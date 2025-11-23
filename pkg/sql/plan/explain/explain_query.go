@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"regexp"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -102,8 +103,39 @@ func NewExplainQueryImpl(query *plan.Query) *ExplainQueryImpl {
 	}
 }
 
+func checkPlanOneExpr(ctx context.Context, lines []string, checkExpr string) ([]string, error) {
+	for i, line := range lines {
+		// regex match checkExpr in line
+		match, err := regexp.MatchString(checkExpr, line)
+		if err != nil {
+			return nil, err
+		}
+		if match {
+			return lines[i:], nil
+		}
+	}
+	return nil, moerr.NewInvalidInputf(ctx, "check expr %s not found", checkExpr)
+}
+
+func checkPlan(ctx context.Context, lines []string, checkExpr []string) error {
+	if len(checkExpr) == 0 {
+		return nil
+	}
+
+	remainingLines, err := checkPlanOneExpr(ctx, lines, checkExpr[0])
+	if err != nil {
+		return err
+	}
+	return checkPlan(ctx, remainingLines, checkExpr[1:])
+}
+
 func (e *ExplainQueryImpl) ExplainPlan(ctx context.Context, buffer *ExplainDataBuffer, options *ExplainOptions) error {
-	return explainPlanTree(e.QueryPlan, ctx, buffer, options)
+	err := explainPlanTree(e.QueryPlan, ctx, buffer, options)
+	if err != nil {
+		return err
+	}
+
+	return checkPlan(ctx, buffer.Lines, options.CheckExpr)
 }
 
 func explainPlanTree(qry *plan.Query, ctx context.Context, buffer *ExplainDataBuffer, options *ExplainOptions) error {

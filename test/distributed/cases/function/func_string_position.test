@@ -1,0 +1,30 @@
+# Basic test case from requirements
+SELECT POSITION('World' IN 'Hello World') AS result1;
+
+# Additional test cases
+SELECT POSITION('Hello' IN 'Hello World') AS at_beginning;
+SELECT POSITION('World' IN 'Hello World') AS in_middle;
+SELECT POSITION('test' IN 'Hello World') AS not_found;
+SELECT POSITION('' IN 'Hello World') AS empty_substr;
+SELECT POSITION('o' IN 'Hello World') AS single_char;
+
+# NULL handling
+SELECT POSITION(NULL IN 'Hello World') AS null_substr;
+SELECT POSITION('World' IN NULL) AS null_str;
+SELECT POSITION(NULL IN NULL) AS both_null;
+
+# Table usage
+CREATE TABLE t1(substr VARCHAR(50), str VARCHAR(50));
+INSERT INTO t1 VALUES ('World', 'Hello World'), ('Hello', 'Hello World'), ('test', 'Hello World');
+SELECT substr, str, POSITION(substr IN str) AS position FROM t1;
+DROP TABLE t1;
+
+# WHERE clause
+CREATE TABLE t1(substr VARCHAR(50), str VARCHAR(50));
+INSERT INTO t1 VALUES ('World', 'Hello World'), ('Hello', 'Hello World'), ('test', 'Hello World');
+SELECT * FROM t1 WHERE POSITION(substr IN str) > 0;
+DROP TABLE t1;
+
+# Comparison with LOCATE (should return same results)
+SELECT POSITION('World' IN 'Hello World') AS position_result, LOCATE('World', 'Hello World') AS locate_result;
+

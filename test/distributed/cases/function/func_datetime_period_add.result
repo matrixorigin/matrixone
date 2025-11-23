@@ -1,0 +1,74 @@
+SELECT PERIOD_ADD(200802, 3) AS result1;
+result1
+200805
+SELECT PERIOD_ADD(200802, 3) AS add_3_months;
+add_3_months
+200805
+SELECT PERIOD_ADD(200802, -3) AS subtract_3_months;
+subtract_3_months
+200711
+SELECT PERIOD_ADD(200802, 0) AS no_change;
+no_change
+200802
+SELECT PERIOD_ADD(0802, 3) AS yymm_format;
+yymm_format
+200805
+SELECT PERIOD_ADD(7002, 3) AS yymm_1970s;
+yymm_1970s
+197005
+SELECT PERIOD_ADD(6902, 3) AS yymm_2060s;
+yymm_2060s
+206905
+SELECT PERIOD_ADD(200812, 1) AS year_boundary;
+year_boundary
+200901
+SELECT PERIOD_ADD(200801, -1) AS year_boundary_back;
+year_boundary_back
+200712
+SELECT PERIOD_ADD(200802, 12) AS one_year;
+one_year
+200902
+SELECT PERIOD_ADD(200802, 24) AS two_years;
+two_years
+201002
+SELECT PERIOD_ADD(200802, -12) AS one_year_back;
+one_year_back
+200702
+SELECT PERIOD_ADD(200801, 0) AS january;
+january
+200801
+SELECT PERIOD_ADD(200812, 0) AS december;
+december
+200812
+SELECT PERIOD_ADD(200802, 1) AS feb_to_mar;
+feb_to_mar
+200803
+SELECT PERIOD_ADD(NULL, 3) AS null_period;
+null_period
+null
+SELECT PERIOD_ADD(200802, NULL) AS null_months;
+null_months
+null
+SELECT PERIOD_ADD(NULL, NULL) AS null_both;
+null_both
+null
+CREATE TABLE t1(period INT, months INT);
+INSERT INTO t1 VALUES (200802, 3), (200812, 1), (200801, -1);
+SELECT PERIOD_ADD(period, months) AS result FROM t1;
+result
+200805
+200901
+200712
+DROP TABLE t1;
+CREATE TABLE t1(period INT, months INT);
+INSERT INTO t1 VALUES (200802, 3), (200812, 1), (200801, -1);
+SELECT * FROM t1 WHERE PERIOD_ADD(period, months) > 200900;
+period    months
+200812    1
+DROP TABLE t1;
+SELECT PERIOD_ADD(200802.0, 3.0) AS float_input;
+float_input
+200805
+SELECT PERIOD_ADD(CAST(200802 AS UNSIGNED), CAST(3 AS UNSIGNED)) AS unsigned_input;
+unsigned_input
+200805

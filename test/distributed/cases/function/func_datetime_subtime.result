@@ -1,0 +1,73 @@
+SELECT SUBTIME('2007-12-31 23:59:59.999999', '1 1:1:1.000002') AS result1;
+result1
+null
+SELECT TIME(SUBTIME('15:30:45', '01:15:30')) AS time_sub_time;
+time_sub_time
+14:15:15
+SELECT TIME(SUBTIME('15:30:45', '00:00:00')) AS time_sub_zero;
+time_sub_zero
+15:30:45
+SELECT TIME(SUBTIME('00:00:00', '00:00:01')) AS zero_sub_second;
+zero_sub_second
+23:59:59
+SELECT SUBTIME('2007-12-31 23:59:59.999999', '1 1:1:1.000002') AS datetime_sub_time;
+datetime_sub_time
+null
+SELECT SUBTIME('2007-12-31 10:30:45', '02:15:30') AS datetime_sub_hours;
+datetime_sub_hours
+2007-12-31 08:15:15
+SELECT SUBTIME('2007-12-31 00:00:00', '00:00:01') AS datetime_sub_second;
+datetime_sub_second
+2007-12-30 23:59:59
+SELECT SUBTIME(TIMESTAMP('2007-12-31 23:59:59'), '1 1:1:1') AS timestamp_sub_time;
+timestamp_sub_time
+2007-12-30 22:58:58
+SELECT SUBTIME('2007-12-31 23:59:59', '1 1:1:1') AS string_datetime;
+string_datetime
+2007-12-30 22:58:58
+SELECT TIME(SUBTIME('15:30:45', '01:15:30')) AS string_time;
+string_time
+14:15:15
+SELECT TIME(SUBTIME('01:00:00', '02:00:00')) AS negative_result;
+negative_result
+23:00:00
+SELECT SUBTIME('2007-12-31 00:00:00', '1 0:0:0') AS negative_datetime;
+negative_datetime
+2007-12-30 00:00:00
+SELECT SUBTIME('2007-12-31 23:59:59.999999', '0 0:0:0.000001') AS with_microseconds;
+with_microseconds
+null
+SELECT TIME(SUBTIME('15:30:45.500000', '00:00:00.200000')) AS time_with_microseconds;
+time_with_microseconds
+15:30:45
+SELECT SUBTIME(NULL, '01:00:00') AS null_expr1;
+null_expr1
+null
+SELECT SUBTIME('15:30:45', NULL) AS null_expr2;
+null_expr2
+null
+SELECT SUBTIME(NULL, NULL) AS null_both;
+null_both
+null
+CREATE TABLE t1(dt DATETIME, t TIME);
+INSERT INTO t1 VALUES ('2007-12-31 23:59:59', '1 1:1:1'), ('2007-12-31 10:30:45', '02:15:30');
+SELECT SUBTIME(dt, t) AS result FROM t1;
+result
+2007-12-30 22:58:58
+2007-12-31 08:15:15
+DROP TABLE t1;
+CREATE TABLE t1(dt DATETIME, t TIME);
+INSERT INTO t1 VALUES ('2007-12-31 23:59:59', '1 1:1:1'), ('2007-12-31 10:30:45', '02:15:30');
+SELECT * FROM t1 WHERE SUBTIME(dt, t) < '2007-12-31 00:00:00';
+dt    t
+2007-12-31 23:59:59    25:01:01
+DROP TABLE t1;
+SELECT SUBTIME('2007-12-31 23:59:59.999999', '0 0:0:0.000000') AS no_change;
+no_change
+null
+SELECT SUBTIME('2007-12-31 00:00:00', '0 0:0:1') AS one_second_before;
+one_second_before
+2007-12-30 23:59:59
+SELECT SUBTIME('2007-12-31 23:59:59', '0 0:1:0') AS one_minute_before;
+one_minute_before
+2007-12-31 23:58:59

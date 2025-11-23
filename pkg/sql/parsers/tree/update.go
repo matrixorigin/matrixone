@@ -15,6 +15,7 @@
 package tree
 
 import (
+	"bytes"
 	"context"
 	"strconv"
 	"strings"
@@ -502,6 +503,55 @@ type ExportParam struct {
 	ForceQuote []string
 	// stage filename path
 	StageFilePath string
+}
+
+func (ep *ExportParam) String() string {
+	buf := bytes.Buffer{}
+	if ep.Fields != nil {
+		buf.WriteString("FIELDS ENCLOSED BY ")
+		buf.WriteString(escapeExportParamLiteral(string(ep.Fields.EnclosedBy.Value)))
+		buf.WriteString(" ")
+
+		buf.WriteString("ESCAPED BY ")
+		buf.WriteString(escapeExportParamLiteral(string(ep.Fields.EscapedBy.Value)))
+		buf.WriteString(" ")
+
+		buf.WriteString("TERMINATED BY ")
+		buf.WriteString(escapeExportParamLiteral(ep.Fields.Terminated.Value))
+		buf.WriteString(" ")
+	}
+
+	if ep.Lines != nil {
+		buf.WriteString("LINES TERMINATED BY ")
+		buf.WriteString(escapeExportParamLiteral(ep.Lines.TerminatedBy.Value))
+	}
+
+	return buf.String()
+}
+
+func escapeExportParamLiteral(val string) string {
+	if val == "" {
+		return ""
+	}
+
+	var b strings.Builder
+	for _, r := range val {
+		switch r {
+		case '\\':
+			b.WriteString(`'\\'`)
+		case '\n':
+			b.WriteString(`'\n'`)
+		case '\r':
+			b.WriteString(`'\r'`)
+		case '\t':
+			b.WriteString(`'\t'`)
+		default:
+			b.WriteByte('\'')
+			b.WriteRune(r)
+			b.WriteByte('\'')
+		}
+	}
+	return b.String()
 }
 
 func (ep *ExportParam) Format(ctx *FmtCtx) {

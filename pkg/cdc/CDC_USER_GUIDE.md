@@ -162,10 +162,10 @@ Table mapping specifies which tables to replicate and how to map them to the tar
 'db1.t1:db2.t1,db1.t2:db2.new_t2'
 
 -- Database-level (all tables in database)
-'db1.*:db1.*'
+'db1:db2'
 
 -- Account-level (all databases and tables)
-'*.*:*.*'
+'*:*'
 ```
 
 #### Optional Parameters
@@ -174,7 +174,7 @@ Use curly braces `{}` to specify options. Options are comma-separated key-value 
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `Level` | string | `table` | Replication granularity: `account`, `database`, or `table` |
+| `Level` | string | **Required** | Replication granularity: `account`, `database`, or `table`. **Must be explicitly specified** |
 | `Exclude` | string | (none) | Comma-separated list of tables to exclude |
 | `StartTs` | timestamp | (current time) | Start timestamp for replication |
 | `EndTs` | timestamp | (none) | End timestamp for bounded replication |
@@ -213,7 +213,7 @@ create cdc task_db_level
   'mysql://myaccount#root:password@127.0.0.1:6001'
   'mysql'
   'mysql://root:password@192.168.1.100:3306'
-  'db1.*:db1.*'
+  'db1:db1'
   {'Level'='database'};
 ```
 
@@ -226,7 +226,7 @@ create cdc task_account_level
   'mysql://myaccount#root:password@127.0.0.1:6001'
   'matrixone'
   'mysql://target_account#admin:password@192.168.1.200:6001'
-  '*.*:*.*'
+  '*:*'
   {'Level'='account', 'Account'='myaccount'};
 ```
 
@@ -240,7 +240,7 @@ create cdc replicate_orders
   'mysql'
   'mysql://root:MySQLPass456@192.168.1.100:3306'
   'sales.orders:sales.orders'
-  {};
+  {'Level'='table'};
 ```
 
 #### Example 2: Multiple Tables with Exclusion
@@ -250,7 +250,7 @@ create cdc replicate_sales_db
   'mysql://prod_account#admin:SecurePass123@127.0.0.1:6001'
   'mysql'
   'mysql://root:MySQLPass456@192.168.1.100:3306'
-  'sales.*:sales.*'
+  'sales:sales'
   {'Level'='database', 'Exclude'='sales.temp_table,sales.staging_table'};
 ```
 
@@ -294,7 +294,7 @@ create cdc mo_to_mo_replication
   'mysql://source_account#admin:password@127.0.0.1:6001'
   'matrixone'
   'mysql://target_account#admin:password@192.168.1.200:6001'
-  'mydb.*:mydb.*'
+  'mydb:mydb'
   {'Level'='database'};
 ```
 
@@ -1469,8 +1469,8 @@ Controls the scope of replication.
 | Value | Description | Table Mapping Format |
 |-------|-------------|----------------------|
 | `table` | Replicate specific tables | `db1.t1:db1.t1,db1.t2:db1.t2` |
-| `database` | Replicate all tables in database(s) | `db1.*:db1.*` |
-| `account` | Replicate all databases in account | `*.*:*.*` |
+| `database` | Replicate all tables in database(s) | `db1:db1` |
+| `account` | Replicate all databases in account | `*:*` |
 
 ### Exclude Option
 
@@ -1655,14 +1655,14 @@ create cdc test_replication
   'mysql'
   'mysql://root:password@192.168.1.100:3306'
   'mydb.orders:mydb.orders'
-  {};
+  {'Level'='table'};
 
 -- After verification, expand
 create cdc full_db_replication
   'mysql://myaccount#admin:password@127.0.0.1:6001'
   'mysql'
   'mysql://root:password@192.168.1.100:3306'
-  'mydb.*:mydb.*'
+  'mydb:mydb'
   {'Level'='database'};
 ```
 
@@ -1675,7 +1675,7 @@ create cdc prod_replication
   'mysql://myaccount#admin:password@127.0.0.1:6001'
   'mysql'
   'mysql://root:password@192.168.1.100:3306'
-  'production.*:production.*'
+  'production:production'
   {'Level'='database', 'Exclude'='production.temp_*,production.staging_*'};
 ```
 
@@ -2010,7 +2010,7 @@ create cdc migrate_prod
   'mysql://prod_account#admin:password@127.0.0.1:6001'
   'mysql'
   'mysql://root:password@192.168.1.100:3306'
-  'prod_db.*:prod_db.*'
+  'prod_db:prod_db'
   {'Level'='database', 'Exclude'='prod_db.temp_*,prod_db.staging_*'};
 ```
 

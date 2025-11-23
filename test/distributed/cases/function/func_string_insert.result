@@ -1,0 +1,56 @@
+SELECT INSERT('Hello World', 7, 5, 'MySQL') AS result1;
+result1
+Hello MySQL
+SELECT INSERT('Hello World', 1, 5, 'Hi') AS replace_beginning;
+replace_beginning
+Hi World
+SELECT INSERT('Hello', 6, 1, ' World') AS insert_at_end;
+insert_at_end
+Hello
+SELECT INSERT('Hello World', 6, 0, 'MySQL ') AS insert_without_remove;
+insert_without_remove
+HelloMySQL  World
+SELECT INSERT('Hello World', 0, 5, 'MySQL') AS invalid_position;
+invalid_position
+Hello World
+SELECT INSERT('Hello', 10, 5, 'MySQL') AS position_exceeds_length;
+position_exceeds_length
+Hello
+SELECT INSERT('Hello', 2, 100, 'MySQL') AS length_exceeds_string;
+length_exceeds_string
+HMySQL
+SELECT INSERT('Hello World', NULL, 5, 'MySQL') AS null_position;
+null_position
+null
+SELECT INSERT('Hello World', 7, NULL, 'MySQL') AS null_length;
+null_length
+null
+SELECT INSERT('Hello World', 7, 5, NULL) AS null_newstr;
+null_newstr
+null
+SELECT INSERT(NULL, 7, 5, 'MySQL') AS null_string;
+null_string
+null
+SELECT INSERT('', 1, 0, 'Hello') AS empty_string;
+empty_string
+
+SELECT INSERT('Hello', 1, 0, '') AS empty_newstr;
+empty_newstr
+Hello
+SELECT INSERT('Hello World', 1, 11, 'MySQL') AS replace_all;
+replace_all
+MySQL
+CREATE TABLE t1(str VARCHAR(50), pos INT, len INT, newstr VARCHAR(50));
+INSERT INTO t1 VALUES ('Hello World', 7, 5, 'MySQL'), ('MatrixOne', 1, 6, 'MySQL'), ('Test', 5, 0, ' Result');
+SELECT str, pos, len, newstr, INSERT(str, pos, len, newstr) AS result FROM t1;
+str    pos    len    newstr    result
+Hello World    7    5    MySQL    Hello MySQL
+MatrixOne    1    6    MySQL    MySQLOne
+Test    5    0     Result    Test
+DROP TABLE t1;
+CREATE TABLE t1(str VARCHAR(50), pos INT, len INT, newstr VARCHAR(50));
+INSERT INTO t1 VALUES ('Hello World', 7, 5, 'MySQL'), ('MatrixOne', 1, 6, 'MySQL'), ('Test', 5, 0, ' Result');
+SELECT * FROM t1 WHERE INSERT(str, pos, len, newstr) = 'Hello MySQL';
+str    pos    len    newstr
+Hello World    7    5    MySQL
+DROP TABLE t1;

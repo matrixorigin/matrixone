@@ -176,7 +176,10 @@ id    left_part
 2    你好世界
 3    😀😃😄😁😆
 SELECT id, RIGHT(data, 5) as right_part FROM t_left_right_test ORDER BY id;
-not supported: function or operator 'right'
+id    right_part
+1    World
+2    你好世界
+3    😀😃😄😁😆
 CREATE TABLE t_null_sort_ci (
 id INT PRIMARY KEY,
 name VARCHAR(100)
@@ -371,13 +374,17 @@ SELECT FIELD('Apple', 'apple', 'banana', 'cherry');
 FIELD(Apple, apple, banana, cherry)
 1
 SELECT MAKE_SET(1|2|4, 'hello', '你好', 'こんにちは', '안녕');
-not supported: function or operator 'make_set'
+MAKE_SET(1 | 2 | 4, hello, 你好, こんにちは, 안녕)
+hello,你好,こんにちは
 SELECT ELT(1, 'Apple', '苹果', 'りんご');
-not supported: function or operator 'elt'
+ELT(1, Apple, 苹果, りんご)
+Apple
 SELECT ELT(2, 'Apple', '苹果', 'りんご');
-not supported: function or operator 'elt'
+ELT(2, Apple, 苹果, りんご)
+苹果
 SELECT ELT(3, 'Apple', '苹果', 'りんご');
-not supported: function or operator 'elt'
+ELT(3, Apple, 苹果, りんご)
+りんご
 SELECT FORMAT(12332.123456, 2);
 FORMAT(12332.123456, 2)
 12,332.12

@@ -1,0 +1,67 @@
+# Basic test case from requirements
+-- @ignore:0
+SELECT UTC_TIME() AS result1;
+
+# Additional test cases
+# Basic usage
+-- @ignore:0
+SELECT UTC_TIME() AS current_utc_time;
+-- @ignore:0
+SELECT UTC_TIME AS current_utc_time_no_parens;
+
+select utc_time() = utc_time as should_be_true;
+
+# With fractional seconds precision
+-- @ignore:0
+SELECT UTC_TIME(0) AS utc_time_scale0;
+-- @ignore:0
+SELECT UTC_TIME(3) AS utc_time_scale3;
+-- @ignore:0
+SELECT UTC_TIME(6) AS utc_time_scale6;
+
+# Compare with CURRENT_TIME (should be different if not in UTC timezone)
+-- @ignore:0,1
+SELECT UTC_TIME() AS utc_time, CURRENT_TIME() AS local_time;
+
+# Table usage
+CREATE TABLE t1(id INT);
+INSERT INTO t1 VALUES (1), (2), (3);
+-- @ignore:1
+SELECT id, UTC_TIME() AS utc_time FROM t1;
+DROP TABLE t1;
+
+# WHERE clause
+# CREATE TABLE t1(t TIME);
+# INSERT INTO t1 VALUES ('00:00:00'), ('23:59:59');
+# SELECT * FROM t1 WHERE t < UTC_TIME();
+# DROP TABLE t1;
+
+# NULL handling (UTC_TIME() should never return NULL)
+SELECT UTC_TIME() IS NOT NULL AS not_null_check;
+
+# Time arithmetic
+-- @ignore:0
+SELECT UTC_TIME() + INTERVAL 1 HOUR AS one_hour_later;
+-- @ignore:0
+SELECT UTC_TIME() - INTERVAL 30 MINUTE AS thirty_minutes_ago;
+
+# Format verification (should return TIME type in HH:MM:SS format)
+-- @ignore:0
+SELECT UTC_TIME() AS time_format;
+
+# With different scales
+-- @ignore:0
+SELECT UTC_TIME(0) AS no_fractional;
+-- @ignore:0
+SELECT UTC_TIME(1) AS one_digit;
+-- @ignore:0
+SELECT UTC_TIME(2) AS two_digits;
+-- @ignore:0
+SELECT UTC_TIME(3) AS three_digits;
+-- @ignore:0
+SELECT UTC_TIME(4) AS four_digits;
+-- @ignore:0
+SELECT UTC_TIME(5) AS five_digits;
+-- @ignore:0
+SELECT UTC_TIME(6) AS six_digits;
+

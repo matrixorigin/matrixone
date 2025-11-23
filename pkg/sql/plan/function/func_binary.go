@@ -17,6 +17,8 @@ package function
 import (
 	"bytes"
 	"context"
+	"crypto/aes"
+	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/hex"
@@ -594,6 +596,147 @@ func roundFloat64(x float64, digits int64) float64 {
 
 func RoundFloat64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	return generalMathMulti("round", ivecs, result, proc, length, roundFloat64, selectList)
+}
+
+// TRUNCATE function implementations
+// TRUNCATE truncates a number to D decimal places without rounding
+func truncateUint64(x uint64, digits int64) uint64 {
+	switch {
+	case digits >= 0:
+		return x
+	case digits > -MaxUint64digits:
+		scale := ScaleTable[-digits]
+		x = x / scale * scale // truncate without rounding
+	case digits <= -MaxUint64digits:
+		x = 0
+	}
+	return x
+}
+
+func TruncateUint64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	return generalMathMulti("truncate", ivecs, result, proc, length, truncateUint64, selectList)
+}
+
+func truncateInt64(x int64, digits int64) int64 {
+	switch {
+	case digits >= 0:
+		return x
+	case digits > -MaxInt64digits:
+		scale := int64(ScaleTable[-digits])
+		// Truncate towards zero (just divide and multiply, no rounding)
+		x = x / scale * scale
+	case digits <= -MaxInt64digits:
+		x = 0
+	}
+	return x
+}
+
+func TruncateInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	return generalMathMulti("truncate", ivecs, result, proc, length, truncateInt64, selectList)
+}
+
+func truncateFloat64(x float64, digits int64) float64 {
+	if digits == 0 {
+		x = math.Trunc(x)
+	} else if digits >= 308 { // the range of float64
+		// No truncation needed
+	} else if digits <= -308 {
+		x = 0
+	} else {
+		var abs_digits uint64
+		if digits < 0 {
+			abs_digits = uint64(-digits)
+		} else {
+			abs_digits = uint64(digits)
+		}
+		var tmp = math.Pow(10.0, float64(abs_digits))
+
+		if digits > 0 {
+			// Truncate to D decimal places: multiply, truncate, divide
+			var value_mul_tmp = x * tmp
+			x = math.Trunc(value_mul_tmp) / tmp
+		} else {
+			// Truncate to -D digits before decimal point
+			var value_div_tmp = x / tmp
+			x = math.Trunc(value_div_tmp) * tmp
+		}
+	}
+	return x
+}
+
+func TruncateFloat64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	return generalMathMulti("truncate", ivecs, result, proc, length, truncateFloat64, selectList)
+}
+
+func truncateDecimal64(x types.Decimal64, digits int64, scale int32, isConst bool) types.Decimal64 {
+	if digits > 19 {
+		digits = 19
+	}
+	if digits < -18 {
+		digits = -18
+	}
+	// Truncate to D decimal places (towards zero)
+	// Similar to Floor but works correctly for both positive and negative
+	if int32(digits) >= scale {
+		return x
+	}
+	k := scale - int32(digits)
+	if k > 18 {
+		k = 18
+	}
+	// Remove the fractional part beyond D digits
+	y, _, _ := x.Mod(types.Decimal64(1), k, 0)
+	x, _ = x.Sub64(y)
+	if isConst {
+		if int32(digits) < 0 {
+			k = scale
+		}
+		x, _ = x.Scale(-k)
+	}
+	return x
+}
+
+func TruncateDecimal64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	scale := ivecs[0].GetType().Scale
+	cb := func(x types.Decimal64, digits int64) types.Decimal64 {
+		return truncateDecimal64(x, digits, scale, result.GetResultVector().GetType().Scale != scale)
+	}
+	return generalMathMulti("truncate", ivecs, result, proc, length, cb, selectList)
+}
+
+func truncateDecimal128(x types.Decimal128, digits int64, scale int32, isConst bool) types.Decimal128 {
+	if digits > 39 {
+		digits = 39
+	}
+	if digits < -38 {
+		digits = -38
+	}
+	// Truncate to D decimal places (towards zero)
+	if int32(digits) >= scale {
+		return x
+	}
+	k := scale - int32(digits)
+	if k > 38 {
+		k = 38
+	}
+	// Remove the fractional part beyond D digits
+	y, _, _ := x.Mod(types.Decimal128{B0_63: 1, B64_127: 0}, k, 0)
+	x, _ = x.Sub128(y)
+	if isConst {
+		if int32(digits) < 0 {
+			k = scale
+		}
+		x, _ = x.Scale(-k)
+	}
+	return x
+}
+
+func TruncateDecimal128(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	scale := ivecs[0].GetType().Scale
+	cb := func(x types.Decimal128, digits int64) types.Decimal128 {
+		return truncateDecimal128(x, digits, scale, result.GetResultVector().GetType().Scale != scale)
+	}
+	return generalMathMulti("truncate", ivecs, result, proc, length, cb, selectList)
 }
 
 func roundDecimal64(x types.Decimal64, digits int64, scale int32, isConst bool) types.Decimal64 {
@@ -1200,6 +1343,873 @@ func TimeAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 	}, selectList)
 }
 
+// TimestampAddDate: TIMESTAMPADD(unit, interval, date)
+// Parameters: ivecs[0] = unit (string), ivecs[1] = interval (int64), ivecs[2] = date (Date)
+func TimestampAddDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	if !ivecs[0].IsConst() {
+		return moerr.NewInvalidArg(proc.Ctx, "timestampadd unit", "not constant")
+	}
+
+	unitStr, _ := vector.GenerateFunctionStrParameter(ivecs[0]).GetStrValue(0)
+	iTyp, err := types.IntervalTypeOf(functionUtil.QuickBytesToStr(unitStr))
+	if err != nil {
+		return err
+	}
+
+	rs := vector.MustFunctionResult[types.Date](result)
+	dates := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[2])
+	intervals := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		date, null1 := dates.GetValue(i)
+		interval, null2 := intervals.GetValue(i)
+		if null1 || null2 {
+			if err = rs.Append(types.Date(0), true); err != nil {
+				return err
+			}
+		} else {
+			resultDate, err := doDateAdd(date, interval, iTyp)
+			if err != nil {
+				return err
+			}
+			if err = rs.Append(resultDate, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// TimestampAddDatetime: TIMESTAMPADD(unit, interval, datetime)
+// Parameters: ivecs[0] = unit (string), ivecs[1] = interval (int64), ivecs[2] = datetime (Datetime)
+func TimestampAddDatetime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	if !ivecs[0].IsConst() {
+		return moerr.NewInvalidArg(proc.Ctx, "timestampadd unit", "not constant")
+	}
+
+	unitStr, _ := vector.GenerateFunctionStrParameter(ivecs[0]).GetStrValue(0)
+	iTyp, err := types.IntervalTypeOf(functionUtil.QuickBytesToStr(unitStr))
+	if err != nil {
+		return err
+	}
+
+	scale := ivecs[2].GetType().Scale
+	if iTyp == types.MicroSecond {
+		scale = 6
+	}
+	rs := vector.MustFunctionResult[types.Datetime](result)
+	rs.TempSetType(types.New(types.T_datetime, 0, scale))
+
+	datetimes := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[2])
+	intervals := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		dt, null1 := datetimes.GetValue(i)
+		interval, null2 := intervals.GetValue(i)
+		if null1 || null2 {
+			if err = rs.Append(types.Datetime(0), true); err != nil {
+				return err
+			}
+		} else {
+			resultDt, err := doDatetimeAdd(dt, interval, iTyp)
+			if err != nil {
+				return err
+			}
+			if err = rs.Append(resultDt, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// TimestampAddTimestamp: TIMESTAMPADD(unit, interval, timestamp)
+// Parameters: ivecs[0] = unit (string), ivecs[1] = interval (int64), ivecs[2] = timestamp (Timestamp)
+func TimestampAddTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	if !ivecs[0].IsConst() {
+		return moerr.NewInvalidArg(proc.Ctx, "timestampadd unit", "not constant")
+	}
+
+	unitStr, _ := vector.GenerateFunctionStrParameter(ivecs[0]).GetStrValue(0)
+	iTyp, err := types.IntervalTypeOf(functionUtil.QuickBytesToStr(unitStr))
+	if err != nil {
+		return err
+	}
+
+	scale := ivecs[2].GetType().Scale
+	if iTyp == types.MicroSecond {
+		scale = 6
+	}
+	rs := vector.MustFunctionResult[types.Timestamp](result)
+	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
+
+	timestamps := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[2])
+	intervals := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	loc := proc.GetSessionInfo().TimeZone
+	if loc == nil {
+		loc = time.Local
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		ts, null1 := timestamps.GetValue(i)
+		interval, null2 := intervals.GetValue(i)
+		if null1 || null2 {
+			if err = rs.Append(types.Timestamp(0), true); err != nil {
+				return err
+			}
+		} else {
+			resultTs, err := doTimestampAdd(loc, ts, interval, iTyp)
+			if err != nil {
+				return err
+			}
+			if err = rs.Append(resultTs, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// TimestampAddString: TIMESTAMPADD(unit, interval, datetime_string)
+// Parameters: ivecs[0] = unit (string), ivecs[1] = interval (int64), ivecs[2] = datetime_string (string)
+func TimestampAddString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	if !ivecs[0].IsConst() {
+		return moerr.NewInvalidArg(proc.Ctx, "timestampadd unit", "not constant")
+	}
+
+	unitStr, _ := vector.GenerateFunctionStrParameter(ivecs[0]).GetStrValue(0)
+	iTyp, err := types.IntervalTypeOf(functionUtil.QuickBytesToStr(unitStr))
+	if err != nil {
+		return err
+	}
+
+	rs := vector.MustFunctionResult[types.Datetime](result)
+	rs.TempSetType(types.New(types.T_datetime, 0, 6))
+
+	dateStrings := vector.GenerateFunctionStrParameter(ivecs[2])
+	intervals := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		dateStr, null1 := dateStrings.GetStrValue(i)
+		interval, null2 := intervals.GetValue(i)
+		if null1 || null2 {
+			if err = rs.Append(types.Datetime(0), true); err != nil {
+				return err
+			}
+		} else {
+			resultDt, err := doDateStringAdd(functionUtil.QuickBytesToStr(dateStr), interval, iTyp)
+			if err != nil {
+				return err
+			}
+			if err = rs.Append(resultDt, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// Conv: CONV(N, from_base, to_base) - Converts numbers between different number bases
+// N can be a string or numeric type
+// from_base and to_base must be integers between 2 and 36
+// Returns a string representation of N in to_base
+func Conv(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	// Get base parameters (must be constants)
+	if !ivecs[1].IsConst() || !ivecs[2].IsConst() {
+		return moerr.NewInvalidArg(proc.Ctx, "conv bases", "not constant")
+	}
+
+	fromBaseVec := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	toBaseVec := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2])
+
+	fromBase, null1 := fromBaseVec.GetValue(0)
+	toBase, null2 := toBaseVec.GetValue(0)
+
+	if null1 || null2 {
+		// If bases are NULL, return NULL for all rows
+		for i := uint64(0); i < uint64(length); i++ {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	// Validate base ranges (2-36)
+	if fromBase < 2 || fromBase > 36 || toBase < 2 || toBase > 36 {
+		return moerr.NewInvalidInputf(proc.Ctx, "conv base must be between 2 and 36, got from_base=%d, to_base=%d", fromBase, toBase)
+	}
+
+	// Handle different input types for N
+	// MySQL behavior:
+	// - For numeric types: always treat as base 10, regardless of from_base
+	// - For string types: parse according to from_base
+	inputType := ivecs[0].GetType()
+	switch inputType.Oid {
+	case types.T_char, types.T_varchar, types.T_text:
+		return convString(ivecs[0], fromBase, toBase, rs, length, selectList)
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
+		// Numeric types are always treated as base 10
+		return convInt64Direct(ivecs[0], toBase, rs, length, selectList)
+	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+		// Numeric types are always treated as base 10
+		return convUint64Direct(ivecs[0], toBase, rs, length, selectList)
+	case types.T_float32, types.T_float64:
+		// Numeric types are always treated as base 10
+		return convFloat64Direct(ivecs[0], toBase, rs, length, selectList)
+	default:
+		// For other types, try to convert to string first
+		return convString(ivecs[0], fromBase, toBase, rs, length, selectList)
+	}
+}
+
+func convString(nVec *vector.Vector, fromBase, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
+	nParam := vector.GenerateFunctionStrParameter(nVec)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		nStr, null := nParam.GetStrValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Parse the number from from_base
+		// strconv.ParseInt can handle bases 2-36
+		val, err := strconv.ParseInt(strings.TrimSpace(string(nStr)), int(fromBase), 64)
+		if err != nil {
+			// If parsing as signed int fails, try unsigned
+			uval, uerr := strconv.ParseUint(strings.TrimSpace(string(nStr)), int(fromBase), 64)
+			if uerr != nil {
+				// Return NULL if parsing fails (MySQL behavior)
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
+			// Convert unsigned to string in to_base
+			result := strconv.FormatUint(uval, int(toBase))
+			if err := rs.AppendBytes([]byte(result), false); err != nil {
+				return err
+			}
+		} else {
+			// Convert signed int to string in to_base
+			// For negative numbers, MySQL returns the unsigned representation
+			if val < 0 {
+				uval := uint64(val)
+				result := strconv.FormatUint(uval, int(toBase))
+				if err := rs.AppendBytes([]byte(result), false); err != nil {
+					return err
+				}
+			} else {
+				result := strconv.FormatInt(val, int(toBase))
+				if err := rs.AppendBytes([]byte(result), false); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func convInt64Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
+	nParam := vector.GenerateFunctionFixedTypeParameter[int64](nVec)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		n, null := nParam.GetValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Convert int64 to string in to_base
+		// For negative numbers, MySQL returns the unsigned representation
+		var result string
+		if n < 0 {
+			uval := uint64(n)
+			result = strconv.FormatUint(uval, int(toBase))
+		} else {
+			result = strconv.FormatInt(n, int(toBase))
+		}
+		if err := rs.AppendBytes([]byte(result), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func convUint64Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
+	nParam := vector.GenerateFunctionFixedTypeParameter[uint64](nVec)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		n, null := nParam.GetValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Convert uint64 to string in to_base
+		result := strconv.FormatUint(n, int(toBase))
+		if err := rs.AppendBytes([]byte(result), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func convFloat64Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
+	nParam := vector.GenerateFunctionFixedTypeParameter[float64](nVec)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		n, null := nParam.GetValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Convert float64 to int64 first (truncate), then to string in to_base
+		val := int64(n)
+		var result string
+		if val < 0 {
+			uval := uint64(val)
+			result = strconv.FormatUint(uval, int(toBase))
+		} else {
+			result = strconv.FormatInt(val, int(toBase))
+		}
+		if err := rs.AppendBytes([]byte(result), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// AddTime: ADDTIME(expr1, expr2) - Adds expr2 (time) to expr1 (time or datetime)
+// expr1 can be TIME, DATETIME, or TIMESTAMP
+// expr2 is a TIME expression (can include days like '1 1:1:1.000002')
+// Returns TIME if expr1 is TIME, DATETIME if expr1 is DATETIME/TIMESTAMP
+func AddTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	// Determine result type based on first argument
+	inputType := ivecs[0].GetType()
+	switch inputType.Oid {
+	case types.T_time:
+		return addTimeToTime(ivecs, result, proc, length, selectList)
+	case types.T_datetime:
+		return addTimeToDatetime(ivecs, result, proc, length, selectList)
+	case types.T_timestamp:
+		return addTimeToTimestamp(ivecs, result, proc, length, selectList)
+	case types.T_char, types.T_varchar, types.T_text:
+		// Try to parse as datetime first, then time
+		return addTimeToString(ivecs, result, proc, length, selectList)
+	default:
+		return moerr.NewInvalidInputf(proc.Ctx, "addtime: unsupported type %v", inputType.Oid)
+	}
+}
+
+func addTimeToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	times1 := vector.GenerateFunctionFixedTypeParameter[types.Time](ivecs[0])
+	time2Param := vector.GenerateFunctionStrParameter(ivecs[1])
+	rs := vector.MustFunctionResult[types.Time](result)
+
+	// Determine scale from input
+	scale := int32(ivecs[0].GetType().Scale)
+	if scale2 := int32(ivecs[1].GetType().Scale); scale2 > scale {
+		scale = scale2
+	}
+	rs.TempSetType(types.New(types.T_time, 0, scale))
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.Append(types.Time(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		time1, null1 := times1.GetValue(i)
+		time2Str, null2 := time2Param.GetStrValue(i)
+
+		if null1 || null2 {
+			if err := rs.Append(types.Time(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Parse time2 string
+		time2, err := types.ParseTime(functionUtil.QuickBytesToStr(time2Str), scale)
+		if err != nil {
+			if err := rs.Append(types.Time(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Add time2 to time1 (both are in microseconds)
+		resultTime := types.Time(int64(time1) + int64(time2))
+
+		// Validate result
+		h := resultTime.Hour()
+		if h < 0 {
+			h = -h
+		}
+		if !types.ValidTime(uint64(h), 0, 0) {
+			if err := rs.Append(types.Time(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if err := rs.Append(resultTime, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func addTimeToDatetime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	datetimes := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
+	time2Param := vector.GenerateFunctionStrParameter(ivecs[1])
+	rs := vector.MustFunctionResult[types.Datetime](result)
+
+	// Determine scale from input
+	scale := int32(ivecs[0].GetType().Scale)
+	if scale2 := int32(ivecs[1].GetType().Scale); scale2 > scale {
+		scale = scale2
+	}
+	rs.TempSetType(types.New(types.T_datetime, 0, scale))
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.Append(types.Datetime(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		dt, null1 := datetimes.GetValue(i)
+		time2Str, null2 := time2Param.GetStrValue(i)
+
+		if null1 || null2 {
+			if err := rs.Append(types.Datetime(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Parse time2 string
+		time2, err := types.ParseTime(functionUtil.QuickBytesToStr(time2Str), scale)
+		if err != nil {
+			if err := rs.Append(types.Datetime(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Add time2 to datetime (both are in microseconds)
+		resultDt := types.Datetime(int64(dt) + int64(time2))
+
+		if err := rs.Append(resultDt, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func addTimeToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	timestamps := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[0])
+	time2Param := vector.GenerateFunctionStrParameter(ivecs[1])
+	rs := vector.MustFunctionResult[types.Timestamp](result)
+	loc := proc.GetSessionInfo().TimeZone
+
+	// Determine scale from input
+	scale := int32(ivecs[0].GetType().Scale)
+	if scale2 := int32(ivecs[1].GetType().Scale); scale2 > scale {
+		scale = scale2
+	}
+	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.Append(types.Timestamp(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		ts, null1 := timestamps.GetValue(i)
+		time2Str, null2 := time2Param.GetStrValue(i)
+
+		if null1 || null2 {
+			if err := rs.Append(types.Timestamp(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Parse time2 string
+		time2, err := types.ParseTime(functionUtil.QuickBytesToStr(time2Str), scale)
+		if err != nil {
+			if err := rs.Append(types.Timestamp(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Convert timestamp to datetime, add time, convert back
+		dt := ts.ToDatetime(loc)
+		resultDt := types.Datetime(int64(dt) + int64(time2))
+		resultTs := resultDt.ToTimestamp(loc)
+
+		if err := rs.Append(resultTs, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func addTimeToString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	// Try to parse as datetime first
+	dtParam := vector.GenerateFunctionStrParameter(ivecs[0])
+	time2Param := vector.GenerateFunctionStrParameter(ivecs[1])
+	rs := vector.MustFunctionResult[types.Datetime](result)
+
+	scale := int32(6) // Use max scale for string inputs
+	rs.TempSetType(types.New(types.T_datetime, 0, scale))
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.Append(types.Datetime(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		dtStr, null1 := dtParam.GetStrValue(i)
+		time2Str, null2 := time2Param.GetStrValue(i)
+
+		if null1 || null2 {
+			if err := rs.Append(types.Datetime(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Try to parse as datetime
+		dt, err := types.ParseDatetime(functionUtil.QuickBytesToStr(dtStr), scale)
+		if err != nil {
+			// If parsing as datetime fails, try as time
+			time1, err2 := types.ParseTime(functionUtil.QuickBytesToStr(dtStr), scale)
+			if err2 != nil {
+				if err := rs.Append(types.Datetime(0), true); err != nil {
+					return err
+				}
+				continue
+			}
+			// Convert time to datetime (using today's date)
+			dt = time1.ToDatetime(scale)
+		}
+
+		// Parse time2 string
+		time2, err := types.ParseTime(functionUtil.QuickBytesToStr(time2Str), scale)
+		if err != nil {
+			if err := rs.Append(types.Datetime(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Add time2 to datetime
+		resultDt := types.Datetime(int64(dt) + int64(time2))
+
+		if err := rs.Append(resultDt, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// SubTime: SUBTIME(expr1, expr2) - Returns expr1 - expr2 expressed as a time value.
+// expr1 can be TIME, DATETIME, or TIMESTAMP
+// expr2 is a TIME expression (can include days like '1 1:1:1.000002')
+// Returns TIME if expr1 is TIME, DATETIME if expr1 is DATETIME/TIMESTAMP
+func SubTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	// Determine result type based on first argument
+	inputType := ivecs[0].GetType()
+	switch inputType.Oid {
+	case types.T_time:
+		return subTimeFromTime(ivecs, result, proc, length, selectList)
+	case types.T_datetime:
+		return subTimeFromDatetime(ivecs, result, proc, length, selectList)
+	case types.T_timestamp:
+		return subTimeFromTimestamp(ivecs, result, proc, length, selectList)
+	case types.T_char, types.T_varchar, types.T_text:
+		// Try to parse as datetime first, then time
+		return subTimeFromString(ivecs, result, proc, length, selectList)
+	default:
+		return moerr.NewInvalidInputf(proc.Ctx, "subtime: unsupported type %v", inputType.Oid)
+	}
+}
+
+func subTimeFromTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	times1 := vector.GenerateFunctionFixedTypeParameter[types.Time](ivecs[0])
+	time2Param := vector.GenerateFunctionStrParameter(ivecs[1])
+	rs := vector.MustFunctionResult[types.Time](result)
+
+	// Determine scale from input
+	scale := int32(ivecs[0].GetType().Scale)
+	if scale2 := int32(ivecs[1].GetType().Scale); scale2 > scale {
+		scale = scale2
+	}
+	rs.TempSetType(types.New(types.T_time, 0, scale))
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.Append(types.Time(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		time1, null1 := times1.GetValue(i)
+		time2Str, null2 := time2Param.GetStrValue(i)
+
+		if null1 || null2 {
+			if err := rs.Append(types.Time(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Parse time2 string
+		time2, err := types.ParseTime(functionUtil.QuickBytesToStr(time2Str), scale)
+		if err != nil {
+			if err := rs.Append(types.Time(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Subtract time2 from time1 (both are in microseconds)
+		resultTime := types.Time(int64(time1) - int64(time2))
+
+		// Validate result
+		h := resultTime.Hour()
+		if h < 0 {
+			h = -h
+		}
+		if !types.ValidTime(uint64(h), 0, 0) {
+			if err := rs.Append(types.Time(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if err := rs.Append(resultTime, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func subTimeFromDatetime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	datetimes := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
+	time2Param := vector.GenerateFunctionStrParameter(ivecs[1])
+	rs := vector.MustFunctionResult[types.Datetime](result)
+
+	// Determine scale from input
+	scale := int32(ivecs[0].GetType().Scale)
+	if scale2 := int32(ivecs[1].GetType().Scale); scale2 > scale {
+		scale = scale2
+	}
+	rs.TempSetType(types.New(types.T_datetime, 0, scale))
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.Append(types.Datetime(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		dt, null1 := datetimes.GetValue(i)
+		time2Str, null2 := time2Param.GetStrValue(i)
+
+		if null1 || null2 {
+			if err := rs.Append(types.Datetime(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Parse time2 string
+		time2, err := types.ParseTime(functionUtil.QuickBytesToStr(time2Str), scale)
+		if err != nil {
+			if err := rs.Append(types.Datetime(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Subtract time2 from datetime (both are in microseconds)
+		resultDt := types.Datetime(int64(dt) - int64(time2))
+
+		if err := rs.Append(resultDt, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func subTimeFromTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	timestamps := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[0])
+	time2Param := vector.GenerateFunctionStrParameter(ivecs[1])
+	rs := vector.MustFunctionResult[types.Timestamp](result)
+	loc := proc.GetSessionInfo().TimeZone
+
+	// Determine scale from input
+	scale := int32(ivecs[0].GetType().Scale)
+	if scale2 := int32(ivecs[1].GetType().Scale); scale2 > scale {
+		scale = scale2
+	}
+	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.Append(types.Timestamp(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		ts, null1 := timestamps.GetValue(i)
+		time2Str, null2 := time2Param.GetStrValue(i)
+
+		if null1 || null2 {
+			if err := rs.Append(types.Timestamp(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Parse time2 string
+		time2, err := types.ParseTime(functionUtil.QuickBytesToStr(time2Str), scale)
+		if err != nil {
+			if err := rs.Append(types.Timestamp(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Convert timestamp to datetime, subtract time, convert back
+		dt := ts.ToDatetime(loc)
+		resultDt := types.Datetime(int64(dt) - int64(time2))
+		resultTs := resultDt.ToTimestamp(loc)
+
+		if err := rs.Append(resultTs, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func subTimeFromString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	// Try to parse as datetime first
+	dtParam := vector.GenerateFunctionStrParameter(ivecs[0])
+	time2Param := vector.GenerateFunctionStrParameter(ivecs[1])
+	rs := vector.MustFunctionResult[types.Datetime](result)
+
+	scale := int32(6) // Use max scale for string inputs
+	rs.TempSetType(types.New(types.T_datetime, 0, scale))
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.Append(types.Datetime(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		dtStr, null1 := dtParam.GetStrValue(i)
+		time2Str, null2 := time2Param.GetStrValue(i)
+
+		if null1 || null2 {
+			if err := rs.Append(types.Datetime(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Try to parse as datetime
+		dt, err := types.ParseDatetime(functionUtil.QuickBytesToStr(dtStr), scale)
+		if err != nil {
+			// If parsing as datetime fails, try as time
+			time1, err2 := types.ParseTime(functionUtil.QuickBytesToStr(dtStr), scale)
+			if err2 != nil {
+				if err := rs.Append(types.Datetime(0), true); err != nil {
+					return err
+				}
+				continue
+			}
+			// Convert time to datetime (using today's date)
+			dt = time1.ToDatetime(scale)
+		}
+
+		// Parse time2 string
+		time2, err := types.ParseTime(functionUtil.QuickBytesToStr(time2Str), scale)
+		if err != nil {
+			if err := rs.Append(types.Datetime(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Subtract time2 from datetime
+		resultDt := types.Datetime(int64(dt) - int64(time2))
+
+		if err := rs.Append(resultDt, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func DateFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	if !ivecs[1].IsConst() {
 		return moerr.NewInvalidArg(proc.Ctx, "date format format", "not constant")
@@ -1665,6 +2675,120 @@ func makeDateFormat(ctx context.Context, t types.Datetime, b rune, buf *bytes.Bu
 	return nil
 }
 
+// TimeFormat: format the time value according to the format string.
+// TIME_FORMAT only supports time-related format specifiers: %H, %h, %I, %i, %k, %l, %S, %s, %f, %p, %r, %T
+func TimeFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	if !ivecs[1].IsConst() {
+		return moerr.NewInvalidArg(proc.Ctx, "time format format", "not constant")
+	}
+
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	times := vector.GenerateFunctionFixedTypeParameter[types.Time](ivecs[0])
+	formats := vector.GenerateFunctionStrParameter(ivecs[1])
+	fmt, null2 := formats.GetStrValue(0)
+
+	var buf bytes.Buffer
+	for i := uint64(0); i < uint64(length); i++ {
+		t, null1 := times.GetValue(i)
+		if null1 || null2 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			buf.Reset()
+			if err = timeFormat(proc.Ctx, t, string(fmt), &buf); err != nil {
+				return err
+			}
+			if err = rs.AppendBytes(buf.Bytes(), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// timeFormat: Get the format string corresponding to the time according to format specifiers
+// Only supports time-related format specifiers: %H, %h, %I, %i, %k, %l, %S, %s, %f, %p, %r, %T
+func timeFormat(ctx context.Context, t types.Time, format string, buf *bytes.Buffer) error {
+	hour, minute, sec, msec, _ := t.ClockFormat()
+	inPatternMatch := false
+	for _, b := range format {
+		if inPatternMatch {
+			if err := makeTimeFormat(ctx, hour, minute, sec, msec, b, buf); err != nil {
+				return err
+			}
+			inPatternMatch = false
+			continue
+		}
+
+		// It's not in pattern match now.
+		if b == '%' {
+			inPatternMatch = true
+		} else {
+			buf.WriteRune(b)
+		}
+	}
+	return nil
+}
+
+// makeTimeFormat: Get the format string corresponding to the time according to a single format character
+// Only supports time-related format specifiers
+func makeTimeFormat(ctx context.Context, hour uint64, minute, sec uint8, msec uint64, b rune, buf *bytes.Buffer) error {
+	switch b {
+	case 'f':
+		fmt.Fprintf(buf, "%06d", msec)
+	case 'H':
+		FormatInt2BufByWidth(int(hour), 2, buf)
+	case 'k':
+		buf.WriteString(strconv.FormatUint(hour, 10))
+	case 'h', 'I':
+		tt := hour % 24
+		if tt%12 == 0 {
+			buf.WriteString("12")
+		} else {
+			FormatInt2BufByWidth(int(tt%12), 2, buf)
+		}
+	case 'i':
+		FormatInt2BufByWidth(int(minute), 2, buf)
+	case 'l':
+		tt := hour % 24
+		if tt%12 == 0 {
+			buf.WriteString("12")
+		} else {
+			buf.WriteString(strconv.FormatUint(tt%12, 10))
+		}
+	case 'p':
+		h := hour % 24
+		if h/12%2 == 0 {
+			buf.WriteString("AM")
+		} else {
+			buf.WriteString("PM")
+		}
+	case 'r':
+		h := hour % 24
+		switch {
+		case h == 0:
+			fmt.Fprintf(buf, "%02d:%02d:%02d AM", 12, minute, sec)
+		case h == 12:
+			fmt.Fprintf(buf, "%02d:%02d:%02d PM", 12, minute, sec)
+		case h < 12:
+			fmt.Fprintf(buf, "%02d:%02d:%02d AM", h, minute, sec)
+		default:
+			fmt.Fprintf(buf, "%02d:%02d:%02d PM", h-12, minute, sec)
+		}
+	case 'S', 's':
+		FormatInt2BufByWidth(int(sec), 2, buf)
+	case 'T':
+		fmt.Fprintf(buf, "%02d:%02d:%02d", hour%24, minute, sec)
+	default:
+		// For unsupported format specifiers, just write the character as-is
+		// This matches MySQL behavior where non-time format specifiers are ignored
+		buf.WriteRune(b)
+	}
+	return nil
+}
+
 // FormatIntByWidth: Formatintwidthn is used to format ints with width parameter n. Insufficient numbers are filled with 0.
 func FormatIntByWidth(num, n int) string {
 	numStr := strconv.Itoa(num)
@@ -1987,6 +3111,598 @@ func FieldString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ 
 	return nil
 }
 
+func eltCheck(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) < 2 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+
+	shouldCast := false
+	castTypes := make([]types.Type, len(inputs))
+
+	// First argument must be numeric (int64)
+	if !inputs[0].Oid.IsInteger() && inputs[0].Oid != types.T_any {
+		c, _ := tryToMatch([]types.Type{inputs[0]}, []types.T{types.T_int64})
+		if c == matchFailed {
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		}
+		if c == matchByCast {
+			shouldCast = true
+			castTypes[0] = types.T_int64.ToType()
+		} else {
+			castTypes[0] = inputs[0]
+		}
+	} else {
+		castTypes[0] = inputs[0]
+	}
+
+	// Rest arguments must be strings
+	for i := 1; i < len(inputs); i++ {
+		if !inputs[i].Oid.IsMySQLString() && inputs[i].Oid != types.T_any {
+			c, _ := tryToMatch([]types.Type{inputs[i]}, []types.T{types.T_varchar})
+			if c == matchFailed {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+			if c == matchByCast {
+				shouldCast = true
+				castTypes[i] = types.T_varchar.ToType()
+			} else {
+				castTypes[i] = inputs[i]
+			}
+		} else {
+			castTypes[i] = inputs[i]
+		}
+	}
+
+	if shouldCast {
+		return newCheckResultWithCast(0, castTypes)
+	}
+	return newCheckResultWithSuccess(0)
+}
+
+// Elt: ELT(N, str1, str2, str3, ...) - Returns str1 if N = 1, str2 if N = 2, and so on.
+// Returns NULL if N is less than 1, greater than the number of strings, or NULL.
+func Elt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	// First argument is the index N
+	nParam := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
+
+	// Rest arguments are strings
+	strParams := make([]vector.FunctionParameterWrapper[types.Varlena], len(ivecs)-1)
+	for i := 1; i < len(ivecs); i++ {
+		strParams[i-1] = vector.GenerateFunctionStrParameter(ivecs[i])
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		n, null := nParam.GetValue(i)
+		if null || n < 1 || n > int64(len(strParams)) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Get the string at position n (1-based, so index is n-1)
+		str, null := strParams[n-1].GetStrValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if err := rs.AppendBytes(str, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func makeSetCheck(overloads []overload, inputs []types.Type) checkResult {
+	// MAKE_SET(bits, str1, str2, ...)
+	// Minimum 2 arguments (bits + at least one string)
+	if len(inputs) < 2 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+
+	shouldCast := false
+	castTypes := make([]types.Type, len(inputs))
+
+	// First argument (bits) must be numeric
+	isNumeric := inputs[0].Oid.IsInteger() || inputs[0].Oid.IsFloat() || inputs[0].Oid == types.T_decimal64 || inputs[0].Oid == types.T_decimal128 || inputs[0].Oid == types.T_bit
+	if !isNumeric && inputs[0].Oid != types.T_any {
+		c, _ := tryToMatch([]types.Type{inputs[0]}, []types.T{types.T_int64})
+		if c == matchFailed {
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		}
+		if c == matchByCast {
+			shouldCast = true
+			castTypes[0] = types.T_int64.ToType()
+		} else {
+			castTypes[0] = inputs[0]
+		}
+	} else {
+		castTypes[0] = inputs[0]
+	}
+
+	// Rest arguments must be strings
+	for i := 1; i < len(inputs); i++ {
+		if !inputs[i].Oid.IsMySQLString() && inputs[i].Oid != types.T_any {
+			c, _ := tryToMatch([]types.Type{inputs[i]}, []types.T{types.T_varchar})
+			if c == matchFailed {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+			if c == matchByCast {
+				shouldCast = true
+				castTypes[i] = types.T_varchar.ToType()
+			} else {
+				castTypes[i] = inputs[i]
+			}
+		} else {
+			castTypes[i] = inputs[i]
+		}
+	}
+
+	if shouldCast {
+		return newCheckResultWithCast(0, castTypes)
+	}
+	return newCheckResultWithSuccess(0)
+}
+
+// MakeSet: MAKE_SET(bits, str1, str2, ...) - Returns a set value (a string containing substrings separated by ',' characters) consisting of the strings that have the corresponding bit in bits set.
+func MakeSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	// First argument: bits (numeric) - handle different numeric types
+	bitsType := ivecs[0].GetType().Oid
+	var getBitsValue func(uint64) (uint64, bool)
+
+	// Create appropriate parameter wrapper based on type (once, outside loop)
+	switch bitsType {
+	case types.T_int8:
+		param := vector.GenerateFunctionFixedTypeParameter[int8](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return uint64(val), false
+		}
+	case types.T_int16:
+		param := vector.GenerateFunctionFixedTypeParameter[int16](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return uint64(val), false
+		}
+	case types.T_int32:
+		param := vector.GenerateFunctionFixedTypeParameter[int32](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return uint64(val), false
+		}
+	case types.T_int64:
+		param := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return uint64(val), false
+		}
+	case types.T_uint8:
+		param := vector.GenerateFunctionFixedTypeParameter[uint8](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return uint64(val), false
+		}
+	case types.T_uint16:
+		param := vector.GenerateFunctionFixedTypeParameter[uint16](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return uint64(val), false
+		}
+	case types.T_uint32:
+		param := vector.GenerateFunctionFixedTypeParameter[uint32](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return uint64(val), false
+		}
+	case types.T_uint64:
+		param := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return val, false
+		}
+	case types.T_float32:
+		param := vector.GenerateFunctionFixedTypeParameter[float32](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return uint64(int64(val)), false
+		}
+	case types.T_float64:
+		param := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return uint64(int64(val)), false
+		}
+	default:
+		// Fallback to int64
+		param := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return uint64(val), false
+		}
+	}
+
+	// Rest arguments are strings
+	strParams := make([]vector.FunctionParameterWrapper[types.Varlena], len(ivecs)-1)
+	for i := 1; i < len(ivecs); i++ {
+		strParams[i-1] = vector.GenerateFunctionStrParameter(ivecs[i])
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Extract bits value using the appropriate getter
+		bitsUint, nullBits := getBitsValue(i)
+		if nullBits {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Build the result string by checking each bit position
+		var parts []string
+		for j := 0; j < len(strParams); j++ {
+			// Check if bit j is set (0-based, so bit 0 corresponds to str1, bit 1 to str2, etc.)
+			if (bitsUint>>uint(j))&1 == 1 {
+				str, null := strParams[j].GetStrValue(i)
+				if !null {
+					parts = append(parts, functionUtil.QuickBytesToStr(str))
+				}
+			}
+		}
+
+		// Join with comma separator
+		resultStr := strings.Join(parts, ",")
+		if err := rs.AppendBytes([]byte(resultStr), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func exportSetCheck(overloads []overload, inputs []types.Type) checkResult {
+	// EXPORT_SET(bits, on, off[, separator[, number_of_bits]])
+	// Minimum 3 arguments, maximum 5 arguments
+	if len(inputs) < 3 || len(inputs) > 5 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+
+	shouldCast := false
+	castTypes := make([]types.Type, len(inputs))
+
+	// First argument (bits) must be numeric
+	// Check if it's a numeric type (integer, float, or decimal)
+	isNumeric := inputs[0].Oid.IsInteger() || inputs[0].Oid.IsFloat() || inputs[0].Oid == types.T_decimal64 || inputs[0].Oid == types.T_decimal128 || inputs[0].Oid == types.T_bit
+	if !isNumeric && inputs[0].Oid != types.T_any {
+		c, _ := tryToMatch([]types.Type{inputs[0]}, []types.T{types.T_int64})
+		if c == matchFailed {
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		}
+		if c == matchByCast {
+			shouldCast = true
+			castTypes[0] = types.T_int64.ToType()
+		} else {
+			castTypes[0] = inputs[0]
+		}
+	} else {
+		castTypes[0] = inputs[0]
+	}
+
+	// Second and third arguments (on, off) must be strings
+	for i := 1; i <= 2; i++ {
+		if !inputs[i].Oid.IsMySQLString() && inputs[i].Oid != types.T_any {
+			c, _ := tryToMatch([]types.Type{inputs[i]}, []types.T{types.T_varchar})
+			if c == matchFailed {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+			if c == matchByCast {
+				shouldCast = true
+				castTypes[i] = types.T_varchar.ToType()
+			} else {
+				castTypes[i] = inputs[i]
+			}
+		} else {
+			castTypes[i] = inputs[i]
+		}
+	}
+
+	// Optional fourth argument (separator) must be string
+	if len(inputs) >= 4 {
+		if !inputs[3].Oid.IsMySQLString() && inputs[3].Oid != types.T_any {
+			c, _ := tryToMatch([]types.Type{inputs[3]}, []types.T{types.T_varchar})
+			if c == matchFailed {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+			if c == matchByCast {
+				shouldCast = true
+				castTypes[3] = types.T_varchar.ToType()
+			} else {
+				castTypes[3] = inputs[3]
+			}
+		} else {
+			castTypes[3] = inputs[3]
+		}
+	}
+
+	// Optional fifth argument (number_of_bits) must be numeric
+	if len(inputs) >= 5 {
+		if !inputs[4].Oid.IsInteger() && inputs[4].Oid != types.T_any {
+			c, _ := tryToMatch([]types.Type{inputs[4]}, []types.T{types.T_int64})
+			if c == matchFailed {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+			if c == matchByCast {
+				shouldCast = true
+				castTypes[4] = types.T_int64.ToType()
+			} else {
+				castTypes[4] = inputs[4]
+			}
+		} else {
+			castTypes[4] = inputs[4]
+		}
+	}
+
+	if shouldCast {
+		return newCheckResultWithCast(0, castTypes)
+	}
+	return newCheckResultWithSuccess(0)
+}
+
+// ExportSet: EXPORT_SET(bits, on, off[, separator[, number_of_bits]]) - Returns a string such that for every bit set in the value bits, you get an on string and for every bit not set, you get an off string.
+func ExportSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	// First argument: bits (numeric) - handle different numeric types
+	bitsType := ivecs[0].GetType().Oid
+	var bitsUint uint64
+	var nullBits bool
+
+	// Create appropriate parameter wrapper based on type (once, outside loop)
+	var getBitsValue func(uint64) (uint64, bool)
+	switch bitsType {
+	case types.T_int8:
+		param := vector.GenerateFunctionFixedTypeParameter[int8](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return uint64(val), false
+		}
+	case types.T_int16:
+		param := vector.GenerateFunctionFixedTypeParameter[int16](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return uint64(val), false
+		}
+	case types.T_int32:
+		param := vector.GenerateFunctionFixedTypeParameter[int32](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return uint64(val), false
+		}
+	case types.T_int64:
+		param := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return uint64(val), false
+		}
+	case types.T_uint8:
+		param := vector.GenerateFunctionFixedTypeParameter[uint8](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return uint64(val), false
+		}
+	case types.T_uint16:
+		param := vector.GenerateFunctionFixedTypeParameter[uint16](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return uint64(val), false
+		}
+	case types.T_uint32:
+		param := vector.GenerateFunctionFixedTypeParameter[uint32](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return uint64(val), false
+		}
+	case types.T_uint64:
+		param := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return val, false
+		}
+	case types.T_float32:
+		param := vector.GenerateFunctionFixedTypeParameter[float32](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return uint64(int64(val)), false
+		}
+	case types.T_float64:
+		param := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return uint64(int64(val)), false
+		}
+	default:
+		// Fallback to int64
+		param := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return uint64(val), false
+		}
+	}
+
+	// Second argument: on (string)
+	onParam := vector.GenerateFunctionStrParameter(ivecs[1])
+
+	// Third argument: off (string)
+	offParam := vector.GenerateFunctionStrParameter(ivecs[2])
+
+	// Optional fourth argument: separator (string, default ',')
+	var separatorParam vector.FunctionParameterWrapper[types.Varlena]
+	separatorProvided := len(ivecs) > 3
+	if separatorProvided {
+		separatorParam = vector.GenerateFunctionStrParameter(ivecs[3])
+	}
+
+	// Optional fifth argument: number_of_bits (int64, default 64)
+	var numberOfBitsParam vector.FunctionParameterWrapper[int64]
+	numberOfBitsProvided := len(ivecs) > 4
+	if numberOfBitsProvided {
+		numberOfBitsParam = vector.GenerateFunctionFixedTypeParameter[int64](ivecs[4])
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Extract bits value using the appropriate getter
+		bitsUint, nullBits = getBitsValue(i)
+
+		if nullBits {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		on, nullOn := onParam.GetStrValue(i)
+		off, nullOff := offParam.GetStrValue(i)
+		if nullOn || nullOff {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Get separator (default ',')
+		separator := ","
+		if separatorProvided && !ivecs[3].IsConstNull() {
+			sep, nullSep := separatorParam.GetStrValue(i)
+			if !nullSep {
+				separator = functionUtil.QuickBytesToStr(sep)
+			}
+		}
+
+		// Get number_of_bits (default 64, max 64)
+		numberOfBits := int64(64)
+		if numberOfBitsProvided && !ivecs[4].IsConstNull() {
+			nBits, nullNBits := numberOfBitsParam.GetValue(i)
+			if !nullNBits {
+				if nBits < 1 {
+					numberOfBits = 1
+				} else if nBits > 64 {
+					numberOfBits = 64
+				} else {
+					numberOfBits = nBits
+				}
+			}
+		}
+
+		// Build the result string
+		var parts []string
+		for j := int64(0); j < numberOfBits; j++ {
+			if (bitsUint>>uint(j))&1 == 1 {
+				parts = append(parts, functionUtil.QuickBytesToStr(on))
+			} else {
+				parts = append(parts, functionUtil.QuickBytesToStr(off))
+			}
+		}
+
+		resultStr := strings.Join(parts, separator)
+		if err := rs.AppendBytes([]byte(resultStr), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func formatCheck(overloads []overload, inputs []types.Type) checkResult {
 	if len(inputs) > 1 {
 		// if the first param's type is time type. return failed.
@@ -2020,6 +3736,102 @@ func FormatWith2Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 			if err = rs.AppendBytes([]byte(val), false); err != nil {
 				return err
 			}
+		}
+	}
+	return nil
+}
+
+// GetFormat returns a format string based on the type and locale.
+// GET_FORMAT({DATE|TIME|DATETIME}, {'EUR'|'USA'|'JIS'|'ISO'|'INTERNAL'})
+func GetFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	vs1 := vector.GenerateFunctionStrParameter(ivecs[0]) // type: DATE, TIME, or DATETIME
+	vs2 := vector.GenerateFunctionStrParameter(ivecs[1]) // locale: EUR, USA, JIS, ISO, INTERNAL
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := vs1.GetStrValue(i)
+		v2, null2 := vs2.GetStrValue(i)
+
+		if null1 || null2 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		typeStr := strings.ToUpper(functionUtil.QuickBytesToStr(v1))
+		localeStr := strings.ToUpper(functionUtil.QuickBytesToStr(v2))
+
+		var formatStr string
+		switch typeStr {
+		case "DATE":
+			switch localeStr {
+			case "USA":
+				formatStr = "%m.%d.%Y"
+			case "EUR":
+				formatStr = "%d.%m.%Y"
+			case "JIS":
+				formatStr = "%Y-%m-%d"
+			case "ISO":
+				formatStr = "%Y-%m-%d"
+			case "INTERNAL":
+				formatStr = "%Y%m%d"
+			default:
+				// Invalid locale, return NULL
+				if err = rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
+		case "TIME":
+			switch localeStr {
+			case "USA":
+				formatStr = "%h:%i:%s %p"
+			case "EUR":
+				formatStr = "%H.%i.%s"
+			case "JIS":
+				formatStr = "%H:%i:%s"
+			case "ISO":
+				formatStr = "%H:%i:%s"
+			case "INTERNAL":
+				formatStr = "%H%i%s"
+			default:
+				// Invalid locale, return NULL
+				if err = rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
+		case "DATETIME":
+			switch localeStr {
+			case "USA":
+				formatStr = "%Y-%m-%d %H.%i.%s"
+			case "EUR":
+				formatStr = "%Y-%m-%d %H.%i.%s"
+			case "JIS":
+				formatStr = "%Y-%m-%d %H:%i:%s"
+			case "ISO":
+				formatStr = "%Y-%m-%d %H:%i:%s"
+			case "INTERNAL":
+				formatStr = "%Y%m%d%H%i%s"
+			default:
+				// Invalid locale, return NULL
+				if err = rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
+		default:
+			// Invalid type, return NULL
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if err = rs.AppendBytes([]byte(formatStr), false); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -2602,6 +4414,210 @@ var validDatetimeUnit = map[string]struct{}{
 	"year_month":         {},
 }
 
+// YearWeekDate: YEARWEEK(date, mode) - Returns year and week for a date as YYYYWW format.
+// If mode is not provided, defaults to 0.
+func YearWeekDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[int64](result)
+	dates := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[0])
+
+	// Get mode (default 0 if not provided)
+	mode := 0
+	if len(ivecs) > 1 && !ivecs[1].IsConstNull() {
+		mode = int(vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0])
+		// Clamp mode to valid range [0, 7]
+		if mode < 0 {
+			mode = 0
+		} else if mode > 7 {
+			mode = 7
+		}
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		date, null := dates.GetValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		year, week := date.YearWeek(mode)
+		// YEARWEEK returns year*100 + week
+		result := int64(year)*100 + int64(week)
+		if err := rs.Append(result, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// YearWeekDatetime: YEARWEEK(datetime, mode) - Returns year and week for a datetime as YYYYWW format.
+func YearWeekDatetime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[int64](result)
+	datetimes := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
+
+	// Get mode (default 0 if not provided)
+	mode := 0
+	if len(ivecs) > 1 && !ivecs[1].IsConstNull() {
+		mode = int(vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0])
+		// Clamp mode to valid range [0, 7]
+		if mode < 0 {
+			mode = 0
+		} else if mode > 7 {
+			mode = 7
+		}
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		dt, null := datetimes.GetValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		year, week := dt.YearWeek(mode)
+		// YEARWEEK returns year*100 + week
+		result := int64(year)*100 + int64(week)
+		if err := rs.Append(result, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// YearWeekTimestamp: YEARWEEK(timestamp, mode) - Returns year and week for a timestamp as YYYYWW format.
+func YearWeekTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[int64](result)
+	timestamps := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[0])
+	loc := proc.GetSessionInfo().TimeZone
+	if loc == nil {
+		loc = time.Local
+	}
+
+	// Get mode (default 0 if not provided)
+	mode := 0
+	if len(ivecs) > 1 && !ivecs[1].IsConstNull() {
+		mode = int(vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0])
+		// Clamp mode to valid range [0, 7]
+		if mode < 0 {
+			mode = 0
+		} else if mode > 7 {
+			mode = 7
+		}
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		ts, null := timestamps.GetValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		dt := ts.ToDatetime(loc)
+		year, week := dt.YearWeek(mode)
+		// YEARWEEK returns year*100 + week
+		result := int64(year)*100 + int64(week)
+		if err := rs.Append(result, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// YearWeekString: YEARWEEK(string, mode) - Returns year and week for a string date/datetime as YYYYWW format.
+// Tries to parse as datetime first, then as date.
+func YearWeekString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[int64](result)
+	dateParam := vector.GenerateFunctionStrParameter(ivecs[0])
+
+	// Get mode (default 0 if not provided)
+	mode := 0
+	if len(ivecs) > 1 && !ivecs[1].IsConstNull() {
+		mode = int(vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0])
+		// Clamp mode to valid range [0, 7]
+		if mode < 0 {
+			mode = 0
+		} else if mode > 7 {
+			mode = 7
+		}
+	}
+
+	scale := int32(6) // Use max scale for string inputs
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		dateStr, null := dateParam.GetStrValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		dateStrVal := functionUtil.QuickBytesToStr(dateStr)
+
+		// Try to parse as datetime first
+		dt, err := types.ParseDatetime(dateStrVal, scale)
+		if err != nil {
+			// If parsing as datetime fails, try as date
+			date, err2 := types.ParseDateCast(dateStrVal)
+			if err2 != nil {
+				// Invalid date string, return NULL
+				if err := rs.Append(0, true); err != nil {
+					return err
+				}
+				continue
+			}
+			// Use date for YEARWEEK calculation
+			year, week := date.YearWeek(mode)
+			result := int64(year)*100 + int64(week)
+			if err := rs.Append(result, false); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Use datetime for YEARWEEK calculation
+		year, week := dt.YearWeek(mode)
+		result := int64(year)*100 + int64(week)
+		if err := rs.Append(result, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func extractFromDatetime(unit string, d types.Datetime) (string, error) {
 	if _, ok := validDatetimeUnit[unit]; !ok {
 		return "", moerr.NewInternalErrorNoCtx("invalid unit")
@@ -2889,6 +4905,43 @@ func evalLeft(str string, length int64) string {
 	return string(runeStr[:leftLength])
 }
 
+func Right(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetStrValue(i)
+		v2, null2 := p2.GetValue(i)
+		if null1 || null2 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			res := evalRight(functionUtil.QuickBytesToStr(v1), v2)
+			if err = rs.AppendBytes(functionUtil.QuickStrToBytes(res), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func evalRight(str string, length int64) string {
+	runeStr := []rune(str)
+	rightLength := int(length)
+	strLength := len(runeStr)
+
+	if rightLength <= 0 {
+		return ""
+	}
+	if rightLength >= strLength {
+		return str
+	}
+	// Return the last rightLength characters
+	return string(runeStr[strLength-rightLength:])
+}
+
 func Power(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	p1 := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[1])
@@ -2934,6 +4987,85 @@ func timeDiff[T types.Time | types.Datetime](v1, v2 T) (types.Time, error) {
 		return types.TimeFromClock(isNeg, types.MaxHourInTime, 59, 59, 0), nil
 	}
 	return tt, nil
+}
+
+// TimeDiffString: TIMEDIFF with string inputs - parses strings as TIME or DATETIME and returns the difference as TIME
+func TimeDiffString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	expr1Param := vector.GenerateFunctionStrParameter(ivecs[0])
+	expr2Param := vector.GenerateFunctionStrParameter(ivecs[1])
+	rs := vector.MustFunctionResult[types.Time](result)
+
+	scale := int32(6) // Use max scale for string inputs
+	rs.TempSetType(types.New(types.T_time, 0, scale))
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.Append(types.Time(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		expr1Str, null1 := expr1Param.GetStrValue(i)
+		expr2Str, null2 := expr2Param.GetStrValue(i)
+
+		if null1 || null2 {
+			if err := rs.Append(types.Time(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Parse expr1 - try datetime first, then time
+		var dt1 types.Datetime
+		var err1 error
+		expr1StrVal := functionUtil.QuickBytesToStr(expr1Str)
+		dt1, err1 = types.ParseDatetime(expr1StrVal, scale)
+		if err1 != nil {
+			// If parsing as datetime fails, try as time
+			time1, err2 := types.ParseTime(expr1StrVal, scale)
+			if err2 != nil {
+				if err := rs.Append(types.Time(0), true); err != nil {
+					return err
+				}
+				continue
+			}
+			// Convert time to datetime (using today's date)
+			dt1 = time1.ToDatetime(scale)
+		}
+
+		// Parse expr2 - try datetime first, then time
+		var dt2 types.Datetime
+		var err2 error
+		expr2StrVal := functionUtil.QuickBytesToStr(expr2Str)
+		dt2, err2 = types.ParseDatetime(expr2StrVal, scale)
+		if err2 != nil {
+			// If parsing as datetime fails, try as time
+			time2, err3 := types.ParseTime(expr2StrVal, scale)
+			if err3 != nil {
+				if err := rs.Append(types.Time(0), true); err != nil {
+					return err
+				}
+				continue
+			}
+			// Convert time to datetime (using today's date)
+			dt2 = time2.ToDatetime(scale)
+		}
+
+		// Calculate difference: expr1 - expr2
+		resultTime, err := timeDiff[types.Datetime](dt1, dt2)
+		if err != nil {
+			if err := rs.Append(types.Time(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if err := rs.Append(resultTime, false); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func TimestampDiff(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
@@ -3030,6 +5162,577 @@ func MakeDateString(
 	return nil
 }
 
+// makeTimeFromInt64: Helper function to create Time from int64 values
+func makeTimeFromInt64(hour, minute, second int64, rs *vector.FunctionResult[types.Time], i uint64) error {
+	// MySQL allows hour to be in range [0, 838] (TIME type range)
+	// minute and second should be in range [0, 59]
+	// If values are out of range, MySQL returns NULL
+	if hour < 0 || hour > 838 {
+		return rs.Append(types.Time(0), true)
+	}
+
+	if minute < 0 || minute > 59 || second < 0 || second > 59 {
+		return rs.Append(types.Time(0), true)
+	}
+
+	// Create Time value using TimeFromClock
+	// hour can be up to 838, so we use uint64 for hour
+	timeValue := types.TimeFromClock(false, uint64(hour), uint8(minute), uint8(second), 0)
+
+	// Validate the resulting time
+	h := timeValue.Hour()
+	if h < 0 {
+		h = -h
+	}
+	if !types.ValidTime(uint64(h), 0, 0) {
+		return rs.Append(types.Time(0), true)
+	}
+
+	return rs.Append(timeValue, false)
+}
+
+// MakeTime: MAKETIME(hour, minute, second) - Returns a time value calculated from the hour, minute, and second arguments.
+func MakeTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Time](result)
+
+	// Check the types of input vectors and create appropriate parameter wrappers
+	hourType := ivecs[0].GetType().Oid
+	minuteType := ivecs[1].GetType().Oid
+	secondType := ivecs[2].GetType().Oid
+
+	// Create parameter wrappers based on types (these can be reused for all rows)
+	var getHourValue func(uint64) (int64, bool)
+	var getMinuteValue func(uint64) (int64, bool)
+	var getSecondValue func(uint64) (int64, bool)
+
+	// Setup hour parameter extractor
+	switch hourType {
+	case types.T_int8:
+		hourParam := vector.GenerateFunctionFixedTypeParameter[int8](ivecs[0])
+		getHourValue = func(i uint64) (int64, bool) {
+			val, null := hourParam.GetValue(i)
+			return int64(val), null
+		}
+	case types.T_int16:
+		hourParam := vector.GenerateFunctionFixedTypeParameter[int16](ivecs[0])
+		getHourValue = func(i uint64) (int64, bool) {
+			val, null := hourParam.GetValue(i)
+			return int64(val), null
+		}
+	case types.T_int32:
+		hourParam := vector.GenerateFunctionFixedTypeParameter[int32](ivecs[0])
+		getHourValue = func(i uint64) (int64, bool) {
+			val, null := hourParam.GetValue(i)
+			return int64(val), null
+		}
+	case types.T_int64:
+		hourParam := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
+		getHourValue = func(i uint64) (int64, bool) {
+			val, null := hourParam.GetValue(i)
+			return val, null
+		}
+	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+		hourParam := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[0])
+		getHourValue = func(i uint64) (int64, bool) {
+			val, null := hourParam.GetValue(i)
+			return int64(val), null
+		}
+	case types.T_float32, types.T_float64:
+		hourParam := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0])
+		getHourValue = func(i uint64) (int64, bool) {
+			val, null := hourParam.GetValue(i)
+			return int64(val), null // Truncate decimal part
+		}
+	default:
+		return moerr.NewInvalidArgNoCtx("MAKETIME hour parameter", hourType)
+	}
+
+	// Setup minute parameter extractor
+	switch minuteType {
+	case types.T_int8:
+		minuteParam := vector.GenerateFunctionFixedTypeParameter[int8](ivecs[1])
+		getMinuteValue = func(i uint64) (int64, bool) {
+			val, null := minuteParam.GetValue(i)
+			return int64(val), null
+		}
+	case types.T_int16:
+		minuteParam := vector.GenerateFunctionFixedTypeParameter[int16](ivecs[1])
+		getMinuteValue = func(i uint64) (int64, bool) {
+			val, null := minuteParam.GetValue(i)
+			return int64(val), null
+		}
+	case types.T_int32:
+		minuteParam := vector.GenerateFunctionFixedTypeParameter[int32](ivecs[1])
+		getMinuteValue = func(i uint64) (int64, bool) {
+			val, null := minuteParam.GetValue(i)
+			return int64(val), null
+		}
+	case types.T_int64:
+		minuteParam := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+		getMinuteValue = func(i uint64) (int64, bool) {
+			val, null := minuteParam.GetValue(i)
+			return val, null
+		}
+	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+		minuteParam := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[1])
+		getMinuteValue = func(i uint64) (int64, bool) {
+			val, null := minuteParam.GetValue(i)
+			return int64(val), null
+		}
+	case types.T_float32, types.T_float64:
+		minuteParam := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[1])
+		getMinuteValue = func(i uint64) (int64, bool) {
+			val, null := minuteParam.GetValue(i)
+			return int64(val), null // Truncate decimal part
+		}
+	default:
+		return moerr.NewInvalidArgNoCtx("MAKETIME minute parameter", minuteType)
+	}
+
+	// Setup second parameter extractor
+	switch secondType {
+	case types.T_int8:
+		secondParam := vector.GenerateFunctionFixedTypeParameter[int8](ivecs[2])
+		getSecondValue = func(i uint64) (int64, bool) {
+			val, null := secondParam.GetValue(i)
+			return int64(val), null
+		}
+	case types.T_int16:
+		secondParam := vector.GenerateFunctionFixedTypeParameter[int16](ivecs[2])
+		getSecondValue = func(i uint64) (int64, bool) {
+			val, null := secondParam.GetValue(i)
+			return int64(val), null
+		}
+	case types.T_int32:
+		secondParam := vector.GenerateFunctionFixedTypeParameter[int32](ivecs[2])
+		getSecondValue = func(i uint64) (int64, bool) {
+			val, null := secondParam.GetValue(i)
+			return int64(val), null
+		}
+	case types.T_int64:
+		secondParam := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2])
+		getSecondValue = func(i uint64) (int64, bool) {
+			val, null := secondParam.GetValue(i)
+			return val, null
+		}
+	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+		secondParam := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[2])
+		getSecondValue = func(i uint64) (int64, bool) {
+			val, null := secondParam.GetValue(i)
+			return int64(val), null
+		}
+	case types.T_float32, types.T_float64:
+		secondParam := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[2])
+		getSecondValue = func(i uint64) (int64, bool) {
+			val, null := secondParam.GetValue(i)
+			return int64(val), null // Truncate decimal part
+		}
+	default:
+		return moerr.NewInvalidArgNoCtx("MAKETIME second parameter", secondType)
+	}
+
+	// Process all rows
+	for i := uint64(0); i < uint64(length); i++ {
+		hourInt, null1 := getHourValue(i)
+		minuteInt, null2 := getMinuteValue(i)
+		secondInt, null3 := getSecondValue(i)
+
+		if null1 || null2 || null3 {
+			if err := rs.Append(types.Time(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if err := makeTimeFromInt64(hourInt, minuteInt, secondInt, rs, i); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// PeriodAdd: PERIOD_ADD(P, N) - Adds N months to period P (in the format YYMM or YYYYMM). Returns a value in the format YYYYMM.
+func PeriodAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[int64](result)
+
+	// P can be int64, uint64, or float64 (period in YYMM or YYYYMM format)
+	// N can be int64, uint64, or float64 (number of months to add)
+	periodType := ivecs[0].GetType().Oid
+	monthsType := ivecs[1].GetType().Oid
+
+	// Create parameter extractors based on types
+	var getPeriodValue func(uint64) (int64, bool)
+	var getMonthsValue func(uint64) (int64, bool)
+
+	// Setup period parameter extractor
+	switch periodType {
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
+		periodParam := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
+		getPeriodValue = func(i uint64) (int64, bool) {
+			val, null := periodParam.GetValue(i)
+			return val, null
+		}
+	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+		periodParam := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[0])
+		getPeriodValue = func(i uint64) (int64, bool) {
+			val, null := periodParam.GetValue(i)
+			return int64(val), null
+		}
+	case types.T_float32, types.T_float64:
+		periodParam := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0])
+		getPeriodValue = func(i uint64) (int64, bool) {
+			val, null := periodParam.GetValue(i)
+			return int64(val), null // Truncate decimal part
+		}
+	default:
+		return moerr.NewInvalidArgNoCtx("PERIOD_ADD period parameter", periodType)
+	}
+
+	// Setup months parameter extractor
+	switch monthsType {
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
+		monthsParam := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+		getMonthsValue = func(i uint64) (int64, bool) {
+			val, null := monthsParam.GetValue(i)
+			return val, null
+		}
+	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+		monthsParam := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[1])
+		getMonthsValue = func(i uint64) (int64, bool) {
+			val, null := monthsParam.GetValue(i)
+			return int64(val), null
+		}
+	case types.T_float32, types.T_float64:
+		monthsParam := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[1])
+		getMonthsValue = func(i uint64) (int64, bool) {
+			val, null := monthsParam.GetValue(i)
+			return int64(val), null // Truncate decimal part
+		}
+	default:
+		return moerr.NewInvalidArgNoCtx("PERIOD_ADD months parameter", monthsType)
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		period, null1 := getPeriodValue(i)
+		months, null2 := getMonthsValue(i)
+
+		if null1 || null2 {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Parse period P (YYMM or YYYYMM format) using helper function
+		year, month, err := parsePeriod(period)
+		if err != nil {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Validate year and month
+		if year < 0 || year > 9999 || month < 1 || month > 12 {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Add months to the date
+		// Create a date from year and month (use day 1)
+		date := types.DateFromCalendar(year, month, 1)
+		dt := date.ToDatetime()
+
+		// Add months using AddInterval
+		resultDt, success := dt.AddInterval(months, types.Month, types.DateTimeType)
+		if !success {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Extract year and month from result
+		resultDate := resultDt.ToDate()
+		resultYear := resultDate.Year()
+		resultMonth := resultDate.Month()
+
+		// Format as YYYYMM
+		resultPeriod := int64(resultYear)*100 + int64(resultMonth)
+
+		if err := rs.Append(resultPeriod, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// parsePeriod parses a period value (YYMM or YYYYMM format) and returns year and month.
+// Returns (year, month, error). If period is invalid, returns (0, 0, error).
+func parsePeriod(period int64) (int32, uint8, error) {
+	// Handle negative periods (MySQL returns NULL for negative periods)
+	if period < 0 {
+		return 0, 0, moerr.NewInvalidArgNoCtx("PERIOD", "negative period")
+	}
+
+	periodStr := fmt.Sprintf("%d", period)
+	periodLen := len(periodStr)
+
+	// Pad 3-digit periods to 4 digits (e.g., 802 -> 0802)
+	if periodLen == 3 {
+		periodStr = "0" + periodStr
+		periodLen = 4
+	}
+
+	var year int32
+	var month uint8
+
+	if periodLen == 4 {
+		// YYMM format (e.g., 0802)
+		yy, err := strconv.ParseInt(periodStr[:2], 10, 32)
+		if err != nil {
+			return 0, 0, err
+		}
+		mm, err := strconv.ParseInt(periodStr[2:], 10, 32)
+		if err != nil || mm < 1 || mm > 12 {
+			return 0, 0, moerr.NewInvalidArgNoCtx("PERIOD", "invalid month")
+		}
+		// Convert YY to YYYY: 00-69 -> 2000-2069, 70-99 -> 1970-1999
+		if yy >= 0 && yy <= 69 {
+			year = int32(2000 + yy)
+		} else if yy >= 70 && yy <= 99 {
+			year = int32(1900 + yy)
+		} else {
+			return 0, 0, moerr.NewInvalidArgNoCtx("PERIOD", "invalid year")
+		}
+		month = uint8(mm)
+	} else if periodLen == 6 {
+		// YYYYMM format (e.g., 200802)
+		yyyy, err := strconv.ParseInt(periodStr[:4], 10, 32)
+		if err != nil {
+			return 0, 0, err
+		}
+		mm, err := strconv.ParseInt(periodStr[4:], 10, 32)
+		if err != nil || mm < 1 || mm > 12 {
+			return 0, 0, moerr.NewInvalidArgNoCtx("PERIOD", "invalid month")
+		}
+		year = int32(yyyy)
+		month = uint8(mm)
+	} else {
+		// Invalid period format (not 3, 4, or 6 digits)
+		return 0, 0, moerr.NewInvalidArgNoCtx("PERIOD", "invalid format")
+	}
+
+	// Validate year range
+	if year < 0 || year > 9999 {
+		return 0, 0, moerr.NewInvalidArgNoCtx("PERIOD", "year out of range")
+	}
+
+	return year, month, nil
+}
+
+// PeriodDiff: PERIOD_DIFF(P1, P2) - Returns the number of months between periods P1 and P2.
+// P1 and P2 should be in the format YYMM or YYYYMM.
+func PeriodDiff(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[int64](result)
+
+	// P1 and P2 can be int64, uint64, or float64 (period in YYMM or YYYYMM format)
+	period1Type := ivecs[0].GetType().Oid
+	period2Type := ivecs[1].GetType().Oid
+
+	// Create parameter extractors based on types
+	var getPeriod1Value func(uint64) (int64, bool)
+	var getPeriod2Value func(uint64) (int64, bool)
+
+	// Setup period1 parameter extractor
+	switch period1Type {
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
+		period1Param := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
+		getPeriod1Value = func(i uint64) (int64, bool) {
+			val, null := period1Param.GetValue(i)
+			return val, null
+		}
+	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+		period1Param := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[0])
+		getPeriod1Value = func(i uint64) (int64, bool) {
+			val, null := period1Param.GetValue(i)
+			return int64(val), null
+		}
+	case types.T_float32, types.T_float64:
+		period1Param := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0])
+		getPeriod1Value = func(i uint64) (int64, bool) {
+			val, null := period1Param.GetValue(i)
+			return int64(val), null // Truncate decimal part
+		}
+	default:
+		return moerr.NewInvalidArgNoCtx("PERIOD_DIFF period1 parameter", period1Type)
+	}
+
+	// Setup period2 parameter extractor
+	switch period2Type {
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
+		period2Param := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+		getPeriod2Value = func(i uint64) (int64, bool) {
+			val, null := period2Param.GetValue(i)
+			return val, null
+		}
+	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+		period2Param := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[1])
+		getPeriod2Value = func(i uint64) (int64, bool) {
+			val, null := period2Param.GetValue(i)
+			return int64(val), null
+		}
+	case types.T_float32, types.T_float64:
+		period2Param := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[1])
+		getPeriod2Value = func(i uint64) (int64, bool) {
+			val, null := period2Param.GetValue(i)
+			return int64(val), null // Truncate decimal part
+		}
+	default:
+		return moerr.NewInvalidArgNoCtx("PERIOD_DIFF period2 parameter", period2Type)
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		period1, null1 := getPeriod1Value(i)
+		period2, null2 := getPeriod2Value(i)
+
+		if null1 || null2 {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Parse period1
+		year1, month1, err1 := parsePeriod(period1)
+		if err1 != nil {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Parse period2
+		year2, month2, err2 := parsePeriod(period2)
+		if err2 != nil {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Calculate difference in months: (year1 - year2) * 12 + (month1 - month2)
+		diffMonths := (year1-year2)*12 + int32(month1) - int32(month2)
+
+		if err := rs.Append(int64(diffMonths), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// SecToTime: SEC_TO_TIME(seconds) - Returns the seconds argument, converted to hours, minutes, and seconds, as a TIME value.
+func SecToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Time](result)
+
+	// seconds can be int64, uint64, or float64
+	secondsType := ivecs[0].GetType().Oid
+
+	// Create parameter extractor based on type
+	var getSecondsValue func(uint64) (int64, bool)
+
+	switch secondsType {
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
+		secondsParam := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
+		getSecondsValue = func(i uint64) (int64, bool) {
+			val, null := secondsParam.GetValue(i)
+			return val, null
+		}
+	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+		secondsParam := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[0])
+		getSecondsValue = func(i uint64) (int64, bool) {
+			val, null := secondsParam.GetValue(i)
+			return int64(val), null
+		}
+	case types.T_float32, types.T_float64:
+		secondsParam := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0])
+		getSecondsValue = func(i uint64) (int64, bool) {
+			val, null := secondsParam.GetValue(i)
+			return int64(val), null // Truncate decimal part
+		}
+	default:
+		return moerr.NewInvalidArgNoCtx("SEC_TO_TIME seconds parameter", secondsType)
+	}
+
+	// MySQL TIME range: -838:59:59 to 838:59:59
+	// In seconds: -3020399 to 3020399
+	const maxTimeSeconds = 3020399 // 838*3600 + 59*60 + 59
+	const minTimeSeconds = -3020399
+
+	for i := uint64(0); i < uint64(length); i++ {
+		seconds, null := getSecondsValue(i)
+
+		if null {
+			if err := rs.Append(types.Time(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Check if seconds is within valid TIME range
+		if seconds > maxTimeSeconds || seconds < minTimeSeconds {
+			if err := rs.Append(types.Time(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Convert seconds to hours, minutes, and seconds
+		// Handle negative values
+		isNegative := seconds < 0
+		if isNegative {
+			seconds = -seconds
+		}
+
+		hours := seconds / 3600
+		remainingSeconds := seconds % 3600
+		minutes := remainingSeconds / 60
+		secs := remainingSeconds % 60
+
+		// Check if hours exceed MySQL TIME limit (838:59:59)
+		// MySQL TIME range is -838:59:59 to 838:59:59
+		if hours > 838 {
+			if err := rs.Append(types.Time(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Create TIME value using TimeFromClock
+		// isNegative: true if the time should be negative
+		timeValue := types.TimeFromClock(isNegative, uint64(hours), uint8(minutes), uint8(secs), 0)
+
+		// Validate the resulting time
+		h := timeValue.Hour()
+		if h < 0 {
+			h = -h
+		}
+		if !types.ValidTime(uint64(h), uint64(timeValue.Minute()), uint64(timeValue.Sec())) {
+			if err := rs.Append(types.Time(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if err := rs.Append(timeValue, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func Replace(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
 	p2 := vector.GenerateFunctionStrParameter(ivecs[1])
@@ -3056,6 +5759,73 @@ func Replace(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pro
 			}
 
 			if err = rs.AppendBytes(functionUtil.QuickStrToBytes(res), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func Insert(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	p1 := vector.GenerateFunctionStrParameter(ivecs[0])              // str
+	p2 := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1]) // pos
+	p3 := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]) // len
+	p4 := vector.GenerateFunctionStrParameter(ivecs[3])              // newstr
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetStrValue(i)
+		v2, null2 := p2.GetValue(i)
+		v3, null3 := p3.GetValue(i)
+		v4, null4 := p4.GetStrValue(i)
+
+		if null1 || null2 || null3 || null4 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			str := functionUtil.QuickBytesToStr(v1)
+			pos := v2
+			replaceLen := v3
+			newstr := functionUtil.QuickBytesToStr(v4)
+
+			// Convert to runes for proper character handling
+			runes := []rune(str)
+			strLen := int64(len(runes))
+
+			// MySQL INSERT behavior:
+			// - If pos <= 0 or pos > string length, return original string
+			// - If replaceLen <= 0, insert newstr at position pos without removing anything
+			// - Otherwise, replace replaceLen characters starting at pos with newstr
+			// - Position is 1-based
+
+			var result string
+			if pos <= 0 || pos > strLen {
+				// Invalid position, return original string
+				result = str
+			} else if replaceLen <= 0 {
+				// Insert without removing
+				posIdx := int(pos - 1) // Convert to 0-based index
+				if posIdx >= len(runes) {
+					result = str + newstr
+				} else {
+					result = string(runes[:posIdx]) + newstr + string(runes[posIdx:])
+				}
+			} else {
+				// Replace replaceLen characters starting at pos
+				posIdx := int(pos - 1) // Convert to 0-based index
+				endIdx := posIdx + int(replaceLen)
+				if endIdx > len(runes) {
+					endIdx = len(runes)
+				}
+				if posIdx >= len(runes) {
+					result = str + newstr
+				} else {
+					result = string(runes[:posIdx]) + newstr + string(runes[endIdx:])
+				}
+			}
+
+			if err = rs.AppendBytes(functionUtil.QuickStrToBytes(result), false); err != nil {
 				return err
 			}
 		}
@@ -3224,4 +5994,170 @@ func castBinaryArrayToInt(array []uint8) int64 {
 		result += int64(value) << uint(8*(len(array)-i-1))
 	}
 	return result
+}
+
+// generateAESKey generates a 16-byte AES key from the input key using SHA1
+// MySQL's AES_ENCRYPT uses SHA1 hash of the key, taking the first 16 bytes
+func generateAESKey(key []byte) []byte {
+	hash := sha1.Sum(key)
+	return hash[:16] // AES-128 requires 16-byte key
+}
+
+// pkcs7Padding adds PKCS7 padding to the data
+func pkcs7Padding(data []byte, blockSize int) []byte {
+	padding := blockSize - len(data)%blockSize
+	padtext := make([]byte, padding)
+	for i := range padtext {
+		padtext[i] = byte(padding)
+	}
+	return append(data, padtext...)
+}
+
+// pkcs7Unpadding removes PKCS7 padding from the data
+func pkcs7Unpadding(data []byte) ([]byte, error) {
+	if len(data) == 0 {
+		return nil, moerr.NewInvalidInputNoCtx("invalid padding")
+	}
+	padding := int(data[len(data)-1])
+	if padding > len(data) || padding == 0 {
+		return nil, moerr.NewInvalidInputNoCtx("invalid padding")
+	}
+	// Verify padding
+	for i := len(data) - padding; i < len(data); i++ {
+		if data[i] != byte(padding) {
+			return nil, moerr.NewInvalidInputNoCtx("invalid padding")
+		}
+	}
+	return data[:len(data)-padding], nil
+}
+
+// encryptECB encrypts data using AES-128-ECB mode
+func encryptECB(plaintext, key []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+
+	// Add PKCS7 padding
+	padded := pkcs7Padding(plaintext, aes.BlockSize)
+
+	// Encrypt each block independently (ECB mode)
+	ciphertext := make([]byte, len(padded))
+	for i := 0; i < len(padded); i += aes.BlockSize {
+		block.Encrypt(ciphertext[i:i+aes.BlockSize], padded[i:i+aes.BlockSize])
+	}
+
+	return ciphertext, nil
+}
+
+// decryptECB decrypts data using AES-128-ECB mode
+func decryptECB(ciphertext, key []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+
+	// Check that ciphertext length is a multiple of block size
+	if len(ciphertext)%aes.BlockSize != 0 {
+		return nil, moerr.NewInvalidInputNoCtx("invalid ciphertext length")
+	}
+
+	// Decrypt each block independently (ECB mode)
+	plaintext := make([]byte, len(ciphertext))
+	for i := 0; i < len(ciphertext); i += aes.BlockSize {
+		block.Decrypt(plaintext[i:i+aes.BlockSize], ciphertext[i:i+aes.BlockSize])
+	}
+
+	// Remove PKCS7 padding
+	return pkcs7Unpadding(plaintext)
+}
+
+// AESEncrypt: AES_ENCRYPT(str, key_str) - Encrypts a string using AES encryption
+func AESEncrypt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	strParam := vector.GenerateFunctionStrParameter(ivecs[0])
+	keyParam := vector.GenerateFunctionStrParameter(ivecs[1])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		str, nullStr := strParam.GetStrValue(i)
+		key, nullKey := keyParam.GetStrValue(i)
+
+		if nullStr || nullKey {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Generate AES key from the key string
+		aesKey := generateAESKey(key)
+
+		// Encrypt using AES-128-ECB
+		ciphertext, err := encryptECB(str, aesKey)
+		if err != nil {
+			// On error, return NULL (MySQL behavior)
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if err := rs.AppendBytes(ciphertext, false); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// AESDecrypt: AES_DECRYPT(crypt_str, key_str) - Decrypts an encrypted string using AES decryption
+func AESDecrypt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	cryptParam := vector.GenerateFunctionStrParameter(ivecs[0])
+	keyParam := vector.GenerateFunctionStrParameter(ivecs[1])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		crypt, nullCrypt := cryptParam.GetStrValue(i)
+		key, nullKey := keyParam.GetStrValue(i)
+
+		if nullCrypt || nullKey {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Generate AES key from the key string
+		aesKey := generateAESKey(key)
+
+		// Decrypt using AES-128-ECB
+		plaintext, err := decryptECB(crypt, aesKey)
+		if err != nil {
+			// On error, return NULL (MySQL behavior)
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if err := rs.AppendBytes(plaintext, false); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

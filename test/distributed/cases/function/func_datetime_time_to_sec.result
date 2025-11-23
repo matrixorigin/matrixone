@@ -1,0 +1,83 @@
+SELECT TIME_TO_SEC('22:23:00') AS result1;
+result1
+80580
+SELECT TIME_TO_SEC('22:23:00') AS test1;  # 80280 (22*3600 + 23*60 + 0)
+test1
+80580
+SELECT TIME_TO_SEC('00:00:00') AS test2;  # 0
+test2
+0
+SELECT TIME_TO_SEC('00:00:01') AS test3;  # 1
+test3
+1
+SELECT TIME_TO_SEC('00:01:00') AS test4;  # 60
+test4
+60
+SELECT TIME_TO_SEC('01:00:00') AS test5;  # 3600
+test5
+3600
+SELECT TIME_TO_SEC('01:01:01') AS test6;  # 3661
+test6
+3661
+SELECT TIME_TO_SEC('00:00:59') AS fifty_nine_seconds;  # 59
+fifty_nine_seconds
+59
+SELECT TIME_TO_SEC('00:59:00') AS fifty_nine_minutes;  # 3540
+fifty_nine_minutes
+3540
+SELECT TIME_TO_SEC('23:00:00') AS twenty_three_hours;  # 82800
+twenty_three_hours
+82800
+SELECT TIME_TO_SEC('838:59:59') AS max_time;  # 3020399 (max MySQL TIME value)
+max_time
+3020399
+SELECT TIME_TO_SEC('-22:23:00') AS negative_time;  # -80280
+negative_time
+-80580
+SELECT TIME_TO_SEC('-01:00:00') AS negative_hour;  # -3600
+negative_hour
+-3600
+SELECT TIME_TO_SEC('-00:01:00') AS negative_minute; # -60
+negative_minute
+-60
+SELECT TIME_TO_SEC('22:23:00.500000') AS with_microseconds;
+with_microseconds
+80580
+SELECT TIME_TO_SEC('01:01:01.999999') AS with_microseconds2;
+with_microseconds2
+3661
+SELECT TIME_TO_SEC(NULL) AS null_test;
+null_test
+null
+CREATE TABLE t1(t TIME);
+INSERT INTO t1 VALUES ('22:23:00'), ('01:00:00'), ('00:00:00');
+SELECT TIME_TO_SEC(t) AS seconds FROM t1;
+seconds
+80580
+3600
+0
+DROP TABLE t1;
+CREATE TABLE t1(t TIME);
+INSERT INTO t1 VALUES ('22:23:00'), ('01:00:00'), ('00:00:00');
+SELECT * FROM t1 WHERE TIME_TO_SEC(t) > 3600;
+t
+22:23:00
+DROP TABLE t1;
+SELECT TIME_TO_SEC('00:00:00') AS zero;
+zero
+0
+SELECT TIME_TO_SEC('23:59:59') AS max_day_time;  # 86399
+max_day_time
+86399
+SELECT TIME_TO_SEC('-23:59:59') AS min_day_time; # -86399
+min_day_time
+-86399
+SELECT TIME_TO_SEC(SEC_TO_TIME(2378)) AS inverse_test1;  # Should return 2378
+inverse_test1
+2378
+SELECT TIME_TO_SEC(SEC_TO_TIME(0)) AS inverse_test2;     # Should return 0
+inverse_test2
+0
+SELECT TIME_TO_SEC(SEC_TO_TIME(3600)) AS inverse_test3;  # Should return 3600
+inverse_test3
+3600

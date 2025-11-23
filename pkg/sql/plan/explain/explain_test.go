@@ -15,6 +15,7 @@
 package explain
 
 import (
+	"bytes"
 	"context"
 	"strings"
 	"testing"
@@ -433,3 +434,313 @@ func runOneStmt(opt plan.Optimizer, t *testing.T, sql string) error {
 	}
 	return nil
 }
+
+func TestCheckPlan(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("empty checkExpr should return nil", func(t *testing.T) {
+		lines := []string{"line1", "line2", "line3"}
+		err := checkPlan(ctx, lines, []string{})
+		if err != nil {
+			t.Errorf("Expected nil error for empty checkExpr, got: %v", err)
+		}
+	})
+
+	t.Run("single pattern that exists", func(t *testing.T) {
+		lines := []string{"line1", "line2 with pattern", "line3"}
+		err := checkPlan(ctx, lines, []string{"pattern"})
+		if err != nil {
+			t.Errorf("Expected nil error when pattern exists, got: %v", err)
+		}
+	})
+
+	t.Run("single pattern that doesn't exist", func(t *testing.T) {
+		lines := []string{"line1", "line2", "line3"}
+		err := checkPlan(ctx, lines, []string{"nonexistent"})
+		if err == nil {
+			t.Error("Expected error when pattern doesn't exist, got nil")
+		}
+		if !strings.Contains(err.Error(), "check expr nonexistent not found") {
+			t.Errorf("Expected error message to contain 'check expr nonexistent not found', got: %v", err)
+		}
+	})
+
+	t.Run("multiple patterns that exist in order", func(t *testing.T) {
+		lines := []string{
+			"line1 with first",
+			"line2",
+			"line3 with second",
+			"line4",
+			"line5 with third",
+		}
+		err := checkPlan(ctx, lines, []string{"first", "second", "third"})
+		if err != nil {
+			t.Errorf("Expected nil error when all patterns exist in order, got: %v", err)
+		}
+	})
+
+	t.Run("multiple patterns where one doesn't exist", func(t *testing.T) {
+		lines := []string{
+			"line1 with first",
+			"line2",
+			"line3 with second",
+			"line4",
+		}
+		err := checkPlan(ctx, lines, []string{"first", "second", "nonexistent"})
+		if err == nil {
+			t.Error("Expected error when pattern doesn't exist, got nil")
+		}
+		if !strings.Contains(err.Error(), "check expr nonexistent not found") {
+			t.Errorf("Expected error message to contain 'check expr nonexistent not found', got: %v", err)
+		}
+	})
+
+	t.Run("multiple patterns where second pattern appears before first", func(t *testing.T) {
+		lines := []string{
+			"line1 with second",
+			"line2",
+			"line3 with first",
+		}
+		err := checkPlan(ctx, lines, []string{"first", "second"})
+		if err == nil {
+			t.Error("Expected error when patterns are out of order, got nil")
+		}
+		// After finding "first", it should look for "second" in remaining lines
+		// Since "second" was before "first", it won't be found
+		if !strings.Contains(err.Error(), "check expr second not found") {
+			t.Errorf("Expected error message to contain 'check expr second not found', got: %v", err)
+		}
+	})
+
+	t.Run("regex pattern matching", func(t *testing.T) {
+		lines := []string{
+			"line1 with number 123",
+			"line2",
+			"line3 with word test",
+		}
+		err := checkPlan(ctx, lines, []string{`\d+`, "test"})
+		if err != nil {
+			t.Errorf("Expected nil error when regex patterns match, got: %v", err)
+		}
+	})
+
+	t.Run("invalid regex pattern", func(t *testing.T) {
+		lines := []string{"line1", "line2"}
+		err := checkPlan(ctx, lines, []string{`[invalid`})
+		if err == nil {
+			t.Error("Expected error for invalid regex pattern, got nil")
+		}
+	})
+
+	t.Run("pattern at beginning of lines", func(t *testing.T) {
+		lines := []string{
+			"first pattern here",
+			"line2",
+			"line3",
+		}
+		err := checkPlan(ctx, lines, []string{"first"})
+		if err != nil {
+			t.Errorf("Expected nil error when pattern is at beginning, got: %v", err)
+		}
+	})
+
+	t.Run("pattern at end of lines", func(t *testing.T) {
+		lines := []string{
+			"line1",
+			"line2",
+			"last pattern here",
+		}
+		err := checkPlan(ctx, lines, []string{"last"})
+		if err != nil {
+			t.Errorf("Expected nil error when pattern is at end, got: %v", err)
+		}
+	})
+
+	t.Run("case sensitive pattern matching", func(t *testing.T) {
+		lines := []string{
+			"line1 with Pattern",
+			"line2",
+		}
+		err := checkPlan(ctx, lines, []string{"pattern"})
+		if err == nil {
+			t.Error("Expected error for case-sensitive mismatch, got nil")
+		}
+	})
+
+	t.Run("multiple occurrences of same pattern", func(t *testing.T) {
+		lines := []string{
+			"line1 with pattern",
+			"line2 with pattern",
+			"line3 with pattern",
+		}
+		err := checkPlan(ctx, lines, []string{"pattern", "pattern"})
+		if err != nil {
+			t.Errorf("Expected nil error when pattern appears multiple times, got: %v", err)
+		}
+	})
+
+	t.Run("empty lines with non-empty checkExpr", func(t *testing.T) {
+		lines := []string{}
+		err := checkPlan(ctx, lines, []string{"pattern"})
+		if err == nil {
+			t.Error("Expected error when lines are empty but checkExpr is not, got nil")
+		}
+	})
+}
+
+func TestAnalyzeInfoDescribeImpl_GetDescription_ReadSize(t *testing.T) {
+	ctx := context.Background()
+	options := &ExplainOptions{
+		Format:   EXPLAIN_FORMAT_TEXT,
+		Verbose:  false,
+		Analyze:  true,
+		NodeType: plan2.Node_TABLE_SCAN,
+	}
+
+	tests := []struct {
+		name            string
+		analyzeInfo     *plan2.AnalyzeInfo
+		wantContains    []string
+		wantNotContains []string
+	}{
+		{
+			name: "with ReadSize, S3ReadSize, DiskReadSize",
+			analyzeInfo: &plan2.AnalyzeInfo{
+				TimeConsumed:     1000000000, // 1000ms
+				WaitTimeConsumed: 0,
+				InputRows:        1000,
+				OutputRows:       500,
+				InputSize:        16 * 1024 * 1024,  // 16MB
+				OutputSize:       8 * 1024 * 1024,   // 8MB
+				MemorySize:       4 * 1024 * 1024,   // 4MB
+				MemoryMin:        2 * 1024 * 1024,   // 2MB
+				MemoryMax:        6 * 1024 * 1024,   // 6MB
+				ReadSize:         153 * 1024 * 1024, // 153MB
+				S3ReadSize:       150 * 1024 * 1024, // 150MB
+				DiskReadSize:     3 * 1024 * 1024,   // 3MB
+				InputBlocks:      10,
+			},
+			wantContains: []string{
+				"timeConsumed=1000ms",
+				"inputRows=1000",
+				"outputRows=500",
+				"InputSize=",
+				"OutputSize=",
+				" ReadSize=", // Format: ReadSize=total|s3|disk
+				"|",          // Check for pipe separator
+				"MemorySize=",
+				"inputBlocks=10",
+			},
+			wantNotContains: []string{
+				" S3ReadSize=",
+				" DiskReadSize=",
+			},
+		},
+		{
+			name: "with ReadSize only, no S3ReadSize and DiskReadSize",
+			analyzeInfo: &plan2.AnalyzeInfo{
+				TimeConsumed:     500000000, // 500ms
+				WaitTimeConsumed: 0,
+				InputRows:        500,
+				OutputRows:       250,
+				InputSize:        8 * 1024 * 1024,  // 8MB
+				OutputSize:       4 * 1024 * 1024,  // 4MB
+				MemorySize:       2 * 1024 * 1024,  // 2MB
+				MemoryMin:        1 * 1024 * 1024,  // 1MB
+				MemoryMax:        3 * 1024 * 1024,  // 3MB
+				ReadSize:         10 * 1024 * 1024, // 10MB
+				S3ReadSize:       0,
+				DiskReadSize:     0,
+				InputBlocks:      5,
+			},
+			wantContains: []string{
+				" ReadSize=", // Format: ReadSize=total|s3|disk (always present)
+				"|",          // Check for pipe separator
+			},
+			wantNotContains: []string{
+				" S3ReadSize=",
+				" DiskReadSize=",
+			},
+		},
+		{
+			name: "with S3ReadSize and DiskReadSize, no ReadSize",
+			analyzeInfo: &plan2.AnalyzeInfo{
+				TimeConsumed:     200000000, // 200ms
+				WaitTimeConsumed: 0,
+				InputRows:        200,
+				OutputRows:       100,
+				InputSize:        4 * 1024 * 1024, // 4MB
+				OutputSize:       2 * 1024 * 1024, // 2MB
+				MemorySize:       1 * 1024 * 1024, // 1MB
+				MemoryMin:        512 * 1024,      // 512KB
+				MemoryMax:        2 * 1024 * 1024, // 2MB
+				ReadSize:         0,
+				S3ReadSize:       50 * 1024 * 1024, // 50MB
+				DiskReadSize:     5 * 1024 * 1024,  // 5MB
+				InputBlocks:      3,
+			},
+			wantContains: []string{
+				" ReadSize=", // Format: ReadSize=total|s3|disk (always present, even if total is 0)
+				"|",          // Check for pipe separator
+			},
+			wantNotContains: []string{
+				" S3ReadSize=",
+				" DiskReadSize=",
+			},
+		},
+		{
+			name: "all ReadSize fields are zero",
+			analyzeInfo: &plan2.AnalyzeInfo{
+				TimeConsumed:     100000000, // 100ms
+				WaitTimeConsumed: 0,
+				InputRows:        100,
+				OutputRows:       50,
+				InputSize:        2 * 1024 * 1024, // 2MB
+				OutputSize:       1 * 1024 * 1024, // 1MB
+				MemorySize:       512 * 1024,      // 512KB
+				MemoryMin:        256 * 1024,      // 256KB
+				MemoryMax:        1 * 1024 * 1024, // 1MB
+				ReadSize:         0,
+				S3ReadSize:       0,
+				DiskReadSize:     0,
+				InputBlocks:      1,
+			},
+			wantContains: []string{
+				"timeConsumed=100ms",
+				"inputRows=100",
+				"outputRows=50",
+				" ReadSize=", // Format: ReadSize=total|s3|disk (always present, even if all are 0)
+				"|",          // Check for pipe separator
+			},
+			wantNotContains: []string{
+				" S3ReadSize=",
+				" DiskReadSize=",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			impl := NewAnalyzeInfoDescribeImpl(tt.analyzeInfo)
+			buf := bytes.NewBuffer(nil)
+			err := impl.GetDescription(ctx, options, buf)
+			if err != nil {
+				t.Fatalf("GetDescription() error = %v", err)
+			}
+
+			result := buf.String()
+			for _, want := range tt.wantContains {
+				if !strings.Contains(result, want) {
+					t.Errorf("GetDescription() result should contain %q, got: %s", want, result)
+				}
+			}
+			for _, notWant := range tt.wantNotContains {
+				if strings.Contains(result, notWant) {
+					t.Errorf("GetDescription() result should not contain %q, got: %s", notWant, result)
+				}
+			}
+		})
+	}
+}
+
+//

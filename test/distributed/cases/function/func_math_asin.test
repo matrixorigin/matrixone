@@ -1,0 +1,33 @@
+# Basic test case from requirements
+SELECT ASIN(0) AS result1;
+
+# Additional test cases
+SELECT ASIN(0.5) AS positive_value;
+SELECT ASIN(1) AS max_value;
+SELECT ASIN(-0.5) AS negative_value;
+SELECT ASIN(-1) AS min_value;
+SELECT ASIN(0.7071067811865476) AS sqrt2_over_2;
+
+# Edge cases
+SELECT ASIN(0.0) AS zero;
+SELECT ASIN(1.0) AS one;
+SELECT ASIN(-1.0) AS minus_one;
+
+# NULL handling
+SELECT ASIN(NULL) AS null_input;
+
+# Table usage
+CREATE TABLE t1(x FLOAT);
+INSERT INTO t1 VALUES (0), (0.5), (1), (-0.5), (-1);
+SELECT x, ASIN(x) AS asin_value FROM t1;
+DROP TABLE t1;
+
+# WHERE clause
+CREATE TABLE t1(x FLOAT);
+INSERT INTO t1 VALUES (0), (0.5), (1), (-0.5), (-1);
+SELECT * FROM t1 WHERE ASIN(x) > 0;
+DROP TABLE t1;
+
+# Comparison with SIN (ASIN(SIN(x)) should be approximately x for x in [-π/2, π/2])
+SELECT ASIN(SIN(0.5)) AS asin_sin_test;
+

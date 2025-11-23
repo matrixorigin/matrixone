@@ -814,6 +814,28 @@ func Test_BuiltIn_Math(t *testing.T) {
 
 	{
 		tc := tcTemp{
+			info: "test asin",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_float64.ToType(),
+					[]float64{
+						0,
+						0.5,
+						1,
+						-0.5,
+						-1,
+					},
+					nil),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0, 0.5235987755982989, 1.5707963267948966, -0.5235987755982989, -1.5707963267948966}, nil),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInASin)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	{
+		tc := tcTemp{
 			info: "test atan",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_float64.ToType(),
@@ -832,23 +854,71 @@ func Test_BuiltIn_Math(t *testing.T) {
 
 	{
 		tc := tcTemp{
-			info: "test atan with 2 args",
+			info: "test atan2",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_float64.ToType(),
 					[]float64{
-						-1, 1, 1, 1, 1.0, 1.0,
+						1, 1, 0, -1, 1, -1,
 					},
 					nil),
 				NewFunctionTestInput(types.T_float64.ToType(),
 					[]float64{
-						1, 0, -1, 1, -1.0, 1.0,
+						1, 0, 1, -1, -1, 1,
 					},
 					nil),
 			},
 			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{-0.7853981633974483, 0, -0.7853981633974483, 0.7853981633974483, -0.7853981633974483, 0.7853981633974483}, nil),
+				[]float64{0.7853981633974483, 1.5707963267948966, 0, -2.356194490192345, 2.356194490192345, -0.7853981633974483}, nil),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInATan2)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	{
+		tc := tcTemp{
+			info: "test degrees",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_float64.ToType(),
+					[]float64{
+						0,
+						math.Pi,
+						math.Pi / 2,
+						math.Pi / 4,
+						2 * math.Pi,
+						-math.Pi,
+					},
+					nil),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0, 180, 90, 45, 360, -180}, nil),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInDegrees)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	{
+		tc := tcTemp{
+			info: "test radians",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_float64.ToType(),
+					[]float64{
+						0,
+						180,
+						90,
+						45,
+						360,
+						-180,
+						30,
+						60,
+					},
+					nil),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0, math.Pi, math.Pi / 2, math.Pi / 4, 2 * math.Pi, -math.Pi, math.Pi / 6, math.Pi / 3}, nil),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInRadians)
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}

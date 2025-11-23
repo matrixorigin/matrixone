@@ -1673,9 +1673,9 @@ func (f *checkpointReaderStub) ReadMeta(context.Context) error {
 
 func (f *checkpointReaderStub) PrefetchData(string) {}
 
-func (f *checkpointReaderStub) ConsumeCheckpointWithTableID(ctx context.Context, fn func(context.Context, objectio.ObjectEntry, bool) error) error {
+func (f *checkpointReaderStub) ConsumeCheckpointWithTableID(ctx context.Context, fn func(context.Context, fileservice.FileService, objectio.ObjectEntry, bool) error) error {
 	for _, obj := range f.objects {
-		if err := fn(ctx, obj.entry, obj.isTombstone); err != nil {
+		if err := fn(ctx, nil, obj.entry, obj.isTombstone); err != nil {
 			return err
 		}
 	}
@@ -5262,6 +5262,149 @@ func TestPartitionChangesHandleStaleRead(t *testing.T) {
 			assert.True(t, gotError, "Expected to encounter stale read error")
 			if handle != nil {
 				handle.Close()
+			}
+		}
+	}
+}
+
+func TestPartitionChangesHandleGCKPBoundaryStaleRead(t *testing.T) {
+	/*
+		This test reproduces a bug in FilterSortedMetaFilesByTimestamp (snapshot.go:51).
+		Because FilterSortedMetaFilesByTimestamp uses LE (<=) instead of LT (<), when the request
+		timestamp equals the end of a newer GCKP, it incorrectly returns the previous GCKP segment
+		instead of the correct one.
+
+		Test scenario:
+		1. Insert data and create first global checkpoint (GCKP1) with range [0, gckp1End]
+		2. Insert more data and create second global checkpoint (GCKP2) with range [0, gckp2End]
+		3. Force GC to clean up old partition state, forcing RequestSnapshotRead to be used
+		4. Try to read from a timestamp equal to gckp2End
+		5. Due to the LE bug in FilterSortedMetaFilesByTimestamp, it will return GCKP1 instead of GCKP2
+		6. This causes getNextChangeHandle to receive the wrong checkpoint entry, leading to stale read error
+	*/
+
+	catalog.SetupDefines("")
+
+	var (
+		accountId    = catalog.System_Account
+		tableName    = "test_gckp_boundary"
+		databaseName = "db_gckp_boundary"
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+
+	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeHandler.Close(true)
+		rpcAgent.Close()
+	}()
+
+	schema := catalog2.MockSchemaAll(20, 0)
+	schema.Name = tableName
+	bat := catalog2.MockBatch(schema, 3)
+	defer bat.Close()
+	bats := bat.Split(3)
+
+	ctx, cancel = context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
+
+	// Create database and table
+	_, _, err := disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
+	require.NoError(t, err)
+
+	// Insert first batch
+	txn, rel := testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
+	require.Nil(t, rel.Append(ctx, bats[0]))
+	require.Nil(t, txn.Commit(ctx))
+	t1 := txn.GetCommitTS()
+
+	txn, rel = testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
+	id := rel.GetMeta().(*catalog2.TableEntry).AsCommonID()
+	require.Nil(t, txn.Commit(ctx))
+
+	// Force first global checkpoint (GCKP1)
+	gckp1TS := taeHandler.GetDB().TxnMgr.Now()
+	err = taeHandler.GetDB().ForceGlobalCheckpoint(ctx, gckp1TS, 0)
+	require.NoError(t, err)
+	gckp1 := taeHandler.GetDB().BGCheckpointRunner.MaxGlobalCheckpoint()
+	require.NotNil(t, gckp1)
+	gckp1End := gckp1.GetEnd()
+	t.Logf("GCKP1: %s", gckp1.String())
+
+	// Insert second batch
+	txn, rel = testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
+	require.Nil(t, rel.Append(ctx, bats[1]))
+	require.Nil(t, txn.Commit(ctx))
+
+	// Force second global checkpoint (GCKP2)
+	gckp2TS := taeHandler.GetDB().TxnMgr.Now()
+	err = taeHandler.GetDB().ForceGlobalCheckpoint(ctx, gckp2TS, 0)
+	require.NoError(t, err)
+	gckp2 := taeHandler.GetDB().BGCheckpointRunner.MaxGlobalCheckpoint()
+	require.NotNil(t, gckp2)
+	gckp2End := gckp2.GetEnd()
+	t.Logf("GCKP2: %s", gckp2.String())
+
+	// Verify we have two different global checkpoints
+	require.True(t, gckp2End.GT(&gckp1End), "GCKP2 end should be greater than GCKP1 end")
+
+	// Insert third batch
+	txn, rel = testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
+	require.Nil(t, rel.Append(ctx, bats[2]))
+	require.Nil(t, txn.Commit(ctx))
+
+	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, databaseName, tableName, false)
+	require.Nil(t, err)
+
+	mp := common.DebugAllocator
+
+	// Force GC to clean up old partition state
+	// This forces the code path to use RequestSnapshotRead in getNextChangeHandle
+	disttaeEngine.Engine.ForceGC(ctx, t1.Next())
+
+	// Setup stub to use real HandleSnapshotRead from taeHandler
+	// This will return real checkpoint entries from the TAE engine
+	ssStub := gostub.Stub(
+		&disttae.RequestSnapshotRead,
+		disttae.GetSnapshotReadFnWithHandler(
+			taeHandler.GetRPCHandle().HandleSnapshotRead,
+		),
+	)
+	defer ssStub.Reset()
+
+	// Try to collect changes from a timestamp that will trigger the bug
+	// Due to the bug in FilterSortedMetaFilesByTimestamp using LE,
+	// when nextFrom == gckp2End, it will return GCKP1 instead of GCKP2
+	// This causes getNextChangeHandle to get the wrong checkpoint entry range
+	{
+		_, rel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
+		require.Nil(t, err)
+
+		// Start reading from just before t1, which will cause nextFrom to be around gckp2End
+		// The bug occurs when the code tries to find the right checkpoint for a timestamp
+		// that equals the end of the second GCKP
+		readFromTS := t1.Prev()
+		readToTS := taeHandler.GetDB().TxnMgr.Now()
+
+		handle, err := rel.CollectChanges(ctx, readFromTS, readToTS, false, mp)
+
+		assert.NoError(t, err)
+		assert.NotNil(t, handle)
+
+		for {
+			data, tombstone, _, err := handle.Next(ctx, mp)
+			assert.NoError(t, err)
+			if data != nil {
+				data.Clean(mp)
+			}
+			if tombstone != nil {
+				tombstone.Clean(mp)
+			}
+			if data == nil && tombstone == nil {
+				break
 			}
 		}
 	}

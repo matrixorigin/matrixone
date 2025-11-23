@@ -1,0 +1,42 @@
+# Basic test case from requirements
+SELECT MINUTE('15:30:45') AS result1;
+
+# Additional test cases
+# TIME type
+SELECT MINUTE('15:30:45') AS time_with_minutes;
+SELECT MINUTE('00:00:00') AS zero_minutes;
+SELECT MINUTE('23:59:59') AS max_minutes;
+SELECT MINUTE('12:34:56') AS various_minutes;
+
+# DATETIME type
+SELECT MINUTE('2024-12-20 15:30:45') AS datetime_with_minutes;
+SELECT MINUTE('2024-12-20 00:00:00') AS datetime_zero;
+SELECT MINUTE('2024-12-20 23:59:59') AS datetime_max;
+
+# TIMESTAMP type
+SELECT MINUTE(TIMESTAMP('2024-12-20 15:30:45')) AS timestamp_with_minutes;
+
+# NULL handling
+SELECT MINUTE(NULL) AS null_input;
+
+# Table usage
+CREATE TABLE t1(t TIME);
+INSERT INTO t1 VALUES ('15:30:45'), ('00:00:00'), ('23:59:59'), ('12:34:56');
+SELECT t, MINUTE(t) AS minute FROM t1;
+DROP TABLE t1;
+
+# DATETIME table
+CREATE TABLE t1(dt DATETIME);
+INSERT INTO t1 VALUES ('2024-12-20 15:30:45'), ('2024-12-20 00:00:00'), ('2024-12-20 23:59:59');
+SELECT dt, MINUTE(dt) AS minute FROM t1;
+DROP TABLE t1;
+
+# WHERE clause
+CREATE TABLE t1(t TIME);
+INSERT INTO t1 VALUES ('15:30:45'), ('00:00:00'), ('23:59:59'), ('12:34:56');
+SELECT * FROM t1 WHERE MINUTE(t) > 30;
+DROP TABLE t1;
+
+# Range check (should return 0-59)
+SELECT MINUTE('15:30:45') AS result1, MINUTE('15:00:45') AS result2, MINUTE('15:59:45') AS result3;
+

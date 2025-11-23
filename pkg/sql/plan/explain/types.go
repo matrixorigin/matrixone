@@ -139,10 +139,11 @@ const (
 )
 
 type ExplainOptions struct {
-	Verbose  bool
-	Analyze  bool
-	Format   ExplainFormat
-	NodeType plan.Node_NodeType
+	Verbose   bool
+	Analyze   bool
+	Format    ExplainFormat
+	NodeType  plan.Node_NodeType
+	CheckExpr []string
 }
 
 func NewExplainDefaultOptions() *ExplainOptions {

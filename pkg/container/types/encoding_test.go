@@ -461,10 +461,10 @@ func TestCompareValues(t *testing.T) {
 	require.Equal(t, int(int32a-int32a), CompareValues(int32a, int32a, T_int32))
 }
 
-func TestCompareValuesUnsupported(t *testing.T) {
-	require.Panics(t, func() {
-		CompareValues(nil, nil, T(255))
-	})
+func TestCompareValuesNULL(t *testing.T) {
+	require.Equal(t, int(0), CompareValues(nil, nil, T(255)))
+	require.Equal(t, int(-1), CompareValues(nil, 1, T(255)))
+	require.Equal(t, int(1), CompareValues(1, nil, T(255)))
 }
 
 func TestEncodeValueUnsupported(t *testing.T) {

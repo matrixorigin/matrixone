@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -99,6 +100,73 @@ func builtInSysdate(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
 
 	resultValue := types.UnixNanoToTimestamp(time.Now().UnixNano()).TruncateToScale(scale)
+	for i := uint64(0); i < uint64(length); i++ {
+		if err := rs.Append(resultValue, false); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func builtInCurrentTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Time](result)
+
+	// Get scale from optional parameter (default 0 for TIME type)
+	scale := int32(0)
+	if len(ivecs) == 1 && !ivecs[0].IsConstNull() {
+		scale = int32(vector.MustFixedColWithTypeCheck[int64](ivecs[0])[0])
+		// Clamp scale to valid range [0, 6]
+		if scale < 0 {
+			scale = 0
+		} else if scale > 6 {
+			scale = 6
+		}
+	}
+	rs.TempSetType(types.New(types.T_time, 0, scale))
+
+	// Get current timestamp and convert to time
+	loc := proc.GetSessionInfo().TimeZone
+	if loc == nil {
+		logutil.Warn("missing timezone in session info")
+		loc = time.Local
+	}
+	ts := types.UnixNanoToTimestamp(proc.GetUnixTime()).TruncateToScale(scale)
+	dt := ts.ToDatetime(loc)
+	resultValue := dt.ToTime(scale)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if err := rs.Append(resultValue, false); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func builtInUtcTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Time](result)
+
+	// Get scale from optional parameter (default 0 for TIME type)
+	scale := int32(0)
+	if len(ivecs) == 1 && !ivecs[0].IsConstNull() {
+		scale = int32(vector.MustFixedColWithTypeCheck[int64](ivecs[0])[0])
+		// Clamp scale to valid range [0, 6]
+		if scale < 0 {
+			scale = 0
+		} else if scale > 6 {
+			scale = 6
+		}
+	}
+	rs.TempSetType(types.New(types.T_time, 0, scale))
+
+	// Get current timestamp and convert to UTC time
+	// Use UTC timezone instead of session timezone
+	loc := time.UTC
+	ts := types.UnixNanoToTimestamp(proc.GetUnixTime()).TruncateToScale(scale)
+	dt := ts.ToDatetime(loc)
+	resultValue := dt.ToTime(scale)
+
 	for i := uint64(0); i < uint64(length); i++ {
 		if err := rs.Append(resultValue, false); err != nil {
 			return err
@@ -540,6 +608,148 @@ func builtInConcat(parameters []*vector.Vector, result vector.FunctionResultWrap
 		}
 		if apv {
 			if err := rs.AppendBytes([]byte(vs), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func builtInCharCheck(_ []overload, inputs []types.Type) checkResult {
+	// CHAR accepts one or more integer arguments
+	if len(inputs) < 1 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+
+	shouldCast := false
+	ret := make([]types.Type, len(inputs))
+	for i, source := range inputs {
+		// Check if it's an integer type
+		if !source.Oid.IsInteger() {
+			// Try to cast to int64
+			c, _ := tryToMatch([]types.Type{source}, []types.T{types.T_int64})
+			if c == matchFailed {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+			if c == matchByCast {
+				shouldCast = true
+				ret[i] = types.T_int64.ToType()
+			}
+		} else {
+			ret[i] = source
+		}
+	}
+	if shouldCast {
+		return newCheckResultWithCast(0, ret)
+	}
+	return newCheckResultWithSuccess(0)
+}
+
+func builtInChar(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	// Create getter functions for each parameter that handle different integer types
+	getters := make([]func(uint64) (int64, bool), len(parameters))
+	for i, param := range parameters {
+		paramType := param.GetType().Oid
+		switch paramType {
+		case types.T_int8:
+			p := vector.GenerateFunctionFixedTypeParameter[int8](param)
+			getters[i] = func(idx uint64) (int64, bool) {
+				val, null := p.GetValue(idx)
+				return int64(val), null
+			}
+		case types.T_int16:
+			p := vector.GenerateFunctionFixedTypeParameter[int16](param)
+			getters[i] = func(idx uint64) (int64, bool) {
+				val, null := p.GetValue(idx)
+				return int64(val), null
+			}
+		case types.T_int32:
+			p := vector.GenerateFunctionFixedTypeParameter[int32](param)
+			getters[i] = func(idx uint64) (int64, bool) {
+				val, null := p.GetValue(idx)
+				return int64(val), null
+			}
+		case types.T_int64:
+			p := vector.GenerateFunctionFixedTypeParameter[int64](param)
+			getters[i] = func(idx uint64) (int64, bool) {
+				val, null := p.GetValue(idx)
+				return val, null
+			}
+		case types.T_uint8:
+			p := vector.GenerateFunctionFixedTypeParameter[uint8](param)
+			getters[i] = func(idx uint64) (int64, bool) {
+				val, null := p.GetValue(idx)
+				return int64(val), null
+			}
+		case types.T_uint16:
+			p := vector.GenerateFunctionFixedTypeParameter[uint16](param)
+			getters[i] = func(idx uint64) (int64, bool) {
+				val, null := p.GetValue(idx)
+				return int64(val), null
+			}
+		case types.T_uint32:
+			p := vector.GenerateFunctionFixedTypeParameter[uint32](param)
+			getters[i] = func(idx uint64) (int64, bool) {
+				val, null := p.GetValue(idx)
+				return int64(val), null
+			}
+		case types.T_uint64:
+			p := vector.GenerateFunctionFixedTypeParameter[uint64](param)
+			getters[i] = func(idx uint64) (int64, bool) {
+				val, null := p.GetValue(idx)
+				return int64(val), null
+			}
+		default:
+			// For non-integer types, try to cast to int64
+			p := vector.GenerateFunctionFixedTypeParameter[int64](param)
+			getters[i] = func(idx uint64) (int64, bool) {
+				val, null := p.GetValue(idx)
+				return val, null
+			}
+		}
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		var resultBytes []byte
+		hasNull := false
+
+		// Process all integer arguments
+		for _, getter := range getters {
+			v, null := getter(i)
+			if null {
+				hasNull = true
+				break
+			}
+			// Convert integer to byte value (0-255)
+			// MySQL CHAR function interprets integers as byte values in UTF-8 encoding
+			// For example: CHAR(228, 184, 173) returns "中" (the UTF-8 bytes for U+4E2D)
+			if v < 0 {
+				// Negative values are treated as 0
+				resultBytes = append(resultBytes, 0)
+			} else if v > 255 {
+				// Values > 255 are treated modulo 256
+				resultBytes = append(resultBytes, byte(v&0xFF))
+			} else {
+				resultBytes = append(resultBytes, byte(v))
+			}
+		}
+
+		if hasNull {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			// Convert byte slice to string (UTF-8 decoding happens automatically)
+			if err := rs.AppendBytes(resultBytes, false); err != nil {
 				return err
 			}
 		}
@@ -2104,6 +2314,40 @@ func builtInToDays(parameters []*vector.Vector, result vector.FunctionResultWrap
 	return nil
 }
 
+// FromDays: InMySQL: Given a day number N, returns a DATE value.
+// note: This function is the inverse of TO_DAYS. Given a day number N, FROM_DAYS(N) returns a DATE value.
+// reference linking: https://dev.mysql.com/doc/refman/8.0/en/date-and-time-functions.html#function_from-days
+func builtInFromDays(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	dayParams := vector.GenerateFunctionFixedTypeParameter[int64](parameters[0])
+	rs := vector.MustFunctionResult[types.Date](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		dayNumber, isNull := dayParams.GetValue(i)
+		if isNull {
+			if err := rs.Append(types.Date(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+		// TO_DAYS(date) = DateTimeDiff(intervalUnitDAY, ZeroDatetime, date) + ADZeroDays
+		// So FROM_DAYS(N) should reverse this:
+		// DateTimeDiff(intervalUnitDAY, ZeroDatetime, date) = N - ADZeroDays
+		// date = ZeroDatetime + (N - ADZeroDays) days
+		daysToAdd := dayNumber - ADZeroDays
+		dt, success := types.ZeroDatetime.AddInterval(daysToAdd, types.Day, types.DateTimeType)
+		if !success {
+			if err := rs.Append(types.Date(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+		dateValue := dt.ToDate()
+		if err := rs.Append(dateValue, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // DateTimeDiff returns t2 - t1 where t1 and t2 are datetime expressions.
 // The unit for the result is given by the unit argument.
 // The values for interval unit are "QUARTER","YEAR","MONTH", "DAY", "HOUR", "SECOND", "MICROSECOND"
@@ -2449,6 +2693,28 @@ func builtInACos(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	return nil
 }
 
+func builtInASin(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
+	rs := vector.MustFunctionResult[float64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := p1.GetValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			asinValue, err := momath.Asin(v)
+			if err != nil {
+				return err
+			}
+			if err = rs.Append(asinValue, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func builtInATan(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
 	rs := vector.MustFunctionResult[float64](result)
@@ -2472,26 +2738,38 @@ func builtInATan(parameters []*vector.Vector, result vector.FunctionResultWrappe
 }
 
 func builtInATan2(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
-	p2 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[1])
+	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0]) // Y
+	p2 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[1]) // X
 	rs := vector.MustFunctionResult[float64](result)
 	for i := uint64(0); i < uint64(length); i++ {
-		v1, null1 := p1.GetValue(i)
-		v2, null2 := p2.GetValue(i)
+		v1, null1 := p1.GetValue(i) // Y
+		v2, null2 := p2.GetValue(i) // X
 		if null1 || null2 {
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
 		} else {
-			if v1 == 0 {
-				return moerr.NewInvalidArg(proc.Ctx, "Atan first input", 0)
-			}
-			if err := rs.Append(math.Atan(v2/v1), false); err != nil {
+			// ATAN2(Y, X) - use math.Atan2 which properly handles all edge cases
+			if err := rs.Append(math.Atan2(v1, v2), false); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
+}
+
+func builtInDegrees(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[float64, float64](parameters, result, proc, length, func(v float64) float64 {
+		// Convert radians to degrees: degrees = radians * (180 / π)
+		return v * (180.0 / math.Pi)
+	}, selectList)
+}
+
+func builtInRadians(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[float64, float64](parameters, result, proc, length, func(v float64) float64 {
+		// Convert degrees to radians: radians = degrees * (π / 180)
+		return v * (math.Pi / 180.0)
+	}, selectList)
 }
 
 func builtInLn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

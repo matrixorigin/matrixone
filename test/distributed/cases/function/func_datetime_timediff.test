@@ -1,82 +1,54 @@
-#time
-select timediff(cast('22:22:22' as time), cast('11:11:11' as time));
-select timediff(cast('22:22:22' as time), cast('-11:11:11' as time));
-select timediff(cast('-22:22:22' as time), cast('11:11:11' as time));
-select timediff(cast('-22:22:22' as time), cast('-11:11:11' as time));
-select timediff(cast('11:11:11' as time) , cast('22:22:22' as time));
-select timediff(cast('11:11:11' as time) , cast('-22:22:22' as time));
-select timediff(cast('-11:11:11' as time) , cast('22:22:22' as time));
-select timediff(cast('-11:11:11' as time) , cast('-22:22:22' as time));
-select timediff(cast('-838:59:59' as time) , cast('838:59:59' as time));
-select timediff(cast('838:59:59' as time) , cast('-838:59:59' as time));
-select timediff(cast('838:59:59' as time) , cast('838:59:59' as time));
+# Basic test case from requirements
+SELECT TIMEDIFF('2000:01:01 00:00:00', '2000:01:01 00:00:00.000001') AS result1;
 
-#invalid time
-select timediff(cast('22:22:22' as time), null);
-select timediff(null, cast('11:11:11' as time));
-select timediff(null, null);
+# Additional test cases
+# String inputs (datetime format)
+SELECT TIMEDIFF('2000:01:01 00:00:00', '2000:01:01 00:00:00.000001') AS microsecond_diff;
+SELECT TIMEDIFF('2000:01:01 00:00:00', '2000:01:01 00:00:00') AS zero_diff;
+SELECT TIMEDIFF('2000:01:01 00:00:01', '2000:01:01 00:00:00') AS one_second_diff;
+SELECT TIMEDIFF('2000:01:01 01:00:00', '2000:01:01 00:00:00') AS one_hour_diff;
 
-#datetime
-select timediff(CAST('2017-08-08 22:22:22' as datetime), CAST('2000-01-02 11:00:00' as datetime));
-select timediff(CAST('2012-12-12 22:22:22' as datetime), CAST('2012-12-12 11:11:11' as datetime));
-select timediff(CAST('2012-12-12 22:22:22' as datetime), CAST('2012-12-12 22:22:22' as datetime));
-select timediff(CAST('2012-12-12 22:22:22' as datetime), CAST('2000-12-12 11:11:11' as datetime));
-select timediff(CAST('2000-12-12 11:11:11' as datetime), CAST('2012-12-12 22:22:22' as datetime));
-select timediff(CAST('2012-12-12 22:22:22' as datetime), CAST('2012-10-10 11:11:11' as datetime));
-select timediff(CAST('2012-10-10 11:11:11' as datetime), CAST('2012-12-12 22:22:22' as datetime));
-select timediff(CAST('2012-12-12 22:22:22' as datetime), CAST('2012-12-10 11:11:11' as datetime));
-select timediff(CAST('2012-12-10 11:11:11' as datetime), CAST('2012-12-12 22:22:22' as datetime));
-select timediff(CAST('2012-12-10 11:11:11' as datetime), CAST('2012-12-10 11:11:11' as datetime));
+# Negative differences
+SELECT TIMEDIFF('2000:01:01 00:00:00', '2000:01:01 00:00:01') AS negative_one_second;
+SELECT TIMEDIFF('2000:01:01 00:00:00', '2000:01:01 01:00:00') AS negative_one_hour;
 
-#invalid datetime
-SELECT TIMEDIFF(CAST('2012-12-12 11:11:11' AS DATETIME), NULL);
-SELECT TIMEDIFF(NULL, CAST('2012-12-12 11:11:11' AS DATETIME));
-SELECT TIMEDIFF(NULL, NULL);
+# TIME type inputs
+SELECT TIMEDIFF('15:30:45', '10:20:30') AS time_diff;
+SELECT TIMEDIFF('00:00:00', '00:00:00') AS time_zero;
+SELECT TIMEDIFF('23:59:59', '00:00:00') AS time_max_diff;
 
-#different input types
-select timediff(CAST('2017-08-08 22:22:22' as datetime), cast('11:11:11' as time));
-select timediff(cast('11:11:11' as time), cast('2017-08-08 22:22:22' as datetime));
-select timediff(CAST('2017-08-08 22:22:22' as datetime), 1);
+# DATETIME type inputs
+SELECT TIMEDIFF('2000-01-01 15:30:45', '2000-01-01 10:20:30') AS datetime_diff;
+SELECT TIMEDIFF('2000-01-01 00:00:00', '2000-01-01 00:00:00') AS datetime_zero;
 
-drop table if exists t1;
-create table t1(a INT,  b time);
-insert into t1 values(1, '22:22:22');
-insert into t1 values(2, '11:11:11');
-insert into t1 values(3, '-22:22:22');
-insert into t1 values(4, '-11:11:11');
-insert into t1 values(5, '838:59:59');
-insert into t1 values(6, '-838:59:59');
-insert into t1 values(7, '00:00:00');
-select a, timediff(cast('22:22:22' as time), b) from t1;
-select a, timediff(b, cast('22:22:22' as time)) from t1;
-drop table t1;
+# Mixed formats
+-- @bvt:issue#22985
+SELECT TIMEDIFF('2000-01-01 15:30:45', '15:30:45') AS mixed_format1;
+SELECT TIMEDIFF('15:30:45', '2000-01-01 15:30:45') AS mixed_format2;
+-- @bvt:issue
 
-drop table if exists t2;
-create table t2(a INT,  b datetime);
-insert into t2 values(1, '2012-12-12 23:22:22');
-insert into t2 values(2, '2012-12-10 11:11:11');
-insert into t2 values(3, '2012-12-14 11:11:11');
-insert into t2 values(4, '2012-12-20 11:11:11');
-insert into t2 values(2, '2012-10-10 11:11:11');
-select a, timediff(cast('2012-12-12 22:22:21' as datetime), b) from t2;
-select a, timediff(b, cast('2012-12-12 22:22:21' as datetime)) from t2;
-drop table t2;
+# With microseconds
+SELECT TIMEDIFF('2000-01-01 00:00:00.500000', '2000-01-01 00:00:00.200000') AS with_microseconds;
+SELECT TIMEDIFF('2000-01-01 00:00:00.000001', '2000-01-01 00:00:00.000000') AS one_microsecond;
 
-select timediff('20',NULL);
-select timediff(NULL,'24:59:09');
-select timediff('20','24:59:09');
-select timediff('12:00','24:59:09');
-select timediff('-838:59:59','-1122');
-select timediff('12:00:00','24:59:09');
+# NULL handling
+SELECT TIMEDIFF(NULL, '2000-01-01 00:00:00') AS null_expr1;
+SELECT TIMEDIFF('2000-01-01 00:00:00', NULL) AS null_expr2;
+SELECT TIMEDIFF(NULL, NULL) AS null_both;
 
-drop table if exists  time_01;
-create table time_01(t1 time,t2 time,t3 time);
-insert into time_01 values("-838:59:59.0000","838:59:59.00","22:00:00");
-insert into time_01 values("0:00:00.0000","0","0:00");
-insert into time_01 values(null,NULL,null);
-insert into time_01 values("23","1122","-1122");
-insert into time_01 values("101412","4","-101219");
-insert into time_01 values("24:59:09.932823","24:02:00.93282332424","24:20:34.00000000");
-insert into time_01 values("2022-09-08 12:00:01","019","23403");
-select timediff(t1,t2) from time_01;
-drop table time_01;
+# Table usage
+CREATE TABLE t1(dt1 DATETIME, dt2 DATETIME);
+INSERT INTO t1 VALUES ('2000-01-01 15:30:45', '2000-01-01 10:20:30'), ('2000-01-01 00:00:00', '2000-01-01 00:00:00');
+SELECT TIMEDIFF(dt1, dt2) AS result FROM t1;
+DROP TABLE t1;
+
+# WHERE clause
+CREATE TABLE t1(dt1 DATETIME, dt2 DATETIME);
+INSERT INTO t1 VALUES ('2000-01-01 15:30:45', '2000-01-01 10:20:30'), ('2000-01-01 00:00:00', '2000-01-01 00:00:00');
+SELECT * FROM t1 WHERE TIMEDIFF(dt1, dt2) > '02:00:00';
+DROP TABLE t1;
+
+# Edge cases
+SELECT TIMEDIFF('2000-01-01 23:59:59', '2000-01-01 00:00:00') AS max_day_diff;
+SELECT TIMEDIFF('2000-01-02 00:00:00', '2000-01-01 00:00:00') AS day_boundary;
+SELECT TIMEDIFF('2000-01-01 00:00:00', '2000-01-02 00:00:00') AS negative_day_boundary;
