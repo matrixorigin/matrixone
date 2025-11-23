@@ -331,10 +331,10 @@ func validate(stmt tree.Statement) error {
 
 func runSql(
 	ctx context.Context, ses *Session, bh BackgroundExec,
-	tblStuff tableStuff, sql string,
+	tblStuff tableStuff, sql string, isLoadToCSV bool,
 ) (sqlRet executor.Result, err error) {
 
-	if strings.Contains(sql, ".csv") {
+	if isLoadToCSV {
 		bh.(*backExec).backSes.SetMysqlResultSet(&MysqlResultSet{})
 		for range tblStuff.def.visibleIdxes {
 			bh.(*backExec).backSes.mrs.AddColumn(&MysqlColumn{})
@@ -1096,7 +1096,7 @@ func flushSqlValues(
 			ret.Close()
 		}()
 
-		ret, err = runSql(ctx, ses, bh, tblStuff, sqlBuffer.String())
+		ret, err = runSql(ctx, ses, bh, tblStuff, sqlBuffer.String(), false)
 	}
 
 	return err
@@ -1270,7 +1270,7 @@ func tryDiffAsCSV(
 		fullFilePath string
 	)
 
-	if sqlRet, err = runSql(ctx, ses, bh, tblStuff, sql); err != nil {
+	if sqlRet, err = runSql(ctx, ses, bh, tblStuff, sql, false); err != nil {
 		return false, err
 	}
 
@@ -1298,13 +1298,13 @@ func tryDiffAsCSV(
 	}
 
 	// output as csv
-	sql = fmt.Sprintf("SELECT * FROM %s.%s%s INTO OUTFILE '%s' %s;",
+	sql = fmt.Sprintf("SELECT * FROM %s.%s%s INTO OUTFILE '%s' %s HEADER 'false';",
 		tblStuff.tarRel.GetTableDef(ctx).DbName,
 		tblStuff.tarRel.GetTableDef(ctx).Name,
 		snap, fullFilePath, strings.Replace(hint, `ESCAPED BY '\\'`, "", 1),
 	)
 
-	if sqlRet, err = runSql(ctx, ses, bh, tblStuff, sql); err != nil {
+	if sqlRet, err = runSql(ctx, ses, bh, tblStuff, sql, true); err != nil {
 		return false, err
 	}
 
@@ -2243,7 +2243,7 @@ func diffDataHelper(
 		tarBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
 		baseBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
 
-		if err2 = cursor.ForEach(func(_ []byte, rows [][]byte) error {
+		if err2 = cursor.ForEach(func(key []byte, rows [][]byte) error {
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -2251,8 +2251,14 @@ func diffDataHelper(
 			}
 
 			for _, row := range rows {
-				if checkRet, err2 = baseDataHashmap.PopByEncodedFullValue(row, false); err2 != nil {
-					return err2
+				if tblStuff.def.pkKind == fakeKind {
+					if checkRet, err2 = baseDataHashmap.PopByEncodedFullValue(row, false); err2 != nil {
+						return err2
+					}
+				} else {
+					if checkRet, err2 = baseDataHashmap.PopByEncodedKey(key, false); err2 != nil {
+						return err2
+					}
 				}
 
 				if !checkRet.Exists {
@@ -2551,7 +2557,7 @@ func handleDelsOnLCA(
 	sqlBuf.WriteString(" order by pks.__idx_")
 
 	sql = sqlBuf.String()
-	if sqlRet, err = runSql(ctx, ses, bh, tblStuff, sql); err != nil {
+	if sqlRet, err = runSql(ctx, ses, bh, tblStuff, sql, false); err != nil {
 		return
 	}
 
