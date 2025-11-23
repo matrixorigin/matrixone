@@ -1,0 +1,92 @@
+SELECT SEC_TO_TIME(2378) AS result1;
+result1
+00:39:38
+SELECT SEC_TO_TIME(2378) AS test1;  # 00:39:38
+test1
+00:39:38
+SELECT SEC_TO_TIME(3661) AS test2;  # 01:01:01
+test2
+01:01:01
+SELECT SEC_TO_TIME(0) AS test3;     # 00:00:00
+test3
+00:00:00
+SELECT SEC_TO_TIME(59) AS test4;    # 00:00:59
+test4
+00:00:59
+SELECT SEC_TO_TIME(60) AS test5;    # 00:01:00
+test5
+00:01:00
+SELECT SEC_TO_TIME(3600) AS test6;  # 01:00:00
+test6
+01:00:00
+SELECT SEC_TO_TIME(1) AS one_second;
+one_second
+00:00:01
+SELECT SEC_TO_TIME(60) AS one_minute;
+one_minute
+00:01:00
+SELECT SEC_TO_TIME(3600) AS one_hour;
+one_hour
+01:00:00
+SELECT SEC_TO_TIME(3661) AS one_hour_one_min_one_sec;
+one_hour_one_min_one_sec
+01:01:01
+SELECT SEC_TO_TIME(30239) AS large_value;  # 08:23:59
+large_value
+08:23:59
+SELECT SEC_TO_TIME(302399) AS very_large;  # 84:00:00 (exceeds 838:59:59, should return NULL)
+very_large
+83:59:59
+SELECT SEC_TO_TIME(-2378) AS negative_test;  # -00:39:38
+negative_test
+null
+SELECT SEC_TO_TIME(-3661) AS negative_large; # -01:01:01
+negative_large
+null
+SELECT SEC_TO_TIME(-3600) AS negative_hour;  # -01:00:00
+negative_hour
+-1:00:00
+SELECT SEC_TO_TIME(2378.7) AS decimal_test;
+decimal_test
+00:39:38
+SELECT SEC_TO_TIME(3661.99) AS decimal_large;
+decimal_large
+01:01:01
+SELECT SEC_TO_TIME(NULL) AS null_test;
+null_test
+null
+CREATE TABLE t1(seconds INT);
+INSERT INTO t1 VALUES (2378), (3661), (0), (3600);
+SELECT SEC_TO_TIME(seconds) AS time_value FROM t1;
+time_value
+00:39:38
+01:01:01
+00:00:00
+01:00:00
+DROP TABLE t1;
+CREATE TABLE t1(seconds INT);
+INSERT INTO t1 VALUES (2378), (3661), (0), (3600);
+SELECT * FROM t1 WHERE SEC_TO_TIME(seconds) > '00:30:00';
+seconds
+2378
+3661
+3600
+DROP TABLE t1;
+SELECT SEC_TO_TIME(2378.0) AS float_input;
+float_input
+00:39:38
+SELECT SEC_TO_TIME(CAST(2378 AS UNSIGNED)) AS unsigned_input;
+unsigned_input
+00:39:38
+SELECT SEC_TO_TIME(3020399) AS max_valid;   # 838:59:59
+max_valid
+838:59:59
+SELECT SEC_TO_TIME(-3020399) AS min_valid;  # -838:59:59
+min_valid
+null
+SELECT SEC_TO_TIME(3020400) AS exceeds_max; # Should return NULL
+exceeds_max
+null
+SELECT SEC_TO_TIME(-3020400) AS exceeds_min; # Should return NULL
+exceeds_min
+null
