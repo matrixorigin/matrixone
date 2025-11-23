@@ -114,8 +114,6 @@ audit_left    INSERT    102    b02    null    null    pending    null    1.250  
 audit_left    INSERT    103    c03    5    �"    closed    retry    null    null
 audit_right    INSERT    103    c03    5    �"    closed    retry    1.500    2024-03-02 08:30:00
 audit_right    INSERT    104    d04    1    �3    open    null    null    null
-data branch merge audit_right into audit_left;
-internal error: conflict: audit_right INSERT and audit_left INSERT on pk(101,'a01') with different values
 data branch merge audit_right into audit_left when conflict skip;
 select job_id, shard, seq, status, payload, metric
 from audit_left
