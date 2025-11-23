@@ -508,16 +508,16 @@ type ExportParam struct {
 func (ep *ExportParam) String() string {
 	buf := bytes.Buffer{}
 	if ep.Fields != nil {
-		buf.WriteString("FIELDS ENCLOSED BY ")
+		buf.WriteString("FIELDS TERMINATED BY ")
+		buf.WriteString(escapeExportParamLiteral(ep.Fields.Terminated.Value))
+		buf.WriteString(" ")
+
+		buf.WriteString("ENCLOSED BY ")
 		buf.WriteString(escapeExportParamLiteral(string(ep.Fields.EnclosedBy.Value)))
 		buf.WriteString(" ")
 
 		buf.WriteString("ESCAPED BY ")
 		buf.WriteString(escapeExportParamLiteral(string(ep.Fields.EscapedBy.Value)))
-		buf.WriteString(" ")
-
-		buf.WriteString("TERMINATED BY ")
-		buf.WriteString(escapeExportParamLiteral(ep.Fields.Terminated.Value))
 		buf.WriteString(" ")
 	}
 
