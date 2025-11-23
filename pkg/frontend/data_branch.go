@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
@@ -329,8 +330,19 @@ func validate(stmt tree.Statement) error {
 }
 
 func runSql(
-	ctx context.Context, ses *Session, bh BackgroundExec, sql string,
+	ctx context.Context, ses *Session, bh BackgroundExec,
+	tblStuff tableStuff, sql string,
 ) (sqlRet executor.Result, err error) {
+
+	if strings.Contains(sql, ".csv") {
+		bh.(*backExec).backSes.SetMysqlResultSet(&MysqlResultSet{})
+		for range tblStuff.def.visibleIdxes {
+			bh.(*backExec).backSes.mrs.AddColumn(&MysqlColumn{})
+		}
+
+		err = bh.Exec(ctx, sql)
+		return
+	}
 
 	var (
 		val   any
@@ -346,13 +358,32 @@ func runSql(
 
 	exec = val.(executor.SQLExecutor)
 
+	backSes := bh.(*backExec).backSes
+
 	opts := executor.Options{}.
 		WithDisableIncrStatement().
-		WithTxn(bh.(*backExec).backSes.GetTxnHandler().GetTxn()).
+		WithTxn(backSes.GetTxnHandler().GetTxn()).
 		WithKeepTxnAlive().
 		WithTimeZone(ses.GetTimeZone())
 
-	return exec.Exec(ctx, sql, opts)
+	if sqlRet, err = exec.Exec(ctx, sql, opts); err != nil {
+		return sqlRet, err
+	}
+
+	//if strings.Contains(sql, ".csv") {
+	//	var (
+	//		stmts []tree.Statement
+	//	)
+	//
+	//	if stmts, err = parsers.Parse(ctx, dialect.MYSQL, sql, 1); err != nil {
+	//		return sqlRet, err
+	//	}
+	//
+	//	st := stmts[0].(*tree.Select)
+	//	conf := ExportConfig{userConfig: st.Ep, service: ses.service}
+	//}
+
+	return sqlRet, nil
 }
 
 func handleDataBranch(
@@ -898,8 +929,11 @@ func prepareFSForDiffAsFile(
 	fullFilePath = path.Join(stmt.OutputOpt.DirPath, fileName)
 
 	if !asSQLFile {
-		// csv file
 		hint = newDiffCSVExportParam().String()
+		// For CSV we rely on executor's INTO OUTFILE to write; just ensure dir exists.
+		if mkErr := os.MkdirAll(filepath.Dir(fullFilePath), 0o755); mkErr != nil {
+			err = mkErr
+		}
 		return
 	}
 
@@ -923,6 +957,14 @@ func prepareFSForDiffAsFile(
 		targetFS = getPu(ses.GetService()).FileService
 		targetPath = fullFilePath
 	} else {
+		// ensure local dir exists when using implicit local ETL path
+		if fsPath.Service == "" {
+			if mkErr := os.MkdirAll(filepath.Dir(fullFilePath), 0o755); mkErr != nil {
+				err = mkErr
+				return
+			}
+		}
+
 		var etlFS fileservice.ETLFileService
 		if etlFS, targetPath, err = fileservice.GetForETL(ctx, nil, fullFilePath); err != nil {
 			return
@@ -934,22 +976,54 @@ func prepareFSForDiffAsFile(
 		return
 	}
 
-	writeFile = func(fileContent []byte) error {
-		vec := fileservice.IOVector{
-			FilePath: targetPath,
-			Entries: []fileservice.IOEntry{
-				{
-					Size: int64(len(fileContent)),
-					Data: fileContent,
-				},
-			},
-		}
-
-		return targetFS.Write(ctx, vec)
+	// SQL diff needs append, so pre-create the file and return an appender.
+	if err = targetFS.Write(ctx, fileservice.IOVector{
+		FilePath: targetPath,
+		Entries: []fileservice.IOEntry{
+			{Size: 0, Data: []byte{}},
+		},
+	}); err != nil && !moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists) {
+		return
 	}
 
-	release = func() {
-		targetFS.Close(ctx)
+	if mfs, ok := targetFS.(fileservice.MutableFileService); ok {
+		var mut fileservice.Mutator
+		if mut, err = mfs.NewMutator(ctx, targetPath); err != nil {
+			return
+		}
+
+		writeFile = func(fileContent []byte) error {
+			return mut.Append(ctx, fileservice.IOEntry{
+				Size: int64(len(fileContent)),
+				Data: fileContent,
+			})
+		}
+
+		release = func() {
+			_ = mut.Close()
+			targetFS.Close(ctx)
+		}
+	} else {
+		// Fallback: manually track offset and re-Write slices.
+		var offset int64
+		writeFile = func(fileContent []byte) error {
+			vec := fileservice.IOVector{
+				FilePath: targetPath,
+				Entries: []fileservice.IOEntry{
+					{
+						Offset: offset,
+						Size:   int64(len(fileContent)),
+						Data:   fileContent,
+					},
+				},
+			}
+			offset += int64(len(fileContent))
+			return targetFS.Write(ctx, vec)
+		}
+
+		release = func() {
+			targetFS.Close(ctx)
+		}
 	}
 
 	return
@@ -1009,6 +1083,8 @@ func flushSqlValues(
 		sqlBuffer.Write(buf.Bytes())
 	}
 
+	sqlBuffer.WriteString(";\n")
+
 	if writeFile != nil {
 		err = writeFile(sqlBuffer.Bytes())
 	} else {
@@ -1020,7 +1096,7 @@ func flushSqlValues(
 			ret.Close()
 		}()
 
-		ret, err = runSql(ctx, ses, bh, sqlBuffer.String())
+		ret, err = runSql(ctx, ses, bh, tblStuff, sqlBuffer.String())
 	}
 
 	return err
@@ -1060,7 +1136,7 @@ func constructValsFromBatch(
 			deleteFromValsBuffer.WriteString("(")
 		}
 		for idx, colIdx := range tblStuff.def.pkColIdxes {
-			formatValIntoString(ses, row[colIdx+2], tblStuff.def.colTypes[colIdx], deleteFromValsBuffer)
+			formatValIntoString(ses, row[colIdx], tblStuff.def.colTypes[colIdx], deleteFromValsBuffer)
 			if idx != len(tblStuff.def.pkColIdxes)-1 {
 				deleteFromValsBuffer.WriteString(",")
 			}
@@ -1194,7 +1270,7 @@ func tryDiffAsCSV(
 		fullFilePath string
 	)
 
-	if sqlRet, err = runSql(ctx, ses, bh, sql); err != nil {
+	if sqlRet, err = runSql(ctx, ses, bh, tblStuff, sql); err != nil {
 		return false, err
 	}
 
@@ -1222,15 +1298,17 @@ func tryDiffAsCSV(
 	}
 
 	// output as csv
-	sql = fmt.Sprintf("SELECT * FROM %s.%s%s INTO OUTFILE %s %s",
+	sql = fmt.Sprintf("SELECT * FROM %s.%s%s INTO OUTFILE '%s' %s;",
 		tblStuff.tarRel.GetTableDef(ctx).DbName,
 		tblStuff.tarRel.GetTableDef(ctx).Name,
-		snap, fullFilePath, hint,
+		snap, fullFilePath, strings.Replace(hint, `ESCAPED BY '\\'`, "", 1),
 	)
 
-	if sqlRet, err = runSql(ctx, ses, bh, sql); err != nil {
+	if sqlRet, err = runSql(ctx, ses, bh, tblStuff, sql); err != nil {
 		return false, err
 	}
+
+	fmt.Println(sql)
 
 	mrs := ses.GetMysqlResultSet()
 	mrs.AddRow([]any{fullFilePath, hint})
@@ -2473,7 +2551,7 @@ func handleDelsOnLCA(
 	sqlBuf.WriteString(" order by pks.__idx_")
 
 	sql = sqlBuf.String()
-	if sqlRet, err = runSql(ctx, ses, bh, sql); err != nil {
+	if sqlRet, err = runSql(ctx, ses, bh, tblStuff, sql); err != nil {
 		return
 	}
 
