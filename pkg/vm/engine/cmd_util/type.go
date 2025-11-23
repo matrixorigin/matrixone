@@ -19,8 +19,9 @@ import "time"
 const AllowPruneDuration = 24 * time.Hour
 
 const (
-	CheckerKeyTTL   = "ttl"
-	CheckerKeyMinTS = "min_ts"
+	CheckerKeyTTL    = "ttl"
+	CheckerKeyMinTS  = "min_ts"
+	CheckerKeyBackup = "backup"
 
 	AddChecker    = "add_checker"
 	RemoveChecker = "remove_checker"

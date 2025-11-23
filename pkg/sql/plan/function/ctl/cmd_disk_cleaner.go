@@ -57,15 +57,19 @@ func IsValidArg(parameter string, proc *process.Process) (*cmd_util.DiskCleaner,
 	}
 	key := parameters[1]
 	switch key {
-	case cmd_util.CheckerKeyTTL, cmd_util.CheckerKeyMinTS:
+	case cmd_util.CheckerKeyTTL, cmd_util.CheckerKeyMinTS, cmd_util.CheckerKeyBackup:
 		break
 	default:
 		return nil, moerr.NewInternalError(proc.Ctx, "handleDiskCleaner: invalid key!")
 	}
+	value := ""
+	if len(parameters) > 2 {
+		value = parameters[2]
+	}
 	return &cmd_util.DiskCleaner{
 		Op:    op,
 		Key:   key,
-		Value: parameters[2],
+		Value: value,
 	}, nil
 }
 

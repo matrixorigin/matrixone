@@ -285,7 +285,37 @@ func execBackup(
 		common.AnyField("backup time", backupTime),
 		common.AnyField("checkpoint num", len(names)),
 		common.AnyField("parallel num", parallelNum))
+
+	// Try to get SQL executor for mo_ctl calls (may not be available in test environment)
+	var exec executor.SQLExecutor
+	var opts executor.Options
+	v, ok := runtime.ServiceRuntime(sid).GetGlobalVariables(runtime.InternalSQLExecutor)
+	if ok {
+		exec = v.(executor.SQLExecutor)
+		opts = executor.Options{}
+	}
+
+	// Backup protection timestamp - will be set to the first checkpoint's start time
+	var protectedTS types.TS
+	var updateTicker *time.Ticker
+	var updateTickerStop chan struct{}
+
 	defer func() {
+		// Stop the update ticker
+		if updateTicker != nil {
+			updateTicker.Stop()
+			close(updateTickerStop)
+		}
+		// Remove backup protection (only if executor is available)
+		if !protectedTS.IsEmpty() && exec != nil {
+			sql := "select mo_ctl('dn','DiskCleaner','remove_checker.backup.')"
+			_, err := exec.Exec(ctx, sql, opts)
+			if err != nil {
+				logutil.Errorf("backup: failed to remove backup protection: %v", err)
+			} else {
+				logutil.Info("backup: backup protection removed")
+			}
+		}
 		logutil.Info("backup", common.OperationField("end backup"),
 			common.AnyField("load checkpoint cost", loadDuration),
 			common.AnyField("copy file cost", copyDuration),
@@ -377,6 +407,57 @@ func execBackup(
 		if err != nil {
 			return err
 		}
+	}
+
+	// Set protectedTS to the backup time point
+	// This is the timestamp that should be protected from GC
+	// Use start if available (from trimInfo), otherwise use baseTS
+	if !start.IsEmpty() {
+		protectedTS = start
+	} else if !baseTS.IsEmpty() {
+		protectedTS = baseTS
+	}
+
+	if !protectedTS.IsEmpty() && exec != nil {
+		// Set backup protection via mo_ctl
+		tsValue := protectedTS.ToString()
+		sql := fmt.Sprintf("select mo_ctl('dn','DiskCleaner','add_checker.backup.%s')", tsValue)
+		_, err := exec.Exec(ctx, sql, opts)
+		if err != nil {
+			logutil.Errorf("backup: failed to set backup protection: %v", err)
+			// Continue backup even if protection setup fails, but log the error
+		} else {
+			logutil.Info("backup: backup protection set",
+				common.AnyField("protected-ts", protectedTS.ToString()))
+
+			// Start a ticker to update backup protection every 5 minutes
+			updateTicker = time.NewTicker(5 * time.Minute)
+			updateTickerStop = make(chan struct{})
+			go func() {
+				for {
+					select {
+					case <-updateTicker.C:
+						// Update backup protection
+						tsValue := protectedTS.ToString()
+						sql := fmt.Sprintf("select mo_ctl('dn','DiskCleaner','add_checker.backup.%s')", tsValue)
+						_, err := exec.Exec(ctx, sql, opts)
+						if err != nil {
+							logutil.Errorf("backup: failed to update backup protection: %v", err)
+						} else {
+							logutil.Info("backup: backup protection updated")
+						}
+					case <-updateTickerStop:
+						return
+					case <-ctx.Done():
+						return
+					}
+				}
+			}()
+		}
+	} else if !protectedTS.IsEmpty() && exec == nil {
+		// SQL executor not available (e.g., in test environment)
+		// Log warning but continue backup without protection
+		logutil.Warn("backup: SQL executor not available, backup protection will not be set")
 	}
 
 	// copy data
@@ -481,9 +562,19 @@ func copyFileAndGetMetaFiles(
 		meta := decoder(file.Name)
 		meta.SetIdx(i)
 
-		if !backup.IsEmpty() && meta.GetStart().GE(&backup) {
-			logutil.Infof("[Backup] skip file %v", file.Name)
-			continue
+		if !backup.IsEmpty() {
+			start := meta.GetStart()
+			end := meta.GetEnd()
+			// Skip if end timestamp is greater than backup time point
+			if !end.IsEmpty() && end.GT(&backup) {
+				logutil.Infof("[Backup] skip file %v (end %v > backup %v)", file.Name, end.ToString(), backup.ToString())
+				continue
+			}
+			// Also check start timestamp (original logic)
+			if !start.IsEmpty() && start.GE(&backup) {
+				logutil.Infof("[Backup] skip file %v (start %v >= backup %v)", file.Name, start.ToString(), backup.ToString())
+				continue
+			}
 		}
 		if doCopy || meta.IsAcctExt() || meta.IsSnapshotExt() {
 			checksum, err = CopyFileWithRetry(ctx, srcFs, dstFs, file.Name, dir)
