@@ -41,7 +41,7 @@ const (
 	// WriteS3Threshold when batches'  size of table reaches this, we will
 	// trigger write s3
 	WriteS3Threshold         = 128 * mpool.MB
-	FaultInjectedS3Threshold = 512 * mpool.KB
+	FaultInjectedS3Threshold = 1 * mpool.KB
 )
 
 type CNS3Writer struct {
