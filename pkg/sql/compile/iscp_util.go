@@ -22,6 +22,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/idxcron"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
 var (
@@ -200,6 +202,103 @@ func CreateAllIndexCdcTasks(c *Compile, indexes []*plan.IndexDef, dbname string,
 			idxmap[idx.IndexName] = true
 			sinker_type := getSinkerTypeFromAlgo(idx.IndexAlgo)
 			e := CreateIndexCdcTask(c, dbname, tablename, idx.IndexName, sinker_type, startFromNow, "")
+			if e != nil {
+				return e
+			}
+		}
+	}
+	return nil
+}
+
+func getIvfflatMetadata(c *Compile) (metadata []byte, frontend bool, err error) {
+	var val any
+
+	// only frontend has ivf_threads_search variable declared
+	_, err = c.proc.GetResolveVariableFunc()("ivf_threads_search", true, false)
+	if err == nil {
+		frontend = true
+	}
+
+	val, err = c.proc.GetResolveVariableFunc()("ivf_threads_build", true, false)
+	if err != nil {
+		return
+	}
+	threadsBuild := val.(int64)
+
+	val, err = c.proc.GetResolveVariableFunc()("kmeans_train_percent", true, false)
+	if err != nil {
+		return
+	}
+	kmeansTrainPercent := val.(float64)
+
+	val, err = c.proc.GetResolveVariableFunc()("kmeans_max_iteration", true, false)
+	if err != nil {
+		return
+	}
+	kmeansMaxIteration := val.(int64)
+
+	val, err = c.proc.GetResolveVariableFunc()("lower_case_table_names", true, false)
+	if err != nil {
+		return
+	}
+	lowerCaseTableNames := val.(int64)
+
+	val, err = c.proc.GetResolveVariableFunc()("experimental_ivf_index", true, false)
+	if err != nil {
+		return
+	}
+	experimentalIvfIndex := val.(int8)
+
+	w := sqlexec.NewMetadataWriter()
+	w.AddInt("ivf_threads_build", threadsBuild)
+	w.AddFloat("kmeans_train_percent", kmeansTrainPercent)
+	w.AddInt("kmeans_max_iteration", kmeansMaxIteration)
+	w.AddInt("lower_case_table_names", lowerCaseTableNames)
+	w.AddInt8("experimental_ivf_index", experimentalIvfIndex)
+
+	metadata, err = w.Marshal()
+	if err != nil {
+		return
+	}
+
+	return
+}
+
+// idxcron function
+func CreateAllIndexUpdateTasks(c *Compile, indexes []*plan.IndexDef, dbname string, tablename string, tableid uint64) error {
+	if c.proc.GetResolveVariableFunc() == nil {
+		return nil
+	}
+
+	ivf_metadata, _, err := getIvfflatMetadata(c)
+	if err != nil {
+		return err
+	}
+
+	idxmap := make(map[string]bool)
+	for _, idx := range indexes {
+		_, ok := idxmap[idx.IndexName]
+		if ok {
+			continue
+		}
+
+		if idx.TableExist && catalog.IsIvfIndexAlgo(idx.IndexAlgo) {
+			idxmap[idx.IndexName] = true
+
+			if len(idx.IndexName) == 0 {
+				// skip empty index name because alter reindex sql don't support empty index name
+				continue
+			}
+
+			e := idxcron.RegisterUpdate(c.proc.Ctx,
+				c.proc.GetService(),
+				c.proc.GetTxnOperator(),
+				tableid,
+				dbname,
+				tablename,
+				idx.IndexName,
+				idxcron.Action_Ivfflat_Reindex,
+				string(ivf_metadata))
 			if e != nil {
 				return e
 			}

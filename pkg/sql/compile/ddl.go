@@ -58,6 +58,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/idxcron"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
@@ -243,6 +244,12 @@ func (s *Scope) DropDatabase(c *Compile) error {
 
 	// 5.unregister iscp jobs
 	err = iscp.UnregisterJobsByDBName(c.proc.Ctx, c.proc.GetService(), c.proc.GetTxnOperator(), dbName)
+	if err != nil {
+		return err
+	}
+
+	// 6.unregister index update
+	err = idxcron.UnregisterUpdateByDbName(c.proc.Ctx, c.proc.GetService(), c.proc.GetTxnOperator(), dbName)
 	if err != nil {
 		return err
 	}
@@ -604,6 +611,17 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					return err
 				}
 
+				// unregister index update
+				err = idxcron.UnregisterUpdate(c.proc.Ctx,
+					c.proc.GetService(),
+					c.proc.GetTxnOperator(),
+					oTableDef.TblId,
+					constraintName,
+					idxcron.Action_Wildcard)
+				if err != nil {
+					return err
+				}
+
 				// Avoid modifying slice directly during iteration
 				oTableDef.Indexes = notDroppedIndex
 				extra.IndexTables = newIndexes
@@ -909,7 +927,20 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 		if req.Kind == api.AlterKind_RenameTable {
 			op, ok := req.Operation.(*api.AlterTableReq_RenameTable)
 			if ok {
+				// iscp
 				err = iscp.RenameSrcTable(c.proc.Ctx,
+					c.proc.GetService(),
+					c.proc.GetTxnOperator(),
+					req.DbId,
+					req.TableId,
+					op.RenameTable.OldName,
+					op.RenameTable.NewName)
+				if err != nil {
+					return err
+				}
+
+				// idxcron
+				err = idxcron.RenameSrcTable(c.proc.Ctx,
 					c.proc.GetService(),
 					c.proc.GetTxnOperator(),
 					req.DbId,
@@ -1510,6 +1541,12 @@ func (s *Scope) CreateTable(c *Compile) error {
 		for _, constraint := range ct.Cts {
 			if idxdef, ok := constraint.(*engine.IndexDef); ok && len(idxdef.Indexes) > 0 {
 				err = CreateAllIndexCdcTasks(c, idxdef.Indexes, dbName, tblName, false)
+				if err != nil {
+					return err
+				}
+
+				// register index update for IVFFLAT
+				err = CreateAllIndexUpdateTasks(c, idxdef.Indexes, dbName, tblName, newRelation.GetTableID(c.proc.Ctx))
 				if err != nil {
 					return err
 				}
@@ -2133,24 +2170,12 @@ func (s *Scope) handleVectorIvfFlatIndex(
 		return err
 	}
 
-	/*
-		// create ISCP job when Async is true
-		if async {
-			// unregister ISCP job so that it can restart index update from ts=0
-			err = DropIndexCdcTask(c, originalTableDef, qryDatabase, originalTableDef.Name, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexName)
-			if err != nil {
-				return err
-			}
+	// 4.e register auto index update (reindex)
+	err = s.handleIvfIndexRegisterUpdate(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata], qryDatabase, originalTableDef)
+	if err != nil {
+		return err
+	}
 
-			logutil.Infof("Ivfflat index Async is true")
-			sinker_type := getSinkerTypeFromAlgo(catalog.MoIndexIvfFlatAlgo.ToString())
-			err = CreateIndexCdcTask(c, qryDatabase, originalTableDef.Name,
-				indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexName, sinker_type, false)
-			if err != nil {
-				return err
-			}
-		}
-	*/
 	return nil
 
 }
@@ -2213,7 +2238,18 @@ func (s *Scope) DropIndex(c *Compile) error {
 		return err
 	}
 
-	//4. delete index object from mo_catalog.mo_indexes
+	// 4. unregister index update
+	err = idxcron.UnregisterUpdate(c.proc.Ctx,
+		c.proc.GetService(),
+		c.proc.GetTxnOperator(),
+		oldTableDef.TblId,
+		qry.IndexName,
+		idxcron.Action_Wildcard)
+	if err != nil {
+		return err
+	}
+
+	//5. delete index object from mo_catalog.mo_indexes
 	deleteSql := fmt.Sprintf(deleteMoIndexesWithTableIdAndIndexNameFormat, r.GetTableID(c.proc.Ctx), qry.IndexName)
 	err = c.runSql(deleteSql)
 	if err != nil {
@@ -2739,6 +2775,15 @@ func (s *Scope) DropTable(c *Compile) error {
 
 	// delete cdc task of the vector and fulltext index here
 	err = DropAllIndexCdcTasks(c, rel.GetTableDef(c.proc.Ctx), qry.Database, qry.Table)
+	if err != nil {
+		return err
+	}
+
+	// unregister index update by Table Id
+	err = idxcron.UnregisterUpdateByTableId(c.proc.Ctx,
+		c.proc.GetService(),
+		c.proc.GetTxnOperator(),
+		tblID)
 	if err != nil {
 		return err
 	}

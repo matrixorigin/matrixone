@@ -126,7 +126,14 @@ func (bj ByteJson) GetUint64() uint64 {
 }
 
 func (bj ByteJson) GetFloat64() float64 {
-	return math.Float64frombits(bj.GetUint64())
+	switch bj.Type {
+	case TpCodeInt64:
+		return float64(bj.GetInt64())
+	case TpCodeUint64:
+		return float64(bj.GetUint64())
+	default:
+		return math.Float64frombits(bj.GetUint64())
+	}
 }
 
 func (bj ByteJson) GetString() []byte {

@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/idxcron"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -300,7 +301,7 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 		if err != nil {
 			return err
 		}
-		cfg.KmeansTrainPercent = val.(int64)
+		cfg.KmeansTrainPercent = val.(float64)
 
 		val, err = c.proc.GetResolveVariableFunc()("kmeans_max_iteration", true, false)
 		if err != nil {
@@ -458,6 +459,30 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 	}
 
 	return nil
+}
+
+func (s *Scope) handleIvfIndexRegisterUpdate(c *Compile, indexDef *plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef) error {
+
+	metadata, frontend, err := getIvfflatMetadata(c)
+	if err != nil {
+		return err
+	}
+
+	if !frontend {
+		// this function call is from background so ignore it
+		logutil.Infof("Background invoke reindex and ignore register index update function call")
+		return nil
+	}
+
+	return idxcron.RegisterUpdate(c.proc.Ctx,
+		c.proc.GetService(),
+		c.proc.GetTxnOperator(),
+		originalTableDef.TblId,
+		qryDatabase,
+		originalTableDef.Name,
+		indexDef.IndexName,
+		idxcron.Action_Ivfflat_Reindex,
+		string(metadata))
 }
 
 func (s *Scope) logTimestamp(c *Compile, qryDatabase, metadataTableName, metrics string) error {
