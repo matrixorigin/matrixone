@@ -45,10 +45,16 @@ func waitForErrorMetadata(t *testing.T, fetcher watermarkRowFetcher, key *Waterm
 			"mo_cdc_watermark",
 			[]string{fmt.Sprintf("%d", key.AccountId), key.TaskId, key.DBName, key.TableName},
 		)
-		if err != nil || len(tuple) < 5 {
+		// Table now has 6 columns: account_id, task_id, db_name, table_name, watermark, err_msg
+		if err != nil || len(tuple) < 6 {
 			return false
 		}
-		msg = strings.Trim(tuple[4], "'")
+		// err_msg is at index 5 (watermark is at index 4)
+		msg = strings.Trim(tuple[5], "'")
+		// Skip if err_msg is empty (no error yet)
+		if msg == "" {
+			return false
+		}
 		meta = ParseErrorMetadata(msg)
 		if cond == nil {
 			return meta != nil

@@ -16,6 +16,7 @@ package cdc
 
 import (
 	"context"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -54,6 +55,9 @@ type DataProcessor struct {
 	// Current accumulated atomic batches
 	insertAtmBatch *AtomicBatch
 	deleteAtmBatch *AtomicBatch
+
+	// Mutex for cleanup operations
+	cleanupMu sync.Mutex
 
 	// Configuration
 	initSnapshotSplitTxn bool // Whether to split snapshot into separate transactions
@@ -418,7 +422,11 @@ func (dp *DataProcessor) processNoMoreData(ctx context.Context) error {
 
 // Cleanup cleans up any remaining resources
 // This should be called in defer to ensure cleanup even on errors
+// This method is safe to call concurrently and is idempotent
 func (dp *DataProcessor) Cleanup() {
+	dp.cleanupMu.Lock()
+	defer dp.cleanupMu.Unlock()
+
 	if dp.insertAtmBatch != nil {
 		dp.insertAtmBatch.Close()
 		dp.insertAtmBatch = nil

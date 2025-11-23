@@ -16,6 +16,7 @@ package cdc
 
 import (
 	"context"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -92,6 +93,8 @@ func (cd *ChangeData) Clean(mp *mpool.MPool) {
 // 2. Provide typed change data (Snapshot/TailWip/TailDone/NoMoreData)
 // 3. Handle resource cleanup
 type ChangeCollector struct {
+	mu sync.RWMutex
+
 	// Engine changes handle
 	changesHandle engine.ChangesHandle
 
@@ -142,7 +145,12 @@ func NewChangeCollector(
 // When both insert and delete batches are nil and no error:
 // - Type will be ChangeTypeNoMoreData
 func (cc *ChangeCollector) Next(ctx context.Context) (*ChangeData, error) {
-	if cc.closed {
+	cc.mu.RLock()
+	closed := cc.closed
+	handle := cc.changesHandle
+	cc.mu.RUnlock()
+
+	if closed || handle == nil {
 		logutil.Warn(
 			"cdc.change_collector.next_after_close",
 			zap.String("task-id", cc.taskId),
@@ -154,7 +162,7 @@ func (cc *ChangeCollector) Next(ctx context.Context) (*ChangeData, error) {
 	}
 
 	// Call engine's Next
-	insertBatch, deleteBatch, hint, err := cc.changesHandle.Next(ctx, cc.mp)
+	insertBatch, deleteBatch, hint, err := handle.Next(ctx, cc.mp)
 	if err != nil {
 		logutil.Error(
 			"cdc.change_collector.next_failed",
@@ -213,14 +221,18 @@ func (cc *ChangeCollector) Next(ctx context.Context) (*ChangeData, error) {
 
 // Close closes the change collector
 func (cc *ChangeCollector) Close() error {
+	cc.mu.Lock()
 	if cc.closed {
+		cc.mu.Unlock()
 		return nil
 	}
-
 	cc.closed = true
+	handle := cc.changesHandle
+	cc.changesHandle = nil
+	cc.mu.Unlock()
 
-	if cc.changesHandle != nil {
-		if err := cc.changesHandle.Close(); err != nil {
+	if handle != nil {
+		if err := handle.Close(); err != nil {
 			logutil.Error(
 				"cdc.change_collector.close_failed",
 				zap.String("task-id", cc.taskId),
@@ -246,6 +258,8 @@ func (cc *ChangeCollector) Close() error {
 
 // IsClosed returns true if the collector is closed
 func (cc *ChangeCollector) IsClosed() bool {
+	cc.mu.RLock()
+	defer cc.mu.RUnlock()
 	return cc.closed
 }
 

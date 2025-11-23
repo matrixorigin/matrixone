@@ -16,8 +16,10 @@ package cdc
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -33,6 +35,7 @@ import (
 	mock_executor "github.com/matrixorigin/matrixone/pkg/util/executor/test"
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestGetTableScanner(t *testing.T) {
@@ -63,7 +66,6 @@ func TestTableScanner1(t *testing.T) {
 	mockSqlExecutor.EXPECT().Exec(gomock.Any(), gomock.Any(), gomock.Any()).Return(res, nil)
 
 	td := &TableDetector{
-		Mutex:                sync.Mutex{},
 		Mp:                   make(map[uint32]TblMap),
 		Callbacks:            make(map[string]TableCallback),
 		CallBackAccountId:    make(map[string]uint32),
@@ -78,13 +80,13 @@ func TestTableScanner1(t *testing.T) {
 	}
 	defer td.Close()
 
-	td.Register("id1", 1, []string{"db1"}, []string{"tbl1"}, func(mp map[uint32]TblMap) error { return nil })
+	assert.True(t, td.RegisterIfAbsent("id1", 1, []string{"db1"}, []string{"tbl1"}, func(mp map[uint32]TblMap) error { return nil }))
 	assert.Equal(t, 1, len(td.Callbacks))
-	td.Register("id2", 2, []string{"db2"}, []string{"tbl2"}, func(mp map[uint32]TblMap) error { return nil })
+	assert.True(t, td.RegisterIfAbsent("id2", 2, []string{"db2"}, []string{"tbl2"}, func(mp map[uint32]TblMap) error { return nil }))
 	assert.Equal(t, 2, len(td.Callbacks))
 	assert.Equal(t, 2, len(td.SubscribedAccountIds))
 
-	td.Register("id3", 1, []string{"db1"}, []string{"tbl1"}, func(mp map[uint32]TblMap) error { return nil })
+	assert.True(t, td.RegisterIfAbsent("id3", 1, []string{"db1"}, []string{"tbl1"}, func(mp map[uint32]TblMap) error { return nil }))
 	assert.Equal(t, 3, len(td.Callbacks))
 	assert.Equal(t, 2, len(td.SubscribedAccountIds))
 	assert.Equal(t, 2, len(td.SubscribedDbNames["db1"]))
@@ -105,7 +107,7 @@ func TestTableScanner1(t *testing.T) {
 	assert.Equal(t, 0, len(td.SubscribedAccountIds))
 	assert.Equal(t, 0, len(td.SubscribedDbNames))
 
-	td.Register("id4", 1, []string{"db4"}, []string{"tbl4"}, func(mp map[uint32]TblMap) error { return nil })
+	assert.True(t, td.RegisterIfAbsent("id4", 1, []string{"db4"}, []string{"tbl4"}, func(mp map[uint32]TblMap) error { return nil }))
 	assert.Equal(t, 1, len(td.Callbacks))
 	assert.Equal(t, 1, len(td.SubscribedAccountIds))
 
@@ -132,6 +134,530 @@ func TestTableScanner1(t *testing.T) {
 	assert.Equal(t, 0, len(td.Mp))
 }
 
+func TestTableDetectorRegisterStartsScanAsync(t *testing.T) {
+	td := &TableDetector{
+		Mp:                   make(map[uint32]TblMap),
+		Callbacks:            make(map[string]TableCallback),
+		CallBackAccountId:    make(map[string]uint32),
+		SubscribedAccountIds: make(map[uint32][]string),
+		CallBackDbName:       make(map[string][]string),
+		SubscribedDbNames:    make(map[string][]string),
+		CallBackTableName:    make(map[string][]string),
+		SubscribedTableNames: make(map[string][]string),
+		cleanupPeriod:        time.Second,
+		cleanupWarn:          time.Second,
+		nowFn:                time.Now,
+	}
+	td.scanTableFn = func() error { return nil }
+	defer td.Close()
+
+	errCh := make(chan error, 1)
+	registered := make(chan struct{})
+	go func() {
+		if !td.RegisterIfAbsent("async-task", 1, []string{"db"}, []string{"tbl"}, func(map[uint32]TblMap) error { return nil }) {
+			errCh <- moerr.NewInternalErrorNoCtx("RegisterIfAbsent failed for async-task")
+		}
+		close(registered)
+	}()
+
+	select {
+	case <-registered:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("register blocked while starting scan loop")
+	}
+
+	select {
+	case err := <-errCh:
+		t.Fatalf("unexpected registration failure: %v", err)
+	default:
+	}
+
+	td.mu.Lock()
+	cancelSet := td.cancel != nil
+	td.mu.Unlock()
+
+	if !cancelSet {
+		t.Fatalf("expected cancel function to be set after registration")
+	}
+}
+
+func TestTableDetectorScanLoopSingleInstance(t *testing.T) {
+	fault.Enable()
+	defer fault.Disable()
+	rmFn, err := objectio.InjectCDCScanTable("fast scan")
+	require.NoError(t, err)
+	defer func() {
+		if rmFn != nil {
+			_, _ = rmFn()
+		}
+	}()
+
+	var scanCalls atomic.Int32
+	td := &TableDetector{
+		Mp:                   make(map[uint32]TblMap),
+		Callbacks:            make(map[string]TableCallback),
+		CallBackAccountId:    make(map[string]uint32),
+		SubscribedAccountIds: make(map[uint32][]string),
+		CallBackDbName:       make(map[string][]string),
+		SubscribedDbNames:    make(map[string][]string),
+		CallBackTableName:    make(map[string][]string),
+		SubscribedTableNames: make(map[string][]string),
+		cleanupPeriod:        time.Second,
+		cleanupWarn:          time.Second,
+		nowFn:                time.Now,
+	}
+	td.scanTableFn = func() error {
+		scanCalls.Add(1)
+		return nil
+	}
+	defer td.Close()
+
+	if !td.RegisterIfAbsent("task-0", 1, []string{"db"}, []string{"tbl"}, func(map[uint32]TblMap) error { return nil }) {
+		t.Fatalf("RegisterIfAbsent failed for first task")
+	}
+
+	waitUntil(t, func() bool { return scanCalls.Load() > 0 }, 500*time.Millisecond, "scan loop did not start")
+
+	firstSeq := td.loopSeq.Load()
+	if firstSeq != 1 {
+		t.Fatalf("expected loopSeq 1, got %d", firstSeq)
+	}
+
+	for i := 1; i < 5; i++ {
+		id := fmt.Sprintf("task-%d", i)
+		if !td.RegisterIfAbsent(id, uint32(i+1), []string{"db"}, []string{"tbl"}, func(map[uint32]TblMap) error { return nil }) {
+			t.Fatalf("RegisterIfAbsent failed for %s", id)
+		}
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	if td.loopSeq.Load() != firstSeq {
+		t.Fatalf("expected loopSeq to remain %d, got %d", firstSeq, td.loopSeq.Load())
+	}
+
+	td.Close()
+	waitUntil(t, func() bool { return !td.loopRunning.Load() }, time.Second, "scan loop did not stop after Close")
+}
+
+func TestTableDetectorProcessCallbackNoReentry(t *testing.T) {
+	td := &TableDetector{
+		Mp:                   make(map[uint32]TblMap),
+		Callbacks:            make(map[string]TableCallback),
+		CallBackAccountId:    make(map[string]uint32),
+		SubscribedAccountIds: make(map[uint32][]string),
+		CallBackDbName:       make(map[string][]string),
+		SubscribedDbNames:    make(map[string][]string),
+		CallBackTableName:    make(map[string][]string),
+		SubscribedTableNames: make(map[string][]string),
+		cleanupPeriod:        time.Second,
+		cleanupWarn:          time.Second,
+		nowFn:                time.Now,
+	}
+	defer td.Close()
+
+	block := make(chan struct{})
+	release := make(chan struct{})
+	var count atomic.Int32
+
+	cb := func(map[uint32]TblMap) error {
+		count.Add(1)
+		select {
+		case <-block:
+		default:
+			close(block)
+		}
+		<-release
+		return nil
+	}
+
+	require.True(t, td.RegisterIfAbsent("task", 1, []string{"db"}, []string{"tbl"}, cb))
+	tables := map[uint32]TblMap{
+		1: {"db.tbl": {SourceDbName: "db", SourceTblName: "tbl"}},
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		td.processCallback(context.Background(), tables)
+	}()
+
+	<-block
+	done := make(chan struct{})
+	go func() {
+		td.processCallback(context.Background(), tables)
+		close(done)
+	}()
+
+	<-done
+	if got := count.Load(); got != 1 {
+		t.Fatalf("callback executed %d times", got)
+	}
+
+	close(release)
+	wg.Wait()
+}
+
+func TestTableDetectorRegisterDuringCallback(t *testing.T) {
+	td := &TableDetector{
+		Mp:                   make(map[uint32]TblMap),
+		Callbacks:            make(map[string]TableCallback),
+		CallBackAccountId:    make(map[string]uint32),
+		SubscribedAccountIds: make(map[uint32][]string),
+		CallBackDbName:       make(map[string][]string),
+		SubscribedDbNames:    make(map[string][]string),
+		CallBackTableName:    make(map[string][]string),
+		SubscribedTableNames: make(map[string][]string),
+		cleanupPeriod:        time.Second,
+		cleanupWarn:          time.Second,
+		nowFn:                time.Now,
+	}
+	defer td.Close()
+
+	enter := make(chan struct{})
+	release := make(chan struct{})
+	var firstCount, secondCount atomic.Int32
+
+	first := func(map[uint32]TblMap) error {
+		firstCount.Add(1)
+		select {
+		case <-enter:
+		default:
+			close(enter)
+		}
+		<-release
+		return nil
+	}
+
+	second := func(map[uint32]TblMap) error {
+		secondCount.Add(1)
+		return nil
+	}
+
+	require.True(t, td.RegisterIfAbsent("task-1", 1, []string{"db"}, []string{"tbl"}, first))
+
+	tables := map[uint32]TblMap{
+		1: {"db.tbl": {SourceDbName: "db", SourceTblName: "tbl"}},
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		td.processCallback(context.Background(), tables)
+	}()
+
+	<-enter
+	regDone := make(chan struct{})
+	go func() {
+		did := td.RegisterIfAbsent("task-2", 1, []string{"db"}, []string{"tbl"}, second)
+		if !did {
+			panic("register failed")
+		}
+		close(regDone)
+	}()
+
+	<-regDone
+	close(release)
+	wg.Wait()
+
+	// Next callback invocation should execute both callbacks.
+	td.processCallback(context.Background(), tables)
+
+	if firstCount.Load() != 2 {
+		t.Fatalf("unexpected first count: %d", firstCount.Load())
+	}
+	if secondCount.Load() != 1 {
+		t.Fatalf("unexpected second count: %d", secondCount.Load())
+	}
+}
+
+func TestTableDetectorProcessCallbackErrorResetsState(t *testing.T) {
+	d := &TableDetector{
+		Mp:                   make(map[uint32]TblMap),
+		Callbacks:            make(map[string]TableCallback),
+		CallBackAccountId:    make(map[string]uint32),
+		SubscribedAccountIds: make(map[uint32][]string),
+		CallBackDbName:       make(map[string][]string),
+		SubscribedDbNames:    make(map[string][]string),
+		CallBackTableName:    make(map[string][]string),
+		SubscribedTableNames: make(map[string][]string),
+		cleanupPeriod:        time.Second,
+		cleanupWarn:          time.Second,
+		nowFn:                time.Now,
+	}
+	defer d.Close()
+
+	var count atomic.Int32
+	cb := func(map[uint32]TblMap) error {
+		count.Add(1)
+		return moerr.NewInternalErrorNoCtx("boom")
+	}
+
+	require.True(t, d.RegisterIfAbsent("task", 1, []string{"db"}, []string{"tbl"}, cb))
+	tables := map[uint32]TblMap{1: {"db.tbl": {SourceDbName: "db", SourceTblName: "tbl"}}}
+
+	d.mu.Lock()
+	d.lastMp = tables
+	d.mu.Unlock()
+
+	d.processCallback(context.Background(), tables)
+	d.processCallback(context.Background(), tables)
+
+	if count.Load() != 2 {
+		t.Fatalf("callback count %d", count.Load())
+	}
+	if d.handling {
+		t.Fatalf("handling flag not reset")
+	}
+	if d.lastMp == nil {
+		t.Fatalf("lastMp should be retained on error")
+	}
+}
+
+func TestTableDetectorProcessCallbackPanicHandled(t *testing.T) {
+	d := &TableDetector{
+		Mp:                   make(map[uint32]TblMap),
+		Callbacks:            make(map[string]TableCallback),
+		CallBackAccountId:    make(map[string]uint32),
+		SubscribedAccountIds: make(map[uint32][]string),
+		CallBackDbName:       make(map[string][]string),
+		SubscribedDbNames:    make(map[string][]string),
+		CallBackTableName:    make(map[string][]string),
+		SubscribedTableNames: make(map[string][]string),
+		cleanupPeriod:        time.Second,
+		cleanupWarn:          time.Second,
+		nowFn:                time.Now,
+	}
+	defer d.Close()
+
+	require.True(t, d.RegisterIfAbsent("task", 1, []string{"db"}, []string{"tbl"}, func(map[uint32]TblMap) error {
+		panic("panic in callback")
+	}))
+
+	tables := map[uint32]TblMap{1: {"db.tbl": {SourceDbName: "db", SourceTblName: "tbl"}}}
+
+	func() {
+		defer func() { _ = recover() }()
+		d.processCallback(context.Background(), tables)
+	}()
+
+	if d.handling {
+		t.Fatalf("handling flag not reset after panic")
+	}
+}
+
+func TestTableDetectorCloseWhileCallbackRunning(t *testing.T) {
+	d := &TableDetector{
+		Mp:                   make(map[uint32]TblMap),
+		Callbacks:            make(map[string]TableCallback),
+		CallBackAccountId:    make(map[string]uint32),
+		SubscribedAccountIds: make(map[uint32][]string),
+		CallBackDbName:       make(map[string][]string),
+		SubscribedDbNames:    make(map[string][]string),
+		CallBackTableName:    make(map[string][]string),
+		SubscribedTableNames: make(map[string][]string),
+		cleanupPeriod:        time.Second,
+		cleanupWarn:          time.Second,
+		nowFn:                time.Now,
+	}
+	defer d.Close()
+
+	fault.Enable()
+	defer fault.Disable()
+	rmFn, err := objectio.InjectCDCScanTable("fast scan")
+	require.NoError(t, err)
+	defer func() {
+		if rmFn != nil {
+			_, _ = rmFn()
+		}
+	}()
+
+	block := make(chan struct{})
+	release := make(chan struct{})
+
+	require.True(t, d.RegisterIfAbsent("task", 1, []string{"db"}, []string{"tbl"}, func(map[uint32]TblMap) error {
+		close(block)
+		<-release
+		return nil
+	}))
+
+	tables := map[uint32]TblMap{1: {"db.tbl": {SourceDbName: "db", SourceTblName: "tbl"}}}
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		d.processCallback(context.Background(), tables)
+	}()
+
+	<-block
+	d.Close()
+	close(release)
+	wg.Wait()
+
+	d.mu.Lock()
+	if d.handling {
+		d.mu.Unlock()
+		t.Fatalf("handling flag not reset after close")
+	}
+	d.mu.Unlock()
+
+	require.Eventually(t, func() bool {
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		return d.cancel == nil && !d.loopRunning.Load()
+	}, 5*time.Second, 10*time.Millisecond, "detector not fully closed")
+}
+
+func TestTableDetectorConcurrentRegisterUnregister(t *testing.T) {
+	fault.Enable()
+	defer fault.Disable()
+	rmFn, err := objectio.InjectCDCScanTable("fast scan")
+	require.NoError(t, err)
+	defer func() {
+		if rmFn != nil {
+			_, _ = rmFn()
+		}
+	}()
+
+	td := &TableDetector{
+		Mp:                   make(map[uint32]TblMap),
+		Callbacks:            make(map[string]TableCallback),
+		CallBackAccountId:    make(map[string]uint32),
+		SubscribedAccountIds: make(map[uint32][]string),
+		CallBackDbName:       make(map[string][]string),
+		SubscribedDbNames:    make(map[string][]string),
+		CallBackTableName:    make(map[string][]string),
+		SubscribedTableNames: make(map[string][]string),
+		cleanupPeriod:        time.Second,
+		cleanupWarn:          time.Second,
+		nowFn:                time.Now,
+	}
+	td.scanTableFn = func() error { return nil }
+	defer td.Close()
+
+	const workers = 16
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	errCh := make(chan error, workers)
+
+	for i := 0; i < workers; i++ {
+		go func(idx int) {
+			defer wg.Done()
+			id := fmt.Sprintf("task-%d", idx)
+			if !td.RegisterIfAbsent(id, uint32(idx+1), []string{fmt.Sprintf("db%d", idx)}, []string{fmt.Sprintf("tbl%d", idx)}, func(map[uint32]TblMap) error { return nil }) {
+				errCh <- moerr.NewInternalErrorNoCtx(fmt.Sprintf("register failed for %s", id))
+				return
+			}
+			time.Sleep(time.Duration(idx%4) * 5 * time.Millisecond)
+			td.UnRegister(id)
+		}(i)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("concurrent register/unregister timed out")
+	}
+
+	close(errCh)
+	for err := range errCh {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	waitUntil(t, func() bool {
+		td.mu.Lock()
+		defer td.mu.Unlock()
+		return len(td.Callbacks) == 0 &&
+			len(td.SubscribedAccountIds) == 0 &&
+			len(td.SubscribedDbNames) == 0 &&
+			len(td.SubscribedTableNames) == 0
+	}, 500*time.Millisecond, "callbacks or subscriptions not cleaned up")
+
+	td.Close()
+	waitUntil(t, func() bool { return !td.loopRunning.Load() }, time.Second, "scan loop did not stop after Close")
+}
+
+func waitUntil(t *testing.T, cond func() bool, timeout time.Duration, msg string) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		if cond() {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timeout waiting for condition: %s", msg)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func TestTableDetectorConcurrentRegister(t *testing.T) {
+	td := &TableDetector{
+		Mp:                   make(map[uint32]TblMap),
+		Callbacks:            make(map[string]TableCallback),
+		CallBackAccountId:    make(map[string]uint32),
+		SubscribedAccountIds: make(map[uint32][]string),
+		CallBackDbName:       make(map[string][]string),
+		SubscribedDbNames:    make(map[string][]string),
+		CallBackTableName:    make(map[string][]string),
+		SubscribedTableNames: make(map[string][]string),
+		cleanupPeriod:        time.Second,
+		cleanupWarn:          time.Second,
+		nowFn:                time.Now,
+	}
+	td.scanTableFn = func() error { return nil }
+	defer td.Close()
+
+	const concurrency = 8
+	var wg sync.WaitGroup
+	wg.Add(concurrency)
+	errCh := make(chan error, concurrency)
+	for i := 0; i < concurrency; i++ {
+		go func(idx int) {
+			defer wg.Done()
+			taskID := fmt.Sprintf("task-%d", idx)
+			db := fmt.Sprintf("db%d", idx)
+			table := fmt.Sprintf("tbl%d", idx)
+			if !td.RegisterIfAbsent(taskID, uint32(idx+1), []string{db}, []string{table}, func(map[uint32]TblMap) error {
+				return nil
+			}) {
+				errCh <- moerr.NewInternalErrorNoCtx(fmt.Sprintf("duplicate registration for %s", taskID))
+			}
+		}(i)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("concurrent register blocked")
+	}
+
+	close(errCh)
+	for err := range errCh {
+		t.Fatalf("unexpected duplicate: %v", err)
+	}
+
+	td.mu.Lock()
+	defer td.mu.Unlock()
+	if len(td.Callbacks) != concurrency {
+		t.Fatalf("expected %d callbacks, got %d", concurrency, len(td.Callbacks))
+	}
+}
+
 func Test_CollectTableInfoSQL(t *testing.T) {
 	var builder cdcSQLBuilder
 	sql := builder.CollectTableInfoSQL("1,2,3", "*", "*")
@@ -154,7 +680,6 @@ func TestScanAndProcess(t *testing.T) {
 	defer ctrl.Finish()
 
 	td := &TableDetector{
-		Mutex:                sync.Mutex{},
 		Mp:                   make(map[uint32]TblMap),
 		Callbacks:            make(map[string]TableCallback),
 		CallBackAccountId:    make(map[string]uint32),
@@ -210,7 +735,6 @@ func TestProcessCallBack(t *testing.T) {
 	defer ctrl.Finish()
 
 	td := &TableDetector{
-		Mutex:                sync.Mutex{},
 		Mp:                   make(map[uint32]TblMap),
 		Callbacks:            make(map[string]TableCallback),
 		CallBackAccountId:    make(map[string]uint32),
@@ -238,7 +762,7 @@ func TestProcessCallBack(t *testing.T) {
 			},
 		},
 	}
-	td.Register("id1", 1, []string{"db1"}, []string{"tbl1"}, func(mp map[uint32]TblMap) error { return moerr.NewInternalErrorNoCtx("ERR") })
+	assert.True(t, td.RegisterIfAbsent("id1", 1, []string{"db1"}, []string{"tbl1"}, func(mp map[uint32]TblMap) error { return moerr.NewInternalErrorNoCtx("ERR") }))
 	assert.Equal(t, 1, len(td.Callbacks))
 	td.mu.Lock()
 	td.lastMp = tables
@@ -300,7 +824,6 @@ func TestTableScanner_UpdateTableInfo(t *testing.T) {
 	).Return(res2, nil)
 
 	td := &TableDetector{
-		Mutex:                sync.Mutex{},
 		Mp:                   make(map[uint32]TblMap),
 		Callbacks:            make(map[string]TableCallback),
 		CallBackAccountId:    make(map[string]uint32),
@@ -314,9 +837,9 @@ func TestTableScanner_UpdateTableInfo(t *testing.T) {
 		cleanupWarn:          DefaultCleanupWarnThreshold,
 	}
 	defer td.Close()
-	td.Register("test-task", 1, []string{"db1"}, []string{"tbl1"}, func(mp map[uint32]TblMap) error {
+	assert.True(t, td.RegisterIfAbsent("test-task", 1, []string{"db1"}, []string{"tbl1"}, func(mp map[uint32]TblMap) error {
 		return nil
-	})
+	}))
 
 	err := td.scanTable()
 	assert.NoError(t, err)

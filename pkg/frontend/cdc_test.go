@@ -86,8 +86,8 @@ func createMockTableDetectorForTest() func(cnUUID string) *cdc.TableDetector {
 			}))
 		}
 
-		// Call Register to properly initialize cancel field
-		detector.Register("__test_permanent_dummy__", 1, []string{}, []string{}, func(map[uint32]cdc.TblMap) error {
+		// Call RegisterIfAbsent to properly initialize cancel field
+		detector.RegisterIfAbsent("__test_permanent_dummy__", 1, []string{}, []string{}, func(map[uint32]cdc.TblMap) error {
 			return nil
 		})
 

@@ -16,6 +16,7 @@ package cdc
 
 import (
 	"context"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -28,10 +29,21 @@ import (
 // 2. Interact with Sinker (SendBegin/Commit/Rollback)
 // 3. Interact with WatermarkUpdater (update watermark)
 // 4. Implement dual-layer safety (tracker + watermark)
+//
+// Concurrency & Locking:
+//   - All PUBLIC methods on TransactionManager are serialized by an internal mutex.
+//     This guarantees safe access and mutation of the internal TransactionTracker.
+//   - DO NOT call any other PUBLIC TransactionManager API while holding the mutex.
+//     If a public method needs to rollback while holding the lock, it MUST call
+//     the private rollbackLocked instead of the public RollbackTransaction to avoid
+//     re-entrant locking and potential deadlocks.
 type TransactionManager struct {
 	sinker           Sinker
 	watermarkUpdater WatermarkUpdater
 	watermarkKey     *WatermarkKey
+
+	// Protects tracker and transactional state transitions
+	mu sync.Mutex
 
 	// Current transaction tracker
 	tracker *TransactionTracker
@@ -71,6 +83,8 @@ func NewTransactionManager(
 // BeginTransaction starts a new transaction
 // This should be called when we have data to send
 func (tm *TransactionManager) BeginTransaction(ctx context.Context, fromTs, toTs types.TS) error {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
 	if tm.tracker != nil && tm.tracker.NeedsRollback() {
 		logutil.Warn(
 			"cdc.txn_manager.begin_with_unfinished",
@@ -80,7 +94,7 @@ func (tm *TransactionManager) BeginTransaction(ctx context.Context, fromTs, toTs
 			zap.String("table", tm.tableName),
 		)
 		// Rollback previous transaction first
-		if err := tm.RollbackTransaction(ctx); err != nil {
+		if err := tm.rollbackLocked(ctx); err != nil {
 			return err
 		}
 	}
@@ -126,6 +140,8 @@ func (tm *TransactionManager) BeginTransaction(ctx context.Context, fromTs, toTs
 // 2. Update watermark (persistent proof)
 // 3. Mark tracker as committed (memory state)
 func (tm *TransactionManager) CommitTransaction(ctx context.Context) error {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
 	if tm.tracker == nil {
 		logutil.Warn(
 			"cdc.txn_manager.commit_without_tracker",
@@ -216,6 +232,8 @@ func (tm *TransactionManager) CommitTransaction(ctx context.Context) error {
 
 // RollbackTransaction rolls back the current transaction
 func (tm *TransactionManager) RollbackTransaction(ctx context.Context) error {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
 	if tm.tracker == nil {
 		logutil.Warn(
 			"cdc.txn_manager.rollback_without_tracker",
@@ -292,6 +310,8 @@ func (tm *TransactionManager) RollbackTransaction(ctx context.Context) error {
 // Layer 1: Check tracker state (fast, explicit)
 // Layer 2: Verify watermark (reliable, persistent)
 func (tm *TransactionManager) EnsureCleanup(ctx context.Context) error {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
 	if tm.tracker == nil {
 		return nil
 	}
@@ -305,7 +325,7 @@ func (tm *TransactionManager) EnsureCleanup(ctx context.Context) error {
 			zap.String("db", tm.dbName),
 			zap.String("table", tm.tableName),
 		)
-		return tm.RollbackTransaction(ctx)
+		return tm.rollbackLocked(ctx)
 	}
 
 	// Layer 2: Verify watermark (dual-layer safety)
@@ -324,7 +344,7 @@ func (tm *TransactionManager) EnsureCleanup(ctx context.Context) error {
 		)
 		// Fallback to tracker state
 		if tm.tracker.hasBegin && !tm.tracker.hasCommitted {
-			return tm.RollbackTransaction(ctx)
+			return tm.rollbackLocked(ctx)
 		}
 		return nil
 	}
@@ -340,7 +360,7 @@ func (tm *TransactionManager) EnsureCleanup(ctx context.Context) error {
 			zap.String("expected", toTs.ToString()),
 			zap.String("actual", current.ToString()),
 		)
-		return tm.RollbackTransaction(ctx)
+		return tm.rollbackLocked(ctx)
 	}
 
 	return nil
@@ -348,10 +368,90 @@ func (tm *TransactionManager) EnsureCleanup(ctx context.Context) error {
 
 // GetTracker returns the current transaction tracker
 func (tm *TransactionManager) GetTracker() *TransactionTracker {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
 	return tm.tracker
 }
 
 // Reset resets the transaction manager for a new transaction
 func (tm *TransactionManager) Reset() {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
 	tm.tracker = nil
+}
+
+// rollbackLocked rolls back the current transaction.
+// NOTE: tm.mu MUST be held by the caller.
+// This function is INTERNAL-ONLY and is used to avoid re-entrancy/deadlocks
+// when a public method needs to perform a rollback while already holding tm.mu.
+func (tm *TransactionManager) rollbackLocked(ctx context.Context) error {
+	if tm.tracker == nil {
+		logutil.Warn(
+			"cdc.txn_manager.rollback_without_tracker",
+			zap.String("task-id", tm.taskId),
+			zap.Uint64("account-id", tm.accountId),
+			zap.String("db", tm.dbName),
+			zap.String("table", tm.tableName),
+		)
+		return nil
+	}
+
+	if !tm.tracker.hasBegin {
+		logutil.Debug(
+			"cdc.txn_manager.rollback_without_begin",
+			zap.String("task-id", tm.taskId),
+			zap.Uint64("account-id", tm.accountId),
+			zap.String("db", tm.dbName),
+			zap.String("table", tm.tableName),
+		)
+		return nil
+	}
+
+	if tm.tracker.hasRolledBack {
+		logutil.Debug(
+			"cdc.txn_manager.already_rolled_back",
+			zap.String("task-id", tm.taskId),
+			zap.Uint64("account-id", tm.accountId),
+			zap.String("db", tm.dbName),
+			zap.String("table", tm.tableName),
+		)
+		return nil
+	}
+
+	// Clear any previous errors before rollback
+	tm.sinker.ClearError()
+
+	// Send ROLLBACK to sinker
+	tm.sinker.SendRollback()
+	// Send dummy to ensure ROLLBACK is sent
+	tm.sinker.SendDummy()
+
+	// Check for errors
+	if err := tm.sinker.Error(); err != nil {
+		logutil.Error(
+			"cdc.txn_manager.send_rollback_failed",
+			zap.String("task-id", tm.taskId),
+			zap.Uint64("account-id", tm.accountId),
+			zap.String("db", tm.dbName),
+			zap.String("table", tm.tableName),
+			zap.Error(err),
+		)
+		// Mark as rolled back even if it failed
+		// to avoid infinite retry loops
+		tm.tracker.MarkRollback()
+		return err
+	}
+
+	// Mark tracker as rolled back
+	tm.tracker.MarkRollback()
+
+	logutil.Debug(
+		"cdc.txn_manager.rollback_success",
+		zap.String("task-id", tm.taskId),
+		zap.Uint64("account-id", tm.accountId),
+		zap.String("db", tm.dbName),
+		zap.String("table", tm.tableName),
+	)
+
+	return nil
 }

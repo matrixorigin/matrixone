@@ -248,6 +248,59 @@ func (c *DashboardCreator) initCDCTableStreamRow() dashboard.Option {
 			axis.Unit("s"),
 			axis.Min(0),
 		),
+		c.withTimeSeries(
+			"Retry Attempts /s",
+			6,
+			[]string{
+				`sum(rate(` + c.getMetricWithFilter("mo_cdc_table_stream_retry_total", `outcome="attempted"`) + `[$interval])) by (table, error_type)`,
+			},
+			[]string{
+				"{{ table }} ({{ error_type }})",
+			},
+			timeseries.Axis(tsaxis.Unit("short")),
+		),
+		c.withTimeSeries(
+			"Retry Outcomes /s",
+			6,
+			[]string{
+				`sum(rate(` + c.getMetricWithFilter("mo_cdc_table_stream_retry_total", `outcome!="attempted"`) + `[$interval])) by (table, error_type, outcome)`,
+			},
+			[]string{
+				"{{ table }} ({{ error_type }}, {{ outcome }})",
+			},
+			timeseries.Axis(tsaxis.Unit("short")),
+		),
+		c.getHistogramWithExtraBy(
+			"Retry Backoff Delay (s)",
+			c.getMetricWithFilter("mo_cdc_table_stream_retry_delay_seconds_bucket", ""),
+			[]float64{0.50, 0.90, 0.99},
+			6,
+			"error_type",
+			axis.Unit("s"),
+			axis.Min(0),
+		),
+		c.withTimeSeries(
+			"Auxiliary Errors /s",
+			6,
+			[]string{
+				`sum(rate(` + c.getMetricWithFilter("mo_cdc_table_stream_auxiliary_error_total", "") + `[$interval])) by (table, auxiliary_error_type)`,
+			},
+			[]string{
+				"{{ table }} ({{ auxiliary_error_type }})",
+			},
+			timeseries.Axis(tsaxis.Unit("short")),
+		),
+		c.withTimeSeries(
+			"Original Error Preserved /s",
+			6,
+			[]string{
+				`sum(rate(` + c.getMetricWithFilter("mo_cdc_table_stream_original_error_preserved_total", "") + `[$interval])) by (table, original_error_type)`,
+			},
+			[]string{
+				"{{ table }} ({{ original_error_type }})",
+			},
+			timeseries.Axis(tsaxis.Unit("short")),
+		),
 	)
 }
 

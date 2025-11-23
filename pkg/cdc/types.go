@@ -310,6 +310,10 @@ type AtomicBatch struct {
 	Mp      *mpool.MPool
 	Batches []*batch.Batch
 	Rows    *btree.BTreeG[AtomicBatchRow]
+
+	totalRows       int
+	duplicateRows   int
+	duplicateLogged bool
 }
 
 func NewAtomicBatch(mp *mpool.MPool) *AtomicBatch {
@@ -343,22 +347,24 @@ func (row AtomicBatchRow) Less(other AtomicBatchRow) bool {
 }
 
 func (bat *AtomicBatch) RowCount() int {
-	c := 0
-	for _, b := range bat.Batches {
-		rows := 0
-		if b != nil && len(b.Vecs) > 0 {
-			rows = b.Vecs[0].Length()
-		}
-		c += rows
-	}
-
-	if c != bat.Rows.Len() {
-		logutil.Error("cdc.atomic_batch.row_count_mismatch",
-			zap.Int("batch-rows", c),
-			zap.Int("btree-rows", bat.Rows.Len()),
+	unique := bat.Rows.Len()
+	if bat.duplicateRows > 0 && !bat.duplicateLogged {
+		logutil.Warn("cdc.atomic_batch.dedup",
+			zap.Int("unique-rows", unique),
+			zap.Int("total-rows", bat.totalRows),
+			zap.Int("duplicate-rows", bat.duplicateRows),
 		)
+		bat.duplicateLogged = true
 	}
-	return c
+	return unique
+}
+
+func (bat *AtomicBatch) TotalRows() int {
+	return bat.totalRows
+}
+
+func (bat *AtomicBatch) DuplicateRows() int {
+	return bat.duplicateRows
 }
 
 func (bat *AtomicBatch) Allocated() int {
@@ -398,7 +404,11 @@ func (bat *AtomicBatch) Append(
 				Offset: i,
 				Src:    batch,
 			}
-			bat.Rows.Set(row)
+			_, replaced := bat.Rows.Set(row)
+			bat.totalRows++
+			if replaced {
+				bat.duplicateRows++
+			}
 		}
 
 		bat.Batches = append(bat.Batches, batch)
@@ -415,6 +425,9 @@ func (bat *AtomicBatch) Close() {
 	}
 	bat.Batches = nil
 	bat.Mp = nil
+	bat.totalRows = 0
+	bat.duplicateRows = 0
+	bat.duplicateLogged = false
 }
 
 func (bat *AtomicBatch) GetRowIterator() RowIterator {

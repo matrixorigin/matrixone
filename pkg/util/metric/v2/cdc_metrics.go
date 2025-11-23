@@ -77,6 +77,43 @@ var (
 			Help:      "Duration of table stream processing rounds",
 			Buckets:   prometheus.ExponentialBuckets(0.001, 2, 15), // 1ms to 16s
 		}, []string{"table"})
+
+	// CdcTableStreamRetryCounter tracks retry attempts by error type and outcome
+	CdcTableStreamRetryCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "cdc",
+			Name:      "table_stream_retry_total",
+			Help:      "Total number of table stream retry attempts by error type and outcome",
+		}, []string{"table", "error_type", "outcome"}) // outcome: attempted, succeeded, exhausted, failed
+
+	// CdcTableStreamRetryDelayHistogram tracks retry backoff delays
+	CdcTableStreamRetryDelayHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "cdc",
+			Name:      "table_stream_retry_delay_seconds",
+			Help:      "Retry backoff delay duration for table streams",
+			Buckets:   prometheus.ExponentialBuckets(0.005, 2, 12), // 5ms to 10s
+		}, []string{"table", "error_type"})
+
+	// CdcTableStreamAuxiliaryErrorCounter tracks auxiliary errors that don't replace original errors
+	CdcTableStreamAuxiliaryErrorCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "cdc",
+			Name:      "table_stream_auxiliary_error_total",
+			Help:      "Total number of auxiliary errors encountered during retries (preserved original error)",
+		}, []string{"table", "auxiliary_error_type"})
+
+	// CdcTableStreamOriginalErrorPreservedCounter tracks when original errors are preserved
+	CdcTableStreamOriginalErrorPreservedCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "cdc",
+			Name:      "table_stream_original_error_preserved_total",
+			Help:      "Total number of times original error was preserved during retries",
+		}, []string{"table", "original_error_type"})
 )
 
 // CDC Data Processing Metrics
@@ -265,6 +302,15 @@ var (
 			Name:      "table_last_activity_timestamp",
 			Help:      "Unix timestamp of last activity for each table",
 		}, []string{"table"})
+
+	// CdcTableNoProgressCounter counts rounds where snapshot did not advance
+	CdcTableNoProgressCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "cdc",
+			Name:      "table_snapshot_no_progress_total",
+			Help:      "Number of times a table round observed snapshot timestamp not advancing",
+		}, []string{"table"})
 )
 
 // CDC Initial Sync Metrics
@@ -370,6 +416,10 @@ func initCDCMetrics() {
 	registry.MustRegister(CdcTableStreamTotalGauge)
 	registry.MustRegister(CdcTableStreamRoundCounter)
 	registry.MustRegister(CdcTableStreamRoundDuration)
+	registry.MustRegister(CdcTableStreamRetryCounter)
+	registry.MustRegister(CdcTableStreamRetryDelayHistogram)
+	registry.MustRegister(CdcTableStreamAuxiliaryErrorCounter)
+	registry.MustRegister(CdcTableStreamOriginalErrorPreservedCounter)
 
 	// Data processing metrics
 	registry.MustRegister(CdcRowsProcessedCounter)
@@ -397,6 +447,7 @@ func initCDCMetrics() {
 	registry.MustRegister(CdcHeartbeatCounter)
 	registry.MustRegister(CdcTableStuckGauge)
 	registry.MustRegister(CdcTableLastActivityTimestamp)
+	registry.MustRegister(CdcTableNoProgressCounter)
 
 	// Initial sync metrics
 	registry.MustRegister(CdcInitialSyncStatusGauge)
