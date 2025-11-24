@@ -219,35 +219,51 @@ func getIvfflatMetadata(c *Compile) (metadata []byte, frontend bool, err error) 
 		frontend = true
 	}
 
+	// When Clone, variables are nil. Set variable to default value
 	val, err = c.proc.GetResolveVariableFunc()("ivf_threads_build", true, false)
 	if err != nil {
 		return
 	}
-	threadsBuild := val.(int64)
+	threadsBuild := int64(0)
+	if val != nil {
+		threadsBuild = val.(int64)
+	}
 
 	val, err = c.proc.GetResolveVariableFunc()("kmeans_train_percent", true, false)
 	if err != nil {
 		return
 	}
-	kmeansTrainPercent := val.(float64)
+	kmeansTrainPercent := float64(10)
+	if val != nil {
+		kmeansTrainPercent = val.(float64)
+	}
 
 	val, err = c.proc.GetResolveVariableFunc()("kmeans_max_iteration", true, false)
 	if err != nil {
 		return
 	}
-	kmeansMaxIteration := val.(int64)
+	kmeansMaxIteration := int64(10)
+	if val != nil {
+		kmeansMaxIteration = val.(int64)
+	}
 
 	val, err = c.proc.GetResolveVariableFunc()("lower_case_table_names", true, false)
 	if err != nil {
 		return
 	}
-	lowerCaseTableNames := val.(int64)
+	lowerCaseTableNames := int64(1)
+	if val != nil {
+		lowerCaseTableNames = val.(int64)
+	}
 
 	val, err = c.proc.GetResolveVariableFunc()("experimental_ivf_index", true, false)
 	if err != nil {
 		return
 	}
-	experimentalIvfIndex := val.(int8)
+	experimentalIvfIndex := int8(1)
+	if val != nil {
+		experimentalIvfIndex = val.(int8)
+	}
 
 	w := sqlexec.NewMetadataWriter()
 	w.AddInt("ivf_threads_build", threadsBuild)
