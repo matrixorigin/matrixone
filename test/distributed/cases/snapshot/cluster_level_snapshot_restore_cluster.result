@@ -198,7 +198,7 @@ drop publication if exists pub02;
 create publication pub02 database repub02 account acc02 comment 'publish before creating snapshot';
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pub02    repub02    *    acc02        2025-11-24 14:01:37    null    publish before creating snapshot
+pub02    repub02    *    acc02        2025-11-24 15:26:50    null    publish before creating snapshot
 select * from mo_catalog.mo_pubs;
 SQL parser error: table "mo_pubs" does not exist
 drop database if exists procedure_test;
@@ -229,8 +229,8 @@ id    val
 3    c
 select * from mo_catalog.mo_stored_procedure;
 proc_id    name    creator    args    lang    body    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
-1    test_if_hit_elseif_first_elseif    null    []    sql    begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    procedure_test    test_account    2025-11-24 14:01:37    2025-11-24 14:01:37    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
-2    test_if_hit_if    null    []    sql    begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    procedure_test    test_account    2025-11-24 14:01:37    2025-11-24 14:01:37    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+1    test_if_hit_elseif_first_elseif    null    []    sql    begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    procedure_test    test_account    2025-11-24 15:26:50    2025-11-24 15:26:50    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+2    test_if_hit_if    null    []    sql    begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    procedure_test    test_account    2025-11-24 15:26:50    2025-11-24 15:26:50    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
 drop database if exists sub01;
 create database sub01 from acc01 publication pub02;
 show databases;
@@ -267,15 +267,15 @@ language sql as
 '$1 + $2';
 select * from mo_catalog.mo_user_defined_function;
 function_id    name    owner    args    rettype    body    language    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
-1    addab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 + $2    sql    udf_db2    test_account    2025-11-24 14:01:37    2025-11-24 14:01:37    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+1    addab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 + $2    sql    udf_db2    test_account    2025-11-24 15:26:50    2025-11-24 15:26:50    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
 drop stage if exists my_ext_stage;
 create stage my_ext_stage URL='s3://load/files/';
 drop stage if exists my_ext_stage1;
 create stage my_ext_stage1 URL='s3://load/files/' CREDENTIALS={'AWS_KEY_ID'='1a2b3c' ,'AWS_SECRET_KEY'='4x5y6z'};
 select * from mo_catalog.mo_stages;
 stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
-1    my_ext_stage    s3://load/files/        in_use    2025-11-24 14:01:37    
-2    my_ext_stage1    s3://load/files/    AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z    in_use    2025-11-24 14:01:37    
+1    my_ext_stage    s3://load/files/        in_use    2025-11-24 15:26:50    
+2    my_ext_stage1    s3://load/files/    AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z    in_use    2025-11-24 15:26:50    
 drop database if exists test01;
 drop database if exists test02;
 drop database if exists test03;
@@ -411,7 +411,7 @@ drop snapshot if exists cluster_level_snapshot;
 create snapshot cluster_level_snapshot for cluster;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-cluster_level_snapshot    2025-11-24 14:01:37.732214999    cluster            
+cluster_level_snapshot    2025-11-24 15:26:50.660701999    cluster            
 use db02;
 alter table departments add column newcolumn int after department_id;
 show create table departments;
@@ -495,14 +495,14 @@ drop function udf_db2.`addAB`(x int, y int);
 drop stage if exists my_ext_stage;
 select * from mo_catalog.mo_stages;
 stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
-2    my_ext_stage1    s3://load/files/    AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z    in_use    2025-11-24 14:01:37    
+2    my_ext_stage1    s3://load/files/    AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z    in_use    2025-11-24 15:26:50    
 use udf_db2;
 create function `add`(x int, y int) returns int
 language sql as
 '$1 + $2';
 select * from mo_catalog.mo_user_defined_function;
 function_id    name    owner    args    rettype    body    language    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
-2    add    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 + $2    sql    udf_db2    test_account    2025-11-24 14:01:37    2025-11-24 14:01:37    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+2    add    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 + $2    sql    udf_db2    test_account    2025-11-24 15:26:50    2025-11-24 15:26:50    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
 drop database test01;
 use test02;
 select * from v01;
@@ -616,15 +616,15 @@ deptno    dname    loc
 40    OPERATIONS    BOSTON
 select * from mo_catalog.mo_stored_procedure;
 proc_id    name    creator    args    lang    body    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
-1    test_if_hit_elseif_first_elseif    null    []    sql    begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    procedure_test    test_account    2025-11-24 14:01:37    2025-11-24 14:01:37    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
-2    test_if_hit_if    null    []    sql    begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    procedure_test    test_account    2025-11-24 14:01:37    2025-11-24 14:01:37    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+1    test_if_hit_elseif_first_elseif    null    []    sql    begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    procedure_test    test_account    2025-11-24 15:26:50    2025-11-24 15:26:50    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+2    test_if_hit_if    null    []    sql    begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    procedure_test    test_account    2025-11-24 15:26:50    2025-11-24 15:26:50    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
 select * from mo_catalog.mo_stages;
 stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
-1    my_ext_stage    s3://load/files/        in_use    2025-11-24 14:01:37    
-2    my_ext_stage1    s3://load/files/    AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z    in_use    2025-11-24 14:01:37    
+1    my_ext_stage    s3://load/files/        in_use    2025-11-24 15:26:50    
+2    my_ext_stage1    s3://load/files/    AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z    in_use    2025-11-24 15:26:50    
 select * from mo_catalog.mo_user_defined_function;
 function_id    name    owner    args    rettype    body    language    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
-1    addab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 + $2    sql    udf_db2    test_account    2025-11-24 14:01:37    2025-11-24 14:01:37    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+1    addab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 + $2    sql    udf_db2    test_account    2025-11-24 15:26:50    2025-11-24 15:26:50    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
 use test02;
 select * from v01;
 id    sale_date    amount

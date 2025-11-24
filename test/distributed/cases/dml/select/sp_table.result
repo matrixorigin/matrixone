@@ -5,7 +5,6 @@ select relname,relkind from mo_catalog.mo_tables where reldatabase = 'mo_catalog
 relname    relkind
 mo_account    r
 mo_branch_metadata    r
-mo_iscp_log    r
 mo_cache    v
 mo_cdc_task    r
 mo_cdc_watermark    r
@@ -15,12 +14,15 @@ mo_data_key    r
 mo_database    r
 mo_foreign_keys    r
 mo_increment_columns    
+mo_index_update    r
 mo_indexes    r
+mo_iscp_log    r
 mo_locks    v
 mo_merge_settings    r
 mo_mysql_compatibility_mode    r
 mo_partition_metadata    r
 mo_partition_tables    r
+mo_pitr    r
 mo_pubs    r
 mo_role    r
 mo_role_grant    r
@@ -43,4 +45,3 @@ mo_user_defined_function    r
 mo_user_grant    r
 mo_variables    v
 mo_version    r
-mo_pitr    r
