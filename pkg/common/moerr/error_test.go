@@ -160,3 +160,35 @@ func TestIsSameMoErr(t *testing.T) {
 	b = GetOkExpectedEOB()
 	require.True(t, IsSameMoErr(a, b))
 }
+
+// TestNewErrTooBigPrecision tests the NewErrTooBigPrecision error constructor
+func TestNewErrTooBigPrecision(t *testing.T) {
+	ctx := context.TODO()
+
+	// Test with function name "now"
+	err := NewErrTooBigPrecision(ctx, 7, "now", 6)
+	require.NotNil(t, err)
+	require.Equal(t, ErrTooBigPrecision, err.ErrorCode())
+	require.Equal(t, ER_TOO_BIG_PRECISION, err.MySQLCode())
+	require.Contains(t, err.Error(), "Too-big precision 7 specified for 'now'")
+	require.Contains(t, err.Error(), "Maximum is 6")
+
+	// Test with function name "sysdate"
+	err = NewErrTooBigPrecision(ctx, -1, "sysdate", 6)
+	require.NotNil(t, err)
+	require.Equal(t, ErrTooBigPrecision, err.ErrorCode())
+	require.Contains(t, err.Error(), "Too-big precision -1 specified for 'sysdate'")
+	require.Contains(t, err.Error(), "Maximum is 6")
+
+	// Test with type name "TIMESTAMP"
+	err = NewErrTooBigPrecision(ctx, 10, "TIMESTAMP", 6)
+	require.NotNil(t, err)
+	require.Equal(t, ErrTooBigPrecision, err.ErrorCode())
+	require.Contains(t, err.Error(), "Too-big precision 10 specified for 'TIMESTAMP'")
+	require.Contains(t, err.Error(), "Maximum is 6")
+
+	// Verify error code
+	code, ok := GetMoErrCode(err)
+	require.True(t, ok)
+	require.Equal(t, ErrTooBigPrecision, code)
+}

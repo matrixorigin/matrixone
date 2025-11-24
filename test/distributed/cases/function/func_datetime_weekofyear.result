@@ -66,7 +66,7 @@ sep_week
 SELECT WEEKOFYEAR('2008-12-15') AS dec_week;
 dec_week
 51
-SELECT WEEKOFYEAR(CURRENT_DATE()) AS current_week;
+SELECT WEEKOFYEAR('2024-11-18') AS current_week;
 current_week
 47
 SELECT WEEKOFYEAR(DATE_ADD('2008-01-01', INTERVAL 7 DAY)) AS week_after;

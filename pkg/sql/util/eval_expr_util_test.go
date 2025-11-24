@@ -16,7 +16,11 @@ package util
 
 import (
 	"testing"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -70,4 +74,106 @@ func TestScoreBinaryToInt(t *testing.T) {
 	val, err = ScoreBinaryToInt("阿斯")
 	require.NoError(t, err)
 	require.Equal(t, uint64(256842263860911), val)
+}
+
+func TestSetInsertValueTimeStamp_MinValueValidation(t *testing.T) {
+	// Test that timestamp minimum value validation works correctly across different timezones
+	// MySQL behavior: TIMESTAMP valid range is always UTC [1970-01-01 00:00:01, 2038-01-19 03:14:07]
+	// The input local time is converted to UTC using current time_zone, then checked against the range.
+	// Timezones further west (smaller UTC offset) allow earlier local dates.
+
+	typ := types.T_timestamp.ToType()
+	typ.Scale = 6
+
+	testCases := []struct {
+		name        string
+		timezone    *time.Location
+		input       string
+		shouldError bool
+		description string
+	}{
+		{
+			name:        "UTC+8_before_min",
+			timezone:    time.FixedZone("UTC+8", 8*3600),
+			input:       "1969-12-31 23:59:59",
+			shouldError: true,
+			description: "UTC+8: 1969-12-31 23:59:59 -> UTC 1969-12-31 15:59:59 (before min, should error)",
+		},
+		{
+			name:        "UTC_before_min",
+			timezone:    time.UTC,
+			input:       "1969-12-31 23:59:59",
+			shouldError: true,
+			description: "UTC: 1969-12-31 23:59:59 -> UTC 1969-12-31 23:59:59 (before min, should error)",
+		},
+		{
+			name:        "UTC-8_after_min",
+			timezone:    time.FixedZone("UTC-8", -8*3600),
+			input:       "1969-12-31 23:59:59",
+			shouldError: false,
+			description: "UTC-8: 1969-12-31 23:59:59 -> UTC 1970-01-01 07:59:59 (after min, should pass)",
+		},
+		{
+			name:        "UTC+8_at_min",
+			timezone:    time.FixedZone("UTC+8", 8*3600),
+			input:       "1970-01-01 00:00:01",
+			shouldError: true,
+			description: "UTC+8: 1970-01-01 00:00:01 -> UTC 1969-12-31 16:00:01 (before min, should error)",
+		},
+		{
+			name:        "UTC_at_min",
+			timezone:    time.UTC,
+			input:       "1970-01-01 00:00:01",
+			shouldError: false,
+			description: "UTC: 1970-01-01 00:00:01 -> UTC 1970-01-01 00:00:01 (at min, should pass)",
+		},
+		{
+			name:        "UTC-8_at_min",
+			timezone:    time.FixedZone("UTC-8", -8*3600),
+			input:       "1969-12-31 16:00:01",
+			shouldError: false,
+			description: "UTC-8: 1969-12-31 16:00:01 -> UTC 1970-01-01 00:00:01 (at min, should pass)",
+		},
+		{
+			name:        "UTC+8_valid",
+			timezone:    time.FixedZone("UTC+8", 8*3600),
+			input:       "2024-01-01 12:00:00",
+			shouldError: false,
+			description: "UTC+8: 2024-01-01 12:00:00 -> UTC 2024-01-01 04:00:00 (valid, should pass)",
+		},
+		{
+			name:        "UTC_valid",
+			timezone:    time.UTC,
+			input:       "2024-01-01 12:00:00",
+			shouldError: false,
+			description: "UTC: 2024-01-01 12:00:00 -> UTC 2024-01-01 12:00:00 (valid, should pass)",
+		},
+		{
+			name:        "UTC-8_valid",
+			timezone:    time.FixedZone("UTC-8", -8*3600),
+			input:       "2024-01-01 12:00:00",
+			shouldError: false,
+			description: "UTC-8: 2024-01-01 12:00:00 -> UTC 2024-01-01 20:00:00 (valid, should pass)",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			proc.Base.SessionInfo.TimeZone = tc.timezone
+
+			numVal := tree.NewNumVal(tc.input, tc.input, false, tree.P_char)
+			canInsert, isnull, res, err := SetInsertValueTimeStamp(proc, numVal, &typ)
+
+			if tc.shouldError {
+				require.False(t, canInsert, tc.description)
+				require.Error(t, err, tc.description)
+			} else {
+				require.True(t, canInsert, tc.description)
+				require.NoError(t, err, tc.description)
+				require.False(t, isnull, tc.description)
+				require.GreaterOrEqual(t, res, types.TimestampMinValue, tc.description)
+			}
+		})
+	}
 }

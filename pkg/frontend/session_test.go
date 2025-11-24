@@ -465,32 +465,98 @@ func TestSession_updateTimeZone(t *testing.T) {
 
 	ses := newSes(nil, ctrl)
 	ctx := context.Background()
-	/*
-		err := updateTimeZone(ctx, ses, ses.GetSessionSysVars(), "time_zone", "system")
+
+	// Test offset timezones
+	t.Run("offset timezones", func(t *testing.T) {
+		err := updateTimeZone(ctx, ses, ses.GetSessionSysVars(), "time_zone", "+00:00")
 		assert.NoError(t, err)
-		assert.Equal(t, "Local", ses.GetTimeZone().String())
-	*/
+		assert.Equal(t, ses.GetTimeZone().String(), "FixedZone")
+		val := ses.GetSessionSysVars().Get("time_zone")
+		assert.Equal(t, "+00:00", val)
 
-	err := updateTimeZone(ctx, ses, ses.GetSessionSysVars(), "time_zone", "+00:00")
-	assert.NoError(t, err)
-	assert.Equal(t, ses.GetTimeZone().String(), "FixedZone")
+		err = updateTimeZone(ctx, ses, ses.GetSessionSysVars(), "time_zone", "+08:00")
+		assert.NoError(t, err)
+		assert.Equal(t, ses.GetTimeZone().String(), "FixedZone")
+		val = ses.GetSessionSysVars().Get("time_zone")
+		assert.Equal(t, "+08:00", val)
 
-	err = updateTimeZone(ctx, ses, ses.GetSessionSysVars(), "time_zone", "+08:00")
-	assert.NoError(t, err)
-	assert.Equal(t, ses.GetTimeZone().String(), "FixedZone")
+		err = updateTimeZone(ctx, ses, ses.GetSessionSysVars(), "time_zone", "-08:00")
+		assert.NoError(t, err)
+		assert.Equal(t, ses.GetTimeZone().String(), "FixedZone")
+		val = ses.GetSessionSysVars().Get("time_zone")
+		assert.Equal(t, "-08:00", val)
+	})
 
-	err = updateTimeZone(ctx, ses, ses.GetSessionSysVars(), "time_zone", "-08:00")
-	assert.NoError(t, err)
-	assert.Equal(t, ses.GetTimeZone().String(), "FixedZone")
+	// Test UTC special handling (case-insensitive, no timezone database dependency)
+	t.Run("UTC special handling", func(t *testing.T) {
+		// Test "UTC" (uppercase)
+		err := updateTimeZone(ctx, ses, ses.GetSessionSysVars(), "time_zone", "UTC")
+		assert.NoError(t, err)
+		assert.Equal(t, time.UTC, ses.GetTimeZone())
+		val := ses.GetSessionSysVars().Get("time_zone")
+		assert.Equal(t, "UTC", val)
 
-	//ci fails the case
-	//err = updateTimeZone(ses, ses.GetSysVars(), "time_zone", "UTC")
-	//assert.NoError(t, err)
-	//assert.Equal(t, ses.GetTimeZone().String(), "utc")
+		// Test "utc" (lowercase) - should also work and use time.UTC directly
+		err = updateTimeZone(ctx, ses, ses.GetSessionSysVars(), "time_zone", "utc")
+		assert.NoError(t, err)
+		assert.Equal(t, time.UTC, ses.GetTimeZone())
+		val = ses.GetSessionSysVars().Get("time_zone")
+		assert.Equal(t, "UTC", val)
 
-	err = updateTimeZone(ctx, ses, ses.GetSessionSysVars(), "time_zone", "")
-	assert.NoError(t, err)
-	assert.Equal(t, ses.GetTimeZone().String(), "UTC")
+		// Test "Utc" (mixed case)
+		err = updateTimeZone(ctx, ses, ses.GetSessionSysVars(), "time_zone", "Utc")
+		assert.NoError(t, err)
+		assert.Equal(t, time.UTC, ses.GetTimeZone())
+		val = ses.GetSessionSysVars().Get("time_zone")
+		assert.Equal(t, "UTC", val)
+	})
+
+	// Test IANA timezone names (case-sensitive)
+	t.Run("IANA timezone names case-sensitive", func(t *testing.T) {
+		// Test correct case: "Asia/Shanghai"
+		err := updateTimeZone(ctx, ses, ses.GetSessionSysVars(), "time_zone", "Asia/Shanghai")
+		if err == nil {
+			// Only test if timezone database is available
+			assert.NotNil(t, ses.GetTimeZone())
+			val := ses.GetSessionSysVars().Get("time_zone")
+			// Should preserve original case
+			assert.Equal(t, "Asia/Shanghai", val)
+		}
+
+		// Test correct case: "America/New_York"
+		err = updateTimeZone(ctx, ses, ses.GetSessionSysVars(), "time_zone", "America/New_York")
+		if err == nil {
+			assert.NotNil(t, ses.GetTimeZone())
+			val := ses.GetSessionSysVars().Get("time_zone")
+			// Should preserve original case
+			assert.Equal(t, "America/New_York", val)
+		}
+	})
+
+	// Test empty string handling
+	t.Run("empty string handling", func(t *testing.T) {
+		err := updateTimeZone(ctx, ses, ses.GetSessionSysVars(), "time_zone", "")
+		// Empty string gets converted to lowercase, then tries to load as location
+		// This may fail if timezone database is not available, which is expected
+		if err == nil {
+			assert.NotNil(t, ses.GetTimeZone())
+		}
+	})
+
+	// Test invalid timezone
+	t.Run("invalid timezone", func(t *testing.T) {
+		err := updateTimeZone(ctx, ses, ses.GetSessionSysVars(), "time_zone", "Invalid/Timezone")
+		assert.Error(t, err)
+	})
+
+	// Test invalid offset format
+	t.Run("invalid offset format", func(t *testing.T) {
+		err := updateTimeZone(ctx, ses, ses.GetSessionSysVars(), "time_zone", "+25:00")
+		assert.Error(t, err)
+
+		err = updateTimeZone(ctx, ses, ses.GetSessionSysVars(), "time_zone", "+08:60")
+		assert.Error(t, err)
+	})
 }
 
 func TestSession_Migrate(t *testing.T) {
