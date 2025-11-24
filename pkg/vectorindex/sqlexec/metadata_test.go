@@ -118,3 +118,123 @@ func TestMetadataWriter(t *testing.T) {
 	require.Equal(t, any(int64(33)), v8)
 
 }
+
+func TestMetadataError(t *testing.T) {
+
+	_, err := NewMetadata(nil)
+	require.NotNil(t, err)
+
+}
+func TestMetadataFromJsonError(t *testing.T) {
+	_, err := NewMetadataFromJson("")
+	require.NotNil(t, err)
+
+	_, err = NewMetadataFromJson("{\"a:3}")
+	require.NotNil(t, err)
+
+	//require.Equal(t, false, json.Valid([]byte("{\"a:3}")))
+}
+
+func TestMetadataResolveError(t *testing.T) {
+
+	{
+		// key not found
+		var bj bytejson.ByteJson
+		bytes, err := bj.Marshal()
+		require.Nil(t, err)
+
+		m, err := NewMetadata(bytes)
+		require.Nil(t, err)
+
+		_, err = m.ResolveVariableFunc("a", false, false)
+		require.NotNil(t, err)
+		fmt.Println(err)
+	}
+
+	{
+		// invalid json path
+		var bj bytejson.ByteJson
+		bytes, err := bj.Marshal()
+		require.Nil(t, err)
+
+		m, err := NewMetadata(bytes)
+		require.Nil(t, err)
+
+		_, err = m.ResolveVariableFunc("[", false, false)
+		require.NotNil(t, err)
+		fmt.Println(err)
+	}
+
+	{
+		// type is nill
+		//jstr := `{"cfg":{"kmeans_train_percent":{"t":"F", "v":10}}}`
+		jstr := `{"cfg":{"kmeans_train_percent":{"v":10}}}`
+
+		m, err := NewMetadataFromJson(jstr)
+		require.Nil(t, err)
+
+		_, err = m.ResolveVariableFunc("kmeans_train_percent", false, false)
+		require.NotNil(t, err)
+		fmt.Println(err)
+
+	}
+
+	{
+		// value is nill
+		jstr := `{"cfg":{"kmeans_train_percent":{"t":"F"}}}`
+
+		m, err := NewMetadataFromJson(jstr)
+		require.Nil(t, err)
+
+		_, err = m.ResolveVariableFunc("kmeans_train_percent", false, false)
+		require.NotNil(t, err)
+		fmt.Println(err)
+
+	}
+
+	{
+		// invalid type
+		jstr := `{"cfg":{"kmeans_train_percent":{"t":"Y", "v": 9}}}`
+
+		m, err := NewMetadataFromJson(jstr)
+		require.Nil(t, err)
+
+		_, err = m.ResolveVariableFunc("kmeans_train_percent", false, false)
+		require.NotNil(t, err)
+		fmt.Println(err)
+
+	}
+
+}
+
+func TestMetadataModifyError(t *testing.T) {
+
+	{
+		// key not found
+		var bj bytejson.ByteJson
+		bytes, err := bj.Marshal()
+		require.Nil(t, err)
+
+		m, err := NewMetadata(bytes)
+		require.Nil(t, err)
+
+		err = m.Modify("[", "v")
+		require.NotNil(t, err)
+		fmt.Println(err)
+	}
+
+	{
+		// invalid value type
+		var bj bytejson.ByteJson
+		bytes, err := bj.Marshal()
+		require.Nil(t, err)
+
+		m, err := NewMetadata(bytes)
+		require.Nil(t, err)
+
+		err = m.Modify("a", bj)
+		require.NotNil(t, err)
+		fmt.Println(err)
+	}
+
+}

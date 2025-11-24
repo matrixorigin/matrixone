@@ -47,19 +47,10 @@ func NewMetadata(data []byte) (*Metadata, error) {
 	}
 
 	var bj bytejson.ByteJson
-	if err := bj.Unmarshal(data); err != nil {
-		return nil, err
-	}
+	bj.Unmarshal(data)
 
-	typepath, err := bytejson.ParseJsonPath("$.t")
-	if err != nil {
-		return nil, err
-	}
-
-	valpath, err := bytejson.ParseJsonPath("$.v")
-	if err != nil {
-		return nil, err
-	}
+	typepath, _ := bytejson.ParseJsonPath("$.t")
+	valpath, _ := bytejson.ParseJsonPath("$.v")
 
 	return &Metadata{bj: bj, typepath: typepath, valpath: valpath}, nil
 }
@@ -74,15 +65,8 @@ func NewMetadataFromJson(js string) (*Metadata, error) {
 		return nil, err
 	}
 
-	typepath, err := bytejson.ParseJsonPath("$.t")
-	if err != nil {
-		return nil, err
-	}
-
-	valpath, err := bytejson.ParseJsonPath("$.v")
-	if err != nil {
-		return nil, err
-	}
+	typepath, _ := bytejson.ParseJsonPath("$.t")
+	valpath, _ := bytejson.ParseJsonPath("$.v")
 
 	return &Metadata{bj: bj, typepath: typepath, valpath: valpath}, nil
 }
