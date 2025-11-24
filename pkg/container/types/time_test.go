@@ -445,3 +445,87 @@ func TestTime_ParseTimeFromDecimal128(t *testing.T) {
 		})
 	}
 }
+
+// TestTime_String2_NoNewline tests that String2 output does not contain newline characters
+// This test ensures the fix for the String2 formatting bug (removing newline from %06d\n)
+func TestTime_String2_NoNewline(t *testing.T) {
+	testCases := []struct {
+		name  string
+		time  Time
+		scale int32
+	}{
+		{
+			name:  "scale 0",
+			time:  TimeFromClock(false, 11, 22, 33, 0),
+			scale: 0,
+		},
+		{
+			name:  "scale 1",
+			time:  TimeFromClock(false, 11, 22, 33, 123456),
+			scale: 1,
+		},
+		{
+			name:  "scale 3",
+			time:  TimeFromClock(false, 11, 22, 33, 123456),
+			scale: 3,
+		},
+		{
+			name:  "scale 6",
+			time:  TimeFromClock(false, 11, 22, 33, 123456),
+			scale: 6,
+		},
+		{
+			name:  "negative scale 3",
+			time:  TimeFromClock(true, 11, 22, 33, 123456),
+			scale: 3,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := tc.time.String2(tc.scale)
+			// Ensure no newline character in the output
+			require.NotContains(t, result, "\n", "String2 output should not contain newline")
+			require.NotContains(t, result, "\r", "String2 output should not contain carriage return")
+
+			// Verify the format is correct
+			if tc.scale > 0 {
+				require.Contains(t, result, ".", "String2 with scale > 0 should contain decimal point")
+			}
+		})
+	}
+}
+
+// TestTime_NumericString_NoNewline tests that NumericString output does not contain newline characters
+func TestTime_NumericString_NoNewline(t *testing.T) {
+	testCases := []struct {
+		name  string
+		time  Time
+		scale int32
+	}{
+		{
+			name:  "scale 0",
+			time:  TimeFromClock(false, 11, 22, 33, 0),
+			scale: 0,
+		},
+		{
+			name:  "scale 3",
+			time:  TimeFromClock(false, 11, 22, 33, 123456),
+			scale: 3,
+		},
+		{
+			name:  "scale 6",
+			time:  TimeFromClock(false, 11, 22, 33, 123456),
+			scale: 6,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := tc.time.NumericString(tc.scale)
+			// Ensure no newline character in the output
+			require.NotContains(t, result, "\n", "NumericString output should not contain newline")
+			require.NotContains(t, result, "\r", "NumericString output should not contain carriage return")
+		})
+	}
+}

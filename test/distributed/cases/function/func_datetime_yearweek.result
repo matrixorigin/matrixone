@@ -80,9 +80,9 @@ sep_week
 SELECT YEARWEEK('2008-12-15') AS dec_week;
 dec_week
 200850
-SELECT YEARWEEK(CURRENT_DATE()) AS current_yearweek;
+SELECT YEARWEEK('2008-06-15') AS current_yearweek;
 current_yearweek
-202546
+200824
 SELECT YEARWEEK(DATE_ADD('1987-01-01', INTERVAL 7 DAY)) AS week_after;
 week_after
 198701
