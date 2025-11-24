@@ -908,8 +908,6 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 		return
 	}
 
-	// Filter out checkpoints that are protected by backup
-	c.backupProtection.RLock()
 	// Use snapshot taken at GC start to ensure consistency
 	protectedTS, isActive := c.getBackupProtectionSnapshot()
 	if isActive {
@@ -971,8 +969,6 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 		return err
 	}
 
-	// Filter out protected files from deleteFiles
-	c.backupProtection.RLock()
 	// Use snapshot taken at GC start to ensure consistency
 	protectedTS, isActive = c.getBackupProtectionSnapshot()
 	if isActive {
@@ -1041,11 +1037,9 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 			zap.String("gckp", ckp.String()),
 		)
 		if end.LT(&newWaterMark) {
-			// Check backup protection before deleting checkpoint files
-			c.backupProtection.RLock()
 			shouldDelete := true
 			// Use snapshot taken at GC start to ensure consistency
-			protectedTS, isActive := c.getBackupProtectionSnapshot()
+			protectedTS, isActive = c.getBackupProtectionSnapshot()
 			if isActive {
 				// Protect checkpoints whose end timestamp is <= protected timestamp
 				if end.LE(&protectedTS) {
@@ -1223,8 +1217,6 @@ func (c *checkpointCleaner) tryGCAgainstGCKPLocked(
 		return
 	}
 
-	// Get backup protection TS if active
-	c.backupProtection.RLock()
 	// Use snapshot taken at GC start to ensure consistency
 	var extraTS types.TS
 	protectedTS, isActive := c.getBackupProtectionSnapshot()
