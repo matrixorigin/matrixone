@@ -480,6 +480,12 @@ func (e *IndexUpdateTaskExecutor) run(ctx context.Context) (err error) {
 		var err2 error
 		var updated bool
 
+		select {
+		case <-ctx.Done():
+			return moerr.NewInternalError(ctx, "context cancelled")
+		default:
+		}
+
 		switch t.Action {
 		case Action_Ivfflat_Reindex:
 			updated, err2 = runIvfflatReindex(ctx, e.txnEngine, e.cnTxnClient, e.cnUUID, t)
