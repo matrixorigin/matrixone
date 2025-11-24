@@ -1309,8 +1309,6 @@ func tryDiffAsCSV(
 		return false, err
 	}
 
-	fmt.Println(sql)
-
 	mrs := ses.GetMysqlResultSet()
 	mrs.AddRow([]any{fullFilePath, hint})
 
