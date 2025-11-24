@@ -1073,7 +1073,7 @@ func (mr *MockRelationMockRecorder) BuildShardingReaders(ctx, proc, expr, relDat
 }
 
 // CollectChanges mocks base method.
-func (m *MockRelation) CollectChanges(ctx context.Context, from, to types.TS, mp *mpool.MPool) (engine.ChangesHandle, error) {
+func (m *MockRelation) CollectChanges(ctx context.Context, from, to types.TS, _ bool, mp *mpool.MPool) (engine.ChangesHandle, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "CollectChanges", ctx, from, to, mp)
 	ret0, _ := ret[0].(engine.ChangesHandle)
@@ -1084,7 +1084,7 @@ func (m *MockRelation) CollectChanges(ctx context.Context, from, to types.TS, mp
 // CollectChanges indicates an expected call of CollectChanges.
 func (mr *MockRelationMockRecorder) CollectChanges(ctx, from, to, mp interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CollectChanges", reflect.TypeOf((*MockRelation)(nil).CollectChanges), ctx, from, to, mp)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CollectChanges", reflect.TypeOf((*MockRelation)(nil).CollectChanges), ctx, from, to, false, mp)
 }
 
 // CollectTombstones mocks base method.
