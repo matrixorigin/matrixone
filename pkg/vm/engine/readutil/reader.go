@@ -50,6 +50,10 @@ import (
 // -----------------------------------------------------------------
 
 func (mixin *withFilterMixin) reset() {
+	// Cleanup reusableTempVec and other resources before resetting filter
+	if mixin.filterState.filter.Cleanup != nil {
+		mixin.filterState.filter.Cleanup()
+	}
 	mixin.filterState.filter = objectio.BlockReadFilter{}
 	mixin.filterState.memFilter = MemPKFilter{}
 	mixin.columns.indexOfFirstSortedColumn = -1

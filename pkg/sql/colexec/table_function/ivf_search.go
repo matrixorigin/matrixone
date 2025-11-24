@@ -76,6 +76,8 @@ func (u *ivfSearchState) reset(tf *TableFunction, proc *process.Process) {
 	if u.batch != nil {
 		u.batch.CleanOnlyData()
 	}
+	// Note: bloomFilter is kept across resets as it's only set once during initialization
+	// It will be cleared in free() method
 }
 
 func (u *ivfSearchState) call(tf *TableFunction, proc *process.Process) (vm.CallResult, error) {
@@ -112,6 +114,8 @@ func (u *ivfSearchState) free(tf *TableFunction, proc *process.Process, pipeline
 	if u.batch != nil {
 		u.batch.Clean(proc.Mp())
 	}
+	// Clear bloomFilter bytes to release memory
+	u.bloomFilter = nil
 }
 
 // waitBloomFilterForTableFunction blocks until it receives a bloomfilter runtime filter

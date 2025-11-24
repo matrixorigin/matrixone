@@ -49,6 +49,7 @@ type BlockReadFilter struct {
 	Valid              bool
 	SortedSearchFunc   ReadFilterSearchFuncType
 	UnSortedSearchFunc ReadFilterSearchFuncType
+	Cleanup            func() // Cleanup function to release resources (e.g., reusableTempVec)
 }
 
 func (f BlockReadFilter) DecideSearchFunc(isSortedBlk bool) ReadFilterSearchFuncType {
