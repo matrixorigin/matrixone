@@ -178,18 +178,25 @@ func (t *IndexUpdateTaskInfo) checkIndexUpdatable(ctx context.Context, dsize uin
 
 func (t *IndexUpdateTaskInfo) saveStatus(sqlproc *sqlexec.SqlProcess, updated bool, err error) error {
 
-	var status IndexUpdateStatus
-	status.Time = time.Now()
+	// skip update status if index is NOT updated
+	if !updated {
+		return nil
+	}
+
+	errsqlfmt := "UPDATE mo_catalog.mo_index_update SET status = '%s' WHERE table_id = %d AND account_id = %d AND action = '%s'"
+	updatesqlfmt := "UPDATE mo_catalog.mo_index_update SET last_update_at = now(), status = '%s' WHERE table_id = %d AND account_id = %d AND action = '%s'"
+
+	var sqlfmt string
+	status := IndexUpdateStatus{Status: Status_Ok, Time: time.Now()}
 
 	if err != nil {
 		// save error status column to mo_index_update
 		status.Status = Status_Error
 		status.Msg = err.Error()
-
+		sqlfmt = errsqlfmt
 		os.Stderr.WriteString(fmt.Sprintf("save Status error %v\n", err))
-		return nil
 	} else {
-		status.Status = Status_Ok
+		sqlfmt = updatesqlfmt
 	}
 
 	bytes, err := sonic.Marshal(&status)
@@ -197,16 +204,14 @@ func (t *IndexUpdateTaskInfo) saveStatus(sqlproc *sqlexec.SqlProcess, updated bo
 		return err
 	}
 
-	// run status sql
-	if updated {
-		sql := fmt.Sprintf("UPDATE mo_catalog.mo_index_update SET last_update_at = now(), status = '%s' WHERE table_id = %d AND account_id = %d AND action = '%s'",
-			string(bytes), t.TableId, t.AccountId, t.Action)
-		res, err2 := runSaveStatusSql(sqlproc, sql)
-		if err2 != nil {
-			return err2
-		}
-		res.Close()
+	// update status
+	sql := fmt.Sprintf(sqlfmt,
+		string(bytes), t.TableId, t.AccountId, t.Action)
+	res, err2 := runSaveStatusSql(sqlproc, sql)
+	if err2 != nil {
+		return err2
 	}
+	res.Close()
 
 	return nil
 }
