@@ -20,6 +20,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -50,7 +51,12 @@ func RegisterUpdate(ctx context.Context,
 	sqlctx := sqlexec.NewSqlContext(newctx, cnUUID, txn, catalog.System_Account, nil)
 	sqlproc := sqlexec.NewSqlProcessWithContext(sqlctx)
 
-	status := `{"response":"ok", "state":"init", "msg":"register"}`
+	status := IndexUpdateStatus{Status: Status_Ok, Msg: "Registered"}
+	bytes, err := sonic.Marshal(&status)
+	if err != nil {
+		return
+	}
+
 	sql := fmt.Sprintf("REPLACE INTO mo_catalog.mo_index_update VALUES (%d, %d, '%s', '%s', '%s', '%s', '%s', '%s', now(), now())",
 		tenantId,
 		tableId,
@@ -59,7 +65,7 @@ func RegisterUpdate(ctx context.Context,
 		indexname,
 		action,
 		metadata,
-		status)
+		string(bytes))
 
 	res, err := sqlexec.RunSql(sqlproc, sql)
 	if err != nil {

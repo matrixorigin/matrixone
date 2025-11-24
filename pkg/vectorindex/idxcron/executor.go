@@ -57,6 +57,9 @@ const (
 	Action_Fulltext_BatchDelete = "fulltext_batch_delete"
 	Action_Wildcard             = "*"
 
+	Status_Error = "error"
+	Status_Ok    = "ok"
+
 	OneWeek                 = 24 * 7 * time.Hour
 	KmeansTrainPercentParam = "kmeans_train_percent"
 	KmeansMaxIterationParam = "kmeans_max_iteration"
@@ -89,6 +92,11 @@ type IndexUpdateTaskInfo struct {
 	Status       []byte
 	CreatedAt    types.Timestamp
 	LastUpdateAt *types.Timestamp
+}
+
+type IndexUpdateStatus struct {
+	Status string `json:"status"`
+	Msg    string `json:"msg,omitempty"`
 }
 
 // The optimal number of LISTS is estimated the the formula below:
@@ -169,17 +177,28 @@ func (t *IndexUpdateTaskInfo) checkIndexUpdatable(ctx context.Context, dsize uin
 
 func (t *IndexUpdateTaskInfo) saveStatus(sqlproc *sqlexec.SqlProcess, updated bool, err error) error {
 
+	var status IndexUpdateStatus
+
 	if err != nil {
 		// save error status column to mo_index_update
+		status.Status = Status_Error
+		status.Msg = err.Error()
 
 		os.Stderr.WriteString(fmt.Sprintf("save Status error %v\n", err))
 		return nil
+	} else {
+		status.Status = Status_Ok
+	}
+
+	bytes, err := sonic.Marshal(&status)
+	if err != nil {
+		return err
 	}
 
 	// run status sql
 	if updated {
-		sql := fmt.Sprintf("UPDATE mo_catalog.mo_index_update SET last_update_at = now() WHERE table_id = %d AND account_id = %d AND action = '%s'",
-			t.TableId, t.AccountId, t.Action)
+		sql := fmt.Sprintf("UPDATE mo_catalog.mo_index_update SET last_update_at = now(), status = '%s' WHERE table_id = %d AND account_id = %d AND action = '%s'",
+			string(bytes), t.TableId, t.AccountId, t.Action)
 		res, err2 := runSaveStatusSql(sqlproc, sql)
 		if err2 != nil {
 			return err2
