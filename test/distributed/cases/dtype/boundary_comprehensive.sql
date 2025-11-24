@@ -3,6 +3,9 @@
 -- @desc: Comprehensive boundary and overflow tests for all data types
 -- @label: bvt
 
+-- Set timezone to UTC to ensure consistent and deterministic test results across different environments
+SET time_zone = '+00:00';
+
 -- ========================================
 -- PART 1: Numeric Type Boundaries and Overflow
 -- ========================================

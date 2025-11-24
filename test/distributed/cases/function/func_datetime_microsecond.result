@@ -1,13 +1,18 @@
 SELECT MICROSECOND('15:30:45.123456') AS result1;
-invalid argument parse timestamp, bad value 15:30:45.123456
+result1
+123456
 SELECT MICROSECOND('15:30:45.123456') AS time_with_microseconds;
-invalid argument parse timestamp, bad value 15:30:45.123456
+time_with_microseconds
+123456
 SELECT MICROSECOND('00:00:00.000000') AS zero_microseconds;
-invalid argument parse timestamp, bad value 00:00:00.000000
+zero_microseconds
+0
 SELECT MICROSECOND('23:59:59.999999') AS max_microseconds;
-invalid argument parse timestamp, bad value 23:59:59.999999
+max_microseconds
+999999
 SELECT MICROSECOND('12:34:56.123') AS partial_microseconds;
-invalid argument parse timestamp, bad value 12:34:56.123
+partial_microseconds
+123000
 SELECT MICROSECOND('2024-12-20 15:30:45.123456') AS datetime_with_microseconds;
 datetime_with_microseconds
 123456
@@ -45,4 +50,5 @@ SELECT * FROM t1 WHERE MICROSECOND(t) > 100000;
 t
 DROP TABLE t1;
 SELECT MICROSECOND('15:30:45.123456') AS result1, MICROSECOND('15:30:45.000000') AS result2, MICROSECOND('15:30:45.999999') AS result3;
-invalid argument parse timestamp, bad value 15:30:45.123456
+result1    result2    result3
+123456    0    999999
