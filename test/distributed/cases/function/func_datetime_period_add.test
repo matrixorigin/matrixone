@@ -1,0 +1,49 @@
+# Basic test case from requirements
+SELECT PERIOD_ADD(200802, 3) AS result1;
+
+# Additional test cases
+# YYYYMM format
+SELECT PERIOD_ADD(200802, 3) AS add_3_months;
+SELECT PERIOD_ADD(200802, -3) AS subtract_3_months;
+SELECT PERIOD_ADD(200802, 0) AS no_change;
+
+# YYMM format (2-digit year)
+SELECT PERIOD_ADD(0802, 3) AS yymm_format;
+SELECT PERIOD_ADD(7002, 3) AS yymm_1970s;
+SELECT PERIOD_ADD(6902, 3) AS yymm_2060s;
+
+# Year boundary crossing
+SELECT PERIOD_ADD(200812, 1) AS year_boundary;
+SELECT PERIOD_ADD(200801, -1) AS year_boundary_back;
+
+# Multiple year changes
+SELECT PERIOD_ADD(200802, 12) AS one_year;
+SELECT PERIOD_ADD(200802, 24) AS two_years;
+SELECT PERIOD_ADD(200802, -12) AS one_year_back;
+
+# Edge cases
+SELECT PERIOD_ADD(200801, 0) AS january;
+SELECT PERIOD_ADD(200812, 0) AS december;
+SELECT PERIOD_ADD(200802, 1) AS feb_to_mar;
+
+# NULL handling
+SELECT PERIOD_ADD(NULL, 3) AS null_period;
+SELECT PERIOD_ADD(200802, NULL) AS null_months;
+SELECT PERIOD_ADD(NULL, NULL) AS null_both;
+
+# Table usage
+CREATE TABLE t1(period INT, months INT);
+INSERT INTO t1 VALUES (200802, 3), (200812, 1), (200801, -1);
+SELECT PERIOD_ADD(period, months) AS result FROM t1;
+DROP TABLE t1;
+
+# WHERE clause
+CREATE TABLE t1(period INT, months INT);
+INSERT INTO t1 VALUES (200802, 3), (200812, 1), (200801, -1);
+SELECT * FROM t1 WHERE PERIOD_ADD(period, months) > 200900;
+DROP TABLE t1;
+
+# Different numeric types
+SELECT PERIOD_ADD(200802.0, 3.0) AS float_input;
+SELECT PERIOD_ADD(CAST(200802 AS UNSIGNED), CAST(3 AS UNSIGNED)) AS unsigned_input;
+

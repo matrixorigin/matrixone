@@ -1,0 +1,59 @@
+SELECT UTC_TIME() AS result1;
+result1
+23:15:20
+SELECT UTC_TIME() AS current_utc_time;
+current_utc_time
+23:15:20
+SELECT UTC_TIME AS current_utc_time_no_parens;
+current_utc_time_no_parens
+23:15:20
+select utc_time() = utc_time as should_be_true;
+should_be_true
+true
+SELECT UTC_TIME(0) AS utc_time_scale0;
+utc_time_scale0
+23:15:20
+SELECT UTC_TIME(3) AS utc_time_scale3;
+utc_time_scale3
+23:15:19.643000000
+SELECT UTC_TIME(6) AS utc_time_scale6;
+utc_time_scale6
+23:15:19.643727000
+SELECT UTC_TIME() AS utc_time, CURRENT_TIME() AS local_time;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 29 near " utc_time, CURRENT_TIME() AS local_time;";
+CREATE TABLE t1(id INT);
+INSERT INTO t1 VALUES (1), (2), (3);
+SELECT id, UTC_TIME() AS utc_time FROM t1;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 33 near " utc_time FROM t1;";
+DROP TABLE t1;
+SELECT UTC_TIME() IS NOT NULL AS not_null_check;
+not_null_check
+true
+SELECT UTC_TIME() + INTERVAL 1 HOUR AS one_hour_later;
+invalid argument operator +, bad value [TIME INTERVAL]
+SELECT UTC_TIME() - INTERVAL 30 MINUTE AS thirty_minutes_ago;
+invalid argument operator -, bad value [TIME INTERVAL]
+SELECT UTC_TIME() AS time_format;
+time_format
+23:15:20
+SELECT UTC_TIME(0) AS no_fractional;
+no_fractional
+23:15:20
+SELECT UTC_TIME(1) AS one_digit;
+one_digit
+23:15:19.700000000
+SELECT UTC_TIME(2) AS two_digits;
+two_digits
+23:15:19.670000000
+SELECT UTC_TIME(3) AS three_digits;
+three_digits
+23:15:19.669000000
+SELECT UTC_TIME(4) AS four_digits;
+four_digits
+23:15:19.669300000
+SELECT UTC_TIME(5) AS five_digits;
+five_digits
+23:15:19.669570000
+SELECT UTC_TIME(6) AS six_digits;
+six_digits
+23:15:19.669814000

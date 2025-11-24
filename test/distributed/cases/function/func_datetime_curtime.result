@@ -1,0 +1,44 @@
+SELECT CURTIME() AS current_time;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 32 near " current_time;";
+SELECT CURRENT_TIME() AS current_time;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 37 near " current_time;";
+SELECT CURTIME() = CURRENT_TIME() AS same_value;
+same_value
+true
+SELECT CURTIME(0) AS current_time_0;
+current_time_0
+20:03:47
+SELECT CURTIME(3) AS current_time_3;
+current_time_3
+20:03:47.083000000
+SELECT CURTIME(6) AS current_time_6;
+current_time_6
+20:03:47.084070000
+CREATE TABLE t1 (a int);
+INSERT INTO t1 VALUES (1), (2), (3);
+SELECT CURTIME() AS current_time FROM t1;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 32 near " current_time FROM t1;";
+SELECT CURTIME() AS t1, TIME(CURTIME()) AS t2;
+t1    t2
+20:03:47    20:03:47
+SELECT CURTIME(0) AS t0, CURTIME(3) AS t3, CURTIME(6) AS t6;
+t0    t3    t6
+20:03:47    20:03:47.114000000    20:03:47.113934000
+SELECT a FROM t1 WHERE CURTIME() IS NOT NULL;
+a
+1
+2
+3
+SELECT CAST(CURTIME() AS TIME) AS casted_time;
+casted_time
+20:03:47
+SELECT CURRENT_TIME() AS t1, CURTIME() AS t2, CURRENT_TIME() = CURTIME() AS equal;
+t1    t2    equal
+20:03:47    20:03:47    true
+DROP TABLE t1;
+CREATE TABLE t2 (id INT, t0 TIME(0), t3 TIME(3), t6 TIME(6));
+INSERT INTO t2 VALUES (1, CURTIME(0), CURTIME(3), CURTIME(6));
+SELECT id, t0, t3, t6 FROM t2;
+id    t0    t3    t6
+1    20:03:47    20:03:47.176000000    20:03:47.176362000
+DROP TABLE t2;

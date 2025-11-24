@@ -1,0 +1,48 @@
+# Basic test case from requirements
+SELECT CONV('A', 16, 10) AS result1;
+
+# Additional test cases
+# Basic conversions
+SELECT CONV('A', 16, 10) AS hex_to_dec;
+SELECT CONV('10', 10, 16) AS dec_to_hex;
+SELECT CONV('1010', 2, 10) AS bin_to_dec;
+SELECT CONV('10', 10, 2) AS dec_to_bin;
+SELECT CONV('FF', 16, 2) AS hex_to_bin;
+
+# Different bases
+SELECT CONV('Z', 36, 10) AS base36_to_dec;
+SELECT CONV('35', 10, 36) AS dec_to_base36;
+SELECT CONV('100', 8, 10) AS oct_to_dec;
+SELECT CONV('64', 10, 8) AS dec_to_oct;
+
+# Numeric input types
+SELECT CONV(10, 10, 16) AS int_to_hex;
+SELECT CONV(255, 10, 2) AS int_to_bin;
+SELECT CONV(100, 10, 8) AS int_to_oct;
+
+# Edge cases
+SELECT CONV('0', 10, 16) AS zero;
+SELECT CONV('1', 10, 2) AS one;
+SELECT CONV(NULL, 10, 16) AS null_input;
+
+# Invalid inputs (should return NULL)
+SELECT CONV('G', 16, 10) AS invalid_hex;
+SELECT CONV('2', 2, 10) AS invalid_bin;
+
+# Table usage
+CREATE TABLE t1(num_str VARCHAR(10), num_val INT);
+INSERT INTO t1 VALUES ('A', 10), ('FF', 255), ('1010', 10);
+-- @bvt:issue#22963
+SELECT CONV(num_str, 16, 10) AS hex_val, CONV(num_val, 10, 16) AS hex_str FROM t1;
+-- @bvt:issue
+DROP TABLE t1;
+
+# WHERE clause
+CREATE TABLE t1(val VARCHAR(10));
+INSERT INTO t1 VALUES ('A'), ('B'), ('C');
+SELECT * FROM t1 WHERE CONV(val, 16, 10) > 10;
+DROP TABLE t1;
+
+# Multiple CONV calls
+SELECT CONV('A', 16, 10) AS val1, CONV('B', 16, 10) AS val2, CONV('C', 16, 10) AS val3;
+

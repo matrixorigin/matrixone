@@ -1,0 +1,54 @@
+# Basic test case from requirements
+SELECT TIME_TO_SEC('22:23:00') AS result1;
+
+# Additional test cases
+# Basic conversions
+SELECT TIME_TO_SEC('22:23:00') AS test1;  # 80280 (22*3600 + 23*60 + 0)
+SELECT TIME_TO_SEC('00:00:00') AS test2;  # 0
+SELECT TIME_TO_SEC('00:00:01') AS test3;  # 1
+SELECT TIME_TO_SEC('00:01:00') AS test4;  # 60
+SELECT TIME_TO_SEC('01:00:00') AS test5;  # 3600
+SELECT TIME_TO_SEC('01:01:01') AS test6;  # 3661
+
+# Hours, minutes, seconds
+SELECT TIME_TO_SEC('00:00:59') AS fifty_nine_seconds;  # 59
+SELECT TIME_TO_SEC('00:59:00') AS fifty_nine_minutes;  # 3540
+SELECT TIME_TO_SEC('23:00:00') AS twenty_three_hours;  # 82800
+
+# Large values
+SELECT TIME_TO_SEC('838:59:59') AS max_time;  # 3020399 (max MySQL TIME value)
+
+# Negative values
+SELECT TIME_TO_SEC('-22:23:00') AS negative_time;  # -80280
+SELECT TIME_TO_SEC('-01:00:00') AS negative_hour;  # -3600
+SELECT TIME_TO_SEC('-00:01:00') AS negative_minute; # -60
+
+# With microseconds (should truncate to seconds)
+SELECT TIME_TO_SEC('22:23:00.500000') AS with_microseconds;
+SELECT TIME_TO_SEC('01:01:01.999999') AS with_microseconds2;
+
+# NULL handling
+SELECT TIME_TO_SEC(NULL) AS null_test;
+
+# Table usage
+CREATE TABLE t1(t TIME);
+INSERT INTO t1 VALUES ('22:23:00'), ('01:00:00'), ('00:00:00');
+SELECT TIME_TO_SEC(t) AS seconds FROM t1;
+DROP TABLE t1;
+
+# WHERE clause
+CREATE TABLE t1(t TIME);
+INSERT INTO t1 VALUES ('22:23:00'), ('01:00:00'), ('00:00:00');
+SELECT * FROM t1 WHERE TIME_TO_SEC(t) > 3600;
+DROP TABLE t1;
+
+# Edge cases
+SELECT TIME_TO_SEC('00:00:00') AS zero;
+SELECT TIME_TO_SEC('23:59:59') AS max_day_time;  # 86399
+SELECT TIME_TO_SEC('-23:59:59') AS min_day_time; # -86399
+
+# Verify inverse relationship with SEC_TO_TIME
+SELECT TIME_TO_SEC(SEC_TO_TIME(2378)) AS inverse_test1;  # Should return 2378
+SELECT TIME_TO_SEC(SEC_TO_TIME(0)) AS inverse_test2;     # Should return 0
+SELECT TIME_TO_SEC(SEC_TO_TIME(3600)) AS inverse_test3;  # Should return 3600
+

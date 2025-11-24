@@ -1,0 +1,64 @@
+-- @suit
+-- @case
+-- @desc:test for CURTIME and CURRENT_TIME functions
+-- @label:bvt
+
+-- Test CURTIME() basic functionality
+-- @ignore:0,1
+SELECT CURTIME() AS current_time;
+
+-- Test CURRENT_TIME() basic functionality (alias of CURTIME)
+-- @ignore:0,1
+SELECT CURRENT_TIME() AS current_time;
+
+-- Test CURTIME() and CURRENT_TIME() return same value
+-- @ignore:0,1
+SELECT CURTIME() = CURRENT_TIME() AS same_value;
+
+-- Test CURTIME(0) - no fractional seconds
+-- @ignore:0,1
+SELECT CURTIME(0) AS current_time_0;
+
+-- Test CURTIME(3) - milliseconds precision
+-- @ignore:0,1
+SELECT CURTIME(3) AS current_time_3;
+
+-- Test CURTIME(6) - microseconds precision
+-- @ignore:0,1
+SELECT CURTIME(6) AS current_time_6;
+
+-- Test CURTIME with table
+CREATE TABLE t1 (a int);
+INSERT INTO t1 VALUES (1), (2), (3);
+-- @ignore:0,1
+SELECT CURTIME() AS current_time FROM t1;
+
+-- Test CURTIME() returns time format HH:MM:SS
+-- @ignore:0,1,2
+SELECT CURTIME() AS t1, TIME(CURTIME()) AS t2;
+
+-- Test CURTIME with different scales in same query
+-- @ignore:0,1,2,3
+SELECT CURTIME(0) AS t0, CURTIME(3) AS t3, CURTIME(6) AS t6;
+
+-- Test CURTIME in WHERE clause
+-- @ignore:0,1
+SELECT a FROM t1 WHERE CURTIME() IS NOT NULL;
+
+-- Test CURTIME with CAST
+-- @ignore:0,1
+SELECT CAST(CURTIME() AS TIME) AS casted_time;
+
+-- Test CURRENT_TIME alias
+-- @ignore:0,1,2
+SELECT CURRENT_TIME() AS t1, CURTIME() AS t2, CURRENT_TIME() = CURTIME() AS equal;
+
+DROP TABLE t1;
+
+-- Test CURTIME precision with table column
+CREATE TABLE t2 (id INT, t0 TIME(0), t3 TIME(3), t6 TIME(6));
+INSERT INTO t2 VALUES (1, CURTIME(0), CURTIME(3), CURTIME(6));
+-- @ignore:0,1,2,3
+SELECT id, t0, t3, t6 FROM t2;
+DROP TABLE t2;
+

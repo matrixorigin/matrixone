@@ -15,24 +15,30 @@
 package function
 
 import (
+	"bytes"
+	"compress/flate"
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/md5"
+	"crypto/rand"
 	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"hash"
 	"hash/crc32"
 	"io"
 	"math"
+	"net"
 	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/util"
@@ -44,6 +50,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -99,6 +106,69 @@ func AbsDecimal128(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 	return opUnaryFixedToFixed[types.Decimal128, types.Decimal128](ivecs, result, proc, length, func(v types.Decimal128) types.Decimal128 {
 		return absDecimal128(v)
 	}, selectList)
+}
+
+// SIGN function implementations
+// SIGN returns 1 for positive numbers, 0 for zero, -1 for negative numbers
+func SignInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[int64, int64](ivecs, result, proc, length, func(v int64) int64 {
+		if v > 0 {
+			return 1
+		} else if v < 0 {
+			return -1
+		}
+		return 0
+	}, selectList)
+}
+
+func SignUInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[uint64, int64](ivecs, result, proc, length, func(v uint64) int64 {
+		if v > 0 {
+			return 1
+		}
+		return 0
+	}, selectList)
+}
+
+func SignFloat64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[float64, int64](ivecs, result, proc, length, func(v float64) int64 {
+		if v > 0 {
+			return 1
+		} else if v < 0 {
+			return -1
+		}
+		return 0
+	}, selectList)
+}
+
+func signDecimal64(v types.Decimal64) int64 {
+	zero := types.Decimal64(0)
+	if v.Compare(zero) == 0 {
+		return 0
+	}
+	if v.Sign() {
+		return -1
+	}
+	return 1
+}
+
+func SignDecimal64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Decimal64, int64](ivecs, result, proc, length, signDecimal64, selectList)
+}
+
+func signDecimal128(v types.Decimal128) int64 {
+	zero := types.Decimal128{B0_63: 0, B64_127: 0}
+	if v.Compare(zero) == 0 {
+		return 0
+	}
+	if v.Sign() {
+		return -1
+	}
+	return 1
+}
+
+func SignDecimal128(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Decimal128, int64](ivecs, result, proc, length, signDecimal128, selectList)
 }
 
 func AbsArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -296,6 +366,41 @@ func AsciiString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 	}, selectList)
 }
 
+// OrdString calculates the ORD value for a string
+// For single-byte characters: returns the byte value (same as ASCII)
+// For multibyte characters: returns (byte1) + (byte2 * 256) + (byte3 * 256²) + ...
+func OrdString(val []byte) int64 {
+	if len(val) == 0 {
+		return 0
+	}
+
+	// Get the first character (rune) to determine its byte size
+	_, runeSize := utf8.DecodeRune(val)
+	if runeSize == 0 {
+		return 0
+	}
+
+	// If it's a single-byte character (ASCII), return the byte value
+	if runeSize == 1 {
+		return int64(val[0])
+	}
+
+	// For multibyte characters, calculate using the formula:
+	// (byte1) + (byte2 * 256) + (byte3 * 256²) + ...
+	var result int64
+	for i := 0; i < runeSize && i < len(val); i++ {
+		result += int64(val[i]) * int64(1<<(8*i)) // 256^i = 2^(8*i)
+	}
+
+	return result
+}
+
+func Ord(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	return opUnaryBytesToFixed[int64](ivecs, result, proc, length, func(v []byte) int64 {
+		return OrdString(v)
+	}, selectList)
+}
+
 var (
 	intStartMap = map[types.T]int{
 		types.T_int8:   3,
@@ -427,6 +532,24 @@ func CurrentDate(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *
 	})
 }
 
+func UtcDate(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	var err error
+
+	// Use UTC timezone instead of session timezone
+	loc := time.UTC
+	ts := types.UnixNanoToTimestamp(proc.GetUnixTime())
+	dateTimes := make([]types.Datetime, 1)
+	dateTimes, err = types.TimestampToDatetime(loc, []types.Timestamp{ts}, dateTimes)
+	if err != nil {
+		return err
+	}
+	r := dateTimes[0].ToDate()
+
+	return opNoneParamToFixed[types.Date](result, proc, length, func() types.Date {
+		return r
+	})
+}
+
 func DateToDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToFixed[types.Date, types.Date](ivecs, result, proc, length, func(v types.Date) types.Date {
 		return v
@@ -465,6 +588,17 @@ func DateToDay(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 func DatetimeToDay(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToFixed[types.Datetime, uint8](ivecs, result, proc, length, func(v types.Datetime) uint8 {
 		return v.Day()
+	}, selectList)
+}
+
+func TimestampToDay(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Timestamp, uint8](ivecs, result, proc, length, func(v types.Timestamp) uint8 {
+		loc := proc.GetSessionInfo().TimeZone
+		if loc == nil {
+			loc = time.Local
+		}
+		dt := v.ToDatetime(loc)
+		return dt.Day()
 	}, selectList)
 }
 
@@ -512,6 +646,153 @@ func JsonUnquote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 	}
 
 	return opUnaryBytesToStrWithErrorCheck(ivecs, result, proc, length, fSingle, selectList)
+}
+
+// QuoteString quotes a string for use in SQL statements
+// Escapes single quotes by doubling them, backslashes, and control characters
+func QuoteString(str string) string {
+	var result strings.Builder
+	result.WriteByte('\'')
+
+	for _, r := range str {
+		switch r {
+		case '\'':
+			// Escape single quote by doubling it
+			result.WriteString("''")
+		case '\\':
+			// Escape backslash
+			result.WriteString("\\\\")
+		case '\n':
+			// Escape newline
+			result.WriteString("\\n")
+		case '\r':
+			// Escape carriage return
+			result.WriteString("\\r")
+		case '\t':
+			// Escape tab
+			result.WriteString("\\t")
+		case '\x00':
+			// Escape null byte
+			result.WriteString("\\0")
+		case '\x1a':
+			// Escape Ctrl+Z (EOF in Windows)
+			result.WriteString("\\Z")
+		default:
+			// Write the character as-is
+			result.WriteRune(r)
+		}
+	}
+
+	result.WriteByte('\'')
+	return result.String()
+}
+
+func Quote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryBytesToBytes(ivecs, result, proc, length, func(v []byte) []byte {
+		str := functionUtil.QuickBytesToStr(v)
+		quoted := QuoteString(str)
+		return functionUtil.QuickStrToBytes(quoted)
+	}, selectList)
+}
+
+// SoundexString implements the SOUNDEX algorithm
+// Returns a phonetic code representing how a string sounds
+func SoundexString(str string) string {
+	if len(str) == 0 {
+		return "0000"
+	}
+
+	// Convert to uppercase and process only alphabetic characters
+	upper := strings.ToUpper(str)
+
+	// Find the first alphabetic character
+	firstChar := byte(0)
+	firstIdx := -1
+	for i := 0; i < len(upper); i++ {
+		if upper[i] >= 'A' && upper[i] <= 'Z' {
+			firstChar = upper[i]
+			firstIdx = i
+			break
+		}
+	}
+
+	// If no alphabetic character found, return "0000"
+	if firstChar == 0 {
+		return "0000"
+	}
+
+	// Build the soundex code
+	var code strings.Builder
+	code.WriteByte(firstChar)
+
+	// Soundex mapping: B, F, P, V → 1; C, G, J, K, Q, S, X, Z → 2; D, T → 3; L → 4; M, N → 5; R → 6
+	// Index: A=0, B=1, C=2, ..., Z=25
+	soundexMap := [26]byte{
+		0,   // A
+		'1', // B
+		'2', // C
+		'3', // D
+		0,   // E
+		'1', // F
+		'2', // G
+		0,   // H
+		0,   // I
+		'2', // J
+		'2', // K
+		'4', // L
+		'5', // M
+		'5', // N
+		0,   // O
+		'1', // P
+		'2', // Q
+		'6', // R
+		'2', // S
+		'3', // T
+		0,   // U
+		'1', // V
+		0,   // W
+		'2', // X
+		0,   // Y
+		'2', // Z
+	}
+
+	lastCode := byte(0)
+	for i := firstIdx + 1; i < len(upper) && code.Len() < 4; i++ {
+		c := upper[i]
+		if c < 'A' || c > 'Z' {
+			continue
+		}
+
+		codeChar := soundexMap[c-'A']
+		// Skip vowels, H, W (codeChar == 0)
+		if codeChar == 0 {
+			continue
+		}
+
+		// Skip consecutive duplicate codes
+		if codeChar == lastCode {
+			continue
+		}
+
+		code.WriteByte(codeChar)
+		lastCode = codeChar
+	}
+
+	// Pad with zeros to make it 4 characters
+	result := code.String()
+	for len(result) < 4 {
+		result += "0"
+	}
+
+	return result
+}
+
+func Soundex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryBytesToBytes(ivecs, result, proc, length, func(v []byte) []byte {
+		str := functionUtil.QuickBytesToStr(v)
+		soundex := SoundexString(str)
+		return functionUtil.QuickStrToBytes(soundex)
+	}, selectList)
 }
 
 func ReadFromFile(Filepath string, fs fileservice.FileService) (io.ReadCloser, error) {
@@ -914,6 +1195,14 @@ func DatetimeToHour(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 	}, selectList)
 }
 
+func TimeToHour(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Time, uint8](ivecs, result, proc, length, func(v types.Time) uint8 {
+		hour, _, _, _, _ := v.ClockFormat()
+		// HOUR function returns 0-23, so we need to take modulo 24
+		return uint8(hour % 24)
+	}, selectList)
+}
+
 func TimestampToMinute(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToFixed[types.Timestamp, uint8](ivecs, result, proc, length, func(v types.Timestamp) uint8 {
 		return uint8(v.ToDatetime(proc.GetSessionInfo().TimeZone).Minute())
@@ -926,6 +1215,14 @@ func DatetimeToMinute(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	}, selectList)
 }
 
+// TimeToMinute returns the minute from time (0-59)
+func TimeToMinute(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Time, uint8](ivecs, result, proc, length, func(v types.Time) uint8 {
+		_, minute, _, _, _ := v.ClockFormat()
+		return uint8(minute)
+	}, selectList)
+}
+
 func TimestampToSecond(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToFixed[types.Timestamp, uint8](ivecs, result, proc, length, func(v types.Timestamp) uint8 {
 		return uint8(v.ToDatetime(proc.GetSessionInfo().TimeZone).Sec())
@@ -935,6 +1232,49 @@ func TimestampToSecond(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 func DatetimeToSecond(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToFixed[types.Datetime, uint8](ivecs, result, proc, length, func(v types.Datetime) uint8 {
 		return uint8(v.Sec())
+	}, selectList)
+}
+
+// TimeToSecond returns the second from time (0-59)
+func TimeToSecond(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Time, uint8](ivecs, result, proc, length, func(v types.Time) uint8 {
+		_, _, sec, _, _ := v.ClockFormat()
+		return uint8(sec)
+	}, selectList)
+}
+
+// TimeToSec returns the time argument, converted to seconds (total seconds)
+func TimeToSec(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Time, int64](ivecs, result, proc, length, func(v types.Time) int64 {
+		// Time is stored in microseconds, so divide by MicroSecsPerSec to get seconds
+		// This gives total seconds (hours*3600 + minutes*60 + seconds)
+		return int64(v) / types.MicroSecsPerSec
+	}, selectList)
+}
+
+// TimestampToMicrosecond returns the microseconds from timestamp (0-999999)
+func TimestampToMicrosecond(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Timestamp, int64](ivecs, result, proc, length, func(v types.Timestamp) int64 {
+		loc := proc.GetSessionInfo().TimeZone
+		if loc == nil {
+			loc = time.Local
+		}
+		dt := v.ToDatetime(loc)
+		return dt.MicroSec()
+	}, selectList)
+}
+
+// DatetimeToMicrosecond returns the microseconds from datetime (0-999999)
+func DatetimeToMicrosecond(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Datetime, int64](ivecs, result, proc, length, func(v types.Datetime) int64 {
+		return v.MicroSec()
+	}, selectList)
+}
+
+// TimeToMicrosecond returns the microseconds from time (0-999999)
+func TimeToMicrosecond(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Time, int64](ivecs, result, proc, length, func(v types.Time) int64 {
+		return v.MicroSec()
 	}, selectList)
 }
 
@@ -1017,6 +1357,808 @@ func hexEncodeInt64(xs int64) string {
 
 func hexEncodeUint64(xs uint64) string {
 	return fmt.Sprintf("%X", xs)
+}
+
+// Inet6Aton converts an IPv6 or IPv4 address string to a binary representation.
+// IPv4 addresses return 4 bytes, IPv6 addresses return 16 bytes.
+// Invalid addresses return NULL.
+func Inet6Aton(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	result.UseOptFunctionParamFrame(1)
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
+	rsVec := rs.GetResultVector()
+	rsNull := rsVec.GetNulls()
+
+	c1 := ivecs[0].IsConst()
+	rsAnyNull := false
+
+	if selectList != nil {
+		if selectList.IgnoreAllRow() {
+			nulls.AddRange(rsNull, 0, uint64(length))
+			return nil
+		}
+		if !selectList.ShouldEvalAllRow() {
+			rsAnyNull = true
+			for i := range selectList.SelectList {
+				if selectList.Contains(uint64(i)) {
+					rsNull.Add(uint64(i))
+				}
+			}
+		}
+	}
+
+	if c1 {
+		v1, null1 := p1.GetStrValue(0)
+		if null1 {
+			nulls.AddRange(rsNull, 0, uint64(length))
+		} else {
+			ipStr := functionUtil.QuickBytesToStr(v1)
+			ip := net.ParseIP(ipStr)
+			if ip == nil {
+				// Invalid IP: return NULL for all rows
+				nulls.AddRange(rsNull, 0, uint64(length))
+			} else {
+				var resultBytes []byte
+				if ip4 := ip.To4(); ip4 != nil {
+					// IPv4: return 4 bytes
+					resultBytes = ip4
+				} else {
+					// IPv6: return 16 bytes
+					resultBytes = ip
+				}
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
+					if err := rs.AppendMustBytesValue(resultBytes); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		return nil
+	}
+
+	// basic case
+	if p1.WithAnyNullValue() || rsAnyNull {
+		nulls.Or(rsNull, ivecs[0].GetNulls(), rsNull)
+		rowCount := uint64(length)
+		for i := uint64(0); i < rowCount; i++ {
+			if rsNull.Contains(i) {
+				if err := rs.AppendMustNullForBytesResult(); err != nil {
+					return err
+				}
+				continue
+			}
+			v1, _ := p1.GetStrValue(i)
+			ipStr := functionUtil.QuickBytesToStr(v1)
+			ip := net.ParseIP(ipStr)
+			if ip == nil {
+				// Invalid IP: return NULL
+				if err := rs.AppendMustNullForBytesResult(); err != nil {
+					return err
+				}
+			} else {
+				var resultBytes []byte
+				if ip4 := ip.To4(); ip4 != nil {
+					resultBytes = ip4
+				} else {
+					resultBytes = ip
+				}
+				if err := rs.AppendMustBytesValue(resultBytes); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
+		v1, _ := p1.GetStrValue(i)
+		ipStr := functionUtil.QuickBytesToStr(v1)
+		ip := net.ParseIP(ipStr)
+		if ip == nil {
+			// Invalid IP: return NULL
+			if err := rs.AppendMustNullForBytesResult(); err != nil {
+				return err
+			}
+		} else {
+			var resultBytes []byte
+			if ip4 := ip.To4(); ip4 != nil {
+				resultBytes = ip4
+			} else {
+				resultBytes = ip
+			}
+			if err := rs.AppendMustBytesValue(resultBytes); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// Inet6Ntoa converts a binary representation of an IPv6 or IPv4 address to a string.
+// Input can be 4 bytes (IPv4) or 16 bytes (IPv6).
+// Invalid input returns NULL.
+func Inet6Ntoa(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	result.UseOptFunctionParamFrame(1)
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
+	rsVec := rs.GetResultVector()
+	rsNull := rsVec.GetNulls()
+
+	c1 := ivecs[0].IsConst()
+	rsAnyNull := false
+
+	if selectList != nil {
+		if selectList.IgnoreAllRow() {
+			nulls.AddRange(rsNull, 0, uint64(length))
+			return nil
+		}
+		if !selectList.ShouldEvalAllRow() {
+			rsAnyNull = true
+			for i := range selectList.SelectList {
+				if selectList.Contains(uint64(i)) {
+					rsNull.Add(uint64(i))
+				}
+			}
+		}
+	}
+
+	if c1 {
+		v1, null1 := p1.GetStrValue(0)
+		if null1 {
+			nulls.AddRange(rsNull, 0, uint64(length))
+		} else {
+			var resultStr string
+			if len(v1) == 4 {
+				// IPv4: 4 bytes
+				ip := net.IP(v1)
+				resultStr = ip.String()
+			} else if len(v1) == 16 {
+				// IPv6: 16 bytes
+				ip := net.IP(v1)
+				// Check if it's an IPv4-mapped IPv6 address (::ffff:x.x.x.x)
+				if ip4 := ip.To4(); ip4 != nil && isIPv4Mapped(ip) {
+					resultStr = ip4.String()
+				} else {
+					resultStr = ip.String()
+				}
+			} else {
+				// Invalid length: return NULL for all rows
+				nulls.AddRange(rsNull, 0, uint64(length))
+				return nil
+			}
+			rowCount := uint64(length)
+			for i := uint64(0); i < rowCount; i++ {
+				if err := rs.AppendMustBytesValue(functionUtil.QuickStrToBytes(resultStr)); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+
+	// basic case
+	if p1.WithAnyNullValue() || rsAnyNull {
+		nulls.Or(rsNull, ivecs[0].GetNulls(), rsNull)
+		rowCount := uint64(length)
+		for i := uint64(0); i < rowCount; i++ {
+			if rsNull.Contains(i) {
+				if err := rs.AppendMustNullForBytesResult(); err != nil {
+					return err
+				}
+				continue
+			}
+			v1, _ := p1.GetStrValue(i)
+			var resultStr string
+			if len(v1) == 4 {
+				ip := net.IP(v1)
+				resultStr = ip.String()
+			} else if len(v1) == 16 {
+				ip := net.IP(v1)
+				if ip4 := ip.To4(); ip4 != nil && isIPv4Mapped(ip) {
+					resultStr = ip4.String()
+				} else {
+					resultStr = ip.String()
+				}
+			} else {
+				// Invalid length: return NULL
+				if err := rs.AppendMustNullForBytesResult(); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := rs.AppendMustBytesValue(functionUtil.QuickStrToBytes(resultStr)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
+		v1, _ := p1.GetStrValue(i)
+		var resultStr string
+		if len(v1) == 4 {
+			ip := net.IP(v1)
+			resultStr = ip.String()
+		} else if len(v1) == 16 {
+			ip := net.IP(v1)
+			if ip4 := ip.To4(); ip4 != nil && isIPv4Mapped(ip) {
+				resultStr = ip4.String()
+			} else {
+				resultStr = ip.String()
+			}
+		} else {
+			// Invalid length: return NULL
+			if err := rs.AppendMustNullForBytesResult(); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := rs.AppendMustBytesValue(functionUtil.QuickStrToBytes(resultStr)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// isIPv4Mapped checks if an IPv6 address is IPv4-mapped (::ffff:x.x.x.x)
+func isIPv4Mapped(ip net.IP) bool {
+	if len(ip) != 16 {
+		return false
+	}
+	// Check for ::ffff: prefix
+	return ip[0] == 0 && ip[1] == 0 && ip[2] == 0 && ip[3] == 0 &&
+		ip[4] == 0 && ip[5] == 0 && ip[6] == 0 && ip[7] == 0 &&
+		ip[8] == 0 && ip[9] == 0 && ip[10] == 0xff && ip[11] == 0xff
+}
+
+// InetAton converts an IPv4 address string to an unsigned integer.
+// Returns NULL for invalid addresses.
+// Formula: a.b.c.d = a*256^3 + b*256^2 + c*256 + d
+func InetAton(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	result.UseOptFunctionParamFrame(1)
+	rs := vector.MustFunctionResult[uint64](result)
+	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedColNoTypeCheck[uint64](rsVec)
+	rsNull := rsVec.GetNulls()
+
+	c1 := ivecs[0].IsConst()
+	rsAnyNull := false
+
+	if selectList != nil {
+		if selectList.IgnoreAllRow() {
+			nulls.AddRange(rsNull, 0, uint64(length))
+			return nil
+		}
+		if !selectList.ShouldEvalAllRow() {
+			rsAnyNull = true
+			for i := range selectList.SelectList {
+				if selectList.Contains(uint64(i)) {
+					rsNull.Add(uint64(i))
+				}
+			}
+		}
+	}
+
+	if c1 {
+		v1, null1 := p1.GetStrValue(0)
+		if null1 {
+			nulls.AddRange(rsNull, 0, uint64(length))
+		} else {
+			ipStr := functionUtil.QuickBytesToStr(v1)
+			ip := net.ParseIP(ipStr)
+			if ip == nil {
+				// Invalid IP: return NULL for all rows
+				nulls.AddRange(rsNull, 0, uint64(length))
+			} else {
+				ip4 := ip.To4()
+				if ip4 == nil {
+					// Not IPv4: return NULL
+					nulls.AddRange(rsNull, 0, uint64(length))
+				} else {
+					// Convert to uint32: a.b.c.d = a*256^3 + b*256^2 + c*256 + d
+					resultVal := uint64(ip4[0])<<24 | uint64(ip4[1])<<16 | uint64(ip4[2])<<8 | uint64(ip4[3])
+					rowCount := uint64(length)
+					for i := uint64(0); i < rowCount; i++ {
+						rss[i] = resultVal
+					}
+				}
+			}
+		}
+		return nil
+	}
+
+	// basic case
+	if p1.WithAnyNullValue() || rsAnyNull {
+		nulls.Or(rsNull, ivecs[0].GetNulls(), rsNull)
+		rowCount := uint64(length)
+		for i := uint64(0); i < rowCount; i++ {
+			if rsNull.Contains(i) {
+				continue
+			}
+			v1, _ := p1.GetStrValue(i)
+			ipStr := functionUtil.QuickBytesToStr(v1)
+			ip := net.ParseIP(ipStr)
+			if ip == nil {
+				// Invalid IP: return NULL
+				rsNull.Add(i)
+			} else {
+				ip4 := ip.To4()
+				if ip4 == nil {
+					// Not IPv4: return NULL
+					rsNull.Add(i)
+				} else {
+					// Convert to uint32
+					rss[i] = uint64(ip4[0])<<24 | uint64(ip4[1])<<16 | uint64(ip4[2])<<8 | uint64(ip4[3])
+				}
+			}
+		}
+		return nil
+	}
+
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
+		v1, _ := p1.GetStrValue(i)
+		ipStr := functionUtil.QuickBytesToStr(v1)
+		ip := net.ParseIP(ipStr)
+		if ip == nil {
+			// Invalid IP: return NULL
+			rsNull.Add(i)
+		} else {
+			ip4 := ip.To4()
+			if ip4 == nil {
+				// Not IPv4: return NULL
+				rsNull.Add(i)
+			} else {
+				// Convert to uint32
+				rss[i] = uint64(ip4[0])<<24 | uint64(ip4[1])<<16 | uint64(ip4[2])<<8 | uint64(ip4[3])
+			}
+		}
+	}
+	return nil
+}
+
+// InetNtoa converts an unsigned integer to an IPv4 address string.
+// Returns NULL for invalid input.
+// Supports uint64, uint32, int64, int32 types.
+func InetNtoa(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	argType := ivecs[0].GetType()
+
+	switch argType.Oid {
+	case types.T_uint64:
+		return opUnaryFixedToStr[uint64](ivecs, result, proc, length, func(val uint64) string {
+			ipVal := uint32(val & 0xFFFFFFFF)
+			ip := net.IPv4(
+				byte(ipVal>>24),
+				byte(ipVal>>16&0xFF),
+				byte(ipVal>>8&0xFF),
+				byte(ipVal&0xFF),
+			)
+			return ip.String()
+		}, selectList)
+	case types.T_uint32:
+		return opUnaryFixedToStr[uint32](ivecs, result, proc, length, func(val uint32) string {
+			ip := net.IPv4(
+				byte(val>>24),
+				byte(val>>16&0xFF),
+				byte(val>>8&0xFF),
+				byte(val&0xFF),
+			)
+			return ip.String()
+		}, selectList)
+	case types.T_int64:
+		return opUnaryFixedToStr[int64](ivecs, result, proc, length, func(val int64) string {
+			// Treat as unsigned
+			ipVal := uint32(uint64(val) & 0xFFFFFFFF)
+			ip := net.IPv4(
+				byte(ipVal>>24),
+				byte(ipVal>>16&0xFF),
+				byte(ipVal>>8&0xFF),
+				byte(ipVal&0xFF),
+			)
+			return ip.String()
+		}, selectList)
+	case types.T_int32:
+		return opUnaryFixedToStr[int32](ivecs, result, proc, length, func(val int32) string {
+			// Treat as unsigned
+			ipVal := uint32(val)
+			ip := net.IPv4(
+				byte(ipVal>>24),
+				byte(ipVal>>16&0xFF),
+				byte(ipVal>>8&0xFF),
+				byte(ipVal&0xFF),
+			)
+			return ip.String()
+		}, selectList)
+	default:
+		// Fallback to uint64
+		return opUnaryFixedToStr[uint64](ivecs, result, proc, length, func(val uint64) string {
+			ipVal := uint32(val & 0xFFFFFFFF)
+			ip := net.IPv4(
+				byte(ipVal>>24),
+				byte(ipVal>>16&0xFF),
+				byte(ipVal>>8&0xFF),
+				byte(ipVal&0xFF),
+			)
+			return ip.String()
+		}, selectList)
+	}
+}
+
+// IsIPv4 returns 1 if the argument is a valid IPv4 address, 0 otherwise.
+// Returns NULL if the input is NULL.
+func IsIPv4(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	result.UseOptFunctionParamFrame(1)
+	rs := vector.MustFunctionResult[int64](result)
+	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedColNoTypeCheck[int64](rsVec)
+	rsNull := rsVec.GetNulls()
+
+	c1 := ivecs[0].IsConst()
+	rsAnyNull := false
+
+	if selectList != nil {
+		if selectList.IgnoreAllRow() {
+			nulls.AddRange(rsNull, 0, uint64(length))
+			return nil
+		}
+		if !selectList.ShouldEvalAllRow() {
+			rsAnyNull = true
+			for i := range selectList.SelectList {
+				if selectList.Contains(uint64(i)) {
+					rsNull.Add(uint64(i))
+				}
+			}
+		}
+	}
+
+	if c1 {
+		v1, null1 := p1.GetStrValue(0)
+		if null1 {
+			nulls.AddRange(rsNull, 0, uint64(length))
+		} else {
+			ipStr := functionUtil.QuickBytesToStr(v1)
+			ip := net.ParseIP(ipStr)
+			var resultVal int64
+			if ip != nil && ip.To4() != nil {
+				// Valid IPv4 address
+				resultVal = 1
+			} else {
+				// Not a valid IPv4 address
+				resultVal = 0
+			}
+			rowCount := uint64(length)
+			for i := uint64(0); i < rowCount; i++ {
+				rss[i] = resultVal
+			}
+		}
+		return nil
+	}
+
+	// basic case
+	if p1.WithAnyNullValue() || rsAnyNull {
+		nulls.Or(rsNull, ivecs[0].GetNulls(), rsNull)
+		rowCount := uint64(length)
+		for i := uint64(0); i < rowCount; i++ {
+			if rsNull.Contains(i) {
+				continue
+			}
+			v1, _ := p1.GetStrValue(i)
+			ipStr := functionUtil.QuickBytesToStr(v1)
+			ip := net.ParseIP(ipStr)
+			if ip != nil && ip.To4() != nil {
+				rss[i] = 1
+			} else {
+				rss[i] = 0
+			}
+		}
+		return nil
+	}
+
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
+		v1, _ := p1.GetStrValue(i)
+		ipStr := functionUtil.QuickBytesToStr(v1)
+		ip := net.ParseIP(ipStr)
+		if ip != nil && ip.To4() != nil {
+			rss[i] = 1
+		} else {
+			rss[i] = 0
+		}
+	}
+	return nil
+}
+
+// IsIPv6 returns 1 if the argument is a valid IPv6 address, 0 otherwise.
+// Returns NULL if the input is NULL.
+func IsIPv6(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	result.UseOptFunctionParamFrame(1)
+	rs := vector.MustFunctionResult[int64](result)
+	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedColNoTypeCheck[int64](rsVec)
+	rsNull := rsVec.GetNulls()
+
+	c1 := ivecs[0].IsConst()
+	rsAnyNull := false
+
+	if selectList != nil {
+		if selectList.IgnoreAllRow() {
+			nulls.AddRange(rsNull, 0, uint64(length))
+			return nil
+		}
+		if !selectList.ShouldEvalAllRow() {
+			rsAnyNull = true
+			for i := range selectList.SelectList {
+				if selectList.Contains(uint64(i)) {
+					rsNull.Add(uint64(i))
+				}
+			}
+		}
+	}
+
+	if c1 {
+		v1, null1 := p1.GetStrValue(0)
+		if null1 {
+			nulls.AddRange(rsNull, 0, uint64(length))
+		} else {
+			ipStr := functionUtil.QuickBytesToStr(v1)
+			ip := net.ParseIP(ipStr)
+			var resultVal int64
+			if ip != nil && ip.To4() == nil {
+				// Valid IPv6 address (not IPv4)
+				resultVal = 1
+			} else {
+				// Not a valid IPv6 address (could be IPv4 or invalid)
+				resultVal = 0
+			}
+			rowCount := uint64(length)
+			for i := uint64(0); i < rowCount; i++ {
+				rss[i] = resultVal
+			}
+		}
+		return nil
+	}
+
+	// basic case
+	if p1.WithAnyNullValue() || rsAnyNull {
+		nulls.Or(rsNull, ivecs[0].GetNulls(), rsNull)
+		rowCount := uint64(length)
+		for i := uint64(0); i < rowCount; i++ {
+			if rsNull.Contains(i) {
+				continue
+			}
+			v1, _ := p1.GetStrValue(i)
+			ipStr := functionUtil.QuickBytesToStr(v1)
+			ip := net.ParseIP(ipStr)
+			if ip != nil && ip.To4() == nil {
+				rss[i] = 1
+			} else {
+				rss[i] = 0
+			}
+		}
+		return nil
+	}
+
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
+		v1, _ := p1.GetStrValue(i)
+		ipStr := functionUtil.QuickBytesToStr(v1)
+		ip := net.ParseIP(ipStr)
+		if ip != nil && ip.To4() == nil {
+			rss[i] = 1
+		} else {
+			rss[i] = 0
+		}
+	}
+	return nil
+}
+
+// isIPv4Compat checks if an IPv6 address is IPv4-compatible (::a.b.c.d)
+// IPv4-compatible addresses have the first 12 bytes as zeros
+func isIPv4Compat(ip net.IP) bool {
+	if len(ip) != 16 {
+		return false
+	}
+	// Check for :: prefix (first 12 bytes are zeros)
+	return ip[0] == 0 && ip[1] == 0 && ip[2] == 0 && ip[3] == 0 &&
+		ip[4] == 0 && ip[5] == 0 && ip[6] == 0 && ip[7] == 0 &&
+		ip[8] == 0 && ip[9] == 0 && ip[10] == 0 && ip[11] == 0 &&
+		// Last 4 bytes should not be all zeros (0.0.0.0 is not considered IPv4-compatible)
+		!(ip[12] == 0 && ip[13] == 0 && ip[14] == 0 && ip[15] == 0)
+}
+
+// IsIPv4Compat returns 1 if the argument is a valid IPv4-compatible IPv6 address, 0 otherwise.
+// Returns NULL if the input is NULL.
+// The input should be a binary representation from INET6_ATON (16 bytes for IPv6).
+func IsIPv4Compat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	result.UseOptFunctionParamFrame(1)
+	rs := vector.MustFunctionResult[int64](result)
+	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedColNoTypeCheck[int64](rsVec)
+	rsNull := rsVec.GetNulls()
+
+	c1 := ivecs[0].IsConst()
+	rsAnyNull := false
+
+	if selectList != nil {
+		if selectList.IgnoreAllRow() {
+			nulls.AddRange(rsNull, 0, uint64(length))
+			return nil
+		}
+		if !selectList.ShouldEvalAllRow() {
+			rsAnyNull = true
+			for i := range selectList.SelectList {
+				if selectList.Contains(uint64(i)) {
+					rsNull.Add(uint64(i))
+				}
+			}
+		}
+	}
+
+	if c1 {
+		v1, null1 := p1.GetStrValue(0)
+		if null1 {
+			nulls.AddRange(rsNull, 0, uint64(length))
+		} else {
+			var resultVal int64
+			if len(v1) == 16 {
+				ip := net.IP(v1)
+				if isIPv4Compat(ip) {
+					resultVal = 1
+				} else {
+					resultVal = 0
+				}
+			} else {
+				// Invalid length: not a valid IPv6 binary representation
+				resultVal = 0
+			}
+			rowCount := uint64(length)
+			for i := uint64(0); i < rowCount; i++ {
+				rss[i] = resultVal
+			}
+		}
+		return nil
+	}
+
+	// basic case
+	if p1.WithAnyNullValue() || rsAnyNull {
+		nulls.Or(rsNull, ivecs[0].GetNulls(), rsNull)
+		rowCount := uint64(length)
+		for i := uint64(0); i < rowCount; i++ {
+			if rsNull.Contains(i) {
+				continue
+			}
+			v1, _ := p1.GetStrValue(i)
+			if len(v1) == 16 {
+				ip := net.IP(v1)
+				if isIPv4Compat(ip) {
+					rss[i] = 1
+				} else {
+					rss[i] = 0
+				}
+			} else {
+				rss[i] = 0
+			}
+		}
+		return nil
+	}
+
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
+		v1, _ := p1.GetStrValue(i)
+		if len(v1) == 16 {
+			ip := net.IP(v1)
+			if isIPv4Compat(ip) {
+				rss[i] = 1
+			} else {
+				rss[i] = 0
+			}
+		} else {
+			rss[i] = 0
+		}
+	}
+	return nil
+}
+
+// IsIPv4Mapped returns 1 if the argument is a valid IPv4-mapped IPv6 address, 0 otherwise.
+// Returns NULL if the input is NULL.
+// The input should be a binary representation from INET6_ATON (16 bytes for IPv6).
+// IPv4-mapped addresses have the format ::ffff:a.b.c.d
+func IsIPv4Mapped(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	result.UseOptFunctionParamFrame(1)
+	rs := vector.MustFunctionResult[int64](result)
+	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedColNoTypeCheck[int64](rsVec)
+	rsNull := rsVec.GetNulls()
+
+	c1 := ivecs[0].IsConst()
+	rsAnyNull := false
+
+	if selectList != nil {
+		if selectList.IgnoreAllRow() {
+			nulls.AddRange(rsNull, 0, uint64(length))
+			return nil
+		}
+		if !selectList.ShouldEvalAllRow() {
+			rsAnyNull = true
+			for i := range selectList.SelectList {
+				if selectList.Contains(uint64(i)) {
+					rsNull.Add(uint64(i))
+				}
+			}
+		}
+	}
+
+	if c1 {
+		v1, null1 := p1.GetStrValue(0)
+		if null1 {
+			nulls.AddRange(rsNull, 0, uint64(length))
+		} else {
+			var resultVal int64
+			if len(v1) == 16 {
+				ip := net.IP(v1)
+				if isIPv4Mapped(ip) {
+					resultVal = 1
+				} else {
+					resultVal = 0
+				}
+			} else {
+				// Invalid length: not a valid IPv6 binary representation
+				resultVal = 0
+			}
+			rowCount := uint64(length)
+			for i := uint64(0); i < rowCount; i++ {
+				rss[i] = resultVal
+			}
+		}
+		return nil
+	}
+
+	// basic case
+	if p1.WithAnyNullValue() || rsAnyNull {
+		nulls.Or(rsNull, ivecs[0].GetNulls(), rsNull)
+		rowCount := uint64(length)
+		for i := uint64(0); i < rowCount; i++ {
+			if rsNull.Contains(i) {
+				continue
+			}
+			v1, _ := p1.GetStrValue(i)
+			if len(v1) == 16 {
+				ip := net.IP(v1)
+				if isIPv4Mapped(ip) {
+					rss[i] = 1
+				} else {
+					rss[i] = 0
+				}
+			} else {
+				rss[i] = 0
+			}
+		}
+		return nil
+	}
+
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
+		v1, _ := p1.GetStrValue(i)
+		if len(v1) == 16 {
+			ip := net.IP(v1)
+			if isIPv4Mapped(ip) {
+				rss[i] = 1
+			} else {
+				rss[i] = 0
+			}
+		} else {
+			rss[i] = 0
+		}
+	}
+	return nil
 }
 
 // UnhexString returns a string representation of a hexadecimal value.
@@ -1110,6 +2252,139 @@ func FromBase64(parameters []*vector.Vector, result vector.FunctionResultWrapper
 			return rs.AppendMustNullForBytesResult()
 		}
 		_ = rs.AppendMustBytesValue(buf)
+	}
+
+	return nil
+}
+
+// Compress: COMPRESS(string) - Compresses a string using zlib compression
+// MySQL format: 4-byte length (little-endian) + compressed data
+func Compress(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	source := vector.GenerateFunctionStrParameter(parameters[0])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		data, null := source.GetStrValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Compress using zlib (flate)
+		var buf bytes.Buffer
+		writer, err := flate.NewWriter(&buf, flate.DefaultCompression)
+		if err != nil {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		_, err = writer.Write(data)
+		if err != nil {
+			writer.Close()
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		err = writer.Close()
+		if err != nil {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		compressed := buf.Bytes()
+
+		// MySQL format: 4-byte length (little-endian) + compressed data
+		originalLen := uint32(len(data))
+		result := make([]byte, 4+len(compressed))
+		binary.LittleEndian.PutUint32(result[0:4], originalLen)
+		copy(result[4:], compressed)
+
+		if err := rs.AppendBytes(result, false); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// Uncompress: UNCOMPRESS(string) - Uncompresses a string compressed by COMPRESS()
+// Reads 4-byte length, then decompresses the rest
+func Uncompress(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	source := vector.GenerateFunctionStrParameter(parameters[0])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		data, null := source.GetStrValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Check minimum length (4 bytes for length + at least 1 byte for compressed data)
+		if len(data) < 5 {
+			// Not a valid compressed string, return NULL
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Read 4-byte length (little-endian)
+		originalLen := binary.LittleEndian.Uint32(data[0:4])
+		compressed := data[4:]
+
+		// Decompress using zlib (flate)
+		reader := flate.NewReader(bytes.NewReader(compressed))
+		decompressed := make([]byte, originalLen)
+		n, err := reader.Read(decompressed)
+		reader.Close()
+
+		if err != nil && err != io.EOF {
+			// Decompression failed, return NULL
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Check if we got the expected length
+		if uint32(n) != originalLen {
+			// Length mismatch, return NULL
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if err := rs.AppendBytes(decompressed, false); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -1279,6 +2554,267 @@ func Decode(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 	return nil
 }
 
+// UncompressedLength: UNCOMPRESSED_LENGTH(compressed_string) - Returns the length that the compressed string had before being compressed
+// Reads the first 4 bytes (little-endian) from the compressed string
+func UncompressedLength(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	source := vector.GenerateFunctionStrParameter(parameters[0])
+	rs := vector.MustFunctionResult[int64](result)
+
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		data, null := source.GetStrValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Check minimum length (at least 4 bytes for the length field)
+		if len(data) < 4 {
+			// Not a valid compressed string, return NULL
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Read 4-byte length (little-endian)
+		originalLen := binary.LittleEndian.Uint32(data[0:4])
+		if err := rs.Append(int64(originalLen), false); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// RandomBytes: RANDOM_BYTES(len) - Returns a binary string of len random bytes
+// Uses crypto/rand for cryptographically secure random bytes
+// Handles both int64 and uint64 parameter types
+func RandomBytes(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	paramType := parameters[0].GetType().Oid
+
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		var lenVal int64
+		var null bool
+
+		// Handle different numeric types
+		switch paramType {
+		case types.T_int64:
+			lenParam := vector.GenerateFunctionFixedTypeParameter[int64](parameters[0])
+			val, nullVal := lenParam.GetValue(i)
+			lenVal = val
+			null = nullVal
+		case types.T_uint64:
+			lenParam := vector.GenerateFunctionFixedTypeParameter[uint64](parameters[0])
+			val, nullVal := lenParam.GetValue(i)
+			if val > uint64(9223372036854775807) { // Max int64
+				lenVal = 1025 // Force > 1024 to return NULL
+			} else {
+				lenVal = int64(val)
+			}
+			null = nullVal
+		default:
+			// Fallback to int64
+			lenParam := vector.GenerateFunctionFixedTypeParameter[int64](parameters[0])
+			val, nullVal := lenParam.GetValue(i)
+			lenVal = val
+			null = nullVal
+		}
+
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Validate length (must be positive, MySQL allows 1 to 1024)
+		if lenVal < 1 {
+			// Return NULL for invalid length (MySQL behavior)
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// MySQL limits RANDOM_BYTES to max 1024 bytes
+		if lenVal > 1024 {
+			// Return NULL for length > 1024 (MySQL behavior)
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Generate random bytes using crypto/rand
+		randomBytes := make([]byte, lenVal)
+		_, err := rand.Read(randomBytes)
+		if err != nil {
+			// On error, return NULL
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if err := rs.AppendBytes(randomBytes, false); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// validatePasswordStrength calculates password strength score (0-100)
+// Scoring based on:
+// - Length (longer is better)
+// - Presence of uppercase letters
+// - Presence of lowercase letters
+// - Presence of numbers
+// - Presence of special characters
+// - Mix of different character types
+// Returns 0, 25, 50, 75, or 100 (MySQL behavior)
+func validatePasswordStrength(password string) int64 {
+	if len(password) == 0 {
+		return 0
+	}
+
+	hasUpper := false
+	hasLower := false
+	hasDigit := false
+	hasSpecial := false
+
+	for _, r := range password {
+		switch {
+		case r >= 'A' && r <= 'Z':
+			hasUpper = true
+		case r >= 'a' && r <= 'z':
+			hasLower = true
+		case r >= '0' && r <= '9':
+			hasDigit = true
+		default:
+			hasSpecial = true
+		}
+	}
+
+	// Count character types
+	typeCount := 0
+	if hasUpper {
+		typeCount++
+	}
+	if hasLower {
+		typeCount++
+	}
+	if hasDigit {
+		typeCount++
+	}
+	if hasSpecial {
+		typeCount++
+	}
+
+	length := len(password)
+	score := int64(0)
+
+	// Length scoring
+	if length >= 16 {
+		score += 30
+	} else if length >= 12 {
+		score += 20
+	} else if length >= 8 {
+		score += 10
+	} else if length < 4 {
+		// Very short passwords get minimal score
+		score = 0
+	}
+
+	// Character type scoring - more types = higher score
+	if typeCount >= 4 {
+		score += 50 // All 4 types
+	} else if typeCount >= 3 {
+		score += 30 // 3 types
+	} else if typeCount >= 2 {
+		score += 15 // 2 types
+	} else if typeCount >= 1 {
+		score += 5 // 1 type only
+	}
+
+	// Additional bonus for length when combined with multiple types
+	if length >= 8 && typeCount >= 3 {
+		score += 10
+	}
+	if length >= 12 && typeCount >= 4 {
+		score += 10
+	}
+
+	// Cap at 100
+	if score > 100 {
+		score = 100
+	}
+
+	// Round to nearest 25 (MySQL behavior: returns 0, 25, 50, 75, or 100)
+	if score < 12 {
+		return 0
+	} else if score < 37 {
+		return 25
+	} else if score < 62 {
+		return 50
+	} else if score < 87 {
+		return 75
+	}
+	return 100
+}
+
+// ValidatePasswordStrength: VALIDATE_PASSWORD_STRENGTH(str) - Returns an integer to indicate how strong the password is
+// Returns 0 (weak) to 100 (strong), typically in increments of 25
+func ValidatePasswordStrength(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	source := vector.GenerateFunctionStrParameter(parameters[0])
+	rs := vector.MustFunctionResult[int64](result)
+
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		data, null := source.GetStrValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		password := string(data)
+		strength := validatePasswordStrength(password)
+		if err := rs.Append(strength, false); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func DateToMonth(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToFixed[types.Date, uint8](ivecs, result, proc, length, func(v types.Date) uint8 {
 		return v.Month()
@@ -1288,6 +2824,20 @@ func DateToMonth(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 func DatetimeToMonth(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToFixed[types.Datetime, uint8](ivecs, result, proc, length, func(v types.Datetime) uint8 {
 		return v.Month()
+	}, selectList)
+}
+
+// DateToQuarter returns the quarter of the year for date (1-4)
+func DateToQuarter(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Date, uint8](ivecs, result, proc, length, func(v types.Date) uint8 {
+		return uint8(v.Quarter())
+	}, selectList)
+}
+
+// DatetimeToQuarter returns the quarter of the year for datetime (1-4)
+func DatetimeToQuarter(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Datetime, uint8](ivecs, result, proc, length, func(v types.Datetime) uint8 {
+		return uint8(v.ToDate().Quarter())
 	}, selectList)
 }
 
@@ -1359,6 +2909,78 @@ func DatetimeToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 	}, selectList)
 }
 
+// weekOfYearHelper calculates the week of year for a given date.
+// WEEKOFYEAR always returns the week number for the year that the date belongs to.
+func weekOfYearHelper(d types.Date) int64 {
+	// Get the year of the input date
+	dateYear := int32(d.Year())
+
+	// Find the Thursday of the calendar week containing this date
+	delta := 4 - int32(d.DayOfWeek())
+	if delta == 4 {
+		delta = -3 // Sunday
+	}
+	thursdayDate := types.Date(int32(d) + delta)
+	thursdayYear, _, _, thursdayYday := thursdayDate.Calendar(false)
+
+	// If Thursday is in a different year than the date, we need special handling
+	if thursdayYear != dateYear {
+		if thursdayYear > dateYear {
+			// Thursday is in the next year, so this date is at the end of the current year
+			// Count how many days of this week are in the current year
+			daysInCurrentYear := 0
+			weekStart := types.Date(int32(d) - delta) // Monday of the week
+			for i := int32(0); i < 7; i++ {
+				checkDate := types.Date(int32(weekStart) + i)
+				if checkDate.Year() == uint16(dateYear) {
+					daysInCurrentYear++
+				}
+			}
+			// If at least 4 days are in the current year, it's week 53 of current year
+			// Otherwise, it's week 1 of next year, but WEEKOFYEAR returns week for date's year
+			if daysInCurrentYear >= 4 {
+				return 53
+			}
+			// If less than 4 days, it's actually week 1 of next year,
+			// but WEEKOFYEAR should return week 53 for the date's year
+			return 53
+		} else {
+			// Thursday is in the previous year, so this date is at the start of the current year
+			// This should be week 1 of current year
+			return 1
+		}
+	}
+
+	// Thursday is in the same year as the date, calculate week normally
+	return int64((thursdayYday-1)/7 + 1)
+}
+
+// DateToWeekOfYear returns the calendar week of the date as a number in the range from 1 to 53.
+// WEEKOFYEAR(date) is equivalent to WEEK(date, 3) which uses ISO 8601 week calculation.
+// WEEKOFYEAR always returns the week number for the year that the date belongs to.
+func DateToWeekOfYear(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Date, int64](ivecs, result, proc, length, weekOfYearHelper, selectList)
+}
+
+// DatetimeToWeekOfYear returns the calendar week of the datetime as a number in the range from 1 to 53.
+func DatetimeToWeekOfYear(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Datetime, int64](ivecs, result, proc, length, func(v types.Datetime) int64 {
+		return weekOfYearHelper(v.ToDate())
+	}, selectList)
+}
+
+// TimestampToWeekOfYear returns the calendar week of the timestamp as a number in the range from 1 to 53.
+func TimestampToWeekOfYear(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Timestamp, int64](ivecs, result, proc, length, func(v types.Timestamp) int64 {
+		loc := proc.GetSessionInfo().TimeZone
+		if loc == nil {
+			loc = time.Local
+		}
+		dt := v.ToDatetime(loc)
+		return weekOfYearHelper(dt.ToDate())
+	}, selectList)
+}
+
 func DateToWeekday(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToFixed[types.Date, int64](ivecs, result, proc, length, func(v types.Date) int64 {
 		return int64(v.DayOfWeek2())
@@ -1368,6 +2990,111 @@ func DateToWeekday(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 func DatetimeToWeekday(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToFixed[types.Datetime, int64](ivecs, result, proc, length, func(v types.Datetime) int64 {
 		return int64(v.ToDate().DayOfWeek2())
+	}, selectList)
+}
+
+// DateToDayOfWeek returns the weekday index for date (1 = Sunday, 2 = Monday, ..., 7 = Saturday)
+func DateToDayOfWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Date, int64](ivecs, result, proc, length, func(v types.Date) int64 {
+		// DayOfWeek() returns 0=Sunday, 1=Monday, ..., 6=Saturday
+		// DAYOFWEEK needs: 1=Sunday, 2=Monday, ..., 7=Saturday
+		return int64(v.DayOfWeek()) + 1
+	}, selectList)
+}
+
+// DatetimeToDayOfWeek returns the weekday index for datetime (1 = Sunday, 2 = Monday, ..., 7 = Saturday)
+func DatetimeToDayOfWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Datetime, int64](ivecs, result, proc, length, func(v types.Datetime) int64 {
+		// DayOfWeek() returns 0=Sunday, 1=Monday, ..., 6=Saturday
+		// DAYOFWEEK needs: 1=Sunday, 2=Monday, ..., 7=Saturday
+		return int64(v.DayOfWeek()) + 1
+	}, selectList)
+}
+
+// TimestampToDayOfWeek returns the weekday index for timestamp (1 = Sunday, 2 = Monday, ..., 7 = Saturday)
+func TimestampToDayOfWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Timestamp, int64](ivecs, result, proc, length, func(v types.Timestamp) int64 {
+		loc := proc.GetSessionInfo().TimeZone
+		if loc == nil {
+			loc = time.Local
+		}
+		dt := v.ToDatetime(loc)
+		// DayOfWeek() returns 0=Sunday, 1=Monday, ..., 6=Saturday
+		// DAYOFWEEK needs: 1=Sunday, 2=Monday, ..., 7=Saturday
+		return int64(dt.DayOfWeek()) + 1
+	}, selectList)
+}
+
+// DateToDayName returns the weekday name for date (e.g., "Sunday", "Monday", ...)
+func DateToDayName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToStr[types.Date](ivecs, result, proc, length, func(v types.Date) string {
+		// DayOfWeek() returns 0=Sunday, 1=Monday, ..., 6=Saturday
+		// Use String() method to get the weekday name
+		return v.DayOfWeek().String()
+	}, selectList)
+}
+
+// DatetimeToDayName returns the weekday name for datetime (e.g., "Sunday", "Monday", ...)
+func DatetimeToDayName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToStr[types.Datetime](ivecs, result, proc, length, func(v types.Datetime) string {
+		// DayOfWeek() returns 0=Sunday, 1=Monday, ..., 6=Saturday
+		// Use String() method to get the weekday name
+		return v.DayOfWeek().String()
+	}, selectList)
+}
+
+// TimestampToDayName returns the weekday name for timestamp (e.g., "Sunday", "Monday", ...)
+func TimestampToDayName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToStr[types.Timestamp](ivecs, result, proc, length, func(v types.Timestamp) string {
+		loc := proc.GetSessionInfo().TimeZone
+		if loc == nil {
+			loc = time.Local
+		}
+		dt := v.ToDatetime(loc)
+		// DayOfWeek() returns 0=Sunday, 1=Monday, ..., 6=Saturday
+		// Use String() method to get the weekday name
+		return dt.DayOfWeek().String()
+	}, selectList)
+}
+
+// DateToMonthName returns the month name for date (e.g., "January", "February", ...)
+func DateToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToStr[types.Date](ivecs, result, proc, length, func(v types.Date) string {
+		// Month() returns 1-12
+		month := v.Month()
+		if month >= 1 && month <= 12 {
+			return MonthNames[month-1]
+		}
+		return ""
+	}, selectList)
+}
+
+// DatetimeToMonthName returns the month name for datetime (e.g., "January", "February", ...)
+func DatetimeToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToStr[types.Datetime](ivecs, result, proc, length, func(v types.Datetime) string {
+		// Month() returns 1-12
+		month := v.Month()
+		if month >= 1 && month <= 12 {
+			return MonthNames[month-1]
+		}
+		return ""
+	}, selectList)
+}
+
+// TimestampToMonthName returns the month name for timestamp (e.g., "January", "February", ...)
+func TimestampToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToStr[types.Timestamp](ivecs, result, proc, length, func(v types.Timestamp) string {
+		loc := proc.GetSessionInfo().TimeZone
+		if loc == nil {
+			loc = time.Local
+		}
+		dt := v.ToDatetime(loc)
+		// Month() returns 1-12
+		month := dt.Month()
+		if month >= 1 && month <= 12 {
+			return MonthNames[month-1]
+		}
+		return ""
 	}, selectList)
 }
 

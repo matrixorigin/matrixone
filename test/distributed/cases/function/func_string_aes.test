@@ -1,0 +1,53 @@
+# Basic test case from requirements
+SELECT AES_DECRYPT(AES_ENCRYPT('text', 'key'), 'key') AS result1;
+
+# Additional test cases
+# Basic encryption and decryption
+SELECT AES_ENCRYPT('Hello World', 'mykey') AS encrypted;
+SELECT AES_DECRYPT(AES_ENCRYPT('Hello World', 'mykey'), 'mykey') AS decrypted;
+
+# Empty string
+SELECT AES_ENCRYPT('', 'key') AS empty_encrypted;
+SELECT AES_DECRYPT(AES_ENCRYPT('', 'key'), 'key') AS empty_decrypted;
+
+# Different keys
+SELECT AES_ENCRYPT('text', 'key1') AS encrypted_key1;
+SELECT AES_ENCRYPT('text', 'key2') AS encrypted_key2;
+SELECT AES_DECRYPT(AES_ENCRYPT('text', 'key1'), 'key1') AS decrypted_correct_key;
+SELECT AES_DECRYPT(AES_ENCRYPT('text', 'key1'), 'key2') AS decrypted_wrong_key;
+
+# Long strings
+SELECT AES_DECRYPT(AES_ENCRYPT('This is a very long string that needs to be encrypted and decrypted properly', 'mysecretkey'), 'mysecretkey') AS long_string;
+
+# Special characters
+SELECT AES_DECRYPT(AES_ENCRYPT('Hello@#$%^&*()', 'key'), 'key') AS special_chars;
+SELECT AES_DECRYPT(AES_ENCRYPT('MatrixOne数据库', 'key'), 'key') AS unicode_chars;
+
+# NULL handling
+SELECT AES_ENCRYPT(NULL, 'key') AS null_input;
+SELECT AES_ENCRYPT('text', NULL) AS null_key;
+SELECT AES_DECRYPT(NULL, 'key') AS null_encrypted;
+SELECT AES_DECRYPT(AES_ENCRYPT('text', 'key'), NULL) AS null_decrypt_key;
+
+# Table usage
+CREATE TABLE t1(plaintext VARCHAR(100), key_str VARCHAR(50));
+INSERT INTO t1 VALUES ('Hello', 'key1'), ('World', 'key2'), ('MatrixOne', 'key3');
+SELECT plaintext, key_str, AES_ENCRYPT(plaintext, key_str) AS encrypted FROM t1;
+SELECT plaintext, key_str, AES_DECRYPT(AES_ENCRYPT(plaintext, key_str), key_str) AS decrypted FROM t1;
+DROP TABLE t1;
+
+# WHERE clause
+CREATE TABLE t1(plaintext VARCHAR(100), key_str VARCHAR(50));
+INSERT INTO t1 VALUES ('Hello', 'key1'), ('World', 'key2'), ('MatrixOne', 'key3');
+SELECT * FROM t1 WHERE AES_DECRYPT(AES_ENCRYPT(plaintext, key_str), key_str) = 'Hello';
+DROP TABLE t1;
+
+# Multiple AES operations
+-- @bvt:issue#23019
+SELECT AES_ENCRYPT('text1', 'key1') AS enc1, AES_ENCRYPT('text2', 'key2') AS enc2, AES_ENCRYPT('text3', 'key3') AS enc3;
+-- @bvt:issue
+
+# Round-trip test with different data types
+SELECT AES_DECRYPT(AES_ENCRYPT('12345', 'numeric'), 'numeric') AS numeric_string;
+SELECT AES_DECRYPT(AES_ENCRYPT('2024-01-01', 'date'), 'date') AS date_string;
+

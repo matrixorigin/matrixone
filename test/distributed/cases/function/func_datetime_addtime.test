@@ -1,0 +1,42 @@
+# Basic test case from requirements
+SELECT ADDTIME('2007-12-31 23:59:59.999999', '1 1:1:1.000002') AS result1;
+
+# Additional test cases
+# TIME + TIME
+SELECT TIME(ADDTIME('12:30:45', '01:15:30')) AS time_add_time;
+SELECT TIME(ADDTIME('23:59:59', '00:00:01')) AS time_wrap;
+SELECT TIME(ADDTIME('00:00:00', '25:00:00')) AS time_with_days;
+
+# DATETIME + TIME
+SELECT ADDTIME('2007-12-31 23:59:59', '00:00:01') AS datetime_add_second;
+SELECT ADDTIME('2007-12-31 23:59:59.999999', '1 1:1:1.000002') AS datetime_add_time_with_days;
+SELECT ADDTIME('2024-01-01 00:00:00', '24:00:00') AS datetime_add_day;
+
+# TIMESTAMP + TIME
+SELECT ADDTIME('2007-12-31 23:59:59', '00:00:01') AS timestamp_add_second;
+
+# String inputs
+SELECT ADDTIME('2007-12-31 23:59:59.999999', '1 1:1:1.000002') AS string_datetime;
+SELECT TIME(ADDTIME('12:30:45', '01:15:30')) AS string_time;
+
+# NULL handling
+SELECT ADDTIME(NULL, '01:00:00') AS null_first;
+SELECT ADDTIME('12:00:00', NULL) AS null_second;
+SELECT ADDTIME(NULL, NULL) AS null_both;
+
+# Edge cases
+SELECT TIME(ADDTIME('00:00:00', '00:00:00')) AS zero_time;
+SELECT TIME(ADDTIME('23:59:59.999999', '00:00:00.000001')) AS microsecond_precision;
+
+# Table usage
+CREATE TABLE t1(dt DATETIME, t TIME);
+INSERT INTO t1 VALUES ('2007-12-31 23:59:59', '01:00:00'), ('2024-01-01 12:00:00', '02:30:00');
+SELECT ADDTIME(dt, t) AS result FROM t1;
+DROP TABLE t1;
+
+# WHERE clause
+CREATE TABLE t1(dt DATETIME, t TIME);
+INSERT INTO t1 VALUES ('2007-12-31 23:59:59', '01:00:00'), ('2024-01-01 12:00:00', '02:30:00');
+SELECT * FROM t1 WHERE ADDTIME(dt, t) > '2008-01-01 00:00:00';
+DROP TABLE t1;
+

@@ -1,0 +1,61 @@
+SELECT OCTET_LENGTH('text') AS result1;
+result1
+4
+SELECT OCTET_LENGTH('text') AS octet_length_basic;
+octet_length_basic
+4
+SELECT OCTET_LENGTH('hello') AS octet_length_hello;
+octet_length_hello
+5
+SELECT OCTET_LENGTH('') AS octet_length_empty;
+octet_length_empty
+0
+SELECT OCTET_LENGTH('text') AS octet_len, LENGTH('text') AS len;
+octet_len    len
+4    4
+SELECT OCTET_LENGTH(CAST('text' AS CHAR(10))) AS octet_length_char;
+octet_length_char
+4
+SELECT OCTET_LENGTH(CAST('text' AS VARCHAR(10))) AS octet_length_varchar;
+octet_length_varchar
+4
+SELECT OCTET_LENGTH(CAST('text' AS TEXT)) AS octet_length_text;
+octet_length_text
+4
+SELECT OCTET_LENGTH('你好') AS octet_length_unicode;
+octet_length_unicode
+6
+SELECT OCTET_LENGTH('Hello世界') AS octet_length_mixed;
+octet_length_mixed
+11
+SELECT OCTET_LENGTH(NULL) AS octet_length_null;
+octet_length_null
+null
+CREATE TABLE t1(s VARCHAR(100));
+INSERT INTO t1 VALUES ('hello'), ('world'), ('test'), ('');
+SELECT s, OCTET_LENGTH(s) AS octet_len FROM t1;
+s    octet_len
+hello    5
+world    5
+test    4
+    0
+DROP TABLE t1;
+CREATE TABLE t1(s VARCHAR(100));
+INSERT INTO t1 VALUES ('short'), ('medium length'), ('very long string');
+SELECT * FROM t1 WHERE OCTET_LENGTH(s) > 10;
+s
+medium length
+very long string
+DROP TABLE t1;
+SELECT OCTET_LENGTH(CONCAT('hello', 'world')) AS octet_length_concat;
+octet_length_concat
+10
+SELECT OCTET_LENGTH(SUBSTRING('hello world', 1, 5)) AS octet_length_substring;
+octet_length_substring
+5
+SELECT OCTET_LENGTH(CAST('binary' AS BLOB)) AS octet_length_blob;
+octet_length_blob
+6
+SELECT OCTET_LENGTH(REPEAT('a', 100)) AS octet_length_repeat;
+octet_length_repeat
+100

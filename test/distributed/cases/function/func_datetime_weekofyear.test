@@ -1,0 +1,51 @@
+# Basic test case from requirements
+SELECT WEEKOFYEAR('2008-02-20') AS result1;
+
+# Additional test cases
+# Basic usage
+SELECT WEEKOFYEAR('2008-02-20') AS week_of_year;
+SELECT WEEKOFYEAR('2008-01-01') AS first_week;
+SELECT WEEKOFYEAR('2008-12-31') AS last_week;
+
+# With DATETIME type
+SELECT WEEKOFYEAR('2008-02-20 10:30:45') AS week_from_datetime;
+SELECT WEEKOFYEAR('2008-01-01 00:00:00') AS first_week_datetime;
+SELECT WEEKOFYEAR('2008-12-31 23:59:59') AS last_week_datetime;
+
+# With TIMESTAMP type
+SELECT WEEKOFYEAR(TIMESTAMP('2008-02-20 10:30:45')) AS week_from_timestamp;
+
+# Edge cases - year boundaries
+SELECT WEEKOFYEAR('2003-12-30') AS week_53_2003;
+SELECT WEEKOFYEAR('2004-01-02') AS week_1_2004;
+SELECT WEEKOFYEAR('2004-12-31') AS week_53_2004;
+SELECT WEEKOFYEAR('2005-01-01') AS week_53_2005;
+
+# Table usage
+CREATE TABLE t1(d DATE);
+INSERT INTO t1 VALUES ('2008-02-20'), ('2008-01-01'), ('2008-12-31');
+SELECT d, WEEKOFYEAR(d) AS week FROM t1;
+DROP TABLE t1;
+
+# WHERE clause
+CREATE TABLE t1(d DATE);
+INSERT INTO t1 VALUES ('2008-01-01'), ('2008-06-15'), ('2008-12-31');
+SELECT * FROM t1 WHERE WEEKOFYEAR(d) > 20;
+DROP TABLE t1;
+
+# NULL handling
+SELECT WEEKOFYEAR(NULL) AS null_result;
+
+# Compare with WEEK function (should be equivalent to WEEK(date, 3))
+SELECT WEEKOFYEAR('2008-02-20') AS weekofyear_result, WEEK('2008-02-20', 3) AS week_mode3_result;
+
+# Different dates throughout the year
+SELECT WEEKOFYEAR('2008-01-15') AS jan_week;
+SELECT WEEKOFYEAR('2008-06-15') AS jun_week;
+SELECT WEEKOFYEAR('2008-09-15') AS sep_week;
+SELECT WEEKOFYEAR('2008-12-15') AS dec_week;
+
+# With expressions
+SELECT WEEKOFYEAR(CURRENT_DATE()) AS current_week;
+SELECT WEEKOFYEAR(DATE_ADD('2008-01-01', INTERVAL 7 DAY)) AS week_after;
+
