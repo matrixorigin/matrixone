@@ -315,8 +315,8 @@ func (bh *branchHashmap) flushPreparedEntries(shardBuckets [][]*hashEntry, chunk
 
 	block := &entryBlock{
 		deallocator: deallocator,
-		remaining:   len(chunk),
 	}
+	block.remaining.Store(int32(len(chunk)))
 	offset := 0
 	for i := range chunk {
 		prepared := &chunk[i]
@@ -1502,20 +1502,25 @@ type preparedEntry struct {
 
 type entryBlock struct {
 	deallocator malloc.Deallocator
-	remaining   int
+	remaining   atomic.Int32
 }
 
 func (eb *entryBlock) release() {
 	if eb == nil {
 		return
 	}
-	if eb.remaining <= 0 {
-		return
-	}
-	eb.remaining--
-	if eb.remaining == 0 && eb.deallocator != nil {
-		eb.deallocator.Deallocate(malloc.NoHints)
-		eb.deallocator = nil
+	for {
+		cur := eb.remaining.Load()
+		if cur <= 0 {
+			return
+		}
+		if eb.remaining.CompareAndSwap(cur, cur-1) {
+			if cur-1 == 0 && eb.deallocator != nil {
+				eb.deallocator.Deallocate(malloc.NoHints)
+				eb.deallocator = nil
+			}
+			return
+		}
 	}
 }
 
