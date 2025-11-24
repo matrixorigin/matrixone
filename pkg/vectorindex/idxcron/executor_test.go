@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -549,4 +550,61 @@ func TestExecutorRunFull(t *testing.T) {
 
 	err = exec.run(ctx)
 	require.NoError(t, err)
+}
+
+func TestIndexUpdateTaskInfoSaveStatusError(t *testing.T) {
+
+	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, catalog.System_Account)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	/*
+		mp := mpool.MustNewZero()
+
+		catalog.SetupDefines("")
+		cnEngine, cnClient, _ := testengine.New(ctx)
+		cnUUID := "a-b-c-d"
+	*/
+	tableid := uint64(1)
+	dbname := "test"
+	tablename := "test_orig_tbl"
+	indexname := "ivf_idx"
+
+	info := &IndexUpdateTaskInfo{
+		DbName:       dbname,
+		TableName:    tablename,
+		IndexName:    indexname,
+		Action:       Action_Ivfflat_Reindex,
+		AccountId:    catalog.System_Account,
+		TableId:      tableid,
+		Metadata:     nil,
+		LastUpdateAt: nil,
+	}
+
+	{
+		// runSavestatusSql
+		stub5 := gostub.Stub(&runSaveStatusSql, func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+			fmt.Println(sql)
+			return executor.Result{}, nil
+		})
+		defer stub5.Reset()
+
+		err := info.saveStatus(nil, true, moerr.NewInternalErrorNoCtx("fake error"))
+		require.NoError(t, err)
+
+	}
+
+	{
+		// runSavestatusSql
+		stub5 := gostub.Stub(&runSaveStatusSql, func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+			fmt.Println(sql)
+			return executor.Result{}, moerr.NewInternalErrorNoCtx("fake sql error")
+		})
+		defer stub5.Reset()
+
+		err := info.saveStatus(nil, true, nil)
+		require.Error(t, err)
+
+	}
+
 }
