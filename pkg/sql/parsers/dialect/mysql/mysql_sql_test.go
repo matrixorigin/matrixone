@@ -3527,10 +3527,12 @@ func TestLimitByRank(t *testing.T) {
 	ctx := context.TODO()
 	testCases := []struct {
 		input   string
+		output  string // expected output from tree.String
 		checkFn func(*testing.T, tree.Statement)
 	}{
 		{
-			input: "SELECT a, b, c FROM T LIMIT 20 BY RANK WITH OPTION 'fudge_factor=3.0', 'nprobe=10'",
+			input:  "SELECT a, b, c FROM T LIMIT 20 BY RANK WITH OPTION 'fudge_factor=3.0', 'nprobe=10'",
+			output: "select a, b, c from t limit 20 by rank with option 'fudge_factor=3.0', 'nprobe=10'",
 			checkFn: func(t *testing.T, stmt tree.Statement) {
 				selectStmt, ok := stmt.(*tree.Select)
 				require.True(t, ok)
@@ -3542,7 +3544,8 @@ func TestLimitByRank(t *testing.T) {
 			},
 		},
 		{
-			input: "SELECT * FROM T LIMIT 10 BY RANK WITH OPTION 'fudge_factor=2.5', 'mode=pre'",
+			input:  "SELECT * FROM T LIMIT 10 BY RANK WITH OPTION 'fudge_factor=2.5', 'mode=pre'",
+			output: "select * from t limit 10 by rank with option 'fudge_factor=2.5', 'mode=pre'",
 			checkFn: func(t *testing.T, stmt tree.Statement) {
 				selectStmt, ok := stmt.(*tree.Select)
 				require.True(t, ok)
@@ -3554,7 +3557,8 @@ func TestLimitByRank(t *testing.T) {
 			},
 		},
 		{
-			input: "SELECT * FROM T LIMIT 10 BY RANK WITH OPTION 'fudge_factor=1.0', 'mode=post'",
+			input:  "SELECT * FROM T LIMIT 10 BY RANK WITH OPTION 'fudge_factor=1.0', 'mode=post'",
+			output: "select * from t limit 10 by rank with option 'fudge_factor=1.0', 'mode=post'",
 			checkFn: func(t *testing.T, stmt tree.Statement) {
 				selectStmt, ok := stmt.(*tree.Select)
 				require.True(t, ok)
@@ -3566,7 +3570,8 @@ func TestLimitByRank(t *testing.T) {
 			},
 		},
 		{
-			input: "SELECT * FROM T LIMIT 5, 10 BY RANK WITH OPTION 'nprobe=20'",
+			input:  "SELECT * FROM T LIMIT 5, 10 BY RANK WITH OPTION 'nprobe=20'",
+			output: "select * from t limit 10 offset 5 by rank with option 'nprobe=20'",
 			checkFn: func(t *testing.T, stmt tree.Statement) {
 				selectStmt, ok := stmt.(*tree.Select)
 				require.True(t, ok)
@@ -3578,7 +3583,8 @@ func TestLimitByRank(t *testing.T) {
 			},
 		},
 		{
-			input: "SELECT * FROM T LIMIT 10 OFFSET 5 BY RANK WITH OPTION 'fudge_factor=4.0'",
+			input:  "SELECT * FROM T LIMIT 10 OFFSET 5 BY RANK WITH OPTION 'fudge_factor=4.0'",
+			output: "select * from t limit 10 offset 5 by rank with option 'fudge_factor=4.0'",
 			checkFn: func(t *testing.T, stmt tree.Statement) {
 				selectStmt, ok := stmt.(*tree.Select)
 				require.True(t, ok)
@@ -3597,6 +3603,11 @@ func TestLimitByRank(t *testing.T) {
 			require.NoError(t, err, "Failed to parse: %s", tc.input)
 			if tc.checkFn != nil {
 				tc.checkFn(t, ast)
+			}
+			// Test tree.String conversion
+			if tc.output != "" {
+				out := tree.String(ast, dialect.MYSQL)
+				require.Equal(t, tc.output, out, "tree.String output mismatch for input: %s", tc.input)
 			}
 		})
 	}

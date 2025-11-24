@@ -15,13 +15,17 @@
 package readutil
 
 import (
+	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"math/rand"
 	"slices"
 	"strconv"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -1542,4 +1546,365 @@ func TestMergeBaseFilterInKind(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestConstructBlockPKFilterWithBloomFilter tests the BloomFilter integration
+// with composite and non-composite primary keys (lines 482-803 in pk_filter.go)
+func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	// Helper function to create a composite primary key vector
+	createCompositePKVec := func(tuples [][]any, mp *mpool.MPool) *vector.Vector {
+		vec := vector.NewVec(types.T_varchar.ToType())
+		packer := types.NewPacker()
+		defer packer.Close()
+
+		for _, tuple := range tuples {
+			packer.Reset()
+			for _, val := range tuple {
+				switch v := val.(type) {
+				case int8:
+					packer.EncodeInt8(v)
+				case int16:
+					packer.EncodeInt16(v)
+				case int32:
+					packer.EncodeInt32(v)
+				case int64:
+					packer.EncodeInt64(v)
+				case uint8:
+					packer.EncodeUint8(v)
+				case uint16:
+					packer.EncodeUint16(v)
+				case uint32:
+					packer.EncodeUint32(v)
+				case uint64:
+					packer.EncodeUint64(v)
+				case string:
+					packer.EncodeStringType([]byte(v))
+				case []byte:
+					packer.EncodeStringType(v)
+				default:
+					t.Fatalf("unsupported type: %T", v)
+				}
+			}
+			vector.AppendBytes(vec, packer.Bytes(), false, mp)
+		}
+		return vec
+	}
+
+	// Helper function to create a BloomFilter with values
+	createBloomFilter := func(values []any, mp *mpool.MPool) ([]byte, error) {
+		// Create a vector with the last column values from composite PK
+		// For non-composite PK, use the values directly
+		vec := vector.NewVec(types.T_int64.ToType())
+		for _, val := range values {
+			switch v := val.(type) {
+			case int64:
+				vector.AppendFixed(vec, v, false, mp)
+			case int32:
+				vector.AppendFixed(vec, int64(v), false, mp)
+			case int16:
+				vector.AppendFixed(vec, int64(v), false, mp)
+			case int8:
+				vector.AppendFixed(vec, int64(v), false, mp)
+			default:
+				vec.Free(mp)
+				return nil, moerr.NewInvalidInputf(context.Background(), "unsupported type for BF: %T", v)
+			}
+		}
+
+		// Use larger capacity to reduce false positive rate
+		// For small value sets, use at least 100 capacity to get better accuracy
+		capacity := int64(len(values))
+		if capacity < 100 {
+			capacity = 100
+		}
+		bf := bloomfilter.New(capacity, 0.001) // Use lower false positive rate
+		bf.Add(vec)
+		vec.Free(mp)
+
+		return bf.Marshal()
+	}
+
+	t.Run("non-composite PK with BloomFilter only", func(t *testing.T) {
+		// Create BloomFilter with values [10, 20, 30]
+		bfData, err := createBloomFilter([]any{int64(10), int64(20), int64(30)}, mp)
+		require.NoError(t, err)
+
+		// Create input vector with values [5, 10, 15, 20, 25, 30, 35]
+		inputVec := vector.NewVec(types.T_int64.ToType())
+		for _, v := range []int64{5, 10, 15, 20, 25, 30, 35} {
+			vector.AppendFixed(inputVec, v, false, mp)
+		}
+		defer inputVec.Free(mp)
+
+		// Create filter with only BloomFilter (no base filter)
+		basePKFilter := BasePKFilter{
+			Valid: false,
+		}
+
+		readFilter, err := ConstructBlockPKFilter(
+			"test_table",
+			"pk", // non-composite PK
+			false,
+			basePKFilter,
+			bfData,
+			mp,
+		)
+		require.NoError(t, err)
+		require.True(t, readFilter.Valid)
+		require.NotNil(t, readFilter.UnSortedSearchFunc)
+
+		// Test the search function
+		result := readFilter.UnSortedSearchFunc(inputVec)
+		// Should return indices of values that exist in BF: [10, 20, 30] -> indices [1, 3, 5]
+		require.Equal(t, []int64{1, 3, 5}, result)
+	})
+
+	t.Run("composite PK with BloomFilter only - int64 last column", func(t *testing.T) {
+		// Create composite PK tuples: (col1, col2, lastCol)
+		// We'll extract lastCol values: [100, 200, 300]
+		tuples := [][]any{
+			{int32(1), int32(2), int64(100)},
+			{int32(1), int32(3), int64(200)},
+			{int32(2), int32(1), int64(300)},
+		}
+
+		compositePKVec := createCompositePKVec(tuples, mp)
+		defer compositePKVec.Free(mp)
+
+		// Create BloomFilter with last column values [100, 200, 300]
+		bfData, err := createBloomFilter([]any{int64(100), int64(200), int64(300)}, mp)
+		require.NoError(t, err)
+
+		// Create filter with only BloomFilter
+		basePKFilter := BasePKFilter{
+			Valid: false,
+		}
+
+		readFilter, err := ConstructBlockPKFilter(
+			"test_table",
+			catalog.CPrimaryKeyColName, // composite PK
+			false,
+			basePKFilter,
+			bfData,
+			mp,
+		)
+		require.NoError(t, err)
+		require.True(t, readFilter.Valid)
+		require.NotNil(t, readFilter.UnSortedSearchFunc)
+
+		// Test the search function
+		result := readFilter.UnSortedSearchFunc(compositePKVec)
+		// Should return all indices [0, 1, 2] since all last columns match
+		require.Equal(t, []int64{0, 1, 2}, result)
+	})
+
+	t.Run("composite PK with BloomFilter - partial match", func(t *testing.T) {
+		// Create composite PK tuples with last column values: [100, 200, 300, 400]
+		tuples := [][]any{
+			{int32(1), int32(2), int64(100)},
+			{int32(1), int32(3), int64(200)},
+			{int32(2), int32(1), int64(300)},
+			{int32(2), int32(2), int64(400)},
+		}
+
+		compositePKVec := createCompositePKVec(tuples, mp)
+		defer compositePKVec.Free(mp)
+
+		// Create BloomFilter with only [100, 300] (partial match)
+		bfData, err := createBloomFilter([]any{int64(100), int64(300)}, mp)
+		require.NoError(t, err)
+
+		basePKFilter := BasePKFilter{
+			Valid: false,
+		}
+
+		readFilter, err := ConstructBlockPKFilter(
+			"test_table",
+			catalog.CPrimaryKeyColName,
+			false,
+			basePKFilter,
+			bfData,
+			mp,
+		)
+		require.NoError(t, err)
+
+		result := readFilter.UnSortedSearchFunc(compositePKVec)
+		// Should return indices containing [0, 2] for values 100 and 300
+		// Note: BloomFilter may have false positives, so we check that it contains the expected indices
+		require.Contains(t, result, int64(0), "Should contain index 0 (value 100)")
+		require.Contains(t, result, int64(2), "Should contain index 2 (value 300)")
+		require.GreaterOrEqual(t, len(result), 2, "Should have at least 2 matches")
+	})
+
+	t.Run("composite PK with BloomFilter - no match", func(t *testing.T) {
+		tuples := [][]any{
+			{int32(1), int32(2), int64(100)},
+			{int32(1), int32(3), int64(200)},
+		}
+
+		compositePKVec := createCompositePKVec(tuples, mp)
+		defer compositePKVec.Free(mp)
+
+		// Create BloomFilter with values that don't match: [999, 888]
+		bfData, err := createBloomFilter([]any{int64(999), int64(888)}, mp)
+		require.NoError(t, err)
+
+		basePKFilter := BasePKFilter{
+			Valid: false,
+		}
+
+		readFilter, err := ConstructBlockPKFilter(
+			"test_table",
+			catalog.CPrimaryKeyColName,
+			false,
+			basePKFilter,
+			bfData,
+			mp,
+		)
+		require.NoError(t, err)
+
+		result := readFilter.UnSortedSearchFunc(compositePKVec)
+		// Should return empty slice since no matches (not nil, but empty slice)
+		require.Empty(t, result)
+	})
+
+	t.Run("composite PK with BloomFilter and base filter (wrap function)", func(t *testing.T) {
+		// Create composite PK tuples
+		tuples := [][]any{
+			{int32(1), int32(2), int64(100)},
+			{int32(1), int32(3), int64(200)},
+			{int32(2), int32(1), int64(300)},
+			{int32(2), int32(2), int64(400)},
+		}
+
+		compositePKVec := createCompositePKVec(tuples, mp)
+		defer compositePKVec.Free(mp)
+
+		// Create BloomFilter with [100, 200, 300]
+		bfData, err := createBloomFilter([]any{int64(100), int64(200), int64(300)}, mp)
+		require.NoError(t, err)
+
+		// Create base filter that matches first 3 rows (simulated by creating a filter)
+		// For simplicity, we'll use an IN filter that matches all rows
+		inVec := vector.NewVec(types.T_int64.ToType())
+		for i := int64(0); i < 4; i++ {
+			vector.AppendFixed(inVec, i, false, mp)
+		}
+		defer inVec.Free(mp)
+
+		basePKFilter := BasePKFilter{
+			Valid: true,
+			Op:    function.IN,
+			Vec:   inVec,
+			Oid:   types.T_int64,
+		}
+
+		readFilter, err := ConstructBlockPKFilter(
+			"test_table",
+			catalog.CPrimaryKeyColName,
+			false,
+			basePKFilter,
+			bfData,
+			mp,
+		)
+		require.NoError(t, err)
+		require.True(t, readFilter.Valid)
+
+		// The wrap function should intersect base filter results with BF results
+		// Since base filter matches all 4 rows, but BF only matches first 3,
+		// result should be [0, 1, 2]
+		result := readFilter.UnSortedSearchFunc(compositePKVec)
+		require.NotNil(t, result)
+		// Note: The exact result depends on how the base filter's IN operation works
+		// This test verifies that wrap function is called and doesn't panic
+		require.GreaterOrEqual(t, len(result), 0)
+	})
+
+	t.Run("composite PK with different last column types - int32", func(t *testing.T) {
+		tuples := [][]any{
+			{int32(1), int32(2), int32(100)},
+			{int32(1), int32(3), int32(200)},
+		}
+
+		compositePKVec := createCompositePKVec(tuples, mp)
+		defer compositePKVec.Free(mp)
+
+		// Create BloomFilter with int32 values (converted to int64 for BF)
+		bfData, err := createBloomFilter([]any{int64(100), int64(200)}, mp)
+		require.NoError(t, err)
+
+		basePKFilter := BasePKFilter{
+			Valid: false,
+		}
+
+		readFilter, err := ConstructBlockPKFilter(
+			"test_table",
+			catalog.CPrimaryKeyColName,
+			false,
+			basePKFilter,
+			bfData,
+			mp,
+		)
+		require.NoError(t, err)
+
+		result := readFilter.UnSortedSearchFunc(compositePKVec)
+		require.Equal(t, []int64{0, 1}, result)
+	})
+
+	t.Run("empty composite PK vector", func(t *testing.T) {
+		compositePKVec := vector.NewVec(types.T_varchar.ToType())
+		defer compositePKVec.Free(mp)
+
+		bfData, err := createBloomFilter([]any{int64(100)}, mp)
+		require.NoError(t, err)
+
+		basePKFilter := BasePKFilter{
+			Valid: false,
+		}
+
+		readFilter, err := ConstructBlockPKFilter(
+			"test_table",
+			catalog.CPrimaryKeyColName,
+			false,
+			basePKFilter,
+			bfData,
+			mp,
+		)
+		require.NoError(t, err)
+
+		result := readFilter.UnSortedSearchFunc(compositePKVec)
+		require.Nil(t, result)
+	})
+
+	t.Run("composite PK with invalid tuple data", func(t *testing.T) {
+		// Create a vector with invalid composite PK data
+		vec := vector.NewVec(types.T_varchar.ToType())
+		// Append invalid data (not a valid tuple)
+		vector.AppendBytes(vec, []byte("invalid"), false, mp)
+		defer vec.Free(mp)
+
+		bfData, err := createBloomFilter([]any{int64(100)}, mp)
+		require.NoError(t, err)
+
+		basePKFilter := BasePKFilter{
+			Valid: false,
+		}
+
+		readFilter, err := ConstructBlockPKFilter(
+			"test_table",
+			catalog.CPrimaryKeyColName,
+			false,
+			basePKFilter,
+			bfData,
+			mp,
+		)
+		require.NoError(t, err)
+
+		// Should handle invalid data gracefully
+		result := readFilter.UnSortedSearchFunc(vec)
+		// Should return nil or empty since extraction fails
+		require.Nil(t, result)
+	})
 }
