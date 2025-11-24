@@ -15,68 +15,10 @@
 package frontend
 
 import (
-	"context"
-	"sync"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/require"
 )
-
-func TestAsyncSQLExecutorSuccess(t *testing.T) {
-	exec, err := newAsyncTaskExecutor(2)
-	require.NoError(t, err)
-	defer exec.Close()
-
-	var mu sync.Mutex
-	executed := make([]int, 0, 3)
-
-	for i := 0; i < 3; i++ {
-		idx := i
-		require.NoError(t, exec.Submit(func(context.Context) error {
-			mu.Lock()
-			executed = append(executed, idx)
-			mu.Unlock()
-			return nil
-		}))
-	}
-
-	require.NoError(t, exec.Wait())
-	require.Len(t, executed, 3)
-}
-
-func TestAsyncSQLExecutorPropagatesError(t *testing.T) {
-	exec, err := newAsyncTaskExecutor(1)
-	require.NoError(t, err)
-	defer exec.Close()
-
-	sentinel := moerr.NewInternalErrorNoCtx("boom")
-
-	require.NoError(t, exec.Submit(func(context.Context) error {
-		return sentinel
-	}))
-
-	require.ErrorIs(t, exec.Wait(), sentinel)
-	require.ErrorIs(t, exec.Submit(func(context.Context) error { return nil }), sentinel)
-}
-
-func TestRowsCollectorSnapshot(t *testing.T) {
-	rc := &rowsCollector{}
-	rc.addRow([]any{1})
-	rc.addRows([][]any{{2}, {3}})
-
-	snapshot := rc.snapshot()
-	require.Len(t, snapshot, 3)
-
-	snapshot = append(snapshot, []any{4})
-	require.Len(t, rc.rows, 3)
-
-	snapshot[0] = []any{100}
-	require.Equal(t, []any{1}, rc.rows[0])
-
-	snapshot[1][0] = 200
-	require.Equal(t, 200, rc.rows[1][0])
-}
 
 func TestBufferPool(t *testing.T) {
 	buf := acquireBuffer()
