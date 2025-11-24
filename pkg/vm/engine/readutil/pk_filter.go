@@ -651,7 +651,8 @@ func ConstructBlockPKFilter(
 			sels = make([]int64, 0, len(validIndices))
 		}
 		bf.Test(tempVec, func(exist bool, idx int) {
-			if exist && idx < len(validIndices) {
+			// Add strict boundary check to prevent index out of range
+			if exist && idx >= 0 && idx < len(validIndices) {
 				sels = append(sels, int64(validIndices[idx]))
 			}
 		})
@@ -696,7 +697,8 @@ func ConstructBlockPKFilter(
 				sels = make([]int64, 0, len(validIndices))
 			}
 			bf.Test(tempVec, func(exist bool, idx int) {
-				if exist && idx < len(validIndices) {
+				// Add strict boundary check to prevent index out of range
+				if exist && idx >= 0 && idx < len(validIndices) {
 					sels = append(sels, int64(validIndices[idx]))
 				}
 			})
@@ -751,14 +753,20 @@ func ConstructBlockPKFilter(
 					rowIndices[i] = int(off)
 				}
 				bfMatched := applyBFToCompositePK(vec, rowIndices)
-				// Reuse exists map
+				// Reuse exists map - use more efficient reallocation for large maps
 				if reusableExists == nil || len(bfMatched) > len(reusableExists)*2 {
 					// If map is too small, reallocate
 					reusableExists = make(map[int]bool, len(bfMatched))
-				} else {
-					// Clear map
-					for k := range reusableExists {
-						delete(reusableExists, k)
+				} else if len(reusableExists) > 0 {
+					// For small maps, clear by reallocating (more efficient than delete loop)
+					if len(reusableExists) < 100 {
+						// For small maps, use delete loop
+						for k := range reusableExists {
+							delete(reusableExists, k)
+						}
+					} else {
+						// For larger maps, reallocate is more efficient
+						reusableExists = make(map[int]bool, len(bfMatched))
 					}
 				}
 				exists = reusableExists
@@ -768,17 +776,24 @@ func ConstructBlockPKFilter(
 				}
 			} else {
 				// Non-composite primary key: test directly
-				// Reuse exists map
+				// Reuse exists map - use more efficient reallocation for large maps
 				if reusableExists == nil || rowCount > len(reusableExists)*2 {
 					reusableExists = make(map[int]bool, rowCount)
-				} else {
-					// Clear map
-					for k := range reusableExists {
-						delete(reusableExists, k)
+				} else if len(reusableExists) > 0 {
+					// For small maps, clear by reallocating (more efficient than delete loop)
+					if len(reusableExists) < 100 {
+						// For small maps, use delete loop
+						for k := range reusableExists {
+							delete(reusableExists, k)
+						}
+					} else {
+						// For larger maps, reallocate is more efficient
+						reusableExists = make(map[int]bool, rowCount)
 					}
 				}
 				exists = reusableExists
 				bf.Test(vec, func(exist bool, row int) {
+					// Add strict boundary check to prevent index out of range
 					if row >= 0 && row < rowCount {
 						exists[row] = exist
 						if exist {
@@ -801,6 +816,20 @@ func ConstructBlockPKFilter(
 	readFilter.SortedSearchFunc = wrap(sortedSearchFunc)
 	readFilter.UnSortedSearchFunc = wrap(unSortedSearchFunc)
 	readFilter.Valid = true
+	// Set cleanup function to release reusableTempVec and BloomFilter when filter is no longer needed
+	readFilter.Cleanup = func() {
+		// Release reusableTempVec
+		if reusableTempVec != nil {
+			reusableTempVec.Free(mp)
+			reusableTempVec = nil
+		}
+		// Release BloomFilter memory
+		bf.Clean()
+		// Clear reusableExists map by reallocating for better memory efficiency
+		if reusableExists != nil {
+			reusableExists = nil
+		}
+	}
 	return readFilter, nil
 }
 
