@@ -1,0 +1,20 @@
+# JSON_ARRAYAGG and JSON_OBJECTAGG examples from MySQL 8.0 docs
+CREATE TABLE t3(o_id INT, attribute VARCHAR(20), value VARCHAR(20));
+INSERT INTO t3 VALUES
+(2,'color','red'),
+(2,'fabric','silk'),
+(3,'color','green'),
+(3,'shape','square');
+SELECT o_id, JSON_ARRAYAGG(attribute) AS attributes FROM t3 GROUP BY o_id ORDER BY o_id;
+SELECT o_id, JSON_OBJECTAGG(attribute, value) AS details FROM t3 GROUP BY o_id ORDER BY o_id;
+
+# Duplicate key handling: last duplicate key wins
+CREATE TABLE t_dup(c VARCHAR(10), i INT);
+INSERT INTO t_dup VALUES ('key',3),('key',4),('key',5);
+SELECT JSON_OBJECTAGG(c,i) AS obj1 FROM t_dup;
+DELETE FROM t_dup;
+INSERT INTO t_dup VALUES ('key',3),('key',5),('key',4);
+SELECT JSON_OBJECTAGG(c,i) AS obj2 FROM t_dup;
+DROP TABLE t_dup;
+
+DROP TABLE t3;
