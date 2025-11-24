@@ -125,6 +125,13 @@ type checkpointCleaner struct {
 		metaFiles    map[string]ioutil.TSRangeFile
 		snapshotMeta *logtail.SnapshotMeta
 		replayDone   bool
+		// backupProtectionSnapshot is a snapshot of backup protection state at the start of GC
+		// This ensures GC consistency: once GC starts, it uses this snapshot and ignores
+		// any changes to backup protection during GC execution
+		backupProtectionSnapshot struct {
+			protectedTS types.TS
+			isActive    bool
+		}
 	}
 
 	// iscpTablesFunc is an optional function to provide the ISCP tables for testing.
@@ -441,13 +448,12 @@ func (c *checkpointCleaner) Replay(inputCtx context.Context) (err error) {
 			)
 			return
 		}
-		// Get backup protection TS if active
-		c.backupProtection.RLock()
+		// Get backup protection TS from snapshot (taken at GC start)
 		var extraTS types.TS
-		if c.backupProtection.isActive && time.Since(c.backupProtection.lastUpdateTime) <= 20*time.Minute {
-			extraTS = c.backupProtection.protectedTS
+		protectedTS, isActive := c.getBackupProtectionSnapshot()
+		if isActive {
+			extraTS = protectedTS
 		}
-		c.backupProtection.RUnlock()
 
 		snapshots, err = c.mutation.snapshotMeta.GetSnapshot(c.ctx, c.sid, c.fs, c.mp, extraTS)
 		if err != nil {
@@ -578,17 +584,16 @@ func (c *checkpointCleaner) deleteStaleSnapshotFilesLocked() error {
 		newMaxTS types.TS,
 		err error,
 	) {
-		// Check backup protection before deleting
-		c.backupProtection.RLock()
-		if c.backupProtection.isActive && time.Since(c.backupProtection.lastUpdateTime) <= 20*time.Minute {
+		// Check backup protection before deleting (use snapshot taken at GC start)
+		protectedTS, isActive := c.getBackupProtectionSnapshot()
+		if isActive {
 			// Protect files whose end timestamp is <= protected timestamp
-			if thisTS.LE(&c.backupProtection.protectedTS) {
-				c.backupProtection.RUnlock()
+			if thisTS.LE(&protectedTS) {
 				logutil.Info(
 					"GC-Backup-Protection-Block-Delete-Snapshot",
 					zap.String("file", thisFile),
 					zap.String("file-ts", thisTS.ToString()),
-					zap.String("protected-ts", c.backupProtection.protectedTS.ToString()),
+					zap.String("protected-ts", protectedTS.ToString()),
 				)
 				// Skip deletion if protected
 				if maxFile == "" {
@@ -601,7 +606,6 @@ func (c *checkpointCleaner) deleteStaleSnapshotFilesLocked() error {
 				return
 			}
 		}
-		c.backupProtection.RUnlock()
 
 		if maxFile == "" {
 			newMaxFile = thisFile
@@ -617,22 +621,21 @@ func (c *checkpointCleaner) deleteStaleSnapshotFilesLocked() error {
 		if maxTS.LT(thisTS) {
 			newMaxFile = thisFile
 			newMaxTS = *thisTS
-			// Check backup protection before deleting maxFile
-			c.backupProtection.RLock()
+			// Check backup protection before deleting maxFile (use snapshot taken at GC start)
 			shouldDelete := true
-			if c.backupProtection.isActive && time.Since(c.backupProtection.lastUpdateTime) <= 20*time.Minute {
+			protectedTS, isActive := c.getBackupProtectionSnapshot()
+			if isActive {
 				// Protect files whose end timestamp is <= protected timestamp
-				if maxTS.LE(&c.backupProtection.protectedTS) {
+				if maxTS.LE(&protectedTS) {
 					shouldDelete = false
 					logutil.Info(
 						"GC-Backup-Protection-Block-Delete-Snapshot",
 						zap.String("file", maxFile),
 						zap.String("file-ts", maxTS.ToString()),
-						zap.String("protected-ts", c.backupProtection.protectedTS.ToString()),
+						zap.String("protected-ts", protectedTS.ToString()),
 					)
 				}
 			}
-			c.backupProtection.RUnlock()
 			if shouldDelete {
 				if err = c.fs.Delete(c.ctx, ioutil.MakeGCFullName(maxFile)); err != nil {
 					logutil.Error(
@@ -907,16 +910,18 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 
 	// Filter out checkpoints that are protected by backup
 	c.backupProtection.RLock()
-	if c.backupProtection.isActive && time.Since(c.backupProtection.lastUpdateTime) <= 20*time.Minute {
+	// Use snapshot taken at GC start to ensure consistency
+	protectedTS, isActive := c.getBackupProtectionSnapshot()
+	if isActive {
 		filtered := make([]*checkpoint.CheckpointEntry, 0, len(toMergeCheckpoint))
 		for _, ckp := range toMergeCheckpoint {
 			endTS := ckp.GetEnd()
 			// Protect checkpoints whose end timestamp is <= protected timestamp
-			if endTS.LE(&c.backupProtection.protectedTS) {
+			if endTS.LE(&protectedTS) {
 				logutil.Info(
 					"GC-Backup-Protection-Block-Merge-Checkpoint",
 					zap.String("checkpoint-end-ts", endTS.ToString()),
-					zap.String("protected-ts", c.backupProtection.protectedTS.ToString()),
+					zap.String("protected-ts", protectedTS.ToString()),
 					zap.String("checkpoint", ckp.String()),
 				)
 				continue
@@ -925,7 +930,6 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 		}
 		toMergeCheckpoint = filtered
 	}
-	c.backupProtection.RUnlock()
 
 	if len(toMergeCheckpoint) == 0 {
 		return
@@ -969,7 +973,9 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 
 	// Filter out protected files from deleteFiles
 	c.backupProtection.RLock()
-	if c.backupProtection.isActive && time.Since(c.backupProtection.lastUpdateTime) <= 20*time.Minute {
+	// Use snapshot taken at GC start to ensure consistency
+	protectedTS, isActive = c.getBackupProtectionSnapshot()
+	if isActive {
 		filteredDeleteFiles := make([]string, 0, len(deleteFiles))
 		for _, deleteFile := range deleteFiles {
 			// Try to decode the file name to get its timestamp
@@ -977,12 +983,12 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 			if decodedFile.IsMetadataFile() || decodedFile.IsCompactExt() {
 				// Check if this checkpoint file should be protected
 				endTS := decodedFile.GetEnd()
-				if endTS.LE(&c.backupProtection.protectedTS) {
+				if endTS.LE(&protectedTS) {
 					logutil.Info(
 						"GC-Backup-Protection-Block-Delete-File",
 						zap.String("file", deleteFile),
 						zap.String("file-end-ts", endTS.ToString()),
-						zap.String("protected-ts", c.backupProtection.protectedTS.ToString()),
+						zap.String("protected-ts", protectedTS.ToString()),
 					)
 					continue
 				}
@@ -991,7 +997,6 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 		}
 		deleteFiles = filteredDeleteFiles
 	}
-	c.backupProtection.RUnlock()
 	logtail.FillUsageBatOfCompacted(
 		ctx,
 		c.checkpointCli.GetCatalog().GetUsageMemo().(*logtail.TNUsageMemo),
@@ -1039,19 +1044,20 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 			// Check backup protection before deleting checkpoint files
 			c.backupProtection.RLock()
 			shouldDelete := true
-			if c.backupProtection.isActive && time.Since(c.backupProtection.lastUpdateTime) <= 20*time.Minute {
+			// Use snapshot taken at GC start to ensure consistency
+			protectedTS, isActive := c.getBackupProtectionSnapshot()
+			if isActive {
 				// Protect checkpoints whose end timestamp is <= protected timestamp
-				if end.LE(&c.backupProtection.protectedTS) {
+				if end.LE(&protectedTS) {
 					shouldDelete = false
 					logutil.Info(
 						"GC-Backup-Protection-Block-Delete-Checkpoint",
 						zap.String("gckp", ckp.String()),
 						zap.String("checkpoint-end-ts", end.ToString()),
-						zap.String("protected-ts", c.backupProtection.protectedTS.ToString()),
+						zap.String("protected-ts", protectedTS.ToString()),
 					)
 				}
 			}
-			c.backupProtection.RUnlock()
 
 			if !shouldDelete {
 				continue
@@ -1219,11 +1225,12 @@ func (c *checkpointCleaner) tryGCAgainstGCKPLocked(
 
 	// Get backup protection TS if active
 	c.backupProtection.RLock()
+	// Use snapshot taken at GC start to ensure consistency
 	var extraTS types.TS
-	if c.backupProtection.isActive && time.Since(c.backupProtection.lastUpdateTime) <= 20*time.Minute {
-		extraTS = c.backupProtection.protectedTS
+	protectedTS, isActive := c.getBackupProtectionSnapshot()
+	if isActive {
+		extraTS = protectedTS
 	}
-	c.backupProtection.RUnlock()
 
 	snapshots, err = c.mutation.snapshotMeta.GetSnapshot(ctx, c.sid, c.fs, c.mp, extraTS)
 	if err != nil {
@@ -1637,7 +1644,13 @@ func (c *checkpointCleaner) Process(
 	}
 	now := time.Now()
 
-	// Check if backup protection has expired and remove it if needed
+	// Start mutation task first to acquire the lock
+	// This ensures backup protection operations wait for GC to complete
+	c.StartMutationTask("gc-process")
+	defer c.StopMutationTask()
+
+	// Check backup protection state and create a snapshot at the start of GC
+	// This snapshot will be used throughout the GC process to ensure consistency
 	c.backupProtection.Lock()
 	if c.backupProtection.isActive && time.Since(c.backupProtection.lastUpdateTime) > 20*time.Minute {
 		logutil.Warn(
@@ -1647,10 +1660,10 @@ func (c *checkpointCleaner) Process(
 		c.backupProtection.isActive = false
 		c.backupProtection.protectedTS = types.TS{}
 	}
+	// Create snapshot of backup protection state
+	c.mutation.backupProtectionSnapshot.protectedTS = c.backupProtection.protectedTS
+	c.mutation.backupProtectionSnapshot.isActive = c.backupProtection.isActive
 	c.backupProtection.Unlock()
-
-	c.StartMutationTask("gc-process")
-	defer c.StopMutationTask()
 
 	startScanWaterMark := c.GetScanWaterMark()
 	startGCWaterMark := c.GetGCWaterMark()
@@ -1856,6 +1869,8 @@ func (c *checkpointCleaner) RemoveChecker(key string) error {
 
 // SetBackupProtection sets the backup protection timestamp
 // protectedTS is the timestamp that should be protected from GC
+// This method acquires the mutation lock to ensure GC consistency:
+// it waits for any ongoing GC to complete before setting protection
 func (c *checkpointCleaner) SetBackupProtection(protectedTS types.TS) {
 	c.backupProtection.Lock()
 	defer c.backupProtection.Unlock()
@@ -1870,6 +1885,8 @@ func (c *checkpointCleaner) SetBackupProtection(protectedTS types.TS) {
 }
 
 // UpdateBackupProtection updates the backup protection timestamp
+// This method acquires the mutation lock to ensure GC consistency:
+// it waits for any ongoing GC to complete before updating protection
 func (c *checkpointCleaner) UpdateBackupProtection(protectedTS types.TS) {
 	c.backupProtection.Lock()
 	defer c.backupProtection.Unlock()
@@ -1902,24 +1919,24 @@ func (c *checkpointCleaner) GetBackupProtection() (protectedTS types.TS, lastUpd
 	return c.backupProtection.protectedTS, c.backupProtection.lastUpdateTime, c.backupProtection.isActive
 }
 
+// getBackupProtectionSnapshot returns the backup protection snapshot taken at the start of GC
+// This ensures GC consistency: once GC starts, it uses this snapshot and ignores
+// any changes to backup protection during GC execution
+func (c *checkpointCleaner) getBackupProtectionSnapshot() (protectedTS types.TS, isActive bool) {
+	// Use snapshot from mutation (taken at GC start)
+	// No lock needed as mutation is already locked during GC execution
+	return c.mutation.backupProtectionSnapshot.protectedTS, c.mutation.backupProtectionSnapshot.isActive
+}
+
 // checkBackupProtection checks if the checkpoint should be protected from GC
 // Returns true if the checkpoint can be GC'ed, false if it should be protected
+// This function uses the snapshot taken at GC start to ensure consistency
 func (c *checkpointCleaner) checkBackupProtection(item any) bool {
-	c.backupProtection.RLock()
-	defer c.backupProtection.RUnlock()
+	// Use snapshot from mutation (taken at GC start)
+	protectedTS, isActive := c.getBackupProtectionSnapshot()
 
 	// If backup protection is not active, allow GC
-	if !c.backupProtection.isActive {
-		return true
-	}
-
-	// Check if protection has expired (20 minutes without update)
-	if time.Since(c.backupProtection.lastUpdateTime) > 20*time.Minute {
-		logutil.Warn(
-			"GC-Backup-Protection-Expired",
-			zap.Duration("time-since-update", time.Since(c.backupProtection.lastUpdateTime)),
-		)
-		// Protection expired, allow GC but don't remove it here (will be removed in Process)
+	if !isActive {
 		return true
 	}
 
@@ -1934,11 +1951,11 @@ func (c *checkpointCleaner) checkBackupProtection(item any) bool {
 	// We protect checkpoints whose end timestamp is <= protected timestamp
 	// This means we protect all checkpoints up to and including the backup time point
 	endTS := ckp.GetEnd()
-	if endTS.LE(&c.backupProtection.protectedTS) {
+	if endTS.LE(&protectedTS) {
 		logutil.Info(
 			"GC-Backup-Protection-Block-Checkpoint",
 			zap.String("checkpoint-end-ts", endTS.ToString()),
-			zap.String("protected-ts", c.backupProtection.protectedTS.ToString()),
+			zap.String("protected-ts", protectedTS.ToString()),
 			zap.String("checkpoint", ckp.String()),
 		)
 		return false
@@ -2088,29 +2105,38 @@ func (c *checkpointCleaner) GetSnapshots() (*logtail.SnapshotInfo, error) {
 	c.mutation.Lock()
 	defer c.mutation.Unlock()
 
-	// Get backup protection TS if active
-	c.backupProtection.RLock()
+	// Use snapshot if GC is running, otherwise use current protection state
 	var extraTS types.TS
-	if c.backupProtection.isActive && time.Since(c.backupProtection.lastUpdateTime) <= 20*time.Minute {
-		extraTS = c.backupProtection.protectedTS
+	// Check if we're in a GC task (mutation task is active)
+	if c.mutation.taskState.name != "" {
+		// GC is running, use snapshot
+		protectedTS, isActive := c.getBackupProtectionSnapshot()
+		if isActive {
+			extraTS = protectedTS
+		}
+	} else {
+		// Not in GC, use current protection state
+		c.backupProtection.RLock()
+		if c.backupProtection.isActive && time.Since(c.backupProtection.lastUpdateTime) <= 20*time.Minute {
+			extraTS = c.backupProtection.protectedTS
+		}
+		c.backupProtection.RUnlock()
 	}
-	c.backupProtection.RUnlock()
 
 	return c.mutation.snapshotMeta.GetSnapshot(c.ctx, c.sid, c.fs, c.mp, extraTS)
 }
 
 func (c *checkpointCleaner) GetSnapshotsLocked() (*logtail.SnapshotInfo, error) {
-	// Check if backup protection is active and add protected TS as extra cluster snapshot
-	c.backupProtection.RLock()
+	// Use snapshot taken at GC start to ensure consistency
 	var extraTS types.TS
-	if c.backupProtection.isActive && time.Since(c.backupProtection.lastUpdateTime) <= 20*time.Minute {
-		extraTS = c.backupProtection.protectedTS
+	protectedTS, isActive := c.getBackupProtectionSnapshot()
+	if isActive {
+		extraTS = protectedTS
 		logutil.Info(
 			"GC-Backup-Protection-Add-Fake-Snapshot",
 			zap.String("protected-ts", extraTS.ToString()),
 		)
 	}
-	c.backupProtection.RUnlock()
 
 	// Pass the protected TS to GetSnapshot, which will add it to cluster snapshots
 	if !extraTS.IsEmpty() {
