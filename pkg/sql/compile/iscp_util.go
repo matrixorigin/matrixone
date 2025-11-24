@@ -242,7 +242,7 @@ func getIvfflatMetadata(c *Compile) (metadata []byte, frontend bool, err error) 
 	if err != nil {
 		return
 	}
-	kmeansMaxIteration := int64(10)
+	kmeansMaxIteration := int64(20)
 	if val != nil {
 		kmeansMaxIteration = val.(int64)
 	}
