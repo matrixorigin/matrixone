@@ -325,6 +325,11 @@ func SetInsertValueTimeStamp(proc *process.Process, numVal *tree.NumVal, typ *ty
 			}
 			// Validate TIMESTAMP minimum value: '1970-01-01 00:00:01.000000' (MySQL behavior)
 			// Note: We don't enforce maximum value limit to allow values beyond MySQL's 2038 limit
+			// MySQL behavior: TIMESTAMP column valid range is always UTC [1970-01-01 00:00:01, 2038-01-19 03:14:07]
+			// The input local time is converted to UTC using the current time_zone, then checked against the range.
+			// The value 'res' is already the UTC timestamp after conversion from the session timezone.
+			// So we directly compare 'res' with TimestampMinValue (which is also in UTC).
+			// This matches MySQL: timezones further west (smaller UTC offset) allow earlier local dates.
 			if res < types.TimestampMinValue {
 				// MySQL error format: "Incorrect datetime value: 'value' for column 'column' at row 1"
 				// Use row 1 as default since we don't have row number in this context
