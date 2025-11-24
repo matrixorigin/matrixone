@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -113,8 +114,9 @@ func newFTTestCase(t *testing.T, m *mpool.MPool, attrs []string, algo fulltext.F
 	return ret
 }
 
-func fake_runSql(proc *process.Process, sql string) (executor.Result, error) {
+func fake_runSql(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
 	// give count
+	proc := sqlproc.Proc
 	return executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeCountBatchFT(proc)}}, nil
 }
 

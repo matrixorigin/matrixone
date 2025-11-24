@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -96,8 +97,8 @@ func newIvfSearchTestCase(t *testing.T, m *mpool.MPool, attrs []string, param st
 	return ret
 }
 
-func mock_ivf_runSql(proc *process.Process, sql string) (executor.Result, error) {
-
+func mock_ivf_runSql(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+	proc := sqlproc.Proc
 	return executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{}}, nil
 }
 
