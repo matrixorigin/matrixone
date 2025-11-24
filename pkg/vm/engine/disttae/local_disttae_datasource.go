@@ -200,15 +200,43 @@ func (ls *LocalDisttaeDataSource) getBlockZMs() {
 	// not the table column position. We need to find the column by name.
 	var orderByColIDX int = -1
 	orderByColName := strings.ToLower(orderByCol.Col.Name)
-	// Extract column name from "table.column" format
+
+	// Extract column name from qualified name format (e.g., "db.table.column" -> "column")
+	// Use LastIndex to handle cases where column name itself might contain dots
 	if idx := strings.LastIndex(orderByColName, "."); idx >= 0 {
 		orderByColName = orderByColName[idx+1:]
 	}
 
+	// Validate RelPos: In JOIN scenarios, RelPos indicates which table the column belongs to.
+	// For LocalDisttaeDataSource, we typically only handle one table (RelPos=0 or -1).
+	// If RelPos > 0, it might indicate the column is from a joined table, which we can't handle here.
+	// However, in practice, ORDER BY columns from joined tables might still be processed,
+	// so we'll proceed but log a warning if RelPos seems inconsistent.
+	relPos := orderByCol.Col.RelPos
+	if relPos > 0 {
+		// This might be a column from a joined table, but we'll still try to find it
+		// in the current table definition as the column might have been projected.
+		logutil.Debug("getBlockZMs: ORDER BY column has RelPos > 0, might be from joined table",
+			zap.String("column", orderByCol.Col.Name),
+			zap.Int32("RelPos", relPos))
+	}
+
 	// First try to use Name2ColIndex if available (O(1) lookup)
+	// Note: Name2ColIndex keys should be lowercase according to proto definition
 	if def.Name2ColIndex != nil {
 		if colIdx, ok := def.Name2ColIndex[orderByColName]; ok {
-			orderByColIDX = int(def.Cols[colIdx].Seqnum)
+			if int(colIdx) < len(def.Cols) {
+				// Verify the found column's type matches the ORDER BY expression type
+				foundCol := def.Cols[colIdx]
+				if foundCol.Typ.Id == ls.OrderBy[0].Expr.Typ.Id {
+					orderByColIDX = int(foundCol.Seqnum)
+				} else {
+					logutil.Warn("getBlockZMs: type mismatch in Name2ColIndex lookup",
+						zap.String("column", orderByColName),
+						zap.Int32("foundType", foundCol.Typ.Id),
+						zap.Int32("expectedType", ls.OrderBy[0].Expr.Typ.Id))
+				}
+			}
 		}
 	}
 
@@ -216,20 +244,54 @@ func (ls *LocalDisttaeDataSource) getBlockZMs() {
 	if orderByColIDX == -1 {
 		for _, col := range def.Cols {
 			if strings.ToLower(col.Name) == orderByColName {
-				orderByColIDX = int(col.Seqnum)
-				break
+				// Verify type match before using this column
+				if col.Typ.Id == ls.OrderBy[0].Expr.Typ.Id {
+					orderByColIDX = int(col.Seqnum)
+					break
+				} else {
+					logutil.Debug("getBlockZMs: found column by name but type mismatch, continuing search",
+						zap.String("column", orderByColName),
+						zap.Int32("foundType", col.Typ.Id),
+						zap.Int32("expectedType", ls.OrderBy[0].Expr.Typ.Id))
+				}
 			}
 		}
 	}
 
-	// Fallback to ColPos if name matching fails (for backward compatibility)
+	// Fallback to ColPos only if:
+	// 1. Name lookup completely failed
+	// 2. RelPos is 0 or -1 (indicating it's from the current table, not a joined table)
+	// 3. ColPos is within valid bounds
+	// This fallback is risky in JOIN scenarios, so we add extra validation
 	if orderByColIDX == -1 {
-		if int(orderByCol.Col.ColPos) < len(def.Cols) {
-			orderByColIDX = int(def.Cols[int(orderByCol.Col.ColPos)].Seqnum)
-		} else {
-			panic(fmt.Sprintf("getBlockZMs: cannot find column for ORDER BY: name=%s, ColPos=%d, tableColsCount=%d",
-				orderByCol.Col.Name, orderByCol.Col.ColPos, len(def.Cols)))
+		if relPos <= 0 && int(orderByCol.Col.ColPos) < len(def.Cols) {
+			fallbackCol := def.Cols[int(orderByCol.Col.ColPos)]
+			// Verify type match before using fallback
+			if fallbackCol.Typ.Id == ls.OrderBy[0].Expr.Typ.Id {
+				orderByColIDX = int(fallbackCol.Seqnum)
+				logutil.Debug("getBlockZMs: using ColPos fallback",
+					zap.String("column", orderByCol.Col.Name),
+					zap.Int32("ColPos", orderByCol.Col.ColPos),
+					zap.String("foundColumn", fallbackCol.Name))
+			} else {
+				logutil.Warn("getBlockZMs: ColPos fallback type mismatch",
+					zap.String("column", orderByCol.Col.Name),
+					zap.Int32("ColPos", orderByCol.Col.ColPos),
+					zap.Int32("foundType", fallbackCol.Typ.Id),
+					zap.Int32("expectedType", ls.OrderBy[0].Expr.Typ.Id))
+			}
 		}
+	}
+
+	// If we still haven't found the column, panic with detailed error information
+	if orderByColIDX == -1 {
+		var availableCols []string
+		for _, col := range def.Cols {
+			availableCols = append(availableCols, fmt.Sprintf("%s(type=%d)", col.Name, col.Typ.Id))
+		}
+		panic(fmt.Sprintf(
+			"getBlockZMs: cannot find column for ORDER BY: name=%s, ColPos=%d, RelPos=%d, expectedType=%d, tableColsCount=%d, availableCols=%v",
+			orderByCol.Col.Name, orderByCol.Col.ColPos, relPos, ls.OrderBy[0].Expr.Typ.Id, len(def.Cols), availableCols))
 	}
 
 	sliceLen := ls.rangeSlice.Len()
