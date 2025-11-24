@@ -162,6 +162,18 @@ func getTestCases(t *testing.T) []TestTask {
 			}(),
 			expected: true,
 		},
+		{
+			jstr:      "",
+			dsize:     uint64(10000000),
+			nlists:    int64(1000),
+			createdAt: types.UnixToTimestamp(time.Now().Add(-4 * OneWeek).Unix()),
+			ts: func() types.Timestamp {
+				now := time.Now()
+				unixts := now.Add(-2 * OneWeek).Unix()
+				return types.UnixToTimestamp(unixts)
+			}(),
+			expected: true,
+		},
 	}
 
 	return tasks
@@ -169,11 +181,15 @@ func getTestCases(t *testing.T) []TestTask {
 
 func TestCheckIndexUpdatable(t *testing.T) {
 
+	var err error
 	tasks := getTestCases(t)
 	for _, ta := range tasks {
 
-		m, err := sqlexec.NewMetadataFromJson(ta.jstr)
-		require.Nil(t, err)
+		m := (*sqlexec.Metadata)(nil)
+		if len(ta.jstr) > 0 {
+			m, err = sqlexec.NewMetadataFromJson(ta.jstr)
+			require.Nil(t, err)
+		}
 
 		info := IndexUpdateTaskInfo{
 			DbName:       "db",
@@ -302,9 +318,13 @@ func TestIvfflatReindex(t *testing.T) {
 	for _, ta := range tasks {
 
 		func() {
+			var err error
 
-			m, err := sqlexec.NewMetadataFromJson(ta.jstr)
-			require.Nil(t, err)
+			m := (*sqlexec.Metadata)(nil)
+			if len(ta.jstr) > 0 {
+				m, err = sqlexec.NewMetadataFromJson(ta.jstr)
+				require.Nil(t, err)
+			}
 
 			info := IndexUpdateTaskInfo{
 				DbName:       dbname,
@@ -387,8 +407,12 @@ func TestExecutorRunFakeTasks(t *testing.T) {
 
 		ret := make([]*IndexUpdateTaskInfo, 0, len(tasks))
 		for _, ta := range tasks {
-			m, err := sqlexec.NewMetadataFromJson(ta.jstr)
-			require.Nil(t, err)
+			var err error
+			m := (*sqlexec.Metadata)(nil)
+			if len(ta.jstr) > 0 {
+				m, err = sqlexec.NewMetadataFromJson(ta.jstr)
+				require.Nil(t, err)
+			}
 
 			info := IndexUpdateTaskInfo{
 				DbName:       dbname,
