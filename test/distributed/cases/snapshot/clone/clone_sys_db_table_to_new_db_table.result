@@ -138,6 +138,7 @@ mo_configurations
 mo_data_key
 mo_database
 mo_foreign_keys
+mo_index_update
 mo_indexes
 mo_iscp_log
 mo_locks
@@ -188,6 +189,7 @@ mo_configurations
 mo_data_key
 mo_database
 mo_foreign_keys
+mo_index_update
 mo_indexes
 mo_iscp_log
 mo_locks

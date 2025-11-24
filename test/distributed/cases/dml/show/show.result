@@ -225,8 +225,7 @@ use mo_catalog;
 show tables;
 Tables_in_mo_catalog
 mo_account
-mo_branch_metadata                                                                                                                                                                                            mo_branch_metadata
-mo_iscp_log
+mo_branch_metadata
 mo_cache
 mo_cdc_task
 mo_cdc_watermark
@@ -235,7 +234,9 @@ mo_configurations
 mo_data_key
 mo_database
 mo_foreign_keys
+mo_index_update
 mo_indexes
+mo_iscp_log
 mo_locks
 mo_merge_settings
 mo_mysql_compatibility_mode
@@ -266,7 +267,7 @@ mo_variables
 mo_version
 show table_number from mo_catalog;
 Number of tables in mo_catalog
-39
+41
 show column_number from mo_database;
 Number of columns in mo_database
 9
