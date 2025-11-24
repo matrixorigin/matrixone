@@ -124,7 +124,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, projN
 		origFuncName)
 
 	// JOIN between source table and hnsw_search table function
-	tableFuncTag := builder.genNewTag()
+	tableFuncTag := builder.genNewBindTag()
 	tableFuncNode := &plan.Node{
 		NodeType: plan.Node_FUNCTION_SCAN,
 		Stats:    &plan.Stats{},

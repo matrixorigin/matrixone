@@ -402,12 +402,12 @@ func (r *reader) SetOrderBy(orderby []*plan.OrderBySpec) {
 	r.source.SetOrderBy(orderby)
 }
 
-func (r *reader) SetBlockTop(orderby []*plan.OrderBySpec, limit uint64) {
-	if len(orderby) == 0 || limit == 0 {
+func (r *reader) SetBlockTop(orderBy []*plan.OrderBySpec, limit uint64) {
+	if len(orderBy) == 0 || limit == 0 {
 		return
 	}
 
-	orderFunc := orderby[0].Expr.GetF()
+	orderFunc := orderBy[0].Expr.GetF()
 	if orderFunc == nil {
 		panic("order function is nil")
 	}
@@ -548,6 +548,7 @@ func (r *reader) Read(
 		return true, nil
 	}
 	if state == engine.InMem {
+		// TODO: handle in-memory data
 		return false, nil
 	}
 	//read block
