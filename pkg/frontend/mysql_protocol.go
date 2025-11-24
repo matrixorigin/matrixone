@@ -2721,7 +2721,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow(mrs *MysqlResultSet, r uint6
 				return err2
 			} else if dt, ok := val.(types.Datetime); ok {
 				value := dt.String2(scale)
-				err = mp.appendStringLenEnc(value)
+				err = AppendStringLenEnc(mp, value)
 				if err != nil {
 					return err
 				}
@@ -2731,7 +2731,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow(mrs *MysqlResultSet, r uint6
 				if err2 != nil {
 					return err2
 				}
-				err = mp.appendStringLenEnc(value)
+				err = AppendStringLenEnc(mp, value)
 				if err != nil {
 					return err
 				}
@@ -2743,7 +2743,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow(mrs *MysqlResultSet, r uint6
 				return err2
 			} else if t, ok := val.(types.Time); ok {
 				value := t.String2(scale)
-				err = mp.appendStringLenEnc(value)
+				err = AppendStringLenEnc(mp, value)
 				if err != nil {
 					return err
 				}
@@ -2753,7 +2753,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow(mrs *MysqlResultSet, r uint6
 				if err2 != nil {
 					return err2
 				}
-				err = mp.appendStringLenEnc(value)
+				err = AppendStringLenEnc(mp, value)
 				if err != nil {
 					return err
 				}
@@ -2766,7 +2766,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow(mrs *MysqlResultSet, r uint6
 			} else if ts, ok := val.(types.Timestamp); ok {
 				// Use session timezone instead of UTC from GetString
 				value := ts.String2(mp.ses.GetTimeZone(), scale)
-				err = mp.appendStringLenEnc(value)
+				err = AppendStringLenEnc(mp, value)
 				if err != nil {
 					return err
 				}
@@ -2776,7 +2776,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow(mrs *MysqlResultSet, r uint6
 				if err2 != nil {
 					return err2
 				}
-				err = mp.appendStringLenEnc(value)
+				err = AppendStringLenEnc(mp, value)
 				if err != nil {
 					return err
 				}

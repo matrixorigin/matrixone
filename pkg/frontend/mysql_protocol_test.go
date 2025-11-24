@@ -4307,6 +4307,9 @@ func Test_appendResultSetTextRow_ScaleHandling(t *testing.T) {
 
 		// Test TIMESTAMP with different scales
 		convey.Convey("TIMESTAMP scale handling", func() {
+			// Ensure session timezone is UTC for this test
+			proto.ses.SetTimeZone(time.UTC)
+
 			rs := &MysqlResultSet{}
 			mysqlCol := new(MysqlColumn)
 			mysqlCol.SetName("timestamp_col")
@@ -4327,8 +4330,41 @@ func Test_appendResultSetTextRow_ScaleHandling(t *testing.T) {
 
 			err := proto.appendResultSetTextRow(rs, 0)
 			convey.So(err, convey.ShouldBeNil)
-			// Should format with scale 4, not 6
+			// Should format with scale 4, not 6, using session timezone (UTC)
 			convey.So(capturedValue, convey.ShouldEqual, "2024-01-15 10:20:30.1234")
+		})
+
+		// Test TIMESTAMP timezone handling
+		convey.Convey("TIMESTAMP timezone handling", func() {
+			// Set session timezone to a different timezone
+			loc, _ := time.LoadLocation("America/New_York") // UTC-5
+			proto.ses.SetTimeZone(loc)
+
+			rs := &MysqlResultSet{}
+			mysqlCol := new(MysqlColumn)
+			mysqlCol.SetName("timestamp_col")
+			mysqlCol.SetColumnType(defines.MYSQL_TYPE_TIMESTAMP)
+			mysqlCol.SetDecimal(0) // No fractional seconds
+			rs.AddColumn(mysqlCol)
+
+			// Create a timestamp in UTC: 2024-01-15 15:00:00 UTC
+			// This should be 10:00:00 in New York (UTC-5)
+			ts, _ := types.ParseTimestamp(time.UTC, "2024-01-15 15:00:00", 0)
+			rs.AddRow([]interface{}{ts})
+
+			// Capture the output
+			var capturedValue string
+			stub := gostub.Stub(&AppendStringLenEnc, func(mp *MysqlProtocolImpl, value string) error {
+				capturedValue = value
+				return nil
+			})
+			defer stub.Reset()
+
+			err := proto.appendResultSetTextRow(rs, 0)
+			convey.So(err, convey.ShouldBeNil)
+			// Should use session timezone (New York), not UTC
+			// 15:00:00 UTC = 10:00:00 EST (UTC-5)
+			convey.So(capturedValue, convey.ShouldEqual, "2024-01-15 10:00:00")
 		})
 	})
 }
