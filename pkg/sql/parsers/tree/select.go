@@ -16,6 +16,7 @@ package tree
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -300,15 +301,21 @@ func (node *Limit) Format(ctx *FmtCtx) {
 			ctx.WriteByte(' ')
 		}
 		ctx.WriteString("with option ")
+		// Sort keys to ensure deterministic output order
+		keys := make([]string, 0, len(node.Option))
+		for key := range node.Option {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
 		first := true
-		for key, value := range node.Option {
+		for _, key := range keys {
 			if !first {
 				ctx.WriteString(", ")
 			}
 			ctx.WriteString("'")
 			ctx.WriteString(key)
 			ctx.WriteString("=")
-			ctx.WriteString(value)
+			ctx.WriteString(node.Option[key])
 			ctx.WriteString("'")
 			first = false
 		}
