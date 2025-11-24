@@ -472,6 +472,7 @@ func TestExecutorRunFull(t *testing.T) {
 		writer.AddInt8("experimental_ivf_index", 1)
 
 		js, err := writer.Marshal()
+		require.NoError(t, err)
 
 		os.Stderr.WriteString(fmt.Sprintf("js %v\n", string(js)))
 

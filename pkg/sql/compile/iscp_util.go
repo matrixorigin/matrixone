@@ -265,14 +265,13 @@ func getIvfflatMetadata(c *Compile) (metadata []byte, frontend bool, err error) 
 }
 
 // idxcron function
-func CreateAllIndexUpdateTasks(c *Compile, indexes []*plan.IndexDef, dbname string, tablename string, tableid uint64) error {
-	if c.proc.GetResolveVariableFunc() == nil {
-		return nil
-	}
+func CreateAllIndexUpdateTasks(c *Compile, indexes []*plan.IndexDef, dbname string, tablename string, tableid uint64) (err error) {
+	var (
+		ivf_metadata []byte
+	)
 
-	ivf_metadata, _, err := getIvfflatMetadata(c)
-	if err != nil {
-		return err
+	if c.proc.GetResolveVariableFunc() == nil {
+		return
 	}
 
 	idxmap := make(map[string]bool)
@@ -290,7 +289,14 @@ func CreateAllIndexUpdateTasks(c *Compile, indexes []*plan.IndexDef, dbname stri
 				continue
 			}
 
-			e := idxcron.RegisterUpdate(c.proc.Ctx,
+			if ivf_metadata == nil {
+				ivf_metadata, _, err = getIvfflatMetadata(c)
+				if err != nil {
+					return
+				}
+			}
+
+			err = idxcron.RegisterUpdate(c.proc.Ctx,
 				c.proc.GetService(),
 				c.proc.GetTxnOperator(),
 				tableid,
@@ -299,10 +305,10 @@ func CreateAllIndexUpdateTasks(c *Compile, indexes []*plan.IndexDef, dbname stri
 				idx.IndexName,
 				idxcron.Action_Ivfflat_Reindex,
 				string(ivf_metadata))
-			if e != nil {
-				return e
+			if err != nil {
+				return
 			}
 		}
 	}
-	return nil
+	return
 }
