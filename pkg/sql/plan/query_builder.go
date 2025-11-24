@@ -2427,27 +2427,11 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 
 		// Parse RankOption if ByRank is true
 		if astLimit.ByRank && astLimit.Option != nil && len(astLimit.Option) > 0 {
-			rankOption := &plan.RankOption{}
-
-			// Helper function to get value from map case-insensitively
-			getOptionValue := func(key string) (string, bool) {
-				keyLower := strings.ToLower(key)
-				for k, v := range astLimit.Option {
-					if strings.ToLower(k) == keyLower {
-						return v, true
-					}
-				}
-				return "", false
+			rankOption, err := parseRankOption(astLimit.Option, builder.GetContext())
+			if err != nil {
+				return 0, err
 			}
-
-			if mode, ok := getOptionValue("mode"); ok {
-				modeLower := strings.ToLower(strings.TrimSpace(mode))
-				if modeLower != "pre" && modeLower != "post" {
-					return 0, moerr.NewInvalidInputf(builder.GetContext(), "mode must be 'pre' or 'post', got '%s'", mode)
-				}
-				rankOption.Mode = modeLower
-			}
-			if rankOption.Mode != "" {
+			if rankOption != nil && rankOption.Mode != "" {
 				node.RankOption = rankOption
 			}
 		}
@@ -5234,6 +5218,43 @@ func (builder *QueryBuilder) GetContext() context.Context {
 		return context.TODO()
 	}
 	return builder.compCtx.GetContext()
+}
+
+// parseRankOption parses rank options from a map of option key-value pairs.
+// It extracts the "mode" option case-insensitively and validates it.
+// Returns a RankOption with the parsed mode if valid, or nil if no mode is specified.
+// Returns an error if the mode value is invalid (must be "pre" or "post").
+func parseRankOption(options map[string]string, ctx context.Context) (*plan.RankOption, error) {
+	if options == nil || len(options) == 0 {
+		return nil, nil
+	}
+
+	rankOption := &plan.RankOption{}
+
+	// Helper function to get value from map case-insensitively
+	getOptionValue := func(key string) (string, bool) {
+		keyLower := strings.ToLower(key)
+		for k, v := range options {
+			if strings.ToLower(k) == keyLower {
+				return v, true
+			}
+		}
+		return "", false
+	}
+
+	if mode, ok := getOptionValue("mode"); ok {
+		modeLower := strings.ToLower(strings.TrimSpace(mode))
+		if modeLower != "pre" && modeLower != "post" {
+			return nil, moerr.NewInvalidInputf(ctx, "mode must be 'pre' or 'post', got '%s'", mode)
+		}
+		rankOption.Mode = modeLower
+	}
+
+	if rankOption.Mode == "" {
+		return nil, nil
+	}
+
+	return rankOption, nil
 }
 
 func (builder *QueryBuilder) checkExprCanPushdown(expr *Expr, node *Node) bool {
