@@ -641,3 +641,43 @@ func TestCmdNoDefine(t *testing.T) {
 	}
 
 }
+
+func TestCmdSqlError(t *testing.T) {
+	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, catalog.System_Account)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// runCmdSql
+	stub1 := gostub.Stub(&runCmdSql, func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		fmt.Println(sql)
+		return executor.Result{}, moerr.NewInternalErrorNoCtx("fake sql error")
+	})
+	defer stub1.Reset()
+
+	//catalog.SetupDefines("")
+	//cnEngine, cnClient, _ := testengine.New(ctx)
+	cnUUID := "a-b-c-d"
+
+	{
+		err := RenameSrcTable(ctx, cnUUID, nil, 0, 0, "old", "new")
+		require.Error(t, err)
+	}
+
+	{
+		err := UnregisterUpdateByTableId(ctx, cnUUID, nil, 0)
+		require.Error(t, err)
+	}
+	{
+		err := UnregisterUpdateByDbName(ctx, cnUUID, nil, "")
+		require.Error(t, err)
+	}
+	{
+		err := UnregisterUpdate(ctx, cnUUID, nil, 0, "idx", "action")
+		require.Error(t, err)
+	}
+	{
+		err := RegisterUpdate(ctx, cnUUID, nil, 0, "db", "tbl", "idx", "action", "meta")
+		require.Error(t, err)
+	}
+
+}

@@ -71,6 +71,7 @@ var (
 	runReindexSql        = sqlexec.RunSql
 	runGetCountSql       = sqlexec.RunSql
 	runTxnWithSqlContext = sqlexec.RunTxnWithSqlContext
+	runCmdSql            = sqlexec.RunSql
 
 	// createdAt Delay update duration
 	createdAtDelay = 2 * 24 * time.Hour

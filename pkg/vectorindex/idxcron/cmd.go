@@ -67,7 +67,7 @@ func RegisterUpdate(ctx context.Context,
 		metadata,
 		string(bytes))
 
-	res, err := sqlexec.RunSql(sqlproc, sql)
+	res, err := runCmdSql(sqlproc, sql)
 	if err != nil {
 		return
 	}
@@ -109,7 +109,7 @@ func UnregisterUpdate(ctx context.Context,
 	os.Stderr.WriteString(sql)
 	os.Stderr.WriteString("\n")
 
-	res, err := sqlexec.RunSql(sqlproc, sql)
+	res, err := runCmdSql(sqlproc, sql)
 	if err != nil {
 		return
 	}
@@ -136,7 +136,7 @@ func UnregisterUpdateByDbName(ctx context.Context,
 	sqlproc := sqlexec.NewSqlProcessWithContext(sqlctx)
 
 	sql := fmt.Sprintf("DELETE FROM mo_catalog.mo_index_update WHERE account_id = %d AND db_name = '%s'", tenantId, dbName)
-	res, err := sqlexec.RunSql(sqlproc, sql)
+	res, err := runCmdSql(sqlproc, sql)
 	if err != nil {
 		return
 	}
@@ -163,7 +163,7 @@ func UnregisterUpdateByTableId(ctx context.Context,
 	sqlproc := sqlexec.NewSqlProcessWithContext(sqlctx)
 
 	sql := fmt.Sprintf("DELETE FROM mo_catalog.mo_index_update WHERE account_id = %d AND table_id = %d", tenantId, tableId)
-	res, err := sqlexec.RunSql(sqlproc, sql)
+	res, err := runCmdSql(sqlproc, sql)
 	if err != nil {
 		return
 	}
@@ -192,7 +192,7 @@ func RenameSrcTable(ctx context.Context,
 
 	sql := fmt.Sprintf("UPDATE mo_catalog.mo_index_update SET table_name = '%s' WHERE account_id = %d AND table_id = %d AND table_name = '%s'",
 		newTablename, tenantId, tableId, oldTableName)
-	res, err := sqlexec.RunSql(sqlproc, sql)
+	res, err := runCmdSql(sqlproc, sql)
 	if err != nil {
 		return
 	}
