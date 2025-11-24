@@ -44,12 +44,13 @@ const DefaultLoadParallism = 20
 func (tbl *txnTable) CollectChanges(
 	ctx context.Context,
 	from, to types.TS,
+	skipDeletes bool,
 	mp *mpool.MPool,
 ) (engine.ChangesHandle, error) {
 	if from.IsEmpty() {
 		return NewCheckpointChangesHandle(ctx, tbl, to, mp)
 	}
-	return NewPartitionChangesHandle(ctx, tbl, from, to, mp)
+	return NewPartitionChangesHandle(ctx, tbl, from, to, skipDeletes, mp)
 }
 
 type PartitionChangesHandle struct {
@@ -63,6 +64,7 @@ type PartitionChangesHandle struct {
 	toTs   types.TS
 	tbl    *txnTable
 
+	skipDeletes   bool
 	primarySeqnum int
 	mp            *mpool.MPool
 	fs            fileservice.FileService
@@ -72,12 +74,14 @@ func NewPartitionChangesHandle(
 	ctx context.Context,
 	tbl *txnTable,
 	from, to types.TS,
+	skipDeletes bool,
 	mp *mpool.MPool,
 ) (*PartitionChangesHandle, error) {
 	handle := &PartitionChangesHandle{
 		tbl:           tbl,
 		fromTs:        from,
 		toTs:          to,
+		skipDeletes:   skipDeletes,
 		primarySeqnum: tbl.primarySeqnum,
 		mp:            mp,
 		fs:            tbl.getTxn().engine.fs,
@@ -151,6 +155,7 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 			state,
 			h.currentPSFrom,
 			h.currentPSTo,
+			h.skipDeletes,
 			objectio.BlockMaxRows,
 			h.primarySeqnum,
 			h.mp,
@@ -222,6 +227,7 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 		checkpointEntries,
 		h.currentPSFrom,
 		h.currentPSTo,
+		h.skipDeletes,
 		objectio.BlockMaxRows,
 		h.primarySeqnum,
 		h.mp,
