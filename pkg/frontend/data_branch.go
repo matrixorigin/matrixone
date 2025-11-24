@@ -2267,8 +2267,8 @@ func diffDataHelper(
 						return err2
 					}
 
-					if err = appendTupleToBat(ses, tarBat, tarTuple, tblStuff); err != nil {
-						return err
+					if err2 = appendTupleToBat(ses, tarBat, tarTuple, tblStuff); err2 != nil {
+						return err2
 					}
 
 				} else {
