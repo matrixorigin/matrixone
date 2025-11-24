@@ -22,19 +22,19 @@
 
 # Top-level folders
 /cgo @aunjgr
-/docs @fengttt
+/docs @fengttt @XuPeng-SH
 /etc @zhangxu19830126
-/optools @fengttt
-/pkg @fengttt
+/optools @fengttt @XuPeng-SH
+/pkg @fengttt @XuPeng-SH
 /proto @zhangxu19830126 @XuPeng-SH
-/cmd @daviszhen @zhangxu19830126 @XuPeng-SH
+/cmd @zhangxu19830126 @XuPeng-SH
 /test @aressu1985 @heni02
 /clients @XuPeng-SH
 
 # cmd
 /cmd/mo-service @zhangxu19830126
 
-/pkg/backup @daviszhen @LeftHandCold
+/pkg/backup @LeftHandCold
 
 /pkg/datasync @volgariver6 @LeftHandCold
 
@@ -49,7 +49,7 @@
 /pkg/iscp @XuPeng-SH
 
 # pkg/cnservice
-/pkg/cnservice @reusee @daviszhen @XuPeng-SH
+/pkg/cnservice @XuPeng-SH
 
 /pkg/cacheservice @volgariver6 @aptend
 
@@ -57,13 +57,13 @@
 
 # pkg/common @fengttt
 /pkg/common @zhangxu19830126 @XuPeng-SH
-/pkg/common/mpool @reusee @XuPeng-SH
-/pkg/common/malloc @reusee
-/pkg/common/spool @reusee @ouyuanning @aunjgr
-/pkg/common/async @zhangxu19830126
+/pkg/common/mpool @XuPeng-SH
+/pkg/common/malloc @XuPeng-SH
+/pkg/common/spool @ouyuanning @aunjgr
+/pkg/common/async @zhangxu19830126 @XuPeng-SH
 /pkg/common/bitmap @aunjgr @XuPeng-SH
 /pkg/common/hashmap @aunjgr
-/pkg/common/moerr @xzxiong
+/pkg/common/moerr @xzxiong @XuPeng-SH
 /pkg/common/morpc @zhangxu19830126
 /pkg/common/moprobe @fengttt
 /pkg/common/stopper @zhangxu19830126
@@ -78,15 +78,15 @@
 /pkg/compress @aunjgr
 
 # pkg/config
-/pkg/config @daviszhen @fengttt
+/pkg/config @fengttt @XuPeng-SH
 
 # pkg/container
 /pkg/container @XuPeng-SH
 /pkg/container/vector @aunjgr @XuPeng-SH
-/pkg/container/pSpool @reusee @aunjgr @ouyuanning
+/pkg/container/pSpool @aunjgr @ouyuanning
 
 # pkg/defines
-/pkg/defines @daviszhen @XuPeng-SH
+/pkg/defines @XuPeng-SH
 
 # pkg/embed
 /pkg/embed @zhangxu19830126
@@ -95,22 +95,22 @@
 /pkg/tnservice @zhangxu19830126 @XuPeng-SH
 
 # pkg/fileservice
-/pkg/fileservice @reusee @fengttt
+/pkg/fileservice @fengttt @XuPeng-SH
 
-# pkg/frontend @daviszhen
-/pkg/frontend @daviszhen @XuPeng-SH
+# pkg/frontend
+/pkg/frontend @XuPeng-SH
 
 # pkg/hakeeper
 /pkg/hakeeper @zhangxu19830126 @volgariver6
 
 # pkg/incrservice
-/pkg/incrservice @zhangxu19830126
+/pkg/incrservice @zhangxu19830126 @XuPeng-SH
 
 # pkg/lockservice
-/pkg/lockservice @zhangxu19830126
+/pkg/lockservice @zhangxu19830126 @iamlinjunhong
 
 # pkg/shardservice
-/pkg/shardservice @zhangxu19830126
+/pkg/shardservice @zhangxu19830126 @iamlinjunhong
 
 # pkg/partitionservice
 /pkg/partitionservice @zhangxu19830126 @iamlinjunhong
@@ -119,7 +119,7 @@
 /pkg/logservice @zhangxu19830126 @volgariver6
 
 # pkg/logutil
-/pkg/logutil @daviszhen @XuPeng-SH
+/pkg/logutil @XuPeng-SH
 
 # pkg/objectio
 /pkg/objectio @LeftHandCold @XuPeng-SH
@@ -131,7 +131,7 @@
 # for compatibility issues required for rolling upgrade.
 /pkg/pb @zhangxu19830126 @XuPeng-SH
 /pkg/pb/logservice @zhangxu19830126
-/pkg/pb/metadata @zhangxu19830126
+/pkg/pb/metadata @zhangxu19830126 @XuPeng-SH
 /pkg/pb/metric @aptend
 /pkg/pb/pipeline @ouyuanning @aunjgr
 /pkg/pb/plan @ouyuanning @aunjgr
@@ -139,13 +139,13 @@
 /pkg/pb/txn @zhangxu19830126
 
 # pkg/perfcounter
-/pkg/perfcounter @reusee
+/pkg/perfcounter @XuPeng-SH
 
 # pkg/sort
 /pkg/sort @aunjgr
 
 # pkg/bootstrap
-/pkg/bootstrap @daviszhen @zhangxu19830126 @LeftHandCold
+/pkg/bootstrap @zhangxu19830126 @LeftHandCold
 
 # pkg/sql
 /pkg/sql @aunjgr
@@ -156,7 +156,7 @@
 /pkg/sql/plan @ouyuanning @aunjgr
 /pkg/sql/plan/function @ouyuanning @aunjgr
 /pkg/sql/plan/explain @ouyuanning @aunjgr
-/pkg/sql/plan/tools @daviszhen @gouhongshen
+/pkg/sql/plan/tools @gouhongshen
 /pkg/sql/colexec/indexjoin @aunjgr
 /pkg/sql/colexec/indexbuild @aunjgr
 /pkg/sql/colexec/intersect @aunjgr
@@ -182,7 +182,7 @@
 /pkg/sql/colexec/multi_update @ouyuanning
 
 # pkg/taskservice
-/pkg/taskservice @zhangxu19830126
+/pkg/taskservice @zhangxu19830126 @XuPeng-SH
 
 # pkg/tests
 /pkg/tests @zhangxu19830126
@@ -190,11 +190,11 @@
 /pkg/tests/txn @zhangxu19830126
 
 # pkg/testutil
-/pkg/testutil @ouyuanning @daviszhen @XuPeng-SH
+/pkg/testutil @ouyuanning @XuPeng-SH
 
 # pkg/txn
 /pkg/txn @zhangxu19830126
-/pkg/txn/storage/memorystorage @reusee
+/pkg/txn/storage/memorystorage @XuPeng-SH
 
 # pkg/util
 /pkg/util @zhangxu19830126 @XuPeng-SH
@@ -213,12 +213,12 @@
 /pkg/vm @XuPeng-SH
 /pkg/vm/engine @XuPeng-SH
 /pkg/vm/pipeline @ouyuanning @aunjgr
-/pkg/vm/process @reusee @aunjgr @XuPeng-SH
+/pkg/vm/process @aunjgr @XuPeng-SH
 /pkg/vm/message @aunjgr
 /pkg/vm/engine/disttae @XuPeng-SH @gouhongshen
 /pkg/vm/engine/disttae/logtailreplay @XuPeng-SH @gouhongshen
 /pkg/vm/engine/tae @XuPeng-SH
-/pkg/vm/engine/memoryengine @reusee
+/pkg/vm/engine/memoryengine @XuPeng-SH
 /pkg/vm/engine/tae/logtail/service @XuPeng-SH @volgariver6
 /pkg/vm/engine/tae/logstore @XuPeng-SH @jiangxinmeng1
 /pkg/vm/engine/tae/wal @XuPeng-SH @jiangxinmeng1

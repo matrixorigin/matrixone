@@ -535,7 +535,7 @@ func checkCheckpointDataByTableID(
 	err = reader.ConsumeCheckpointWithTableID(
 		ctx,
 		func(
-			ctx context.Context, obj objectio.ObjectEntry, isTombstone bool,
+			ctx context.Context, fs fileservice.FileService, obj objectio.ObjectEntry, isTombstone bool,
 		) (err error) {
 			objCount++
 			obj2, err := tbl.GetObjectByID(

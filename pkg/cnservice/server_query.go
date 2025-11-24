@@ -100,6 +100,7 @@ func (s *service) initQueryCommandHandler() {
 	s.queryService.AddHandleFunc(query.CmdMethod_CtlMoTableStats, s.handleMoTableStats, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_WorkspaceThreshold, s.handleWorkspaceThresholdRequest, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_MinTimestamp, s.handleGetMinTimestamp, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_CtlPrefetchOnSubscribed, s.handleCtlPrefetchOnSubscribed, false)
 }
 
 func (s *service) handleKillConn(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
@@ -176,6 +177,17 @@ func (s *service) handleCtlReader(ctx context.Context, req *query.Request, resp 
 	resp.CtlReaderResponse.Resp = ctl.UpdateCurrentCNReader(
 		req.CtlReaderRequest.Cmd, extra...)
 
+	return nil
+}
+
+func (s *service) handleCtlPrefetchOnSubscribed(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
+	if req == nil || req.CtlPrefetchOnSubscribedRequest == nil {
+		return moerr.NewInternalError(ctx, "bad request")
+	}
+	resp.CtlPrefetchOnSubscribedResponse = new(query.CtlPrefetchOnSubscribedResponse)
+	resp.CtlPrefetchOnSubscribedResponse.Resp = ctl.UpdateCurrentCNPrefetchOnSubscribed(
+		req.CtlPrefetchOnSubscribedRequest.Patterns,
+	)
 	return nil
 }
 
@@ -408,7 +420,7 @@ func (s *service) handleUnsubscribeTable(ctx context.Context, req *query.Request
 	if req.UnsubscribeTable == nil {
 		return moerr.NewInternalError(ctx, "bad request")
 	}
-	err := s.storeEngine.UnsubscribeTable(ctx, req.UnsubscribeTable.DatabaseID, req.UnsubscribeTable.TableID)
+	err := s.storeEngine.UnsubscribeTable(ctx, 0, req.UnsubscribeTable.DatabaseID, req.UnsubscribeTable.TableID)
 	if err != nil {
 		resp.WrapError(err)
 		return nil
