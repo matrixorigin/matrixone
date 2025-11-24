@@ -95,8 +95,9 @@ type IndexUpdateTaskInfo struct {
 }
 
 type IndexUpdateStatus struct {
-	Status string `json:"status"`
-	Msg    string `json:"msg,omitempty"`
+	Status string    `json:"status"`
+	Msg    string    `json:"msg,omitempty"`
+	Time   time.Time `json:"time,omitempty"`
 }
 
 // The optimal number of LISTS is estimated the the formula below:
@@ -178,6 +179,7 @@ func (t *IndexUpdateTaskInfo) checkIndexUpdatable(ctx context.Context, dsize uin
 func (t *IndexUpdateTaskInfo) saveStatus(sqlproc *sqlexec.SqlProcess, updated bool, err error) error {
 
 	var status IndexUpdateStatus
+	status.Time = time.Now()
 
 	if err != nil {
 		// save error status column to mo_index_update
