@@ -5225,7 +5225,7 @@ func (builder *QueryBuilder) GetContext() context.Context {
 // Returns a RankOption with the parsed mode if valid, or nil if no mode is specified.
 // Returns an error if the mode value is invalid (must be "pre" or "post").
 func parseRankOption(options map[string]string, ctx context.Context) (*plan.RankOption, error) {
-	if options == nil || len(options) == 0 {
+	if len(options) == 0 {
 		return nil, nil
 	}
 
