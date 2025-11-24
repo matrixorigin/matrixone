@@ -2715,27 +2715,67 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow(mrs *MysqlResultSet, r uint6
 				}
 			}
 		case defines.MYSQL_TYPE_DATETIME:
-			if value, err2 := mrs.GetString(mp.ctx, r, i); err2 != nil {
+			// Get scale from column metadata and format with correct scale
+			scale := int32(mysqlColumn.Decimal())
+			if val, err2 := mrs.GetValue(mp.ctx, r, i); err2 != nil {
 				return err2
+			} else if dt, ok := val.(types.Datetime); ok {
+				value := dt.String2(scale)
+				err = mp.appendStringLenEnc(value)
+				if err != nil {
+					return err
+				}
 			} else {
+				// Fallback to GetString if type assertion fails
+				value, err2 := mrs.GetString(mp.ctx, r, i)
+				if err2 != nil {
+					return err2
+				}
 				err = mp.appendStringLenEnc(value)
 				if err != nil {
 					return err
 				}
 			}
 		case defines.MYSQL_TYPE_TIME:
-			if value, err2 := mrs.GetString(mp.ctx, r, i); err2 != nil {
+			// Get scale from column metadata and format with correct scale
+			scale := int32(mysqlColumn.Decimal())
+			if val, err2 := mrs.GetValue(mp.ctx, r, i); err2 != nil {
 				return err2
+			} else if t, ok := val.(types.Time); ok {
+				value := t.String2(scale)
+				err = mp.appendStringLenEnc(value)
+				if err != nil {
+					return err
+				}
 			} else {
+				// Fallback to GetString if type assertion fails
+				value, err2 := mrs.GetString(mp.ctx, r, i)
+				if err2 != nil {
+					return err2
+				}
 				err = mp.appendStringLenEnc(value)
 				if err != nil {
 					return err
 				}
 			}
 		case defines.MYSQL_TYPE_TIMESTAMP:
-			if value, err2 := mrs.GetString(mp.ctx, r, i); err2 != nil {
+			// Get scale from column metadata and use session timezone
+			scale := int32(mysqlColumn.Decimal())
+			if val, err2 := mrs.GetValue(mp.ctx, r, i); err2 != nil {
 				return err2
+			} else if ts, ok := val.(types.Timestamp); ok {
+				// Use session timezone instead of UTC from GetString
+				value := ts.String2(mp.ses.GetTimeZone(), scale)
+				err = mp.appendStringLenEnc(value)
+				if err != nil {
+					return err
+				}
 			} else {
+				// Fallback to GetString if type assertion fails
+				value, err2 := mrs.GetString(mp.ctx, r, i)
+				if err2 != nil {
+					return err2
+				}
 				err = mp.appendStringLenEnc(value)
 				if err != nil {
 					return err

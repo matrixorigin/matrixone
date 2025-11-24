@@ -422,3 +422,48 @@ func TestDatetime_TruncateToScale(t *testing.T) {
 	expected = DatetimeFromClock(2024, 1, 16, 0, 0, 0, 0)
 	require.Equal(t, expected, truncated, "scale 0 should round to next day")
 }
+
+// TestDatetime_String2_NoNewline tests that String2 output does not contain newline characters
+// This test ensures the fix for the String2 formatting bug (removing newline from %06d\n)
+func TestDatetime_String2_NoNewline(t *testing.T) {
+	testCases := []struct {
+		name     string
+		datetime Datetime
+		scale    int32
+	}{
+		{
+			name:     "scale 0",
+			datetime: DatetimeFromClock(2024, 1, 15, 10, 20, 30, 0),
+			scale:    0,
+		},
+		{
+			name:     "scale 1",
+			datetime: DatetimeFromClock(2024, 1, 15, 10, 20, 30, 123456),
+			scale:    1,
+		},
+		{
+			name:     "scale 3",
+			datetime: DatetimeFromClock(2024, 1, 15, 10, 20, 30, 123456),
+			scale:    3,
+		},
+		{
+			name:     "scale 6",
+			datetime: DatetimeFromClock(2024, 1, 15, 10, 20, 30, 123456),
+			scale:    6,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := tc.datetime.String2(tc.scale)
+			// Ensure no newline character in the output
+			require.NotContains(t, result, "\n", "String2 output should not contain newline")
+			require.NotContains(t, result, "\r", "String2 output should not contain carriage return")
+
+			// Verify the format is correct
+			if tc.scale > 0 {
+				require.Contains(t, result, ".", "String2 with scale > 0 should contain decimal point")
+			}
+		})
+	}
+}
