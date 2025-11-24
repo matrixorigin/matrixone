@@ -299,15 +299,19 @@ func execBackup(
 	var protectedTS types.TS
 	var updateTicker *time.Ticker
 	var updateTickerStop chan struct{}
+	var protectionSet bool // Track if protection was successfully set
 
 	defer func() {
 		// Stop the update ticker
 		if updateTicker != nil {
+			logutil.Infof("updateTicker.Stop() start")
 			updateTicker.Stop()
+			logutil.Infof("updateTicker.Stop() end")
 			close(updateTickerStop)
+			logutil.Infof("updateTickerStop end")
 		}
-		// Remove backup protection (only if executor is available)
-		if !protectedTS.IsEmpty() && exec != nil {
+		// Remove backup protection if it was set
+		if protectionSet && exec != nil {
 			sql := "select mo_ctl('dn','DiskCleaner','remove_checker.backup.')"
 			_, err := exec.Exec(ctx, sql, opts)
 			if err != nil {
@@ -427,6 +431,7 @@ func execBackup(
 			logutil.Errorf("backup: failed to set backup protection: %v", err)
 			// Continue backup even if protection setup fails, but log the error
 		} else {
+			protectionSet = true // Mark that protection was successfully set
 			logutil.Info("backup: backup protection set",
 				common.AnyField("protected-ts", protectedTS.ToString()))
 
