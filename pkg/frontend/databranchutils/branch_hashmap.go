@@ -24,7 +24,6 @@ import (
 	"runtime"
 	"sync"
 	"sync/atomic"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -1715,7 +1714,7 @@ func bytesToStableString(b []byte) string {
 	if len(b) == 0 {
 		return ""
 	}
-	return unsafe.String(&b[0], len(b))
+	return string(b)
 }
 func (hs *hashShard) iterateUnsafe(fn func(key []byte, rows [][]byte) error) error {
 	if fn == nil {

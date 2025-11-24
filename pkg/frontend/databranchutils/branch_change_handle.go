@@ -80,7 +80,7 @@ var CollectChanges = func(
 	if end.GE(&from) {
 		handle := new(BranchChangeHandle)
 		if handle.handle, err = rel.CollectChanges(
-			ctx, from, end, false, mp,
+			ctx, from, end, mp,
 		); err != nil {
 			return nil, err
 		}

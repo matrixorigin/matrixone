@@ -124,7 +124,7 @@ func TestCollectChangesRange(t *testing.T) {
 	end := types.BuildTS(2, 0)
 	fake := &fakeChangesHandle{}
 
-	rel.EXPECT().CollectChanges(gomock.Any(), from, end, false, gomock.Any()).Return(fake, nil)
+	rel.EXPECT().CollectChanges(gomock.Any(), from, end, gomock.Any()).Return(fake, nil)
 
 	handle, err := CollectChanges(context.Background(), rel, from, end, nil)
 	require.NoError(t, err)
@@ -157,7 +157,7 @@ func TestCollectChangesPropagatesError(t *testing.T) {
 	end := types.BuildTS(3, 0)
 
 	expectedErr := moerr.NewInternalErrorNoCtx("collect failed")
-	rel.EXPECT().CollectChanges(gomock.Any(), from, end, false, gomock.Any()).Return(nil, expectedErr)
+	rel.EXPECT().CollectChanges(gomock.Any(), from, end, gomock.Any()).Return(nil, expectedErr)
 
 	handle, err := CollectChanges(context.Background(), rel, from, end, nil)
 	require.Nil(t, handle)
