@@ -17,12 +17,13 @@ package readutil
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"math/rand"
 	"slices"
 	"strconv"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
@@ -1786,11 +1787,16 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 		bfData, err := createBloomFilter([]any{int64(100), int64(200), int64(300)}, mp)
 		require.NoError(t, err)
 
-		// Create base filter that matches first 3 rows (simulated by creating a filter)
-		// For simplicity, we'll use an IN filter that matches all rows
+		// For composite PK, base filter cannot be directly applied because:
+		// 1. Composite PK vector is VARCHAR type (contains serialized tuples)
+		// 2. Base filter expects a specific type (e.g., int64) matching the last column
+		// 3. The base filter would need to extract the last column first, which is handled
+		//    by the wrap function internally
+		// So we test with a base filter that would match the extracted last column values
+		// Create base filter with values matching the last column: [100, 200, 300, 400]
 		inVec := vector.NewVec(types.T_int64.ToType())
-		for i := int64(0); i < 4; i++ {
-			vector.AppendFixed(inVec, i, false, mp)
+		for _, val := range []int64{100, 200, 300, 400} {
+			vector.AppendFixed(inVec, val, false, mp)
 		}
 		defer inVec.Free(mp)
 
@@ -1812,14 +1818,18 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, readFilter.Valid)
 
-		// The wrap function should intersect base filter results with BF results
-		// Since base filter matches all 4 rows, but BF only matches first 3,
-		// result should be [0, 1, 2]
+		// The wrap function should:
+		// 1. Extract last column from composite PK (100, 200, 300, 400)
+		// 2. Apply base filter (IN [100, 200, 300, 400]) -> matches all 4 rows
+		// 3. Apply BloomFilter ([100, 200, 300]) -> matches first 3 rows
+		// 4. Intersect results -> should return [0, 1, 2]
 		result := readFilter.UnSortedSearchFunc(compositePKVec)
 		require.NotNil(t, result)
-		// Note: The exact result depends on how the base filter's IN operation works
-		// This test verifies that wrap function is called and doesn't panic
-		require.GreaterOrEqual(t, len(result), 0)
+		// Should contain indices 0, 1, 2 (values 100, 200, 300)
+		require.Contains(t, result, int64(0), "Should contain index 0 (value 100)")
+		require.Contains(t, result, int64(1), "Should contain index 1 (value 200)")
+		require.Contains(t, result, int64(2), "Should contain index 2 (value 300)")
+		require.GreaterOrEqual(t, len(result), 3, "Should have at least 3 matches")
 	})
 
 	t.Run("composite PK with different last column types - int32", func(t *testing.T) {
