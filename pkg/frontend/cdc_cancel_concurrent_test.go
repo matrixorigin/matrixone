@@ -53,9 +53,9 @@ func createMockTableDetector() *cdc.TableDetector {
 		}))
 	}
 
-	// Call Register to properly initialize cancel field
+	// Call RegisterIfAbsent to properly initialize cancel field
 	// This starts scanTableLoop, which is safe because scanTableFn is no-op
-	detector.Register("__test_permanent_dummy__", 1, []string{}, []string{}, func(map[uint32]cdc.TblMap) error {
+	detector.RegisterIfAbsent("__test_permanent_dummy__", 1, []string{}, []string{}, func(map[uint32]cdc.TblMap) error {
 		return nil // Dummy callback
 	})
 
