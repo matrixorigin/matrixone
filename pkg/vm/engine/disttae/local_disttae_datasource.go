@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -193,7 +194,43 @@ func (ls *LocalDisttaeDataSource) getBlockZMs() {
 	orderByCol, _ := ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col)
 
 	def := ls.table.tableDef
-	orderByColIDX := int(def.Cols[int(orderByCol.Col.ColPos)].Seqnum)
+
+	// Find the column by name instead of using ColPos directly.
+	// In JOIN scenarios, ColPos points to the projection list position,
+	// not the table column position. We need to find the column by name.
+	var orderByColIDX int = -1
+	orderByColName := strings.ToLower(orderByCol.Col.Name)
+	// Extract column name from "table.column" format
+	if idx := strings.LastIndex(orderByColName, "."); idx >= 0 {
+		orderByColName = orderByColName[idx+1:]
+	}
+
+	// First try to use Name2ColIndex if available (O(1) lookup)
+	if def.Name2ColIndex != nil {
+		if colIdx, ok := def.Name2ColIndex[orderByColName]; ok {
+			orderByColIDX = int(def.Cols[colIdx].Seqnum)
+		}
+	}
+
+	// If Name2ColIndex is not available or lookup failed, search by name
+	if orderByColIDX == -1 {
+		for _, col := range def.Cols {
+			if strings.ToLower(col.Name) == orderByColName {
+				orderByColIDX = int(col.Seqnum)
+				break
+			}
+		}
+	}
+
+	// Fallback to ColPos if name matching fails (for backward compatibility)
+	if orderByColIDX == -1 {
+		if int(orderByCol.Col.ColPos) < len(def.Cols) {
+			orderByColIDX = int(def.Cols[int(orderByCol.Col.ColPos)].Seqnum)
+		} else {
+			panic(fmt.Sprintf("getBlockZMs: cannot find column for ORDER BY: name=%s, ColPos=%d, tableColsCount=%d",
+				orderByCol.Col.Name, orderByCol.Col.ColPos, len(def.Cols)))
+		}
+	}
 
 	sliceLen := ls.rangeSlice.Len()
 	ls.blockZMS = make([]index.ZM, sliceLen)
