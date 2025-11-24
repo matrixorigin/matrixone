@@ -323,6 +323,13 @@ func SetInsertValueTimeStamp(proc *process.Process, numVal *tree.NumVal, typ *ty
 			if err != nil {
 				return false, false, res, err
 			}
+			// Validate TIMESTAMP minimum value: '1970-01-01 00:00:01.000000' (MySQL behavior)
+			// Note: We don't enforce maximum value limit to allow values beyond MySQL's 2038 limit
+			if res < types.TimestampMinValue {
+				// MySQL error format: "Incorrect datetime value: 'value' for column 'column' at row 1"
+				// Use row 1 as default since we don't have row number in this context
+				return false, false, res, moerr.NewTruncatedValueForField(proc.Ctx, "datetime", s, "ts_min", 1)
+			}
 			return true, false, res, err
 		}
 

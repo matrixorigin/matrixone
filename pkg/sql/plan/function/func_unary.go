@@ -1278,6 +1278,85 @@ func TimeToMicrosecond(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 	}, selectList)
 }
 
+// StringToMicrosecond returns the microseconds from a string input
+// Tries to parse as TIME, DATETIME, or TIMESTAMP. Returns NULL if parsing fails (MySQL behavior)
+func StringToMicrosecond(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	strParam := vector.GenerateFunctionStrParameter(ivecs[0])
+	rs := vector.MustFunctionResult[int64](result)
+	scale := int32(6) // Use max scale for parsing
+
+	zone := time.Local
+	if proc != nil && proc.GetSessionInfo() != nil {
+		zone = proc.GetSessionInfo().TimeZone
+		if zone == nil {
+			zone = time.Local
+		}
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		strVal, null := strParam.GetStrValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		str := functionUtil.QuickBytesToStr(strVal)
+
+		// Empty string should return NULL (MySQL behavior)
+		// Note: ParseTime("", scale) returns Time(0) successfully, but MySQL returns NULL
+		if len(str) == 0 {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Try parsing as TIME first (most common format for microsecond)
+		timeVal, err1 := types.ParseTime(str, scale)
+		if err1 == nil {
+			if err := rs.Append(timeVal.MicroSec(), false); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Try parsing as DATETIME
+		dtVal, err2 := types.ParseDatetime(str, scale)
+		if err2 == nil {
+			if err := rs.Append(dtVal.MicroSec(), false); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Try parsing as TIMESTAMP
+		tsVal, err3 := types.ParseTimestamp(zone, str, scale)
+		if err3 == nil {
+			dt := tsVal.ToDatetime(zone)
+			if err := rs.Append(dt.MicroSec(), false); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// All parsing attempts failed, return NULL (MySQL behavior)
+		if err := rs.Append(0, true); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func doBinary(orig []byte) []byte {
 	if len(orig) > types.MaxBinaryLen {
 		return orig[:types.MaxBinaryLen]
@@ -3312,10 +3391,31 @@ func TriggerFaultPoint(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 	return nil
 }
 
-func UTCTimestamp(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opNoneParamToFixed[types.Datetime](result, proc, length, func() types.Datetime {
-		return types.UTC()
-	})
+func UTCTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Datetime](result)
+
+	// Get scale from parameter, default to 0 if not provided (matching MySQL behavior)
+	scale := int32(0)
+	if len(ivecs) == 1 && !ivecs[0].IsConstNull() && ivecs[0].Length() > 0 {
+		scale = int32(vector.MustFixedColWithTypeCheck[int64](ivecs[0])[0])
+		// Validate scale range: 0-6 (matching MySQL behavior)
+		if scale < 0 {
+			return moerr.NewInvalidArg(proc.Ctx, "utc_timestamp", fmt.Sprintf("negative precision %d specified", scale))
+		}
+		if scale > 6 {
+			return moerr.NewErrTooBigPrecision(proc.Ctx, scale, "utc_timestamp", 6)
+		}
+	}
+	rs.TempSetType(types.New(types.T_datetime, 0, scale))
+
+	resultValue := types.UTC().TruncateToScale(scale)
+	for i := uint64(0); i < uint64(length); i++ {
+		if err := rs.Append(resultValue, false); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func sleepSeconds(proc *process.Process, sec float64) (uint8, error) {

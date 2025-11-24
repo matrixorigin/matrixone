@@ -71,6 +71,7 @@ const (
 	ErrDataTruncated               uint16 = 20202
 	ErrInvalidArg                  uint16 = 20203
 	ErrTruncatedWrongValueForField uint16 = 20204
+	ErrTooBigPrecision             uint16 = 20205
 
 	// Group 3: invalid input
 	ErrBadConfig            uint16 = 20300
@@ -336,6 +337,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrDataTruncated:               {ER_DATA_TOO_LONG, []string{MySQLDefaultSqlState}, "data truncated: data type %s, %s"},
 	ErrInvalidArg:                  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid argument %s, bad value %s"},
 	ErrTruncatedWrongValueForField: {ER_TRUNCATED_WRONG_VALUE_FOR_FIELD, []string{MySQLDefaultSqlState}, "truncated type %s value %s for column %s, %d"},
+	ErrTooBigPrecision:             {ER_TOO_BIG_PRECISION, []string{"42000", "S1009"}, "Too-big precision %d specified for '%-.192s'. Maximum is %d."},
 
 	// Group 3: invalid input
 	ErrBadConfig:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid configuration: %s"},
@@ -1588,6 +1590,10 @@ func NewTxnUnknown(ctx context.Context, txnID string) *Error {
 
 func NewErrExecutorRunning(ctx context.Context, executor string) *Error {
 	return newError(ctx, ErrExecutorRunning, executor)
+}
+
+func NewErrTooBigPrecision(ctx context.Context, precision int32, funcName string, maxPrecision uint64) *Error {
+	return newError(ctx, ErrTooBigPrecision, precision, funcName, maxPrecision)
 }
 
 var contextFunc atomic.Value
