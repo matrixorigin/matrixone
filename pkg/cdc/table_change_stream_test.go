@@ -1886,13 +1886,13 @@ func (n *noopTxnOperator) NextSequence() uint64 {
 	return 0
 }
 
-func (n *noopTxnOperator) EnterRunSql()            {}
-func (n *noopTxnOperator) ExitRunSql()             {}
-func (n *noopTxnOperator) EnterIncrStmt()          {}
-func (n *noopTxnOperator) ExitIncrStmt()           {}
-func (n *noopTxnOperator) EnterRollbackStmt()      {}
-func (n *noopTxnOperator) ExitRollbackStmt()       {}
-func (n *noopTxnOperator) SetFootPrints(int, bool) {}
+func (n *noopTxnOperator) EnterRunSql()              {}
+func (n *noopTxnOperator) ExitRunSql()               {}
+func (n *noopTxnOperator) EnterIncrStmt()            {}
+func (n *noopTxnOperator) ExitIncrStmt()             {}
+func (n *noopTxnOperator) EnterRollbackStmt()        {}
+func (n *noopTxnOperator) ExitRollbackStmt()         {}
+func (n *noopTxnOperator) SetFootPrints(int, bool)   {}
 func (n *noopTxnOperator) Set(key string, value any) {}
 func (n *noopTxnOperator) Get(key string) (any, bool) {
 	return nil, false
