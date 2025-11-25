@@ -1910,8 +1910,9 @@ func addTimeToString(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 	time2Param := vector.GenerateFunctionStrParameter(ivecs[1])
 	rs := vector.MustFunctionResult[types.Datetime](result)
 
-	scale := int32(6) // Use max scale for string inputs
-	rs.TempSetType(types.New(types.T_datetime, 0, scale))
+	scale := int32(6) // Use max scale for parsing inputs
+	// MySQL ADDTIME with string inputs returns DATETIME with scale 6 (microsecond precision)
+	rs.TempSetType(types.New(types.T_datetime, 0, 6))
 
 	for i := uint64(0); i < uint64(length); i++ {
 		if selectList != nil && selectList.Contains(i) {
@@ -2155,8 +2156,9 @@ func subTimeFromString(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 	time2Param := vector.GenerateFunctionStrParameter(ivecs[1])
 	rs := vector.MustFunctionResult[types.Datetime](result)
 
-	scale := int32(6) // Use max scale for string inputs
-	rs.TempSetType(types.New(types.T_datetime, 0, scale))
+	scale := int32(6) // Use max scale for parsing inputs
+	// MySQL SUBTIME with string inputs returns DATETIME with scale 6 (microsecond precision)
+	rs.TempSetType(types.New(types.T_datetime, 0, 6))
 
 	for i := uint64(0); i < uint64(length); i++ {
 		if selectList != nil && selectList.Contains(i) {

@@ -50,8 +50,23 @@ func (t Time) String2(scale int32) string {
 		symbol = "-"
 	}
 	if scale > 0 {
+		// Format microseconds as 6 digits (max precision we store)
 		msecInstr := fmt.Sprintf("%06d", ms)
-		msecInstr = msecInstr[:scale]
+		// For scale > 6, pad with zeros to the right (e.g., scale 9: "000001" -> "000001000")
+		if scale > 6 {
+			// Pad to 9 digits by appending zeros
+			for len(msecInstr) < 9 {
+				msecInstr = msecInstr + "0"
+			}
+			// Truncate to requested scale (max 9)
+			if scale > 9 {
+				scale = 9
+			}
+			msecInstr = msecInstr[:scale]
+		} else {
+			// For scale <= 6, truncate from the right
+			msecInstr = msecInstr[:scale]
+		}
 		return fmt.Sprintf("%s%02d:%02d:%02d"+"."+msecInstr, symbol, h, m, s)
 	}
 	return fmt.Sprintf("%s%02d:%02d:%02d", symbol, h, m, s)
@@ -374,14 +389,16 @@ func (t Time) ToDatetime(scale int32) Datetime {
 	// TODO: Get today date from local time zone setting?
 	d := Today(time.UTC)
 	dt := d.ToDatetime()
-	if scale == 6 {
+	// Time type only supports up to 6 digits of microsecond precision
+	// For scale >= 6, use scale 6 (full microsecond precision)
+	if scale >= 6 {
 		return Datetime(int64(dt) + int64(t))
 	}
 
 	// TODO: add the valid check
 	newTime := Datetime(int64(dt) + int64(t))
 	base := newTime / scaleVal[scale]
-	if newTime%scaleVal[scale]/scaleVal[scale+1] >= 5 { // check carry
+	if scale < 6 && newTime%scaleVal[scale]/scaleVal[scale+1] >= 5 { // check carry
 		base += 1
 	}
 	return base * scaleVal[scale]
