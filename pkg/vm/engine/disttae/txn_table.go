@@ -2252,7 +2252,7 @@ func (tbl *txnTable) PKPersistedBetween(
 		tbl.tableDef.Pkey.PkeyColName,
 		catalog.IsFakePkName(tbl.tableDef.Pkey.PkeyColName),
 		basePKFilter,
-		nil, // txn path 这里只用静态 PK 过滤，不参与 ivf BloomFilter
+		nil,
 		tbl.proc.Load().Mp(),
 	)
 	if err != nil {
@@ -2260,7 +2260,13 @@ func (tbl *txnTable) PKPersistedBetween(
 	}
 
 	buildUnsortedFilter := func() objectio.ReadFilterSearchFuncType {
-		return LinearSearchOffsetByValFactory(keys)
+		inner := LinearSearchOffsetByValFactory(keys)
+		return func(cacheVectors containers.Vectors) []int64 {
+			if len(cacheVectors) == 0 || cacheVectors[0].Length() == 0 {
+				return nil
+			}
+			return inner(&cacheVectors[0])
+		}
 	}
 
 	cacheVectors := containers.NewVectors(1)
@@ -2291,7 +2297,7 @@ func (tbl *txnTable) PKPersistedBetween(
 			searchFunc = buildUnsortedFilter()
 		}
 
-		sels := searchFunc(&cacheVectors[0])
+		sels := searchFunc(cacheVectors)
 		release()
 		if len(sels) > 0 {
 			return true, nil
