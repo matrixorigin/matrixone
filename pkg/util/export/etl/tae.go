@@ -109,6 +109,12 @@ func (w *TAEWriter) WriteStrings(Line []string) error {
 				return moerr.NewInternalErrorf(w.ctx, "the input value is not int64 type for column %d: %v, err: %s", colIdx, field, err)
 			}
 			elems[colIdx] = table.Int64Field(val)
+		case types.T_uint32:
+			val, err := strconv.ParseUint(field, 10, 32)
+			if err != nil {
+				return moerr.NewInternalErrorf(w.ctx, "the input value is not uint32 type for column %d: %v, err: %s", colIdx, field, err)
+			}
+			elems[colIdx] = table.Uint32Field(uint32(val))
 		case types.T_uint64:
 			val, err := strconv.ParseUint(field, 10, 64)
 			if err != nil {
@@ -211,6 +217,9 @@ func getOneRowData(ctx context.Context, bat *batch.Batch, Line []table.ColumnFie
 		case types.T_int64:
 			cols := vector.MustFixedColNoTypeCheck[int64](vec)
 			cols[rowIdx] = field.Integer
+		case types.T_uint32:
+			cols := vector.MustFixedColNoTypeCheck[uint32](vec)
+			cols[rowIdx] = uint32(field.Integer)
 		case types.T_uint64:
 			cols := vector.MustFixedColNoTypeCheck[uint64](vec)
 			cols[rowIdx] = uint64(field.Integer)
@@ -397,6 +406,9 @@ func GetVectorArrayLen(ctx context.Context, vec *vector.Vector) (int, error) {
 	case types.T_int64:
 		cols := vector.MustFixedColNoTypeCheck[int64](vec)
 		return len(cols), nil
+	case types.T_uint32:
+		cols := vector.MustFixedColNoTypeCheck[uint32](vec)
+		return len(cols), nil
 	case types.T_uint64:
 		cols := vector.MustFixedColNoTypeCheck[uint64](vec)
 		return len(cols), nil
@@ -423,6 +435,9 @@ func ValToString(ctx context.Context, vec *vector.Vector, rowIdx int) (string, e
 	switch typ.Oid {
 	case types.T_int64:
 		cols := vector.MustFixedColNoTypeCheck[int64](vec)
+		return fmt.Sprintf("%d", cols[rowIdx]), nil
+	case types.T_uint32:
+		cols := vector.MustFixedColNoTypeCheck[uint32](vec)
 		return fmt.Sprintf("%d", cols[rowIdx]), nil
 	case types.T_uint64:
 		cols := vector.MustFixedColNoTypeCheck[uint64](vec)

@@ -46,7 +46,12 @@ var (
 func rollbackTxnFunc(ses FeSession, execErr error, execCtx *ExecCtx) error {
 	execCtx.ses.EnterFPrint(FPRollbackTxn)
 	defer execCtx.ses.ExitFPrint(FPRollbackTxn)
-	incStatementErrorsCounter(execCtx.tenant, execCtx.stmt)
+	tenantInfo := execCtx.ses.GetTenantInfo()
+	tenantId := uint32(0)
+	if tenantInfo != nil {
+		tenantId = tenantInfo.GetTenantID()
+	}
+	incStatementErrorsCounter(execCtx.tenant, tenantId, execCtx.stmt)
 	/*
 		Cases    | set Autocommit = 1/0 | BEGIN statement |
 		---------------------------------------------------
@@ -317,7 +322,12 @@ func (th *TxnHandler) createUnsafe(execCtx *ExecCtx) error {
 	defer func() {
 		if err != nil {
 			tenant := execCtx.tenant
-			incTransactionErrorsCounter(tenant, metric.SQLTypeBegin)
+			tenantInfo := execCtx.ses.GetTenantInfo()
+			tenantId := uint32(0)
+			if tenantInfo != nil {
+				tenantId = tenantInfo.GetTenantID()
+			}
+			incTransactionErrorsCounter(tenant, tenantId, metric.SQLTypeBegin)
 		}
 	}()
 	err = th.createTxnOpUnsafe(execCtx)
@@ -509,9 +519,14 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 	defer func() {
 		// metric count
 		tenant := execCtx.ses.GetTenantName()
-		incTransactionCounter(tenant)
+		tenantInfo := execCtx.ses.GetTenantInfo()
+		tenantId := uint32(0)
+		if tenantInfo != nil {
+			tenantId = tenantInfo.GetTenantID()
+		}
+		incTransactionCounter(tenant, tenantId)
 		if err != nil {
-			incTransactionErrorsCounter(tenant, metric.SQLTypeCommit)
+			incTransactionErrorsCounter(tenant, tenantId, metric.SQLTypeCommit)
 		}
 	}()
 
@@ -633,10 +648,15 @@ func (th *TxnHandler) rollbackUnsafe(execCtx *ExecCtx) error {
 	defer func() {
 		// metric count
 		tenant := execCtx.ses.GetTenantName()
-		incTransactionCounter(tenant)
-		incTransactionErrorsCounter(tenant, metric.SQLTypeOther) // exec rollback cnt
+		tenantInfo := execCtx.ses.GetTenantInfo()
+		tenantId := uint32(0)
+		if tenantInfo != nil {
+			tenantId = tenantInfo.GetTenantID()
+		}
+		incTransactionCounter(tenant, tenantId)
+		incTransactionErrorsCounter(tenant, tenantId, metric.SQLTypeOther) // exec rollback cnt
 		if err != nil {
-			incTransactionErrorsCounter(tenant, metric.SQLTypeRollback)
+			incTransactionErrorsCounter(tenant, tenantId, metric.SQLTypeRollback)
 		}
 	}()
 	if execCtx.ses.GetLogLevel().Enabled(zap.DebugLevel) {

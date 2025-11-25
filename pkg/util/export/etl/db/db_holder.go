@@ -20,6 +20,7 @@ import (
 	"database/sql"
 	"encoding/csv"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -326,22 +327,27 @@ func IsRecordExisted(ctx context.Context, record []string, tbl *table.Table, get
 
 	if tbl.Table == "statement_info" {
 		const stmtIDIndex = 0           // Replace with actual index for statement ID if different
-		const accountIndex = 3          // Replace with actual index for account
-		const statusIndex = 15          // Replace with actual index for status
-		const requestAtIndex = 12       // Replace with actual index for request_at
+		const accountIdIndex = 4        // Replace with actual index for account_id (after account at index 3)
+		const statusIndex = 16          // Replace with actual index for status (shifted by 1 due to account_id)
+		const requestAtIndex = 13       // Replace with actual index for request_at (shifted by 1 due to account_id)
 		if len(record) <= statusIndex { // Use the largest index you will access
 			return false, nil
 		}
-		return isStatementExisted(ctx, dbConn, record[stmtIDIndex], record[statusIndex], record[requestAtIndex], record[accountIndex])
+		accountIdStr := record[accountIdIndex]
+		accountId, err := strconv.ParseUint(accountIdStr, 10, 32)
+		if err != nil {
+			return false, err
+		}
+		return isStatementExisted(ctx, dbConn, record[stmtIDIndex], record[statusIndex], record[requestAtIndex], uint32(accountId))
 	}
 
 	return false, nil
 }
 
-func isStatementExisted(ctx context.Context, db *sql.DB, stmtId string, status string, request_at, account string) (bool, error) {
+func isStatementExisted(ctx context.Context, db *sql.DB, stmtId string, status string, request_at string, accountId uint32) (bool, error) {
 	var exists bool
-	query := "SELECT EXISTS(SELECT 1 FROM `system`.statement_info WHERE statement_id = ? AND status = ? AND request_at = ? AND account = ?)"
-	err := db.QueryRowContext(ctx, query, stmtId, status, request_at, account).Scan(&exists)
+	query := "SELECT EXISTS(SELECT 1 FROM `system`.statement_info WHERE statement_id = ? AND status = ? AND request_at = ? AND account_id = ?)"
+	err := db.QueryRowContext(ctx, query, stmtId, status, request_at, accountId).Scan(&exists)
 	if err != nil {
 		return false, err
 	}
