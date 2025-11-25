@@ -67,6 +67,7 @@ type CheckpointBasedGCJob struct {
 	snapshotMeta  *logtail.SnapshotMeta
 	snapshots     *logtail.SnapshotInfo
 	pitr          *logtail.PitrInfo
+	cdcWatermarks map[uint64]types.TS
 	ts            *types.TS
 	globalCkpLoc  objectio.Location
 	globalCkpVer  uint32
@@ -85,6 +86,7 @@ func NewCheckpointBasedGCJob(
 	sourcer engine.BaseReader,
 	pitr *logtail.PitrInfo,
 	snapshots *logtail.SnapshotInfo,
+	cdcWatermarks map[uint64]types.TS,
 	snapshotMeta *logtail.SnapshotMeta,
 	checkpointCli checkpoint.Runner,
 	buffer *containers.OneSchemaBatchBuffer,
@@ -99,6 +101,7 @@ func NewCheckpointBasedGCJob(
 		snapshotMeta:  snapshotMeta,
 		snapshots:     snapshots,
 		pitr:          pitr,
+		cdcWatermarks: cdcWatermarks,
 		ts:            ts,
 		globalCkpLoc:  globalCkpLoc,
 		globalCkpVer:  gckpVersion,
@@ -172,7 +175,10 @@ func (e *CheckpointBasedGCJob) Execute(ctx context.Context) error {
 		e.pitr,
 		e.snapshotMeta,
 		transObjects,
+		e.cdcWatermarks,
 		e.checkpointCli,
+		e.fs,
+		e.mp,
 	)
 	if err != nil {
 		return err
@@ -356,7 +362,10 @@ func MakeSnapshotAndPitrFineFilter(
 	pitrs *logtail.PitrInfo,
 	snapshotMeta *logtail.SnapshotMeta,
 	transObjects map[string]map[uint64]*ObjectEntry,
+	cdcWatermarks map[uint64]types.TS,
 	checkpointCli checkpoint.Runner,
+	fs fileservice.FileService,
+	mp *mpool.MPool,
 ) (
 	filter FilterFn,
 	err error,
@@ -371,6 +380,10 @@ func MakeSnapshotAndPitrFineFilter(
 		snapshots,
 		pitrs,
 	)
+
+	// Copy tableID to dbID mapping to avoid lock contention
+	tableIDToDBID := snapshotMeta.GetTableIDToDBIDMap()
+
 	return func(
 		ctx context.Context,
 		bm *bitmap.Bitmap,
@@ -404,6 +417,27 @@ func MakeSnapshotAndPitrFineFilter(
 					if !logtail.ObjectIsSnapshotRefers(
 						entry.stats, pitr, &entry.createTS, &entry.dropTS, sp,
 					) {
+						// Check CDC logic similar to ISCP
+						if cdcWatermarks == nil {
+							bm.Add(uint64(i))
+							continue
+						}
+						// Get dbID from tableID
+						if dbID, ok := tableIDToDBID[tableID]; ok {
+							if cdcTS, ok := cdcWatermarks[dbID]; ok {
+								// This table is in a CDC database
+								// For CNCreated or Appendable objects, check if we should protect them
+								if entry.stats.GetCNCreated() || entry.stats.GetAppendable() {
+									// Protect if createTS > cdcTS or dropTS > cdcTS
+									// (if create or drop timestamp is greater than cdcTS, cannot delete)
+									if entry.createTS.GT(&cdcTS) ||
+										(!entry.dropTS.IsEmpty() && entry.dropTS.GT(&cdcTS)) {
+										// Protect this object
+										continue
+									}
+								}
+							}
+						}
 						bm.Add(uint64(i))
 					}
 					continue
@@ -421,6 +455,27 @@ func MakeSnapshotAndPitrFineFilter(
 			if !logtail.ObjectIsSnapshotRefers(
 				&stats, pitr, &createTS, &deleteTS, sp,
 			) {
+				// Check CDC logic similar to ISCP
+				if cdcWatermarks == nil {
+					bm.Add(uint64(i))
+					continue
+				}
+				// Get dbID from tableID
+				if dbID, ok := tableIDToDBID[tableID]; ok {
+					if cdcTS, ok := cdcWatermarks[dbID]; ok {
+						// This table is in a CDC database
+						// For CNCreated or Appendable objects, check if we should protect them
+						if stats.GetCNCreated() || stats.GetAppendable() {
+							// Protect if createTS > cdcTS or dropTS > cdcTS
+							// (if create or drop timestamp is greater than cdcTS, cannot delete)
+							if createTS.GT(&cdcTS) ||
+								(!deleteTS.IsEmpty() && deleteTS.GT(&cdcTS)) {
+								// Protect this object
+								continue
+							}
+						}
+					}
+				}
 				bm.Add(uint64(i))
 			}
 		}
