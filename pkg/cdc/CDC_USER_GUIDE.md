@@ -9,20 +9,25 @@
 ## Table of Contents
 
 1. [Overview](#overview)
-2. [Quick Start](#quick-start)
-3. [CREATE CDC - Creating a CDC Task](#create-cdc---creating-a-cdc-task)
-4. [SHOW CDC - Viewing CDC Tasks](#show-cdc---viewing-cdc-tasks)
-5. [PAUSE CDC - Pausing a CDC Task](#pause-cdc---pausing-a-cdc-task)
-6. [RESUME CDC - Resuming a CDC Task](#resume-cdc---resuming-a-cdc-task)
-7. [DROP CDC - Dropping a CDC Task](#drop-cdc---dropping-a-cdc-task)
-8. [RESTART CDC - Restarting a CDC Task](#restart-cdc---restarting-a-cdc-task)
-9. [Monitoring and Error Handling](#monitoring-and-error-handling)
-10. [Metrics and Observability](#metrics-and-observability)
-11. [Configuration Options Reference](#configuration-options-reference)
-12. [Best Practices](#best-practices)
-13. [Troubleshooting](#troubleshooting)
-14. [Test Scenarios](#test-scenarios)
-15. [FAQ](#faq)
+2. [System Architecture](#system-architecture)
+   - [Core Components](#core-components)
+   - [Component Collaboration](#component-collaboration)
+   - [Task Lifecycle](#task-lifecycle)
+   - [Design Intentions](#design-intentions)
+3. [Quick Start](#quick-start)
+4. [CREATE CDC - Creating a CDC Task](#create-cdc---creating-a-cdc-task)
+5. [SHOW CDC - Viewing CDC Tasks](#show-cdc---viewing-cdc-tasks)
+6. [PAUSE CDC - Pausing a CDC Task](#pause-cdc---pausing-a-cdc-task)
+7. [RESUME CDC - Resuming a CDC Task](#resume-cdc---resuming-a-cdc-task)
+8. [DROP CDC - Dropping a CDC Task](#drop-cdc---dropping-a-cdc-task)
+9. [RESTART CDC - Restarting a CDC Task](#restart-cdc---restarting-a-cdc-task)
+10. [Monitoring and Error Handling](#monitoring-and-error-handling)
+11. [Metrics and Observability](#metrics-and-observability)
+12. [Configuration Options Reference](#configuration-options-reference)
+13. [Best Practices](#best-practices)
+14. [Troubleshooting](#troubleshooting)
+15. [Test Scenarios](#test-scenarios)
+16. [FAQ](#faq)
 
 ---
 
@@ -47,6 +52,343 @@ Change Data Capture (CDC) is a data replication feature that captures and synchr
 - MySQL 5.7+
 - MySQL 8.0+
 - MatrixOne (inter-cluster replication)
+
+---
+
+## System Architecture
+
+### Overview
+
+The CDC system is built on a **pipeline architecture** that processes data changes through multiple stages: reading from source, processing changes, and writing to target. The system is designed for **high reliability**, **automatic recovery**, and **precise state management**.
+
+### Core Components
+
+The CDC system consists of five main components that work together to achieve reliable data replication:
+
+#### 1. TableChangeStream (Stream)
+
+**Purpose**: The main orchestrator that coordinates the entire data replication pipeline for a single table.
+
+**Responsibilities**:
+- Orchestrates the data replication lifecycle for one table
+- Manages tick-based polling intervals (frequency control)
+- Coordinates between Reader, Processor, and Sinker components
+- Handles error classification and retry decisions
+- Manages watermark progression and state persistence
+- Implements StaleRead recovery mechanism
+- Provides pause/cancel control signal handling
+
+**Key Behaviors**:
+- Runs in a continuous loop, processing one round at a time
+- Each round: reads changes → processes → writes → updates watermark
+- Automatically retries on retryable errors
+- Stops processing on non-retryable errors (requires manual intervention)
+- Persists error state to database for recovery after restarts
+
+**Lifecycle**:
+- Created per table when task starts
+- Runs until task is paused, dropped, or encounters fatal error
+- Cleans up resources on shutdown
+
+#### 2. Reader (ChangeReader)
+
+**Purpose**: Reads change data from MatrixOne source database.
+
+**Responsibilities**:
+- Creates transactions to read changes from source tables
+- Collects changes within a timestamp range (fromTs to toTs)
+- Handles table schema changes and truncation
+- Provides change batches (snapshot + incremental) to processor
+- Manages transaction lifecycle (begin, read, commit/rollback)
+
+**Key Behaviors**:
+- Uses MatrixOne transaction API to read changes
+- Returns changes in batches (snapshot data + incremental changes)
+- Handles StaleRead errors (data not yet available at requested timestamp)
+- Supports table relation lookups and schema validation
+
+**Components**:
+- **TransactionManager**: Manages transaction lifecycle, coordinates with Sinker for BEGIN/COMMIT/ROLLBACK
+- **ChangeCollector**: Collects changes from source tables within timestamp ranges
+- **DataProcessor**: Processes change batches and coordinates with Sinker
+
+#### 3. Sinker (mysqlSinker2)
+
+**Purpose**: Writes data changes to downstream MySQL-compatible database.
+
+**Responsibilities**:
+- Executes SQL commands (INSERT, UPDATE, DELETE) on target database
+- Manages transaction lifecycle on target (BEGIN, COMMIT, ROLLBACK)
+- Implements retry mechanism with exponential backoff
+- Provides circuit breaker to prevent retry storms
+- Handles connection management and reconnection
+- Tracks transaction state (IDLE, ACTIVE, COMMITTED, ROLLED_BACK)
+
+**Key Behaviors**:
+- Uses command channel pattern: commands are sent asynchronously, executed by consumer goroutine
+- Once error occurs, all subsequent commands are skipped until `ClearError()`
+- Producer (Reader) polls `Error()` to detect async failures
+- Supports SQL batching and reuse query buffer optimization
+- Automatic retry for transient errors (network, timeout, circuit breaker)
+
+**Transaction State Machine**:
+```
+IDLE --SendBegin--> ACTIVE --SendCommit--> COMMITTED --cleanup--> IDLE
+                    ACTIVE --SendRollback--> ROLLED_BACK --cleanup--> IDLE
+```
+
+#### 4. WatermarkUpdater
+
+**Purpose**: Manages watermark state (checkpoint) and error persistence.
+
+**Responsibilities**:
+- Maintains per-table watermark (last synchronized timestamp)
+- Persists error messages with metadata (retryable flag, retry count, timestamps)
+- Provides in-memory cache for fast watermark lookups
+- Implements asynchronous job queue for watermark updates (preserves batch processing design)
+- Manages circuit breaker state for commit failures
+- Clears errors on successful processing
+
+**Key Behaviors**:
+- Watermark represents the last successfully synchronized timestamp
+- Errors are persisted with structured format: `R:<count>:<first>:<last>:<message>` or `N:<first>:<message>`
+- Uses lazy batch processing: updates are queued and processed asynchronously
+- Cache provides fast reads without synchronous SQL queries
+- Circuit breaker tracks commit failure patterns
+
+**Storage**:
+- In-memory cache: fast lookups during processing
+- Database (`mo_catalog.mo_cdc_watermark`): persistent state, survives restarts
+
+**Watermark Persistence Design - At-Least-Once Semantics**:
+
+The watermark persistence is **asynchronous by design** to preserve batch processing performance. This design choice has important implications:
+
+1. **Asynchronous Persistence**:
+   - Watermark updates are queued and processed asynchronously via job queue
+   - This avoids blocking data processing with synchronous database writes
+   - Improves overall throughput and reduces latency
+
+2. **Watermark May Lag Behind Actual Progress**:
+   - The persisted watermark in database may be **lower than the actual synchronized position**
+   - This is **intentional and safe** due to idempotency guarantees
+
+3. **Idempotency Guarantee**:
+   - CDC operations (INSERT, UPDATE, DELETE) are **idempotent** on the target database
+   - If system restarts before watermark is persisted, it will re-sync from the last persisted watermark
+   - Re-syncing the same data multiple times is safe and does not cause data corruption
+   - This ensures **at-least-once delivery** semantics
+
+4. **Recovery Behavior**:
+   - On restart, system resumes from the last persisted watermark (which may be lower than actual)
+   - System will re-process some data that was already synchronized
+   - This is acceptable because operations are idempotent
+   - Better to have slight duplication than to lose data
+
+5. **Error Handling for Watermark Stalls**:
+   - If watermark cannot advance (e.g., due to persistent errors), system detects this condition
+   - Watermark stall errors are logged and tracked via metrics
+   - System will retry and eventually recover when underlying issues are resolved
+   - See "Watermark Stall Errors" in Error Handling section for details
+
+**Why This Design**:
+- **Performance**: Asynchronous updates avoid blocking the critical data path
+- **Reliability**: At-least-once semantics ensure no data loss
+- **Simplicity**: Idempotent operations simplify error recovery
+- **Trade-off**: Accepts slight data duplication in exchange for better performance and simpler recovery
+
+#### 5. Task Scheduler (Frontend)
+
+**Purpose**: Manages task lifecycle and coordinates multiple table streams.
+
+**Responsibilities**:
+- Creates and manages CDC tasks
+- Starts/stops table streams based on task state
+- Checks error state before starting streams (uses `ShouldRetry` logic)
+- Handles task-level operations (pause, resume, restart, drop)
+- Monitors task health and state transitions
+- Clears errors on resume/restart
+
+**Key Behaviors**:
+- Scans for new tables and creates streams dynamically
+- Before starting stream, checks persisted error in watermark table
+- Skips tables with non-retryable errors (requires manual intervention)
+- Allows retryable errors to continue processing
+- Clears all table errors when task is resumed
+
+### Component Collaboration
+
+The components work together in a **producer-consumer pipeline**:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Task Scheduler                            │
+│  - Creates/manages tasks                                     │
+│  - Starts/stops table streams                                │
+│  - Checks error state before starting                        │
+└──────────────────────┬──────────────────────────────────────┘
+                       │
+                       ▼
+┌─────────────────────────────────────────────────────────────┐
+│              TableChangeStream (per table)                  │
+│  - Orchestrates pipeline                                    │
+│  - Manages tick-based polling                               │
+│  - Coordinates components                                   │
+└──────┬───────────────────────────────┬──────────────────────┘
+       │                               │
+       ▼                               ▼
+┌──────────────────┐          ┌──────────────────┐
+│     Reader       │          │   WatermarkUpdater│
+│  - Read changes  │          │  - Manage state   │
+│  - Collect data  │          │  - Persist errors │
+└──────┬───────────┘          └──────────────────┘
+       │
+       ▼
+┌─────────────────────────────────────────────────────────────┐
+│              TransactionManager + DataProcessor             │
+│  - Coordinate transaction lifecycle                        │
+│  - Process change batches                                   │
+│  - Send commands to Sinker                                  │
+└──────┬──────────────────────────────────────────────────────┘
+       │
+       ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    Sinker (mysqlSinker2)                    │
+│  - Execute SQL on target                                    │
+│  - Manage target transactions                               │
+│  - Retry on transient errors                                │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Data Flow**:
+
+1. **TableChangeStream** starts a processing round (tick-based)
+2. **Reader** creates transaction and collects changes from source (fromTs to toTs)
+3. **DataProcessor** processes change batches:
+   - Sends BEGIN to Sinker
+   - Sends INSERT/UPDATE/DELETE commands for each change
+   - Sends COMMIT to Sinker
+4. **Sinker** executes commands on target database:
+   - Receives commands asynchronously via channel
+   - Executes SQL with retry mechanism
+   - Reports errors back to producer
+5. **WatermarkUpdater** updates watermark on success:
+   - Updates in-memory cache
+   - Queues database update (asynchronous)
+6. **TableChangeStream** waits for next tick interval and repeats
+
+**Error Handling Flow**:
+
+1. Error occurs in any component (Reader, Sinker, etc.)
+2. Error propagates to **TableChangeStream**
+3. **TableChangeStream** classifies error (retryable/non-retryable)
+4. Error state updated atomically (lastError + retryable flag)
+5. Error persisted to **WatermarkUpdater** (with metadata)
+6. If retryable: Stream waits for next tick and retries
+7. If non-retryable: Stream stops, requires manual intervention
+8. On restart: **Task Scheduler** checks persisted error, decides whether to start stream
+
+### Task Lifecycle
+
+A CDC task goes through the following states:
+
+```
+CREATED → STARTING → RUNNING → [PAUSED] → [RUNNING] → CANCELLED
+                              ↓
+                           [FAILED] → [RUNNING] (after resume)
+```
+
+**State Transitions**:
+
+1. **CREATED**: Task is created via `CREATE CDC` command
+   - Metadata stored in `mo_catalog.mo_cdc_task`
+   - Initial watermark entries created in `mo_catalog.mo_cdc_watermark`
+
+2. **STARTING**: Task is being initialized
+   - Task scheduler scans for tables
+   - Creates TableChangeStream for each table
+   - Checks error state before starting streams
+
+3. **RUNNING**: Task is actively replicating data
+   - TableChangeStream processes changes in rounds
+   - Watermarks are updated on successful rounds
+   - Errors are handled automatically (retryable) or block processing (non-retryable)
+
+4. **PAUSED**: Task is temporarily stopped
+   - All table streams are stopped gracefully
+   - State is preserved (watermarks, errors)
+   - Can be resumed via `RESUME CDC` command
+
+5. **FAILED**: Task encountered non-retryable error
+   - Task remains in RUNNING state but sync is blocked
+   - Error persists until manually cleared
+   - Can be recovered via `RESUME CDC` (clears errors)
+
+6. **CANCELLED**: Task is dropped
+   - All resources are cleaned up
+   - Metadata and watermarks are deleted
+   - Cannot be recovered
+
+**Control Operations**:
+
+- **PAUSE**: Gracefully stops all table streams, preserves state
+- **RESUME**: Clears all errors, restarts streams from last watermark
+- **RESTART**: Stops and immediately restarts, clears errors
+- **DROP**: Permanently deletes task and all metadata
+
+### Design Intentions
+
+The CDC system is designed with the following principles:
+
+1. **Reliability First**:
+   - All state is persisted (watermarks, errors)
+   - Errors are classified and handled appropriately
+   - System can recover from any error state via manual intervention
+
+2. **Automatic Recovery**:
+   - Transient errors (network, system unavailability) are automatically retried
+   - Retry mechanism with exponential backoff prevents retry storms
+   - Circuit breaker protects against persistent failures
+
+3. **Precise State Management**:
+   - Watermark represents exact synchronization point
+   - Errors are tracked with metadata (retryable, count, timestamps)
+   - State survives system restarts
+
+4. **Performance Optimization**:
+   - Asynchronous processing (command channel pattern)
+   - Batch processing for watermark updates
+   - SQL reuse query buffer optimization
+   - In-memory cache for fast watermark lookups
+
+5. **Flexibility**:
+   - Supports multiple replication levels (account, database, table)
+   - Configurable frequency, time ranges, filters
+   - Optional initial snapshot
+
+6. **Observability**:
+   - Structured logging with consistent keys
+   - Metrics for monitoring and alerting
+   - Progress tracking per table
+
+7. **User Control**:
+   - Manual intervention always possible (resume clears all errors)
+   - Clear error messages guide troubleshooting
+   - Task operations (pause/resume/restart) provide full control
+
+### Component Isolation
+
+Each component is designed to be **loosely coupled**:
+
+- **TableChangeStream** doesn't know about downstream MySQL details
+- **Sinker** doesn't know about source MatrixOne details
+- **WatermarkUpdater** is a shared service, used by all streams
+- **Reader** components are independent per table
+
+This design allows:
+- Easy testing (components can be mocked)
+- Independent scaling (each table stream is independent)
+- Clear error boundaries (errors are contained and handled appropriately)
 
 ---
 
@@ -162,10 +504,10 @@ Table mapping specifies which tables to replicate and how to map them to the tar
 'db1.t1:db2.t1,db1.t2:db2.new_t2'
 
 -- Database-level (all tables in database)
-'db1.*:db1.*'
+'db1:db2'
 
 -- Account-level (all databases and tables)
-'*.*:*.*'
+'*:*'
 ```
 
 #### Optional Parameters
@@ -174,7 +516,7 @@ Use curly braces `{}` to specify options. Options are comma-separated key-value 
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `Level` | string | `table` | Replication granularity: `account`, `database`, or `table` |
+| `Level` | string | **Required** | Replication granularity: `account`, `database`, or `table`. **Must be explicitly specified** |
 | `Exclude` | string | (none) | Comma-separated list of tables to exclude |
 | `StartTs` | timestamp | (current time) | Start timestamp for replication |
 | `EndTs` | timestamp | (none) | End timestamp for bounded replication |
@@ -213,7 +555,7 @@ create cdc task_db_level
   'mysql://myaccount#root:password@127.0.0.1:6001'
   'mysql'
   'mysql://root:password@192.168.1.100:3306'
-  'db1.*:db1.*'
+  'db1:db1'
   {'Level'='database'};
 ```
 
@@ -226,7 +568,7 @@ create cdc task_account_level
   'mysql://myaccount#root:password@127.0.0.1:6001'
   'matrixone'
   'mysql://target_account#admin:password@192.168.1.200:6001'
-  '*.*:*.*'
+  '*:*'
   {'Level'='account', 'Account'='myaccount'};
 ```
 
@@ -240,7 +582,7 @@ create cdc replicate_orders
   'mysql'
   'mysql://root:MySQLPass456@192.168.1.100:3306'
   'sales.orders:sales.orders'
-  {};
+  {'Level'='table'};
 ```
 
 #### Example 2: Multiple Tables with Exclusion
@@ -250,7 +592,7 @@ create cdc replicate_sales_db
   'mysql://prod_account#admin:SecurePass123@127.0.0.1:6001'
   'mysql'
   'mysql://root:MySQLPass456@192.168.1.100:3306'
-  'sales.*:sales.*'
+  'sales:sales'
   {'Level'='database', 'Exclude'='sales.temp_table,sales.staging_table'};
 ```
 
@@ -294,7 +636,7 @@ create cdc mo_to_mo_replication
   'mysql://source_account#admin:password@127.0.0.1:6001'
   'matrixone'
   'mysql://target_account#admin:password@192.168.1.200:6001'
-  'mydb.*:mydb.*'
+  'mydb:mydb'
   {'Level'='database'};
 ```
 
@@ -453,18 +795,42 @@ resume cdc task task3;
 
 ### Error Clearing
 
-`resume cdc task` automatically clears error messages for all tables, allowing fresh retry attempts.
+**`resume cdc task` automatically clears ALL error messages for all tables in the task**, regardless of error type (retryable or non-retryable). This allows fresh retry attempts after fixing underlying issues.
 
+**Behavior:**
+- Clears all errors in `mo_catalog.mo_cdc_watermark.err_msg` for the task
+- Resets error state for all tables
+- Allows system to retry from last watermark
+- Works for both retryable and non-retryable errors
+
+**Use Cases:**
+- After fixing network issues
+- After restoring downstream MySQL service
+- After fixing schema mismatches
+- After resolving authentication problems
+- After any manual intervention to fix root causes
+
+**Example:**
 ```sql
 -- Before RESUME: check for errors
 show cdc task replicate_orders;
+-- Shows: table1 has error "N:1763362169:rollback failure"
+
+-- Fix the underlying issue (e.g., restore service, fix schema)
 
 -- Resume clears errors and restarts
 resume cdc task replicate_orders;
 
--- After RESUME: errors are cleared
+-- After RESUME: errors are cleared, processing resumes
 show cdc task replicate_orders;
+-- Shows: table1 has no error, processing continues
 ```
+
+**Important Notes:**
+- Resume clears **all** errors, not just non-retryable ones
+- Always fix underlying issues before resuming
+- System will retry from last watermark after resume
+- If issue persists, error will occur again (can be cleared again)
 
 ---
 
@@ -561,31 +927,336 @@ resume cdc task task2 'restart';
 
 ### Error Types
 
+The CDC system automatically classifies errors as **retryable** or **non-retryable** based on error type and context. This classification determines whether the system will automatically retry or require manual intervention.
+
 #### 1. Retryable Errors
 
-Automatically retried up to 3 times:
-- Network timeouts
-- Transient connection failures
-- Stale read errors
+**Automatically retried up to 3 times** before requiring manual intervention.
 
-**Behavior**: Task continues running, error message shows retry count
+**MatrixOne System/Network Errors (Highest Priority):**
+These errors indicate temporary system unavailability and are always retryable:
+- **RPC Timeout**: MatrixOne RPC calls timed out
+- **No Available Backend**: No backend services available
+- **Backend Cannot Connect**: Cannot connect to remote backend
+- **TN Shard Not Found**: Transaction node shard not found (temporary)
+- **RPC Error**: Generic RPC communication errors
+- **Client/Backend Closed**: Connection closed unexpectedly
+- **Context Timeout**: Operation timeout due to system delays
+
+**Network/Connection Issues:**
+- Connection timeouts, connection resets, network errors
+- Service unavailable errors
+- Network-related begin transaction failures
+
+**Transaction Errors:**
+- **Commit Failures**: Transient network issues during transaction commit
+- **Begin Failures (Network-related)**: Network issues when starting transactions
+
+**Data Source Errors:**
+- **Table Relation Errors**: Table truncated or temporarily unavailable (table may be recreated)
+- **Watermark Stall Errors**: Snapshot timestamp stuck (temporary condition)
+  - Occurs when watermark cannot advance for extended period (default threshold: 1 minute)
+  - System detects this condition and logs warning: `cdc.table_stream.snapshot_not_advanced`
+  - Error is retryable - system will continue attempting to advance watermark
+  - Tracked via metrics for monitoring
+  - Usually resolves automatically when source data becomes available
+- **StaleRead Errors**: If recovery is possible (watermark reset succeeds)
+
+**Sinker Errors (Transient):**
+- Circuit breaker errors (indicates temporary overload)
+- Timeout errors from downstream MySQL
+
+**Behavior**: 
+- Task continues running, error message shows retry count
+- Automatic retry up to 3 times (configurable via `WithMaxRetryCount`)
+- After max retries, automatically converted to non-retryable
+- Error persists in watermark table with format: `R:<count>:<first>:<last>:<message>`
+- Uses exponential backoff between retries (configurable via `WithRetryBackoff`)
 
 **Example Error Message**:
 ```
-retryable error: timeout connecting to target (retry 2/3)
+R:2:1763362169:1763362200:internal error: commit failure
 ```
+- `R`: Retryable
+- `2`: Retry count (current attempt)
+- `1763362169`: First seen timestamp
+- `1763362200`: Last seen timestamp
+- `internal error: commit failure`: Error message
+
+#### Retry Mechanism Details
+
+**Exponential Backoff Strategy**:
+
+The CDC system implements exponential backoff for retryable errors to avoid overwhelming the system during transient failures. The backoff delay is calculated based on:
+- **Error Type**: Different error types may have different base delays
+- **Retry Count**: Delay increases exponentially with each retry attempt
+- **Configurable Parameters**: Base delay, maximum delay, and backoff factor
+
+**Default Configuration**:
+- **Max Retry Count**: 3 attempts
+- **Base Delay**: 200ms (for most error types)
+- **Max Delay**: 30s (caps the exponential growth)
+- **Backoff Factor**: 2.0 (doubles delay each retry)
+
+**Retry Delay Calculation**:
+- Retry 1: Base delay (e.g., 200ms)
+- Retry 2: Base delay × factor (e.g., 400ms)
+- Retry 3: Base delay × factor² (e.g., 800ms)
+- Capped at maximum delay (e.g., 30s)
+
+**Original Error Preservation**:
+
+To ensure **deterministic error reporting**, the CDC system preserves the **original error** that triggered the retry sequence. This design ensures that:
+
+1. **Consistent Error Reporting**: The error returned to users and persisted in the database is the original error that caused the retry, not auxiliary errors encountered during retry attempts (e.g., cache lookup failures during cleanup).
+
+2. **Clear Root Cause**: Users can identify the actual problem (e.g., "commit failure") rather than secondary issues that occurred during retry (e.g., "cache error").
+
+3. **Predictable Behavior**: The system behavior is deterministic - the same error condition will always report the same error, regardless of what happens during retry attempts.
+
+**How It Works**:
+- When a retryable error first occurs, it is stored as the **original error**
+- During retry attempts, if auxiliary errors occur (e.g., during cleanup operations), they are logged but do not replace the original error
+- If a new primary error occurs (different error type), it replaces the original error
+- If a fatal (non-retryable) error occurs, it replaces the original error
+- When retries are exhausted or a fatal error occurs, the **original error** is returned/persisted
+
+**Example Scenario**:
+```
+1. Commit failure occurs → Original error: "commit failure"
+2. Retry attempt 1 → Cleanup encounters cache error → Original error preserved: "commit failure"
+3. Retry attempt 2 → Commit failure again → Original error preserved: "commit failure"
+4. Retry attempt 3 → Commit failure again → Original error preserved: "commit failure"
+5. Max retries exceeded → System stops, reports: "commit failure" (not "cache error")
+```
+
+This ensures that users always see the root cause of the problem, not transient issues that occurred during recovery attempts.
 
 #### 2. Non-Retryable Errors
 
-Require manual intervention:
-- Target table not found
-- Schema mismatch
-- Authentication failures
-- Syntax errors
+**Require manual intervention** - no automatic retry.
 
-**Behavior**: Task remains in `running` state but sync is blocked for affected tables
+**System State Errors:**
+- **Rollback Failures**: System state may be inconsistent after rollback failure
+- **Begin Failures (State-related)**: Cannot start transaction due to state issues (e.g., "transaction already active")
 
-**Resolution**: Fix the issue, then `resume cdc task <task_name>` to clear errors
+**Fatal Errors:**
+- **Simple Sinker Errors**: Fatal errors before transaction starts (no context indicating transient issue)
+- **StaleRead with startTs**: Cannot recover (startTs is set, cannot reset watermark)
+- **Target Table Not Found**: Schema mismatch or table deleted permanently
+- **Authentication Failures**: Invalid credentials (requires configuration fix)
+- **Syntax Errors**: SQL construction failures (requires code fix)
+
+**Control Signals:**
+- Pause/cancel signals (intentional stops)
+
+**Unknown Errors:**
+- Errors that don't match any known pattern (default to non-retryable for safety)
+
+**Behavior**: 
+- Task remains in `running` state but sync is blocked for affected tables
+- Error persists until manually cleared via `resume cdc task`
+- No automatic retry
+- Error persists in watermark table with format: `N:<first>:<message>`
+
+**Example Error Message**:
+```
+N:1763362169:internal error: rollback failure
+```
+- `N`: Non-retryable
+- `1763362169`: First seen timestamp
+- `internal error: rollback failure`: Error message
+
+**Max Retry Exceeded Format**:
+```
+N:1763362169:max retry exceeded (4): connection timeout
+```
+- Auto-converted from retryable after exceeding 3 retries
+- Requires manual intervention via `resume cdc task`
+
+### Error Classification Logic
+
+The system uses a **priority-based classification** approach to determine if errors are retryable:
+
+**Classification Priority (Checked in Order):**
+
+1. **Control Signals** (Non-retryable)
+   - Pause/cancel signals are always non-retryable (intentional stops)
+
+2. **MatrixOne System Errors** (Retryable)
+   - System checks for specific MatrixOne error codes first
+   - All system/network errors (RPC timeout, backend unavailable, shard not found, etc.) are automatically retryable
+   - This ensures resilience during temporary MatrixOne system unavailability or network fluctuations
+
+3. **Context Timeout Errors** (Retryable)
+   - Operation timeouts due to system delays are retryable
+
+4. **Error Message Pattern Matching** (Retryable/Non-retryable)
+   - **Retryable Patterns**: `commit`, `connection`, `timeout`, `network`, `unavailable`, `rpc`, `backend`, `shard`, `relation`, `truncated`, `stuck`, `stall`
+   - **Non-Retryable Patterns**: `rollback`, `begin` (without network context), simple `sinker error` (without context)
+
+5. **Default** (Non-retryable)
+   - Unknown errors default to non-retryable for safety
+
+**Special Handling:**
+
+- **Begin Failures**: 
+  - Network-related (contains `connection`, `timeout`, `network`, `unavailable`, `rpc`, `backend`) → **Retryable**
+  - State-related (e.g., "transaction already active") → **Non-retryable**
+
+- **Sinker Errors**:
+  - With transient context (`circuit`, `timeout`) → **Retryable**
+  - Simple "sinker error" without context → **Non-retryable**
+
+- **StaleRead Errors**:
+  - Recovery attempted automatically
+  - If recovery succeeds → Error is swallowed, processing continues
+  - If recovery fails → **Non-retryable**
+
+**Why This Matters:**
+
+This classification ensures that:
+- **Temporary system issues** (network抖动, service unavailability, MatrixOne node failures) are automatically retried
+- **Permanent errors** (state inconsistencies, fatal configuration issues) require manual intervention
+- **Users can always recover** by using `resume cdc task` to clear any error and retry
+
+### Error Storage
+
+Errors are stored in two places for different purposes:
+
+1. **In-Memory (Runtime)**:
+   - Tracks the last error that occurred during processing
+   - Maintains retryable flag for current processing round
+   - Updated atomically to ensure consistency
+   - Used for immediate retry decisions
+
+2. **Persistent (Database)**:
+   - Stored in `mo_catalog.mo_cdc_watermark.err_msg` column
+   - Format: `R:<count>:<first>:<last>:<message>` (retryable) or `N:<first>:<message>` (non-retryable)
+   - Persisted asynchronously to avoid blocking data processing
+   - Used by task scheduler to decide whether to start table processing
+   - Survives system restarts
+
+### Error Consumption
+
+Errors are consumed at two levels:
+
+1. **Runtime (During Processing)**:
+   - When an error occurs, processing round stops immediately
+   - Error state is persisted to database
+   - If retryable: Stream waits for next tick interval and retries automatically
+   - If non-retryable: Stream stops processing, waits for manual intervention
+
+2. **Startup (Task Scheduler)**:
+   - Before starting table stream, scheduler checks persisted error in watermark table
+   - Uses retry decision logic:
+     - **No error** → Start processing
+     - **Retryable error with count ≤ 3** → Start processing (continue retrying)
+     - **Retryable error with count > 3** → Skip table (converted to non-retryable, requires manual clear)
+     - **Non-retryable error** → Skip table (requires manual clear)
+
+**Retry Decision Logic:**
+- System automatically allows retry for retryable errors up to 3 attempts
+- After 3 retries, retryable errors are converted to non-retryable
+- Non-retryable errors always require manual intervention via `resume cdc task`
+
+### Error Lifecycle
+
+**Stage 1: Error Occurs**
+- Error is detected during processing (network issue, commit failure, etc.)
+- System immediately classifies error as retryable or non-retryable
+
+**Stage 2: Error State Update**
+- Error state updated atomically (ensures consistency)
+- Error persisted to watermark table with metadata (retry count, timestamps)
+
+**Stage 3: Retry Decision**
+- **Retryable errors**: 
+  - Retry count incremented
+  - If count ≤ 3: Continue processing, retry on next tick
+  - If count > 3: Convert to non-retryable, stop processing
+- **Non-retryable errors**: 
+  - Stop processing immediately
+  - Require manual intervention
+
+**Stage 4: Manual Recovery (if needed)**
+- User fixes underlying issue (network restored, service back online, etc.)
+- User runs `resume cdc task <task_name>` to clear error
+- System clears all errors for the task
+- Processing resumes from last watermark
+
+**Key Points:**
+- All errors (retryable and non-retryable) can be cleared via `resume cdc task`
+- System always allows recovery through manual intervention
+- Errors persist across system restarts until manually cleared
+
+### Multi-Level Retry
+
+The CDC system implements retry at multiple levels for maximum resilience:
+
+1. **Executor Level (Sinker - Downstream MySQL)**:
+   - Automatic retry with exponential backoff for SQL execution
+   - Circuit breaker prevents retry storms
+   - Retries network errors, MySQL connection issues, and transient SQL errors
+   - Handles downstream service unavailability
+
+2. **TableChangeStream Level (Data Processing)**:
+   - Tick-based retry for retryable errors
+   - Automatic StaleRead recovery (resets watermark if possible)
+   - Error state tracking and persistence
+   - Handles MatrixOne system errors and data source issues
+
+3. **Task Scheduler Level (Task Management)**:
+   - Startup check before starting table processing
+   - Skips tables with non-retryable errors (requires manual intervention)
+   - Allows retryable errors to continue processing
+   - Manual recovery via `resume cdc task`
+
+**Benefits:**
+- Network fluctuations are handled automatically at executor level
+- System unavailability is handled at table stream level
+- Permanent errors are caught early and require manual fix
+- Users can always recover via `resume cdc task`
+
+### Error Resolution
+
+**For Retryable Errors:**
+- Usually resolve automatically within 3 retries
+- Monitor retry count in error message (format: `R:<count>:...`)
+- If error persists after 3 retries:
+  - Check underlying cause (network, service availability)
+  - Fix the issue if possible
+  - Use `resume cdc task` to clear error and retry
+
+**For Non-Retryable Errors:**
+1. **Identify the root cause**:
+   - Check error message in `show cdc task` output
+   - Review logs for detailed error context
+   - Common causes: missing tables, schema mismatches, authentication failures, state inconsistencies
+
+2. **Fix the underlying issue**:
+   - Create missing tables
+   - Fix schema mismatches
+   - Update credentials
+   - Resolve state inconsistencies
+
+3. **Clear error and retry**:
+   - Run `resume cdc task <task_name>` to clear all errors
+   - System will automatically retry on next scan
+   - Processing resumes from last watermark
+
+**Important: All Errors Can Be Cleared**
+
+- `resume cdc task` clears **all errors** (both retryable and non-retryable) for all tables in the task
+- This ensures users can always recover from any error state
+- After clearing errors, system will retry from last watermark
+- If underlying issue is fixed, processing will succeed
+- If underlying issue persists, error will occur again and can be cleared again
+
+**Best Practice:**
+- Always fix the underlying issue before clearing errors
+- Monitor error messages to understand root causes
+- Use `resume cdc task` as a recovery mechanism after fixing issues
 
 ### Debugging with Logs
 
@@ -676,6 +1347,28 @@ join mo_catalog.mo_cdc_task t
 where t.state = 'running'
 order by lag_minutes desc;
 ```
+
+#### Detect Snapshot Stalls
+
+Each table stream tracks whether recent polling rounds failed to advance the snapshot watermark. When this happens, CDC:
+
+- Increments `mo_cdc_table_snapshot_no_progress_total` for the affected table on every stalled round.
+- Sets `mo_cdc_table_stuck` to `1` and records the time in `mo_cdc_table_last_activity_timestamp`.
+- Emits throttled warning logs; if the stall exceeds the internal threshold (default 1 minute) the table stream raises a retryable error so the scheduler can retry later.
+- Resets counters and gauges automatically once progress resumes.
+
+```promql
+# Tables currently flagged as stalled
+mo_cdc_table_stuck == 1
+
+# Minutes since last successful progress
+(time() - mo_cdc_table_last_activity_timestamp) / 60
+
+# Rounds without progress in the last 10 minutes
+increase(mo_cdc_table_snapshot_no_progress_total[10m]) > 0
+```
+
+> **Note**: The stall threshold and warning interval are configurable (defaults: 1 minute stall threshold, 10 second warning throttle). Adjust your alerting thresholds if you override these values.
 
 ### Common Error Messages
 
@@ -785,6 +1478,7 @@ rate(mo_cdc_task_state_change_total[5m])
 | `mo_cdc_watermark_cache_size` | Gauge | `tier` | Number of watermarks in each cache tier |
 | `mo_cdc_watermark_update_total` | Counter | `table`, `update_type` | Count of watermark updates |
 | `mo_cdc_watermark_commit_duration_seconds` | Histogram | - | Duration of watermark commits to database |
+| `mo_cdc_table_snapshot_no_progress_total` | Counter | `table` | Count of processing rounds where snapshot timestamps failed to advance (stall detection) |
 
 **Example Queries**:
 ```promql
@@ -807,6 +1501,9 @@ mo_cdc_watermark_cache_size{tier="committed"}
 
 # Watermark commit latency (P99)
 histogram_quantile(0.99, mo_cdc_watermark_commit_duration_seconds_bucket)
+
+# Snapshot stalls detected in the last 10 minutes
+increase(mo_cdc_table_snapshot_no_progress_total[10m]) > 0
 
 # ⚠️ Planned feature: Watermark Lag Ratio (frequency-agnostic)
 # mo_cdc_watermark_lag_ratio  # <2: normal, 2-5: warning, >5: critical
@@ -860,6 +1557,12 @@ avg(mo_cdc_batch_size_rows)
 | `mo_cdc_table_stream_total` | Gauge | `state` | Number of active table streams |
 | `mo_cdc_table_stream_round_total` | Counter | `table`, `status` | Count of processing rounds |
 | `mo_cdc_table_stream_round_duration_seconds` | Histogram | `table` | Duration of processing rounds |
+| `mo_cdc_table_stuck` | Gauge | `table` | Whether a table stream is currently flagged as stalled (1 = stuck, 0 = healthy) |
+| `mo_cdc_table_last_activity_timestamp` | Gauge | `table` | Unix timestamp when the table stream last made forward progress |
+| `mo_cdc_table_stream_retry_total` | Counter | `table`, `error_type`, `outcome` | Count of retry attempts by error type and outcome (`attempted`, `succeeded`, `exhausted`, `failed`) |
+| `mo_cdc_table_stream_retry_delay_seconds` | Histogram | `table`, `error_type` | Retry backoff delay duration (exponential backoff) |
+| `mo_cdc_table_stream_auxiliary_error_total` | Counter | `table`, `auxiliary_error_type` | Count of auxiliary errors encountered during retries (preserved original error) |
+| `mo_cdc_table_stream_original_error_preserved_total` | Counter | `table`, `original_error_type` | Count of times original error was preserved during retries (ensures deterministic error reporting) |
 
 **Example Queries**:
 ```promql
@@ -873,6 +1576,31 @@ rate(mo_cdc_table_stream_round_total[5m])
 
 # Processing duration P99
 histogram_quantile(0.99, mo_cdc_table_stream_round_duration_seconds_bucket)
+
+# Tables currently marked as stuck
+mo_cdc_table_stuck == 1
+
+# Minutes since last successful progress
+(time() - mo_cdc_table_last_activity_timestamp) / 60
+
+# Retry attempt rate by error type
+sum by (table, error_type) (rate(mo_cdc_table_stream_retry_total{outcome="attempted"}[5m]))
+
+# Retry success rate (retries that eventually succeeded)
+sum by (table, error_type) (rate(mo_cdc_table_stream_retry_total{outcome="succeeded"}[5m])) /
+sum by (table, error_type) (rate(mo_cdc_table_stream_retry_total{outcome="attempted"}[5m]))
+
+# Retry exhaustion (retries exceeded max count)
+sum by (table, error_type) (rate(mo_cdc_table_stream_retry_total{outcome="exhausted"}[5m]))
+
+# Average retry backoff delay (P50)
+histogram_quantile(0.50, rate(mo_cdc_table_stream_retry_delay_seconds_bucket[5m]))
+
+# Auxiliary errors (infrastructure errors during retries)
+sum by (table, auxiliary_error_type) (rate(mo_cdc_table_stream_auxiliary_error_total[5m]))
+
+# Original error preservation (ensures deterministic error reporting)
+sum by (table, original_error_type) (rate(mo_cdc_table_stream_original_error_preserved_total[5m]))
 ```
 
 #### Sinker Metrics
@@ -975,6 +1703,29 @@ sum(mo_cdc_sinker_transaction_total{status="error"})
 sum by (sql_type) (rate(mo_cdc_sinker_sql_total{status="error"}[5m]))
 ```
 
+#### Retry Monitoring
+
+```promql
+# Retry Attempt Rate by Error Type
+sum by (table, error_type) (rate(mo_cdc_table_stream_retry_total{outcome="attempted"}[5m]))
+
+# Retry Success Rate
+sum by (table, error_type) (rate(mo_cdc_table_stream_retry_total{outcome="succeeded"}[5m])) /
+sum by (table, error_type) (rate(mo_cdc_table_stream_retry_total{outcome="attempted"}[5m]))
+
+# Retry Exhaustion Rate (retries exceeded max count)
+sum by (table, error_type) (rate(mo_cdc_table_stream_retry_total{outcome="exhausted"}[5m]))
+
+# Auxiliary Errors (errors that don't replace original errors)
+sum by (table, auxiliary_error_type) (rate(mo_cdc_table_stream_auxiliary_error_total[5m]))
+
+# Original Error Preservation (ensures deterministic error reporting)
+sum by (table, original_error_type) (rate(mo_cdc_table_stream_original_error_preserved_total[5m]))
+
+# Average Retry Backoff Delay
+histogram_quantile(0.50, rate(mo_cdc_table_stream_retry_delay_seconds_bucket[5m]))
+```
+
 ### Alert Rules
 
 #### Critical Alerts
@@ -1005,7 +1756,21 @@ These alerts indicate immediate action required:
 #   severity: critical
 #   description: "Watermark lag is 5x higher than expected"
 
-# 3. Watermark Stuck (Current Recommended Approach: Group-based)
+# 3. High Retry Exhaustion Rate
+- alert: CDCHighRetryExhaustion
+  expr: sum by (table) (rate(mo_cdc_table_stream_retry_total{outcome="exhausted"}[5m])) > 0.1
+  for: 5m
+  severity: warning
+  description: "Table {{ $labels.table }} has high retry exhaustion rate (>0.1/s). Retries are exceeding max count."
+
+# 4. Frequent Auxiliary Errors
+- alert: CDCFrequentAuxiliaryErrors
+  expr: sum by (table) (rate(mo_cdc_table_stream_auxiliary_error_total[5m])) > 1
+  for: 5m
+  severity: warning
+  description: "Table {{ $labels.table }} has frequent auxiliary errors (>1/s). May indicate infrastructure issues during retries."
+
+# 5. Watermark Stuck (Current Recommended Approach: Group-based)
 # Use separate rules for different task frequencies if you have task groups
 # Example for real-time tasks (Frequency < 1 minute):
 - alert: CDCWatermarkStuck_Realtime
@@ -1070,7 +1835,14 @@ These alerts indicate potential issues:
   severity: warning
   description: "High error rate detected (>0.01/s)"
 
-# 3. Slow SQL Execution
+# 3. High Retry Rate (indicates transient issues)
+- alert: CDCHighRetryRate
+  expr: sum by (table) (rate(mo_cdc_table_stream_retry_total{outcome="attempted"}[5m])) > 5
+  for: 5m
+  severity: warning
+  description: "Table {{ $labels.table }} has high retry rate (>5/s). May indicate transient infrastructure issues."
+
+# 4. Slow SQL Execution
 - alert: CDCSQLSlow
   expr: histogram_quantile(0.99, mo_cdc_sinker_sql_duration_seconds_bucket) > 1
   for: 5m
@@ -1227,6 +1999,7 @@ Configure alerts for critical conditions:
 - ✅ Watermark stuck (`mo_cdc_watermark_lag_seconds > 300`)
 - ✅ No heartbeat (`rate(mo_cdc_heartbeat_total[5m]) == 0`)
 - ✅ High error rate (`rate(mo_cdc_task_error_total[5m]) > 0.01`)
+- ✅ Snapshot stall detection (`increase(mo_cdc_table_snapshot_no_progress_total[10m]) > 0` or `mo_cdc_table_stuck == 1`)
 
 #### 2. Monitor Watermark Lag
 
@@ -1434,8 +2207,8 @@ Controls the scope of replication.
 | Value | Description | Table Mapping Format |
 |-------|-------------|----------------------|
 | `table` | Replicate specific tables | `db1.t1:db1.t1,db1.t2:db1.t2` |
-| `database` | Replicate all tables in database(s) | `db1.*:db1.*` |
-| `account` | Replicate all databases in account | `*.*:*.*` |
+| `database` | Replicate all tables in database(s) | `db1:db1` |
+| `account` | Replicate all databases in account | `*:*` |
 
 ### Exclude Option
 
@@ -1620,14 +2393,14 @@ create cdc test_replication
   'mysql'
   'mysql://root:password@192.168.1.100:3306'
   'mydb.orders:mydb.orders'
-  {};
+  {'Level'='table'};
 
 -- After verification, expand
 create cdc full_db_replication
   'mysql://myaccount#admin:password@127.0.0.1:6001'
   'mysql'
   'mysql://root:password@192.168.1.100:3306'
-  'mydb.*:mydb.*'
+  'mydb:mydb'
   {'Level'='database'};
 ```
 
@@ -1640,7 +2413,7 @@ create cdc prod_replication
   'mysql://myaccount#admin:password@127.0.0.1:6001'
   'mysql'
   'mysql://root:password@192.168.1.100:3306'
-  'production.*:production.*'
+  'production:production'
   {'Level'='database', 'Exclude'='production.temp_*,production.staging_*'};
 ```
 
@@ -1975,7 +2748,7 @@ create cdc migrate_prod
   'mysql://prod_account#admin:password@127.0.0.1:6001'
   'mysql'
   'mysql://root:password@192.168.1.100:3306'
-  'prod_db.*:prod_db.*'
+  'prod_db:prod_db'
   {'Level'='database', 'Exclude'='prod_db.temp_*,prod_db.staging_*'};
 ```
 

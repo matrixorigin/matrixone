@@ -60,7 +60,7 @@ var (
 	}
 )
 
-func newFTTestCase(t *testing.T, m *mpool.MPool, attrs []string, algo fulltext.FullTextScoreAlgo) fulltextTestCase {
+func newFTTestCase(t *testing.T, m *mpool.MPool, attrs []string, algo fulltext.FullTextScoreAlgo, limit uint64) fulltextTestCase {
 	proc := testutil.NewProcessWithMPool(t, "", m)
 	proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
 		if varName == fulltext.FulltextRelevancyAlgo {
@@ -103,7 +103,7 @@ func newFTTestCase(t *testing.T, m *mpool.MPool, attrs []string, algo fulltext.F
 				Expr: &plan.Expr_Lit{
 					Lit: &plan.Literal{
 						Value: &plan.Literal_U64Val{
-							U64Val: 0,
+							U64Val: limit,
 						},
 					},
 				},
@@ -114,7 +114,6 @@ func newFTTestCase(t *testing.T, m *mpool.MPool, attrs []string, algo fulltext.F
 }
 
 func fake_runSql(proc *process.Process, sql string) (executor.Result, error) {
-
 	// give count
 	return executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeCountBatchFT(proc)}}, nil
 }
@@ -126,7 +125,6 @@ func fake_runSql_streaming(
 	ch chan executor.Result,
 	err_chan chan error,
 ) (executor.Result, error) {
-	defer close(ch)
 	res := executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeTextBatchFT(proc)}}
 	ch <- res
 	return executor.Result{}, nil
@@ -135,7 +133,7 @@ func fake_runSql_streaming(
 // argvec [src_tbl, index_tbl, pattern, mode int64]
 func TestFullTextCall(t *testing.T) {
 
-	ut := newFTTestCase(t, mpool.MustNewZero(), ftdefaultAttrs, fulltext.ALGO_TFIDF)
+	ut := newFTTestCase(t, mpool.MustNewZero(), ftdefaultAttrs, fulltext.ALGO_TFIDF, uint64(0))
 
 	inbat := makeBatchFT(ut.proc)
 
@@ -188,9 +186,67 @@ func TestFullTextCall(t *testing.T) {
 }
 
 // argvec [src_tbl, index_tbl, pattern, mode int64]
+func TestFullTextCallWithLimitByRank(t *testing.T) {
+
+	ut := newFTTestCase(t, mpool.MustNewZero(), ftdefaultAttrs, fulltext.ALGO_TFIDF, uint64(128))
+
+	inbat := makeBatchFT(ut.proc)
+
+	ut.arg.Args = makeConstInputExprsFT()
+	//fmt.Printf("%v\n", ut.arg.Args)
+
+	// Prepare
+	err := ut.arg.Prepare(ut.proc)
+	require.Nil(t, err)
+
+	for i := range ut.arg.ctr.executorsForArgs {
+		ut.arg.ctr.argVecs[i], err = ut.arg.ctr.executorsForArgs[i].Eval(ut.proc, []*batch.Batch{inbat}, nil)
+		require.Nil(t, err)
+	}
+
+	// stub runSql function
+	ft_runSql = fake_runSql
+	ft_runSql_streaming = fake_runSql_streaming
+
+	// enable LIMIT BY RANK
+	ut.arg.ctr.state.(*fulltextState).ranking = true
+
+	// start
+	err = ut.arg.ctr.state.start(ut.arg, ut.proc, 0, nil)
+	require.Nil(t, err)
+
+	var result vm.CallResult
+
+	// first call receive data
+	for i := 0; i < 192; i++ {
+		result, err = ut.arg.ctr.state.call(ut.arg, ut.proc)
+		require.Nil(t, err)
+		require.Equal(t, result.Status, vm.ExecNext)
+		require.Equal(t, result.Batch.RowCount(), 128)
+	}
+
+	result, err = ut.arg.ctr.state.call(ut.arg, ut.proc)
+	require.Nil(t, err)
+	require.Equal(t, result.Status, vm.ExecNext)
+	require.Equal(t, result.Batch.RowCount(), 1)
+	//fmt.Printf("ROW COUNT = %d  BATCH = %v\n", result.Batch.RowCount(), result.Batch)
+
+	// second call receive channel close
+	result, err = ut.arg.ctr.state.call(ut.arg, ut.proc)
+	require.Nil(t, err)
+	require.Equal(t, result.Status, vm.ExecStop)
+
+	// reset
+	ut.arg.ctr.state.reset(ut.arg, ut.proc)
+
+	// free
+	ut.arg.ctr.state.free(ut.arg, ut.proc, false, nil)
+}
+
+// argvec [src_tbl, index_tbl, pattern, mode int64]
 func TestFullTextCallOneAttr(t *testing.T) {
 
-	ut := newFTTestCase(t, mpool.MustNewZero(), ftdefaultAttrs[0:1], fulltext.ALGO_TFIDF)
+	ut := newFTTestCase(t, mpool.MustNewZero(), ftdefaultAttrs[0:1], fulltext.ALGO_TFIDF, uint64(0))
 
 	inbat := makeBatchFT(ut.proc)
 
@@ -245,7 +301,7 @@ func TestFullTextCallOneAttr(t *testing.T) {
 // argvec [src_tbl, index_tbl, pattern, mode int64]
 func TestFullTextEarlyFree(t *testing.T) {
 
-	ut := newFTTestCase(t, mpool.MustNewZero(), ftdefaultAttrs[0:1], fulltext.ALGO_TFIDF)
+	ut := newFTTestCase(t, mpool.MustNewZero(), ftdefaultAttrs[0:1], fulltext.ALGO_TFIDF, uint64(0))
 
 	inbat := makeBatchFT(ut.proc)
 

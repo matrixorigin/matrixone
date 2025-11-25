@@ -360,6 +360,16 @@ var supportedStringBuiltIns = []FuncNew{
 					return ExtractFromVarchar
 				},
 			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_varchar, types.T_timestamp},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return ExtractFromTimestamp
+				},
+			},
 		},
 	},
 
@@ -4096,6 +4106,16 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return DateStringSub
 				},
 			},
+			{
+				overloadId: 6,
+				args:       []types.T{types.T_time, types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_time.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return TimeSub
+				},
+			},
 		},
 	},
 
@@ -4168,6 +4188,47 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return DayOfYear
+				},
+			},
+		},
+	},
+
+	// function `dayofweek`
+	{
+		functionId: DAYOFWEEK,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_date},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return DateToDayOfWeek
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_datetime},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return DatetimeToDayOfWeek
+				},
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_timestamp},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return TimestampToDayOfWeek
 				},
 			},
 		},
