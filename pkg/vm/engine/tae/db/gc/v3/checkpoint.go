@@ -1943,6 +1943,10 @@ func (c *checkpointCleaner) checkBackupProtection(item any) bool {
 	// We protect checkpoints whose end timestamp is <= protected timestamp
 	// This means we protect all checkpoints up to and including the backup time point
 	endTS := ckp.GetEnd()
+	// Empty/invalid timestamps should not be protected (allow GC)
+	if endTS.IsEmpty() {
+		return true
+	}
 	if endTS.LE(&protectedTS) {
 		logutil.Info(
 			"GC-Backup-Protection-Block-Checkpoint",

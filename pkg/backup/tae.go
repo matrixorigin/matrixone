@@ -303,12 +303,15 @@ func execBackup(
 
 	defer func() {
 		// Stop the update ticker
+		// IMPORTANT: Close the channel first to signal the goroutine to exit,
+		// then stop the ticker. This prevents deadlock if exec.Exec is blocking
+		// in the goroutine. If we stop the ticker first, the goroutine might be
+		// stuck in exec.Exec and unable to check updateTickerStop channel.
 		if updateTicker != nil {
-			logutil.Infof("updateTicker.Stop() start")
-			updateTicker.Stop()
-			logutil.Infof("updateTicker.Stop() end")
+			// Close channel first to signal goroutine to exit
 			close(updateTickerStop)
-			logutil.Infof("updateTickerStop end")
+			// Then stop the ticker (this is safe even if goroutine is still running)
+			updateTicker.Stop()
 		}
 		// Remove backup protection if it was set
 		if protectionSet && exec != nil {
