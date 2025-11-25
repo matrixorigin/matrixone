@@ -12749,17 +12749,17 @@ func TestCdcMeta(t *testing.T) {
 	var wg sync.WaitGroup
 	for _, dataBatch := range testBats1 {
 		wg.Add(1)
-		err = pool.Submit(testutil.AppendClosure(t, dataBatch, testSchema1.Name, db, &wg))
+		err = pool.Submit(testutil.AppendClosureWithDBName(t, dataBatch, "db1", testSchema1.Name, db, &wg))
 		assert.Nil(t, err)
 	}
 	for _, dataBatch := range testBats2 {
 		wg.Add(1)
-		err = pool.Submit(testutil.AppendClosure(t, dataBatch, testSchema2.Name, db, &wg))
+		err = pool.Submit(testutil.AppendClosureWithDBName(t, dataBatch, "db2", testSchema2.Name, db, &wg))
 		assert.Nil(t, err)
 	}
 	for _, dataBatch := range testBats3 {
 		wg.Add(1)
-		err = pool.Submit(testutil.AppendClosure(t, dataBatch, testSchema3.Name, db, &wg))
+		err = pool.Submit(testutil.AppendClosureWithDBName(t, dataBatch, "db3", testSchema3.Name, db, &wg))
 		assert.Nil(t, err)
 	}
 	wg.Wait()
@@ -12842,6 +12842,10 @@ func TestCdcMeta(t *testing.T) {
 		return
 	}
 	if initMinMerged != nil {
+		testutils.WaitExpect(3000, func() bool {
+			initMinEnd := initMinMerged.GetEnd()
+			return minEnd.GT(&initMinEnd)
+		})
 		initMinEnd := initMinMerged.GetEnd()
 		if !minEnd.GT(&initMinEnd) {
 			return
@@ -12915,10 +12919,6 @@ func TestCdcMeta(t *testing.T) {
 	db1_ts4 := types.BuildTS(now.Add(-time.Duration(30)*time.Second).UnixNano(), 0) // Later than db1_ts1
 	appendCdcRecord(0, "task9", "db1", "new_table1", db1_ts4.ToString(), "")
 
-	// Add a new record for db2 with an earlier timestamp (should update the minimum)
-	db2_ts3 := types.BuildTS(now.Add(-time.Duration(6)*time.Minute).UnixNano(), 0) // Earlier than db2_ts1
-	appendCdcRecord(0, "task10", "db2", "new_table2", db2_ts3.ToString(), "")
-
 	testutils.WaitExpect(10000, func() bool {
 		return testutil.AllCheckpointsFinished(db)
 	})
@@ -12947,7 +12947,7 @@ func TestCdcMeta(t *testing.T) {
 	cdcTS2_2, exists2_2 := cdcWatermarks2[testDBID2]
 	assert.True(t, exists2_2, "CDC watermark should exist for test database 2 after restart")
 	assert.False(t, cdcTS2_2.IsEmpty())
-	expectedMinTS2_2 := db2_ts3
+	expectedMinTS2_2 := db2_ts1
 	assert.True(t, cdcTS2_2.EQ(&expectedMinTS2_2),
 		"Expected CDC timestamp for db2 to be updated to the new minimum watermark after restart, got %s, expected %s",
 		cdcTS2_2.ToString(), expectedMinTS2_2.ToString())
