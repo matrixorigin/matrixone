@@ -78,6 +78,16 @@ func (t *startTask) Handle(_ context.Context) error {
 	return nil
 }
 
+func taskNameFromDetails(t task.DaemonTask) string {
+	if t.Details.Details == nil {
+		return ""
+	}
+	if d, ok := t.Details.Details.(*task.Details_CreateCdc); ok && d != nil && d.CreateCdc != nil {
+		return d.CreateCdc.TaskName
+	}
+	return ""
+}
+
 type resumeTask struct {
 	runner *taskRunner
 	task   *daemonTask
@@ -102,6 +112,14 @@ func (t *resumeTask) Handle(ctx context.Context) error {
 	}
 
 	tk := tasks[0]
+	start := time.Now()
+	t.runner.logger.Info("cdc.task.resume.start",
+		zap.Uint64("task-id", tk.ID),
+		zap.String("task-name", taskNameFromDetails(tk)),
+		zap.String("task-runner", tk.TaskRunner),
+		zap.String("target-runner", t.runner.runnerID),
+		zap.String("current-status", tk.TaskStatus.String()),
+	)
 	// We cannot resume a task which is not on local runner.
 	if !strings.EqualFold(tk.TaskRunner, t.runner.runnerID) {
 		return moerr.NewInternalErrorf(ctx, "the task is not on local runner, prev runner %s, "+
@@ -116,6 +134,13 @@ func (t *resumeTask) Handle(ctx context.Context) error {
 	if err != nil {
 		return moerr.AttachCause(ctx, err)
 	}
+	t.runner.logger.Info("cdc.task.resume.finish",
+		zap.Uint64("task-id", tk.ID),
+		zap.String("task-name", taskNameFromDetails(tk)),
+		zap.String("new-status", tk.TaskStatus.String()),
+		zap.Time("last-run", tk.LastRun),
+		zap.Duration("elapsed", time.Since(start)),
+	)
 
 	ar := t.task.activeRoutine.Load()
 	if ar == nil || *ar == nil {
@@ -142,17 +167,50 @@ func (t *restartTask) Handle(ctx context.Context) error {
 	defer cancel()
 	tasks, err := t.runner.service.QueryDaemonTask(ctx, WithTaskIDCond(EQ, t.task.task.ID))
 	if err != nil {
+		t.runner.logger.Error("cdc.task.restart.query_failed",
+			zap.Uint64("task-id", t.task.task.ID),
+			zap.Error(err),
+		)
 		return moerr.AttachCause(ctx, err)
 	}
 	if len(tasks) != 1 {
+		t.runner.logger.Error("cdc.task.restart.query_wrong_count",
+			zap.Uint64("task-id", t.task.task.ID),
+			zap.Int("task-count", len(tasks)),
+		)
 		return moerr.NewInternalErrorf(ctx, "count of tasks is wrong %d", len(tasks))
 	}
 
 	tk := tasks[0]
-	// We cannot resume a task which is not on local runner.
-	if !strings.EqualFold(tk.TaskRunner, t.runner.runnerID) {
+	start := time.Now()
+	t.runner.logger.Info("cdc.task.restart.start",
+		zap.Uint64("task-id", tk.ID),
+		zap.String("task-name", taskNameFromDetails(tk)),
+		zap.String("task-runner", tk.TaskRunner),
+		zap.String("target-runner", t.runner.runnerID),
+		zap.String("current-status", tk.TaskStatus.String()),
+	)
+
+	// We cannot restart a task which is not on local runner.
+	// However, if TaskRunner is empty, we allow the local runner to take over.
+	if tk.TaskRunner != "" && !strings.EqualFold(tk.TaskRunner, t.runner.runnerID) {
+		t.runner.logger.Warn("cdc.task.restart.wrong_runner",
+			zap.Uint64("task-id", tk.ID),
+			zap.String("task-runner", tk.TaskRunner),
+			zap.String("local-runner", t.runner.runnerID),
+		)
 		return moerr.NewInternalErrorf(ctx, "the task is not on local runner, prev runner %s, "+
 			"local runner %s", tk.TaskRunner, t.runner.runnerID)
+	}
+
+	// If TaskRunner is empty, assign it to the current runner
+	if tk.TaskRunner == "" {
+		tk.TaskRunner = t.runner.runnerID
+		t.runner.logger.Info("cdc.task.restart.assign_runner",
+			zap.Uint64("task-id", tk.ID),
+			zap.String("task-name", taskNameFromDetails(tk)),
+			zap.String("assigned-runner", tk.TaskRunner),
+		)
 	}
 
 	tk.TaskStatus = task.TaskStatus_Running
@@ -161,15 +219,54 @@ func (t *restartTask) Handle(ctx context.Context) error {
 	tk.LastHeartbeat = nowTime
 	_, err = t.runner.service.UpdateDaemonTask(ctx, []task.DaemonTask{tk})
 	if err != nil {
+		t.runner.logger.Error("cdc.task.restart.update_status_failed",
+			zap.Uint64("task-id", tk.ID),
+			zap.Error(err),
+		)
 		return moerr.AttachCause(ctx, err)
 	}
 
+	t.runner.logger.Info("cdc.task.restart.status_updated",
+		zap.Uint64("task-id", tk.ID),
+		zap.String("task-name", taskNameFromDetails(tk)),
+		zap.String("new-status", tk.TaskStatus.String()),
+		zap.Time("last-run", tk.LastRun),
+	)
+
 	ar := t.task.activeRoutine.Load()
 	if ar == nil || *ar == nil {
+		t.runner.logger.Error("cdc.task.restart.active_routine_nil",
+			zap.Uint64("task-id", tk.ID),
+			zap.String("task-name", taskNameFromDetails(tk)),
+		)
 		return moerr.NewInternalErrorf(ctx, "cannot handle restart operation, "+
 			"active routine not set for task %d", t.task.task.ID)
 	}
-	return (*ar).Restart()
+
+	t.runner.logger.Info("cdc.task.restart.calling_active_routine",
+		zap.Uint64("task-id", tk.ID),
+		zap.String("task-name", taskNameFromDetails(tk)),
+	)
+
+	err = (*ar).Restart()
+	if err != nil {
+		t.runner.logger.Error("cdc.task.restart.failed",
+			zap.Uint64("task-id", tk.ID),
+			zap.String("task-name", taskNameFromDetails(tk)),
+			zap.Error(err),
+			zap.Duration("elapsed", time.Since(start)),
+		)
+		return err
+	}
+
+	t.runner.logger.Info("cdc.task.restart.finish",
+		zap.Uint64("task-id", tk.ID),
+		zap.String("task-name", taskNameFromDetails(tk)),
+		zap.String("new-status", tk.TaskStatus.String()),
+		zap.Duration("elapsed", time.Since(start)),
+	)
+
+	return nil
 }
 
 type pauseTask struct {
@@ -187,6 +284,7 @@ func newPauseTask(r *taskRunner, t *daemonTask) *pauseTask {
 func (t *pauseTask) Handle(ctx context.Context) error {
 	ctx, cancel := context.WithTimeoutCause(ctx, time.Second*5, moerr.CausePauseTaskHandle)
 	defer cancel()
+	start := time.Now()
 	tasks, err := t.runner.service.QueryDaemonTask(ctx, WithTaskIDCond(EQ, t.task.task.ID))
 	if err != nil {
 		return moerr.AttachCause(ctx, err)
@@ -196,6 +294,13 @@ func (t *pauseTask) Handle(ctx context.Context) error {
 	}
 
 	tk := tasks[0]
+	t.runner.logger.Info("cdc.task.pause.start",
+		zap.Uint64("task-id", tk.ID),
+		zap.String("task-name", taskNameFromDetails(tk)),
+		zap.String("task-runner", tk.TaskRunner),
+		zap.String("target-runner", t.runner.runnerID),
+		zap.String("current-status", tk.TaskStatus.String()),
+	)
 	tk.TaskStatus = task.TaskStatus_Paused
 	_, err = t.runner.service.UpdateDaemonTask(ctx, []task.DaemonTask{tk})
 	if err != nil {
@@ -212,6 +317,12 @@ func (t *pauseTask) Handle(ctx context.Context) error {
 			return err
 		}
 	}
+	t.runner.logger.Info("cdc.task.pause.finish",
+		zap.Uint64("task-id", tk.ID),
+		zap.String("task-name", taskNameFromDetails(tk)),
+		zap.String("new-status", tk.TaskStatus.String()),
+		zap.Duration("elapsed", time.Since(start)),
+	)
 	return nil
 }
 
@@ -466,25 +577,58 @@ func (r *taskRunner) startTasks(ctx context.Context) []task.DaemonTask {
 func (r *taskRunner) resumeTasks(ctx context.Context) []task.DaemonTask {
 	// We only resume the tasks that already running on this runner. For the tasks that
 	// run on other runners and heartbeat timeout, startTasks() will handle them.
-	return r.mergeTasks(
+	tasks := r.mergeTasks(
 		r.queryDaemonTasks(ctx,
 			WithTaskStatusCond(task.TaskStatus_ResumeRequested),
 			WithTaskRunnerCond(EQ, r.runnerID),
 		),
 	)
+	if len(tasks) > 0 {
+		for _, t := range tasks {
+			r.logger.Info("cdc.task.resume.enqueue",
+				zap.Uint64("task-id", t.ID),
+				zap.String("task-name", taskNameFromDetails(t)),
+				zap.String("current-status", t.TaskStatus.String()),
+				zap.String("task-runner", t.TaskRunner),
+			)
+		}
+	}
+	return tasks
 }
 
 // restartTasks gets the tasks that need to restart.
 // - status equals to task.TaskStatus_RestartRequested and runner equals to local
 func (r *taskRunner) restartTasks(ctx context.Context) []task.DaemonTask {
-	// We only resume the tasks that already running on this runner. For the tasks that
-	// run on other runners and heartbeat timeout, startTasks() will handle them.
-	return r.mergeTasks(
-		r.queryDaemonTasks(ctx,
-			WithTaskStatusCond(task.TaskStatus_RestartRequested),
-			WithTaskRunnerCond(EQ, r.runnerID),
-		),
+	// Handle the tasks which is in RestartRequested status:
+	//   1. the task is on current runner
+	//   2. the task is on other runners, but heartbeat timeout or null. In the handler,
+	//      do NOT restart the active routine in this case.
+	localRestart := r.queryDaemonTasks(ctx,
+		WithTaskStatusCond(task.TaskStatus_RestartRequested),
+		WithTaskRunnerCond(EQ, r.runnerID),
 	)
+	laggedRestart := r.queryDaemonTasks(ctx,
+		WithTaskStatusCond(task.TaskStatus_RestartRequested),
+		WithLastHeartbeat(LE, time.Now().UnixNano()-r.options.heartbeatTimeout.Nanoseconds()),
+	)
+	tasks := r.mergeTasks(localRestart, laggedRestart)
+	if len(tasks) > 0 {
+		for _, t := range tasks {
+			r.logger.Info("cdc.task.restart.enqueue",
+				zap.Uint64("task-id", t.ID),
+				zap.String("task-name", taskNameFromDetails(t)),
+				zap.String("current-status", t.TaskStatus.String()),
+				zap.String("task-runner", t.TaskRunner),
+				zap.String("local-runner", r.runnerID),
+			)
+		}
+	} else {
+		r.logger.Debug("cdc.task.restart.enqueue.none",
+			zap.Int("local-candidates", len(localRestart)),
+			zap.Int("lagged-candidates", len(laggedRestart)),
+		)
+	}
+	return tasks
 }
 
 // pauseTasks gets the tasks that need to pause.
@@ -494,16 +638,31 @@ func (r *taskRunner) pauseTasks(ctx context.Context) []task.DaemonTask {
 	//   1. the task is on current runner
 	//   2. the task is on other runners, but heartbeat timeout or null. In the handler,
 	//      do NOT pause the active routine in this case.
-	return r.mergeTasks(
-		r.queryDaemonTasks(ctx,
-			WithTaskStatusCond(task.TaskStatus_PauseRequested),
-			WithTaskRunnerCond(EQ, r.runnerID),
-		),
-		r.queryDaemonTasks(ctx,
-			WithTaskStatusCond(task.TaskStatus_PauseRequested),
-			WithLastHeartbeat(LE, time.Now().UnixNano()-r.options.heartbeatTimeout.Nanoseconds()),
-		),
+	localPause := r.queryDaemonTasks(ctx,
+		WithTaskStatusCond(task.TaskStatus_PauseRequested),
+		WithTaskRunnerCond(EQ, r.runnerID),
 	)
+	laggedPause := r.queryDaemonTasks(ctx,
+		WithTaskStatusCond(task.TaskStatus_PauseRequested),
+		WithLastHeartbeat(LE, time.Now().UnixNano()-r.options.heartbeatTimeout.Nanoseconds()),
+	)
+	tasks := r.mergeTasks(localPause, laggedPause)
+	if len(tasks) > 0 {
+		for _, t := range tasks {
+			r.logger.Info("cdc.task.pause.enqueue",
+				zap.Uint64("task-id", t.ID),
+				zap.String("task-name", taskNameFromDetails(t)),
+				zap.String("current-status", t.TaskStatus.String()),
+				zap.String("task-runner", t.TaskRunner),
+			)
+		}
+	} else {
+		r.logger.Debug("cdc.task.pause.enqueue.none",
+			zap.Int("local-candidates", len(localPause)),
+			zap.Int("lagged-candidates", len(laggedPause)),
+		)
+	}
+	return tasks
 }
 
 // cancelTasks gets the tasks that need to cancel.

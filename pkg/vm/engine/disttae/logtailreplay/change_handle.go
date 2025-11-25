@@ -44,6 +44,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
+type checkpointEntryReader interface {
+	ReadMeta(context.Context) error
+	PrefetchData(string)
+	ConsumeCheckpointWithTableID(context.Context, func(context.Context, fileservice.FileService, objectio.ObjectEntry, bool) error) error
+}
+
+var newCKPReaderWithTableID = func(version uint32, location objectio.Location, tableID uint64, mp *mpool.MPool, fs fileservice.FileService) checkpointEntryReader {
+	return logtail.NewCKPReaderWithTableID_V2(version, location, tableID, mp, fs)
+}
+
 const (
 	JTCDCLoad tasks.JobType = 300 + iota
 )
@@ -722,6 +732,7 @@ func (p *baseHandle) getObjectEntries(objIter btree.IterG[objectio.ObjectEntry],
 }
 
 type ChangeHandler struct {
+	skipDeletes     bool
 	tombstoneHandle *baseHandle
 	dataHandle      *baseHandle
 	coarseMaxRow    int
@@ -748,6 +759,7 @@ func NewChangesHandlerWithCheckpointEntries(
 	sid string,
 	checkpoints []*checkpoint.CheckpointEntry,
 	start, end types.TS,
+	skipDeletes bool,
 	maxRow uint32,
 	primarySeqnum int,
 	mp *mpool.MPool,
@@ -755,6 +767,7 @@ func NewChangesHandlerWithCheckpointEntries(
 ) (changeHandle *ChangeHandler, err error) {
 	changeHandle = &ChangeHandler{
 		coarseMaxRow:  int(maxRow),
+		skipDeletes:   skipDeletes,
 		start:         start,
 		end:           end,
 		fs:            fs,
@@ -764,7 +777,7 @@ func NewChangesHandlerWithCheckpointEntries(
 		mp:            mp,
 		scheduler:     tasks.NewParallelJobScheduler(LoadParallism),
 	}
-	dataAobj, dataCNObj, tombstoneAobj, tombstoneCNObj, err := getObjectsFromCheckpointEntries(ctx, tid, sid, checkpoints, mp, fs)
+	dataAobj, dataCNObj, tombstoneAobj, tombstoneCNObj, err := getObjectsFromCheckpointEntries(ctx, tid, sid, start, end, checkpoints, mp, fs)
 	if err != nil {
 		return
 	}
@@ -789,6 +802,7 @@ func getObjectsFromCheckpointEntries(
 	ctx context.Context,
 	tid uint64,
 	sid string,
+	start, end types.TS,
 	checkpoint []*checkpoint.CheckpointEntry,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
@@ -796,15 +810,17 @@ func getObjectsFromCheckpointEntries(
 	dataAobj, dataCNObj, tombstoneAobj, tombstoneCNObj []*objectio.ObjectEntry,
 	err error,
 ) {
-	dataAobj = make([]*objectio.ObjectEntry, 0)
-	dataCNObj = make([]*objectio.ObjectEntry, 0)
-	tombstoneAobj = make([]*objectio.ObjectEntry, 0)
-	tombstoneCNObj = make([]*objectio.ObjectEntry, 0)
-	readers := make([]*logtail.CKPReader, 0)
+	dataAobjMap := make(map[string]*objectio.ObjectEntry)
+	dataCNObjMap := make(map[string]*objectio.ObjectEntry)
+	tombstoneAobjMap := make(map[string]*objectio.ObjectEntry)
+	tombstoneCNObjMap := make(map[string]*objectio.ObjectEntry)
+	readers := make([]checkpointEntryReader, 0)
 	for _, entry := range checkpoint {
-		reader := logtail.NewCKPReaderWithTableID_V2(entry.GetVersion(), entry.GetLocation(), tid, mp, fs)
+		reader := newCKPReaderWithTableID(entry.GetVersion(), entry.GetLocation(), tid, mp, fs)
 		readers = append(readers, reader)
-		ioutil.Prefetch(sid, fs, entry.GetLocation())
+		if fs != nil && sid != "" {
+			_ = ioutil.Prefetch(sid, fs, entry.GetLocation())
+		}
 	}
 	for _, reader := range readers {
 		if err = reader.ReadMeta(ctx); err != nil {
@@ -816,19 +832,23 @@ func getObjectsFromCheckpointEntries(
 	for _, reader := range readers {
 		if err = reader.ConsumeCheckpointWithTableID(
 			ctx,
-			func(ctx context.Context, obj objectio.ObjectEntry, isTombstone bool) (err error) {
+			func(ctx context.Context, fs fileservice.FileService, obj objectio.ObjectEntry, isTombstone bool) (err error) {
 				if obj.GetAppendable() {
-					if isTombstone {
-						tombstoneAobj = append(tombstoneAobj, &obj)
-					} else {
-						dataAobj = append(dataAobj, &obj)
+					if obj.CreateTime.GE(&start) {
+						if isTombstone {
+							tombstoneAobjMap[obj.ObjectShortName().ShortString()] = &obj
+						} else {
+							dataAobjMap[obj.ObjectShortName().ShortString()] = &obj
+						}
 					}
 				}
 				if obj.GetCNCreated() {
-					if isTombstone {
-						tombstoneCNObj = append(tombstoneCNObj, &obj)
-					} else {
-						dataCNObj = append(dataCNObj, &obj)
+					if obj.CreateTime.GE(&start) {
+						if isTombstone {
+							tombstoneCNObjMap[obj.ObjectShortName().ShortString()] = &obj
+						} else {
+							dataCNObjMap[obj.ObjectShortName().ShortString()] = &obj
+						}
 					}
 				}
 				return
@@ -837,6 +857,22 @@ func getObjectsFromCheckpointEntries(
 			return
 		}
 	}
+	dataAobj = make([]*objectio.ObjectEntry, 0)
+	for _, obj := range dataAobjMap {
+		dataAobj = append(dataAobj, obj)
+	}
+	dataCNObj = make([]*objectio.ObjectEntry, 0)
+	for _, obj := range dataCNObjMap {
+		dataCNObj = append(dataCNObj, obj)
+	}
+	tombstoneAobj = make([]*objectio.ObjectEntry, 0)
+	for _, obj := range tombstoneAobjMap {
+		tombstoneAobj = append(tombstoneAobj, obj)
+	}
+	tombstoneCNObj = make([]*objectio.ObjectEntry, 0)
+	for _, obj := range tombstoneCNObjMap {
+		tombstoneCNObj = append(tombstoneCNObj, obj)
+	}
 	return
 }
 
@@ -844,6 +880,7 @@ func NewChangesHandler(
 	ctx context.Context,
 	state *PartitionState,
 	start, end types.TS,
+	skipDeletes bool,
 	maxRow uint32,
 	primarySeqnum int,
 	mp *mpool.MPool,
@@ -854,6 +891,7 @@ func NewChangesHandler(
 	}
 	changeHandle = &ChangeHandler{
 		coarseMaxRow:  int(maxRow),
+		skipDeletes:   skipDeletes,
 		start:         start,
 		end:           end,
 		fs:            fs,
@@ -933,7 +971,7 @@ func (p *ChangeHandler) quickNext(ctx context.Context, mp *mpool.MPool) (data, t
 		if err != nil {
 			return
 		}
-		if err = filterBatch(data, tombstone, p.primarySeqnum); err != nil {
+		if err = filterBatch(data, tombstone, p.primarySeqnum, p.skipDeletes); err != nil {
 			return
 		}
 		if tombstoneEnd && dataEnd {
@@ -965,7 +1003,7 @@ func (p *ChangeHandler) quickNext(ctx context.Context, mp *mpool.MPool) (data, t
 //
 // This ensures that for any pk, we only keep the most recent operation,
 // whether it's an insert/update from data batch or a delete from tombstone batch.
-func filterBatch(data, tombstone *batch.Batch, primarySeqnum int) (err error) {
+func filterBatch(data, tombstone *batch.Batch, primarySeqnum int, skipDeletes bool) (err error) {
 	if data == nil || tombstone == nil {
 		return
 	}
@@ -1037,11 +1075,22 @@ func filterBatch(data, tombstone *batch.Batch, primarySeqnum int) (err error) {
 		if first.isDelete {
 			// Keep only last insert
 			if !last.isDelete {
-				for _, ri := range rowInfos[0 : len(rowInfos)-1] {
-					if ri.isDelete {
-						tombstoneRowsToDelete = append(tombstoneRowsToDelete, int64(ri.row))
-					} else {
-						dataRowsToDelete = append(dataRowsToDelete, int64(ri.row))
+				if skipDeletes {
+					// Keep only last insert
+					for _, ri := range rowInfos[0 : len(rowInfos)-1] {
+						if ri.isDelete {
+							tombstoneRowsToDelete = append(tombstoneRowsToDelete, int64(ri.row))
+						} else {
+							dataRowsToDelete = append(dataRowsToDelete, int64(ri.row))
+						}
+					}
+				} else {
+					for _, ri := range rowInfos[0 : len(rowInfos)-1] {
+						if ri.isDelete {
+							tombstoneRowsToDelete = append(tombstoneRowsToDelete, int64(ri.row))
+						} else {
+							dataRowsToDelete = append(dataRowsToDelete, int64(ri.row))
+						}
 					}
 				}
 			} else {
@@ -1142,7 +1191,7 @@ func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombst
 		case NextChangeHandle_Data:
 			err = p.dataHandle.Next(ctx, &data, mp)
 			if err == nil && data.Vecs[0].Length() >= p.coarseMaxRow*2 {
-				if err = filterBatch(data, tombstone, p.primarySeqnum); err != nil {
+				if err = filterBatch(data, tombstone, p.primarySeqnum, p.skipDeletes); err != nil {
 					return
 				}
 				if data.Vecs[0].Length() > p.coarseMaxRow {
@@ -1159,7 +1208,7 @@ func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombst
 		case NextChangeHandle_Tombstone:
 			err = p.tombstoneHandle.Next(ctx, &tombstone, mp)
 			if err == nil && tombstone.Vecs[0].Length() >= p.coarseMaxRow*2 {
-				if err = filterBatch(data, tombstone, p.primarySeqnum); err != nil {
+				if err = filterBatch(data, tombstone, p.primarySeqnum, p.skipDeletes); err != nil {
 					return
 				}
 				if tombstone.Vecs[0].Length() > p.coarseMaxRow {
@@ -1176,7 +1225,7 @@ func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombst
 		}
 		if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
 			err = nil
-			if err = filterBatch(data, tombstone, p.primarySeqnum); err != nil {
+			if err = filterBatch(data, tombstone, p.primarySeqnum, p.skipDeletes); err != nil {
 				return
 			}
 			p.totalDuration += time.Since(t0)

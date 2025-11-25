@@ -44,12 +44,13 @@ const DefaultLoadParallism = 20
 func (tbl *txnTable) CollectChanges(
 	ctx context.Context,
 	from, to types.TS,
+	skipDeletes bool,
 	mp *mpool.MPool,
 ) (engine.ChangesHandle, error) {
 	if from.IsEmpty() {
 		return NewCheckpointChangesHandle(ctx, tbl, to, mp)
 	}
-	return NewPartitionChangesHandle(ctx, tbl, from, to, mp)
+	return NewPartitionChangesHandle(ctx, tbl, from, to, skipDeletes, mp)
 }
 
 type PartitionChangesHandle struct {
@@ -63,6 +64,7 @@ type PartitionChangesHandle struct {
 	toTs   types.TS
 	tbl    *txnTable
 
+	skipDeletes   bool
 	primarySeqnum int
 	mp            *mpool.MPool
 	fs            fileservice.FileService
@@ -72,12 +74,14 @@ func NewPartitionChangesHandle(
 	ctx context.Context,
 	tbl *txnTable,
 	from, to types.TS,
+	skipDeletes bool,
 	mp *mpool.MPool,
 ) (*PartitionChangesHandle, error) {
 	handle := &PartitionChangesHandle{
 		tbl:           tbl,
 		fromTs:        from,
 		toTs:          to,
+		skipDeletes:   skipDeletes,
 		primarySeqnum: tbl.primarySeqnum,
 		mp:            mp,
 		fs:            tbl.getTxn().engine.fs,
@@ -116,7 +120,9 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 	if h.currentPSTo.EQ(&h.toTs) {
 		return true, nil
 	}
-	state, err := h.tbl.getPartitionState(ctx)
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	state, err := h.tbl.getPartitionState(ctxWithTimeout)
 	if err != nil {
 		return
 	}
@@ -127,7 +133,7 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 		nextFrom = h.currentPSTo.Next()
 	}
 	stateStart := state.GetStart()
-	if stateStart.LT(&nextFrom) {
+	if stateStart.LE(&nextFrom) {
 		h.currentPSTo = h.toTs
 		h.currentPSFrom = nextFrom
 		if h.handleIdx != 0 {
@@ -149,6 +155,7 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 			state,
 			h.currentPSFrom,
 			h.currentPSTo,
+			h.skipDeletes,
 			objectio.BlockMaxRows,
 			h.primarySeqnum,
 			h.mp,
@@ -177,6 +184,7 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 		checkpointEntries = make([]*checkpoint.CheckpointEntry, 0, len(resp.Entries))
 		entries := resp.Entries
 		for _, entry := range entries {
+			logutil.Infof("ChangesHandle-Split get checkpoint entry: %v", entry.String())
 			start := types.TimestampToTS(*entry.Start)
 			end := types.TimestampToTS(*entry.End)
 			if start.LT(&minTS) {
@@ -192,6 +200,7 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 		}
 	}
 	if nextFrom.LT(&minTS) || nextFrom.GT(&maxTS) {
+		logutil.Infof("ChangesHandle-Split nextFrom is not in the checkpoint entry range: %s-%s", minTS.ToString(), maxTS.ToString())
 		return false, moerr.NewErrStaleReadNoCtx(minTS.ToString(), nextFrom.ToString())
 	}
 	h.currentPSFrom = nextFrom
@@ -218,6 +227,7 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 		checkpointEntries,
 		h.currentPSFrom,
 		h.currentPSTo,
+		h.skipDeletes,
 		objectio.BlockMaxRows,
 		h.primarySeqnum,
 		h.mp,

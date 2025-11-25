@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"reflect"
 	"regexp"
 	"sync"
 	"testing"
@@ -52,6 +53,47 @@ import (
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
+
+// Global stub for GetTableDetector - initialized in init() to prevent panics across all tests
+var _globalTableDetectorStub *gostub.Stubs
+
+// init sets up global mock for GetTableDetector once for all tests in this package
+// This stub is NEVER reset to ensure consistent behavior across all tests
+func init() {
+	_globalTableDetectorStub = gostub.Stub(&cdc.GetTableDetector, createMockTableDetectorForTest())
+}
+
+// createMockTableDetectorForTest creates a properly initialized mock TableDetector for testing
+func createMockTableDetectorForTest() func(cnUUID string) *cdc.TableDetector {
+	return func(cnUUID string) *cdc.TableDetector {
+		detector := &cdc.TableDetector{
+			Mp:                   make(map[uint32]cdc.TblMap),
+			Callbacks:            make(map[string]cdc.TableCallback),
+			CallBackAccountId:    make(map[string]uint32),
+			SubscribedAccountIds: make(map[uint32][]string),
+			CallBackDbName:       make(map[string][]string),
+			SubscribedDbNames:    make(map[string][]string),
+			CallBackTableName:    make(map[string][]string),
+			SubscribedTableNames: make(map[string][]string),
+		}
+
+		// Set scanTableFn to no-op to prevent panic in scanTableLoop
+		detectorValue := reflect.ValueOf(detector).Elem()
+		scanTableFnField := detectorValue.FieldByName("scanTableFn")
+		if scanTableFnField.IsValid() && scanTableFnField.CanSet() {
+			scanTableFnField.Set(reflect.ValueOf(func() error {
+				return nil
+			}))
+		}
+
+		// Call RegisterIfAbsent to properly initialize cancel field
+		detector.RegisterIfAbsent("__test_permanent_dummy__", 1, []string{}, []string{}, func(map[uint32]cdc.TblMap) error {
+			return nil
+		})
+
+		return detector
+	}
+}
 
 func Test_newCdcSqlFormat(t *testing.T) {
 	id, _ := uuid.Parse("019111fd-aed1-70c0-8760-9abadd8f0f4a")
@@ -408,15 +450,15 @@ func Test_handleCreateCdc(t *testing.T) {
 	})
 	defer stub.Reset()
 
-	stubOpenDbConn := gostub.Stub(&cdc.OpenDbConn, func(_, _, _ string, _ int, _ string) (*sql.DB, error) {
-		return nil, nil
-	})
-	defer stubOpenDbConn.Reset()
-
 	stubCheckPitr := gostub.Stub(&CDCCheckPitrGranularity, func(ctx context.Context, bh BackgroundExec, accName string, pts *cdc.PatternTuples, minLength ...int64) error {
 		return nil
 	})
 	defer stubCheckPitr.Reset()
+
+	stubOpenDbConn := gostub.Stub(&cdc.OpenDbConn, func(user, password string, ip string, port int, timeout string) (*sql.DB, error) {
+		return nil, nil
+	})
+	defer stubOpenDbConn.Reset()
 
 	tests := []struct {
 		name    string
@@ -456,6 +498,11 @@ func Test_doCreateCdc_invalidStartTs(t *testing.T) {
 		return nil
 	})
 	defer stubCheckPitr.Reset()
+
+	stubOpenDbConn := gostub.Stub(&cdc.OpenDbConn, func(_, _, _ string, _ int, _ string) (*sql.DB, error) {
+		return nil, nil
+	})
+	defer stubOpenDbConn.Reset()
 
 	create := &tree.CreateCDC{
 		IfNotExists: false,
@@ -974,6 +1021,9 @@ func TestRegisterCdcExecutor(t *testing.T) {
 	}
 
 	attacher := func(ctx context.Context, tid uint64, ar taskservice.ActiveRoutine) error {
+		if exec, ok := ar.(*CDCTaskExecutor); ok {
+			exec.holdCh <- 1
+		}
 		return nil
 	}
 
@@ -1003,18 +1053,7 @@ func TestRegisterCdcExecutor(t *testing.T) {
 	assert.NoError(t, err)
 	defer mpool.DeleteMPool(mp)
 
-	gostub.Stub(&cdc.GetTableDetector, func(cnUUID string) *cdc.TableDetector {
-		return &cdc.TableDetector{
-			Mp:                   make(map[uint32]cdc.TblMap),
-			Callbacks:            map[string]cdc.TableCallback{"id": func(mp map[uint32]cdc.TblMap) error { return nil }},
-			CallBackAccountId:    map[string]uint32{"id": 0},
-			SubscribedAccountIds: map[uint32][]string{0: {"id"}},
-			CallBackDbName:       make(map[string][]string),
-			SubscribedDbNames:    make(map[string][]string),
-			CallBackTableName:    make(map[string][]string),
-			SubscribedTableNames: make(map[string][]string),
-		}
-	})
+	gostub.Stub(&cdc.GetTableDetector, createMockTableDetectorForTest())
 
 	tests := []struct {
 		name string
@@ -1240,20 +1279,12 @@ func Test_updateCdcTask_restart(t *testing.T) {
 	sql17 := "UPDATE `mo_catalog`.`mo_cdc_task` SET state = .* WHERE 1=1 AND account_id = 0 AND task_name = 'task1'"
 	mock.ExpectExec(sql17).WillReturnResult(sqlmock.NewResult(1, 1))
 
-	sql18 := "DELETE FROM `mo_catalog`.`mo_cdc_watermark` WHERE account_id = 0 AND task_id = 'taskID-1'"
-	mock.ExpectExec(sql18).WillReturnResult(sqlmock.NewResult(1, 1))
-
-	sql19 := "DELETE FROM `mo_catalog`.`mo_cdc_task` WHERE 1=1 AND account_id = 0 AND task_name = 'task1'"
-	mock.ExpectExec(sql19).WillReturnResult(sqlmock.NewResult(1, 1))
-
 	genSqlIdx := func(sql string) int {
 		mSql15, err := regexp.MatchString(sql15, sql)
 		assert.NoError(t, err)
 		mSql16, err := regexp.MatchString(sql16, sql)
 		assert.NoError(t, err)
 		mSql17, err := regexp.MatchString(sql17, sql)
-		assert.NoError(t, err)
-		mSql19, err := regexp.MatchString(sql19, sql)
 		assert.NoError(t, err)
 
 		if mSql15 {
@@ -1262,8 +1293,6 @@ func Test_updateCdcTask_restart(t *testing.T) {
 			return mSqlIdx16
 		} else if mSql17 {
 			return mSqlIdx17
-		} else if mSql19 {
-			return mSqlIdx19
 		}
 
 		return -1
@@ -1296,6 +1325,7 @@ func Test_updateCdcTask_restart(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := onPreUpdateCDCTasks(tt.args.ctx, tt.args.targetStatus, tt.args.taskKeyMap, tt.args.tx, tt.args.accountId, tt.args.taskName)
 			assert.NoError(t, err, "updateCdcTask(%v, %v, %v, %v, %v, %v)", tt.args.ctx, tt.args.targetStatus, tt.args.taskKeyMap, tt.args.tx, tt.args.accountId, tt.args.taskName)
+			assert.NoError(t, mock.ExpectationsWereMet())
 		})
 	}
 }
@@ -2213,18 +2243,32 @@ func Test_handleShowCdc(t *testing.T) {
 }
 
 func TestCdcTask_Resume(t *testing.T) {
-	cdc := &CDCTaskExecutor{
+	executor := &CDCTaskExecutor{
 		activeRoutine: cdc.NewCdcActiveRoutine(),
 		spec: &task.CreateCdcDetails{
 			TaskName: "task1",
+			Accounts: []*task.Account{{Id: 1}}, // Add account for clearAllTableErrors
 		},
-		holdCh: make(chan int, 1),
+		stateMachine: NewExecutorStateMachine(),
+		holdCh:       make(chan int, 1),
 		startFunc: func(_ context.Context) error {
 			return nil
 		},
 	}
 
-	err := cdc.Resume()
+	// Initialize minimal ie for clearAllTableErrors
+	u, ie := cdc.InitCDCWatermarkUpdaterForTest(t)
+	u.Start()
+	defer u.Stop()
+	executor.ie = ie
+
+	// Transition to Paused state first
+	_ = executor.stateMachine.Transition(TransitionStart)
+	_ = executor.stateMachine.Transition(TransitionStartSuccess)
+	_ = executor.stateMachine.Transition(TransitionPause)
+	_ = executor.stateMachine.Transition(TransitionPauseComplete)
+
+	err := executor.Resume()
 	assert.NoErrorf(t, err, "Resume()")
 }
 
@@ -2232,42 +2276,85 @@ func TestCdcTask_Restart(t *testing.T) {
 	u, _ := cdc.InitCDCWatermarkUpdaterForTest(t)
 	u.Start()
 	defer u.Stop()
-	cdc := &CDCTaskExecutor{
+
+	// Note: GetTableDetector is already stubbed globally in init()
+	cdcTask := &CDCTaskExecutor{
 		activeRoutine:    cdc.NewCdcActiveRoutine(),
 		watermarkUpdater: u,
+		cnUUID:           "test-uuid",
 		spec: &task.CreateCdcDetails{
+			TaskId:   "task1",
 			TaskName: "task1",
 		},
-		holdCh: make(chan int, 1),
+		holdCh:       make(chan int, 1),
+		stateMachine: NewExecutorStateMachine(),
 		startFunc: func(_ context.Context) error {
 			return nil
 		},
-		isRunning: true,
 	}
+	// Must be in Running state to Restart
+	_ = cdcTask.stateMachine.Transition(TransitionStart)
+	_ = cdcTask.stateMachine.Transition(TransitionStartSuccess)
 
-	err := cdc.Restart()
+	err := cdcTask.Restart()
 	assert.NoErrorf(t, err, "Restart()")
+
+	// Wait a bit for the goroutine to start
+	time.Sleep(10 * time.Millisecond)
 }
 
 func TestCdcTask_Pause(t *testing.T) {
+	// Note: GetTableDetector is already stubbed globally in init()
 	holdCh := make(chan int, 1)
 	go func() {
 		<-holdCh
 	}()
 
-	cdc := &CDCTaskExecutor{
-		activeRoutine: cdc.NewCdcActiveRoutine(),
+	executor := &CDCTaskExecutor{
+		activeRoutine:  cdc.NewCdcActiveRoutine(),
+		cnUUID:         "test-cn",
+		runningReaders: &sync.Map{},
 		spec: &task.CreateCdcDetails{
+			TaskId:   "task1",
 			TaskName: "task1",
 		},
-		isRunning: true,
-		holdCh:    holdCh,
+		stateMachine: NewExecutorStateMachine(),
+		holdCh:       holdCh,
 	}
-	err := cdc.Pause()
+	// Transition to Running state
+	_ = executor.stateMachine.Transition(TransitionStart)
+	_ = executor.stateMachine.Transition(TransitionStartSuccess)
+	err := executor.Pause()
 	assert.NoErrorf(t, err, "Pause()")
 }
 
+func TestCdcTask_PauseWhileStarting(t *testing.T) {
+	holdCh := make(chan int, 1)
+	executor := &CDCTaskExecutor{
+		activeRoutine:  cdc.NewCdcActiveRoutine(),
+		cnUUID:         "test-cn",
+		runningReaders: &sync.Map{},
+		spec: &task.CreateCdcDetails{
+			TaskId:   "task1",
+			TaskName: "task1",
+		},
+		stateMachine: NewExecutorStateMachine(),
+		holdCh:       holdCh,
+	}
+	require.NoError(t, executor.stateMachine.Transition(TransitionStart))
+
+	err := executor.Pause()
+	assert.NoError(t, err)
+	assert.Equal(t, StatePaused, executor.stateMachine.State())
+	select {
+	case <-holdCh:
+		// value placed by Pause to unblock Start; drain to keep channel clean
+	default:
+	}
+}
+
 func TestCdcTask_Cancel(t *testing.T) {
+	// Note: GetTableDetector is already stubbed globally in init()
 	ch := make(chan int, 1)
 	go func() {
 		<-ch
@@ -2276,16 +2363,23 @@ func TestCdcTask_Cancel(t *testing.T) {
 	u, _ := cdc.InitCDCWatermarkUpdaterForTest(t)
 	u.Start()
 	defer u.Stop()
-	cdc := &CDCTaskExecutor{
+	executor := &CDCTaskExecutor{
 		activeRoutine:    cdc.NewCdcActiveRoutine(),
 		watermarkUpdater: u,
+		cnUUID:           "test-cn",
+		runningReaders:   &sync.Map{},
 		spec: &task.CreateCdcDetails{
+			TaskId:   "task1",
 			TaskName: "task1",
 		},
-		holdCh:    ch,
-		isRunning: true,
+		stateMachine: NewExecutorStateMachine(),
+		holdCh:       ch,
 	}
-	err := cdc.Cancel()
+	// Transition to Running state
+	_ = executor.stateMachine.Transition(TransitionStart)
+	_ = executor.stateMachine.Transition(TransitionStartSuccess)
+
+	err := executor.Cancel()
 	assert.NoErrorf(t, err, "Cancel()")
 }
 
@@ -2738,6 +2832,14 @@ func TestCdcTask_handleNewTables(t *testing.T) {
 	stub2 := gostub.Stub(&cdc.FinishTxnOp, func(context.Context, error, client.TxnOperator, engine.Engine) {})
 	defer stub2.Reset()
 
+	// Setup CDC test stubs for TableChangeStream
+	cdcStubs := setupCDCTestStubs(t)
+	defer func() {
+		for _, s := range cdcStubs {
+			s.Reset()
+		}
+	}()
+
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -2785,6 +2887,14 @@ func TestCdcTask_handleNewTables_addpipeline(t *testing.T) {
 		return false, nil
 	})
 	defer stub3.Reset()
+
+	// Setup CDC test stubs for TableChangeStream
+	cdcStubs := setupCDCTestStubs(t)
+	defer func() {
+		for _, s := range cdcStubs {
+			s.Reset()
+		}
+	}()
 
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -2841,6 +2951,14 @@ func TestCdcTask_handleNewTables_GetTxnOpErr(t *testing.T) {
 	stub2 := gostub.Stub(&cdc.FinishTxnOp, func(context.Context, error, client.TxnOperator, engine.Engine) {})
 	defer stub2.Reset()
 
+	// Setup CDC test stubs for TableChangeStream (though this test should fail before creating reader)
+	cdcStubs := setupCDCTestStubs(t)
+	defer func() {
+		for _, s := range cdcStubs {
+			s.Reset()
+		}
+	}()
+
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -2884,6 +3002,14 @@ func TestCdcTask_handleNewTables_NewEngineFailed(t *testing.T) {
 
 	stub2 := gostub.Stub(&cdc.FinishTxnOp, func(context.Context, error, client.TxnOperator, engine.Engine) {})
 	defer stub2.Reset()
+
+	// Setup CDC test stubs for TableChangeStream
+	cdcStubs := setupCDCTestStubs(t)
+	defer func() {
+		for _, s := range cdcStubs {
+			s.Reset()
+		}
+	}()
 
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -2940,7 +3066,7 @@ func TestCdcTask_handleNewTables_existingReaderWithDifferentTableID(t *testing.T
 
 	wg := &sync.WaitGroup{}
 	wg.Add(1)
-	oldReader := &mockTableReader{
+	oldReader := &mockChangeReader{
 		info: &cdc.DbTableInfo{SourceTblId: 100},
 		wg:   wg,
 	}
@@ -2976,27 +3102,63 @@ func TestCdcTask_handleNewTables_existingReaderWithDifferentTableID(t *testing.T
 	cdcTask.handleNewTables(mp)
 }
 
-type mockReader struct{}
+// setupCDCTestStubs sets up all necessary stubs for CDC tests that create TableChangeStream
+// This prevents nil pointer panics when TableChangeStream.Run() is called in goroutines
+func setupCDCTestStubs(t *testing.T) []*gostub.Stubs {
+	var stubs []*gostub.Stubs
 
-func (m mockReader) Run(ctx context.Context, ar *cdc.ActiveRoutine) {}
+	// Stub GetTableDef to return a valid tableDef
+	stubs = append(stubs, gostub.Stub(&cdc.GetTableDef, func(context.Context, client.TxnOperator, engine.Engine, uint64) (*plan.TableDef, error) {
+		return &plan.TableDef{
+			Cols: []*plan.ColDef{
+				{Name: "id"},
+				{Name: "ts"},
+			},
+			Pkey: &plan.PrimaryKeyDef{
+				Names: []string{"id"},
+			},
+			Name2ColIndex: map[string]int32{
+				"id": 0,
+				"ts": 1,
+			},
+		}, nil
+	}))
 
-func (m mockReader) Close() {}
+	// Stub GetTxn
+	stubs = append(stubs, gostub.Stub(&cdc.GetTxn, func(ctx context.Context, cnEngine engine.Engine, txnOp client.TxnOperator) error {
+		return nil
+	}))
 
-type mockTableReader struct {
+	// Stub GetRelationById to prevent nil pointer in processOneRound
+	stubs = append(stubs, gostub.Stub(&cdc.GetRelationById, func(ctx context.Context, cnEngine engine.Engine, txnOp client.TxnOperator, tableId uint64) (dbName string, tblName string, rel engine.Relation, err error) {
+		// Return error to stop the reader loop quickly
+		return "", "", nil, moerr.NewInternalError(ctx, "test stub - no relation")
+	}))
+
+	// Stub EnterRunSql and ExitRunSql
+	stubs = append(stubs, gostub.Stub(&cdc.EnterRunSql, func(client.TxnOperator) {}))
+	stubs = append(stubs, gostub.Stub(&cdc.ExitRunSql, func(client.TxnOperator) {}))
+
+	return stubs
+}
+
+type mockChangeReader struct {
 	info *cdc.DbTableInfo
 	wg   *sync.WaitGroup
 }
 
-func (m mockTableReader) Run(ctx context.Context, ar *cdc.ActiveRoutine) {}
+func (m mockChangeReader) Run(ctx context.Context, ar *cdc.ActiveRoutine) {}
 
-func (m mockTableReader) Close() {}
+func (m mockChangeReader) Close() {}
 
-func (m mockTableReader) Info() *cdc.DbTableInfo {
-	return m.info
+func (m mockChangeReader) Wait() {
+	if m.wg != nil {
+		m.wg.Wait()
+	}
 }
 
-func (m mockTableReader) GetWg() *sync.WaitGroup {
-	return m.wg
+func (m mockChangeReader) GetTableInfo() *cdc.DbTableInfo {
+	return m.info
 }
 
 type mockSinker struct{}
@@ -3034,13 +3196,11 @@ func (m mockSinker) Error() error {
 }
 
 func (m mockSinker) Reset() {
-	//TODO implement me
-	panic("implement me")
+	// No-op for mock
 }
 
 func (m mockSinker) Close() {
-	//TODO implement me
-	panic("implement me")
+	// No-op for mock - Close() is called during cleanup
 }
 
 func (m mockSinker) ClearError() {}
@@ -3050,6 +3210,7 @@ func TestCdcTask_addExecPipelineForTable(t *testing.T) {
 	u.Start()
 	defer u.Stop()
 	cdcTask := &CDCTaskExecutor{
+		activeRoutine:    cdc.NewCdcActiveRoutine(), // Required for reader.Run()
 		watermarkUpdater: u,
 		runningReaders:   &sync.Map{},
 		noFull:           true,
@@ -3079,8 +3240,35 @@ func TestCdcTask_addExecPipelineForTable(t *testing.T) {
 	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOperator.EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
 
-	stubGetTableDef := gostub.Stub(&cdc.GetTableDef, func(context.Context, client.TxnOperator, engine.Engine, uint64) (*plan.TableDef, error) {
+	// Stub GetTxnOp to prevent nil pointer in TableChangeStream.Run()
+	stubGetTxnOp := gostub.Stub(&cdc.GetTxnOp, func(_ context.Context, _ engine.Engine, _ client.TxnClient, _ string) (client.TxnOperator, error) {
 		return nil, nil
+	})
+	defer stubGetTxnOp.Reset()
+
+	stubFinishTxnOp := gostub.Stub(&cdc.FinishTxnOp, func(ctx context.Context, inputErr error, txnOp client.TxnOperator, cnEngine engine.Engine) {})
+	defer stubFinishTxnOp.Reset()
+
+	stubGetTxn := gostub.Stub(&cdc.GetTxn, func(ctx context.Context, cnEngine engine.Engine, txnOp client.TxnOperator) error {
+		return nil
+	})
+	defer stubGetTxn.Reset()
+
+	stubGetTableDef := gostub.Stub(&cdc.GetTableDef, func(context.Context, client.TxnOperator, engine.Engine, uint64) (*plan.TableDef, error) {
+		// Return a valid tableDef to prevent panic in NewTableChangeStream
+		return &plan.TableDef{
+			Cols: []*plan.ColDef{
+				{Name: "id"},
+				{Name: "ts"},
+			},
+			Pkey: &plan.PrimaryKeyDef{
+				Names: []string{"id"},
+			},
+			Name2ColIndex: map[string]int32{
+				"id": 0,
+				"ts": 1,
+			},
+		}, nil
 	})
 	defer stubGetTableDef.Reset()
 
@@ -3103,31 +3291,27 @@ func TestCdcTask_addExecPipelineForTable(t *testing.T) {
 		})
 	defer stubSinker.Reset()
 
-	stubReader := gostub.Stub(
-		&cdc.NewTableReader,
-		func(
-			client.TxnClient,
-			engine.Engine,
-			*mpool.MPool,
-			*fileservice.Pool[*types.Packer],
-			uint64,
-			string,
-			*cdc.DbTableInfo,
-			cdc.Sinker,
-			*cdc.CDCWatermarkUpdater,
-			*plan.TableDef,
-			bool,
-			*sync.Map,
-			types.TS,
-			types.TS,
-			bool,
-			string,
-		) cdc.Reader {
-			return &mockReader{}
-		})
-	defer stubReader.Reset()
+	// Don't stub NewTableChangeStream - let it create a real reader
+	// The real reader needs proper initialization which the mocks above don't provide
+	// So the reader will be created but Run() might fail - which is OK for this test
+	// The test just checks that addExecPipelineForTable returns without error
 
-	assert.NoError(t, cdcTask.addExecPipelineForTable(context.Background(), info, txnOperator))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	assert.NoError(t, cdcTask.addExecPipelineForTable(ctx, info, txnOperator))
+
+	// Get the created reader from runningReaders and wait for it to complete
+	// This ensures the goroutine finishes before test cleanup
+	key := cdc.GenDbTblKey(info.SourceDbName, info.SourceTblName)
+	if val, ok := cdcTask.runningReaders.Load(key); ok {
+		if reader, ok := val.(cdc.ChangeReader); ok {
+			// Cancel the context to stop the reader
+			cancel()
+			// Wait for the reader goroutine to finish
+			reader.Wait()
+		}
+	}
 }
 
 func TestCdcTask_checkPitr(t *testing.T) {

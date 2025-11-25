@@ -161,6 +161,10 @@ func (c *DashboardCreator) Create() error {
 		return err
 	}
 
+	if err := c.initCDCDashboard(); err != nil {
+		return err
+	}
+
 	if err := c.initShardingDashboard(); err != nil {
 		return err
 	}

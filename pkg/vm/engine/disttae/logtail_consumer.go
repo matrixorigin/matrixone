@@ -372,10 +372,13 @@ func (c *PushClient) validLogTailMustApplied(snapshotTS timestamp.Timestamp) {
 
 func (c *PushClient) skipSubIfSubscribed(
 	ctx context.Context,
+	acctId uint64,
 	tableID uint64,
-	dbID uint64) (bool, *logtailreplay.PartitionState) {
+	dbID uint64,
+) (bool, *logtailreplay.PartitionState) {
+
 	//if table has been subscribed, return quickly.
-	if ps, ok, _ := c.isSubscribed(dbID, tableID); ok {
+	if ps, ok, _ := c.isSubscribed(ctx, acctId, dbID, tableID); ok {
 		return true, ps
 	}
 	return false, nil
@@ -383,6 +386,7 @@ func (c *PushClient) skipSubIfSubscribed(
 
 func (c *PushClient) toSubscribeTable(
 	ctx context.Context,
+	accId uint64,
 	tableID uint64,
 	tableName string,
 	dbID uint64,
@@ -402,7 +406,7 @@ func (c *PushClient) toSubscribeTable(
 			moerr.NewInternalErrorNoCtx("injected subscribe table err")
 	}
 
-	if skip, ps = c.skipSubIfSubscribed(ctx, tableID, dbID); skip {
+	if skip, ps = c.skipSubIfSubscribed(ctx, accId, tableID, dbID); skip {
 		return ps, nil
 	}
 
@@ -424,7 +428,7 @@ func (c *PushClient) toSubscribeTable(
 				return nil, err
 			}
 		case SubRspReceived:
-			state, err = c.loadAndConsumeLatestCkp(ctx, tableID, tableName, dbID, dbName)
+			state, err = c.loadAndConsumeLatestCkp(ctx, accId, tableID, tableName, dbID, dbName)
 			if err != nil {
 				return nil, err
 			}
@@ -441,7 +445,7 @@ func (c *PushClient) toSubscribeTable(
 
 		case Subscribed:
 			//if table has been subscribed, return the ps.
-			ps, _, state = c.isSubscribed(dbID, tableID)
+			ps, _, state = c.isSubscribed(ctx, accId, dbID, tableID)
 			if ps != nil {
 				logutil.Info(
 					fmt.Sprintf("%s-subscribe-ok", logTag),
@@ -465,9 +469,10 @@ func (c *PushClient) toSubscribeTable(
 // TryToSubscribeTable subscribe a table and block until subscribe succeed.
 func (c *PushClient) TryToSubscribeTable(
 	ctx context.Context,
-	dbId, tblId uint64,
-	dbName, tblName string) (err error) {
-	_, err = c.toSubscribeTable(ctx, tblId, tblName, dbId, dbName)
+	accId, dbId, tblId uint64,
+	dbName, tblName string,
+) (err error) {
+	_, err = c.toSubscribeTable(ctx, accId, tblId, tblName, dbId, dbName)
 	return
 }
 
@@ -944,7 +949,7 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 }
 
 // UnsubscribeTable implements the LogtailEngine interface.
-func (c *PushClient) UnsubscribeTable(ctx context.Context, dbID, tbID uint64) error {
+func (c *PushClient) UnsubscribeTable(ctx context.Context, accId, dbID, tbID uint64) error {
 	if c.subscriber == nil {
 		return moerr.NewInternalErrorf(ctx, "%s cannot unsubscribe table %d-%d as subscriber not initialized", logTag, dbID, tbID)
 	}
@@ -1106,7 +1111,11 @@ type SubTableStatus struct {
 	LatestTime time.Time
 }
 
-func (c *PushClient) isSubscribed(dbId, tId uint64) (*logtailreplay.PartitionState, bool, SubscribeState) {
+func (c *PushClient) isSubscribed(
+	ctx context.Context,
+	accId, dbId, tId uint64,
+) (*logtailreplay.PartitionState, bool, SubscribeState) {
+
 	s := &c.subscribed
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
@@ -1119,7 +1128,7 @@ func (c *PushClient) isSubscribed(dbId, tId uint64) (*logtailreplay.PartitionSta
 			SubState:   Subscribed,
 			LatestTime: time.Now(),
 		}
-		return c.eng.GetOrCreateLatestPart(dbId, tId).Snapshot(), true, Subscribed
+		return c.eng.GetOrCreateLatestPart(ctx, accId, dbId, tId).Snapshot(), true, Subscribed
 	}
 	if !exist {
 		return nil, false, Unsubscribed
@@ -1182,6 +1191,7 @@ func (s *subscribedTable) isSubscribed(dbId, tblId uint64) bool {
 // consumeLatestCkp consume the latest checkpoint of the table if not consumed, and return the latest partition state.
 func (c *PushClient) loadAndConsumeLatestCkp(
 	ctx context.Context,
+	accId uint64,
 	tableID uint64,
 	tableName string,
 	dbID uint64,
@@ -1192,7 +1202,7 @@ func (c *PushClient) loadAndConsumeLatestCkp(
 	defer c.subscribed.mutex.Unlock()
 	v, exist := c.subscribed.m[tableID]
 	if exist && (v.SubState == SubRspReceived || v.SubState == Subscribed) {
-		_, err := c.eng.LazyLoadLatestCkp(ctx, tableID, tableName, dbID, dbName)
+		_, err := c.eng.LazyLoadLatestCkp(ctx, accId, tableID, tableName, dbID, dbName)
 		if err != nil {
 			return InvalidSubState, err
 		}
@@ -2047,7 +2057,7 @@ func updatePartitionOfPush(
 	dbId, tblId := tl.Table.GetDbId(), tl.Table.GetTbId()
 
 	t0 := time.Now()
-	partition := e.GetOrCreateLatestPart(dbId, tblId)
+	partition := e.GetOrCreateLatestPart(ctx, uint64(tl.Table.AccId), dbId, tblId)
 	v2.LogtailUpdatePartitonGetPartitionDurationHistogram.Observe(time.Since(t0).Seconds())
 
 	t0 = time.Now()
