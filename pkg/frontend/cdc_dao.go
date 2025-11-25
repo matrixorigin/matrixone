@@ -123,10 +123,20 @@ func (t *CDCDao) CreateTask(
 
 	var (
 		details *task.Details
+		ts      taskservice.TaskService
 	)
 	if details, err = opts.BuildTaskDetails(); err != nil {
 		return
 	}
+
+	// Get TaskService - handle nil case gracefully instead of panicking
+	if t.ts == nil && t.ses != nil {
+		t.ts = getPu(t.ses.GetService()).TaskService
+	}
+	if t.ts == nil {
+		return moerr.NewInternalError(ctx, "TaskService is not available. CDC task creation requires TaskService to be initialized.")
+	}
+	ts = t.ts
 
 	creatTaskJob := func(
 		ctx context.Context,
@@ -145,7 +155,7 @@ func (t *CDCDao) CreateTask(
 		return int(rowsAffected), nil
 	}
 
-	_, err = t.MustGetTaskService().AddCDCTask(
+	_, err = ts.AddCDCTask(
 		ctx, opts.BuildTaskMetadata(), details, creatTaskJob,
 	)
 	return
