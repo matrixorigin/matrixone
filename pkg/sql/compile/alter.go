@@ -171,10 +171,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 	}
 
 	// Idxcron: remove index update tasks with temp table id
-	err = idxcron.UnregisterUpdateByTableId(c.proc.Ctx,
-		c.proc.GetService(),
-		c.proc.GetTxnOperator(),
-		newRel.GetTableID(c.proc.Ctx))
+	err = DropAllIndexUpdateTasks(c, newTmpTableDef, dbName, qry.CopyTableDef.Name)
 	if err != nil {
 		return err
 	}
