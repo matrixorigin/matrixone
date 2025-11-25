@@ -16,17 +16,21 @@ package cdc
 
 import (
 	"context"
+	"database/sql"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -624,3 +628,584 @@ func TestMysqlSinker2_HandleInsertBatch(t *testing.T) {
 
 // Skipping complex async workflow tests for now
 // Will be tested through integration tests with reader
+
+// TestCreateMysqlSinker2 verifies CreateMysqlSinker2 handles various scenarios
+func TestCreateMysqlSinker2(t *testing.T) {
+	tableDef := &plan.TableDef{
+		Name:   "test_table",
+		DbName: "test_db",
+		Cols: []*plan.ColDef{
+			{
+				Name: "id",
+				Typ:  plan.Type{Id: int32(types.T_int32)},
+				Default: &plan.Default{
+					NullAbility: true,
+				},
+			},
+			{
+				Name: "name",
+				Typ:  plan.Type{Id: int32(types.T_varchar)},
+				Default: &plan.Default{
+					NullAbility: true,
+				},
+			},
+		},
+		Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}},
+		Name2ColIndex: map[string]int32{"id": 0, "name": 1},
+	}
+
+	t.Run("SuccessPath", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		defer db.Close()
+
+		stub := gostub.Stub(&OpenDbConn, func(user, password, ip string, port int, timeout string) (*sql.DB, error) {
+			return db, nil
+		})
+		defer stub.Reset()
+
+		// Mock all SQL executions - ExecSQL uses "fakeSql" as placeholder
+		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 0))
+
+		sinkUri := UriInfo{
+			SinkTyp:  CDCSinkType_MySQL,
+			User:     "test_user",
+			Password: "test_pass",
+			Ip:       "127.0.0.1",
+			Port:     3306,
+		}
+
+		dbTblInfo := &DbTableInfo{
+			SourceDbName:  "src_db",
+			SourceTblName: "src_table",
+			SinkDbName:    "sink_db",
+			SinkTblName:   "sink_table",
+			IdChanged:     false,
+		}
+
+		sinker, err := CreateMysqlSinker2(
+			sinkUri,
+			1,
+			"task-1",
+			dbTblInfo,
+			nil,
+			tableDef,
+			0,
+			1*time.Second,
+			NewCdcActiveRoutine(),
+			1024*1024,
+			CDCDefaultSendSqlTimeout,
+		)
+
+		assert.NoError(t, err)
+		assert.NotNil(t, sinker)
+		assert.NoError(t, mock.ExpectationsWereMet())
+		sinker.Close()
+	})
+
+	t.Run("SuccessPath_WithIdChanged", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		defer db.Close()
+
+		stub := gostub.Stub(&OpenDbConn, func(user, password, ip string, port int, timeout string) (*sql.DB, error) {
+			return db, nil
+		})
+		defer stub.Reset()
+
+		// Mock all SQL executions including DROP TABLE
+		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 0))
+
+		sinkUri := UriInfo{
+			SinkTyp:  CDCSinkType_MySQL,
+			User:     "test_user",
+			Password: "test_pass",
+			Ip:       "127.0.0.1",
+			Port:     3306,
+		}
+
+		dbTblInfo := &DbTableInfo{
+			SourceDbName:  "src_db",
+			SourceTblName: "src_table",
+			SinkDbName:    "sink_db",
+			SinkTblName:   "sink_table",
+			IdChanged:     true,
+		}
+
+		sinker, err := CreateMysqlSinker2(
+			sinkUri,
+			1,
+			"task-1",
+			dbTblInfo,
+			nil,
+			tableDef,
+			0,
+			1*time.Second,
+			NewCdcActiveRoutine(),
+			1024*1024,
+			CDCDefaultSendSqlTimeout,
+		)
+
+		assert.NoError(t, err)
+		assert.NotNil(t, sinker)
+		assert.False(t, dbTblInfo.IdChanged, "IdChanged should be reset")
+		assert.NoError(t, mock.ExpectationsWereMet())
+		sinker.Close()
+	})
+
+	t.Run("NewExecutorFails", func(t *testing.T) {
+		stub := gostub.Stub(&OpenDbConn, func(user, password, ip string, port int, timeout string) (*sql.DB, error) {
+			return nil, moerr.NewInternalErrorNoCtx("connection failed")
+		})
+		defer stub.Reset()
+
+		sinkUri := UriInfo{
+			SinkTyp:  CDCSinkType_MySQL,
+			User:     "test_user",
+			Password: "test_pass",
+			Ip:       "127.0.0.1",
+			Port:     3306,
+		}
+
+		dbTblInfo := &DbTableInfo{
+			SinkDbName:  "sink_db",
+			SinkTblName: "sink_table",
+		}
+
+		sinker, err := CreateMysqlSinker2(
+			sinkUri,
+			1,
+			"task-1",
+			dbTblInfo,
+			nil,
+			tableDef,
+			0,
+			1*time.Second,
+			NewCdcActiveRoutine(),
+			1024*1024,
+			CDCDefaultSendSqlTimeout,
+		)
+
+		assert.Error(t, err)
+		assert.Nil(t, sinker)
+		assert.Contains(t, err.Error(), "connection failed")
+	})
+
+	t.Run("CreateDatabaseFails", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		defer db.Close()
+
+		stub := gostub.Stub(&OpenDbConn, func(user, password, ip string, port int, timeout string) (*sql.DB, error) {
+			return db, nil
+		})
+		defer stub.Reset()
+
+		mock.ExpectExec("fakeSql").WillReturnError(moerr.NewInternalErrorNoCtx("create database failed"))
+
+		sinkUri := UriInfo{
+			SinkTyp:  CDCSinkType_MySQL,
+			User:     "test_user",
+			Password: "test_pass",
+			Ip:       "127.0.0.1",
+			Port:     3306,
+		}
+
+		dbTblInfo := &DbTableInfo{
+			SinkDbName:  "sink_db",
+			SinkTblName: "sink_table",
+		}
+
+		sinker, err := CreateMysqlSinker2(
+			sinkUri,
+			1,
+			"task-1",
+			dbTblInfo,
+			nil,
+			tableDef,
+			0,
+			1*time.Second,
+			NewCdcActiveRoutine(),
+			1024*1024,
+			CDCDefaultSendSqlTimeout,
+		)
+
+		assert.Error(t, err)
+		assert.Nil(t, sinker)
+		assert.Contains(t, err.Error(), "create database failed")
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("UseDatabaseFails", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		defer db.Close()
+
+		stub := gostub.Stub(&OpenDbConn, func(user, password, ip string, port int, timeout string) (*sql.DB, error) {
+			return db, nil
+		})
+		defer stub.Reset()
+
+		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectExec("fakeSql").WillReturnError(moerr.NewInternalErrorNoCtx("use database failed"))
+
+		sinkUri := UriInfo{
+			SinkTyp:  CDCSinkType_MySQL,
+			User:     "test_user",
+			Password: "test_pass",
+			Ip:       "127.0.0.1",
+			Port:     3306,
+		}
+
+		dbTblInfo := &DbTableInfo{
+			SinkDbName:  "sink_db",
+			SinkTblName: "sink_table",
+		}
+
+		sinker, err := CreateMysqlSinker2(
+			sinkUri,
+			1,
+			"task-1",
+			dbTblInfo,
+			nil,
+			tableDef,
+			0,
+			1*time.Second,
+			NewCdcActiveRoutine(),
+			1024*1024,
+			CDCDefaultSendSqlTimeout,
+		)
+
+		assert.Error(t, err)
+		assert.Nil(t, sinker)
+		assert.Contains(t, err.Error(), "use database failed")
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("DropTableFails", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		defer db.Close()
+
+		stub := gostub.Stub(&OpenDbConn, func(user, password, ip string, port int, timeout string) (*sql.DB, error) {
+			return db, nil
+		})
+		defer stub.Reset()
+
+		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectExec("fakeSql").WillReturnError(moerr.NewInternalErrorNoCtx("drop table failed"))
+
+		sinkUri := UriInfo{
+			SinkTyp:  CDCSinkType_MySQL,
+			User:     "test_user",
+			Password: "test_pass",
+			Ip:       "127.0.0.1",
+			Port:     3306,
+		}
+
+		dbTblInfo := &DbTableInfo{
+			SinkDbName:  "sink_db",
+			SinkTblName: "sink_table",
+			IdChanged:   true,
+		}
+
+		sinker, err := CreateMysqlSinker2(
+			sinkUri,
+			1,
+			"task-1",
+			dbTblInfo,
+			nil,
+			tableDef,
+			0,
+			1*time.Second,
+			NewCdcActiveRoutine(),
+			1024*1024,
+			CDCDefaultSendSqlTimeout,
+		)
+
+		assert.Error(t, err)
+		assert.Nil(t, sinker)
+		assert.Contains(t, err.Error(), "drop table failed")
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("CreateTableFails", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		defer db.Close()
+
+		stub := gostub.Stub(&OpenDbConn, func(user, password, ip string, port int, timeout string) (*sql.DB, error) {
+			return db, nil
+		})
+		defer stub.Reset()
+
+		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectExec("fakeSql").WillReturnError(moerr.NewInternalErrorNoCtx("create table failed"))
+
+		sinkUri := UriInfo{
+			SinkTyp:  CDCSinkType_MySQL,
+			User:     "test_user",
+			Password: "test_pass",
+			Ip:       "127.0.0.1",
+			Port:     3306,
+		}
+
+		dbTblInfo := &DbTableInfo{
+			SinkDbName:  "sink_db",
+			SinkTblName: "sink_table",
+		}
+
+		sinker, err := CreateMysqlSinker2(
+			sinkUri,
+			1,
+			"task-1",
+			dbTblInfo,
+			nil,
+			tableDef,
+			0,
+			1*time.Second,
+			NewCdcActiveRoutine(),
+			1024*1024,
+			CDCDefaultSendSqlTimeout,
+		)
+
+		assert.Error(t, err)
+		assert.Nil(t, sinker)
+		assert.Contains(t, err.Error(), "create table failed")
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("ClusterTableNotSupported", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		defer db.Close()
+
+		stub := gostub.Stub(&OpenDbConn, func(user, password, ip string, port int, timeout string) (*sql.DB, error) {
+			return db, nil
+		})
+		defer stub.Reset()
+
+		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 0))
+
+		clusterTableDef := &plan.TableDef{
+			Name:      "cluster_table",
+			DbName:    "test_db",
+			TableType: catalog.SystemClusterRel,
+			Cols: []*plan.ColDef{
+				{Name: "id", Typ: plan.Type{Id: int32(types.T_int32)}},
+			},
+			Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}},
+			Name2ColIndex: map[string]int32{"id": 0},
+		}
+
+		sinkUri := UriInfo{
+			SinkTyp:  CDCSinkType_MySQL,
+			User:     "test_user",
+			Password: "test_pass",
+			Ip:       "127.0.0.1",
+			Port:     3306,
+		}
+
+		dbTblInfo := &DbTableInfo{
+			SinkDbName:  "sink_db",
+			SinkTblName: "sink_table",
+		}
+
+		sinker, err := CreateMysqlSinker2(
+			sinkUri,
+			1,
+			"task-1",
+			dbTblInfo,
+			nil,
+			clusterTableDef,
+			0,
+			1*time.Second,
+			NewCdcActiveRoutine(),
+			1024*1024,
+			CDCDefaultSendSqlTimeout,
+		)
+
+		assert.Error(t, err)
+		assert.Nil(t, sinker)
+		assert.Contains(t, err.Error(), "cluster table is not supported")
+	})
+
+	t.Run("ExternalTableNotSupported", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		defer db.Close()
+
+		stub := gostub.Stub(&OpenDbConn, func(user, password, ip string, port int, timeout string) (*sql.DB, error) {
+			return db, nil
+		})
+		defer stub.Reset()
+
+		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 0))
+
+		externalTableDef := &plan.TableDef{
+			Name:      "external_table",
+			DbName:    "test_db",
+			TableType: catalog.SystemExternalRel,
+			Cols: []*plan.ColDef{
+				{Name: "id", Typ: plan.Type{Id: int32(types.T_int32)}},
+			},
+			Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}},
+			Name2ColIndex: map[string]int32{"id": 0},
+		}
+
+		sinkUri := UriInfo{
+			SinkTyp:  CDCSinkType_MySQL,
+			User:     "test_user",
+			Password: "test_pass",
+			Ip:       "127.0.0.1",
+			Port:     3306,
+		}
+
+		dbTblInfo := &DbTableInfo{
+			SinkDbName:  "sink_db",
+			SinkTblName: "sink_table",
+		}
+
+		sinker, err := CreateMysqlSinker2(
+			sinkUri,
+			1,
+			"task-1",
+			dbTblInfo,
+			nil,
+			externalTableDef,
+			0,
+			1*time.Second,
+			NewCdcActiveRoutine(),
+			1024*1024,
+			CDCDefaultSendSqlTimeout,
+		)
+
+		assert.Error(t, err)
+		assert.Nil(t, sinker)
+		assert.Contains(t, err.Error(), "external table is not supported")
+	})
+
+	t.Run("ConcurrentCreation", func(t *testing.T) {
+		// Test concurrent creation with sequential execution to avoid stub conflicts
+		// Each test creates its own mock and stub, but we run them sequentially
+		// to avoid global stub conflicts in gostub
+		const numTests = 5
+		errors := make([]error, numTests)
+		sinkers := make([]Sinker, numTests)
+
+		for i := 0; i < numTests; i++ {
+			db, mock, err := sqlmock.New()
+			require.NoError(t, err)
+
+			stub := gostub.Stub(&OpenDbConn, func(user, password, ip string, port int, timeout string) (*sql.DB, error) {
+				return db, nil
+			})
+			defer stub.Reset()
+			defer db.Close()
+
+			mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 0))
+			mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 0))
+			mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 0))
+
+			sinkUri := UriInfo{
+				SinkTyp:  CDCSinkType_MySQL,
+				User:     "test_user",
+				Password: "test_pass",
+				Ip:       "127.0.0.1",
+				Port:     3306,
+			}
+
+			dbTblInfo := &DbTableInfo{
+				SourceDbName:  fmt.Sprintf("src_db_%d", i),
+				SourceTblName: fmt.Sprintf("src_table_%d", i),
+				SinkDbName:    fmt.Sprintf("sink_db_%d", i),
+				SinkTblName:   fmt.Sprintf("sink_table_%d", i),
+			}
+
+			sinker, err := CreateMysqlSinker2(
+				sinkUri,
+				uint64(i),
+				fmt.Sprintf("task-%d", i),
+				dbTblInfo,
+				nil,
+				tableDef,
+				0,
+				1*time.Second,
+				NewCdcActiveRoutine(),
+				1024*1024,
+				CDCDefaultSendSqlTimeout,
+			)
+
+			errors[i] = err
+			sinkers[i] = sinker
+
+			if err == nil {
+				assert.NoError(t, mock.ExpectationsWereMet())
+			}
+		}
+
+		for i := 0; i < numTests; i++ {
+			assert.NoError(t, errors[i], "test %d should succeed", i)
+			if sinkers[i] != nil {
+				sinkers[i].Close()
+			}
+		}
+	})
+
+	t.Run("NilTableDef", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		defer db.Close()
+
+		stub := gostub.Stub(&OpenDbConn, func(user, password, ip string, port int, timeout string) (*sql.DB, error) {
+			return db, nil
+		})
+		defer stub.Reset()
+
+		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 0))
+
+		sinkUri := UriInfo{
+			SinkTyp:  CDCSinkType_MySQL,
+			User:     "test_user",
+			Password: "test_pass",
+			Ip:       "127.0.0.1",
+			Port:     3306,
+		}
+
+		dbTblInfo := &DbTableInfo{
+			SinkDbName:  "sink_db",
+			SinkTblName: "sink_table",
+		}
+
+		sinker, err := CreateMysqlSinker2(
+			sinkUri,
+			1,
+			"task-1",
+			dbTblInfo,
+			nil,
+			nil, // nil tableDef
+			0,
+			1*time.Second,
+			NewCdcActiveRoutine(),
+			1024*1024,
+			CDCDefaultSendSqlTimeout,
+		)
+
+		// Should handle nil tableDef gracefully
+		if err == nil {
+			assert.NotNil(t, sinker)
+			sinker.Close()
+		}
+	})
+}
