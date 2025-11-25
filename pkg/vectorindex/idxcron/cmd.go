@@ -51,7 +51,7 @@ func RegisterUpdate(ctx context.Context,
 	sqlctx := sqlexec.NewSqlContext(newctx, cnUUID, txn, catalog.System_Account, nil)
 	sqlproc := sqlexec.NewSqlProcessWithContext(sqlctx)
 
-	status := IndexUpdateStatus{Status: Status_Ok, Msg: "Registered", Time: time.Now()}
+	status := IndexUpdateStatus{Status: Status_Ok, Msg: "index update registered", Time: time.Now()}
 	bytes, err := sonic.Marshal(&status)
 	if err != nil {
 		return

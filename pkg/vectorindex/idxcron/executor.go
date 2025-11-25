@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -179,23 +180,24 @@ func (t *IndexUpdateTaskInfo) checkIndexUpdatable(ctx context.Context, dsize uin
 
 func (t *IndexUpdateTaskInfo) saveStatus(sqlproc *sqlexec.SqlProcess, updated bool, err error) error {
 
-	// skip update status if index is NOT updated
-	if !updated {
-		return nil
-	}
-
 	errsqlfmt := "UPDATE mo_catalog.mo_index_update SET status = '%s' WHERE table_id = %d AND account_id = %d AND action = '%s'"
 	updatesqlfmt := "UPDATE mo_catalog.mo_index_update SET last_update_at = now(), status = '%s' WHERE table_id = %d AND account_id = %d AND action = '%s'"
 
+	// skip update status if index is NOT updated
+	status := IndexUpdateStatus{Status: Status_Ok, Msg: "reindex success", Time: time.Now()}
+	if !updated {
+		status.Status = Status_Ok
+		status.Msg = "index update skipped"
+		os.Stderr.WriteString("updated skipped\n")
+	}
+
 	var sqlfmt string
-	status := IndexUpdateStatus{Status: Status_Ok, Time: time.Now()}
 
 	if err != nil {
 		// save error status column to mo_index_update
 		status.Status = Status_Error
 		status.Msg = err.Error()
 		sqlfmt = errsqlfmt
-		os.Stderr.WriteString(fmt.Sprintf("save Status error %v\n", err))
 	} else {
 		sqlfmt = updatesqlfmt
 	}
@@ -205,6 +207,7 @@ func (t *IndexUpdateTaskInfo) saveStatus(sqlproc *sqlexec.SqlProcess, updated bo
 		return err
 	}
 
+	os.Stderr.WriteString(fmt.Sprintf("save Status %v\n", string(bytes)))
 	// update status
 	sql := fmt.Sprintf(sqlfmt,
 		string(bytes), t.TableId, t.AccountId, t.Action)
@@ -472,16 +475,18 @@ func runFulltextBatchDelete(ctx context.Context, txnEngine engine.Engine, txnCli
 
 func (e *IndexUpdateTaskExecutor) run(ctx context.Context) (err error) {
 
-	os.Stderr.WriteString("IndexUpdateTaskExecutor RUN TASK\n")
+	os.Stderr.WriteString(fmt.Sprintf("IndexUpdateTaskExecutor RUN TASK, time %v\n", time.Now()))
+	logutil.Infof("IndexUpdateTaskExecutor START")
+
+	defer func() {
+		logutil.Infof("IndexUpdateTaskExecutor END")
+	}()
 
 	tasks, err := getTasks(ctx, e.txnEngine, e.cnTxnClient, e.cnUUID)
 	if err != nil {
 		return err
 	}
 	os.Stderr.WriteString(fmt.Sprintf("RUN OUT TASKS %v\n", len(tasks)))
-	for _, t := range tasks {
-		os.Stderr.WriteString(fmt.Sprintf("RUN OUT TASKS %v\n", t.Metadata))
-	}
 
 	// do the maintenance such as ivfflat re-index, fulltext batch_delete
 	for _, t := range tasks {
@@ -514,8 +519,10 @@ func (e *IndexUpdateTaskExecutor) run(ctx context.Context) (err error) {
 	return nil
 }
 
-// var IndexUpdateTaskCronExpr = "0 0 24 * * *"
-var IndexUpdateTaskCronExpr = "*/15 * * * * *"
+var IndexUpdateTaskCronExpr = "0 55 23 * * *" // 23:55:00 everyday
+
+// var IndexUpdateTaskCronExpr = "0 */5 * * * *" // every 5 minutes
+// var IndexUpdateTaskCronExpr = "*/15 * * * * *" // every 15 seconds
 
 const ParamSeparator = " "
 
