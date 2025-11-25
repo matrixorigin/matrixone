@@ -17,6 +17,8 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path"
@@ -34,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -72,7 +75,8 @@ const (
 )
 
 const (
-	batchCnt = objectio.BlockMaxRows / 10
+	maxSqlBatchCnt  = objectio.BlockMaxRows * 10
+	maxSqlBatchSize = mpool.MB * 48
 )
 
 var bufferPool = sync.Pool{
@@ -371,19 +375,6 @@ func runSql(
 		return sqlRet, err
 	}
 
-	//if strings.Contains(sql, ".csv") {
-	//	var (
-	//		stmts []tree.Statement
-	//	)
-	//
-	//	if stmts, err = parsers.Parse(ctx, dialect.MYSQL, sql, 1); err != nil {
-	//		return sqlRet, err
-	//	}
-	//
-	//	st := stmts[0].(*tree.Select)
-	//	conf := ExportConfig{userConfig: st.Ep, service: ses.service}
-	//}
-
 	return sqlRet, nil
 }
 
@@ -585,6 +576,74 @@ func handleBranchMerge(
 	return diffMergeAgency(ses, execCtx, stmt)
 }
 
+func tryFlushDeletesOrReplace(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	tblStuff tableStuff,
+	newWrapped *batchWithKind,
+	deleteCnt *int,
+	deletesBuf *bytes.Buffer,
+	replaceCnt *int,
+	replaceBuf *bytes.Buffer,
+	writeFile func([]byte) error,
+) (err error) {
+
+	flushDeletes := func() error {
+		if err = flushSqlValues(
+			ctx, ses, bh, tblStuff, deletesBuf, true, writeFile,
+		); err != nil {
+			return err
+		}
+
+		*deleteCnt = 0
+		deletesBuf.Reset()
+		return nil
+	}
+
+	flushReplace := func() error {
+
+		if err = flushSqlValues(
+			ctx, ses, bh, tblStuff, replaceBuf, false, writeFile,
+		); err != nil {
+			return err
+		}
+
+		*replaceCnt = 0
+		replaceBuf.Reset()
+		return nil
+	}
+
+	// if wrapped is nil, means force flush
+	if newWrapped != nil {
+		newSize := newWrapped.batch.Size()
+		if newWrapped.kind == diffDelete {
+			if deletesBuf.Len()+newSize >= maxSqlBatchSize || *deleteCnt >= maxSqlBatchCnt {
+				return flushDeletes()
+			}
+		} else {
+			if replaceBuf.Len()+newSize >= maxSqlBatchSize || *replaceCnt >= maxSqlBatchCnt {
+				return flushReplace()
+			}
+		}
+		return nil
+	}
+
+	if *replaceCnt > 0 {
+		if err = flushReplace(); err != nil {
+			return err
+		}
+	}
+
+	if *deleteCnt > 0 {
+		if err = flushDeletes(); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func mergeDiffs(
 	ctx context.Context,
 	cancel context.CancelFunc,
@@ -627,6 +686,16 @@ func mergeDiffs(
 			continue
 		}
 
+		if err = tryFlushDeletesOrReplace(
+			ctx, ses, bh, tblStuff, &wrapped,
+			&deleteCnt, deleteFromVals, &replaceCnt, replaceIntoVals, nil,
+		); err != nil {
+			firstErr = err
+			cancel()
+			tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+			continue
+		}
+
 		if err = constructValsFromBatch(
 			ctx, ses, tblStuff, wrapped, deleteFromVals, replaceIntoVals,
 		); err != nil {
@@ -642,47 +711,15 @@ func mergeDiffs(
 			replaceCnt += wrapped.batch.RowCount()
 		}
 
-		if deleteCnt >= batchCnt {
-			deleteCnt = 0
-			if err = flushSqlValues(
-				ctx, ses, bh, tblStuff, deleteFromVals, true, nil,
-			); err != nil {
-				firstErr = err
-				cancel()
-			}
-			deleteFromVals.Reset()
-		}
-
-		if replaceCnt >= batchCnt {
-			replaceCnt = 0
-			if err = flushSqlValues(
-				ctx, ses, bh, tblStuff, replaceIntoVals, false, nil,
-			); err != nil {
-				firstErr = err
-				cancel()
-			}
-			replaceIntoVals.Reset()
-		}
 		tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
 	}
 
-	if deleteCnt > 0 {
-		if err = flushSqlValues(
-			ctx, ses, bh, tblStuff, deleteFromVals, true, nil,
-		); err != nil {
-			if firstErr == nil {
-				firstErr = err
-			}
-		}
-	}
-
-	if replaceCnt > 0 {
-		if err = flushSqlValues(
-			ctx, ses, bh, tblStuff, replaceIntoVals, false, nil,
-		); err != nil {
-			if firstErr == nil {
-				firstErr = err
-			}
+	if err = tryFlushDeletesOrReplace(
+		ctx, ses, bh, tblStuff, nil,
+		&deleteCnt, deleteFromVals, &replaceCnt, replaceIntoVals, nil,
+	); err != nil {
+		if firstErr == nil {
+			firstErr = err
 		}
 	}
 
@@ -817,6 +854,17 @@ func satisfyDiffOutputOpt(
 			}
 
 			if wrapped.name == tblStuff.tarRel.GetTableName() {
+				if err = tryFlushDeletesOrReplace(
+					ctx, ses, bh, tblStuff, &wrapped,
+					&deleteCnt, deleteFromValsBuffer, &replaceCnt, replaceIntoValsBuffer,
+					writeFile,
+				); err != nil {
+					first = err
+					cancel()
+					tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+					continue
+				}
+
 				if err = constructValsFromBatch(
 					ctx, ses, tblStuff, wrapped, deleteFromValsBuffer, replaceIntoValsBuffer,
 				); err != nil {
@@ -831,55 +879,21 @@ func satisfyDiffOutputOpt(
 					replaceCnt += int(wrapped.batch.RowCount())
 				}
 			}
+
 			tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
-
-			if deleteCnt >= batchCnt {
-				if err = flushSqlValues(
-					ctx, ses, bh, tblStuff, deleteFromValsBuffer, true, writeFile,
-				); err != nil {
-					first = err
-					cancel()
-					continue
-				}
-
-				deleteCnt = 0
-				deleteFromValsBuffer.Reset()
-			}
-
-			if replaceCnt >= batchCnt {
-				if err = flushSqlValues(
-					ctx, ses, bh, tblStuff, replaceIntoValsBuffer, false, writeFile,
-				); err != nil {
-					first = err
-					cancel()
-					continue
-				}
-
-				replaceCnt = 0
-				replaceIntoValsBuffer.Reset()
-			}
 		}
 
 		if first != nil {
 			return first
 		}
 
-		if deleteCnt > 0 {
-			if err = flushSqlValues(
-				ctx, ses, bh, tblStuff, deleteFromValsBuffer, true, writeFile,
-			); err != nil {
-				first = err
-				cancel()
-			}
-		}
-
-		if replaceCnt > 0 {
-			if err = flushSqlValues(
-				ctx, ses, bh, tblStuff, replaceIntoValsBuffer, false, writeFile,
-			); err != nil {
-				first = err
-				cancel()
-			}
+		if err = tryFlushDeletesOrReplace(
+			ctx, ses, bh, tblStuff, nil,
+			&deleteCnt, deleteFromValsBuffer, &replaceCnt, replaceIntoValsBuffer,
+			writeFile,
+		); err != nil {
+			first = err
+			cancel()
 		}
 
 		mrs.AddRow([]any{fullFilePath, fileHint})
@@ -1096,7 +1110,6 @@ func flushSqlValues(
 		defer func() {
 			ret.Close()
 		}()
-
 		ret, err = runSql(ctx, ses, bh, tblStuff, sqlBuffer.String(), false)
 	}
 
@@ -1157,8 +1170,20 @@ func constructValsFromBatch(
 			if vec.GetNulls().Contains(uint64(rowIdx)) {
 				row[colIdx] = nil
 			} else {
-				bb := vec.GetRawBytesAt(rowIdx)
-				row[colIdx] = types.DecodeValue(bb, vec.GetType().Oid)
+
+				switch vec.GetType().Oid {
+				case types.T_datetime, types.T_timestamp, types.T_decimal64,
+					types.T_decimal128, types.T_time:
+					bb := vec.GetRawBytesAt(rowIdx)
+					row[colIdx] = types.DecodeValue(bb, vec.GetType().Oid)
+				default:
+					if err = extractRowFromVector(
+						ctx, ses, vec, colIdx, row, rowIdx, false,
+					); err != nil {
+						return
+					}
+				}
+
 			}
 		}
 
@@ -2636,14 +2661,39 @@ func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer)
 
 	switch t.Oid {
 	case types.T_varchar, types.T_text, types.T_json, types.T_char, types.
-		T_varbinary, types.T_binary, types.T_array_float32, types.T_array_float64:
-		buf.WriteString("'")
-		if x, ok := val.([]byte); ok {
-			buf.WriteString(string(x))
-		} else {
-			buf.WriteString(val.(string))
+		T_varbinary, types.T_binary:
+		if t.Oid == types.T_json {
+			var strVal string
+			switch x := val.(type) {
+			case bytejson.ByteJson:
+				strVal = x.String()
+			case *bytejson.ByteJson:
+				if x == nil {
+					panic(moerr.NewInternalErrorNoCtx("formatValIntoString: nil *bytejson.ByteJson"))
+				}
+				strVal = x.String()
+			case []byte:
+				strVal = string(x)
+			case string:
+				strVal = x
+			default:
+				panic(moerr.NewInternalErrorNoCtxf("formatValIntoString: unexpected json type %T", val))
+			}
+			jsonLiteral := escapeJSONControlBytes([]byte(strVal))
+			if !json.Valid(jsonLiteral) {
+				panic(moerr.NewInternalErrorNoCtxf("formatValIntoString: invalid json input %q", strVal))
+			}
+			writeEscapedSQLString(buf, jsonLiteral)
+			return
 		}
-		buf.WriteString("'")
+		switch x := val.(type) {
+		case []byte:
+			writeEscapedSQLString(buf, x)
+		case string:
+			writeEscapedSQLString(buf, []byte(x))
+		default:
+			panic(moerr.NewInternalErrorNoCtxf("formatValIntoString: unexpected string type %T", val))
+		}
 	case types.T_timestamp:
 		buf.WriteString("'")
 		buf.WriteString(val.(types.Timestamp).String2(ses.timeZone, t.Scale))
@@ -2682,7 +2732,77 @@ func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer)
 		writeFloat(float64(val.(float32)), 32)
 	case types.T_float64:
 		writeFloat(val.(float64), 64)
+	case types.T_array_float32:
+		buf.WriteString("'")
+		buf.WriteString(types.ArrayToString[float32](val.([]float32)))
+		buf.WriteString("'")
+	case types.T_array_float64:
+		buf.WriteString("'")
+		buf.WriteString(types.ArrayToString[float64](val.([]float64)))
+		buf.WriteString("'")
+	default:
+		panic(moerr.NewInternalErrorNoCtxf("formatValIntoString: unsupported type %v", t.Oid))
 	}
+}
+
+// writeEscapedSQLString escapes special and control characters for SQL literal output.
+func writeEscapedSQLString(buf *bytes.Buffer, b []byte) {
+	buf.WriteByte('\'')
+	for _, c := range b {
+		switch c {
+		case '\'':
+			buf.WriteString("\\'")
+		//case '"':
+		//	buf.WriteString("\\\"")
+		case '\\':
+			buf.WriteString("\\\\")
+		case 0:
+			buf.WriteString("\\0")
+		case '\b':
+			buf.WriteString("\\b")
+		case '\n':
+			buf.WriteString("\\n")
+		case '\r':
+			buf.WriteString("\\r")
+		case '\t':
+			buf.WriteString("\\t")
+		case 0x1A:
+			buf.WriteString("\\Z")
+		default:
+			if c < 0x20 || c == 0x7f {
+				buf.WriteString("\\x")
+				buf.WriteString(hex.EncodeToString([]byte{c}))
+			} else {
+				buf.WriteByte(c)
+			}
+		}
+	}
+	buf.WriteByte('\'')
+}
+
+// escapeJSONControlChars converts control characters to JSON-compliant \u00XX escapes.
+func escapeJSONControlBytes(b []byte) []byte {
+	var out []byte
+	hexDigits := "0123456789abcdef"
+
+	for i, c := range b {
+		if c < 0x20 || c == 0x7f {
+			if out == nil {
+				out = make([]byte, 0, len(b)+8)
+				out = append(out, b[:i]...)
+			}
+			out = append(out, '\\', 'u', '0', '0', hexDigits[c>>4], hexDigits[c&0xf])
+			continue
+		}
+		if out != nil {
+			out = append(out, c)
+		}
+	}
+
+	if out == nil {
+		return b
+	}
+	return out
 }
 
 func buildHashmapForTable(
@@ -3242,8 +3362,8 @@ func getTablesCreationCommitTS(
 
 	if len(sqlRet.Batches) != 1 && sqlRet.Batches[0].RowCount() != 1 {
 		return nil, moerr.NewInternalErrorNoCtxf(
-			"get table created time for (%s, %s) failed",
-			tar.GetTableName(), base.GetTableName(),
+			"get table created time for (%s, %s) failed(%s)",
+			tar.GetTableName(), base.GetTableName(), buf.String(),
 		)
 	}
 
