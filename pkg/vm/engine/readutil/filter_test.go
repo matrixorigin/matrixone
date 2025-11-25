@@ -25,7 +25,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -1076,12 +1075,9 @@ func TestConstructBlockPKFilter(t *testing.T) {
 				}
 
 				blkPKFilter, err := ConstructBlockPKFilter(
-					"tbl",
-					"pk",
 					false,
 					basePKFilter,
 					nil,
-					mp,
 				)
 				require.NoError(t, err)
 
@@ -1647,20 +1643,18 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 		}
 
 		readFilter, err := ConstructBlockPKFilter(
-			"test_table",
-			"pk", // non-composite PK
 			false,
 			basePKFilter,
 			bfData,
-			mp,
 		)
 		require.NoError(t, err)
 		require.True(t, readFilter.Valid)
 		require.NotNil(t, readFilter.UnSortedSearchFunc)
 
 		// Test the search function
-		// For non-composite PK without optimization, use single vector
-		cacheVectors := containers.Vectors{*inputVec}
+		// For non-composite PK, we still need len(cacheVectors) >= 2 to match the function signature
+		// Use the same vector for both positions (PK column)
+		cacheVectors := containers.Vectors{*inputVec, *inputVec}
 		result := readFilter.UnSortedSearchFunc(cacheVectors)
 		// Should return indices of values that exist in BF: [10, 20, 30] -> indices [1, 3, 5]
 		require.Equal(t, []int64{1, 3, 5}, result)
@@ -1688,12 +1682,9 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 		}
 
 		readFilter, err := ConstructBlockPKFilter(
-			"test_table",
-			catalog.CPrimaryKeyColName, // composite PK
 			false,
 			basePKFilter,
 			bfData,
-			mp,
 		)
 		require.NoError(t, err)
 		require.True(t, readFilter.Valid)
@@ -1734,12 +1725,9 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 		}
 
 		readFilter, err := ConstructBlockPKFilter(
-			"test_table",
-			catalog.CPrimaryKeyColName,
 			false,
 			basePKFilter,
 			bfData,
-			mp,
 		)
 		require.NoError(t, err)
 
@@ -1777,12 +1765,9 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 		}
 
 		readFilter, err := ConstructBlockPKFilter(
-			"test_table",
-			catalog.CPrimaryKeyColName,
 			false,
 			basePKFilter,
 			bfData,
-			mp,
 		)
 		require.NoError(t, err)
 
@@ -1829,12 +1814,9 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 		}
 
 		readFilter, err := ConstructBlockPKFilter(
-			"test_table",
-			catalog.CPrimaryKeyColName,
 			false,
 			basePKFilter,
 			bfData,
-			mp,
 		)
 		require.NoError(t, err)
 		require.True(t, readFilter.Valid)
@@ -1874,12 +1856,9 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 		}
 
 		readFilter, err := ConstructBlockPKFilter(
-			"test_table",
-			catalog.CPrimaryKeyColName,
 			false,
 			basePKFilter,
 			bfData,
-			mp,
 		)
 		require.NoError(t, err)
 
@@ -1907,12 +1886,9 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 		}
 
 		readFilter, err := ConstructBlockPKFilter(
-			"test_table",
-			catalog.CPrimaryKeyColName,
 			false,
 			basePKFilter,
 			bfData,
-			mp,
 		)
 		require.NoError(t, err)
 
@@ -1939,12 +1915,9 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 		}
 
 		readFilter, err := ConstructBlockPKFilter(
-			"test_table",
-			catalog.CPrimaryKeyColName,
 			false,
 			basePKFilter,
 			bfData,
-			mp,
 		)
 		require.NoError(t, err)
 
