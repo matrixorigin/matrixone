@@ -644,7 +644,7 @@ func TestCmdNoDefine(t *testing.T) {
 
 func TestCmdSqlError(t *testing.T) {
 	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, catalog.System_Account)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	// runCmdSql
