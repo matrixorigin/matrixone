@@ -562,6 +562,18 @@ func (c *checkpointCleaner) CloneMetaFilesLocked() map[string]ioutil.TSRangeFile
 }
 
 func (c *checkpointCleaner) deleteStaleSnapshotFilesLocked() error {
+	// Skip deletion if backup protection is active
+	// Use snapshot taken at GC start to ensure consistency
+	protectedTS, isActive := c.getBackupProtectionSnapshot()
+	if isActive {
+		logutil.Info(
+			"GC-Backup-Protection-Skip-Delete-Snapshot",
+			zap.String("task", c.TaskNameLocked()),
+			zap.String("protected-ts", protectedTS.ToString()),
+		)
+		return nil
+	}
+
 	var (
 		maxSnapEnd  types.TS
 		maxSnapFile string
@@ -727,6 +739,18 @@ func (c *checkpointCleaner) deleteStaleSnapshotFilesLocked() error {
 // `c.mutation.scanned`: [t300, t400]
 // `t100_t200_xxx.ckp`, `t200_t300_xxx.ckp` are hard deleted
 func (c *checkpointCleaner) deleteStaleCKPMetaFileLocked() (err error) {
+	// Skip deletion if backup protection is active
+	// Use snapshot taken at GC start to ensure consistency
+	protectedTS, isActive := c.getBackupProtectionSnapshot()
+	if isActive {
+		logutil.Info(
+			"GC-Backup-Protection-Skip-Delete-CKP-Meta",
+			zap.String("task", c.TaskNameLocked()),
+			zap.String("protected-ts", protectedTS.ToString()),
+		)
+		return nil
+	}
+
 	// TODO: add log
 	window := c.GetScannedWindowLocked()
 	metaFiles := c.CloneMetaFilesLocked()
@@ -844,6 +868,18 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 	pitrs *logtail.PitrInfo,
 	gcFileCount int,
 ) (err error) {
+	// Skip merge if backup protection is active
+	// Use snapshot taken at GC start to ensure consistency
+	protectedTS, isActive := c.getBackupProtectionSnapshot()
+	if isActive {
+		logutil.Info(
+			"GC-Backup-Protection-Skip-Merge",
+			zap.String("task", c.TaskNameLocked()),
+			zap.String("protected-ts", protectedTS.ToString()),
+		)
+		return nil
+	}
+
 	// checkpointLowWaterMark is empty only in the following cases:
 	// 1. no incremental and no gloabl checkpoint
 	// 2. one incremental checkpoint with empty start
@@ -908,27 +944,6 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 		return
 	}
 
-	// Use snapshot taken at GC start to ensure consistency
-	protectedTS, isActive := c.getBackupProtectionSnapshot()
-	if isActive {
-		filtered := make([]*checkpoint.CheckpointEntry, 0, len(toMergeCheckpoint))
-		for _, ckp := range toMergeCheckpoint {
-			endTS := ckp.GetEnd()
-			// Protect checkpoints whose end timestamp is <= protected timestamp
-			if endTS.LE(&protectedTS) {
-				logutil.Info(
-					"GC-Backup-Protection-Block-Merge-Checkpoint",
-					zap.String("checkpoint-end-ts", endTS.ToString()),
-					zap.String("protected-ts", protectedTS.ToString()),
-					zap.String("checkpoint", ckp.String()),
-				)
-				continue
-			}
-			filtered = append(filtered, ckp)
-		}
-		toMergeCheckpoint = filtered
-	}
-
 	if len(toMergeCheckpoint) == 0 {
 		return
 	}
@@ -967,31 +982,6 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 	); err != nil {
 		extraErrMsg = "MergeCheckpoint failed"
 		return err
-	}
-
-	// Use snapshot taken at GC start to ensure consistency
-	protectedTS, isActive = c.getBackupProtectionSnapshot()
-	if isActive {
-		filteredDeleteFiles := make([]string, 0, len(deleteFiles))
-		for _, deleteFile := range deleteFiles {
-			// Try to decode the file name to get its timestamp
-			_, decodedFile := ioutil.TryDecodeTSRangeFile(deleteFile)
-			if decodedFile.IsMetadataFile() || decodedFile.IsCompactExt() {
-				// Check if this checkpoint file should be protected
-				endTS := decodedFile.GetEnd()
-				if endTS.LE(&protectedTS) {
-					logutil.Info(
-						"GC-Backup-Protection-Block-Delete-File",
-						zap.String("file", deleteFile),
-						zap.String("file-end-ts", endTS.ToString()),
-						zap.String("protected-ts", protectedTS.ToString()),
-					)
-					continue
-				}
-			}
-			filteredDeleteFiles = append(filteredDeleteFiles, deleteFile)
-		}
-		deleteFiles = filteredDeleteFiles
 	}
 	logtail.FillUsageBatOfCompacted(
 		ctx,
@@ -1238,6 +1228,8 @@ func (c *checkpointCleaner) tryGCAgainstGCKPLocked(
 	}
 	// Delete files after doGCAgainstGlobalCheckpointLocked
 	// TODO:Requires Physical Removal Policy
+	// Note: Data files are GC'ed normally even when backup protection is active.
+	// Only checkpoint metadata merge/delete is skipped (handled in mergeCheckpointFilesLocked).
 	if err = c.deleter.DeleteMany(
 		ctx,
 		c.TaskNameLocked(),
