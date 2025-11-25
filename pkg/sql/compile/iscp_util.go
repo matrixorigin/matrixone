@@ -328,3 +328,31 @@ func CreateAllIndexUpdateTasks(c *Compile, indexes []*plan.IndexDef, dbname stri
 	}
 	return
 }
+
+// drop all cdc tasks according to tableDef
+func DropAllIndexUpdateTasks(c *Compile, tabledef *plan.TableDef, dbname string, tablename string) (err error) {
+	idxmap := make(map[string]bool)
+	for _, idx := range tabledef.Indexes {
+
+		_, ok := idxmap[idx.IndexName]
+		if ok {
+			continue
+		}
+
+		if idx.TableExist && catalog.IsIvfIndexAlgo(idx.IndexAlgo) {
+			idxmap[idx.IndexName] = true
+			//hasindex = true
+
+			err = idxcron.UnregisterUpdate(c.proc.Ctx,
+				c.proc.GetService(),
+				c.proc.GetTxnOperator(),
+				tabledef.TblId,
+				idx.IndexName,
+				idxcron.Action_Ivfflat_Reindex)
+			if err != nil {
+				return
+			}
+		}
+	}
+	return
+}

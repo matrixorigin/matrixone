@@ -2780,10 +2780,7 @@ func (s *Scope) DropTable(c *Compile) error {
 	}
 
 	// unregister index update by Table Id
-	err = idxcron.UnregisterUpdateByTableId(c.proc.Ctx,
-		c.proc.GetService(),
-		c.proc.GetTxnOperator(),
-		tblID)
+	err = DropAllIndexUpdateTasks(c, rel.GetTableDef(c.proc.Ctx), qry.Database, qry.Table)
 	if err != nil {
 		return err
 	}
