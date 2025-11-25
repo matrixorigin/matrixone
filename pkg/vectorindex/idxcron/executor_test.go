@@ -554,18 +554,6 @@ func TestExecutorRunFull(t *testing.T) {
 
 func TestIndexUpdateTaskInfoSaveStatusError(t *testing.T) {
 
-	var cancel context.CancelFunc
-	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, catalog.System_Account)
-	ctx, cancel = context.WithCancel(ctx)
-	defer cancel()
-
-	/*
-		mp := mpool.MustNewZero()
-
-		catalog.SetupDefines("")
-		cnEngine, cnClient, _ := testengine.New(ctx)
-		cnUUID := "a-b-c-d"
-	*/
 	tableid := uint64(1)
 	dbname := "test"
 	tablename := "test_orig_tbl"
