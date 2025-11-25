@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -30,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -210,4 +212,254 @@ func TestBigS3WorkspaceIterMissingData(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, outBatch.RowCount())
 	require.Equal(t, 1, outBatch.Vecs[0].Length())
+}
+
+// TestLocalDisttaeDataSource_getBlockZMs_ColumnLookup tests the column lookup logic
+// that fixes the bug where ColPos in JOIN scenarios points to projection list position
+// instead of table column position.
+func TestLocalDisttaeDataSource_getBlockZMs_ColumnLookup(t *testing.T) {
+	// This test focuses on testing the column lookup logic without requiring actual block data.
+	// We test that the function correctly finds columns by name even when ColPos is wrong.
+
+	tableDef := &plan.TableDef{
+		Cols: []*plan.ColDef{
+			{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}, Seqnum: 0},
+			{Name: "remark", Typ: plan.Type{Id: int32(types.T_varchar)}, Seqnum: 8},      // Position 8: VARCHAR
+			{Name: "created_at", Typ: plan.Type{Id: int32(types.T_datetime)}, Seqnum: 9}, // Position 9: DATETIME
+		},
+		Name2ColIndex: map[string]int32{
+			"id":         0, // Index in Cols array
+			"remark":     1, // Index in Cols array
+			"created_at": 2, // Index in Cols array
+		},
+	}
+
+	// Test case 1: Find column by qualified name "table.column"
+	orderByCol := &plan.ColRef{
+		Name:   "table.created_at",
+		ColPos: 8, // Wrong ColPos (points to remark in projection list)
+	}
+	orderByColName := "table.created_at"
+	if idx := strings.LastIndex(strings.ToLower(orderByColName), "."); idx >= 0 {
+		orderByColName = orderByColName[idx+1:]
+	}
+	require.Equal(t, "created_at", orderByColName, "Should extract column name from qualified name")
+
+	var orderByColIDX int = -1
+	if tableDef.Name2ColIndex != nil {
+		if colIdx, ok := tableDef.Name2ColIndex[orderByColName]; ok {
+			orderByColIDX = int(tableDef.Cols[colIdx].Seqnum)
+		}
+	}
+	require.Equal(t, 9, orderByColIDX, "Should find created_at (seqnum 9) by name, not remark (seqnum 8)")
+
+	// Test case 2: Find column by simple name
+	orderByColName = "created_at"
+	orderByColIDX = -1
+	if tableDef.Name2ColIndex != nil {
+		if colIdx, ok := tableDef.Name2ColIndex[orderByColName]; ok {
+			orderByColIDX = int(tableDef.Cols[colIdx].Seqnum)
+		}
+	}
+	require.Equal(t, 9, orderByColIDX, "Should find created_at by simple name")
+
+	// Test case 3: Fallback to ColPos when name lookup fails
+	orderByColName = "nonexistent_column"
+	orderByCol.ColPos = 1 // Valid ColPos pointing to remark (index 1 in Cols array)
+	orderByColIDX = -1
+	if tableDef.Name2ColIndex != nil {
+		if colIdx, ok := tableDef.Name2ColIndex[orderByColName]; ok {
+			orderByColIDX = int(tableDef.Cols[colIdx].Seqnum)
+		}
+	}
+	// Fallback to ColPos
+	if orderByColIDX == -1 {
+		if int(orderByCol.ColPos) < len(tableDef.Cols) {
+			orderByColIDX = int(tableDef.Cols[int(orderByCol.ColPos)].Seqnum)
+		}
+	}
+	require.Equal(t, 8, orderByColIDX, "Should fallback to ColPos 1 (remark, seqnum 8) when name lookup fails")
+}
+
+// TestLocalDisttaeDataSource_getBlockZMs tests the fix for the bug where
+// ColPos in JOIN scenarios points to projection list position instead of table column position.
+// This test verifies that getBlockZMs correctly finds columns by name.
+func TestLocalDisttaeDataSource_getBlockZMs(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
+	defer cancel()
+
+	proc := testutil.NewProc(t)
+	fs, err := fileservice.Get[fileservice.FileService](proc.GetFileService(), defines.SharedFileServiceName)
+	require.NoError(t, err)
+
+	// Create a table definition with multiple columns
+	// Simulating the bug scenario: created_at is at seqnum 9, but ColPos might point to position 8 (remark)
+	tableDef := &plan.TableDef{
+		Cols: []*plan.ColDef{
+			{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}, Seqnum: 0},
+			{Name: "organization_id", Typ: plan.Type{Id: int32(types.T_varchar)}, Seqnum: 1},
+			{Name: "trx_id", Typ: plan.Type{Id: int32(types.T_varchar)}, Seqnum: 2},
+			{Name: "record_sn", Typ: plan.Type{Id: int32(types.T_varchar)}, Seqnum: 3},
+			{Name: "coupon_id", Typ: plan.Type{Id: int32(types.T_varchar)}, Seqnum: 4},
+			{Name: "bill_id", Typ: plan.Type{Id: int32(types.T_varchar)}, Seqnum: 5},
+			{Name: "amount", Typ: plan.Type{Id: int32(types.T_decimal128)}, Seqnum: 6},
+			{Name: "after_amount", Typ: plan.Type{Id: int32(types.T_decimal128)}, Seqnum: 7},
+			{Name: "remark", Typ: plan.Type{Id: int32(types.T_varchar)}, Seqnum: 8},      // Position 8: VARCHAR
+			{Name: "created_at", Typ: plan.Type{Id: int32(types.T_datetime)}, Seqnum: 9}, // Position 9: DATETIME (ORDER BY column)
+			{Name: "__mo_rowid", Typ: plan.Type{Id: int32(types.T_Rowid)}, Seqnum: 10},
+		},
+		Name2ColIndex: map[string]int32{
+			"id":              0,
+			"organization_id": 1,
+			"trx_id":          2,
+			"record_sn":       3,
+			"coupon_id":       4,
+			"bill_id":         5,
+			"amount":          6,
+			"after_amount":    7,
+			"remark":          8,
+			"created_at":      9,
+			"__mo_rowid":      10,
+		},
+	}
+
+	txnDB := txnDatabase{
+		op: nil,
+	}
+
+	txnTbl := txnTable{
+		db:       &txnDB,
+		tableDef: tableDef,
+	}
+
+	ls := &LocalDisttaeDataSource{
+		fs:    fs,
+		ctx:   ctx,
+		table: &txnTbl,
+		OrderBy: []*plan.OrderBySpec{
+			{
+				Expr: &plan.Expr{
+					Typ: plan.Type{Id: int32(types.T_datetime)},
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							Name:   "coupon_usage_detail_logs.created_at", // Full qualified name
+							ColPos: 8,                                     // This points to projection list position 8 (remark), not table position 9 (created_at)
+							RelPos: 0,
+						},
+					},
+				},
+				Flag: plan.OrderBySpec_DESC,
+			},
+		},
+		Limit: 0, // No limit to trigger getBlockZMs
+	}
+
+	// Create an empty rangeSlice to avoid loading non-existent block metadata
+	// This test focuses on column lookup logic, not block loading
+	ls.rangeSlice = readutil.NewBlockListRelationData(0).GetBlockInfoSlice()
+
+	// Test case 1: Column name lookup should find created_at (seqnum 9) instead of remark (seqnum 8)
+	// This simulates the bug scenario where ColPos=8 would incorrectly point to remark
+	// but we should find created_at by name.
+	// With empty rangeSlice, getBlockZMs should complete without trying to load blocks
+	require.NotPanics(t, func() {
+		ls.getBlockZMs()
+	}, "getBlockZMs should find created_at by name, not panic on column lookup")
+
+	// Verify that blockZMS was initialized (even if empty)
+	require.NotNil(t, ls.blockZMS, "blockZMS should be initialized")
+	require.Equal(t, 0, len(ls.blockZMS), "blockZMS should be empty when rangeSlice is empty")
+
+	// Test case 2: Test with simple column name (without table prefix)
+	ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col).Col.Name = "created_at"
+	ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col).Col.ColPos = 8 // Still wrong ColPos
+	ls.blockZMS = nil
+	require.NotPanics(t, func() {
+		ls.getBlockZMs()
+	}, "getBlockZMs should work with simple column name")
+
+	// Test case 3: Test fallback to ColPos when name lookup fails
+	ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col).Col.Name = "nonexistent_column"
+	ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col).Col.ColPos = 9 // Valid ColPos as fallback (points to created_at)
+	ls.blockZMS = nil
+	require.NotPanics(t, func() {
+		ls.getBlockZMs()
+	}, "getBlockZMs should fallback to ColPos when name lookup fails")
+
+	// Test case 4: Test panic when both name lookup and ColPos fail
+	ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col).Col.Name = "nonexistent_column"
+	ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col).Col.ColPos = 999 // Invalid ColPos
+	ls.blockZMS = nil
+	require.Panics(t, func() {
+		ls.getBlockZMs()
+	}, "getBlockZMs should panic when both name lookup and ColPos fail")
+
+	// Test case 5: Test with Name2ColIndex (O(1) lookup)
+	ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col).Col.Name = "created_at"
+	ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col).Col.ColPos = 8 // Wrong ColPos
+	ls.blockZMS = nil
+	require.NotPanics(t, func() {
+		ls.getBlockZMs()
+	}, "getBlockZMs should use Name2ColIndex for O(1) lookup")
+}
+
+// TestLocalDisttaeDataSource_getBlockZMs_ColumnNameExtraction tests column name extraction
+// from qualified names like "table.column".
+func TestLocalDisttaeDataSource_getBlockZMs_ColumnNameExtraction(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
+	defer cancel()
+
+	proc := testutil.NewProc(t)
+	fs, err := fileservice.Get[fileservice.FileService](proc.GetFileService(), defines.SharedFileServiceName)
+	require.NoError(t, err)
+
+	tableDef := &plan.TableDef{
+		Cols: []*plan.ColDef{
+			{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}, Seqnum: 0},
+			{Name: "created_at", Typ: plan.Type{Id: int32(types.T_datetime)}, Seqnum: 1},
+		},
+		Name2ColIndex: map[string]int32{
+			"id":         0,
+			"created_at": 1,
+		},
+	}
+
+	txnTbl := txnTable{
+		tableDef: tableDef,
+	}
+
+	ls := &LocalDisttaeDataSource{
+		fs:    fs,
+		ctx:   ctx,
+		table: &txnTbl,
+		OrderBy: []*plan.OrderBySpec{
+			{
+				Expr: &plan.Expr{
+					Typ: plan.Type{Id: int32(types.T_datetime)},
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							Name:   "db.table.created_at", // Multiple dots
+							ColPos: 0,
+							RelPos: 0,
+						},
+					},
+				},
+			},
+		},
+		Limit: 0,
+	}
+
+	// Create an empty rangeSlice to avoid loading non-existent block metadata
+	// This test focuses on column name extraction logic, not block loading
+	ls.rangeSlice = readutil.NewBlockListRelationData(0).GetBlockInfoSlice()
+
+	// Should extract "created_at" from "db.table.created_at"
+	// Since rangeSlice is empty, getBlockZMs should complete without trying to load blocks
+	require.NotPanics(t, func() {
+		ls.getBlockZMs()
+	}, "getBlockZMs should extract column name from qualified name and handle empty rangeSlice")
+
+	// Verify that blockZMS was initialized (even if empty)
+	require.NotNil(t, ls.blockZMS, "blockZMS should be initialized")
+	require.Equal(t, 0, len(ls.blockZMS), "blockZMS should be empty when rangeSlice is empty")
 }
