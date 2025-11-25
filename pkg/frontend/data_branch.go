@@ -339,13 +339,19 @@ func runSql(
 	tblStuff tableStuff, sql string, isLoadToCSV bool,
 ) (sqlRet executor.Result, err error) {
 
-	if isLoadToCSV {
+	if isLoadToCSV || strings.Contains(strings.ToLower(snapConditionRegex.FindString(sql)), "snapshot") {
 		bh.(*backExec).backSes.SetMysqlResultSet(&MysqlResultSet{})
+		// export as CSV need this
 		for range tblStuff.def.visibleIdxes {
 			bh.(*backExec).backSes.mrs.AddColumn(&MysqlColumn{})
 		}
 
-		err = bh.Exec(ctx, sql)
+		if err = bh.Exec(ctx, sql); err != nil {
+			return
+		}
+		bh.ClearExecResultSet()
+		sqlRet.Batches = bh.GetExecResultBatches()
+
 		return
 	}
 
@@ -1472,135 +1478,160 @@ func diffOnBase(
 		closeHandle()
 	}()
 
-	if dagInfo.lcaTableId == 0 {
-		// has no lca
-		if tarHandle, baseHandle, err = constructChangeHandle(
-			ctx, ses, bh, tblStuff, &dagInfo,
-		); err != nil {
-			return
-		}
+	//if true || dagInfo.lcaTableId == 0 {
 
-		if err = hashDiff(
-			ctx, ses, bh, tblStuff, dagInfo, retCh,
-			copt, tarHandle, baseHandle,
-		); err != nil {
-			return
-		}
+	if dagInfo.lcaType != lcaEmpty {
+		if dagInfo.lcaTableId == tblStuff.tarRel.GetTableID(ctx) {
+			tblStuff.lcaRel = tblStuff.tarRel
+		} else if dagInfo.lcaTableId == tblStuff.baseRel.GetTableID(ctx) {
+			tblStuff.lcaRel = tblStuff.baseRel
+		} else {
+			lcaSnapshot := &plan2.Snapshot{
+				Tenant: &plan.SnapshotTenant{
+					TenantID: ses.GetAccountId(),
+				},
+			}
+			lcaSnapshot.TS = &timestamp.Timestamp{PhysicalTime: dagInfo.tarBranchTS.Physical()}
+			if dagInfo.baseBranchTS.LT(&dagInfo.tarBranchTS) {
+				lcaSnapshot.TS.PhysicalTime = dagInfo.baseBranchTS.Physical()
+			}
 
-		closeHandle()
+			if tblStuff.lcaRel, err = getRelationById(
+				ctx, ses, bh, dagInfo.lcaTableId, lcaSnapshot); err != nil {
+				return
+			}
+		}
+	}
+
+	// has no lca
+	if tarHandle, baseHandle, err = constructChangeHandle(
+		ctx, ses, bh, tblStuff, &dagInfo,
+	); err != nil {
 		return
 	}
 
+	if err = hashDiff(
+		ctx, ses, bh, tblStuff, dagInfo, retCh,
+		copt, tarHandle, baseHandle,
+	); err != nil {
+		return
+	}
+
+	closeHandle()
+	return
+	//}
+
+	//return
 	// merge left into right
-	var (
-		lcaRel      engine.Relation
-		lcaSnapshot *plan.Snapshot
-	)
-
-	lcaSnapshot = &plan2.Snapshot{
-		Tenant: &plan.SnapshotTenant{
-			TenantID: ses.GetAccountId(),
-		},
-	}
-
-	if dagInfo.lcaTableId == tblStuff.tarRel.GetTableID(ctx) {
-		// left is the LCA
-		lcaRel = tblStuff.tarRel
-		lcaSnapshot.TS = &timestamp.Timestamp{PhysicalTime: dagInfo.baseBranchTS.Physical()}
-		if tblStuff.tarSnap != nil && tblStuff.tarSnap.TS.Less(*lcaSnapshot.TS) {
-			lcaSnapshot.TS = tblStuff.tarSnap.TS
-		}
-	} else if dagInfo.lcaTableId == tblStuff.baseRel.GetTableID(ctx) {
-		// right is the LCA
-		lcaRel = tblStuff.baseRel
-		lcaSnapshot.TS = &timestamp.Timestamp{PhysicalTime: dagInfo.tarBranchTS.Physical()}
-		if tblStuff.baseSnap != nil && tblStuff.baseSnap.TS.Less(*lcaSnapshot.TS) {
-			lcaSnapshot.TS = tblStuff.baseSnap.TS
-		}
-	} else {
-		// LCA is other table
-		lcaSnapshot.TS = &timestamp.Timestamp{PhysicalTime: dagInfo.tarBranchTS.Physical()}
-		if dagInfo.baseBranchTS.LT(&dagInfo.tarBranchTS) {
-			lcaSnapshot.TS.PhysicalTime = dagInfo.baseBranchTS.Physical()
-		}
-
-		if lcaRel, err = getRelationById(
-			ctx, ses, bh, dagInfo.lcaTableId, lcaSnapshot); err != nil {
-			return
-		}
-	}
-
-	tblStuff.lcaRel = lcaRel
-
-	var (
-		tmpPair1 = tblStuff
-		tmpPair2 = tblStuff
-
-		dagInfo1 branchMetaInfo
-		dagInfo2 branchMetaInfo
-
-		finalTblStuff tableStuff
-		finalDagInfo  branchMetaInfo
-	)
-
-	tmpPair1.tarRel = tblStuff.tarRel
-	tmpPair1.baseRel = lcaRel
-	tmpPair1.tarSnap = tblStuff.tarSnap
-	tmpPair1.baseSnap = lcaSnapshot
-
-	if dagInfo1, err = decideLCABranchTSFromBranchDAG(
-		ctx, ses, tmpPair1.tarRel, tmpPair1.baseRel,
-	); err != nil {
-		return
-	}
-
-	if dagInfo1.tarBranchTS.IsEmpty() {
-		dagInfo1.tarBranchTS = types.TimestampToTS(*tmpPair1.baseSnap.TS)
-	}
-
-	if tarHandle, _, err = constructChangeHandle(
-		ctx, ses, bh, tmpPair1, &dagInfo1,
-	); err != nil {
-		return
-	}
-
-	tmpPair2.tarRel = tblStuff.baseRel
-	tmpPair2.baseRel = lcaRel
-	tmpPair2.tarSnap = tblStuff.baseSnap
-	tmpPair2.baseSnap = lcaSnapshot
-
-	if dagInfo2, err = decideLCABranchTSFromBranchDAG(
-		ctx, ses, tmpPair2.tarRel, tmpPair2.baseRel,
-	); err != nil {
-		return
-	}
-
-	if dagInfo2.tarBranchTS.IsEmpty() {
-		dagInfo2.tarBranchTS = types.TimestampToTS(*tmpPair2.baseSnap.TS)
-	}
-
-	if copt.conflictOpt == nil || copt.conflictOpt.Opt != tree.CONFLICT_ACCEPT {
-		// if we got a conflict_accept option,
-		// then we should ignore all inserts/deletes/updates from the base.
-		if baseHandle, _, err = constructChangeHandle(
-			ctx, ses, bh, tmpPair2, &dagInfo2,
-		); err != nil {
-			return
-		}
-	}
-
-	finalDagInfo.lcaType = dagInfo.lcaType
-	finalDagInfo.lcaTableId = dagInfo.lcaTableId
-	finalDagInfo.tarBranchTS = dagInfo1.tarBranchTS
-	finalDagInfo.baseBranchTS = dagInfo2.tarBranchTS
-
-	finalTblStuff = tblStuff
-	finalTblStuff.tarRel = tmpPair1.tarRel
-	finalTblStuff.baseRel = tmpPair2.tarRel
-	finalTblStuff.tarSnap = tmpPair1.tarSnap
-	finalTblStuff.baseSnap = tmpPair2.tarSnap
-
-	return hashDiff(ctx, ses, bh, finalTblStuff, finalDagInfo, retCh, copt, tarHandle, baseHandle)
+	//var (
+	//	lcaRel      engine.Relation
+	//	lcaSnapshot *plan.Snapshot
+	//)
+	//
+	//lcaSnapshot = &plan2.Snapshot{
+	//	Tenant: &plan.SnapshotTenant{
+	//		TenantID: ses.GetAccountId(),
+	//	},
+	//}
+	//
+	//if dagInfo.lcaTableId == tblStuff.tarRel.GetTableID(ctx) {
+	//	// left is the LCA
+	//	lcaRel = tblStuff.tarRel
+	//	lcaSnapshot.TS = &timestamp.Timestamp{PhysicalTime: dagInfo.baseBranchTS.Physical()}
+	//	if tblStuff.tarSnap != nil && tblStuff.tarSnap.TS.Less(*lcaSnapshot.TS) {
+	//		lcaSnapshot.TS = tblStuff.tarSnap.TS
+	//	}
+	//} else if dagInfo.lcaTableId == tblStuff.baseRel.GetTableID(ctx) {
+	//	// right is the LCA
+	//	lcaRel = tblStuff.baseRel
+	//	lcaSnapshot.TS = &timestamp.Timestamp{PhysicalTime: dagInfo.tarBranchTS.Physical()}
+	//	if tblStuff.baseSnap != nil && tblStuff.baseSnap.TS.Less(*lcaSnapshot.TS) {
+	//		lcaSnapshot.TS = tblStuff.baseSnap.TS
+	//	}
+	//} else {
+	//	// LCA is other table
+	//	lcaSnapshot.TS = &timestamp.Timestamp{PhysicalTime: dagInfo.tarBranchTS.Physical()}
+	//	if dagInfo.baseBranchTS.LT(&dagInfo.tarBranchTS) {
+	//		lcaSnapshot.TS.PhysicalTime = dagInfo.baseBranchTS.Physical()
+	//	}
+	//
+	//	if lcaRel, err = getRelationById(
+	//		ctx, ses, bh, dagInfo.lcaTableId, lcaSnapshot); err != nil {
+	//		return
+	//	}
+	//}
+	//
+	//tblStuff.lcaRel = lcaRel
+	//
+	//var (
+	//	tmpPair1 = tblStuff
+	//	tmpPair2 = tblStuff
+	//
+	//	dagInfo1 branchMetaInfo
+	//	dagInfo2 branchMetaInfo
+	//
+	//	finalTblStuff tableStuff
+	//	finalDagInfo  branchMetaInfo
+	//)
+	//
+	//tmpPair1.tarRel = tblStuff.tarRel
+	//tmpPair1.baseRel = lcaRel
+	//tmpPair1.tarSnap = tblStuff.tarSnap
+	//tmpPair1.baseSnap = lcaSnapshot
+	//
+	//if dagInfo1, err = decideLCABranchTSFromBranchDAG(
+	//	ctx, ses, tmpPair1.tarRel, tmpPair1.baseRel,
+	//); err != nil {
+	//	return
+	//}
+	//
+	//if dagInfo1.tarBranchTS.IsEmpty() {
+	//	dagInfo1.tarBranchTS = types.TimestampToTS(*tmpPair1.baseSnap.TS)
+	//}
+	//
+	//if tarHandle, _, err = constructChangeHandle(
+	//	ctx, ses, bh, tmpPair1, &dagInfo1,
+	//); err != nil {
+	//	return
+	//}
+	//
+	//tmpPair2.tarRel = tblStuff.baseRel
+	//tmpPair2.baseRel = lcaRel
+	//tmpPair2.tarSnap = tblStuff.baseSnap
+	//tmpPair2.baseSnap = lcaSnapshot
+	//
+	//if dagInfo2, err = decideLCABranchTSFromBranchDAG(
+	//	ctx, ses, tmpPair2.tarRel, tmpPair2.baseRel,
+	//); err != nil {
+	//	return
+	//}
+	//
+	//if dagInfo2.tarBranchTS.IsEmpty() {
+	//	dagInfo2.tarBranchTS = types.TimestampToTS(*tmpPair2.baseSnap.TS)
+	//}
+	//
+	//if copt.conflictOpt == nil || copt.conflictOpt.Opt != tree.CONFLICT_ACCEPT {
+	//	// if we got a conflict_accept option,
+	//	// then we should ignore all inserts/deletes/updates from the base.
+	//	if baseHandle, _, err = constructChangeHandle(
+	//		ctx, ses, bh, tmpPair2, &dagInfo2,
+	//	); err != nil {
+	//		return
+	//	}
+	//}
+	//
+	//finalDagInfo.lcaType = dagInfo.lcaType
+	//finalDagInfo.lcaTableId = dagInfo.lcaTableId
+	//finalDagInfo.tarBranchTS = dagInfo1.tarBranchTS
+	//finalDagInfo.baseBranchTS = dagInfo2.tarBranchTS
+	//
+	//finalTblStuff = tblStuff
+	//finalTblStuff.tarRel = tmpPair1.tarRel
+	//finalTblStuff.baseRel = tmpPair2.tarRel
+	//finalTblStuff.tarSnap = tmpPair1.tarSnap
+	//finalTblStuff.baseSnap = tmpPair2.tarSnap
+	//
+	//return hashDiff(ctx, ses, bh, finalTblStuff, finalDagInfo, retCh, copt, tarHandle, baseHandle)
 }
 
 func hashDiff(
@@ -1758,6 +1789,11 @@ func hashDiffIfHasLCA(
 						}
 						i++
 						j++
+					} else if copt.conflictOpt.Opt == tree.CONFLICT_ACCEPT {
+						// only keep the rows from tar
+						sels2 = append(sels2, int64(j))
+						i++
+						j++
 					} else if copt.conflictOpt.Opt == tree.CONFLICT_SKIP {
 						sels1 = append(sels1, int64(i))
 						sels2 = append(sels2, int64(j))
@@ -1803,9 +1839,14 @@ func hashDiffIfHasLCA(
 				)
 				if sels1, sels2, err3 = checkConflict(wrapped, baseWrapped); err3 != nil {
 					return
-				} else if len(sels1) != 0 {
-					wrapped.batch.Shrink(sels1, true)
-					baseWrapped.batch.Shrink(sels2, true)
+				} else {
+					if len(sels1) != 0 {
+						wrapped.batch.Shrink(sels1, true)
+					}
+
+					if len(sels2) != 0 {
+						baseWrapped.batch.Shrink(sels2, true)
+					}
 				}
 
 				if wrapped.batch.RowCount() == 0 {
@@ -3054,14 +3095,14 @@ func constructChangeHandle(
 			return
 		}
 
-		if branchInfo.lcaType != lcaEmpty {
-			// collect nothing from base
-			if handle != nil {
-				err = moerr.NewInternalErrorNoCtx("the LCA collect range is not empty")
-				return
-			}
-			continue
-		}
+		//if branchInfo.lcaType != lcaEmpty {
+		//	// collect nothing from base
+		//	if handle != nil {
+		//		err = moerr.NewInternalErrorNoCtx("the LCA collect range is not empty")
+		//		return
+		//	}
+		//	continue
+		//}
 
 		baseHandle = append(baseHandle, handle)
 	}

@@ -38,7 +38,7 @@ func TestFormatValIntoString_StringEscaping(t *testing.T) {
 
 	val := "a'b\"c\\\n\t\r\x1a\x00"
 	formatValIntoString(ses, val, types.New(types.T_varchar, 0, 0), &buf)
-	require.Equal(t, `'a\'b\"c\\\n\t\r\Z\0'`, buf.String())
+	require.Equal(t, `'a\'b"c\\\n\t\r\Z\0'`, buf.String())
 }
 
 func TestFormatValIntoString_ByteEscaping(t *testing.T) {
