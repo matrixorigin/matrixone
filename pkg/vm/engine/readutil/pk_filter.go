@@ -30,8 +30,6 @@ import (
 
 /* Don't remove me. will be used lated
 func DirectConstructBlockPKFilter(
-	tableName string,
-	pkColName string,
 	isFakePK bool,
 	val []byte,
 	inVec *vector.Vector,
@@ -48,17 +46,14 @@ func DirectConstructBlockPKFilter(
 		base.Oid = oid
 	}
 	base.Valid = true
-	return ConstructBlockPKFilter(tableName, pkColName, isFakePK, base, nil)
+	return ConstructBlockPKFilter(isFakePK, base)
 }
 */
 
 func ConstructBlockPKFilter(
-	tableName string,
-	pkColName string,
 	isFakePK bool,
 	basePKFilter BasePKFilter,
 	bloomFilter []byte,
-	mp *mpool.MPool,
 ) (f objectio.BlockReadFilter, err error) {
 	if !basePKFilter.Valid && len(bloomFilter) == 0 {
 		return objectio.BlockReadFilter{}, nil

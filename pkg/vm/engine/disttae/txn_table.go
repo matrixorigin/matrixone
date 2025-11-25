@@ -2248,12 +2248,9 @@ func (tbl *txnTable) PKPersistedBetween(
 	}
 
 	filter, err := readutil.ConstructBlockPKFilter(
-		tbl.tableDef.Name,
-		tbl.tableDef.Pkey.PkeyColName,
 		catalog.IsFakePkName(tbl.tableDef.Pkey.PkeyColName),
 		basePKFilter,
 		nil,
-		tbl.proc.Load().Mp(),
 	)
 	if err != nil {
 		return false, err
