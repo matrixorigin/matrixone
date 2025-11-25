@@ -172,6 +172,28 @@ func TestTime_ParseTimeFromString(t *testing.T) {
 			scale:    3,
 			isErr:    false,
 		},
+		// ==================== Time format with days: d hh:mm:ss(.msec) ====================
+		{
+			name:     "TestParse-DaysFormat-NoPrecision",
+			inputStr: "1 1:1:1",
+			expected: TimeFromClock(false, 25, 1, 1, 0), // 1 day + 1 hour = 25 hours
+			scale:    0,
+			isErr:    false,
+		},
+		{
+			name:     "TestParse-DaysFormat-WithMicroseconds",
+			inputStr: "1 1:1:1.000002",
+			expected: TimeFromClock(false, 25, 1, 1, 2), // 1 day + 1 hour + 2 microseconds
+			scale:    6,
+			isErr:    false,
+		},
+		{
+			name:     "TestParse-DaysFormat-WithMilliseconds",
+			inputStr: "2 12:30:45.123456",
+			expected: TimeFromClock(false, 60, 30, 45, 123456), // 2 days + 12 hours = 60 hours
+			scale:    6,
+			isErr:    false,
+		},
 		{
 			name: "TestParse3-Precision",
 			// 11:22:33

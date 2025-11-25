@@ -118,12 +118,12 @@ func ParseTime(s string, scale int32) (Time, error) {
 			return Time(0), nil
 		}
 
-		if s[0] == '-' {
+		if timeString[0] == '-' {
 			isNegative = true
 			timeString = timeString[1:]
 		}
 
-		timeParts := strings.Split(s, " ")
+		timeParts := strings.Split(timeString, " ")
 		if len(timeParts) > 1 {
 			day, _ = strconv.ParseUint(timeParts[0], 10, 64)
 			if day > MaxHourInTime/maxHourInDay {
