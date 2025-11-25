@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 
@@ -289,6 +290,14 @@ func (back *backExec) GetExecResultBatches() []*batch.Batch {
 }
 
 func (back *backExec) ClearExecResultBatches() {
+	if len(back.backSes.resultBatches) == 1 {
+		if len(back.backSes.resultBatches[0].Vecs) == 1 {
+			if back.backSes.resultBatches[0].Vecs[0].GetType().Oid == types.T_int64 {
+				x := 0
+				x++
+			}
+		}
+	}
 	for _, bat := range back.backSes.resultBatches {
 		if bat != nil {
 			bat.Clean(back.backSes.pool)
@@ -735,6 +744,9 @@ func fakeDataSetFetcher2(handle FeSession, execCtx *ExecCtx, dataSet *batch.Batc
 	back := handle.(*backSession)
 	err := fillResultSet(execCtx.reqCtx, dataSet, back, back.mrs)
 	if err != nil {
+		return err
+	}
+	if err = back.AppendResultBatch(dataSet); err != nil {
 		return err
 	}
 	back.SetMysqlResultSetOfBackgroundTask(back.mrs)
