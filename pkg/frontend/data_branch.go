@@ -1309,8 +1309,6 @@ func tryDiffAsCSV(
 		return false, err
 	}
 
-	fmt.Println(sql)
-
 	mrs := ses.GetMysqlResultSet()
 	mrs.AddRow([]any{fullFilePath, hint})
 
@@ -3258,7 +3256,7 @@ func getTablesCreationCommitTS(
 	end = slices.MaxFunc(snapshot, func(a, b types.TS) int { return a.Compare(&b) })
 
 	if moTableHandle, err = moTableRel.CollectChanges(
-		ctx, from, end, mp,
+		ctx, from, end, false, mp,
 	); err != nil {
 		return
 	}
