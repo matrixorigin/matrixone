@@ -1983,6 +1983,93 @@ func TestTimeDiffInDateTime(t *testing.T) {
 	}
 }
 
+func initTimeDiffStringTestCase() []tcTemp {
+	// Test cases for TimeDiffString with string inputs (including colon format)
+	// expr1, expr2, expected result
+	testCases := []struct {
+		expr1, expr2 string
+		expected     types.Time
+		desc         string
+	}{
+		{
+			expr1:    "2000:01:01 00:00:00",
+			expr2:    "2000:01:01 00:00:00.000001",
+			expected: types.Time(-1), // -1 microsecond
+			desc:     "colon format microsecond diff",
+		},
+		{
+			expr1:    "2000:01:01 00:00:00",
+			expr2:    "2000:01:01 00:00:00",
+			expected: types.Time(0),
+			desc:     "colon format zero diff",
+		},
+		{
+			expr1:    "2000:01:01 00:00:01",
+			expr2:    "2000:01:01 00:00:00",
+			expected: types.Time(1000000), // 1 second = 1000000 microseconds
+			desc:     "colon format one second diff",
+		},
+		{
+			expr1:    "2000:01:01 01:00:00",
+			expr2:    "2000:01:01 00:00:00",
+			expected: types.Time(3600000000), // 1 hour = 3600000000 microseconds
+			desc:     "colon format one hour diff",
+		},
+		{
+			expr1:    "2000:01:01 00:00:00",
+			expr2:    "2000:01:01 00:00:01",
+			expected: types.Time(-1000000), // -1 second
+			desc:     "colon format negative one second",
+		},
+		{
+			expr1:    "2000-01-01 15:30:45",
+			expr2:    "2000-01-01 10:20:30",
+			expected: types.Time(18615000000), // 5:10:15 = 18615000000 microseconds
+			desc:     "dash format datetime diff",
+		},
+		{
+			expr1:    "15:30:45",
+			expr2:    "10:20:30",
+			expected: types.Time(18615000000), // 5:10:15
+			desc:     "time format diff",
+		},
+	}
+
+	inputs1 := make([]string, len(testCases))
+	inputs2 := make([]string, len(testCases))
+	expected := make([]types.Time, len(testCases))
+	nulls := make([]bool, len(testCases))
+
+	for i, tc := range testCases {
+		inputs1[i] = tc.expr1
+		inputs2[i] = tc.expr2
+		expected[i] = tc.expected
+		nulls[i] = false
+	}
+
+	return []tcTemp{
+		{
+			info: "test timediff string inputs with colon format",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), inputs1, nulls),
+				NewFunctionTestInput(types.T_varchar.ToType(), inputs2, nulls),
+			},
+			expect: NewFunctionTestResult(types.T_time.ToType(), false, expected, nulls),
+		},
+	}
+}
+
+func TestTimeDiffString(t *testing.T) {
+	testCases := initTimeDiffStringTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, TimeDiffString)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
 // TIMESTAMPDIFF
 
 func initTimestampDiffTestCase() []tcTemp {

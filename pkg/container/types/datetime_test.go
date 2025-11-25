@@ -276,6 +276,22 @@ func TestParseDatetime(t *testing.T) {
 			want:    "",
 			wantErr: true,
 		},
+		// 5. colon separator format (MySQL compatible)
+		{
+			name: "colon separator yyyy:mm:dd hh:mm:ss",
+			args: "2000:01:01 00:00:00",
+			want: "2000-01-01 00:00:00.000000",
+		},
+		{
+			name: "colon separator with microseconds",
+			args: "2000:01:01 00:00:00.000001",
+			want: "2000-01-01 00:00:00.000001",
+		},
+		{
+			name: "colon separator with milliseconds",
+			args: "2000:01:01 12:34:56.123456",
+			want: "2000-01-01 12:34:56.123456",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

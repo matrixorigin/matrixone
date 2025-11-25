@@ -101,7 +101,7 @@ func ParseDatetime(s string, scale int32) (Datetime, error) {
 	var carry uint32 = 0
 	var err error
 
-	if s[4] == '-' || s[4] == '/' {
+	if s[4] == '-' || s[4] == '/' || s[4] == ':' {
 		var num int64
 		var unum uint64
 		strArr := strings.Split(s, " ")
@@ -109,7 +109,9 @@ func ParseDatetime(s string, scale int32) (Datetime, error) {
 			return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
 		}
 		// solve year/month/day
-		front := strings.Split(strArr[0], s[4:5])
+		// Use the separator found at position 4 (between year and month)
+		dateSep := s[4:5]
+		front := strings.Split(strArr[0], dateSep)
 		if len(front) != 3 {
 			return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
 		}
