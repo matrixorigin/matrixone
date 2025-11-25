@@ -115,4 +115,21 @@ select * from x2 left join x1 on x1.a = x2.a order by x1.a limit 10;
 drop table x1;
 drop table x2;
 
+-- Test case for remap error fix: o.id = CAST(d.id AS INT) in LEFT JOIN
+drop table if exists t_order;
+drop table if exists t_summary;
+drop table if exists t_mapping;
+create table t_order (id INT);
+create table t_summary (id INT);
+create table t_mapping (id INT);
+insert into t_order values (1);
+insert into t_summary values (1);
+insert into t_mapping values (1);
+-- @separator:table
+explain select o.id from t_order o join t_summary d on d.id = o.id left join (select distinct id from t_mapping) m on m.id = o.id where o.id = CAST(d.id AS INT);
+select o.id from t_order o join t_summary d on d.id = o.id left join (select distinct id from t_mapping) m on m.id = o.id where o.id = CAST(d.id AS INT);
+drop table t_order;
+drop table t_summary;
+drop table t_mapping;
+
 drop database if exists d1;

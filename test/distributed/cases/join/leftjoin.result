@@ -174,4 +174,33 @@ a    b    a    b
 42    5    42    1
 drop table x1;
 drop table x2;
+drop table if exists t_order;
+drop table if exists t_summary;
+drop table if exists t_mapping;
+create table t_order (id INT);
+create table t_summary (id INT);
+create table t_mapping (id INT);
+insert into t_order values (1);
+insert into t_summary values (1);
+insert into t_mapping values (1);
+explain select o.id from t_order o join t_summary d on d.id = o.id left join (select distinct id from t_mapping) m on m.id = o.id where o.id = CAST(d.id AS INT);
+TP QUERY PLAN
+Project
+  ->  Join
+        Join Type: LEFT
+        Join Cond: (o.id = t_mapping.id)
+        ->  Join
+              Join Type: INNER
+              Join Cond: (o.id = cast(d.id AS INT)), (o.id = d.id)
+              ->  Table Scan on d1.t_order
+              ->  Table Scan on d1.t_summary
+        ->  Aggregate
+              Group Key: t_mapping.id
+              ->  Table Scan on d1.t_mapping
+select o.id from t_order o join t_summary d on d.id = o.id left join (select distinct id from t_mapping) m on m.id = o.id where o.id = CAST(d.id AS INT);
+id
+1
+drop table t_order;
+drop table t_summary;
+drop table t_mapping;
 drop database if exists d1;

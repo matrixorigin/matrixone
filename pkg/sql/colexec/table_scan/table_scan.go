@@ -124,6 +124,7 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 		analyzer.AddS3RequestCount(crs)
 		analyzer.AddFileServiceCacheInfo(crs)
 		analyzer.AddDiskIO(crs)
+		analyzer.AddReadSizeInfo(crs)
 
 		if isEnd {
 			e = err

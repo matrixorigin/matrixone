@@ -284,7 +284,7 @@ func TestSubscribedTable(t *testing.T) {
 	}
 	for _, tbl := range tbls {
 		subscribeRecord.setTableSubscribed(tbl.db, tbl.tb)
-		_ = subscribeRecord.eng.GetOrCreateLatestPart(tbl.db, tbl.tb)
+		_ = subscribeRecord.eng.GetOrCreateLatestPart(nil, 0, tbl.db, tbl.tb)
 	}
 	assert.Equal(t, 4, len(subscribeRecord.m))
 	assert.Equal(t, true, subscribeRecord.isSubscribed(tbls[0].db, tbls[0].tb))
@@ -644,7 +644,7 @@ func TestPushClient_DoGCPartitionState(t *testing.T) {
 		partitions: map[[2]uint64]*logtailreplay.Partition{},
 	}
 	c.eng.catalog.Store(cache.NewCatalog())
-	ps := logtailreplay.NewPartition("", 300)
+	ps := logtailreplay.NewPartition("", nil, 0, 0, 300, nil)
 	state := ps.Snapshot()
 	assert.NotNil(t, state)
 
@@ -740,21 +740,21 @@ func TestPushClient_LoadAndConsumeLatestCkp(t *testing.T) {
 	// Test Case 1.1: Table is subscribed with SubRspReceived state, LazyLoadLatestCkp succeeds
 	dbID1, tableID1 := uint64(1), uint64(1)
 	c.SetSubscribeState(dbID1, tableID1, SubRspReceived)
-	state, err := c.loadAndConsumeLatestCkp(ctx, tableID1, "table1", dbID1, "db1")
+	state, err := c.loadAndConsumeLatestCkp(ctx, 0, tableID1, "table1", dbID1, "db1")
 	assert.NoError(t, err)
 	assert.Equal(t, Subscribed, state)
 
 	// Test Case 1.2: Table is subscribed with Subscribed state
 	dbID12, tableID12 := uint64(12), uint64(12)
 	c.SetSubscribeState(dbID12, tableID12, Subscribed)
-	state, err = c.loadAndConsumeLatestCkp(ctx, tableID12, "table12", dbID12, "db12")
+	state, err = c.loadAndConsumeLatestCkp(ctx, 0, tableID12, "table12", dbID12, "db12")
 	assert.NoError(t, err)
 	assert.Equal(t, Subscribed, state)
 
 	// Test Case 2.1: Table is not subscribed, subscriber is not ready
 	dbID21, tableID21 := uint64(21), uint64(21)
 	c.subscriber = &logTailSubscriber{} // not ready state
-	state, err = c.loadAndConsumeLatestCkp(ctx, tableID21, "table21", dbID21, "db21")
+	state, err = c.loadAndConsumeLatestCkp(ctx, 0, tableID21, "table21", dbID21, "db21")
 	assert.Error(t, err)
 	assert.Equal(t, Unsubscribed, state)
 
@@ -766,7 +766,7 @@ func TestPushClient_LoadAndConsumeLatestCkp(t *testing.T) {
 	c.subscriber.sendSubscribe = func(ctx context.Context, id api.TableID) error {
 		return nil
 	}
-	state, err = c.loadAndConsumeLatestCkp(ctx, tableID22, "table22", dbID22, "db22")
+	state, err = c.loadAndConsumeLatestCkp(ctx, 0, tableID22, "table22", dbID22, "db22")
 	assert.NoError(t, err)
 	assert.Equal(t, Subscribing, state)
 
@@ -775,14 +775,14 @@ func TestPushClient_LoadAndConsumeLatestCkp(t *testing.T) {
 	c.subscriber.sendSubscribe = func(ctx context.Context, id api.TableID) error {
 		return moerr.NewInternalErrorNoCtx("mock subscribe error")
 	}
-	state, err = c.loadAndConsumeLatestCkp(ctx, tableID23, "table23", dbID23, "db23")
+	state, err = c.loadAndConsumeLatestCkp(ctx, 0, tableID23, "table23", dbID23, "db23")
 	assert.Error(t, err)
 	assert.Equal(t, Unsubscribed, state)
 
 	// Test Case 3: Table exists but has other state (Unsubscribing)
 	dbID3, tableID3 := uint64(3), uint64(3)
 	c.SetSubscribeState(dbID3, tableID3, Unsubscribing)
-	state, err = c.loadAndConsumeLatestCkp(ctx, tableID3, "table3", dbID3, "db3")
+	state, err = c.loadAndConsumeLatestCkp(ctx, 0, tableID3, "table3", dbID3, "db3")
 	assert.NoError(t, err)
 	assert.Equal(t, Unsubscribing, state)
 }

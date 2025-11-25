@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"runtime/trace"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/RoaringBitmap/roaring"
@@ -1107,7 +1108,13 @@ func (tbl *txnTable) DedupSnapByPK(
 				zap.String("pk", keys.PPString(keys.Length())),
 				zap.String("rowids", rowIDs.PPString(rowIDs.Length())),
 			)
-			entry := common.TypeStringValue(*keys.GetType(), keys.Get(i), false)
+			var entry string
+			if strings.HasPrefix(colName, "__mo") {
+				// try to unpack the key, it doesn't matter if it is not a composite key
+				entry = common.TypeStringValue(*keys.GetType(), keys.Get(i), false, common.WithIsComposite{})
+			} else {
+				entry = common.TypeStringValue(*keys.GetType(), keys.Get(i), false)
+			}
 			return moerr.NewDuplicateEntryNoCtx(entry, colName)
 		}
 	}

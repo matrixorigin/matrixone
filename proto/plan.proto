@@ -656,6 +656,12 @@ message AnalyzeInfo {
 	int64 written_rows = 31;
 	// deleted_rows used to estimate S3input
 	int64 deleted_rows = 32;
+	// read_size: actual bytes read from storage layer (excluding rowid tombstone)
+	int64 read_size = 33;
+	// s3_read_size: actual bytes read from S3 (excluding rowid tombstone)
+	int64 s3_read_size = 34;
+	// disk_read_size: actual bytes read from disk cache (excluding rowid tombstone)
+	int64 disk_read_size = 35;
 }
 
 message OriginTableMessageForFuzzy {

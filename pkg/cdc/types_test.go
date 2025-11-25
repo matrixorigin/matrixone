@@ -203,6 +203,27 @@ func Test_atomicBatchRowIter(t *testing.T) {
 	iter.Close()
 }
 
+func TestAtomicBatch_RowCountDeduplicates(t *testing.T) {
+	bat := NewAtomicBatch(testutil.TestUtilMp)
+	ts := types.BuildTS(10, 2)
+
+	createBatch := func(pk int32) *batch.Batch {
+		b := batch.New([]string{"pk", "ts"})
+		b.Vecs[0] = testutil.MakeInt32Vector([]int32{pk}, nil)
+		b.Vecs[1] = testutil.MakeTSVector([]types.TS{ts}, nil)
+		return b
+	}
+
+	bat.Append(types.NewPacker(), createBatch(42), 1, 0)
+	bat.Append(types.NewPacker(), createBatch(42), 1, 0) // duplicate pk+ts
+	bat.Append(types.NewPacker(), createBatch(43), 1, 0) // unique pk
+
+	assert.Equal(t, 2, bat.RowCount())
+	assert.Equal(t, 3, bat.TotalRows())
+	assert.Equal(t, 1, bat.DuplicateRows())
+	assert.Equal(t, 2, bat.Rows.Len())
+}
+
 func TestDbTableInfo_String(t *testing.T) {
 	type fields struct {
 		SourceDbName  string

@@ -655,44 +655,63 @@ func extractColRefAndLiteralsInFilter(expr *plan.Expr) (col *ColRef, litType typ
 	return
 }
 
-// for predicate deduction, filter must be like func(col)>1 , or (col=1) or (col=2)
-// and only 1 colRef is allowd in the filter
+// extractColRefInFilter extracts a unique column reference from an expression.
+// Used for predicate deduction, where filters must contain only one column reference.
+//
+// This function implements unified logic for extracting column references:
+//   - For column expressions: returns the column reference directly
+//   - For function expressions:
+//   - The first argument MUST contain a column reference (otherwise returns nil)
+//   - All other arguments must satisfy one of the following:
+//     1. Not contain any column references (i.e., literals/constants), OR
+//     2. Contain the same column reference as the first argument
+//
+// This unified approach works for all function types:
+//   - Comparison operators (=, >, <, >=, <=, between, in, etc.):
+//   - col = 1 → returns col (literal is allowed)
+//   - col = trim(col) → returns col (same column in function is allowed)
+//   - col = col2 → returns nil (different column is rejected)
+//   - func(col) > 2 → returns col (nested function calls are supported recursively)
+//   - Logical operators (and, or, etc.):
+//   - and(col, col) → returns col (same column in all args)
+//   - and(col, col2) → returns nil (different columns are rejected)
+//   - and(col, 1) → returns col (literal is allowed, though may be semantically invalid)
+//   - Cast functions:
+//   - cast(col, type) → returns col (type argument is literal)
+//
+// Returns the column reference if the expression contains exactly one unique column reference,
+// nil otherwise.
 func extractColRefInFilter(expr *plan.Expr) *ColRef {
 	switch exprImpl := expr.Expr.(type) {
-	case *plan.Expr_F:
-		switch exprImpl.F.Func.ObjName {
-		case "=", ">", "<", ">=", "<=", "prefix_eq", "between", "prefix_between", "in", "prefix_in", "cast":
-			switch e := exprImpl.F.Args[1].Expr.(type) {
-			case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Vec, *plan.Expr_List, *plan.Expr_T:
-				return extractColRefInFilter(exprImpl.F.Args[0])
-			case *plan.Expr_F:
-				switch e.F.Func.ObjName {
-				case "cast", "serial", "date_sub":
-					return extractColRefInFilter(exprImpl.F.Args[0])
-				}
-				return nil
-			default:
-				return nil
-			}
-		default:
-			var col *ColRef
-			for _, arg := range exprImpl.F.Args {
-				c := extractColRefInFilter(arg)
-				if c == nil {
-					return nil
-				}
-				if col != nil {
-					if col.RelPos != c.RelPos || col.ColPos != c.ColPos {
-						return nil
-					}
-				} else {
-					col = c
-				}
-			}
-			return col
-		}
 	case *plan.Expr_Col:
 		return exprImpl.Col
+	case *plan.Expr_F:
+		args := exprImpl.F.Args
+		if len(args) == 0 {
+			return nil
+		}
+
+		// Extract column reference from the first argument
+		col := extractColRefInFilter(args[0])
+		if col == nil {
+			return nil
+		}
+
+		// Verify all remaining arguments either:
+		// 1. Don't contain any column references (literals/constants), OR
+		// 2. Contain the same column reference as the first argument
+		for i := 1; i < len(args); i++ {
+			otherCol := extractColRefInFilter(args[i])
+			if otherCol != nil {
+				// If this argument has a column reference, it must match the first argument's column
+				if col.RelPos != otherCol.RelPos || col.ColPos != otherCol.ColPos {
+					return nil
+				}
+			}
+			// If otherCol is nil, the argument is a literal/constant (no column reference), which is acceptable
+		}
+
+		return col
 	}
 	return nil
 }
@@ -1414,7 +1433,7 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 		}
 
 		return &plan.Expr{
-			Typ: expr.Typ,
+			Typ: plan.Type{Id: int32(vec.GetType().Oid), Scale: vec.GetType().Scale, Width: vec.GetType().Width},
 			Expr: &plan.Expr_Vec{
 				Vec: &plan.LiteralVec{
 					Len:  int32(vec.Length()),

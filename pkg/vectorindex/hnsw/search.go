@@ -19,7 +19,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -30,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
@@ -120,7 +120,8 @@ func (idx *HnswSearchIndex) LoadIndex(
 	var (
 		fp          *os.File
 		stream_chan = make(chan executor.Result, 2)
-		error_chan  = make(chan error)
+		error_chan  = make(chan error, 2)
+		wg          sync.WaitGroup
 	)
 
 	// create tempfile for writing
@@ -149,7 +150,13 @@ func (idx *HnswSearchIndex) LoadIndex(
 	ctx, cancel := context.WithCancelCause(proc.GetTopContext())
 	defer cancel(nil)
 
+	wg.Add(1)
 	go func() {
+		defer func() {
+			close(stream_chan)
+			wg.Done()
+		}()
+
 		if _, err2 := runSql_streaming(
 			ctx, proc, sql, stream_chan, error_chan,
 		); err2 != nil {
@@ -177,6 +184,8 @@ func (idx *HnswSearchIndex) LoadIndex(
 			res.Close()
 		}
 	}
+
+	wg.Wait()
 
 	if err == nil {
 		// fetch potential remaining errors from error_chan
@@ -317,10 +326,7 @@ func (s *HnswSearch) Search(
 			return nil, nil, moerr.NewInternalError(proc.Ctx, "heap return key is not int64")
 		}
 		reskeys = append(reskeys, sr.Id)
-		if s.Idxcfg.Usearch.Metric == usearch.L2sq {
-			// distance functino of L2Distance is l2sq so sqrt at the end
-			sr.Distance = math.Sqrt(sr.Distance)
-		}
+		sr.Distance = metric.DistanceTransformHnsw(sr.Distance, metric.DistFuncNameToMetricType[rt.OrigFuncName], s.Idxcfg.Usearch.Metric)
 		resdistances = append(resdistances, sr.Distance)
 	}
 
@@ -426,6 +432,5 @@ func (s *HnswSearch) Load(proc *process.Process) error {
 
 // check config and update some parameters such as ef_search
 func (s *HnswSearch) UpdateConfig(newalgo cache.VectorIndexSearchIf) error {
-
 	return nil
 }

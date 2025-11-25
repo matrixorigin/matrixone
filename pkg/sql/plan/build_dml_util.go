@@ -2409,17 +2409,45 @@ func appendDeleteIndexTablePlan(
 	}
 
 	/*
-		For the hidden table of the secondary index, there will be no null situation, so there is no need to use right join
-		For why right join is needed, you can consider the following SQL :
+		Why we need RIGHT JOIN for both UNIQUE KEY and SECONDARY INDEX:
 
-		create table t1(a int, b int, c int, unique key(a));
-		insert into t1 values(null, 1, 1);
-		explain verbose update t1 set a = 1 where a is null;
+		JOIN Structure:
+		  - Left table (RelPos=0):  Index table (existing index records)
+		  - Right table (RelPos=1): Main table data (from ON DUPLICATE KEY or UPDATE)
+		  - Join condition: index_table.__mo_index_idx_col = main_data.index_columns
+
+		Scenario 1: UNIQUE KEY with NULL values
+		  create table t1(a int, b int, c int, unique key(a));
+		  insert into t1 values(null, 1, 1);  -- NULL exists in main table but NOT in index table
+		  update t1 set a = 1 where a is null;
+
+		  Data flow:
+		    Right table (main): (null, 1, 1) → (1, 1, 1)
+		    Left table (index): empty (NULL not indexed)
+		    INNER JOIN: row filtered out ❌
+		    RIGHT JOIN: NULL + (1, 1, 1) → preserved ✅
+
+		Scenario 2: ON DUPLICATE KEY UPDATE with mixed insert/update (no explicit primary key)
+		  insert into t1 values (1, 'alice@x.com', 'Alice'), (2, 'bob@x.com', 'Bob')
+		  on duplicate key update name = values(name);
+
+		  Data flow:
+		    Right table (main): ('Alice', pk1) -- update existing
+		                       ('Bob', pk2)   -- new insert
+		    Left table (idx_name): ('Alice', pk1) -- only existing record
+		    INNER JOIN: only ('Alice', pk1) matched, 'Bob' filtered out ❌
+		    RIGHT JOIN: both rows preserved ✅
+
+		Conclusion: RIGHT JOIN ensures all rows from main table are preserved, regardless of
+		whether they exist in the index table. This is critical for:
+		  1. UNIQUE KEY: handling NULL values that don't exist in index
+		  2. SECONDARY INDEX: handling new inserts in ON DUPLICATE KEY UPDATE scenarios
+
+		Note: The original assumption "secondary index won't have null situation" was incorrect.
+		While secondary indexes don't store NULL values, they DO need RIGHT JOIN to handle
+		new inserts that don't yet exist in the index table.
 	*/
-	joinType := plan.Node_INNER
-	if isUK {
-		joinType = plan.Node_RIGHT
-	}
+	joinType := plan.Node_RIGHT
 
 	sid := builder.compCtx.GetProcess().GetService()
 	lastNodeId = builder.appendNode(&plan.Node{
@@ -4371,7 +4399,7 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 		})
 	}
 
-	ftcols := _getColDefs(tokenizeColDefs)
+	ftcols := DeepCopyColDefList(tokenizeColDefs)
 	ftcols[0].Typ = tableDef.Cols[pkPos].Typ
 
 	tablefunc := &plan.Node{

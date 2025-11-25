@@ -166,16 +166,26 @@ func (bats *CompactBatchs) Union(mpool *mpool.MPool, inBatch *Batch, sels []int3
 	}
 
 	if bats.Length() == 0 {
-		tmpBat := NewWithSize(len(inBatch.Vecs))
-		for i := range tmpBat.Vecs {
-			tmpBat.Vecs[i] = vector.NewVec(*inBatch.Vecs[i].GetType())
-			err := tmpBat.Vecs[i].UnionInt32(inBatch.Vecs[i], sels, mpool)
-			if err != nil {
-				return err
+		// Handle large sels: split into multiple batches if selsLen > batchMaxRow
+		remainingSels := sels
+		for len(remainingSels) > 0 {
+			tmpSize := len(remainingSels)
+			if tmpSize > bats.batchMaxRow {
+				tmpSize = bats.batchMaxRow
 			}
+			tmpSels := remainingSels[:tmpSize]
+			tmpBat := NewWithSize(len(inBatch.Vecs))
+			for i := range tmpBat.Vecs {
+				tmpBat.Vecs[i] = vector.NewVec(*inBatch.Vecs[i].GetType())
+				err := tmpBat.Vecs[i].UnionInt32(inBatch.Vecs[i], tmpSels, mpool)
+				if err != nil {
+					return err
+				}
+			}
+			tmpBat.rowCount = tmpBat.Vecs[0].Length()
+			bats.batchs = append(bats.batchs, tmpBat)
+			remainingSels = remainingSels[tmpSize:]
 		}
-		tmpBat.rowCount = tmpBat.Vecs[0].Length()
-		bats.batchs = append(bats.batchs, tmpBat)
 		return nil
 	}
 
