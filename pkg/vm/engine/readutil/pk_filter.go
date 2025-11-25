@@ -17,7 +17,6 @@ package readutil
 import (
 	"bytes"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -25,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"go.uber.org/zap"
 )
 
@@ -459,10 +459,23 @@ func ConstructBlockPKFilter(
 	}
 
 	// If no BloomFilter, keep original behavior: only use BasePKFilter's search functions.
+	// Wrap the inner functions to match the new signature
+	wrapInner := func(inner func(*vector.Vector) []int64) func(containers.Vectors) []int64 {
+		if inner == nil {
+			return nil
+		}
+		return func(cacheVectors containers.Vectors) []int64 {
+			if len(cacheVectors) == 0 || cacheVectors[0].Length() == 0 {
+				return nil
+			}
+			return inner(&cacheVectors[0])
+		}
+	}
+
 	if len(bloomFilter) == 0 {
 		if sortedSearchFunc != nil {
-			readFilter.SortedSearchFunc = sortedSearchFunc
-			readFilter.UnSortedSearchFunc = unSortedSearchFunc
+			readFilter.SortedSearchFunc = wrapInner(sortedSearchFunc)
+			readFilter.UnSortedSearchFunc = wrapInner(unSortedSearchFunc)
 			readFilter.Valid = true
 			return readFilter, nil
 		}
@@ -479,329 +492,100 @@ func ConstructBlockPKFilter(
 		return objectio.BlockReadFilter{}, err
 	}
 
-	// Check if it's a composite primary key that needs to be split
-	isCompositePK := pkColName == catalog.CPrimaryKeyColName && len(bloomFilter) > 0
-
 	// Reusable temporary variables (defined outside closure to avoid allocation on each call)
 	var (
-		reusableExtractedValues []any
-		reusableValidIndices    []int
-		reusableRowIndices      []int
-		reusableSels            []int64
-		reusableExists          map[int]bool
-		reusableTempVec         *vector.Vector
-		reusableTempVecType     types.Type
+		reusableSels   []int64
+		reusableExists map[int]bool
 	)
 
-	// Extract the last column value from composite primary key vector
-	extractLastColFromCompositePK := func(vec *vector.Vector, rowIndices []int) (extractedValues []any, validIndices []int) {
-		// Check capacity, reallocate if insufficient
-		if cap(reusableExtractedValues) < len(rowIndices) {
-			reusableExtractedValues = make([]any, 0, len(rowIndices))
-		}
-		if cap(reusableValidIndices) < len(rowIndices) {
-			reusableValidIndices = make([]int, 0, len(rowIndices))
-		}
-		// Reuse slice, reset via [:0] but keep capacity
-		extractedValues = reusableExtractedValues[:0]
-		validIndices = reusableValidIndices[:0]
-		for _, idx := range rowIndices {
-			if idx < 0 || idx >= vec.Length() {
-				continue
-			}
-			cpkeyBytes := vec.GetBytesAt(idx)
-			tuple, err := types.Unpack(cpkeyBytes)
-			if err != nil || len(tuple) == 0 {
-				continue
-			}
-			extractedValues = append(extractedValues, tuple[len(tuple)-1])
-			validIndices = append(validIndices, idx)
-		}
-		// Update reusable variables
-		reusableExtractedValues = extractedValues
-		reusableValidIndices = validIndices
-		return
-	}
-
-	// Create or reuse temporary vector based on type and fill values
-	createTempVecFromValues := func(values []any, mp *mpool.MPool) *vector.Vector {
-		if len(values) == 0 {
+	// Pure BloomFilter searchFunc: directly filter entire column with BloomFilter.
+	// This function only works when optimization is enabled (len(cacheVectors) >= 2).
+	// When optimization is enabled, cacheVectors[1] contains __mo_index_pri_col which is used for BF filtering.
+	// If len(cacheVectors) < 2, skip BF filtering and return nil.
+	bfOnlySearch := func(cacheVectors containers.Vectors) []int64 {
+		if len(cacheVectors) < 2 || cacheVectors[0].Length() == 0 || cacheVectors[1].Length() == 0 {
 			return nil
 		}
-		firstVal := values[0]
-		var targetType types.Type
-		var tempVec *vector.Vector
-
-		// Determine target type
-		switch firstVal.(type) {
-		case int8:
-			targetType = types.T_int8.ToType()
-		case int16:
-			targetType = types.T_int16.ToType()
-		case int32:
-			targetType = types.T_int32.ToType()
-		case int64:
-			targetType = types.T_int64.ToType()
-		case uint8:
-			targetType = types.T_uint8.ToType()
-		case uint16:
-			targetType = types.T_uint16.ToType()
-		case uint32:
-			targetType = types.T_uint32.ToType()
-		case uint64:
-			targetType = types.T_uint64.ToType()
-		case string, []byte:
-			targetType = types.T_varchar.ToType()
-		default:
-			return nil
-		}
-
-		// Check if can reuse
-		if reusableTempVec != nil && reusableTempVecType.Eq(targetType) {
-			tempVec = reusableTempVec
-			tempVec.CleanOnlyData()
-		} else {
-			// Type mismatch or doesn't exist, create new
-			tempVec = vector.NewVec(targetType)
-			reusableTempVec = tempVec
-			reusableTempVecType = targetType
-		}
-
-		// Fill data
-		switch firstVal.(type) {
-		case int8:
-			for _, val := range values {
-				if iv, ok := val.(int8); ok {
-					_ = vector.AppendFixed(tempVec, iv, false, mp)
-				}
-			}
-		case int16:
-			for _, val := range values {
-				if iv, ok := val.(int16); ok {
-					_ = vector.AppendFixed(tempVec, iv, false, mp)
-				}
-			}
-		case int32:
-			for _, val := range values {
-				if iv, ok := val.(int32); ok {
-					_ = vector.AppendFixed(tempVec, iv, false, mp)
-				}
-			}
-		case int64:
-			for _, val := range values {
-				if iv, ok := val.(int64); ok {
-					_ = vector.AppendFixed(tempVec, iv, false, mp)
-				}
-			}
-		case uint8:
-			for _, val := range values {
-				if iv, ok := val.(uint8); ok {
-					_ = vector.AppendFixed(tempVec, iv, false, mp)
-				}
-			}
-		case uint16:
-			for _, val := range values {
-				if iv, ok := val.(uint16); ok {
-					_ = vector.AppendFixed(tempVec, iv, false, mp)
-				}
-			}
-		case uint32:
-			for _, val := range values {
-				if iv, ok := val.(uint32); ok {
-					_ = vector.AppendFixed(tempVec, iv, false, mp)
-				}
-			}
-		case uint64:
-			for _, val := range values {
-				if iv, ok := val.(uint64); ok {
-					_ = vector.AppendFixed(tempVec, iv, false, mp)
-				}
-			}
-		case string:
-			for _, val := range values {
-				if sv, ok := val.(string); ok {
-					_ = vector.AppendBytes(tempVec, []byte(sv), false, mp)
-				}
-			}
-		case []byte:
-			for _, val := range values {
-				if bv, ok := val.([]byte); ok {
-					_ = vector.AppendBytes(tempVec, bv, false, mp)
-				}
-			}
-		}
-		return tempVec
-	}
-
-	// Apply BloomFilter to composite primary key vector, return matching row indices
-	applyBFToCompositePK := func(vec *vector.Vector, rowIndices []int) []int64 {
-		extractedValues, validIndices := extractLastColFromCompositePK(vec, rowIndices)
-		if len(extractedValues) == 0 {
-			return nil
-		}
-		tempVec := createTempVecFromValues(extractedValues, mp)
-		if tempVec == nil {
-			return nil
-		}
-		// Note: no longer defer Free, because tempVec is reused and will be CleanOnlyData on next use
-
-		// Reuse sels slice
+		rowCount := cacheVectors[0].Length()
+		lastColVec := &cacheVectors[1]
 		sels := reusableSels[:0]
-		if cap(sels) < len(validIndices) {
-			sels = make([]int64, 0, len(validIndices))
+		if cap(sels) < rowCount {
+			sels = make([]int64, 0, rowCount)
 		}
-		bf.Test(tempVec, func(exist bool, idx int) {
-			// Add strict boundary check to prevent index out of range
-			if exist && idx >= 0 && idx < len(validIndices) {
-				sels = append(sels, int64(validIndices[idx]))
+		bf.Test(lastColVec, func(exist bool, row int) {
+			if exist && row >= 0 && row < rowCount {
+				sels = append(sels, int64(row))
 			}
 		})
 		reusableSels = sels
 		return sels
 	}
 
-	// Pure BloomFilter searchFunc: directly filter entire column with BF.
-	// If composite primary key, need to split out the last column (__mo_index_pri_col) first, then test split values with BF.
-	bfOnlySearch := func(vec *vector.Vector) []int64 {
-		if vec == nil || vec.Length() == 0 {
-			return nil
-		}
-		rowCount := vec.Length()
-		var sels []int64
-
-		if isCompositePK {
-			// Composite primary key: apply BF to all rows
-			// Reuse allRows slice
-			if cap(reusableRowIndices) < rowCount {
-				reusableRowIndices = make([]int, rowCount)
-			}
-			allRows := reusableRowIndices[:rowCount]
-			for i := 0; i < rowCount; i++ {
-				allRows[i] = i
-			}
-			// Call extractLastColFromCompositePK only once, get both extractedValues and validIndices
-			extractedValues, validIndices := extractLastColFromCompositePK(vec, allRows)
-			// Use extracted values to create tempVec, avoid duplicate extraction in applyBFToCompositePK
-			if len(extractedValues) == 0 {
-				return nil
-			}
-			tempVec := createTempVecFromValues(extractedValues, mp)
-			if tempVec == nil {
-				return nil
-			}
-			// Note: no longer defer Free, because tempVec is reused and will be CleanOnlyData on next use
-
-			// Reuse sels slice
-			sels = reusableSels[:0]
-			if cap(sels) < len(validIndices) {
-				sels = make([]int64, 0, len(validIndices))
-			}
-			bf.Test(tempVec, func(exist bool, idx int) {
-				// Add strict boundary check to prevent index out of range
-				if exist && idx >= 0 && idx < len(validIndices) {
-					sels = append(sels, int64(validIndices[idx]))
-				}
-			})
-			reusableSels = sels
-		} else {
-			// Non-composite primary key: directly test original vector with BF
-			// Reuse sels slice
-			sels = reusableSels[:0]
-			if cap(sels) < rowCount {
-				sels = make([]int64, 0, rowCount)
-			}
-			bf.Test(vec, func(exist bool, row int) {
-				if exist {
-					sels = append(sels, int64(row))
-				}
-			})
-			reusableSels = sels
-		}
-		return sels
-	}
-
 	// Wrap: if inner is nil, degenerate to pure BF; otherwise run inner first, then intersect with BF results.
-	wrap := func(inner func(*vector.Vector) []int64) func(*vector.Vector) []int64 {
+	// The inner function receives *vector.Vector (PK column) for PK filtering.
+	// cacheVectors[0] is used for PK filtering, cacheVectors[1] (if exists) is used for BF filtering.
+	// When optimization is enabled (len(cacheVectors) >= 2), cacheVectors[1] contains __mo_index_pri_col.
+	wrap := func(inner func(*vector.Vector) []int64) func(containers.Vectors) []int64 {
 		if inner == nil {
 			return bfOnlySearch
 		}
-		return func(vec *vector.Vector) []int64 {
-			if vec == nil || vec.Length() == 0 {
+		return func(cacheVectors containers.Vectors) []int64 {
+			if len(cacheVectors) == 0 || cacheVectors[0].Length() == 0 {
 				return nil
 			}
 
-			rowCount := vec.Length()
-			offsets := inner(vec)
+			pkVec := &cacheVectors[0]
+			rowCount := pkVec.Length()
+			offsets := inner(pkVec)
 			innerCount := len(offsets)
 
 			if innerCount == 0 {
 				return offsets
 			}
 
-			// Test BF on rows filtered by inner
+			// Test BloomFilter on rows filtered by inner function.
+			// Only works when optimization is enabled (len(cacheVectors) >= 2).
+			if len(cacheVectors) < 2 || cacheVectors[1].Length() == 0 {
+				// No optimization: skip BF filtering, return all offsets that passed inner filter.
+				return offsets
+			}
+
+			// Optimization enabled: use cacheVectors[1] (__mo_index_pri_col) for BF filtering.
+			lastColVec := &cacheVectors[1]
 			var exists map[int]bool
 			var bfHits int
 
-			if isCompositePK {
-				// Composite primary key: apply BF to rows filtered by inner
-				// Reuse rowIndices slice
-				if cap(reusableRowIndices) < len(offsets) {
-					reusableRowIndices = make([]int, len(offsets))
-				}
-				rowIndices := reusableRowIndices[:len(offsets)]
-				for i, off := range offsets {
-					rowIndices[i] = int(off)
-				}
-				bfMatched := applyBFToCompositePK(vec, rowIndices)
-				// Reuse exists map - use more efficient reallocation for large maps
-				if reusableExists == nil || len(bfMatched) > len(reusableExists)*2 {
-					// If map is too small, reallocate
-					reusableExists = make(map[int]bool, len(bfMatched))
-				} else if len(reusableExists) > 0 {
-					// For small maps, clear by reallocating (more efficient than delete loop)
-					if len(reusableExists) < 100 {
-						// For small maps, use delete loop
-						for k := range reusableExists {
-							delete(reusableExists, k)
-						}
-					} else {
-						// For larger maps, reallocate is more efficient
-						reusableExists = make(map[int]bool, len(bfMatched))
+			// Reuse exists map - use more efficient reallocation for large maps
+			if reusableExists == nil || rowCount > len(reusableExists)*2 {
+				reusableExists = make(map[int]bool, rowCount)
+			} else if len(reusableExists) > 0 {
+				// For small maps, clear by reallocating (more efficient than delete loop)
+				if len(reusableExists) < 100 {
+					// For small maps, use delete loop
+					for k := range reusableExists {
+						delete(reusableExists, k)
 					}
+				} else {
+					// For larger maps, reallocate is more efficient
+					reusableExists = make(map[int]bool, rowCount)
 				}
-				exists = reusableExists
-				for _, off := range bfMatched {
-					exists[int(off)] = true
+			}
+			exists = reusableExists
+
+			// Test BloomFilter on lastColVec, but only for rows that passed inner filter.
+			rowSet := make(map[int]bool, len(offsets))
+			for _, off := range offsets {
+				if int(off) >= 0 && int(off) < rowCount {
+					rowSet[int(off)] = true
+				}
+			}
+			bf.Test(lastColVec, func(exist bool, row int) {
+				// Add strict boundary check to prevent index out of range
+				if exist && row >= 0 && row < rowCount && rowSet[row] {
+					exists[row] = true
 					bfHits++
 				}
-			} else {
-				// Non-composite primary key: test directly
-				// Reuse exists map - use more efficient reallocation for large maps
-				if reusableExists == nil || rowCount > len(reusableExists)*2 {
-					reusableExists = make(map[int]bool, rowCount)
-				} else if len(reusableExists) > 0 {
-					// For small maps, clear by reallocating (more efficient than delete loop)
-					if len(reusableExists) < 100 {
-						// For small maps, use delete loop
-						for k := range reusableExists {
-							delete(reusableExists, k)
-						}
-					} else {
-						// For larger maps, reallocate is more efficient
-						reusableExists = make(map[int]bool, rowCount)
-					}
-				}
-				exists = reusableExists
-				bf.Test(vec, func(exist bool, row int) {
-					// Add strict boundary check to prevent index out of range
-					if row >= 0 && row < rowCount {
-						exists[row] = exist
-						if exist {
-							bfHits++
-						}
-					}
-				})
-			}
+			})
 
 			out := offsets[:0]
 			for _, off := range offsets {
@@ -816,13 +600,8 @@ func ConstructBlockPKFilter(
 	readFilter.SortedSearchFunc = wrap(sortedSearchFunc)
 	readFilter.UnSortedSearchFunc = wrap(unSortedSearchFunc)
 	readFilter.Valid = true
-	// Set cleanup function to release reusableTempVec and BloomFilter when filter is no longer needed
+	// Set cleanup function to release BloomFilter when filter is no longer needed
 	readFilter.Cleanup = func() {
-		// Release reusableTempVec
-		if reusableTempVec != nil {
-			reusableTempVec.Free(mp)
-			reusableTempVec = nil
-		}
 		// Release BloomFilter memory
 		bf.Clean()
 		// Clear reusableExists map by reallocating for better memory efficiency

@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1249,8 +1250,9 @@ func TestConstructBlockPKFilter(t *testing.T) {
 					basePKFilter.String(),
 					common.MoVectorToString(inputVec, 100))
 
-				sel1 := blkPKFilter.SortedSearchFunc(inputVec)
-				sel2 := blkPKFilter.UnSortedSearchFunc(inputVec)
+				cacheVectors := containers.Vectors{*inputVec}
+				sel1 := blkPKFilter.SortedSearchFunc(cacheVectors)
+				sel2 := blkPKFilter.UnSortedSearchFunc(cacheVectors)
 
 				require.Equal(t, sel1, sel2, msg)
 			}
@@ -1657,7 +1659,9 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 		require.NotNil(t, readFilter.UnSortedSearchFunc)
 
 		// Test the search function
-		result := readFilter.UnSortedSearchFunc(inputVec)
+		// For non-composite PK without optimization, use single vector
+		cacheVectors := containers.Vectors{*inputVec}
+		result := readFilter.UnSortedSearchFunc(cacheVectors)
 		// Should return indices of values that exist in BF: [10, 20, 30] -> indices [1, 3, 5]
 		require.Equal(t, []int64{1, 3, 5}, result)
 	})
@@ -1695,8 +1699,16 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 		require.True(t, readFilter.Valid)
 		require.NotNil(t, readFilter.UnSortedSearchFunc)
 
-		// Test the search function
-		result := readFilter.UnSortedSearchFunc(compositePKVec)
+		// Test the search function with optimization (len(cacheVectors) >= 2)
+		// Create last column vector for optimization
+		lastColVec := vector.NewVec(types.T_int64.ToType())
+		for _, tuple := range tuples {
+			lastVal := tuple[len(tuple)-1].(int64)
+			vector.AppendFixed(lastColVec, lastVal, false, mp)
+		}
+		defer lastColVec.Free(mp)
+		cacheVectors := containers.Vectors{*compositePKVec, *lastColVec}
+		result := readFilter.UnSortedSearchFunc(cacheVectors)
 		// Should return all indices [0, 1, 2] since all last columns match
 		require.Equal(t, []int64{0, 1, 2}, result)
 	})
@@ -1731,7 +1743,15 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 		)
 		require.NoError(t, err)
 
-		result := readFilter.UnSortedSearchFunc(compositePKVec)
+		// Create last column vector for optimization
+		lastColVec := vector.NewVec(types.T_int64.ToType())
+		for _, tuple := range tuples {
+			lastVal := tuple[len(tuple)-1].(int64)
+			vector.AppendFixed(lastColVec, lastVal, false, mp)
+		}
+		defer lastColVec.Free(mp)
+		cacheVectors := containers.Vectors{*compositePKVec, *lastColVec}
+		result := readFilter.UnSortedSearchFunc(cacheVectors)
 		// Should return indices containing [0, 2] for values 100 and 300
 		// Note: BloomFilter may have false positives, so we check that it contains the expected indices
 		require.Contains(t, result, int64(0), "Should contain index 0 (value 100)")
@@ -1766,7 +1786,15 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 		)
 		require.NoError(t, err)
 
-		result := readFilter.UnSortedSearchFunc(compositePKVec)
+		// Create last column vector for optimization
+		lastColVec := vector.NewVec(types.T_int64.ToType())
+		for _, tuple := range tuples {
+			lastVal := tuple[len(tuple)-1].(int64)
+			vector.AppendFixed(lastColVec, lastVal, false, mp)
+		}
+		defer lastColVec.Free(mp)
+		cacheVectors := containers.Vectors{*compositePKVec, *lastColVec}
+		result := readFilter.UnSortedSearchFunc(cacheVectors)
 		// Should return empty slice since no matches (not nil, but empty slice)
 		require.Empty(t, result)
 	})
@@ -1812,7 +1840,15 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 		require.True(t, readFilter.Valid)
 
 		// With only BloomFilter, should return indices 0, 1, 2 (values 100, 200, 300)
-		result := readFilter.UnSortedSearchFunc(compositePKVec)
+		// Create last column vector for optimization
+		lastColVec := vector.NewVec(types.T_int64.ToType())
+		for _, tuple := range tuples {
+			lastVal := tuple[len(tuple)-1].(int64)
+			vector.AppendFixed(lastColVec, lastVal, false, mp)
+		}
+		defer lastColVec.Free(mp)
+		cacheVectors := containers.Vectors{*compositePKVec, *lastColVec}
+		result := readFilter.UnSortedSearchFunc(cacheVectors)
 		require.NotNil(t, result)
 		require.Contains(t, result, int64(0), "Should contain index 0 (value 100)")
 		require.Contains(t, result, int64(1), "Should contain index 1 (value 200)")
@@ -1847,7 +1883,15 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 		)
 		require.NoError(t, err)
 
-		result := readFilter.UnSortedSearchFunc(compositePKVec)
+		// Create last column vector for optimization
+		lastColVec := vector.NewVec(types.T_int32.ToType())
+		for _, tuple := range tuples {
+			lastVal := tuple[len(tuple)-1].(int32)
+			vector.AppendFixed(lastColVec, lastVal, false, mp)
+		}
+		defer lastColVec.Free(mp)
+		cacheVectors := containers.Vectors{*compositePKVec, *lastColVec}
+		result := readFilter.UnSortedSearchFunc(cacheVectors)
 		require.Equal(t, []int64{0, 1}, result)
 	})
 
@@ -1872,7 +1916,11 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 		)
 		require.NoError(t, err)
 
-		result := readFilter.UnSortedSearchFunc(compositePKVec)
+		// For empty vector, optimization path should return nil
+		emptyLastColVec := vector.NewVec(types.T_int64.ToType())
+		defer emptyLastColVec.Free(mp)
+		cacheVectors := containers.Vectors{*compositePKVec, *emptyLastColVec}
+		result := readFilter.UnSortedSearchFunc(cacheVectors)
 		require.Nil(t, result)
 	})
 
@@ -1901,7 +1949,11 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 		require.NoError(t, err)
 
 		// Should handle invalid data gracefully
-		result := readFilter.UnSortedSearchFunc(vec)
+		// For invalid data, optimization path should return nil
+		invalidLastColVec := vector.NewVec(types.T_int64.ToType())
+		defer invalidLastColVec.Free(mp)
+		cacheVectors := containers.Vectors{*vec, *invalidLastColVec}
+		result := readFilter.UnSortedSearchFunc(cacheVectors)
 		// Should return nil or empty since extraction fails
 		require.Nil(t, result)
 	})
