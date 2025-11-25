@@ -554,8 +554,9 @@ func TestExecutorRunFull(t *testing.T) {
 
 func TestIndexUpdateTaskInfoSaveStatusError(t *testing.T) {
 
+	var cancel context.CancelFunc
 	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, catalog.System_Account)
-	ctx, cancel := context.WithCancel(ctx)
+	ctx, cancel = context.WithCancel(ctx)
 	defer cancel()
 
 	/*
