@@ -551,3 +551,211 @@ func TestTime_NumericString_NoNewline(t *testing.T) {
 		})
 	}
 }
+
+// TestTime_NumericString_ScaleGreaterThan6 tests NumericString with scale > 6
+// This test ensures that scale > 6 does not cause panic and handles correctly
+func TestTime_NumericString_ScaleGreaterThan6(t *testing.T) {
+	testCases := []struct {
+		name        string
+		time        Time
+		scale       int32
+		expected    string // Expected output format
+		shouldPanic bool
+	}{
+		{
+			name:        "scale 7 - should pad with zeros",
+			time:        TimeFromClock(false, 11, 22, 33, 123456),
+			scale:       7,
+			expected:    "112233.1234560",
+			shouldPanic: false,
+		},
+		{
+			name:        "scale 8 - should pad with zeros",
+			time:        TimeFromClock(false, 11, 22, 33, 123456),
+			scale:       8,
+			expected:    "112233.12345600",
+			shouldPanic: false,
+		},
+		{
+			name:        "scale 9 - should pad with zeros",
+			time:        TimeFromClock(false, 11, 22, 33, 123456),
+			scale:       9,
+			expected:    "112233.123456000",
+			shouldPanic: false,
+		},
+		{
+			name:        "scale 10 - should pad to 10 digits",
+			time:        TimeFromClock(false, 11, 22, 33, 123456),
+			scale:       10,
+			expected:    "112233.1234560000", // Should pad to 10 digits (DECIMAL can support up to 38)
+			shouldPanic: false,
+		},
+		{
+			name:        "scale 20 - should pad to 20 digits",
+			time:        TimeFromClock(false, 11, 22, 33, 123456),
+			scale:       20,
+			expected:    "112233.12345600000000000000", // Should pad to 20 digits
+			shouldPanic: false,
+		},
+		{
+			name:        "scale 7 with zero microseconds",
+			time:        TimeFromClock(false, 11, 22, 33, 0),
+			scale:       7,
+			expected:    "112233.0000000",
+			shouldPanic: false,
+		},
+		{
+			name:        "scale 7 with single microsecond",
+			time:        TimeFromClock(false, 11, 22, 33, 1),
+			scale:       7,
+			expected:    "112233.0000010",
+			shouldPanic: false,
+		},
+		{
+			name:        "scale 7 negative time",
+			time:        TimeFromClock(true, 11, 22, 33, 123456),
+			scale:       7,
+			expected:    "-112233.1234560",
+			shouldPanic: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.shouldPanic {
+				require.Panics(t, func() {
+					tc.time.NumericString(tc.scale)
+				}, "NumericString should panic with scale > 6")
+			} else {
+				// This should not panic
+				result := tc.time.NumericString(tc.scale)
+				require.NotPanics(t, func() {
+					tc.time.NumericString(tc.scale)
+				}, "NumericString should not panic with scale > 6")
+				require.Equal(t, tc.expected, result, "NumericString output should match expected format")
+				// Ensure no newline character in the output
+				require.NotContains(t, result, "\n", "NumericString output should not contain newline")
+				require.NotContains(t, result, "\r", "NumericString output should not contain carriage return")
+			}
+		})
+	}
+}
+
+// TestTime_TruncateToScale_ScaleGreaterThan6 tests TruncateToScale with scale > 6
+// This test ensures that scale > 6 does not cause panic and handles correctly
+func TestTime_TruncateToScale_ScaleGreaterThan6(t *testing.T) {
+	testCases := []struct {
+		name     string
+		time     Time
+		scale    int32
+		expected Time // Expected result (should be same as input for scale >= 6)
+	}{
+		{
+			name:     "scale 7 - should return full precision",
+			time:     TimeFromClock(false, 11, 22, 33, 123456),
+			scale:    7,
+			expected: TimeFromClock(false, 11, 22, 33, 123456), // Should return same as input
+		},
+		{
+			name:     "scale 9 - should return full precision",
+			time:     TimeFromClock(false, 11, 22, 33, 123456),
+			scale:    9,
+			expected: TimeFromClock(false, 11, 22, 33, 123456), // Should return same as input
+		},
+		{
+			name:     "scale 10 - should return full precision",
+			time:     TimeFromClock(false, 11, 22, 33, 123456),
+			scale:    10,
+			expected: TimeFromClock(false, 11, 22, 33, 123456), // Should return same as input
+		},
+		{
+			name:     "scale 7 with zero microseconds",
+			time:     TimeFromClock(false, 11, 22, 33, 0),
+			scale:    7,
+			expected: TimeFromClock(false, 11, 22, 33, 0),
+		},
+		{
+			name:     "scale 7 negative time",
+			time:     TimeFromClock(true, 11, 22, 33, 123456),
+			scale:    7,
+			expected: TimeFromClock(true, 11, 22, 33, 123456),
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// This should not panic even with scale > 6
+			result := tc.time.TruncateToScale(tc.scale)
+			require.NotPanics(t, func() {
+				tc.time.TruncateToScale(tc.scale)
+			}, "TruncateToScale should not panic with scale > 6")
+			require.Equal(t, tc.expected, result, "TruncateToScale(%d) should return full precision for scale >= 6", tc.scale)
+		})
+	}
+}
+
+// TestTime_ToDecimal_ScaleGreaterThan6 tests ToDecimal64 and ToDecimal128 with scale > 6
+// These methods call NumericString internally, so they should handle scale > 6 correctly
+func TestTime_ToDecimal_ScaleGreaterThan6(t *testing.T) {
+	testCases := []struct {
+		name        string
+		time        Time
+		scale       int32
+		shouldPanic bool
+	}{
+		{
+			name:        "ToDecimal64 with scale 7",
+			time:        TimeFromClock(false, 11, 22, 33, 123456),
+			scale:       7,
+			shouldPanic: false,
+		},
+		{
+			name:        "ToDecimal64 with scale 9",
+			time:        TimeFromClock(false, 11, 22, 33, 123456),
+			scale:       9,
+			shouldPanic: false,
+		},
+		{
+			name:        "ToDecimal128 with scale 7",
+			time:        TimeFromClock(false, 11, 22, 33, 123456),
+			scale:       7,
+			shouldPanic: false,
+		},
+		{
+			name:        "ToDecimal128 with scale 9",
+			time:        TimeFromClock(false, 11, 22, 33, 123456),
+			scale:       9,
+			shouldPanic: false,
+		},
+		{
+			name:        "ToDecimal64 with scale 10",
+			time:        TimeFromClock(false, 11, 22, 33, 123456),
+			scale:       10,
+			shouldPanic: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.shouldPanic {
+				require.Panics(t, func() {
+					_, _ = tc.time.ToDecimal64(context.TODO(), 38, tc.scale)
+				}, "ToDecimal64 should panic with scale > 6")
+				require.Panics(t, func() {
+					_, _ = tc.time.ToDecimal128(context.TODO(), 38, tc.scale)
+				}, "ToDecimal128 should panic with scale > 6")
+			} else {
+				// These should not panic
+				require.NotPanics(t, func() {
+					_, err := tc.time.ToDecimal64(context.TODO(), 38, tc.scale)
+					require.NoError(t, err, "ToDecimal64 should not error with scale > 6")
+				}, "ToDecimal64 should not panic with scale > 6")
+
+				require.NotPanics(t, func() {
+					_, err := tc.time.ToDecimal128(context.TODO(), 38, tc.scale)
+					require.NoError(t, err, "ToDecimal128 should not error with scale > 6")
+				}, "ToDecimal128 should not panic with scale > 6")
+			}
+		})
+	}
+}

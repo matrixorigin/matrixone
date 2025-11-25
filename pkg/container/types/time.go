@@ -81,8 +81,22 @@ func (t Time) NumericString(scale int32) string {
 		symbol = "-"
 	}
 	if scale > 0 {
+		// Format microseconds as 6 digits (max precision we store)
 		msecInstr := fmt.Sprintf("%06d", ms)
-		msecInstr = msecInstr[:scale]
+		// For scale > 6, pad with zeros to the right
+		// TIME only stores 6 digits of microsecond precision, so we pad with zeros
+		// to match the requested DECIMAL scale (which can be up to 38)
+		if scale > 6 {
+			// Pad to requested scale by appending zeros
+			for len(msecInstr) < int(scale) {
+				msecInstr = msecInstr + "0"
+			}
+			// Use the full padded string (scale digits)
+			// No truncation needed since we padded to exactly scale length
+		} else {
+			// For scale <= 6, truncate from the right
+			msecInstr = msecInstr[:scale]
+		}
 		return fmt.Sprintf("%s%02d%02d%02d"+"."+msecInstr, symbol, h, m, s)
 	}
 	return fmt.Sprintf("%s%02d%02d%02d", symbol, h, m, s)
@@ -282,8 +296,10 @@ func (t Time) ToInt64() int64 {
 //   - 0: seconds (no fractional part)
 //   - 1-5: fractional seconds with corresponding precision
 //   - 6: microseconds (full precision, no truncation)
+//   - >6: treated as scale 6 (full precision)
 func (t Time) TruncateToScale(scale int32) Time {
-	if scale == 6 {
+	// For scale >= 6, return full precision (no truncation)
+	if scale >= 6 {
 		return t
 	}
 
@@ -304,7 +320,7 @@ func (t Time) TruncateToScale(scale int32) Time {
 	base := int64(microPart) / divisor
 
 	// Round up if the next digit >= 5
-	if int64(microPart)%divisor/(divisor/10) >= 5 {
+	if scale < 6 && int64(microPart)%divisor/(divisor/10) >= 5 {
 		base += 1
 	}
 
