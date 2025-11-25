@@ -591,6 +591,10 @@ func (bh *branchHashmap) Migrate(keyCols []int, parallelism int) (BranchHashmap,
 }
 
 func (bh *branchHashmap) projectInternal(keyCols []int, parallelism int, consume bool) (BranchHashmap, error) {
+	if bh.ItemCount() == 0 {
+		return NewBranchHashmap()
+	}
+
 	if len(keyCols) == 0 {
 		return nil, moerr.NewInvalidInputNoCtx("branchHashmap requires at least one key column for Project")
 	}
