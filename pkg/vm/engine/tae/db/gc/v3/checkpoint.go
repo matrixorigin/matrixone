@@ -1586,7 +1586,19 @@ func (c *checkpointCleaner) Process(
 	// Create snapshot of backup protection state
 	c.mutation.backupProtectionSnapshot.protectedTS = c.backupProtection.protectedTS
 	c.mutation.backupProtectionSnapshot.isActive = c.backupProtection.isActive
+	isBackupActive := c.backupProtection.isActive
+	protectedTS := c.backupProtection.protectedTS
 	c.backupProtection.Unlock()
+
+	// If backup protection is active, skip all GC operations
+	if isBackupActive {
+		logutil.Info(
+			"GC-Backup-Protection-Skip-All-GC",
+			zap.String("task", c.TaskNameLocked()),
+			zap.String("protected-ts", protectedTS.ToString()),
+		)
+		return nil
+	}
 
 	startScanWaterMark := c.GetScanWaterMark()
 	startGCWaterMark := c.GetGCWaterMark()
