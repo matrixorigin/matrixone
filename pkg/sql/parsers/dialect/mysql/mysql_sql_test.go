@@ -179,8 +179,8 @@ var (
 		input:  "select cluster_centers(a kmeans '5,vector_cosine_ops,random,true') from t1;",
 		output: "select cluster_centers(a, 5,vector_cosine_ops,random,true) from t1",
 	}, {
-		input:  "alter table t1 alter reindex idx1 IVFFLAT lists = 5",
-		output: "alter table t1 alter reindex idx1 ivfflat lists = 5",
+		input:  "alter table t1 alter reindex idx1 IVFFLAT lists = 5 auto_update = 1",
+		output: "alter table t1 alter reindex idx1 ivfflat lists = 5 auto_update = 1",
 	}, {
 		input:  "create connector for s with (\"type\"='kafka', \"topic\"= 'user', \"partition\" = '1', \"value\"= 'json', \"bootstrap.servers\" = '127.0.0.1:62610');",
 		output: "create connector for s with (type = kafka, topic = user, partition = 1, value = json, bootstrap.servers = 127.0.0.1:62610)",

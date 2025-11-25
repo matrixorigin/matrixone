@@ -2070,6 +2070,7 @@ type IndexOption struct {
 	HnswEfConstruction       int64
 	HnswEfSearch             int64
 	Async                    bool
+	AutoUpdate               bool
 }
 
 // Must follow the following sequence when test
@@ -2126,6 +2127,9 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 	}
 	if node.Async {
 		ctx.WriteString("ASYNC ")
+	}
+	if node.AutoUpdate {
+		ctx.WriteString("AUTO_UPDATE ")
 	}
 }
 

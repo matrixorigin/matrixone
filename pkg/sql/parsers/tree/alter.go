@@ -741,11 +741,11 @@ type AlterOptionAlterReIndex struct {
 	AlgoParamList int64
 }
 
-func NewAlterOptionAlterReIndex(name Identifier, keyType IndexType, algoParamList int64) *AlterOptionAlterReIndex {
+func NewAlterOptionAlterReIndex(name Identifier, option *IndexOption) *AlterOptionAlterReIndex {
 	a := reuse.Alloc[AlterOptionAlterReIndex](nil)
 	a.Name = name
-	a.KeyType = keyType
-	a.AlgoParamList = algoParamList
+	a.KeyType = option.IType
+	a.AlgoParamList = option.AlgoParamList
 	return a
 }
 

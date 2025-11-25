@@ -365,7 +365,7 @@ import (
 
 // Secondary Index
 %token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT MASTER HNSW
-%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_SEARCH EF_CONSTRUCTION M ASYNC
+%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_SEARCH EF_CONSTRUCTION M ASYNC AUTO_UPDATE
 
 // Alter
 %token <str> EXPIRE ACCOUNT ACCOUNTS UNLOCK DAY NEVER PUMP MYSQL_COMPATIBILITY_MODE UNIQUE_CHECK_ON_AUTOINCR
@@ -3848,23 +3848,27 @@ alter_table_alter:
         var visibility = $3
         $$ = tree.NewAlterOptionAlterIndex(indexName, visibility)
     }
-| REINDEX ident IVFFLAT LISTS equal_opt INTEGRAL
+| REINDEX ident IVFFLAT index_option_list
     {
-    	val := int64($6.(int64))
-    	if val <= 0 {
-		yylex.Error("LISTS should be greater than 0")
-		return 1
-    	}
-        var keyType = tree.INDEX_TYPE_IVFFLAT
-        var algoParamList = val
+        var io *tree.IndexOption = nil
+        if $4 == nil {
+            io = tree.NewIndexOption()
+            io.IType = tree.INDEX_TYPE_IVFFLAT
+        } else {
+            io = $4
+            io.IType = tree.INDEX_TYPE_IVFFLAT
+        }
         var name = tree.Identifier($2.Compare())
-        $$ = tree.NewAlterOptionAlterReIndex(name, keyType, algoParamList)
+        $$ = tree.NewAlterOptionAlterReIndex(name, io)
     }
 | REINDEX ident HNSW
     {
-        var keyType = tree.INDEX_TYPE_HNSW
+	
+        var io *tree.IndexOption = nil
+        io = tree.NewIndexOption()
+        io.IType = tree.INDEX_TYPE_HNSW
         var name = tree.Identifier($2.Compare())
-        $$ = tree.NewAlterOptionAlterReIndex(name, keyType, 0)
+        $$ = tree.NewAlterOptionAlterReIndex(name, io)
     }
 |   CHECK ident enforce
     {
@@ -7706,7 +7710,16 @@ index_option:
 	io.Async = true
 	$$ = io
      }
-	
+|    AUTO_UPDATE equal_opt INTEGRAL
+     {
+	io := tree.NewIndexOption()
+	io.AutoUpdate = true	
+        val := int64($3.(int64))
+        if val == 0 {
+		io.AutoUpdate = false	
+        }
+	$$ = io
+     }
 
 index_column_list:
     index_column
