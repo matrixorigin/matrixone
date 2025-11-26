@@ -114,7 +114,7 @@ func (srv *Server) CancelPipelineSending(
 			zap.Bool("alreadyDone", v.alreadyDone),
 			zap.Bool("hasReceiver", v.receiver != nil),
 			zap.Bool("isDispatch", v.isDispatch))
-			
+
 		if !v.isDispatch {
 			// Only cancel non-dispatch pipelines (query execution pipelines)
 			logutil.Debug("CancelPipelineSending canceling non-dispatch pipeline",
