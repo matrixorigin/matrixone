@@ -35,12 +35,6 @@ func (srv *Server) RecordDispatchPipeline(
 
 	// check if sender has sent a stop running message.
 	if v, ok := srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline[key]; ok && v.alreadyDone {
-		logutil.Debug("RecordDispatchPipeline found alreadyDone record",
-			zap.Uint64("streamID", streamID),
-			zap.Bool("hasReceiver", v.receiver != nil),
-			zap.Bool("isDispatch", v.isDispatch),
-			zap.Bool("hasQueryCancel", v.queryCancel != nil))
-
 		// Fix: Check if this is a stale record created by CancelPipelineSending
 		// before RecordDispatchPipeline was called (race condition).
 		// If receiver is nil, it means CancelPipelineSending created this record
@@ -72,17 +66,6 @@ func (srv *Server) RecordDispatchPipeline(
 				zap.String("oldReceiverUid", v.receiver.Uid.String()),
 				zap.String("newReceiverUid", dispatchReceiver.Uid.String()))
 			delete(srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline, key)
-		}
-	}
-
-	// Check if there's an existing record with a different receiver
-	// This can happen when multiple receivers share the same streamID
-	if existing, exists := srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline[key]; exists {
-		if existing.receiver != nil && existing.receiver.Uid != dispatchReceiver.Uid {
-			logutil.Debug("RecordDispatchPipeline: overwriting existing receiver with different Uid",
-				zap.Uint64("streamID", streamID),
-				zap.String("existingReceiverUid", existing.receiver.Uid.String()),
-				zap.String("newReceiverUid", dispatchReceiver.Uid.String()))
 		}
 	}
 
@@ -140,56 +123,19 @@ func (srv *Server) CancelPipelineSending(
 			zap.Bool("alreadyDone", v.alreadyDone),
 			zap.Bool("hasReceiver", v.receiver != nil),
 			zap.Bool("isDispatch", v.isDispatch))
-
-		// Fix: StopSending message is used to stop sending data, not to cancel
-		// dispatch receivers. Dispatch receivers are used to receive data and
-		// should continue receiving until data sending is complete.
-		// Only cancel non-dispatch pipelines (those that execute queries).
-		if v.isDispatch {
-			logutil.Debug("CancelPipelineSending: ignoring dispatch receiver (StopSending should not cancel receivers)",
-				zap.Uint64("streamID", streamID),
-				zap.String("receiverUid", func() string {
-					if v.receiver != nil {
-						return v.receiver.Uid.String()
-					}
-					return "nil"
-				}()))
-			// Don't cancel dispatch receivers - they should continue receiving data
-		} else {
+		if !v.isDispatch {
 			// Only cancel non-dispatch pipelines (query execution pipelines)
 			logutil.Debug("CancelPipelineSending canceling non-dispatch pipeline",
 				zap.Uint64("streamID", streamID))
 			v.cancelPipeline()
 		}
-	} else {
-		// Fix: Don't create a canceled record if no record exists.
-		// This can happen when StopSending arrives before PrepareDoneNotifyMessage.
-		// The RecordDispatchPipeline will handle the registration properly.
-		// Creating a canceled record here causes issues when multiple receivers
-		// share the same streamID (different sessions).
-		logutil.Debug("CancelPipelineSending: no existing record, ignoring (will be handled by RecordDispatchPipeline)",
-			zap.Uint64("streamID", streamID))
-		// Don't create canceled record - let RecordDispatchPipeline handle it
 	}
 }
 
 func (srv *Server) RemoveRelatedPipeline(session morpc.ClientSession, streamID uint64) {
 	key := generateRecordKey(session, streamID)
-
 	srv.receivedRunningPipeline.Lock()
 	defer srv.receivedRunningPipeline.Unlock()
-
-	if v, ok := srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline[key]; ok {
-		logutil.Debug("RemoveRelatedPipeline removing record",
-			zap.Uint64("streamID", streamID),
-			zap.Bool("alreadyDone", v.alreadyDone),
-			zap.Bool("hasReceiver", v.receiver != nil),
-			zap.Bool("isDispatch", v.isDispatch))
-	} else {
-		logutil.Debug("RemoveRelatedPipeline called but no record found",
-			zap.Uint64("streamID", streamID))
-	}
-
 	delete(srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline, key)
 }
 
