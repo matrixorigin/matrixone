@@ -191,24 +191,25 @@ func (t *IndexUpdateTaskInfo) checkIndexUpdatable(ctx context.Context, dsize uin
 
 func (t *IndexUpdateTaskInfo) saveStatus(sqlproc *sqlexec.SqlProcess, updated bool, reason string, err error) error {
 
-	errsqlfmt := "UPDATE mo_catalog.mo_index_update SET status = '%s' WHERE table_id = %d AND account_id = %d AND action = '%s'"
+	statussqlfmt := "UPDATE mo_catalog.mo_index_update SET status = '%s' WHERE table_id = %d AND account_id = %d AND action = '%s'"
 	updatesqlfmt := "UPDATE mo_catalog.mo_index_update SET last_update_at = now(), status = '%s' WHERE table_id = %d AND account_id = %d AND action = '%s'"
 
 	// skip update status if index is NOT updated
-	status := IndexUpdateStatus{Status: Status_Ok, Msg: "reindex success", Time: time.Now()}
-	if !updated {
-		status.Status = Status_Skipped
-		status.Msg = reason
-	}
-
+	status := IndexUpdateStatus{Time: time.Now()}
 	var sqlfmt string
 
 	if err != nil {
 		// save error status column to mo_index_update
 		status.Status = Status_Error
 		status.Msg = err.Error()
-		sqlfmt = errsqlfmt
+		sqlfmt = statussqlfmt
+	} else if !updated {
+		status.Status = Status_Skipped
+		status.Msg = reason
+		sqlfmt = statussqlfmt
 	} else {
+		status.Status = Status_Ok
+		status.Msg = "reindex success"
 		sqlfmt = updatesqlfmt
 	}
 
