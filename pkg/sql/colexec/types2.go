@@ -126,17 +126,32 @@ func (srv *Server) CancelPipelineSending(
 	defer srv.receivedRunningPipeline.Unlock()
 
 	if v, ok := srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline[key]; ok {
-		logutil.Info("[DEBUG] CancelPipelineSending found existing record, calling cancelPipeline",
+		logutil.Info("[DEBUG] CancelPipelineSending found existing record",
 			zap.Uint64("streamID", streamID),
 			zap.Bool("alreadyDone", v.alreadyDone),
 			zap.Bool("hasReceiver", v.receiver != nil),
 			zap.Bool("isDispatch", v.isDispatch))
-		if v.receiver != nil {
-			logutil.Info("[DEBUG] CancelPipelineSending canceling receiver",
+		
+		// Fix: StopSending message is used to stop sending data, not to cancel
+		// dispatch receivers. Dispatch receivers are used to receive data and
+		// should continue receiving until data sending is complete.
+		// Only cancel non-dispatch pipelines (those that execute queries).
+		if v.isDispatch {
+			logutil.Info("[DEBUG] CancelPipelineSending: ignoring dispatch receiver (StopSending should not cancel receivers)",
 				zap.Uint64("streamID", streamID),
-				zap.String("receiverUid", v.receiver.Uid.String()))
+				zap.String("receiverUid", func() string {
+					if v.receiver != nil {
+						return v.receiver.Uid.String()
+					}
+					return "nil"
+				}()))
+			// Don't cancel dispatch receivers - they should continue receiving data
+		} else {
+			// Only cancel non-dispatch pipelines (query execution pipelines)
+			logutil.Info("[DEBUG] CancelPipelineSending canceling non-dispatch pipeline",
+				zap.Uint64("streamID", streamID))
+			v.cancelPipeline()
 		}
-		v.cancelPipeline()
 	} else {
 		// Fix: Don't create a canceled record if no record exists.
 		// This can happen when StopSending arrives before PrepareDoneNotifyMessage.
