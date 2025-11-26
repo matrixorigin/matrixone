@@ -120,7 +120,13 @@ func ParseDatetime(s string, scale int32) (Datetime, error) {
 	if s[4] == '-' || s[4] == '/' || s[4] == ':' {
 		var num int64
 		var unum uint64
-		strArr := strings.Split(s, " ")
+		// Support both space-separated format (2024-12-20 10:30:45) and ISO 8601 format (2024-12-20T10:30:45)
+		var strArr []string
+		if strings.Contains(s, "T") {
+			strArr = strings.Split(s, "T")
+		} else {
+			strArr = strings.Split(s, " ")
+		}
 		if len(strArr) != 2 {
 			return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
 		}

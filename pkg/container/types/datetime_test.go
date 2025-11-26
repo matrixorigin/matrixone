@@ -292,6 +292,37 @@ func TestParseDatetime(t *testing.T) {
 			args: "2000:01:01 12:34:56.123456",
 			want: "2000-01-01 12:34:56.123456",
 		},
+		// 6. ISO 8601 format (yyyy-mm-ddThh:mm:ss)
+		{
+			name: "ISO 8601 format yyyy-mm-ddThh:mm:ss",
+			args: "2024-12-20T10:30:45",
+			want: "2024-12-20 10:30:45.000000",
+		},
+		{
+			name: "ISO 8601 format with microseconds",
+			args: "2024-12-20T10:30:45.123456",
+			want: "2024-12-20 10:30:45.123456",
+		},
+		{
+			name: "ISO 8601 format with milliseconds",
+			args: "2024-12-20T10:30:45.123",
+			want: "2024-12-20 10:30:45.123000",
+		},
+		{
+			name: "ISO 8601 format with single digit microseconds",
+			args: "2024-12-20T10:30:45.1",
+			want: "2024-12-20 10:30:45.100000",
+		},
+		{
+			name: "ISO 8601 format midnight",
+			args: "2024-12-20T00:00:00",
+			want: "2024-12-20 00:00:00.000000",
+		},
+		{
+			name: "ISO 8601 format end of day",
+			args: "2024-12-20T23:59:59",
+			want: "2024-12-20 23:59:59.000000",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

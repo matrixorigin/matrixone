@@ -1936,7 +1936,13 @@ func TimestampAddString(ivecs []*vector.Vector, result vector.FunctionResultWrap
 					}
 				} else {
 					// Format as DATETIME string (full format with time)
-					resultStr := resultDt.String2(0) // Use scale 0 for no fractional seconds
+					// For MICROSECOND unit, use scale 6 only if microsecond part is non-zero
+					// MySQL behavior: don't show .000000 if microsecond part is 0
+					scale := int32(0)
+					if iTyp == types.MicroSecond && resultDt.MicroSec() != 0 {
+						scale = 6
+					}
+					resultStr := resultDt.String2(scale)
 					if err = rs.AppendBytes([]byte(resultStr), false); err != nil {
 						return err
 					}
@@ -1998,7 +2004,13 @@ func TimestampAddString(ivecs []*vector.Vector, result vector.FunctionResultWrap
 				}
 			} else {
 				// Format as DATETIME string (full format with time)
-				resultStr := resultDt.String2(0) // Use scale 0 for no fractional seconds
+				// For MICROSECOND unit, use scale 6 only if microsecond part is non-zero
+				// MySQL behavior: don't show .000000 if microsecond part is 0
+				scale := int32(0)
+				if iTyp == types.MicroSecond && resultDt.MicroSec() != 0 {
+					scale = 6
+				}
+				resultStr := resultDt.String2(scale)
 				if err = rs.AppendBytes([]byte(resultStr), false); err != nil {
 					return err
 				}

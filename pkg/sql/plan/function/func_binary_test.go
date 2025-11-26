@@ -1346,6 +1346,88 @@ func TestTimestampAddStringPerformance(t *testing.T) {
 		// Time unit should return DATETIME format
 		require.Equal(t, "2024-12-20 02:00:00", string(resultBytes))
 	})
+
+	// Test case 5: ISO 8601 format support
+	t.Run("ISO 8601 format support", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+
+		testCases := []struct {
+			name     string
+			unit     string
+			interval int64
+			input    string
+			expected string
+		}{
+			{
+				name:     "ISO format with DAY unit",
+				unit:     "DAY",
+				interval: 5,
+				input:    "2024-12-20T10:30:45",
+				expected: "2024-12-25 10:30:45",
+			},
+			{
+				name:     "ISO format with HOUR unit",
+				unit:     "HOUR",
+				interval: 2,
+				input:    "2024-12-20T10:30:45",
+				expected: "2024-12-20 12:30:45",
+			},
+			{
+				name:     "ISO format with MINUTE unit",
+				unit:     "MINUTE",
+				interval: 30,
+				input:    "2024-12-20T10:30:45",
+				expected: "2024-12-20 11:00:45",
+			},
+			{
+				name:     "ISO format with SECOND unit",
+				unit:     "SECOND",
+				interval: 60,
+				input:    "2024-12-20T10:30:45",
+				expected: "2024-12-20 10:31:45",
+			},
+			{
+				name:     "ISO format with microseconds",
+				unit:     "MICROSECOND",
+				interval: 123456,
+				input:    "2024-12-20T10:30:45.000000",
+				expected: "2024-12-20 10:30:45.123456",
+			},
+			{
+				name:     "ISO format with MONTH unit",
+				unit:     "MONTH",
+				interval: 1,
+				input:    "2024-12-20T10:30:45",
+				expected: "2025-01-20 10:30:45",
+			},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				unitVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte(tc.unit), 1, proc.Mp())
+				intervalVec, _ := vector.NewConstFixed(types.T_int64.ToType(), tc.interval, 1, proc.Mp())
+				inputVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte(tc.input), 1, proc.Mp())
+
+				parameters := []*vector.Vector{unitVec, intervalVec, inputVec}
+				result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+
+				fnLength := inputVec.Length()
+				err := result.PreExtendAndReset(fnLength)
+				require.NoError(t, err)
+
+				err = TimestampAddString(parameters, result, proc, fnLength, nil)
+				require.NoError(t, err)
+
+				v := result.GetResultVector()
+				require.Equal(t, fnLength, v.Length())
+
+				strParam := vector.GenerateFunctionStrParameter(v)
+				resultBytes, null := strParam.GetStrValue(0)
+				require.False(t, null)
+				require.Equal(t, tc.expected, string(resultBytes))
+			})
+		}
+	})
 }
 
 // TestTimestampAddErrorHandling tests error handling for TIMESTAMPADD function

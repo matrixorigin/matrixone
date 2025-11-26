@@ -164,3 +164,311 @@ SELECT TIMESTAMPADD(YEAR, -1, '2024-02-29') AS negative_year_leap;
 # Negative day causing month rollback
 SELECT TIMESTAMPADD(DAY, -32, '2024-02-01') AS negative_day_feb;
 
+# ============================================
+# 11. Week Boundary Tests
+# ============================================
+
+# Week addition across month boundary
+SELECT TIMESTAMPADD(WEEK, 1, '2024-01-28') AS week_across_month;
+
+# Week addition across year boundary
+SELECT TIMESTAMPADD(WEEK, 1, '2024-12-28') AS week_across_year;
+
+# Multiple weeks
+SELECT TIMESTAMPADD(WEEK, 4, '2024-01-01') AS four_weeks;
+
+# Negative weeks
+SELECT TIMESTAMPADD(WEEK, -1, '2024-01-08') AS negative_week;
+
+# ============================================
+# 12. Microsecond Precision Tests
+# ============================================
+
+# Microsecond addition with different scales
+SELECT TIMESTAMPADD(MICROSECOND, 1, '2024-12-20 10:30:45.000000') AS microsecond_scale_0;
+SELECT TIMESTAMPADD(MICROSECOND, 1, '2024-12-20 10:30:45.123456') AS microsecond_scale_6;
+SELECT TIMESTAMPADD(MICROSECOND, 999999, '2024-12-20 10:30:45.000000') AS microsecond_near_second;
+SELECT TIMESTAMPADD(MICROSECOND, 1000000, '2024-12-20 10:30:45.000000') AS microsecond_one_second;
+
+# Negative microseconds
+SELECT TIMESTAMPADD(MICROSECOND, -1, '2024-12-20 10:30:45.000001') AS negative_microsecond;
+
+# ============================================
+# 13. Mixed Date and Time Units
+# ============================================
+
+# DATE input with time units (should return DATETIME)
+SELECT TIMESTAMPADD(HOUR, 25, '2024-12-20') AS date_plus_hours;
+SELECT TIMESTAMPADD(MINUTE, 1440, '2024-12-20') AS date_plus_minutes;
+SELECT TIMESTAMPADD(SECOND, 86400, '2024-12-20') AS date_plus_seconds;
+SELECT TIMESTAMPADD(MICROSECOND, 86400000000, '2024-12-20') AS date_plus_microseconds;
+
+# DATE input with date units (should return DATE)
+SELECT TIMESTAMPADD(DAY, 1, '2024-12-20') AS date_plus_day;
+SELECT TIMESTAMPADD(WEEK, 1, '2024-12-20') AS date_plus_week;
+SELECT TIMESTAMPADD(MONTH, 1, '2024-12-20') AS date_plus_month;
+SELECT TIMESTAMPADD(QUARTER, 1, '2024-12-20') AS date_plus_quarter;
+SELECT TIMESTAMPADD(YEAR, 1, '2024-12-20') AS date_plus_year;
+
+# ============================================
+# 14. String Input Edge Cases
+# ============================================
+
+# DATE format string with date units
+SELECT TIMESTAMPADD(DAY, 1, '2024-12-20') AS string_date_day;
+SELECT TIMESTAMPADD(MONTH, 1, '2024-12-20') AS string_date_month;
+
+# DATE format string with time units (should return DATETIME string)
+SELECT TIMESTAMPADD(HOUR, 1, '2024-12-20') AS string_date_hour;
+SELECT TIMESTAMPADD(MINUTE, 30, '2024-12-20') AS string_date_minute;
+
+# DATETIME format string
+SELECT TIMESTAMPADD(DAY, 1, '2024-12-20 10:30:45') AS string_datetime_day;
+SELECT TIMESTAMPADD(HOUR, 1, '2024-12-20 10:30:45') AS string_datetime_hour;
+
+# ============================================
+# 15. Zero and Negative Edge Cases
+# ============================================
+
+# Zero interval
+SELECT TIMESTAMPADD(DAY, 0, '2024-12-20') AS zero_interval_day;
+SELECT TIMESTAMPADD(MONTH, 0, '2024-12-20') AS zero_interval_month;
+SELECT TIMESTAMPADD(YEAR, 0, '2024-12-20') AS zero_interval_year;
+
+# Large negative intervals
+SELECT TIMESTAMPADD(YEAR, -100, '2024-01-01') AS large_negative_year;
+SELECT TIMESTAMPADD(MONTH, -1200, '2024-01-01') AS large_negative_month;
+SELECT TIMESTAMPADD(DAY, -36500, '2024-01-01') AS large_negative_day;
+
+# ============================================
+# 16. Boundary Date Combinations
+# ============================================
+
+# Feb 29 in different scenarios
+SELECT TIMESTAMPADD(DAY, 1, '2020-02-28') AS feb28_to_feb29_leap;
+SELECT TIMESTAMPADD(DAY, 1, '2021-02-28') AS feb28_to_mar1_non_leap;
+SELECT TIMESTAMPADD(DAY, -1, '2020-03-01') AS mar1_to_feb29_leap;
+SELECT TIMESTAMPADD(DAY, -1, '2021-03-01') AS mar1_to_feb28_non_leap;
+
+# Month end scenarios
+SELECT TIMESTAMPADD(MONTH, 1, '2024-04-30') AS apr30_plus_month;
+SELECT TIMESTAMPADD(MONTH, 1, '2024-06-30') AS jun30_plus_month;
+SELECT TIMESTAMPADD(MONTH, 1, '2024-09-30') AS sep30_plus_month;
+
+# ============================================
+# 17. Complex Table Operations
+# ============================================
+
+# Multiple edge cases in one query
+CREATE TABLE t1(d DATE, dt DATETIME);
+INSERT INTO t1 VALUES 
+    ('2024-01-31', '2024-12-20 23:59:59'),
+    ('2020-02-28', '2024-12-20 00:00:00'),
+    ('2024-12-31', '2024-12-20 12:30:45');
+SELECT d, TIMESTAMPADD(MONTH, 1, d) AS next_month, 
+       dt, TIMESTAMPADD(HOUR, 1, dt) AS next_hour 
+FROM t1;
+DROP TABLE t1;
+
+# Edge cases with WHERE clause
+CREATE TABLE t1(d DATE);
+INSERT INTO t1 VALUES ('2024-01-31'), ('2024-03-31'), ('2024-05-31'), ('2024-07-31');
+SELECT d, TIMESTAMPADD(MONTH, 1, d) AS next_month 
+FROM t1 
+WHERE TIMESTAMPADD(MONTH, 1, d) > '2024-02-01';
+DROP TABLE t1;
+
+# Edge cases with ORDER BY
+CREATE TABLE t1(d DATE);
+INSERT INTO t1 VALUES ('2024-12-31'), ('2024-01-01'), ('2024-06-15');
+SELECT d, TIMESTAMPADD(DAY, 1, d) AS next_day 
+FROM t1 
+ORDER BY TIMESTAMPADD(DAY, 1, d);
+DROP TABLE t1;
+
+# ============================================
+# 18. TIMESTAMP Type Edge Cases
+# ============================================
+
+# TIMESTAMP with time boundary
+SELECT TIMESTAMPADD(SECOND, 1, TIMESTAMP('2024-12-20 23:59:59')) AS timestamp_boundary;
+
+# TIMESTAMP with date boundary
+SELECT TIMESTAMPADD(DAY, 1, TIMESTAMP('2024-12-31 10:30:45')) AS timestamp_date_boundary;
+
+# TIMESTAMP with month overflow
+SELECT TIMESTAMPADD(MONTH, 1, TIMESTAMP('2024-01-31 10:30:45')) AS timestamp_month_overflow;
+
+# ============================================
+# 19. Very Large Intervals
+# ============================================
+
+# Maximum supported intervals
+SELECT TIMESTAMPADD(YEAR, 9999, '0001-01-01') AS max_year_interval;
+SELECT TIMESTAMPADD(MONTH, 119988, '0001-01-01') AS max_month_interval;
+SELECT TIMESTAMPADD(DAY, 3652059, '0001-01-01') AS max_day_interval;
+
+# ============================================
+# 20. Special Date Values
+# ============================================
+
+# First day of year
+SELECT TIMESTAMPADD(DAY, -1, '2024-01-01') AS first_day_minus_one;
+SELECT TIMESTAMPADD(DAY, 1, '2024-01-01') AS first_day_plus_one;
+
+# Last day of year
+SELECT TIMESTAMPADD(DAY, -1, '2024-12-31') AS last_day_minus_one;
+SELECT TIMESTAMPADD(DAY, 1, '2024-12-31') AS last_day_plus_one;
+
+# First and last day of month
+SELECT TIMESTAMPADD(DAY, -1, '2024-02-01') AS feb_first_minus_one;
+SELECT TIMESTAMPADD(DAY, 1, '2024-02-28') AS feb_last_plus_one;
+SELECT TIMESTAMPADD(DAY, 1, '2024-02-29') AS feb29_plus_one_leap;
+
+# ============================================
+# 21. Error Handling Tests (Expected Errors)
+# ============================================
+
+# Invalid unit parameter (should return error)
+-- Note: These will cause syntax errors, so they're commented out
+-- SELECT TIMESTAMPADD('INVALID_UNIT', 5, '2024-12-20') AS invalid_unit;
+-- SELECT TIMESTAMPADD(NULL, 5, '2024-12-20') AS null_unit;
+
+# Invalid date string (should return NULL or error)
+SELECT TIMESTAMPADD(DAY, 5, '2024-13-45') AS invalid_date_string;
+SELECT TIMESTAMPADD(DAY, 5, 'not-a-date') AS invalid_date_format;
+SELECT TIMESTAMPADD(DAY, 5, '2024-02-30') AS invalid_feb_date;
+SELECT TIMESTAMPADD(DAY, 5, '2024-04-31') AS invalid_apr_date;
+
+# NULL handling
+SELECT TIMESTAMPADD(DAY, 5, NULL) AS null_date;
+SELECT TIMESTAMPADD(DAY, NULL, '2024-12-20') AS null_interval;
+# Note: NULL as unit parameter would cause syntax error, so commented out
+-- SELECT TIMESTAMPADD(NULL, 5, '2024-12-20') AS null_unit;
+
+# ============================================
+# 22. Return Type Verification Tests
+# ============================================
+
+# DATE + date unit should return DATE format (no time part)
+CREATE TABLE t1(d DATE);
+INSERT INTO t1 VALUES ('2024-12-20');
+SELECT d, TIMESTAMPADD(DAY, 5, d) AS result_day FROM t1;
+SELECT d, TIMESTAMPADD(WEEK, 1, d) AS result_week FROM t1;
+SELECT d, TIMESTAMPADD(MONTH, 1, d) AS result_month FROM t1;
+SELECT d, TIMESTAMPADD(QUARTER, 1, d) AS result_quarter FROM t1;
+SELECT d, TIMESTAMPADD(YEAR, 1, d) AS result_year FROM t1;
+DROP TABLE t1;
+
+# DATE + time unit should return DATETIME format (with time part)
+CREATE TABLE t1(d DATE);
+INSERT INTO t1 VALUES ('2024-12-20');
+SELECT d, TIMESTAMPADD(HOUR, 2, d) AS result_hour FROM t1;
+SELECT d, TIMESTAMPADD(MINUTE, 30, d) AS result_minute FROM t1;
+SELECT d, TIMESTAMPADD(SECOND, 45, d) AS result_second FROM t1;
+SELECT d, TIMESTAMPADD(MICROSECOND, 123456, d) AS result_microsecond FROM t1;
+DROP TABLE t1;
+
+# ============================================
+# 23. Complex Query Scenarios
+# ============================================
+
+# JOIN operations with TIMESTAMPADD
+CREATE TABLE t1(id INT, d DATE);
+CREATE TABLE t2(id INT, interval_val INT);
+INSERT INTO t1 VALUES (1, '2024-01-31'), (2, '2024-03-31');
+INSERT INTO t2 VALUES (1, 1), (2, 2);
+SELECT t1.d, t2.interval_val, TIMESTAMPADD(MONTH, t2.interval_val, t1.d) AS result
+FROM t1 JOIN t2 ON t1.id = t2.id;
+DROP TABLE t1;
+DROP TABLE t2;
+
+# Subquery with TIMESTAMPADD
+CREATE TABLE t1(d DATE);
+INSERT INTO t1 VALUES ('2024-01-31'), ('2024-03-31'), ('2024-05-31');
+SELECT d FROM t1 WHERE TIMESTAMPADD(MONTH, 1, d) > '2024-02-01';
+DROP TABLE t1;
+
+# GROUP BY with TIMESTAMPADD
+CREATE TABLE t1(d DATE, category VARCHAR(10));
+INSERT INTO t1 VALUES ('2024-01-31', 'A'), ('2024-03-31', 'A'), ('2024-05-31', 'B');
+SELECT category, TIMESTAMPADD(MONTH, 1, MIN(d)) AS min_next_month
+FROM t1 GROUP BY category;
+DROP TABLE t1;
+
+# ============================================
+# 24. String Input Format Variations
+# ============================================
+
+# Different DATE string formats
+SELECT TIMESTAMPADD(DAY, 1, '2024-12-20') AS standard_date_format;
+SELECT TIMESTAMPADD(DAY, 1, '20241220') AS compact_date_format;
+
+# Different DATETIME string formats
+SELECT TIMESTAMPADD(HOUR, 1, '2024-12-20 10:30:45') AS standard_datetime_format;
+SELECT TIMESTAMPADD(HOUR, 1, '2024-12-20T10:30:45') AS iso_datetime_format;
+
+# ============================================
+# 25. Scale and Precision Tests
+# ============================================
+
+# DATETIME with different scales
+CREATE TABLE t1(dt0 DATETIME(0), dt3 DATETIME(3), dt6 DATETIME(6));
+INSERT INTO t1 VALUES 
+    ('2024-12-20 10:30:45', '2024-12-20 10:30:45.123', '2024-12-20 10:30:45.123456');
+SELECT dt0, TIMESTAMPADD(MICROSECOND, 1, dt0) AS dt0_result FROM t1;
+SELECT dt3, TIMESTAMPADD(MICROSECOND, 1, dt3) AS dt3_result FROM t1;
+SELECT dt6, TIMESTAMPADD(MICROSECOND, 1, dt6) AS dt6_result FROM t1;
+DROP TABLE t1;
+
+# ============================================
+# 26. Cross-Type Compatibility Tests
+# ============================================
+
+# DATE column with different unit keywords (not string literals)
+# Note: TIMESTAMPADD requires unit as keyword, not string literal
+# String literals like 'DAY' would cause syntax error
+CREATE TABLE t1(d DATE);
+INSERT INTO t1 VALUES ('2024-12-20');
+SELECT d, TIMESTAMPADD(DAY, 5, d) AS day_unit FROM t1;
+SELECT d, TIMESTAMPADD(MONTH, 1, d) AS month_unit FROM t1;
+SELECT d, TIMESTAMPADD(HOUR, 2, d) AS hour_unit FROM t1;
+DROP TABLE t1;
+
+# ============================================
+# 27. Performance Edge Cases
+# ============================================
+
+# Large batch operations
+CREATE TABLE t1(d DATE);
+INSERT INTO t1 VALUES 
+    ('2024-01-31'), ('2024-03-31'), ('2024-05-31'), ('2024-07-31'), ('2024-08-31'),
+    ('2024-10-31'), ('2024-12-31'), ('2020-02-28'), ('2021-02-28'), ('2020-02-29');
+SELECT d, TIMESTAMPADD(MONTH, 1, d) AS next_month FROM t1 ORDER BY d;
+DROP TABLE t1;
+
+# Mixed DATE and DATETIME in same query
+CREATE TABLE t1(d DATE, dt DATETIME);
+INSERT INTO t1 VALUES ('2024-12-20', '2024-12-20 10:30:45');
+SELECT TIMESTAMPADD(DAY, 1, d) AS date_result, 
+       TIMESTAMPADD(DAY, 1, dt) AS datetime_result FROM t1;
+DROP TABLE t1;
+
+# ============================================
+# 28. Special Calendar Scenarios
+# ============================================
+
+# Year 2000 (Y2K)
+SELECT TIMESTAMPADD(YEAR, 1, '1999-12-31') AS y2k_boundary;
+
+# Year 2100 (not a leap year)
+SELECT TIMESTAMPADD(DAY, 1, '2100-02-28') AS year2100_feb28;
+
+# Year 2400 (leap year)
+SELECT TIMESTAMPADD(DAY, 1, '2400-02-28') AS year2400_feb28;
+
+# Century boundaries
+SELECT TIMESTAMPADD(YEAR, 1, '1899-12-31') AS century_19_to_20;
+SELECT TIMESTAMPADD(YEAR, 1, '1999-12-31') AS century_20_to_21;
+SELECT TIMESTAMPADD(YEAR, 1, '2099-12-31') AS century_21_to_22;
+
