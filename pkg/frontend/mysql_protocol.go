@@ -3116,56 +3116,10 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow2(mrs *MysqlResultSet, colS
 				return err
 			}
 		case defines.MYSQL_TYPE_DATETIME, defines.MYSQL_TYPE_TIMESTAMP:
-			var dt types.Datetime
-			var err error
-			var value string
-			typ := colSlices.GetType(i)
-			switch typ.Oid {
-			case types.T_datetime:
-				value, err = GetDatetime(colSlices, rowIdx, i)
-				if err != nil {
-					return err
-				}
-				// For binary protocol, ensure full DATETIME format (not DATE format)
-				// JDBC clients expect full DATETIME format for MYSQL_TYPE_DATETIME/TIMESTAMP columns
-				// This avoids "Invalid length (10) for type TIMESTAMP" errors
-				if len(value) == 10 { // DATE format "YYYY-MM-DD"
-					value = value + " 00:00:00"
-				}
-			case types.T_timestamp:
-				value, err = GetTimestamp(colSlices, rowIdx, i, mp.ses.GetTimeZone())
-				if err != nil {
-					return err
-				}
-				// Ensure full DATETIME format for TIMESTAMP
-				if len(value) == 10 { // DATE format "YYYY-MM-DD"
-					value = value + " 00:00:00"
-				}
-			case types.T_date:
-				// Handle DATE type when MySQL column type is MYSQL_TYPE_DATETIME
-				// This can happen when TIMESTAMPADD with DATE input returns DATE type
-				// but MySQL column type is set to MYSQL_TYPE_DATETIME
-				date, err := GetDate(colSlices, rowIdx, i)
-				if err != nil {
-					return err
-				}
-				// Convert DATE to DATETIME format string
-				value = date.String() + " 00:00:00"
-			default:
-				return moerr.NewInternalErrorf(mp.ctx, "unknown type %s in datetime or timestamp", typ.Oid)
-			}
-
-			idx := strings.Index(value, ".")
-			if idx == -1 {
-				dt, err = types.ParseDatetime(value, 0)
-				if err != nil {
-					return err
-				}
-			} else {
-				dt, err = types.ParseDatetime(value, int32(len(value)-idx-1))
-				if err != nil {
-					return err
-				}
+			// Use unified function to prepare Datetime for binary protocol
+			dt, err := prepareDatetimeForBinaryProtocol(colSlices, rowIdx, i, mysqlColumn.ColumnType(), mp.ses.GetTimeZone())
+			if err != nil {
+				return err
 			}
 			// For binary protocol, always encode as 7 bytes (with time part) for MYSQL_TYPE_DATETIME/TIMESTAMP
 			// JDBC clients expect TIMESTAMP format (7 or 11 bytes), not DATE format (4 bytes)
@@ -4102,4 +4056,73 @@ func formatDateOrDatetimeForMySQL(
 	default:
 		return "", moerr.NewInternalErrorf(context.Background(), "unsupported MySQL column type %d", mysqlColumnType)
 	}
+}
+
+// prepareDatetimeForBinaryProtocol prepares a Datetime value for binary protocol encoding.
+// This function handles the special cases for TIMESTAMPADD function results in binary protocol:
+// - Converts DATE type to DATETIME when MySQL column type is MYSQL_TYPE_DATETIME/TIMESTAMP
+// - Ensures full DATETIME format (not DATE format) for binary protocol
+// - Returns the Datetime value and an error if any
+func prepareDatetimeForBinaryProtocol(
+	colSlices *ColumnSlices,
+	rowIdx uint64,
+	colIdx uint64,
+	mysqlColumnType defines.MysqlType,
+	timeZone *time.Location,
+) (types.Datetime, error) {
+	var dt types.Datetime
+	var err error
+	var value string
+	typ := colSlices.GetType(colIdx)
+
+	switch typ.Oid {
+	case types.T_datetime:
+		value, err = GetDatetime(colSlices, rowIdx, colIdx)
+		if err != nil {
+			return dt, err
+		}
+		// For binary protocol, ensure full DATETIME format (not DATE format)
+		// JDBC clients expect full DATETIME format for MYSQL_TYPE_DATETIME/TIMESTAMP columns
+		// This avoids "Invalid length (10) for type TIMESTAMP" errors
+		if len(value) == 10 { // DATE format "YYYY-MM-DD"
+			value = value + " 00:00:00"
+		}
+	case types.T_timestamp:
+		value, err = GetTimestamp(colSlices, rowIdx, colIdx, timeZone)
+		if err != nil {
+			return dt, err
+		}
+		// Ensure full DATETIME format for TIMESTAMP
+		if len(value) == 10 { // DATE format "YYYY-MM-DD"
+			value = value + " 00:00:00"
+		}
+	case types.T_date:
+		// Handle DATE type when MySQL column type is MYSQL_TYPE_DATETIME/TIMESTAMP
+		// This can happen when TIMESTAMPADD with DATE input returns DATE type
+		// but MySQL column type is set to MYSQL_TYPE_DATETIME/TIMESTAMP
+		date, err2 := GetDate(colSlices, rowIdx, colIdx)
+		if err2 != nil {
+			return dt, err2
+		}
+		// Convert DATE to DATETIME format string for binary protocol
+		value = date.String() + " 00:00:00"
+	default:
+		return dt, moerr.NewInternalErrorf(context.Background(), "unknown type %s in datetime or timestamp", typ.Oid)
+	}
+
+	// Parse the string value to Datetime
+	idx := strings.Index(value, ".")
+	if idx == -1 {
+		dt, err = types.ParseDatetime(value, 0)
+		if err != nil {
+			return dt, err
+		}
+	} else {
+		dt, err = types.ParseDatetime(value, int32(len(value)-idx-1))
+		if err != nil {
+			return dt, err
+		}
+	}
+
+	return dt, nil
 }

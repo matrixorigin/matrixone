@@ -4368,3 +4368,174 @@ func Test_appendResultSetTextRow_ScaleHandling(t *testing.T) {
 		})
 	})
 }
+
+// Test_appendResultSetBinaryRow2_DateTimeHandling tests that appendResultSetBinaryRow2 correctly handles
+// DATE/DATETIME/TIMESTAMP types for TIMESTAMPADD function results in binary protocol.
+// This ensures the fix for TIMESTAMPADD return type handling in binary protocol.
+func Test_appendResultSetBinaryRow2_DateTimeHandling(t *testing.T) {
+	ctx := context.TODO()
+	convey.Convey("appendResultSetBinaryRow2 DATE/DATETIME/TIMESTAMP handling", t, func() {
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+		pu := config.NewParameterUnit(sv, nil, nil, nil)
+		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
+		setSessionAlloc("", NewLeakCheckAllocator())
+		setPu("", pu)
+		ioses, err := NewIOSession(&testConn{}, pu, "")
+		convey.ShouldBeNil(err)
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
+
+		ses := NewSession(ctx, "", proto, nil)
+		proto.ses = ses
+
+		proc := testutil.NewProcess(t)
+
+		// Test DATETIME column with DATE type (TIMESTAMPADD with DATE input + date unit)
+		convey.Convey("MYSQL_TYPE_DATETIME with DATE type", func() {
+			rs := &MysqlResultSet{}
+			mysqlCol := new(MysqlColumn)
+			mysqlCol.SetName("datetime_col")
+			mysqlCol.SetColumnType(defines.MYSQL_TYPE_DATETIME)
+			mysqlCol.SetDecimal(0)
+			rs.AddColumn(mysqlCol)
+
+			// Create a batch with DATE type vector
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vector.NewVec(types.New(types.T_date, 0, 0))
+			date := types.Date(types.DateFromCalendar(2024, 1, 15))
+			vector.AppendFixed(bat.Vecs[0], date, false, proc.Mp())
+			bat.SetRowCount(1)
+
+			colSlices := &ColumnSlices{
+				ctx:             ctx,
+				colIdx2SliceIdx: make([]int, len(bat.Vecs)),
+				dataSet:         bat,
+			}
+			defer colSlices.Close()
+			err = convertBatchToSlices(ctx, ses, bat, colSlices)
+			convey.So(err, convey.ShouldBeNil)
+
+			err := proto.appendResultSetBinaryRow2(rs, colSlices, 0)
+			convey.So(err, convey.ShouldBeNil)
+		})
+
+		// Test DATETIME column with DATETIME type (TIMESTAMPADD with DATE input + time unit)
+		convey.Convey("MYSQL_TYPE_DATETIME with DATETIME type", func() {
+			rs := &MysqlResultSet{}
+			mysqlCol := new(MysqlColumn)
+			mysqlCol.SetName("datetime_col")
+			mysqlCol.SetColumnType(defines.MYSQL_TYPE_DATETIME)
+			mysqlCol.SetDecimal(0)
+			rs.AddColumn(mysqlCol)
+
+			// Create a batch with DATETIME type vector
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vector.NewVec(types.New(types.T_datetime, 0, 0))
+			dt, _ := types.ParseDatetime("2024-01-15 10:20:30", 0)
+			vector.AppendFixed(bat.Vecs[0], dt, false, proc.Mp())
+			bat.SetRowCount(1)
+
+			colSlices := &ColumnSlices{
+				ctx:             ctx,
+				colIdx2SliceIdx: make([]int, len(bat.Vecs)),
+				dataSet:         bat,
+			}
+			defer colSlices.Close()
+			err = convertBatchToSlices(ctx, ses, bat, colSlices)
+			convey.So(err, convey.ShouldBeNil)
+
+			err := proto.appendResultSetBinaryRow2(rs, colSlices, 0)
+			convey.So(err, convey.ShouldBeNil)
+		})
+
+		// Test TIMESTAMP column with DATE type (TIMESTAMPADD with DATE input + date unit)
+		convey.Convey("MYSQL_TYPE_TIMESTAMP with DATE type", func() {
+			rs := &MysqlResultSet{}
+			mysqlCol := new(MysqlColumn)
+			mysqlCol.SetName("timestamp_col")
+			mysqlCol.SetColumnType(defines.MYSQL_TYPE_TIMESTAMP)
+			mysqlCol.SetDecimal(0)
+			rs.AddColumn(mysqlCol)
+
+			// Create a batch with DATE type vector
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vector.NewVec(types.New(types.T_date, 0, 0))
+			date := types.Date(types.DateFromCalendar(2024, 1, 15))
+			vector.AppendFixed(bat.Vecs[0], date, false, proc.Mp())
+			bat.SetRowCount(1)
+
+			colSlices := &ColumnSlices{
+				ctx:             ctx,
+				colIdx2SliceIdx: make([]int, len(bat.Vecs)),
+				dataSet:         bat,
+			}
+			defer colSlices.Close()
+			err = convertBatchToSlices(ctx, ses, bat, colSlices)
+			convey.So(err, convey.ShouldBeNil)
+
+			err := proto.appendResultSetBinaryRow2(rs, colSlices, 0)
+			convey.So(err, convey.ShouldBeNil)
+		})
+
+		// Test TIMESTAMP column with TIMESTAMP type
+		convey.Convey("MYSQL_TYPE_TIMESTAMP with TIMESTAMP type", func() {
+			rs := &MysqlResultSet{}
+			mysqlCol := new(MysqlColumn)
+			mysqlCol.SetName("timestamp_col")
+			mysqlCol.SetColumnType(defines.MYSQL_TYPE_TIMESTAMP)
+			mysqlCol.SetDecimal(0)
+			rs.AddColumn(mysqlCol)
+
+			// Create a batch with TIMESTAMP type vector
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vector.NewVec(types.New(types.T_timestamp, 0, 0))
+			ts, _ := types.ParseTimestamp(time.UTC, "2024-01-15 10:20:30", 0)
+			vector.AppendFixed(bat.Vecs[0], ts, false, proc.Mp())
+			bat.SetRowCount(1)
+
+			colSlices := &ColumnSlices{
+				ctx:             ctx,
+				colIdx2SliceIdx: make([]int, len(bat.Vecs)),
+				dataSet:         bat,
+			}
+			defer colSlices.Close()
+			err = convertBatchToSlices(ctx, ses, bat, colSlices)
+			convey.So(err, convey.ShouldBeNil)
+
+			err := proto.appendResultSetBinaryRow2(rs, colSlices, 0)
+			convey.So(err, convey.ShouldBeNil)
+		})
+
+		// Test DATETIME column with DATETIME type having fractional seconds
+		convey.Convey("MYSQL_TYPE_DATETIME with DATETIME type (with microseconds)", func() {
+			rs := &MysqlResultSet{}
+			mysqlCol := new(MysqlColumn)
+			mysqlCol.SetName("datetime_col")
+			mysqlCol.SetColumnType(defines.MYSQL_TYPE_DATETIME)
+			mysqlCol.SetDecimal(6) // Microsecond precision
+			rs.AddColumn(mysqlCol)
+
+			// Create a batch with DATETIME type vector (with microseconds)
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vector.NewVec(types.New(types.T_datetime, 0, 6))
+			dt, _ := types.ParseDatetime("2024-01-15 10:20:30.123456", 6)
+			vector.AppendFixed(bat.Vecs[0], dt, false, proc.Mp())
+			bat.SetRowCount(1)
+
+			colSlices := &ColumnSlices{
+				ctx:             ctx,
+				colIdx2SliceIdx: make([]int, len(bat.Vecs)),
+				dataSet:         bat,
+			}
+			defer colSlices.Close()
+			err = convertBatchToSlices(ctx, ses, bat, colSlices)
+			convey.So(err, convey.ShouldBeNil)
+
+			err := proto.appendResultSetBinaryRow2(rs, colSlices, 0)
+			convey.So(err, convey.ShouldBeNil)
+		})
+	})
+}
