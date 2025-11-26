@@ -57,8 +57,9 @@ const (
 	Action_Ivfflat_Reindex = "ivfflat_reindex"
 	Action_Wildcard        = "*"
 
-	Status_Error = "error"
-	Status_Ok    = "ok"
+	Status_Error   = "error"
+	Status_Ok      = "ok"
+	Status_Skipped = "skipped"
 
 	OneWeek                 = 24 * 7 * time.Hour
 	KmeansTrainPercentParam = "kmeans_train_percent"
@@ -117,13 +118,13 @@ func (t *IndexUpdateTaskInfo) checkIndexUpdatable(ctx context.Context, dsize uin
 	ts := createdAt.Add(createdAtDelay)
 	if ts.After(now) {
 		// skip update when createdAt + delay is after current time
-		reason = fmt.Sprintf("IndexUpdateTask skipped. reason: current time < 2 days after createdAt (%v < %v)", createdAt, ts)
+		reason = fmt.Sprintf("current time < 2 days after createdAt (%v < %v)", createdAt, ts)
 		return
 	}
 
 	// If data size is smaller than nlist, skip the reindex
 	if dsize < uint64(nlist) {
-		reason = fmt.Sprintf("IndexUpdateTask skipped. reason: source data size < Nlist (%d < %d)", dsize, nlist)
+		reason = fmt.Sprintf("source data size < Nlist (%d < %d)", dsize, nlist)
 		return
 	}
 
@@ -156,7 +157,7 @@ func (t *IndexUpdateTaskInfo) checkIndexUpdatable(ctx context.Context, dsize uin
 		ts = time.Unix(t.LastUpdateAt.Unix(), 0)
 		ts = ts.Add(OneWeek)
 		if ts.After(now) {
-			reason = fmt.Sprintf("IndexUpdateTask skipped. reason: training sample size in between lower and upper limit (%f < %f < %f) AND current time < 1 week after lastUpdatedAt (%v < %v)",
+			reason = fmt.Sprintf("training sample size in between lower and upper limit (%f < %f < %f) AND current time < 1 week after lastUpdatedAt (%v < %v)",
 				lower, nsample, upper, now, ts)
 			return
 		} else {
@@ -171,7 +172,7 @@ func (t *IndexUpdateTaskInfo) checkIndexUpdatable(ctx context.Context, dsize uin
 			ts = time.Unix(t.LastUpdateAt.Unix(), 0)
 			ts = ts.Add(OneWeek)
 			if ts.After(now) {
-				reason = fmt.Sprintf("IndexUpdateTask skipped. reason: training sample size > upper limit ( %f > %f) AND current time < 1 week after lastUpdatedAt (%v < %v)",
+				reason = fmt.Sprintf("training sample size > upper limit ( %f > %f) AND current time < 1 week after lastUpdatedAt (%v < %v)",
 					nsample, upper, now, ts)
 				return
 			}
@@ -197,7 +198,7 @@ func (t *IndexUpdateTaskInfo) saveStatus(sqlproc *sqlexec.SqlProcess, updated bo
 	// skip update status if index is NOT updated
 	status := IndexUpdateStatus{Status: Status_Ok, Msg: "reindex success", Time: time.Now()}
 	if !updated {
-		status.Status = Status_Ok
+		status.Status = Status_Skipped
 		status.Msg = reason
 	}
 
