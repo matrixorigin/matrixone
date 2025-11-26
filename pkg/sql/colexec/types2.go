@@ -29,10 +29,24 @@ func (srv *Server) RecordDispatchPipeline(
 
 	// check if sender has sent a stop running message.
 	if v, ok := srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline[key]; ok && v.alreadyDone {
-		dispatchReceiver.Lock()
-		dispatchReceiver.ReceiverDone = true
-		dispatchReceiver.Unlock()
-		return
+		// Fix: Check if this is a stale record created by CancelPipelineSending
+		// before RecordDispatchPipeline was called (race condition).
+		// If receiver is nil, it means CancelPipelineSending created this record
+		// when the pipeline wasn't registered yet. We should clean it up and
+		// allow the normal registration to proceed.
+		if v.receiver == nil {
+			// This is a stale record created by CancelPipelineSending before
+			// RecordDispatchPipeline was called. Clean it up and proceed with
+			// normal registration.
+			delete(srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline, key)
+		} else {
+			// This is a legitimate cancellation - the receiver was already registered
+			// and then cancelled. Set ReceiverDone to true.
+			dispatchReceiver.Lock()
+			dispatchReceiver.ReceiverDone = true
+			dispatchReceiver.Unlock()
+			return
+		}
 	}
 
 	value := runningPipelineInfo{
