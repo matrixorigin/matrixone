@@ -117,7 +117,7 @@ func (t *IndexUpdateTaskInfo) checkIndexUpdatable(ctx context.Context, dsize uin
 	ts := createdAt.Add(createdAtDelay)
 	if ts.After(now) {
 		// skip update when createdAt + delay is after current time
-		reason = fmt.Sprintf("current time < 2 days after createdAt (%v < %v)", createdAt, ts)
+		reason = fmt.Sprintf("current time < 2 days after createdAt (%v < %v)", createdAt.Format("2006-01-02 15:04:05"), ts.Format("2006-01-02 15:04:05"))
 		return
 	}
 
@@ -157,7 +157,7 @@ func (t *IndexUpdateTaskInfo) checkIndexUpdatable(ctx context.Context, dsize uin
 		ts = ts.Add(OneWeek)
 		if ts.After(now) {
 			reason = fmt.Sprintf("training sample size in between lower and upper limit (%f < %f < %f) AND current time < 1 week after lastUpdatedAt (%v < %v)",
-				lower, nsample, upper, now, ts)
+				lower, nsample, upper, now.Format("2006-01-02 15:04:05"), ts.Format("2006-01-02 15:04:05"))
 			return
 		} else {
 			// update
@@ -169,10 +169,10 @@ func (t *IndexUpdateTaskInfo) checkIndexUpdatable(ctx context.Context, dsize uin
 		// reindex every week
 		if t.LastUpdateAt != nil {
 			ts = time.Unix(t.LastUpdateAt.Unix(), 0)
-			ts = ts.Add(OneWeek)
+			ts = ts.Add(2 * OneWeek)
 			if ts.After(now) {
-				reason = fmt.Sprintf("training sample size > upper limit ( %f > %f) AND current time < 1 week after lastUpdatedAt (%v < %v)",
-					nsample, upper, now, ts)
+				reason = fmt.Sprintf("training sample size > upper limit ( %f > %f) AND current time < 2 week after lastUpdatedAt (%v < %v)",
+					nsample, upper, now.Format("2006-01-02 15:04:05"), ts.Format("2006-01-02 15:04:05"))
 				return
 			}
 		}
