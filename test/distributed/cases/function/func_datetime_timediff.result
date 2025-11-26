@@ -1,24 +1,24 @@
 SELECT TIMEDIFF('2000:01:01 00:00:00', '2000:01:01 00:00:00.000001') AS result1;
 result1
-null
+00:00:00.000001000
 SELECT TIMEDIFF('2000:01:01 00:00:00', '2000:01:01 00:00:00.000001') AS microsecond_diff;
 microsecond_diff
-null
+00:00:00.000001000
 SELECT TIMEDIFF('2000:01:01 00:00:00', '2000:01:01 00:00:00') AS zero_diff;
 zero_diff
-null
+00:00:00
 SELECT TIMEDIFF('2000:01:01 00:00:01', '2000:01:01 00:00:00') AS one_second_diff;
 one_second_diff
-null
+00:00:01
 SELECT TIMEDIFF('2000:01:01 01:00:00', '2000:01:01 00:00:00') AS one_hour_diff;
 one_hour_diff
-null
+01:00:00
 SELECT TIMEDIFF('2000:01:01 00:00:00', '2000:01:01 00:00:01') AS negative_one_second;
 negative_one_second
-null
+00:00:01
 SELECT TIMEDIFF('2000:01:01 00:00:00', '2000:01:01 01:00:00') AS negative_one_hour;
 negative_one_hour
-null
+-1:00:00
 SELECT TIMEDIFF('15:30:45', '10:20:30') AS time_diff;
 time_diff
 05:10:15

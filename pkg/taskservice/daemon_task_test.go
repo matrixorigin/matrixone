@@ -222,3 +222,29 @@ func TestRestartDaemonTask(t *testing.T) {
 	}, WithRunnerParallelism(1),
 		WithRunnerFetchInterval(time.Millisecond))
 }
+
+// TestRestartDaemonTaskWithEmptyRunner tests restart when TaskRunner is empty.
+// This covers the bug fix where tasks with empty TaskRunner couldn't be restarted.
+func TestRestartDaemonTaskWithEmptyRunner(t *testing.T) {
+	runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
+		// Create a task with empty TaskRunner (simulating newly created task)
+		dt := newDaemonTaskForTest(1, task.TaskStatus_Created, "")
+		mustAddTestDaemonTask(t, store, 1, dt)
+		var started atomic.Bool
+		r.testRegisterExecutor(t, task.TaskCode_ConnectorKafkaSink, &started)
+		waitStarted(&started, time.Second*5)
+
+		// Update task status to RestartRequested (TaskRunner still empty)
+		dt.TaskStatus = task.TaskStatus_RestartRequested
+		mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{dt})
+
+		// Wait for restart to complete
+		expectTaskStatus(t, store, dt, task.TaskStatus_RestartRequested, task.TaskStatus_Running)
+
+		// Verify TaskRunner was assigned
+		updatedTasks := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, 1))
+		assert.Len(t, updatedTasks, 1, "Should have exactly one task")
+		assert.Equal(t, r.runnerID, updatedTasks[0].TaskRunner, "TaskRunner should be assigned to current runner")
+	}, WithRunnerParallelism(1),
+		WithRunnerFetchInterval(time.Millisecond))
+}
