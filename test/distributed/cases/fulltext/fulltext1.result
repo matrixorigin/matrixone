@@ -148,7 +148,7 @@ Project
               Block Filter Cond: (t1.c = 100)
               Runtime Filter Probe: t1.a
         ->  Index Table Scan on t1.index2 [ForceOneCN]
-              Filter Cond: prefix_eq(__mo_index_pri_col)
-              Block Filter Cond: prefix_eq(__mo_index_pri_col)
+              Filter Cond: prefix_eq(__mo_index_idx_col)
+              Block Filter Cond: prefix_eq(__mo_index_idx_col)
 drop table t1;
 drop database test;
