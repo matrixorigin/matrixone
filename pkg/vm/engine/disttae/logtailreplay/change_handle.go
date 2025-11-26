@@ -732,6 +732,7 @@ func (p *baseHandle) getObjectEntries(objIter btree.IterG[objectio.ObjectEntry],
 }
 
 type ChangeHandler struct {
+	skipDeletes     bool
 	tombstoneHandle *baseHandle
 	dataHandle      *baseHandle
 	coarseMaxRow    int
@@ -758,6 +759,7 @@ func NewChangesHandlerWithCheckpointEntries(
 	sid string,
 	checkpoints []*checkpoint.CheckpointEntry,
 	start, end types.TS,
+	skipDeletes bool,
 	maxRow uint32,
 	primarySeqnum int,
 	mp *mpool.MPool,
@@ -765,6 +767,7 @@ func NewChangesHandlerWithCheckpointEntries(
 ) (changeHandle *ChangeHandler, err error) {
 	changeHandle = &ChangeHandler{
 		coarseMaxRow:  int(maxRow),
+		skipDeletes:   skipDeletes,
 		start:         start,
 		end:           end,
 		fs:            fs,
@@ -877,6 +880,7 @@ func NewChangesHandler(
 	ctx context.Context,
 	state *PartitionState,
 	start, end types.TS,
+	skipDeletes bool,
 	maxRow uint32,
 	primarySeqnum int,
 	mp *mpool.MPool,
@@ -887,6 +891,7 @@ func NewChangesHandler(
 	}
 	changeHandle = &ChangeHandler{
 		coarseMaxRow:  int(maxRow),
+		skipDeletes:   skipDeletes,
 		start:         start,
 		end:           end,
 		fs:            fs,
@@ -966,7 +971,7 @@ func (p *ChangeHandler) quickNext(ctx context.Context, mp *mpool.MPool) (data, t
 		if err != nil {
 			return
 		}
-		if err = filterBatch(data, tombstone, p.primarySeqnum); err != nil {
+		if err = filterBatch(data, tombstone, p.primarySeqnum, p.skipDeletes); err != nil {
 			return
 		}
 		if tombstoneEnd && dataEnd {
@@ -998,7 +1003,7 @@ func (p *ChangeHandler) quickNext(ctx context.Context, mp *mpool.MPool) (data, t
 //
 // This ensures that for any pk, we only keep the most recent operation,
 // whether it's an insert/update from data batch or a delete from tombstone batch.
-func filterBatch(data, tombstone *batch.Batch, primarySeqnum int) (err error) {
+func filterBatch(data, tombstone *batch.Batch, primarySeqnum int, skipDeletes bool) (err error) {
 	if data == nil || tombstone == nil {
 		return
 	}
@@ -1070,11 +1075,22 @@ func filterBatch(data, tombstone *batch.Batch, primarySeqnum int) (err error) {
 		if first.isDelete {
 			// Keep only last insert
 			if !last.isDelete {
-				for _, ri := range rowInfos[0 : len(rowInfos)-1] {
-					if ri.isDelete {
-						tombstoneRowsToDelete = append(tombstoneRowsToDelete, int64(ri.row))
-					} else {
-						dataRowsToDelete = append(dataRowsToDelete, int64(ri.row))
+				if skipDeletes {
+					// Keep only last insert
+					for _, ri := range rowInfos[0 : len(rowInfos)-1] {
+						if ri.isDelete {
+							tombstoneRowsToDelete = append(tombstoneRowsToDelete, int64(ri.row))
+						} else {
+							dataRowsToDelete = append(dataRowsToDelete, int64(ri.row))
+						}
+					}
+				} else {
+					for _, ri := range rowInfos[0 : len(rowInfos)-1] {
+						if ri.isDelete {
+							tombstoneRowsToDelete = append(tombstoneRowsToDelete, int64(ri.row))
+						} else {
+							dataRowsToDelete = append(dataRowsToDelete, int64(ri.row))
+						}
 					}
 				}
 			} else {
@@ -1175,7 +1191,7 @@ func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombst
 		case NextChangeHandle_Data:
 			err = p.dataHandle.Next(ctx, &data, mp)
 			if err == nil && data.Vecs[0].Length() >= p.coarseMaxRow*2 {
-				if err = filterBatch(data, tombstone, p.primarySeqnum); err != nil {
+				if err = filterBatch(data, tombstone, p.primarySeqnum, p.skipDeletes); err != nil {
 					return
 				}
 				if data.Vecs[0].Length() > p.coarseMaxRow {
@@ -1192,7 +1208,7 @@ func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombst
 		case NextChangeHandle_Tombstone:
 			err = p.tombstoneHandle.Next(ctx, &tombstone, mp)
 			if err == nil && tombstone.Vecs[0].Length() >= p.coarseMaxRow*2 {
-				if err = filterBatch(data, tombstone, p.primarySeqnum); err != nil {
+				if err = filterBatch(data, tombstone, p.primarySeqnum, p.skipDeletes); err != nil {
 					return
 				}
 				if tombstone.Vecs[0].Length() > p.coarseMaxRow {
@@ -1209,7 +1225,7 @@ func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombst
 		}
 		if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
 			err = nil
-			if err = filterBatch(data, tombstone, p.primarySeqnum); err != nil {
+			if err = filterBatch(data, tombstone, p.primarySeqnum, p.skipDeletes); err != nil {
 				return
 			}
 			p.totalDuration += time.Since(t0)

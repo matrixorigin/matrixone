@@ -4,7 +4,6 @@
 
 select 'Test will fail if code depends on space/formatting.   #22165';
 
--- @bvt:issue#22165
 select starlark(
 $$
 def main(args):
@@ -50,5 +49,4 @@ def main(args):
     arg2 = int(jq('.[1]', args))
     return arg1 + arg2
 $$, '1') as result;
--- @bvt:issue
 

@@ -153,3 +153,7 @@ func (c *MockCleaner) GetDetails(ctx context.Context) (map[uint32]*TableStats, e
 func (c *MockCleaner) Verify(ctx context.Context) string {
 	return ""
 }
+
+func (c *MockCleaner) CDCTables() (map[uint64]types.TS, error) {
+	return nil, nil
+}

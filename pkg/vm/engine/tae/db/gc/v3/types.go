@@ -150,6 +150,7 @@ type Cleaner interface {
 	GetSnapshots() (*logtail.SnapshotInfo, error)
 	GetDetails(ctx context.Context) (map[uint32]*TableStats, error)
 	Verify(ctx context.Context) string
+	CDCTables() (map[uint64]types.TS, error)
 
 	// For testing
 	GetTablePK(tableId uint64) string

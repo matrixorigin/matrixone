@@ -198,7 +198,7 @@ func TestChangesHandle1(t *testing.T) {
 		_, rel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
 		require.Nil(t, err)
 
-		handle, err := rel.CollectChanges(ctx, types.TS{}, taeHandler.GetDB().TxnMgr.Now(), mp)
+		handle, err := rel.CollectChanges(ctx, types.TS{}, taeHandler.GetDB().TxnMgr.Now(), false, mp)
 		assert.NoError(t, err)
 		totalRows := 0
 		for {
@@ -217,7 +217,7 @@ func TestChangesHandle1(t *testing.T) {
 		assert.Equal(t, totalRows, 9)
 		assert.NoError(t, handle.Close())
 
-		handle, err = rel.CollectChanges(ctx, startTS, taeHandler.GetDB().TxnMgr.Now(), mp)
+		handle, err = rel.CollectChanges(ctx, startTS, taeHandler.GetDB().TxnMgr.Now(), false, mp)
 		assert.NoError(t, err)
 		for {
 			data, tombstone, hint, err := handle.Next(ctx, mp)
@@ -287,7 +287,7 @@ func TestChangesHandle2(t *testing.T) {
 		_, rel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
 		require.Nil(t, err)
 
-		handle, err := rel.CollectChanges(ctx, types.TS{}, taeHandler.GetDB().TxnMgr.Now(), mp)
+		handle, err := rel.CollectChanges(ctx, types.TS{}, taeHandler.GetDB().TxnMgr.Now(), false, mp)
 		assert.NoError(t, err)
 		totalRows := 0
 		for {
@@ -307,7 +307,7 @@ func TestChangesHandle2(t *testing.T) {
 		assert.Equal(t, totalRows, 9)
 		assert.NoError(t, handle.Close())
 
-		handle, err = rel.CollectChanges(ctx, startTS, taeHandler.GetDB().TxnMgr.Now(), mp)
+		handle, err = rel.CollectChanges(ctx, startTS, taeHandler.GetDB().TxnMgr.Now(), false, mp)
 		assert.NoError(t, err)
 		for {
 			data, tombstone, hint, err := handle.Next(ctx, mp)
@@ -404,7 +404,7 @@ func TestChangesHandle3(t *testing.T) {
 		_, rel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
 		require.Nil(t, err)
 
-		handle, err := rel.CollectChanges(ctx, types.TS{}, taeHandler.GetDB().TxnMgr.Now(), mp)
+		handle, err := rel.CollectChanges(ctx, types.TS{}, taeHandler.GetDB().TxnMgr.Now(), false, mp)
 		assert.NoError(t, err)
 		totalRows := 0
 		for {
@@ -423,7 +423,7 @@ func TestChangesHandle3(t *testing.T) {
 		assert.Equal(t, totalRows, 163820)
 		assert.NoError(t, handle.Close())
 
-		handle, err = rel.CollectChanges(ctx, startTS, taeHandler.GetDB().TxnMgr.Now(), mp)
+		handle, err = rel.CollectChanges(ctx, startTS, taeHandler.GetDB().TxnMgr.Now(), false, mp)
 		assert.NoError(t, err)
 		totalRows = 0
 		for {
@@ -515,7 +515,7 @@ func TestChangesHandleForCNWrite(t *testing.T) {
 		_, rel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
 		require.Nil(t, err)
 
-		handle, err := rel.CollectChanges(ctx, types.TS{}, taeEngine.GetDB().TxnMgr.Now(), mp)
+		handle, err := rel.CollectChanges(ctx, types.TS{}, taeEngine.GetDB().TxnMgr.Now(), false, mp)
 		assert.NoError(t, err)
 		totalRows := 0
 		for {
@@ -534,7 +534,7 @@ func TestChangesHandleForCNWrite(t *testing.T) {
 		assert.Equal(t, totalRows, bat.Length())
 		assert.NoError(t, handle.Close())
 
-		handle, err = rel.CollectChanges(ctx, startTS, taeEngine.GetDB().TxnMgr.Now(), mp)
+		handle, err = rel.CollectChanges(ctx, startTS, taeEngine.GetDB().TxnMgr.Now(), false, mp)
 		assert.NoError(t, err)
 		batchCount := 0
 		for {
@@ -636,7 +636,7 @@ func TestChangesHandle4(t *testing.T) {
 		require.Nil(t, err)
 
 		c := &checkHelper{}
-		handle, err := rel.CollectChanges(ctx, startTS, taeEngine.GetDB().TxnMgr.Now(), mp)
+		handle, err := rel.CollectChanges(ctx, startTS, taeEngine.GetDB().TxnMgr.Now(), false, mp)
 		assert.NoError(t, err)
 		for {
 			data, tombstone, _, err := handle.Next(ctx, mp)
@@ -756,7 +756,7 @@ func TestChangesHandle5(t *testing.T) {
 		_, rel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
 		require.Nil(t, err)
 
-		handle, err := rel.CollectChanges(ctx, types.TS{}, taeHandler.GetDB().TxnMgr.Now(), mp)
+		handle, err := rel.CollectChanges(ctx, types.TS{}, taeHandler.GetDB().TxnMgr.Now(), false, mp)
 		assert.NoError(t, err)
 		totalRows := 0
 		for {
@@ -775,7 +775,7 @@ func TestChangesHandle5(t *testing.T) {
 		assert.Equal(t, totalRows, 9)
 		assert.NoError(t, handle.Close())
 
-		handle, err = rel.CollectChanges(ctx, startTS, taeHandler.GetDB().TxnMgr.Now(), mp)
+		handle, err = rel.CollectChanges(ctx, startTS, taeHandler.GetDB().TxnMgr.Now(), false, mp)
 		assert.NoError(t, err)
 		for {
 			data, tombstone, hint, err := handle.Next(ctx, mp)
@@ -855,7 +855,7 @@ func TestChangesHandle6(t *testing.T) {
 		_, rel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
 		require.Nil(t, err)
 
-		handle, err := rel.CollectChanges(ctx, types.TS{}, taeHandler.GetDB().TxnMgr.Now(), mp)
+		handle, err := rel.CollectChanges(ctx, types.TS{}, taeHandler.GetDB().TxnMgr.Now(), false, mp)
 		assert.NoError(t, err)
 		totalRows := 0
 		for {
@@ -874,7 +874,7 @@ func TestChangesHandle6(t *testing.T) {
 		assert.Equal(t, totalRows, 9)
 		assert.NoError(t, handle.Close())
 
-		handle, err = rel.CollectChanges(ctx, startTS, taeHandler.GetDB().TxnMgr.Now(), mp)
+		handle, err = rel.CollectChanges(ctx, startTS, taeHandler.GetDB().TxnMgr.Now(), false, mp)
 		assert.NoError(t, err)
 		for {
 			data, tombstone, hint, err := handle.Next(ctx, mp)
@@ -958,7 +958,7 @@ func TestChangesHandleStaleFiles1(t *testing.T) {
 		_, rel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
 		require.Nil(t, err)
 
-		_, err = rel.CollectChanges(ctx, startTS, taeHandler.GetDB().TxnMgr.Now(), mp)
+		_, err = rel.CollectChanges(ctx, startTS, taeHandler.GetDB().TxnMgr.Now(), false, mp)
 		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrStaleRead))
 
 	}
@@ -1030,7 +1030,7 @@ func TestChangesHandleStaleFiles2(t *testing.T) {
 
 		_, rel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
 		require.Nil(t, err)
-		handle, err := rel.CollectChanges(ctx, startTS, taeEngine.GetDB().TxnMgr.Now(), mp)
+		handle, err := rel.CollectChanges(ctx, startTS, taeEngine.GetDB().TxnMgr.Now(), false, mp)
 		assert.NoError(t, err)
 		{
 			txn, dnRel := testutil2.GetRelation(t, accountId, taeEngine.GetDB(), databaseName, tableName)
@@ -1121,7 +1121,7 @@ func TestChangesHandleStaleFiles5(t *testing.T) {
 		_, rel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
 		require.Nil(t, err)
 
-		handle, err := rel.CollectChanges(ctx, startTS, taeHandler.GetDB().TxnMgr.Now(), mp)
+		handle, err := rel.CollectChanges(ctx, startTS, taeHandler.GetDB().TxnMgr.Now(), false, mp)
 		assert.NoError(t, err)
 		totalRows := 0
 		for {
@@ -1216,7 +1216,7 @@ func TestChangeHandleFilterBatch1(t *testing.T) {
 		_, rel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
 		require.Nil(t, err)
 
-		handle, err := rel.CollectChanges(ctx, startTS, ts1, mp)
+		handle, err := rel.CollectChanges(ctx, startTS, ts1, false, mp)
 		assert.NoError(t, err)
 		for {
 			data, tombstone, hint, err := handle.Next(ctx, mp)
@@ -1230,7 +1230,7 @@ func TestChangeHandleFilterBatch1(t *testing.T) {
 		}
 		assert.NoError(t, handle.Close())
 
-		handle, err = rel.CollectChanges(ctx, startTS, ts3, mp)
+		handle, err = rel.CollectChanges(ctx, startTS, ts3, false, mp)
 		assert.NoError(t, err)
 		for {
 			data, tombstone, hint, err := handle.Next(ctx, mp)
@@ -1245,7 +1245,7 @@ func TestChangeHandleFilterBatch1(t *testing.T) {
 		}
 		assert.NoError(t, handle.Close())
 
-		handle, err = rel.CollectChanges(ctx, ts2, ts3, mp)
+		handle, err = rel.CollectChanges(ctx, ts2, ts3, false, mp)
 		assert.NoError(t, err)
 		for {
 			data, tombstone, hint, err := handle.Next(ctx, mp)
@@ -1260,7 +1260,7 @@ func TestChangeHandleFilterBatch1(t *testing.T) {
 		}
 		assert.NoError(t, handle.Close())
 
-		handle, err = rel.CollectChanges(ctx, ts2, ts4, mp)
+		handle, err = rel.CollectChanges(ctx, ts2, ts4, false, mp)
 		assert.NoError(t, err)
 		for {
 			data, tombstone, hint, err := handle.Next(ctx, mp)
@@ -1357,7 +1357,7 @@ func TestChangeHandleFilterBatch2(t *testing.T) {
 		_, rel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
 		require.Nil(t, err)
 
-		handle, err := rel.CollectChanges(ctx, startTS, end, mp)
+		handle, err := rel.CollectChanges(ctx, startTS, end, false, mp)
 		assert.NoError(t, err)
 		for {
 			data, tombstone, hint, err := handle.Next(ctx, mp)
@@ -1424,7 +1424,7 @@ func TestChangesHandle7(t *testing.T) {
 		_, rel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
 		require.Nil(t, err)
 
-		handle, err := rel.CollectChanges(ctx, startTS, taeHandler.GetDB().TxnMgr.Now(), mp)
+		handle, err := rel.CollectChanges(ctx, startTS, taeHandler.GetDB().TxnMgr.Now(), false, mp)
 		assert.NoError(t, err)
 		totalRowCount := 0
 		for {
@@ -1521,7 +1521,7 @@ func TestPartitionChangesHandle(t *testing.T) {
 		_, rel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
 		require.Nil(t, err)
 
-		handle, err := rel.CollectChanges(ctx, t1.Prev(), t2.Next(), mp)
+		handle, err := rel.CollectChanges(ctx, t1.Prev(), t2.Next(), false, mp)
 		assert.NoError(t, err)
 		var totalRows int
 		for {
@@ -1765,7 +1765,7 @@ func TestPartitionChangesHandleStaleRead(t *testing.T) {
 
 		// Try to collect changes starting from a time that's been GC'd
 		// Since t1.Prev() < t2 (minTS of checkpoint entry), this should trigger the stale read error
-		handle, err := rel.CollectChanges(ctx, t1.Prev(), t3.Next(), mp)
+		handle, err := rel.CollectChanges(ctx, t1.Prev(), t3.Next(), false, mp)
 
 		// We expect either:
 		// 1. An error during CollectChanges (stale read error)
@@ -1939,7 +1939,7 @@ func TestPartitionChangesHandleGCKPBoundaryStaleRead(t *testing.T) {
 		readFromTS := t1.Prev()
 		readToTS := taeHandler.GetDB().TxnMgr.Now()
 
-		handle, err := rel.CollectChanges(ctx, readFromTS, readToTS, mp)
+		handle, err := rel.CollectChanges(ctx, readFromTS, readToTS, false, mp)
 
 		assert.NoError(t, err)
 		assert.NotNil(t, handle)
