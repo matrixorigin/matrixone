@@ -15,13 +15,16 @@
 package function
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -352,8 +355,7 @@ func TestCoalesce(t *testing.T) {
 
 func initTimestampAddTestCase() []tcTemp {
 	d1, _ := types.ParseDateCast("2024-12-20")
-	r1, _ := types.ParseDateCast("2024-12-25")  // +5 days
-	r11, _ := types.ParseDateCast("2024-12-21") // +1 days
+	r1, _ := types.ParseDateCast("2024-12-25") // +5 days
 	d2, _ := types.ParseDatetime("2024-12-20 10:30:45", 6)
 	r2, _ := types.ParseDatetime("2024-12-25 10:30:45", 6) // +5 days
 	d3, _ := types.ParseTimestamp(time.Local, "2024-12-20 10:30:45", 6)
@@ -372,6 +374,8 @@ func initTimestampAddTestCase() []tcTemp {
 					[]types.Date{d1},
 					[]bool{false}),
 			},
+			// MySQL behavior: DATE input + date unit → DATE output
+			// TimestampAddDate uses SetType to change vector type to DATE for date units
 			expect: NewFunctionTestResult(types.T_date.ToType(), false,
 				[]types.Date{r1},
 				[]bool{false}),
@@ -420,28 +424,15 @@ func initTimestampAddTestCase() []tcTemp {
 					[]string{"2024-12-20 10:30:45"},
 					[]bool{false}),
 			},
-			expect: NewFunctionTestResult(types.T_datetime.ToType(), false,
-				[]types.Datetime{r2},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"2024-12-25 10:30:45"},
 				[]bool{false}),
 		},
+		// Note: DATE with HOUR (time unit) returns DATETIME type at runtime via TempSetType
+		// This test case is skipped because the test framework cannot handle dynamic type changes
+		// The functionality is tested in TestAddIntervalMicrosecond in datetime_test.go
 		{
-			info: "test TimestampAdd - DATE with HOUR",
-			typ:  types.T_date,
-			inputs: []FunctionTestInput{
-				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"HOUR"}, []bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{24},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_date.ToType(),
-					[]types.Date{d1},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_date.ToType(), false,
-				[]types.Date{r11},
-				[]bool{false}),
-		},
-		{
-			info: "test TimestampAdd - null",
+			info: "test TimestampAdd - DATE input is NULL",
 			typ:  types.T_date,
 			inputs: []FunctionTestInput{
 				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"DAY"}, []bool{false}),
@@ -452,6 +443,26 @@ func initTimestampAddTestCase() []tcTemp {
 					[]types.Date{d1},
 					[]bool{true}),
 			},
+			// MySQL behavior: DATE input + date unit → DATE output
+			// TimestampAddDate uses SetType to change vector type to DATE for date units
+			expect: NewFunctionTestResult(types.T_date.ToType(), false,
+				[]types.Date{types.Date(0)},
+				[]bool{true}),
+		},
+		{
+			info: "test TimestampAdd - interval is NULL",
+			typ:  types.T_date,
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"DAY"}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{5},
+					[]bool{true}),
+				NewFunctionTestInput(types.T_date.ToType(),
+					[]types.Date{d1},
+					[]bool{false}),
+			},
+			// MySQL behavior: DATE input + date unit → DATE output
+			// TimestampAddDate uses SetType to change vector type to DATE for date units
 			expect: NewFunctionTestResult(types.T_date.ToType(), false,
 				[]types.Date{types.Date(0)},
 				[]bool{true}),
@@ -467,8 +478,38 @@ func TestTimestampAdd(t *testing.T) {
 		var fcTC FunctionTestCase
 		switch tc.typ {
 		case types.T_date:
-			fcTC = NewFunctionTestCase(proc,
-				tc.inputs, tc.expect, TimestampAddDate)
+			// For DATE input, retType returns DATETIME, so we need to create result wrapper with DATETIME type
+			// But the actual vector type will be DATE for date units (DAY, WEEK, etc.)
+			// So we manually create the test case to handle this mismatch
+			fcTC = FunctionTestCase{proc: proc}
+			mp := proc.Mp()
+			// allocate vector for function parameters
+			fcTC.parameters = make([]*vector.Vector, len(tc.inputs))
+			for i := range fcTC.parameters {
+				typ := tc.inputs[i].typ
+				var nsp *nulls.Nulls = nil
+				if len(tc.inputs[i].nullList) != 0 {
+					nsp = nulls.NewWithSize(len(tc.inputs[i].nullList))
+					for j, b := range tc.inputs[i].nullList {
+						if b {
+							nsp.Set(uint64(j))
+						}
+					}
+				}
+				fcTC.parameters[i] = newVectorByType(proc.Mp(), typ, tc.inputs[i].values, nsp)
+				if tc.inputs[i].isConst {
+					fcTC.parameters[i].SetClass(vector.CONSTANT)
+				}
+			}
+			// Create result wrapper with DATETIME type (because retType returns DATETIME)
+			fcTC.result = vector.NewFunctionResultWrapper(types.T_datetime.ToType(), mp)
+			if len(fcTC.parameters) == 0 {
+				fcTC.fnLength = 1
+			} else {
+				fcTC.fnLength = fcTC.parameters[0].Length()
+			}
+			fcTC.expected = tc.expect
+			fcTC.fn = TimestampAddDate
 		case types.T_datetime:
 			fcTC = NewFunctionTestCase(proc,
 				tc.inputs, tc.expect, TimestampAddDatetime)
@@ -483,6 +524,251 @@ func TestTimestampAdd(t *testing.T) {
 		}
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+// TestTimestampAddWithNullParameter tests TIMESTAMPADD with NULL parameters
+// This test verifies that NULL parameters are handled correctly without type mismatch errors
+func TestTimestampAddWithNullParameter(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// Test case 1: TIMESTAMPADD(DAY, 5, NULL) - third parameter (DATE) is NULL
+	// Expected: Returns NULL (DATE type)
+	t.Run("DATE parameter is NULL", func(t *testing.T) {
+		unitVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte("DAY"), 1, proc.Mp())
+		intervalVec, _ := vector.NewConstFixed(types.T_int64.ToType(), int64(5), 1, proc.Mp())
+		// Create a DATE vector with NULL value
+		dateVec := vector.NewVec(types.T_date.ToType())
+		nsp := nulls.NewWithSize(1)
+		nsp.Add(0)
+		dateVec.SetNulls(nsp)
+		dateVec.SetLength(1)
+
+		parameters := []*vector.Vector{unitVec, intervalVec, dateVec}
+		// retType returns DATETIME, so create result wrapper with DATETIME type
+		result := vector.NewFunctionResultWrapper(types.T_datetime.ToType(), proc.Mp())
+
+		fnLength := dateVec.Length()
+		err := result.PreExtendAndReset(fnLength)
+		require.NoError(t, err)
+
+		err = TimestampAddDate(parameters, result, proc, fnLength, nil)
+		require.NoError(t, err)
+
+		v := result.GetResultVector()
+		require.Equal(t, fnLength, v.Length(), "Result length should match input length")
+		// MySQL behavior: DATE input + date unit → DATE output
+		// TimestampAddDate uses SetType to change vector type to DATE for date units
+		require.Equal(t, types.T_date, v.GetType().Oid, "Result type should be DATE for date units (MySQL compatible)")
+		require.True(t, v.GetNulls().Contains(0), "Result should be NULL")
+	})
+
+	// Test case 2: TIMESTAMPADD(DAY, NULL, DATE('2024-12-20')) - second parameter (interval) is NULL
+	// Expected: Returns NULL (DATE type)
+	t.Run("interval parameter is NULL", func(t *testing.T) {
+		d1, _ := types.ParseDateCast("2024-12-20")
+
+		unitVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte("DAY"), 1, proc.Mp())
+		// Create an INT64 vector with NULL value
+		intervalVec := vector.NewVec(types.T_int64.ToType())
+		nsp := nulls.NewWithSize(1)
+		nsp.Add(0)
+		intervalVec.SetNulls(nsp)
+		intervalVec.SetLength(1)
+		dateVec, _ := vector.NewConstFixed(types.T_date.ToType(), d1, 1, proc.Mp())
+
+		parameters := []*vector.Vector{unitVec, intervalVec, dateVec}
+		// retType returns DATETIME, so create result wrapper with DATETIME type
+		result := vector.NewFunctionResultWrapper(types.T_datetime.ToType(), proc.Mp())
+
+		fnLength := dateVec.Length()
+		err := result.PreExtendAndReset(fnLength)
+		require.NoError(t, err)
+
+		err = TimestampAddDate(parameters, result, proc, fnLength, nil)
+		require.NoError(t, err)
+
+		v := result.GetResultVector()
+		require.Equal(t, fnLength, v.Length(), "Result length should match input length")
+		// MySQL behavior: DATE input + date unit → DATE output
+		// TimestampAddDate uses SetType to change vector type to DATE for date units
+		require.Equal(t, types.T_date, v.GetType().Oid, "Result type should be DATE for date units (MySQL compatible)")
+		require.True(t, v.GetNulls().Contains(0), "Result should be NULL")
+	})
+
+	// Test case 3: TIMESTAMPADD(HOUR, 2, NULL) - third parameter (DATE) is NULL with time unit
+	// Expected: Returns NULL (DATETIME type after TempSetType)
+	t.Run("DATE parameter is NULL with time unit", func(t *testing.T) {
+		unitVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte("HOUR"), 1, proc.Mp())
+		intervalVec, _ := vector.NewConstFixed(types.T_int64.ToType(), int64(2), 1, proc.Mp())
+		// Create a DATE vector with NULL value
+		dateVec := vector.NewVec(types.T_date.ToType())
+		nsp := nulls.NewWithSize(1)
+		nsp.Add(0)
+		dateVec.SetNulls(nsp)
+		dateVec.SetLength(1)
+
+		parameters := []*vector.Vector{unitVec, intervalVec, dateVec}
+		// retType returns DATETIME, so create result wrapper with DATETIME type
+		result := vector.NewFunctionResultWrapper(types.T_datetime.ToType(), proc.Mp())
+
+		fnLength := dateVec.Length()
+		err := result.PreExtendAndReset(fnLength)
+		require.NoError(t, err)
+
+		err = TimestampAddDate(parameters, result, proc, fnLength, nil)
+		require.NoError(t, err)
+
+		v := result.GetResultVector()
+		require.Equal(t, fnLength, v.Length(), "Result length should match input length")
+		// For time units, TempSetType changes type to DATETIME
+		require.Equal(t, types.T_datetime, v.GetType().Oid, "Result type should be DATETIME for time units")
+		require.True(t, v.GetNulls().Contains(0), "Result should be NULL")
+	})
+}
+
+// TestTimestampAddDateWithMicrosecond tests DATE input + MICROSECOND which should return DATETIME type
+// This test verifies MySQL compatibility: DATE input + time unit (MICROSECOND) → DATETIME output
+func TestTimestampAddDateWithMicrosecond(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// Test DATE + MICROSECOND = DATETIME
+	d1, _ := types.ParseDateCast("2024-12-20")
+	rMicrosecond, _ := types.ParseDatetime("2024-12-20 00:00:01.000000", 6) // +1000000 microseconds = +1 second
+
+	// Create input vectors manually to ensure correct length
+	unitVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte("MICROSECOND"), 1, proc.Mp())
+	intervalVec, _ := vector.NewConstFixed(types.T_int64.ToType(), int64(1000000), 1, proc.Mp())
+	dateVec, _ := vector.NewConstFixed(types.T_date.ToType(), d1, 1, proc.Mp())
+
+	parameters := []*vector.Vector{unitVec, intervalVec, dateVec}
+
+	// Create result wrapper - retType returns DATETIME
+	result := vector.NewFunctionResultWrapper(types.New(types.T_datetime, 0, 0), proc.Mp())
+
+	// Run the function - use the actual length from the date vector
+	// For const vectors, Length() returns the const length
+	fnLength := dateVec.Length()
+	err := result.PreExtendAndReset(fnLength)
+	require.NoError(t, err)
+
+	err = TimestampAddDate(parameters, result, proc, fnLength, nil)
+	require.NoError(t, err)
+
+	// Check the result - TempSetType should have changed it to DATETIME
+	v := result.GetResultVector()
+	require.Equal(t, fnLength, v.Length(), "Result length should match input length")
+	require.Equal(t, types.T_datetime, v.GetType().Oid, "Result type should be DATETIME after TempSetType")
+	require.Equal(t, int32(6), v.GetType().Scale, "Result scale should be 6 for microsecond precision")
+
+	// Check the value - get the last value (in case PreExtendAndReset added extra space)
+	dt := vector.GenerateFunctionFixedTypeParameter[types.Datetime](v)
+	resultDt, null := dt.GetValue(uint64(v.Length() - 1))
+	require.False(t, null, "Result should not be null")
+	require.Equal(t, rMicrosecond, resultDt, "Result should be 2024-12-20 00:00:01.000000")
+	require.Equal(t, "2024-12-20 00:00:01.000000", resultDt.String2(6), "String representation should match")
+}
+
+// TestTimestampAddDateWithTimeUnits tests DATE input + time units (HOUR, MINUTE, SECOND) which should return DATETIME type
+// This test verifies MySQL compatibility: DATE input + time unit → DATETIME output
+func TestTimestampAddDateWithTimeUnits(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	testCases := []struct {
+		unit     string
+		interval int64
+		expected string
+		scale    int32
+	}{
+		{"HOUR", 2, "2024-12-20 02:00:00", 0},
+		{"MINUTE", 30, "2024-12-20 00:30:00", 0},
+		{"SECOND", 45, "2024-12-20 00:00:45", 0},
+	}
+
+	d1, _ := types.ParseDateCast("2024-12-20")
+
+	for _, tc := range testCases {
+		t.Run(tc.unit, func(t *testing.T) {
+			expectedDt, _ := types.ParseDatetime(tc.expected, tc.scale)
+
+			unitVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte(tc.unit), 1, proc.Mp())
+			intervalVec, _ := vector.NewConstFixed(types.T_int64.ToType(), tc.interval, 1, proc.Mp())
+			dateVec, _ := vector.NewConstFixed(types.T_date.ToType(), d1, 1, proc.Mp())
+
+			parameters := []*vector.Vector{unitVec, intervalVec, dateVec}
+			// retType returns DATETIME, so create result wrapper with DATETIME type
+			result := vector.NewFunctionResultWrapper(types.New(types.T_datetime, 0, 0), proc.Mp())
+
+			fnLength := dateVec.Length()
+			err := result.PreExtendAndReset(fnLength)
+			require.NoError(t, err)
+
+			err = TimestampAddDate(parameters, result, proc, fnLength, nil)
+			require.NoError(t, err)
+
+			v := result.GetResultVector()
+			require.Equal(t, fnLength, v.Length(), "Result length should match input length")
+			require.Equal(t, types.T_datetime, v.GetType().Oid, "Result type should be DATETIME after TempSetType")
+			require.Equal(t, tc.scale, v.GetType().Scale, fmt.Sprintf("Result scale should be %d for %s unit", tc.scale, tc.unit))
+
+			dt := vector.GenerateFunctionFixedTypeParameter[types.Datetime](v)
+			resultDt, null := dt.GetValue(uint64(v.Length() - 1))
+			require.False(t, null, "Result should not be null")
+			require.Equal(t, expectedDt, resultDt, "Result should match expected value")
+			require.Equal(t, tc.expected, resultDt.String2(tc.scale), "String representation should match")
+		})
+	}
+}
+
+// TestTimestampAddDateWithDateUnits tests DATE input + date units (WEEK, MONTH, QUARTER, YEAR) which should return DATE type
+// This test verifies MySQL compatibility: DATE input + date unit → DATE output
+func TestTimestampAddDateWithDateUnits(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	testCases := []struct {
+		unit     string
+		interval int64
+		expected string
+	}{
+		{"WEEK", 1, "2024-12-27"},
+		{"MONTH", 1, "2025-01-20"},
+		{"QUARTER", 1, "2025-03-20"},
+		{"YEAR", 1, "2025-12-20"},
+	}
+
+	d1, _ := types.ParseDateCast("2024-12-20")
+
+	for _, tc := range testCases {
+		t.Run(tc.unit, func(t *testing.T) {
+			expectedDate, _ := types.ParseDateCast(tc.expected)
+
+			unitVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte(tc.unit), 1, proc.Mp())
+			intervalVec, _ := vector.NewConstFixed(types.T_int64.ToType(), tc.interval, 1, proc.Mp())
+			dateVec, _ := vector.NewConstFixed(types.T_date.ToType(), d1, 1, proc.Mp())
+
+			parameters := []*vector.Vector{unitVec, intervalVec, dateVec}
+			// retType returns DATETIME, so create result wrapper with DATETIME type
+			result := vector.NewFunctionResultWrapper(types.New(types.T_datetime, 0, 0), proc.Mp())
+
+			fnLength := dateVec.Length()
+			err := result.PreExtendAndReset(fnLength)
+			require.NoError(t, err)
+
+			err = TimestampAddDate(parameters, result, proc, fnLength, nil)
+			require.NoError(t, err)
+
+			v := result.GetResultVector()
+			require.Equal(t, fnLength, v.Length(), "Result length should match input length")
+			// MySQL behavior: DATE input + date unit → DATE output
+			// TimestampAddDate uses SetType to change vector type to DATE for date units
+			require.Equal(t, types.T_date, v.GetType().Oid, "Result type should be DATE (MySQL compatible)")
+
+			// Read as Date
+			dateParam := vector.GenerateFunctionFixedTypeParameter[types.Date](v)
+			resultDate, null := dateParam.GetValue(uint64(v.Length() - 1))
+			require.False(t, null, "Result should not be null")
+			require.Equal(t, expectedDate, resultDate, "Result should match expected value")
+		})
 	}
 }
 
@@ -520,6 +806,682 @@ func TestConcatWs(t *testing.T) {
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+// TestTimestampAddComprehensiveFromExpectResult tests all cases from expect result files
+// This ensures complete coverage of TIMESTAMPADD functionality matching MySQL behavior
+func TestTimestampAddComprehensiveFromExpectResult(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// Test cases from func_datetime_timestampadd.result and func_datetime_timestampadd_comprehensive.result
+
+	// 1. String input (DATE format) + date units → DATE format string
+	t.Run("String DATE format + date units", func(t *testing.T) {
+		testCases := []struct {
+			name     string
+			unit     string
+			interval int64
+			input    string
+			expected string
+		}{
+			{"DAY +5", "DAY", 5, "2024-12-20", "2024-12-25"},
+			{"DAY -5", "DAY", -5, "2024-12-20", "2024-12-15"},
+			{"MONTH +1", "MONTH", 1, "2024-12-20", "2025-01-20"},
+			{"YEAR +1", "YEAR", 1, "2024-12-20", "2025-12-20"},
+			{"WEEK +1", "WEEK", 1, "2024-12-20", "2024-12-27"},
+			{"QUARTER +1", "QUARTER", 1, "2024-12-20", "2025-03-20"},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				unitVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte(tc.unit), 1, proc.Mp())
+				intervalVec, _ := vector.NewConstFixed(types.T_int64.ToType(), tc.interval, 1, proc.Mp())
+				inputVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte(tc.input), 1, proc.Mp())
+
+				parameters := []*vector.Vector{unitVec, intervalVec, inputVec}
+				result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+
+				fnLength := inputVec.Length()
+				err := result.PreExtendAndReset(fnLength)
+				require.NoError(t, err)
+
+				err = TimestampAddString(parameters, result, proc, fnLength, nil)
+				require.NoError(t, err)
+
+				v := result.GetResultVector()
+				require.Equal(t, fnLength, v.Length())
+				require.Equal(t, types.T_varchar, v.GetType().Oid)
+
+				strParam := vector.GenerateFunctionStrParameter(v)
+				resultBytes, null := strParam.GetStrValue(0)
+				require.False(t, null, "Result should not be null")
+				resultStr := string(resultBytes)
+				require.Equal(t, tc.expected, resultStr)
+			})
+		}
+	})
+
+	// 2. String input (DATE format) + time units → DATETIME format string
+	t.Run("String DATE format + time units", func(t *testing.T) {
+		testCases := []struct {
+			name     string
+			unit     string
+			interval int64
+			input    string
+			expected string
+		}{
+			{"HOUR +24", "HOUR", 24, "2024-12-20", "2024-12-21 00:00:00"},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				unitVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte(tc.unit), 1, proc.Mp())
+				intervalVec, _ := vector.NewConstFixed(types.T_int64.ToType(), tc.interval, 1, proc.Mp())
+				inputVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte(tc.input), 1, proc.Mp())
+
+				parameters := []*vector.Vector{unitVec, intervalVec, inputVec}
+				result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+
+				fnLength := inputVec.Length()
+				err := result.PreExtendAndReset(fnLength)
+				require.NoError(t, err)
+
+				err = TimestampAddString(parameters, result, proc, fnLength, nil)
+				require.NoError(t, err)
+
+				v := result.GetResultVector()
+				require.Equal(t, fnLength, v.Length())
+				require.Equal(t, types.T_varchar, v.GetType().Oid)
+
+				strParam := vector.GenerateFunctionStrParameter(v)
+				resultBytes, null := strParam.GetStrValue(0)
+				require.False(t, null, "Result should not be null")
+				resultStr := string(resultBytes)
+				require.Equal(t, tc.expected, resultStr)
+			})
+		}
+	})
+
+	// 3. String input (DATETIME format) + date units → DATETIME format string
+	t.Run("String DATETIME format + date units", func(t *testing.T) {
+		testCases := []struct {
+			name     string
+			unit     string
+			interval int64
+			input    string
+			expected string
+		}{
+			{"DAY +5", "DAY", 5, "2024-12-20 10:30:45", "2024-12-25 10:30:45"},
+			{"DAY +7", "DAY", 7, "2024-12-20 10:30:45", "2024-12-27 10:30:45"},
+			{"WEEK +1", "WEEK", 1, "2024-12-20 10:30:45", "2024-12-27 10:30:45"},
+			{"MONTH +1", "MONTH", 1, "2024-12-20 10:30:45", "2025-01-20 10:30:45"},
+			{"QUARTER +1", "QUARTER", 1, "2024-12-20 10:30:45", "2025-03-20 10:30:45"},
+			{"YEAR +1", "YEAR", 1, "2024-12-20 10:30:45", "2025-12-20 10:30:45"},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				unitVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte(tc.unit), 1, proc.Mp())
+				intervalVec, _ := vector.NewConstFixed(types.T_int64.ToType(), tc.interval, 1, proc.Mp())
+				inputVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte(tc.input), 1, proc.Mp())
+
+				parameters := []*vector.Vector{unitVec, intervalVec, inputVec}
+				result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+
+				fnLength := inputVec.Length()
+				err := result.PreExtendAndReset(fnLength)
+				require.NoError(t, err)
+
+				err = TimestampAddString(parameters, result, proc, fnLength, nil)
+				require.NoError(t, err)
+
+				v := result.GetResultVector()
+				require.Equal(t, fnLength, v.Length())
+				require.Equal(t, types.T_varchar, v.GetType().Oid)
+
+				strParam := vector.GenerateFunctionStrParameter(v)
+				resultBytes, null := strParam.GetStrValue(0)
+				require.False(t, null, "Result should not be null")
+				resultStr := string(resultBytes)
+				require.Equal(t, tc.expected, resultStr)
+			})
+		}
+	})
+
+	// 4. String input (DATETIME format) + time units → DATETIME format string
+	t.Run("String DATETIME format + time units", func(t *testing.T) {
+		testCases := []struct {
+			name     string
+			unit     string
+			interval int64
+			input    string
+			expected string
+		}{
+			{"HOUR +2", "HOUR", 2, "2024-12-20 10:30:45", "2024-12-20 12:30:45"},
+			{"HOUR -2", "HOUR", -2, "2024-12-20 10:30:45", "2024-12-20 08:30:45"},
+			{"HOUR +24", "HOUR", 24, "2024-12-20 10:30:45", "2024-12-21 10:30:45"},
+			{"MINUTE +30", "MINUTE", 30, "2024-12-20 10:30:45", "2024-12-20 11:00:45"},
+			{"MINUTE +60", "MINUTE", 60, "2024-12-20 10:30:45", "2024-12-20 11:30:45"},
+			{"SECOND +60", "SECOND", 60, "2024-12-20 10:30:45", "2024-12-20 10:31:45"},
+			{"MICROSECOND +1000000", "MICROSECOND", 1000000, "2024-12-20 10:30:45", "2024-12-20 10:30:46"},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				unitVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte(tc.unit), 1, proc.Mp())
+				intervalVec, _ := vector.NewConstFixed(types.T_int64.ToType(), tc.interval, 1, proc.Mp())
+				inputVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte(tc.input), 1, proc.Mp())
+
+				parameters := []*vector.Vector{unitVec, intervalVec, inputVec}
+				result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+
+				fnLength := inputVec.Length()
+				err := result.PreExtendAndReset(fnLength)
+				require.NoError(t, err)
+
+				err = TimestampAddString(parameters, result, proc, fnLength, nil)
+				require.NoError(t, err)
+
+				v := result.GetResultVector()
+				require.Equal(t, fnLength, v.Length())
+				require.Equal(t, types.T_varchar, v.GetType().Oid)
+
+				strParam := vector.GenerateFunctionStrParameter(v)
+				resultBytes, null := strParam.GetStrValue(0)
+				require.False(t, null, "Result should not be null")
+				resultStr := string(resultBytes)
+				require.Equal(t, tc.expected, resultStr)
+			})
+		}
+	})
+
+	// 5. DATE type input + date units → DATE type
+	t.Run("DATE type + date units", func(t *testing.T) {
+		d1, _ := types.ParseDateCast("2024-12-20")
+		testCases := []struct {
+			name     string
+			unit     string
+			interval int64
+			expected string
+		}{
+			{"DAY +5", "DAY", 5, "2024-12-25"},
+			{"DAY -5", "DAY", -5, "2024-12-15"},
+			{"MONTH +1", "MONTH", 1, "2025-01-20"},
+			{"YEAR +1", "YEAR", 1, "2025-12-20"},
+			{"WEEK +1", "WEEK", 1, "2024-12-27"},
+			{"QUARTER +1", "QUARTER", 1, "2025-03-20"},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				expectedDate, _ := types.ParseDateCast(tc.expected)
+
+				unitVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte(tc.unit), 1, proc.Mp())
+				intervalVec, _ := vector.NewConstFixed(types.T_int64.ToType(), tc.interval, 1, proc.Mp())
+				dateVec, _ := vector.NewConstFixed(types.T_date.ToType(), d1, 1, proc.Mp())
+
+				parameters := []*vector.Vector{unitVec, intervalVec, dateVec}
+				// retType returns DATETIME, so create result wrapper with DATETIME type
+				result := vector.NewFunctionResultWrapper(types.T_datetime.ToType(), proc.Mp())
+
+				fnLength := dateVec.Length()
+				err := result.PreExtendAndReset(fnLength)
+				require.NoError(t, err)
+
+				err = TimestampAddDate(parameters, result, proc, fnLength, nil)
+				require.NoError(t, err)
+
+				v := result.GetResultVector()
+				require.Equal(t, fnLength, v.Length())
+				require.Equal(t, types.T_date, v.GetType().Oid)
+
+				dateParam := vector.GenerateFunctionFixedTypeParameter[types.Date](v)
+				resultDate, null := dateParam.GetValue(0)
+				require.False(t, null, "Result should not be null")
+				require.Equal(t, expectedDate, resultDate)
+			})
+		}
+	})
+
+	// 6. DATE type input + time units → DATETIME type
+	// This test verifies MySQL compatibility: DATE input + time unit → DATETIME output
+	t.Run("DATE type + time units", func(t *testing.T) {
+		d1, _ := types.ParseDateCast("2024-12-20")
+		testCases := []struct {
+			name     string
+			unit     string
+			interval int64
+			expected string
+			scale    int32
+		}{
+			{"HOUR +2", "HOUR", 2, "2024-12-20 02:00:00", 0},
+			{"MINUTE +30", "MINUTE", 30, "2024-12-20 00:30:00", 0},
+			{"SECOND +45", "SECOND", 45, "2024-12-20 00:00:45", 0},
+			{"MICROSECOND +1000000", "MICROSECOND", 1000000, "2024-12-20 00:00:01", 6},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				expectedDt, _ := types.ParseDatetime(tc.expected, tc.scale)
+
+				unitVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte(tc.unit), 1, proc.Mp())
+				intervalVec, _ := vector.NewConstFixed(types.T_int64.ToType(), tc.interval, 1, proc.Mp())
+				dateVec, _ := vector.NewConstFixed(types.T_date.ToType(), d1, 1, proc.Mp())
+
+				parameters := []*vector.Vector{unitVec, intervalVec, dateVec}
+				// retType returns DATETIME, so create result wrapper with DATETIME type
+				result := vector.NewFunctionResultWrapper(types.T_datetime.ToType(), proc.Mp())
+
+				fnLength := dateVec.Length()
+				err := result.PreExtendAndReset(fnLength)
+				require.NoError(t, err)
+
+				err = TimestampAddDate(parameters, result, proc, fnLength, nil)
+				require.NoError(t, err)
+
+				v := result.GetResultVector()
+				require.Equal(t, fnLength, v.Length())
+				require.Equal(t, types.T_datetime, v.GetType().Oid, "Result type should be DATETIME for time units")
+				require.Equal(t, tc.scale, v.GetType().Scale, fmt.Sprintf("Result scale should be %d for %s unit", tc.scale, tc.unit))
+
+				dtParam := vector.GenerateFunctionFixedTypeParameter[types.Datetime](v)
+				resultDt, null := dtParam.GetValue(0)
+				require.False(t, null, "Result should not be null")
+				require.Equal(t, expectedDt, resultDt, "Result should match expected value")
+				// For MICROSECOND, MySQL displays without fractional seconds if they are zero
+				// So we compare with String2(0) to match MySQL's display format (expect result file format)
+				displayScale := int32(0)
+				if tc.unit != "MICROSECOND" {
+					displayScale = tc.scale
+				}
+				require.Equal(t, tc.expected, resultDt.String2(displayScale), "String representation should match")
+
+				// Verify that actual vector type is DATETIME (not DATE)
+				require.Equal(t, types.T_datetime, v.GetType().Oid, "Result type should be DATETIME for time units")
+				require.Equal(t, tc.scale, v.GetType().Scale, fmt.Sprintf("Result scale should be %d for %s unit", tc.scale, tc.unit))
+			})
+		}
+	})
+
+	// 7. TIMESTAMP type input + date/time units → TIMESTAMP type
+	t.Run("TIMESTAMP type + date/time units", func(t *testing.T) {
+		ts1, _ := types.ParseTimestamp(time.Local, "2024-12-20 10:30:45", 6)
+		testCases := []struct {
+			name     string
+			unit     string
+			interval int64
+			expected string // Expected string representation
+		}{
+			{"DAY +5", "DAY", 5, "2024-12-25 10:30:45"},
+			{"HOUR +2", "HOUR", 2, "2024-12-20 12:30:45"},
+			{"HOUR -2", "HOUR", -2, "2024-12-20 08:30:45"},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				unitVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte(tc.unit), 1, proc.Mp())
+				intervalVec, _ := vector.NewConstFixed(types.T_int64.ToType(), tc.interval, 1, proc.Mp())
+				tsVec, _ := vector.NewConstFixed(types.T_timestamp.ToType(), ts1, 1, proc.Mp())
+
+				parameters := []*vector.Vector{unitVec, intervalVec, tsVec}
+				result := vector.NewFunctionResultWrapper(types.T_timestamp.ToType(), proc.Mp())
+
+				fnLength := tsVec.Length()
+				err := result.PreExtendAndReset(fnLength)
+				require.NoError(t, err)
+
+				err = TimestampAddTimestamp(parameters, result, proc, fnLength, nil)
+				require.NoError(t, err)
+
+				v := result.GetResultVector()
+				require.Equal(t, fnLength, v.Length())
+				require.Equal(t, types.T_timestamp, v.GetType().Oid)
+
+				tsParam := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](v)
+				resultTs, null := tsParam.GetValue(0)
+				require.False(t, null, "Result should not be null")
+				resultStr := resultTs.String2(time.Local, 0)
+				require.Equal(t, tc.expected, resultStr)
+			})
+		}
+	})
+
+	// 8. DATETIME type input + date/time units → DATETIME type
+	t.Run("DATETIME type + date/time units", func(t *testing.T) {
+		dt1, _ := types.ParseDatetime("2024-12-20 10:30:45", 6)
+		testCases := []struct {
+			name     string
+			unit     string
+			interval int64
+			expected string // Expected string representation
+		}{
+			{"DAY +5", "DAY", 5, "2024-12-25 10:30:45"},
+			{"HOUR +2", "HOUR", 2, "2024-12-20 12:30:45"},
+			{"MINUTE +30", "MINUTE", 30, "2024-12-20 11:00:45"},
+			{"SECOND +60", "SECOND", 60, "2024-12-20 10:31:45"},
+			{"MICROSECOND +1000000", "MICROSECOND", 1000000, "2024-12-20 10:30:46"},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				unitVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte(tc.unit), 1, proc.Mp())
+				intervalVec, _ := vector.NewConstFixed(types.T_int64.ToType(), tc.interval, 1, proc.Mp())
+				dtVec, _ := vector.NewConstFixed(types.T_datetime.ToType(), dt1, 1, proc.Mp())
+
+				parameters := []*vector.Vector{unitVec, intervalVec, dtVec}
+				result := vector.NewFunctionResultWrapper(types.T_datetime.ToType(), proc.Mp())
+
+				fnLength := dtVec.Length()
+				err := result.PreExtendAndReset(fnLength)
+				require.NoError(t, err)
+
+				err = TimestampAddDatetime(parameters, result, proc, fnLength, nil)
+				require.NoError(t, err)
+
+				v := result.GetResultVector()
+				require.Equal(t, fnLength, v.Length())
+				require.Equal(t, types.T_datetime, v.GetType().Oid)
+
+				dtParam := vector.GenerateFunctionFixedTypeParameter[types.Datetime](v)
+				resultDt, null := dtParam.GetValue(0)
+				require.False(t, null, "Result should not be null")
+				resultStr := resultDt.String2(0)
+				require.Equal(t, tc.expected, resultStr)
+			})
+		}
+	})
+}
+
+// TestTimestampAddRetType tests the retType function behavior for TIMESTAMPADD
+// This test verifies that retType returns the correct type, which affects MySQL protocol layer formatting
+func TestTimestampAddRetType(t *testing.T) {
+	ctx := context.Background()
+
+	// Get TIMESTAMPADD function ID
+	fnId, err := getFunctionIdByName(ctx, "timestampadd")
+	require.NoError(t, err)
+
+	// Test case: DATE input
+	// retType returns DATETIME to match MySQL behavior
+	// Since retType cannot know the runtime unit at compile time, it returns DATETIME conservatively
+	// At runtime, TimestampAddDate will use TempSetType appropriately:
+	// - For time units: DATETIME with scale 0 (HOUR/MINUTE/SECOND) or 6 (MICROSECOND)
+	// - For date units: DATETIME with scale 0, but formatted as DATE when time is 00:00:00
+	t.Run("DATE input - retType returns DATETIME", func(t *testing.T) {
+		parameters := []types.Type{
+			types.T_varchar.ToType(), // unit parameter (string)
+			types.T_int64.ToType(),   // interval parameter
+			types.T_date.ToType(),    // date parameter
+		}
+
+		// Find matching overload
+		fn := allSupportedFunctions[fnId]
+		var matchedOverload *overload
+		for i := range fn.Overloads {
+			ov := &fn.Overloads[i]
+			if len(ov.args) == len(parameters) {
+				match := true
+				for j := range parameters {
+					if ov.args[j] != parameters[j].Oid {
+						match = false
+						break
+					}
+				}
+				if match {
+					matchedOverload = ov
+					break
+				}
+			}
+		}
+		require.NotNil(t, matchedOverload, "Should find matching overload for DATE input")
+
+		// Call retType function
+		retType := matchedOverload.retType(parameters)
+		require.Equal(t, types.T_datetime, retType.Oid, "retType returns DATETIME type (to match MySQL behavior)")
+
+		// Document the behavior: retType returns DATETIME, which ensures MySQL column metadata is MYSQL_TYPE_DATETIME
+		// This prevents "Invalid length (19) for type DATE" errors when actual vector type is DATETIME
+		t.Logf("retType returns: %s (Oid: %d)", retType.Oid, retType.Oid)
+		t.Logf("For DATE input + time unit (HOUR/MINUTE/SECOND/MICROSECOND), actual vector type is DATETIME")
+		t.Logf("MySQL protocol layer uses retType (DATETIME) to determine formatting, ensuring correct DATETIME format")
+		t.Logf("For DATE input + date unit, MySQL protocol layer formats as DATE when time is 00:00:00")
+	})
+
+	// Test case: DATETIME input - retType returns DATETIME
+	t.Run("DATETIME input - retType returns DATETIME", func(t *testing.T) {
+		parameters := []types.Type{
+			types.T_varchar.ToType(),  // unit parameter (string)
+			types.T_int64.ToType(),    // interval parameter
+			types.T_datetime.ToType(), // datetime parameter
+		}
+
+		// Find matching overload
+		fn2 := allSupportedFunctions[fnId]
+		var matchedOverload2 *overload
+		for i := range fn2.Overloads {
+			ov := &fn2.Overloads[i]
+			if len(ov.args) == len(parameters) {
+				match := true
+				for j := range parameters {
+					if ov.args[j] != parameters[j].Oid {
+						match = false
+						break
+					}
+				}
+				if match {
+					matchedOverload2 = ov
+					break
+				}
+			}
+		}
+		require.NotNil(t, matchedOverload2, "Should find matching overload for DATETIME input")
+
+		// Call retType function
+		retType := matchedOverload2.retType(parameters)
+		require.Equal(t, types.T_datetime, retType.Oid, "retType returns DATETIME type for DATETIME input")
+	})
+}
+
+// TestTimestampAddMySQLProtocolColumnType tests that MySQL protocol column type matches actual vector type
+// This test verifies that when TIMESTAMPADD(DAY, 5, DATE) returns DATE type, the MySQL column type is MYSQL_TYPE_DATE
+// NOT MYSQL_TYPE_TIMESTAMP or MYSQL_TYPE_DATETIME
+// This prevents "Invalid length (10) for type TIMESTAMP" errors
+func TestTimestampAddMySQLProtocolColumnType(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// Test case: TIMESTAMPADD(DAY, 5, DATE('2024-12-20'))
+	// MySQL behavior: Returns DATE type (2024-12-25)
+	// MySQL column type should be MYSQL_TYPE_DATE (not MYSQL_TYPE_TIMESTAMP or MYSQL_TYPE_DATETIME)
+	t.Run("DATE input + DAY unit - MySQL column type should be DATE", func(t *testing.T) {
+		d1, _ := types.ParseDateCast("2024-12-20")
+		expectedDate, _ := types.ParseDateCast("2024-12-25")
+
+		unitVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte("DAY"), 1, proc.Mp())
+		intervalVec, _ := vector.NewConstFixed(types.T_int64.ToType(), int64(5), 1, proc.Mp())
+		dateVec, _ := vector.NewConstFixed(types.T_date.ToType(), d1, 1, proc.Mp())
+
+		parameters := []*vector.Vector{unitVec, intervalVec, dateVec}
+		// After BindFuncExprImplByPlanExpr fix, expr.Typ is DATE, so result wrapper is DATE type
+		result := vector.NewFunctionResultWrapper(types.T_date.ToType(), proc.Mp())
+
+		fnLength := dateVec.Length()
+		err := result.PreExtendAndReset(fnLength)
+		require.NoError(t, err)
+
+		err = TimestampAddDate(parameters, result, proc, fnLength, nil)
+		require.NoError(t, err, "Should not panic when result wrapper is DATE type")
+
+		v := result.GetResultVector()
+		require.Equal(t, fnLength, v.Length())
+		// MySQL behavior: DATE input + date unit → DATE output
+		require.Equal(t, types.T_date, v.GetType().Oid, "Actual vector type should be DATE (MySQL compatible)")
+
+		// Verify the actual value matches MySQL
+		dateParam := vector.GenerateFunctionFixedTypeParameter[types.Date](v)
+		resultDate, null := dateParam.GetValue(0)
+		require.False(t, null, "Result should not be null")
+		require.Equal(t, expectedDate, resultDate, "Result should match MySQL behavior: DATE input + DAY unit → DATE output")
+	})
+
+	// Test case: TIMESTAMPADD(DAY, 5, DATE('2024-12-20')) with DATETIME result wrapper (backward compatibility)
+	// This tests the backward compatibility path
+	t.Run("DATE input + DAY unit - backward compatibility with DATETIME result wrapper", func(t *testing.T) {
+		d1, _ := types.ParseDateCast("2024-12-20")
+		expectedDate, _ := types.ParseDateCast("2024-12-25")
+
+		unitVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte("DAY"), 1, proc.Mp())
+		intervalVec, _ := vector.NewConstFixed(types.T_int64.ToType(), int64(5), 1, proc.Mp())
+		dateVec, _ := vector.NewConstFixed(types.T_date.ToType(), d1, 1, proc.Mp())
+
+		parameters := []*vector.Vector{unitVec, intervalVec, dateVec}
+		// Backward compatibility: if retType returns DATETIME, result wrapper is DATETIME type
+		result := vector.NewFunctionResultWrapper(types.T_datetime.ToType(), proc.Mp())
+
+		fnLength := dateVec.Length()
+		err := result.PreExtendAndReset(fnLength)
+		require.NoError(t, err)
+
+		err = TimestampAddDate(parameters, result, proc, fnLength, nil)
+		require.NoError(t, err, "Should not panic when result wrapper is DATETIME type (backward compatibility)")
+
+		v := result.GetResultVector()
+		require.Equal(t, fnLength, v.Length())
+		// MySQL behavior: DATE input + date unit → DATE output
+		require.Equal(t, types.T_date, v.GetType().Oid, "Actual vector type should be DATE (MySQL compatible)")
+
+		// Verify the actual value matches MySQL
+		dateParam := vector.GenerateFunctionFixedTypeParameter[types.Date](v)
+		resultDate, null := dateParam.GetValue(0)
+		require.False(t, null, "Result should not be null")
+		require.Equal(t, expectedDate, resultDate, "Result should match MySQL behavior: DATE input + DAY unit → DATE output")
+	})
+}
+
+// TestTimestampAddMySQLCompatibilityAndPanicPrevention tests MySQL compatibility and prevents panic issues
+// This test verifies the critical execution flow that was causing panic:
+// 1. retType returns DATETIME (because it cannot know the runtime unit at compile time)
+// 2. FunctionExpressionExecutor creates result wrapper with DATETIME type (from retType via planExpr.Typ)
+// 3. TimestampAddDate is called with DATETIME result wrapper
+// 4. TimestampAddDate uses MustFunctionResult[types.Datetime] (should NOT panic)
+// 5. For date units: TimestampAddDate uses SetType to change vector type to DATE
+// 6. For time units: TimestampAddDate uses TempSetType to set vector type to DATETIME with appropriate scale
+// 7. Final result type matches MySQL behavior
+//
+// This test specifically covers the panic scenario:
+// - SELECT d, TIMESTAMPADD(DAY, 5, d) AS added_date FROM t1;
+// - Where d is a DATE column
+// - Expected: Returns DATE type (2024-12-25), no panic
+func TestTimestampAddMySQLCompatibilityAndPanicPrevention(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// Test case 1: TIMESTAMPADD(DAY, 5, DATE('2024-12-20'))
+	// MySQL behavior: Returns DATE type (2024-12-25)
+	// This simulates: SELECT TIMESTAMPADD(DAY, 5, d) AS added_date FROM t1; where d is DATE column
+	t.Run("DATE input + DAY unit - simulates actual execution flow", func(t *testing.T) {
+		d1, _ := types.ParseDateCast("2024-12-20")
+		expectedDate, _ := types.ParseDateCast("2024-12-25")
+
+		unitVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte("DAY"), 1, proc.Mp())
+		intervalVec, _ := vector.NewConstFixed(types.T_int64.ToType(), int64(5), 1, proc.Mp())
+		dateVec, _ := vector.NewConstFixed(types.T_date.ToType(), d1, 1, proc.Mp())
+
+		parameters := []*vector.Vector{unitVec, intervalVec, dateVec}
+		// CRITICAL: Simulate FunctionExpressionExecutor.Init() behavior:
+		// - retType returns DATETIME (from list_builtIn.go)
+		// - planExpr.Typ is set to DATETIME (from retType)
+		// - FunctionExpressionExecutor.Init() uses planExpr.Typ to create result wrapper
+		// - So result wrapper is DATETIME type
+		// If we create DATE result wrapper here, MustFunctionResult[types.Datetime] will panic!
+		result := vector.NewFunctionResultWrapper(types.T_datetime.ToType(), proc.Mp())
+
+		fnLength := dateVec.Length()
+		err := result.PreExtendAndReset(fnLength)
+		require.NoError(t, err)
+
+		// This should NOT panic: MustFunctionResult[types.Datetime] on DATETIME result wrapper
+		// This is the exact line that was panicking: func_binary.go:1370
+		err = TimestampAddDate(parameters, result, proc, fnLength, nil)
+		require.NoError(t, err, "Should not panic when calling MustFunctionResult[types.Datetime] on DATETIME result wrapper")
+
+		v := result.GetResultVector()
+		require.Equal(t, fnLength, v.Length())
+		// MySQL behavior: DATE input + date unit → DATE output
+		require.Equal(t, types.T_date, v.GetType().Oid, "Result type should be DATE (MySQL compatible)")
+
+		// Verify the actual value matches MySQL
+		dateParam := vector.GenerateFunctionFixedTypeParameter[types.Date](v)
+		resultDate, null := dateParam.GetValue(0)
+		require.False(t, null, "Result should not be null")
+		require.Equal(t, expectedDate, resultDate, "Result should match MySQL behavior: DATE input + DAY unit → DATE output")
+	})
+
+	// Test case 2: TIMESTAMPADD(HOUR, 2, DATE('2024-12-20'))
+	// MySQL behavior: Returns DATETIME type (2024-12-20 02:00:00)
+	// This simulates: SELECT TIMESTAMPADD(HOUR, 2, d) AS date_plus_hour FROM t1; where d is DATE column
+	t.Run("DATE input + HOUR unit - simulates actual execution flow", func(t *testing.T) {
+		d1, _ := types.ParseDateCast("2024-12-20")
+		expectedDt, _ := types.ParseDatetime("2024-12-20 02:00:00", 0)
+
+		unitVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte("HOUR"), 1, proc.Mp())
+		intervalVec, _ := vector.NewConstFixed(types.T_int64.ToType(), int64(2), 1, proc.Mp())
+		dateVec, _ := vector.NewConstFixed(types.T_date.ToType(), d1, 1, proc.Mp())
+
+		parameters := []*vector.Vector{unitVec, intervalVec, dateVec}
+		// CRITICAL: retType returns DATETIME, so result wrapper must be DATETIME type
+		result := vector.NewFunctionResultWrapper(types.T_datetime.ToType(), proc.Mp())
+
+		fnLength := dateVec.Length()
+		err := result.PreExtendAndReset(fnLength)
+		require.NoError(t, err)
+
+		// This should NOT panic
+		err = TimestampAddDate(parameters, result, proc, fnLength, nil)
+		require.NoError(t, err, "Should not panic when calling MustFunctionResult[types.Datetime] on DATETIME result wrapper")
+
+		v := result.GetResultVector()
+		require.Equal(t, fnLength, v.Length())
+		// MySQL behavior: DATE input + time unit → DATETIME output
+		require.Equal(t, types.T_datetime, v.GetType().Oid, "Result type should be DATETIME (MySQL compatible)")
+		require.Equal(t, int32(0), v.GetType().Scale, "Scale should be 0 for HOUR unit")
+
+		// Verify the actual value matches MySQL
+		dtParam := vector.GenerateFunctionFixedTypeParameter[types.Datetime](v)
+		resultDt, null := dtParam.GetValue(0)
+		require.False(t, null, "Result should not be null")
+		require.Equal(t, expectedDt, resultDt, "Result should match MySQL behavior: DATE input + HOUR unit → DATETIME output")
+	})
+
+	// Test case 3: Verify that DATE result wrapper is now supported (after fix)
+	// After BindFuncExprImplByPlanExpr fix, expr.Typ can be DATE for date units
+	// FunctionExpressionExecutor creates DATE result wrapper, and TimestampAddDate handles it correctly
+	t.Run("DATE result wrapper is now supported for date units", func(t *testing.T) {
+		d1, _ := types.ParseDateCast("2024-12-20")
+		expectedDate, _ := types.ParseDateCast("2024-12-25")
+
+		unitVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte("DAY"), 1, proc.Mp())
+		intervalVec, _ := vector.NewConstFixed(types.T_int64.ToType(), int64(5), 1, proc.Mp())
+		dateVec, _ := vector.NewConstFixed(types.T_date.ToType(), d1, 1, proc.Mp())
+
+		parameters := []*vector.Vector{unitVec, intervalVec, dateVec}
+		// After BindFuncExprImplByPlanExpr fix, expr.Typ is DATE for date units
+		// FunctionExpressionExecutor creates DATE result wrapper
+		result := vector.NewFunctionResultWrapper(types.T_date.ToType(), proc.Mp())
+
+		fnLength := dateVec.Length()
+		err := result.PreExtendAndReset(fnLength)
+		require.NoError(t, err)
+
+		// This should NOT panic: TimestampAddDate now handles DATE result wrapper correctly
+		err = TimestampAddDate(parameters, result, proc, fnLength, nil)
+		require.NoError(t, err, "Should not panic when result wrapper is DATE type (after fix)")
+
+		v := result.GetResultVector()
+		require.Equal(t, types.T_date, v.GetType().Oid, "Result type should be DATE")
+		dateParam := vector.GenerateFunctionFixedTypeParameter[types.Date](v)
+		resultDate, null := dateParam.GetValue(0)
+		require.False(t, null, "Result should not be null")
+		require.Equal(t, expectedDate, resultDate, "Result should match expected value")
+	})
 }
 
 func initDateAddTestCase() []tcTemp {

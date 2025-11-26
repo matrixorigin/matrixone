@@ -5636,7 +5636,13 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar, types.T_int64, types.T_date},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_date.ToType()
+					// Return DATETIME type to match MySQL behavior
+					// MySQL behavior: DATE input + date unit → DATE output, DATE input + time unit → DATETIME output
+					// Since retType cannot know the runtime unit at compile time, return DATETIME conservatively
+					// At runtime, TimestampAddDate will use TempSetType appropriately:
+					// - For time units: DATETIME with scale 0 (HOUR/MINUTE/SECOND) or 6 (MICROSECOND)
+					// - For date units: DATETIME with scale 0, but formatted as DATE when time is 00:00:00
+					return types.T_datetime.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimestampAddDate
@@ -5666,7 +5672,10 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 3,
 				args:       []types.T{types.T_varchar, types.T_int64, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_datetime.ToType()
+					// MySQL behavior: When input is string literal, return VARCHAR/CHAR type (not DATETIME)
+					// This matches MySQL where TIMESTAMPADD with string input returns CHAR/VARCHAR
+					// The actual value format (DATE or DATETIME) depends on input string format and unit
+					return types.T_varchar.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimestampAddString
@@ -5676,7 +5685,13 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 4,
 				args:       []types.T{types.T_char, types.T_int64, types.T_date},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_date.ToType()
+					// Return DATETIME type to match MySQL behavior
+					// MySQL behavior: DATE input + date unit → DATE output, DATE input + time unit → DATETIME output
+					// Since retType cannot know the runtime unit at compile time, return DATETIME conservatively
+					// At runtime, TimestampAddDate will use TempSetType appropriately:
+					// - For time units: DATETIME with scale 0 (HOUR/MINUTE/SECOND) or 6 (MICROSECOND)
+					// - For date units: DATETIME with scale 0, but formatted as DATE when time is 00:00:00
+					return types.T_datetime.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimestampAddDate
@@ -5706,6 +5721,9 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 7,
 				args:       []types.T{types.T_char, types.T_int64, types.T_char},
 				retType: func(parameters []types.Type) types.Type {
+					// Return type depends on the unit parameter and input string format (runtime value)
+					// Default to DATETIME, but will be changed to DATE at runtime for date units with DATE format strings
+					// This matches MySQL behavior: DATE for date units with DATE format strings, DATETIME otherwise
 					return types.T_datetime.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
@@ -6850,6 +6868,76 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimestampDiff
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_varchar, types.T_date, types.T_date},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return TimestampDiffDate
+				},
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_varchar, types.T_timestamp, types.T_timestamp},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return TimestampDiffTimestamp
+				},
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return TimestampDiffString
+				},
+			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_char, types.T_datetime, types.T_datetime},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return TimestampDiff
+				},
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_char, types.T_date, types.T_date},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return TimestampDiffDate
+				},
+			},
+			{
+				overloadId: 6,
+				args:       []types.T{types.T_char, types.T_timestamp, types.T_timestamp},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return TimestampDiffTimestamp
+				},
+			},
+			{
+				overloadId: 7,
+				args:       []types.T{types.T_char, types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return TimestampDiffString
 				},
 			},
 		},

@@ -1345,6 +1345,9 @@ func TimeAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 
 // TimestampAddDate: TIMESTAMPADD(unit, interval, date)
 // Parameters: ivecs[0] = unit (string), ivecs[1] = interval (int64), ivecs[2] = date (Date)
+// MySQL behavior: Returns DATE for date units (DAY, WEEK, MONTH, QUARTER, YEAR)
+//
+//	Returns DATETIME for time units (HOUR, MINUTE, SECOND, MICROSECOND)
 func TimestampAddDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	if !ivecs[0].IsConst() {
 		return moerr.NewInvalidArg(proc.Ctx, "timestampadd unit", "not constant")
@@ -1356,24 +1359,116 @@ func TimestampAddDate(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 		return err
 	}
 
-	rs := vector.MustFunctionResult[types.Date](result)
+	// Check if interval type is a time unit (HOUR, MINUTE, SECOND, MICROSECOND)
+	// If so, return DATETIME; otherwise return DATE
+	isTimeUnit := iTyp == types.Hour || iTyp == types.Minute || iTyp == types.Second || iTyp == types.MicroSecond
+
 	dates := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[2])
 	intervals := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
 
-	for i := uint64(0); i < uint64(length); i++ {
-		date, null1 := dates.GetValue(i)
-		interval, null2 := intervals.GetValue(i)
-		if null1 || null2 {
-			if err = rs.Append(types.Date(0), true); err != nil {
-				return err
+	// Check result wrapper type: it can be DATE (from BindFuncExprImplByPlanExpr) or DATETIME (from retType)
+	// This handles both cases:
+	// 1. New case: BindFuncExprImplByPlanExpr sets expr.Typ to DATE → result wrapper is DATE
+	// 2. Old case: retType returns DATETIME → result wrapper is DATETIME (backward compatibility)
+	vec := result.GetResultVector()
+	resultType := vec.GetType().Oid
+
+	if isTimeUnit {
+		// Return DATETIME for time units (MySQL compatible)
+		// When input is DATE but unit is time unit, MySQL returns DATETIME
+		// Set scale based on interval type:
+		// - MICROSECOND: scale=6 (microsecond precision)
+		// - HOUR, MINUTE, SECOND: scale=0 (no fractional seconds)
+		scale := int32(0)
+		if iTyp == types.MicroSecond {
+			scale = 6
+		}
+
+		if resultType == types.T_date {
+			// Result wrapper is DATE, but we need to return DATETIME
+			// Convert to DATETIME type
+			vec.SetType(types.New(types.T_datetime, 0, scale))
+			rss := vector.MustFixedColNoTypeCheck[types.Datetime](vec)
+			rsNull := vec.GetNulls()
+
+			for i := uint64(0); i < uint64(length); i++ {
+				date, null1 := dates.GetValue(i)
+				interval, null2 := intervals.GetValue(i)
+				if null1 || null2 {
+					rsNull.Add(i)
+				} else {
+					// Convert DATE to DATETIME, add interval, return DATETIME
+					dt := date.ToDatetime()
+					resultDt, err := doDatetimeAdd(dt, interval, iTyp)
+					if err != nil {
+						return err
+					}
+					rss[i] = resultDt
+				}
 			}
 		} else {
-			resultDate, err := doDateAdd(date, interval, iTyp)
-			if err != nil {
-				return err
+			// Result wrapper is DATETIME (backward compatibility)
+			rsDatetime := vector.MustFunctionResult[types.Datetime](result)
+			rsDatetime.TempSetType(types.New(types.T_datetime, 0, scale))
+			rss := vector.MustFixedColNoTypeCheck[types.Datetime](vec)
+			rsNull := vec.GetNulls()
+
+			for i := uint64(0); i < uint64(length); i++ {
+				date, null1 := dates.GetValue(i)
+				interval, null2 := intervals.GetValue(i)
+				if null1 || null2 {
+					rsNull.Add(i)
+				} else {
+					// Convert DATE to DATETIME, add interval, return DATETIME
+					dt := date.ToDatetime()
+					resultDt, err := doDatetimeAdd(dt, interval, iTyp)
+					if err != nil {
+						return err
+					}
+					rss[i] = resultDt
+				}
 			}
-			if err = rs.Append(resultDate, false); err != nil {
-				return err
+		}
+	} else {
+		// Return DATE for date units (DAY, WEEK, MONTH, QUARTER, YEAR)
+		// MySQL behavior: DATE input + date unit → DATE output
+		if resultType == types.T_date {
+			// Result wrapper is already DATE (from BindFuncExprImplByPlanExpr)
+			rss := vector.MustFixedColNoTypeCheck[types.Date](vec)
+			rsNull := vec.GetNulls()
+
+			for i := uint64(0); i < uint64(length); i++ {
+				date, null1 := dates.GetValue(i)
+				interval, null2 := intervals.GetValue(i)
+				if null1 || null2 {
+					rsNull.Add(i)
+				} else {
+					resultDate, err := doDateAdd(date, interval, iTyp)
+					if err != nil {
+						return err
+					}
+					rss[i] = resultDate
+				}
+			}
+		} else {
+			// Result wrapper is DATETIME (backward compatibility)
+			// Use SetType to change vector type to DATE
+			vec.SetType(types.New(types.T_date, 0, 0))
+			rss := vector.MustFixedColNoTypeCheck[types.Date](vec)
+			rsNull := vec.GetNulls()
+
+			for i := uint64(0); i < uint64(length); i++ {
+				date, null1 := dates.GetValue(i)
+				interval, null2 := intervals.GetValue(i)
+				if null1 || null2 {
+					rsNull.Add(i)
+				} else {
+					resultDate, err := doDateAdd(date, interval, iTyp)
+					if err != nil {
+						return err
+					}
+					rss[i] = resultDate
+				}
 			}
 		}
 	}
@@ -1396,6 +1491,12 @@ func TimestampAddDatetime(ivecs []*vector.Vector, result vector.FunctionResultWr
 	scale := ivecs[2].GetType().Scale
 	if iTyp == types.MicroSecond {
 		scale = 6
+	}
+	// For DATETIME type input, always return DATETIME format (not DATE format)
+	// Use scale >= 1 to indicate DATETIME type input (vs scale=0 for DATE type input)
+	// This allows MySQL protocol layer to format as full DATETIME format
+	if scale == 0 {
+		scale = 1 // Mark as DATETIME type input
 	}
 	rs := vector.MustFunctionResult[types.Datetime](result)
 	rs.TempSetType(types.New(types.T_datetime, 0, scale))
@@ -1472,6 +1573,8 @@ func TimestampAddTimestamp(ivecs []*vector.Vector, result vector.FunctionResultW
 
 // TimestampAddString: TIMESTAMPADD(unit, interval, datetime_string)
 // Parameters: ivecs[0] = unit (string), ivecs[1] = interval (int64), ivecs[2] = datetime_string (string)
+// MySQL behavior: When input is string literal, return VARCHAR/CHAR type (not DATETIME)
+// The actual value format (DATE or DATETIME) depends on input string format and unit
 func TimestampAddString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	if !ivecs[0].IsConst() {
 		return moerr.NewInvalidArg(proc.Ctx, "timestampadd unit", "not constant")
@@ -1483,26 +1586,107 @@ func TimestampAddString(ivecs []*vector.Vector, result vector.FunctionResultWrap
 		return err
 	}
 
-	rs := vector.MustFunctionResult[types.Datetime](result)
-	rs.TempSetType(types.New(types.T_datetime, 0, 6))
+	// Check if interval type is a time unit (HOUR, MINUTE, SECOND, MICROSECOND)
+	// If so, return DATETIME format string; otherwise check if input is DATE format
+	isTimeUnit := iTyp == types.Hour || iTyp == types.Minute || iTyp == types.Second || iTyp == types.MicroSecond
 
 	dateStrings := vector.GenerateFunctionStrParameter(ivecs[2])
 	intervals := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
 
-	for i := uint64(0); i < uint64(length); i++ {
-		dateStr, null1 := dateStrings.GetStrValue(i)
-		interval, null2 := intervals.GetValue(i)
-		if null1 || null2 {
-			if err = rs.Append(types.Datetime(0), true); err != nil {
-				return err
+	// Return VARCHAR type (string) to match MySQL behavior when input is string literal
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	if isTimeUnit {
+		// Return DATETIME format string for time units
+		for i := uint64(0); i < uint64(length); i++ {
+			dateStr, null1 := dateStrings.GetStrValue(i)
+			interval, null2 := intervals.GetValue(i)
+			if null1 || null2 {
+				if err = rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+			} else {
+				resultDt, err := doDateStringAdd(functionUtil.QuickBytesToStr(dateStr), interval, iTyp)
+				if err != nil {
+					return err
+				}
+				// Format as DATETIME string (full format with time)
+				resultStr := resultDt.String2(0) // Use scale 0 for no fractional seconds
+				if err = rs.AppendBytes([]byte(resultStr), false); err != nil {
+					return err
+				}
+			}
+		}
+	} else {
+		// For date units, check if input string is DATE format (date only, no time)
+		// First pass: check if all inputs are DATE format
+		allDateFormat := true
+		for i := uint64(0); i < uint64(length); i++ {
+			dateStr, null1 := dateStrings.GetStrValue(i)
+			if null1 {
+				continue
+			}
+			dateStrVal := functionUtil.QuickBytesToStr(dateStr)
+			// Check if it's date-only format (no space, no colon)
+			hasTimePart := strings.Contains(dateStrVal, " ") || strings.Contains(dateStrVal, ":")
+			if hasTimePart {
+				allDateFormat = false
+				break
+			}
+			// Try to parse as DATE
+			_, err1 := types.ParseDateCast(dateStrVal)
+			if err1 != nil {
+				allDateFormat = false
+				break
+			}
+		}
+
+		if allDateFormat {
+			// All inputs are DATE format, return DATE format string (YYYY-MM-DD)
+			for i := uint64(0); i < uint64(length); i++ {
+				dateStr, null1 := dateStrings.GetStrValue(i)
+				interval, null2 := intervals.GetValue(i)
+				if null1 || null2 {
+					if err = rs.AppendBytes(nil, true); err != nil {
+						return err
+					}
+				} else {
+					dateStrVal := functionUtil.QuickBytesToStr(dateStr)
+					date, err1 := types.ParseDateCast(dateStrVal)
+					if err1 != nil {
+						return err1
+					}
+					resultDate, err2 := doDateAdd(date, interval, iTyp)
+					if err2 != nil {
+						return err2
+					}
+					// Format as DATE string (YYYY-MM-DD only)
+					resultStr := resultDate.String()
+					if err = rs.AppendBytes([]byte(resultStr), false); err != nil {
+						return err
+					}
+				}
 			}
 		} else {
-			resultDt, err := doDateStringAdd(functionUtil.QuickBytesToStr(dateStr), interval, iTyp)
-			if err != nil {
-				return err
-			}
-			if err = rs.Append(resultDt, false); err != nil {
-				return err
+			// Mixed or DATETIME format, return DATETIME format string
+			for i := uint64(0); i < uint64(length); i++ {
+				dateStr, null1 := dateStrings.GetStrValue(i)
+				interval, null2 := intervals.GetValue(i)
+				if null1 || null2 {
+					if err = rs.AppendBytes(nil, true); err != nil {
+						return err
+					}
+				} else {
+					resultDt, err := doDateStringAdd(functionUtil.QuickBytesToStr(dateStr), interval, iTyp)
+					if err != nil {
+						return err
+					}
+					// Format as DATETIME string (full format with time)
+					resultStr := resultDt.String2(0) // Use scale 0 for no fractional seconds
+					if err = rs.AppendBytes([]byte(resultStr), false); err != nil {
+						return err
+					}
+				}
 			}
 		}
 	}
@@ -5070,7 +5254,9 @@ func TimeDiffString(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 	return nil
 }
 
-func TimestampDiff(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+// TimestampDiff: TIMESTAMPDIFF(unit, datetime1, datetime2) - Returns datetime2 - datetime1
+// Supports DATETIME, DATE, TIMESTAMP, and string inputs
+func TimestampDiff(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[1])
 	p3 := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[2])
@@ -5085,10 +5271,135 @@ func TimestampDiff(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 				return err
 			}
 		} else {
+			// MySQL: TIMESTAMPDIFF(unit, datetime1, datetime2) returns datetime2 - datetime1
 			res, _ := v3.DateTimeDiffWithUnit(functionUtil.QuickBytesToStr(v1), v2)
 			if err = rs.Append(res, false); err != nil {
 				return err
 			}
+		}
+	}
+	return nil
+}
+
+// TimestampDiffDate: TIMESTAMPDIFF(unit, date1, date2) - Supports DATE inputs
+func TimestampDiffDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[1])
+	p3 := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[2])
+	rs := vector.MustFunctionResult[int64](result)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetStrValue(i)
+		v2, null2 := p2.GetValue(i)
+		v3, null3 := p3.GetValue(i)
+		if null1 || null2 || null3 {
+			if err = rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			// Convert DATE to DATETIME for calculation
+			dt2 := v2.ToDatetime()
+			dt3 := v3.ToDatetime()
+			// MySQL: TIMESTAMPDIFF(unit, datetime1, datetime2) returns datetime2 - datetime1
+			res, _ := dt3.DateTimeDiffWithUnit(functionUtil.QuickBytesToStr(v1), dt2)
+			if err = rs.Append(res, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// TimestampDiffTimestamp: TIMESTAMPDIFF(unit, timestamp1, timestamp2) - Supports TIMESTAMP inputs
+func TimestampDiffTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[1])
+	p3 := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[2])
+	rs := vector.MustFunctionResult[int64](result)
+
+	loc := proc.GetSessionInfo().TimeZone
+	if loc == nil {
+		loc = time.Local
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetStrValue(i)
+		v2, null2 := p2.GetValue(i)
+		v3, null3 := p3.GetValue(i)
+		if null1 || null2 || null3 {
+			if err = rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			// Convert TIMESTAMP to DATETIME for calculation (considering timezone)
+			dt2 := v2.ToDatetime(loc)
+			dt3 := v3.ToDatetime(loc)
+			// MySQL: TIMESTAMPDIFF(unit, datetime1, datetime2) returns datetime2 - datetime1
+			res, _ := dt3.DateTimeDiffWithUnit(functionUtil.QuickBytesToStr(v1), dt2)
+			if err = rs.Append(res, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// TimestampDiffString: TIMESTAMPDIFF(unit, datetime_string1, datetime_string2) - Supports string inputs
+func TimestampDiffString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
+	p2 := vector.GenerateFunctionStrParameter(ivecs[1])
+	p3 := vector.GenerateFunctionStrParameter(ivecs[2])
+	rs := vector.MustFunctionResult[int64](result)
+
+	scale := int32(6) // Use max scale for string inputs
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetStrValue(i)
+		v2, null2 := p2.GetStrValue(i)
+		v3, null3 := p3.GetStrValue(i)
+		if null1 || null2 || null3 {
+			if err = rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Parse datetime_string1 - try datetime first, then date
+		var dt2 types.Datetime
+		v2Str := functionUtil.QuickBytesToStr(v2)
+		dt2, err2 := types.ParseDatetime(v2Str, scale)
+		if err2 != nil {
+			// If parsing as datetime fails, try as date
+			date2, err3 := types.ParseDateCast(v2Str)
+			if err3 != nil {
+				if err = rs.Append(0, true); err != nil {
+					return err
+				}
+				continue
+			}
+			dt2 = date2.ToDatetime()
+		}
+
+		// Parse datetime_string2 - try datetime first, then date
+		var dt3 types.Datetime
+		v3Str := functionUtil.QuickBytesToStr(v3)
+		dt3, err3 := types.ParseDatetime(v3Str, scale)
+		if err3 != nil {
+			// If parsing as datetime fails, try as date
+			date3, err4 := types.ParseDateCast(v3Str)
+			if err4 != nil {
+				if err = rs.Append(0, true); err != nil {
+					return err
+				}
+				continue
+			}
+			dt3 = date3.ToDatetime()
+		}
+
+		// MySQL: TIMESTAMPDIFF(unit, datetime1, datetime2) returns datetime2 - datetime1
+		res, _ := dt3.DateTimeDiffWithUnit(functionUtil.QuickBytesToStr(v1), dt2)
+		if err = rs.Append(res, false); err != nil {
+			return err
 		}
 	}
 	return nil

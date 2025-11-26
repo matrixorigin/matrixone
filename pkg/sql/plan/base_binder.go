@@ -1838,6 +1838,33 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			}
 		}
 
+	case "timestampadd":
+		// For TIMESTAMPADD with DATE input, check if unit is constant and adjust return type
+		// MySQL behavior: DATE input + date unit → DATE output, DATE input + time unit → DATETIME output
+		// This ensures GetResultColumnsFromPlan returns correct column type for MySQL protocol layer
+		if len(args) >= 3 && argsType[2].Oid == types.T_date {
+			// Check if first argument (unit) is a constant string
+			if unitExpr, ok := args[0].Expr.(*plan.Expr_Lit); ok && unitExpr.Lit != nil && !unitExpr.Lit.Isnull {
+				if sval, ok := unitExpr.Lit.GetValue().(*plan.Literal_Sval); ok {
+					unitStr := strings.ToUpper(sval.Sval)
+					// Parse interval type
+					iTyp, err := types.IntervalTypeOf(unitStr)
+					if err == nil {
+						// Check if it's a date unit (DAY, WEEK, MONTH, QUARTER, YEAR)
+						isDateUnit := iTyp == types.Day || iTyp == types.Week ||
+							iTyp == types.Month || iTyp == types.Quarter ||
+							iTyp == types.Year
+						if isDateUnit {
+							// Return DATE type for date units (MySQL compatible)
+							returnType = types.T_date.ToType()
+						}
+						// For time units (HOUR, MINUTE, SECOND, MICROSECOND), keep DATETIME (from retType)
+					}
+				}
+			}
+			// If unit is not constant, keep DATETIME (conservative approach)
+		}
+
 	case "python_user_defined_function":
 		size := (argsLength - 2) / 2
 		args = args[:size+1]

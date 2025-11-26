@@ -2708,10 +2708,37 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow(mrs *MysqlResultSet, r uint6
 			if value, err2 := mrs.GetValue(mp.ctx, r, i); err2 != nil {
 				return err2
 			} else {
-				mp.dateEncBuffer = value.(types.Date).ToBytes(mp.dateEncBuffer[:0])
-				err = mp.appendCountOfBytesLenEnc(mp.dateEncBuffer[:types.DateToBytesLength])
-				if err != nil {
-					return err
+				// Handle both Date and Datetime types for MYSQL_TYPE_DATE
+				// This can happen when TIMESTAMPADD with DATE input returns DATETIME type (with scale=0)
+				// but MySQL column type is set to MYSQL_TYPE_DATE
+				if dt, ok := value.(types.Datetime); ok {
+					// Fix: When actual value is Datetime, format as DATETIME string (not DATE)
+					// This handles TIMESTAMPADD with DATE input + time unit (HOUR/MINUTE/SECOND/MICROSECOND)
+					// MySQL behavior: DATE input + time unit → DATETIME output
+					// Get scale from column metadata
+					scale := int32(mysqlColumn.Decimal())
+					// Format as DATETIME string with correct scale
+					// If fractional seconds are 0, don't show them (MySQL behavior)
+					valueStr := dt.String2(scale)
+					// Remove trailing zeros from fractional seconds to match MySQL display
+					if scale > 0 && dt.MicroSec() == 0 {
+						// If fractional seconds are 0, format without fractional part
+						valueStr = dt.String2(0)
+					}
+					err = AppendStringLenEnc(mp, valueStr)
+					if err != nil {
+						return err
+					}
+				} else if d, ok := value.(types.Date); ok {
+					// Normal case: value is Date, format as DATE
+					var date types.Date = d
+					mp.dateEncBuffer = date.ToBytes(mp.dateEncBuffer[:0])
+					err = mp.appendCountOfBytesLenEnc(mp.dateEncBuffer[:types.DateToBytesLength])
+					if err != nil {
+						return err
+					}
+				} else {
+					return moerr.NewInternalErrorf(mp.ctx, "unsupported type %T for MYSQL_TYPE_DATE", value)
 				}
 			}
 		case defines.MYSQL_TYPE_DATETIME:
@@ -2720,10 +2747,33 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow(mrs *MysqlResultSet, r uint6
 			if val, err2 := mrs.GetValue(mp.ctx, r, i); err2 != nil {
 				return err2
 			} else if dt, ok := val.(types.Datetime); ok {
-				value := dt.String2(scale)
-				err = AppendStringLenEnc(mp, value)
-				if err != nil {
-					return err
+				// Check if this should be formatted as DATE (scale=0 and time is 00:00:00)
+				// This handles TIMESTAMPADD with DATE input and date units returning DATE type
+				// MySQL behavior: DATE input + date unit → DATE output (type 91)
+				// When scale=0 and time is 00:00:00, format as DATE to match MySQL behavior
+				hour, minute, sec := dt.Clock()
+				if scale == 0 && hour == 0 && minute == 0 && sec == 0 {
+					// Format as DATE (YYYY-MM-DD) to match MySQL behavior
+					date := dt.ToDate()
+					value := date.String()
+					err = AppendStringLenEnc(mp, value)
+					if err != nil {
+						return err
+					}
+				} else {
+					// Always return full DATETIME format for MYSQL_TYPE_DATETIME
+					// JDBC clients may interpret MYSQL_TYPE_DATETIME as TIMESTAMP and expect full format
+					// This avoids "Invalid length (10) for type TIMESTAMP" errors
+					// For scale > 0 but < 6, use scale 0 for formatting (no fractional seconds)
+					formatScale := scale
+					if scale > 0 && scale < 6 {
+						formatScale = 0
+					}
+					value := dt.String2(formatScale)
+					err = AppendStringLenEnc(mp, value)
+					if err != nil {
+						return err
+					}
 				}
 			} else {
 				// Fallback to GetString if type assertion fails
@@ -2731,9 +2781,23 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow(mrs *MysqlResultSet, r uint6
 				if err2 != nil {
 					return err2
 				}
-				err = AppendStringLenEnc(mp, value)
-				if err != nil {
-					return err
+				// Check if it's DATE format and scale=0, format as DATE
+				if len(value) == 10 && scale == 0 { // DATE format "YYYY-MM-DD"
+					// Keep as DATE format to match MySQL behavior
+					err = AppendStringLenEnc(mp, value)
+					if err != nil {
+						return err
+					}
+				} else {
+					// Ensure full DATETIME format (not DATE format)
+					// Pad DATE format to DATETIME format if needed
+					if len(value) == 10 { // DATE format "YYYY-MM-DD"
+						value = value + " 00:00:00"
+					}
+					err = AppendStringLenEnc(mp, value)
+					if err != nil {
+						return err
+					}
 				}
 			}
 		case defines.MYSQL_TYPE_TIME:
@@ -2770,11 +2834,33 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow(mrs *MysqlResultSet, r uint6
 				if err != nil {
 					return err
 				}
+			} else if dt, ok := val.(types.Datetime); ok {
+				// For TIMESTAMP type, always return full DATETIME format (not DATE format)
+				// MySQL client expects TIMESTAMP strings to have full datetime format
+				hour, minute, sec := dt.Clock()
+				if hour == 0 && minute == 0 && sec == 0 && scale == 0 {
+					// Even if time is 00:00:00, return full format for TIMESTAMP
+					value := dt.String() // Use String() which always returns full format
+					err = AppendStringLenEnc(mp, value)
+					if err != nil {
+						return err
+					}
+				} else {
+					value := dt.String2(scale)
+					err = AppendStringLenEnc(mp, value)
+					if err != nil {
+						return err
+					}
+				}
 			} else {
 				// Fallback to GetString if type assertion fails
 				value, err2 := mrs.GetString(mp.ctx, r, i)
 				if err2 != nil {
 					return err2
+				}
+				// Ensure full format for TIMESTAMP (pad DATE format to DATETIME format)
+				if len(value) == 10 { // DATE format "YYYY-MM-DD"
+					value = value + " 00:00:00"
 				}
 				err = AppendStringLenEnc(mp, value)
 				if err != nil {
@@ -3034,11 +3120,31 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow2(mrs *MysqlResultSet, colS
 				if err != nil {
 					return err
 				}
+				// For binary protocol, ensure full DATETIME format (not DATE format)
+				// JDBC clients expect full DATETIME format for MYSQL_TYPE_DATETIME/TIMESTAMP columns
+				// This avoids "Invalid length (10) for type TIMESTAMP" errors
+				if len(value) == 10 { // DATE format "YYYY-MM-DD"
+					value = value + " 00:00:00"
+				}
 			case types.T_timestamp:
 				value, err = GetTimestamp(colSlices, rowIdx, i, mp.ses.GetTimeZone())
 				if err != nil {
 					return err
 				}
+				// Ensure full DATETIME format for TIMESTAMP
+				if len(value) == 10 { // DATE format "YYYY-MM-DD"
+					value = value + " 00:00:00"
+				}
+			case types.T_date:
+				// Handle DATE type when MySQL column type is MYSQL_TYPE_DATETIME
+				// This can happen when TIMESTAMPADD with DATE input returns DATE type
+				// but MySQL column type is set to MYSQL_TYPE_DATETIME
+				date, err := GetDate(colSlices, rowIdx, i)
+				if err != nil {
+					return err
+				}
+				// Convert DATE to DATETIME format string
+				value = date.String() + " 00:00:00"
 			default:
 				return moerr.NewInternalErrorf(mp.ctx, "unknown type %s in datetime or timestamp", typ.Oid)
 			}
@@ -3055,9 +3161,28 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow2(mrs *MysqlResultSet, colS
 					return err
 				}
 			}
-			err = mp.appendDatetime(dt)
-			if err != nil {
-				return err
+			// For binary protocol, always encode as 7 bytes (with time part) for MYSQL_TYPE_DATETIME/TIMESTAMP
+			// JDBC clients expect TIMESTAMP format (7 or 11 bytes), not DATE format (4 bytes)
+			// This avoids "Invalid length (10) for type TIMESTAMP" errors
+			if dt.Hour() == 0 && dt.Minute() == 0 && dt.Sec() == 0 && dt.MicroSec() == 0 {
+				// Force encode as 7 bytes (with time part) instead of 4 bytes (date only)
+				err = mp.append(7)
+				if err != nil {
+					return err
+				}
+				err = mp.appendUint16(uint16(dt.Year()))
+				if err != nil {
+					return err
+				}
+				err = mp.append(dt.Month(), dt.Day(), byte(0), byte(0), byte(0))
+				if err != nil {
+					return err
+				}
+			} else {
+				err = mp.appendDatetime(dt)
+				if err != nil {
+					return err
+				}
 			}
 		default:
 			return moerr.NewInternalError(mp.ctx, "type is not supported in binary text result row")
@@ -3253,19 +3378,79 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 				return err
 			}
 		case defines.MYSQL_TYPE_DATE:
-			value, err := GetDate(colSlices, r, i)
-			if err != nil {
-				return err
-			}
-			mp.dateEncBuffer = value.ToBytes(mp.dateEncBuffer[:0])
-			err = mp.appendCountOfBytesLenEnc(mp.dateEncBuffer[:types.DateToBytesLength])
-			if err != nil {
-				return err
+			// Check vector type - it might be DATETIME even if MySQL column type is DATE
+			typ := colSlices.GetType(i)
+			vec := colSlices.GetVector(i)
+			actualType := vec.GetType().Oid
+			var err error
+
+			// Fix: When actual vector type is DATETIME, format as DATETIME string (not DATE)
+			// This handles TIMESTAMPADD with DATE input + time unit (HOUR/MINUTE/SECOND/MICROSECOND)
+			// MySQL behavior: DATE input + time unit → DATETIME output
+			if actualType == types.T_datetime {
+				// Actual vector type is DATETIME, format as DATETIME string
+				dtStr, err2 := GetDatetime(colSlices, r, i)
+				if err2 != nil {
+					return err2
+				}
+				// Format as DATETIME string (not DATE)
+				err = AppendStringLenEnc(mp, dtStr)
+				if err != nil {
+					return err
+				}
+			} else if typ.Oid == types.T_date {
+				// Normal case: type is T_date and actual vector type is also T_date
+				date, err2 := GetDate(colSlices, r, i)
+				if err2 != nil {
+					return err2
+				}
+				mp.dateEncBuffer = date.ToBytes(mp.dateEncBuffer[:0])
+				err = mp.appendCountOfBytesLenEnc(mp.dateEncBuffer[:types.DateToBytesLength])
+				if err != nil {
+					return err
+				}
+			} else {
+				return moerr.NewInternalErrorf(mp.ctx, "unsupported type %s for MYSQL_TYPE_DATE", typ.Oid)
 			}
 		case defines.MYSQL_TYPE_DATETIME:
-			value, err := GetDatetime(colSlices, r, i)
-			if err != nil {
-				return err
+			// Check vector type - it might be DATE even if MySQL column type is DATETIME
+			typ := colSlices.GetType(i)
+			var value string
+			var err error
+			if typ.Oid == types.T_date {
+				// Handle DATE type when MySQL column type is MYSQL_TYPE_DATETIME
+				// This can happen when TIMESTAMPADD with DATE input returns DATE type
+				// but MySQL column type is set to MYSQL_TYPE_DATETIME
+				// MySQL behavior: DATE input + date unit → DATE output (type 91)
+				// Format as DATE (YYYY-MM-DD) to match MySQL behavior
+				date, err2 := GetDate(colSlices, r, i)
+				if err2 != nil {
+					return err2
+				}
+				value = date.String()
+			} else {
+				// Use GetDatetime which respects the scale from the vector type
+				value, err = GetDatetime(colSlices, r, i)
+				if err != nil {
+					return err
+				}
+				// Check if this should be formatted as DATE (scale=0 and time is 00:00:00)
+				// This handles TIMESTAMPADD with DATE input and date units returning DATE type
+				// MySQL behavior: DATE input + date unit → DATE output (type 91)
+				// Get the actual vector to check scale and time
+				vec := colSlices.dataSet.Vecs[i]
+				actualScale := vec.GetType().Scale
+				if actualScale == 0 && len(value) == 10 {
+					// Scale is 0 and value is DATE format, keep as DATE format
+					// This matches MySQL behavior for TIMESTAMPADD(DAY, 5, date_column)
+				} else {
+					// For MYSQL_TYPE_DATETIME with scale>=1 or non-zero time, return full DATETIME format
+					// JDBC clients expect TIMESTAMP/DATETIME format (19+ characters), not DATE format (10 characters)
+					// This avoids "Invalid length (10) for type TIMESTAMP" errors
+					if len(value) == 10 { // DATE format "YYYY-MM-DD"
+						value = value + " 00:00:00"
+					}
+				}
 			}
 			err = AppendStringLenEnc(mp, value)
 			if err != nil {
@@ -3284,13 +3469,42 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 			typ := colSlices.GetType(i)
 			switch typ.Oid {
 			case types.T_datetime:
-				value, err := GetDatetime(colSlices, r, i)
-				if err != nil {
-					return err
-				}
-				err = AppendStringLenEnc(mp, value)
-				if err != nil {
-					return err
+				// For TIMESTAMP type, always return full DATETIME format (not DATE format)
+				// MySQL client expects TIMESTAMP strings to have full datetime format
+				scale := int32(mysqlColumn.Decimal())
+				if val, err2 := mrs.GetValue(mp.ctx, r, i); err2 != nil {
+					return err2
+				} else if dt, ok := val.(types.Datetime); ok {
+					// Always return full DATETIME format for TIMESTAMP type
+					hour, minute, sec := dt.Clock()
+					if hour == 0 && minute == 0 && sec == 0 && scale == 0 {
+						// Even if time is 00:00:00, return full format for TIMESTAMP
+						value := dt.String() // Use String() which always returns full format
+						err = AppendStringLenEnc(mp, value)
+						if err != nil {
+							return err
+						}
+					} else {
+						value := dt.String2(scale)
+						err = AppendStringLenEnc(mp, value)
+						if err != nil {
+							return err
+						}
+					}
+				} else {
+					// Fallback to GetDatetime
+					value, err := GetDatetime(colSlices, r, i)
+					if err != nil {
+						return err
+					}
+					// Ensure full format for TIMESTAMP (pad DATE format to DATETIME format)
+					if len(value) == 10 { // DATE format "YYYY-MM-DD"
+						value = value + " 00:00:00"
+					}
+					err = AppendStringLenEnc(mp, value)
+					if err != nil {
+						return err
+					}
 				}
 			default:
 				value, err := GetTimestamp(colSlices, r, i, mp.ses.GetTimeZone())

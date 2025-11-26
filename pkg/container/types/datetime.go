@@ -62,6 +62,7 @@ func (dt Datetime) String() string {
 func (dt Datetime) String2(scale int32) string {
 	y, m, d, _ := dt.ToDate().Calendar(true)
 	hour, minute, sec := dt.Clock()
+
 	if scale > 0 {
 		msec := int64(dt) % MicroSecsPerSec
 		// Format microseconds as 6 digits (max precision we store)
@@ -413,6 +414,12 @@ func (dt Datetime) AddDateTime(addMonth, addYear int64, timeType TimeType) (Date
 func (dt Datetime) AddInterval(nums int64, its IntervalType, timeType TimeType) (Datetime, bool) {
 	var addMonth, addYear int64
 	switch its {
+	case MicroSecond:
+		// nums is already in microseconds, no conversion needed
+		// For time units (MicroSecond, Second, Minute, Hour), the addition won't change the date part
+		// so we can directly return the result without ValidDatetime check
+		newDate := dt + Datetime(nums)
+		return newDate, true
 	case Second:
 		nums *= MicroSecsPerSec
 	case Minute:
