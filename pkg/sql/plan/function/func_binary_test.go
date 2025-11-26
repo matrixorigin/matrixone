@@ -5498,3 +5498,191 @@ func TestTimeFormat(t *testing.T) {
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
 }
+
+// TestTimestampDiffDateString tests TIMESTAMPDIFF with DATE and string arguments
+// This tests the new overload that handles mixed DATE and string types
+func TestTimestampDiffDateString(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	t.Run("DATE and string with time part", func(t *testing.T) {
+		// Test: TIMESTAMPDIFF(HOUR, DATE('2024-12-20'), '2024-12-20 12:00:00')
+		// Expected: 12 hours
+		unitVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte("HOUR"), 1, proc.Mp())
+		date1, _ := types.ParseDateCast("2024-12-20")
+		dateVec, _ := vector.NewConstFixed(types.T_date.ToType(), date1, 1, proc.Mp())
+		strVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte("2024-12-20 12:00:00"), 1, proc.Mp())
+
+		parameters := []*vector.Vector{unitVec, dateVec, strVec}
+		result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
+
+		fnLength := dateVec.Length()
+		err := result.PreExtendAndReset(fnLength)
+		require.NoError(t, err)
+
+		// Use TimestampDiffDateString to handle DATE and string mix
+		err = TimestampDiffDateString(parameters, result, proc, fnLength, nil)
+		require.NoError(t, err)
+
+		v := result.GetResultVector()
+		require.Equal(t, fnLength, v.Length())
+		require.Equal(t, types.T_int64, v.GetType().Oid)
+
+		int64Param := vector.GenerateFunctionFixedTypeParameter[int64](v)
+		resultVal, null := int64Param.GetValue(0)
+		require.False(t, null, "Result should not be null")
+		require.Equal(t, int64(12), resultVal, "Should return 12 hours")
+	})
+
+	t.Run("DATE and string with DAY unit", func(t *testing.T) {
+		// Test: TIMESTAMPDIFF(DAY, DATE('2024-12-20'), '2024-12-21 12:00:00')
+		// Expected: 1 day
+		unitVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte("DAY"), 1, proc.Mp())
+		date1, _ := types.ParseDateCast("2024-12-20")
+		dateVec, _ := vector.NewConstFixed(types.T_date.ToType(), date1, 1, proc.Mp())
+		strVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte("2024-12-21 12:00:00"), 1, proc.Mp())
+
+		parameters := []*vector.Vector{unitVec, dateVec, strVec}
+		result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
+
+		fnLength := dateVec.Length()
+		err := result.PreExtendAndReset(fnLength)
+		require.NoError(t, err)
+
+		err = TimestampDiffDateString(parameters, result, proc, fnLength, nil)
+		require.NoError(t, err)
+
+		v := result.GetResultVector()
+		int64Param := vector.GenerateFunctionFixedTypeParameter[int64](v)
+		resultVal, null := int64Param.GetValue(0)
+		require.False(t, null)
+		require.Equal(t, int64(1), resultVal, "Should return 1 day")
+	})
+}
+
+// TestTimestampDiffStringDate tests TIMESTAMPDIFF with string and DATE arguments
+// This tests the new overload that handles mixed string and DATE types
+func TestTimestampDiffStringDate(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	t.Run("String and DATE with time part", func(t *testing.T) {
+		// Test: TIMESTAMPDIFF(HOUR, '2024-12-20 12:00:00', DATE('2024-12-20'))
+		// Expected: -12 hours
+		unitVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte("HOUR"), 1, proc.Mp())
+		strVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte("2024-12-20 12:00:00"), 1, proc.Mp())
+		date1, _ := types.ParseDateCast("2024-12-20")
+		dateVec, _ := vector.NewConstFixed(types.T_date.ToType(), date1, 1, proc.Mp())
+
+		parameters := []*vector.Vector{unitVec, strVec, dateVec}
+		result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
+
+		fnLength := strVec.Length()
+		err := result.PreExtendAndReset(fnLength)
+		require.NoError(t, err)
+
+		// Use TimestampDiffStringDate to handle string and DATE mix
+		err = TimestampDiffStringDate(parameters, result, proc, fnLength, nil)
+		require.NoError(t, err)
+
+		v := result.GetResultVector()
+		require.Equal(t, fnLength, v.Length())
+		require.Equal(t, types.T_int64, v.GetType().Oid)
+
+		int64Param := vector.GenerateFunctionFixedTypeParameter[int64](v)
+		resultVal, null := int64Param.GetValue(0)
+		require.False(t, null, "Result should not be null")
+		require.Equal(t, int64(-12), resultVal, "Should return -12 hours")
+	})
+
+	t.Run("String and DATE with MINUTE unit", func(t *testing.T) {
+		// Test: TIMESTAMPDIFF(MINUTE, '2024-12-20 10:30:00', DATE('2024-12-20'))
+		// Expected: -630 minutes (10 hours 30 minutes)
+		unitVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte("MINUTE"), 1, proc.Mp())
+		strVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte("2024-12-20 10:30:00"), 1, proc.Mp())
+		date1, _ := types.ParseDateCast("2024-12-20")
+		dateVec, _ := vector.NewConstFixed(types.T_date.ToType(), date1, 1, proc.Mp())
+
+		parameters := []*vector.Vector{unitVec, strVec, dateVec}
+		result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
+
+		fnLength := strVec.Length()
+		err := result.PreExtendAndReset(fnLength)
+		require.NoError(t, err)
+
+		err = TimestampDiffStringDate(parameters, result, proc, fnLength, nil)
+		require.NoError(t, err)
+
+		v := result.GetResultVector()
+		int64Param := vector.GenerateFunctionFixedTypeParameter[int64](v)
+		resultVal, null := int64Param.GetValue(0)
+		require.False(t, null)
+		require.Equal(t, int64(-630), resultVal, "Should return -630 minutes")
+	})
+}
+
+// TestTimestampDiffTimestampDate tests TIMESTAMPDIFF with TIMESTAMP and DATE arguments
+func TestTimestampDiffTimestampDate(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	t.Run("TIMESTAMP and DATE with DAY unit", func(t *testing.T) {
+		// Test: TIMESTAMPDIFF(DAY, TIMESTAMP('2024-12-20 10:30:45'), DATE('2024-12-21'))
+		// Expected: 0 (because 2024-12-20 10:30:45 to 2024-12-21 00:00:00 is less than 1 day)
+		unitVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte("DAY"), 1, proc.Mp())
+		ts1, _ := types.ParseTimestamp(proc.GetSessionInfo().TimeZone, "2024-12-20 10:30:45", 0)
+		tsVec, _ := vector.NewConstFixed(types.T_timestamp.ToType(), ts1, 1, proc.Mp())
+		date1, _ := types.ParseDateCast("2024-12-21")
+		dateVec, _ := vector.NewConstFixed(types.T_date.ToType(), date1, 1, proc.Mp())
+
+		parameters := []*vector.Vector{unitVec, tsVec, dateVec}
+		result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
+
+		fnLength := tsVec.Length()
+		err := result.PreExtendAndReset(fnLength)
+		require.NoError(t, err)
+
+		err = TimestampDiffTimestampDate(parameters, result, proc, fnLength, nil)
+		require.NoError(t, err)
+
+		v := result.GetResultVector()
+		require.Equal(t, fnLength, v.Length())
+		require.Equal(t, types.T_int64, v.GetType().Oid)
+
+		int64Param := vector.GenerateFunctionFixedTypeParameter[int64](v)
+		resultVal, null := int64Param.GetValue(0)
+		require.False(t, null)
+		require.Equal(t, int64(0), resultVal, "Should return 0 days (less than 1 day difference)")
+	})
+}
+
+// TestTimestampDiffDateTimestamp tests TIMESTAMPDIFF with DATE and TIMESTAMP arguments
+func TestTimestampDiffDateTimestamp(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	t.Run("DATE and TIMESTAMP with DAY unit", func(t *testing.T) {
+		// Test: TIMESTAMPDIFF(DAY, DATE('2024-12-20'), TIMESTAMP('2024-12-21 10:30:45'))
+		// Expected: 1 (because 2024-12-20 00:00:00 to 2024-12-21 10:30:45 is more than 1 day)
+		unitVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte("DAY"), 1, proc.Mp())
+		date1, _ := types.ParseDateCast("2024-12-20")
+		dateVec, _ := vector.NewConstFixed(types.T_date.ToType(), date1, 1, proc.Mp())
+		ts1, _ := types.ParseTimestamp(proc.GetSessionInfo().TimeZone, "2024-12-21 10:30:45", 0)
+		tsVec, _ := vector.NewConstFixed(types.T_timestamp.ToType(), ts1, 1, proc.Mp())
+
+		parameters := []*vector.Vector{unitVec, dateVec, tsVec}
+		result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
+
+		fnLength := dateVec.Length()
+		err := result.PreExtendAndReset(fnLength)
+		require.NoError(t, err)
+
+		err = TimestampDiffDateTimestamp(parameters, result, proc, fnLength, nil)
+		require.NoError(t, err)
+
+		v := result.GetResultVector()
+		require.Equal(t, fnLength, v.Length())
+		require.Equal(t, types.T_int64, v.GetType().Oid)
+
+		int64Param := vector.GenerateFunctionFixedTypeParameter[int64](v)
+		resultVal, null := int64Param.GetValue(0)
+		require.False(t, null)
+		require.Equal(t, int64(1), resultVal, "Should return 1 day")
+	})
+}

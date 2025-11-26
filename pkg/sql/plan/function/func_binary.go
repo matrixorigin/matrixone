@@ -5599,7 +5599,9 @@ func TimestampDiff(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 			}
 		} else {
 			// MySQL: TIMESTAMPDIFF(unit, datetime1, datetime2) returns datetime2 - datetime1
-			res, _ := v3.DateTimeDiffWithUnit(functionUtil.QuickBytesToStr(v1), v2)
+			// DateTimeDiffWithUnit expects lowercase unit string
+			unitStr := strings.ToLower(functionUtil.QuickBytesToStr(v1))
+			res, _ := v3.DateTimeDiffWithUnit(unitStr, v2)
 			if err = rs.Append(res, false); err != nil {
 				return err
 			}
@@ -5609,6 +5611,9 @@ func TimestampDiff(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 }
 
 // TimestampDiffDate: TIMESTAMPDIFF(unit, date1, date2) - Supports DATE inputs
+// Note: This function is called when both arguments are DATE type.
+// When mixing DATE with string (containing time), the system should select TimestampDiffString
+// or convert DATE to DATETIME and use TimestampDiff.
 func TimestampDiffDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[1])
@@ -5624,11 +5629,13 @@ func TimestampDiffDate(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 				return err
 			}
 		} else {
-			// Convert DATE to DATETIME for calculation
+			// Convert DATE to DATETIME for calculation (time part is 00:00:00)
 			dt2 := v2.ToDatetime()
 			dt3 := v3.ToDatetime()
 			// MySQL: TIMESTAMPDIFF(unit, datetime1, datetime2) returns datetime2 - datetime1
-			res, _ := dt3.DateTimeDiffWithUnit(functionUtil.QuickBytesToStr(v1), dt2)
+			// DateTimeDiffWithUnit expects lowercase unit string
+			unitStr := strings.ToLower(functionUtil.QuickBytesToStr(v1))
+			res, _ := dt3.DateTimeDiffWithUnit(unitStr, dt2)
 			if err = rs.Append(res, false); err != nil {
 				return err
 			}
@@ -5662,7 +5669,9 @@ func TimestampDiffTimestamp(ivecs []*vector.Vector, result vector.FunctionResult
 			dt2 := v2.ToDatetime(loc)
 			dt3 := v3.ToDatetime(loc)
 			// MySQL: TIMESTAMPDIFF(unit, datetime1, datetime2) returns datetime2 - datetime1
-			res, _ := dt3.DateTimeDiffWithUnit(functionUtil.QuickBytesToStr(v1), dt2)
+			// DateTimeDiffWithUnit expects lowercase unit string
+			unitStr := strings.ToLower(functionUtil.QuickBytesToStr(v1))
+			res, _ := dt3.DateTimeDiffWithUnit(unitStr, dt2)
 			if err = rs.Append(res, false); err != nil {
 				return err
 			}
@@ -5724,7 +5733,193 @@ func TimestampDiffString(ivecs []*vector.Vector, result vector.FunctionResultWra
 		}
 
 		// MySQL: TIMESTAMPDIFF(unit, datetime1, datetime2) returns datetime2 - datetime1
-		res, _ := dt3.DateTimeDiffWithUnit(functionUtil.QuickBytesToStr(v1), dt2)
+		// DateTimeDiffWithUnit expects lowercase unit string
+		unitStr := strings.ToLower(functionUtil.QuickBytesToStr(v1))
+		res, _ := dt3.DateTimeDiffWithUnit(unitStr, dt2)
+		if err = rs.Append(res, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// TimestampDiffDateString: TIMESTAMPDIFF(unit, date, datetime_string) - Handles DATE and string mix
+// When first argument is DATE and second is string, convert DATE to DATETIME (time 00:00:00)
+func TimestampDiffDateString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[1])
+	p3 := vector.GenerateFunctionStrParameter(ivecs[2])
+	rs := vector.MustFunctionResult[int64](result)
+
+	scale := int32(6) // Use max scale for string inputs
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetStrValue(i)
+		v2, null2 := p2.GetValue(i)
+		v3, null3 := p3.GetStrValue(i)
+		if null1 || null2 || null3 {
+			if err = rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Convert DATE to DATETIME (time part is 00:00:00)
+		dt2 := v2.ToDatetime()
+
+		// Parse datetime_string - try datetime first, then date
+		var dt3 types.Datetime
+		v3Str := functionUtil.QuickBytesToStr(v3)
+		dt3, err3 := types.ParseDatetime(v3Str, scale)
+		if err3 != nil {
+			// If parsing as datetime fails, try as date
+			date3, err4 := types.ParseDateCast(v3Str)
+			if err4 != nil {
+				if err = rs.Append(0, true); err != nil {
+					return err
+				}
+				continue
+			}
+			dt3 = date3.ToDatetime()
+		}
+
+		// MySQL: TIMESTAMPDIFF(unit, datetime1, datetime2) returns datetime2 - datetime1
+		// DateTimeDiffWithUnit expects lowercase unit string
+		unitStr := strings.ToLower(functionUtil.QuickBytesToStr(v1))
+		res, _ := dt3.DateTimeDiffWithUnit(unitStr, dt2)
+		if err = rs.Append(res, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// TimestampDiffStringDate: TIMESTAMPDIFF(unit, datetime_string, date) - Handles string and DATE mix
+// When first argument is string and second is DATE, convert DATE to DATETIME (time 00:00:00)
+func TimestampDiffStringDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
+	p2 := vector.GenerateFunctionStrParameter(ivecs[1])
+	p3 := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[2])
+	rs := vector.MustFunctionResult[int64](result)
+
+	scale := int32(6) // Use max scale for string inputs
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetStrValue(i)
+		v2, null2 := p2.GetStrValue(i)
+		v3, null3 := p3.GetValue(i)
+		if null1 || null2 || null3 {
+			if err = rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Parse datetime_string - try datetime first, then date
+		var dt2 types.Datetime
+		v2Str := functionUtil.QuickBytesToStr(v2)
+		dt2, err2 := types.ParseDatetime(v2Str, scale)
+		if err2 != nil {
+			// If parsing as datetime fails, try as date
+			date2, err3 := types.ParseDateCast(v2Str)
+			if err3 != nil {
+				if err = rs.Append(0, true); err != nil {
+					return err
+				}
+				continue
+			}
+			dt2 = date2.ToDatetime()
+		}
+
+		// Convert DATE to DATETIME (time part is 00:00:00)
+		dt3 := v3.ToDatetime()
+
+		// MySQL: TIMESTAMPDIFF(unit, datetime1, datetime2) returns datetime2 - datetime1
+		// DateTimeDiffWithUnit expects lowercase unit string
+		unitStr := strings.ToLower(functionUtil.QuickBytesToStr(v1))
+		res, _ := dt3.DateTimeDiffWithUnit(unitStr, dt2)
+		if err = rs.Append(res, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// TimestampDiffTimestampDate: TIMESTAMPDIFF(unit, timestamp, date) - Handles TIMESTAMP and DATE mix
+// When first argument is TIMESTAMP and second is DATE, convert both to DATETIME and calculate
+func TimestampDiffTimestampDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[1])
+	p3 := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[2])
+	rs := vector.MustFunctionResult[int64](result)
+
+	loc := proc.GetSessionInfo().TimeZone
+	if loc == nil {
+		loc = time.Local
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetStrValue(i)
+		v2, null2 := p2.GetValue(i)
+		v3, null3 := p3.GetValue(i)
+		if null1 || null2 || null3 {
+			if err = rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Convert TIMESTAMP to DATETIME (considering timezone)
+		dt2 := v2.ToDatetime(loc)
+
+		// Convert DATE to DATETIME (time part is 00:00:00)
+		dt3 := v3.ToDatetime()
+
+		// MySQL: TIMESTAMPDIFF(unit, datetime1, datetime2) returns datetime2 - datetime1
+		// DateTimeDiffWithUnit expects lowercase unit string
+		unitStr := strings.ToLower(functionUtil.QuickBytesToStr(v1))
+		res, _ := dt3.DateTimeDiffWithUnit(unitStr, dt2)
+		if err = rs.Append(res, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// TimestampDiffDateTimestamp: TIMESTAMPDIFF(unit, date, timestamp) - Handles DATE and TIMESTAMP mix
+// When first argument is DATE and second is TIMESTAMP, convert both to DATETIME and calculate
+func TimestampDiffDateTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[1])
+	p3 := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[2])
+	rs := vector.MustFunctionResult[int64](result)
+
+	loc := proc.GetSessionInfo().TimeZone
+	if loc == nil {
+		loc = time.Local
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetStrValue(i)
+		v2, null2 := p2.GetValue(i)
+		v3, null3 := p3.GetValue(i)
+		if null1 || null2 || null3 {
+			if err = rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Convert DATE to DATETIME (time part is 00:00:00)
+		dt2 := v2.ToDatetime()
+
+		// Convert TIMESTAMP to DATETIME (considering timezone)
+		dt3 := v3.ToDatetime(loc)
+
+		// MySQL: TIMESTAMPDIFF(unit, datetime1, datetime2) returns datetime2 - datetime1
+		// DateTimeDiffWithUnit expects lowercase unit string
+		unitStr := strings.ToLower(functionUtil.QuickBytesToStr(v1))
+		res, _ := dt3.DateTimeDiffWithUnit(unitStr, dt2)
 		if err = rs.Append(res, false); err != nil {
 			return err
 		}

@@ -6940,6 +6940,46 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return TimestampDiffString
 				},
 			},
+			{
+				overloadId: 8,
+				args:       []types.T{types.T_varchar, types.T_date, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return TimestampDiffDateString
+				},
+			},
+			{
+				overloadId: 9,
+				args:       []types.T{types.T_varchar, types.T_varchar, types.T_date},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return TimestampDiffStringDate
+				},
+			},
+			{
+				overloadId: 10,
+				args:       []types.T{types.T_varchar, types.T_timestamp, types.T_date},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return TimestampDiffTimestampDate
+				},
+			},
+			{
+				overloadId: 11,
+				args:       []types.T{types.T_varchar, types.T_date, types.T_timestamp},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return TimestampDiffDateTimestamp
+				},
+			},
 		},
 	},
 
