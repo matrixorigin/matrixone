@@ -17,7 +17,6 @@ package idxcron
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -218,7 +217,6 @@ func (t *IndexUpdateTaskInfo) saveStatus(sqlproc *sqlexec.SqlProcess, updated bo
 		return err
 	}
 
-	os.Stderr.WriteString(fmt.Sprintf("save Status %v\n", string(bytes)))
 	// update status
 	sql := fmt.Sprintf(sqlfmt,
 		string(bytes), t.TableId, t.AccountId, t.Action)
@@ -380,7 +378,6 @@ func getTableDefFunc(sqlproc *sqlexec.SqlProcess, txnEngine engine.Engine, dbnam
 		return
 	}
 
-	//os.Stderr.WriteString(fmt.Sprintf("table id %d\n", rel.GetTableID(sqlproc.GetContext())))
 	tableDef = rel.CopyTableDef(sqlproc.GetContext())
 	return
 }
