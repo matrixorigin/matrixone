@@ -66,6 +66,17 @@ func (srv *Server) RecordDispatchPipeline(
 		}
 	}
 
+	// Check if there's an existing record with a different receiver
+	// This can happen when multiple receivers share the same streamID
+	if existing, exists := srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline[key]; exists {
+		if existing.receiver != nil && existing.receiver.Uid != dispatchReceiver.Uid {
+			logutil.Warn("[DEBUG] RecordDispatchPipeline: overwriting existing receiver with different Uid",
+				zap.Uint64("streamID", streamID),
+				zap.String("existingReceiverUid", existing.receiver.Uid.String()),
+				zap.String("newReceiverUid", dispatchReceiver.Uid.String()))
+		}
+	}
+
 	value := runningPipelineInfo{
 		alreadyDone: false,
 		isDispatch:  true,
@@ -120,11 +131,21 @@ func (srv *Server) CancelPipelineSending(
 			zap.Bool("alreadyDone", v.alreadyDone),
 			zap.Bool("hasReceiver", v.receiver != nil),
 			zap.Bool("isDispatch", v.isDispatch))
+		if v.receiver != nil {
+			logutil.Info("[DEBUG] CancelPipelineSending canceling receiver",
+				zap.Uint64("streamID", streamID),
+				zap.String("receiverUid", v.receiver.Uid.String()))
+		}
 		v.cancelPipeline()
 	} else {
-		logutil.Warn("[DEBUG] CancelPipelineSending creating canceled record (no existing record)",
+		// Fix: Don't create a canceled record if no record exists.
+		// This can happen when StopSending arrives before PrepareDoneNotifyMessage.
+		// The RecordDispatchPipeline will handle the registration properly.
+		// Creating a canceled record here causes issues when multiple receivers
+		// share the same streamID (different sessions).
+		logutil.Info("[DEBUG] CancelPipelineSending: no existing record, ignoring (will be handled by RecordDispatchPipeline)",
 			zap.Uint64("streamID", streamID))
-		srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline[key] = generateCanceledRecord()
+		// Don't create canceled record - let RecordDispatchPipeline handle it
 	}
 }
 
