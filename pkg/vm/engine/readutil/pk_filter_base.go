@@ -38,6 +38,8 @@ type BasePKFilter struct {
 	UB    []byte
 	Vec   *vector.Vector
 	Oid   types.T
+	// Disjuncts holds OR-ed atomic filters; when non-empty, Op/LB/UB/Vec are ignored.
+	Disjuncts []BasePKFilter
 }
 
 func (b *BasePKFilter) String() string {
@@ -138,46 +140,34 @@ func ConstructBasePKFilter(
 
 		case "or":
 			var filters []BasePKFilter
+			hasUnsupported := false
 			for idx := range exprImpl.F.Args {
 				ff, err := ConstructBasePKFilter(exprImpl.F.Args[idx], tblDef, mp)
 				if err != nil {
 					return BasePKFilter{}, err
 				}
 				if !ff.Valid {
-					return BasePKFilter{}, err
+					hasUnsupported = true
+					continue
 				}
 
-				filters = append(filters, ff)
+				filters = append(filters, toDisjuncts(ff)...)
+			}
+
+			if hasUnsupported {
+				return BasePKFilter{}, nil
 			}
 
 			if len(filters) == 0 {
 				return BasePKFilter{}, nil
 			}
-
-			for idx := 0; idx < len(filters)-1; {
-				f1 := &filters[idx]
-				f2 := &filters[idx+1]
-				ff, err := mergeFilters(f1, f2, function.OR, mp)
-				if err != nil {
-					return BasePKFilter{}, nil
-				}
-
-				if !ff.Valid {
-					return BasePKFilter{}, nil
-				}
-
-				idx++
-				filters[idx] = ff
+			if len(filters) == 1 {
+				return filters[0], nil
 			}
 
-			for idx := 0; idx < len(filters)-1; idx++ {
-				if filters[idx].Vec != nil {
-					filters[idx].Vec.Free(mp)
-				}
-			}
-
-			ret := filters[len(filters)-1]
-			return ret, nil
+			filter.Valid = true
+			filter.Disjuncts = filters
+			return filter, nil
 
 		case ">=":
 			//a >= ?
@@ -306,4 +296,11 @@ func ConstructBasePKFilter(
 	}
 
 	return
+}
+
+func toDisjuncts(f BasePKFilter) []BasePKFilter {
+	if len(f.Disjuncts) > 0 {
+		return f.Disjuncts
+	}
+	return []BasePKFilter{f}
 }
