@@ -53,8 +53,8 @@ func (srv *Server) RecordDispatchPipeline(
 			logutil.Debug("RecordDispatchPipeline cleaning stale record",
 				zap.Uint64("streamID", streamID))
 			delete(srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline, key)
-		} else {
-			// This is a legitimate cancellation - the receiver was already registered
+		} else if v.receiver.Uid == dispatchReceiver.Uid {
+			// This is a legitimate cancellation - the same receiver was already registered
 			// and then cancelled. Set ReceiverDone to true.
 			logutil.Debug("RecordDispatchPipeline setting ReceiverDone=true (legitimate cancellation)",
 				zap.Uint64("streamID", streamID),
@@ -63,6 +63,15 @@ func (srv *Server) RecordDispatchPipeline(
 			dispatchReceiver.ReceiverDone = true
 			dispatchReceiver.Unlock()
 			return
+		} else {
+			// Different receiver with same streamID - this can happen when multiple
+			// receivers share the same streamID. Clean up the old record and allow
+			// the new receiver to register.
+			logutil.Debug("RecordDispatchPipeline: cleaning old receiver record with different Uid",
+				zap.Uint64("streamID", streamID),
+				zap.String("oldReceiverUid", v.receiver.Uid.String()),
+				zap.String("newReceiverUid", dispatchReceiver.Uid.String()))
+			delete(srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline, key)
 		}
 	}
 
