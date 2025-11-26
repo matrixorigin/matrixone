@@ -359,10 +359,6 @@ func (bat *Batch) Size() int {
 }
 
 func (bat *Batch) RowCount() int {
-	if bat == nil {
-		x := 0
-		x++
-	}
 	return bat.rowCount
 }
 

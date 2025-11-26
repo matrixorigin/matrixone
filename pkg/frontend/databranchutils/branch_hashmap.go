@@ -167,10 +167,7 @@ func NewBranchHashmap(opts ...BranchHashmapOption) (BranchHashmap, error) {
 	}
 	if bh.shardCount <= 0 {
 		cpu := runtime.NumCPU() * 4
-		if cpu <= 0 {
-			cpu = 1
-		}
-		bh.shardCount = 1
+		bh.shardCount = cpu
 	}
 	if bh.shardCount < minShardCount {
 		bh.shardCount = minShardCount
@@ -498,7 +495,7 @@ func (bh *branchHashmap) PopByEncodedFullValue(encodedValue []byte, removeAll bo
 	defer bh.putPacker(packer)
 
 	for i, colIdx := range keyCols {
-		if *(&valueTypes[colIdx]) != keyTypes[i] {
+		if valueTypes[colIdx] != keyTypes[i] {
 			return result, moerr.NewInvalidInputNoCtx("key column type mismatch")
 		}
 		if err := encodeDecodedValue(packer, valueTypes[colIdx], tuple[colIdx]); err != nil {

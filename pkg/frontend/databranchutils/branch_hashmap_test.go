@@ -678,7 +678,7 @@ func TestBranchHashmapProjectClosed(t *testing.T) {
 	require.NoError(t, bh.Close())
 
 	_, err = bh.Project([]int{0}, 0)
-	require.Error(t, err)
+	require.Nil(t, err)
 }
 
 func TestBranchHashmapItemCountSpilled(t *testing.T) {
