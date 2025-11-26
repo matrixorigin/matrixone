@@ -562,18 +562,6 @@ func (c *checkpointCleaner) CloneMetaFilesLocked() map[string]ioutil.TSRangeFile
 }
 
 func (c *checkpointCleaner) deleteStaleSnapshotFilesLocked() error {
-	// Skip deletion if backup protection is active
-	// Use snapshot taken at GC start to ensure consistency
-	protectedTS, isActive := c.getBackupProtectionSnapshot()
-	if isActive {
-		logutil.Info(
-			"GC-Backup-Protection-Skip-Delete-Snapshot",
-			zap.String("task", c.TaskNameLocked()),
-			zap.String("protected-ts", protectedTS.ToString()),
-		)
-		return nil
-	}
-
 	var (
 		maxSnapEnd  types.TS
 		maxSnapFile string
@@ -698,18 +686,6 @@ func (c *checkpointCleaner) deleteStaleSnapshotFilesLocked() error {
 // `c.mutation.scanned`: [t300, t400]
 // `t100_t200_xxx.ckp`, `t200_t300_xxx.ckp` are hard deleted
 func (c *checkpointCleaner) deleteStaleCKPMetaFileLocked() (err error) {
-	// Skip deletion if backup protection is active
-	// Use snapshot taken at GC start to ensure consistency
-	protectedTS, isActive := c.getBackupProtectionSnapshot()
-	if isActive {
-		logutil.Info(
-			"GC-Backup-Protection-Skip-Delete-CKP-Meta",
-			zap.String("task", c.TaskNameLocked()),
-			zap.String("protected-ts", protectedTS.ToString()),
-		)
-		return nil
-	}
-
 	// TODO: add log
 	window := c.GetScannedWindowLocked()
 	metaFiles := c.CloneMetaFilesLocked()
@@ -827,18 +803,6 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 	pitrs *logtail.PitrInfo,
 	gcFileCount int,
 ) (err error) {
-	// Skip merge if backup protection is active
-	// Use snapshot taken at GC start to ensure consistency
-	protectedTS, isActive := c.getBackupProtectionSnapshot()
-	if isActive {
-		logutil.Info(
-			"GC-Backup-Protection-Skip-Merge",
-			zap.String("task", c.TaskNameLocked()),
-			zap.String("protected-ts", protectedTS.ToString()),
-		)
-		return nil
-	}
-
 	// checkpointLowWaterMark is empty only in the following cases:
 	// 1. no incremental and no gloabl checkpoint
 	// 2. one incremental checkpoint with empty start
@@ -1804,8 +1768,9 @@ func (c *checkpointCleaner) RemoveChecker(key string) error {
 
 // SetBackupProtection sets the backup protection timestamp
 // protectedTS is the timestamp that should be protected from GC
-// This method acquires the mutation lock to ensure GC consistency:
-// it waits for any ongoing GC to complete before setting protection
+// This method only acquires the backupProtection lock, not the mutation lock.
+// GC consistency is ensured by Process() which creates a snapshot of protection
+// state at GC start, so ongoing GC won't be affected by protection changes.
 func (c *checkpointCleaner) SetBackupProtection(protectedTS types.TS) {
 	c.backupProtection.Lock()
 	defer c.backupProtection.Unlock()
@@ -1820,8 +1785,9 @@ func (c *checkpointCleaner) SetBackupProtection(protectedTS types.TS) {
 }
 
 // UpdateBackupProtection updates the backup protection timestamp
-// This method acquires the mutation lock to ensure GC consistency:
-// it waits for any ongoing GC to complete before updating protection
+// This method only acquires the backupProtection lock, not the mutation lock.
+// GC consistency is ensured by Process() which creates a snapshot of protection
+// state at GC start, so ongoing GC won't be affected by protection changes.
 func (c *checkpointCleaner) UpdateBackupProtection(protectedTS types.TS) {
 	c.backupProtection.Lock()
 	defer c.backupProtection.Unlock()
