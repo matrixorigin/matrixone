@@ -299,7 +299,7 @@ func (retBatchPool *retBatchList) freeAllRetBatches(mp *mpool.MPool) {
 	for _, bat := range retBatchPool.tList {
 		bat.Clean(mp)
 	}
-	for bat, _ := range retBatchPool.pinned {
+	for bat := range retBatchPool.pinned {
 		bat.Clean(mp)
 	}
 
