@@ -1618,44 +1618,27 @@ func TimestampAddString(ivecs []*vector.Vector, result vector.FunctionResultWrap
 			}
 		}
 	} else {
-		// For date units, check if input string is DATE format (date only, no time)
-		// First pass: check if all inputs are DATE format
-		allDateFormat := true
+		// For date units, process each input in a single pass
+		// Optimized: Single-pass processing instead of two passes
+		// For each input, try DATE format first, fallback to DATETIME format if needed
 		for i := uint64(0); i < uint64(length); i++ {
 			dateStr, null1 := dateStrings.GetStrValue(i)
-			if null1 {
+			interval, null2 := intervals.GetValue(i)
+			if null1 || null2 {
+				if err = rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
 				continue
 			}
-			dateStrVal := functionUtil.QuickBytesToStr(dateStr)
-			// Check if it's date-only format (no space, no colon)
-			hasTimePart := strings.Contains(dateStrVal, " ") || strings.Contains(dateStrVal, ":")
-			if hasTimePart {
-				allDateFormat = false
-				break
-			}
-			// Try to parse as DATE
-			_, err1 := types.ParseDateCast(dateStrVal)
-			if err1 != nil {
-				allDateFormat = false
-				break
-			}
-		}
 
-		if allDateFormat {
-			// All inputs are DATE format, return DATE format string (YYYY-MM-DD)
-			for i := uint64(0); i < uint64(length); i++ {
-				dateStr, null1 := dateStrings.GetStrValue(i)
-				interval, null2 := intervals.GetValue(i)
-				if null1 || null2 {
-					if err = rs.AppendBytes(nil, true); err != nil {
-						return err
-					}
-				} else {
-					dateStrVal := functionUtil.QuickBytesToStr(dateStr)
-					date, err1 := types.ParseDateCast(dateStrVal)
-					if err1 != nil {
-						return err1
-					}
+			dateStrVal := functionUtil.QuickBytesToStr(dateStr)
+			// Quick check: if string contains space or colon, it's likely DATETIME format
+			hasTimePart := strings.Contains(dateStrVal, " ") || strings.Contains(dateStrVal, ":")
+			if !hasTimePart {
+				// Try to parse as DATE format first (optimized path)
+				date, err1 := types.ParseDateCast(dateStrVal)
+				if err1 == nil {
+					// Successfully parsed as DATE, process as DATE format
 					resultDate, err2 := doDateAdd(date, interval, iTyp)
 					if err2 != nil {
 						return err2
@@ -1665,28 +1648,18 @@ func TimestampAddString(ivecs []*vector.Vector, result vector.FunctionResultWrap
 					if err = rs.AppendBytes([]byte(resultStr), false); err != nil {
 						return err
 					}
+					continue
 				}
 			}
-		} else {
-			// Mixed or DATETIME format, return DATETIME format string
-			for i := uint64(0); i < uint64(length); i++ {
-				dateStr, null1 := dateStrings.GetStrValue(i)
-				interval, null2 := intervals.GetValue(i)
-				if null1 || null2 {
-					if err = rs.AppendBytes(nil, true); err != nil {
-						return err
-					}
-				} else {
-					resultDt, err := doDateStringAdd(functionUtil.QuickBytesToStr(dateStr), interval, iTyp)
-					if err != nil {
-						return err
-					}
-					// Format as DATETIME string (full format with time)
-					resultStr := resultDt.String2(0) // Use scale 0 for no fractional seconds
-					if err = rs.AppendBytes([]byte(resultStr), false); err != nil {
-						return err
-					}
-				}
+			// Fallback to DATETIME format processing
+			resultDt, err := doDateStringAdd(dateStrVal, interval, iTyp)
+			if err != nil {
+				return err
+			}
+			// Format as DATETIME string (full format with time)
+			resultStr := resultDt.String2(0) // Use scale 0 for no fractional seconds
+			if err = rs.AppendBytes([]byte(resultStr), false); err != nil {
+				return err
 			}
 		}
 	}
