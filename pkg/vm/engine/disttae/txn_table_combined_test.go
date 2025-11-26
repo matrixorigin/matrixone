@@ -66,7 +66,7 @@ func TestCombinedTxnTable_CollectChanges(t *testing.T) {
 			context.Background(),
 			types.TS{},
 			types.TS{},
-			false,
+			true,
 			&mpool.MPool{},
 		)
 	})
