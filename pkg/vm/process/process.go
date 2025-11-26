@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -271,5 +272,15 @@ func (proc *Process) GetSpillFileService() (fileservice.MutableFileService, erro
 	if err != nil {
 		return nil, err
 	}
-	return fileservice.SubPath(local, defines.SpillFileServiceName).(fileservice.MutableFileService), nil
+
+	if err := local.EnsureDir(proc.Ctx, defines.SpillFileServiceName); err != nil {
+		return nil, err
+	}
+
+	subPathFS := fileservice.SubPath(local, defines.SpillFileServiceName)
+	mutablefs, ok := subPathFS.(fileservice.MutableFileService)
+	if !ok {
+		return nil, moerr.NewInternalErrorNoCtx("subPathFS is not a MutableFileService")
+	}
+	return mutablefs, nil
 }

@@ -21,8 +21,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -39,16 +39,17 @@ const (
 type container struct {
 	status int
 
-	bat *batch.Batch
+	bat     *batch.Batch
+	batAggs []aggexec.AggFuncExec
 
 	desc      []bool
 	nullsLast []bool
-	orderVecs []group.ExprEvalVector
+	orderVecs []colexec.ExprEvalVector
 	sels      []int64
 
 	ps      []int64 // index of partition by
 	os      []int64 // Sorted partitions
-	aggVecs []group.ExprEvalVector
+	aggVecs []colexec.ExprEvalVector
 
 	vec  *vector.Vector
 	rBat *batch.Batch
@@ -152,12 +153,12 @@ func (ctr *container) freeBatch(mp *mpool.MPool) {
 
 func (ctr *container) freeAggFun() {
 	if ctr.bat != nil {
-		for _, a := range ctr.bat.Aggs {
+		for _, a := range ctr.batAggs {
 			if a != nil {
 				a.Free()
 			}
 		}
-		ctr.bat.Aggs = nil
+		ctr.batAggs = nil
 	}
 }
 

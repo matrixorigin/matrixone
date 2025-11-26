@@ -16,8 +16,9 @@ package batch
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -53,6 +54,10 @@ func TestBatchMarshalAndUnmarshal(t *testing.T) {
 		rbat := new(Batch)
 		err = rbat.UnmarshalBinary(data)
 		require.NoError(t, err)
+
+		require.Equal(t, tc.bat.ExtraBuf1, rbat.ExtraBuf1)
+		require.Equal(t, tc.bat.ExtraBuf2, rbat.ExtraBuf2)
+
 		for i, vec := range rbat.Vecs {
 			require.Equal(t, vector.MustFixedColWithTypeCheck[int8](tc.bat.Vecs[i]), vector.MustFixedColWithTypeCheck[int8](vec))
 		}
@@ -60,11 +65,19 @@ func TestBatchMarshalAndUnmarshal(t *testing.T) {
 
 	var buf bytes.Buffer
 	for _, tc := range tcs {
-		data, err := tc.bat.MarshalBinaryWithBuffer(&buf)
+		data, err := tc.bat.MarshalBinaryWithBuffer(&buf, true)
 		require.NoError(t, err)
 
 		rbat := new(Batch)
 		err = rbat.UnmarshalBinary(data)
+		require.NoError(t, err)
+		for i, vec := range rbat.Vecs {
+			require.Equal(t, vector.MustFixedColWithTypeCheck[int8](tc.bat.Vecs[i]), vector.MustFixedColWithTypeCheck[int8](vec))
+		}
+
+		reader := bytes.NewReader(data)
+		rbat = new(Batch)
+		err = rbat.UnmarshalFromReader(reader, nil)
 		require.NoError(t, err)
 		for i, vec := range rbat.Vecs {
 			require.Equal(t, vector.MustFixedColWithTypeCheck[int8](tc.bat.Vecs[i]), vector.MustFixedColWithTypeCheck[int8](vec))
@@ -140,9 +153,10 @@ func newBatch(ts []types.Type, rows int) *Batch {
 		}
 	}
 
+	bat.ExtraBuf1 = []byte("extra buf 1")
+	bat.ExtraBuf2 = []byte("extra buf 2")
+
 	aggexec.RegisterGroupConcatAgg(0, ",")
-	agg0, _ := aggexec.MakeAgg(aggexec.NewSimpleAggMemoryManager(mp), 0, false, []types.Type{types.T_varchar.ToType()}...)
-	bat.Aggs = []aggexec.AggFuncExec{agg0}
 	bat.Attrs = []string{"1"}
 	return bat
 }

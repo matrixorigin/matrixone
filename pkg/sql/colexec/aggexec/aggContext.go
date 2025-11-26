@@ -107,6 +107,36 @@ func (a *AggContext) getGroupContextEncodings() [][]byte {
 	return encodings
 }
 
+func (a *AggContext) getGroupContextEncodingsForFlags(cnt int64, flags [][]uint8) [][]byte {
+	if !a.hasGroupContext {
+		return nil
+	}
+	encodings := make([][]byte, cnt)
+	nextX := 0
+	nextY := 0
+	for i := range flags {
+		for j := range flags[i] {
+			if flags[i][j] == 1 {
+				encodings[nextX] = a.groupContext[nextY].Marshal()
+				nextX++
+			}
+			nextY++
+		}
+	}
+	return encodings
+}
+
+func (a *AggContext) getGroupContextEncodingsForChunk(start int, ngroup int) [][]byte {
+	if !a.hasGroupContext {
+		return nil
+	}
+	encodings := make([][]byte, ngroup)
+	for i := 0; i < ngroup; i++ {
+		encodings[i] = a.groupContext[start+i].Marshal()
+	}
+	return encodings
+}
+
 func (a *AggContext) decodeGroupContexts(encodings [][]byte, resultType types.Type, parameters ...types.Type) {
 	if !a.hasGroupContext {
 		return
