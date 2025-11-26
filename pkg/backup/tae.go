@@ -115,7 +115,7 @@ func BackupData(
 	}
 
 	// Setup backup protection manager
-	exec, opts := getSQLExecutor(sid)
+	exec, opts = getSQLExecutor(sid)
 	protectionMgr := newBackupProtectionManager(ctx, exec, opts)
 	defer protectionMgr.cleanup()
 
