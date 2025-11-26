@@ -111,4 +111,3 @@ func TestCancelPipelineSending_ShouldNotCancelDispatchReceiver(t *testing.T) {
 	require.True(t, record.isDispatch, "Record should be marked as dispatch")
 	require.False(t, record.alreadyDone, "Record should not be marked as done")
 }
-

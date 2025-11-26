@@ -68,14 +68,14 @@ func (srv *Server) RecordDispatchPipeline(
 
 	// Check if there's an existing record with a different receiver
 	// This can happen when multiple receivers share the same streamID
-		if existing, exists := srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline[key]; exists {
-			if existing.receiver != nil && existing.receiver.Uid != dispatchReceiver.Uid {
-				logutil.Debug("RecordDispatchPipeline: overwriting existing receiver with different Uid",
-					zap.Uint64("streamID", streamID),
-					zap.String("existingReceiverUid", existing.receiver.Uid.String()),
-					zap.String("newReceiverUid", dispatchReceiver.Uid.String()))
-			}
+	if existing, exists := srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline[key]; exists {
+		if existing.receiver != nil && existing.receiver.Uid != dispatchReceiver.Uid {
+			logutil.Debug("RecordDispatchPipeline: overwriting existing receiver with different Uid",
+				zap.Uint64("streamID", streamID),
+				zap.String("existingReceiverUid", existing.receiver.Uid.String()),
+				zap.String("newReceiverUid", dispatchReceiver.Uid.String()))
 		}
+	}
 
 	value := runningPipelineInfo{
 		alreadyDone: false,
@@ -131,7 +131,7 @@ func (srv *Server) CancelPipelineSending(
 			zap.Bool("alreadyDone", v.alreadyDone),
 			zap.Bool("hasReceiver", v.receiver != nil),
 			zap.Bool("isDispatch", v.isDispatch))
-		
+
 		// Fix: StopSending message is used to stop sending data, not to cancel
 		// dispatch receivers. Dispatch receivers are used to receive data and
 		// should continue receiving until data sending is complete.
@@ -182,10 +182,6 @@ func (srv *Server) RemoveRelatedPipeline(session morpc.ClientSession, streamID u
 	}
 
 	delete(srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline, key)
-}
-
-func generateCanceledRecord() runningPipelineInfo {
-	return runningPipelineInfo{alreadyDone: true}
 }
 
 func generateRecordKey(session morpc.ClientSession, streamID uint64) rpcClientItem {
