@@ -555,9 +555,7 @@ func (r *reader) Read(
 				return false, err
 			}
 
-			for _, vec := range outBatch.Vecs {
-				vec.Shuffle(sels, mp)
-			}
+			outBatch.Shuffle(sels, mp)
 
 			distVec := vector.NewVec(types.T_float64.ToType())
 			vector.AppendFixedList(distVec, dists, nil, mp)
