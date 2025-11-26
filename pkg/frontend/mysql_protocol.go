@@ -3385,7 +3385,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 				if err2 != nil {
 					return err2
 				}
-				value = date.String()
+				value = formatDateForMySQL(date)
 			} else {
 				// Use GetDatetime which respects the scale from the vector type
 				value, err = GetDatetime(colSlices, r, i)
@@ -3976,6 +3976,19 @@ func GetPassWord(pwd string) ([]byte, error) {
 	return pwdByte, nil
 }
 
+// formatDateForMySQL formats a Date value for MySQL protocol, handling zero date (0000-00-00)
+// MySQL uses 0000-00-00 as zero date for minimum overflow cases (e.g., TIMESTAMPADD(DAY, -1, '0001-01-01'))
+// MatrixOne's Date(0) represents 0001-01-01, so we format it as "0000-00-00" for MySQL compatibility
+func formatDateForMySQL(d types.Date) string {
+	// Check if this is a zero date (Date(0) = 0001-01-01)
+	// MySQL uses 0000-00-00 as zero date for minimum overflow cases
+	// For MySQL compatibility, format Date(0) as "0000-00-00"
+	if d == types.Date(0) {
+		return "0000-00-00"
+	}
+	return d.String()
+}
+
 // formatDateOrDatetimeForMySQL formats a Date or Datetime value according to MySQL column type.
 // This function handles the special cases for TIMESTAMPADD function results:
 // - When MySQL column type is MYSQL_TYPE_DATE but actual value is Datetime (DATE + time unit → DATETIME)
@@ -4007,7 +4020,7 @@ func formatDateOrDatetimeForMySQL(
 		} else if d, ok := value.(types.Date); ok {
 			// Normal case: value is Date, return empty string (will be handled by binary encoding)
 			// For text protocol, caller should use date.ToBytes() instead
-			return d.String(), nil
+			return formatDateForMySQL(d), nil
 		}
 		return "", moerr.NewInternalErrorf(context.Background(), "unsupported type %T for MYSQL_TYPE_DATE", value)
 
@@ -4020,7 +4033,7 @@ func formatDateOrDatetimeForMySQL(
 			if scale == 0 && hour == 0 && minute == 0 && sec == 0 {
 				// Format as DATE (YYYY-MM-DD) to match MySQL behavior
 				date := dt.ToDate()
-				return date.String(), nil
+				return formatDateForMySQL(date), nil
 			}
 			// Always return full DATETIME format for MYSQL_TYPE_DATETIME
 			// JDBC clients may interpret MYSQL_TYPE_DATETIME as TIMESTAMP and expect full format
@@ -4033,7 +4046,7 @@ func formatDateOrDatetimeForMySQL(
 			// but MySQL column type is set to MYSQL_TYPE_DATETIME
 			// MySQL behavior: DATE input + date unit → DATE output (type 91)
 			// Format as DATE (YYYY-MM-DD) to match MySQL behavior
-			return d.String(), nil
+			return formatDateForMySQL(d), nil
 		}
 		return "", moerr.NewInternalErrorf(context.Background(), "unsupported type %T for MYSQL_TYPE_DATETIME", value)
 
@@ -4105,7 +4118,7 @@ func prepareDatetimeForBinaryProtocol(
 			return dt, err2
 		}
 		// Convert DATE to DATETIME format string for binary protocol
-		value = date.String() + " 00:00:00"
+		value = formatDateForMySQL(date) + " 00:00:00"
 	default:
 		return dt, moerr.NewInternalErrorf(context.Background(), "unknown type %s in datetime or timestamp", typ.Oid)
 	}

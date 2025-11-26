@@ -1106,6 +1106,18 @@ func convertTimezone(tz string) *time.Location {
 	return loc
 }
 
+// dateOverflowMaxError is a special error to indicate maximum date overflow (should return NULL)
+var dateOverflowMaxError = moerr.NewOutOfRangeNoCtx("date", "maximum")
+
+// isDateOverflowMaxError checks if the error is a maximum date overflow error
+func isDateOverflowMaxError(err error) bool {
+	if err == nil {
+		return false
+	}
+	// Compare error message to check if it's the maximum overflow error
+	return err.Error() == dateOverflowMaxError.Error()
+}
+
 func doDateAdd(start types.Date, diff int64, iTyp types.IntervalType) (types.Date, error) {
 	err := types.JudgeIntervalNumOverflow(diff, iTyp)
 	if err != nil {
@@ -1115,7 +1127,18 @@ func doDateAdd(start types.Date, diff int64, iTyp types.IntervalType) (types.Dat
 	if success {
 		return dt.ToDate(), nil
 	} else {
-		return 0, moerr.NewOutOfRangeNoCtx("date", "")
+		// MySQL behavior:
+		// - If overflow beyond maximum (diff > 0), return NULL
+		// - If overflow beyond minimum (diff < 0), return zero date '0000-00-00'
+		if diff > 0 {
+			// Maximum overflow: return special error to indicate NULL should be returned
+			return 0, dateOverflowMaxError
+		} else {
+			// Minimum overflow: return zero date (Date(0) = '0000-01-01', but MySQL expects '0000-00-00')
+			// Note: MatrixOne's Date(0) represents '0000-01-01', but MySQL's zero date is '0000-00-00'
+			// For MySQL compatibility, we return Date(0) which will be formatted as '0000-00-00' by protocol layer
+			return types.Date(0), nil
+		}
 	}
 }
 
@@ -1132,6 +1155,18 @@ func doTimeAdd(start types.Time, diff int64, iTyp types.IntervalType) (types.Tim
 	}
 }
 
+// datetimeOverflowMaxError is a special error to indicate maximum datetime overflow (should return NULL)
+var datetimeOverflowMaxError = moerr.NewOutOfRangeNoCtx("datetime", "maximum")
+
+// isDatetimeOverflowMaxError checks if the error is a maximum datetime overflow error
+func isDatetimeOverflowMaxError(err error) bool {
+	if err == nil {
+		return false
+	}
+	// Compare error message to check if it's the maximum overflow error
+	return err.Error() == datetimeOverflowMaxError.Error()
+}
+
 func doDatetimeAdd(start types.Datetime, diff int64, iTyp types.IntervalType) (types.Datetime, error) {
 	err := types.JudgeIntervalNumOverflow(diff, iTyp)
 	if err != nil {
@@ -1141,7 +1176,16 @@ func doDatetimeAdd(start types.Datetime, diff int64, iTyp types.IntervalType) (t
 	if success {
 		return dt, nil
 	} else {
-		return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
+		// MySQL behavior:
+		// - If overflow beyond maximum (diff > 0), return NULL
+		// - If overflow beyond minimum (diff < 0), return zero datetime '0000-00-00 00:00:00'
+		if diff > 0 {
+			// Maximum overflow: return special error to indicate NULL should be returned
+			return 0, datetimeOverflowMaxError
+		} else {
+			// Minimum overflow: return zero datetime
+			return types.ZeroDatetime, nil
+		}
 	}
 }
 
@@ -1158,7 +1202,16 @@ func doDateStringAdd(startStr string, diff int64, iTyp types.IntervalType) (type
 	if success {
 		return dt, nil
 	} else {
-		return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
+		// MySQL behavior:
+		// - If overflow beyond maximum (diff > 0), return NULL
+		// - If overflow beyond minimum (diff < 0), return zero datetime '0000-00-00 00:00:00'
+		if diff > 0 {
+			// Maximum overflow: return special error to indicate NULL should be returned
+			return 0, datetimeOverflowMaxError
+		} else {
+			// Minimum overflow: return zero datetime
+			return types.ZeroDatetime, nil
+		}
 	}
 }
 
@@ -1280,9 +1333,35 @@ func DateAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 	unit, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]).GetValue(0)
 	iTyp := types.IntervalType(unit)
 
-	return opBinaryFixedFixedToFixedWithErrorCheck[types.Date, int64, types.Date](ivecs, result, proc, length, func(v1 types.Date, v2 int64) (types.Date, error) {
-		return doDateAdd(v1, v2, iTyp)
-	}, selectList)
+	// Use custom implementation to handle maximum overflow (return NULL)
+	result.UseOptFunctionParamFrame(2)
+	rs := vector.MustFunctionResult[types.Date](result)
+	p1 := vector.OptGetParamFromWrapper[types.Date](rs, 0, ivecs[0])
+	p2 := vector.OptGetParamFromWrapper[int64](rs, 1, ivecs[1])
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedColNoTypeCheck[types.Date](rsVec)
+	rsNull := rsVec.GetNulls()
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetValue(i)
+		v2, null2 := p2.GetValue(i)
+		if null1 || null2 {
+			rsNull.Add(i)
+		} else {
+			resultDate, err := doDateAdd(v1, v2, iTyp)
+			if err != nil {
+				if isDateOverflowMaxError(err) {
+					// MySQL behavior: maximum overflow returns NULL
+					rsNull.Add(i)
+				} else {
+					return err
+				}
+			} else {
+				rss[i] = resultDate
+			}
+		}
+	}
+	return nil
 }
 
 func DatetimeAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
@@ -1295,9 +1374,34 @@ func DatetimeAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 	rs := vector.MustFunctionResult[types.Datetime](result)
 	rs.TempSetType(types.New(types.T_datetime, 0, scale))
 
-	return opBinaryFixedFixedToFixedWithErrorCheck[types.Datetime, int64, types.Datetime](ivecs, result, proc, length, func(v1 types.Datetime, v2 int64) (types.Datetime, error) {
-		return doDatetimeAdd(v1, v2, iTyp)
-	}, selectList)
+	// Use custom implementation to handle maximum overflow (return NULL)
+	result.UseOptFunctionParamFrame(2)
+	p1 := vector.OptGetParamFromWrapper[types.Datetime](rs, 0, ivecs[0])
+	p2 := vector.OptGetParamFromWrapper[int64](rs, 1, ivecs[1])
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedColNoTypeCheck[types.Datetime](rsVec)
+	rsNull := rsVec.GetNulls()
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetValue(i)
+		v2, null2 := p2.GetValue(i)
+		if null1 || null2 {
+			rsNull.Add(i)
+		} else {
+			resultDt, err := doDatetimeAdd(v1, v2, iTyp)
+			if err != nil {
+				if isDatetimeOverflowMaxError(err) {
+					// MySQL behavior: maximum overflow returns NULL
+					rsNull.Add(i)
+				} else {
+					return err
+				}
+			} else {
+				rss[i] = resultDt
+			}
+		}
+	}
+	return nil
 }
 
 func DateStringAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
@@ -1306,9 +1410,34 @@ func DateStringAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 	rs := vector.MustFunctionResult[types.Datetime](result)
 	rs.TempSetType(types.New(types.T_datetime, 0, 6))
 
-	return opBinaryStrFixedToFixedWithErrorCheck[int64, types.Datetime](ivecs, result, proc, length, func(v1 string, v2 int64) (types.Datetime, error) {
-		return doDateStringAdd(v1, v2, iTyp)
-	}, selectList)
+	// Use custom implementation to handle maximum overflow (return NULL)
+	result.UseOptFunctionParamFrame(2)
+	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
+	p2 := vector.OptGetParamFromWrapper[int64](rs, 1, ivecs[1])
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedColNoTypeCheck[types.Datetime](rsVec)
+	rsNull := rsVec.GetNulls()
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetStrValue(i)
+		v2, null2 := p2.GetValue(i)
+		if null1 || null2 {
+			rsNull.Add(i)
+		} else {
+			resultDt, err := doDateStringAdd(functionUtil.QuickBytesToStr(v1), v2, iTyp)
+			if err != nil {
+				if isDatetimeOverflowMaxError(err) {
+					// MySQL behavior: maximum overflow returns NULL
+					rsNull.Add(i)
+				} else {
+					return err
+				}
+			} else {
+				rss[i] = resultDt
+			}
+		}
+	}
+	return nil
 }
 
 func TimestampAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
@@ -1398,9 +1527,15 @@ func TimestampAddDate(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 						dt := date.ToDatetime()
 						resultDt, err := doDatetimeAdd(dt, interval, iTyp)
 						if err != nil {
-							return err
+							if isDatetimeOverflowMaxError(err) {
+								// MySQL behavior: maximum overflow returns NULL
+								rsNull.Add(i)
+							} else {
+								return err
+							}
+						} else {
+							rss[i] = resultDt
 						}
-						rss[i] = resultDt
 					}
 				}
 			} else {
@@ -1420,9 +1555,15 @@ func TimestampAddDate(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 						dt := date.ToDatetime()
 						resultDt, err := doDatetimeAdd(dt, interval, iTyp)
 						if err != nil {
-							return err
+							if isDatetimeOverflowMaxError(err) {
+								// MySQL behavior: maximum overflow returns NULL
+								rsNull.Add(i)
+							} else {
+								return err
+							}
+						} else {
+							rss[i] = resultDt
 						}
-						rss[i] = resultDt
 					}
 				}
 			}
@@ -1442,9 +1583,15 @@ func TimestampAddDate(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 					} else {
 						resultDate, err := doDateAdd(date, interval, iTyp)
 						if err != nil {
-							return err
+							if isDateOverflowMaxError(err) {
+								// MySQL behavior: maximum overflow returns NULL
+								rsNull.Add(i)
+							} else {
+								return err
+							}
+						} else {
+							rss[i] = resultDate
 						}
-						rss[i] = resultDate
 					}
 				}
 			} else {
@@ -1462,9 +1609,15 @@ func TimestampAddDate(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 					} else {
 						resultDate, err := doDateAdd(date, interval, iTyp)
 						if err != nil {
-							return err
+							if isDateOverflowMaxError(err) {
+								// MySQL behavior: maximum overflow returns NULL
+								rsNull.Add(i)
+							} else {
+								return err
+							}
+						} else {
+							rss[i] = resultDate
 						}
-						rss[i] = resultDate
 					}
 				}
 			}
@@ -1521,9 +1674,15 @@ func TimestampAddDate(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 					dt := date.ToDatetime()
 					resultDt, err := doDatetimeAdd(dt, interval, iTyp)
 					if err != nil {
-						return err
+						if isDatetimeOverflowMaxError(err) {
+							// MySQL behavior: maximum overflow returns NULL
+							rsNull.Add(i)
+						} else {
+							return err
+						}
+					} else {
+						rss[i] = resultDt
 					}
-					rss[i] = resultDt
 				}
 			}
 		} else {
@@ -1548,9 +1707,15 @@ func TimestampAddDate(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 					dt := date.ToDatetime()
 					resultDt, err := doDatetimeAdd(dt, interval, iTyp)
 					if err != nil {
-						return err
+						if isDatetimeOverflowMaxError(err) {
+							// MySQL behavior: maximum overflow returns NULL
+							rsNull.Add(i)
+						} else {
+							return err
+						}
+					} else {
+						rss[i] = resultDt
 					}
-					rss[i] = resultDt
 				}
 			}
 		}
@@ -1574,9 +1739,15 @@ func TimestampAddDate(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 					}
 					resultDate, err := doDateAdd(date, interval, iTyp)
 					if err != nil {
-						return err
+						if isDateOverflowMaxError(err) {
+							// MySQL behavior: maximum overflow returns NULL
+							rsNull.Add(i)
+						} else {
+							return err
+						}
+					} else {
+						rss[i] = resultDate
 					}
-					rss[i] = resultDate
 				}
 			}
 		} else {
@@ -1598,9 +1769,15 @@ func TimestampAddDate(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 					}
 					resultDate, err := doDateAdd(date, interval, iTyp)
 					if err != nil {
-						return err
+						if isDateOverflowMaxError(err) {
+							// MySQL behavior: maximum overflow returns NULL
+							rsNull.Add(i)
+						} else {
+							return err
+						}
+					} else {
+						rss[i] = resultDate
 					}
-					rss[i] = resultDate
 				}
 			}
 		}
@@ -1647,10 +1824,18 @@ func TimestampAddDatetime(ivecs []*vector.Vector, result vector.FunctionResultWr
 		} else {
 			resultDt, err := doDatetimeAdd(dt, interval, iTyp)
 			if err != nil {
-				return err
-			}
-			if err = rs.Append(resultDt, false); err != nil {
-				return err
+				if isDatetimeOverflowMaxError(err) {
+					// MySQL behavior: maximum overflow returns NULL
+					if err = rs.Append(types.Datetime(0), true); err != nil {
+						return err
+					}
+				} else {
+					return err
+				}
+			} else {
+				if err = rs.Append(resultDt, false); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -1741,12 +1926,20 @@ func TimestampAddString(ivecs []*vector.Vector, result vector.FunctionResultWrap
 			} else {
 				resultDt, err := doDateStringAdd(functionUtil.QuickBytesToStr(dateStr), interval, iTyp)
 				if err != nil {
-					return err
-				}
-				// Format as DATETIME string (full format with time)
-				resultStr := resultDt.String2(0) // Use scale 0 for no fractional seconds
-				if err = rs.AppendBytes([]byte(resultStr), false); err != nil {
-					return err
+					if isDatetimeOverflowMaxError(err) {
+						// MySQL behavior: maximum overflow returns NULL
+						if err = rs.AppendBytes(nil, true); err != nil {
+							return err
+						}
+					} else {
+						return err
+					}
+				} else {
+					// Format as DATETIME string (full format with time)
+					resultStr := resultDt.String2(0) // Use scale 0 for no fractional seconds
+					if err = rs.AppendBytes([]byte(resultStr), false); err != nil {
+						return err
+					}
 				}
 			}
 		}
@@ -1774,12 +1967,20 @@ func TimestampAddString(ivecs []*vector.Vector, result vector.FunctionResultWrap
 					// Successfully parsed as DATE, process as DATE format
 					resultDate, err2 := doDateAdd(date, interval, iTyp)
 					if err2 != nil {
-						return err2
-					}
-					// Format as DATE string (YYYY-MM-DD only)
-					resultStr := resultDate.String()
-					if err = rs.AppendBytes([]byte(resultStr), false); err != nil {
-						return err
+						if isDateOverflowMaxError(err2) {
+							// MySQL behavior: maximum overflow returns NULL
+							if err = rs.AppendBytes(nil, true); err != nil {
+								return err
+							}
+						} else {
+							return err2
+						}
+					} else {
+						// Format as DATE string (YYYY-MM-DD only)
+						resultStr := resultDate.String()
+						if err = rs.AppendBytes([]byte(resultStr), false); err != nil {
+							return err
+						}
 					}
 					continue
 				}
@@ -1787,12 +1988,20 @@ func TimestampAddString(ivecs []*vector.Vector, result vector.FunctionResultWrap
 			// Fallback to DATETIME format processing
 			resultDt, err := doDateStringAdd(dateStrVal, interval, iTyp)
 			if err != nil {
-				return err
-			}
-			// Format as DATETIME string (full format with time)
-			resultStr := resultDt.String2(0) // Use scale 0 for no fractional seconds
-			if err = rs.AppendBytes([]byte(resultStr), false); err != nil {
-				return err
+				if isDatetimeOverflowMaxError(err) {
+					// MySQL behavior: maximum overflow returns NULL
+					if err = rs.AppendBytes(nil, true); err != nil {
+						return err
+					}
+				} else {
+					return err
+				}
+			} else {
+				// Format as DATETIME string (full format with time)
+				resultStr := resultDt.String2(0) // Use scale 0 for no fractional seconds
+				if err = rs.AppendBytes([]byte(resultStr), false); err != nil {
+					return err
+				}
 			}
 		}
 	}
