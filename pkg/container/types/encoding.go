@@ -13,7 +13,6 @@
 // limitations under the License.
 
 //go:build !debug
-// +build !debug
 
 package types
 
