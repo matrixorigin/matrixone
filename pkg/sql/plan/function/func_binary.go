@@ -1348,45 +1348,160 @@ func TimeAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 // MySQL behavior: Returns DATE for date units (DAY, WEEK, MONTH, QUARTER, YEAR)
 //
 //	Returns DATETIME for time units (HOUR, MINUTE, SECOND, MICROSECOND)
+//
+// Supports both constant and non-constant unit parameters
 func TimestampAddDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	if !ivecs[0].IsConst() {
-		return moerr.NewInvalidArg(proc.Ctx, "timestampadd unit", "not constant")
-	}
-
-	unitStr, _ := vector.GenerateFunctionStrParameter(ivecs[0]).GetStrValue(0)
-	iTyp, err := types.IntervalTypeOf(functionUtil.QuickBytesToStr(unitStr))
-	if err != nil {
-		return err
-	}
-
-	// Check if interval type is a time unit (HOUR, MINUTE, SECOND, MICROSECOND)
-	// If so, return DATETIME; otherwise return DATE
-	isTimeUnit := iTyp == types.Hour || iTyp == types.Minute || iTyp == types.Second || iTyp == types.MicroSecond
-
 	dates := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[2])
 	intervals := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	unitStrings := vector.GenerateFunctionStrParameter(ivecs[0])
 
 	// Check result wrapper type: it can be DATE (from BindFuncExprImplByPlanExpr) or DATETIME (from retType)
-	// This handles both cases:
-	// 1. New case: BindFuncExprImplByPlanExpr sets expr.Typ to DATE → result wrapper is DATE
-	// 2. Old case: retType returns DATETIME → result wrapper is DATETIME (backward compatibility)
 	vec := result.GetResultVector()
 	resultType := vec.GetType().Oid
 
-	if isTimeUnit {
-		// Return DATETIME for time units (MySQL compatible)
-		// When input is DATE but unit is time unit, MySQL returns DATETIME
-		// Set scale based on interval type:
-		// - MICROSECOND: scale=6 (microsecond precision)
-		// - HOUR, MINUTE, SECOND: scale=0 (no fractional seconds)
-		scale := int32(0)
-		if iTyp == types.MicroSecond {
-			scale = 6
+	// Handle constant unit (optimized path)
+	if ivecs[0].IsConst() {
+		unitStr, _ := unitStrings.GetStrValue(0)
+		iTyp, err := types.IntervalTypeOf(functionUtil.QuickBytesToStr(unitStr))
+		if err != nil {
+			return err
 		}
 
+		// Check if interval type is a time unit (HOUR, MINUTE, SECOND, MICROSECOND)
+		isTimeUnit := iTyp == types.Hour || iTyp == types.Minute || iTyp == types.Second || iTyp == types.MicroSecond
+
+		if isTimeUnit {
+			// Return DATETIME for time units (MySQL compatible)
+			// When input is DATE but unit is time unit, MySQL returns DATETIME
+			// Set scale based on interval type:
+			// - MICROSECOND: scale=6 (microsecond precision)
+			// - HOUR, MINUTE, SECOND: scale=0 (no fractional seconds)
+			scale := int32(0)
+			if iTyp == types.MicroSecond {
+				scale = 6
+			}
+
+			if resultType == types.T_date {
+				// Result wrapper is DATE, but we need to return DATETIME
+				// Convert to DATETIME type
+				vec.SetType(types.New(types.T_datetime, 0, scale))
+				rss := vector.MustFixedColNoTypeCheck[types.Datetime](vec)
+				rsNull := vec.GetNulls()
+
+				for i := uint64(0); i < uint64(length); i++ {
+					date, null1 := dates.GetValue(i)
+					interval, null2 := intervals.GetValue(i)
+					if null1 || null2 {
+						rsNull.Add(i)
+					} else {
+						// Convert DATE to DATETIME, add interval, return DATETIME
+						dt := date.ToDatetime()
+						resultDt, err := doDatetimeAdd(dt, interval, iTyp)
+						if err != nil {
+							return err
+						}
+						rss[i] = resultDt
+					}
+				}
+			} else {
+				// Result wrapper is DATETIME (backward compatibility)
+				rsDatetime := vector.MustFunctionResult[types.Datetime](result)
+				rsDatetime.TempSetType(types.New(types.T_datetime, 0, scale))
+				rss := vector.MustFixedColNoTypeCheck[types.Datetime](vec)
+				rsNull := vec.GetNulls()
+
+				for i := uint64(0); i < uint64(length); i++ {
+					date, null1 := dates.GetValue(i)
+					interval, null2 := intervals.GetValue(i)
+					if null1 || null2 {
+						rsNull.Add(i)
+					} else {
+						// Convert DATE to DATETIME, add interval, return DATETIME
+						dt := date.ToDatetime()
+						resultDt, err := doDatetimeAdd(dt, interval, iTyp)
+						if err != nil {
+							return err
+						}
+						rss[i] = resultDt
+					}
+				}
+			}
+		} else {
+			// Return DATE for date units (DAY, WEEK, MONTH, QUARTER, YEAR)
+			// MySQL behavior: DATE input + date unit → DATE output
+			if resultType == types.T_date {
+				// Result wrapper is already DATE (from BindFuncExprImplByPlanExpr)
+				rss := vector.MustFixedColNoTypeCheck[types.Date](vec)
+				rsNull := vec.GetNulls()
+
+				for i := uint64(0); i < uint64(length); i++ {
+					date, null1 := dates.GetValue(i)
+					interval, null2 := intervals.GetValue(i)
+					if null1 || null2 {
+						rsNull.Add(i)
+					} else {
+						resultDate, err := doDateAdd(date, interval, iTyp)
+						if err != nil {
+							return err
+						}
+						rss[i] = resultDate
+					}
+				}
+			} else {
+				// Result wrapper is DATETIME (backward compatibility)
+				// Use SetType to change vector type to DATE
+				vec.SetType(types.New(types.T_date, 0, 0))
+				rss := vector.MustFixedColNoTypeCheck[types.Date](vec)
+				rsNull := vec.GetNulls()
+
+				for i := uint64(0); i < uint64(length); i++ {
+					date, null1 := dates.GetValue(i)
+					interval, null2 := intervals.GetValue(i)
+					if null1 || null2 {
+						rsNull.Add(i)
+					} else {
+						resultDate, err := doDateAdd(date, interval, iTyp)
+						if err != nil {
+							return err
+						}
+						rss[i] = resultDate
+					}
+				}
+			}
+		}
+		return nil
+	}
+
+	// Handle non-constant unit (runtime processing)
+	// First pass: check all units to determine result type
+	// MySQL behavior: if any unit is time unit, return DATETIME; otherwise return DATE
+	hasTimeUnit := false
+	maxScale := int32(0)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		unitStr, null := unitStrings.GetStrValue(i)
+		if null {
+			continue
+		}
+		iTyp, err := types.IntervalTypeOf(functionUtil.QuickBytesToStr(unitStr))
+		if err != nil {
+			return err
+		}
+		isTimeUnit := iTyp == types.Hour || iTyp == types.Minute || iTyp == types.Second || iTyp == types.MicroSecond
+		if isTimeUnit {
+			hasTimeUnit = true
+			if iTyp == types.MicroSecond {
+				maxScale = 6
+			}
+		}
+	}
+
+	// Second pass: process data based on determined result type
+	if hasTimeUnit {
+		// Return DATETIME for time units (MySQL compatible)
+		scale := maxScale
 		if resultType == types.T_date {
 			// Result wrapper is DATE, but we need to return DATETIME
-			// Convert to DATETIME type
 			vec.SetType(types.New(types.T_datetime, 0, scale))
 			rss := vector.MustFixedColNoTypeCheck[types.Datetime](vec)
 			rsNull := vec.GetNulls()
@@ -1394,9 +1509,14 @@ func TimestampAddDate(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 			for i := uint64(0); i < uint64(length); i++ {
 				date, null1 := dates.GetValue(i)
 				interval, null2 := intervals.GetValue(i)
-				if null1 || null2 {
+				unitStr, null3 := unitStrings.GetStrValue(i)
+				if null1 || null2 || null3 {
 					rsNull.Add(i)
 				} else {
+					iTyp, err := types.IntervalTypeOf(functionUtil.QuickBytesToStr(unitStr))
+					if err != nil {
+						return err
+					}
 					// Convert DATE to DATETIME, add interval, return DATETIME
 					dt := date.ToDatetime()
 					resultDt, err := doDatetimeAdd(dt, interval, iTyp)
@@ -1407,7 +1527,7 @@ func TimestampAddDate(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 				}
 			}
 		} else {
-			// Result wrapper is DATETIME (backward compatibility)
+			// Result wrapper is DATETIME
 			rsDatetime := vector.MustFunctionResult[types.Datetime](result)
 			rsDatetime.TempSetType(types.New(types.T_datetime, 0, scale))
 			rss := vector.MustFixedColNoTypeCheck[types.Datetime](vec)
@@ -1416,9 +1536,14 @@ func TimestampAddDate(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 			for i := uint64(0); i < uint64(length); i++ {
 				date, null1 := dates.GetValue(i)
 				interval, null2 := intervals.GetValue(i)
-				if null1 || null2 {
+				unitStr, null3 := unitStrings.GetStrValue(i)
+				if null1 || null2 || null3 {
 					rsNull.Add(i)
 				} else {
+					iTyp, err := types.IntervalTypeOf(functionUtil.QuickBytesToStr(unitStr))
+					if err != nil {
+						return err
+					}
 					// Convert DATE to DATETIME, add interval, return DATETIME
 					dt := date.ToDatetime()
 					resultDt, err := doDatetimeAdd(dt, interval, iTyp)
@@ -1430,19 +1555,23 @@ func TimestampAddDate(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 			}
 		}
 	} else {
-		// Return DATE for date units (DAY, WEEK, MONTH, QUARTER, YEAR)
-		// MySQL behavior: DATE input + date unit → DATE output
+		// Return DATE for date units (all units are date units)
 		if resultType == types.T_date {
-			// Result wrapper is already DATE (from BindFuncExprImplByPlanExpr)
+			// Result wrapper is already DATE
 			rss := vector.MustFixedColNoTypeCheck[types.Date](vec)
 			rsNull := vec.GetNulls()
 
 			for i := uint64(0); i < uint64(length); i++ {
 				date, null1 := dates.GetValue(i)
 				interval, null2 := intervals.GetValue(i)
-				if null1 || null2 {
+				unitStr, null3 := unitStrings.GetStrValue(i)
+				if null1 || null2 || null3 {
 					rsNull.Add(i)
 				} else {
+					iTyp, err := types.IntervalTypeOf(functionUtil.QuickBytesToStr(unitStr))
+					if err != nil {
+						return err
+					}
 					resultDate, err := doDateAdd(date, interval, iTyp)
 					if err != nil {
 						return err
@@ -1451,8 +1580,7 @@ func TimestampAddDate(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 				}
 			}
 		} else {
-			// Result wrapper is DATETIME (backward compatibility)
-			// Use SetType to change vector type to DATE
+			// Result wrapper is DATETIME, but all units are date units, so return DATE
 			vec.SetType(types.New(types.T_date, 0, 0))
 			rss := vector.MustFixedColNoTypeCheck[types.Date](vec)
 			rsNull := vec.GetNulls()
@@ -1460,9 +1588,14 @@ func TimestampAddDate(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 			for i := uint64(0); i < uint64(length); i++ {
 				date, null1 := dates.GetValue(i)
 				interval, null2 := intervals.GetValue(i)
-				if null1 || null2 {
+				unitStr, null3 := unitStrings.GetStrValue(i)
+				if null1 || null2 || null3 {
 					rsNull.Add(i)
 				} else {
+					iTyp, err := types.IntervalTypeOf(functionUtil.QuickBytesToStr(unitStr))
+					if err != nil {
+						return err
+					}
 					resultDate, err := doDateAdd(date, interval, iTyp)
 					if err != nil {
 						return err

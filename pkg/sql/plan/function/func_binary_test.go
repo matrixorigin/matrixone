@@ -1523,6 +1523,201 @@ func TestTimestampAddErrorHandling(t *testing.T) {
 	})
 }
 
+// TestTimestampAddNonConstantUnit tests TIMESTAMPADD with non-constant unit parameter
+// This simulates: SELECT TIMESTAMPADD(col_unit, 5, date_col) FROM t1;
+// MySQL behavior: Runtime unit determines return type
+func TestTimestampAddNonConstantUnit(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// Test case 1: Non-constant unit with all date units → should return DATE
+	t.Run("Non-constant unit - all date units", func(t *testing.T) {
+		d1, _ := types.ParseDateCast("2024-12-20")
+		d2, _ := types.ParseDateCast("2024-12-21")
+		expected1, _ := types.ParseDateCast("2024-12-25") // +5 DAY
+		expected2, _ := types.ParseDateCast("2024-12-28") // +7 DAY
+
+		// Create non-constant unit vector: ["DAY", "DAY"]
+		unitStrs := []string{"DAY", "DAY"}
+		unitVec := vector.NewVec(types.T_varchar.ToType())
+		vector.AppendStringList(unitVec, unitStrs, nil, proc.Mp())
+
+		// Create interval vector: [5, 7]
+		intervals := []int64{5, 7}
+		intervalVec := vector.NewVec(types.T_int64.ToType())
+		vector.AppendFixedList(intervalVec, intervals, nil, proc.Mp())
+
+		// Create date vector: [d1, d2]
+		dates := []types.Date{d1, d2}
+		dateVec := vector.NewVec(types.T_date.ToType())
+		vector.AppendFixedList(dateVec, dates, nil, proc.Mp())
+
+		parameters := []*vector.Vector{unitVec, intervalVec, dateVec}
+		// Result wrapper should be DATETIME (from retType, since unit is not constant at compile time)
+		result := vector.NewFunctionResultWrapper(types.T_datetime.ToType(), proc.Mp())
+
+		fnLength := dateVec.Length()
+		err := result.PreExtendAndReset(fnLength)
+		require.NoError(t, err)
+
+		err = TimestampAddDate(parameters, result, proc, fnLength, nil)
+		require.NoError(t, err, "Should handle non-constant unit")
+
+		v := result.GetResultVector()
+		require.Equal(t, fnLength, v.Length())
+
+		// Since all units are date units, result type should be DATE
+		require.Equal(t, types.T_date, v.GetType().Oid, "Result type should be DATE when all units are date units")
+
+		dateParam := vector.GenerateFunctionFixedTypeParameter[types.Date](v)
+		resultDate1, null1 := dateParam.GetValue(0)
+		require.False(t, null1)
+		require.Equal(t, expected1, resultDate1)
+
+		resultDate2, null2 := dateParam.GetValue(1)
+		require.False(t, null2)
+		require.Equal(t, expected2, resultDate2)
+	})
+
+	// Test case 2: Non-constant unit with mixed date/time units → should return DATETIME
+	t.Run("Non-constant unit - mixed date/time units", func(t *testing.T) {
+		d1, _ := types.ParseDateCast("2024-12-20")
+		d2, _ := types.ParseDateCast("2024-12-20")
+		expected1, _ := types.ParseDateCast("2024-12-25")             // +5 DAY
+		expected2, _ := types.ParseDatetime("2024-12-20 02:00:00", 0) // +2 HOUR
+
+		// Create non-constant unit vector: ["DAY", "HOUR"]
+		unitStrs := []string{"DAY", "HOUR"}
+		unitVec := vector.NewVec(types.T_varchar.ToType())
+		vector.AppendStringList(unitVec, unitStrs, nil, proc.Mp())
+
+		// Create interval vector: [5, 2]
+		intervals := []int64{5, 2}
+		intervalVec := vector.NewVec(types.T_int64.ToType())
+		vector.AppendFixedList(intervalVec, intervals, nil, proc.Mp())
+
+		// Create date vector: [d1, d2]
+		dates := []types.Date{d1, d2}
+		dateVec := vector.NewVec(types.T_date.ToType())
+		vector.AppendFixedList(dateVec, dates, nil, proc.Mp())
+
+		parameters := []*vector.Vector{unitVec, intervalVec, dateVec}
+		result := vector.NewFunctionResultWrapper(types.T_datetime.ToType(), proc.Mp())
+
+		fnLength := dateVec.Length()
+		err := result.PreExtendAndReset(fnLength)
+		require.NoError(t, err)
+
+		err = TimestampAddDate(parameters, result, proc, fnLength, nil)
+		require.NoError(t, err, "Should handle mixed date/time units")
+
+		v := result.GetResultVector()
+		require.Equal(t, fnLength, v.Length())
+
+		// Since there's at least one time unit, result type should be DATETIME
+		require.Equal(t, types.T_datetime, v.GetType().Oid, "Result type should be DATETIME when any unit is time unit")
+
+		// First result: DATE input + DAY unit → should be DATE format but stored as DATETIME
+		dtParam := vector.GenerateFunctionFixedTypeParameter[types.Datetime](v)
+		resultDt1, null1 := dtParam.GetValue(0)
+		require.False(t, null1)
+		// Convert expected DATE to DATETIME for comparison
+		expectedDt1 := expected1.ToDatetime()
+		require.Equal(t, expectedDt1, resultDt1)
+
+		// Second result: DATE input + HOUR unit → should be DATETIME
+		resultDt2, null2 := dtParam.GetValue(1)
+		require.False(t, null2)
+		require.Equal(t, expected2, resultDt2)
+	})
+
+	// Test case 3: Non-constant unit with all time units → should return DATETIME
+	t.Run("Non-constant unit - all time units", func(t *testing.T) {
+		d1, _ := types.ParseDateCast("2024-12-20")
+		d2, _ := types.ParseDateCast("2024-12-20")
+		expected1, _ := types.ParseDatetime("2024-12-20 02:00:00", 0) // +2 HOUR
+		expected2, _ := types.ParseDatetime("2024-12-20 00:30:00", 0) // +30 MINUTE
+
+		// Create non-constant unit vector: ["HOUR", "MINUTE"]
+		unitStrs := []string{"HOUR", "MINUTE"}
+		unitVec := vector.NewVec(types.T_varchar.ToType())
+		vector.AppendStringList(unitVec, unitStrs, nil, proc.Mp())
+
+		// Create interval vector: [2, 30]
+		intervals := []int64{2, 30}
+		intervalVec := vector.NewVec(types.T_int64.ToType())
+		vector.AppendFixedList(intervalVec, intervals, nil, proc.Mp())
+
+		// Create date vector: [d1, d2]
+		dates := []types.Date{d1, d2}
+		dateVec := vector.NewVec(types.T_date.ToType())
+		vector.AppendFixedList(dateVec, dates, nil, proc.Mp())
+
+		parameters := []*vector.Vector{unitVec, intervalVec, dateVec}
+		result := vector.NewFunctionResultWrapper(types.T_datetime.ToType(), proc.Mp())
+
+		fnLength := dateVec.Length()
+		err := result.PreExtendAndReset(fnLength)
+		require.NoError(t, err)
+
+		err = TimestampAddDate(parameters, result, proc, fnLength, nil)
+		require.NoError(t, err, "Should handle all time units")
+
+		v := result.GetResultVector()
+		require.Equal(t, fnLength, v.Length())
+
+		// Since all units are time units, result type should be DATETIME
+		require.Equal(t, types.T_datetime, v.GetType().Oid, "Result type should be DATETIME when all units are time units")
+
+		dtParam := vector.GenerateFunctionFixedTypeParameter[types.Datetime](v)
+		resultDt1, null1 := dtParam.GetValue(0)
+		require.False(t, null1)
+		require.Equal(t, expected1, resultDt1)
+
+		resultDt2, null2 := dtParam.GetValue(1)
+		require.False(t, null2)
+		require.Equal(t, expected2, resultDt2)
+	})
+
+	// Test case 4: Non-constant unit with NULL values
+	t.Run("Non-constant unit - with NULL values", func(t *testing.T) {
+		d1, _ := types.ParseDateCast("2024-12-20")
+		d2, _ := types.ParseDateCast("2024-12-21")
+
+		// Create non-constant unit vector: ["DAY", NULL]
+		unitStrs := []string{"DAY", ""}
+		unitVec := vector.NewVec(types.T_varchar.ToType())
+		vector.AppendStringList(unitVec, unitStrs, nil, proc.Mp())
+		// Set second element as NULL
+		nulls := nulls.NewWithSize(2)
+		nulls.Set(1)
+		unitVec.SetNulls(nulls)
+
+		// Create interval vector: [5, 7]
+		intervals := []int64{5, 7}
+		intervalVec := vector.NewVec(types.T_int64.ToType())
+		vector.AppendFixedList(intervalVec, intervals, nil, proc.Mp())
+
+		// Create date vector: [d1, d2]
+		dates := []types.Date{d1, d2}
+		dateVec := vector.NewVec(types.T_date.ToType())
+		vector.AppendFixedList(dateVec, dates, nil, proc.Mp())
+
+		parameters := []*vector.Vector{unitVec, intervalVec, dateVec}
+		result := vector.NewFunctionResultWrapper(types.T_datetime.ToType(), proc.Mp())
+
+		fnLength := dateVec.Length()
+		err := result.PreExtendAndReset(fnLength)
+		require.NoError(t, err)
+
+		err = TimestampAddDate(parameters, result, proc, fnLength, nil)
+		// NULL unit should cause error or be handled gracefully
+		// The important thing is it doesn't panic
+		if err != nil {
+			require.Contains(t, err.Error(), "null", "Error should mention null or invalid unit")
+		}
+	})
+}
+
 // TestTimestampAddRetType tests the retType function behavior for TIMESTAMPADD
 // This test verifies that retType returns the correct type, which affects MySQL protocol layer formatting
 func TestTimestampAddRetType(t *testing.T) {
