@@ -145,7 +145,7 @@ func TestBackupData(t *testing.T) {
 		locations = append(locations, location)
 	}
 	fileList := make([]*taeFile, 0)
-	err = execBackup(ctx, "", db.Opts.Fs, service, locations, 1, types.TS{}, "full", &fileList)
+	err = execBackup(ctx, "", db.Opts.Fs, service, locations, 1, types.TS{}, "full", &fileList, nil)
 	assert.Nil(t, err)
 	fileMap := make(map[string]struct{})
 	for _, file := range fileList {
@@ -252,7 +252,7 @@ func TestBackupData2(t *testing.T) {
 		locations = append(locations, location)
 	}
 	fileList := make([]*taeFile, 0)
-	err = execBackup(ctx, "", db.Opts.Fs, service, locations, 1, types.TS{}, "full", &fileList)
+	err = execBackup(ctx, "", db.Opts.Fs, service, locations, 1, types.TS{}, "full", &fileList, nil)
 	assert.Nil(t, err)
 	fileMap := make(map[string]struct{})
 	for _, file := range fileList {
@@ -323,7 +323,7 @@ func TestBackupData3(t *testing.T) {
 		locations = append(locations, location)
 	}
 	fileList := make([]*taeFile, 0)
-	err = execBackup(ctx, "", db.Opts.Fs, service, locations, 1, types.TS{}, "full", &fileList)
+	err = execBackup(ctx, "", db.Opts.Fs, service, locations, 1, types.TS{}, "full", &fileList, nil)
 	assert.Nil(t, err)
 	fileMap := make(map[string]struct{})
 	for _, file := range fileList {
@@ -404,7 +404,7 @@ func TestBackupData4(t *testing.T) {
 		locations = append(locations, location)
 	}
 	fileList := make([]*taeFile, 0)
-	err = execBackup(ctx, "", db.Opts.Fs, service, locations, 1, types.TS{}, "full", &fileList)
+	err = execBackup(ctx, "", db.Opts.Fs, service, locations, 1, types.TS{}, "full", &fileList, nil)
 	assert.Nil(t, err)
 	fileMap := make(map[string]struct{})
 	for _, file := range fileList {
@@ -538,7 +538,7 @@ func TestBackupData5(t *testing.T) {
 			},
 		},
 	})
-	err = execBackup(ctx, "", db.Opts.Fs, service, locations, 1, types.TS{}, "full", &fileList)
+	err = execBackup(ctx, "", db.Opts.Fs, service, locations, 1, types.TS{}, "full", &fileList, nil)
 	assert.Nil(t, err)
 	fileMap := make(map[string]struct{})
 	for _, file := range fileList {

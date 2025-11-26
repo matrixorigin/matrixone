@@ -47,6 +47,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
+const (
+	// Backup protection update interval
+	backupProtectionUpdateInterval = 5 * time.Minute
+	// mo_ctl command prefix for backup protection
+	backupProtectionCmdPrefix = "add_checker.backup."
+	backupProtectionRemoveCmd = "remove_checker.backup."
+)
+
 func getFileNames(ctx context.Context, retBytes [][][]byte) ([]string, error) {
 	var err error
 	cr := ctl.Result{}
@@ -105,8 +113,14 @@ func BackupData(
 	if err != nil {
 		return err
 	}
+
+	// Setup backup protection manager
+	exec, opts := getSQLExecutor(sid)
+	protectionMgr := newBackupProtectionManager(ctx, exec, opts)
+	defer protectionMgr.cleanup()
+
 	count := config.Parallelism
-	return execBackup(ctx, sid, srcFs, dstFs, fileName, int(count), config.BackupTs, config.BackupType, nil)
+	return execBackup(ctx, sid, srcFs, dstFs, fileName, int(count), config.BackupTs, config.BackupType, nil, protectionMgr)
 }
 
 func getParallelCount(count int) int {
@@ -271,6 +285,7 @@ func execBackup(
 	ts types.TS,
 	typ string,
 	filesList *[]*taeFile,
+	protectionMgr *backupProtectionManager, // Optional: nil for tests, non-nil for production
 ) error {
 	backupTime := names[0]
 	trimInfo := names[1]
@@ -286,43 +301,7 @@ func execBackup(
 		common.AnyField("checkpoint num", len(names)),
 		common.AnyField("parallel num", parallelNum))
 
-	// Try to get SQL executor for mo_ctl calls (may not be available in test environment)
-	var exec executor.SQLExecutor
-	var opts executor.Options
-	v, ok := runtime.ServiceRuntime(sid).GetGlobalVariables(runtime.InternalSQLExecutor)
-	if ok {
-		exec = v.(executor.SQLExecutor)
-		opts = executor.Options{}
-	}
-
-	// Backup protection timestamp - will be set to the first checkpoint's start time
-	var protectedTS types.TS
-	var updateTicker *time.Ticker
-	var updateTickerStop chan struct{}
-	var protectionSet bool // Track if protection was successfully set
-
 	defer func() {
-		// Stop the update ticker
-		// IMPORTANT: Close the channel first to signal the goroutine to exit,
-		// then stop the ticker. This prevents deadlock if exec.Exec is blocking
-		// in the goroutine. If we stop the ticker first, the goroutine might be
-		// stuck in exec.Exec and unable to check updateTickerStop channel.
-		if updateTicker != nil {
-			// Close channel first to signal goroutine to exit
-			close(updateTickerStop)
-			// Then stop the ticker (this is safe even if goroutine is still running)
-			updateTicker.Stop()
-		}
-		// Remove backup protection if it was set
-		if protectionSet && exec != nil {
-			sql := "select mo_ctl('dn','DiskCleaner','remove_checker.backup.')"
-			_, err := exec.Exec(ctx, sql, opts)
-			if err != nil {
-				logutil.Errorf("backup: failed to remove backup protection: %v", err)
-			} else {
-				logutil.Info("backup: backup protection removed")
-			}
-		}
 		logutil.Info("backup", common.OperationField("end backup"),
 			common.AnyField("load checkpoint cost", loadDuration),
 			common.AnyField("copy file cost", copyDuration),
@@ -419,53 +398,17 @@ func execBackup(
 	// Set protectedTS to the backup time point
 	// This is the timestamp that should be protected from GC
 	// Use start if available (from trimInfo), otherwise use baseTS
+	var protectedTS types.TS
 	if !start.IsEmpty() {
 		protectedTS = start
 	} else if !baseTS.IsEmpty() {
 		protectedTS = baseTS
 	}
 
-	if !protectedTS.IsEmpty() && exec != nil {
-		// Set backup protection via mo_ctl
-		tsValue := protectedTS.ToString()
-		sql := fmt.Sprintf("select mo_ctl('dn','DiskCleaner','add_checker.backup.%s')", tsValue)
-		_, err := exec.Exec(ctx, sql, opts)
-		if err != nil {
-			logutil.Errorf("backup: failed to set backup protection: %v", err)
-			// Continue backup even if protection setup fails, but log the error
-		} else {
-			protectionSet = true // Mark that protection was successfully set
-			logutil.Info("backup: backup protection set",
-				common.AnyField("protected-ts", protectedTS.ToString()))
-
-			// Start a ticker to update backup protection every 5 minutes
-			updateTicker = time.NewTicker(5 * time.Minute)
-			updateTickerStop = make(chan struct{})
-			go func() {
-				for {
-					select {
-					case <-updateTicker.C:
-						// Update backup protection
-						tsValue := protectedTS.ToString()
-						sql := fmt.Sprintf("select mo_ctl('dn','DiskCleaner','add_checker.backup.%s')", tsValue)
-						_, err := exec.Exec(ctx, sql, opts)
-						if err != nil {
-							logutil.Errorf("backup: failed to update backup protection: %v", err)
-						} else {
-							logutil.Info("backup: backup protection updated")
-						}
-					case <-updateTickerStop:
-						return
-					case <-ctx.Done():
-						return
-					}
-				}
-			}()
-		}
-	} else if !protectedTS.IsEmpty() && exec == nil {
-		// SQL executor not available (e.g., in test environment)
-		// Log warning but continue backup without protection
-		logutil.Warn("backup: SQL executor not available, backup protection will not be set")
+	// Start backup protection if we have a valid timestamp and protection manager
+	// protectionMgr can be nil in test environments
+	if !protectedTS.IsEmpty() && protectionMgr != nil {
+		protectionMgr.start(protectedTS)
 	}
 
 	// copy data
@@ -777,4 +720,127 @@ func CopyFile(ctx context.Context, srcFs, dstFs fileservice.FileService, name, d
 		return nil, err
 	}
 	return hasher.Sum(nil), nil
+}
+
+// getSQLExecutor tries to get SQL executor from runtime
+// Returns (executor, opts) if available, (nil, empty opts) otherwise
+func getSQLExecutor(sid string) (executor.SQLExecutor, executor.Options) {
+	v, ok := runtime.ServiceRuntime(sid).GetGlobalVariables(runtime.InternalSQLExecutor)
+	if !ok {
+		return nil, executor.Options{}
+	}
+	return v.(executor.SQLExecutor), executor.Options{}
+}
+
+// buildBackupProtectionSQL builds the SQL command for backup protection
+func buildBackupProtectionSQL(protectedTS types.TS) string {
+	tsValue := protectedTS.ToString()
+	return fmt.Sprintf("select mo_ctl('dn','DiskCleaner','%s%s')", backupProtectionCmdPrefix, tsValue)
+}
+
+// buildRemoveBackupProtectionSQL builds the SQL command to remove backup protection
+func buildRemoveBackupProtectionSQL() string {
+	return fmt.Sprintf("select mo_ctl('dn','DiskCleaner','%s')", backupProtectionRemoveCmd)
+}
+
+// backupProtectionManager manages backup protection lifecycle
+type backupProtectionManager struct {
+	ctx            context.Context
+	exec           executor.SQLExecutor
+	opts           executor.Options
+	protectedTS    types.TS
+	updateTicker   *time.Ticker
+	updateStopChan chan struct{}
+	protectionSet  bool
+}
+
+// newBackupProtectionManager creates a new backup protection manager
+func newBackupProtectionManager(ctx context.Context, exec executor.SQLExecutor, opts executor.Options) *backupProtectionManager {
+	return &backupProtectionManager{
+		ctx:            ctx,
+		exec:           exec,
+		opts:           opts,
+		updateStopChan: make(chan struct{}),
+	}
+}
+
+// start starts backup protection with the given timestamp
+func (mgr *backupProtectionManager) start(protectedTS types.TS) {
+	mgr.protectedTS = protectedTS
+
+	if mgr.exec == nil {
+		logutil.Warn("backup: SQL executor not available, backup protection will not be set")
+		return
+	}
+
+	// Set backup protection via mo_ctl
+	sql := buildBackupProtectionSQL(protectedTS)
+	_, err := mgr.exec.Exec(mgr.ctx, sql, mgr.opts)
+	if err != nil {
+		logutil.Errorf("backup: failed to set backup protection: %v", err)
+		// Continue backup even if protection setup fails, but log the error
+		return
+	}
+
+	mgr.protectionSet = true
+	logutil.Info("backup: backup protection set",
+		common.AnyField("protected-ts", protectedTS.ToString()))
+
+	// Start a ticker to update backup protection periodically
+	mgr.updateTicker = time.NewTicker(backupProtectionUpdateInterval)
+	go mgr.updateLoop()
+}
+
+// updateLoop runs in a goroutine to periodically update backup protection
+func (mgr *backupProtectionManager) updateLoop() {
+	for {
+		select {
+		case <-mgr.updateTicker.C:
+			mgr.updateProtection()
+		case <-mgr.updateStopChan:
+			return
+		case <-mgr.ctx.Done():
+			return
+		}
+	}
+}
+
+// updateProtection updates the backup protection timestamp
+func (mgr *backupProtectionManager) updateProtection() {
+	if mgr.exec == nil {
+		return
+	}
+	sql := buildBackupProtectionSQL(mgr.protectedTS)
+	_, err := mgr.exec.Exec(mgr.ctx, sql, mgr.opts)
+	if err != nil {
+		logutil.Errorf("backup: failed to update backup protection: %v", err)
+	} else {
+		logutil.Info("backup: backup protection updated")
+	}
+}
+
+// cleanup stops the update ticker and removes backup protection
+// IMPORTANT: Close the channel first to signal the goroutine to exit,
+// then stop the ticker. This prevents deadlock if exec.Exec is blocking
+// in the goroutine. If we stop the ticker first, the goroutine might be
+// stuck in exec.Exec and unable to check updateStopChan channel.
+func (mgr *backupProtectionManager) cleanup() {
+	// Stop the update ticker
+	if mgr.updateTicker != nil {
+		// Close channel first to signal goroutine to exit
+		close(mgr.updateStopChan)
+		// Then stop the ticker (this is safe even if goroutine is still running)
+		mgr.updateTicker.Stop()
+	}
+
+	// Remove backup protection if it was set
+	if mgr.protectionSet && mgr.exec != nil {
+		sql := buildRemoveBackupProtectionSQL()
+		_, err := mgr.exec.Exec(mgr.ctx, sql, mgr.opts)
+		if err != nil {
+			logutil.Errorf("backup: failed to remove backup protection: %v", err)
+		} else {
+			logutil.Info("backup: backup protection removed")
+		}
+	}
 }
