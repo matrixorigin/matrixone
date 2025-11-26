@@ -399,7 +399,7 @@ func sendBatchToClientSession(
 		if failureMode == FailureModeStrict {
 			// Strict mode: receiver done indicates data loss
 			// This happens when remote CN crashes or cancels
-			logutil.Error("[DEBUG] sendBatchToClientSession: ReceiverDone=true in strict mode",
+			logutil.Debug("sendBatchToClientSession: ReceiverDone=true in strict mode",
 				zap.String("receiverID", receiverID),
 				zap.Uint64("msgId", wcs.MsgId),
 				zap.String("uid", wcs.Uid.String()))

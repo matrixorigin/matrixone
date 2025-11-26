@@ -26,7 +26,7 @@ func (srv *Server) RecordDispatchPipeline(
 
 	key := generateRecordKey(session, streamID)
 
-	logutil.Info("[DEBUG] RecordDispatchPipeline called",
+	logutil.Debug("RecordDispatchPipeline called",
 		zap.Uint64("streamID", streamID),
 		zap.String("receiverUid", dispatchReceiver.Uid.String()))
 
@@ -35,7 +35,7 @@ func (srv *Server) RecordDispatchPipeline(
 
 	// check if sender has sent a stop running message.
 	if v, ok := srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline[key]; ok && v.alreadyDone {
-		logutil.Warn("[DEBUG] RecordDispatchPipeline found alreadyDone record",
+		logutil.Debug("RecordDispatchPipeline found alreadyDone record",
 			zap.Uint64("streamID", streamID),
 			zap.Bool("hasReceiver", v.receiver != nil),
 			zap.Bool("isDispatch", v.isDispatch),
@@ -50,13 +50,13 @@ func (srv *Server) RecordDispatchPipeline(
 			// This is a stale record created by CancelPipelineSending before
 			// RecordDispatchPipeline was called. Clean it up and proceed with
 			// normal registration.
-			logutil.Info("[DEBUG] RecordDispatchPipeline cleaning stale record",
+			logutil.Debug("RecordDispatchPipeline cleaning stale record",
 				zap.Uint64("streamID", streamID))
 			delete(srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline, key)
 		} else {
 			// This is a legitimate cancellation - the receiver was already registered
 			// and then cancelled. Set ReceiverDone to true.
-			logutil.Warn("[DEBUG] RecordDispatchPipeline setting ReceiverDone=true (legitimate cancellation)",
+			logutil.Debug("RecordDispatchPipeline setting ReceiverDone=true (legitimate cancellation)",
 				zap.Uint64("streamID", streamID),
 				zap.String("existingReceiverUid", v.receiver.Uid.String()))
 			dispatchReceiver.Lock()
@@ -68,14 +68,14 @@ func (srv *Server) RecordDispatchPipeline(
 
 	// Check if there's an existing record with a different receiver
 	// This can happen when multiple receivers share the same streamID
-	if existing, exists := srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline[key]; exists {
-		if existing.receiver != nil && existing.receiver.Uid != dispatchReceiver.Uid {
-			logutil.Warn("[DEBUG] RecordDispatchPipeline: overwriting existing receiver with different Uid",
-				zap.Uint64("streamID", streamID),
-				zap.String("existingReceiverUid", existing.receiver.Uid.String()),
-				zap.String("newReceiverUid", dispatchReceiver.Uid.String()))
+		if existing, exists := srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline[key]; exists {
+			if existing.receiver != nil && existing.receiver.Uid != dispatchReceiver.Uid {
+				logutil.Debug("RecordDispatchPipeline: overwriting existing receiver with different Uid",
+					zap.Uint64("streamID", streamID),
+					zap.String("existingReceiverUid", existing.receiver.Uid.String()),
+					zap.String("newReceiverUid", dispatchReceiver.Uid.String()))
+			}
 		}
-	}
 
 	value := runningPipelineInfo{
 		alreadyDone: false,
@@ -85,7 +85,7 @@ func (srv *Server) RecordDispatchPipeline(
 	}
 
 	srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline[key] = value
-	logutil.Info("[DEBUG] RecordDispatchPipeline registered successfully",
+	logutil.Debug("RecordDispatchPipeline registered successfully",
 		zap.Uint64("streamID", streamID),
 		zap.String("receiverUid", dispatchReceiver.Uid.String()))
 }
@@ -119,14 +119,14 @@ func (srv *Server) CancelPipelineSending(
 
 	key := generateRecordKey(session, streamID)
 
-	logutil.Info("[DEBUG] CancelPipelineSending called",
+	logutil.Debug("CancelPipelineSending called",
 		zap.Uint64("streamID", streamID))
 
 	srv.receivedRunningPipeline.Lock()
 	defer srv.receivedRunningPipeline.Unlock()
 
 	if v, ok := srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline[key]; ok {
-		logutil.Info("[DEBUG] CancelPipelineSending found existing record",
+		logutil.Debug("CancelPipelineSending found existing record",
 			zap.Uint64("streamID", streamID),
 			zap.Bool("alreadyDone", v.alreadyDone),
 			zap.Bool("hasReceiver", v.receiver != nil),
@@ -137,7 +137,7 @@ func (srv *Server) CancelPipelineSending(
 		// should continue receiving until data sending is complete.
 		// Only cancel non-dispatch pipelines (those that execute queries).
 		if v.isDispatch {
-			logutil.Info("[DEBUG] CancelPipelineSending: ignoring dispatch receiver (StopSending should not cancel receivers)",
+			logutil.Debug("CancelPipelineSending: ignoring dispatch receiver (StopSending should not cancel receivers)",
 				zap.Uint64("streamID", streamID),
 				zap.String("receiverUid", func() string {
 					if v.receiver != nil {
@@ -148,7 +148,7 @@ func (srv *Server) CancelPipelineSending(
 			// Don't cancel dispatch receivers - they should continue receiving data
 		} else {
 			// Only cancel non-dispatch pipelines (query execution pipelines)
-			logutil.Info("[DEBUG] CancelPipelineSending canceling non-dispatch pipeline",
+			logutil.Debug("CancelPipelineSending canceling non-dispatch pipeline",
 				zap.Uint64("streamID", streamID))
 			v.cancelPipeline()
 		}
@@ -158,7 +158,7 @@ func (srv *Server) CancelPipelineSending(
 		// The RecordDispatchPipeline will handle the registration properly.
 		// Creating a canceled record here causes issues when multiple receivers
 		// share the same streamID (different sessions).
-		logutil.Info("[DEBUG] CancelPipelineSending: no existing record, ignoring (will be handled by RecordDispatchPipeline)",
+		logutil.Debug("CancelPipelineSending: no existing record, ignoring (will be handled by RecordDispatchPipeline)",
 			zap.Uint64("streamID", streamID))
 		// Don't create canceled record - let RecordDispatchPipeline handle it
 	}
@@ -171,13 +171,13 @@ func (srv *Server) RemoveRelatedPipeline(session morpc.ClientSession, streamID u
 	defer srv.receivedRunningPipeline.Unlock()
 
 	if v, ok := srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline[key]; ok {
-		logutil.Info("[DEBUG] RemoveRelatedPipeline removing record",
+		logutil.Debug("RemoveRelatedPipeline removing record",
 			zap.Uint64("streamID", streamID),
 			zap.Bool("alreadyDone", v.alreadyDone),
 			zap.Bool("hasReceiver", v.receiver != nil),
 			zap.Bool("isDispatch", v.isDispatch))
 	} else {
-		logutil.Info("[DEBUG] RemoveRelatedPipeline called but no record found",
+		logutil.Debug("RemoveRelatedPipeline called but no record found",
 			zap.Uint64("streamID", streamID))
 	}
 
