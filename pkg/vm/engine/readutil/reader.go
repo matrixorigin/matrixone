@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -548,7 +549,21 @@ func (r *reader) Read(
 		return true, nil
 	}
 	if state == engine.InMem {
-		// TODO: handle in-memory data
+		if r.orderByLimit != nil {
+			sels, dists, err := blockio.HandleOrderByLimitOnIVFFlatIndex(ctx, nil, outBatch.Vecs[r.orderByLimit.ColPos], r.orderByLimit)
+			if err != nil {
+				return false, err
+			}
+
+			for _, vec := range outBatch.Vecs {
+				vec.Shuffle(sels, mp)
+			}
+
+			distVec := vector.NewVec(types.T_float64.ToType())
+			vector.AppendFixedList(distVec, dists, nil, mp)
+			outBatch.Vecs = append(outBatch.Vecs, distVec)
+		}
+
 		return false, nil
 	}
 	//read block
