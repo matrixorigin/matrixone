@@ -14,12 +14,12 @@ create table t1 (a int, b varchar(10));
 insert into t1 values (1, '2001-01-01'),(2, '2002-02-02');
 select '2007-01-01' + interval a day from t1;
 2007-01-01 + interval(a, day)
-2007-01-02 00:00:00
-2007-01-03 00:00:00
+2007-01-02
+2007-01-03
 select b + interval a day from t1;
 b + interval(a, day)
-2001-01-02 00:00:00
-2002-02-04 00:00:00
+2001-01-02
+2002-02-04
 drop table t1;
 SELECT ADDDATE(DATE'2021-01-01', INTERVAL 1 DAY);
 ADDDATE(DATE(2021-01-01), INTERVAL(1, day))
@@ -48,7 +48,7 @@ ADDDATE(TIME(00:00:00), INTERVAL(1, hour))
 01:00:00
 SELECT ADDDATE('2021-01-01', INTERVAL 1 DAY);
 ADDDATE(2021-01-01, INTERVAL(1, day))
-2021-01-02 00:00:00
+2021-01-02
 SELECT ADDDATE('2021-01-01', INTERVAL 1 HOUR);
 ADDDATE(2021-01-01, INTERVAL(1, hour))
 2021-01-01 01:00:00
@@ -59,9 +59,11 @@ SELECT ADDDATE('2021-01-01 00:00:00', INTERVAL 1 HOUR);
 ADDDATE(2021-01-01 00:00:00, INTERVAL(1, hour))
 2021-01-01 01:00:00
 SELECT ADDDATE('00:00:00', INTERVAL 1 DAY);
-invalid input: invalid datetime value 00:00:00
+ADDDATE(00:00:00, INTERVAL(1, day))
+null
 SELECT ADDDATE('00:00:00', INTERVAL 1 HOUR);
-invalid input: invalid datetime value 00:00:00
+ADDDATE(00:00:00, INTERVAL(1, hour))
+null
 select date_add("1997-12-31 23:59:59",INTERVAL 1 SECOND);
 date_add(1997-12-31 23:59:59, INTERVAL(1, second))
 1998-01-01 00:00:00
@@ -114,9 +116,11 @@ select date_add("1997-12-31 23:59:59",INTERVAL -100000 DAY);
 date_add(1997-12-31 23:59:59, INTERVAL(-100000, day))
 1724-03-17 23:59:59
 select date_add("1997-12-31 23:59:59",INTERVAL 100000 MONTH);
-Data truncation: data out of range: data type datetime, 
+date_add(1997-12-31 23:59:59, INTERVAL(100000, month))
+null
 select date_add("1997-12-31 23:59:59",INTERVAL -100000 YEAR);
-Data truncation: data out of range: data type datetime, 
+date_add(1997-12-31 23:59:59, INTERVAL(-100000, year))
+null
 select date_add("1997-12-31 23:59:59",INTERVAL "10000:1" MINUTE_SECOND);
 date_add(1997-12-31 23:59:59, INTERVAL(10000:1, minute_second))
 1998-01-07 22:40:00
@@ -143,7 +147,7 @@ date_add(1997-12-31, INTERVAL(1, second))
 1997-12-31 00:00:01
 select date_add("1997-12-31",INTERVAL 1 DAY);
 date_add(1997-12-31, INTERVAL(1, day))
-1998-01-01 00:00:00
+1998-01-01
 select date_add(NULL,INTERVAL 100000 SECOND);
 date_add(null, INTERVAL(100000, second))
 null
@@ -154,22 +158,23 @@ select date_add("1997-12-31 23:59:59",INTERVAL NULL MINUTE_SECOND);
 date_add(1997-12-31 23:59:59, INTERVAL(null, minute_second))
 null
 select date_add("9999-12-31 23:59:59",INTERVAL 1 SECOND);
-Data truncation: data out of range: data type datetime, 
+date_add(9999-12-31 23:59:59, INTERVAL(1, second))
+null
 select date_add('1998-01-30',Interval 1 month);
 date_add(1998-01-30, Interval(1, month))
-1998-02-28 00:00:00
+1998-02-28
 select date_add('1998-01-30',Interval '2:1' year_month);
 date_add(1998-01-30, Interval(2:1, year_month))
-2000-02-29 00:00:00
+2000-02-29
 select date_add('1996-02-29',Interval '1' year);
 date_add(1996-02-29, Interval(1, year))
-1997-02-28 00:00:00
+1997-02-28
 select date_add("1997-12-31",INTERVAL 1 SECOND);
 date_add(1997-12-31, INTERVAL(1, second))
 1997-12-31 00:00:01
 select date_add("1997-12-31",INTERVAL "1 1" YEAR_MONTH);
 date_add(1997-12-31, INTERVAL(1 1, year_month))
-1999-01-31 00:00:00
+1999-01-31
 SELECT DATE_ADD(to_date('9999-12-30 23:59:00','%Y-%m-%d %H:%i:%s'), INTERVAL 1 MINUTE);
 DATE_ADD(to_date(9999-12-30 23:59:00, %Y-%m-%d %H:%i:%s), INTERVAL(1, minute))
 9999-12-31 00:00:00
@@ -238,15 +243,16 @@ DATE_ADD(20071108181000, INTERVAL(1, day))
 2007-11-09 18:10:00
 select DATE_ADD('20071108',       INTERVAL 1 DAY);
 DATE_ADD(20071108, INTERVAL(1, day))
-2007-11-09 00:00:00
+2007-11-09
 select DATE_ADD(20071108,         INTERVAL 1 DAY);
 DATE_ADD(20071108, INTERVAL(1, day))
-2007-11-09 00:00:00
+2007-11-09
 select date_add('1000-01-01 00:00:00', interval '1.03:02:01.05' day_microsecond);
 date_add(1000-01-01 00:00:00, interval(1.03:02:01.05, day_microsecond))
-1000-01-02 03:02:01.050000000
+1000-01-02 03:02:01.050000
 select date_add('1000-01-01 00:00:00', interval '1.02' day_microsecond);
-internal error: conv intervaltype has jagged array input
+date_add(1000-01-01 00:00:00, interval(1.02, day_microsecond))
+1000-01-01 00:00:01.020000
 select date_add("0199-12-31 23:59:59",INTERVAL 2 SECOND);
 date_add(0199-12-31 23:59:59, INTERVAL(2, second))
 0200-01-01 00:00:01
@@ -255,46 +261,56 @@ date_add(2001-01-01 23:59:59, INTERVAL(-2000, year))
 0001-01-01 23:59:59
 SELECT
 date_add('1995-01-05', INTERVAL '9223372036854775807-02' YEAR_MONTH) as result;
-invalid input: interval type, bad value '-10'
+result
+null
 SELECT
 date_add('1995-01-05', INTERVAL '9223372036854775808-02' YEAR_MONTH) as result;
-invalid input: invalid time interval value '9223372036854775808-02'
+result
+null
 SELECT
 date_add('1995-01-05', INTERVAL '9223372036854775808-02' DAY) as result;
-invalid input: invalid time interval value '9223372036854775808-02'
+result
+null
 SELECT
 date_add('1995-01-05', INTERVAL '9223372036854775808-02' WEEK) as result;
-invalid input: invalid time interval value '9223372036854775808-02'
+result
+null
 SELECT
 date_add('1995-01-05', INTERVAL '9223372036854775808-02' SECOND) as result;
-invalid input: invalid time interval value '9223372036854775808-02'
+result
+null
 SELECT
 date_add('1995-01-05', INTERVAL '9223372036854775700-02' YEAR_MONTH) as result;
-invalid input: interval type, bad value '-1294'
+result
+null
 SELECT
 date_add('1995-01-05', INTERVAL 9223372036854775806 SECOND) as result;
-invalid argument interval, bad value 9223372036854775806
+result
+null
 SELECT
 date_add('1995-01-05', INTERVAL 9223372036854775806 MINUTE) as result;
-invalid argument interval, bad value 9223372036854775806
+result
+null
 SELECT
 date_add('1995-01-05', INTERVAL 9223372036854775806 HOUR) as result;
-invalid argument interval, bad value 9223372036854775806
+result
+null
 SELECT
 date_add('1995-01-05', INTERVAL -9223372036854775806 SECOND) as result;
-invalid argument interval, bad value -9223372036854775806
+result
+null
 SELECT
 date_add('1995-01-05', INTERVAL -9223372036854775806 MINUTE) as result;
-invalid argument interval, bad value -9223372036854775806
+result
+null
 SELECT
 date_add('1995-01-05', INTERVAL -9223372036854775806 HOUR) as result;
-invalid argument interval, bad value -9223372036854775806
+result
+null
 select date_add("2001-01-01 23:59:59",null);
-date_add(2001-01-01 23:59:59, null)
-null
+SQL syntax error: You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'null)' at line 1
 select date_add(null, null);
-date_add(null, null)
-null
+SQL syntax error: You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'null)' at line 1
 drop table if exists t1;
 create table t1 (a int, b date);
 insert into t1 values(1, "2010-10-30"), (2, NULL);
@@ -354,22 +370,23 @@ OCT(DATE_SUB('2007-08-03', INTERVAL 1 MINUTE)) AS field_str1,
 OCT(DATE_SUB('2007-08-03 17:33:00', INTERVAL 1 MINUTE)) AS field1_str2,
 OCT(DATE_SUB(DATE('2007-08-03'), INTERVAL 1 DAY)) AS field_date,
 OCT(DATE_SUB(CAST('2007-08-03 17:33:00' AS DATETIME), INTERVAL 1 MINUTE)) AS field_datetime;
-invalid argument function oct, bad value [DATETIME]
+field_str1    field1_str2    field_date    field_datetime
+3727    3727    3727    3727
 select date_sub("1998-01-01 00:00:00.000001",INTERVAL "1 1:1:1.000002" DAY_MICROSECOND);
 date_sub(1998-01-01 00:00:00.000001, INTERVAL(1 1:1:1.000002, day_microsecond))
-1997-12-30 22:58:58.999999000
+1997-12-30 22:58:58.999999
 select date_sub("1998-01-01 00:00:00.000001",INTERVAL "1:1:1.000002" HOUR_MICROSECOND);
 date_sub(1998-01-01 00:00:00.000001, INTERVAL(1:1:1.000002, hour_microsecond))
-1997-12-31 22:58:58.999999000
+1997-12-31 22:58:58.999999
 select date_sub("1998-01-01 00:00:00.000001",INTERVAL "1:1.000002" MINUTE_MICROSECOND);
 date_sub(1998-01-01 00:00:00.000001, INTERVAL(1:1.000002, minute_microsecond))
-1997-12-31 23:58:58.999999000
+1997-12-31 23:58:58.999999
 select date_sub("1998-01-01 00:00:00.000001",INTERVAL "1.000002" SECOND_MICROSECOND);
 date_sub(1998-01-01 00:00:00.000001, INTERVAL(1.000002, second_microsecond))
-1997-12-31 23:59:58.999999000
+1997-12-31 23:59:58.999999
 select date_sub("1998-01-01 00:00:00.000001",INTERVAL "000002" MICROSECOND);
 date_sub(1998-01-01 00:00:00.000001, INTERVAL(000002, microsecond))
-1997-12-31 23:59:59.999999000
+1997-12-31 23:59:59.999999
 select date_sub("1998-01-01 00:00:00",INTERVAL 1 SECOND);
 date_sub(1998-01-01 00:00:00, INTERVAL(1, second))
 1997-12-31 23:59:59
@@ -441,7 +458,8 @@ select date_sub("0169-01-01 00:00:01",INTERVAL 2 SECOND);
 date_sub(0169-01-01 00:00:01, INTERVAL(2, second))
 0168-12-31 23:59:59
 select DATE_SUB(NOW(), INTERVAL 9999 YEAR);
-Data truncation: data out of range: data type timestamp, 
+DATE_SUB(NOW(), INTERVAL(9999, year))
+null
 CREATE TABLE t1 (a DATETIME(6));
 INSERT INTO t1 VALUES ('1000-01-01 01:00:00.000000');
 INSERT INTO t1 VALUES ('1000-01-01 01:00:00.000001');
@@ -459,28 +477,28 @@ DATE_SUB(a, INTERVAL(1, minute))
 2001-01-01 00:59:00.000001000
 SELECT a, DATE_SUB(a, INTERVAL 1.1 SECOND) FROM t1 ORDER BY a;
 a    DATE_SUB(a, INTERVAL(1.1, second))
-1000-01-01 01:00:00    1000-01-01 00:59:59
-1000-01-01 01:00:00.000001000    1000-01-01 00:59:59.000001000
-2001-01-01 00:00:00    2000-12-31 23:59:59
-2001-01-01 00:00:00.000001000    2000-12-31 23:59:59.000001000
-2001-01-01 01:00:00    2001-01-01 00:59:59
-2001-01-01 01:00:00.000001000    2001-01-01 00:59:59.000001000
+1000-01-01 01:00:00    1000-01-01 00:59:58.900000000
+1000-01-01 01:00:00.000001000    1000-01-01 00:59:58.900001000
+2001-01-01 00:00:00    2000-12-31 23:59:58.900000000
+2001-01-01 00:00:00.000001000    2000-12-31 23:59:58.900001000
+2001-01-01 01:00:00    2001-01-01 00:59:58.900000000
+2001-01-01 01:00:00.000001000    2001-01-01 00:59:58.900001000
 SELECT a, DATE_SUB(a, INTERVAL 1.000009 SECOND) FROM t1 ORDER BY a;
 a    DATE_SUB(a, INTERVAL(1.000009, second))
-1000-01-01 01:00:00    1000-01-01 00:59:59
-1000-01-01 01:00:00.000001000    1000-01-01 00:59:59.000001000
-2001-01-01 00:00:00    2000-12-31 23:59:59
-2001-01-01 00:00:00.000001000    2000-12-31 23:59:59.000001000
-2001-01-01 01:00:00    2001-01-01 00:59:59
-2001-01-01 01:00:00.000001000    2001-01-01 00:59:59.000001000
+1000-01-01 01:00:00    1000-01-01 00:59:58.999991000
+1000-01-01 01:00:00.000001000    1000-01-01 00:59:58.999992000
+2001-01-01 00:00:00    2000-12-31 23:59:58.999991000
+2001-01-01 00:00:00.000001000    2000-12-31 23:59:58.999992000
+2001-01-01 01:00:00    2001-01-01 00:59:58.999991000
+2001-01-01 01:00:00.000001000    2001-01-01 00:59:58.999992000
 SELECT a, DATE_SUB(a, INTERVAL -0.1 SECOND) FROM t1 ORDER BY a;
 a    DATE_SUB(a, INTERVAL(-0.1, second))
-1000-01-01 01:00:00    1000-01-01 01:00:00
-1000-01-01 01:00:00.000001000    1000-01-01 01:00:00.000001000
-2001-01-01 00:00:00    2001-01-01 00:00:00
-2001-01-01 00:00:00.000001000    2001-01-01 00:00:00.000001000
-2001-01-01 01:00:00    2001-01-01 01:00:00
-2001-01-01 01:00:00.000001000    2001-01-01 01:00:00.000001000
+1000-01-01 01:00:00    1000-01-01 01:00:00.100000000
+1000-01-01 01:00:00.000001000    1000-01-01 01:00:00.100001000
+2001-01-01 00:00:00    2001-01-01 00:00:00.100000000
+2001-01-01 00:00:00.000001000    2001-01-01 00:00:00.100001000
+2001-01-01 01:00:00    2001-01-01 01:00:00.100000000
+2001-01-01 01:00:00.000001000    2001-01-01 01:00:00.100001000
 SELECT DATE_SUB(CAST(a AS DATETIME), INTERVAL 1 MINUTE) FROM t1 ORDER BY a;
 DATE_SUB(cast(a as datetime), INTERVAL(1, minute))
 1000-01-01 00:59:00

@@ -4798,6 +4798,56 @@ var supportedMathBuiltIns = []FuncNew{
 					return OctFloat[float64]
 				},
 			},
+			{
+				overloadId: 10,
+				args:       []types.T{types.T_date},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_decimal128.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return OctDate
+				},
+			},
+			{
+				overloadId: 11,
+				args:       []types.T{types.T_datetime},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_decimal128.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return OctDatetime
+				},
+			},
+			{
+				overloadId: 12,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_decimal128.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return OctString
+				},
+			},
+			{
+				overloadId: 13,
+				args:       []types.T{types.T_char},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_decimal128.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return OctString
+				},
+			},
+			{
+				overloadId: 14,
+				args:       []types.T{types.T_text},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_decimal128.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return OctString
+				},
+			},
 		},
 	},
 
@@ -5513,7 +5563,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_varchar, types.T_int64, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_datetime.ToType()
+					return types.T_varchar.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return DateStringAdd
@@ -5523,7 +5573,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 3,
 				args:       []types.T{types.T_char, types.T_int64, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_datetime.ToType()
+					return types.T_char.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return DateStringAdd
@@ -5553,7 +5603,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 6,
 				args:       []types.T{types.T_text, types.T_int64, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_datetime.ToType()
+					return types.T_text.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return DateStringAdd
@@ -5765,7 +5815,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_varchar, types.T_int64, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_datetime.ToType()
+					return types.T_varchar.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return DateStringSub
@@ -5775,7 +5825,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 3,
 				args:       []types.T{types.T_char, types.T_int64, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_datetime.ToType()
+					return types.T_char.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return DateStringSub
@@ -5795,7 +5845,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 5,
 				args:       []types.T{types.T_text, types.T_int64, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_datetime.ToType()
+					return types.T_text.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return DateStringSub

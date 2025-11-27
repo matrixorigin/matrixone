@@ -1120,6 +1120,10 @@ func isDateOverflowMaxError(err error) bool {
 }
 
 func doDateAdd(start types.Date, diff int64, iTyp types.IntervalType) (types.Date, error) {
+	// Check for invalid interval marker (math.MaxInt64 indicates parse error)
+	if diff == math.MaxInt64 {
+		return 0, datetimeOverflowMaxError
+	}
 	err := types.JudgeIntervalNumOverflow(diff, iTyp)
 	if err != nil {
 		return 0, err
@@ -1159,7 +1163,13 @@ func doDateAdd(start types.Date, diff int64, iTyp types.IntervalType) (types.Dat
 			}
 			// Check if calculated year is out of valid range
 			if resultYear < types.MinDatetimeYear || resultYear > types.MaxDatetimeYear {
-				// Year out of valid range, throw error
+				// For YEAR type, if year < 1, return zero date (MySQL behavior)
+				// For MONTH/QUARTER types, if year < 1, throw error
+				if iTyp == types.Year && resultYear < types.MinDatetimeYear {
+					// Year < 1 for YEAR type: return zero date (MySQL behavior)
+					return types.Date(0), nil
+				}
+				// Year out of valid range for other types or year > 9999: throw error
 				return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
 			}
 			// Minimum overflow within valid year range: return zero date
@@ -1196,9 +1206,14 @@ func isDatetimeOverflowMaxError(err error) bool {
 }
 
 func doDatetimeAdd(start types.Datetime, diff int64, iTyp types.IntervalType) (types.Datetime, error) {
+	// Check for invalid interval marker (math.MaxInt64 indicates parse error)
+	if diff == math.MaxInt64 {
+		return 0, datetimeOverflowMaxError
+	}
 	err := types.JudgeIntervalNumOverflow(diff, iTyp)
 	if err != nil {
-		return 0, err
+		// MySQL behavior: invalid/overflow interval values return NULL, not error
+		return 0, datetimeOverflowMaxError
 	}
 	dt, success := start.AddInterval(diff, iTyp, types.DateTimeType)
 	if success {
@@ -1235,8 +1250,8 @@ func doDatetimeAdd(start types.Datetime, diff int64, iTyp types.IntervalType) (t
 			}
 			// Check if calculated year is out of valid range
 			if resultYear < types.MinDatetimeYear || resultYear > types.MaxDatetimeYear {
-				// Year out of valid range, throw error
-				return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
+				// MySQL behavior: year out of valid range returns NULL (overflow)
+				return 0, datetimeOverflowMaxError
 			}
 			// Minimum overflow within valid year range: return zero datetime
 			return types.ZeroDatetime, nil
@@ -1244,13 +1259,37 @@ func doDatetimeAdd(start types.Datetime, diff int64, iTyp types.IntervalType) (t
 	}
 }
 
+// isAllDigits checks if a string contains only digits
+func isAllDigits(s string) bool {
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return len(s) > 0
+}
+
 func doDateStringAdd(startStr string, diff int64, iTyp types.IntervalType) (types.Datetime, error) {
+	// Check for invalid interval marker (math.MaxInt64 indicates parse error)
+	if diff == math.MaxInt64 {
+		return 0, datetimeOverflowMaxError
+	}
 	err := types.JudgeIntervalNumOverflow(diff, iTyp)
 	if err != nil {
-		return 0, err
+		// MySQL behavior: invalid/overflow interval values return NULL, not error
+		return 0, datetimeOverflowMaxError
 	}
 	start, err := types.ParseDatetime(startStr, 6)
 	if err != nil {
+		// If ParseDatetime fails, try ParseTime (for TIME format like '00:00:00')
+		// If ParseTime succeeds, it's a TIME format string, return NULL (MySQL behavior)
+		// If ParseTime also fails, it's an invalid string, return the original error
+		_, err2 := types.ParseTime(startStr, 6)
+		if err2 == nil {
+			// TIME format is not valid for date_add, return NULL (MySQL behavior)
+			return 0, datetimeOverflowMaxError
+		}
+		// Both parsing failed, return the original error (invalid string)
 		return 0, err
 	}
 	dt, success := start.AddInterval(diff, iTyp, types.DateType)
@@ -1288,8 +1327,8 @@ func doDateStringAdd(startStr string, diff int64, iTyp types.IntervalType) (type
 			}
 			// Check if calculated year is out of valid range
 			if resultYear < types.MinDatetimeYear || resultYear > types.MaxDatetimeYear {
-				// Year out of valid range, throw error
-				return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
+				// MySQL behavior: year out of valid range returns NULL (overflow)
+				return 0, datetimeOverflowMaxError
 			}
 			// Minimum overflow within valid year range: return zero datetime
 			return types.ZeroDatetime, nil
@@ -1298,9 +1337,14 @@ func doDateStringAdd(startStr string, diff int64, iTyp types.IntervalType) (type
 }
 
 func doTimestampAdd(loc *time.Location, start types.Timestamp, diff int64, iTyp types.IntervalType) (types.Timestamp, error) {
+	// Check for invalid interval marker (math.MaxInt64 indicates parse error)
+	if diff == math.MaxInt64 {
+		return 0, datetimeOverflowMaxError
+	}
 	err := types.JudgeIntervalNumOverflow(diff, iTyp)
 	if err != nil {
-		return 0, err
+		// MySQL behavior: invalid/overflow interval values return NULL, not error
+		return 0, datetimeOverflowMaxError
 	}
 	dt, success := start.ToDatetime(loc).AddInterval(diff, iTyp, types.DateTimeType)
 	if success {
@@ -1430,6 +1474,11 @@ func DateAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 		if null1 || null2 {
 			rsNull.Add(i)
 		} else {
+			// Check for invalid interval marker (math.MaxInt64 indicates parse error)
+			if v2 == math.MaxInt64 {
+				rsNull.Add(i)
+				continue
+			}
 			resultDate, err := doDateAdd(v1, v2, iTyp)
 			if err != nil {
 				if isDateOverflowMaxError(err) {
@@ -1471,6 +1520,11 @@ func DatetimeAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 		if null1 || null2 {
 			rsNull.Add(i)
 		} else {
+			// Check for invalid interval marker (math.MaxInt64 indicates parse error)
+			if v2 == math.MaxInt64 {
+				rsNull.Add(i)
+				continue
+			}
 			resultDt, err := doDatetimeAdd(v1, v2, iTyp)
 			if err != nil {
 				if isDatetimeOverflowMaxError(err) {
@@ -1490,34 +1544,69 @@ func DatetimeAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 func DateStringAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	unit, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]).GetValue(0)
 	iTyp := types.IntervalType(unit)
-	rs := vector.MustFunctionResult[types.Datetime](result)
-	rs.TempSetType(types.New(types.T_datetime, 0, 6))
+	// Return VARCHAR type (string) to match MySQL behavior when input is string literal
+	rs := vector.MustFunctionResult[types.Varlena](result)
 
-	// Use custom implementation to handle maximum overflow (return NULL)
-	result.UseOptFunctionParamFrame(2)
-	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
-	p2 := vector.OptGetParamFromWrapper[int64](rs, 1, ivecs[1])
-	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedColNoTypeCheck[types.Datetime](rsVec)
-	rsNull := rsVec.GetNulls()
+	dateStrings := vector.GenerateFunctionStrParameter(ivecs[0])
+	intervals := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
 
 	for i := uint64(0); i < uint64(length); i++ {
-		v1, null1 := p1.GetStrValue(i)
-		v2, null2 := p2.GetValue(i)
+		dateStr, null1 := dateStrings.GetStrValue(i)
+		interval, null2 := intervals.GetValue(i)
 		if null1 || null2 {
-			rsNull.Add(i)
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
 		} else {
-			resultDt, err := doDateStringAdd(functionUtil.QuickBytesToStr(v1), v2, iTyp)
+			// Check for invalid interval marker (math.MaxInt64 indicates parse error)
+			if interval == math.MaxInt64 {
+				if err = rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
+			dateStrVal := functionUtil.QuickBytesToStr(dateStr)
+			resultDt, err := doDateStringAdd(dateStrVal, interval, iTyp)
 			if err != nil {
 				if isDatetimeOverflowMaxError(err) {
-					// According to test expectations, overflow should throw error
-					// Error message format: "data out of range: data type datetime, "
-					return moerr.NewOutOfRangeNoCtx("datetime", "")
+					// MySQL behavior: overflow or invalid input should return NULL
+					if err = rs.AppendBytes(nil, true); err != nil {
+						return err
+					}
+					continue
 				} else {
 					return err
 				}
 			} else {
-				rss[i] = resultDt
+				// Format output based on input format and interval type
+				// Check if input is date-only format (no time part)
+				// For numeric format like '20071108181000' (14+ digits), it contains time part
+				isNumericFormat := len(dateStrVal) >= 14 && isAllDigits(dateStrVal)
+				hasTimePart := strings.Contains(dateStrVal, " ") || strings.Contains(dateStrVal, ":") || isNumericFormat
+
+				// Check if interval type affects time part
+				isTimeUnit := iTyp == types.MicroSecond || iTyp == types.Second ||
+					iTyp == types.Minute || iTyp == types.Hour
+
+				// Format as DATETIME string
+				// For MICROSECOND unit, use scale 6 (MySQL compatible: microsecond precision)
+				// For other units, don't show fractional seconds (scale 0)
+				scale := int32(0)
+				if iTyp == types.MicroSecond {
+					scale = 6
+				}
+				resultStr := resultDt.String2(scale)
+
+				// If input was date-only and interval doesn't affect time, return date-only format
+				if !hasTimePart && !isTimeUnit {
+					// Extract date part only (YYYY-MM-DD)
+					resultDate := resultDt.ToDate()
+					resultStr = resultDate.String()
+				}
+
+				if err = rs.AppendBytes([]byte(resultStr), false); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -1961,12 +2050,27 @@ func TimestampAddTimestamp(ivecs []*vector.Vector, result vector.FunctionResultW
 				return err
 			}
 		} else {
+			// Check for invalid interval marker (math.MaxInt64 indicates parse error)
+			if interval == math.MaxInt64 {
+				if err = rs.Append(types.Timestamp(0), true); err != nil {
+					return err
+				}
+				continue
+			}
 			resultTs, err := doTimestampAdd(loc, ts, interval, iTyp)
 			if err != nil {
-				return err
-			}
-			if err = rs.Append(resultTs, false); err != nil {
-				return err
+				if isDatetimeOverflowMaxError(err) {
+					// MySQL behavior: maximum overflow returns NULL
+					if err = rs.Append(types.Timestamp(0), true); err != nil {
+						return err
+					}
+				} else {
+					return err
+				}
+			} else {
+				if err = rs.Append(resultTs, false); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -2008,6 +2112,13 @@ func TimestampAddString(ivecs []*vector.Vector, result vector.FunctionResultWrap
 					return err
 				}
 			} else {
+				// Check for invalid interval marker (math.MaxInt64 indicates parse error)
+				if interval == math.MaxInt64 {
+					if err = rs.AppendBytes(nil, true); err != nil {
+						return err
+					}
+					continue
+				}
 				resultDt, err := doDateStringAdd(functionUtil.QuickBytesToStr(dateStr), interval, iTyp)
 				if err != nil {
 					if isDatetimeOverflowMaxError(err) {
@@ -2047,6 +2158,13 @@ func TimestampAddString(ivecs []*vector.Vector, result vector.FunctionResultWrap
 				continue
 			}
 
+			// Check for invalid interval marker (math.MaxInt64 indicates parse error)
+			if interval == math.MaxInt64 {
+				if err = rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
 			dateStrVal := functionUtil.QuickBytesToStr(dateStr)
 			// Quick check: if string contains space or colon, it's likely DATETIME format
 			hasTimePart := strings.Contains(dateStrVal, " ") || strings.Contains(dateStrVal, ":")
@@ -3430,6 +3548,10 @@ func AbbrDayOfMonth(day int) string {
 }
 
 func doDateSub(start types.Date, diff int64, iTyp types.IntervalType) (types.Date, error) {
+	// Check for invalid interval marker (math.MaxInt64 indicates parse error)
+	if diff == math.MaxInt64 {
+		return 0, datetimeOverflowMaxError
+	}
 	err := types.JudgeIntervalNumOverflow(diff, iTyp)
 	if err != nil {
 		return 0, err
@@ -3456,45 +3578,148 @@ func doTimeSub(start types.Time, diff int64, iTyp types.IntervalType) (types.Tim
 }
 
 func doDatetimeSub(start types.Datetime, diff int64, iTyp types.IntervalType) (types.Datetime, error) {
+	// Check for invalid interval marker (math.MaxInt64 indicates parse error)
+	if diff == math.MaxInt64 {
+		return 0, datetimeOverflowMaxError
+	}
 	err := types.JudgeIntervalNumOverflow(diff, iTyp)
 	if err != nil {
-		return 0, err
+		// MySQL behavior: invalid/overflow interval values return NULL, not error
+		return 0, datetimeOverflowMaxError
 	}
 	dt, success := start.AddInterval(-diff, iTyp, types.DateTimeType)
 	if success {
 		return dt, nil
 	} else {
-		return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
+		// MySQL behavior: overflow should return NULL
+		// Check if it's maximum overflow (negative diff means subtracting, so -diff > 0 means adding)
+		if -diff > 0 {
+			// Maximum overflow: return special error to indicate NULL should be returned
+			return 0, datetimeOverflowMaxError
+		} else {
+			// Minimum overflow: check if year is out of valid range
+			var resultYear int64
+			startYear := int64(start.Year())
+			switch iTyp {
+			case types.Year:
+				resultYear = startYear - diff // diff is negative, so subtracting negative = adding
+			case types.Month:
+				resultYear = startYear - diff/12
+			case types.Quarter:
+				resultYear = startYear - (diff*3)/12
+			default:
+				resultYear = startYear
+			}
+			if resultYear < types.MinDatetimeYear || resultYear > types.MaxDatetimeYear {
+				// MySQL behavior: year out of valid range returns NULL (overflow)
+				return 0, datetimeOverflowMaxError
+			}
+			// Minimum overflow within valid year range: return zero datetime
+			return types.ZeroDatetime, nil
+		}
 	}
 }
 
 func doDateStringSub(startStr string, diff int64, iTyp types.IntervalType) (types.Datetime, error) {
+	// Check for invalid interval marker (math.MaxInt64 indicates parse error)
+	if diff == math.MaxInt64 {
+		return 0, datetimeOverflowMaxError
+	}
 	err := types.JudgeIntervalNumOverflow(diff, iTyp)
 	if err != nil {
-		return 0, err
+		// MySQL behavior: invalid/overflow interval values return NULL, not error
+		return 0, datetimeOverflowMaxError
 	}
 	start, err := types.ParseDatetime(startStr, 6)
 	if err != nil {
+		// If ParseDatetime fails, try ParseTime (for TIME format like '00:00:00')
+		// If ParseTime succeeds, it's a TIME format string, return NULL (MySQL behavior)
+		// If ParseTime also fails, it's an invalid string, return the original error
+		_, err2 := types.ParseTime(startStr, 6)
+		if err2 == nil {
+			// TIME format is not valid for date_sub, return NULL (MySQL behavior)
+			return 0, datetimeOverflowMaxError
+		}
+		// Both parsing failed, return the original error (invalid string)
 		return 0, err
 	}
 	dt, success := start.AddInterval(-diff, iTyp, types.DateType)
 	if success {
 		return dt, nil
 	} else {
-		return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
+		// MySQL behavior:
+		// - If overflow beyond maximum (-diff > 0, meaning we're adding), return NULL
+		// - If overflow beyond minimum (-diff < 0, meaning we're subtracting):
+		//   - If year is out of valid range (< 1 or > 9999), throw error
+		//   - Otherwise, return zero datetime '0000-00-00 00:00:00'
+		if -diff > 0 {
+			// Maximum overflow: return special error to indicate NULL should be returned
+			return 0, datetimeOverflowMaxError
+		} else {
+			// Check if year is out of valid range for negative intervals
+			var resultYear int64
+			startYear := int64(start.Year())
+			switch iTyp {
+			case types.Year:
+				resultYear = startYear - diff // diff is negative, so subtracting negative = adding
+			case types.Month:
+				resultYear = startYear - diff/12
+			case types.Quarter:
+				resultYear = startYear - (diff*3)/12
+			default:
+				resultYear = startYear
+			}
+			if resultYear < types.MinDatetimeYear || resultYear > types.MaxDatetimeYear {
+				// MySQL behavior: year out of valid range returns NULL (overflow)
+				return 0, datetimeOverflowMaxError
+			}
+			// Minimum overflow within valid year range: return zero datetime
+			return types.ZeroDatetime, nil
+		}
 	}
 }
 
 func doTimestampSub(loc *time.Location, start types.Timestamp, diff int64, iTyp types.IntervalType) (types.Timestamp, error) {
+	// Check for invalid interval marker (math.MaxInt64 indicates parse error)
+	if diff == math.MaxInt64 {
+		return 0, datetimeOverflowMaxError
+	}
 	err := types.JudgeIntervalNumOverflow(diff, iTyp)
 	if err != nil {
-		return 0, err
+		// MySQL behavior: invalid/overflow interval values return NULL, not error
+		return 0, datetimeOverflowMaxError
 	}
 	dt, success := start.ToDatetime(loc).AddInterval(-diff, iTyp, types.DateTimeType)
 	if success {
 		return dt.ToTimestamp(loc), nil
 	} else {
-		return 0, moerr.NewOutOfRangeNoCtx("timestamp", "")
+		// MySQL behavior: overflow should return NULL
+		// Check if it's maximum overflow (negative diff means subtracting, so -diff > 0 means adding)
+		if -diff > 0 {
+			// Maximum overflow: return special error to indicate NULL should be returned
+			return 0, datetimeOverflowMaxError
+		} else {
+			// Minimum overflow: check if year is out of valid range
+			startDt := start.ToDatetime(loc)
+			var resultYear int64
+			startYear := int64(startDt.Year())
+			switch iTyp {
+			case types.Year:
+				resultYear = startYear - diff // diff is negative, so subtracting negative = adding
+			case types.Month:
+				resultYear = startYear - diff/12
+			case types.Quarter:
+				resultYear = startYear - (diff*3)/12
+			default:
+				resultYear = startYear
+			}
+			if resultYear < types.MinDatetimeYear || resultYear > types.MaxDatetimeYear {
+				// MySQL behavior: year out of valid range returns NULL (overflow)
+				return 0, datetimeOverflowMaxError
+			}
+			// Minimum overflow within valid year range: return zero timestamp
+			return types.Timestamp(0), nil
+		}
 	}
 }
 
@@ -3517,35 +3742,107 @@ func DatetimeSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 	rs := vector.MustFunctionResult[types.Datetime](result)
 	rs.TempSetType(types.New(types.T_datetime, 0, scale))
 
-	return opBinaryFixedFixedToFixedWithErrorCheck[types.Datetime, int64, types.Datetime](ivecs, result, proc, length, func(v1 types.Datetime, v2 int64) (types.Datetime, error) {
-		return doDatetimeSub(v1, v2, iTyp)
-	}, selectList)
+	// Use custom implementation to handle maximum overflow (return NULL)
+	result.UseOptFunctionParamFrame(2)
+	p1 := vector.OptGetParamFromWrapper[types.Datetime](rs, 0, ivecs[0])
+	p2 := vector.OptGetParamFromWrapper[int64](rs, 1, ivecs[1])
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedColNoTypeCheck[types.Datetime](rsVec)
+	rsNull := rsVec.GetNulls()
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetValue(i)
+		v2, null2 := p2.GetValue(i)
+		if null1 || null2 {
+			rsNull.Add(i)
+		} else {
+			// Check for invalid interval marker (math.MaxInt64 indicates parse error)
+			if v2 == math.MaxInt64 {
+				rsNull.Add(i)
+				continue
+			}
+			resultDt, err := doDatetimeSub(v1, v2, iTyp)
+			if err != nil {
+				if isDatetimeOverflowMaxError(err) {
+					// MySQL behavior: maximum overflow returns NULL
+					rsNull.Add(i)
+				} else {
+					return err
+				}
+			} else {
+				rss[i] = resultDt
+			}
+		}
+	}
+	return nil
 }
 
 func DateStringSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	rs := vector.MustFunctionResult[types.Datetime](result)
 	unit, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]).GetValue(0)
-
-	var d types.Datetime
-	starts := vector.GenerateFunctionStrParameter(ivecs[0])
-	diffs := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
-	rs.TempSetType(types.New(types.T_datetime, 0, 6))
 	iTyp := types.IntervalType(unit)
-	for i := uint64(0); i < uint64(length); i++ {
-		v1, null1 := starts.GetStrValue(i)
-		v2, null2 := diffs.GetValue(i)
+	// Return VARCHAR type (string) to match MySQL behavior when input is string literal
+	rs := vector.MustFunctionResult[types.Varlena](result)
 
+	dateStrings := vector.GenerateFunctionStrParameter(ivecs[0])
+	intervals := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		dateStr, null1 := dateStrings.GetStrValue(i)
+		interval, null2 := intervals.GetValue(i)
 		if null1 || null2 {
-			if err = rs.Append(d, true); err != nil {
+			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
 		} else {
-			val, err := doDateStringSub(functionUtil.QuickBytesToStr(v1), v2, iTyp)
-			if err != nil {
-				return err
+			// Check for invalid interval marker (math.MaxInt64 indicates parse error)
+			if interval == math.MaxInt64 {
+				if err = rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
 			}
-			if err = rs.Append(val, false); err != nil {
-				return err
+			dateStrVal := functionUtil.QuickBytesToStr(dateStr)
+			resultDt, err := doDateStringSub(dateStrVal, interval, iTyp)
+			if err != nil {
+				if isDatetimeOverflowMaxError(err) {
+					// MySQL behavior: overflow or invalid input should return NULL
+					if err = rs.AppendBytes(nil, true); err != nil {
+						return err
+					}
+					continue
+				} else {
+					return err
+				}
+			} else {
+				// Format output based on input format and interval type
+				// Check if input is date-only format (no time part)
+				// For numeric format like '20071108181000' (14+ digits), it contains time part
+				isNumericFormat := len(dateStrVal) >= 14 && isAllDigits(dateStrVal)
+				hasTimePart := strings.Contains(dateStrVal, " ") || strings.Contains(dateStrVal, ":") || isNumericFormat
+
+				// Check if interval type affects time part
+				isTimeUnit := iTyp == types.MicroSecond || iTyp == types.Second ||
+					iTyp == types.Minute || iTyp == types.Hour
+
+				// Format as DATETIME string
+				// For MICROSECOND unit, use scale 6 (MySQL compatible: microsecond precision)
+				// For other units, don't show fractional seconds (scale 0)
+				scale := int32(0)
+				if iTyp == types.MicroSecond {
+					scale = 6
+				}
+				resultStr := resultDt.String2(scale)
+
+				// If input was date-only and interval doesn't affect time, return date-only format
+				if !hasTimePart && !isTimeUnit {
+					// Extract date part only (YYYY-MM-DD)
+					resultDate := resultDt.ToDate()
+					resultStr = resultDate.String()
+				}
+
+				if err = rs.AppendBytes([]byte(resultStr), false); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -3563,9 +3860,43 @@ func TimestampSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 	rs := vector.MustFunctionResult[types.Timestamp](result)
 	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
 
-	return opBinaryFixedFixedToFixedWithErrorCheck[types.Timestamp, int64, types.Timestamp](ivecs, result, proc, length, func(v1 types.Timestamp, v2 int64) (types.Timestamp, error) {
-		return doTimestampSub(proc.GetSessionInfo().TimeZone, v1, v2, iTyp)
-	}, selectList)
+	// Use custom implementation to handle maximum overflow (return NULL)
+	result.UseOptFunctionParamFrame(2)
+	p1 := vector.OptGetParamFromWrapper[types.Timestamp](rs, 0, ivecs[0])
+	p2 := vector.OptGetParamFromWrapper[int64](rs, 1, ivecs[1])
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedColNoTypeCheck[types.Timestamp](rsVec)
+	rsNull := rsVec.GetNulls()
+	loc := proc.GetSessionInfo().TimeZone
+	if loc == nil {
+		loc = time.Local
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetValue(i)
+		v2, null2 := p2.GetValue(i)
+		if null1 || null2 {
+			rsNull.Add(i)
+		} else {
+			// Check for invalid interval marker (math.MaxInt64 indicates parse error)
+			if v2 == math.MaxInt64 {
+				rsNull.Add(i)
+				continue
+			}
+			resultTs, err := doTimestampSub(loc, v1, v2, iTyp)
+			if err != nil {
+				if isDatetimeOverflowMaxError(err) {
+					// MySQL behavior: maximum overflow returns NULL
+					rsNull.Add(i)
+				} else {
+					return err
+				}
+			} else {
+				rss[i] = resultTs
+			}
+		}
+	}
+	return nil
 }
 
 func TimeSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
