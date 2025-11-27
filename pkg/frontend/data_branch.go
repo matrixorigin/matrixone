@@ -1349,7 +1349,12 @@ func writeCSV(
 		stop       bool
 		wg         sync.WaitGroup
 		errChan    = make(chan error, 1)
-		streamChan = make(chan executor.Result, 10)
+		streamChan = make(chan executor.Result, runtime.NumCPU())
+
+		writerWg  sync.WaitGroup
+		workerWg  sync.WaitGroup
+		writerErr = make(chan error, 1)
+		closeByte sync.Once
 
 		mrs      = &MysqlResultSet{}
 		hint     string
@@ -1362,6 +1367,9 @@ func writeCSV(
 	}
 
 	ep.init()
+	ep.ctx = ctx
+	ep.mrs = mrs
+	ep.ByteChan = make(chan *BatchByte, runtime.NumCPU())
 
 	hint = ep.userConfig.String()
 	fileName += ".csv"
@@ -1377,20 +1385,69 @@ func writeCSV(
 		return
 	}
 
+	writerWg.Add(1)
+	if err = tblStuff.worker.Submit(func() {
+		defer writerWg.Done()
+		for bb := range ep.ByteChan {
+			if bb.err != nil {
+				select {
+				case writerErr <- bb.err:
+				default:
+				}
+				return
+			}
+			ep.BatchMap[bb.index] = bb.writeByte
+			for {
+				value, ok := ep.BatchMap[ep.WriteIndex.Load()+1]
+				if !ok {
+					break
+				}
+				if err2 := writeToCSVFile(ep, value); err2 != nil {
+					select {
+					case writerErr <- err2:
+					default:
+					}
+					return
+				}
+				ep.WriteIndex.Add(1)
+				ep.BatchMap[ep.WriteIndex.Load()] = nil
+			}
+		}
+		if ep.WriteIndex.Load() != ep.Index.Load() {
+			if err2 := exportAllDataFromBatches(ep); err2 != nil {
+				select {
+				case writerErr <- err2:
+				default:
+				}
+			}
+		}
+	}); err != nil {
+		writerWg.Done()
+		return err
+	}
+
 	defer func() {
+		closeByte.Do(func() {
+			close(ep.ByteChan)
+		})
+		writerWg.Wait()
 		closeErr := Close(ep)
 		ep.Close()
 		if err == nil {
 			err = closeErr
+		} else {
+			err = errors.Join(err, closeErr)
 		}
 	}()
 
 	wg.Add(1)
 	if err = tblStuff.worker.Submit(func() {
+		t := time.Now()
 		defer func() {
 			wg.Done()
 			close(streamChan)
 			close(errChan)
+			fmt.Println("runSql took", time.Since(t))
 		}()
 		if _, err2 := runSql(ctx, ses, bh, tblStuff, sql, streamChan, errChan); err2 != nil {
 			select {
@@ -1427,10 +1484,15 @@ func writeCSV(
 				continue
 			}
 			for _, bat := range sqlRet.Batches {
-				ep.Index.Add(1)
-				constructByte(ctx, ses, bat, ep.Index.Load(), ep.ByteChan, ep)
-				if err2 := exportDataFromBatchToCSVFile(ep); err2 != nil {
-					err = errors.Join(err, err2)
+				copied, _ := bat.Dup(ses.proc.Mp())
+				idx := ep.Index.Add(1)
+				workerWg.Add(1)
+				if submitErr := tblStuff.worker.Submit(func() {
+					defer workerWg.Done()
+					constructByte(ctx, ses, copied, idx, ep.ByteChan, ep)
+				}); submitErr != nil {
+					workerWg.Done()
+					err = errors.Join(err, submitErr)
 					stop = true
 					cancelCtx()
 					break
@@ -1441,6 +1503,17 @@ func writeCSV(
 	}
 
 	wg.Wait()
+	workerWg.Wait()
+	closeByte.Do(func() {
+		close(ep.ByteChan)
+	})
+	writerWg.Wait()
+
+	select {
+	case e := <-writerErr:
+		err = errors.Join(err, e)
+	default:
+	}
 
 	if err != nil {
 		return err
