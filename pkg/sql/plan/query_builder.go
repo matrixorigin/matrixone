@@ -3246,8 +3246,7 @@ func (builder *QueryBuilder) bindSelectClause(
 		return
 	}
 
-	if builder.isForUpdate {
-		tableDef := builder.qry.Nodes[nodeID].GetTableDef()
+	if tableDef := builder.qry.Nodes[nodeID].GetTableDef(); tableDef != nil && builder.isForUpdate {
 		pkPos, pkTyp := getPkPos(tableDef, false)
 		lastTag := builder.qry.Nodes[nodeID].BindingTags[0]
 		lockTarget := &plan.LockTarget{
