@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -336,10 +337,12 @@ func validate(stmt tree.Statement) error {
 
 func runSql(
 	ctx context.Context, ses *Session, bh BackgroundExec,
-	tblStuff tableStuff, sql string, isLoadToCSV bool,
+	tblStuff tableStuff, sql string,
+	streamChan chan executor.Result, errChan chan error,
 ) (sqlRet executor.Result, err error) {
 
-	if isLoadToCSV || strings.Contains(strings.ToLower(snapConditionRegex.FindString(sql)), "snapshot") {
+	if strings.Contains(strings.ToLower(snapConditionRegex.FindString(sql)), "snapshot") {
+		// SQLExecutor cannot execute snapshot read(actually cannot resolveSnapshotByName)
 		bh.(*backExec).backSes.SetMysqlResultSet(&MysqlResultSet{})
 		// export as CSV need this
 		for range tblStuff.def.visibleIdxes {
@@ -376,6 +379,10 @@ func runSql(
 		WithTxn(backSes.GetTxnHandler().GetTxn()).
 		WithKeepTxnAlive().
 		WithTimeZone(ses.GetTimeZone())
+
+	if streamChan != nil && errChan != nil {
+		opts = opts.WithStreaming(streamChan, errChan)
+	}
 
 	if sqlRet, err = exec.Exec(ctx, sql, opts); err != nil {
 		return sqlRet, err
@@ -842,7 +849,7 @@ func satisfyDiffOutputOpt(
 		}()
 
 		if fullFilePath, fileHint, writeFile, release, err = prepareFSForDiffAsFile(
-			ctx, ses, stmt, tblStuff, true,
+			ctx, ses, stmt, tblStuff,
 		); err != nil {
 			return
 		}
@@ -914,49 +921,45 @@ func satisfyDiffOutputOpt(
 	return trySaveQueryResult(ctx, ses, mrs)
 }
 
+func makeFileName(
+	baseAtTsExpr *tree.AtTimeStamp,
+	tarAtTsExpr *tree.AtTimeStamp,
+	tblStuff tableStuff,
+) string {
+	var (
+		srcName  = tblStuff.tarRel.GetTableName()
+		baseName = tblStuff.baseRel.GetTableName()
+	)
+
+	if baseAtTsExpr != nil {
+		baseName = fmt.Sprintf("%s_%s", baseName, baseAtTsExpr.SnapshotName)
+	}
+
+	if tarAtTsExpr != nil {
+		srcName = fmt.Sprintf("%s_%s", srcName, tarAtTsExpr.SnapshotName)
+	}
+
+	return fmt.Sprintf(
+		"diff_%s_%s_%s",
+		srcName, baseName,
+		time.Now().UTC().Format("20060102_150405"),
+	)
+}
+
 func prepareFSForDiffAsFile(
 	ctx context.Context,
 	ses *Session,
 	stmt *tree.DataBranchDiff,
 	tblStuff tableStuff,
-	asSQLFile bool,
 ) (fullFilePath, hint string, writeFile func([]byte) error, release func(), err error) {
 	var (
 		fileName string
-		srcName  = tblStuff.tarRel.GetTableName()
-		baseName = tblStuff.baseRel.GetTableName()
 	)
 
-	if stmt.BaseTable.AtTsExpr != nil {
-		baseName = fmt.Sprintf("%s_%s", baseName, stmt.BaseTable.AtTsExpr.SnapshotName)
-	}
-
-	if stmt.TargetTable.AtTsExpr != nil {
-		srcName = fmt.Sprintf("%s_%s", srcName, stmt.TargetTable.AtTsExpr.SnapshotName)
-	}
-
-	fileName = fmt.Sprintf(
-		"diff_%s_%s_%s",
-		srcName, baseName,
-		time.Now().UTC().Format("20060102_150405"),
-	)
-
-	if asSQLFile {
-		fileName += ".sql"
-	} else {
-		fileName += ".csv"
-	}
+	fileName = makeFileName(stmt.BaseTable.AtTsExpr, stmt.TargetTable.AtTsExpr, tblStuff)
+	fileName += ".sql"
 
 	fullFilePath = path.Join(stmt.OutputOpt.DirPath, fileName)
-
-	if !asSQLFile {
-		hint = newDiffCSVExportParam().String()
-		// For CSV we rely on executor's INTO OUTFILE to write; just ensure dir exists.
-		if mkErr := os.MkdirAll(filepath.Dir(fullFilePath), 0o755); mkErr != nil {
-			err = mkErr
-		}
-		return
-	}
 
 	hint = fmt.Sprintf(
 		"DELETE FROM %s.%s, REPLACE INTO %s.%s",
@@ -1116,7 +1119,7 @@ func flushSqlValues(
 		defer func() {
 			ret.Close()
 		}()
-		ret, err = runSql(ctx, ses, bh, tblStuff, sqlBuffer.String(), false)
+		ret, err = runSql(ctx, ses, bh, tblStuff, sqlBuffer.String(), nil, nil)
 	}
 
 	return err
@@ -1296,13 +1299,11 @@ func tryDiffAsCSV(
 	}
 
 	var (
-		err          error
-		sqlRet       executor.Result
-		hint         string
-		fullFilePath string
+		err    error
+		sqlRet executor.Result
 	)
 
-	if sqlRet, err = runSql(ctx, ses, bh, tblStuff, sql, false); err != nil {
+	if sqlRet, err = runSql(ctx, ses, bh, tblStuff, sql, nil, nil); err != nil {
 		return false, err
 	}
 
@@ -1318,35 +1319,140 @@ func tryDiffAsCSV(
 
 	sqlRet.Close()
 
+	return true, writeCSV(ctx, ses, tblStuff, bh, stmt)
+}
+
+func writeCSV(
+	inputCtx context.Context,
+	ses *Session,
+	tblStuff tableStuff,
+	bh BackgroundExec,
+	stmt *tree.DataBranchDiff,
+) (err error) {
+
+	ctx, cancelCtx := context.WithCancel(inputCtx)
+	defer cancelCtx()
+
 	snap := ""
 	if tblStuff.tarSnap != nil {
 		snap = fmt.Sprintf("{snapshot='%s'}", tblStuff.tarSnap.ExtraInfo.Name)
 	}
 
-	if fullFilePath, hint, _, _, err = prepareFSForDiffAsFile(
-		ctx, ses, stmt, tblStuff, false,
-	); err != nil {
-		return false, err
-	}
-
 	// output as csv
-	sql = fmt.Sprintf("SELECT * FROM %s.%s%s INTO OUTFILE '%s' %s HEADER 'false';",
+	sql := fmt.Sprintf("SELECT * FROM %s.%s%s;",
 		tblStuff.tarRel.GetTableDef(ctx).DbName,
 		tblStuff.tarRel.GetTableDef(ctx).Name,
-		snap, fullFilePath, strings.Replace(hint, `ESCAPED BY '\\'`, "", 1),
+		snap,
 	)
 
-	if sqlRet, err = runSql(ctx, ses, bh, tblStuff, sql, true); err != nil {
-		return false, err
+	var (
+		stop       bool
+		wg         sync.WaitGroup
+		errChan    = make(chan error, 1)
+		streamChan = make(chan executor.Result, 10)
+
+		mrs      = &MysqlResultSet{}
+		hint     string
+		fileName = makeFileName(stmt.BaseTable.AtTsExpr, stmt.TargetTable.AtTsExpr, tblStuff)
+	)
+
+	ep := &ExportConfig{
+		userConfig: newDiffCSVUserConfig(),
+		service:    ses.service,
 	}
 
-	mrs := ses.GetMysqlResultSet()
-	mrs.AddRow([]any{fullFilePath, hint})
+	ep.init()
 
-	return true, trySaveQueryResult(ctx, ses, mrs)
+	hint = ep.userConfig.String()
+	fileName += ".csv"
+	ep.userConfig.FilePath = path.Join(stmt.OutputOpt.DirPath, fileName)
+
+	for range tblStuff.def.visibleIdxes {
+		mrs.AddColumn(&MysqlColumn{})
+	}
+
+	ep.DefaultBufSize = getPu(ses.GetService()).SV.ExportDataDefaultFlushSize
+	initExportFileParam(ep, mrs)
+	if err = openNewFile(ctx, ep, mrs); err != nil {
+		return
+	}
+
+	defer func() {
+		closeErr := Close(ep)
+		ep.Close()
+		if err == nil {
+			err = closeErr
+		}
+	}()
+
+	wg.Add(1)
+	if err = tblStuff.worker.Submit(func() {
+		defer func() {
+			wg.Done()
+			close(streamChan)
+			close(errChan)
+		}()
+		if _, err2 := runSql(ctx, ses, bh, tblStuff, sql, streamChan, errChan); err2 != nil {
+			select {
+			case errChan <- err2:
+			default:
+			}
+		}
+	}); err != nil {
+		wg.Done()
+		return err
+	}
+
+	streamOpen, errOpen := true, true
+	for streamOpen || errOpen {
+		select {
+		case <-inputCtx.Done():
+			err = errors.Join(err, inputCtx.Err())
+			stop = true
+		case e, ok := <-errChan:
+			if !ok {
+				errOpen = false
+				continue
+			}
+			err = errors.Join(err, e)
+			cancelCtx()
+			stop = true
+		case sqlRet, ok := <-streamChan:
+			if !ok {
+				streamOpen = false
+				continue
+			}
+			if stop {
+				sqlRet.Close()
+				continue
+			}
+			for _, bat := range sqlRet.Batches {
+				ep.Index.Add(1)
+				constructByte(ctx, ses, bat, ep.Index.Load(), ep.ByteChan, ep)
+				if err2 := exportDataFromBatchToCSVFile(ep); err2 != nil {
+					err = errors.Join(err, err2)
+					stop = true
+					cancelCtx()
+					break
+				}
+			}
+			sqlRet.Close()
+		}
+	}
+
+	wg.Wait()
+
+	if err != nil {
+		return err
+	}
+
+	mrs = ses.GetMysqlResultSet()
+	mrs.AddRow([]any{ep.userConfig.FilePath, hint})
+
+	return trySaveQueryResult(ctx, ses, mrs)
 }
 
-func newDiffCSVExportParam() *tree.ExportParam {
+func newDiffCSVUserConfig() *tree.ExportParam {
 	fields := tree.NewFields(
 		tree.DefaultFieldsTerminated,
 		false,
