@@ -248,13 +248,6 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 				bat.Vecs[i] = vector.NewVecFromReuse()
 			}
 		}
-	} else {
-		// CRITICAL FIX: Even when Vecs length doesn't change, we need to ensure Vecs are properly reset
-		// for batch reuse scenarios. CleanOnlyData() was called before UnmarshalBinary, but we should
-		// also ensure Vecs are in a clean state before unmarshaling new data.
-		// Note: vecs[i].UnmarshalBinary will reset the vector type and data, so this should be safe.
-		// However, to be extra safe, we could reset Vecs here, but that might be too aggressive.
-		// Let's keep the current logic but ensure Attrs are properly handled.
 	}
 
 	vecs := bat.Vecs
