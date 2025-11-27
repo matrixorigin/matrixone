@@ -838,9 +838,14 @@ func satisfyDiffOutputOpt(
 			fullFilePath string
 			writeFile    func([]byte) error
 			release      func()
+			cleanup      func()
+			succeeded    bool
 		)
 
 		defer func() {
+			if !succeeded && cleanup != nil {
+				cleanup()
+			}
 			if release != nil {
 				release()
 			}
@@ -848,10 +853,16 @@ func satisfyDiffOutputOpt(
 			releaseBuffer(replaceIntoValsBuffer)
 		}()
 
-		if fullFilePath, fileHint, writeFile, release, err = prepareFSForDiffAsFile(
+		if fullFilePath, fileHint, writeFile, release, cleanup, err = prepareFSForDiffAsFile(
 			ctx, ses, stmt, tblStuff,
 		); err != nil {
 			return
+		}
+		if writeFile != nil {
+			// Make generated SQL runnable in one transaction.
+			if err = writeFile([]byte("BEGIN;\n")); err != nil {
+				return
+			}
 		}
 
 		for wrapped := range retCh {
@@ -908,7 +919,13 @@ func satisfyDiffOutputOpt(
 			first = err
 			cancel()
 		}
+		if first == nil && writeFile != nil {
+			if err = writeFile([]byte("COMMIT;\n")); err != nil {
+				return err
+			}
+		}
 
+		succeeded = true
 		mrs.AddRow([]any{fullFilePath, fileHint})
 	}
 
@@ -951,7 +968,7 @@ func prepareFSForDiffAsFile(
 	ses *Session,
 	stmt *tree.DataBranchDiff,
 	tblStuff tableStuff,
-) (fullFilePath, hint string, writeFile func([]byte) error, release func(), err error) {
+) (fullFilePath, hint string, writeFile func([]byte) error, release func(), cleanup func(), err error) {
 	var (
 		fileName string
 	)
@@ -1050,7 +1067,41 @@ func prepareFSForDiffAsFile(
 		}
 	}
 
+	cleanup = func() {
+		_ = targetFS.Delete(context.Background(), targetPath)
+	}
+
 	return
+}
+
+func removeFileIgnoreError(ctx context.Context, service, filePath string) {
+	if len(filePath) == 0 {
+		return
+	}
+
+	fsPath, err := fileservice.ParsePath(filePath)
+	if err != nil {
+		return
+	}
+
+	var (
+		targetFS   fileservice.FileService
+		targetPath string
+	)
+
+	if fsPath.Service == defines.SharedFileServiceName {
+		targetFS = getPu(service).FileService
+		targetPath = filePath
+	} else {
+		var etlFS fileservice.ETLFileService
+		if etlFS, targetPath, err = fileservice.GetForETL(ctx, nil, filePath); err != nil {
+			return
+		}
+		targetFS = etlFS
+	}
+
+	_ = targetFS.Delete(ctx, targetPath)
+	targetFS.Close(ctx)
 }
 
 // if `writeFile` is not nil, the sql will be flushed down into this file, or
@@ -1359,6 +1410,7 @@ func writeCSV(
 		mrs      = &MysqlResultSet{}
 		hint     string
 		fileName = makeFileName(stmt.BaseTable.AtTsExpr, stmt.TargetTable.AtTsExpr, tblStuff)
+		cleanup  func()
 	)
 
 	ep := &ExportConfig{
@@ -1383,6 +1435,9 @@ func writeCSV(
 	initExportFileParam(ep, mrs)
 	if err = openNewFile(ctx, ep, mrs); err != nil {
 		return
+	}
+	cleanup = func() {
+		removeFileIgnoreError(context.Background(), ep.service, ep.userConfig.FilePath)
 	}
 
 	writerWg.Add(1)
@@ -1427,6 +1482,12 @@ func writeCSV(
 	}
 
 	defer func() {
+		if err != nil && cleanup != nil {
+			cleanup()
+		}
+	}()
+
+	defer func() {
 		closeByte.Do(func() {
 			close(ep.ByteChan)
 		})
@@ -1447,7 +1508,6 @@ func writeCSV(
 			wg.Done()
 			close(streamChan)
 			close(errChan)
-			fmt.Println("runSql took", time.Since(t))
 		}()
 		if _, err2 := runSql(ctx, ses, bh, tblStuff, sql, streamChan, errChan); err2 != nil {
 			select {
