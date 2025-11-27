@@ -973,7 +973,7 @@ func buildCreateTable(
 			Stats:       nil,
 			ObjRef:      nil,
 			TableDef:    createTable.TableDef,
-			BindingTags: []int32{builder.genNewTag()},
+			BindingTags: []int32{builder.genNewBindTag()},
 		}, bindContext)
 
 		err = builder.addBinding(nodeID, tree.AliasClause{}, bindContext)
