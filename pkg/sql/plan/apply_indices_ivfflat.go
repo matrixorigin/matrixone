@@ -223,7 +223,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, projN
 		secondScanNode.Offset = nil
 
 		// Add a PROJECT node above secondScanNode to output only the primary key column
-		secondProjectTag := builder.genNewTag()
+		secondProjectTag := builder.genNewBindTag()
 		secondPkExpr := &plan.Expr{
 			Typ: pkType,
 			Expr: &plan.Expr_Col{
