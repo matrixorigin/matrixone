@@ -1,5 +1,11 @@
+select mo_ctl('dn','DiskCleaner','add_checker.backup.1764213488640322343-1')
+mo_ctl(dn, DiskCleaner, add_checker.backup.1764213488640322343-1)
+{\n  "method": "DiskCleaner",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 select mo_ctl('dn','DiskCleaner','force_gc');
 mo_ctl(dn, DiskCleaner, force_gc)
+{\n  "method": "DiskCleaner",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select mo_ctl('dn','DiskCleaner','remove_checker.backup.')
+mo_ctl(dn, DiskCleaner, remove_checker.backup.)
 {\n  "method": "DiskCleaner",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 select mo_ctl('dn','DiskCleaner','details');
 mo_ctl(dn, DiskCleaner, details)

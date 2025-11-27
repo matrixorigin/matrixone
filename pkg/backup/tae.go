@@ -288,7 +288,7 @@ func execBackup(
 	protectionMgr *backupProtectionManager, // Optional: nil for tests, non-nil for production
 ) error {
 	backupTime := names[0]
-	trimInfo := names[1]
+	trimString := names[1]
 	names = names[1:]
 	files := make(map[string]*objectio.BackupObject, 0)
 	gcFileMap := make(map[string]string)
@@ -377,9 +377,9 @@ func execBackup(
 	var cnLoc, mergeStart, mergeEnd string
 	var end, start types.TS
 	var version uint64
-	if trimInfo != "" {
+	if trimString != "" {
 		var err error
-		ckpStr := strings.Split(trimInfo, ":")
+		ckpStr := strings.Split(trimString, ":")
 		if len(ckpStr) != 5 {
 			return moerr.NewInternalError(ctx, fmt.Sprintf("invalid checkpoint string: %v", ckpStr))
 		}
@@ -397,7 +397,7 @@ func execBackup(
 
 	// Set protectedTS to the backup time point
 	// This is the timestamp that should be protected from GC
-	// Use start if available (from trimInfo), otherwise use baseTS
+	// Use start if available (from trimString), otherwise use baseTS
 	var protectedTS types.TS
 	if !start.IsEmpty() {
 		protectedTS = start
@@ -430,7 +430,7 @@ func execBackup(
 	copyDuration += time.Since(now)
 	taeFileList = append(taeFileList, sizeList...)
 	now = time.Now()
-	if trimInfo != "" {
+	if trimString != "" {
 		cnLocation, err := objectio.StringToLocation(cnLoc)
 		if err != nil {
 			return err
