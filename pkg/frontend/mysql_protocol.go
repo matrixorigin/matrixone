@@ -365,7 +365,6 @@ func (mp *MysqlProtocolImpl) GetBool(id PropertyID) bool {
 }
 
 func (mp *MysqlProtocolImpl) Write(execCtx *ExecCtx, crs *perfcounter.CounterSet, bat *batch.Batch) error {
-	const countOfResultSet = 1
 	n := bat.Vecs[0].Length()
 	//TODO: remove this MRS here
 	//Create a new temporary result set per pipeline thread.
@@ -375,10 +374,27 @@ func (mp *MysqlProtocolImpl) Write(execCtx *ExecCtx, crs *perfcounter.CounterSet
 	sesMrs := execCtx.ses.GetMysqlResultSet()
 	mrs.Columns = sesMrs.Columns
 
-	//group row
-	mrs.Data = make([][]interface{}, countOfResultSet)
-	for i := 0; i < countOfResultSet; i++ {
-		mrs.Data[i] = make([]interface{}, len(bat.Vecs))
+	ses := execCtx.ses.(*Session)
+	isShowTableStatus := ses.GetShowStmtType() == ShowTableStatus
+
+	//group row - allocate space for rows in the batch
+	//Note: mrs.Data is primarily used for show table status (which only uses mrs.Data[0]),
+	//but we need to allocate enough space to avoid index out of bounds errors if
+	//appendResultSetTextRow is called (which accesses mrs.Data via ColumnIsNull).
+	//For normal queries using WriteResultSetRow2, mrs.Data is not accessed, but we
+	//allocate it defensively to prevent crashes if code paths change.
+	//Optimization: Only allocate what's needed - 1 row for show table status, n rows otherwise
+	if isShowTableStatus {
+		// For show table status, only need 1 row (reused in loop)
+		mrs.Data = make([][]interface{}, 1)
+		mrs.Data[0] = make([]interface{}, len(bat.Vecs))
+	} else {
+		// For other queries, allocate n rows to prevent index out of bounds
+		// if any code path accesses mrs.Data (e.g., via sendResultSet)
+		mrs.Data = make([][]interface{}, n)
+		for i := 0; i < n; i++ {
+			mrs.Data[i] = make([]interface{}, len(bat.Vecs))
+		}
 	}
 
 	colSlices := &ColumnSlices{
@@ -391,8 +407,6 @@ func (mp *MysqlProtocolImpl) Write(execCtx *ExecCtx, crs *perfcounter.CounterSet
 	if err != nil {
 		return err
 	}
-	ses := execCtx.ses.(*Session)
-	isShowTableStatus := ses.GetShowStmtType() == ShowTableStatus
 	colSlices.safeRefSlice = !isShowTableStatus
 	if isShowTableStatus {
 		for j := 0; j < n; j++ { //row index
