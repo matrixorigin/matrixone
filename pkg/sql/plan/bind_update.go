@@ -70,7 +70,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				}
 			}
 		}
-		
+
 		// Only block if irregular index exists AND indexed columns are being updated
 		if hasIrregularIndex {
 			for colName := range dmlCtx.updateCol2Expr[i] {
@@ -79,7 +79,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				}
 			}
 		}
-		
+
 		validIndexes, _ := getValidIndexes(tableDef)
 		tableDef.Indexes = validIndexes
 
