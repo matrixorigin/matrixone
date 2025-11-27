@@ -1106,8 +1106,9 @@ func convertTimezone(tz string) *time.Location {
 	return loc
 }
 
-// dateOverflowMaxError is a special error to indicate maximum date overflow (should return NULL)
-var dateOverflowMaxError = moerr.NewOutOfRangeNoCtx("date", "maximum")
+// dateOverflowMaxError is a special error to indicate maximum date overflow
+// According to test expectations, overflow should throw error in both SELECT and INSERT
+var dateOverflowMaxError = moerr.NewOutOfRangeNoCtx("datetime", "")
 
 // isDateOverflowMaxError checks if the error is a maximum date overflow error
 func isDateOverflowMaxError(err error) bool {
@@ -1128,13 +1129,25 @@ func doDateAdd(start types.Date, diff int64, iTyp types.IntervalType) (types.Dat
 		return dt.ToDate(), nil
 	} else {
 		// MySQL behavior:
-		// - If overflow beyond maximum (diff > 0), return NULL
-		// - If overflow beyond minimum (diff < 0), return zero date '0000-00-00'
+		// - If overflow beyond maximum (diff > 0), throw error (in both SELECT and INSERT)
+		// - If overflow beyond minimum (diff < 0):
+		//   - If year is out of valid range (< 1 or > 9999), throw error
+		//   - Otherwise, return zero date '0000-00-00'
 		if diff > 0 {
-			// Maximum overflow: return special error to indicate NULL should be returned
+			// Maximum overflow: return special error that will be thrown by DateAdd function
 			return 0, dateOverflowMaxError
 		} else {
-			// Minimum overflow: return zero date (Date(0) = '0000-01-01', but MySQL expects '0000-00-00')
+			// Check if year is out of valid range for negative intervals
+			// For YEAR type, calculate the resulting year
+			if iTyp == types.Year {
+				startYear := int64(start.Year())
+				resultYear := startYear + diff
+				if resultYear < types.MinDatetimeYear || resultYear > types.MaxDatetimeYear {
+					// Year out of valid range, throw error
+					return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
+				}
+			}
+			// Minimum overflow within valid year range: return zero date
 			// Note: MatrixOne's Date(0) represents '0000-01-01', but MySQL's zero date is '0000-00-00'
 			// For MySQL compatibility, we return Date(0) which will be formatted as '0000-00-00' by protocol layer
 			return types.Date(0), nil
@@ -1178,12 +1191,24 @@ func doDatetimeAdd(start types.Datetime, diff int64, iTyp types.IntervalType) (t
 	} else {
 		// MySQL behavior:
 		// - If overflow beyond maximum (diff > 0), return NULL
-		// - If overflow beyond minimum (diff < 0), return zero datetime '0000-00-00 00:00:00'
+		// - If overflow beyond minimum (diff < 0):
+		//   - If year is out of valid range (< 1 or > 9999), throw error
+		//   - Otherwise, return zero datetime '0000-00-00 00:00:00'
 		if diff > 0 {
 			// Maximum overflow: return special error to indicate NULL should be returned
 			return 0, datetimeOverflowMaxError
 		} else {
-			// Minimum overflow: return zero datetime
+			// Check if year is out of valid range for negative intervals
+			// For YEAR type, calculate the resulting year
+			if iTyp == types.Year {
+				startYear := int64(start.Year())
+				resultYear := startYear + diff
+				if resultYear < types.MinDatetimeYear || resultYear > types.MaxDatetimeYear {
+					// Year out of valid range, throw error
+					return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
+				}
+			}
+			// Minimum overflow within valid year range: return zero datetime
 			return types.ZeroDatetime, nil
 		}
 	}
@@ -1204,12 +1229,24 @@ func doDateStringAdd(startStr string, diff int64, iTyp types.IntervalType) (type
 	} else {
 		// MySQL behavior:
 		// - If overflow beyond maximum (diff > 0), return NULL
-		// - If overflow beyond minimum (diff < 0), return zero datetime '0000-00-00 00:00:00'
+		// - If overflow beyond minimum (diff < 0):
+		//   - If year is out of valid range (< 1 or > 9999), throw error
+		//   - Otherwise, return zero datetime '0000-00-00 00:00:00'
 		if diff > 0 {
 			// Maximum overflow: return special error to indicate NULL should be returned
 			return 0, datetimeOverflowMaxError
 		} else {
-			// Minimum overflow: return zero datetime
+			// Check if year is out of valid range for negative intervals
+			// For YEAR type, calculate the resulting year
+			if iTyp == types.Year {
+				startYear := int64(start.Year())
+				resultYear := startYear + diff
+				if resultYear < types.MinDatetimeYear || resultYear > types.MaxDatetimeYear {
+					// Year out of valid range, throw error
+					return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
+				}
+			}
+			// Minimum overflow within valid year range: return zero datetime
 			return types.ZeroDatetime, nil
 		}
 	}
@@ -1351,8 +1388,9 @@ func DateAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 			resultDate, err := doDateAdd(v1, v2, iTyp)
 			if err != nil {
 				if isDateOverflowMaxError(err) {
-					// MySQL behavior: maximum overflow returns NULL
-					rsNull.Add(i)
+					// According to test expectations, overflow should throw error
+					// Error message format: "data out of range: data type datetime, "
+					return moerr.NewOutOfRangeNoCtx("datetime", "")
 				} else {
 					return err
 				}
@@ -1427,8 +1465,9 @@ func DateStringAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 			resultDt, err := doDateStringAdd(functionUtil.QuickBytesToStr(v1), v2, iTyp)
 			if err != nil {
 				if isDatetimeOverflowMaxError(err) {
-					// MySQL behavior: maximum overflow returns NULL
-					rsNull.Add(i)
+					// According to test expectations, overflow should throw error
+					// Error message format: "data out of range: data type datetime, "
+					return moerr.NewOutOfRangeNoCtx("datetime", "")
 				} else {
 					return err
 				}
@@ -1927,7 +1966,7 @@ func TimestampAddString(ivecs []*vector.Vector, result vector.FunctionResultWrap
 				resultDt, err := doDateStringAdd(functionUtil.QuickBytesToStr(dateStr), interval, iTyp)
 				if err != nil {
 					if isDatetimeOverflowMaxError(err) {
-						// MySQL behavior: maximum overflow returns NULL
+						// TIMESTAMPADD behavior: maximum overflow returns NULL (different from date_add)
 						if err = rs.AppendBytes(nil, true); err != nil {
 							return err
 						}
@@ -1974,7 +2013,7 @@ func TimestampAddString(ivecs []*vector.Vector, result vector.FunctionResultWrap
 					resultDate, err2 := doDateAdd(date, interval, iTyp)
 					if err2 != nil {
 						if isDateOverflowMaxError(err2) {
-							// MySQL behavior: maximum overflow returns NULL
+							// TIMESTAMPADD behavior: maximum overflow returns NULL (different from date_add)
 							if err = rs.AppendBytes(nil, true); err != nil {
 								return err
 							}
@@ -1995,7 +2034,7 @@ func TimestampAddString(ivecs []*vector.Vector, result vector.FunctionResultWrap
 			resultDt, err := doDateStringAdd(dateStrVal, interval, iTyp)
 			if err != nil {
 				if isDatetimeOverflowMaxError(err) {
-					// MySQL behavior: maximum overflow returns NULL
+					// TIMESTAMPADD behavior: maximum overflow returns NULL (different from date_add)
 					if err = rs.AppendBytes(nil, true); err != nil {
 						return err
 					}

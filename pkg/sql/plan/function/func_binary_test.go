@@ -2176,6 +2176,273 @@ func TestDateAdd(t *testing.T) {
 	}
 }
 
+// TestDateAddOverflow tests that date_add throws error when overflow occurs
+// This matches MySQL behavior where overflow should throw error in both SELECT and INSERT
+func TestDateAddOverflow(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// Test case: date_add with large year interval that causes overflow
+	// date_add('2000-01-01', interval 8000 year) should throw error
+	startDate, _ := types.ParseDateCast("2000-01-01")
+	largeInterval := int64(8000) // 8000 years, will cause overflow
+
+	// Create input vectors
+	ivecs := make([]*vector.Vector, 3)
+	var err error
+	ivecs[0], err = vector.NewConstFixed(types.T_date.ToType(), startDate, 1, proc.Mp())
+	require.NoError(t, err)
+	ivecs[1], err = vector.NewConstFixed(types.T_int64.ToType(), largeInterval, 1, proc.Mp())
+	require.NoError(t, err)
+	ivecs[2], err = vector.NewConstFixed(types.T_int64.ToType(), int64(types.Year), 1, proc.Mp())
+	require.NoError(t, err)
+
+	// Create result vector
+	result := vector.NewFunctionResultWrapper(types.T_date.ToType(), proc.Mp())
+
+	// Initialize result vector before calling DateAdd
+	err = result.PreExtendAndReset(1)
+	require.NoError(t, err)
+
+	// Call DateAdd - should return error
+	err = DateAdd(ivecs, result, proc, 1, nil)
+	require.Error(t, err, "date_add with overflow should return error")
+	require.Contains(t, err.Error(), "data out of range", "error message should contain 'data out of range'")
+
+	// Cleanup
+	for _, v := range ivecs {
+		if v != nil {
+			v.Free(proc.Mp())
+		}
+	}
+	if result != nil {
+		result.Free()
+	}
+}
+
+// TestDateAddOverflowNegative tests that date_sub with large negative interval returns zero date
+func TestDateAddOverflowNegative(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// Test case: date_sub('2000-01-01', interval 2001 year) should return zero date
+	// According to MySQL behavior, underflow should return zero date '0000-00-00', not error
+	startDate, _ := types.ParseDateCast("2000-01-01")
+	largeNegativeInterval := int64(-2001) // -2001 years, will cause underflow
+
+	// Create input vectors
+	ivecs := make([]*vector.Vector, 3)
+	var err error
+	ivecs[0], err = vector.NewConstFixed(types.T_date.ToType(), startDate, 1, proc.Mp())
+	require.NoError(t, err)
+	ivecs[1], err = vector.NewConstFixed(types.T_int64.ToType(), largeNegativeInterval, 1, proc.Mp())
+	require.NoError(t, err)
+	ivecs[2], err = vector.NewConstFixed(types.T_int64.ToType(), int64(types.Year), 1, proc.Mp())
+	require.NoError(t, err)
+
+	// Create result vector
+	result := vector.NewFunctionResultWrapper(types.T_date.ToType(), proc.Mp())
+
+	// Initialize result vector before calling DateAdd
+	err = result.PreExtendAndReset(1)
+	require.NoError(t, err)
+
+	// Call DateAdd - should return zero date for underflow (MySQL behavior)
+	err = DateAdd(ivecs, result, proc, 1, nil)
+	require.NoError(t, err, "date_add with underflow should return zero date, not error")
+
+	// Check result is zero date
+	resultVec := result.GetResultVector()
+	resultDate := vector.MustFixedColNoTypeCheck[types.Date](resultVec)[0]
+	require.Equal(t, types.Date(0), resultDate, "underflow should return zero date")
+
+	// Cleanup
+	for _, v := range ivecs {
+		if v != nil {
+			v.Free(proc.Mp())
+		}
+	}
+	if result != nil {
+		result.Free()
+	}
+}
+
+// TestDateAddNormal tests normal date_add operations that should succeed
+func TestDateAddNormal(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	testCases := []struct {
+		name          string
+		startDate     string
+		interval      int64
+		intervalType  types.IntervalType
+		expectedDate  string
+		shouldSucceed bool
+	}{
+		{
+			name:          "add 1 day",
+			startDate:     "2000-01-01",
+			interval:      1,
+			intervalType:  types.Day,
+			expectedDate:  "2000-01-02",
+			shouldSucceed: true,
+		},
+		{
+			name:          "add 1 year",
+			startDate:     "2000-01-01",
+			interval:      1,
+			intervalType:  types.Year,
+			expectedDate:  "2001-01-01",
+			shouldSucceed: true,
+		},
+		{
+			name:          "add 100 years (within range)",
+			startDate:     "2000-01-01",
+			interval:      100,
+			intervalType:  types.Year,
+			expectedDate:  "2100-01-01",
+			shouldSucceed: true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			startDate, err := types.ParseDateCast(tc.startDate)
+			require.NoError(t, err)
+
+			expectedDate, err := types.ParseDateCast(tc.expectedDate)
+			require.NoError(t, err)
+
+			// Create input vectors
+			ivecs := make([]*vector.Vector, 3)
+			var vecErr error
+			ivecs[0], vecErr = vector.NewConstFixed(types.T_date.ToType(), startDate, 1, proc.Mp())
+			require.NoError(t, vecErr)
+			ivecs[1], vecErr = vector.NewConstFixed(types.T_int64.ToType(), tc.interval, 1, proc.Mp())
+			require.NoError(t, vecErr)
+			ivecs[2], vecErr = vector.NewConstFixed(types.T_int64.ToType(), int64(tc.intervalType), 1, proc.Mp())
+			require.NoError(t, vecErr)
+
+			// Create result vector
+			result := vector.NewFunctionResultWrapper(types.T_date.ToType(), proc.Mp())
+
+			// Initialize result vector before calling DateAdd
+			vecErr = result.PreExtendAndReset(1)
+			require.NoError(t, vecErr)
+
+			// Call DateAdd
+			err = DateAdd(ivecs, result, proc, 1, nil)
+			if tc.shouldSucceed {
+				require.NoError(t, err, "date_add should succeed for normal case")
+				resultVec := result.GetResultVector()
+				resultDate := vector.MustFixedColNoTypeCheck[types.Date](resultVec)[0]
+				require.Equal(t, expectedDate, resultDate, "result date should match expected")
+			} else {
+				require.Error(t, err, "date_add should return error for overflow case")
+			}
+
+			// Cleanup
+			for _, v := range ivecs {
+				if v != nil {
+					v.Free(proc.Mp())
+				}
+			}
+			if result != nil {
+				result.Free()
+			}
+		})
+	}
+}
+
+// TestDateStringAddOverflow tests that DateStringAdd throws error when overflow occurs
+// This is the actual path used by SQL: date_add('2000-01-01', interval 8000 year)
+func TestDateStringAddOverflow(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// Test case: date_add with string input and large year interval that causes overflow
+	// date_add('2000-01-01', interval 8000 year) should throw error
+	startDateStr := "2000-01-01"
+	largeInterval := int64(8000) // 8000 years, will cause overflow
+
+	// Create input vectors
+	ivecs := make([]*vector.Vector, 3)
+	var err error
+	ivecs[0], err = vector.NewConstBytes(types.T_varchar.ToType(), []byte(startDateStr), 1, proc.Mp())
+	require.NoError(t, err)
+	ivecs[1], err = vector.NewConstFixed(types.T_int64.ToType(), largeInterval, 1, proc.Mp())
+	require.NoError(t, err)
+	ivecs[2], err = vector.NewConstFixed(types.T_int64.ToType(), int64(types.Year), 1, proc.Mp())
+	require.NoError(t, err)
+
+	// Create result vector
+	result := vector.NewFunctionResultWrapper(types.T_datetime.ToType(), proc.Mp())
+
+	// Initialize result vector before calling DateStringAdd
+	err = result.PreExtendAndReset(1)
+	require.NoError(t, err)
+
+	// Call DateStringAdd - should return error
+	err = DateStringAdd(ivecs, result, proc, 1, nil)
+	require.Error(t, err, "DateStringAdd with overflow should return error")
+	require.Contains(t, err.Error(), "data out of range", "error message should contain 'data out of range'")
+
+	// Cleanup
+	for _, v := range ivecs {
+		if v != nil {
+			v.Free(proc.Mp())
+		}
+	}
+	if result != nil {
+		result.Free()
+	}
+}
+
+// TestTimestampAddOverflowReturnsNull tests that TIMESTAMPADD returns NULL when overflow occurs
+// This matches MySQL behavior where TIMESTAMPADD overflow returns NULL (different from date_add)
+func TestTimestampAddOverflowReturnsNull(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// Test case: TIMESTAMPADD(DAY, 1, '9999-12-31') should return NULL
+	startDateStr := "9999-12-31"
+	interval := int64(1) // 1 day, will cause overflow
+
+	// Create input vectors for TimestampAddString
+	ivecs := make([]*vector.Vector, 3)
+	var err error
+	// Unit parameter (DAY)
+	ivecs[0], err = vector.NewConstBytes(types.T_varchar.ToType(), []byte("DAY"), 1, proc.Mp())
+	require.NoError(t, err)
+	// Interval parameter
+	ivecs[1], err = vector.NewConstFixed(types.T_int64.ToType(), interval, 1, proc.Mp())
+	require.NoError(t, err)
+	// Date string parameter
+	ivecs[2], err = vector.NewConstBytes(types.T_varchar.ToType(), []byte(startDateStr), 1, proc.Mp())
+	require.NoError(t, err)
+
+	// Create result vector (VARCHAR type for string output)
+	result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+
+	// Initialize result vector before calling TimestampAddString
+	err = result.PreExtendAndReset(1)
+	require.NoError(t, err)
+
+	// Call TimestampAddString - should return NULL (no error)
+	err = TimestampAddString(ivecs, result, proc, 1, nil)
+	require.NoError(t, err, "TimestampAddString with overflow should return NULL, not error")
+
+	// Check result is NULL
+	resultVec := result.GetResultVector()
+	require.True(t, resultVec.GetNulls().Contains(0), "TimestampAddString overflow should return NULL")
+
+	// Cleanup
+	for _, v := range ivecs {
+		if v != nil {
+			v.Free(proc.Mp())
+		}
+	}
+	if result != nil {
+		result.Free()
+	}
+}
+
 func initConvertTzTestCase() []tcTemp {
 	d1, _ := types.ParseDatetime("2023-01-01 00:00:00", 6)
 	r1 := "2022-12-31 13:07:00"
