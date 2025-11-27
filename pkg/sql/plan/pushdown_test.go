@@ -28,8 +28,8 @@ func setupLeftJoinBase(t *testing.T) (*MockCompilerContext, *QueryBuilder, *plan
 	ctx := NewMockCompilerContext(true)
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
 
-	leftTag := builder.genNewTag()
-	rightTag := builder.genNewTag()
+	leftTag := builder.genNewBindTag()
+	rightTag := builder.genNewBindTag()
 
 	intType := Type{Id: int32(types.T_int64)}
 

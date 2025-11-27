@@ -270,7 +270,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	}
 
 	if updatePkOrUk {
-		newProjTag := builder.genNewTag()
+		newProjTag := builder.genNewBindTag()
 		newProjList := make([]*plan.Expr, len(selectNode.ProjectList))
 		for i := range selectNode.ProjectList {
 			newProjList[i] = &plan.Expr{
@@ -325,7 +325,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 					newProjNode.ProjectList = append(newProjNode.ProjectList, newPkExpr)
 				}
 
-				scanTag := builder.genNewTag()
+				scanTag := builder.genNewBindTag()
 				scanNodeID := builder.appendNode(&plan.Node{
 					NodeType:     plan.Node_TABLE_SCAN,
 					TableDef:     tableDef,
@@ -406,7 +406,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				if err != nil {
 					return 0, err
 				}
-				idxTag := builder.genNewTag()
+				idxTag := builder.genNewBindTag()
 				builder.addNameByColRef(idxTag, idxTableDef)
 
 				idxScanNode := &plan.Node{
@@ -549,7 +549,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			if err != nil {
 				return 0, err
 			}
-			idxTag := builder.genNewTag()
+			idxTag := builder.genNewBindTag()
 			builder.addNameByColRef(idxTag, idxTableDef)
 
 			idxScanNodes[i][j] = &plan.Node{
@@ -624,7 +624,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	lockTargets := make([]*plan.LockTarget, 0)
 	updateCtxList := make([]*plan.UpdateCtx, 0)
 
-	finalProjTag := builder.genNewTag()
+	finalProjTag := builder.genNewBindTag()
 	finalColName2Idx := make(map[string]int32)
 	var finalProjList []*plan.Expr
 
@@ -846,7 +846,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 
 	dmlNode := &plan.Node{
 		NodeType:      plan.Node_MULTI_UPDATE,
-		BindingTags:   []int32{builder.genNewTag()},
+		BindingTags:   []int32{builder.genNewBindTag()},
 		UpdateCtxList: updateCtxList,
 	}
 
@@ -854,7 +854,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		NodeType:    plan.Node_LOCK_OP,
 		Children:    []int32{lastNodeID},
 		TableDef:    dmlCtx.tableDefs[0],
-		BindingTags: []int32{builder.genNewTag()},
+		BindingTags: []int32{builder.genNewBindTag()},
 		LockTargets: lockTargets,
 	}, bindCtx)
 	reCheckifNeedLockWholeTable(builder)
