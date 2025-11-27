@@ -1138,14 +1138,29 @@ func doDateAdd(start types.Date, diff int64, iTyp types.IntervalType) (types.Dat
 			return 0, dateOverflowMaxError
 		} else {
 			// Check if year is out of valid range for negative intervals
-			// For YEAR type, calculate the resulting year
-			if iTyp == types.Year {
-				startYear := int64(start.Year())
-				resultYear := startYear + diff
-				if resultYear < types.MinDatetimeYear || resultYear > types.MaxDatetimeYear {
-					// Year out of valid range, throw error
-					return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
-				}
+			// For YEAR, MONTH, QUARTER types, calculate the resulting year
+			var resultYear int64
+			startYear := int64(start.Year())
+			switch iTyp {
+			case types.Year:
+				resultYear = startYear + diff
+			case types.Month:
+				// Calculate: year + month/12, handling month overflow
+				resultYear = startYear + diff/12
+			case types.Quarter:
+				// Calculate: year + (quarter*3)/12
+				resultYear = startYear + (diff*3)/12
+			default:
+				// For other types (Day, Week, etc.), they don't directly affect year
+				// The AddInterval already checked ValidDate, so if it failed,
+				// it means the result is out of range, but for non-year-affecting types,
+				// we should return zero date (not error) for underflow
+				resultYear = startYear // Keep original year for non-year-affecting types
+			}
+			// Check if calculated year is out of valid range
+			if resultYear < types.MinDatetimeYear || resultYear > types.MaxDatetimeYear {
+				// Year out of valid range, throw error
+				return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
 			}
 			// Minimum overflow within valid year range: return zero date
 			// Note: MatrixOne's Date(0) represents '0000-01-01', but MySQL's zero date is '0000-00-00'
@@ -1199,14 +1214,29 @@ func doDatetimeAdd(start types.Datetime, diff int64, iTyp types.IntervalType) (t
 			return 0, datetimeOverflowMaxError
 		} else {
 			// Check if year is out of valid range for negative intervals
-			// For YEAR type, calculate the resulting year
-			if iTyp == types.Year {
-				startYear := int64(start.Year())
-				resultYear := startYear + diff
-				if resultYear < types.MinDatetimeYear || resultYear > types.MaxDatetimeYear {
-					// Year out of valid range, throw error
-					return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
-				}
+			// For YEAR, MONTH, QUARTER types, calculate the resulting year
+			var resultYear int64
+			startYear := int64(start.Year())
+			switch iTyp {
+			case types.Year:
+				resultYear = startYear + diff
+			case types.Month:
+				// Calculate: year + month/12, handling month overflow
+				resultYear = startYear + diff/12
+			case types.Quarter:
+				// Calculate: year + (quarter*3)/12
+				resultYear = startYear + (diff*3)/12
+			default:
+				// For other types (Day, Week, etc.), they don't directly affect year
+				// The AddInterval already checked ValidDatetime, so if it failed,
+				// it means the result is out of range, but for non-year-affecting types,
+				// we should return zero datetime (not error) for underflow
+				resultYear = startYear // Keep original year for non-year-affecting types
+			}
+			// Check if calculated year is out of valid range
+			if resultYear < types.MinDatetimeYear || resultYear > types.MaxDatetimeYear {
+				// Year out of valid range, throw error
+				return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
 			}
 			// Minimum overflow within valid year range: return zero datetime
 			return types.ZeroDatetime, nil
@@ -1237,14 +1267,29 @@ func doDateStringAdd(startStr string, diff int64, iTyp types.IntervalType) (type
 			return 0, datetimeOverflowMaxError
 		} else {
 			// Check if year is out of valid range for negative intervals
-			// For YEAR type, calculate the resulting year
-			if iTyp == types.Year {
-				startYear := int64(start.Year())
-				resultYear := startYear + diff
-				if resultYear < types.MinDatetimeYear || resultYear > types.MaxDatetimeYear {
-					// Year out of valid range, throw error
-					return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
-				}
+			// For YEAR, MONTH, QUARTER types, calculate the resulting year
+			var resultYear int64
+			startYear := int64(start.Year())
+			switch iTyp {
+			case types.Year:
+				resultYear = startYear + diff
+			case types.Month:
+				// Calculate: year + month/12, handling month overflow
+				resultYear = startYear + diff/12
+			case types.Quarter:
+				// Calculate: year + (quarter*3)/12
+				resultYear = startYear + (diff*3)/12
+			default:
+				// For other types (Day, Week, etc.), they don't directly affect year
+				// The AddInterval already checked ValidDate/ValidDatetime, so if it failed,
+				// it means the result is out of range, but for non-year-affecting types,
+				// we should return zero datetime (not error) for underflow
+				resultYear = startYear // Keep original year for non-year-affecting types
+			}
+			// Check if calculated year is out of valid range
+			if resultYear < types.MinDatetimeYear || resultYear > types.MaxDatetimeYear {
+				// Year out of valid range, throw error
+				return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
 			}
 			// Minimum overflow within valid year range: return zero datetime
 			return types.ZeroDatetime, nil

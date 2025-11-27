@@ -2443,6 +2443,174 @@ func TestTimestampAddOverflowReturnsNull(t *testing.T) {
 	}
 }
 
+// TestDateStringAddOverflowNegativeMonth tests that DateStringAdd throws error when MONTH interval causes year out of range
+func TestDateStringAddOverflowNegativeMonth(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// Test case: date_add with string input and large negative MONTH interval that causes year < 1
+	// date_add('1997-12-31', INTERVAL -120000 MONTH) should throw error
+	// Calculation: 1997 + (-120000)/12 = 1997 - 10000 = -8003 < 1
+	startDateStr := "1997-12-31 23:59:59"
+	largeNegativeInterval := int64(-120000) // -120000 months, will cause year < 1
+
+	// Create input vectors
+	ivecs := make([]*vector.Vector, 3)
+	var err error
+	ivecs[0], err = vector.NewConstBytes(types.T_varchar.ToType(), []byte(startDateStr), 1, proc.Mp())
+	require.NoError(t, err)
+	ivecs[1], err = vector.NewConstFixed(types.T_int64.ToType(), largeNegativeInterval, 1, proc.Mp())
+	require.NoError(t, err)
+	ivecs[2], err = vector.NewConstFixed(types.T_int64.ToType(), int64(types.Month), 1, proc.Mp())
+	require.NoError(t, err)
+
+	// Create result vector
+	result := vector.NewFunctionResultWrapper(types.T_datetime.ToType(), proc.Mp())
+
+	// Initialize result vector before calling DateStringAdd
+	err = result.PreExtendAndReset(1)
+	require.NoError(t, err)
+
+	// Call DateStringAdd - should return error
+	err = DateStringAdd(ivecs, result, proc, 1, nil)
+	require.Error(t, err, "DateStringAdd with negative MONTH causing year < 1 should return error")
+	require.Contains(t, err.Error(), "data out of range", "error message should contain 'data out of range'")
+
+	// Cleanup
+	for _, v := range ivecs {
+		if v != nil {
+			v.Free(proc.Mp())
+		}
+	}
+	if result != nil {
+		result.Free()
+	}
+}
+
+// TestDateStringAddOverflowNegativeQuarter tests that DateStringAdd throws error when QUARTER interval causes year out of range
+func TestDateStringAddOverflowNegativeQuarter(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// Test case: date_add with string input and large negative QUARTER interval that causes year < 1
+	// date_add('1997-12-31', INTERVAL -40000 QUARTER) should throw error
+	// Calculation: 1997 + (-40000*3)/12 = 1997 - 10000 = -8003 < 1
+	startDateStr := "1997-12-31 23:59:59"
+	largeNegativeInterval := int64(-40000) // -40000 quarters, will cause year < 1
+
+	// Create input vectors
+	ivecs := make([]*vector.Vector, 3)
+	var err error
+	ivecs[0], err = vector.NewConstBytes(types.T_varchar.ToType(), []byte(startDateStr), 1, proc.Mp())
+	require.NoError(t, err)
+	ivecs[1], err = vector.NewConstFixed(types.T_int64.ToType(), largeNegativeInterval, 1, proc.Mp())
+	require.NoError(t, err)
+	ivecs[2], err = vector.NewConstFixed(types.T_int64.ToType(), int64(types.Quarter), 1, proc.Mp())
+	require.NoError(t, err)
+
+	// Create result vector
+	result := vector.NewFunctionResultWrapper(types.T_datetime.ToType(), proc.Mp())
+
+	// Initialize result vector before calling DateStringAdd
+	err = result.PreExtendAndReset(1)
+	require.NoError(t, err)
+
+	// Call DateStringAdd - should return error
+	err = DateStringAdd(ivecs, result, proc, 1, nil)
+	require.Error(t, err, "DateStringAdd with negative QUARTER causing year < 1 should return error")
+	require.Contains(t, err.Error(), "data out of range", "error message should contain 'data out of range'")
+
+	// Cleanup
+	for _, v := range ivecs {
+		if v != nil {
+			v.Free(proc.Mp())
+		}
+	}
+	if result != nil {
+		result.Free()
+	}
+}
+
+// TestDateAddOverflowNegativeMonth tests that DateAdd throws error when MONTH interval causes year out of range
+func TestDateAddOverflowNegativeMonth(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// Test case: date_add with DATE input and large negative MONTH interval that causes year < 1
+	startDate, _ := types.ParseDateCast("1997-12-31")
+	largeNegativeInterval := int64(-120000) // -120000 months, will cause year < 1
+
+	// Create input vectors
+	ivecs := make([]*vector.Vector, 3)
+	var err error
+	ivecs[0], err = vector.NewConstFixed(types.T_date.ToType(), startDate, 1, proc.Mp())
+	require.NoError(t, err)
+	ivecs[1], err = vector.NewConstFixed(types.T_int64.ToType(), largeNegativeInterval, 1, proc.Mp())
+	require.NoError(t, err)
+	ivecs[2], err = vector.NewConstFixed(types.T_int64.ToType(), int64(types.Month), 1, proc.Mp())
+	require.NoError(t, err)
+
+	// Create result vector
+	result := vector.NewFunctionResultWrapper(types.T_date.ToType(), proc.Mp())
+
+	// Initialize result vector before calling DateAdd
+	err = result.PreExtendAndReset(1)
+	require.NoError(t, err)
+
+	// Call DateAdd - should return error
+	err = DateAdd(ivecs, result, proc, 1, nil)
+	require.Error(t, err, "DateAdd with negative MONTH causing year < 1 should return error")
+	require.Contains(t, err.Error(), "data out of range", "error message should contain 'data out of range'")
+
+	// Cleanup
+	for _, v := range ivecs {
+		if v != nil {
+			v.Free(proc.Mp())
+		}
+	}
+	if result != nil {
+		result.Free()
+	}
+}
+
+// TestDateAddOverflowNegativeQuarter tests that DateAdd throws error when QUARTER interval causes year out of range
+func TestDateAddOverflowNegativeQuarter(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// Test case: date_add with DATE input and large negative QUARTER interval that causes year < 1
+	startDate, _ := types.ParseDateCast("1997-12-31")
+	largeNegativeInterval := int64(-40000) // -40000 quarters, will cause year < 1
+
+	// Create input vectors
+	ivecs := make([]*vector.Vector, 3)
+	var err error
+	ivecs[0], err = vector.NewConstFixed(types.T_date.ToType(), startDate, 1, proc.Mp())
+	require.NoError(t, err)
+	ivecs[1], err = vector.NewConstFixed(types.T_int64.ToType(), largeNegativeInterval, 1, proc.Mp())
+	require.NoError(t, err)
+	ivecs[2], err = vector.NewConstFixed(types.T_int64.ToType(), int64(types.Quarter), 1, proc.Mp())
+	require.NoError(t, err)
+
+	// Create result vector
+	result := vector.NewFunctionResultWrapper(types.T_date.ToType(), proc.Mp())
+
+	// Initialize result vector before calling DateAdd
+	err = result.PreExtendAndReset(1)
+	require.NoError(t, err)
+
+	// Call DateAdd - should return error
+	err = DateAdd(ivecs, result, proc, 1, nil)
+	require.Error(t, err, "DateAdd with negative QUARTER causing year < 1 should return error")
+	require.Contains(t, err.Error(), "data out of range", "error message should contain 'data out of range'")
+
+	// Cleanup
+	for _, v := range ivecs {
+		if v != nil {
+			v.Free(proc.Mp())
+		}
+	}
+	if result != nil {
+		result.Free()
+	}
+}
+
 func initConvertTzTestCase() []tcTemp {
 	d1, _ := types.ParseDatetime("2023-01-01 00:00:00", 6)
 	r1 := "2022-12-31 13:07:00"

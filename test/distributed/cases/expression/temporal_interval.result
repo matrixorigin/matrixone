@@ -76,6 +76,10 @@ select date_add("1997-12-31 23:59:59",INTERVAL 100000 QUARTER);
 Data truncation: data out of range: data type datetime, 
 select date_add("1997-12-31 23:59:59",INTERVAL -100000 YEAR);
 Data truncation: data out of range: data type datetime, 
+select date_add("1997-12-31 23:59:59",INTERVAL -120000 MONTH);
+Data truncation: data out of range: data type datetime, 
+select date_add("1997-12-31 23:59:59",INTERVAL -40000 QUARTER);
+Data truncation: data out of range: data type datetime, 
 select date_add("1997-12-31 23:59:59",INTERVAL "10000:1" MINUTE_SECOND);
 date_add("1997-12-31 23:59:59",INTERVAL "10000:1" MINUTE_SECOND)
 1998-01-07 22:40:00
