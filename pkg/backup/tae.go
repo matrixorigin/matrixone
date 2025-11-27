@@ -307,7 +307,7 @@ func execBackup(
 			common.AnyField("copy file cost", copyDuration),
 			common.AnyField("rewrite checkpoint cost", reWriteDuration))
 	}()
-	now := time.Now()
+	startTime := time.Now()
 	baseTS := ts
 	// When rewriting the checkpoint and trimming the aobject,
 	// you need to collect the atombstone in the last checkpoint
@@ -345,7 +345,7 @@ func execBackup(
 			lastData = data
 		}
 	}
-	loadDuration += time.Since(now)
+	loadDuration += time.Since(startTime)
 
 	dstObj, err := fileservice.SortedList(dstFs.List(ctx, ""))
 	dstHave := make(map[string]bool)
