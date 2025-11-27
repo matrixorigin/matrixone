@@ -580,6 +580,7 @@ import (
 %type <order> order
 %type <orderBy> order_list order_by_clause order_by_opt
 %type <limit> limit_opt limit_clause
+%type <limit> limit_rank_suffix
 %type <str> insert_column optype_opt
 %type <str> optype
 %type <identifierList> column_list column_list_opt partition_clause_opt partition_id_list insert_column_list accounts_list restore_db_scope restore_table_scope
@@ -5580,17 +5581,72 @@ limit_opt:
     }
 
 limit_clause:
-    LIMIT expression
+    LIMIT expression limit_rank_suffix
     {
-        $$ = &tree.Limit{Count: $2}
+        l := &tree.Limit{Count: $2}
+        if $3 != nil {
+            l.ByRank = $3.ByRank
+            l.Option = $3.Option
+        }
+        $$ = l
     }
-|   LIMIT expression ',' expression
+|   LIMIT expression ',' expression limit_rank_suffix
     {
-        $$ = &tree.Limit{Offset: $2, Count: $4}
+        l := &tree.Limit{Offset: $2, Count: $4}
+        if $5 != nil {
+            l.ByRank = $5.ByRank
+            l.Option = $5.Option
+        }
+        $$ = l
     }
-|   LIMIT expression OFFSET expression
+|   LIMIT expression OFFSET expression limit_rank_suffix
     {
-        $$ = &tree.Limit{Offset: $4, Count: $2}
+        l := &tree.Limit{Offset: $4, Count: $2}
+        if $5 != nil {
+            l.ByRank = $5.ByRank
+            l.Option = $5.Option
+        }
+        $$ = l
+    }
+
+limit_rank_suffix:
+    {
+        $$ = nil
+    }
+|   BY RANK WITH OPTION expression_list
+    {
+        // Parse option strings to extract key=value pairs into a map
+        optionMap := make(map[string]string)
+        
+        for _, expr := range $5 {
+            var str string
+            // Handle both NumVal (P_char) and StrVal
+            if numVal, ok := expr.(*tree.NumVal); ok && numVal.ValType == tree.P_char {
+                str = numVal.String()
+            } else if strVal, ok := expr.(*tree.StrVal); ok {
+                str = strVal.String()
+            } else {
+                continue
+            }
+            
+            // Remove quotes if present
+            if len(str) >= 2 && ((str[0] == '\'' && str[len(str)-1] == '\'') || (str[0] == '"' && str[len(str)-1] == '"')) {
+                str = str[1 : len(str)-1]
+            }
+            
+            // Parse key=value pairs
+            parts := strings.Split(str, "=")
+            if len(parts) == 2 {
+                key := strings.TrimSpace(strings.ToLower(parts[0]))
+                value := strings.TrimSpace(parts[1])
+                optionMap[key] = value
+            }
+        }
+        
+        $$ = &tree.Limit{
+            ByRank: true,
+            Option: optionMap,
+        }
     }
 
 order_by_opt:

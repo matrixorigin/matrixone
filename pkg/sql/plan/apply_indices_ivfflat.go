@@ -48,12 +48,16 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, projN
 	}
 
 	var limit *plan.Expr
+	var rankOption *plan.RankOption
 	if sortNode.Limit != nil {
 		limit = sortNode.Limit
+		rankOption = sortNode.RankOption
 	} else if scanNode.Limit != nil {
 		limit = scanNode.Limit
+		rankOption = scanNode.RankOption
 	} else if projNode.Limit != nil {
 		limit = projNode.Limit
+		rankOption = projNode.RankOption
 	}
 	if limit == nil {
 		return nodeID, nil
@@ -91,6 +95,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, projN
 	}
 
 	nProbe := int64(5)
+	// Get nprobe from system variable
 	nProbeIf, err := builder.compCtx.ResolveVariable("probe_limit", true, false)
 	if err != nil {
 		return nodeID, err
@@ -123,7 +128,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, projN
 		partType.Id,
 		origFuncName)
 
-	// JOIN between source table and hnsw_search table function
+	// build ivf_search table function node
 	tableFuncTag := builder.genNewBindTag()
 	tableFuncNode := &plan.Node{
 		NodeType: plan.Node_FUNCTION_SCAN,
@@ -197,42 +202,220 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, projN
 		tableFuncNode.Limit = DeepCopyExpr(limit)
 	}
 
-	// oncond
-	wherePkEqPk, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
-		{
+	// Determine join structure based on rankOption.mode:
+	//   mode != "pre": JOIN( scanNode, ivf_search )
+	//   mode == "pre": JOIN( scanNode, JOIN(ivf_search, secondScan) )
+	var joinRootID int32
+
+	pushdownEnabled := false
+	if rankOption != nil && rankOption.Mode == "pre" {
+		pushdownEnabled = true
+	}
+
+	if pushdownEnabled {
+		// secondScanNode: copy original scanNode for JOIN(ivf, table)
+		secondScanNodeID := builder.copyNode(ctx, scanNode.NodeId)
+		secondScanNode := builder.qry.Nodes[secondScanNodeID]
+
+		// second scan is only used for runtime filter & inner join, should not inherit limit/offset from original table.
+		// Otherwise BloomFilter will only see the truncated primary key set, causing data loss.
+		secondScanNode.Limit = nil
+		secondScanNode.Offset = nil
+
+		// Add a PROJECT node above secondScanNode to output only the primary key column
+		secondProjectTag := builder.genNewTag()
+		secondPkExpr := &plan.Expr{
+			Typ: pkType,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: secondScanNode.BindingTags[0],
+					ColPos: pkPos,
+					Name:   scanNode.TableDef.Cols[pkPos].Name,
+				},
+			},
+		}
+		secondProjectNodeID := builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_PROJECT,
+			Children:    []int32{secondScanNodeID},
+			ProjectList: []*plan.Expr{secondPkExpr},
+			BindingTags: []int32{secondProjectTag},
+		}, ctx)
+
+		// inner join: (ivf_search table function JOIN second table project)
+		innerJoinOn, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
+			{
+				Typ: pkType,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: tableFuncTag,
+						ColPos: 0, // tf.pkid
+					},
+				},
+			},
+			{
+				Typ: pkType,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: secondProjectTag,
+						ColPos: 0, // only pk column from second scan
+					},
+				},
+			},
+		})
+
+		innerJoinNodeID := builder.appendNode(&plan.Node{
+			NodeType: plan.Node_JOIN,
+			Children: []int32{tableFuncNodeID, secondProjectNodeID},
+			JoinType: plan.Node_INNER,
+			OnList:   []*Expr{innerJoinOn},
+			// Don't set Limit/Offset on JOIN - they should be applied after SORT
+		}, ctx)
+
+		// Construct BloomFilter type runtime filter for inner join + table function
+		rfTag := builder.genNewMsgTag()
+
+		// build side: primary key from secondScanNode (consistent with BloomFilter build column)
+		buildExpr := &plan.Expr{
+			Typ: pkType,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: secondProjectTag,
+					ColPos: 0,
+				},
+			},
+		}
+		buildSpec := MakeRuntimeFilter(rfTag, false, 0, buildExpr, false)
+		buildSpec.UseBloomFilter = true
+		innerJoinNode := builder.qry.Nodes[innerJoinNodeID]
+		innerJoinNode.RuntimeFilterBuildList = []*plan.RuntimeFilterSpec{buildSpec}
+
+		// probe side: pkid column from table function
+		probeExpr := &plan.Expr{
+			Typ: pkType,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: tableFuncTag,
+					ColPos: 0,
+				},
+			},
+		}
+		probeSpec := MakeRuntimeFilter(rfTag, false, 0, probeExpr, false)
+		probeSpec.UseBloomFilter = true
+		tableFuncNode.RuntimeFilterProbeList = []*plan.RuntimeFilterSpec{probeSpec}
+
+		// outer join: original table JOIN (inner ivf join)
+		outerOn, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
+			{
+				Typ: pkType,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: scanNode.BindingTags[0],
+						ColPos: pkPos, // tbl.pk
+					},
+				},
+			},
+			{
+				Typ: pkType,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: tableFuncTag, // tf pkid from inner join subtree
+						ColPos: 0,
+					},
+				},
+			},
+		})
+
+		outerJoinNodeID := builder.appendNode(&plan.Node{
+			NodeType: plan.Node_JOIN,
+			Children: []int32{scanNode.NodeId, innerJoinNodeID},
+			JoinType: plan.Node_INNER,
+			OnList:   []*Expr{outerOn},
+			// Don't set Limit/Offset on JOIN - they should be applied after SORT
+		}, ctx)
+
+		// Manually construct a runtime filter for outer join:
+		//   - build side: right child inner join (smaller set, contains actual pkid)
+		//   - probe side: left child table scan (original table), performs block/row pruning at scan stage.
+		// Note:
+		//   1) We don't use BloomFilter here, but use the existing IN-list runtime filter pipeline;
+		//   2) UpperLimit is set to avoid all filters being degraded to PASS due to 0.
+		rfTag2 := builder.genNewMsgTag()
+
+		// probe: primary key column from original table (scanNode left child)
+		probeExpr2 := &plan.Expr{
 			Typ: pkType,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: scanNode.BindingTags[0],
-					ColPos: pkPos, // tbl.pk
+					ColPos: pkPos,
 				},
 			},
-		},
-		{
+		}
+		probeSpec2 := MakeRuntimeFilter(rfTag2, false, 0, DeepCopyExpr(probeExpr2), false)
+		scanNode.RuntimeFilterProbeList = append(scanNode.RuntimeFilterProbeList, probeSpec2)
+
+		// build: placeholder column, HashBuild will generate IN-list based on build side join key's UniqueJoinKeys[0]
+		buildExpr2 := &plan.Expr{
 			Typ: pkType,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: tableFuncTag, // last idxTbl (may be join) relPos
-					ColPos: 0,            // idxTbl.pk
+					RelPos: -1,
+					ColPos: 0,
 				},
 			},
-		},
-	})
+		}
 
-	joinNodeID := builder.appendNode(&plan.Node{
-		NodeType: plan.Node_JOIN,
-		Children: []int32{scanNode.NodeId, tableFuncNodeID},
-		JoinType: plan.Node_INNER,
-		OnList:   []*Expr{wherePkEqPk},
-		// Don't set Limit/Offset on JOIN - they should be applied after SORT
-	}, ctx)
+		// Set inLimit to "unlimited" to ensure this runtime filter won't be disabled due to upper limit.
+		// Use int32 max value directly here.
+		const unlimitedInFilterCard = int32(1<<31 - 1)
+		buildSpec2 := MakeRuntimeFilter(rfTag2, false, unlimitedInFilterCard, buildExpr2, false)
+
+		outerJoinNode := builder.qry.Nodes[outerJoinNodeID]
+		outerJoinNode.RuntimeFilterBuildList = append(outerJoinNode.RuntimeFilterBuildList, buildSpec2)
+
+		// Outer join doesn't add extra project, let global column pruning optimizer handle it
+		joinRootID = outerJoinNodeID
+	} else {
+		// JOIN( table, ivf )
+		wherePkEqPk, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
+			{
+				Typ: pkType,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: scanNode.BindingTags[0],
+						ColPos: pkPos, // tbl.pk
+					},
+				},
+			},
+			{
+				Typ: pkType,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: tableFuncTag,
+						ColPos: 0, // tf.pkid
+					},
+				},
+			},
+		})
+
+		joinNodeID := builder.appendNode(&plan.Node{
+			NodeType: plan.Node_JOIN,
+			Children: []int32{scanNode.NodeId, tableFuncNodeID},
+			JoinType: plan.Node_INNER,
+			OnList:   []*Expr{wherePkEqPk},
+			// Don't set Limit/Offset on JOIN - they should be applied after SORT
+		}, ctx)
+
+		// In non-nested mode, outer join also doesn't add extra project, let optimizer handle column pruning
+		joinRootID = joinNodeID
+	}
 
 	// Keep FilterList on scanNode so filters are applied during table scan
 	// Clear Limit/Offset from scanNode since they should be applied after SORT
 	scanNode.Limit = nil
 	scanNode.Offset = nil
 
-	// Create SortBy with distance column from table function
+	// Create SortBy, still sort directly by table function's score, let remap map ColRef to corresponding output column
 	orderByScore := []*OrderBySpec{
 		{
 			Expr: &plan.Expr{
@@ -250,7 +433,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, projN
 
 	sortByID := builder.appendNode(&plan.Node{
 		NodeType: plan.Node_SORT,
-		Children: []int32{joinNodeID},
+		Children: []int32{joinRootID},
 		OrderBy:  orderByScore,
 		Limit:    limit,                         // Apply LIMIT after sorting
 		Offset:   DeepCopyExpr(sortNode.Offset), // Apply OFFSET after sorting
