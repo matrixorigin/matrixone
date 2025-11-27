@@ -68,7 +68,7 @@ func (builder *QueryBuilder) buildGenerateSeries(tbl *tree.TableFunction, ctx *B
 			},
 			Cols: generateSeriesColDefs[retsIdx],
 		},
-		BindingTags:     []int32{builder.genNewTag()},
+		BindingTags:     []int32{builder.genNewBindTag()},
 		Children:        children,
 		TblFuncExprList: exprs,
 	}
@@ -97,7 +97,7 @@ func (builder *QueryBuilder) buildGenerateRandomInt64(tbl *tree.TableFunction, c
 				},
 			},
 		},
-		BindingTags:     []int32{builder.genNewTag()},
+		BindingTags:     []int32{builder.genNewBindTag()},
 		Children:        children,
 		TblFuncExprList: exprs,
 	}
@@ -127,7 +127,7 @@ func (builder *QueryBuilder) buildGenerateRandomFloat64(tbl *tree.TableFunction,
 				},
 			},
 		},
-		BindingTags:     []int32{builder.genNewTag()},
+		BindingTags:     []int32{builder.genNewBindTag()},
 		Children:        children,
 		TblFuncExprList: exprs,
 	}
