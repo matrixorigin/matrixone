@@ -672,7 +672,7 @@ func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node,
 		return -1
 	}
 
-	idxTag := builder.genNewTag()
+	idxTag := builder.genNewBindTag()
 	idxObjRef, idxTableDef, e := builder.compCtx.ResolveIndexTableByRef(node.ObjRef, idxDef.IndexTableName, scanSnapshot)
 	if e != nil {
 		panic(e)
@@ -759,7 +759,7 @@ func (builder *QueryBuilder) getIndexForNonEquiCond(indexes []*IndexDef, node *p
 }
 
 func (builder *QueryBuilder) applyIndexJoin(idxDef *IndexDef, node *plan.Node, filterType int, filterIdx []int32, scanSnapshot *Snapshot) (int32, int32) {
-	idxTag := builder.genNewTag()
+	idxTag := builder.genNewBindTag()
 	idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(node.ObjRef, idxDef.IndexTableName, scanSnapshot)
 	if err != nil {
 		panic(err)
@@ -989,7 +989,7 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 			continue
 		}
 
-		idxTag := builder.genNewTag()
+		idxTag := builder.genNewBindTag()
 		idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(leftChild.ObjRef, idxDef.IndexTableName, scanSnapshot)
 		if err != nil {
 			panic(err)
