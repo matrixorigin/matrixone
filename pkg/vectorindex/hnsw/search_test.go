@@ -30,14 +30,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 	usearch "github.com/unum-cloud/usearch/golang"
 )
 
 // give metadata [index_id, checksum, timestamp]
-func mock_runSql(proc *process.Process, sql string) (executor.Result, error) {
-
+func mock_runSql(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+	proc := sqlproc.Proc
 	return executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeMetaBatch(proc)}}, nil
 }
 

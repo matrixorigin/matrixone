@@ -126,7 +126,7 @@ func clustering[T types.RealNumbers](u *ivfCreateState, tf *TableFunction, proc 
 
 	sqls := []string{sql}
 	for _, s := range sqls {
-		res, err := ivf_runSql(proc, s)
+		res, err := ivf_runSql(sqlexec.NewSqlProcess(proc), s)
 		if err != nil {
 			return err
 		}

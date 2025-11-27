@@ -23,20 +23,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/stretchr/testify/require"
 )
 
 // give blob
 func mock_runSql(
-	proc *process.Process,
+	sqlproc *sqlexec.SqlProcess,
 	sql string,
 ) (executor.Result, error) {
 	return executor.Result{}, nil
 }
 
 func mock_runSql_parser_error(
-	proc *process.Process,
+	sqlproc *sqlexec.SqlProcess,
 	sql string,
 ) (executor.Result, error) {
 	return executor.Result{}, moerr.NewInternalErrorNoCtx("sql parser error")

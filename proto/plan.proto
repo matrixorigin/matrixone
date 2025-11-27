@@ -802,6 +802,7 @@ message Node {
 	// LIMIT
 	Expr limit = 15;
 	Expr offset = 16;
+	RankOption rank_option = 89;
 
 	TableDef table_def = 17;
 	ObjectRef obj_ref = 18;
@@ -973,6 +974,7 @@ message RuntimeFilterSpec {
 	int32 upper_limit = 3;
 	Expr expr = 4;
 	bool not_on_pk = 5;
+	bool use_bloom_filter = 6;
 }
 
 message IdList {
@@ -1636,4 +1638,20 @@ message CloneTable {
 	ObjectRef src_obj_def = 4;
 	string dst_database_name = 5;
 	string dst_table_name = 6;
+}
+
+message AlterPartitionOption {
+	AlterPartitionType AlterType = 1;
+	repeated PartitionDef PartitionDefs = 2;
+}
+
+enum AlterPartitionType {
+	AddPartitionTables = 0;
+	DropPartitionTables = 1;
+	TruncatePartitionTables = 2;
+	RedefinePartitionTables = 3;
+}
+
+message RankOption {
+	string mode = 1;        // "pre" or "post"
 }
