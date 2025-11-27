@@ -56,10 +56,31 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			})
 		}
 
-		validIndexes, hasIrregularIndex := getValidIndexes(tableDef)
-		if hasIrregularIndex {
-			return 0, moerr.NewUnsupportedDML(builder.GetContext(), "update vector/full-text index")
+		// Check if any irregular index (vector/full-text) columns are being updated
+		// Only block UPDATE if the indexed columns are being updated
+		hasIrregularIndex := false
+		irregularIndexCols := make(map[string]bool)
+		for _, idxDef := range tableDef.Indexes {
+			if !catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) {
+				hasIrregularIndex = true
+				// Collect all columns in this irregular index
+				for _, part := range idxDef.Parts {
+					resolvedColName := catalog.ResolveAlias(part)
+					irregularIndexCols[resolvedColName] = true
+				}
+			}
 		}
+		
+		// Only block if irregular index exists AND indexed columns are being updated
+		if hasIrregularIndex {
+			for colName := range dmlCtx.updateCol2Expr[i] {
+				if irregularIndexCols[colName] {
+					return 0, moerr.NewUnsupportedDML(builder.GetContext(), "update vector/full-text index")
+				}
+			}
+		}
+		
+		validIndexes, _ := getValidIndexes(tableDef)
 		tableDef.Indexes = validIndexes
 
 		var pkAndUkCols = make(map[string]bool)
