@@ -1,9 +1,9 @@
 -- @separator:table
-select mo_ctl('dn','DiskCleaner','add_checker.backup.1764213488640322343-1')
+select mo_ctl('dn','DiskCleaner','add_checker.backup.1764213488640322343-1');
 -- @separator:table
 select mo_ctl('dn','DiskCleaner','force_gc');
 -- @separator:table
-select mo_ctl('dn','DiskCleaner','remove_checker.backup.')
+select mo_ctl('dn','DiskCleaner','remove_checker.backup.');
 -- @ignore:0,1
 select mo_ctl('dn','DiskCleaner','details');
 -- @ignore:0,1
