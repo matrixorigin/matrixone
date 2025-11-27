@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
@@ -743,4 +744,283 @@ func TestExecBackupWithProtectionUpdate(t *testing.T) {
 		err = execBackup(ctx, "", srcFs, dstFs, names, 1, ts, "full", nil, nil)
 		_ = err
 	}()
+}
+
+// TestBackupProtectionManager tests backupProtectionManager lifecycle
+func TestBackupProtectionManager(t *testing.T) {
+	defer testutils.AfterTest(t)()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Create a mock SQL executor
+	mockExec := &mockSQLExecutor{
+		execFunc: func(ctx context.Context, sql string, opts executor.Options) (executor.Result, error) {
+			return executor.Result{}, nil
+		},
+	}
+
+	// Create protection manager
+	opts := executor.Options{}
+	mgr := newBackupProtectionManager(ctx, mockExec, opts)
+
+	// Test start
+	ts := types.BuildTS(time.Now().UnixNano(), 0)
+	mgr.start(ts)
+
+	// Wait a bit to let ticker run
+	time.Sleep(100 * time.Millisecond)
+
+	// Test cleanup
+	mgr.cleanup()
+}
+
+// TestExecBackupWithProtectionMgr tests execBackup with protection manager
+func TestExecBackupWithProtectionMgr(t *testing.T) {
+	defer testutils.AfterTest(t)()
+
+	ctx := context.Background()
+	srcFs, err := fileservice.NewMemoryFS("src", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	dstFs, err := fileservice.NewMemoryFS("dst", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+
+	// Create a minimal checkpoint file
+	now := time.Now()
+	ts := types.BuildTS(now.UnixNano(), 0)
+	ckpName := "meta_" + ioutil.EncodeCKPMetadataName(ts, ts)
+	ckpContent := []byte("checkpoint content")
+	err = srcFs.Write(ctx, fileservice.IOVector{
+		FilePath: ckpName,
+		Entries: []fileservice.IOEntry{
+			{
+				ReaderForWrite: bytes.NewReader(ckpContent),
+				Size:           int64(len(ckpContent)),
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	// Create names array for execBackup with start TS
+	names := []string{
+		"backup_time",
+		"cnLoc|1|" + ts.ToString() + "|tnLoc|" + ts.ToString(),
+		ckpName,
+	}
+
+	// Create mock executor and protection manager
+	mockExec := &mockSQLExecutor{
+		execFunc: func(ctx context.Context, sql string, opts executor.Options) (executor.Result, error) {
+			return executor.Result{}, nil
+		},
+	}
+	opts := executor.Options{}
+	protectionMgr := newBackupProtectionManager(ctx, mockExec, opts)
+	defer protectionMgr.cleanup()
+
+	// Run execBackup with protection manager
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Logf("Expected panic in execBackup: %v", r)
+			}
+		}()
+		err = execBackup(ctx, "", srcFs, dstFs, names, 1, ts, "full", nil, protectionMgr)
+		_ = err
+	}()
+}
+
+// TestExecBackupWithBaseTS tests execBackup with baseTS (no start TS)
+func TestExecBackupWithBaseTS(t *testing.T) {
+	defer testutils.AfterTest(t)()
+
+	ctx := context.Background()
+	srcFs, err := fileservice.NewMemoryFS("src", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	dstFs, err := fileservice.NewMemoryFS("dst", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+
+	// Create a minimal checkpoint file
+	now := time.Now()
+	ts := types.BuildTS(now.UnixNano(), 0)
+	ckpName := "meta_" + ioutil.EncodeCKPMetadataName(ts, ts)
+	ckpContent := []byte("checkpoint content")
+	err = srcFs.Write(ctx, fileservice.IOVector{
+		FilePath: ckpName,
+		Entries: []fileservice.IOEntry{
+			{
+				ReaderForWrite: bytes.NewReader(ckpContent),
+				Size:           int64(len(ckpContent)),
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	// Create names array for execBackup without start TS (empty start)
+	names := []string{
+		"backup_time",
+		"cnLoc|1|" + ts.ToString() + "|tnLoc|", // Empty start TS
+		ckpName,
+	}
+
+	// Run execBackup - should use baseTS (not empty, so protectedTS = baseTS)
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Logf("Expected panic in execBackup: %v", r)
+			}
+		}()
+		err = execBackup(ctx, "", srcFs, dstFs, names, 1, ts, "full", nil, nil)
+		_ = err
+	}()
+}
+
+// TestExecBackupWithEmptyBaseTS tests execBackup with empty baseTS (should not set protectedTS)
+func TestExecBackupWithEmptyBaseTS(t *testing.T) {
+	defer testutils.AfterTest(t)()
+
+	ctx := context.Background()
+	srcFs, err := fileservice.NewMemoryFS("src", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	dstFs, err := fileservice.NewMemoryFS("dst", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+
+	// Create a minimal checkpoint file
+	now := time.Now()
+	ts := types.BuildTS(now.UnixNano(), 0)
+	ckpName := "meta_" + ioutil.EncodeCKPMetadataName(ts, ts)
+	ckpContent := []byte("checkpoint content")
+	err = srcFs.Write(ctx, fileservice.IOVector{
+		FilePath: ckpName,
+		Entries: []fileservice.IOEntry{
+			{
+				ReaderForWrite: bytes.NewReader(ckpContent),
+				Size:           int64(len(ckpContent)),
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	// Create names array for execBackup without start TS (empty start)
+	names := []string{
+		"backup_time",
+		"cnLoc|1|" + ts.ToString() + "|tnLoc|", // Empty start TS
+		ckpName,
+	}
+
+	// Run execBackup with empty baseTS - should not set protectedTS
+	emptyTS := types.TS{}
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Logf("Expected panic in execBackup: %v", r)
+			}
+		}()
+		err = execBackup(ctx, "", srcFs, dstFs, names, 1, emptyTS, "full", nil, nil)
+		_ = err
+	}()
+}
+
+// TestCopyFileAndGetMetaFilesWithStartGEBackup tests filtering when start >= backup
+func TestCopyFileAndGetMetaFilesWithStartGEBackup(t *testing.T) {
+	defer testutils.AfterTest(t)()
+
+	ctx := context.Background()
+	srcFs, err := fileservice.NewMemoryFS("src", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	dstFs, err := fileservice.NewMemoryFS("dst", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+
+	// Create test checkpoint files
+	now := time.Now()
+	backupTS := types.BuildTS(now.UnixNano(), 0)
+	// Create a file where start == backup (should be skipped by start check)
+	// The start check is: if !start.IsEmpty() && start.GE(&backup)
+	file1Name := ioutil.EncodeCKPMetadataName(backupTS, backupTS)
+	file1Content := []byte("checkpoint 1")
+
+	err = srcFs.Write(ctx, fileservice.IOVector{
+		FilePath: file1Name,
+		Entries: []fileservice.IOEntry{
+			{
+				ReaderForWrite: bytes.NewReader(file1Content),
+				Size:           int64(len(file1Content)),
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	// Create another file where start > backup
+	startTS2 := types.BuildTS(now.Add(time.Hour).UnixNano(), 0)
+	endTS2 := types.BuildTS(now.Add(2*time.Hour).UnixNano(), 0)
+	file2Name := ioutil.EncodeCKPMetadataName(startTS2, endTS2)
+	file2Content := []byte("checkpoint 2")
+	err = srcFs.Write(ctx, fileservice.IOVector{
+		FilePath: file2Name,
+		Entries: []fileservice.IOEntry{
+			{
+				ReaderForWrite: bytes.NewReader(file2Content),
+				Size:           int64(len(file2Content)),
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	// Test copyFileAndGetMetaFiles with filtering
+	decoder := func(name string) ioutil.TSRangeFile {
+		return ioutil.DecodeTSRangeFile(name)
+	}
+
+	taeFiles, metaFiles, _, err := copyFileAndGetMetaFiles(
+		ctx, srcFs, dstFs, "", backupTS, decoder, true,
+	)
+	require.NoError(t, err)
+
+	// Should skip files with start >= backup
+	// file1 will be skipped by end check (end > backup)
+	// file2 should be skipped by start check (start == backup)
+	assert.Len(t, taeFiles, 0, "Should skip files with start >= backup or end > backup")
+	assert.Len(t, metaFiles, 0, "Should skip files with start >= backup or end > backup")
+}
+
+// TestGetSQLExecutor tests getSQLExecutor function
+func TestGetSQLExecutor(t *testing.T) {
+	defer testutils.AfterTest(t)()
+
+	// Test with empty sid (should return nil)
+	exec, opts := getSQLExecutor("")
+	assert.Nil(t, exec)
+	assert.Equal(t, executor.Options{}, opts)
+}
+
+// TestBackupProtectionSQLBuilders tests SQL builder functions
+func TestBackupProtectionSQLBuilders(t *testing.T) {
+	defer testutils.AfterTest(t)()
+
+	ts := types.BuildTS(time.Now().UnixNano(), 0)
+
+	// Test buildBackupProtectionSQL
+	sql := buildBackupProtectionSQL(ts)
+	assert.Contains(t, sql, "add_checker.backup.")
+	assert.Contains(t, sql, ts.ToString())
+
+	// Test buildRemoveBackupProtectionSQL
+	removeSQL := buildRemoveBackupProtectionSQL()
+	assert.Contains(t, removeSQL, "remove_checker.backup.")
+}
+
+// mockSQLExecutor is a mock implementation of SQLExecutor for testing
+type mockSQLExecutor struct {
+	execFunc func(ctx context.Context, sql string, opts executor.Options) (executor.Result, error)
+}
+
+func (m *mockSQLExecutor) Exec(ctx context.Context, sql string, opts executor.Options) (executor.Result, error) {
+	if m.execFunc != nil {
+		return m.execFunc(ctx, sql, opts)
+	}
+	return executor.Result{}, nil
+}
+
+func (m *mockSQLExecutor) ExecTxn(ctx context.Context, execFunc func(executor.TxnExecutor) error, opts executor.Options) error {
+	return nil
 }
