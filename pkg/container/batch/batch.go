@@ -229,11 +229,13 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 	data = data[8:]
 
 	l := types.DecodeInt32(data[:4])
-	if int(l) != len(bat.Vecs) {
+	vecsLen := int(l)
+	vecsLenChanged := vecsLen != len(bat.Vecs)
+	if vecsLenChanged {
 		if len(bat.Vecs) > 0 {
 			bat.Clean(mp)
 		}
-		bat.Vecs = make([]*vector.Vector, l)
+		bat.Vecs = make([]*vector.Vector, vecsLen)
 		for i := range bat.Vecs {
 			if bat.offHeap {
 				bat.Vecs[i] = vector.NewOffHeapVec()
@@ -258,17 +260,30 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 	}
 
 	l = types.DecodeInt32(data[:4])
-	if int(l) != len(bat.Attrs) {
-		bat.Attrs = make([]string, l)
+	// Fix for bug #23156: Attrs length must always match Vecs length to prevent data mapping errors
+	// The original bug in d4b79f12 was that Attrs length was checked independently against serialized length,
+	// which could lead to inconsistency when batch is reused with different Vecs/Attrs configurations.
+	// Key insight: When Vecs length changes, we must also reset Attrs to match the new Vecs length.
+	// We ensure bat.Attrs length always equals vecsLen (the actual Vecs length), regardless of serialized Attrs length.
+	serializedAttrsLen := int(l)
+	if vecsLenChanged || vecsLen != len(bat.Attrs) {
+		// If Vecs length changed, we already reallocated Vecs above, so we must also reallocate Attrs
+		// If Attrs length doesn't match Vecs length, we need to fix it
+		bat.Attrs = make([]string, vecsLen)
 	}
 	data = data[4:]
 
-	for i := 0; i < int(l); i++ {
+	// Always update Attrs from serialized data, but only up to vecsLen to ensure consistency with Vecs
+	// This ensures Attrs content is fully refreshed from serialized data
+	for i := 0; i < serializedAttrsLen; i++ {
 		size := types.DecodeInt32(data[:4])
 		data = data[4:]
-		bat.Attrs[i] = string(data[:size])
+		if i < vecsLen {
+			bat.Attrs[i] = string(data[:size])
+		}
 		data = data[size:]
 	}
+	// If serializedAttrsLen < vecsLen, remaining Attrs are already empty strings from make([]string, vecsLen)
 
 	l = types.DecodeInt32(data[:4])
 	aggs := make([][]byte, l)
