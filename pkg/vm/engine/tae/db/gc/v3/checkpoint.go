@@ -986,6 +986,10 @@ func (c *checkpointCleaner) GetPITRsLocked(ctx context.Context) (*logtail.PitrIn
 	return c.mutation.snapshotMeta.GetPITR(ctx, c.sid, ts, c.fs, c.mp)
 }
 
+func (c *checkpointCleaner) CDCTables() (map[uint64]types.TS, error) {
+	return c.mutation.snapshotMeta.GetCDC(c.ctx, c.sid, c.fs, c.mp)
+}
+
 // (no incremental checkpoint scan)
 // `tryGCLocked` will update
 // `mutation.scanned` and `mutation.metaFiles` and `mutation.snapshotMeta`
@@ -1085,6 +1089,10 @@ func (c *checkpointCleaner) tryGCAgainstGCKPLocked(
 		extraErrMsg = "GetSnapshot failed"
 		return
 	}
+
+	// Note: CDC DBs are updated from watermark table data in updateTableInfo
+	// which is called during snapshotMeta.Update, so no need to call it here
+
 	filesToGC, err := c.doGCAgainstGlobalCheckpointLocked(
 		ctx, gckp, snapshots, pitrs, memoryBuffer,
 	)
@@ -1173,11 +1181,16 @@ func (c *checkpointCleaner) doGCAgainstGlobalCheckpointLocked(
 	// [t100, t400] [f10, f11]
 	// Also, it will update the GC metadata
 	scannedWindow := c.GetScannedWindowLocked()
+	cdcWatermarks, err := c.CDCTables()
+	if err != nil {
+		return nil, err
+	}
 	if filesToGC, metafile, err = scannedWindow.ExecuteGlobalCheckpointBasedGC(
 		ctx,
 		gckp,
 		snapshots,
 		pitrs,
+		cdcWatermarks,
 		c.mutation.snapshotMeta,
 		c.checkpointCli,
 		memoryBuffer,
@@ -1338,11 +1351,17 @@ func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
 		zap.String("task", c.TaskNameLocked()),
 		zap.Int("files-count", len(mergeWindow.files)),
 	)
+	var cdcWatermarks map[uint64]types.TS
+	cdcWatermarks, err = c.CDCTables()
+	if err != nil {
+		return err
+	}
 	if _, _, err = mergeWindow.ExecuteGlobalCheckpointBasedGC(
 		c.ctx,
 		gCkp,
 		snapshots,
 		pitr,
+		cdcWatermarks,
 		c.mutation.snapshotMeta,
 		c.checkpointCli,
 		buffer,
@@ -1366,6 +1385,7 @@ func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
 		gCkp,
 		snapshots,
 		pitr,
+		cdcWatermarks,
 		c.mutation.snapshotMeta,
 		c.checkpointCli,
 		buffer,
@@ -1840,3 +1860,7 @@ func (c *checkpointCleaner) GetDetails(ctx context.Context) (map[uint32]*TableSt
 	window := scan.Clone()
 	return window.Details(ctx, c.mutation.snapshotMeta, c.mp)
 }
+
+// Note: updateCDCDBsFromWatermarkLocked is no longer needed
+// because watermark table data is read in updateTableInfo
+// which is called during snapshotMeta.Update
