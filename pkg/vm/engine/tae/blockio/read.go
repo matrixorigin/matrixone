@@ -60,7 +60,7 @@ func removeIf[T any](data []T, pred func(t T) bool) []T {
 
 // ReadDataByFilter only read block data from storage by filter, don't apply deletes.
 // Right now, it cannot support filter by physical address column.
-// len(columns) == len(colTypes) == 1
+// len(columns) == len(colTypes) >= 1 (supports multiple columns for optimization)
 func ReadDataByFilter(
 	ctx context.Context,
 	tableName string,
@@ -94,7 +94,7 @@ func ReadDataByFilter(
 	defer release()
 	defer deleteMask.Release()
 
-	sels = searchFunc(&cacheVectors[0])
+	sels = searchFunc(cacheVectors)
 	if !deleteMask.IsEmpty() {
 		sels = removeIf(sels, func(i int64) bool {
 			return deleteMask.Contains(uint64(i))

@@ -591,3 +591,268 @@ func TestScopeGetRelDataError(t *testing.T) {
 	err := s.getRelData(c, nil)
 	require.Error(t, err)
 }
+
+// mockRelation is a mock Relation that captures the FilterHint passed to BuildReaders
+type mockRelationForBloomFilter struct {
+	engine.Relation
+	capturedHint engine.FilterHint
+}
+
+func (m *mockRelationForBloomFilter) BuildReaders(
+	ctx context.Context,
+	proc any,
+	expr *plan.Expr,
+	relData engine.RelData,
+	num int,
+	txnOffset int,
+	orderBy bool,
+	policy engine.TombstoneApplyPolicy,
+	filterHint engine.FilterHint,
+) ([]engine.Reader, error) {
+	m.capturedHint = filterHint
+	return []engine.Reader{}, nil
+}
+
+func TestBuildReadersBloomFilterHint(t *testing.T) {
+	t.Run("BloomFilter set when node is IVFFLAT Entries and context has bloom filter", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		expectedBloomFilter := []byte{1, 2, 3, 4, 5}
+		ctx := context.WithValue(proc.Ctx, defines.IvfBloomFilter{}, expectedBloomFilter)
+		proc.Ctx = ctx
+
+		mockRel := &mockRelationForBloomFilter{}
+		s := &Scope{
+			Proc: proc,
+			DataSource: &Source{
+				Rel: mockRel,
+				node: &plan.Node{
+					TableDef: &plan.TableDef{
+						TableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
+					},
+				},
+				FilterExpr: nil,
+			},
+			NodeInfo: engine.Node{
+				Mcpu: 1,
+			},
+			TxnOffset: 0,
+		}
+
+		c := NewMockCompile(t)
+		c.proc = proc
+		// Use MakeFalseExpr to make emptyScan = true, skipping getRelData
+		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
+		s.DataSource.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{}
+
+		readers, err := s.buildReaders(c)
+		require.NoError(t, err)
+		require.NotNil(t, readers)
+		require.Equal(t, expectedBloomFilter, mockRel.capturedHint.BloomFilter)
+	})
+
+	t.Run("BloomFilter not set when node is nil", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		expectedBloomFilter := []byte{1, 2, 3, 4, 5}
+		ctx := context.WithValue(proc.Ctx, defines.IvfBloomFilter{}, expectedBloomFilter)
+		proc.Ctx = ctx
+
+		mockRel := &mockRelationForBloomFilter{}
+		s := &Scope{
+			Proc: proc,
+			DataSource: &Source{
+				Rel:                mockRel,
+				node:               nil, // node is nil
+				FilterExpr:         nil,
+				FilterList:         []*plan.Expr{},
+				RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
+			},
+			NodeInfo: engine.Node{
+				Mcpu: 1,
+			},
+			TxnOffset: 0,
+		}
+
+		c := NewMockCompile(t)
+		c.proc = proc
+		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
+
+		readers, err := s.buildReaders(c)
+		require.NoError(t, err)
+		require.NotNil(t, readers)
+		require.Nil(t, mockRel.capturedHint.BloomFilter)
+	})
+
+	t.Run("BloomFilter not set when TableDef is nil", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		expectedBloomFilter := []byte{1, 2, 3, 4, 5}
+		ctx := context.WithValue(proc.Ctx, defines.IvfBloomFilter{}, expectedBloomFilter)
+		proc.Ctx = ctx
+
+		mockRel := &mockRelationForBloomFilter{}
+		s := &Scope{
+			Proc: proc,
+			DataSource: &Source{
+				Rel: mockRel,
+				node: &plan.Node{
+					TableDef: nil, // TableDef is nil
+				},
+				FilterExpr:         nil,
+				FilterList:         []*plan.Expr{},
+				RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
+			},
+			NodeInfo: engine.Node{
+				Mcpu: 1,
+			},
+			TxnOffset: 0,
+		}
+
+		c := NewMockCompile(t)
+		c.proc = proc
+		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
+
+		readers, err := s.buildReaders(c)
+		require.NoError(t, err)
+		require.NotNil(t, readers)
+		require.Nil(t, mockRel.capturedHint.BloomFilter)
+	})
+
+	t.Run("BloomFilter not set when TableType is not IVFFLAT Entries", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		expectedBloomFilter := []byte{1, 2, 3, 4, 5}
+		ctx := context.WithValue(proc.Ctx, defines.IvfBloomFilter{}, expectedBloomFilter)
+		proc.Ctx = ctx
+
+		mockRel := &mockRelationForBloomFilter{}
+		s := &Scope{
+			Proc: proc,
+			DataSource: &Source{
+				Rel: mockRel,
+				node: &plan.Node{
+					TableDef: &plan.TableDef{
+						TableType: catalog.SystemSI_IVFFLAT_TblType_Metadata, // different type
+					},
+				},
+				FilterExpr:         nil,
+				FilterList:         []*plan.Expr{},
+				RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
+			},
+			NodeInfo: engine.Node{
+				Mcpu: 1,
+			},
+			TxnOffset: 0,
+		}
+
+		c := NewMockCompile(t)
+		c.proc = proc
+		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
+
+		readers, err := s.buildReaders(c)
+		require.NoError(t, err)
+		require.NotNil(t, readers)
+		require.Nil(t, mockRel.capturedHint.BloomFilter)
+	})
+
+	t.Run("BloomFilter not set when context has no IvfBloomFilter", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		// No IvfBloomFilter in context
+
+		mockRel := &mockRelationForBloomFilter{}
+		s := &Scope{
+			Proc: proc,
+			DataSource: &Source{
+				Rel: mockRel,
+				node: &plan.Node{
+					TableDef: &plan.TableDef{
+						TableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
+					},
+				},
+				FilterExpr:         nil,
+				FilterList:         []*plan.Expr{},
+				RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
+			},
+			NodeInfo: engine.Node{
+				Mcpu: 1,
+			},
+			TxnOffset: 0,
+		}
+
+		c := NewMockCompile(t)
+		c.proc = proc
+		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
+
+		readers, err := s.buildReaders(c)
+		require.NoError(t, err)
+		require.NotNil(t, readers)
+		require.Nil(t, mockRel.capturedHint.BloomFilter)
+	})
+
+	t.Run("BloomFilter not set when context value is not []byte", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		ctx := context.WithValue(proc.Ctx, defines.IvfBloomFilter{}, "not a byte slice")
+		proc.Ctx = ctx
+
+		mockRel := &mockRelationForBloomFilter{}
+		s := &Scope{
+			Proc: proc,
+			DataSource: &Source{
+				Rel: mockRel,
+				node: &plan.Node{
+					TableDef: &plan.TableDef{
+						TableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
+					},
+				},
+				FilterExpr:         nil,
+				FilterList:         []*plan.Expr{},
+				RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
+			},
+			NodeInfo: engine.Node{
+				Mcpu: 1,
+			},
+			TxnOffset: 0,
+		}
+
+		c := NewMockCompile(t)
+		c.proc = proc
+		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
+
+		readers, err := s.buildReaders(c)
+		require.NoError(t, err)
+		require.NotNil(t, readers)
+		require.Nil(t, mockRel.capturedHint.BloomFilter)
+	})
+
+	t.Run("BloomFilter not set when context value is empty []byte", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		ctx := context.WithValue(proc.Ctx, defines.IvfBloomFilter{}, []byte{}) // empty byte slice
+		proc.Ctx = ctx
+
+		mockRel := &mockRelationForBloomFilter{}
+		s := &Scope{
+			Proc: proc,
+			DataSource: &Source{
+				Rel: mockRel,
+				node: &plan.Node{
+					TableDef: &plan.TableDef{
+						TableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
+					},
+				},
+				FilterExpr:         nil,
+				FilterList:         []*plan.Expr{},
+				RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
+			},
+			NodeInfo: engine.Node{
+				Mcpu: 1,
+			},
+			TxnOffset: 0,
+		}
+
+		c := NewMockCompile(t)
+		c.proc = proc
+		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
+
+		readers, err := s.buildReaders(c)
+		require.NoError(t, err)
+		require.NotNil(t, readers)
+		require.Nil(t, mockRel.capturedHint.BloomFilter)
+	})
+}

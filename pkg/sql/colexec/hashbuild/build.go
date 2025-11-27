@@ -17,6 +17,7 @@ package hashbuild
 import (
 	"bytes"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -143,6 +144,26 @@ func (ctr *container) build(ap *HashBuild, proc *process.Process, analyzer proce
 	return nil
 }
 
+// calculateBloomFilterProbability calculates the false positive rate for bloom filter
+// based on row count. Reference fuzzyfilter experience, choose different false positive rates
+// based on row count to balance memory usage and filtering accuracy.
+func calculateBloomFilterProbability(rowCount int) float64 {
+	switch {
+	case rowCount < 10_0001:
+		return 0.00001
+	case rowCount < 100_0001:
+		return 0.000003
+	case rowCount < 1000_0001:
+		return 0.000001
+	case rowCount < 1_0000_0001:
+		return 0.0000005
+	case rowCount < 10_0000_0001:
+		return 0.0000002
+	default:
+		return 0.0000001
+	}
+}
+
 func (ctr *container) handleRuntimeFilter(ap *HashBuild, proc *process.Process) error {
 	if ap.RuntimeFilterSpec == nil {
 		return nil
@@ -151,19 +172,64 @@ func (ctr *container) handleRuntimeFilter(ap *HashBuild, proc *process.Process) 
 	var runtimeFilter message.RuntimeFilterMessage
 	runtimeFilter.Tag = ap.RuntimeFilterSpec.Tag
 
-	if ap.RuntimeFilterSpec.Expr == nil {
+	spec := ap.RuntimeFilterSpec
+
+	// use bloom filter runtime filter when requested
+	if spec.UseBloomFilter {
+		// currently only support single-column key for bloom runtime filter
+		// composite key still uses original IN / PASS logic
+		if spec.Expr != nil && spec.Expr.GetF() != nil {
+			runtimeFilter.Typ = message.RuntimeFilter_PASS
+			message.SendRuntimeFilter(runtimeFilter, spec, proc.GetMessageBoard())
+			return nil
+		}
+
+		// No data, directly DROP
+		if ctr.hashmapBuilder.InputBatchRowCount == 0 ||
+			len(ctr.hashmapBuilder.UniqueJoinKeys) == 0 ||
+			ctr.hashmapBuilder.UniqueJoinKeys[0].Length() == 0 {
+			runtimeFilter.Typ = message.RuntimeFilter_DROP
+			message.SendRuntimeFilter(runtimeFilter, spec, proc.GetMessageBoard())
+			return nil
+		}
+
+		keyVec := ctr.hashmapBuilder.UniqueJoinKeys[0]
+		rowCount := keyVec.Length()
+
+		// Use common/bloomfilter to build BloomFilter
+		// Reference fuzzyfilter experience, choose different false positive rates based on row count
+		probability := calculateBloomFilterProbability(rowCount)
+
+		bf := bloomfilter.New(int64(rowCount), probability)
+		bf.Add(keyVec)
+
+		data, err := bf.Marshal()
+		if err != nil {
+			return err
+		}
+
+		runtimeFilter.Typ = message.RuntimeFilter_BLOOMFILTER
+		runtimeFilter.Card = int32(rowCount)
+		runtimeFilter.Data = data
+		message.SendRuntimeFilter(runtimeFilter, spec, proc.GetMessageBoard())
+
+		// UniqueJoinKeys will be released uniformly in defer
+		return nil
+	}
+
+	if spec.Expr == nil {
 		runtimeFilter.Typ = message.RuntimeFilter_PASS
-		message.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec, proc.GetMessageBoard())
+		message.SendRuntimeFilter(runtimeFilter, spec, proc.GetMessageBoard())
 		return nil
 	} else if ctr.hashmapBuilder.InputBatchRowCount == 0 || len(ctr.hashmapBuilder.UniqueJoinKeys) == 0 || ctr.hashmapBuilder.UniqueJoinKeys[0].Length() == 0 {
 		runtimeFilter.Typ = message.RuntimeFilter_DROP
-		message.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec, proc.GetMessageBoard())
+		message.SendRuntimeFilter(runtimeFilter, spec, proc.GetMessageBoard())
 		return nil
 	}
 
 	hashmapCount := ctr.hashmapBuilder.GetGroupCount()
 
-	inFilterCardLimit := ap.RuntimeFilterSpec.UpperLimit
+	inFilterCardLimit := spec.UpperLimit
 	//inFilterCardLimit := plan.GetInFilterCardLimit()
 	//bloomFilterCardLimit := int64(plan.BloomFilterCardLimit)
 	//v, ok = runtime.ProcessLevelRuntime().GetGlobalVariables("runtime_filter_limit_bloom_filter")
@@ -180,7 +246,7 @@ func (ctr *container) handleRuntimeFilter(ap *HashBuild, proc *process.Process) 
 
 	if hashmapCount > uint64(inFilterCardLimit) {
 		runtimeFilter.Typ = message.RuntimeFilter_PASS
-		message.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec, proc.GetMessageBoard())
+		message.SendRuntimeFilter(runtimeFilter, spec, proc.GetMessageBoard())
 		return nil
 	} else {
 		rowCount := ctr.hashmapBuilder.UniqueJoinKeys[0].Length()
@@ -188,12 +254,12 @@ func (ctr *container) handleRuntimeFilter(ap *HashBuild, proc *process.Process) 
 		var data []byte
 		var err error
 		// Composite primary key
-		if ap.RuntimeFilterSpec.Expr.GetF() != nil {
+		if spec.Expr.GetF() != nil {
 			bat := batch.NewWithSize(len(ctr.hashmapBuilder.UniqueJoinKeys))
 			bat.SetRowCount(rowCount)
 			copy(bat.Vecs, ctr.hashmapBuilder.UniqueJoinKeys)
 
-			vec, free, erg := colexec.GetReadonlyResultFromExpression(proc, ap.RuntimeFilterSpec.Expr, []*batch.Batch{bat})
+			vec, free, erg := colexec.GetReadonlyResultFromExpression(proc, spec.Expr, []*batch.Batch{bat})
 			if erg != nil {
 				return erg
 			}
@@ -212,7 +278,7 @@ func (ctr *container) handleRuntimeFilter(ap *HashBuild, proc *process.Process) 
 		runtimeFilter.Typ = message.RuntimeFilter_IN
 		runtimeFilter.Card = int32(rowCount)
 		runtimeFilter.Data = data
-		message.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec, proc.GetMessageBoard())
+		message.SendRuntimeFilter(runtimeFilter, spec, proc.GetMessageBoard())
 		ctr.runtimeFilterIn = true
 	}
 	return nil
