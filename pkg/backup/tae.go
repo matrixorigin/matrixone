@@ -362,7 +362,7 @@ func execBackup(
 			dstHave[object] = true
 		}
 	}
-	now = time.Now()
+	startTime = time.Now()
 	for _, oName := range oNames {
 		objName := oName.Location.Name().String()
 		if dstHave[objName] {
@@ -427,9 +427,9 @@ func execBackup(
 	if err != nil {
 		return err
 	}
-	copyDuration += time.Since(now)
+	copyDuration += time.Since(startTime)
 	taeFileList = append(taeFileList, sizeList...)
-	now = time.Now()
+	startTime = time.Now()
 	if trimString != "" {
 		cnLocation, err := objectio.StringToLocation(cnLoc)
 		if err != nil {
@@ -471,7 +471,7 @@ func execBackup(
 			ts:       start,
 		})
 	}
-	reWriteDuration += time.Since(now)
+	reWriteDuration += time.Since(startTime)
 	for _, file := range taeFileList {
 		if dstHave[file.path] {
 			file.needCopy = true
