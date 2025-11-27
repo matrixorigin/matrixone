@@ -2860,7 +2860,7 @@ func handleDelsOnLCA(
 	sqlBuf.WriteString(" order by pks.__idx_")
 
 	sql = sqlBuf.String()
-	if sqlRet, err = runSql(ctx, ses, bh, tblStuff, sql, false); err != nil {
+	if sqlRet, err = runSql(ctx, ses, bh, tblStuff, sql, nil, nil); err != nil {
 		return
 	}
 
