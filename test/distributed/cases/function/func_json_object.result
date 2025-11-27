@@ -1,0 +1,55 @@
+SELECT JSON_OBJECT('name', 'John', 'age', 30) AS result1;
+result1
+{"age": 30, "name": "John"}
+SELECT JSON_OBJECT('name', 'John', 'age', 30) AS basic_object;
+basic_object
+{"age": 30, "name": "John"}
+SELECT JSON_OBJECT('a', 1, 'b', 2, 'c', 3) AS multiple_pairs;
+multiple_pairs
+{"a": 1, "b": 2, "c": 3}
+SELECT JSON_OBJECT('key', 'value') AS single_pair;
+single_pair
+{"key": "value"}
+SELECT JSON_OBJECT() AS empty_object;
+empty_object
+{}
+SELECT JSON_OBJECT('int', 42, 'float', 3.14, 'bool', true, 'string', 'hello') AS mixed_types;
+mixed_types
+{"bool": true, "float": 3.14, "int": 42, "string": "hello"}
+SELECT JSON_OBJECT('null_val', NULL) AS null_value;
+null_value
+{"null_val": null}
+SELECT JSON_OBJECT('nested', JSON_ARRAY(1, 2, 3)) AS nested_array;
+nested_array
+{"nested": [1, 2, 3]}
+SELECT JSON_OBJECT('obj', JSON_OBJECT('a', 1, 'b', 2)) AS nested_object;
+nested_object
+{"obj": {"a": 1, "b": 2}}
+SELECT JSON_OBJECT('date', '2024-12-20', 'time', '10:30:45') AS date_time;
+date_time
+{"date": "2024-12-20", "time": "10:30:45"}
+SELECT JSON_OBJECT('key1', NULL, 'key2', 'value') AS null_in_object;
+null_in_object
+{"key1": null, "key2": "value"}
+CREATE TABLE t1(name VARCHAR(10), age INT, city VARCHAR(10));
+INSERT INTO t1 VALUES ('John', 30, 'NYC'), ('Jane', 25, 'LA'), ('Bob', 35, 'Chicago');
+SELECT JSON_OBJECT('name', name, 'age', age, 'city', city) AS json_obj FROM t1;
+json_obj
+{"age": 30, "city": "NYC", "name": "John"}
+{"age": 25, "city": "LA", "name": "Jane"}
+{"age": 35, "city": "Chicago", "name": "Bob"}
+DROP TABLE t1;
+CREATE TABLE t1(id INT, name VARCHAR(10));
+INSERT INTO t1 VALUES (1, 'Alice'), (2, 'Bob'), (3, 'Charlie');
+SELECT * FROM t1 WHERE JSON_OBJECT('id', id, 'name', name) IS NOT NULL;
+id    name
+1    Alice
+2    Bob
+3    Charlie
+DROP TABLE t1;
+SELECT JSON_OBJECT('a', 1) AS obj1, JSON_OBJECT('b', 2) AS obj2, JSON_OBJECT('c', 3) AS obj3;
+obj1    obj2    obj3
+{"a": 1}    {"b": 2}    {"c": 3}
+SELECT JSON_OBJECT('person', JSON_OBJECT('name', 'John', 'age', 30), 'hobbies', JSON_ARRAY('reading', 'coding')) AS complex;
+complex
+{"hobbies": ["reading", "coding"], "person": {"age": 30, "name": "John"}}

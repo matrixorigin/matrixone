@@ -1,0 +1,133 @@
+SELECT CONV('A', 16, 10) AS result1;
+result1
+10
+SELECT CONV('A', 16, 10) AS hex_to_dec;
+hex_to_dec
+10
+SELECT CONV('10', 10, 16) AS dec_to_hex;
+dec_to_hex
+a
+SELECT CONV('1010', 2, 10) AS bin_to_dec;
+bin_to_dec
+10
+SELECT CONV('10', 10, 2) AS dec_to_bin;
+dec_to_bin
+1010
+SELECT CONV('FF', 16, 2) AS hex_to_bin;
+hex_to_bin
+11111111
+SELECT CONV('Z', 36, 10) AS base36_to_dec;
+base36_to_dec
+35
+SELECT CONV('35', 10, 36) AS dec_to_base36;
+dec_to_base36
+z
+SELECT CONV('100', 8, 10) AS oct_to_dec;
+oct_to_dec
+64
+SELECT CONV('64', 10, 8) AS dec_to_oct;
+dec_to_oct
+100
+SELECT CONV(10, 10, 16) AS int_to_hex;
+int_to_hex
+a
+SELECT CONV(255, 10, 2) AS int_to_bin;
+int_to_bin
+11111111
+SELECT CONV(100, 10, 8) AS int_to_oct;
+int_to_oct
+144
+SELECT CONV('0', 10, 16) AS zero;
+zero
+0
+SELECT CONV('1', 10, 2) AS one;
+one
+1
+SELECT CONV(NULL, 10, 16) AS null_input;
+null_input
+null
+SELECT CONV('G', 16, 10) AS invalid_hex;
+invalid_hex
+null
+SELECT CONV('2', 2, 10) AS invalid_bin;
+invalid_bin
+null
+CREATE TABLE t1(num_str VARCHAR(10), num_val INT);
+INSERT INTO t1 VALUES ('A', 10), ('FF', 255), ('1010', 10);
+SELECT CONV(num_str, 16, 10) AS hex_val, CONV(num_val, 10, 16) AS hex_str FROM t1;
+internal error: panic type mismatch: casting INT vector to []int64: 
+github.com/matrixorigin/matrixone/pkg/container/vector.checkType[...]
+	/home/fengttt/m/matrixone/pkg/container/vector/vector.go:107
+github.com/matrixorigin/matrixone/pkg/container/vector.ToSlice[...]
+	/home/fengttt/m/matrixone/pkg/container/vector/vector.go:101
+github.com/matrixorigin/matrixone/pkg/container/vector.ToFixedCol[...]
+	/home/fengttt/m/matrixone/pkg/container/vector/tools.go:42
+github.com/matrixorigin/matrixone/pkg/container/vector.MustFixedColWithTypeCheck[...]
+	/home/fengttt/m/matrixone/pkg/container/vector/tools.go:56
+github.com/matrixorigin/matrixone/pkg/container/vector.GenerateFunctionFixedTypeParameter[...]
+	/home/fengttt/m/matrixone/pkg/container/vector/functionTools.go:67
+github.com/matrixorigin/matrixone/pkg/sql/plan/function.convInt64Direct
+	/home/fengttt/m/matrixone/pkg/sql/plan/function/func_binary.go:1624
+github.com/matrixorigin/matrixone/pkg/sql/plan/function.Conv
+	/home/fengttt/m/matrixone/pkg/sql/plan/function/func_binary.go:1553
+github.com/matrixorigin/matrixone/pkg/sql/colexec.(*FunctionExpressionExecutor).Eval
+	/home/fengttt/m/matrixone/pkg/sql/colexec/evalExpression.go:633
+github.com/matrixorigin/matrixone/pkg/sql/colexec/projection.(*Projection).Call
+	/home/fengttt/m/matrixone/pkg/sql/colexec/projection/projection.go:76
+github.com/matrixorigin/matrixone/pkg/vm.Exec
+	/home/fengttt/m/matrixone/pkg/vm/types.go:514
+github.com/matrixorigin/matrixone/pkg/vm.ChildrenCall
+	/home/fengttt/m/matrixone/pkg/vm/types.go:525
+github.com/matrixorigin/matrixone/pkg/sql/colexec/output.(*Output).Call
+	/home/fengttt/m/matrixone/pkg/sql/colexec/output/output.go:55
+github.com/matrixorigin/matrixone/pkg/vm.Exec
+	/home/fengttt/m/matrixone/pkg/vm/types.go:514
+github.com/matrixorigin/matrixone/pkg/vm/pipeline.(*Pipeline).Run
+	/home/fengttt/m/matrixone/pkg/vm/pipeline/pipeline.go:71
+github.com/matrixorigin/matrixone/pkg/vm/pipeline.(*Pipeline).RunWithReader
+	/home/fengttt/m/matrixone/pkg/vm/pipeline/pipeline.go:59
+github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).Run
+	/home/fengttt/m/matrixone/pkg/sql/compile/scope.go:198
+github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).ParallelRun
+	/home/fengttt/m/matrixone/pkg/sql/compile/scope.go:490
+github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).MergeRun
+	/home/fengttt/m/matrixone/pkg/sql/compile/scope.go:276
+github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).RemoteRun
+	/home/fengttt/m/matrixone/pkg/sql/compile/scope.go:395
+github.com/matrixorigin/matrixone/pkg/sql/compile.(*Compile).run
+	/home/fengttt/m/matrixone/pkg/sql/compile/compile.go:375
+github.com/matrixorigin/matrixone/pkg/sql/compile.(*Compile).runOnce
+	/home/fengttt/m/matrixone/pkg/sql/compile/compile.go:522
+github.com/matrixorigin/matrixone/pkg/sql/compile.(*Compile).Run
+	/home/fengttt/m/matrixone/pkg/sql/compile/compile2.go:250
+github.com/matrixorigin/matrixone/pkg/frontend.executeResultRowStmt
+	/home/fengttt/m/matrixone/pkg/frontend/result_row_stmt.go:87
+github.com/matrixorigin/matrixone/pkg/frontend.executeStmt
+	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2994
+github.com/matrixorigin/matrixone/pkg/frontend.dispatchStmt
+	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2847
+github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithIncrStmt
+	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2812
+github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithWorkspace
+	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2756
+github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithTxn
+	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2631
+github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithResponse
+	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2594
+github.com/matrixorigin/matrixone/pkg/frontend.doComQuery
+	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:3237
+github.com/matrixorigin/matrixone/pkg/frontend.ExecRequest
+	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:3317
+github.com/matrixorigin/matrixone/pkg/frontend.(*Routine).handleRequest
+	/home/fengttt/m/matrixone/pkg/frontend/routine.go:298
+DROP TABLE t1;
+CREATE TABLE t1(val VARCHAR(10));
+INSERT INTO t1 VALUES ('A'), ('B'), ('C');
+SELECT * FROM t1 WHERE CONV(val, 16, 10) > 10;
+val
+B
+C
+DROP TABLE t1;
+SELECT CONV('A', 16, 10) AS val1, CONV('B', 16, 10) AS val2, CONV('C', 16, 10) AS val3;
+val1    val2    val3
+10    11    12

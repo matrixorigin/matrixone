@@ -1,0 +1,50 @@
+SELECT ASIN(0) AS result1;
+result1
+0.0
+SELECT ASIN(0.5) AS positive_value;
+positive_value
+0.5235987755982989
+SELECT ASIN(1) AS max_value;
+max_value
+1.5707963267948966
+SELECT ASIN(-0.5) AS negative_value;
+negative_value
+-0.5235987755982989
+SELECT ASIN(-1) AS min_value;
+min_value
+-1.5707963267948966
+SELECT ASIN(0.7071067811865476) AS sqrt2_over_2;
+sqrt2_over_2
+0.7853981633974483
+SELECT ASIN(0.0) AS zero;
+zero
+0.0
+SELECT ASIN(1.0) AS one;
+one
+1.5707963267948966
+SELECT ASIN(-1.0) AS minus_one;
+minus_one
+-1.5707963267948966
+SELECT ASIN(NULL) AS null_input;
+null_input
+null
+CREATE TABLE t1(x FLOAT);
+INSERT INTO t1 VALUES (0), (0.5), (1), (-0.5), (-1);
+SELECT x, ASIN(x) AS asin_value FROM t1;
+x    asin_value
+0.0    0.0
+0.5    0.5235987755982989
+1.0    1.5707963267948966
+-0.5    -0.5235987755982989
+-1.0    -1.5707963267948966
+DROP TABLE t1;
+CREATE TABLE t1(x FLOAT);
+INSERT INTO t1 VALUES (0), (0.5), (1), (-0.5), (-1);
+SELECT * FROM t1 WHERE ASIN(x) > 0;
+x
+0.5
+1.0
+DROP TABLE t1;
+SELECT ASIN(SIN(0.5)) AS asin_sin_test;
+asin_sin_test
+0.5

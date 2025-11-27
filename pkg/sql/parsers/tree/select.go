@@ -16,6 +16,7 @@ package tree
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -268,6 +269,9 @@ func (np NullsPosition) String() string {
 // the LIMIT clause.
 type Limit struct {
 	Offset, Count Expr
+	ByRank        bool
+	Option        map[string]string // parsed options like {"fudge_factor": "3.0", "nprobe": "10", "mode": "pre"}
+	Mode          string            // "pre" or "post"
 }
 
 func (node *Limit) Format(ctx *FmtCtx) {
@@ -283,6 +287,38 @@ func (node *Limit) Format(ctx *FmtCtx) {
 		}
 		ctx.WriteString("offset ")
 		node.Offset.Format(ctx)
+		needSpace = true
+	}
+	if node != nil && node.ByRank {
+		if needSpace {
+			ctx.WriteByte(' ')
+		}
+		ctx.WriteString("by rank")
+		needSpace = true
+	}
+	if node != nil && node.Option != nil && len(node.Option) > 0 {
+		if needSpace {
+			ctx.WriteByte(' ')
+		}
+		ctx.WriteString("with option ")
+		// Sort keys to ensure deterministic output order
+		keys := make([]string, 0, len(node.Option))
+		for key := range node.Option {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		first := true
+		for _, key := range keys {
+			if !first {
+				ctx.WriteString(", ")
+			}
+			ctx.WriteString("'")
+			ctx.WriteString(key)
+			ctx.WriteString("=")
+			ctx.WriteString(node.Option[key])
+			ctx.WriteString("'")
+			first = false
+		}
 	}
 }
 

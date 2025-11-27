@@ -1,0 +1,54 @@
+# Basic test case from requirements
+SELECT PERIOD_DIFF(200802, 200703) AS result1;
+
+# Additional test cases
+# YYYYMM format
+SELECT PERIOD_DIFF(200802, 200703) AS diff_11_months;
+SELECT PERIOD_DIFF(200703, 200802) AS diff_negative_11_months;
+SELECT PERIOD_DIFF(200802, 200802) AS diff_zero;
+
+# YYMM format (2-digit year)
+SELECT PERIOD_DIFF(0802, 0703) AS yymm_format;
+SELECT PERIOD_DIFF(7002, 6903) AS yymm_1970s;
+SELECT PERIOD_DIFF(6902, 7003) AS yymm_negative;
+
+# Year boundary crossing
+SELECT PERIOD_DIFF(200812, 200801) AS same_year_11_months;
+SELECT PERIOD_DIFF(200901, 200812) AS year_boundary_1_month;
+SELECT PERIOD_DIFF(200901, 200801) AS year_boundary_12_months;
+
+# Multiple year differences
+SELECT PERIOD_DIFF(201002, 200802) AS two_years;
+SELECT PERIOD_DIFF(201202, 200802) AS four_years;
+SELECT PERIOD_DIFF(200802, 201202) AS negative_four_years;
+
+# Edge cases
+SELECT PERIOD_DIFF(200801, 200812) AS negative_11_months;
+SELECT PERIOD_DIFF(200802, 200801) AS one_month;
+SELECT PERIOD_DIFF(200801, 200802) AS negative_one_month;
+
+# NULL handling
+SELECT PERIOD_DIFF(NULL, 200703) AS null_period1;
+SELECT PERIOD_DIFF(200802, NULL) AS null_period2;
+SELECT PERIOD_DIFF(NULL, NULL) AS null_both;
+
+# Table usage
+CREATE TABLE t1(period1 INT, period2 INT);
+INSERT INTO t1 VALUES (200802, 200703), (200812, 200801), (201002, 200802);
+SELECT PERIOD_DIFF(period1, period2) AS result FROM t1;
+DROP TABLE t1;
+
+# WHERE clause
+CREATE TABLE t1(period1 INT, period2 INT);
+INSERT INTO t1 VALUES (200802, 200703), (200812, 200801), (201002, 200802);
+SELECT * FROM t1 WHERE PERIOD_DIFF(period1, period2) > 10;
+DROP TABLE t1;
+
+# Different numeric types
+SELECT PERIOD_DIFF(200802.0, 200703.0) AS float_input;
+SELECT PERIOD_DIFF(CAST(200802 AS UNSIGNED), CAST(200703 AS UNSIGNED)) AS unsigned_input;
+
+# Mixed formats (YYYYMM and YYMM)
+SELECT PERIOD_DIFF(200802, 0803) AS mixed_format1;
+SELECT PERIOD_DIFF(0802, 200703) AS mixed_format2;
+

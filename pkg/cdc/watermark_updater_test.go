@@ -319,6 +319,177 @@ func TestWatermarkUpdater_ForceFlushCircuitBreakerIntegration(t *testing.T) {
 	require.Greater(t, exec.execCalls, prevCalls)
 }
 
+func TestWatermarkUpdater_RemoveCachedWM_Idempotent(t *testing.T) {
+	exec := &retryableMockExecutor{}
+	var syncOption UpdateOption = func(u *CDCWatermarkUpdater) {
+		u.customized.scheduleJob = func(job *UpdaterJob) error {
+			u.onJobs(job)
+			return nil
+		}
+		u.customized.cronJob = func(ctx context.Context) {}
+	}
+	updater := NewCDCWatermarkUpdater("remove-idempotent", exec, syncOption)
+
+	ctx := context.Background()
+	key := WatermarkKey{
+		AccountId: 5,
+		TaskId:    "task",
+		DBName:    "db",
+		TableName: "tbl",
+	}
+	ts := types.BuildTS(50, 1)
+
+	require.NoError(t, updater.UpdateWatermarkOnly(ctx, &key, &ts))
+	require.NoError(t, updater.ForceFlush(ctx))
+	require.NoError(t, updater.RemoveCachedWM(ctx, &key))
+
+	updater.RLock()
+	_, committedExists := updater.cacheCommitted[key]
+	_, uncommittedExists := updater.cacheUncommitted[key]
+	_, committingExists := updater.cacheCommitting[key]
+	_, errMetaExists := updater.errorMetadataCache[key]
+	updater.RUnlock()
+
+	require.False(t, committedExists)
+	require.False(t, uncommittedExists)
+	require.False(t, committingExists)
+	require.False(t, errMetaExists)
+
+	require.NoError(t, updater.RemoveCachedWM(ctx, &key))
+}
+
+func TestWatermarkUpdater_RemoveCachedWM_NoExisting(t *testing.T) {
+	exec := &retryableMockExecutor{}
+	var syncOption UpdateOption = func(u *CDCWatermarkUpdater) {
+		u.customized.scheduleJob = func(job *UpdaterJob) error {
+			u.onJobs(job)
+			return nil
+		}
+		u.customized.cronJob = func(ctx context.Context) {}
+	}
+	updater := NewCDCWatermarkUpdater("remove-noexisting", exec, syncOption)
+
+	ctx := context.Background()
+	key := WatermarkKey{
+		AccountId: 6,
+		TaskId:    "task",
+		DBName:    "db",
+		TableName: "tbl",
+	}
+
+	require.NoError(t, updater.RemoveCachedWM(ctx, &key))
+}
+
+func TestWatermarkUpdater_RemoveCachedWM_AfterStopUsesFallback(t *testing.T) {
+	exec := &retryableMockExecutor{}
+	updater := NewCDCWatermarkUpdater("remove-after-stop", exec)
+	updater.Start()
+	updater.Stop()
+
+	ctx := context.Background()
+	key := WatermarkKey{
+		AccountId: 7,
+		TaskId:    "task",
+		DBName:    "db",
+		TableName: "tbl",
+	}
+	ts := types.BuildTS(70, 2)
+	now := time.Now()
+
+	updater.Lock()
+	updater.cacheCommitted[key] = ts
+	updater.cacheUncommitted[key] = ts
+	updater.cacheCommitting[key] = ts
+	updater.errorMetadataCache[key] = &ErrorMetadata{
+		IsRetryable: true,
+		RetryCount:  3,
+		FirstSeen:   now,
+		LastSeen:    now,
+		Message:     "fallback cleanup",
+	}
+	updater.commitCircuitOpen[key] = now
+	updater.commitFailureCount[key] = 2
+	updater.Unlock()
+
+	require.NoError(t, updater.RemoveCachedWM(ctx, &key))
+
+	updater.RLock()
+	_, inCommitted := updater.cacheCommitted[key]
+	_, inUncommitted := updater.cacheUncommitted[key]
+	_, inCommitting := updater.cacheCommitting[key]
+	_, hasErrMeta := updater.errorMetadataCache[key]
+	_, circuitOpen := updater.commitCircuitOpen[key]
+	_, failureCount := updater.commitFailureCount[key]
+	updater.RUnlock()
+
+	require.False(t, inCommitted)
+	require.False(t, inUncommitted)
+	require.False(t, inCommitting)
+	require.False(t, hasErrMeta)
+	require.False(t, circuitOpen)
+	require.False(t, failureCount)
+
+	_, logExists := updater.fallbackLog.Load(key.String())
+	require.True(t, logExists)
+}
+
+func TestWatermarkUpdater_UpdateErrMsg_AfterStopUsesFallback(t *testing.T) {
+	exec := &retryableMockExecutor{}
+	updater := NewCDCWatermarkUpdater("update-errmsg-after-stop", exec)
+	updater.Start()
+	updater.Stop()
+
+	ctx := context.Background()
+	key := WatermarkKey{
+		AccountId: 9,
+		TaskId:    "task",
+		DBName:    "db",
+		TableName: "tbl",
+	}
+
+	require.NoError(t, updater.UpdateWatermarkErrMsg(ctx, &key, "retryable error:temporary", nil))
+
+	updater.RLock()
+	meta, exists := updater.errorMetadataCache[key]
+	updater.RUnlock()
+	require.True(t, exists)
+	require.True(t, meta.IsRetryable)
+	require.Equal(t, 1, meta.RetryCount)
+
+	require.NoError(t, updater.UpdateWatermarkErrMsg(ctx, &key, "", nil))
+
+	updater.RLock()
+	_, exists = updater.errorMetadataCache[key]
+	updater.RUnlock()
+	require.False(t, exists)
+}
+
+func TestWatermarkUpdater_GetOrAddCommitted_AfterStopUsesFallback(t *testing.T) {
+	exec := &retryableMockExecutor{}
+	updater := NewCDCWatermarkUpdater("get-or-add-after-stop", exec)
+	updater.Start()
+	updater.Stop()
+
+	ctx := context.Background()
+	key := WatermarkKey{
+		AccountId: 10,
+		TaskId:    "task",
+		DBName:    "db",
+		TableName: "tbl",
+	}
+	ts := types.BuildTS(80, 3)
+
+	ret, err := updater.GetOrAddCommitted(ctx, &key, &ts)
+	require.NoError(t, err)
+	require.True(t, ret.Equal(&ts))
+
+	updater.RLock()
+	committed, ok := updater.cacheCommitted[key]
+	updater.RUnlock()
+	require.True(t, ok)
+	require.True(t, committed.Equal(&ts))
+}
+
 func TestWatermarkUpdater_CircuitBreakerHelpers(t *testing.T) {
 	exec := &retryableMockExecutor{failRemaining: watermarkCommitMaxRetries}
 	var syncOption UpdateOption = func(u *CDCWatermarkUpdater) {
@@ -1297,8 +1468,7 @@ func TestCDCWatermarkUpdater_UpdateWatermarkErrMsg(t *testing.T) {
 		"err1",
 		nil, // Legacy format
 	)
-	// should be error because the watermark is not found
-	assert.Error(t, err)
+	assert.NoError(t, err)
 
 	ts := types.BuildTS(1, 1)
 	ret, err := u.GetOrAddCommitted(
@@ -1323,18 +1493,44 @@ func TestCDCWatermarkUpdater_UpdateWatermarkErrMsg(t *testing.T) {
 		[]string{fmt.Sprintf("%d", key.AccountId), key.TaskId, key.DBName, key.TableName},
 	)
 	assert.NoError(t, err)
-	assert.Len(t, tuple, 5)
+	// Table now has 6 columns: account_id, task_id, db_name, table_name, watermark, err_msg
+	assert.Len(t, tuple, 6)
 	assert.Equal(t, fmt.Sprintf("%d", key.AccountId), tuple[0])
 	assert.Equal(t, key.TaskId, tuple[1])
 	assert.Equal(t, key.DBName, tuple[2])
 	assert.Equal(t, key.TableName, tuple[3])
+	// tuple[4] is watermark
+	// tuple[5] is err_msg
 
 	// Error message is now formatted as "N:timestamp:message" (non-retryable)
 	// Note: In "N:timestamp:message" format, retry count is always 0 (not tracked for non-retryable)
-	formattedErrMsg := tuple[4]
+	formattedErrMsg := tuple[5]
 	metadata := ParseErrorMetadata(formattedErrMsg)
 	require.NotNil(t, metadata)
 	assert.False(t, metadata.IsRetryable)
 	assert.Equal(t, 0, metadata.RetryCount) // Non-retryable format doesn't track retry count
 	assert.Contains(t, metadata.Message, "err1")
+}
+
+func TestCDCWatermarkUpdater_RemoveThenUpdateErrMsg(t *testing.T) {
+	ctx := context.Background()
+	updater, _ := InitCDCWatermarkUpdaterForTest(t)
+	updater.Start()
+	defer updater.Stop()
+
+	key := &WatermarkKey{
+		AccountId: 1,
+		TaskId:    "task",
+		DBName:    "db",
+		TableName: "tbl",
+	}
+	wm := types.BuildTS(100, 0)
+
+	require.NoError(t, updater.UpdateWatermarkOnly(ctx, key, &wm))
+	require.NoError(t, updater.ForceFlush(ctx))
+	require.NoError(t, updater.RemoveCachedWM(ctx, key))
+
+	// UpdateWatermarkErrMsg is expected to succeed even after RemoveCachedWM; current implementation returns ErrNoWatermarkFound.
+	err := updater.UpdateWatermarkErrMsg(ctx, key, "boom", nil)
+	require.NoError(t, err)
 }
