@@ -25,8 +25,10 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 // receiverFailureMode defines how to handle receiver failures
@@ -397,6 +399,10 @@ func sendBatchToClientSession(
 		if failureMode == FailureModeStrict {
 			// Strict mode: receiver done indicates data loss
 			// This happens when remote CN crashes or cancels
+			logutil.Debug("sendBatchToClientSession: ReceiverDone=true in strict mode",
+				zap.String("receiverID", receiverID),
+				zap.Uint64("msgId", wcs.MsgId),
+				zap.String("uid", wcs.Uid.String()))
 			return true, moerr.NewInternalError(ctx, fmt.Sprintf(
 				"remote receiver %s is already done, data loss may occur. "+
 					"This usually indicates the remote CN has failed or been canceled",
