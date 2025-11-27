@@ -834,7 +834,7 @@ func (sm *SnapshotMeta) Update(
 	sm.Lock()
 	defer sm.Unlock()
 
-	now := time.Now()
+	start := time.Now()
 	defer func() {
 		logger := logutil.Info
 		if err != nil {
@@ -843,7 +843,7 @@ func (sm *SnapshotMeta) Update(
 		logger(
 			"GC-SnapshotMeta-Update",
 			zap.Error(err),
-			zap.Duration("cost", time.Since(now)),
+			zap.Duration("cost", time.Since(start)),
 			zap.String("start-ts", startts.ToString()),
 			zap.String("end-ts", endts.ToString()),
 			zap.String("task", taskName),
@@ -991,7 +991,7 @@ func (sm *SnapshotMeta) GetSnapshot(
 ) (*SnapshotInfo, error) {
 	var err error
 
-	now := time.Now()
+	start := time.Now()
 	defer func() {
 		logger := logutil.Info
 		if err != nil {
@@ -1000,7 +1000,7 @@ func (sm *SnapshotMeta) GetSnapshot(
 		logger(
 			"GetSnapshot",
 			zap.Error(err),
-			zap.Duration("cost", time.Since(now)),
+			zap.Duration("cost", time.Since(start)),
 		)
 	}()
 
