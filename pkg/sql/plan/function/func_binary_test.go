@@ -350,6 +350,142 @@ func TestCoalesce(t *testing.T) {
 	}
 }
 
+func initTimestampAddTestCase() []tcTemp {
+	d1, _ := types.ParseDateCast("2024-12-20")
+	r1, _ := types.ParseDateCast("2024-12-25")  // +5 days
+	r11, _ := types.ParseDateCast("2024-12-21") // +1 days
+	d2, _ := types.ParseDatetime("2024-12-20 10:30:45", 6)
+	r2, _ := types.ParseDatetime("2024-12-25 10:30:45", 6) // +5 days
+	d3, _ := types.ParseTimestamp(time.Local, "2024-12-20 10:30:45", 6)
+	r3, _ := types.ParseTimestamp(time.Local, "2024-12-25 10:30:45", 6) // +5 days
+
+	return []tcTemp{
+		{
+			info: "test TimestampAdd - DATE with DAY",
+			typ:  types.T_date,
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"DAY"}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{5},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_date.ToType(),
+					[]types.Date{d1},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_date.ToType(), false,
+				[]types.Date{r1},
+				[]bool{false}),
+		},
+		{
+			info: "test TimestampAdd - DATETIME with DAY",
+			typ:  types.T_datetime,
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"DAY"}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{5},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_datetime.ToType(),
+					[]types.Datetime{d2},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_datetime.ToType(), false,
+				[]types.Datetime{r2},
+				[]bool{false}),
+		},
+		{
+			info: "test TimestampAdd - TIMESTAMP with DAY",
+			typ:  types.T_timestamp,
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"DAY"}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{5},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_timestamp.ToType(),
+					[]types.Timestamp{d3},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_timestamp.ToType(), false,
+				[]types.Timestamp{r3},
+				[]bool{false}),
+		},
+		{
+			info: "test TimestampAdd - VARCHAR with DAY",
+			typ:  types.T_varchar,
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"DAY"}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{5},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"2024-12-20 10:30:45"},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_datetime.ToType(), false,
+				[]types.Datetime{r2},
+				[]bool{false}),
+		},
+		{
+			info: "test TimestampAdd - DATE with HOUR",
+			typ:  types.T_date,
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"HOUR"}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{24},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_date.ToType(),
+					[]types.Date{d1},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_date.ToType(), false,
+				[]types.Date{r11},
+				[]bool{false}),
+		},
+		{
+			info: "test TimestampAdd - null",
+			typ:  types.T_date,
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"DAY"}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{5},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_date.ToType(),
+					[]types.Date{d1},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_date.ToType(), false,
+				[]types.Date{types.Date(0)},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestTimestampAdd(t *testing.T) {
+	testCases := initTimestampAddTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		var fcTC FunctionTestCase
+		switch tc.typ {
+		case types.T_date:
+			fcTC = NewFunctionTestCase(proc,
+				tc.inputs, tc.expect, TimestampAddDate)
+		case types.T_datetime:
+			fcTC = NewFunctionTestCase(proc,
+				tc.inputs, tc.expect, TimestampAddDatetime)
+		case types.T_timestamp:
+			fcTC = NewFunctionTestCase(proc,
+				tc.inputs, tc.expect, TimestampAddTimestamp)
+		case types.T_varchar:
+			fcTC = NewFunctionTestCase(proc,
+				tc.inputs, tc.expect, TimestampAddString)
+		default:
+			t.Fatalf("unsupported type for timestampadd test: %v", tc.typ)
+		}
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
 func initConcatWsTestCase() []tcTemp {
 	return []tcTemp{
 		{
@@ -1847,6 +1983,93 @@ func TestTimeDiffInDateTime(t *testing.T) {
 	}
 }
 
+func initTimeDiffStringTestCase() []tcTemp {
+	// Test cases for TimeDiffString with string inputs (including colon format)
+	// expr1, expr2, expected result
+	testCases := []struct {
+		expr1, expr2 string
+		expected     types.Time
+		desc         string
+	}{
+		{
+			expr1:    "2000:01:01 00:00:00",
+			expr2:    "2000:01:01 00:00:00.000001",
+			expected: types.Time(-1), // -1 microsecond
+			desc:     "colon format microsecond diff",
+		},
+		{
+			expr1:    "2000:01:01 00:00:00",
+			expr2:    "2000:01:01 00:00:00",
+			expected: types.Time(0),
+			desc:     "colon format zero diff",
+		},
+		{
+			expr1:    "2000:01:01 00:00:01",
+			expr2:    "2000:01:01 00:00:00",
+			expected: types.Time(1000000), // 1 second = 1000000 microseconds
+			desc:     "colon format one second diff",
+		},
+		{
+			expr1:    "2000:01:01 01:00:00",
+			expr2:    "2000:01:01 00:00:00",
+			expected: types.Time(3600000000), // 1 hour = 3600000000 microseconds
+			desc:     "colon format one hour diff",
+		},
+		{
+			expr1:    "2000:01:01 00:00:00",
+			expr2:    "2000:01:01 00:00:01",
+			expected: types.Time(-1000000), // -1 second
+			desc:     "colon format negative one second",
+		},
+		{
+			expr1:    "2000-01-01 15:30:45",
+			expr2:    "2000-01-01 10:20:30",
+			expected: types.Time(18615000000), // 5:10:15 = 18615000000 microseconds
+			desc:     "dash format datetime diff",
+		},
+		{
+			expr1:    "15:30:45",
+			expr2:    "10:20:30",
+			expected: types.Time(18615000000), // 5:10:15
+			desc:     "time format diff",
+		},
+	}
+
+	inputs1 := make([]string, len(testCases))
+	inputs2 := make([]string, len(testCases))
+	expected := make([]types.Time, len(testCases))
+	nulls := make([]bool, len(testCases))
+
+	for i, tc := range testCases {
+		inputs1[i] = tc.expr1
+		inputs2[i] = tc.expr2
+		expected[i] = tc.expected
+		nulls[i] = false
+	}
+
+	return []tcTemp{
+		{
+			info: "test timediff string inputs with colon format",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), inputs1, nulls),
+				NewFunctionTestInput(types.T_varchar.ToType(), inputs2, nulls),
+			},
+			expect: NewFunctionTestResult(types.T_time.ToType(), false, expected, nulls),
+		},
+	}
+}
+
+func TestTimeDiffString(t *testing.T) {
+	testCases := initTimeDiffStringTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, TimeDiffString)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
 // TIMESTAMPDIFF
 
 func initTimestampDiffTestCase() []tcTemp {
@@ -2466,6 +2689,78 @@ func TestLeft(t *testing.T) {
 	}
 }
 
+// Right
+func initRightTestCase() []tcTemp {
+	cases := []struct {
+		s    string
+		len  int64
+		want string
+	}{
+		// Basic cases from user requirements
+		{"Hello World", 5, "World"}, // RIGHT('Hello World', 5) = 'World'
+		{"Hello", 10, "Hello"},      // RIGHT('Hello', 10) = 'Hello'
+		{"Hello", 0, ""},            // RIGHT('Hello', 0) = ''
+		// Additional test cases
+		{"abcde", 3, "cde"},
+		{"abcde", -1, ""},
+		{"abcde", 100, "abcde"},
+		{"foobarbar", 5, "arbar"},
+		// Unicode test cases
+		{"是都方式快递费", 3, "快递费"},
+		{"ｱｲｳｴｵ", 3, "ｳｴｵ"},
+		{"あいうえお", 3, "うえお"},
+		{"龔龖龗龞龡", 3, "龗龞龡"},
+		// Edge cases
+		{"", 5, ""},
+		{"test", 4, "test"},
+		{"test", 1, "t"},
+	}
+
+	var testInputs = make([]tcTemp, 0, len(cases))
+	for _, c := range cases {
+		testInputs = append(testInputs, tcTemp{
+			info: fmt.Sprintf("test right('%s', %d) = '%s'", c.s, c.len, c.want),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{c.s}, []bool{}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{c.len}, []bool{}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{c.want}, []bool{}),
+		})
+	}
+
+	// Add NULL test cases
+	testInputs = append(testInputs, tcTemp{
+		info: "test right with NULL first argument",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{""}, []bool{true}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{5}, []bool{false}),
+		},
+		expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{true}),
+	})
+
+	testInputs = append(testInputs, tcTemp{
+		info: "test right with NULL second argument",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"Hello World"}, []bool{false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{0}, []bool{true}),
+		},
+		expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{true}),
+	})
+
+	return testInputs
+}
+
+func TestRight(t *testing.T) {
+	testCases := initRightTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Right)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
 // POWER
 func initPowerTestCase() []tcTemp {
 	cases := []struct {
@@ -2473,13 +2768,17 @@ func initPowerTestCase() []tcTemp {
 		right float64
 		want  float64
 	}{
+		// Basic cases from user requirements
+		{2, 3, 8},   // POW(2, 3) = 8
+		{2, 0, 1},   // POW(2, 0) = 1
+		{4, 0.5, 2}, // POW(4, 0.5) = 2 (square root)
+		// Additional test cases
 		{1, 2, 1},
 		{2, 2, 4},
 		{3, 2, 9},
 		{3, 3, 27},
 		{4, 2, 16},
 		{4, 3, 64},
-		{4, 0.5, 2},
 		{5, 2, 25},
 		{6, 2, 36},
 		{7, 2, 49},
@@ -2490,13 +2789,28 @@ func initPowerTestCase() []tcTemp {
 		{3.5, 2, 12.25},
 		{4.5, 2, 20.25},
 		{5.5, 2, 30.25},
+		// Negative exponent
+		{2, -1, 0.5},
+		{4, -2, 0.0625},
+		{10, -2, 0.01},
+		// Zero base
+		{0, 5, 0},
+		{0, 0, 1}, // 0^0 = 1 in most systems
+		// One as base or exponent
+		{1, 100, 1},
+		{100, 1, 100},
+		// Negative base with integer exponent
+		{-2, 2, 4},
+		{-2, 3, -8},
+		{-1, 1, -1},
+		{-1, 2, 1},
 	}
 
 	var testInputs = make([]tcTemp, 0, len(cases))
 	for _, c := range cases {
 
 		testInputs = append(testInputs, tcTemp{
-			info: "test pow ",
+			info: fmt.Sprintf("test pow(%v, %v) = %v", c.left, c.right, c.want),
 			inputs: []FunctionTestInput{
 				// Create a input entry <float64, float64>
 				NewFunctionTestInput(types.T_float64.ToType(), []float64{c.left}, []bool{}),
@@ -2505,6 +2819,34 @@ func initPowerTestCase() []tcTemp {
 			expect: NewFunctionTestResult(types.T_float64.ToType(), false, []float64{c.want}, []bool{}),
 		})
 	}
+
+	// Add NULL test cases
+	testInputs = append(testInputs, tcTemp{
+		info: "test pow with NULL first argument",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{0}, []bool{true}),
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{2}, []bool{false}),
+		},
+		expect: NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0}, []bool{true}),
+	})
+
+	testInputs = append(testInputs, tcTemp{
+		info: "test pow with NULL second argument",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{2}, []bool{false}),
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{0}, []bool{true}),
+		},
+		expect: NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0}, []bool{true}),
+	})
+
+	testInputs = append(testInputs, tcTemp{
+		info: "test pow with both NULL arguments",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{0}, []bool{true}),
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{0}, []bool{true}),
+		},
+		expect: NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0}, []bool{true}),
+	})
 
 	return testInputs
 }
@@ -2516,6 +2858,76 @@ func TestPower(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Power)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+// TRUNCATE
+func initTruncateTestCase() []tcTemp {
+	cases := []struct {
+		left  float64
+		right int64
+		want  float64
+	}{
+		// Basic cases from user requirements
+		{4.567, 2, 4.56},   // TRUNCATE(4.567, 2) = 4.56
+		{4.567, 0, 4.0},    // TRUNCATE(4.567, 0) = 4
+		{-4.567, 2, -4.56}, // TRUNCATE(-4.567, 2) = -4.56
+		// Additional test cases
+		{4.567, 1, 4.5},
+		{4.567, 3, 4.567},
+		{-4.567, 0, -4.0},
+		{-4.567, 1, -4.5},
+		{0.5, 0, 0.0},
+		{-0.5, 0, 0.0},
+		{1.999, 2, 1.99},
+		{-1.999, 2, -1.99},
+		{10.123456, 3, 10.123},
+		{-10.123456, 3, -10.123},
+	}
+
+	var testInputs = make([]tcTemp, 0, len(cases))
+	for _, c := range cases {
+		testInputs = append(testInputs, tcTemp{
+			info: fmt.Sprintf("test truncate(%v, %v) = %v", c.left, c.right, c.want),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_float64.ToType(), []float64{c.left}, []bool{}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{c.right}, []bool{}),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false, []float64{c.want}, []bool{}),
+		})
+	}
+
+	// Add NULL test cases
+	testInputs = append(testInputs, tcTemp{
+		info: "test truncate with NULL first argument",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{0}, []bool{true}),
+			NewFunctionTestConstInput(types.T_int64.ToType(), []int64{2}, []bool{false}),
+		},
+		expect: NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0}, []bool{true}),
+	})
+
+	// truncate with NULL second argument should expect error, we want a const.
+	testInputs = append(testInputs, tcTemp{
+		info: "test truncate with NULL second argument",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{4.567}, []bool{false}),
+			NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0}, []bool{true}),
+		},
+		expect: NewFunctionTestResult(types.T_float64.ToType(), true, []float64{0}, []bool{true}),
+	})
+
+	return testInputs
+}
+
+func TestTruncate(t *testing.T) {
+	testCases := initTruncateTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, TruncateFloat64)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
@@ -3033,6 +3445,205 @@ func initReplaceTestCase() []tcTemp {
 	return testInputs
 }
 
+// INSERT
+func initInsertTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test insert basic",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"Hello World"},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{7},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{5},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"MySQL"},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"Hello MySQL"},
+				[]bool{false}),
+		},
+		{
+			info: "test insert at beginning",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"World"},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{1},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{5},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"Hello "},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"Hello "},
+				[]bool{false}),
+		},
+		{
+			info: "test insert at end",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"Hello"},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{6},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{1},
+					[]bool{false}),
+				// result is hello, according to MySQL behavior
+				// if pos is NOT in the range of string, return original string.
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"World"},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"Hello"},
+				[]bool{false}),
+		},
+		{
+			info: "test insert with zero length (insert without remove)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"Hello World"},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{7},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{0},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"MySQL "},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"Hello MySQL World"},
+				[]bool{false}),
+		},
+		{
+			info: "test insert with invalid position (pos <= 0)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"Hello World"},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{0},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{5},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"MySQL"},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"Hello World"},
+				[]bool{false}),
+		},
+		{
+			info: "test insert with position > string length",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"Hello"},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{10},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{5},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"MySQL"},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"Hello"},
+				[]bool{false}),
+		},
+		{
+			info: "test insert with NULL",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"Hello World"},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{7},
+					[]bool{true}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{5},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"MySQL"},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{""},
+				[]bool{true}),
+		},
+		{
+			info: "test insert with negative length",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"Hello World"},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{7},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{-1},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"MySQL "},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"Hello MySQL World"},
+				[]bool{false}),
+		},
+		{
+			info: "test insert with length exceeding string",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"Hello"},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{2},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{100},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"MySQL"},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"HMySQL"},
+				[]bool{false}),
+		},
+	}
+}
+
+func TestInsert(t *testing.T) {
+	testCases := initInsertTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Insert)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
 func TestReplace(t *testing.T) {
 	testCases := initReplaceTestCase()
 
@@ -3222,5 +3833,98 @@ func Test_castBinaryArrayToInt(t *testing.T) {
 			result := castBinaryArrayToInt(tc.input)
 			require.Equal(t, tc.expect, result)
 		})
+	}
+}
+
+func initTimeFormatTestCase() []tcTemp {
+	t1, _ := types.ParseTime("15:30:45", 6)
+	t2, _ := types.ParseTime("00:00:00", 6)
+	t3, _ := types.ParseTime("23:59:59.123456", 6)
+	t4, _ := types.ParseTime("12:34:56.789012", 6)
+
+	return []tcTemp{
+		{
+			info: "test time_format - %H:%i:%s",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_time.ToType(),
+					[]types.Time{t1, t2, t3},
+					[]bool{false, false, false}),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"%H:%i:%s"}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"15:30:45", "00:00:00", "23:59:59"},
+				[]bool{false, false, false}),
+		},
+		{
+			info: "test time_format - %T",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_time.ToType(),
+					[]types.Time{t1},
+					[]bool{false}),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"%T"}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"15:30:45"},
+				[]bool{false}),
+		},
+		{
+			info: "test time_format - %h:%i:%s %p",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_time.ToType(),
+					[]types.Time{t1, t2, t4},
+					[]bool{false, false, false}),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"%h:%i:%s %p"}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"03:30:45 PM", "12:00:00 AM", "12:34:56 PM"},
+				[]bool{false, false, false}),
+		},
+		{
+			info: "test time_format - %r",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_time.ToType(),
+					[]types.Time{t1, t2, t4},
+					[]bool{false, false, false}),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"%r"}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"03:30:45 PM", "12:00:00 AM", "12:34:56 PM"},
+				[]bool{false, false, false}),
+		},
+		{
+			info: "test time_format - %H:%i:%s.%f",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_time.ToType(),
+					[]types.Time{t3, t4},
+					[]bool{false, false}),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"%H:%i:%s.%f"}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"23:59:59.123456", "12:34:56.789012"},
+				[]bool{false, false}),
+		},
+		{
+			info: "test time_format - null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_time.ToType(),
+					[]types.Time{t1},
+					[]bool{true}),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"%H:%i:%s"}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{""},
+				[]bool{true}),
+		},
+	}
+}
+
+func TestTimeFormat(t *testing.T) {
+	testCases := initTimeFormatTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, TimeFormat)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
 }

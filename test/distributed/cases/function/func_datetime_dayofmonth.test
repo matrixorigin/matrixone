@@ -1,0 +1,42 @@
+# Basic test case from requirements
+SELECT DAYOFMONTH('2007-02-03') AS result1;
+
+# Additional test cases
+# DATE type
+SELECT DAYOFMONTH('2007-02-03') AS day_3;
+SELECT DAYOFMONTH('2007-02-01') AS day_1;
+SELECT DAYOFMONTH('2007-02-28') AS day_28;
+SELECT DAYOFMONTH('2007-02-29') AS day_29_leap;
+SELECT DAYOFMONTH('2008-02-29') AS day_29_leap_year;
+SELECT DAYOFMONTH('2007-01-31') AS day_31;
+
+# DATETIME type
+SELECT DAYOFMONTH('2007-02-03 12:30:45') AS datetime_day_3;
+SELECT DAYOFMONTH('2007-12-31 23:59:59') AS datetime_day_31;
+
+# TIMESTAMP type
+SELECT DAYOFMONTH('2007-02-03 12:30:45') AS timestamp_day_3;
+
+# NULL handling
+SELECT DAYOFMONTH(NULL) AS null_date;
+
+# Table usage
+CREATE TABLE t1(d DATE, dt DATETIME);
+INSERT INTO t1 VALUES ('2007-02-03', '2007-02-03 12:00:00'), ('2007-02-15', '2007-02-15 12:00:00');
+SELECT DAYOFMONTH(d) AS day_from_date, DAYOFMONTH(dt) AS day_from_datetime FROM t1;
+DROP TABLE t1;
+
+# WHERE clause
+CREATE TABLE t1(d DATE);
+INSERT INTO t1 VALUES ('2007-02-03'), ('2007-02-15'), ('2007-02-28');
+SELECT * FROM t1 WHERE DAYOFMONTH(d) > 10;
+DROP TABLE t1;
+
+# Edge cases - first and last day of month
+SELECT DAYOFMONTH('2007-01-01') AS first_day, DAYOFMONTH('2007-01-31') AS last_day_jan;
+SELECT DAYOFMONTH('2007-02-01') AS first_day_feb, DAYOFMONTH('2007-02-28') AS last_day_feb;
+SELECT DAYOFMONTH('2007-04-01') AS first_day_apr, DAYOFMONTH('2007-04-30') AS last_day_apr;
+
+# Different months
+SELECT DAYOFMONTH('2007-01-15') AS jan, DAYOFMONTH('2007-02-15') AS feb, DAYOFMONTH('2007-03-15') AS mar, DAYOFMONTH('2007-04-15') AS apr;
+

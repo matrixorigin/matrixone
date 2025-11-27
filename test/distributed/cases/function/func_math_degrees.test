@@ -1,0 +1,39 @@
+# Basic test case from requirements
+SELECT DEGREES(PI()) AS result1;
+
+# Additional test cases
+SELECT DEGREES(0) AS zero_radians;
+SELECT DEGREES(PI()) AS pi_radians;
+SELECT DEGREES(PI()/2) AS pi_over_2;
+SELECT DEGREES(PI()/4) AS pi_over_4;
+SELECT DEGREES(2*PI()) AS two_pi;
+SELECT DEGREES(-PI()) AS negative_pi;
+
+# Common angle conversions
+SELECT DEGREES(0) AS zero_degrees;
+SELECT DEGREES(PI()/6) AS thirty_degrees;
+SELECT DEGREES(PI()/4) AS forty_five_degrees;
+SELECT DEGREES(PI()/3) AS sixty_degrees;
+SELECT DEGREES(PI()/2) AS ninety_degrees;
+SELECT DEGREES(PI()) AS one_eighty_degrees;
+SELECT DEGREES(2*PI()) AS three_sixty_degrees;
+
+# NULL handling
+SELECT DEGREES(NULL) AS null_input;
+
+# Table usage
+CREATE TABLE t1(radians FLOAT);
+INSERT INTO t1 VALUES (0), (PI()/2), (PI()), (2*PI()), (-PI());
+SELECT radians, DEGREES(radians) AS degrees FROM t1;
+DROP TABLE t1;
+
+# WHERE clause
+CREATE TABLE t1(radians FLOAT);
+INSERT INTO t1 VALUES (0), (PI()/2), (PI()), (2*PI()), (-PI());
+SELECT * FROM t1 WHERE DEGREES(radians) > 0;
+DROP TABLE t1;
+
+# Comparison with RADIANS (if implemented)
+# DEGREES(RADIANS(degrees)) should equal degrees
+# SELECT DEGREES(RADIANS(90)) AS should_be_90;
+

@@ -1,0 +1,88 @@
+SELECT YEARWEEK('1987-01-01') AS result1;
+result1
+198652
+SELECT YEARWEEK('1987-01-01') AS yearweek;
+yearweek
+198652
+SELECT YEARWEEK('2008-02-20') AS yearweek_feb;
+yearweek_feb
+200807
+SELECT YEARWEEK('2008-12-31') AS yearweek_dec;
+yearweek_dec
+200852
+SELECT YEARWEEK('1987-01-01', 0) AS yearweek_mode0;
+yearweek_mode0
+198652
+SELECT YEARWEEK('1987-01-01', 1) AS yearweek_mode1;
+yearweek_mode1
+198701
+SELECT YEARWEEK('1987-01-01', 2) AS yearweek_mode2;
+yearweek_mode2
+198652
+SELECT YEARWEEK('1987-01-01', 3) AS yearweek_mode3;
+yearweek_mode3
+198701
+SELECT YEARWEEK('1987-01-01 10:30:45') AS yearweek_datetime;
+yearweek_datetime
+198652
+SELECT YEARWEEK('2008-02-20 12:00:00', 0) AS yearweek_datetime_mode0;
+yearweek_datetime_mode0
+200807
+SELECT YEARWEEK(TIMESTAMP('1987-01-01 10:30:45')) AS yearweek_timestamp;
+yearweek_timestamp
+198652
+SELECT YEARWEEK('2003-12-30') AS yearweek_2003_dec;
+yearweek_2003_dec
+200352
+SELECT YEARWEEK('2004-01-02') AS yearweek_2004_jan;
+yearweek_2004_jan
+200352
+SELECT YEARWEEK('2004-12-31') AS yearweek_2004_dec;
+yearweek_2004_dec
+200452
+SELECT YEARWEEK('2005-01-01') AS yearweek_2005_jan;
+yearweek_2005_jan
+200452
+CREATE TABLE t1(d DATE);
+INSERT INTO t1 VALUES ('1987-01-01'), ('2008-02-20'), ('2008-12-31');
+SELECT d, YEARWEEK(d) AS yearweek FROM t1;
+d    yearweek
+1987-01-01    198652
+2008-02-20    200807
+2008-12-31    200852
+DROP TABLE t1;
+CREATE TABLE t1(d DATE);
+INSERT INTO t1 VALUES ('1987-01-01'), ('2008-06-15'), ('2008-12-31');
+SELECT * FROM t1 WHERE YEARWEEK(d) > 200800;
+d
+2008-06-15
+2008-12-31
+DROP TABLE t1;
+SELECT YEARWEEK(NULL) AS null_result;
+null_result
+null
+SELECT YEARWEEK('1987-01-01', NULL) AS null_mode;
+null_mode
+198652
+SELECT YEARWEEK('1987-01-01') AS yearweek_result,
+YEAR('1987-01-01') AS year_result,
+WEEK('1987-01-01', 0) AS week_result;
+invalid argument function week, bad value [VARCHAR BIGINT]
+SELECT YEARWEEK('2008-01-15') AS jan_week;
+jan_week
+200802
+SELECT YEARWEEK('2008-06-15') AS jun_week;
+jun_week
+200824
+SELECT YEARWEEK('2008-09-15') AS sep_week;
+sep_week
+200837
+SELECT YEARWEEK('2008-12-15') AS dec_week;
+dec_week
+200850
+SELECT YEARWEEK('2008-06-15') AS current_yearweek;
+current_yearweek
+200824
+SELECT YEARWEEK(DATE_ADD('1987-01-01', INTERVAL 7 DAY)) AS week_after;
+week_after
+198701

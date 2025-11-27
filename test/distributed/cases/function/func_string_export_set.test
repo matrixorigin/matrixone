@@ -1,0 +1,62 @@
+# Basic test case from requirements
+SELECT EXPORT_SET(5, 'Y', 'N', ',', 4) AS result1;
+
+# Additional test cases
+# Basic usage
+SELECT EXPORT_SET(5, 'Y', 'N', ',', 4) AS export_set_basic;
+SELECT EXPORT_SET(5, 'Y', 'N') AS export_set_default_sep;
+SELECT EXPORT_SET(5, 'Y', 'N', ',') AS export_set_default_bits;
+
+# Different bit patterns
+SELECT EXPORT_SET(0, 'Y', 'N', ',', 4) AS export_set_zero;
+SELECT EXPORT_SET(15, 'Y', 'N', ',', 4) AS export_set_all_ones;
+SELECT EXPORT_SET(1, 'Y', 'N', ',', 4) AS export_set_one;
+SELECT EXPORT_SET(8, 'Y', 'N', ',', 4) AS export_set_eight;
+
+# Different separators
+SELECT EXPORT_SET(5, 'Y', 'N', '|', 4) AS export_set_pipe;
+SELECT EXPORT_SET(5, 'Y', 'N', '-', 4) AS export_set_dash;
+SELECT EXPORT_SET(5, 'Y', 'N', '', 4) AS export_set_empty_sep;
+SELECT EXPORT_SET(5, 'Y', 'N', ' ', 4) AS export_set_space;
+
+# Different on/off strings
+SELECT EXPORT_SET(5, 'ON', 'OFF', ',', 4) AS export_set_on_off;
+SELECT EXPORT_SET(5, '1', '0', ',', 4) AS export_set_1_0;
+SELECT EXPORT_SET(5, 'true', 'false', ',', 4) AS export_set_true_false;
+
+# Different number_of_bits
+SELECT EXPORT_SET(5, 'Y', 'N', ',', 1) AS export_set_1_bit;
+SELECT EXPORT_SET(5, 'Y', 'N', ',', 2) AS export_set_2_bits;
+SELECT EXPORT_SET(5, 'Y', 'N', ',', 8) AS export_set_8_bits;
+SELECT EXPORT_SET(5, 'Y', 'N', ',', 64) AS export_set_64_bits;
+
+# Large numbers
+SELECT EXPORT_SET(255, 'Y', 'N', ',', 8) AS export_set_255;
+SELECT EXPORT_SET(256, 'Y', 'N', ',', 9) AS export_set_256;
+
+# Negative numbers (treated as unsigned)
+SELECT EXPORT_SET(-1, 'Y', 'N', ',', 8) AS export_set_neg_one;
+
+# NULL handling
+SELECT EXPORT_SET(NULL, 'Y', 'N', ',', 4) AS export_set_null_bits;
+SELECT EXPORT_SET(5, NULL, 'N', ',', 4) AS export_set_null_on;
+SELECT EXPORT_SET(5, 'Y', NULL, ',', 4) AS export_set_null_off;
+SELECT EXPORT_SET(5, 'Y', 'N', NULL, 4) AS export_set_null_sep;
+SELECT EXPORT_SET(5, 'Y', 'N', ',', NULL) AS export_set_null_bits_count;
+
+# Table usage
+CREATE TABLE t1(bits INT, on_str VARCHAR(10), off_str VARCHAR(10));
+INSERT INTO t1 VALUES (5, 'Y', 'N'), (10, 'ON', 'OFF'), (15, '1', '0');
+SELECT bits, EXPORT_SET(bits, on_str, off_str, ',', 4) AS result FROM t1;
+DROP TABLE t1;
+
+# WHERE clause
+CREATE TABLE t1(bits INT);
+INSERT INTO t1 VALUES (5), (10), (15);
+SELECT * FROM t1 WHERE EXPORT_SET(bits, 'Y', 'N', ',', 4) LIKE 'Y%';
+DROP TABLE t1;
+
+# Edge cases
+SELECT EXPORT_SET(0, 'Y', 'N', ',', 0) AS export_set_zero_bits;
+SELECT EXPORT_SET(0, 'Y', 'N', ',', 1) AS export_set_one_bit_zero;
+

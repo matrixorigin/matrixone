@@ -1,0 +1,126 @@
+SELECT IS_IPV4('10.0.5.9') AS result1;
+result1
+1
+SELECT IS_IPV4('10.0.5.9') AS valid_ip1;
+valid_ip1
+1
+SELECT IS_IPV4('192.168.1.1') AS valid_ip2;
+valid_ip2
+1
+SELECT IS_IPV4('127.0.0.1') AS valid_ip3;
+valid_ip3
+1
+SELECT IS_IPV4('255.255.255.255') AS valid_ip4;
+valid_ip4
+1
+SELECT IS_IPV4('0.0.0.0') AS valid_ip5;
+valid_ip5
+1
+SELECT IS_IPV4('1.1.1.1') AS valid_ip6;
+valid_ip6
+1
+SELECT IS_IPV4('invalid') AS invalid1;
+invalid1
+0
+SELECT IS_IPV4('256.256.256.256') AS invalid2;
+invalid2
+0
+SELECT IS_IPV4('192.168.1') AS invalid3;
+invalid3
+0
+SELECT IS_IPV4('192.168.1.1.1') AS invalid4;
+invalid4
+0
+SELECT IS_IPV4('::1') AS invalid5;  -- IPv6 address
+invalid5
+0
+SELECT IS_IPV4('2001:db8::1') AS invalid6;  -- IPv6 address
+invalid6
+0
+SELECT IS_IPV4('') AS invalid7;  -- Empty string
+invalid7
+0
+SELECT IS_IPV4('192.168.1.256') AS invalid8;  -- Octet > 255
+invalid8
+0
+SELECT IS_IPV4('192.168.-1.1') AS invalid9;  -- Negative octet
+invalid9
+0
+SELECT IS_IPV4('192.168.1.1.') AS invalid10;  -- Trailing dot
+invalid10
+0
+SELECT IS_IPV4(NULL) AS null_input;
+null_input
+null
+CREATE TABLE t1(id INT, ip_str VARCHAR(50));
+INSERT INTO t1 VALUES (1, '192.168.1.1');
+INSERT INTO t1 VALUES (2, '10.0.0.1');
+INSERT INTO t1 VALUES (3, '::1');
+INSERT INTO t1 VALUES (4, 'invalid');
+INSERT INTO t1 VALUES (5, NULL);
+INSERT INTO t1 VALUES (6, '127.0.0.1');
+SELECT id, ip_str, IS_IPV4(ip_str) AS is_valid FROM t1;
+id    ip_str    is_valid
+1    192.168.1.1    1
+2    10.0.0.1    1
+3    ::1    0
+4    invalid    0
+5    null    null
+6    127.0.0.1    1
+DROP TABLE t1;
+CREATE TABLE t1(id INT, ip_str VARCHAR(50));
+INSERT INTO t1 VALUES (1, '192.168.1.1'), (2, '::1'), (3, '10.0.0.1'), (4, 'invalid');
+SELECT id, ip_str FROM t1 WHERE IS_IPV4(ip_str) = 1;
+id    ip_str
+1    192.168.1.1
+3    10.0.0.1
+SELECT id, ip_str FROM t1 WHERE IS_IPV4(ip_str) = 0;
+id    ip_str
+2    ::1
+4    invalid
+DROP TABLE t1;
+SELECT IS_IPV4('192.168.1.1') AS ip1, IS_IPV4('::1') AS ip2, IS_IPV4('10.0.0.1') AS ip3;
+ip1    ip2    ip3
+1    0    1
+SELECT IS_IPV4('192.168.1.1') = 1 AS is_valid_ip;
+is_valid_ip
+true
+SELECT IS_IPV4('::1') = 0 AS is_not_ipv4;
+is_not_ipv4
+true
+SELECT IS_IPV4('0.0.0.0') AS zero_ip;
+zero_ip
+1
+SELECT IS_IPV4('255.255.255.255') AS max_ip;
+max_ip
+1
+SELECT IS_IPV4('1.1.1.1') AS min_nonzero;
+min_nonzero
+1
+SELECT IS_IPV4('192.168.01.1') AS leading_zero;  -- Should be valid (01 = 1)
+leading_zero
+0
+SELECT IS_IPV4('192.168.1') AS incomplete;
+incomplete
+0
+SELECT IS_IPV4('192.168.1.') AS trailing_dot;
+trailing_dot
+0
+SELECT IS_IPV4('.192.168.1.1') AS leading_dot;
+leading_dot
+0
+SELECT IS_IPV4(INET_NTOA(3232235777)) AS from_ntoa;
+from_ntoa
+1
+SELECT IS_IPV4('192.168.1.1') AND IS_IPV4('10.0.0.1') AS both_valid;
+both_valid
+true
+SELECT IS_IPV4('192.168.1.1') OR IS_IPV4('::1') AS one_valid;
+one_valid
+true
+CREATE TABLE t1(id INT, ip_str VARCHAR(50));
+INSERT INTO t1 VALUES (1, '192.168.1.1'), (2, '::1');
+SELECT (SELECT IS_IPV4(ip_str) FROM t1 WHERE id = 1) AS subquery_result;
+subquery_result
+1
+DROP TABLE t1;

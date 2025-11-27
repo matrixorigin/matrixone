@@ -1,0 +1,48 @@
+# Basic test case from requirements
+SELECT GET_FORMAT(DATE, 'USA') AS result1;
+
+# Additional test cases
+# DATE formats
+SELECT GET_FORMAT(DATE, 'USA') AS date_usa;
+SELECT GET_FORMAT(DATE, 'EUR') AS date_eur;
+SELECT GET_FORMAT(DATE, 'JIS') AS date_jis;
+SELECT GET_FORMAT(DATE, 'ISO') AS date_iso;
+SELECT GET_FORMAT(DATE, 'INTERNAL') AS date_internal;
+
+# TIME formats
+SELECT GET_FORMAT(TIME, 'USA') AS time_usa;
+SELECT GET_FORMAT(TIME, 'EUR') AS time_eur;
+SELECT GET_FORMAT(TIME, 'JIS') AS time_jis;
+SELECT GET_FORMAT(TIME, 'ISO') AS time_iso;
+SELECT GET_FORMAT(TIME, 'INTERNAL') AS time_internal;
+
+# DATETIME formats
+SELECT GET_FORMAT(DATETIME, 'USA') AS datetime_usa;
+SELECT GET_FORMAT(DATETIME, 'EUR') AS datetime_eur;
+SELECT GET_FORMAT(DATETIME, 'JIS') AS datetime_jis;
+SELECT GET_FORMAT(DATETIME, 'ISO') AS datetime_iso;
+SELECT GET_FORMAT(DATETIME, 'INTERNAL') AS datetime_internal;
+
+# Case insensitive
+SELECT GET_FORMAT('date', 'usa') AS date_lowercase;
+SELECT GET_FORMAT('DATE', 'Eur') AS date_mixed;
+
+# NULL handling
+SELECT GET_FORMAT(NULL, 'USA') AS null_type;
+SELECT GET_FORMAT(DATE, NULL) AS null_locale;
+SELECT GET_FORMAT(NULL, NULL) AS null_both;
+
+# Invalid type/locale (should return NULL)
+SELECT GET_FORMAT('INVALID', 'USA') AS invalid_type;
+SELECT GET_FORMAT(DATE, 'INVALID') AS invalid_locale;
+
+# Table usage
+CREATE TABLE t1(type_col VARCHAR(10), locale_col VARCHAR(10));
+INSERT INTO t1 VALUES ('DATE', 'USA'), ('TIME', 'EUR'), ('DATETIME', 'JIS');
+SELECT GET_FORMAT(type_col, locale_col) AS format_str FROM t1;
+DROP TABLE t1;
+
+# Using with DATE_FORMAT
+SELECT DATE_FORMAT('2024-12-20', GET_FORMAT(DATE, 'USA')) AS formatted_date;
+SELECT DATE_FORMAT('2024-12-20 15:30:45', GET_FORMAT(DATETIME, 'EUR')) AS formatted_datetime;
+

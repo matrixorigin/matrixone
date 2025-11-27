@@ -1,0 +1,42 @@
+# Basic test case from requirements
+SELECT JSON_OBJECT('name', 'John', 'age', 30) AS result1;
+
+# Additional test cases
+# Basic objects
+SELECT JSON_OBJECT('name', 'John', 'age', 30) AS basic_object;
+SELECT JSON_OBJECT('a', 1, 'b', 2, 'c', 3) AS multiple_pairs;
+SELECT JSON_OBJECT('key', 'value') AS single_pair;
+SELECT JSON_OBJECT() AS empty_object;
+
+# Different value types
+SELECT JSON_OBJECT('int', 42, 'float', 3.14, 'bool', true, 'string', 'hello') AS mixed_types;
+SELECT JSON_OBJECT('null_val', NULL) AS null_value;
+
+# Nested JSON
+SELECT JSON_OBJECT('nested', JSON_ARRAY(1, 2, 3)) AS nested_array;
+SELECT JSON_OBJECT('obj', JSON_OBJECT('a', 1, 'b', 2)) AS nested_object;
+
+# Date and time types
+SELECT JSON_OBJECT('date', '2024-12-20', 'time', '10:30:45') AS date_time;
+
+# NULL handling
+SELECT JSON_OBJECT('key1', NULL, 'key2', 'value') AS null_in_object;
+
+# Table usage
+CREATE TABLE t1(name VARCHAR(10), age INT, city VARCHAR(10));
+INSERT INTO t1 VALUES ('John', 30, 'NYC'), ('Jane', 25, 'LA'), ('Bob', 35, 'Chicago');
+SELECT JSON_OBJECT('name', name, 'age', age, 'city', city) AS json_obj FROM t1;
+DROP TABLE t1;
+
+# WHERE clause
+CREATE TABLE t1(id INT, name VARCHAR(10));
+INSERT INTO t1 VALUES (1, 'Alice'), (2, 'Bob'), (3, 'Charlie');
+SELECT * FROM t1 WHERE JSON_OBJECT('id', id, 'name', name) IS NOT NULL;
+DROP TABLE t1;
+
+# Multiple JSON_OBJECT calls
+SELECT JSON_OBJECT('a', 1) AS obj1, JSON_OBJECT('b', 2) AS obj2, JSON_OBJECT('c', 3) AS obj3;
+
+# Complex nested structures
+SELECT JSON_OBJECT('person', JSON_OBJECT('name', 'John', 'age', 30), 'hobbies', JSON_ARRAY('reading', 'coding')) AS complex;
+

@@ -1,0 +1,57 @@
+# Basic test case from requirements
+SELECT TIME_FORMAT('15:30:45', '%H:%i:%s') AS result1;
+
+# Additional test cases
+# Basic time formats
+SELECT TIME_FORMAT('15:30:45', '%H:%i:%s') AS basic_format;
+SELECT TIME_FORMAT('15:30:45', '%T') AS t_format;
+SELECT TIME_FORMAT('00:00:00', '%H:%i:%s') AS zero_time;
+SELECT TIME_FORMAT('23:59:59', '%H:%i:%s') AS max_time;
+
+# 12-hour format with AM/PM
+SELECT TIME_FORMAT('15:30:45', '%h:%i:%s %p') AS hour12_pm;
+SELECT TIME_FORMAT('00:00:00', '%h:%i:%s %p') AS hour12_am;
+SELECT TIME_FORMAT('12:00:00', '%h:%i:%s %p') AS hour12_noon;
+SELECT TIME_FORMAT('12:34:56', '%h:%i:%s %p') AS hour12_afternoon;
+
+# %r format (12-hour time with AM/PM)
+SELECT TIME_FORMAT('15:30:45', '%r') AS r_format_pm;
+SELECT TIME_FORMAT('00:00:00', '%r') AS r_format_am;
+SELECT TIME_FORMAT('12:34:56', '%r') AS r_format_noon;
+
+# With microseconds
+SELECT TIME_FORMAT('15:30:45.123456', '%H:%i:%s.%f') AS with_microseconds;
+SELECT TIME_FORMAT('12:34:56.789012', '%H:%i:%s.%f') AS with_microseconds2;
+
+# Different hour formats
+SELECT TIME_FORMAT('15:30:45', '%H') AS hour_24;
+SELECT TIME_FORMAT('15:30:45', '%h') AS hour_12;
+SELECT TIME_FORMAT('15:30:45', '%k') AS hour_24_no_zero;
+SELECT TIME_FORMAT('15:30:45', '%l') AS hour_12_no_zero;
+SELECT TIME_FORMAT('15:30:45', '%I') AS hour_12_alt;
+
+# Minute and second formats
+SELECT TIME_FORMAT('15:30:45', '%i') AS minute;
+SELECT TIME_FORMAT('15:30:45', '%S') AS second;
+SELECT TIME_FORMAT('15:30:45', '%s') AS second_alt;
+
+# NULL handling
+SELECT TIME_FORMAT(NULL, '%H:%i:%s') AS null_time;
+SELECT TIME_FORMAT('15:30:45', NULL) AS null_format;
+
+# Table usage
+CREATE TABLE t1(t TIME);
+INSERT INTO t1 VALUES ('15:30:45'), ('00:00:00'), ('23:59:59'), ('12:34:56');
+SELECT t, TIME_FORMAT(t, '%H:%i:%s') AS formatted FROM t1;
+DROP TABLE t1;
+
+# WHERE clause
+CREATE TABLE t1(t TIME);
+INSERT INTO t1 VALUES ('15:30:45'), ('00:00:00'), ('23:59:59'), ('12:34:56');
+SELECT * FROM t1 WHERE TIME_FORMAT(t, '%H') = '15';
+DROP TABLE t1;
+
+# Complex format strings
+SELECT TIME_FORMAT('15:30:45.123456', '%H:%i:%s.%f') AS complex_format;
+SELECT TIME_FORMAT('15:30:45', 'Time is %H:%i:%s') AS with_text;
+

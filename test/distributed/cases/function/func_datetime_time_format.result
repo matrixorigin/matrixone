@@ -1,0 +1,93 @@
+SELECT TIME_FORMAT('15:30:45', '%H:%i:%s') AS result1;
+result1
+15:30:45
+SELECT TIME_FORMAT('15:30:45', '%H:%i:%s') AS basic_format;
+basic_format
+15:30:45
+SELECT TIME_FORMAT('15:30:45', '%T') AS t_format;
+t_format
+15:30:45
+SELECT TIME_FORMAT('00:00:00', '%H:%i:%s') AS zero_time;
+zero_time
+00:00:00
+SELECT TIME_FORMAT('23:59:59', '%H:%i:%s') AS max_time;
+max_time
+23:59:59
+SELECT TIME_FORMAT('15:30:45', '%h:%i:%s %p') AS hour12_pm;
+hour12_pm
+03:30:45 PM
+SELECT TIME_FORMAT('00:00:00', '%h:%i:%s %p') AS hour12_am;
+hour12_am
+12:00:00 AM
+SELECT TIME_FORMAT('12:00:00', '%h:%i:%s %p') AS hour12_noon;
+hour12_noon
+12:00:00 PM
+SELECT TIME_FORMAT('12:34:56', '%h:%i:%s %p') AS hour12_afternoon;
+hour12_afternoon
+12:34:56 PM
+SELECT TIME_FORMAT('15:30:45', '%r') AS r_format_pm;
+r_format_pm
+03:30:45 PM
+SELECT TIME_FORMAT('00:00:00', '%r') AS r_format_am;
+r_format_am
+12:00:00 AM
+SELECT TIME_FORMAT('12:34:56', '%r') AS r_format_noon;
+r_format_noon
+12:34:56 PM
+SELECT TIME_FORMAT('15:30:45.123456', '%H:%i:%s.%f') AS with_microseconds;
+with_microseconds
+15:30:45.123456
+SELECT TIME_FORMAT('12:34:56.789012', '%H:%i:%s.%f') AS with_microseconds2;
+with_microseconds2
+12:34:56.789012
+SELECT TIME_FORMAT('15:30:45', '%H') AS hour_24;
+hour_24
+15
+SELECT TIME_FORMAT('15:30:45', '%h') AS hour_12;
+hour_12
+03
+SELECT TIME_FORMAT('15:30:45', '%k') AS hour_24_no_zero;
+hour_24_no_zero
+15
+SELECT TIME_FORMAT('15:30:45', '%l') AS hour_12_no_zero;
+hour_12_no_zero
+3
+SELECT TIME_FORMAT('15:30:45', '%I') AS hour_12_alt;
+hour_12_alt
+03
+SELECT TIME_FORMAT('15:30:45', '%i') AS minute;
+minute
+30
+SELECT TIME_FORMAT('15:30:45', '%S') AS second;
+second
+45
+SELECT TIME_FORMAT('15:30:45', '%s') AS second_alt;
+second_alt
+45
+SELECT TIME_FORMAT(NULL, '%H:%i:%s') AS null_time;
+null_time
+null
+SELECT TIME_FORMAT('15:30:45', NULL) AS null_format;
+null_format
+null
+CREATE TABLE t1(t TIME);
+INSERT INTO t1 VALUES ('15:30:45'), ('00:00:00'), ('23:59:59'), ('12:34:56');
+SELECT t, TIME_FORMAT(t, '%H:%i:%s') AS formatted FROM t1;
+t    formatted
+15:30:45    15:30:45
+00:00:00    00:00:00
+23:59:59    23:59:59
+12:34:56    12:34:56
+DROP TABLE t1;
+CREATE TABLE t1(t TIME);
+INSERT INTO t1 VALUES ('15:30:45'), ('00:00:00'), ('23:59:59'), ('12:34:56');
+SELECT * FROM t1 WHERE TIME_FORMAT(t, '%H') = '15';
+t
+15:30:45
+DROP TABLE t1;
+SELECT TIME_FORMAT('15:30:45.123456', '%H:%i:%s.%f') AS complex_format;
+complex_format
+15:30:45.123456
+SELECT TIME_FORMAT('15:30:45', 'Time is %H:%i:%s') AS with_text;
+with_text
+Time is 15:30:45

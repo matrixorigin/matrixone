@@ -150,3 +150,10 @@ select hour(now());
 select minute(now());
 -- @ignore:0
 select second(now());
+
+-- should be true
+select localtime() = now() as should_be_true;
+select localtime = now() as should_be_true;
+
+select localtimestamp() = now() as should_be_true;
+select localtimestamp = now() as should_be_true;
