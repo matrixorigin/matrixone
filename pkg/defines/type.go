@@ -249,6 +249,10 @@ type VarScopeKey struct{}
 // Determine if it is a stored procedure
 type InSp struct{}
 
+// IvfBloomFilter carries BloomFilter bytes for ivf entries scan in internal SQL executor.
+// This key is set on context when invoking internal SQL from ivf_search.
+type IvfBloomFilter struct{}
+
 // PkCheckByTN whether TN does primary key uniqueness check against transaction's workspace or not.
 type PkCheckByTN struct{}
 

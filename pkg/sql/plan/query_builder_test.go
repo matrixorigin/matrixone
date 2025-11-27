@@ -380,7 +380,7 @@ func TestQueryBuilder_bindLimit(t *testing.T) {
 	stmts, _ := parsers.Parse(context.TODO(), dialect.MYSQL, "select a from select_test.bind_select limit 1, 5", 1)
 	astLimit := stmts[0].(*tree.Select).Limit
 
-	boundOffsetExpr, boundCountExpr, err := builder.bindLimit(bindCtx, astLimit)
+	boundOffsetExpr, boundCountExpr, _, err := builder.bindLimit(bindCtx, astLimit)
 	require.NoError(t, err)
 	require.Equal(t, int32(types.T_uint64), boundOffsetExpr.Typ.Id)
 	offsetExpr, ok := boundOffsetExpr.Expr.(*plan.Expr_Lit)
@@ -806,4 +806,118 @@ func TestQueryBuilder_buildRemapErrorMessage(t *testing.T) {
 			assert.Contains(t, result, "Column remapping failed", "%s: should start with error header", tt.desc)
 		})
 	}
+}
+
+func TestParseRankOption(t *testing.T) {
+	ctx := context.TODO()
+
+	t.Run("valid mode pre", func(t *testing.T) {
+		options := map[string]string{
+			"mode": "pre",
+		}
+		rankOption, err := parseRankOption(options, ctx)
+		require.NoError(t, err)
+		require.NotNil(t, rankOption)
+		require.Equal(t, "pre", rankOption.Mode)
+	})
+
+	t.Run("valid mode post", func(t *testing.T) {
+		options := map[string]string{
+			"mode": "post",
+		}
+		rankOption, err := parseRankOption(options, ctx)
+		require.NoError(t, err)
+		require.NotNil(t, rankOption)
+		require.Equal(t, "post", rankOption.Mode)
+	})
+
+	t.Run("valid mode case insensitive", func(t *testing.T) {
+		options := map[string]string{
+			"MODE": "PRE",
+		}
+		rankOption, err := parseRankOption(options, ctx)
+		require.NoError(t, err)
+		require.NotNil(t, rankOption)
+		require.Equal(t, "pre", rankOption.Mode)
+	})
+
+	t.Run("valid mode with whitespace", func(t *testing.T) {
+		options := map[string]string{
+			"mode": "  post  ",
+		}
+		rankOption, err := parseRankOption(options, ctx)
+		require.NoError(t, err)
+		require.NotNil(t, rankOption)
+		require.Equal(t, "post", rankOption.Mode)
+	})
+
+	t.Run("invalid mode value", func(t *testing.T) {
+		options := map[string]string{
+			"mode": "invalid",
+		}
+		rankOption, err := parseRankOption(options, ctx)
+		require.Error(t, err)
+		require.Nil(t, rankOption)
+		require.Contains(t, err.Error(), "mode must be 'pre' or 'post'")
+		require.Contains(t, err.Error(), "invalid")
+	})
+
+	t.Run("empty options map", func(t *testing.T) {
+		options := map[string]string{}
+		rankOption, err := parseRankOption(options, ctx)
+		require.NoError(t, err)
+		require.Nil(t, rankOption)
+	})
+
+	t.Run("nil options map", func(t *testing.T) {
+		var options map[string]string = nil
+		rankOption, err := parseRankOption(options, ctx)
+		require.NoError(t, err)
+		require.Nil(t, rankOption)
+	})
+
+	t.Run("options without mode", func(t *testing.T) {
+		options := map[string]string{
+			"fudge_factor": "3.0",
+			"nprobe":       "10",
+		}
+		rankOption, err := parseRankOption(options, ctx)
+		require.NoError(t, err)
+		require.Nil(t, rankOption)
+	})
+
+	t.Run("options with mode and other options", func(t *testing.T) {
+		options := map[string]string{
+			"mode":         "pre",
+			"fudge_factor": "3.0",
+			"nprobe":       "10",
+		}
+		rankOption, err := parseRankOption(options, ctx)
+		require.NoError(t, err)
+		require.NotNil(t, rankOption)
+		require.Equal(t, "pre", rankOption.Mode)
+	})
+
+	t.Run("case insensitive key matching", func(t *testing.T) {
+		options := map[string]string{
+			"MoDe": "post",
+		}
+		rankOption, err := parseRankOption(options, ctx)
+		require.NoError(t, err)
+		require.NotNil(t, rankOption)
+		require.Equal(t, "post", rankOption.Mode)
+	})
+
+	t.Run("multiple mode keys with different cases", func(t *testing.T) {
+		options := map[string]string{
+			"mode": "pre",
+			"MODE": "post",
+		}
+		// Should match the first one found (order is not guaranteed in map iteration)
+		rankOption, err := parseRankOption(options, ctx)
+		require.NoError(t, err)
+		require.NotNil(t, rankOption)
+		// The actual value depends on map iteration order, but should be either "pre" or "post"
+		require.Contains(t, []string{"pre", "post"}, rankOption.Mode)
+	})
 }

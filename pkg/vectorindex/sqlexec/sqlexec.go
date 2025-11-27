@@ -72,6 +72,10 @@ func (s *SqlContext) SetResolveVariableFunc(f func(varName string, isSystemVar, 
 type SqlProcess struct {
 	Proc   *process.Process
 	SqlCtx *SqlContext
+
+	// Optional BloomFilter bytes attached by vector index runtime.
+	// Used to drive additional filtering in internal SQL executor (e.g. ivf entries scan).
+	BloomFilter []byte
 }
 
 func NewSqlProcess(proc *process.Process) *SqlProcess {
@@ -117,6 +121,14 @@ func RunSql(sqlproc *SqlProcess, sql string) (executor.Result, error) {
 
 		//-------------------------------------------------------
 		topContext := proc.GetTopContext()
+		// Attach optional Ivf BloomFilter to context for internal executor.
+		if len(sqlproc.BloomFilter) > 0 {
+			topContext = context.WithValue(
+				topContext,
+				defines.IvfBloomFilter{},
+				sqlproc.BloomFilter,
+			)
+		}
 		accountId, err := defines.GetAccountId(proc.Ctx)
 		if err != nil {
 			return executor.Result{}, err
