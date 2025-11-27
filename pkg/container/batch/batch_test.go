@@ -612,3 +612,80 @@ func TestBatchUnmarshalWithAnyMp_SameLengthReuse(t *testing.T) {
 	reusedBat.Clean(mp)
 	require.Equal(t, int64(0), mp.CurrNB())
 }
+
+// TestBatchUnmarshalWithAnyMp_SerializedLengthMismatch tests handling of inconsistent serialized data
+// where serialized Vecs length != serialized Attrs length (can occur in practice)
+// The fix ensures Attrs length always matches Vecs length, using Vecs length as authoritative
+func TestBatchUnmarshalWithAnyMp_SerializedLengthMismatch(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	// Create a normal batch: 2 Vecs, 2 Attrs
+	bat := NewWithSize(2)
+	bat.Attrs = []string{"col1", "col2"}
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	bat.SetRowCount(2)
+	vector.AppendFixed(bat.Vecs[0], int32(1), false, mp)
+	vector.AppendFixed(bat.Vecs[0], int32(2), false, mp)
+	vector.AppendFixed(bat.Vecs[1], int32(10), false, mp)
+	vector.AppendFixed(bat.Vecs[1], int32(20), false, mp)
+
+	// Marshal it
+	data, err := bat.MarshalBinary()
+	require.NoError(t, err)
+
+	// Manually modify the serialized data to create inconsistency:
+	// Change Attrs length from 2 to 3 in the serialized data
+	// Format: | rowCount(8) | VecsLen(4) | Vecs... | AttrsLen(4) | Attrs... | ...
+	offset := 8 + 4 // skip rowCount and VecsLen
+	// Skip Vecs data to find AttrsLen position
+	for i := 0; i < 2; i++ {
+		vecSize := types.DecodeInt32(data[offset:])
+		offset += 4 + int(vecSize)
+	}
+	// Now offset points to AttrsLen
+	// Change it from 2 to 3 and add an extra attr entry
+	three := int32(3)
+	attrsLenBytes := types.EncodeInt32(&three)
+	newData := make([]byte, 0, len(data)+13)
+	newData = append(newData, data[:offset]...)
+	newData = append(newData, attrsLenBytes...)
+	// Keep existing two attrs, then add third
+	offset += 4
+	// Copy existing two attrs
+	attrsDataOffset := offset
+	for i := 0; i < 2; i++ {
+		attrSize := types.DecodeInt32(data[attrsDataOffset:])
+		newData = append(newData, data[attrsDataOffset:attrsDataOffset+4+int(attrSize)]...)
+		attrsDataOffset += 4 + int(attrSize)
+	}
+	// Add third attr
+	extraAttrSize := int32(5) // "extra" is 5 bytes
+	newData = append(newData, types.EncodeInt32(&extraAttrSize)...)
+	newData = append(newData, []byte("extra")...)
+	// Copy rest of data
+	newData = append(newData, data[attrsDataOffset:]...)
+	data = newData
+
+	// Clean up original batch
+	bat.Clean(mp)
+
+	// Unmarshal the inconsistent data
+	// Vecs length = 2 (from serialized data), but serialized Attrs length = 3
+	// The fix should ensure Attrs length matches Vecs length (2), ignoring the extra Attr
+	testBat := &Batch{}
+	testBat.offHeap = false
+	err = testBat.UnmarshalBinaryWithAnyMp(data, mp)
+	require.NoError(t, err)
+
+	// Attrs length should match Vecs length (2), not serialized Attrs length (3)
+	require.Equal(t, 2, len(testBat.Vecs), "Vecs length should be 2")
+	require.Equal(t, 2, len(testBat.Attrs), "Attrs length should match Vecs length (2), ignoring serialized length (3)")
+	require.Equal(t, len(testBat.Vecs), len(testBat.Attrs), "Vecs and Attrs must have same length")
+	require.Equal(t, "col1", testBat.Attrs[0], "First attr should be correct")
+	require.Equal(t, "col2", testBat.Attrs[1], "Second attr should be correct")
+
+	// Clean up
+	testBat.Clean(mp)
+	require.Equal(t, int64(0), mp.CurrNB())
+}

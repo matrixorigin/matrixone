@@ -229,10 +229,12 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 	data = data[8:]
 
 	l := types.DecodeInt32(data[:4])
+	// Fix for bug #23156: Handle Vecs length changes (from d4b79f12) while maintaining revert version's firstTime logic
+	firstTime := bat.Vecs == nil
 	vecsLen := int(l)
-	vecsLenChanged := vecsLen != len(bat.Vecs)
-	if vecsLenChanged {
-		if len(bat.Vecs) > 0 {
+	vecsLenChanged := !firstTime && vecsLen != len(bat.Vecs)
+	if firstTime || vecsLenChanged {
+		if vecsLenChanged && len(bat.Vecs) > 0 {
 			bat.Clean(mp)
 		}
 		bat.Vecs = make([]*vector.Vector, vecsLen)
@@ -248,7 +250,7 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 	vecs := bat.Vecs
 	data = data[4:]
 
-	for i := 0; i < int(l); i++ {
+	for i := 0; i < vecsLen; i++ {
 		size := types.DecodeInt32(data[:4])
 		data = data[4:]
 
@@ -260,30 +262,35 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 	}
 
 	l = types.DecodeInt32(data[:4])
-	// Fix for bug #23156: Attrs length must always match Vecs length to prevent data mapping errors
-	// The original bug in d4b79f12 was that Attrs length was checked independently against serialized length,
-	// which could lead to inconsistency when batch is reused with different Vecs/Attrs configurations.
-	// Key insight: When Vecs length changes, we must also reset Attrs to match the new Vecs length.
-	// We ensure bat.Attrs length always equals vecsLen (the actual Vecs length), regardless of serialized Attrs length.
+	// Fix for bug #23156: Attrs length MUST always match Vecs length
+	// Vecs length (vecsLen) is authoritative - it's already allocated and deserialized
+	// If serialized Attrs length differs from Vecs length, we use Vecs length as the source of truth
+	// This handles cases where serialized data has inconsistent lengths (which can occur in practice)
 	serializedAttrsLen := int(l)
-	if vecsLenChanged || vecsLen != len(bat.Attrs) {
-		// If Vecs length changed, we already reallocated Vecs above, so we must also reallocate Attrs
-		// If Attrs length doesn't match Vecs length, we need to fix it
+	if vecsLen != len(bat.Attrs) {
 		bat.Attrs = make([]string, vecsLen)
 	}
 	data = data[4:]
 
-	// Always update Attrs from serialized data, but only up to vecsLen to ensure consistency with Vecs
-	// This ensures Attrs content is fully refreshed from serialized data
-	for i := 0; i < serializedAttrsLen; i++ {
+	// Read serialized Attrs, but only up to min(serializedAttrsLen, vecsLen)
+	// If serialized length > vecsLen: ignore excess (data inconsistency, Vecs length is authoritative)
+	// If serialized length < vecsLen: read what's available (remaining will be empty strings, should not happen normally)
+	attrsToRead := serializedAttrsLen
+	if attrsToRead > vecsLen {
+		attrsToRead = vecsLen
+	}
+	for i := 0; i < attrsToRead; i++ {
 		size := types.DecodeInt32(data[:4])
 		data = data[4:]
-		if i < vecsLen {
-			bat.Attrs[i] = string(data[:size])
-		}
+		bat.Attrs[i] = string(data[:size])
 		data = data[size:]
 	}
-	// If serializedAttrsLen < vecsLen, remaining Attrs are already empty strings from make([]string, vecsLen)
+	// If serialized Attrs length > vecsLen, skip the excess data
+	for i := attrsToRead; i < serializedAttrsLen; i++ {
+		size := types.DecodeInt32(data[:4])
+		data = data[4:]
+		data = data[size:]
+	}
 
 	l = types.DecodeInt32(data[:4])
 	aggs := make([][]byte, l)
