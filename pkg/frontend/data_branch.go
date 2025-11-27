@@ -1503,7 +1503,6 @@ func writeCSV(
 
 	wg.Add(1)
 	if err = tblStuff.worker.Submit(func() {
-		t := time.Now()
 		defer func() {
 			wg.Done()
 			close(streamChan)
