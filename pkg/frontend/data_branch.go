@@ -2860,7 +2860,7 @@ func handleDelsOnLCA(
 	sqlBuf.WriteString(" order by pks.__idx_")
 
 	sql = sqlBuf.String()
-	if sqlRet, err = sqlexec.RunSql(ses.proc, sql); err != nil {
+	if sqlRet, err = sqlexec.RunSql(sqlexec.NewSqlProcess(ses.proc), sql); err != nil {
 		return
 	}
 
@@ -3635,7 +3635,7 @@ func getTablesCreationCommitTS(
 		ses.accountId, base.GetTableDef(ctx).DbName, base.GetTableName(),
 	))
 
-	if sqlRet, err = sqlexec.RunSql(ses.proc, buf.String()); err != nil {
+	if sqlRet, err = sqlexec.RunSql(sqlexec.NewSqlProcess(ses.proc), buf.String()); err != nil {
 		return
 	}
 
@@ -3794,7 +3794,7 @@ func constructBranchDAG(
 	}()
 
 	if sqlRet, err = sqlexec.RunSql(
-		ses.proc,
+		sqlexec.NewSqlProcess(ses.proc),
 		fmt.Sprintf(scanBranchMetadataSql, catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA),
 	); err != nil {
 		return
