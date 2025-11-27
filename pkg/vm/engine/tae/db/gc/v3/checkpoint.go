@@ -584,7 +584,6 @@ func (c *checkpointCleaner) deleteStaleSnapshotFilesLocked() error {
 		newMaxTS types.TS,
 		err error,
 	) {
-
 		if maxFile == "" {
 			newMaxFile = thisFile
 			newMaxTS = *thisTS
@@ -608,6 +607,7 @@ func (c *checkpointCleaner) deleteStaleSnapshotFilesLocked() error {
 					zap.String("new-max-file", newMaxFile),
 					zap.String("new-max-ts", newMaxTS.ToString()),
 				)
+				return
 			}
 			logutil.Info(
 				"GC-TRACE-DELETE-SNAPSHOT-FILE",
@@ -617,6 +617,7 @@ func (c *checkpointCleaner) deleteStaleSnapshotFilesLocked() error {
 			)
 			// TODO: seem to be a bug
 			delete(metaFiles, maxFile)
+			return
 		}
 
 		// thisTS <= maxTS: this file is expired and should be deleted
