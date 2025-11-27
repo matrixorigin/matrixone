@@ -740,7 +740,7 @@ func TestExecBackupWithProtectionUpdate(t *testing.T) {
 				t.Logf("Expected panic in execBackup: %v", r)
 			}
 		}()
-		err = execBackup(ctx, "", srcFs, dstFs, names, 1, ts, "full", nil)
+		err = execBackup(ctx, "", srcFs, dstFs, names, 1, ts, "full", nil, nil)
 		_ = err
 	}()
 }
