@@ -287,6 +287,7 @@ func (m *ColRefRemapping) String() string {
 	return sb.String()
 }
 
+// XXX: It's dangerous to copy binding/message tags if both old and new nodes are eventually used.
 func (builder *QueryBuilder) copyNode(ctx *BindContext, nodeId int32) int32 {
 	node := builder.qry.Nodes[nodeId]
 	newNode := DeepCopyNode(node)

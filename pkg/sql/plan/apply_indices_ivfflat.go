@@ -217,6 +217,10 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, projN
 		secondScanNodeID := builder.copyNode(ctx, scanNode.NodeId)
 		secondScanNode := builder.qry.Nodes[secondScanNodeID]
 
+		for i := range secondScanNode.BindingTags {
+			secondScanNode.BindingTags[i] = builder.genNewBindTag()
+		}
+
 		// second scan is only used for runtime filter & inner join, should not inherit limit/offset from original table.
 		// Otherwise BloomFilter will only see the truncated primary key set, causing data loss.
 		secondScanNode.Limit = nil
