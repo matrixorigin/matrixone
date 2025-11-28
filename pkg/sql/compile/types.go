@@ -141,8 +141,7 @@ type Source struct {
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 	OrderBy            []*plan.OrderBySpec // for ordered scan
 
-	BlockOrderBy []*plan.OrderBySpec
-	BlockLimit   uint64
+	IndexReaderParam *plan.IndexReaderParam
 
 	RecvMsgList []plan.MsgHeader
 }

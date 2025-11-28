@@ -305,8 +305,8 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 	}
 
 	// Get Sort list info
-	if len(ndesc.Node.BlockOrderBy) > 0 {
-		orderByInfo, err := ndesc.GetBlockOrderByInfo(ctx, options)
+	if ndesc.Node.IndexReaderParam != nil {
+		orderByInfo, err := ndesc.GetIndexReaderParamInfo(ctx, options)
 		if err != nil {
 			return nil, err
 		}
@@ -429,16 +429,6 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 			if err != nil {
 				return nil, err
 			}
-		}
-		lines = append(lines, buf.String())
-	}
-
-	if ndesc.Node.BlockLimit != nil {
-		buf := bytes.NewBuffer(make([]byte, 0, 160))
-		buf.WriteString("Block Limit: ")
-		err := describeExpr(ctx, ndesc.Node.BlockLimit, options, buf)
-		if err != nil {
-			return nil, err
 		}
 		lines = append(lines, buf.String())
 	}
@@ -998,8 +988,8 @@ func (ndesc *NodeDescribeImpl) GetOrderByInfo(ctx context.Context, options *Expl
 	buf := bytes.NewBuffer(make([]byte, 0, 300))
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		buf.WriteString("Sort Key: ")
-		blockOrderByDescImpl := NewOrderByDescribeImpl(ndesc.Node.OrderBy)
-		err := blockOrderByDescImpl.GetDescription(ctx, options, buf)
+		orderByDescImpl := NewOrderByDescribeImpl(ndesc.Node.OrderBy)
+		err := orderByDescImpl.GetDescription(ctx, options, buf)
 		if err != nil {
 			return "", err
 		}
@@ -1011,14 +1001,63 @@ func (ndesc *NodeDescribeImpl) GetOrderByInfo(ctx context.Context, options *Expl
 	return buf.String(), nil
 }
 
-func (ndesc *NodeDescribeImpl) GetBlockOrderByInfo(ctx context.Context, options *ExplainOptions) (string, error) {
+func (ndesc *NodeDescribeImpl) GetIndexReaderParamInfo(ctx context.Context, options *ExplainOptions) (string, error) {
 	buf := bytes.NewBuffer(make([]byte, 0, 300))
+	param := ndesc.Node.IndexReaderParam
 	if options.Format == EXPLAIN_FORMAT_TEXT {
-		buf.WriteString("Block Sort Key: ")
-		orderByDescImpl := NewOrderByDescribeImpl(ndesc.Node.BlockOrderBy)
-		err := orderByDescImpl.GetDescription(ctx, options, buf)
-		if err != nil {
-			return "", err
+		buf.WriteString("Index Reader Param:")
+		if len(param.OrderBy) > 0 {
+			buf.WriteString("  Sort Key: ")
+			orderByDescImpl := NewOrderByDescribeImpl(param.OrderBy)
+			err := orderByDescImpl.GetDescription(ctx, options, buf)
+			if err != nil {
+				return "", err
+			}
+		}
+
+		if param.Limit != nil {
+			buf.WriteString("  Limit: ")
+			err := describeExpr(ctx, param.Limit, options, buf)
+			if err != nil {
+				return "", err
+			}
+		}
+
+		if param.DistRange != nil {
+			if param.DistRange.LowerBoundType != plan.BoundType_UNBOUNDED || param.DistRange.UpperBoundType != plan.BoundType_UNBOUNDED {
+				buf.WriteString("  DistRange: ")
+				if param.DistRange.LowerBoundType == plan.BoundType_UNBOUNDED {
+					buf.WriteString("(-Inf")
+				} else {
+					if param.DistRange.LowerBoundType == plan.BoundType_INCLUSIVE {
+						buf.WriteString("[")
+					} else {
+						buf.WriteString("(")
+					}
+
+					err := describeExpr(ctx, param.DistRange.LowerBound, options, buf)
+					if err != nil {
+						return "", err
+					}
+				}
+
+				buf.WriteString(",")
+
+				if param.DistRange.UpperBoundType == plan.BoundType_UNBOUNDED {
+					buf.WriteString("Inf)")
+				} else {
+					err := describeExpr(ctx, param.DistRange.UpperBound, options, buf)
+					if err != nil {
+						return "", err
+					}
+
+					if param.DistRange.UpperBoundType == plan.BoundType_INCLUSIVE {
+						buf.WriteString("]")
+					} else {
+						buf.WriteString(")")
+					}
+				}
+			}
 		}
 	} else if options.Format == EXPLAIN_FORMAT_JSON {
 		return "", moerr.NewNYI(ctx, "explain format json")

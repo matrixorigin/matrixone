@@ -48,7 +48,8 @@ type ivfSearchState struct {
 	batch *batch.Batch
 
 	// runtime filter BloomFilter bytes from hash build side (optional)
-	bloomFilter []byte
+	bloomFilter      []byte
+	indexReaderParam *plan.IndexReaderParam
 }
 
 // stub function
@@ -165,15 +166,8 @@ func ivfSearchPrepare(proc *process.Process, arg *TableFunction) (tvfState, erro
 	arg.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, arg.Args)
 	arg.ctr.argVecs = make([]*vector.Vector, len(arg.Args))
 
-	if arg.Limit != nil {
-		if cExpr, ok := arg.Limit.Expr.(*plan.Expr_Lit); ok {
-			if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
-				st.limit = c.U64Val
-			}
-		}
-	} else {
-		st.limit = uint64(1)
-	}
+	st.limit = max(arg.IndexReaderParam.GetLimit().GetLit().GetU64Val(), uint64(1))
+	st.indexReaderParam = arg.IndexReaderParam
 
 	return st, err
 
@@ -303,10 +297,10 @@ func runIvfSearchVector[T types.RealNumbers](tf *TableFunction, u *ivfSearchStat
 		Probe:             uint(u.tblcfg.Nprobe),
 		OrigFuncName:      u.tblcfg.OrigFuncName,
 		BackgroundQueries: make([]*plan.Query, 1),
-		BloomFilter:       u.bloomFilter,
 	}
 	sqlProc := sqlexec.NewSqlProcess(proc)
 	sqlProc.BloomFilter = u.bloomFilter
+	sqlProc.IndexReaderParam = u.indexReaderParam
 
 	u.keys, u.distances, err = veccache.Cache.Search(sqlProc, key, algo, fa, rt)
 	if err != nil {

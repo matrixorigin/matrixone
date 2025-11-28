@@ -253,6 +253,10 @@ type InSp struct{}
 // This key is set on context when invoking internal SQL from ivf_search.
 type IvfBloomFilter struct{}
 
+// IvfReaderParam carries DistRange for ivf entries scan in internal SQL executor.
+// This key is set on context when invoking internal SQL from ivf_search.
+type IvfReaderParam struct{}
+
 // PkCheckByTN whether TN does primary key uniqueness check against transaction's workspace or not.
 type PkCheckByTN struct{}
 
