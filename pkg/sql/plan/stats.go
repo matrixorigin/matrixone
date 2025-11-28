@@ -1304,6 +1304,21 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 				node.Stats.Selectivity = node.Stats.Outcnt / node.Stats.Cost
 			}
 		}
+	} else if node.NodeType == plan.Node_FUNCTION_SCAN && node.IndexReaderParam != nil {
+		if node.IndexReaderParam.Limit != nil {
+			limitExpr := DeepCopyExpr(node.IndexReaderParam.Limit)
+			if _, ok := limitExpr.Expr.(*plan.Expr_F); ok {
+				if !hasParam(limitExpr) {
+					limitExpr, _ = ConstantFold(batch.EmptyForConstFoldBatch, limitExpr, builder.compCtx.GetProcess(), true, true)
+				}
+			}
+			if cExpr, ok := limitExpr.Expr.(*plan.Expr_Lit); ok {
+				if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
+					node.Stats.Outcnt = float64(c.U64Val)
+					node.Stats.Selectivity = node.Stats.Outcnt / node.Stats.Cost
+				}
+			}
+		}
 	}
 }
 

@@ -606,57 +606,67 @@ func (builder *QueryBuilder) pushdownVectorIndexTopToTableScan(nodeID int32) {
 		builder.pushdownVectorIndexTopToTableScan(childID)
 	}
 
-	if node.NodeType == plan.Node_SORT && node.Limit != nil && node.Offset == nil && len(node.OrderBy) == 1 {
-		orderCol := node.OrderBy[0].Expr.GetCol()
-		if orderCol == nil {
-			return
-		}
-
-		projNode := builder.qry.Nodes[node.Children[0]]
-		if projNode.NodeType != plan.Node_PROJECT || len(projNode.Children) == 0 {
-			return
-		}
-
-		orderFunc := projNode.ProjectList[orderCol.ColPos]
-		if metric.DistFuncOpTypes[orderFunc.GetF().GetFunc().GetObjName()] == "" {
-			return
-		}
-
-		scanNode := builder.qry.Nodes[projNode.Children[0]]
-		if scanNode.NodeType != plan.Node_TABLE_SCAN || scanNode.Offset != nil || scanNode.BlockOrderBy != nil {
-			return
-		}
-		limitVal := node.Limit.GetLit().GetU64Val()
-		if limitVal == 0 {
-			return
-		}
-		if scanNode.TableDef.TableType != catalog.SystemSI_IVFFLAT_TblType_Entries {
-			return
-		}
-
-		scanNode.BlockOrderBy = append(scanNode.BlockOrderBy, &plan.OrderBySpec{
-			Expr:      orderFunc,
-			Collation: node.OrderBy[0].Collation,
-			Flag:      node.OrderBy[0].Flag,
-		})
-		scanNode.BlockLimit = DeepCopyExpr(node.Limit)
-
-		// if there is a limit, outcnt is limit number
-		scanNode.Stats.Outcnt = float64(scanNode.Stats.BlockNum) * float64(limitVal)
-		scanNode.Stats.Cost = float64(scanNode.Stats.BlockNum * objectio.BlockMaxRows)
-
-		orderFuncTag := builder.genNewBindTag()
-		scanNode.BindingTags = append(scanNode.BindingTags, orderFuncTag)
-		projNode.ProjectList[orderCol.ColPos] = &plan.Expr{
-			Typ: orderFunc.Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: orderFuncTag,
-					ColPos: 0,
-				},
-			},
-		}
-
-		builder.nameByColRef[[2]int32{orderFuncTag, 0}] = "__dist_func__"
+	if node.NodeType != plan.Node_SORT || node.Limit == nil || node.Offset != nil {
+		return
 	}
+
+	if len(node.OrderBy) != 1 {
+		return
+	}
+
+	orderCol := node.OrderBy[0].Expr.GetCol()
+	if orderCol == nil {
+		return
+	}
+
+	projNode := builder.qry.Nodes[node.Children[0]]
+	if projNode.NodeType != plan.Node_PROJECT || len(projNode.Children) == 0 {
+		return
+	}
+
+	orderFunc := projNode.ProjectList[orderCol.ColPos]
+	if metric.DistFuncOpTypes[orderFunc.GetF().GetFunc().GetObjName()] == "" {
+		return
+	}
+
+	scanNode := builder.qry.Nodes[projNode.Children[0]]
+	if scanNode.NodeType != plan.Node_TABLE_SCAN || scanNode.Offset != nil || scanNode.OrderBy != nil {
+		return
+	}
+	limitVal := node.Limit.GetLit().GetU64Val()
+	if limitVal == 0 {
+		return
+	}
+	if scanNode.TableDef.TableType != catalog.SystemSI_IVFFLAT_TblType_Entries {
+		return
+	}
+
+	scanNode.IndexReaderParam = &plan.IndexReaderParam{
+		OrderBy: []*plan.OrderBySpec{
+			{
+				Expr:      orderFunc,
+				Collation: node.OrderBy[0].Collation,
+				Flag:      node.OrderBy[0].Flag,
+			},
+		},
+		Limit: DeepCopyExpr(node.Limit),
+	}
+
+	// if there is a limit, outcnt is limit number
+	scanNode.Stats.Outcnt = float64(scanNode.Stats.BlockNum) * float64(limitVal)
+	scanNode.Stats.Cost = float64(scanNode.Stats.BlockNum * objectio.BlockMaxRows)
+
+	orderFuncTag := builder.genNewBindTag()
+	scanNode.BindingTags = append(scanNode.BindingTags, orderFuncTag)
+	projNode.ProjectList[orderCol.ColPos] = &plan.Expr{
+		Typ: orderFunc.Typ,
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: orderFuncTag,
+				ColPos: 0,
+			},
+		},
+	}
+
+	builder.nameByColRef[[2]int32{orderFuncTag, 0}] = "__dist_func__"
 }

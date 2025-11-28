@@ -32,7 +32,7 @@ func DeepCopyExprList(list []*Expr) []*Expr {
 	return newList
 }
 
-func DeepCopyOrderBy(orderBy *plan.OrderBySpec) *plan.OrderBySpec {
+func DeepCopyOrderBySpec(orderBy *plan.OrderBySpec) *plan.OrderBySpec {
 	if orderBy == nil {
 		return nil
 	}
@@ -41,6 +41,17 @@ func DeepCopyOrderBy(orderBy *plan.OrderBySpec) *plan.OrderBySpec {
 		Collation: orderBy.Collation,
 		Flag:      orderBy.Flag,
 	}
+}
+
+func DeepCopyOrderBySpecList(orderByList []*plan.OrderBySpec) []*plan.OrderBySpec {
+	if orderByList == nil {
+		return nil
+	}
+	newList := make([]*plan.OrderBySpec, len(orderByList))
+	for idx, orderBy := range orderByList {
+		newList[idx] = DeepCopyOrderBySpec(orderBy)
+	}
+	return newList
 }
 
 func DeepCopyObjectRef(ref *plan.ObjectRef) *plan.ObjectRef {
@@ -189,58 +200,49 @@ func DeepCopyDedupJoinCtx(ctx *plan.DedupJoinCtx) *plan.DedupJoinCtx {
 
 func DeepCopyNode(node *plan.Node) *plan.Node {
 	newNode := &Node{
-		NodeType:        node.NodeType,
-		NodeId:          node.NodeId,
-		ExtraOptions:    node.ExtraOptions,
-		Children:        slices.Clone(node.Children),
-		JoinType:        node.JoinType,
-		IsRightJoin:     node.IsRightJoin,
-		BindingTags:     slices.Clone(node.BindingTags),
-		Limit:           DeepCopyExpr(node.Limit),
-		Offset:          DeepCopyExpr(node.Offset),
-		ProjectList:     DeepCopyExprList(node.ProjectList),
-		OnList:          DeepCopyExprList(node.OnList),
-		FilterList:      DeepCopyExprList(node.FilterList),
-		BlockFilterList: DeepCopyExprList(node.BlockFilterList),
-		GroupBy:         DeepCopyExprList(node.GroupBy),
-		GroupingFlag:    slices.Clone(node.GroupingFlag),
-		AggList:         DeepCopyExprList(node.AggList),
-		OrderBy:         make([]*plan.OrderBySpec, len(node.OrderBy)),
-		BlockOrderBy:    make([]*plan.OrderBySpec, len(node.BlockOrderBy)),
-		BlockLimit:      DeepCopyExpr(node.BlockLimit),
-		DeleteCtx:       DeepCopyDeleteCtx(node.DeleteCtx),
-		TblFuncExprList: DeepCopyExprList(node.TblFuncExprList),
-		ClusterTable:    DeepCopyClusterTable(node.GetClusterTable()),
-		InsertCtx:       DeepCopyInsertCtx(node.InsertCtx),
-		ReplaceCtx:      DeepCopyReplaceCtx(node.ReplaceCtx),
-		NotCacheable:    node.NotCacheable,
-		SourceStep:      node.SourceStep,
-		PreInsertCtx:    DeepCopyPreInsertCtx(node.PreInsertCtx),
-		PreInsertUkCtx:  DeepCopyPreInsertUkCtx(node.PreInsertUkCtx),
-		OnDuplicateKey:  DeepCopyOnDuplicateKeyCtx(node.OnDuplicateKey),
-		LockTargets:     make([]*plan.LockTarget, len(node.LockTargets)),
-		AnalyzeInfo:     DeepCopyAnalyzeInfo(node.AnalyzeInfo),
-		IsEnd:           node.IsEnd,
-		ExternScan:      node.ExternScan,
-		SampleFunc:      DeepCopySampleFuncSpec(node.SampleFunc),
-		OnUpdateExprs:   DeepCopyExprList(node.OnUpdateExprs),
-		DedupColName:    node.DedupColName,
-		DedupColTypes:   slices.Clone(node.DedupColTypes),
-		UpdateCtxList:   DeepCopyUpdateCtxList(node.UpdateCtxList),
-		DedupJoinCtx:    DeepCopyDedupJoinCtx(node.DedupJoinCtx),
+		NodeType:         node.NodeType,
+		NodeId:           node.NodeId,
+		ExtraOptions:     node.ExtraOptions,
+		Children:         slices.Clone(node.Children),
+		JoinType:         node.JoinType,
+		IsRightJoin:      node.IsRightJoin,
+		BindingTags:      slices.Clone(node.BindingTags),
+		Limit:            DeepCopyExpr(node.Limit),
+		Offset:           DeepCopyExpr(node.Offset),
+		ProjectList:      DeepCopyExprList(node.ProjectList),
+		OnList:           DeepCopyExprList(node.OnList),
+		FilterList:       DeepCopyExprList(node.FilterList),
+		BlockFilterList:  DeepCopyExprList(node.BlockFilterList),
+		GroupBy:          DeepCopyExprList(node.GroupBy),
+		GroupingFlag:     slices.Clone(node.GroupingFlag),
+		AggList:          DeepCopyExprList(node.AggList),
+		OrderBy:          DeepCopyOrderBySpecList(node.OrderBy),
+		DeleteCtx:        DeepCopyDeleteCtx(node.DeleteCtx),
+		TblFuncExprList:  DeepCopyExprList(node.TblFuncExprList),
+		ClusterTable:     DeepCopyClusterTable(node.GetClusterTable()),
+		InsertCtx:        DeepCopyInsertCtx(node.InsertCtx),
+		ReplaceCtx:       DeepCopyReplaceCtx(node.ReplaceCtx),
+		NotCacheable:     node.NotCacheable,
+		SourceStep:       node.SourceStep,
+		PreInsertCtx:     DeepCopyPreInsertCtx(node.PreInsertCtx),
+		PreInsertUkCtx:   DeepCopyPreInsertUkCtx(node.PreInsertUkCtx),
+		OnDuplicateKey:   DeepCopyOnDuplicateKeyCtx(node.OnDuplicateKey),
+		LockTargets:      make([]*plan.LockTarget, len(node.LockTargets)),
+		AnalyzeInfo:      DeepCopyAnalyzeInfo(node.AnalyzeInfo),
+		IsEnd:            node.IsEnd,
+		ExternScan:       node.ExternScan,
+		SampleFunc:       DeepCopySampleFuncSpec(node.SampleFunc),
+		OnUpdateExprs:    DeepCopyExprList(node.OnUpdateExprs),
+		DedupColName:     node.DedupColName,
+		DedupColTypes:    slices.Clone(node.DedupColTypes),
+		UpdateCtxList:    DeepCopyUpdateCtxList(node.UpdateCtxList),
+		DedupJoinCtx:     DeepCopyDedupJoinCtx(node.DedupJoinCtx),
+		IndexReaderParam: DeepCopyIndexReaderParam(node.IndexReaderParam),
 	}
 	newNode.Uuid = append(newNode.Uuid, node.Uuid...)
 
 	for idx, target := range node.LockTargets {
 		newNode.LockTargets[idx] = DeepCopyLockTarget(target)
-	}
-
-	for idx, orderBy := range node.OrderBy {
-		newNode.OrderBy[idx] = DeepCopyOrderBy(orderBy)
-	}
-
-	for idx, blockOrderBy := range node.BlockOrderBy {
-		newNode.BlockOrderBy[idx] = DeepCopyOrderBy(blockOrderBy)
 	}
 
 	newNode.Stats = DeepCopyStats(node.Stats)
@@ -280,6 +282,28 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 	}
 
 	return newNode
+}
+
+func DeepCopyIndexReaderParam(oldParam *plan.IndexReaderParam) *plan.IndexReaderParam {
+	if oldParam == nil {
+		return nil
+	}
+
+	ret := &plan.IndexReaderParam{
+		OrderBy: DeepCopyOrderBySpecList(oldParam.OrderBy),
+		Limit:   DeepCopyExpr(oldParam.Limit),
+	}
+
+	if oldParam.DistRange != nil {
+		ret.DistRange = &plan.DistRange{
+			LowerBoundType: oldParam.DistRange.LowerBoundType,
+			UpperBoundType: oldParam.DistRange.UpperBoundType,
+			LowerBound:     DeepCopyExpr(oldParam.DistRange.LowerBound),
+			UpperBound:     DeepCopyExpr(oldParam.DistRange.UpperBound),
+		}
+	}
+
+	return ret
 }
 
 func DeepCopyReplaceCtx(oldCtx *plan.ReplaceCtx) *plan.ReplaceCtx {
@@ -921,16 +945,12 @@ func DeepCopyExpr(expr *Expr) *Expr {
 		}
 
 	case *plan.Expr_W:
-		os := make([]*OrderBySpec, len(item.W.OrderBy))
-		for i, o := range item.W.OrderBy {
-			os[i] = DeepCopyOrderBy(o)
-		}
 		f := item.W.Frame
 		newExpr.Expr = &plan.Expr_W{
 			W: &plan.WindowSpec{
 				WindowFunc:  DeepCopyExpr(item.W.WindowFunc),
 				PartitionBy: DeepCopyExprList(item.W.PartitionBy),
-				OrderBy:     os,
+				OrderBy:     DeepCopyOrderBySpecList(item.W.OrderBy),
 				Name:        item.W.Name,
 				Frame: &plan.FrameClause{
 					Type: f.Type,
