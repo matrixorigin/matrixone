@@ -182,6 +182,9 @@ var (
 		input:  "alter table t1 alter reindex idx1 IVFFLAT lists = 5 force_sync",
 		output: "alter table t1 alter reindex idx1 ivfflat lists = 5 force_sync",
 	}, {
+		input:  "alter table t1 alter reindex idx1 IVFFLAT force_sync",
+		output: "alter table t1 alter reindex idx1 ivfflat force_sync",
+	}, {
 		input:  "create connector for s with (\"type\"='kafka', \"topic\"= 'user', \"partition\" = '1', \"value\"= 'json', \"bootstrap.servers\" = '127.0.0.1:62610');",
 		output: "create connector for s with (type = kafka, topic = user, partition = 1, value = json, bootstrap.servers = 127.0.0.1:62610)",
 	}, {

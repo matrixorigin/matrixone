@@ -761,23 +761,24 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 						// 2.a update AlgoParams for the index to be re-indexed
 						// NOTE: this will throw error if the algo type is not supported for reindex.
 						// So Step 4. will not be executed if error is thrown here.
-						newAlgoParamsMap[catalog.IndexAlgoParamLists] = fmt.Sprintf("%d", tableAlterIndex.IndexAlgoParamList)
+						if tableAlterIndex.IndexAlgoParamList > 0 {
+							newAlgoParamsMap[catalog.IndexAlgoParamLists] = fmt.Sprintf("%d", tableAlterIndex.IndexAlgoParamList)
+							// 2.b generate new AlgoParams string
+							newAlgoParams, err := catalog.IndexParamsMapToJsonString(newAlgoParamsMap)
+							if err != nil {
+								return err
+							}
 
-						// 2.b generate new AlgoParams string
-						newAlgoParams, err := catalog.IndexParamsMapToJsonString(newAlgoParamsMap)
-						if err != nil {
-							return err
-						}
+							// 3.a Update IndexDef and TableDef
+							alterIndex.IndexAlgoParams = newAlgoParams
+							oTableDef.Indexes[i].IndexAlgoParams = newAlgoParams
 
-						// 3.a Update IndexDef and TableDef
-						alterIndex.IndexAlgoParams = newAlgoParams
-						oTableDef.Indexes[i].IndexAlgoParams = newAlgoParams
-
-						// 3.b Update mo_catalog.mo_indexes
-						updateSql := fmt.Sprintf(updateMoIndexesAlgoParams, newAlgoParams, oTableDef.TblId, alterIndex.IndexName)
-						err = c.runSql(updateSql)
-						if err != nil {
-							return err
+							// 3.b Update mo_catalog.mo_indexes
+							updateSql := fmt.Sprintf(updateMoIndexesAlgoParams, newAlgoParams, oTableDef.TblId, alterIndex.IndexName)
+							err = c.runSql(updateSql)
+							if err != nil {
+								return err
+							}
 						}
 					case catalog.MoIndexHnswAlgo.ToString():
 						// PASS
