@@ -1,4 +1,3 @@
-set experimental_fulltext_index=1;
 use mo_catalog;
 create cluster table clu01(col1 int, col2 decimal);
 insert into clu01 values(1,2,0);

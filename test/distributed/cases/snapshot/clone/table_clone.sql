@@ -85,30 +85,24 @@ create snapshot sp3 for table db1_copy_copy t4_copy_copy;
 create table db1.t7 clone db1_copy_copy.t4_copy_copy {snapshot = "sp3"} to account acc1;
 -- @session
 
-set experimental_fulltext_index = 1;
 create table db1.t8 (id INT auto_increment primary key, content text, fulltext(content));
 insert into db1.t8(content) values ("this is a test for clone fulltext table 1");
 insert into db1.t8(content) values ("this is a test for clone fulltext table 2");
 insert into db1.t8(content) values ("this is a test for clone fulltext table 3");
-set experimental_fulltext_index = 0;
 
 create table db1.t8_copy clone db1.t8;
 select * from db1.t8_copy order by id asc;
 
-select @@session.experimental_fulltext_index;
 
-SET experimental_ivf_index = 1;
 create table db1.t9(a int primary key, b vecf32(3));
 insert into db1.t9 values(1, "[1,2,3]");
 insert into db1.t9 values(2, "[1,2,4]");
 insert into db1.t9 values(3, "[1,2.4,4]");
 create index idx using IVFFLAT on db1.t9(b);
-SET experimental_ivf_index = 0;
 
 create table db1.t9_copy clone db1.t9;
 select * from db1.t9_copy order by a asc;
 
-select @@session.experimental_ivf_index;
 
 drop snapshot if exists sp0;
 drop snapshot if exists sp1;
