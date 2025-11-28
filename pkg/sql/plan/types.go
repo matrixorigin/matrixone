@@ -173,8 +173,8 @@ type QueryBuilder struct {
 	tag2Table  map[int32]*TableDef
 	tag2NodeID map[int32]int32
 
-	nextTag    int32
-	nextMsgTag int32
+	nextBindTag int32
+	nextMsgTag  int32
 
 	isPrepareStatement    bool
 	mysqlCompatible       bool

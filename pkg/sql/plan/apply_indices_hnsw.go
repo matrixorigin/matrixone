@@ -103,7 +103,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, projNode
 		origFuncName)
 
 	// JOIN between source table and hnsw_search table function
-	tableFuncTag := builder.genNewTag()
+	tableFuncTag := builder.genNewBindTag()
 	tableFuncNode := &plan.Node{
 		NodeType: plan.Node_FUNCTION_SCAN,
 		Stats:    &plan.Stats{},
