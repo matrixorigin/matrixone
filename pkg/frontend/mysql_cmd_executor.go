@@ -221,6 +221,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 
 	stm.ConnectionId = ses.GetConnectionID()
 	stm.Account = tenant.GetTenant()
+	stm.AccountID = tenant.GetTenantID()
 	stm.RoleId = tenant.GetDefaultRoleID()
 	//stm.RoleId = proc.GetSessionInfo().RoleId
 	stm.User = tenant.GetUser()
@@ -288,7 +289,7 @@ var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *pr
 	if tenant == nil {
 		tenant, _ = GetTenantInfo(ctx, "internal")
 	}
-	incStatementErrorsCounter(tenant.GetTenant(), nil)
+	incStatementErrorsCounter(tenant.GetTenant(), tenant.GetTenantID(), nil)
 	return ctx, nil
 }
 
@@ -2255,19 +2256,19 @@ func parseSql(execCtx *ExecCtx, p *mysql.MySQLParser) (stmts []tree.Statement, e
 	return p.Parse(execCtx.reqCtx, execCtx.input.getSql(), lctn)
 }
 
-func incTransactionCounter(tenant string) {
-	metric.TransactionCounter(tenant).Inc()
+func incTransactionCounter(tenant string, tenantId uint32) {
+	metric.TransactionCounter(tenant, tenantId).Inc()
 }
 
-func incTransactionErrorsCounter(tenant string, t metric.SQLType) {
+func incTransactionErrorsCounter(tenant string, tenantId uint32, t metric.SQLType) {
 	if t == metric.SQLTypeRollback {
 		return
 	}
-	metric.TransactionErrorsCounter(tenant, t).Inc()
+	metric.TransactionErrorsCounter(tenant, tenantId, t).Inc()
 }
 
-func incStatementErrorsCounter(tenant string, stmt tree.Statement) {
-	metric.StatementErrorsCounter(tenant, getStatementType(stmt).GetQueryType()).Inc()
+func incStatementErrorsCounter(tenant string, tenantId uint32, stmt tree.Statement) {
+	metric.StatementErrorsCounter(tenant, tenantId, getStatementType(stmt).GetQueryType()).Inc()
 }
 
 // authenticateUserCanExecuteStatement checks the user can execute the statement

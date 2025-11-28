@@ -8624,8 +8624,10 @@ sub_partition_opt:
 |   SUBPARTITION BY sub_partition_method sub_partition_num_opt
     {
         var IsSubPartition = true
-        var PType = $3
+        var PType = $3.PType
         var Num = uint64($4)
+        $3.PType = nil
+        $3.Free()
         $$ = tree.NewPartitionBy2(
             IsSubPartition,
             PType,
