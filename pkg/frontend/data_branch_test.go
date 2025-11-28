@@ -116,7 +116,7 @@ func TestCompareSingleValInVector_AllTypes(t *testing.T) {
 				require.NoError(t, err)
 				require.NoError(t, vector.AppendBytes(leftVec, leftBytes, false, mp))
 				require.NoError(t, vector.AppendBytes(rightVec, rightBytes, false, mp))
-				expected := types.CompareValues(types.DecodeJson(leftBytes), types.DecodeJson(rightBytes), types.T_json)
+				expected := types.CompareValue(types.DecodeJson(leftBytes), types.DecodeJson(rightBytes))
 				return leftVec, rightVec, expected
 			},
 		},
@@ -127,7 +127,7 @@ func TestCompareSingleValInVector_AllTypes(t *testing.T) {
 				leftVal, rightVal := false, true
 				leftVec := buildFixedVector(t, mp, typ, leftVal)
 				rightVec := buildFixedVector(t, mp, typ, rightVal)
-				return leftVec, rightVec, types.CompareValues(leftVal, rightVal, types.T_bool)
+				return leftVec, rightVec, types.CompareValue(leftVal, rightVal)
 			},
 		},
 		{
@@ -137,7 +137,7 @@ func TestCompareSingleValInVector_AllTypes(t *testing.T) {
 				leftVal, rightVal := uint64(1), uint64(3)
 				leftVec := buildFixedVector(t, mp, typ, leftVal)
 				rightVec := buildFixedVector(t, mp, typ, rightVal)
-				return leftVec, rightVec, types.CompareValues(leftVal, rightVal, types.T_bit)
+				return leftVec, rightVec, types.CompareValue(leftVal, rightVal)
 			},
 		},
 		{
@@ -147,7 +147,7 @@ func TestCompareSingleValInVector_AllTypes(t *testing.T) {
 				leftVal, rightVal := int8(1), int8(2)
 				leftVec := buildFixedVector(t, mp, typ, leftVal)
 				rightVec := buildFixedVector(t, mp, typ, rightVal)
-				return leftVec, rightVec, types.CompareValues(leftVal, rightVal, types.T_int8)
+				return leftVec, rightVec, types.CompareValue(leftVal, rightVal)
 			},
 		},
 		{
@@ -157,7 +157,7 @@ func TestCompareSingleValInVector_AllTypes(t *testing.T) {
 				leftVal, rightVal := uint8(1), uint8(2)
 				leftVec := buildFixedVector(t, mp, typ, leftVal)
 				rightVec := buildFixedVector(t, mp, typ, rightVal)
-				return leftVec, rightVec, types.CompareValues(leftVal, rightVal, types.T_uint8)
+				return leftVec, rightVec, types.CompareValue(leftVal, rightVal)
 			},
 		},
 		{
@@ -167,7 +167,7 @@ func TestCompareSingleValInVector_AllTypes(t *testing.T) {
 				leftVal, rightVal := int16(1), int16(2)
 				leftVec := buildFixedVector(t, mp, typ, leftVal)
 				rightVec := buildFixedVector(t, mp, typ, rightVal)
-				return leftVec, rightVec, types.CompareValues(leftVal, rightVal, types.T_int16)
+				return leftVec, rightVec, types.CompareValue(leftVal, rightVal)
 			},
 		},
 		{
@@ -177,7 +177,7 @@ func TestCompareSingleValInVector_AllTypes(t *testing.T) {
 				leftVal, rightVal := uint16(1), uint16(2)
 				leftVec := buildFixedVector(t, mp, typ, leftVal)
 				rightVec := buildFixedVector(t, mp, typ, rightVal)
-				return leftVec, rightVec, types.CompareValues(leftVal, rightVal, types.T_uint16)
+				return leftVec, rightVec, types.CompareValue(leftVal, rightVal)
 			},
 		},
 		{
@@ -187,7 +187,7 @@ func TestCompareSingleValInVector_AllTypes(t *testing.T) {
 				leftVal, rightVal := int32(1), int32(2)
 				leftVec := buildFixedVector(t, mp, typ, leftVal)
 				rightVec := buildFixedVector(t, mp, typ, rightVal)
-				return leftVec, rightVec, types.CompareValues(leftVal, rightVal, types.T_int32)
+				return leftVec, rightVec, types.CompareValue(leftVal, rightVal)
 			},
 		},
 		{
@@ -197,7 +197,7 @@ func TestCompareSingleValInVector_AllTypes(t *testing.T) {
 				leftVal, rightVal := uint32(1), uint32(2)
 				leftVec := buildFixedVector(t, mp, typ, leftVal)
 				rightVec := buildFixedVector(t, mp, typ, rightVal)
-				return leftVec, rightVec, types.CompareValues(leftVal, rightVal, types.T_uint32)
+				return leftVec, rightVec, types.CompareValue(leftVal, rightVal)
 			},
 		},
 		{
@@ -207,7 +207,7 @@ func TestCompareSingleValInVector_AllTypes(t *testing.T) {
 				leftVal, rightVal := int64(1), int64(2)
 				leftVec := buildFixedVector(t, mp, typ, leftVal)
 				rightVec := buildFixedVector(t, mp, typ, rightVal)
-				return leftVec, rightVec, types.CompareValues(leftVal, rightVal, types.T_int64)
+				return leftVec, rightVec, types.CompareValue(leftVal, rightVal)
 			},
 		},
 		{
@@ -217,7 +217,7 @@ func TestCompareSingleValInVector_AllTypes(t *testing.T) {
 				leftVal, rightVal := uint64(1), uint64(2)
 				leftVec := buildFixedVector(t, mp, typ, leftVal)
 				rightVec := buildFixedVector(t, mp, typ, rightVal)
-				return leftVec, rightVec, types.CompareValues(leftVal, rightVal, types.T_uint64)
+				return leftVec, rightVec, types.CompareValue(leftVal, rightVal)
 			},
 		},
 		{
@@ -227,7 +227,7 @@ func TestCompareSingleValInVector_AllTypes(t *testing.T) {
 				leftVal, rightVal := float32(1.1), float32(2.2)
 				leftVec := buildFixedVector(t, mp, typ, leftVal)
 				rightVec := buildFixedVector(t, mp, typ, rightVal)
-				return leftVec, rightVec, types.CompareValues(leftVal, rightVal, types.T_float32)
+				return leftVec, rightVec, types.CompareValue(leftVal, rightVal)
 			},
 		},
 		{
@@ -237,7 +237,7 @@ func TestCompareSingleValInVector_AllTypes(t *testing.T) {
 				leftVal, rightVal := float64(1.1), float64(2.2)
 				leftVec := buildFixedVector(t, mp, typ, leftVal)
 				rightVec := buildFixedVector(t, mp, typ, rightVal)
-				return leftVec, rightVec, types.CompareValues(leftVal, rightVal, types.T_float64)
+				return leftVec, rightVec, types.CompareValue(leftVal, rightVal)
 			},
 		},
 		{
@@ -247,7 +247,7 @@ func TestCompareSingleValInVector_AllTypes(t *testing.T) {
 				leftVal, rightVal := []byte("a"), []byte("b")
 				leftVec := buildBytesVector(t, mp, typ, leftVal)
 				rightVec := buildBytesVector(t, mp, typ, rightVal)
-				return leftVec, rightVec, types.CompareValues(leftVal, rightVal, types.T_char)
+				return leftVec, rightVec, types.CompareValue(leftVal, rightVal)
 			},
 		},
 		{
@@ -257,7 +257,7 @@ func TestCompareSingleValInVector_AllTypes(t *testing.T) {
 				leftVal, rightVal := []byte("alpha"), []byte("beta")
 				leftVec := buildBytesVector(t, mp, typ, leftVal)
 				rightVec := buildBytesVector(t, mp, typ, rightVal)
-				return leftVec, rightVec, types.CompareValues(leftVal, rightVal, types.T_varchar)
+				return leftVec, rightVec, types.CompareValue(leftVal, rightVal)
 			},
 		},
 		{
@@ -267,7 +267,7 @@ func TestCompareSingleValInVector_AllTypes(t *testing.T) {
 				leftVal, rightVal := []byte("blob-a"), []byte("blob-b")
 				leftVec := buildBytesVector(t, mp, typ, leftVal)
 				rightVec := buildBytesVector(t, mp, typ, rightVal)
-				return leftVec, rightVec, types.CompareValues(leftVal, rightVal, types.T_blob)
+				return leftVec, rightVec, types.CompareValue(leftVal, rightVal)
 			},
 		},
 		{
@@ -277,7 +277,7 @@ func TestCompareSingleValInVector_AllTypes(t *testing.T) {
 				leftVal, rightVal := []byte("text-a"), []byte("text-b")
 				leftVec := buildBytesVector(t, mp, typ, leftVal)
 				rightVec := buildBytesVector(t, mp, typ, rightVal)
-				return leftVec, rightVec, types.CompareValues(leftVal, rightVal, types.T_text)
+				return leftVec, rightVec, types.CompareValue(leftVal, rightVal)
 			},
 		},
 		{
@@ -287,7 +287,7 @@ func TestCompareSingleValInVector_AllTypes(t *testing.T) {
 				leftVal, rightVal := []byte{0x00, 0x01}, []byte{0x00, 0x02}
 				leftVec := buildBytesVector(t, mp, typ, leftVal)
 				rightVec := buildBytesVector(t, mp, typ, rightVal)
-				return leftVec, rightVec, types.CompareValues(leftVal, rightVal, types.T_binary)
+				return leftVec, rightVec, types.CompareValue(leftVal, rightVal)
 			},
 		},
 		{
@@ -297,7 +297,7 @@ func TestCompareSingleValInVector_AllTypes(t *testing.T) {
 				leftVal, rightVal := []byte{0x01, 0x02}, []byte{0x02, 0x03}
 				leftVec := buildBytesVector(t, mp, typ, leftVal)
 				rightVec := buildBytesVector(t, mp, typ, rightVal)
-				return leftVec, rightVec, types.CompareValues(leftVal, rightVal, types.T_varbinary)
+				return leftVec, rightVec, types.CompareValue(leftVal, rightVal)
 			},
 		},
 		{
@@ -307,7 +307,7 @@ func TestCompareSingleValInVector_AllTypes(t *testing.T) {
 				leftVal, rightVal := []byte("link-a"), []byte("link-b")
 				leftVec := buildBytesVector(t, mp, typ, leftVal)
 				rightVec := buildBytesVector(t, mp, typ, rightVal)
-				return leftVec, rightVec, types.CompareValues(leftVal, rightVal, types.T_datalink)
+				return leftVec, rightVec, types.CompareValue(leftVal, rightVal)
 			},
 		},
 		{
@@ -318,7 +318,7 @@ func TestCompareSingleValInVector_AllTypes(t *testing.T) {
 				rightVal := []float32{1, 3}
 				leftVec := buildArrayVector(t, mp, typ, [][]float32{leftVal})
 				rightVec := buildArrayVector(t, mp, typ, [][]float32{rightVal})
-				return leftVec, rightVec, types.CompareValues(leftVal, rightVal, types.T_array_float32)
+				return leftVec, rightVec, types.CompareValue(leftVal, rightVal)
 			},
 		},
 		{
@@ -329,7 +329,7 @@ func TestCompareSingleValInVector_AllTypes(t *testing.T) {
 				rightVal := []float64{2, 3}
 				leftVec := buildArrayVector(t, mp, typ, [][]float64{leftVal})
 				rightVec := buildArrayVector(t, mp, typ, [][]float64{rightVal})
-				return leftVec, rightVec, types.CompareValues(leftVal, rightVal, types.T_array_float64)
+				return leftVec, rightVec, types.CompareValue(leftVal, rightVal)
 			},
 		},
 		{
@@ -339,7 +339,7 @@ func TestCompareSingleValInVector_AllTypes(t *testing.T) {
 				leftVal, rightVal := types.Date(1), types.Date(2)
 				leftVec := buildFixedVector(t, mp, typ, leftVal)
 				rightVec := buildFixedVector(t, mp, typ, rightVal)
-				return leftVec, rightVec, types.CompareValues(leftVal, rightVal, types.T_date)
+				return leftVec, rightVec, types.CompareValue(leftVal, rightVal)
 			},
 		},
 		{
@@ -349,7 +349,7 @@ func TestCompareSingleValInVector_AllTypes(t *testing.T) {
 				leftVal, rightVal := types.Datetime(1), types.Datetime(2)
 				leftVec := buildFixedVector(t, mp, typ, leftVal)
 				rightVec := buildFixedVector(t, mp, typ, rightVal)
-				return leftVec, rightVec, types.CompareValues(leftVal, rightVal, types.T_datetime)
+				return leftVec, rightVec, types.CompareValue(leftVal, rightVal)
 			},
 		},
 		{
@@ -359,7 +359,7 @@ func TestCompareSingleValInVector_AllTypes(t *testing.T) {
 				leftVal, rightVal := types.Time(1), types.Time(2)
 				leftVec := buildFixedVector(t, mp, typ, leftVal)
 				rightVec := buildFixedVector(t, mp, typ, rightVal)
-				return leftVec, rightVec, types.CompareValues(leftVal, rightVal, types.T_time)
+				return leftVec, rightVec, types.CompareValue(leftVal, rightVal)
 			},
 		},
 		{
@@ -369,7 +369,7 @@ func TestCompareSingleValInVector_AllTypes(t *testing.T) {
 				leftVal, rightVal := types.Timestamp(1), types.Timestamp(2)
 				leftVec := buildFixedVector(t, mp, typ, leftVal)
 				rightVec := buildFixedVector(t, mp, typ, rightVal)
-				return leftVec, rightVec, types.CompareValues(leftVal, rightVal, types.T_timestamp)
+				return leftVec, rightVec, types.CompareValue(leftVal, rightVal)
 			},
 		},
 		{
@@ -382,7 +382,7 @@ func TestCompareSingleValInVector_AllTypes(t *testing.T) {
 				require.NoError(t, err)
 				leftVec := buildFixedVector(t, mp, typ, leftVal)
 				rightVec := buildFixedVector(t, mp, typ, rightVal)
-				return leftVec, rightVec, types.CompareValues(leftVal, rightVal, types.T_decimal64)
+				return leftVec, rightVec, types.CompareValue(leftVal, rightVal)
 			},
 		},
 		{
@@ -395,7 +395,7 @@ func TestCompareSingleValInVector_AllTypes(t *testing.T) {
 				require.NoError(t, err)
 				leftVec := buildFixedVector(t, mp, typ, leftVal)
 				rightVec := buildFixedVector(t, mp, typ, rightVal)
-				return leftVec, rightVec, types.CompareValues(leftVal, rightVal, types.T_decimal128)
+				return leftVec, rightVec, types.CompareValue(leftVal, rightVal)
 			},
 		},
 		{
@@ -407,7 +407,7 @@ func TestCompareSingleValInVector_AllTypes(t *testing.T) {
 				copy(rightVal[:], []byte("bbbbbbbbbbbbbbbb"))
 				leftVec := buildFixedVector(t, mp, typ, leftVal)
 				rightVec := buildFixedVector(t, mp, typ, rightVal)
-				return leftVec, rightVec, types.CompareValues(leftVal, rightVal, types.T_uuid)
+				return leftVec, rightVec, types.CompareValue(leftVal, rightVal)
 			},
 		},
 		{
@@ -420,7 +420,7 @@ func TestCompareSingleValInVector_AllTypes(t *testing.T) {
 				rightVal := types.NewRowid(&blk, 2)
 				leftVec := buildFixedVector(t, mp, typ, leftVal)
 				rightVec := buildFixedVector(t, mp, typ, rightVal)
-				return leftVec, rightVec, types.CompareValues(leftVal, rightVal, types.T_Rowid)
+				return leftVec, rightVec, types.CompareValue(leftVal, rightVal)
 			},
 		},
 		{
@@ -432,7 +432,7 @@ func TestCompareSingleValInVector_AllTypes(t *testing.T) {
 				copy(rightVal[:], []byte("block-00000000002"))
 				leftVec := buildFixedVector(t, mp, typ, leftVal)
 				rightVec := buildFixedVector(t, mp, typ, rightVal)
-				return leftVec, rightVec, types.CompareValues(leftVal, rightVal, types.T_Blockid)
+				return leftVec, rightVec, types.CompareValue(leftVal, rightVal)
 			},
 		},
 		{
@@ -443,7 +443,7 @@ func TestCompareSingleValInVector_AllTypes(t *testing.T) {
 				rightVal := types.BuildTS(2, 0)
 				leftVec := buildFixedVector(t, mp, typ, leftVal)
 				rightVec := buildFixedVector(t, mp, typ, rightVal)
-				return leftVec, rightVec, types.CompareValues(leftVal, rightVal, types.T_TS)
+				return leftVec, rightVec, types.CompareValue(leftVal, rightVal)
 			},
 		},
 		{
@@ -453,7 +453,7 @@ func TestCompareSingleValInVector_AllTypes(t *testing.T) {
 				leftVal, rightVal := types.Enum(1), types.Enum(2)
 				leftVec := buildFixedVector(t, mp, typ, leftVal)
 				rightVec := buildFixedVector(t, mp, typ, rightVal)
-				return leftVec, rightVec, types.CompareValues(leftVal, rightVal, types.T_enum)
+				return leftVec, rightVec, types.CompareValue(leftVal, rightVal)
 			},
 		},
 	}
@@ -487,7 +487,7 @@ func TestCompareSingleValInVector_ConstVectors(t *testing.T) {
 
 	cmp, err := compareSingleValInVector(ctx, ses, 0, 2, leftVec, rightVec)
 	require.NoError(t, err)
-	require.Equal(t, types.CompareValues(int32(5), int32(7), types.T_int32), cmp)
+	require.Equal(t, types.CompareValue(int32(5), int32(7)), cmp)
 }
 
 func buildFixedVector[T any](t *testing.T, mp *mpool.MPool, typ types.Type, vals ...T) *vector.Vector {
