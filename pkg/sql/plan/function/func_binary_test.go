@@ -5446,6 +5446,50 @@ func TestExtract(t *testing.T) {
 	}
 }
 
+// TestExtractMicrosecondFromDateAddString tests EXTRACT(MICROSECOND FROM DATE_ADD(...))
+// This verifies that when DATE_ADD returns a string with fractional seconds,
+// EXTRACT can correctly extract the microseconds even when the string type has scale=0
+func TestExtractMicrosecondFromDateAddString(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// Test case: EXTRACT(MICROSECOND FROM DATE_ADD('2024-01-15 12:34:56.123456', INTERVAL 1 HOUR))
+	// Expected: 123456 (not 0)
+	// DATE_ADD returns: '2024-01-15 13:34:56.123456' (string with 6-digit fractional seconds)
+	dateAddResult := "2024-01-15 13:34:56.123456"
+
+	// Create input vectors for EXTRACT(MICROSECOND, string)
+	unitVec, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("microsecond"), 1, proc.Mp())
+	require.NoError(t, err)
+	resultVec, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte(dateAddResult), 1, proc.Mp())
+	require.NoError(t, err)
+
+	parameters := []*vector.Vector{unitVec, resultVec}
+	result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+
+	fnLength := resultVec.Length()
+	err = result.PreExtendAndReset(fnLength)
+	require.NoError(t, err)
+
+	err = ExtractFromVarchar(parameters, result, proc, fnLength, nil)
+	require.NoError(t, err)
+
+	// Verify result
+	v := result.GetResultVector()
+	require.Equal(t, fnLength, v.Length())
+	require.Equal(t, types.T_varchar, v.GetType().Oid)
+
+	strParam := vector.GenerateFunctionStrParameter(v)
+	resultBytes, null := strParam.GetStrValue(0)
+	require.False(t, null, "Result should not be null")
+	resultStr := string(resultBytes)
+	require.Equal(t, "123456", resultStr, "EXTRACT(MICROSECOND FROM DATE_ADD result) should extract microseconds correctly")
+
+	// Cleanup
+	unitVec.Free(proc.Mp())
+	resultVec.Free(proc.Mp())
+	result.Free()
+}
+
 // REPLACE
 
 func initReplaceTestCase() []tcTemp {
@@ -6405,7 +6449,8 @@ func TestDateStringAddReturnTypeCompatibility(t *testing.T) {
 	}
 }
 
-// TestDateStringAddNonMicrosecondInterval tests that DateStringAdd works correctly with non-MICROSECOND intervals
+// TestDateStringAddNonMicrosecondInterval tests that DateStringAdd preserves input precision
+// MySQL behavior: DATE_ADD preserves the precision of the input string, even for non-MICROSECOND intervals
 func TestDateStringAddNonMicrosecondInterval(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
@@ -6415,10 +6460,10 @@ func TestDateStringAddNonMicrosecondInterval(t *testing.T) {
 		intervalType types.IntervalType
 		expected     string
 	}{
-		{"SECOND interval", 1, types.Second, "2022-07-01 10:20:31"},
-		{"MINUTE interval", 1, types.Minute, "2022-07-01 10:21:30"},
-		{"HOUR interval", 1, types.Hour, "2022-07-01 11:20:30"},
-		{"DAY interval", 1, types.Day, "2022-07-02 10:20:30"},
+		{"SECOND interval", 1, types.Second, "2022-07-01 10:20:31.123456"},
+		{"MINUTE interval", 1, types.Minute, "2022-07-01 10:21:30.123456"},
+		{"HOUR interval", 1, types.Hour, "2022-07-01 11:20:30.123456"},
+		{"DAY interval", 1, types.Day, "2022-07-02 10:20:30.123456"},
 	}
 
 	for _, tc := range testCases {

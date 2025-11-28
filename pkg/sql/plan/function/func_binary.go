@@ -1588,11 +1588,19 @@ func DateStringAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 				isTimeUnit := iTyp == types.MicroSecond || iTyp == types.Second ||
 					iTyp == types.Minute || iTyp == types.Hour
 
-				// Format as DATETIME string
-				// For MICROSECOND unit, use scale 6 (MySQL compatible: microsecond precision)
-				// For other units, don't show fractional seconds (scale 0)
+				// Extract scale from input string to preserve precision
+				// MySQL behavior: DATE_ADD preserves the precision of the input string
 				scale := int32(0)
-				if iTyp == types.MicroSecond {
+				if dotIdx := strings.Index(dateStrVal, "."); dotIdx >= 0 {
+					// Input string has fractional seconds, extract the scale
+					fractionalPart := dateStrVal[dotIdx+1:]
+					// Count digits in fractional part (up to 6 for microseconds)
+					scale = int32(len(fractionalPart))
+					if scale > 6 {
+						scale = 6
+					}
+				} else if iTyp == types.MicroSecond {
+					// For MICROSECOND unit, use scale 6 if input has no fractional part
 					scale = 6
 				}
 				resultStr := resultDt.String2(scale)
@@ -3824,11 +3832,19 @@ func DateStringSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 				isTimeUnit := iTyp == types.MicroSecond || iTyp == types.Second ||
 					iTyp == types.Minute || iTyp == types.Hour
 
-				// Format as DATETIME string
-				// For MICROSECOND unit, use scale 6 (MySQL compatible: microsecond precision)
-				// For other units, don't show fractional seconds (scale 0)
+				// Extract scale from input string to preserve precision
+				// MySQL behavior: DATE_SUB preserves the precision of the input string
 				scale := int32(0)
-				if iTyp == types.MicroSecond {
+				if dotIdx := strings.Index(dateStrVal, "."); dotIdx >= 0 {
+					// Input string has fractional seconds, extract the scale
+					fractionalPart := dateStrVal[dotIdx+1:]
+					// Count digits in fractional part (up to 6 for microseconds)
+					scale = int32(len(fractionalPart))
+					if scale > 6 {
+						scale = 6
+					}
+				} else if iTyp == types.MicroSecond {
+					// For MICROSECOND unit, use scale 6 if input has no fractional part
 					scale = 6
 				}
 				resultStr := resultDt.String2(scale)
@@ -5740,7 +5756,13 @@ func ExtractFromVarchar(ivecs []*vector.Vector, result vector.FunctionResultWrap
 		return nil
 	}
 	unit := functionUtil.QuickBytesToStr(v1)
+	// For string input, use scale 6 to ensure fractional seconds are correctly parsed
+	// This is critical for EXTRACT(MICROSECOND FROM DATE_ADD(...)) where DATE_ADD returns a string
 	scale := p2.GetType().Scale
+	if scale == 0 {
+		// If scale is 0 (default for VARCHAR), use scale 6 to preserve microsecond precision
+		scale = 6
+	}
 	for i := uint64(0); i < uint64(length); i++ {
 		v2, null2 := p2.GetStrValue(i)
 		if null2 {
