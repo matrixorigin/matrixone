@@ -1072,6 +1072,17 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		crs := new(perfcounter.CounterSet)
 		newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
 
+		hint := engine.FilterHint{}
+		// Pass runtime BloomFilter to reader via FilterHint (only for ivf entries table).
+		if n := s.DataSource.node; n != nil && n.TableDef != nil &&
+			n.TableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries {
+			if bfVal := c.proc.Ctx.Value(defines.IvfBloomFilter{}); bfVal != nil {
+				if bf, ok := bfVal.([]byte); ok && len(bf) > 0 {
+					hint.BloomFilter = bf
+				}
+			}
+		}
+
 		readers, err = s.DataSource.Rel.BuildReaders(
 			newCtx,
 			c.proc,
@@ -1081,7 +1092,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 			s.TxnOffset,
 			len(s.DataSource.OrderBy) > 0,
 			engine.Policy_CheckAll,
-			engine.FilterHint{},
+			hint,
 		)
 
 		stats.AddScopePrepareS3Request(statistic.S3Request{
@@ -1135,6 +1146,16 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		crs := new(perfcounter.CounterSet)
 		newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
 
+		hint := engine.FilterHint{}
+		if n := s.DataSource.node; n != nil && n.TableDef != nil &&
+			n.TableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries {
+			if bfVal := c.proc.Ctx.Value(defines.IvfBloomFilter{}); bfVal != nil {
+				if bf, ok := bfVal.([]byte); ok && len(bf) > 0 {
+					hint.BloomFilter = bf
+				}
+			}
+		}
+
 		mainRds, err = s.DataSource.Rel.BuildReaders(
 			newCtx,
 			c.proc,
@@ -1144,7 +1165,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 			s.TxnOffset,
 			len(s.DataSource.OrderBy) > 0,
 			engine.Policy_CheckAll,
-			engine.FilterHint{},
+			hint,
 		)
 		if err != nil {
 			return

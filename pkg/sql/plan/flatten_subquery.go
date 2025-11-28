@@ -274,7 +274,7 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 }
 
 func (builder *QueryBuilder) insertMarkJoin(left, right int32, joinPreds []*plan.Expr, outerPred *plan.Expr, negate bool, ctx *BindContext) (nodeID int32, markExpr *plan.Expr, err error) {
-	markTag := builder.genNewTag()
+	markTag := builder.genNewBindTag()
 
 	for i, pred := range joinPreds {
 		if !pred.Typ.NotNullable {

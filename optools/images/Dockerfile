@@ -1,4 +1,4 @@
-FROM matrixorigin/golang:1.24-ubuntu22.04 AS builder
+FROM matrixorigin/golang:1.25-ubuntu22.04 AS builder
 
 # goproxy
 ARG GOPROXY="https://proxy.golang.org,direct"

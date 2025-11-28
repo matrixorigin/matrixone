@@ -108,6 +108,8 @@ type RuntimeConfig struct {
 	Probe             uint
 	OrigFuncName      string
 	BackgroundQueries []*plan.Query
+	// Optional BloomFilter bytes for entries table scan (runtime filter)
+	BloomFilter []byte
 }
 
 type VectorIndexCdc[T types.RealNumbers] struct {

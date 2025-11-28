@@ -17,7 +17,6 @@ package idxcron
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -29,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -53,12 +53,12 @@ import (
 +----------------+---------------------+------+------+---------+-------+---------+
 */
 const (
-	Action_Ivfflat_Reindex      = "ivfflat_reindex"
-	Action_Fulltext_BatchDelete = "fulltext_batch_delete"
-	Action_Wildcard             = "*"
+	Action_Ivfflat_Reindex = "ivfflat_reindex"
+	Action_Wildcard        = "*"
 
-	Status_Error = "error"
-	Status_Ok    = "ok"
+	Status_Error   = "error"
+	Status_Ok      = "ok"
+	Status_Skipped = "skipped"
 
 	OneWeek                 = 24 * 7 * time.Hour
 	KmeansTrainPercentParam = "kmeans_train_percent"
@@ -110,59 +110,70 @@ type IndexUpdateStatus struct {
 // Case 1: ivf_train_percent * dsize < 30 * nlist, always re-index
 // Case 2: 30 * nlist < ivf_train_percent * dsize < 256 * nlist, re-index every week
 // Case 3:  dsize > 256 * nlist, re-index every 1 week and ivf_train_percent = (256 * nlist) / dsize
-func (t *IndexUpdateTaskInfo) checkIndexUpdatable(ctx context.Context, dsize uint64, nlist int64) (ok bool, err error) {
+func (t *IndexUpdateTaskInfo) checkIndexUpdatable(ctx context.Context, dsize uint64, nlist int64) (ok bool, reason string, err error) {
 
 	now := time.Now()
 	createdAt := time.Unix(t.CreatedAt.Unix(), 0)
-	if createdAt.Add(createdAtDelay).After(now) {
+	ts := createdAt.Add(createdAtDelay)
+	if ts.After(now) {
 		// skip update when createdAt + delay is after current time
-		return false, nil
+		reason = fmt.Sprintf("current time < 2 days after createdAt (%v < %v)", createdAt.Format("2006-01-02 15:04:05"), ts.Format("2006-01-02 15:04:05"))
+		return
 	}
 
 	// If data size is smaller than nlist, skip the reindex
 	if dsize < uint64(nlist) {
-		return false, nil
+		reason = fmt.Sprintf("source data size < Nlist (%d < %d)", dsize, nlist)
+		return
 	}
 
 	lower := float64(30 * nlist)
 	upper := float64(256 * nlist)
 
 	if t.Metadata == nil {
-		return true, nil
+		ok = true
+		return
 	}
 
 	v, err := t.Metadata.ResolveVariableFunc(KmeansTrainPercentParam, false, true)
 	if err != nil {
-		return false, err
+		return
 	}
 	ivf_train_percent := v.(float64)
 
 	nsample := float64(dsize) * (ivf_train_percent / 100)
 
 	if nsample < lower {
-		return true, nil
+		ok = true
+		return
 	} else if nsample < upper {
 		// reindex every week
 		if t.LastUpdateAt == nil {
-			return true, nil
+			ok = true
+			return
 		}
 
-		ts := time.Unix(t.LastUpdateAt.Unix(), 0)
+		ts = time.Unix(t.LastUpdateAt.Unix(), 0)
 		ts = ts.Add(OneWeek)
 		if ts.After(now) {
-			return false, nil
+			reason = fmt.Sprintf("training sample size in between lower and upper limit (%f < %f < %f) AND current time < 1 week after lastUpdatedAt (%v < %v)",
+				lower, nsample, upper, now.Format("2006-01-02 15:04:05"), ts.Format("2006-01-02 15:04:05"))
+			return
 		} else {
 			// update
-			return true, nil
+			ok = true
+			return
 		}
 
 	} else {
 		// reindex every week
 		if t.LastUpdateAt != nil {
-			ts := time.Unix(t.LastUpdateAt.Unix(), 0)
-			ts = ts.Add(OneWeek)
+			ts = time.Unix(t.LastUpdateAt.Unix(), 0)
+			ts = ts.Add(2 * OneWeek)
 			if ts.After(now) {
-				return false, nil
+				reason = fmt.Sprintf("training sample size > upper limit ( %f > %f) AND current time < 2 week after lastUpdatedAt (%v < %v)",
+					nsample, upper, now.Format("2006-01-02 15:04:05"), ts.Format("2006-01-02 15:04:05"))
+				return
 			}
 		}
 
@@ -170,33 +181,35 @@ func (t *IndexUpdateTaskInfo) checkIndexUpdatable(ctx context.Context, dsize uin
 		ratio := (upper / float64(dsize)) * 100
 		err = t.Metadata.Modify(KmeansTrainPercentParam, ratio)
 		if err != nil {
-			return false, err
+			return
 		}
 
-		return true, nil
+		ok = true
+		return
 	}
 }
 
-func (t *IndexUpdateTaskInfo) saveStatus(sqlproc *sqlexec.SqlProcess, updated bool, err error) error {
+func (t *IndexUpdateTaskInfo) saveStatus(sqlproc *sqlexec.SqlProcess, updated bool, reason string, err error) error {
 
-	// skip update status if index is NOT updated
-	if !updated {
-		return nil
-	}
-
-	errsqlfmt := "UPDATE mo_catalog.mo_index_update SET status = '%s' WHERE table_id = %d AND account_id = %d AND action = '%s'"
+	statussqlfmt := "UPDATE mo_catalog.mo_index_update SET status = '%s' WHERE table_id = %d AND account_id = %d AND action = '%s'"
 	updatesqlfmt := "UPDATE mo_catalog.mo_index_update SET last_update_at = now(), status = '%s' WHERE table_id = %d AND account_id = %d AND action = '%s'"
 
+	// skip update status if index is NOT updated
+	status := IndexUpdateStatus{Time: time.Now()}
 	var sqlfmt string
-	status := IndexUpdateStatus{Status: Status_Ok, Time: time.Now()}
 
 	if err != nil {
 		// save error status column to mo_index_update
 		status.Status = Status_Error
 		status.Msg = err.Error()
-		sqlfmt = errsqlfmt
-		os.Stderr.WriteString(fmt.Sprintf("save Status error %v\n", err))
+		sqlfmt = statussqlfmt
+	} else if !updated {
+		status.Status = Status_Skipped
+		status.Msg = reason
+		sqlfmt = statussqlfmt
 	} else {
+		status.Status = Status_Ok
+		status.Msg = "reindex success"
 		sqlfmt = updatesqlfmt
 	}
 
@@ -288,7 +301,6 @@ func getTasksFunc(
 		catalog.System_Account, 5*time.Minute, nil, nil,
 		func(sqlproc *sqlexec.SqlProcess, data any) error {
 
-			//tasks := data.([]*IndexUpdateTaskInfo)
 			sql := "SELECT db_name, table_name, index_name, action, account_id, table_id, metadata, last_update_at, create_at from mo_catalog.mo_index_update"
 			res, err := runGetTasksSql(sqlproc, sql)
 			if err != nil {
@@ -367,7 +379,6 @@ func getTableDefFunc(sqlproc *sqlexec.SqlProcess, txnEngine engine.Engine, dbnam
 		return
 	}
 
-	os.Stderr.WriteString(fmt.Sprintf("table id %d\n", rel.GetTableID(sqlproc.GetContext())))
 	tableDef = rel.CopyTableDef(sqlproc.GetContext())
 	return
 }
@@ -377,7 +388,7 @@ func runIvfflatReindex(ctx context.Context,
 	txnEngine engine.Engine,
 	txnClient client.TxnClient,
 	cnUUID string,
-	task *IndexUpdateTaskInfo) (updated bool, err error) {
+	task *IndexUpdateTaskInfo) (updated bool, reason string, err error) {
 
 	if len(task.IndexName) == 0 {
 		err = moerr.NewInternalErrorNoCtx("table index name is empty string. skip reindex.")
@@ -439,13 +450,14 @@ func runIvfflatReindex(ctx context.Context,
 				}
 			}
 
-			ok, err := task.checkIndexUpdatable(ctx, dsize, lists)
-			if err != nil {
-				return err
+			ok := false
+			ok, reason, err2 = task.checkIndexUpdatable(ctx, dsize, lists)
+			if err2 != nil {
+				return
 			}
 			if !ok {
 				// skip the update
-				return nil
+				return
 			}
 
 			// run alter table alter reindex
@@ -456,8 +468,6 @@ func runIvfflatReindex(ctx context.Context,
 			}
 			res.Close()
 
-			os.Stderr.WriteString(sql)
-			os.Stderr.WriteString(fmt.Sprintf("\ndsize = %d\n", dsize))
 			// mark reindex is performed
 			updated = true
 			return
@@ -466,27 +476,26 @@ func runIvfflatReindex(ctx context.Context,
 	return
 }
 
-func runFulltextBatchDelete(ctx context.Context, txnEngine engine.Engine, txnClient client.TxnClient, cnUUID string, task *IndexUpdateTaskInfo) (updated bool, err error) {
-	return updated, moerr.NewInternalErrorNoCtx("fulltext batch delete not implemented yet")
-}
-
 func (e *IndexUpdateTaskExecutor) run(ctx context.Context) (err error) {
 
-	os.Stderr.WriteString("IndexUpdateTaskExecutor RUN TASK\n")
+	logutil.Infof("IndexUpdateTaskExecutor START")
+
+	defer func() {
+		logutil.Infof("IndexUpdateTaskExecutor END")
+	}()
 
 	tasks, err := getTasks(ctx, e.txnEngine, e.cnTxnClient, e.cnUUID)
 	if err != nil {
 		return err
 	}
-	os.Stderr.WriteString(fmt.Sprintf("RUN OUT TASKS %v\n", len(tasks)))
-	for _, t := range tasks {
-		os.Stderr.WriteString(fmt.Sprintf("RUN OUT TASKS %v\n", t.Metadata))
-	}
 
 	// do the maintenance such as ivfflat re-index, fulltext batch_delete
 	for _, t := range tasks {
-		var err2 error
-		var updated bool
+		var (
+			err2    error
+			updated bool
+			reason  string
+		)
 
 		select {
 		case <-ctx.Done():
@@ -496,9 +505,7 @@ func (e *IndexUpdateTaskExecutor) run(ctx context.Context) (err error) {
 
 		switch t.Action {
 		case Action_Ivfflat_Reindex:
-			updated, err2 = runIvfflatReindex(ctx, e.txnEngine, e.cnTxnClient, e.cnUUID, t)
-		case Action_Fulltext_BatchDelete:
-			updated, err2 = runFulltextBatchDelete(ctx, e.txnEngine, e.cnTxnClient, e.cnUUID, t)
+			updated, reason, err2 = runIvfflatReindex(ctx, e.txnEngine, e.cnTxnClient, e.cnUUID, t)
 		default:
 			err2 = moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid index update action %v", t))
 		}
@@ -507,15 +514,17 @@ func (e *IndexUpdateTaskExecutor) run(ctx context.Context) (err error) {
 			catalog.System_Account, 5*time.Minute, nil, nil,
 			func(sqlproc *sqlexec.SqlProcess, data any) error {
 
-				return t.saveStatus(sqlproc, updated, err2)
+				return t.saveStatus(sqlproc, updated, reason, err2)
 			})
 	}
 
 	return nil
 }
 
-// var IndexUpdateTaskCronExpr = "0 0 24 * * *"
-var IndexUpdateTaskCronExpr = "*/15 * * * * *"
+var IndexUpdateTaskCronExpr = "0 55 23 * * *" // 23:55:00 everyday
+
+// var IndexUpdateTaskCronExpr = "0 */5 * * * *" // every 5 minutes
+// var IndexUpdateTaskCronExpr = "*/15 * * * * *" // every 15 seconds
 
 const ParamSeparator = " "
 

@@ -204,7 +204,7 @@ func TestCheckIndexUpdatable(t *testing.T) {
 			CreatedAt:    ta.createdAt,
 		}
 
-		ok, err := info.checkIndexUpdatable(context.Background(), ta.dsize, ta.nlists)
+		ok, _, err := info.checkIndexUpdatable(context.Background(), ta.dsize, ta.nlists)
 		require.NoError(t, err)
 		require.Equal(t, ta.expected, ok)
 
@@ -354,8 +354,8 @@ func TestIvfflatReindex(t *testing.T) {
 			})
 			defer stub3.Reset()
 
-			updated, err := runIvfflatReindex(ctx, cnEngine, cnClient, cnUUID, &info)
-			fmt.Printf("updated = %v\n", updated)
+			updated, reason, err := runIvfflatReindex(ctx, cnEngine, cnClient, cnUUID, &info)
+			fmt.Printf("updated = %v, reason = %s\n", updated, reason)
 			require.NoError(t, err)
 			require.Equal(t, ta.expected, updated)
 
@@ -578,7 +578,7 @@ func TestIndexUpdateTaskInfoSaveStatusError(t *testing.T) {
 		})
 		defer stub5.Reset()
 
-		err := info.saveStatus(nil, true, moerr.NewInternalErrorNoCtx("fake error"))
+		err := info.saveStatus(nil, true, "reason", moerr.NewInternalErrorNoCtx("fake error"))
 		require.NoError(t, err)
 
 	}
@@ -591,7 +591,7 @@ func TestIndexUpdateTaskInfoSaveStatusError(t *testing.T) {
 		})
 		defer stub5.Reset()
 
-		err := info.saveStatus(nil, true, nil)
+		err := info.saveStatus(nil, true, "reason", nil)
 		require.Error(t, err)
 
 	}
