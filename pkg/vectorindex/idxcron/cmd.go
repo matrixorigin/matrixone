@@ -135,12 +135,23 @@ func UnregisterUpdateByDbName(ctx context.Context,
 	sqlctx := sqlexec.NewSqlContext(newctx, cnUUID, txn, catalog.System_Account, nil)
 	sqlproc := sqlexec.NewSqlProcessWithContext(sqlctx)
 
-	sql := fmt.Sprintf("DELETE FROM mo_catalog.mo_index_update WHERE account_id = %d AND db_name = '%s'", tenantId, dbName)
+	// check compatibility. skip it if mo_index_update table not found
+	sql := fmt.Sprintf("SELECT COUNT(*) FROM mo_catalog.mo_tables WHERE relname = '%s'", catalog.MO_INDEX_UPDATE)
 	res, err := runCmdSql(sqlproc, sql)
 	if err != nil {
 		return
 	}
-	defer res.Close()
+	if len(res.Batches) == 0 {
+		return
+	}
+	res.Close()
+
+	sql = fmt.Sprintf("DELETE FROM mo_catalog.mo_index_update WHERE account_id = %d AND db_name = '%s'", tenantId, dbName)
+	res, err = runCmdSql(sqlproc, sql)
+	if err != nil {
+		return
+	}
+	res.Close()
 
 	return
 }
