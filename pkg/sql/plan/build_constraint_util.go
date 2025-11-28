@@ -615,7 +615,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 
 	// append ProjectNode
 	projectCtx := NewBindContext(builder, bindCtx)
-	lastTag := builder.genNewTag()
+	lastTag := builder.genNewBindTag()
 	info.rootId = builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_PROJECT,
 		ProjectList: projectList,
@@ -675,7 +675,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 				NodeType:    plan.Node_TABLE_SCAN,
 				ObjRef:      rightObjRef,
 				TableDef:    rightTableDef,
-				BindingTags: []int32{builder.genNewTag()},
+				BindingTags: []int32{builder.genNewBindTag()},
 			}, rightCtx)
 			rightTag := builder.qry.Nodes[rightId].BindingTags[0]
 			baseNodeTag := builder.qry.Nodes[info.rootId].BindingTags[0]
@@ -802,7 +802,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 				NodeType:    plan.Node_PROJECT,
 				ProjectList: info.projectList,
 				Children:    []int32{info.rootId},
-				BindingTags: []int32{builder.genNewTag()},
+				BindingTags: []int32{builder.genNewBindTag()},
 			}, bindCtx)
 			bindCtx.results = info.projectList
 		}
@@ -1137,7 +1137,7 @@ func buildValueScan(
 	var err error
 
 	proc := builder.compCtx.GetProcess()
-	lastTag := builder.genNewTag()
+	lastTag := builder.genNewBindTag()
 	colCount := len(updateColumns)
 	rowsetData := &plan.RowsetData{
 		Cols: make([]*plan.ColData, colCount),
@@ -1294,7 +1294,7 @@ func buildValueScan(
 		return err
 	}
 
-	lastTag = builder.genNewTag()
+	lastTag = builder.genNewBindTag()
 	info.rootId = builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_PROJECT,
 		ProjectList: projectList,
