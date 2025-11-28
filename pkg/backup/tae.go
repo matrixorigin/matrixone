@@ -564,7 +564,7 @@ func CopyGCDir(
 ) ([]*taeFile, error) {
 	var checksum []byte
 
-	taeFileList, metaFiles, files, err := copyFileAndGetMetaFiles(
+	taeFiles, metaFiles, files, err := copyFileAndGetMetaFiles(
 		ctx, srcFs, dstFs, dir, backup, ioutil.DecodeGCMetadataName, false,
 	)
 	if err != nil {
@@ -600,7 +600,7 @@ func CopyGCDir(
 		}
 		if needCopy {
 			copyFiles = append(copyFiles, metaFile)
-			taeFileList = append(taeFileList, filesList...)
+			taeFiles = append(taeFiles, filesList...)
 		}
 	}
 
@@ -619,7 +619,7 @@ func CopyGCDir(
 		if err != nil {
 			return nil, err
 		}
-		taeFileList = append(taeFileList, &taeFile{
+		taeFiles = append(taeFiles, &taeFile{
 			path:     dir + string(os.PathSeparator) + name,
 			size:     files[metaFile.GetIdx()].Size,
 			checksum: checksum,
@@ -627,7 +627,7 @@ func CopyGCDir(
 			ts:       backup,
 		})
 	}
-	return taeFileList, nil
+	return taeFiles, nil
 }
 
 func CopyCheckpointDir(
@@ -640,7 +640,7 @@ func CopyCheckpointDir(
 		meta.SetExt("")
 		return meta
 	}
-	taeFileList, metaFiles, _, err := copyFileAndGetMetaFiles(
+	taeFiles, metaFiles, _, err := copyFileAndGetMetaFiles(
 		ctx, srcFs, dstFs, dir, backup, decoder, true,
 	)
 	if err != nil {
@@ -656,7 +656,7 @@ func CopyCheckpointDir(
 			break
 		}
 	}
-	return taeFileList, minTs, nil
+	return taeFiles, minTs, nil
 }
 
 func CopyFileWithRetry(ctx context.Context, srcFs, dstFs fileservice.FileService, name, dstDir string, newName ...string) ([]byte, error) {
