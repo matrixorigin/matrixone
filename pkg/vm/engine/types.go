@@ -1319,5 +1319,6 @@ func GetPrefetchOnSubscribed() (bool, []*regexp.Regexp) {
 }
 
 type FilterHint struct {
-	Must bool
+	Must        bool
+	BloomFilter []byte
 }

@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -50,6 +51,10 @@ import (
 // -----------------------------------------------------------------
 
 func (mixin *withFilterMixin) reset() {
+	// Cleanup reusableTempVec and other resources before resetting filter
+	if mixin.filterState.filter.Cleanup != nil {
+		mixin.filterState.filter.Cleanup()
+	}
 	mixin.filterState.filter = objectio.BlockReadFilter{}
 	mixin.filterState.memFilter = MemPKFilter{}
 	mixin.columns.indexOfFirstSortedColumn = -1
@@ -137,12 +142,44 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 	}
 
 	if pkPos != -1 {
-		// here we will select the primary key column from the vectors, and
-		// use the search function to find the offset of the primary key.
-		// it returns the offset of the primary key in the pk vector.
-		// if the primary key is not found, it returns empty slice
-		mixin.filterState.seqnums = []uint16{mixin.columns.seqnums[pkPos]}
-		mixin.filterState.colTypes = mixin.columns.colTypes[pkPos : pkPos+1]
+		// For composite primary key, optimize BloomFilter filtering by using __mo_index_pri_col directly
+		// if all conditions are met (IVF entries table, has BF, last PK col is __mo_index_pri_col, query includes it).
+		if mixin.tableDef.Pkey != nil && len(mixin.tableDef.Pkey.Names) > 1 {
+			// Composite primary key: check optimization conditions.
+			lastPKColName := strings.ToLower(mixin.tableDef.Pkey.Names[len(mixin.tableDef.Pkey.Names)-1])
+
+			// Check all conditions for optimization (must all be satisfied):
+			// 1. Table type is IVF entries table.
+			isIVFEntriesTable := mixin.tableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries
+			// 2. Has bloom filter.
+			hasBF := mixin.filterState.hasBF
+			// 3. Last PK column is __mo_index_pri_col.
+			isLastColPriCol := lastPKColName == strings.ToLower(catalog.IndexTablePrimaryColName)
+			// 4. Query includes __mo_index_pri_col.
+			lastPKColPos := -1
+			for i, col := range cols {
+				if strings.ToLower(col) == lastPKColName {
+					lastPKColPos = i
+					break
+				}
+			}
+
+			if isIVFEntriesTable && hasBF && isLastColPriCol && lastPKColPos != -1 {
+				// All conditions met: use both PK column and __mo_index_pri_col for filtering.
+				// cacheVectors[0] will be used for PK filtering.
+				// cacheVectors[1] will be used for BF filtering (directly, no unpacking needed).
+				mixin.filterState.seqnums = []uint16{mixin.columns.seqnums[pkPos], mixin.columns.seqnums[lastPKColPos]}
+				mixin.filterState.colTypes = []types.Type{mixin.columns.colTypes[pkPos], mixin.columns.colTypes[lastPKColPos]}
+			} else {
+				// Conditions not met: use composite PK column only.
+				mixin.filterState.seqnums = []uint16{mixin.columns.seqnums[pkPos]}
+				mixin.filterState.colTypes = mixin.columns.colTypes[pkPos : pkPos+1]
+			}
+		} else {
+			// Single primary key or non-composite: use the primary key column directly.
+			mixin.filterState.seqnums = []uint16{mixin.columns.seqnums[pkPos]}
+			mixin.filterState.colTypes = mixin.columns.colTypes[pkPos : pkPos+1]
+		}
 	}
 
 	if mixin.tableDef.Pkey != nil {
@@ -232,6 +269,7 @@ type withFilterMixin struct {
 		seqnums   []uint16 // seqnums of the columns in the filter
 		pkSeqNum  int32
 		colTypes  []types.Type
+		hasBF     bool // whether bloom filter is available
 	}
 
 	orderByLimit *objectio.BlockReadTopOp
@@ -366,6 +404,7 @@ func NewReader(
 	blockFilter, err := ConstructBlockPKFilter(
 		catalog.IsFakePkName(tableDef.Pkey.PkeyColName),
 		baseFilter,
+		filterHint.BloomFilter,
 	)
 	if err != nil {
 		return nil, err
@@ -384,6 +423,7 @@ func NewReader(
 	r.filterState.expr = expr
 	r.filterState.filter = blockFilter
 	r.filterState.memFilter = memFilter
+	r.filterState.hasBF = len(filterHint.BloomFilter) > 0
 	r.threshHold = threshHold
 	return r, nil
 }
@@ -402,12 +442,12 @@ func (r *reader) SetOrderBy(orderby []*plan.OrderBySpec) {
 	r.source.SetOrderBy(orderby)
 }
 
-func (r *reader) SetBlockTop(orderby []*plan.OrderBySpec, limit uint64) {
-	if len(orderby) == 0 || limit == 0 {
+func (r *reader) SetBlockTop(orderBy []*plan.OrderBySpec, limit uint64) {
+	if len(orderBy) == 0 || limit == 0 {
 		return
 	}
 
-	orderFunc := orderby[0].Expr.GetF()
+	orderFunc := orderBy[0].Expr.GetF()
 	if orderFunc == nil {
 		panic("order function is nil")
 	}
@@ -548,6 +588,19 @@ func (r *reader) Read(
 		return true, nil
 	}
 	if state == engine.InMem {
+		if r.orderByLimit != nil {
+			sels, dists, err := blockio.HandleOrderByLimitOnIVFFlatIndex(ctx, nil, outBatch.Vecs[r.orderByLimit.ColPos], r.orderByLimit)
+			if err != nil {
+				return false, err
+			}
+
+			outBatch.Shuffle(sels, mp)
+
+			distVec := vector.NewVec(types.T_float64.ToType())
+			vector.AppendFixedList(distVec, dists, nil, mp)
+			outBatch.Vecs = append(outBatch.Vecs, distVec)
+		}
+
 		return false, nil
 	}
 	//read block

@@ -1,6 +1,17 @@
 #SELECT, 嵌套
 select power(exp(10), log(100)),exp(power(2,2)),power(-1,1),power(NULL,0),power(1,1),power(3,9),power(-1,2),power(NULL,2);
 
+#SELECT - Basic test cases from requirements
+SELECT POW(2, 3) AS result1;
+SELECT POW(2, 0) AS result2;
+SELECT POW(4, 0.5) AS result3;
+SELECT POWER(2, 3) AS result4;
+SELECT POWER(2, 0) AS result5;
+SELECT POWER(4, 0.5) AS result6;
+
+#SELECT - Verify POW and POWER are aliases
+SELECT POW(2, 3) = POWER(2, 3) AS same_result;
+
 #SELECT
 SELECT power(2,13);
 SELECT power(-2,-3);

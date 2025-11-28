@@ -310,11 +310,14 @@ SELECT ASCII('中'), ASCII('😀');
 ASCII(中)    ASCII(😀)
 228    240
 SELECT ORD('A'), ORD('中'), ORD('😀');
-not supported: function or operator 'ord'
+ORD(A)    ORD(中)    ORD(😀)
+65    11385060    2157486064
 SELECT CHAR(65, 66, 67);
-not supported: function or operator 'char'
+CHAR(65, 66, 67)
+ABC
 SELECT CHAR(228, 184, 173);  -- UTF-8 bytes for '中'
-not supported: function or operator 'char'
+CHAR(228, 184, 173)
+中
 CREATE TABLE t_strcmp (
 id INT PRIMARY KEY,
 val1 VARCHAR(100),

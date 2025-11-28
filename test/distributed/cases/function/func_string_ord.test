@@ -1,0 +1,28 @@
+# Basic test case from requirements
+SELECT ORD('A') AS result1;
+
+# Additional test cases
+SELECT ORD('B') AS single_char;
+SELECT ORD('Hello') AS first_char_of_string;
+SELECT ORD('') AS empty_string;
+SELECT ORD('0') AS digit;
+SELECT ORD(' ') AS space;
+
+# NULL handling
+SELECT ORD(NULL) AS null_input;
+
+# Table usage
+CREATE TABLE t1(str VARCHAR(50));
+INSERT INTO t1 VALUES ('A'), ('Hello'), ('World'), ('');
+SELECT str, ORD(str) AS ord_value FROM t1;
+DROP TABLE t1;
+
+# WHERE clause
+CREATE TABLE t1(str VARCHAR(50));
+INSERT INTO t1 VALUES ('A'), ('Hello'), ('World'), ('B');
+SELECT * FROM t1 WHERE ORD(str) = 65;
+DROP TABLE t1;
+
+# Comparison with ASCII (should be same for single-byte characters)
+SELECT ORD('A') AS ord_value, ASCII('A') AS ascii_value;
+

@@ -688,6 +688,9 @@ func isLegalLine(param *tree.ExternParam, cols []*plan.ColDef, fields []csvparse
 				}
 			}
 		case types.T_timestamp:
+			// Note: isLegalLine is only used for file offset calculation in parallel LOAD DATA,
+			// not for actual data loading. It uses time.Local as fallback since proc is not available.
+			// The actual data loading uses getColData which correctly uses session timezone.
 			t := time.Local
 			_, err := types.ParseTimestamp(t, field.Val, col.Typ.Scale)
 			if err != nil {
@@ -1124,7 +1127,7 @@ func getOneRowData(proc *process.Process, bat *batch.Batch, line []csvparser.Fie
 			return err
 		}
 		for _, attr := range param.Attrs {
-			if err := getColData(bat, line, rowIdx, param, mp, attr); err != nil {
+			if err := getColData(bat, line, rowIdx, param, mp, attr, proc); err != nil {
 				return err
 			}
 		}
@@ -1133,7 +1136,7 @@ func getOneRowData(proc *process.Process, bat *batch.Batch, line []csvparser.Fie
 
 	if int32(len(line)) >= param.ColumnListLen {
 		for _, attr := range param.Attrs {
-			if err := getColData(bat, line, rowIdx, param, mp, attr); err != nil {
+			if err := getColData(bat, line, rowIdx, param, mp, attr, proc); err != nil {
 				return err
 			}
 		}
@@ -1142,7 +1145,7 @@ func getOneRowData(proc *process.Process, bat *batch.Batch, line []csvparser.Fie
 
 	for _, attr := range param.Attrs {
 		if attr.ColFieldIndex < int32(len(line)) {
-			if err := getColData(bat, line, rowIdx, param, mp, attr); err != nil {
+			if err := getColData(bat, line, rowIdx, param, mp, attr, proc); err != nil {
 				return err
 			}
 			continue
@@ -1153,7 +1156,7 @@ func getOneRowData(proc *process.Process, bat *batch.Batch, line []csvparser.Fie
 	return nil
 }
 
-func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *ExternalParam, mp *mpool.MPool, attr plan.ExternAttr) error {
+func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *ExternalParam, mp *mpool.MPool, attr plan.ExternAttr, proc *process.Process) error {
 	colIdx := attr.ColIndex
 	colName := attr.ColName
 	vec := bat.Vecs[colIdx]
@@ -1541,6 +1544,12 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 		}
 	case types.T_timestamp:
 		t := time.Local
+		if proc != nil {
+			t = proc.GetSessionInfo().TimeZone
+			if t == nil {
+				t = time.Local
+			}
+		}
 		d, err := types.ParseTimestamp(t, field.Val, vec.GetType().Scale)
 		if err != nil {
 			logutil.Errorf("parse field[%v] err:%v", field.Val, err)
