@@ -54,8 +54,6 @@ drop snapshot snap01;
 
 
 -- session
-set experimental_ivf_index=1;
-show variables like "experimental_ivf_index";
 drop database if exists vecdb2;
 create database vecdb2;
 use vecdb2;
@@ -67,8 +65,6 @@ drop snapshot if exists snap02;
 create snapshot snap02 for account sys;
 drop database vecdb2;
 restore account sys from snapshot snap02;
-show variables like "experimental_ivf_index";
-set experimental_ivf_index=0;
 drop database vecdb2;
 drop snapshot snap02;
 
@@ -76,9 +72,7 @@ drop snapshot snap02;
 
 
 -- global
-set global experimental_ivf_index=1;
 -- @session:id=2&user=sys:dump&password=111
-show variables like "experimental_ivf_index";
 drop database if exists vecdb2;
 create database vecdb2;
 use vecdb2;
@@ -90,8 +84,6 @@ drop snapshot if exists snap02;
 create snapshot snap02 for account sys;
 drop database vecdb2;
 restore account sys from snapshot snap02;
-show variables like "experimental_ivf_index";
-set experimental_ivf_index=0;
 drop database vecdb2;
 drop snapshot snap02;
 -- @session

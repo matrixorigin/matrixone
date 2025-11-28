@@ -97,18 +97,14 @@ select * from db1.t8_copy order by id asc;
 
 select @@session.experimental_fulltext_index;
 
-SET experimental_ivf_index = 1;
 create table db1.t9(a int primary key, b vecf32(3));
 insert into db1.t9 values(1, "[1,2,3]");
 insert into db1.t9 values(2, "[1,2,4]");
 insert into db1.t9 values(3, "[1,2.4,4]");
 create index idx using IVFFLAT on db1.t9(b);
-SET experimental_ivf_index = 0;
 
 create table db1.t9_copy clone db1.t9;
 select * from db1.t9_copy order by a asc;
-
-select @@session.experimental_ivf_index;
 
 drop snapshot if exists sp0;
 drop snapshot if exists sp1;

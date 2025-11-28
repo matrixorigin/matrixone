@@ -60,7 +60,6 @@ idx2    MULTIPLE    __mo_alias_id
 select relkind from mo_catalog.mo_tables where relname in (select distinct index_table_name from mo_catalog.mo_indexes where name = 'idx2' and table_id in (select rel_id from mo_catalog.mo_tables where relname = 't1'));
 relkind
 i
-SET experimental_ivf_index = 1;
 drop table if exists t2;
 create table t2(a int primary key, b vecf32(3), index idx9 using ivfflat (b));
 select * from t2;

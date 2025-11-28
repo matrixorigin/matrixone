@@ -1,5 +1,3 @@
-SET experimental_ivf_index = 1;
-
 DROP TABLE IF EXISTS `ca_specify_answer_dataset`;
 CREATE TABLE `ca_specify_answer_dataset` (
   `id` bigint NOT NULL AUTO_INCREMENT,
