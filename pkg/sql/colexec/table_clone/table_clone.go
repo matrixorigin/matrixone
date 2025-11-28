@@ -485,7 +485,6 @@ func (tc *TableClone) updateDstAutoIncrColumns(
 		}
 	}()
 
-	maxVal = int64(0)
 	rows := 0
 	for _, col := range incrCols {
 		maxVal = int64(tc.Ctx.SrcAutoIncrOffsets[int32(col.ColIndex)])
