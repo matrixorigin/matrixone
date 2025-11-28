@@ -3683,16 +3683,11 @@ func buildDeleteMultiTableIndexes(ctx CompilerContext, builder *QueryBuilder, bi
 
 			if isUpdate {
 				// do it like simple update
-				logutil.Infof("IVF_INDEX_DEBUG: UPDATE operation detected for table %s, index %s, entries table %s",
-					delCtx.tableDef.Name, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexName,
-					entriesTableDef.Name)
 				lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
 				newSourceStep := builder.appendStep(lastNodeId)
 				// delete uk plan
 				{
 					//sink_scan -> lock -> delete
-					logutil.Infof("IVF_INDEX_DEBUG: Building DELETE plan for entries table %s (step %d)",
-						entriesTableDef.Name, newSourceStep)
 					lastNodeId = appendSinkScanNode(builder, bindCtx, newSourceStep)
 					delNodeInfo := makeDeleteNodeInfo(builder.compCtx, entriesObjRef, entriesTableDef, entriesDeleteIdx, false, entriesTblPkPos, entriesTblPkTyp, delCtx.lockTable)
 					lastNodeId, err = makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo, false, true, false)
@@ -3700,14 +3695,11 @@ func buildDeleteMultiTableIndexes(ctx CompilerContext, builder *QueryBuilder, bi
 					if err != nil {
 						return err
 					}
-					logutil.Infof("IVF_INDEX_DEBUG: DELETE plan built, nodeId=%d", lastNodeId)
 					builder.appendStep(lastNodeId)
 				}
 				// insert ivf_sk plan
 				{
 					//TODO: verify with ouyuanning, if this is correct
-					logutil.Infof("IVF_INDEX_DEBUG: Building INSERT plan for entries table %s (step %d)",
-						entriesTableDef.Name, newSourceStep)
 					lastNodeId = appendSinkScanNode(builder, bindCtx, newSourceStep)
 					lastNodeIdForTblJoinCentroids := appendSinkScanNode(builder, bindCtx, newSourceStep)
 
@@ -3743,7 +3735,6 @@ func buildDeleteMultiTableIndexes(ctx CompilerContext, builder *QueryBuilder, bi
 					if err != nil {
 						return err
 					}
-					logutil.Infof("IVF_INDEX_DEBUG: Pre-insert vector plan built, step=%d", preUKStep)
 
 					insertEntriesTableDef := DeepCopyTableDef(entriesTableDef, false)
 					for _, col := range entriesTableDef.Cols {
@@ -3770,7 +3761,6 @@ func buildDeleteMultiTableIndexes(ctx CompilerContext, builder *QueryBuilder, bi
 					if err != nil {
 						return err
 					}
-					logutil.Infof("IVF_INDEX_DEBUG: INSERT plan built for entries table %s", entriesTableDef.Name)
 				}
 
 			} else {
