@@ -29,15 +29,15 @@ Project
               Runtime Filter Probe: t2.__mo_cpkey_col Match Prefix
         ->  Join
               Join Type: INDEX
-              Join Cond: (t1.c1 = #[1,0])
+              Join Cond: (t1.c1 = __mo_index_pri_col)
               Runtime Filter Build: #[-1,0]
               ->  Table Scan on d1.t1 [ForceOneCN]
                     Filter Cond: (t1.c3 = 11)
                     Block Filter Cond: (t1.c3 = 11)
                     Runtime Filter Probe: t1.c1
               ->  Index Table Scan on t1.id1 [ForceOneCN]
-                    Filter Cond: (#[0,0] = 11)
-                    Block Filter Cond: (#[0,0] = 11)
+                    Filter Cond: (__mo_index_idx_col = 11)
+                    Block Filter Cond: (__mo_index_idx_col = 11)
 select * from t1,t2 where t1.c1=t2.c0 and t1.c3=11;
 c1    c2    c3    c0    c1    c2    c3
 11    11    11    11    11    11    11
@@ -263,7 +263,7 @@ explain SELECT pseudo1 FROM t14 WHERE pseudo='joce';
 TP QUERY PLAN
 Project
   ->  Index Table Scan on t14.pseudo
-        Filter Cond: prefix_eq(#[0,0])
+        Filter Cond: prefix_eq(__mo_index_idx_col)
 SELECT pseudo1 FROM t14 WHERE pseudo='joce';
 pseudo1
 testtt
@@ -279,11 +279,11 @@ TP QUERY PLAN
 Project
   ->  Join
         Join Type: INDEX
-        Join Cond: (t1.__mo_fake_pk_col = #[1,0])
+        Join Cond: (t1.__mo_fake_pk_col = __mo_index_pri_col)
         Runtime Filter Build: #[-1,0]
         ->  Table Scan on d1.t1 [ForceOneCN]
               Filter Cond: (t1.c1 = 1)
               Runtime Filter Probe: t1.__mo_fake_pk_col
         ->  Index Table Scan on t1.c1 [ForceOneCN]
-              Filter Cond: prefix_eq(#[0,0])
+              Filter Cond: prefix_eq(__mo_index_idx_col)
 drop database d1;
