@@ -1360,6 +1360,7 @@ message AlterTableAlterReIndex {
 	string table_name = 2;
 	string index_name = 3;
 	int64 index_algo_param_list = 4;
+        bool force_sync = 5;
 }
 
 message AlterTableComment {

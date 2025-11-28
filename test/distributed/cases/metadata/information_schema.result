@@ -32,6 +32,7 @@ def    mo_catalog    mo_columns    BASE TABLE    Tae
 def    mo_catalog    mo_data_key    BASE TABLE    Tae
 def    mo_catalog    mo_database    BASE TABLE    Tae
 def    mo_catalog    mo_foreign_keys    BASE TABLE    Tae
+def    mo_catalog    mo_index_update    BASE TABLE    Tae
 def    mo_catalog    mo_indexes    BASE TABLE    Tae
 def    mo_catalog    mo_iscp_log    BASE TABLE    Tae
 def    mo_catalog    mo_merge_settings    BASE TABLE    Tae

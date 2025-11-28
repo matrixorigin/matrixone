@@ -812,3 +812,29 @@ func CreateCompressFileTable(db engine.Database) {
 		}
 	}
 }
+
+func CreateIvfSrcTable(db engine.Database) {
+	ctx := context.TODO()
+	{
+		var attrs []engine.TableDef
+
+		{
+			attrs = append(attrs, &engine.AttributeDef{
+				Attr: engine.Attribute{
+					Alg:     compress.Lz4,
+					Name:    "a",
+					Type:    types.T_int64.ToType(),
+					Primary: true,
+				}})
+			attrs = append(attrs, &engine.AttributeDef{
+				Attr: engine.Attribute{
+					Alg:  compress.Lz4,
+					Name: "b",
+					Type: types.T_array_float32.ToType(),
+				}})
+		}
+		if err := db.Create(ctx, "ivfsrc", attrs); err != nil {
+			logutil.Fatal(err.Error())
+		}
+	}
+}

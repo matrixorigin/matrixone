@@ -81,6 +81,7 @@ alter table vector_index_06 alter rindex idx01 ivfflat lists=3;
 alter table vector_index_06 alter reindex idx01 ivfflat;
 alter table vector_index_06 alter reindex idx01 lists=3;
 alter table vector_index_06 alter reindex idx01 flat lists=3;
+alter table vector_index_06 alter reindex idx01 ivfflat force_sync;
 
 -- L2_DISTANCE(）
 create table vector_index_07(a int primary key, b vecf32(128),c int,key c_k(c));
