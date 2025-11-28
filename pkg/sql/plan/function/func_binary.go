@@ -1589,16 +1589,13 @@ func DateStringAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 					iTyp == types.Minute || iTyp == types.Hour
 
 				// Extract scale from input string to preserve precision
-				// MySQL behavior: DATE_ADD preserves the precision of the input string
+				// MySQL behavior: DATE_ADD with string input that has fractional seconds
+				// should pad zeros to 6 digits (e.g., '.9999' -> '.999900')
 				scale := int32(0)
 				if dotIdx := strings.Index(dateStrVal, "."); dotIdx >= 0 {
-					// Input string has fractional seconds, extract the scale
-					fractionalPart := dateStrVal[dotIdx+1:]
-					// Count digits in fractional part (up to 6 for microseconds)
-					scale = int32(len(fractionalPart))
-					if scale > 6 {
-						scale = 6
-					}
+					// Input string has fractional seconds, use scale 6 to pad zeros
+					// MySQL behavior: pad fractional seconds to 6 digits
+					scale = 6
 				} else if iTyp == types.MicroSecond {
 					// For MICROSECOND unit, use scale 6 if input has no fractional part
 					scale = 6
@@ -3833,16 +3830,13 @@ func DateStringSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 					iTyp == types.Minute || iTyp == types.Hour
 
 				// Extract scale from input string to preserve precision
-				// MySQL behavior: DATE_SUB preserves the precision of the input string
+				// MySQL behavior: DATE_SUB with string input that has fractional seconds
+				// should pad zeros to 6 digits (e.g., '.9999' -> '.999900')
 				scale := int32(0)
 				if dotIdx := strings.Index(dateStrVal, "."); dotIdx >= 0 {
-					// Input string has fractional seconds, extract the scale
-					fractionalPart := dateStrVal[dotIdx+1:]
-					// Count digits in fractional part (up to 6 for microseconds)
-					scale = int32(len(fractionalPart))
-					if scale > 6 {
-						scale = 6
-					}
+					// Input string has fractional seconds, use scale 6 to pad zeros
+					// MySQL behavior: pad fractional seconds to 6 digits
+					scale = 6
 				} else if iTyp == types.MicroSecond {
 					// For MICROSECOND unit, use scale 6 if input has no fractional part
 					scale = 6

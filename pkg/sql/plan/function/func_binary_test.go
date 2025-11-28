@@ -6449,8 +6449,9 @@ func TestDateStringAddReturnTypeCompatibility(t *testing.T) {
 	}
 }
 
-// TestDateStringAddNonMicrosecondInterval tests that DateStringAdd preserves input precision
-// MySQL behavior: DATE_ADD preserves the precision of the input string, even for non-MICROSECOND intervals
+// TestDateStringAddNonMicrosecondInterval tests that DateStringAdd pads fractional seconds to 6 digits
+// MySQL behavior: DATE_ADD with string input that has fractional seconds pads zeros to 6 digits
+// (e.g., '.9999' -> '.999900', '.123456' -> '.123456')
 func TestDateStringAddNonMicrosecondInterval(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
@@ -6497,6 +6498,91 @@ func TestDateStringAddNonMicrosecondInterval(t *testing.T) {
 			resultStr, null := strParam.GetStrValue(0)
 			require.False(t, null)
 			require.Equal(t, tc.expected, string(resultStr))
+
+			// Cleanup
+			for _, vec := range ivecs {
+				if vec != nil {
+					vec.Free(proc.Mp())
+				}
+			}
+			if result != nil {
+				result.Free()
+			}
+		})
+	}
+}
+
+// TestDateStringAddPadsFractionalSeconds tests that DATE_ADD pads fractional seconds to 6 digits
+// MySQL behavior: DATE_ADD('2022-02-28 23:59:59.9999', INTERVAL 1 WEEK) -> '2022-03-07 23:59:59.999900'
+func TestDateStringAddPadsFractionalSeconds(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	testCases := []struct {
+		name         string
+		input        string
+		interval     int64
+		intervalType types.IntervalType
+		expected     string
+	}{
+		{
+			name:         "4-digit fractional seconds padded to 6",
+			input:        "2022-02-28 23:59:59.9999",
+			interval:     7, // 1 week
+			intervalType: types.Day,
+			expected:     "2022-03-07 23:59:59.999900",
+		},
+		{
+			name:         "3-digit fractional seconds padded to 6",
+			input:        "2022-02-28 23:59:59.123",
+			interval:     1,
+			intervalType: types.Hour,
+			expected:     "2022-03-01 00:59:59.123000",
+		},
+		{
+			name:         "1-digit fractional seconds padded to 6",
+			input:        "2022-02-28 23:59:59.5",
+			interval:     1,
+			intervalType: types.Minute,
+			expected:     "2022-03-01 00:00:59.500000",
+		},
+		{
+			name:         "6-digit fractional seconds (no padding needed)",
+			input:        "2022-02-28 23:59:59.123456",
+			interval:     1,
+			intervalType: types.Hour,
+			expected:     "2022-03-01 00:59:59.123456",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Create input vectors
+			ivecs := make([]*vector.Vector, 3)
+			var err error
+			ivecs[0], err = vector.NewConstBytes(types.T_varchar.ToType(), []byte(tc.input), 1, proc.Mp())
+			require.NoError(t, err)
+			ivecs[1], err = vector.NewConstFixed(types.T_int64.ToType(), tc.interval, 1, proc.Mp())
+			require.NoError(t, err)
+			ivecs[2], err = vector.NewConstFixed(types.T_int64.ToType(), int64(tc.intervalType), 1, proc.Mp())
+			require.NoError(t, err)
+
+			// Create result vector
+			result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+
+			// Initialize result vector
+			err = result.PreExtendAndReset(1)
+			require.NoError(t, err)
+
+			// Call DateStringAdd
+			err = DateStringAdd(ivecs, result, proc, 1, nil)
+			require.NoError(t, err)
+
+			// Verify result
+			v := result.GetResultVector()
+			strParam := vector.GenerateFunctionStrParameter(v)
+			resultStr, null := strParam.GetStrValue(0)
+			require.False(t, null)
+			require.Equal(t, tc.expected, string(resultStr), "Fractional seconds should be padded to 6 digits")
 
 			// Cleanup
 			for _, vec := range ivecs {
