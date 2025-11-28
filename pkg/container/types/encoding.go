@@ -388,6 +388,16 @@ func CompareValues(left, right any, t T) int {
 		} else {
 			return 0
 		}
+	case T_bit:
+		lVal := left.(uint64)
+		rVal := right.(uint64)
+		if lVal > rVal {
+			return 1
+		}
+		if lVal < rVal {
+			return -1
+		}
+		return 0
 	case T_int8:
 		lVal := left.(int8)
 		rVal := right.(int8)
@@ -460,19 +470,72 @@ func CompareValues(left, right any, t T) int {
 		lVal := left.(TS)
 		rVal := right.(TS)
 		return lVal.Compare(&rVal)
+	case T_Blockid:
+		lVal := left.(Blockid)
+		rVal := right.(Blockid)
+		return lVal.Compare(&rVal)
 	case T_Rowid:
 		lVal := left.(Rowid)
 		rVal := right.(Rowid)
 		return lVal.Compare(&rVal)
-	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary,
-		T_array_float32, T_array_float64, T_datalink:
+	case T_char, T_varchar, T_blob, T_text, T_binary, T_varbinary, T_datalink:
 		return bytes.Compare(left.([]byte), right.([]byte))
+	case T_json:
+		switch lVal := left.(type) {
+		case bytejson.ByteJson:
+			return bytejson.CompareByteJson(lVal, right.(bytejson.ByteJson))
+		case []byte:
+			return bytes.Compare(lVal, right.([]byte))
+		default:
+			panic(fmt.Sprintf("CompareValues unsupported json value type %T", left))
+		}
+	case T_array_float32:
+		switch lVal := left.(type) {
+		case []byte:
+			return bytes.Compare(lVal, right.([]byte))
+		case []float32:
+			return compareFloatSlice(lVal, right.([]float32))
+		default:
+			panic(fmt.Sprintf("CompareValues unsupported array_float32 value type %T", left))
+		}
+	case T_array_float64:
+		switch lVal := left.(type) {
+		case []byte:
+			return bytes.Compare(lVal, right.([]byte))
+		case []float64:
+			return compareFloatSlice(lVal, right.([]float64))
+		default:
+			panic(fmt.Sprintf("CompareValues unsupported array_float64 value type %T", left))
+		}
 	case T_enum:
 		lVal := left.(Enum)
 		rVal := right.(Enum)
 		return int(lVal - rVal)
 	default:
 		panic(fmt.Sprintf("CompareValues unsupported type %v", t))
+	}
+}
+
+func compareFloatSlice[T ~float32 | ~float64](left, right []T) int {
+	min := len(left)
+	if len(right) < min {
+		min = len(right)
+	}
+	for i := 0; i < min; i++ {
+		if left[i] < right[i] {
+			return -1
+		}
+		if left[i] > right[i] {
+			return 1
+		}
+	}
+	switch {
+	case len(left) < len(right):
+		return -1
+	case len(left) > len(right):
+		return 1
+	default:
+		return 0
 	}
 }
 
