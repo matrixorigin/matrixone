@@ -59,7 +59,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 	selectNode := builder.qry.Nodes[lastNodeID]
 	selectTag := selectNode.BindingTags[0]
 
-	fullProjTag := builder.genNewTag()
+	fullProjTag := builder.genNewBindTag()
 	fullProjList := make([]*plan.Expr, 0, len(selectNode.ProjectList)+len(tableDef.Cols))
 	for i, expr := range selectNode.ProjectList {
 		fullProjList = append(fullProjList, &plan.Expr{
@@ -80,7 +80,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 
 	// get old columns from existing main table
 	{
-		oldScanTag := builder.genNewTag()
+		oldScanTag := builder.genNewBindTag()
 
 		builder.addNameByColRef(oldScanTag, tableDef)
 
@@ -186,7 +186,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 
 	// detect primary key confliction
 	{
-		scanTag := builder.genNewTag()
+		scanTag := builder.genNewBindTag()
 
 		// handle primary/unique key confliction
 		builder.addNameByColRef(scanTag, tableDef)
@@ -268,7 +268,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			continue
 		}
 
-		idxTag := builder.genNewTag()
+		idxTag := builder.genNewBindTag()
 		builder.addNameByColRef(idxTag, idxTableDefs[i])
 
 		idxScanNode := &plan.Node{
@@ -352,7 +352,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 
 	// get old RowID for index tables
 	for i := range tableDef.Indexes {
-		idxTag := builder.genNewTag()
+		idxTag := builder.genNewBindTag()
 		builder.addNameByColRef(idxTag, idxTableDefs[i])
 
 		idxScanNode := &plan.Node{
@@ -408,7 +408,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 	lockTargets := make([]*plan.LockTarget, 0)
 	updateCtxList := make([]*plan.UpdateCtx, 0)
 
-	finalProjTag := builder.genNewTag()
+	finalProjTag := builder.genNewBindTag()
 	finalProjList := make([]*plan.Expr, 0, len(tableDef.Cols)+len(tableDef.Indexes)*2)
 	var newPkIdx int32
 
@@ -580,7 +580,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			NodeType:    plan.Node_LOCK_OP,
 			Children:    []int32{lastNodeID},
 			TableDef:    tableDef,
-			BindingTags: []int32{builder.genNewTag()},
+			BindingTags: []int32{builder.genNewBindTag()},
 			LockTargets: lockTargets,
 		}, bindCtx)
 		reCheckifNeedLockWholeTable(builder)
@@ -589,7 +589,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 	lastNodeID = builder.appendNode(&plan.Node{
 		NodeType:      plan.Node_MULTI_UPDATE,
 		Children:      []int32{lastNodeID},
-		BindingTags:   []int32{builder.genNewTag()},
+		BindingTags:   []int32{builder.genNewBindTag()},
 		UpdateCtxList: updateCtxList,
 	}, bindCtx)
 
@@ -614,8 +614,8 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 
 	projList1 := make([]*plan.Expr, 0, len(tableDef.Cols)-1)
 	projList2 := make([]*plan.Expr, 0, len(tableDef.Cols)-1)
-	projTag1 := builder.genNewTag()
-	preInsertTag := builder.genNewTag()
+	projTag1 := builder.genNewBindTag()
+	preInsertTag := builder.genNewBindTag()
 
 	var (
 		compPkeyExpr  *plan.Expr
@@ -778,7 +778,7 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 		NodeType:    plan.Node_PROJECT,
 		ProjectList: projList2,
 		Children:    []int32{lastNodeID},
-		BindingTags: []int32{builder.genNewTag()},
+		BindingTags: []int32{builder.genNewBindTag()},
 	}, tmpCtx)
 
 	return lastNodeID, colName2Idx, skipUniqueIdx, nil

@@ -197,7 +197,7 @@ func (builder *QueryBuilder) buildParseJsonl(tvfName string, tbl *tree.TableFunc
 			},
 			Cols: cols,
 		},
-		BindingTags:     []int32{builder.genNewTag()},
+		BindingTags:     []int32{builder.genNewBindTag()},
 		TblFuncExprList: exprs,
 		Children:        children,
 	}

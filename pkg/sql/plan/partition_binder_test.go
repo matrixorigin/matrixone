@@ -254,7 +254,7 @@ func newTestPartitionBinder() *PartitionBinder {
 		Stats:       nil,
 		ObjRef:      nil,
 		TableDef:    newTestTableDef(1, []string{"a"}, []types.T{types.T_int32}),
-		BindingTags: []int32{builder.genNewTag()},
+		BindingTags: []int32{builder.genNewBindTag()},
 	}, bindContext)
 
 	err := builder.addBinding(nodeID, tree.AliasClause{}, bindContext)
