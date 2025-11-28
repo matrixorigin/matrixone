@@ -198,7 +198,7 @@ func (tbl *baseTable) getRowsByPK(ctx context.Context, pks containers.Vector) (r
 			common.WorkspaceAllocator,
 		)
 		if err != nil {
-			logutil.Infof("getRowsByPK failed GetDuplicate: %v", err)
+			logutil.Infof("getRowsByPK failed GetDuplicate: %v, obj %v", err, obj.ID().String())
 			return
 		}
 	}
