@@ -459,7 +459,6 @@ func TestCompareSingleValInVector_AllTypes(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			leftVec, rightVec, expected := tc.build(t, mp)
 			defer leftVec.Free(mp)
