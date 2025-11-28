@@ -92,7 +92,7 @@ func (builder *QueryBuilder) buildHnswCreate(tbl *tree.TableFunction, ctx *BindC
 			},
 			Cols: colDefs,
 		},
-		BindingTags:     []int32{builder.genNewTag()},
+		BindingTags:     []int32{builder.genNewBindTag()},
 		TblFuncExprList: exprs,
 		Children:        children,
 	}
@@ -126,7 +126,7 @@ func (builder *QueryBuilder) buildHnswSearch(tbl *tree.TableFunction, ctx *BindC
 			},
 			Cols: colDefs,
 		},
-		BindingTags:     []int32{builder.genNewTag()},
+		BindingTags:     []int32{builder.genNewBindTag()},
 		TblFuncExprList: exprs,
 		Children:        children,
 	}

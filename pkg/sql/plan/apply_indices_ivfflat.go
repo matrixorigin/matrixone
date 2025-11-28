@@ -129,7 +129,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, projN
 		origFuncName)
 
 	// build ivf_search table function node
-	tableFuncTag := builder.genNewTag()
+	tableFuncTag := builder.genNewBindTag()
 	tableFuncNode := &plan.Node{
 		NodeType: plan.Node_FUNCTION_SCAN,
 		Stats:    &plan.Stats{},
@@ -217,13 +217,17 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, projN
 		secondScanNodeID := builder.copyNode(ctx, scanNode.NodeId)
 		secondScanNode := builder.qry.Nodes[secondScanNodeID]
 
+		for i := range secondScanNode.BindingTags {
+			secondScanNode.BindingTags[i] = builder.genNewBindTag()
+		}
+
 		// second scan is only used for runtime filter & inner join, should not inherit limit/offset from original table.
 		// Otherwise BloomFilter will only see the truncated primary key set, causing data loss.
 		secondScanNode.Limit = nil
 		secondScanNode.Offset = nil
 
 		// Add a PROJECT node above secondScanNode to output only the primary key column
-		secondProjectTag := builder.genNewTag()
+		secondProjectTag := builder.genNewBindTag()
 		secondPkExpr := &plan.Expr{
 			Typ: pkType,
 			Expr: &plan.Expr_Col{
