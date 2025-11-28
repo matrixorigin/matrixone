@@ -361,7 +361,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 			case catalog.MoIndexIvfFlatAlgo.ToString():
 				err = s.handleVectorIvfFlatIndex(
 					c, id, extra, dbSource, multiTableIndex.IndexDefs,
-					qry.Database, newTableDef, nil,
+					qry.Database, newTableDef, nil, false,
 				)
 			case catalog.MoIndexHnswAlgo.ToString():
 				err = s.handleVectorHnswIndex(

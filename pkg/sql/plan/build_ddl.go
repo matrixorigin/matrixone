@@ -4006,6 +4006,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					)
 				}
 				alterTableReIndex.IndexAlgoParamList = opt.AlgoParamList
+				alterTableReIndex.ForceSync = opt.ForceSync
 			case tree.INDEX_TYPE_HNSW:
 				// PASS: keep options on change for incremental update
 			default:

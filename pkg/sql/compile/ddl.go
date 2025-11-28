@@ -693,7 +693,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			for _, multiTableIndex := range multiTableIndexes {
 				switch multiTableIndex.IndexAlgo { // no need for catalog.ToLower() here
 				case catalog.MoIndexIvfFlatAlgo.ToString():
-					err = s.handleVectorIvfFlatIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, indexInfo)
+					err = s.handleVectorIvfFlatIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, indexInfo, false)
 				case catalog.MoIndexHnswAlgo.ToString():
 					err = s.handleVectorHnswIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, indexInfo)
 				}
@@ -800,7 +800,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			for _, multiTableIndex := range multiTableIndexes {
 				switch multiTableIndex.IndexAlgo {
 				case catalog.MoIndexIvfFlatAlgo.ToString():
-					err = s.handleVectorIvfFlatIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, nil)
+					err = s.handleVectorIvfFlatIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, nil, tableAlterIndex.ForceSync)
 				case catalog.MoIndexHnswAlgo.ToString():
 					// TODO: we should call refresh Hnsw Index function instead of CreateHnswIndex function
 					err = s.handleVectorHnswIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, nil)
@@ -1979,7 +1979,7 @@ func (s *Scope) doCreateIndex(
 	for _, multiTableIndex := range multiTableIndexes {
 		switch multiTableIndex.IndexAlgo {
 		case catalog.MoIndexIvfFlatAlgo.ToString():
-			err = s.handleVectorIvfFlatIndex(c, tableId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, originalTableDef, indexInfo)
+			err = s.handleVectorIvfFlatIndex(c, tableId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, originalTableDef, indexInfo, false)
 		case catalog.MoIndexHnswAlgo.ToString():
 			err = s.handleVectorHnswIndex(c, tableId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, originalTableDef, indexInfo)
 		}
@@ -2098,6 +2098,7 @@ func (s *Scope) handleVectorIvfFlatIndex(
 	qryDatabase string,
 	originalTableDef *plan.TableDef,
 	indexInfo *plan.CreateTable,
+	forceSync bool,
 ) error {
 	if ok, err := s.isExperimentalEnabled(c, ivfFlatIndexFlag); err != nil {
 		return err
@@ -2145,12 +2146,13 @@ func (s *Scope) handleVectorIvfFlatIndex(
 	// 4.b populate centroids table
 	err = s.handleIvfIndexCentroidsTable(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids], qryDatabase, originalTableDef,
 		totalCnt,
-		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName)
+		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName,
+		forceSync)
 	if err != nil {
 		return err
 	}
 
-	if !async {
+	if !async || forceSync {
 		// 4.c populate entries table
 		err = s.handleIvfIndexEntriesTable(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries], qryDatabase, originalTableDef,
 			indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName,

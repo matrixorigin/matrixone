@@ -281,16 +281,8 @@ func getIvfflatMetadata(c *Compile) (metadata []byte, frontend bool, err error) 
 }
 
 func checkValidIndexUpdateByIndexdef(idx *plan.IndexDef) (bool, error) {
-	var err error
-
 	if idx.TableExist && catalog.IsIvfIndexAlgo(idx.IndexAlgo) {
-
-		auto, err = catalog.IsAutoUpdate(idx.IndexAlgoParams)
-		if err != nil {
-			return false, err
-		}
-
-		return auto, nil
+		return true, nil
 	}
 	return false, nil
 }
@@ -312,7 +304,8 @@ func CreateAllIndexUpdateTasks(c *Compile, indexes []*plan.IndexDef, dbname stri
 			continue
 		}
 
-		valid, err := checkValidIndexUpdateByIndexdef(idx)
+		valid := false
+		valid, err = checkValidIndexUpdateByIndexdef(idx)
 		if err != nil {
 			return
 		}
@@ -358,7 +351,8 @@ func DropAllIndexUpdateTasks(c *Compile, tabledef *plan.TableDef, dbname string,
 			continue
 		}
 
-		valid, err := checkValidIndexUpdateByIndexdef(idx)
+		valid := false
+		valid, err = checkValidIndexUpdateByIndexdef(idx)
 		if err != nil {
 			return
 		}

@@ -460,8 +460,8 @@ func runIvfflatReindex(ctx context.Context,
 				return
 			}
 
-			// run alter table alter reindex
-			sql := fmt.Sprintf("ALTER TABLE `%s`.`%s` ALTER REINDEX `%s` IVFFLAT LISTS=%d", task.DbName, task.TableName, task.IndexName, lists)
+			// run alter table alter reindex in force synchronous mode to make sure to build index in single transaction
+			sql := fmt.Sprintf("ALTER TABLE `%s`.`%s` ALTER REINDEX `%s` IVFFLAT FORCE_SYNC LISTS=%d", task.DbName, task.TableName, task.IndexName, lists)
 			res, err2 = runReindexSql(sqlproc, sql)
 			if err2 != nil {
 				return
