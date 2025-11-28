@@ -1,8 +1,4 @@
-set experimental_fulltext_index=1;
 set ft_relevancy_algorithm="TF-IDF";
-show variables like "experimental_fulltext_index";
-Variable_name    Value
-experimental_fulltext_index    on
 drop database if exists test01;
 create database test01;
 use test01;
@@ -20,16 +16,8 @@ drop snapshot if exists snap01;
 create snapshot snap01 for account sys;
 drop database test01;
 restore account sys from snapshot snap01;
-show variables like "experimental_fulltext_index";
-Variable_name    Value
-experimental_fulltext_index    on
-set experimental_fulltext_index=0;
 drop database test01;
 drop snapshot snap01;
-set global experimental_fulltext_index=1;
-show variables like "experimental_fulltext_index";
-Variable_name    Value
-experimental_fulltext_index    on
 drop database if exists test01;
 create database test01;
 use test01;
@@ -47,10 +35,6 @@ drop snapshot if exists snap01;
 create snapshot snap01 for account sys;
 drop database test01;
 restore account sys from snapshot snap01;
-show variables like "experimental_fulltext_index";
-Variable_name    Value
-experimental_fulltext_index    on
-set global experimental_fulltext_index=0;
 drop database test01;
 drop snapshot snap01;
 set experimental_ivf_index=1;

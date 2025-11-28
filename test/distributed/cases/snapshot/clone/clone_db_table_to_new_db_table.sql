@@ -131,7 +131,6 @@ drop database db04;
 drop database if exists db04;
 create database db04;
 use db04;
-SET experimental_fulltext_index = 1;
 create table src (id bigint primary key, body varchar, title text);
 insert into src values (0, 'color is red', 't1'), (1, 'car is yellow', 'crazy car'), (2, 'sky is blue', 'no limit'), (3, 'blue is not red', 'colorful'),
 (4, '遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。', '遠東兒童中文'),
