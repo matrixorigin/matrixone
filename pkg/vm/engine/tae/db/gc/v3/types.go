@@ -16,6 +16,7 @@ package gc
 
 import (
 	"context"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -151,6 +152,12 @@ type Cleaner interface {
 	GetDetails(ctx context.Context) (map[uint32]*TableStats, error)
 	Verify(ctx context.Context) string
 	ISCPTables() (map[uint64]types.TS, error)
+
+	// Backup protection methods
+	SetBackupProtection(protectedTS types.TS)
+	UpdateBackupProtection(protectedTS types.TS)
+	RemoveBackupProtection()
+	GetBackupProtection() (protectedTS types.TS, lastUpdateTime time.Time, isActive bool)
 
 	// For testing
 	GetTablePK(tableId uint64) string
