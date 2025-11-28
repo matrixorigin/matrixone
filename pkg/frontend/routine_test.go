@@ -225,7 +225,7 @@ func Test_ConnectionCount(t *testing.T) {
 		mo.handleConn(ctx, serverConn)
 	}()
 
-	cCounter := metric.ConnectionCounter(sysAccountName)
+	cCounter := metric.ConnectionCounter(sysAccountName, 0)
 	cCounter.Set(0)
 
 	conn1, err = openDbConn(t, 6001)

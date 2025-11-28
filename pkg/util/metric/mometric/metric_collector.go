@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"math"
 	"runtime"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -361,11 +362,27 @@ func (s *mfsetETL) GetBatch(ctx context.Context, buf *bytes.Buffer) table.Export
 			// table `sql_statement_cu` NO column `metric_name`
 			if row.Table.GetName() == SingleMetricTable.GetName() {
 				row.SetColumnVal(metricNameColumn, table.StringField(mf.GetName()))
+				// Extract account_id from labels for SingleMetricTable
+				var accountId uint32 = 0
+				for _, lbl := range metric.Label {
+					if lbl.GetName() == "account_id" {
+						if parsedId, err := strconv.ParseUint(lbl.GetValue(), 10, 32); err == nil {
+							accountId = uint32(parsedId)
+						}
+						break
+					}
+				}
+				row.SetColumnVal(metricAccountIdColumn, table.Uint32Field(accountId))
 			}
 			row.SetColumnVal(metricNodeColumn, table.StringField(mf.GetNode()))
 			row.SetColumnVal(metricRoleColumn, table.StringField(mf.GetRole()))
 			// custom labels
 			for _, lbl := range metric.Label {
+				// Skip account_id label - it's handled separately for SingleMetricTable only
+				// SqlStatementCUTable doesn't have account_id column
+				if lbl.GetName() == "account_id" {
+					continue
+				}
 				row.SetVal(lbl.GetName(), table.StringField(lbl.GetValue()))
 			}
 

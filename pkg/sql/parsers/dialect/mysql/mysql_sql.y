@@ -276,6 +276,8 @@ import (
 %nonassoc LOWER_THAN_ORDER
 %nonassoc ORDER
 %nonassoc LOWER_THAN_COMMA
+%nonassoc LOWER_THAN_WITH
+%nonassoc WITH
 %token <str> SELECT INSERT UPDATE DELETE FROM WHERE GROUP HAVING BY LIMIT OFFSET FOR OF CONNECT MANAGE GRANTS OWNERSHIP REFERENCE
 %nonassoc LOWER_THAN_SET
 %nonassoc <str> SET
@@ -312,7 +314,15 @@ import (
 %left <str> '*' '/' DIV '%' MOD
 %left <str> '^'
 %right <str> '~' UNARY
+%nonassoc LOWER_THAN_COLLATE
 %left <str> COLLATE
+%left TYPECAST
+%nonassoc LOWER_THAN_SIGNED
+%left SIGNED UNSIGNED
+%nonassoc LOWER_THAN_ZEROFILL
+%left ZEROFILL
+%nonassoc LOWER_THAN_INT
+%left INT INTEGER
 %right <str> BINARY UNDERSCORE_BINARY
 %right <str> INTERVAL
 %nonassoc <str> '.' ','
@@ -394,6 +404,7 @@ import (
 
 // Load
 %token <str> LOAD INLINE INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES ROWS IMPORT DISCARD JSONTYPE
+%token TYPECAST
 
 // MODump
 %token <str> MODUMP
@@ -5903,6 +5914,7 @@ simple_select_clause:
     }
 
 select_options_opt:
+    %prec EMPTY
     {
         $$ = tree.QuerySpecOptionNone
     }
@@ -6042,6 +6054,7 @@ grouping_sets:
     }
 
 rollup_opt:
+    %prec LOWER_THAN_WITH
     {
         $$ = false
     }
@@ -8135,6 +8148,7 @@ diff_output_opt:
     }
 
 conflict_opt:
+     %prec EMPTY
      {
      	$$ = nil
      }
@@ -8635,8 +8649,10 @@ sub_partition_opt:
 |   SUBPARTITION BY sub_partition_method sub_partition_num_opt
     {
         var IsSubPartition = true
-        var PType = $3
+        var PType = $3.PType
         var Num = uint64($4)
+        $3.PType = nil
+        $3.Free()
         $$ = tree.NewPartitionBy2(
             IsSubPartition,
             PType,
@@ -9997,7 +10013,7 @@ bit_expr:
     {
         $$ = tree.NewBinaryExpr(tree.RIGHT_SHIFT, $1, $3)
     }
-|   simple_expr
+|   simple_expr %prec LOWER_THAN_COLLATE
     {
         $$ = $1
     }
@@ -10113,6 +10129,10 @@ simple_expr:
 |   BIT_CAST '(' expression AS mo_cast_type ')'
     {
         $$ = tree.NewBitCastExpr($3, $5)
+    }
+|   simple_expr TYPECAST mo_cast_type %prec TYPECAST
+    {
+        $$ = tree.NewCastExpr($1, $3)
     }
 |   CONVERT '(' expression ',' mysql_cast_type ')'
     {
@@ -10480,6 +10500,7 @@ mysql_cast_type:
     }
 
 integer_opt:
+    %prec LOWER_THAN_INT
     {}
 |    INTEGER
 |    INT
@@ -12576,7 +12597,7 @@ decimal_length_opt:
     }
 
 unsigned_opt:
-    /* EMPTY */
+    %prec LOWER_THAN_SIGNED
     {
         $$ = false
     }
@@ -12590,7 +12611,7 @@ unsigned_opt:
     }
 
 zero_fill_opt:
-    /* EMPTY */
+    %prec LOWER_THAN_ZEROFILL
     {}
 |   ZEROFILL
     {
@@ -13109,7 +13130,6 @@ non_reserved_keyword:
 |	SECOND
 |	SHUTDOWN
 |	SQL_CACHE
-|	SQL_NO_CACHE
 |	SLAVE
 |	SLIDING
 |	SUPER
@@ -13170,7 +13190,6 @@ non_reserved_keyword:
 |   SETS
 |   CUBE
 |   RETRY
-|   SQL_BUFFER_RESULT
 |	INTERNAL
 
 func_not_keyword:

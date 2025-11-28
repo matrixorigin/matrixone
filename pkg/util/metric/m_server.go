@@ -14,6 +14,8 @@
 
 package metric
 
+import "strconv"
+
 var (
 	ConnFactory = NewGaugeVec(
 		GaugeOpts{
@@ -21,7 +23,7 @@ var (
 			Name:      "connections",
 			Help:      "Number of process connections",
 		},
-		[]string{constTenantKey},
+		[]string{constTenantKey, constTenantIdKey},
 	)
 
 	StorageUsageFactory = NewGaugeVec(
@@ -30,7 +32,7 @@ var (
 			Name:      "storage_usage",
 			Help:      "Storage usage of each account",
 		},
-		[]string{constTenantKey},
+		[]string{constTenantKey, constTenantIdKey},
 	)
 
 	ObjectCountFactory = NewGaugeVec(
@@ -39,7 +41,7 @@ var (
 			Name:      "object_count",
 			Help:      "object number of each account",
 		},
-		[]string{constTenantKey},
+		[]string{constTenantKey, constTenantIdKey},
 	)
 
 	SnapshotUsageFactory = NewGaugeVec(
@@ -48,22 +50,22 @@ var (
 			Name:      "snapshot_usage",
 			Help:      "Snapshot usage of each account",
 		},
-		[]string{constTenantKey},
+		[]string{constTenantKey, constTenantIdKey},
 	)
 )
 
-func ConnectionCounter(account string) Gauge {
-	return ConnFactory.WithLabelValues(account)
+func ConnectionCounter(account string, accountId uint32) Gauge {
+	return ConnFactory.WithLabelValues(account, strconv.FormatUint(uint64(accountId), 10))
 }
 
-func StorageUsage(account string) Gauge {
-	return StorageUsageFactory.WithLabelValues(account)
+func StorageUsage(account string, accountId uint32) Gauge {
+	return StorageUsageFactory.WithLabelValues(account, strconv.FormatUint(uint64(accountId), 10))
 }
 
-func ObjectCount(account string) Gauge {
-	return ObjectCountFactory.WithLabelValues(account)
+func ObjectCount(account string, accountId uint32) Gauge {
+	return ObjectCountFactory.WithLabelValues(account, strconv.FormatUint(uint64(accountId), 10))
 }
 
-func SnapshotUsage(account string) Gauge {
-	return SnapshotUsageFactory.WithLabelValues(account)
+func SnapshotUsage(account string, accountId uint32) Gauge {
+	return SnapshotUsageFactory.WithLabelValues(account, strconv.FormatUint(uint64(accountId), 10))
 }

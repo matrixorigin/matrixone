@@ -62,9 +62,9 @@ select 1 as secondary_engine_attribute, 1 as security, 1 as sequence, 1 as seque
 
 select 1 as shared, 1 as shutdown, 1 as signed, 1 as simple, 1 as slave, 1 as sliding, 1 as smallint, 1 as snapshot;
 
-select 1 as some, 1 as source, 1 as spatial, 1 as sql, 1 as sql_cache, 1 as sql_no_cache, 1 as sql_tsi_day, 1 as sql_tsi_hour, 1 as sql_tsi_minute;
+select 1 as some, 1 as source, 1 as spatial, 1 as sql, 1 as sql_cache, 1 as `sql_no_cache`, 1 as `sql_tsi_day`, 1 as `sql_tsi_hour`, 1 as `sql_tsi_minute`;
 
-select 1 as sql_tsi_second, 1 as sql_tsi_year, 1 as sql_tsi_quarter, 1 as sql_tsi_month, 1 as sql_tsi_week, 1 as stage, 1 as stageoption;
+select 1 as `sql_tsi_second`, 1 as `sql_tsi_year`, 1 as `sql_tsi_quarter`, 1 as `sql_tsi_month`, 1 as `sql_tsi_week`, 1 as stage, 1 as stageoption;
 
 select 1 as stages, 1 as start, 1 as stats_auto_recalc, 1 as stats_persistent, 1 as stats_sample_pages, 1 as status, 1 as storage, 1 as stream;
 

@@ -834,7 +834,7 @@ func (sm *SnapshotMeta) Update(
 	sm.Lock()
 	defer sm.Unlock()
 
-	now := time.Now()
+	start := time.Now()
 	defer func() {
 		logger := logutil.Info
 		if err != nil {
@@ -843,7 +843,7 @@ func (sm *SnapshotMeta) Update(
 		logger(
 			"GC-SnapshotMeta-Update",
 			zap.Error(err),
-			zap.Duration("cost", time.Since(now)),
+			zap.Duration("cost", time.Since(start)),
 			zap.String("start-ts", startts.ToString()),
 			zap.String("end-ts", endts.ToString()),
 			zap.String("task", taskName),
@@ -987,10 +987,11 @@ func (sm *SnapshotMeta) GetSnapshot(
 	sid string,
 	fs fileservice.FileService,
 	mp *mpool.MPool,
+	extraClusterTS ...types.TS,
 ) (*SnapshotInfo, error) {
 	var err error
 
-	now := time.Now()
+	start := time.Now()
 	defer func() {
 		logger := logutil.Info
 		if err != nil {
@@ -999,7 +1000,7 @@ func (sm *SnapshotMeta) GetSnapshot(
 		logger(
 			"GetSnapshot",
 			zap.Error(err),
-			zap.Duration("cost", time.Since(now)),
+			zap.Duration("cost", time.Since(start)),
 		)
 	}()
 
@@ -1118,6 +1119,19 @@ func (sm *SnapshotMeta) GetSnapshot(
 			}
 		}
 	}
+
+	// Add extra cluster-level snapshot timestamps (e.g., for backup protection)
+	// Add them before sorting so we only need to sort once
+	for _, extraTS := range extraClusterTS {
+		if !extraTS.IsEmpty() {
+			snapshotInfo.cluster = append(snapshotInfo.cluster, extraTS)
+			logutil.Info(
+				"GetSnapshot-Add-Extra-Cluster-Snapshot",
+				zap.String("ts", extraTS.ToString()),
+			)
+		}
+	}
+
 	// Sort cluster snapshots
 	sort.Slice(snapshotInfo.cluster, func(i, j int) bool {
 		return snapshotInfo.cluster[i].LT(&snapshotInfo.cluster[j])

@@ -113,25 +113,25 @@ Number of columns in mo_table_partitions
 use system_metrics;
 show column_number from metric;
 Number of columns in metric
-7
+8
 show column_number from sql_statement_total;
 Number of columns in sql_statement_total
-6
+7
 show column_number from sql_statement_errors;
 Number of columns in sql_statement_errors
-6
+7
 show column_number from sql_statement_cu;
 Number of columns in sql_statement_cu
 6
 show column_number from sql_transaction_total;
 Number of columns in sql_transaction_total
-5
+6
 show column_number from sql_transaction_errors;
 Number of columns in sql_transaction_errors
-6
+7
 show column_number from server_connections;
 Number of columns in server_connections
-5
+6
 show column_number from process_cpu_percent;
 Number of columns in process_cpu_percent
 5
@@ -168,7 +168,7 @@ Number of columns in sys_net_sent_bytes
 use system;
 show column_number from statement_info;
 Number of columns in statement_info
-30
+31
 show column_number from rawlog;
 Number of columns in rawlog
 23
@@ -457,7 +457,7 @@ Number of columns in mo_columns
 use system;
 show column_number from statement_info;
 Number of columns in statement_info
-30
+31
 drop database if exists test_db;
 create database test_db;
 show table_number from test_db;

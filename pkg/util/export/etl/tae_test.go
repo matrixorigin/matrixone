@@ -185,12 +185,15 @@ func TestTAEWriter_WriteRow(t *testing.T) {
 				TransactionID:        _1TxnID,
 				SessionID:            _1SesID,
 				Account:              "MO",
+				AccountID:            0,
 				User:                 "moroot",
 				Database:             "system",
 				Statement:            []byte("show tables"),
 				StatementFingerprint: "show tables",
 				StatementTag:         "",
 				ExecPlan:             nil,
+				RequestAt:            time.Now(),
+				ResponseAt:           time.Now(),
 			},
 		)
 		return arr
@@ -239,9 +242,11 @@ func TestTAEWriter_WriteRow(t *testing.T) {
 			for _, item := range items {
 				row := item.GetTable().GetRow(tt.fields.ctx)
 				item.FillRow(tt.fields.ctx, row)
-				writer.WriteRow(row)
+				err := writer.WriteRow(row)
+				require.Nil(t, err)
 			}
-			writer.FlushAndClose()
+			_, err := writer.FlushAndClose()
+			require.Nil(t, err)
 
 			folder := path.Dir(filePath)
 			entrys, err := fileservice.SortedList(fs.List(ctx, folder))
