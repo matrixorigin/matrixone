@@ -32,9 +32,7 @@ import (
 )
 
 const (
-	ivfFlatIndexFlag  = "experimental_ivf_index"
-	fulltextIndexFlag = "experimental_fulltext_index"
-	hnswIndexFlag     = "experimental_hnsw_index"
+	hnswIndexFlag = "experimental_hnsw_index"
 )
 
 func (s *Scope) handleUniqueIndexTable(
@@ -420,11 +418,6 @@ func (s *Scope) logTimestamp(c *Compile, qryDatabase, metadataTableName, metrics
 }
 
 func (s *Scope) isExperimentalEnabled(c *Compile, flag string) (bool, error) {
-	// Deprecated: experimental_ivf_index and experimental_fulltext_index are always enabled
-	if flag == ivfFlatIndexFlag || flag == fulltextIndexFlag {
-		return true, nil
-	}
-
 	if s.Magic == TableClone {
 		skipFlags := []string{
 			hnswIndexFlag,

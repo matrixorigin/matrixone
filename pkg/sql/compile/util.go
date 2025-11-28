@@ -426,7 +426,6 @@ func (s *Scope) checkTableWithValidIndexes(c *Compile, relation engine.Relation)
 		if idxdef, ok := constraint.(*engine.IndexDef); ok && len(idxdef.Indexes) > 0 {
 			for _, idx := range idxdef.Indexes {
 				if idx.TableExist {
-					// Deprecated: experimental_ivf_index and experimental_fulltext_index are always enabled
 					// Only check hnswIndexFlag
 					if catalog.IsHnswIndexAlgo(idx.IndexAlgo) {
 						indexflag := hnswIndexFlag
