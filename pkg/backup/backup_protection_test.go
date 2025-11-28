@@ -984,14 +984,14 @@ func TestCopyFileAndGetMetaFilesWithStartGEBackup(t *testing.T) {
 }
 
 // TestGetSQLExecutor tests getSQLExecutor function
-func TestGetSQLExecutor(t *testing.T) {
-	defer testutils.AfterTest(t)()
-
-	// Test with empty sid (should return nil)
-	exec, opts := getSQLExecutor("")
-	assert.Nil(t, exec)
-	assert.Equal(t, executor.Options{}, opts)
-}
+//func TestGetSQLExecutor(t *testing.T) {
+//	defer testutils.AfterTest(t)()
+//
+//	// Test with empty sid (should return nil)
+//	exec, opts := getSQLExecutor("")
+//	assert.Nil(t, exec)
+//	assert.Equal(t, executor.Options{}, opts)
+//}
 
 // TestBackupProtectionSQLBuilders tests SQL builder functions
 func TestBackupProtectionSQLBuilders(t *testing.T) {

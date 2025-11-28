@@ -115,7 +115,7 @@ func BackupData(
 	}
 
 	// Setup backup protection manager
-	exec, opts = getSQLExecutor(sid)
+	//exec, opts = getSQLExecutor(sid)
 	protectionMgr := newBackupProtectionManager(ctx, exec, opts)
 	defer protectionMgr.cleanup()
 
@@ -499,14 +499,14 @@ func copyFileAndGetMetaFiles(
 	decoder func(string) ioutil.TSRangeFile,
 	doCopy bool,
 ) ([]*taeFile, []ioutil.TSRangeFile, []fileservice.DirEntry, error) {
-	files, err := fileservice.SortedList(srcFs.List(ctx, dir))
+	mFiles, err := fileservice.SortedList(srcFs.List(ctx, dir))
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	taeFileList := make([]*taeFile, 0, len(files))
+	taeFileList := make([]*taeFile, 0, len(mFiles))
 	metaFiles := make([]ioutil.TSRangeFile, 0)
 	var checksum []byte
-	for i, file := range files {
+	for i, file := range mFiles {
 		if file.IsDir {
 			panic("not support dir")
 		}
@@ -547,13 +547,13 @@ func copyFileAndGetMetaFiles(
 	}
 
 	if len(metaFiles) == 0 {
-		return taeFileList, metaFiles, files, nil
+		return taeFileList, metaFiles, mFiles, nil
 	}
 	sort.Slice(metaFiles, func(i, j int) bool {
 		return metaFiles[i].GetEnd().LT(metaFiles[j].GetEnd())
 	})
 
-	return taeFileList, metaFiles, files, nil
+	return taeFileList, metaFiles, mFiles, nil
 }
 
 func CopyGCDir(
@@ -724,13 +724,13 @@ func CopyFile(ctx context.Context, srcFs, dstFs fileservice.FileService, name, d
 
 // getSQLExecutor tries to get SQL executor from runtime
 // Returns (executor, opts) if available, (nil, empty opts) otherwise
-func getSQLExecutor(sid string) (executor.SQLExecutor, executor.Options) {
-	v, ok := runtime.ServiceRuntime(sid).GetGlobalVariables(runtime.InternalSQLExecutor)
-	if !ok {
-		return nil, executor.Options{}
-	}
-	return v.(executor.SQLExecutor), executor.Options{}
-}
+//func getSQLExecutor(sid string) (executor.SQLExecutor, executor.Options) {
+//	v, ok := runtime.ServiceRuntime(sid).GetGlobalVariables(runtime.InternalSQLExecutor)
+//	if !ok {
+//		return nil, executor.Options{}
+//	}
+//	return v.(executor.SQLExecutor), executor.Options{}
+//}
 
 // buildBackupProtectionSQL builds the SQL command for backup protection
 func buildBackupProtectionSQL(protectedTS types.TS) string {
