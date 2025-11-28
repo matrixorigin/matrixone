@@ -119,16 +119,6 @@ func makeIntervalExprForProjection(valueExpr *plan.Expr, unit string) *plan.Expr
 	}
 }
 
-// Helper to extract int64 value from a constant expression
-func extractInt64ValueFromProjection(expr *plan.Expr) int64 {
-	if lit, ok := expr.Expr.(*plan.Expr_Lit); ok {
-		if i64val, ok := lit.Lit.Value.(*plan.Literal_I64Val); ok {
-			return i64val.I64Val
-		}
-	}
-	return 0
-}
-
 // TestProjectionBinderResetIntervalDecimal tests that ProjectionBinder.resetInterval correctly handles
 // decimal/float interval values by converting them to microseconds and setting the interval type to MicroSecond.
 // This is critical for SELECT DATE_SUB(a, INTERVAL 1.1 SECOND) FROM t1 scenarios.
