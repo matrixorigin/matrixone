@@ -313,10 +313,12 @@ func (rm *RoutineManager) Closed(rs *Conn) {
 		rt.decreaseCount(func() {
 			account := ses.GetTenantInfo()
 			accountName := sysAccountName
+			accountId := uint32(0)
 			if account != nil {
 				accountName = account.GetTenant()
+				accountId = account.GetTenantID()
 			}
-			metric.ConnectionCounter(accountName).Dec()
+			metric.ConnectionCounter(accountName, accountId).Dec()
 			rm.accountRoutine.deleteRoutine(int64(account.GetTenantID()), rt)
 		})
 		rm.sessionManager.RemoveSession(ses)

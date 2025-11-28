@@ -441,6 +441,7 @@ var (
 	metricNodeColumn        = table.StringDefaultColumn(`node`, ALL_IN_ONE_MODE, `mo node uuid`)
 	metricRoleColumn        = table.StringDefaultColumn(`role`, ALL_IN_ONE_MODE, `mo node role, like: CN, DN, LOG`)
 	metricAccountColumn     = table.StringDefaultColumn(`account`, `sys`, `account name`)
+	metricAccountIdColumn   = table.UInt32Column(`account_id`, `account id`)
 	metricTypeColumn        = table.StringColumn(`type`, `sql type, like: insert, select, ...`)
 
 	sqlSourceTypeColumn = table.StringColumn(`sql_source_type`, `sql_source_type, val like: external_sql, cloud_nonuser_sql, cloud_user_sql, internal_sql, ...`)
@@ -450,9 +451,9 @@ var SingleMetricTable = &table.Table{
 	Account:          table.AccountSys,
 	Database:         MetricDBConst,
 	Table:            `metric`,
-	Columns:          []table.Column{metricNameColumn, metricCollectTimeColumn, metricValueColumn, metricNodeColumn, metricRoleColumn, metricAccountColumn, metricTypeColumn},
+	Columns:          []table.Column{metricNameColumn, metricCollectTimeColumn, metricValueColumn, metricNodeColumn, metricRoleColumn, metricAccountColumn, metricAccountIdColumn, metricTypeColumn},
 	PrimaryKeyColumn: []table.Column{},
-	ClusterBy:        []table.Column{metricAccountColumn, metricNameColumn, metricCollectTimeColumn},
+	ClusterBy:        []table.Column{metricCollectTimeColumn, metricAccountIdColumn, metricNameColumn},
 	Engine:           table.NormalTableEngine,
 	Comment:          `metric data`,
 	PathBuilder:      table.NewAccountDatePathBuilder(),
