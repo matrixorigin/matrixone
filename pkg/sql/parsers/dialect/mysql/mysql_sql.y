@@ -365,7 +365,7 @@ import (
 
 // Secondary Index
 %token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT MASTER HNSW
-%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_SEARCH EF_CONSTRUCTION M ASYNC AUTO_UPDATE
+%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_SEARCH EF_CONSTRUCTION M ASYNC FORCE_SYNC
 
 // Alter
 %token <str> EXPIRE ACCOUNT ACCOUNTS UNLOCK DAY NEVER PUMP MYSQL_COMPATIBILITY_MODE UNIQUE_CHECK_ON_AUTOINCR
@@ -7673,7 +7673,9 @@ index_option_list:
 	      opt1.HnswEfSearch = opt2.HnswEfSearch
  	    } else if opt2.Async {
 	      opt1.Async = opt2.Async
- 	    }
+ 	    } else if opt2.ForceSync {
+	      opt1.ForceSync = opt2.ForceSync
+	    }
             $$ = opt1
         }
     }
@@ -7766,14 +7768,10 @@ index_option:
 	io.Async = true
 	$$ = io
      }
-|    AUTO_UPDATE equal_opt INTEGRAL
+|    FORCE_SYNC
      {
 	io := tree.NewIndexOption()
-	io.AutoUpdate = true	
-        val := int64($3.(int64))
-        if val == 0 {
-		io.AutoUpdate = false	
-        }
+	io.ForceSync = true	
 	$$ = io
      }
 

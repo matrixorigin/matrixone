@@ -739,6 +739,7 @@ type AlterOptionAlterReIndex struct {
 	Name          Identifier
 	KeyType       IndexType
 	AlgoParamList int64
+	ForceSync     bool
 }
 
 func NewAlterOptionAlterReIndex(name Identifier, option *IndexOption) *AlterOptionAlterReIndex {
@@ -746,6 +747,7 @@ func NewAlterOptionAlterReIndex(name Identifier, option *IndexOption) *AlterOpti
 	a.Name = name
 	a.KeyType = option.IType
 	a.AlgoParamList = option.AlgoParamList
+	a.ForceSync = option.ForceSync
 	return a
 }
 
@@ -760,6 +762,10 @@ func (node *AlterOptionAlterReIndex) Format(ctx *FmtCtx) {
 	}
 	if node.AlgoParamList != 0 {
 		ctx.WriteString(fmt.Sprintf(" lists = %d", node.AlgoParamList))
+	}
+	if node.ForceSync {
+		ctx.WriteString(" ")
+		ctx.WriteString("force_sync")
 	}
 }
 
