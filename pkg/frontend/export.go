@@ -24,7 +24,9 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 
@@ -78,8 +80,6 @@ type BatchByte struct {
 	writeByte []byte
 	err       error
 }
-
-var escape byte = '"'
 
 type CloseExportData struct {
 	stopExportData chan interface{}
@@ -350,13 +350,24 @@ func escapeJSONControlChars(s string) string {
 }
 
 func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index int32, ByteChan chan *BatchByte, ep *ExportConfig) {
-	ses := obj.(*Session)
+	var (
+		ok      bool
+		backSes *backSession
+		ss      *Session
+		mp      *mpool.MPool
+	)
+
+	if ss, ok = obj.(*Session); !ok {
+		backSes = obj.(*backSession)
+		mp = backSes.GetMemPool()
+	} else {
+		mp = ss.GetMemPool()
+	}
+
 	symbol := ep.Symbol
 	closeby := ep.userConfig.Fields.EnclosedBy.Value
 	terminated := ep.userConfig.Fields.Terminated.Value
 	flag := ep.ColumnFlag
-
-	escape = closeby
 
 	buffer := &bytes.Buffer{}
 
@@ -428,15 +439,15 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 					formatOutputString(ep, []byte(strconv.FormatFloat(float64(val), 'f', int(vec.GetType().Scale), 64)), symbol[j], closeby, flag[j], buffer)
 				}
 			case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
-				value := addEscapeToString(vec.GetBytesAt(i))
+				value := addEscapeToString(vec.GetBytesAt(i), closeby)
 				formatOutputString(ep, value, symbol[j], closeby, true, buffer)
 			case types.T_array_float32:
 				arrStr := types.BytesToArrayToString[float32](vec.GetBytesAt(i))
-				value := addEscapeToString(util2.UnsafeStringToBytes(arrStr))
+				value := addEscapeToString(util2.UnsafeStringToBytes(arrStr), closeby)
 				formatOutputString(ep, value, symbol[j], closeby, true, buffer)
 			case types.T_array_float64:
 				arrStr := types.BytesToArrayToString[float64](vec.GetBytesAt(i))
-				value := addEscapeToString(util2.UnsafeStringToBytes(arrStr))
+				value := addEscapeToString(util2.UnsafeStringToBytes(arrStr), closeby)
 				formatOutputString(ep, value, symbol[j], closeby, true, buffer)
 			case types.T_date:
 				val := vector.GetFixedAtNoTypeCheck[types.Date](vec, i)
@@ -450,8 +461,13 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 				val := vector.GetFixedAtNoTypeCheck[types.Time](vec, i).String2(scale)
 				formatOutputString(ep, []byte(val), symbol[j], closeby, flag[j], buffer)
 			case types.T_timestamp:
+				var timeZone *time.Location
+				if ss != nil {
+					timeZone = ss.GetTimeZone()
+				} else {
+					timeZone = backSes.GetTimeZone()
+				}
 				scale := vec.GetType().Scale
-				timeZone := ses.GetTimeZone()
 				val := vector.GetFixedAtNoTypeCheck[types.Timestamp](vec, i).String2(timeZone, scale)
 				formatOutputString(ep, []byte(val), symbol[j], closeby, flag[j], buffer)
 			case types.T_decimal64:
@@ -475,13 +491,20 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 				val := vector.GetFixedAtNoTypeCheck[types.Enum](vec, i).String()
 				formatOutputString(ep, []byte(val), symbol[j], closeby, flag[j], buffer)
 			default:
-				ses.Error(ctx,
-					"Failed to construct byte due to unsupported type",
-					zap.Int("typeOid", int(vec.GetType().Oid)))
+				if ss != nil {
+					ss.Error(ctx,
+						"Failed to construct byte due to unsupported type",
+						zap.Int("typeOid", int(vec.GetType().Oid)))
+				} else {
+					backSes.Error(ctx,
+						"Failed to construct byte due to unsupported type",
+						zap.Int("typeOid", int(vec.GetType().Oid)))
+				}
+
 				ByteChan <- &BatchByte{
 					err: moerr.NewInternalErrorf(ctx, "constructByte : unsupported type %d", vec.GetType().Oid),
 				}
-				bat.Clean(ses.GetMemPool())
+				bat.Clean(mp)
 				return
 			}
 		}
@@ -498,12 +521,16 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 		writeByte: result,
 		err:       nil,
 	}
-	ses.writeCsvBytes.Add(int64(reslen)) // statistic out traffic, CASE 2: select into
-	bat.Clean(ses.GetMemPool())
+
+	if ss != nil {
+		ss.writeCsvBytes.Add(int64(reslen)) // statistic out traffic, CASE 2: select into
+	}
+
+	bat.Clean(mp)
 
 }
 
-func addEscapeToString(s []byte) []byte {
+func addEscapeToString(s []byte, escape byte) []byte {
 	pos := make([]int, 0)
 	for i := 0; i < len(s); i++ {
 		if s[i] == escape {
@@ -639,7 +666,7 @@ func exportDataFromResultSetToCSVFile(oq *ExportConfig) error {
 				return err
 			}
 			if _, ok := value.([]byte); ok {
-				value = addEscapeToString(value.([]byte))
+				value = addEscapeToString(value.([]byte), closeby)
 			} else if arr, ok := value.([]float32); ok {
 				// this is for T_array_float32 type
 				value = []byte(types.ArrayToString[float32](arr))

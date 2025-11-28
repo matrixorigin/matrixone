@@ -2795,13 +2795,26 @@ func (s *Scope) DropTable(c *Compile) error {
 		}
 	}
 
-	sql := fmt.Sprintf(
-		"delete from mo_catalog.mo_merge_settings where account_id = %d and tid = %d",
-		accountID, tblID,
-	)
-	err = c.runSqlWithSystemTenant(sql)
-	if err != nil {
-		return err
+	sqls := []string{
+		fmt.Sprintf(
+			"delete from mo_catalog.mo_merge_settings where account_id = %d and tid = %d",
+			accountID, tblID,
+		),
+
+		fmt.Sprintf(
+			"update mo_catalog.mo_branch_metadata set table_deleted = true where table_id = %d",
+			tblID,
+		),
+	}
+
+	for _, ss := range sqls {
+		if err = c.runSqlWithSystemTenant(ss); err != nil {
+			logutil.Error("run extra sql failed when drop table",
+				zap.String("sql", ss),
+				zap.Error(err),
+			)
+			return err
+		}
 	}
 
 	return partitionservice.GetService(c.proc.GetService()).Delete(
@@ -2810,6 +2823,7 @@ func (s *Scope) DropTable(c *Compile) error {
 		c.proc.GetTxnOperator(),
 	)
 }
+
 func (s *Scope) CreateSequence(c *Compile) error {
 	if s.ScopeAnalyzer == nil {
 		s.ScopeAnalyzer = NewScopeAnalyzer()
