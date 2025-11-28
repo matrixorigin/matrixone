@@ -17,10 +17,10 @@ call sp_empty();
 :3:7: got return, want indent
 call sp_empty('foo');
 invalid argument sp_empty procedure have invalid input args length, bad value 1
-create procedure sp_badparam(in mo int) language 'starlark'
+create procedure sp_badparam(in `mo` int) language 'starlark'
 '';
 invalid input: mo, mo.*, out_* are reserved and cannot be used as a procedure argument name
-create procedure sp_badparam(in mo.foo int) language 'starlark'
+create procedure sp_badparam(in `mo.foo` int) language 'starlark'
 '';
 invalid input: mo, mo.*, out_* are reserved and cannot be used as a procedure argument name
 create procedure sp_badparam(inout out_foo int) language 'starlark'

@@ -21,6 +21,7 @@ import (
 	"encoding"
 	"fmt"
 	"io"
+	"strings"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -362,6 +363,119 @@ func DecodeValue(val []byte, t T) any {
 		return DecodeFixed[Enum](val)
 	default:
 		panic(fmt.Sprintf("unsupported type %v", t))
+	}
+}
+
+func CompareValue(left, right any) int {
+	if left == nil {
+		if right == nil {
+			return 0
+		}
+		return -1
+	}
+	if right == nil {
+		return 1
+	}
+
+	switch lVal := left.(type) {
+	case bool:
+		rVal := right.(bool)
+		switch {
+		case lVal && !rVal:
+			return 1
+		case !lVal && rVal:
+			return -1
+		default:
+			return 0
+		}
+	case uint64:
+		rVal := right.(uint64)
+		switch {
+		case lVal > rVal:
+			return 1
+		case lVal < rVal:
+			return -1
+		default:
+			return 0
+		}
+	case int8:
+		return int(lVal - right.(int8))
+	case int16:
+		return int(lVal - right.(int16))
+	case int32:
+		return int(lVal - right.(int32))
+	case int64:
+		return int(lVal - right.(int64))
+	case uint8:
+		return int(lVal - right.(uint8))
+	case uint16:
+		return int(lVal - right.(uint16))
+	case uint32:
+		return int(lVal - right.(uint32))
+	case float32:
+		return int(lVal - right.(float32))
+	case float64:
+		return int(lVal - right.(float64))
+	case Decimal64:
+		return lVal.Compare(right.(Decimal64))
+	case Decimal128:
+		return lVal.Compare(right.(Decimal128))
+	case Date:
+		return int(lVal - right.(Date))
+	case Time:
+		return int(lVal - right.(Time))
+	case Timestamp:
+		return int(lVal - right.(Timestamp))
+	case Datetime:
+		return int(lVal - right.(Datetime))
+	case Uuid:
+		return lVal.Compare(right.(Uuid))
+	case TS:
+		rVal := right.(TS)
+		return lVal.Compare(&rVal)
+	case Blockid:
+		rVal := right.(Blockid)
+		return lVal.Compare(&rVal)
+	case Rowid:
+		rVal := right.(Rowid)
+		return lVal.Compare(&rVal)
+	case []byte:
+		return bytes.Compare(lVal, right.([]byte))
+	case bytejson.ByteJson:
+		return bytejson.CompareByteJson(lVal, right.(bytejson.ByteJson))
+	case []float32:
+		return compareFloatSlice(lVal, right.([]float32))
+	case []float64:
+		return compareFloatSlice(lVal, right.([]float64))
+	case Enum:
+		return int(lVal - right.(Enum))
+	case string:
+		return strings.Compare(lVal, right.(string))
+	default:
+		panic(fmt.Sprintf("CompareValue unsupported type %T", left))
+	}
+}
+
+func compareFloatSlice[T ~float32 | ~float64](left, right []T) int {
+	min := len(left)
+	if len(right) < min {
+		min = len(right)
+	}
+	for i := 0; i < min; i++ {
+		if left[i] < right[i] {
+			return -1
+		}
+		if left[i] > right[i] {
+			return 1
+		}
+	}
+	switch {
+	case len(left) < len(right):
+		return -1
+	case len(left) > len(right):
+		return 1
+	default:
+		return 0
 	}
 }
 

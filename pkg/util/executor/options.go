@@ -259,6 +259,15 @@ func (opts Options) WithSQL(sql string) Options {
 	return opts
 }
 
+func (opts Options) WithKeepTxnAlive() Options {
+	opts.keepTxnAlive = true
+	return opts
+}
+
+func (opts Options) KeepTxnAlive() bool {
+	return opts.keepTxnAlive
+}
+
 func (opts Options) SQL() string {
 	return opts.sql
 }

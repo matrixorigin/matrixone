@@ -110,19 +110,38 @@ func (s *sqlExecutor) Exec(
 	opts executor.Options,
 ) (executor.Result, error) {
 	ctx = perfcounter.AttachTxnExecutorKey(ctx)
-	var res executor.Result
-	err := s.ExecTxn(
-		ctx,
-		func(exec executor.TxnExecutor) error {
-			v, err := exec.Exec(sql, opts.StatementOption())
-			res = v
-			return err
-		},
-		opts.WithSQL(sql))
-	if err != nil {
-		return executor.Result{}, err
+
+	var (
+		res executor.Result
+	)
+
+	// use an outer txn to execute this sql and DO NOT
+	// commit or rollback after this execution finished.
+	if opts.ExistsTxn() && opts.KeepTxnAlive() {
+		var (
+			err  error
+			exec *txnExecutor
+		)
+
+		if exec, err = newTxnExecutor(ctx, s, opts); err != nil {
+			return res, err
+		}
+
+		return exec.Exec(sql, opts.StatementOption())
+	} else {
+		err := s.ExecTxn(
+			ctx,
+			func(exec executor.TxnExecutor) error {
+				v, err := exec.Exec(sql, opts.StatementOption())
+				res = v
+				return err
+			},
+			opts.WithSQL(sql))
+		if err != nil {
+			return executor.Result{}, err
+		}
+		return res, nil
 	}
-	return res, nil
 }
 
 func (s *sqlExecutor) ExecTxn(
@@ -357,6 +376,8 @@ func (exec *txnExecutor) Exec(
 					Query: optimized,
 				},
 			}
+		} else {
+			return executor.Result{}, err
 		}
 	default:
 		pn, err = plan.BuildPlan(compileContext, stmt, prepared)
