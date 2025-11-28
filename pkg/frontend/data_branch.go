@@ -341,18 +341,20 @@ func runSql(
 	streamChan chan executor.Result, errChan chan error,
 ) (sqlRet executor.Result, err error) {
 
-	if strings.Contains(strings.ToLower(snapConditionRegex.FindString(sql)), "snapshot") {
+	if streamChan == nil &&
+		strings.Contains(strings.ToLower(snapConditionRegex.FindString(sql)), "snapshot") {
 		// SQLExecutor cannot execute snapshot read(actually cannot resolveSnapshotByName)
-		bh.(*backExec).backSes.SetMysqlResultSet(&MysqlResultSet{})
+		// bh.(*backExec).backSes.SetMysqlResultSet(&MysqlResultSet{})
 		// export as CSV need this
-		for range tblStuff.def.visibleIdxes {
-			bh.(*backExec).backSes.mrs.AddColumn(&MysqlColumn{})
-		}
+		//for range tblStuff.def.visibleIdxes {
+		//	bh.(*backExec).backSes.mrs.AddColumn(&MysqlColumn{})
+		//}
 
 		if err = bh.Exec(ctx, sql); err != nil {
 			return
 		}
 		bh.ClearExecResultSet()
+		sqlRet.Mp = ses.proc.Mp()
 		sqlRet.Batches = bh.GetExecResultBatches()
 
 		return
@@ -1384,9 +1386,10 @@ func writeCSV(
 	ctx, cancelCtx := context.WithCancel(inputCtx)
 	defer cancelCtx()
 
+	// SQLExecutor do not support snapshot read, we must use the MO_TS
 	snap := ""
 	if tblStuff.tarSnap != nil {
-		snap = fmt.Sprintf("{snapshot='%s'}", tblStuff.tarSnap.ExtraInfo.Name)
+		snap = fmt.Sprintf("{MO_TS=%d}", tblStuff.tarSnap.TS.PhysicalTime)
 	}
 
 	// output as csv
@@ -2343,20 +2346,22 @@ func findDeleteAndUpdateBat(
 		}
 
 		if err2 = cursor.ForEach(func(key []byte, rows [][]byte) error {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			default:
-			}
-
-			if tuple, _, err2 = tombstoneHashmap.DecodeRow(key); err2 != nil {
-				return err2
-			} else {
-				if err2 = vector.AppendAny(tBat1.Vecs[0], tuple[0], false, ses.proc.Mp()); err2 != nil {
-					return err2
+			for range rows {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				default:
 				}
 
-				tBat1.SetRowCount(tBat1.Vecs[0].Length())
+				if tuple, _, err2 = tombstoneHashmap.DecodeRow(key); err2 != nil {
+					return err2
+				} else {
+					if err2 = vector.AppendAny(tBat1.Vecs[0], tuple[0], false, ses.proc.Mp()); err2 != nil {
+						return err2
+					}
+
+					tBat1.SetRowCount(tBat1.Vecs[0].Length())
+				}
 			}
 			return nil
 		}); err2 != nil {

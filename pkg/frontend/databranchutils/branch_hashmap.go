@@ -104,7 +104,7 @@ type GetResult struct {
 const (
 	branchHashSeed = 0x9e3779b97f4a7c15
 	minShardCount  = 4
-	maxShardCount  = 64
+	maxShardCount  = 128
 	putBatchSize   = 8192
 )
 
