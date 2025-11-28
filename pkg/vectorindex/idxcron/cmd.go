@@ -136,7 +136,9 @@ func UnregisterUpdateByDbName(ctx context.Context,
 	sqlproc := sqlexec.NewSqlProcessWithContext(sqlctx)
 
 	// check compatibility. skip it if mo_index_update table not found
-	sql := fmt.Sprintf("SELECT COUNT(*) FROM mo_catalog.mo_tables WHERE relname = '%s'", catalog.MO_INDEX_UPDATE)
+	sql := fmt.Sprintf("SELECT COUNT(*) FROM mo_catalog.mo_tables WHERE account_id = 0 AND relname = '%s' AND reldatabase = '%s'",
+		catalog.MO_INDEX_UPDATE,
+		catalog.MO_CATALOG)
 	res, err := runCmdSql(sqlproc, sql)
 	if err != nil {
 		return
