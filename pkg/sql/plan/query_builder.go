@@ -3344,7 +3344,8 @@ func (builder *QueryBuilder) bindWhere(
 	clause *tree.Where,
 	nodeID int32,
 ) (newNodeID int32, boundFilterList []*plan.Expr, notCacheable bool, err error) {
-	whereList, err := splitAndBindCondition(clause.Expr, NoAlias, ctx)
+	convertedExpr := builder.convertAccountToAccountIdIfNeeded(ctx, clause.Expr)
+	whereList, err := splitAndBindCondition(convertedExpr, NoAlias, ctx)
 	if err != nil {
 		return
 	}
@@ -3367,6 +3368,100 @@ func (builder *QueryBuilder) bindWhere(
 
 	newNodeID = nodeID
 	return
+}
+
+// isAccountConvertibleTable checks if a binding refers to statement_info or metric table.
+// It checks both binding.table (which might be an alias) and the actual table name from node.TableDef.Name.
+func isAccountConvertibleTable(binding *Binding, builder *QueryBuilder, dbName, tableName string) bool {
+	if binding == nil {
+		return false
+	}
+	if binding.db != dbName {
+		return false
+	}
+	// Check if binding.table matches (no alias case)
+	if binding.table == tableName {
+		return true
+	}
+	// Check the actual table name from node.TableDef.Name (alias case)
+	if int(binding.nodeId) < len(builder.qry.Nodes) {
+		node := builder.qry.Nodes[binding.nodeId]
+		if node != nil && node.TableDef != nil && node.TableDef.Name == tableName {
+			return true
+		}
+	}
+	return false
+}
+
+// buildAccountConvertibleTableAliasMap builds a map of table aliases/names that refer to statement_info or metric table.
+// The key is the table alias/name used in the query, the value indicates if it refers to statement_info or metric.
+func (builder *QueryBuilder) buildAccountConvertibleTableAliasMap(ctx *BindContext) map[string]bool {
+	tableAliasMap := make(map[string]bool)
+	for tableName, binding := range ctx.bindingByTable {
+		// Check for statement_info table in system database
+		if isAccountConvertibleTable(binding, builder, catalog.MO_SYSTEM, catalog.MO_STATEMENT) {
+			tableAliasMap[tableName] = true
+			tableAliasMap[catalog.MO_STATEMENT] = true
+		}
+		// Check for metric table in system_metrics database
+		if isAccountConvertibleTable(binding, builder, catalog.MO_SYSTEM_METRICS, catalog.MO_METRIC) {
+			tableAliasMap[tableName] = true
+			tableAliasMap[catalog.MO_METRIC] = true
+		}
+	}
+	return tableAliasMap
+}
+
+// hasStatementInfoOrMetricTable checks if the query involves statement_info or metric table
+// It checks both binding.table (which might be an alias) and the actual table name from node.TableDef.Name
+func hasStatementInfoOrMetricTable(ctx *BindContext, builder *QueryBuilder) bool {
+	for _, binding := range ctx.bindingByTable {
+		if isAccountConvertibleTable(binding, builder, catalog.MO_SYSTEM, catalog.MO_STATEMENT) {
+			return true
+		}
+		if isAccountConvertibleTable(binding, builder, catalog.MO_SYSTEM_METRICS, catalog.MO_METRIC) {
+			return true
+		}
+	}
+	return false
+}
+
+// convertAccountToAccountIdIfNeeded converts account to account_id if the query involves statement_info or metric table.
+// This conversion is primarily designed for compatibility with mo-cloud's business-level usage of the account field.
+// When mo-cloud queries statement_info or metric using account names (e.g., WHERE account = 'sys'), this function automatically
+// converts the account filter to account_id filter by looking up the corresponding account_id from mo_catalog.mo_account.
+// This provides a more user-friendly interface while maintaining compatibility with the underlying account_id-based storage.
+func (builder *QueryBuilder) convertAccountToAccountIdIfNeeded(ctx *BindContext, expr tree.Expr) tree.Expr {
+	if !hasStatementInfoOrMetricTable(ctx, builder) {
+		return expr
+	}
+
+	currentAccountID, err := builder.compCtx.GetAccountId()
+	if err != nil {
+		return expr
+	}
+
+	isSystemAccount := currentAccountID == catalog.System_Account
+	currentAccountName := "sys"
+	if !isSystemAccount {
+		currentAccountName = builder.compCtx.GetAccountName()
+	}
+
+	tableAliasMap := builder.buildAccountConvertibleTableAliasMap(ctx)
+	// Create account_id resolver function that queries account_id from mo_catalog.mo_account
+	accountIdResolver := func(accountName string) (uint32, error) {
+		accountIds, err := builder.compCtx.ResolveAccountIds([]string{accountName})
+		if err != nil {
+			return 0, err
+		}
+		if len(accountIds) == 0 {
+			// Account not found, return 0 to indicate not found
+			return 0, nil
+		}
+		return accountIds[0], nil
+	}
+	convertedExpr, _ := util.ConvertAccountToAccountIdWithTableCheck(expr, isSystemAccount, currentAccountName, currentAccountID, tableAliasMap, accountIdResolver)
+	return convertedExpr
 }
 
 func (builder *QueryBuilder) bindGroupBy(
@@ -4807,7 +4902,6 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 			if err != nil {
 				return 0, err
 			}
-			acctName := builder.compCtx.GetUserName()
 			if sub := builder.compCtx.GetQueryingSubscription(); sub != nil {
 				currentAccountID = uint32(sub.AccountId)
 				builder.qry.Nodes[nodeID].NotCacheable = true
@@ -4823,7 +4917,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 					}
 					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
 				} else if dbName == catalog.MO_SYSTEM_METRICS && (tableName == catalog.MO_METRIC || tableName == catalog.MO_SQL_STMT_CU) {
-					motablesFilter := util.BuildSysMetricFilter(acctName)
+					motablesFilter := util.BuildSysMetricFilter(uint64(currentAccountID))
 					ctx.binder = NewWhereBinder(builder, ctx)
 					accountFilterExprs, err := splitAndBindCondition(motablesFilter, NoAlias, ctx)
 					if err != nil {
@@ -4831,7 +4925,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 					}
 					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
 				} else if dbName == catalog.MO_SYSTEM && tableName == catalog.MO_STATEMENT {
-					motablesFilter := util.BuildSysStatementInfoFilter(acctName)
+					motablesFilter := util.BuildSysStatementInfoFilter(uint64(currentAccountID))
 					ctx.binder = NewWhereBinder(builder, ctx)
 					accountFilterExprs, err := splitAndBindCondition(motablesFilter, NoAlias, ctx)
 					if err != nil {

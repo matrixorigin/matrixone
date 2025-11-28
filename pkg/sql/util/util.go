@@ -142,14 +142,12 @@ func BuildMoDataBaseFilter(curAccountId uint64) tree.Expr {
 	return tree.NewOrExpr(left, right)
 }
 
-func BuildSysStatementInfoFilter(acctName string) tree.Expr {
-	equalAccount := makeStringEqualAst("account", strings.Split(acctName, ":")[0])
-	return equalAccount
+func BuildSysStatementInfoFilter(curAccountId uint64) tree.Expr {
+	return makeAccountIdEqualAst(curAccountId)
 }
 
-func BuildSysMetricFilter(acctName string) tree.Expr {
-	equalAccount := makeStringEqualAst("account", strings.Split(acctName, ":")[0])
-	return equalAccount
+func BuildSysMetricFilter(curAccountId uint64) tree.Expr {
+	return makeAccountIdEqualAst(curAccountId)
 }
 
 // Build the filter condition AST expression for mo_tables, as follows:
@@ -259,6 +257,160 @@ func GetClusterTableAttributeType() *tree.T {
 
 func IsClusterTableAttribute(name string) bool {
 	return name == clusterTableAttributeName
+}
+
+// AccountIdResolver is a function type that resolves account name to account_id.
+// It returns the account_id if found, or an error if not found or on failure.
+// If the account is not found, it should return (0, nil) to indicate the account doesn't exist.
+type AccountIdResolver func(accountName string) (uint32, error)
+
+// ConvertAccountToAccountIdWithTableCheck converts account column references to account_id comparisons in AST.
+// This conversion is primarily designed for compatibility with mo-cloud's business-level usage of the account field.
+//
+// The function only handles EQUAL operations (account = 'xxx') for system accounts. For other operations (IN, LIKE, etc.), it keeps the original condition unchanged.
+//
+// For system accounts (account_id = 0):
+//   - If account = 'sys', it directly converts to account_id = 0 without query
+//   - If account = 'xxx' and accountIdResolver is provided, it queries account_id:
+//   - If account_id is found, replaces with account_id = <id> (can be pushed down to tablescan)
+//   - If account_id is not found, keeps the original account = 'xxx' condition
+//
+// For non-system accounts:
+//   - No conversion is performed because account_id filter is already added in tablescan during plan building. QueryBuiler::buildTable pkg/sql/plan/query_builder.go:4889
+//
+// tableAliasMap is a map of table names/aliases that refer to statement_info or metric table. If nil, only checks for unqualified column names
+// or table name "statement_info"/"metric". This map is used to verify if table-qualified column names (e.g., s.account, m.account) refer to statement_info or metric.
+//
+// This allows mo-cloud to query statement_info or metric table using account names (e.g., WHERE account = 'sys' or WHERE s.account = 'sys')
+// instead of account_ids, providing a more intuitive interface while maintaining compatibility with the underlying account_id-based storage and access control.
+//
+// Returns the converted AST expression and a boolean indicating if any conversion was made.
+func ConvertAccountToAccountIdWithTableCheck(astExpr tree.Expr, isSystemAccount bool, currentAccountName string, currentAccountID uint32, tableAliasMap map[string]bool, accountIdResolver AccountIdResolver) (tree.Expr, bool) {
+	switch expr := astExpr.(type) {
+	case *tree.ComparisonExpr:
+		// Check if Left is account column from statement_info table
+		if isAccountColumnFromStatementInfoOrMetric(expr.Left, tableAliasMap) {
+			// For non-system account, do nothing because account_id filter is already added in tablescan
+			if !isSystemAccount {
+				return astExpr, false
+			}
+			// Only handle EQUAL operation for account column
+			// For other operations (IN, LIKE, etc.), keep original condition unchanged
+			if expr.Op != tree.EQUAL {
+				return astExpr, false
+			}
+			// Optimization: if account = 'sys', directly convert to account_id = 0 without query
+			if accountValue, ok := extractAccountValue(expr.Right); ok {
+				if strings.EqualFold(accountValue, "sys") {
+					accountIdColName := tree.NewUnresolvedColName("account_id")
+					accountIdConst := tree.NewNumVal(uint64(0), "0", false, tree.P_uint64)
+					return tree.NewComparisonExpr(tree.EQUAL, accountIdColName, accountIdConst), true
+				}
+				if accountIdResolver != nil {
+					accountId, err := accountIdResolver(accountValue)
+					if err == nil && accountId != 0 {
+						// Account found, replace with account_id = <id>
+						accountIdColName := tree.NewUnresolvedColName("account_id")
+						accountIdConst := tree.NewNumVal(uint64(accountId), strconv.Itoa(int(accountId)), false, tree.P_uint64)
+						return tree.NewComparisonExpr(tree.EQUAL, accountIdColName, accountIdConst), true
+					}
+					// Account not found or error, keep original account = 'xxx' condition
+					return astExpr, false
+				}
+			}
+			// If resolver is not available, keep original condition
+			return astExpr, false
+		}
+		// Recursively process Left and Right
+		newLeft, leftConverted := ConvertAccountToAccountIdWithTableCheck(expr.Left, isSystemAccount, currentAccountName, currentAccountID, tableAliasMap, accountIdResolver)
+		newRight, rightConverted := ConvertAccountToAccountIdWithTableCheck(expr.Right, isSystemAccount, currentAccountName, currentAccountID, tableAliasMap, accountIdResolver)
+		if leftConverted || rightConverted {
+			return &tree.ComparisonExpr{
+				Op:     expr.Op,
+				SubOp:  expr.SubOp,
+				Left:   newLeft,
+				Right:  newRight,
+				Escape: expr.Escape,
+			}, true
+		}
+
+	case *tree.AndExpr:
+		newLeft, leftConverted := ConvertAccountToAccountIdWithTableCheck(expr.Left, isSystemAccount, currentAccountName, currentAccountID, tableAliasMap, accountIdResolver)
+		newRight, rightConverted := ConvertAccountToAccountIdWithTableCheck(expr.Right, isSystemAccount, currentAccountName, currentAccountID, tableAliasMap, accountIdResolver)
+		if leftConverted || rightConverted {
+			return &tree.AndExpr{Left: newLeft, Right: newRight}, true
+		}
+
+	case *tree.OrExpr:
+		newLeft, leftConverted := ConvertAccountToAccountIdWithTableCheck(expr.Left, isSystemAccount, currentAccountName, currentAccountID, tableAliasMap, accountIdResolver)
+		newRight, rightConverted := ConvertAccountToAccountIdWithTableCheck(expr.Right, isSystemAccount, currentAccountName, currentAccountID, tableAliasMap, accountIdResolver)
+		if leftConverted || rightConverted {
+			return &tree.OrExpr{Left: newLeft, Right: newRight}, true
+		}
+
+	case *tree.NotExpr:
+		newExpr, converted := ConvertAccountToAccountIdWithTableCheck(expr.Expr, isSystemAccount, currentAccountName, currentAccountID, tableAliasMap, accountIdResolver)
+		if converted {
+			return &tree.NotExpr{Expr: newExpr}, true
+		}
+
+	case *tree.ParenExpr:
+		newExpr, converted := ConvertAccountToAccountIdWithTableCheck(expr.Expr, isSystemAccount, currentAccountName, currentAccountID, tableAliasMap, accountIdResolver)
+		if converted {
+			return &tree.ParenExpr{Expr: newExpr}, true
+		}
+	}
+
+	return astExpr, false
+}
+
+// isAccountColumnFromStatementInfoOrMetric checks if the expression is an account column reference from statement_info or metric table.
+// This is used to identify account column comparisons that need to be converted to account_id comparisons
+// for compatibility with mo-cloud's business-level usage of the account field.
+//
+// For table-qualified column names (e.g., s.account or statement_info.account), it checks if the table name/alias
+// refers to statement_info or metric table using tableAliasMap. If tableAliasMap is nil, it only checks if table name is "statement_info" or "metric".
+// For unqualified column names, it returns true (will be checked by hasStatementInfoOrMetricTable in caller).
+func isAccountColumnFromStatementInfoOrMetric(expr tree.Expr, tableAliasMap map[string]bool) bool {
+	if unresolvedName, ok := expr.(*tree.UnresolvedName); ok {
+		colName := unresolvedName.ColName()
+		if !strings.EqualFold(colName, "account") {
+			return false
+		}
+		// If column name has table qualification, check if table refers to statement_info or metric
+		if unresolvedName.NumParts >= 2 {
+			tblName := unresolvedName.TblName()
+			// Check if table name is "statement_info" (case-insensitive)
+			if strings.EqualFold(tblName, catalog.MO_STATEMENT) {
+				return true
+			}
+			// Check if table name is "metric" (case-insensitive)
+			if strings.EqualFold(tblName, catalog.MO_METRIC) {
+				return true
+			}
+			// If tableAliasMap is provided, check if the table alias refers to statement_info or metric
+			if tableAliasMap != nil {
+				return tableAliasMap[tblName]
+			}
+			// If no tableAliasMap and table name is not "statement_info" or "metric", don't convert
+			return false
+		}
+		// For unqualified column names, return true (will be checked by hasStatementInfoOrMetricTable in caller)
+		return true
+	}
+	return false
+}
+
+// extractAccountValue extracts the account value from an expression (for string literals).
+// This helper function is used to extract account name values from AST expressions
+// when converting account comparisons to account_id comparisons for mo-cloud compatibility.
+func extractAccountValue(expr tree.Expr) (string, bool) {
+	if numVal, ok := expr.(*tree.NumVal); ok {
+		if numVal.ValType == tree.P_char {
+			return numVal.String(), true
+		}
+	}
+	return "", false
 }
 
 const partitionDelimiter = "%!%"
