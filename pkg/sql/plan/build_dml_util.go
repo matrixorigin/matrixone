@@ -4413,7 +4413,7 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 			},
 			Cols: ftcols,
 		},
-		BindingTags:     []int32{builder.genNewTag()},
+		BindingTags:     []int32{builder.genNewBindTag()},
 		TblFuncExprList: args,
 		//Children:        []int32{lastNodeId},
 	}
@@ -4437,7 +4437,7 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 		NodeType:    plan.Node_APPLY,
 		Children:    []int32{lastNodeId, tableFuncId},
 		ApplyType:   plan.Node_CROSSAPPLY,
-		BindingTags: []int32{builder.genNewTag()},
+		BindingTags: []int32{builder.genNewBindTag()},
 		ProjectList: apply_project,
 	}, bindCtx)
 

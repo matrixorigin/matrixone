@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -441,12 +442,12 @@ func (r *reader) SetOrderBy(orderby []*plan.OrderBySpec) {
 	r.source.SetOrderBy(orderby)
 }
 
-func (r *reader) SetBlockTop(orderby []*plan.OrderBySpec, limit uint64) {
-	if len(orderby) == 0 || limit == 0 {
+func (r *reader) SetBlockTop(orderBy []*plan.OrderBySpec, limit uint64) {
+	if len(orderBy) == 0 || limit == 0 {
 		return
 	}
 
-	orderFunc := orderby[0].Expr.GetF()
+	orderFunc := orderBy[0].Expr.GetF()
 	if orderFunc == nil {
 		panic("order function is nil")
 	}
@@ -587,6 +588,19 @@ func (r *reader) Read(
 		return true, nil
 	}
 	if state == engine.InMem {
+		if r.orderByLimit != nil {
+			sels, dists, err := blockio.HandleOrderByLimitOnIVFFlatIndex(ctx, nil, outBatch.Vecs[r.orderByLimit.ColPos], r.orderByLimit)
+			if err != nil {
+				return false, err
+			}
+
+			outBatch.Shuffle(sels, mp)
+
+			distVec := vector.NewVec(types.T_float64.ToType())
+			vector.AppendFixedList(distVec, dists, nil, mp)
+			outBatch.Vecs = append(outBatch.Vecs, distVec)
+		}
+
 		return false, nil
 	}
 	//read block
