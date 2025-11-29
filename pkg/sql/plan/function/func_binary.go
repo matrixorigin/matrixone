@@ -1148,8 +1148,9 @@ func doDateAdd(start types.Date, diff int64, iTyp types.IntervalType) (types.Dat
 			switch iTyp {
 			case types.Year:
 				resultYear = startYear + diff
-			case types.Month:
+			case types.Month, types.Year_Month:
 				// Calculate: year + month/12, handling month overflow
+				// Year_Month should be treated the same as Month
 				resultYear = startYear + diff/12
 			case types.Quarter:
 				// Calculate: year + (quarter*3)/12
@@ -1235,8 +1236,9 @@ func doDatetimeAdd(start types.Datetime, diff int64, iTyp types.IntervalType) (t
 			switch iTyp {
 			case types.Year:
 				resultYear = startYear + diff
-			case types.Month:
+			case types.Month, types.Year_Month:
 				// Calculate: year + month/12, handling month overflow
+				// Year_Month should be treated the same as Month
 				resultYear = startYear + diff/12
 			case types.Quarter:
 				// Calculate: year + (quarter*3)/12
@@ -1338,8 +1340,9 @@ func doDateStringAdd(startStr string, diff int64, iTyp types.IntervalType) (type
 			switch iTyp {
 			case types.Year:
 				resultYear = startYear + diff
-			case types.Month:
+			case types.Month, types.Year_Month:
 				// Calculate: year + month/12, handling month overflow
+				// Year_Month should be treated the same as Month
 				resultYear = startYear + diff/12
 			case types.Quarter:
 				// Calculate: year + (quarter*3)/12

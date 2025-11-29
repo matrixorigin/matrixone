@@ -445,6 +445,11 @@ func (dt Datetime) AddInterval(nums int64, its IntervalType, timeType TimeType) 
 	case Year:
 		addYear = nums
 		return dt.AddDateTime(addMonth, addYear, timeType)
+	case Year_Month:
+		// Year_Month should be treated as Month (nums already represents months after NormalizeInterval)
+		// This handles the case where Year_Month type is directly passed without NormalizeInterval conversion
+		addMonth = nums
+		return dt.AddDateTime(addMonth, addYear, timeType)
 	}
 
 	newDate := dt + Datetime(nums)
