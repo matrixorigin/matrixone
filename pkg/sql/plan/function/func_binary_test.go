@@ -7044,3 +7044,257 @@ func TestDateSubWithDecimalInterval(t *testing.T) {
 		})
 	}
 }
+
+// TestDoDatetimeAddComprehensive tests doDatetimeAdd with comprehensive test cases
+func TestDoDatetimeAddComprehensive(t *testing.T) {
+	testCases := []struct {
+		name          string
+		start         types.Datetime
+		diff          int64
+		iTyp          types.IntervalType
+		expectError   bool
+		expectZero    bool
+		expectedValue types.Datetime
+		errorContains string
+	}{
+		// Test invalid interval marker
+		{
+			name:        "Invalid interval marker (math.MaxInt64)",
+			start:       types.Datetime(0),
+			diff:        math.MaxInt64,
+			iTyp:        types.Day,
+			expectError: true,
+		},
+		// Test normal success cases
+		{
+			name:          "Normal add 1 day",
+			start:         types.Datetime(0), // 1970-01-01 00:00:00
+			diff:          1,
+			iTyp:          types.Day,
+			expectError:   false,
+			expectedValue: types.Datetime(86400 * 1000000), // 1970-01-02 00:00:00
+		},
+		{
+			name:          "Normal add 1 month",
+			start:         types.Datetime(0),
+			diff:          1,
+			iTyp:          types.Month,
+			expectError:   false,
+			expectedValue: types.Datetime(2678400 * 1000000), // 1970-02-01 00:00:00
+		},
+		{
+			name:          "Normal add 1 year",
+			start:         types.Datetime(0),
+			diff:          1,
+			iTyp:          types.Year,
+			expectError:   false,
+			expectedValue: types.Datetime(31536000 * 1000000), // 1971-01-01 00:00:00
+		},
+		// Test overflow cases (diff > 0)
+		{
+			name:        "Overflow beyond maximum (diff > 0)",
+			start:       func() types.Datetime { dt, _ := types.ParseDatetime("9999-12-31 23:59:59", 6); return dt }(),
+			diff:        1,
+			iTyp:        types.Day,
+			expectError: true,
+		},
+		// Test underflow cases (diff < 0) - Year type
+		{
+			name:        "Underflow with Year type, year out of range (< MinDatetimeYear)",
+			start:       types.Datetime(0), // 1970-01-01
+			diff:        -2000,             // 1970 - 2000 = -30, out of range
+			iTyp:        types.Year,
+			expectError: true,
+		},
+		// Note: For underflow cases where year is in valid range but AddInterval fails,
+		// we need dates that are close to the minimum valid datetime (0001-01-01)
+		// but subtracting would cause underflow. However, if the year calculation
+		// stays in valid range, it should return ZeroDatetime.
+		// These cases are hard to trigger because AddInterval typically succeeds
+		// for dates within valid range. Let's test the logic paths that are reachable.
+		// Test underflow cases - Month type
+		{
+			name:        "Underflow with Month type, year out of range",
+			start:       types.Datetime(0),
+			diff:        -24000, // -24000 months = -2000 years, out of range
+			iTyp:        types.Month,
+			expectError: true,
+		},
+		// Test underflow cases - Quarter type
+		{
+			name:        "Underflow with Quarter type, year out of range",
+			start:       types.Datetime(0),
+			diff:        -8000, // -8000 quarters = -2000 years, out of range
+			iTyp:        types.Quarter,
+			expectError: true,
+		},
+		// Test large interval values that cause date overflow (should return NULL, not panic)
+		// This tests the fix for the Calendar array bounds check bug
+		{
+			name:        "Large interval value causing date overflow (1 trillion days)",
+			start:       types.Datetime(0),
+			diff:        1000000000000, // 1 trillion days ≈ 27 billion years, causes Calendar array bounds issue
+			iTyp:        types.Day,
+			expectError: true, // Should return datetimeOverflowMaxError (NULL in MySQL)
+		},
+		{
+			name:        "Large negative interval value causing date underflow",
+			start:       types.Datetime(0),
+			diff:        -1000000000000, // Very large negative number
+			iTyp:        types.Day,
+			expectError: true, // Should return datetimeOverflowMaxError (NULL in MySQL)
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := doDatetimeAdd(tc.start, tc.diff, tc.iTyp)
+
+			if tc.expectError {
+				require.Error(t, err)
+				if tc.errorContains != "" {
+					require.Contains(t, err.Error(), tc.errorContains)
+				}
+				// Check if it's the overflow error
+				require.True(t, isDatetimeOverflowMaxError(err), "Should return datetimeOverflowMaxError")
+				return
+			}
+
+			require.NoError(t, err)
+			if tc.expectZero {
+				require.Equal(t, types.ZeroDatetime, result, "Should return zero datetime")
+			} else {
+				require.Equal(t, tc.expectedValue, result, "Result should match expected value")
+			}
+		})
+	}
+}
+
+// TestDoDateStringAddComprehensive tests doDateStringAdd with comprehensive test cases
+func TestDoDateStringAddComprehensive(t *testing.T) {
+	testCases := []struct {
+		name          string
+		startStr      string
+		diff          int64
+		iTyp          types.IntervalType
+		expectError   bool
+		expectZero    bool
+		expectedValue types.Datetime
+		errorContains string
+	}{
+		// Test invalid interval marker
+		{
+			name:        "Invalid interval marker (math.MaxInt64)",
+			startStr:    "2022-01-01",
+			diff:        math.MaxInt64,
+			iTyp:        types.Day,
+			expectError: true,
+		},
+		// Test normal success cases
+		{
+			name:          "Normal add 1 day",
+			startStr:      "2022-01-01 00:00:00",
+			diff:          1,
+			iTyp:          types.Day,
+			expectError:   false,
+			expectedValue: func() types.Datetime { dt, _ := types.ParseDatetime("2022-01-02 00:00:00", 6); return dt }(),
+		},
+		{
+			name:          "Normal add 1 month",
+			startStr:      "2022-01-01 00:00:00",
+			diff:          1,
+			iTyp:          types.Month,
+			expectError:   false,
+			expectedValue: func() types.Datetime { dt, _ := types.ParseDatetime("2022-02-01 00:00:00", 6); return dt }(),
+		},
+		// Test ParseDatetime failure - TIME format
+		{
+			name:        "TIME format string (should return NULL)",
+			startStr:    "12:34:56",
+			diff:        1,
+			iTyp:        types.Day,
+			expectError: true,
+		},
+		// Test ParseDatetime failure - invalid string
+		{
+			name:        "Invalid string format",
+			startStr:    "invalid-date",
+			diff:        1,
+			iTyp:        types.Day,
+			expectError: true,
+		},
+		// Test overflow cases (diff > 0)
+		{
+			name:        "Overflow beyond maximum (diff > 0)",
+			startStr:    "9999-12-31 23:59:59",
+			diff:        1,
+			iTyp:        types.Day,
+			expectError: true,
+		},
+		// Test underflow cases (diff < 0) - Year type
+		{
+			name:        "Underflow with Year type, year out of range",
+			startStr:    "2000-01-01 00:00:00",
+			diff:        -2000, // 2000 - 2000 = 0, out of range
+			iTyp:        types.Year,
+			expectError: true,
+		},
+		// Test underflow cases - Month type
+		{
+			name:        "Underflow with Month type, year out of range",
+			startStr:    "2000-01-01 00:00:00",
+			diff:        -24000, // -24000 months = -2000 years, out of range
+			iTyp:        types.Month,
+			expectError: true,
+		},
+		// Test underflow cases - Quarter type
+		{
+			name:        "Underflow with Quarter type, year out of range",
+			startStr:    "2000-01-01 00:00:00",
+			diff:        -8000, // -8000 quarters = -2000 years, out of range
+			iTyp:        types.Quarter,
+			expectError: true,
+		},
+		// Test large interval values that cause date overflow (should return NULL, not panic)
+		// This tests the fix for the Calendar array bounds check bug
+		{
+			name:        "Large interval value causing date overflow (1 trillion days)",
+			startStr:    "1970-01-01 00:00:00",
+			diff:        1000000000000, // 1 trillion days ≈ 27 billion years, causes Calendar array bounds issue
+			iTyp:        types.Day,
+			expectError: true, // Should return datetimeOverflowMaxError (NULL in MySQL)
+		},
+		{
+			name:        "Large negative interval value causing date underflow",
+			startStr:    "2022-01-01 00:00:00",
+			diff:        -1000000000000, // Very large negative number
+			iTyp:        types.Day,
+			expectError: true, // Should return datetimeOverflowMaxError (NULL in MySQL)
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := doDateStringAdd(tc.startStr, tc.diff, tc.iTyp)
+
+			if tc.expectError {
+				require.Error(t, err)
+				if tc.errorContains != "" {
+					require.Contains(t, err.Error(), tc.errorContains)
+				}
+				// Check if it's the overflow error (except for invalid string format)
+				if tc.name != "Invalid string format" {
+					require.True(t, isDatetimeOverflowMaxError(err), "Should return datetimeOverflowMaxError")
+				}
+				return
+			}
+
+			require.NoError(t, err)
+			if tc.expectZero {
+				require.Equal(t, types.ZeroDatetime, result, "Should return zero datetime")
+			} else {
+				require.Equal(t, tc.expectedValue, result, "Result should match expected value")
+			}
+		})
+	}
+}

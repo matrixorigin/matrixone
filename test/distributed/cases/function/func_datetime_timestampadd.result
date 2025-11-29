@@ -127,3 +127,15 @@ DROP TABLE t1;
 SELECT TIMESTAMPADD(DAY, 5, '2024-12-20') AS result1, TIMESTAMPADD(HOUR, 12, '2024-12-20 10:30:45') AS result2, TIMESTAMPADD(MONTH, 1, '2024-12-20') AS result3;
 result1    result2    result3
 2024-12-25    2024-12-20 22:30:45    2025-01-20
+SELECT TIMESTAMPADD(DAY, 1000000000000, '1970-01-01 00:00:00') AS large_positive_interval;
+large_positive_interval
+null
+SELECT TIMESTAMPADD(DAY, -1000000000000, '1970-01-01 00:00:00') AS large_negative_interval;
+large_negative_interval
+null
+SELECT DATE_ADD('1970-01-01 00:00:00', INTERVAL 1000000000000 DAY) AS date_add_large_positive;
+date_add_large_positive
+null
+SELECT DATE_ADD('1970-01-01 00:00:00', INTERVAL -1000000000000 DAY) AS date_add_large_negative;
+date_add_large_negative
+null

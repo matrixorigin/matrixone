@@ -78,3 +78,10 @@ DROP TABLE t1;
 # Multiple units
 SELECT TIMESTAMPADD(DAY, 5, '2024-12-20') AS result1, TIMESTAMPADD(HOUR, 12, '2024-12-20 10:30:45') AS result2, TIMESTAMPADD(MONTH, 1, '2024-12-20') AS result3;
 
+# Large interval values that cause overflow (should return NULL, not panic)
+# MySQL behavior: TIMESTAMPADD(DAY, 1000000000000, '1970-01-01 00:00:00') returns NULL
+SELECT TIMESTAMPADD(DAY, 1000000000000, '1970-01-01 00:00:00') AS large_positive_interval;
+SELECT TIMESTAMPADD(DAY, -1000000000000, '1970-01-01 00:00:00') AS large_negative_interval;
+SELECT DATE_ADD('1970-01-01 00:00:00', INTERVAL 1000000000000 DAY) AS date_add_large_positive;
+SELECT DATE_ADD('1970-01-01 00:00:00', INTERVAL -1000000000000 DAY) AS date_add_large_negative;
+

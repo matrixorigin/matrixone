@@ -1242,11 +1242,37 @@ func doDatetimeAdd(start types.Datetime, diff int64, iTyp types.IntervalType) (t
 				// Calculate: year + (quarter*3)/12
 				resultYear = startYear + (diff*3)/12
 			default:
-				// For other types (Day, Week, etc.), they don't directly affect year
-				// The AddInterval already checked ValidDatetime, so if it failed,
-				// it means the result is out of range, but for non-year-affecting types,
-				// we should return zero datetime (not error) for underflow
-				resultYear = startYear // Keep original year for non-year-affecting types
+				// For other types (Day, Week, etc.), check the actual calculated year
+				// from the failed AddInterval result to determine if year is out of range
+				// If AddInterval failed, the result datetime might be invalid, but we can
+				// still check the year from Calendar to see if it's out of range
+				// Calculate what the result would be to check the year
+				var nums int64
+				switch iTyp {
+				case types.Day:
+					nums = diff * types.MicroSecsPerSec * types.SecsPerDay
+				case types.Week:
+					nums = diff * types.MicroSecsPerSec * types.SecsPerWeek
+				case types.Hour:
+					nums = diff * types.MicroSecsPerSec * types.SecsPerHour
+				case types.Minute:
+					nums = diff * types.MicroSecsPerSec * types.SecsPerMinute
+				case types.Second:
+					nums = diff * types.MicroSecsPerSec
+				case types.MicroSecond:
+					nums = diff
+				default:
+					// For other types, keep original year
+					resultYear = startYear
+				}
+				if nums != 0 {
+					// Check the year from the calculated date
+					calcDate := start + types.Datetime(nums)
+					calcYear, _, _, _ := calcDate.ToDate().Calendar(true)
+					resultYear = int64(calcYear)
+				} else {
+					resultYear = startYear
+				}
 			}
 			// Check if calculated year is out of valid range
 			if resultYear < types.MinDatetimeYear || resultYear > types.MaxDatetimeYear {
@@ -1319,11 +1345,37 @@ func doDateStringAdd(startStr string, diff int64, iTyp types.IntervalType) (type
 				// Calculate: year + (quarter*3)/12
 				resultYear = startYear + (diff*3)/12
 			default:
-				// For other types (Day, Week, etc.), they don't directly affect year
-				// The AddInterval already checked ValidDate/ValidDatetime, so if it failed,
-				// it means the result is out of range, but for non-year-affecting types,
-				// we should return zero datetime (not error) for underflow
-				resultYear = startYear // Keep original year for non-year-affecting types
+				// For other types (Day, Week, etc.), check the actual calculated year
+				// from the failed AddInterval result to determine if year is out of range
+				// If AddInterval failed, the result datetime might be invalid, but we can
+				// still check the year from Calendar to see if it's out of range
+				// Calculate what the result would be to check the year
+				var nums int64
+				switch iTyp {
+				case types.Day:
+					nums = diff * types.MicroSecsPerSec * types.SecsPerDay
+				case types.Week:
+					nums = diff * types.MicroSecsPerSec * types.SecsPerWeek
+				case types.Hour:
+					nums = diff * types.MicroSecsPerSec * types.SecsPerHour
+				case types.Minute:
+					nums = diff * types.MicroSecsPerSec * types.SecsPerMinute
+				case types.Second:
+					nums = diff * types.MicroSecsPerSec
+				case types.MicroSecond:
+					nums = diff
+				default:
+					// For other types, keep original year
+					resultYear = startYear
+				}
+				if nums != 0 {
+					// Check the year from the calculated date
+					calcDate := start + types.Datetime(nums)
+					calcYear, _, _, _ := calcDate.ToDate().Calendar(true)
+					resultYear = int64(calcYear)
+				} else {
+					resultYear = startYear
+				}
 			}
 			// Check if calculated year is out of valid range
 			if resultYear < types.MinDatetimeYear || resultYear > types.MaxDatetimeYear {
