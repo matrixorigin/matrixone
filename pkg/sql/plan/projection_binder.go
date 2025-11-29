@@ -431,9 +431,9 @@ func (b *ProjectionBinder) resetInterval(e *Expr) (*Expr, error) {
 				finalValue = int64(math.Round(floatVal * float64(types.MicroSecsPerSec*types.SecsPerDay)))
 				// Since we've converted to microseconds, change interval type to MicroSecond
 				intervalType = types.MicroSecond
-			default:
-				finalValue = int64(floatVal)
 			}
+			// Note: default case removed as it's unreachable - when needsMicrosecondConversion is true,
+			// isTimeUnit must be true, which means intervalType can only be Second/Minute/Hour/Day
 		}
 	} else {
 		// For non-time units or non-decimal/float types, convert directly to int64

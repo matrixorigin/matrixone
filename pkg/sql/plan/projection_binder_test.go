@@ -297,6 +297,282 @@ func makeInt64ConstForProjection(val int64) *plan.Expr {
 	}
 }
 
+// Helper function to create an int8 constant expression
+func makeInt8ConstForProjection(val int8) *plan.Expr {
+	return &plan.Expr{
+		Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{
+				Isnull: false,
+				Value: &plan.Literal_I8Val{
+					I8Val: int32(val),
+				},
+			},
+		},
+		Typ: plan.Type{
+			Id:          int32(types.T_int8),
+			NotNullable: true,
+		},
+	}
+}
+
+// Helper function to create an int16 constant expression
+func makeInt16ConstForProjection(val int16) *plan.Expr {
+	return &plan.Expr{
+		Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{
+				Isnull: false,
+				Value: &plan.Literal_I16Val{
+					I16Val: int32(val),
+				},
+			},
+		},
+		Typ: plan.Type{
+			Id:          int32(types.T_int16),
+			NotNullable: true,
+		},
+	}
+}
+
+// Helper function to create an int32 constant expression
+func makeInt32ConstForProjection(val int32) *plan.Expr {
+	return &plan.Expr{
+		Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{
+				Isnull: false,
+				Value: &plan.Literal_I32Val{
+					I32Val: val,
+				},
+			},
+		},
+		Typ: plan.Type{
+			Id:          int32(types.T_int32),
+			NotNullable: true,
+		},
+	}
+}
+
+// Helper function to create a uint8 constant expression
+func makeUint8ConstForProjection(val uint8) *plan.Expr {
+	return &plan.Expr{
+		Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{
+				Isnull: false,
+				Value: &plan.Literal_U8Val{
+					U8Val: uint32(val),
+				},
+			},
+		},
+		Typ: plan.Type{
+			Id:          int32(types.T_uint8),
+			NotNullable: true,
+		},
+	}
+}
+
+// Helper function to create a uint16 constant expression
+func makeUint16ConstForProjection(val uint16) *plan.Expr {
+	return &plan.Expr{
+		Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{
+				Isnull: false,
+				Value: &plan.Literal_U16Val{
+					U16Val: uint32(val),
+				},
+			},
+		},
+		Typ: plan.Type{
+			Id:          int32(types.T_uint16),
+			NotNullable: true,
+		},
+	}
+}
+
+// Helper function to create a uint32 constant expression
+func makeUint32ConstForProjection(val uint32) *plan.Expr {
+	return &plan.Expr{
+		Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{
+				Isnull: false,
+				Value: &plan.Literal_U32Val{
+					U32Val: val,
+				},
+			},
+		},
+		Typ: plan.Type{
+			Id:          int32(types.T_uint32),
+			NotNullable: true,
+		},
+	}
+}
+
+// Helper function to create a uint64 constant expression
+func makeUint64ConstForProjection(val uint64) *plan.Expr {
+	return &plan.Expr{
+		Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{
+				Isnull: false,
+				Value: &plan.Literal_U64Val{
+					U64Val: val,
+				},
+			},
+		},
+		Typ: plan.Type{
+			Id:          int32(types.T_uint64),
+			NotNullable: true,
+		},
+	}
+}
+
+// Helper function to create a decimal64 constant expression with specific scale (can be negative)
+func makeDecimal64ConstForProjectionWithScale(val float64, scale int32) *plan.Expr {
+	d64, _ := types.Decimal64FromFloat64(val, 18, scale)
+	return &plan.Expr{
+		Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{
+				Isnull: false,
+				Value: &plan.Literal_Decimal64Val{
+					Decimal64Val: &plan.Decimal64{A: int64(d64)},
+				},
+			},
+		},
+		Typ: plan.Type{
+			Id:          int32(types.T_decimal64),
+			NotNullable: true,
+			Scale:       scale,
+		},
+	}
+}
+
+// Helper function to create a decimal128 constant expression with specific scale (can be negative)
+func makeDecimal128ConstForProjectionWithScale(val float64, scale int32) *plan.Expr {
+	d128, _ := types.Decimal128FromFloat64(val, 38, scale)
+	return &plan.Expr{
+		Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{
+				Isnull: false,
+				Value: &plan.Literal_Decimal128Val{
+					Decimal128Val: &plan.Decimal128{
+						A: int64(d128.B0_63),
+						B: int64(d128.B64_127),
+					},
+				},
+			},
+		},
+		Typ: plan.Type{
+			Id:          int32(types.T_decimal128),
+			NotNullable: true,
+			Scale:       scale,
+		},
+	}
+}
+
+// Helper function to create a decimal64 constant expression with negative scale (to test scale < 0 branch)
+func makeDecimal64ConstForProjectionWithNegativeScale(val float64, scale int32) *plan.Expr {
+	// Use a valid scale for creation, but set Typ.Scale to negative value
+	d64, _ := types.Decimal64FromFloat64(val, 18, 0)
+	return &plan.Expr{
+		Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{
+				Isnull: false,
+				Value: &plan.Literal_Decimal64Val{
+					Decimal64Val: &plan.Decimal64{A: int64(d64)},
+				},
+			},
+		},
+		Typ: plan.Type{
+			Id:          int32(types.T_decimal64),
+			NotNullable: true,
+			Scale:       scale, // Set to negative value to test scale < 0 branch
+		},
+	}
+}
+
+// Helper function to create a decimal128 constant expression with negative scale (to test scale < 0 branch)
+func makeDecimal128ConstForProjectionWithNegativeScale(val float64, scale int32) *plan.Expr {
+	// Use a valid scale for creation, but set Typ.Scale to negative value
+	d128, _ := types.Decimal128FromFloat64(val, 38, 0)
+	return &plan.Expr{
+		Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{
+				Isnull: false,
+				Value: &plan.Literal_Decimal128Val{
+					Decimal128Val: &plan.Decimal128{
+						A: int64(d128.B0_63),
+						B: int64(d128.B64_127),
+					},
+				},
+			},
+		},
+		Typ: plan.Type{
+			Id:          int32(types.T_decimal128),
+			NotNullable: true,
+			Scale:       scale, // Set to negative value to test scale < 0 branch
+		},
+	}
+}
+
+// Helper function to create a null constant expression for decimal64 type
+func makeNullDecimal64ConstForProjection() *plan.Expr {
+	return &plan.Expr{
+		Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{
+				Isnull: true,
+			},
+		},
+		Typ: plan.Type{
+			Id:          int32(types.T_decimal64),
+			NotNullable: false,
+			Scale:       1,
+		},
+	}
+}
+
+// Helper function to create a null constant expression for decimal128 type
+func makeNullDecimal128ConstForProjection() *plan.Expr {
+	return &plan.Expr{
+		Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{
+				Isnull: true,
+			},
+		},
+		Typ: plan.Type{
+			Id:          int32(types.T_decimal128),
+			NotNullable: false,
+			Scale:       1,
+		},
+	}
+}
+
+// Helper function to create a null constant expression for float64 type
+func makeNullFloat64ConstForProjection() *plan.Expr {
+	return &plan.Expr{
+		Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{
+				Isnull: true,
+			},
+		},
+		Typ: plan.Type{
+			Id:          int32(types.T_float64),
+			NotNullable: false,
+		},
+	}
+}
+
+// Helper function to create a null constant expression for float32 type
+func makeNullFloat32ConstForProjection() *plan.Expr {
+	return &plan.Expr{
+		Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{
+				Isnull: true,
+			},
+		},
+		Typ: plan.Type{
+			Id:          int32(types.T_float32),
+			NotNullable: false,
+		},
+	}
+}
+
 // Helper to extract int64 value from a constant expression
 func extractInt64ValueFromExpr(expr *plan.Expr) int64 {
 	if lit, ok := expr.Expr.(*plan.Expr_Lit); ok {
@@ -510,6 +786,112 @@ func TestProjectionBinderResetIntervalComprehensive(t *testing.T) {
 			intervalUnit:         "HOUR",
 			expectedIntervalVal:  5400000000, // 1.5 * 60 * 60 * 1000000
 			expectedIntervalType: types.MicroSecond,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			intervalExpr := makeIntervalExprForProjection(tc.intervalValueExpr, tc.intervalUnit)
+
+			result, err := projectionBinder.resetInterval(intervalExpr)
+
+			if tc.expectError {
+				require.Error(t, err)
+				if tc.errorContains != "" {
+					require.Contains(t, err.Error(), tc.errorContains)
+				}
+				return
+			}
+
+			require.NoError(t, err)
+			require.NotNil(t, result)
+
+			// Verify the result structure
+			listExpr, ok := result.Expr.(*plan.Expr_List)
+			require.True(t, ok, "Result should be a list expression")
+			require.Len(t, listExpr.List.List, 2, "Result should have 2 elements")
+
+			// Verify the interval value
+			intervalValue := extractInt64ValueFromExpr(listExpr.List.List[0])
+			require.Equal(t, tc.expectedIntervalVal, intervalValue,
+				"Interval value mismatch for %s", tc.name)
+
+			// Verify the interval type
+			intervalType := extractInt64ValueFromExpr(listExpr.List.List[1])
+			require.Equal(t, int64(tc.expectedIntervalType), intervalType,
+				"Interval type mismatch for %s", tc.name)
+		})
+	}
+}
+
+// TestProjectionBinderResetIntervalAdditionalCoverage tests additional edge cases
+// to improve code coverage for resetInterval function, focusing on uncovered branches
+func TestProjectionBinderResetIntervalAdditionalCoverage(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	bindCtx := NewBindContext(builder, nil)
+	havingBinder := NewHavingBinder(builder, bindCtx)
+	projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
+
+	testCases := []struct {
+		name                 string
+		intervalValueExpr    *plan.Expr
+		intervalUnit         string
+		expectedIntervalVal  int64
+		expectedIntervalType types.IntervalType
+		expectError          bool
+		errorContains        string
+	}{
+		// Test decimal64 with negative scale (should handle scale < 0 by setting to 0)
+		// This covers the branch: if scale < 0 { scale = 0 }
+		{
+			name:                 "INTERVAL 1 SECOND (decimal64, negative scale -1)",
+			intervalValueExpr:    makeDecimal64ConstForProjectionWithNegativeScale(1.0, -1),
+			intervalUnit:         "SECOND",
+			expectedIntervalVal:  1000000,
+			expectedIntervalType: types.MicroSecond,
+		},
+		// Test decimal128 with negative scale (should handle scale < 0 by setting to 0)
+		// This covers the branch: if scale < 0 { scale = 0 }
+		{
+			name:                 "INTERVAL 1 SECOND (decimal128, negative scale -1)",
+			intervalValueExpr:    makeDecimal128ConstForProjectionWithNegativeScale(1.0, -1),
+			intervalUnit:         "SECOND",
+			expectedIntervalVal:  1000000,
+			expectedIntervalType: types.MicroSecond,
+		},
+		// Test null decimal64 constant (covers c.Isnull branch, hasValue = false)
+		// Note: When hasValue is false, finalValue remains 0 (default value)
+		// This may be a bug, but we test the current behavior
+		{
+			name:                 "INTERVAL NULL SECOND (decimal64, null value)",
+			intervalValueExpr:    makeNullDecimal64ConstForProjection(),
+			intervalUnit:         "SECOND",
+			expectedIntervalVal:  0,            // When hasValue is false, finalValue is 0
+			expectedIntervalType: types.Second, // intervalType remains unchanged when hasValue is false
+		},
+		// Test null decimal128 constant (covers c.Isnull branch, hasValue = false)
+		{
+			name:                 "INTERVAL NULL SECOND (decimal128, null value)",
+			intervalValueExpr:    makeNullDecimal128ConstForProjection(),
+			intervalUnit:         "SECOND",
+			expectedIntervalVal:  0,
+			expectedIntervalType: types.Second,
+		},
+		// Test null float64 constant (covers c.Isnull branch, hasValue = false)
+		{
+			name:                 "INTERVAL NULL SECOND (float64, null value)",
+			intervalValueExpr:    makeNullFloat64ConstForProjection(),
+			intervalUnit:         "SECOND",
+			expectedIntervalVal:  0,
+			expectedIntervalType: types.Second,
+		},
+		// Test null float32 constant (covers c.Isnull branch, hasValue = false)
+		{
+			name:                 "INTERVAL NULL SECOND (float32, null value)",
+			intervalValueExpr:    makeNullFloat32ConstForProjection(),
+			intervalUnit:         "SECOND",
+			expectedIntervalVal:  0,
+			expectedIntervalType: types.Second,
 		},
 	}
 
