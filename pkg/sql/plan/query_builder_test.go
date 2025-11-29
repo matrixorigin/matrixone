@@ -1273,3 +1273,453 @@ func TestParseRankOption(t *testing.T) {
 		require.Contains(t, []string{"pre", "post"}, rankOption.Mode)
 	})
 }
+
+// TestBaseBinder_bindComparisonExpr tests bindComparisonExpr with various comparison operators
+func TestBaseBinder_bindComparisonExpr(t *testing.T) {
+	testCases := []struct {
+		name      string
+		sql       string
+		expectErr bool
+		setupFunc func() (*QueryBuilder, *BindContext) // Optional custom setup
+		checkFunc func(t *testing.T, expr *plan.Expr, err error)
+	}{
+		// Basic comparison operators
+		{
+			name:      "EQUAL: a = 1",
+			sql:       "a = 1",
+			expectErr: false,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				funcExpr, ok := expr.Expr.(*plan.Expr_F)
+				require.True(t, ok)
+				require.Equal(t, "=", funcExpr.F.Func.ObjName)
+			},
+		},
+		{
+			name:      "LESS_THAN: a < 1",
+			sql:       "a < 1",
+			expectErr: false,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				funcExpr, ok := expr.Expr.(*plan.Expr_F)
+				require.True(t, ok)
+				require.Equal(t, "<", funcExpr.F.Func.ObjName)
+			},
+		},
+		{
+			name:      "LESS_THAN_EQUAL: a <= 1",
+			sql:       "a <= 1",
+			expectErr: false,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				funcExpr, ok := expr.Expr.(*plan.Expr_F)
+				require.True(t, ok)
+				require.Equal(t, "<=", funcExpr.F.Func.ObjName)
+			},
+		},
+		{
+			name:      "GREAT_THAN: a > 1",
+			sql:       "a > 1",
+			expectErr: false,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				funcExpr, ok := expr.Expr.(*plan.Expr_F)
+				require.True(t, ok)
+				require.Equal(t, ">", funcExpr.F.Func.ObjName)
+			},
+		},
+		{
+			name:      "GREAT_THAN_EQUAL: a >= 1",
+			sql:       "a >= 1",
+			expectErr: false,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				funcExpr, ok := expr.Expr.(*plan.Expr_F)
+				require.True(t, ok)
+				require.Equal(t, ">=", funcExpr.F.Func.ObjName)
+			},
+		},
+		{
+			name:      "NOT_EQUAL: a <> 1",
+			sql:       "a <> 1",
+			expectErr: false,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				funcExpr, ok := expr.Expr.(*plan.Expr_F)
+				require.True(t, ok)
+				require.Equal(t, "<>", funcExpr.F.Func.ObjName)
+			},
+		},
+		{
+			name:      "LIKE: a LIKE 'test%'",
+			sql:       "a LIKE 'test%'",
+			expectErr: false,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				funcExpr, ok := expr.Expr.(*plan.Expr_F)
+				require.True(t, ok)
+				require.Equal(t, "like", funcExpr.F.Func.ObjName)
+			},
+		},
+		{
+			name:      "NOT_LIKE: a NOT LIKE 'test%'",
+			sql:       "a NOT LIKE 'test%'",
+			expectErr: false,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				// NOT_LIKE should be converted to NOT(LIKE(...))
+				funcExpr, ok := expr.Expr.(*plan.Expr_F)
+				require.True(t, ok)
+				require.Equal(t, "not", funcExpr.F.Func.ObjName)
+			},
+		},
+		// Note: ILIKE requires string types, but 'a' column is BIGINT in genBuilderAndCtx
+		// So we'll test ILIKE with a string column setup
+		{
+			name:      "ILIKE: string_col ILIKE 'test%'",
+			sql:       "string_col ILIKE 'test%'",
+			expectErr: false,
+			setupFunc: func() (*QueryBuilder, *BindContext) {
+				builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+				bindCtx := NewBindContext(builder, nil)
+				typ := types.T_varchar.ToType()
+				plan2Type := makePlan2Type(&typ)
+				bind := &Binding{
+					tag:            1,
+					nodeId:         0,
+					db:             "select_test",
+					table:          "bind_select",
+					tableID:        0,
+					cols:           []string{"string_col"},
+					colIsHidden:    []bool{false},
+					types:          []*plan.Type{&plan2Type},
+					refCnts:        []uint{0},
+					colIdByName:    map[string]int32{"string_col": 0},
+					isClusterTable: false,
+					defaults:       []string{""},
+				}
+				bindCtx.bindings = append(bindCtx.bindings, bind)
+				bindCtx.bindingByTable[bind.table] = bind
+				bindCtx.bindingByCol["string_col"] = bind
+				bindCtx.bindingByTag[bind.tag] = bind
+				return builder, bindCtx
+			},
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				funcExpr, ok := expr.Expr.(*plan.Expr_F)
+				require.True(t, ok)
+				require.Equal(t, "ilike", funcExpr.F.Func.ObjName)
+			},
+		},
+		{
+			name:      "NOT_ILIKE: string_col NOT ILIKE 'test%'",
+			sql:       "string_col NOT ILIKE 'test%'",
+			expectErr: false,
+			setupFunc: func() (*QueryBuilder, *BindContext) {
+				builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+				bindCtx := NewBindContext(builder, nil)
+				typ := types.T_varchar.ToType()
+				plan2Type := makePlan2Type(&typ)
+				bind := &Binding{
+					tag:            1,
+					nodeId:         0,
+					db:             "select_test",
+					table:          "bind_select",
+					tableID:        0,
+					cols:           []string{"string_col"},
+					colIsHidden:    []bool{false},
+					types:          []*plan.Type{&plan2Type},
+					refCnts:        []uint{0},
+					colIdByName:    map[string]int32{"string_col": 0},
+					isClusterTable: false,
+					defaults:       []string{""},
+				}
+				bindCtx.bindings = append(bindCtx.bindings, bind)
+				bindCtx.bindingByTable[bind.table] = bind
+				bindCtx.bindingByCol["string_col"] = bind
+				bindCtx.bindingByTag[bind.tag] = bind
+				return builder, bindCtx
+			},
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				// NOT_ILIKE should be converted to NOT(ILIKE(...))
+				funcExpr, ok := expr.Expr.(*plan.Expr_F)
+				require.True(t, ok)
+				require.Equal(t, "not", funcExpr.F.Func.ObjName)
+			},
+		},
+		{
+			name:      "IN: a IN (1, 2, 3)",
+			sql:       "a IN (1, 2, 3)",
+			expectErr: false,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				funcExpr, ok := expr.Expr.(*plan.Expr_F)
+				require.True(t, ok)
+				require.Equal(t, "in", funcExpr.F.Func.ObjName)
+			},
+		},
+		{
+			name:      "NOT_IN: a NOT IN (1, 2, 3)",
+			sql:       "a NOT IN (1, 2, 3)",
+			expectErr: false,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				funcExpr, ok := expr.Expr.(*plan.Expr_F)
+				require.True(t, ok)
+				require.Equal(t, "not_in", funcExpr.F.Func.ObjName)
+			},
+		},
+		// Tuple comparisons
+		{
+			name:      "Tuple EQUAL: (a, b) = (1, 2)",
+			sql:       "(a, b) = (1, 2)",
+			expectErr: false,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				// Tuple comparison should result in AND of individual comparisons
+				funcExpr, ok := expr.Expr.(*plan.Expr_F)
+				require.True(t, ok)
+				require.Equal(t, "and", funcExpr.F.Func.ObjName)
+			},
+		},
+		{
+			name:      "Tuple EQUAL different lengths: (a, b) = (1, 2, 3)",
+			sql:       "(a, b) = (1, 2, 3)",
+			expectErr: true,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "different length")
+			},
+		},
+		{
+			name:      "Tuple LESS_THAN: (a, b) < (1, 2)",
+			sql:       "(a, b) < (1, 2)",
+			expectErr: false,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				// Tuple < should result in complex expression with AND/OR
+				funcExpr, ok := expr.Expr.(*plan.Expr_F)
+				require.True(t, ok)
+				// Should be either "and" or "or" depending on the logic
+				require.Contains(t, []string{"and", "or"}, funcExpr.F.Func.ObjName)
+			},
+		},
+		{
+			name:      "Tuple NOT_EQUAL: (a, b) <> (1, 2)",
+			sql:       "(a, b) <> (1, 2)",
+			expectErr: false,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				// Tuple <> should result in OR of individual comparisons
+				funcExpr, ok := expr.Expr.(*plan.Expr_F)
+				require.True(t, ok)
+				require.Equal(t, "or", funcExpr.F.Func.ObjName)
+			},
+		},
+		{
+			name:      "Tuple LESS_THAN_EQUAL: (a, b) <= (1, 2)",
+			sql:       "(a, b) <= (1, 2)",
+			expectErr: false,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				// Tuple <= should result in complex expression with AND/OR
+				funcExpr, ok := expr.Expr.(*plan.Expr_F)
+				require.True(t, ok)
+				require.Contains(t, []string{"and", "or"}, funcExpr.F.Func.ObjName)
+			},
+		},
+		{
+			name:      "Tuple GREAT_THAN: (a, b) > (1, 2)",
+			sql:       "(a, b) > (1, 2)",
+			expectErr: false,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				// Tuple > should result in complex expression with AND/OR
+				funcExpr, ok := expr.Expr.(*plan.Expr_F)
+				require.True(t, ok)
+				require.Contains(t, []string{"and", "or"}, funcExpr.F.Func.ObjName)
+			},
+		},
+		{
+			name:      "Tuple GREAT_THAN_EQUAL: (a, b) >= (1, 2)",
+			sql:       "(a, b) >= (1, 2)",
+			expectErr: false,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				// Tuple >= should result in complex expression with AND/OR
+				funcExpr, ok := expr.Expr.(*plan.Expr_F)
+				require.True(t, ok)
+				require.Contains(t, []string{"and", "or"}, funcExpr.F.Func.ObjName)
+			},
+		},
+		{
+			name:      "Tuple LESS_THAN different lengths: (a, b) < (1, 2, 3)",
+			sql:       "(a, b) < (1, 2, 3)",
+			expectErr: true,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "different length")
+			},
+		},
+		// REG_MATCH and NOT_REG_MATCH
+		{
+			name:      "REG_MATCH: string_col REGEXP 'pattern'",
+			sql:       "string_col REGEXP 'pattern'",
+			expectErr: false,
+			setupFunc: func() (*QueryBuilder, *BindContext) {
+				builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+				bindCtx := NewBindContext(builder, nil)
+				typ := types.T_varchar.ToType()
+				plan2Type := makePlan2Type(&typ)
+				bind := &Binding{
+					tag:            1,
+					nodeId:         0,
+					db:             "select_test",
+					table:          "bind_select",
+					tableID:        0,
+					cols:           []string{"string_col"},
+					colIsHidden:    []bool{false},
+					types:          []*plan.Type{&plan2Type},
+					refCnts:        []uint{0},
+					colIdByName:    map[string]int32{"string_col": 0},
+					isClusterTable: false,
+					defaults:       []string{""},
+				}
+				bindCtx.bindings = append(bindCtx.bindings, bind)
+				bindCtx.bindingByTable[bind.table] = bind
+				bindCtx.bindingByCol["string_col"] = bind
+				bindCtx.bindingByTag[bind.tag] = bind
+				return builder, bindCtx
+			},
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				funcExpr, ok := expr.Expr.(*plan.Expr_F)
+				require.True(t, ok)
+				require.Equal(t, "reg_match", funcExpr.F.Func.ObjName)
+			},
+		},
+		{
+			name:      "NOT_REG_MATCH: string_col NOT REGEXP 'pattern'",
+			sql:       "string_col NOT REGEXP 'pattern'",
+			expectErr: false,
+			setupFunc: func() (*QueryBuilder, *BindContext) {
+				builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+				bindCtx := NewBindContext(builder, nil)
+				typ := types.T_varchar.ToType()
+				plan2Type := makePlan2Type(&typ)
+				bind := &Binding{
+					tag:            1,
+					nodeId:         0,
+					db:             "select_test",
+					table:          "bind_select",
+					tableID:        0,
+					cols:           []string{"string_col"},
+					colIsHidden:    []bool{false},
+					types:          []*plan.Type{&plan2Type},
+					refCnts:        []uint{0},
+					colIdByName:    map[string]int32{"string_col": 0},
+					isClusterTable: false,
+					defaults:       []string{""},
+				}
+				bindCtx.bindings = append(bindCtx.bindings, bind)
+				bindCtx.bindingByTable[bind.table] = bind
+				bindCtx.bindingByCol["string_col"] = bind
+				bindCtx.bindingByTag[bind.tag] = bind
+				return builder, bindCtx
+			},
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				funcExpr, ok := expr.Expr.(*plan.Expr_F)
+				require.True(t, ok)
+				require.Equal(t, "not_reg_match", funcExpr.F.Func.ObjName)
+			},
+		},
+		// Single element tuple comparisons (edge case)
+		{
+			name:      "Single element tuple EQUAL: (a) = (1)",
+			sql:       "(a) = (1)",
+			expectErr: false,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				// Single element tuple should still work
+				funcExpr, ok := expr.Expr.(*plan.Expr_F)
+				require.True(t, ok)
+				// For single element, it should be just "="
+				require.Equal(t, "=", funcExpr.F.Func.ObjName)
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Use custom setup if provided, otherwise use default
+			var builder *QueryBuilder
+			var bindCtx *BindContext
+			if tc.setupFunc != nil {
+				builder, bindCtx = tc.setupFunc()
+			} else {
+				builder, bindCtx = genBuilderAndCtx()
+			}
+			whereBinder := NewWhereBinder(builder, bindCtx)
+
+			// Parse SQL to get comparison expression
+			stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select * from bind_select where "+tc.sql, 1)
+			if err != nil {
+				if tc.expectErr {
+					return
+				}
+				t.Fatalf("Failed to parse SQL: %v", err)
+			}
+
+			selectStmt := stmts[0].(*tree.Select)
+			whereClause := selectStmt.Select.(*tree.SelectClause).Where
+			if whereClause == nil {
+				t.Fatalf("No WHERE clause found")
+			}
+
+			// Extract comparison expression
+			compExpr, ok := whereClause.Expr.(*tree.ComparisonExpr)
+			if !ok {
+				t.Fatalf("WHERE clause is not a ComparisonExpr")
+			}
+
+			// Bind the comparison expression
+			expr, err := whereBinder.bindComparisonExpr(compExpr, 0, false)
+
+			if tc.expectErr {
+				require.Error(t, err)
+				if tc.checkFunc != nil {
+					tc.checkFunc(t, expr, err)
+				}
+			} else {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				if tc.checkFunc != nil {
+					tc.checkFunc(t, expr, err)
+				}
+			}
+		})
+	}
+}
