@@ -3549,7 +3549,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableBoolType("experimental_ivf_index"),
-		Default:           int64(0),
+		Default:           int64(1), // Deprecated: always enabled, kept for compatibility
 	},
 	"ivf_threads_build": {
 		Name:              "ivf_threads_build",
@@ -3605,7 +3605,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableBoolType("experimental_fulltext_index"),
-		Default:           int64(0),
+		Default:           int64(1), // Deprecated: always enabled, kept for compatibility
 	},
 	"ft_relevancy_algorithm": {
 		Name:              fulltext.FulltextRelevancyAlgo,
