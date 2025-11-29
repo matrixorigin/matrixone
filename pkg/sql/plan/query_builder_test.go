@@ -349,8 +349,360 @@ func TestQueryBuilder_bindProjection(t *testing.T) {
 	require.Equal(t, 4, resultLen)
 }
 
-// TODO
-func TestQueryBuilder_bindTimeWindow(t *testing.T) {}
+// genBuilderAndCtxWithColumnType creates a builder and context with a column of specified type
+func genBuilderAndCtxWithColumnType(typ types.T, colName string) (*QueryBuilder, *BindContext) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	bindCtx := NewBindContext(builder, nil)
+
+	typesType := typ.ToType()
+	plan2Type := makePlan2Type(&typesType)
+	bind := &Binding{
+		tag:            1,
+		nodeId:         0,
+		db:             "select_test",
+		table:          "bind_select",
+		tableID:        0,
+		cols:           []string{colName},
+		colIsHidden:    []bool{false},
+		types:          []*plan.Type{&plan2Type},
+		refCnts:        []uint{0},
+		colIdByName:    map[string]int32{colName: 0},
+		isClusterTable: false,
+		defaults:       []string{""},
+	}
+	bindCtx.bindings = append(bindCtx.bindings, bind)
+	bindCtx.bindingByTable[bind.table] = bind
+	bindCtx.bindingByCol[colName] = bind
+	bindCtx.bindingByTag[bind.tag] = bind
+	return builder, bindCtx
+}
+
+func TestQueryBuilder_bindTimeWindow(t *testing.T) {
+	tests := []struct {
+		name          string
+		colType       types.T
+		colName       string
+		expectError   bool
+		expectCast    bool
+		errorContains string
+	}{
+		// Temporal types - should work without casting
+		{
+			name:        "DATETIME type should work",
+			colType:     types.T_datetime,
+			colName:     "ts",
+			expectError: false,
+			expectCast:  false,
+		},
+		{
+			name:        "DATE type should work",
+			colType:     types.T_date,
+			colName:     "ts",
+			expectError: false,
+			expectCast:  false,
+		},
+		{
+			name:        "TIMESTAMP type should work",
+			colType:     types.T_timestamp,
+			colName:     "ts",
+			expectError: false,
+			expectCast:  false,
+		},
+		{
+			name:        "TIME type should work",
+			colType:     types.T_time,
+			colName:     "ts",
+			expectError: false,
+			expectCast:  false,
+		},
+		// String types - should be automatically cast to DATETIME
+		{
+			name:        "VARCHAR type should be cast to DATETIME",
+			colType:     types.T_varchar,
+			colName:     "ts",
+			expectError: false,
+			expectCast:  true,
+		},
+		{
+			name:        "CHAR type should be cast to DATETIME",
+			colType:     types.T_char,
+			colName:     "ts",
+			expectError: false,
+			expectCast:  true,
+		},
+		{
+			name:        "TEXT type should be cast to DATETIME",
+			colType:     types.T_text,
+			colName:     "ts",
+			expectError: false,
+			expectCast:  true,
+		},
+		// Non-temporal types - should return error
+		{
+			name:          "INT type should return error",
+			colType:       types.T_int64,
+			colName:       "ts",
+			expectError:   true,
+			expectCast:    false,
+			errorContains: "must be temporal in time window",
+		},
+		{
+			name:          "FLOAT type should return error",
+			colType:       types.T_float64,
+			colName:       "ts",
+			expectError:   true,
+			expectCast:    false,
+			errorContains: "must be temporal in time window",
+		},
+		{
+			name:          "BOOL type should return error",
+			colType:       types.T_bool,
+			colName:       "ts",
+			expectError:   true,
+			expectCast:    false,
+			errorContains: "must be temporal in time window",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			builder, bindCtx := genBuilderAndCtxWithColumnType(tt.colType, tt.colName)
+
+			// Create a time window AST
+			astTimeWindow := &tree.TimeWindow{
+				Interval: &tree.Interval{
+					Col:  tree.NewUnresolvedName(tree.NewCStr(tt.colName, 0)),
+					Val:  tree.NewNumVal(int64(2), "2", false, tree.P_int64),
+					Unit: "second",
+				},
+				Sliding: nil,
+				Fill:    nil,
+			}
+
+			// Create help function
+			helpFunc, err := makeHelpFuncForTimeWindow(astTimeWindow)
+			require.NoError(t, err)
+
+			// Create a time window group expression (mock)
+			timeWindowGroup := &plan.Expr{
+				Typ: plan.Type{
+					Id: int32(types.T_datetime),
+				},
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: 1,
+						ColPos: 0,
+					},
+				},
+			}
+
+			// Create projection binder
+			havingBinder := NewHavingBinder(builder, bindCtx)
+			projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
+
+			// Call bindTimeWindow
+			fillType, fillVals, fillCols, interval, sliding, ts, wEnd, boundTimeWindowOrderBy, err := builder.bindTimeWindow(
+				bindCtx,
+				projectionBinder,
+				astTimeWindow,
+				timeWindowGroup,
+				helpFunc,
+			)
+
+			if tt.expectError {
+				require.Error(t, err)
+				if tt.errorContains != "" {
+					require.Contains(t, err.Error(), tt.errorContains)
+				}
+				// Verify error message contains type information
+				if tt.colType != types.T_varchar && tt.colType != types.T_char && tt.colType != types.T_text {
+					require.Contains(t, err.Error(), types.Type{Oid: tt.colType}.String())
+				}
+			} else {
+				require.NoError(t, err)
+				require.NotNil(t, ts)
+				require.NotNil(t, interval)
+				require.NotNil(t, boundTimeWindowOrderBy)
+
+				// Verify that ts is cast to DATETIME if expectCast is true
+				if tt.expectCast {
+					require.Equal(t, int32(types.T_datetime), ts.Typ.Id)
+					// Verify it's a cast expression
+					castExpr, ok := ts.Expr.(*plan.Expr_F)
+					require.True(t, ok)
+					require.Equal(t, "cast", castExpr.F.Func.ObjName)
+				} else {
+					// For temporal types, should keep original type
+					require.Equal(t, int32(tt.colType), ts.Typ.Id)
+				}
+
+				// Verify boundTimeWindowOrderBy
+				require.Equal(t, timeWindowGroup, boundTimeWindowOrderBy.Expr)
+				require.Equal(t, plan.OrderBySpec_INTERNAL|plan.OrderBySpec_ASC|plan.OrderBySpec_NULLS_FIRST, boundTimeWindowOrderBy.Flag)
+
+				// Verify wEnd is set when sliding is nil
+				if astTimeWindow.Sliding == nil {
+					require.NotNil(t, wEnd)
+					require.Equal(t, ts.Typ.Id, wEnd.Typ.Id)
+				} else {
+					require.NotNil(t, sliding)
+				}
+
+				// Verify fillType is set correctly (should be NONE when Fill is nil)
+				if astTimeWindow.Fill == nil {
+					require.Equal(t, plan.Node_NONE, fillType)
+					require.Nil(t, fillVals)
+					require.Nil(t, fillCols)
+				}
+			}
+		})
+	}
+}
+
+func TestQueryBuilder_bindTimeWindow_WithSliding(t *testing.T) {
+	builder, bindCtx := genBuilderAndCtxWithColumnType(types.T_datetime, "ts")
+
+	astTimeWindow := &tree.TimeWindow{
+		Interval: &tree.Interval{
+			Col:  tree.NewUnresolvedName(tree.NewCStr("ts", 0)),
+			Val:  tree.NewNumVal(int64(2), "2", false, tree.P_int64),
+			Unit: "second",
+		},
+		Sliding: &tree.Sliding{
+			Val:  tree.NewNumVal(int64(1), "1", false, tree.P_int64),
+			Unit: "second",
+		},
+		Fill: nil,
+	}
+
+	helpFunc, err := makeHelpFuncForTimeWindow(astTimeWindow)
+	require.NoError(t, err)
+
+	timeWindowGroup := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_datetime)},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{RelPos: 1, ColPos: 0},
+		},
+	}
+
+	havingBinder := NewHavingBinder(builder, bindCtx)
+	projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
+
+	_, _, _, _, sliding, ts, wEnd, _, err := builder.bindTimeWindow(
+		bindCtx,
+		projectionBinder,
+		astTimeWindow,
+		timeWindowGroup,
+		helpFunc,
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, sliding)
+	require.Nil(t, wEnd) // wEnd should be nil when sliding is present
+	require.NotNil(t, ts)
+	require.Equal(t, int32(types.T_datetime), ts.Typ.Id)
+}
+
+func TestQueryBuilder_bindTimeWindow_WithFill(t *testing.T) {
+	builder, bindCtx := genBuilderAndCtxWithColumnType(types.T_datetime, "ts")
+
+	// Set up context with times for fill
+	bindCtx.times = []*plan.Expr{
+		{
+			Typ: plan.Type{Id: int32(types.T_int64)},
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{RelPos: 1, ColPos: 0},
+			},
+		},
+	}
+
+	fillTests := []struct {
+		name     string
+		fillMode tree.FillMode
+		fillVal  tree.Expr
+		expected plan.Node_FillType
+	}{
+		{
+			name:     "FillPrev",
+			fillMode: tree.FillPrev,
+			fillVal:  nil,
+			expected: plan.Node_PREV,
+		},
+		{
+			name:     "FillNext",
+			fillMode: tree.FillNext,
+			fillVal:  nil,
+			expected: plan.Node_NEXT,
+		},
+		{
+			name:     "FillValue",
+			fillMode: tree.FillValue,
+			fillVal:  tree.NewNumVal(int64(0), "0", false, tree.P_int64),
+			expected: plan.Node_VALUE,
+		},
+		{
+			name:     "FillLinear",
+			fillMode: tree.FillLinear,
+			fillVal:  nil,
+			expected: plan.Node_LINEAR,
+		},
+		{
+			name:     "FillNone",
+			fillMode: tree.FillNone,
+			fillVal:  nil,
+			expected: plan.Node_NONE,
+		},
+	}
+
+	for _, tt := range fillTests {
+		t.Run(tt.name, func(t *testing.T) {
+			astTimeWindow := &tree.TimeWindow{
+				Interval: &tree.Interval{
+					Col:  tree.NewUnresolvedName(tree.NewCStr("ts", 0)),
+					Val:  tree.NewNumVal(int64(2), "2", false, tree.P_int64),
+					Unit: "second",
+				},
+				Sliding: nil,
+				Fill: &tree.Fill{
+					Mode: tt.fillMode,
+					Val:  tt.fillVal,
+				},
+			}
+
+			helpFunc, err := makeHelpFuncForTimeWindow(astTimeWindow)
+			require.NoError(t, err)
+
+			timeWindowGroup := &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_datetime)},
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{RelPos: 1, ColPos: 0},
+				},
+			}
+
+			havingBinder := NewHavingBinder(builder, bindCtx)
+			projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
+
+			fillType, fillVals, fillCols, _, _, _, _, _, err := builder.bindTimeWindow(
+				bindCtx,
+				projectionBinder,
+				astTimeWindow,
+				timeWindowGroup,
+				helpFunc,
+			)
+
+			require.NoError(t, err)
+			require.Equal(t, tt.expected, fillType)
+
+			if tt.fillMode == tree.FillNone || tt.fillMode == tree.FillNull {
+				require.Nil(t, fillVals)
+				require.Nil(t, fillCols)
+			} else if tt.fillVal != nil {
+				require.NotNil(t, fillVals)
+				require.NotNil(t, fillCols)
+			}
+		})
+	}
+}
 
 func TestQueryBuilder_bindOrderBy(t *testing.T) {
 	builder, bindCtx := genBuilderAndCtx()
