@@ -1723,3 +1723,503 @@ func TestBaseBinder_bindComparisonExpr(t *testing.T) {
 		})
 	}
 }
+
+// TestBaseBinder_bindUnaryExpr tests bindUnaryExpr with various unary operators
+func TestBaseBinder_bindUnaryExpr(t *testing.T) {
+	builder, bindCtx := genBuilderAndCtx()
+	whereBinder := NewWhereBinder(builder, bindCtx)
+
+	testCases := []struct {
+		name      string
+		sql       string
+		expectErr bool
+		checkFunc func(t *testing.T, expr *plan.Expr, err error)
+	}{
+		{
+			name:      "UNARY_MINUS: -a",
+			sql:       "-a",
+			expectErr: false,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				funcExpr, ok := expr.Expr.(*plan.Expr_F)
+				require.True(t, ok)
+				require.Equal(t, "unary_minus", funcExpr.F.Func.ObjName)
+			},
+		},
+		{
+			name:      "UNARY_PLUS: +a",
+			sql:       "+a",
+			expectErr: false,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				funcExpr, ok := expr.Expr.(*plan.Expr_F)
+				require.True(t, ok)
+				require.Equal(t, "unary_plus", funcExpr.F.Func.ObjName)
+			},
+		},
+		{
+			name:      "UNARY_TILDE: ~a",
+			sql:       "~a",
+			expectErr: false,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				funcExpr, ok := expr.Expr.(*plan.Expr_F)
+				require.True(t, ok)
+				require.Equal(t, "unary_tilde", funcExpr.F.Func.ObjName)
+			},
+		},
+		// Note: UNARY_MARK (?a) is not a standard SQL syntax and may not be parseable
+		// Skipping this test case as it's not a valid SQL expression
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Parse SQL to get unary expression
+			stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select "+tc.sql+" from bind_select", 1)
+			if err != nil {
+				if tc.expectErr {
+					return
+				}
+				t.Fatalf("Failed to parse SQL: %v", err)
+			}
+
+			selectStmt := stmts[0].(*tree.Select)
+			selectClause := selectStmt.Select.(*tree.SelectClause)
+			if len(selectClause.Exprs) == 0 {
+				t.Fatalf("No select expressions found")
+			}
+
+			// Extract unary expression
+			unaryExpr, ok := selectClause.Exprs[0].Expr.(*tree.UnaryExpr)
+			if !ok {
+				t.Fatalf("Select expression is not a UnaryExpr")
+			}
+
+			// Bind the unary expression
+			expr, err := whereBinder.bindUnaryExpr(unaryExpr, 0, false)
+
+			if tc.expectErr {
+				require.Error(t, err)
+				if tc.checkFunc != nil {
+					tc.checkFunc(t, expr, err)
+				}
+			} else {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				if tc.checkFunc != nil {
+					tc.checkFunc(t, expr, err)
+				}
+			}
+		})
+	}
+}
+
+// TestBaseBinder_bindBinaryExpr tests bindBinaryExpr with various binary operators
+func TestBaseBinder_bindBinaryExpr(t *testing.T) {
+	builder, bindCtx := genBuilderAndCtx()
+	whereBinder := NewWhereBinder(builder, bindCtx)
+
+	testCases := []struct {
+		name      string
+		sql       string
+		expectErr bool
+		checkFunc func(t *testing.T, expr *plan.Expr, err error)
+	}{
+		{
+			name:      "PLUS: a + 1",
+			sql:       "a + 1",
+			expectErr: false,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				funcExpr, ok := expr.Expr.(*plan.Expr_F)
+				require.True(t, ok)
+				require.Equal(t, "+", funcExpr.F.Func.ObjName)
+			},
+		},
+		{
+			name:      "MINUS: a - 1",
+			sql:       "a - 1",
+			expectErr: false,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				funcExpr, ok := expr.Expr.(*plan.Expr_F)
+				require.True(t, ok)
+				require.Equal(t, "-", funcExpr.F.Func.ObjName)
+			},
+		},
+		{
+			name:      "MULTI: a * 1",
+			sql:       "a * 1",
+			expectErr: false,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				funcExpr, ok := expr.Expr.(*plan.Expr_F)
+				require.True(t, ok)
+				require.Equal(t, "*", funcExpr.F.Func.ObjName)
+			},
+		},
+		{
+			name:      "MOD: a % 1",
+			sql:       "a % 1",
+			expectErr: false,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				funcExpr, ok := expr.Expr.(*plan.Expr_F)
+				require.True(t, ok)
+				require.Equal(t, "%", funcExpr.F.Func.ObjName)
+			},
+		},
+		{
+			name:      "DIV: a / 1",
+			sql:       "a / 1",
+			expectErr: false,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				funcExpr, ok := expr.Expr.(*plan.Expr_F)
+				require.True(t, ok)
+				require.Equal(t, "/", funcExpr.F.Func.ObjName)
+			},
+		},
+		{
+			name:      "INTEGER_DIV: a div 1",
+			sql:       "a div 1",
+			expectErr: false,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				funcExpr, ok := expr.Expr.(*plan.Expr_F)
+				require.True(t, ok)
+				require.Equal(t, "div", funcExpr.F.Func.ObjName)
+			},
+		},
+		{
+			name:      "BIT_XOR: a ^ 1",
+			sql:       "a ^ 1",
+			expectErr: false,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				funcExpr, ok := expr.Expr.(*plan.Expr_F)
+				require.True(t, ok)
+				require.Equal(t, "^", funcExpr.F.Func.ObjName)
+			},
+		},
+		{
+			name:      "BIT_OR: a | 1",
+			sql:       "a | 1",
+			expectErr: false,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				funcExpr, ok := expr.Expr.(*plan.Expr_F)
+				require.True(t, ok)
+				require.Equal(t, "|", funcExpr.F.Func.ObjName)
+			},
+		},
+		{
+			name:      "BIT_AND: a & 1",
+			sql:       "a & 1",
+			expectErr: false,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				funcExpr, ok := expr.Expr.(*plan.Expr_F)
+				require.True(t, ok)
+				require.Equal(t, "&", funcExpr.F.Func.ObjName)
+			},
+		},
+		{
+			name:      "LEFT_SHIFT: a << 1",
+			sql:       "a << 1",
+			expectErr: false,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				funcExpr, ok := expr.Expr.(*plan.Expr_F)
+				require.True(t, ok)
+				require.Equal(t, "<<", funcExpr.F.Func.ObjName)
+			},
+		},
+		{
+			name:      "RIGHT_SHIFT: a >> 1",
+			sql:       "a >> 1",
+			expectErr: false,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				funcExpr, ok := expr.Expr.(*plan.Expr_F)
+				require.True(t, ok)
+				require.Equal(t, ">>", funcExpr.F.Func.ObjName)
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Parse SQL to get binary expression
+			stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select "+tc.sql+" from bind_select", 1)
+			if err != nil {
+				if tc.expectErr {
+					return
+				}
+				t.Fatalf("Failed to parse SQL: %v", err)
+			}
+
+			selectStmt := stmts[0].(*tree.Select)
+			selectClause := selectStmt.Select.(*tree.SelectClause)
+			if len(selectClause.Exprs) == 0 {
+				t.Fatalf("No select expressions found")
+			}
+
+			// Extract binary expression
+			binaryExpr, ok := selectClause.Exprs[0].Expr.(*tree.BinaryExpr)
+			if !ok {
+				t.Fatalf("Select expression is not a BinaryExpr")
+			}
+
+			// Bind the binary expression
+			expr, err := whereBinder.bindBinaryExpr(binaryExpr, 0, false)
+
+			if tc.expectErr {
+				require.Error(t, err)
+				if tc.checkFunc != nil {
+					tc.checkFunc(t, expr, err)
+				}
+			} else {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				if tc.checkFunc != nil {
+					tc.checkFunc(t, expr, err)
+				}
+			}
+		})
+	}
+}
+
+// TestBaseBinder_bindRangeCond tests bindRangeCond with BETWEEN and NOT BETWEEN
+func TestBaseBinder_bindRangeCond(t *testing.T) {
+	builder, bindCtx := genBuilderAndCtx()
+	whereBinder := NewWhereBinder(builder, bindCtx)
+
+	testCases := []struct {
+		name      string
+		sql       string
+		expectErr bool
+		checkFunc func(t *testing.T, expr *plan.Expr, err error)
+	}{
+		{
+			name:      "BETWEEN: a BETWEEN 1 AND 10",
+			sql:       "a BETWEEN 1 AND 10",
+			expectErr: false,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				funcExpr, ok := expr.Expr.(*plan.Expr_F)
+				require.True(t, ok)
+				require.Equal(t, "between", funcExpr.F.Func.ObjName)
+			},
+		},
+		{
+			name:      "NOT BETWEEN: a NOT BETWEEN 1 AND 10",
+			sql:       "a NOT BETWEEN 1 AND 10",
+			expectErr: false,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				// NOT BETWEEN should be converted to OR of two comparisons
+				funcExpr, ok := expr.Expr.(*plan.Expr_F)
+				require.True(t, ok)
+				require.Equal(t, "or", funcExpr.F.Func.ObjName)
+			},
+		},
+		{
+			name:      "BETWEEN with tuple: (a, b) BETWEEN (1, 2) AND (10, 20)",
+			sql:       "(a, b) BETWEEN (1, 2) AND (10, 20)",
+			expectErr: false,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				// Tuple BETWEEN should be converted to AND of two comparisons
+				funcExpr, ok := expr.Expr.(*plan.Expr_F)
+				require.True(t, ok)
+				require.Equal(t, "and", funcExpr.F.Func.ObjName)
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Parse SQL to get range condition
+			stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select * from bind_select where "+tc.sql, 1)
+			if err != nil {
+				if tc.expectErr {
+					return
+				}
+				t.Fatalf("Failed to parse SQL: %v", err)
+			}
+
+			selectStmt := stmts[0].(*tree.Select)
+			whereClause := selectStmt.Select.(*tree.SelectClause).Where
+			if whereClause == nil {
+				t.Fatalf("No WHERE clause found")
+			}
+
+			// Extract range condition
+			rangeCond, ok := whereClause.Expr.(*tree.RangeCond)
+			if !ok {
+				t.Fatalf("WHERE clause is not a RangeCond")
+			}
+
+			// Bind the range condition
+			expr, err := whereBinder.bindRangeCond(rangeCond, 0, false)
+
+			if tc.expectErr {
+				require.Error(t, err)
+				if tc.checkFunc != nil {
+					tc.checkFunc(t, expr, err)
+				}
+			} else {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				if tc.checkFunc != nil {
+					tc.checkFunc(t, expr, err)
+				}
+			}
+		})
+	}
+}
+
+// TestBaseBinder_baseBindExpr tests baseBindExpr with various expression types
+func TestBaseBinder_baseBindExpr(t *testing.T) {
+	builder, bindCtx := genBuilderAndCtx()
+	whereBinder := NewWhereBinder(builder, bindCtx)
+
+	testCases := []struct {
+		name      string
+		sql       string
+		expectErr bool
+		checkFunc func(t *testing.T, expr *plan.Expr, err error)
+	}{
+		{
+			name:      "ParenExpr: (a)",
+			sql:       "(a)",
+			expectErr: false,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+			},
+		},
+		{
+			name:      "OrExpr: a OR b",
+			sql:       "a OR b",
+			expectErr: false,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				funcExpr, ok := expr.Expr.(*plan.Expr_F)
+				require.True(t, ok)
+				require.Equal(t, "or", funcExpr.F.Func.ObjName)
+			},
+		},
+		{
+			name:      "AndExpr: a AND b",
+			sql:       "a AND b",
+			expectErr: false,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				funcExpr, ok := expr.Expr.(*plan.Expr_F)
+				require.True(t, ok)
+				require.Equal(t, "and", funcExpr.F.Func.ObjName)
+			},
+		},
+		{
+			name:      "NotExpr: NOT a",
+			sql:       "NOT a",
+			expectErr: false,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				funcExpr, ok := expr.Expr.(*plan.Expr_F)
+				require.True(t, ok)
+				require.Equal(t, "not", funcExpr.F.Func.ObjName)
+			},
+		},
+		{
+			name:      "IsNullExpr: a IS NULL",
+			sql:       "a IS NULL",
+			expectErr: false,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				funcExpr, ok := expr.Expr.(*plan.Expr_F)
+				require.True(t, ok)
+				require.Equal(t, "isnull", funcExpr.F.Func.ObjName)
+			},
+		},
+		{
+			name:      "IsNotNullExpr: a IS NOT NULL",
+			sql:       "a IS NOT NULL",
+			expectErr: false,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				funcExpr, ok := expr.Expr.(*plan.Expr_F)
+				require.True(t, ok)
+				require.Equal(t, "isnotnull", funcExpr.F.Func.ObjName)
+			},
+		},
+		{
+			name:      "CastExpr: CAST(a AS INT)",
+			sql:       "CAST(a AS INT)",
+			expectErr: false,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Parse SQL to get expression
+			stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select "+tc.sql+" from bind_select", 1)
+			if err != nil {
+				if tc.expectErr {
+					return
+				}
+				t.Fatalf("Failed to parse SQL: %v", err)
+			}
+
+			selectStmt := stmts[0].(*tree.Select)
+			selectClause := selectStmt.Select.(*tree.SelectClause)
+			if len(selectClause.Exprs) == 0 {
+				t.Fatalf("No select expressions found")
+			}
+
+			// Bind the expression using baseBindExpr
+			expr, err := whereBinder.baseBindExpr(selectClause.Exprs[0].Expr, 0, false)
+
+			if tc.expectErr {
+				require.Error(t, err)
+				if tc.checkFunc != nil {
+					tc.checkFunc(t, expr, err)
+				}
+			} else {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				if tc.checkFunc != nil {
+					tc.checkFunc(t, expr, err)
+				}
+			}
+		})
+	}
+}
