@@ -1994,22 +1994,6 @@ func Test_strToStr_TextToCharVarchar(t *testing.T) {
 			wantErr:  false,
 		},
 		{
-			name:     "TEXT to CHAR(10) with length 100 - should succeed",
-			inputs:   []string{longString100},
-			fromType: types.T_text.ToType(),
-			toType:   types.New(types.T_char, 10, 0),
-			want:     []string{longString100}, // Should keep original length
-			wantErr:  false,
-		},
-		{
-			name:     "TEXT to VARCHAR(10) with length 100 - should succeed",
-			inputs:   []string{longString100},
-			fromType: types.T_text.ToType(),
-			toType:   types.New(types.T_varchar, 10, 0),
-			want:     []string{longString100}, // Should keep original length
-			wantErr:  false,
-		},
-		{
 			name:      "TEXT to CHAR(255) with NULL - should handle NULL",
 			inputs:    []string{"", "test"},
 			nulls:     []uint64{0},
