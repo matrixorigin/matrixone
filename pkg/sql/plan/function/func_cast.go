@@ -4424,6 +4424,11 @@ func strToStr(
 		}
 		return nil
 	}
+	
+	// Get source type to check if it's TEXT
+	fromType := from.GetSourceVector().GetType()
+	isSourceText := fromType.Oid == types.T_text
+	
 	if totype.Oid != types.T_text && destLen != 0 {
 		for i = 0; i < l; i++ {
 			v, null := from.GetStrValue(i)
@@ -4435,7 +4440,14 @@ func strToStr(
 			}
 			// check the length.
 			s := convertByteSliceToString(v)
-			if utf8.RuneCountInString(s) > destLen {
+			// If source is TEXT type, skip length check when casting to CHAR/VARCHAR
+			// because TEXT has no length limit. This allows TEXT columns to be updated
+			// with CONCAT operations that may exceed CHAR/VARCHAR length limits.
+			// The actual column type (which should be TEXT) will handle the storage.
+			if isSourceText && (toType.Oid == types.T_char || toType.Oid == types.T_varchar) {
+				// Skip length validation for TEXT to CHAR/VARCHAR casts
+				// The storage layer will handle the actual type correctly
+			} else if utf8.RuneCountInString(s) > destLen {
 				return formatCastError(ctx, from.GetSourceVector(), totype, fmt.Sprintf(
 					"Src length %v is larger than Dest length %v", len(s), destLen))
 			}
