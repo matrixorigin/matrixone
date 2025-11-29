@@ -513,3 +513,185 @@ func TestResetIntervalFunction(t *testing.T) {
 		})
 	}
 }
+
+// Helper function to create a datetime constant expression
+func makeDatetimeConstForResetDate(dtStr string) *plan.Expr {
+	dt, _ := types.ParseDatetime(dtStr, 6)
+	return &plan.Expr{
+		Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{
+				Isnull: false,
+				Value: &plan.Literal_Datetimeval{
+					Datetimeval: int64(dt),
+				},
+			},
+		},
+		Typ: plan.Type{
+			Id:          int32(types.T_datetime),
+			NotNullable: true,
+			Scale:       6,
+		},
+	}
+}
+
+// Helper function to create a date constant expression
+func makeDateConstForResetDate(dateStr string) *plan.Expr {
+	d, _ := types.ParseDateCast(dateStr)
+	return &plan.Expr{
+		Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{
+				Isnull: false,
+				Value: &plan.Literal_Dateval{
+					Dateval: int32(d),
+				},
+			},
+		},
+		Typ: plan.Type{
+			Id:          int32(types.T_date),
+			NotNullable: true,
+		},
+	}
+}
+
+// Helper function to create an int64 constant expression
+func makeInt64ConstForResetDate(val int64) *plan.Expr {
+	return &plan.Expr{
+		Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{
+				Isnull: false,
+				Value: &plan.Literal_I64Val{
+					I64Val: val,
+				},
+			},
+		},
+		Typ: plan.Type{
+			Id:          int32(types.T_int64),
+			NotNullable: true,
+		},
+	}
+}
+
+// TestResetDateFunction tests resetDateFunction with various scenarios
+func TestResetDateFunction(t *testing.T) {
+	ctx := context.Background()
+
+	testCases := []struct {
+		name          string
+		dateExpr      *plan.Expr
+		intervalExpr  *plan.Expr
+		expectError   bool
+		errorContains string
+		checkFunc     func(t *testing.T, args []*plan.Expr, err error)
+	}{
+		{
+			name:     "NULL interval - should return syntax error",
+			dateExpr: makeDatetimeConstForResetDate("2000-01-01 00:00:00"),
+			intervalExpr: &plan.Expr{
+				Expr: &plan.Expr_Lit{
+					Lit: &plan.Literal{
+						Isnull: true,
+					},
+				},
+				Typ: plan.Type{
+					Id: int32(types.T_any),
+				},
+			},
+			expectError:   true,
+			errorContains: "syntax",
+		},
+		{
+			name:         "Expr_List interval - should call resetDateFunctionArgs directly",
+			dateExpr:     makeDatetimeConstForResetDate("2000-01-01 00:00:00"),
+			intervalExpr: makeIntervalExpr(makeInt64ConstForResetDate(1), "SECOND"),
+			expectError:  false,
+			checkFunc: func(t *testing.T, args []*plan.Expr, err error) {
+				require.NoError(t, err)
+				require.Len(t, args, 3)
+				require.NotNil(t, args[0])
+				require.NotNil(t, args[1])
+				require.NotNil(t, args[2])
+				// For int64 interval value, it doesn't get converted to microseconds
+				// The value remains 1, and the type is Second
+				intervalVal := extractInt64FromExpr(args[1])
+				require.Equal(t, int64(1), intervalVal)
+				// Verify interval type is Second
+				intervalType := extractInt64FromExpr(args[2])
+				require.Equal(t, int64(types.Second), intervalType)
+			},
+		},
+		{
+			name:         "Non-Expr_List interval - should create default 'day' interval",
+			dateExpr:     makeDatetimeConstForResetDate("2000-01-01 00:00:00"),
+			intervalExpr: makeInt64ConstForResetDate(5),
+			expectError:  false,
+			checkFunc: func(t *testing.T, args []*plan.Expr, err error) {
+				require.NoError(t, err)
+				require.Len(t, args, 3)
+				require.NotNil(t, args[0])
+				require.NotNil(t, args[1])
+				require.NotNil(t, args[2])
+				// Verify interval value is 5 days
+				intervalVal := extractInt64FromExpr(args[1])
+				require.Equal(t, int64(5), intervalVal)
+				// Verify interval type is Day (default)
+				intervalType := extractInt64FromExpr(args[2])
+				require.Equal(t, int64(types.Day), intervalType)
+			},
+		},
+		{
+			name:         "DATE type with Expr_List interval - should handle date type conversion",
+			dateExpr:     makeDateConstForResetDate("2000-01-01"),
+			intervalExpr: makeIntervalExpr(makeInt64ConstForResetDate(1), "HOUR"),
+			expectError:  false,
+			checkFunc: func(t *testing.T, args []*plan.Expr, err error) {
+				require.NoError(t, err)
+				require.Len(t, args, 3)
+				// DATE with HOUR interval should be converted to DATETIME
+				require.NotNil(t, args[0])
+				// For int64 interval value, it doesn't get converted to microseconds
+				// The value remains 1, and the type is Hour
+				intervalVal := extractInt64FromExpr(args[1])
+				require.Equal(t, int64(1), intervalVal)
+				// Verify interval type is Hour
+				intervalType := extractInt64FromExpr(args[2])
+				require.Equal(t, int64(types.Hour), intervalType)
+			},
+		},
+		{
+			name:         "DATE type with DAY interval - should not convert to DATETIME",
+			dateExpr:     makeDateConstForResetDate("2000-01-01"),
+			intervalExpr: makeIntervalExpr(makeInt64ConstForResetDate(1), "DAY"),
+			expectError:  false,
+			checkFunc: func(t *testing.T, args []*plan.Expr, err error) {
+				require.NoError(t, err)
+				require.Len(t, args, 3)
+				// DATE with DAY interval should remain DATE
+				require.NotNil(t, args[0])
+				// Verify interval value is 1 day
+				intervalVal := extractInt64FromExpr(args[1])
+				require.Equal(t, int64(1), intervalVal)
+				// Verify interval type is Day
+				intervalType := extractInt64FromExpr(args[2])
+				require.Equal(t, int64(types.Day), intervalType)
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			args, err := resetDateFunction(ctx, tc.dateExpr, tc.intervalExpr)
+
+			if tc.expectError {
+				require.Error(t, err)
+				if tc.errorContains != "" {
+					require.Contains(t, err.Error(), tc.errorContains)
+				}
+			} else {
+				require.NoError(t, err)
+				if tc.checkFunc != nil {
+					tc.checkFunc(t, args, err)
+				}
+			}
+		})
+	}
+}
