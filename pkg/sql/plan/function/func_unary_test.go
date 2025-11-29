@@ -3630,6 +3630,105 @@ func TestOctString(t *testing.T) {
 			result.Free()
 		}
 	})
+
+	// Test T_text type (overloadId: 14)
+	t.Run("OCT with T_text type", func(t *testing.T) {
+		testCases := []struct {
+			name     string
+			inputStr string
+			expected string
+			desc     string
+		}{
+			{
+				name:     "OCT with T_text DATETIME string",
+				inputStr: "2007-08-02 23:59:00",
+				expected: "3727",
+				desc:     "OCT should handle T_text type with DATETIME string",
+			},
+			{
+				name:     "OCT with T_text DATE string",
+				inputStr: "2007-08-02",
+				expected: "3727",
+				desc:     "OCT should handle T_text type with DATE string",
+			},
+			{
+				name:     "OCT with T_text integer string",
+				inputStr: "12345",
+				expected: "30071",
+				desc:     "OCT should handle T_text type with integer string",
+			},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				// Create input vector with T_text type
+				ivecs := make([]*vector.Vector, 1)
+				var err error
+				ivecs[0], err = vector.NewConstBytes(types.T_text.ToType(), []byte(tc.inputStr), 1, proc.Mp())
+				require.NoError(t, err)
+
+				// Create result vector
+				result := vector.NewFunctionResultWrapper(types.T_decimal128.ToType(), proc.Mp())
+
+				// Initialize result vector
+				err = result.PreExtendAndReset(1)
+				require.NoError(t, err)
+
+				// Call OctString
+				err = OctString(ivecs, result, proc, 1, nil)
+				require.NoError(t, err, tc.desc)
+
+				// Verify result
+				resultVec := result.GetResultVector()
+				require.False(t, resultVec.GetNulls().Contains(0), "Result should not be NULL for valid input: %s", tc.desc)
+
+				decParam := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](resultVec)
+				resultDec, null := decParam.GetValue(0)
+				require.False(t, null, "Result should not be null: %s", tc.desc)
+
+				// Convert decimal128 to string and verify it matches expected octal
+				resultStr := resultDec.Format(0)
+				require.Equal(t, tc.expected, resultStr, "OCT result should match expected value: %s", tc.desc)
+
+				// Cleanup
+				for _, v := range ivecs {
+					if v != nil {
+						v.Free(proc.Mp())
+					}
+				}
+				if result != nil {
+					result.Free()
+				}
+			})
+		}
+
+		// Test error case with T_text type
+		t.Run("OCT with T_text invalid string", func(t *testing.T) {
+			ivecs := make([]*vector.Vector, 1)
+			var err error
+			ivecs[0], err = vector.NewConstBytes(types.T_text.ToType(), []byte("invalid-date-string"), 1, proc.Mp())
+			require.NoError(t, err)
+
+			result := vector.NewFunctionResultWrapper(types.T_decimal128.ToType(), proc.Mp())
+			err = result.PreExtendAndReset(1)
+			require.NoError(t, err)
+
+			// Call OctString - should return error for invalid input
+			err = OctString(ivecs, result, proc, 1, nil)
+			require.Error(t, err, "OCT should return error for invalid T_text input")
+			require.Contains(t, err.Error(), "function oct", "Error message should mention function oct")
+
+			// Cleanup
+			for _, v := range ivecs {
+				if v != nil {
+					v.Free(proc.Mp())
+				}
+			}
+			if result != nil {
+				result.Free()
+			}
+		})
+	})
 }
 
 func TestDecode(t *testing.T) {
