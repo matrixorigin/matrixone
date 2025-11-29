@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -239,6 +240,280 @@ func TestProjectionBinderResetIntervalDecimal(t *testing.T) {
 	}
 }
 
+// Helper function to create a float32 constant expression
+func makeFloat32ConstForProjection(val float32) *plan.Expr {
+	return &plan.Expr{
+		Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{
+				Isnull: false,
+				Value: &plan.Literal_Fval{
+					Fval: val,
+				},
+			},
+		},
+		Typ: plan.Type{
+			Id:          int32(types.T_float32),
+			NotNullable: true,
+		},
+	}
+}
+
+// Helper function to create a varchar constant expression
+func makeVarcharConstForProjection(s string) *plan.Expr {
+	return &plan.Expr{
+		Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{
+				Isnull: false,
+				Value: &plan.Literal_Sval{
+					Sval: s,
+				},
+			},
+		},
+		Typ: plan.Type{
+			Id:          int32(types.T_varchar),
+			NotNullable: true,
+			Width:       int32(len(s)),
+		},
+	}
+}
+
+// Helper function to create an int64 constant expression
+func makeInt64ConstForProjection(val int64) *plan.Expr {
+	return &plan.Expr{
+		Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{
+				Isnull: false,
+				Value: &plan.Literal_I64Val{
+					I64Val: val,
+				},
+			},
+		},
+		Typ: plan.Type{
+			Id:          int32(types.T_int64),
+			NotNullable: true,
+		},
+	}
+}
+
+// Helper to extract int64 value from a constant expression
+func extractInt64ValueFromExpr(expr *plan.Expr) int64 {
+	if lit, ok := expr.Expr.(*plan.Expr_Lit); ok {
+		if i64val, ok := lit.Lit.Value.(*plan.Literal_I64Val); ok {
+			return i64val.I64Val
+		}
+	}
+	return 0
+}
+
+// TestProjectionBinderResetIntervalComprehensive tests resetInterval with full ProjectionBinder setup
+// to achieve high code coverage
+func TestProjectionBinderResetIntervalComprehensive(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	bindCtx := NewBindContext(builder, nil)
+	havingBinder := NewHavingBinder(builder, bindCtx)
+	projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
+
+	testCases := []struct {
+		name                 string
+		intervalValueExpr    *plan.Expr
+		intervalUnit         string
+		expectedIntervalVal  int64
+		expectedIntervalType types.IntervalType
+		expectError          bool
+		errorContains        string
+	}{
+		// Test varchar/char string interval values
+		{
+			name:                 "INTERVAL '1' SECOND (varchar)",
+			intervalValueExpr:    makeVarcharConstForProjection("1"),
+			intervalUnit:         "SECOND",
+			expectedIntervalVal:  1,
+			expectedIntervalType: types.Second,
+		},
+		{
+			name:                 "INTERVAL '1.5' SECOND (varchar)",
+			intervalValueExpr:    makeVarcharConstForProjection("1.5"),
+			intervalUnit:         "SECOND",
+			expectedIntervalVal:  math.MaxInt64, // "1.5" is invalid format for SECOND, returns MaxInt64
+			expectedIntervalType: types.Second,
+		},
+		{
+			name:                 "INTERVAL '1' DAY (char)",
+			intervalValueExpr:    makeStringConstForProjection("1"),
+			intervalUnit:         "DAY",
+			expectedIntervalVal:  1,
+			expectedIntervalType: types.Day,
+		},
+		{
+			name:                 "INTERVAL 'invalid' SECOND (varchar, invalid string)",
+			intervalValueExpr:    makeVarcharConstForProjection("invalid"),
+			intervalUnit:         "SECOND",
+			expectedIntervalVal:  math.MaxInt64, // Invalid string returns MaxInt64
+			expectedIntervalType: types.Second,
+		},
+		// Test float64 time units
+		{
+			name:                 "INTERVAL 1.1 SECOND (float64)",
+			intervalValueExpr:    makeFloat64ConstForProjection(1.1),
+			intervalUnit:         "SECOND",
+			expectedIntervalVal:  1100000,
+			expectedIntervalType: types.MicroSecond,
+		},
+		{
+			name:                 "INTERVAL 1.000009 SECOND (float64)",
+			intervalValueExpr:    makeFloat64ConstForProjection(1.000009),
+			intervalUnit:         "SECOND",
+			expectedIntervalVal:  1000009,
+			expectedIntervalType: types.MicroSecond,
+		},
+		{
+			name:                 "INTERVAL 1.5 MINUTE (float64)",
+			intervalValueExpr:    makeFloat64ConstForProjection(1.5),
+			intervalUnit:         "MINUTE",
+			expectedIntervalVal:  90000000,
+			expectedIntervalType: types.MicroSecond,
+		},
+		{
+			name:                 "INTERVAL 0.5 HOUR (float64)",
+			intervalValueExpr:    makeFloat64ConstForProjection(0.5),
+			intervalUnit:         "HOUR",
+			expectedIntervalVal:  1800000000,
+			expectedIntervalType: types.MicroSecond,
+		},
+		{
+			name:                 "INTERVAL 1.1 DAY (float64)",
+			intervalValueExpr:    makeFloat64ConstForProjection(1.1),
+			intervalUnit:         "DAY",
+			expectedIntervalVal:  95040000000, // 1.1 * 86400 * 1000000
+			expectedIntervalType: types.MicroSecond,
+		},
+		// Test float32 time units
+		{
+			name:                 "INTERVAL 1.1 SECOND (float32)",
+			intervalValueExpr:    makeFloat32ConstForProjection(1.1),
+			intervalUnit:         "SECOND",
+			expectedIntervalVal:  1100000,
+			expectedIntervalType: types.MicroSecond,
+		},
+		{
+			name:                 "INTERVAL 2.5 MINUTE (float32)",
+			intervalValueExpr:    makeFloat32ConstForProjection(2.5),
+			intervalUnit:         "MINUTE",
+			expectedIntervalVal:  150000000, // 2.5 * 60 * 1000000
+			expectedIntervalType: types.MicroSecond,
+		},
+		// Test decimal64 time units
+		{
+			name:                 "INTERVAL 1.1 SECOND (decimal64)",
+			intervalValueExpr:    makeDecimal64ConstForProjection(1.1, 1),
+			intervalUnit:         "SECOND",
+			expectedIntervalVal:  1100000,
+			expectedIntervalType: types.MicroSecond,
+		},
+		{
+			name:                 "INTERVAL 1.5 MINUTE (decimal64)",
+			intervalValueExpr:    makeDecimal64ConstForProjection(1.5, 1),
+			intervalUnit:         "MINUTE",
+			expectedIntervalVal:  90000000,
+			expectedIntervalType: types.MicroSecond,
+		},
+		// Test decimal128 time units
+		{
+			name:                 "INTERVAL 1.1 SECOND (decimal128)",
+			intervalValueExpr:    makeDecimal128ConstForProjection(1.1, 1),
+			intervalUnit:         "SECOND",
+			expectedIntervalVal:  1100000,
+			expectedIntervalType: types.MicroSecond,
+		},
+		{
+			name:                 "INTERVAL 0.5 HOUR (decimal128)",
+			intervalValueExpr:    makeDecimal128ConstForProjection(0.5, 1),
+			intervalUnit:         "HOUR",
+			expectedIntervalVal:  1800000000,
+			expectedIntervalType: types.MicroSecond,
+		},
+		// Test int64 (no conversion for time units)
+		{
+			name:                 "INTERVAL 1 SECOND (int64)",
+			intervalValueExpr:    makeInt64ConstForProjection(1),
+			intervalUnit:         "SECOND",
+			expectedIntervalVal:  1,
+			expectedIntervalType: types.Second,
+		},
+		{
+			name:                 "INTERVAL 2 MINUTE (int64)",
+			intervalValueExpr:    makeInt64ConstForProjection(2),
+			intervalUnit:         "MINUTE",
+			expectedIntervalVal:  2,
+			expectedIntervalType: types.Minute,
+		},
+		// Test non-time units with float64 (should not convert to microseconds)
+		{
+			name:                 "INTERVAL 1.5 MONTH (float64, non-time unit)",
+			intervalValueExpr:    makeFloat64ConstForProjection(1.5),
+			intervalUnit:         "MONTH",
+			expectedIntervalVal:  2, // Converted to int64, 1.5 rounds to 2
+			expectedIntervalType: types.Month,
+		},
+		{
+			name:                 "INTERVAL 1.5 YEAR (float64, non-time unit)",
+			intervalValueExpr:    makeFloat64ConstForProjection(1.5),
+			intervalUnit:         "YEAR",
+			expectedIntervalVal:  2, // Converted to int64, 1.5 rounds to 2
+			expectedIntervalType: types.Year,
+		},
+		{
+			name:                 "INTERVAL 1.5 WEEK (float64, non-time unit)",
+			intervalValueExpr:    makeFloat64ConstForProjection(1.5),
+			intervalUnit:         "WEEK",
+			expectedIntervalVal:  2, // Converted to int64, 1.5 rounds to 2
+			expectedIntervalType: types.Week,
+		},
+		// Test error cases
+		{
+			name:              "Invalid interval unit",
+			intervalValueExpr: makeInt64ConstForProjection(1),
+			intervalUnit:      "INVALID_UNIT",
+			expectError:       true,
+			errorContains:     "invalid interval type",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			intervalExpr := makeIntervalExprForProjection(tc.intervalValueExpr, tc.intervalUnit)
+
+			result, err := projectionBinder.resetInterval(intervalExpr)
+
+			if tc.expectError {
+				require.Error(t, err)
+				if tc.errorContains != "" {
+					require.Contains(t, err.Error(), tc.errorContains)
+				}
+				return
+			}
+
+			require.NoError(t, err)
+			require.NotNil(t, result)
+
+			// Verify the result structure
+			listExpr, ok := result.Expr.(*plan.Expr_List)
+			require.True(t, ok, "Result should be a list expression")
+			require.Len(t, listExpr.List.List, 2, "Result should have 2 elements")
+
+			// Verify the interval value
+			intervalValue := extractInt64ValueFromExpr(listExpr.List.List[0])
+			require.Equal(t, tc.expectedIntervalVal, intervalValue,
+				"Interval value mismatch for %s", tc.name)
+
+			// Verify the interval type
+			intervalType := extractInt64ValueFromExpr(listExpr.List.List[1])
+			require.Equal(t, int64(tc.expectedIntervalType), intervalType,
+				"Interval type mismatch for %s", tc.name)
+		})
+	}
+}
+
 // TestProjectionBinderResetIntervalDecimalTypeCheck tests that the type checking logic
 // in resetInterval correctly identifies decimal/float types that need microsecond conversion.
 func TestProjectionBinderResetIntervalDecimalTypeCheck(t *testing.T) {
@@ -263,6 +538,12 @@ func TestProjectionBinderResetIntervalDecimalTypeCheck(t *testing.T) {
 		{
 			name:                       "decimal128 SECOND should convert",
 			intervalValueType:          types.T_decimal128,
+			intervalUnit:               "SECOND",
+			shouldConvertToMicrosecond: true,
+		},
+		{
+			name:                       "float32 SECOND should convert",
+			intervalValueType:          types.T_float32,
 			intervalUnit:               "SECOND",
 			shouldConvertToMicrosecond: true,
 		},
