@@ -614,6 +614,7 @@ func TestProjectionBinderResetIntervalComprehensive(t *testing.T) {
 		expectedIntervalType types.IntervalType
 		expectError          bool
 		errorContains        string
+		returnsCastExpr      bool // true if returns a cast expression instead of constant
 	}{
 		// Test varchar/char string interval values
 		{
@@ -725,42 +726,42 @@ func TestProjectionBinderResetIntervalComprehensive(t *testing.T) {
 			expectedIntervalVal:  1800000000,
 			expectedIntervalType: types.MicroSecond,
 		},
-		// Test int64 (no conversion for time units)
+		// Test int64 (returns cast expression, value computed at execution time)
 		{
 			name:                 "INTERVAL 1 SECOND (int64)",
 			intervalValueExpr:    makeInt64ConstForProjection(1),
 			intervalUnit:         "SECOND",
-			expectedIntervalVal:  1,
 			expectedIntervalType: types.Second,
+			returnsCastExpr:      true, // int64 returns cast expression
 		},
 		{
 			name:                 "INTERVAL 2 MINUTE (int64)",
 			intervalValueExpr:    makeInt64ConstForProjection(2),
 			intervalUnit:         "MINUTE",
-			expectedIntervalVal:  2,
 			expectedIntervalType: types.Minute,
+			returnsCastExpr:      true, // int64 returns cast expression
 		},
-		// Test non-time units with float64 (should not convert to microseconds)
+		// Test non-time units with float64 (returns cast expression, value computed at execution time)
 		{
 			name:                 "INTERVAL 1.5 MONTH (float64, non-time unit)",
 			intervalValueExpr:    makeFloat64ConstForProjection(1.5),
 			intervalUnit:         "MONTH",
-			expectedIntervalVal:  2, // Converted to int64, 1.5 rounds to 2
 			expectedIntervalType: types.Month,
+			returnsCastExpr:      true, // non-time unit returns cast expression
 		},
 		{
 			name:                 "INTERVAL 1.5 YEAR (float64, non-time unit)",
 			intervalValueExpr:    makeFloat64ConstForProjection(1.5),
 			intervalUnit:         "YEAR",
-			expectedIntervalVal:  2, // Converted to int64, 1.5 rounds to 2
 			expectedIntervalType: types.Year,
+			returnsCastExpr:      true, // non-time unit returns cast expression
 		},
 		{
 			name:                 "INTERVAL 1.5 WEEK (float64, non-time unit)",
 			intervalValueExpr:    makeFloat64ConstForProjection(1.5),
 			intervalUnit:         "WEEK",
-			expectedIntervalVal:  2, // Converted to int64, 1.5 rounds to 2
 			expectedIntervalType: types.Week,
+			returnsCastExpr:      true, // non-time unit returns cast expression
 		},
 		// Test error cases
 		{
@@ -826,10 +827,16 @@ func TestProjectionBinderResetIntervalComprehensive(t *testing.T) {
 			require.True(t, ok, "Result should be a list expression")
 			require.Len(t, listExpr.List.List, 2, "Result should have 2 elements")
 
-			// Verify the interval value
-			intervalValue := extractInt64ValueFromExpr(listExpr.List.List[0])
-			require.Equal(t, tc.expectedIntervalVal, intervalValue,
-				"Interval value mismatch for %s", tc.name)
+			if tc.returnsCastExpr {
+				// For cases that return cast expression, verify it's a function (cast)
+				_, isFuncExpr := listExpr.List.List[0].Expr.(*plan.Expr_F)
+				require.True(t, isFuncExpr, "Expected cast expression (Expr_F) for %s", tc.name)
+			} else {
+				// Verify the interval value is a constant
+				intervalValue := extractInt64ValueFromExpr(listExpr.List.List[0])
+				require.Equal(t, tc.expectedIntervalVal, intervalValue,
+					"Interval value mismatch for %s", tc.name)
+			}
 
 			// Verify the interval type
 			intervalType := extractInt64ValueFromExpr(listExpr.List.List[1])
@@ -931,15 +938,14 @@ func TestProjectionBinderResetIntervalAdditionalCoverage(t *testing.T) {
 			expectedIntervalVal:  0,
 			expectedIntervalType: types.Second,
 		},
-		// Test error case: when non-time unit cast to int64 fails (covers line 460)
-		// This requires cast to int64 to return null or unexpected type
-		// We can test with a null int64 value
+		// Test NULL handling for non-time units: should return cast expression (not error)
+		// The NULL will be handled at execution time (consistent with resetDateFunctionArgs)
 		{
-			name:              "INTERVAL NULL WEEK (int64, null value)",
-			intervalValueExpr: makeNullInt64ConstForProjection(),
-			intervalUnit:      "WEEK",
-			expectError:       true,
-			errorContains:     "invalid interval value",
+			name:                 "INTERVAL NULL WEEK (int64, null value)",
+			intervalValueExpr:    makeNullInt64ConstForProjection(),
+			intervalUnit:         "WEEK",
+			expectError:          false,
+			expectedIntervalType: types.Week, // intervalType remains unchanged
 		},
 	}
 

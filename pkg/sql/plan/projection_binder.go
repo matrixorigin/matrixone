@@ -311,63 +311,41 @@ func (b *ProjectionBinder) resetInterval(e *Expr) (*Expr, error) {
 		return nil, err
 	}
 
+	// Handle varchar/char type: parse interval string format like "1:30" for HOUR_MINUTE
 	if e1.Typ.Id == int32(types.T_varchar) || e1.Typ.Id == int32(types.T_char) {
 		s := e1.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_Sval).Sval
 		returnNum, returnType, err := types.NormalizeInterval(s, intervalType)
 		if err != nil {
-			// MySQL behavior: invalid interval string should return NULL at execution time, not error at parse time
-			// Use a special marker value (math.MaxInt64) to indicate invalid interval
-			// This will be detected in function execution and return NULL
+			// MySQL behavior: invalid interval string should return NULL at execution time
 			returnNum = math.MaxInt64
 			returnType = intervalType
 		}
-
 		e.Expr.(*plan.Expr_List).List.List[0] = makePlan2Int64ConstExprWithType(returnNum)
 		e.Expr.(*plan.Expr_List).List.List[1] = makePlan2Int64ConstExprWithType(int64(returnType))
 		return e, nil
 	}
 
-	// For time units (SECOND, MINUTE, HOUR, DAY), we need to handle decimal/float values
-	// by converting them to microseconds. First, convert to float64 to preserve decimal part.
+	// For time units (SECOND, MINUTE, HOUR, DAY), handle decimal/float values
+	// by converting them to microseconds (similar to resetDateFunctionArgs)
 	isTimeUnit := intervalType == types.Second || intervalType == types.Minute ||
 		intervalType == types.Hour || intervalType == types.Day
-	needsMicrosecondConversion := isTimeUnit && (e1.Typ.Id == int32(types.T_decimal64) ||
+	isDecimalOrFloat := e1.Typ.Id == int32(types.T_decimal64) ||
 		e1.Typ.Id == int32(types.T_decimal128) || e1.Typ.Id == int32(types.T_float32) ||
-		e1.Typ.Id == int32(types.T_float64))
+		e1.Typ.Id == int32(types.T_float64)
 
-	var finalValue int64
-	if needsMicrosecondConversion {
-		// Convert to float64 first to preserve decimal part
-		floatType := &plan.Type{Id: int32(types.T_float64)}
-		floatExpr, err := appendCastBeforeExpr(b.GetContext(), e1, *floatType)
-		if err != nil {
-			return nil, err
-		}
-
-		executor, err := colexec.NewExpressionExecutor(b.builder.compCtx.GetProcess(), floatExpr)
-		if err != nil {
-			return nil, err
-		}
-		defer executor.Free()
-		vec, err := executor.Eval(b.builder.compCtx.GetProcess(), []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
-		if err != nil {
-			return nil, err
-		}
-		c := rule.GetConstantValue(vec, false, 0)
-
-		// Extract float64 value
+	// Try to get literal value directly (consistent with resetDateFunctionArgs)
+	lit := e1.GetLit()
+	if isTimeUnit && isDecimalOrFloat && lit != nil && !lit.Isnull {
 		var floatVal float64
 		var hasValue bool
-		if c.Isnull {
-			hasValue = false
-		} else if dval, ok := c.Value.(*plan.Literal_Dval); ok {
+
+		if dval, ok := lit.Value.(*plan.Literal_Dval); ok {
 			floatVal = dval.Dval
 			hasValue = true
-		} else if fval, ok := c.Value.(*plan.Literal_Fval); ok {
+		} else if fval, ok := lit.Value.(*plan.Literal_Fval); ok {
 			floatVal = float64(fval.Fval)
 			hasValue = true
-		} else if d64val, ok := c.Value.(*plan.Literal_Decimal64Val); ok {
-			// Handle decimal64 from cast function execution
+		} else if d64val, ok := lit.Value.(*plan.Literal_Decimal64Val); ok {
 			d64 := types.Decimal64(d64val.Decimal64Val.A)
 			scale := e1.Typ.Scale
 			if scale < 0 {
@@ -375,8 +353,7 @@ func (b *ProjectionBinder) resetInterval(e *Expr) (*Expr, error) {
 			}
 			floatVal = types.Decimal64ToFloat64(d64, scale)
 			hasValue = true
-		} else if d128val, ok := c.Value.(*plan.Literal_Decimal128Val); ok {
-			// Handle decimal128 from cast function execution
+		} else if d128val, ok := lit.Value.(*plan.Literal_Decimal128Val); ok {
 			d128 := types.Decimal128{B0_63: uint64(d128val.Decimal128Val.A), B64_127: uint64(d128val.Decimal128Val.B)}
 			scale := e1.Typ.Scale
 			if scale < 0 {
@@ -384,86 +361,36 @@ func (b *ProjectionBinder) resetInterval(e *Expr) (*Expr, error) {
 			}
 			floatVal = types.Decimal128ToFloat64(d128, scale)
 			hasValue = true
-		} else {
-			// Fallback: try to convert to int64
-			typ := &plan.Type{Id: int32(types.T_int64)}
-			numberExpr, err := appendCastBeforeExpr(b.GetContext(), e1, *typ)
-			if err != nil {
-				return nil, err
-			}
-			executor2, err := colexec.NewExpressionExecutor(b.builder.compCtx.GetProcess(), numberExpr)
-			if err != nil {
-				return nil, err
-			}
-			defer executor2.Free()
-			vec2, err := executor2.Eval(b.builder.compCtx.GetProcess(), []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
-			if err != nil {
-				return nil, err
-			}
-			c2 := rule.GetConstantValue(vec2, false, 0)
-			if ival, ok := c2.Value.(*plan.Literal_I64Val); ok {
-				finalValue = ival.I64Val
-			} else {
-				return nil, moerr.NewInvalidInput(b.GetContext(), "invalid interval value")
-			}
 		}
 
-		// Convert to microseconds based on interval type
 		if hasValue {
+			var finalValue int64
 			switch intervalType {
 			case types.Second:
-				// Use math.Round to handle floating point precision issues (e.g., 1.000009 * 1000000 = 1000008.9999999999)
 				finalValue = int64(math.Round(floatVal * float64(types.MicroSecsPerSec)))
-				// Since we've converted to microseconds, change interval type to MicroSecond
-				intervalType = types.MicroSecond
 			case types.Minute:
-				// Use math.Round to handle floating point precision issues
 				finalValue = int64(math.Round(floatVal * float64(types.MicroSecsPerSec*types.SecsPerMinute)))
-				// Since we've converted to microseconds, change interval type to MicroSecond
-				intervalType = types.MicroSecond
 			case types.Hour:
-				// Use math.Round to handle floating point precision issues
 				finalValue = int64(math.Round(floatVal * float64(types.MicroSecsPerSec*types.SecsPerHour)))
-				// Since we've converted to microseconds, change interval type to MicroSecond
-				intervalType = types.MicroSecond
 			case types.Day:
-				// Use math.Round to handle floating point precision issues
 				finalValue = int64(math.Round(floatVal * float64(types.MicroSecsPerSec*types.SecsPerDay)))
-				// Since we've converted to microseconds, change interval type to MicroSecond
-				intervalType = types.MicroSecond
 			}
-			// Note: default case removed as it's unreachable - when needsMicrosecondConversion is true,
-			// isTimeUnit must be true, which means intervalType can only be Second/Minute/Hour/Day
-		}
-	} else {
-		// For non-time units or non-decimal/float types, convert directly to int64
-		typ := &plan.Type{Id: int32(types.T_int64)}
-		numberExpr, err := appendCastBeforeExpr(b.GetContext(), e1, *typ)
-		if err != nil {
-			return nil, err
-		}
-
-		executor, err := colexec.NewExpressionExecutor(b.builder.compCtx.GetProcess(), numberExpr)
-		if err != nil {
-			return nil, err
-		}
-		defer executor.Free()
-		vec, err := executor.Eval(b.builder.compCtx.GetProcess(), []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
-		if err != nil {
-			return nil, err
-		}
-		c := rule.GetConstantValue(vec, false, 0)
-
-		if ival, ok := c.Value.(*plan.Literal_I64Val); ok {
-			finalValue = ival.I64Val
-		} else {
-			return nil, moerr.NewInvalidInput(b.GetContext(), "invalid interval value")
+			e.Expr.(*plan.Expr_List).List.List[0] = makePlan2Int64ConstExprWithType(finalValue)
+			e.Expr.(*plan.Expr_List).List.List[1] = makePlan2Int64ConstExprWithType(int64(types.MicroSecond))
+			return e, nil
 		}
 	}
 
-	e.Expr.(*plan.Expr_List).List.List[0] = makePlan2Int64ConstExprWithType(finalValue)
-	e.Expr.(*plan.Expr_List).List.List[1] = makePlan2Int64ConstExprWithType(int64(intervalType))
+	// For other cases (non-time units, integer types, NULL values, or non-literal expressions):
+	// Cast to int64 and let execution handle NULL properly
+	typ := &plan.Type{Id: int32(types.T_int64)}
+	numberExpr, err := appendCastBeforeExpr(b.GetContext(), e1, *typ)
+	if err != nil {
+		return nil, err
+	}
 
+	e.Expr.(*plan.Expr_List).List.List[0] = numberExpr
+	e.Expr.(*plan.Expr_List).List.List[1] = makePlan2Int64ConstExprWithType(int64(intervalType))
 	return e, nil
 }
 
