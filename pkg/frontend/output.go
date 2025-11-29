@@ -561,32 +561,18 @@ func (slices *ColumnSlices) GetDate(r uint64, i uint64) (types.Date, error) {
 		r = 0
 	}
 	typ := slices.GetType(i)
-	vec := slices.dataSet.Vecs[i]
 
-	// Check actual vector type, not the type set by TempSetType
-	// This handles the case where TempSetType changed the type to T_date
-	// but actual data is stored as Datetime (e.g., TIMESTAMPADD with DATE input and date units)
-	actualType := vec.GetType().Oid
-
-	// If the type is T_date but actual vector type is T_datetime,
-	// read directly from vector instead of using ColumnSlices
-	// This avoids sliceIdx mismatch (sliceIdx is based on typ.Oid, not actualType)
-	if typ.Oid == types.T_date && actualType == types.T_datetime {
-		// Read directly from vector using MustFixedColNoTypeCheck
-		dtSlice := vector.MustFixedColNoTypeCheck[types.Datetime](vec)
-		dt := dtSlice[r]
-		return dt.ToDate(), nil
-	}
-
-	// Normal case: use sliceIdx based on typ.Oid
+	// Note: mysql_protocol.go handles the case where MySQL column type is MYSQL_TYPE_DATE
+	// but actual vector type is T_datetime (e.g., TIMESTAMPADD with DATE input + time unit).
+	// In that case, it calls GetDatetime instead of GetDate.
+	// So GetDate only needs to handle T_date and T_datetime vector types.
 	sliceIdx := slices.GetSliceIdx(i)
 	switch typ.Oid {
 	case types.T_date:
 		return slices.arrDate[sliceIdx][r], nil
 	case types.T_datetime:
 		// Handle DATETIME type when MySQL column type is MYSQL_TYPE_DATE
-		// This can happen when TIMESTAMPADD with DATE input and date units returns DATE type
-		// but the vector type is set to DATE while actual data is stored as DATETIME
+		// This can happen when TIMESTAMPADD returns DATETIME but caller expects DATE
 		dt := slices.arrDatetime[sliceIdx][r]
 		return dt.ToDate(), nil
 	default:
@@ -603,26 +589,12 @@ func (slices *ColumnSlices) GetDatetime(r uint64, i uint64) (string, error) {
 	if slices.IsConst(i) {
 		r = 0
 	}
-	typ := slices.GetType(i)
 	vec := slices.dataSet.Vecs[i]
 	actualType := vec.GetType().Oid
 
-	// If the type is T_date but actual vector type is T_datetime,
-	// read directly from vector instead of using ColumnSlices
-	// This avoids sliceIdx mismatch (sliceIdx is based on typ.Oid, not actualType)
-	if typ.Oid == types.T_date && actualType == types.T_datetime {
-		// Read directly from vector using MustFixedColNoTypeCheck
-		dtSlice := vector.MustFixedColNoTypeCheck[types.Datetime](vec)
-		dt := dtSlice[r]
-		scale := vec.GetType().Scale
-		// If fractional seconds are 0, format without fractional part (MySQL behavior)
-		if scale > 0 && dt.MicroSec() == 0 {
-			return dt.String2(0), nil
-		}
-		return dt.String2(scale), nil
-	}
-
-	// Normal case: use sliceIdx based on typ.Oid
+	// Note: mysql_protocol.go handles the case where MySQL column type is MYSQL_TYPE_DATE
+	// but actual vector type is T_datetime. It calls GetDatetime directly.
+	// So GetDatetime only needs to handle T_datetime vector type.
 	sliceIdx := slices.GetSliceIdx(i)
 	switch actualType {
 	case types.T_datetime:

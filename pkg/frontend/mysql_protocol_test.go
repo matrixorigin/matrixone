@@ -4369,6 +4369,528 @@ func Test_appendResultSetTextRow_ScaleHandling(t *testing.T) {
 	})
 }
 
+// Test_appendResultSetTextRow_DateTimeCoverage tests additional branches in appendResultSetTextRow
+// for MYSQL_TYPE_DATE and MYSQL_TYPE_DATETIME types.
+func Test_appendResultSetTextRow_DateTimeCoverage(t *testing.T) {
+	ctx := context.TODO()
+	convey.Convey("appendResultSetTextRow DATE/DATETIME coverage", t, func() {
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+		pu := config.NewParameterUnit(sv, nil, nil, nil)
+		pu.SV.SkipCheckUser = true
+		pu.SV.KillRountinesInterval = 0
+		setSessionAlloc("", NewLeakCheckAllocator())
+		setPu("", pu)
+		ioses, err := NewIOSession(&testConn{}, pu, "")
+		convey.ShouldBeNil(err)
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
+
+		ses := NewSession(ctx, "", proto, nil)
+		proto.ses = ses
+
+		// Test MYSQL_TYPE_DATE with types.Date value (normal case)
+		convey.Convey("MYSQL_TYPE_DATE normal case", func() {
+			rs := &MysqlResultSet{}
+			mysqlCol := new(MysqlColumn)
+			mysqlCol.SetName("date_col")
+			mysqlCol.SetColumnType(defines.MYSQL_TYPE_DATE)
+			rs.AddColumn(mysqlCol)
+
+			dt, _ := types.ParseDateCast("2024-01-15")
+			rs.AddRow([]interface{}{dt})
+
+			err := proto.appendResultSetTextRow(rs, 0)
+			convey.So(err, convey.ShouldBeNil)
+		})
+
+		// Test MYSQL_TYPE_DATE with wrong type (should return error)
+		convey.Convey("MYSQL_TYPE_DATE wrong type", func() {
+			rs := &MysqlResultSet{}
+			mysqlCol := new(MysqlColumn)
+			mysqlCol.SetName("date_col")
+			mysqlCol.SetColumnType(defines.MYSQL_TYPE_DATE)
+			rs.AddColumn(mysqlCol)
+
+			// Add a string instead of types.Date - should fail type assertion
+			rs.AddRow([]interface{}{"2024-01-15"})
+
+			err := proto.appendResultSetTextRow(rs, 0)
+			convey.So(err, convey.ShouldNotBeNil)
+			convey.So(err.Error(), convey.ShouldContainSubstring, "unsupported type")
+		})
+
+		// Test MYSQL_TYPE_DATETIME with types.Datetime value (normal case)
+		convey.Convey("MYSQL_TYPE_DATETIME normal case", func() {
+			rs := &MysqlResultSet{}
+			mysqlCol := new(MysqlColumn)
+			mysqlCol.SetName("datetime_col")
+			mysqlCol.SetColumnType(defines.MYSQL_TYPE_DATETIME)
+			mysqlCol.SetDecimal(0)
+			rs.AddColumn(mysqlCol)
+
+			dt, _ := types.ParseDatetime("2024-01-15 10:20:30", 0)
+			rs.AddRow([]interface{}{dt})
+
+			var capturedValue string
+			stub := gostub.Stub(&AppendStringLenEnc, func(mp *MysqlProtocolImpl, value string) error {
+				capturedValue = value
+				return nil
+			})
+			defer stub.Reset()
+
+			err := proto.appendResultSetTextRow(rs, 0)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(capturedValue, convey.ShouldEqual, "2024-01-15 10:20:30")
+		})
+
+		// Test MYSQL_TYPE_DATETIME with wrong type (fallback to GetString)
+		convey.Convey("MYSQL_TYPE_DATETIME fallback to GetString", func() {
+			rs := &MysqlResultSet{}
+			mysqlCol := new(MysqlColumn)
+			mysqlCol.SetName("datetime_col")
+			mysqlCol.SetColumnType(defines.MYSQL_TYPE_DATETIME)
+			mysqlCol.SetDecimal(0)
+			rs.AddColumn(mysqlCol)
+
+			// Add a string instead of types.Datetime - should fallback to GetString
+			rs.AddRow([]interface{}{"2024-01-15 10:20:30"})
+
+			var capturedValue string
+			stub := gostub.Stub(&AppendStringLenEnc, func(mp *MysqlProtocolImpl, value string) error {
+				capturedValue = value
+				return nil
+			})
+			defer stub.Reset()
+
+			err := proto.appendResultSetTextRow(rs, 0)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(capturedValue, convey.ShouldEqual, "2024-01-15 10:20:30")
+		})
+
+		// Test MYSQL_TYPE_DATETIME with nil value (fallback to GetString)
+		convey.Convey("MYSQL_TYPE_DATETIME nil value fallback", func() {
+			rs := &MysqlResultSet{}
+			mysqlCol := new(MysqlColumn)
+			mysqlCol.SetName("datetime_col")
+			mysqlCol.SetColumnType(defines.MYSQL_TYPE_DATETIME)
+			mysqlCol.SetDecimal(0)
+			rs.AddColumn(mysqlCol)
+
+			// Add nil value - should fallback to GetString which returns empty string
+			rs.AddRow([]interface{}{nil})
+
+			// When value is nil, ColumnIsNull returns true and we skip with 0xFB
+			// So this test actually tests the NULL path
+			err := proto.appendResultSetTextRow(rs, 0)
+			convey.So(err, convey.ShouldBeNil)
+		})
+
+		// Test MYSQL_TYPE_DATETIME with scale > 0
+		convey.Convey("MYSQL_TYPE_DATETIME with scale", func() {
+			rs := &MysqlResultSet{}
+			mysqlCol := new(MysqlColumn)
+			mysqlCol.SetName("datetime_col")
+			mysqlCol.SetColumnType(defines.MYSQL_TYPE_DATETIME)
+			mysqlCol.SetDecimal(6) // microsecond precision
+			rs.AddColumn(mysqlCol)
+
+			dt, _ := types.ParseDatetime("2024-01-15 10:20:30.123456", 6)
+			rs.AddRow([]interface{}{dt})
+
+			var capturedValue string
+			stub := gostub.Stub(&AppendStringLenEnc, func(mp *MysqlProtocolImpl, value string) error {
+				capturedValue = value
+				return nil
+			})
+			defer stub.Reset()
+
+			err := proto.appendResultSetTextRow(rs, 0)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(capturedValue, convey.ShouldEqual, "2024-01-15 10:20:30.123456")
+		})
+
+		// Test MYSQL_TYPE_TIME with types.Time value (normal case)
+		convey.Convey("MYSQL_TYPE_TIME normal case", func() {
+			rs := &MysqlResultSet{}
+			mysqlCol := new(MysqlColumn)
+			mysqlCol.SetName("time_col")
+			mysqlCol.SetColumnType(defines.MYSQL_TYPE_TIME)
+			mysqlCol.SetDecimal(0)
+			rs.AddColumn(mysqlCol)
+
+			t, _ := types.ParseTime("11:22:33", 0)
+			rs.AddRow([]interface{}{t})
+
+			var capturedValue string
+			stub := gostub.Stub(&AppendStringLenEnc, func(mp *MysqlProtocolImpl, value string) error {
+				capturedValue = value
+				return nil
+			})
+			defer stub.Reset()
+
+			err := proto.appendResultSetTextRow(rs, 0)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(capturedValue, convey.ShouldEqual, "11:22:33")
+		})
+
+		// Test MYSQL_TYPE_TIME with wrong type (fallback to GetString)
+		convey.Convey("MYSQL_TYPE_TIME fallback to GetString", func() {
+			rs := &MysqlResultSet{}
+			mysqlCol := new(MysqlColumn)
+			mysqlCol.SetName("time_col")
+			mysqlCol.SetColumnType(defines.MYSQL_TYPE_TIME)
+			mysqlCol.SetDecimal(0)
+			rs.AddColumn(mysqlCol)
+
+			// Add a string instead of types.Time - should fallback to GetString
+			rs.AddRow([]interface{}{"11:22:33"})
+
+			var capturedValue string
+			stub := gostub.Stub(&AppendStringLenEnc, func(mp *MysqlProtocolImpl, value string) error {
+				capturedValue = value
+				return nil
+			})
+			defer stub.Reset()
+
+			err := proto.appendResultSetTextRow(rs, 0)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(capturedValue, convey.ShouldEqual, "11:22:33")
+		})
+
+		// Test MYSQL_TYPE_TIMESTAMP with types.Timestamp value (normal case)
+		convey.Convey("MYSQL_TYPE_TIMESTAMP normal case", func() {
+			proto.ses.SetTimeZone(time.UTC)
+
+			rs := &MysqlResultSet{}
+			mysqlCol := new(MysqlColumn)
+			mysqlCol.SetName("timestamp_col")
+			mysqlCol.SetColumnType(defines.MYSQL_TYPE_TIMESTAMP)
+			mysqlCol.SetDecimal(0)
+			rs.AddColumn(mysqlCol)
+
+			ts, _ := types.ParseTimestamp(time.UTC, "2024-01-15 10:20:30", 0)
+			rs.AddRow([]interface{}{ts})
+
+			var capturedValue string
+			stub := gostub.Stub(&AppendStringLenEnc, func(mp *MysqlProtocolImpl, value string) error {
+				capturedValue = value
+				return nil
+			})
+			defer stub.Reset()
+
+			err := proto.appendResultSetTextRow(rs, 0)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(capturedValue, convey.ShouldEqual, "2024-01-15 10:20:30")
+		})
+
+		// Test MYSQL_TYPE_TIMESTAMP with types.Datetime value (fallback case)
+		convey.Convey("MYSQL_TYPE_TIMESTAMP with Datetime value", func() {
+			rs := &MysqlResultSet{}
+			mysqlCol := new(MysqlColumn)
+			mysqlCol.SetName("timestamp_col")
+			mysqlCol.SetColumnType(defines.MYSQL_TYPE_TIMESTAMP)
+			mysqlCol.SetDecimal(0)
+			rs.AddColumn(mysqlCol)
+
+			// Add a Datetime instead of Timestamp - should use Datetime branch
+			dt, _ := types.ParseDatetime("2024-01-15 10:20:30", 0)
+			rs.AddRow([]interface{}{dt})
+
+			var capturedValue string
+			stub := gostub.Stub(&AppendStringLenEnc, func(mp *MysqlProtocolImpl, value string) error {
+				capturedValue = value
+				return nil
+			})
+			defer stub.Reset()
+
+			err := proto.appendResultSetTextRow(rs, 0)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(capturedValue, convey.ShouldEqual, "2024-01-15 10:20:30")
+		})
+
+		// Test MYSQL_TYPE_TIMESTAMP with wrong type (fallback to GetString)
+		convey.Convey("MYSQL_TYPE_TIMESTAMP fallback to GetString", func() {
+			rs := &MysqlResultSet{}
+			mysqlCol := new(MysqlColumn)
+			mysqlCol.SetName("timestamp_col")
+			mysqlCol.SetColumnType(defines.MYSQL_TYPE_TIMESTAMP)
+			mysqlCol.SetDecimal(0)
+			rs.AddColumn(mysqlCol)
+
+			// Add a string instead of Timestamp - should fallback to GetString
+			rs.AddRow([]interface{}{"2024-01-15 10:20:30"})
+
+			var capturedValue string
+			stub := gostub.Stub(&AppendStringLenEnc, func(mp *MysqlProtocolImpl, value string) error {
+				capturedValue = value
+				return nil
+			})
+			defer stub.Reset()
+
+			err := proto.appendResultSetTextRow(rs, 0)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(capturedValue, convey.ShouldEqual, "2024-01-15 10:20:30")
+		})
+
+		// Test MYSQL_TYPE_ENUM
+		convey.Convey("MYSQL_TYPE_ENUM", func() {
+			rs := &MysqlResultSet{}
+			mysqlCol := new(MysqlColumn)
+			mysqlCol.SetName("enum_col")
+			mysqlCol.SetColumnType(defines.MYSQL_TYPE_ENUM)
+			rs.AddColumn(mysqlCol)
+
+			rs.AddRow([]interface{}{"value1"})
+
+			err := proto.appendResultSetTextRow(rs, 0)
+			convey.So(err, convey.ShouldBeNil)
+		})
+
+		// Test MYSQL_TYPE_BOOL
+		convey.Convey("MYSQL_TYPE_BOOL", func() {
+			rs := &MysqlResultSet{}
+			mysqlCol := new(MysqlColumn)
+			mysqlCol.SetName("bool_col")
+			mysqlCol.SetColumnType(defines.MYSQL_TYPE_BOOL)
+			rs.AddColumn(mysqlCol)
+
+			rs.AddRow([]interface{}{"true"})
+
+			err := proto.appendResultSetTextRow(rs, 0)
+			convey.So(err, convey.ShouldBeNil)
+		})
+
+		// Test MYSQL_TYPE_BIT
+		convey.Convey("MYSQL_TYPE_BIT", func() {
+			rs := &MysqlResultSet{}
+			mysqlCol := new(MysqlColumn)
+			mysqlCol.SetName("bit_col")
+			mysqlCol.SetColumnType(defines.MYSQL_TYPE_BIT)
+			mysqlCol.SetLength(8)
+			rs.AddColumn(mysqlCol)
+
+			rs.AddRow([]interface{}{uint64(255)})
+
+			err := proto.appendResultSetTextRow(rs, 0)
+			convey.So(err, convey.ShouldBeNil)
+		})
+
+		// Test MYSQL_TYPE_DECIMAL
+		convey.Convey("MYSQL_TYPE_DECIMAL", func() {
+			rs := &MysqlResultSet{}
+			mysqlCol := new(MysqlColumn)
+			mysqlCol.SetName("decimal_col")
+			mysqlCol.SetColumnType(defines.MYSQL_TYPE_DECIMAL)
+			rs.AddColumn(mysqlCol)
+
+			rs.AddRow([]interface{}{"123.456"})
+
+			err := proto.appendResultSetTextRow(rs, 0)
+			convey.So(err, convey.ShouldBeNil)
+		})
+
+		// Test MYSQL_TYPE_UUID
+		convey.Convey("MYSQL_TYPE_UUID", func() {
+			rs := &MysqlResultSet{}
+			mysqlCol := new(MysqlColumn)
+			mysqlCol.SetName("uuid_col")
+			mysqlCol.SetColumnType(defines.MYSQL_TYPE_UUID)
+			rs.AddColumn(mysqlCol)
+
+			rs.AddRow([]interface{}{"550e8400-e29b-41d4-a716-446655440000"})
+
+			err := proto.appendResultSetTextRow(rs, 0)
+			convey.So(err, convey.ShouldBeNil)
+		})
+
+		// Test MYSQL_TYPE_TINY
+		convey.Convey("MYSQL_TYPE_TINY", func() {
+			rs := &MysqlResultSet{}
+			mysqlCol := new(MysqlColumn)
+			mysqlCol.SetName("tiny_col")
+			mysqlCol.SetColumnType(defines.MYSQL_TYPE_TINY)
+			rs.AddColumn(mysqlCol)
+
+			rs.AddRow([]interface{}{int64(127)})
+
+			err := proto.appendResultSetTextRow(rs, 0)
+			convey.So(err, convey.ShouldBeNil)
+		})
+
+		// Test MYSQL_TYPE_YEAR with zero value
+		convey.Convey("MYSQL_TYPE_YEAR zero", func() {
+			rs := &MysqlResultSet{}
+			mysqlCol := new(MysqlColumn)
+			mysqlCol.SetName("year_col")
+			mysqlCol.SetColumnType(defines.MYSQL_TYPE_YEAR)
+			rs.AddColumn(mysqlCol)
+
+			rs.AddRow([]interface{}{int64(0)})
+
+			err := proto.appendResultSetTextRow(rs, 0)
+			convey.So(err, convey.ShouldBeNil)
+		})
+
+		// Test MYSQL_TYPE_YEAR with non-zero value
+		convey.Convey("MYSQL_TYPE_YEAR non-zero", func() {
+			rs := &MysqlResultSet{}
+			mysqlCol := new(MysqlColumn)
+			mysqlCol.SetName("year_col")
+			mysqlCol.SetColumnType(defines.MYSQL_TYPE_YEAR)
+			rs.AddColumn(mysqlCol)
+
+			rs.AddRow([]interface{}{int64(2024)})
+
+			err := proto.appendResultSetTextRow(rs, 0)
+			convey.So(err, convey.ShouldBeNil)
+		})
+
+		// Test MYSQL_TYPE_FLOAT with float32
+		convey.Convey("MYSQL_TYPE_FLOAT float32", func() {
+			rs := &MysqlResultSet{}
+			mysqlCol := new(MysqlColumn)
+			mysqlCol.SetName("float_col")
+			mysqlCol.SetColumnType(defines.MYSQL_TYPE_FLOAT)
+			rs.AddColumn(mysqlCol)
+
+			rs.AddRow([]interface{}{float32(3.14)})
+
+			err := proto.appendResultSetTextRow(rs, 0)
+			convey.So(err, convey.ShouldBeNil)
+		})
+
+		// Test MYSQL_TYPE_FLOAT with float64
+		convey.Convey("MYSQL_TYPE_FLOAT float64", func() {
+			rs := &MysqlResultSet{}
+			mysqlCol := new(MysqlColumn)
+			mysqlCol.SetName("float_col")
+			mysqlCol.SetColumnType(defines.MYSQL_TYPE_FLOAT)
+			rs.AddColumn(mysqlCol)
+
+			rs.AddRow([]interface{}{float64(3.14159)})
+
+			err := proto.appendResultSetTextRow(rs, 0)
+			convey.So(err, convey.ShouldBeNil)
+		})
+
+		// Test MYSQL_TYPE_DOUBLE with float32
+		convey.Convey("MYSQL_TYPE_DOUBLE float32", func() {
+			rs := &MysqlResultSet{}
+			mysqlCol := new(MysqlColumn)
+			mysqlCol.SetName("double_col")
+			mysqlCol.SetColumnType(defines.MYSQL_TYPE_DOUBLE)
+			rs.AddColumn(mysqlCol)
+
+			rs.AddRow([]interface{}{float32(3.14)})
+
+			err := proto.appendResultSetTextRow(rs, 0)
+			convey.So(err, convey.ShouldBeNil)
+		})
+
+		// Test MYSQL_TYPE_DOUBLE with float64
+		convey.Convey("MYSQL_TYPE_DOUBLE float64", func() {
+			rs := &MysqlResultSet{}
+			mysqlCol := new(MysqlColumn)
+			mysqlCol.SetName("double_col")
+			mysqlCol.SetColumnType(defines.MYSQL_TYPE_DOUBLE)
+			rs.AddColumn(mysqlCol)
+
+			rs.AddRow([]interface{}{float64(3.14159265358979)})
+
+			err := proto.appendResultSetTextRow(rs, 0)
+			convey.So(err, convey.ShouldBeNil)
+		})
+
+		// Test MYSQL_TYPE_LONGLONG unsigned
+		convey.Convey("MYSQL_TYPE_LONGLONG unsigned", func() {
+			rs := &MysqlResultSet{}
+			mysqlCol := new(MysqlColumn)
+			mysqlCol.SetName("bigint_col")
+			mysqlCol.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+			mysqlCol.SetSigned(false) // unsigned
+			rs.AddColumn(mysqlCol)
+
+			rs.AddRow([]interface{}{uint64(18446744073709551615)})
+
+			err := proto.appendResultSetTextRow(rs, 0)
+			convey.So(err, convey.ShouldBeNil)
+		})
+
+		// Test MYSQL_TYPE_LONGLONG signed
+		convey.Convey("MYSQL_TYPE_LONGLONG signed", func() {
+			rs := &MysqlResultSet{}
+			mysqlCol := new(MysqlColumn)
+			mysqlCol.SetName("bigint_col")
+			mysqlCol.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+			mysqlCol.SetSigned(true) // signed
+			rs.AddColumn(mysqlCol)
+
+			rs.AddRow([]interface{}{int64(-9223372036854775808)})
+
+			err := proto.appendResultSetTextRow(rs, 0)
+			convey.So(err, convey.ShouldBeNil)
+		})
+
+		// Test MYSQL_TYPE_VARCHAR with []byte
+		convey.Convey("MYSQL_TYPE_VARCHAR bytes", func() {
+			rs := &MysqlResultSet{}
+			mysqlCol := new(MysqlColumn)
+			mysqlCol.SetName("varchar_col")
+			mysqlCol.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+			rs.AddColumn(mysqlCol)
+
+			rs.AddRow([]interface{}{[]byte("hello world")})
+
+			err := proto.appendResultSetTextRow(rs, 0)
+			convey.So(err, convey.ShouldBeNil)
+		})
+
+		// Test MYSQL_TYPE_VARCHAR with string
+		convey.Convey("MYSQL_TYPE_VARCHAR string", func() {
+			rs := &MysqlResultSet{}
+			mysqlCol := new(MysqlColumn)
+			mysqlCol.SetName("varchar_col")
+			mysqlCol.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+			rs.AddColumn(mysqlCol)
+
+			rs.AddRow([]interface{}{"hello world"})
+
+			err := proto.appendResultSetTextRow(rs, 0)
+			convey.So(err, convey.ShouldBeNil)
+		})
+
+		// Test MYSQL_TYPE_BLOB
+		convey.Convey("MYSQL_TYPE_BLOB", func() {
+			rs := &MysqlResultSet{}
+			mysqlCol := new(MysqlColumn)
+			mysqlCol.SetName("blob_col")
+			mysqlCol.SetColumnType(defines.MYSQL_TYPE_BLOB)
+			rs.AddColumn(mysqlCol)
+
+			rs.AddRow([]interface{}{[]byte{0x01, 0x02, 0x03}})
+
+			err := proto.appendResultSetTextRow(rs, 0)
+			convey.So(err, convey.ShouldBeNil)
+		})
+
+		// Test NULL value
+		convey.Convey("NULL value", func() {
+			rs := &MysqlResultSet{}
+			mysqlCol := new(MysqlColumn)
+			mysqlCol.SetName("nullable_col")
+			mysqlCol.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+			rs.AddColumn(mysqlCol)
+
+			rs.AddRow([]interface{}{nil})
+
+			err := proto.appendResultSetTextRow(rs, 0)
+			convey.So(err, convey.ShouldBeNil)
+		})
+	})
+}
+
 // Test_appendResultSetBinaryRow2_DateTimeHandling tests that appendResultSetBinaryRow2 correctly handles
 // DATE/DATETIME/TIMESTAMP types for TIMESTAMPADD function results in binary protocol.
 // This ensures the fix for TIMESTAMPADD return type handling in binary protocol.
