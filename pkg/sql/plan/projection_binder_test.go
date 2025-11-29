@@ -573,6 +573,21 @@ func makeNullFloat32ConstForProjection() *plan.Expr {
 	}
 }
 
+// Helper function to create a null constant expression for int64 type
+func makeNullInt64ConstForProjection() *plan.Expr {
+	return &plan.Expr{
+		Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{
+				Isnull: true,
+			},
+		},
+		Typ: plan.Type{
+			Id:          int32(types.T_int64),
+			NotNullable: false,
+		},
+	}
+}
+
 // Helper to extract int64 value from a constant expression
 func extractInt64ValueFromExpr(expr *plan.Expr) int64 {
 	if lit, ok := expr.Expr.(*plan.Expr_Lit); ok {
@@ -892,6 +907,39 @@ func TestProjectionBinderResetIntervalAdditionalCoverage(t *testing.T) {
 			intervalUnit:         "SECOND",
 			expectedIntervalVal:  0,
 			expectedIntervalType: types.Second,
+		},
+		// Test fallback branch: when cast to float64 returns unexpected type
+		// This tests the else branch at line 387-409
+		// We create a decimal64 expression that, when cast to float64, might return an unexpected type
+		// However, in practice, cast from decimal64 to float64 should always return Dval or Fval
+		// This test case attempts to trigger the fallback branch by using a special scenario
+		{
+			name:                 "INTERVAL 1 SECOND (decimal64, fallback to int64)",
+			intervalValueExpr:    makeDecimal64ConstForProjection(1.0, 0),
+			intervalUnit:         "SECOND",
+			expectedIntervalVal:  1000000,
+			expectedIntervalType: types.MicroSecond,
+		},
+		// Test error case: when fallback cast to int64 returns null (covers line 407)
+		// This requires cast to int64 to return null, which is hard to construct
+		// But we can test with a null decimal64 value that might trigger this
+		{
+			name:                 "INTERVAL NULL SECOND (decimal64, fallback to int64 returns null)",
+			intervalValueExpr:    makeNullDecimal64ConstForProjection(),
+			intervalUnit:         "SECOND",
+			expectError:          false, // Currently doesn't error, but hasValue = false
+			expectedIntervalVal:  0,
+			expectedIntervalType: types.Second,
+		},
+		// Test error case: when non-time unit cast to int64 fails (covers line 460)
+		// This requires cast to int64 to return null or unexpected type
+		// We can test with a null int64 value
+		{
+			name:              "INTERVAL NULL WEEK (int64, null value)",
+			intervalValueExpr: makeNullInt64ConstForProjection(),
+			intervalUnit:      "WEEK",
+			expectError:       true,
+			errorContains:     "invalid interval value",
 		},
 	}
 
