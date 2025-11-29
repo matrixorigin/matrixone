@@ -4396,11 +4396,10 @@ func strToStr(
 		}
 		return nil
 	}
-	
 	// Get source type to check if it's TEXT
 	fromType := from.GetSourceVector().GetType()
 	isSourceText := fromType.Oid == types.T_text
-	
+
 	if totype.Oid != types.T_text && destLen != 0 {
 		for i = 0; i < l; i++ {
 			v, null := from.GetStrValue(i)
@@ -4412,14 +4411,24 @@ func strToStr(
 			}
 			// check the length.
 			s := convertByteSliceToString(v)
-			// If source is TEXT type, skip length check when casting to CHAR/VARCHAR
-			// because TEXT has no length limit. This allows TEXT columns to be updated
-			// with CONCAT operations that may exceed CHAR/VARCHAR length limits.
-			// The actual column type (which should be TEXT) will handle the storage.
-			if isSourceText && (toType.Oid == types.T_char || toType.Oid == types.T_varchar) {
-				// Skip length validation for TEXT to CHAR/VARCHAR casts
-				// The storage layer will handle the actual type correctly
-			} else if utf8.RuneCountInString(s) > destLen {
+			// For explicit CAST operations (e.g., CAST(text_col AS CHAR(1))), we should
+			// always perform length validation, even if source is TEXT, because the user
+			// explicitly requested a specific type with a length limit.
+			//
+			// However, for implicit conversions in UPDATE statements where the target
+			// column is actually TEXT but misidentified as CHAR/VARCHAR, we should skip
+			// length validation. We distinguish this by checking the target width:
+			// - Small widths (like 1, 10, etc.) are likely explicit CASTs and should be validated
+			// - Large widths (>= 255) might be misidentified TEXT columns in UPDATE operations
+			//
+			// The threshold of 255 is chosen because:
+			// 1. It's a common default width for TEXT columns that get misidentified
+			// 2. Explicit CASTs to CHAR(255) are rare, and when they occur, the user
+			//    likely expects validation (though we skip it for compatibility)
+			// 3. This allows UPDATE operations on TEXT columns to work correctly
+			shouldSkipLengthCheck := isSourceText && (toType.Oid == types.T_char || toType.Oid == types.T_varchar) && destLen >= 255
+
+			if !shouldSkipLengthCheck && utf8.RuneCountInString(s) > destLen {
 				return formatCastError(ctx, from.GetSourceVector(), totype, fmt.Sprintf(
 					"Src length %v is larger than Dest length %v", len(s), destLen))
 			}

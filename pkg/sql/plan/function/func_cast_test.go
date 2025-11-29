@@ -1949,9 +1949,9 @@ func Benchmark_strToSigned_Binary(b *testing.B) {
 					b.Fatalf("strToSigned failed: %v", err)
 				}
 
-			to.Free()
-		}
-	})
+				to.Free()
+			}
+		})
 	}
 }
 
@@ -1963,8 +1963,8 @@ func Test_strToStr_TextToCharVarchar(t *testing.T) {
 	mp := mpool.MustNewZero()
 
 	// Helper function to create long strings
-	longString260 := strings.Repeat("a", 260)  // 260 characters
-	longString100 := strings.Repeat("b", 100)  // 100 characters
+	longString260 := strings.Repeat("a", 260) // 260 characters
+	longString100 := strings.Repeat("b", 100) // 100 characters
 
 	tests := []struct {
 		name      string
@@ -2024,6 +2024,30 @@ func Test_strToStr_TextToCharVarchar(t *testing.T) {
 			inputs:   []string{longString100},
 			fromType: types.New(types.T_varchar, 100, 0),
 			toType:   types.New(types.T_char, 10, 0),
+			wantErr:  true,
+			errMsg:   "larger than Dest length",
+		},
+		{
+			name:     "TEXT to CHAR(1) with length > 1 - should fail (explicit CAST)",
+			inputs:   []string{"ab"},
+			fromType: types.T_text.ToType(),
+			toType:   types.New(types.T_char, 1, 0),
+			wantErr:  true,
+			errMsg:   "larger than Dest length",
+		},
+		{
+			name:     "TEXT to CHAR(10) with length 100 - should fail (explicit CAST to small width)",
+			inputs:   []string{longString100},
+			fromType: types.T_text.ToType(),
+			toType:   types.New(types.T_char, 10, 0),
+			wantErr:  true,
+			errMsg:   "larger than Dest length",
+		},
+		{
+			name:     "TEXT to VARCHAR(10) with length 100 - should fail (explicit CAST to small width)",
+			inputs:   []string{longString100},
+			fromType: types.T_text.ToType(),
+			toType:   types.New(types.T_varchar, 10, 0),
 			wantErr:  true,
 			errMsg:   "larger than Dest length",
 		},
