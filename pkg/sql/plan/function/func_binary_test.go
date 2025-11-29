@@ -7501,3 +7501,490 @@ func TestDoDateStringAddComprehensive(t *testing.T) {
 		})
 	}
 }
+
+// TestTimestampAddDateWithTChar tests TimestampAddDate with T_char type (overloadId: 4)
+// args: [types.T_char, types.T_int64, types.T_date]
+func TestTimestampAddDateWithTChar(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	testCases := []struct {
+		name     string
+		unit     string
+		interval int64
+		dateStr  string
+		expected string
+		desc     string
+	}{
+		{
+			name:     "T_char unit DAY with DATE",
+			unit:     "DAY",
+			interval: 1,
+			dateStr:  "2024-01-01",
+			expected: "2024-01-02",
+			desc:     "TIMESTAMPADD(DAY, 1, DATE('2024-01-01')) should return DATE",
+		},
+		{
+			name:     "T_char unit HOUR with DATE",
+			unit:     "HOUR",
+			interval: 1,
+			dateStr:  "2024-01-01",
+			expected: "2024-01-01 01:00:00",
+			desc:     "TIMESTAMPADD(HOUR, 1, DATE('2024-01-01')) should return DATETIME",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Create input vectors with T_char type for unit
+			unitVec, err := vector.NewConstBytes(types.T_char.ToType(), []byte(tc.unit), 1, proc.Mp())
+			require.NoError(t, err)
+
+			intervalVec, err := vector.NewConstFixed(types.T_int64.ToType(), tc.interval, 1, proc.Mp())
+			require.NoError(t, err)
+
+			date, err := types.ParseDateCast(tc.dateStr)
+			require.NoError(t, err)
+			dateVec, err := vector.NewConstFixed(types.T_date.ToType(), date, 1, proc.Mp())
+			require.NoError(t, err)
+
+			parameters := []*vector.Vector{unitVec, intervalVec, dateVec}
+			result := vector.NewFunctionResultWrapper(types.T_datetime.ToType(), proc.Mp())
+
+			fnLength := dateVec.Length()
+			err = result.PreExtendAndReset(fnLength)
+			require.NoError(t, err)
+
+			err = TimestampAddDate(parameters, result, proc, fnLength, nil)
+			require.NoError(t, err, tc.desc)
+
+			v := result.GetResultVector()
+			require.Equal(t, fnLength, v.Length())
+
+			// Verify result based on unit type
+			if tc.unit == "DAY" || tc.unit == "MONTH" || tc.unit == "YEAR" {
+				// Date units return DATE type
+				dateParam := vector.GenerateFunctionFixedTypeParameter[types.Date](v)
+				resultDate, null := dateParam.GetValue(0)
+				require.False(t, null)
+				require.Equal(t, tc.expected, resultDate.String(), tc.desc)
+			} else {
+				// Time units return DATETIME type
+				datetimeParam := vector.GenerateFunctionFixedTypeParameter[types.Datetime](v)
+				resultDt, null := datetimeParam.GetValue(0)
+				require.False(t, null)
+				require.Contains(t, resultDt.String2(v.GetType().Scale), tc.expected, tc.desc)
+			}
+
+			// Cleanup
+			for _, vec := range parameters {
+				if vec != nil {
+					vec.Free(proc.Mp())
+				}
+			}
+			if result != nil {
+				result.Free()
+			}
+		})
+	}
+}
+
+// TestTimestampAddStringWithTChar tests TimestampAddString with T_char types (overloadId: 7)
+// args: [types.T_char, types.T_int64, types.T_char]
+func TestTimestampAddStringWithTChar(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	testCases := []struct {
+		name     string
+		unit     string
+		interval int64
+		dateStr  string
+		expected string
+		desc     string
+	}{
+		{
+			name:     "T_char unit DAY with T_char date string",
+			unit:     "DAY",
+			interval: 1,
+			dateStr:  "2024-01-01",
+			expected: "2024-01-02",
+			desc:     "TIMESTAMPADD(DAY, 1, '2024-01-01') should return '2024-01-02'",
+		},
+		{
+			name:     "T_char unit HOUR with T_char datetime string",
+			unit:     "HOUR",
+			interval: 1,
+			dateStr:  "2024-01-01 10:00:00",
+			expected: "2024-01-01 11:00:00",
+			desc:     "TIMESTAMPADD(HOUR, 1, '2024-01-01 10:00:00') should return '2024-01-01 11:00:00'",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Create input vectors with T_char types
+			unitVec, err := vector.NewConstBytes(types.T_char.ToType(), []byte(tc.unit), 1, proc.Mp())
+			require.NoError(t, err)
+
+			intervalVec, err := vector.NewConstFixed(types.T_int64.ToType(), tc.interval, 1, proc.Mp())
+			require.NoError(t, err)
+
+			dateStrVec, err := vector.NewConstBytes(types.T_char.ToType(), []byte(tc.dateStr), 1, proc.Mp())
+			require.NoError(t, err)
+
+			parameters := []*vector.Vector{unitVec, intervalVec, dateStrVec}
+			result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+
+			fnLength := dateStrVec.Length()
+			err = result.PreExtendAndReset(fnLength)
+			require.NoError(t, err)
+
+			err = TimestampAddString(parameters, result, proc, fnLength, nil)
+			require.NoError(t, err, tc.desc)
+
+			v := result.GetResultVector()
+			require.Equal(t, fnLength, v.Length())
+
+			// Verify result (string type)
+			strParam := vector.GenerateFunctionStrParameter(v)
+			resultStr, null := strParam.GetStrValue(0)
+			require.False(t, null)
+			resultStrVal := string(resultStr)
+			require.Contains(t, resultStrVal, tc.expected, tc.desc)
+
+			// Cleanup
+			for _, vec := range parameters {
+				if vec != nil {
+					vec.Free(proc.Mp())
+				}
+			}
+			if result != nil {
+				result.Free()
+			}
+		})
+	}
+}
+
+// TestTimestampDiffWithTChar tests TimestampDiff with T_char type (overloadId: 4)
+// args: [types.T_char, types.T_datetime, types.T_datetime]
+func TestTimestampDiffWithTChar(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	testCases := []struct {
+		name     string
+		unit     string
+		dt1      string
+		dt2      string
+		expected int64
+		desc     string
+	}{
+		{
+			name:     "T_char unit DAY with DATETIME",
+			unit:     "DAY",
+			dt1:      "2024-01-01 10:00:00",
+			dt2:      "2024-01-02 10:00:00",
+			expected: 1,
+			desc:     "TIMESTAMPDIFF(DAY, '2024-01-01 10:00:00', '2024-01-02 10:00:00') should return 1",
+		},
+		{
+			name:     "T_char unit HOUR with DATETIME",
+			unit:     "HOUR",
+			dt1:      "2024-01-01 10:00:00",
+			dt2:      "2024-01-01 12:00:00",
+			expected: 2,
+			desc:     "TIMESTAMPDIFF(HOUR, '2024-01-01 10:00:00', '2024-01-01 12:00:00') should return 2",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Create input vectors with T_char type for unit
+			unitVec, err := vector.NewConstBytes(types.T_char.ToType(), []byte(tc.unit), 1, proc.Mp())
+			require.NoError(t, err)
+
+			dt1, err := types.ParseDatetime(tc.dt1, 6)
+			require.NoError(t, err)
+			dt1Vec, err := vector.NewConstFixed(types.T_datetime.ToType(), dt1, 1, proc.Mp())
+			require.NoError(t, err)
+
+			dt2, err := types.ParseDatetime(tc.dt2, 6)
+			require.NoError(t, err)
+			dt2Vec, err := vector.NewConstFixed(types.T_datetime.ToType(), dt2, 1, proc.Mp())
+			require.NoError(t, err)
+
+			parameters := []*vector.Vector{unitVec, dt1Vec, dt2Vec}
+			result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
+
+			fnLength := dt1Vec.Length()
+			err = result.PreExtendAndReset(fnLength)
+			require.NoError(t, err)
+
+			err = TimestampDiff(parameters, result, proc, fnLength, nil)
+			require.NoError(t, err, tc.desc)
+
+			v := result.GetResultVector()
+			require.Equal(t, fnLength, v.Length())
+			require.Equal(t, types.T_int64, v.GetType().Oid)
+
+			int64Param := vector.GenerateFunctionFixedTypeParameter[int64](v)
+			resultVal, null := int64Param.GetValue(0)
+			require.False(t, null)
+			require.Equal(t, tc.expected, resultVal, tc.desc)
+
+			// Cleanup
+			for _, vec := range parameters {
+				if vec != nil {
+					vec.Free(proc.Mp())
+				}
+			}
+			if result != nil {
+				result.Free()
+			}
+		})
+	}
+}
+
+// TestTimestampDiffDateWithTChar tests TimestampDiffDate with T_char and T_date types (overloadId: 5)
+// args: [types.T_char, types.T_date, types.T_date]
+func TestTimestampDiffDateWithTChar(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	testCases := []struct {
+		name     string
+		unit     string
+		date1    string
+		date2    string
+		expected int64
+		desc     string
+	}{
+		{
+			name:     "T_char unit DAY with DATE",
+			unit:     "DAY",
+			date1:    "2024-01-01",
+			date2:    "2024-01-02",
+			expected: 1,
+			desc:     "TIMESTAMPDIFF(DAY, DATE('2024-01-01'), DATE('2024-01-02')) should return 1",
+		},
+		{
+			name:     "T_char unit MONTH with DATE",
+			unit:     "MONTH",
+			date1:    "2024-01-01",
+			date2:    "2024-03-01",
+			expected: 2,
+			desc:     "TIMESTAMPDIFF(MONTH, DATE('2024-01-01'), DATE('2024-03-01')) should return 2",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Create input vectors with T_char type for unit
+			unitVec, err := vector.NewConstBytes(types.T_char.ToType(), []byte(tc.unit), 1, proc.Mp())
+			require.NoError(t, err)
+
+			date1, err := types.ParseDateCast(tc.date1)
+			require.NoError(t, err)
+			date1Vec, err := vector.NewConstFixed(types.T_date.ToType(), date1, 1, proc.Mp())
+			require.NoError(t, err)
+
+			date2, err := types.ParseDateCast(tc.date2)
+			require.NoError(t, err)
+			date2Vec, err := vector.NewConstFixed(types.T_date.ToType(), date2, 1, proc.Mp())
+			require.NoError(t, err)
+
+			parameters := []*vector.Vector{unitVec, date1Vec, date2Vec}
+			result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
+
+			fnLength := date1Vec.Length()
+			err = result.PreExtendAndReset(fnLength)
+			require.NoError(t, err)
+
+			err = TimestampDiffDate(parameters, result, proc, fnLength, nil)
+			require.NoError(t, err, tc.desc)
+
+			v := result.GetResultVector()
+			require.Equal(t, fnLength, v.Length())
+			require.Equal(t, types.T_int64, v.GetType().Oid)
+
+			int64Param := vector.GenerateFunctionFixedTypeParameter[int64](v)
+			resultVal, null := int64Param.GetValue(0)
+			require.False(t, null)
+			require.Equal(t, tc.expected, resultVal, tc.desc)
+
+			// Cleanup
+			for _, vec := range parameters {
+				if vec != nil {
+					vec.Free(proc.Mp())
+				}
+			}
+			if result != nil {
+				result.Free()
+			}
+		})
+	}
+}
+
+// TestTimestampDiffTimestampWithTChar tests TimestampDiffTimestamp with T_char and T_timestamp types (overloadId: 6)
+// args: [types.T_char, types.T_timestamp, types.T_timestamp]
+func TestTimestampDiffTimestampWithTChar(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	testCases := []struct {
+		name     string
+		unit     string
+		ts1      string
+		ts2      string
+		expected int64
+		desc     string
+	}{
+		{
+			name:     "T_char unit DAY with TIMESTAMP",
+			unit:     "DAY",
+			ts1:      "2024-01-01 10:00:00",
+			ts2:      "2024-01-02 10:00:00",
+			expected: 1,
+			desc:     "TIMESTAMPDIFF(DAY, TIMESTAMP('2024-01-01 10:00:00'), TIMESTAMP('2024-01-02 10:00:00')) should return 1",
+		},
+		{
+			name:     "T_char unit HOUR with TIMESTAMP",
+			unit:     "HOUR",
+			ts1:      "2024-01-01 10:00:00",
+			ts2:      "2024-01-01 12:00:00",
+			expected: 2,
+			desc:     "TIMESTAMPDIFF(HOUR, TIMESTAMP('2024-01-01 10:00:00'), TIMESTAMP('2024-01-01 12:00:00')) should return 2",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Create input vectors with T_char type for unit
+			unitVec, err := vector.NewConstBytes(types.T_char.ToType(), []byte(tc.unit), 1, proc.Mp())
+			require.NoError(t, err)
+
+			loc := proc.GetSessionInfo().TimeZone
+			if loc == nil {
+				loc = time.Local
+			}
+
+			ts1, err := types.ParseTimestamp(loc, tc.ts1, 0)
+			require.NoError(t, err)
+			ts1Vec, err := vector.NewConstFixed(types.T_timestamp.ToType(), ts1, 1, proc.Mp())
+			require.NoError(t, err)
+
+			ts2, err := types.ParseTimestamp(loc, tc.ts2, 0)
+			require.NoError(t, err)
+			ts2Vec, err := vector.NewConstFixed(types.T_timestamp.ToType(), ts2, 1, proc.Mp())
+			require.NoError(t, err)
+
+			parameters := []*vector.Vector{unitVec, ts1Vec, ts2Vec}
+			result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
+
+			fnLength := ts1Vec.Length()
+			err = result.PreExtendAndReset(fnLength)
+			require.NoError(t, err)
+
+			err = TimestampDiffTimestamp(parameters, result, proc, fnLength, nil)
+			require.NoError(t, err, tc.desc)
+
+			v := result.GetResultVector()
+			require.Equal(t, fnLength, v.Length())
+			require.Equal(t, types.T_int64, v.GetType().Oid)
+
+			int64Param := vector.GenerateFunctionFixedTypeParameter[int64](v)
+			resultVal, null := int64Param.GetValue(0)
+			require.False(t, null)
+			require.Equal(t, tc.expected, resultVal, tc.desc)
+
+			// Cleanup
+			for _, vec := range parameters {
+				if vec != nil {
+					vec.Free(proc.Mp())
+				}
+			}
+			if result != nil {
+				result.Free()
+			}
+		})
+	}
+}
+
+// TestTimestampDiffStringWithTChar tests TimestampDiffString with T_char and T_varchar types (overloadId: 7)
+// args: [types.T_char, types.T_varchar, types.T_varchar]
+func TestTimestampDiffStringWithTChar(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	testCases := []struct {
+		name     string
+		unit     string
+		str1     string
+		str2     string
+		expected int64
+		desc     string
+	}{
+		{
+			name:     "T_char unit DAY with T_varchar datetime strings",
+			unit:     "DAY",
+			str1:     "2024-01-01 10:00:00",
+			str2:     "2024-01-02 10:00:00",
+			expected: 1,
+			desc:     "TIMESTAMPDIFF(DAY, '2024-01-01 10:00:00', '2024-01-02 10:00:00') should return 1",
+		},
+		{
+			name:     "T_char unit HOUR with T_varchar datetime strings",
+			unit:     "HOUR",
+			str1:     "2024-01-01 10:00:00",
+			str2:     "2024-01-01 12:00:00",
+			expected: 2,
+			desc:     "TIMESTAMPDIFF(HOUR, '2024-01-01 10:00:00', '2024-01-01 12:00:00') should return 2",
+		},
+		{
+			name:     "T_char unit DAY with T_varchar date strings",
+			unit:     "DAY",
+			str1:     "2024-01-01",
+			str2:     "2024-01-02",
+			expected: 1,
+			desc:     "TIMESTAMPDIFF(DAY, '2024-01-01', '2024-01-02') should return 1",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Create input vectors with T_char type for unit
+			unitVec, err := vector.NewConstBytes(types.T_char.ToType(), []byte(tc.unit), 1, proc.Mp())
+			require.NoError(t, err)
+
+			str1Vec, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte(tc.str1), 1, proc.Mp())
+			require.NoError(t, err)
+
+			str2Vec, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte(tc.str2), 1, proc.Mp())
+			require.NoError(t, err)
+
+			parameters := []*vector.Vector{unitVec, str1Vec, str2Vec}
+			result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
+
+			fnLength := str1Vec.Length()
+			err = result.PreExtendAndReset(fnLength)
+			require.NoError(t, err)
+
+			err = TimestampDiffString(parameters, result, proc, fnLength, nil)
+			require.NoError(t, err, tc.desc)
+
+			v := result.GetResultVector()
+			require.Equal(t, fnLength, v.Length())
+			require.Equal(t, types.T_int64, v.GetType().Oid)
+
+			int64Param := vector.GenerateFunctionFixedTypeParameter[int64](v)
+			resultVal, null := int64Param.GetValue(0)
+			require.False(t, null)
+			require.Equal(t, tc.expected, resultVal, tc.desc)
+
+			// Cleanup
+			for _, vec := range parameters {
+				if vec != nil {
+					vec.Free(proc.Mp())
+				}
+			}
+			if result != nil {
+				result.Free()
+			}
+		})
+	}
+}
