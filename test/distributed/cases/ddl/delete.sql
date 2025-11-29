@@ -1,5 +1,3 @@
-set experimental_fulltext_index=1;
-set experimental_ivf_index=1;
 drop database if exists test_delete;
 create database test_delete;
 use test_delete;

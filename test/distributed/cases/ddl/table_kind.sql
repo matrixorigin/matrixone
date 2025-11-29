@@ -29,7 +29,6 @@ select name, type, column_name from mo_catalog.mo_indexes where name = 'idx2' an
 select relkind from mo_catalog.mo_tables where relname in (select distinct index_table_name from mo_catalog.mo_indexes where name = 'idx2' and table_id in (select rel_id from mo_catalog.mo_tables where relname = 't1'));
 
 
-SET experimental_ivf_index = 1;
 -- 10. Create IVF index within Create Table (this will create empty index hidden tables)
 drop table if exists t2;
 create table t2(a int primary key, b vecf32(3), index idx9 using ivfflat (b));
@@ -100,7 +99,6 @@ select name, type, column_name, algo, algo_table_type,algo_params from mo_catalo
 select relkind from mo_catalog.mo_tables where relname in (select distinct index_table_name from mo_catalog.mo_indexes where name = 'idx2' and table_id in (select rel_id from mo_catalog.mo_tables where relname = 'tbl'));
 
 -------------------------------------------------------------------------------------------------------------------
-set experimental_fulltext_index=1;
 set ft_relevancy_algorithm="TF-IDF";
 
 create table src1 (id bigint primary key, body varchar, title text);

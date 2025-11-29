@@ -1,3 +1,4 @@
+
 set enable_remap_hint = 1;
 drop account if exists acc01;
 create account acc01 admin_name = 'test_account' identified by '111';
@@ -557,7 +558,6 @@ set enable_remap_hint = 0;
 
 
 
-set experimental_fulltext_index=1;
 set ft_relevancy_algorithm="TF-IDF";
 drop table if exists t_user;
 create table t_user (

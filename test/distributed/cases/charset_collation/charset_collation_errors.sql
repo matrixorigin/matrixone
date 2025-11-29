@@ -429,12 +429,6 @@ SELECT * FROM t_duplicate_key;
 -- @case
 -- @desc: Test FULLTEXT index with different charsets
 -- @label:bvt
-CREATE TABLE t_fulltext (
-    id INT PRIMARY KEY,
-    content TEXT,
-    FULLTEXT KEY idx_content (content)
-) CHARACTER SET utf8mb4;
-
 INSERT INTO t_fulltext VALUES (1, 'The quick brown fox jumps over the lazy dog');
 INSERT INTO t_fulltext VALUES (2, 'Quick brown foxes');
 INSERT INTO t_fulltext VALUES (3, '快速的棕色狐狸跳过懒狗');
@@ -520,4 +514,3 @@ DROP TABLE `测试表`;
 -- @desc: Cleanup
 -- @label:bvt
 DROP DATABASE IF EXISTS charset_error_test;
-

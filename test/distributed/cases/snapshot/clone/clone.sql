@@ -1,5 +1,4 @@
 -- clone db/table in current account with snapshot
-set experimental_fulltext_index=1;
 set ft_relevancy_algorithm="TF-IDF";
 SET experimental_hnsw_index = 1;
 drop database if exists test01;
