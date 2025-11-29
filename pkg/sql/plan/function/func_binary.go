@@ -1264,8 +1264,7 @@ func doDatetimeAdd(start types.Datetime, diff int64, iTyp types.IntervalType) (t
 				case types.MicroSecond:
 					nums = diff
 				default:
-					// For other types, keep original year
-					resultYear = startYear
+					// For other types, nums remains 0, will use startYear in else block
 				}
 				if nums != 0 {
 					// Check the year from the calculated date
@@ -1368,8 +1367,7 @@ func doDateStringAdd(startStr string, diff int64, iTyp types.IntervalType) (type
 				case types.MicroSecond:
 					nums = diff
 				default:
-					// For other types, keep original year
-					resultYear = startYear
+					// For other types, nums remains 0, will use startYear in else block
 				}
 				if nums != 0 {
 					// Check the year from the calculated date
