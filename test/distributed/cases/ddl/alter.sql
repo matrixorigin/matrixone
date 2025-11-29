@@ -448,7 +448,7 @@ insert into t3 values (1, 'a', 'bb', 'ccc');
 insert into t3 values (2, 'aa', 'bbbb', 'cccccc');
 
 -- Should use INPLACE algorithm for multiple varchar length increases
-alter table t3 
+alter table t3
 modify column col1 varchar(50),
 modify column col2 varchar(100) not null,
 modify column col3 varchar(150);
@@ -503,7 +503,6 @@ commit;
 show create table t5;
 
 
-set experimental_fulltext_index=1;
 create table v1 (a int primary key, b int);
 
 insert into v1 values (1, 1), (2, 1);
@@ -537,4 +536,3 @@ drop table v1;
 drop table v2;
 drop table v3;
 drop database varchar_test;
-

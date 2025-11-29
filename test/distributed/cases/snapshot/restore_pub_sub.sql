@@ -1,4 +1,3 @@
-set experimental_fulltext_index=1;
 set global enable_privilege_cache = off;
 drop account if exists acc01;
 create account acc01 admin_name = 'test_account' identified by '111';
