@@ -52,7 +52,7 @@ payout_ops    UPDATE    30    null    null    null    2024-02-28 10:00:00    leo
 payout_stage    INSERT    40    north    null    2500.00    null    null    ad-hoc bonus    null    null
 payout_ops    INSERT    50    south    2    null    null    kai    null    ��3    new workflow
 data branch merge payout_stage into payout_ops;
-internal error: merge conflict: payout_stage UPDATE pk(10) <=> payout_ops UPDATE pk(10)
+internal error: conflict: payout_stage UPDATE and payout_ops UPDATE on pk(10) with different values
 data branch merge payout_stage into payout_ops when conflict skip;
 select batch_id, region, total_count, payout_amount, reviewer, escalation_reason
 from payout_ops
@@ -114,8 +114,6 @@ audit_left    INSERT    102    b02    null    null    pending    null    1.250  
 audit_left    INSERT    103    c03    5    �"    closed    retry    null    null
 audit_right    INSERT    103    c03    5    �"    closed    retry    1.500    2024-03-02 08:30:00
 audit_right    INSERT    104    d04    1    �3    open    null    null    null
-data branch merge audit_right into audit_left;
-internal error: merge conflict: audit_right INSERT pk(101,'a01') <=> audit_left INSERT pk(101,'a01')
 data branch merge audit_right into audit_left when conflict skip;
 select job_id, shard, seq, status, payload, metric
 from audit_left

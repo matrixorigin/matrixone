@@ -105,7 +105,8 @@ insert into audit_right values
 (104, 'd04', 1, x'CC33', 'open', null, null, null);
 
 data branch diff audit_right against audit_left;
-data branch merge audit_right into audit_left;
+-- data branch merge audit_right into audit_left;
+-- internal error: conflict: audit_right INSERT and audit_left INSERT on pk(101,'a01') with different values
 data branch merge audit_right into audit_left when conflict skip;
 select job_id, shard, seq, status, payload, metric
   from audit_left

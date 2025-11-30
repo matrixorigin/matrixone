@@ -1,0 +1,43 @@
+drop database if exists db1;
+create database db1;
+use db1;
+
+-- fake pk
+create table db1.t10(a int, b int);
+insert into db1.t10 select *,* from generate_series(1, 1000)g;
+create table db1.t10_copy1 clone db1.t10;
+select `__mo_fake_pk_col` as pk, a, b from db1.t10 except select `__mo_fake_pk_col` as pk, a, b from db1.t10_copy1;
+
+delete from t10 where a mod 19 = 0;
+create table db1.t10_copy2 clone db1.t10;
+select `__mo_fake_pk_col` as pk, a, b from db1.t10 except select `__mo_fake_pk_col` as pk, a, b from db1.t10_copy2;
+
+update db1.t10 set b = b*10 where a mod 17 = 0;
+create table db1.t10_copy3 clone db1.t10;
+select `__mo_fake_pk_col` as pk, a, b from db1.t10 except select `__mo_fake_pk_col` as pk, a, b from db1.t10_copy3;
+
+insert into db1.t10(a,b) values(2000, 2000),(3000, 3000);
+insert into db1.t10(b) values(4000),(5000);
+create table db1.t10_copy4 clone db1.t10;
+select `__mo_fake_pk_col` as pk, a, b from db1.t10 except select `__mo_fake_pk_col` as pk, a, b from db1.t10_copy4;
+
+-- auto incremental pk
+create table t11(a int auto_increment, b int, primary key(a));
+insert into t11 select *,* from generate_series(1, 1000)g;
+create table t11_copy1 clone t11;
+select a, b from t11 except select a, b from t11_copy1;
+
+delete from t11 where a mod 19 = 0;
+create table t11_copy2 clone t11;
+select a, b from t11 except select a, b from t11_copy2;
+
+update t11 set b = b*10 where a mod 17 = 0;
+create table t11_copy3 clone t11;
+select a, b from t11 except select a, b from t11_copy3;
+
+insert into t11(a,b) values(2000, 2000),(3000, 3000);
+insert into t11(b) values(4000),(5000);
+create table t11_copy4 clone t11;
+select a, b from t11 except select a, b from t11_copy4;
+
+drop database db1;
