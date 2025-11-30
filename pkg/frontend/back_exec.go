@@ -16,7 +16,6 @@ package frontend
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -121,24 +120,25 @@ func (back *backExec) Exec(ctx context.Context, sql string) (retErr error) {
 	if len(statements) > 1 {
 		return moerr.NewInternalErrorf(ctx, "Exec() can run one statement at one time. but get '%d' statements now, sql = %s", len(statements), sql)
 	}
-
-	if st, ok := statements[0].(*tree.Select); ok && st != nil && st.Ep != nil {
-		back.backSes.ep = &ExportConfig{
-			userConfig: st.Ep,
-			service:    back.Service(),
-		}
-
-		back.backSes.ep.init()
-		back.backSes.ep.DefaultBufSize = getPu(back.backSes.GetService()).SV.ExportDataDefaultFlushSize
-		initExportFileParam(back.backSes.ep, back.backSes.mrs)
-		if err = openNewFile(ctx, back.backSes.ep, back.backSes.mrs); err != nil {
-			return err
-		}
-
-		defer func() {
-			retErr = errors.Join(retErr, Close(back.backSes.ep))
-		}()
-	}
+	// uncomment this to enable backExec export data to CSV file.
+	//
+	//if st, ok := statements[0].(*tree.Select); ok && st != nil && st.Ep != nil {
+	//	back.backSes.ep = &ExportConfig{
+	//		userConfig: st.Ep,
+	//		service:    back.Service(),
+	//	}
+	//
+	//	back.backSes.ep.init()
+	//	back.backSes.ep.DefaultBufSize = getPu(back.backSes.GetService()).SV.ExportDataDefaultFlushSize
+	//	initExportFileParam(back.backSes.ep, back.backSes.mrs)
+	//	if err = openNewFile(ctx, back.backSes.ep, back.backSes.mrs); err != nil {
+	//		return err
+	//	}
+	//
+	//	defer func() {
+	//		retErr = errors.Join(retErr, Close(back.backSes.ep))
+	//	}()
+	//}
 
 	//share txn can not run transaction statement
 	if back.backSes.GetTxnHandler().IsShareTxn() {
