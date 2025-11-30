@@ -1185,7 +1185,8 @@ func doDateAdd(start types.Date, diff int64, iTyp types.IntervalType) (types.Dat
 				case types.MicroSecond:
 					nums = diff
 				default:
-					resultYear = startYear
+					// For unknown interval types, nums remains 0
+					// resultYear will be set to startYear in the else branch below
 				}
 				if nums != 0 {
 					// Check the year from the calculated date
