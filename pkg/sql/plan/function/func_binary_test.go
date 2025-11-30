@@ -16,12 +16,12 @@ package function
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"math"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -8292,7 +8292,7 @@ func TestIsDateOverflowMaxError(t *testing.T) {
 	require.True(t, isDateOverflowMaxError(dateOverflowMaxError))
 
 	// Test with different error
-	require.False(t, isDateOverflowMaxError(errors.New("different error")))
+	require.False(t, isDateOverflowMaxError(moerr.NewInvalidArgNoCtx("test", "different error")))
 }
 
 // TestIsDatetimeOverflowMaxError tests the isDatetimeOverflowMaxError function
@@ -8304,7 +8304,7 @@ func TestIsDatetimeOverflowMaxError(t *testing.T) {
 	require.True(t, isDatetimeOverflowMaxError(datetimeOverflowMaxError))
 
 	// Test with different error
-	require.False(t, isDatetimeOverflowMaxError(errors.New("different error")))
+	require.False(t, isDatetimeOverflowMaxError(moerr.NewInvalidArgNoCtx("test", "different error")))
 }
 
 // TestTimestampAddDateWithConstantDateUnitAndDateResultType tests TimestampAddDate with constant date unit and DATE result type
