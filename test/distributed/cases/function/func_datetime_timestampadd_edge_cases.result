@@ -63,7 +63,7 @@ max_date_boundary
 null
 SELECT TIMESTAMPADD(DAY, -1, '0001-01-01') AS min_date_boundary;
 min_date_boundary
-0001-01-01
+null
 SELECT TIMESTAMPADD(SECOND, 1, '2024-12-20 23:59:59') AS time_max_boundary_second;
 time_max_boundary_second
 2024-12-21 00:00:00

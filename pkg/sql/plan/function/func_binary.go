@@ -1130,15 +1130,27 @@ func doDateAdd(start types.Date, diff int64, iTyp types.IntervalType) (types.Dat
 	}
 	dt, success := start.ToDatetime().AddInterval(diff, iTyp, types.DateType)
 	if success {
-		return dt.ToDate(), nil
+		// Check if result is out of valid date range (0001-01-01 to 9999-12-31)
+		resultDate := dt.ToDate()
+		year, _, _, _ := resultDate.Calendar(true)
+
+		// Check both year and negative datetime value
+		// Negative datetime value indicates year 0 or earlier (underflow)
+		// ToDate() truncates negative datetime values to 0, making Calendar return year=1,
+		// so we need to check int64(dt) < 0 to catch underflow cases
+		if year < 1 || int64(dt) < 0 {
+			return 0, dateOverflowMaxError // Minimum underflow: return NULL
+		}
+		if year > types.MaxDatetimeYear {
+			return 0, dateOverflowMaxError // Maximum overflow: return NULL (matches MySQL)
+		}
+		return resultDate, nil
 	} else {
-		// MySQL behavior:
-		// - If overflow beyond maximum (diff > 0), throw error (in both SELECT and INSERT)
-		// - If overflow beyond minimum (diff < 0):
-		//   - If year is out of valid range (< 1 or > 9999), throw error
-		//   - Otherwise, return zero date '0000-00-00'
+		// Simplified behavior:
+		// - If overflow beyond maximum (diff > 0), return NULL (matches MySQL)
+		// - If overflow beyond minimum (diff < 0), return NULL (our requirement: < 0001-01-01 returns NULL)
 		if diff > 0 {
-			// Maximum overflow: return special error that will be thrown by DateAdd function
+			// Maximum overflow: return NULL (MySQL behavior)
 			return 0, dateOverflowMaxError
 		} else {
 			// Check if year is out of valid range for negative intervals
@@ -1156,27 +1168,47 @@ func doDateAdd(start types.Date, diff int64, iTyp types.IntervalType) (types.Dat
 				// Calculate: year + (quarter*3)/12
 				resultYear = startYear + (diff*3)/12
 			default:
-				// For other types (Day, Week, etc.), they don't directly affect year
-				// The AddInterval already checked ValidDate, so if it failed,
-				// it means the result is out of range, but for non-year-affecting types,
-				// we should return zero date (not error) for underflow
-				resultYear = startYear // Keep original year for non-year-affecting types
+				// For other types (Day, Week, etc.), check the actual calculated year
+				// from the failed AddInterval result to determine if year is out of range
+				var nums int64
+				switch iTyp {
+				case types.Day:
+					nums = diff * types.MicroSecsPerSec * types.SecsPerDay
+				case types.Week:
+					nums = diff * types.MicroSecsPerSec * types.SecsPerWeek
+				case types.Hour:
+					nums = diff * types.MicroSecsPerSec * types.SecsPerHour
+				case types.Minute:
+					nums = diff * types.MicroSecsPerSec * types.SecsPerMinute
+				case types.Second:
+					nums = diff * types.MicroSecsPerSec
+				case types.MicroSecond:
+					nums = diff
+				default:
+					resultYear = startYear
+				}
+				if nums != 0 {
+					// Check the year from the calculated date
+					calcDate := start.ToDatetime() + types.Datetime(nums)
+					calcYear, _, _, _ := calcDate.ToDate().Calendar(true)
+					// Calendar returns (0, 0, 0) for invalid dates (out of range)
+					if calcYear == 0 {
+						return 0, dateOverflowMaxError
+					}
+					resultYear = int64(calcYear)
+				} else {
+					resultYear = startYear
+				}
 			}
 			// Check if calculated year is out of valid range
-			if resultYear < types.MinDatetimeYear || resultYear > types.MaxDatetimeYear {
-				// For YEAR type, if year < 1, return zero date (MySQL behavior)
-				// For MONTH/QUARTER types, if year < 1, throw error
-				if iTyp == types.Year && resultYear < types.MinDatetimeYear {
-					// Year < 1 for YEAR type: return zero date (MySQL behavior)
-					return types.Date(0), nil
-				}
-				// Year out of valid range for other types or year > 9999: throw error
-				return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
+			// Valid date range is 0001-01-01 to 9999-12-31
+			if resultYear < 1 || resultYear > types.MaxDatetimeYear {
+				// Year out of valid range returns NULL
+				return 0, dateOverflowMaxError
 			}
-			// Minimum overflow within valid year range: return zero date
-			// Note: MatrixOne's Date(0) represents '0000-01-01', but MySQL's zero date is '0000-00-00'
-			// For MySQL compatibility, we return Date(0) which will be formatted as '0000-00-00' by protocol layer
-			return types.Date(0), nil
+			// If year is in valid range but AddInterval failed, it means the date is before 0001-01-01
+			// Return NULL
+			return 0, dateOverflowMaxError
 		}
 	}
 }
@@ -1218,13 +1250,26 @@ func doDatetimeAdd(start types.Datetime, diff int64, iTyp types.IntervalType) (t
 	}
 	dt, success := start.AddInterval(diff, iTyp, types.DateTimeType)
 	if success {
+		// Check if result is out of valid date range (0001-01-01 to 9999-12-31)
+		year, _, _, _ := dt.ToDate().Calendar(true)
+
+		// Check both year and negative datetime value
+		// Negative datetime value indicates year 0 or earlier (underflow)
+		// ToDate() truncates negative datetime values to 0, making Calendar return year=1,
+		// so we need to check int64(dt) < 0 to catch underflow cases
+		if year < 1 || int64(dt) < 0 {
+			return 0, datetimeOverflowMaxError // Minimum underflow: return NULL
+		}
+		if year > types.MaxDatetimeYear {
+			return 0, datetimeOverflowMaxError // Maximum overflow: return NULL (matches MySQL)
+		}
 		return dt, nil
 	} else {
-		// MySQL behavior:
+		// Simplified behavior:
 		// - If overflow beyond maximum (diff > 0), return NULL
 		// - If overflow beyond minimum (diff < 0):
-		//   - If year is out of valid range (< 1 or > 9999), throw error
-		//   - Otherwise, return zero datetime '0000-00-00 00:00:00'
+		//   - If year is out of valid range (< 1 or > 9999), return NULL
+		//   - Otherwise, return NULL (all dates before 0001-01-01 are invalid)
 		if diff > 0 {
 			// Maximum overflow: return special error to indicate NULL should be returned
 			return 0, datetimeOverflowMaxError
@@ -1270,18 +1315,24 @@ func doDatetimeAdd(start types.Datetime, diff int64, iTyp types.IntervalType) (t
 					// Check the year from the calculated date
 					calcDate := start + types.Datetime(nums)
 					calcYear, _, _, _ := calcDate.ToDate().Calendar(true)
+					// Calendar returns (0, 0, 0) for invalid dates (out of range)
+					if calcYear == 0 {
+						return 0, datetimeOverflowMaxError
+					}
 					resultYear = int64(calcYear)
 				} else {
 					resultYear = startYear
 				}
 			}
 			// Check if calculated year is out of valid range
-			if resultYear < types.MinDatetimeYear || resultYear > types.MaxDatetimeYear {
-				// MySQL behavior: year out of valid range returns NULL (overflow)
+			// Valid date range is 0001-01-01 to 9999-12-31
+			if resultYear < 1 || resultYear > types.MaxDatetimeYear {
+				// Year out of valid range returns NULL
 				return 0, datetimeOverflowMaxError
 			}
-			// Minimum overflow within valid year range: return zero datetime
-			return types.ZeroDatetime, nil
+			// If year is in valid range but AddInterval failed, it means the date is before 0001-01-01
+			// Return NULL
+			return 0, datetimeOverflowMaxError
 		}
 	}
 }
@@ -1321,6 +1372,15 @@ func doDateStringAdd(startStr string, diff int64, iTyp types.IntervalType) (type
 	}
 	dt, success := start.AddInterval(diff, iTyp, types.DateType)
 	if success {
+		// Check if result is less than minimum valid date (0001-01-01)
+		// All dates before 0001-01-01 should return NULL
+		// For time units (HOUR, MINUTE, SECOND, MICROSECOND), we need to check the datetime directly
+		// because ToDate() truncates negative datetime values to 0
+		year, _, _, _ := dt.ToDate().Calendar(true)
+		// Also check if the datetime value itself is negative (which indicates year 0 or earlier)
+		if year < 1 || int64(dt) < 0 {
+			return 0, datetimeOverflowMaxError
+		}
 		return dt, nil
 	} else {
 		// MySQL behavior:
@@ -1401,6 +1461,19 @@ func doTimestampAdd(loc *time.Location, start types.Timestamp, diff int64, iTyp 
 	}
 	dt, success := start.ToDatetime(loc).AddInterval(diff, iTyp, types.DateTimeType)
 	if success {
+		// Check if result is out of valid date range (0001-01-01 to 9999-12-31)
+		year, _, _, _ := dt.ToDate().Calendar(true)
+
+		// Check both year and negative datetime value
+		// Negative datetime value indicates year 0 or earlier (underflow)
+		// ToDate() truncates negative datetime values to 0, making Calendar return year=1,
+		// so we need to check int64(dt) < 0 to catch underflow cases
+		if year < 1 || int64(dt) < 0 {
+			return 0, datetimeOverflowMaxError // Minimum underflow: return NULL
+		}
+		if year > types.MaxDatetimeYear {
+			return 0, datetimeOverflowMaxError // Maximum overflow: return NULL (matches MySQL)
+		}
 		return dt.ToTimestamp(loc), nil
 	} else {
 		return 0, moerr.NewOutOfRangeNoCtx("timestamp", "")
@@ -1535,9 +1608,8 @@ func DateAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 			resultDate, err := doDateAdd(v1, v2, iTyp)
 			if err != nil {
 				if isDateOverflowMaxError(err) {
-					// According to test expectations, overflow should throw error
-					// Error message format: "data out of range: data type datetime, "
-					return moerr.NewOutOfRangeNoCtx("datetime", "")
+					// Simplified behavior: overflow/underflow returns NULL
+					rsNull.Add(i)
 				} else {
 					return err
 				}

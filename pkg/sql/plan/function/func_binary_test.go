@@ -1960,13 +1960,13 @@ func TestDateAdd(t *testing.T) {
 	}
 }
 
-// TestDateAddOverflow tests that date_add throws error when overflow occurs
-// This matches MySQL behavior where overflow should throw error in both SELECT and INSERT
+// TestDateAddOverflow tests that date_add returns NULL when overflow occurs
+// This matches MySQL behavior where overflow returns NULL (with warning)
 func TestDateAddOverflow(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
 	// Test case: date_add with large year interval that causes overflow
-	// date_add('2000-01-01', interval 8000 year) should throw error
+	// date_add('2000-01-01', interval 8000 year) should return NULL (MySQL behavior)
 	startDate, _ := types.ParseDateCast("2000-01-01")
 	largeInterval := int64(8000) // 8000 years, will cause overflow
 
@@ -1987,10 +1987,13 @@ func TestDateAddOverflow(t *testing.T) {
 	err = result.PreExtendAndReset(1)
 	require.NoError(t, err)
 
-	// Call DateAdd - should return error
+	// Call DateAdd - should return NULL (not error)
 	err = DateAdd(ivecs, result, proc, 1, nil)
-	require.Error(t, err, "date_add with overflow should return error")
-	require.Contains(t, err.Error(), "data out of range", "error message should contain 'data out of range'")
+	require.NoError(t, err, "date_add with overflow should return NULL, not error")
+
+	// Check that result is NULL
+	resultVec := result.GetResultVector()
+	require.True(t, resultVec.GetNulls().Contains(0), "Result should be NULL for overflow")
 
 	// Cleanup
 	for _, v := range ivecs {
@@ -2435,7 +2438,8 @@ func TestDateStringAddOverflowNegativeQuarter(t *testing.T) {
 	}
 }
 
-// TestDateAddOverflowNegativeMonth tests that DateAdd throws error when MONTH interval causes year out of range
+// TestDateAddOverflowNegativeMonth tests that DateAdd returns NULL when MONTH interval causes year < 1
+// This matches our requirement: dates before 0001-01-01 should return NULL
 func TestDateAddOverflowNegativeMonth(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
@@ -2460,10 +2464,13 @@ func TestDateAddOverflowNegativeMonth(t *testing.T) {
 	err = result.PreExtendAndReset(1)
 	require.NoError(t, err)
 
-	// Call DateAdd - should return error
+	// Call DateAdd - should return NULL (not error)
 	err = DateAdd(ivecs, result, proc, 1, nil)
-	require.Error(t, err, "DateAdd with negative MONTH causing year < 1 should return error")
-	require.Contains(t, err.Error(), "data out of range", "error message should contain 'data out of range'")
+	require.NoError(t, err, "DateAdd with negative MONTH causing year < 1 should return NULL, not error")
+
+	// Check that result is NULL
+	resultVec := result.GetResultVector()
+	require.True(t, resultVec.GetNulls().Contains(0), "Result should be NULL for underflow")
 
 	// Cleanup
 	for _, v := range ivecs {
@@ -2501,10 +2508,13 @@ func TestDateAddOverflowNegativeQuarter(t *testing.T) {
 	err = result.PreExtendAndReset(1)
 	require.NoError(t, err)
 
-	// Call DateAdd - should return error
+	// Call DateAdd - should return NULL (not error)
 	err = DateAdd(ivecs, result, proc, 1, nil)
-	require.Error(t, err, "DateAdd with negative QUARTER causing year < 1 should return error")
-	require.Contains(t, err.Error(), "data out of range", "error message should contain 'data out of range'")
+	require.NoError(t, err, "DateAdd with negative QUARTER causing year < 1 should return NULL, not error")
+
+	// Check that result is NULL
+	resultVec := result.GetResultVector()
+	require.True(t, resultVec.GetNulls().Contains(0), "Result should be NULL for underflow")
 
 	// Cleanup
 	for _, v := range ivecs {
@@ -6951,18 +6961,15 @@ func TestDoDatetimeAddComprehensive(t *testing.T) {
 			expectError: true, // Should return datetimeOverflowMaxError (NULL in MySQL)
 		},
 		// Note: MicroSecond type in AddInterval directly returns without ValidDatetime check,
-		// so even large negative values will return success=true. The result may be invalid
-		// but AddInterval won't catch it. We test with a smaller value that would cause underflow.
+		// so even large negative values will return success=true. However, our implementation
+		// checks the year after AddInterval, so large negative values that result in year < 1
+		// will return NULL.
 		{
-			name:        "Large negative MicroSecond interval (AddInterval succeeds, but result may be invalid)",
+			name:        "Large negative MicroSecond interval causing year < 1",
 			start:       types.Datetime(0),
-			diff:        -1000000000000, // Very large negative number
+			diff:        -1000000000000, // Very large negative number, will cause year < 1
 			iTyp:        types.MicroSecond,
-			expectError: false, // AddInterval returns success=true for MicroSecond
-			expectedValue: func() types.Datetime {
-				// Calculate expected: start + diff (in microseconds)
-				return types.Datetime(0) + types.Datetime(-1000000000000)
-			}(),
+			expectError: true, // Should return datetimeOverflowMaxError (NULL) because year < 1
 		},
 		// Test time units with normal values
 		{
@@ -7764,6 +7771,508 @@ func TestTimestampDiffStringWithTChar(t *testing.T) {
 			for _, vec := range parameters {
 				if vec != nil {
 					vec.Free(proc.Mp())
+				}
+			}
+			if result != nil {
+				result.Free()
+			}
+		})
+	}
+}
+
+// TestDateAddMinimumValidDate tests that dates before 0001-01-01 return NULL
+// This implements the simplified behavior where 0001-01-01 is the minimum valid date
+func TestDateAddMinimumValidDate(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	testCases := []struct {
+		name         string
+		startDate    string
+		interval     int64
+		intervalType types.IntervalType
+		shouldBeNull bool
+		description  string
+	}{
+		{
+			name:         "DATE_ADD('0001-01-01', INTERVAL -1 DAY) should return NULL",
+			startDate:    "0001-01-01",
+			interval:     -1,
+			intervalType: types.Day,
+			shouldBeNull: true,
+			description:  "Subtracting 1 day from minimum valid date should return NULL",
+		},
+		{
+			name:         "DATE_ADD('0001-01-01', INTERVAL -3 DAY) should return NULL",
+			startDate:    "0001-01-01",
+			interval:     -3,
+			intervalType: types.Day,
+			shouldBeNull: true,
+			description:  "Subtracting 3 days from minimum valid date should return NULL",
+		},
+		{
+			name:         "DATE_ADD('0001-01-01', INTERVAL -1 WEEK) should return NULL",
+			startDate:    "0001-01-01",
+			interval:     -1,
+			intervalType: types.Week,
+			shouldBeNull: true,
+			description:  "Subtracting 1 week from minimum valid date should return NULL",
+		},
+		{
+			name:         "DATE_ADD('0001-01-01', INTERVAL -1 HOUR) should return NULL",
+			startDate:    "0001-01-01",
+			interval:     -1,
+			intervalType: types.Hour,
+			shouldBeNull: true,
+			description:  "Subtracting 1 hour from minimum valid date should return NULL",
+		},
+		{
+			name:         "DATE_ADD('0001-01-01', INTERVAL -1 MINUTE) should return NULL",
+			startDate:    "0001-01-01",
+			interval:     -1,
+			intervalType: types.Minute,
+			shouldBeNull: true,
+			description:  "Subtracting 1 minute from minimum valid date should return NULL",
+		},
+		{
+			name:         "DATE_ADD('0001-01-01', INTERVAL -1 SECOND) should return NULL",
+			startDate:    "0001-01-01",
+			interval:     -1,
+			intervalType: types.Second,
+			shouldBeNull: true,
+			description:  "Subtracting 1 second from minimum valid date should return NULL",
+		},
+		{
+			name:         "DATE_ADD('0001-01-01', INTERVAL -1 YEAR) should return NULL",
+			startDate:    "0001-01-01",
+			interval:     -1,
+			intervalType: types.Year,
+			shouldBeNull: true,
+			description:  "Subtracting 1 year from minimum valid date should return NULL",
+		},
+		{
+			name:         "DATE_ADD('0001-01-01', INTERVAL -1 MONTH) should return NULL",
+			startDate:    "0001-01-01",
+			interval:     -1,
+			intervalType: types.Month,
+			shouldBeNull: true,
+			description:  "Subtracting 1 month from minimum valid date should return NULL",
+		},
+		{
+			name:         "DATE_ADD('0001-01-02', INTERVAL -2 DAY) should return NULL",
+			startDate:    "0001-01-02",
+			interval:     -2,
+			intervalType: types.Day,
+			shouldBeNull: true,
+			description:  "Subtracting 2 days from 0001-01-02 should return NULL",
+		},
+		{
+			name:         "DATE_ADD('0001-01-15', INTERVAL -3 WEEK) should return NULL",
+			startDate:    "0001-01-15",
+			interval:     -3,
+			intervalType: types.Week,
+			shouldBeNull: true,
+			description:  "Subtracting 3 weeks from 0001-01-15 should return NULL",
+		},
+		{
+			name:         "DATE_ADD('0001-01-01', INTERVAL 0 DAY) should succeed",
+			startDate:    "0001-01-01",
+			interval:     0,
+			intervalType: types.Day,
+			shouldBeNull: false,
+			description:  "Adding 0 days to minimum valid date should succeed",
+		},
+		{
+			name:         "DATE_ADD('0001-01-01', INTERVAL 1 DAY) should succeed",
+			startDate:    "0001-01-01",
+			interval:     1,
+			intervalType: types.Day,
+			shouldBeNull: false,
+			description:  "Adding 1 day to minimum valid date should succeed",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			startDate, err := types.ParseDateCast(tc.startDate)
+			require.NoError(t, err)
+
+			// Create input vectors
+			ivecs := make([]*vector.Vector, 3)
+			ivecs[0], err = vector.NewConstFixed(types.T_date.ToType(), startDate, 1, proc.Mp())
+			require.NoError(t, err)
+			ivecs[1], err = vector.NewConstFixed(types.T_int64.ToType(), tc.interval, 1, proc.Mp())
+			require.NoError(t, err)
+			ivecs[2], err = vector.NewConstFixed(types.T_int64.ToType(), int64(tc.intervalType), 1, proc.Mp())
+			require.NoError(t, err)
+
+			// Create result vector
+			result := vector.NewFunctionResultWrapper(types.T_date.ToType(), proc.Mp())
+			err = result.PreExtendAndReset(1)
+			require.NoError(t, err)
+
+			// Call DateAdd
+			err = DateAdd(ivecs, result, proc, 1, nil)
+			require.NoError(t, err, tc.description)
+
+			// Check result
+			resultVec := result.GetResultVector()
+			if tc.shouldBeNull {
+				require.True(t, resultVec.GetNulls().Contains(0),
+					"%s: Result should be NULL", tc.description)
+			} else {
+				require.False(t, resultVec.GetNulls().Contains(0),
+					"%s: Result should not be NULL", tc.description)
+				resultDate := vector.MustFixedColNoTypeCheck[types.Date](resultVec)[0]
+				require.GreaterOrEqual(t, int32(resultDate.Year()), int32(1),
+					"%s: Result year should be >= 1", tc.description)
+			}
+
+			// Cleanup
+			for _, v := range ivecs {
+				if v != nil {
+					v.Free(proc.Mp())
+				}
+			}
+			if result != nil {
+				result.Free()
+			}
+		})
+	}
+}
+
+// TestTimestampAddMinimumValidDate tests that TIMESTAMPADD returns NULL for dates before 0001-01-01
+func TestTimestampAddMinimumValidDate(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	testCases := []struct {
+		name         string
+		startDate    string
+		interval     int64
+		intervalType types.IntervalType
+		shouldBeNull bool
+		description  string
+	}{
+		{
+			name:         "TIMESTAMPADD(DAY, -3, '0001-01-01') should return NULL",
+			startDate:    "0001-01-01",
+			interval:     -3,
+			intervalType: types.Day,
+			shouldBeNull: true,
+			description:  "Subtracting 3 days from minimum valid date should return NULL",
+		},
+		{
+			name:         "TIMESTAMPADD(DAY, -1, '0001-01-01') should return NULL",
+			startDate:    "0001-01-01",
+			interval:     -1,
+			intervalType: types.Day,
+			shouldBeNull: true,
+			description:  "Subtracting 1 day from minimum valid date should return NULL",
+		},
+		{
+			name:         "TIMESTAMPADD(WEEK, -1, '0001-01-01') should return NULL",
+			startDate:    "0001-01-01",
+			interval:     -1,
+			intervalType: types.Week,
+			shouldBeNull: true,
+			description:  "Subtracting 1 week from minimum valid date should return NULL",
+		},
+		{
+			name:         "TIMESTAMPADD(HOUR, -24, '0001-01-01') should return NULL",
+			startDate:    "0001-01-01",
+			interval:     -24,
+			intervalType: types.Hour,
+			shouldBeNull: true,
+			description:  "Subtracting 24 hours from minimum valid date should return NULL",
+		},
+		{
+			name:         "TIMESTAMPADD(MINUTE, -60, '0001-01-01') should return NULL",
+			startDate:    "0001-01-01",
+			interval:     -60,
+			intervalType: types.Minute,
+			shouldBeNull: true,
+			description:  "Subtracting 60 minutes from minimum valid date should return NULL",
+		},
+		{
+			name:         "TIMESTAMPADD(SECOND, -1, '0001-01-01') should return NULL",
+			startDate:    "0001-01-01",
+			interval:     -1,
+			intervalType: types.Second,
+			shouldBeNull: true,
+			description:  "Subtracting 1 second from minimum valid date should return NULL",
+		},
+		{
+			name:         "TIMESTAMPADD(YEAR, -1, '0001-01-01') should return NULL",
+			startDate:    "0001-01-01",
+			interval:     -1,
+			intervalType: types.Year,
+			shouldBeNull: true,
+			description:  "Subtracting 1 year from minimum valid date should return NULL",
+		},
+		{
+			name:         "TIMESTAMPADD(MONTH, -1, '0001-01-01') should return NULL",
+			startDate:    "0001-01-01",
+			interval:     -1,
+			intervalType: types.Month,
+			shouldBeNull: true,
+			description:  "Subtracting 1 month from minimum valid date should return NULL",
+		},
+		{
+			name:         "TIMESTAMPADD(DAY, 0, '0001-01-01') should succeed",
+			startDate:    "0001-01-01",
+			interval:     0,
+			intervalType: types.Day,
+			shouldBeNull: false,
+			description:  "Adding 0 days to minimum valid date should succeed",
+		},
+		{
+			name:         "TIMESTAMPADD(DAY, 1, '0001-01-01') should succeed",
+			startDate:    "0001-01-01",
+			interval:     1,
+			intervalType: types.Day,
+			shouldBeNull: false,
+			description:  "Adding 1 day to minimum valid date should succeed",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			startDate, err := types.ParseDateCast(tc.startDate)
+			require.NoError(t, err)
+
+			// Create input vectors for TimestampAddDate
+			// Parameter order: [unit (string), interval (int64), date (Date)]
+			ivecs := make([]*vector.Vector, 3)
+			unitStr := tc.intervalType.String()
+			ivecs[0], err = vector.NewConstBytes(types.T_varchar.ToType(), []byte(unitStr), 1, proc.Mp())
+			require.NoError(t, err)
+			ivecs[1], err = vector.NewConstFixed(types.T_int64.ToType(), tc.interval, 1, proc.Mp())
+			require.NoError(t, err)
+			ivecs[2], err = vector.NewConstFixed(types.T_date.ToType(), startDate, 1, proc.Mp())
+			require.NoError(t, err)
+
+			// Create result vector (DATETIME type for TimestampAddDate)
+			result := vector.NewFunctionResultWrapper(types.T_datetime.ToType(), proc.Mp())
+			err = result.PreExtendAndReset(1)
+			require.NoError(t, err)
+
+			// Call TimestampAddDate
+			err = TimestampAddDate(ivecs, result, proc, 1, nil)
+			require.NoError(t, err, tc.description)
+
+			// Check result
+			resultVec := result.GetResultVector()
+			if tc.shouldBeNull {
+				require.True(t, resultVec.GetNulls().Contains(0),
+					"%s: Result should be NULL", tc.description)
+			} else {
+				require.False(t, resultVec.GetNulls().Contains(0),
+					"%s: Result should not be NULL", tc.description)
+				resultDt := vector.MustFixedColNoTypeCheck[types.Datetime](resultVec)[0]
+				resultYear, _, _, _ := resultDt.ToDate().Calendar(true)
+				require.GreaterOrEqual(t, resultYear, int32(1),
+					"%s: Result year should be >= 1", tc.description)
+			}
+
+			// Cleanup
+			for _, v := range ivecs {
+				if v != nil {
+					v.Free(proc.Mp())
+				}
+			}
+			if result != nil {
+				result.Free()
+			}
+		})
+	}
+}
+
+// TestDatetimeAddMinimumValidDate tests that DATETIME_ADD returns NULL for dates before 0001-01-01
+func TestDatetimeAddMinimumValidDate(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	testCases := []struct {
+		name          string
+		startDatetime string
+		interval      int64
+		intervalType  types.IntervalType
+		shouldBeNull  bool
+		description   string
+	}{
+		{
+			name:          "DATETIME_ADD('0001-01-01 00:00:00', INTERVAL -1 DAY) should return NULL",
+			startDatetime: "0001-01-01 00:00:00",
+			interval:      -1,
+			intervalType:  types.Day,
+			shouldBeNull:  true,
+			description:   "Subtracting 1 day from minimum valid datetime should return NULL",
+		},
+		{
+			name:          "DATETIME_ADD('0001-01-01 00:00:00', INTERVAL -1 HOUR) should return NULL",
+			startDatetime: "0001-01-01 00:00:00",
+			interval:      -1,
+			intervalType:  types.Hour,
+			shouldBeNull:  true,
+			description:   "Subtracting 1 hour from minimum valid datetime should return NULL",
+		},
+		{
+			name:          "DATETIME_ADD('0001-01-01 00:00:00', INTERVAL -1 MINUTE) should return NULL",
+			startDatetime: "0001-01-01 00:00:00",
+			interval:      -1,
+			intervalType:  types.Minute,
+			shouldBeNull:  true,
+			description:   "Subtracting 1 minute from minimum valid datetime should return NULL",
+		},
+		{
+			name:          "DATETIME_ADD('0001-01-01 00:00:00', INTERVAL -1 SECOND) should return NULL",
+			startDatetime: "0001-01-01 00:00:00",
+			interval:      -1,
+			intervalType:  types.Second,
+			shouldBeNull:  true,
+			description:   "Subtracting 1 second from minimum valid datetime should return NULL",
+		},
+		{
+			name:          "DATETIME_ADD('0001-01-01 00:00:00', INTERVAL 1 DAY) should succeed",
+			startDatetime: "0001-01-01 00:00:00",
+			interval:      1,
+			intervalType:  types.Day,
+			shouldBeNull:  false,
+			description:   "Adding 1 day to minimum valid datetime should succeed",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			startDt, err := types.ParseDatetime(tc.startDatetime, 6)
+			require.NoError(t, err)
+
+			// Create input vectors
+			ivecs := make([]*vector.Vector, 3)
+			ivecs[0], err = vector.NewConstFixed(types.T_datetime.ToType(), startDt, 1, proc.Mp())
+			require.NoError(t, err)
+			ivecs[1], err = vector.NewConstFixed(types.T_int64.ToType(), tc.interval, 1, proc.Mp())
+			require.NoError(t, err)
+			ivecs[2], err = vector.NewConstFixed(types.T_int64.ToType(), int64(tc.intervalType), 1, proc.Mp())
+			require.NoError(t, err)
+
+			// Create result vector
+			result := vector.NewFunctionResultWrapper(types.T_datetime.ToType(), proc.Mp())
+			err = result.PreExtendAndReset(1)
+			require.NoError(t, err)
+
+			// Call DatetimeAdd
+			err = DatetimeAdd(ivecs, result, proc, 1, nil)
+			require.NoError(t, err, tc.description)
+
+			// Check result
+			resultVec := result.GetResultVector()
+			if tc.shouldBeNull {
+				require.True(t, resultVec.GetNulls().Contains(0),
+					"%s: Result should be NULL", tc.description)
+			} else {
+				require.False(t, resultVec.GetNulls().Contains(0),
+					"%s: Result should not be NULL", tc.description)
+				resultDt := vector.MustFixedColNoTypeCheck[types.Datetime](resultVec)[0]
+				resultYear, _, _, _ := resultDt.ToDate().Calendar(true)
+				require.GreaterOrEqual(t, resultYear, int32(1),
+					"%s: Result year should be >= 1", tc.description)
+			}
+
+			// Cleanup
+			for _, v := range ivecs {
+				if v != nil {
+					v.Free(proc.Mp())
+				}
+			}
+			if result != nil {
+				result.Free()
+			}
+		})
+	}
+}
+
+// TestDateAddYearZeroBoundary tests boundary cases around year 0
+func TestDateAddYearZeroBoundary(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	testCases := []struct {
+		name         string
+		startDate    string
+		interval     int64
+		intervalType types.IntervalType
+		shouldBeNull bool
+		description  string
+	}{
+		{
+			name:         "DATE_ADD('1970-01-01', INTERVAL -1970 YEAR) should return NULL",
+			startDate:    "1970-01-01",
+			interval:     -1970,
+			intervalType: types.Year,
+			shouldBeNull: true,
+			description:  "Subtracting 1970 years from 1970-01-01 should return NULL (year would be 0)",
+		},
+		{
+			name:         "DATE_ADD('2000-01-01', INTERVAL -2000 YEAR) should return NULL",
+			startDate:    "2000-01-01",
+			interval:     -2000,
+			intervalType: types.Year,
+			shouldBeNull: true,
+			description:  "Subtracting 2000 years from 2000-01-01 should return NULL (year would be 0)",
+		},
+		{
+			name:         "DATE_ADD('2000-01-01', INTERVAL -24000 MONTH) should return NULL",
+			startDate:    "2000-01-01",
+			interval:     -24000,
+			intervalType: types.Month,
+			shouldBeNull: true,
+			description:  "Subtracting 24000 months from 2000-01-01 should return NULL (year would be 0)",
+		},
+		{
+			name:         "DATE_ADD('2000-06-15', INTERVAL -24005 MONTH) should return NULL",
+			startDate:    "2000-06-15",
+			interval:     -24005,
+			intervalType: types.Month,
+			shouldBeNull: true,
+			description:  "Subtracting 24005 months from 2000-06-15 should return NULL",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			startDate, err := types.ParseDateCast(tc.startDate)
+			require.NoError(t, err)
+
+			// Create input vectors
+			ivecs := make([]*vector.Vector, 3)
+			ivecs[0], err = vector.NewConstFixed(types.T_date.ToType(), startDate, 1, proc.Mp())
+			require.NoError(t, err)
+			ivecs[1], err = vector.NewConstFixed(types.T_int64.ToType(), tc.interval, 1, proc.Mp())
+			require.NoError(t, err)
+			ivecs[2], err = vector.NewConstFixed(types.T_int64.ToType(), int64(tc.intervalType), 1, proc.Mp())
+			require.NoError(t, err)
+
+			// Create result vector
+			result := vector.NewFunctionResultWrapper(types.T_date.ToType(), proc.Mp())
+			err = result.PreExtendAndReset(1)
+			require.NoError(t, err)
+
+			// Call DateAdd
+			err = DateAdd(ivecs, result, proc, 1, nil)
+			require.NoError(t, err, tc.description)
+
+			// Check result
+			resultVec := result.GetResultVector()
+			if tc.shouldBeNull {
+				require.True(t, resultVec.GetNulls().Contains(0),
+					"%s: Result should be NULL", tc.description)
+			} else {
+				require.False(t, resultVec.GetNulls().Contains(0),
+					"%s: Result should not be NULL", tc.description)
+			}
+
+			// Cleanup
+			for _, v := range ivecs {
+				if v != nil {
+					v.Free(proc.Mp())
 				}
 			}
 			if result != nil {
