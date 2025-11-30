@@ -9086,3 +9086,45 @@ func TestTimestampDiffStringWithTCharErrorHandling(t *testing.T) {
 		})
 	}
 }
+
+func Test_doTimestampSub_Edge(t *testing.T) {
+	// diff == math.MaxInt64
+	_, err := doTimestampSub(nil, types.Timestamp(0), math.MaxInt64, types.Year)
+	require.Error(t, err)
+
+	// diff == IntervalNumMAX+1
+	_, err = doTimestampSub(nil, types.Timestamp(0), int64(types.IntervalNumMAX)+1, types.Year)
+	require.Error(t, err)
+
+	// !success
+	// This can occur if you start from a large timestamp near the upper boundary (e.g. 9999-12-31 23:59:59) and "add" (i.e. -diff > 0) a positive interval.
+	// For example:
+	maxTS, _ := types.ParseTimestamp(time.UTC, "9999-12-31 23:59:59", 0)
+	_, err = doTimestampSub(time.UTC, maxTS, -1, types.Day) // -diff > 0, so actually doing maxTS + 1 day (overflow)
+	require.Error(t, err)
+}
+
+func Test_doDatetimeSub_Edge(t *testing.T) {
+	// diff == math.MaxInt64
+	_, err := doDatetimeSub(types.Datetime(0), math.MaxInt64, types.Year)
+	require.Error(t, err)
+
+	// diff == IntervalNumMAX+1
+	_, err = doDatetimeSub(types.Datetime(0), int64(types.IntervalNumMAX)+1, types.Year)
+	require.Error(t, err)
+
+	// !success
+	maxDT, _ := types.ParseDatetime("9999-12-31 23:59:59", 6)
+	_, err = doDatetimeSub(maxDT, -1, types.Day) // -diff > 0, so actually doing maxDT + 1 day (overflow)
+	require.Error(t, err)
+}
+
+func Test_doDateStringSub_Edge(t *testing.T) {
+	// diff == math.MaxInt64
+	_, err := doDateStringSub("2024-01-01 00:00:00", math.MaxInt64, types.Year)
+	require.Error(t, err)
+
+	// diff == IntervalNumMAX+1
+	_, err = doDateStringSub("2024-01-01 00:00:00", int64(types.IntervalNumMAX)+1, types.Year)
+	require.Error(t, err)
+}

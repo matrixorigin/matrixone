@@ -3722,32 +3722,10 @@ func doDatetimeSub(start types.Datetime, diff int64, iTyp types.IntervalType) (t
 	if success {
 		return dt, nil
 	} else {
-		// MySQL behavior: overflow should return NULL
-		// Check if it's maximum overflow (negative diff means subtracting, so -diff > 0 means adding)
-		if -diff > 0 {
-			// Maximum overflow: return special error to indicate NULL should be returned
-			return 0, datetimeOverflowMaxError
-		} else {
-			// Minimum overflow: check if year is out of valid range
-			var resultYear int64
-			startYear := int64(start.Year())
-			switch iTyp {
-			case types.Year:
-				resultYear = startYear - diff // diff is negative, so subtracting negative = adding
-			case types.Month:
-				resultYear = startYear - diff/12
-			case types.Quarter:
-				resultYear = startYear - (diff*3)/12
-			default:
-				resultYear = startYear
-			}
-			if resultYear < types.MinDatetimeYear || resultYear > types.MaxDatetimeYear {
-				// MySQL behavior: year out of valid range returns NULL (overflow)
-				return 0, datetimeOverflowMaxError
-			}
-			// Minimum overflow within valid year range: return zero datetime
-			return types.ZeroDatetime, nil
-		}
+		// MySQL behavior: if AddInterval returns success=false, the result date is invalid
+		// (out of valid range 0001-01-01 to 9999-12-31, or invalid date like Feb 30)
+		// Return NULL (datetimeOverflowMaxError) for all invalid cases
+		return 0, datetimeOverflowMaxError
 	}
 }
 
@@ -3824,33 +3802,10 @@ func doTimestampSub(loc *time.Location, start types.Timestamp, diff int64, iTyp 
 	if success {
 		return dt.ToTimestamp(loc), nil
 	} else {
-		// MySQL behavior: overflow should return NULL
-		// Check if it's maximum overflow (negative diff means subtracting, so -diff > 0 means adding)
-		if -diff > 0 {
-			// Maximum overflow: return special error to indicate NULL should be returned
-			return 0, datetimeOverflowMaxError
-		} else {
-			// Minimum overflow: check if year is out of valid range
-			startDt := start.ToDatetime(loc)
-			var resultYear int64
-			startYear := int64(startDt.Year())
-			switch iTyp {
-			case types.Year:
-				resultYear = startYear - diff // diff is negative, so subtracting negative = adding
-			case types.Month:
-				resultYear = startYear - diff/12
-			case types.Quarter:
-				resultYear = startYear - (diff*3)/12
-			default:
-				resultYear = startYear
-			}
-			if resultYear < types.MinDatetimeYear || resultYear > types.MaxDatetimeYear {
-				// MySQL behavior: year out of valid range returns NULL (overflow)
-				return 0, datetimeOverflowMaxError
-			}
-			// Minimum overflow within valid year range: return zero timestamp
-			return types.Timestamp(0), nil
-		}
+		// MySQL behavior: if AddInterval returns success=false, the result date is invalid
+		// (out of valid range 0001-01-01 to 9999-12-31, or invalid date like Feb 30)
+		// Return NULL (datetimeOverflowMaxError) for all invalid cases
+		return 0, datetimeOverflowMaxError
 	}
 }
 
