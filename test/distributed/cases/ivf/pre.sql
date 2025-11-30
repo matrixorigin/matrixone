@@ -1,4 +1,3 @@
-SET experimental_ivf_index = 1;
 create database if not exists dd1;
 use dd1;
 CREATE TABLE `mini_vector_data` (`id` VARCHAR(64) NOT NULL, `text` TEXT DEFAULT NULL, `vec` vecf32(8) DEFAULT NULL COMMENT '8-dim embedding vector', `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (`id`));
@@ -15,5 +14,4 @@ INSERT INTO mini_vector_data (id, text, vec) VALUES ('id9','testing vectors','[0
 INSERT INTO mini_vector_data (id, text, vec) VALUES ('id10','additional entry','[0.19,-0.22,0.33,0.77,-0.04,0.12,0.58,-0.31]');
 WITH q AS (SELECT id, text, l2_distance(vec, '[0.1,-0.2,0.3,0.4,-0.1,0.2,0.0,0.5]') AS dist FROM mini_vector_data) SELECT * FROM q ORDER BY dist LIMIT 5 by rank with option 'mode=pre';
 WITH q AS (SELECT id, text, l2_distance(vec, '[0.1,-0.2,0.3,0.4,-0.1,0.2,0.0,0.5]') AS dist FROM mini_vector_data) SELECT * FROM q ORDER BY dist LIMIT 5 by rank with option 'mode=post';
-SET experimental_ivf_index = 0;
 drop database if exists dd1;
