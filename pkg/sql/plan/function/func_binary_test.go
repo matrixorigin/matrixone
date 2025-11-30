@@ -8068,8 +8068,18 @@ func TestTimestampAddMinimumValidDate(t *testing.T) {
 			} else {
 				require.False(t, resultVec.GetNulls().Contains(0),
 					"%s: Result should not be NULL", tc.description)
-				resultDt := vector.MustFixedColNoTypeCheck[types.Datetime](resultVec)[0]
-				resultYear, _, _, _ := resultDt.ToDate().Calendar(true)
+				// Check result type - can be DATE or DATETIME depending on unit type
+				resultType := resultVec.GetType().Oid
+				var resultYear int32
+				if resultType == types.T_date {
+					// Result is DATE type (for date units like DAY, WEEK, MONTH, etc.)
+					resultDate := vector.MustFixedColNoTypeCheck[types.Date](resultVec)[0]
+					resultYear, _, _, _ = resultDate.Calendar(true)
+				} else {
+					// Result is DATETIME type (for time units like HOUR, MINUTE, SECOND, etc.)
+					resultDt := vector.MustFixedColNoTypeCheck[types.Datetime](resultVec)[0]
+					resultYear, _, _, _ = resultDt.ToDate().Calendar(true)
+				}
 				require.GreaterOrEqual(t, resultYear, int32(1),
 					"%s: Result year should be >= 1", tc.description)
 			}
