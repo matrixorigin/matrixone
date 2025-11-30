@@ -5735,12 +5735,6 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 4,
 				args:       []types.T{types.T_char, types.T_int64, types.T_date},
 				retType: func(parameters []types.Type) types.Type {
-					// Return DATETIME type to match MySQL behavior
-					// MySQL behavior: DATE input + date unit → DATE output, DATE input + time unit → DATETIME output
-					// Since retType cannot know the runtime unit at compile time, return DATETIME conservatively
-					// At runtime, TimestampAddDate will use TempSetType appropriately:
-					// - For time units: DATETIME with scale 0 (HOUR/MINUTE/SECOND) or 6 (MICROSECOND)
-					// - For date units: DATETIME with scale 0, but formatted as DATE when time is 00:00:00
 					return types.T_datetime.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
@@ -5771,9 +5765,6 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 7,
 				args:       []types.T{types.T_char, types.T_int64, types.T_char},
 				retType: func(parameters []types.Type) types.Type {
-					// Return type depends on the unit parameter and input string format (runtime value)
-					// Default to DATETIME, but will be changed to DATE at runtime for date units with DATE format strings
-					// This matches MySQL behavior: DATE for date units with DATE format strings, DATETIME otherwise
 					return types.T_datetime.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
