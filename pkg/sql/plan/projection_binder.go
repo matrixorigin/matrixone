@@ -382,14 +382,35 @@ func (b *ProjectionBinder) resetInterval(e *Expr) (*Expr, error) {
 	}
 
 	// For other cases (non-time units, integer types, NULL values, or non-literal expressions):
-	// Cast to int64 and let execution handle NULL properly
+	// Must use executor to evaluate and return constant (window.go expects Expr_Lit)
 	typ := &plan.Type{Id: int32(types.T_int64)}
 	numberExpr, err := appendCastBeforeExpr(b.GetContext(), e1, *typ)
 	if err != nil {
 		return nil, err
 	}
 
-	e.Expr.(*plan.Expr_List).List.List[0] = numberExpr
+	executor, err := colexec.NewExpressionExecutor(b.builder.compCtx.GetProcess(), numberExpr)
+	if err != nil {
+		return nil, err
+	}
+	defer executor.Free()
+	vec, err := executor.Eval(b.builder.compCtx.GetProcess(), []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+	if err != nil {
+		return nil, err
+	}
+	c := rule.GetConstantValue(vec, false, 0)
+
+	var finalValue int64
+	if c.Isnull {
+		// NULL interval: use special marker value
+		finalValue = math.MaxInt64
+	} else if ival, ok := c.Value.(*plan.Literal_I64Val); ok {
+		finalValue = ival.I64Val
+	} else {
+		return nil, moerr.NewInvalidInput(b.GetContext(), "invalid interval value")
+	}
+
+	e.Expr.(*plan.Expr_List).List.List[0] = makePlan2Int64ConstExprWithType(finalValue)
 	e.Expr.(*plan.Expr_List).List.List[1] = makePlan2Int64ConstExprWithType(int64(intervalType))
 	return e, nil
 }

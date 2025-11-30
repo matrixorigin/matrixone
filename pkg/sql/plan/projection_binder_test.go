@@ -726,42 +726,42 @@ func TestProjectionBinderResetIntervalComprehensive(t *testing.T) {
 			expectedIntervalVal:  1800000000,
 			expectedIntervalType: types.MicroSecond,
 		},
-		// Test int64 (returns cast expression, value computed at execution time)
+		// Test int64 (no conversion for time units, returns constant)
 		{
 			name:                 "INTERVAL 1 SECOND (int64)",
 			intervalValueExpr:    makeInt64ConstForProjection(1),
 			intervalUnit:         "SECOND",
+			expectedIntervalVal:  1,
 			expectedIntervalType: types.Second,
-			returnsCastExpr:      true, // int64 returns cast expression
 		},
 		{
 			name:                 "INTERVAL 2 MINUTE (int64)",
 			intervalValueExpr:    makeInt64ConstForProjection(2),
 			intervalUnit:         "MINUTE",
+			expectedIntervalVal:  2,
 			expectedIntervalType: types.Minute,
-			returnsCastExpr:      true, // int64 returns cast expression
 		},
-		// Test non-time units with float64 (returns cast expression, value computed at execution time)
+		// Test non-time units with float64 (converted to int64 via executor)
 		{
 			name:                 "INTERVAL 1.5 MONTH (float64, non-time unit)",
 			intervalValueExpr:    makeFloat64ConstForProjection(1.5),
 			intervalUnit:         "MONTH",
+			expectedIntervalVal:  2, // 1.5 cast to int64 = 2
 			expectedIntervalType: types.Month,
-			returnsCastExpr:      true, // non-time unit returns cast expression
 		},
 		{
 			name:                 "INTERVAL 1.5 YEAR (float64, non-time unit)",
 			intervalValueExpr:    makeFloat64ConstForProjection(1.5),
 			intervalUnit:         "YEAR",
+			expectedIntervalVal:  2, // 1.5 cast to int64 = 2
 			expectedIntervalType: types.Year,
-			returnsCastExpr:      true, // non-time unit returns cast expression
 		},
 		{
 			name:                 "INTERVAL 1.5 WEEK (float64, non-time unit)",
 			intervalValueExpr:    makeFloat64ConstForProjection(1.5),
 			intervalUnit:         "WEEK",
+			expectedIntervalVal:  2, // 1.5 cast to int64 = 2
 			expectedIntervalType: types.Week,
-			returnsCastExpr:      true, // non-time unit returns cast expression
 		},
 		// Test error cases
 		{
@@ -881,38 +881,37 @@ func TestProjectionBinderResetIntervalAdditionalCoverage(t *testing.T) {
 			expectedIntervalVal:  1000000,
 			expectedIntervalType: types.MicroSecond,
 		},
-		// Test null decimal64 constant (covers c.Isnull branch, hasValue = false)
-		// Note: When hasValue is false, finalValue remains 0 (default value)
-		// This may be a bug, but we test the current behavior
+		// Test null decimal64 constant - goes through fallback executor path
+		// NULL values return MaxInt64 marker for consistent handling at execution time
 		{
 			name:                 "INTERVAL NULL SECOND (decimal64, null value)",
 			intervalValueExpr:    makeNullDecimal64ConstForProjection(),
 			intervalUnit:         "SECOND",
-			expectedIntervalVal:  0,            // When hasValue is false, finalValue is 0
-			expectedIntervalType: types.Second, // intervalType remains unchanged when hasValue is false
+			expectedIntervalVal:  math.MaxInt64, // NULL marker
+			expectedIntervalType: types.Second,
 		},
-		// Test null decimal128 constant (covers c.Isnull branch, hasValue = false)
+		// Test null decimal128 constant - goes through fallback executor path
 		{
 			name:                 "INTERVAL NULL SECOND (decimal128, null value)",
 			intervalValueExpr:    makeNullDecimal128ConstForProjection(),
 			intervalUnit:         "SECOND",
-			expectedIntervalVal:  0,
+			expectedIntervalVal:  math.MaxInt64, // NULL marker
 			expectedIntervalType: types.Second,
 		},
-		// Test null float64 constant (covers c.Isnull branch, hasValue = false)
+		// Test null float64 constant - goes through fallback executor path
 		{
 			name:                 "INTERVAL NULL SECOND (float64, null value)",
 			intervalValueExpr:    makeNullFloat64ConstForProjection(),
 			intervalUnit:         "SECOND",
-			expectedIntervalVal:  0,
+			expectedIntervalVal:  math.MaxInt64, // NULL marker
 			expectedIntervalType: types.Second,
 		},
-		// Test null float32 constant (covers c.Isnull branch, hasValue = false)
+		// Test null float32 constant - goes through fallback executor path
 		{
 			name:                 "INTERVAL NULL SECOND (float32, null value)",
 			intervalValueExpr:    makeNullFloat32ConstForProjection(),
 			intervalUnit:         "SECOND",
-			expectedIntervalVal:  0,
+			expectedIntervalVal:  math.MaxInt64, // NULL marker
 			expectedIntervalType: types.Second,
 		},
 		// Test fallback branch: when cast to float64 returns unexpected type
@@ -927,25 +926,24 @@ func TestProjectionBinderResetIntervalAdditionalCoverage(t *testing.T) {
 			expectedIntervalVal:  1000000,
 			expectedIntervalType: types.MicroSecond,
 		},
-		// Test error case: when fallback cast to int64 returns null (covers line 407)
-		// This requires cast to int64 to return null, which is hard to construct
-		// But we can test with a null decimal64 value that might trigger this
+		// Test fallback path with null decimal64 - returns MaxInt64 marker
 		{
-			name:                 "INTERVAL NULL SECOND (decimal64, fallback to int64 returns null)",
+			name:                 "INTERVAL NULL SECOND (decimal64, fallback returns null marker)",
 			intervalValueExpr:    makeNullDecimal64ConstForProjection(),
 			intervalUnit:         "SECOND",
-			expectError:          false, // Currently doesn't error, but hasValue = false
-			expectedIntervalVal:  0,
+			expectError:          false,
+			expectedIntervalVal:  math.MaxInt64, // NULL marker
 			expectedIntervalType: types.Second,
 		},
-		// Test NULL handling for non-time units: should return cast expression (not error)
-		// The NULL will be handled at execution time (consistent with resetDateFunctionArgs)
+		// Test NULL handling for non-time units: returns MaxInt64 marker
+		// The MaxInt64 marker will be detected at execution time and return NULL
 		{
 			name:                 "INTERVAL NULL WEEK (int64, null value)",
 			intervalValueExpr:    makeNullInt64ConstForProjection(),
 			intervalUnit:         "WEEK",
 			expectError:          false,
-			expectedIntervalType: types.Week, // intervalType remains unchanged
+			expectedIntervalVal:  math.MaxInt64, // NULL marker
+			expectedIntervalType: types.Week,
 		},
 	}
 
