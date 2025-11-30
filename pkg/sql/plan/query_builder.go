@@ -3616,8 +3616,19 @@ func (builder *QueryBuilder) bindTimeWindow(
 
 	t := types.Type{Oid: types.T(ts.Typ.Id)}
 	if !t.IsTemporal() {
-		err = moerr.NewNotSupportedf(builder.GetContext(), "the type of %s must be temporal in time window", tree.String(col, dialect.MYSQL))
-		return
+		// If the column type is string (VARCHAR/CHAR/TEXT), try to cast it to DATETIME
+		// This allows date_add() results (which return VARCHAR for MySQL compatibility) to be used in time windows
+		if t.Oid == types.T_varchar || t.Oid == types.T_char || t.Oid == types.T_text {
+			ts, err = appendCastBeforeExpr(builder.GetContext(), ts, plan.Type{
+				Id: int32(types.T_datetime),
+			})
+			if err != nil {
+				return
+			}
+		} else {
+			err = moerr.NewNotSupportedf(builder.GetContext(), "the type of %s (%s) must be temporal in time window", tree.String(col, dialect.MYSQL), t.String())
+			return
+		}
 	}
 
 	boundTimeWindowOrderBy = &plan.OrderBySpec{

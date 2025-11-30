@@ -1,65 +1,141 @@
 SELECT TIMESTAMPADD(DAY, 5, '2024-12-20') AS result1;
-invalid input: column DAY does not exist
+result1
+2024-12-25
 SELECT TIMESTAMPADD(DAY, 5, '2024-12-20') AS date_add_days;
-invalid input: column DAY does not exist
+date_add_days
+2024-12-25
 SELECT TIMESTAMPADD(DAY, -5, '2024-12-20') AS date_sub_days;
-invalid input: column DAY does not exist
+date_sub_days
+2024-12-15
 SELECT TIMESTAMPADD(HOUR, 24, '2024-12-20') AS date_add_hours;
-invalid input: column HOUR does not exist
+date_add_hours
+2024-12-21 00:00:00
 SELECT TIMESTAMPADD(MONTH, 1, '2024-12-20') AS date_add_month;
-invalid input: column MONTH does not exist
+date_add_month
+2025-01-20
 SELECT TIMESTAMPADD(YEAR, 1, '2024-12-20') AS date_add_year;
-invalid input: column YEAR does not exist
+date_add_year
+2025-12-20
 SELECT TIMESTAMPADD(DAY, 5, '2024-12-20 10:30:45') AS datetime_add_days;
-invalid input: column DAY does not exist
+datetime_add_days
+2024-12-25 10:30:45
 SELECT TIMESTAMPADD(HOUR, 2, '2024-12-20 10:30:45') AS datetime_add_hours;
-invalid input: column HOUR does not exist
+datetime_add_hours
+2024-12-20 12:30:45
 SELECT TIMESTAMPADD(MINUTE, 30, '2024-12-20 10:30:45') AS datetime_add_minutes;
-invalid input: column MINUTE does not exist
+datetime_add_minutes
+2024-12-20 11:00:45
 SELECT TIMESTAMPADD(SECOND, 60, '2024-12-20 10:30:45') AS datetime_add_seconds;
-invalid input: column SECOND does not exist
+datetime_add_seconds
+2024-12-20 10:31:45
 SELECT TIMESTAMPADD(DAY, 5, TIMESTAMP('2024-12-20 10:30:45')) AS timestamp_add_days;
-invalid input: column DAY does not exist
+timestamp_add_days
+2024-12-25 10:30:45
 SELECT TIMESTAMPADD(MICROSECOND, 1000000, '2024-12-20 10:30:45') AS add_microseconds;
-invalid input: column MICROSECOND does not exist
+add_microseconds
+2024-12-20 10:30:46
 SELECT TIMESTAMPADD(SECOND, 60, '2024-12-20 10:30:45') AS add_seconds;
-invalid input: column SECOND does not exist
+add_seconds
+2024-12-20 10:31:45
 SELECT TIMESTAMPADD(MINUTE, 60, '2024-12-20 10:30:45') AS add_minutes;
-invalid input: column MINUTE does not exist
+add_minutes
+2024-12-20 11:30:45
 SELECT TIMESTAMPADD(HOUR, 24, '2024-12-20 10:30:45') AS add_hours;
-invalid input: column HOUR does not exist
+add_hours
+2024-12-21 10:30:45
 SELECT TIMESTAMPADD(DAY, 7, '2024-12-20 10:30:45') AS add_days;
-invalid input: column DAY does not exist
+add_days
+2024-12-27 10:30:45
 SELECT TIMESTAMPADD(WEEK, 1, '2024-12-20 10:30:45') AS add_weeks;
-invalid input: column WEEK does not exist
+add_weeks
+2024-12-27 10:30:45
 SELECT TIMESTAMPADD(MONTH, 1, '2024-12-20 10:30:45') AS add_months;
-invalid input: column MONTH does not exist
+add_months
+2025-01-20 10:30:45
 SELECT TIMESTAMPADD(QUARTER, 1, '2024-12-20 10:30:45') AS add_quarters;
-invalid input: column QUARTER does not exist
+add_quarters
+2025-03-20 10:30:45
 SELECT TIMESTAMPADD(YEAR, 1, '2024-12-20 10:30:45') AS add_years;
-invalid input: column YEAR does not exist
+add_years
+2025-12-20 10:30:45
 SELECT TIMESTAMPADD(DAY, -5, '2024-12-20') AS sub_days;
-invalid input: column DAY does not exist
+sub_days
+2024-12-15
 SELECT TIMESTAMPADD(HOUR, -2, '2024-12-20 10:30:45') AS sub_hours;
-invalid input: column HOUR does not exist
+sub_hours
+2024-12-20 08:30:45
 SELECT TIMESTAMPADD(DAY, 5, NULL) AS null_date;
-invalid input: column DAY does not exist
+null_date
+null
 SELECT TIMESTAMPADD(DAY, NULL, '2024-12-20') AS null_interval;
-invalid input: column DAY does not exist
+null_interval
+null
 CREATE TABLE t1(d DATE);
 INSERT INTO t1 VALUES ('2024-12-20'), ('2024-01-01'), ('2024-06-15');
 SELECT d, TIMESTAMPADD(DAY, 5, d) AS added_date FROM t1;
-invalid input: column DAY does not exist
+d    added_date
+2024-12-20    2024-12-25
+2024-01-01    2024-01-06
+2024-06-15    2024-06-20
+DROP TABLE t1;
+CREATE TABLE t1(d DATE);
+INSERT INTO t1 VALUES ('2024-12-20');
+SELECT TIMESTAMPADD(HOUR, 2, d) AS date_plus_hour FROM t1;
+date_plus_hour
+2024-12-20 02:00:00
+SELECT TIMESTAMPADD(MINUTE, 30, d) AS date_plus_minute FROM t1;
+date_plus_minute
+2024-12-20 00:30:00
+SELECT TIMESTAMPADD(SECOND, 45, d) AS date_plus_second FROM t1;
+date_plus_second
+2024-12-20 00:00:45
+SELECT TIMESTAMPADD(MICROSECOND, 1000000, d) AS date_plus_microsecond FROM t1;
+date_plus_microsecond
+2024-12-20 00:00:01
+DROP TABLE t1;
+CREATE TABLE t1(d DATE);
+INSERT INTO t1 VALUES ('2024-12-20');
+SELECT TIMESTAMPADD(DAY, 5, d) AS date_plus_day FROM t1;
+date_plus_day
+2024-12-25
+SELECT TIMESTAMPADD(WEEK, 1, d) AS date_plus_week FROM t1;
+date_plus_week
+2024-12-27
+SELECT TIMESTAMPADD(MONTH, 1, d) AS date_plus_month FROM t1;
+date_plus_month
+2025-01-20
+SELECT TIMESTAMPADD(QUARTER, 1, d) AS date_plus_quarter FROM t1;
+date_plus_quarter
+2025-03-20
+SELECT TIMESTAMPADD(YEAR, 1, d) AS date_plus_year FROM t1;
+date_plus_year
+2025-12-20
 DROP TABLE t1;
 CREATE TABLE t1(dt DATETIME);
 INSERT INTO t1 VALUES ('2024-12-20 10:30:45'), ('2024-01-01 00:00:00'), ('2024-06-15 12:00:00');
 SELECT dt, TIMESTAMPADD(HOUR, 2, dt) AS added_datetime FROM t1;
-invalid input: column HOUR does not exist
+dt    added_datetime
+2024-12-20 10:30:45    2024-12-20 12:30:45
+2024-01-01 00:00:00    2024-01-01 02:00:00
+2024-06-15 12:00:00    2024-06-15 14:00:00
 DROP TABLE t1;
 CREATE TABLE t1(d DATE);
 INSERT INTO t1 VALUES ('2024-12-20'), ('2024-01-01'), ('2024-06-15');
 SELECT * FROM t1 WHERE TIMESTAMPADD(DAY, 5, d) > '2024-12-25';
-invalid input: column DAY does not exist
+d
 DROP TABLE t1;
 SELECT TIMESTAMPADD(DAY, 5, '2024-12-20') AS result1, TIMESTAMPADD(HOUR, 12, '2024-12-20 10:30:45') AS result2, TIMESTAMPADD(MONTH, 1, '2024-12-20') AS result3;
-invalid input: column DAY does not exist
+result1    result2    result3
+2024-12-25    2024-12-20 22:30:45    2025-01-20
+SELECT TIMESTAMPADD(DAY, 1000000000000, '1970-01-01 00:00:00') AS large_positive_interval;
+large_positive_interval
+null
+SELECT TIMESTAMPADD(DAY, -1000000000000, '1970-01-01 00:00:00') AS large_negative_interval;
+large_negative_interval
+null
+SELECT DATE_ADD('1970-01-01 00:00:00', INTERVAL 1000000000000 DAY) AS date_add_large_positive;
+date_add_large_positive
+null
+SELECT DATE_ADD('1970-01-01 00:00:00', INTERVAL -1000000000000 DAY) AS date_add_large_negative;
+date_add_large_negative
+null

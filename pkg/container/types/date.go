@@ -579,10 +579,21 @@ func (d Date) Calendar(full bool) (year int32, month, day uint8, yday uint16) {
 	// Estimate month on assumption that every month has 31 days.
 	// The estimate may be too low by at most one month, so adjust.
 	month = uint8(d / 31)
+	// Check bounds: daysBefore array has 13 elements (0-12), so month+1 must be <= 12
+	// If month is too large, the date is invalid (out of valid datetime range)
+	if month+1 >= uint8(len(daysBefore)) {
+		// Return invalid date (year=0) to indicate invalid date
+		// ValidDatetime will catch this and return false
+		return 0, 0, 0, 0
+	}
 	end := daysBefore[month+1]
 	var begin uint16
 	if uint16(d) >= end {
 		month++
+		// Check bounds again after increment
+		if month+1 >= uint8(len(daysBefore)) {
+			return 0, 0, 0, 0
+		}
 		begin = end
 	} else {
 		begin = daysBefore[month]

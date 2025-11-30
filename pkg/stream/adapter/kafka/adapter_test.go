@@ -344,14 +344,14 @@ func TestPopulateBatchFromMSGWithJSON(t *testing.T) {
 		},
 		{
 			"test_name3",
-			nil, // int32 overflow
-			nil, // int16 overflow
-			nil, // int8 overflow
-			nil, // uint8 overflow
-			nil, // uint64 overflow
-			nil, // valid float32
-			nil, // invalid datetime
-			nil, // invalid JSON
+			nil,                               // int32 overflow
+			nil,                               // int16 overflow
+			nil,                               // int8 overflow
+			nil,                               // uint8 overflow
+			nil,                               // uint64 overflow
+			nil,                               // valid float32
+			types.Datetime(63745056000000000), // valid datetime (ISO 8601 format)
+			nil,                               // invalid JSON
 		},
 	}
 

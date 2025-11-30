@@ -1,0 +1,62 @@
+SELECT TIMESTAMPDIFF(DAY, DATE('2018-01-01'), DATE('2018-01-31')) AS date_diff_days;
+date_diff_days
+30
+SELECT TIMESTAMPDIFF(MONTH, DATE('2018-01-01'), DATE('2018-03-01')) AS date_diff_months;
+date_diff_months
+2
+SELECT TIMESTAMPDIFF(YEAR, DATE('2018-01-01'), DATE('2019-01-01')) AS date_diff_years;
+date_diff_years
+1
+SELECT TIMESTAMPDIFF(DAY, TIMESTAMP('2018-01-01 00:00:00'), TIMESTAMP('2018-01-31 23:59:59')) AS timestamp_diff_days;
+timestamp_diff_days
+30
+SELECT TIMESTAMPDIFF(HOUR, TIMESTAMP('2018-01-01 00:00:00'), TIMESTAMP('2018-01-01 12:00:00')) AS timestamp_diff_hours;
+timestamp_diff_hours
+12
+SELECT TIMESTAMPDIFF(DAY, '2018-01-01', '2018-01-31') AS string_date_diff_days;
+string_date_diff_days
+30
+SELECT TIMESTAMPDIFF(MONTH, '2018-01-01', '2018-03-01') AS string_date_diff_months;
+string_date_diff_months
+2
+SELECT TIMESTAMPDIFF(DAY, '2017-12-01 12:15:12', '2018-01-01 7:18:20') AS string_datetime_diff_days;
+string_datetime_diff_days
+30
+SELECT TIMESTAMPDIFF(HOUR, '2017-12-01 12:15:12', '2018-01-01 7:18:20') AS string_datetime_diff_hours;
+string_datetime_diff_hours
+739
+SELECT TIMESTAMPDIFF(DAY, DATE('2018-01-01'), '2018-01-31 12:00:00') AS mixed_date_datetime;
+mixed_date_datetime
+30
+SELECT TIMESTAMPDIFF(DAY, '2018-01-01', '2018-01-31 12:00:00') AS mixed_string_datetime;
+timestampdiff(time_stamp_unit(day), 2018-01-01, 2018-01-31 12:00:00)
+30
+CREATE TABLE t1(d1 DATE, d2 DATE);
+INSERT INTO t1 VALUES ('2018-01-01', '2018-01-31'), ('2018-01-01', '2019-01-01');
+SELECT d1, d2, TIMESTAMPDIFF(DAY, d1, d2) AS diff_days FROM t1;
+d1    d2    diff_days
+2018-01-01    2018-01-31    30
+2018-01-01    2019-01-01    365
+DROP TABLE t1;
+CREATE TABLE t1(ts1 TIMESTAMP, ts2 TIMESTAMP);
+INSERT INTO t1 VALUES ('2018-01-01 00:00:00', '2018-01-01 12:00:00'), ('2018-01-01 00:00:00', '2018-01-02 00:00:00');
+SELECT ts1, ts2, TIMESTAMPDIFF(HOUR, ts1, ts2) AS diff_hours FROM t1;
+ts1    ts2    diff_hours
+2018-01-01 00:00:00    2018-01-01 12:00:00    12
+2018-01-01 00:00:00    2018-01-02 00:00:00    24
+DROP TABLE t1;
+SELECT TIMESTAMPDIFF(DAY, DATE('2018-01-31'), DATE('2018-01-01')) AS negative_date_diff;
+negative_date_diff
+-30
+SELECT TIMESTAMPDIFF(HOUR, TIMESTAMP('2018-01-01 12:00:00'), TIMESTAMP('2018-01-01 00:00:00')) AS negative_timestamp_diff;
+negative_timestamp_diff
+-12
+SELECT TIMESTAMPDIFF(DAY, NULL, DATE('2018-01-31')) AS null_first;
+null_first
+null
+SELECT TIMESTAMPDIFF(DAY, DATE('2018-01-01'), NULL) AS null_second;
+null_second
+null
+SELECT TIMESTAMPDIFF(DAY, NULL, NULL) AS null_both;
+null_both
+null

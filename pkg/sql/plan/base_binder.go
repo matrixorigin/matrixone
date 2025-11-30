@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 
@@ -1380,6 +1381,10 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		if len(args) != 2 {
 			return nil, moerr.NewInvalidArg(ctx, "date_add/date_sub function need two args", len(args))
 		}
+		// MySQL behavior: NULL literal as second argument should return syntax error
+		if isNullExpr(args[1]) {
+			return nil, moerr.NewSyntaxError(ctx, "You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'null)' at line 1")
+		}
 		args, err = resetDateFunction(ctx, args[0], args[1])
 		if err != nil {
 			return nil, err
@@ -1838,6 +1843,33 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			}
 		}
 
+	case "timestampadd":
+		// For TIMESTAMPADD with DATE input, check if unit is constant and adjust return type
+		// MySQL behavior: DATE input + date unit → DATE output, DATE input + time unit → DATETIME output
+		// This ensures GetResultColumnsFromPlan returns correct column type for MySQL protocol layer
+		if len(args) >= 3 && argsType[2].Oid == types.T_date {
+			// Check if first argument (unit) is a constant string
+			if unitExpr, ok := args[0].Expr.(*plan.Expr_Lit); ok && unitExpr.Lit != nil && !unitExpr.Lit.Isnull {
+				if sval, ok := unitExpr.Lit.GetValue().(*plan.Literal_Sval); ok {
+					unitStr := strings.ToUpper(sval.Sval)
+					// Parse interval type
+					iTyp, err := types.IntervalTypeOf(unitStr)
+					if err == nil {
+						// Check if it's a date unit (DAY, WEEK, MONTH, QUARTER, YEAR)
+						isDateUnit := iTyp == types.Day || iTyp == types.Week ||
+							iTyp == types.Month || iTyp == types.Quarter ||
+							iTyp == types.Year
+						if isDateUnit {
+							// Return DATE type for date units (MySQL compatible)
+							returnType = types.T_date.ToType()
+						}
+						// For time units (HOUR, MINUTE, SECOND, MICROSECOND), keep DATETIME (from retType)
+					}
+				}
+			}
+			// If unit is not constant, keep DATETIME (conservative approach)
+		}
+
 	case "python_user_defined_function":
 		size := (argsLength - 2) / 2
 		args = args[:size+1]
@@ -2066,6 +2098,10 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 	firstExpr := intervalExpr.GetList().List[0]
 	secondExpr := intervalExpr.GetList().List[1]
 
+	// MySQL behavior: INTERVAL NULL SECOND is valid and returns NULL at execution time
+	// Only date_add(..., null) (without INTERVAL) should return syntax error
+	// This is handled in resetDateFunction, not here
+
 	intervalTypeStr := secondExpr.GetLit().GetSval()
 	intervalType, err := types.IntervalTypeOf(intervalTypeStr)
 	if err != nil {
@@ -2081,7 +2117,11 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 		returnNum, returnType, err := types.NormalizeInterval(s, intervalType)
 
 		if err != nil {
-			return nil, err
+			// MySQL behavior: invalid interval string should return NULL at execution time, not error at parse time
+			// Use a special marker value (math.MaxInt64) to indicate invalid interval
+			// This will be detected in function execution and return NULL
+			returnNum = math.MaxInt64
+			returnType = intervalType
 		}
 		// "date '2020-10-10' - interval 1 Hour"  will return datetime
 		// so we rewrite "date '2020-10-10' - interval 1 Hour"  to  "date_add(datetime, 1, hour)"
@@ -2121,6 +2161,98 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 		}
 	}
 
+	// For time units (SECOND, MINUTE, HOUR, DAY), we need to handle decimal/float values
+	// by converting them to microseconds. Check if firstExpr is a literal with decimal/float type.
+	isTimeUnit := intervalType == types.Second || intervalType == types.Minute ||
+		intervalType == types.Hour || intervalType == types.Day
+	isDecimalOrFloat := firstExpr.Typ.Id == int32(types.T_decimal64) ||
+		firstExpr.Typ.Id == int32(types.T_decimal128) ||
+		firstExpr.Typ.Id == int32(types.T_float32) ||
+		firstExpr.Typ.Id == int32(types.T_float64)
+
+	// Try to get literal value, either directly or from a cast function
+	var lit *plan.Literal
+	var innerExpr *plan.Expr // The inner expression (for getting scale from cast target type)
+	if firstExpr.GetLit() != nil {
+		lit = firstExpr.GetLit()
+		innerExpr = firstExpr
+	} else if funcExpr, ok := firstExpr.Expr.(*plan.Expr_F); ok && funcExpr.F != nil {
+		// Check if it's a cast function with a literal argument
+		if len(funcExpr.F.Args) > 0 && funcExpr.F.Args[0].GetLit() != nil {
+			lit = funcExpr.F.Args[0].GetLit()
+			innerExpr = firstExpr // Use firstExpr to get the scale from the cast target type
+		}
+	}
+
+	if isTimeUnit && isDecimalOrFloat && lit != nil {
+		// Extract the value from the literal and convert to microseconds
+		var floatVal float64
+		var hasValue bool
+
+		if !lit.Isnull {
+			if dval, ok := lit.Value.(*plan.Literal_Dval); ok {
+				floatVal = dval.Dval
+				hasValue = true
+			} else if fval, ok := lit.Value.(*plan.Literal_Fval); ok {
+				floatVal = float64(fval.Fval)
+				hasValue = true
+			} else if d64val, ok := lit.Value.(*plan.Literal_Decimal64Val); ok {
+				// Convert decimal64 to float64
+				d64 := types.Decimal64(d64val.Decimal64Val.A)
+				scale := innerExpr.Typ.Scale
+				if scale < 0 {
+					scale = 0
+				}
+				floatVal = types.Decimal64ToFloat64(d64, scale)
+				hasValue = true
+			} else if d128val, ok := lit.Value.(*plan.Literal_Decimal128Val); ok {
+				// Convert decimal128 to float64
+				d128 := types.Decimal128{B0_63: uint64(d128val.Decimal128Val.A), B64_127: uint64(d128val.Decimal128Val.B)}
+				scale := innerExpr.Typ.Scale
+				if scale < 0 {
+					scale = 0
+				}
+				floatVal = types.Decimal128ToFloat64(d128, scale)
+				hasValue = true
+			} else if sval, ok := lit.Value.(*plan.Literal_Sval); ok {
+				// Handle string literal (from cast function's first argument)
+				// Try to parse as decimal128 to get the float value
+				d128, scale, err := types.Parse128(sval.Sval)
+				if err == nil {
+					floatVal = types.Decimal128ToFloat64(d128, scale)
+					hasValue = true
+				}
+			}
+		}
+
+		if hasValue {
+			// Convert to microseconds based on interval type
+			var finalValue int64
+			switch intervalType {
+			case types.Second:
+				// Use math.Round to handle floating point precision issues (e.g., 1.000009 * 1000000 = 1000008.9999999999)
+				finalValue = int64(math.Round(floatVal * float64(types.MicroSecsPerSec)))
+			case types.Minute:
+				// Use math.Round to handle floating point precision issues
+				finalValue = int64(math.Round(floatVal * float64(types.MicroSecsPerSec*types.SecsPerMinute)))
+			case types.Hour:
+				// Use math.Round to handle floating point precision issues
+				finalValue = int64(math.Round(floatVal * float64(types.MicroSecsPerSec*types.SecsPerHour)))
+			case types.Day:
+				// Use math.Round to handle floating point precision issues
+				finalValue = int64(math.Round(floatVal * float64(types.MicroSecsPerSec*types.SecsPerDay)))
+			default:
+				finalValue = int64(floatVal)
+			}
+			return []*Expr{
+				dateExpr,
+				makePlan2Int64ConstExprWithType(finalValue),
+				// Use MicroSecond type since we've converted to microseconds
+				makePlan2Int64ConstExprWithType(int64(types.MicroSecond)),
+			}, nil
+		}
+	}
+
 	numberExpr, err := appendCastBeforeExpr(ctx, firstExpr, *intervalTypeInFunction)
 	if err != nil {
 		return nil, err
@@ -2134,6 +2266,10 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 }
 
 func resetDateFunction(ctx context.Context, dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) {
+	// MySQL behavior: NULL literal as interval argument should return syntax error
+	if isNullExpr(intervalExpr) {
+		return nil, moerr.NewSyntaxError(ctx, "You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'null)' at line 1")
+	}
 	switch intervalExpr.Expr.(type) {
 	case *plan.Expr_List:
 		return resetDateFunctionArgs(ctx, dateExpr, intervalExpr)
@@ -2173,6 +2309,9 @@ func resetIntervalFunctionArgs(ctx context.Context, intervalExpr *Expr) ([]*Expr
 	firstExpr := intervalExpr.GetList().List[0]
 	secondExpr := intervalExpr.GetList().List[1]
 
+	// MySQL behavior: INTERVAL NULL SECOND is valid and returns NULL at execution time
+	// NULL values will be handled at execution time (null1 || null2 check)
+
 	intervalTypeStr := secondExpr.GetLit().GetSval()
 	intervalType, err := types.IntervalTypeOf(intervalTypeStr)
 	if err != nil {
@@ -2187,12 +2326,86 @@ func resetIntervalFunctionArgs(ctx context.Context, intervalExpr *Expr) ([]*Expr
 		s := firstExpr.GetLit().GetSval()
 		returnNum, returnType, err := types.NormalizeInterval(s, intervalType)
 		if err != nil {
-			return nil, err
+			// MySQL behavior: invalid interval string should return NULL at execution time, not error at parse time
+			// Use a special marker value (math.MaxInt64) to indicate invalid interval
+			// This will be detected in function execution and return NULL
+			returnNum = math.MaxInt64
+			returnType = intervalType
 		}
 		return []*Expr{
 			makePlan2Int64ConstExprWithType(returnNum),
 			makePlan2Int64ConstExprWithType(int64(returnType)),
 		}, nil
+	}
+
+	// For time units (SECOND, MINUTE, HOUR, DAY), we need to handle decimal/float values
+	// by converting them to microseconds. Check if firstExpr is a literal with decimal/float type.
+	isTimeUnit := intervalType == types.Second || intervalType == types.Minute ||
+		intervalType == types.Hour || intervalType == types.Day
+	isDecimalOrFloat := firstExpr.Typ.Id == int32(types.T_decimal64) ||
+		firstExpr.Typ.Id == int32(types.T_decimal128) ||
+		firstExpr.Typ.Id == int32(types.T_float32) ||
+		firstExpr.Typ.Id == int32(types.T_float64)
+
+	if isTimeUnit && isDecimalOrFloat && firstExpr.GetLit() != nil {
+		// Extract the value from the literal and convert to microseconds
+		lit := firstExpr.GetLit()
+		var floatVal float64
+		var hasValue bool
+
+		if !lit.Isnull {
+			if dval, ok := lit.Value.(*plan.Literal_Dval); ok {
+				floatVal = dval.Dval
+				hasValue = true
+			} else if fval, ok := lit.Value.(*plan.Literal_Fval); ok {
+				floatVal = float64(fval.Fval)
+				hasValue = true
+			} else if d64val, ok := lit.Value.(*plan.Literal_Decimal64Val); ok {
+				// Convert decimal64 to float64
+				d64 := types.Decimal64(d64val.Decimal64Val.A)
+				scale := firstExpr.Typ.Scale
+				if scale < 0 {
+					scale = 0
+				}
+				floatVal = types.Decimal64ToFloat64(d64, scale)
+				hasValue = true
+			} else if d128val, ok := lit.Value.(*plan.Literal_Decimal128Val); ok {
+				// Convert decimal128 to float64
+				d128 := types.Decimal128{B0_63: uint64(d128val.Decimal128Val.A), B64_127: uint64(d128val.Decimal128Val.B)}
+				scale := firstExpr.Typ.Scale
+				if scale < 0 {
+					scale = 0
+				}
+				floatVal = types.Decimal128ToFloat64(d128, scale)
+				hasValue = true
+			}
+		}
+
+		if hasValue {
+			// Convert to microseconds based on interval type
+			var finalValue int64
+			switch intervalType {
+			case types.Second:
+				// Use math.Round to handle floating point precision issues (e.g., 1.000009 * 1000000 = 1000008.9999999999)
+				finalValue = int64(math.Round(floatVal * float64(types.MicroSecsPerSec)))
+			case types.Minute:
+				// Use math.Round to handle floating point precision issues
+				finalValue = int64(math.Round(floatVal * float64(types.MicroSecsPerSec*types.SecsPerMinute)))
+			case types.Hour:
+				// Use math.Round to handle floating point precision issues
+				finalValue = int64(math.Round(floatVal * float64(types.MicroSecsPerSec*types.SecsPerHour)))
+			case types.Day:
+				// Use math.Round to handle floating point precision issues
+				finalValue = int64(math.Round(floatVal * float64(types.MicroSecsPerSec*types.SecsPerDay)))
+			default:
+				finalValue = int64(floatVal)
+			}
+			return []*Expr{
+				makePlan2Int64ConstExprWithType(finalValue),
+				// Use MicroSecond type since we've converted to microseconds
+				makePlan2Int64ConstExprWithType(int64(types.MicroSecond)),
+			}, nil
+		}
 	}
 
 	numberExpr, err := appendCastBeforeExpr(ctx, firstExpr, *intervalTypeInFunction)

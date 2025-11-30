@@ -2837,12 +2837,95 @@ func TestRowToString(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // datetime
+		// Test 1: Non-const vector with non-null value
 		v := NewVec(types.T_datetime.ToType())
 		scale := types.Datetime(types.MicroSecsPerSec * types.SecsPerDay)
 		err := AppendFixedList(v, []types.Datetime{1 * scale, 2 * scale, 3 * scale, 4 * scale}, nil, mp)
 		require.NoError(t, err)
 		require.Equal(t, "0001-01-03 00:00:00", v.RowToString(1))
 		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+
+		// Test 2: Non-const vector with null value
+		v2 := NewVec(types.T_datetime.ToType())
+		err = AppendFixedList(v2, []types.Datetime{1 * scale, 2 * scale, 3 * scale, 4 * scale}, []bool{false, false, true, false}, mp)
+		require.NoError(t, err)
+		require.Equal(t, "null", v2.RowToString(2))
+		v2.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+
+		// Test 3: Const null vector
+		v3 := NewConstNull(types.T_datetime.ToType(), 1, mp)
+		require.Equal(t, "null", v3.RowToString(0))
+		v3.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+
+		// Test 4: Const vector with null
+		v4, err := NewConstFixed(types.T_datetime.ToType(), 1*scale, 1, mp)
+		require.NoError(t, err)
+		nulls.Add(&v4.nsp, 0)
+		require.Equal(t, "null", v4.RowToString(0))
+		v4.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+
+		// Test 5: Const vector with non-null value
+		v5, err := NewConstFixed(types.T_datetime.ToType(), 2*scale, 1, mp)
+		require.NoError(t, err)
+		require.Equal(t, "0001-01-03 00:00:00", v5.RowToString(0))
+		v5.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+
+		// Test 6: Non-const vector with different scale
+		v6 := NewVec(types.T_datetime.ToType())
+		v6.SetTypeScale(3)
+		err = AppendFixedList(v6, []types.Datetime{1 * scale, 2 * scale}, nil, mp)
+		require.NoError(t, err)
+		// The output should include microseconds with scale 3
+		result := v6.RowToString(0)
+		require.Contains(t, result, "0001-01-02")
+		v6.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+
+		// Test 7: Const vector with different scale
+		v7, err := NewConstFixed(types.T_datetime.ToType(), 2*scale, 1, mp)
+		require.NoError(t, err)
+		v7.SetTypeScale(6)
+		result2 := v7.RowToString(0)
+		require.Contains(t, result2, "0001-01-03")
+		v7.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+
+		// Test 8: Non-const vector with null at index 0
+		v8 := NewVec(types.T_datetime.ToType())
+		err = AppendFixedList(v8, []types.Datetime{1 * scale, 2 * scale}, []bool{true, false}, mp)
+		require.NoError(t, err)
+		require.Equal(t, "null", v8.RowToString(0))
+		require.Equal(t, "0001-01-03 00:00:00", v8.RowToString(1))
+		v8.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+
+		// Test 9: Ensure all code paths are covered - const vector with nulls.Add but not const null
+		// This tests the else branch at line 2747-2748 when const is true but not IsConstNull
+		v9, err := NewConstFixed(types.T_datetime.ToType(), 3*scale, 1, mp)
+		require.NoError(t, err)
+		// Ensure it's not const null (has data)
+		require.False(t, v9.IsConstNull())
+		// Ensure nsp doesn't contain 0 (line 2745 check should be false)
+		require.False(t, nulls.Contains(&v9.nsp, 0))
+		result9 := v9.RowToString(0)
+		require.Contains(t, result9, "0001-01-04")
+		v9.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+
+		// Test 10: Ensure all code paths are covered - non-const vector else branch at line 2753-2754
+		v10 := NewVec(types.T_datetime.ToType())
+		err = AppendFixedList(v10, []types.Datetime{5 * scale, 6 * scale}, []bool{false, false}, mp)
+		require.NoError(t, err)
+		// Ensure idx 0 is not null (line 2751 check should be false)
+		require.False(t, v10.nsp.Contains(0))
+		result10 := v10.RowToString(0)
+		require.Contains(t, result10, "0001-01-06")
+		v10.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // time

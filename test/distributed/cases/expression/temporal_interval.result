@@ -1,412 +1,429 @@
 select date_add("1997-12-31 23:59:59.000002",INTERVAL "10000 99:99:99.999999" DAY_MICROSECOND);
-date_add("1997-12-31 23:59:59.000002",INTERVAL "10000 99:99:99.999999" DAY_MICROSECOND)
-2025-05-23 04:40:39.000001000
+date_add(1997-12-31 23:59:59.000002, INTERVAL(10000 99:99:99.999999, day_microsecond))
+2025-05-23 04:40:39.000001
 select date_add("1997-12-31 23:59:59.000002",INTERVAL "10000:99:99.999999" HOUR_MICROSECOND);
-date_add("1997-12-31 23:59:59.000002",INTERVAL "10000:99:99.999999" HOUR_MICROSECOND)
-1999-02-21 17:40:39.000001000
+date_add(1997-12-31 23:59:59.000002, INTERVAL(10000:99:99.999999, hour_microsecond))
+1999-02-21 17:40:39.000001
 select date_add("1997-12-31 23:59:59.000002",INTERVAL "10000:99.999999" MINUTE_MICROSECOND);
-date_add("1997-12-31 23:59:59.000002",INTERVAL "10000:99.999999" MINUTE_MICROSECOND)
-1998-01-07 22:41:39.000001000
+date_add(1997-12-31 23:59:59.000002, INTERVAL(10000:99.999999, minute_microsecond))
+1998-01-07 22:41:39.000001
 select date_add("1997-12-31 23:59:59.000002",INTERVAL "10000.999999" SECOND_MICROSECOND);
-date_add("1997-12-31 23:59:59.000002",INTERVAL "10000.999999" SECOND_MICROSECOND)
-1998-01-01 02:46:40.000001000
+date_add(1997-12-31 23:59:59.000002, INTERVAL(10000.999999, second_microsecond))
+1998-01-01 02:46:40.000001
 select date_add("1997-12-31 23:59:59.000002",INTERVAL "999999" MICROSECOND);
-date_add("1997-12-31 23:59:59.000002",INTERVAL "999999" MICROSECOND)
-1998-01-01 00:00:00.000001000
+date_add(1997-12-31 23:59:59.000002, INTERVAL(999999, microsecond))
+1998-01-01 00:00:00.000001
 select date_add("1997-12-31 23:59:59",INTERVAL 1 SECOND);
-date_add("1997-12-31 23:59:59",INTERVAL 1 SECOND)
+date_add(1997-12-31 23:59:59, INTERVAL(1, second))
 1998-01-01 00:00:00
 select date_add("1997-12-31 23:59:59",INTERVAL 1 MINUTE);
-date_add("1997-12-31 23:59:59",INTERVAL 1 MINUTE)
+date_add(1997-12-31 23:59:59, INTERVAL(1, minute))
 1998-01-01 00:00:59
 select date_add("1997-12-31 23:59:59",INTERVAL 1 HOUR);
-date_add("1997-12-31 23:59:59",INTERVAL 1 HOUR)
+date_add(1997-12-31 23:59:59, INTERVAL(1, hour))
 1998-01-01 00:59:59
 select date_add("1997-12-31 23:59:59",INTERVAL 1 DAY);
-date_add("1997-12-31 23:59:59",INTERVAL 1 DAY)
+date_add(1997-12-31 23:59:59, INTERVAL(1, day))
 1998-01-01 23:59:59
 select date_add("1997-12-31 23:59:59",INTERVAL 0 DAY);
-date_add("1997-12-31 23:59:59",INTERVAL 0 DAY)
+date_add(1997-12-31 23:59:59, INTERVAL(0, day))
 1997-12-31 23:59:59
 select date_add("1997-12-31 23:59:59",INTERVAL 1 MONTH);
-date_add("1997-12-31 23:59:59",INTERVAL 1 MONTH)
+date_add(1997-12-31 23:59:59, INTERVAL(1, month))
 1998-01-31 23:59:59
 select date_add("1997-12-31 23:59:59",INTERVAL 1 QUARTER);
-date_add("1997-12-31 23:59:59",INTERVAL 1 QUARTER)
+date_add(1997-12-31 23:59:59, INTERVAL(1, quarter))
 1998-03-31 23:59:59
 select date_add("1997-12-31 23:59:59",INTERVAL 1 YEAR);
-date_add("1997-12-31 23:59:59",INTERVAL 1 YEAR)
+date_add(1997-12-31 23:59:59, INTERVAL(1, year))
 1998-12-31 23:59:59
 select date_add("1997-12-31 23:59:59",INTERVAL "1:1" MINUTE_SECOND);
-date_add("1997-12-31 23:59:59",INTERVAL "1:1" MINUTE_SECOND)
+date_add(1997-12-31 23:59:59, INTERVAL(1:1, minute_second))
 1998-01-01 00:01:00
 select date_add("1997-12-31 23:59:59",INTERVAL "1:1" HOUR_MINUTE);
-date_add("1997-12-31 23:59:59",INTERVAL "1:1" HOUR_MINUTE)
+date_add(1997-12-31 23:59:59, INTERVAL(1:1, hour_minute))
 1998-01-01 01:00:59
 select date_add("1997-12-31 23:59:59",INTERVAL "1:1" DAY_HOUR);
-date_add("1997-12-31 23:59:59",INTERVAL "1:1" DAY_HOUR)
+date_add(1997-12-31 23:59:59, INTERVAL(1:1, day_hour))
 1998-01-02 00:59:59
 select date_add("1997-12-31 23:59:59",INTERVAL "1 1" YEAR_MONTH);
-date_add("1997-12-31 23:59:59",INTERVAL "1 1" YEAR_MONTH)
+date_add(1997-12-31 23:59:59, INTERVAL(1 1, year_month))
 1999-01-31 23:59:59
 select date_add("1997-12-31 23:59:59",INTERVAL "1:1:1" HOUR_SECOND);
-date_add("1997-12-31 23:59:59",INTERVAL "1:1:1" HOUR_SECOND)
+date_add(1997-12-31 23:59:59, INTERVAL(1:1:1, hour_second))
 1998-01-01 01:01:00
 select date_add("1997-12-31 23:59:59",INTERVAL "1 1:1" DAY_MINUTE);
-date_add("1997-12-31 23:59:59",INTERVAL "1 1:1" DAY_MINUTE)
+date_add(1997-12-31 23:59:59, INTERVAL(1 1:1, day_minute))
 1998-01-02 01:00:59
 select date_add("1997-12-31 23:59:59",INTERVAL "1 1:1:1" DAY_SECOND);
-date_add("1997-12-31 23:59:59",INTERVAL "1 1:1:1" DAY_SECOND)
+date_add(1997-12-31 23:59:59, INTERVAL(1 1:1:1, day_second))
 1998-01-02 01:01:00
 select date_add("1997-12-31 23:59:59",INTERVAL 100000 SECOND);
-date_add("1997-12-31 23:59:59",INTERVAL 100000 SECOND)
+date_add(1997-12-31 23:59:59, INTERVAL(100000, second))
 1998-01-02 03:46:39
 select date_add("1997-12-31 23:59:59",INTERVAL -100000 MINUTE);
-date_add("1997-12-31 23:59:59",INTERVAL -100000 MINUTE)
+date_add(1997-12-31 23:59:59, INTERVAL(-100000, minute))
 1997-10-23 13:19:59
 select date_add("1997-12-31 23:59:59",INTERVAL 100000 HOUR);
-date_add("1997-12-31 23:59:59",INTERVAL 100000 HOUR)
+date_add(1997-12-31 23:59:59, INTERVAL(100000, hour))
 2009-05-29 15:59:59
 select date_add("1997-12-31 23:59:59",INTERVAL -100000 DAY);
-date_add("1997-12-31 23:59:59",INTERVAL -100000 DAY)
+date_add(1997-12-31 23:59:59, INTERVAL(-100000, day))
 1724-03-17 23:59:59
 select date_add("1997-12-31 23:59:59",INTERVAL 100000 MONTH);
-Data truncation: data out of range: data type datetime, 
+date_add(1997-12-31 23:59:59, INTERVAL(100000, month))
+null
 select date_add("1997-12-31 23:59:59",INTERVAL 100000 QUARTER);
-Data truncation: data out of range: data type datetime, 
+date_add(1997-12-31 23:59:59, INTERVAL(100000, quarter))
+null
 select date_add("1997-12-31 23:59:59",INTERVAL -100000 YEAR);
-Data truncation: data out of range: data type datetime, 
+date_add(1997-12-31 23:59:59, INTERVAL(-100000, year))
+null
+select date_add("1997-12-31 23:59:59",INTERVAL -120000 MONTH);
+date_add(1997-12-31 23:59:59, INTERVAL(-120000, month))
+null
+select date_add("1997-12-31 23:59:59",INTERVAL -40000 QUARTER);
+date_add(1997-12-31 23:59:59, INTERVAL(-40000, quarter))
+null
 select date_add("1997-12-31 23:59:59",INTERVAL "10000:1" MINUTE_SECOND);
-date_add("1997-12-31 23:59:59",INTERVAL "10000:1" MINUTE_SECOND)
+date_add(1997-12-31 23:59:59, INTERVAL(10000:1, minute_second))
 1998-01-07 22:40:00
 select date_add("1997-12-31 23:59:59",INTERVAL "-10000:1" HOUR_MINUTE);
-date_add("1997-12-31 23:59:59",INTERVAL "-10000:1" HOUR_MINUTE)
+date_add(1997-12-31 23:59:59, INTERVAL(-10000:1, hour_minute))
 1996-11-10 07:58:59
 select date_add("1997-12-31 23:59:59",INTERVAL "10000:1" DAY_HOUR);
-date_add("1997-12-31 23:59:59",INTERVAL "10000:1" DAY_HOUR)
+date_add(1997-12-31 23:59:59, INTERVAL(10000:1, day_hour))
 2025-05-19 00:59:59
 select date_add("1997-12-31 23:59:59",INTERVAL "-100 1" YEAR_MONTH);
-date_add("1997-12-31 23:59:59",INTERVAL "-100 1" YEAR_MONTH)
+date_add(1997-12-31 23:59:59, INTERVAL(-100 1, year_month))
 1897-11-30 23:59:59
 select date_add("1997-12-31 23:59:59",INTERVAL "10000:99:99" HOUR_SECOND);
-date_add("1997-12-31 23:59:59",INTERVAL "10000:99:99" HOUR_SECOND)
+date_add(1997-12-31 23:59:59, INTERVAL(10000:99:99, hour_second))
 1999-02-21 17:40:38
 select date_add("1997-12-31 23:59:59",INTERVAL " -10000 99:99" DAY_MINUTE);
-date_add("1997-12-31 23:59:59",INTERVAL " -10000 99:99" DAY_MINUTE)
+date_add(1997-12-31 23:59:59, INTERVAL( -10000 99:99, day_minute))
 1970-08-11 19:20:59
 select date_add("1997-12-31 23:59:59",INTERVAL "10000 99:99:99" DAY_SECOND);
-date_add("1997-12-31 23:59:59",INTERVAL "10000 99:99:99" DAY_SECOND)
+date_add(1997-12-31 23:59:59, INTERVAL(10000 99:99:99, day_second))
 2025-05-23 04:40:38
 select date_add("1997-12-31",INTERVAL 1 SECOND);
-date_add("1997-12-31",INTERVAL 1 SECOND)
+date_add(1997-12-31, INTERVAL(1, second))
 1997-12-31 00:00:01
 select date_add("1997-12-31",INTERVAL 1 DAY);
-date_add("1997-12-31",INTERVAL 1 DAY)
-1998-01-01 00:00:00
+date_add(1997-12-31, INTERVAL(1, day))
+1998-01-01
 select date_add(NULL,INTERVAL 100000 SECOND);
-date_add(NULL,INTERVAL 100000 SECOND)
+date_add(null, INTERVAL(100000, second))
 null
 select date_add("1997-12-31 23:59:59",INTERVAL NULL SECOND);
-date_add("1997-12-31 23:59:59",INTERVAL NULL SECOND)
+date_add(1997-12-31 23:59:59, INTERVAL(null, second))
 null
 select date_add("1997-12-31 23:59:59",INTERVAL NULL MINUTE_SECOND);
-date_add("1997-12-31 23:59:59",INTERVAL NULL MINUTE_SECOND)
+date_add(1997-12-31 23:59:59, INTERVAL(null, minute_second))
 null
 select date_add("9999-12-31 23:59:59",INTERVAL 1 SECOND);
-Data truncation: data out of range: data type datetime, 
+date_add(9999-12-31 23:59:59, INTERVAL(1, second))
+null
 select date_sub("0000-00-00 00:00:00",INTERVAL 1 SECOND);
 invalid input: invalid datetime value 0000-00-00 00:00:00
 select date_add('1998-01-30',Interval 1 month);
-date_add('1998-01-30',Interval 1 month)
-1998-02-28 00:00:00
+date_add(1998-01-30, Interval(1, month))
+1998-02-28
 select date_add('1998-01-30',Interval '2:1' year_month);
-date_add('1998-01-30',Interval '2:1' year_month)
-2000-02-29 00:00:00
+date_add(1998-01-30, Interval(2:1, year_month))
+2000-02-29
 select date_add('1996-02-29',Interval '1' year);
-date_add('1996-02-29',Interval '1' year)
-1997-02-28 00:00:00
+date_add(1996-02-29, Interval(1, year))
+1997-02-28
 select date_add('1996-02-29',Interval q year);
 invalid input: column q does not exist
 select date_add("1997-12-31 23:59:59",INTERVAL 1.5 SECOND);
-date_add("1997-12-31 23:59:59",INTERVAL 1.5 SECOND)
-1998-01-01 00:00:01
+date_add(1997-12-31 23:59:59, INTERVAL(1.5, second))
+1998-01-01 00:00:00.500000
 select date_add("1997-12-31 23:59:59",INTERVAL 1.5 MINUTE);
-date_add("1997-12-31 23:59:59",INTERVAL 1.5 MINUTE)
-1998-01-01 00:01:59
+date_add(1997-12-31 23:59:59, INTERVAL(1.5, minute))
+1998-01-01 00:01:29.000000
 select date_add("1997-12-31 23:59:59",INTERVAL 1.5 HOUR);
-date_add("1997-12-31 23:59:59",INTERVAL 1.5 HOUR)
-1998-01-01 01:59:59
+date_add(1997-12-31 23:59:59, INTERVAL(1.5, hour))
+1998-01-01 01:29:59.000000
 select date_add("1997-12-31 23:59:59",INTERVAL 1.5 DAY);
-date_add("1997-12-31 23:59:59",INTERVAL 1.5 DAY)
-1998-01-02 23:59:59
+date_add(1997-12-31 23:59:59, INTERVAL(1.5, day))
+1998-01-02 11:59:59.000000
 select date_add("1997-12-31 23:59:59",INTERVAL 1.5 ABC);
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 54 near " ABC);";
 select date_sub("1998-01-01 00:00:00",INTERVAL 1 SECOND);
-date_sub("1998-01-01 00:00:00",INTERVAL 1 SECOND)
+date_sub(1998-01-01 00:00:00, INTERVAL(1, second))
 1997-12-31 23:59:59
 select date_sub("1998-01-01 00:00:00",INTERVAL 1 MINUTE);
-date_sub("1998-01-01 00:00:00",INTERVAL 1 MINUTE)
+date_sub(1998-01-01 00:00:00, INTERVAL(1, minute))
 1997-12-31 23:59:00
 select date_sub("1998-01-01 00:00:00",INTERVAL 1 HOUR);
-date_sub("1998-01-01 00:00:00",INTERVAL 1 HOUR)
+date_sub(1998-01-01 00:00:00, INTERVAL(1, hour))
 1997-12-31 23:00:00
 select date_sub("1998-01-01 00:00:00",INTERVAL 1 DAY);
-date_sub("1998-01-01 00:00:00",INTERVAL 1 DAY)
+date_sub(1998-01-01 00:00:00, INTERVAL(1, day))
 1997-12-31 00:00:00
 select date_sub("1998-01-01 00:00:00",INTERVAL 1 MONTH);
-date_sub("1998-01-01 00:00:00",INTERVAL 1 MONTH)
+date_sub(1998-01-01 00:00:00, INTERVAL(1, month))
 1997-12-01 00:00:00
 select date_sub("1998-01-01 00:00:00",INTERVAL 1 QUARTER);
-date_sub("1998-01-01 00:00:00",INTERVAL 1 QUARTER)
+date_sub(1998-01-01 00:00:00, INTERVAL(1, quarter))
 1997-10-01 00:00:00
 select date_sub("1998-01-01 00:00:00",INTERVAL 1 YEAR);
-date_sub("1998-01-01 00:00:00",INTERVAL 1 YEAR)
+date_sub(1998-01-01 00:00:00, INTERVAL(1, year))
 1997-01-01 00:00:00
 select date_sub("1998-01-01 00:00:00",INTERVAL 100000 SECOND);
-date_sub("1998-01-01 00:00:00",INTERVAL 100000 SECOND)
+date_sub(1998-01-01 00:00:00, INTERVAL(100000, second))
 1997-12-30 20:13:20
 select date_sub("1998-01-01 00:00:009",INTERVAL -100000 MINUTE);
-date_sub("1998-01-01 00:00:009",INTERVAL -100000 MINUTE)
+date_sub(1998-01-01 00:00:009, INTERVAL(-100000, minute))
 1998-03-11 10:40:09
 select date_sub("1998-01-01 00:00:00",INTERVAL 100000 HOUR);
-date_sub("1998-01-01 00:00:00",INTERVAL 100000 HOUR)
+date_sub(1998-01-01 00:00:00, INTERVAL(100000, hour))
 1986-08-05 08:00:00
 select date_sub("1998-01-01 00:00:00",INTERVAL 0 HOUR);
-date_sub("1998-01-01 00:00:00",INTERVAL 0 HOUR)
+date_sub(1998-01-01 00:00:00, INTERVAL(0, hour))
 1998-01-01 00:00:00
 select date_sub("1998-01-01 00:00:00",INTERVAL -100000 DAY);
-date_sub("1998-01-01 00:00:00",INTERVAL -100000 DAY)
+date_sub(1998-01-01 00:00:00, INTERVAL(-100000, day))
 2271-10-17 00:00:00
 select date_sub("1998-01-01 00:00:00",INTERVAL 100000 MONTH);
-Data truncation: data out of range: data type datetime, 
+date_sub(1998-01-01 00:00:00, INTERVAL(100000, month))
+null
 select date_sub("1998-01-01 00:00:00",INTERVAL 100000 QUARTER);
-Data truncation: data out of range: data type datetime, 
+date_sub(1998-01-01 00:00:00, INTERVAL(100000, quarter))
+null
 select date_sub("1998-01-01 00:00:00",INTERVAL -100000 YEAR);
-Data truncation: data out of range: data type datetime, 
+date_sub(1998-01-01 00:00:00, INTERVAL(-100000, year))
+null
 select date_sub("1998-01-01 00:00:00",INTERVAL "1:1" MINUTE_SECOND);
-date_sub("1998-01-01 00:00:00",INTERVAL "1:1" MINUTE_SECOND)
+date_sub(1998-01-01 00:00:00, INTERVAL(1:1, minute_second))
 1997-12-31 23:58:59
 select date_sub("1998-01-01 00:00:00",INTERVAL "1:1" HOUR_MINUTE);
-date_sub("1998-01-01 00:00:00",INTERVAL "1:1" HOUR_MINUTE)
+date_sub(1998-01-01 00:00:00, INTERVAL(1:1, hour_minute))
 1997-12-31 22:59:00
 select date_sub("1998-01-01 00:00:00",INTERVAL "1:1" DAY_HOUR);
-date_sub("1998-01-01 00:00:00",INTERVAL "1:1" DAY_HOUR)
+date_sub(1998-01-01 00:00:00, INTERVAL(1:1, day_hour))
 1997-12-30 23:00:00
 select date_sub("1998-01-01 00:00:00",INTERVAL "1 1" YEAR_MONTH);
-date_sub("1998-01-01 00:00:00",INTERVAL "1 1" YEAR_MONTH)
+date_sub(1998-01-01 00:00:00, INTERVAL(1 1, year_month))
 1996-12-01 00:00:00
 select date_sub("1998-01-01 00:00:00",INTERVAL "1:1:1" HOUR_SECOND);
-date_sub("1998-01-01 00:00:00",INTERVAL "1:1:1" HOUR_SECOND)
+date_sub(1998-01-01 00:00:00, INTERVAL(1:1:1, hour_second))
 1997-12-31 22:58:59
 select date_sub("1998-01-01 00:00:00",INTERVAL "1 1:1" DAY_MINUTE);
-date_sub("1998-01-01 00:00:00",INTERVAL "1 1:1" DAY_MINUTE)
+date_sub(1998-01-01 00:00:00, INTERVAL(1 1:1, day_minute))
 1997-12-30 22:59:00
 select date_sub("1998-01-01 00:00:00",INTERVAL "1 1:1:1" DAY_SECOND);
-date_sub("1998-01-01 00:00:00",INTERVAL "1 1:1:1" DAY_SECOND)
+date_sub(1998-01-01 00:00:00, INTERVAL(1 1:1:1, day_second))
 1997-12-30 22:58:59
 select date_sub("1998-01-01 00:00:00",INTERVAL "10000:1" MINUTE_SECOND);
-date_sub("1998-01-01 00:00:00",INTERVAL "10000:1" MINUTE_SECOND)
+date_sub(1998-01-01 00:00:00, INTERVAL(10000:1, minute_second))
 1997-12-25 01:19:59
 select date_sub("1998-01-01 00:00:00",INTERVAL "-10000:1" HOUR_MINUTE);
-date_sub("1998-01-01 00:00:00",INTERVAL "-10000:1" HOUR_MINUTE)
+date_sub(1998-01-01 00:00:00, INTERVAL(-10000:1, hour_minute))
 1999-02-21 16:01:00
 select date_sub("1998-01-01 00:00:00",INTERVAL "10000:1" DAY_HOUR);
-date_sub("1998-01-01 00:00:00",INTERVAL "10000:1" DAY_HOUR)
+date_sub(1998-01-01 00:00:00, INTERVAL(10000:1, day_hour))
 1970-08-15 23:00:00
 select date_sub("1998-01-01 00:00:00",INTERVAL "-100 1" YEAR_MONTH);
-date_sub("1998-01-01 00:00:00",INTERVAL "-100 1" YEAR_MONTH)
+date_sub(1998-01-01 00:00:00, INTERVAL(-100 1, year_month))
 2098-02-01 00:00:00
 select date_sub("1998-01-01 00:00:00",INTERVAL "10000:99:99" HOUR_SECOND);
-date_sub("1998-01-01 00:00:00",INTERVAL "10000:99:99" HOUR_SECOND)
+date_sub(1998-01-01 00:00:00, INTERVAL(10000:99:99, hour_second))
 1996-11-10 06:19:21
 select date_sub("1998-01-01 00:00:00",INTERVAL " -10000 99:99" DAY_MINUTE);
-date_sub("1998-01-01 00:00:00",INTERVAL " -10000 99:99" DAY_MINUTE)
+date_sub(1998-01-01 00:00:00, INTERVAL( -10000 99:99, day_minute))
 2025-05-23 04:39:00
 select date_sub("1998-01-01 00:00:00",INTERVAL "10000 99:99:99" DAY_SECOND);
-date_sub("1998-01-01 00:00:00",INTERVAL "10000 99:99:99" DAY_SECOND)
+date_sub(1998-01-01 00:00:00, INTERVAL(10000 99:99:99, day_second))
 1970-08-11 19:19:21
 select date_sub("1998-01-01 00:00:00.000001",INTERVAL "1 1:1:1.000002" DAY_MICROSECOND);
-date_sub("1998-01-01 00:00:00.000001",INTERVAL "1 1:1:1.000002" DAY_MICROSECOND)
-1997-12-30 22:58:58.999999000
+date_sub(1998-01-01 00:00:00.000001, INTERVAL(1 1:1:1.000002, day_microsecond))
+1997-12-30 22:58:58.999999
 select date_sub("1998-01-01 00:00:00.000001",INTERVAL "1:1:1.000002" HOUR_MICROSECOND);
-date_sub("1998-01-01 00:00:00.000001",INTERVAL "1:1:1.000002" HOUR_MICROSECOND)
-1997-12-31 22:58:58.999999000
+date_sub(1998-01-01 00:00:00.000001, INTERVAL(1:1:1.000002, hour_microsecond))
+1997-12-31 22:58:58.999999
 select date_sub("1998-01-01 00:00:00.000001",INTERVAL "1:1.000002" MINUTE_MICROSECOND);
-date_sub("1998-01-01 00:00:00.000001",INTERVAL "1:1.000002" MINUTE_MICROSECOND)
-1997-12-31 23:58:58.999999000
+date_sub(1998-01-01 00:00:00.000001, INTERVAL(1:1.000002, minute_microsecond))
+1997-12-31 23:58:58.999999
 select date_sub("1998-01-01 00:00:00.000001",INTERVAL "1.000002" SECOND_MICROSECOND);
-date_sub("1998-01-01 00:00:00.000001",INTERVAL "1.000002" SECOND_MICROSECOND)
-1997-12-31 23:59:58.999999000
+date_sub(1998-01-01 00:00:00.000001, INTERVAL(1.000002, second_microsecond))
+1997-12-31 23:59:58.999999
 select date_sub("1998-01-01 00:00:00.000001",INTERVAL "000002" MICROSECOND);
-date_sub("1998-01-01 00:00:00.000001",INTERVAL "000002" MICROSECOND)
-1997-12-31 23:59:59.999999000
+date_sub(1998-01-01 00:00:00.000001, INTERVAL(000002, microsecond))
+1997-12-31 23:59:59.999999
 select date_sub("1998-01-01",INTERVAL 1 SECOND);
-date_sub("1998-01-01",INTERVAL 1 SECOND)
+date_sub(1998-01-01, INTERVAL(1, second))
 1997-12-31 23:59:59
 select date_sub("1998-01-01",INTERVAL 1 DAY);
-date_sub("1998-01-01",INTERVAL 1 DAY)
-1997-12-31 00:00:00
+date_sub(1998-01-01, INTERVAL(1, day))
+1997-12-31
 select date_sub(NULL,INTERVAL 100000 SECOND);
-date_sub(NULL,INTERVAL 100000 SECOND)
+date_sub(null, INTERVAL(100000, second))
 null
 select date_sub("1998-01-01 00:00:00",INTERVAL NULL SECOND);
-date_sub("1998-01-01 00:00:00",INTERVAL NULL SECOND)
+date_sub(1998-01-01 00:00:00, INTERVAL(null, second))
 null
 select date_sub("1998-01-01 00:00:00",INTERVAL NULL MINUTE_SECOND);
-date_sub("1998-01-01 00:00:00",INTERVAL NULL MINUTE_SECOND)
+date_sub(1998-01-01 00:00:00, INTERVAL(null, minute_second))
 null
 select date_sub("1998-01-01 00:00:00",INTERVAL 1 SECOND);
-date_sub("1998-01-01 00:00:00",INTERVAL 1 SECOND)
+date_sub(1998-01-01 00:00:00, INTERVAL(1, second))
 1997-12-31 23:59:59
 select date_sub("0000-00-00 00:00:00",INTERVAL 1 SECOND);
 invalid input: invalid datetime value 0000-00-00 00:00:00
 select date_add('1998-01-30',Interval 1 month);
-date_add('1998-01-30',Interval 1 month)
-1998-02-28 00:00:00
+date_add(1998-01-30, Interval(1, month))
+1998-02-28
 select date_sub('1998-02-01',Interval '2:1' year_month);
-date_sub('1998-02-01',Interval '2:1' year_month)
-1996-01-01 00:00:00
+date_sub(1998-02-01, Interval(2:1, year_month))
+1996-01-01
 select date_sub('1996-02-29',Interval '1' year);
-date_sub('1996-02-29',Interval '1' year)
-1995-02-28 00:00:00
+date_sub(1996-02-29, Interval(1, year))
+1995-02-28
 select date_add('1996-02-29',Interval a year);
 invalid input: column a does not exist
 select date_sub("1998-01-01 00:00:00",INTERVAL 1.5 SECOND);
-date_sub("1998-01-01 00:00:00",INTERVAL 1.5 SECOND)
-1997-12-31 23:59:58
+date_sub(1998-01-01 00:00:00, INTERVAL(1.5, second))
+1997-12-31 23:59:58.500000
 select date_sub("1998-01-01 00:00:00",INTERVAL 1.5 MINUTE);
-date_sub("1998-01-01 00:00:00",INTERVAL 1.5 MINUTE)
-1997-12-31 23:58:00
+date_sub(1998-01-01 00:00:00, INTERVAL(1.5, minute))
+1997-12-31 23:58:30.000000
 select date_sub("1998-01-01 00:00:00",INTERVAL 1.5 HOUR);
-date_sub("1998-01-01 00:00:00",INTERVAL 1.5 HOUR)
-1997-12-31 22:00:00
+date_sub(1998-01-01 00:00:00, INTERVAL(1.5, hour))
+1997-12-31 22:30:00.000000
 select date_sub("1998-01-01 00:00:00",INTERVAL 1.5 DAY);
-date_sub("1998-01-01 00:00:00",INTERVAL 1.5 DAY)
-1997-12-30 00:00:00
+date_sub(1998-01-01 00:00:00, INTERVAL(1.5, day))
+1997-12-30 12:00:00.000000
 select date_sub("1998-01-01 00:00:00",INTERVAL 1.5 MONTH);
-date_sub("1998-01-01 00:00:00",INTERVAL 1.5 MONTH)
+date_sub(1998-01-01 00:00:00, INTERVAL(1.5, month))
 1997-11-01 00:00:00
 select date_sub("1998-01-01 00:00:00",INTERVAL 1.5 QUARTER);
-date_sub("1998-01-01 00:00:00",INTERVAL 1.5 QUARTER)
+date_sub(1998-01-01 00:00:00, INTERVAL(1.5, quarter))
 1997-07-01 00:00:00
 select date_sub("1998-01-01 00:00:00",INTERVAL 1 ABC);
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 52 near " ABC);";
 select date_sub(NULL,INTERVAL 100000 SECOND);
-date_sub(NULL,INTERVAL 100000 SECOND)
+date_sub(null, INTERVAL(100000, second))
 null
 select date_sub("1998-01-02",INTERVAL 31 DAY);
-date_sub("1998-01-02",INTERVAL 31 DAY)
-1997-12-02 00:00:00
+date_sub(1998-01-02, INTERVAL(31, day))
+1997-12-02
 select "1997-12-31 23:59:59" + INTERVAL 1 SECOND;
-"1997-12-31 23:59:59" + INTERVAL 1 SECOND
+1997-12-31 23:59:59 + INTERVAL(1, second)
 1998-01-01 00:00:00
 select INTERVAL 1 DAY + "1997-12-31";
-INTERVAL 1 DAY + "1997-12-31"
-1998-01-01 00:00:00
+INTERVAL(1, day) + 1997-12-31
+1998-01-01
 select "1998-01-01 00:00:00" - INTERVAL 1 SECOND;
-"1998-01-01 00:00:00" - INTERVAL 1 SECOND
+1998-01-01 00:00:00 - INTERVAL(1, second)
 1997-12-31 23:59:59
 SELECT "1900-01-01 00:00:00" + INTERVAL 2147483648 SECOND;
-"1900-01-01 00:00:00" + INTERVAL 2147483648 SECOND
+1900-01-01 00:00:00 + INTERVAL(2147483648, second)
 1968-01-20 03:14:08
 SELECT "1900-01-01 00:00:00" + INTERVAL "1:2147483647" MINUTE_SECOND;
-"1900-01-01 00:00:00" + INTERVAL "1:2147483647" MINUTE_SECOND
+1900-01-01 00:00:00 + INTERVAL(1:2147483647, minute_second)
 1968-01-20 03:15:07
 SELECT "1900-01-01 00:00:00" + INTERVAL "100000000:214748364700" MINUTE_SECOND;
-"1900-01-01 00:00:00" + INTERVAL "100000000:214748364700" MINUTE_SECOND
+1900-01-01 00:00:00 + INTERVAL(100000000:214748364700, minute_second)
 8895-03-27 22:11:40
 SELECT "1900-01-01 00:00:00" + INTERVAL 1<<37 SECOND;
-"1900-01-01 00:00:00" + INTERVAL 1<<37 SECOND
+1900-01-01 00:00:00 + INTERVAL(1 << 37, second)
 6255-04-08 15:04:32
 SELECT "1900-01-01 00:00:00" + INTERVAL 1<<31 MINUTE;
-"1900-01-01 00:00:00" + INTERVAL 1<<31 MINUTE
+1900-01-01 00:00:00 + INTERVAL(1 << 31, minute)
 5983-01-24 02:08:00
 SELECT "1900-01-01 00:00:00" + INTERVAL 1<<20 HOUR;
-"1900-01-01 00:00:00" + INTERVAL 1<<20 HOUR
+1900-01-01 00:00:00 + INTERVAL(1 << 20, hour)
 2019-08-15 16:00:00
 SELECT "1900-01-01 00:00:00" + INTERVAL 1<<38 SECOND;
-Data truncation: data out of range: data type datetime,
+1900-01-01 00:00:00 + INTERVAL(1 << 38, second)
+null
 SELECT "1900-01-01 00:00:00" + INTERVAL 1<<33 MINUTE;
-Data truncation: data out of range: data type datetime,
+1900-01-01 00:00:00 + INTERVAL(1 << 33, minute)
+null
 SELECT "1900-01-01 00:00:00" + INTERVAL 1<<30 HOUR;
-Data truncation: data out of range: data type datetime,
+1900-01-01 00:00:00 + INTERVAL(1 << 30, hour)
+null
 SELECT "1900-01-01 00:00:00" + INTERVAL "1000000000:214748364700" MINUTE_SECOND;
-Data truncation: data out of range: data type datetime, 
+1900-01-01 00:00:00 + INTERVAL(1000000000:214748364700, minute_second)
+null
 SELECT "1997-12-31 23:59:59" + INTERVAL 1 SECOND;
-"1997-12-31 23:59:59" + INTERVAL 1 SECOND
+1997-12-31 23:59:59 + INTERVAL(1, second)
 1998-01-01 00:00:00
 create table t1(i int,a date,b date,c datetime,d char(20),e varchar(50));
 insert into t1 values(1,"1997-12-31","1997-12-31","1997-12-31 23:59:59.000002","1997-12-31 23:59:59","1997-12-31 23:59:59.000002");
 insert into t1 values(2,"1998-01-01","1998-01-01","1998-01-01 00:00:00.000001","1998-01-01 00:00:00","1997-12-31 23:59:59.000002");
 insert into t1 values(3,NULL,NULL,NULL,NULL,NULL);
 select date_add(a,INTERVAL 1 SECOND), date_add(b,INTERVAL 1 MINUTE), date_add(c,INTERVAL 1 HOUR), date_add(d,INTERVAL 1 MONTH), date_add(e,INTERVAL 1 QUARTER) from t1;
-date_add(a,INTERVAL 1 SECOND)	date_add(b,INTERVAL 1 MINUTE)	date_add(c,INTERVAL 1 HOUR)	date_add(d,INTERVAL 1 MONTH)	date_add(e,INTERVAL 1 QUARTER)
-1997-12-31 00:00:01	1997-12-31 00:01:00	1998-01-01 00:59:59	1998-01-31 23:59:59	1998-03-31 23:59:59.000002000
-1998-01-01 00:00:01	1998-01-01 00:01:00	1998-01-01 01:00:00	1998-02-01 00:00:00	1998-03-31 23:59:59.000002000
-null	null	null	null	null
+date_add(a, INTERVAL(1, second))    date_add(b, INTERVAL(1, minute))    date_add(c, INTERVAL(1, hour))    date_add(d, INTERVAL(1, month))    date_add(e, INTERVAL(1, quarter))
+1997-12-31 00:00:01    1997-12-31 00:01:00    1998-01-01 00:59:59    1998-01-31 23:59:59    1998-03-31 23:59:59.000002
+1998-01-01 00:00:01    1998-01-01 00:01:00    1998-01-01 01:00:00    1998-02-01 00:00:00    1998-03-31 23:59:59.000002
+null    null    null    null    null
 select date_add(a,INTERVAL 1 YEAR), date_add(b,"1:1" MINUTE_SECOND), date_add(c,INTERVAL "1:1" HOUR_MINUTE), date_add(d,INTERVAL "1:1" DAY_HOUR), date_add(e,INTERVAL "1 1" YEAR_MONTH) from t1;
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 66 near " MINUTE_SECOND), date_add(c,INTERVAL "1:1" HOUR_MINUTE), date_add(d,INTERVAL "1:1" DAY_HOUR), date_add(e,INTERVAL "1 1" YEAR_MONTH) from t1;";
 select date_add(a,"1:1:1" HOUR_SECOND), date_add(b,"1:1:1" HOUR_SECOND), date_add(c,INTERVAL "1 1:1" DAY_MINUTE), date_add(d,INTERVAL "1 1:1:1" DAY_SECOND), date_add(e,INTERVAL "1 1" YEAR_MONTH) from t1;
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 37 near " HOUR_SECOND), date_add(b,"1:1:1" HOUR_SECOND), date_add(c,INTERVAL "1 1:1" DAY_MINUTE), date_add(d,INTERVAL "1 1:1:1" DAY_SECOND), date_add(e,INTERVAL "1 1" YEAR_MONTH) from t1;";
 select date_sub(a,INTERVAL 1 SECOND), date_sub(b,INTERVAL 1 MINUTE), date_sub(c,INTERVAL 1 HOUR), date_sub(d,INTERVAL 1 MONTH), date_sub(e,INTERVAL 1 QUARTER) from t1;
-date_sub(a,INTERVAL 1 SECOND)	date_sub(b,INTERVAL 1 MINUTE)	date_sub(c,INTERVAL 1 HOUR)	date_sub(d,INTERVAL 1 MONTH)	date_sub(e,INTERVAL 1 QUARTER)
-1997-12-30 23:59:59	1997-12-30 23:59:00	1997-12-31 22:59:59	1997-11-30 23:59:59	1997-09-30 23:59:59.000002000
-1997-12-31 23:59:59	1997-12-31 23:59:00	1997-12-31 23:00:00	1997-12-01 00:00:00	1997-09-30 23:59:59.000002000
-null	null	null	null	null
+date_sub(a, INTERVAL(1, second))    date_sub(b, INTERVAL(1, minute))    date_sub(c, INTERVAL(1, hour))    date_sub(d, INTERVAL(1, month))    date_sub(e, INTERVAL(1, quarter))
+1997-12-30 23:59:59    1997-12-30 23:59:00    1997-12-31 22:59:59    1997-11-30 23:59:59    1997-09-30 23:59:59.000002
+1997-12-31 23:59:59    1997-12-31 23:59:00    1997-12-31 23:00:00    1997-12-01 00:00:00    1997-09-30 23:59:59.000002
+null    null    null    null    null
 select date_sub(a,INTERVAL 1 YEAR), date_sub(b,INTERVAL "1:1" MINUTE_SECOND), date_sub(c,INTERVAL "1:1" HOUR_MINUTE), date_sub(d,INTERVAL "1:1" DAY_HOUR), date_sub(e,INTERVAL "1 1" YEAR_MONTH) from t1;
-date_sub(a,INTERVAL 1 YEAR)	date_sub(b,INTERVAL "1:1" MINUTE_SECOND)	date_sub(c,INTERVAL "1:1" HOUR_MINUTE)	date_sub(d,INTERVAL "1:1" DAY_HOUR)	date_sub(e,INTERVAL "1 1" YEAR_MONTH)
-1996-12-31	1997-12-30 23:58:59	1997-12-31 22:58:59	1997-12-30 22:59:59	1996-11-30 23:59:59.000002000
-1997-01-01	1997-12-31 23:58:59	1997-12-31 22:59:00	1997-12-30 23:00:00	1996-11-30 23:59:59.000002000
-null	null	null	null	null
+date_sub(a, INTERVAL(1, year))    date_sub(b, INTERVAL(1:1, minute_second))    date_sub(c, INTERVAL(1:1, hour_minute))    date_sub(d, INTERVAL(1:1, day_hour))    date_sub(e, INTERVAL(1 1, year_month))
+1996-12-31    1997-12-30 23:58:59    1997-12-31 22:58:59    1997-12-30 22:59:59    1996-11-30 23:59:59.000002
+1997-01-01    1997-12-31 23:58:59    1997-12-31 22:59:00    1997-12-30 23:00:00    1996-11-30 23:59:59.000002
+null    null    null    null    null
 select date_sub(a,INTERVAL "1:1:1" HOUR_SECOND), date_sub(b,INTERVAL "1:1:1" HOUR_SECOND), date_sub(c,INTERVAL "1 1:1" DAY_MINUTE), date_sub(d,INTERVAL "1 1:1:1" DAY_SECOND), date_sub(e,INTERVAL "1 1" YEAR_MONTH) from t1;
-date_sub(a,INTERVAL "1:1:1" HOUR_SECOND)	date_sub(b,INTERVAL "1:1:1" HOUR_SECOND)	date_sub(c,INTERVAL "1 1:1" DAY_MINUTE)	date_sub(d,INTERVAL "1 1:1:1" DAY_SECOND)	date_sub(e,INTERVAL "1 1" YEAR_MONTH)
-1997-12-30 22:58:59	1997-12-30 22:58:59	1997-12-30 22:58:59	1997-12-30 22:58:58	1996-11-30 23:59:59.000002000
-1997-12-31 22:58:59	1997-12-31 22:58:59	1997-12-30 22:59:00	1997-12-30 22:58:59	1996-11-30 23:59:59.000002000
-null	null	null	null	null
+date_sub(a, INTERVAL(1:1:1, hour_second))    date_sub(b, INTERVAL(1:1:1, hour_second))    date_sub(c, INTERVAL(1 1:1, day_minute))    date_sub(d, INTERVAL(1 1:1:1, day_second))    date_sub(e, INTERVAL(1 1, year_month))
+1997-12-30 22:58:59    1997-12-30 22:58:59    1997-12-30 22:58:59    1997-12-30 22:58:58    1996-11-30 23:59:59.000002
+1997-12-31 22:58:59    1997-12-31 22:58:59    1997-12-30 22:59:00    1997-12-30 22:58:59    1996-11-30 23:59:59.000002
+null    null    null    null    null
 select a + INTERVAL 1 SECOND,b + INTERVAL 1 MINUTE,c + INTERVAL 1 HOUR from t1;
-a + INTERVAL 1 SECOND	b + INTERVAL 1 MINUTE	c + INTERVAL 1 HOUR
-1997-12-31 00:00:01	1997-12-31 00:01:00	1998-01-01 00:59:59
-1998-01-01 00:00:01	1998-01-01 00:01:00	1998-01-01 01:00:00
-null	null	null
+a + INTERVAL(1, second)    b + INTERVAL(1, minute)    c + INTERVAL(1, hour)
+1997-12-31 00:00:01    1997-12-31 00:01:00    1998-01-01 00:59:59
+1998-01-01 00:00:01    1998-01-01 00:01:00    1998-01-01 01:00:00
+null    null    null
 select a - INTERVAL 1 SECOND,b - INTERVAL 1 MINUTE,c - INTERVAL 1 HOUR from t1;
-a - INTERVAL 1 SECOND	b - INTERVAL 1 MINUTE	c - INTERVAL 1 HOUR
-1997-12-30 23:59:59	1997-12-30 23:59:00	1997-12-31 22:59:59
-1997-12-31 23:59:59	1997-12-31 23:59:00	1997-12-31 23:00:00
-null	null	null
+a - INTERVAL(1, second)    b - INTERVAL(1, minute)    c - INTERVAL(1, hour)
+1997-12-30 23:59:59    1997-12-30 23:59:00    1997-12-31 22:59:59
+1997-12-31 23:59:59    1997-12-31 23:59:00    1997-12-31 23:00:00
+null    null    null
 select i + INTERVAL 1 SECOND from t1;
 invalid argument operator +, bad value [INT INTERVAL]
 select month(date_sub("1998-01-01 00:00:00",INTERVAL 1 SECOND));
-month(date_sub("1998-01-01 00:00:00",INTERVAL 1 SECOND))
+month(date_sub(1998-01-01 00:00:00, INTERVAL(1, second)))
 12
 select weekday(date_sub("1998-01-01 00:00:00",INTERVAL 1 MINUTE));
-weekday(date_sub("1998-01-01 00:00:00",INTERVAL 1 MINUTE))
+weekday(date_sub(1998-01-01 00:00:00, INTERVAL(1, minute)))
 2
 select date(date_sub("1998-01-01 00:00:00",INTERVAL 1 DAY));
-date(date_sub("1998-01-01 00:00:00",INTERVAL 1 DAY))
+date(date_sub(1998-01-01 00:00:00, INTERVAL(1, day)))
 1997-12-31
 select dayofyear(date_sub("1998-01-01 00:00:00",INTERVAL 1 MONTH));
-dayofyear(date_sub("1998-01-01 00:00:00",INTERVAL 1 MONTH))
+dayofyear(date_sub(1998-01-01 00:00:00, INTERVAL(1, month)))
 335
 select month(date_add("1997-12-31 23:59:59",INTERVAL "1:1" MINUTE_SECOND));
-month(date_add("1997-12-31 23:59:59",INTERVAL "1:1" MINUTE_SECOND))
+month(date_add(1997-12-31 23:59:59, INTERVAL(1:1, minute_second)))
 1
 select weekday(date_add("1997-12-31 23:59:59",INTERVAL "1:1" HOUR_MINUTE));
-weekday(date_add("1997-12-31 23:59:59",INTERVAL "1:1" HOUR_MINUTE))
+weekday(date_add(1997-12-31 23:59:59, INTERVAL(1:1, hour_minute)))
 3
 select date(date_add("1997-12-31 23:59:59",INTERVAL "1 1" YEAR_MONTH));
-date(date_add("1997-12-31 23:59:59",INTERVAL "1 1" YEAR_MONTH))
+date(date_add(1997-12-31 23:59:59, INTERVAL(1 1, year_month)))
 1999-01-31
 select dayofyear(date_add("1997-12-31 23:59:59",INTERVAL "1:1:1" HOUR_SECOND));
-dayofyear(date_add("1997-12-31 23:59:59",INTERVAL "1:1:1" HOUR_SECOND))
+dayofyear(date_add(1997-12-31 23:59:59, INTERVAL(1:1:1, hour_second)))
 1
 select date("1997-12-31 23:59:59" + INTERVAL 1 SECOND) + INTERVAL "1:1:1" HOUR_SECOND;
-date("1997-12-31 23:59:59" + INTERVAL 1 SECOND) + INTERVAL "1:1:1" HOUR_SECOND
+date(1997-12-31 23:59:59 + INTERVAL(1, second)) + INTERVAL(1:1:1, hour_second)
 1998-01-01 01:01:01
 SELECT CAST(CAST('2006-08-10 10:11:12' AS DATETIME) AS DECIMAL(20,6));
-cast(cast(2006-08-10 10:11:12 as datetime(26)) as decimal(20, 6))
+cast(cast(2006-08-10 10:11:12 as datetime) as decimal(20, 6))
 1155204672.000000
 SELECT CAST(CAST('2006-08-10 10:11:12' AS DATETIME) + INTERVAL 14 MICROSECOND AS DECIMAL(20,6));
-cast(cast(2006-08-10 10:11:12 as datetime(26)) + interval(14, microsecond) as decimal(20, 6))
+cast(cast(2006-08-10 10:11:12 as datetime) + INTERVAL(14, microsecond) as decimal(20, 6))
 1155204672.000014
 drop table if exists t1;
 drop table if exists t2;
@@ -464,18 +481,18 @@ i	a	b	c	d	e
 9	1998-01-01	1998-01-01	1998-01-01 00:00:00	1998-01-01 00:00:00	1997-12-31 23:59:59.000002
 10	2010-11-12	1998-01-01	1998-01-01 00:00:00	1998-01-01 00:00:00	1997-12-31 23:59:59.000002
 select date_add(b,INTERVAL 1 DAY),date_add(c,INTERVAL 1 SECOND) from t1;
-date_add(b,INTERVAL 1 DAY)	date_add(c,INTERVAL 1 SECOND)
-1998-01-02 00:00:59	1998-01-01 01:00:00
-1998-01-02 00:01:00	1998-01-02 01:00:00
-1998-01-03 01:00:59	1998-01-02 01:01:01
-1998-01-02 00:00:59	1998-01-01 01:00:00
-1998-01-02 00:01:00	1998-01-02 01:00:00
-1998-01-03 01:00:59	1998-01-02 01:01:01
-1998-01-02 00:00:00	1998-01-01 00:00:01
-1998-01-02 00:00:00	1998-01-01 00:00:01
-1998-01-02 00:00:00	1998-01-01 00:00:01
-1998-01-02 00:00:00	1998-01-01 00:00:01
-null	null
+date_add(b, INTERVAL(1, day))    date_add(c, INTERVAL(1, second))
+1998-01-02 00:00:59    1998-01-01 01:00:00
+1998-01-02 00:01:00    1998-01-02 01:00:00
+1998-01-03 01:00:59    1998-01-02 01:01:01
+1998-01-02 00:00:59    1998-01-01 01:00:00
+1998-01-02 00:01:00    1998-01-02 01:00:00
+1998-01-03 01:00:59    1998-01-02 01:01:01
+1998-01-02 00:00:00    1998-01-01 00:00:01
+1998-01-02 00:00:00    1998-01-01 00:00:01
+1998-01-02 00:00:00    1998-01-01 00:00:01
+1998-01-02 00:00:00    1998-01-01 00:00:01
+null    null
 select distinct(a) from t1 where c > "1998-01-01 00:59:59";
 a
 1998-12-30
@@ -511,21 +528,21 @@ i	c + INTERVAL 1 MINUTE
 3	1998-01-02 01:02:00
 6	1998-01-02 01:02:00
 select t1.i,t2.i,t1.c + INTERVAL 1 MINUTE,t2.b + INTERVAL 1 YEAR from t1 join t2 where (t1.a + INTERVAL 1 DAY) = (t2.c -INTERVAL 1 DAY );
-i	i	t1.c + INTERVAL 1 MINUTE	t2.b + INTERVAL 1 YEAR
+i    i    t1.c + INTERVAL(1, minute)    t2.b + INTERVAL(1, year)
 select '2007-01-01' + interval i day from t2;
-'2007-01-01' + interval i day
-2007-01-02 00:00:00
-2007-01-03 00:00:00
-2007-01-04 00:00:00
-2007-01-05 00:00:00
-2007-01-06 00:00:00
-2007-01-07 00:00:00
-2007-01-08 00:00:00
-2007-01-09 00:00:00
-2007-01-10 00:00:00
-2007-01-11 00:00:00
+2007-01-01 + interval(i, day)
+2007-01-02
+2007-01-03
+2007-01-04
+2007-01-05
+2007-01-06
+2007-01-07
+2007-01-08
+2007-01-09
+2007-01-10
+2007-01-11
 select b + interval i day from t2;
-b + interval i day
+b + interval(i, day)
 1998-01-02 00:00:59
 1998-01-03 00:01:00
 1998-01-05 01:00:59
@@ -538,12 +555,12 @@ b + interval i day
 null
 update t1 set c = c + INTERVAL 1 DAY where i > 6;
 select * from t1 where i > 6;
-i	a	b	c	d	e
-7	1998-01-01 00:00:00	1998-01-01 00:00:00	1998-01-02 00:00:00	1998-01-01 00:00:00	1997-12-31 23:59:59.000002
-8	1998-01-01 00:00:00	1998-01-01 00:00:00	1998-01-02 00:00:00	1998-01-01 00:00:00	1997-12-31 23:59:59.000002
-9	1998-01-01 00:00:00	1998-01-01 00:00:00	1998-01-02 00:00:00	1998-01-01 00:00:00	1997-12-31 23:59:59.000002
-10	2010-11-12 00:00:00	1998-01-01 00:00:00	1998-01-02 00:00:00	1998-01-01 00:00:00	1997-12-31 23:59:59.000002
-11	null	null	null	null	null
+i    a    b    c    d    e
+7    1998-01-01 00:00:00    1998-01-01 00:00:00    1998-01-02 00:00:00    1998-01-01 00:00:00    1997-12-31 23:59:59.000002
+8    1998-01-01 00:00:00    1998-01-01 00:00:00    1998-01-02 00:00:00    1998-01-01 00:00:00    1997-12-31 23:59:59.000002
+9    1998-01-01 00:00:00    1998-01-01 00:00:00    1998-01-02 00:00:00    1998-01-01 00:00:00    1997-12-31 23:59:59.000002
+10    2010-11-12 00:00:00    1998-01-01 00:00:00    1998-01-02 00:00:00    1998-01-01 00:00:00    1997-12-31 23:59:59.000002
+11    null    null    null    null    null
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t1;
@@ -561,29 +578,25 @@ datum
 SELECT * FROM t1 WHERE datum BETWEEN cast("2000-1-2" as date) AND datum - INTERVAL 100 DAY;
 datum
 SELECT CAST('2006-09-26' AS DATE) + INTERVAL 1 DAY;
-CAST('2006-09-26' AS DATE) + INTERVAL 1 DAY
+cast(2006-09-26 as date) + INTERVAL(1, day)
 2006-09-27
 SELECT CAST('2006-09-26' AS DATE) + INTERVAL 1 MONTH;
-CAST('2006-09-26' AS DATE) + INTERVAL 1 MONTH
+cast(2006-09-26 as date) + INTERVAL(1, month)
 2006-10-26
 SELECT CAST('2006-09-26' AS DATE) + INTERVAL 1 YEAR;
-CAST('2006-09-26' AS DATE) + INTERVAL 1 YEAR
+cast(2006-09-26 as date) + INTERVAL(1, year)
 2007-09-26
 SELECT CAST('2006-09-26' AS DATE) + INTERVAL 1 WEEK;
-CAST('2006-09-26' AS DATE) + INTERVAL 1 WEEK
+cast(2006-09-26 as date) + INTERVAL(1, week)
 2006-10-03
 drop table if exists t1;
 create table t1 (d date);
 insert into t1 (d) select date_sub('2000-01-01', INTERVAL 2001 YEAR);
-Data truncation: data out of range: data type datetime, 
 insert into t1 (d) select date_add('2000-01-01',interval 8000 year);
-Data truncation: data out of range: data type datetime, 
 insert into t1 select date_add(NULL, INTERVAL 1 DAY);
 insert into t1 select date_add('2000-01-04', INTERVAL NULL DAY);
 insert into t1 (d) select date_sub('2000-01-01', INTERVAL 2001 YEAR);
-Data truncation: data out of range: data type datetime, 
 insert into t1 (d) select date_add('2000-01-01',interval 8000 year);
-Data truncation: data out of range: data type datetime, 
 insert into t1 select date_add(NULL, INTERVAL 1 DAY);
 insert into t1 select date_add('2000-01-04', INTERVAL NULL DAY);
 select * from t1;
@@ -592,14 +605,18 @@ null
 null
 null
 null
+null
+null
+null
+null
 drop table t1;
 set @tt=now();
 select @tt;
 @tt
-2024-04-09 16:58:58.056874
+2025-11-28 16:59:53.276438
 select date_add(@tt, Interval 30 SECOND);
-date_add(@tt, interval(30, second))
-2024-04-09 16:59:28.056874000
+date_add(@tt, Interval(30, second))
+2025-11-28 17:00:23.276438
 select date_sub(@tt, Interval 30 SECOND);
-date_sub(@tt, interval(30, second))
-2024-04-09 16:58:28.056874000
+date_sub(@tt, Interval(30, second))
+2025-11-28 16:59:23.276438

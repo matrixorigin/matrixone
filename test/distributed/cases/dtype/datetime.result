@@ -35,25 +35,25 @@ cast(2000-01-01 as datetime) * 1.1
 1041353280.0
 SELECT DATE_ADD('2022-02-28 23:59:59.9999', INTERVAL 1 SECOND) '1 second later';
 1 second later
-2022-03-01 00:00:00.999900000
+2022-03-01 00:00:00.999900
 SELECT DATE_ADD('2022-02-28 23:59:59.9999', INTERVAL 1 MINUTE) '1 minute later';
 1 minute later
-2022-03-01 00:00:59.999900000
+2022-03-01 00:00:59.999900
 SELECT DATE_ADD('2022-02-28 23:59:59.9999', INTERVAL 1 HOUR) '1 hour later';
 1 hour later
-2022-03-01 00:59:59.999900000
+2022-03-01 00:59:59.999900
 SELECT DATE_ADD('2022-02-28 23:59:59.9999', INTERVAL 1 DAY) '1 day later';
 1 day later
-2022-03-01 23:59:59.999900000
+2022-03-01 23:59:59.999900
 SELECT DATE_ADD('2022-02-28 23:59:59.9999', INTERVAL 1 WEEK) '1 week later';
 1 week later
-2022-03-07 23:59:59.999900000
+2022-03-07 23:59:59.999900
 SELECT DATE_ADD('2022-02-28 23:59:59.9999', INTERVAL 13 MONTH) '1 month earlier';
 1 month earlier
-2023-03-28 23:59:59.999900000
+2023-03-28 23:59:59.999900
 SELECT DATE_ADD('2022-02-28 23:59:59.9999', INTERVAL 1 YEAR) '1 year earlier';
 1 year earlier
-2023-02-28 23:59:59.999900000
+2023-02-28 23:59:59.999900
 select cast(cast('2000-12-31' as date) as datetime(0));
 cast(cast(2000-12-31 as date) as datetime)
 2000-12-31 00:00:00
@@ -138,20 +138,20 @@ insert into t1 values('2022-01-01 00:00:00.005000', 3);
 insert into t2 values('2022-01-01 00:00:00.005', 4);
 insert into t2 values('2022-01-01 00:00:00.001', 5);
 select * from t1;
-dt	value32
-2022-01-01 00:00:00.000050000	1
-2022-01-01 00:00:00.000500000	2
-2022-01-01 00:00:00.005000000	3
+dt    value32
+2022-01-01 00:00:00.000050000    1
+2022-01-01 00:00:00.000500000    2
+2022-01-01 00:00:00.005000000    3
 select * from t2;
-dt	value32
-2022-01-01 00:00:00.001000000	5
-2022-01-01 00:00:00.005000000	4
+dt    value32
+2022-01-01 00:00:00.005000000    4
+2022-01-01 00:00:00.001000000    5
 select * from t1 join t2 on t1.dt=t2.dt order by 1 desc, t2.dt asc;
-dt	value32	dt	value32
-2022-01-01 00:00:00.005000000	3	2022-01-01 00:00:00.005000000	4
+dt    value32    dt    value32
+2022-01-01 00:00:00.005000000    3    2022-01-01 00:00:00.005000000    4
 select * from t1 join t2 on t1.dt=t2.dt where t1.value32<>t2.value32;
-dt	value32	dt	value32
-2022-01-01 00:00:00.005000000	3	2022-01-01 00:00:00.005000000	4
+dt    value32    dt    value32
+2022-01-01 00:00:00.005000000    3    2022-01-01 00:00:00.005000000    4
 drop table if exists t1;
 drop table if exists t2;
 CREATE TABLE t_datetime(id datetime(6));

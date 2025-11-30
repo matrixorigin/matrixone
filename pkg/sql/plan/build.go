@@ -440,6 +440,7 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 					columns[idx].DbName = col.DbName
 				}
 			}
+
 		}
 
 		return columns

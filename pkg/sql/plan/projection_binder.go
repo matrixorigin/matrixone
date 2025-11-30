@@ -15,6 +15,8 @@
 package plan
 
 import (
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -309,18 +311,78 @@ func (b *ProjectionBinder) resetInterval(e *Expr) (*Expr, error) {
 		return nil, err
 	}
 
+	// Handle varchar/char type: parse interval string format like "1:30" for HOUR_MINUTE
 	if e1.Typ.Id == int32(types.T_varchar) || e1.Typ.Id == int32(types.T_char) {
 		s := e1.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_Sval).Sval
 		returnNum, returnType, err := types.NormalizeInterval(s, intervalType)
 		if err != nil {
-			return nil, err
+			// MySQL behavior: invalid interval string should return NULL at execution time
+			returnNum = math.MaxInt64
+			returnType = intervalType
 		}
-
 		e.Expr.(*plan.Expr_List).List.List[0] = makePlan2Int64ConstExprWithType(returnNum)
 		e.Expr.(*plan.Expr_List).List.List[1] = makePlan2Int64ConstExprWithType(int64(returnType))
 		return e, nil
 	}
 
+	// For time units (SECOND, MINUTE, HOUR, DAY), handle decimal/float values
+	// by converting them to microseconds (similar to resetDateFunctionArgs)
+	isTimeUnit := intervalType == types.Second || intervalType == types.Minute ||
+		intervalType == types.Hour || intervalType == types.Day
+	isDecimalOrFloat := e1.Typ.Id == int32(types.T_decimal64) ||
+		e1.Typ.Id == int32(types.T_decimal128) || e1.Typ.Id == int32(types.T_float32) ||
+		e1.Typ.Id == int32(types.T_float64)
+
+	// Try to get literal value directly (consistent with resetDateFunctionArgs)
+	lit := e1.GetLit()
+	if isTimeUnit && isDecimalOrFloat && lit != nil && !lit.Isnull {
+		var floatVal float64
+		var hasValue bool
+
+		if dval, ok := lit.Value.(*plan.Literal_Dval); ok {
+			floatVal = dval.Dval
+			hasValue = true
+		} else if fval, ok := lit.Value.(*plan.Literal_Fval); ok {
+			floatVal = float64(fval.Fval)
+			hasValue = true
+		} else if d64val, ok := lit.Value.(*plan.Literal_Decimal64Val); ok {
+			d64 := types.Decimal64(d64val.Decimal64Val.A)
+			scale := e1.Typ.Scale
+			if scale < 0 {
+				scale = 0
+			}
+			floatVal = types.Decimal64ToFloat64(d64, scale)
+			hasValue = true
+		} else if d128val, ok := lit.Value.(*plan.Literal_Decimal128Val); ok {
+			d128 := types.Decimal128{B0_63: uint64(d128val.Decimal128Val.A), B64_127: uint64(d128val.Decimal128Val.B)}
+			scale := e1.Typ.Scale
+			if scale < 0 {
+				scale = 0
+			}
+			floatVal = types.Decimal128ToFloat64(d128, scale)
+			hasValue = true
+		}
+
+		if hasValue {
+			var finalValue int64
+			switch intervalType {
+			case types.Second:
+				finalValue = int64(math.Round(floatVal * float64(types.MicroSecsPerSec)))
+			case types.Minute:
+				finalValue = int64(math.Round(floatVal * float64(types.MicroSecsPerSec*types.SecsPerMinute)))
+			case types.Hour:
+				finalValue = int64(math.Round(floatVal * float64(types.MicroSecsPerSec*types.SecsPerHour)))
+			case types.Day:
+				finalValue = int64(math.Round(floatVal * float64(types.MicroSecsPerSec*types.SecsPerDay)))
+			}
+			e.Expr.(*plan.Expr_List).List.List[0] = makePlan2Int64ConstExprWithType(finalValue)
+			e.Expr.(*plan.Expr_List).List.List[1] = makePlan2Int64ConstExprWithType(int64(types.MicroSecond))
+			return e, nil
+		}
+	}
+
+	// For other cases (non-time units, integer types, NULL values, or non-literal expressions):
+	// Must use executor to evaluate and return constant (window.go expects Expr_Lit)
 	typ := &plan.Type{Id: int32(types.T_int64)}
 	numberExpr, err := appendCastBeforeExpr(b.GetContext(), e1, *typ)
 	if err != nil {
@@ -338,9 +400,18 @@ func (b *ProjectionBinder) resetInterval(e *Expr) (*Expr, error) {
 	}
 	c := rule.GetConstantValue(vec, false, 0)
 
-	e.Expr.(*plan.Expr_List).List.List[0] = &plan.Expr{Typ: *typ, Expr: &plan.Expr_Lit{Lit: c}}
-	e.Expr.(*plan.Expr_List).List.List[1] = makePlan2Int64ConstExprWithType(int64(intervalType))
+	var finalValue int64
+	if c.Isnull {
+		// NULL interval: use special marker value
+		finalValue = math.MaxInt64
+	} else if ival, ok := c.Value.(*plan.Literal_I64Val); ok {
+		finalValue = ival.I64Val
+	} else {
+		return nil, moerr.NewInvalidInput(b.GetContext(), "invalid interval value")
+	}
 
+	e.Expr.(*plan.Expr_List).List.List[0] = makePlan2Int64ConstExprWithType(finalValue)
+	e.Expr.(*plan.Expr_List).List.List[1] = makePlan2Int64ConstExprWithType(int64(intervalType))
 	return e, nil
 }
 
