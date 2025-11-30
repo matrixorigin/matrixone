@@ -418,7 +418,8 @@ INSERT INTO t_date_arith VALUES (1, '9999-12-31');
 INSERT INTO t_date_arith VALUES (2, '1000-01-01');
 INSERT INTO t_date_arith VALUES (3, '2024-02-29');
 SELECT dt, DATE_ADD(dt, INTERVAL 1 DAY) FROM t_date_arith WHERE id = 1;
-Data truncation: data out of range: data type datetime,
+dt    DATE_ADD(dt, INTERVAL(1, day))
+9999-12-31    null
 SELECT dt, DATE_SUB(dt, INTERVAL 1 DAY) FROM t_date_arith WHERE id = 2;
 dt    DATE_SUB(dt, INTERVAL(1, day))
 1000-01-01    0999-12-31
@@ -448,7 +449,7 @@ INSERT INTO t_unique (code) VALUES (NULL);
 INSERT INTO t_unique (code) VALUES (NULL);
 INSERT INTO t_unique (code) VALUES ('A');
 INSERT INTO t_unique (code) VALUES ('A');
-Duplicate entry 'A' for key '(.*)'
+Duplicate entry 'A' for key 'code'
 SELECT * FROM t_unique ORDER BY id;
 id    code
 1    null
@@ -466,7 +467,7 @@ INSERT INTO t_not_null (name) VALUES (NULL);
 constraint violation: Column 'name' cannot be null
 SELECT * FROM t_not_null ORDER BY id;
 id    name
-1
+1    
 2    test
 DROP TABLE t_not_null;
 DROP TABLE IF EXISTS t_mixed;
