@@ -1,4 +1,3 @@
-SET experimental_ivf_index = 1;
 create database if not exists dd1;
 use dd1;
 CREATE TABLE `mini_vector_data` (`id` VARCHAR(64) NOT NULL, `text` TEXT DEFAULT NULL, `vec` vecf32(8) DEFAULT NULL COMMENT '8-dim embedding vector', `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (`id`));
@@ -27,5 +26,4 @@ id1    hello world    1.0551303640156267
 id10    additional entry    1.0718208877650799
 id2    greeting message    1.1550325221482527
 id3    vector search test    1.1828778308075465
-SET experimental_ivf_index = 0;
 drop database if exists dd1;

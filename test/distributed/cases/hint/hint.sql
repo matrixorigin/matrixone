@@ -558,7 +558,6 @@ set enable_remap_hint = 0;
 
 
 
-set experimental_fulltext_index=1;
 set ft_relevancy_algorithm="TF-IDF";
 drop table if exists t_user;
 create table t_user (
