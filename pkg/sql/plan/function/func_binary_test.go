@@ -8827,7 +8827,7 @@ func TestDoDatetimeAddWithNumsZero(t *testing.T) {
 	// But all valid interval types are handled, so this might be impossible to trigger
 	// Let's test with normal cases
 	start, _ := types.ParseDatetime("2024-01-01 00:00:00", 6)
-	
+
 	// Test with different interval types
 	testCases := []struct {
 		name string
@@ -8841,7 +8841,7 @@ func TestDoDatetimeAddWithNumsZero(t *testing.T) {
 		{"Second", 1, types.Second},
 		{"MicroSecond", 1, types.MicroSecond},
 	}
-	
+
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			result, err := doDatetimeAdd(start, tc.diff, tc.iTyp)
@@ -8948,5 +8948,131 @@ func TestTimestampAddTimestampWithMicrosecondScale(t *testing.T) {
 	}
 	if result != nil {
 		result.Free()
+	}
+}
+
+// TestTimestampAddDateWithTCharNonConstUnit tests TimestampAddDate with T_char type and non-const unit (overloadId: 4)
+// This tests the non-const unit path in TimestampAddDate
+func TestTimestampAddDateWithTCharNonConstUnit(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// Test with non-const T_char unit vector
+	units := []string{"DAY", "HOUR"}
+	unitVec := vector.NewVec(types.T_char.ToType())
+	vector.AppendStringList(unitVec, units, nil, proc.Mp())
+
+	intervals := []int64{1, 1}
+	intervalVec := vector.NewVec(types.T_int64.ToType())
+	vector.AppendFixedList(intervalVec, intervals, nil, proc.Mp())
+
+	dates := []types.Date{}
+	for _, d := range []string{"2024-01-01", "2024-01-01"} {
+		date, err := types.ParseDateCast(d)
+		require.NoError(t, err)
+		dates = append(dates, date)
+	}
+	dateVec := vector.NewVec(types.T_date.ToType())
+	vector.AppendFixedList(dateVec, dates, nil, proc.Mp())
+
+	parameters := []*vector.Vector{unitVec, intervalVec, dateVec}
+	result := vector.NewFunctionResultWrapper(types.T_datetime.ToType(), proc.Mp())
+
+	fnLength := dateVec.Length()
+	err := result.PreExtendAndReset(fnLength)
+	require.NoError(t, err)
+
+	err = TimestampAddDate(parameters, result, proc, fnLength, nil)
+	require.NoError(t, err)
+
+	v := result.GetResultVector()
+	require.Equal(t, fnLength, v.Length())
+
+	// Cleanup
+	for _, vec := range parameters {
+		if vec != nil {
+			vec.Free(proc.Mp())
+		}
+	}
+	if result != nil {
+		result.Free()
+	}
+}
+
+// TestTimestampDiffStringWithTCharErrorHandling tests TimestampDiffString error handling paths (overloadId: 7)
+// args: [types.T_char, types.T_varchar, types.T_varchar]
+func TestTimestampDiffStringWithTCharErrorHandling(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	testCases := []struct {
+		name         string
+		unit         string
+		str1         string
+		str2         string
+		shouldBeNull bool
+		desc         string
+	}{
+		{
+			name:         "T_char unit with invalid date string 1",
+			unit:         "DAY",
+			str1:         "invalid-date",
+			str2:         "2024-01-02",
+			shouldBeNull: true,
+			desc:         "TIMESTAMPDIFF should return NULL for invalid date string",
+		},
+		{
+			name:         "T_char unit with invalid date string 2",
+			unit:         "DAY",
+			str1:         "2024-01-01",
+			str2:         "invalid-date",
+			shouldBeNull: true,
+			desc:         "TIMESTAMPDIFF should return NULL for invalid date string",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Create input vectors with T_char type for unit
+			unitVec, err := vector.NewConstBytes(types.T_char.ToType(), []byte(tc.unit), 1, proc.Mp())
+			require.NoError(t, err)
+
+			str1Vec, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte(tc.str1), 1, proc.Mp())
+			require.NoError(t, err)
+
+			str2Vec, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte(tc.str2), 1, proc.Mp())
+			require.NoError(t, err)
+
+			parameters := []*vector.Vector{unitVec, str1Vec, str2Vec}
+			result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
+
+			fnLength := str1Vec.Length()
+			err = result.PreExtendAndReset(fnLength)
+			require.NoError(t, err)
+
+			err = TimestampDiffString(parameters, result, proc, fnLength, nil)
+			require.NoError(t, err, tc.desc)
+
+			v := result.GetResultVector()
+			require.Equal(t, fnLength, v.Length())
+			require.Equal(t, types.T_int64, v.GetType().Oid)
+
+			int64Param := vector.GenerateFunctionFixedTypeParameter[int64](v)
+			resultVal, null := int64Param.GetValue(0)
+			if tc.shouldBeNull {
+				require.True(t, null, "Result should be NULL for invalid input: %s", tc.desc)
+			} else {
+				require.False(t, null, "Result should not be null: %s", tc.desc)
+				_ = resultVal
+			}
+
+			// Cleanup
+			for _, vec := range parameters {
+				if vec != nil {
+					vec.Free(proc.Mp())
+				}
+			}
+			if result != nil {
+				result.Free()
+			}
+		})
 	}
 }
