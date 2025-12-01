@@ -574,6 +574,11 @@ func (h *Handle) HandleDiskCleaner(
 	}()
 	switch op {
 	case cmd_util.RemoveChecker:
+		if key == cmd_util.CheckerKeyBackup {
+			// Remove backup protection
+			h.db.DiskCleaner.GetCleaner().RemoveBackupProtection()
+			return nil, nil
+		}
 		return nil, h.db.DiskCleaner.GetCleaner().RemoveChecker(key)
 	case cmd_util.StopGC:
 		err = h.db.Controller.SwitchTxnMode(ctx, 3, "")
@@ -694,6 +699,25 @@ func (h *Handle) HandleDiskCleaner(
 				end := ckp.GetEnd()
 				return !end.GE(&ts)
 			}, cmd_util.CheckerKeyMinTS)
+		return
+	case cmd_util.CheckerKeyBackup:
+		// Set or update backup protection timestamp
+		// value format: timestamp string that can be parsed by types.StringToTS
+		var ts types.TS
+		if value == "" {
+			return nil, moerr.NewInvalidArgNoCtx(key, value)
+		}
+		ts = types.StringToTS(value)
+		if ts.IsEmpty() {
+			return nil, moerr.NewInvalidArgNoCtx(key, value)
+		}
+		cleaner := h.db.DiskCleaner.GetCleaner()
+		_, _, isActive := cleaner.GetBackupProtection()
+		if isActive {
+			cleaner.UpdateBackupProtection(ts)
+		} else {
+			cleaner.SetBackupProtection(ts)
+		}
 		return
 	default:
 		return nil, moerr.NewInvalidArgNoCtx(key, value)
