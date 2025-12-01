@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -991,7 +992,13 @@ func prepareFSForDiffAsFile(
 	ses *Session,
 	stmt *tree.DataBranchDiff,
 	tblStuff tableStuff,
-) (sqlRetPath, hint string, writeFile func([]byte) error, release func(), cleanup func(), err error) {
+) (
+	sqlRetPath, sqlRetHint string,
+	writeFile func([]byte) error,
+	release func(),
+	cleanup func(),
+	err error,
+) {
 	var (
 		ok           bool
 		stagePath    string
@@ -1013,7 +1020,7 @@ func prepareFSForDiffAsFile(
 		fullFilePath = path.Join(stmt.OutputOpt.DirPath, fileName)
 	}
 
-	hint = fmt.Sprintf(
+	sqlRetHint = fmt.Sprintf(
 		"DELETE FROM %s.%s, REPLACE INTO %s.%s",
 		tblStuff.baseRel.GetTableDef(ctx).DbName, tblStuff.baseRel.GetTableName(),
 		tblStuff.baseRel.GetTableDef(ctx).DbName, tblStuff.baseRel.GetTableName(),
@@ -1048,21 +1055,34 @@ func prepareFSForDiffAsFile(
 		targetFS = etlFS
 	}
 
+	cleanup = func() {
+		_ = targetFS.Delete(context.Background(), targetPath)
+	}
+
+	defer func() {
+		if err != nil {
+			if cleanup != nil {
+				cleanup()
+			}
+			targetFS.Close(ctx)
+		}
+	}()
+
 	if err = targetFS.Delete(ctx, targetPath); err != nil && !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 		return
 	}
 
-	// SQL diff needs append, so pre-create the file and return an appender.
-	if err = targetFS.Write(ctx, fileservice.IOVector{
-		FilePath: targetPath,
-		Entries: []fileservice.IOEntry{
-			{Size: 0, Data: []byte{}},
-		},
-	}); err != nil && !moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists) {
-		return
-	}
-
 	if mfs, ok := targetFS.(fileservice.MutableFileService); ok {
+		// SQL diff needs append, so pre-create the file and return an appender.
+		if err = targetFS.Write(ctx, fileservice.IOVector{
+			FilePath: targetPath,
+			Entries: []fileservice.IOEntry{
+				{Size: 0, Data: []byte{}},
+			},
+		}); err != nil && !moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists) {
+			return
+		}
+
 		var mut fileservice.Mutator
 		if mut, err = mfs.NewMutator(ctx, targetPath); err != nil {
 			return
@@ -1080,30 +1100,68 @@ func prepareFSForDiffAsFile(
 			targetFS.Close(ctx)
 		}
 	} else {
-		// Fallback: manually track offset and re-Write slices.
-		var offset int64
-		writeFile = func(fileContent []byte) error {
-			vec := fileservice.IOVector{
-				FilePath: targetPath,
-				Entries: []fileservice.IOEntry{
-					{
-						Offset: offset,
-						Size:   int64(len(fileContent)),
-						Data:   fileContent,
-					},
-				},
-			}
-			offset += int64(len(fileContent))
-			return targetFS.Write(ctx, vec)
-		}
-
-		release = func() {
-			targetFS.Close(ctx)
+		if writeFile, release, err = newSingleWriteAppender(
+			ctx, tblStuff.worker, targetFS, targetPath, cleanup,
+		); err != nil {
+			return
 		}
 	}
 
-	cleanup = func() {
-		_ = targetFS.Delete(context.Background(), targetPath)
+	return
+}
+
+func newSingleWriteAppender(
+	ctx context.Context,
+	worker *ants.Pool,
+	targetFS fileservice.FileService,
+	targetPath string,
+	onError func(),
+) (writeFile func([]byte) error, release func(), err error) {
+	pr, pw := io.Pipe()
+	done := make(chan error, 1)
+
+	if worker == nil {
+		err = moerr.NewInternalErrorNoCtx("worker pool is nil")
+		return
+	}
+
+	if err = worker.Submit(func() {
+		defer close(done)
+		vec := fileservice.IOVector{
+			FilePath: targetPath,
+			Entries: []fileservice.IOEntry{
+				{
+					ReaderForWrite: pr,
+					Size:           -1,
+				},
+			},
+		}
+		if wErr := targetFS.Write(ctx, vec); wErr != nil {
+			_ = pr.CloseWithError(wErr)
+			done <- wErr
+			return
+		}
+		done <- pr.Close()
+	}); err != nil {
+		_ = pr.Close()
+		_ = pw.Close()
+		return
+	}
+
+	writeFile = func(fileContent []byte) error {
+		if len(fileContent) == 0 {
+			return nil
+		}
+		_, err := pw.Write(fileContent)
+		return err
+	}
+
+	release = func() {
+		_ = pw.Close()
+		if wErr := <-done; wErr != nil && onError != nil {
+			onError()
+		}
+		targetFS.Close(ctx)
 	}
 
 	return
