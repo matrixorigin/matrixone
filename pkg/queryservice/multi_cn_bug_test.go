@@ -138,7 +138,7 @@ func TestRequestMultipleCn_ContextTimeout(t *testing.T) {
 		assert.Error(t, err, "Should return error when context times out")
 		// Accept both "context canceled" (from cancel()) and "context deadline exceeded" (from timeout)
 		errStr := err.Error()
-		assert.True(t, 
+		assert.True(t,
 			strings.Contains(errStr, "context canceled") || strings.Contains(errStr, "context deadline exceeded"),
 			"Error should indicate context termination, got: %s", errStr)
 	})
@@ -485,7 +485,7 @@ func TestRequestMultipleCn_FailedNodesOnlyRealAddresses(t *testing.T) {
 		assert.Error(t, err, "Should return error on timeout")
 		// Accept both "context canceled" (from cancel()) and "context deadline exceeded" (from timeout)
 		errStr := err.Error()
-		assert.True(t, 
+		assert.True(t,
 			strings.Contains(errStr, "context canceled") || strings.Contains(errStr, "context deadline exceeded"),
 			"Error should indicate context termination, got: %s", errStr)
 
