@@ -626,28 +626,28 @@ func backSesOutputCallback(handle FeSession, execCtx *ExecCtx, dataSet *batch.Ba
 		return nil
 	}
 
-	back := handle.(*backSession)
+	// uncomment this to enable backExec export data to CSV file.
+	//back := handle.(*backSession)
+	//if back.ep != nil {
+	//	back.ep.Index.Add(1)
+	//	copied, err := dataSet.Dup(execCtx.ses.GetMemPool())
+	//	if err != nil {
+	//		return err
+	//	}
+	//
+	//	constructByte(execCtx.reqCtx, execCtx.ses, copied, back.ep.Index.Load(), back.ep.ByteChan, back.ep)
+	//
+	//	if err = exportDataFromBatchToCSVFile(back.ep); err != nil {
+	//		execCtx.ses.Error(execCtx.reqCtx,
+	//			"Error occurred while exporting to CSV file",
+	//			zap.Error(err))
+	//		return err
+	//	}
+	//
+	//	return nil
+	//}
 
-	if back.ep == nil {
-		return fakeDataSetFetcher2(handle, execCtx, dataSet, nil)
-	}
-
-	back.ep.Index.Add(1)
-	copied, err := dataSet.Dup(execCtx.ses.GetMemPool())
-	if err != nil {
-		return err
-	}
-
-	constructByte(execCtx.reqCtx, execCtx.ses, copied, back.ep.Index.Load(), back.ep.ByteChan, back.ep)
-
-	if err = exportDataFromBatchToCSVFile(back.ep); err != nil {
-		execCtx.ses.Error(execCtx.reqCtx,
-			"Error occurred while exporting to CSV file",
-			zap.Error(err))
-		return err
-	}
-
-	return nil
+	return fakeDataSetFetcher2(handle, execCtx, dataSet, nil)
 }
 
 var NewShareTxnBackgroundExec = func(ctx context.Context, ses FeSession, rawBatch bool) BackgroundExec {

@@ -1704,3 +1704,99 @@ func (d *limitedDeallocator) Deallocate(_ malloc.Hints) {
 func (d *limitedDeallocator) As(malloc.Trait) bool {
 	return false
 }
+
+func TestEncodeDecodedValue_AllTypes(t *testing.T) {
+	p := types.NewPacker()
+	defer p.Close()
+
+	stringTypeOids := []types.T{
+		types.T_char,
+		types.T_varchar,
+		types.T_blob,
+		types.T_text,
+		types.T_json,
+		types.T_binary,
+		types.T_varbinary,
+		types.T_datalink,
+		types.T_array_float32,
+		types.T_array_float64,
+	}
+
+	baseCases := []struct {
+		name   string
+		typ    types.Type
+		value  any
+		expect any
+	}{
+		{name: "nil", typ: types.T_bool.ToType(), value: nil, expect: nil},
+		{name: "bool", typ: types.T_bool.ToType(), value: true, expect: true},
+		{name: "int8", typ: types.T_int8.ToType(), value: int8(-8), expect: int8(-8)},
+		{name: "int16", typ: types.T_int16.ToType(), value: int16(1024), expect: int16(1024)},
+		{name: "int32", typ: types.T_int32.ToType(), value: int32(-2048), expect: int32(-2048)},
+		{name: "int64", typ: types.T_int64.ToType(), value: int64(1 << 40), expect: int64(1 << 40)},
+		{name: "uint8", typ: types.T_uint8.ToType(), value: uint8(250), expect: uint8(250)},
+		{name: "uint16", typ: types.T_uint16.ToType(), value: uint16(1025), expect: uint16(1025)},
+		{name: "uint32", typ: types.T_uint32.ToType(), value: uint32(1 << 20), expect: uint32(1 << 20)},
+		{name: "uint64", typ: types.T_uint64.ToType(), value: uint64(1 << 60), expect: uint64(1 << 60)},
+		{name: "float32", typ: types.T_float32.ToType(), value: float32(1.5), expect: float32(1.5)},
+		{name: "float64", typ: types.T_float64.ToType(), value: float64(-2.5), expect: float64(-2.5)},
+		{name: "date", typ: types.T_date.ToType(), value: types.Date(42), expect: types.Date(42)},
+		{name: "time", typ: types.T_time.ToType(), value: types.Time(123456), expect: types.Time(123456)},
+		{name: "datetime", typ: types.T_datetime.ToType(), value: types.Datetime(789), expect: types.Datetime(789)},
+		{name: "timestamp", typ: types.T_timestamp.ToType(), value: types.Timestamp(456), expect: types.Timestamp(456)},
+		{name: "decimal64", typ: types.T_decimal64.ToType(), value: types.Decimal64(123456), expect: types.Decimal64(123456)},
+		{name: "decimal128", typ: types.T_decimal128.ToType(), value: types.Decimal128{B0_63: 1, B64_127: 2}, expect: types.Decimal128{B0_63: 1, B64_127: 2}},
+		{name: "uuid", typ: types.T_uuid.ToType(), value: types.Uuid{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}, expect: types.Uuid{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}},
+		{name: "bit", typ: types.T_bit.ToType(), value: uint64(10), expect: uint64(10)},
+		{name: "enum_value", typ: types.T_enum.ToType(), value: types.Enum(7), expect: uint16(7)},
+		{name: "enum_uint16", typ: types.T_enum.ToType(), value: uint16(9), expect: uint16(9)},
+		{name: "ts_bytes", typ: types.T_TS.ToType(), value: []byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}, expect: []byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}},
+		{name: "default_bytes", typ: types.T_any.ToType(), value: []byte("fallback"), expect: []byte("fallback")},
+	}
+
+	for _, oid := range stringTypeOids {
+		baseCases = append(baseCases, struct {
+			name   string
+			typ    types.Type
+			value  any
+			expect any
+		}{
+			name:   oid.String(),
+			typ:    oid.ToType(),
+			value:  []byte("string-type"),
+			expect: []byte("string-type"),
+		})
+	}
+
+	for _, tc := range baseCases {
+		p.Reset()
+		err := encodeDecodedValue(p, tc.typ, tc.value)
+		require.NoError(t, err, tc.name)
+
+		tuple, err := types.Unpack(p.GetBuf())
+		require.NoError(t, err, tc.name)
+		require.Len(t, tuple, 1, tc.name)
+		require.Equal(t, tc.expect, tuple[0], tc.name)
+	}
+}
+
+func TestEncodeDecodedValue_TypeMismatch(t *testing.T) {
+	p := types.NewPacker()
+	defer p.Close()
+
+	cases := []struct {
+		name  string
+		typ   types.Type
+		value any
+	}{
+		{name: "int8_from_int16", typ: types.T_int8.ToType(), value: int16(1)},
+		{name: "string_from_string", typ: types.T_varchar.ToType(), value: "not-bytes"},
+		{name: "enum_invalid_type", typ: types.T_enum.ToType(), value: int32(3)},
+	}
+
+	for _, tc := range cases {
+		p.Reset()
+		err := encodeDecodedValue(p, tc.typ, tc.value)
+		require.Error(t, err, tc.name)
+	}
+}
