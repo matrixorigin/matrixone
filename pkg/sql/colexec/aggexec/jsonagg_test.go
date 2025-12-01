@@ -406,7 +406,6 @@ func TestBuildValueByteJsonCoversTypes(t *testing.T) {
 	}
 
 	for _, tt := range cases {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			defer tt.vec.Free(mg.Mp())
 			res, err := buildValueByteJson(tt.vec, tt.row)
