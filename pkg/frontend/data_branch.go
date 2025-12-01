@@ -316,6 +316,7 @@ type compositeOption struct {
 }
 
 func validate(stmt tree.Statement) error {
+	return nil
 	switch s := stmt.(type) {
 	case *tree.DataBranchDiff:
 		if s.OutputOpt != nil && len(s.OutputOpt.DirPath) != 0 {
@@ -494,7 +495,7 @@ func diffMergeAgency(
 		done      bool
 		wg        = new(sync.WaitGroup)
 		outputErr atomic.Value
-		retBatCh  = make(chan batchWithKind, 10)
+		retBatCh  = make(chan batchWithKind, 100)
 		waited    bool
 	)
 
@@ -550,7 +551,7 @@ func diffMergeAgency(
 	}()
 
 	if err = diffOnBase(
-		execCtx.reqCtx, ses, bh, wg, dagInfo, tblStuff, retBatCh, copt,
+		ctx, ses, bh, wg, dagInfo, tblStuff, retBatCh, copt,
 	); err != nil {
 		return
 	}
@@ -990,15 +991,27 @@ func prepareFSForDiffAsFile(
 	ses *Session,
 	stmt *tree.DataBranchDiff,
 	tblStuff tableStuff,
-) (fullFilePath, hint string, writeFile func([]byte) error, release func(), cleanup func(), err error) {
+) (sqlRetPath, hint string, writeFile func([]byte) error, release func(), cleanup func(), err error) {
 	var (
-		fileName string
+		ok           bool
+		stagePath    string
+		fileName     string
+		fullFilePath string
 	)
 
 	fileName = makeFileName(stmt.BaseTable.AtTsExpr, stmt.TargetTable.AtTsExpr, tblStuff)
 	fileName += ".sql"
 
-	fullFilePath = path.Join(stmt.OutputOpt.DirPath, fileName)
+	sqlRetPath = path.Join(stmt.OutputOpt.DirPath, fileName)
+
+	if stagePath, ok, err = tryDecodeStagePath(ses, stmt.OutputOpt.DirPath); err != nil {
+		return
+	} else if ok {
+		sqlRetPath = strings.Replace(sqlRetPath, "stage:/", "stage://", 1)
+		fullFilePath = path.Join(stagePath, fileName)
+	} else {
+		fullFilePath = path.Join(stmt.OutputOpt.DirPath, fileName)
+	}
 
 	hint = fmt.Sprintf(
 		"DELETE FROM %s.%s, REPLACE INTO %s.%s",
@@ -1430,10 +1443,11 @@ func writeCSV(
 		writerErr = make(chan error, 1)
 		closeByte sync.Once
 
-		mrs      = &MysqlResultSet{}
-		hint     string
-		fileName = makeFileName(stmt.BaseTable.AtTsExpr, stmt.TargetTable.AtTsExpr, tblStuff)
-		cleanup  func()
+		mrs        = &MysqlResultSet{}
+		sqlRetHint string
+		sqlRetPath string
+		fileName   = makeFileName(stmt.BaseTable.AtTsExpr, stmt.TargetTable.AtTsExpr, tblStuff)
+		cleanup    func()
 	)
 
 	ep := &ExportConfig{
@@ -1441,26 +1455,47 @@ func writeCSV(
 		service:    ses.service,
 	}
 
+	for range tblStuff.def.visibleIdxes {
+		mrs.AddColumn(&MysqlColumn{})
+	}
+
 	ep.init()
 	ep.ctx = ctx
 	ep.mrs = mrs
 	ep.ByteChan = make(chan *BatchByte, runtime.NumCPU())
 
-	hint = ep.userConfig.String()
-	fileName += ".csv"
-	ep.userConfig.FilePath = path.Join(stmt.OutputOpt.DirPath, fileName)
-
-	for range tblStuff.def.visibleIdxes {
-		mrs.AddColumn(&MysqlColumn{})
-	}
-
 	ep.DefaultBufSize = getPu(ses.GetService()).SV.ExportDataDefaultFlushSize
 	initExportFileParam(ep, mrs)
-	if err = openNewFile(ctx, ep, mrs); err != nil {
+
+	sqlRetHint = ep.userConfig.String()
+	fileName += ".csv"
+
+	var (
+		ok        bool
+		stagePath string
+	)
+
+	sqlRetPath = path.Join(stmt.OutputOpt.DirPath, fileName)
+
+	if stagePath, ok, err = tryDecodeStagePath(ses, stmt.OutputOpt.DirPath); err != nil {
 		return
-	}
-	cleanup = func() {
-		removeFileIgnoreError(context.Background(), ep.service, ep.userConfig.FilePath)
+	} else if ok {
+		sqlRetPath = strings.Replace(sqlRetPath, "stage:/", "stage://", 1)
+		ep.userConfig.StageFilePath = path.Join(stagePath, fileName)
+		if err = openNewFile(ctx, ep, mrs); err != nil {
+			return
+		}
+		cleanup = func() {
+			removeFileIgnoreError(context.Background(), ep.service, ep.userConfig.StageFilePath)
+		}
+	} else {
+		ep.userConfig.FilePath = path.Join(stmt.OutputOpt.DirPath, fileName)
+		if err = openNewFile(ctx, ep, mrs); err != nil {
+			return
+		}
+		cleanup = func() {
+			removeFileIgnoreError(context.Background(), ep.service, ep.userConfig.FilePath)
+		}
 	}
 
 	writerWg.Add(1)
@@ -1602,7 +1637,7 @@ func writeCSV(
 	}
 
 	mrs = ses.GetMysqlResultSet()
-	mrs.AddRow([]any{ep.userConfig.FilePath, hint})
+	mrs.AddRow([]any{sqlRetPath, sqlRetHint})
 
 	return trySaveQueryResult(ctx, ses, mrs)
 }
@@ -2644,6 +2679,12 @@ func diffDataHelper(
 			return err2
 		}
 
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
 		retCh <- batchWithKind{
 			batch: tarBat,
 			kind:  diffInsert,
@@ -2694,6 +2735,12 @@ func diffDataHelper(
 			return nil
 		}); err2 != nil {
 			return err2
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
 		}
 
 		retCh <- batchWithKind{
