@@ -102,7 +102,7 @@ func ConstructBlockPKFilter(
 	}
 
 	var (
-		sortedSearchFunc func(*vector.Vector) []int64
+		sortedSearchFunc   func(*vector.Vector) []int64
 		unSortedSearchFunc func(*vector.Vector) []int64
 	)
 	if !sortedMissing && len(sortedFuncs) > 0 {
@@ -293,7 +293,7 @@ func combineOffsetFuncs(funcs []func(*vector.Vector) []int64) func(*vector.Vecto
 
 func buildBlockPKSearchFuncs(
 	basePKFilter BasePKFilter,
-	) (
+) (
 	sortedSearchFunc func(*vector.Vector) []int64,
 	unSortedSearchFunc func(*vector.Vector) []int64,
 	err error,
