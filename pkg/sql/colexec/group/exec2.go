@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -43,6 +44,7 @@ const (
 
 func (group *Group) Prepare(proc *process.Process) (err error) {
 	group.ctr.state = vm.Build
+	group.ctr.mp = mpool.MustNewNoFixed("group_mpool")
 
 	if group.OpAnalyzer != nil {
 		group.OpAnalyzer.Reset()
@@ -104,7 +106,7 @@ func (group *Group) prepareGroupAndAggArg(proc *process.Process) (err error) {
 		// no group by, only one group, always create the dummy group by batch.
 		if len(group.ctr.groupByBatches) == 0 {
 			group.ctr.groupByBatches = append(group.ctr.groupByBatches,
-				group.ctr.createNewGroupByBatch(proc, group.ctr.groupByEvaluate.Vec, 1))
+				group.ctr.createNewGroupByBatch(group.ctr.groupByEvaluate.Vec, 1))
 			group.ctr.groupByBatches[0].SetRowCount(1)
 		}
 	}
@@ -146,7 +148,7 @@ func (group *Group) prepareGroupAndAggArg(proc *process.Process) (err error) {
 				}
 			}
 		} else {
-			group.ctr.aggList, err = group.ctr.makeAggList(proc, group.Aggs)
+			group.ctr.aggList, err = group.ctr.makeAggList(group.Aggs)
 			if err != nil {
 				return err
 			}
@@ -221,7 +223,7 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 			if len(group.ctr.aggList) != len(group.Aggs) {
-				group.ctr.aggList, err = group.ctr.makeAggList(proc, group.Aggs)
+				group.ctr.aggList, err = group.ctr.makeAggList(group.Aggs)
 				if err != nil {
 					return vm.CancelResult, err
 				}
@@ -313,7 +315,7 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 
 			// append the mini batch to the group by batches, return the number of added
 			// groups.
-			more, err := group.ctr.appendGroupByBatch(proc, group.ctr.groupByEvaluate.Vec, i, insertList)
+			more, err := group.ctr.appendGroupByBatch(group.ctr.groupByEvaluate.Vec, i, insertList)
 			if err != nil {
 				return false, err
 			}
@@ -359,7 +361,7 @@ func (ctr *container) buildHashTable(proc *process.Process) error {
 	return nil
 }
 
-func (ctr *container) createNewGroupByBatch(proc *process.Process, vs []*vector.Vector, size int) *batch.Batch {
+func (ctr *container) createNewGroupByBatch(vs []*vector.Vector, size int) *batch.Batch {
 	// initialize the groupByTypes.   this is again very bad design.
 	// types should be resolved at plan time.
 	if len(ctr.groupByTypes) == 0 {
@@ -372,13 +374,12 @@ func (ctr *container) createNewGroupByBatch(proc *process.Process, vs []*vector.
 	for i, typ := range ctr.groupByTypes {
 		b.Vecs[i] = vector.NewOffHeapVecWithType(typ)
 	}
-	b.PreExtend(proc.Mp(), size)
+	b.PreExtend(ctr.mp, size)
 	b.SetRowCount(0)
 	return b
 }
 
 func (ctr *container) appendGroupByBatch(
-	proc *process.Process,
 	vs []*vector.Vector,
 	offset int,
 	insertList []uint8) (int, error) {
@@ -386,7 +387,7 @@ func (ctr *container) appendGroupByBatch(
 	// first find the target batch.
 	if len(ctr.groupByBatches) == 0 ||
 		ctr.groupByBatches[len(ctr.groupByBatches)-1].RowCount() >= aggBatchSize {
-		ctr.groupByBatches = append(ctr.groupByBatches, ctr.createNewGroupByBatch(proc, vs, aggBatchSize))
+		ctr.groupByBatches = append(ctr.groupByBatches, ctr.createNewGroupByBatch(vs, aggBatchSize))
 	}
 	currBatch := ctr.groupByBatches[len(ctr.groupByBatches)-1]
 	spaceLeft := aggBatchSize - currBatch.RowCount()
@@ -406,7 +407,7 @@ func (ctr *container) appendGroupByBatch(
 
 	// there is enough space in the current batch to insert thisTime.
 	for i, vec := range currBatch.Vecs {
-		err := vec.UnionBatch(vs[i], int64(offset), len(thisTime), thisTime, proc.Mp())
+		err := vec.UnionBatch(vs[i], int64(offset), len(thisTime), thisTime, ctr.mp)
 		if err != nil {
 			return 0, err
 		}
@@ -416,7 +417,7 @@ func (ctr *container) appendGroupByBatch(
 	if toIncrease > spaceLeft {
 		// there is not enough space in the current batch to insert thisTime.
 		// so we need to append the rest of the insertList to the next batch.
-		_, err := ctr.appendGroupByBatch(proc, vs, offset+kth+1, insertList[kth+1:])
+		_, err := ctr.appendGroupByBatch(vs, offset+kth+1, insertList[kth+1:])
 		if err != nil {
 			return 0, err
 		}

@@ -32,7 +32,7 @@ import (
 func TestExtendResultPurely(t *testing.T) {
 	blockLimitation := 100
 
-	mg := SimpleAggMemoryManager{mp: mpool.MustNewZeroNoFixed()}
+	mg := mpool.MustNewZeroNoFixed()
 	{
 		osr := optSplitResult{}
 		osr.init(mg, types.T_bool.ToType(), false, false)
@@ -63,7 +63,7 @@ func TestExtendResultPurely(t *testing.T) {
 func TestFlushAll(t *testing.T) {
 	blockLimitation := 100
 
-	mg := SimpleAggMemoryManager{mp: mpool.MustNewZeroNoFixed()}
+	mg := mpool.MustNewZeroNoFixed()
 	{
 		osr := optSplitResult{}
 		osr.init(mg, types.T_bool.ToType(), false, false)
@@ -73,11 +73,11 @@ func TestFlushAll(t *testing.T) {
 		vs := osr.flushAll()
 		require.True(t, len(vs) == 0 || (len(vs) == 1 && vs[0].Length() == 0))
 		for i := range vs {
-			vs[i].Free(mg.mp)
+			vs[i].Free(mg)
 		}
 
 		osr.free()
-		require.Equal(t, int64(0), mg.mp.CurrNB())
+		require.Equal(t, int64(0), mg.CurrNB())
 	}
 
 	{
@@ -89,11 +89,11 @@ func TestFlushAll(t *testing.T) {
 		vs := osr.flushAll()
 		require.Equal(t, 3, len(vs))
 		for i := range vs {
-			vs[i].Free(mg.mp)
+			vs[i].Free(mg)
 		}
 
 		osr.free()
-		require.Equal(t, int64(0), mg.mp.CurrNB())
+		require.Equal(t, int64(0), mg.CurrNB())
 	}
 }
 
@@ -120,13 +120,13 @@ func checkCapSituation(t *testing.T, expected []int, src []*vector.Vector, ourLi
 }
 
 func TestResultSerialization(t *testing.T) {
-	proc := hackAggMemoryManager()
+	mp := mpool.MustNewZeroNoFixed()
 	{
-		before := proc.Mp().CurrNB()
+		before := mp.CurrNB()
 		r1 := aggResultWithFixedType[int64]{}
 		r1.optSplitResult.optInformation.chunkSize = 2
 		r1.optSplitResult.optInformation.doesThisNeedEmptyList = true
-		r1.init(proc, types.T_int64.ToType(), true, false)
+		r1.init(mp, types.T_int64.ToType(), true, false)
 
 		_, _, _, _, err := r1.resExtend(7)
 		require.NoError(t, err)
@@ -141,7 +141,7 @@ func TestResultSerialization(t *testing.T) {
 		require.Equal(t, 0, len(dist))
 
 		r2 := aggResultWithFixedType[int64]{}
-		r2.init(proc, types.T_int64.ToType(), true, false)
+		r2.init(mp, types.T_int64.ToType(), true, false)
 		r2.optSplitResult.optInformation.chunkSize = 2
 		r2.optSplitResult.optInformation.doesThisNeedEmptyList = true
 
@@ -153,15 +153,15 @@ func TestResultSerialization(t *testing.T) {
 
 		r1.free()
 		r2.free()
-		require.Equal(t, before, proc.Mp().CurrNB())
+		require.Equal(t, before, mp.CurrNB())
 	}
 
 	{
-		before := proc.Mp().CurrNB()
+		before := mp.CurrNB()
 		r1 := aggResultWithBytesType{}
 		r1.optSplitResult.optInformation.chunkSize = 2
 		r1.optSplitResult.optInformation.doesThisNeedEmptyList = true
-		r1.init(proc, types.T_varchar.ToType(), true, false)
+		r1.init(mp, types.T_varchar.ToType(), true, false)
 
 		_, _, _, _, err := r1.resExtend(15)
 		require.NoError(t, err)
@@ -171,7 +171,7 @@ func TestResultSerialization(t *testing.T) {
 		require.Equal(t, 0, len(dist))
 
 		r2 := aggResultWithBytesType{}
-		r2.init(proc, types.T_varchar.ToType(), true, false)
+		r2.init(mp, types.T_varchar.ToType(), true, false)
 		r2.optSplitResult.optInformation.chunkSize = 2
 		r2.optSplitResult.optInformation.doesThisNeedEmptyList = true
 
@@ -183,18 +183,18 @@ func TestResultSerialization(t *testing.T) {
 
 		r1.free()
 		r2.free()
-		require.Equal(t, before, proc.Mp().CurrNB())
+		require.Equal(t, before, mp.CurrNB())
 	}
 }
 
 func TestResultSize(t *testing.T) {
-	proc := hackAggMemoryManager()
+	mp := mpool.MustNewZeroNoFixed()
 	chunkSize := 10
 
 	// Test aggResultWithFixedType
 	{
-		before := proc.Mp().CurrNB()
-		r := initAggResultWithFixedTypeResult[int64](proc, types.T_int64.ToType(), true, 0, false)
+		before := mp.CurrNB()
+		r := initAggResultWithFixedTypeResult[int64](mp, types.T_int64.ToType(), true, 0, false)
 		r.optInformation.chunkSize = chunkSize
 
 		initialSize := r.Size()
@@ -208,13 +208,13 @@ func TestResultSize(t *testing.T) {
 
 		// free and check memory release
 		r.free()
-		require.Equal(t, before, proc.Mp().CurrNB())
+		require.Equal(t, before, mp.CurrNB())
 	}
 
 	// Test aggResultWithBytesType
 	{
-		before := proc.Mp().CurrNB()
-		r := initAggResultWithBytesTypeResult(proc, types.T_varchar.ToType(), true, "", false)
+		before := mp.CurrNB()
+		r := initAggResultWithBytesTypeResult(mp, types.T_varchar.ToType(), true, "", false)
 		r.optInformation.chunkSize = chunkSize
 
 		initialSize := r.Size()
@@ -229,7 +229,7 @@ func TestResultSize(t *testing.T) {
 		// populate with data and check size increase again
 		for i := range r.resultList {
 			for j := 0; j < r.resultList[i].Length(); j++ {
-				err = vector.SetBytesAt(r.resultList[i], j, []byte("test_data"), proc.Mp())
+				err = vector.SetBytesAt(r.resultList[i], j, []byte("test_data"), mp)
 				require.NoError(t, err)
 			}
 		}
@@ -238,6 +238,6 @@ func TestResultSize(t *testing.T) {
 
 		// free and check memory release
 		r.free()
-		require.Equal(t, before, proc.Mp().CurrNB())
+		require.Equal(t, before, mp.CurrNB())
 	}
 }

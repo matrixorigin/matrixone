@@ -77,7 +77,7 @@ func RegisterAggFromBytesRetBytes(
 }
 
 func newAggregatorFromBytesToBytes(
-	mg AggMemoryManager, info singleAggInfo, impl aggImplementation) AggFuncExec {
+	mg *mpool.MPool, info singleAggInfo, impl aggImplementation) AggFuncExec {
 	e := &aggregatorFromBytesToBytes{}
 	e.init(mg, info, impl)
 	return e
@@ -154,7 +154,7 @@ func (exec *aggregatorFromBytesToBytes) UnmarshalFromReader(reader io.Reader, mp
 }
 
 func (exec *aggregatorFromBytesToBytes) init(
-	mg AggMemoryManager,
+	mg *mpool.MPool,
 	info singleAggInfo,
 	impl aggImplementation) {
 

@@ -79,7 +79,7 @@ func RegisterAggFromFixedRetBytes[from types.FixedSizeTExceptStrType](
 }
 
 func newAggregatorFromFixedToBytes(
-	mg AggMemoryManager, info singleAggInfo, impl aggImplementation) AggFuncExec {
+	mg *mpool.MPool, info singleAggInfo, impl aggImplementation) AggFuncExec {
 	switch info.argType.Oid {
 	case types.T_bool:
 		e := &aggregatorFromFixedToBytes[bool]{}
@@ -269,7 +269,7 @@ func (exec *aggregatorFromFixedToBytes[from]) unmarshal(_ *mpool.MPool, result, 
 }
 
 func (exec *aggregatorFromFixedToBytes[from]) init(
-	mg AggMemoryManager,
+	mg *mpool.MPool,
 	info singleAggInfo,
 	impl aggImplementation) {
 

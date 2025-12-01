@@ -83,7 +83,7 @@ func (exec *countColumnExec) unmarshal(_ *mpool.MPool, result, empties, groups [
 	return exec.ret.unmarshalFromBytes(result, empties, groups)
 }
 
-func newCountColumnExecExec(mg AggMemoryManager, info singleAggInfo) AggFuncExec {
+func newCountColumnExecExec(mg *mpool.MPool, info singleAggInfo) AggFuncExec {
 	exec := &countColumnExec{
 		singleAggInfo: info,
 		ret:           initAggResultWithFixedTypeResult[int64](mg, info.retType, false, 0, info.distinct),
@@ -333,11 +333,12 @@ func (exec *countStarExec) unmarshal(_ *mpool.MPool, result, empties, _ [][]byte
 	return exec.ret.unmarshalFromBytes(result, empties, nil)
 }
 
-func newCountStarExec(mg AggMemoryManager, info singleAggInfo) AggFuncExec {
-	return &countStarExec{
+func newCountStarExec(mg *mpool.MPool, info singleAggInfo) AggFuncExec {
+	exec := &countStarExec{
 		singleAggInfo: info,
 		ret:           initAggResultWithFixedTypeResult[int64](mg, info.retType, false, 0, false),
 	}
+	return exec
 }
 
 func (exec *countStarExec) GroupGrow(more int) error {

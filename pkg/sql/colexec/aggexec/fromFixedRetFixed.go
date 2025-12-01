@@ -80,7 +80,7 @@ func RegisterAggFromFixedRetFixed[from, to types.FixedSizeTExceptStrType](
 
 // newSingleAggFuncExec1NewVersion creates a aggregatorFromFixedToFixed from agg information.
 func newSingleAggFuncExec1NewVersion(
-	mg AggMemoryManager, info singleAggInfo, impl aggImplementation) AggFuncExec {
+	mg *mpool.MPool, info singleAggInfo, impl aggImplementation) AggFuncExec {
 	switch info.retType.Oid {
 	case types.T_bool:
 		return newAggregatorFromFixedToFixed[bool](mg, info, impl)
@@ -133,7 +133,7 @@ func newSingleAggFuncExec1NewVersion(
 }
 
 func newAggregatorFromFixedToFixed[to types.FixedSizeTExceptStrType](
-	mg AggMemoryManager, info singleAggInfo, impl aggImplementation) AggFuncExec {
+	mg *mpool.MPool, info singleAggInfo, impl aggImplementation) AggFuncExec {
 	switch info.argType.Oid {
 	case types.T_bool:
 		e := &aggregatorFromFixedToFixed[bool, to]{}
@@ -322,7 +322,7 @@ func (exec *aggregatorFromFixedToFixed[from, to]) unmarshal(_ *mpool.MPool, resu
 }
 
 func (exec *aggregatorFromFixedToFixed[from, to]) init(
-	mg AggMemoryManager,
+	mg *mpool.MPool,
 	info singleAggInfo,
 	impl aggImplementation) {
 

@@ -333,6 +333,7 @@ type MPool struct {
 	inUseCount int32 // number of in use call
 	pools      [NumFixedPool]fixedPool
 	details    *mpoolDetails
+	allocs     sync.Map
 
 	// To remove: this thing is highly unlikely to be of any good use.
 	sels *sync.Pool
@@ -426,7 +427,7 @@ func NewMPool(tag string, cap int64, flag int) (*MPool, error) {
 	mp.cap = cap
 
 	mp.noFixed = (flag & NoFixed) != 0
-	mp.noLock = (flag & NoFixed) != 0
+	mp.noLock = (flag & NoLock) != 0
 
 	if !mp.noFixed {
 		for i := 0; i < NumFixedPool; i++ {

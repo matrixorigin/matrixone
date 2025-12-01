@@ -139,7 +139,7 @@ func (exec *medianColumnExecSelf[T, R]) unmarshal(mp *mpool.MPool, result, empti
 	return exec.ret.unmarshalFromBytes(result, empties, nil)
 }
 
-func newMedianColumnExecSelf[T numeric | types.Decimal64 | types.Decimal128, R float64 | types.Decimal128](mg AggMemoryManager, info singleAggInfo) medianColumnExecSelf[T, R] {
+func newMedianColumnExecSelf[T numeric | types.Decimal64 | types.Decimal128, R float64 | types.Decimal128](mg *mpool.MPool, info singleAggInfo) medianColumnExecSelf[T, R] {
 	var r R
 	// XXX: this distinct impl. is totall screwed.
 	s := medianColumnExecSelf[T, R]{
@@ -414,7 +414,7 @@ type medianColumnNumericExec[T numeric] struct {
 	medianColumnExecSelf[T, float64]
 }
 
-func newMedianColumnNumericExec[T numeric](mg AggMemoryManager, info singleAggInfo) AggFuncExec {
+func newMedianColumnNumericExec[T numeric](mg *mpool.MPool, info singleAggInfo) AggFuncExec {
 	return &medianColumnNumericExec[T]{
 		medianColumnExecSelf: newMedianColumnExecSelf[T, float64](mg, info),
 	}
@@ -424,13 +424,13 @@ type medianColumnDecimalExec[T types.Decimal64 | types.Decimal128] struct {
 	medianColumnExecSelf[T, types.Decimal128]
 }
 
-func newMedianColumnDecimalExec[T types.Decimal64 | types.Decimal128](mg AggMemoryManager, info singleAggInfo) AggFuncExec {
+func newMedianColumnDecimalExec[T types.Decimal64 | types.Decimal128](mg *mpool.MPool, info singleAggInfo) AggFuncExec {
 	return &medianColumnDecimalExec[T]{
 		medianColumnExecSelf: newMedianColumnExecSelf[T, types.Decimal128](mg, info),
 	}
 }
 
-func newMedianExecutor(mg AggMemoryManager, info singleAggInfo) (AggFuncExec, error) {
+func newMedianExecutor(mg *mpool.MPool, info singleAggInfo) (AggFuncExec, error) {
 	if info.distinct {
 		return nil, moerr.NewNotSupportedNoCtx("median in distinct mode")
 	}

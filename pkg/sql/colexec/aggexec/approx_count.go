@@ -186,14 +186,14 @@ func (exec *approxCountVarExec) unmarshal(_ *mpool.MPool, result, empties, group
 	return nil
 }
 
-func newApproxCountFixedExec[T types.FixedSizeTExceptStrType](mg AggMemoryManager, info singleAggInfo) AggFuncExec {
+func newApproxCountFixedExec[T types.FixedSizeTExceptStrType](mg *mpool.MPool, info singleAggInfo) AggFuncExec {
 	return &approxCountFixedExec[T]{
 		singleAggInfo: info,
 		ret:           initAggResultWithFixedTypeResult[uint64](mg, info.retType, false, 0, false),
 	}
 }
 
-func makeApproxCount(mg AggMemoryManager, id int64, arg types.Type) AggFuncExec {
+func makeApproxCount(mg *mpool.MPool, id int64, arg types.Type) AggFuncExec {
 	info := singleAggInfo{
 		aggID:     id,
 		distinct:  false,

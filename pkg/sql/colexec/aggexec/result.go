@@ -71,12 +71,12 @@ type SplitResult interface {
 }
 
 func initAggResultWithFixedTypeResult[T types.FixedSizeTExceptStrType](
-	mg AggMemoryManager,
+	mp *mpool.MPool,
 	resultType types.Type,
 	needEmptySituationList bool, initialValue T, hasDistinct bool) aggResultWithFixedType[T] {
 
 	res := aggResultWithFixedType[T]{}
-	res.init(mg, resultType, needEmptySituationList, hasDistinct)
+	res.init(mp, resultType, needEmptySituationList, hasDistinct)
 	res.InitialValue = initialValue
 	res.values = make([][]T, 1)
 
@@ -84,12 +84,12 @@ func initAggResultWithFixedTypeResult[T types.FixedSizeTExceptStrType](
 }
 
 func initAggResultWithBytesTypeResult(
-	mg AggMemoryManager,
+	mp *mpool.MPool,
 	resultType types.Type,
 	setEmptyGroupToNull bool, initialValue string, hasDistinct bool) aggResultWithBytesType {
 
 	res := aggResultWithBytesType{}
-	res.init(mg, resultType, setEmptyGroupToNull, hasDistinct)
+	res.init(mp, resultType, setEmptyGroupToNull, hasDistinct)
 	res.InitialValue = []byte(initialValue)
 
 	return res
@@ -450,10 +450,8 @@ func (r *optSplitResult) unmarshalFromReader(reader io.Reader) error {
 }
 
 func (r *optSplitResult) init(
-	mg AggMemoryManager, typ types.Type, needEmptyList, hasDistinct bool) {
-	if mg != nil {
-		r.mp = mg.Mp()
-	}
+	mp *mpool.MPool, typ types.Type, needEmptyList, hasDistinct bool) {
+	r.mp = mp
 	r.resultType = typ
 
 	r.optInformation.doesThisNeedEmptyList = needEmptyList

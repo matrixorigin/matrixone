@@ -43,10 +43,10 @@ type singleWindowExec struct {
 	groups []i64Slice
 }
 
-func makeRankDenseRankRowNumber(mg AggMemoryManager, info singleAggInfo) AggFuncExec {
+func makeRankDenseRankRowNumber(mp *mpool.MPool, info singleAggInfo) AggFuncExec {
 	return &singleWindowExec{
 		singleAggInfo: info,
-		ret:           initAggResultWithFixedTypeResult[int64](mg, info.retType, info.emptyNull, 0, false),
+		ret:           initAggResultWithFixedTypeResult[int64](mp, info.retType, info.emptyNull, 0, false),
 	}
 }
 

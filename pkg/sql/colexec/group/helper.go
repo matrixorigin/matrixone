@@ -224,7 +224,7 @@ func (ctr *container) spillDataToDisk(proc *process.Process, parentBkt *spillBuc
 
 	// tmp batch and buffer to write.   it is OK to pass in a nil vec, as
 	// ctr.groupByTypes is already initialized.
-	gbBatch := ctr.createNewGroupByBatch(proc, nil, aggBatchSize)
+	gbBatch := ctr.createNewGroupByBatch(nil, aggBatchSize)
 	defer gbBatch.Clean(proc.Mp())
 	buf := bytes.NewBuffer(make([]byte, 0, common.MiB))
 
@@ -309,7 +309,7 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 
 	// we reset ctr state, and create a new group by batch.
 	ctr.resetForSpill(proc)
-	gbBatch := ctr.createNewGroupByBatch(proc, nil, aggBatchSize)
+	gbBatch := ctr.createNewGroupByBatch(nil, aggBatchSize)
 	totalCnt := int64(0)
 
 	for {
@@ -328,13 +328,13 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 		totalCnt += cnt
 
 		if len(ctr.aggList) != len(aggExprs) {
-			ctr.aggList, err = ctr.makeAggList(proc, aggExprs)
+			ctr.aggList, err = ctr.makeAggList(aggExprs)
 			if err != nil {
 				return false, err
 			}
 		}
 		if len(ctr.spillAggList) != len(aggExprs) {
-			ctr.spillAggList, err = ctr.makeAggList(proc, aggExprs)
+			ctr.spillAggList, err = ctr.makeAggList(aggExprs)
 			if err != nil {
 				return false, err
 			}
@@ -406,7 +406,7 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 				return false, err
 			}
 			insertList, _ := ctr.hr.GetBinaryInsertList(vals, originGroupCount)
-			more, err := ctr.appendGroupByBatch(proc, gbBatch.Vecs, i, insertList)
+			more, err := ctr.appendGroupByBatch(gbBatch.Vecs, i, insertList)
 			if err != nil {
 				return false, err
 			}
@@ -543,7 +543,7 @@ func (ctr *container) needSpill(opAnalyzer process.Analyzer) bool {
 	return needSpill
 }
 
-func (ctr *container) makeAggList(proc *process.Process, aggExprs []aggexec.AggFuncExecExpression) ([]aggexec.AggFuncExec, error) {
+func (ctr *container) makeAggList(aggExprs []aggexec.AggFuncExecExpression) ([]aggexec.AggFuncExec, error) {
 	var err error
 	aggList := make([]aggexec.AggFuncExec, len(aggExprs))
 	for i, agExpr := range aggExprs {
@@ -551,7 +551,7 @@ func (ctr *container) makeAggList(proc *process.Process, aggExprs []aggexec.AggF
 		for j, arg := range agExpr.GetArgExpressions() {
 			typs[j] = types.New(types.T(arg.Typ.Id), arg.Typ.Width, arg.Typ.Scale)
 		}
-		aggList[i], err = aggexec.MakeAgg(proc, agExpr.GetAggID(), agExpr.IsDistinct(), typs...)
+		aggList[i], err = aggexec.MakeAgg(ctr.mp, agExpr.GetAggID(), agExpr.IsDistinct(), typs...)
 		if err != nil {
 			return nil, err
 		}

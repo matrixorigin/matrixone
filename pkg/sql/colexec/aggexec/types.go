@@ -140,26 +140,10 @@ var (
 	}
 )
 
-type AggMemoryManager interface {
-	Mp() *mpool.MPool
-}
-
-type SimpleAggMemoryManager struct {
-	mp *mpool.MPool
-}
-
-func NewSimpleAggMemoryManager(mp *mpool.MPool) AggMemoryManager {
-	return SimpleAggMemoryManager{mp: mp}
-}
-
-func (m SimpleAggMemoryManager) Mp() *mpool.MPool {
-	return m.mp
-}
-
 // MakeAgg is the only exporting method to create an aggregation function executor.
 // all the aggID should be registered before calling this function.
 func MakeAgg(
-	mg AggMemoryManager,
+	mg *mpool.MPool,
 	aggID int64, isDistinct bool,
 	param ...types.Type,
 ) (AggFuncExec, error) {
@@ -177,7 +161,7 @@ func MakeAgg(
 	return nil, moerr.NewInternalErrorNoCtx(errmsg)
 }
 
-func MakeInitialAggListFromList(mg AggMemoryManager, list []AggFuncExec) ([]AggFuncExec, error) {
+func MakeInitialAggListFromList(mg *mpool.MPool, list []AggFuncExec) ([]AggFuncExec, error) {
 	result := make([]AggFuncExec, 0, len(list))
 	for _, v := range list {
 		param, _ := v.TypesInfo()
@@ -192,7 +176,7 @@ func MakeInitialAggListFromList(mg AggMemoryManager, list []AggFuncExec) ([]AggF
 
 // makeSingleAgg supports to create an aggregation function executor for single column.
 func makeSingleAgg(
-	mg AggMemoryManager,
+	mg *mpool.MPool,
 	aggID int64, isDistinct bool,
 	param types.Type) AggFuncExec {
 	agg, err := getSingleAggImplByInfo(aggID, param)
@@ -225,24 +209,24 @@ func makeSingleAgg(
 }
 
 func makeSpecialAggExec(
-	mg AggMemoryManager,
+	mp *mpool.MPool,
 	id int64, isDistinct bool, params ...types.Type,
 ) (AggFuncExec, bool, error) {
 	if _, ok := specialAgg[id]; ok {
 		switch id {
 		case AggIdOfCountColumn:
-			return makeCount(mg, false, id, isDistinct, params[0]), true, nil
+			return makeCount(mp, false, id, isDistinct, params[0]), true, nil
 		case AggIdOfCountStar:
-			return makeCount(mg, true, id, isDistinct, params[0]), true, nil
+			return makeCount(mp, true, id, isDistinct, params[0]), true, nil
 		case AggIdOfMedian:
-			exec, err := makeMedian(mg, id, isDistinct, params[0])
+			exec, err := makeMedian(mp, id, isDistinct, params[0])
 			return exec, true, err
 		case AggIdOfGroupConcat:
-			return makeGroupConcat(mg, id, isDistinct, params, getCroupConcatRet(params...), groupConcatSep), true, nil
+			return makeGroupConcat(mp, id, isDistinct, params, getCroupConcatRet(params...), groupConcatSep), true, nil
 		case AggIdOfApproxCount:
-			return makeApproxCount(mg, id, params[0]), true, nil
+			return makeApproxCount(mp, id, params[0]), true, nil
 		case WinIdOfRowNumber, WinIdOfRank, WinIdOfDenseRank:
-			exec, err := makeWindowExec(mg, id, isDistinct)
+			exec, err := makeWindowExec(mp, id, isDistinct)
 			return exec, true, err
 		}
 	}
@@ -252,7 +236,7 @@ func makeSpecialAggExec(
 // makeGroupConcat is one special case of makeMultiAgg.
 // it supports creating an aggregation function executor for special aggregation `group_concat()`.
 func makeGroupConcat(
-	mg AggMemoryManager,
+	mp *mpool.MPool,
 	aggID int64, isDistinct bool,
 	param []types.Type, result types.Type,
 	separator string) AggFuncExec {
@@ -263,11 +247,11 @@ func makeGroupConcat(
 		retType:   result,
 		emptyNull: true,
 	}
-	return newGroupConcatExec(mg, info, separator)
+	return newGroupConcatExec(mp, info, separator)
 }
 
 func makeCount(
-	mg AggMemoryManager, isStar bool,
+	mp *mpool.MPool, isStar bool,
 	aggID int64, isDistinct bool,
 	param types.Type) AggFuncExec {
 	info := singleAggInfo{
@@ -279,13 +263,13 @@ func makeCount(
 	}
 
 	if isStar {
-		return newCountStarExec(mg, info)
+		return newCountStarExec(mp, info)
 	}
-	return newCountColumnExecExec(mg, info)
+	return newCountColumnExecExec(mp, info)
 }
 
 func makeMedian(
-	mg AggMemoryManager, aggID int64, isDistinct bool, param types.Type) (AggFuncExec, error) {
+	mp *mpool.MPool, aggID int64, isDistinct bool, param types.Type) (AggFuncExec, error) {
 	info := singleAggInfo{
 		aggID:     aggID,
 		distinct:  isDistinct,
@@ -293,11 +277,11 @@ func makeMedian(
 		retType:   MedianReturnType([]types.Type{param}),
 		emptyNull: true,
 	}
-	return newMedianExecutor(mg, info)
+	return newMedianExecutor(mp, info)
 }
 
 func makeWindowExec(
-	mg AggMemoryManager, aggID int64, isDistinct bool) (AggFuncExec, error) {
+	mp *mpool.MPool, aggID int64, isDistinct bool) (AggFuncExec, error) {
 	if isDistinct {
 		return nil, moerr.NewInternalErrorNoCtx("window function does not support `distinct`")
 	}
@@ -309,7 +293,7 @@ func makeWindowExec(
 		retType:   types.T_int64.ToType(),
 		emptyNull: false,
 	}
-	return makeRankDenseRankRowNumber(mg, info), nil
+	return makeRankDenseRankRowNumber(mp, info), nil
 }
 
 type dummyBinaryMarshaler struct {

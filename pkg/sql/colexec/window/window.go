@@ -123,7 +123,7 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 
 			ctr.batAggs = make([]aggexec.AggFuncExec, len(window.Aggs))
 			for i, ag := range window.Aggs {
-				ctr.batAggs[i], err = aggexec.MakeAgg(proc, ag.GetAggID(), ag.IsDistinct(), window.Types[i])
+				ctr.batAggs[i], err = aggexec.MakeAgg(proc.Mp(), ag.GetAggID(), ag.IsDistinct(), window.Types[i])
 				if err != nil {
 					return result, err
 				}

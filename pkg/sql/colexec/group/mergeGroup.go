@@ -128,7 +128,7 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 
 		if mergeGroup.ctr.mtyp == H0 {
 			if len(mergeGroup.ctr.groupByBatches) == 0 {
-				gb := mergeGroup.ctr.createNewGroupByBatch(proc, bat.Vecs, 1)
+				gb := mergeGroup.ctr.createNewGroupByBatch(bat.Vecs, 1)
 				gb.SetRowCount(1)
 				mergeGroup.ctr.groupByBatches = append(mergeGroup.ctr.groupByBatches, gb)
 			}
@@ -148,10 +148,10 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 			}
 			mergeGroup.ctr.setSpillMem(mergeGroup.SpillMem, mergeGroup.Aggs)
 
-			if mergeGroup.ctr.aggList, err = mergeGroup.ctr.makeAggList(proc, mergeGroup.Aggs); err != nil {
+			if mergeGroup.ctr.aggList, err = mergeGroup.ctr.makeAggList(mergeGroup.Aggs); err != nil {
 				return false, err
 			}
-			if mergeGroup.ctr.spillAggList, err = mergeGroup.ctr.makeAggList(proc, mergeGroup.Aggs); err != nil {
+			if mergeGroup.ctr.spillAggList, err = mergeGroup.ctr.makeAggList(mergeGroup.Aggs); err != nil {
 				return false, err
 			}
 		}
@@ -202,7 +202,7 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 				return false, err
 			}
 			insertList, _ := mergeGroup.ctr.hr.GetBinaryInsertList(vals, originGroupCount)
-			more, err := mergeGroup.ctr.appendGroupByBatch(proc, bat.Vecs, i, insertList)
+			more, err := mergeGroup.ctr.appendGroupByBatch(bat.Vecs, i, insertList)
 			if err != nil {
 				return false, err
 			}

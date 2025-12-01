@@ -20,6 +20,7 @@ import (
 	"os"
 
 	"github.com/matrixorigin/matrixone/pkg/common"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -78,7 +79,9 @@ func (bkt *spillBucket) free(proc *process.Process) {
 
 // container running context.
 type container struct {
-	state        vm.CtrState
+	state vm.CtrState
+	mp    *mpool.MPool
+
 	inputDone    bool
 	currBatchIdx int
 
@@ -190,13 +193,23 @@ func (ctr *container) free(proc *process.Process) {
 	ctr.freeGroupByBatches(proc)
 	ctr.freeAggList(proc)
 	ctr.freeSpillBkts(proc)
+
+	mpool.DeleteMPool(ctr.mp)
+	ctr.mp = nil
 }
 
 func (ctr *container) reset(proc *process.Process) {
+	// reset the container state, do not reuse anything
 	ctr.state = vm.Build
+
 	ctr.inputDone = false
+	ctr.hr.Free0()
+
 	ctr.resetForSpill(proc)
 	ctr.freeSpillBkts(proc)
+
+	mpool.DeleteMPool(ctr.mp)
+	ctr.mp = mpool.MustNewNoFixed("group_mpool")
 }
 
 func (ctr *container) resetForSpill(proc *process.Process) {

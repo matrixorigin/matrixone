@@ -112,7 +112,7 @@ func GroupConcatReturnType(args []types.Type) types.Type {
 	return types.T_text.ToType()
 }
 
-func newGroupConcatExec(mg AggMemoryManager, info multiAggInfo, separator string) AggFuncExec {
+func newGroupConcatExec(mg *mpool.MPool, info multiAggInfo, separator string) AggFuncExec {
 	exec := &groupConcatExec{
 		multiAggInfo: info,
 		ret:          initAggResultWithBytesTypeResult(mg, info.retType, info.emptyNull, "", info.distinct),
