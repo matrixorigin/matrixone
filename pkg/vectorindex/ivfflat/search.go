@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
+	cuvs "github.com/rapidsai/cuvs/go"
 )
 
 var runSql = sqlexec.RunSql
@@ -228,6 +229,12 @@ func NewIvfflatSearch[T types.RealNumbers](
 ) *IvfflatSearch[T] {
 	nthread := vectorindex.GetConcurrency(tblcfg.ThreadsSearch)
 	s := &IvfflatSearch[T]{Idxcfg: idxcfg, Tblcfg: tblcfg, ThreadsSearch: nthread}
+
+	resources, err := cuvs.NewResource(nil)
+	if err != nil {
+		return nil
+	}
+	defer resources.Close()
 	return s
 }
 
