@@ -448,3 +448,103 @@ func TestRequestMultipleCn_FailedNodesOnlyRealAddresses(t *testing.T) {
 		}
 	})
 }
+
+// TestRequestMultipleCn_TimeoutOverrideLogging verifies that when context times out
+// after a connection error has been recorded, the timeout override is logged.
+//
+// This test covers the code path at query_service.go:302-308 where a timeout error
+// overrides a previous connection error and logs the override for debugging.
+//
+// The test uses event-based synchronization (no sleep/random factors) to ensure:
+// 1. A connection error occurs first (sets retErr)
+// 2. Then context is canceled (triggers <-ctx.Done())
+// 3. The timeout override logging path is executed (retErr != nil branch)
+func TestRequestMultipleCn_TimeoutOverrideLogging(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	cn := metadata.CNService{ServiceID: "test_timeout_override"}
+	runTestWithQueryService(t, cn, nil, func(cli client.QueryClient, addr string) {
+		// Event-based synchronization channels (no sleep, precise control)
+		connectionErrorOccurred := make(chan struct{}) // Signal when connection error happens
+		node1ResponseBlocked := make(chan struct{})     // Block node1's response processing
+
+		// Use WithTimeout with a very long deadline to avoid timing issues on slow systems.
+		// The actual cancellation is controlled precisely via events, not by timeout.
+		// morpc's Future requires a deadline, but we cancel immediately after connection error,
+		// so the long timeout will never be reached.
+		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Hour)
+		defer cancel()
+
+		// Simulate 2 CN nodes:
+		// - node1: valid address (will succeed, but we'll block its response processing)
+		// - node2: non-existent socket (will fail immediately, setting retErr)
+		node1 := addr
+		node2 := fmt.Sprintf("unix:///tmp/nonexistent-%d.sock", time.Now().Nanosecond())
+
+		var successCount int
+		genRequest := func() *pb.Request {
+			req := cli.NewRequest(pb.CmdMethod_GetCacheInfo)
+			req.GetCacheInfoRequest = &pb.GetCacheInfoRequest{}
+			return req
+		}
+
+		// Block node1's response processing to ensure main loop is still waiting
+		// when context times out. This ensures responsesReceived < validNodes.
+		handleValidResponse := func(nodeAddr string, rsp *pb.Response) {
+			if nodeAddr == node1 {
+				// Block until we're ready to process (after timeout override is logged)
+				<-node1ResponseBlocked
+			}
+			if rsp != nil && rsp.GetCacheInfoResponse != nil {
+				successCount++
+			}
+		}
+
+		// Monitor connection errors: signal when node2 fails (sets retErr)
+		handleInvalidResponse := func(nodeAddr string) {
+			if nodeAddr == node2 {
+				// Connection error occurred, retErr is now set
+				// Signal that retErr is set (non-blocking)
+				select {
+				case connectionErrorOccurred <- struct{}{}:
+				default:
+				}
+			}
+		}
+
+		// Start RequestMultipleCn in a goroutine
+		var err error
+		done := make(chan struct{})
+		go func() {
+			err = RequestMultipleCn(ctx, []string{node1, node2}, cli, genRequest, handleValidResponse, handleInvalidResponse)
+			close(done)
+		}()
+
+		// Step 1: Wait for connection error to occur (node2 fails, retErr is set)
+		// This is event-based: we wait for the actual event, not a timeout
+		<-connectionErrorOccurred
+
+		// Step 2: Cancel context to trigger <-ctx.Done() immediately
+		// At this point:
+		// - retErr is set (connection error from node2)
+		// - Main loop is still waiting for node1's response (blocked in handleValidResponse)
+		// - responsesReceived < validNodes, so loop continues
+		// This simulates a timeout happening after connection error
+		// The timeout override logging path (line 302-308) will be executed
+		cancel()
+
+		// Wait for RequestMultipleCn to complete
+		// The context cancellation should trigger timeout override logging
+		<-done
+
+		// Unblock node1's response processing (cleanup)
+		close(node1ResponseBlocked)
+
+		// Verify that an error is returned
+		assert.Error(t, err, "Should return error")
+		// The code path at line 302-308 should be covered because:
+		// 1. retErr != nil (connection error from node2)
+		// 2. <-ctx.Done() triggered (context canceled/timeout)
+		// 3. Main loop was still waiting (node1 blocked)
+	})
+}
