@@ -386,7 +386,11 @@ class VectorManager(_VectorManagerBase):
         table_name = _extract_table_name(table_name)
 
         if database is None:
-            database = getattr(self.client, 'database', 'test')
+            # Try to get database from connection params first
+            if hasattr(self.client, '_connection_params') and self.client._connection_params:
+                database = self.client._connection_params.get('database')
+            if not database:
+                database = getattr(self.client, 'database', 'test')
 
         # Auto-infer column name if not provided
         if not column_name:
@@ -619,7 +623,11 @@ class AsyncVectorManager(_VectorManagerBase):
         table_name = _extract_table_name(table_name)
 
         if database is None:
-            database = getattr(self.client, 'database', 'test')
+            # Try to get database from connection params first
+            if hasattr(self.client, '_connection_params') and self.client._connection_params:
+                database = self.client._connection_params.get('database')
+            if not database:
+                database = getattr(self.client, 'database', 'test')
 
         # Auto-infer column name if not provided
         if not column_name:

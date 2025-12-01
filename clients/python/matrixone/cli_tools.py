@@ -1933,8 +1933,8 @@ class MatrixOneCLI(cmd.Cmd):
                 algo_table_type = row[3] if len(row) > 3 else None
 
                 try:
-                    # Use SDK's get_ivf_stats method with column name
-                    stats = self.client.vector_ops.get_ivf_stats(table_name, column_name)
+                    # Use SDK's get_ivf_stats method with column name and database
+                    stats = self.client.vector_ops.get_ivf_stats(table_name, column_name, database=database)
 
                     if stats and 'index_tables' in stats:
                         # Show centroid distribution
