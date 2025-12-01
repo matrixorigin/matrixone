@@ -113,7 +113,7 @@ func (eb *entryBlock) release() {
 	}
 	eb.remaining--
 	if eb.remaining == 0 && eb.deallocator != nil {
-		eb.deallocator.Deallocate(malloc.NoHints)
+		eb.deallocator.Deallocate()
 		eb.deallocator = nil
 	}
 }

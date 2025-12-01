@@ -60,7 +60,7 @@ func NewCheckedAllocator[U Allocator](
 				}
 
 				hints |= DoNotReuse
-				args.deallocator.Deallocate(hints)
+				args.deallocator.Deallocate()
 
 				// unref to allow finalizer
 				args.deallocated = nil

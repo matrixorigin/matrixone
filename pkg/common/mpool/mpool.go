@@ -597,7 +597,33 @@ func (mp *MPool) Alloc(sz int, offHeap bool) ([]byte, error) {
 		return bs.ToSlice(sz, int(mp.pools[idx].eleSz)), nil
 	}
 
-	return alloc(sz, requiredSpaceWithoutHeader, mp, offHeap), nil
+	return mp.alloc(sz, requiredSpaceWithoutHeader, offHeap), nil
+}
+
+func (mp *MPool) alloc(sz int, requiredSpaceWithoutHeader int, offHeap bool) []byte {
+	allocateSize := requiredSpaceWithoutHeader + kMemHdrSz
+	var bs []byte
+	var err error
+	if offHeap {
+		bs, err = allocator().Allocate(uint64(allocateSize), malloc.NoHints)
+		if err != nil {
+			panic(err)
+		}
+	} else {
+		bs = make([]byte, allocateSize)
+	}
+
+	hdr := unsafe.Pointer(&bs[0])
+	pHdr := (*memHdr)(hdr)
+	pHdr.poolId = mp.id
+	pHdr.fixedPoolIdx = NumFixedPool
+	pHdr.allocSz = int32(sz)
+	pHdr.SetGuard()
+	if mp.details != nil {
+		mp.details.recordAlloc(int64(pHdr.allocSz))
+	}
+	pHdr.offHeap = offHeap
+	return pHdr.ToSlice(sz, requiredSpaceWithoutHeader)
 }
 
 func (mp *MPool) Free(bs []byte) {
@@ -605,7 +631,12 @@ func (mp *MPool) Free(bs []byte) {
 		return
 	}
 	bs = bs[:1]
-	hdr := unsafe.Add((unsafe.Pointer)(&bs[0]), -kMemHdrSz)
+	ptr := unsafe.Pointer(&bs[0])
+	mp.freePtr(ptr)
+}
+
+func (mp *MPool) freePtr(ptr unsafe.Pointer) {
+	hdr := unsafe.Add(ptr, -kMemHdrSz)
 	pHdr := (*memHdr)(hdr)
 
 	if !pHdr.CheckGuard() {
@@ -622,7 +653,7 @@ func (mp *MPool) Free(bs []byte) {
 		if !ok {
 			panic(moerr.NewInternalErrorNoCtxf("invalid mpool id %d", pHdr.poolId))
 		}
-		(otherPool.(*MPool)).Free(bs)
+		(otherPool.(*MPool)).freePtr(ptr)
 		return
 	}
 
@@ -649,11 +680,7 @@ func (mp *MPool) Free(bs []byte) {
 			panic(moerr.NewInternalErrorNoCtx("free size -1, possible double free"))
 		}
 		if pHdr.offHeap {
-			allocator().Deallocate(
-				unsafe.Slice((*byte)(hdr), 1),
-				// issue: https://github.com/matrixorigin/matrixone/issues/19758
-				malloc.IgnoreMunmapError,
-			)
+			allocator().Deallocate(unsafe.Slice((*byte)(hdr), 1))
 		}
 	}
 }
@@ -757,29 +784,6 @@ func (mp *MPool) Grow2(old []byte, old2 []byte, sz int, offHeap bool) ([]byte, e
 	return ret, nil
 }
 
-/*
-func (mp *MPool) Increase(nb int64) error {
-	gcurr := globalStats.RecordAlloc("global", nb)
-	if gcurr > GlobalCap() {
-		globalStats.RecordFree(mp.tag, nb)
-		return moerr.NewOOMNoCtx()
-	}
-
-	// check if it is under my cap
-	mycurr := mp.stats.RecordAlloc(mp.tag, nb)
-	if mycurr > mp.Cap() {
-		mp.stats.RecordFree(mp.tag, nb)
-		return moerr.NewInternalErrorNoCtx("mpool out of space, alloc %d bytes, cap %d", nb, mp.cap)
-	}
-	return nil
-}
-
-func (mp *MPool) Decrease(nb int64) {
-	mp.stats.RecordFree(mp.tag, nb)
-	globalStats.RecordFree("global", nb)
-}
-*/
-
 func MakeSliceWithCap[T any](n, cap int, mp *MPool, offHeap bool) ([]T, error) {
 	var t T
 	tsz := unsafe.Sizeof(t)
@@ -804,6 +808,14 @@ func MakeSliceArgs[T any](mp *MPool, offHeap bool, args ...T) ([]T, error) {
 	}
 	copy(ret, args)
 	return ret, nil
+}
+
+func FreeSlice[T any](mp *MPool, bs []T) {
+	if cap(bs) == 0 {
+		return
+	}
+	// Free only care about the pointer,
+	mp.Free(unsafe.Slice((*byte)(unsafe.Pointer(&bs[0])), 1))
 }
 
 // Report memory usage in json.

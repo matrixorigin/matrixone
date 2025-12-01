@@ -22,9 +22,9 @@ type chainDeallocator []Deallocator
 
 var _ Deallocator = &chainDeallocator{}
 
-func (c *chainDeallocator) Deallocate(hints Hints) {
+func (c *chainDeallocator) Deallocate() {
 	for i := len(*c) - 1; i >= 0; i-- {
-		(*c)[i].Deallocate(hints)
+		(*c)[i].Deallocate()
 	}
 	*c = (*c)[:0]
 	chainDeallocatorPool.Put(c)

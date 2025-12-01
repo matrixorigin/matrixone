@@ -957,7 +957,7 @@ type limitedDeallocator struct {
 	size      uint64
 }
 
-func (d *limitedDeallocator) Deallocate(_ malloc.Hints) {
+func (d *limitedDeallocator) Deallocate() {
 	d.allocator.mu.Lock()
 	d.allocator.used -= d.size
 	d.allocator.mu.Unlock()

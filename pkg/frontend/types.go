@@ -460,7 +460,7 @@ func (s *SessionAllocator) Alloc(capacity int) ([]byte, error) {
 }
 
 func (s SessionAllocator) Free(bs []byte) {
-	s.allocator.Deallocate(bs, malloc.NoClear)
+	s.allocator.Deallocate(bs)
 }
 
 var _ FeSession = &Session{}

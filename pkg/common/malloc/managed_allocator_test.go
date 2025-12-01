@@ -58,7 +58,7 @@ func TestManagedAllocator(t *testing.T) {
 			}
 		}
 		// deallocate
-		allocator.Deallocate(slice, NoHints)
+		allocator.Deallocate(slice)
 	}
 }
 
@@ -79,7 +79,7 @@ func BenchmarkManagedAllocator(b *testing.B) {
 				if err != nil {
 					b.Fatal(err)
 				}
-				allcator.Deallocate(slice, NoHints)
+				allcator.Deallocate(slice)
 			}
 		})
 
@@ -92,7 +92,7 @@ func BenchmarkManagedAllocator(b *testing.B) {
 					if err != nil {
 						b.Fatal(err)
 					}
-					allcator.Deallocate(slice, NoHints)
+					allcator.Deallocate(slice)
 				}
 			})
 		})
@@ -126,6 +126,6 @@ func FuzzManagedAllocator(f *testing.F) {
 		for i := range bs {
 			bs[i] = uint8(i)
 		}
-		allocator.Deallocate(bs, NoHints)
+		allocator.Deallocate(bs)
 	})
 }

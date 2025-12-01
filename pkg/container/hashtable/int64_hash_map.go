@@ -56,7 +56,7 @@ func init() {
 func (ht *Int64HashMap) Free() {
 	for i, de := range ht.rawDataDeallocators {
 		if de != nil {
-			de.Deallocate(malloc.NoHints)
+			de.Deallocate()
 		}
 		ht.rawData[i], ht.cells[i] = nil, nil
 	}
@@ -284,7 +284,7 @@ func (ht *Int64HashMap) ResizeOnDemand(cnt int) error {
 			}
 		}
 
-		oldDeallocator.Deallocate(malloc.NoHints)
+		oldDeallocator.Deallocate()
 	}
 
 	return nil

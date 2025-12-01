@@ -63,7 +63,7 @@ func init() {
 func (ht *StringHashMap) Free() {
 	for _, de := range ht.rawDataDeallocators {
 		if de != nil {
-			de.Deallocate(malloc.NoHints)
+			de.Deallocate()
 		}
 	}
 	for i := range ht.rawData {
@@ -291,7 +291,7 @@ func (ht *StringHashMap) ResizeOnDemand(n uint64) error {
 			}
 		}
 
-		oldDeallocator.Deallocate(malloc.NoHints)
+		oldDeallocator.Deallocate()
 	}
 
 	return nil

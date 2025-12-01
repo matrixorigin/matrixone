@@ -35,11 +35,3 @@ var allocator = sync.OnceValue(func() *malloc.ManagedAllocator[malloc.Allocator]
 	// managed
 	return malloc.NewManagedAllocator(allocator)
 })
-
-func MakeBytes(size int) ([]byte, error) {
-	return allocator().Allocate(uint64(size), malloc.NoHints)
-}
-
-func FreeBytes(bs []byte) {
-	allocator().Deallocate(bs, malloc.NoHints)
-}

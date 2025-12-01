@@ -65,7 +65,7 @@ func (s *InuseTrackingAllocator[U]) Allocate(size uint64, hints Hints) ([]byte, 
 	n := s.inUse.Add(size)
 	if s.onChange != nil {
 		if err := s.onChange(n); err != nil {
-			dec.Deallocate(hints)
+			dec.Deallocate()
 			panic(err)
 		}
 	}

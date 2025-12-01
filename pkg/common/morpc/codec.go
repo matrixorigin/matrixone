@@ -258,7 +258,7 @@ func (c *baseCodec) Encode(data interface{}, out *buf.ByteBuf, conn io.Writer) e
 				discardWritten()
 				return err
 			}
-			defer dec.Deallocate(malloc.NoHints)
+			defer dec.Deallocate()
 			compressedPayloadData = v
 		}
 
@@ -319,7 +319,7 @@ func (c *baseCodec) compress(src []byte) ([]byte, malloc.Deallocator, error) {
 	}
 	dst, err = c.compressTo(src, dst)
 	if err != nil {
-		dec.Deallocate(malloc.NoHints)
+		dec.Deallocate()
 		return nil, nil, err
 	}
 	return dst, dec, nil
@@ -340,7 +340,7 @@ func (c *baseCodec) uncompress(src []byte) ([]byte, malloc.Deallocator, error) {
 		if err == nil {
 			return dst, dec, nil
 		}
-		dec.Deallocate(malloc.NoHints)
+		dec.Deallocate()
 		if err != lz4.ErrInvalidSourceShortBuffer {
 			return nil, nil, err
 		}
@@ -437,7 +437,7 @@ func (c *baseCodec) writeBody(
 	if err != nil {
 		return nil, err
 	}
-	defer dec.Deallocate(malloc.NoHints)
+	defer dec.Deallocate()
 	if _, err = msg.MarshalTo(origin); err != nil {
 		return nil, err
 	}
@@ -447,7 +447,7 @@ func (c *baseCodec) writeBody(
 	if err != nil {
 		return nil, err
 	}
-	defer dec.Deallocate(malloc.NoHints)
+	defer dec.Deallocate()
 
 	dst, err = compress(origin, dst)
 	if err != nil {
@@ -494,7 +494,7 @@ func (c *baseCodec) readMessage(
 		if err != nil {
 			return err
 		}
-		defer dec.Deallocate(malloc.NoHints)
+		defer dec.Deallocate()
 		body = dstBody
 
 		if payloadSize > 0 {
@@ -506,7 +506,7 @@ func (c *baseCodec) readMessage(
 			// modules.
 			// TODO: We currently use copy to avoid memory leaks in mpool, but this introduces
 			// a memory allocation overhead that will need to be optimized away.
-			defer dec.Deallocate(malloc.NoHints)
+			defer dec.Deallocate()
 			payload = clone(dstPayload)
 		}
 	}
