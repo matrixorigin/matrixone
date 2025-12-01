@@ -17,6 +17,7 @@ package queryservice
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -25,6 +26,9 @@ import (
 	"github.com/lni/goutils/leaktest"
 	"github.com/stretchr/testify/assert"
 
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
@@ -593,4 +597,184 @@ func TestRequestMultipleCn_TimeoutOverrideLogging(t *testing.T) {
 		// 2. <-ctx.Done() triggered (context canceled)
 		// 3. When <-ctx.Done() is selected, retErr != nil, so the logging branch is executed
 	})
+}
+
+// TestRequestMultipleCn_ResponseErrorWithDeadlineExceeded verifies that when a response
+// returns with context.DeadlineExceeded error, the code path at query_service.go:202-206
+// is correctly executed.
+//
+// This test covers the specific code path:
+//
+//	if ctx.Err() == context.DeadlineExceeded || errors.Is(res.err, context.DeadlineExceeded) {
+//		// Context has timed out, prioritize timeout error
+//		if retErr == nil {
+//			retErr = moerr.NewInternalError(ctx, "RequestMultipleCn : context deadline exceeded")
+//		}
+//	}
+//
+// The test ensures:
+// 1. SendMessage returns context.DeadlineExceeded error (or ctx.Err() == context.DeadlineExceeded)
+// 2. retErr == nil (this is the first error)
+// 3. The timeout error is correctly set
+//
+// Strategy: Use event-based synchronization (no sleep/random factors) to ensure the context
+// times out before SendMessage completes. We create a handler that waits for a signal
+// before responding, allowing us to precisely control when the context times out relative
+// to when the response is processed.
+//
+// The test uses event-based synchronization:
+// 1. Wait for handler to be called (event: handlerCalled)
+// 2. Wait for context to timeout naturally (event: <-ctx.Done())
+// 3. Wait for response to be processed (event: responseReceived)
+//
+// This ensures deterministic behavior across different test environments.
+func TestRequestMultipleCn_ResponseErrorWithDeadlineExceeded(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	cn := metadata.CNService{ServiceID: "test_response_deadline_exceeded"}
+	sid := ""
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			defer leaktest.AfterTest(t)()
+			runtime.ServiceRuntime(sid).SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+			runtime.SetupServiceBasedRuntime(cn.ServiceID, runtime.ServiceRuntime(sid))
+			address := fmt.Sprintf("unix:///tmp/cn-%d-%s.sock",
+				time.Now().Nanosecond(), cn.ServiceID)
+
+			if err := os.RemoveAll(address[7:]); err != nil {
+				panic(err)
+			}
+
+			qs, err := NewQueryService(cn.ServiceID, address, morpc.Config{})
+			assert.NoError(t, err)
+
+			qt, err := client.NewQueryClient(cn.ServiceID, morpc.Config{})
+			assert.NoError(t, err)
+
+			// Event-based synchronization: signal when handler is called
+			handlerCalled := make(chan struct{})
+			// Signal when response with error is received in main loop (before processing)
+			responseReceived := make(chan struct{})
+			// Signal to allow handler to proceed (or timeout)
+			allowProceed := make(chan struct{})
+
+			// Create a handler that waits for a signal before responding
+			// This allows us to control when the response is sent relative to context timeout
+			qs.AddHandleFunc(pb.CmdMethod_GetCacheInfo, func(ctx context.Context, request *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
+				// Signal that handler is called
+				select {
+				case handlerCalled <- struct{}{}:
+				default:
+				}
+
+				// Wait for signal to proceed or context timeout
+				select {
+				case <-allowProceed:
+					// Proceed with response
+					ci := &pb.CacheInfo{
+						NodeType:  cn.ServiceID,
+						NodeId:    "uuid",
+						CacheType: "memory",
+					}
+					resp.GetCacheInfoResponse = &pb.GetCacheInfoResponse{
+						CacheInfoList: []*pb.CacheInfo{ci},
+					}
+					return nil
+				case <-ctx.Done():
+					// Context timed out, return timeout error
+					return ctx.Err()
+				}
+			}, false)
+
+			err = qs.Start()
+			assert.NoError(t, err)
+
+			// Use a short timeout context to ensure it times out
+			// We use 50ms which is short enough to timeout but long enough for handler to be called
+			// Note: We wait for ctx.Done() (event-based) rather than using time.Sleep, ensuring
+			// deterministic behavior across different test environments
+			ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+			defer cancel()
+
+			// Verify context hasn't timed out yet at function entry
+			if ctx.Err() != nil {
+				t.Skip("Context already timed out, skipping test")
+				return
+			}
+
+			var successCount int
+			genRequest := func() *pb.Request {
+				req := qt.NewRequest(pb.CmdMethod_GetCacheInfo)
+				req.GetCacheInfoRequest = &pb.GetCacheInfoRequest{}
+				return req
+			}
+
+			handleValidResponse := func(nodeAddr string, rsp *pb.Response) {
+				if rsp != nil && rsp.GetCacheInfoResponse != nil {
+					successCount++
+				}
+			}
+
+			// Monitor when response with error is received in main loop
+			// This happens at line 196-198, before the error check at line 202
+			handleInvalidResponse := func(nodeAddr string) {
+				// Signal that response has been received and is being processed
+				// At this point, we're in the main loop at line 216, which means
+				// the response was already processed at line 202-206
+				select {
+				case responseReceived <- struct{}{}:
+				default:
+				}
+			}
+
+			// Start RequestMultipleCn in a goroutine
+			var errResult error
+			done := make(chan struct{})
+			go func() {
+				errResult = RequestMultipleCn(ctx, []string{address}, qt, genRequest, handleValidResponse, handleInvalidResponse)
+				close(done)
+			}()
+
+			// Step 1: Wait for handler to be called (SendMessage has started)
+			// This is event-based: we wait for the actual event, not a timeout
+			<-handlerCalled
+
+			// Step 2: Wait for context to timeout naturally
+			// We wait for ctx.Done() to be closed, which happens when the timeout expires
+			// This ensures that when the response is processed (line 202),
+			// ctx.Err() will be context.DeadlineExceeded
+			<-ctx.Done()
+
+			// Step 3: Wait for response to be processed in the main loop
+			// The handler will return ctx.Err() (context.DeadlineExceeded) when it receives
+			// the timeout signal, causing SendMessage to return context.DeadlineExceeded error.
+			// When the response is processed at line 202, ctx.Err() will be context.DeadlineExceeded,
+			// triggering the code path at line 202-206
+			<-responseReceived
+
+			// Wait for RequestMultipleCn to complete
+			<-done
+
+			// Cleanup: allow handler to proceed if it's still waiting
+			select {
+			case allowProceed <- struct{}{}:
+			default:
+			}
+
+			// Verify that the timeout error is correctly set
+			assert.Error(t, errResult, "Should return error when context deadline exceeded")
+			// The error should indicate context deadline exceeded
+			errStr := errResult.Error()
+			assert.True(t,
+				strings.Contains(errStr, "context deadline exceeded"),
+				"Error should indicate context deadline exceeded, got: %s", errStr)
+			assert.Equal(t, 0, successCount, "No nodes should succeed")
+
+			err = qs.Close()
+			assert.NoError(t, err)
+			err = qt.Close()
+			assert.NoError(t, err)
+		},
+	)
 }
