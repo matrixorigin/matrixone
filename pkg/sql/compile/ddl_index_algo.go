@@ -32,9 +32,7 @@ import (
 )
 
 const (
-	ivfFlatIndexFlag  = "experimental_ivf_index"
-	fulltextIndexFlag = "experimental_fulltext_index"
-	hnswIndexFlag     = "experimental_hnsw_index"
+	hnswIndexFlag = "experimental_hnsw_index"
 )
 
 func (s *Scope) handleUniqueIndexTable(
@@ -133,11 +131,6 @@ func (s *Scope) handleFullTextIndexTable(
 	originalTableDef *plan.TableDef,
 	indexInfo *plan.CreateTable,
 ) error {
-	if ok, err := s.isExperimentalEnabled(c, fulltextIndexFlag); err != nil {
-		return err
-	} else if !ok {
-		return moerr.NewInternalErrorNoCtx("FullText index is not enabled")
-	}
 	if len(indexInfo.GetIndexTables()) != 1 {
 		return moerr.NewInternalErrorNoCtx("index table count not equal to 1")
 	}
@@ -425,10 +418,9 @@ func (s *Scope) logTimestamp(c *Compile, qryDatabase, metadataTableName, metrics
 }
 
 func (s *Scope) isExperimentalEnabled(c *Compile, flag string) (bool, error) {
-
 	if s.Magic == TableClone {
 		skipFlags := []string{
-			fulltextIndexFlag, ivfFlatIndexFlag, hnswIndexFlag,
+			hnswIndexFlag,
 		}
 
 		// if the scope is a table clone means we are trying to

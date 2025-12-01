@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -44,6 +45,9 @@ type ivfSearchState struct {
 	distances []float64
 	// holding one call batch, tokenizedState owns it.
 	batch *batch.Batch
+
+	// runtime filter BloomFilter bytes from hash build side (optional)
+	bloomFilter []byte
 }
 
 // stub function
@@ -72,6 +76,8 @@ func (u *ivfSearchState) reset(tf *TableFunction, proc *process.Process) {
 	if u.batch != nil {
 		u.batch.CleanOnlyData()
 	}
+	// Note: bloomFilter is kept across resets as it's only set once during initialization
+	// It will be cleared in free() method
 }
 
 func (u *ivfSearchState) call(tf *TableFunction, proc *process.Process) (vm.CallResult, error) {
@@ -108,6 +114,47 @@ func (u *ivfSearchState) free(tf *TableFunction, proc *process.Process, pipeline
 	if u.batch != nil {
 		u.batch.Clean(proc.Mp())
 	}
+	// Clear bloomFilter bytes to release memory
+	u.bloomFilter = nil
+}
+
+// waitBloomFilterForTableFunction blocks until it receives a bloomfilter runtime filter
+// that matches tf.RuntimeFilterSpecs (if any). It is used when ivf_search acts as probe
+// side in a join and build side produces a bloom runtime filter.
+// We don't deserialize BloomFilter here, only keep raw bytes, which can be passed to SQL executor / table scan later.
+func waitBloomFilterForTableFunction(tf *TableFunction, proc *process.Process) ([]byte, error) {
+	if len(tf.RuntimeFilterSpecs) == 0 {
+		return nil, nil
+	}
+	spec := tf.RuntimeFilterSpecs[0]
+	if !spec.UseBloomFilter {
+		return nil, nil
+	}
+
+	msgReceiver := message.NewMessageReceiver(
+		[]int32{spec.Tag},
+		message.AddrBroadCastOnCurrentCN(),
+		proc.GetMessageBoard(),
+	)
+	msgs, ctxDone, err := msgReceiver.ReceiveMessage(true, proc.Ctx)
+	if err != nil || ctxDone {
+		return nil, err
+	}
+
+	for i := range msgs {
+		m, ok := msgs[i].(message.RuntimeFilterMessage)
+		if !ok {
+			continue
+		}
+		if m.Typ != message.RuntimeFilter_BLOOMFILTER {
+			continue
+		}
+
+		// runtime bloomfilter uses common/bloomfilter encoding; pass through bytes directly here
+		return m.Data, nil
+	}
+
+	return nil, nil
 }
 
 func ivfSearchPrepare(proc *process.Process, arg *TableFunction) (tvfState, error) {
@@ -136,6 +183,13 @@ func ivfSearchPrepare(proc *process.Process, arg *TableFunction) (tvfState, erro
 func (u *ivfSearchState) start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) (err error) {
 
 	if !u.inited {
+		// receive bloom runtime filter if any
+		if bf, err := waitBloomFilterForTableFunction(tf, proc); err != nil {
+			return err
+		} else {
+			u.bloomFilter = bf
+		}
+
 		if len(tf.Params) > 0 {
 			err = json.Unmarshal([]byte(tf.Params), &u.param)
 			if err != nil {
@@ -247,7 +301,9 @@ func runIvfSearchVector[T types.RealNumbers](tf *TableFunction, u *ivfSearchStat
 		Probe:             uint(u.tblcfg.Nprobe),
 		OrigFuncName:      u.tblcfg.OrigFuncName,
 		BackgroundQueries: make([]*plan.Query, 1),
+		BloomFilter:       u.bloomFilter,
 	}
+
 	u.keys, u.distances, err = veccache.Cache.Search(proc, key, algo, fa, rt)
 	if err != nil {
 		return err

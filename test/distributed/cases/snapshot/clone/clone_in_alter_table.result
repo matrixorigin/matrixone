@@ -15,7 +15,7 @@ count(*)
 99997
 delete from t1 where a in (2, 2222, 22222);
 select * from t1 where a in (2, 2222, 22222);
-a    b    c    d    e
+a    b    c    d    e    f
 select a from t1 where b = 9;
 a
 9
@@ -116,8 +116,6 @@ a    b_2    c    d    e    f
 890    888.0    888    888    888    null
 8890    8888.0    8888    8888    8888    null
 88890    88888.0    88888    88888    88888    null
-set experimental_fulltext_index=1;
-set experimental_ivf_index = 1;
 set experimental_hnsw_index = 1;
 create table t2 (a bigint primary key auto_increment, b vecf32(3), c vecf32(3), d text, index ivfIdx using ivfflat(b) lists=5 op_type "vector_l2_ops", index hnswIdx using hnsw(c) op_type 'vector_l2_ops', fulltext(d));
 insert into t2(b,c,d) select CONCAT('[',FLOOR(RAND() * 9),',', FLOOR(RAND() * 9), ',', FLOOR(RAND() * 9),']'), CONCAT('[',FLOOR(RAND() * 9),',', FLOOR(RAND() * 9), ',', FLOOR(RAND() * 9),']'), * from generate_series(1, 1000)g;
@@ -132,7 +130,5 @@ floor(max(l2_distance(c, [1,1,1])))
 select a,d from t2 where match(d) against('234' in boolean mode);
 a    d
 234    234
-set experimental_fulltext_index=0;
-set experimental_ivf_index = 0;
 set experimental_hnsw_index = 0;
 drop database test;

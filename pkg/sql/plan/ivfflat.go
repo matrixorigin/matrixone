@@ -89,7 +89,7 @@ func (builder *QueryBuilder) buildIvfCreate(tbl *tree.TableFunction, ctx *BindCo
 			},
 			Cols: colDefs,
 		},
-		BindingTags:     []int32{builder.genNewTag()},
+		BindingTags:     []int32{builder.genNewBindTag()},
 		TblFuncExprList: exprs,
 		Children:        children,
 	}
@@ -123,7 +123,7 @@ func (builder *QueryBuilder) buildIvfSearch(tbl *tree.TableFunction, ctx *BindCo
 			},
 			Cols: colDefs,
 		},
-		BindingTags:     []int32{builder.genNewTag()},
+		BindingTags:     []int32{builder.genNewBindTag()},
 		TblFuncExprList: exprs,
 		Children:        children,
 	}

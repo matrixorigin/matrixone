@@ -358,8 +358,8 @@ select * from t1
 union all
 select * from t2;
 id    name    age    city
-2    Bob    30    Shanghai
 1    Alice    25    Beijing
+2    Bob    30    Shanghai
 drop table if exists `user_data`;
 create table `user-data` (
 id int,

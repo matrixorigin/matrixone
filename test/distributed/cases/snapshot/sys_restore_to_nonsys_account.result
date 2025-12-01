@@ -24,7 +24,7 @@ drop snapshot if exists sp01;
 create snapshot sp01 for account acc01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp01    2025-07-19 05:53:00.750633    account    acc01        
+sp01    2025-07-19 05:53:00.750633    account    acc01
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
 insert into s3t values (300001, 34, 23, 1);
@@ -326,8 +326,8 @@ drop snapshot if exists sp08;
 create snapshot sp08 for account acc01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp08    2025-07-19 05:53:03.594028    account    acc01        
-sp07    2025-07-19 05:53:03.568687    account    acc01        
+sp08    2025-07-19 05:53:03.594028    account    acc01
+sp07    2025-07-19 05:53:03.568687    account    acc01
 use test01;
 create table table03 (col1 int);
 insert into table03 values (1),(2);
@@ -433,9 +433,7 @@ drop database if exists fulltext_acc01;
 create database fulltext_acc01;
 use fulltext_acc01;
 drop table if exists src;
-set experimental_fulltext_index=1;
 create table src (id bigint primary key, json1 text, json2 varchar, fulltext(json1) with parser json);
-set experimental_fulltext_index=0;
 insert into src values  (0, '{"a":1, "b":"red"}', '{"d": "happy birthday", "f":"winter"}'),
 (1, '{"a":2, "b":"中文學習教材"}', '["apple", "orange", "banana", "指引"]'),
 (2, '{"a":3, "b":"red blue"}', '{"d":"兒童中文"}');

@@ -1,4 +1,3 @@
-set experimental_fulltext_index=1;
 set ft_relevancy_algorithm="TF-IDF";
 drop database if exists test;
 create database test;
@@ -141,14 +140,14 @@ TP QUERY PLAN
 Project
   ->  Join
         Join Type: INDEX
-        Join Cond: (t1.a = #[1,0])
+        Join Cond: (t1.a = __mo_index_pri_col)
         Runtime Filter Build: #[-1,0]
         ->  Table Scan on test.t1 [ForceOneCN]
               Filter Cond: (t1.c = 100)
               Block Filter Cond: (t1.c = 100)
               Runtime Filter Probe: t1.a
         ->  Index Table Scan on t1.index2 [ForceOneCN]
-              Filter Cond: prefix_eq(#[0,0])
-              Block Filter Cond: prefix_eq(#[0,0])
+              Filter Cond: prefix_eq(__mo_index_idx_col)
+              Block Filter Cond: prefix_eq(__mo_index_idx_col)
 drop table t1;
 drop database test;

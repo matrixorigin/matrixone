@@ -365,7 +365,7 @@ func (s *HnswSearch) Destroy() {
 func (s *HnswSearch) LoadMetadata(proc *process.Process) ([]*HnswSearchIndex, error) {
 
 	sql := fmt.Sprintf("SELECT * FROM `%s`.`%s`", s.Tblcfg.DbName, s.Tblcfg.MetadataTable)
-	res, err := runSql(proc, sql)
+	res, err := runSql(sqlexec.NewSqlProcess(proc), sql)
 	if err != nil {
 		return nil, err
 	}

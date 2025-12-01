@@ -426,16 +426,9 @@ func (s *Scope) checkTableWithValidIndexes(c *Compile, relation engine.Relation)
 		if idxdef, ok := constraint.(*engine.IndexDef); ok && len(idxdef.Indexes) > 0 {
 			for _, idx := range idxdef.Indexes {
 				if idx.TableExist {
-					var indexflag string
+					// Only check hnswIndexFlag
 					if catalog.IsHnswIndexAlgo(idx.IndexAlgo) {
-						indexflag = hnswIndexFlag
-					} else if catalog.IsIvfIndexAlgo(idx.IndexAlgo) {
-						indexflag = ivfFlatIndexFlag
-					} else if catalog.IsFullTextIndexAlgo(idx.IndexAlgo) {
-						indexflag = fulltextIndexFlag
-					}
-
-					if len(indexflag) > 0 {
+						indexflag := hnswIndexFlag
 						if ok, err := s.isExperimentalEnabled(c, indexflag); err != nil {
 							return err
 						} else if !ok {

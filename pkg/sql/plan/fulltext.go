@@ -109,7 +109,7 @@ func (builder *QueryBuilder) buildFullTextIndexScan(tbl *tree.TableFunction, ctx
 			},
 			Cols: colDefs,
 		},
-		BindingTags:     []int32{builder.genNewTag()},
+		BindingTags:     []int32{builder.genNewBindTag()},
 		TblFuncExprList: exprs,
 		Children:        children,
 	}
@@ -196,7 +196,7 @@ func (builder *QueryBuilder) buildFullTextIndexTokenize(tbl *tree.TableFunction,
 			},
 			Cols: colDefs,
 		},
-		BindingTags:     []int32{builder.genNewTag()},
+		BindingTags:     []int32{builder.genNewBindTag()},
 		TblFuncExprList: exprs,
 		Children:        children,
 	}

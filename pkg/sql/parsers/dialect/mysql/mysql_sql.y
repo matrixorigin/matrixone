@@ -230,6 +230,9 @@ import (
     indexVisibility tree.VisibleType
 
     killOption tree.KillOption
+    toAccountOpt *tree.ToAccountOpt
+    conflictOpt *tree.ConflictOpt
+    diffOutputOpt   *tree.DiffOutputOpt
     statementOption tree.StatementOption
 
     tableLock tree.TableLock
@@ -350,7 +353,8 @@ import (
 %token <str> PREPARE DEALLOCATE RESET
 %token <str> EXTENSION
 %token <str> RETENTION PERIOD
-%token <str> CLONE
+%token <str> CLONE BRANCH LOG REVERT REBASE DIFF
+%token <str> CONFLICT CONFLICT_FAIL CONFLICT_SKIP CONFLICT_ACCEPT OUTPUT
 
 // Sequence
 %token <str> INCREMENT CYCLE MINVALUE
@@ -559,6 +563,10 @@ import (
 %type <subscriptionOption> subscription_opt
 %type <accountsSetOption> alter_publication_accounts_opt create_publication_accounts
 %type <str> alter_publication_db_name_opt
+%type <statement> branch_stmt
+%type <toAccountOpt> to_account_opt
+%type <conflictOpt> conflict_opt
+%type <diffOutputOpt> diff_output_opt
 
 %type <select> select_stmt select_no_parens
 %type <selectStatement> simple_select select_with_parens simple_select_clause
@@ -575,6 +583,7 @@ import (
 %type <order> order
 %type <orderBy> order_list order_by_clause order_by_opt
 %type <limit> limit_opt limit_clause
+%type <limit> limit_rank_suffix
 %type <str> insert_column optype_opt
 %type <str> optype
 %type <identifierList> column_list column_list_opt partition_clause_opt partition_id_list insert_column_list accounts_list
@@ -952,6 +961,7 @@ normal_stmt:
 |   pause_cdc_stmt
 |   resume_cdc_stmt
 |   restart_cdc_stmt
+|   branch_stmt
 
 
 backup_stmt:
@@ -3657,6 +3667,8 @@ algorithm_type:
 |   INPLACE
 |   COPY
 |   CLONE
+|   DATA
+|   BRANCH
 
 able_type:
     DISABLE
@@ -5522,17 +5534,72 @@ limit_opt:
     }
 
 limit_clause:
-    LIMIT expression
+    LIMIT expression limit_rank_suffix
     {
-        $$ = &tree.Limit{Count: $2}
+        l := &tree.Limit{Count: $2}
+        if $3 != nil {
+            l.ByRank = $3.ByRank
+            l.Option = $3.Option
+        }
+        $$ = l
     }
-|   LIMIT expression ',' expression
+|   LIMIT expression ',' expression limit_rank_suffix
     {
-        $$ = &tree.Limit{Offset: $2, Count: $4}
+        l := &tree.Limit{Offset: $2, Count: $4}
+        if $5 != nil {
+            l.ByRank = $5.ByRank
+            l.Option = $5.Option
+        }
+        $$ = l
     }
-|   LIMIT expression OFFSET expression
+|   LIMIT expression OFFSET expression limit_rank_suffix
     {
-        $$ = &tree.Limit{Offset: $4, Count: $2}
+        l := &tree.Limit{Offset: $4, Count: $2}
+        if $5 != nil {
+            l.ByRank = $5.ByRank
+            l.Option = $5.Option
+        }
+        $$ = l
+    }
+
+limit_rank_suffix:
+    {
+        $$ = nil
+    }
+|   BY RANK WITH OPTION expression_list
+    {
+        // Parse option strings to extract key=value pairs into a map
+        optionMap := make(map[string]string)
+        
+        for _, expr := range $5 {
+            var str string
+            // Handle both NumVal (P_char) and StrVal
+            if numVal, ok := expr.(*tree.NumVal); ok && numVal.ValType == tree.P_char {
+                str = numVal.String()
+            } else if strVal, ok := expr.(*tree.StrVal); ok {
+                str = strVal.String()
+            } else {
+                continue
+            }
+            
+            // Remove quotes if present
+            if len(str) >= 2 && ((str[0] == '\'' && str[len(str)-1] == '\'') || (str[0] == '"' && str[len(str)-1] == '"')) {
+                str = str[1 : len(str)-1]
+            }
+            
+            // Parse key=value pairs
+            parts := strings.Split(str, "=")
+            if len(parts) == 2 {
+                key := strings.TrimSpace(strings.ToLower(parts[0]))
+                value := strings.TrimSpace(parts[1])
+                optionMap[key] = value
+            }
+        }
+        
+        $$ = &tree.Limit{
+            ByRank: true,
+            Option: optionMap,
+        }
     }
 
 order_by_opt:
@@ -7744,21 +7811,13 @@ create_database_stmt:
         )
     }
 // CREATE comment_opt database_or_schema comment_opt not_exists_opt ident
-|   CREATE database_or_schema not_exists_opt db_name CLONE db_name table_snapshot_opt
+|   CREATE database_or_schema not_exists_opt db_name CLONE db_name table_snapshot_opt to_account_opt
     {
     	var t = tree.NewCloneDatabase()
     	t.DstDatabase = tree.Identifier($4)
     	t.SrcDatabase = tree.Identifier($6)
     	t.AtTsExpr = $7
-    	$$ = t
-    }
-|   CREATE database_or_schema not_exists_opt db_name CLONE db_name table_snapshot_opt TO ACCOUNT ident
-    {
-    	var t = tree.NewCloneDatabase()
-    	t.DstDatabase = tree.Identifier($4)
-    	t.SrcDatabase = tree.Identifier($6)
-    	t.AtTsExpr = $7
-    	t.ToAccountName = tree.Identifier($10.Compare())
+    	t.ToAccountOpt = $8
     	$$ = t
     }
 
@@ -7946,7 +8005,120 @@ replace_opt:
     }
 
 
+branch_stmt:
+    DATA BRANCH CREATE TABLE table_name FROM table_name to_account_opt
+    {
+    	t := tree.NewDataBranchCreateTable()
+    	t.CreateTable.Table = *$5
+        t.CreateTable.LikeTableName = *$7
+        t.CreateTable.IsAsLike = true
+        t.SrcTable = *$7
+        t.ToAccountOpt = $8
+        $$ = t
+    }
+|   DATA BRANCH CREATE DATABASE db_name FROM db_name table_snapshot_opt to_account_opt
+    {
+    	t := tree.NewDataBranchCreateDatabase()
+        t.DstDatabase = tree.Identifier($4)
+        t.SrcDatabase = tree.Identifier($6)
+        t.AtTsExpr = $8
+        t.ToAccountOpt = $9
+        $$ = t
+    }
+|   DATA BRANCH DELETE TABLE table_name
+    {
+    	t := tree.NewDataBranchDeleteTable()
+    	t.TableName = *$5
+    	$$ = t
+    }
+|   DATA BRANCH DELETE DATABASE db_name
+    {
+	t := tree.NewDataBranchDeleteDatabase()
+	t.DatabaseName = tree.Identifier($5)
+	$$ = t
+    }
+|   DATA BRANCH DIFF table_name AGAINST table_name diff_output_opt
+    {
+    	t := tree.NewDataBranchDiff()
+    	t.TargetTable = *$4
+    	t.BaseTable = *$6
+    	t.OutputOpt = $7
+    	$$ = t
+    }
+|   DATA BRANCH MERGE table_name INTO table_name conflict_opt
+    {
+    	t := tree.NewDataBranchMerge()
+    	t.SrcTable = *$4
+    	t.DstTable = *$6
+    	t.ConflictOpt = $7
+    	$$ = t
+    }
 
+
+diff_output_opt:
+    {
+       $$ = nil
+    }
+    | OUTPUT AS table_name
+    {
+        $$ = &tree.DiffOutputOpt {
+            As: *$3,
+        }
+    }
+    | OUTPUT FILE STRING
+    {
+        $$ = &tree.DiffOutputOpt {
+            DirPath: $3,
+        }
+    }
+    | OUTPUT LIMIT INTEGRAL
+    {
+    	x := $3.(int64)
+    	$$ = &tree.DiffOutputOpt {
+           Limit: &x,
+        }
+    }
+    | OUTPUT COUNT
+    {
+    	$$ = &tree.DiffOutputOpt {
+           Count: true,
+        }
+    }
+
+conflict_opt:
+     {
+     	$$ = nil
+     }
+     | WHEN CONFLICT CONFLICT_FAIL
+     {
+     	$$ = &tree.ConflictOpt {
+             Opt: tree.CONFLICT_FAIL,
+     	}
+     }
+    | WHEN CONFLICT CONFLICT_SKIP
+    {
+     	$$ = &tree.ConflictOpt {
+             Opt: tree.CONFLICT_SKIP,
+     	}
+    }
+    | WHEN CONFLICT CONFLICT_ACCEPT
+    {
+    	$$ = &tree.ConflictOpt {
+            Opt: tree.CONFLICT_ACCEPT,
+    	}
+    }
+
+to_account_opt:
+    /* empty */
+    {
+    	$$ = nil
+    }
+    | TO ACCOUNT ident
+    {
+    	$$ = &tree.ToAccountOpt {
+    	    AccountName: tree.Identifier($3.Compare()),
+    	}
+    }
 
 create_table_stmt:
     CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' table_option_list_opt partition_by_opt cluster_by_opt
@@ -8051,23 +8223,14 @@ create_table_stmt:
         t.SubscriptionOption = $6
         $$ = t
     }
-|   CREATE temporary_opt TABLE not_exists_opt table_name CLONE table_name
+|   CREATE temporary_opt TABLE not_exists_opt table_name CLONE table_name to_account_opt
     {
 	t := tree.NewCloneTable()
 	t.CreateTable.Table = *$5
 	t.CreateTable.LikeTableName = *$7
 	t.CreateTable.IsAsLike = true
 	t.SrcTable = *$7
-	$$ = t
-    }
-|   CREATE temporary_opt TABLE not_exists_opt table_name CLONE table_name TO ACCOUNT ident
-    {
-	t := tree.NewCloneTable()
-	t.CreateTable.Table = *$5
-	t.CreateTable.LikeTableName = *$7
-	t.CreateTable.IsAsLike = true
-	t.SrcTable = *$7
-	t.ToAccountName = tree.Identifier($10.Compare())
+	t.ToAccountOpt = $8
 	$$ = t
     }
 
@@ -12596,6 +12759,8 @@ equal_opt:
 //|   RETURNS
 //|   MYSQL_COMPATIBILITY_MODE
 //|   CLONE
+//|   MO
+//|   BRANCH
 
 non_reserved_keyword:
     ACCOUNT

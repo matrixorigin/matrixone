@@ -65,7 +65,7 @@ func (idx *IvfflatSearchIndex[T]) LoadIndex(proc *process.Process, idxcfg vector
 	)
 
 	//os.Stderr.WriteString(fmt.Sprintf("Load Index SQL = %s\n", sql))
-	res, err := runSql(proc, sql)
+	res, err := runSql(sqlexec.NewSqlProcess(proc), sql)
 	if err != nil {
 		return err
 	}
@@ -181,7 +181,9 @@ func (idx *IvfflatSearchIndex[T]) Search(
 	//fmt.Println("IVFFlat SQL: ", sql)
 	//os.Stderr.WriteString(sql)
 
-	res, err := runSql(proc, sql)
+	sqlProc := sqlexec.NewSqlProcess(proc)
+	sqlProc.BloomFilter = rt.BloomFilter
+	res, err := runSql(sqlProc, sql)
 	if err != nil {
 		return
 	}
@@ -197,7 +199,9 @@ func (idx *IvfflatSearchIndex[T]) Search(
 		return resid, distances, nil
 	}
 
+	var rowCount int64
 	for _, bat := range res.Batches {
+		rowCount += int64(bat.RowCount())
 		for i := 0; i < bat.RowCount(); i++ {
 			if bat.Vecs[1].IsNull(uint64(i)) {
 				continue

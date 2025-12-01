@@ -1085,7 +1085,7 @@ func filterBatch(data, tombstone *batch.Batch, primarySeqnum int, skipDeletes bo
 						}
 					}
 				} else {
-					for _, ri := range rowInfos[0 : len(rowInfos)-1] {
+					for _, ri := range rowInfos[1 : len(rowInfos)-1] {
 						if ri.isDelete {
 							tombstoneRowsToDelete = append(tombstoneRowsToDelete, int64(ri.row))
 						} else {

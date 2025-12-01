@@ -371,7 +371,6 @@ drop database test01;
 
 -- sys restore nonsys to nonsys account: fulltext index table
 -- @session:id=1&user=acc01:test_account&password=111
-set experimental_fulltext_index=1;
 drop database if exists fulltext_index_acc01;
 create database fulltext_index_acc01;
 use fulltext_index_acc01;

@@ -1,0 +1,29 @@
+create database if not exists dd1;
+use dd1;
+CREATE TABLE `mini_vector_data` (`id` VARCHAR(64) NOT NULL, `text` TEXT DEFAULT NULL, `vec` vecf32(8) DEFAULT NULL COMMENT '8-dim embedding vector', `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (`id`));
+CREATE INDEX `idx_vec` USING ivfflat ON `mini_vector_data` (`vec`) lists = 16 op_type 'vector_l2_ops';
+INSERT INTO mini_vector_data (id, text, vec) VALUES ('id1','hello world','[0.12,-0.33,0.51,0.27,-0.48,0.19,0.72,-0.11]');
+INSERT INTO mini_vector_data (id, text, vec) VALUES ('id2','greeting message','[0.44,0.09,-0.31,0.62,0.18,-0.55,0.21,0.33]');
+INSERT INTO mini_vector_data (id, text, vec) VALUES ('id3','vector search test','[-0.21,0.73,-0.12,0.51,-0.44,0.09,0.14,0.82]');
+INSERT INTO mini_vector_data (id, text, vec) VALUES ('id4','example data','[0.51,0.25,0.09,-0.33,0.74,-0.28,0.41,0.17]');
+INSERT INTO mini_vector_data (id, text, vec) VALUES ('id5','embedding sample','[0.08,-0.41,0.66,0.12,0.53,-0.15,0.38,-0.22]');
+INSERT INTO mini_vector_data (id, text, vec) VALUES ('id6','short text','[0.32,0.71,-0.26,0.14,-0.03,0.66,-0.41,0.19]');
+INSERT INTO mini_vector_data (id, text, vec) VALUES ('id7','random note','[-0.55,0.12,0.44,-0.19,0.27,0.51,0.11,-0.03]');
+INSERT INTO mini_vector_data (id, text, vec) VALUES ('id8','semantic item','[0.23,-0.14,0.82,0.39,-0.52,0.08,0.26,0.73]');
+INSERT INTO mini_vector_data (id, text, vec) VALUES ('id9','testing vectors','[0.61,0.33,-0.48,0.09,0.12,0.54,-0.29,0.41]');
+INSERT INTO mini_vector_data (id, text, vec) VALUES ('id10','additional entry','[0.19,-0.22,0.33,0.77,-0.04,0.12,0.58,-0.31]');
+WITH q AS (SELECT id, text, l2_distance(vec, '[0.1,-0.2,0.3,0.4,-0.1,0.2,0.0,0.5]') AS dist FROM mini_vector_data) SELECT * FROM q ORDER BY dist LIMIT 5 by rank with option 'mode=pre';
+id    text    dist
+id8    semantic item    0.7760798852372132
+id1    hello world    1.0551303640156267
+id10    additional entry    1.0718208877650799
+id2    greeting message    1.1550325221482527
+id3    vector search test    1.1828778308075465
+WITH q AS (SELECT id, text, l2_distance(vec, '[0.1,-0.2,0.3,0.4,-0.1,0.2,0.0,0.5]') AS dist FROM mini_vector_data) SELECT * FROM q ORDER BY dist LIMIT 5 by rank with option 'mode=post';
+id    text    dist
+id8    semantic item    0.7760798852372132
+id1    hello world    1.0551303640156267
+id10    additional entry    1.0718208877650799
+id2    greeting message    1.1550325221482527
+id3    vector search test    1.1828778308075465
+drop database if exists dd1;

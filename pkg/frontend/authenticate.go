@@ -931,6 +931,7 @@ var (
 		"mo_cdc_watermark":            0,
 		catalog.MO_TABLE_STATS:        0,
 		catalog.MO_MERGE_SETTINGS:     0,
+		catalog.MO_BRANCH_METADATA:    0,
 	}
 	sysAccountTables = map[string]struct{}{
 		catalog.MOVersionTable:       {},
@@ -973,6 +974,7 @@ var (
 		catalog.MO_TABLE_STATS:        0,
 		catalog.MO_ACCOUNT_LOCK:       0,
 		catalog.MO_MERGE_SETTINGS:     0,
+		catalog.MO_BRANCH_METADATA:    0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
 	createAutoTableSql           = MoCatalogMoAutoIncrTableDDL
@@ -1013,6 +1015,7 @@ var (
 		MoCatalogMoAccountLockDDL,
 		MoCatalogMergeSettingsDDL,
 		MoCatalogMergeSettingsInitData,
+		MoCatalogBranchMetadataDDL,
 	}
 
 	//drop tables for the tenant
@@ -5726,13 +5729,18 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeNone
 		kind = privilegeKindSpecial
 		special = specialTagAdmin
-	case *tree.CloneTable:
+	case
+		*tree.CloneTable,
+		*tree.DataBranchCreateTable,
+		*tree.DataBranchDeleteTable,
+		*tree.DataBranchDiff,
+		*tree.DataBranchMerge:
 		objType = objectTypeTable
-		typs = append(typs, PrivilegeTypeInsert, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
+		typs = append(typs, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
 		writeDatabaseAndTableDirectly = true
-	case *tree.CloneDatabase:
+	case *tree.CloneDatabase, *tree.DataBranchCreateDatabase, *tree.DataBranchDeleteDatabase:
 		objType = objectTypeDatabase
-		typs = append(typs, PrivilegeTypeCreateDatabase, PrivilegeTypeAccountAll)
+		typs = append(typs, PrivilegeTypeDatabaseAll, PrivilegeTypeAccountAll)
 		writeDatabaseAndTableDirectly = true
 	default:
 		panic(fmt.Sprintf("does not have the privilege definition of the statement %s", stmt))
@@ -7774,6 +7782,11 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccoun
 		if strings.HasPrefix(sql, fmt.Sprintf("create table mo_catalog.%s", catalog.MO_ACCOUNT_LOCK)) {
 			return true
 		}
+
+		if strings.HasPrefix(sql, fmt.Sprintf("create table mo_catalog.%s", catalog.MO_BRANCH_METADATA)) {
+			return true
+		}
+
 		return false
 	}
 
