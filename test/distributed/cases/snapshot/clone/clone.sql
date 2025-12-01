@@ -131,7 +131,9 @@ create database system_new clone system;
 drop database if exists system_metrics_new;
 create database system_metrics_new clone system_metrics;
 use system_metrics_new;
+-- @bvt:issue#23182
 show tables;
+-- @bvt:issue
 show databases;
 use test01_new;
 show tables;

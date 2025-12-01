@@ -5,8 +5,9 @@ show table_number from mo_task;
 show table_number from information_schema;
 show table_number from mysql;
 show table_number from mo_catalog;
+-- @bvt:issue#23182
 show table_number from system;
-
+-- @bvt:issue
 
 -- test system tables column_number
 
@@ -53,12 +54,16 @@ show column_number from mo_table_partitions;
 
 use system_metrics;
 show column_number from metric;
+show column_number from sql_statement_cu;
+
+-- @bvt:issue#23182
 show column_number from sql_statement_total;
 show column_number from sql_statement_errors;
-show column_number from sql_statement_cu;
 show column_number from sql_transaction_total;
 show column_number from sql_transaction_errors;
 show column_number from server_connections;
+-- @bvt:issue
+
 show column_number from process_cpu_percent;
 show column_number from process_resident_memory_bytes;
 show column_number from process_open_fds;

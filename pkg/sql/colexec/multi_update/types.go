@@ -190,8 +190,13 @@ func (update *MultiUpdate) addInsertAffectRows(tableType UpdateTableType, rowCou
 	if tableType != UpdateMainTable {
 		return
 	}
+	// For REPLACE INTO, we always count INSERT rows, regardless of update.ctr.action
+	// because REPLACE INTO should return at least the number of rows being inserted
 	switch update.ctr.action {
 	case actionInsert:
+		update.addAffectedRowsFunc(rowCount)
+	case actionUpdate:
+		// For REPLACE INTO with both DELETE and INSERT, count INSERT rows
 		update.addAffectedRowsFunc(rowCount)
 	}
 }
@@ -200,11 +205,18 @@ func (update *MultiUpdate) addDeleteAffectRows(tableType UpdateTableType, rowCou
 	if tableType != UpdateMainTable {
 		return
 	}
+	// For REPLACE INTO, we don't count DELETE rows in affected rows
+	// REPLACE INTO should only return the number of INSERT rows
+	// Only count DELETE rows for regular UPDATE operations
 	switch update.ctr.action {
 	case actionDelete:
+		// Regular DELETE operation, count it
 		update.addAffectedRowsFunc(rowCount)
 	case actionUpdate:
-		update.addAffectedRowsFunc(rowCount)
+		// For UPDATE operations (not REPLACE INTO), count DELETE rows
+		// But for REPLACE INTO, this should not be called or should be ignored
+		// REPLACE INTO uses actionUpdate but should only count INSERT
+		// So we don't count DELETE here for actionUpdate
 	}
 }
 
