@@ -316,27 +316,6 @@ type compositeOption struct {
 	conflictOpt *tree.ConflictOpt
 }
 
-func validate(stmt tree.Statement) error {
-	return nil
-	switch s := stmt.(type) {
-	case *tree.DataBranchDiff:
-		if s.OutputOpt != nil && len(s.OutputOpt.DirPath) != 0 {
-			info, err := os.Stat(s.OutputOpt.DirPath)
-			if err != nil {
-				if os.IsNotExist(err) {
-					return moerr.NewInternalErrorNoCtxf("diff output directory does not exist: %s", s.OutputOpt.DirPath)
-				}
-				return moerr.NewInternalErrorNoCtxf("diff output directory check failed: %v", err)
-			}
-			if !info.IsDir() {
-				return moerr.NewInternalErrorNoCtxf("diff output file only accept a directory path")
-			}
-			return nil
-		}
-	}
-	return nil
-}
-
 func runSql(
 	ctx context.Context, ses *Session, bh BackgroundExec,
 	tblStuff tableStuff, sql string,
@@ -429,7 +408,7 @@ func diffMergeAgency(
 		deferred func(error) error
 	)
 
-	if err = validate(stmt); err != nil {
+	if err = validate(execCtx.reqCtx, ses, stmt); err != nil {
 		return err
 	}
 
@@ -985,6 +964,101 @@ func makeFileName(
 		srcName, baseName,
 		time.Now().UTC().Format("20060102_150405"),
 	)
+}
+
+func validate(
+	ctx context.Context,
+	ses *Session,
+	stmt tree.Statement,
+) error {
+	if stmt == nil {
+		return nil
+	}
+
+	var (
+		ok       bool
+		diffStmt *tree.DataBranchDiff
+	)
+
+	if diffStmt, ok = stmt.(*tree.DataBranchDiff); !ok {
+		return nil
+	}
+
+	if diffStmt.OutputOpt != nil && len(diffStmt.OutputOpt.DirPath) > 0 {
+		if err := validateOutputDirPath(ctx, ses, diffStmt.OutputOpt.DirPath); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func validateOutputDirPath(ctx context.Context, ses *Session, dirPath string) (err error) {
+	if len(dirPath) == 0 {
+		return nil
+	}
+
+	var (
+		stagePath    string
+		ok           bool
+		inputDirPath = dirPath
+	)
+
+	if stagePath, ok, err = tryDecodeStagePath(ses, dirPath); err != nil {
+		return
+	} else if ok {
+		dirPath = stagePath
+	}
+
+	var fsPath fileservice.Path
+	if fsPath, err = fileservice.ParsePath(dirPath); err != nil {
+		return
+	}
+
+	if fsPath.Service == "" {
+		var info os.FileInfo
+		if info, err = os.Stat(dirPath); err != nil {
+			if os.IsNotExist(err) {
+				return moerr.NewInvalidInputNoCtxf("output directory %s does not exist", inputDirPath)
+			}
+			return
+		}
+		if !info.IsDir() {
+			return moerr.NewInvalidInputNoCtxf("output directory %s is not a directory", inputDirPath)
+		}
+		return nil
+	}
+
+	var (
+		targetFS   fileservice.FileService
+		targetPath string
+		entry      *fileservice.DirEntry
+	)
+
+	if fsPath.Service == defines.SharedFileServiceName {
+		targetFS = getPu(ses.GetService()).FileService
+		targetPath = dirPath
+	} else {
+		var etlFS fileservice.ETLFileService
+		if etlFS, targetPath, err = fileservice.GetForETL(ctx, nil, dirPath); err != nil {
+			return
+		}
+		targetFS = etlFS
+		defer targetFS.Close(ctx)
+	}
+
+	if entry, err = targetFS.StatFile(ctx, targetPath); err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+			return moerr.NewInvalidInputNoCtxf("output directory %s does not exist", inputDirPath)
+		}
+		return
+	}
+
+	if !entry.IsDir {
+		return moerr.NewInvalidInputNoCtxf("output directory %s is not a directory", inputDirPath)
+	}
+
+	return nil
 }
 
 func prepareFSForDiffAsFile(
