@@ -40,8 +40,8 @@ a    b
 22    20000
 23    20001
 40000    40000
-50000    3
-50001    4
+50001    3
+50002    4
 create table t3 clone t2;
 select * from t3 order by a asc;
 a    b
@@ -54,8 +54,8 @@ a    b
 22    20000
 23    20001
 40000    40000
-50000    3
-50001    4
+50001    3
+50002    4
 insert into t3(b) values(7),(8);
 insert into t3(a,b) values(5,9),(6,10);
 select * from t3 order by a asc;
@@ -71,10 +71,10 @@ a    b
 22    20000
 23    20001
 40000    40000
-50000    3
-50001    4
-60000    7
-60001    8
+50001    3
+50002    4
+60001    7
+60002    8
 delete from t3 where a mod 2 = 0 or a > 100;
 select * from t3 order by a asc;
 a    b
@@ -95,8 +95,8 @@ a    b
 6    6
 21    21
 23    20001
-60002    100
-60003    101
+60003    100
+60004    101
 create table t4 (a int, b int) cluster by(a,b);
 insert into t4 select *,* from generate_series(1, 5)g;
 create table t5 clone t4 to account sys;
@@ -179,4 +179,3 @@ drop snapshot if exists sp1;
 drop account if exists acc1;
 drop account if exists acc2;
 drop database if exists db1;
-drop database if exists db2;
