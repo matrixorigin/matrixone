@@ -1,6 +1,20 @@
 //go:build gpu
 // +build gpu
 
+// Copyright 2023 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package device
 
 import (
@@ -51,6 +65,21 @@ func (c *GpuClusterer[T]) Close() error {
 	return nil
 }
 
+func toCuvsDistance(distance metric.MetricType) cuvs.Distance {
+	switch distance {
+	case metric.Metric_L2sqDistance, metric.Metric_L2Distance:
+		return cuvs.DistanceSQEuclidean
+	case metric.Metric_InnerProduct:
+		return cuvs.DistanceInnerProduct
+	case metric.Metric_CosineDistance:
+		return cuvs.DistanceCosine
+	case metric.Metric_L1Distance:
+		return cuvs.DistanceL1
+	default:
+		return cuvs.DistanceSQEuclidean
+	}
+}
+
 func NewKMeans[T types.RealNumbers](vectors [][]T, clusterCnt,
 	maxIterations int, deltaThreshold float64,
 	distanceType metric.MetricType, initType kmeans.InitType,
@@ -72,7 +101,7 @@ func NewKMeans[T types.RealNumbers](vectors [][]T, clusterCnt,
 			return nil, err
 		}
 		indexParams.SetNLists(uint32(clusterCnt))
-		//indexParams.SetMetric()
+		indexParams.SetMetric(toCuvsDistance(distanceType))
 		indexParams.SetKMeansNIters(uint32(maxIterations))
 		indexParams.SetKMeansTrainsetFraction(1) // train all sample
 		c.indexParams = indexParams
