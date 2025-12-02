@@ -163,6 +163,8 @@ func NewKMeans[T types.RealNumbers](vectors [][]T, clusterCnt,
 		}
 		c.dataset = &dataset
 
+		c.index, _ = ivf_flat.CreateIndex(c.indexParams, c.dataset)
+
 		return c, nil
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("cuvs type not supported")
