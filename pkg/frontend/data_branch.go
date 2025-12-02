@@ -81,23 +81,6 @@ const (
 	maxSqlBatchSize = mpool.MB * 48
 )
 
-var bufferPool = sync.Pool{
-	New: func() any {
-		return &bytes.Buffer{}
-	},
-}
-
-func acquireBuffer() *bytes.Buffer {
-	buf := bufferPool.Get().(*bytes.Buffer)
-	buf.Reset()
-	return buf
-}
-
-func releaseBuffer(buf *bytes.Buffer) {
-	buf.Reset()
-	bufferPool.Put(buf)
-}
-
 type collectRange struct {
 	from []types.TS
 	end  []types.TS
@@ -131,6 +114,31 @@ type tableStuff struct {
 	worker *ants.Pool
 
 	retPool *retBatchList
+
+	bufferPool *sync.Pool
+}
+
+func (tblStuff *tableStuff) initBufferPool() {
+	if tblStuff.bufferPool == nil {
+		tblStuff.bufferPool = &sync.Pool{
+			New: func() any {
+				return &bytes.Buffer{}
+			},
+		}
+	}
+}
+
+func (tblStuff *tableStuff) acquireBuffer() *bytes.Buffer {
+	tblStuff.initBufferPool()
+	buf := tblStuff.bufferPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	return buf
+}
+
+func (tblStuff *tableStuff) releaseBuffer(buf *bytes.Buffer) {
+	tblStuff.initBufferPool()
+	buf.Reset()
+	tblStuff.bufferPool.Put(buf)
 }
 
 type batchWithKind struct {
@@ -655,14 +663,14 @@ func mergeDiffs(
 		replaceCnt int
 		deleteCnt  int
 
-		replaceIntoVals = acquireBuffer()
-		deleteFromVals  = acquireBuffer()
+		replaceIntoVals = tblStuff.acquireBuffer()
+		deleteFromVals  = tblStuff.acquireBuffer()
 		firstErr        error
 	)
 
 	defer func() {
-		releaseBuffer(replaceIntoVals)
-		releaseBuffer(deleteFromVals)
+		tblStuff.releaseBuffer(replaceIntoVals)
+		tblStuff.releaseBuffer(deleteFromVals)
 	}()
 
 	defer func() {
@@ -834,8 +842,8 @@ func satisfyDiffOutputOpt(
 			replaceCnt int
 			deleteCnt  int
 
-			deleteFromValsBuffer  = acquireBuffer()
-			replaceIntoValsBuffer = acquireBuffer()
+			deleteFromValsBuffer  = tblStuff.acquireBuffer()
+			replaceIntoValsBuffer = tblStuff.acquireBuffer()
 
 			fileHint     string
 			fullFilePath string
@@ -852,8 +860,8 @@ func satisfyDiffOutputOpt(
 			if release != nil {
 				release()
 			}
-			releaseBuffer(deleteFromValsBuffer)
-			releaseBuffer(replaceIntoValsBuffer)
+			tblStuff.releaseBuffer(deleteFromValsBuffer)
+			tblStuff.releaseBuffer(replaceIntoValsBuffer)
 		}()
 
 		if fullFilePath, fileHint, writeFile, release, cleanup, err = prepareFSForDiffAsFile(
@@ -1283,8 +1291,8 @@ func flushSqlValues(
 	writeFile func([]byte) error,
 ) (err error) {
 
-	sqlBuffer := acquireBuffer()
-	defer releaseBuffer(sqlBuffer)
+	sqlBuffer := tblStuff.acquireBuffer()
+	defer tblStuff.releaseBuffer(sqlBuffer)
 
 	initReplaceIntoBuf := func() {
 		sqlBuffer.WriteString(fmt.Sprintf(
@@ -1866,6 +1874,11 @@ func getTableStuff(
 	}
 
 	tblStuff.retPool = &retBatchList{}
+	tblStuff.bufferPool = &sync.Pool{
+		New: func() any {
+			return &bytes.Buffer{}
+		},
+	}
 
 	return
 
@@ -2236,7 +2249,7 @@ func hashDiffIfHasLCA(
 							return
 						}
 
-						buf := acquireBuffer()
+						buf := tblStuff.acquireBuffer()
 						formatValIntoString(ses, tarRow[0], tblStuff.def.colTypes[tblStuff.def.pkColIdx], buf)
 
 						err3 = moerr.NewInternalErrorNoCtxf(
@@ -2244,7 +2257,7 @@ func hashDiffIfHasLCA(
 							tarWrapped.name, tarWrapped.kind,
 							baseWrapped.name, baseWrapped.kind, buf.String(),
 						)
-						releaseBuffer(buf)
+						tblStuff.releaseBuffer(buf)
 						return
 					}
 				} else if cmp < 0 {
@@ -2664,7 +2677,7 @@ func checkConflictAndAppendToBat(
 	if copt.conflictOpt != nil {
 		switch copt.conflictOpt.Opt {
 		case tree.CONFLICT_FAIL:
-			buf := acquireBuffer()
+			buf := tblStuff.acquireBuffer()
 			for i, idx := range tblStuff.def.pkColIdxes {
 				formatValIntoString(ses, tarTuple[idx], tblStuff.def.colTypes[idx], buf)
 				if i < len(tblStuff.def.pkColIdxes)-1 {
@@ -2673,7 +2686,7 @@ func checkConflictAndAppendToBat(
 			}
 
 			msg := buf.String()
-			releaseBuffer(buf)
+			tblStuff.releaseBuffer(buf)
 			return moerr.NewInternalErrorNoCtxf(
 				"conflict: %s %s and %s %s on pk(%v) with different values",
 				tblStuff.tarRel.GetTableName(), diffInsert,
@@ -2941,8 +2954,8 @@ func handleDelsOnLCA(
 		sqlRet executor.Result
 		mots   = fmt.Sprintf("{MO_TS=%d} ", snapshot.PhysicalTime)
 
-		sqlBuf  = acquireBuffer()
-		valsBuf = acquireBuffer()
+		sqlBuf  = tblStuff.acquireBuffer()
+		valsBuf = tblStuff.acquireBuffer()
 
 		lcaTblDef  = tblStuff.lcaRel.GetTableDef(ctx)
 		baseTblDef = tblStuff.baseRel.GetTableDef(ctx)
@@ -2952,8 +2965,8 @@ func handleDelsOnLCA(
 	)
 
 	defer func() {
-		releaseBuffer(sqlBuf)
-		releaseBuffer(valsBuf)
+		tblStuff.releaseBuffer(sqlBuf)
+		tblStuff.releaseBuffer(valsBuf)
 	}()
 
 	pkNames := lcaTblDef.Pkey.Names
@@ -3599,7 +3612,7 @@ func decideCollectRange(
 		ctx, ses, eng, mp,
 		tables.tarRel, tables.baseRel,
 		[]types.TS{tarSp, baseSp},
-		txnOp,
+		txnOp, tables,
 	); err != nil {
 		return
 	}
@@ -3793,6 +3806,7 @@ func getTablesCreationCommitTS(
 	base engine.Relation,
 	snapshot []types.TS,
 	txnOp client.TxnOperator,
+	tblStuff tableStuff,
 ) (commitTS []types.TS, err error) {
 
 	var (
@@ -3821,9 +3835,9 @@ func getTablesCreationCommitTS(
 		return
 	}
 
-	buf := acquireBuffer()
+	buf := tblStuff.acquireBuffer()
 	defer func() {
-		releaseBuffer(buf)
+		tblStuff.releaseBuffer(buf)
 		sqlRet.Close()
 	}()
 
