@@ -31,6 +31,7 @@ type GpuClusterer[T cuvs.TensorNumberType] struct {
 	index       *ivf_flat.IvfFlatIndex
 	indexParams *ivf_flat.IndexParams
 	dataset     *cuvs.Tensor[T]
+	centroids   *cuvs.Tensor[T]
 }
 
 func (c *GpuClusterer[T]) InitCentroids() error {
@@ -40,7 +41,52 @@ func (c *GpuClusterer[T]) InitCentroids() error {
 
 func (c *GpuClusterer[T]) Cluster() (any, error) {
 
-	return nil, nil
+	if _, err := c.dataset.ToDevice(c.resoure); err != nil {
+		return nil, err
+	}
+
+	if err := ivf_flat.BuildIndex(*c.resource, c.indexParams, c.dataset, c.index); err != nil {
+		return nil, err
+	}
+
+	if err := c.resource.Sync(); err != nil {
+		return nil, err
+	}
+
+	nlist, err := ivf_flat.GetNLists(c.index)
+	if err != nil {
+		return nil, err
+	}
+
+	dim, err := ivf_flat.GetDim(c.index)
+	if err != nil {
+		return nil, err
+	}
+
+	centers, err := cuvs.NewTensorOnDevice[T](c.resource, []int64{int64(nlist), int64(dim)})
+	if err != nil {
+		return nil, err
+	}
+	c.centroids = &centers
+
+	if _, err := centers.ToDevice(c.resource); err != nil {
+		return nil, err
+	}
+
+	if err := ivf_flat.GetCenters(c.index, &centers); err != nil {
+		return nil, err
+	}
+
+	if _, err := centers.ToHost(c.resource); err != nil {
+		return nil, err
+	}
+
+	result, err := centers.Slice()
+	if err != nil {
+		return nil, err
+	}
+
+	return result, nil
 }
 
 func (c *GpuClusterer[T]) SSE() (float64, error) {
@@ -61,6 +107,9 @@ func (c *GpuClusterer[T]) Close() error {
 	}
 	if c.index != nil {
 		c.index.Close()
+	}
+	if c.centroids != nil {
+		c.centroids.Close()
 	}
 	return nil
 }
