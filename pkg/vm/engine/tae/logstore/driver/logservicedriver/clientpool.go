@@ -129,30 +129,35 @@ func NewClient(
 	retryDuration time.Duration,
 ) (client *wrappedClient, err error) {
 	client = new(wrappedClient)
-	var (
-		startTime = time.Now()
-		wrapped   BackendClient
-	)
-	for i := 0; i < retryTimes; i++ {
+	var wrapped BackendClient
+	startTime := time.Now()
+
+	// Standard retry logic: try up to retryTimes, respecting total duration
+	// First attempt doesn't count as a retry
+	for attempt := 0; attempt < retryTimes; attempt++ {
 		if wrapped, err = factory(); err == nil {
-			break
+			// Success
+			client.wrapped = wrapped
+			client.buf = wrapped.GetLogRecord(bufSize)
+			return client, nil
 		}
-		logutil.Errorf("WAL-Replay failed to create log service client: %v", err)
-		// Only check time limit if this is not the last attempt
-		// This ensures we at least try retryTimes times
-		if i < retryTimes-1 {
-			if time.Since(startTime) > retryDuration {
+
+		logutil.Errorf("WAL-Replay failed to create log service client (attempt %d/%d): %v",
+			attempt+1, retryTimes, err)
+
+		// Don't sleep after the last attempt
+		if attempt < retryTimes-1 {
+			// Check if we have time for another retry
+			if time.Since(startTime) >= retryDuration {
+				logutil.Errorf("WAL-Replay retry timeout after %v, stopping retries", retryDuration)
 				break
 			}
 			time.Sleep(retryInterval)
 		}
 	}
-	if err != nil {
-		return nil, err
-	}
-	client.wrapped = wrapped
-	client.buf = wrapped.GetLogRecord(bufSize)
-	return client, nil
+
+	// All retries exhausted
+	return nil, err
 }
 
 func (c *wrappedClient) Close() {
