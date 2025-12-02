@@ -142,6 +142,9 @@ func TestQueryServiceKillConn(t *testing.T) {
 		defer cli.Release(resp)
 		assert.NotNil(t, resp.KillConnResponse)
 		assert.Equal(t, true, resp.KillConnResponse.Success)
+		// Cancel context before cleanup to help cleanup goroutines exit faster
+		// This reduces the chance of timeout during client.Close()
+		cancel()
 	})
 }
 
