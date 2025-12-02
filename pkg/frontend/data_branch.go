@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -80,23 +81,6 @@ const (
 	maxSqlBatchSize = mpool.MB * 48
 )
 
-var bufferPool = sync.Pool{
-	New: func() any {
-		return &bytes.Buffer{}
-	},
-}
-
-func acquireBuffer() *bytes.Buffer {
-	buf := bufferPool.Get().(*bytes.Buffer)
-	buf.Reset()
-	return buf
-}
-
-func releaseBuffer(buf *bytes.Buffer) {
-	buf.Reset()
-	bufferPool.Put(buf)
-}
-
 type collectRange struct {
 	from []types.TS
 	end  []types.TS
@@ -130,6 +114,31 @@ type tableStuff struct {
 	worker *ants.Pool
 
 	retPool *retBatchList
+
+	bufferPool *sync.Pool
+}
+
+func (tblStuff *tableStuff) initBufferPool() {
+	if tblStuff.bufferPool == nil {
+		tblStuff.bufferPool = &sync.Pool{
+			New: func() any {
+				return &bytes.Buffer{}
+			},
+		}
+	}
+}
+
+func (tblStuff *tableStuff) acquireBuffer() *bytes.Buffer {
+	tblStuff.initBufferPool()
+	buf := tblStuff.bufferPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	return buf
+}
+
+func (tblStuff *tableStuff) releaseBuffer(buf *bytes.Buffer) {
+	tblStuff.initBufferPool()
+	buf.Reset()
+	tblStuff.bufferPool.Put(buf)
 }
 
 type batchWithKind struct {
@@ -315,26 +324,6 @@ type compositeOption struct {
 	conflictOpt *tree.ConflictOpt
 }
 
-func validate(stmt tree.Statement) error {
-	switch s := stmt.(type) {
-	case *tree.DataBranchDiff:
-		if s.OutputOpt != nil && len(s.OutputOpt.DirPath) != 0 {
-			info, err := os.Stat(s.OutputOpt.DirPath)
-			if err != nil {
-				if os.IsNotExist(err) {
-					return moerr.NewInternalErrorNoCtxf("diff output directory does not exist: %s", s.OutputOpt.DirPath)
-				}
-				return moerr.NewInternalErrorNoCtxf("diff output directory check failed: %v", err)
-			}
-			if !info.IsDir() {
-				return moerr.NewInternalErrorNoCtxf("diff output file only accept a directory path")
-			}
-			return nil
-		}
-	}
-	return nil
-}
-
 func runSql(
 	ctx context.Context, ses *Session, bh BackgroundExec,
 	tblStuff tableStuff, sql string,
@@ -427,7 +416,7 @@ func diffMergeAgency(
 		deferred func(error) error
 	)
 
-	if err = validate(stmt); err != nil {
+	if err = validate(execCtx.reqCtx, ses, stmt); err != nil {
 		return err
 	}
 
@@ -494,7 +483,7 @@ func diffMergeAgency(
 		done      bool
 		wg        = new(sync.WaitGroup)
 		outputErr atomic.Value
-		retBatCh  = make(chan batchWithKind, 10)
+		retBatCh  = make(chan batchWithKind, 100)
 		waited    bool
 	)
 
@@ -550,7 +539,7 @@ func diffMergeAgency(
 	}()
 
 	if err = diffOnBase(
-		execCtx.reqCtx, ses, bh, wg, dagInfo, tblStuff, retBatCh, copt,
+		ctx, ses, bh, wg, dagInfo, tblStuff, retBatCh, copt,
 	); err != nil {
 		return
 	}
@@ -674,14 +663,14 @@ func mergeDiffs(
 		replaceCnt int
 		deleteCnt  int
 
-		replaceIntoVals = acquireBuffer()
-		deleteFromVals  = acquireBuffer()
+		replaceIntoVals = tblStuff.acquireBuffer()
+		deleteFromVals  = tblStuff.acquireBuffer()
 		firstErr        error
 	)
 
 	defer func() {
-		releaseBuffer(replaceIntoVals)
-		releaseBuffer(deleteFromVals)
+		tblStuff.releaseBuffer(replaceIntoVals)
+		tblStuff.releaseBuffer(deleteFromVals)
 	}()
 
 	defer func() {
@@ -853,8 +842,8 @@ func satisfyDiffOutputOpt(
 			replaceCnt int
 			deleteCnt  int
 
-			deleteFromValsBuffer  = acquireBuffer()
-			replaceIntoValsBuffer = acquireBuffer()
+			deleteFromValsBuffer  = tblStuff.acquireBuffer()
+			replaceIntoValsBuffer = tblStuff.acquireBuffer()
 
 			fileHint     string
 			fullFilePath string
@@ -871,8 +860,8 @@ func satisfyDiffOutputOpt(
 			if release != nil {
 				release()
 			}
-			releaseBuffer(deleteFromValsBuffer)
-			releaseBuffer(replaceIntoValsBuffer)
+			tblStuff.releaseBuffer(deleteFromValsBuffer)
+			tblStuff.releaseBuffer(replaceIntoValsBuffer)
 		}()
 
 		if fullFilePath, fileHint, writeFile, release, cleanup, err = prepareFSForDiffAsFile(
@@ -985,22 +974,135 @@ func makeFileName(
 	)
 }
 
+func validate(
+	ctx context.Context,
+	ses *Session,
+	stmt tree.Statement,
+) error {
+	if stmt == nil {
+		return nil
+	}
+
+	var (
+		ok       bool
+		diffStmt *tree.DataBranchDiff
+	)
+
+	if diffStmt, ok = stmt.(*tree.DataBranchDiff); !ok {
+		return nil
+	}
+
+	if diffStmt.OutputOpt != nil && len(diffStmt.OutputOpt.DirPath) > 0 {
+		if err := validateOutputDirPath(ctx, ses, diffStmt.OutputOpt.DirPath); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func validateOutputDirPath(ctx context.Context, ses *Session, dirPath string) (err error) {
+	if len(dirPath) == 0 {
+		return nil
+	}
+
+	var (
+		stagePath    string
+		ok           bool
+		inputDirPath = dirPath
+	)
+
+	if stagePath, ok, err = tryDecodeStagePath(ses, dirPath); err != nil {
+		return
+	} else if ok {
+		dirPath = stagePath
+	}
+
+	var fsPath fileservice.Path
+	if fsPath, err = fileservice.ParsePath(dirPath); err != nil {
+		return
+	}
+
+	if fsPath.Service == "" {
+		var info os.FileInfo
+		if info, err = os.Stat(dirPath); err != nil {
+			if os.IsNotExist(err) {
+				return moerr.NewInvalidInputNoCtxf("output directory %s does not exist", inputDirPath)
+			}
+			return
+		}
+		if !info.IsDir() {
+			return moerr.NewInvalidInputNoCtxf("output directory %s is not a directory", inputDirPath)
+		}
+		return nil
+	}
+
+	var (
+		targetFS   fileservice.FileService
+		targetPath string
+		entry      *fileservice.DirEntry
+	)
+
+	if fsPath.Service == defines.SharedFileServiceName {
+		targetFS = getPu(ses.GetService()).FileService
+		targetPath = dirPath
+	} else {
+		var etlFS fileservice.ETLFileService
+		if etlFS, targetPath, err = fileservice.GetForETL(ctx, nil, dirPath); err != nil {
+			return
+		}
+		targetFS = etlFS
+		defer targetFS.Close(ctx)
+	}
+
+	if entry, err = targetFS.StatFile(ctx, targetPath); err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+			return moerr.NewInvalidInputNoCtxf("output directory %s does not exist", inputDirPath)
+		}
+		return
+	}
+
+	if !entry.IsDir {
+		return moerr.NewInvalidInputNoCtxf("output directory %s is not a directory", inputDirPath)
+	}
+
+	return nil
+}
+
 func prepareFSForDiffAsFile(
 	ctx context.Context,
 	ses *Session,
 	stmt *tree.DataBranchDiff,
 	tblStuff tableStuff,
-) (fullFilePath, hint string, writeFile func([]byte) error, release func(), cleanup func(), err error) {
+) (
+	sqlRetPath, sqlRetHint string,
+	writeFile func([]byte) error,
+	release func(),
+	cleanup func(),
+	err error,
+) {
 	var (
-		fileName string
+		ok           bool
+		stagePath    string
+		fileName     string
+		fullFilePath string
 	)
 
 	fileName = makeFileName(stmt.BaseTable.AtTsExpr, stmt.TargetTable.AtTsExpr, tblStuff)
 	fileName += ".sql"
 
-	fullFilePath = path.Join(stmt.OutputOpt.DirPath, fileName)
+	sqlRetPath = path.Join(stmt.OutputOpt.DirPath, fileName)
 
-	hint = fmt.Sprintf(
+	if stagePath, ok, err = tryDecodeStagePath(ses, stmt.OutputOpt.DirPath); err != nil {
+		return
+	} else if ok {
+		sqlRetPath = strings.Replace(sqlRetPath, "stage:/", "stage://", 1)
+		fullFilePath = path.Join(stagePath, fileName)
+	} else {
+		fullFilePath = path.Join(stmt.OutputOpt.DirPath, fileName)
+	}
+
+	sqlRetHint = fmt.Sprintf(
 		"DELETE FROM %s.%s, REPLACE INTO %s.%s",
 		tblStuff.baseRel.GetTableDef(ctx).DbName, tblStuff.baseRel.GetTableName(),
 		tblStuff.baseRel.GetTableDef(ctx).DbName, tblStuff.baseRel.GetTableName(),
@@ -1035,21 +1137,34 @@ func prepareFSForDiffAsFile(
 		targetFS = etlFS
 	}
 
+	cleanup = func() {
+		_ = targetFS.Delete(context.Background(), targetPath)
+	}
+
+	defer func() {
+		if err != nil {
+			if cleanup != nil {
+				cleanup()
+			}
+			targetFS.Close(ctx)
+		}
+	}()
+
 	if err = targetFS.Delete(ctx, targetPath); err != nil && !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 		return
 	}
 
-	// SQL diff needs append, so pre-create the file and return an appender.
-	if err = targetFS.Write(ctx, fileservice.IOVector{
-		FilePath: targetPath,
-		Entries: []fileservice.IOEntry{
-			{Size: 0, Data: []byte{}},
-		},
-	}); err != nil && !moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists) {
-		return
-	}
-
 	if mfs, ok := targetFS.(fileservice.MutableFileService); ok {
+		// SQL diff needs append, so pre-create the file and return an appender.
+		if err = targetFS.Write(ctx, fileservice.IOVector{
+			FilePath: targetPath,
+			Entries: []fileservice.IOEntry{
+				{Size: 0, Data: []byte{}},
+			},
+		}); err != nil && !moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists) {
+			return
+		}
+
 		var mut fileservice.Mutator
 		if mut, err = mfs.NewMutator(ctx, targetPath); err != nil {
 			return
@@ -1067,30 +1182,68 @@ func prepareFSForDiffAsFile(
 			targetFS.Close(ctx)
 		}
 	} else {
-		// Fallback: manually track offset and re-Write slices.
-		var offset int64
-		writeFile = func(fileContent []byte) error {
-			vec := fileservice.IOVector{
-				FilePath: targetPath,
-				Entries: []fileservice.IOEntry{
-					{
-						Offset: offset,
-						Size:   int64(len(fileContent)),
-						Data:   fileContent,
-					},
-				},
-			}
-			offset += int64(len(fileContent))
-			return targetFS.Write(ctx, vec)
-		}
-
-		release = func() {
-			targetFS.Close(ctx)
+		if writeFile, release, err = newSingleWriteAppender(
+			ctx, tblStuff.worker, targetFS, targetPath, cleanup,
+		); err != nil {
+			return
 		}
 	}
 
-	cleanup = func() {
-		_ = targetFS.Delete(context.Background(), targetPath)
+	return
+}
+
+func newSingleWriteAppender(
+	ctx context.Context,
+	worker *ants.Pool,
+	targetFS fileservice.FileService,
+	targetPath string,
+	onError func(),
+) (writeFile func([]byte) error, release func(), err error) {
+	pr, pw := io.Pipe()
+	done := make(chan error, 1)
+
+	if worker == nil {
+		err = moerr.NewInternalErrorNoCtx("worker pool is nil")
+		return
+	}
+
+	if err = worker.Submit(func() {
+		defer close(done)
+		vec := fileservice.IOVector{
+			FilePath: targetPath,
+			Entries: []fileservice.IOEntry{
+				{
+					ReaderForWrite: pr,
+					Size:           -1,
+				},
+			},
+		}
+		if wErr := targetFS.Write(ctx, vec); wErr != nil {
+			_ = pr.CloseWithError(wErr)
+			done <- wErr
+			return
+		}
+		done <- pr.Close()
+	}); err != nil {
+		_ = pr.Close()
+		_ = pw.Close()
+		return
+	}
+
+	writeFile = func(fileContent []byte) error {
+		if len(fileContent) == 0 {
+			return nil
+		}
+		_, err := pw.Write(fileContent)
+		return err
+	}
+
+	release = func() {
+		_ = pw.Close()
+		if wErr := <-done; wErr != nil && onError != nil {
+			onError()
+		}
+		targetFS.Close(ctx)
 	}
 
 	return
@@ -1138,8 +1291,8 @@ func flushSqlValues(
 	writeFile func([]byte) error,
 ) (err error) {
 
-	sqlBuffer := acquireBuffer()
-	defer releaseBuffer(sqlBuffer)
+	sqlBuffer := tblStuff.acquireBuffer()
+	defer tblStuff.releaseBuffer(sqlBuffer)
 
 	initReplaceIntoBuf := func() {
 		sqlBuffer.WriteString(fmt.Sprintf(
@@ -1430,10 +1583,11 @@ func writeCSV(
 		writerErr = make(chan error, 1)
 		closeByte sync.Once
 
-		mrs      = &MysqlResultSet{}
-		hint     string
-		fileName = makeFileName(stmt.BaseTable.AtTsExpr, stmt.TargetTable.AtTsExpr, tblStuff)
-		cleanup  func()
+		mrs        = &MysqlResultSet{}
+		sqlRetHint string
+		sqlRetPath string
+		fileName   = makeFileName(stmt.BaseTable.AtTsExpr, stmt.TargetTable.AtTsExpr, tblStuff)
+		cleanup    func()
 	)
 
 	ep := &ExportConfig{
@@ -1441,26 +1595,47 @@ func writeCSV(
 		service:    ses.service,
 	}
 
+	for range tblStuff.def.visibleIdxes {
+		mrs.AddColumn(&MysqlColumn{})
+	}
+
 	ep.init()
 	ep.ctx = ctx
 	ep.mrs = mrs
 	ep.ByteChan = make(chan *BatchByte, runtime.NumCPU())
 
-	hint = ep.userConfig.String()
-	fileName += ".csv"
-	ep.userConfig.FilePath = path.Join(stmt.OutputOpt.DirPath, fileName)
-
-	for range tblStuff.def.visibleIdxes {
-		mrs.AddColumn(&MysqlColumn{})
-	}
-
 	ep.DefaultBufSize = getPu(ses.GetService()).SV.ExportDataDefaultFlushSize
 	initExportFileParam(ep, mrs)
-	if err = openNewFile(ctx, ep, mrs); err != nil {
+
+	sqlRetHint = ep.userConfig.String()
+	fileName += ".csv"
+
+	var (
+		ok        bool
+		stagePath string
+	)
+
+	sqlRetPath = path.Join(stmt.OutputOpt.DirPath, fileName)
+
+	if stagePath, ok, err = tryDecodeStagePath(ses, stmt.OutputOpt.DirPath); err != nil {
 		return
-	}
-	cleanup = func() {
-		removeFileIgnoreError(context.Background(), ep.service, ep.userConfig.FilePath)
+	} else if ok {
+		sqlRetPath = strings.Replace(sqlRetPath, "stage:/", "stage://", 1)
+		ep.userConfig.StageFilePath = path.Join(stagePath, fileName)
+		if err = openNewFile(ctx, ep, mrs); err != nil {
+			return
+		}
+		cleanup = func() {
+			removeFileIgnoreError(context.Background(), ep.service, ep.userConfig.StageFilePath)
+		}
+	} else {
+		ep.userConfig.FilePath = path.Join(stmt.OutputOpt.DirPath, fileName)
+		if err = openNewFile(ctx, ep, mrs); err != nil {
+			return
+		}
+		cleanup = func() {
+			removeFileIgnoreError(context.Background(), ep.service, ep.userConfig.FilePath)
+		}
 	}
 
 	writerWg.Add(1)
@@ -1602,7 +1777,7 @@ func writeCSV(
 	}
 
 	mrs = ses.GetMysqlResultSet()
-	mrs.AddRow([]any{ep.userConfig.FilePath, hint})
+	mrs.AddRow([]any{sqlRetPath, sqlRetHint})
 
 	return trySaveQueryResult(ctx, ses, mrs)
 }
@@ -1699,6 +1874,11 @@ func getTableStuff(
 	}
 
 	tblStuff.retPool = &retBatchList{}
+	tblStuff.bufferPool = &sync.Pool{
+		New: func() any {
+			return &bytes.Buffer{}
+		},
+	}
 
 	return
 
@@ -2069,7 +2249,7 @@ func hashDiffIfHasLCA(
 							return
 						}
 
-						buf := acquireBuffer()
+						buf := tblStuff.acquireBuffer()
 						formatValIntoString(ses, tarRow[0], tblStuff.def.colTypes[tblStuff.def.pkColIdx], buf)
 
 						err3 = moerr.NewInternalErrorNoCtxf(
@@ -2077,7 +2257,7 @@ func hashDiffIfHasLCA(
 							tarWrapped.name, tarWrapped.kind,
 							baseWrapped.name, baseWrapped.kind, buf.String(),
 						)
-						releaseBuffer(buf)
+						tblStuff.releaseBuffer(buf)
 						return
 					}
 				} else if cmp < 0 {
@@ -2497,7 +2677,7 @@ func checkConflictAndAppendToBat(
 	if copt.conflictOpt != nil {
 		switch copt.conflictOpt.Opt {
 		case tree.CONFLICT_FAIL:
-			buf := acquireBuffer()
+			buf := tblStuff.acquireBuffer()
 			for i, idx := range tblStuff.def.pkColIdxes {
 				formatValIntoString(ses, tarTuple[idx], tblStuff.def.colTypes[idx], buf)
 				if i < len(tblStuff.def.pkColIdxes)-1 {
@@ -2506,7 +2686,7 @@ func checkConflictAndAppendToBat(
 			}
 
 			msg := buf.String()
-			releaseBuffer(buf)
+			tblStuff.releaseBuffer(buf)
 			return moerr.NewInternalErrorNoCtxf(
 				"conflict: %s %s and %s %s on pk(%v) with different values",
 				tblStuff.tarRel.GetTableName(), diffInsert,
@@ -2644,6 +2824,12 @@ func diffDataHelper(
 			return err2
 		}
 
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
 		retCh <- batchWithKind{
 			batch: tarBat,
 			kind:  diffInsert,
@@ -2694,6 +2880,12 @@ func diffDataHelper(
 			return nil
 		}); err2 != nil {
 			return err2
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
 		}
 
 		retCh <- batchWithKind{
@@ -2762,8 +2954,8 @@ func handleDelsOnLCA(
 		sqlRet executor.Result
 		mots   = fmt.Sprintf("{MO_TS=%d} ", snapshot.PhysicalTime)
 
-		sqlBuf  = acquireBuffer()
-		valsBuf = acquireBuffer()
+		sqlBuf  = tblStuff.acquireBuffer()
+		valsBuf = tblStuff.acquireBuffer()
 
 		lcaTblDef  = tblStuff.lcaRel.GetTableDef(ctx)
 		baseTblDef = tblStuff.baseRel.GetTableDef(ctx)
@@ -2773,8 +2965,8 @@ func handleDelsOnLCA(
 	)
 
 	defer func() {
-		releaseBuffer(sqlBuf)
-		releaseBuffer(valsBuf)
+		tblStuff.releaseBuffer(sqlBuf)
+		tblStuff.releaseBuffer(valsBuf)
 	}()
 
 	pkNames := lcaTblDef.Pkey.Names
@@ -3420,7 +3612,7 @@ func decideCollectRange(
 		ctx, ses, eng, mp,
 		tables.tarRel, tables.baseRel,
 		[]types.TS{tarSp, baseSp},
-		txnOp,
+		txnOp, tables,
 	); err != nil {
 		return
 	}
@@ -3614,6 +3806,7 @@ func getTablesCreationCommitTS(
 	base engine.Relation,
 	snapshot []types.TS,
 	txnOp client.TxnOperator,
+	tblStuff tableStuff,
 ) (commitTS []types.TS, err error) {
 
 	var (
@@ -3642,9 +3835,9 @@ func getTablesCreationCommitTS(
 		return
 	}
 
-	buf := acquireBuffer()
+	buf := tblStuff.acquireBuffer()
 	defer func() {
-		releaseBuffer(buf)
+		tblStuff.releaseBuffer(buf)
 		sqlRet.Close()
 	}()
 

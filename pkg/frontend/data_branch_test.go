@@ -17,22 +17,30 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/require"
 )
 
 func TestBufferPool(t *testing.T) {
-	buf := acquireBuffer()
-	buf.WriteString("data")
-	releaseBuffer(buf)
+	tblStuff := tableStuff{}
 
-	buf2 := acquireBuffer()
+	buf := tblStuff.acquireBuffer()
+	buf.WriteString("data")
+	tblStuff.releaseBuffer(buf)
+
+	buf2 := tblStuff.acquireBuffer()
 	require.Equal(t, 0, buf2.Len())
-	releaseBuffer(buf2)
+	tblStuff.releaseBuffer(buf2)
 }
 
 func TestFormatValIntoString_StringEscaping(t *testing.T) {
@@ -88,6 +96,66 @@ func TestFormatValIntoString_UnsupportedType(t *testing.T) {
 	require.Panics(t, func() {
 		formatValIntoString(ses, true, types.New(types.T_bool, 0, 0), &buf)
 	})
+}
+
+func TestNewSingleWriteAppender_WriteAndRelease(t *testing.T) {
+	ctx := context.Background()
+	worker, err := ants.NewPool(1)
+	require.NoError(t, err)
+	defer worker.Release()
+
+	fs, err := fileservice.NewMemoryFS("mem", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+
+	writeFile, release, err := newSingleWriteAppender(
+		ctx, worker, fs, "dir/file", func() {},
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, writeFile([]byte("hello ")))
+	require.NoError(t, writeFile([]byte("world")))
+	release()
+
+	vec := fileservice.IOVector{
+		FilePath: "dir/file",
+		Entries: []fileservice.IOEntry{
+			{Size: -1},
+		},
+	}
+	require.NoError(t, fs.Read(ctx, &vec))
+	require.Equal(t, []byte("hello world"), vec.Entries[0].Data)
+}
+
+func TestNewSingleWriteAppender_NilWorker(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewMemoryFS("mem", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+
+	_, _, err = newSingleWriteAppender(ctx, nil, fs, "any", func() {})
+	require.Error(t, err)
+}
+
+func TestValidate(t *testing.T) {
+	tmpDir := t.TempDir()
+	ses := &Session{}
+
+	stmt := &tree.DataBranchDiff{
+		OutputOpt: &tree.DiffOutputOpt{
+			DirPath: tmpDir,
+		},
+	}
+	require.NoError(t, validate(context.Background(), ses, stmt))
+
+	missingDir := filepath.Join(tmpDir, "missing")
+	stmt.OutputOpt.DirPath = missingDir
+	require.Error(t, validate(context.Background(), ses, stmt))
+
+	filePath := filepath.Join(tmpDir, "file")
+	require.NoError(t, os.WriteFile(filePath, []byte(time.Now().String()), 0o644))
+	stmt.OutputOpt.DirPath = filePath
+	require.Error(t, validate(context.Background(), ses, stmt))
+
+	require.NoError(t, validate(context.Background(), ses, nil))
 }
 
 func TestCompareSingleValInVector_AllTypes(t *testing.T) {
