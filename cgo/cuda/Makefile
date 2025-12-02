@@ -289,7 +289,7 @@ FATBIN_FILE := mocl_kernel${TARGET_SIZE}.fatbin
 ifeq ($(TARGET_ARCH),$(filter $(TARGET_ARCH),armv7l aarch64 sbsa))
 SMS ?= 53 61 70 72 75 80 86 87 90
 else
-SMS ?= 80 86 89 90
+SMS ?= 75 80 86 89 90
 endif
 
 ifeq ($(GENCODE_FLAGS),)
