@@ -157,6 +157,7 @@ THIRDPARTIES_INSTALL_DIR=$(ROOT_DIR)/thirdparties/install
 RACE_OPT :=
 DEBUG_OPT :=
 CGO_DEBUG_OPT :=
+TAGS :=
 
 ifeq ($(MO_CL_CUDA),1)
 	ifeq ($(CONDA_PREFIX),)
@@ -166,11 +167,11 @@ ifeq ($(MO_CL_CUDA),1)
 	CUVS_LDFLAGS := -L$(CONDA_PREFIX)/envs/go/lib -lcuvs -lcuvs_c
 	CUDA_CFLAGS := -I/usr/local/cuda/include $(CUVS_CFLAGS)
 	CUDA_LDFLAGS := -L/usr/local/cuda/lib64/stubs -lcuda -L/usr/local/cuda/lib64 -lcudart $(CUVS_LDFLAGS) -lstdc++
+	TAGS += -tags "gpu"
 endif
 
 CGO_OPTS :=CGO_CFLAGS="-I$(THIRDPARTIES_INSTALL_DIR)/include $(CUDA_CFLAGS)"
 GOLDFLAGS=-ldflags="-extldflags '$(CUDA_LDFLAGS) -L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,\$${ORIGIN}/lib -fopenmp' $(VERSION_INFO)"
-TAGS :=
 
 ifeq ("$(UNAME_S)","darwin")
 GOLDFLAGS:=-ldflags="-extldflags '-L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,@executable_path/lib' $(VERSION_INFO)"

@@ -30,7 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/kmeans"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/kmeans/elkans"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/kmeans/device"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -85,7 +85,7 @@ func clustering[T types.RealNumbers](u *ivfCreateState, tf *TableFunction, proc 
 
 	// NOTE: We use L2 distance to caculate centroid.  Ivfflat metric just for searching.
 	var centers [][]T
-	if clusterer, err = elkans.NewKMeans(
+	if clusterer, err = device.NewKMeans(
 		data, int(u.idxcfg.Ivfflat.Lists),
 		int(u.tblcfg.KmeansMaxIteration),
 		defaultKmeansDeltaThreshold,
