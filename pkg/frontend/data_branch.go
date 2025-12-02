@@ -585,7 +585,9 @@ func tryFlushDeletesOrReplace(
 	ses *Session,
 	bh BackgroundExec,
 	tblStuff tableStuff,
-	newWrapped *batchWithKind,
+	newKind string,
+	newValsLen int,
+	newRowCnt int,
 	deleteCnt *int,
 	deletesBuf *bytes.Buffer,
 	replaceCnt *int,
@@ -619,14 +621,15 @@ func tryFlushDeletesOrReplace(
 	}
 
 	// if wrapped is nil, means force flush
-	if newWrapped != nil {
-		newSize := newWrapped.batch.Size()
-		if newWrapped.kind == diffDelete {
-			if deletesBuf.Len()+newSize >= maxSqlBatchSize || *deleteCnt >= maxSqlBatchCnt {
+	if newKind != "" {
+		if newKind == diffDelete {
+			if deletesBuf.Len()+newValsLen >= maxSqlBatchSize ||
+				*deleteCnt+newRowCnt >= maxSqlBatchCnt {
 				return flushDeletes()
 			}
 		} else {
-			if replaceBuf.Len()+newSize >= maxSqlBatchSize || *replaceCnt >= maxSqlBatchCnt {
+			if replaceBuf.Len()+newValsLen >= maxSqlBatchSize ||
+				*replaceCnt+newRowCnt >= maxSqlBatchCnt {
 				return flushReplace()
 			}
 		}
@@ -666,11 +669,13 @@ func mergeDiffs(
 		replaceIntoVals = tblStuff.acquireBuffer()
 		deleteFromVals  = tblStuff.acquireBuffer()
 		firstErr        error
+		tmpValsBuffer   = tblStuff.acquireBuffer()
 	)
 
 	defer func() {
 		tblStuff.releaseBuffer(replaceIntoVals)
 		tblStuff.releaseBuffer(deleteFromVals)
+		tblStuff.releaseBuffer(tmpValsBuffer)
 	}()
 
 	defer func() {
@@ -690,8 +695,35 @@ func mergeDiffs(
 			continue
 		}
 
+		tmpValsBuffer.Reset()
+
+		if err = constructValsFromBatch(
+			ctx, ses, tblStuff, wrapped, tmpValsBuffer, tmpValsBuffer,
+		); err != nil {
+			firstErr = err
+			cancel()
+			tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+			continue
+		}
+
+		if tmpValsBuffer.Len() == 0 {
+			tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+			continue
+		}
+
+		newRowCnt := wrapped.batch.RowCount()
+		newValsLen := tmpValsBuffer.Len()
+		if wrapped.kind == diffDelete {
+			if deleteFromVals.Len() > 0 {
+				newValsLen++
+			}
+		} else {
+			if replaceIntoVals.Len() > 0 {
+				newValsLen++
+			}
+		}
 		if err = tryFlushDeletesOrReplace(
-			ctx, ses, bh, tblStuff, &wrapped,
+			ctx, ses, bh, tblStuff, wrapped.kind, newValsLen, newRowCnt,
 			&deleteCnt, deleteFromVals, &replaceCnt, replaceIntoVals, nil,
 		); err != nil {
 			firstErr = err
@@ -700,27 +732,26 @@ func mergeDiffs(
 			continue
 		}
 
-		if err = constructValsFromBatch(
-			ctx, ses, tblStuff, wrapped, deleteFromVals, replaceIntoVals,
-		); err != nil {
-			firstErr = err
-			cancel()
-			tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
-			continue
-		}
-
 		if wrapped.kind == diffDelete {
-			deleteCnt += wrapped.batch.RowCount()
+			if deleteFromVals.Len() > 0 {
+				deleteFromVals.WriteString(",")
+			}
+			deleteFromVals.Write(tmpValsBuffer.Bytes())
+			deleteCnt += newRowCnt
 		} else {
-			replaceCnt += wrapped.batch.RowCount()
+			if replaceIntoVals.Len() > 0 {
+				replaceIntoVals.WriteString(",")
+			}
+			replaceIntoVals.Write(tmpValsBuffer.Bytes())
+			replaceCnt += newRowCnt
 		}
 
 		tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
 	}
 
 	if err = tryFlushDeletesOrReplace(
-		ctx, ses, bh, tblStuff, nil,
-		&deleteCnt, deleteFromVals, &replaceCnt, replaceIntoVals, nil,
+		ctx, ses, bh, tblStuff, "",
+		0, 0, &deleteCnt, deleteFromVals, &replaceCnt, replaceIntoVals, nil,
 	); err != nil {
 		if firstErr == nil {
 			firstErr = err
@@ -844,6 +875,7 @@ func satisfyDiffOutputOpt(
 
 			deleteFromValsBuffer  = tblStuff.acquireBuffer()
 			replaceIntoValsBuffer = tblStuff.acquireBuffer()
+			tmpValsBuffer         = tblStuff.acquireBuffer()
 
 			fileHint     string
 			fullFilePath string
@@ -862,6 +894,7 @@ func satisfyDiffOutputOpt(
 			}
 			tblStuff.releaseBuffer(deleteFromValsBuffer)
 			tblStuff.releaseBuffer(replaceIntoValsBuffer)
+			tblStuff.releaseBuffer(tmpValsBuffer)
 		}()
 
 		if fullFilePath, fileHint, writeFile, release, cleanup, err = prepareFSForDiffAsFile(
@@ -889,8 +922,35 @@ func satisfyDiffOutputOpt(
 			}
 
 			if wrapped.name == tblStuff.tarRel.GetTableName() {
+				tmpValsBuffer.Reset()
+
+				if err = constructValsFromBatch(
+					ctx, ses, tblStuff, wrapped, tmpValsBuffer, tmpValsBuffer,
+				); err != nil {
+					first = err
+					cancel()
+					tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+					continue
+				}
+
+				if tmpValsBuffer.Len() == 0 {
+					tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+					continue
+				}
+
+				newRowCnt := wrapped.batch.RowCount()
+				newValsLen := tmpValsBuffer.Len()
+				if wrapped.kind == diffDelete {
+					if deleteFromValsBuffer.Len() > 0 {
+						newValsLen++
+					}
+				} else {
+					if replaceIntoValsBuffer.Len() > 0 {
+						newValsLen++
+					}
+				}
 				if err = tryFlushDeletesOrReplace(
-					ctx, ses, bh, tblStuff, &wrapped,
+					ctx, ses, bh, tblStuff, wrapped.kind, newValsLen, newRowCnt,
 					&deleteCnt, deleteFromValsBuffer, &replaceCnt, replaceIntoValsBuffer,
 					writeFile,
 				); err != nil {
@@ -900,18 +960,18 @@ func satisfyDiffOutputOpt(
 					continue
 				}
 
-				if err = constructValsFromBatch(
-					ctx, ses, tblStuff, wrapped, deleteFromValsBuffer, replaceIntoValsBuffer,
-				); err != nil {
-					first = err
-					cancel()
-					tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
-					continue
-				}
 				if wrapped.kind == diffDelete {
-					deleteCnt += int(wrapped.batch.RowCount())
+					if deleteFromValsBuffer.Len() > 0 {
+						deleteFromValsBuffer.WriteString(",")
+					}
+					deleteFromValsBuffer.Write(tmpValsBuffer.Bytes())
+					deleteCnt += newRowCnt
 				} else {
-					replaceCnt += int(wrapped.batch.RowCount())
+					if replaceIntoValsBuffer.Len() > 0 {
+						replaceIntoValsBuffer.WriteString(",")
+					}
+					replaceIntoValsBuffer.Write(tmpValsBuffer.Bytes())
+					replaceCnt += newRowCnt
 				}
 			}
 
@@ -923,8 +983,8 @@ func satisfyDiffOutputOpt(
 		}
 
 		if err = tryFlushDeletesOrReplace(
-			ctx, ses, bh, tblStuff, nil,
-			&deleteCnt, deleteFromValsBuffer, &replaceCnt, replaceIntoValsBuffer,
+			ctx, ses, bh, tblStuff, "",
+			0, 0, &deleteCnt, deleteFromValsBuffer, &replaceCnt, replaceIntoValsBuffer,
 			writeFile,
 		); err != nil {
 			first = err
