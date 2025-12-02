@@ -169,9 +169,9 @@ CGO_DEBUG_OPT :=
 TAGS :=
 
 ifeq ($(MO_CL_CUDA),1)
-	ifeq ($(CONDA_PREFIX),)
-		$(error CONDA_PREFIX env variable not found.)
-	endif
+  ifeq ($(CONDA_PREFIX),)
+    $(error CONDA_PREFIX env variable not found.)
+  endif
 	CUVS_CFLAGS := -I$(CONDA_PREFIX)/include
 	CUVS_LDFLAGS := -L$(CONDA_PREFIX)/envs/go/lib -lcuvs -lcuvs_c
 	CUDA_CFLAGS := -I/usr/local/cuda/include $(CUVS_CFLAGS)
