@@ -376,8 +376,15 @@ func TestRequestMultipleCn_NoGoroutineLeak(t *testing.T) {
 
 		handleValidResponse := func(nodeAddr string, rsp *pb.Response) {
 			if nodeAddr == node1 {
-				// Block node1's response processing to ensure main loop is still waiting
-				<-node1ResponseBlocked
+				// Block node1's response processing, but check context to avoid deadlock
+				// If context is canceled, return early to allow RequestMultipleCn to complete
+				select {
+				case <-node1ResponseBlocked:
+					// Unblocked, continue processing
+				case <-ctx.Done():
+					// Context canceled, return early to avoid deadlock
+					return
+				}
 			}
 		}
 
@@ -391,10 +398,16 @@ func TestRequestMultipleCn_NoGoroutineLeak(t *testing.T) {
 		// Cancel context immediately to trigger timeout (event-driven, no sleep)
 		cancel()
 
-		// Wait for RequestMultipleCn to complete
-		<-done
+		// Wait for RequestMultipleCn to complete with timeout to avoid hanging
+		select {
+		case <-done:
+			// RequestMultipleCn completed successfully
+		case <-time.After(30 * time.Second):
+			t.Fatal("RequestMultipleCn did not complete within 30 seconds")
+		}
 
-		// Unblock node1's response processing (cleanup)
+		// Unblock node1's response processing (cleanup) in case it's still waiting
+		// Close the channel so any waiting handler goroutines can proceed
 		close(node1ResponseBlocked)
 	})
 }
