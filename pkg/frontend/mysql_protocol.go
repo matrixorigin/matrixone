@@ -365,7 +365,6 @@ func (mp *MysqlProtocolImpl) GetBool(id PropertyID) bool {
 }
 
 func (mp *MysqlProtocolImpl) Write(execCtx *ExecCtx, crs *perfcounter.CounterSet, bat *batch.Batch) error {
-	const countOfResultSet = 1
 	n := bat.Vecs[0].Length()
 	//TODO: remove this MRS here
 	//Create a new temporary result set per pipeline thread.
@@ -375,10 +374,27 @@ func (mp *MysqlProtocolImpl) Write(execCtx *ExecCtx, crs *perfcounter.CounterSet
 	sesMrs := execCtx.ses.GetMysqlResultSet()
 	mrs.Columns = sesMrs.Columns
 
-	//group row
-	mrs.Data = make([][]interface{}, countOfResultSet)
-	for i := 0; i < countOfResultSet; i++ {
-		mrs.Data[i] = make([]interface{}, len(bat.Vecs))
+	ses := execCtx.ses.(*Session)
+	isShowTableStatus := ses.GetShowStmtType() == ShowTableStatus
+
+	//group row - allocate space for rows in the batch
+	//Note: mrs.Data is primarily used for show table status (which only uses mrs.Data[0]),
+	//but we need to allocate enough space to avoid index out of bounds errors if
+	//appendResultSetTextRow is called (which accesses mrs.Data via ColumnIsNull).
+	//For normal queries using WriteResultSetRow2, mrs.Data is not accessed, but we
+	//allocate it defensively to prevent crashes if code paths change.
+	//Optimization: Only allocate what's needed - 1 row for show table status, n rows otherwise
+	if isShowTableStatus {
+		// For show table status, only need 1 row (reused in loop)
+		mrs.Data = make([][]interface{}, 1)
+		mrs.Data[0] = make([]interface{}, len(bat.Vecs))
+	} else {
+		// For other queries, allocate n rows to prevent index out of bounds
+		// if any code path accesses mrs.Data (e.g., via sendResultSet)
+		mrs.Data = make([][]interface{}, n)
+		for i := 0; i < n; i++ {
+			mrs.Data[i] = make([]interface{}, len(bat.Vecs))
+		}
 	}
 
 	colSlices := &ColumnSlices{
@@ -391,8 +407,6 @@ func (mp *MysqlProtocolImpl) Write(execCtx *ExecCtx, crs *perfcounter.CounterSet
 	if err != nil {
 		return err
 	}
-	ses := execCtx.ses.(*Session)
-	isShowTableStatus := ses.GetShowStmtType() == ShowTableStatus
 	colSlices.safeRefSlice = !isShowTableStatus
 	if isShowTableStatus {
 		for j := 0; j < n; j++ { //row index
@@ -2708,10 +2722,16 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow(mrs *MysqlResultSet, r uint6
 			if value, err2 := mrs.GetValue(mp.ctx, r, i); err2 != nil {
 				return err2
 			} else {
-				mp.dateEncBuffer = value.(types.Date).ToBytes(mp.dateEncBuffer[:0])
-				err = mp.appendCountOfBytesLenEnc(mp.dateEncBuffer[:types.DateToBytesLength])
-				if err != nil {
-					return err
+				if d, ok := value.(types.Date); ok {
+					// Normal case: value is Date, format as DATE (use binary encoding for efficiency)
+					var date types.Date = d
+					mp.dateEncBuffer = date.ToBytes(mp.dateEncBuffer[:0])
+					err = mp.appendCountOfBytesLenEnc(mp.dateEncBuffer[:types.DateToBytesLength])
+					if err != nil {
+						return err
+					}
+				} else {
+					return moerr.NewInternalErrorf(mp.ctx, "unsupported type %T for MYSQL_TYPE_DATE", value)
 				}
 			}
 		case defines.MYSQL_TYPE_DATETIME:
@@ -2719,14 +2739,26 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow(mrs *MysqlResultSet, r uint6
 			scale := int32(mysqlColumn.Decimal())
 			if val, err2 := mrs.GetValue(mp.ctx, r, i); err2 != nil {
 				return err2
-			} else if dt, ok := val.(types.Datetime); ok {
-				value := dt.String2(scale)
-				err = AppendStringLenEnc(mp, value)
-				if err != nil {
-					return err
+			} else if val != nil {
+				if dt, ok := val.(types.Datetime); ok {
+					valueStr := dt.String2(scale)
+					err = AppendStringLenEnc(mp, valueStr)
+					if err != nil {
+						return err
+					}
+				} else {
+					// Fallback to GetString if type assertion fails
+					value, err3 := mrs.GetString(mp.ctx, r, i)
+					if err3 != nil {
+						return err3
+					}
+					err = AppendStringLenEnc(mp, value)
+					if err != nil {
+						return err
+					}
 				}
 			} else {
-				// Fallback to GetString if type assertion fails
+				// Fallback to GetString if value is nil
 				value, err2 := mrs.GetString(mp.ctx, r, i)
 				if err2 != nil {
 					return err2
@@ -2767,6 +2799,12 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow(mrs *MysqlResultSet, r uint6
 				// Use session timezone instead of UTC from GetString
 				value := ts.String2(mp.ses.GetTimeZone(), scale)
 				err = AppendStringLenEnc(mp, value)
+				if err != nil {
+					return err
+				}
+			} else if dt, ok := val.(types.Datetime); ok {
+				valueStr := dt.String2(scale)
+				err = AppendStringLenEnc(mp, valueStr)
 				if err != nil {
 					return err
 				}
@@ -3024,40 +3062,56 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow2(mrs *MysqlResultSet, colS
 				return err
 			}
 		case defines.MYSQL_TYPE_DATETIME, defines.MYSQL_TYPE_TIMESTAMP:
-			var dt types.Datetime
-			var err error
-			var value string
+			// Use vector's actual type to encode, not MySQL column type
 			typ := colSlices.GetType(i)
-			switch typ.Oid {
-			case types.T_datetime:
-				value, err = GetDatetime(colSlices, rowIdx, i)
+			if typ.Oid == types.T_date {
+				date, err2 := GetDate(colSlices, rowIdx, i)
+				if err2 != nil {
+					return err2
+				}
+				err = mp.appendDate(date)
 				if err != nil {
 					return err
 				}
-			case types.T_timestamp:
-				value, err = GetTimestamp(colSlices, rowIdx, i, mp.ses.GetTimeZone())
+			} else if typ.Oid == types.T_timestamp {
+				value, err2 := GetTimestamp(colSlices, rowIdx, i, mp.ses.GetTimeZone())
+				if err2 != nil {
+					return err2
+				}
+				var dt types.Datetime
+				idx := strings.Index(value, ".")
+				if idx == -1 {
+					dt, err = types.ParseDatetime(value, 0)
+				} else {
+					dt, err = types.ParseDatetime(value, int32(len(value)-idx-1))
+				}
 				if err != nil {
 					return err
 				}
-			default:
-				return moerr.NewInternalErrorf(mp.ctx, "unknown type %s in datetime or timestamp", typ.Oid)
-			}
-
-			idx := strings.Index(value, ".")
-			if idx == -1 {
-				dt, err = types.ParseDatetime(value, 0)
+				err = mp.appendDatetime(dt)
 				if err != nil {
 					return err
 				}
 			} else {
-				dt, err = types.ParseDatetime(value, int32(len(value)-idx-1))
+				// T_datetime
+				value, err2 := GetDatetime(colSlices, rowIdx, i)
+				if err2 != nil {
+					return err2
+				}
+				var dt types.Datetime
+				idx := strings.Index(value, ".")
+				if idx == -1 {
+					dt, err = types.ParseDatetime(value, 0)
+				} else {
+					dt, err = types.ParseDatetime(value, int32(len(value)-idx-1))
+				}
 				if err != nil {
 					return err
 				}
-			}
-			err = mp.appendDatetime(dt)
-			if err != nil {
-				return err
+				err = mp.appendDatetime(dt)
+				if err != nil {
+					return err
+				}
 			}
 		default:
 			return moerr.NewInternalError(mp.ctx, "type is not supported in binary text result row")
@@ -3253,19 +3307,56 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 				return err
 			}
 		case defines.MYSQL_TYPE_DATE:
-			value, err := GetDate(colSlices, r, i)
-			if err != nil {
-				return err
-			}
-			mp.dateEncBuffer = value.ToBytes(mp.dateEncBuffer[:0])
-			err = mp.appendCountOfBytesLenEnc(mp.dateEncBuffer[:types.DateToBytesLength])
-			if err != nil {
-				return err
+			// Check vector type - it might be DATETIME even if MySQL column type is DATE
+			typ := colSlices.GetType(i)
+			vec := colSlices.GetVector(i)
+			actualType := vec.GetType().Oid
+			var err error
+
+			// Fix: When actual vector type is DATETIME, format as DATETIME string (not DATE)
+			// This handles TIMESTAMPADD with DATE input + time unit (HOUR/MINUTE/SECOND/MICROSECOND)
+			// MySQL behavior: DATE input + time unit → DATETIME output
+			if actualType == types.T_datetime {
+				// Actual vector type is DATETIME, format as DATETIME string
+				dtStr, err2 := GetDatetime(colSlices, r, i)
+				if err2 != nil {
+					return err2
+				}
+				// Format as DATETIME string (not DATE)
+				err = AppendStringLenEnc(mp, dtStr)
+				if err != nil {
+					return err
+				}
+			} else if typ.Oid == types.T_date {
+				// Normal case: type is T_date and actual vector type is also T_date
+				date, err2 := GetDate(colSlices, r, i)
+				if err2 != nil {
+					return err2
+				}
+				mp.dateEncBuffer = date.ToBytes(mp.dateEncBuffer[:0])
+				err = mp.appendCountOfBytesLenEnc(mp.dateEncBuffer[:types.DateToBytesLength])
+				if err != nil {
+					return err
+				}
+			} else {
+				return moerr.NewInternalErrorf(mp.ctx, "unsupported type %s for MYSQL_TYPE_DATE", typ.Oid)
 			}
 		case defines.MYSQL_TYPE_DATETIME:
-			value, err := GetDatetime(colSlices, r, i)
-			if err != nil {
-				return err
+			// Use vector's actual type to format, not MySQL column type
+			typ := colSlices.GetType(i)
+			var value string
+			var err error
+			if typ.Oid == types.T_date {
+				date, err2 := GetDate(colSlices, r, i)
+				if err2 != nil {
+					return err2
+				}
+				value = formatDateForMySQL(date)
+			} else {
+				value, err = GetDatetime(colSlices, r, i)
+				if err != nil {
+					return err
+				}
 			}
 			err = AppendStringLenEnc(mp, value)
 			if err != nil {
@@ -3281,26 +3372,29 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 				return err
 			}
 		case defines.MYSQL_TYPE_TIMESTAMP:
+			// Use vector's actual type to format, not MySQL column type
 			typ := colSlices.GetType(i)
 			switch typ.Oid {
-			case types.T_datetime:
-				value, err := GetDatetime(colSlices, r, i)
+			case types.T_timestamp:
+				value, err2 := GetTimestamp(colSlices, r, i, mp.ses.GetTimeZone())
+				if err2 != nil {
+					return err2
+				}
+				err = AppendStringLenEnc(mp, value)
 				if err != nil {
 					return err
+				}
+			case types.T_datetime:
+				value, err2 := GetDatetime(colSlices, r, i)
+				if err2 != nil {
+					return err2
 				}
 				err = AppendStringLenEnc(mp, value)
 				if err != nil {
 					return err
 				}
 			default:
-				value, err := GetTimestamp(colSlices, r, i, mp.ses.GetTimeZone())
-				if err != nil {
-					return err
-				}
-				err = AppendStringLenEnc(mp, value)
-				if err != nil {
-					return err
-				}
+				return moerr.NewInternalErrorf(mp.ctx, "unsupported type %s for MYSQL_TYPE_TIMESTAMP", typ.Oid)
 			}
 		case defines.MYSQL_TYPE_ENUM, defines.MYSQL_TYPE_JSON:
 			value, err := GetStringBased(colSlices, r, i)
@@ -3805,4 +3899,17 @@ func GetPassWord(pwd string) ([]byte, error) {
 		logutil.Errorf("GetPassWord failed.")
 	}
 	return pwdByte, nil
+}
+
+// formatDateForMySQL formats a Date value for MySQL protocol, handling zero date (0000-00-00)
+// MySQL uses 0000-00-00 as zero date for minimum overflow cases (e.g., TIMESTAMPADD(DAY, -1, '0001-01-01'))
+// MatrixOne's Date(0) represents 0001-01-01, so we format it as "0000-00-00" for MySQL compatibility
+func formatDateForMySQL(d types.Date) string {
+	// Check if this is a zero date (Date(0) = 0001-01-01)
+	// MySQL uses 0000-00-00 as zero date for minimum overflow cases
+	// For MySQL compatibility, format Date(0) as "0000-00-00"
+	if d == types.Date(0) {
+		return "0000-00-00"
+	}
+	return d.String()
 }

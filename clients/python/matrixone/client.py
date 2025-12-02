@@ -278,15 +278,16 @@ class Client(BaseMatrixOneClient):
 
             host: Database host
             port: Database port
-            user: Username or login info in format "user", "account#user", or "account#user#role"
+            user: Username or login info in format "user", "account#user", "account#user#role",
+                  "account:user", or "account:user:role" (both '#' and ':' separators are supported)
             password: Password
             database: Database name
             ssl_mode: SSL mode (disabled, preferred, required)
             ssl_ca: SSL CA certificate path
             ssl_cert: SSL client certificate path
             ssl_key: SSL client key path
-            account: Optional account name (will be combined with user if user doesn't contain '#')
-            role: Optional role name (will be combined with user if user doesn't contain '#')
+            account: Optional account name (will be combined with user if user doesn't contain '#' or ':')
+            role: Optional role name (will be combined with user if user doesn't contain '#' or ':')
             charset: Character set for the connection (default: utf8mb4)
             connection_timeout: Connection timeout in seconds (default: 30)
             auto_commit: Enable autocommit (default: True)
@@ -650,7 +651,8 @@ class Client(BaseMatrixOneClient):
 
         Args::
 
-            user: Username or login info in format "user", "account#user", or "account#user#role"
+            user: Username or login info in format "user", "account#user", "account#user#role",
+                  "account:user", or "account:user:role"
             account: Optional account name
             role: Optional role name
 
@@ -659,17 +661,24 @@ class Client(BaseMatrixOneClient):
             tuple: (final_user_string, parsed_info_dict)
 
         Rules:
-        1. If user contains '#', it's already in format "account#user" or "account#user#role"
+        1. If user contains '#' or ':', it's already in format "account#user" or "account#user#role"
+           (or with ':' separator, which will be normalized to '#')
            - If account or role is also provided, raise error (conflict)
-        2. If user doesn't contain '#', combine with optional account/role:
+        2. If user doesn't contain '#' or ':', combine with optional account/role:
            - No account/role: use user as-is
            - Only role: use "sys#user#role"
            - Only account: use "account#user"
            - Both: use "account#user#role"
         """
-        # Check if user already contains login format
+        # Check if user already contains login format (support both '#' and ':' as separators)
+        delimiter = None
         if "#" in user:
-            # User is already in format "account#user" or "account#user#role"
+            delimiter = "#"
+        elif ":" in user:
+            delimiter = ":"
+
+        if delimiter is not None:
+            # User is already in format "account#user" or "account#user#role" (or with ':')
             if account is not None or role is not None:
                 raise ValueError(
                     f"Conflict: user parameter '{user}' already contains account/role info, "
@@ -678,17 +687,27 @@ class Client(BaseMatrixOneClient):
                 )
 
             # Parse the existing format
-            parts = user.split("#")
+            parts = user.split(delimiter)
             if len(parts) == 2:
-                # "account#user" format
+                # "account#user" or "account:user" format
                 final_account, final_user, final_role = parts[0], parts[1], None
             elif len(parts) == 3:
-                # "account#user#role" format
+                # "account#user#role" or "account:user:role" format
                 final_account, final_user, final_role = parts[0], parts[1], parts[2]
             else:
-                raise ValueError(f"Invalid user format: '{user}'. Expected 'user', 'account#user', or 'account#user#role'")
+                raise ValueError(
+                    f"Invalid user format: '{user}'. Expected 'user', 'account#user', "
+                    f"'account#user#role', 'account:user', or 'account:user:role'"
+                )
 
-            final_user_string = user
+            # Normalize to use '#' separator for consistency
+            if delimiter == ":":
+                if final_role:
+                    final_user_string = f"{final_account}#{final_user}#{final_role}"
+                else:
+                    final_user_string = f"{final_account}#{final_user}"
+            else:
+                final_user_string = user
 
         else:
             # User is just a username, combine with optional account/role

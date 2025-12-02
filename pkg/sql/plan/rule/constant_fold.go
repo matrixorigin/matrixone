@@ -271,7 +271,13 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 	ec := &plan.Expr_Lit{
 		Lit: c,
 	}
-	expr.Typ = plan.Type{Id: int32(vec.GetType().Oid), Scale: vec.GetType().Scale, Width: vec.GetType().Width}
+	// Preserve the original expr.Typ (from retType) instead of using vec.GetType()
+	// This ensures that expr.Typ matches the retType, preventing type mismatches
+	// when FunctionExpressionExecutor creates result wrapper using planExpr.Typ
+	// For example, TIMESTAMPADD with DATE input returns DATETIME type (from retType),
+	// but the actual vector type might be DATETIME (after TempSetType) or DATE (before TempSetType)
+	// We should preserve the retType (DATETIME) to ensure consistency
+	expr.Typ = plan.Type{Id: expr.Typ.Id, Scale: vec.GetType().Scale, Width: vec.GetType().Width}
 	expr.Expr = ec
 
 	return expr

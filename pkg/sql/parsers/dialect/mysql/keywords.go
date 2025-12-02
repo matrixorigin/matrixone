@@ -474,6 +474,7 @@ func init() {
 		"time":                       TIME,
 		"timestamp":                  TIMESTAMP,
 		"timestampdiff":              TIMESTAMPDIFF,
+		"timestampadd":               TIMESTAMPADD,
 		"tinyblob":                   TINYBLOB,
 		"tinyint":                    TINYINT,
 		"tinytext":                   TINYTEXT,

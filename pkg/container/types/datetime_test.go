@@ -292,6 +292,37 @@ func TestParseDatetime(t *testing.T) {
 			args: "2000:01:01 12:34:56.123456",
 			want: "2000-01-01 12:34:56.123456",
 		},
+		// 6. ISO 8601 format (yyyy-mm-ddThh:mm:ss)
+		{
+			name: "ISO 8601 format yyyy-mm-ddThh:mm:ss",
+			args: "2024-12-20T10:30:45",
+			want: "2024-12-20 10:30:45.000000",
+		},
+		{
+			name: "ISO 8601 format with microseconds",
+			args: "2024-12-20T10:30:45.123456",
+			want: "2024-12-20 10:30:45.123456",
+		},
+		{
+			name: "ISO 8601 format with milliseconds",
+			args: "2024-12-20T10:30:45.123",
+			want: "2024-12-20 10:30:45.123000",
+		},
+		{
+			name: "ISO 8601 format with single digit microseconds",
+			args: "2024-12-20T10:30:45.1",
+			want: "2024-12-20 10:30:45.100000",
+		},
+		{
+			name: "ISO 8601 format midnight",
+			args: "2024-12-20T00:00:00",
+			want: "2024-12-20 00:00:00.000000",
+		},
+		{
+			name: "ISO 8601 format end of day",
+			args: "2024-12-20T23:59:59",
+			want: "2024-12-20 23:59:59.000000",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -561,4 +592,42 @@ func TestDatetime_ToTime(t *testing.T) {
 	// Convert back to TIME - this should not panic
 	resultTime := resultDt.ToTime(9)
 	require.Equal(t, "13:46:15.000000", resultTime.String2(6), "TIME(ADDTIME(...)) should work correctly")
+}
+
+// TestAddIntervalMicrosecond tests AddInterval with MicroSecond unit
+// This test verifies the fix for TIMESTAMPADD(MICROSECOND, 1000000, DATE('2024-12-20'))
+func TestAddIntervalMicrosecond(t *testing.T) {
+	// Test case: DATE('2024-12-20') + 1000000 microseconds = 2024-12-20 00:00:01.000000
+	date, _ := ParseDateCast("2024-12-20")
+	dt := date.ToDatetime()
+
+	// Add 1000000 microseconds (1 second)
+	result, success := dt.AddInterval(1000000, MicroSecond, DateTimeType)
+	require.True(t, success, "AddInterval should succeed for MicroSecond")
+	require.NotEqual(t, Datetime(0), result, "Result should not be zero")
+
+	// Verify the result is 2024-12-20 00:00:01.000000
+	expected, _ := ParseDatetime("2024-12-20 00:00:01.000000", 6)
+	require.Equal(t, expected, result, "DATE + 1000000 microseconds should equal 2024-12-20 00:00:01.000000")
+
+	// Verify the string representation
+	require.Equal(t, "2024-12-20 00:00:01.000000", result.String2(6), "String representation should match")
+
+	// Test with different microsecond values
+	testCases := []struct {
+		microseconds int64
+		expected     string
+	}{
+		{1000000, "2024-12-20 00:00:01.000000"}, // 1 second
+		{500000, "2024-12-20 00:00:00.500000"},  // 0.5 seconds
+		{123456, "2024-12-20 00:00:00.123456"},  // 123456 microseconds
+		{2000000, "2024-12-20 00:00:02.000000"}, // 2 seconds
+	}
+
+	for _, tc := range testCases {
+		result, success := dt.AddInterval(tc.microseconds, MicroSecond, DateTimeType)
+		require.True(t, success, "AddInterval should succeed for %d microseconds", tc.microseconds)
+		require.NotEqual(t, Datetime(0), result, "Result should not be zero for %d microseconds", tc.microseconds)
+		require.Equal(t, tc.expected, result.String2(6), "Result should match expected for %d microseconds", tc.microseconds)
+	}
 }

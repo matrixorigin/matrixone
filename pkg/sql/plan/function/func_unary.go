@@ -2526,6 +2526,60 @@ func OctFloat[T constraints.Float](ivecs []*vector.Vector, result vector.Functio
 	return opUnaryFixedToFixedWithErrorCheck[T, types.Decimal128](ivecs, result, proc, length, octFloat[T], selectList)
 }
 
+func OctDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixedWithErrorCheck[types.Date, types.Decimal128](ivecs, result, proc, length, func(v types.Date) (types.Decimal128, error) {
+		// MySQL behavior: OCT(DATE) returns octal of the year, not days since epoch
+		// Extract year from DATE and convert to octal
+		year, _, _, _ := v.Calendar(true)
+		val := int64(year)
+		return oct[int64](val)
+	}, selectList)
+}
+
+func OctDatetime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixedWithErrorCheck[types.Datetime, types.Decimal128](ivecs, result, proc, length, func(v types.Datetime) (types.Decimal128, error) {
+		// MySQL behavior: OCT(DATETIME) returns octal of the year, not days since epoch or microseconds
+		// Extract year from DATETIME and convert to octal
+		year, _, _, _ := v.ToDate().Calendar(true)
+		val := int64(year)
+		return oct[int64](val)
+	}, selectList)
+}
+
+// OctString handles OCT function for string types (varchar, char, text)
+// It tries to parse the string as DATE or DATETIME, then converts to octal
+func OctString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryBytesToFixedWithErrorCheck[types.Decimal128](ivecs, result, proc, length, func(v []byte) (types.Decimal128, error) {
+		s := string(v)
+		// Try to parse as DATETIME first (more common for date_add/sub results)
+		dt, err := types.ParseDatetime(s, 6)
+		if err == nil {
+			// MySQL behavior: OCT(DATETIME string) returns octal of the year, not days since epoch or microseconds
+			// Extract year from DATETIME and convert to octal
+			year, _, _, _ := dt.ToDate().Calendar(true)
+			val := int64(year)
+			return oct[int64](val)
+		}
+		// Try to parse as DATE
+		d, err2 := types.ParseDateCast(s)
+		if err2 == nil {
+			// MySQL behavior: OCT(DATE string) returns octal of the year, not days since epoch
+			// Extract year from DATE and convert to octal
+			year, _, _, _ := d.Calendar(true)
+			val := int64(year)
+			return oct[int64](val)
+		}
+		// If both parsing fail, try to parse as integer directly
+		// This handles cases where the string is already a number
+		val, err3 := strconv.ParseInt(strings.TrimSpace(s), 10, 64)
+		if err3 == nil {
+			return oct[int64](val)
+		}
+		// If all parsing fails, return error (MySQL behavior: invalid input returns error)
+		return types.Decimal128{}, moerr.NewInvalidArgNoCtx("function oct", s)
+	}, selectList)
+}
+
 func octFloat[T constraints.Float](xs T) (types.Decimal128, error) {
 	var res types.Decimal128
 
