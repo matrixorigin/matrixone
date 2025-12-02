@@ -132,8 +132,13 @@ func TestRequestMultipleCn_ContextTimeout(t *testing.T) {
 		// Cancel context immediately to trigger timeout (event-driven, no sleep)
 		cancel()
 
-		// Wait for RequestMultipleCn to complete
-		<-done
+		// Wait for RequestMultipleCn to complete with 10s protection
+		select {
+		case <-done:
+			// Test completed
+		case <-time.After(10 * time.Second):
+			t.Fatal("Test hung - 10s protection triggered")
+		}
 
 		// Verify context timeout is correctly handled
 		// Note: When using cancel(), the error may be "context canceled",
@@ -398,12 +403,12 @@ func TestRequestMultipleCn_NoGoroutineLeak(t *testing.T) {
 		// Cancel context immediately to trigger timeout (event-driven, no sleep)
 		cancel()
 
-		// Wait for RequestMultipleCn to complete with timeout to avoid hanging
+		// Wait for RequestMultipleCn to complete with 10s protection
 		select {
 		case <-done:
 			// RequestMultipleCn completed successfully
-		case <-time.After(30 * time.Second):
-			t.Fatal("RequestMultipleCn did not complete within 30 seconds")
+		case <-time.After(10 * time.Second):
+			t.Fatal("Test hung - 10s protection triggered")
 		}
 
 		// Unblock node1's response processing (cleanup) in case it's still waiting
@@ -492,8 +497,13 @@ func TestRequestMultipleCn_FailedNodesOnlyRealAddresses(t *testing.T) {
 		// Cancel context immediately to trigger timeout (event-driven, no sleep)
 		cancel()
 
-		// Wait for RequestMultipleCn to complete
-		<-done
+		// Wait for RequestMultipleCn to complete with 10s protection
+		select {
+		case <-done:
+			// Test completed
+		case <-time.After(10 * time.Second):
+			t.Fatal("Test hung - 10s protection triggered")
+		}
 
 		// Verify error
 		// Note: When using cancel(), the error may be "context canceled",
@@ -586,8 +596,13 @@ func TestRequestMultipleCn_TimeoutOverrideLogging(t *testing.T) {
 		}()
 
 		// Step 1: Wait for connection error to occur (node2 fails, retErr is set)
-		// This is event-based: we wait for the actual event, not a timeout
-		<-connectionErrorOccurred
+		// This is event-based with 10s protection
+		select {
+		case <-connectionErrorOccurred:
+			// Connection error occurred
+		case <-time.After(10 * time.Second):
+			t.Fatal("Connection error not detected within 10s")
+		}
 
 		// Step 2: Cancel context immediately to trigger <-ctx.Done()
 		// At this point:
@@ -599,9 +614,13 @@ func TestRequestMultipleCn_TimeoutOverrideLogging(t *testing.T) {
 		// The key is: when <-ctx.Done() is triggered, retErr != nil, so the logging path is executed
 		cancel()
 
-		// Wait for RequestMultipleCn to complete
-		// The context cancellation should trigger timeout override logging
-		<-done
+		// Wait for RequestMultipleCn to complete with 10s protection
+		select {
+		case <-done:
+			// Test completed
+		case <-time.After(10 * time.Second):
+			t.Fatal("Test hung - 10s protection triggered")
+		}
 
 		// Verify that an error is returned
 		assert.Error(t, err, "Should return error")
