@@ -44,6 +44,7 @@
 #  % cd cuvs
 #  % conda env create --name go -f conda/environments/go_cuda-130_arch-$(uname -m).yaml
 #  % conda activate go
+# 3. compile matrixone
 #  % cd matrixone
 #  % MO_CL_CUDA=1 make
 
