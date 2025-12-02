@@ -41,7 +41,7 @@ func (c *GpuClusterer[T]) InitCentroids() error {
 
 func (c *GpuClusterer[T]) Cluster() (any, error) {
 
-	if _, err := c.dataset.ToDevice(c.resoure); err != nil {
+	if _, err := c.dataset.ToDevice(c.resource); err != nil {
 		return nil, err
 	}
 
