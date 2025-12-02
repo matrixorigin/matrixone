@@ -159,10 +159,16 @@ DEBUG_OPT :=
 CGO_DEBUG_OPT :=
 
 ifeq ($(MO_CL_CUDA),1)
-	CUDA_LDFLAGS := -L/usr/local/cuda/lib64/stubs -lcuda -L/usr/local/cuda/lib64 -lcudart -L/home/eric/miniconda3/envs/go/lib -lcuvs -lcuvs_c -lstdc++
+	ifeq ($(CONDA_PREFIX),)
+		$(error CONDA_PREFIX env variable not found.)
+	endif
+	CUVS_CFLAGS := -I$(CONDA_PREFIX)/include
+	CUVS_LDFLAGS := -L$(CONDA_PREFIX)/envs/go/lib -lcuvs -lcuvs_c
+	CUDA_CFLAGS := -I/usr/local/cuda/include $(CUVS_CFLAGS)
+	CUDA_LDFLAGS := -L/usr/local/cuda/lib64/stubs -lcuda -L/usr/local/cuda/lib64 -lcudart $(CUVS_LDFLAGS) -lstdc++
 endif
 
-CGO_OPTS :=CGO_CFLAGS="-I$(THIRDPARTIES_INSTALL_DIR)/include -I/home/eric/miniconda3/envs/go/include -I/usr/local/cuda/include"
+CGO_OPTS :=CGO_CFLAGS="-I$(THIRDPARTIES_INSTALL_DIR)/include $(CUDA_CFLAGS)"
 GOLDFLAGS=-ldflags="-extldflags '$(CUDA_LDFLAGS) -L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,\$${ORIGIN}/lib -fopenmp' $(VERSION_INFO)"
 TAGS :=
 
