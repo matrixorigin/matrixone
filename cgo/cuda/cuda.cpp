@@ -72,7 +72,7 @@ typedef struct CudaEnv {
 int32_t CudaEnv_init(CudaEnv *env, uint8_t *errBuf) {
     MOCL_CHECK_RET(cuInit(0), -1000, errBuf);
     env->cuDevice = findCudaDeviceDRV(0, NULL);
-    MOCL_CHECK_RET(cuCtxCreate(&env->cuContext, 0, 0, env->cuDevice), -1001, errBuf);
+    MOCL_CHECK_RET(cuCtxCreate(&env->cuContext, nullptr, 0, env->cuDevice), -1001, errBuf);
 #ifdef __linux__
     char mobin_path[PATH_MAX];
     ssize_t nb = readlink("/proc/self/exe", mobin_path, PATH_MAX);
