@@ -37,6 +37,15 @@
 # To construct a directory named vendor in the main module’s root directory that contains copies of all packages needed to support builds and tests of packages in the main module.
 # make vendor
 #
+# To compile mo-service with GPU support,
+# 1. install CUDA toolkit (version 1.30 or above)
+# 2. install cuVS Go bindings with conda
+#  % git clone git@github.com:rapidsai/cuvs.git
+#  % cd cuvs
+#  % conda env create --name go -f conda/environments/go_cuda-130_arch-$(uname -m).yaml
+#  % conda activate go
+#  % cd matrixone
+#  % MO_CL_CUDA=1 make
 
 # where am I
 ROOT_DIR = $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
