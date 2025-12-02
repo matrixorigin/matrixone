@@ -139,8 +139,14 @@ func ConstructBasePKFilter(
 			return ret, nil
 
 		case "or":
-			var filters []BasePKFilter
-			hasUnsupported := false
+			var (
+				filters1 []BasePKFilter
+				filters2 []BasePKFilter
+
+				cannotMerge    bool
+				hasUnsupported bool
+			)
+
 			for idx := range exprImpl.F.Args {
 				ff, err := ConstructBasePKFilter(exprImpl.F.Args[idx], tblDef, mp)
 				if err != nil {
@@ -151,22 +157,53 @@ func ConstructBasePKFilter(
 					continue
 				}
 
-				filters = append(filters, toDisjuncts(ff)...)
+				filters1 = append(filters1, toDisjuncts(ff)...)
+				filters2 = append(filters2, ff)
 			}
 
 			if hasUnsupported {
 				return BasePKFilter{}, nil
 			}
 
-			if len(filters) == 0 {
+			if len(filters1) == 0 {
 				return BasePKFilter{}, nil
 			}
-			if len(filters) == 1 {
-				return filters[0], nil
+
+			if len(filters1) == 1 {
+				return filters1[0], nil
+			}
+
+			for idx := 0; idx < len(filters2)-1; {
+				f1 := &filters2[idx]
+				f2 := &filters2[idx+1]
+				ff, err := mergeFilters(f1, f2, function.OR, mp)
+				if err != nil {
+					return BasePKFilter{}, nil
+				}
+
+				if !ff.Valid {
+					//return BasePKFilter{}, nil
+					cannotMerge = true
+					break
+				}
+
+				idx++
+				filters2[idx] = ff
+			}
+
+			if !cannotMerge {
+				for idx := 0; idx < len(filters2)-1; idx++ {
+					if filters2[idx].Vec != nil {
+						filters2[idx].Vec.Free(mp)
+					}
+				}
+
+				ret := filters2[len(filters2)-1]
+				return ret, nil
 			}
 
 			filter.Valid = true
-			filter.Disjuncts = filters
+			filter.Disjuncts = filters1
 			return filter, nil
 
 		case ">=":
