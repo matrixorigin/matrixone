@@ -19,8 +19,8 @@ import (
 	"io"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
@@ -37,17 +37,15 @@ type StringHashMapCell struct {
 var StrKeyPadding [16]byte
 
 type StringHashMap struct {
-	allocator malloc.Allocator
+	mp *mpool.MPool
 
 	blockCellCnt    uint64
 	blockMaxElemCnt uint64
 	cellCntMask     uint64
 
-	cellCnt             uint64
-	elemCnt             uint64
-	rawData             [][]byte
-	rawDataDeallocators []malloc.Deallocator
-	cells               [][]StringHashMapCell
+	cellCnt uint64
+	elemCnt uint64
+	cells   [][]StringHashMapCell
 }
 
 var (
@@ -61,50 +59,35 @@ func init() {
 }
 
 func (ht *StringHashMap) Free() {
-	for _, de := range ht.rawDataDeallocators {
-		if de != nil {
-			de.Deallocate()
-		}
-	}
-	for i := range ht.rawData {
-		ht.rawData[i] = nil
-	}
-	for i := range ht.cells {
+	for i, c := range ht.cells {
+		mpool.FreeSlice(ht.mp, c)
 		ht.cells[i] = nil
 	}
-	ht.rawData, ht.cells = nil, nil
+	ht.cells = nil
 }
 
-func (ht *StringHashMap) allocate(index int, size uint64) error {
-	if ht.rawDataDeallocators[index] != nil {
+func (ht *StringHashMap) allocate(index int, ncells int) error {
+	if ht.cells[index] != nil {
 		panic("overwriting")
 	}
-	bs, de, err := ht.allocator.Allocate(size, malloc.NoHints)
+	c, err := mpool.MakeSlice[StringHashMapCell](ncells, ht.mp, true)
 	if err != nil {
 		return err
 	}
-	ht.rawData[index] = bs
-	ht.rawDataDeallocators[index] = de
-	ht.cells[index] = unsafe.Slice((*StringHashMapCell)(unsafe.Pointer(&ht.rawData[index][0])), ht.blockCellCnt)
+	ht.cells[index] = c
 	return nil
 }
 
-func (ht *StringHashMap) Init(allocator malloc.Allocator) (err error) {
-	if allocator == nil {
-		allocator = DefaultAllocator()
-	}
-	ht.allocator = allocator
+func (ht *StringHashMap) Init(mp *mpool.MPool) (err error) {
+	ht.mp = mp
 	ht.blockCellCnt = kInitialCellCnt
 	ht.blockMaxElemCnt = maxElemCnt(kInitialCellCnt, strCellSize)
 	ht.elemCnt = 0
 	ht.cellCnt = kInitialCellCnt
 	ht.cellCntMask = kInitialCellCnt - 1
 
-	ht.rawData = make([][]byte, 1)
-	ht.rawDataDeallocators = make([]malloc.Deallocator, 1)
 	ht.cells = make([][]StringHashMapCell, 1)
-
-	if err := ht.allocate(0, uint64(ht.blockCellCnt*strCellSize)); err != nil {
+	if err := ht.allocate(0, int(ht.blockCellCnt)); err != nil {
 		return err
 	}
 
@@ -189,7 +172,7 @@ func (ht *StringHashMap) findEmptyCell(state *[3]uint64) *StringHashMapCell {
 func (ht *StringHashMap) ResizeOnDemand(n uint64) error {
 
 	targetCnt := ht.elemCnt + n
-	if targetCnt <= uint64(len(ht.rawData))*ht.blockMaxElemCnt {
+	if targetCnt <= uint64(len(ht.cells))*ht.blockMaxElemCnt {
 		return nil
 	}
 
@@ -203,17 +186,15 @@ func (ht *StringHashMap) ResizeOnDemand(n uint64) error {
 	newAlloc := int(newCellCnt * strCellSize)
 	if ht.blockCellCnt == maxStrCellCntPerBlock {
 		// double the blocks
-		oldBlockNum := len(ht.rawData)
+		oldBlockNum := len(ht.cells)
 		newBlockNum := newAlloc / maxBlockSize
 
-		ht.rawData = append(ht.rawData, make([][]byte, newBlockNum-oldBlockNum)...)
-		ht.rawDataDeallocators = append(ht.rawDataDeallocators, make([]malloc.Deallocator, newBlockNum-oldBlockNum)...)
 		ht.cells = append(ht.cells, make([][]StringHashMapCell, newBlockNum-oldBlockNum)...)
 		ht.cellCnt = ht.blockCellCnt * uint64(newBlockNum)
 		ht.cellCntMask = ht.cellCnt - 1
 
 		for i := oldBlockNum; i < newBlockNum; i++ {
-			if err := ht.allocate(i, uint64(ht.blockCellCnt*strCellSize)); err != nil {
+			if err := ht.allocate(i, int(ht.blockCellCnt)); err != nil {
 				return err
 			}
 		}
@@ -251,8 +232,9 @@ func (ht *StringHashMap) ResizeOnDemand(n uint64) error {
 		}
 	} else {
 		oldCells0 := ht.cells[0]
-		oldDeallocator := ht.rawDataDeallocators[0]
-		ht.rawDataDeallocators[0] = nil
+		ht.cells[0] = nil
+		defer mpool.FreeSlice(ht.mp, oldCells0)
+
 		ht.cellCnt = newCellCnt
 		ht.cellCntMask = ht.cellCnt - 1
 
@@ -260,7 +242,7 @@ func (ht *StringHashMap) ResizeOnDemand(n uint64) error {
 			ht.blockCellCnt = newCellCnt
 			ht.blockMaxElemCnt = newMaxElemCnt
 
-			if err := ht.allocate(0, uint64(newAlloc)); err != nil {
+			if err := ht.allocate(0, int(newCellCnt)); err != nil {
 				return err
 			}
 
@@ -269,14 +251,12 @@ func (ht *StringHashMap) ResizeOnDemand(n uint64) error {
 			ht.blockMaxElemCnt = maxElemCnt(ht.blockCellCnt, strCellSize)
 
 			newBlockNum := newAlloc / maxBlockSize
-			ht.rawData = make([][]byte, newBlockNum)
-			ht.rawDataDeallocators = make([]malloc.Deallocator, newBlockNum)
 			ht.cells = make([][]StringHashMapCell, newBlockNum)
 			ht.cellCnt = ht.blockCellCnt * uint64(newBlockNum)
 			ht.cellCntMask = ht.cellCnt - 1
 
 			for i := 0; i < newBlockNum; i++ {
-				if err := ht.allocate(i, uint64(ht.blockCellCnt*strCellSize)); err != nil {
+				if err := ht.allocate(i, int(ht.blockCellCnt)); err != nil {
 					return err
 				}
 			}
@@ -290,8 +270,6 @@ func (ht *StringHashMap) ResizeOnDemand(n uint64) error {
 				*newCell = *cell
 			}
 		}
-
-		oldDeallocator.Deallocate()
 	}
 
 	return nil
@@ -300,11 +278,8 @@ func (ht *StringHashMap) ResizeOnDemand(n uint64) error {
 func (ht *StringHashMap) Size() int64 {
 	// 88 is the origin size of StringHashMaps
 	ret := int64(88)
-	for i := range ht.rawData {
-		ret += 24
-		ret += int64(len(ht.rawData[i]))
-		ret += 24
-		ret += int64(32 * len(ht.cells[i]))
+	for i := range ht.cells {
+		ret += int64(int(strCellSize) * len(ht.cells[i]))
 	}
 	return ret
 }
@@ -346,8 +321,8 @@ func (ht *StringHashMap) MarshalBinary() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func (ht *StringHashMap) UnmarshalBinary(data []byte, allocator malloc.Allocator) error {
-	_, err := ht.UnmarshalFrom(bytes.NewReader(data), allocator)
+func (ht *StringHashMap) UnmarshalBinary(data []byte, mp *mpool.MPool) error {
+	_, err := ht.UnmarshalFrom(bytes.NewReader(data), mp)
 	return err
 }
 
@@ -390,7 +365,7 @@ func (ht *StringHashMap) WriteTo(w io.Writer) (n int64, err error) {
 	return
 }
 
-func (ht *StringHashMap) UnmarshalFrom(r io.Reader, allocator malloc.Allocator) (n int64, err error) {
+func (ht *StringHashMap) UnmarshalFrom(r io.Reader, mp *mpool.MPool) (n int64, err error) {
 	var rn int
 
 	// Read element count
@@ -401,7 +376,7 @@ func (ht *StringHashMap) UnmarshalFrom(r io.Reader, allocator malloc.Allocator) 
 	n += int64(rn)
 	elemCnt := types.DecodeUint64(buf)
 
-	if err = ht.Init(allocator); err != nil {
+	if err = ht.Init(mp); err != nil {
 		return
 	}
 

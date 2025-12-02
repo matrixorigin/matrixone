@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 )
 
 func TestLimits(t *testing.T) {
@@ -42,8 +43,9 @@ func TestLimits(t *testing.T) {
 				}
 			}()
 
+			m := mpool.MustNewZero()
 			var hashmap StringHashMap
-			hashmap.Init(newAllocator())
+			hashmap.Init(m)
 			hashmap.ResizeOnDemand(2 * (1 << 10))
 		}()
 

@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
@@ -28,6 +29,8 @@ import (
 
 func (mergeGroup *MergeGroup) Prepare(proc *process.Process) error {
 	mergeGroup.ctr.state = vm.Build
+	mergeGroup.ctr.mp = mpool.MustNewNoFixed("merge_group_mpool")
+
 	if mergeGroup.OpAnalyzer != nil {
 		mergeGroup.OpAnalyzer.Reset()
 	}

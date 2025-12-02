@@ -210,12 +210,12 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 
 	var itr hashmap.Iterator
 	if hb.keyWidth <= 8 {
-		if hb.IntHashMap, err = hashmap.NewIntHashMap(false); err != nil {
+		if hb.IntHashMap, err = hashmap.NewIntHashMap(false, proc.Mp()); err != nil {
 			return err
 		}
 		itr = hb.IntHashMap.NewIterator()
 	} else {
-		if hb.StrHashMap, err = hashmap.NewStrHashMap(false); err != nil {
+		if hb.StrHashMap, err = hashmap.NewStrHashMap(false, proc.Mp()); err != nil {
 			return err
 		}
 		itr = hb.StrHashMap.NewIterator()

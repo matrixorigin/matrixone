@@ -18,7 +18,7 @@ import (
 	"bytes"
 	"io"
 
-	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -36,9 +36,9 @@ func init() {
 	}
 }
 
-func NewStrHashMap(hasNull bool) (*StrHashMap, error) {
+func NewStrHashMap(hasNull bool, memPool *mpool.MPool) (*StrHashMap, error) {
 	mp := &hashtable.StringHashMap{}
-	if err := mp.Init(nil); err != nil {
+	if err := mp.Init(memPool); err != nil {
 		return nil, err
 	}
 	return &StrHashMap{
@@ -392,9 +392,9 @@ func (m *StrHashMap) MarshalBinary() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func (m *StrHashMap) UnmarshalBinary(data []byte, allocator malloc.Allocator) error {
+func (m *StrHashMap) UnmarshalBinary(data []byte, mp *mpool.MPool) error {
 	r := bytes.NewReader(data)
-	_, err := m.UnmarshalFrom(r, allocator)
+	_, err := m.UnmarshalFrom(r, mp)
 	return err
 }
 
@@ -431,7 +431,7 @@ func (m *StrHashMap) WriteTo(w io.Writer) (int64, error) {
 	return n, nil
 }
 
-func (m *StrHashMap) UnmarshalFrom(r io.Reader, allocator malloc.Allocator) (int64, error) {
+func (m *StrHashMap) UnmarshalFrom(r io.Reader, mp *mpool.MPool) (int64, error) {
 	var n int64
 
 	// Deserialize hasNull
@@ -453,7 +453,7 @@ func (m *StrHashMap) UnmarshalFrom(r io.Reader, allocator malloc.Allocator) (int
 
 	// Deserialize the underlying StringHashMap
 	m.hashMap = &hashtable.StringHashMap{}
-	subn, err := m.hashMap.UnmarshalFrom(r, allocator)
+	subn, err := m.hashMap.UnmarshalFrom(r, mp)
 	if err != nil {
 		return 0, err
 	}

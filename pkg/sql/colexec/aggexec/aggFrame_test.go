@@ -199,14 +199,6 @@ func doAggTest[input, output types.FixedSizeTExceptStrType | string](
 	checkResult(isResult2Null, result2, rs[0], 1)
 }
 
-type hackManager struct {
-	mp *mpool.MPool
-}
-
-func (h hackManager) Mp() *mpool.MPool {
-	return h.mp
-}
-
 func TestCount(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
 	info := singleAggInfo{
@@ -902,21 +894,21 @@ func TestDistinctHashMarshalUnmarshal(t *testing.T) {
 	}()
 
 	{
-		dh := newDistinctHash()
+		dh := newDistinctHash(mp)
 
 		data, err := dh.marshal()
 		require.NoError(t, err)
 		require.Nil(t, data)
 
-		newDh := newDistinctHash()
-		err = newDh.unmarshal(nil)
+		newDh := newDistinctHash(mp)
+		err = newDh.unmarshal(nil, mp)
 		require.NoError(t, err)
 
 		require.Equal(t, 0, len(newDh.maps))
 	}
 
 	{
-		dh := newDistinctHash()
+		dh := newDistinctHash(mp)
 		require.NoError(t, dh.grows(1))
 
 		v1 := vector.NewVec(types.T_varchar.ToType())
@@ -930,8 +922,8 @@ func TestDistinctHashMarshalUnmarshal(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, data)
 
-		newDh := newDistinctHash()
-		err = newDh.unmarshal(data)
+		newDh := newDistinctHash(mp)
+		err = newDh.unmarshal(data, mp)
 		require.NoError(t, err)
 
 		require.Equal(t, 1, len(newDh.maps))
@@ -941,7 +933,7 @@ func TestDistinctHashMarshalUnmarshal(t *testing.T) {
 	}
 
 	{
-		dh := newDistinctHash()
+		dh := newDistinctHash(mp)
 		require.NoError(t, dh.grows(3))
 
 		v1 := vector.NewVec(types.T_varchar.ToType())
@@ -962,8 +954,8 @@ func TestDistinctHashMarshalUnmarshal(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, data)
 
-		newDh := newDistinctHash()
-		err = newDh.unmarshal(data)
+		newDh := newDistinctHash(mp)
+		err = newDh.unmarshal(data, mp)
 		require.NoError(t, err)
 
 		require.Equal(t, 3, len(newDh.maps))

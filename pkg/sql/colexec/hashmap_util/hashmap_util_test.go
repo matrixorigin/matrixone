@@ -63,24 +63,26 @@ func TestBuildHashMap(t *testing.T) {
 }
 
 func TestHashMapAllocAndFree(t *testing.T) {
+	mp := mpool.MustNewZero()
+
 	var hb HashmapBuilder
 	var err error
-	hb.IntHashMap, err = hashmap.NewIntHashMap(false)
+	hb.IntHashMap, err = hashmap.NewIntHashMap(false, mp)
 	require.NoError(t, err)
 	err = hb.IntHashMap.PreAlloc(100)
 	require.NoError(t, err)
 	hb.IntHashMap.Free()
-	hb.IntHashMap, err = hashmap.NewIntHashMap(false)
+	hb.IntHashMap, err = hashmap.NewIntHashMap(false, mp)
 	require.NoError(t, err)
 	err = hb.IntHashMap.PreAlloc(10000)
 	require.NoError(t, err)
 	hb.IntHashMap.Free()
-	hb.IntHashMap, err = hashmap.NewIntHashMap(false)
+	hb.IntHashMap, err = hashmap.NewIntHashMap(false, mp)
 	require.NoError(t, err)
 	err = hb.IntHashMap.PreAlloc(1000000)
 	require.NoError(t, err)
 	hb.IntHashMap.Free()
-	hb.IntHashMap, err = hashmap.NewIntHashMap(false)
+	hb.IntHashMap, err = hashmap.NewIntHashMap(false, mp)
 	require.NoError(t, err)
 	err = hb.IntHashMap.PreAlloc(100000000)
 	require.NoError(t, err)

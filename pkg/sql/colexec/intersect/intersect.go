@@ -43,7 +43,7 @@ func (intersect *Intersect) Prepare(proc *process.Process) error {
 		intersect.OpAnalyzer.Reset()
 	}
 
-	intersect.ctr.hashTable, err = hashmap.NewStrHashMap(true)
+	intersect.ctr.hashTable, err = hashmap.NewStrHashMap(true, proc.Mp())
 	if err != nil {
 		return err
 	}

@@ -159,7 +159,7 @@ func (exec *aggregatorFromBytesToBytes) init(
 	impl aggImplementation) {
 
 	if info.IsDistinct() {
-		exec.distinctHash = newDistinctHash()
+		exec.distinctHash = newDistinctHash(mg)
 	}
 
 	var v string

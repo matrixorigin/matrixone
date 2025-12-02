@@ -333,7 +333,6 @@ type MPool struct {
 	inUseCount int32 // number of in use call
 	pools      [NumFixedPool]fixedPool
 	details    *mpoolDetails
-	allocs     sync.Map
 
 	// To remove: this thing is highly unlikely to be of any good use.
 	sels *sync.Pool
@@ -814,8 +813,7 @@ func FreeSlice[T any](mp *MPool, bs []T) {
 	if cap(bs) == 0 {
 		return
 	}
-	// Free only care about the pointer,
-	mp.Free(unsafe.Slice((*byte)(unsafe.Pointer(&bs[0])), 1))
+	mp.freePtr(unsafe.Pointer(&bs[0]))
 }
 
 // Report memory usage in json.

@@ -17,7 +17,7 @@ package hashmap
 import (
 	"io"
 
-	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
@@ -52,11 +52,11 @@ type HashMap interface {
 	// MarshalBinary serializes the hash map into a byte slice.
 	MarshalBinary() ([]byte, error)
 	// UnmarshalBinary deserializes a byte slice into the hash map.
-	UnmarshalBinary(data []byte, allocator malloc.Allocator) error
+	UnmarshalBinary(data []byte, mp *mpool.MPool) error
 	// WriteTo serializes the hash map to a writer.
 	WriteTo(w io.Writer) (int64, error)
 	// UnmarshalFrom deserializes a byte slice from a reader.
-	UnmarshalFrom(r io.Reader, allocator malloc.Allocator) (int64, error)
+	UnmarshalFrom(r io.Reader, mp *mpool.MPool) (int64, error)
 	// Get all (group, hashCode) pairs
 	AllGroupHash() []uint64
 }

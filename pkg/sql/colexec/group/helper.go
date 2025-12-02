@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
@@ -32,6 +33,7 @@ import (
 )
 
 type ResHashRelated struct {
+	mp       *mpool.MPool
 	Hash     hashmap.HashMap
 	Itr      hashmap.Iterator
 	inserted []uint8
@@ -42,8 +44,17 @@ func (hr *ResHashRelated) IsEmpty() bool {
 }
 
 func (hr *ResHashRelated) BuildHashTable(
+	proc *process.Process, mp *mpool.MPool,
 	rebuild bool,
 	isStrHash bool, keyNullable bool, preAllocated uint64) error {
+
+	if hr.mp == nil {
+		hr.mp = mp
+	}
+
+	if hr.mp != mp {
+		return moerr.NewInternalError(proc.Ctx, "hr.map mpool reset to different mpool")
+	}
 
 	if rebuild {
 		if hr.Hash != nil {
@@ -57,7 +68,7 @@ func (hr *ResHashRelated) BuildHashTable(
 	}
 
 	if isStrHash {
-		h, err := hashmap.NewStrHashMap(keyNullable)
+		h, err := hashmap.NewStrHashMap(keyNullable, hr.mp)
 		if err != nil {
 			return err
 		}
@@ -76,7 +87,7 @@ func (hr *ResHashRelated) BuildHashTable(
 		return nil
 	}
 
-	h, err := hashmap.NewIntHashMap(keyNullable)
+	h, err := hashmap.NewIntHashMap(keyNullable, hr.mp)
 	if err != nil {
 		return err
 	}

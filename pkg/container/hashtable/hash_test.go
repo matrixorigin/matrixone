@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/stretchr/testify/require"
 )
 
@@ -169,6 +170,7 @@ func TestHashFn(t *testing.T) {
 }
 
 func TestInt64HashMap_MarshalUnmarshal_Empty(t *testing.T) {
+	m := mpool.MustNewZero()
 	originalMap := &Int64HashMap{}
 	err := originalMap.Init(nil)
 	require.NoError(t, err)
@@ -178,7 +180,7 @@ func TestInt64HashMap_MarshalUnmarshal_Empty(t *testing.T) {
 	require.NoError(t, err)
 
 	unmarshaledMap := &Int64HashMap{}
-	err = unmarshaledMap.UnmarshalBinary(marshaledData, DefaultAllocator())
+	err = unmarshaledMap.UnmarshalBinary(marshaledData, m)
 	require.NoError(t, err)
 	defer unmarshaledMap.Free()
 
@@ -188,6 +190,7 @@ func TestInt64HashMap_MarshalUnmarshal_Empty(t *testing.T) {
 }
 
 func TestInt64HashMap_MarshalUnmarshal_SingleElement(t *testing.T) {
+	m := mpool.MustNewZero()
 	originalMap := &Int64HashMap{}
 	err := originalMap.Init(nil)
 	require.NoError(t, err)
@@ -204,7 +207,7 @@ func TestInt64HashMap_MarshalUnmarshal_SingleElement(t *testing.T) {
 	require.NoError(t, err)
 
 	unmarshaledMap := &Int64HashMap{}
-	err = unmarshaledMap.UnmarshalBinary(marshaledData, DefaultAllocator())
+	err = unmarshaledMap.UnmarshalBinary(marshaledData, m)
 	require.NoError(t, err)
 	defer unmarshaledMap.Free()
 
@@ -242,8 +245,9 @@ func TestInt64HashMap_MarshalUnmarshal_MultipleElementsNoResize(t *testing.T) {
 	marshaledData, err := originalMap.MarshalBinary()
 	require.NoError(t, err)
 
+	m := mpool.MustNewZero()
 	unmarshaledMap := &Int64HashMap{}
-	err = unmarshaledMap.UnmarshalBinary(marshaledData, DefaultAllocator())
+	err = unmarshaledMap.UnmarshalBinary(marshaledData, m)
 	require.NoError(t, err)
 	defer unmarshaledMap.Free()
 
@@ -284,8 +288,9 @@ func TestInt64HashMap_MarshalUnmarshal_MultipleElementsWithResize(t *testing.T) 
 	marshaledData, err := originalMap.MarshalBinary()
 	require.NoError(t, err)
 
+	m := mpool.MustNewZero()
 	unmarshaledMap := &Int64HashMap{}
-	err = unmarshaledMap.UnmarshalBinary(marshaledData, DefaultAllocator())
+	err = unmarshaledMap.UnmarshalBinary(marshaledData, m)
 	require.NoError(t, err)
 	defer unmarshaledMap.Free()
 
@@ -310,8 +315,9 @@ func TestStringHashMap_MarshalUnmarshal_Empty(t *testing.T) {
 	marshaledData, err := originalMap.MarshalBinary()
 	require.NoError(t, err)
 
+	m := mpool.MustNewZero()
 	unmarshaledMap := &StringHashMap{}
-	err = unmarshaledMap.UnmarshalBinary(marshaledData, DefaultAllocator())
+	err = unmarshaledMap.UnmarshalBinary(marshaledData, m)
 	require.NoError(t, err)
 	defer unmarshaledMap.Free()
 
@@ -337,8 +343,9 @@ func TestStringHashMap_MarshalUnmarshal_SingleElement(t *testing.T) {
 	marshaledData, err := originalMap.MarshalBinary()
 	require.NoError(t, err)
 
+	m := mpool.MustNewZero()
 	unmarshaledMap := &StringHashMap{}
-	err = unmarshaledMap.UnmarshalBinary(marshaledData, DefaultAllocator())
+	err = unmarshaledMap.UnmarshalBinary(marshaledData, m)
 	require.NoError(t, err)
 	defer unmarshaledMap.Free()
 
@@ -375,8 +382,9 @@ func TestStringHashMap_MarshalUnmarshal_MultipleElementsNoResize(t *testing.T) {
 	marshaledData, err := originalMap.MarshalBinary()
 	require.NoError(t, err)
 
+	m := mpool.MustNewZero()
 	unmarshaledMap := &StringHashMap{}
-	err = unmarshaledMap.UnmarshalBinary(marshaledData, DefaultAllocator())
+	err = unmarshaledMap.UnmarshalBinary(marshaledData, m)
 	require.NoError(t, err)
 	defer unmarshaledMap.Free()
 
@@ -416,8 +424,9 @@ func TestStringHashMap_MarshalUnmarshal_MultipleElementsWithResize(t *testing.T)
 	marshaledData, err := originalMap.MarshalBinary()
 	require.NoError(t, err)
 
+	m := mpool.MustNewZero()
 	unmarshaledMap := &StringHashMap{}
-	err = unmarshaledMap.UnmarshalBinary(marshaledData, DefaultAllocator())
+	err = unmarshaledMap.UnmarshalBinary(marshaledData, m)
 	require.NoError(t, err)
 	defer unmarshaledMap.Free()
 

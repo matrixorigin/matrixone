@@ -345,7 +345,9 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 
 func (ctr *container) buildHashTable(proc *process.Process) error {
 	// build hash table
-	if err := ctr.hr.BuildHashTable(false,
+	if err := ctr.hr.BuildHashTable(
+		proc, ctr.mp,
+		false,
 		ctr.mtyp == HStr,
 		ctr.keyNullable,
 		aggHtPreAllocSize); err != nil {

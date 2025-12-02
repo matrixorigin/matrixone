@@ -330,7 +330,7 @@ func (r *optSplitResult) unmarshalFromBytes(resultData, emptyData, distinctData 
 	if len(distinctData) != 0 {
 		r.distinct = make([]distinctHash, len(distinctData))
 		for i := range distinctData {
-			if err = r.distinct[i].unmarshal(distinctData[i]); err != nil {
+			if err = r.distinct[i].unmarshal(distinctData[i], r.mp); err != nil {
 				return err
 			}
 		}
@@ -441,7 +441,7 @@ func (r *optSplitResult) unmarshalFromReader(reader io.Reader) error {
 	if cnt > 0 {
 		r.distinct = make([]distinctHash, cnt)
 		for i := range r.distinct {
-			if err = r.distinct[i].unmarshalFromReader(reader); err != nil {
+			if err = r.distinct[i].unmarshalFromReader(reader, r.mp); err != nil {
 				return err
 			}
 		}
@@ -466,7 +466,7 @@ func (r *optSplitResult) init(
 	}
 
 	if hasDistinct {
-		r.distinct = append(r.distinct, newDistinctHash())
+		r.distinct = append(r.distinct, newDistinctHash(mp))
 	}
 	r.nowIdx1 = 0
 }
@@ -653,7 +653,7 @@ func (r *optSplitResult) appendPartK() int {
 		r.emptyList = append(r.emptyList, vector.NewOffHeapVecWithType(types.T_bool.ToType()))
 	}
 	if r.optInformation.hasDistinct {
-		r.distinct = append(r.distinct, newDistinctHash())
+		r.distinct = append(r.distinct, newDistinctHash(r.mp))
 	}
 	return len(r.resultList) - 1
 }

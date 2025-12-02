@@ -151,7 +151,7 @@ func (sample *Sample) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 
 		if ctr.isGroupBy {
-			err = ctr.hashAndSample(bat)
+			err = ctr.hashAndSample(bat, proc)
 		} else {
 			err = ctr.samplePool.Sample(1, ctr.sampleVectors, nil, bat)
 		}
@@ -213,14 +213,14 @@ func (ctr *container) evaluateSampleAndGroupByColumns(proc *process.Process, bat
 	return nil
 }
 
-func (ctr *container) hashAndSample(bat *batch.Batch) (err error) {
+func (ctr *container) hashAndSample(bat *batch.Batch, proc *process.Process) (err error) {
 	var iterator hashmap.Iterator
 	var groupList []uint64
 	count := bat.RowCount()
 
 	if ctr.useIntHashMap {
 		if ctr.intHashMap == nil {
-			ctr.intHashMap, err = hashmap.NewIntHashMap(ctr.groupVectorsNullable)
+			ctr.intHashMap, err = hashmap.NewIntHashMap(ctr.groupVectorsNullable, proc.Mp())
 			if err != nil {
 				return err
 			}
@@ -228,7 +228,7 @@ func (ctr *container) hashAndSample(bat *batch.Batch) (err error) {
 		iterator = ctr.intHashMap.NewIterator()
 	} else {
 		if ctr.strHashMap == nil {
-			ctr.strHashMap, err = hashmap.NewStrHashMap(ctr.groupVectorsNullable)
+			ctr.strHashMap, err = hashmap.NewStrHashMap(ctr.groupVectorsNullable, proc.Mp())
 			if err != nil {
 				return err
 			}
