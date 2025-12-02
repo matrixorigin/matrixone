@@ -18,11 +18,11 @@
 package device
 
 import (
-	"math/rand/v2"
 	"fmt"
-	"testing"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/stretchr/testify/require"
-	 "github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	"math/rand/v2"
+	"testing"
 )
 
 func TestGpu(t *testing.T) {
