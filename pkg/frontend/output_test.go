@@ -16,11 +16,8 @@ package frontend
 
 import (
 	"context"
+	"math/rand"
 	"testing"
-
-	"github.com/smartystreets/goconvey/convey"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -28,6 +25,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/smartystreets/goconvey/convey"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestExtractRowFromVector(t *testing.T) {
@@ -64,6 +64,81 @@ func BenchmarkName(b *testing.B) {
 			_ = extractRowFromVector2(context.TODO(), nil, vec, 0, row, j, false, colSlices)
 		}
 	}
+}
+
+func TestExtractRowFromVector2(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	colSlices := &ColumnSlices{
+		colIdx2SliceIdx: make([]int, 1),
+	}
+
+	t.Run("A", func(t *testing.T) {
+		var (
+			vecf32 [][]float32
+			vec    = vector.NewVec(types.T_array_float32.ToType())
+		)
+
+		for i := 0; i < 10; i++ {
+			vecf32 = append(vecf32, make([]float32, 10))
+			for j := 0; j < 10; j++ {
+				vecf32[i][j] = rand.Float32()
+			}
+			bb := types.ArrayToBytes[float32](vecf32[i])
+			err := vector.AppendAny(vec, bb, false, mp)
+			require.NoError(t, err)
+		}
+
+		err := convertVectorToSlice(context.TODO(), nil, vec, 0, colSlices)
+		require.NoError(t, err)
+		row := make([]any, 1)
+
+		for i := range 10 {
+			err = extractRowFromVector2(context.Background(), nil, vec, 0, row, i, false, colSlices)
+			require.NoError(t, err)
+
+			require.Equal(t, row[0].([]float32), vecf32[i])
+
+			err = extractRowFromVector2(context.Background(), nil, vec, 0, row, i, true, colSlices)
+			require.NoError(t, err)
+
+			require.Equal(t, row[0].([]float32), vecf32[i])
+		}
+	})
+
+	t.Run("B", func(t *testing.T) {
+		var (
+			vecf64 [][]float64
+			vec    = vector.NewVec(types.T_array_float64.ToType())
+		)
+
+		for i := 0; i < 10; i++ {
+			vecf64 = append(vecf64, make([]float64, 10))
+			for j := 0; j < 10; j++ {
+				vecf64[i][j] = rand.Float64()
+			}
+			bb := types.ArrayToBytes[float64](vecf64[i])
+			err := vector.AppendAny(vec, bb, false, mp)
+			require.NoError(t, err)
+		}
+
+		err := convertVectorToSlice(context.TODO(), nil, vec, 0, colSlices)
+		require.NoError(t, err)
+		row := make([]any, 1)
+
+		for i := range 10 {
+			err = extractRowFromVector2(context.Background(), nil, vec, 0, row, i, false, colSlices)
+			require.NoError(t, err)
+
+			require.Equal(t, row[0].([]float64), vecf64[i])
+
+			err = extractRowFromVector2(context.Background(), nil, vec, 0, row, i, true, colSlices)
+			require.NoError(t, err)
+
+			require.Equal(t, row[0].([]float64), vecf64[i])
+		}
+	})
+
 }
 
 func BenchmarkName2(b *testing.B) {

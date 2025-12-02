@@ -96,9 +96,19 @@ func extractRowFromVector(ctx context.Context, ses FeSession, vec *vector.Vector
 		//+------------------------------+
 		//|   �?   @  @@                  |
 		//+------------------------------+
-		row[i] = vector.GetArrayAt[float32](vec, rowIndex)
+		arr := vector.GetArrayAt[float32](vec, rowIndex)
+		if safeRefSlice {
+			row[i] = arr
+		} else {
+			row[i] = append([]float32(nil), arr...)
+		}
 	case types.T_array_float64:
-		row[i] = vector.GetArrayAt[float64](vec, rowIndex)
+		arr := vector.GetArrayAt[float64](vec, rowIndex)
+		if safeRefSlice {
+			row[i] = arr
+		} else {
+			row[i] = append([]float64(nil), arr...)
+		}
 	case types.T_date:
 		row[i] = vector.GetFixedAtNoTypeCheck[types.Date](vec, rowIndex)
 	case types.T_datetime:
@@ -204,9 +214,19 @@ func extractRowFromVector2(ctx context.Context, ses FeSession, vec *vector.Vecto
 		//+------------------------------+
 		//|   �?   @  @@                  |
 		//+------------------------------+
-		row[i] = vector.GetArrayAt2[float32](vec, colSlices.arrVarlena[sliceIdx], rowIndex)
+		arr := vector.GetArrayAt2[float32](vec, colSlices.arrVarlena[sliceIdx], rowIndex)
+		if safeRefSlice {
+			row[i] = arr
+		} else {
+			row[i] = append([]float32(nil), arr...)
+		}
 	case types.T_array_float64:
-		row[i] = vector.GetArrayAt2[float64](vec, colSlices.arrVarlena[sliceIdx], rowIndex)
+		arr := vector.GetArrayAt2[float64](vec, colSlices.arrVarlena[sliceIdx], rowIndex)
+		if safeRefSlice {
+			row[i] = arr
+		} else {
+			row[i] = append([]float64(nil), arr...)
+		}
 	case types.T_date:
 		row[i] = colSlices.arrDate[sliceIdx][rowIndex]
 	case types.T_datetime:
