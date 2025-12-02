@@ -65,18 +65,20 @@ func (c *GpuClusterer[T]) Close() error {
 	return nil
 }
 
-func toCuvsDistance(distance metric.MetricType) cuvs.Distance {
+func resolveCuvsDistanceForDense(distance metric.MetricType) cuvs.Distance {
 	switch distance {
-	case metric.Metric_L2sqDistance, metric.Metric_L2Distance:
-		return cuvs.DistanceSQEuclidean
+	case metric.Metric_L2sqDistance:
+		return cuvs.DistanceL2
+	case metric.Metric_L2Distance:
+		return cuvs.DistanceL2
 	case metric.Metric_InnerProduct:
-		return cuvs.DistanceInnerProduct
+		return cuvs.DistanceL2
 	case metric.Metric_CosineDistance:
-		return cuvs.DistanceCosine
+		return cuvs.DistanceL2
 	case metric.Metric_L1Distance:
-		return cuvs.DistanceL1
+		return cuvs.DistanceL2
 	default:
-		return cuvs.DistanceSQEuclidean
+		return cuvs.DistanceL2
 	}
 }
 
@@ -101,7 +103,7 @@ func NewKMeans[T types.RealNumbers](vectors [][]T, clusterCnt,
 			return nil, err
 		}
 		indexParams.SetNLists(uint32(clusterCnt))
-		indexParams.SetMetric(toCuvsDistance(distanceType))
+		indexParams.SetMetric(resolveCuvsDistanceForDense(distanceType))
 		indexParams.SetKMeansNIters(uint32(maxIterations))
 		indexParams.SetKMeansTrainsetFraction(1) // train all sample
 		c.indexParams = indexParams
