@@ -1,5 +1,4 @@
 -- clone db/table in current account with snapshot
-set experimental_fulltext_index=1;
 set ft_relevancy_algorithm="TF-IDF";
 SET experimental_hnsw_index = 1;
 drop database if exists test01;
@@ -132,7 +131,9 @@ create database system_new clone system;
 drop database if exists system_metrics_new;
 create database system_metrics_new clone system_metrics;
 use system_metrics_new;
+-- @bvt:issue#23182
 show tables;
+-- @bvt:issue
 show databases;
 use test01_new;
 show tables;

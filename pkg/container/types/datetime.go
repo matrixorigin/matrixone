@@ -62,6 +62,7 @@ func (dt Datetime) String() string {
 func (dt Datetime) String2(scale int32) string {
 	y, m, d, _ := dt.ToDate().Calendar(true)
 	hour, minute, sec := dt.Clock()
+
 	if scale > 0 {
 		msec := int64(dt) % MicroSecsPerSec
 		// Format microseconds as 6 digits (max precision we store)
@@ -119,7 +120,13 @@ func ParseDatetime(s string, scale int32) (Datetime, error) {
 	if s[4] == '-' || s[4] == '/' || s[4] == ':' {
 		var num int64
 		var unum uint64
-		strArr := strings.Split(s, " ")
+		// Support both space-separated format (2024-12-20 10:30:45) and ISO 8601 format (2024-12-20T10:30:45)
+		var strArr []string
+		if strings.Contains(s, "T") {
+			strArr = strings.Split(s, "T")
+		} else {
+			strArr = strings.Split(s, " ")
+		}
 		if len(strArr) != 2 {
 			return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
 		}
@@ -413,6 +420,12 @@ func (dt Datetime) AddDateTime(addMonth, addYear int64, timeType TimeType) (Date
 func (dt Datetime) AddInterval(nums int64, its IntervalType, timeType TimeType) (Datetime, bool) {
 	var addMonth, addYear int64
 	switch its {
+	case MicroSecond:
+		// nums is already in microseconds, no conversion needed
+		// For time units (MicroSecond, Second, Minute, Hour), the addition won't change the date part
+		// so we can directly return the result without ValidDatetime check
+		newDate := dt + Datetime(nums)
+		return newDate, true
 	case Second:
 		nums *= MicroSecsPerSec
 	case Minute:
@@ -431,6 +444,11 @@ func (dt Datetime) AddInterval(nums int64, its IntervalType, timeType TimeType) 
 		return dt.AddDateTime(addMonth, addYear, timeType)
 	case Year:
 		addYear = nums
+		return dt.AddDateTime(addMonth, addYear, timeType)
+	case Year_Month:
+		// Year_Month should be treated as Month (nums already represents months after NormalizeInterval)
+		// This handles the case where Year_Month type is directly passed without NormalizeInterval conversion
+		addMonth = nums
 		return dt.AddDateTime(addMonth, addYear, timeType)
 	}
 

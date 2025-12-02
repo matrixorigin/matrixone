@@ -485,7 +485,7 @@ func (tc *TableClone) updateDstAutoIncrColumns(
 		}
 	}()
 
-	maxVal = int64(0)
+	rows := 0
 	for _, col := range incrCols {
 		maxVal = int64(tc.Ctx.SrcAutoIncrOffsets[int32(col.ColIndex)])
 
@@ -514,10 +514,17 @@ func (tc *TableClone) updateDstAutoIncrColumns(
 		); err != nil {
 			return err
 		}
+		if rows == 0 {
+			rows = vecs[col.ColIndex].Length()
+		}
+	}
+
+	if rows == 0 {
+		return nil
 	}
 
 	if _, err = proc.GetIncrService().InsertValues(
-		dstCtx, tc.dstMasterRel.GetTableID(dstCtx), vecs, vecs[0].Length(), maxVal,
+		dstCtx, tc.dstMasterRel.GetTableID(dstCtx), vecs, rows, int64(rows),
 	); err != nil {
 		return err
 	}

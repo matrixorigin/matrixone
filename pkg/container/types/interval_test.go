@@ -103,15 +103,17 @@ func TestConv(t *testing.T) {
 	require.Equal(t, vt, Minute, "HM error")
 	require.Equal(t, err, nil, "HM error")
 
+	// MySQL behavior: empty string is treated as 0, no error
 	val, vt, err = NormalizeInterval("", Hour_Minute)
 	require.Equal(t, val, int64(0), "HM error")
-	require.Equal(t, vt, IntervalTypeInvalid, "HM error")
-	require.NotEqual(t, err, nil, "HM error")
+	require.Equal(t, vt, Minute, "HM error")
+	require.Equal(t, err, nil, "HM error")
 
+	// MySQL behavior: invalid string is treated as 0, no error
 	val, vt, err = NormalizeInterval("foo", Hour_Minute)
 	require.Equal(t, val, int64(0), "HM error")
-	require.Equal(t, vt, IntervalTypeInvalid, "HM error")
-	require.NotEqual(t, err, nil, "HM error")
+	require.Equal(t, vt, Minute, "HM error")
+	require.Equal(t, err, nil, "HM error")
 
 	val, vt, err = NormalizeInterval("1 01:02:03.4", Day_MicroSecond)
 	val2, vt2, _ := NormalizeInterval("1 01:02:03.0", Day_MicroSecond)
@@ -151,4 +153,72 @@ func TestConv(t *testing.T) {
 
 	_, _, err = NormalizeInterval("123400000000000000000000 0", Year_Month)
 	require.NotEqual(t, err, nil, "YM error")
+}
+
+// TestNormalizeIntervalMicrosecondSingleValue tests the else if len(vals) == 1 branch
+// This covers the case where microsecond type has only 1 value (len(vals) == 1 && len(vals) < typeMaxLen)
+func TestNormalizeIntervalMicrosecondSingleValue(t *testing.T) {
+	// Test Second_MicroSecond with single value (typeMaxLen=2, len(vals)=1)
+	// Input "5" parses as [5], then parseInts multiplies by 10^(6-1)=100000 -> [500000]
+	// Then padding: [0, 500000] -> second=0, microsecond=500000
+	val, vt, err := NormalizeInterval("5", Second_MicroSecond)
+	require.NoError(t, err)
+	require.Equal(t, MicroSecond, vt)
+	// Expected: 0*1000000 + 500000 = 500000
+	require.Equal(t, int64(500000), val)
+
+	// Test Minute_MicroSecond with single value (typeMaxLen=3, len(vals)=1)
+	val, vt, err = NormalizeInterval("10", Minute_MicroSecond)
+	require.NoError(t, err)
+	require.Equal(t, MicroSecond, vt)
+	// Input "10" parses as [10], then parseInts multiplies by 10^(6-2)=10000 -> [100000]
+	// Then padding: [0, 0, 100000] -> minute=0, second=0, microsecond=100000
+	require.Equal(t, int64(100000), val)
+
+	// Test Hour_MicroSecond with single value (typeMaxLen=4, len(vals)=1)
+	val, vt, err = NormalizeInterval("20", Hour_MicroSecond)
+	require.NoError(t, err)
+	require.Equal(t, MicroSecond, vt)
+	// Input "20" parses as [20], then parseInts multiplies by 10^(6-2)=10000 -> [200000]
+	// Then padding: [0, 0, 0, 200000] -> hour=0, minute=0, second=0, microsecond=200000
+	require.Equal(t, int64(200000), val)
+
+	// Test Day_MicroSecond with single value (typeMaxLen=5, len(vals)=1)
+	val, vt, err = NormalizeInterval("30", Day_MicroSecond)
+	require.NoError(t, err)
+	require.Equal(t, MicroSecond, vt)
+	// Input "30" parses as [30], then parseInts multiplies by 10^(6-2)=10000 -> [300000]
+	// Then padding: [0, 0, 0, 0, 300000] -> day=0, hour=0, minute=0, second=0, microsecond=300000
+	require.Equal(t, int64(300000), val)
+}
+
+// TestNormalizeIntervalMicrosecondMoreThanTwoValues tests the else branch (len(vals) > 2)
+// This covers the case where microsecond type has more than 2 values but less than typeMaxLen
+func TestNormalizeIntervalMicrosecondMoreThanTwoValues(t *testing.T) {
+	// Test Hour_MicroSecond with 3 values (typeMaxLen=4, len(vals)=3, so 3 > 2 && 3 < 4)
+	// Input "1 2 3" parses as [1, 2, 3]
+	// parseInts sees len(ret)=3 < typeMaxLen=4, so multiplies last value by 10^(6-1)=100000
+	// Result: [1, 2, 300000]
+	// Then padding from left: [0, 1, 2, 300000]
+	val, vt, err := NormalizeInterval("1 2 3", Hour_MicroSecond)
+	require.NoError(t, err)
+	require.Equal(t, MicroSecond, vt)
+	// Expected: 0*60*60*1000000 + 1*60*1000000 + 2*1000000 + 300000 = 62000000 + 300000 = 62300000
+	require.Equal(t, int64(62300000), val)
+
+	// Test Day_MicroSecond with 3 values (typeMaxLen=5, len(vals)=3, so 3 > 2 && 3 < 5)
+	val, vt, err = NormalizeInterval("1 2 3", Day_MicroSecond)
+	require.NoError(t, err)
+	require.Equal(t, MicroSecond, vt)
+	// Input "1 2 3" -> [1, 2, 300000] -> padding: [0, 0, 1, 2, 300000]
+	// Expected: 0*24*60*60*1000000 + 0*60*60*1000000 + 1*60*1000000 + 2*1000000 + 300000 = 62300000
+	require.Equal(t, int64(62300000), val)
+
+	// Test Day_MicroSecond with 4 values (typeMaxLen=5, len(vals)=4, so 4 > 2 && 4 < 5)
+	val, vt, err = NormalizeInterval("1 2 3 4", Day_MicroSecond)
+	require.NoError(t, err)
+	require.Equal(t, MicroSecond, vt)
+	// Input "1 2 3 4" -> [1, 2, 3, 400000] -> padding: [0, 1, 2, 3, 400000]
+	// Expected: 0*24*60*60*1000000 + 1*60*60*1000000 + 2*60*1000000 + 3*1000000 + 400000 = 3723000000 + 400000 = 3723400000
+	require.Equal(t, int64(3723400000), val)
 }

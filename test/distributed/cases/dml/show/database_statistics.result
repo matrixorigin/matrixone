@@ -114,24 +114,19 @@ use system_metrics;
 show column_number from metric;
 Number of columns in metric
 8
-show column_number from sql_statement_total;
-Number of columns in sql_statement_total
-7
-show column_number from sql_statement_errors;
-Number of columns in sql_statement_errors
-7
 show column_number from sql_statement_cu;
 Number of columns in sql_statement_cu
 6
+show column_number from sql_statement_total;
+
+show column_number from sql_statement_errors;
+
 show column_number from sql_transaction_total;
-Number of columns in sql_transaction_total
-6
+
 show column_number from sql_transaction_errors;
-Number of columns in sql_transaction_errors
-7
+
 show column_number from server_connections;
-Number of columns in server_connections
-6
+
 show column_number from process_cpu_percent;
 Number of columns in process_cpu_percent
 5

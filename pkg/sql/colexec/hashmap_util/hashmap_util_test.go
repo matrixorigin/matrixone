@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
@@ -85,4 +86,98 @@ func TestHashMapAllocAndFree(t *testing.T) {
 	err = hb.IntHashMap.PreAlloc(100000000)
 	require.NoError(t, err)
 	hb.IntHashMap.Free()
+}
+
+// TestResetWithNilPointers tests that Reset() handles nil pointers gracefully
+// This is a regression test for the panic fix where Reset() would crash when
+// vecs or UniqueJoinKeys contained nil pointers.
+func TestResetWithNilPointers(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	var hb HashmapBuilder
+
+	// Test case 1: vecs with nil pointers and needDupVec = true
+	hb.needDupVec = true
+	hb.vecs = make([][]*vector.Vector, 2)
+	hb.vecs[0] = make([]*vector.Vector, 2)
+	hb.vecs[1] = make([]*vector.Vector, 2)
+	// Set some vectors to nil to simulate partial initialization
+	hb.vecs[0][0] = nil
+	hb.vecs[0][1] = nil
+	hb.vecs[1][0] = nil
+	hb.vecs[1][1] = nil
+
+	// Test case 2: vecs with nil slice
+	hb.vecs = append(hb.vecs, nil)
+
+	// Test case 3: UniqueJoinKeys with nil pointers
+	hb.UniqueJoinKeys = make([]*vector.Vector, 3)
+	hb.UniqueJoinKeys[0] = nil
+	hb.UniqueJoinKeys[1] = nil
+	hb.UniqueJoinKeys[2] = nil
+
+	// Reset should not panic
+	hb.Reset(proc, true)
+	require.Nil(t, hb.vecs)
+	require.Nil(t, hb.UniqueJoinKeys)
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+// TestResetWithMixedNilAndValidPointers tests Reset() with a mix of nil and valid vectors
+func TestResetWithMixedNilAndValidPointers(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	var hb HashmapBuilder
+
+	// Create some valid vectors
+	vec1 := testutil.MakeInt32Vector([]int32{1, 2, 3}, nil)
+	vec2 := testutil.MakeInt32Vector([]int32{4, 5, 6}, nil)
+
+	// Test case: vecs with mix of nil and valid vectors
+	hb.needDupVec = true
+	hb.vecs = make([][]*vector.Vector, 2)
+	hb.vecs[0] = []*vector.Vector{vec1, nil}
+	hb.vecs[1] = []*vector.Vector{nil, vec2}
+
+	// Test case: UniqueJoinKeys with mix of nil and valid vectors
+	hb.UniqueJoinKeys = []*vector.Vector{vec1, nil, vec2}
+
+	// Reset should free valid vectors and not panic on nil
+	hb.Reset(proc, true)
+	require.Nil(t, hb.vecs)
+	require.Nil(t, hb.UniqueJoinKeys)
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+// TestFreeWithNilPointers tests that Free() handles nil pointers gracefully
+func TestFreeWithNilPointers(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	var hb HashmapBuilder
+
+	// Test case: UniqueJoinKeys with nil pointers
+	hb.UniqueJoinKeys = make([]*vector.Vector, 3)
+	hb.UniqueJoinKeys[0] = nil
+	hb.UniqueJoinKeys[1] = nil
+	hb.UniqueJoinKeys[2] = nil
+
+	// Free should not panic
+	hb.Free(proc)
+	require.Nil(t, hb.UniqueJoinKeys)
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+// TestFreeWithMixedNilAndValidPointers tests Free() with a mix of nil and valid vectors
+func TestFreeWithMixedNilAndValidPointers(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	var hb HashmapBuilder
+
+	// Create some valid vectors
+	vec1 := testutil.MakeInt32Vector([]int32{1, 2, 3}, nil)
+	vec2 := testutil.MakeInt32Vector([]int32{4, 5, 6}, nil)
+
+	// Test case: UniqueJoinKeys with mix of nil and valid vectors
+	hb.UniqueJoinKeys = []*vector.Vector{vec1, nil, vec2}
+
+	// Free should free valid vectors and not panic on nil
+	hb.Free(proc)
+	require.Nil(t, hb.UniqueJoinKeys)
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }

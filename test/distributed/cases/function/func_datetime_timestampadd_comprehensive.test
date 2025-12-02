@@ -1,0 +1,66 @@
+# Comprehensive TIMESTAMPADD tests for DATE, TIMESTAMP, and string inputs
+# Testing MySQL compatibility with different input types
+
+# DATE type inputs
+SELECT TIMESTAMPADD(DAY, 5, DATE('2024-12-20')) AS date_add_days;
+SELECT TIMESTAMPADD(MONTH, 1, DATE('2024-12-20')) AS date_add_month;
+SELECT TIMESTAMPADD(YEAR, 1, DATE('2024-12-20')) AS date_add_year;
+
+# TIMESTAMP type inputs
+SELECT TIMESTAMPADD(DAY, 5, TIMESTAMP('2024-12-20 10:30:45')) AS timestamp_add_days;
+SELECT TIMESTAMPADD(HOUR, 2, TIMESTAMP('2024-12-20 10:30:45')) AS timestamp_add_hours;
+
+# String inputs (DATE format)
+SELECT TIMESTAMPADD(DAY, 5, '2024-12-20') AS string_date_add_days;
+SELECT TIMESTAMPADD(MONTH, 1, '2024-12-20') AS string_date_add_month;
+
+# String inputs (DATETIME format)
+SELECT TIMESTAMPADD(DAY, 5, '2024-12-20 10:30:45') AS string_datetime_add_days;
+SELECT TIMESTAMPADD(HOUR, 2, '2024-12-20 10:30:45') AS string_datetime_add_hours;
+
+# Table usage with DATE
+CREATE TABLE t1(d DATE);
+INSERT INTO t1 VALUES ('2024-12-20'), ('2024-01-01'), ('2024-06-15');
+SELECT d, TIMESTAMPADD(DAY, 5, d) AS added_date FROM t1;
+DROP TABLE t1;
+
+# Table usage with TIMESTAMP
+CREATE TABLE t1(ts TIMESTAMP);
+INSERT INTO t1 VALUES ('2024-12-20 10:30:45'), ('2024-01-01 00:00:00');
+SELECT ts, TIMESTAMPADD(HOUR, 2, ts) AS added_timestamp FROM t1;
+DROP TABLE t1;
+
+# Negative intervals
+SELECT TIMESTAMPADD(DAY, -5, DATE('2024-12-20')) AS date_sub_days;
+SELECT TIMESTAMPADD(HOUR, -2, TIMESTAMP('2024-12-20 10:30:45')) AS timestamp_sub_hours;
+
+# NULL handling
+SELECT TIMESTAMPADD(DAY, 5, NULL) AS null_date;
+SELECT TIMESTAMPADD(DAY, NULL, DATE('2024-12-20')) AS null_interval;
+
+# Different units with DATE
+# MySQL compatibility: DATE + time unit (HOUR, MINUTE, SECOND, MICROSECOND) → DATETIME output
+# DATE + date unit (DAY, WEEK, MONTH, QUARTER, YEAR) → DATE output
+SELECT TIMESTAMPADD(MICROSECOND, 1000000, DATE('2024-12-20')) AS date_add_microseconds;
+SELECT TIMESTAMPADD(SECOND, 45, DATE('2024-12-20')) AS date_add_seconds;
+SELECT TIMESTAMPADD(MINUTE, 30, DATE('2024-12-20')) AS date_add_minutes;
+SELECT TIMESTAMPADD(HOUR, 2, DATE('2024-12-20')) AS date_add_hours;
+SELECT TIMESTAMPADD(DAY, 5, DATE('2024-12-20')) AS date_add_days;
+SELECT TIMESTAMPADD(WEEK, 1, DATE('2024-12-20')) AS date_add_weeks;
+SELECT TIMESTAMPADD(MONTH, 1, DATE('2024-12-20')) AS date_add_months;
+SELECT TIMESTAMPADD(QUARTER, 1, DATE('2024-12-20')) AS date_add_quarters;
+SELECT TIMESTAMPADD(YEAR, 1, DATE('2024-12-20')) AS date_add_years;
+
+# Verify return types: DATE + time unit should return DATETIME (not DATE)
+# DATE + date unit should return DATE
+CREATE TABLE t1(d DATE);
+INSERT INTO t1 VALUES ('2024-12-20');
+SELECT TIMESTAMPADD(HOUR, 2, d) AS date_plus_hour FROM t1;
+SELECT TIMESTAMPADD(MINUTE, 30, d) AS date_plus_minute FROM t1;
+SELECT TIMESTAMPADD(SECOND, 45, d) AS date_plus_second FROM t1;
+SELECT TIMESTAMPADD(MICROSECOND, 1000000, d) AS date_plus_microsecond FROM t1;
+SELECT TIMESTAMPADD(DAY, 5, d) AS date_plus_day FROM t1;
+SELECT TIMESTAMPADD(WEEK, 1, d) AS date_plus_week FROM t1;
+SELECT TIMESTAMPADD(MONTH, 1, d) AS date_plus_month FROM t1;
+DROP TABLE t1;
+

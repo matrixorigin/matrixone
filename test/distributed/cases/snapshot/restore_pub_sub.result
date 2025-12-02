@@ -1,4 +1,3 @@
-set experimental_fulltext_index=1;
 set global enable_privilege_cache = off;
 drop account if exists acc01;
 create account acc01 admin_name = 'test_account' identified by '111';
@@ -46,7 +45,7 @@ drop publication if exists pub01;
 create publication pub01 database test01 account all;
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pub01    test01    *    *        2025-07-18 22:50:56    null    
+pub01    test01    *    *        2025-07-18 22:50:56    null
 show subscriptions all;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
 pub01    sys    test01    *        2025-07-18 22:50:56    null    null    0
@@ -56,7 +55,7 @@ drop snapshot if exists sp01;
 create snapshot sp01 for account acc01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp01    2025-07-19 05:50:56.137018    account    acc01        
+sp01    2025-07-19 05:50:56.137018    account    acc01
 use sub01;
 show tables;
 Tables_in_sub01
@@ -96,7 +95,7 @@ use test01;
 drop table aff01;
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pub01    test01    *    *    acc01    2025-07-18 22:50:56    null    
+pub01    test01    *    *    acc01    2025-07-18 22:50:56    null
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
 pub01    sys    test01    *        2025-07-18 22:50:56    sub01    2025-07-18 22:50:56    0
@@ -153,7 +152,7 @@ drop publication if exists pub02;
 create publication pub02 database test02 table rs02 account acc01;
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pub02    test02    rs02    acc01        2025-07-18 22:50:56    null    
+pub02    test02    rs02    acc01        2025-07-18 22:50:56    null
 show subscriptions all;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
 pub02    sys    test02    rs02        2025-07-18 22:50:56    null    null    0
@@ -166,7 +165,7 @@ drop snapshot if exists sp02;
 create snapshot sp02 for account acc01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp02    2025-07-19 05:50:57.044724    account    acc01        
+sp02    2025-07-19 05:50:57.044724    account    acc01
 drop database sub02;
 drop publication pub02;
 show subscriptions;
@@ -210,7 +209,7 @@ drop publication if exists pub03;
 create publication pub03 database test03 account acc01;
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pub03    test03    *    acc01        2025-07-18 22:50:58    null    
+pub03    test03    *    acc01        2025-07-18 22:50:58    null
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
 drop database if exists sub03;
@@ -502,7 +501,7 @@ drop publication if exists pub_full01;
 create publication pub_full01 database pub_fulltext_table account acc01;
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pub_full01    pub_fulltext_table    *    acc01        2025-07-18 22:50:59    null    
+pub_full01    pub_fulltext_table    *    acc01        2025-07-18 22:50:59    null
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
 drop database if exists sub_pull01;

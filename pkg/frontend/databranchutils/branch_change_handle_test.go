@@ -145,8 +145,7 @@ func TestCollectChangesSkipsEmptyRange(t *testing.T) {
 	handle, err := CollectChanges(context.Background(), rel, from, end, nil)
 	require.NoError(t, err)
 
-	actual := handle.(*BranchChangeHandle)
-	require.Nil(t, actual.handle)
+	require.Nil(t, handle)
 }
 
 func TestCollectChangesPropagatesError(t *testing.T) {

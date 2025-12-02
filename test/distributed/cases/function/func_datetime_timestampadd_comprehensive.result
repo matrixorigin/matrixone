@@ -1,0 +1,105 @@
+SELECT TIMESTAMPADD(DAY, 5, DATE('2024-12-20')) AS date_add_days;
+date_add_days
+2024-12-25
+SELECT TIMESTAMPADD(MONTH, 1, DATE('2024-12-20')) AS date_add_month;
+date_add_month
+2025-01-20
+SELECT TIMESTAMPADD(YEAR, 1, DATE('2024-12-20')) AS date_add_year;
+date_add_year
+2025-12-20
+SELECT TIMESTAMPADD(DAY, 5, TIMESTAMP('2024-12-20 10:30:45')) AS timestamp_add_days;
+timestamp_add_days
+2024-12-25 10:30:45
+SELECT TIMESTAMPADD(HOUR, 2, TIMESTAMP('2024-12-20 10:30:45')) AS timestamp_add_hours;
+timestamp_add_hours
+2024-12-20 12:30:45
+SELECT TIMESTAMPADD(DAY, 5, '2024-12-20') AS string_date_add_days;
+string_date_add_days
+2024-12-25
+SELECT TIMESTAMPADD(MONTH, 1, '2024-12-20') AS string_date_add_month;
+string_date_add_month
+2025-01-20
+SELECT TIMESTAMPADD(DAY, 5, '2024-12-20 10:30:45') AS string_datetime_add_days;
+string_datetime_add_days
+2024-12-25 10:30:45
+SELECT TIMESTAMPADD(HOUR, 2, '2024-12-20 10:30:45') AS string_datetime_add_hours;
+string_datetime_add_hours
+2024-12-20 12:30:45
+CREATE TABLE t1(d DATE);
+INSERT INTO t1 VALUES ('2024-12-20'), ('2024-01-01'), ('2024-06-15');
+SELECT d, TIMESTAMPADD(DAY, 5, d) AS added_date FROM t1;
+d    added_date
+2024-12-20    2024-12-25
+2024-01-01    2024-01-06
+2024-06-15    2024-06-20
+DROP TABLE t1;
+CREATE TABLE t1(ts TIMESTAMP);
+INSERT INTO t1 VALUES ('2024-12-20 10:30:45'), ('2024-01-01 00:00:00');
+SELECT ts, TIMESTAMPADD(HOUR, 2, ts) AS added_timestamp FROM t1;
+ts    added_timestamp
+2024-12-20 10:30:45    2024-12-20 12:30:45
+2024-01-01 00:00:00    2024-01-01 02:00:00
+DROP TABLE t1;
+SELECT TIMESTAMPADD(DAY, -5, DATE('2024-12-20')) AS date_sub_days;
+date_sub_days
+2024-12-15
+SELECT TIMESTAMPADD(HOUR, -2, TIMESTAMP('2024-12-20 10:30:45')) AS timestamp_sub_hours;
+timestamp_sub_hours
+2024-12-20 08:30:45
+SELECT TIMESTAMPADD(DAY, 5, NULL) AS null_date;
+null_date
+null
+SELECT TIMESTAMPADD(DAY, NULL, DATE('2024-12-20')) AS null_interval;
+null_interval
+null
+SELECT TIMESTAMPADD(MICROSECOND, 1000000, DATE('2024-12-20')) AS date_add_microseconds;
+date_add_microseconds
+2024-12-20 00:00:01
+SELECT TIMESTAMPADD(SECOND, 45, DATE('2024-12-20')) AS date_add_seconds;
+date_add_seconds
+2024-12-20 00:00:45
+SELECT TIMESTAMPADD(MINUTE, 30, DATE('2024-12-20')) AS date_add_minutes;
+date_add_minutes
+2024-12-20 00:30:00
+SELECT TIMESTAMPADD(HOUR, 2, DATE('2024-12-20')) AS date_add_hours;
+date_add_hours
+2024-12-20 02:00:00
+SELECT TIMESTAMPADD(DAY, 5, DATE('2024-12-20')) AS date_add_days;
+date_add_days
+2024-12-25
+SELECT TIMESTAMPADD(WEEK, 1, DATE('2024-12-20')) AS date_add_weeks;
+date_add_weeks
+2024-12-27
+SELECT TIMESTAMPADD(MONTH, 1, DATE('2024-12-20')) AS date_add_months;
+date_add_months
+2025-01-20
+SELECT TIMESTAMPADD(QUARTER, 1, DATE('2024-12-20')) AS date_add_quarters;
+date_add_quarters
+2025-03-20
+SELECT TIMESTAMPADD(YEAR, 1, DATE('2024-12-20')) AS date_add_years;
+date_add_years
+2025-12-20
+CREATE TABLE t1(d DATE);
+INSERT INTO t1 VALUES ('2024-12-20');
+SELECT TIMESTAMPADD(HOUR, 2, d) AS date_plus_hour FROM t1;
+date_plus_hour
+2024-12-20 02:00:00
+SELECT TIMESTAMPADD(MINUTE, 30, d) AS date_plus_minute FROM t1;
+date_plus_minute
+2024-12-20 00:30:00
+SELECT TIMESTAMPADD(SECOND, 45, d) AS date_plus_second FROM t1;
+date_plus_second
+2024-12-20 00:00:45
+SELECT TIMESTAMPADD(MICROSECOND, 1000000, d) AS date_plus_microsecond FROM t1;
+date_plus_microsecond
+2024-12-20 00:00:01
+SELECT TIMESTAMPADD(DAY, 5, d) AS date_plus_day FROM t1;
+date_plus_day
+2024-12-25
+SELECT TIMESTAMPADD(WEEK, 1, d) AS date_plus_week FROM t1;
+date_plus_week
+2024-12-27
+SELECT TIMESTAMPADD(MONTH, 1, d) AS date_plus_month FROM t1;
+date_plus_month
+2025-01-20
+DROP TABLE t1;

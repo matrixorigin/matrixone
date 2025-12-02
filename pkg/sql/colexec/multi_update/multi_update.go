@@ -311,7 +311,8 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 			if err := batBufs[actionDelete].UnmarshalBinary(batData[i].GetByteSlice(batArea)); err != nil {
 				return input, err
 			}
-			update.addDeleteAffectRows(tableType, rowCounts[i])
+			// For REPLACE INTO, we don't count DELETE rows in affected rows
+			// REPLACE INTO should only return the number of INSERT rows
 			name := nameData[i].UnsafeGetString(nameArea)
 
 			crs := analyzer.GetOpCounterSet()
@@ -319,6 +320,9 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 			err = source.Delete(newCtx, batBufs[actionDelete], name)
 			if err != nil {
 				return input, err
+			}
+			if tableType == UpdateMainTable {
+				update.addDeleteAffectRows(tableType, rowCounts[i])
 			}
 			analyzer.AddDeletedRows(int64(batBufs[actionDelete].RowCount()))
 			analyzer.AddS3RequestCount(crs)
@@ -335,7 +339,11 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 				return input, err
 			}
 
-			update.addInsertAffectRows(tableType, rowCounts[i])
+			// For REPLACE INTO, we need to count INSERT rows based on the actual action
+			// Always count INSERT rows for main table, regardless of update.ctr.action
+			if tableType == UpdateMainTable {
+				update.addAffectedRowsFunc(rowCounts[i])
+			}
 
 			crs := analyzer.GetOpCounterSet()
 			newCtx := perfcounter.AttachS3RequestKey(ctx, crs)

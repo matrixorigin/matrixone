@@ -595,7 +595,6 @@ commit;
 show create table t5;
 Table    Create Table
 t5    CREATE TABLE `t5` (\n  `id` int NOT NULL,\n  `new_content` varchar(1000) DEFAULT NULL,\n  PRIMARY KEY (`id`)\n)
-set experimental_fulltext_index=1;
 create table v1 (a int primary key, b int);
 insert into v1 values (1, 1), (2, 1);
 alter table v1 modify column b int unique key; -- dup, join dedup path
