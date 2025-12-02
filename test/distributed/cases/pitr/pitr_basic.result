@@ -163,7 +163,6 @@ pitr_id    pitr_name    create_account    create_time    modified_time    level 
 0193fcf4-6418-7631-82ab-1712a55199b3    pitr12    0    2024-12-25 08:34:55    2024-12-25 08:34:55    table    0    sys    db01    table01    316947    1    h
 0193fcf4-64fe-7781-b9ff-0682df39be3f    pitr14    0    2024-12-25 08:34:55    2024-12-25 08:34:55    account    30001    acc01            30001    1    h
 drop account if exists acc01;
-drop account if exists acc02;
 select `pitr_id`, `pitr_name`, `create_account`, `create_time`, `modified_time`, `level`, `account_id`, `account_name`, `database_name`, `table_name`, `obj_id`, `pitr_length`, `pitr_unit` from mo_catalog.mo_pitr Where pitr_name != 'sys_mo_catalog_pitr';
 pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit
 0193fcf4-63d4-77d7-96f1-d95052aab623    pitr05    0    2024-12-25 08:34:55    2024-12-25 08:34:55    cluster    0                18446744073709551615    1    h
@@ -263,6 +262,7 @@ drop pitr if exists pitr13;
 create pitr pitr13 for table db01 table01 range 1 'd';
 internal error: database `db01` table `table01` already has a pitr
 drop account if exists acc01;
+drop account if exists acc02;
 create account acc01 admin_name = 'test_account' identified by '111';
 drop pitr if exists pitr14;
 create pitr pitr14 for account acc01 range 1 'h';
