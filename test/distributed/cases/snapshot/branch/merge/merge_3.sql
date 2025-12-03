@@ -21,8 +21,8 @@ insert into payout_template values
 (20, 'west', 3, null, null, null, 'requires data', null, 'missing invoices'),
 (30, null, 7, 4800.00, '2024-02-28 10:00:00', 'leo', null, x'BBBB22', 'stale approvals');
 
-create table payout_stage clone payout_template;
-create table payout_ops clone payout_template;
+data branch create table payout_stage from payout_template;
+data branch create table payout_ops from payout_template;
 
 update payout_stage
    set payout_amount = null,
