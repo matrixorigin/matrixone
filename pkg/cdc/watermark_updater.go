@@ -295,6 +295,11 @@ type CDCWatermarkUpdater struct {
 	commitFailureCount map[WatermarkKey]uint32    // consecutive persistence failures per key
 	commitCircuitOpen  map[WatermarkKey]time.Time // keys in circuit-breaker cool-down
 
+	// Pause registry: tracks which tasks are currently paused
+	// Used to prevent watermark updates during pause operations
+	// Key: taskId (string), Value: pause timestamp (time.Time)
+	pausedTasks sync.Map
+
 	queue        sm.Queue
 	cronExecutor *tasks.CancelableJob
 
@@ -1077,6 +1082,21 @@ func (u *CDCWatermarkUpdater) UpdateWatermarkOnly(
 	key *WatermarkKey,
 	watermark *types.TS,
 ) (err error) {
+	// FIX: Check if this task is paused
+	// If paused, reject watermark updates to prevent data loss on resume
+	if pauseTime, paused := u.pausedTasks.Load(key.TaskId); paused {
+		logutil.Debug(
+			"cdc.watermark.update_blocked_by_pause",
+			zap.String("task-id", key.TaskId),
+			zap.String("key", key.String()),
+			zap.String("watermark", watermark.ToString()),
+			zap.Time("pause-time", pauseTime.(time.Time)),
+		)
+		// Return nil to maintain eventual consistency contract
+		// But don't actually update the watermark
+		return nil
+	}
+
 	u.Lock()
 	defer u.Unlock()
 
@@ -1086,6 +1106,7 @@ func (u *CDCWatermarkUpdater) UpdateWatermarkOnly(
 	// Log watermark updates for better observability
 	logutil.Debug(
 		"cdc.watermark.buffer_update",
+		zap.String("task-id", key.TaskId),
 		zap.String("key", key.String()),
 		zap.String("old-watermark", oldWatermark.ToString()),
 		zap.String("new-watermark", watermark.ToString()),
@@ -1182,6 +1203,26 @@ func (u *CDCWatermarkUpdater) ForceFlush(ctx context.Context) (err error) {
 	job.WaitDone()
 	err = job.GetResult().Err
 	return
+}
+
+// MarkTaskPaused marks a task as paused to block watermark updates
+// This is called when a task is being paused to prevent race conditions
+func (u *CDCWatermarkUpdater) MarkTaskPaused(taskId string) {
+	u.pausedTasks.Store(taskId, time.Now())
+	logutil.Info(
+		"cdc.watermark.task_marked_paused",
+		zap.String("task-id", taskId),
+	)
+}
+
+// UnmarkTaskPaused removes the pause mark from a task
+// This is called when a task resumes or is cancelled
+func (u *CDCWatermarkUpdater) UnmarkTaskPaused(taskId string) {
+	u.pausedTasks.Delete(taskId)
+	logutil.Info(
+		"cdc.watermark.task_unmarked_paused",
+		zap.String("task-id", taskId),
+	)
 }
 
 // IsCircuitBreakerOpen returns true if the circuit breaker is currently open for the given key.
