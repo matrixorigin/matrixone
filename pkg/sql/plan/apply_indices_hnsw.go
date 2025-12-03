@@ -26,81 +26,109 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
-func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, projNode, sortNode, scanNode *plan.Node, multiTableIndex *MultiTableIndex) (int32, error) {
+type hnswIndexContext struct {
+	vecCtx       *vectorSortContext
+	metaDef      *plan.IndexDef
+	idxDef       *plan.IndexDef
+	vecLitArg    *plan.Expr
+	origFuncName string
+	partPos      int32
+	pkPos        int32
+	pkType       plan.Type
+	params       string
+	nThread      int64
+}
 
-	if len(sortNode.OrderBy) != 1 {
-		return nodeID, nil
+func (builder *QueryBuilder) prepareHnswIndexContext(vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex) (*hnswIndexContext, error) {
+	if vecCtx == nil || multiTableIndex == nil {
+		return nil, nil
+	}
+	if vecCtx.distFnExpr == nil {
+		return nil, nil
 	}
 
-	var childNode *plan.Node
-	sortDirection := sortNode.OrderBy[0].Flag // For the most part, it is ASC
-	orderExpr := sortNode.OrderBy[0].Expr
-	distFnExpr := orderExpr.GetF()
-	if distFnExpr == nil {
-		childNode = builder.qry.Nodes[sortNode.Children[0]]
-		if childNode.NodeType == plan.Node_PROJECT {
-			distFnExpr = childNode.ProjectList[orderExpr.GetCol().ColPos].GetF()
-		}
-
-		if distFnExpr == nil {
-			return nodeID, nil
-		}
+	// RankOption.Mode controls vector index behavior:
+	// - "force": Disable vector index, force full table scan (for debugging/comparison)
+	// - nil/other: Enable vector index with default behavior
+	if vecCtx.rankOption != nil && vecCtx.rankOption.Mode == "force" {
+		return nil, nil
 	}
 
-	var limit *plan.Expr
-	if sortNode.Limit != nil {
-		limit = sortNode.Limit
-	} else if scanNode.Limit != nil {
-		limit = scanNode.Limit
-	} else if projNode.Limit != nil {
-		limit = projNode.Limit
+	metaDef := multiTableIndex.IndexDefs[catalog.Hnsw_TblType_Metadata]
+	idxDef := multiTableIndex.IndexDefs[catalog.Hnsw_TblType_Storage]
+	if metaDef == nil || idxDef == nil {
+		return nil, nil
 	}
-	if limit == nil {
+
+	opTypeAst, err := sonic.Get([]byte(metaDef.IndexAlgoParams), catalog.IndexAlgoParamOpType)
+	if err != nil {
+		return nil, nil
+	}
+	opType, err := opTypeAst.StrictString()
+	if err != nil {
+		return nil, nil
+	}
+
+	origFuncName := vecCtx.distFnExpr.Func.ObjName
+	if opType != metric.DistFuncOpTypes[origFuncName] {
+		return nil, nil
+	}
+
+	keyPart := idxDef.Parts[0]
+	partPos := vecCtx.scanNode.TableDef.Name2ColIndex[keyPart]
+	_, vecLitArg, found := builder.getArgsFromDistFn(vecCtx.distFnExpr, partPos)
+	if !found {
+		return nil, nil
+	}
+
+	pkPos := vecCtx.scanNode.TableDef.Name2ColIndex[vecCtx.scanNode.TableDef.Pkey.PkeyColName]
+	pkType := vecCtx.scanNode.TableDef.Cols[pkPos].Typ
+
+	nThread, err := builder.compCtx.ResolveVariable("hnsw_threads_search", true, false)
+	if err != nil {
+		return nil, err
+	}
+
+	return &hnswIndexContext{
+		vecCtx:       vecCtx,
+		metaDef:      metaDef,
+		idxDef:       idxDef,
+		vecLitArg:    vecLitArg,
+		origFuncName: origFuncName,
+		partPos:      partPos,
+		pkPos:        pkPos,
+		pkType:       pkType,
+		params:       idxDef.IndexAlgoParams,
+		nThread:      nThread.(int64),
+	}, nil
+}
+
+func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex) (int32, error) {
+
+	if vecCtx == nil || vecCtx.sortNode == nil || vecCtx.scanNode == nil {
 		return nodeID, nil
 	}
 
 	ctx := builder.ctxByNode[nodeID]
-	metaDef := multiTableIndex.IndexDefs[catalog.Hnsw_TblType_Metadata]
-	idxDef := multiTableIndex.IndexDefs[catalog.Hnsw_TblType_Storage]
+	projNode := vecCtx.projNode
+	sortNode := vecCtx.sortNode
+	scanNode := vecCtx.scanNode
+	childNode := vecCtx.childNode
+	orderExpr := vecCtx.orderExpr
+	limit := vecCtx.limit
 
-	opTypeAst, err := sonic.Get([]byte(metaDef.IndexAlgoParams), catalog.IndexAlgoParamOpType)
-	if err != nil {
-		return nodeID, nil
-	}
-	opType, err := opTypeAst.StrictString()
-	if err != nil {
-		return nodeID, nil
-	}
-
-	origFuncName := distFnExpr.Func.ObjName
-	if opType != metric.DistFuncOpTypes[origFuncName] {
-		return nodeID, nil
-	}
-
-	keyPart := idxDef.Parts[0]
-	partPos := scanNode.TableDef.Name2ColIndex[keyPart]
-	_, vecLitArg, found := builder.getArgsFromDistFn(distFnExpr, partPos)
-	if !found {
-		return nodeID, nil
-	}
-
-	pkPos := scanNode.TableDef.Name2ColIndex[scanNode.TableDef.Pkey.PkeyColName]
-	pkType := scanNode.TableDef.Cols[pkPos].Typ
-	params := idxDef.IndexAlgoParams
-
-	nThread, err := builder.compCtx.ResolveVariable("hnsw_threads_search", true, false)
-	if err != nil {
+	hnswCtx, err := builder.prepareHnswIndexContext(vecCtx, multiTableIndex)
+	if err != nil || hnswCtx == nil {
 		return nodeID, err
 	}
 
-	// generate JSON by fmt.Sprintf instead of sonic.Marshal for performance
 	tblCfgStr := fmt.Sprintf(`{"db": "%s", "src": "%s", "metadata":"%s", "index":"%s", "threads_search": %d, "orig_func_name": "%s"}`,
 		scanNode.ObjRef.SchemaName,
 		scanNode.TableDef.Name,
-		metaDef.IndexTableName,
-		idxDef.IndexTableName,
-		nThread.(int64),
-		origFuncName)
+		hnswCtx.metaDef.IndexTableName,
+		hnswCtx.idxDef.IndexTableName,
+		hnswCtx.nThread,
+		hnswCtx.origFuncName)
 
 	// JOIN between source table and hnsw_search table function
 	tableFuncTag := builder.genNewBindTag()
@@ -112,7 +140,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, projNode
 			//Name:               tbl.String(),
 			TblFunc: &plan.TableFunction{
 				Name:  kHNSWSearchFuncName,
-				Param: []byte(params),
+				Param: []byte(hnswCtx.params),
 			},
 			Cols: DeepCopyColDefList(kHNSWSearchColDefs),
 		},
@@ -130,7 +158,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, projNode
 					},
 				},
 			},
-			DeepCopyExpr(vecLitArg),
+			DeepCopyExpr(hnswCtx.vecLitArg),
 		},
 	}
 	tableFuncNodeID := builder.appendNode(tableFuncNode, ctx)
@@ -176,16 +204,16 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, projNode
 	// oncond
 	wherePkEqPk, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
 		{
-			Typ: pkType,
+			Typ: hnswCtx.pkType,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: scanNode.BindingTags[0],
-					ColPos: pkPos, // tbl.pk
+					ColPos: hnswCtx.pkPos, // tbl.pk
 				},
 			},
 		},
 		{
-			Typ: pkType,
+			Typ: hnswCtx.pkType,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: tableFuncTag, // last idxTbl (may be join) relPos
@@ -220,7 +248,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, projNode
 					},
 				},
 			},
-			Flag: sortDirection,
+			Flag: vecCtx.sortDirection,
 		},
 	}
 
