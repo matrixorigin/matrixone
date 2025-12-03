@@ -173,7 +173,7 @@ func runSinglePKWithBase(t *testing.T, parentCtx context.Context, db *sql.DB) {
 	execSQLDB(t, ctx, db, fmt.Sprintf("create table `%s` (id int primary key, value int, note varchar(32))", base))
 	execSQLDB(t, ctx, db, fmt.Sprintf("insert into `%s` values (1, 10, 'seed'), (2, 20, 'seed'), (3, 30, 'seed')", base))
 
-	execSQLDB(t, ctx, db, fmt.Sprintf("create table `%s` clone `%s`", branch, base))
+	execSQLDB(t, ctx, db, fmt.Sprintf("data branch create table `%s` from `%s`", branch, base))
 	execSQLDB(t, ctx, db, fmt.Sprintf("insert into `%s` values (4, 40, 'inserted'), (5, 50, 'inserted')", branch))
 	execSQLDB(t, ctx, db, fmt.Sprintf("update `%s` set value = value + 90, note = 'updated' where id = 2", branch))
 	execSQLDB(t, ctx, db, fmt.Sprintf("delete from `%s` where id = 3", branch))
@@ -213,7 +213,7 @@ func runMultiPKWithBase(t *testing.T, parentCtx context.Context, db *sql.DB) {
 	execSQLDB(t, ctx, db, fmt.Sprintf("create table `%s` (org_id int, event_id int, quantity int, status varchar(16), primary key (org_id, event_id))", base))
 	execSQLDB(t, ctx, db, fmt.Sprintf("insert into `%s` values (1, 1, 100, 'seed'), (1, 2, 200, 'seed'), (2, 1, 300, 'seed')", base))
 
-	execSQLDB(t, ctx, db, fmt.Sprintf("create table `%s` clone `%s`", branch, base))
+	execSQLDB(t, ctx, db, fmt.Sprintf("data branch create table `%s` from `%s`", branch, base))
 	execSQLDB(t, ctx, db, fmt.Sprintf("insert into `%s` values (3, 3, 900, 'inserted'), (2, 2, 400, 'inserted')", branch))
 	execSQLDB(t, ctx, db, fmt.Sprintf("update `%s` set quantity = quantity + 5, status = 'updated' where org_id = 1 and event_id = 2", branch))
 	execSQLDB(t, ctx, db, fmt.Sprintf("delete from `%s` where org_id = 2 and event_id = 1", branch))
@@ -356,7 +356,7 @@ select
 from generate_series(1, 10000) as g`, base)
 	execSQLDB(t, ctx, db, baseInsert)
 
-	execSQLDB(t, ctx, db, fmt.Sprintf("create table %s clone %s", branch, base))
+	execSQLDB(t, ctx, db, fmt.Sprintf("data branch create table %s from %s", branch, base))
 
 	newInserts := fmt.Sprintf(`
 insert into %s
@@ -426,7 +426,7 @@ insert into %s values
 	(2, null, 'beta', null, '2024-01-02 00:00:00'),
 	(3, 30, null, 'only-extra', null)`, base))
 
-	execSQLDB(t, ctx, db, fmt.Sprintf("create table %s clone %s", branch, base))
+	execSQLDB(t, ctx, db, fmt.Sprintf("data branch create table %s from %s", branch, base))
 	execSQLDB(t, ctx, db, fmt.Sprintf("update %s set label = null, extra = null where id = 1", branch))
 	execSQLDB(t, ctx, db, fmt.Sprintf("update %s set qty = 22, created_at = null where id = 2", branch))
 	execSQLDB(t, ctx, db, fmt.Sprintf("insert into %s values (4, null, null, 'brand-new', '2024-01-04 00:00:00')", branch))
