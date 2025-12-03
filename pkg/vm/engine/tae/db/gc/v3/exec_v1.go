@@ -415,7 +415,7 @@ func MakeSnapshotAndPitrFineFilter(
 						}
 						if iscpTS, ok := iscpTables[entry.table]; ok {
 							if entry.stats.GetCNCreated() || entry.stats.GetAppendable() {
-								if (!entry.dropTS.IsEmpty() && entry.dropTS.LT(&iscpTS)) ||
+								if (!entry.dropTS.IsEmpty() && entry.dropTS.GT(&iscpTS)) ||
 									entry.createTS.GT(&iscpTS) {
 									continue
 								}
@@ -444,7 +444,7 @@ func MakeSnapshotAndPitrFineFilter(
 				}
 				if iscpTS, ok := iscpTables[tableID]; ok {
 					if stats.GetCNCreated() || stats.GetAppendable() {
-						if (!deleteTS.IsEmpty() && deleteTS.LT(&iscpTS)) ||
+						if (!deleteTS.IsEmpty() && deleteTS.GT(&iscpTS)) ||
 							createTS.GT(&iscpTS) {
 							continue
 						}
