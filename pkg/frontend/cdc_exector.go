@@ -518,18 +518,20 @@ func (exec *CDCTaskExecutor) Pause() error {
 	}()
 
 	if wasRunning {
-		// FIX: Mark task as paused BEFORE closing pause channel
-		// This ensures any in-flight commits will have their watermark updates blocked
-		if exec.watermarkUpdater != nil {
-			exec.watermarkUpdater.MarkTaskPaused(exec.spec.TaskId)
-		}
-
 		cdc.GetTableDetector(exec.cnUUID).UnRegister(exec.spec.TaskId)
 		exec.activeRoutine.ClosePause()
 
 		// Synchronously wait for all readers to stop before proceeding
 		// This ensures no goroutine leaks and clean pause state
 		exec.stopAllReaders()
+
+		// FIX: Mark task as paused AFTER readers have stopped
+		// Critical: Must be after stopAllReaders() to prevent blocking legitimate commits
+		// If marked before stop, readers may send data successfully but watermark gets blocked,
+		// causing data duplication on resume
+		if exec.watermarkUpdater != nil {
+			exec.watermarkUpdater.MarkTaskPaused(exec.spec.TaskId)
+		}
 
 		// FIX: Force flush watermarks with timeout
 		// This ensures all legitimate watermarks (from commits completed before pause)
