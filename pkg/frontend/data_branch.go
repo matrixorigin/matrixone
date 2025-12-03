@@ -1337,13 +1337,51 @@ func validateOutputDirPath(ctx context.Context, ses *Session, dirPath string) (e
 
 	if entry, err = targetFS.StatFile(ctx, targetPath); err != nil {
 		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-			return moerr.NewInvalidInputNoCtxf("output directory %s does not exist", inputDirPath)
+			// fallthrough to List-based directory detection
+		} else {
+			return
 		}
-		return
 	}
 
-	if !entry.IsDir {
-		return moerr.NewInvalidInputNoCtxf("output directory %s is not a directory", inputDirPath)
+	// StatFile succeeded: reject if it's a file, accept if the FS can stat directories.
+	if entry != nil {
+		if !entry.IsDir {
+			return moerr.NewInvalidInputNoCtxf("output directory %s is not a directory", inputDirPath)
+		}
+		return nil
+	}
+
+	// StatFile can't prove directory existence (common for object storage). Use parent List to
+	// detect the child entry and its type.
+	trimmedPath := strings.TrimRight(targetPath, "/")
+	if len(trimmedPath) == 0 {
+		// root of the service, treat as directory
+		return nil
+	}
+	parent, base := path.Split(trimmedPath)
+	parent = strings.TrimRight(parent, "/")
+	if len(base) == 0 {
+		// target is root
+		return nil
+	}
+
+	found := false
+	for entry, err = range targetFS.List(ctx, parent) {
+		if err != nil {
+			return err
+		}
+		if entry.Name != base {
+			continue
+		}
+		found = true
+		if !entry.IsDir {
+			return moerr.NewInvalidInputNoCtxf("output directory %s is not a directory", inputDirPath)
+		}
+		return nil
+	}
+
+	if !found {
+		return moerr.NewInvalidInputNoCtxf("output directory %s does not exist", inputDirPath)
 	}
 
 	return nil
