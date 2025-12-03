@@ -6,12 +6,15 @@ ENV LANG=en_US.utf8
 RUN export LANG=en_US.utf8
 
 ARG DEBIAN_FRONTEND=noninteractive
-ENV MOHOME=/matrixone
+ENV MOHOME=/app/matrixone
 ENV PATH="/usr/local/cuda/bin:${PATH}"
 ENV LD_LIBRARY_PATH="/usr/local/cuda/lib64:/usr/local/cuda/lib64/stubs:${MOHOME}/thirdparties/install/lib:${LD_LIBRARY_PATH}"
 
-WORKDIR /matrixone
-COPY . .
+WORKDIR /app
+COPY matrixone matrixone
+COPY cuvs cuvs
+COPY go.work .
+COPY go.work.sum .
 
 ##################################################
 #           install dependecies                  #
@@ -30,7 +33,7 @@ RUN rm miniconda.sh
 ENV PATH="/root/miniconda/bin:${PATH}"
 RUN /root/miniconda/bin/conda init bash
 
-RUN /root/miniconda/bin/conda env create --name go -f /matrixone/optools/images/gpu/go_cuda-130_arch-x86_64.yaml
+RUN /root/miniconda/bin/conda env create --name go -f /app/matrixone/optools/images/gpu/go_cuda-130_arch-x86_64.yaml
 RUN echo "source activate go" >> ~/.bashrc
 
 ENV CONDA_PREFIX=/root/miniconda/envs/go
@@ -41,18 +44,20 @@ ENV LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${CONDA_PREFIX}/lib"
 ARG GOPROXY="https://proxy.golang.org,direct"
 RUN go env -w GOPROXY=${GOPROXY}
 
-RUN go mod download
+RUN cd matrixone && go mod download
 
 ENV MO_CL_CUDA=1
-RUN make clean && make
+RUN cd matrixone && make clean && make
 
-# build runtime docker image
+#ENTRYPOINT ["bash"]
+
 FROM nvidia/cuda:13.0.2-cudnn-runtime-ubuntu24.04
 
-COPY --from=builder /matrixone/mo-service /mo-service
-COPY --from=builder /matrixone/etc /etc
-COPY --from=builder /matrixone/thirdparties/install/lib/*.so /usr/local/lib
+COPY --from=builder /app/matrixone/mo-service /mo-service
+COPY --from=builder /app/matrixone/etc /etc
+COPY --from=builder /app/matrixone/thirdparties/install/lib/*.so /usr/local/lib
 COPY --from=builder /root/miniconda/envs/go/lib /root/miniconda/envs/go/lib
+#COPY --from=builder /root/.bashrc /root/
 
 ENV PATH="/usr/local/cuda/bin:${PATH}"
 ENV LD_LIBRARY_PATH="/usr/local/lib:/usr/local/cuda/lib64:/usr/local/cuda/lib64/stubs:${LD_LIBRARY_PATH}"
@@ -69,5 +74,6 @@ WORKDIR /
 
 EXPOSE 6001
 
+#ENTRYPOINT ["bash"]
 ENTRYPOINT [ "/mo-service", "-debug-http=:12345", "-launch", "/etc/quickstart/launch.toml"]
 
