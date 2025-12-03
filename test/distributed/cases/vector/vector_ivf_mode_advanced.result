@@ -1,0 +1,261 @@
+create database if not exists dd2;
+use dd2;
+CREATE TABLE vector_test_advanced (
+id INT PRIMARY KEY,
+name VARCHAR(100),
+category VARCHAR(50),
+score FLOAT,
+active BOOLEAN DEFAULT true,
+embedding vecf32(16)
+);
+CREATE INDEX idx_vec_advanced USING ivfflat ON vector_test_advanced(embedding) lists=8 op_type 'vector_l2_ops';
+INSERT INTO vector_test_advanced (id, name, category, score, active, embedding) VALUES
+(1, 'Item A', 'cat1', 5.0, true, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,0.1,0.2,0.3,0.4,0.5,0.6,0.7]'),
+(2, 'Item B', 'cat1', 4.5, true, '[0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]'),
+(3, 'Item C', 'cat2', 4.0, true, '[0.3,0.4,0.5,0.6,0.7,0.8,0.9,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9]'),
+(4, 'Item D', 'cat2', 3.5, false, '[0.4,0.5,0.6,0.7,0.8,0.9,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,0.1]'),
+(5, 'Item E', 'cat3', 3.0, true, '[0.5,0.6,0.7,0.8,0.9,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,0.1,0.2]'),
+(6, 'Item F', 'cat3', 2.5, false, '[0.6,0.7,0.8,0.9,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,0.1,0.2,0.3]'),
+(7, 'Item G', 'cat1', 2.0, true, '[0.7,0.8,0.9,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,0.1,0.2,0.3,0.4]'),
+(8, 'Item H', 'cat2', 1.5, true, '[0.8,0.9,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,0.1,0.2,0.3,0.4,0.5]'),
+(9, 'Item I', 'cat3', 1.0, false, '[0.9,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,0.1,0.2,0.3,0.4,0.5,0.6]'),
+(10, 'Item J', 'cat1', 0.5, true, '[0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1]');
+SELECT id, name, score FROM vector_test_advanced
+WHERE category = 'cat1' AND active = true AND score > 4.0
+ORDER BY l2_distance(embedding, '[0.15,0.25,0.35,0.45,0.55,0.65,0.75,0.85,0.95,0.15,0.25,0.35,0.45,0.55,0.65,0.75]')
+LIMIT 2 by rank with option 'mode=pre';
+id    name    score
+1    Item A    5.0
+2    Item B    4.5
+SELECT id, name, score FROM vector_test_advanced
+WHERE category = 'cat1' AND active = true AND score > 4.0
+ORDER BY l2_distance(embedding, '[0.15,0.25,0.35,0.45,0.55,0.65,0.75,0.85,0.95,0.15,0.25,0.35,0.45,0.55,0.65,0.75]')
+LIMIT 2 by rank with option 'mode=post';
+id    name    score
+1    Item A    5.0
+2    Item B    4.5
+SELECT id, name FROM vector_test_advanced
+WHERE (category = 'cat1' OR category = 'cat2') AND active = true
+ORDER BY l2_distance(embedding, '[0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5]')
+LIMIT 3 by rank with option 'mode=pre';
+id    name
+2    Item B
+3    Item C
+1    Item A
+SELECT id, name, score FROM vector_test_advanced
+WHERE score BETWEEN 2.0 AND 4.0
+ORDER BY l2_distance(embedding, '[0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5]')
+LIMIT 4 by rank with option 'mode=pre';
+id    name    score
+3    Item C    4.0
+4    Item D    3.5
+5    Item E    3.0
+7    Item G    2.0
+SELECT id, name, score FROM vector_test_advanced
+WHERE score BETWEEN 2.0 AND 4.0
+ORDER BY l2_distance(embedding, '[0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5]')
+LIMIT 4 by rank with option 'mode=post';
+id    name    score
+3    Item C    4.0
+4    Item D    3.5
+5    Item E    3.0
+7    Item G    2.0
+SELECT id, name FROM vector_test_advanced
+WHERE category != 'cat3' AND active = true
+ORDER BY l2_distance(embedding, '[0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2]')
+LIMIT 3 by rank with option 'mode=pre';
+id    name
+10    Item J
+1    Item A
+2    Item B
+SELECT id, name FROM vector_test_advanced
+WHERE name LIKE 'Item %' AND active = true
+ORDER BY l2_distance(embedding, '[0.3,0.3,0.3,0.3,0.3,0.3,0.3,0.3,0.3,0.3,0.3,0.3,0.3,0.3,0.3,0.3]')
+LIMIT 5 by rank with option 'mode=pre';
+id    name
+10    Item J
+1    Item A
+2    Item B
+8    Item H
+7    Item G
+SELECT id, name FROM vector_test_advanced
+WHERE active = false
+ORDER BY l2_distance(embedding, '[0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5]')
+LIMIT 3 by rank with option 'mode=pre';
+id    name
+9    Item I
+4    Item D
+6    Item F
+SELECT id, name FROM vector_test_advanced
+WHERE active = false
+ORDER BY l2_distance(embedding, '[0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5]')
+LIMIT 3 by rank with option 'mode=post';
+id    name
+9    Item I
+4    Item D
+6    Item F
+SELECT id, name, category FROM vector_test_advanced
+WHERE (category = 'cat1' AND score > 3.0) OR (category = 'cat2' AND active = true)
+ORDER BY l2_distance(embedding, '[0.4,0.4,0.4,0.4,0.4,0.4,0.4,0.4,0.4,0.4,0.4,0.4,0.4,0.4,0.4,0.4]')
+LIMIT 4 by rank with option 'mode=pre';
+id    name    category
+1    Item A    cat1
+2    Item B    cat1
+3    Item C    cat2
+8    Item H    cat2
+SELECT id, name FROM vector_test_advanced
+WHERE id IN (1, 3, 5, 7, 9)
+ORDER BY l2_distance(embedding, '[0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6]')
+LIMIT 3 by rank with option 'mode=pre';
+id    name
+3    Item C
+5    Item E
+1    Item A
+SELECT id, name FROM vector_test_advanced
+WHERE id IN (1, 3, 5, 7, 9)
+ORDER BY l2_distance(embedding, '[0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6,0.6]')
+LIMIT 3 by rank with option 'mode=post';
+id    name
+3    Item C
+5    Item E
+1    Item A
+SELECT id, name FROM vector_test_advanced
+WHERE active = true
+ORDER BY l2_distance(embedding, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,0.1,0.2,0.3,0.4,0.5,0.6,0.7]')
+LIMIT 1 by rank with option 'mode=pre';
+id    name
+1    Item A
+SELECT id, name FROM vector_test_advanced
+WHERE active = true
+ORDER BY l2_distance(embedding, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,0.1,0.2,0.3,0.4,0.5,0.6,0.7]')
+LIMIT 9 by rank with option 'mode=pre';
+id    name
+1    Item A
+2    Item B
+3    Item C
+8    Item H
+10    Item J
+7    Item G
+5    Item E
+SELECT id FROM vector_test_advanced
+WHERE active = true
+ORDER BY l2_distance(embedding, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,0.1,0.2,0.3,0.4,0.5,0.6,0.7]')
+LIMIT 6 by rank with option 'mode=pre';
+id
+1
+2
+3
+8
+10
+7
+SELECT id, name FROM vector_test_advanced
+WHERE category = 'cat1' AND active = true
+ORDER BY l2_distance(embedding, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,0.1,0.2,0.3,0.4,0.5,0.6,0.7]')
+LIMIT 3 by rank with option 'mode=force';
+id    name
+1    Item A
+2    Item B
+10    Item J
+INSERT INTO vector_test_advanced (id, name, category, score, active, embedding) VALUES
+(11, 'Item K', NULL, 5.5, true, '[0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2]');
+SELECT id, name, category FROM vector_test_advanced
+WHERE category IS NOT NULL AND active = true
+ORDER BY l2_distance(embedding, '[0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2]')
+LIMIT 3 by rank with option 'mode=pre';
+id    name    category
+10    Item J    cat1
+1    Item A    cat1
+2    Item B    cat1
+SELECT id, name, category FROM vector_test_advanced
+WHERE category IS NOT NULL AND active = true
+ORDER BY l2_distance(embedding, '[0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2]')
+LIMIT 3 by rank with option 'mode=post';
+id    name    category
+10    Item J    cat1
+1    Item A    cat1
+2    Item B    cat1
+CREATE TABLE cosine_test (
+id INT PRIMARY KEY,
+vec vecf32(8)
+);
+CREATE INDEX idx_cosine USING ivfflat ON cosine_test(vec) lists=4 op_type 'vector_cosine_ops';
+INSERT INTO cosine_test VALUES
+(1, '[1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0]'),
+(2, '[0.0,1.0,0.0,0.0,0.0,0.0,0.0,0.0]'),
+(3, '[0.0,0.0,1.0,0.0,0.0,0.0,0.0,0.0]'),
+(4, '[0.0,0.0,0.0,1.0,0.0,0.0,0.0,0.0]'),
+(5, '[0.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0]');
+SELECT id FROM cosine_test
+ORDER BY cosine_distance(vec, '[1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0]')
+LIMIT 3 by rank with option 'mode=pre';
+id
+1
+3
+2
+CREATE TABLE inner_product_test (
+id INT PRIMARY KEY,
+vec vecf32(8)
+);
+CREATE INDEX idx_inner USING ivfflat ON inner_product_test(vec) lists=4 op_type 'vector_inner_product';
+internal error: invalid op_type: 'vector_inner_product'
+INSERT INTO inner_product_test VALUES
+(1, '[1.0,2.0,3.0,4.0,5.0,6.0,7.0,8.0]'),
+(2, '[8.0,7.0,6.0,5.0,4.0,3.0,2.0,1.0]'),
+(3, '[1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0]'),
+(4, '[2.0,2.0,2.0,2.0,2.0,2.0,2.0,2.0]'),
+(5, '[0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5]');
+SELECT id FROM inner_product_test
+ORDER BY inner_product(vec, '[1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0]') DESC
+LIMIT 3 by rank with option 'mode=pre';
+id
+5
+3
+4
+SELECT id, name FROM vector_test_advanced
+WHERE category IN ('cat1', 'cat2') AND score > 2.0
+ORDER BY l2_distance(embedding, '[0.3,0.3,0.3,0.3,0.3,0.3,0.3,0.3,0.3,0.3,0.3,0.3,0.3,0.3,0.3,0.3]')
+LIMIT 2 OFFSET 1 by rank with option 'mode=pre';
+id    name
+2    Item B
+3    Item C
+SELECT id, name FROM vector_test_advanced
+WHERE category IN ('cat1', 'cat2') AND score > 2.0
+ORDER BY l2_distance(embedding, '[0.3,0.3,0.3,0.3,0.3,0.3,0.3,0.3,0.3,0.3,0.3,0.3,0.3,0.3,0.3,0.3]')
+LIMIT 2 OFFSET 1 by rank with option 'mode=post';
+id    name
+2    Item B
+3    Item C
+SELECT id, name FROM vector_test_advanced
+WHERE active = true
+ORDER BY l2_distance(embedding, '[0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5]')
+LIMIT 5 by rank with option 'mode=pre';
+id    name
+2    Item B
+3    Item C
+1    Item A
+8    Item H
+5    Item E
+SELECT id, name FROM vector_test_advanced
+WHERE active = true
+ORDER BY l2_distance(embedding, '[0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5]')
+LIMIT 5 by rank with option 'mode=post';
+id    name
+2    Item B
+3    Item C
+1    Item A
+8    Item H
+5    Item E
+SELECT id, name FROM vector_test_advanced
+WHERE active = true
+ORDER BY l2_distance(embedding, '[0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5]')
+LIMIT 5 by rank with option 'mode=force';
+id    name
+2    Item B
+3    Item C
+1    Item A
+5    Item E
+8    Item H
+drop table if exists vector_test_advanced;
+drop table if exists cosine_test;
+drop table if exists inner_product_test;
+drop database if exists dd2;

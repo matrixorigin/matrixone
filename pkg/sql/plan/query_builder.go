@@ -81,17 +81,19 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 		qry: &Query{
 			StmtType: queryType,
 		},
-		compCtx:            ctx,
-		ctxByNode:          []*BindContext{},
-		nameByColRef:       make(map[[2]int32]string),
-		nextBindTag:        0,
-		mysqlCompatible:    mysqlCompatible,
-		aggSpillMem:        aggSpillMem,
-		tag2Table:          make(map[int32]*TableDef),
-		tag2NodeID:         make(map[int32]int32),
-		isPrepareStatement: isPrepareStatement,
-		deleteNode:         make(map[uint64]int32),
-		skipStats:          skipStats,
+		compCtx:              ctx,
+		ctxByNode:            []*BindContext{},
+		nameByColRef:         make(map[[2]int32]string),
+		protectedScans:       make(map[int32]int),
+		projectSpecialGuards: make(map[int32]*specialIndexGuard),
+		nextBindTag:          0,
+		mysqlCompatible:      mysqlCompatible,
+		aggSpillMem:          aggSpillMem,
+		tag2Table:            make(map[int32]*TableDef),
+		tag2NodeID:           make(map[int32]int32),
+		isPrepareStatement:   isPrepareStatement,
+		deleteNode:           make(map[uint64]int32),
+		skipStats:            skipStats,
 	}
 }
 
@@ -2074,7 +2076,9 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		}
 		// after determine shuffle, be careful when calling ReCalcNodeStats again.
 		// needResetHashMapStats should always be false from here
+		builder.prepareSpecialIndexGuards(rootID)
 		rootID, err = builder.applyIndices(rootID, colRefCnt, make(map[[2]int32]*plan.Expr))
+		builder.resetSpecialIndexGuards()
 		if err != nil {
 			return nil, err
 		}
@@ -5375,7 +5379,7 @@ func (builder *QueryBuilder) GetContext() context.Context {
 // parseRankOption parses rank options from a map of option key-value pairs.
 // It extracts the "mode" option case-insensitively and validates it.
 // Returns a RankOption with the parsed mode if valid, or nil if no mode is specified.
-// Returns an error if the mode value is invalid (must be "pre" or "post").
+// Returns an error if the mode value is invalid (must be "pre", "post", or "force").
 func parseRankOption(options map[string]string, ctx context.Context) (*plan.RankOption, error) {
 	if len(options) == 0 {
 		return nil, nil
@@ -5396,8 +5400,12 @@ func parseRankOption(options map[string]string, ctx context.Context) (*plan.Rank
 
 	if mode, ok := getOptionValue("mode"); ok {
 		modeLower := strings.ToLower(strings.TrimSpace(mode))
-		if modeLower != "pre" && modeLower != "post" {
-			return nil, moerr.NewInvalidInputf(ctx, "mode must be 'pre' or 'post', got '%s'", mode)
+		// Mode options:
+		// - "pre": Enable vector index with BloomFilter pushdown
+		// - "post": Enable vector index with standard behavior (post-filtering)
+		// - "force": Force disable vector index, use full table scan
+		if modeLower != "pre" && modeLower != "post" && modeLower != "force" {
+			return nil, moerr.NewInvalidInputf(ctx, "mode must be 'pre', 'post', or 'force', got '%s'", mode)
 		}
 		rankOption.Mode = modeLower
 	}
