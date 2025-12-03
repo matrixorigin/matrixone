@@ -155,7 +155,7 @@ func handleCloneTable(
 	ses *Session,
 	stmt *tree.CloneTable,
 	bh BackgroundExec,
-) (err error) {
+) (receipt cloneReceipt, err error) {
 
 	var (
 		ctx    context.Context
@@ -170,8 +170,6 @@ func handleCloneTable(
 		toAccountId   uint32
 		opAccountId   uint32
 		fromAccountId uint32
-
-		receipt cloneReceipt
 	)
 
 	if reqCtx.Value(tree.CloneLevelCtxKey{}) == nil {
@@ -287,10 +285,6 @@ func handleCloneTable(
 	receipt.opAccount = opAccountId
 	receipt.srcAccount = fromAccountId
 
-	if err = updateBranchMetaTable(reqCtx, ses, bh, receipt); err != nil {
-		return
-	}
-
 	if faultInjected, _ = objectio.LogCNCloneFailedInjected(
 		stmt.CreateTable.Table.SchemaName.String(), stmt.CreateTable.Table.ObjectName.String(),
 	); faultInjected {
@@ -308,7 +302,7 @@ func handleCloneDatabase(
 	execCtx *ExecCtx,
 	ses *Session,
 	stmt *tree.CloneDatabase,
-) (err error) {
+) (receipts []cloneReceipt, err error) {
 
 	var (
 		reqCtx = execCtx.reqCtx
@@ -346,7 +340,7 @@ func handleCloneDatabase(
 	// do not open another transaction,
 	// if the clone already executed within a transaction.
 	if bh, deferred, err = getBackExecutor(reqCtx, ses); err != nil {
-		return err
+		return
 	}
 
 	defer func() {
@@ -361,29 +355,31 @@ func handleCloneDatabase(
 	if opAccountId, toAccountId, snapshot, err = getOpAndToAccountId(
 		reqCtx, ses, bh, stmt.ToAccountOpt, stmt.AtTsExpr,
 	); err != nil {
-		return err
+		return
 	}
 
 	if snapshot == nil && opAccountId != toAccountId {
-		return moerr.NewInternalErrorNoCtxf("clone database between different accounts need a snapshot")
+		err = moerr.NewInternalErrorNoCtxf("clone database between different accounts need a snapshot")
+		return
 	}
 
 	if opAccountId != sysAccountID && opAccountId != toAccountId {
-		return moerr.NewInternalError(reqCtx, "only sys can clone table to another account")
+		err = moerr.NewInternalError(reqCtx, "only sys can clone table to another account")
+		return
 	}
 
 	ctx1 = defines.AttachAccountId(reqCtx, toAccountId)
 	if err = bh.Exec(ctx1,
 		fmt.Sprintf("create database `%s`", stmt.DstDatabase),
 	); err != nil {
-		return err
+		return
 	}
 
 	if srcTblInfos, err = getTableInfos(
 		reqCtx, ses.GetService(), bh, snapshot,
 		stmt.SrcDatabase.String(), "",
 	); err != nil {
-		return err
+		return
 	}
 
 	snapCondition = snapConditionRegex.FindString(execCtx.input.sql)
@@ -391,13 +387,13 @@ func handleCloneDatabase(
 	if sortedFkTbls, err = fkTablesTopoSort(
 		reqCtx, bh, snapshot, stmt.SrcDatabase.String(), "",
 	); err != nil {
-		return err
+		return
 	}
 
 	if fkTableMap, err = getTableInfoMap(
 		reqCtx, ses.GetService(), bh, snapshot, stmt.SrcDatabase.String(), "", sortedFkTbls,
 	); err != nil {
-		return err
+		return
 	}
 
 	if len(snapCondition) == 0 {
@@ -416,7 +412,7 @@ func handleCloneDatabase(
 		if snapshotTS, err = tryToIncreaseTxnPhysicalTS(
 			reqCtx, ses.proc.GetTxnOperator(),
 		); err != nil {
-			return err
+			return
 		}
 	}
 
@@ -437,6 +433,7 @@ func handleCloneDatabase(
 		}
 
 		var (
+			receipt     cloneReceipt
 			cloneStmts  []tree.Statement
 			tempExecCtx = &ExecCtx{
 				reqCtx: reqCtx,
@@ -452,12 +449,13 @@ func handleCloneDatabase(
 			cloneStmts[0].Free()
 		}()
 
-		if err = handleCloneTable(
+		if receipt, err = handleCloneTable(
 			tempExecCtx, ses, cloneStmts[0].(*tree.CloneTable), bh,
 		); err != nil {
 			return err
 		}
 
+		receipts = append(receipts, receipt)
 		return nil
 	}
 
@@ -477,7 +475,7 @@ func handleCloneDatabase(
 			stmt.DstDatabase.String(), srcTbl.tblName,
 			stmt.SrcDatabase.String(), srcTbl.tblName,
 		); err != nil {
-			return err
+			return
 		}
 	}
 
@@ -488,7 +486,7 @@ func handleCloneDatabase(
 				stmt.DstDatabase.String(), tblInfo.tblName,
 				stmt.SrcDatabase.String(), tblInfo.tblName,
 			); err != nil {
-				return err
+				return
 			}
 		}
 	}
@@ -503,7 +501,7 @@ func handleCloneDatabase(
 		if sortedViews, err = sortedViewInfos(
 			reqCtx, ses, bh, "", snapshot, viewMap, fromAccount, toAccountId,
 		); err != nil {
-			return err
+			return
 		}
 
 		for i := range sortedViews {
@@ -521,11 +519,11 @@ func handleCloneDatabase(
 		}
 
 		if err = restoreViews(reqCtx, ses, bh, "", newViewMap, toAccountId, sortedViews); err != nil {
-			return err
+			return
 		}
 	}
 
-	return nil
+	return
 }
 
 func tryToIncreaseTxnPhysicalTS(
