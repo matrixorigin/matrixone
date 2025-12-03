@@ -1,5 +1,4 @@
 //go:build gpu
-// +build gpu
 
 // Copyright 2023 Matrix Origin
 //

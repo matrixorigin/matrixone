@@ -1,5 +1,4 @@
 //go:build gpu
-// +build gpu
 
 // Copyright 2023 Matrix Origin
 //
@@ -19,10 +18,11 @@ package device
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
-	"github.com/stretchr/testify/require"
 	"math/rand/v2"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	"github.com/stretchr/testify/require"
 )
 
 func TestGpu(t *testing.T) {
