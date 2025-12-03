@@ -1335,6 +1335,21 @@ func validateOutputDirPath(ctx context.Context, ses *Session, dirPath string) (e
 		defer targetFS.Close(ctx)
 	}
 
+	if len(strings.Trim(targetPath, "/")) == 0 {
+		// service root: try listing to ensure the bucket/root is reachable
+		for _, err = range targetFS.List(ctx, targetPath) {
+			if err != nil {
+				if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+					return moerr.NewInvalidInputNoCtxf("output directory %s does not exist", inputDirPath)
+				}
+				return err
+			}
+			// any entry means list works
+			break
+		}
+		return nil
+	}
+
 	if entry, err = targetFS.StatFile(ctx, targetPath); err != nil {
 		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 			// fallthrough to List-based directory detection
