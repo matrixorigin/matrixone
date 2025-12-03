@@ -897,15 +897,23 @@ func mergeFilters(
 		finalFilter.Oid = left.Oid
 
 		if !finalFilter.Valid && connector == function.AND {
-			// choose the left as default
-			finalFilter = *left
-			if left.Vec != nil {
-				// why dup here?
-				// once the merge filter generated, the others will be free.
-				//finalFilter.Vec, err = left.Vec.Dup(proc.Mp())
+			// nonempty disjuncts makes the memory pk filter invalid,
+			// so we choose the one whose disjuncts is empty as default here.
+			if len(left.Disjuncts) > 0 {
+				finalFilter = *right
+				if right.Vec != nil {
+					// why dup here?
+					// once the merge filter generated, the others will be free.
+					//finalFilter.Vec, err = left.Vec.Dup(proc.Mp())
 
-				// or just set the left.Vec = nil to avoid free it
-				(*left).Vec = nil
+					// or just set the left.Vec = nil to avoid free it
+					(*right).Vec = nil
+				}
+			} else {
+				finalFilter = *left
+				if left.Vec != nil {
+					(*left).Vec = nil
+				}
 			}
 		}
 	}()
