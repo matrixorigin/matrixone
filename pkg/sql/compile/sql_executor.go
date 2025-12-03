@@ -190,13 +190,18 @@ func (s *sqlExecutor) getCompileContext(
 	proc *process.Process,
 	db string,
 	lower int64) *compilerContext {
-	return &compilerContext{
+	cc := &compilerContext{
 		ctx:       ctx,
 		defaultDB: db,
 		engine:    s.eng,
 		proc:      proc,
 		lower:     lower,
 	}
+	// For testing: check if a stats cache is provided in context
+	if statsCache, ok := ctx.Value("test_stats_cache").(*plan.StatsCache); ok {
+		cc.statsCache = statsCache
+	}
+	return cc
 }
 
 func (s *sqlExecutor) adjustOptions(
