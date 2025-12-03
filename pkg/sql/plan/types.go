@@ -188,6 +188,10 @@ type QueryBuilder struct {
 	deleteNode map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
 
 	optimizerHints *OptimizerHints
+
+	// optimizationHistory records key optimization steps for debugging remap errors
+	// Only records when optimizations actually change the plan structure
+	optimizationHistory []string
 }
 
 type OptimizerHints struct {
