@@ -390,9 +390,11 @@ func handleDataBranch(
 
 	switch st := stmt.(type) {
 	case *tree.DataBranchCreateTable:
-		//return dataBranchCreateTable(execCtx, ses, st)
+		return dataBranchCreateTable(execCtx, ses, st)
 	case *tree.DataBranchCreateDatabase:
+		return dataBranchCreateDatabase(execCtx, ses, st)
 	case *tree.DataBranchDeleteTable:
+		return dataBranchDeleteTable(execCtx, ses, st)
 	case *tree.DataBranchDeleteDatabase:
 	case *tree.DataBranchDiff:
 		return handleBranchDiff(execCtx, ses, st)
@@ -402,6 +404,103 @@ func handleDataBranch(
 		return moerr.NewNotSupportedNoCtxf("data branch not supported: %v", st)
 	}
 
+	return nil
+}
+
+func dataBranchCreateTable(
+	execCtx *ExecCtx,
+	ses *Session,
+	stmt *tree.DataBranchCreateTable,
+) (err error) {
+	var (
+		bh        BackgroundExec
+		deferred  func(error) error
+		receipt   cloneReceipt
+		cloneStmt *tree.CloneTable
+	)
+
+	if bh, deferred, err = getBackExecutor(execCtx.reqCtx, ses); err != nil {
+		return
+	}
+
+	defer func() {
+		if deferred != nil {
+			err = deferred(err)
+		}
+	}()
+
+	cloneStmt = &tree.CloneTable{
+		SrcTable:     stmt.SrcTable,
+		CreateTable:  stmt.CreateTable,
+		ToAccountOpt: stmt.ToAccountOpt,
+	}
+
+	if receipt, err = handleCloneTable(execCtx, ses, cloneStmt, bh); err != nil {
+		return
+	}
+
+	if err = updateBranchMetaTable(execCtx.reqCtx, ses, bh, receipt); err != nil {
+		return
+	}
+
+	return nil
+}
+
+func dataBranchCreateDatabase(
+	execCtx *ExecCtx,
+	ses *Session,
+	stmt *tree.DataBranchCreateDatabase,
+) (err error) {
+	var (
+		bh       BackgroundExec
+		deferred func(error) error
+		receipts []cloneReceipt
+	)
+
+	if bh, deferred, err = getBackExecutor(execCtx.reqCtx, ses); err != nil {
+		return
+	}
+
+	defer func() {
+		if deferred != nil {
+			err = deferred(err)
+		}
+	}()
+
+	if receipts, err = handleCloneDatabase(execCtx, ses, &stmt.CloneDatabase); err != nil {
+		return
+	}
+
+	for _, rcpt := range receipts {
+		if err = updateBranchMetaTable(execCtx.reqCtx, ses, bh, rcpt); err != nil {
+			return
+		}
+	}
+
+	return nil
+}
+
+func dataBranchDeleteTable(
+	execCtx *ExecCtx,
+	ses *Session,
+	stmt *tree.DataBranchDeleteTable,
+) (err error) {
+	var (
+		bh       BackgroundExec
+		deferred func(error) error
+	)
+
+	if bh, deferred, err = getBackExecutor(execCtx.reqCtx, ses); err != nil {
+		return
+	}
+
+	defer func() {
+		if deferred != nil {
+			err = deferred(err)
+		}
+	}()
+
+	_ = bh
 	return nil
 }
 
@@ -421,7 +520,7 @@ func diffMergeAgency(
 	}
 
 	// do not open another transaction,
-	// if the clone already executed within a transaction.
+	// if this already executed within a transaction.
 	if bh, deferred, err = getBackExecutor(execCtx.reqCtx, ses); err != nil {
 		return
 	}

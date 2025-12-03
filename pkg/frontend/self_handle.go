@@ -526,14 +526,14 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 	case *tree.CloneDatabase:
 		ses.EnterFPrint(FPCloneDatabase)
 		defer ses.ExitFPrint(FPCloneDatabase)
-		if err = handleCloneDatabase(execCtx, ses, st); err != nil {
+		if _, err = handleCloneDatabase(execCtx, ses, st); err != nil {
 			return
 		}
 
 	case *tree.CloneTable:
 		ses.EnterFPrint(FPCloneTable)
 		defer ses.ExitFPrint(FPCloneTable)
-		if err = handleCloneTable(execCtx, ses, st, nil); err != nil {
+		if _, err = handleCloneTable(execCtx, ses, st, nil); err != nil {
 			return
 		}
 
