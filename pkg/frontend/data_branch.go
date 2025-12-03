@@ -25,6 +25,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strconv"
@@ -81,21 +82,23 @@ const (
 	maxSqlBatchSize = mpool.MB * 48
 )
 
-var bufferPool = sync.Pool{
-	New: func() any {
+func acquireBuffer(pool *sync.Pool) *bytes.Buffer {
+	if pool == nil {
 		return &bytes.Buffer{}
-	},
-}
-
-func acquireBuffer() *bytes.Buffer {
-	buf := bufferPool.Get().(*bytes.Buffer)
+	}
+	buf := pool.Get().(*bytes.Buffer)
 	buf.Reset()
 	return buf
 }
 
-func releaseBuffer(buf *bytes.Buffer) {
+func releaseBuffer(pool *sync.Pool, buf *bytes.Buffer) {
+	if buf == nil {
+		return
+	}
 	buf.Reset()
-	bufferPool.Put(buf)
+	if pool != nil {
+		pool.Put(buf)
+	}
 }
 
 type collectRange struct {
@@ -131,6 +134,8 @@ type tableStuff struct {
 	worker *ants.Pool
 
 	retPool *retBatchList
+
+	bufPool *sync.Pool
 }
 
 type batchWithKind struct {
@@ -405,10 +410,11 @@ func dataBranchCreateTable(
 	stmt *tree.DataBranchCreateTable,
 ) (err error) {
 	var (
-		bh        BackgroundExec
-		deferred  func(error) error
-		receipt   cloneReceipt
-		cloneStmt *tree.CloneTable
+		bh          BackgroundExec
+		deferred    func(error) error
+		receipt     cloneReceipt
+		cloneStmt   *tree.CloneTable
+		tempExecCtx *ExecCtx
 	)
 
 	if bh, deferred, err = getBackExecutor(execCtx.reqCtx, ses); err != nil {
@@ -427,7 +433,28 @@ func dataBranchCreateTable(
 		ToAccountOpt: stmt.ToAccountOpt,
 	}
 
-	if receipt, err = handleCloneTable(execCtx, ses, cloneStmt, bh); err != nil {
+	oldDefault := ses.GetTxnCompileCtx().DefaultDatabase()
+	defer func() {
+		ses.GetTxnCompileCtx().SetDatabase(oldDefault)
+	}()
+
+	//data branch create table xxx from yyy snap_opt to_account_op;
+	re := regexp.MustCompile(`(?i)^DATA\s+BRANCH\s+CREATE\s+TABLE\s+(\S+)\s+FROM\s+(.+?);?$`)
+	srcAndDst := re.FindStringSubmatch(execCtx.input.sql)
+	if srcAndDst == nil {
+		return moerr.NewInternalErrorNoCtxf("cannot find src and dst table: %s", execCtx.input.sql)
+	}
+
+	sql := fmt.Sprintf("CREATE TABLE %s CLONE %s", srcAndDst[1], srcAndDst[2])
+
+	execCtx.reqCtx = context.WithValue(execCtx.reqCtx, tree.CloneLevelCtxKey{}, tree.NormalCloneLevelTable)
+
+	tempExecCtx = &ExecCtx{
+		reqCtx: execCtx.reqCtx,
+		input:  &UserInput{sql: sql},
+	}
+
+	if receipt, err = handleCloneTable(tempExecCtx, ses, cloneStmt, bh); err != nil {
 		return
 	}
 
@@ -742,6 +769,177 @@ func tryFlushDeletesOrReplace(
 	return nil
 }
 
+type sqlValuesAppender struct {
+	ctx        context.Context
+	ses        *Session
+	bh         BackgroundExec
+	tblStuff   tableStuff
+	deleteCnt  *int
+	deleteBuf  *bytes.Buffer
+	replaceCnt *int
+	replaceBuf *bytes.Buffer
+	writeFile  func([]byte) error
+}
+
+func (sva sqlValuesAppender) appendRow(kind string, rowValues []byte) error {
+	var (
+		targetBuf *bytes.Buffer
+		rowCnt    *int
+	)
+
+	if kind == diffDelete {
+		targetBuf = sva.deleteBuf
+		rowCnt = sva.deleteCnt
+	} else {
+		targetBuf = sva.replaceBuf
+		rowCnt = sva.replaceCnt
+	}
+
+	newValsLen := len(rowValues)
+	if targetBuf.Len() > 0 {
+		newValsLen++
+	}
+
+	if err := tryFlushDeletesOrReplace(
+		sva.ctx, sva.ses, sva.bh, sva.tblStuff, kind, newValsLen, 1,
+		sva.deleteCnt, sva.deleteBuf, sva.replaceCnt, sva.replaceBuf, sva.writeFile,
+	); err != nil {
+		return err
+	}
+
+	if targetBuf.Len() > 0 {
+		targetBuf.WriteString(",")
+	}
+	targetBuf.Write(rowValues)
+	*rowCnt++
+	return nil
+}
+
+func (sva sqlValuesAppender) flushAll() error {
+	return tryFlushDeletesOrReplace(
+		sva.ctx, sva.ses, sva.bh, sva.tblStuff, "",
+		0, 0, sva.deleteCnt, sva.deleteBuf, sva.replaceCnt, sva.replaceBuf, sva.writeFile,
+	)
+}
+
+func writeReplaceRowValues(
+	ses *Session,
+	tblStuff tableStuff,
+	row []any,
+	buf *bytes.Buffer,
+) {
+	buf.WriteString("(")
+	for i, idx := range tblStuff.def.visibleIdxes {
+		formatValIntoString(ses, row[idx], tblStuff.def.colTypes[idx], buf)
+		if i != len(tblStuff.def.visibleIdxes)-1 {
+			buf.WriteString(",")
+		}
+	}
+	buf.WriteString(")")
+}
+
+func writeDeleteRowValues(
+	ses *Session,
+	tblStuff tableStuff,
+	row []any,
+	buf *bytes.Buffer,
+) {
+	if len(tblStuff.def.pkColIdxes) > 1 {
+		buf.WriteString("(")
+	}
+	for i, colIdx := range tblStuff.def.pkColIdxes {
+		formatValIntoString(ses, row[colIdx], tblStuff.def.colTypes[colIdx], buf)
+		if i != len(tblStuff.def.pkColIdxes)-1 {
+			buf.WriteString(",")
+		}
+	}
+	if len(tblStuff.def.pkColIdxes) > 1 {
+		buf.WriteString(")")
+	}
+}
+
+func appendBatchRowsAsSQLValues(
+	ctx context.Context,
+	ses *Session,
+	tblStuff tableStuff,
+	wrapped batchWithKind,
+	tmpValsBuffer *bytes.Buffer,
+	appender sqlValuesAppender,
+) (err error) {
+
+	//seenCols := make(map[int]struct{}, len(tblStuff.def.visibleIdxes))
+	row := make([]any, len(tblStuff.def.colNames))
+
+	for rowIdx := range wrapped.batch.RowCount() {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		for _, colIdx := range tblStuff.def.visibleIdxes {
+			//seenCols[colIdx] = struct{}{}
+			vec := wrapped.batch.Vecs[colIdx]
+			if vec.GetNulls().Contains(uint64(rowIdx)) {
+				row[colIdx] = nil
+				continue
+			}
+
+			switch vec.GetType().Oid {
+			case types.T_datetime, types.T_timestamp, types.T_decimal64,
+				types.T_decimal128, types.T_time:
+				bb := vec.GetRawBytesAt(rowIdx)
+				row[colIdx] = types.DecodeValue(bb, vec.GetType().Oid)
+			default:
+				if err = extractRowFromVector(
+					ctx, ses, vec, colIdx, row, rowIdx, false,
+				); err != nil {
+					return
+				}
+			}
+		}
+
+		//for _, pkIdx := range tblStuff.def.pkColIdxes {
+		//	if _, ok := seenCols[pkIdx]; ok {
+		//		continue
+		//	}
+		//	vec := wrapped.batch.Vecs[pkIdx]
+		//	if vec.GetNulls().Contains(uint64(rowIdx)) {
+		//		row[pkIdx] = nil
+		//		continue
+		//	}
+		//
+		//	switch vec.GetType().Oid {
+		//	case types.T_datetime, types.T_timestamp, types.T_decimal64,
+		//		types.T_decimal128, types.T_time:
+		//		bb := vec.GetRawBytesAt(rowIdx)
+		//		row[pkIdx] = types.DecodeValue(bb, vec.GetType().Oid)
+		//	default:
+		//		if err = extractRowFromVector(
+		//			ctx, ses, vec, pkIdx, row, rowIdx, false,
+		//		); err != nil {
+		//			return
+		//		}
+		//	}
+		//}
+
+		tmpValsBuffer.Reset()
+		if wrapped.kind == diffDelete {
+			writeDeleteRowValues(ses, tblStuff, row, tmpValsBuffer)
+		} else {
+			writeReplaceRowValues(ses, tblStuff, row, tmpValsBuffer)
+		}
+
+		if tmpValsBuffer.Len() == 0 {
+			continue
+		}
+
+		if err = appender.appendRow(wrapped.kind, tmpValsBuffer.Bytes()); err != nil {
+			return
+		}
+	}
+
+	return nil
+}
+
 func mergeDiffs(
 	ctx context.Context,
 	cancel context.CancelFunc,
@@ -757,21 +955,32 @@ func mergeDiffs(
 		replaceCnt int
 		deleteCnt  int
 
-		replaceIntoVals = acquireBuffer()
-		deleteFromVals  = acquireBuffer()
+		replaceIntoVals = acquireBuffer(tblStuff.bufPool)
+		deleteFromVals  = acquireBuffer(tblStuff.bufPool)
 		firstErr        error
-		tmpValsBuffer   = acquireBuffer()
+		tmpValsBuffer   = acquireBuffer(tblStuff.bufPool)
 	)
 
 	defer func() {
-		releaseBuffer(replaceIntoVals)
-		releaseBuffer(deleteFromVals)
-		releaseBuffer(tmpValsBuffer)
+		releaseBuffer(tblStuff.bufPool, replaceIntoVals)
+		releaseBuffer(tblStuff.bufPool, deleteFromVals)
+		releaseBuffer(tblStuff.bufPool, tmpValsBuffer)
 	}()
 
 	defer func() {
 		cancel()
 	}()
+
+	appender := sqlValuesAppender{
+		ctx:        ctx,
+		ses:        ses,
+		bh:         bh,
+		tblStuff:   tblStuff,
+		deleteCnt:  &deleteCnt,
+		deleteBuf:  deleteFromVals,
+		replaceCnt: &replaceCnt,
+		replaceBuf: replaceIntoVals,
+	}
 
 	// conflict option should be pushed down to the hash phase,
 	// so the batch we received is conflict-free.
@@ -786,64 +995,19 @@ func mergeDiffs(
 			continue
 		}
 
-		tmpValsBuffer.Reset()
-
-		if err = constructValsFromBatch(
-			ctx, ses, tblStuff, wrapped, tmpValsBuffer, tmpValsBuffer,
+		if err = appendBatchRowsAsSQLValues(
+			ctx, ses, tblStuff, wrapped, tmpValsBuffer, appender,
 		); err != nil {
 			firstErr = err
 			cancel()
 			tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
 			continue
-		}
-
-		if tmpValsBuffer.Len() == 0 {
-			tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
-			continue
-		}
-
-		newRowCnt := wrapped.batch.RowCount()
-		newValsLen := tmpValsBuffer.Len()
-		if wrapped.kind == diffDelete {
-			if deleteFromVals.Len() > 0 {
-				newValsLen++
-			}
-		} else {
-			if replaceIntoVals.Len() > 0 {
-				newValsLen++
-			}
-		}
-		if err = tryFlushDeletesOrReplace(
-			ctx, ses, bh, tblStuff, wrapped.kind, newValsLen, newRowCnt,
-			&deleteCnt, deleteFromVals, &replaceCnt, replaceIntoVals, nil,
-		); err != nil {
-			firstErr = err
-			cancel()
-			tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
-			continue
-		}
-
-		if wrapped.kind == diffDelete {
-			if deleteFromVals.Len() > 0 {
-				deleteFromVals.WriteString(",")
-			}
-			deleteFromVals.Write(tmpValsBuffer.Bytes())
-			deleteCnt += newRowCnt
-		} else {
-			if replaceIntoVals.Len() > 0 {
-				replaceIntoVals.WriteString(",")
-			}
-			replaceIntoVals.Write(tmpValsBuffer.Bytes())
-			replaceCnt += newRowCnt
 		}
 
 		tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
 	}
 
-	if err = tryFlushDeletesOrReplace(
-		ctx, ses, bh, tblStuff, "",
-		0, 0, &deleteCnt, deleteFromVals, &replaceCnt, replaceIntoVals, nil,
-	); err != nil {
+	if err = appender.flushAll(); err != nil {
 		if firstErr == nil {
 			firstErr = err
 		}
@@ -964,9 +1128,9 @@ func satisfyDiffOutputOpt(
 			replaceCnt int
 			deleteCnt  int
 
-			deleteFromValsBuffer  = acquireBuffer()
-			replaceIntoValsBuffer = acquireBuffer()
-			tmpValsBuffer         = acquireBuffer()
+			deleteFromValsBuffer  = acquireBuffer(tblStuff.bufPool)
+			replaceIntoValsBuffer = acquireBuffer(tblStuff.bufPool)
+			tmpValsBuffer         = acquireBuffer(tblStuff.bufPool)
 
 			fileHint     string
 			fullFilePath string
@@ -983,15 +1147,27 @@ func satisfyDiffOutputOpt(
 			if release != nil {
 				release()
 			}
-			releaseBuffer(deleteFromValsBuffer)
-			releaseBuffer(replaceIntoValsBuffer)
-			releaseBuffer(tmpValsBuffer)
+			releaseBuffer(tblStuff.bufPool, deleteFromValsBuffer)
+			releaseBuffer(tblStuff.bufPool, replaceIntoValsBuffer)
+			releaseBuffer(tblStuff.bufPool, tmpValsBuffer)
 		}()
 
 		if fullFilePath, fileHint, writeFile, release, cleanup, err = prepareFSForDiffAsFile(
 			ctx, ses, stmt, tblStuff,
 		); err != nil {
 			return
+		}
+
+		appender := sqlValuesAppender{
+			ctx:        ctx,
+			ses:        ses,
+			bh:         bh,
+			tblStuff:   tblStuff,
+			deleteCnt:  &deleteCnt,
+			deleteBuf:  deleteFromValsBuffer,
+			replaceCnt: &replaceCnt,
+			replaceBuf: replaceIntoValsBuffer,
+			writeFile:  writeFile,
 		}
 		if writeFile != nil {
 			// Make generated SQL runnable in one transaction.
@@ -1013,56 +1189,13 @@ func satisfyDiffOutputOpt(
 			}
 
 			if wrapped.name == tblStuff.tarRel.GetTableName() {
-				tmpValsBuffer.Reset()
-
-				if err = constructValsFromBatch(
-					ctx, ses, tblStuff, wrapped, tmpValsBuffer, tmpValsBuffer,
+				if err = appendBatchRowsAsSQLValues(
+					ctx, ses, tblStuff, wrapped, tmpValsBuffer, appender,
 				); err != nil {
 					first = err
 					cancel()
 					tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
 					continue
-				}
-
-				if tmpValsBuffer.Len() == 0 {
-					tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
-					continue
-				}
-
-				newRowCnt := wrapped.batch.RowCount()
-				newValsLen := tmpValsBuffer.Len()
-				if wrapped.kind == diffDelete {
-					if deleteFromValsBuffer.Len() > 0 {
-						newValsLen++
-					}
-				} else {
-					if replaceIntoValsBuffer.Len() > 0 {
-						newValsLen++
-					}
-				}
-				if err = tryFlushDeletesOrReplace(
-					ctx, ses, bh, tblStuff, wrapped.kind, newValsLen, newRowCnt,
-					&deleteCnt, deleteFromValsBuffer, &replaceCnt, replaceIntoValsBuffer,
-					writeFile,
-				); err != nil {
-					first = err
-					cancel()
-					tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
-					continue
-				}
-
-				if wrapped.kind == diffDelete {
-					if deleteFromValsBuffer.Len() > 0 {
-						deleteFromValsBuffer.WriteString(",")
-					}
-					deleteFromValsBuffer.Write(tmpValsBuffer.Bytes())
-					deleteCnt += newRowCnt
-				} else {
-					if replaceIntoValsBuffer.Len() > 0 {
-						replaceIntoValsBuffer.WriteString(",")
-					}
-					replaceIntoValsBuffer.Write(tmpValsBuffer.Bytes())
-					replaceCnt += newRowCnt
 				}
 			}
 
@@ -1073,11 +1206,7 @@ func satisfyDiffOutputOpt(
 			return first
 		}
 
-		if err = tryFlushDeletesOrReplace(
-			ctx, ses, bh, tblStuff, "",
-			0, 0, &deleteCnt, deleteFromValsBuffer, &replaceCnt, replaceIntoValsBuffer,
-			writeFile,
-		); err != nil {
+		if err = appender.flushAll(); err != nil {
 			first = err
 			cancel()
 		}
@@ -1442,8 +1571,8 @@ func flushSqlValues(
 	writeFile func([]byte) error,
 ) (err error) {
 
-	sqlBuffer := acquireBuffer()
-	defer releaseBuffer(sqlBuffer)
+	sqlBuffer := acquireBuffer(tblStuff.bufPool)
+	defer releaseBuffer(tblStuff.bufPool, sqlBuffer)
 
 	initReplaceIntoBuf := func() {
 		sqlBuffer.WriteString(fmt.Sprintf(
@@ -2025,6 +2154,11 @@ func getTableStuff(
 	}
 
 	tblStuff.retPool = &retBatchList{}
+	tblStuff.bufPool = &sync.Pool{
+		New: func() any {
+			return &bytes.Buffer{}
+		},
+	}
 
 	return
 
@@ -2395,7 +2529,7 @@ func hashDiffIfHasLCA(
 							return
 						}
 
-						buf := acquireBuffer()
+						buf := acquireBuffer(tblStuff.bufPool)
 						formatValIntoString(ses, tarRow[0], tblStuff.def.colTypes[tblStuff.def.pkColIdx], buf)
 
 						err3 = moerr.NewInternalErrorNoCtxf(
@@ -2403,7 +2537,7 @@ func hashDiffIfHasLCA(
 							tarWrapped.name, tarWrapped.kind,
 							baseWrapped.name, baseWrapped.kind, buf.String(),
 						)
-						releaseBuffer(buf)
+						releaseBuffer(tblStuff.bufPool, buf)
 						return
 					}
 				} else if cmp < 0 {
@@ -2823,7 +2957,7 @@ func checkConflictAndAppendToBat(
 	if copt.conflictOpt != nil {
 		switch copt.conflictOpt.Opt {
 		case tree.CONFLICT_FAIL:
-			buf := acquireBuffer()
+			buf := acquireBuffer(tblStuff.bufPool)
 			for i, idx := range tblStuff.def.pkColIdxes {
 				formatValIntoString(ses, tarTuple[idx], tblStuff.def.colTypes[idx], buf)
 				if i < len(tblStuff.def.pkColIdxes)-1 {
@@ -2832,7 +2966,7 @@ func checkConflictAndAppendToBat(
 			}
 
 			msg := buf.String()
-			releaseBuffer(buf)
+			releaseBuffer(tblStuff.bufPool, buf)
 			return moerr.NewInternalErrorNoCtxf(
 				"conflict: %s %s and %s %s on pk(%v) with different values",
 				tblStuff.tarRel.GetTableName(), diffInsert,
@@ -3100,8 +3234,8 @@ func handleDelsOnLCA(
 		sqlRet executor.Result
 		mots   = fmt.Sprintf("{MO_TS=%d} ", snapshot.PhysicalTime)
 
-		sqlBuf  = acquireBuffer()
-		valsBuf = acquireBuffer()
+		sqlBuf  = acquireBuffer(tblStuff.bufPool)
+		valsBuf = acquireBuffer(tblStuff.bufPool)
 
 		lcaTblDef  = tblStuff.lcaRel.GetTableDef(ctx)
 		baseTblDef = tblStuff.baseRel.GetTableDef(ctx)
@@ -3111,8 +3245,8 @@ func handleDelsOnLCA(
 	)
 
 	defer func() {
-		releaseBuffer(sqlBuf)
-		releaseBuffer(valsBuf)
+		releaseBuffer(tblStuff.bufPool, sqlBuf)
+		releaseBuffer(tblStuff.bufPool, valsBuf)
 	}()
 
 	pkNames := lcaTblDef.Pkey.Names
@@ -3980,9 +4114,8 @@ func getTablesCreationCommitTS(
 		return
 	}
 
-	buf := acquireBuffer()
+	buf := &bytes.Buffer{}
 	defer func() {
-		releaseBuffer(buf)
 		sqlRet.Close()
 	}()
 
