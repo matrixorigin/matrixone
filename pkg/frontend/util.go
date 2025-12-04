@@ -1496,6 +1496,13 @@ func colDef2MysqlColumn(ctx context.Context, col *plan.ColDef) (*MysqlColumn, er
 	}
 
 	c.SetDecimal(col.Typ.Scale)
+
+	// For TIMESTAMPADD function compatibility with MySQL:
+	// GetResultColumnsFromPlan sets the return type based on input type and unit:
+	// - DATE input + date unit → DATE type (MYSQL_TYPE_DATE)
+	// - DATE input + time unit → DATETIME type (MYSQL_TYPE_DATETIME)
+	// - DATETIME input → DATETIME type (MYSQL_TYPE_DATETIME)
+
 	convertMysqlTextTypeToBlobType(c)
 	return c, nil
 }

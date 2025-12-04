@@ -1,4 +1,3 @@
-set experimental_fulltext_index=1;
 drop account if exists acc01;
 create account acc01 admin_name = 'test_account' identified by '111';
 drop database if exists sp_test;
@@ -45,7 +44,7 @@ insert into aff01 values (7499,'ALLEN','SALESMAN',7698,'1981-02-20',1600,300,30)
 create snapshot spsp01 for database sp_test;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-spsp01    2025-07-19 05:52:25.870071    database    sys    sp_test    
+spsp01    2025-07-19 05:52:25.870071    database    sys    sp_test
 drop database sp_test;
 restore database sp_test{snapshot="spsp01"};
 show databases;
@@ -94,9 +93,9 @@ empno    ename    job    mgr    hiredate    sal    comm    deptno
 7499    ALLEN    SALESMAN    7698    1981-02-20    1600.00    300.00    30
 desc test_sp01;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    YES        null        
-col2    DECIMAL(6,0)    YES        null        
-col3    VARCHAR(30)    YES        null        
+col1    INT(32)    YES        null
+col2    DECIMAL(6,0)    YES        null
+col3    VARCHAR(30)    YES        null
 desc aff01;
 Field    Type    Null    Key    Default    Extra    Comment
 empno    INT UNSIGNED(32)    NO    PRI    null    auto_increment    雇员编号
@@ -148,7 +147,7 @@ create snapshot spsp02 for database sp_test01;
 
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-spsp02    2025-07-17 19:15:34.177971    database    sys    sp_test01          
+spsp02    2025-07-17 19:15:34.177971    database    sys    sp_test01
 delete from partition01 where birth_date = '1980-12-17';
 
 select * from partition01;
@@ -180,10 +179,10 @@ drop snapshot if exists `SELECT`;
 create snapshot `SELECT` for database sp_test02;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-select    2025-07-19 05:52:26.022949    database    sys    sp_test02    
+select    2025-07-19 05:52:26.022949    database    sys    sp_test02
 select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots;
 sname    level    account_name    database_name    table_name
-select    database    sys    sp_test02    
+select    database    sys    sp_test02
 drop snapshot `SELECT`;
 drop database sp_test02;
 drop database if exists sp_test03;
@@ -194,10 +193,10 @@ drop snapshot if exists AUTO_INCREMENT;
 create snapshot AUTO_INCREMENT for database sp_test03;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-auto_increment    2025-07-19 05:52:26.069177    database    sys    sp_test03    
+auto_increment    2025-07-19 05:52:26.069177    database    sys    sp_test03
 select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots;
 sname    level    account_name    database_name    table_name
-auto_increment    database    sys    sp_test03    
+auto_increment    database    sys    sp_test03
 drop snapshot AUTO_INCREMENT;
 drop database sp_test03;
 drop database if exists sp_Test03;
@@ -251,10 +250,10 @@ create snapshot spsp03 for table db02 table01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
 spsp03    2025-07-19 05:52:26.26781    table    sys    db02    table01
-spsp02    2025-07-19 05:52:26.260618    database    sys    db02    
+spsp02    2025-07-19 05:52:26.260618    database    sys    db02
 select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots where level = 'database';
 sname    level    account_name    database_name    table_name
-spsp02    database    sys    db02    
+spsp02    database    sys    db02
 select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots where level = 'table';
 sname    level    account_name    database_name    table_name
 spsp03    table    sys    db02    table01
@@ -361,15 +360,15 @@ col1    col2    col3    col4
 2    37829901k3d    2    2
 desc aff01;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    YES    MUL    null        
-col2    INT(32)    YES        null        
-col3    INT(32)    NO    PRI    null        
+col1    INT(32)    YES    MUL    null
+col2    INT(32)    YES        null
+col3    INT(32)    NO    PRI    null
 desc pri01;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    NO    PRI    null        
-col2    VARCHAR(20)    YES        null        
-col3    INT(32)    YES        null        
-col4    BIGINT(64)    YES        null        
+col1    INT(32)    NO    PRI    null
+col2    VARCHAR(20)    YES        null
+col3    INT(32)    YES        null
+col4    BIGINT(64)    YES        null
 drop database db06;
 drop snapshot spsp06;
 drop database if exists db07;

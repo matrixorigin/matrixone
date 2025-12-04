@@ -85,7 +85,7 @@ func (back *backExec) GetExecStatsArray() statistic.StatsArray {
 
 var restoreSqlRegx = regexp.MustCompile("MO_TS.*=")
 
-func (back *backExec) Exec(ctx context.Context, sql string) error {
+func (back *backExec) Exec(ctx context.Context, sql string) (retErr error) {
 	back.backSes.EnterFPrint(FPBackExecExec)
 	defer back.backSes.ExitFPrint(FPBackExecExec)
 	if ctx == nil {
@@ -120,6 +120,26 @@ func (back *backExec) Exec(ctx context.Context, sql string) error {
 	if len(statements) > 1 {
 		return moerr.NewInternalErrorf(ctx, "Exec() can run one statement at one time. but get '%d' statements now, sql = %s", len(statements), sql)
 	}
+	// uncomment this to enable backExec export data to CSV file.
+	//
+	//if st, ok := statements[0].(*tree.Select); ok && st != nil && st.Ep != nil {
+	//	back.backSes.ep = &ExportConfig{
+	//		userConfig: st.Ep,
+	//		service:    back.Service(),
+	//	}
+	//
+	//	back.backSes.ep.init()
+	//	back.backSes.ep.DefaultBufSize = getPu(back.backSes.GetService()).SV.ExportDataDefaultFlushSize
+	//	initExportFileParam(back.backSes.ep, back.backSes.mrs)
+	//	if err = openNewFile(ctx, back.backSes.ep, back.backSes.mrs); err != nil {
+	//		return err
+	//	}
+	//
+	//	defer func() {
+	//		retErr = errors.Join(retErr, Close(back.backSes.ep))
+	//	}()
+	//}
+
 	//share txn can not run transaction statement
 	if back.backSes.GetTxnHandler().IsShareTxn() {
 		for _, stmt := range statements {
@@ -598,7 +618,36 @@ var NewBackgroundExec = func(
 	// We do not compute and pass in txnOp, but when InitBackExec sees nil, it will pass to its upsteam.
 	// txnOp = upstream.GetTxnHandler().GetTxn()
 	//
-	return upstream.InitBackExec(txnOp, "", fakeDataSetFetcher2, opts...)
+	return upstream.InitBackExec(txnOp, "", backSesOutputCallback, opts...)
+}
+
+func backSesOutputCallback(handle FeSession, execCtx *ExecCtx, dataSet *batch.Batch, _ *perfcounter.CounterSet) error {
+	if handle == nil || dataSet == nil {
+		return nil
+	}
+
+	// uncomment this to enable backExec export data to CSV file.
+	//back := handle.(*backSession)
+	//if back.ep != nil {
+	//	back.ep.Index.Add(1)
+	//	copied, err := dataSet.Dup(execCtx.ses.GetMemPool())
+	//	if err != nil {
+	//		return err
+	//	}
+	//
+	//	constructByte(execCtx.reqCtx, execCtx.ses, copied, back.ep.Index.Load(), back.ep.ByteChan, back.ep)
+	//
+	//	if err = exportDataFromBatchToCSVFile(back.ep); err != nil {
+	//		execCtx.ses.Error(execCtx.reqCtx,
+	//			"Error occurred while exporting to CSV file",
+	//			zap.Error(err))
+	//		return err
+	//	}
+	//
+	//	return nil
+	//}
+
+	return fakeDataSetFetcher2(handle, execCtx, dataSet, nil)
 }
 
 var NewShareTxnBackgroundExec = func(ctx context.Context, ses FeSession, rawBatch bool) BackgroundExec {
@@ -689,6 +738,9 @@ func fakeDataSetFetcher2(handle FeSession, execCtx *ExecCtx, dataSet *batch.Batc
 	if err != nil {
 		return err
 	}
+	if err = back.AppendResultBatch(dataSet); err != nil {
+		return err
+	}
 	back.SetMysqlResultSetOfBackgroundTask(back.mrs)
 	return nil
 }
@@ -750,6 +802,7 @@ func getResultSet(ctx context.Context, bh BackgroundExec) ([]ExecResult, error) 
 
 type backSession struct {
 	feSessionImpl
+	//ep *ExportConfig
 }
 
 func newBackSession(ses FeSession, txnOp TxnOperator, db string, callBack outputCallBackFunc) *backSession {
@@ -1001,7 +1054,7 @@ func (backSes *backSession) GetShareTxnBackgroundExec(ctx context.Context, newRa
 		txnOp = backSes.GetTxnHandler().GetTxn()
 	}
 
-	be := backSes.InitBackExec(txnOp, "", fakeDataSetFetcher2)
+	be := backSes.InitBackExec(txnOp, "", backSesOutputCallback)
 	//the derived statement execute in a shared transaction in background session
 	be.(*backExec).backSes.ReplaceDerivedStmt(true)
 	return be

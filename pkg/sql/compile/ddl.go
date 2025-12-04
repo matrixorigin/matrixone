@@ -2101,12 +2101,6 @@ func (s *Scope) handleVectorIvfFlatIndex(
 	indexInfo *plan.CreateTable,
 	forceSync bool,
 ) error {
-	if ok, err := s.isExperimentalEnabled(c, ivfFlatIndexFlag); err != nil {
-		return err
-	} else if !ok {
-		return moerr.NewInternalErrorNoCtx("IVF index is not enabled")
-	}
-
 	// 1. static check
 	if len(indexDefs) != 3 {
 		return moerr.NewInternalErrorNoCtx("invalid ivf index table definition")

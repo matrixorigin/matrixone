@@ -1,9 +1,4 @@
 -- create table error
-SET experimental_ivf_index = 0;
-create table vector_index_00(a int primary key, b vecf32(128),c int,key c_k(c), KEY idx using ivfflat(b) lists = 256 op_type 'vector_l2_ops');
-
-
-SET experimental_ivf_index = 1;
 SET probe_limit=10;
 
 -- Create ivf1_async
@@ -94,6 +89,3 @@ select *, L2_DISTANCE(c, "[2,2,3]") from ivf4 order by L2_DISTANCE(c, "[2,2,3]")
 drop table ivf1_async;
 drop table ivf3;
 drop table ivf4;
-
-
-

@@ -1,0 +1,273 @@
+SELECT TIMESTAMPDIFF(DAY, '2024-12-20', TIMESTAMPADD(DAY, 5, '2024-12-20')) AS should_be_5;
+should_be_5
+5
+SELECT TIMESTAMPDIFF(HOUR, '2024-12-20 10:00:00', TIMESTAMPADD(HOUR, 3, '2024-12-20 10:00:00')) AS should_be_3;
+should_be_3
+3
+SELECT TIMESTAMPDIFF(MINUTE, '2024-12-20 10:30:00', TIMESTAMPADD(MINUTE, 15, '2024-12-20 10:30:00')) AS should_be_15;
+should_be_15
+15
+SELECT TIMESTAMPDIFF(SECOND, '2024-12-20 10:30:45', TIMESTAMPADD(SECOND, 30, '2024-12-20 10:30:45')) AS should_be_30;
+should_be_30
+30
+SELECT TIMESTAMPDIFF(MICROSECOND, '2024-12-20 10:30:45.000000', TIMESTAMPADD(MICROSECOND, 123456, '2024-12-20 10:30:45.000000')) AS should_be_123456;
+should_be_123456
+123456
+SELECT TIMESTAMPDIFF(WEEK, '2024-12-20', TIMESTAMPADD(WEEK, 2, '2024-12-20')) AS should_be_2;
+should_be_2
+2
+SELECT TIMESTAMPDIFF(MONTH, '2024-01-01', TIMESTAMPADD(MONTH, 3, '2024-01-01')) AS should_be_3;
+should_be_3
+3
+SELECT TIMESTAMPDIFF(QUARTER, '2024-01-01', TIMESTAMPADD(QUARTER, 1, '2024-01-01')) AS should_be_1;
+should_be_1
+1
+SELECT TIMESTAMPDIFF(YEAR, '2024-01-01', TIMESTAMPADD(YEAR, 2, '2024-01-01')) AS should_be_2;
+should_be_2
+2
+SELECT TIMESTAMPDIFF(DAY, '2024-12-25', TIMESTAMPADD(DAY, -5, '2024-12-25')) AS should_be_neg_5;
+should_be_neg_5
+-5
+SELECT TIMESTAMPDIFF(HOUR, '2024-12-20 15:00:00', TIMESTAMPADD(HOUR, -3, '2024-12-20 15:00:00')) AS should_be_neg_3;
+should_be_neg_3
+-3
+SELECT TIMESTAMPDIFF(DAY,
+TIMESTAMPADD(MONTH, 1, '2024-01-01'),
+TIMESTAMPADD(YEAR, 1, '2024-01-01')
+) AS complex_diff;
+complex_diff
+335
+SELECT TIMESTAMPDIFF(HOUR,
+TIMESTAMPADD(DAY, 5, '2024-12-20 10:00:00'),
+TIMESTAMPADD(DAY, 10, '2024-12-20 10:00:00')
+) AS complex_diff_hours;
+complex_diff_hours
+120
+SELECT TIMESTAMPDIFF(MONTH,
+TIMESTAMPADD(QUARTER, 1, '2024-01-01'),
+TIMESTAMPADD(YEAR, 1, '2024-01-01')
+) AS complex_diff_months;
+complex_diff_months
+9
+SELECT TIMESTAMPDIFF(DAY,
+TIMESTAMPADD(DAY, 5, TIMESTAMPADD(MONTH, 1, '2024-01-01')),
+TIMESTAMPADD(DAY, 10, TIMESTAMPADD(YEAR, 1, '2024-01-01'))
+) AS nested_complex_diff;
+nested_complex_diff
+340
+SELECT TIMESTAMPADD(DAY, 5, '2024-12-20') AS timestampadd_result,
+DATE_ADD('2024-12-20', INTERVAL 5 DAY) AS dateadd_result;
+timestampadd_result    dateadd_result
+2024-12-25    2024-12-25
+SELECT TIMESTAMPADD(MONTH, 3, '2024-01-01') AS timestampadd_month,
+DATE_ADD('2024-01-01', INTERVAL 3 MONTH) AS dateadd_month;
+timestampadd_month    dateadd_month
+2024-04-01    2024-04-01
+SELECT TIMESTAMPADD(YEAR, 1, '2024-01-01') AS timestampadd_year,
+DATE_ADD('2024-01-01', INTERVAL 1 YEAR) AS dateadd_year;
+timestampadd_year    dateadd_year
+2025-01-01    2025-01-01
+SELECT TIMESTAMPDIFF(DAY, '2024-01-01', '2024-12-31') AS timestampdiff_result,
+DATEDIFF('2024-12-31', '2024-01-01') AS datediff_result;
+timestampdiff_result    datediff_result
+365    365
+SELECT TIMESTAMPDIFF(DAY, '2024-12-20', '2024-12-25') AS timestampdiff_days,
+DATEDIFF('2024-12-25', '2024-12-20') AS datediff_days;
+timestampdiff_days    datediff_days
+5    5
+SELECT TIMESTAMPDIFF(HOUR, '2024-12-20 10:00:00', '2024-12-20 15:00:00') AS timestampdiff_hour,
+TIMEDIFF('2024-12-20 15:00:00', '2024-12-20 10:00:00') AS timediff_result;
+timestampdiff_hour    timediff_result
+5    05:00:00
+SELECT TIMESTAMPDIFF(MINUTE, '2024-12-20 10:00:00', '2024-12-20 10:30:00') AS timestampdiff_minute,
+TIMEDIFF('2024-12-20 10:30:00', '2024-12-20 10:00:00') AS timediff_minute;
+timestampdiff_minute    timediff_minute
+30    00:30:00
+SELECT TIMESTAMPDIFF(DAY,
+TIMESTAMPADD(DAY, -5, TIMESTAMPADD(DAY, 5, '2024-12-20')),
+'2024-12-20'
+) AS round_trip_day;
+round_trip_day
+0
+SELECT TIMESTAMPDIFF(HOUR,
+TIMESTAMPADD(HOUR, -3, TIMESTAMPADD(HOUR, 3, '2024-12-20 10:00:00')),
+'2024-12-20 10:00:00'
+) AS round_trip_hour;
+round_trip_hour
+0
+SELECT TIMESTAMPDIFF(MONTH,
+TIMESTAMPADD(MONTH, -2, TIMESTAMPADD(MONTH, 2, '2024-01-01')),
+'2024-01-01'
+) AS round_trip_month;
+round_trip_month
+0
+SELECT TIMESTAMPDIFF(DAY,
+'2024-01-01',
+TIMESTAMPADD(DAY, 5, TIMESTAMPADD(MONTH, 1, TIMESTAMPADD(YEAR, 1, '2024-01-01')))
+) AS chain_operations;
+chain_operations
+402
+SELECT TIMESTAMPADD(DAY,
+TIMESTAMPDIFF(DAY, '2024-01-01', '2024-06-01'),
+'2024-01-01'
+) AS chain_diff_add;
+chain_diff_add
+2024-06-01
+CREATE TABLE t1(id INT, start_date DATE, interval_val INT, unit VARCHAR(20));
+INSERT INTO t1 VALUES
+(1, '2024-01-01', 5, 'DAY'),
+(2, '2024-01-01', 3, 'MONTH'),
+(3, '2024-01-01', 1, 'YEAR'),
+(4, '2024-12-20', 10, 'DAY'),
+(5, '2024-06-15', 2, 'QUARTER');
+SELECT id, start_date, interval_val, unit,
+CASE unit
+WHEN 'DAY' THEN TIMESTAMPADD(DAY, interval_val, start_date)
+WHEN 'MONTH' THEN TIMESTAMPADD(MONTH, interval_val, start_date)
+WHEN 'YEAR' THEN TIMESTAMPADD(YEAR, interval_val, start_date)
+WHEN 'QUARTER' THEN TIMESTAMPADD(QUARTER, interval_val, start_date)
+END AS end_date,
+CASE unit
+WHEN 'DAY' THEN TIMESTAMPDIFF(DAY, start_date, TIMESTAMPADD(DAY, interval_val, start_date))
+WHEN 'MONTH' THEN TIMESTAMPDIFF(MONTH, start_date, TIMESTAMPADD(MONTH, interval_val, start_date))
+WHEN 'YEAR' THEN TIMESTAMPDIFF(YEAR, start_date, TIMESTAMPADD(YEAR, interval_val, start_date))
+WHEN 'QUARTER' THEN TIMESTAMPDIFF(QUARTER, start_date, TIMESTAMPADD(QUARTER, interval_val, start_date))
+END AS diff_should_equal_interval
+FROM t1
+ORDER BY id;
+id    start_date    interval_val    unit    end_date    diff_should_equal_interval
+1    2024-01-01    5    DAY    2024-01-06    5
+2    2024-01-01    3    MONTH    2024-04-01    3
+3    2024-01-01    1    YEAR    2025-01-01    1
+4    2024-12-20    10    DAY    2024-12-30    10
+5    2024-06-15    2    QUARTER    2024-12-15    2
+DROP TABLE t1;
+SELECT * FROM (
+SELECT TIMESTAMPADD(DAY, 5, '2024-12-20') AS future_date
+) AS subquery;
+future_date
+2024-12-25
+SELECT TIMESTAMPDIFF(DAY, '2024-12-20',
+(SELECT TIMESTAMPADD(DAY, 5, '2024-12-20'))
+) AS subquery_diff;
+subquery_diff
+5
+SELECT TIMESTAMPDIFF(DAY,
+(SELECT TIMESTAMPADD(DAY, 5, '2024-01-01')),
+(SELECT TIMESTAMPADD(DAY, 10, '2024-01-01'))
+) AS nested_subquery_diff;
+nested_subquery_diff
+5
+CREATE TABLE t1(id INT, start_date DATE);
+CREATE TABLE t2(id INT, interval_val INT);
+INSERT INTO t1 VALUES (1, '2024-01-01'), (2, '2024-06-01');
+INSERT INTO t2 VALUES (1, 5), (2, 10);
+SELECT t1.start_date, t2.interval_val,
+TIMESTAMPADD(DAY, t2.interval_val, t1.start_date) AS end_date,
+TIMESTAMPDIFF(DAY, t1.start_date, TIMESTAMPADD(DAY, t2.interval_val, t1.start_date)) AS day_diff
+FROM t1 JOIN t2 ON t1.id = t2.id;
+start_date    interval_val    end_date    day_diff
+2024-01-01    5    2024-01-06    5
+2024-06-01    10    2024-06-11    10
+DROP TABLE t1;
+DROP TABLE t2;
+CREATE TABLE t1(category VARCHAR(10), start_date DATE, interval_val INT);
+INSERT INTO t1 VALUES
+('A', '2024-01-01', 5),
+('A', '2024-01-15', 10),
+('B', '2024-06-01', 3),
+('B', '2024-06-15', 7);
+SELECT category,
+AVG(TIMESTAMPDIFF(DAY, start_date, TIMESTAMPADD(DAY, interval_val, start_date))) AS avg_diff
+FROM t1
+GROUP BY category;
+category    avg_diff
+A    7.5000
+B    5.0000
+SELECT category,
+MAX(TIMESTAMPADD(DAY, interval_val, start_date)) AS max_end_date,
+MIN(TIMESTAMPADD(DAY, interval_val, start_date)) AS min_end_date,
+TIMESTAMPDIFF(DAY,
+MIN(TIMESTAMPADD(DAY, interval_val, start_date)),
+MAX(TIMESTAMPADD(DAY, interval_val, start_date))
+) AS range_diff
+FROM t1
+GROUP BY category;
+category    max_end_date    min_end_date    range_diff
+A    2024-01-25    2024-01-06    19
+B    2024-06-22    2024-06-04    18
+DROP TABLE t1;
+CREATE TABLE t1(id INT, start_date DATE, interval_val INT);
+INSERT INTO t1 VALUES
+(1, '2024-01-01', 5),
+(2, '2024-01-01', 10),
+(3, '2024-01-01', 3);
+SELECT id, start_date, interval_val,
+TIMESTAMPADD(DAY, interval_val, start_date) AS end_date
+FROM t1
+ORDER BY TIMESTAMPADD(DAY, interval_val, start_date);
+id    start_date    interval_val    end_date
+3    2024-01-01    3    2024-01-04
+1    2024-01-01    5    2024-01-06
+2    2024-01-01    10    2024-01-11
+SELECT id, start_date, interval_val,
+TIMESTAMPDIFF(DAY, '2024-01-01', TIMESTAMPADD(DAY, interval_val, start_date)) AS d_diff
+FROM t1
+ORDER BY TIMESTAMPDIFF(DAY, '2024-01-01', TIMESTAMPADD(DAY, interval_val, start_date));
+id    start_date    interval_val    d_diff
+3    2024-01-01    3    3
+1    2024-01-01    5    5
+2    2024-01-01    10    10
+DROP TABLE t1;
+CREATE TABLE t1(id INT, start_date DATE, interval_val INT);
+INSERT INTO t1 VALUES
+(1, '2024-01-01', 5),
+(2, '2024-01-01', 10),
+(3, '2024-01-01', 15),
+(4, '2024-01-01', 20);
+SELECT id, start_date, interval_val,
+TIMESTAMPADD(DAY, interval_val, start_date) AS end_date
+FROM t1
+WHERE TIMESTAMPADD(DAY, interval_val, start_date) > '2024-01-10';
+id    start_date    interval_val    end_date
+2    2024-01-01    10    2024-01-11
+3    2024-01-01    15    2024-01-16
+4    2024-01-01    20    2024-01-21
+SELECT id, start_date, interval_val,
+TIMESTAMPDIFF(DAY, start_date, TIMESTAMPADD(DAY, interval_val, start_date)) AS t_diff
+FROM t1
+WHERE TIMESTAMPDIFF(DAY, start_date, TIMESTAMPADD(DAY, interval_val, start_date)) > 10;
+id    start_date    interval_val    t_diff
+3    2024-01-01    15    15
+4    2024-01-01    20    20
+DROP TABLE t1;
+SELECT TIMESTAMPDIFF(DAY, '2024-12-20', TIMESTAMPADD(DAY, 0, '2024-12-20')) AS zero_interval;
+zero_interval
+0
+SELECT TIMESTAMPDIFF(DAY, '2024-01-01', TIMESTAMPADD(YEAR, 10, '2024-01-01')) AS large_interval;
+large_interval
+3653
+SELECT TIMESTAMPDIFF(DAY, '2024-12-25', TIMESTAMPADD(DAY, -5, '2024-12-25')) AS negative_interval;
+negative_interval
+-5
+SELECT TIMESTAMPDIFF(DAY, '2020-02-28', TIMESTAMPADD(DAY, 1, '2020-02-28')) AS leap_year_add;
+leap_year_add
+1
+SELECT TIMESTAMPDIFF(DAY, '2020-02-29', TIMESTAMPADD(YEAR, 1, '2020-02-29')) AS leap_year_year_add;
+leap_year_year_add
+365
+SELECT TIMESTAMPDIFF(DAY, DATE('2024-12-20'), TIMESTAMPADD(DAY, 5, DATE('2024-12-20'))) AS date_type;
+date_type
+5
+SELECT TIMESTAMPDIFF(HOUR, '2024-12-20 10:00:00', TIMESTAMPADD(HOUR, 3, '2024-12-20 10:00:00')) AS datetime_type;
+datetime_type
+3
+SELECT TIMESTAMPDIFF(DAY, TIMESTAMP('2024-12-20 10:00:00'), TIMESTAMPADD(DAY, 5, TIMESTAMP('2024-12-20 10:00:00'))) AS timestamp_type;
+timestamp_type
+5
+SELECT TIMESTAMPDIFF(DAY, '2024-12-20', TIMESTAMPADD(DAY, 5, '2024-12-20')) AS string_type;
+string_type
+5
+SELECT TIMESTAMPDIFF(DAY, '2024-12-20T10:30:45', TIMESTAMPADD(DAY, 5, '2024-12-20T10:30:45')) AS iso_format;
+iso_format
+5

@@ -1,4 +1,3 @@
-SET experimental_ivf_index = 1;
 DROP TABLE IF EXISTS `ca_specify_answer_dataset`;
 CREATE TABLE `ca_specify_answer_dataset` (
 `id` bigint NOT NULL AUTO_INCREMENT,
@@ -61,7 +60,7 @@ status = 1
 ORDER BY
 distance ASC
 LIMIT 10;
-id    question    output_result    distance
+
 SELECT
 id,
 question,

@@ -398,25 +398,25 @@ func MakeSnapshotAndPitrFineFilter(
 
 			if transObjects[name] != nil {
 				tables := transObjects[name]
-				if entry := tables[tableID]; entry != nil {
+				if objectEntry := tables[tableID]; objectEntry != nil {
 					// Check if the table still exists using the combined map
 					ok := tableExistenceMap[tableID]
 					// The table has not been dropped, and the dropTS is empty, so it cannot be deleted.
-					if entry.dropTS.IsEmpty() && ok {
+					if objectEntry.dropTS.IsEmpty() && ok {
 						continue
 					}
 
 					if !logtail.ObjectIsSnapshotRefers(
-						entry.stats, pitr, &entry.createTS, &entry.dropTS, sp,
+						objectEntry.stats, pitr, &objectEntry.createTS, &objectEntry.dropTS, sp,
 					) {
 						if iscpTables == nil {
 							bm.Add(uint64(i))
 							continue
 						}
-						if iscpTS, ok := iscpTables[entry.table]; ok {
-							if entry.stats.GetCNCreated() || entry.stats.GetAppendable() {
-								if (!entry.dropTS.IsEmpty() && entry.dropTS.LT(&iscpTS)) ||
-									entry.createTS.GT(&iscpTS) {
+						if iscpTS, ok := iscpTables[objectEntry.table]; ok {
+							if objectEntry.stats.GetCNCreated() || objectEntry.stats.GetAppendable() {
+								if (!objectEntry.dropTS.IsEmpty() && objectEntry.dropTS.GT(&iscpTS)) ||
+									objectEntry.createTS.GT(&iscpTS) {
 									continue
 								}
 							}
@@ -444,7 +444,7 @@ func MakeSnapshotAndPitrFineFilter(
 				}
 				if iscpTS, ok := iscpTables[tableID]; ok {
 					if stats.GetCNCreated() || stats.GetAppendable() {
-						if (!deleteTS.IsEmpty() && deleteTS.LT(&iscpTS)) ||
+						if (!deleteTS.IsEmpty() && deleteTS.GT(&iscpTS)) ||
 							createTS.GT(&iscpTS) {
 							continue
 						}

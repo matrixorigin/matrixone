@@ -3523,30 +3523,53 @@ func doCreateStage(ctx context.Context, ses *Session, cs *tree.CreateStage) (err
 	return err
 }
 
+func tryDecodeStagePath(
+	ses *Session,
+	filePath string,
+) (retPath string, ok bool, err error) {
+
+	var (
+		s stage.StageDef
+	)
+
+	if strings.HasPrefix(filePath, stage.STAGE_PROTOCOL+"://") {
+		// stage:// URL
+		if s, err = stageutil.UrlToStageDef(filePath, ses.proc); err != nil {
+			return
+		}
+
+		// s.ToPath() returns the fileservice filepath, i.e. s3,...:/path for S3 or /path for local file
+		if retPath, _, err = s.ToPath(); err != nil {
+			return
+		}
+
+		ok = true
+	}
+
+	return
+}
+
 func doCheckFilePath(ctx context.Context, ses *Session, ep *tree.ExportParam) (err error) {
-	//var err error
-	var filePath string
 	if ep == nil {
 		return err
 	}
 
 	// detect filepath contain stage or not
-	filePath = ep.FilePath
-	if strings.HasPrefix(filePath, stage.STAGE_PROTOCOL+"://") {
-		// stage:// URL
-		s, err := stageutil.UrlToStageDef(filePath, ses.proc)
-		if err != nil {
-			return err
-		}
+	//var err error
+	var (
+		ok       bool
+		filePath string
+	)
 
-		// s.ToPath() returns the fileservice filepath, i.e. s3,...:/path for S3 or /path for local file
-		ses.ep.userConfig.StageFilePath, _, err = s.ToPath()
-		if err != nil {
-			return err
-		}
+	if filePath, ok, err = tryDecodeStagePath(ses, ep.FilePath); err != nil {
+		return
 	}
-	return err
 
+	if ok {
+		ses.ep.userConfig.StageFilePath = filePath
+	}
+
+	return
 }
 
 func doAlterStage(ctx context.Context, ses *Session, as *tree.AlterStage) (err error) {

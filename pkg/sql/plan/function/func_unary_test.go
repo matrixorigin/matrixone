@@ -29,6 +29,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
@@ -3376,6 +3377,358 @@ func TestOctInt64(t *testing.T) {
 	}
 	//TODO: I am excluding scalar testcase, as per our last discussion on WeCom: https://github.com/m-schen/matrixone/blob/0a48ec5488caff6fd918ad558ebe054eba745be8/pkg/sql/plan/function/builtin/unary/oct_test.go#L176
 	//TODO: Previous OctFloat didn't have testcase. Should we add new testcases?
+}
+
+// TestOctDate tests OCT function with DATE type
+func TestOctDate(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// Test case: OCT(DATE_SUB('2007-08-03', INTERVAL 1 DAY))
+	// Expected: 3727 (octal representation of days since epoch)
+	testCases := []struct {
+		name     string
+		dateStr  string
+		expected string // Expected octal string representation
+	}{
+		{
+			name:     "OCT with DATE '2007-08-02'",
+			dateStr:  "2007-08-02",
+			expected: "3727", // This should match MySQL's OCT(DATE_SUB('2007-08-03', INTERVAL 1 DAY))
+		},
+		{
+			name:     "OCT with DATE '2007-08-03'",
+			dateStr:  "2007-08-03",
+			expected: "3727", // This should match MySQL's OCT(DATE('2007-08-03')) - same year as 2007-08-02
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Parse the date
+			date, err := types.ParseDateCast(tc.dateStr)
+			require.NoError(t, err)
+
+			// Create input vector
+			ivecs := make([]*vector.Vector, 1)
+			ivecs[0], err = vector.NewConstFixed(types.T_date.ToType(), date, 1, proc.Mp())
+			require.NoError(t, err)
+
+			// Create result vector
+			result := vector.NewFunctionResultWrapper(types.T_decimal128.ToType(), proc.Mp())
+
+			// Initialize result vector
+			err = result.PreExtendAndReset(1)
+			require.NoError(t, err)
+
+			// Call OctDate
+			err = OctDate(ivecs, result, proc, 1, nil)
+			require.NoError(t, err)
+
+			// Verify result
+			resultVec := result.GetResultVector()
+			require.False(t, resultVec.GetNulls().Contains(0), "Result should not be NULL")
+
+			decParam := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](resultVec)
+			resultDec, null := decParam.GetValue(0)
+			require.False(t, null, "Result should not be null")
+
+			// Convert decimal128 to string and verify it matches expected octal
+			resultStr := resultDec.Format(0)
+			// FIXED: Now we verify the exact value matches MySQL's expected result
+			// MySQL behavior: OCT(DATE) returns octal of days since epoch
+			require.Equal(t, tc.expected, resultStr, "OCT result should match MySQL's expected value (octal of days)")
+
+			// Cleanup
+			for _, v := range ivecs {
+				if v != nil {
+					v.Free(proc.Mp())
+				}
+			}
+			if result != nil {
+				result.Free()
+			}
+		})
+	}
+}
+
+// TestOctDatetime tests OCT function with DATETIME type
+func TestOctDatetime(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// Test case: OCT(DATE_SUB('2007-08-03 17:33:00', INTERVAL 1 MINUTE))
+	// Expected: 3727 (octal representation of microseconds since epoch)
+	testCases := []struct {
+		name     string
+		dtStr    string
+		expected string // Expected octal string representation (approximate)
+	}{
+		{
+			name:     "OCT with DATETIME '2007-08-02 23:59:00'",
+			dtStr:    "2007-08-02 23:59:00",
+			expected: "3727", // This should match MySQL's OCT(DATE_SUB('2007-08-03', INTERVAL 1 MINUTE))
+		},
+		{
+			name:     "OCT with DATETIME '2007-08-03 17:33:00'",
+			dtStr:    "2007-08-03 17:33:00",
+			expected: "3727", // This should match MySQL's OCT(DATETIME('2007-08-03')) - same year as 2007-08-02
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Parse the datetime
+			dt, err := types.ParseDatetime(tc.dtStr, 6)
+			require.NoError(t, err)
+
+			// Create input vector
+			ivecs := make([]*vector.Vector, 1)
+			ivecs[0], err = vector.NewConstFixed(types.T_datetime.ToType(), dt, 1, proc.Mp())
+			require.NoError(t, err)
+
+			// Create result vector
+			result := vector.NewFunctionResultWrapper(types.T_decimal128.ToType(), proc.Mp())
+
+			// Initialize result vector
+			err = result.PreExtendAndReset(1)
+			require.NoError(t, err)
+
+			// Call OctDatetime
+			err = OctDatetime(ivecs, result, proc, 1, nil)
+			require.NoError(t, err)
+
+			// Verify result
+			resultVec := result.GetResultVector()
+			require.False(t, resultVec.GetNulls().Contains(0), "Result should not be NULL")
+
+			decParam := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](resultVec)
+			resultDec, null := decParam.GetValue(0)
+			require.False(t, null, "Result should not be null")
+
+			// Convert decimal128 to string and verify it matches expected octal
+			resultStr := resultDec.Format(0)
+			// FIXED: Now we verify the exact value matches MySQL's expected result
+			// MySQL behavior: OCT(DATETIME) returns octal of days since epoch, not microseconds
+			require.Equal(t, tc.expected, resultStr, "OCT result should match MySQL's expected value (octal of days, not microseconds)")
+
+			// Cleanup
+			for _, v := range ivecs {
+				if v != nil {
+					v.Free(proc.Mp())
+				}
+			}
+			if result != nil {
+				result.Free()
+			}
+		})
+	}
+}
+
+// TestOctString tests OCT function with string types (varchar, char, text)
+// This covers the case where DATE_SUB returns a string and OCT needs to parse it
+func TestOctString(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	testCases := []struct {
+		name     string
+		inputStr string
+		expected string // Expected octal string representation
+		desc     string
+	}{
+		{
+			name:     "OCT with DATETIME string '2007-08-02 23:59:00'",
+			inputStr: "2007-08-02 23:59:00",
+			expected: "3727", // OCT(DATE_SUB('2007-08-03', INTERVAL 1 MINUTE)) should return 3727
+			desc:     "OCT(DATE_SUB('2007-08-03', INTERVAL 1 MINUTE)) returns string, OCT should parse it and return days octal",
+		},
+		{
+			name:     "OCT with DATE string '2007-08-02'",
+			inputStr: "2007-08-02",
+			expected: "3727", // OCT(DATE_SUB('2007-08-03', INTERVAL 1 DAY)) should return 3727
+			desc:     "OCT(DATE_SUB('2007-08-03', INTERVAL 1 DAY)) returns string, OCT should parse it and return days octal",
+		},
+		{
+			name:     "OCT with DATETIME string with microseconds '2007-08-02 23:59:00.123456'",
+			inputStr: "2007-08-02 23:59:00.123456",
+			expected: "3727", // Should return days octal, not microseconds octal
+			desc:     "OCT should handle datetime strings with fractional seconds and return days octal",
+		},
+		{
+			name:     "OCT with integer string '12345'",
+			inputStr: "12345",
+			expected: "30071", // Octal representation of 12345
+			desc:     "OCT should handle integer strings",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Create input vector with string type
+			ivecs := make([]*vector.Vector, 1)
+			var err error
+			ivecs[0], err = vector.NewConstBytes(types.T_varchar.ToType(), []byte(tc.inputStr), 1, proc.Mp())
+			require.NoError(t, err)
+
+			// Create result vector
+			result := vector.NewFunctionResultWrapper(types.T_decimal128.ToType(), proc.Mp())
+
+			// Initialize result vector
+			err = result.PreExtendAndReset(1)
+			require.NoError(t, err)
+
+			// Call OctString
+			err = OctString(ivecs, result, proc, 1, nil)
+			require.NoError(t, err, tc.desc)
+
+			// Verify result
+			resultVec := result.GetResultVector()
+			require.False(t, resultVec.GetNulls().Contains(0), "Result should not be NULL for valid input: %s", tc.desc)
+
+			decParam := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](resultVec)
+			resultDec, null := decParam.GetValue(0)
+			require.False(t, null, "Result should not be null: %s", tc.desc)
+
+			// Convert decimal128 to string and verify it matches expected octal
+			resultStr := resultDec.Format(0)
+			// FIXED: Now we verify the exact value matches MySQL's expected result
+			require.Equal(t, tc.expected, resultStr, "OCT result should match MySQL's expected value: %s", tc.desc)
+
+			// Cleanup
+			for _, v := range ivecs {
+				if v != nil {
+					v.Free(proc.Mp())
+				}
+			}
+			if result != nil {
+				result.Free()
+			}
+		})
+	}
+
+	// Test error case: invalid string that can't be parsed
+	t.Run("OCT with invalid string", func(t *testing.T) {
+		ivecs := make([]*vector.Vector, 1)
+		var err error
+		ivecs[0], err = vector.NewConstBytes(types.T_varchar.ToType(), []byte("invalid-date-string"), 1, proc.Mp())
+		require.NoError(t, err)
+
+		result := vector.NewFunctionResultWrapper(types.T_decimal128.ToType(), proc.Mp())
+		err = result.PreExtendAndReset(1)
+		require.NoError(t, err)
+
+		// Call OctString - should return error for invalid input
+		err = OctString(ivecs, result, proc, 1, nil)
+		require.Error(t, err, "OCT should return error for invalid string input")
+		require.Contains(t, err.Error(), "function oct", "Error message should mention function oct")
+
+		// Cleanup
+		for _, v := range ivecs {
+			if v != nil {
+				v.Free(proc.Mp())
+			}
+		}
+		if result != nil {
+			result.Free()
+		}
+	})
+
+	// Test T_text type (overloadId: 14)
+	t.Run("OCT with T_text type", func(t *testing.T) {
+		testCases := []struct {
+			name     string
+			inputStr string
+			expected string
+			desc     string
+		}{
+			{
+				name:     "OCT with T_text DATETIME string",
+				inputStr: "2007-08-02 23:59:00",
+				expected: "3727",
+				desc:     "OCT should handle T_text type with DATETIME string",
+			},
+			{
+				name:     "OCT with T_text DATE string",
+				inputStr: "2007-08-02",
+				expected: "3727",
+				desc:     "OCT should handle T_text type with DATE string",
+			},
+			{
+				name:     "OCT with T_text integer string",
+				inputStr: "12345",
+				expected: "30071",
+				desc:     "OCT should handle T_text type with integer string",
+			},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				// Create input vector with T_text type
+				ivecs := make([]*vector.Vector, 1)
+				var err error
+				ivecs[0], err = vector.NewConstBytes(types.T_text.ToType(), []byte(tc.inputStr), 1, proc.Mp())
+				require.NoError(t, err)
+
+				// Create result vector
+				result := vector.NewFunctionResultWrapper(types.T_decimal128.ToType(), proc.Mp())
+
+				// Initialize result vector
+				err = result.PreExtendAndReset(1)
+				require.NoError(t, err)
+
+				// Call OctString
+				err = OctString(ivecs, result, proc, 1, nil)
+				require.NoError(t, err, tc.desc)
+
+				// Verify result
+				resultVec := result.GetResultVector()
+				require.False(t, resultVec.GetNulls().Contains(0), "Result should not be NULL for valid input: %s", tc.desc)
+
+				decParam := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](resultVec)
+				resultDec, null := decParam.GetValue(0)
+				require.False(t, null, "Result should not be null: %s", tc.desc)
+
+				// Convert decimal128 to string and verify it matches expected octal
+				resultStr := resultDec.Format(0)
+				require.Equal(t, tc.expected, resultStr, "OCT result should match expected value: %s", tc.desc)
+
+				// Cleanup
+				for _, v := range ivecs {
+					if v != nil {
+						v.Free(proc.Mp())
+					}
+				}
+				if result != nil {
+					result.Free()
+				}
+			})
+		}
+
+		// Test error case with T_text type
+		t.Run("OCT with T_text invalid string", func(t *testing.T) {
+			ivecs := make([]*vector.Vector, 1)
+			var err error
+			ivecs[0], err = vector.NewConstBytes(types.T_text.ToType(), []byte("invalid-date-string"), 1, proc.Mp())
+			require.NoError(t, err)
+
+			result := vector.NewFunctionResultWrapper(types.T_decimal128.ToType(), proc.Mp())
+			err = result.PreExtendAndReset(1)
+			require.NoError(t, err)
+
+			// Call OctString - should return error for invalid input
+			err = OctString(ivecs, result, proc, 1, nil)
+			require.Error(t, err, "OCT should return error for invalid T_text input")
+			require.Contains(t, err.Error(), "function oct", "Error message should mention function oct")
+
+			// Cleanup
+			for _, v := range ivecs {
+				if v != nil {
+					v.Free(proc.Mp())
+				}
+			}
+			if result != nil {
+				result.Free()
+			}
+		})
+	})
 }
 
 func TestDecode(t *testing.T) {

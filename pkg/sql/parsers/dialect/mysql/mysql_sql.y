@@ -425,7 +425,7 @@ import (
 %token <str> CURRENT_TIME LOCALTIME LOCALTIMESTAMP
 %token <str> UTC_DATE UTC_TIME UTC_TIMESTAMP
 %token <str> REPLACE CONVERT
-%token <str> SEPARATOR TIMESTAMPDIFF
+%token <str> SEPARATOR TIMESTAMPDIFF TIMESTAMPADD
 %token <str> CURRENT_DATE CURRENT_USER CURRENT_ROLE
 
 // Time unit
@@ -3732,9 +3732,6 @@ algorithm_type:
 |   INSTANT
 |   INPLACE
 |   COPY
-|   CLONE
-|   DATA
-|   BRANCH
 
 able_type:
     DISABLE
@@ -11157,6 +11154,17 @@ function_call_nonkeyword:
             Exprs: tree.Exprs{arg1, $5, $7},
         }
 	}
+|	TIMESTAMPADD '(' time_stamp_unit ',' expression ',' expression ')'
+	{
+        name := tree.NewUnresolvedColName($1)
+        str := strings.ToLower($3)
+        arg1 := tree.NewNumVal(str, str, false, tree.P_char)
+		$$ =  &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{arg1, $5, $7},
+        }
+	}
 function_call_keyword:
     name_confict '(' expression_list_opt ')'
     {
@@ -12823,9 +12831,6 @@ equal_opt:
 //|   TABLE_VALUES
 //|   RETURNS
 //|   MYSQL_COMPATIBILITY_MODE
-//|   CLONE
-//|   MO
-//|   BRANCH
 
 non_reserved_keyword:
     ACCOUNT
@@ -12842,6 +12847,8 @@ non_reserved_keyword:
 |   BIT
 |   BLOB
 |   BOOL
+|   BRANCH
+|   CLONE
 |   CANCEL
 |   CHAIN
 |   CHECKSUM
@@ -12854,6 +12861,10 @@ non_reserved_keyword:
 |   COLUMNS
 |   CONNECTION
 |   CONSISTENT
+|   CONFLICT
+|   CONFLICT_ACCEPT
+|   CONFLICT_FAIL
+|   CONFLICT_SKIP
 |   COMPRESSED
 |   COMPACT
 |   COLUMN_FORMAT
@@ -12867,6 +12878,7 @@ non_reserved_keyword:
 |   CASCADE
 |   DAEMON
 |   DATA
+|   DIFF
 |	DAY
 |   DATETIME
 |   DECIMAL
@@ -12946,6 +12958,7 @@ non_reserved_keyword:
 |   OPTIMIZE
 |   OPEN
 |   OPTION
+|   OUTPUT
 |   PACK_KEYS
 |   PARTIAL
 |   PARTITIONS
@@ -13245,6 +13258,7 @@ not_keyword:
 |   VAR_SAMP
 |   AVG
 |	TIMESTAMPDIFF
+|	TIMESTAMPADD
 |   NEXTVAL
 |   SETVAL
 |   CURRVAL
