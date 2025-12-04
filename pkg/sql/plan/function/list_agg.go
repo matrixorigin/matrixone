@@ -244,6 +244,75 @@ var supportedAggInNewFramework = []FuncNew{
 	},
 
 	{
+		functionId: JSON_ARRAYAGG,
+		class:      plan.Function_AGG,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(_ []overload, inputs []types.Type) checkResult {
+			if len(inputs) != 1 {
+				return newCheckResultWithFailure(failedAggParametersWrong)
+			}
+			if inputs[0].Oid == types.T_any {
+				return newCheckResultWithCast(0, []types.Type{types.T_text.ToType()})
+			}
+			switch inputs[0].Oid {
+			case types.T_binary, types.T_varbinary, types.T_blob:
+				return newCheckResultWithFailure(failedAggParametersWrong)
+			}
+			return newCheckResultWithSuccess(0)
+		},
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isAgg:      true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_json.ToType()
+				},
+				aggFramework: aggregationLogicOfOverload{
+					str:         "json_arrayagg",
+					aggRegister: agg.RegisterJsonArrayAgg,
+				},
+			},
+		},
+	},
+
+	{
+		functionId: JSON_OBJECTAGG,
+		class:      plan.Function_AGG,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(_ []overload, inputs []types.Type) checkResult {
+			if len(inputs) != 2 {
+				return newCheckResultWithFailure(failedAggParametersWrong)
+			}
+			key := inputs[0]
+			val := inputs[1]
+			if key.Oid == types.T_any {
+				key = types.T_varchar.ToType()
+			}
+			if !key.Oid.IsMySQLString() {
+				return newCheckResultWithFailure(failedAggParametersWrong)
+			}
+			switch val.Oid {
+			case types.T_binary, types.T_varbinary, types.T_blob:
+				return newCheckResultWithFailure(failedAggParametersWrong)
+			}
+			return newCheckResultWithCast(0, []types.Type{key, val})
+		},
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isAgg:      true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_json.ToType()
+				},
+				aggFramework: aggregationLogicOfOverload{
+					str:         "json_objectagg",
+					aggRegister: agg.RegisterJsonObjectAgg,
+				},
+			},
+		},
+	},
+
+	{
 		functionId: APPROX_COUNT,
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,

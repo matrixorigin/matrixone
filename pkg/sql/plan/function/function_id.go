@@ -570,9 +570,15 @@ const (
 	// function `is_ipv4_mapped`
 	IS_IPV4_MAPPED = 399
 
+	// function `json_arrayagg`
+	JSON_ARRAYAGG = 400
+
+	// function `json_objectagg`
+	JSON_OBJECTAGG = 401
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 400
+	FUNCTION_END_NUMBER = 402
 )
 
 // functionIdRegister is what function we have registered already.
@@ -823,6 +829,8 @@ var functionIdRegister = map[string]int32{
 	"json_extract_string":            JSON_EXTRACT_STRING,
 	"json_extract_float64":           JSON_EXTRACT_FLOAT64,
 	"json_object":                    JSON_OBJECT,
+	"json_arrayagg":                  JSON_ARRAYAGG,
+	"json_objectagg":                 JSON_OBJECTAGG,
 	"json_quote":                     JSON_QUOTE,
 	"json_unquote":                   JSON_UNQUOTE,
 	"json_row":                       JSON_ROW,
