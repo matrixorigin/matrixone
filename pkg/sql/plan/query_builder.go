@@ -55,16 +55,17 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 		qry: &Query{
 			StmtType: queryType,
 		},
-		compCtx:            ctx,
-		ctxByNode:          []*BindContext{},
-		nameByColRef:       make(map[[2]int32]string),
-		nextBindTag:        0,
-		mysqlCompatible:    mysqlCompatible,
-		tag2Table:          make(map[int32]*TableDef),
-		tag2NodeID:         make(map[int32]int32),
-		isPrepareStatement: isPrepareStatement,
-		deleteNode:         make(map[uint64]int32),
-		skipStats:          skipStats,
+		compCtx:             ctx,
+		ctxByNode:           []*BindContext{},
+		nameByColRef:        make(map[[2]int32]string),
+		nextBindTag:         0,
+		mysqlCompatible:     mysqlCompatible,
+		tag2Table:           make(map[int32]*TableDef),
+		tag2NodeID:          make(map[int32]int32),
+		isPrepareStatement:  isPrepareStatement,
+		deleteNode:          make(map[uint64]int32),
+		skipStats:           skipStats,
+		optimizationHistory: make([]string, 0),
 	}
 }
 
@@ -162,6 +163,17 @@ func (builder *QueryBuilder) buildRemapErrorMessage(
 			sb.WriteString(fmt.Sprintf("   %s\n", exprStr))
 			sb.WriteString("\n")
 		}
+	}
+
+	// Optimization history
+	if len(builder.optimizationHistory) > 0 {
+		sb.WriteString("🔧 Optimization History:\n")
+		for _, hist := range builder.optimizationHistory {
+			sb.WriteString(fmt.Sprintf("   - %s\n", hist))
+		}
+		sb.WriteString("\n")
+	} else {
+		sb.WriteString("🔧 Optimization History: (no associatelaw applied)\n\n")
 	}
 
 	// Available columns
