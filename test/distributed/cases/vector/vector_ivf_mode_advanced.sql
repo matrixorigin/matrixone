@@ -59,7 +59,7 @@ LIMIT 3 by rank with option 'mode=pre';
 -- ============================================================================
 SELECT id, name, score FROM vector_test_advanced 
 WHERE score BETWEEN 2.0 AND 4.0
-ORDER BY l2_distance(embedding, '[0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5]')
+ORDER BY id, l2_distance(embedding, '[0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5]')
 LIMIT 4 by rank with option 'mode=pre';
 
 -- ============================================================================
@@ -67,7 +67,7 @@ LIMIT 4 by rank with option 'mode=pre';
 -- ============================================================================
 SELECT id, name, score FROM vector_test_advanced 
 WHERE score BETWEEN 2.0 AND 4.0
-ORDER BY l2_distance(embedding, '[0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5]')
+ORDER BY id, l2_distance(embedding, '[0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5]')
 LIMIT 4 by rank with option 'mode=post';
 
 -- ============================================================================

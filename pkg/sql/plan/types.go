@@ -167,8 +167,8 @@ type QueryBuilder struct {
 	qry     *plan.Query
 	compCtx CompilerContext
 
-	ctxByNode    []*BindContext
-	nameByColRef map[[2]int32]string
+	ctxByNode            []*BindContext
+	nameByColRef         map[[2]int32]string
 	protectedScans       map[int32]int
 	projectSpecialGuards map[int32]*specialIndexGuard
 

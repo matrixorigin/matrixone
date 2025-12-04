@@ -44,22 +44,22 @@ id    name
 1    Item A
 SELECT id, name, score FROM vector_test_advanced
 WHERE score BETWEEN 2.0 AND 4.0
-ORDER BY l2_distance(embedding, '[0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5]')
+ORDER BY id, l2_distance(embedding, '[0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5]')
 LIMIT 4 by rank with option 'mode=pre';
 id    name    score
 3    Item C    4.0
 4    Item D    3.5
 5    Item E    3.0
-7    Item G    2.0
+6    Item F    2.5
 SELECT id, name, score FROM vector_test_advanced
 WHERE score BETWEEN 2.0 AND 4.0
-ORDER BY l2_distance(embedding, '[0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5]')
+ORDER BY id, l2_distance(embedding, '[0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5]')
 LIMIT 4 by rank with option 'mode=post';
 id    name    score
 3    Item C    4.0
 4    Item D    3.5
 5    Item E    3.0
-7    Item G    2.0
+6    Item F    2.5
 SELECT id, name FROM vector_test_advanced
 WHERE category != 'cat3' AND active = true
 ORDER BY l2_distance(embedding, '[0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2]')
