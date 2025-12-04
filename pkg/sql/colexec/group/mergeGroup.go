@@ -150,11 +150,17 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 				mergeGroup.Aggs = append(mergeGroup.Aggs, agExpr)
 			}
 			mergeGroup.ctr.setSpillMem(mergeGroup.SpillMem, mergeGroup.Aggs)
+		}
 
-			if mergeGroup.ctr.aggList, err = mergeGroup.ctr.makeAggList(mergeGroup.Aggs); err != nil {
+		if len(mergeGroup.ctr.aggList) != len(mergeGroup.Aggs) {
+			mergeGroup.ctr.aggList, err = mergeGroup.ctr.makeAggList(mergeGroup.Aggs)
+			if err != nil {
 				return false, err
 			}
-			if mergeGroup.ctr.spillAggList, err = mergeGroup.ctr.makeAggList(mergeGroup.Aggs); err != nil {
+		}
+		if len(mergeGroup.ctr.spillAggList) != len(mergeGroup.Aggs) {
+			mergeGroup.ctr.spillAggList, err = mergeGroup.ctr.makeAggList(mergeGroup.Aggs)
+			if err != nil {
 				return false, err
 			}
 		}
@@ -168,6 +174,7 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 		if err != nil {
 			return false, err
 		}
+
 		if int(nAggs) != len(mergeGroup.ctr.spillAggList) {
 			return false, moerr.NewInternalError(proc.Ctx, "nAggs != len(mergeGroup.ctr.spillAggList)")
 		}
