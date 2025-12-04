@@ -25,16 +25,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestBufferPool(t *testing.T) {
-	buf := acquireBuffer()
-	buf.WriteString("data")
-	releaseBuffer(buf)
-
-	buf2 := acquireBuffer()
-	require.Equal(t, 0, buf2.Len())
-	releaseBuffer(buf2)
-}
-
 func TestFormatValIntoString_StringEscaping(t *testing.T) {
 	var buf bytes.Buffer
 	ses := &Session{}
