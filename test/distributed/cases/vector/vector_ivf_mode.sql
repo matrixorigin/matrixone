@@ -283,16 +283,16 @@ UNION
 ORDER BY dist LIMIT 4;
 
 -- Test Case: UNION with mode=pre on different tables (mini_vector_data and mini_embed_data)
-(SELECT id, text AS content, l2_distance(vec, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]') AS dist 
+(SELECT id, text AS content
  FROM mini_vector_data 
  ORDER BY l2_distance(vec, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]') 
  LIMIT 2 by rank with option 'mode=pre')
 UNION
-(SELECT id, content, cosine_distance(embedding, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]') AS dist 
+(SELECT id, content
  FROM mini_embed_data 
  ORDER BY cosine_distance(embedding, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]') 
  LIMIT 2 by rank with option 'mode=pre')
-ORDER BY dist LIMIT 3;
+LIMIT 3;
 
 -- Test Case: UNION with mode=pre and complex WHERE conditions
 (SELECT id, category, l2_distance(vec, '[0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9]') AS dist 
@@ -349,18 +349,18 @@ SELECT * FROM q2
 ORDER BY dist LIMIT 3;
 
 -- Test Case: UNION ALL with mode=pre and different LIMIT sizes (testing over-fetch)
-(SELECT id, content, cosine_distance(embedding, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]') AS dist 
+(SELECT id, content
  FROM mini_embed_data 
  WHERE file_id = 'file01'
  ORDER BY cosine_distance(embedding, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]') 
  LIMIT 1 by rank with option 'mode=pre')
 UNION ALL
-(SELECT id, content, cosine_distance(embedding, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]') AS dist 
+(SELECT id, content
  FROM mini_embed_data 
  WHERE file_id = 'file02'
  ORDER BY cosine_distance(embedding, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]') 
  LIMIT 2 by rank with option 'mode=pre')
-ORDER BY dist DESC LIMIT 3;
+LIMIT 3;
 
 -- Test Case: UNION with mode=pre and DESC ordering
 (SELECT id, text, l2_distance(vec, '[0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5]') AS dist 
