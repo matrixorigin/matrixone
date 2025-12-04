@@ -1534,3 +1534,175 @@ func TestCDCWatermarkUpdater_RemoveThenUpdateErrMsg(t *testing.T) {
 	err := updater.UpdateWatermarkErrMsg(ctx, key, "boom", nil)
 	require.NoError(t, err)
 }
+
+// TestCDCWatermarkUpdater_MarkUnmarkTaskPaused tests pause state management
+func TestCDCWatermarkUpdater_MarkUnmarkTaskPaused(t *testing.T) {
+	updater, _ := InitCDCWatermarkUpdaterForTest(t)
+	updater.Start()
+	defer updater.Stop()
+
+	taskId := "test-task-pause"
+
+	_, paused := updater.pausedTasks.Load(taskId)
+	require.False(t, paused)
+
+	updater.MarkTaskPaused(taskId)
+	pauseTime, paused := updater.pausedTasks.Load(taskId)
+	require.True(t, paused)
+	require.NotZero(t, pauseTime)
+
+	pauseTimeValue := pauseTime.(time.Time)
+	require.True(t, time.Since(pauseTimeValue) < time.Second)
+
+	updater.UnmarkTaskPaused(taskId)
+	_, paused = updater.pausedTasks.Load(taskId)
+	require.False(t, paused)
+}
+
+// TestCDCWatermarkUpdater_PauseBlocksWatermarkUpdate tests that paused tasks block watermark updates
+func TestCDCWatermarkUpdater_PauseBlocksWatermarkUpdate(t *testing.T) {
+	ctx := context.Background()
+	updater, _ := InitCDCWatermarkUpdaterForTest(t)
+	updater.Start()
+	defer updater.Stop()
+
+	taskId := "test-task-block"
+	key := &WatermarkKey{
+		AccountId: 1,
+		TaskId:    taskId,
+		DBName:    "test_db",
+		TableName: "test_table",
+	}
+
+	wm1 := types.BuildTS(1000, 1)
+	err := updater.UpdateWatermarkOnly(ctx, key, &wm1)
+	require.NoError(t, err)
+
+	err = updater.ForceFlush(ctx)
+	require.NoError(t, err)
+
+	cachedWm, err := updater.GetFromCache(ctx, key)
+	require.NoError(t, err)
+	require.Equal(t, wm1, cachedWm)
+
+	updater.MarkTaskPaused(taskId)
+
+	wm2 := types.BuildTS(2000, 1)
+	err = updater.UpdateWatermarkOnly(ctx, key, &wm2)
+	require.NoError(t, err)
+
+	err = updater.ForceFlush(ctx)
+	require.NoError(t, err)
+
+	cachedWm, err = updater.GetFromCache(ctx, key)
+	require.NoError(t, err)
+	require.Equal(t, wm1, cachedWm)
+
+	updater.UnmarkTaskPaused(taskId)
+
+	wm3 := types.BuildTS(3000, 1)
+	err = updater.UpdateWatermarkOnly(ctx, key, &wm3)
+	require.NoError(t, err)
+
+	err = updater.ForceFlush(ctx)
+	require.NoError(t, err)
+
+	cachedWm, err = updater.GetFromCache(ctx, key)
+	require.NoError(t, err)
+	require.Equal(t, wm3, cachedWm)
+}
+
+// TestCDCWatermarkUpdater_MultipleTasksPauseIndependently tests that pausing one task doesn't affect others
+func TestCDCWatermarkUpdater_MultipleTasksPauseIndependently(t *testing.T) {
+	ctx := context.Background()
+	updater, _ := InitCDCWatermarkUpdaterForTest(t)
+	updater.Start()
+	defer updater.Stop()
+
+	task1 := "task-1"
+	task2 := "task-2"
+
+	key1 := &WatermarkKey{
+		AccountId: 1,
+		TaskId:    task1,
+		DBName:    "db1",
+		TableName: "table1",
+	}
+
+	key2 := &WatermarkKey{
+		AccountId: 1,
+		TaskId:    task2,
+		DBName:    "db2",
+		TableName: "table2",
+	}
+
+	wm1_v1 := types.BuildTS(1000, 1)
+	wm2_v1 := types.BuildTS(2000, 1)
+
+	require.NoError(t, updater.UpdateWatermarkOnly(ctx, key1, &wm1_v1))
+	require.NoError(t, updater.UpdateWatermarkOnly(ctx, key2, &wm2_v1))
+	require.NoError(t, updater.ForceFlush(ctx))
+
+	updater.MarkTaskPaused(task1)
+
+	wm1_v2 := types.BuildTS(1100, 1)
+	wm2_v2 := types.BuildTS(2100, 1)
+
+	require.NoError(t, updater.UpdateWatermarkOnly(ctx, key1, &wm1_v2))
+	require.NoError(t, updater.UpdateWatermarkOnly(ctx, key2, &wm2_v2))
+	require.NoError(t, updater.ForceFlush(ctx))
+
+	cached1, err := updater.GetFromCache(ctx, key1)
+	require.NoError(t, err)
+	require.Equal(t, wm1_v1, cached1)
+
+	cached2, err := updater.GetFromCache(ctx, key2)
+	require.NoError(t, err)
+	require.Equal(t, wm2_v2, cached2)
+}
+
+// TestCDCWatermarkUpdater_PauseRestartCycle tests multiple pause/restart cycles
+func TestCDCWatermarkUpdater_PauseRestartCycle(t *testing.T) {
+	ctx := context.Background()
+	updater, _ := InitCDCWatermarkUpdaterForTest(t)
+	updater.Start()
+	defer updater.Stop()
+
+	taskId := "lifecycle-task"
+	key := &WatermarkKey{
+		AccountId: 1,
+		TaskId:    taskId,
+		DBName:    "db",
+		TableName: "tbl",
+	}
+
+	for cycle := 0; cycle < 3; cycle++ {
+		wmRunning := types.BuildTS(int64(1000*(cycle+1)), 1)
+		require.NoError(t, updater.UpdateWatermarkOnly(ctx, key, &wmRunning))
+		require.NoError(t, updater.ForceFlush(ctx))
+
+		cached, err := updater.GetFromCache(ctx, key)
+		require.NoError(t, err)
+		require.Equal(t, wmRunning, cached)
+
+		updater.MarkTaskPaused(taskId)
+
+		wmPaused := types.BuildTS(int64(1000*(cycle+1)+500), 1)
+		require.NoError(t, updater.UpdateWatermarkOnly(ctx, key, &wmPaused))
+		require.NoError(t, updater.ForceFlush(ctx))
+
+		cached, err = updater.GetFromCache(ctx, key)
+		require.NoError(t, err)
+		require.Equal(t, wmRunning, cached)
+
+		updater.UnmarkTaskPaused(taskId)
+
+		wmRestart := types.BuildTS(int64(1000*(cycle+2)), 1)
+		require.NoError(t, updater.UpdateWatermarkOnly(ctx, key, &wmRestart))
+		require.NoError(t, updater.ForceFlush(ctx))
+
+		cached, err = updater.GetFromCache(ctx, key)
+		require.NoError(t, err)
+		require.Equal(t, wmRestart, cached)
+	}
+}
