@@ -20,8 +20,8 @@ insert into customer_lifecycle values
 (1003, 'west', 2, 4500.00, 655, 'web', null, '2024-03-02 15:11:00', 0, null),
 (1004, null, 1, 3200.50, 610, 'branch', 'watchlist', null, 1, '1992-09-01');
 create snapshot sp_customer_base for table test_null_diff customer_lifecycle;
-create table customer_branch_alpha clone customer_lifecycle{snapshot='sp_customer_base'};
-create table customer_branch_beta clone customer_lifecycle{snapshot='sp_customer_base'};
+data branch create table customer_branch_alpha from customer_lifecycle{snapshot='sp_customer_base'};
+data branch create table customer_branch_beta from customer_lifecycle{snapshot='sp_customer_base'};
 update customer_branch_alpha
 set credit_score = null,
 risk_note = null,
@@ -85,8 +85,8 @@ insert into instrument_positions values
 (5003, 'CB200', 'spot', 62000.00, 0.0050, 0.01, 'new issue', '2024-03-03', '2024-03-03 09:45:00');
 drop snapshot if exists sp_position_base;
 create snapshot sp_position_base for table test_null_diff instrument_positions;
-create table position_branch_live clone instrument_positions{snapshot='sp_position_base'};
-create table position_branch_model clone instrument_positions{snapshot='sp_position_base'};
+data branch create table position_branch_live from instrument_positions{snapshot='sp_position_base'};
+data branch create table position_branch_model from instrument_positions{snapshot='sp_position_base'};
 update position_branch_live
 set exposure = null,
 margin_rate = null,

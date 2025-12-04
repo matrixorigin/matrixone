@@ -20400,8 +20400,8 @@ yydefault:
 //line mysql_sql.y:8017
 		{
 			t := tree.NewDataBranchCreateDatabase()
-			t.DstDatabase = tree.Identifier(yyDollar[4].str)
-			t.SrcDatabase = tree.Identifier(yyDollar[6].str)
+			t.DstDatabase = tree.Identifier(yyDollar[5].str)
+			t.SrcDatabase = tree.Identifier(yyDollar[7].str)
 			t.AtTsExpr = yyDollar[8].atTimeStampUnion()
 			t.ToAccountOpt = yyDollar[9].toAccountOptUnion()
 			yyLOCAL = t
