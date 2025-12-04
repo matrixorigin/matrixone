@@ -308,6 +308,220 @@ id    category
 1    A
 2    A
 3    A
+(SELECT id, text, l2_distance(vec, '[0.1,-0.2,0.3,0.4,-0.1,0.2,0.0,0.5]') AS dist
+FROM mini_vector_data
+WHERE id IN ('id1', 'id2', 'id3')
+ORDER BY l2_distance(vec, '[0.1,-0.2,0.3,0.4,-0.1,0.2,0.0,0.5]')
+LIMIT 2 by rank with option 'mode=pre')
+UNION
+(SELECT id, text, l2_distance(vec, '[0.1,-0.2,0.3,0.4,-0.1,0.2,0.0,0.5]') AS dist
+FROM mini_vector_data
+WHERE id IN ('id7', 'id8', 'id9')
+ORDER BY l2_distance(vec, '[0.1,-0.2,0.3,0.4,-0.1,0.2,0.0,0.5]')
+LIMIT 2 by rank with option 'mode=pre')
+ORDER BY dist LIMIT 3;
+id    text    dist
+id8    semantic item    0.7760798852372132
+id1    hello world    1.0551303640156267
+id2    greeting message    1.1550325221482527
+(SELECT id, text, l2_distance(vec, '[0.1,-0.2,0.3,0.4,-0.1,0.2,0.0,0.5]') AS dist
+FROM mini_vector_data
+WHERE id LIKE 'id%'
+ORDER BY l2_distance(vec, '[0.1,-0.2,0.3,0.4,-0.1,0.2,0.0,0.5]')
+LIMIT 3 by rank with option 'mode=pre')
+UNION ALL
+(SELECT id, text, l2_distance(vec, '[0.1,-0.2,0.3,0.4,-0.1,0.2,0.0,0.5]') AS dist
+FROM mini_vector_data
+WHERE text LIKE '%test%'
+ORDER BY l2_distance(vec, '[0.1,-0.2,0.3,0.4,-0.1,0.2,0.0,0.5]')
+LIMIT 2 by rank with option 'mode=pre')
+ORDER BY dist LIMIT 5;
+id    text    dist
+id8    semantic item    0.7760798852372132
+id1    hello world    1.0551303640156267
+id10    additional entry    1.0718208877650799
+id3    vector search test    1.1828778308075465
+id9    testing vectors    1.2254387147786232
+(SELECT id, text, l2_distance(vec, '[0.1,-0.2,0.3,0.4,-0.1,0.2,0.0,0.5]') AS dist
+FROM mini_vector_data
+WHERE id IN ('id1', 'id2', 'id3', 'id4')
+ORDER BY l2_distance(vec, '[0.1,-0.2,0.3,0.4,-0.1,0.2,0.0,0.5]')
+LIMIT 2 by rank with option 'mode=pre')
+UNION
+(SELECT id, text, l2_distance(vec, '[0.1,-0.2,0.3,0.4,-0.1,0.2,0.0,0.5]') AS dist
+FROM mini_vector_data
+WHERE id IN ('id6', 'id7', 'id8', 'id9')
+ORDER BY l2_distance(vec, '[0.1,-0.2,0.3,0.4,-0.1,0.2,0.0,0.5]')
+LIMIT 2 by rank with option 'mode=post')
+ORDER BY dist LIMIT 4;
+id    text    dist
+id8    semantic item    0.7760798852372132
+id1    hello world    1.0551303640156267
+id2    greeting message    1.1550325221482527
+id7    random note    1.1910499415172193
+(SELECT id, text AS content, l2_distance(vec, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]') AS dist
+FROM mini_vector_data
+ORDER BY l2_distance(vec, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]')
+LIMIT 2 by rank with option 'mode=pre')
+UNION
+(SELECT id, content, cosine_distance(embedding, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]') AS dist
+FROM mini_embed_data
+ORDER BY cosine_distance(embedding, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]')
+LIMIT 2 by rank with option 'mode=pre')
+ORDER BY dist LIMIT 3;
+id    content    dist
+id04    mysql is a relational database    0.0
+id01    ai is artificial intelligence    1.1920928955078125E-7
+id7    random note    1.3764447511503541
+(SELECT id, category, l2_distance(vec, '[0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9]') AS dist
+FROM vec_with_multi_idx
+WHERE category = 'A' AND status = 1
+ORDER BY l2_distance(vec, '[0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9]')
+LIMIT 2 by rank with option 'mode=pre')
+UNION
+(SELECT id, category, l2_distance(vec, '[0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9]') AS dist
+FROM vec_with_multi_idx
+WHERE category = 'B' AND status = 1
+ORDER BY l2_distance(vec, '[0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9]')
+LIMIT 2 by rank with option 'mode=pre')
+ORDER BY dist LIMIT 3;
+id    category    dist
+2    A    0.0
+1    A    0.28284269614271473
+3    B    0.842614929215999
+(SELECT id, category, l2_distance(vec, '[0.15,0.25,0.35,0.45,0.55,0.65,0.75,0.85]') AS dist
+FROM vec_with_regular_idx
+WHERE category = 'A'
+ORDER BY l2_distance(vec, '[0.15,0.25,0.35,0.45,0.55,0.65,0.75,0.85]')
+LIMIT 2 by rank with option 'mode=pre')
+UNION
+(SELECT id, category, l2_distance(vec, '[0.15,0.25,0.35,0.45,0.55,0.65,0.75,0.85]') AS dist
+FROM vec_with_regular_idx
+WHERE category = 'B'
+ORDER BY l2_distance(vec, '[0.15,0.25,0.35,0.45,0.55,0.65,0.75,0.85]')
+LIMIT 2 by rank with option 'mode=pre')
+UNION
+(SELECT id, category, l2_distance(vec, '[0.15,0.25,0.35,0.45,0.55,0.65,0.75,0.85]') AS dist
+FROM vec_with_regular_idx
+WHERE category = 'C'
+ORDER BY l2_distance(vec, '[0.15,0.25,0.35,0.45,0.55,0.65,0.75,0.85]')
+LIMIT 1 by rank with option 'mode=pre')
+ORDER BY dist LIMIT 4;
+id    category    dist
+1    A    0.14142133490046585
+2    A    0.14142136782769238
+3    B    0.8485281542825963
+8    B    1.1045360607064578
+WITH q1 AS (
+SELECT id, text, l2_distance(vec, '[0.1,-0.2,0.3,0.4,-0.1,0.2,0.0,0.5]') AS dist
+FROM mini_vector_data
+WHERE id IN ('id1', 'id2', 'id3')
+ORDER BY dist
+LIMIT 2 by rank with option 'mode=pre'
+),
+q2 AS (
+SELECT id, text, l2_distance(vec, '[0.1,-0.2,0.3,0.4,-0.1,0.2,0.0,0.5]') AS dist
+FROM mini_vector_data
+WHERE id IN ('id8', 'id9', 'id10')
+ORDER BY dist
+LIMIT 2 by rank with option 'mode=pre'
+)
+SELECT * FROM q1
+UNION
+SELECT * FROM q2
+ORDER BY dist LIMIT 3;
+id    text    dist
+id8    semantic item    0.7760798852372132
+id1    hello world    1.0551303640156267
+id10    additional entry    1.0718208877650799
+(SELECT id, content, cosine_distance(embedding, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]') AS dist
+FROM mini_embed_data
+WHERE file_id = 'file01'
+ORDER BY cosine_distance(embedding, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]')
+LIMIT 1 by rank with option 'mode=pre')
+UNION ALL
+(SELECT id, content, cosine_distance(embedding, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]') AS dist
+FROM mini_embed_data
+WHERE file_id = 'file02'
+ORDER BY cosine_distance(embedding, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]')
+LIMIT 2 by rank with option 'mode=pre')
+ORDER BY dist DESC LIMIT 3;
+id    content    dist
+id03    it stores high dimensional vectors    0.3518875241279602
+id01    ai is artificial intelligence    1.1920928955078125E-7
+id04    mysql is a relational database    0.0
+(SELECT id, text, l2_distance(vec, '[0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5]') AS dist
+FROM mini_vector_data
+WHERE id LIKE 'id1%'
+ORDER BY l2_distance(vec, '[0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5]') DESC
+LIMIT 2 by rank with option 'mode=pre')
+UNION
+(SELECT id, text, l2_distance(vec, '[0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5]') AS dist
+FROM mini_vector_data
+WHERE id LIKE 'id%' AND id NOT LIKE 'id1%'
+ORDER BY l2_distance(vec, '[0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5]') DESC
+LIMIT 3 by rank with option 'mode=pre')
+ORDER BY dist DESC LIMIT 4;
+id    text    dist
+id1    hello world    1.5373028605540773
+id3    vector search test    1.4917104068217915
+id7    random note    1.4874810097387785
+id2    greeting message    1.4697277791471293
+(SELECT id, category, status, l2_distance(vec, '[0.3,0.4,0.5,0.6,0.7,0.8,0.9,0.1]') AS dist
+FROM vec_with_multi_idx
+WHERE status = 1
+ORDER BY l2_distance(vec, '[0.3,0.4,0.5,0.6,0.7,0.8,0.9,0.1]')
+LIMIT 3 OFFSET 1 by rank with option 'mode=pre')
+UNION
+(SELECT id, category, status, l2_distance(vec, '[0.3,0.4,0.5,0.6,0.7,0.8,0.9,0.1]') AS dist
+FROM vec_with_multi_idx
+WHERE status = 2
+ORDER BY l2_distance(vec, '[0.3,0.4,0.5,0.6,0.7,0.8,0.9,0.1]')
+LIMIT 2 by rank with option 'mode=pre')
+ORDER BY dist LIMIT 4;
+id    category    status    dist
+4    B    2    0.842614929215999
+2    A    1    0.842614929215999
+1    A    1    0.8774964278710846
+5    C    1    1.1045360607064578
+(SELECT id, text, l2_distance(vec, '[0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2]') AS dist
+FROM mini_vector_data
+WHERE id IN ('id1', 'id2')
+ORDER BY l2_distance(vec, '[0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2]')
+LIMIT 1 by rank with option 'mode=pre')
+UNION ALL
+(SELECT id, text, l2_distance(vec, '[0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2]') AS dist
+FROM mini_vector_data
+WHERE id IN ('id3', 'id4')
+ORDER BY l2_distance(vec, '[0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2]')
+LIMIT 1 by rank with option 'mode=post')
+UNION ALL
+(SELECT id, text, l2_distance(vec, '[0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2]') AS dist
+FROM mini_vector_data
+WHERE id IN ('id5', 'id6')
+ORDER BY l2_distance(vec, '[0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2]')
+LIMIT 1 by rank with option 'mode=force')
+ORDER BY dist LIMIT 3;
+id    text    dist
+id4    example data    0.9790812245419112
+id5    embedding sample    1.0221056938171387
+id2    greeting message    1.0421612074250595
+(SELECT id, category, status, l2_distance(vec, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]') AS dist
+FROM vec_with_composite_idx
+WHERE category = 'A' AND status = 1
+ORDER BY l2_distance(vec, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]')
+LIMIT 1 by rank with option 'mode=pre')
+UNION
+(SELECT id, category, status, l2_distance(vec, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]') AS dist
+FROM vec_with_composite_idx
+WHERE category = 'B'
+ORDER BY l2_distance(vec, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]')
+LIMIT 2 by rank with option 'mode=pre')
+ORDER BY dist LIMIT 3;
+id    category    status    dist
+1    A    1    0.0
+4    B    1    1.1224972117841794
+5    B    2    1.244989940648632
 drop table if exists vec_with_regular_idx;
 drop table if exists vec_with_multi_idx;
 drop table if exists vec_with_composite_idx;
