@@ -177,3 +177,49 @@ func TestTimestamp_TruncateToScale(t *testing.T) {
 	truncated = ts5.TruncateToScale(2)
 	require.Equal(t, int64(TimestampMinValue+130000), int64(truncated)) // rounds up to .13
 }
+
+// TestTimestamp_String2_NoNewline tests that String2 output does not contain newline characters
+// This test ensures the fix for the String2 formatting bug (removing newline from %06d\n)
+func TestTimestamp_String2_NoNewline(t *testing.T) {
+	loc := time.UTC
+	testCases := []struct {
+		name      string
+		timestamp Timestamp
+		scale     int32
+	}{
+		{
+			name:      "scale 0",
+			timestamp: TimestampMinValue,
+			scale:     0,
+		},
+		{
+			name:      "scale 1",
+			timestamp: TimestampMinValue + 123456,
+			scale:     1,
+		},
+		{
+			name:      "scale 3",
+			timestamp: TimestampMinValue + 123456,
+			scale:     3,
+		},
+		{
+			name:      "scale 6",
+			timestamp: TimestampMinValue + 123456,
+			scale:     6,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := tc.timestamp.String2(loc, tc.scale)
+			// Ensure no newline character in the output
+			require.NotContains(t, result, "\n", "String2 output should not contain newline")
+			require.NotContains(t, result, "\r", "String2 output should not contain carriage return")
+
+			// Verify the format is correct
+			if tc.scale > 0 {
+				require.Contains(t, result, ".", "String2 with scale > 0 should contain decimal point")
+			}
+		})
+	}
+}

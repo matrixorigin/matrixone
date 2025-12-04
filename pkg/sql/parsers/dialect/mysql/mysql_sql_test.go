@@ -448,6 +448,9 @@ var (
 			input:  "select cast(\"2022-01-01 01:23:34\" as varchar)",
 			output: "select cast(2022-01-01 01:23:34 as varchar)",
 		}, {
+			input:  "select 1.2::int;",
+			output: "select cast(1.2 as int)",
+		}, {
 			input:  "select serial_extract(col, 1 as varchar(3)) from t1",
 			output: "select serial_extract(col, 1 as varchar(3)) from t1",
 		}, {
@@ -2647,20 +2650,32 @@ var (
 			output: "create table t1 as select * from t2{as of timestamp 2019-01-01 00:00:00}",
 		},
 		{
-			input: "restore cluster from snapshot snapshot_01",
+			input:  `restore cluster{snapshot="snapshot_01"}`,
+			output: "restore cluster{snapshot=snapshot_01}",
 		},
 		{
-			input: "restore account account_01 from snapshot snapshot_01",
+			input:  "restore account account_01{snapshot=\"snapshot_01\"}",
+			output: "restore account account_01{snapshot=snapshot_01}",
 		},
 		{
-			input: "restore account account_01 database db1 from snapshot snapshot_01",
+			input:  "restore database account_01.db1{snapshot='snapshot_01'}",
+			output: "restore database account_01.db1{snapshot=snapshot_01}",
 		},
 		{
-			input: "restore account account_01 database db1 table t1 from snapshot snapshot_01",
+			input:  "restore database account_01.db1{snapshot=\"snapshot_01\"}",
+			output: "restore database account_01.db1{snapshot=snapshot_01}",
 		},
 		{
-			input:  "restore account account_01 from snapshot snapshot_01 to account account_02",
-			output: "restore account account_01 from snapshot snapshot_01 to account account_02",
+			input:  "restore database account_01.db1{snapshot=\"snapshot_01\"} to account account_02",
+			output: "restore database account_01.db1{snapshot=snapshot_01} to account account_02",
+		},
+		{
+			input:  "restore table account_01.db1.t1{snapshot=\"snapshot_01\"}",
+			output: "restore table account_01.db1.t1{snapshot=snapshot_01}",
+		},
+		{
+			input:  "restore account account_01{snapshot=\"snapshot_01\"} to account account_02",
+			output: "restore account account_01{snapshot=snapshot_01} to account account_02",
 		},
 		{
 			input: `create cdc test_create_task 'mysql://dump:111@127.0.0.1:6001' 'mysql' 'mysql://root:123456@127.0.0.1:3306' 'a,b' { "StartTS"='',"EndTS"='',"NoFull"='false',"FullConcurrency"='16',"IncrementalConcurrency"='16',"ConfigFile"='',"FullTaskRetry"='',"IncrementalTaskRetry"='',"FullDDLRetry"='0',"FullDMLRetry"='0',"IncrementalDDLRetry"='0',"IncrementalDMLRetry"='0'}`,
@@ -3508,5 +3523,95 @@ func TestFaultTolerance(t *testing.T) {
 			t.Errorf("Fault tolerant ases (%q) should parse errors", tcase.input)
 			continue
 		}
+	}
+}
+
+func TestLimitByRank(t *testing.T) {
+	ctx := context.TODO()
+	testCases := []struct {
+		input   string
+		output  string // expected output from tree.String
+		checkFn func(*testing.T, tree.Statement)
+	}{
+		{
+			input:  "SELECT a, b, c FROM T LIMIT 20 BY RANK WITH OPTION 'fudge_factor=3.0', 'nprobe=10'",
+			output: "select a, b, c from t limit 20 by rank with option 'fudge_factor=3.0', 'nprobe=10'",
+			checkFn: func(t *testing.T, stmt tree.Statement) {
+				selectStmt, ok := stmt.(*tree.Select)
+				require.True(t, ok)
+				require.NotNil(t, selectStmt.Limit)
+				require.True(t, selectStmt.Limit.ByRank)
+				require.NotNil(t, selectStmt.Limit.Option)
+				require.Equal(t, "3.0", selectStmt.Limit.Option["fudge_factor"])
+				require.Equal(t, "10", selectStmt.Limit.Option["nprobe"])
+			},
+		},
+		{
+			input:  "SELECT * FROM T LIMIT 10 BY RANK WITH OPTION 'fudge_factor=2.5', 'mode=pre'",
+			output: "select * from t limit 10 by rank with option 'fudge_factor=2.5', 'mode=pre'",
+			checkFn: func(t *testing.T, stmt tree.Statement) {
+				selectStmt, ok := stmt.(*tree.Select)
+				require.True(t, ok)
+				require.NotNil(t, selectStmt.Limit)
+				require.True(t, selectStmt.Limit.ByRank)
+				require.NotNil(t, selectStmt.Limit.Option)
+				require.Equal(t, "2.5", selectStmt.Limit.Option["fudge_factor"])
+				require.Equal(t, "pre", selectStmt.Limit.Option["mode"])
+			},
+		},
+		{
+			input:  "SELECT * FROM T LIMIT 10 BY RANK WITH OPTION 'fudge_factor=1.0', 'mode=post'",
+			output: "select * from t limit 10 by rank with option 'fudge_factor=1.0', 'mode=post'",
+			checkFn: func(t *testing.T, stmt tree.Statement) {
+				selectStmt, ok := stmt.(*tree.Select)
+				require.True(t, ok)
+				require.NotNil(t, selectStmt.Limit)
+				require.True(t, selectStmt.Limit.ByRank)
+				require.NotNil(t, selectStmt.Limit.Option)
+				require.Equal(t, "1.0", selectStmt.Limit.Option["fudge_factor"])
+				require.Equal(t, "post", selectStmt.Limit.Option["mode"])
+			},
+		},
+		{
+			input:  "SELECT * FROM T LIMIT 5, 10 BY RANK WITH OPTION 'nprobe=20'",
+			output: "select * from t limit 10 offset 5 by rank with option 'nprobe=20'",
+			checkFn: func(t *testing.T, stmt tree.Statement) {
+				selectStmt, ok := stmt.(*tree.Select)
+				require.True(t, ok)
+				require.NotNil(t, selectStmt.Limit)
+				require.True(t, selectStmt.Limit.ByRank)
+				require.NotNil(t, selectStmt.Limit.Option)
+				require.Equal(t, "20", selectStmt.Limit.Option["nprobe"])
+				require.NotNil(t, selectStmt.Limit.Offset)
+			},
+		},
+		{
+			input:  "SELECT * FROM T LIMIT 10 OFFSET 5 BY RANK WITH OPTION 'fudge_factor=4.0'",
+			output: "select * from t limit 10 offset 5 by rank with option 'fudge_factor=4.0'",
+			checkFn: func(t *testing.T, stmt tree.Statement) {
+				selectStmt, ok := stmt.(*tree.Select)
+				require.True(t, ok)
+				require.NotNil(t, selectStmt.Limit)
+				require.True(t, selectStmt.Limit.ByRank)
+				require.NotNil(t, selectStmt.Limit.Option)
+				require.Equal(t, "4.0", selectStmt.Limit.Option["fudge_factor"])
+				require.NotNil(t, selectStmt.Limit.Offset)
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.input, func(t *testing.T) {
+			ast, err := ParseOne(ctx, tc.input, 1)
+			require.NoError(t, err, "Failed to parse: %s", tc.input)
+			if tc.checkFn != nil {
+				tc.checkFn(t, ast)
+			}
+			// Test tree.String conversion
+			if tc.output != "" {
+				out := tree.String(ast, dialect.MYSQL)
+				require.Equal(t, tc.output, out, "tree.String output mismatch for input: %s", tc.input)
+			}
+		})
 	}
 }

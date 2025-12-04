@@ -18,7 +18,7 @@ import (
 	"container/heap"
 	"context"
 	"fmt"
-	"slices"
+	"sort"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -60,7 +60,7 @@ func removeIf[T any](data []T, pred func(t T) bool) []T {
 
 // ReadDataByFilter only read block data from storage by filter, don't apply deletes.
 // Right now, it cannot support filter by physical address column.
-// len(columns) == len(colTypes) == 1
+// len(columns) == len(colTypes) >= 1 (supports multiple columns for optimization)
 func ReadDataByFilter(
 	ctx context.Context,
 	tableName string,
@@ -94,7 +94,7 @@ func ReadDataByFilter(
 	defer release()
 	defer deleteMask.Release()
 
-	sels = searchFunc(&cacheVectors[0])
+	sels = searchFunc(cacheVectors)
 	if !deleteMask.IsEmpty() {
 		sels = removeIf(sels, func(i int64) bool {
 			return deleteMask.Contains(uint64(i))
@@ -377,6 +377,166 @@ func BlockDataReadBackup(
 	return
 }
 
+func HandleOrderByLimitOnIVFFlatIndex(
+	ctx context.Context,
+	selectRows []int64,
+	vecCol *vector.Vector,
+	orderByLimit *objectio.BlockReadTopOp,
+) ([]int64, []float64, error) {
+	if selectRows == nil {
+		selectRows = make([]int64, vecCol.Length())
+		for i := range selectRows {
+			selectRows[i] = int64(i)
+		}
+	}
+
+	var sels []int64
+	var dists []float64
+
+	nullsBm := vecCol.GetNulls()
+
+	if int(orderByLimit.Limit) < len(selectRows) {
+		// apply topn if needed
+		hp := make(vectorindex.SearchResultMaxHeap, 0, orderByLimit.Limit)
+
+		switch orderByLimit.Typ {
+		case types.T_array_float32:
+			distFunc, err := metric.ResolveDistanceFn[float32](orderByLimit.Metric)
+			if err != nil {
+				return nil, nil, err
+			}
+
+			rhs := types.BytesToArray[float32](orderByLimit.NumVec)
+
+			for _, row := range selectRows {
+				if nullsBm.Contains(uint64(row)) {
+					continue
+				}
+				dist, err := distFunc(types.BytesToArray[float32](vecCol.GetBytesAt(int(row))), rhs)
+				if err != nil {
+					return nil, nil, err
+				}
+				dist64 := float64(dist)
+
+				heapItem := &vectorindex.SearchResult{
+					Id:       row,
+					Distance: dist64,
+				}
+				if len(hp) >= int(orderByLimit.Limit) {
+					if dist64 < hp[0].GetDistance() {
+						hp[0] = heapItem
+						heap.Fix(&hp, 0)
+					}
+				} else {
+					heap.Push(&hp, heapItem)
+				}
+			}
+
+		case types.T_array_float64:
+			distFunc, err := metric.ResolveDistanceFn[float64](orderByLimit.Metric)
+			if err != nil {
+				return nil, nil, err
+			}
+
+			rhs := types.BytesToArray[float64](orderByLimit.NumVec)
+
+			for _, row := range selectRows {
+				if nullsBm.Contains(uint64(row)) {
+					continue
+				}
+				dist, err := distFunc(types.BytesToArray[float64](vecCol.GetBytesAt(int(row))), rhs)
+				if err != nil {
+					return nil, nil, err
+				}
+
+				heapItem := &vectorindex.SearchResult{
+					Id:       row,
+					Distance: dist,
+				}
+				if len(hp) >= int(orderByLimit.Limit) {
+					if dist < hp[0].GetDistance() {
+						hp[0] = heapItem
+						heap.Fix(&hp, 0)
+					}
+				} else {
+					heap.Push(&hp, heapItem)
+				}
+			}
+
+		default:
+			return nil, nil, moerr.NewInternalError(ctx, fmt.Sprintf("only support float32/float64 type for topn: %s", orderByLimit.Typ))
+		}
+
+		sRes := make([]vectorindex.SearchResult, len(hp))
+		for i := range sRes {
+			sRes[i] = *hp[i].(*vectorindex.SearchResult)
+		}
+		sort.Slice(sRes, func(i, j int) bool {
+			return sRes[i].Id < sRes[j].Id
+		})
+
+		sels = make([]int64, len(sRes))
+		dists = make([]float64, len(sRes))
+
+		for i := range sRes {
+			sels[i] = sRes[i].Id
+			dists[i] = sRes[i].Distance
+		}
+	} else {
+		sels = make([]int64, 0, len(selectRows))
+		dists = make([]float64, 0, len(selectRows))
+
+		switch orderByLimit.Typ {
+		case types.T_array_float32:
+			distFunc, err := metric.ResolveDistanceFn[float32](orderByLimit.Metric)
+			if err != nil {
+				return nil, nil, err
+			}
+
+			rhs := types.BytesToArray[float32](orderByLimit.NumVec)
+
+			for _, row := range selectRows {
+				if nullsBm.Contains(uint64(row)) {
+					continue
+				}
+				dist, err := distFunc(types.BytesToArray[float32](vecCol.GetBytesAt(int(row))), rhs)
+				if err != nil {
+					return nil, nil, err
+				}
+
+				sels = append(sels, row)
+				dists = append(dists, float64(dist))
+			}
+
+		case types.T_array_float64:
+			distFunc, err := metric.ResolveDistanceFn[float64](orderByLimit.Metric)
+			if err != nil {
+				return nil, nil, err
+			}
+
+			rhs := types.BytesToArray[float64](orderByLimit.NumVec)
+
+			for _, row := range selectRows {
+				if nullsBm.Contains(uint64(row)) {
+					continue
+				}
+				dist, err := distFunc(types.BytesToArray[float64](vecCol.GetBytesAt(int(row))), rhs)
+				if err != nil {
+					return nil, nil, err
+				}
+
+				sels = append(sels, row)
+				dists = append(dists, float64(dist))
+			}
+
+		default:
+			return nil, nil, moerr.NewInternalError(ctx, fmt.Sprintf("only support float32/float64 type for topn: %s", orderByLimit.Typ))
+		}
+	}
+
+	return sels, dists, nil
+}
+
 // BlockDataReadInner only read data,don't apply deletes.
 func BlockDataReadInner(
 	ctx context.Context,
@@ -420,80 +580,19 @@ func BlockDataReadInner(
 
 	// len(selectRows) > 0 means it was already filtered by pk filter
 	if len(selectRows) > 0 {
-		if orderByLimit != nil && int(orderByLimit.Limit) < len(selectRows) {
-			// apply topn if needed
-			hp := make(vectorindex.SearchResultMaxHeap, 0, orderByLimit.Limit)
-			lhs := cacheVectors[orderByLimit.ColPos]
+		var dists []float64
 
-			switch orderByLimit.Typ {
-			case types.T_array_float32:
-				distFunc, err := metric.ResolveDistanceFn[float32](orderByLimit.Metric)
-				if err != nil {
-					return err
-				}
-
-				rhs := types.BytesToArray[float32](orderByLimit.NumVec)
-
-				for _, row := range selectRows {
-					dist, err := distFunc(types.BytesToArray[float32](lhs.GetBytesAt(int(row))), rhs)
-					if err != nil {
-						return err
-					}
-					dist64 := float64(dist)
-
-					heapItem := &vectorindex.SearchResult{
-						Id:       row,
-						Distance: dist64,
-					}
-					if len(hp) >= int(orderByLimit.Limit) {
-						if dist64 < hp[0].GetDistance() {
-							hp[0] = heapItem
-							heap.Fix(&hp, 0)
-						}
-					} else {
-						heap.Push(&hp, heapItem)
-					}
-				}
-
-			case types.T_array_float64:
-				distFunc, err := metric.ResolveDistanceFn[float64](orderByLimit.Metric)
-				if err != nil {
-					return err
-				}
-
-				rhs := types.BytesToArray[float64](orderByLimit.NumVec)
-
-				for _, row := range selectRows {
-					dist64, err := distFunc(types.BytesToArray[float64](lhs.GetBytesAt(int(row))), rhs)
-					if err != nil {
-						return err
-					}
-
-					heapItem := &vectorindex.SearchResult{
-						Id:       row,
-						Distance: dist64,
-					}
-					if len(hp) >= int(orderByLimit.Limit) {
-						if dist64 < hp[0].GetDistance() {
-							hp[0] = heapItem
-							heap.Fix(&hp, 0)
-						}
-					} else {
-						heap.Push(&hp, heapItem)
-					}
-				}
-
-			default:
-				return moerr.NewInternalErrorNoCtx(fmt.Sprintf("only support float32/float64 type for topn: %s", orderByLimit.Typ))
+		if orderByLimit != nil {
+			vecColPos := orderByLimit.ColPos
+			if phyAddrColumnPos >= 0 && vecColPos > int32(phyAddrColumnPos) {
+				vecColPos--
 			}
+			vecCol := &cacheVectors[vecColPos]
 
-			sels := make([]int64, 0, orderByLimit.Limit)
-			for len(hp) > 0 {
-				sels = append(sels, heap.Pop(&hp).(*vectorindex.SearchResult).Id)
+			selectRows, dists, err = HandleOrderByLimitOnIVFFlatIndex(ctx, selectRows, vecCol, orderByLimit)
+			if err != nil {
+				return err
 			}
-
-			slices.Sort(sels)
-			selectRows = sels
 		}
 
 		// phyAddrColumnPos >= 0 means one of the columns is the physical address column
@@ -514,6 +613,10 @@ func BlockDataReadInner(
 			if outputColPos == phyAddrColumnPos {
 				continue
 			}
+			if orderByLimit != nil && loadedColumnPos == int(orderByLimit.ColPos) {
+				loadedColumnPos++
+				continue
+			}
 			if err = outputBat.Vecs[outputColPos].PreExtendWithArea(
 				len(selectRows), 0, mp,
 			); err != nil {
@@ -525,6 +628,16 @@ func BlockDataReadInner(
 				break
 			}
 			loadedColumnPos++
+		}
+
+		if orderByLimit != nil {
+			if len(outputBat.Vecs) == len(columns) {
+				distVec := vector.NewVec(types.T_float64.ToType())
+				vector.AppendFixedList(distVec, dists, nil, mp)
+				outputBat.Vecs = append(outputBat.Vecs, distVec)
+			} else {
+				vector.AppendFixedList(outputBat.Vecs[len(outputBat.Vecs)-1], dists, nil, mp)
+			}
 		}
 		return
 	}

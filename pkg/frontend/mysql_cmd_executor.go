@@ -221,6 +221,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 
 	stm.ConnectionId = ses.GetConnectionID()
 	stm.Account = tenant.GetTenant()
+	stm.AccountID = tenant.GetTenantID()
 	stm.RoleId = tenant.GetDefaultRoleID()
 	//stm.RoleId = proc.GetSessionInfo().RoleId
 	stm.User = tenant.GetUser()
@@ -288,7 +289,7 @@ var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *pr
 	if tenant == nil {
 		tenant, _ = GetTenantInfo(ctx, "internal")
 	}
-	incStatementErrorsCounter(tenant.GetTenant(), nil)
+	incStatementErrorsCounter(tenant.GetTenant(), tenant.GetTenantID(), nil)
 	return ctx, nil
 }
 
@@ -1888,7 +1889,7 @@ func getExplainOption(reqCtx context.Context, options []tree.OptionElem) (*expla
 		return es, nil
 	} else {
 		for _, v := range options {
-			if strings.EqualFold(v.Name, "VERBOSE") {
+			if strings.EqualFold(v.Name, tree.VerboseOption) {
 				if strings.EqualFold(v.Value, "TRUE") || v.Value == "NULL" {
 					es.Verbose = true
 				} else if strings.EqualFold(v.Value, "FALSE") {
@@ -1896,7 +1897,7 @@ func getExplainOption(reqCtx context.Context, options []tree.OptionElem) (*expla
 				} else {
 					return nil, moerr.NewInvalidInputf(reqCtx, "invalid explain option '%s', valud '%s'", v.Name, v.Value)
 				}
-			} else if strings.EqualFold(v.Name, "ANALYZE") {
+			} else if strings.EqualFold(v.Name, tree.AnalyzeOption) {
 				if strings.EqualFold(v.Value, "TRUE") || v.Value == "NULL" {
 					es.Analyze = true
 				} else if strings.EqualFold(v.Value, "FALSE") {
@@ -1904,7 +1905,7 @@ func getExplainOption(reqCtx context.Context, options []tree.OptionElem) (*expla
 				} else {
 					return nil, moerr.NewInvalidInputf(reqCtx, "invalid explain option '%s', valud '%s'", v.Name, v.Value)
 				}
-			} else if strings.EqualFold(v.Name, "FORMAT") {
+			} else if strings.EqualFold(v.Name, tree.FormatOption) {
 				if strings.EqualFold(v.Value, "TEXT") {
 					es.Format = explain.EXPLAIN_FORMAT_TEXT
 				} else if strings.EqualFold(v.Value, "JSON") {
@@ -1913,6 +1914,10 @@ func getExplainOption(reqCtx context.Context, options []tree.OptionElem) (*expla
 					return nil, moerr.NewNotSupportedf(reqCtx, "Unsupport explain format '%s'", v.Value)
 				} else {
 					return nil, moerr.NewInvalidInputf(reqCtx, "invalid explain option '%s', valud '%s'", v.Name, v.Value)
+				}
+			} else if strings.EqualFold(v.Name, tree.CheckOption) {
+				if err := json.Unmarshal([]byte(v.Value), &es.CheckExpr); err != nil {
+					return nil, moerr.NewInvalidInputf(reqCtx, "invalid explain option '%s', valud '%s': %s", v.Name, v.Value, err.Error())
 				}
 			} else {
 				return nil, moerr.NewInvalidInputf(reqCtx, "invalid explain option '%s', valud '%s'", v.Name, v.Value)
@@ -2251,19 +2256,19 @@ func parseSql(execCtx *ExecCtx, p *mysql.MySQLParser) (stmts []tree.Statement, e
 	return p.Parse(execCtx.reqCtx, execCtx.input.getSql(), lctn)
 }
 
-func incTransactionCounter(tenant string) {
-	metric.TransactionCounter(tenant).Inc()
+func incTransactionCounter(tenant string, tenantId uint32) {
+	metric.TransactionCounter(tenant, tenantId).Inc()
 }
 
-func incTransactionErrorsCounter(tenant string, t metric.SQLType) {
+func incTransactionErrorsCounter(tenant string, tenantId uint32, t metric.SQLType) {
 	if t == metric.SQLTypeRollback {
 		return
 	}
-	metric.TransactionErrorsCounter(tenant, t).Inc()
+	metric.TransactionErrorsCounter(tenant, tenantId, t).Inc()
 }
 
-func incStatementErrorsCounter(tenant string, stmt tree.Statement) {
-	metric.StatementErrorsCounter(tenant, getStatementType(stmt).GetQueryType()).Inc()
+func incStatementErrorsCounter(tenant string, tenantId uint32, stmt tree.Statement) {
+	metric.StatementErrorsCounter(tenant, tenantId, getStatementType(stmt).GetQueryType()).Inc()
 }
 
 // authenticateUserCanExecuteStatement checks the user can execute the statement

@@ -425,6 +425,48 @@ var supportedAggInNewFramework = []FuncNew{
 	},
 
 	{
+		functionId: VAR_SAMPLE,
+		class:      plan.Function_AGG,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			return fixedUnaryAggTypeCheck(inputs, agg.VarSampleSupportedParameters)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isAgg:      true,
+				retType:    agg.VarSampleReturnType,
+				aggFramework: aggregationLogicOfOverload{
+					str:         "var_sample",
+					aggRegister: agg.RegisterVarSample2,
+				},
+			},
+		},
+	},
+
+	{
+		functionId: STDDEV_SAMPLE,
+		class:      plan.Function_AGG,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			return fixedUnaryAggTypeCheck(inputs, agg.VarSampleSupportedParameters)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isAgg:      true,
+				retType:    agg.VarSampleReturnType,
+				aggFramework: aggregationLogicOfOverload{
+					str:         "stddev_sample",
+					aggRegister: agg.RegisterStdDevSample2,
+				},
+			},
+		},
+	},
+
+	{
 		functionId: MEDIAN,
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,

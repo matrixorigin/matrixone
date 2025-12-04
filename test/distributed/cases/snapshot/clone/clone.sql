@@ -1,5 +1,4 @@
 -- clone db/table in current account with snapshot
-set experimental_fulltext_index=1;
 set ft_relevancy_algorithm="TF-IDF";
 SET experimental_hnsw_index = 1;
 drop database if exists test01;
@@ -26,7 +25,6 @@ create unique index mail_method_idx on aerr(email,lmethod);
 alter table aerr add primary key (uid);
 select uid,lmethod,email from aerr where lmethod = 'basic' and  email = 'xx@mo.cn';
 set @idxsql = concat("select count(*) from `", (SELECT index_table_name FROM mo_catalog.mo_indexes WHERE column_name = 'lmethod'), "`");
-prepare err1 from @novar;
 prepare s1 from @idxsql;
 execute s1;
 drop snapshot if exists sp01;
@@ -133,7 +131,9 @@ create database system_new clone system;
 drop database if exists system_metrics_new;
 create database system_metrics_new clone system_metrics;
 use system_metrics_new;
+-- @bvt:issue#23182
 show tables;
+-- @bvt:issue
 show databases;
 use test01_new;
 show tables;

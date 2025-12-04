@@ -1,0 +1,75 @@
+drop database if exists d1;
+create database d1;
+use d1;
+drop table if exists t1;
+drop table if exists t2;
+drop table if exists t3;
+create table t1(c1 int primary key);
+create table t2(c1 int primary key, c2 int, c3 int);
+create table t3(c1 int, c2 int, c3 int, primary key(c1,c2));
+create table t4(c1 bigint primary key, c2 bigint);
+insert into t1 select * from generate_series(10000) g;
+insert into t4 select c1, c1 from t1;
+insert into t2 select c1, c1, c1 from t1;
+insert into t2 select c1+10000, c1+10000, c1+10000 from t1;
+insert into t3 select c1, c1, c1 from t1;
+insert into t3 select c1+10000, c1+10000, c1+10000 from t1;
+insert into t3 select c1+20000, c1+20000, c1+20000 from t1;
+select mo_ctl('dn', 'flush', 'd1.t1');
+mo_ctl(dn, flush, d1.t1)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select mo_ctl('dn', 'flush', 'd1.t2');
+mo_ctl(dn, flush, d1.t2)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select mo_ctl('dn', 'flush', 'd1.t3');
+mo_ctl(dn, flush, d1.t3)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select mo_ctl('dn', 'flush', 'd1.t4');
+mo_ctl(dn, flush, d1.t4)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+explain select * from t4 where c1 + 2 = 5;
+TP QUERY PLAN
+Project
+  ->  Table Scan on d1.t4
+        Filter Cond: (t4.c1 = 3)
+        Block Filter Cond: (t4.c1 = 3)
+explain (check '["Table Scan", "= 3", "Filter Cond"]') select * from t4 where c1 + 2 = 5;
+TP QUERY PLAN
+Project
+  ->  Table Scan on d1.t4
+        Filter Cond: (t4.c1 = 3)
+        Block Filter Cond: (t4.c1 = 3)
+explain (check '["= 5"]') select * from t4 where c1 + 2 = 5;
+invalid input: check expr = 5 not found
+explain (analyze true, check '["Table Scan", "ReadSize=", "|", "bytes", "InputSize=", "OutputSize=", "MemorySize=", "timeConsumed=", "inputRows=", "outputRows=", "= 3", "Filter Cond"]') select * from t4 where c1 + 2 = 5;
+tp query plan
+Project
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=16 bytes OutputSize=16 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=16 bytes (min=16 bytes, max=16 bytes)
+  ->  Table Scan on d1.t4
+        Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=1 outputRows=1 (min=1, max=1) InputSize=16 bytes OutputSize=16 bytes ReadSize=96.05 KiB|0 bytes|64.04 KiB MemorySize=33 bytes (min=16 bytes, max=16 bytes)
+        Filter Cond: (t4.c1 = 3)
+        Block Filter Cond: (t4.c1 = 3)
+explain (analyze true, check '["Table Scan", "ReadSize=", "|", "bytes", "InputSize=", "OutputSize=", "MemorySize=", "timeConsumed=", "inputRows=", "outputRows=", "= 3", "Filter Cond"]') select * from t4 where c1 + 2 = 5;
+tp query plan
+Project
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=16 bytes OutputSize=16 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=16 bytes (min=16 bytes, max=16 bytes)
+  ->  Table Scan on d1.t4
+        Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=1 outputRows=1 (min=1, max=1) InputSize=16 bytes OutputSize=16 bytes ReadSize=96.05 KiB|0 bytes|0 bytes MemorySize=33 bytes (min=16 bytes, max=16 bytes)
+        Filter Cond: (t4.c1 = 3)
+        Block Filter Cond: (t4.c1 = 3)
+explain (analyze true, check '["= 5"]') select * from t4 where c1 + 2 = 5;
+invalid input: check expr = 5 not found
+explain (check '["% 2", "Sort", "Limit: 10", "% 3"]') select * from (select * from t1 where c1%3=0 order by c1 desc limit 10) tmpt where c1 % 2 = 0;
+TP QUERY PLAN
+Project
+  ->  Filter
+        Filter Cond: ((cast(t1.c1 AS BIGINT) % 2) = 0)
+        ->  Sort
+              Sort Key: t1.c1 DESC
+              Limit: 10
+              Send Message: [tag 1 , type MsgTopValue]
+              ->  Table Scan on d1.t1
+                    Sort Key: t1.c1 DESC
+                    Filter Cond: ((cast(t1.c1 AS BIGINT) % 3) = 0)
+                    Recv Message: [tag 1 , type MsgTopValue]
+drop database if exists d1;

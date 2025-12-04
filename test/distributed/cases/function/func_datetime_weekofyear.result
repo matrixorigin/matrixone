@@ -1,0 +1,74 @@
+SELECT WEEKOFYEAR('2008-02-20') AS result1;
+result1
+8
+SELECT WEEKOFYEAR('2008-02-20') AS week_of_year;
+week_of_year
+8
+SELECT WEEKOFYEAR('2008-01-01') AS first_week;
+first_week
+1
+SELECT WEEKOFYEAR('2008-12-31') AS last_week;
+last_week
+53
+SELECT WEEKOFYEAR('2008-02-20 10:30:45') AS week_from_datetime;
+week_from_datetime
+8
+SELECT WEEKOFYEAR('2008-01-01 00:00:00') AS first_week_datetime;
+first_week_datetime
+1
+SELECT WEEKOFYEAR('2008-12-31 23:59:59') AS last_week_datetime;
+last_week_datetime
+53
+SELECT WEEKOFYEAR(TIMESTAMP('2008-02-20 10:30:45')) AS week_from_timestamp;
+week_from_timestamp
+8
+SELECT WEEKOFYEAR('2003-12-30') AS week_53_2003;
+week_53_2003
+53
+SELECT WEEKOFYEAR('2004-01-02') AS week_1_2004;
+week_1_2004
+1
+SELECT WEEKOFYEAR('2004-12-31') AS week_53_2004;
+week_53_2004
+53
+SELECT WEEKOFYEAR('2005-01-01') AS week_53_2005;
+week_53_2005
+1
+CREATE TABLE t1(d DATE);
+INSERT INTO t1 VALUES ('2008-02-20'), ('2008-01-01'), ('2008-12-31');
+SELECT d, WEEKOFYEAR(d) AS week FROM t1;
+d    week
+2008-02-20    8
+2008-01-01    1
+2008-12-31    53
+DROP TABLE t1;
+CREATE TABLE t1(d DATE);
+INSERT INTO t1 VALUES ('2008-01-01'), ('2008-06-15'), ('2008-12-31');
+SELECT * FROM t1 WHERE WEEKOFYEAR(d) > 20;
+d
+2008-06-15
+2008-12-31
+DROP TABLE t1;
+SELECT WEEKOFYEAR(NULL) AS null_result;
+null_result
+null
+SELECT WEEKOFYEAR('2008-02-20') AS weekofyear_result, WEEK('2008-02-20', 3) AS week_mode3_result;
+invalid argument function week, bad value [VARCHAR BIGINT]
+SELECT WEEKOFYEAR('2008-01-15') AS jan_week;
+jan_week
+3
+SELECT WEEKOFYEAR('2008-06-15') AS jun_week;
+jun_week
+24
+SELECT WEEKOFYEAR('2008-09-15') AS sep_week;
+sep_week
+38
+SELECT WEEKOFYEAR('2008-12-15') AS dec_week;
+dec_week
+51
+SELECT WEEKOFYEAR('2024-11-18') AS current_week;
+current_week
+47
+SELECT WEEKOFYEAR(DATE_ADD('2008-01-01', INTERVAL 7 DAY)) AS week_after;
+week_after
+2

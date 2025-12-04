@@ -1,3 +1,4 @@
+SET time_zone = '+00:00';
 DROP TABLE IF EXISTS t_bigint;
 CREATE TABLE t_bigint (
 id INT PRIMARY KEY AUTO_INCREMENT,
@@ -210,6 +211,7 @@ id    ts
 1    1970-01-01 00:00:01
 2    2038-01-19 03:14:07
 INSERT INTO t_timestamp (ts) VALUES ('1969-12-31 23:59:59');
+truncated type datetime value 1969-12-31 23:59:59 for column ts_min, 1
 INSERT INTO t_timestamp (ts) VALUES ('2038-01-19 03:14:08');
 DROP TABLE t_timestamp;
 DROP TABLE IF EXISTS t_time;
@@ -416,7 +418,8 @@ INSERT INTO t_date_arith VALUES (1, '9999-12-31');
 INSERT INTO t_date_arith VALUES (2, '1000-01-01');
 INSERT INTO t_date_arith VALUES (3, '2024-02-29');
 SELECT dt, DATE_ADD(dt, INTERVAL 1 DAY) FROM t_date_arith WHERE id = 1;
-Data truncation: data out of range: data type date, 
+dt    DATE_ADD(dt, INTERVAL(1, day))
+9999-12-31    null
 SELECT dt, DATE_SUB(dt, INTERVAL 1 DAY) FROM t_date_arith WHERE id = 2;
 dt    DATE_SUB(dt, INTERVAL(1, day))
 1000-01-01    0999-12-31
@@ -464,7 +467,7 @@ INSERT INTO t_not_null (name) VALUES (NULL);
 constraint violation: Column 'name' cannot be null
 SELECT * FROM t_not_null ORDER BY id;
 id    name
-1    
+1
 2    test
 DROP TABLE t_not_null;
 DROP TABLE IF EXISTS t_mixed;

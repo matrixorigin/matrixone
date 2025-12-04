@@ -1,0 +1,39 @@
+# Basic test case from requirements
+SELECT RADIANS(180) AS result1;
+
+# Additional test cases
+SELECT RADIANS(0) AS zero_degrees;
+SELECT RADIANS(180) AS one_eighty_degrees;
+SELECT RADIANS(90) AS ninety_degrees;
+SELECT RADIANS(45) AS forty_five_degrees;
+SELECT RADIANS(360) AS three_sixty_degrees;
+SELECT RADIANS(-180) AS negative_one_eighty;
+
+# Common angle conversions
+SELECT RADIANS(0) AS zero_radians;
+SELECT RADIANS(30) AS thirty_degrees;
+SELECT RADIANS(45) AS forty_five_degrees;
+SELECT RADIANS(60) AS sixty_degrees;
+SELECT RADIANS(90) AS ninety_degrees;
+SELECT RADIANS(180) AS one_eighty_degrees;
+SELECT RADIANS(360) AS three_sixty_degrees;
+
+# NULL handling
+SELECT RADIANS(NULL) AS null_input;
+
+# Table usage
+CREATE TABLE t1(degrees FLOAT);
+INSERT INTO t1 VALUES (0), (90), (180), (360), (-180);
+SELECT degrees, RADIANS(degrees) AS radians FROM t1;
+DROP TABLE t1;
+
+# WHERE clause
+CREATE TABLE t1(degrees FLOAT);
+INSERT INTO t1 VALUES (0), (90), (180), (360), (-180);
+SELECT * FROM t1 WHERE RADIANS(degrees) > 0;
+DROP TABLE t1;
+
+# Comparison with DEGREES (RADIANS(DEGREES(radians)) should equal radians)
+SELECT RADIANS(DEGREES(PI())) AS should_be_pi;
+SELECT DEGREES(RADIANS(180)) AS should_be_180;
+

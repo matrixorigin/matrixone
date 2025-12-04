@@ -199,8 +199,8 @@ import (
     property tree.Property
     exportParm *tree.ExportParam
 
-    epxlainOptions []tree.OptionElem
-    epxlainOption tree.OptionElem
+    explainOptions []tree.OptionElem
+    explainOption tree.OptionElem
     whenClause *tree.When
     whenClauseList []*tree.When
     withClause *tree.With
@@ -276,6 +276,8 @@ import (
 %nonassoc LOWER_THAN_ORDER
 %nonassoc ORDER
 %nonassoc LOWER_THAN_COMMA
+%nonassoc LOWER_THAN_WITH
+%nonassoc WITH
 %token <str> SELECT INSERT UPDATE DELETE FROM WHERE GROUP HAVING BY LIMIT OFFSET FOR OF CONNECT MANAGE GRANTS OWNERSHIP REFERENCE
 %nonassoc LOWER_THAN_SET
 %nonassoc <str> SET
@@ -312,13 +314,20 @@ import (
 %left <str> '*' '/' DIV '%' MOD
 %left <str> '^'
 %right <str> '~' UNARY
+%nonassoc LOWER_THAN_COLLATE
 %left <str> COLLATE
+%left TYPECAST
+%nonassoc LOWER_THAN_SIGNED
+%left SIGNED UNSIGNED
+%nonassoc LOWER_THAN_ZEROFILL
+%left ZEROFILL
+%nonassoc LOWER_THAN_INT
+%left INT INTEGER
 %right <str> BINARY UNDERSCORE_BINARY
 %right <str> INTERVAL
 %nonassoc <str> '.' ','
 
 %token <str> OUT INOUT
-
 
 // Transaction
 %token <str> BEGIN START TRANSACTION COMMIT ROLLBACK WORK CONSISTENT SNAPSHOT SAVEPOINT
@@ -361,14 +370,12 @@ import (
 // publication
 %token <str> PUBLICATION SUBSCRIPTIONS PUBLICATIONS
 
-
 // MO table option
 %token <str> PROPERTIES
 
 // Secondary Index
 %token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT MASTER HNSW
 %token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_SEARCH EF_CONSTRUCTION M ASYNC
-
 
 // Alter
 %token <str> EXPIRE ACCOUNT ACCOUNTS UNLOCK DAY NEVER PUMP MYSQL_COMPATIBILITY_MODE UNIQUE_CHECK_ON_AUTOINCR
@@ -397,6 +404,7 @@ import (
 
 // Load
 %token <str> LOAD INLINE INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES ROWS IMPORT DISCARD JSONTYPE
+%token TYPECAST
 
 // MODump
 %token <str> MODUMP
@@ -417,7 +425,7 @@ import (
 %token <str> CURRENT_TIME LOCALTIME LOCALTIMESTAMP
 %token <str> UTC_DATE UTC_TIME UTC_TIMESTAMP
 %token <str> REPLACE CONVERT
-%token <str> SEPARATOR TIMESTAMPDIFF
+%token <str> SEPARATOR TIMESTAMPDIFF TIMESTAMPADD
 %token <str> CURRENT_DATE CURRENT_USER CURRENT_ROLE
 
 // Time unit
@@ -539,7 +547,7 @@ import (
 %type <exportParm> export_data_param_opt
 %type <loadParam> load_param_opt load_param_opt_2
 %type <tailParam> tail_param_opt
-%type <str> json_type_opt
+%type <str> json_type_opt restore_snapshot_name restore_to_account_name_opt
 
 // case statement
 %type <statement> case_stmt
@@ -583,9 +591,10 @@ import (
 %type <order> order
 %type <orderBy> order_list order_by_clause order_by_opt
 %type <limit> limit_opt limit_clause
+%type <limit> limit_rank_suffix
 %type <str> insert_column optype_opt
 %type <str> optype
-%type <identifierList> column_list column_list_opt partition_clause_opt partition_id_list insert_column_list accounts_list
+%type <identifierList> column_list column_list_opt partition_clause_opt partition_id_list insert_column_list accounts_list restore_db_scope restore_table_scope
 %type <joinCond> join_condition join_condition_opt on_expression_opt
 %type <selectLockInfo> select_lock_opt
 %type <upgrade_target> target
@@ -791,11 +800,11 @@ import (
 %type <cte> common_table_expr
 %type <cteList> cte_list
 
-%type <epxlainOptions> utility_option_list
-%type <epxlainOption> utility_option_elem
+%type <explainOptions> utility_option_list
+%type <explainOption> utility_option_elem
 %type <str> utility_option_name utility_option_arg
 %type <str> explain_option_key
-%type <str> explain_foramt_value trim_direction
+%type <str> explain_format_value trim_direction
 %type <str> priority_opt priority quick_opt ignore_opt wild_opt
 
 %type <str> account_name account_role_name
@@ -848,7 +857,6 @@ import (
 
 start_command:
     stmt_type
-
 
 stmt_type:
     block_stmt
@@ -961,7 +969,6 @@ normal_stmt:
 |   resume_cdc_stmt
 |   restart_cdc_stmt
 |   branch_stmt
-
 
 backup_stmt:
     BACKUP STRING FILESYSTEM STRING PARALLELISM STRING backup_type_opt backup_timestamp_opt
@@ -1240,61 +1247,153 @@ create_pitr_stmt:
         }
     }
 
-
 pitr_value:
     INTEGRAL
     {
         $$ = $1.(int64)
     }
    
-    
 
 snapshot_restore_stmt:
-    RESTORE CLUSTER FROM SNAPSHOT ident
+    RESTORE DATABASE restore_db_scope restore_snapshot_name restore_to_account_name_opt
     {
-        $$ = &tree.RestoreSnapShot{
-            Level: tree.RESTORELEVELCLUSTER,
-            SnapShotName: tree.Identifier($5.Compare()),
+        var account tree.Identifier
+        var database tree.Identifier
+        switch len($3) {
+        case 1:
+            database = $3[0]
+        case 2:
+            account = $3[0]
+            database = $3[1]
+        default:
+            yylex.Error("invalid restore database target")
+            goto ret1
         }
 
+        snapshotName := tree.Identifier($4)
+        result := &tree.RestoreSnapShot{
+            Level:        tree.RESTORELEVELDATABASE,
+            DatabaseName: database,
+            SnapShotName: snapshotName,
+        }
+
+        if len(account) > 0 {
+            result.AccountName = account
+        }
+
+        if len($5) > 0 {
+            result.ToAccountName = tree.Identifier($5)
+        }
+
+        $$ = result
     }
-|   RESTORE ACCOUNT ident FROM SNAPSHOT ident
+|   RESTORE TABLE restore_table_scope restore_snapshot_name restore_to_account_name_opt
+    {
+        var account tree.Identifier
+        var database tree.Identifier
+        var table tree.Identifier
+
+        switch len($3) {
+        case 2:
+            database = $3[0]
+            table = $3[1]
+        case 3:
+            account = $3[0]
+            database = $3[1]
+            table = $3[2]
+        default:
+            yylex.Error("invalid restore table target")
+            goto ret1
+        }
+
+        snapshotName := tree.Identifier($4)
+        result := &tree.RestoreSnapShot{
+            Level:        tree.RESTORELEVELTABLE,
+            DatabaseName: database,
+            TableName:    table,
+            SnapShotName: snapshotName,
+        }
+
+        if len(account) > 0 {
+            result.AccountName = account
+        }
+
+        if len($5) > 0 {
+            result.ToAccountName = tree.Identifier($5)
+        }
+
+        $$ = result
+    }
+|   RESTORE CLUSTER restore_snapshot_name
     {
         $$ = &tree.RestoreSnapShot{
-            Level: tree.RESTORELEVELACCOUNT,
-            AccountName:tree.Identifier($3.Compare()),
-            SnapShotName:tree.Identifier($6.Compare()),
+            Level:        tree.RESTORELEVELCLUSTER,
+            SnapShotName: tree.Identifier($3),
         }
     }
-|   RESTORE ACCOUNT ident DATABASE ident FROM SNAPSHOT ident
+|   RESTORE ACCOUNT ident restore_snapshot_name restore_to_account_name_opt
     {
-        $$ = &tree.RestoreSnapShot{
-            Level: tree.RESTORELEVELDATABASE,
-            AccountName: tree.Identifier($3.Compare()),
-            DatabaseName: tree.Identifier($5.Compare()),
-            SnapShotName: tree.Identifier($8.Compare()),
+        result := &tree.RestoreSnapShot{
+            Level:        tree.RESTORELEVELACCOUNT,
+            AccountName:  tree.Identifier($3.Compare()),
+            SnapShotName: tree.Identifier($4),
         }
-    }
-|   RESTORE ACCOUNT ident DATABASE ident TABLE ident FROM SNAPSHOT ident
-    {
-        $$ = &tree.RestoreSnapShot{
-            Level: tree.RESTORELEVELTABLE,
-            AccountName: tree.Identifier($3.Compare()),
-            DatabaseName: tree.Identifier($5.Compare()),
-            TableName: tree.Identifier($7.Compare()),
-            SnapShotName: tree.Identifier($10.Compare()),
+
+        if len($5) > 0 {
+            result.ToAccountName = tree.Identifier($5)
         }
+
+        $$ = result
     }
-|   RESTORE ACCOUNT ident FROM SNAPSHOT ident TO ACCOUNT ident
+
+restore_db_scope:
+    ident
     {
-        $$ = &tree.RestoreSnapShot{ 
-            Level: tree.RESTORELEVELACCOUNT,
-            AccountName:tree.Identifier($3.Compare()),
-            SnapShotName:tree.Identifier($6.Compare()),
-            ToAccountName: tree.Identifier($9.Compare()),
+        $$ = tree.IdentifierList{tree.Identifier($1.Compare())}
+    }
+|   ident '.' ident
+    {
+        $$ = tree.IdentifierList{
+            tree.Identifier($1.Compare()),
+            tree.Identifier($3.Compare()),
         }
     }
 
+restore_table_scope:
+    ident '.' ident
+    {
+        $$ = tree.IdentifierList{
+            tree.Identifier($1.Compare()),
+            tree.Identifier($3.Compare()),
+        }
+    }
+|   ident '.' ident '.' ident
+    {
+        $$ = tree.IdentifierList{
+            tree.Identifier($1.Compare()),
+            tree.Identifier($3.Compare()),
+            tree.Identifier($5.Compare()),
+        }
+    }
+
+restore_snapshot_name:
+    '{' SNAPSHOT '=' ident '}'
+    {
+        $$ = $4.Compare()
+    }
+|   '{' SNAPSHOT '=' STRING '}'
+    {
+        $$ = strings.ToLower($4)
+    }
+
+restore_to_account_name_opt:
+    {
+        $$ = ""
+    }
+|   TO ACCOUNT ident
+    {
+        $$ = $3.Compare()
+    }
 
 restore_pitr_stmt:
    RESTORE FROM PITR ident STRING
@@ -1407,7 +1506,6 @@ call_stmt:
             Args: $4,
         }
     }
-
 
 leave_stmt:
     LEAVE ident
@@ -1572,9 +1670,6 @@ mo_dump_stmt:
             ExportParams: ep,
         }
     }
-
-
-
 
 load_data_stmt:
     LOAD DATA local_opt load_param_opt duplicate_opt INTO TABLE table_name tail_param_opt parallel_opt strict_opt
@@ -2124,7 +2219,6 @@ object_type:
     {
         $$ = tree.OBJECT_TYPE_ACCOUNT
     }
-
 
 priv_list:
     priv_elem
@@ -3061,7 +3155,6 @@ prepare_stmt:
         $$ = tree.NewPrepareVar(tree.Identifier($2), $4)
     }
 
-
 execute_stmt:
     execute_sym stmt_name
     {
@@ -3118,103 +3211,78 @@ explain_stmt:
     }
 |   explain_sym VERBOSE explainable_stmt
     {
-        explainStmt := tree.NewExplainStmt($3, "text")
-        optionElem := tree.MakeOptionElem("verbose", "NULL")
-        options := tree.MakeOptions(optionElem)
-        explainStmt.Options = options
-        $$ = explainStmt
+        options := []tree.OptionElem{
+            tree.MakeOptionElem(tree.VerboseOption, "NULL"),
+        }
+        $$ = tree.MakeExplainStmt($3, options)
     }
 |   explain_sym ANALYZE explainable_stmt
     {
-        explainStmt := tree.NewExplainAnalyze($3, "text")
-        optionElem := tree.MakeOptionElem("analyze", "NULL")
-        options := tree.MakeOptions(optionElem)
-        explainStmt.Options = options
-        $$ = explainStmt
+        options := []tree.OptionElem{
+            tree.MakeOptionElem(tree.AnalyzeOption, "NULL"),
+        }
+        $$ = tree.MakeExplainStmt($3, options)
     }
 |   explain_sym ANALYZE VERBOSE explainable_stmt
     {
-        explainStmt := tree.NewExplainAnalyze($4, "text")
-        optionElem1 := tree.MakeOptionElem("analyze", "NULL")
-        optionElem2 := tree.MakeOptionElem("verbose", "NULL")
-        options := tree.MakeOptions(optionElem1)
-        options = append(options, optionElem2)
-        explainStmt.Options = options
-        $$ = explainStmt
+        options := []tree.OptionElem{
+            tree.MakeOptionElem(tree.AnalyzeOption, "NULL"),
+            tree.MakeOptionElem(tree.VerboseOption, "NULL"),
+        }
+        $$ = tree.MakeExplainStmt($4, options)
     }
 |   explain_sym PHYPLAN explainable_stmt
     {
-        explainStmt := tree.NewExplainPhyPlan($3, "text")
-        optionElem := tree.MakeOptionElem("phyplan", "NULL")
-        options := tree.MakeOptions(optionElem)
-        explainStmt.Options = options
-        $$ = explainStmt
+        options := []tree.OptionElem{
+            tree.MakeOptionElem(tree.PhyPlanOption, "NULL"),
+        }
+        $$ = tree.MakeExplainStmt($3, options)
     }
 |   explain_sym PHYPLAN VERBOSE explainable_stmt
     {
-        explainStmt := tree.NewExplainPhyPlan($4, "text")
-        optionElem1 := tree.MakeOptionElem("phyplan", "NULL")
-        optionElem2 := tree.MakeOptionElem("verbose", "NULL")
-        options := tree.MakeOptions(optionElem1)
-        options = append(options, optionElem2)
-        explainStmt.Options = options
-        $$ = explainStmt
+         options := []tree.OptionElem{
+            tree.MakeOptionElem(tree.PhyPlanOption, "NULL"),
+            tree.MakeOptionElem(tree.VerboseOption, "NULL"),
+        }
+        $$ = tree.MakeExplainStmt($4, options)
     }
 |   explain_sym PHYPLAN ANALYZE explainable_stmt
     {
-        explainStmt := tree.NewExplainPhyPlan($4, "text")
-        optionElem1 := tree.MakeOptionElem("phyplan", "NULL")
-        optionElem2 := tree.MakeOptionElem("analyze", "NULL")
-        options := tree.MakeOptions(optionElem1)
-        options = append(options, optionElem2)
-        explainStmt.Options = options
-        $$ = explainStmt
+        options := []tree.OptionElem{
+            tree.MakeOptionElem(tree.PhyPlanOption, "NULL"),
+            tree.MakeOptionElem(tree.AnalyzeOption, "NULL"),
+        }
+        $$ = tree.MakeExplainStmt($4, options)
     }
 |   explain_sym '(' utility_option_list ')' explainable_stmt
     {
-    	if tree.IsContainPhyPlan($3) {
-	    explainStmt := tree.NewExplainPhyPlan($5, "text")
-            explainStmt.Options = $3
-            $$ = explainStmt
-    	} else if tree.IsContainAnalyze($3) {
-            explainStmt := tree.NewExplainAnalyze($5, "text")
-            explainStmt.Options = $3
-            $$ = explainStmt
-        } else {
-            explainStmt := tree.NewExplainStmt($5, "text")
-            explainStmt.Options = $3
-            $$ = explainStmt
-        }
+        $$ = tree.MakeExplainStmt($5, $3)
     }
 |   explain_sym FORCE execute_stmt
-{
-    $$ = tree.NewExplainStmt($3, "text")
-}
+    {
+        $$ = tree.MakeExplainStmt($3, nil)
+    }
 |   explain_sym VERBOSE FORCE execute_stmt
     {
-        explainStmt := tree.NewExplainStmt($4, "text")
-        optionElem := tree.MakeOptionElem("verbose", "NULL")
-        options := tree.MakeOptions(optionElem)
-        explainStmt.Options = options
-        $$ = explainStmt
+        options := []tree.OptionElem{
+            tree.MakeOptionElem(tree.VerboseOption, "NULL"),
+        }
+        $$ = tree.MakeExplainStmt($4, options)
     }
 |   explain_sym ANALYZE FORCE execute_stmt
     {
-        explainStmt := tree.NewExplainAnalyze($4, "text")
-        optionElem := tree.MakeOptionElem("analyze", "NULL")
-        options := tree.MakeOptions(optionElem)
-        explainStmt.Options = options
-        $$ = explainStmt
+        options := []tree.OptionElem{
+            tree.MakeOptionElem(tree.AnalyzeOption, "NULL"),
+        }
+        $$ = tree.MakeExplainStmt($4, options)
     }
 |   explain_sym ANALYZE VERBOSE FORCE execute_stmt
     {
-        explainStmt := tree.NewExplainAnalyze($5, "text")
-        optionElem1 := tree.MakeOptionElem("analyze", "NULL")
-        optionElem2 := tree.MakeOptionElem("verbose", "NULL")
-        options := tree.MakeOptions(optionElem1)
-        options = append(options, optionElem2)
-        explainStmt.Options = options
-        $$ = explainStmt
+        options := []tree.OptionElem{
+            tree.MakeOptionElem(tree.AnalyzeOption, "NULL"),
+            tree.MakeOptionElem(tree.VerboseOption, "NULL"),
+        }
+        $$ = tree.MakeExplainStmt($5, options)
     }
 
 explain_option_key:
@@ -3222,11 +3290,11 @@ explain_option_key:
 |   VERBOSE
 |   FORMAT
 |   PHYPLAN
+|   CHECK
 
-explain_foramt_value:
+explain_format_value:
     JSON
 |   TEXT
-
 
 prepare_sym:
     PREPARE
@@ -3248,7 +3316,7 @@ explain_sym:
 utility_option_list:
     utility_option_elem
     {
-        $$ = tree.MakeOptions($1)
+        $$ = []tree.OptionElem{$1}
     }
 |     utility_option_list ',' utility_option_elem
     {
@@ -3268,10 +3336,10 @@ utility_option_name:
     }
 
 utility_option_arg:
-    TRUE                    { $$ = "true" }
-|   FALSE                        { $$ = "false" }
-|   explain_foramt_value                    { $$ = $1 }
-
+    TRUE                        { $$ = "true" }
+|   FALSE                       { $$ = "false" }
+|   explain_format_value        { $$ = $1 }
+|   STRING                      { $$ = $1 }
 
 analyze_stmt:
     ANALYZE TABLE table_name '(' column_list ')'
@@ -3317,7 +3385,6 @@ opt_retry:
         }
         $$ = res
     }
-
 
 alter_stmt:
     alter_user_stmt
@@ -3408,7 +3475,6 @@ rename_option:
         alterTable.Options = []tree.AlterTableOption{opt}
         $$ = alterTable
     }
-
 
 alter_option_list:
     alter_option
@@ -3666,9 +3732,6 @@ algorithm_type:
 |   INSTANT
 |   INPLACE
 |   COPY
-|   CLONE
-|   DATA
-|   BRANCH
 
 able_type:
     DISABLE
@@ -3835,7 +3898,6 @@ visibility:
    	    $$ = tree.VISIBLE_TYPE_INVISIBLE
     }
 
-
 alter_account_stmt:
     ALTER ACCOUNT exists_opt account_name_or_param alter_account_auth_option account_status_option account_comment_opt
     {
@@ -3964,7 +4026,6 @@ alter_user_stmt:
         commentOrAttribute := $6
         $$ = tree.NewAlterUser(ifExists, users, nil, miscOpt, commentOrAttribute)
     }
-
 
 default_role_opt:
     {
@@ -4533,7 +4594,6 @@ show_upgrade_stmt:
     	$$ = &tree.ShowAccountUpgrade{}
     }
 
-
 show_subscriptions_stmt:
     SHOW SUBSCRIPTIONS like_opt
     {
@@ -4571,8 +4631,6 @@ table_column_name:
     {
         $$ = $2
     }
-
-
 
 from_or_in:
     FROM
@@ -4870,8 +4928,6 @@ delete_without_using_stmt:
             TableRefs: tree.TableExprs{$7},
         }
     }
-
-
 
 delete_with_using_stmt:
     DELETE priority_opt quick_opt ignore_opt FROM table_name_wild_list USING table_references where_expression_opt
@@ -5342,7 +5398,6 @@ force_quote_opt:
         $$ = $3
     }
 
-
 force_quote_list:
     ident
     {
@@ -5534,17 +5589,72 @@ limit_opt:
     }
 
 limit_clause:
-    LIMIT expression
+    LIMIT expression limit_rank_suffix
     {
-        $$ = &tree.Limit{Count: $2}
+        l := &tree.Limit{Count: $2}
+        if $3 != nil {
+            l.ByRank = $3.ByRank
+            l.Option = $3.Option
+        }
+        $$ = l
     }
-|   LIMIT expression ',' expression
+|   LIMIT expression ',' expression limit_rank_suffix
     {
-        $$ = &tree.Limit{Offset: $2, Count: $4}
+        l := &tree.Limit{Offset: $2, Count: $4}
+        if $5 != nil {
+            l.ByRank = $5.ByRank
+            l.Option = $5.Option
+        }
+        $$ = l
     }
-|   LIMIT expression OFFSET expression
+|   LIMIT expression OFFSET expression limit_rank_suffix
     {
-        $$ = &tree.Limit{Offset: $4, Count: $2}
+        l := &tree.Limit{Offset: $4, Count: $2}
+        if $5 != nil {
+            l.ByRank = $5.ByRank
+            l.Option = $5.Option
+        }
+        $$ = l
+    }
+
+limit_rank_suffix:
+    {
+        $$ = nil
+    }
+|   BY RANK WITH OPTION expression_list
+    {
+        // Parse option strings to extract key=value pairs into a map
+        optionMap := make(map[string]string)
+        
+        for _, expr := range $5 {
+            var str string
+            // Handle both NumVal (P_char) and StrVal
+            if numVal, ok := expr.(*tree.NumVal); ok && numVal.ValType == tree.P_char {
+                str = numVal.String()
+            } else if strVal, ok := expr.(*tree.StrVal); ok {
+                str = strVal.String()
+            } else {
+                continue
+            }
+            
+            // Remove quotes if present
+            if len(str) >= 2 && ((str[0] == '\'' && str[len(str)-1] == '\'') || (str[0] == '"' && str[len(str)-1] == '"')) {
+                str = str[1 : len(str)-1]
+            }
+            
+            // Parse key=value pairs
+            parts := strings.Split(str, "=")
+            if len(parts) == 2 {
+                key := strings.TrimSpace(strings.ToLower(parts[0]))
+                value := strings.TrimSpace(parts[1])
+                optionMap[key] = value
+            }
+        }
+        
+        $$ = &tree.Limit{
+            ByRank: true,
+            Option: optionMap,
+        }
     }
 
 order_by_opt:
@@ -5797,6 +5907,7 @@ simple_select_clause:
     }
 
 select_options_opt:
+    %prec EMPTY
     {
         $$ = tree.QuerySpecOptionNone
     }
@@ -5936,6 +6047,7 @@ grouping_sets:
     }
 
 rollup_opt:
+    %prec LOWER_THAN_WITH
     {
         $$ = false
     }
@@ -6157,7 +6269,6 @@ values_stmt:
         }
     }
 
-
 row_constructor_list:
     row_constructor
     {
@@ -6189,7 +6300,6 @@ optype:
     {
         $$ = $1
     }
-
 
 optype_opt:
 	  '(' optype ')'
@@ -6580,7 +6690,6 @@ opt_lang:
         $$ = $2
     }
 
-
 create_function_stmt:
     CREATE replace_opt FUNCTION func_name '(' func_args_list_opt ')' RETURNS func_return LANGUAGE func_lang func_body_import STRING func_handler_opt
     {
@@ -6684,7 +6793,6 @@ func_body_import:
     {
     	$$ = true
     }
-
 
 func_handler_opt:
     {
@@ -6987,7 +7095,6 @@ create_publication_accounts:
 	    }
     }
 
-
 create_stage_stmt:
     CREATE STAGE not_exists_opt ident urlparams stage_credentials_opt stage_status_opt stage_comment_opt
     {
@@ -7116,7 +7223,6 @@ alter_stage_stmt:
         var comment = $9
         $$ = tree.NewAlterStage(ifNotExists, name, urlOption, credentialsOption, statusOption, comment)
     }
-
 
 alter_publication_stmt:
     ALTER PUBLICATION exists_opt ident alter_publication_accounts_opt alter_publication_db_name_opt alter_publication_table_opt comment_opt
@@ -7291,7 +7397,6 @@ user_comment_or_attribute_opt:
 //    {
 //        $$ = &tree.ResourceOptionMaxUserConnections{Count: $2.(int64)}
 //    }
-
 
 //require_clause_opt:
 //    {
@@ -7949,7 +8054,6 @@ replace_opt:
         $$ = true
     }
 
-
 branch_stmt:
     DATA BRANCH CREATE TABLE table_name FROM table_name to_account_opt
     {
@@ -7999,7 +8103,6 @@ branch_stmt:
     	$$ = t
     }
 
-
 diff_output_opt:
     {
        $$ = nil
@@ -8008,6 +8111,12 @@ diff_output_opt:
     {
         $$ = &tree.DiffOutputOpt {
             As: *$3,
+        }
+    }
+    | OUTPUT FILE STRING
+    {
+        $$ = &tree.DiffOutputOpt {
+            DirPath: $3,
         }
     }
     | OUTPUT LIMIT INTEGRAL
@@ -8025,6 +8134,7 @@ diff_output_opt:
     }
 
 conflict_opt:
+     %prec EMPTY
      {
      	$$ = nil
      }
@@ -8525,8 +8635,10 @@ sub_partition_opt:
 |   SUBPARTITION BY sub_partition_method sub_partition_num_opt
     {
         var IsSubPartition = true
-        var PType = $3
+        var PType = $3.PType
         var Num = uint64($4)
+        $3.PType = nil
+        $3.Free()
         $$ = tree.NewPartitionBy2(
             IsSubPartition,
             PType,
@@ -9887,7 +9999,7 @@ bit_expr:
     {
         $$ = tree.NewBinaryExpr(tree.RIGHT_SHIFT, $1, $3)
     }
-|   simple_expr
+|   simple_expr %prec LOWER_THAN_COLLATE
     {
         $$ = $1
     }
@@ -10004,6 +10116,10 @@ simple_expr:
     {
         $$ = tree.NewBitCastExpr($3, $5)
     }
+|   simple_expr TYPECAST mo_cast_type %prec TYPECAST
+    {
+        $$ = tree.NewCastExpr($1, $3)
+    }
 |   CONVERT '(' expression ',' mysql_cast_type ')'
     {
         $$ = tree.NewCastExpr($3, $5)
@@ -10055,8 +10171,6 @@ simple_expr:
 	}
 	$$ = val		
     }
-
-
 
 search_pattern:
     STRING
@@ -10372,6 +10486,7 @@ mysql_cast_type:
     }
 
 integer_opt:
+    %prec LOWER_THAN_INT
     {}
 |    INTEGER
 |    INT
@@ -10450,7 +10565,6 @@ window_frame_clause_opt:
     {
         $$ = $1
     }
-
 
 window_partition_by:
    PARTITION BY expression_list
@@ -10945,7 +11059,6 @@ function_call_generic:
         }
     }
 
-
 trim_direction:
     BOTH
 |   LEADING
@@ -11020,6 +11133,17 @@ function_call_nonkeyword:
         }
     }
 |	TIMESTAMPDIFF '(' time_stamp_unit ',' expression ',' expression ')'
+	{
+        name := tree.NewUnresolvedColName($1)
+        str := strings.ToLower($3)
+        arg1 := tree.NewNumVal(str, str, false, tree.P_char)
+		$$ =  &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{arg1, $5, $7},
+        }
+	}
+|	TIMESTAMPADD '(' time_stamp_unit ',' expression ',' expression ')'
 	{
         name := tree.NewUnresolvedColName($1)
         str := strings.ToLower($3)
@@ -11641,7 +11765,6 @@ literal:
     {
         $$ = tree.NewNumVal($2, $2, false, tree.P_ScoreBinary)
     }
-
 
 column_type:
     numeric_type unsigned_opt zero_fill_opt
@@ -12471,7 +12594,7 @@ decimal_length_opt:
     }
 
 unsigned_opt:
-    /* EMPTY */
+    %prec LOWER_THAN_SIGNED
     {
         $$ = false
     }
@@ -12485,7 +12608,7 @@ unsigned_opt:
     }
 
 zero_fill_opt:
-    /* EMPTY */
+    %prec LOWER_THAN_ZEROFILL
     {}
 |   ZEROFILL
     {
@@ -12697,9 +12820,6 @@ equal_opt:
 //|   TABLE_VALUES
 //|   RETURNS
 //|   MYSQL_COMPATIBILITY_MODE
-//|   CLONE
-//|   MO
-//|   BRANCH
 
 non_reserved_keyword:
     ACCOUNT
@@ -12716,6 +12836,8 @@ non_reserved_keyword:
 |   BIT
 |   BLOB
 |   BOOL
+|   BRANCH
+|   CLONE
 |   CANCEL
 |   CHAIN
 |   CHECKSUM
@@ -12728,6 +12850,10 @@ non_reserved_keyword:
 |   COLUMNS
 |   CONNECTION
 |   CONSISTENT
+|   CONFLICT
+|   CONFLICT_ACCEPT
+|   CONFLICT_FAIL
+|   CONFLICT_SKIP
 |   COMPRESSED
 |   COMPACT
 |   COLUMN_FORMAT
@@ -12741,6 +12867,7 @@ non_reserved_keyword:
 |   CASCADE
 |   DAEMON
 |   DATA
+|   DIFF
 |	DAY
 |   DATETIME
 |   DECIMAL
@@ -12820,6 +12947,7 @@ non_reserved_keyword:
 |   OPTIMIZE
 |   OPEN
 |   OPTION
+|   OUTPUT
 |   PACK_KEYS
 |   PARTIAL
 |   PARTITIONS
@@ -13004,7 +13132,6 @@ non_reserved_keyword:
 |	SECOND
 |	SHUTDOWN
 |	SQL_CACHE
-|	SQL_NO_CACHE
 |	SLAVE
 |	SLIDING
 |	SUPER
@@ -13065,7 +13192,6 @@ non_reserved_keyword:
 |   SETS
 |   CUBE
 |   RETRY
-|   SQL_BUFFER_RESULT
 |	INTERNAL
 
 func_not_keyword:
@@ -13121,6 +13247,7 @@ not_keyword:
 |   VAR_SAMP
 |   AVG
 |	TIMESTAMPDIFF
+|	TIMESTAMPADD
 |   NEXTVAL
 |   SETVAL
 |   CURRVAL
@@ -13131,7 +13258,6 @@ not_keyword:
 |   BITMAP_BIT_POSITION
 |   BITMAP_BUCKET_NUMBER
 |   BITMAP_COUNT
-
 
 //mo_keywords:
 //    PROPERTIES

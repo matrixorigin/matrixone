@@ -37,6 +37,16 @@
 # To construct a directory named vendor in the main module’s root directory that contains copies of all packages needed to support builds and tests of packages in the main module.
 # make vendor
 #
+# To compile mo-service with GPU support,
+# 1. install CUDA toolkit (version 1.30 or above)
+# 2. install cuVS Go bindings with conda
+#  % git clone git@github.com:rapidsai/cuvs.git
+#  % cd cuvs
+#  % conda env create --name go -f conda/environments/go_cuda-130_arch-$(uname -m).yaml
+#  % conda activate go
+# 3. compile matrixone
+#  % cd matrixone
+#  % MO_CL_CUDA=1 make
 
 # where am I
 ROOT_DIR = $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
@@ -157,14 +167,21 @@ THIRDPARTIES_INSTALL_DIR=$(ROOT_DIR)/thirdparties/install
 RACE_OPT :=
 DEBUG_OPT :=
 CGO_DEBUG_OPT :=
+TAGS :=
 
 ifeq ($(MO_CL_CUDA),1)
-	CUDA_LDFLAGS := -L/usr/local/cuda/lib64/stubs -lcuda -L/usr/local/cuda/lib64 -lcudart -lstdc++
+  ifeq ($(CONDA_PREFIX),)
+    $(error CONDA_PREFIX env variable not found.)
+  endif
+	CUVS_CFLAGS := -I$(CONDA_PREFIX)/include
+	CUVS_LDFLAGS := -L$(CONDA_PREFIX)/envs/go/lib -lcuvs -lcuvs_c
+	CUDA_CFLAGS := -I/usr/local/cuda/include $(CUVS_CFLAGS)
+	CUDA_LDFLAGS := -L/usr/local/cuda/lib64/stubs -lcuda -L/usr/local/cuda/lib64 -lcudart $(CUVS_LDFLAGS) -lstdc++
+	TAGS += -tags "gpu"
 endif
 
-CGO_OPTS :=CGO_CFLAGS="-I$(THIRDPARTIES_INSTALL_DIR)/include"
+CGO_OPTS :=CGO_CFLAGS="-I$(THIRDPARTIES_INSTALL_DIR)/include $(CUDA_CFLAGS)"
 GOLDFLAGS=-ldflags="-extldflags '$(CUDA_LDFLAGS) -L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,\$${ORIGIN}/lib -fopenmp' $(VERSION_INFO)"
-TAGS :=
 
 ifeq ("$(UNAME_S)","darwin")
 GOLDFLAGS:=-ldflags="-extldflags '-L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,@executable_path/lib' $(VERSION_INFO)"
@@ -559,7 +576,7 @@ fmt:
 
 .PHONY: install-static-check-tools
 install-static-check-tools:
-	@curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | bash -s -- -b $(GOPATH)/bin v2.1.6
+	@curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | bash -s -- -b $(GOPATH)/bin v2.6.2
 	@go install github.com/matrixorigin/linter/cmd/molint@latest
 	@go install github.com/apache/skywalking-eyes/cmd/license-eye@v0.4.0
 
@@ -568,7 +585,7 @@ static-check: config err-check
 	$(CGO_OPTS) go vet -vettool=`which molint` ./...
 	$(CGO_OPTS) license-eye -c .licenserc.yml header check
 	$(CGO_OPTS) license-eye -c .licenserc.yml dep check
-	$(CGO_OPTS) golangci-lint run -c .golangci.yml ./...
+	$(CGO_OPTS) golangci-lint run -v -c .golangci.yml ./...
 
 fmtErrs := $(shell grep -onr 'fmt.Errorf' pkg/ --exclude-dir=.git --exclude-dir=vendor \
 				--exclude=*.pb.go --exclude=system_vars.go --exclude=Makefile)

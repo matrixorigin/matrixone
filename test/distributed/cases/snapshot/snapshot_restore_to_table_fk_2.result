@@ -320,7 +320,7 @@ create snapshot snapshot_01 for account;
 Drop database Payroll;
 Drop database Projects;
 Drop database Company;
-restore account sys from snapshot snapshot_01;
+restore account sys{snapshot="snapshot_01"};
 select * from Company.Departments;
 departmentid    name    managerid
 1    Research and Development    null
@@ -759,7 +759,7 @@ create snapshot snapshot_01 for account;
 Drop database Payroll;
 Drop database Projects;
 Drop database Company;
-restore account sys from snapshot snapshot_01;
+restore account sys{snapshot="snapshot_01"};
 select * from Company.Departments;
 departmentid    name    managerid
 1    Research and Development    null
@@ -1236,7 +1236,7 @@ departmentid    budget
 4    400000.00
 5    500000.00
 6    600000.00
-restore account sys from snapshot snapshot_01;
+restore account sys{snapshot="snapshot_01"};
 select * from acc_test02.pri01;
 deptno    dname    loc
 10    ACCOUNTING    NEW YORK

@@ -1,8 +1,4 @@
-set experimental_fulltext_index=1;
 set ft_relevancy_algorithm="TF-IDF";
-show variables like "experimental_fulltext_index";
-Variable_name    Value
-experimental_fulltext_index    on
 drop database if exists test01;
 create database test01;
 use test01;
@@ -19,17 +15,9 @@ create fulltext index ftidx on src (body, title);
 drop snapshot if exists snap01;
 create snapshot snap01 for account sys;
 drop database test01;
-restore account sys from snapshot snap01;
-show variables like "experimental_fulltext_index";
-Variable_name    Value
-experimental_fulltext_index    on
-set experimental_fulltext_index=0;
+restore account sys{snapshot="snap01"};
 drop database test01;
 drop snapshot snap01;
-set global experimental_fulltext_index=1;
-show variables like "experimental_fulltext_index";
-Variable_name    Value
-experimental_fulltext_index    on
 drop database if exists test01;
 create database test01;
 use test01;
@@ -46,17 +34,9 @@ create fulltext index ftidx on src (body, title);
 drop snapshot if exists snap01;
 create snapshot snap01 for account sys;
 drop database test01;
-restore account sys from snapshot snap01;
-show variables like "experimental_fulltext_index";
-Variable_name    Value
-experimental_fulltext_index    on
-set global experimental_fulltext_index=0;
+restore account sys{snapshot="snap01"};
 drop database test01;
 drop snapshot snap01;
-set experimental_ivf_index=1;
-show variables like "experimental_ivf_index";
-Variable_name    Value
-experimental_ivf_index    on
 drop database if exists vecdb2;
 create database vecdb2;
 use vecdb2;
@@ -68,17 +48,9 @@ insert into t1 values(2, "[1,2,4]", "[1,2,4,4,5]");
 drop snapshot if exists snap02;
 create snapshot snap02 for account sys;
 drop database vecdb2;
-restore account sys from snapshot snap02;
-show variables like "experimental_ivf_index";
-Variable_name    Value
-experimental_ivf_index    on
-set experimental_ivf_index=0;
+restore account sys{snapshot="snap02"};
 drop database vecdb2;
 drop snapshot snap02;
-set global experimental_ivf_index=1;
-show variables like "experimental_ivf_index";
-Variable_name    Value
-experimental_ivf_index    on
 drop database if exists vecdb2;
 create database vecdb2;
 use vecdb2;
@@ -90,11 +62,7 @@ insert into t1 values(2, "[1,2,4]", "[1,2,4,4,5]");
 drop snapshot if exists snap02;
 create snapshot snap02 for account sys;
 drop database vecdb2;
-restore account sys from snapshot snap02;
-show variables like "experimental_ivf_index";
-Variable_name    Value
-experimental_ivf_index    on
-set experimental_ivf_index=0;
+restore account sys{snapshot="snap02"};
 drop database vecdb2;
 drop snapshot snap02;
 set experimental_hnsw_index=1;
@@ -110,7 +78,7 @@ DROP TABLE vector_empty;
 drop snapshot if exists snap03;
 create snapshot snap03 for account sys;
 drop database test03;
-restore account sys from snapshot snap03;
+restore account sys{snapshot="snap03"};
 show variables like "experimental_hnsw_index";
 Variable_name    Value
 experimental_hnsw_index    on
@@ -130,7 +98,7 @@ DROP TABLE vector_empty;
 drop snapshot if exists snap03;
 create snapshot snap03 for account sys;
 drop database test03;
-restore account sys from snapshot snap03;
+restore account sys{snapshot="snap03"};
 show variables like "experimental_hnsw_index";
 Variable_name    Value
 experimental_hnsw_index    on

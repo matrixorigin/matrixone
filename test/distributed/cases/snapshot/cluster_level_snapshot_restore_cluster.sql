@@ -419,7 +419,7 @@ revoke role_r1 from role_r2;
 select operation_role_id,operation_user_id from mo_catalog.mo_role_grant;
 -- @session
 
-restore cluster from snapshot cluster_level_snapshot;
+restore cluster{snapshot="cluster_level_snapshot"};
 
 use db02;
 select * from departments;

@@ -78,6 +78,7 @@ class Session(SQLAlchemySession):
     - **metadata**: MetadataManager for table metadata analysis
     - **load_data**: LoadDataManager for bulk data loading
     - **stage**: StageManager for external stage management
+    - **cdc**: CDCManager for change data capture task operations
 
     Creating Session:
 
@@ -372,6 +373,7 @@ class Session(SQLAlchemySession):
         from .metadata import MetadataManager
         from .load_data import LoadDataManager
         from .stage import StageManager
+        from .cdc import CDCManager
         from .pitr import PitrManager
         from .pubsub import PubSubManager
         from .restore import RestoreManager
@@ -391,6 +393,7 @@ class Session(SQLAlchemySession):
         self.metadata = MetadataManager(client, executor=self)
         self.load_data = LoadDataManager(client, executor=self)
         self.stage = StageManager(client, executor=self)
+        self.cdc = CDCManager(client, executor=self)
         self.export = ExportManager(self)
 
     def execute(self, sql_or_stmt, params: Optional[Tuple] = None, **kwargs):
@@ -997,6 +1000,7 @@ class AsyncSession(SQLAlchemyAsyncSession):
     - **metadata**: AsyncMetadataManager for async metadata analysis
     - **load_data**: AsyncLoadDataManager for async bulk loading
     - **stage**: AsyncStageManager for async stage management
+    - **cdc**: AsyncCDCManager for async change data capture task operations
 
     Creating AsyncSession:
 
@@ -1194,6 +1198,7 @@ class AsyncSession(SQLAlchemyAsyncSession):
         from .account import AsyncAccountManager
         from .load_data import AsyncLoadDataManager
         from .stage import AsyncStageManager
+        from .cdc import AsyncCDCManager
         from .metadata import AsyncMetadataManager
         from .export import AsyncExportManager
 
@@ -1210,6 +1215,7 @@ class AsyncSession(SQLAlchemyAsyncSession):
         self.metadata = AsyncMetadataManager(client, executor=self)
         self.load_data = AsyncLoadDataManager(client, executor=self)
         self.stage = AsyncStageManager(client, executor=self)
+        self.cdc = AsyncCDCManager(client, executor=self)
         self.export = AsyncExportManager(self)
 
     async def execute(self, sql_or_stmt, params: Optional[Tuple] = None, **kwargs):

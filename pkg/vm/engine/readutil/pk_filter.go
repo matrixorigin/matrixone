@@ -16,12 +16,16 @@ package readutil
 
 import (
 	"bytes"
+	"sort"
+
+	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"go.uber.org/zap"
 )
 
@@ -50,16 +54,250 @@ func DirectConstructBlockPKFilter(
 func ConstructBlockPKFilter(
 	isFakePK bool,
 	basePKFilter BasePKFilter,
+	bloomFilter []byte,
 ) (f objectio.BlockReadFilter, err error) {
-	if !basePKFilter.Valid {
+	if !basePKFilter.Valid && len(bloomFilter) == 0 {
 		return objectio.BlockReadFilter{}, nil
 	}
 
-	var readFilter objectio.BlockReadFilter
-	var sortedSearchFunc, unSortedSearchFunc func(*vector.Vector) []int64
+	readFilter := objectio.BlockReadFilter{
+		HasFakePK: isFakePK,
+	}
 
-	readFilter.HasFakePK = isFakePK
+	defer func() {
+		if readFilter.SortedSearchFunc == nil && readFilter.UnSortedSearchFunc == nil {
+			logutil.Warn("ConstructBlockPKFilter skipped data type",
+				zap.Int("expr op", basePKFilter.Op),
+				zap.String("data type", basePKFilter.Oid.String()))
+		}
+	}()
 
+	disjuncts := basePKFilter.Disjuncts
+	if len(disjuncts) == 0 {
+		disjuncts = []BasePKFilter{basePKFilter}
+	}
+
+	var (
+		sortedMissing bool
+		unsMissing    bool
+		sortedFuncs   []func(*vector.Vector) []int64
+		unsFuncs      []func(*vector.Vector) []int64
+	)
+
+	for idx := range disjuncts {
+		sortedFunc, unsortedFunc, err := buildBlockPKSearchFuncs(disjuncts[idx])
+		if err != nil {
+			return objectio.BlockReadFilter{}, err
+		}
+		if sortedFunc == nil {
+			sortedMissing = true
+		} else {
+			sortedFuncs = append(sortedFuncs, sortedFunc)
+		}
+		if unsortedFunc == nil {
+			unsMissing = true
+		} else {
+			unsFuncs = append(unsFuncs, unsortedFunc)
+		}
+	}
+
+	var (
+		sortedSearchFunc   func(*vector.Vector) []int64
+		unSortedSearchFunc func(*vector.Vector) []int64
+	)
+	if !sortedMissing && len(sortedFuncs) > 0 {
+		sortedSearchFunc = combineOffsetFuncs(sortedFuncs)
+	}
+	if !unsMissing && len(unsFuncs) > 0 {
+		unSortedSearchFunc = combineOffsetFuncs(unsFuncs)
+	}
+
+	// If no BloomFilter, keep original behavior: only use BasePKFilter's search functions.
+	// Wrap the inner functions to match the new signature
+	wrapInner := func(inner func(*vector.Vector) []int64) func(containers.Vectors) []int64 {
+		if inner == nil {
+			return nil
+		}
+		return func(cacheVectors containers.Vectors) []int64 {
+			if len(cacheVectors) == 0 || cacheVectors[0].Length() == 0 {
+				return nil
+			}
+			return inner(&cacheVectors[0])
+		}
+	}
+
+	if len(bloomFilter) == 0 {
+		if sortedSearchFunc != nil {
+			readFilter.SortedSearchFunc = wrapInner(sortedSearchFunc)
+			readFilter.UnSortedSearchFunc = wrapInner(unSortedSearchFunc)
+			readFilter.Valid = true
+			return readFilter, nil
+		}
+		// No BF, and no search func constructed from PK, equivalent to "no block filtering"
+		return readFilter, nil
+	}
+
+	// Case with BloomFilter: wrap existing search func.
+	var bf bloomfilter.BloomFilter
+	if err := bf.Unmarshal(bloomFilter); err != nil {
+		return objectio.BlockReadFilter{}, err
+	}
+
+	// Reusable temporary variables (defined outside closure to avoid allocation on each call)
+	var (
+		reusableSels   []int64
+		reusableExists map[int]bool
+	)
+
+	// Pure BloomFilter searchFunc: directly filter entire column with BloomFilter.
+	// This function only works when optimization is enabled (len(cacheVectors) >= 2).
+	// When optimization is enabled, cacheVectors[1] contains __mo_index_pri_col which is used for BF filtering.
+	// If len(cacheVectors) < 2, skip BF filtering and return nil.
+	bfOnlySearch := func(cacheVectors containers.Vectors) []int64 {
+		if len(cacheVectors) < 2 || cacheVectors[0].Length() == 0 || cacheVectors[1].Length() == 0 {
+			return nil
+		}
+		rowCount := cacheVectors[0].Length()
+		lastColVec := &cacheVectors[1]
+		sels := reusableSels[:0]
+		if cap(sels) < rowCount {
+			sels = make([]int64, 0, rowCount)
+		}
+		bf.Test(lastColVec, func(exist bool, row int) {
+			if exist && row >= 0 && row < rowCount {
+				sels = append(sels, int64(row))
+			}
+		})
+		reusableSels = sels
+		return sels
+	}
+
+	// Wrap: if inner is nil, degenerate to pure BF; otherwise run inner first, then intersect with BF results.
+	// The inner function receives *vector.Vector (PK column) for PK filtering.
+	// cacheVectors[0] is used for PK filtering, cacheVectors[1] (if exists) is used for BF filtering.
+	// When optimization is enabled (len(cacheVectors) >= 2), cacheVectors[1] contains __mo_index_pri_col.
+	wrap := func(inner func(*vector.Vector) []int64) func(containers.Vectors) []int64 {
+		if inner == nil {
+			return bfOnlySearch
+		}
+		return func(cacheVectors containers.Vectors) []int64 {
+			if len(cacheVectors) == 0 || cacheVectors[0].Length() == 0 {
+				return nil
+			}
+
+			pkVec := &cacheVectors[0]
+			rowCount := pkVec.Length()
+			offsets := inner(pkVec)
+			innerCount := len(offsets)
+
+			if innerCount == 0 {
+				return offsets
+			}
+
+			// Test BloomFilter on rows filtered by inner function.
+			// Only works when optimization is enabled (len(cacheVectors) >= 2).
+			if len(cacheVectors) < 2 || cacheVectors[1].Length() == 0 {
+				// No optimization: skip BF filtering, return all offsets that passed inner filter.
+				return offsets
+			}
+
+			// Optimization enabled: use cacheVectors[1] (__mo_index_pri_col) for BF filtering.
+			lastColVec := &cacheVectors[1]
+			var exists map[int]bool
+			var bfHits int
+
+			// Reuse exists map - use more efficient reallocation for large maps
+			if reusableExists == nil || rowCount > len(reusableExists)*2 {
+				reusableExists = make(map[int]bool, rowCount)
+			} else if len(reusableExists) > 0 {
+				// For small maps, clear by reallocating (more efficient than delete loop)
+				if len(reusableExists) < 100 {
+					// For small maps, use delete loop
+					for k := range reusableExists {
+						delete(reusableExists, k)
+					}
+				} else {
+					// For larger maps, reallocate is more efficient
+					reusableExists = make(map[int]bool, rowCount)
+				}
+			}
+			exists = reusableExists
+
+			// Test BloomFilter on lastColVec, but only for rows that passed inner filter.
+			rowSet := make(map[int]bool, len(offsets))
+			for _, off := range offsets {
+				if int(off) >= 0 && int(off) < rowCount {
+					rowSet[int(off)] = true
+				}
+			}
+			bf.Test(lastColVec, func(exist bool, row int) {
+				// Add strict boundary check to prevent index out of range
+				if exist && row >= 0 && row < rowCount && rowSet[row] {
+					exists[row] = true
+					bfHits++
+				}
+			})
+
+			out := offsets[:0]
+			for _, off := range offsets {
+				if exists[int(off)] {
+					out = append(out, off)
+				}
+			}
+			return out
+		}
+	}
+
+	readFilter.SortedSearchFunc = wrap(sortedSearchFunc)
+	readFilter.UnSortedSearchFunc = wrap(unSortedSearchFunc)
+	readFilter.Valid = true
+	// Set cleanup function to release BloomFilter when filter is no longer needed
+	readFilter.Cleanup = func() {
+		// Release BloomFilter memory
+		bf.Clean()
+		// Clear reusableExists map by reallocating for better memory efficiency
+		if reusableExists != nil {
+			reusableExists = nil
+		}
+	}
+
+	readFilter.Valid = true
+	return readFilter, nil
+}
+
+func combineOffsetFuncs(funcs []func(*vector.Vector) []int64) func(*vector.Vector) []int64 {
+	if len(funcs) == 1 {
+		return funcs[0]
+	}
+
+	return func(vec *vector.Vector) []int64 {
+		seen := make(map[int64]struct{})
+		var out []int64
+		for _, fn := range funcs {
+			if fn == nil {
+				continue
+			}
+			offsets := fn(vec)
+			for _, off := range offsets {
+				if _, ok := seen[off]; ok {
+					continue
+				}
+				seen[off] = struct{}{}
+				out = append(out, off)
+			}
+		}
+		sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+		return out
+	}
+}
+
+func buildBlockPKSearchFuncs(
+	basePKFilter BasePKFilter,
+) (
+	sortedSearchFunc func(*vector.Vector) []int64,
+	unSortedSearchFunc func(*vector.Vector) []int64,
+	err error,
+) {
 	switch basePKFilter.Op {
 	case function.EQUAL:
 		switch basePKFilter.Oid {
@@ -446,19 +684,7 @@ func ConstructBlockPKFilter(
 		default:
 		}
 	}
-
-	if sortedSearchFunc != nil {
-		readFilter.SortedSearchFunc = sortedSearchFunc
-		readFilter.UnSortedSearchFunc = unSortedSearchFunc
-		readFilter.Valid = true
-		return readFilter, nil
-	} else {
-		logutil.Warn("ConstructBlockPKFilter skipped data type",
-			zap.Int("expr op", basePKFilter.Op),
-			zap.String("data type", basePKFilter.Oid.String()))
-	}
-
-	return readFilter, nil
+	return
 }
 
 func mergeBaseFilterInKind(
@@ -671,15 +897,23 @@ func mergeFilters(
 		finalFilter.Oid = left.Oid
 
 		if !finalFilter.Valid && connector == function.AND {
-			// choose the left as default
-			finalFilter = *left
-			if left.Vec != nil {
-				// why dup here?
-				// once the merge filter generated, the others will be free.
-				//finalFilter.Vec, err = left.Vec.Dup(proc.Mp())
+			// nonempty disjuncts makes the memory pk filter invalid,
+			// so we choose the one whose disjuncts is empty as default here.
+			if len(left.Disjuncts) > 0 {
+				finalFilter = *right
+				if right.Vec != nil {
+					// why dup here?
+					// once the merge filter generated, the others will be free.
+					//finalFilter.Vec, err = left.Vec.Dup(proc.Mp())
 
-				// or just set the left.Vec = nil to avoid free it
-				(*left).Vec = nil
+					// or just set the left.Vec = nil to avoid free it
+					(*right).Vec = nil
+				}
+			} else {
+				finalFilter = *left
+				if left.Vec != nil {
+					(*left).Vec = nil
+				}
 			}
 		}
 	}()

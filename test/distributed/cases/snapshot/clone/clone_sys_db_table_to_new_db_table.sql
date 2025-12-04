@@ -185,7 +185,6 @@ drop snapshot sp08;
 
 
 -- clone database a where database a does not have snapshot
--- @bvt:issue#22615
 drop database if exists test102;
 create database test102;
 use test102;
@@ -205,7 +204,7 @@ create database db09 clone test103 {snapshot = 'sp09'};
 drop database test102;
 drop database test103;
 drop snapshot sp09;
--- @bvt:issue
+
 
 
 

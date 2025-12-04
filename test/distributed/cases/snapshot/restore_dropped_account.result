@@ -4,16 +4,16 @@ drop snapshot if exists spsp01;
 create snapshot spsp01 for account acc01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-spsp01    2025-07-19 05:50:41.915817    account    acc01        
+spsp01    2025-07-19 05:50:41.915817    account    acc01
 show accounts;
 account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    snapshot_size    comments
-acc01    test_account    2025-07-19 05:50:41    open    null    5    65    0.0    0.0    
+acc01    test_account    2025-07-19 05:50:41    open    null    5    65    0.0    0.0
 sys    root    2025-07-19 05:30:43    open    null    8    110    46.624066    0.0    system account
 drop account acc01;
-restore account acc01 from snapshot spsp01;
+restore account acc01{snapshot="spsp01"};
 show accounts;
 account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    snapshot_size    comments
-acc01    test_account    2025-07-19 05:50:42    open    null    5    65    0.0    0.0    
+acc01    test_account    2025-07-19 05:50:42    open    null    5    65    0.0    0.0
 sys    root    2025-07-19 05:30:43    open    null    8    110    46.624066    0.0    system account
 drop account acc01;
 drop snapshot spsp01;
@@ -87,7 +87,6 @@ insert into partition01 values (9001,'1980-12-17', 'SMITH', 'CLERK', 'F', '2008-
 drop database if exists test06;
 create database test06;
 use test06;
-set experimental_fulltext_index=1;
 create table src (id bigint primary key, body varchar, title text);
 insert into src values (0, 'color is red', 't1'), (1, 'car is yellow', 'crazy car'), (2, 'sky is blue', 'no limit'), (3, 'blue is not red', 'colorful'),
 (4, '遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。', '遠東兒童中文'),
@@ -132,10 +131,10 @@ v01    create view v01 as select * from src;    utf8mb4    utf8mb4_general_ci
 drop snapshot if exists spsp02;
 create snapshot spsp02 for account acc02;
 drop account acc02;
-restore account acc02 from snapshot spsp02;
+restore account acc02{snapshot="spsp02"};
 show accounts;
 account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    snapshot_size    comments
-acc02    test_account    2025-07-19 05:50:43    open    null    9    71    0.0    0.0    
+acc02    test_account    2025-07-19 05:50:43    open    null    9    71    0.0    0.0
 sys    root    2025-07-19 05:30:43    open    null    8    110    46.624066    0.0    system account
 show databases;
 Database
@@ -273,7 +272,7 @@ drop snapshot if exists spsp03;
 create snapshot spsp03 for account acc03;
 drop account acc03;
 create account acc03 admin_name = 'test_account' identified by '111';
-restore account acc03 from snapshot spsp03;
+restore account acc03{snapshot="spsp03"};
 drop account acc03;
 drop snapshot spsp03;
 drop account if exists acc04;
@@ -302,10 +301,10 @@ drop stage if exists stage01;
 create stage stage01 url = 'file:///$resources/into_outfile/stage';
 select * from mo_catalog.mo_stages;
 stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
-1    stage01    file:////Users/fengttt/m/matrixone/test/distributed/resources/into_outfile/stage        in_use    2025-07-19 05:50:45    
+1    stage01    file:////Users/fengttt/m/matrixone/test/distributed/resources/into_outfile/stage        in_use    2025-07-19 05:50:45
 show stages;
 STAGE_NAME    URL    STATUS    COMMENT
-stage01    file:////Users/fengttt/m/matrixone/test/distributed/resources/into_outfile/stage    in_use    
+stage01    file:////Users/fengttt/m/matrixone/test/distributed/resources/into_outfile/stage    in_use
 select * from t1 into outfile 'stage://stage01/local_stage_table20.csv';
 truncate t1;
 load data infile 'stage://stage01/local_stage_table20.csv' into table t1 fields terminated by ',' ignore 1 lines;
@@ -419,7 +418,7 @@ create snapshot spsp06 for cluster;
 drop account acc04;
 drop account acc05;
 drop account acc06;
-restore cluster from snapshot spsp06;
+restore cluster{snapshot="spsp06"};
 use test04;
 select * from t1;
 id    ti    si    bi    fl    dl    de    ch    vch    dd    dt
@@ -434,7 +433,7 @@ id    ti    si    bi    fl    dl    de    ch    vch    dd    dt
 9    8    4    9    9849.312    9849312.0    9849    see you    subquery    2022-04-28    2022-04-28 22:40:11
 show stages;
 STAGE_NAME    URL    STATUS    COMMENT
-stage01    file:////Users/fengttt/m/matrixone/test/distributed/resources/into_outfile/stage    in_use    
+stage01    file:////Users/fengttt/m/matrixone/test/distributed/resources/into_outfile/stage    in_use
 select * from vtab32;
 id    vecf32_3    vecf32_5
 1    null    null
@@ -487,7 +486,7 @@ create account acc07 admin_name = 'test_account' identified by '111';
 drop snapshot if exists spsp07;
 create snapshot spsp07 for account acc07;
 drop account acc07;
-restore account acc07 from snapshot spsp07;
+restore account acc07{snapshot="spsp07"};
 show databases;
 Database
 information_schema

@@ -1,4 +1,3 @@
-set experimental_fulltext_index=1;
 drop account if exists acc01;
 create account acc01 admin_name = 'test_account' identified by '111';
 
@@ -29,7 +28,7 @@ select count(*) from s3t;
 select * from s3t where col1 = 23;
 -- @session
 
-restore account acc01 from snapshot sp01;
+restore account acc01{snapshot="sp01"};
 
 -- @session:id=1&user=acc01:test_account&password=111
 show databases;
@@ -53,7 +52,7 @@ select avg(col1) from s3t;
 delete from s3t where col1 > 30000;
 -- @session
 
-restore account acc01 from snapshot sp02;
+restore account acc01{snapshot="sp02"};
 
 -- @session:id=1&user=acc01:test_account&password=111
 select count(*) from s3t where col1 > 2000;
@@ -62,7 +61,7 @@ select avg(col1) from s3t;
 show create table s3t;
 -- @session
 
-restore account acc01 from snapshot sp01;
+restore account acc01{snapshot="sp01"};
 
 -- @session:id=1&user=acc01:test_account&password=111
 show databases;
@@ -201,7 +200,7 @@ select * from acc_test03.table04;
 show create table acc_test04.index03;
 -- @session
 
-restore account acc01 from snapshot sp04;
+restore account acc01{snapshot="sp04"};
 
 -- @session:id=1&user=acc01:test_account&password=111
 show databases;
@@ -253,7 +252,7 @@ create table table03 (col1 int);
 insert into table03 values (1),(2);
 -- @session
 
-restore account acc01 from snapshot sp07;
+restore account acc01{snapshot="sp07"};
 
 -- @session:id=1&user=acc01:test_account&password=111
 use test01;
@@ -262,7 +261,7 @@ select * from table01;
 select * from table02;
 -- @session
 
-restore account acc01 from snapshot sp08;
+restore account acc01{snapshot="sp08"};
 
 -- @session:id=1&user=acc01:test_account&password=111
 use test01;
@@ -313,7 +312,7 @@ insert into table02 values(139, 'database', null);
 alter table table02 drop column new;
 -- @session
 
-restore account acc01 from snapshot sp10;
+restore account acc01{snapshot="sp10"};
 
 -- @session:id=1&user=acc01:test_account&password=111
 use test02;
@@ -360,7 +359,7 @@ insert into rs01 values (10, -1, null);
 select count(*) from rs01;
 -- @session
 
-restore account acc01 from snapshot sp03 to account sys;
+restore account acc01{snapshot="sp03"} to account sys;
 drop snapshot sp03;
 
 -- @session:id=1&user=acc01:test_account&password=111
@@ -374,9 +373,7 @@ drop database if exists fulltext_acc01;
 create database fulltext_acc01;
 use fulltext_acc01;
 drop table if exists src;
-set experimental_fulltext_index=1;
 create table src (id bigint primary key, json1 text, json2 varchar, fulltext(json1) with parser json);
-set experimental_fulltext_index=0;
 insert into src values  (0, '{"a":1, "b":"red"}', '{"d": "happy birthday", "f":"winter"}'),
 (1, '{"a":2, "b":"中文學習教材"}', '["apple", "orange", "banana", "指引"]'),
 (2, '{"a":3, "b":"red blue"}', '{"d":"兒童中文"}');
@@ -389,7 +386,7 @@ create snapshot full_sp_acc01 for account acc01;
 drop database fulltext_acc01;
 -- @session
 
-restore account acc01 from snapshot full_sp_acc01;
+restore account acc01{snapshot="full_sp_acc01"};
 
 -- @session:id=1&user=acc01:test_account&password=111
 show databases;

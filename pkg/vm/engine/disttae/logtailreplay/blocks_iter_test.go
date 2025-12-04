@@ -25,7 +25,7 @@ import (
 )
 
 func TestPartitionState_CollectObjectsBetweenInProgress(t *testing.T) {
-	pState := NewPartitionState("", false, 0x3fff)
+	pState := NewPartitionState("", false, 0x3fff, false)
 
 	//       t1			t2		   t3		  t4           t4         t5		 t5			t6		   t6
 	// ---- obj1 ----- obj2 ----- obj3 ----- d-obj1 ----- obj4 ---- d-obj2 ---- obj5 ---- d-obj3 ---- obj6

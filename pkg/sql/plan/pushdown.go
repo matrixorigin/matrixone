@@ -193,7 +193,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 				}
 			}
 
-			if canTurnInner && node.JoinType == plan.Node_LEFT && joinSides[i]&JoinSideRight != 0 && rejectsNull(filter, builder.compCtx.GetProcess()) {
+			if canTurnInner && node.JoinType == plan.Node_LEFT && joinSides[i] == JoinSideRight && rejectsNull(filter, builder.compCtx.GetProcess()) {
 				for _, cond := range node.OnList {
 					filters = append(filters, splitPlanConjunction(applyDistributivity(builder.GetContext(), cond))...)
 				}
@@ -623,7 +623,7 @@ func (builder *QueryBuilder) pushdownVectorIndexTopToTableScan(nodeID int32) {
 		}
 
 		scanNode := builder.qry.Nodes[projNode.Children[0]]
-		if scanNode.NodeType != plan.Node_TABLE_SCAN || scanNode.Offset != nil {
+		if scanNode.NodeType != plan.Node_TABLE_SCAN || scanNode.Offset != nil || scanNode.BlockOrderBy != nil {
 			return
 		}
 		limitVal := node.Limit.GetLit().GetU64Val()
@@ -635,7 +635,7 @@ func (builder *QueryBuilder) pushdownVectorIndexTopToTableScan(nodeID int32) {
 		}
 
 		scanNode.BlockOrderBy = append(scanNode.BlockOrderBy, &plan.OrderBySpec{
-			Expr:      DeepCopyExpr(orderFunc),
+			Expr:      orderFunc,
 			Collation: node.OrderBy[0].Collation,
 			Flag:      node.OrderBy[0].Flag,
 		})
@@ -644,5 +644,19 @@ func (builder *QueryBuilder) pushdownVectorIndexTopToTableScan(nodeID int32) {
 		// if there is a limit, outcnt is limit number
 		scanNode.Stats.Outcnt = float64(scanNode.Stats.BlockNum) * float64(limitVal)
 		scanNode.Stats.Cost = float64(scanNode.Stats.BlockNum * objectio.BlockMaxRows)
+
+		orderFuncTag := builder.genNewBindTag()
+		scanNode.BindingTags = append(scanNode.BindingTags, orderFuncTag)
+		projNode.ProjectList[orderCol.ColPos] = &plan.Expr{
+			Typ: orderFunc.Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: orderFuncTag,
+					ColPos: 0,
+				},
+			},
+		}
+
+		builder.nameByColRef[[2]int32{orderFuncTag, 0}] = "__dist_func__"
 	}
 }

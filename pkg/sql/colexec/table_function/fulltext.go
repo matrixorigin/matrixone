@@ -15,6 +15,7 @@
 package table_function
 
 import (
+	"container/heap"
 	"context"
 	"fmt"
 	"sync"
@@ -29,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -55,6 +57,9 @@ type fulltextState struct {
 	mpool     *fulltext.FixedBytePool
 	param     fulltext.FullTextParserParam
 	docLenMap map[any]int32
+	minheap   vectorindex.SearchResultHeap
+	resbuf    []*vectorindex.SearchResultAnyKey
+	ranking   bool
 
 	// holding output batch
 	batch *batch.Batch
@@ -136,25 +141,114 @@ func (u *fulltextState) returnResult(proc *process.Process, scoremap map[any]flo
 
 }
 
-func (u *fulltextState) call(tf *TableFunction, proc *process.Process) (vm.CallResult, error) {
+func (u *fulltextState) returnResultFromBuffer(proc *process.Process, limit uint64) (vm.CallResult, error) {
 
-	u.batch.CleanOnlyData()
+	blocksz := 8192
+	nres := len(u.resbuf)
+	n := nres
+	if n > int(limit) {
+		n = int(limit)
+	}
+	if n > blocksz {
+		n = blocksz
+	}
 
-	// number of result more than pushdown limit and exit
-	if u.limit > 0 && u.n_result >= u.limit {
+	for i := range n {
+		// get result in reversed order
+		sr := u.resbuf[nres-i-1]
+		doc_id := sr.Id
+		if str, ok := sr.Id.(string); ok {
+			bytes := []byte(str)
+			doc_id = bytes
+		}
+		vector.AppendAny(u.batch.Vecs[0], doc_id, false, proc.Mp())
+
+		if u.batch.VectorCount() > 1 {
+			vector.AppendFixed[float32](u.batch.Vecs[1], float32(sr.GetDistance()), false, proc.Mp())
+		}
+	}
+
+	// remove the retrieved results from buffer
+	u.resbuf = u.resbuf[:nres-n]
+
+	u.batch.SetRowCount(n)
+	u.n_result += uint64(n)
+	if u.batch.RowCount() == 0 {
 		return vm.CancelResult, nil
 	}
 
-	// array is empty, try to get batch from SQL executor
-	scoremap, err := evaluate(u, proc, u.sacc)
-	if err != nil {
-		return vm.CancelResult, err
+	return vm.CallResult{Status: vm.ExecNext, Batch: u.batch}, nil
+
+}
+
+// return (doc_id, score) as result
+// when scoremap is empty, return result end.
+func (u *fulltextState) returnResultFromHeap(proc *process.Process, limit uint64) (vm.CallResult, error) {
+
+	if len(u.resbuf) > 0 {
+		return vm.CancelResult, moerr.NewInternalError(proc.Ctx, "result buffer is not empty.")
 	}
 
-	if scoremap != nil {
-		return u.returnResult(proc, scoremap)
+	if u.minheap == nil {
+		return vm.CancelResult, nil
 	}
-	return vm.CancelResult, nil
+
+	// minheap is in reversed order so pop everything out
+	for range u.minheap.Len() {
+		sr := heap.Pop(&u.minheap).(*vectorindex.SearchResultAnyKey)
+		u.resbuf = append(u.resbuf, sr)
+	}
+
+	return u.returnResultFromBuffer(proc, limit)
+}
+
+func (u *fulltextState) call(tf *TableFunction, proc *process.Process) (vm.CallResult, error) {
+
+	var err error
+	u.batch.CleanOnlyData()
+	limit := u.limit
+	topk := limit
+
+	if u.ranking {
+		topk = 3 * limit
+	} else {
+
+		// number of result more than pushdown limit and exit
+		if limit > 0 && u.n_result >= limit {
+			return vm.CancelResult, nil
+		}
+	}
+
+	if limit == 0 {
+		// array is empty, try to get batch from SQL executor
+		scoremap, err := evaluate(u, proc, u.sacc)
+		if err != nil {
+			return vm.CancelResult, err
+		}
+
+		if scoremap != nil {
+			return u.returnResult(proc, scoremap)
+		}
+		return vm.CancelResult, nil
+
+	} else {
+		if len(u.resbuf) > 0 {
+			return u.returnResultFromBuffer(proc, limit)
+		}
+
+		// build minheap
+		if len(u.minheap) == 0 {
+			err = sort_topk(u, proc, u.sacc, topk)
+			if err != nil {
+				return vm.CancelResult, err
+			}
+		}
+
+		if u.minheap != nil {
+			return u.returnResultFromHeap(proc, limit)
+		}
+		return vm.CancelResult, nil
+	}
 }
 
 // start calling tvf on nthRow and put the result in u.batch.  Note that current unnest impl will
@@ -169,7 +263,7 @@ func (u *fulltextState) start(tf *TableFunction, proc *process.Process, nthRow i
 			}
 		}
 		u.batch = tf.createResultBatch()
-		u.errCh = make(chan error)
+		u.errCh = make(chan error, 2)
 		u.streamCh = make(chan executor.Result, 8)
 		u.idx2word = make(map[int]string)
 		u.inited = true
@@ -222,6 +316,9 @@ func fulltextIndexScanPrepare(proc *process.Process, tableFunction *TableFunctio
 			}
 		}
 	}
+
+	// TODO: LIMIT BY RANK should set ranking to true
+	st.ranking = false
 	return st, err
 }
 
@@ -287,6 +384,56 @@ func evaluate(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) 
 	}
 
 	return scoremap, nil
+}
+
+func sort_topk(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum, limit uint64) (err error) {
+	aggcnt := u.aggcnt
+	if u.minheap == nil {
+		u.minheap = make(vectorindex.SearchResultHeap, 0, limit)
+		u.resbuf = make([]*vectorindex.SearchResultAnyKey, 0, limit)
+	}
+	heap.Init(&u.minheap)
+
+	for doc_id, addr := range u.agghtab {
+
+		docvec, err := u.mpool.GetItem(addr)
+		if err != nil {
+			return err
+		}
+
+		docLen := int64(0)
+		if len, ok := u.docLenMap[doc_id]; ok {
+			docLen = int64(len)
+		}
+
+		score, err := s.Eval(docvec, docLen, aggcnt)
+		if err != nil {
+			return err
+		}
+
+		if len(score) > 0 {
+			scoref64 := float64(score[0])
+			if len(u.minheap) >= int(limit) {
+				if u.minheap[0].GetDistance() < scoref64 {
+					u.minheap[0] = &vectorindex.SearchResultAnyKey{Id: doc_id, Distance: scoref64}
+					heap.Fix(&u.minheap, 0)
+				}
+			} else {
+				heap.Push(&u.minheap, &vectorindex.SearchResultAnyKey{Id: doc_id, Distance: scoref64})
+			}
+		}
+	}
+
+	for _, it := range u.minheap {
+		sr := it.(*vectorindex.SearchResultAnyKey)
+		err = u.mpool.FreeItem(u.agghtab[sr.Id])
+		if err != nil {
+			return err
+		}
+		delete(u.agghtab, sr.Id)
+	}
+
+	return nil
 }
 
 // result from SQL is (doc_id, index constant (refer to Pattern.Index))
@@ -488,7 +635,10 @@ func fulltextIndexMatch(
 
 	waiter.Add(1)
 	go func() {
-		defer waiter.Done()
+		defer func() {
+			close(u.streamCh)
+			waiter.Done()
+		}()
 
 		// get the statistic of search string ([]Pattern) and store in SearchAccum
 		res, err2 := runWordStats(ctx, u, proc, u.sacc)

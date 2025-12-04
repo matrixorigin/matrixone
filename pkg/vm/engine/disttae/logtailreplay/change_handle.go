@@ -806,11 +806,13 @@ func getObjectsFromCheckpointEntries(
 	dataCNObjMap := make(map[string]*objectio.ObjectEntry)
 	tombstoneAobjMap := make(map[string]*objectio.ObjectEntry)
 	tombstoneCNObjMap := make(map[string]*objectio.ObjectEntry)
-	readers := make([]*logtail.CKPReader, 0)
+	readers := make([]checkpointEntryReader, 0)
 	for _, entry := range checkpoint {
-		reader := logtail.NewCKPReaderWithTableID_V2(entry.GetVersion(), entry.GetLocation(), tid, mp, fs)
+		reader := newCKPReaderWithTableID(entry.GetVersion(), entry.GetLocation(), tid, mp, fs)
 		readers = append(readers, reader)
-		ioutil.Prefetch(sid, fs, entry.GetLocation())
+		if loc := entry.GetLocation(); !loc.IsEmpty() {
+			ioutil.Prefetch(sid, fs, loc)
+		}
 	}
 	for _, reader := range readers {
 		if err = reader.ReadMeta(ctx); err != nil {
@@ -822,19 +824,23 @@ func getObjectsFromCheckpointEntries(
 	for _, reader := range readers {
 		if err = reader.ConsumeCheckpointWithTableID(
 			ctx,
-			func(ctx context.Context, obj objectio.ObjectEntry, isTombstone bool) (err error) {
+			func(ctx context.Context, fs fileservice.FileService, obj objectio.ObjectEntry, isTombstone bool) (err error) {
 				if obj.GetAppendable() {
-					if isTombstone {
-						tombstoneAobjMap[obj.ObjectShortName().ShortString()] = &obj
-					} else {
-						dataAobjMap[obj.ObjectShortName().ShortString()] = &obj
+					if obj.CreateTime.GE(&start) {
+						if isTombstone {
+							tombstoneAobjMap[obj.ObjectShortName().ShortString()] = &obj
+						} else {
+							dataAobjMap[obj.ObjectShortName().ShortString()] = &obj
+						}
 					}
 				}
 				if obj.GetCNCreated() {
-					if isTombstone {
-						tombstoneCNObjMap[obj.ObjectShortName().ShortString()] = &obj
-					} else {
-						dataCNObjMap[obj.ObjectShortName().ShortString()] = &obj
+					if obj.CreateTime.GE(&start) {
+						if isTombstone {
+							tombstoneCNObjMap[obj.ObjectShortName().ShortString()] = &obj
+						} else {
+							dataCNObjMap[obj.ObjectShortName().ShortString()] = &obj
+						}
 					}
 				}
 				return
@@ -1484,4 +1490,42 @@ func updateCNDataBatch(bat *batch.Batch, commitTS types.TS, mp *mpool.MPool) {
 		return
 	}
 	bat.Vecs = append(bat.Vecs, commitTSVec)
+}
+
+// TestGetObjectsFromCheckpointEntries exposes getObjectsFromCheckpointEntries for tests in other packages.
+func TestGetObjectsFromCheckpointEntries(
+	ctx context.Context,
+	tid uint64,
+	sid string,
+	start, end types.TS,
+	checkpoint []*checkpoint.CheckpointEntry,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (
+	dataAobj, dataCNObj, tombstoneAobj, tombstoneCNObj []*objectio.ObjectEntry,
+	err error,
+) {
+	return getObjectsFromCheckpointEntries(ctx, tid, sid, start, end, checkpoint, mp, fs)
+}
+
+type CheckpointEntryReader = checkpointEntryReader
+
+// SetCheckpointReaderFactoryForTest overrides the checkpoint reader factory during tests.
+// It returns a restore function that should be deferred by callers.
+func SetCheckpointReaderFactoryForTest(factory func(uint32, objectio.Location, uint64, *mpool.MPool, fileservice.FileService) checkpointEntryReader) func() {
+	old := newCKPReaderWithTableID
+	newCKPReaderWithTableID = factory
+	return func() {
+		newCKPReaderWithTableID = old
+	}
+}
+
+type checkpointEntryReader interface {
+	ReadMeta(context.Context) error
+	PrefetchData(string)
+	ConsumeCheckpointWithTableID(context.Context, func(context.Context, fileservice.FileService, objectio.ObjectEntry, bool) error) error
+}
+
+var newCKPReaderWithTableID = func(version uint32, location objectio.Location, tableID uint64, mp *mpool.MPool, fs fileservice.FileService) checkpointEntryReader {
+	return logtail.NewCKPReaderWithTableID_V2(version, location, tableID, mp, fs)
 }

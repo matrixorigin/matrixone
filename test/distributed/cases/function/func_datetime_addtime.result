@@ -1,0 +1,62 @@
+SELECT CAST(ADDTIME('2007-12-31 23:59:59.999999', '1 1:1:1.000002') AS CHAR) AS result1;
+result1
+2008-01-02 01:01:01.000001
+SELECT TIME(ADDTIME('12:30:45', '01:15:30')) AS time_add_time;
+time_add_time
+13:46:15
+SELECT TIME(ADDTIME('23:59:59', '00:00:01')) AS time_wrap;
+time_wrap
+24:00:00
+SELECT TIME(ADDTIME('00:00:00', '25:00:00')) AS time_with_days;
+time_with_days
+25:00:00
+SELECT ADDTIME('2007-12-31 23:59:59', '00:00:01') AS datetime_add_second;
+datetime_add_second
+2008-01-01 00:00:00
+SELECT CAST(ADDTIME('2007-12-31 23:59:59.999999', '1 1:1:1.000002') AS CHAR) AS datetime_add_time_with_days;
+datetime_add_time_with_days
+2008-01-02 01:01:01.000001
+SELECT ADDTIME('2024-01-01 00:00:00', '24:00:00') AS datetime_add_day;
+datetime_add_day
+2024-01-02 00:00:00
+SELECT ADDTIME('2007-12-31 23:59:59', '00:00:01') AS timestamp_add_second;
+timestamp_add_second
+2008-01-01 00:00:00
+SELECT CAST(ADDTIME('2007-12-31 23:59:59.999999', '1 1:1:1.000002') AS CHAR) AS string_datetime;
+string_datetime
+2008-01-02 01:01:01.000001
+SELECT TIME(ADDTIME('12:30:45', '01:15:30')) AS string_time;
+string_time
+13:46:15
+SELECT ADDTIME(NULL, '01:00:00') AS null_first;
+null_first
+null
+SELECT ADDTIME('12:00:00', NULL) AS null_second;
+null_second
+null
+SELECT ADDTIME(NULL, NULL) AS null_both;
+null_both
+null
+SELECT TIME(ADDTIME('00:00:00', '00:00:00')) AS zero_time;
+zero_time
+00:00:00
+SELECT TIME(ADDTIME('23:59:59.999999', '00:00:00.000001')) AS microsecond_precision;
+microsecond_precision
+24:00:00
+SELECT TIME(ADDTIME('25:59:59', '10:00:01')) AS time_wrap_36;
+time_wrap_36
+36:00:00
+CREATE TABLE t1(dt DATETIME, t TIME);
+INSERT INTO t1 VALUES ('2007-12-31 23:59:59', '01:00:00'), ('2024-01-01 12:00:00', '02:30:00');
+SELECT ADDTIME(dt, t) AS result FROM t1;
+result
+2008-01-01 00:59:59
+2024-01-01 14:30:00
+DROP TABLE t1;
+CREATE TABLE t1(dt DATETIME, t TIME);
+INSERT INTO t1 VALUES ('2007-12-31 23:59:59', '01:00:00'), ('2024-01-01 12:00:00', '02:30:00');
+SELECT * FROM t1 WHERE ADDTIME(dt, t) > '2008-01-01 00:00:00';
+dt    t
+2007-12-31 23:59:59    01:00:00
+2024-01-01 12:00:00    02:30:00
+DROP TABLE t1;

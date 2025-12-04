@@ -420,9 +420,159 @@ const (
 	// hash partition function
 	HASH_PARTITION = 349
 
+	// mo_tuple_expr function
+	MO_TUPLE_EXPR = 350
+
+	// function `current_time`, `curtime`
+	CURRENT_TIME = 351
+
+	// function `truncate`
+	TRUNCATE = 352
+
+	// function `char`
+	CHAR = 353
+
+	// function `insert`
+	INSERT = 354
+
+	// function `ord`
+	ORD = 355
+
+	// function `quote`
+	QUOTE = 356
+
+	// function `soundex`
+	SOUNDEX = 357
+
+	// function `degrees`
+	DEGREES = 358
+
+	// function `radians`
+	RADIANS = 359
+
+	// function `dayofweek`
+	DAYOFWEEK = 360
+
+	// function `microsecond`
+	MICROSECOND = 361
+
+	// function `quarter`
+	QUARTER = 362
+
+	// function `time_format`
+	TIME_FORMAT = 363
+
+	// function `timestampadd`
+	TIMESTAMPADD = 364
+
+	// function `json_array`
+	JSON_ARRAY = 365
+
+	// function `json_object`
+	JSON_OBJECT = 366
+
+	// function `conv`
+	CONV = 367
+
+	// function `dayname`
+	DAYNAME = 368
+
+	// function `dayofmonth`
+	DAYOFMONTH = 369
+
+	// function `from_days`
+	FROM_DAYS = 370
+
+	// function `get_format`
+	GET_FORMAT = 371
+
+	// function `localtime`
+	LOCALTIME = 372
+
+	// function `maketime`
+	MAKETIME = 373
+
+	// function `monthname`
+	MONTHNAME = 374
+
+	// function `period_add`
+	PERIOD_ADD = 375
+
+	// function `period_diff`
+	PERIOD_DIFF = 376
+
+	// function `sec_to_time`
+	SEC_TO_TIME = 377
+
+	// function `subtime`
+	SUBTIME = 378
+
+	// function `time_to_sec`
+	TIME_TO_SEC = 379
+
+	// function `utc_date`
+	UTC_DATE = 380
+
+	// function `utc_time`
+	UTC_TIME = 381
+
+	// function `weekofyear`
+	WEEKOFYEAR = 382
+
+	// function `yearweek`
+	YEARWEEK = 383
+
+	// function `elt`
+	ELT = 384
+
+	// function `export_set`
+	EXPORT_SET = 385
+
+	// function `make_set`
+	MAKE_SET = 386
+
+	// function `compress`
+	COMPRESS = 387
+
+	// function `uncompress`
+	UNCOMPRESS = 388
+
+	// function `uncompressed_length`
+	UNCOMPRESSED_LENGTH = 389
+
+	// function `random_bytes`
+	RANDOM_BYTES = 390
+
+	// function `validate_password_strength`
+	VALIDATE_PASSWORD_STRENGTH = 391
+
+	// function `inet6_aton`
+	INET6_ATON = 392
+
+	// function `inet6_ntoa`
+	INET6_NTOA = 393
+
+	// function `inet_aton`
+	INET_ATON = 394
+
+	// function `inet_ntoa`
+	INET_NTOA = 395
+
+	// function `is_ipv4`
+	IS_IPV4 = 396
+
+	// function `is_ipv6`
+	IS_IPV6 = 397
+
+	// function `is_ipv4_compat`
+	IS_IPV4_COMPAT = 398
+
+	// function `is_ipv4_mapped`
+	IS_IPV4_MAPPED = 399
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 350
+	FUNCTION_END_NUMBER = 400
 )
 
 // functionIdRegister is what function we have registered already.
@@ -499,9 +649,12 @@ var functionIdRegister = map[string]int32{
 	"cluster_centers":       CLUSTER_CENTERS,
 	"subvector":             SUB_VECTOR,
 	"std":                   STDDEV_POP,
+	"stddev":                STDDEV_POP,
 	"stddev_pop":            STDDEV_POP,
+	"stddev_samp":           STDDEV_SAMPLE,
 	"variance":              VAR_POP,
 	"var_pop":               VAR_POP,
+	"var_samp":              VAR_SAMPLE,
 	"approx_count":          APPROX_COUNT,
 	"approx_count_distinct": APPROX_COUNT_DISTINCT,
 	"any_value":             ANY_VALUE,
@@ -514,6 +667,7 @@ var functionIdRegister = map[string]int32{
 	"endswith":    ENDSWITH,
 	"findinset":   FINDINSET,
 	"find_in_set": FINDINSET,
+	"pow":         POW,
 	"power":       POW,
 	"startswith":  STARTSWITH,
 	"to_date":     STR_TO_DATE,
@@ -524,16 +678,24 @@ var functionIdRegister = map[string]int32{
 	// variadic functions
 	"ceil":              CEIL,
 	"ceiling":           CEIL,
+	"char":              CHAR,
 	"concat_ws":         CONCAT_WS,
 	"concat":            CONCAT,
 	"current_timestamp": CURRENT_TIMESTAMP,
 	"now":               CURRENT_TIMESTAMP,
+	"localtime":         LOCALTIME,
+	"localtimestamp":    LOCALTIME,
+	"current_time":      CURRENT_TIME,
+	"curtime":           CURRENT_TIME,
 	"sysdate":           SYSDATE,
 	"floor":             FLOOR,
 	"lpad":              LPAD,
 	"pi":                PI,
+	"position":          POSITION,
+	"quote":             QUOTE,
 	"round":             ROUND,
 	"rpad":              RPAD,
+	"soundex":           SOUNDEX,
 	"strcmp":            STRCMP,
 	"substr":            SUBSTRING,
 	"substring":         SUBSTRING,
@@ -541,27 +703,56 @@ var functionIdRegister = map[string]int32{
 	"encode":            ENCODE,
 	"utc_timestamp":     UTC_TIMESTAMP,
 	"unix_timestamp":    UNIX_TIMESTAMP,
+	"from_days":         FROM_DAYS,
 	"from_unixtime":     FROM_UNIXTIME,
+	"get_format":        GET_FORMAT,
 	"left":              LEFT,
+	"right":             RIGHT,
 	// unary functions
 	// whoever edit this, please follow the lexical order, or come up with a better ordering method
 	"abs":                            ABS,
 	"acos":                           ACOS,
+	"aes_decrypt":                    AES_DECRYPT,
+	"aes_encrypt":                    AES_ENCRYPT,
+	"addtime":                        ADDTIME,
+	"compress":                       COMPRESS,
+	"uncompress":                     UNCOMPRESS,
+	"uncompressed_length":            UNCOMPRESSED_LENGTH,
+	"random_bytes":                   RANDOM_BYTES,
+	"validate_password_strength":     VALIDATE_PASSWORD_STRENGTH,
+	"inet6_aton":                     INET6_ATON,
+	"inet6_ntoa":                     INET6_NTOA,
+	"inet_aton":                      INET_ATON,
+	"inet_ntoa":                      INET_NTOA,
+	"is_ipv4":                        IS_IPV4,
+	"is_ipv6":                        IS_IPV6,
+	"is_ipv4_compat":                 IS_IPV4_COMPAT,
+	"is_ipv4_mapped":                 IS_IPV4_MAPPED,
+	"asin":                           ASIN,
 	"assert":                         ASSERT,
 	"bit_length":                     BIT_LENGTH,
 	"date":                           DATE,
 	"time":                           TIME,
+	"time_format":                    TIME_FORMAT,
+	"timestampadd":                   TIMESTAMPADD,
 	"hour":                           HOUR,
+	"microsecond":                    MICROSECOND,
 	"minute":                         MINUTE,
+	"quarter":                        QUARTER,
 	"second":                         SECOND,
 	"sqrt":                           SQRT,
 	"to_seconds":                     TO_SECONDS,
 	"day":                            DAY,
 	"to_days":                        TO_DAYS,
+	"dayofweek":                      DAYOFWEEK,
+	"dayname":                        DAYNAME,
+	"dayofmonth":                     DAYOFMONTH,
+	"monthname":                      MONTHNAME,
 	"dayofyear":                      DAYOFYEAR,
 	"exp":                            EXP,
 	"empty":                          EMPTY,
 	"length":                         LENGTH,
+	"octet_length":                   LENGTH,
 	"lengthutf8":                     LENGTH_UTF8,
 	"char_length":                    LENGTH_UTF8,
 	"ln":                             LN,
@@ -572,9 +763,11 @@ var functionIdRegister = map[string]int32{
 	"month":                          MONTH,
 	"not_in_rows":                    NOT_IN_ROWS,
 	"oct":                            OCT,
+	"radians":                        RADIANS,
 	"rand":                           RANDOM,
 	"reverse":                        REVERSE,
 	"rtrim":                          RTRIM,
+	"sign":                           SIGN,
 	"sin":                            SIN,
 	"sinh":                           SINH,
 	"space":                          SPACE,
@@ -588,7 +781,9 @@ var functionIdRegister = map[string]int32{
 	"isempty":                        ISEMPTY,
 	"date_add":                       DATE_ADD,
 	"date_sub":                       DATE_SUB,
+	"degrees":                        DEGREES,
 	"atan":                           ATAN,
+	"atan2":                          ATAN2,
 	"cos":                            COS,
 	"cot":                            COT,
 	"crc32":                          CRC32,
@@ -603,6 +798,7 @@ var functionIdRegister = map[string]int32{
 	"charset":                        CHARSET,
 	"convert":                        CONVERT,
 	"convert_tz":                     CONVERT_TZ,
+	"conv":                           CONV,
 	"current_account_id":             CURRENT_ACCOUNT_ID,
 	"current_account_name":           CURRENT_ACCOUNT_NAME,
 	"current_role":                   CURRENT_ROLE,
@@ -611,18 +807,22 @@ var functionIdRegister = map[string]int32{
 	"current_user_id":                CURRENT_USER_ID,
 	"current_user_name":              CURRENT_USER_NAME,
 	"found_rows":                     FOUND_ROWS,
+	"greatest":                       GREATEST,
 	"icu_version":                    ICULIBVERSION,
 	"last_insert_id":                 LAST_INSERT_ID,
 	"last_query_id":                  LAST_QUERY_ID,
 	"last_uuid":                      LAST_QUERY_ID,
+	"least":                          LEAST,
 	"roles_graphml":                  ROLES_GRAPHML,
 	"row_count":                      ROW_COUNT,
 	"row_number":                     ROW_NUMBER,
 	"version":                        VERSION,
 	"collation":                      COLLATION,
+	"json_array":                     JSON_ARRAY,
 	"json_extract":                   JSON_EXTRACT,
 	"json_extract_string":            JSON_EXTRACT_STRING,
 	"json_extract_float64":           JSON_EXTRACT_FLOAT64,
+	"json_object":                    JSON_OBJECT,
 	"json_quote":                     JSON_QUOTE,
 	"json_unquote":                   JSON_UNQUOTE,
 	"json_row":                       JSON_ROW,
@@ -654,12 +854,19 @@ var functionIdRegister = map[string]int32{
 	"serial_extract":                 SERIAL_EXTRACT,
 	"hash_value":                     HASH,
 	"hash_partition":                 HASH_PARTITION,
+	"mo_tuple_expr":                  MO_TUPLE_EXPR,
 	"bin":                            BIN,
 	"datediff":                       DATEDIFF,
 	"timestampdiff":                  TIMESTAMPDIFF,
 	"timediff":                       TIMEDIFF,
 	"last_day":                       LAST_DAY,
 	"makedate":                       MAKEDATE,
+	"maketime":                       MAKETIME,
+	"period_add":                     PERIOD_ADD,
+	"period_diff":                    PERIOD_DIFF,
+	"sec_to_time":                    SEC_TO_TIME,
+	"subtime":                        SUBTIME,
+	"time_to_sec":                    TIME_TO_SEC,
 	"reg_match":                      REG_MATCH,
 	"not_reg_match":                  NOT_REG_MATCH,
 	"regexp_instr":                   REGEXP_INSTR,
@@ -679,16 +886,26 @@ var functionIdRegister = map[string]int32{
 	"format":                         FORMAT,
 	"sleep":                          SLEEP,
 	"split_part":                     SPLIT_PART,
+	"insert":                         INSERT,
 	"instr":                          INSTR,
+	"ord":                            ORD,
 	"locate":                         LOCATE,
 	"curdate":                        CURRENT_DATE,
 	"current_date":                   CURRENT_DATE,
+	"utc_date":                       UTC_DATE,
+	"utc_time":                       UTC_TIME,
+	"weekofyear":                     WEEKOFYEAR,
+	"yearweek":                       YEARWEEK,
+	"elt":                            ELT,
+	"export_set":                     EXPORT_SET,
+	"make_set":                       MAKE_SET,
 	"ascii":                          ASCII,
 	"replace":                        REPLACE,
 	"mo_table_rows":                  MO_TABLE_ROWS,
 	"mo_table_size":                  MO_TABLE_SIZE,
 	"mo_table_col_max":               MO_TABLE_COL_MAX,
 	"mo_table_col_min":               MO_TABLE_COL_MIN,
+	"truncate":                       TRUNCATE,
 	"trim":                           TRIM,
 	"sha2":                           SHA2,
 	"mo_log_date":                    MO_LOG_DATE,

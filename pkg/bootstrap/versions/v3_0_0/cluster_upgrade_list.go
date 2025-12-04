@@ -25,7 +25,6 @@ import (
 
 var clusterUpgEntries = []versions.UpgradeEntry{
 	upg_mo_pitr,
-	upg_mo_iscp_log_new,
 	upg_drop_mo_stored_procedure,
 	upg_create_mo_stored_procedure,
 }
@@ -56,15 +55,6 @@ var upg_mo_pitr = versions.UpgradeEntry{
 	},
 }
 
-var upg_mo_iscp_log_new = versions.UpgradeEntry{
-	Schema:    catalog.MO_CATALOG,
-	TableName: catalog.MO_ISCP_LOG,
-	UpgType:   versions.CREATE_NEW_TABLE,
-	UpgSql:    frontend.MoCatalogMoISCPLogDDL,
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
-		return versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, catalog.MO_ISCP_LOG)
-	},
-}
 var upg_drop_mo_stored_procedure = versions.UpgradeEntry{
 	Schema:    catalog.MO_CATALOG,
 	TableName: catalog.MO_STORED_PROCEDURE,

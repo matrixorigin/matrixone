@@ -46,7 +46,7 @@ func (builder *QueryBuilder) buildStageList(tbl *tree.TableFunction, ctx *BindCo
 			},
 			Cols: colDefs,
 		},
-		BindingTags:     []int32{builder.genNewTag()},
+		BindingTags:     []int32{builder.genNewBindTag()},
 		Children:        children,
 		TblFuncExprList: exprs,
 	}

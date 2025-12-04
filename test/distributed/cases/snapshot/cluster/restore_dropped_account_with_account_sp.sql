@@ -19,7 +19,7 @@ drop account if exists acc01;
 
 select * from db01.t01{snapshot='snapshot_acc01_dropped'};
 
-restore account acc01 from snapshot snapshot_acc01_dropped;
+restore account acc01{snapshot="snapshot_acc01_dropped"};
 
 -- @session:id=2&user=acc01:test_account&password=111
 select * from db01.t01;
@@ -53,7 +53,7 @@ drop account if exists acc01;
 
 create account acc01 admin_name = 'test_account' identified by '123456';
 
-restore account acc01 from snapshot snapshot_acc01_dropped_created;
+restore account acc01{snapshot="snapshot_acc01_dropped_created"};
 
 -- @session:id=4&user=acc01:test_account&password=111
 select * from db01.t01;

@@ -1,0 +1,282 @@
+select 1.2::int;
+cast(1.2 as int)
+1
+select 1.2::integer;
+cast(1.2 as integer)
+1
+select 3.7::bigint;
+cast(3.7 as bigint)
+4
+select 3.7::smallint;
+cast(3.7 as smallint)
+4
+select 3.7::tinyint;
+cast(3.7 as tinyint)
+4
+select 123.456::float;
+cast(123.456 as float)
+123.456
+select 123.456::double;
+cast(123.456 as double)
+123.456
+select 123.456::decimal;
+cast(123.456 as decimal(38))
+123
+select 123.456::numeric;
+cast(123.456 as numeric(38))
+123
+select 123::varchar;
+cast(123 as varchar)
+123
+select 123::char(10);
+cast(123 as char(10))
+123
+select 123::text;
+cast(123 as text)
+123
+select '123'::int;
+cast(123 as int)
+123
+select '123.45'::decimal(10,2);
+cast(123.45 as decimal(10, 2))
+123.45
+select '2023-01-01'::date;
+cast(2023-01-01 as date)
+2023-01-01
+select '2023-01-01 12:00:00'::datetime;
+cast(2023-01-01 12:00:00 as datetime)
+2023-01-01 12:00:00
+select '2023-01-01 12:00:00'::timestamp;
+cast(2023-01-01 12:00:00 as timestamp)
+2023-01-01 12:00:00
+select '12:00:00'::time;
+cast(12:00:00 as time)
+12:00:00
+select 1::bool;
+cast(1 as bool)
+true
+select 0::bool;
+cast(0 as bool)
+false
+select 'true'::bool;
+cast(true as bool)
+true
+select 'false'::bool;
+cast(false as bool)
+false
+select 123::unsigned;
+cast(123 as unsigned)
+123
+select 123::unsigned integer;
+cast(123 as integer unsigned)
+123
+select 123::signed;
+cast(123 as signed)
+123
+select 123::signed integer;
+cast(123 as integer)
+123
+select (1.2 + 3.4)::int;
+cast((1.2 + 3.4) as int)
+5
+select (10 / 3)::decimal(10,2);
+cast((10 / 3) as decimal(10, 2))
+3.33
+select abs(-123.45)::int;
+cast(abs(-123.45) as int)
+123
+select round(123.456)::int;
+cast(round(123.456) as int)
+123
+drop table if exists t1;
+create table t1 (a decimal(10,2), b varchar(20));
+insert into t1 values (123.45, '456'), (789.12, '999');
+select * from t1 where a::int > 100;
+a	b
+123.45	456
+789.12	999
+select * from t1 where b::int < 500;
+a	b
+123.45	456
+drop table t1;
+select 123.456::int as int_val;
+int_val
+123
+select '2023-01-01'::date as date_val;
+date_val
+2023-01-01
+select 1::bool as bool_val;
+bool_val
+true
+select 1.2::int + 3.4::int;
+cast(1.2 as int) + cast(3.4 as int)
+4
+select '123'::int * 2;
+cast(123 as int) * 2
+246
+select (1.5::int)::varchar;
+cast((cast(1.5 as int)) as varchar)
+2
+select null::int;
+cast(null as int)
+null
+select null::varchar;
+cast(null as varchar)
+null
+select null::date;
+cast(null as date)
+null
+select cast(123.456::int as varchar);
+cast(cast(123.456 as int) as varchar)
+123
+select length(123::varchar);
+length(cast(123 as varchar))
+3
+select 1.2::int, 3.4::decimal(10,2), '123'::int, true::int;
+cast(1.2 as int)	cast(3.4 as decimal(10, 2))	cast(123 as int)	cast(true as int)
+1	3.40	123	1
+drop table if exists t1;
+create table t1 (a varchar(10));
+insert into t1 values ('100'), ('200'), ('50');
+select * from t1 order by a::int;
+a
+50
+100
+200
+drop table t1;
+drop table if exists t1;
+create table t1 (a decimal(5,2));
+insert into t1 values (1.2), (1.2), (3.4), (3.4);
+select a::int, count(*) from t1 group by a::int;
+cast(a as int)	count(*)
+1	2
+3	2
+drop table t1;
+select (1.2::int) + (3.4::int);
+(cast(1.2 as int)) + (cast(3.4 as int))
+4
+select ('100'::int) * 2;
+(cast(100 as int)) * 2
+200
+select (123.456::decimal(10,2)) / 2;
+(cast(123.456 as decimal(10, 2))) / 2
+61.73000000
+select case when 1.5::int = 1 then 'truncated' else 'not truncated' end;
+case when cast(1.5 as int) = 1 then truncated else not truncated end
+not truncated
+select case 1.5::int when 1 then 'one' when 2 then 'two' else 'other' end;
+case cast(1.5 as int) when 1 then one when 2 then two else other end
+two
+select '{"key":"value"}'::json;
+cast({"key":"value"} as json)
+{"key": "value"}
+select '550e8400-e29b-41d4-a716-446655440000'::uuid;
+cast(550e8400-e29b-41d4-a716-446655440000 as uuid)
+550e8400-e29b-41d4-a716-446655440000
+select (1.2::int)::varchar;
+cast((cast(1.2 as int)) as varchar)
+1
+select ('123'::int)::decimal(10,2);
+cast((cast(123 as int)) as decimal(10, 2))
+123.00
+drop table if exists t1;
+create table t1 (a decimal(10,2));
+insert into t1 values (123.45), (678.90);
+select * from (select a::int as b from t1) t where b > 100;
+b
+123
+679
+drop table t1;
+drop table if exists t1;
+drop table if exists t2;
+create table t1 (a varchar(10));
+create table t2 (b int);
+insert into t1 values ('100'), ('200');
+insert into t2 values (100), (200);
+select * from t1 join t2 on t1.a::int = t2.b;
+a	b
+100	100
+200	200
+drop table t1;
+drop table t2;
+select 123.456789::decimal(10,2);
+cast(123.456789 as decimal(10, 2))
+123.46
+select 123.456789::decimal(10,4);
+cast(123.456789 as decimal(10, 4))
+123.4568
+select '123.456789'::decimal(10,2);
+cast(123.456789 as decimal(10, 2))
+123.46
+select '2023-01-01'::date;
+cast(2023-01-01 as date)
+2023-01-01
+select '2023-01-01 12:00:00'::datetime;
+cast(2023-01-01 12:00:00 as datetime)
+2023-01-01 12:00:00
+select '2023-01-01 12:00:00'::timestamp;
+cast(2023-01-01 12:00:00 as timestamp)
+2023-01-01 12:00:00
+select '12:00:00'::time;
+cast(12:00:00 as time)
+12:00:00
+drop table if exists t1;
+create table t1 (a int, b varchar(20), c decimal(10,2));
+insert into t1 values (123.45::int, 456::varchar, '789.12'::decimal(10,2));
+invalid argument cast to int, bad value 123.45
+select * from t1;
+a	b	c
+drop table t1;
+drop table if exists t1;
+create table t1 (a int, b varchar(20));
+insert into t1 values (100, '200');
+update t1 set a = '300'::int where b::int > 150;
+select * from t1;
+a	b
+300	200
+drop table t1;
+select 1.5::int = 1;
+cast(1.5 as int) = 1
+false
+select 1.5::int != 2;
+cast(1.5 as int) != 2
+false
+select 1.5::int < 2;
+cast(1.5 as int) < 2
+false
+select 1.5::int > 0;
+cast(1.5 as int) > 0
+true
+select 1.5::int <= 2;
+cast(1.5 as int) <= 2
+true
+select 1.5::int >= 1;
+cast(1.5 as int) >= 1
+true
+select 1.2::int union select 3.4::int;
+cast(1.2 as int)
+3
+1
+select '123'::int union select '456'::int;
+cast(123 as int)
+456
+123
+drop table if exists t1;
+create table t1 (a decimal(10,2));
+insert into t1 values (1.2), (3.4), (5.6);
+select sum(a::int) from t1;
+sum(cast(a as int))
+10
+select avg(a::int) from t1;
+avg(cast(a as int))
+3.3333333333333335
+select max(a::int) from t1;
+max(cast(a as int))
+6
+select min(a::int) from t1;
+min(cast(a as int))
+1
+select count(a::int) from t1;
+count(cast(a as int))
+3
+drop table t1;

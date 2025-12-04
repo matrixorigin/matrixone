@@ -268,7 +268,7 @@ INSERT INTO t_only_spaces VALUES (2, '  ');
 INSERT INTO t_only_spaces VALUES (3, '   ');
 INSERT INTO t_only_spaces VALUES (4, '    ');
 SELECT id, LENGTH(data), CHAR_LENGTH(data), data = '' FROM t_only_spaces ORDER BY id;
-id    LENGTH(data)    CHAR_LENGTH(data)    data = 
+id    LENGTH(data)    CHAR_LENGTH(data)    data =
 1    1    1    false
 2    2    2    false
 3    3    3    false
@@ -310,11 +310,14 @@ SELECT ASCII('中'), ASCII('😀');
 ASCII(中)    ASCII(😀)
 228    240
 SELECT ORD('A'), ORD('中'), ORD('😀');
-not supported: function or operator 'ord'
+ORD(A)    ORD(中)    ORD(😀)
+65    11385060    2157486064
 SELECT CHAR(65, 66, 67);
-not supported: function or operator 'char'
+CHAR(65, 66, 67)
+ABC
 SELECT CHAR(228, 184, 173);  -- UTF-8 bytes for '中'
-not supported: function or operator 'char'
+CHAR(228, 184, 173)
+中
 CREATE TABLE t_strcmp (
 id INT PRIMARY KEY,
 val1 VARCHAR(100),
@@ -336,12 +339,6 @@ INSERT INTO t_duplicate_key VALUES (1, 'Test');
 SELECT * FROM t_duplicate_key;
 id    name
 1    Test
-CREATE TABLE t_fulltext (
-id INT PRIMARY KEY,
-content TEXT,
-FULLTEXT KEY idx_content (content)
-) CHARACTER SET utf8mb4;
-internal error: experimental_fulltext_index is not enabled
 INSERT INTO t_fulltext VALUES (1, 'The quick brown fox jumps over the lazy dog');
 no such table charset_error_test.t_fulltext
 INSERT INTO t_fulltext VALUES (2, 'Quick brown foxes');

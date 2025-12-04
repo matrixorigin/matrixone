@@ -1715,7 +1715,7 @@ func initFixed3() {
 				{toType: types.T_int8, preferLevel: 2},
 				{toType: types.T_int16, preferLevel: 2},
 				{toType: types.T_int32, preferLevel: 2},
-				{toType: types.T_int64, preferLevel: 2},
+				{toType: types.T_int64, preferLevel: 1},
 				{toType: types.T_uint8, preferLevel: 2},
 				{toType: types.T_uint16, preferLevel: 2},
 				{toType: types.T_uint64, preferLevel: 1},

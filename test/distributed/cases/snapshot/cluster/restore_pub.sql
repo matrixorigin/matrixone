@@ -162,7 +162,7 @@ drop database if exists sub_db4;
 show databases like 'sub_db4';
 -- @session
 
-restore cluster from snapshot cluster_sp;
+restore cluster{snapshot="cluster_sp"};
 
 -- @ignore:5,6
 show publications;

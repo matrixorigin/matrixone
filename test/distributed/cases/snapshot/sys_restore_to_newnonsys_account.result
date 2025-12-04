@@ -25,7 +25,7 @@ drop snapshot if exists sp01;
 create snapshot sp01 for account acc01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp01    2025-07-19 05:52:55.707381    account    acc01        
+sp01    2025-07-19 05:52:55.707381    account    acc01
 use acc_test01;
 insert into s3t values (300001, 34, 23, 1);
 select count(*) from s3t;
@@ -34,7 +34,7 @@ count(*)
 select * from s3t where col1 = 23;
 col1    col2    col4    col3
 23    2    null    12
-restore account acc01 from snapshot sp01 to account acc02;
+restore account acc01{snapshot="sp01"} to account acc02;
 show databases;
 Database
 acc_test01
@@ -66,12 +66,12 @@ Table    Create Table
 s3t    CREATE TABLE `s3t` (\n  `col1` int NOT NULL,\n  `col2` int NOT NULL,\n  `col3` int DEFAULT NULL,\n  PRIMARY KEY (`col1`,`col2`)\n)
 drop snapshot if exists sp02;
 create snapshot sp02 for account acc01;
-restore account acc01 from snapshot sp02 to account acc02;
+restore account acc01{snapshot="sp02"} to account acc02;
 use acc_test01;
 show create table s3t;
 Table    Create Table
 s3t    CREATE TABLE `s3t` (\n  `col1` int NOT NULL,\n  `col2` int NOT NULL,\n  `col3` int DEFAULT NULL,\n  PRIMARY KEY (`col1`,`col2`)\n)
-restore account acc01 from snapshot sp01 to account acc02;
+restore account acc01{snapshot="sp01"} to account acc02;
 show databases;
 Database
 acc_test01
@@ -272,7 +272,7 @@ a    b    c
 show create table acc_test04.index03;
 Table    Create Table
 index03    CREATE TABLE `index03` (\n  `emp_no` int NOT NULL,\n  `birth_date` date NOT NULL,\n  `first_name` varchar(14) NOT NULL,\n  `last_name` varchar(16) NOT NULL,\n  `gender` varchar(5) NOT NULL,\n  `hire_date` date NOT NULL,\n  PRIMARY KEY (`emp_no`)\n) partition by range columns (`emp_no`) (partition p01 values less than (100001), partition p02 values less than (200001), partition p03 values less than (300001), partition p04 values less than (400001))
-restore account acc01 from snapshot sp04 to account acc02;
+restore account acc01{snapshot="sp04"} to account acc02;
 show databases;
 Database
 acc_test02
@@ -332,10 +332,10 @@ drop snapshot if exists sp08;
 create snapshot sp08 for account acc01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp08    2025-07-19 05:52:58.143598    account    acc01        
-sp07    2025-07-19 05:52:58.119    account    acc01        
-restore account acc01 from snapshot sp07 to account acc02;
-restore account acc01 from snapshot sp08 to account acc02;
+sp08    2025-07-19 05:52:58.143598    account    acc01
+sp07    2025-07-19 05:52:58.119    account    acc01
+restore account acc01{snapshot="sp07"} to account acc02;
+restore account acc01{snapshot="sp08"} to account acc02;
 use test01;
 show tables;
 Tables_in_test01
@@ -379,7 +379,7 @@ insert into table02 values(134, 'database');
 alter table table02 add column new decimal after col2;
 drop snapshot if exists sp10;
 create snapshot sp10 for account acc01;
-restore account acc01 from snapshot sp10 to account acc02;
+restore account acc01{snapshot="sp10"} to account acc02;
 use test02;
 show create table table01;
 no such table test02.table01
@@ -392,7 +392,7 @@ col1    col2    new
 134    database    null
 select * from table01;
 SQL parser error: table "table01" does not exist
-restore account acc01 from snapshot sp09 to account acc02;
+restore account acc01{snapshot="sp09"} to account acc02;
 drop database test02;
 drop snapshot sp09;
 drop snapshot sp10;
@@ -418,11 +418,10 @@ insert into rs01 values (10, -1, null);
 select count(*) from rs01;
 count(*)
 6
-restore account acc01 from snapshot sp03 to account sys;
+restore account acc01{snapshot="sp03"} to account sys;
 internal error: non-sys account's snapshot can't restore to sys account
 drop snapshot sp03;
 drop database test01;
-set experimental_fulltext_index=1;
 drop database if exists fulltext_index_acc01;
 create database fulltext_index_acc01;
 use fulltext_index_acc01;
@@ -437,7 +436,7 @@ create fulltext index fdx_01 on articles(title, body) with parser json;
 drop snapshot if exists fu_sp01;
 create snapshot fu_sp01 for account acc01;
 drop database fulltext_index_acc01;
-restore account acc01 from snapshot fu_sp01 to account acc02;
+restore account acc01{snapshot="fu_sp01"} to account acc02;
 show databases;
 Database
 acc_test02

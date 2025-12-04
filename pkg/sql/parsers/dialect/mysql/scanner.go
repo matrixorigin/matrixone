@@ -192,6 +192,10 @@ func (s *Scanner) Scan() (int, string) {
 			s.incN(2)
 			return ASSIGNMENT, ""
 		}
+		if s.peek(1) == ':' {
+			s.incN(2)
+			return TYPECAST, ""
+		}
 
 		// Like mysql -h ::1 ?
 		id, str := s.scanBindVar()

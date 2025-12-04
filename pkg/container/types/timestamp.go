@@ -51,6 +51,8 @@ var TimestampMinValue Timestamp
 var TimestampMaxValue Timestamp
 
 // the range for TIMESTAMP values is '1970-01-01 00:00:01.000000' to '2038-01-19 03:14:07.999999'.
+// Note: TimestampMinValue enforces the minimum, but TimestampMaxValue is set to 9999-12-31
+// to allow values beyond MySQL's 2038 limit (we don't enforce maximum value restriction).
 func init() {
 	TimestampMinValue = FromClockUTC(1970, 1, 1, 0, 0, 1, 0)
 	TimestampMaxValue = FromClockUTC(9999, 12, 31, 23, 59, 59, 999999)
@@ -71,7 +73,7 @@ func (ts Timestamp) String2(loc *time.Location, scale int32) string {
 	hour, minute, sec := t.Clock()
 	if scale > 0 {
 		msec := t.Nanosecond() / 1000
-		msecInstr := fmt.Sprintf("%06d\n", msec)
+		msecInstr := fmt.Sprintf("%06d", msec)
 		msecInstr = msecInstr[:scale]
 
 		return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d"+"."+msecInstr, y, m, d, hour, minute, sec)

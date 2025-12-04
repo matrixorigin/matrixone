@@ -130,6 +130,77 @@ func TestCombinedTxnTable_Delete(t *testing.T) {
 	})
 }
 
+func TestCombinedTxnTable_BuildReaders(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("RelDataNilSuccess", func(t *testing.T) {
+		reader1 := &mockReader{}
+		reader2 := &mockReader{}
+		rel1Called := false
+		rel2Called := false
+
+		mockRel1 := &mockRelation{
+			buildReadersFunc: func(ctx context.Context, proc any, expr *plan.Expr, relData engine.RelData, num int, txnOffset int, orderBy bool, policy engine.TombstoneApplyPolicy, filterHint engine.FilterHint) ([]engine.Reader, error) {
+				rel1Called = true
+				assert.Nil(t, relData)
+				assert.Equal(t, 1, num)
+				return []engine.Reader{reader1}, nil
+			},
+		}
+		mockRel2 := &mockRelation{
+			buildReadersFunc: func(ctx context.Context, proc any, expr *plan.Expr, relData engine.RelData, num int, txnOffset int, orderBy bool, policy engine.TombstoneApplyPolicy, filterHint engine.FilterHint) ([]engine.Reader, error) {
+				rel2Called = true
+				assert.Nil(t, relData)
+				return []engine.Reader{reader2}, nil
+			},
+		}
+
+		table := &combinedTxnTable{
+			tablesFunc: func() ([]engine.Relation, error) {
+				return []engine.Relation{mockRel1, mockRel2}, nil
+			},
+		}
+
+		result, err := table.BuildReaders(ctx, nil, nil, nil, 1, 0, false, engine.Policy_CheckAll, engine.FilterHint{})
+		assert.NoError(t, err)
+		assert.Equal(t, []engine.Reader{reader1, reader2}, result)
+		assert.True(t, rel1Called)
+		assert.True(t, rel2Called)
+	})
+
+	t.Run("TablesFuncError", func(t *testing.T) {
+		table := &combinedTxnTable{
+			tablesFunc: func() ([]engine.Relation, error) {
+				return nil, assert.AnError
+			},
+		}
+
+		result, err := table.BuildReaders(ctx, nil, nil, nil, 1, 0, false, engine.Policy_CheckAll, engine.FilterHint{})
+		assert.Error(t, err)
+		assert.Nil(t, result)
+		assert.Equal(t, assert.AnError, err)
+	})
+
+	t.Run("RelationBuildReadersError", func(t *testing.T) {
+		mockRel := &mockRelation{
+			buildReadersFunc: func(ctx context.Context, proc any, expr *plan.Expr, relData engine.RelData, num int, txnOffset int, orderBy bool, policy engine.TombstoneApplyPolicy, filterHint engine.FilterHint) ([]engine.Reader, error) {
+				return nil, assert.AnError
+			},
+		}
+
+		table := &combinedTxnTable{
+			tablesFunc: func() ([]engine.Relation, error) {
+				return []engine.Relation{mockRel}, nil
+			},
+		}
+
+		result, err := table.BuildReaders(ctx, nil, nil, nil, 1, 0, false, engine.Policy_CheckAll, engine.FilterHint{})
+		assert.Error(t, err)
+		assert.Nil(t, result)
+		assert.Equal(t, assert.AnError, err)
+	})
+}
+
 func TestCombinedTxnTable_GetColumMetadataScanInfo(t *testing.T) {
 	// Test case 1: Success case with multiple tables
 	t.Run("Success with multiple tables", func(t *testing.T) {
@@ -1049,6 +1120,26 @@ func (m *mockTombstoner) Merge(other engine.Tombstoner) error {
 func (m *mockTombstoner) SortInMemory() {
 }
 
+type mockReader struct{}
+
+func (m *mockReader) Close() error {
+	return nil
+}
+
+func (m *mockReader) Read(context.Context, []string, *plan.Expr, *mpool.MPool, *batch.Batch) (bool, error) {
+	return false, nil
+}
+
+func (m *mockReader) SetOrderBy([]*plan.OrderBySpec) {}
+
+func (m *mockReader) GetOrderBy() []*plan.OrderBySpec {
+	return nil
+}
+
+func (m *mockReader) SetBlockTop([]*plan.OrderBySpec, uint64) {}
+
+func (m *mockReader) SetFilterZM(objectio.ZoneMap) {}
+
 type mockRelation struct {
 	rangesFunc                      func(ctx context.Context, param engine.RangesParam) (engine.RelData, error)
 	getColumMetadataScanInfoFunc    func(ctx context.Context, name string, visitTombstone bool) ([]*plan.MetadataScanInfo, error)
@@ -1057,6 +1148,7 @@ type mockRelation struct {
 	collectTombstonesFunc           func(ctx context.Context, txnOffset int, policy engine.TombstoneCollectPolicy) (engine.Tombstoner, error)
 	sizeFunc                        func(ctx context.Context, columnName string) (uint64, error)
 	rowsFunc                        func(ctx context.Context) (uint64, error)
+	buildReadersFunc                func(ctx context.Context, proc any, expr *plan.Expr, relData engine.RelData, num int, txnOffset int, orderBy bool, policy engine.TombstoneApplyPolicy, filterHint engine.FilterHint) ([]engine.Reader, error)
 }
 
 func (m *mockRelation) Ranges(ctx context.Context, param engine.RangesParam) (engine.RelData, error) {
@@ -1065,6 +1157,9 @@ func (m *mockRelation) Ranges(ctx context.Context, param engine.RangesParam) (en
 
 // Implement other required methods with empty implementations
 func (m *mockRelation) BuildReaders(ctx context.Context, proc any, expr *plan.Expr, relData engine.RelData, num int, txnOffset int, orderBy bool, policy engine.TombstoneApplyPolicy, filterHint engine.FilterHint) ([]engine.Reader, error) {
+	if m.buildReadersFunc != nil {
+		return m.buildReadersFunc(ctx, proc, expr, relData, num, txnOffset, orderBy, policy, filterHint)
+	}
 	return nil, nil
 }
 

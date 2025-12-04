@@ -62,10 +62,26 @@ func (dt Datetime) String() string {
 func (dt Datetime) String2(scale int32) string {
 	y, m, d, _ := dt.ToDate().Calendar(true)
 	hour, minute, sec := dt.Clock()
+
 	if scale > 0 {
 		msec := int64(dt) % MicroSecsPerSec
-		msecInstr := fmt.Sprintf("%06d\n", msec)
-		msecInstr = msecInstr[:scale]
+		// Format microseconds as 6 digits (max precision we store)
+		msecInstr := fmt.Sprintf("%06d", msec)
+		// For scale > 6, pad with zeros to the right (e.g., scale 9: "000001" -> "000001000")
+		if scale > 6 {
+			// Pad to 9 digits by appending zeros
+			for len(msecInstr) < 9 {
+				msecInstr = msecInstr + "0"
+			}
+			// Truncate to requested scale (max 9)
+			if scale > 9 {
+				scale = 9
+			}
+			msecInstr = msecInstr[:scale]
+		} else {
+			// For scale <= 6, truncate from the right
+			msecInstr = msecInstr[:scale]
+		}
 
 		return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d"+"."+msecInstr, y, m, d, hour, minute, sec)
 	}
@@ -101,15 +117,23 @@ func ParseDatetime(s string, scale int32) (Datetime, error) {
 	var carry uint32 = 0
 	var err error
 
-	if s[4] == '-' || s[4] == '/' {
+	if s[4] == '-' || s[4] == '/' || s[4] == ':' {
 		var num int64
 		var unum uint64
-		strArr := strings.Split(s, " ")
+		// Support both space-separated format (2024-12-20 10:30:45) and ISO 8601 format (2024-12-20T10:30:45)
+		var strArr []string
+		if strings.Contains(s, "T") {
+			strArr = strings.Split(s, "T")
+		} else {
+			strArr = strings.Split(s, " ")
+		}
 		if len(strArr) != 2 {
 			return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
 		}
 		// solve year/month/day
-		front := strings.Split(strArr[0], s[4:5])
+		// Use the separator found at position 4 (between year and month)
+		dateSep := s[4:5]
+		front := strings.Split(strArr[0], dateSep)
 		if len(front) != 3 {
 			return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
 		}
@@ -251,19 +275,41 @@ func (dt Datetime) ToDate() Date {
 // We need to truncate the part after scale position when cast
 // between different scale.
 func (dt Datetime) ToTime(scale int32) Time {
-	if scale == 6 {
-		return Time(dt % microSecsPerDay)
+	// Get today's date (the base date used when converting TIME to DATETIME)
+	todayDate := Today(time.UTC)
+	todayDatetime := todayDate.ToDatetime()
+
+	// Get the date portion of the datetime
+	datePart := dt.ToDate()
+	baseDatetime := datePart.ToDatetime()
+
+	// Calculate time difference from the base date
+	// If the datetime's date is today or tomorrow (within 1 day), use today as base
+	// This preserves times > 24 hours that came from ADDTIME with TIME inputs
+	var timeDiff int64
+	dateDiff := int64(datePart) - int64(todayDate)
+	if dateDiff >= 0 && dateDiff <= 1 {
+		// Date is today or tomorrow, calculate from today's date
+		timeDiff = int64(dt) - int64(todayDatetime)
+	} else {
+		// Date is far from today, use the date portion of the datetime
+		timeDiff = int64(dt) - int64(baseDatetime)
 	}
 
-	// truncate the date part
-	ms := dt % microSecsPerDay
+	// Time type only supports up to 6 digits of microsecond precision
+	// For scale > 6, use scale 6 (full microsecond precision)
+	if scale >= 6 {
+		return Time(timeDiff)
+	}
 
-	base := ms / scaleVal[scale]
-	if ms%scaleVal[scale]/scaleVal[scale+1] >= 5 { // check carry
+	// truncate the time part
+	scaleValInt := int64(scaleVal[scale])
+	base := timeDiff / scaleValInt
+	if scale < 6 && timeDiff%scaleValInt/int64(scaleVal[scale+1]) >= 5 { // check carry
 		base += 1
 	}
 
-	return Time(base * scaleVal[scale])
+	return Time(base * scaleValInt)
 }
 
 // TruncateToScale truncates a datetime to the given scale (0-6).
@@ -271,8 +317,10 @@ func (dt Datetime) ToTime(scale int32) Time {
 //   - 0: seconds (no fractional part)
 //   - 1-5: fractional seconds with corresponding precision
 //   - 6: microseconds (full precision, no truncation)
+//   - >6: treated as scale 6 (full precision)
 func (dt Datetime) TruncateToScale(scale int32) Datetime {
-	if scale == 6 {
+	// For scale >= 6, return full precision (no truncation)
+	if scale >= 6 {
 		return dt
 	}
 
@@ -284,7 +332,7 @@ func (dt Datetime) TruncateToScale(scale int32) Datetime {
 	divisor := scaleVal[scale]
 	base := microPart / divisor
 	// Round up if the next digit >= 5
-	if microPart%divisor/scaleVal[scale+1] >= 5 {
+	if scale < 6 && microPart%divisor/scaleVal[scale+1] >= 5 {
 		base += 1
 	}
 
@@ -372,6 +420,12 @@ func (dt Datetime) AddDateTime(addMonth, addYear int64, timeType TimeType) (Date
 func (dt Datetime) AddInterval(nums int64, its IntervalType, timeType TimeType) (Datetime, bool) {
 	var addMonth, addYear int64
 	switch its {
+	case MicroSecond:
+		// nums is already in microseconds, no conversion needed
+		// For time units (MicroSecond, Second, Minute, Hour), the addition won't change the date part
+		// so we can directly return the result without ValidDatetime check
+		newDate := dt + Datetime(nums)
+		return newDate, true
 	case Second:
 		nums *= MicroSecsPerSec
 	case Minute:
@@ -390,6 +444,11 @@ func (dt Datetime) AddInterval(nums int64, its IntervalType, timeType TimeType) 
 		return dt.AddDateTime(addMonth, addYear, timeType)
 	case Year:
 		addYear = nums
+		return dt.AddDateTime(addMonth, addYear, timeType)
+	case Year_Month:
+		// Year_Month should be treated as Month (nums already represents months after NormalizeInterval)
+		// This handles the case where Year_Month type is directly passed without NormalizeInterval conversion
+		addMonth = nums
 		return dt.AddDateTime(addMonth, addYear, timeType)
 	}
 
