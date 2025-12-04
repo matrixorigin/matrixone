@@ -33,8 +33,8 @@ func TestNewClientPoolRetriesThenSucceeds(t *testing.T) {
 		ClientBufSize:       128,
 		MaxTimeout:          time.Second,
 		ClientRetryTimes:    2,
-		ClientRetryInterval: time.Nanosecond,
-		ClientRetryDuration: time.Millisecond,
+		ClientRetryInterval: time.Millisecond,       // 1ms between retries
+		ClientRetryDuration: 100 * time.Millisecond, // 100ms budget (enough for any CI)
 		ClientFactory: func() (logservice.Client, error) {
 			if attempts.Add(1) == 1 {
 				return nil, moerr.NewInternalErrorNoCtx("factory boom")

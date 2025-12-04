@@ -404,18 +404,24 @@ func (s *TableChangeStream) Run(ctx context.Context, ar *ActiveRoutine) {
 			s.cancelRun()
 			return
 		case <-ar.Pause:
+			// Get current watermark when receiving pause signal in main loop
+			currentWatermark, _ := s.watermarkUpdater.GetFromCache(streamCtx, s.watermarkKey)
 			logutil.Info(
 				"cdc.table_stream.stop_pause_signal",
-				zap.String("table", s.tableInfo.String()),
 				zap.String("task-id", s.taskId),
+				zap.String("table", s.tableInfo.String()),
+				zap.String("current-watermark", currentWatermark.ToString()),
 			)
 			s.cancelRun()
 			return
 		case <-ar.Cancel:
+			// Get current watermark when receiving cancel signal in main loop
+			currentWatermark, _ := s.watermarkUpdater.GetFromCache(streamCtx, s.watermarkKey)
 			logutil.Info(
 				"cdc.table_stream.stop_cancel_signal",
-				zap.String("table", s.tableInfo.String()),
 				zap.String("task-id", s.taskId),
+				zap.String("table", s.tableInfo.String()),
+				zap.String("current-watermark", currentWatermark.ToString()),
 			)
 			s.cancelRun()
 			return
@@ -1208,10 +1214,30 @@ func (s *TableChangeStream) processWithTxn(
 			s.progressTracker.EndRound(false, ctx.Err())
 			return ctx.Err()
 		case <-ar.Pause:
+			// Get current watermark before pause
+			currentWatermark, _ := s.watermarkUpdater.GetFromCache(ctx, s.watermarkKey)
+			logutil.Info(
+				"cdc.table_stream.pause_signal_received",
+				zap.String("task-id", s.taskId),
+				zap.String("table", s.tableInfo.String()),
+				zap.String("current-watermark", currentWatermark.ToString()),
+				zap.String("from-ts", fromTs.ToString()),
+				zap.String("to-ts", toTs.ToString()),
+			)
 			err := moerr.NewInternalErrorf(ctx, "paused")
 			s.progressTracker.EndRound(false, err)
 			return err
 		case <-ar.Cancel:
+			// Get current watermark before cancel
+			currentWatermark, _ := s.watermarkUpdater.GetFromCache(ctx, s.watermarkKey)
+			logutil.Info(
+				"cdc.table_stream.cancel_signal_received",
+				zap.String("task-id", s.taskId),
+				zap.String("table", s.tableInfo.String()),
+				zap.String("current-watermark", currentWatermark.ToString()),
+				zap.String("from-ts", fromTs.ToString()),
+				zap.String("to-ts", toTs.ToString()),
+			)
 			err := moerr.NewInternalErrorf(ctx, "cancelled")
 			s.progressTracker.EndRound(false, err)
 			return err
@@ -1228,6 +1254,37 @@ func (s *TableChangeStream) processWithTxn(
 		if err != nil {
 			s.progressTracker.EndRound(false, err)
 			return err
+		}
+
+		// FIX: Check pause before processing NoMoreData
+		// NoMoreData triggers commit which updates watermark
+		// If pause signal arrived after last select but before commit,
+		// we must catch it here to prevent watermark update during pause
+		// This fixes the race condition that caused 1144 rows loss in production
+		if changeData.Type == ChangeTypeNoMoreData {
+			select {
+			case <-ar.Pause:
+				logutil.Info(
+					"cdc.table_stream.pause_before_final_commit",
+					zap.String("task-id", s.taskId),
+					zap.String("table", s.tableInfo.String()),
+					zap.String("from-ts", fromTs.ToString()),
+					zap.String("to-ts", toTs.ToString()),
+				)
+				s.progressTracker.EndRound(false, moerr.NewInternalErrorf(ctx, "paused"))
+				return moerr.NewInternalErrorf(ctx, "paused before final commit")
+			case <-ar.Cancel:
+				logutil.Info(
+					"cdc.table_stream.cancel_before_final_commit",
+					zap.String("task-id", s.taskId),
+					zap.String("table", s.tableInfo.String()),
+					zap.String("from-ts", fromTs.ToString()),
+					zap.String("to-ts", toTs.ToString()),
+				)
+				s.progressTracker.EndRound(false, moerr.NewInternalErrorf(ctx, "cancelled"))
+				return moerr.NewInternalErrorf(ctx, "cancelled before final commit")
+			default:
+			}
 		}
 
 		// Process change
@@ -1275,6 +1332,7 @@ func (s *TableChangeStream) processWithTxn(
 
 			logutil.Debug(
 				"cdc.table_stream.round_complete",
+				zap.String("task-id", s.taskId),
 				zap.String("table", s.tableInfo.String()),
 				zap.Uint64("batches-processed", batchCount),
 				zap.Uint64("round-rows", s.progressTracker.currentRoundRows.Load()),
