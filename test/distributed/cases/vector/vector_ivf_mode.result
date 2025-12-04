@@ -361,7 +361,7 @@ id2    greeting message    1.1550325221482527
 id7    random note    1.1910499415172193
 (SELECT id, text AS content
 FROM mini_vector_data
-ORDER BY l2_distance(vec, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]')
+ORDER BY id, l2_distance(vec, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]')
 LIMIT 2 by rank with option 'mode=pre')
 UNION
 (SELECT id, content
@@ -370,9 +370,9 @@ ORDER BY cosine_distance(embedding, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]')
 LIMIT 2 by rank with option 'mode=pre')
 LIMIT 3;
 id    content
-id01    ai is artificial intelligence
+id1    hello world
+id10    additional entry
 id04    mysql is a relational database
-id7    random note
 (SELECT id, category, l2_distance(vec, '[0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9]') AS dist
 FROM vec_with_multi_idx
 WHERE category = 'A' AND status = 1
@@ -447,9 +447,9 @@ ORDER BY cosine_distance(embedding, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]')
 LIMIT 2 by rank with option 'mode=pre')
 LIMIT 3;
 id    content
-id01    ai is artificial intelligence
 id04    mysql is a relational database
 id03    it stores high dimensional vectors
+id01    ai is artificial intelligence
 (SELECT id, text, l2_distance(vec, '[0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5]') AS dist
 FROM mini_vector_data
 WHERE id LIKE 'id1%'
