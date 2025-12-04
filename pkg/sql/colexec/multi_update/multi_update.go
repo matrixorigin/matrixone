@@ -321,6 +321,9 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 			if err != nil {
 				return input, err
 			}
+			if tableType == UpdateMainTable {
+				update.addDeleteAffectRows(tableType, rowCounts[i])
+			}
 			analyzer.AddDeletedRows(int64(batBufs[actionDelete].RowCount()))
 			analyzer.AddS3RequestCount(crs)
 			analyzer.AddFileServiceCacheInfo(crs)
