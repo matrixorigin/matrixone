@@ -273,6 +273,11 @@ func (exec *aggregatorFromFixedToBytes[from]) init(
 	info singleAggInfo,
 	impl aggImplementation) {
 
+	// XXX distinct really messged up
+	if info.IsDistinct() {
+		exec.distinctHash = newDistinctHash(mg)
+	}
+
 	var v string
 	if resultInitMethod := impl.logic.init; resultInitMethod != nil {
 		v = string(resultInitMethod.(InitBytesResultOfAgg)(info.retType, info.argType))

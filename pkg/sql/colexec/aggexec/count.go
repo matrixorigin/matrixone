@@ -88,6 +88,11 @@ func newCountColumnExecExec(mg *mpool.MPool, info singleAggInfo) AggFuncExec {
 		singleAggInfo: info,
 		ret:           initAggResultWithFixedTypeResult[int64](mg, info.retType, false, 0, info.distinct),
 	}
+
+	// XXX distinct really messged up
+	if info.IsDistinct() {
+		exec.distinctHash.mp = mg
+	}
 	return exec
 }
 

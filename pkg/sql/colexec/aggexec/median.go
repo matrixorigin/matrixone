@@ -146,6 +146,12 @@ func newMedianColumnExecSelf[T numeric | types.Decimal64 | types.Decimal128, R f
 		singleAggInfo: info,
 		ret:           initAggResultWithFixedTypeResult[R](mg, info.retType, info.emptyNull, r, info.IsDistinct()),
 	}
+
+	// set mpool for distinct hash, this is so messed up and we have to
+	// completely rewrite it later.
+	if info.IsDistinct() {
+		s.distinctHash.mp = mg
+	}
 	return s
 }
 

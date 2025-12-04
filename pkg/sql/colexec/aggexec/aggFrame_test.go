@@ -905,6 +905,9 @@ func TestDistinctHashMarshalUnmarshal(t *testing.T) {
 		require.NoError(t, err)
 
 		require.Equal(t, 0, len(newDh.maps))
+
+		dh.free()
+		newDh.free()
 	}
 
 	{
@@ -930,6 +933,9 @@ func TestDistinctHashMarshalUnmarshal(t *testing.T) {
 		require.Equal(t, uint64(1), newDh.maps[0].GroupCount())
 
 		v1.Free(mp)
+
+		dh.free()
+		newDh.free()
 	}
 
 	{
@@ -965,6 +971,9 @@ func TestDistinctHashMarshalUnmarshal(t *testing.T) {
 
 		v1.Free(mp)
 		v2.Free(mp)
+
+		dh.free()
+		newDh.free()
 	}
 
 }

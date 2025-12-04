@@ -158,6 +158,7 @@ func (exec *aggregatorFromBytesToBytes) init(
 	info singleAggInfo,
 	impl aggImplementation) {
 
+	// XXX distinct really messged up
 	if info.IsDistinct() {
 		exec.distinctHash = newDistinctHash(mg)
 	}
