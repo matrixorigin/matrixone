@@ -307,7 +307,7 @@ func probeRun[T types.RealNumbers](ctr *container, ap *Productl2, proc *process.
 	}
 
 	if centers.curr > 0 {
-		keys, distances, err := usearch.ExactSearchUnsafe(
+		keys, _, err := usearch.ExactSearchUnsafe(
 			util.UnsafePointer(&(centers.vector[0])),
 			util.UnsafePointer(&(probeset.vector[0])),
 			uint(centers.curr),
