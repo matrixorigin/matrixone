@@ -453,7 +453,9 @@ var predefinedFunids = map[int]int{
 	IS_IPV6:                    397,
 	IS_IPV4_COMPAT:             398,
 	IS_IPV4_MAPPED:             399,
-	FUNCTION_END_NUMBER:        400,
+	JSON_ARRAYAGG:              400,
+	JSON_OBJECTAGG:             401,
+	FUNCTION_END_NUMBER:        402,
 }
 
 func Test_funids(t *testing.T) {
