@@ -55,6 +55,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/panjf2000/ants/v2"
 )
 
@@ -322,8 +323,7 @@ type compositeOption struct {
 }
 
 func runSql(
-	ctx context.Context, ses *Session, bh BackgroundExec,
-	tblStuff tableStuff, sql string,
+	ctx context.Context, ses *Session, bh BackgroundExec, sql string,
 	streamChan chan executor.Result, errChan chan error,
 ) (sqlRet executor.Result, err error) {
 
@@ -391,7 +391,7 @@ func handleDataBranch(
 	case *tree.DataBranchCreateDatabase:
 		return dataBranchCreateDatabase(execCtx, ses, st)
 	case *tree.DataBranchDeleteTable:
-		return dataBranchDeleteTable(execCtx, ses, st)
+		//return dataBranchDeleteTable(execCtx, ses, st)
 	case *tree.DataBranchDeleteDatabase:
 	case *tree.DataBranchDiff:
 		return handleBranchDiff(execCtx, ses, st)
@@ -499,29 +499,108 @@ func dataBranchCreateDatabase(
 	return nil
 }
 
-func dataBranchDeleteTable(
-	execCtx *ExecCtx,
-	ses *Session,
-	stmt *tree.DataBranchDeleteTable,
-) (err error) {
-	var (
-		bh       BackgroundExec
-		deferred func(error) error
-	)
+//func dataBranchDeleteTable(
+//	execCtx *ExecCtx,
+//	ses *Session,
+//	stmt *tree.DataBranchDeleteTable,
+//) (err error) {
+//	var (
+//		bh       BackgroundExec
+//		deferred func(error) error
+//	)
+//
+//	if bh, deferred, err = getBackExecutor(execCtx.reqCtx, ses); err != nil {
+//		return
+//	}
+//
+//	defer func() {
+//		if deferred != nil {
+//			err = deferred(err)
+//		}
+//	}()
+//
+//	var (
+//		dbName  = stmt.TableName.SchemaName
+//		tblName = stmt.TableName.ObjectName
+//		accId   uint32
+//		sqlRet  executor.Result
+//		tblId   uint64
+//	)
+//
+//	if len(dbName) == 0 {
+//		dbName = tree.Identifier(ses.GetTxnCompileCtx().DefaultDatabase())
+//	}
+//
+//	if len(dbName) == 0 {
+//		return moerr.NewInternalErrorNoCtxf("no db selected for the table %s", tblName)
+//	}
+//
+//	if accId, err = defines.GetAccountId(execCtx.reqCtx); err != nil {
+//		return
+//	}
+//
+//	if sqlRet, err = runSql(
+//		execCtx.reqCtx, ses, bh, fmt.Sprintf(
+//			"select rel_id from %s.%s where account_id = %d and reldatabase = '%s' and relname = '%s'",
+//			catalog.MO_CATALOG, catalog.MO_TABLES, accId, dbName, tblName,
+//		), nil, nil,
+//	); err != nil {
+//		return
+//	}
+//
+//	defer func() {
+//		sqlRet.Close()
+//	}()
+//
+//	if len(sqlRet.Batches) != 1 && sqlRet.Batches[0].Vecs[0].Length() != 1 {
+//		return moerr.NewInternalErrorNoCtxf(
+//			"get table id failed for the table %s.%s",
+//			dbName, tblName,
+//		)
+//	}
+//
+//	return nil
+//}
 
-	if bh, deferred, err = getBackExecutor(execCtx.reqCtx, ses); err != nil {
-		return
-	}
-
-	defer func() {
-		if deferred != nil {
-			err = deferred(err)
-		}
-	}()
-
-	_ = bh
-	return nil
-}
+//func branchDeleteTableHelper(
+//	ctx context.Context,
+//	ses *Session,
+//	bh BackgroundExec,
+//	dbName string,
+//	tblIdNameBatches []*batch.Batch,
+//) (err error) {
+//
+//	for _, bat := range tblIdNameBatches {
+//		idVec := bat.Vecs[0]
+//		nameVec := bat.Vecs[1]
+//
+//		col, area := vector.MustVarlenaRawData(nameVec)
+//
+//		for rowIdx := range bat.RowCount() {
+//			id := vector.GetFixedAtWithTypeCheck[uint64](idVec, rowIdx)
+//			name := col[rowIdx].GetByteSlice(area)
+//
+//			if _, err = runSql(
+//				ctx, ses, bh,
+//				fmt.Sprintf(
+//					"delete from %s.%s where table_id = %d",
+//					catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA, id,
+//				), nil, nil,
+//			); err != nil {
+//				return
+//			}
+//
+//			if _, err = runSql(
+//				ctx, ses, bh,
+//				fmt.Sprintf(
+//					"drop table %s.%s", dbName, name), nil, nil,
+//			); err != nil {
+//				return
+//			}
+//		}
+//	}
+//
+//}
 
 func diffMergeAgency(
 	ses *Session,
@@ -1678,7 +1757,7 @@ func flushSqlValues(
 		defer func() {
 			ret.Close()
 		}()
-		ret, err = runSql(ctx, ses, bh, tblStuff, sqlBuffer.String(), nil, nil)
+		ret, err = runSql(ctx, ses, bh, sqlBuffer.String(), nil, nil)
 	}
 
 	return err
@@ -1862,7 +1941,7 @@ func tryDiffAsCSV(
 		sqlRet executor.Result
 	)
 
-	if sqlRet, err = runSql(ctx, ses, bh, tblStuff, sql, nil, nil); err != nil {
+	if sqlRet, err = runSql(ctx, ses, bh, sql, nil, nil); err != nil {
 		return false, err
 	}
 
@@ -2039,7 +2118,7 @@ func writeCSV(
 			close(streamChan)
 			close(errChan)
 		}()
-		if _, err2 := runSql(ctx, ses, bh, tblStuff, sql, streamChan, errChan); err2 != nil {
+		if _, err2 := runSql(ctx, ses, bh, sql, streamChan, errChan); err2 != nil {
 			select {
 			case errChan <- err2:
 			default:
@@ -3410,7 +3489,7 @@ func handleDelsOnLCA(
 	sqlBuf.WriteString(" order by pks.__idx_")
 
 	sql = sqlBuf.String()
-	if sqlRet, err = runSql(ctx, ses, bh, tblStuff, sql, nil, nil); err != nil {
+	if sqlRet, err = runSql(ctx, ses, bh, sql, nil, nil); err != nil {
 		return
 	}
 
