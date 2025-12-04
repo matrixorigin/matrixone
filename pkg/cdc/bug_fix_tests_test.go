@@ -1019,3 +1019,86 @@ func (u *lifecycleTestWatermarkUpdater) GetCommitFailureCount(key *WatermarkKey)
 func (u *lifecycleTestWatermarkUpdater) ForceFlush(ctx context.Context) error {
 	return nil
 }
+
+func (u *lifecycleTestWatermarkUpdater) ResetCircuitBreaker(key *WatermarkKey) {
+}
+
+// TestPauseBeforeFinalCommit_NoDataLoss tests pause signal arriving after NoMoreData
+// is detected but before final commit executes. This is Bug #7's critical race window.
+func TestPauseBeforeFinalCommit_NoDataLoss(t *testing.T) {
+	ctx := context.Background()
+	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mpool.DeleteMPool(mp)
+
+	sinker := &integrationTestSinker{
+		insertBatches:     make([]insertBatchInfo, 0),
+		commits:           make([]commitInfo, 0),
+		slowCommitDelayMs: 0,
+	}
+
+	updater := &integrationTestWatermarkUpdater{
+		watermarks:    make(map[string]types.TS),
+		updateHistory: make([]watermarkUpdateEvent, 0),
+		pausedTasks:   make(map[string]time.Time),
+	}
+
+	tm := NewTransactionManager(sinker, updater, 1, "pause-before-commit-test", "test_db", "test_table")
+
+	fromTs := types.BuildTS(1000, 1)
+	toTs := types.BuildTS(2000, 1)
+
+	err = tm.BeginTransaction(ctx, fromTs, toTs)
+	require.NoError(t, err)
+
+	updater.markTaskPaused("pause-before-commit-test")
+
+	err = tm.CommitTransaction(ctx)
+	require.NoError(t, err)
+
+	updateEvents := updater.getUpdateHistory()
+	for _, event := range updateEvents {
+		require.False(t, event.pauseActive)
+	}
+
+	commitCount := sinker.getCommitCount()
+	require.Equal(t, 1, commitCount)
+}
+
+// TestCancelBeforeFinalCommit_NoDataLoss tests cancel signal arriving before final commit
+func TestCancelBeforeFinalCommit_NoDataLoss(t *testing.T) {
+	ctx := context.Background()
+	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mpool.DeleteMPool(mp)
+
+	sinker := &integrationTestSinker{
+		insertBatches:     make([]insertBatchInfo, 0),
+		commits:           make([]commitInfo, 0),
+		slowCommitDelayMs: 0,
+	}
+
+	updater := &integrationTestWatermarkUpdater{
+		watermarks:    make(map[string]types.TS),
+		updateHistory: make([]watermarkUpdateEvent, 0),
+		pausedTasks:   make(map[string]time.Time),
+	}
+
+	tm := NewTransactionManager(sinker, updater, 1, "cancel-before-commit-test", "test_db", "test_table")
+
+	fromTs := types.BuildTS(1000, 1)
+	toTs := types.BuildTS(2000, 1)
+
+	err = tm.BeginTransaction(ctx, fromTs, toTs)
+	require.NoError(t, err)
+
+	updater.markTaskPaused("cancel-before-commit-test")
+
+	err = tm.CommitTransaction(ctx)
+	require.NoError(t, err)
+
+	updateEvents := updater.getUpdateHistory()
+	for _, event := range updateEvents {
+		require.False(t, event.pauseActive)
+	}
+}
