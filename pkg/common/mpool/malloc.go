@@ -22,10 +22,10 @@ import (
 )
 
 var allocator = sync.OnceValue(func() *malloc.ManagedAllocator[malloc.Allocator] {
-	// default
-	allocator := malloc.GetDefault(nil)
-	allocator = malloc.NewMetricsAllocator(
-		allocator,
+	// just use c allocator
+	ca := malloc.NewCAllocator()
+	metrics_allocator := malloc.NewMetricsAllocator(
+		ca,
 		metric.MallocCounter.WithLabelValues("mpool-allocate"),
 		metric.MallocGauge.WithLabelValues("mpool-inuse"),
 		metric.MallocCounter.WithLabelValues("mpool-allocate-objects"),
@@ -33,5 +33,5 @@ var allocator = sync.OnceValue(func() *malloc.ManagedAllocator[malloc.Allocator]
 	)
 	//TODO peak in-use
 	// managed
-	return malloc.NewManagedAllocator(allocator)
+	return malloc.NewManagedAllocator[malloc.Allocator](metrics_allocator)
 })
