@@ -143,6 +143,10 @@ func NewKMeans[T types.RealNumbers](vectors [][]T, clusterCnt,
 	}, nil
 }
 
+func (km *ElkanClusterer[T]) Close() error {
+	return nil
+}
+
 // InitCentroids initializes the centroids using initialization algorithms like random or kmeans++.
 func (km *ElkanClusterer[T]) InitCentroids() error {
 	var initializer Initializer

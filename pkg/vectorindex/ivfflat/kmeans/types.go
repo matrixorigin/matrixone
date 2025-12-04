@@ -20,6 +20,7 @@ type Clusterer interface {
 	InitCentroids() error
 	Cluster() (any, error)
 	SSE() (float64, error)
+	Close() error
 }
 
 type InitType uint16
