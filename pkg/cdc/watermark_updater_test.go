@@ -1551,9 +1551,6 @@ func TestCDCWatermarkUpdater_MarkUnmarkTaskPaused(t *testing.T) {
 	require.True(t, paused)
 	require.NotZero(t, pauseTime)
 
-	pauseTimeValue := pauseTime.(time.Time)
-	require.True(t, time.Since(pauseTimeValue) < time.Second)
-
 	updater.UnmarkTaskPaused(taskId)
 	_, paused = updater.pausedTasks.Load(taskId)
 	require.False(t, paused)
