@@ -1462,7 +1462,6 @@ func validateOutputDirPath(ctx context.Context, ses *Session, dirPath string) (e
 		return nil
 	}
 
-	found := false
 	for entry, err = range targetFS.List(ctx, parent) {
 		if err != nil {
 			return err
@@ -1470,18 +1469,13 @@ func validateOutputDirPath(ctx context.Context, ses *Session, dirPath string) (e
 		if entry.Name != base {
 			continue
 		}
-		found = true
 		if !entry.IsDir {
 			return moerr.NewInvalidInputNoCtxf("output directory %s is not a directory", inputDirPath)
 		}
 		return nil
 	}
 
-	if !found {
-		return moerr.NewInvalidInputNoCtxf("output directory %s does not exist", inputDirPath)
-	}
-
-	return nil
+	return moerr.NewInvalidInputNoCtxf("output directory %s does not exist", inputDirPath)
 }
 
 func prepareFSForDiffAsFile(
@@ -1764,89 +1758,6 @@ func flushSqlValues(
 	}
 
 	return err
-}
-
-func constructValsFromBatch(
-	ctx context.Context,
-	ses *Session,
-	tblStuff tableStuff,
-	wrapped batchWithKind,
-	deleteFromValsBuffer *bytes.Buffer,
-	replaceIntoValsBuffer *bytes.Buffer,
-) (err error) {
-
-	writeReplaceInto := func(row []any) {
-		if replaceIntoValsBuffer.Len() > 0 {
-			replaceIntoValsBuffer.WriteString(",")
-		}
-
-		replaceIntoValsBuffer.WriteString("(")
-		for j, idx := range tblStuff.def.visibleIdxes {
-			formatValIntoString(ses, row[j], tblStuff.def.colTypes[idx], replaceIntoValsBuffer)
-			if j != len(row)-1 {
-				replaceIntoValsBuffer.WriteString(",")
-			}
-		}
-
-		replaceIntoValsBuffer.WriteString(")")
-	}
-
-	writeDeleteFrom := func(row []any) {
-		if deleteFromValsBuffer.Len() > 0 {
-			deleteFromValsBuffer.WriteString(",")
-		}
-
-		if len(tblStuff.def.pkColIdxes) > 1 {
-			deleteFromValsBuffer.WriteString("(")
-		}
-		for idx, colIdx := range tblStuff.def.pkColIdxes {
-			formatValIntoString(ses, row[colIdx], tblStuff.def.colTypes[colIdx], deleteFromValsBuffer)
-			if idx != len(tblStuff.def.pkColIdxes)-1 {
-				deleteFromValsBuffer.WriteString(",")
-			}
-		}
-		if len(tblStuff.def.pkColIdxes) > 1 {
-			deleteFromValsBuffer.WriteString(")")
-		}
-	}
-
-	var (
-		row = make([]any, len(tblStuff.def.visibleIdxes))
-	)
-
-	for rowIdx := range wrapped.batch.RowCount() {
-		for _, colIdx := range tblStuff.def.visibleIdxes {
-			vec := wrapped.batch.Vecs[colIdx]
-			if vec.GetNulls().Contains(uint64(rowIdx)) {
-				row[colIdx] = nil
-			} else {
-
-				switch vec.GetType().Oid {
-				case types.T_datetime, types.T_timestamp, types.T_decimal64,
-					types.T_decimal128, types.T_time:
-					bb := vec.GetRawBytesAt(rowIdx)
-					row[colIdx] = types.DecodeValue(bb, vec.GetType().Oid)
-				default:
-					if err = extractRowFromVector(
-						ctx, ses, vec, colIdx, row, rowIdx, false,
-					); err != nil {
-						return
-					}
-				}
-
-			}
-		}
-
-		if wrapped.kind == diffDelete {
-			writeDeleteFrom(row)
-		} else if wrapped.kind == diffInsert {
-			writeReplaceInto(row)
-		} else {
-			writeReplaceInto(row)
-		}
-	}
-
-	return
 }
 
 func buildOutputSchema(
