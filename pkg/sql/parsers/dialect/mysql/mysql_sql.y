@@ -3732,9 +3732,6 @@ algorithm_type:
 |   INSTANT
 |   INPLACE
 |   COPY
-|   CLONE
-|   DATA
-|   BRANCH
 
 able_type:
     DISABLE
@@ -12823,9 +12820,6 @@ equal_opt:
 //|   TABLE_VALUES
 //|   RETURNS
 //|   MYSQL_COMPATIBILITY_MODE
-//|   CLONE
-//|   MO
-//|   BRANCH
 
 non_reserved_keyword:
     ACCOUNT
@@ -12842,6 +12836,8 @@ non_reserved_keyword:
 |   BIT
 |   BLOB
 |   BOOL
+|   BRANCH
+|   CLONE
 |   CANCEL
 |   CHAIN
 |   CHECKSUM
@@ -12854,6 +12850,10 @@ non_reserved_keyword:
 |   COLUMNS
 |   CONNECTION
 |   CONSISTENT
+|   CONFLICT
+|   CONFLICT_ACCEPT
+|   CONFLICT_FAIL
+|   CONFLICT_SKIP
 |   COMPRESSED
 |   COMPACT
 |   COLUMN_FORMAT
@@ -12867,6 +12867,7 @@ non_reserved_keyword:
 |   CASCADE
 |   DAEMON
 |   DATA
+|   DIFF
 |	DAY
 |   DATETIME
 |   DECIMAL
@@ -12946,6 +12947,7 @@ non_reserved_keyword:
 |   OPTIMIZE
 |   OPEN
 |   OPTION
+|   OUTPUT
 |   PACK_KEYS
 |   PARTIAL
 |   PARTITIONS
