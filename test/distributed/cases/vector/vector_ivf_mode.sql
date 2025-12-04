@@ -236,6 +236,194 @@ WHERE category = 'A'
 ORDER BY l2_distance(vec, '[0.15,0.25,0.35,0.45,0.55,0.65,0.75,0.85]')
 LIMIT 3 by rank with option 'mode=pre';
 
+-- ============================================================================
+-- Test Cases: UNION with Vector Index and mode=pre
+-- ============================================================================
+
+-- Test Case: Simple UNION with mode=pre on same table
+(SELECT id, text, l2_distance(vec, '[0.1,-0.2,0.3,0.4,-0.1,0.2,0.0,0.5]') AS dist 
+ FROM mini_vector_data 
+ WHERE id IN ('id1', 'id2', 'id3')
+ ORDER BY l2_distance(vec, '[0.1,-0.2,0.3,0.4,-0.1,0.2,0.0,0.5]') 
+ LIMIT 2 by rank with option 'mode=pre')
+UNION
+(SELECT id, text, l2_distance(vec, '[0.1,-0.2,0.3,0.4,-0.1,0.2,0.0,0.5]') AS dist 
+ FROM mini_vector_data 
+ WHERE id IN ('id7', 'id8', 'id9')
+ ORDER BY l2_distance(vec, '[0.1,-0.2,0.3,0.4,-0.1,0.2,0.0,0.5]') 
+ LIMIT 2 by rank with option 'mode=pre')
+ORDER BY dist LIMIT 3;
+
+-- Test Case: UNION ALL with mode=pre (allows duplicates)
+(SELECT id, text, l2_distance(vec, '[0.1,-0.2,0.3,0.4,-0.1,0.2,0.0,0.5]') AS dist 
+ FROM mini_vector_data 
+ WHERE id LIKE 'id%'
+ ORDER BY l2_distance(vec, '[0.1,-0.2,0.3,0.4,-0.1,0.2,0.0,0.5]') 
+ LIMIT 3 by rank with option 'mode=pre')
+UNION ALL
+(SELECT id, text, l2_distance(vec, '[0.1,-0.2,0.3,0.4,-0.1,0.2,0.0,0.5]') AS dist 
+ FROM mini_vector_data 
+ WHERE text LIKE '%test%'
+ ORDER BY l2_distance(vec, '[0.1,-0.2,0.3,0.4,-0.1,0.2,0.0,0.5]') 
+ LIMIT 2 by rank with option 'mode=pre')
+ORDER BY dist LIMIT 5;
+
+-- Test Case: UNION with mode=pre and mode=post (mixed modes)
+(SELECT id, text, l2_distance(vec, '[0.1,-0.2,0.3,0.4,-0.1,0.2,0.0,0.5]') AS dist 
+ FROM mini_vector_data 
+ WHERE id IN ('id1', 'id2', 'id3', 'id4')
+ ORDER BY l2_distance(vec, '[0.1,-0.2,0.3,0.4,-0.1,0.2,0.0,0.5]') 
+ LIMIT 2 by rank with option 'mode=pre')
+UNION
+(SELECT id, text, l2_distance(vec, '[0.1,-0.2,0.3,0.4,-0.1,0.2,0.0,0.5]') AS dist 
+ FROM mini_vector_data 
+ WHERE id IN ('id6', 'id7', 'id8', 'id9')
+ ORDER BY l2_distance(vec, '[0.1,-0.2,0.3,0.4,-0.1,0.2,0.0,0.5]') 
+ LIMIT 2 by rank with option 'mode=post')
+ORDER BY dist LIMIT 4;
+
+-- Test Case: UNION with mode=pre on different tables (mini_vector_data and mini_embed_data)
+(SELECT id, text AS content, l2_distance(vec, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]') AS dist 
+ FROM mini_vector_data 
+ ORDER BY l2_distance(vec, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]') 
+ LIMIT 2 by rank with option 'mode=pre')
+UNION
+(SELECT id, content, cosine_distance(embedding, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]') AS dist 
+ FROM mini_embed_data 
+ ORDER BY cosine_distance(embedding, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]') 
+ LIMIT 2 by rank with option 'mode=pre')
+ORDER BY dist LIMIT 3;
+
+-- Test Case: UNION with mode=pre and complex WHERE conditions
+(SELECT id, category, l2_distance(vec, '[0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9]') AS dist 
+ FROM vec_with_multi_idx 
+ WHERE category = 'A' AND status = 1
+ ORDER BY l2_distance(vec, '[0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9]') 
+ LIMIT 2 by rank with option 'mode=pre')
+UNION
+(SELECT id, category, l2_distance(vec, '[0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9]') AS dist 
+ FROM vec_with_multi_idx 
+ WHERE category = 'B' AND status = 1
+ ORDER BY l2_distance(vec, '[0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9]') 
+ LIMIT 2 by rank with option 'mode=pre')
+ORDER BY dist LIMIT 3;
+
+-- Test Case: Three-way UNION with mode=pre
+(SELECT id, category, l2_distance(vec, '[0.15,0.25,0.35,0.45,0.55,0.65,0.75,0.85]') AS dist 
+ FROM vec_with_regular_idx 
+ WHERE category = 'A'
+ ORDER BY l2_distance(vec, '[0.15,0.25,0.35,0.45,0.55,0.65,0.75,0.85]') 
+ LIMIT 2 by rank with option 'mode=pre')
+UNION
+(SELECT id, category, l2_distance(vec, '[0.15,0.25,0.35,0.45,0.55,0.65,0.75,0.85]') AS dist 
+ FROM vec_with_regular_idx 
+ WHERE category = 'B'
+ ORDER BY l2_distance(vec, '[0.15,0.25,0.35,0.45,0.55,0.65,0.75,0.85]') 
+ LIMIT 2 by rank with option 'mode=pre')
+UNION
+(SELECT id, category, l2_distance(vec, '[0.15,0.25,0.35,0.45,0.55,0.65,0.75,0.85]') AS dist 
+ FROM vec_with_regular_idx 
+ WHERE category = 'C'
+ ORDER BY l2_distance(vec, '[0.15,0.25,0.35,0.45,0.55,0.65,0.75,0.85]') 
+ LIMIT 1 by rank with option 'mode=pre')
+ORDER BY dist LIMIT 4;
+
+-- Test Case: UNION with mode=pre using CTE (WITH clause)
+WITH q1 AS (
+  SELECT id, text, l2_distance(vec, '[0.1,-0.2,0.3,0.4,-0.1,0.2,0.0,0.5]') AS dist 
+  FROM mini_vector_data 
+  WHERE id IN ('id1', 'id2', 'id3')
+  ORDER BY dist 
+  LIMIT 2 by rank with option 'mode=pre'
+),
+q2 AS (
+  SELECT id, text, l2_distance(vec, '[0.1,-0.2,0.3,0.4,-0.1,0.2,0.0,0.5]') AS dist 
+  FROM mini_vector_data 
+  WHERE id IN ('id8', 'id9', 'id10')
+  ORDER BY dist 
+  LIMIT 2 by rank with option 'mode=pre'
+)
+SELECT * FROM q1
+UNION
+SELECT * FROM q2
+ORDER BY dist LIMIT 3;
+
+-- Test Case: UNION ALL with mode=pre and different LIMIT sizes (testing over-fetch)
+(SELECT id, content, cosine_distance(embedding, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]') AS dist 
+ FROM mini_embed_data 
+ WHERE file_id = 'file01'
+ ORDER BY cosine_distance(embedding, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]') 
+ LIMIT 1 by rank with option 'mode=pre')
+UNION ALL
+(SELECT id, content, cosine_distance(embedding, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]') AS dist 
+ FROM mini_embed_data 
+ WHERE file_id = 'file02'
+ ORDER BY cosine_distance(embedding, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]') 
+ LIMIT 2 by rank with option 'mode=pre')
+ORDER BY dist DESC LIMIT 3;
+
+-- Test Case: UNION with mode=pre and DESC ordering
+(SELECT id, text, l2_distance(vec, '[0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5]') AS dist 
+ FROM mini_vector_data 
+ WHERE id LIKE 'id1%'
+ ORDER BY l2_distance(vec, '[0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5]') DESC
+ LIMIT 2 by rank with option 'mode=pre')
+UNION
+(SELECT id, text, l2_distance(vec, '[0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5]') AS dist 
+ FROM mini_vector_data 
+ WHERE id LIKE 'id%' AND id NOT LIKE 'id1%'
+ ORDER BY l2_distance(vec, '[0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5]') DESC
+ LIMIT 3 by rank with option 'mode=pre')
+ORDER BY dist DESC LIMIT 4;
+
+-- Test Case: UNION with mode=pre and OFFSET
+(SELECT id, category, status, l2_distance(vec, '[0.3,0.4,0.5,0.6,0.7,0.8,0.9,0.1]') AS dist 
+ FROM vec_with_multi_idx 
+ WHERE status = 1
+ ORDER BY l2_distance(vec, '[0.3,0.4,0.5,0.6,0.7,0.8,0.9,0.1]') 
+ LIMIT 3 OFFSET 1 by rank with option 'mode=pre')
+UNION
+(SELECT id, category, status, l2_distance(vec, '[0.3,0.4,0.5,0.6,0.7,0.8,0.9,0.1]') AS dist 
+ FROM vec_with_multi_idx 
+ WHERE status = 2
+ ORDER BY l2_distance(vec, '[0.3,0.4,0.5,0.6,0.7,0.8,0.9,0.1]') 
+ LIMIT 2 by rank with option 'mode=pre')
+ORDER BY dist LIMIT 4;
+
+-- Test Case: UNION with mode=pre, mode=post, and mode=force (all three modes)
+(SELECT id, text, l2_distance(vec, '[0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2]') AS dist 
+ FROM mini_vector_data 
+ WHERE id IN ('id1', 'id2')
+ ORDER BY l2_distance(vec, '[0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2]') 
+ LIMIT 1 by rank with option 'mode=pre')
+UNION ALL
+(SELECT id, text, l2_distance(vec, '[0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2]') AS dist 
+ FROM mini_vector_data 
+ WHERE id IN ('id3', 'id4')
+ ORDER BY l2_distance(vec, '[0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2]') 
+ LIMIT 1 by rank with option 'mode=post')
+UNION ALL
+(SELECT id, text, l2_distance(vec, '[0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2]') AS dist 
+ FROM mini_vector_data 
+ WHERE id IN ('id5', 'id6')
+ ORDER BY l2_distance(vec, '[0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2]') 
+ LIMIT 1 by rank with option 'mode=force')
+ORDER BY dist LIMIT 3;
+
+-- Test Case: UNION with composite index and mode=pre
+(SELECT id, category, status, l2_distance(vec, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]') AS dist 
+ FROM vec_with_composite_idx 
+ WHERE category = 'A' AND status = 1
+ ORDER BY l2_distance(vec, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]') 
+ LIMIT 1 by rank with option 'mode=pre')
+UNION
+(SELECT id, category, status, l2_distance(vec, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]') AS dist 
+ FROM vec_with_composite_idx 
+ WHERE category = 'B'
+ ORDER BY l2_distance(vec, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]') 
+ LIMIT 2 by rank with option 'mode=pre')
+ORDER BY dist LIMIT 3;
+
 drop table if exists vec_with_regular_idx;
 drop table if exists vec_with_multi_idx;
 drop table if exists vec_with_composite_idx;
