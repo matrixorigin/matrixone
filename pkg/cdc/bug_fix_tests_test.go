@@ -261,22 +261,6 @@ func (u *raceTestWatermarkUpdater) markTaskPaused(taskId string) {
 	u.pausedTasks[taskId] = time.Now()
 }
 
-func (s *raceTestSinker) raceConditionDetected() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.raceDetected
-}
-
-func (s *raceTestSinker) getTotalInsertedRows() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	total := 0
-	for _, rows := range s.insertedRows {
-		total += rows
-	}
-	return total
-}
-
 // Sinker interface implementation
 func (s *raceTestSinker) Run(ctx context.Context, ar *ActiveRoutine)    {}
 func (s *raceTestSinker) Sink(ctx context.Context, data *DecoderOutput) {}
@@ -559,15 +543,6 @@ type commitInfo struct {
 	pauseActive bool
 }
 
-func (s *integrationTestSinker) recordInsert(rows int) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.insertBatches = append(s.insertBatches, insertBatchInfo{
-		rows:      rows,
-		timestamp: time.Now(),
-	})
-}
-
 func (s *integrationTestSinker) Run(ctx context.Context, ar *ActiveRoutine) {
 	// For integration test, we don't need async processing
 }
@@ -649,28 +624,10 @@ func (s *integrationTestSinker) setPauseActive(active bool) {
 	s.pauseActive = active
 }
 
-func (s *integrationTestSinker) getTotalInsertedRows() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	total := 0
-	for _, batch := range s.insertBatches {
-		total += batch.rows
-	}
-	return total
-}
-
 func (s *integrationTestSinker) getCommitCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.commits)
-}
-
-func (s *integrationTestSinker) getCommits() []commitInfo {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	result := make([]commitInfo, len(s.commits))
-	copy(result, s.commits)
-	return result
 }
 
 // integrationTestWatermarkUpdater is a real updater with pause tracking
