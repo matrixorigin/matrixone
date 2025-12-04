@@ -3795,23 +3795,3 @@ func (r *mockLogWatermarksResult) GetString(ctx context.Context, row uint64, col
 	}
 	return "2024-01-01 00:00:00.000000", nil
 }
-
-// Mock IE for testing ForceFlush failure scenario
-type mockFlushErrorIe struct {
-	queryCallCount int
-}
-
-func (m *mockFlushErrorIe) Exec(ctx context.Context, s string, options ie.SessionOverrideOptions) error {
-	return moerr.NewInternalErrorNoCtx("exec error")
-}
-
-func (m *mockFlushErrorIe) Query(ctx context.Context, s string, options ie.SessionOverrideOptions) ie.InternalExecResult {
-	m.queryCallCount++
-	return &mockLogWatermarksResult{
-		hasError: false,
-		rowCount: 0,
-	}
-}
-
-func (m *mockFlushErrorIe) ApplySessionOverride(options ie.SessionOverrideOptions) {
-}
