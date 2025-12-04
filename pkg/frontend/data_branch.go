@@ -485,7 +485,11 @@ func dataBranchCreateDatabase(
 		}
 	}()
 
-	if receipts, err = handleCloneDatabase(execCtx, ses, &stmt.CloneDatabase); err != nil {
+	execCtx.reqCtx = context.WithValue(
+		execCtx.reqCtx, tree.CloneLevelCtxKey{}, tree.NormalCloneLevelDatabase,
+	)
+
+	if receipts, err = handleCloneDatabase(execCtx, ses, bh, &stmt.CloneDatabase); err != nil {
 		return
 	}
 

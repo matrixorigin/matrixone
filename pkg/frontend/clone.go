@@ -301,13 +301,13 @@ var snapConditionRegex = regexp.MustCompile(`\{[^}]+}`)
 func handleCloneDatabase(
 	execCtx *ExecCtx,
 	ses *Session,
+	bh BackgroundExec,
 	stmt *tree.CloneDatabase,
 ) (receipts []cloneReceipt, err error) {
 
 	var (
 		reqCtx = execCtx.reqCtx
 
-		bh       BackgroundExec
 		deferred func(error) error
 
 		toAccountId uint32
@@ -337,20 +337,17 @@ func handleCloneDatabase(
 		reqCtx = context.WithValue(reqCtx, tree.CloneLevelCtxKey{}, tree.NormalCloneLevelDatabase)
 	}
 
-	// do not open another transaction,
-	// if the clone already executed within a transaction.
-	if bh, deferred, err = getBackExecutor(reqCtx, ses); err != nil {
-		return
-	}
-
-	defer func() {
-		if deferred != nil {
-			//if r := recover(); r != nil {
-			//	err = moerr.ConvertPanicError(reqCtx, r)
-			//}
-			err = deferred(err)
+	if bh == nil {
+		if bh, deferred, err = getBackExecutor(reqCtx, ses); err != nil {
+			return
 		}
-	}()
+
+		defer func() {
+			if deferred != nil {
+				err = deferred(err)
+			}
+		}()
+	}
 
 	if opAccountId, toAccountId, snapshot, err = getOpAndToAccountId(
 		reqCtx, ses, bh, stmt.ToAccountOpt, stmt.AtTsExpr,
