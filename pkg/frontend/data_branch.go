@@ -25,6 +25,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strconv"
@@ -325,8 +326,7 @@ type compositeOption struct {
 }
 
 func runSql(
-	ctx context.Context, ses *Session, bh BackgroundExec,
-	tblStuff tableStuff, sql string,
+	ctx context.Context, ses *Session, bh BackgroundExec, sql string,
 	streamChan chan executor.Result, errChan chan error,
 ) (sqlRet executor.Result, err error) {
 
@@ -390,9 +390,11 @@ func handleDataBranch(
 
 	switch st := stmt.(type) {
 	case *tree.DataBranchCreateTable:
-		//return dataBranchCreateTable(execCtx, ses, st)
+		return dataBranchCreateTable(execCtx, ses, st)
 	case *tree.DataBranchCreateDatabase:
+		return dataBranchCreateDatabase(execCtx, ses, st)
 	case *tree.DataBranchDeleteTable:
+		//return dataBranchDeleteTable(execCtx, ses, st)
 	case *tree.DataBranchDeleteDatabase:
 	case *tree.DataBranchDiff:
 		return handleBranchDiff(execCtx, ses, st)
@@ -404,6 +406,208 @@ func handleDataBranch(
 
 	return nil
 }
+
+func dataBranchCreateTable(
+	execCtx *ExecCtx,
+	ses *Session,
+	stmt *tree.DataBranchCreateTable,
+) (err error) {
+	var (
+		bh          BackgroundExec
+		deferred    func(error) error
+		receipt     cloneReceipt
+		cloneStmt   *tree.CloneTable
+		tempExecCtx *ExecCtx
+	)
+
+	if bh, deferred, err = getBackExecutor(execCtx.reqCtx, ses); err != nil {
+		return
+	}
+
+	defer func() {
+		if deferred != nil {
+			err = deferred(err)
+		}
+	}()
+
+	cloneStmt = &tree.CloneTable{
+		SrcTable:     stmt.SrcTable,
+		CreateTable:  stmt.CreateTable,
+		ToAccountOpt: stmt.ToAccountOpt,
+	}
+
+	oldDefault := ses.GetTxnCompileCtx().DefaultDatabase()
+	defer func() {
+		ses.GetTxnCompileCtx().SetDatabase(oldDefault)
+	}()
+
+	//data branch create table xxx from yyy snap_opt to_account_op;
+	re := regexp.MustCompile(`(?i)^DATA\s+BRANCH\s+CREATE\s+TABLE\s+(\S+)\s+FROM\s+(.+?);?$`)
+	srcAndDst := re.FindStringSubmatch(execCtx.input.sql)
+	if srcAndDst == nil {
+		return moerr.NewInternalErrorNoCtxf("cannot find src and dst table: %s", execCtx.input.sql)
+	}
+
+	sql := fmt.Sprintf("CREATE TABLE %s CLONE %s", srcAndDst[1], srcAndDst[2])
+
+	execCtx.reqCtx = context.WithValue(execCtx.reqCtx, tree.CloneLevelCtxKey{}, tree.NormalCloneLevelTable)
+
+	tempExecCtx = &ExecCtx{
+		reqCtx: execCtx.reqCtx,
+		input:  &UserInput{sql: sql},
+	}
+
+	if receipt, err = handleCloneTable(tempExecCtx, ses, cloneStmt, bh); err != nil {
+		return
+	}
+
+	if err = updateBranchMetaTable(execCtx.reqCtx, ses, bh, receipt); err != nil {
+		return
+	}
+
+	return nil
+}
+
+func dataBranchCreateDatabase(
+	execCtx *ExecCtx,
+	ses *Session,
+	stmt *tree.DataBranchCreateDatabase,
+) (err error) {
+	var (
+		bh       BackgroundExec
+		deferred func(error) error
+		receipts []cloneReceipt
+	)
+
+	if bh, deferred, err = getBackExecutor(execCtx.reqCtx, ses); err != nil {
+		return
+	}
+
+	defer func() {
+		if deferred != nil {
+			err = deferred(err)
+		}
+	}()
+
+	execCtx.reqCtx = context.WithValue(
+		execCtx.reqCtx, tree.CloneLevelCtxKey{}, tree.NormalCloneLevelDatabase,
+	)
+
+	if receipts, err = handleCloneDatabase(execCtx, ses, bh, &stmt.CloneDatabase); err != nil {
+		return
+	}
+
+	for _, rcpt := range receipts {
+		if err = updateBranchMetaTable(execCtx.reqCtx, ses, bh, rcpt); err != nil {
+			return
+		}
+	}
+
+	return nil
+}
+
+//func dataBranchDeleteTable(
+//	execCtx *ExecCtx,
+//	ses *Session,
+//	stmt *tree.DataBranchDeleteTable,
+//) (err error) {
+//	var (
+//		bh       BackgroundExec
+//		deferred func(error) error
+//	)
+//
+//	if bh, deferred, err = getBackExecutor(execCtx.reqCtx, ses); err != nil {
+//		return
+//	}
+//
+//	defer func() {
+//		if deferred != nil {
+//			err = deferred(err)
+//		}
+//	}()
+//
+//	var (
+//		dbName  = stmt.TableName.SchemaName
+//		tblName = stmt.TableName.ObjectName
+//		accId   uint32
+//		sqlRet  executor.Result
+//		tblId   uint64
+//	)
+//
+//	if len(dbName) == 0 {
+//		dbName = tree.Identifier(ses.GetTxnCompileCtx().DefaultDatabase())
+//	}
+//
+//	if len(dbName) == 0 {
+//		return moerr.NewInternalErrorNoCtxf("no db selected for the table %s", tblName)
+//	}
+//
+//	if accId, err = defines.GetAccountId(execCtx.reqCtx); err != nil {
+//		return
+//	}
+//
+//	if sqlRet, err = runSql(
+//		execCtx.reqCtx, ses, bh, fmt.Sprintf(
+//			"select rel_id from %s.%s where account_id = %d and reldatabase = '%s' and relname = '%s'",
+//			catalog.MO_CATALOG, catalog.MO_TABLES, accId, dbName, tblName,
+//		), nil, nil,
+//	); err != nil {
+//		return
+//	}
+//
+//	defer func() {
+//		sqlRet.Close()
+//	}()
+//
+//	if len(sqlRet.Batches) != 1 && sqlRet.Batches[0].Vecs[0].Length() != 1 {
+//		return moerr.NewInternalErrorNoCtxf(
+//			"get table id failed for the table %s.%s",
+//			dbName, tblName,
+//		)
+//	}
+//
+//	return nil
+//}
+
+//func branchDeleteTableHelper(
+//	ctx context.Context,
+//	ses *Session,
+//	bh BackgroundExec,
+//	dbName string,
+//	tblIdNameBatches []*batch.Batch,
+//) (err error) {
+//
+//	for _, bat := range tblIdNameBatches {
+//		idVec := bat.Vecs[0]
+//		nameVec := bat.Vecs[1]
+//
+//		col, area := vector.MustVarlenaRawData(nameVec)
+//
+//		for rowIdx := range bat.RowCount() {
+//			id := vector.GetFixedAtWithTypeCheck[uint64](idVec, rowIdx)
+//			name := col[rowIdx].GetByteSlice(area)
+//
+//			if _, err = runSql(
+//				ctx, ses, bh,
+//				fmt.Sprintf(
+//					"delete from %s.%s where table_id = %d",
+//					catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA, id,
+//				), nil, nil,
+//			); err != nil {
+//				return
+//			}
+//
+//			if _, err = runSql(
+//				ctx, ses, bh,
+//				fmt.Sprintf(
+//					"drop table %s.%s", dbName, name), nil, nil,
+//			); err != nil {
+//				return
+//			}
+//		}
+//	}
+//
+//}
 
 func diffMergeAgency(
 	ses *Session,
@@ -421,7 +625,7 @@ func diffMergeAgency(
 	}
 
 	// do not open another transaction,
-	// if the clone already executed within a transaction.
+	// if this already executed within a transaction.
 	if bh, deferred, err = getBackExecutor(execCtx.reqCtx, ses); err != nil {
 		return
 	}
@@ -651,6 +855,177 @@ func tryFlushDeletesOrReplace(
 	return nil
 }
 
+type sqlValuesAppender struct {
+	ctx        context.Context
+	ses        *Session
+	bh         BackgroundExec
+	tblStuff   tableStuff
+	deleteCnt  *int
+	deleteBuf  *bytes.Buffer
+	replaceCnt *int
+	replaceBuf *bytes.Buffer
+	writeFile  func([]byte) error
+}
+
+func (sva sqlValuesAppender) appendRow(kind string, rowValues []byte) error {
+	var (
+		targetBuf *bytes.Buffer
+		rowCnt    *int
+	)
+
+	if kind == diffDelete {
+		targetBuf = sva.deleteBuf
+		rowCnt = sva.deleteCnt
+	} else {
+		targetBuf = sva.replaceBuf
+		rowCnt = sva.replaceCnt
+	}
+
+	newValsLen := len(rowValues)
+	if targetBuf.Len() > 0 {
+		newValsLen++
+	}
+
+	if err := tryFlushDeletesOrReplace(
+		sva.ctx, sva.ses, sva.bh, sva.tblStuff, kind, newValsLen, 1,
+		sva.deleteCnt, sva.deleteBuf, sva.replaceCnt, sva.replaceBuf, sva.writeFile,
+	); err != nil {
+		return err
+	}
+
+	if targetBuf.Len() > 0 {
+		targetBuf.WriteString(",")
+	}
+	targetBuf.Write(rowValues)
+	*rowCnt++
+	return nil
+}
+
+func (sva sqlValuesAppender) flushAll() error {
+	return tryFlushDeletesOrReplace(
+		sva.ctx, sva.ses, sva.bh, sva.tblStuff, "",
+		0, 0, sva.deleteCnt, sva.deleteBuf, sva.replaceCnt, sva.replaceBuf, sva.writeFile,
+	)
+}
+
+func writeReplaceRowValues(
+	ses *Session,
+	tblStuff tableStuff,
+	row []any,
+	buf *bytes.Buffer,
+) {
+	buf.WriteString("(")
+	for i, idx := range tblStuff.def.visibleIdxes {
+		formatValIntoString(ses, row[idx], tblStuff.def.colTypes[idx], buf)
+		if i != len(tblStuff.def.visibleIdxes)-1 {
+			buf.WriteString(",")
+		}
+	}
+	buf.WriteString(")")
+}
+
+func writeDeleteRowValues(
+	ses *Session,
+	tblStuff tableStuff,
+	row []any,
+	buf *bytes.Buffer,
+) {
+	if len(tblStuff.def.pkColIdxes) > 1 {
+		buf.WriteString("(")
+	}
+	for i, colIdx := range tblStuff.def.pkColIdxes {
+		formatValIntoString(ses, row[colIdx], tblStuff.def.colTypes[colIdx], buf)
+		if i != len(tblStuff.def.pkColIdxes)-1 {
+			buf.WriteString(",")
+		}
+	}
+	if len(tblStuff.def.pkColIdxes) > 1 {
+		buf.WriteString(")")
+	}
+}
+
+func appendBatchRowsAsSQLValues(
+	ctx context.Context,
+	ses *Session,
+	tblStuff tableStuff,
+	wrapped batchWithKind,
+	tmpValsBuffer *bytes.Buffer,
+	appender sqlValuesAppender,
+) (err error) {
+
+	//seenCols := make(map[int]struct{}, len(tblStuff.def.visibleIdxes))
+	row := make([]any, len(tblStuff.def.colNames))
+
+	for rowIdx := range wrapped.batch.RowCount() {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		for _, colIdx := range tblStuff.def.visibleIdxes {
+			//seenCols[colIdx] = struct{}{}
+			vec := wrapped.batch.Vecs[colIdx]
+			if vec.GetNulls().Contains(uint64(rowIdx)) {
+				row[colIdx] = nil
+				continue
+			}
+
+			switch vec.GetType().Oid {
+			case types.T_datetime, types.T_timestamp, types.T_decimal64,
+				types.T_decimal128, types.T_time:
+				bb := vec.GetRawBytesAt(rowIdx)
+				row[colIdx] = types.DecodeValue(bb, vec.GetType().Oid)
+			default:
+				if err = extractRowFromVector(
+					ctx, ses, vec, colIdx, row, rowIdx, false,
+				); err != nil {
+					return
+				}
+			}
+		}
+
+		//for _, pkIdx := range tblStuff.def.pkColIdxes {
+		//	if _, ok := seenCols[pkIdx]; ok {
+		//		continue
+		//	}
+		//	vec := wrapped.batch.Vecs[pkIdx]
+		//	if vec.GetNulls().Contains(uint64(rowIdx)) {
+		//		row[pkIdx] = nil
+		//		continue
+		//	}
+		//
+		//	switch vec.GetType().Oid {
+		//	case types.T_datetime, types.T_timestamp, types.T_decimal64,
+		//		types.T_decimal128, types.T_time:
+		//		bb := vec.GetRawBytesAt(rowIdx)
+		//		row[pkIdx] = types.DecodeValue(bb, vec.GetType().Oid)
+		//	default:
+		//		if err = extractRowFromVector(
+		//			ctx, ses, vec, pkIdx, row, rowIdx, false,
+		//		); err != nil {
+		//			return
+		//		}
+		//	}
+		//}
+
+		tmpValsBuffer.Reset()
+		if wrapped.kind == diffDelete {
+			writeDeleteRowValues(ses, tblStuff, row, tmpValsBuffer)
+		} else {
+			writeReplaceRowValues(ses, tblStuff, row, tmpValsBuffer)
+		}
+
+		if tmpValsBuffer.Len() == 0 {
+			continue
+		}
+
+		if err = appender.appendRow(wrapped.kind, tmpValsBuffer.Bytes()); err != nil {
+			return
+		}
+	}
+
+	return nil
+}
+
 func mergeDiffs(
 	ctx context.Context,
 	cancel context.CancelFunc,
@@ -682,6 +1057,17 @@ func mergeDiffs(
 		cancel()
 	}()
 
+	appender := sqlValuesAppender{
+		ctx:        ctx,
+		ses:        ses,
+		bh:         bh,
+		tblStuff:   tblStuff,
+		deleteCnt:  &deleteCnt,
+		deleteBuf:  deleteFromVals,
+		replaceCnt: &replaceCnt,
+		replaceBuf: replaceIntoVals,
+	}
+
 	// conflict option should be pushed down to the hash phase,
 	// so the batch we received is conflict-free.
 	for wrapped := range retCh {
@@ -695,64 +1081,19 @@ func mergeDiffs(
 			continue
 		}
 
-		tmpValsBuffer.Reset()
-
-		if err = constructValsFromBatch(
-			ctx, ses, tblStuff, wrapped, tmpValsBuffer, tmpValsBuffer,
+		if err = appendBatchRowsAsSQLValues(
+			ctx, ses, tblStuff, wrapped, tmpValsBuffer, appender,
 		); err != nil {
 			firstErr = err
 			cancel()
 			tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
 			continue
-		}
-
-		if tmpValsBuffer.Len() == 0 {
-			tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
-			continue
-		}
-
-		newRowCnt := wrapped.batch.RowCount()
-		newValsLen := tmpValsBuffer.Len()
-		if wrapped.kind == diffDelete {
-			if deleteFromVals.Len() > 0 {
-				newValsLen++
-			}
-		} else {
-			if replaceIntoVals.Len() > 0 {
-				newValsLen++
-			}
-		}
-		if err = tryFlushDeletesOrReplace(
-			ctx, ses, bh, tblStuff, wrapped.kind, newValsLen, newRowCnt,
-			&deleteCnt, deleteFromVals, &replaceCnt, replaceIntoVals, nil,
-		); err != nil {
-			firstErr = err
-			cancel()
-			tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
-			continue
-		}
-
-		if wrapped.kind == diffDelete {
-			if deleteFromVals.Len() > 0 {
-				deleteFromVals.WriteString(",")
-			}
-			deleteFromVals.Write(tmpValsBuffer.Bytes())
-			deleteCnt += newRowCnt
-		} else {
-			if replaceIntoVals.Len() > 0 {
-				replaceIntoVals.WriteString(",")
-			}
-			replaceIntoVals.Write(tmpValsBuffer.Bytes())
-			replaceCnt += newRowCnt
 		}
 
 		tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
 	}
 
-	if err = tryFlushDeletesOrReplace(
-		ctx, ses, bh, tblStuff, "",
-		0, 0, &deleteCnt, deleteFromVals, &replaceCnt, replaceIntoVals, nil,
-	); err != nil {
+	if err = appender.flushAll(); err != nil {
 		if firstErr == nil {
 			firstErr = err
 		}
@@ -902,6 +1243,18 @@ func satisfyDiffOutputOpt(
 		); err != nil {
 			return
 		}
+
+		appender := sqlValuesAppender{
+			ctx:        ctx,
+			ses:        ses,
+			bh:         bh,
+			tblStuff:   tblStuff,
+			deleteCnt:  &deleteCnt,
+			deleteBuf:  deleteFromValsBuffer,
+			replaceCnt: &replaceCnt,
+			replaceBuf: replaceIntoValsBuffer,
+			writeFile:  writeFile,
+		}
 		if writeFile != nil {
 			// Make generated SQL runnable in one transaction.
 			if err = writeFile([]byte("BEGIN;\n")); err != nil {
@@ -922,56 +1275,13 @@ func satisfyDiffOutputOpt(
 			}
 
 			if wrapped.name == tblStuff.tarRel.GetTableName() {
-				tmpValsBuffer.Reset()
-
-				if err = constructValsFromBatch(
-					ctx, ses, tblStuff, wrapped, tmpValsBuffer, tmpValsBuffer,
+				if err = appendBatchRowsAsSQLValues(
+					ctx, ses, tblStuff, wrapped, tmpValsBuffer, appender,
 				); err != nil {
 					first = err
 					cancel()
 					tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
 					continue
-				}
-
-				if tmpValsBuffer.Len() == 0 {
-					tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
-					continue
-				}
-
-				newRowCnt := wrapped.batch.RowCount()
-				newValsLen := tmpValsBuffer.Len()
-				if wrapped.kind == diffDelete {
-					if deleteFromValsBuffer.Len() > 0 {
-						newValsLen++
-					}
-				} else {
-					if replaceIntoValsBuffer.Len() > 0 {
-						newValsLen++
-					}
-				}
-				if err = tryFlushDeletesOrReplace(
-					ctx, ses, bh, tblStuff, wrapped.kind, newValsLen, newRowCnt,
-					&deleteCnt, deleteFromValsBuffer, &replaceCnt, replaceIntoValsBuffer,
-					writeFile,
-				); err != nil {
-					first = err
-					cancel()
-					tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
-					continue
-				}
-
-				if wrapped.kind == diffDelete {
-					if deleteFromValsBuffer.Len() > 0 {
-						deleteFromValsBuffer.WriteString(",")
-					}
-					deleteFromValsBuffer.Write(tmpValsBuffer.Bytes())
-					deleteCnt += newRowCnt
-				} else {
-					if replaceIntoValsBuffer.Len() > 0 {
-						replaceIntoValsBuffer.WriteString(",")
-					}
-					replaceIntoValsBuffer.Write(tmpValsBuffer.Bytes())
-					replaceCnt += newRowCnt
 				}
 			}
 
@@ -982,11 +1292,7 @@ func satisfyDiffOutputOpt(
 			return first
 		}
 
-		if err = tryFlushDeletesOrReplace(
-			ctx, ses, bh, tblStuff, "",
-			0, 0, &deleteCnt, deleteFromValsBuffer, &replaceCnt, replaceIntoValsBuffer,
-			writeFile,
-		); err != nil {
+		if err = appender.flushAll(); err != nil {
 			first = err
 			cancel()
 		}
@@ -1115,18 +1421,65 @@ func validateOutputDirPath(ctx context.Context, ses *Session, dirPath string) (e
 		defer targetFS.Close(ctx)
 	}
 
+	if len(strings.Trim(targetPath, "/")) == 0 {
+		// service root: try listing to ensure the bucket/root is reachable
+		for _, err = range targetFS.List(ctx, targetPath) {
+			if err != nil {
+				if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+					return moerr.NewInvalidInputNoCtxf("output directory %s does not exist", inputDirPath)
+				}
+				return err
+			}
+			// any entry means list works
+			break
+		}
+		return nil
+	}
+
 	if entry, err = targetFS.StatFile(ctx, targetPath); err != nil {
 		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-			return moerr.NewInvalidInputNoCtxf("output directory %s does not exist", inputDirPath)
+			// fallthrough to List-based directory detection
+		} else {
+			return
 		}
-		return
 	}
 
-	if !entry.IsDir {
-		return moerr.NewInvalidInputNoCtxf("output directory %s is not a directory", inputDirPath)
+	// StatFile succeeded: reject if it's a file, accept if the FS can stat directories.
+	if entry != nil {
+		if !entry.IsDir {
+			return moerr.NewInvalidInputNoCtxf("output directory %s is not a directory", inputDirPath)
+		}
+		return nil
 	}
 
-	return nil
+	// StatFile can't prove directory existence (common for object storage). Use parent List to
+	// detect the child entry and its type.
+	trimmedPath := strings.TrimRight(targetPath, "/")
+	if len(trimmedPath) == 0 {
+		// root of the service, treat as directory
+		return nil
+	}
+	parent, base := path.Split(trimmedPath)
+	parent = strings.TrimRight(parent, "/")
+	if len(base) == 0 {
+		// target is root
+		return nil
+	}
+
+	for entry, err = range targetFS.List(ctx, parent) {
+		if err != nil {
+			return err
+		}
+		if entry.Name != base {
+			continue
+		}
+		if !entry.IsDir {
+			return moerr.NewInvalidInputNoCtxf("output directory %s is not a directory", inputDirPath)
+		}
+		return nil
+	}
+
+	return moerr.NewInvalidInputNoCtxf("output directory %s does not exist", inputDirPath)
 }
 
 func prepareFSForDiffAsFile(
@@ -1405,93 +1758,10 @@ func flushSqlValues(
 		defer func() {
 			ret.Close()
 		}()
-		ret, err = runSql(ctx, ses, bh, tblStuff, sqlBuffer.String(), nil, nil)
+		ret, err = runSql(ctx, ses, bh, sqlBuffer.String(), nil, nil)
 	}
 
 	return err
-}
-
-func constructValsFromBatch(
-	ctx context.Context,
-	ses *Session,
-	tblStuff tableStuff,
-	wrapped batchWithKind,
-	deleteFromValsBuffer *bytes.Buffer,
-	replaceIntoValsBuffer *bytes.Buffer,
-) (err error) {
-
-	writeReplaceInto := func(row []any) {
-		if replaceIntoValsBuffer.Len() > 0 {
-			replaceIntoValsBuffer.WriteString(",")
-		}
-
-		replaceIntoValsBuffer.WriteString("(")
-		for j, idx := range tblStuff.def.visibleIdxes {
-			formatValIntoString(ses, row[j], tblStuff.def.colTypes[idx], replaceIntoValsBuffer)
-			if j != len(row)-1 {
-				replaceIntoValsBuffer.WriteString(",")
-			}
-		}
-
-		replaceIntoValsBuffer.WriteString(")")
-	}
-
-	writeDeleteFrom := func(row []any) {
-		if deleteFromValsBuffer.Len() > 0 {
-			deleteFromValsBuffer.WriteString(",")
-		}
-
-		if len(tblStuff.def.pkColIdxes) > 1 {
-			deleteFromValsBuffer.WriteString("(")
-		}
-		for idx, colIdx := range tblStuff.def.pkColIdxes {
-			formatValIntoString(ses, row[colIdx], tblStuff.def.colTypes[colIdx], deleteFromValsBuffer)
-			if idx != len(tblStuff.def.pkColIdxes)-1 {
-				deleteFromValsBuffer.WriteString(",")
-			}
-		}
-		if len(tblStuff.def.pkColIdxes) > 1 {
-			deleteFromValsBuffer.WriteString(")")
-		}
-	}
-
-	var (
-		row = make([]any, len(tblStuff.def.visibleIdxes))
-	)
-
-	for rowIdx := range wrapped.batch.RowCount() {
-		for _, colIdx := range tblStuff.def.visibleIdxes {
-			vec := wrapped.batch.Vecs[colIdx]
-			if vec.GetNulls().Contains(uint64(rowIdx)) {
-				row[colIdx] = nil
-			} else {
-
-				switch vec.GetType().Oid {
-				case types.T_datetime, types.T_timestamp, types.T_decimal64,
-					types.T_decimal128, types.T_time:
-					bb := vec.GetRawBytesAt(rowIdx)
-					row[colIdx] = types.DecodeValue(bb, vec.GetType().Oid)
-				default:
-					if err = extractRowFromVector(
-						ctx, ses, vec, colIdx, row, rowIdx, false,
-					); err != nil {
-						return
-					}
-				}
-
-			}
-		}
-
-		if wrapped.kind == diffDelete {
-			writeDeleteFrom(row)
-		} else if wrapped.kind == diffInsert {
-			writeReplaceInto(row)
-		} else {
-			writeReplaceInto(row)
-		}
-	}
-
-	return
 }
 
 func buildOutputSchema(
@@ -1589,7 +1859,7 @@ func tryDiffAsCSV(
 		sqlRet executor.Result
 	)
 
-	if sqlRet, err = runSql(ctx, ses, bh, tblStuff, sql, nil, nil); err != nil {
+	if sqlRet, err = runSql(ctx, ses, bh, sql, nil, nil); err != nil {
 		return false, err
 	}
 
@@ -1766,7 +2036,7 @@ func writeCSV(
 			close(streamChan)
 			close(errChan)
 		}()
-		if _, err2 := runSql(ctx, ses, bh, tblStuff, sql, streamChan, errChan); err2 != nil {
+		if _, err2 := runSql(ctx, ses, bh, sql, streamChan, errChan); err2 != nil {
 			select {
 			case errChan <- err2:
 			default:
