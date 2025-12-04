@@ -480,6 +480,15 @@ func (exec *CDCTaskExecutor) Pause() error {
 		return moerr.NewInternalErrorf(context.Background(), "cannot pause: %v", err)
 	}
 
+	// FIX: Mark task as paused ASAP to maximize blocking window
+	// This prevents watermark updates from commits that start after pause signal
+	// Trade-off: May block legitimate commits during stopAllReaders (causing data duplication)
+	// but prevents data loss which is more severe
+	// CDC design: duplication is acceptable (handled by downstream), loss is not
+	if exec.watermarkUpdater != nil {
+		exec.watermarkUpdater.MarkTaskPaused(exec.spec.TaskId)
+	}
+
 	// Log watermark states for all running tables before pause
 	exec.logCurrentWatermarks("before_pause")
 
@@ -525,13 +534,9 @@ func (exec *CDCTaskExecutor) Pause() error {
 		// This ensures no goroutine leaks and clean pause state
 		exec.stopAllReaders()
 
-		// FIX: Mark task as paused AFTER readers have stopped
-		// Critical: Must be after stopAllReaders() to prevent blocking legitimate commits
-		// If marked before stop, readers may send data successfully but watermark gets blocked,
-		// causing data duplication on resume
-		if exec.watermarkUpdater != nil {
-			exec.watermarkUpdater.MarkTaskPaused(exec.spec.TaskId)
-		}
+		// Note: task was marked as paused earlier (before ClosePause) to maximize blocking window
+		// This may cause some watermark updates during stopAllReaders to be blocked,
+		// leading to minor data duplication on resume, but prevents data loss
 
 		// FIX: Force flush watermarks with timeout
 		// This ensures all legitimate watermarks (from commits completed before pause)
