@@ -168,10 +168,11 @@ type VectorSet[T types.RealNumbers] struct {
 	count     int
 	dimension int32
 	curr      int64
+	elemsz    uint
 }
 
-func newVectorSet[T types.RealNumbers](count int, dimension int32) *VectorSet[T] {
-	c := &VectorSet[T]{count: count, dimension: dimension}
+func newVectorSet[T types.RealNumbers](count int, dimension int32, elemSize uint) *VectorSet[T] {
+	c := &VectorSet[T]{count: count, dimension: dimension, elemsz: elemSize}
 	c.idxmap = make(map[int64]int64)
 	c.vector = make([]T, count*int(dimension))
 	return c
@@ -199,12 +200,14 @@ func newMat[T types.RealNumbers](ctr *container, ap *Productl2) (*VectorSet[T], 
 	tblColPos := ap.OnExpr.GetF().GetArgs()[1].GetCol().GetColPos()
 
 	dim := ctr.bat.Vecs[centroidColPos].GetType().Width
+	elemSize := uint(ctr.bat.Vecs[centroidColPos].GetType().GetArrayElementSize())
+
 	quantize, err := hnsw.QuantizationToUsearch(int32(ctr.bat.Vecs[centroidColPos].GetType().Oid))
 	if err != nil {
 		return nil, nil, 0, err
 	}
 
-	centers := newVectorSet[T](buildCount, dim)
+	centers := newVectorSet[T](buildCount, dim, elemSize)
 
 	for i := 0; i < buildCount; i++ {
 		switch ctr.bat.Vecs[centroidColPos].GetType().Oid {
@@ -228,7 +231,7 @@ func newMat[T types.RealNumbers](ctr *container, ap *Productl2) (*VectorSet[T], 
 	}
 
 	// embedding mat
-	probeset := newVectorSet[T](probeCount, dim)
+	probeset := newVectorSet[T](probeCount, dim, elemSize)
 	for j := 0; j < probeCount; j++ {
 
 		switch ctr.bat.Vecs[centroidColPos].GetType().Oid {
@@ -303,16 +306,14 @@ func probeRun[T types.RealNumbers](ctr *container, ap *Productl2, proc *process.
 		return nil
 	}
 
-	elemSize := uint(util.UnsafeSizeof(T(0)))
-
 	if centers.curr > 0 {
-		keys, _, err := usearch.ExactSearchUnsafe(
-			util.UnsafePointer(&(centers.vector)[0]),
-			util.UnsafePointer(&(probeset.vector)[0]),
+		keys, distances, err := usearch.ExactSearchUnsafe(
+			util.UnsafePointer(&(centers.vector[0])),
+			util.UnsafePointer(&(probeset.vector[0])),
 			uint(centers.curr),
 			uint(probeset.curr),
-			uint(centers.dimension)*elemSize,
-			uint(probeset.dimension)*elemSize,
+			uint(centers.dimension)*centers.elemsz,
+			uint(probeset.dimension)*centers.elemsz,
 			uint(centers.dimension),
 			ctr.metrictype,
 			usearch_quantize,
@@ -321,6 +322,9 @@ func probeRun[T types.RealNumbers](ctr *container, ap *Productl2, proc *process.
 		if err != nil {
 			return err
 		}
+
+		//os.Stderr.WriteString(fmt.Sprintf("keys %v\n", keys))
+		//os.Stderr.WriteString(fmt.Sprintf("distances %v\n", distances))
 
 		for j := 0; j < probeset.count; j++ {
 
