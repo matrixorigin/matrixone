@@ -8016,8 +8016,8 @@ branch_stmt:
 |   DATA BRANCH CREATE DATABASE db_name FROM db_name table_snapshot_opt to_account_opt
     {
     	t := tree.NewDataBranchCreateDatabase()
-        t.DstDatabase = tree.Identifier($4)
-        t.SrcDatabase = tree.Identifier($6)
+        t.DstDatabase = tree.Identifier($5)
+        t.SrcDatabase = tree.Identifier($7)
         t.AtTsExpr = $8
         t.ToAccountOpt = $9
         $$ = t

@@ -526,7 +526,7 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 	case *tree.CloneDatabase:
 		ses.EnterFPrint(FPCloneDatabase)
 		defer ses.ExitFPrint(FPCloneDatabase)
-		if _, err = handleCloneDatabase(execCtx, ses, st); err != nil {
+		if _, err = handleCloneDatabase(execCtx, ses, nil, st); err != nil {
 			return
 		}
 

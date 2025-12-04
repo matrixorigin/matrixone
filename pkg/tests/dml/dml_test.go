@@ -143,11 +143,17 @@ func TestDataBranchDiffAsFile(t *testing.T) {
 			t.Log("sql diff handles rows containing NULL values")
 			runSQLDiffHandlesNulls(t, ctx, sqlDB)
 
+			t.Log("data branch create database populates metadata")
+			runBranchDatabaseMetadata(t, ctx, sqlDB)
+
 			t.Log("csv diff emits large range dataset that can be loaded back")
 			runCSVLoadSimple(t, ctx, sqlDB)
 
 			t.Log("csv diff covers rich data type payloads")
 			runCSVLoadRichTypes(t, ctx, sqlDB)
+
+			t.Log("diff output to stage and load via datalink")
+			runDiffOutputToStage(t, ctx, sqlDB)
 		})
 }
 
@@ -524,6 +530,122 @@ insert into %s values
 
 	loadDiffCSVIntoTable(t, ctx, db, base, diffPath)
 	assertTablesEqual(t, ctx, db, dbName, target, base)
+}
+
+func runDiffOutputToStage(t *testing.T, parentCtx context.Context, db *sql.DB) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(parentCtx, time.Second*120)
+	defer cancel()
+
+	dbName := testutils.GetDatabaseName(t)
+	base := "stage_base"
+	branch := "stage_branch"
+
+	stageDir := t.TempDir()
+	stageName := "stage_local_" + strings.ToLower(testutils.GetDatabaseName(t))
+	stageURL := fmt.Sprintf("file://%s", stageDir)
+
+	execSQLDB(t, ctx, db, "set role moadmin")
+	execSQLDB(t, ctx, db, fmt.Sprintf("create stage %s url = '%s'", stageName, stageURL))
+	defer execSQLDB(t, ctx, db, fmt.Sprintf("drop stage if exists %s", stageName))
+
+	execSQLDB(t, ctx, db, fmt.Sprintf("create database `%s`", dbName))
+	defer func() {
+		execSQLDB(t, ctx, db, fmt.Sprintf("drop database if exists `%s`", dbName))
+	}()
+
+	execSQLDB(t, ctx, db, fmt.Sprintf("create table `%s`.`%s` (id int primary key, val int)", dbName, base))
+	execSQLDB(t, ctx, db, fmt.Sprintf("insert into `%s`.`%s` values (1, 10), (2, 20), (3, 30)", dbName, base))
+
+	execSQLDB(t, ctx, db, fmt.Sprintf("data branch create table %s.%s from %s.%s", dbName, branch, dbName, base))
+	execSQLDB(t, ctx, db, fmt.Sprintf("insert into %s.%s values (4, 40)", dbName, branch))
+	execSQLDB(t, ctx, db, fmt.Sprintf("update %s.%s set val = val + 5 where id = 2", dbName, branch))
+	execSQLDB(t, ctx, db, fmt.Sprintf("delete from %s.%s where id = 3", dbName, branch))
+
+	diffStmt := fmt.Sprintf("data branch diff %s.%s against %s.%s output file 'stage://%s/'", dbName, branch, dbName, base, stageName)
+	rows, err := db.QueryContext(ctx, diffStmt)
+	require.NoErrorf(t, err, "sql: %s", diffStmt)
+	defer rows.Close()
+
+	require.Truef(t, rows.Next(), "diff statement %s returned no rows", diffStmt)
+	cols, err := rows.Columns()
+	require.NoError(t, err)
+
+	raw := make([][]byte, len(cols))
+	dest := make([]any, len(cols))
+	for i := range raw {
+		dest[i] = &raw[i]
+	}
+	require.NoError(t, rows.Scan(dest...))
+	require.NoErrorf(t, rows.Err(), "diff statement %s failed", diffStmt)
+	require.Falsef(t, rows.Next(), "unexpected extra rows for diff statement %s", diffStmt)
+
+	require.NotEmpty(t, raw, "diff statement returned no columns")
+	stagePath := string(raw[0])
+	require.NotEmpty(t, stagePath, "diff output stage path is empty")
+
+	t.Logf("stage diff path: %s", stagePath)
+	require.Equal(t, ".sql", filepath.Ext(stagePath))
+
+	loadStmt := fmt.Sprintf("select load_file(cast('%s' as datalink))", stagePath)
+	loadRows, err := db.QueryContext(ctx, loadStmt)
+	require.NoErrorf(t, err, "sql: %s", loadStmt)
+	defer loadRows.Close()
+
+	require.Truef(t, loadRows.Next(), "load_file %s returned no rows", stagePath)
+	var payload []byte
+	require.NoError(t, loadRows.Scan(&payload))
+	require.Falsef(t, loadRows.Next(), "load_file %s returned unexpected extra rows", stagePath)
+	require.NoErrorf(t, loadRows.Err(), "load_file %s failed", stagePath)
+	require.NotEmpty(t, payload, "stage diff payload is empty")
+
+	sqlContent := strings.ToLower(string(payload))
+	require.Contains(t, sqlContent, fmt.Sprintf("replace into %s.%s", strings.ToLower(dbName), base))
+	require.Contains(t, sqlContent, fmt.Sprintf("delete from %s.%s", strings.ToLower(dbName), base))
+
+	applyDiffStatements(t, ctx, db, string(payload))
+	assertTablesEqual(t, ctx, db, dbName, branch, base)
+}
+
+func runBranchDatabaseMetadata(t *testing.T, parentCtx context.Context, db *sql.DB) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(parentCtx, time.Second*90)
+	defer cancel()
+
+	dbName := testutils.GetDatabaseName(t)
+	copyDB := dbName + "_copy"
+	tables := []string{"tbl_one", "tbl_two"}
+
+	execSQLDB(t, ctx, db, fmt.Sprintf("create database `%s`", dbName))
+	defer func() {
+		execSQLDB(t, ctx, db, fmt.Sprintf("drop database if exists `%s`", copyDB))
+		execSQLDB(t, ctx, db, fmt.Sprintf("drop database if exists `%s`", dbName))
+	}()
+
+	execSQLDB(t, ctx, db, fmt.Sprintf("create table `%s`.`%s` (id int primary key)", dbName, tables[0]))
+	execSQLDB(t, ctx, db, fmt.Sprintf("create table `%s`.`%s` (id int primary key)", dbName, tables[1]))
+
+	execSQLDB(t, ctx, db, fmt.Sprintf("data branch create database `%s` from `%s`", copyDB, dbName))
+
+	query := fmt.Sprintf("select relname from mo_catalog.mo_tables where rel_id in (select table_id from mo_catalog.mo_branch_metadata) and lower(reldatabase) = '%s'", strings.ToLower(copyDB))
+	rows, err := db.QueryContext(ctx, query)
+	require.NoErrorf(t, err, "sql: %s", query)
+	defer rows.Close()
+
+	branchedTables := make([]string, 0, len(tables))
+	for rows.Next() {
+		var name string
+		require.NoError(t, rows.Scan(&name))
+		branchedTables = append(branchedTables, name)
+	}
+	require.NoErrorf(t, rows.Err(), "sql: %s", query)
+	t.Logf("branch metadata tables for %s: %v(sql=%s)", copyDB, branchedTables, query)
+
+	for _, tb := range tables {
+		require.Containsf(t, branchedTables, tb, "table %s not found in branch metadata", tb)
+	}
 }
 
 func readSQLFile(t *testing.T, path string) string {
