@@ -309,7 +309,7 @@ func (node *RankOption) Format(ctx *FmtCtx) {
 	}
 
 	ctx.WriteString("by rank")
-	if node.Option == nil || len(node.Option) == 0 {
+	if len(node.Option) == 0 {
 		return
 	}
 
