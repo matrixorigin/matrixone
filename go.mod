@@ -14,6 +14,7 @@ require (
 	github.com/aliyun/alibaba-cloud-sdk-go v1.63.34
 	github.com/aliyun/aliyun-oss-go-sdk v3.0.2+incompatible
 	github.com/aliyun/credentials-go v1.3.10
+	github.com/ashvardanian/stringzilla/golang v0.0.0-20251129144314-ad86638a56f7
 	github.com/aws/aws-sdk-go v1.55.5
 	github.com/aws/aws-sdk-go-v2 v1.32.5
 	github.com/aws/aws-sdk-go-v2/config v1.28.5
@@ -75,6 +76,7 @@ require (
 	github.com/prashantv/gostub v1.1.0
 	github.com/prometheus/client_golang v1.17.0
 	github.com/prometheus/client_model v0.4.1-0.20230718164431-9a2bf3000d16
+	github.com/rapidsai/cuvs/go v0.0.0-20251126145430-91c51b1cc43d
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/samber/lo v1.38.1
 	github.com/segmentio/encoding v0.4.0
