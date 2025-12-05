@@ -438,11 +438,13 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 						if !moerr.IsMoErrCode(err, moerr.ErrParseError) &&
 							!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
 							!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
-							c.proc.Error(c.proc.Ctx, "lock index table for alter table",
-								zap.String("databaseName", c.db),
-								zap.String("origin tableName", qry.GetTableDef().Name),
-								zap.String("index name", indexdef.IndexName),
-								zap.String("index tableName", indexdef.IndexTableName),
+							c.proc.Error(
+								c.proc.Ctx,
+								"alter.table.lock.index.table",
+								zap.String("db", c.db),
+								zap.String("main-table", qry.GetTableDef().Name),
+								zap.String("index-name", indexdef.IndexName),
+								zap.String("index-table-name", indexdef.IndexTableName),
 								zap.Error(err))
 							return err
 						}
