@@ -509,19 +509,19 @@ id2    greeting message    1.0421612074250595
 (SELECT id, category, status, l2_distance(vec, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]') AS dist
 FROM vec_with_composite_idx
 WHERE category = 'A' AND status = 1
-ORDER BY l2_distance(vec, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]')
+ORDER BY id, l2_distance(vec, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]')
 LIMIT 1 by rank with option 'mode=pre')
 UNION
 (SELECT id, category, status, l2_distance(vec, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]') AS dist
 FROM vec_with_composite_idx
 WHERE category = 'B'
-ORDER BY l2_distance(vec, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]')
+ORDER BY id, l2_distance(vec, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]')
 LIMIT 2 by rank with option 'mode=pre')
 ORDER BY dist LIMIT 3;
 id    category    status    dist
 1    A    1    0.0
-4    B    1    1.1224972117841794
-5    B    2    1.244989940648632
+4    B    1    1.1224972009658813
+5    B    2    1.2449899911880493
 drop table if exists vec_with_regular_idx;
 drop table if exists vec_with_multi_idx;
 drop table if exists vec_with_composite_idx;
