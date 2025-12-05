@@ -96,9 +96,19 @@ func extractRowFromVector(ctx context.Context, ses FeSession, vec *vector.Vector
 		//+------------------------------+
 		//|   �?   @  @@                  |
 		//+------------------------------+
-		row[i] = vector.GetArrayAt[float32](vec, rowIndex)
+		arr := vector.GetArrayAt[float32](vec, rowIndex)
+		if safeRefSlice {
+			row[i] = arr
+		} else {
+			row[i] = append([]float32(nil), arr...)
+		}
 	case types.T_array_float64:
-		row[i] = vector.GetArrayAt[float64](vec, rowIndex)
+		arr := vector.GetArrayAt[float64](vec, rowIndex)
+		if safeRefSlice {
+			row[i] = arr
+		} else {
+			row[i] = append([]float64(nil), arr...)
+		}
 	case types.T_date:
 		row[i] = vector.GetFixedAtNoTypeCheck[types.Date](vec, rowIndex)
 	case types.T_datetime:
@@ -204,9 +214,19 @@ func extractRowFromVector2(ctx context.Context, ses FeSession, vec *vector.Vecto
 		//+------------------------------+
 		//|   �?   @  @@                  |
 		//+------------------------------+
-		row[i] = vector.GetArrayAt2[float32](vec, colSlices.arrVarlena[sliceIdx], rowIndex)
+		arr := vector.GetArrayAt2[float32](vec, colSlices.arrVarlena[sliceIdx], rowIndex)
+		if safeRefSlice {
+			row[i] = arr
+		} else {
+			row[i] = append([]float32(nil), arr...)
+		}
 	case types.T_array_float64:
-		row[i] = vector.GetArrayAt2[float64](vec, colSlices.arrVarlena[sliceIdx], rowIndex)
+		arr := vector.GetArrayAt2[float64](vec, colSlices.arrVarlena[sliceIdx], rowIndex)
+		if safeRefSlice {
+			row[i] = arr
+		} else {
+			row[i] = append([]float64(nil), arr...)
+		}
 	case types.T_date:
 		row[i] = colSlices.arrDate[sliceIdx][rowIndex]
 	case types.T_datetime:
@@ -560,11 +580,21 @@ func (slices *ColumnSlices) GetDate(r uint64, i uint64) (types.Date, error) {
 	if slices.IsConst(i) {
 		r = 0
 	}
-	sliceIdx := slices.GetSliceIdx(i)
 	typ := slices.GetType(i)
+
+	// Note: mysql_protocol.go handles the case where MySQL column type is MYSQL_TYPE_DATE
+	// but actual vector type is T_datetime (e.g., TIMESTAMPADD with DATE input + time unit).
+	// In that case, it calls GetDatetime instead of GetDate.
+	// So GetDate only needs to handle T_date and T_datetime vector types.
+	sliceIdx := slices.GetSliceIdx(i)
 	switch typ.Oid {
 	case types.T_date:
 		return slices.arrDate[sliceIdx][r], nil
+	case types.T_datetime:
+		// Handle DATETIME type when MySQL column type is MYSQL_TYPE_DATE
+		// This can happen when TIMESTAMPADD returns DATETIME but caller expects DATE
+		dt := slices.arrDatetime[sliceIdx][r]
+		return dt.ToDate(), nil
 	default:
 		var d types.Date
 		return d, moerr.NewInternalError(slices.ctx, "invalid date slice")
@@ -579,12 +609,22 @@ func (slices *ColumnSlices) GetDatetime(r uint64, i uint64) (string, error) {
 	if slices.IsConst(i) {
 		r = 0
 	}
-	sliceIdx := slices.GetSliceIdx(i)
 	vec := slices.dataSet.Vecs[i]
-	switch vec.GetType().Oid {
+	actualType := vec.GetType().Oid
+
+	// Note: mysql_protocol.go handles the case where MySQL column type is MYSQL_TYPE_DATE
+	// but actual vector type is T_datetime. It calls GetDatetime directly.
+	// So GetDatetime only needs to handle T_datetime vector type.
+	sliceIdx := slices.GetSliceIdx(i)
+	switch actualType {
 	case types.T_datetime:
 		scale := vec.GetType().Scale
-		return slices.arrDatetime[sliceIdx][r].String2(scale), nil
+		dt := slices.arrDatetime[sliceIdx][r]
+		// If fractional seconds are 0, format without fractional part (MySQL behavior)
+		if scale > 0 && dt.MicroSec() == 0 {
+			return dt.String2(0), nil
+		}
+		return dt.String2(scale), nil
 	default:
 		return "", moerr.NewInternalError(slices.ctx, "invalid datetime slice")
 	}

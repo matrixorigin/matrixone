@@ -174,6 +174,7 @@ type StatementInfo struct {
 	SessionID            [16]byte `jons:"session_id"`
 	ConnectionId         uint32   `json:"connection_id"`
 	Account              string   `json:"account"`
+	AccountID            uint32   `json:"account_id"`
 	User                 string   `json:"user"`
 	Host                 string   `json:"host"`
 	RoleId               uint32   `json:"role_id"`
@@ -358,6 +359,7 @@ func (s *StatementInfo) free() {
 	s.SessionID = NilSesID
 	s.ConnectionId = 0
 	s.Account = ""
+	s.AccountID = 0
 	s.User = ""
 	s.Host = ""
 	s.RoleId = 0
@@ -401,6 +403,7 @@ func (s *StatementInfo) CloneWithoutExecPlan() *StatementInfo {
 	stmt.SessionID = s.SessionID
 	stmt.ConnectionId = s.ConnectionId
 	stmt.Account = s.Account
+	stmt.AccountID = s.AccountID
 	stmt.User = s.User
 	stmt.Host = s.Host
 	stmt.RoleId = s.RoleId
@@ -453,6 +456,7 @@ func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
 	}
 	row.SetColumnVal(sesIDCol, table.UuidField(s.SessionID[:]))
 	row.SetColumnVal(accountCol, table.StringField(s.Account))
+	row.SetColumnVal(accountIdCol, table.Uint32Field(s.AccountID))
 	row.SetColumnVal(roleIdCol, table.Int64Field(int64(s.RoleId)))
 	row.SetColumnVal(userCol, table.StringField(s.User))
 	row.SetColumnVal(hostCol, table.StringField(s.Host))
@@ -679,8 +683,8 @@ func (s *StatementInfo) EndStatement(ctx context.Context, err error, sentRows in
 		s.MarkResponseAt()
 		// --- Start of metric part
 		// duration is filled in s.MarkResponseAt()
-		incStatementCounter(s.Account, s.QueryType)
-		addStatementDurationCounter(s.Account, s.QueryType, s.Duration)
+		incStatementCounter(s.Account, s.AccountID, s.QueryType)
+		addStatementDurationCounter(s.Account, s.AccountID, s.QueryType, s.Duration)
 		// --- END of metric part
 		if err != nil {
 			outBytes += ResponseErrPacketSize + int64(len(err.Error()))
@@ -694,7 +698,7 @@ func (s *StatementInfo) EndStatement(ctx context.Context, err error, sentRows in
 			logutil.Warnf("negative cu: %f, %s", s.statsArray.GetCU(), uuid.UUID(s.StatementID).String())
 			v2.GetTraceNegativeCUCounter("cu").Inc()
 		} else {
-			metric.StatementCUCounter(s.Account, s.SqlSourceType).Add(s.statsArray.GetCU())
+			metric.StatementCUCounter(s.Account, s.AccountID, s.SqlSourceType).Add(s.statsArray.GetCU())
 		}
 		s.Status = StatementStatusSuccess
 		if err != nil {
@@ -730,11 +734,11 @@ func (s *StatementInfo) CopyStatementInfo() string {
 	return builder.String()
 }
 
-func addStatementDurationCounter(tenant, queryType string, duration time.Duration) {
-	metric.StatementDuration(tenant, queryType).Add(float64(duration))
+func addStatementDurationCounter(tenant string, tenantId uint32, queryType string, duration time.Duration) {
+	metric.StatementDuration(tenant, tenantId, queryType).Add(float64(duration))
 }
-func incStatementCounter(tenant, queryType string) {
-	metric.StatementCounter(tenant, queryType).Inc()
+func incStatementCounter(tenant string, tenantId uint32, queryType string) {
+	metric.StatementCounter(tenant, tenantId, queryType).Inc()
 }
 
 type StatementInfoStatus int

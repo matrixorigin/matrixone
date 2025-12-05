@@ -276,6 +276,8 @@ import (
 %nonassoc LOWER_THAN_ORDER
 %nonassoc ORDER
 %nonassoc LOWER_THAN_COMMA
+%nonassoc LOWER_THAN_WITH
+%nonassoc WITH
 %token <str> SELECT INSERT UPDATE DELETE FROM WHERE GROUP HAVING BY LIMIT OFFSET FOR OF CONNECT MANAGE GRANTS OWNERSHIP REFERENCE
 %nonassoc LOWER_THAN_SET
 %nonassoc <str> SET
@@ -312,7 +314,15 @@ import (
 %left <str> '*' '/' DIV '%' MOD
 %left <str> '^'
 %right <str> '~' UNARY
+%nonassoc LOWER_THAN_COLLATE
 %left <str> COLLATE
+%left TYPECAST
+%nonassoc LOWER_THAN_SIGNED
+%left SIGNED UNSIGNED
+%nonassoc LOWER_THAN_ZEROFILL
+%left ZEROFILL
+%nonassoc LOWER_THAN_INT
+%left INT INTEGER
 %right <str> BINARY UNDERSCORE_BINARY
 %right <str> INTERVAL
 %nonassoc <str> '.' ','
@@ -394,6 +404,7 @@ import (
 
 // Load
 %token <str> LOAD INLINE INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES ROWS IMPORT DISCARD JSONTYPE
+%token TYPECAST
 
 // MODump
 %token <str> MODUMP
@@ -414,7 +425,7 @@ import (
 %token <str> CURRENT_TIME LOCALTIME LOCALTIMESTAMP
 %token <str> UTC_DATE UTC_TIME UTC_TIMESTAMP
 %token <str> REPLACE CONVERT
-%token <str> SEPARATOR TIMESTAMPDIFF
+%token <str> SEPARATOR TIMESTAMPDIFF TIMESTAMPADD
 %token <str> CURRENT_DATE CURRENT_USER CURRENT_ROLE
 
 // Time unit
@@ -580,6 +591,7 @@ import (
 %type <order> order
 %type <orderBy> order_list order_by_clause order_by_opt
 %type <limit> limit_opt limit_clause
+%type <limit> limit_rank_suffix
 %type <str> insert_column optype_opt
 %type <str> optype
 %type <identifierList> column_list column_list_opt partition_clause_opt partition_id_list insert_column_list accounts_list restore_db_scope restore_table_scope
@@ -3720,9 +3732,6 @@ algorithm_type:
 |   INSTANT
 |   INPLACE
 |   COPY
-|   CLONE
-|   DATA
-|   BRANCH
 
 able_type:
     DISABLE
@@ -5580,17 +5589,72 @@ limit_opt:
     }
 
 limit_clause:
-    LIMIT expression
+    LIMIT expression limit_rank_suffix
     {
-        $$ = &tree.Limit{Count: $2}
+        l := &tree.Limit{Count: $2}
+        if $3 != nil {
+            l.ByRank = $3.ByRank
+            l.Option = $3.Option
+        }
+        $$ = l
     }
-|   LIMIT expression ',' expression
+|   LIMIT expression ',' expression limit_rank_suffix
     {
-        $$ = &tree.Limit{Offset: $2, Count: $4}
+        l := &tree.Limit{Offset: $2, Count: $4}
+        if $5 != nil {
+            l.ByRank = $5.ByRank
+            l.Option = $5.Option
+        }
+        $$ = l
     }
-|   LIMIT expression OFFSET expression
+|   LIMIT expression OFFSET expression limit_rank_suffix
     {
-        $$ = &tree.Limit{Offset: $4, Count: $2}
+        l := &tree.Limit{Offset: $4, Count: $2}
+        if $5 != nil {
+            l.ByRank = $5.ByRank
+            l.Option = $5.Option
+        }
+        $$ = l
+    }
+
+limit_rank_suffix:
+    {
+        $$ = nil
+    }
+|   BY RANK WITH OPTION expression_list
+    {
+        // Parse option strings to extract key=value pairs into a map
+        optionMap := make(map[string]string)
+        
+        for _, expr := range $5 {
+            var str string
+            // Handle both NumVal (P_char) and StrVal
+            if numVal, ok := expr.(*tree.NumVal); ok && numVal.ValType == tree.P_char {
+                str = numVal.String()
+            } else if strVal, ok := expr.(*tree.StrVal); ok {
+                str = strVal.String()
+            } else {
+                continue
+            }
+            
+            // Remove quotes if present
+            if len(str) >= 2 && ((str[0] == '\'' && str[len(str)-1] == '\'') || (str[0] == '"' && str[len(str)-1] == '"')) {
+                str = str[1 : len(str)-1]
+            }
+            
+            // Parse key=value pairs
+            parts := strings.Split(str, "=")
+            if len(parts) == 2 {
+                key := strings.TrimSpace(strings.ToLower(parts[0]))
+                value := strings.TrimSpace(parts[1])
+                optionMap[key] = value
+            }
+        }
+        
+        $$ = &tree.Limit{
+            ByRank: true,
+            Option: optionMap,
+        }
     }
 
 order_by_opt:
@@ -5843,6 +5907,7 @@ simple_select_clause:
     }
 
 select_options_opt:
+    %prec EMPTY
     {
         $$ = tree.QuerySpecOptionNone
     }
@@ -5982,6 +6047,7 @@ grouping_sets:
     }
 
 rollup_opt:
+    %prec LOWER_THAN_WITH
     {
         $$ = false
     }
@@ -8068,6 +8134,7 @@ diff_output_opt:
     }
 
 conflict_opt:
+     %prec EMPTY
      {
      	$$ = nil
      }
@@ -8568,8 +8635,10 @@ sub_partition_opt:
 |   SUBPARTITION BY sub_partition_method sub_partition_num_opt
     {
         var IsSubPartition = true
-        var PType = $3
+        var PType = $3.PType
         var Num = uint64($4)
+        $3.PType = nil
+        $3.Free()
         $$ = tree.NewPartitionBy2(
             IsSubPartition,
             PType,
@@ -9930,7 +9999,7 @@ bit_expr:
     {
         $$ = tree.NewBinaryExpr(tree.RIGHT_SHIFT, $1, $3)
     }
-|   simple_expr
+|   simple_expr %prec LOWER_THAN_COLLATE
     {
         $$ = $1
     }
@@ -10046,6 +10115,10 @@ simple_expr:
 |   BIT_CAST '(' expression AS mo_cast_type ')'
     {
         $$ = tree.NewBitCastExpr($3, $5)
+    }
+|   simple_expr TYPECAST mo_cast_type %prec TYPECAST
+    {
+        $$ = tree.NewCastExpr($1, $3)
     }
 |   CONVERT '(' expression ',' mysql_cast_type ')'
     {
@@ -10413,6 +10486,7 @@ mysql_cast_type:
     }
 
 integer_opt:
+    %prec LOWER_THAN_INT
     {}
 |    INTEGER
 |    INT
@@ -11059,6 +11133,17 @@ function_call_nonkeyword:
         }
     }
 |	TIMESTAMPDIFF '(' time_stamp_unit ',' expression ',' expression ')'
+	{
+        name := tree.NewUnresolvedColName($1)
+        str := strings.ToLower($3)
+        arg1 := tree.NewNumVal(str, str, false, tree.P_char)
+		$$ =  &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{arg1, $5, $7},
+        }
+	}
+|	TIMESTAMPADD '(' time_stamp_unit ',' expression ',' expression ')'
 	{
         name := tree.NewUnresolvedColName($1)
         str := strings.ToLower($3)
@@ -12509,7 +12594,7 @@ decimal_length_opt:
     }
 
 unsigned_opt:
-    /* EMPTY */
+    %prec LOWER_THAN_SIGNED
     {
         $$ = false
     }
@@ -12523,7 +12608,7 @@ unsigned_opt:
     }
 
 zero_fill_opt:
-    /* EMPTY */
+    %prec LOWER_THAN_ZEROFILL
     {}
 |   ZEROFILL
     {
@@ -12735,9 +12820,6 @@ equal_opt:
 //|   TABLE_VALUES
 //|   RETURNS
 //|   MYSQL_COMPATIBILITY_MODE
-//|   CLONE
-//|   MO
-//|   BRANCH
 
 non_reserved_keyword:
     ACCOUNT
@@ -12754,6 +12836,8 @@ non_reserved_keyword:
 |   BIT
 |   BLOB
 |   BOOL
+|   BRANCH
+|   CLONE
 |   CANCEL
 |   CHAIN
 |   CHECKSUM
@@ -12766,6 +12850,10 @@ non_reserved_keyword:
 |   COLUMNS
 |   CONNECTION
 |   CONSISTENT
+|   CONFLICT
+|   CONFLICT_ACCEPT
+|   CONFLICT_FAIL
+|   CONFLICT_SKIP
 |   COMPRESSED
 |   COMPACT
 |   COLUMN_FORMAT
@@ -12779,6 +12867,7 @@ non_reserved_keyword:
 |   CASCADE
 |   DAEMON
 |   DATA
+|   DIFF
 |	DAY
 |   DATETIME
 |   DECIMAL
@@ -12858,6 +12947,7 @@ non_reserved_keyword:
 |   OPTIMIZE
 |   OPEN
 |   OPTION
+|   OUTPUT
 |   PACK_KEYS
 |   PARTIAL
 |   PARTITIONS
@@ -13042,7 +13132,6 @@ non_reserved_keyword:
 |	SECOND
 |	SHUTDOWN
 |	SQL_CACHE
-|	SQL_NO_CACHE
 |	SLAVE
 |	SLIDING
 |	SUPER
@@ -13103,7 +13192,6 @@ non_reserved_keyword:
 |   SETS
 |   CUBE
 |   RETRY
-|   SQL_BUFFER_RESULT
 |	INTERNAL
 
 func_not_keyword:
@@ -13159,6 +13247,7 @@ not_keyword:
 |   VAR_SAMP
 |   AVG
 |	TIMESTAMPDIFF
+|	TIMESTAMPADD
 |   NEXTVAL
 |   SETVAL
 |   CURRVAL

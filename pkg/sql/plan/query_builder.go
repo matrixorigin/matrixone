@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -92,7 +93,7 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 		compCtx:            ctx,
 		ctxByNode:          []*BindContext{},
 		nameByColRef:       make(map[[2]int32]string),
-		nextTag:            0,
+		nextBindTag:        0,
 		mysqlCompatible:    mysqlCompatible,
 		aggSpillMem:        aggSpillMem,
 		tag2Table:          make(map[int32]*TableDef),
@@ -225,9 +226,9 @@ func (builder *QueryBuilder) buildRemapErrorMessage(
 
 func (builder *QueryBuilder) remapSingleColRef(col *plan.ColRef, colMap map[[2]int32][2]int32, remapInfo *RemapInfo) error {
 	mapID := [2]int32{col.RelPos, col.ColPos}
-	if ids, ok := colMap[mapID]; ok {
-		col.RelPos = ids[0]
-		col.ColPos = ids[1]
+	if mappedCol, ok := colMap[mapID]; ok {
+		col.RelPos = mappedCol[0]
+		col.ColPos = mappedCol[1]
 		col.Name = builder.nameByColRef[mapID]
 	} else {
 		colName := "<unknown>"
@@ -295,6 +296,7 @@ func (m *ColRefRemapping) String() string {
 	return sb.String()
 }
 
+// XXX: It's dangerous to copy binding/message tags if both old and new nodes are eventually used.
 func (builder *QueryBuilder) copyNode(ctx *BindContext, nodeId int32) int32 {
 	node := builder.qry.Nodes[nodeId]
 	newNode := DeepCopyNode(node)
@@ -466,11 +468,11 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			localToGlobal: make([][2]int32, 0),
 		}
 
-		tag := node.BindingTags[0]
+		colTag := node.BindingTags[0]
 		newTableDef := DeepCopyTableDef(node.TableDef, false)
 
 		for i, col := range node.TableDef.Cols {
-			globalRef := [2]int32{tag, int32(i)}
+			globalRef := [2]int32{colTag, int32(i)}
 			if colRefCnt[globalRef] == 0 {
 				continue
 			}
@@ -479,17 +481,20 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			newTableDef.Cols = append(newTableDef.Cols, DeepCopyColDef(col))
 		}
 
+		if len(node.BindingTags) > 1 {
+			orderFuncTag := node.BindingTags[1]
+			internalRemapping.addColRef([2]int32{orderFuncTag, 0})
+
+		}
+
 		if len(newTableDef.Cols) == 0 {
-			internalRemapping.addColRef([2]int32{tag, 0})
+			internalRemapping.addColRef([2]int32{colTag, 0})
 			newTableDef.Cols = append(newTableDef.Cols, DeepCopyColDef(node.TableDef.Cols[0]))
 		}
 
 		node.TableDef = newTableDef
 
-		colMap := make(map[[2]int32][2]int32)
-		for global, local := range internalRemapping.globalToLocal {
-			colMap[global] = local
-		}
+		colMap := maps.Clone(internalRemapping.globalToLocal)
 		for localIdx, global := range internalRemapping.localToGlobal {
 			colMap[[2]int32{0, int32(localIdx)}] = global
 		}
@@ -570,34 +575,37 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			})
 		}
 
-		if len(node.ProjectList) == 0 {
-			if len(node.TableDef.Cols) == 0 {
-				globalRef := [2]int32{tag, 0}
-				remapping.addColRef(globalRef)
+		if len(node.BindingTags) > 1 {
+			orderFuncTag := node.BindingTags[1]
+
+			if colRefCnt[[2]int32{orderFuncTag, 0}] > 0 {
+				remapping.addColRef([2]int32{orderFuncTag, 0})
 
 				node.ProjectList = append(node.ProjectList, &plan.Expr{
-					Typ: node.TableDef.Cols[0].Typ,
+					Typ: node.BlockOrderBy[0].Expr.Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: 0,
-							ColPos: 0,
-							Name:   builder.nameByColRef[globalRef],
-						},
-					},
-				})
-			} else {
-				remapping.addColRef(internalRemapping.localToGlobal[0])
-				node.ProjectList = append(node.ProjectList, &plan.Expr{
-					Typ: node.TableDef.Cols[0].Typ,
-					Expr: &plan.Expr_Col{
-						Col: &plan.ColRef{
-							RelPos: 0,
-							ColPos: 0,
-							Name:   builder.nameByColRef[internalRemapping.localToGlobal[0]],
+							ColPos: int32(len(node.TableDef.Cols)),
+							Name:   "__dist_func__",
 						},
 					},
 				})
 			}
+		}
+
+		if len(node.ProjectList) == 0 && len(node.TableDef.Cols) > 0 {
+			remapping.addColRef(internalRemapping.localToGlobal[0])
+			node.ProjectList = append(node.ProjectList, &plan.Expr{
+				Typ: node.TableDef.Cols[0].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: 0,
+						ColPos: 0,
+						Name:   builder.nameByColRef[internalRemapping.localToGlobal[0]],
+					},
+				},
+			})
 		}
 
 	case plan.Node_INTERSECT, plan.Node_INTERSECT_ALL,
@@ -627,14 +635,9 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			}
 		}
 
-		internalMap := make(map[[2]int32][2]int32)
-
 		leftRemapping, err := builder.remapAllColRefs(leftID, step, colRefCnt, colRefBool, sinkColRef)
 		if err != nil {
 			return nil, err
-		}
-		for k, v := range leftRemapping.globalToLocal {
-			internalMap[k] = v
 		}
 
 		_, err = builder.remapAllColRefs(rightID, step, colRefCnt, colRefBool, sinkColRef)
@@ -646,7 +649,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		for idx, expr := range node.ProjectList {
 			increaseRefCnt(expr, -1, colRefCnt)
 			remapInfo.srcExprIdx = idx
-			err := builder.remapColRefForExpr(expr, internalMap, &remapInfo)
+			err := builder.remapColRefForExpr(expr, leftRemapping.globalToLocal, &remapInfo)
 			if err != nil {
 				return nil, err
 			}
@@ -667,17 +670,13 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			}
 		}
 
-		internalMap := make(map[[2]int32][2]int32)
-
 		leftID := node.Children[0]
 		leftRemapping, err := builder.remapAllColRefs(leftID, step, colRefCnt, colRefBool, sinkColRef)
 		if err != nil {
 			return nil, err
 		}
 
-		for k, v := range leftRemapping.globalToLocal {
-			internalMap[k] = v
-		}
+		internalMap := maps.Clone(leftRemapping.globalToLocal)
 
 		rightID := node.Children[1]
 		rightRemapping, err := builder.remapAllColRefs(rightID, step, colRefCnt, colRefBool, sinkColRef)
@@ -2092,6 +2091,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 
 		builder.generateRuntimeFilters(rootID)
 		builder.pushdownVectorIndexTopToTableScan(rootID)
+		builder.removeSimpleProjections(rootID, plan.Node_UNKNOWN, false, colRefCnt)
 		ReCalcNodeStats(rootID, builder, true, false, false)
 		builder.forceJoinOnOneCN(rootID, false)
 		// after this ,never call ReCalcNodeStats again !!!
@@ -2335,7 +2335,7 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 		utIdx := i - 1
 		lastNewNodeIdx := len(newNodes) - 1
 		if unionTypes[utIdx] == plan.Node_INTERSECT || unionTypes[utIdx] == plan.Node_INTERSECT_ALL {
-			lastTag = builder.genNewTag()
+			lastTag = builder.genNewBindTag()
 			leftNodeTag := builder.qry.Nodes[newNodes[lastNewNodeIdx]].BindingTags[0]
 			newNodeID := builder.appendNode(&plan.Node{
 				NodeType:    unionTypes[utIdx],
@@ -2354,7 +2354,7 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 	lastNodeID := newNodes[0]
 	for i := 1; i < len(newNodes); i++ {
 		utIdx := i - 1
-		lastTag = builder.genNewTag()
+		lastTag = builder.genNewBindTag()
 		leftNodeTag := builder.qry.Nodes[lastNodeID].BindingTags[0]
 
 		lastNodeID = builder.appendNode(&plan.Node{
@@ -2366,9 +2366,9 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 	}
 
 	// set ctx base on selects[0] and it's ctx
-	ctx.groupTag = builder.genNewTag()
-	ctx.aggregateTag = builder.genNewTag()
-	ctx.projectTag = builder.genNewTag()
+	ctx.groupTag = builder.genNewBindTag()
+	ctx.aggregateTag = builder.genNewBindTag()
+	ctx.projectTag = builder.genNewBindTag()
 	for i, v := range ctx.headings {
 		ctx.aliasMap[v] = &aliasItem{
 			idx: int32(i),
@@ -2461,6 +2461,17 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 				}
 			}
 		}
+
+		// Parse RankOption if ByRank is true
+		if astLimit.ByRank && astLimit.Option != nil && len(astLimit.Option) > 0 {
+			rankOption, err := parseRankOption(astLimit.Option, builder.GetContext())
+			if err != nil {
+				return 0, err
+			}
+			if rankOption != nil && rankOption.Mode != "" {
+				node.RankOption = rankOption
+			}
+		}
 	}
 
 	// append result PROJECT node
@@ -2476,7 +2487,7 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 				},
 			})
 		}
-		ctx.resultTag = builder.genNewTag()
+		ctx.resultTag = builder.genNewBindTag()
 
 		lastNodeID = builder.appendNode(&plan.Node{
 			NodeType:    plan.Node_PROJECT,
@@ -2591,7 +2602,7 @@ func (builder *QueryBuilder) bindRecursiveCte(
 			cteBindType:   CteBindTypeInitStmt,
 			cte:           cteRef,
 			recScanNodeId: -1})
-	initCtx.sinkTag = builder.genNewTag()
+	initCtx.sinkTag = builder.genNewBindTag()
 	initLastNodeID, err1 := builder.bindSelect(&tree.Select{Select: *left}, initCtx, false)
 	if err1 != nil {
 		err = err1
@@ -2880,13 +2891,13 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	astLimit := stmt.Limit
 	astTimeWindow := stmt.TimeWindow
 
-	ctx.groupTag = builder.genNewTag()
-	ctx.aggregateTag = builder.genNewTag()
-	ctx.projectTag = builder.genNewTag()
-	ctx.windowTag = builder.genNewTag()
-	ctx.sampleTag = builder.genNewTag()
+	ctx.groupTag = builder.genNewBindTag()
+	ctx.aggregateTag = builder.genNewBindTag()
+	ctx.projectTag = builder.genNewBindTag()
+	ctx.windowTag = builder.genNewBindTag()
+	ctx.sampleTag = builder.genNewBindTag()
 	if astTimeWindow != nil {
-		ctx.timeTag = builder.genNewTag() // ctx.timeTag > 0
+		ctx.timeTag = builder.genNewBindTag() // ctx.timeTag > 0
 		if astTimeWindow.Sliding != nil {
 			ctx.sliding = true
 		}
@@ -3056,8 +3067,9 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	// bind limit/offset clause
 	var boundOffsetExpr *Expr
 	var boundCountExpr *Expr
+	var rankOption *plan.RankOption
 	if astLimit != nil {
-		if boundOffsetExpr, boundCountExpr, err = builder.bindLimit(ctx, astLimit); err != nil {
+		if boundOffsetExpr, boundCountExpr, rankOption, err = builder.bindLimit(ctx, astLimit); err != nil {
 			return
 		}
 
@@ -3161,11 +3173,14 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	}
 
 	// attach limit/offset to last node
-	if boundCountExpr != nil || boundOffsetExpr != nil {
+	if boundCountExpr != nil || boundOffsetExpr != nil || rankOption != nil {
 		node := builder.qry.Nodes[nodeID]
 
 		node.Limit = boundCountExpr
 		node.Offset = boundOffsetExpr
+		if rankOption != nil {
+			node.RankOption = rankOption
+		}
 	}
 
 	// append result PROJECT node
@@ -3240,8 +3255,7 @@ func (builder *QueryBuilder) bindSelectClause(
 		return
 	}
 
-	if builder.isForUpdate {
-		tableDef := builder.qry.Nodes[nodeID].GetTableDef()
+	if tableDef := builder.qry.Nodes[nodeID].GetTableDef(); tableDef != nil && builder.isForUpdate {
 		pkPos, pkTyp := getPkPos(tableDef, false)
 		lastTag := builder.qry.Nodes[nodeID].BindingTags[0]
 		lockTarget := &plan.LockTarget{
@@ -3268,7 +3282,7 @@ func (builder *QueryBuilder) bindSelectClause(
 			Children:    []int32{nodeID},
 			TableDef:    tableDef,
 			LockTargets: []*plan.LockTarget{lockTarget},
-			BindingTags: []int32{builder.genNewTag()},
+			BindingTags: []int32{builder.genNewBindTag()},
 		}
 
 		if astLimit == nil {
@@ -3339,7 +3353,8 @@ func (builder *QueryBuilder) bindWhere(
 	clause *tree.Where,
 	nodeID int32,
 ) (newNodeID int32, boundFilterList []*plan.Expr, notCacheable bool, err error) {
-	whereList, err := splitAndBindCondition(clause.Expr, NoAlias, ctx)
+	convertedExpr := builder.convertAccountToAccountIdIfNeeded(ctx, clause.Expr)
+	whereList, err := splitAndBindCondition(convertedExpr, NoAlias, ctx)
 	if err != nil {
 		return
 	}
@@ -3362,6 +3377,100 @@ func (builder *QueryBuilder) bindWhere(
 
 	newNodeID = nodeID
 	return
+}
+
+// isAccountConvertibleTable checks if a binding refers to statement_info or metric table.
+// It checks both binding.table (which might be an alias) and the actual table name from node.TableDef.Name.
+func isAccountConvertibleTable(binding *Binding, builder *QueryBuilder, dbName, tableName string) bool {
+	if binding == nil {
+		return false
+	}
+	if binding.db != dbName {
+		return false
+	}
+	// Check if binding.table matches (no alias case)
+	if binding.table == tableName {
+		return true
+	}
+	// Check the actual table name from node.TableDef.Name (alias case)
+	if int(binding.nodeId) < len(builder.qry.Nodes) {
+		node := builder.qry.Nodes[binding.nodeId]
+		if node != nil && node.TableDef != nil && node.TableDef.Name == tableName {
+			return true
+		}
+	}
+	return false
+}
+
+// buildAccountConvertibleTableAliasMap builds a map of table aliases/names that refer to statement_info or metric table.
+// The key is the table alias/name used in the query, the value indicates if it refers to statement_info or metric.
+func (builder *QueryBuilder) buildAccountConvertibleTableAliasMap(ctx *BindContext) map[string]bool {
+	tableAliasMap := make(map[string]bool)
+	for tableName, binding := range ctx.bindingByTable {
+		// Check for statement_info table in system database
+		if isAccountConvertibleTable(binding, builder, catalog.MO_SYSTEM, catalog.MO_STATEMENT) {
+			tableAliasMap[tableName] = true
+			tableAliasMap[catalog.MO_STATEMENT] = true
+		}
+		// Check for metric table in system_metrics database
+		if isAccountConvertibleTable(binding, builder, catalog.MO_SYSTEM_METRICS, catalog.MO_METRIC) {
+			tableAliasMap[tableName] = true
+			tableAliasMap[catalog.MO_METRIC] = true
+		}
+	}
+	return tableAliasMap
+}
+
+// hasStatementInfoOrMetricTable checks if the query involves statement_info or metric table
+// It checks both binding.table (which might be an alias) and the actual table name from node.TableDef.Name
+func hasStatementInfoOrMetricTable(ctx *BindContext, builder *QueryBuilder) bool {
+	for _, binding := range ctx.bindingByTable {
+		if isAccountConvertibleTable(binding, builder, catalog.MO_SYSTEM, catalog.MO_STATEMENT) {
+			return true
+		}
+		if isAccountConvertibleTable(binding, builder, catalog.MO_SYSTEM_METRICS, catalog.MO_METRIC) {
+			return true
+		}
+	}
+	return false
+}
+
+// convertAccountToAccountIdIfNeeded converts account to account_id if the query involves statement_info or metric table.
+// This conversion is primarily designed for compatibility with mo-cloud's business-level usage of the account field.
+// When mo-cloud queries statement_info or metric using account names (e.g., WHERE account = 'sys'), this function automatically
+// converts the account filter to account_id filter by looking up the corresponding account_id from mo_catalog.mo_account.
+// This provides a more user-friendly interface while maintaining compatibility with the underlying account_id-based storage.
+func (builder *QueryBuilder) convertAccountToAccountIdIfNeeded(ctx *BindContext, expr tree.Expr) tree.Expr {
+	if !hasStatementInfoOrMetricTable(ctx, builder) {
+		return expr
+	}
+
+	currentAccountID, err := builder.compCtx.GetAccountId()
+	if err != nil {
+		return expr
+	}
+
+	isSystemAccount := currentAccountID == catalog.System_Account
+	currentAccountName := "sys"
+	if !isSystemAccount {
+		currentAccountName = builder.compCtx.GetAccountName()
+	}
+
+	tableAliasMap := builder.buildAccountConvertibleTableAliasMap(ctx)
+	// Create account_id resolver function that queries account_id from mo_catalog.mo_account
+	accountIdResolver := func(accountName string) (uint32, error) {
+		accountIds, err := builder.compCtx.ResolveAccountIds([]string{accountName})
+		if err != nil {
+			return 0, err
+		}
+		if len(accountIds) == 0 {
+			// Account not found, return 0 to indicate not found
+			return 0, nil
+		}
+		return accountIds[0], nil
+	}
+	convertedExpr, _ := util.ConvertAccountToAccountIdWithTableCheck(expr, isSystemAccount, currentAccountName, currentAccountID, tableAliasMap, accountIdResolver)
+	return convertedExpr
 }
 
 func (builder *QueryBuilder) bindGroupBy(
@@ -3516,8 +3625,19 @@ func (builder *QueryBuilder) bindTimeWindow(
 
 	t := types.Type{Oid: types.T(ts.Typ.Id)}
 	if !t.IsTemporal() {
-		err = moerr.NewNotSupportedf(builder.GetContext(), "the type of %s must be temporal in time window", tree.String(col, dialect.MYSQL))
-		return
+		// If the column type is string (VARCHAR/CHAR/TEXT), try to cast it to DATETIME
+		// This allows date_add() results (which return VARCHAR for MySQL compatibility) to be used in time windows
+		if t.Oid == types.T_varchar || t.Oid == types.T_char || t.Oid == types.T_text {
+			ts, err = appendCastBeforeExpr(builder.GetContext(), ts, plan.Type{
+				Id: int32(types.T_datetime),
+			})
+			if err != nil {
+				return
+			}
+		} else {
+			err = moerr.NewNotSupportedf(builder.GetContext(), "the type of %s (%s) must be temporal in time window", tree.String(col, dialect.MYSQL), t.String())
+			return
+		}
 	}
 
 	boundTimeWindowOrderBy = &plan.OrderBySpec{
@@ -3650,7 +3770,7 @@ func (builder *QueryBuilder) bindOrderBy(
 func (builder *QueryBuilder) bindLimit(
 	ctx *BindContext,
 	astLimit *tree.Limit,
-) (boundOffsetExpr, boundCountExpr *Expr, err error) {
+) (boundOffsetExpr, boundCountExpr *Expr, rankOption *plan.RankOption, err error) {
 	limitBinder := NewLimitBinder(builder, ctx)
 	if astLimit.Offset != nil {
 		if boundOffsetExpr, err = limitBinder.BindExpr(astLimit.Offset, 0, true); err != nil {
@@ -3668,6 +3788,31 @@ func (builder *QueryBuilder) bindLimit(
 			}
 		}
 	}
+
+	// Parse RankOption if ByRank is true
+	if astLimit.ByRank && astLimit.Option != nil && len(astLimit.Option) > 0 {
+		rankOption = &plan.RankOption{}
+
+		// Helper function to get value from map case-insensitively
+		getOptionValue := func(key string) (string, bool) {
+			keyLower := strings.ToLower(key)
+			for k, v := range astLimit.Option {
+				if strings.ToLower(k) == keyLower {
+					return v, true
+				}
+			}
+			return "", false
+		}
+
+		if mode, ok := getOptionValue("mode"); ok {
+			modeLower := strings.ToLower(strings.TrimSpace(mode))
+			if modeLower != "pre" && modeLower != "post" {
+				return nil, nil, nil, moerr.NewInvalidInputf(builder.GetContext(), "mode must be 'pre' or 'post', got '%s'", mode)
+			}
+			rankOption.Mode = modeLower
+		}
+	}
+
 	return
 }
 
@@ -3730,7 +3875,7 @@ func (builder *QueryBuilder) bindValues(
 		NodeType:     plan.Node_VALUE_SCAN,
 		RowsetData:   rowSetData,
 		TableDef:     tableDef,
-		BindingTags:  []int32{builder.genNewTag()},
+		BindingTags:  []int32{builder.genNewBindTag()},
 		Uuid:         nodeUUID[:],
 		NotCacheable: true,
 	}, ctx)
@@ -4014,7 +4159,7 @@ func (builder *QueryBuilder) appendResultProjectionNode(ctx *BindContext, nodeID
 		})
 	}
 
-	ctx.resultTag = builder.genNewTag()
+	ctx.resultTag = builder.genNewBindTag()
 	return builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_PROJECT,
 		ProjectList: ctx.results,
@@ -4651,7 +4796,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 				Stats:        nil,
 				ObjRef:       &plan.ObjectRef{DbName: schema, SchemaName: table},
 				TableDef:     tableDef,
-				BindingTags:  []int32{builder.genNewTag()},
+				BindingTags:  []int32{builder.genNewBindTag()},
 				ScanSnapshot: snapshot,
 			}, ctx)
 
@@ -4716,7 +4861,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 			ObjRef:       obj,
 			TableDef:     tableDef,
 			ExternScan:   externScan,
-			BindingTags:  []int32{builder.genNewTag()},
+			BindingTags:  []int32{builder.genNewBindTag()},
 			ScanSnapshot: snapshot,
 		}, ctx)
 
@@ -4777,7 +4922,6 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 			if err != nil {
 				return 0, err
 			}
-			acctName := builder.compCtx.GetUserName()
 			if sub := builder.compCtx.GetQueryingSubscription(); sub != nil {
 				currentAccountID = uint32(sub.AccountId)
 				builder.qry.Nodes[nodeID].NotCacheable = true
@@ -4793,7 +4937,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 					}
 					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
 				} else if dbName == catalog.MO_SYSTEM_METRICS && (tableName == catalog.MO_METRIC || tableName == catalog.MO_SQL_STMT_CU) {
-					motablesFilter := util.BuildSysMetricFilter(acctName)
+					motablesFilter := util.BuildSysMetricFilter(uint64(currentAccountID))
 					ctx.binder = NewWhereBinder(builder, ctx)
 					accountFilterExprs, err := splitAndBindCondition(motablesFilter, NoAlias, ctx)
 					if err != nil {
@@ -4801,7 +4945,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 					}
 					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
 				} else if dbName == catalog.MO_SYSTEM && tableName == catalog.MO_STATEMENT {
-					motablesFilter := util.BuildSysStatementInfoFilter(acctName)
+					motablesFilter := util.BuildSysStatementInfoFilter(uint64(currentAccountID))
 					ctx.binder = NewWhereBinder(builder, ctx)
 					accountFilterExprs, err := splitAndBindCondition(motablesFilter, NoAlias, ctx)
 					if err != nil {
@@ -4854,9 +4998,9 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 	return
 }
 
-func (builder *QueryBuilder) genNewTag() int32 {
-	builder.nextTag++
-	return builder.nextTag
+func (builder *QueryBuilder) genNewBindTag() int32 {
+	builder.nextBindTag++
+	return builder.nextBindTag
 }
 
 func (builder *QueryBuilder) genNewMsgTag() (ret int32) {
@@ -5240,6 +5384,43 @@ func (builder *QueryBuilder) GetContext() context.Context {
 		return context.TODO()
 	}
 	return builder.compCtx.GetContext()
+}
+
+// parseRankOption parses rank options from a map of option key-value pairs.
+// It extracts the "mode" option case-insensitively and validates it.
+// Returns a RankOption with the parsed mode if valid, or nil if no mode is specified.
+// Returns an error if the mode value is invalid (must be "pre" or "post").
+func parseRankOption(options map[string]string, ctx context.Context) (*plan.RankOption, error) {
+	if len(options) == 0 {
+		return nil, nil
+	}
+
+	rankOption := &plan.RankOption{}
+
+	// Helper function to get value from map case-insensitively
+	getOptionValue := func(key string) (string, bool) {
+		keyLower := strings.ToLower(key)
+		for k, v := range options {
+			if strings.ToLower(k) == keyLower {
+				return v, true
+			}
+		}
+		return "", false
+	}
+
+	if mode, ok := getOptionValue("mode"); ok {
+		modeLower := strings.ToLower(strings.TrimSpace(mode))
+		if modeLower != "pre" && modeLower != "post" {
+			return nil, moerr.NewInvalidInputf(ctx, "mode must be 'pre' or 'post', got '%s'", mode)
+		}
+		rankOption.Mode = modeLower
+	}
+
+	if rankOption.Mode == "" {
+		return nil, nil
+	}
+
+	return rankOption, nil
 }
 
 func (builder *QueryBuilder) checkExprCanPushdown(expr *Expr, node *Node) bool {

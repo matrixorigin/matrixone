@@ -225,6 +225,12 @@ func makeSpecialAggExec(
 			return makeGroupConcat(mp, id, isDistinct, params, getCroupConcatRet(params...), groupConcatSep), true, nil
 		case AggIdOfApproxCount:
 			return makeApproxCount(mp, id, params[0]), true, nil
+		case AggIdOfJsonArrayAgg:
+			exec, err := makeJsonArrayAgg(mp, id, isDistinct, params)
+			return exec, true, err
+		case AggIdOfJsonObjectAgg:
+			exec, err := makeJsonObjectAgg(mp, id, isDistinct, params)
+			return exec, true, err
 		case WinIdOfRowNumber, WinIdOfRank, WinIdOfDenseRank:
 			exec, err := makeWindowExec(mp, id, isDistinct)
 			return exec, true, err
@@ -248,6 +254,40 @@ func makeGroupConcat(
 		emptyNull: true,
 	}
 	return newGroupConcatExec(mp, info, separator)
+}
+
+func makeJsonArrayAgg(
+	mg AggMemoryManager,
+	aggID int64, isDistinct bool,
+	param []types.Type) (AggFuncExec, error) {
+	if len(param) != 1 {
+		return nil, moerr.NewInternalErrorNoCtx("json_arrayagg needs exactly one argument")
+	}
+	info := multiAggInfo{
+		aggID:     aggID,
+		distinct:  isDistinct,
+		argTypes:  param,
+		retType:   types.T_json.ToType(),
+		emptyNull: true,
+	}
+	return newJsonArrayAggExec(mg, info), nil
+}
+
+func makeJsonObjectAgg(
+	mg AggMemoryManager,
+	aggID int64, isDistinct bool,
+	param []types.Type) (AggFuncExec, error) {
+	if len(param) != 2 {
+		return nil, moerr.NewInternalErrorNoCtx("json_objectagg needs exactly two arguments")
+	}
+	info := multiAggInfo{
+		aggID:     aggID,
+		distinct:  isDistinct,
+		argTypes:  param,
+		retType:   types.T_json.ToType(),
+		emptyNull: true,
+	}
+	return newJsonObjectAggExec(mg, info), nil
 }
 
 func makeCount(

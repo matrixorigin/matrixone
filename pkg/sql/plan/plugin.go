@@ -57,7 +57,7 @@ func (builder *QueryBuilder) buildPluginExec(tbl *tree.TableFunction, ctx *BindC
 			},
 			Cols: colDefs,
 		},
-		BindingTags:     []int32{builder.genNewTag()},
+		BindingTags:     []int32{builder.genNewBindTag()},
 		TblFuncExprList: exprs,
 		Children:        children,
 	}

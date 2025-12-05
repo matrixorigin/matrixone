@@ -13,7 +13,6 @@
 // limitations under the License.
 
 //go:build !debug
-// +build !debug
 
 package types
 
@@ -22,6 +21,7 @@ import (
 	"encoding"
 	"fmt"
 	"io"
+	"strings"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -367,7 +367,7 @@ func DecodeValue(val []byte, t T) any {
 	}
 }
 
-func CompareValues(left, right any, t T) int {
+func CompareValue(left, right any) int {
 	if left == nil {
 		if right == nil {
 			return 0
@@ -378,103 +378,105 @@ func CompareValues(left, right any, t T) int {
 		return 1
 	}
 
-	switch t {
-	case T_bool:
-		lVal := left.(bool)
+	switch lVal := left.(type) {
+	case bool:
 		rVal := right.(bool)
-
-		if lVal && !rVal {
+		switch {
+		case lVal && !rVal:
 			return 1
-		} else if !lVal && rVal {
+		case !lVal && rVal:
 			return -1
-		} else {
+		default:
 			return 0
 		}
-	case T_int8:
-		lVal := left.(int8)
-		rVal := right.(int8)
-		return int(lVal - rVal)
-	case T_int16:
-		lVal := left.(int16)
-		rVal := right.(int16)
-		return int(lVal - rVal)
-	case T_int32:
-		lVal := left.(int32)
-		rVal := right.(int32)
-		return int(lVal - rVal)
-	case T_int64:
-		lVal := left.(int64)
-		rVal := right.(int64)
-		return int(lVal - rVal)
-	case T_uint8:
-		lVal := left.(uint8)
-		rVal := right.(uint8)
-		return int(lVal - rVal)
-	case T_uint16:
-		lVal := left.(uint16)
-		rVal := right.(uint16)
-		return int(lVal - rVal)
-	case T_uint32:
-		lVal := left.(uint32)
-		rVal := right.(uint32)
-		return int(lVal - rVal)
-	case T_uint64:
-		lVal := left.(uint64)
+	case uint64:
 		rVal := right.(uint64)
-		return int(lVal - rVal)
-	case T_float32:
-		lVal := left.(float32)
-		rVal := right.(float32)
-		return int(lVal - rVal)
-	case T_float64:
-		lVal := left.(float64)
-		rVal := right.(float64)
-		return int(lVal - rVal)
-	case T_decimal64:
-		lVal := left.(Decimal64)
-		rVal := right.(Decimal64)
-		return lVal.Compare(rVal)
-	case T_decimal128:
-		lVal := left.(Decimal128)
-		rVal := right.(Decimal128)
-		return lVal.Compare(rVal)
-	case T_date:
-		lVal := left.(Date)
-		rVal := right.(Date)
-		return int(lVal - rVal)
-	case T_time:
-		lVal := left.(Time)
-		rVal := right.(Time)
-		return int(lVal - rVal)
-	case T_timestamp:
-		lVal := left.(Timestamp)
-		rVal := right.(Timestamp)
-		return int(lVal - rVal)
-	case T_datetime:
-		lVal := left.(Datetime)
-		rVal := right.(Datetime)
-		return int(lVal - rVal)
-	case T_uuid:
-		lVal := left.(Uuid)
-		rVal := right.(Uuid)
-		return lVal.Compare(rVal)
-	case T_TS:
-		lVal := left.(TS)
+		switch {
+		case lVal > rVal:
+			return 1
+		case lVal < rVal:
+			return -1
+		default:
+			return 0
+		}
+	case int8:
+		return int(lVal - right.(int8))
+	case int16:
+		return int(lVal - right.(int16))
+	case int32:
+		return int(lVal - right.(int32))
+	case int64:
+		return int(lVal - right.(int64))
+	case uint8:
+		return int(lVal - right.(uint8))
+	case uint16:
+		return int(lVal - right.(uint16))
+	case uint32:
+		return int(lVal - right.(uint32))
+	case float32:
+		return int(lVal - right.(float32))
+	case float64:
+		return int(lVal - right.(float64))
+	case Decimal64:
+		return lVal.Compare(right.(Decimal64))
+	case Decimal128:
+		return lVal.Compare(right.(Decimal128))
+	case Date:
+		return int(lVal - right.(Date))
+	case Time:
+		return int(lVal - right.(Time))
+	case Timestamp:
+		return int(lVal - right.(Timestamp))
+	case Datetime:
+		return int(lVal - right.(Datetime))
+	case Uuid:
+		return lVal.Compare(right.(Uuid))
+	case TS:
 		rVal := right.(TS)
 		return lVal.Compare(&rVal)
-	case T_Rowid:
-		lVal := left.(Rowid)
+	case Blockid:
+		rVal := right.(Blockid)
+		return lVal.Compare(&rVal)
+	case Rowid:
 		rVal := right.(Rowid)
 		return lVal.Compare(&rVal)
-	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary,
-		T_array_float32, T_array_float64, T_datalink:
-		return bytes.Compare(left.([]byte), right.([]byte))
-	case T_enum:
-		lVal := left.(Enum)
-		rVal := right.(Enum)
-		return int(lVal - rVal)
+	case []byte:
+		return bytes.Compare(lVal, right.([]byte))
+	case bytejson.ByteJson:
+		return bytejson.CompareByteJson(lVal, right.(bytejson.ByteJson))
+	case []float32:
+		return compareFloatSlice(lVal, right.([]float32))
+	case []float64:
+		return compareFloatSlice(lVal, right.([]float64))
+	case Enum:
+		return int(lVal - right.(Enum))
+	case string:
+		return strings.Compare(lVal, right.(string))
 	default:
-		panic(fmt.Sprintf("CompareValues unsupported type %v", t))
+		panic(fmt.Sprintf("CompareValue unsupported type %T", left))
+	}
+}
+
+func compareFloatSlice[T ~float32 | ~float64](left, right []T) int {
+	min := len(left)
+	if len(right) < min {
+		min = len(right)
+	}
+	for i := 0; i < min; i++ {
+		if left[i] < right[i] {
+			return -1
+		}
+		if left[i] > right[i] {
+			return 1
+		}
+	}
+	switch {
+	case len(left) < len(right):
+		return -1
+	case len(left) > len(right):
+		return 1
+	default:
+		return 0
 	}
 }
 

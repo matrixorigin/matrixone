@@ -14,6 +14,8 @@
 
 package metric
 
+import "strconv"
+
 var (
 	StatementCounterFactory = NewCounterVec(
 		CounterOpts{
@@ -21,7 +23,7 @@ var (
 			Name:      "statement_total",
 			Help:      "Counter of executed sql statement",
 		},
-		[]string{constTenantKey, "type"},
+		[]string{constTenantKey, constTenantIdKey, "type"},
 		false,
 	)
 
@@ -31,7 +33,7 @@ var (
 			Name:      "statement_duration_total",
 			Help:      "Statement duration of each query type for each account",
 		},
-		[]string{constTenantKey, "type"},
+		[]string{constTenantKey, constTenantIdKey, "type"},
 		false,
 	)
 
@@ -41,7 +43,7 @@ var (
 			Name:      "transaction_total",
 			Help:      "Counter of transaction",
 		},
-		[]string{constTenantKey},
+		[]string{constTenantKey, constTenantIdKey},
 		false,
 	)
 
@@ -51,7 +53,7 @@ var (
 			Name:      "transaction_errors",
 			Help:      "Counter of errors on execute commit/rollback statement",
 		},
-		[]string{constTenantKey, "type"},
+		[]string{constTenantKey, constTenantIdKey, "type"},
 		false,
 	)
 
@@ -61,7 +63,7 @@ var (
 			Name:      "statement_errors",
 			Help:      "Counter of executed sql statement failed.",
 		},
-		[]string{constTenantKey, "type"},
+		[]string{constTenantKey, constTenantIdKey, "type"},
 		false,
 	)
 
@@ -71,7 +73,7 @@ var (
 			Name:      "statement_cu",
 			Help:      "Counter of executed sql statement cu",
 		},
-		[]string{constTenantKey, "sql_source_type"},
+		[]string{constTenantKey, constTenantIdKey, "sql_source_type"},
 		false,
 	)
 )
@@ -93,30 +95,31 @@ var (
 )
 
 // StatementCounter accept t as tree.QueryType
-func StatementCounter(tenant string, t string) Counter {
-	return StatementCounterFactory.WithLabelValues(tenant, t)
+func StatementCounter(tenant string, tenantId uint32, t string) Counter {
+	return StatementCounterFactory.WithLabelValues(tenant, strconv.FormatUint(uint64(tenantId), 10), t)
 }
 
-func StatementDuration(tenant string, t string) Counter {
-	return StatementDurationFactory.WithLabelValues(tenant, t)
+func StatementDuration(tenant string, tenantId uint32, t string) Counter {
+	return StatementDurationFactory.WithLabelValues(tenant, strconv.FormatUint(uint64(tenantId), 10), t)
 }
 
-func TransactionCounter(tenant string) Counter {
-	return TransactionCounterFactory.WithLabelValues(tenant)
+func TransactionCounter(tenant string, tenantId uint32) Counter {
+	return TransactionCounterFactory.WithLabelValues(tenant, strconv.FormatUint(uint64(tenantId), 10))
 }
 
-func TransactionErrorsCounter(account string, t SQLType) Counter {
-	return TransactionErrorsFactory.WithLabelValues(account, string(t))
+func TransactionErrorsCounter(account string, accountId uint32, t SQLType) Counter {
+	return TransactionErrorsFactory.WithLabelValues(account, strconv.FormatUint(uint64(accountId), 10), string(t))
 }
 
 // StatementErrorsCounter accept t as tree.QueryType
-func StatementErrorsCounter(account string, t string) Counter {
-	return StatementErrorsFactory.WithLabelValues(account, t)
+func StatementErrorsCounter(account string, accountId uint32, t string) Counter {
+	return StatementErrorsFactory.WithLabelValues(account, strconv.FormatUint(uint64(accountId), 10), t)
 }
 
-// StatementCUCounter accept @account, @sqlSourceType
+// StatementCUCounter accept @account, @accountId, @sqlSourceType
 // @account is the account name of the user who executes the sql statement.
+// @accountId is the account id of the user who executes the sql statement.
 // @sqlSourceType is the type of sql source, such as InternalSql, CloudNoUserSql, ExternalSql, CloudUserSql etc.
-func StatementCUCounter(account string, sqlSourceType string) Counter {
-	return StatementCUCounterFactory.WithLabelValues(account, sqlSourceType)
+func StatementCUCounter(account string, accountId uint32, sqlSourceType string) Counter {
+	return StatementCUCounterFactory.WithLabelValues(account, strconv.FormatUint(uint64(accountId), 10), sqlSourceType)
 }

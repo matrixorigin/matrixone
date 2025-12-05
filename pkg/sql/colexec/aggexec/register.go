@@ -89,16 +89,18 @@ var (
 	registeredAggFunctions = make(map[aggKey]aggImplementation)
 
 	// list of special aggregation function IDs.
-	AggIdOfCountColumn = int64(-1)
-	AggIdOfCountStar   = int64(-2)
-	AggIdOfGroupConcat = int64(-3)
-	AggIdOfApproxCount = int64(-4)
-	AggIdOfMedian      = int64(-5)
-	WinIdOfRowNumber   = int64(-7)
-	WinIdOfRank        = int64(-8)
-	WinIdOfDenseRank   = int64(-9)
-	groupConcatSep     = ","
-	getCroupConcatRet  = func(args ...types.Type) types.Type {
+	AggIdOfCountColumn   = int64(-1)
+	AggIdOfCountStar     = int64(-2)
+	AggIdOfGroupConcat   = int64(-3)
+	AggIdOfApproxCount   = int64(-4)
+	AggIdOfMedian        = int64(-5)
+	AggIdOfJsonArrayAgg  = int64(-6)
+	AggIdOfJsonObjectAgg = int64(-7)
+	WinIdOfRowNumber     = int64(-8)
+	WinIdOfRank          = int64(-9)
+	WinIdOfDenseRank     = int64(-10)
+	groupConcatSep       = ","
+	getCroupConcatRet    = func(args ...types.Type) types.Type {
 		for _, p := range args {
 			if p.Oid == types.T_binary || p.Oid == types.T_varbinary || p.Oid == types.T_blob {
 				return types.T_blob.ToType()

@@ -1,4 +1,3 @@
-SET experimental_ivf_index = 1;
 drop database if exists vecdb2;
 create database vecdb2;
 use vecdb2;
@@ -658,5 +657,4 @@ count(*)
 select count(*) from mo_catalog.mo_tables where reldatabase = "vecdb3"; -- rag_table + 0 ivf index tables
 count(*)
 1
-SET experimental_ivf_index = 0;
 drop database vecdb3;

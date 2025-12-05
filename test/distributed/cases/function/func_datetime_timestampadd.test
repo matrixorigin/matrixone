@@ -43,6 +43,26 @@ INSERT INTO t1 VALUES ('2024-12-20'), ('2024-01-01'), ('2024-06-15');
 SELECT d, TIMESTAMPADD(DAY, 5, d) AS added_date FROM t1;
 DROP TABLE t1;
 
+# MySQL compatibility: DATE + time unit → DATETIME, DATE + date unit → DATE
+# Test DATE column with time units (should return DATETIME)
+CREATE TABLE t1(d DATE);
+INSERT INTO t1 VALUES ('2024-12-20');
+SELECT TIMESTAMPADD(HOUR, 2, d) AS date_plus_hour FROM t1;
+SELECT TIMESTAMPADD(MINUTE, 30, d) AS date_plus_minute FROM t1;
+SELECT TIMESTAMPADD(SECOND, 45, d) AS date_plus_second FROM t1;
+SELECT TIMESTAMPADD(MICROSECOND, 1000000, d) AS date_plus_microsecond FROM t1;
+DROP TABLE t1;
+
+# Test DATE column with date units (should return DATE)
+CREATE TABLE t1(d DATE);
+INSERT INTO t1 VALUES ('2024-12-20');
+SELECT TIMESTAMPADD(DAY, 5, d) AS date_plus_day FROM t1;
+SELECT TIMESTAMPADD(WEEK, 1, d) AS date_plus_week FROM t1;
+SELECT TIMESTAMPADD(MONTH, 1, d) AS date_plus_month FROM t1;
+SELECT TIMESTAMPADD(QUARTER, 1, d) AS date_plus_quarter FROM t1;
+SELECT TIMESTAMPADD(YEAR, 1, d) AS date_plus_year FROM t1;
+DROP TABLE t1;
+
 # DATETIME table
 CREATE TABLE t1(dt DATETIME);
 INSERT INTO t1 VALUES ('2024-12-20 10:30:45'), ('2024-01-01 00:00:00'), ('2024-06-15 12:00:00');
@@ -57,4 +77,11 @@ DROP TABLE t1;
 
 # Multiple units
 SELECT TIMESTAMPADD(DAY, 5, '2024-12-20') AS result1, TIMESTAMPADD(HOUR, 12, '2024-12-20 10:30:45') AS result2, TIMESTAMPADD(MONTH, 1, '2024-12-20') AS result3;
+
+# Large interval values that cause overflow (should return NULL, not panic)
+# MySQL behavior: TIMESTAMPADD(DAY, 1000000000000, '1970-01-01 00:00:00') returns NULL
+SELECT TIMESTAMPADD(DAY, 1000000000000, '1970-01-01 00:00:00') AS large_positive_interval;
+SELECT TIMESTAMPADD(DAY, -1000000000000, '1970-01-01 00:00:00') AS large_negative_interval;
+SELECT DATE_ADD('1970-01-01 00:00:00', INTERVAL 1000000000000 DAY) AS date_add_large_positive;
+SELECT DATE_ADD('1970-01-01 00:00:00', INTERVAL -1000000000000 DAY) AS date_add_large_negative;
 

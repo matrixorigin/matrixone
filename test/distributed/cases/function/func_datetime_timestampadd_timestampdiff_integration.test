@@ -1,0 +1,284 @@
+# TIMESTAMPADD and TIMESTAMPDIFF Integration Tests
+# Testing the relationship and combination usage of TIMESTAMPADD and TIMESTAMPDIFF
+
+# ============================================
+# 1. Inverse Relationship Tests
+# ============================================
+# Verify that TIMESTAMPADD and TIMESTAMPDIFF are inverse operations
+SELECT TIMESTAMPDIFF(DAY, '2024-12-20', TIMESTAMPADD(DAY, 5, '2024-12-20')) AS should_be_5;
+SELECT TIMESTAMPDIFF(HOUR, '2024-12-20 10:00:00', TIMESTAMPADD(HOUR, 3, '2024-12-20 10:00:00')) AS should_be_3;
+SELECT TIMESTAMPDIFF(MINUTE, '2024-12-20 10:30:00', TIMESTAMPADD(MINUTE, 15, '2024-12-20 10:30:00')) AS should_be_15;
+SELECT TIMESTAMPDIFF(SECOND, '2024-12-20 10:30:45', TIMESTAMPADD(SECOND, 30, '2024-12-20 10:30:45')) AS should_be_30;
+SELECT TIMESTAMPDIFF(MICROSECOND, '2024-12-20 10:30:45.000000', TIMESTAMPADD(MICROSECOND, 123456, '2024-12-20 10:30:45.000000')) AS should_be_123456;
+SELECT TIMESTAMPDIFF(WEEK, '2024-12-20', TIMESTAMPADD(WEEK, 2, '2024-12-20')) AS should_be_2;
+SELECT TIMESTAMPDIFF(MONTH, '2024-01-01', TIMESTAMPADD(MONTH, 3, '2024-01-01')) AS should_be_3;
+SELECT TIMESTAMPDIFF(QUARTER, '2024-01-01', TIMESTAMPADD(QUARTER, 1, '2024-01-01')) AS should_be_1;
+SELECT TIMESTAMPDIFF(YEAR, '2024-01-01', TIMESTAMPADD(YEAR, 2, '2024-01-01')) AS should_be_2;
+
+# Negative intervals
+SELECT TIMESTAMPDIFF(DAY, '2024-12-25', TIMESTAMPADD(DAY, -5, '2024-12-25')) AS should_be_neg_5;
+SELECT TIMESTAMPDIFF(HOUR, '2024-12-20 15:00:00', TIMESTAMPADD(HOUR, -3, '2024-12-20 15:00:00')) AS should_be_neg_3;
+
+# ============================================
+# 2. Complex Combination Tests
+# ============================================
+# Calculate difference between two TIMESTAMPADD results
+SELECT TIMESTAMPDIFF(DAY,
+    TIMESTAMPADD(MONTH, 1, '2024-01-01'),
+    TIMESTAMPADD(YEAR, 1, '2024-01-01')
+) AS complex_diff;
+
+SELECT TIMESTAMPDIFF(HOUR,
+    TIMESTAMPADD(DAY, 5, '2024-12-20 10:00:00'),
+    TIMESTAMPADD(DAY, 10, '2024-12-20 10:00:00')
+) AS complex_diff_hours;
+
+SELECT TIMESTAMPDIFF(MONTH,
+    TIMESTAMPADD(QUARTER, 1, '2024-01-01'),
+    TIMESTAMPADD(YEAR, 1, '2024-01-01')
+) AS complex_diff_months;
+
+# Nested TIMESTAMPADD operations
+SELECT TIMESTAMPDIFF(DAY,
+    TIMESTAMPADD(DAY, 5, TIMESTAMPADD(MONTH, 1, '2024-01-01')),
+    TIMESTAMPADD(DAY, 10, TIMESTAMPADD(YEAR, 1, '2024-01-01'))
+) AS nested_complex_diff;
+
+# ============================================
+# 3. Comparison with Other Date Functions
+# ============================================
+# Compare TIMESTAMPADD with DATE_ADD
+-- @bvt:issue#23160
+SELECT TIMESTAMPADD(DAY, 5, '2024-12-20') AS timestampadd_result,
+       DATE_ADD('2024-12-20', INTERVAL 5 DAY) AS dateadd_result;
+
+SELECT TIMESTAMPADD(MONTH, 3, '2024-01-01') AS timestampadd_month,
+       DATE_ADD('2024-01-01', INTERVAL 3 MONTH) AS dateadd_month;
+
+SELECT TIMESTAMPADD(YEAR, 1, '2024-01-01') AS timestampadd_year,
+       DATE_ADD('2024-01-01', INTERVAL 1 YEAR) AS dateadd_year;
+-- @bvt:issue
+
+# Compare TIMESTAMPDIFF with DATEDIFF
+SELECT TIMESTAMPDIFF(DAY, '2024-01-01', '2024-12-31') AS timestampdiff_result,
+       DATEDIFF('2024-12-31', '2024-01-01') AS datediff_result;
+
+SELECT TIMESTAMPDIFF(DAY, '2024-12-20', '2024-12-25') AS timestampdiff_days,
+       DATEDIFF('2024-12-25', '2024-12-20') AS datediff_days;
+
+# Compare TIMESTAMPDIFF with TIMEDIFF (for time units)
+SELECT TIMESTAMPDIFF(HOUR, '2024-12-20 10:00:00', '2024-12-20 15:00:00') AS timestampdiff_hour,
+       TIMEDIFF('2024-12-20 15:00:00', '2024-12-20 10:00:00') AS timediff_result;
+
+SELECT TIMESTAMPDIFF(MINUTE, '2024-12-20 10:00:00', '2024-12-20 10:30:00') AS timestampdiff_minute,
+       TIMEDIFF('2024-12-20 10:30:00', '2024-12-20 10:00:00') AS timediff_minute;
+
+# ============================================
+# 4. Round-trip Tests
+# ============================================
+# Add interval, then subtract same interval should return original
+SELECT TIMESTAMPDIFF(DAY,
+    TIMESTAMPADD(DAY, -5, TIMESTAMPADD(DAY, 5, '2024-12-20')),
+    '2024-12-20'
+) AS round_trip_day;
+
+SELECT TIMESTAMPDIFF(HOUR,
+    TIMESTAMPADD(HOUR, -3, TIMESTAMPADD(HOUR, 3, '2024-12-20 10:00:00')),
+    '2024-12-20 10:00:00'
+) AS round_trip_hour;
+
+SELECT TIMESTAMPDIFF(MONTH,
+    TIMESTAMPADD(MONTH, -2, TIMESTAMPADD(MONTH, 2, '2024-01-01')),
+    '2024-01-01'
+) AS round_trip_month;
+
+# ============================================
+# 5. Chain Operations Tests
+# ============================================
+# Chain multiple TIMESTAMPADD operations
+SELECT TIMESTAMPDIFF(DAY,
+    '2024-01-01',
+    TIMESTAMPADD(DAY, 5, TIMESTAMPADD(MONTH, 1, TIMESTAMPADD(YEAR, 1, '2024-01-01')))
+) AS chain_operations;
+
+# Chain TIMESTAMPDIFF with TIMESTAMPADD
+SELECT TIMESTAMPADD(DAY,
+    TIMESTAMPDIFF(DAY, '2024-01-01', '2024-06-01'),
+    '2024-01-01'
+) AS chain_diff_add;
+
+# ============================================
+# 6. Table-based Integration Tests
+# ============================================
+# Create table with dates and intervals
+CREATE TABLE t1(id INT, start_date DATE, interval_val INT, unit VARCHAR(20));
+INSERT INTO t1 VALUES
+    (1, '2024-01-01', 5, 'DAY'),
+    (2, '2024-01-01', 3, 'MONTH'),
+    (3, '2024-01-01', 1, 'YEAR'),
+    (4, '2024-12-20', 10, 'DAY'),
+    (5, '2024-06-15', 2, 'QUARTER');
+
+# Use TIMESTAMPADD to calculate end dates, then TIMESTAMPDIFF to verify
+SELECT id, start_date, interval_val, unit,
+       CASE unit
+           WHEN 'DAY' THEN TIMESTAMPADD(DAY, interval_val, start_date)
+           WHEN 'MONTH' THEN TIMESTAMPADD(MONTH, interval_val, start_date)
+           WHEN 'YEAR' THEN TIMESTAMPADD(YEAR, interval_val, start_date)
+           WHEN 'QUARTER' THEN TIMESTAMPADD(QUARTER, interval_val, start_date)
+       END AS end_date,
+       CASE unit
+           WHEN 'DAY' THEN TIMESTAMPDIFF(DAY, start_date, TIMESTAMPADD(DAY, interval_val, start_date))
+           WHEN 'MONTH' THEN TIMESTAMPDIFF(MONTH, start_date, TIMESTAMPADD(MONTH, interval_val, start_date))
+           WHEN 'YEAR' THEN TIMESTAMPDIFF(YEAR, start_date, TIMESTAMPADD(YEAR, interval_val, start_date))
+           WHEN 'QUARTER' THEN TIMESTAMPDIFF(QUARTER, start_date, TIMESTAMPADD(QUARTER, interval_val, start_date))
+       END AS diff_should_equal_interval
+FROM t1
+ORDER BY id;
+
+DROP TABLE t1;
+
+# ============================================
+# 7. Subquery Integration Tests
+# ============================================
+# Use TIMESTAMPADD in subquery, then TIMESTAMPDIFF in outer query
+SELECT * FROM (
+    SELECT TIMESTAMPADD(DAY, 5, '2024-12-20') AS future_date
+) AS subquery;
+
+SELECT TIMESTAMPDIFF(DAY, '2024-12-20',
+    (SELECT TIMESTAMPADD(DAY, 5, '2024-12-20'))
+) AS subquery_diff;
+
+# Multiple levels of nesting
+SELECT TIMESTAMPDIFF(DAY,
+    (SELECT TIMESTAMPADD(DAY, 5, '2024-01-01')),
+    (SELECT TIMESTAMPADD(DAY, 10, '2024-01-01'))
+) AS nested_subquery_diff;
+
+# ============================================
+# 8. JOIN Integration Tests
+# ============================================
+CREATE TABLE t1(id INT, start_date DATE);
+CREATE TABLE t2(id INT, interval_val INT);
+INSERT INTO t1 VALUES (1, '2024-01-01'), (2, '2024-06-01');
+INSERT INTO t2 VALUES (1, 5), (2, 10);
+
+# Use TIMESTAMPADD in JOIN
+SELECT t1.start_date, t2.interval_val,
+       TIMESTAMPADD(DAY, t2.interval_val, t1.start_date) AS end_date,
+       TIMESTAMPDIFF(DAY, t1.start_date, TIMESTAMPADD(DAY, t2.interval_val, t1.start_date)) AS day_diff
+FROM t1 JOIN t2 ON t1.id = t2.id;
+
+DROP TABLE t1;
+DROP TABLE t2;
+
+# ============================================
+# 9. GROUP BY Integration Tests
+# ============================================
+CREATE TABLE t1(category VARCHAR(10), start_date DATE, interval_val INT);
+INSERT INTO t1 VALUES
+    ('A', '2024-01-01', 5),
+    ('A', '2024-01-15', 10),
+    ('B', '2024-06-01', 3),
+    ('B', '2024-06-15', 7);
+
+# Aggregate TIMESTAMPADD results
+SELECT category,
+       AVG(TIMESTAMPDIFF(DAY, start_date, TIMESTAMPADD(DAY, interval_val, start_date))) AS avg_diff
+FROM t1
+GROUP BY category;
+
+# Use TIMESTAMPDIFF in GROUP BY
+SELECT category,
+       MAX(TIMESTAMPADD(DAY, interval_val, start_date)) AS max_end_date,
+       MIN(TIMESTAMPADD(DAY, interval_val, start_date)) AS min_end_date,
+       TIMESTAMPDIFF(DAY,
+           MIN(TIMESTAMPADD(DAY, interval_val, start_date)),
+           MAX(TIMESTAMPADD(DAY, interval_val, start_date))
+       ) AS range_diff
+FROM t1
+GROUP BY category;
+
+DROP TABLE t1;
+
+# ============================================
+# 10. ORDER BY Integration Tests
+# ============================================
+CREATE TABLE t1(id INT, start_date DATE, interval_val INT);
+INSERT INTO t1 VALUES
+    (1, '2024-01-01', 5),
+    (2, '2024-01-01', 10),
+    (3, '2024-01-01', 3);
+
+# Order by TIMESTAMPADD result
+SELECT id, start_date, interval_val,
+       TIMESTAMPADD(DAY, interval_val, start_date) AS end_date
+FROM t1
+ORDER BY TIMESTAMPADD(DAY, interval_val, start_date);
+
+# Order by TIMESTAMPDIFF result
+SELECT id, start_date, interval_val,
+       TIMESTAMPDIFF(DAY, '2024-01-01', TIMESTAMPADD(DAY, interval_val, start_date)) AS d_diff
+FROM t1
+ORDER BY TIMESTAMPDIFF(DAY, '2024-01-01', TIMESTAMPADD(DAY, interval_val, start_date));
+
+DROP TABLE t1;
+
+# ============================================
+# 11. WHERE Clause Integration Tests
+# ============================================
+CREATE TABLE t1(id INT, start_date DATE, interval_val INT);
+INSERT INTO t1 VALUES
+    (1, '2024-01-01', 5),
+    (2, '2024-01-01', 10),
+    (3, '2024-01-01', 15),
+    (4, '2024-01-01', 20);
+
+# Filter by TIMESTAMPADD result
+SELECT id, start_date, interval_val,
+       TIMESTAMPADD(DAY, interval_val, start_date) AS end_date
+FROM t1
+WHERE TIMESTAMPADD(DAY, interval_val, start_date) > '2024-01-10';
+
+# Filter by TIMESTAMPDIFF result
+SELECT id, start_date, interval_val,
+       TIMESTAMPDIFF(DAY, start_date, TIMESTAMPADD(DAY, interval_val, start_date)) AS t_diff
+FROM t1
+WHERE TIMESTAMPDIFF(DAY, start_date, TIMESTAMPADD(DAY, interval_val, start_date)) > 10;
+
+DROP TABLE t1;
+
+# ============================================
+# 12. Edge Cases in Integration
+# ============================================
+# Zero interval
+SELECT TIMESTAMPDIFF(DAY, '2024-12-20', TIMESTAMPADD(DAY, 0, '2024-12-20')) AS zero_interval;
+
+# Large intervals
+SELECT TIMESTAMPDIFF(DAY, '2024-01-01', TIMESTAMPADD(YEAR, 10, '2024-01-01')) AS large_interval;
+
+# Negative intervals
+SELECT TIMESTAMPDIFF(DAY, '2024-12-25', TIMESTAMPADD(DAY, -5, '2024-12-25')) AS negative_interval;
+
+# Leap year handling
+SELECT TIMESTAMPDIFF(DAY, '2020-02-28', TIMESTAMPADD(DAY, 1, '2020-02-28')) AS leap_year_add;
+SELECT TIMESTAMPDIFF(DAY, '2020-02-29', TIMESTAMPADD(YEAR, 1, '2020-02-29')) AS leap_year_year_add;
+
+# ============================================
+# 13. Different Input Types Integration
+# ============================================
+# DATE type
+SELECT TIMESTAMPDIFF(DAY, DATE('2024-12-20'), TIMESTAMPADD(DAY, 5, DATE('2024-12-20'))) AS date_type;
+
+# DATETIME type
+SELECT TIMESTAMPDIFF(HOUR, '2024-12-20 10:00:00', TIMESTAMPADD(HOUR, 3, '2024-12-20 10:00:00')) AS datetime_type;
+
+# TIMESTAMP type
+SELECT TIMESTAMPDIFF(DAY, TIMESTAMP('2024-12-20 10:00:00'), TIMESTAMPADD(DAY, 5, TIMESTAMP('2024-12-20 10:00:00'))) AS timestamp_type;
+
+# String type
+SELECT TIMESTAMPDIFF(DAY, '2024-12-20', TIMESTAMPADD(DAY, 5, '2024-12-20')) AS string_type;
+
+# ISO 8601 format
+SELECT TIMESTAMPDIFF(DAY, '2024-12-20T10:30:45', TIMESTAMPADD(DAY, 5, '2024-12-20T10:30:45')) AS iso_format;

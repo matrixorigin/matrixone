@@ -96,6 +96,7 @@ func GetMetricStorageUsageExecutor(
 const (
 	ShowAllAccountSQL = "SHOW ACCOUNTS;"
 	ShowAccountSQL    = "SHOW ACCOUNTS like %q;"
+	ColumnAccountId   = "account_id"   // result column in `show accounts`, or column in table mo_catalog.mo_account
 	ColumnAccountName = "account_name" // result column in `show accounts`, or column in table mo_catalog.mo_account
 	ColumnSize        = "size"         // result column in `show accounts`, or column in table mo_catalog.mo_account
 	ColumnCreatedTime = "created_time" // column in table mo_catalog.mo_account
@@ -139,7 +140,7 @@ func checkServerStarted(service string, logger *log.MOLogger) bool {
 }
 
 // after 1.3.0, turn it as CONST var
-var accountIdx, sizeIdx, snapshotSizeIdx uint64
+var accountIdIdx, accountIdx, sizeIdx, snapshotSizeIdx uint64
 var objectCountIdx uint64
 var name2IdxErr error
 var name2IdxOnce sync.Once
@@ -157,6 +158,10 @@ func GetColumnIdxFromShowAccountResult(ctx context.Context, result ie.InternalEx
 			}
 			name2idx[colName] = colIdx
 		}
+		if _, ok := name2idx[ColumnAccountId]; !ok {
+			// adapt version, account_id might not exist in older versions
+			name2idx[ColumnAccountId] = math.MaxUint64
+		}
 		if _, ok := name2idx[ColumnAccountName]; !ok {
 			name2IdxErr = moerr.NewInternalErrorf(ctx, "column not found in 'show account': %s", ColumnAccountName)
 			return
@@ -173,7 +178,7 @@ func GetColumnIdxFromShowAccountResult(ctx context.Context, result ie.InternalEx
 			logutil.Errorf("column object count does not exists: %v", name2idx)
 			name2idx[ColumnObjectCount] = math.MaxUint64
 		}
-		accountIdx, sizeIdx, snapshotSizeIdx = name2idx[ColumnAccountName], name2idx[ColumnSize], name2idx[ColumnSnapshotSize]
+		accountIdIdx, accountIdx, sizeIdx, snapshotSizeIdx = name2idx[ColumnAccountId], name2idx[ColumnAccountName], name2idx[ColumnSize], name2idx[ColumnSnapshotSize]
 		objectCountIdx = name2idx[ColumnObjectCount]
 	})
 	return name2IdxErr
@@ -273,6 +278,14 @@ func CalculateStorageUsage(
 				return err
 			}
 
+			var accountId uint32 = 0
+			if accountIdIdx != math.MaxUint64 {
+				accountIdVal, err := result.GetUint64(ctx, rowIdx, accountIdIdx)
+				if err == nil {
+					accountId = uint32(accountIdVal)
+				}
+			}
+
 			sizeMB, err = result.GetFloat64(ctx, rowIdx, sizeIdx)
 			if err != nil {
 				return err
@@ -298,13 +311,14 @@ func CalculateStorageUsage(
 
 			logger.Debug("storage_usage",
 				zap.String("account", account),
+				zap.Uint32("account_id", accountId),
 				zap.Float64("sizeMB", sizeMB),
 				zap.Float64("snapshot", snapshotSizeMB),
 				zap.Float64("object_count", objectCount))
 
-			metric.ObjectCount(account).Set(objectCount)
-			metric.StorageUsage(account).Set(sizeMB)
-			metric.SnapshotUsage(account).Set(snapshotSizeMB)
+			metric.ObjectCount(account, accountId).Set(objectCount)
+			metric.StorageUsage(account, accountId).Set(sizeMB)
+			metric.SnapshotUsage(account, accountId).Set(snapshotSizeMB)
 		}
 
 		// next round
@@ -427,6 +441,14 @@ func checkNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 				continue
 			}
 
+			var accountId uint32 = 0
+			if accountIdIdx != math.MaxUint64 {
+				accountIdVal, err := showRet.GetUint64(ctx, 0, accountIdIdx)
+				if err == nil {
+					accountId = uint32(accountIdVal)
+				}
+			}
+
 			sizeMB, err = showRet.GetFloat64(ctx, 0, sizeIdx)
 			if err != nil {
 				logger.Error("failed to fetch new account size", zap.Error(err), zap.String("account", account))
@@ -445,12 +467,12 @@ func checkNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 			// done query.
 
 			// update new accounts metric
-			logger.Info("new account storage_usage", zap.String("account", account), zap.Float64("sizeMB", sizeMB),
+			logger.Info("new account storage_usage", zap.String("account", account), zap.Uint32("account_id", accountId), zap.Float64("sizeMB", sizeMB),
 				zap.Float64("snapshot", snapshotSizeMB),
 				zap.String("created_time", createdTime))
 
-			metric.StorageUsage(account).Set(sizeMB)
-			metric.SnapshotUsage(account).Set(snapshotSizeMB)
+			metric.StorageUsage(account, accountId).Set(sizeMB)
+			metric.SnapshotUsage(account, accountId).Set(snapshotSizeMB)
 			v2.GetTraceCheckStorageUsageNewIncCounter().Inc()
 		}
 

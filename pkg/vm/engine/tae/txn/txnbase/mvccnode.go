@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
@@ -78,6 +79,7 @@ func (un *TxnMVCCNode) CheckConflict(txn txnif.TxnReader) error {
 		if un.IsSameTxn(txn) {
 			return nil
 		}
+		logutil.Infof("Dedup-WW, prev txn is %x, new txn is %x", un.Txn.GetID(), txn.GetID())
 		return txnif.ErrTxnWWConflict
 	}
 
@@ -86,6 +88,7 @@ func (un *TxnMVCCNode) CheckConflict(txn txnif.TxnReader) error {
 	//        ts         CommitTs            time
 	startTS := txn.GetStartTS()
 	if un.End.GT(&startTS) {
+		logutil.Infof("Dedup-WW, prev ts is %x, new txn is %x", un.End.ToString(), startTS.ToString())
 		return txnif.ErrTxnWWConflict
 	}
 	return nil

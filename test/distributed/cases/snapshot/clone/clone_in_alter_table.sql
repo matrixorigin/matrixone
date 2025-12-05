@@ -79,8 +79,6 @@ alter table t1 add column f int;
 update t1 set a = a + 1 where c in (8,88,888,8888,88888);
 select * from t1 where c in (8,88,888,8888,88888);
 
-set experimental_fulltext_index=1;
-set experimental_ivf_index = 1;
 set experimental_hnsw_index = 1;
 create table t2 (a bigint primary key auto_increment, b vecf32(3), c vecf32(3), d text, index ivfIdx using ivfflat(b) lists=5 op_type "vector_l2_ops", index hnswIdx using hnsw(c) op_type 'vector_l2_ops', fulltext(d));
 insert into t2(b,c,d) select CONCAT('[',FLOOR(RAND() * 9),',', FLOOR(RAND() * 9), ',', FLOOR(RAND() * 9),']'), CONCAT('[',FLOOR(RAND() * 9),',', FLOOR(RAND() * 9), ',', FLOOR(RAND() * 9),']'), * from generate_series(1, 1000)g;
@@ -91,8 +89,6 @@ select floor(max(l2_distance(b, "[1,1,1]"))) from t2;
 select floor(max(l2_distance(c, "[1,1,1]"))) from t2;
 select a,d from t2 where match(d) against('234' in boolean mode);
 
-set experimental_fulltext_index=0;
-set experimental_ivf_index = 0;
 set experimental_hnsw_index = 0;
 
 drop database test;

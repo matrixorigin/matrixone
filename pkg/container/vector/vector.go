@@ -2796,18 +2796,22 @@ func implDatetimeRowToString(v *Vector, idx int) string {
 		return "null"
 	}
 
+	var dt types.Datetime
 	if v.IsConst() {
 		if nulls.Contains(&v.nsp, 0) {
 			return "null"
 		} else {
-			return GetFixedAtNoTypeCheck[types.Datetime](v, 0).String2(v.typ.Scale)
+			dt = GetFixedAtNoTypeCheck[types.Datetime](v, 0)
+		}
+	} else {
+		if v.nsp.Contains(uint64(idx)) {
+			return "null"
+		} else {
+			dt = GetFixedAtNoTypeCheck[types.Datetime](v, idx)
 		}
 	}
-	if v.nsp.Contains(uint64(idx)) {
-		return "null"
-	} else {
-		return GetFixedAtNoTypeCheck[types.Datetime](v, idx).String2(v.typ.Scale)
-	}
+
+	return dt.String2(v.typ.Scale)
 }
 
 func implDecimalRowToString[T types.DecimalWithFormat](v *Vector, idx int) string {
