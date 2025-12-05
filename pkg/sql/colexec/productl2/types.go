@@ -39,8 +39,8 @@ type container struct {
 	rbat       *batch.Batch
 	inBat      *batch.Batch // probe batch
 	metrictype metric.MetricType
-	centers    any // *metric.VectorSet[T]
-	queries    any // *metric.VectorSet[T]
+	centers    any // *metric.VectorSetIf[T]
+	queries    any // *metric.VectorSetIf[T]
 }
 
 type Productl2 struct {

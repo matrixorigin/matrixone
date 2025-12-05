@@ -259,7 +259,7 @@ func probeRun[T types.RealNumbers](ctr *container, ap *Productl2, proc *process.
 		return err
 	}
 
-	if centers.Curr > 0 && probeset.Curr > 0 {
+	if centers.GetCurr() > 0 && probeset.GetCurr() > 0 {
 
 		keys, distances, err := metric.ExactSearch[T](centers, probeset, ctr.metrictype, 1, uint(ncpu))
 		if err != nil {
@@ -270,9 +270,11 @@ func probeRun[T types.RealNumbers](ctr *container, ap *Productl2, proc *process.
 		//os.Stderr.WriteString(fmt.Sprintf("keys %v\n", keys))
 		//os.Stderr.WriteString(fmt.Sprintf("distances %v\n", distances))
 
+		idxmap := probeset.GetIndexMap()
+
 		for j := 0; j < int(probeset.Count); j++ {
 
-			idx := probeset.Idxmap[int64(j)]
+			idx := idxmap[int64(j)]
 			if idx == -1 {
 				leastClusterIndex[j] = 0
 			} else {

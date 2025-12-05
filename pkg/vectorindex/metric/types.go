@@ -15,11 +15,9 @@
 package metric
 
 import (
-	"fmt"
 	"math"
 	"reflect"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	usearch "github.com/unum-cloud/usearch/golang"
 )
@@ -142,62 +140,4 @@ func DistanceTransformIvfflat(dist float64, origMetricType, metricType MetricTyp
 		return math.Sqrt(dist)
 	}
 	return dist
-}
-
-type VectorSet[T types.RealNumbers] struct {
-	Idxmap    map[int64]int64
-	Vector    []T // flatten vector
-	Count     uint
-	Dimension uint
-	Curr      int64
-	Elemsz    uint
-}
-
-func NewVectorSet[T types.RealNumbers](count uint, dimension uint, elemSize uint) *VectorSet[T] {
-	c := &VectorSet[T]{Count: count, Dimension: dimension, Elemsz: elemSize}
-	c.Idxmap = make(map[int64]int64, count*dimension)
-	c.Vector = make([]T, count*dimension)
-	return c
-}
-
-func (set *VectorSet[T]) SetNull(offset int64) {
-	set.Idxmap[offset] = -1
-}
-
-func (set *VectorSet[T]) AddVector(offset int64, v []T) {
-	if v == nil {
-		set.Idxmap[offset] = -1
-		return
-	}
-
-	set.Idxmap[offset] = set.Curr
-	start := set.Curr * int64(set.Dimension)
-	for i, f := range v {
-		set.Vector[start+int64(i)] = f
-	}
-	set.Curr += 1
-
-}
-
-func (set *VectorSet[T]) Reset(count uint, dimension uint, elemSize uint) {
-	newsz := count * dimension
-	if cap(set.Vector) < int(newsz) {
-		set.Vector = make([]T, count*dimension)
-	}
-	clear(set.Idxmap)
-	set.Count = count
-	set.Dimension = dimension
-	set.Curr = 0
-	set.Elemsz = elemSize
-}
-
-func GetUseachQuantizationFromType(v any) (usearch.Quantization, error) {
-	switch v.(type) {
-	case float32:
-		return usearch.F32, nil
-	case float64:
-		return usearch.F64, nil
-	default:
-		return 0, moerr.NewInternalErrorNoCtx(fmt.Sprintf("usearch not support type %T", v))
-	}
 }
