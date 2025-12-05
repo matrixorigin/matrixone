@@ -38,7 +38,6 @@ const (
 
 	// spill parameters.
 	spillNumBuckets = 32
-	spillMaskBits   = 5
 	spillMaxPass    = 3
 )
 
@@ -46,8 +45,8 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 	group.ctr.state = vm.Build
 	group.ctr.mp = mpool.MustNewNoFixed("group_mpool")
 
-	// debug, to
-	group.ctr.mp.EnableDetailRecording()
+	// debug,
+	// group.ctr.mp.EnableDetailRecording()
 
 	if group.OpAnalyzer != nil {
 		group.OpAnalyzer.Reset()

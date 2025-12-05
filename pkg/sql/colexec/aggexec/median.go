@@ -111,7 +111,7 @@ func (exec *medianColumnExecSelf[T, R]) UnmarshalFromReader(reader io.Reader, mp
 		exec.groups = make([]*Vectors[T], ngrp)
 		for i := range exec.groups {
 			exec.groups[i] = NewEmptyVectors[T]()
-			_, bs, err := types.ReadSizeBytes(reader, nil, false)
+			_, bs, err := types.ReadSizeBytes(reader)
 			if err != nil {
 				return err
 			}

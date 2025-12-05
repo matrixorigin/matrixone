@@ -361,8 +361,12 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 
 		// load group by batch from the spill bucket.
 		gbBatch.CleanOnlyData()
-		gbBatch.PreExtend(proc.Mp(), int(cnt))
-		gbBatch.UnmarshalFromReader(bkt.file, proc.Mp())
+		if err = gbBatch.PreExtend(proc.Mp(), int(cnt)); err != nil {
+			return false, err
+		}
+		if err = gbBatch.UnmarshalFromReader(bkt.file, proc.Mp()); err != nil {
+			return false, err
+		}
 
 		checkMagic, err := types.ReadUint64(bkt.file)
 		if err != nil {

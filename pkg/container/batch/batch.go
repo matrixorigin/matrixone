@@ -307,7 +307,7 @@ func (bat *Batch) UnmarshalFromReader(r io.Reader, mp *mpool.MPool) (err error) 
 	vecs := bat.Vecs
 
 	for i := 0; i < l; i++ {
-		_, bs, err := types.ReadSizeBytes(r, nil, false)
+		_, bs, err := types.ReadSizeBytes(r)
 		if err != nil {
 			return err
 		}
@@ -325,7 +325,7 @@ func (bat *Batch) UnmarshalFromReader(r io.Reader, mp *mpool.MPool) (err error) 
 	}
 
 	for i := 0; i < int(l); i++ {
-		_, bs, err := types.ReadSizeBytes(r, nil, false)
+		_, bs, err := types.ReadSizeBytes(r)
 		if err != nil {
 			return err
 		}
@@ -333,10 +333,10 @@ func (bat *Batch) UnmarshalFromReader(r io.Reader, mp *mpool.MPool) (err error) 
 	}
 
 	// ExtraBuf1
-	if _, bat.ExtraBuf1, err = types.ReadSizeBytes(r, nil, false); err != nil {
+	if _, bat.ExtraBuf1, err = types.ReadSizeBytes(r); err != nil {
 		return err
 	}
-	if _, bat.ExtraBuf2, err = types.ReadSizeBytes(r, nil, false); err != nil {
+	if _, bat.ExtraBuf2, err = types.ReadSizeBytes(r); err != nil {
 		return err
 	}
 

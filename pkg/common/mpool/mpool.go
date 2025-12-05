@@ -606,8 +606,6 @@ func (mp *MPool) allocWithDetailK(detailk string, sz int, offHeap bool) ([]byte,
 	if idx < NumFixedPool {
 		bs := mp.pools[idx].alloc(int32(requiredSpaceWithoutHeader))
 		mp.details.recordAlloc(detailk, int64(bs.allocSz))
-		if mp.details != nil {
-		}
 		return bs.ToSlice(sz, int(mp.pools[idx].eleSz)), nil
 	}
 
@@ -747,10 +745,8 @@ func roundupsize(size int) int {
 // Grow is like reAlloc, but we try to be a little bit more aggressive on growing
 // the slice.
 func (mp *MPool) growWithDetailK(detailk string, old []byte, sz int, offHeap bool) ([]byte, error) {
-	if sz < len(old) {
-		return nil, moerr.NewInternalErrorNoCtxf("mpool grow actually shrinks, %d, %d", len(old), sz)
-	}
 	if sz <= cap(old) {
+		// no need to grow, actually can be shrink.  eitherway, the old buffer is good enough.
 		return old[:sz], nil
 	}
 	newCap := calculateNewCap(cap(old), sz)

@@ -464,7 +464,7 @@ func unmarshalFromReader[T encoding.BinaryUnmarshaler](reader io.Reader, ret *op
 	if cnt != 0 {
 		res = make([]T, cnt)
 		for i := range res {
-			_, bs, err := types.ReadSizeBytes(reader, nil, false)
+			_, bs, err := types.ReadSizeBytes(reader)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -481,7 +481,7 @@ func unmarshalFromReader[T encoding.BinaryUnmarshaler](reader io.Reader, ret *op
 	if cnt > 0 {
 		extra = make([][]byte, cnt)
 		for i := range extra {
-			_, bs, err := types.ReadSizeBytes(reader, nil, false)
+			_, bs, err := types.ReadSizeBytes(reader)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -525,7 +525,7 @@ func (ag *AggFuncExecExpression) UnmarshalFromReader(r io.Reader) error {
 		return err
 	}
 	for i := int32(0); i < argLen; i++ {
-		_, bs, err := types.ReadSizeBytes(r, nil, false)
+		_, bs, err := types.ReadSizeBytes(r)
 		if err != nil {
 			return err
 		}

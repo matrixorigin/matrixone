@@ -760,26 +760,38 @@ func ReadType(r io.Reader) (Type, error) {
 	return DecodeType(buf), nil
 }
 
-func ReadSizeBytes(r io.Reader, mp *mpool.MPool, offHeap bool) (int32, []byte, error) {
+func ReadSizeBytes(r io.Reader) (int32, []byte, error) {
 	sz, err := ReadInt32(r)
 	if err != nil {
 		return 0, nil, err
 	}
 	if sz > 0 {
-		var bs []byte
-		if mp != nil {
-			bs, err = mp.Alloc(int(sz), offHeap)
-			if err != nil {
-				return 0, nil, err
-			}
-		} else {
-			bs = make([]byte, sz)
-		}
-
+		bs := make([]byte, sz)
 		if _, err := io.ReadFull(r, bs); err != nil {
 			return 0, nil, err
 		}
 		return sz, bs, nil
 	}
 	return sz, nil, nil
+}
+
+func ReadSizeBytesMp(r io.Reader, bs []byte, mp *mpool.MPool, offHeap bool) (int32, []byte, error) {
+	sz, err := ReadInt32(r)
+	if err != nil {
+		return 0, nil, err
+	}
+	if sz > 0 {
+		bs, err = mp.Grow(bs, int(sz), offHeap)
+		if err != nil {
+			return 0, nil, err
+		}
+		if _, err := io.ReadFull(r, bs); err != nil {
+			return 0, nil, err
+		}
+	} else {
+		if bs != nil {
+			bs = bs[:0]
+		}
+	}
+	return sz, bs, nil
 }

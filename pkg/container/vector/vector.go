@@ -838,7 +838,7 @@ func (v *Vector) UnmarshalWithReader(r io.Reader, mp *mpool.MPool) error {
 	}
 
 	// read data
-	dataLen, dataBuf, err := types.ReadSizeBytes(r, mp, v.offHeap)
+	dataLen, dataBuf, err := types.ReadSizeBytesMp(r, v.data, mp, v.offHeap)
 	if err != nil {
 		return err
 	}
@@ -848,7 +848,7 @@ func (v *Vector) UnmarshalWithReader(r io.Reader, mp *mpool.MPool) error {
 	}
 
 	// read area
-	areaLen, areaBuf, err := types.ReadSizeBytes(r, mp, v.offHeap)
+	areaLen, areaBuf, err := types.ReadSizeBytesMp(r, v.area, mp, v.offHeap)
 	if err != nil {
 		return err
 	}
@@ -859,7 +859,7 @@ func (v *Vector) UnmarshalWithReader(r io.Reader, mp *mpool.MPool) error {
 	// read nsp, do not use mpool.  nspBuf is different because
 	// it is not managed by vector.  In the following, it will
 	// be unmarshalled into v.nsp
-	nspLen, nspBuf, err := types.ReadSizeBytes(r, nil, false)
+	nspLen, nspBuf, err := types.ReadSizeBytes(r)
 	if err != nil {
 		return err
 	}

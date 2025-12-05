@@ -354,6 +354,7 @@ func (r *optSplitResult) marshalToBuffers(flags [][]uint8, buf *bytes.Buffer) er
 	buf.Write(types.EncodeInt64(&cnt))
 	if cnt > 0 {
 		mvec := vector.NewVec(types.T_bool.ToType())
+		defer mvec.Free(r.mp)
 		for i := range r.emptyList {
 			mvec.UnionBatch(r.emptyList[i], 0, r.emptyList[i].Length(), flags[i], r.mp)
 		}

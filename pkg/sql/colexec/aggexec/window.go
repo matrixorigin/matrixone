@@ -120,7 +120,7 @@ func (exec *singleWindowExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MP
 	if ngrp != 0 {
 		exec.groups = make([]i64Slice, ngrp)
 		for i := range exec.groups {
-			_, bs, err := types.ReadSizeBytes(reader, nil, false)
+			_, bs, err := types.ReadSizeBytes(reader)
 			if err != nil {
 				return err
 			}
