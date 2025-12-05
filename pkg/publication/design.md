@@ -1,7 +1,11 @@
 **sql**
-* snapshot diff (类似data branch diff t2{snapshot="sp2"} against t1{snapshot="sp1"};)返回metadata diff&ts->ts
+* snapshot diff 
+ objectlist [database d] [table t] snapshot sp2 [against snapshot sp1]
+返回值:db name, table name, object list
 
 * create database/table from cluster(show subscribe的结果,检查上游是否发布)
+
+* get snapshot ts
 
 * drop database/table(删除mo_sync_configs)
 
@@ -61,3 +65,5 @@ collect change scan object
 复制文件
 
 **优化alter不删表？**
+
+**检查权限**

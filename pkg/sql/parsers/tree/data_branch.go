@@ -71,6 +71,16 @@ func init() {
 		reuse.DefaultOptions[DataBranchMerge](),
 	)
 
+	reuse.CreatePool[ObjectList](
+		func() *ObjectList {
+			return &ObjectList{}
+		},
+		func(c *ObjectList) {
+			c.reset()
+		},
+		reuse.DefaultOptions[ObjectList](),
+	)
+
 }
 
 type DataBranchType int
@@ -393,4 +403,51 @@ func (s *DataBranchMerge) GetQueryType() string {
 
 func (s *DataBranchMerge) Free() {
 	reuse.Free[DataBranchMerge](s, nil)
+}
+
+type ObjectList struct {
+	statementImpl
+
+	Database        Identifier  // optional database name
+	Table           Identifier  // optional table name
+	Snapshot        Identifier  // snapshot name
+	AgainstSnapshot *Identifier // optional against snapshot name
+}
+
+func (s *ObjectList) TypeName() string {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (s *ObjectList) reset() {
+	*s = ObjectList{}
+}
+
+func NewObjectList() *ObjectList {
+	return reuse.Alloc[ObjectList](nil)
+}
+
+func (s *ObjectList) StmtKind() StmtKind {
+	return compositeResRowType
+}
+
+func (s *ObjectList) Format(ctx *FmtCtx) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (s *ObjectList) String() string {
+	return s.GetStatementType()
+}
+
+func (s *ObjectList) GetStatementType() string {
+	return "object list"
+}
+
+func (s *ObjectList) GetQueryType() string {
+	return QueryTypeOth
+}
+
+func (s *ObjectList) Free() {
+	reuse.Free[ObjectList](s, nil)
 }

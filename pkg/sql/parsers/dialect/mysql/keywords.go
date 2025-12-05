@@ -665,5 +665,6 @@ func init() {
 		"diff":                       DIFF,
 		"conflict":                   CONFLICT,
 		"output":                     OUTPUT,
+		"objectlist":                 OBJECTLIST,
 	}
 }

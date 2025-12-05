@@ -233,6 +233,7 @@ import (
     toAccountOpt *tree.ToAccountOpt
     conflictOpt *tree.ConflictOpt
     diffOutputOpt   *tree.DiffOutputOpt
+    objectList      *tree.ObjectList
     statementOption tree.StatementOption
 
     tableLock tree.TableLock
@@ -363,7 +364,7 @@ import (
 %token <str> EXTENSION
 %token <str> RETENTION PERIOD
 %token <str> CLONE BRANCH LOG REVERT REBASE DIFF
-%token <str> CONFLICT CONFLICT_FAIL CONFLICT_SKIP CONFLICT_ACCEPT OUTPUT
+%token <str> CONFLICT CONFLICT_FAIL CONFLICT_SKIP CONFLICT_ACCEPT OUTPUT OBJECTLIST
 
 // Sequence
 %token <str> INCREMENT CYCLE MINVALUE
@@ -572,6 +573,8 @@ import (
 %type <accountsSetOption> alter_publication_accounts_opt create_publication_accounts
 %type <str> alter_publication_db_name_opt
 %type <statement> branch_stmt
+%type <objectList> objectlist_opt
+%type <str> against_snapshot_opt
 %type <toAccountOpt> to_account_opt
 %type <conflictOpt> conflict_opt
 %type <diffOutputOpt> diff_output_opt
@@ -8102,6 +8105,18 @@ branch_stmt:
     	t.ConflictOpt = $7
     	$$ = t
     }
+|   OBJECTLIST objectlist_opt SNAPSHOT ident against_snapshot_opt
+    {
+    	t := tree.NewObjectList()
+    	t.Database = $2.Database
+    	t.Table = $2.Table
+    	t.Snapshot = tree.Identifier($4.Compare())
+    	if len($5) > 0 {
+    		snapshot := tree.Identifier($5)
+    		t.AgainstSnapshot = &snapshot
+    	}
+    	$$ = t
+    }
 
 diff_output_opt:
     {
@@ -8155,6 +8170,44 @@ conflict_opt:
     	$$ = &tree.ConflictOpt {
             Opt: tree.CONFLICT_ACCEPT,
     	}
+    }
+
+objectlist_opt:
+    {
+    	$$ = &tree.ObjectList{
+    		Database: "",
+    		Table: "",
+    	}
+    }
+    | DATABASE ident
+    {
+    	$$ = &tree.ObjectList{
+    		Database: tree.Identifier($2.Compare()),
+    		Table: "",
+    	}
+    }
+    | DATABASE ident TABLE ident
+    {
+    	$$ = &tree.ObjectList{
+    		Database: tree.Identifier($2.Compare()),
+    		Table: tree.Identifier($4.Compare()),
+    	}
+    }
+    | TABLE ident
+    {
+    	$$ = &tree.ObjectList{
+    		Database: "",
+    		Table: tree.Identifier($2.Compare()),
+    	}
+    }
+
+against_snapshot_opt:
+    {
+    	$$ = ""
+    }
+    | AGAINST SNAPSHOT ident
+    {
+    	$$ = $3.Compare()
     }
 
 to_account_opt:
