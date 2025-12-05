@@ -436,7 +436,8 @@ func (s *mysqlSinker2) handleCommit(ctx context.Context) error {
 	// Transition back to IDLE
 	s.txnState.Store(v2TxnStateIdle)
 
-	logutil.Info("cdc.mysql_sinker2.commit_success",
+	logutil.Debug("cdc.mysql_sinker2.commit_success",
+		zap.String("task-id", s.taskId),
 		zap.String("table", s.dbTblInfo.String()),
 		zap.Duration("commit-duration", time.Since(start)))
 
@@ -470,6 +471,7 @@ func (s *mysqlSinker2) handleRollback(ctx context.Context) error {
 	s.txnState.Store(v2TxnStateIdle)
 
 	logutil.Debug("cdc.mysql_sinker2.rollback_txn",
+		zap.String("task-id", s.taskId),
 		zap.String("table", s.dbTblInfo.String()))
 
 	return nil
@@ -506,7 +508,8 @@ func (s *mysqlSinker2) handleInsertBatch(ctx context.Context, cmd *Command) erro
 		return err
 	}
 
-	logutil.Info("cdc.mysql_sinker2.insert_batch_start",
+	logutil.Debug("cdc.mysql_sinker2.insert_batch_start",
+		zap.String("task-id", s.taskId),
 		zap.String("table", s.dbTblInfo.String()),
 		zap.Int("rows", rows),
 		zap.Int("sql-count", len(sqls)),
@@ -539,10 +542,13 @@ func (s *mysqlSinker2) handleInsertBatch(ctx context.Context, cmd *Command) erro
 		}
 	}
 
-	logutil.Info("cdc.mysql_sinker2.insert_batch_complete",
+	logutil.Debug("cdc.mysql_sinker2.insert_batch_complete",
+		zap.String("task-id", s.taskId),
 		zap.String("table", s.dbTblInfo.String()),
 		zap.Int("rows", rows),
 		zap.Int("sql-count", len(sqls)),
+		zap.String("from-ts", cmd.Meta.FromTs.ToString()),
+		zap.String("to-ts", cmd.Meta.ToTs.ToString()),
 		zap.Duration("total-duration", time.Since(start)))
 
 	return nil

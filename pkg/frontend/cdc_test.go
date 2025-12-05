@@ -3598,3 +3598,200 @@ func TestTransformIntoHours(t *testing.T) {
 		})
 	}
 }
+
+// Test logCurrentWatermarks with successful query
+func TestCDCTaskExecutor_logCurrentWatermarks_Success(t *testing.T) {
+	mockIe := &mockLogWatermarksIe{
+		hasError: false,
+		rowCount: 2,
+	}
+
+	executor := &CDCTaskExecutor{
+		ie: mockIe,
+		spec: &task.CreateCdcDetails{
+			TaskId: "test-task-id",
+			Accounts: []*task.Account{
+				{Id: 100},
+			},
+		},
+		watermarkUpdater: &cdc.CDCWatermarkUpdater{},
+	}
+
+	// Should not panic and execute without error
+	executor.logCurrentWatermarks("test_phase")
+	assert.Equal(t, 1, mockIe.queryCallCount)
+}
+
+// Test logCurrentWatermarks with query error
+func TestCDCTaskExecutor_logCurrentWatermarks_QueryError(t *testing.T) {
+	mockIe := &mockLogWatermarksIe{
+		hasError: true,
+		rowCount: 0,
+	}
+
+	executor := &CDCTaskExecutor{
+		ie: mockIe,
+		spec: &task.CreateCdcDetails{
+			TaskId: "test-task-id",
+			Accounts: []*task.Account{
+				{Id: 100},
+			},
+		},
+		watermarkUpdater: &cdc.CDCWatermarkUpdater{},
+	}
+
+	// Should handle error gracefully without panic
+	executor.logCurrentWatermarks("test_phase")
+	assert.Equal(t, 1, mockIe.queryCallCount)
+}
+
+// Test logCurrentWatermarks with nil watermarkUpdater
+func TestCDCTaskExecutor_logCurrentWatermarks_NilWatermarkUpdater(t *testing.T) {
+	mockIe := &mockLogWatermarksIe{}
+
+	executor := &CDCTaskExecutor{
+		ie: mockIe,
+		spec: &task.CreateCdcDetails{
+			TaskId: "test-task-id",
+			Accounts: []*task.Account{
+				{Id: 100},
+			},
+		},
+		watermarkUpdater: nil,
+	}
+
+	// Should return early without calling Query
+	executor.logCurrentWatermarks("test_phase")
+	assert.Equal(t, 0, mockIe.queryCallCount)
+}
+
+// Test logCurrentWatermarks with empty result
+func TestCDCTaskExecutor_logCurrentWatermarks_EmptyResult(t *testing.T) {
+	mockIe := &mockLogWatermarksIe{
+		hasError: false,
+		rowCount: 0,
+	}
+
+	executor := &CDCTaskExecutor{
+		ie: mockIe,
+		spec: &task.CreateCdcDetails{
+			TaskId: "test-task-id",
+			Accounts: []*task.Account{
+				{Id: 100},
+			},
+		},
+		watermarkUpdater: &cdc.CDCWatermarkUpdater{},
+	}
+
+	// Should handle empty result gracefully
+	executor.logCurrentWatermarks("test_phase")
+	assert.Equal(t, 1, mockIe.queryCallCount)
+}
+
+// Test Pause with watermarkUpdater ForceFlush success
+func TestCDCTaskExecutor_Pause_WithWatermarkFlushSuccess(t *testing.T) {
+	holdCh := make(chan int, 1)
+	go func() {
+		<-holdCh
+	}()
+
+	u, _ := cdc.InitCDCWatermarkUpdaterForTest(t)
+	u.Start()
+	defer u.Stop()
+
+	executor := &CDCTaskExecutor{
+		activeRoutine:    cdc.NewCdcActiveRoutine(),
+		watermarkUpdater: u,
+		cnUUID:           "test-cn",
+		runningReaders:   &sync.Map{},
+		spec: &task.CreateCdcDetails{
+			TaskId:   "task1",
+			TaskName: "task1",
+			Accounts: []*task.Account{
+				{Id: 100},
+			},
+		},
+		stateMachine: NewExecutorStateMachine(),
+		holdCh:       holdCh,
+		ie:           &mockLogWatermarksIe{hasError: false, rowCount: 1},
+	}
+
+	// Transition to Running state
+	_ = executor.stateMachine.Transition(TransitionStart)
+	_ = executor.stateMachine.Transition(TransitionStartSuccess)
+
+	err := executor.Pause()
+	assert.NoError(t, err)
+	assert.Equal(t, StatePaused, executor.stateMachine.State())
+}
+
+// Mock IE for logCurrentWatermarks tests
+type mockLogWatermarksIe struct {
+	hasError       bool
+	rowCount       uint64
+	queryCallCount int
+}
+
+func (m *mockLogWatermarksIe) Exec(ctx context.Context, s string, options ie.SessionOverrideOptions) error {
+	return nil
+}
+
+func (m *mockLogWatermarksIe) Query(ctx context.Context, s string, options ie.SessionOverrideOptions) ie.InternalExecResult {
+	m.queryCallCount++
+	return &mockLogWatermarksResult{
+		hasError: m.hasError,
+		rowCount: m.rowCount,
+	}
+}
+
+func (m *mockLogWatermarksIe) ApplySessionOverride(options ie.SessionOverrideOptions) {
+}
+
+type mockLogWatermarksResult struct {
+	hasError bool
+	rowCount uint64
+}
+
+func (r *mockLogWatermarksResult) Error() error {
+	if r.hasError {
+		return moerr.NewInternalErrorNoCtx("mock query error")
+	}
+	return nil
+}
+
+func (r *mockLogWatermarksResult) ColumnCount() uint64 {
+	return 3
+}
+
+func (r *mockLogWatermarksResult) Column(ctx context.Context, u uint64) (string, uint8, bool, error) {
+	return "", 0, false, nil
+}
+
+func (r *mockLogWatermarksResult) RowCount() uint64 {
+	return r.rowCount
+}
+
+func (r *mockLogWatermarksResult) Row(ctx context.Context, u uint64) ([]interface{}, error) {
+	return []interface{}{"db_name", "table_name", "2024-01-01 00:00:00"}, nil
+}
+
+func (r *mockLogWatermarksResult) Value(ctx context.Context, u uint64, u2 uint64) (interface{}, error) {
+	return "mock_value", nil
+}
+
+func (r *mockLogWatermarksResult) GetUint64(ctx context.Context, u uint64, u2 uint64) (uint64, error) {
+	return 0, nil
+}
+
+func (r *mockLogWatermarksResult) GetFloat64(ctx context.Context, u uint64, u2 uint64) (float64, error) {
+	return 0, nil
+}
+
+func (r *mockLogWatermarksResult) GetString(ctx context.Context, row uint64, col uint64) (string, error) {
+	if col == 0 {
+		return "test_db", nil
+	} else if col == 1 {
+		return "test_table", nil
+	}
+	return "2024-01-01 00:00:00.000000", nil
+}
