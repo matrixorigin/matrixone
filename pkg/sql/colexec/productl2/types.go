@@ -34,13 +34,14 @@ const (
 )
 
 type container struct {
-	state      int
-	bat        *batch.Batch // build batch
-	rbat       *batch.Batch
-	inBat      *batch.Batch // probe batch
-	metrictype metric.MetricType
-	centers    any // *metric.VectorSetIf[T]
-	queries    any // *metric.VectorSetIf[T]
+	state       int
+	bat         *batch.Batch // build batch
+	rbat        *batch.Batch
+	inBat       *batch.Batch // probe batch
+	metrictype  metric.MetricType
+	brute_force any // brute_force.BruteForceIndexIf[T]
+	centers     any // *metric.VectorSetIf[T]
+	queries     any // *metric.VectorSetIf[T]
 }
 
 type Productl2 struct {

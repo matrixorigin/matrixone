@@ -37,13 +37,14 @@ type GpuVectorSet[T cuvs.TensorNumberType] struct {
 
 var _ VectorSetIf[float32] = &GpuVectorSet[float32]{}
 
-func NewVectorSet[T types.RealNumbers](count uint, dimension uint, elemSize uint) *VectorSet[T] {
+func NewVectorSet[T types.RealNumbers](count uint, dimension uint, elemSize uint) VectorSetIf[T] {
 	var t T
 	switch any(t).(type) {
 	case float32:
-		c := &GpVectorSet[T]{Count: count, Dimension: dimension, Elemsz: elemSize}
+		c := &GpVectorSet[float32]{Count: count, Dimension: dimension, Elemsz: elemSize}
 		c.Idxmap = make(map[int64]int64, count*dimension)
-		c.Vector = make([][]T, count)
+		c.Vector = make([][]float32, count)
+		return c
 	default:
 		c := &VectorSet[T]{Count: count, Dimension: dimension, Elemsz: elemSize}
 		c.Idxmap = make(map[int64]int64, count*dimension)
@@ -130,23 +131,49 @@ func ExactSearch[T types.RealNumbers](_dataset, _queries VectorSetIf[T],
 	case *VectorSet:
 		return UsearchExactSearch[T](_dataset, _queries, metric, maxResults, ncpu)
 	case *GpuVectorSet:
-		return GpuExactSearch[T](_dataset, _queries, metric, maxResults, ncpu)
+		var t T
+		switch any(t).(type) {
+		case float32:
+			return GpuExactSearch[float32](_dataset, _queries, metric, maxResults, ncpu)
+		default:
+			return nil, moerr.NewInternalErrorNoCtx("Not supported type for GPU")
+		}
 	}
 }
 
-func GpuExactSearch[T types.RealNumbers](_dataset, _queries VectorSetIf[T],
+func GpuExactSearch[T cuvs.TensorNumberType](_dataset, _queries VectorSetIf[T],
 	metric MetricType,
 	maxResults uint,
 	ncpu uint) (keys []uint64, distances []float32, err error) {
-	usearch_metric := MetricTypeToUsearchMetric[metric]
 
-	quantization, err := GetUseachQuantizationFromType(T(0))
+	/*
+		usearch_metric := MetricTypeToUsearchMetric[metric]
+
+		quantization, err := GetUseachQuantizationFromType(T(0))
+		if err != nil {
+			return nil, nil, err
+		}
+	*/
+
+	resouce, _ := cuvs.NewResource(nil)
+	defer resource.Close()
+
+	dataset := _dataset.(*GpuVectorSet[T])
+	queries := _queries.(*GpuVectorSet[T])
+
+	dataset_tensor, err := cuvs.NewTensor(dataset.GetVector().([][]T))
 	if err != nil {
 		return nil, nil, err
 	}
+	defer dataset_tensor.Close()
 
-	dataset := _dataset.(*VectorSet[T])
-	queries := _queries.(*VectorSet[T])
+	queries_tensor, err := cuvs.NewTensor(queries.GetVector().([][]T))
+	if err != nil {
+		return nil, nil, err
+	}
+	defer queries_tensor.Close()
+
+	index, err := CreateIndex()
 
 	return usearch.ExactSearchUnsafe(
 		util.UnsafePointer(&(dataset.Vector[0])),

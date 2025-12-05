@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/brute_force"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -168,8 +169,15 @@ func (productl2 *Productl2) build(proc *process.Process, analyzer process.Analyz
 	switch ctr.bat.Vecs[centroidColPos].GetType().Oid {
 	case types.T_array_float32:
 		ctr.centers = getCenters[float32](productl2, proc, analyzer)
+		index := brute_force.CreateIndex[float32]()
+		index.BuildIndex(ctr.centers.(metric.VectorSetIf[float32]), ctr.metrictype)
+		ctr.brute_force = index
+
 	case types.T_array_float64:
 		ctr.centers = getCenters[float64](productl2, proc, analyzer)
+		index := brute_force.CreateIndex[float64]()
+		index.BuildIndex(ctr.centers.(metric.VectorSetIf[float64]), ctr.metrictype)
+		ctr.brute_force = index
 	}
 
 	return nil
