@@ -41,17 +41,17 @@ explain (check '["= 5"]') select * from t4 where c1 + 2 = 5;
 -- verify: ReadSize format with pipe separator, Analyze info fields, Table Scan node, and filter condition
 -- Note: ReadSize values may vary (cache state, data distribution), so we only verify format, not specific values
 -- Temporarily disabled due to timeConsumed random value issue. Re-enable after bvt tool supports regex matching for result sets.
--- @bvt:issue#23146
+-- @hint:timeConsumed=,waitTime=,inputBlocks=,inputRows=,outputRows=,InputSize=,OutputSize=,ReadSize=,MemorySize=
 explain (analyze true, check '["Table Scan", "ReadSize=", "|", "bytes", "InputSize=", "OutputSize=", "MemorySize=", "timeConsumed=", "inputRows=", "outputRows=", "= 3", "Filter Cond"]') select * from t4 where c1 + 2 = 5;
--- @bvt:issue
+
 -- @separator:table
 -- check ReadSize format (ReadSize=xx|xx|xx), filter condition, and other key fields
 -- verify: ReadSize format with pipe separator, Analyze info fields, Table Scan node, and filter condition
 -- Note: ReadSize values may vary (cache state, data distribution), so we only verify format, not specific values
 -- Temporarily disabled due to timeConsumed random value issue. Re-enable after bvt tool supports regex matching for result sets.
--- @bvt:issue#23146
+-- @hint:timeConsumed=,waitTime=,inputBlocks=,inputRows=,outputRows=,InputSize=,OutputSize=,ReadSize=,MemorySize=
 explain (analyze true, check '["Table Scan", "ReadSize=", "|", "bytes", "InputSize=", "OutputSize=", "MemorySize=", "timeConsumed=", "inputRows=", "outputRows=", "= 3", "Filter Cond"]') select * from t4 where c1 + 2 = 5;
--- @bvt:issue
+
 
 -- the following should fail
 -- @separator:table

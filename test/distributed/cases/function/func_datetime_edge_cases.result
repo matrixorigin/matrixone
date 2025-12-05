@@ -92,4 +92,5 @@ microsecond(date_add('2022-07-01 10:20:30.999999', interval 1 microsecond)),
 microsecond(date_sub('2022-07-01 10:20:30.000000', interval 1 microsecond)),
 microsecond(timestampadd(microsecond, 999999, '2022-07-01 10:20:30.000000'))
 ;
-invalid input: column microsecond does not exist
+microsecond(date_add(2022-07-01 10:20:30.999999, interval(1, microsecond)))    microsecond(date_sub(2022-07-01 10:20:30.000000, interval(1, microsecond)))    microsecond(timestampadd(microsecond, 999999, 2022-07-01 10:20:30.000000))
+0    999999    999999

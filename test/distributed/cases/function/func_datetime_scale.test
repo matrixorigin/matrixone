@@ -65,11 +65,9 @@ select
     date_add('2022-07-01 10:20:30.123456', interval 1 microsecond)
 ;
 
--- @bvt:issue#22956
-select 
+select
     timestampadd(microsecond, 1, '2022-07-01 10:20:30.123456')
 ;
--- @bvt:issue
 
 -- @teardown
 drop table if exists t_scale_storage;
