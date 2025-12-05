@@ -1067,7 +1067,7 @@ func (c *PushClient) partitionStateGCTicker(ctx context.Context, e *Engine) {
 	for {
 		select {
 		case <-ctx.Done():
-			logutil.Infof("%s GC partition_state process exit.", logTag)
+			logutil.Info("logtail.consumer.partition.state.gc.ticker.stopped")
 			return
 
 		case <-ticker.C:
@@ -1091,7 +1091,6 @@ func (c *PushClient) TryGC(ctx context.Context) {
 	if !c.subscriber.ready() {
 		return
 	}
-	logutil.Debugf("%s Running unused table GC", logTag)
 	c.doGCUnusedTable(ctx)
 }
 
@@ -1250,10 +1249,11 @@ func (c *PushClient) waitUntilSubscribingChanged(ctx context.Context, dbId, tblI
 			}
 		}
 	}
-	logutil.Errorf("%s wait for tbl[db: %d, tbl: %d] subscribing changed timeout[%s]",
-		logTag, dbId, tblId, maxTimeToCheckTableSubscribeSucceed)
-	return InvalidSubState, moerr.NewInternalErrorf(ctx, "Wait for tbl[db:%d, tbl:%d] subscribing changed timeout",
-		dbId, tblId)
+	return InvalidSubState, moerr.NewInternalErrorf(
+		ctx,
+		"wait for table subscribing changed timeout: db-id: %d, tbl-id: %d, timeout: %s",
+		dbId, tblId, maxTimeToCheckTableSubscribeSucceed,
+	)
 }
 
 func (c *PushClient) waitUntilUnsubscribingChanged(ctx context.Context, dbId, tblId uint64) (SubscribeState, error) {
@@ -1274,10 +1274,12 @@ func (c *PushClient) waitUntilUnsubscribingChanged(ctx context.Context, dbId, tb
 			}
 		}
 	}
-	logutil.Errorf("%s wait for tbl[db: %d, tbl: %d] unsubscribing changed timeout[%s]",
-		logTag, dbId, tblId, maxTimeToCheckTableUnSubscribeSucceed)
-	return InvalidSubState, moerr.NewInternalErrorf(ctx, "Wait for tbl[db:%d, tbl:%d] unsubscribing changed timeout",
-		dbId, tblId)
+
+	return InvalidSubState, moerr.NewInternalErrorf(
+		ctx,
+		"wait for table unsubscribing changed timeout: db-id: %d, tbl-id: %d, timeout: %s",
+		dbId, tblId, maxTimeToCheckTableUnSubscribeSucceed,
+	)
 }
 
 func (c *PushClient) isNotSubscribing(ctx context.Context, dbId, tblId uint64) (bool, SubscribeState, error) {
@@ -1349,8 +1351,11 @@ func (s *subscribedTable) setTableSubNotExist(dbId, tblId uint64) {
 		SubState:   SubRspTableNotExist,
 		LatestTime: time.Now(),
 	}
-	logutil.Errorf("%s received incorrect subscribe response, table[db: %d, tbl: %d] is not exist",
-		logTag, dbId, tblId)
+	logutil.Error(
+		"logtail.consumer.set.table.sub.not.exist",
+		zap.Uint64("db-id", dbId),
+		zap.Uint64("tbl-id", tblId),
+	)
 }
 
 func (s *subscribedTable) clearTable(dbId, tblId uint64) {
@@ -1367,7 +1372,11 @@ func (s *subscribedTable) setTableSubscribed(dbId, tblId uint64) {
 		SubState:   Subscribed,
 		LatestTime: time.Now(),
 	}
-	logutil.Infof("%s subscribe tbl[db: %d, tbl: %d] succeed", logTag, dbId, tblId)
+	logutil.Info(
+		"logtail.consumer.set.table.subscribed",
+		zap.Uint64("db-id", dbId),
+		zap.Uint64("tbl-id", tblId),
+	)
 }
 
 func (s *subscribedTable) setTableSubRspReceived(dbId, tblId uint64) {
@@ -1378,12 +1387,12 @@ func (s *subscribedTable) setTableSubRspReceived(dbId, tblId uint64) {
 		SubState:   SubRspReceived,
 		LatestTime: time.Now(),
 	}
-	logutil.Infof("%s %s subscribe tbl[db: %d, tbl: %d] resp received, %p",
-		s.eng.service,
-		logTag,
-		dbId,
-		tblId,
-		s,
+	logutil.Info(
+		"logtail.consumer.set.table.sub.rsp.received",
+		zap.String("service", s.eng.service),
+		zap.Uint64("db-id", dbId),
+		zap.Uint64("tbl-id", tblId),
+		zap.Any("subscribed-table", s),
 	)
 }
 
@@ -1392,7 +1401,11 @@ func (s *subscribedTable) setTableUnsubscribe(dbId, tblId uint64) {
 	defer s.mutex.Unlock()
 	s.eng.cleanMemoryTableWithTable(dbId, tblId)
 	delete(s.m, tblId)
-	logutil.Infof("%s unsubscribe tbl[db: %d, tbl: %d] succeed", logTag, dbId, tblId)
+	logutil.Info(
+		"logtail.consumer.set.table.unsubscribe",
+		zap.Uint64("db-id", dbId),
+		zap.Uint64("tbl-id", tblId),
+	)
 }
 
 // syncLogTailTimestamp is a global log tail timestamp for a cn node.
@@ -1648,7 +1661,10 @@ func waitServerReady(addr string) {
 			if address.RemoteAddressAvail(network, addr, defaultDialServerTimeout) {
 				return
 			}
-			logutil.Warnf("%s logtail server %s is not ready yet", logTag, addr)
+			logutil.Warn(
+				"logtail.consumer.wait.server.ready",
+				zap.String("addr", addr),
+			)
 
 		case <-serverFatal.C:
 			panic(fmt.Sprintf("could not connect to logtail server for %s", defaultServerTimeout))
@@ -1705,13 +1721,19 @@ func (e *Engine) InitLogTailPushModel(ctx context.Context, timestampWaiter clien
 	// try to init log tail client. if failed, retry.
 	for {
 		if err := ctx.Err(); err != nil {
-			logutil.Infof("%s mo context has done, init log tail client failed.", logTag)
+			logutil.Info(
+				"logtail.consumer.init.push.model.failed",
+				zap.Error(err),
+			)
 			return err
 		}
 
 		// get log tail service address.
 		if err := e.pClient.init(logTailServerAddr, timestampWaiter, e); err != nil {
-			logutil.Errorf("%s client init failed, err is %s", logTag, err)
+			logutil.Error(
+				"logtail.consumer.init.push.model.client.failed",
+				zap.Error(err),
+			)
 			continue
 		}
 		break
@@ -1747,8 +1769,12 @@ func dispatchSubscribeResponse(
 		defer func() {
 			tDuration := time.Since(startTime)
 			if tDuration > time.Millisecond*5 {
-				logutil.Warnf("%s consume subscribe response for tbl[dbId: %d, tblID: %d] cost %s",
-					logTag, tbl.DbId, tbl.TbId, tDuration.String())
+				logutil.Warn(
+					"logtail.consumer.slow.subscribe.response",
+					zap.Uint64("db-id", tbl.DbId),
+					zap.Uint64("tbl-id", tbl.TbId),
+					zap.Duration("cost", tDuration),
+				)
 			}
 		}()
 
@@ -1833,8 +1859,11 @@ func dispatchUnSubscribeResponse(
 	tbl := response.Table
 	notDistribute := ifShouldNotDistribute(tbl.DbId, tbl.TbId)
 	if notDistribute {
-		logutil.Errorf("%s unexpected unsubscribe response for tbl[dbId: %d, tblID: %d]",
-			logTag, tbl.DbId, tbl.TbId)
+		logutil.Error(
+			"logtail.consumer.dispatch.unsubscribe.response.unexpected",
+			zap.Uint64("db-id", tbl.DbId),
+			zap.Uint64("tbl-id", tbl.TbId),
+		)
 		return nil
 	}
 	routineIndex := tbl.TbId % consumerNumber
@@ -1862,7 +1891,11 @@ func (rc *routineController) sendSubscribeResponse(
 	receiveAt time.Time) {
 	if l := len(rc.signalChan); l > rc.warningBufferLen {
 		rc.warningBufferLen = l
-		logutil.Infof("%s consume-routine %d signalChan len is %d, maybe consume is too slow", logTag, rc.routineId, l)
+		logutil.Info(
+			"logtail.consumer.slow.consume.routine",
+			zap.Int("routine-id", rc.routineId),
+			zap.Int("signal-chan-len", l),
+		)
 	}
 
 	rc.signalChan <- &cmdToConsumeSub{log: r, receiveAt: receiveAt}
@@ -1871,7 +1904,11 @@ func (rc *routineController) sendSubscribeResponse(
 func (rc *routineController) sendTableLogTail(r logtail.TableLogtail, receiveAt time.Time) {
 	if l := len(rc.signalChan); l > rc.warningBufferLen {
 		rc.warningBufferLen = l
-		logutil.Infof("%s consume-routine %d signalChan len is %d, maybe consume is too slow", logTag, rc.routineId, l)
+		logutil.Info(
+			"logtail.consumer.slow.send.table.log.tail",
+			zap.Int("routine-id", rc.routineId),
+			zap.Int("signal-chan-len", l),
+		)
 	}
 
 	log := rc.cmdLogPool.Get().(*cmdToConsumeLog)
@@ -1885,7 +1922,11 @@ func (rc *routineController) updateTimeFromT(
 	receiveAt time.Time) {
 	if l := len(rc.signalChan); l > rc.warningBufferLen {
 		rc.warningBufferLen = l
-		logutil.Infof("%s consume-routine %d signalChan len is %d, maybe consume is too slow", logTag, rc.routineId, l)
+		logutil.Info(
+			"logtail.consumer.slow.update.time",
+			zap.Int("routine-id", rc.routineId),
+			zap.Int("signal-chan-len", l),
+		)
 	}
 
 	updateTime := rc.cmdTimePool.Get().(*cmdToUpdateTime)
@@ -1898,7 +1939,11 @@ func (rc *routineController) sendUnSubscribeResponse(r *logtail.UnSubscribeRespo
 	// debug for issue #10138.
 	if l := len(rc.signalChan); l > rc.warningBufferLen {
 		rc.warningBufferLen = l
-		logutil.Infof("%s consume-routine %d signalChan len is %d, maybe consume is too slow", logTag, rc.routineId, l)
+		logutil.Info(
+			"logtail.consumer.slow.send.unsubscribe.response",
+			zap.Int("routine-id", rc.routineId),
+			zap.Int("signal-chan-len", l),
+		)
 	}
 
 	rc.signalChan <- &cmdToConsumeUnSub{log: r, receiveAt: receiveAt}
@@ -2114,7 +2159,12 @@ func updatePartitionOfPush(
 	}
 
 	if err != nil {
-		logutil.Errorf("%s consume %d-%s log tail error: %v\n", logTag, tblId, partition.TableInfo.Name, err)
+		logutil.Error(
+			"logtail.consumer.update.partition.of.push.error",
+			zap.Uint64("tbl-id", tblId),
+			zap.String("table-name", partition.TableInfo.Name),
+			zap.Error(err),
+		)
 		return err
 	}
 
