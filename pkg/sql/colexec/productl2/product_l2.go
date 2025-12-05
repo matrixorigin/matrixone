@@ -198,7 +198,15 @@ func newMat[T types.RealNumbers](ctr *container, ap *Productl2) (*metric.VectorS
 	elemSize := uint(ctr.inBat.Vecs[tblColPos].GetType().GetArrayElementSize())
 
 	// embedding mat
-	probeset := metric.NewVectorSet[T](uint(probeCount), uint(dim), elemSize)
+	var probeset *metric.VectorSet[T]
+	if ctr.queries == nil {
+		probeset = metric.NewVectorSet[T](uint(probeCount), uint(dim), elemSize)
+		ctr.queries = probeset
+	} else {
+		probeset = ctr.queries.(*metric.VectorSet[T])
+		probeset.Reset(uint(probeCount), uint(dim), elemSize)
+	}
+
 	for j := 0; j < probeCount; j++ {
 
 		if ctr.inBat.Vecs[tblColPos].IsNull(uint64(j)) {

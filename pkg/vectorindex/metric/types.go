@@ -155,7 +155,7 @@ type VectorSet[T types.RealNumbers] struct {
 
 func NewVectorSet[T types.RealNumbers](count uint, dimension uint, elemSize uint) *VectorSet[T] {
 	c := &VectorSet[T]{Count: count, Dimension: dimension, Elemsz: elemSize}
-	c.Idxmap = make(map[int64]int64)
+	c.Idxmap = make(map[int64]int64, count*dimension)
 	c.Vector = make([]T, count*dimension)
 	return c
 }
@@ -177,6 +177,18 @@ func (set *VectorSet[T]) AddVector(offset int64, v []T) {
 	}
 	set.Curr += 1
 
+}
+
+func (set *VectorSet[T]) Reset(count uint, dimension uint, elemSize uint) {
+	newsz := count * dimension
+	if cap(set.Vector) < int(newsz) {
+		set.Vector = make([]T, count*dimension)
+	}
+	clear(set.Idxmap)
+	set.Count = count
+	set.Dimension = dimension
+	set.Curr = 0
+	set.Elemsz = elemSize
 }
 
 func GetUseachQuantizationFromType(v any) (usearch.Quantization, error) {

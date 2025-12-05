@@ -40,6 +40,7 @@ type container struct {
 	inBat      *batch.Batch // probe batch
 	metrictype metric.MetricType
 	centers    any // *metric.VectorSet[T]
+	queries    any // *metric.VectorSet[T]
 }
 
 type Productl2 struct {
