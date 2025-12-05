@@ -47,7 +47,7 @@ insert into t0 values(0,0);
 
 create snapshot sp0 for table test t0;
 
-create table t1 clone t0{snapshot="sp0"};
+data branch create table t1 from t0{snapshot="sp0"};
 insert into t1 select *,* from generate_series(1, 16384)g;
 
 update t1 set b = b+10 where a = 0;
@@ -69,7 +69,7 @@ insert into t0 values(0,0);
 
 create snapshot sp0 for table test t0;
 
-create table t1 clone t0{snapshot="sp0"};
+data branch create table t1 from t0{snapshot="sp0"};
 insert into t1 select *,* from generate_series(1, 16384)g;
 
 update t1 set b = b+10 where a = 0;
@@ -89,7 +89,7 @@ drop table t1;
 -- fake pk
 create table t1(a int, b int);
 insert into t1 select *,* from generate_series(1, 20000)g;
-create table t1_copy1 clone t1;
+data branch create table t1_copy1 from t1;
 
 update t1_copy1 set b = b+1 where a in (111, 1111, 11111);
 update t1_copy1 set b = b+1 where a in (99, 999, 9999);
@@ -102,7 +102,7 @@ data branch diff t1_copy1 against t1;
 create table t2(a int auto_increment, b int, primary key(a));
 insert into t2 select *,* from generate_series(1, 20000)g;
 
-create table t2_copy1 clone t2;
+data branch create table t2_copy1 from t2;
 
 update t2_copy1 set b = b+1 where a in (111, 1111, 11111);
 update t2_copy1 set b = b+1 where a in (99, 999, 9999);

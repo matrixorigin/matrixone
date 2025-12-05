@@ -12,8 +12,8 @@ insert into orders_eu_source values(101, 'B201', 3,  45.00, '2024-03-04', '2024-
 
 create snapshot sp_orders_base for table test_mixed_diff orders_eu_source;
 
-create table orders_branch_x clone orders_eu_source{snapshot='sp_orders_base'};
-create table orders_branch_y clone orders_eu_source{snapshot='sp_orders_base'};
+data branch create table orders_branch_x from orders_eu_source{snapshot='sp_orders_base'};
+data branch create table orders_branch_y from orders_eu_source{snapshot='sp_orders_base'};
 
 -- branch X adds a new tenant record and updates timestamps
 update orders_branch_x
@@ -51,8 +51,8 @@ insert into sku_inventory values('SKU003', 1, 6,  7.125, 1,  x'0F0F0F0F');
 
 create snapshot sp_sku_base for table test_mixed_diff sku_inventory;
 
-create table sku_branch_a clone sku_inventory{snapshot='sp_sku_base'};
-create table sku_branch_b clone sku_inventory{snapshot='sp_sku_base'};
+data branch create table sku_branch_a from sku_inventory{snapshot='sp_sku_base'};
+data branch create table sku_branch_b from sku_inventory{snapshot='sp_sku_base'};
 
 -- branch A simulates a recall and binary hash rotation
 update sku_branch_a
@@ -95,8 +95,8 @@ insert into sensor_events values('2024-03-10 09:10:00', 'south', 21.5, 'A', 'ste
 
 create snapshot sp_sensor_base for table test_mixed_diff sensor_events;
 
-create table sensor_branch_live clone sensor_events{snapshot='sp_sensor_base'};
-create table sensor_branch_model clone sensor_events{snapshot='sp_sensor_base'};
+data branch create table sensor_branch_live from sensor_events{snapshot='sp_sensor_base'};
+data branch create table sensor_branch_model from sensor_events{snapshot='sp_sensor_base'};
 
 -- live branch filters out noisy read and adjusts quality grades
 update sensor_branch_live

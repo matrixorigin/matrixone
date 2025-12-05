@@ -42,10 +42,10 @@ drop table t2;
 create table t0 (a int, b int, primary key(a));
 insert into t0 values (1,1),(2,2),(3,3);
 
-create table t1 clone t0;
+data branch create table t1 from t0;
 insert into t1 values(4,4);
 
-create table t2 clone t0;
+data branch create table t2 from t0;
 insert into t2 values(5,5);
 
 data branch diff t2 against t1;
@@ -62,7 +62,7 @@ drop table t2;
 create table t1(a int, b int, primary key(a));
 insert into t1 values(1,1),(2,2);
 
-create table t2 clone t1;
+data branch create table t2 from t1;
 insert into t2 values(3,3),(4,4);
 
 data branch diff t2 against t1;
@@ -77,7 +77,7 @@ drop table t2;
 create table t1(a int, b int, primary key(a));
 insert into t1 values(1,1),(2,2);
 
-create table t2 clone t1;
+data branch create table t2 from t1;
 insert into t2 values(3,3),(4,4);
 update t2 set b = b + 1 where a in (1,3);
 
@@ -94,7 +94,7 @@ drop table t2;
 create table t2 (a int, b int, primary key(a));
 insert into t2 values(1,1),(2,2);
 
-create table t1 clone t2;
+data branch create table t1 from t2;
 insert into t1 values(3,3),(4,4);
 
 data branch diff t2 against t1;
@@ -109,7 +109,7 @@ drop table t2;
 create table t2 (a int, b int, primary key(a));
 insert into t2 values(1,1),(2,2);
 
-create table t1 clone t2;
+data branch create table t1 from t2;
 insert into t1 values(3,3),(4,4);
 
 insert into t2 values (5,5);

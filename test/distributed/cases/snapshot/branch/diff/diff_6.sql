@@ -1,3 +1,7 @@
+drop account if exists acc1;
+create account acc1 admin_name "root1" identified by "111";
+
+-- @session:id=1&user=acc1:root1&password=111
 drop database if exists test_null_diff;
 create database test_null_diff;
 use test_null_diff;
@@ -148,3 +152,6 @@ drop table position_branch_model;
 drop table instrument_positions;
 
 drop database test_null_diff;
+
+-- @session
+drop account acc1;
