@@ -1673,41 +1673,28 @@ func waitServerReady(addr string) {
 }
 
 func (e *Engine) getLogTailServiceAddr() string {
-	getFn := func() string {
-		tnServices := e.GetTNServices()
-		if len(tnServices) != 0 {
-			return tnServices[0].LogTailServiceAddress
-		}
-		return ""
-	}
-
-	var addr string
-	logutil.Infof("%s try to get logtail service address", logTag)
-	addr = getFn()
-	if len(addr) > 0 {
-		logutil.Infof("%s got logtail service address: %s",
-			logTag, addr)
-		return addr
-	}
-	logutil.Warnf("%s cannot get logtail service address", logTag)
-
+	start := time.Now()
 	timeout := time.NewTimer(defaultGetLogTailAddrTimeoutDuration)
 	defer timeout.Stop()
 	ticker := time.NewTicker(time.Millisecond * 20)
 	defer ticker.Stop()
+
 	for {
+		tnServices := e.GetTNServices()
+		if len(tnServices) > 0 && tnServices[0].LogTailServiceAddress != "" {
+			addr := tnServices[0].LogTailServiceAddress
+			logutil.Info("logtail.consumer.get.logtail.service.addr",
+				zap.String("addr", addr),
+				zap.Duration("cost", time.Since(start)),
+			)
+			return addr
+		}
+
 		select {
 		case <-timeout.C:
 			panic(fmt.Sprintf("cannot get logtail service address, timeout %s",
 				defaultGetLogTailAddrTimeoutDuration))
-
 		case <-ticker.C:
-			addr = getFn()
-			logutil.Infof("%s got logtail service address: %s",
-				logTag, addr)
-			if len(addr) > 0 {
-				return addr
-			}
 		}
 	}
 }
