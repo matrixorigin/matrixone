@@ -414,13 +414,13 @@ ORDER BY dist LIMIT 3;
 (SELECT id, category, status, l2_distance(vec, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]') AS dist 
  FROM vec_with_composite_idx 
  WHERE category = 'A' AND status = 1
- ORDER BY l2_distance(vec, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]') 
+ ORDER BY id, l2_distance(vec, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]') 
  LIMIT 1 by rank with option 'mode=pre')
 UNION
 (SELECT id, category, status, l2_distance(vec, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]') AS dist 
  FROM vec_with_composite_idx 
  WHERE category = 'B'
- ORDER BY l2_distance(vec, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]') 
+ ORDER BY id, l2_distance(vec, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]') 
  LIMIT 2 by rank with option 'mode=pre')
 ORDER BY dist LIMIT 3;
 
