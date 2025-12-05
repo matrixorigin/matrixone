@@ -22,10 +22,8 @@ SELECT TIMEDIFF('2000-01-01 15:30:45', '2000-01-01 10:20:30') AS datetime_diff;
 SELECT TIMEDIFF('2000-01-01 00:00:00', '2000-01-01 00:00:00') AS datetime_zero;
 
 # Mixed formats
--- @bvt:issue#22985
 SELECT TIMEDIFF('2000-01-01 15:30:45', '15:30:45') AS mixed_format1;
 SELECT TIMEDIFF('15:30:45', '2000-01-01 15:30:45') AS mixed_format2;
--- @bvt:issue
 
 # With microseconds
 SELECT TIMEDIFF('2000-01-01 00:00:00.500000', '2000-01-01 00:00:00.200000') AS with_microseconds;

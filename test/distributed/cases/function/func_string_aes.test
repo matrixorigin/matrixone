@@ -43,9 +43,7 @@ SELECT * FROM t1 WHERE AES_DECRYPT(AES_ENCRYPT(plaintext, key_str), key_str) = '
 DROP TABLE t1;
 
 # Multiple AES operations
--- @bvt:issue#23019
 SELECT AES_ENCRYPT('text1', 'key1') AS enc1, AES_ENCRYPT('text2', 'key2') AS enc2, AES_ENCRYPT('text3', 'key3') AS enc3;
--- @bvt:issue
 
 # Round-trip test with different data types
 SELECT AES_DECRYPT(AES_ENCRYPT('12345', 'numeric'), 'numeric') AS numeric_string;
