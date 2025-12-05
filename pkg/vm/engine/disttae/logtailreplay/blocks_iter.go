@@ -16,10 +16,9 @@ package logtailreplay
 
 import (
 	"bytes"
-	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/tidwall/btree"
 )
@@ -125,10 +124,10 @@ func (p *PartitionState) NewObjectsIter(
 	visitTombstone bool,
 ) (objectio.ObjectIter, error) {
 	if !p.IsEmpty() && snapshot.LT(&p.start) {
-		logutil.Infof("NewObjectsIter: tid:%v, ps:%p, snapshot ts:%s, minTS:%s",
-			p.tid, p, snapshot.ToString(), p.start.ToString())
-		msg := fmt.Sprintf("(%s<%s)", snapshot.ToString(), p.start.ToString())
-		return nil, moerr.NewTxnStaleNoCtx(msg)
+		return nil, moerr.NewTxnStaleNoCtxf(
+			"(%s<%s)",
+			snapshot.ToString(), p.start.ToString(),
+		)
 	}
 
 	if visitTombstone {
