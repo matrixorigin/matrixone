@@ -55,7 +55,7 @@ INSERT INTO t1 VALUES (3, '2001:db8::1', UNHEX('20010DB8000000000000000000000001
 INSERT INTO t1 VALUES (4, NULL, NULL);
 
 SELECT id, ip_str, HEX(INET6_ATON(ip_str)) AS converted FROM t1;
-SELECT id, ip_bin, INET6_NTOA(ip_bin) AS converted FROM t1;
+SELECT id, HEX(ip_bin) AS ip_bin_hex, INET6_NTOA(ip_bin) AS converted FROM t1;
 DROP TABLE t1;
 
 # WHERE clause
