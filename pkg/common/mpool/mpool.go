@@ -276,9 +276,10 @@ func newMpoolDetails() *mpoolDetails {
 	return &mpd
 }
 
-func (d *mpoolDetails) recordAlloc(nb int64) {
-	f := stack.Caller(2)
-	k := fmt.Sprintf("%v", f)
+func (d *mpoolDetails) recordAlloc(k string, nb int64) {
+	if d == nil {
+		return
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -288,9 +289,10 @@ func (d *mpoolDetails) recordAlloc(nb int64) {
 	d.alloc[k] = info
 }
 
-func (d *mpoolDetails) recordFree(nb int64) {
-	f := stack.Caller(2)
-	k := fmt.Sprintf("%v", f)
+func (d *mpoolDetails) recordFree(k string, nb int64) {
+	if d == nil {
+		return
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -364,6 +366,15 @@ func (mp *MPool) EnableDetailRecording() {
 
 func (mp *MPool) DisableDetailRecording() {
 	mp.details = nil
+}
+
+func (mp *MPool) getDetailK() string {
+	if mp == nil || mp.details == nil {
+		return ""
+	}
+	f := stack.Caller(2)
+	k := fmt.Sprintf("%v:%n", f, f)
+	return k
 }
 
 func (mp *MPool) Stats() *MPoolStats {
@@ -546,8 +557,12 @@ func sizeToIdx(size int) int {
 var CapLimit = math.MaxInt32 // 2GB - 1
 
 func (mp *MPool) Alloc(sz int, offHeap bool) ([]byte, error) {
-	// reject unexpected alloc size.
+	detailk := mp.getDetailK()
+	return mp.allocWithDetailK(detailk, sz, offHeap)
+}
 
+func (mp *MPool) allocWithDetailK(detailk string, sz int, offHeap bool) ([]byte, error) {
+	// reject unexpected alloc size.
 	if sz < 0 || sz > CapLimit {
 		logutil.Errorf("mpool memory allocation exceed limit with requested size %d: %s", sz, string(debug.Stack()))
 		return nil, moerr.NewInternalErrorNoCtxf("mpool memory allocation exceed limit with requested size %d", sz)
@@ -590,16 +605,16 @@ func (mp *MPool) Alloc(sz int, offHeap bool) ([]byte, error) {
 	// from fixed pool
 	if idx < NumFixedPool {
 		bs := mp.pools[idx].alloc(int32(requiredSpaceWithoutHeader))
+		mp.details.recordAlloc(detailk, int64(bs.allocSz))
 		if mp.details != nil {
-			mp.details.recordAlloc(int64(bs.allocSz))
 		}
 		return bs.ToSlice(sz, int(mp.pools[idx].eleSz)), nil
 	}
 
-	return mp.alloc(sz, requiredSpaceWithoutHeader, offHeap), nil
+	return mp.alloc(detailk, sz, requiredSpaceWithoutHeader, offHeap), nil
 }
 
-func (mp *MPool) alloc(sz int, requiredSpaceWithoutHeader int, offHeap bool) []byte {
+func (mp *MPool) alloc(detailk string, sz int, requiredSpaceWithoutHeader int, offHeap bool) []byte {
 	allocateSize := requiredSpaceWithoutHeader + kMemHdrSz
 	var bs []byte
 	var err error
@@ -619,22 +634,27 @@ func (mp *MPool) alloc(sz int, requiredSpaceWithoutHeader int, offHeap bool) []b
 	pHdr.allocSz = int32(sz)
 	pHdr.SetGuard()
 	if mp.details != nil {
-		mp.details.recordAlloc(int64(pHdr.allocSz))
+		mp.details.recordAlloc(detailk, int64(pHdr.allocSz))
 	}
 	pHdr.offHeap = offHeap
 	return pHdr.ToSlice(sz, requiredSpaceWithoutHeader)
 }
 
 func (mp *MPool) Free(bs []byte) {
+	detailk := mp.getDetailK()
+	mp.freeWithDetailK(detailk, bs)
+}
+
+func (mp *MPool) freeWithDetailK(detailk string, bs []byte) {
 	if bs == nil || cap(bs) == 0 {
 		return
 	}
 	bs = bs[:1]
 	ptr := unsafe.Pointer(&bs[0])
-	mp.freePtr(ptr)
+	mp.freePtr(detailk, ptr)
 }
 
-func (mp *MPool) freePtr(ptr unsafe.Pointer) {
+func (mp *MPool) freePtr(detailk string, ptr unsafe.Pointer) {
 	hdr := unsafe.Add(ptr, -kMemHdrSz)
 	pHdr := (*memHdr)(hdr)
 
@@ -652,7 +672,7 @@ func (mp *MPool) freePtr(ptr unsafe.Pointer) {
 		if !ok {
 			panic(moerr.NewInternalErrorNoCtxf("invalid mpool id %d", pHdr.poolId))
 		}
-		(otherPool.(*MPool)).freePtr(ptr)
+		(otherPool.(*MPool)).freePtr(detailk, ptr)
 		return
 	}
 
@@ -667,7 +687,7 @@ func (mp *MPool) freePtr(ptr unsafe.Pointer) {
 	mp.stats.RecordFree(mp.tag, recordSize)
 	globalStats.RecordFree("global", recordSize)
 	if mp.details != nil {
-		mp.details.recordFree(int64(pHdr.allocSz))
+		mp.details.recordFree(detailk, int64(pHdr.allocSz))
 	}
 
 	// free from fixed pool
@@ -684,16 +704,16 @@ func (mp *MPool) freePtr(ptr unsafe.Pointer) {
 	}
 }
 
-func (mp *MPool) reAlloc(old []byte, sz int, offHeap bool) ([]byte, error) {
+func (mp *MPool) reAllocWithDetailK(detailk string, old []byte, sz int, offHeap bool) ([]byte, error) {
 	if sz <= cap(old) {
 		return old[:sz], nil
 	}
-	ret, err := mp.Alloc(sz, offHeap)
+	ret, err := mp.allocWithDetailK(detailk, sz, offHeap)
 	if err != nil {
 		return nil, err
 	}
 	copy(ret, old)
-	mp.Free(old)
+	mp.freeWithDetailK(detailk, old)
 	return ret, nil
 }
 
@@ -726,7 +746,7 @@ func roundupsize(size int) int {
 
 // Grow is like reAlloc, but we try to be a little bit more aggressive on growing
 // the slice.
-func (mp *MPool) Grow(old []byte, sz int, offHeap bool) ([]byte, error) {
+func (mp *MPool) growWithDetailK(detailk string, old []byte, sz int, offHeap bool) ([]byte, error) {
 	if sz < len(old) {
 		return nil, moerr.NewInternalErrorNoCtxf("mpool grow actually shrinks, %d, %d", len(old), sz)
 	}
@@ -735,11 +755,16 @@ func (mp *MPool) Grow(old []byte, sz int, offHeap bool) ([]byte, error) {
 	}
 	newCap := calculateNewCap(cap(old), sz)
 
-	ret, err := mp.reAlloc(old, newCap, offHeap)
+	ret, err := mp.reAllocWithDetailK(detailk, old, newCap, offHeap)
 	if err != nil {
 		return old, err
 	}
 	return ret[:sz], nil
+}
+
+func (mp *MPool) Grow(old []byte, sz int, offHeap bool) ([]byte, error) {
+	detailk := mp.getDetailK()
+	return mp.growWithDetailK(detailk, old, sz, offHeap)
 }
 
 // copy-paste from go slice grow strategy.
@@ -749,7 +774,8 @@ func calculateNewCap(oldCap int, requiredSize int) int {
 	if requiredSize > doublecap {
 		newcap = requiredSize
 	} else {
-		const threshold = 256
+		// performance: use a larger threshold (256 -> 4096)
+		const threshold = 4096
 		if newcap < threshold {
 			newcap = doublecap
 		} else {
@@ -774,7 +800,8 @@ func (mp *MPool) Grow2(old []byte, old2 []byte, sz int, offHeap bool) ([]byte, e
 	if sz < len1+len2 {
 		return nil, moerr.NewInternalErrorNoCtxf("mpool grow2 actually shrinks, %d+%d, %d", len1, len2, sz)
 	}
-	ret, err := mp.Grow(old, sz, offHeap)
+	detailk := mp.getDetailK()
+	ret, err := mp.growWithDetailK(detailk, old, sz, offHeap)
 	if err != nil {
 		return nil, err
 	}
@@ -783,10 +810,10 @@ func (mp *MPool) Grow2(old []byte, old2 []byte, sz int, offHeap bool) ([]byte, e
 	return ret, nil
 }
 
-func MakeSliceWithCap[T any](n, cap int, mp *MPool, offHeap bool) ([]T, error) {
+func makeSliceWithCapWithDetailK[T any](detailk string, n, cap int, mp *MPool, offHeap bool) ([]T, error) {
 	var t T
 	tsz := unsafe.Sizeof(t)
-	bs, err := mp.Alloc(int(tsz)*cap, offHeap)
+	bs, err := mp.allocWithDetailK(detailk, int(tsz)*cap, offHeap)
 	if err != nil {
 		return nil, err
 	}
@@ -797,11 +824,13 @@ func MakeSliceWithCap[T any](n, cap int, mp *MPool, offHeap bool) ([]T, error) {
 }
 
 func MakeSlice[T any](n int, mp *MPool, offHeap bool) ([]T, error) {
-	return MakeSliceWithCap[T](n, n, mp, offHeap)
+	detailk := mp.getDetailK()
+	return makeSliceWithCapWithDetailK[T](detailk, n, n, mp, offHeap)
 }
 
 func MakeSliceArgs[T any](mp *MPool, offHeap bool, args ...T) ([]T, error) {
-	ret, err := MakeSlice[T](len(args), mp, offHeap)
+	detailk := mp.getDetailK()
+	ret, err := makeSliceWithCapWithDetailK[T](detailk, len(args), len(args), mp, offHeap)
 	if err != nil {
 		return ret, err
 	}
@@ -813,7 +842,8 @@ func FreeSlice[T any](mp *MPool, bs []T) {
 	if cap(bs) == 0 {
 		return
 	}
-	mp.freePtr(unsafe.Pointer(&bs[0]))
+	detailk := mp.getDetailK()
+	mp.freePtr(detailk, unsafe.Pointer(&bs[0]))
 }
 
 // Report memory usage in json.
