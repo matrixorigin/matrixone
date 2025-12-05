@@ -1,0 +1,48 @@
+create database if not exists cte01;
+use cte01;
+DROP TABLE IF EXISTS temp_txn_nested_2372;
+CREATE TABLE temp_txn_nested_2372 (
+id BIGINT PRIMARY KEY,
+company_id BIGINT,
+status VARCHAR(20)
+);
+INSERT INTO temp_txn_nested_2372
+VALUES
+(1, 100, 'OK'),
+(2, 100, 'OK'),
+(3, 101, 'FAIL'),
+(4, 102, NULL),
+(5, 103, 'OK');
+START TRANSACTION;
+WITH ordered AS (
+SELECT id
+FROM temp_txn_nested_2372
+WHERE status IS NOT NULL
+ORDER BY id
+LIMIT 3
+)
+SELECT id
+FROM temp_txn_nested_2372
+WHERE id IN (SELECT id FROM ordered) FOR UPDATE;
+internal error: not support subquery for update
+ROLLBACK;
+START TRANSACTION;
+SELECT id
+FROM temp_txn_nested_2372
+WHERE status = 'OK'
+FOR UPDATE;
+id
+1
+2
+5
+ROLLBACK;
+WITH filtered AS (
+SELECT id, company_id FROM temp_txn_nested_2372 WHERE status IS NOT NULL
+)
+SELECT * FROM filtered ORDER BY id;
+id    company_id
+1    100
+2    100
+3    101
+5    103
+drop database cte01;
