@@ -1020,6 +1020,7 @@ select * from dense_rank01;
 id    sex
 5    m
 drop database test11_table;
+drop account acc04;
 drop snapshot sp09;
 drop snapshot sp10;
 drop snapshot sp11;

@@ -47,6 +47,7 @@ show pitr;
 
 --sys to normal account level success
 drop account if exists acc01;
+drop account if exists acc02;
 create account acc01 admin_name = 'test_account' identified by '111';
 drop pitr if exists pitr14;
 create pitr pitr14 for account acc01 range 1 'h';

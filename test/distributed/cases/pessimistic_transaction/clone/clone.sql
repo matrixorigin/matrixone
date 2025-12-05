@@ -525,6 +525,7 @@ use test11_table;
 select * from dense_rank01;
 drop database test11_table;
 -- @session
+drop account acc04;
 drop snapshot sp09;
 drop snapshot sp10;
 drop snapshot sp11;
