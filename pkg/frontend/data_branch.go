@@ -678,7 +678,7 @@ func diffMergeAgency(
 	}
 
 	if dagInfo, err = decideLCABranchTSFromBranchDAG(
-		ctx, ses, tblStuff.tarRel, tblStuff.baseRel,
+		ctx, ses, bh, tblStuff.tarRel, tblStuff.baseRel,
 	); err != nil {
 		return
 	}
@@ -4250,6 +4250,7 @@ func getTablesCreationCommitTS(
 func decideLCABranchTSFromBranchDAG(
 	ctx context.Context,
 	ses *Session,
+	bh BackgroundExec,
 	tarRel engine.Relation,
 	baseRel engine.Relation,
 ) (
@@ -4279,7 +4280,7 @@ func decideLCABranchTSFromBranchDAG(
 		}
 	}()
 
-	if dag, err = constructBranchDAG(ctx, ses); err != nil {
+	if dag, err = constructBranchDAG(ctx, ses, bh); err != nil {
 		return
 	}
 
@@ -4323,6 +4324,7 @@ func decideLCABranchTSFromBranchDAG(
 func constructBranchDAG(
 	ctx context.Context,
 	ses *Session,
+	bh BackgroundExec,
 ) (dag *databranchutils.DataBranchDAG, err error) {
 
 	var (
@@ -4341,9 +4343,10 @@ func constructBranchDAG(
 		sqlRet.Close()
 	}()
 
-	if sqlRet, err = sqlexec.RunSql(
-		sqlexec.NewSqlProcess(ses.proc),
+	if sqlRet, err = runSql(
+		sysCtx, ses, bh,
 		fmt.Sprintf(scanBranchMetadataSql, catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA),
+		nil, nil,
 	); err != nil {
 		return
 	}
