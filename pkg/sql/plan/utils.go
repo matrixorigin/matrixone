@@ -1116,6 +1116,14 @@ func ExprIsZonemappable(ctx context.Context, expr *plan.Expr) bool {
 		}
 
 		return true
+
+	case *plan.Expr_Col:
+		// Array types don't support zonemapping
+		if expr.Typ.Id == int32(types.T_array_float32) || expr.Typ.Id == int32(types.T_array_float64) {
+			return false
+		}
+		return true
+
 	default:
 		return true
 	}
