@@ -912,7 +912,9 @@ func NewConstraintViolation(ctx context.Context, msg string) *Error {
 
 func NewUnsupportedDML(ctx context.Context, msg string, args ...any) *Error {
 	xmsg := fmt.Sprintf(msg, args...)
-	return newError(ctx, ErrUnsupportedDML, xmsg)
+	// Use ContextWithNoReport to prevent logging, but still carry runtime info in error message
+	noReportCtx := errutil.ContextWithNoReport(ctx, true)
+	return newError(noReportCtx, ErrUnsupportedDML, xmsg)
 }
 
 func NewEmptyVector(ctx context.Context) *Error {
