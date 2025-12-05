@@ -732,7 +732,7 @@ func TestQueryBuilder_bindLimit(t *testing.T) {
 	stmts, _ := parsers.Parse(context.TODO(), dialect.MYSQL, "select a from select_test.bind_select limit 1, 5", 1)
 	astLimit := stmts[0].(*tree.Select).Limit
 
-	boundOffsetExpr, boundCountExpr, _, err := builder.bindLimit(bindCtx, astLimit)
+	boundOffsetExpr, boundCountExpr, _, err := builder.bindLimit(bindCtx, astLimit, nil)
 	require.NoError(t, err)
 	require.Equal(t, int32(types.T_uint64), boundOffsetExpr.Typ.Id)
 	offsetExpr, ok := boundOffsetExpr.Expr.(*plan.Expr_Lit)
@@ -1210,8 +1210,18 @@ func TestParseRankOption(t *testing.T) {
 		rankOption, err := parseRankOption(options, ctx)
 		require.Error(t, err)
 		require.Nil(t, rankOption)
-		require.Contains(t, err.Error(), "mode must be 'pre' or 'post'")
+		require.Contains(t, err.Error(), "mode must be 'pre', 'post', or 'force'")
 		require.Contains(t, err.Error(), "invalid")
+	})
+
+	t.Run("valid mode force", func(t *testing.T) {
+		options := map[string]string{
+			"mode": "force",
+		}
+		rankOption, err := parseRankOption(options, ctx)
+		require.NoError(t, err)
+		require.NotNil(t, rankOption)
+		require.Equal(t, "force", rankOption.Mode)
 	})
 
 	t.Run("empty options map", func(t *testing.T) {
