@@ -130,32 +130,6 @@ type branchHashmap struct {
 	closed bool
 }
 
-const branchHashSeed uint64 = 0x9e3779b97f4a7c15
-
-type preparedEntry struct {
-	key   []byte
-	value []byte
-}
-
-type entryBlock struct {
-	deallocator malloc.Deallocator
-	remaining   int
-}
-
-func (eb *entryBlock) release() {
-	if eb == nil {
-		return
-	}
-	if eb.remaining <= 0 {
-		return
-	}
-	eb.remaining--
-	if eb.remaining == 0 && eb.deallocator != nil {
-		eb.deallocator.Deallocate()
-		eb.deallocator = nil
-	}
-}
-
 // BranchHashmapOption configures a branchHashmap instance.
 type BranchHashmapOption func(*branchHashmap)
 
@@ -1543,7 +1517,7 @@ func (eb *entryBlock) release() {
 		}
 		if eb.remaining.CompareAndSwap(cur, cur-1) {
 			if cur-1 == 0 && eb.deallocator != nil {
-				eb.deallocator.Deallocate(malloc.NoHints)
+				eb.deallocator.Deallocate()
 				eb.deallocator = nil
 			}
 			return

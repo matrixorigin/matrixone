@@ -257,7 +257,7 @@ func makeGroupConcat(
 }
 
 func makeJsonArrayAgg(
-	mg AggMemoryManager,
+	mp *mpool.MPool,
 	aggID int64, isDistinct bool,
 	param []types.Type) (AggFuncExec, error) {
 	if len(param) != 1 {
@@ -270,11 +270,11 @@ func makeJsonArrayAgg(
 		retType:   types.T_json.ToType(),
 		emptyNull: true,
 	}
-	return newJsonArrayAggExec(mg, info), nil
+	return newJsonArrayAggExec(mp, info), nil
 }
 
 func makeJsonObjectAgg(
-	mg AggMemoryManager,
+	mp *mpool.MPool,
 	aggID int64, isDistinct bool,
 	param []types.Type) (AggFuncExec, error) {
 	if len(param) != 2 {
@@ -287,7 +287,7 @@ func makeJsonObjectAgg(
 		retType:   types.T_json.ToType(),
 		emptyNull: true,
 	}
-	return newJsonObjectAggExec(mg, info), nil
+	return newJsonObjectAggExec(mp, info), nil
 }
 
 func makeCount(
