@@ -340,6 +340,8 @@ func (r *optSplitResult) unmarshalFromBytes(resultData, emptyData, distinctData 
 
 func (r *optSplitResult) marshalToBuffers(flags [][]uint8, buf *bytes.Buffer) error {
 	rvec := vector.NewVec(r.resultType)
+	defer rvec.Free(r.mp)
+
 	for i := range r.resultList {
 		rvec.UnionBatch(r.resultList[i], 0, r.resultList[i].Length(), flags[i], r.mp)
 	}

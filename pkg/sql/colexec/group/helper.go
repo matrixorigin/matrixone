@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/cespare/xxhash/v2"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -173,6 +174,13 @@ func countNonZeroAndFindKth(values []uint8, k int) (count int, kth int) {
 	return count, kth
 }
 
+func (ctr *container) computeBucketIndex(hashCodes []uint64, myLv uint64) {
+	for i := range hashCodes {
+		x := hashCodes[i] + myLv
+		hashCodes[i] = xxhash.Sum64(types.EncodeUint64(&x)) & (spillNumBuckets - 1)
+	}
+}
+
 func (ctr *container) spillDataToDisk(proc *process.Process, parentBkt *spillBucket) error {
 	var parentLv int
 	if parentBkt != nil {
@@ -229,9 +237,9 @@ func (ctr *container) spillDataToDisk(proc *process.Process, parentBkt *spillBuc
 
 	// compute spill bucket.
 	hashCodes := ctr.hr.Hash.AllGroupHash()
-	for i, hashCode := range hashCodes {
-		hashCodes[i] = (hashCode >> (64 - spillMaskBits*uint64(myLv))) & (spillNumBuckets - 1)
-	}
+	// our hash code from Hash is NOT random, esp, int32/uint32 will hash to a 32 bit value,
+	// bummer.
+	ctr.computeBucketIndex(hashCodes, uint64(myLv))
 
 	// tmp batch and buffer to write.   it is OK to pass in a nil vec, as
 	// ctr.groupByTypes is already initialized.
@@ -517,20 +525,8 @@ func (ctr *container) outputOneBatchFinal(proc *process.Process, opAnalyzer proc
 }
 
 func (ctr *container) memUsed() int64 {
-	var memUsed int64
-
-	// group by
-	for _, b := range ctr.groupByBatches {
-		memUsed += int64(b.Size())
-	}
-	// times 2, so that roughly we have the hashtable size.
-	memUsed *= 2
-
-	// aggs
-	for _, ag := range ctr.aggList {
-		memUsed += ag.Size()
-	}
-	return memUsed
+	sz := ctr.mp.CurrNB()
+	return sz
 }
 
 func (ctr *container) needSpill(opAnalyzer process.Analyzer) bool {
