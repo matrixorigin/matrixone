@@ -18,7 +18,9 @@ import (
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	usearch "github.com/unum-cloud/usearch/golang"
 	"gonum.org/v1/gonum/blas/blas32"
 	"gonum.org/v1/gonum/blas/blas64"
 )
@@ -305,4 +307,30 @@ func ResolveDistanceFn[T types.RealNumbers](metric MetricType) (DistanceFunction
 		return nil, moerr.NewInternalErrorNoCtx("invalid distance type")
 	}
 	return distanceFunction, nil
+}
+
+func ExactSearch[T types.RealNumbers](dataset, queries *VectorSet[T],
+	metric MetricType,
+	maxResults uint,
+	ncpu uint) (keys []uint64, distances []float32, err error) {
+
+	usearch_metric := MetricTypeToUsearchMetric[metric]
+
+	quantization, err := GetUseachQuantizationFromType(T(0))
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return usearch.ExactSearchUnsafe(
+		util.UnsafePointer(&(dataset.Vector[0])),
+		util.UnsafePointer(&(queries.Vector[0])),
+		uint(dataset.Curr),
+		uint(queries.Curr),
+		dataset.Dimension*dataset.Elemsz,
+		queries.Dimension*queries.Elemsz,
+		dataset.Dimension,
+		usearch_metric,
+		quantization,
+		maxResults,
+		ncpu)
 }

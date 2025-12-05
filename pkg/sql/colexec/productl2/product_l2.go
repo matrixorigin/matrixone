@@ -21,16 +21,13 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	usearch "github.com/unum-cloud/usearch/golang"
 )
 
 const opName = "product_l2"
@@ -51,7 +48,7 @@ func (productl2 *Productl2) Prepare(proc *process.Process) error {
 		productl2.OpAnalyzer.Reset()
 	}
 
-	metrictype, ok := metric.OpTypeToUsearchMetric[strings.ToLower(productl2.VectorOpType)]
+	metrictype, ok := metric.OpTypeToIvfMetric[strings.ToLower(productl2.VectorOpType)]
 	if !ok {
 		return moerr.NewInternalError(proc.Ctx, "ProductL2: vector optype not found")
 	}
@@ -124,6 +121,28 @@ func (productl2 *Productl2) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
+func getCenters[T types.RealNumbers](ap *Productl2, proc *process.Process, analyzer process.Analyzer) *metric.VectorSet[T] {
+	ctr := &ap.ctr
+	buildCount := ctr.bat.RowCount()
+	centroidColPos := ap.OnExpr.GetF().GetArgs()[0].GetCol().GetColPos()
+
+	dim := ctr.bat.Vecs[centroidColPos].GetType().Width
+	elemSize := uint(ctr.bat.Vecs[centroidColPos].GetType().GetArrayElementSize())
+
+	centers := metric.NewVectorSet[T](uint(buildCount), uint(dim), elemSize)
+
+	for i := 0; i < buildCount; i++ {
+		if ctr.bat.Vecs[centroidColPos].IsNull(uint64(i)) {
+			centers.SetNull(int64(i))
+			continue
+		}
+
+		c := types.BytesToArray[T](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))
+		centers.AddVector(int64(i), c)
+	}
+	return centers
+}
+
 func (productl2 *Productl2) build(proc *process.Process, analyzer process.Analyzer) error {
 	ctr := &productl2.ctr
 	start := time.Now()
@@ -144,6 +163,15 @@ func (productl2 *Productl2) build(proc *process.Process, analyzer process.Analyz
 		}
 	}
 	mp.Free()
+
+	centroidColPos := productl2.OnExpr.GetF().GetArgs()[0].GetCol().GetColPos()
+	switch ctr.bat.Vecs[centroidColPos].GetType().Oid {
+	case types.T_array_float32:
+		ctr.centers = getCenters[float32](productl2, proc, analyzer)
+	case types.T_array_float64:
+		ctr.centers = getCenters[float64](productl2, proc, analyzer)
+	}
+
 	return nil
 }
 
@@ -162,103 +190,32 @@ func (productl2 *Productl2) build(proc *process.Process, analyzer process.Analyz
 //	}
 //)
 
-type VectorSet[T types.RealNumbers] struct {
-	idxmap    map[int64]int64
-	vector    []T // flatten vector
-	count     int
-	dimension int32
-	curr      int64
-	elemsz    uint
-}
-
-func newVectorSet[T types.RealNumbers](count int, dimension int32, elemSize uint) *VectorSet[T] {
-	c := &VectorSet[T]{count: count, dimension: dimension, elemsz: elemSize}
-	c.idxmap = make(map[int64]int64)
-	c.vector = make([]T, count*int(dimension))
-	return c
-}
-
-func (set *VectorSet[T]) addVector(id int64, v []T) {
-	if v == nil {
-		set.idxmap[id] = -1
-		return
-	}
-
-	set.idxmap[id] = set.curr
-	offset := set.curr * int64(set.dimension)
-	for i, f := range v {
-		set.vector[offset+int64(i)] = f
-	}
-	set.curr += 1
-
-}
-
-func newMat[T types.RealNumbers](ctr *container, ap *Productl2) (*VectorSet[T], *VectorSet[T], usearch.Quantization, error) {
-	buildCount := ctr.bat.RowCount()
+func newMat[T types.RealNumbers](ctr *container, ap *Productl2) (*metric.VectorSet[T], error) {
 	probeCount := ctr.inBat.RowCount()
-	centroidColPos := ap.OnExpr.GetF().GetArgs()[0].GetCol().GetColPos()
 	tblColPos := ap.OnExpr.GetF().GetArgs()[1].GetCol().GetColPos()
 
-	dim := ctr.bat.Vecs[centroidColPos].GetType().Width
-	elemSize := uint(ctr.bat.Vecs[centroidColPos].GetType().GetArrayElementSize())
-
-	quantize, err := hnsw.QuantizationToUsearch(int32(ctr.bat.Vecs[centroidColPos].GetType().Oid))
-	if err != nil {
-		return nil, nil, 0, err
-	}
-
-	centers := newVectorSet[T](buildCount, dim, elemSize)
-
-	for i := 0; i < buildCount; i++ {
-		switch ctr.bat.Vecs[centroidColPos].GetType().Oid {
-		case types.T_array_float32:
-			if ctr.bat.Vecs[centroidColPos].IsNull(uint64(i)) {
-				centers.addVector(int64(i), nil)
-				continue
-			}
-
-			c := types.BytesToArray[T](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))
-			centers.addVector(int64(i), c)
-
-		case types.T_array_float64:
-			if ctr.bat.Vecs[centroidColPos].IsNull(uint64(i)) {
-				centers.addVector(int64(i), nil)
-				continue
-			}
-			c := types.BytesToArray[T](ctr.bat.Vecs[centroidColPos].GetBytesAt(i))
-			centers.addVector(int64(i), c)
-		}
-	}
+	dim := ctr.inBat.Vecs[tblColPos].GetType().Width
+	elemSize := uint(ctr.inBat.Vecs[tblColPos].GetType().GetArrayElementSize())
 
 	// embedding mat
-	probeset := newVectorSet[T](probeCount, dim, elemSize)
+	probeset := metric.NewVectorSet[T](uint(probeCount), uint(dim), elemSize)
 	for j := 0; j < probeCount; j++ {
 
-		switch ctr.bat.Vecs[centroidColPos].GetType().Oid {
-		case types.T_array_float32:
-			if ctr.inBat.Vecs[tblColPos].IsNull(uint64(j)) {
-				probeset.addVector(int64(j), nil)
-				continue
-			}
-			v := types.BytesToArray[T](ctr.inBat.Vecs[tblColPos].GetBytesAt(j))
-			probeset.addVector(int64(j), v)
-		case types.T_array_float64:
-			if ctr.inBat.Vecs[tblColPos].IsNull(uint64(j)) {
-				probeset.addVector(int64(j), nil)
-				continue
-			}
-			v := types.BytesToArray[T](ctr.inBat.Vecs[tblColPos].GetBytesAt(j))
-			probeset.addVector(int64(j), v)
+		if ctr.inBat.Vecs[tblColPos].IsNull(uint64(j)) {
+			probeset.SetNull(int64(j))
+			continue
 		}
+		v := types.BytesToArray[T](ctr.inBat.Vecs[tblColPos].GetBytesAt(j))
+		probeset.AddVector(int64(j), v)
 
 	}
 
-	return centers, probeset, quantize, nil
+	return probeset, nil
 }
 
 func (ctr *container) probe(ap *Productl2, proc *process.Process, result *vm.CallResult) error {
-	centroidColPos := ap.OnExpr.GetF().GetArgs()[0].GetCol().GetColPos()
-	switch ctr.bat.Vecs[centroidColPos].GetType().Oid {
+	tblColPos := ap.OnExpr.GetF().GetArgs()[1].GetCol().GetColPos()
+	switch ctr.inBat.Vecs[tblColPos].GetType().Oid {
 	case types.T_array_float32:
 		return probeRun[float32](ctr, ap, proc, result)
 	case types.T_array_float64:
@@ -268,16 +225,8 @@ func (ctr *container) probe(ap *Productl2, proc *process.Process, result *vm.Cal
 }
 
 func probeRun[T types.RealNumbers](ctr *container, ap *Productl2, proc *process.Process, result *vm.CallResult) error {
-	buildCount := ctr.bat.RowCount()
 	probeCount := ctr.inBat.RowCount()
-
-	if buildCount == 0 {
-		return nil
-	}
-
-	if probeCount == 0 {
-		return nil
-	}
+	centers := ctr.centers.(*metric.VectorSet[T])
 
 	ncpu := runtime.NumCPU()
 	if probeCount < ncpu {
@@ -297,38 +246,25 @@ func probeRun[T types.RealNumbers](ctr *container, ap *Productl2, proc *process.
 		leastClusterIndex[i] = 0
 	}
 
-	centers, probeset, usearch_quantize, err := newMat[T](ctr, ap)
+	probeset, err := newMat[T](ctr, ap)
 	if err != nil {
 		return err
 	}
 
-	if probeset.curr == 0 {
-		return nil
-	}
+	if centers.Curr > 0 && probeset.Curr > 0 {
 
-	if centers.curr > 0 {
-		keys, _, err := usearch.ExactSearchUnsafe(
-			util.UnsafePointer(&(centers.vector[0])),
-			util.UnsafePointer(&(probeset.vector[0])),
-			uint(centers.curr),
-			uint(probeset.curr),
-			uint(centers.dimension)*centers.elemsz,
-			uint(probeset.dimension)*centers.elemsz,
-			uint(centers.dimension),
-			ctr.metrictype,
-			usearch_quantize,
-			1, // maxResult = 1
-			uint(ncpu))
+		keys, distances, err := metric.ExactSearch[T](centers, probeset, ctr.metrictype, 1, uint(ncpu))
 		if err != nil {
 			return err
 		}
+		_ = distances
 
 		//os.Stderr.WriteString(fmt.Sprintf("keys %v\n", keys))
 		//os.Stderr.WriteString(fmt.Sprintf("distances %v\n", distances))
 
-		for j := 0; j < probeset.count; j++ {
+		for j := 0; j < int(probeset.Count); j++ {
 
-			idx := probeset.idxmap[int64(j)]
+			idx := probeset.Idxmap[int64(j)]
 			if idx == -1 {
 				leastClusterIndex[j] = 0
 			} else {
@@ -347,7 +283,7 @@ func probeRun[T types.RealNumbers](ctr *container, ap *Productl2, proc *process.
 			}
 		}
 	} else {
-		for j := 0; j < probeset.count; j++ {
+		for j := 0; j < int(probeset.Count); j++ {
 
 			for k, rp := range ap.Result {
 				if rp.Rel == 0 {
