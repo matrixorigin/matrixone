@@ -41,6 +41,8 @@ type TableFunction struct {
 	// probe side runtime filter specs (including BloomFilter)
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 
+	IndexReaderParam *plan.IndexReaderParam
+
 	OffsetTotal [][2]int64
 	CanOpt      bool
 

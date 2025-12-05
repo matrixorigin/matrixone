@@ -203,7 +203,7 @@ func (r *EmptyReader) GetOrderBy() []*plan.OrderBySpec {
 func (r *EmptyReader) SetOrderBy([]*plan.OrderBySpec) {
 }
 
-func (r *EmptyReader) SetBlockTop([]*plan.OrderBySpec, uint64) {
+func (r *EmptyReader) SetIndexParam(param *plan.IndexReaderParam) {
 }
 
 func (r *EmptyReader) Close() error {
@@ -272,7 +272,7 @@ type withFilterMixin struct {
 		hasBF     bool // whether bloom filter is available
 	}
 
-	orderByLimit *objectio.BlockReadTopOp
+	orderByLimit *objectio.IndexReaderTopOp
 }
 
 type reader struct {
@@ -321,9 +321,9 @@ func (r *mergeReader) SetOrderBy(orderby []*plan.OrderBySpec) {
 	}
 }
 
-func (r *mergeReader) SetBlockTop(orderby []*plan.OrderBySpec, limit uint64) {
+func (r *mergeReader) SetIndexParam(param *plan.IndexReaderParam) {
 	for i := range r.rds {
-		r.rds[i].SetBlockTop(orderby, limit)
+		r.rds[i].SetIndexParam(param)
 	}
 }
 
@@ -442,12 +442,12 @@ func (r *reader) SetOrderBy(orderby []*plan.OrderBySpec) {
 	r.source.SetOrderBy(orderby)
 }
 
-func (r *reader) SetBlockTop(orderBy []*plan.OrderBySpec, limit uint64) {
-	if len(orderBy) == 0 || limit == 0 {
+func (r *reader) SetIndexParam(param *plan.IndexReaderParam) {
+	if param == nil {
 		return
 	}
 
-	orderFunc := orderBy[0].Expr.GetF()
+	orderFunc := param.OrderBy[0].Expr.GetF()
 	if orderFunc == nil {
 		panic("order function is nil")
 	}
@@ -462,20 +462,34 @@ func (r *reader) SetBlockTop(orderBy []*plan.OrderBySpec, limit uint64) {
 		return
 	}
 
-	metric, ok := metric.DistFuncNameToMetricType[orderFunc.Func.ObjName]
+	metricType, ok := metric.DistFuncNameToMetricType[orderFunc.Func.ObjName]
 	if !ok {
 		panic("unsupported order function")
 	}
 
 	if r.orderByLimit == nil {
-		r.orderByLimit = &objectio.BlockReadTopOp{}
+		r.orderByLimit = &objectio.IndexReaderTopOp{}
 	}
 
 	r.orderByLimit.Typ = types.T(orderFunc.Args[0].Typ.Id)
-	r.orderByLimit.Metric = metric
+	r.orderByLimit.MetricType = metricType
 	r.orderByLimit.ColPos = col.ColPos
 	r.orderByLimit.NumVec = []byte(numVec)
-	r.orderByLimit.Limit = limit
+	r.orderByLimit.Limit = param.Limit.GetLit().GetU64Val()
+
+	if param.DistRange != nil {
+		r.orderByLimit.LowerBoundType = param.DistRange.LowerBoundType
+		r.orderByLimit.LowerBound = param.DistRange.LowerBound.GetLit().GetDval()
+		r.orderByLimit.UpperBoundType = param.DistRange.UpperBoundType
+		r.orderByLimit.UpperBound = param.DistRange.UpperBound.GetLit().GetDval()
+
+		if param.OrigFuncName == metric.DistFn_L2Distance {
+			r.orderByLimit.LowerBound *= r.orderByLimit.LowerBound
+			r.orderByLimit.UpperBound *= r.orderByLimit.UpperBound
+		}
+	}
+
+	r.orderByLimit.DistHeap = make(objectio.Float64Heap, 0, r.orderByLimit.Limit)
 }
 
 func (r *reader) GetOrderBy() []*plan.OrderBySpec {

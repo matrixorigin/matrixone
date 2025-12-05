@@ -21,6 +21,7 @@ import (
 
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -76,6 +77,9 @@ type SqlProcess struct {
 	// Optional BloomFilter bytes attached by vector index runtime.
 	// Used to drive additional filtering in internal SQL executor (e.g. ivf entries scan).
 	BloomFilter []byte
+	// Optional IndexReaderParam attached by vector index runtime.
+	// Used to drive additional filtering in internal SQL executor (e.g. ivf entries scan).
+	IndexReaderParam *plan.IndexReaderParam
 }
 
 func NewSqlProcess(proc *process.Process) *SqlProcess {
@@ -127,6 +131,14 @@ func RunSql(sqlproc *SqlProcess, sql string) (executor.Result, error) {
 				topContext,
 				defines.IvfBloomFilter{},
 				sqlproc.BloomFilter,
+			)
+		}
+		// Attach optional DistRange to context for internal executor.
+		if sqlproc.IndexReaderParam != nil {
+			topContext = context.WithValue(
+				topContext,
+				defines.IvfReaderParam{},
+				sqlproc.IndexReaderParam,
 			)
 		}
 		accountId, err := defines.GetAccountId(proc.Ctx)

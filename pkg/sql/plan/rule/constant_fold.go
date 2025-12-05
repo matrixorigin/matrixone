@@ -51,9 +51,6 @@ func (r *ConstantFold) Apply(node *plan.Node, _ *plan.Query, proc *process.Proce
 	if node.Limit != nil {
 		node.Limit = r.constantFold(node.Limit, proc)
 	}
-	if node.BlockLimit != nil {
-		node.BlockLimit = r.constantFold(node.BlockLimit, proc)
-	}
 	if node.Offset != nil {
 		node.Offset = r.constantFold(node.Offset, proc)
 	}
@@ -100,8 +97,17 @@ func (r *ConstantFold) Apply(node *plan.Node, _ *plan.Query, proc *process.Proce
 		orderBy.Expr = r.constantFold(orderBy.Expr, proc)
 	}
 
-	for _, orderBy := range node.BlockOrderBy {
-		orderBy.Expr = r.constantFold(orderBy.Expr, proc)
+	if node.IndexReaderParam != nil {
+		for _, orderBy := range node.IndexReaderParam.OrderBy {
+			orderBy.Expr = r.constantFold(orderBy.Expr, proc)
+		}
+
+		node.IndexReaderParam.Limit = r.constantFold(node.IndexReaderParam.Limit, proc)
+
+		if distRange := node.IndexReaderParam.DistRange; distRange != nil {
+			distRange.LowerBound = r.constantFold(distRange.LowerBound, proc)
+			distRange.UpperBound = r.constantFold(distRange.UpperBound, proc)
+		}
 	}
 
 	// for i := range n.TblFuncExprList {
@@ -118,6 +124,10 @@ func (r *ConstantFold) Apply(node *plan.Node, _ *plan.Query, proc *process.Proce
 }
 
 func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *plan.Expr {
+	if expr == nil {
+		return expr
+	}
+
 	if expr.Typ.Id == int32(types.T_interval) {
 		panic(moerr.NewInternalError(proc.Ctx, "not supported type INTERVAL"))
 	}

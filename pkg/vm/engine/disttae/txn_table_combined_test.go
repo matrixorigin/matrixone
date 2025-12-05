@@ -1136,7 +1136,7 @@ func (m *mockReader) GetOrderBy() []*plan.OrderBySpec {
 	return nil
 }
 
-func (m *mockReader) SetBlockTop([]*plan.OrderBySpec, uint64) {}
+func (m *mockReader) SetIndexParam(param *plan.IndexReaderParam) {}
 
 func (m *mockReader) SetFilterZM(objectio.ZoneMap) {}
 
