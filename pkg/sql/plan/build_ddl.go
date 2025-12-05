@@ -3999,13 +3999,14 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 
 			switch opt.KeyType {
 			case tree.INDEX_TYPE_IVFFLAT:
-				if opt.AlgoParamList <= 0 {
+				if opt.AlgoParamList < 0 {
 					return nil, moerr.NewInternalErrorf(
 						ctx.GetContext(),
-						"lists should be > 0.",
+						"lists should be >= 0. lists = 0 will keep the original configuration.",
 					)
 				}
 				alterTableReIndex.IndexAlgoParamList = opt.AlgoParamList
+				alterTableReIndex.ForceSync = opt.ForceSync
 			case tree.INDEX_TYPE_HNSW:
 				// PASS: keep options on change for incremental update
 			default:

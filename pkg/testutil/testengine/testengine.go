@@ -111,6 +111,7 @@ func New(
 	CreateCustomer(db)
 	CreateLineorder(db)
 	CreateCompressFileTable(db)
+	CreateIvfSrcTable(db)
 
 	if err = txnOp.Commit(ctx); err != nil {
 		panic(err)

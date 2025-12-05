@@ -199,6 +199,7 @@ func init() {
 		"for":                        FOR,
 		"of":                         OF,
 		"force":                      FORCE,
+		"force_sync":                 FORCE_SYNC,
 		"foreign":                    FOREIGN,
 		"format":                     FORMAT,
 		"from":                       FROM,
