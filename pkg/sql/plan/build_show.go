@@ -74,7 +74,7 @@ func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase,
 		return returnByRewriteSQL(ctx, sql, plan.DataDefinition_SHOW_CREATEDATABASE)
 	}
 
-	sqlStr := "SELECT \"%s\" AS `Database`, \"%s` AS `Create Database`"
+	sqlStr := "SELECT \"%s\" AS `Database`, \"%s\" AS `Create Database`"
 	createSql := fmt.Sprintf("CREATE DATABASE `%s`", name)
 	sqlStr = fmt.Sprintf(sqlStr, name, createSql)
 
@@ -1079,10 +1079,10 @@ func buildShowCreatePublications(stmt *tree.ShowCreatePublications, ctx Compiler
 func returnByRewriteSQL(ctx CompilerContext, sql string,
 	ddlType plan.DataDefinition_DdlType) (*Plan, error) {
 	newStmt, err := getRewriteSQLStmt(ctx, sql)
-	defer newStmt.Free()
 	if err != nil {
 		return nil, err
 	}
+	defer newStmt.Free()
 	return getReturnDdlBySelectStmt(ctx, newStmt, ddlType)
 }
 
