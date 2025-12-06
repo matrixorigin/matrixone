@@ -55,17 +55,19 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 		qry: &Query{
 			StmtType: queryType,
 		},
-		compCtx:             ctx,
-		ctxByNode:           []*BindContext{},
-		nameByColRef:        make(map[[2]int32]string),
-		nextBindTag:         0,
-		mysqlCompatible:     mysqlCompatible,
-		tag2Table:           make(map[int32]*TableDef),
-		tag2NodeID:          make(map[int32]int32),
-		isPrepareStatement:  isPrepareStatement,
-		deleteNode:          make(map[uint64]int32),
-		skipStats:           skipStats,
-		optimizationHistory: make([]string, 0),
+		compCtx:              ctx,
+		ctxByNode:            []*BindContext{},
+		nameByColRef:         make(map[[2]int32]string),
+		protectedScans:       make(map[int32]int),
+		projectSpecialGuards: make(map[int32]*specialIndexGuard),
+		nextBindTag:          0,
+		mysqlCompatible:      mysqlCompatible,
+		tag2Table:            make(map[int32]*TableDef),
+		tag2NodeID:           make(map[int32]int32),
+		isPrepareStatement:   isPrepareStatement,
+		deleteNode:           make(map[uint64]int32),
+		skipStats:            skipStats,
+		optimizationHistory:  make([]string, 0),
 	}
 }
 
@@ -2058,7 +2060,9 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		}
 		// after determine shuffle, be careful when calling ReCalcNodeStats again.
 		// needResetHashMapStats should always be false from here
+		builder.prepareSpecialIndexGuards(rootID)
 		rootID, err = builder.applyIndices(rootID, colRefCnt, make(map[[2]int32]*plan.Expr))
+		builder.resetSpecialIndexGuards()
 		if err != nil {
 			return nil, err
 		}
@@ -2126,7 +2130,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 	return builder.qry, nil
 }
 
-func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.OrderBy, astLimit *tree.Limit, ctx *BindContext, isRoot bool) (int32, error) {
+func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.OrderBy, astLimit *tree.Limit, astRankOption *tree.RankOption, ctx *BindContext, isRoot bool) (int32, error) {
 	if builder.isForUpdate {
 		return 0, moerr.NewInternalError(builder.GetContext(), "not support select union for update")
 	}
@@ -2413,7 +2417,14 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 		}, ctx)
 	}
 
-	// append limit
+	// append limit / rank option
+	var unionRankOption *plan.RankOption
+	if astRankOption != nil {
+		if unionRankOption, err = parseRankOption(astRankOption.Option, builder.GetContext()); err != nil {
+			return 0, err
+		}
+	}
+
 	if astLimit != nil {
 		node := builder.qry.Nodes[lastNodeID]
 
@@ -2437,16 +2448,12 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 			}
 		}
 
-		// Parse RankOption if ByRank is true
-		if astLimit.ByRank && astLimit.Option != nil && len(astLimit.Option) > 0 {
-			rankOption, err := parseRankOption(astLimit.Option, builder.GetContext())
-			if err != nil {
-				return 0, err
-			}
-			if rankOption != nil && rankOption.Mode != "" {
-				node.RankOption = rankOption
-			}
+		if unionRankOption != nil && unionRankOption.Mode != "" {
+			node.RankOption = unionRankOption
 		}
+	} else if unionRankOption != nil && unionRankOption.Mode != "" {
+		node := builder.qry.Nodes[lastNodeID]
+		node.RankOption = unionRankOption
 	}
 
 	// append result PROJECT node
@@ -2864,6 +2871,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 
 	astOrderBy := stmt.OrderBy
 	astLimit := stmt.Limit
+	astRankOption := stmt.RankOption
 	astTimeWindow := stmt.TimeWindow
 
 	ctx.groupTag = builder.genNewBindTag()
@@ -2905,6 +2913,12 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 					return 0, moerr.NewSyntaxError(builder.GetContext(), "multiple LIMIT clauses not allowed")
 				}
 				astLimit = selectClause.Select.Limit
+			}
+			if selectClause.Select.RankOption != nil {
+				if astRankOption != nil {
+					return 0, moerr.NewSyntaxError(builder.GetContext(), "multiple BY RANK clauses not allowed")
+				}
+				astRankOption = selectClause.Select.RankOption
 			}
 			stmt = selectClause.Select
 
@@ -2981,7 +2995,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 					}
 					leftClause = &tree.UnionClause{Type: tree.UNION, Left: leftClause, Right: stmt, All: true}
 				}
-				return builder.buildUnion(leftClause, astOrderBy, astLimit, ctx, isRoot)
+				return builder.buildUnion(leftClause, astOrderBy, astLimit, astRankOption, ctx, isRoot)
 			}
 		}
 
@@ -2999,7 +3013,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			rollupFilter = selectClause.Having.RollupHaving
 		}
 	case *tree.UnionClause:
-		return builder.buildUnion(selectClause, astOrderBy, astLimit, ctx, isRoot)
+		return builder.buildUnion(selectClause, astOrderBy, astLimit, astRankOption, ctx, isRoot)
 	case *tree.ValuesClause:
 		if nodeID, selectList, err = builder.bindValues(ctx, selectClause); err != nil {
 			return
@@ -3043,12 +3057,12 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	var boundOffsetExpr *Expr
 	var boundCountExpr *Expr
 	var rankOption *plan.RankOption
-	if astLimit != nil {
-		if boundOffsetExpr, boundCountExpr, rankOption, err = builder.bindLimit(ctx, astLimit); err != nil {
+	if astLimit != nil || astRankOption != nil {
+		if boundOffsetExpr, boundCountExpr, rankOption, err = builder.bindLimit(ctx, astLimit, astRankOption); err != nil {
 			return
 		}
 
-		if builder.isForUpdate {
+		if astLimit != nil && builder.isForUpdate {
 			lockNode.Children[0] = nodeID
 			nodeID = builder.appendNode(lockNode, ctx)
 		}
@@ -3620,46 +3634,31 @@ func (builder *QueryBuilder) bindOrderBy(
 func (builder *QueryBuilder) bindLimit(
 	ctx *BindContext,
 	astLimit *tree.Limit,
+	astRankOption *tree.RankOption,
 ) (boundOffsetExpr, boundCountExpr *Expr, rankOption *plan.RankOption, err error) {
-	limitBinder := NewLimitBinder(builder, ctx)
-	if astLimit.Offset != nil {
-		if boundOffsetExpr, err = limitBinder.BindExpr(astLimit.Offset, 0, true); err != nil {
-			return
-		}
-	}
-	if astLimit.Count != nil {
-		if boundCountExpr, err = limitBinder.BindExpr(astLimit.Count, 0, true); err != nil {
-			return
-		}
-
-		if cExpr, ok := boundCountExpr.Expr.(*plan.Expr_Lit); ok {
-			if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
-				ctx.hasSingleRow = c.U64Val == 1
+	if astLimit != nil {
+		limitBinder := NewLimitBinder(builder, ctx)
+		if astLimit.Offset != nil {
+			if boundOffsetExpr, err = limitBinder.BindExpr(astLimit.Offset, 0, true); err != nil {
+				return
 			}
 		}
-	}
+		if astLimit.Count != nil {
+			if boundCountExpr, err = limitBinder.BindExpr(astLimit.Count, 0, true); err != nil {
+				return
+			}
 
-	// Parse RankOption if ByRank is true
-	if astLimit.ByRank && astLimit.Option != nil && len(astLimit.Option) > 0 {
-		rankOption = &plan.RankOption{}
-
-		// Helper function to get value from map case-insensitively
-		getOptionValue := func(key string) (string, bool) {
-			keyLower := strings.ToLower(key)
-			for k, v := range astLimit.Option {
-				if strings.ToLower(k) == keyLower {
-					return v, true
+			if cExpr, ok := boundCountExpr.Expr.(*plan.Expr_Lit); ok {
+				if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
+					ctx.hasSingleRow = c.U64Val == 1
 				}
 			}
-			return "", false
 		}
+	}
 
-		if mode, ok := getOptionValue("mode"); ok {
-			modeLower := strings.ToLower(strings.TrimSpace(mode))
-			if modeLower != "pre" && modeLower != "post" {
-				return nil, nil, nil, moerr.NewInvalidInputf(builder.GetContext(), "mode must be 'pre' or 'post', got '%s'", mode)
-			}
-			rankOption.Mode = modeLower
+	if astRankOption != nil && astRankOption.Option != nil {
+		if rankOption, err = parseRankOption(astRankOption.Option, builder.GetContext()); err != nil {
+			return nil, nil, nil, err
 		}
 	}
 
@@ -5235,7 +5234,7 @@ func (builder *QueryBuilder) GetContext() context.Context {
 // parseRankOption parses rank options from a map of option key-value pairs.
 // It extracts the "mode" option case-insensitively and validates it.
 // Returns a RankOption with the parsed mode if valid, or nil if no mode is specified.
-// Returns an error if the mode value is invalid (must be "pre" or "post").
+// Returns an error if the mode value is invalid (must be "pre", "post", or "force").
 func parseRankOption(options map[string]string, ctx context.Context) (*plan.RankOption, error) {
 	if len(options) == 0 {
 		return nil, nil
@@ -5256,8 +5255,12 @@ func parseRankOption(options map[string]string, ctx context.Context) (*plan.Rank
 
 	if mode, ok := getOptionValue("mode"); ok {
 		modeLower := strings.ToLower(strings.TrimSpace(mode))
-		if modeLower != "pre" && modeLower != "post" {
-			return nil, moerr.NewInvalidInputf(ctx, "mode must be 'pre' or 'post', got '%s'", mode)
+		// Mode options:
+		// - "pre": Enable vector index with BloomFilter pushdown
+		// - "post": Enable vector index with standard behavior (post-filtering)
+		// - "force": Force disable vector index, use full table scan
+		if modeLower != "pre" && modeLower != "post" && modeLower != "force" {
+			return nil, moerr.NewInvalidInputf(ctx, "mode must be 'pre', 'post', or 'force', got '%s'", mode)
 		}
 		rankOption.Mode = modeLower
 	}
