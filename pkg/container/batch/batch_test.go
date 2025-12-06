@@ -47,6 +47,8 @@ func init() {
 }
 
 func TestBatchMarshalAndUnmarshal(t *testing.T) {
+	mp := mpool.MustNewZero()
+
 	for _, tc := range tcs {
 		data, err := tc.bat.MarshalBinary()
 		require.NoError(t, err)
@@ -77,7 +79,7 @@ func TestBatchMarshalAndUnmarshal(t *testing.T) {
 
 		reader := bytes.NewReader(data)
 		rbat = new(Batch)
-		err = rbat.UnmarshalFromReader(reader, nil)
+		err = rbat.UnmarshalFromReader(reader, mp)
 		require.NoError(t, err)
 		for i, vec := range rbat.Vecs {
 			require.Equal(t, vector.MustFixedColWithTypeCheck[int8](tc.bat.Vecs[i]), vector.MustFixedColWithTypeCheck[int8](vec))
