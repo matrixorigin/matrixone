@@ -154,11 +154,15 @@ func (s *Scope) handleFullTextIndexTable(
 func (s *Scope) handleIndexColCount(c *Compile, indexDef *plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef) (int64, error) {
 
 	indexColumnName := indexDef.Parts[0]
-	countTotalSql := fmt.Sprintf("select count(`%s`) from `%s`.`%s`;",
+	countTotalSql := fmt.Sprintf("SELECT COUNT(`%s`) FROM `%s`.`%s`;",
 		indexColumnName,
 		qryDatabase,
 		originalTableDef.Name)
-	rs, err := c.runSqlWithResult(countTotalSql, NoAccountId)
+	rs, err := c.runSqlWithResultAndOptions(
+		countTotalSql,
+		NoAccountId,
+		executor.StatementOption{}.WithDisableLog(),
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -186,7 +190,7 @@ func (s *Scope) handleIvfIndexMetaTable(c *Compile, indexDef *plan.IndexDef, qry
 		INSERT INTO meta (`key`, `value`) VALUES ('version', '0') ON DUPLICATE KEY UPDATE `value` = CAST( (cast(`value` AS BIGINT) + 1) AS CHAR);
 	*/
 
-	insertSQL := fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`) values('version', '0')"+
+	insertSQL := fmt.Sprintf("INSERT INTO `%s`.`%s` (`%s`, `%s`) VALUES('version', '0')"+
 		"ON DUPLICATE KEY UPDATE `%s` = CAST( (CAST(`%s` AS BIGINT) + 1) AS CHAR);",
 		qryDatabase,
 		indexDef.IndexTableName,
@@ -341,7 +345,7 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 	}
 
 	// 2. insert into entries table
-	insertSQL := fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`, `%s`, `%s`) ",
+	insertSQL := fmt.Sprintf("INSERT INTO `%s`.`%s` (`%s`, `%s`, `%s`, `%s`) ",
 		qryDatabase,
 		indexDef.IndexTableName,
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
@@ -351,9 +355,9 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 	)
 
 	// 3. centroids table with latest version
-	centroidsTableForCurrentVersionSql := fmt.Sprintf("(select * from "+
-		"`%s`.`%s` where `%s` = "+
-		"(select CAST(%s as BIGINT) from `%s`.`%s` where `%s` = 'version'))  as `%s`",
+	centroidsTableForCurrentVersionSql := fmt.Sprintf("(SELECT * FROM "+
+		"`%s`.`%s` WHERE `%s` = "+
+		"(SELECT CAST(%s as BIGINT) FROM `%s`.`%s` WHERE `%s` = 'version'))  as `%s`",
 		qryDatabase,
 		centroidsTableName,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
@@ -369,8 +373,8 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 	indexColumnName := indexDef.Parts[0]
 	centroidsCrossL2JoinTbl := fmt.Sprintf("%s "+
 		"SELECT `%s`, `%s`,  %s, `%s`"+
-		" FROM `%s`.`%s` CENTROIDX ('%s') join %s "+
-		" using (`%s`, `%s`) ",
+		" FROM `%s`.`%s` CENTROIDX ('%s') JOIN %s "+
+		" USING (`%s`, `%s`) ",
 		insertSQL,
 
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
@@ -408,7 +412,9 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 
 func (s *Scope) logTimestamp(c *Compile, qryDatabase, metadataTableName, metrics string) error {
 	// Disable SQL logging for vector index timestamp logging
-	return c.runSqlWithOptions(fmt.Sprintf("INSERT INTO `%s`.`%s` (%s, %s) "+" VALUES ('%s', NOW()) "+" ON DUPLICATE KEY UPDATE %s = NOW();",
+	return c.runSqlWithOptions(fmt.Sprintf("INSERT INTO `%s`.`%s` (%s, %s) "+
+		"VALUES ('%s', NOW()) "+
+		"ON DUPLICATE KEY UPDATE %s = NOW();",
 		qryDatabase,
 		metadataTableName,
 		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,

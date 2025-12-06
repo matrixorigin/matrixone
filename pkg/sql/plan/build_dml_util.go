@@ -3365,8 +3365,8 @@ func getSqlForAddFk(db, table string, data *FkData) string {
 	row := make([]string, 16)
 	rows := 0
 	sb := strings.Builder{}
-	sb.WriteString("insert into `mo_catalog`.`mo_foreign_keys`  ")
-	sb.WriteString(" values ")
+	sb.WriteString("INSERT INTO `mo_catalog`.`mo_foreign_keys` ")
+	sb.WriteString("VALUES ")
 	for childIdx, childCol := range data.Cols.Cols {
 		row[0] = data.Def.Name
 		row[1] = "0"
@@ -3408,9 +3408,9 @@ func getSqlForAddFk(db, table string, data *FkData) string {
 // on the table
 func getSqlForDeleteTable(db, tbl string) string {
 	sb := strings.Builder{}
-	sb.WriteString("delete from `mo_catalog`.`mo_foreign_keys` where ")
+	sb.WriteString("DELETE FROM `mo_catalog`.`mo_foreign_keys` WHERE ")
 	sb.WriteString(fmt.Sprintf(
-		"db_name = '%s' and table_name = '%s'", db, tbl))
+		"db_name = '%s' AND table_name = '%s'", db, tbl))
 	return sb.String()
 }
 
@@ -3418,9 +3418,9 @@ func getSqlForDeleteTable(db, tbl string) string {
 // on the table
 func getSqlForDeleteConstraint(db, tbl, constraint string) string {
 	sb := strings.Builder{}
-	sb.WriteString("delete from `mo_catalog`.`mo_foreign_keys` where ")
+	sb.WriteString("DELETE FROM `mo_catalog`.`mo_foreign_keys` WHERE ")
 	sb.WriteString(fmt.Sprintf(
-		"constraint_name = '%s' and db_name = '%s' and table_name = '%s'",
+		"constraint_name = '%s' AND db_name = '%s' AND table_name = '%s'",
 		constraint, db, tbl))
 	return sb.String()
 }
@@ -3429,7 +3429,7 @@ func getSqlForDeleteConstraint(db, tbl, constraint string) string {
 // on the database
 func getSqlForDeleteDB(db string) string {
 	sb := strings.Builder{}
-	sb.WriteString("delete from `mo_catalog`.`mo_foreign_keys` where ")
+	sb.WriteString("DELETE FROM `mo_catalog`.`mo_foreign_keys` WHERE ")
 	sb.WriteString(fmt.Sprintf("db_name = '%s'", db))
 	return sb.String()
 }
@@ -3437,15 +3437,15 @@ func getSqlForDeleteDB(db string) string {
 // getSqlForRenameTable returns the sqls that rename the table of all fk relationships in mo_foreign_keys
 func getSqlForRenameTable(db, oldName, newName string) (ret []string) {
 	sb := strings.Builder{}
-	sb.WriteString("update `mo_catalog`.`mo_foreign_keys` ")
-	sb.WriteString(fmt.Sprintf("set table_name = '%s' ", newName))
-	sb.WriteString(fmt.Sprintf("where db_name = '%s' and table_name = '%s' ; ", db, oldName))
+	sb.WriteString("UPDATE `mo_catalog`.`mo_foreign_keys` ")
+	sb.WriteString(fmt.Sprintf("SET table_name = '%s' ", newName))
+	sb.WriteString(fmt.Sprintf("WHERE db_name = '%s' AND table_name = '%s' ; ", db, oldName))
 	ret = append(ret, sb.String())
 
 	sb.Reset()
-	sb.WriteString("update `mo_catalog`.`mo_foreign_keys` ")
-	sb.WriteString(fmt.Sprintf("set refer_table_name = '%s' ", newName))
-	sb.WriteString(fmt.Sprintf("where refer_db_name = '%s' and refer_table_name = '%s' ; ", db, oldName))
+	sb.WriteString("UPDATE `mo_catalog`.`mo_foreign_keys` ")
+	sb.WriteString(fmt.Sprintf("SET refer_table_name = '%s' ", newName))
+	sb.WriteString(fmt.Sprintf("WHERE refer_db_name = '%s' AND refer_table_name = '%s' ; ", db, oldName))
 	ret = append(ret, sb.String())
 	return
 }
@@ -3472,8 +3472,8 @@ func getSqlForRenameColumn(db, table, oldName, newName string) (ret []string) {
 // that refer to it.
 func getSqlForCheckHasDBRefersTo(db string) string {
 	sb := strings.Builder{}
-	sb.WriteString("select count(*) > 0 from `mo_catalog`.`mo_foreign_keys` ")
-	sb.WriteString(fmt.Sprintf("where refer_db_name = '%s' and db_name != '%s';", db, db))
+	sb.WriteString("SELECT COUNT(*) > 0 FROM `mo_catalog`.`mo_foreign_keys` ")
+	sb.WriteString(fmt.Sprintf("WHERE refer_db_name = '%s' AND db_name != '%s';", db, db))
 	return sb.String()
 }
 
