@@ -37,18 +37,6 @@ func maxElemCnt(cellCnt, cellSize uint64) uint64 {
 	return cellCnt * 4 / 5
 }
 
-type Aggregator interface {
-	StateSize() uint8
-	ResultSize() uint8
-	NeedsInit() bool
-
-	Init(state unsafe.Pointer)
-	AddBatch(states []unsafe.Pointer, values unsafe.Pointer)
-	MergeBatch(lstates, rstates []unsafe.Pointer)
-
-	Finalize(states, results []unsafe.Pointer)
-}
-
 func toUnsafePointer[T any](p *T) unsafe.Pointer {
 	return unsafe.Pointer(p)
 }

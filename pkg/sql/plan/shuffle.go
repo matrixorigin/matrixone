@@ -677,43 +677,6 @@ func determineShuffleForGroupBy(node *plan.Node, builder *QueryBuilder) {
 
 }
 
-func getShuffleDop(ncpu int, lencn int, hashmapSize float64) (dop int) {
-	if ncpu <= 4 {
-		ncpu = 4
-	}
-	maxret := ncpu * 4
-	// these magic number comes from hashmap resize factor. see hashtable/common.go, in maxElemCnt function
-	ret1 := int(hashmapSize/float64(lencn)/12800000) + 1
-	if ret1 >= maxret {
-		return maxret
-	}
-
-	ret2 := int(hashmapSize/float64(lencn)/6000000) + 1
-	if ret2 >= maxret {
-		return ret1
-	}
-	ret3 := int(hashmapSize/float64(lencn)/320000) + 1
-	if ret3 <= ncpu/2 {
-		return ncpu
-	}
-	if ret3 >= maxret-1 {
-		return maxret
-	}
-	if ret3 <= ncpu {
-		if ncpu*2 > maxret {
-			return maxret
-		} else {
-			return ncpu * 2
-		}
-	}
-	ret4 := (ret3/ncpu + 1) * ncpu
-	if ret4 > maxret {
-		return maxret
-	} else {
-		return ret4
-	}
-}
-
 // default shuffle type for scan is hash
 // for table with primary key, and ndv of first column in primary key is high enough, use range shuffle
 // only support integer type
