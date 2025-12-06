@@ -3226,7 +3226,8 @@ func runSql(ctx CompilerContext, sql string) (executor.Result, error) {
 		WithTxn(proc.GetTxnOperator()).
 		WithDatabase(proc.GetSessionInfo().Database).
 		WithTimeZone(proc.GetSessionInfo().TimeZone).
-		WithAccountID(accountId)
+		WithAccountID(accountId).
+		WithStatementOption(executor.StatementOption{}.WithDisableLog())
 	return exec.Exec(topContext, sql, opts)
 }
 

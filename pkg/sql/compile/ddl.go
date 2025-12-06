@@ -43,6 +43,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -729,8 +730,9 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 
 						// 3.b Update mo_catalog.mo_indexes
 						updateSql := fmt.Sprintf(updateMoIndexesAlgoParams, newAlgoParams, oTableDef.TblId, alterIndex.IndexName)
-						err = c.runSql(updateSql)
-						if err != nil {
+						if err = c.runSqlWithOptions(
+							updateSql, executor.StatementOption{}.WithDisableLog(),
+						); err != nil {
 							return err
 						}
 
