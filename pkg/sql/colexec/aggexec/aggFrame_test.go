@@ -75,9 +75,10 @@ type avgDemoCtx struct {
 	count int64
 }
 
-func (d *avgDemoCtx) Marshal() []byte    { return types.EncodeInt64(&d.count) }
-func (d *avgDemoCtx) Unmarshal(b []byte) { d.count = types.DecodeInt64(b) }
-func (d *avgDemoCtx) Size() int64        { return 8 } // size of count
+func (d *avgDemoCtx) Marshal() []byte                { return types.EncodeInt64(&d.count) }
+func (d *avgDemoCtx) MarshalBinary() ([]byte, error) { return d.Marshal(), nil }
+func (d *avgDemoCtx) Unmarshal(b []byte)             { d.count = types.DecodeInt64(b) }
+func (d *avgDemoCtx) Size() int64                    { return 8 } // size of count
 var _ AggGroupExecContext = &avgDemoCtx{}
 
 func fromIdxListToNullList(start, end int, idxList []int) []bool {
@@ -198,30 +199,18 @@ func doAggTest[input, output types.FixedSizeTExceptStrType | string](
 	checkResult(isResult2Null, result2, rs[0], 1)
 }
 
-type hackManager struct {
-	mp *mpool.MPool
-}
-
-func (h hackManager) Mp() *mpool.MPool {
-	return h.mp
-}
-
-func hackAggMemoryManager() hackManager {
-	return hackManager{mp: mpool.MustNewZeroNoFixed()}
-}
-
 func TestCount(t *testing.T) {
-	m := hackAggMemoryManager()
+	mp := mpool.MustNewZeroNoFixed()
 	info := singleAggInfo{
 		aggID:    AggIdOfCountColumn,
 		distinct: false,
 		retType:  types.T_int64.ToType(),
 	}
-	a := newCountColumnExecExec(m, info)
+	a := newCountColumnExecExec(mp, info)
 
 	doAggTest[int64, int64](
 		t, a,
-		m.Mp(), types.T_int64.ToType(),
+		mp, types.T_int64.ToType(),
 		[]int64{1, 2, 3}, []int{0}, 2, false,
 		[]int64{1, 2, 3}, nil, 3, false)
 
@@ -229,7 +218,7 @@ func TestCount(t *testing.T) {
 }
 
 func TestMedian(t *testing.T) {
-	m := hackAggMemoryManager()
+	mp := mpool.MustNewZeroNoFixed()
 	info := singleAggInfo{
 		aggID:     1,
 		distinct:  false,
@@ -237,14 +226,14 @@ func TestMedian(t *testing.T) {
 		retType:   types.T_float64.ToType(),
 		emptyNull: true,
 	}
-	a := newMedianColumnNumericExec[int64](m, info)
+	a := newMedianColumnNumericExec[int64](mp, info)
 	defer a.Free()
 
 	a.PreAllocateGroups(1)
 
 	doAggTest[int64, float64](
 		t, a,
-		m.Mp(), types.T_int64.ToType(),
+		mp, types.T_int64.ToType(),
 		[]int64{1, 2, 3}, nil, float64(2), false,
 		[]int64{1, 2, 3}, nil, float64(2), false)
 
@@ -260,18 +249,18 @@ func TestMedian(t *testing.T) {
 		retType:   types.T_float64.ToType(),
 		emptyNull: true,
 	}
-	b := newMedianColumnNumericExec[int64](m, info2)
+	b := newMedianColumnNumericExec[int64](mp, info2)
 	defer b.Free()
 
 	doAggTest[int64, float64](
 		t, b,
-		m.Mp(), types.T_int64.ToType(),
+		mp, types.T_int64.ToType(),
 		[]int64{1, 2, 3}, nil, float64(2), false,
 		[]int64{1, 2, 3}, nil, float64(2), false)
 }
 
 func TestBytesToBytesFrameWork(t *testing.T) {
-	m := hackAggMemoryManager()
+	mp := mpool.MustNewZeroNoFixed()
 	info := singleAggInfo{
 		distinct:  false,
 		argType:   types.T_varchar.ToType(),
@@ -321,18 +310,18 @@ func TestBytesToBytesFrameWork(t *testing.T) {
 	}
 
 	a := newAggregatorFromBytesToBytes(
-		m, info, implement)
+		mp, info, implement)
 	defer a.Free()
 
 	doAggTest[string, string](
 		t, a,
-		m.Mp(), types.T_varchar.ToType(),
+		mp, types.T_varchar.ToType(),
 		[]string{"a", "bb", "c", "ddd"}, []int{3}, "bb", false,
 		[]string{"a", "bb", "c", "ddd"}, nil, "ddd", false)
 }
 
 func TestFixedToFixedFrameWork(t *testing.T) {
-	m := hackAggMemoryManager()
+	mp := mpool.MustNewZeroNoFixed()
 	info := singleAggInfo{
 		distinct:  false,
 		argType:   types.T_int64.ToType(),
@@ -385,18 +374,18 @@ func TestFixedToFixedFrameWork(t *testing.T) {
 	}
 
 	a := newSingleAggFuncExec1NewVersion(
-		m, info, implement)
+		mp, info, implement)
 	defer a.Free()
 
 	doAggTest[int64, int64](
 		t, a,
-		m.Mp(), types.T_int64.ToType(),
+		mp, types.T_int64.ToType(),
 		[]int64{1, 2, 3, 4, 5}, nil, int64(3), false,
 		[]int64{2, 3, 4, 5, 6}, nil, int64(2), false)
 }
 
 func TestFixedToFixedFrameWork_withExecContext(t *testing.T) {
-	m := hackAggMemoryManager()
+	mp := mpool.MustNewZeroNoFixed()
 	info := singleAggInfo{
 		distinct:  false,
 		argType:   types.T_int64.ToType(),
@@ -454,21 +443,19 @@ func TestFixedToFixedFrameWork_withExecContext(t *testing.T) {
 	}
 
 	a := newSingleAggFuncExec1NewVersion(
-		m, info, implement)
+		mp, info, implement)
 	defer a.Free()
 
 	doAggTest[int64, int64](
 		t, a,
-		m.Mp(), types.T_int64.ToType(),
+		mp, types.T_int64.ToType(),
 		[]int64{1, 2, 3, 4, 5}, nil, int64(15/5), false,
 		[]int64{2, 3, 4, 5, 6}, []int{3}, int64(15/4), false)
 }
 
 func TestMakeInitialAggListFromList(t *testing.T) {
-	mp := mpool.MustNewZero()
-
+	mg := mpool.MustNewZero()
 	RegisterGroupConcatAgg(123, ",")
-	mg := NewSimpleAggMemoryManager(mp)
 	agg0, err := MakeAgg(mg, 123, true, []types.Type{types.T_varchar.ToType()}...)
 	require.Nil(t, err)
 	defer agg0.Free()
@@ -485,22 +472,22 @@ func TestMakeInitialAggListFromList(t *testing.T) {
 }
 
 func TestAggExecSize(t *testing.T) {
-	m := hackAggMemoryManager()
+	mp := mpool.MustNewZeroNoFixed()
 	defer func() {
 		// ensure all memory is released
-		require.Equal(t, int64(0), m.Mp().CurrNB())
+		require.Equal(t, int64(0), mp.CurrNB())
 	}()
 
 	testCases := []struct {
 		name       string
-		factory    func(mg AggMemoryManager) (AggFuncExec, error)
+		factory    func(mg *mpool.MPool) (AggFuncExec, error)
 		groupCount int
 		// fillFunc fills data into the aggregator and returns whether the size is expected to increase.
 		fillFunc func(t *testing.T, agg AggFuncExec, mp *mpool.MPool, groupCount int) (sizeShouldIncrease bool)
 	}{
 		{
 			name: "count_star",
-			factory: func(mg AggMemoryManager) (AggFuncExec, error) {
+			factory: func(mg *mpool.MPool) (AggFuncExec, error) {
 				return makeCount(mg, true, AggIdOfCountStar, false, types.T_int64.ToType()), nil
 			},
 			groupCount: 10,
@@ -515,7 +502,7 @@ func TestAggExecSize(t *testing.T) {
 		},
 		{
 			name: "count_column",
-			factory: func(mg AggMemoryManager) (AggFuncExec, error) {
+			factory: func(mg *mpool.MPool) (AggFuncExec, error) {
 				return makeCount(mg, false, AggIdOfCountColumn, false, types.T_int64.ToType()), nil
 			},
 			groupCount: 10,
@@ -530,7 +517,7 @@ func TestAggExecSize(t *testing.T) {
 		},
 		{
 			name: "count_column_distinct",
-			factory: func(mg AggMemoryManager) (AggFuncExec, error) {
+			factory: func(mg *mpool.MPool) (AggFuncExec, error) {
 				return makeCount(mg, false, AggIdOfCountColumn, true, types.T_int64.ToType()), nil
 			},
 			groupCount: 10,
@@ -545,7 +532,7 @@ func TestAggExecSize(t *testing.T) {
 		},
 		{
 			name: "median",
-			factory: func(mg AggMemoryManager) (AggFuncExec, error) {
+			factory: func(mg *mpool.MPool) (AggFuncExec, error) {
 				info := singleAggInfo{
 					aggID:     AggIdOfMedian,
 					distinct:  false,
@@ -567,7 +554,7 @@ func TestAggExecSize(t *testing.T) {
 		},
 		{
 			name: "group_concat",
-			factory: func(mg AggMemoryManager) (AggFuncExec, error) {
+			factory: func(mg *mpool.MPool) (AggFuncExec, error) {
 				return makeGroupConcat(mg, AggIdOfGroupConcat, false, []types.Type{types.T_varchar.ToType()}, getCroupConcatRet(types.T_varchar.ToType()), ","), nil
 			},
 			groupCount: 10,
@@ -582,7 +569,7 @@ func TestAggExecSize(t *testing.T) {
 		},
 		{
 			name: "approx_count",
-			factory: func(mg AggMemoryManager) (AggFuncExec, error) {
+			factory: func(mg *mpool.MPool) (AggFuncExec, error) {
 				return makeApproxCount(mg, AggIdOfApproxCount, types.T_int64.ToType()), nil
 			},
 			groupCount: 10,
@@ -597,7 +584,7 @@ func TestAggExecSize(t *testing.T) {
 		},
 		{
 			name: "window_rank",
-			factory: func(mg AggMemoryManager) (AggFuncExec, error) {
+			factory: func(mg *mpool.MPool) (AggFuncExec, error) {
 				return makeWindowExec(mg, WinIdOfRank, false)
 			},
 			groupCount: 10,
@@ -614,7 +601,7 @@ func TestAggExecSize(t *testing.T) {
 		},
 		{
 			name: "fixed_to_fixed_with_context",
-			factory: func(mg AggMemoryManager) (AggFuncExec, error) {
+			factory: func(mg *mpool.MPool) (AggFuncExec, error) {
 				info := singleAggInfo{
 					distinct:  false,
 					argType:   types.T_int64.ToType(),
@@ -658,9 +645,9 @@ func TestAggExecSize(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			before := m.Mp().CurrNB()
+			before := mp.CurrNB()
 
-			agg, err := tc.factory(m)
+			agg, err := tc.factory(mp)
 			require.NoError(t, err)
 
 			initialSize := agg.Size()
@@ -672,7 +659,7 @@ func TestAggExecSize(t *testing.T) {
 			require.Greater(t, grownSize, initialSize)
 
 			if tc.fillFunc != nil {
-				sizeShouldIncrease := tc.fillFunc(t, agg, m.Mp(), tc.groupCount)
+				sizeShouldIncrease := tc.fillFunc(t, agg, mp, tc.groupCount)
 				filledSize := agg.Size()
 				if sizeShouldIncrease {
 					require.Greater(t, filledSize, grownSize, "Size() should increase after filling data")
@@ -683,15 +670,15 @@ func TestAggExecSize(t *testing.T) {
 			}
 
 			agg.Free()
-			require.Equal(t, before, m.Mp().CurrNB(), "memory leak detected in %s", tc.name)
+			require.Equal(t, before, mp.CurrNB(), "memory leak detected in %s", tc.name)
 		})
 	}
 }
 
 func TestGroupConcatExecMarshalUnmarshal(t *testing.T) {
-	m := hackAggMemoryManager()
+	mp := mpool.MustNewZeroNoFixed()
 	defer func() {
-		require.Equal(t, int64(0), m.Mp().CurrNB())
+		require.Equal(t, int64(0), mp.CurrNB())
 	}()
 
 	{
@@ -702,20 +689,20 @@ func TestGroupConcatExecMarshalUnmarshal(t *testing.T) {
 			retType:   getCroupConcatRet(types.T_varchar.ToType()),
 			emptyNull: true,
 		}
-		exec := newGroupConcatExec(m, info, ",")
+		exec := newGroupConcatExec(mp, info, ",")
 
 		require.NoError(t, exec.GroupGrow(2))
 		v1 := vector.NewVec(types.T_varchar.ToType())
-		defer v1.Free(m.Mp())
-		require.NoError(t, vector.AppendBytes(v1, []byte("test1"), false, m.Mp()))
+		defer v1.Free(mp)
+		require.NoError(t, vector.AppendBytes(v1, []byte("test1"), false, mp))
 		require.NoError(t, exec.Fill(0, 0, []*vector.Vector{v1}))
 
 		data, err := exec.marshal()
 		require.NoError(t, err)
 		require.NotNil(t, data)
 
-		newExec := newGroupConcatExec(m, info, ",")
-		err = newExec.unmarshal(m.Mp(), nil, nil, [][]byte{[]byte(",")})
+		newExec := newGroupConcatExec(mp, info, ",")
+		err = newExec.unmarshal(mp, nil, nil, [][]byte{[]byte(",")})
 		require.NoError(t, err)
 
 		require.Equal(t, []byte(","), newExec.(*groupConcatExec).separator)
@@ -731,16 +718,16 @@ func TestGroupConcatExecMarshalUnmarshal(t *testing.T) {
 			retType:   getCroupConcatRet(types.T_varchar.ToType()),
 			emptyNull: true,
 		}
-		exec := newGroupConcatExec(m, info, "|")
+		exec := newGroupConcatExec(mp, info, "|")
 
 		data, err := exec.marshal()
 		require.NoError(t, err)
 
-		newExec := newGroupConcatExec(m, info, ",")
+		newExec := newGroupConcatExec(mp, info, ",")
 		encoded := &EncodedAgg{}
 		require.NoError(t, encoded.Unmarshal(data))
 
-		err = newExec.unmarshal(m.Mp(), encoded.Result, encoded.Empties, encoded.Groups)
+		err = newExec.unmarshal(mp, encoded.Result, encoded.Empties, encoded.Groups)
 		require.NoError(t, err)
 
 		require.Equal(t, []byte("|"), newExec.(*groupConcatExec).separator)
@@ -756,22 +743,22 @@ func TestGroupConcatExecMarshalUnmarshal(t *testing.T) {
 			retType:   getCroupConcatRet(types.T_varchar.ToType()),
 			emptyNull: true,
 		}
-		exec := newGroupConcatExec(m, info, ",")
+		exec := newGroupConcatExec(mp, info, ",")
 		require.NoError(t, exec.GroupGrow(1))
 
 		v1 := vector.NewVec(types.T_varchar.ToType())
-		defer v1.Free(m.Mp())
-		require.NoError(t, vector.AppendBytes(v1, []byte("distinct1"), false, m.Mp()))
+		defer v1.Free(mp)
+		require.NoError(t, vector.AppendBytes(v1, []byte("distinct1"), false, mp))
 		require.NoError(t, exec.Fill(0, 0, []*vector.Vector{v1}))
 
 		data, err := exec.marshal()
 		require.NoError(t, err)
 
-		newExec := newGroupConcatExec(m, info, ",")
+		newExec := newGroupConcatExec(mp, info, ",")
 		encoded := &EncodedAgg{}
 		require.NoError(t, encoded.Unmarshal(data))
 
-		err = newExec.unmarshal(m.Mp(), encoded.Result, encoded.Empties, encoded.Groups)
+		err = newExec.unmarshal(mp, encoded.Result, encoded.Empties, encoded.Groups)
 		require.NoError(t, err)
 
 		exec.Free()
@@ -786,16 +773,16 @@ func TestGroupConcatExecMarshalUnmarshal(t *testing.T) {
 			retType:   getCroupConcatRet(types.T_varchar.ToType()),
 			emptyNull: true,
 		}
-		exec := newGroupConcatExec(m, info, ",")
+		exec := newGroupConcatExec(mp, info, ",")
 
 		exec.Free()
 	}
 }
 
 func TestCountColumnExecMarshalUnmarshal(t *testing.T) {
-	m := hackAggMemoryManager()
+	mp := mpool.MustNewZeroNoFixed()
 	defer func() {
-		require.Equal(t, int64(0), m.Mp().CurrNB())
+		require.Equal(t, int64(0), mp.CurrNB())
 	}()
 
 	{
@@ -806,22 +793,22 @@ func TestCountColumnExecMarshalUnmarshal(t *testing.T) {
 			retType:   types.T_int64.ToType(),
 			emptyNull: false,
 		}
-		exec := newCountColumnExecExec(m, info)
+		exec := newCountColumnExecExec(mp, info)
 		require.NoError(t, exec.GroupGrow(3))
 
 		v1 := vector.NewVec(types.T_int64.ToType())
-		defer v1.Free(m.Mp())
-		require.NoError(t, vector.AppendFixedList(v1, []int64{1, 2, 3}, nil, m.Mp()))
+		defer v1.Free(mp)
+		require.NoError(t, vector.AppendFixedList(v1, []int64{1, 2, 3}, nil, mp))
 		require.NoError(t, exec.BulkFill(0, []*vector.Vector{v1}))
 
 		data, err := exec.marshal()
 		require.NoError(t, err)
 
-		newExec := newCountColumnExecExec(m, info)
+		newExec := newCountColumnExecExec(mp, info)
 		encoded := &EncodedAgg{}
 		require.NoError(t, encoded.Unmarshal(data))
 
-		err = newExec.unmarshal(m.Mp(), encoded.Result, encoded.Empties, encoded.Groups)
+		err = newExec.unmarshal(mp, encoded.Result, encoded.Empties, encoded.Groups)
 		require.NoError(t, err)
 
 		exec.Free()
@@ -836,22 +823,22 @@ func TestCountColumnExecMarshalUnmarshal(t *testing.T) {
 			retType:   types.T_int64.ToType(),
 			emptyNull: false,
 		}
-		exec := newCountColumnExecExec(m, info)
+		exec := newCountColumnExecExec(mp, info)
 		require.NoError(t, exec.GroupGrow(2))
 
 		v1 := vector.NewVec(types.T_int64.ToType())
-		defer v1.Free(m.Mp())
-		require.NoError(t, vector.AppendFixedList(v1, []int64{1, 2, 1, 3}, nil, m.Mp()))
+		defer v1.Free(mp)
+		require.NoError(t, vector.AppendFixedList(v1, []int64{1, 2, 1, 3}, nil, mp))
 		require.NoError(t, exec.BulkFill(0, []*vector.Vector{v1}))
 
 		data, err := exec.marshal()
 		require.NoError(t, err)
 
-		newExec := newCountColumnExecExec(m, info)
+		newExec := newCountColumnExecExec(mp, info)
 		encoded := &EncodedAgg{}
 		require.NoError(t, encoded.Unmarshal(data))
 
-		err = newExec.unmarshal(m.Mp(), encoded.Result, encoded.Empties, encoded.Groups)
+		err = newExec.unmarshal(mp, encoded.Result, encoded.Empties, encoded.Groups)
 		require.NoError(t, err)
 
 		exec.Free()
@@ -866,17 +853,17 @@ func TestCountColumnExecMarshalUnmarshal(t *testing.T) {
 			retType:   types.T_int64.ToType(),
 			emptyNull: false,
 		}
-		exec := newCountColumnExecExec(m, info)
+		exec := newCountColumnExecExec(mp, info)
 		require.NoError(t, exec.GroupGrow(1))
 
 		data, err := exec.marshal()
 		require.NoError(t, err)
 
-		newExec := newCountColumnExecExec(m, info)
+		newExec := newCountColumnExecExec(mp, info)
 		encoded := &EncodedAgg{}
 		require.NoError(t, encoded.Unmarshal(data))
 
-		err = newExec.unmarshal(m.Mp(), encoded.Result, encoded.Empties, encoded.Groups)
+		err = newExec.unmarshal(mp, encoded.Result, encoded.Empties, encoded.Groups)
 		require.NoError(t, err)
 
 		exec.Free()
@@ -891,9 +878,9 @@ func TestCountColumnExecMarshalUnmarshal(t *testing.T) {
 			retType:   types.T_int64.ToType(),
 			emptyNull: false,
 		}
-		exec := newCountColumnExecExec(m, info)
+		exec := newCountColumnExecExec(mp, info)
 
-		err := exec.unmarshal(m.Mp(), nil, nil, [][]byte{})
+		err := exec.unmarshal(mp, nil, nil, [][]byte{})
 		require.NoError(t, err)
 
 		exec.Free()
@@ -901,32 +888,35 @@ func TestCountColumnExecMarshalUnmarshal(t *testing.T) {
 }
 
 func TestDistinctHashMarshalUnmarshal(t *testing.T) {
-	m := hackAggMemoryManager()
+	mp := mpool.MustNewZeroNoFixed()
 	defer func() {
-		require.Equal(t, int64(0), m.Mp().CurrNB())
+		require.Equal(t, int64(0), mp.CurrNB())
 	}()
 
 	{
-		dh := newDistinctHash()
+		dh := newDistinctHash(mp)
 
 		data, err := dh.marshal()
 		require.NoError(t, err)
 		require.Nil(t, data)
 
-		newDh := newDistinctHash()
-		err = newDh.unmarshal(nil)
+		newDh := newDistinctHash(mp)
+		err = newDh.unmarshal(nil, mp)
 		require.NoError(t, err)
 
 		require.Equal(t, 0, len(newDh.maps))
+
+		dh.free()
+		newDh.free()
 	}
 
 	{
-		dh := newDistinctHash()
+		dh := newDistinctHash(mp)
 		require.NoError(t, dh.grows(1))
 
 		v1 := vector.NewVec(types.T_varchar.ToType())
-		defer v1.Free(m.Mp())
-		require.NoError(t, vector.AppendBytes(v1, []byte("key1"), false, m.Mp()))
+		defer v1.Free(mp)
+		require.NoError(t, vector.AppendBytes(v1, []byte("key1"), false, mp))
 
 		_, err := dh.fill(0, []*vector.Vector{v1}, 0)
 		require.NoError(t, err)
@@ -935,27 +925,30 @@ func TestDistinctHashMarshalUnmarshal(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, data)
 
-		newDh := newDistinctHash()
-		err = newDh.unmarshal(data)
+		newDh := newDistinctHash(mp)
+		err = newDh.unmarshal(data, mp)
 		require.NoError(t, err)
 
 		require.Equal(t, 1, len(newDh.maps))
 		require.Equal(t, uint64(1), newDh.maps[0].GroupCount())
 
-		v1.Free(m.Mp())
+		v1.Free(mp)
+
+		dh.free()
+		newDh.free()
 	}
 
 	{
-		dh := newDistinctHash()
+		dh := newDistinctHash(mp)
 		require.NoError(t, dh.grows(3))
 
 		v1 := vector.NewVec(types.T_varchar.ToType())
-		defer v1.Free(m.Mp())
-		require.NoError(t, vector.AppendBytes(v1, []byte("key1"), false, m.Mp()))
+		defer v1.Free(mp)
+		require.NoError(t, vector.AppendBytes(v1, []byte("key1"), false, mp))
 
 		v2 := vector.NewVec(types.T_varchar.ToType())
-		defer v2.Free(m.Mp())
-		require.NoError(t, vector.AppendBytes(v2, []byte("key2"), false, m.Mp()))
+		defer v2.Free(mp)
+		require.NoError(t, vector.AppendBytes(v2, []byte("key2"), false, mp))
 
 		_, err := dh.fill(0, []*vector.Vector{v1}, 0)
 		require.NoError(t, err)
@@ -967,8 +960,8 @@ func TestDistinctHashMarshalUnmarshal(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, data)
 
-		newDh := newDistinctHash()
-		err = newDh.unmarshal(data)
+		newDh := newDistinctHash(mp)
+		err = newDh.unmarshal(data, mp)
 		require.NoError(t, err)
 
 		require.Equal(t, 3, len(newDh.maps))
@@ -976,8 +969,11 @@ func TestDistinctHashMarshalUnmarshal(t *testing.T) {
 		require.Equal(t, uint64(1), newDh.maps[1].GroupCount())
 		require.Equal(t, uint64(0), newDh.maps[2].GroupCount())
 
-		v1.Free(m.Mp())
-		v2.Free(m.Mp())
+		v1.Free(mp)
+		v2.Free(mp)
+
+		dh.free()
+		newDh.free()
 	}
 
 }

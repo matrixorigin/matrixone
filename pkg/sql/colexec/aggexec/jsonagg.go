@@ -15,7 +15,9 @@
 package aggexec
 
 import (
+	"bytes"
 	"encoding/json"
+	io "io"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -52,7 +54,7 @@ func (exec *jsonArrayAggExec) GetOptResult() SplitResult {
 
 func (exec *jsonArrayAggExec) marshal() ([]byte, error) {
 	d := exec.multiAggInfo.getEncoded()
-	r, em, err := exec.ret.marshalToBytes()
+	r, em, _, err := exec.ret.marshalToBytes()
 	if err != nil {
 		return nil, err
 	}
@@ -85,17 +87,29 @@ func (exec *jsonArrayAggExec) marshal() ([]byte, error) {
 	return encoded.Marshal()
 }
 
-func (exec *jsonArrayAggExec) unmarshal(_ *mpool.MPool, result, empties, groups [][]byte) error {
-	if err := exec.ret.unmarshalFromBytes(result, empties); err != nil {
+func (exec *jsonArrayAggExec) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
+	return marshalRetAndGroupsToBuffer(
+		cnt, flags, buf,
+		&exec.ret.optSplitResult, exec.groups, nil)
+}
+
+func (exec *jsonArrayAggExec) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
+	return marshalChunkToBuffer(
+		chunk, buf,
+		&exec.ret.optSplitResult, exec.groups, nil)
+}
+
+func (exec *jsonArrayAggExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
+	_, groups, err := unmarshalFromReader[jsonArrayAggGroup](reader, &exec.ret.optSplitResult)
+	if err != nil {
 		return err
 	}
-
 	offset := 0
 	if exec.IsDistinct() {
 		if len(groups) == 0 {
 			return moerr.NewInternalErrorNoCtx("json_arrayagg distinct data missing")
 		}
-		if err := exec.distinctHash.unmarshal(groups[0]); err != nil {
+		if err := exec.distinctHash.unmarshal(groups[0], mp); err != nil {
 			return err
 		}
 		offset = 1
@@ -114,10 +128,40 @@ func (exec *jsonArrayAggExec) unmarshal(_ *mpool.MPool, result, empties, groups 
 	return nil
 }
 
-func newJsonArrayAggExec(mg AggMemoryManager, info multiAggInfo) *jsonArrayAggExec {
+func (exec *jsonArrayAggExec) unmarshal(mp *mpool.MPool, result, empties, groups [][]byte) error {
+	if err := exec.ret.unmarshalFromBytes(result, empties, nil); err != nil {
+		return err
+	}
+
+	offset := 0
+	if exec.IsDistinct() {
+		if len(groups) == 0 {
+			return moerr.NewInternalErrorNoCtx("json_arrayagg distinct data missing")
+		}
+		if err := exec.distinctHash.unmarshal(groups[0], mp); err != nil {
+			return err
+		}
+		offset = 1
+	}
+
+	groupCount := exec.ret.totalGroupCount()
+	exec.groups = make([]jsonArrayAggGroup, groupCount)
+	for i := 0; i < groupCount && offset+i < len(groups); i++ {
+		if len(groups[offset+i]) == 0 {
+			continue
+		}
+		if err := unmarshalJsonArrayGroup(&exec.groups[i], groups[offset+i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func newJsonArrayAggExec(mp *mpool.MPool, info multiAggInfo) *jsonArrayAggExec {
 	return &jsonArrayAggExec{
 		multiAggInfo: info,
-		ret:          initAggResultWithBytesTypeResult(mg, info.retType, info.emptyNull, ""),
+		ret:          initAggResultWithBytesTypeResult(mp, info.retType, info.emptyNull, "", info.IsDistinct()),
+		distinctHash: distinctHash{mp: mp},
 	}
 }
 
@@ -289,7 +333,7 @@ func (exec *jsonObjectAggExec) GetOptResult() SplitResult {
 
 func (exec *jsonObjectAggExec) marshal() ([]byte, error) {
 	d := exec.multiAggInfo.getEncoded()
-	r, em, err := exec.ret.marshalToBytes()
+	r, em, _, err := exec.ret.marshalToBytes()
 	if err != nil {
 		return nil, err
 	}
@@ -322,8 +366,21 @@ func (exec *jsonObjectAggExec) marshal() ([]byte, error) {
 	return encoded.Marshal()
 }
 
-func (exec *jsonObjectAggExec) unmarshal(_ *mpool.MPool, result, empties, groups [][]byte) error {
-	if err := exec.ret.unmarshalFromBytes(result, empties); err != nil {
+func (exec *jsonObjectAggExec) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
+	return marshalRetAndGroupsToBuffer(
+		cnt, flags, buf,
+		&exec.ret.optSplitResult, exec.groups, nil)
+}
+
+func (exec *jsonObjectAggExec) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
+	return marshalChunkToBuffer(
+		chunk, buf,
+		&exec.ret.optSplitResult, exec.groups, nil)
+}
+
+func (exec *jsonObjectAggExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
+	_, groups, err := unmarshalFromReader[jsonObjectAggGroup](reader, &exec.ret.optSplitResult)
+	if err != nil {
 		return err
 	}
 
@@ -332,7 +389,7 @@ func (exec *jsonObjectAggExec) unmarshal(_ *mpool.MPool, result, empties, groups
 		if len(groups) == 0 {
 			return moerr.NewInternalErrorNoCtx("json_objectagg distinct data missing")
 		}
-		if err := exec.distinctHash.unmarshal(groups[0]); err != nil {
+		if err := exec.distinctHash.unmarshal(groups[0], mp); err != nil {
 			return err
 		}
 		offset = 1
@@ -351,10 +408,40 @@ func (exec *jsonObjectAggExec) unmarshal(_ *mpool.MPool, result, empties, groups
 	return nil
 }
 
-func newJsonObjectAggExec(mg AggMemoryManager, info multiAggInfo) *jsonObjectAggExec {
+func (exec *jsonObjectAggExec) unmarshal(mp *mpool.MPool, result, empties, groups [][]byte) error {
+	if err := exec.ret.unmarshalFromBytes(result, empties, nil); err != nil {
+		return err
+	}
+
+	offset := 0
+	if exec.IsDistinct() {
+		if len(groups) == 0 {
+			return moerr.NewInternalErrorNoCtx("json_objectagg distinct data missing")
+		}
+		if err := exec.distinctHash.unmarshal(groups[0], mp); err != nil {
+			return err
+		}
+		offset = 1
+	}
+
+	groupCount := exec.ret.totalGroupCount()
+	exec.groups = make([]jsonObjectAggGroup, groupCount)
+	for i := 0; i < groupCount && offset+i < len(groups); i++ {
+		if len(groups[offset+i]) == 0 {
+			continue
+		}
+		if err := unmarshalJsonObjectGroup(&exec.groups[i], groups[offset+i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func newJsonObjectAggExec(mg *mpool.MPool, info multiAggInfo) *jsonObjectAggExec {
 	return &jsonObjectAggExec{
 		multiAggInfo: info,
-		ret:          initAggResultWithBytesTypeResult(mg, info.retType, info.emptyNull, ""),
+		ret:          initAggResultWithBytesTypeResult(mg, info.retType, info.emptyNull, "", info.IsDistinct()),
+		distinctHash: distinctHash{mp: mg},
 	}
 }
 
@@ -526,6 +613,14 @@ func (exec *jsonObjectAggExec) Size() int64 {
 	return exec.ret.Size() + exec.distinctHash.Size()
 }
 
+func (g jsonArrayAggGroup) MarshalBinary() ([]byte, error) {
+	return marshalJsonArrayGroup(g)
+}
+
+func (g jsonArrayAggGroup) UnmarshalBinary(data []byte) error {
+	return unmarshalJsonArrayGroup(&g, data)
+}
+
 func marshalJsonArrayGroup(g jsonArrayAggGroup) ([]byte, error) {
 	if len(g.values) == 0 {
 		return nil, nil
@@ -538,6 +633,14 @@ func unmarshalJsonArrayGroup(g *jsonArrayAggGroup, data []byte) error {
 		return nil
 	}
 	return json.Unmarshal(data, &g.values)
+}
+
+func (g jsonObjectAggGroup) MarshalBinary() ([]byte, error) {
+	return marshalJsonObjectGroup(g)
+}
+
+func (g jsonObjectAggGroup) UnmarshalBinary(data []byte) error {
+	return unmarshalJsonObjectGroup(&g, data)
 }
 
 func marshalJsonObjectGroup(g jsonObjectAggGroup) ([]byte, error) {

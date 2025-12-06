@@ -114,11 +114,11 @@ func (i *IOEntry) prepareData(ctx context.Context) (finally func(err *error)) {
 			i.releaseData()
 		}
 		i.releaseData = func() {
-			dec.Deallocate(malloc.NoHints)
+			dec.Deallocate()
 		}
 		finally = func(err *error) {
 			if err != nil && *err != nil {
-				dec.Deallocate(malloc.NoHints)
+				dec.Deallocate()
 			}
 		}
 

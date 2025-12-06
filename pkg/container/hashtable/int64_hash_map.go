@@ -19,8 +19,8 @@ import (
 	"io"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
@@ -30,17 +30,15 @@ type Int64HashMapCell struct {
 }
 
 type Int64HashMap struct {
-	allocator malloc.Allocator
+	mp *mpool.MPool
 
 	blockCellCnt    uint64
 	blockMaxElemCnt uint64
 	cellCntMask     uint64
 
-	cellCnt             uint64
-	elemCnt             uint64
-	rawData             [][]byte
-	rawDataDeallocators []malloc.Deallocator
-	cells               [][]Int64HashMapCell
+	cellCnt uint64
+	elemCnt uint64
+	cells   [][]Int64HashMapCell
 }
 
 var (
@@ -54,45 +52,37 @@ func init() {
 }
 
 func (ht *Int64HashMap) Free() {
-	for i, de := range ht.rawDataDeallocators {
-		if de != nil {
-			de.Deallocate(malloc.NoHints)
-		}
-		ht.rawData[i], ht.cells[i] = nil, nil
+	for i, c := range ht.cells {
+		mpool.FreeSlice(ht.mp, c)
+		ht.cells[i] = nil
 	}
-	ht.rawData, ht.cells = nil, nil
+	ht.cells = nil
 }
 
-func (ht *Int64HashMap) allocate(index int, size uint64) error {
-	if ht.rawDataDeallocators[index] != nil {
+func (ht *Int64HashMap) allocate(index int, ncells int) error {
+	if ht.cells[index] != nil {
 		panic("overwriting")
 	}
-	bs, de, err := ht.allocator.Allocate(size, malloc.NoHints)
+
+	cell, err := mpool.MakeSlice[Int64HashMapCell](ncells, ht.mp, true)
 	if err != nil {
 		return err
 	}
-	ht.rawData[index] = bs
-	ht.rawDataDeallocators[index] = de
-	ht.cells[index] = unsafe.Slice((*Int64HashMapCell)(unsafe.Pointer(&ht.rawData[index][0])), ht.blockCellCnt)
+	ht.cells[index] = cell
 	return nil
 }
 
-func (ht *Int64HashMap) Init(allocator malloc.Allocator) (err error) {
-	if allocator == nil {
-		allocator = DefaultAllocator()
-	}
-	ht.allocator = allocator
+func (ht *Int64HashMap) Init(mp *mpool.MPool) (err error) {
+	ht.mp = mp
 	ht.blockCellCnt = kInitialCellCnt
 	ht.blockMaxElemCnt = maxElemCnt(kInitialCellCnt, intCellSize)
 	ht.cellCntMask = kInitialCellCnt - 1
 	ht.elemCnt = 0
 	ht.cellCnt = kInitialCellCnt
 
-	ht.rawData = make([][]byte, 1)
-	ht.rawDataDeallocators = make([]malloc.Deallocator, 1)
 	ht.cells = make([][]Int64HashMapCell, 1)
 
-	if err = ht.allocate(0, uint64(ht.blockCellCnt*intCellSize)); err != nil {
+	if err = ht.allocate(0, int(ht.blockCellCnt)); err != nil {
 		return err
 	}
 
@@ -180,9 +170,8 @@ func (ht *Int64HashMap) findEmptyCell(hash uint64) *Int64HashMapCell {
 }
 
 func (ht *Int64HashMap) ResizeOnDemand(cnt int) error {
-
 	targetCnt := ht.elemCnt + uint64(cnt)
-	if targetCnt <= uint64(len(ht.rawData))*ht.blockMaxElemCnt {
+	if targetCnt <= uint64(len(ht.cells))*ht.blockMaxElemCnt {
 		return nil
 	}
 
@@ -196,17 +185,15 @@ func (ht *Int64HashMap) ResizeOnDemand(cnt int) error {
 	newAllocSize := int(newCellCnt * intCellSize)
 	if ht.blockCellCnt == maxIntCellCntPerBlock {
 		// double the blocks
-		oldBlockNum := len(ht.rawData)
+		oldBlockNum := len(ht.cells)
 		newBlockNum := newAllocSize / maxBlockSize
 
-		ht.rawData = append(ht.rawData, make([][]byte, newBlockNum-oldBlockNum)...)
-		ht.rawDataDeallocators = append(ht.rawDataDeallocators, make([]malloc.Deallocator, newBlockNum-oldBlockNum)...)
 		ht.cells = append(ht.cells, make([][]Int64HashMapCell, newBlockNum-oldBlockNum)...)
 		ht.cellCnt = ht.blockCellCnt * uint64(newBlockNum)
 		ht.cellCntMask = ht.cellCnt - 1
 
 		for i := oldBlockNum; i < newBlockNum; i++ {
-			if err := ht.allocate(i, uint64(ht.blockCellCnt*intCellSize)); err != nil {
+			if err := ht.allocate(i, int(ht.blockCellCnt)); err != nil {
 				return err
 			}
 		}
@@ -244,8 +231,9 @@ func (ht *Int64HashMap) ResizeOnDemand(cnt int) error {
 		}
 	} else {
 		oldCells0 := ht.cells[0]
-		oldDeallocator := ht.rawDataDeallocators[0]
-		ht.rawDataDeallocators[0] = nil
+		ht.cells[0] = nil
+		defer mpool.FreeSlice(ht.mp, oldCells0)
+
 		ht.cellCnt = newCellCnt
 		ht.cellCntMask = newCellCnt - 1
 
@@ -253,7 +241,7 @@ func (ht *Int64HashMap) ResizeOnDemand(cnt int) error {
 			ht.blockCellCnt = newCellCnt
 			ht.blockMaxElemCnt = newMaxElemCnt
 
-			if err := ht.allocate(0, uint64(newAllocSize)); err != nil {
+			if err := ht.allocate(0, int(newCellCnt)); err != nil {
 				return err
 			}
 
@@ -262,14 +250,12 @@ func (ht *Int64HashMap) ResizeOnDemand(cnt int) error {
 			ht.blockMaxElemCnt = maxElemCnt(ht.blockCellCnt, intCellSize)
 
 			newBlockNum := newAllocSize / maxBlockSize
-			ht.rawData = make([][]byte, newBlockNum)
-			ht.rawDataDeallocators = make([]malloc.Deallocator, newBlockNum)
 			ht.cells = make([][]Int64HashMapCell, newBlockNum)
 			ht.cellCnt = ht.blockCellCnt * uint64(newBlockNum)
 			ht.cellCntMask = ht.cellCnt - 1
 
 			for i := 0; i < newBlockNum; i++ {
-				if err := ht.allocate(i, uint64(ht.blockCellCnt*intCellSize)); err != nil {
+				if err := ht.allocate(i, int(ht.blockCellCnt)); err != nil {
 					return err
 				}
 			}
@@ -283,8 +269,6 @@ func (ht *Int64HashMap) ResizeOnDemand(cnt int) error {
 				*newCell = *cell
 			}
 		}
-
-		oldDeallocator.Deallocate(malloc.NoHints)
 	}
 
 	return nil
@@ -297,8 +281,8 @@ func (ht *Int64HashMap) Cardinality() uint64 {
 func (ht *Int64HashMap) Size() int64 {
 	// 41 is the fixed size of Int64HashMap
 	ret := int64(41)
-	for i := range ht.rawData {
-		ret += int64(len(ht.rawData[i]))
+	for i := range ht.cells {
+		ret += int64(len(ht.cells[i]) * int(intCellSize))
 		// 16 is the len of ht.cells[i]
 		ret += 16
 	}
@@ -343,8 +327,8 @@ func (ht *Int64HashMap) MarshalBinary() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func (ht *Int64HashMap) UnmarshalBinary(data []byte, allocator malloc.Allocator) error {
-	_, err := ht.UnmarshalFrom(bytes.NewReader(data), allocator)
+func (ht *Int64HashMap) UnmarshalBinary(data []byte, mp *mpool.MPool) error {
+	_, err := ht.UnmarshalFrom(bytes.NewReader(data), mp)
 	return err
 }
 
@@ -380,7 +364,7 @@ func (ht *Int64HashMap) WriteTo(w io.Writer) (n int64, err error) {
 	return
 }
 
-func (ht *Int64HashMap) UnmarshalFrom(r io.Reader, allocator malloc.Allocator) (n int64, err error) {
+func (ht *Int64HashMap) UnmarshalFrom(r io.Reader, mp *mpool.MPool) (n int64, err error) {
 	var rn int
 
 	// Read element count
@@ -391,7 +375,7 @@ func (ht *Int64HashMap) UnmarshalFrom(r io.Reader, allocator malloc.Allocator) (
 	n += int64(rn)
 	elemCnt := types.DecodeUint64(buf)
 
-	if err = ht.Init(allocator); err != nil {
+	if err = ht.Init(mp); err != nil {
 		return
 	}
 
@@ -418,4 +402,16 @@ func (ht *Int64HashMap) UnmarshalFrom(r io.Reader, allocator malloc.Allocator) (
 	ht.elemCnt = elemCnt
 
 	return
+}
+
+func (ht *Int64HashMap) AllGroupHash() []uint64 {
+	ret := make([]uint64, ht.elemCnt)
+	for i := range ht.cells {
+		for _, c := range ht.cells[i] {
+			if c.Mapped != 0 {
+				ret[c.Mapped-1] = c.Key
+			}
+		}
+	}
+	return ret
 }
