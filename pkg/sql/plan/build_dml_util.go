@@ -3271,7 +3271,7 @@ func (fk FkReferDef) String() string {
 // that refer to the table
 func GetSqlForFkReferredTo(db, table string) string {
 	return fmt.Sprintf(
-		"select "+
+		"SELECT "+
 			"db_name, "+
 			"table_name, "+
 			"constraint_name, "+
@@ -3279,13 +3279,13 @@ func GetSqlForFkReferredTo(db, table string) string {
 			"refer_column_name, "+
 			"on_delete, "+
 			"on_update "+
-			"from "+
+			"FROM "+
 			"`mo_catalog`.`mo_foreign_keys` "+
-			"where "+
-			"refer_db_name = '%s' and refer_table_name = '%s' "+
-			" and "+
-			"(db_name != '%s' or db_name = '%s' and table_name != '%s') "+
-			"order by db_name, table_name, constraint_name;",
+			"WHERE "+
+			"refer_db_name = '%s' AND refer_table_name = '%s' "+
+			"AND "+
+			"(db_name != '%s' OR db_name = '%s' AND table_name != '%s') "+
+			"ORDER BY db_name, table_name, constraint_name;",
 		db, table, db, db, table)
 }
 
@@ -3408,9 +3408,9 @@ func getSqlForAddFk(db, table string, data *FkData) string {
 // on the table
 func getSqlForDeleteTable(db, tbl string) string {
 	sb := strings.Builder{}
-	sb.WriteString("DELETE FROM `mo_catalog`.`mo_foreign_keys` WHERE ")
-	sb.WriteString(fmt.Sprintf(
-		"db_name = '%s' AND table_name = '%s'", db, tbl))
+	sb.WriteString("DELETE FROM `mo_catalog`.`mo_foreign_keys` ")
+	sb.WriteString(fmt.Sprintf("WHERE db_name = '%s' AND table_name = '%s'",
+		db, tbl))
 	return sb.String()
 }
 
@@ -3418,9 +3418,8 @@ func getSqlForDeleteTable(db, tbl string) string {
 // on the table
 func getSqlForDeleteConstraint(db, tbl, constraint string) string {
 	sb := strings.Builder{}
-	sb.WriteString("DELETE FROM `mo_catalog`.`mo_foreign_keys` WHERE ")
-	sb.WriteString(fmt.Sprintf(
-		"constraint_name = '%s' AND db_name = '%s' AND table_name = '%s'",
+	sb.WriteString("DELETE FROM `mo_catalog`.`mo_foreign_keys` ")
+	sb.WriteString(fmt.Sprintf("WHERE constraint_name = '%s' AND db_name = '%s' AND table_name = '%s'",
 		constraint, db, tbl))
 	return sb.String()
 }
@@ -3429,8 +3428,8 @@ func getSqlForDeleteConstraint(db, tbl, constraint string) string {
 // on the database
 func getSqlForDeleteDB(db string) string {
 	sb := strings.Builder{}
-	sb.WriteString("DELETE FROM `mo_catalog`.`mo_foreign_keys` WHERE ")
-	sb.WriteString(fmt.Sprintf("db_name = '%s'", db))
+	sb.WriteString("DELETE FROM `mo_catalog`.`mo_foreign_keys` ")
+	sb.WriteString(fmt.Sprintf("WHERE db_name = '%s'", db))
 	return sb.String()
 }
 
@@ -3439,13 +3438,15 @@ func getSqlForRenameTable(db, oldName, newName string) (ret []string) {
 	sb := strings.Builder{}
 	sb.WriteString("UPDATE `mo_catalog`.`mo_foreign_keys` ")
 	sb.WriteString(fmt.Sprintf("SET table_name = '%s' ", newName))
-	sb.WriteString(fmt.Sprintf("WHERE db_name = '%s' AND table_name = '%s' ; ", db, oldName))
+	sb.WriteString(fmt.Sprintf("WHERE db_name = '%s' AND table_name = '%s' ; ",
+		db, oldName))
 	ret = append(ret, sb.String())
 
 	sb.Reset()
 	sb.WriteString("UPDATE `mo_catalog`.`mo_foreign_keys` ")
 	sb.WriteString(fmt.Sprintf("SET refer_table_name = '%s' ", newName))
-	sb.WriteString(fmt.Sprintf("WHERE refer_db_name = '%s' AND refer_table_name = '%s' ; ", db, oldName))
+	sb.WriteString(fmt.Sprintf("WHERE refer_db_name = '%s' AND refer_table_name = '%s' ; ",
+		db, oldName))
 	ret = append(ret, sb.String())
 	return
 }
@@ -3453,16 +3454,16 @@ func getSqlForRenameTable(db, oldName, newName string) (ret []string) {
 // getSqlForRenameColumn returns the sqls that rename the column of all fk relationships in mo_foreign_keys
 func getSqlForRenameColumn(db, table, oldName, newName string) (ret []string) {
 	sb := strings.Builder{}
-	sb.WriteString("update `mo_catalog`.`mo_foreign_keys` ")
-	sb.WriteString(fmt.Sprintf("set column_name = '%s' ", newName))
-	sb.WriteString(fmt.Sprintf("where db_name = '%s' and table_name = '%s' and column_name = '%s' ; ",
+	sb.WriteString("UPDATE `mo_catalog`.`mo_foreign_keys` ")
+	sb.WriteString(fmt.Sprintf("SET column_name = '%s' ", newName))
+	sb.WriteString(fmt.Sprintf("WHERE db_name = '%s' AND table_name = '%s' AND column_name = '%s' ; ",
 		db, table, oldName))
 	ret = append(ret, sb.String())
 
 	sb.Reset()
-	sb.WriteString("update `mo_catalog`.`mo_foreign_keys` ")
-	sb.WriteString(fmt.Sprintf("set refer_column_name = '%s' ", newName))
-	sb.WriteString(fmt.Sprintf("where refer_db_name = '%s' and refer_table_name = '%s' and refer_column_name = '%s' ; ",
+	sb.WriteString("UPDATE `mo_catalog`.`mo_foreign_keys` ")
+	sb.WriteString(fmt.Sprintf("SET refer_column_name = '%s' ", newName))
+	sb.WriteString(fmt.Sprintf("WHERE refer_db_name = '%s' AND refer_table_name = '%s' AND refer_column_name = '%s' ; ",
 		db, table, oldName))
 	ret = append(ret, sb.String())
 	return
@@ -3473,7 +3474,8 @@ func getSqlForRenameColumn(db, table, oldName, newName string) (ret []string) {
 func getSqlForCheckHasDBRefersTo(db string) string {
 	sb := strings.Builder{}
 	sb.WriteString("SELECT COUNT(*) > 0 FROM `mo_catalog`.`mo_foreign_keys` ")
-	sb.WriteString(fmt.Sprintf("WHERE refer_db_name = '%s' AND db_name != '%s';", db, db))
+	sb.WriteString(fmt.Sprintf("WHERE refer_db_name = '%s' AND db_name != '%s'",
+		db, db))
 	return sb.String()
 }
 
