@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
 /*
@@ -317,7 +318,7 @@ func (f *fuzzyCheck) backgroundSQLCheck(c *Compile) error {
 		duplicateCheckSql = fmt.Sprintf(fuzzyNonCompoundCheck, f.attr, f.db, f.tbl, f.attr, f.condition, f.attr)
 	}
 
-	res, err := c.runSqlWithResult(duplicateCheckSql, NoAccountId)
+	res, err := c.runSqlWithResultAndOptions(duplicateCheckSql, NoAccountId, executor.StatementOption{}.WithDisableLog())
 	if err != nil {
 		c.debugLogFor19288(err, duplicateCheckSql)
 		c.proc.Errorf(c.proc.Ctx, "The sql that caused the fuzzy check background SQL failed is %s, and generated background sql is %s", c.sql, duplicateCheckSql)

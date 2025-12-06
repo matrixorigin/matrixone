@@ -70,31 +70,31 @@ var (
 )
 var (
 	// see the comment in fuzzyCheck func genCondition for the reason why has to be two SQLs
-	fuzzyNonCompoundCheck = "select %s from `%s`.`%s` where %s in (%s) group by %s having count(*) > 1 limit 1;"
-	fuzzyCompoundCheck    = "select serial(%s) from `%s`.`%s` where %s group by serial(%s) having count(*) > 1 limit 1;"
+	fuzzyNonCompoundCheck = "SELECT %s FROM `%s`.`%s` WHERE %s IN (%s) GROUP BY %s HAVING COUNT(*) > 1 LIMIT 1;"
+	fuzzyCompoundCheck    = "SELECT serial(%s) FROM `%s`.`%s` WHERE %s GROUP BY serial(%s) HAVING COUNT(*) > 1 LIMIT 1;"
 )
 
 var (
-	insertIntoSingleIndexTableWithPKeyFormat    = "insert into  `%s`.`%s` select (%s), %s from `%s`.`%s` where (%s) is not null;"
-	insertIntoUniqueIndexTableWithPKeyFormat    = "insert into  `%s`.`%s` select serial(%s), %s from `%s`.`%s` where serial(%s) is not null;"
-	insertIntoSecondaryIndexTableWithPKeyFormat = "insert into  `%s`.`%s` select serial_full(%s), %s from `%s`.`%s`;"
-	insertIntoSingleIndexTableWithoutPKeyFormat = "insert into  `%s`.`%s` select (%s) from `%s`.`%s` where (%s) is not null;"
-	insertIntoIndexTableWithoutPKeyFormat       = "insert into  `%s`.`%s` select serial(%s) from `%s`.`%s` where serial(%s) is not null;"
-	insertIntoMasterIndexTableFormat            = "insert into  `%s`.`%s` select serial_full('%s', %s, %s), %s from `%s`.`%s`;"
+	insertIntoSingleIndexTableWithPKeyFormat    = "INSERT INTO  `%s`.`%s` SELECT (%s), %s FROM `%s`.`%s` WHERE (%s) IS NOT NULL;"
+	insertIntoUniqueIndexTableWithPKeyFormat    = "INSERT INTO  `%s`.`%s` SELECT serial(%s), %s FROM `%s`.`%s` WHERE serial(%s) IS NOT NULL;"
+	insertIntoSecondaryIndexTableWithPKeyFormat = "INSERT INTO  `%s`.`%s` SELECT serial_full(%s), %s FROM `%s`.`%s`;"
+	insertIntoSingleIndexTableWithoutPKeyFormat = "INSERT INTO  `%s`.`%s` SELECT (%s) FROM `%s`.`%s` WHERE (%s) IS NOT NULL;"
+	insertIntoIndexTableWithoutPKeyFormat       = "INSERT INTO  `%s`.`%s` SELECT serial(%s) FROM `%s`.`%s` WHERE serial(%s) IS NOT NULL;"
+	insertIntoMasterIndexTableFormat            = "INSERT INTO  `%s`.`%s` SELECT serial_full('%s', %s, %s), %s FROM `%s`.`%s`;"
 )
 
 var (
-	deleteMoIndexesWithDatabaseIdFormat          = `delete from mo_catalog.mo_indexes where database_id = %v;`
-	deleteMoIndexesWithTableIdFormat             = `delete from mo_catalog.mo_indexes where table_id = %v;`
-	deleteMoIndexesWithTableIdAndIndexNameFormat = `delete from mo_catalog.mo_indexes where table_id = %v and name = '%s';`
-	updateMoIndexesVisibleFormat                 = `update mo_catalog.mo_indexes set is_visible = %v where table_id = %v and name = '%s';`
-	updateMoIndexesTruncateTableFormat           = `update mo_catalog.mo_indexes set table_id = %v where table_id = %v`
-	updateMoIndexesAlgoParams                    = `update mo_catalog.mo_indexes set algo_params = '%s' where table_id = %v and name = '%s';`
-	updateMoMergeSettings                        = `update mo_catalog.mo_merge_settings set tid = %v where account_id = %v and tid = %v;`
+	deleteMoIndexesWithDatabaseIdFormat          = `DELETE FROM mo_catalog.mo_indexes WHERE database_id = %v;`
+	deleteMoIndexesWithTableIdFormat             = `DELETE FROM mo_catalog.mo_indexes WHERE table_id = %v;`
+	deleteMoIndexesWithTableIdAndIndexNameFormat = `DELETE FROM mo_catalog.mo_indexes WHERE table_id = %v AND name = '%s';`
+	updateMoIndexesVisibleFormat                 = `UPDATE mo_catalog.mo_indexes SET is_visible = %v WHERE table_id = %v AND name = '%s';`
+	updateMoIndexesTruncateTableFormat           = `UPDATE mo_catalog.mo_indexes SET table_id = %v WHERE table_id = %v`
+	updateMoIndexesAlgoParams                    = `UPDATE mo_catalog.mo_indexes SET algo_params = '%s' WHERE table_id = %v AND name = '%s';`
+	updateMoMergeSettings                        = `UPDATE mo_catalog.mo_merge_settings SET tid = %v WHERE account_id = %v AND tid = %v;`
 )
 
 var (
-	dropTableBeforeDropDatabase = "drop table if exists `%v`.`%v`;"
+	dropTableBeforeDropDatabase = "DROP TABLE IF EXISTS `%v`.`%v`;"
 )
 
 var (
@@ -102,7 +102,7 @@ var (
 )
 
 var (
-	insertIntoHnswIndexTableFormat = "SELECT f.* from `%s`.`%s` AS %s CROSS APPLY hnsw_create('%s', '%s', %s, %s) AS f;"
+	insertIntoHnswIndexTableFormat = "SELECT f.* FROM `%s`.`%s` AS %s CROSS APPLY hnsw_create('%s', '%s', %s, %s) AS f;"
 )
 
 // genInsertIndexTableSql: Generate an insert statement for inserting data into the index table

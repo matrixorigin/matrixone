@@ -135,7 +135,8 @@ func TestTxnTable_Reset(t *testing.T) {
 		rt.SetGlobalVariables(runtime.ClusterService, mc)
 		st := shardservice.NewShardStorage("", rt.Clock(), nil, nil, nil, nil)
 		sv := shardservice.NewService(shardservice.Config{
-			ServiceID: "s1",
+			ServiceID:     "s1",
+			ListenAddress: "127.0.0.1:0", // 使用随机端口避免冲突
 		}, st)
 		tbl, err := MockTableDelegate(orig, sv)
 		assert.NoError(t, err)

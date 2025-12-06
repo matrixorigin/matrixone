@@ -906,7 +906,7 @@ func (s *Scope) replace(c *Compile) error {
 
 	delAffectedRows := uint64(0)
 	if deleteCond != "" {
-		result, err := c.runSqlWithResult(fmt.Sprintf("delete from `%s`.`%s` where %s", dbName, tblName, deleteCond), NoAccountId)
+		result, err := c.runSqlWithResult(fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE %s", dbName, tblName, deleteCond), NoAccountId)
 		if err != nil {
 			return err
 		}

@@ -16,14 +16,11 @@ package mometric
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 )
 
@@ -91,38 +88,4 @@ func (e *StatsLogWriter) gatherAndWrite(ctx context.Context) {
 			e.logger.Info(statsFName, statsFamily...)
 		}
 	}
-
-	// logging block read statistics info here
-	v := ctx.Value(ServiceTypeKey).(string)
-	if v == metadata.ServiceType_name[int32(metadata.ServiceType_CN)] || v == LaunchMode {
-		e.writeBlkReadStats()
-	}
-}
-
-func (e *StatsLogWriter) writeBlkReadStats() {
-	blkHit, blkTotal := objectio.BlkReadStats.BlkCacheHitStats.ExportW()
-	blkHitRate := float32(1)
-	if blkTotal != 0 {
-		blkHitRate = float32(blkHit) / float32(blkTotal)
-	}
-
-	entryHit, entryTotal := objectio.BlkReadStats.EntryCacheHitStats.ExportW()
-	entryHitRate := float32(1)
-	if entryTotal != 0 {
-		entryHitRate = float32(entryHit) / float32(entryTotal)
-	}
-
-	readerNum, blkNum := objectio.BlkReadStats.BlksByReaderStats.ExportW()
-	blksInEachReader := float32(1)
-	if readerNum != 0 {
-		blksInEachReader = float32(blkNum) / float32(readerNum)
-	}
-
-	e.logger.Info(fmt.Sprintf("duration: %d, "+
-		"blk hit rate: %d/%d=%.4f, entry hit rate: %d/%d=%.4f, (average) blks in each reader: %d/%d=%.4f",
-		e.gatherInterval,
-		blkHit, blkTotal, blkHitRate,
-		entryHit, entryTotal, entryHitRate,
-		blkNum, readerNum, blksInEachReader))
-
 }
