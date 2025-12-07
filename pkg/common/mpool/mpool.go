@@ -279,7 +279,9 @@ func (mp *MPool) deallocateAllPtrs() {
 	mp.mu.Lock()
 	defer mp.mu.Unlock()
 	for ptr := range mp.ptrs {
-		allocator().Deallocate(unsafe.Slice((*byte)(ptr), 1))
+		pHdr := (*memHdr)(ptr)
+		allocateSize := int(pHdr.allocSz) + kMemHdrSz
+		simpleCAllocator().Deallocate(unsafe.Slice((*byte)(ptr), allocateSize), uint64(allocateSize))
 	}
 	mp.ptrs = nil
 }
@@ -322,6 +324,8 @@ func (mp *MPool) destroy() {
 		// here we MUST free all the memories allocated by this mpool.
 		// otherwise it is a memory leak.  Whoever still holds
 		// a pointer of this mpool is a bug (the cross pool case).
+		//
+		// We are so messed up ...
 		mp.deallocateAllPtrs()
 	}
 
@@ -480,7 +484,7 @@ func (mp *MPool) alloc(detailk string, sz int, requiredSpaceWithoutHeader int, o
 	var bs []byte
 	var err error
 	if offHeap {
-		bs, err = allocator().Allocate(uint64(allocateSize), malloc.NoHints)
+		bs, _, err = simpleCAllocator().Allocate(uint64(allocateSize), malloc.NoHints)
 		if err != nil {
 			panic(err)
 		}
@@ -553,7 +557,8 @@ func (mp *MPool) freePtr(detailk string, ptr unsafe.Pointer) {
 	}
 	if pHdr.offHeap {
 		mp.removePtr(hdr)
-		allocator().Deallocate(unsafe.Slice((*byte)(hdr), 1))
+		allocateSize := int(pHdr.allocSz) + kMemHdrSz
+		simpleCAllocator().Deallocate(unsafe.Slice((*byte)(hdr), allocateSize), uint64(allocateSize))
 	}
 }
 
@@ -742,6 +747,16 @@ func MPoolControl(tag string, cmd string) string {
 	globalPools.Range(cmdFunc)
 	return "ok"
 }
+
+var simpleCAllocator = sync.OnceValue(func() *malloc.SimpleCAllocator {
+	sca := malloc.NewSimpleCAllocator(
+		v2.MallocCounter.WithLabelValues("mpool-allocate"),
+		v2.MallocGauge.WithLabelValues("mpool-inuse"),
+		v2.MallocCounter.WithLabelValues("mpool-allocate-objects"),
+		v2.MallocGauge.WithLabelValues("mpool-inuse-objects"),
+	)
+	return sca
+})
 
 func init() {
 	globalStats.Init()

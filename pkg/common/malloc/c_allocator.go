@@ -57,3 +57,7 @@ func (c *CAllocator) Allocate(size uint64, hints Hints) ([]byte, Deallocator, er
 		ptr: ptr,
 	}), nil
 }
+
+func (c *CAllocator) Deallocate(slice []byte) {
+	C.free(unsafe.Pointer(unsafe.SliceData(slice)))
+}
