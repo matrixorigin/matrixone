@@ -1271,14 +1271,15 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			createTable.TableDef.Cols = append(createTable.TableDef.Cols, col)
 		}
 
-		// insert into new_table select default_val1, default_val2, ..., * from (select clause);
+		// INSERT INTO new_table SELECT default_val1, default_val2, ..., * FROM (SELECT clause);
 		var insertSqlBuilder strings.Builder
-		insertSqlBuilder.WriteString(fmt.Sprintf("insert into `%s`.`%s` select ", createTable.Database, createTable.TableDef.Name))
+		insertSqlBuilder.WriteString(fmt.Sprintf("INSERT INTO `%s`.`%s` SELECT ",
+			createTable.Database, createTable.TableDef.Name))
 
 		cols := createTable.TableDef.Cols
 		firstCol := true
 		for i := range cols {
-			// insert default values if col[i] only in create clause
+			// INSERT default values if col[i] only in create clause
 			if !slices.ContainsFunc(asSelectCols, func(c *ColDef) bool { return c.Name == cols[i].Name }) {
 				if !firstCol {
 					insertSqlBuilder.WriteString(", ")
@@ -1290,13 +1291,13 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		if !firstCol {
 			insertSqlBuilder.WriteString(", ")
 		}
-		// add all cols from select clause
+		// add all cols from SELECT clause
 		insertSqlBuilder.WriteString("*")
 
-		// from
+		// FROM
 		fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
 		stmt.AsSource.Format(fmtCtx)
-		insertSqlBuilder.WriteString(fmt.Sprintf(" from (%s)", fmtCtx.String()))
+		insertSqlBuilder.WriteString(fmt.Sprintf(" FROM (%s)", fmtCtx.String()))
 
 		createTable.CreateAsSelectSql = insertSqlBuilder.String()
 	}

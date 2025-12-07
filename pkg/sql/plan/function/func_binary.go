@@ -92,7 +92,7 @@ func doFaultPoint(
 		ret = true
 	}
 
-	logutil.Info("FaultPoint",
+	logutil.Debug("FaultPoint",
 		zap.String("sql", sql),
 		zap.String("sqlRet", string(sqlRet[0][0].([]byte))))
 

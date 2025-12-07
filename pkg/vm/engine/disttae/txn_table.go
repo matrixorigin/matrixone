@@ -2015,15 +2015,14 @@ func (tbl *txnTable) BuildShardingReaders(
 func (tbl *txnTable) getPartitionState(
 	ctx context.Context,
 ) (ps *logtailreplay.PartitionState, err error) {
-
-	defer func() {
-		if tbl.tableId == catalog.MO_COLUMNS_ID {
-			logutil.Info("open partition state for mo_columns",
-				zap.String("txn", tbl.db.op.Txn().DebugString()),
-				zap.String("desc", ps.Desc(true)),
-				zap.String("pointer", fmt.Sprintf("%p", ps)))
-		}
-	}()
+	// defer func() {
+	// 	if tbl.tableId == catalog.MO_COLUMNS_ID {
+	// 		logutil.Info("open partition state for mo_columns",
+	// 			zap.String("txn", tbl.db.op.Txn().DebugString()),
+	// 			zap.String("desc", ps.Desc(true)),
+	// 			zap.String("pointer", fmt.Sprintf("%p", ps)))
+	// 	}
+	// }()
 
 	var (
 		eng          = tbl.eng.(*Engine)
@@ -2109,10 +2108,10 @@ func (tbl *txnTable) getPartitionState(
 	start, end = types.MaxTs(), types.MinTs()
 	if ps != nil {
 		start, end = ps.GetDuration()
-		msg = "Txn-Table-GetSSPS-Succeed"
+		msg = "table.get.snapshot.state.succeed"
 	} else {
 		logger = logutil.Error
-		msg = "Txn-Table-GetSSPS-Failed"
+		msg = "table.get.snapshot.state.failed"
 	}
 
 	logger(

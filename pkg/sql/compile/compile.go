@@ -4858,7 +4858,7 @@ func detectFkSelfRefer(c *Compile, detectSqls []string) error {
 
 // runDetectSql runs the fk detecting sql
 func runDetectSql(c *Compile, sql string) error {
-	res, err := c.runSqlWithResult(sql, NoAccountId)
+	res, err := c.runSqlWithResultAndOptions(sql, NoAccountId, executor.StatementOption{}.WithDisableLog())
 	if err != nil {
 		c.proc.Errorf(c.proc.Ctx, "The sql that caused the fk self refer check failed is %s, and generated background sql is %s", c.sql, sql)
 		return err
@@ -4879,7 +4879,7 @@ func runDetectSql(c *Compile, sql string) error {
 
 // runDetectFkReferToDBSql runs the fk detecting sql
 func runDetectFkReferToDBSql(c *Compile, sql string) error {
-	res, err := c.runSqlWithResult(sql, NoAccountId)
+	res, err := c.runSqlWithResultAndOptions(sql, NoAccountId, executor.StatementOption{}.WithDisableLog())
 	if err != nil {
 		c.proc.Errorf(c.proc.Ctx, "The sql that caused the fk self refer check failed is %s, and generated background sql is %s", c.sql, sql)
 		return err

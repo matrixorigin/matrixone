@@ -141,7 +141,8 @@ func RunSql(sqlproc *SqlProcess, sql string) (executor.Result, error) {
 			WithDatabase(proc.GetSessionInfo().Database).
 			WithTimeZone(proc.GetSessionInfo().TimeZone).
 			WithAccountID(accountId).
-			WithResolveVariableFunc(proc.GetResolveVariableFunc())
+			WithResolveVariableFunc(proc.GetResolveVariableFunc()).
+			WithStatementOption(executor.StatementOption{}.WithDisableLog())
 		return exec.Exec(topContext, sql, opts)
 	} else {
 
@@ -160,7 +161,8 @@ func RunSql(sqlproc *SqlProcess, sql string) (executor.Result, error) {
 			WithDisableIncrStatement().
 			WithTxn(sqlctx.Txn()).
 			WithAccountID(accountId).
-			WithResolveVariableFunc(sqlctx.GetResolveVariableFunc())
+			WithResolveVariableFunc(sqlctx.GetResolveVariableFunc()).
+			WithStatementOption(executor.StatementOption{}.WithDisableLog())
 		return exec.Exec(sqlctx.Ctx, sql, opts)
 
 	}
@@ -194,6 +196,7 @@ func RunStreamingSql(
 		WithDatabase(proc.GetSessionInfo().Database).
 		WithTimeZone(proc.GetSessionInfo().TimeZone).
 		WithAccountID(accountId).
-		WithStreaming(stream_chan, error_chan)
+		WithStreaming(stream_chan, error_chan).
+		WithStatementOption(executor.StatementOption{}.WithDisableLog())
 	return exec.Exec(ctx, sql, opts)
 }
