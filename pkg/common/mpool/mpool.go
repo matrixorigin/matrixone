@@ -48,6 +48,10 @@ type MPoolStats struct {
 	xpoolFree map[string]detailInfo
 }
 
+func (s *MPoolStats) Init() {
+	s.xpoolFree = make(map[string]detailInfo)
+}
+
 func (s *MPoolStats) Report(tab string) string {
 	if s.HighWaterMark.Load() == 0 {
 		// empty, reduce noise.
@@ -201,6 +205,7 @@ func (d *mpoolDetails) recordAlloc(k string, nb int64) {
 		return
 	}
 	d.mu.Lock()
+
 	defer d.mu.Unlock()
 
 	info := d.alloc[k]
@@ -251,20 +256,32 @@ type MPool struct {
 	stats   MPoolStats // stats
 	details *mpoolDetails
 
-	// To remove: this thing is highly unlikely to be of any good use.
-	sels *sync.Pool
+	mu   sync.Mutex
+	ptrs map[unsafe.Pointer]struct{}
 }
 
 const (
 	NoFixed = 1 << iota
 )
 
-func (mp *MPool) PutSels(sels []int64) {
-	mp.sels.Put(&sels)
+func (mp *MPool) recordPtr(ptr unsafe.Pointer) {
+	mp.mu.Lock()
+	defer mp.mu.Unlock()
+	mp.ptrs[ptr] = struct{}{}
 }
-func (mp *MPool) GetSels() []int64 {
-	ss := mp.sels.Get().(*[]int64)
-	return (*ss)[:0]
+func (mp *MPool) removePtr(ptr unsafe.Pointer) {
+	mp.mu.Lock()
+	defer mp.mu.Unlock()
+	delete(mp.ptrs, ptr)
+}
+
+func (mp *MPool) deallocateAllPtrs() {
+	mp.mu.Lock()
+	defer mp.mu.Unlock()
+	for ptr := range mp.ptrs {
+		allocator().Deallocate(unsafe.Slice((*byte)(ptr), 1))
+	}
+	mp.ptrs = nil
 }
 
 func (mp *MPool) EnableDetailRecording() {
@@ -297,9 +314,15 @@ func (mp *MPool) Cap() int64 {
 	return mp.cap
 }
 
-func (mp *MPool) destroy() (succeed bool) {
+func (mp *MPool) destroy() {
 	if mp.stats.NumAlloc.Load() < mp.stats.NumFree.Load() {
+		// this is a memory leak,
 		logutil.Errorf("mp error: %s", mp.stats.Report(""))
+
+		// here we MUST free all the memories allocated by this mpool.
+		// otherwise it is a memory leak.  Whoever still holds
+		// a pointer of this mpool is a bug (the cross pool case).
+		mp.deallocateAllPtrs()
 	}
 
 	// Here we just compensate whatever left over in mp.stats
@@ -307,7 +330,6 @@ func (mp *MPool) destroy() (succeed bool) {
 	globalStats.RecordManyFrees(mp.tag,
 		mp.stats.NumAlloc.Load()-mp.stats.NumFree.Load(),
 		mp.stats.NumCurrBytes.Load())
-	return true
 }
 
 // New a MPool.   Tag is user supplied, used for debugging/diagnostics.
@@ -333,13 +355,8 @@ func NewMPool(tag string, cap int64, flag int) (*MPool, error) {
 	mp.tag = tag
 	mp.cap = cap
 
-	mp.sels = &sync.Pool{
-		New: func() any {
-			ss := make([]int64, 0, 16)
-			return &ss
-		},
-	}
-
+	mp.stats.Init()
+	mp.ptrs = make(map[unsafe.Pointer]struct{})
 	globalPools.Store(id, &mp)
 	return &mp, nil
 }
@@ -393,9 +410,8 @@ func DeleteMPool(mp *MPool) {
 	}
 
 	// logutil.Infof("destroy mpool %s, cap %d, stats\n%s", mp.tag, mp.cap, mp.Report())
-	if mp.destroy() {
-		globalPools.Delete(mp.id)
-	}
+	mp.destroy()
+	globalPools.Delete(mp.id)
 }
 
 var nextPool int64
@@ -468,6 +484,7 @@ func (mp *MPool) alloc(detailk string, sz int, requiredSpaceWithoutHeader int, o
 		if err != nil {
 			panic(err)
 		}
+		mp.recordPtr(unsafe.Pointer(&bs[0]))
 	} else {
 		bs = make([]byte, allocateSize)
 	}
@@ -535,6 +552,7 @@ func (mp *MPool) freePtr(detailk string, ptr unsafe.Pointer) {
 		panic(moerr.NewInternalErrorNoCtx("free size -1, possible double free"))
 	}
 	if pHdr.offHeap {
+		mp.removePtr(hdr)
 		allocator().Deallocate(unsafe.Slice((*byte)(hdr), 1))
 	}
 }
@@ -723,4 +741,8 @@ func MPoolControl(tag string, cmd string) string {
 
 	globalPools.Range(cmdFunc)
 	return "ok"
+}
+
+func init() {
+	globalStats.Init()
 }

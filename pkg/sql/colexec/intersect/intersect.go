@@ -124,7 +124,7 @@ func (intersect *Intersect) buildHashTable(proc *process.Process, analyzer proce
 				}
 
 				if v > rowcnt {
-					ctr.cnts = append(ctr.cnts, proc.Mp().GetSels())
+					ctr.cnts = append(ctr.cnts, vector.GetSels())
 					ctr.cnts[v-1] = append(ctr.cnts[v-1], 1)
 					rowcnt++
 				}
