@@ -43,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
+	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -155,7 +156,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 			bb.WriteString(envStmt)
 			bb.WriteString(" // ")
 			bb.WriteString(execSql)
-			text = SubStringFromBegin(bb.String(), int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
+			text = commonutil.Abbreviate(bb.String(), int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
 		} else {
 			// ignore envStmt == ""
 			// case: exec `set @t = 2;` will trigger an internal query with the same session.
@@ -163,11 +164,11 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 			//	+ fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
 			//	+ cw.GetAst().Format(fmtCtx)
 			//  + envStmt = fmtCtx.String()
-			text = SubStringFromBegin(envStmt, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
+			text = commonutil.Abbreviate(envStmt, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
 		}
 	} else {
 		stmID, _ = uuid.NewV7()
-		text = SubStringFromBegin(envStmt, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
+		text = commonutil.Abbreviate(envStmt, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
 	}
 	ses.SetStmtId(stmID)
 	ses.SetStmtType(getStatementType(statement).GetStatementType())
@@ -3309,7 +3310,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 	case COM_QUERY:
 		var query = util.UnsafeBytesToString(req.GetData().([]byte))
 		ses.addSqlCount(1)
-		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(SubStringFromBegin(query, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))))
+		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(commonutil.Abbreviate(query, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))))
 		input := &UserInput{sql: query}
 		err = doComQuery(ses, execCtx, input)
 		if err != nil {

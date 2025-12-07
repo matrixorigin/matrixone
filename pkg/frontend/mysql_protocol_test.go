@@ -2220,7 +2220,7 @@ func Test_beginPacket(t *testing.T) {
 			var data []byte = nil
 			var sequenceId byte = 0
 			for i := 0; i < n; i += curLen {
-				curLen = Min(int(MaxPayloadSize), n-i)
+				curLen = min(int(MaxPayloadSize), n-i)
 				binary.LittleEndian.PutUint32(header[:], uint32(curLen))
 				header[3] = sequenceId
 				sequenceId++

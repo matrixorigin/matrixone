@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
+	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	mo_config "github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -82,14 +83,6 @@ func (cf *CloseFlag) IsClosed() bool {
 
 func (cf *CloseFlag) IsOpened() bool {
 	return atomic.LoadUint32(&cf.closed) == 0
-}
-
-func Min(a int, b int) int {
-	if a < b {
-		return a
-	} else {
-		return b
-	}
 }
 
 func Max(a int, b int) int {
@@ -154,28 +147,6 @@ func (t *Timeout) isTimeout() bool {
 		t.lastTime.Store(time.Now())
 	}
 	return true
-}
-
-/*
-length:
--1, complete string.
-0, empty string
->0 , length of characters at the header of the string.
-*/
-func SubStringFromBegin(str string, length int) string {
-	if length == 0 || length < -1 {
-		return ""
-	}
-
-	if length == -1 {
-		return str
-	}
-
-	l := Min(len(str), length)
-	if l != len(str) {
-		return str[:l] + "..."
-	}
-	return str[:l]
 }
 
 /*
@@ -516,7 +487,7 @@ func logStatementStringStatus(
 				str = stm.CopyStatementInfo()
 			}
 		}
-		str = SubStringFromBegin(str, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
+		str = commonutil.Abbreviate(str, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
 		return str
 	}
 	switch resper := ses.GetResponser().(type) {
