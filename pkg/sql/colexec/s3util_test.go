@@ -103,7 +103,7 @@ func TestSetStatsCNCreated(t *testing.T) {
 }
 
 func TestMergeSortBatches(t *testing.T) {
-	pool, err := mpool.NewMPool("", mpool.GB, 0)
+	pool, err := mpool.NewMPool("", mpool.GB, mpool.NoFixed)
 	require.NoError(t, err)
 	var restult *batch.Batch
 	sinker := func(bat *batch.Batch) error {
@@ -460,7 +460,7 @@ func TestMergeSortBatches(t *testing.T) {
 }
 
 func TestS3Writer_SortAndSync(t *testing.T) {
-	pool, err := mpool.NewMPool("", mpool.GB, 0)
+	pool, err := mpool.NewMPool("", mpool.GB, mpool.NoFixed)
 	require.NoError(t, err)
 
 	bat := batch.NewWithSize(2)
@@ -530,7 +530,7 @@ func TestS3Writer_SortAndSync(t *testing.T) {
 
 	// test data size larger than object size limit
 	{
-		pool, err = mpool.NewMPool("", mpool.GB, 0)
+		pool, err = mpool.NewMPool("", mpool.GB, mpool.NoFixed)
 		require.NoError(t, err)
 
 		proc := testutil.NewProc(

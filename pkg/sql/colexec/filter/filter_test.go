@@ -348,7 +348,7 @@ func MakeFilterMockBatchs() *batch.Batch {
 }
 
 func TestIssue18454(t *testing.T) {
-	mp, _ := mpool.NewMPool("", 0, 0)
+	mp := mpool.MustNew("")
 	proc := testutil.NewProcessWithMPool(t, "", mp)
 	proc.SetBaseProcessRunningStatus(true)
 	newParamForFoldCase2(proc)
@@ -383,7 +383,7 @@ func TestIssue18454(t *testing.T) {
 }
 
 func BenchmarkPlanConstandFold1(b *testing.B) {
-	mp, _ := mpool.NewMPool("", 0, 0)
+	mp := mpool.MustNew("test")
 	proc := testutil.NewProcessWithMPool(b, "", mp)
 	expr := generateFoldCase1()
 	b.ResetTimer()
@@ -398,7 +398,7 @@ func BenchmarkPlanConstandFold1(b *testing.B) {
 }
 
 func BenchmarkExecutorConstandFold1(b *testing.B) {
-	mp, _ := mpool.NewMPool("", 0, 0)
+	mp := mpool.MustNew("")
 	proc := testutil.NewProcessWithMPool(b, "", mp)
 	expr := generateFoldCase1()
 	proc.SetBaseProcessRunningStatus(true)
@@ -412,7 +412,7 @@ func BenchmarkExecutorConstandFold1(b *testing.B) {
 }
 
 func BenchmarkExecutorConstandFold2_Reuse(b *testing.B) {
-	mp, _ := mpool.NewMPool("", 0, 0)
+	mp := mpool.MustNew("test")
 	proc := testutil.NewProcessWithMPool(b, "", mp)
 	proc.SetBaseProcessRunningStatus(true)
 	newParamForFoldCase2(proc)
@@ -436,7 +436,7 @@ func BenchmarkExecutorConstandFold2_Reuse(b *testing.B) {
 }
 
 func BenchmarkExecutorConstandFold2_NoFree(b *testing.B) {
-	mp, _ := mpool.NewMPool("", 0, 0)
+	mp := mpool.MustNew("test")
 	proc := testutil.NewProcessWithMPool(b, "", mp)
 	newParamForFoldCase2(proc)
 	expr := generateFoldCase2()

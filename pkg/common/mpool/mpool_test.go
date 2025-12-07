@@ -22,7 +22,7 @@ import (
 )
 
 func TestMPoolLimitExceed(t *testing.T) {
-	m, err := NewMPool("test-mpool-small", 0, 0)
+	m, err := NewMPool("test-mpool-small", 0, NoFixed)
 	require.Nil(t, err)
 
 	_, err = m.Alloc(7775731712, false)
@@ -30,7 +30,7 @@ func TestMPoolLimitExceed(t *testing.T) {
 }
 
 func TestMPool(t *testing.T) {
-	m, err := NewMPool("test-mpool-small", 0, 0)
+	m, err := NewMPool("test-mpool-small", 0, NoFixed)
 	require.True(t, err == nil, "new mpool failed %v", err)
 
 	nb0 := m.CurrNB()
@@ -69,7 +69,7 @@ func TestMPool(t *testing.T) {
 
 func TestReportMemUsage(t *testing.T) {
 	// Just test a mid sized
-	m, err := NewMPool("testjson", 0, 0)
+	m, err := NewMPool("testjson", 0, NoFixed)
 	m.EnableDetailRecording()
 
 	require.True(t, err == nil, "new mpool failed %v", err)
@@ -101,7 +101,7 @@ func TestReportMemUsage(t *testing.T) {
 }
 
 func TestMP(t *testing.T) {
-	pool, err := NewMPool("default", 0, 0)
+	pool, err := NewMPool("default", 0, NoFixed)
 	if err != nil {
 		panic(err)
 	}

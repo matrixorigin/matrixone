@@ -707,7 +707,7 @@ func TestPushClient_LoadAndConsumeLatestCkp(t *testing.T) {
 	catalog.SetupDefines(sid)
 
 	// Create Engine and PushClient for testing
-	mp, err := mpool.NewMPool(sid, 1024*1024, 0)
+	mp, err := mpool.NewMPool(sid, 1024*1024, mpool.NoFixed)
 	assert.NoError(t, err)
 	sender, err := rpc.NewSender(rpc.Config{}, rt)
 	require.NoError(t, err)
