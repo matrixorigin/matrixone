@@ -351,12 +351,11 @@ func copyTxnMeta(src txn.TxnMeta) *txn.TxnMeta {
 		ID:         commonUtil.CloneBytes(src.GetID()),
 		Status:     src.GetStatus(),
 		SnapshotTS: src.GetSnapshotTS(),
-		PreparedTS: commonUtil.CloneBytes(src.GetPreparedTS()),
-		CommitTS:   commonUtil.CloneBytes(src.GetCommitTS()),
+		PreparedTS: src.GetPreparedTS(),
+		CommitTS:   src.GetCommitTS(),
 		Mode:       src.GetMode(),
 		Isolation:  src.GetIsolation(),
 	}
-	return commonUtil.CloneBytes(src.GetID())
 	return dst
 }
 
