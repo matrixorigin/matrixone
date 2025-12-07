@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
+	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -520,7 +521,7 @@ func (c *Compile) runOnce() (err error) {
 					if e := recover(); e != nil {
 						err := moerr.ConvertPanicError(c.proc.Ctx, e)
 						c.proc.Error(c.proc.Ctx, "panic in run",
-							zap.String("sql", c.sql),
+							zap.String("sql", commonutil.Abbreviate(c.sql, 500)),
 							zap.String("error", err.Error()))
 						errC <- err
 					}

@@ -135,7 +135,7 @@ func extractRowFromVector(ctx context.Context, vec *vector.Vector, i int, row []
 
 	switch vec.GetType().Oid { //get col
 	case types.T_json:
-		row[i] = types.DecodeJson(copyBytes(vec.GetBytesAt(rowIndex)))
+		row[i] = types.DecodeJson(vec.CloneBytesAt(rowIndex))
 	case types.T_bool:
 		row[i] = vector.GetFixedAtWithTypeCheck[bool](vec, rowIndex)
 	case types.T_bit:
@@ -161,7 +161,7 @@ func extractRowFromVector(ctx context.Context, vec *vector.Vector, i int, row []
 	case types.T_float64:
 		row[i] = vector.GetFixedAtWithTypeCheck[float64](vec, rowIndex)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
-		row[i] = copyBytes(vec.GetBytesAt(rowIndex))
+		row[i] = vec.CloneBytesAt(rowIndex)
 	case types.T_array_float32:
 		// NOTE: Don't merge it with T_varchar. You will get raw binary in the SQL output
 		//+------------------------------+
@@ -209,16 +209,6 @@ func extractRowFromVector(ctx context.Context, vec *vector.Vector, i int, row []
 		return moerr.NewInternalErrorf(ctx, "extractRowFromVector : unsupported type %d", vec.GetType().Oid)
 	}
 	return nil
-}
-
-func copyBytes(src []byte) []byte {
-	if len(src) > 0 {
-		dst := make([]byte, len(src))
-		copy(dst, src)
-		return dst
-	} else {
-		return []byte{}
-	}
 }
 
 func convertColIntoSql(
