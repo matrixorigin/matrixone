@@ -190,8 +190,9 @@ func (s *Scope) DropDatabase(c *Compile) error {
 
 	for _, t := range deleteTables {
 		dropSql := fmt.Sprintf(dropTableBeforeDropDatabase, dbName, t)
-		err = c.runSql(dropSql)
-		if err != nil {
+		if err = c.runSqlWithOptions(
+			dropSql, executor.StatementOption{}.WithDisableLog(),
+		); err != nil {
 			return err
 		}
 	}
@@ -210,21 +211,23 @@ func (s *Scope) DropDatabase(c *Compile) error {
 
 	// 1.delete all index object record under the database from mo_catalog.mo_indexes
 	deleteSql := fmt.Sprintf(deleteMoIndexesWithDatabaseIdFormat, s.Plan.GetDdl().GetDropDatabase().GetDatabaseId())
-	err = c.runSql(deleteSql)
-	if err != nil {
+	if err = c.runSqlWithOptions(
+		deleteSql, executor.StatementOption{}.WithDisableLog(),
+	); err != nil {
 		return err
 	}
 
 	// 3. delete fks
-	err = c.runSql(s.Plan.GetDdl().GetDropDatabase().GetUpdateFkSql())
-	if err != nil {
+	if err = c.runSqlWithOptions(
+		s.Plan.GetDdl().GetDropDatabase().GetUpdateFkSql(), executor.StatementOption{}.WithDisableLog(),
+	); err != nil {
 		return err
 	}
 
 	// 4.update mo_pitr table
 	if !needSkipDbs[dbName] {
 		now := c.proc.GetTxnOperator().SnapshotTS().ToStdTime().UTC().UnixNano()
-		updatePitrSql := fmt.Sprintf("update `%s`.`%s` set `%s` = %d, `%s` = %d where `%s` = %d and `%s` = '%s' and `%s` = %d and `%s` = %s",
+		updatePitrSql := fmt.Sprintf("UPDATE `%s`.`%s` SET `%s` = %d, `%s` = %d WHERE `%s` = %d AND `%s` = '%s' AND `%s` = %d AND `%s` = %s",
 			catalog.MO_CATALOG, catalog.MO_PITR,
 			catalog.MO_PITR_STATUS, 0,
 			catalog.MO_PITR_CHANGED_TIME, now,
@@ -461,11 +464,13 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 						if !moerr.IsMoErrCode(err, moerr.ErrParseError) &&
 							!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
 							!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
-							c.proc.Error(c.proc.Ctx, "lock index table for alter table",
-								zap.String("databaseName", c.db),
-								zap.String("origin tableName", qry.GetTableDef().Name),
-								zap.String("index name", indexdef.IndexName),
-								zap.String("index tableName", indexdef.IndexTableName),
+							c.proc.Error(
+								c.proc.Ctx,
+								"alter.table.lock.index.table",
+								zap.String("db", c.db),
+								zap.String("main-table", qry.GetTableDef().Name),
+								zap.String("index-name", indexdef.IndexName),
+								zap.String("index-table-name", indexdef.IndexTableName),
 								zap.Error(err))
 							return err
 						}
@@ -582,14 +587,16 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 
 						//1. drop index table
 						if indexdef.TableExist {
-							if err := c.runSql("drop table `" + indexdef.IndexTableName + "`"); err != nil {
+							if err := c.runSqlWithOptions(
+								"DROP TABLE `"+indexdef.IndexTableName+"`", executor.StatementOption{}.WithDisableLog(),
+							); err != nil {
 								return err
 							}
 						}
-						//2. delete index object from mo_catalog.mo_indexes
 						deleteSql := fmt.Sprintf(deleteMoIndexesWithTableIdAndIndexNameFormat, oTableDef.TblId, indexdef.IndexName)
-						err = c.runSql(deleteSql)
-						if err != nil {
+						if err = c.runSqlWithOptions(
+							deleteSql, executor.StatementOption{}.WithDisableLog(),
+						); err != nil {
 							return err
 						}
 					} else {
@@ -691,8 +698,9 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				if err != nil {
 					return err
 				}
-				err = c.runSql(insertSql)
-				if err != nil {
+				if err = c.runSqlWithOptions(
+					insertSql, executor.StatementOption{}.WithDisableLog(),
+				); err != nil {
 					return err
 				}
 			}
@@ -712,8 +720,9 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					} else {
 						updateSql = fmt.Sprintf(updateMoIndexesVisibleFormat, 0, oTableDef.TblId, indexdef.IndexName)
 					}
-					err = c.runSql(updateSql)
-					if err != nil {
+					if err = c.runSqlWithOptions(
+						updateSql, executor.StatementOption{}.WithDisableLog(),
+					); err != nil {
 						return err
 					}
 
@@ -757,8 +766,9 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 
 						// 3.b Update mo_catalog.mo_indexes
 						updateSql := fmt.Sprintf(updateMoIndexesAlgoParams, newAlgoParams, oTableDef.TblId, alterIndex.IndexName)
-						err = c.runSql(updateSql)
-						if err != nil {
+						if err = c.runSqlWithOptions(
+							updateSql, executor.StatementOption{}.WithDisableLog(),
+						); err != nil {
 							return err
 						}
 					case catalog.MoIndexHnswAlgo.ToString():
@@ -1096,8 +1106,9 @@ func (s *Scope) CreateTable(c *Compile) error {
 
 	//update mo_foreign_keys
 	for _, sql := range qry.UpdateFkSqls {
-		err = c.runSql(sql)
-		if err != nil {
+		if err = c.runSqlWithOptions(
+			sql, executor.StatementOption{}.WithDisableLog(),
+		); err != nil {
 			return err
 		}
 	}
@@ -1431,7 +1442,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		var initSQL string
 		switch def.TableType {
 		case catalog.SystemSI_IVFFLAT_TblType_Metadata:
-			initSQL = fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`) VALUES('version', '0');",
+			initSQL = fmt.Sprintf("INSERT INTO `%s`.`%s` (`%s`, `%s`) VALUES('version', '0');",
 				qry.Database,
 				def.Name,
 				catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
@@ -1439,7 +1450,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 			)
 
 		case catalog.SystemSI_IVFFLAT_TblType_Centroids:
-			initSQL = fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`, `%s`) VALUES(0,1,NULL);",
+			initSQL = fmt.Sprintf("INSERT INTO `%s`.`%s` (`%s`, `%s`, `%s`) VALUES(0,1,NULL);",
 				qry.Database,
 				def.Name,
 				catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
@@ -1447,7 +1458,9 @@ func (s *Scope) CreateTable(c *Compile) error {
 				catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
 			)
 		}
-		err = c.runSql(initSQL)
+		err = c.runSqlWithOptions(
+			initSQL, executor.StatementOption{}.WithDisableLog(),
+		)
 		if err != nil {
 			c.proc.Error(c.proc.Ctx, "create index table for execute initSQL",
 				zap.String("databaseName", c.db),
@@ -1489,7 +1502,9 @@ func (s *Scope) CreateTable(c *Compile) error {
 			)
 			return err
 		}
-		err = c.runSql(insertSQL)
+		err = c.runSqlWithOptions(
+			insertSQL, executor.StatementOption{}.WithDisableLog(),
+		)
 		if err != nil {
 			c.proc.Error(c.proc.Ctx, "createTable",
 				zap.String("insertSQL", insertSQL),
@@ -1585,7 +1600,9 @@ func (c *Compile) runSqlWithSystemTenant(sql string) error {
 	defer func() {
 		c.proc.Ctx = oldCtx
 	}()
-	return c.runSql(sql)
+	return c.runSqlWithOptions(
+		sql, executor.StatementOption{}.WithDisableLog(),
+	)
 }
 
 func (s *Scope) CreateView(c *Compile) error {
@@ -1644,8 +1661,9 @@ func (s *Scope) CreateView(c *Compile) error {
 		}
 
 		if qry.GetReplace() {
-			err = c.runSql(fmt.Sprintf("drop view if exists %s", viewName))
-			if err != nil {
+			if err = c.runSqlWithOptions(
+				fmt.Sprintf("DROP VIEW IF EXISTS %s", viewName), executor.StatementOption{}.WithDisableLog(),
+			); err != nil {
 				getLogger(s.Proc.GetService()).Error("drop existing view failed",
 					zap.String("databaseName", c.db),
 					zap.String("viewName", qry.GetTableDef().GetName()),
@@ -1986,7 +2004,9 @@ func (s *Scope) doCreateIndex(
 		if err != nil {
 			return err
 		}
-		err = c.runSql(sql)
+		err = c.runSqlWithOptions(
+			sql, executor.StatementOption{}.WithDisableLog(),
+		)
 		if err != nil {
 			return err
 		}
@@ -2207,9 +2227,10 @@ func (s *Scope) DropIndex(c *Compile) error {
 		return err
 	}
 
-	//4. delete index object from mo_catalog.mo_indexes
 	deleteSql := fmt.Sprintf(deleteMoIndexesWithTableIdAndIndexNameFormat, r.GetTableID(c.proc.Ctx), qry.IndexName)
-	err = c.runSql(deleteSql)
+	err = c.runSqlWithOptions(
+		deleteSql, executor.StatementOption{}.WithDisableLog(),
+	)
 	if err != nil {
 		return err
 	}
@@ -2671,7 +2692,9 @@ func (s *Scope) DropTable(c *Compile) error {
 
 	if len(qry.UpdateFkSqls) > 0 {
 		for _, sql := range qry.UpdateFkSqls {
-			if err = c.runSql(sql); err != nil {
+			if err = c.runSqlWithOptions(
+				sql, executor.StatementOption{}.WithDisableLog(),
+			); err != nil {
 				return err
 			}
 		}
@@ -2737,16 +2760,10 @@ func (s *Scope) DropTable(c *Compile) error {
 		return err
 	}
 
-	// delete all index objects record of the table in mo_catalog.mo_indexes
-	if !qry.IsView && qry.Database != catalog.MO_CATALOG && qry.Table != catalog.MO_INDEXES {
-		if qry.GetTableDef().Pkey != nil || len(qry.GetTableDef().Indexes) > 0 {
-			deleteSql := fmt.Sprintf(deleteMoIndexesWithTableIdFormat, qry.GetTableDef().TblId)
-			err = c.runSql(deleteSql)
-			if err != nil {
-				return err
-			}
-		}
-	}
+	deleteSql := fmt.Sprintf(deleteMoIndexesWithTableIdFormat, qry.GetTableDef().TblId)
+	err = c.runSqlWithOptions(
+		deleteSql, executor.StatementOption{}.WithDisableLog(),
+	)
 
 	if isTemp {
 		if err := dbSource.Delete(c.proc.Ctx, engine.GetTempTableName(dbName, tblName)); err != nil {
@@ -3021,8 +3038,9 @@ func (s *Scope) AlterSequence(c *Compile) error {
 
 		curval = c.proc.GetSessionInfo().SeqCurValues[rel.GetTableID(c.proc.Ctx)]
 		// dorp the pre sequence
-		err = c.runSql(fmt.Sprintf("drop sequence %s", tblName))
-		if err != nil {
+		if err = c.runSqlWithOptions(
+			fmt.Sprintf("DROP SEQUENCE %s", tblName), executor.StatementOption{}.WithDisableLog(),
+		); err != nil {
 			return err
 		}
 	} else {
@@ -3995,7 +4013,7 @@ func (s *Scope) CreatePitr(c *Compile) error {
 	const sysAccountId = 0
 
 	// Query for sys_mo_catalog_pitr
-	sysPitrSql := "select pitr_length, pitr_unit from mo_catalog.mo_pitr where pitr_name = '" + sysMoCatalogPitr + "'"
+	sysPitrSql := "SELECT pitr_length, pitr_unit FROM mo_catalog.mo_pitr WHERE pitr_name = '" + sysMoCatalogPitr + "'"
 	sysRes, err := c.runSqlWithResult(sysPitrSql, sysAccountId)
 	if err != nil {
 		return err
@@ -4013,7 +4031,7 @@ func (s *Scope) CreatePitr(c *Compile) error {
 	}
 
 	if needUpdateSysPitr {
-		updateSql := fmt.Sprintf("update mo_catalog.mo_pitr set pitr_length = %d, pitr_unit = '%s' where pitr_name = '%s'", createPitr.GetPitrValue(), createPitr.GetPitrUnit(), sysMoCatalogPitr)
+		updateSql := fmt.Sprintf("UPDATE mo_catalog.mo_pitr SET pitr_length = %d, pitr_unit = '%s' WHERE pitr_name = '%s'", createPitr.GetPitrValue(), createPitr.GetPitrUnit(), sysMoCatalogPitr)
 		err = c.runSqlWithAccountId(updateSql, sysAccountId)
 		if err != nil {
 			return err
@@ -4114,7 +4132,7 @@ func (s *Scope) DropPitr(c *Compile) error {
 	}
 
 	// 1. Check if PITR exists
-	checkSql := fmt.Sprintf("select pitr_id from mo_catalog.mo_pitr where pitr_name = '%s' and create_account = %d", pitrName, accountId)
+	checkSql := fmt.Sprintf("SELECT pitr_id FROM mo_catalog.mo_pitr WHERE pitr_name = '%s' AND create_account = %d", pitrName, accountId)
 	res, err := c.runSqlWithResult(checkSql, int32(sysAccountId))
 	if err != nil {
 		return err
@@ -4128,14 +4146,14 @@ func (s *Scope) DropPitr(c *Compile) error {
 	}
 
 	// 2. Delete PITR record
-	deleteSql := fmt.Sprintf("delete from mo_catalog.mo_pitr where pitr_name = '%s' and create_account = %d", pitrName, accountId)
+	deleteSql := fmt.Sprintf("DELETE FROM mo_catalog.mo_pitr WHERE pitr_name = '%s' AND create_account = %d", pitrName, accountId)
 	err = c.runSqlWithAccountId(deleteSql, int32(sysAccountId))
 	if err != nil {
 		return err
 	}
 
 	// 3. Check if there are other PITR records besides sys_mo_catalog_pitr
-	checkOtherSql := fmt.Sprintf("select pitr_id from mo_catalog.mo_pitr where pitr_name != '%s'", sysMoCatalogPitr)
+	checkOtherSql := fmt.Sprintf("SELECT pitr_id FROM mo_catalog.mo_pitr WHERE pitr_name != '%s'", sysMoCatalogPitr)
 	otherRes, err := c.runSqlWithResult(checkOtherSql, sysAccountId)
 	if err != nil {
 		return err
@@ -4143,7 +4161,7 @@ func (s *Scope) DropPitr(c *Compile) error {
 	defer otherRes.Close()
 	if len(otherRes.Batches) == 0 || otherRes.Batches[0].RowCount() == 0 {
 		// 4. No other PITR records, delete sys_mo_catalog_pitr
-		deleteSysSql := fmt.Sprintf("delete from mo_catalog.mo_pitr where pitr_name = '%s' and create_account = %d", sysMoCatalogPitr, sysAccountId)
+		deleteSysSql := fmt.Sprintf("DELETE FROM mo_catalog.mo_pitr WHERE pitr_name = '%s' AND create_account = %d", sysMoCatalogPitr, sysAccountId)
 		err = c.runSqlWithAccountId(deleteSysSql, sysAccountId)
 		if err != nil {
 			return err
@@ -4176,20 +4194,20 @@ func getSqlForCheckPitrDup(
 		return getSqlForCheckDupPitrFormat(createPitr.CurrentAccountId, math.MaxUint64)
 	case tree.PITRLEVELACCOUNT:
 		if createPitr.OriginAccountName {
-			return fmt.Sprintf(sql, createPitr.CurrentAccountId) + fmt.Sprintf(" and account_name = '%s' and level = 'account' and pitr_status = 1;", createPitr.AccountName)
+			return fmt.Sprintf(sql, createPitr.CurrentAccountId) + fmt.Sprintf(" AND account_name = '%s' AND level = 'account' AND pitr_status = 1;", createPitr.AccountName)
 		} else {
-			return fmt.Sprintf(sql, createPitr.CurrentAccountId) + fmt.Sprintf(" and account_name = '%s' and level = 'account' and pitr_status = 1;", createPitr.CurrentAccount)
+			return fmt.Sprintf(sql, createPitr.CurrentAccountId) + fmt.Sprintf(" AND account_name = '%s' AND level = 'account' AND pitr_status = 1;", createPitr.CurrentAccount)
 		}
 	case tree.PITRLEVELDATABASE:
-		return fmt.Sprintf(sql, createPitr.CurrentAccountId) + fmt.Sprintf(" and database_name = '%s' and level = 'database' and pitr_status = 1;", createPitr.DatabaseName)
+		return fmt.Sprintf(sql, createPitr.CurrentAccountId) + fmt.Sprintf(" AND database_name = '%s' AND level = 'database' AND pitr_status = 1;", createPitr.DatabaseName)
 	case tree.PITRLEVELTABLE:
-		return fmt.Sprintf(sql, createPitr.CurrentAccountId) + fmt.Sprintf(" and database_name = '%s' and table_name = '%s' and level = 'table' and pitr_status = 1;", createPitr.DatabaseName, createPitr.TableName)
+		return fmt.Sprintf(sql, createPitr.CurrentAccountId) + fmt.Sprintf(" AND database_name = '%s' AND table_name = '%s' AND level = 'table' AND pitr_status = 1;", createPitr.DatabaseName, createPitr.TableName)
 	}
 	return sql
 }
 
 func getSqlForCheckDupPitrFormat(accountId uint32, objId uint64) string {
-	return fmt.Sprintf(`select pitr_id from mo_catalog.mo_pitr where create_account = %d and obj_id = %d;`, accountId, objId)
+	return fmt.Sprintf(`SELECT pitr_id FROM mo_catalog.mo_pitr WHERE create_account = %d AND obj_id = %d;`, accountId, objId)
 }
 
 func getPitrObjectId(createPitr *plan.CreatePitr) uint64 {

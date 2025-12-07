@@ -404,14 +404,16 @@ func saveProfilesLoop(sigs chan os.Signal) {
 
 	quit := false
 	tk := time.NewTicker(*profileInterval)
-	logutil.GetGlobalLogger().Info("save profiles loop started", zap.Duration("profile-interval", *profileInterval), zap.Duration("cpuProfileInterval", cpuProfileInterval))
+	logutil.Info(
+		"save.profiles.loop.started",
+		zap.Duration("interval", *profileInterval),
+		zap.Duration("duration", cpuProfileInterval),
+	)
 	for {
 		select {
 		case <-tk.C:
-			logutil.GetGlobalLogger().Info("save profiles start")
 			saveProfiles()
 			saveCpuProfile(cpuProfileInterval)
-			logutil.GetGlobalLogger().Info("save profiles end")
 		case <-sigs:
 			quit = true
 		}
@@ -435,20 +437,29 @@ func saveProfiles() {
 func saveProfile(typ string) string {
 	name, _ := uuid.NewV7()
 	profilePath := catalog.BuildProfilePath(globalServiceType, globalNodeId, typ, name.String()) + ".gz"
-	logutil.GetGlobalLogger().Info("save profiles ", zap.String("path", profilePath))
 	cnservice.SaveProfile(profilePath, typ, globalEtlFS)
 	return profilePath
 }
 
 func saveCpuProfile(cpuProfileInterval time.Duration) {
+	// Skip CPU profile if already in use (e.g., started via -cpu-profile flag)
+	if *cpuProfilePathFlag != "" {
+		logutil.GetGlobalLogger().Debug("skip cpu profile generation, cpu profiling already enabled via -cpu-profile flag")
+		return
+	}
+
 	genCpuProfile := func(writer io.Writer) error {
 		err := pprof.StartCPUProfile(writer)
 		if err != nil {
+			// If CPU profiling is already in use, skip silently
+			if strings.Contains(err.Error(), "cpu profiling already in use") {
+				return nil
+			}
 			return err
 		}
 		time.Sleep(cpuProfileInterval)
 		pprof.StopCPUProfile()
-		return err
+		return nil
 	}
 	saveProfileWithType("cpu", genCpuProfile)
 }

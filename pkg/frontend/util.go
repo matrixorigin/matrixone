@@ -484,14 +484,27 @@ func (s statementStatus) String() string {
 }
 
 // logStatementStatus prints the status of the statement into the log.
-func logStatementStatus(ctx context.Context, ses FeSession, stmt tree.Statement, status statementStatus, err error) {
+func logStatementStatus(
+	ctx context.Context,
+	ses FeSession,
+	_ tree.Statement,
+	status statementStatus,
+	err error,
+) {
 	logStatementStringStatus(ctx, ses, "", status, err)
 }
 
 // logStatementStringStatus
-// if stmtStr == "", get the query statement from FeSession or motrace.StatementInfo (which migrate from logStatementStatus).
+// if stmtStr == "", get the query statement from FeSession or motrace.StatementInfo
+// (which migrate from logStatementStatus).
 // This op is aim to avoid string copy in 'status == success' case.
-func logStatementStringStatus(ctx context.Context, ses FeSession, stmtStr string, status statementStatus, err error) {
+func logStatementStringStatus(
+	ctx context.Context,
+	ses FeSession,
+	stmtStr string,
+	status statementStatus,
+	err error,
+) {
 	var outBytes, outPacket int64
 	var getFormatedSqlStr = func() string {
 		var str = stmtStr
