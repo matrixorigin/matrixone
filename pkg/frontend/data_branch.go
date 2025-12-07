@@ -38,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
-	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -4396,9 +4395,9 @@ func compareSingleValInVector(
 	// Use raw values to avoid format conversions in extractRowFromVector.
 	switch vec1.GetType().Oid {
 	case types.T_json:
-		val1 := types.DecodeJson(commonutil.CloneBytesIf(vec1.GetBytesAt(rowIdx1), false))
-		val2 := types.DecodeJson(commonutil.CloneBytesIf(vec2.GetBytesAt(rowIdx2), false))
-		return types.CompareValue(val1, val2), nil
+		val1 := types.DecodeJson(vec1.GetBytesAt(rowIdx1))
+		val2 := types.DecodeJson(vec2.GetBytesAt(rowIdx2))
+		return bytejson.CompareByteJson(val1, val2), nil
 	case types.T_bool:
 		val1 := vector.GetFixedAtNoTypeCheck[bool](vec1, rowIdx1)
 		val2 := vector.GetFixedAtNoTypeCheck[bool](vec2, rowIdx2)
@@ -4448,9 +4447,10 @@ func compareSingleValInVector(
 		val2 := vector.GetFixedAtNoTypeCheck[float64](vec2, rowIdx2)
 		return types.CompareValue(val1, val2), nil
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
-		val1 := commonutil.CloneBytesIf(vec1.GetBytesAt(rowIdx1), false)
-		val2 := commonutil.CloneBytesIf(vec2.GetBytesAt(rowIdx2), false)
-		return types.CompareValue(val1, val2), nil
+		return bytes.Compare(
+			vec1.GetBytesAt(rowIdx1),
+			vec2.GetBytesAt(rowIdx2),
+		), nil
 	case types.T_array_float32:
 		val1 := vector.GetArrayAt[float32](vec1, rowIdx1)
 		val2 := vector.GetArrayAt[float32](vec2, rowIdx2)
