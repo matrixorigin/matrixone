@@ -1853,7 +1853,7 @@ func extractPStateFromRelData(
 		logutil.Warn("RELDATA-WITH-EMPTY-PSTATE",
 			zap.String("db", tbl.db.databaseName),
 			zap.String("table", tbl.tableName),
-			zap.String("sql", sql),
+			zap.String("sql", commonUtil.Abbreviate(sql, 500)),
 			zap.String("relDataType", fmt.Sprintf("%T", relData)),
 			zap.String("relDataContent", relData.String()),
 			zap.String("stack", string(debug.Stack())))

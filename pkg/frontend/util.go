@@ -38,7 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
+	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	mo_config "github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -84,14 +84,6 @@ func (cf *CloseFlag) IsOpened() bool {
 	return atomic.LoadUint32(&cf.closed) == 0
 }
 
-func Min(a int, b int) int {
-	if a < b {
-		return a
-	} else {
-		return b
-	}
-}
-
 func Max(a int, b int) int {
 	if a < b {
 		return b
@@ -111,71 +103,6 @@ func GetRoutineId() uint64 {
 		id = invalidGoroutineId
 	}
 	return uint64(id)
-}
-
-type Timeout struct {
-	//last record of the time
-	lastTime atomic.Value //time.Time
-
-	//period
-	timeGap time.Duration
-
-	//auto update
-	autoUpdate bool
-}
-
-func NewTimeout(tg time.Duration, autoUpdateWhenChecked bool) *Timeout {
-	ret := &Timeout{
-		timeGap:    tg,
-		autoUpdate: autoUpdateWhenChecked,
-	}
-	ret.lastTime.Store(time.Now())
-	return ret
-}
-
-func (t *Timeout) UpdateTime(tn time.Time) {
-	t.lastTime.Store(tn)
-}
-
-/*
-----------+---------+------------------+--------
-
-	lastTime     Now         lastTime + timeGap
-
-return true  :  is timeout. the lastTime has been updated.
-return false :  is not timeout. the lastTime has not been updated.
-*/
-func (t *Timeout) isTimeout() bool {
-	if time.Since(t.lastTime.Load().(time.Time)) <= t.timeGap {
-		return false
-	}
-
-	if t.autoUpdate {
-		t.lastTime.Store(time.Now())
-	}
-	return true
-}
-
-/*
-length:
--1, complete string.
-0, empty string
->0 , length of characters at the header of the string.
-*/
-func SubStringFromBegin(str string, length int) string {
-	if length == 0 || length < -1 {
-		return ""
-	}
-
-	if length == -1 {
-		return str
-	}
-
-	l := Min(len(str), length)
-	if l != len(str) {
-		return str[:l] + "..."
-	}
-	return str[:l]
 }
 
 /*
@@ -516,7 +443,7 @@ func logStatementStringStatus(
 				str = stm.CopyStatementInfo()
 			}
 		}
-		str = SubStringFromBegin(str, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
+		str = commonutil.Abbreviate(str, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
 		return str
 	}
 	switch resper := ses.GetResponser().(type) {
@@ -627,19 +554,6 @@ func getVariableValue(varDefault interface{}) string {
 
 func makeServerVersion(pu *mo_config.ParameterUnit, version string) string {
 	return pu.SV.ServerVersionPrefix + version
-}
-
-func copyBytes(src []byte, needCopy bool) []byte {
-	if needCopy {
-		if len(src) > 0 {
-			dst := make([]byte, len(src))
-			copy(dst, src)
-			return dst
-		} else {
-			return []byte{}
-		}
-	}
-	return src
 }
 
 // getUserProfile returns the account, user, role of the account
@@ -1481,7 +1395,7 @@ func Copy[T any](src []T) []T {
 
 func hashString(s string) string {
 	hash := sha256.New()
-	hash.Write(util.UnsafeStringToBytes(s))
+	hash.Write(commonutil.UnsafeStringToBytes(s))
 	hashBytes := hash.Sum(nil)
 	return hex.EncodeToString(hashBytes)
 }

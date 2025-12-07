@@ -36,6 +36,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -2906,7 +2907,7 @@ func (s *Scope) DropTable(c *Compile) error {
 	for _, ss := range sqls {
 		if err = c.runSqlWithSystemTenant(ss); err != nil {
 			logutil.Error("run extra sql failed when drop table",
-				zap.String("sql", ss),
+				zap.String("sql", commonutil.Abbreviate(ss, 500)),
 				zap.Error(err),
 			)
 			return err
