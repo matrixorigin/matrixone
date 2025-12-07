@@ -205,7 +205,7 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	// 4.update mo_pitr table
 	if !needSkipDbs[dbName] {
 		now := c.proc.GetTxnOperator().SnapshotTS().ToStdTime().UTC().UnixNano()
-		updatePitrSql := fmt.Sprintf("update `%s`.`%s` set `%s` = %d, `%s` = %d where `%s` = %d and `%s` = '%s' and `%s` = %d and `%s` = %s",
+		updatePitrSql := fmt.Sprintf("UPDATE `%s`.`%s` SET `%s` = %d, `%s` = %d WHERE `%s` = %d AND `%s` = '%s' AND `%s` = %d AND `%s` = %s",
 			catalog.MO_CATALOG, catalog.MO_PITR,
 			catalog.MO_PITR_STATUS, 0,
 			catalog.MO_PITR_CHANGED_TIME, now,
@@ -1377,7 +1377,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		var initSQL string
 		switch def.TableType {
 		case catalog.SystemSI_IVFFLAT_TblType_Metadata:
-			initSQL = fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`) VALUES('version', '0');",
+			initSQL = fmt.Sprintf("INSERT INTO `%s`.`%s` (`%s`, `%s`) VALUES('version', '0');",
 				qry.Database,
 				def.Name,
 				catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
@@ -1385,7 +1385,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 			)
 
 		case catalog.SystemSI_IVFFLAT_TblType_Centroids:
-			initSQL = fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`, `%s`) VALUES(0,1,NULL);",
+			initSQL = fmt.Sprintf("INSERT INTO `%s`.`%s` (`%s`, `%s`, `%s`) VALUES(0,1,NULL);",
 				qry.Database,
 				def.Name,
 				catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
@@ -1561,7 +1561,7 @@ func (s *Scope) CreateView(c *Compile) error {
 		}
 
 		if qry.GetReplace() {
-			err = c.runSql(fmt.Sprintf("drop view if exists %s", viewName))
+			err = c.runSql(fmt.Sprintf("DROP VIEW IF EXISTS %s", viewName))
 			if err != nil {
 				getLogger(s.Proc.GetService()).Error("drop existing view failed",
 					zap.String("databaseName", c.db),
@@ -2781,7 +2781,7 @@ func (s *Scope) DropTable(c *Compile) error {
 	if !needSkipDbs[dbName] {
 		now := c.proc.GetTxnOperator().SnapshotTS().ToStdTime().UTC().UnixNano()
 		updatePitrSql := fmt.Sprintf(
-			"update `%s`.`%s` set `%s` = %d, `%s` = %d where `%s` = %d and `%s` = '%s' and `%s` = '%s' and `%s` = %d and `%s` = %d",
+			"UPDATE `%s`.`%s` SET `%s` = %d, `%s` = %d WHERE `%s` = %d AND `%s` = '%s' AND `%s` = '%s' AND `%s` = %d AND `%s` = %d",
 			catalog.MO_CATALOG, catalog.MO_PITR,
 			catalog.MO_PITR_STATUS, 0,
 			catalog.MO_PITR_CHANGED_TIME, now,
@@ -2801,12 +2801,12 @@ func (s *Scope) DropTable(c *Compile) error {
 
 	sqls := []string{
 		fmt.Sprintf(
-			"delete from mo_catalog.mo_merge_settings where account_id = %d and tid = %d",
+			"DELETE FROM mo_catalog.mo_merge_settings WHERE account_id = %d AND tid = %d",
 			accountID, tblID,
 		),
 
 		fmt.Sprintf(
-			"update mo_catalog.mo_branch_metadata set table_deleted = true where table_id = %d",
+			"UPDATE mo_catalog.mo_branch_metadata SET table_deleted = true WHERE table_id = %d",
 			tblID,
 		),
 	}
@@ -2933,7 +2933,7 @@ func (s *Scope) AlterSequence(c *Compile) error {
 	if rel, err := dbSource.Relation(c.proc.Ctx, tblName, nil); err == nil {
 		// sequence table exists
 		// get pre sequence table row values
-		_values, err := c.proc.GetSessionInfo().SqlHelper.ExecSql(fmt.Sprintf("select * from `%s`.`%s`", dbName, tblName))
+		_values, err := c.proc.GetSessionInfo().SqlHelper.ExecSql(fmt.Sprintf("SELECT * FROM `%s`.`%s`", dbName, tblName))
 		if err != nil {
 			return err
 		}
@@ -2946,7 +2946,7 @@ func (s *Scope) AlterSequence(c *Compile) error {
 
 		curval = c.proc.GetSessionInfo().SeqCurValues[rel.GetTableID(c.proc.Ctx)]
 		// dorp the pre sequence
-		err = c.runSql(fmt.Sprintf("drop sequence %s", tblName))
+		err = c.runSql(fmt.Sprintf("DROP SEQUENCE %s", tblName))
 		if err != nil {
 			return err
 		}
@@ -3846,7 +3846,7 @@ func (s *Scope) CreatePitr(c *Compile) error {
 
 	// check pitr if exists（pitr_name + create_account）
 	checkExistSql := getSqlForCheckPitrExists(pitrName, accountId)
-	existRes, err := c.runSqlWithResult(checkExistSql, int32(accountId))
+	existRes, err := c.runSqlWithResultAndOptions(checkExistSql, int32(accountId), executor.StatementOption{}.WithDisableLog())
 	if err != nil {
 		return err
 	}
@@ -3861,7 +3861,7 @@ func (s *Scope) CreatePitr(c *Compile) error {
 
 	// Check if pitr dup
 	checkSql := getSqlForCheckPitrDup(createPitr)
-	res, err := c.runSqlWithResult(checkSql, int32(accountId))
+	res, err := c.runSqlWithResultAndOptions(checkSql, int32(accountId), executor.StatementOption{}.WithDisableLog())
 	if err != nil {
 		return err
 	}
@@ -3878,7 +3878,7 @@ func (s *Scope) CreatePitr(c *Compile) error {
 
 	now := c.proc.GetTxnOperator().SnapshotTS().ToStdTime().UTC().UnixNano()
 	// Build create pitr sql
-	sql := fmt.Sprintf(`insert into mo_catalog.mo_pitr(
+	sql := fmt.Sprintf(`INSERT INTO mo_catalog.mo_pitr(
                                pitr_id,
                                pitr_name,
                                create_account,
@@ -3892,7 +3892,7 @@ func (s *Scope) CreatePitr(c *Compile) error {
                                obj_id,
                                pitr_length,
                                pitr_unit,
-                               pitr_status_changed_time) values ('%s', '%s', %d, %d, %d, '%s', %d, '%s', '%s', '%s', %d, %d, '%s', %d)`,
+                               pitr_status_changed_time) VALUES ('%s', '%s', %d, %d, %d, '%s', %d, '%s', '%s', '%s', %d, %d, '%s', %d)`,
 		newUUid,
 		pitrName,
 		createPitr.GetCurrentAccountId(),
@@ -3910,7 +3910,7 @@ func (s *Scope) CreatePitr(c *Compile) error {
 	)
 
 	// Execute create pitr sql
-	err = c.runSql(sql)
+	err = c.runSqlWithOptions(sql, executor.StatementOption{}.WithDisableLog())
 	if err != nil {
 		return err
 	}
@@ -3920,8 +3920,8 @@ func (s *Scope) CreatePitr(c *Compile) error {
 	const sysAccountId = 0
 
 	// Query for sys_mo_catalog_pitr
-	sysPitrSql := "select pitr_length, pitr_unit from mo_catalog.mo_pitr where pitr_name = '" + sysMoCatalogPitr + "'"
-	sysRes, err := c.runSqlWithResult(sysPitrSql, sysAccountId)
+	sysPitrSql := "SELECT pitr_length, pitr_unit FROM mo_catalog.mo_pitr WHERE pitr_name = '" + sysMoCatalogPitr + "'"
+	sysRes, err := c.runSqlWithResultAndOptions(sysPitrSql, sysAccountId, executor.StatementOption{}.WithDisableLog())
 	if err != nil {
 		return err
 	}
@@ -3938,8 +3938,8 @@ func (s *Scope) CreatePitr(c *Compile) error {
 	}
 
 	if needUpdateSysPitr {
-		updateSql := fmt.Sprintf("update mo_catalog.mo_pitr set pitr_length = %d, pitr_unit = '%s' where pitr_name = '%s'", createPitr.GetPitrValue(), createPitr.GetPitrUnit(), sysMoCatalogPitr)
-		err = c.runSqlWithAccountId(updateSql, sysAccountId)
+		updateSql := fmt.Sprintf("UPDATE mo_catalog.mo_pitr SET pitr_length = %d, pitr_unit = '%s' WHERE pitr_name = '%s'", createPitr.GetPitrValue(), createPitr.GetPitrUnit(), sysMoCatalogPitr)
+		err = c.runSqlWithAccountIdAndOptions(updateSql, sysAccountId, executor.StatementOption{}.WithDisableLog())
 		if err != nil {
 			return err
 		}
@@ -3958,7 +3958,7 @@ func (s *Scope) CreatePitr(c *Compile) error {
 		if err != nil {
 			return err
 		}
-		insertSql := fmt.Sprintf(`insert into mo_catalog.mo_pitr(
+		insertSql := fmt.Sprintf(`INSERT INTO mo_catalog.mo_pitr(
 			pitr_id,
 			pitr_name,
 			create_account,
@@ -3973,7 +3973,7 @@ func (s *Scope) CreatePitr(c *Compile) error {
 			pitr_length,
 			pitr_unit,
             pitr_status_changed_time
-        ) values ('%s', '%s', %d, %d, %d, '%s', %d, '%s', '%s', '%s', '%s', %d, '%s', %d)`,
+        ) VALUES ('%s', '%s', %d, %d, %d, '%s', %d, '%s', '%s', '%s', '%s', %d, '%s', %d)`,
 
 			sysPitrUuid,
 			sysMoCatalogPitr,
@@ -3990,7 +3990,7 @@ func (s *Scope) CreatePitr(c *Compile) error {
 			createPitr.GetPitrUnit(),
 			now,
 		)
-		err = c.runSqlWithAccountId(insertSql, sysAccountId)
+		err = c.runSqlWithAccountIdAndOptions(insertSql, sysAccountId, executor.StatementOption{}.WithDisableLog())
 		if err != nil {
 			return err
 		}
@@ -4039,8 +4039,8 @@ func (s *Scope) DropPitr(c *Compile) error {
 	}
 
 	// 1. Check if PITR exists
-	checkSql := fmt.Sprintf("select pitr_id from mo_catalog.mo_pitr where pitr_name = '%s' and create_account = %d", pitrName, accountId)
-	res, err := c.runSqlWithResult(checkSql, int32(accountId))
+	checkSql := fmt.Sprintf("SELECT pitr_id FROM mo_catalog.mo_pitr WHERE pitr_name = '%s' AND create_account = %d", pitrName, accountId)
+	res, err := c.runSqlWithResultAndOptions(checkSql, int32(accountId), executor.StatementOption{}.WithDisableLog())
 	if err != nil {
 		return err
 	}
@@ -4053,23 +4053,23 @@ func (s *Scope) DropPitr(c *Compile) error {
 	}
 
 	// 2. Delete PITR record
-	deleteSql := fmt.Sprintf("delete from mo_catalog.mo_pitr where pitr_name = '%s' and create_account = %d", pitrName, accountId)
-	err = c.runSqlWithAccountId(deleteSql, int32(accountId))
+	deleteSql := fmt.Sprintf("DELETE FROM mo_catalog.mo_pitr WHERE pitr_name = '%s' AND create_account = %d", pitrName, accountId)
+	err = c.runSqlWithAccountIdAndOptions(deleteSql, int32(accountId), executor.StatementOption{}.WithDisableLog())
 	if err != nil {
 		return err
 	}
 
 	// 3. Check if there are other PITR records besides sys_mo_catalog_pitr
-	checkOtherSql := fmt.Sprintf("select pitr_id from mo_catalog.mo_pitr where pitr_name != '%s'", sysMoCatalogPitr)
-	otherRes, err := c.runSqlWithResult(checkOtherSql, sysAccountId)
+	checkOtherSql := fmt.Sprintf("SELECT pitr_id FROM mo_catalog.mo_pitr WHERE pitr_name != '%s'", sysMoCatalogPitr)
+	otherRes, err := c.runSqlWithResultAndOptions(checkOtherSql, sysAccountId, executor.StatementOption{}.WithDisableLog())
 	if err != nil {
 		return err
 	}
 	defer otherRes.Close()
 	if len(otherRes.Batches) == 0 || otherRes.Batches[0].RowCount() == 0 {
 		// 4. No other PITR records, delete sys_mo_catalog_pitr
-		deleteSysSql := fmt.Sprintf("delete from mo_catalog.mo_pitr where pitr_name = '%s' and create_account = %d", sysMoCatalogPitr, sysAccountId)
-		err = c.runSqlWithAccountId(deleteSysSql, sysAccountId)
+		deleteSysSql := fmt.Sprintf("DELETE FROM mo_catalog.mo_pitr WHERE pitr_name = '%s' AND create_account = %d", sysMoCatalogPitr, sysAccountId)
+		err = c.runSqlWithAccountIdAndOptions(deleteSysSql, sysAccountId, executor.StatementOption{}.WithDisableLog())
 		if err != nil {
 			return err
 		}
@@ -4095,7 +4095,7 @@ func pitrDupError(c *Compile, createPitr *plan.CreatePitr) error {
 func getSqlForCheckPitrDup(
 	createPitr *plan.CreatePitr,
 ) string {
-	sql := "select pitr_id from mo_catalog.mo_pitr where create_account = %d"
+	sql := "SELECT pitr_id FROM mo_catalog.mo_pitr WHERE create_account = %d"
 	switch tree.PitrLevel(createPitr.GetLevel()) {
 	case tree.PITRLEVELCLUSTER:
 		return getSqlForCheckDupPitrFormat(createPitr.CurrentAccountId, math.MaxUint64)
@@ -4114,7 +4114,7 @@ func getSqlForCheckPitrDup(
 }
 
 func getSqlForCheckDupPitrFormat(accountId uint32, objId uint64) string {
-	return fmt.Sprintf(`select pitr_id from mo_catalog.mo_pitr where create_account = %d and obj_id = %d;`, accountId, objId)
+	return fmt.Sprintf(`SELECT pitr_id FROM mo_catalog.mo_pitr WHERE create_account = %d AND obj_id = %d;`, accountId, objId)
 }
 
 func getPitrObjectId(createPitr *plan.CreatePitr) uint64 {
@@ -4182,5 +4182,5 @@ func CheckSysMoCatalogPitrResult(ctx context.Context, vecs []*vector.Vector, new
 }
 
 func getSqlForCheckPitrExists(pitrName string, accountId uint32) string {
-	return fmt.Sprintf("select pitr_id from mo_catalog.mo_pitr where pitr_name = '%s' and create_account = %d order by pitr_id", pitrName, accountId)
+	return fmt.Sprintf("SELECT pitr_id FROM mo_catalog.mo_pitr WHERE pitr_name = '%s' AND create_account = %d ORDER BY pitr_id", pitrName, accountId)
 }
