@@ -62,8 +62,7 @@ func TestMPool(t *testing.T) {
 	// 30 -- we realloc, need alloc first, then copy.
 	// therefore, (10 + 20) * max(i) and 2 header size (old and new), is the high water.
 	require.True(t, (hw0+10000*30+2*kMemHdrSz) == m.Stats().HighWaterMark.Load(), "hw")
-	// >, because some alloc is absorbed by fixed pool
-	require.True(t, nalloc0+10000*2 > m.Stats().NumAlloc.Load(), "alloc")
+	require.True(t, nalloc0+10000*2 == m.Stats().NumAlloc.Load(), "alloc")
 	require.True(t, nalloc0-nfree0 == m.Stats().NumAlloc.Load()-m.Stats().NumFree.Load(), "free")
 }
 
