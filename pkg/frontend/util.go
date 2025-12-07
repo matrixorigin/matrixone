@@ -38,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	mo_config "github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -1396,7 +1395,7 @@ func Copy[T any](src []T) []T {
 
 func hashString(s string) string {
 	hash := sha256.New()
-	hash.Write(util.UnsafeStringToBytes(s))
+	hash.Write(commonutil.UnsafeStringToBytes(s))
 	hashBytes := hash.Sum(nil)
 	return hex.EncodeToString(hashBytes)
 }

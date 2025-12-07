@@ -42,7 +42,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -3308,7 +3307,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 	case COM_QUIT:
 		return resp, moerr.GetMysqlClientQuit()
 	case COM_QUERY:
-		var query = util.UnsafeBytesToString(req.GetData().([]byte))
+		var query = commonutil.UnsafeBytesToString(req.GetData().([]byte))
 		ses.addSqlCount(1)
 		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(commonutil.Abbreviate(query, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))))
 		input := &UserInput{sql: query}
@@ -3322,7 +3321,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		}
 		return resp, nil
 	case COM_INIT_DB:
-		var dbname = util.UnsafeBytesToString(req.GetData().([]byte))
+		var dbname = commonutil.UnsafeBytesToString(req.GetData().([]byte))
 		ses.addSqlCount(1)
 		query := "use `" + dbname + "`"
 		err = doComQuery(ses, execCtx, &UserInput{sql: query})
@@ -3332,7 +3331,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 
 		return resp, nil
 	case COM_FIELD_LIST:
-		var payload = util.UnsafeBytesToString(req.GetData().([]byte))
+		var payload = commonutil.UnsafeBytesToString(req.GetData().([]byte))
 		ses.addSqlCount(1)
 		query := makeCmdFieldListSql(payload)
 		err = doComQuery(ses, execCtx, &UserInput{sql: query})
@@ -3348,7 +3347,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 
 	case COM_STMT_PREPARE:
 		ses.SetCmd(COM_STMT_PREPARE)
-		sql = util.UnsafeBytesToString(req.GetData().([]byte))
+		sql = commonutil.UnsafeBytesToString(req.GetData().([]byte))
 		ses.addSqlCount(1)
 
 		// rewrite to "Prepare stmt_name from 'xxx'"
@@ -3600,11 +3599,11 @@ func convertMysqlTextTypeToBlobType(col *MysqlColumn) {
 // build plan json when marhal plan error
 func buildErrorJsonPlan(buffer *bytes.Buffer, uuid uuid.UUID, errcode uint16, msg string) []byte {
 	var bytes [36]byte
-	util.EncodeUUIDHex(bytes[:], uuid[:])
+	commonutil.EncodeUUIDHex(bytes[:], uuid[:])
 	explainData := models.ExplainData{
 		Code:    errcode,
 		Message: msg,
-		Uuid:    util.UnsafeBytesToString(bytes[:]),
+		Uuid:    commonutil.UnsafeBytesToString(bytes[:]),
 	}
 	encoder := json.NewEncoder(buffer)
 	encoder.SetEscapeHTML(false)
