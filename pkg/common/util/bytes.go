@@ -32,10 +32,10 @@ func CloneBytesIf(src []byte, clone bool) []byte {
 
 // new copy of the slice
 func CloneBytes(src []byte) []byte {
-	var ret []byte
 	if len(src) > 0 {
-		ret = make([]byte, len(src))
+		ret := make([]byte, len(src))
 		copy(ret, src)
+		return ret
 	}
-	return ret
+	return make([]byte, 0)
 }
