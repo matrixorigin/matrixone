@@ -106,49 +106,6 @@ func GetRoutineId() uint64 {
 	return uint64(id)
 }
 
-type Timeout struct {
-	//last record of the time
-	lastTime atomic.Value //time.Time
-
-	//period
-	timeGap time.Duration
-
-	//auto update
-	autoUpdate bool
-}
-
-func NewTimeout(tg time.Duration, autoUpdateWhenChecked bool) *Timeout {
-	ret := &Timeout{
-		timeGap:    tg,
-		autoUpdate: autoUpdateWhenChecked,
-	}
-	ret.lastTime.Store(time.Now())
-	return ret
-}
-
-func (t *Timeout) UpdateTime(tn time.Time) {
-	t.lastTime.Store(tn)
-}
-
-/*
-----------+---------+------------------+--------
-
-	lastTime     Now         lastTime + timeGap
-
-return true  :  is timeout. the lastTime has been updated.
-return false :  is not timeout. the lastTime has not been updated.
-*/
-func (t *Timeout) isTimeout() bool {
-	if time.Since(t.lastTime.Load().(time.Time)) <= t.timeGap {
-		return false
-	}
-
-	if t.autoUpdate {
-		t.lastTime.Store(time.Now())
-	}
-	return true
-}
-
 /*
 path exists in the system
 return:

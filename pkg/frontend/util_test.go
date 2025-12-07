@@ -97,14 +97,6 @@ func Test_routineid(t *testing.T) {
 	})
 }
 
-func Test_timeout(t *testing.T) {
-	cvey.Convey("timeout", t, func() {
-		to := NewTimeout(5*time.Second, true)
-		to.UpdateTime(time.Now())
-		cvey.So(to.isTimeout(), cvey.ShouldBeFalse)
-	})
-}
-
 func Test_substringFromBegin(t *testing.T) {
 	cvey.Convey("ssfb", t, func() {
 		cvey.So(commonutil.Abbreviate("abcdef", 3), cvey.ShouldEqual, "abc...")
