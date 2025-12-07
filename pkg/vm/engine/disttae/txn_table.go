@@ -2108,10 +2108,10 @@ func (tbl *txnTable) getPartitionState(
 	start, end = types.MaxTs(), types.MinTs()
 	if ps != nil {
 		start, end = ps.GetDuration()
-		msg = "Txn-Table-GetSSPS-Succeed"
+		msg = "table.get.snapshot.state.succeed"
 	} else {
 		logger = logutil.Error
-		msg = "Txn-Table-GetSSPS-Failed"
+		msg = "table.get.snapshot.state.failed"
 	}
 
 	logger(

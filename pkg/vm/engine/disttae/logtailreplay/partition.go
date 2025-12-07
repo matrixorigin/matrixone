@@ -234,7 +234,7 @@ func (p *Partition) Truncate(ctx context.Context, ids [2]uint64, ts types.TS) er
 	}
 
 	logutil.Info(
-		"PS-Truncate",
+		"partition.state.truncate",
 		zap.String("name", p.TableInfo.Name),
 		zap.Uint64("id", p.TableInfo.ID),
 		zap.String("prev-state", fmt.Sprintf("%p", curState)),

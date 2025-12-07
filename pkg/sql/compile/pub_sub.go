@@ -46,9 +46,9 @@ func createSubscription(ctx context.Context, c *Compile, dbName string, subOptio
 
 	// check existence
 	sql := fmt.Sprintf(`
-		SELECT COUNT(1)
+		SELECT count(1)
 		FROM mo_catalog.mo_subs
-		WHERE pub_account_name = '%s' AND pub_name = '%s' AND sub_account_id = %d AND sub_name IS NOT NULL
+		WHERE pub_account_name = '%s' AND pub_name = '%s' AND sub_account_id = %d AND sub_name is not null
 	`, subOption.From, subOption.Publication, accountId)
 	rs, err := c.runSqlWithResultAndOptions(
 		sql,
@@ -71,7 +71,7 @@ func createSubscription(ctx context.Context, c *Compile, dbName string, subOptio
 
 	sql = fmt.Sprintf(`
 		UPDATE mo_catalog.mo_subs
-		SET sub_name='%s', sub_time=NOW()
+		SET sub_name='%s', sub_time=now()
 		WHERE pub_account_name = '%s' AND pub_name = '%s' AND sub_account_id = %d
 	`, dbName, subOption.From, subOption.Publication, accountId)
 	return c.runSqlWithAccountIdAndOptions(
@@ -90,7 +90,7 @@ func dropSubscription(ctx context.Context, c *Compile, dbName string) error {
 	// update SubStatusNormal records
 	sql := fmt.Sprintf(`
 		UPDATE mo_catalog.mo_subs
-		SET sub_name=NULL, sub_time=NULL
+		SET sub_name=null, sub_time=null
 		WHERE sub_account_id = %d AND sub_name = '%s' AND status = %d
 	`, accountId, dbName, pubsub.SubStatusNormal)
 	if err = c.runSqlWithAccountIdAndOptions(
