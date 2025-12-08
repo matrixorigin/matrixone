@@ -237,3 +237,10 @@ func TestPartitionState_CollectObjectsBetweenInProgress(t *testing.T) {
 		}
 	}
 }
+
+func TestPartitionState_NewBlocksIter(t *testing.T) {
+	pState := NewPartitionState("", false, 0x3fff, false)
+	pState.start = types.BuildTS(100, 0)
+	_, err := pState.NewObjectsIter(types.BuildTS(99, 0), false, true)
+	require.Error(t, err)
+}
