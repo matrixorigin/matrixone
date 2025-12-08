@@ -271,7 +271,7 @@ const (
 	defaultGamaCycleDur      = time.Minute
 	defaultGetTableListLimit = options.DefaultBlockMaxRows
 
-	logHeader = "MO-TABLE-STATS-TASK"
+	logHeader = "mo.table.stats.task"
 )
 
 const (
@@ -333,8 +333,9 @@ func initMoTableStatsConfig(
 		defer func() {
 			eng.dynamicCtx.defaultConf = eng.dynamicCtx.conf
 			if err != nil {
-				logutil.Error(logHeader,
-					zap.String("source", "init mo table stats config"),
+				logutil.Error(
+					logHeader,
+					zap.String("action", "init.config"),
 					zap.Error(err))
 			}
 		}()
@@ -417,8 +418,9 @@ func initMoTableStatsConfig(
 				runtime.NumCPU(),
 				ants.WithNonblocking(false),
 				ants.WithPanicHandler(func(e interface{}) {
-					logutil.Error(logHeader,
-						zap.String("source", "gama task panic"),
+					logutil.Error(
+						logHeader,
+						zap.String("action", "beta.panic.handler"),
 						zap.Any("error", e))
 				})); err != nil {
 				return
@@ -428,8 +430,9 @@ func initMoTableStatsConfig(
 				runtime.NumCPU(),
 				ants.WithNonblocking(false),
 				ants.WithPanicHandler(func(e interface{}) {
-					logutil.Error(logHeader,
-						zap.String("source", "gama task panic"),
+					logutil.Error(
+						logHeader,
+						zap.String("action", "gama.panic.handler"),
 						zap.Any("error", e))
 				})); err != nil {
 				return
@@ -444,9 +447,11 @@ func initMoTableStatsConfig(
 			task.launchTimes++
 			task.running = true
 
-			logutil.Info(logHeader,
-				zap.String("source", fmt.Sprintf("launch %s", hint)),
-				zap.Int("times", task.launchTimes))
+			logutil.Info(
+				logHeader,
+				zap.String("action", fmt.Sprintf("launch.%s", hint)),
+				zap.Int("times", task.launchTimes),
+			)
 
 			go func() {
 				defer func() {
@@ -483,9 +488,10 @@ func initMoTableStatsConfig(
 			)
 
 			defer func() {
-				logutil.Info(logHeader,
-					zap.String("source", "wait the mo service started"),
-					zap.Duration("duration", moServerStarted.Sub(start)),
+				logutil.Info(
+					logHeader,
+					zap.String("action", "wait.mo.service.started"),
+					zap.Duration("takes", moServerStarted.Sub(start)),
 				)
 			}()
 
@@ -539,9 +545,11 @@ func (d *dynamicCtx) initCronTask(
 	insertTask := func() {
 		sql, err = predefine.GenInitCronTaskSQL(int32(task.TaskCode_MOTableStats))
 		if err != nil {
-			logutil.Error(logHeader,
-				zap.String("source", "init cron task"),
-				zap.Error(err))
+			logutil.Error(
+				logHeader,
+				zap.String("action", "init.cron.task"),
+				zap.Error(err),
+			)
 		}
 
 		d.executeSQL(ctx, sql, "init cron task")
@@ -565,7 +573,10 @@ func (d *dynamicCtx) initCronTask(
 	}
 
 	if checkTask() {
-		logutil.Info(logHeader, zap.String("source", "init cron task succeed"))
+		logutil.Info(
+			logHeader,
+			zap.String("action", "init.cron.task.succeed"),
+		)
 		return true
 	}
 
@@ -821,9 +832,11 @@ func (d *dynamicCtx) checkMoveOnTask() bool {
 
 	disable := d.conf.DisableStatsTask
 
-	logutil.Info(logHeader,
-		zap.String("source", "check move on"),
-		zap.Bool("disable", disable))
+	logutil.Info(
+		logHeader,
+		zap.String("action", "check.move.on"),
+		zap.Bool("state", disable),
+	)
 
 	return disable
 }
@@ -868,9 +881,11 @@ func (d *dynamicCtx) setMoveOnTask(newVal bool) string {
 	d.conf.DisableStatsTask = !newVal
 
 	ret := fmt.Sprintf("move on: %v to %v", oldState, newVal)
-	logutil.Info(logHeader,
-		zap.String("source", "set move on"),
-		zap.String("state", ret))
+	logutil.Info(
+		logHeader,
+		zap.String("action", "set.move.on"),
+		zap.String("state", ret),
+	)
 
 	return ret
 }
@@ -884,9 +899,11 @@ func (d *dynamicCtx) setUseOldImpl(newVal bool) string {
 	d.conf.StatsUsingOldImpl = newVal
 
 	ret := fmt.Sprintf("use old impl: %v to %v", oldState, newVal)
-	logutil.Info(logHeader,
-		zap.String("source", "set use old impl"),
-		zap.String("state", ret))
+	logutil.Info(
+		logHeader,
+		zap.String("action", "set.use.old.impl"),
+		zap.String("state", ret),
+	)
 
 	return ret
 }
@@ -900,9 +917,11 @@ func (d *dynamicCtx) setForceUpdate(newVal bool) string {
 	d.conf.ForceUpdate = newVal
 
 	ret := fmt.Sprintf("force update: %v to %v", oldState, newVal)
-	logutil.Info(logHeader,
-		zap.String("source", "set force update"),
-		zap.String("state", ret))
+	logutil.Info(
+		logHeader,
+		zap.String("action", "set.force.update"),
+		zap.String("state", ret),
+	)
 
 	return ret
 }
@@ -1036,7 +1055,7 @@ func (d *dynamicCtx) executeSQL(ctx context.Context, sql string, hint string) ie
 	ret := exec.(ie.InternalExecutor).Query(newCtx, sql, d.sqlOpts)
 	if ret.Error() != nil {
 		logutil.Info(logHeader,
-			zap.String("source", hint),
+			zap.String("action", hint),
 			zap.Error(ret.Error()),
 			zap.String("sql", sql))
 	}
@@ -1268,12 +1287,13 @@ func (d *dynamicCtx) QueryTableStatsByAccounts(
 		ctx, sql, "query table stats by account",
 		wantedStatsIdxes, forceUpdate, resetUpdateTime)
 
-	logutil.Info(logHeader,
-		zap.String("source", "QueryTableStatsByAccounts"),
-		zap.Int("acc cnt", len(accs)),
-		zap.Int("tbl cnt", len(tbls)),
-		zap.Bool("forceUpdate", forceUpdate),
-		zap.Bool("resetUpdateTime", resetUpdateTime),
+	logutil.Info(
+		logHeader,
+		zap.String("action", "query.table.stats.by.accounts"),
+		zap.Int("account-count", len(accs)),
+		zap.Int("table-count", len(tbls)),
+		zap.Bool("force-update", forceUpdate),
+		zap.Bool("reset-update-time", resetUpdateTime),
 		zap.Duration("takes", time.Since(now)),
 		zap.Bool("ok", ok),
 		zap.Error(err))
@@ -1304,15 +1324,17 @@ func (d *dynamicCtx) QueryTableStatsByDatabase(
 	statsVals, _, retDb, tbls, ok, err = d.queryTableStatsByXXX(
 		ctx, sql, "query table stats by database", wantedStatsIdxes, forceUpdate, resetUpdateTime)
 
-	logutil.Info(logHeader,
-		zap.String("source", "QueryTableStatsByDatabase"),
-		zap.Int("db cnt", len(dbIds)),
-		zap.Int("tbl cnt", len(tbls)),
-		zap.Bool("forceUpdate", forceUpdate),
-		zap.Bool("resetUpdateTime", resetUpdateTime),
+	logutil.Info(
+		logHeader,
+		zap.String("action", "query.table.stats.by.database"),
+		zap.Int("database-count", len(dbIds)),
+		zap.Int("table-count", len(tbls)),
+		zap.Bool("force-update", forceUpdate),
+		zap.Bool("reset-update-time", resetUpdateTime),
 		zap.Duration("takes", time.Since(now)),
 		zap.Bool("ok", ok),
-		zap.Error(err))
+		zap.Error(err),
+	)
 
 	return statsVals, retDb, ok, err
 }
@@ -1338,14 +1360,16 @@ func (d *dynamicCtx) QueryTableStatsByTable(
 	statsVals, _, _, retTbls, ok, err = d.queryTableStatsByXXX(
 		ctx, sql, "query table stats by table", wantedStatsIdxes, forceUpdate, resetUpdateTime)
 
-	logutil.Info(logHeader,
-		zap.String("source", "QueryTableStatsByTable"),
-		zap.Int("tbl cnt", len(tblIds)),
-		zap.Bool("forceUpdate", forceUpdate),
-		zap.Bool("resetUpdateTime", resetUpdateTime),
+	logutil.Info(
+		logHeader,
+		zap.String("action", "query.table.stats.by.table"),
+		zap.Int("table-count", len(tblIds)),
+		zap.Bool("force-update", forceUpdate),
+		zap.Bool("reset-update-time", resetUpdateTime),
 		zap.Duration("takes", time.Since(now)),
 		zap.Bool("ok", ok),
-		zap.Error(err))
+		zap.Error(err),
+	)
 
 	return statsVals, retTbls, ok, err
 }
@@ -1654,7 +1678,7 @@ func (d *dynamicCtx) tableStatsExecutor(
 
 			if !d.moStatsCronTaskInit.Load() {
 				logutil.Info(logHeader,
-					zap.String("source", "table stats executor"),
+					zap.String("action", "table.stats.executor"),
 					zap.String("state", "waiting mo stats cron task init"))
 				continue
 			}
@@ -2703,11 +2727,12 @@ func (d *dynamicCtx) updateSpecialStatsStart(
 		start := stats[specialStart].(string)
 		old := oldStart.ToTimestamp().ToStdTime().Format("2006-01-02 15:04:05.000000")
 		if old != start {
-			logutil.Info(logHeader,
-				zap.String("source", "update special stats start"),
-				zap.String("given up update", "the start changed already"),
-				zap.String("current", start),
-				zap.String("last read", old))
+			logutil.Info(
+				logHeader,
+				zap.String("action", "update.special.stats.start"),
+				zap.String("start", start),
+				zap.String("last", old),
+			)
 
 			return false, nil
 		}

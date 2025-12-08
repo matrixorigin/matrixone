@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -82,12 +83,7 @@ func Test_PathExists(t *testing.T) {
 	}
 }
 
-func Test_MinMax(t *testing.T) {
-	cvey.Convey("min", t, func() {
-		cvey.So(Min(10, 9), cvey.ShouldEqual, 9)
-		cvey.So(Min(9, 10), cvey.ShouldEqual, 9)
-	})
-
+func Test_Max(t *testing.T) {
 	cvey.Convey("max", t, func() {
 		cvey.So(Max(10, 9), cvey.ShouldEqual, 10)
 		cvey.So(Max(9, 10), cvey.ShouldEqual, 10)
@@ -101,17 +97,9 @@ func Test_routineid(t *testing.T) {
 	})
 }
 
-func Test_timeout(t *testing.T) {
-	cvey.Convey("timeout", t, func() {
-		to := NewTimeout(5*time.Second, true)
-		to.UpdateTime(time.Now())
-		cvey.So(to.isTimeout(), cvey.ShouldBeFalse)
-	})
-}
-
 func Test_substringFromBegin(t *testing.T) {
 	cvey.Convey("ssfb", t, func() {
-		cvey.So(SubStringFromBegin("abcdef", 3), cvey.ShouldEqual, "abc...")
+		cvey.So(commonutil.Abbreviate("abcdef", 3), cvey.ShouldEqual, "abc...")
 	})
 }
 
