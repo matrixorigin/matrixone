@@ -2489,9 +2489,10 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		createOpts = createOpts.WithKeepAutoIncrement(oldID)
 	}
 
-	r, err := c.runSqlWithResult(
-		fmt.Sprintf("show create table `%s`.`%s`", db, table),
+	r, err := c.runSqlWithResultAndOptions(
+		fmt.Sprintf("SHOW CREATE TABLE `%s`.`%s`", db, table),
 		int32(accountID),
+		executor.StatementOption{}.WithDisableLog(),
 	)
 	if err != nil {
 		return err
@@ -3946,7 +3947,7 @@ func (s *Scope) CreatePitr(c *Compile) error {
 
 	// check pitr if exists（pitr_name + create_account）
 	checkExistSql := getSqlForCheckPitrExists(pitrName, accountId)
-	existRes, err := c.runSqlWithResult(checkExistSql, int32(sysAccountId))
+	existRes, err := c.runSqlWithResultAndOptions(checkExistSql, int32(sysAccountId), executor.StatementOption{}.WithDisableLog())
 	if err != nil {
 		return err
 	}
@@ -3961,7 +3962,7 @@ func (s *Scope) CreatePitr(c *Compile) error {
 
 	// Check if pitr dup
 	checkSql := getSqlForCheckPitrDup(createPitr)
-	res, err := c.runSqlWithResult(checkSql, int32(sysAccountId))
+	res, err := c.runSqlWithResultAndOptions(checkSql, int32(sysAccountId), executor.StatementOption{}.WithDisableLog())
 	if err != nil {
 		return err
 	}
@@ -4010,7 +4011,7 @@ func (s *Scope) CreatePitr(c *Compile) error {
 	)
 
 	// Execute create pitr sql
-	err = c.runSqlWithAccountId(sql, int32(sysAccountId))
+	err = c.runSqlWithAccountIdAndOptions(sql, int32(sysAccountId), executor.StatementOption{}.WithDisableLog())
 	if err != nil {
 		return err
 	}
@@ -4021,7 +4022,7 @@ func (s *Scope) CreatePitr(c *Compile) error {
 
 	// Query for sys_mo_catalog_pitr
 	sysPitrSql := "SELECT pitr_length, pitr_unit FROM mo_catalog.mo_pitr WHERE pitr_name = '" + sysMoCatalogPitr + "'"
-	sysRes, err := c.runSqlWithResult(sysPitrSql, sysAccountId)
+	sysRes, err := c.runSqlWithResultAndOptions(sysPitrSql, sysAccountId, executor.StatementOption{}.WithDisableLog())
 	if err != nil {
 		return err
 	}
@@ -4039,7 +4040,7 @@ func (s *Scope) CreatePitr(c *Compile) error {
 
 	if needUpdateSysPitr {
 		updateSql := fmt.Sprintf("UPDATE mo_catalog.mo_pitr SET pitr_length = %d, pitr_unit = '%s' WHERE pitr_name = '%s'", createPitr.GetPitrValue(), createPitr.GetPitrUnit(), sysMoCatalogPitr)
-		err = c.runSqlWithAccountId(updateSql, sysAccountId)
+		err = c.runSqlWithAccountIdAndOptions(updateSql, sysAccountId, executor.StatementOption{}.WithDisableLog())
 		if err != nil {
 			return err
 		}
@@ -4090,7 +4091,7 @@ func (s *Scope) CreatePitr(c *Compile) error {
 			createPitr.GetPitrUnit(),
 			now,
 		)
-		err = c.runSqlWithAccountId(insertSql, sysAccountId)
+		err = c.runSqlWithAccountIdAndOptions(insertSql, sysAccountId, executor.StatementOption{}.WithDisableLog())
 		if err != nil {
 			return err
 		}
@@ -4140,7 +4141,7 @@ func (s *Scope) DropPitr(c *Compile) error {
 
 	// 1. Check if PITR exists
 	checkSql := fmt.Sprintf("SELECT pitr_id FROM mo_catalog.mo_pitr WHERE pitr_name = '%s' AND create_account = %d", pitrName, accountId)
-	res, err := c.runSqlWithResult(checkSql, int32(sysAccountId))
+	res, err := c.runSqlWithResultAndOptions(checkSql, int32(sysAccountId), executor.StatementOption{}.WithDisableLog())
 	if err != nil {
 		return err
 	}
@@ -4154,14 +4155,14 @@ func (s *Scope) DropPitr(c *Compile) error {
 
 	// 2. Delete PITR record
 	deleteSql := fmt.Sprintf("DELETE FROM mo_catalog.mo_pitr WHERE pitr_name = '%s' AND create_account = %d", pitrName, accountId)
-	err = c.runSqlWithAccountId(deleteSql, int32(sysAccountId))
+	err = c.runSqlWithAccountIdAndOptions(deleteSql, int32(sysAccountId), executor.StatementOption{}.WithDisableLog())
 	if err != nil {
 		return err
 	}
 
 	// 3. Check if there are other PITR records besides sys_mo_catalog_pitr
 	checkOtherSql := fmt.Sprintf("SELECT pitr_id FROM mo_catalog.mo_pitr WHERE pitr_name != '%s'", sysMoCatalogPitr)
-	otherRes, err := c.runSqlWithResult(checkOtherSql, sysAccountId)
+	otherRes, err := c.runSqlWithResultAndOptions(checkOtherSql, sysAccountId, executor.StatementOption{}.WithDisableLog())
 	if err != nil {
 		return err
 	}
@@ -4169,7 +4170,7 @@ func (s *Scope) DropPitr(c *Compile) error {
 	if len(otherRes.Batches) == 0 || otherRes.Batches[0].RowCount() == 0 {
 		// 4. No other PITR records, delete sys_mo_catalog_pitr
 		deleteSysSql := fmt.Sprintf("DELETE FROM mo_catalog.mo_pitr WHERE pitr_name = '%s' AND create_account = %d", sysMoCatalogPitr, sysAccountId)
-		err = c.runSqlWithAccountId(deleteSysSql, sysAccountId)
+		err = c.runSqlWithAccountIdAndOptions(deleteSysSql, sysAccountId, executor.StatementOption{}.WithDisableLog())
 		if err != nil {
 			return err
 		}
@@ -4195,7 +4196,7 @@ func pitrDupError(c *Compile, createPitr *plan.CreatePitr) error {
 func getSqlForCheckPitrDup(
 	createPitr *plan.CreatePitr,
 ) string {
-	sql := "select pitr_id from mo_catalog.mo_pitr where create_account = %d"
+	sql := "SELECT pitr_id FROM mo_catalog.mo_pitr WHERE create_account = %d"
 	switch tree.PitrLevel(createPitr.GetLevel()) {
 	case tree.PITRLEVELCLUSTER:
 		return getSqlForCheckDupPitrFormat(createPitr.CurrentAccountId, math.MaxUint64)
@@ -4282,7 +4283,7 @@ func CheckSysMoCatalogPitrResult(ctx context.Context, vecs []*vector.Vector, new
 }
 
 func getSqlForCheckPitrExists(pitrName string, accountId uint32) string {
-	return fmt.Sprintf("select pitr_id from mo_catalog.mo_pitr where pitr_name = '%s' and create_account = %d order by pitr_id", pitrName, accountId)
+	return fmt.Sprintf("SELECT pitr_id FROM mo_catalog.mo_pitr WHERE pitr_name = '%s' AND create_account = %d ORDER BY pitr_id", pitrName, accountId)
 }
 
 func (s *Scope) CreateCDC(c *Compile) error {
@@ -4298,7 +4299,7 @@ func (s *Scope) CreateCDC(c *Compile) error {
 	// 1.5 IF NOT EXISTS pre-check to avoid inconsistent rows between mo_cdc_task and daemon task
 	if planCDC.GetIfNotExists() {
 		preCheckSQL := cdc.CDCSQLBuilder.GetTaskIdSQL(uint64(opts.UserInfo.AccountId), opts.TaskName)
-		if res, err := c.runSqlWithResult(preCheckSQL, int32(catalog.System_Account)); err == nil {
+		if res, err := c.runSqlWithResultAndOptions(preCheckSQL, int32(catalog.System_Account), executor.StatementOption{}.WithDisableLog()); err == nil {
 			exists := false
 			if len(res.Batches) > 0 && res.Batches[0].Vecs[0].Length() > 0 {
 				exists = true
@@ -5039,9 +5040,9 @@ func (c *Compile) checkPitrGranularity(
 		return err
 	}
 
-	sqlCluster := fmt.Sprintf(`select pitr_length,pitr_unit from %s.%s where level='cluster' and account_id = %d`,
+	sqlCluster := fmt.Sprintf(`SELECT pitr_length,pitr_unit FROM %s.%s WHERE level='cluster' AND account_id = %d`,
 		catalog.MO_CATALOG, catalog.MO_PITR, accountId)
-	if res, err := c.runSqlWithResult(sqlCluster, int32(catalog.System_Account)); err == nil {
+	if res, err := c.runSqlWithResultAndOptions(sqlCluster, int32(catalog.System_Account), executor.StatementOption{}.WithDisableLog()); err == nil {
 		if len(res.Batches) > 0 && res.Batches[0].Vecs[0].Length() > 0 {
 			val := int64(vector.MustFixedColNoTypeCheck[uint8](res.Batches[0].Vecs[0])[0])
 			unit := strings.ToLower(res.Batches[0].Vecs[1].GetStringAt(0))
@@ -5060,7 +5061,7 @@ func (c *Compile) checkPitrGranularity(
 		isAccountPattern := pt.Source.Database == cdc.CDCPitrGranularity_All && pt.Source.Table == cdc.CDCPitrGranularity_All
 		// helper to run query and evaluate requirement
 		checkQuery := func(q string) (bool, error) {
-			res, err := c.runSqlWithResult(q, int32(catalog.System_Account))
+			res, err := c.runSqlWithResultAndOptions(q, int32(catalog.System_Account), executor.StatementOption{}.WithDisableLog())
 			if err != nil {
 				return false, err
 			}
