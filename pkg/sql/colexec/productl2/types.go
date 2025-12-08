@@ -80,8 +80,6 @@ func NewArgument() *Productl2 {
 
 func (productl2 *Productl2) Release() {
 	if productl2 != nil {
-		productl2.ctr.release()
-
 		reuse.Free[Productl2](productl2, nil)
 	}
 }
@@ -98,6 +96,7 @@ func (productl2 *Productl2) Reset(proc *process.Process, pipelineFailed bool, er
 }
 
 func (productl2 *Productl2) Free(proc *process.Process, pipelineFailed bool, err error) {
+	productl2.ctr.release()
 	productl2.ctr.cleanBatch(proc.Mp())
 }
 
