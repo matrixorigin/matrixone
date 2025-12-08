@@ -756,15 +756,17 @@ func TestRequestMultipleCn_ResponseErrorWithDeadlineExceeded(t *testing.T) {
 			assert.Error(t, errResult, "Should return error when context deadline exceeded")
 			// Accept multiple error types that can occur in different environments:
 			// - "context deadline exceeded": normal timeout path
+			// - "context canceled": when cancel() is called explicitly
 			// - "failed to get result": connection error during timeout
 			// - "EOF": connection closed by server during timeout
-			// All of these indicate the timeout was handled correctly
+			// All of these indicate the timeout/cancellation was handled correctly
 			errStr := errResult.Error()
 			assert.True(t,
 				strings.Contains(errStr, "context deadline exceeded") ||
+					strings.Contains(errStr, "context canceled") ||
 					strings.Contains(errStr, "failed to get result") ||
 					strings.Contains(errStr, "EOF"),
-				"Error should indicate timeout or connection error, got: %s", errStr)
+				"Error should indicate timeout/cancellation or connection error, got: %s", errStr)
 			assert.Equal(t, 0, successCount, "No nodes should succeed due to timeout")
 		},
 	)
