@@ -262,7 +262,6 @@ type MPool struct {
 
 const (
 	NoFixed = 1 << iota
-	DestroyOnFree
 )
 
 func (mp *MPool) recordPtr(ptr unsafe.Pointer) {

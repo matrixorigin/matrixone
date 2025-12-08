@@ -34,27 +34,27 @@ type MockTxnExecutor struct {
 	mp   *mpool.MPool
 }
 
-func (MockTxnExecutor) Use(db string) {
+func (mock *MockTxnExecutor) Use(db string) {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (MockTxnExecutor) LockTable(table string) error {
+func (mock *MockTxnExecutor) LockTable(table string) error {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (e MockTxnExecutor) Exec(sql string, options executor.StatementOption) (executor.Result, error) {
-	if strings.HasPrefix(sql, "delete from mo_catalog.mo_subs") && e.flag {
+func (mock *MockTxnExecutor) Exec(sql string, options executor.StatementOption) (executor.Result, error) {
+	if strings.HasPrefix(sql, "delete from mo_catalog.mo_subs") && mock.flag {
 		return executor.Result{}, assert.AnError
 	}
 
 	bat := batch.New([]string{"a"})
-	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, e.mp)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, mock.mp)
 	bat.SetRowCount(1)
 	return executor.Result{
 		Batches: []*batch.Batch{bat},
-		Mp:      e.mp,
+		Mp:      mock.mp,
 	}, nil
 }
 
@@ -116,7 +116,10 @@ func Test_migrateMoPubs(t *testing.T) {
 	)
 	defer getSubbedAccNamesStub.Reset()
 
-	txn := &MockTxnExecutor{}
+	txn := &MockTxnExecutor{
+		mp: mpool.MustNewZeroNoFixed(),
+	}
+	defer mpool.DeleteMPool(txn.mp)
 	err := migrateMoPubs(txn)
 	assert.NoError(t, err)
 }

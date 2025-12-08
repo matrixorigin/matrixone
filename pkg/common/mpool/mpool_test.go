@@ -42,13 +42,13 @@ func TestMPool(t *testing.T) {
 	require.True(t, nfree0 == 0, "bad nfree")
 
 	for i := 1; i <= 10000; i++ {
-		a, err := m.Alloc(i*10, false)
+		a, err := m.Alloc(i*10, true)
 		require.True(t, err == nil, "alloc failure, %v", err)
 		require.True(t, len(a) == i*10, "allocation i size error")
 		a[0] = 0xF0
 		require.True(t, a[1] == 0, "allocation result not zeroed.")
 		a[i*10-1] = 0xBA
-		a, err = m.reAllocWithDetailK(m.getDetailK(), a, i*20, false)
+		a, err = m.reAllocWithDetailK(m.getDetailK(), a, i*20, true)
 		require.True(t, err == nil, "realloc failure %v", err)
 		require.True(t, len(a) == i*20, "allocation i size error")
 		require.True(t, a[0] == 0xF0, "reallocation not copied")
@@ -125,30 +125,30 @@ func TestMP(t *testing.T) {
 
 func TestMpoolReAllocate(t *testing.T) {
 	m := MustNewZero()
-	d1, err := m.Alloc(1023, false)
+	d1, err := m.Alloc(1023, true)
 	require.NoError(t, err)
 	require.Equal(t, int64(cap(d1)+kMemHdrSz), m.CurrNB())
 
-	d2, err := m.reAllocWithDetailK(m.getDetailK(), d1, cap(d1)-1, false)
+	d2, err := m.reAllocWithDetailK(m.getDetailK(), d1, cap(d1)-1, true)
 	require.NoError(t, err)
 	require.Equal(t, cap(d1), cap(d2))
 	require.Equal(t, int64(cap(d1)+kMemHdrSz), m.CurrNB())
 
-	d3, err := m.reAllocWithDetailK(m.getDetailK(), d2, cap(d2)+1025, false)
+	d3, err := m.reAllocWithDetailK(m.getDetailK(), d2, cap(d2)+1025, true)
 	require.NoError(t, err)
 	require.Equal(t, int64(cap(d3)+kMemHdrSz), m.CurrNB())
 
 	if cap(d3) > 5 {
 		d3 = d3[:cap(d3)-4]
 		var d3_1 []byte
-		d3_1, err = m.Grow(d3, cap(d3)-2, false)
+		d3_1, err = m.Grow(d3, cap(d3)-2, true)
 		require.NoError(t, err)
 		require.Equal(t, cap(d3), cap(d3_1))
 		require.Equal(t, int64(cap(d3)+kMemHdrSz), m.CurrNB())
 		d3 = d3_1
 	}
 
-	d4, err := m.Grow(d3, cap(d3)+10, false)
+	d4, err := m.Grow(d3, cap(d3)+10, true)
 	require.NoError(t, err)
 	require.Equal(t, int64(cap(d4)+kMemHdrSz), m.CurrNB())
 

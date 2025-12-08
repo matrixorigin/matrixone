@@ -160,7 +160,8 @@ func makeTestCases(t *testing.T) []filterTestCase {
 }
 
 func TestFilter(t *testing.T) {
-	for _, tc := range makeTestCases(t) {
+	tcs := makeTestCases(t)
+	for _, tc := range tcs {
 		resetChildren(tc.arg, tc.proc)
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
@@ -214,8 +215,8 @@ func resetChildren(arg *Filter, proc *process.Process) {
 		child.Reset(proc, false, nil)
 		child.Free(proc, false, nil)
 	}
-	bat0 := MakeFilterMockBatchs()
-	bat1 := MakeFilterMockBatchs()
+	bat0 := MakeFilterMockBatchs(proc.Mp())
+	bat1 := MakeFilterMockBatchs(proc.Mp())
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat0, bat1})
 	arg.Children = nil
 	arg.AppendChild(op)
@@ -241,10 +242,8 @@ func makePlan2Int32ConstExpr(v int32) *plan.Expr_Lit {
 }
 
 // new batchs with schema : (a int, b uuid, c varchar, d json, e datetime)
-func MakeFilterMockBatchs() *batch.Batch {
+func MakeFilterMockBatchs(mp *mpool.MPool) *batch.Batch {
 	bat := batch.New([]string{"a", "b", "c"})
-	mp := mpool.MustNewZeroNoFixed()
-	defer mpool.DeleteMPool(mp)
 
 	vecs := make([]*vector.Vector, 3)
 	vecs[0] = testutil.MakeInt32Vector([]int32{
