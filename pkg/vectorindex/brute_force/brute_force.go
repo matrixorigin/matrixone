@@ -50,7 +50,7 @@ func GetUsearchQuantizationFromType(v any) (usearch.Quantization, error) {
 	}
 }
 
-func NewBruteForceIndex[T types.RealNumbers](dataset [][]T,
+func NewCpuBruteForceIndex[T types.RealNumbers](dataset [][]T,
 	dimension uint,
 	m metric.MetricType,
 	elemsz uint) (cache.VectorIndexSearchIf, error) {

@@ -1,4 +1,4 @@
-//go:build !gpu
+//go:build gpu
 
 package brute_force
 

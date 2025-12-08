@@ -22,7 +22,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	cuvs "github.com/rapidsai/cuvs/go"
 	usearch "github.com/unum-cloud/usearch/golang"
+)
+
+var (
+	MetricTypeToCuvsMetric = map[MetricType]cuvs.Distance{
+		Metric_L2sqDistance:   cuvs.DistanceSQEuclidean,
+		Metric_L2Distance:     cuvs.DistanceSqEuclidean,
+		Metric_InnerProduct:   cuvs.DistanceInnerProduct,
+		Metric_CosineDistance: cuvs.DistanceCosine,
+		Metric_L1Distance:     cuvs.DistanceL1,
+	}
 )
 
 type GpuVectorSet[T cuvs.TensorNumberType] struct {

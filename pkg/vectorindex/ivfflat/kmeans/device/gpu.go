@@ -80,6 +80,10 @@ func (c *GpuClusterer[T]) Cluster() (any, error) {
 		return nil, err
 	}
 
+	if err := c.resource.Sync(); err != nil {
+		return nil, err
+	}
+
 	result, err := centers.Slice()
 	if err != nil {
 		return nil, err

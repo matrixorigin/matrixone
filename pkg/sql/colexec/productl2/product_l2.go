@@ -68,6 +68,17 @@ func (productl2 *Productl2) Call(proc *process.Process) (vm.CallResult, error) {
 	ctr := &ap.ctr
 	result := vm.NewCallResult()
 	var err error
+
+	// TODO: create End() for ProductL2
+	/*
+		defer func() {
+			if ctr.brute_force != nil {
+				ctr.brute_force.Destroy()
+				ctr.brute_force = nil
+			}
+		}()
+	*/
+
 	for {
 		switch ctr.state {
 		case Build:
@@ -123,6 +134,7 @@ func (productl2 *Productl2) Call(proc *process.Process) (vm.CallResult, error) {
 			return result, nil
 		}
 	}
+
 }
 
 func NewNullVector[T types.RealNumbers](dim int32) []T {
@@ -153,6 +165,11 @@ func getIndex[T types.RealNumbers](ap *Productl2, proc *process.Process, analyze
 	}
 
 	algo, err := brute_force.NewBruteForceIndex[T](centers, uint(dim), ctr.metrictype, elemSize)
+	if err != nil {
+		return nil, err
+	}
+
+	err = algo.Load(sqlexec.NewSqlProcess(proc))
 	if err != nil {
 		return nil, err
 	}
