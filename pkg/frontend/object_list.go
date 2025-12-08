@@ -17,13 +17,11 @@ package frontend
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-// handleObjectList handles objectlist command
-// Returns mock data with three columns: db name, table name, object list
-// Each column is filled with "1" as requested
 func handleObjectList(
 	ctx context.Context,
 	ses *Session,
@@ -56,8 +54,39 @@ func handleObjectList(
 		mrs.AddColumn(col)
 	}
 
-	// Add one row with all columns filled with "1"
-	row := []any{"1", "1", "1"}
+	// Parse snapshot timestamps if specified
+	var dbNameTS, tableNameTS types.TS
+
+	// Parse against snapshot (db name column)
+	if stmt.AgainstSnapshot != nil && len(string(*stmt.AgainstSnapshot)) > 0 {
+		snapshot, err := ses.GetTxnCompileCtx().ResolveSnapshotWithSnapshotName(string(*stmt.AgainstSnapshot))
+		if err == nil && snapshot != nil && snapshot.TS != nil {
+			dbNameTS = types.TimestampToTS(*snapshot.TS)
+		} else {
+			// If parsing fails, use empty TS
+			dbNameTS = types.MinTs()
+		}
+	} else {
+		// If against snapshot not specified, use empty TS
+		dbNameTS = types.MinTs()
+	}
+
+	// Parse snapshot (table name column)
+	if len(string(stmt.Snapshot)) > 0 {
+		snapshot, err := ses.GetTxnCompileCtx().ResolveSnapshotWithSnapshotName(string(stmt.Snapshot))
+		if err == nil && snapshot != nil && snapshot.TS != nil {
+			tableNameTS = types.TimestampToTS(*snapshot.TS)
+		} else {
+			// If parsing fails, use empty TS
+			tableNameTS = types.MinTs()
+		}
+	} else {
+		// If snapshot not specified, use empty TS
+		tableNameTS = types.MinTs()
+	}
+
+	// Add row with snapshot timestamps
+	row := []any{dbNameTS.ToString(), tableNameTS.ToString(), "1"}
 	mrs.AddRow(row)
 
 	// Save query result if needed

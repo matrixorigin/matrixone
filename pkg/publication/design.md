@@ -2,6 +2,10 @@
 * snapshot diff 
  objectlist [database d] [table t] snapshot sp2 [against snapshot sp1]
 返回值:db name, table name, object list
+for table,
+get table,
+get snapshot ts(from,to)
+scan partition state
 
 * create database/table from cluster(show subscribe的结果,检查上游是否发布)
 
