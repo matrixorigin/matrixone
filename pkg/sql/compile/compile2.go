@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -64,7 +65,7 @@ func (c *Compile) Compile(
 		if e := recover(); e != nil {
 			err = moerr.ConvertPanicError(execTopContext, e)
 			c.proc.Error(execTopContext, "panic in compile",
-				zap.String("sql", c.sql),
+				zap.String("sql", commonutil.Abbreviate(c.sql, 500)),
 				zap.String("error", err.Error()))
 		}
 		task.End()
@@ -297,8 +298,15 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		return nil, err
 	}
 	queryResult.AffectRows = runC.getAffectedRows()
-	if c.uid != "mo_logger" && strings.Contains(strings.ToLower(c.sql), "insert") && (strings.Contains(c.sql, "{MO_TS =") || strings.Contains(c.sql, "{SNAPSHOT =")) {
-		getLogger(c.proc.GetService()).Info("insert into with snapshot", zap.String("sql", c.sql), zap.Uint64("affectRows", queryResult.AffectRows))
+	if c.uid != "mo_logger" &&
+		strings.Contains(strings.ToLower(c.sql), "insert") &&
+		(strings.Contains(c.sql, "{MO_TS =") ||
+			strings.Contains(c.sql, "{SNAPSHOT =")) {
+		getLogger(c.proc.GetService()).Info(
+			"insert into with snapshot",
+			zap.String("sql", commonutil.Abbreviate(c.sql, 500)),
+			zap.Uint64("affectRows", queryResult.AffectRows),
+		)
 	}
 	if txnOperator != nil {
 		err = txnOperator.GetWorkspace().Adjust(writeOffset)

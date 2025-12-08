@@ -196,17 +196,23 @@ func RequestMultipleCn(ctx context.Context,
 		case res := <-responseChan:
 			responsesReceived++
 			if res.err != nil {
-				// Check if the error itself is a context timeout error
-				// or if the context has already timed out (handles race condition)
-				// If context has timed out, prioritize timeout error over connection error
-				if ctx.Err() == context.DeadlineExceeded || errors.Is(res.err, context.DeadlineExceeded) {
-					// Context has timed out, prioritize timeout error
+				// Check if the error itself is a context timeout/cancellation error
+				// or if the context has already timed out/canceled (handles race condition)
+				// If context has timed out or been canceled, prioritize context error over connection error
+				ctxErr := ctx.Err()
+				if ctxErr == context.DeadlineExceeded || ctxErr == context.Canceled ||
+					errors.Is(res.err, context.DeadlineExceeded) || errors.Is(res.err, context.Canceled) {
+					// Context has timed out or been canceled, prioritize context error
 					if retErr == nil {
-						retErr = moerr.NewInternalError(ctx, "RequestMultipleCn : context deadline exceeded")
+						if ctxErr == context.Canceled || errors.Is(res.err, context.Canceled) {
+							retErr = moerr.NewInternalError(ctx, "RequestMultipleCn : context canceled")
+						} else {
+							retErr = moerr.NewInternalError(ctx, "RequestMultipleCn : context deadline exceeded")
+						}
 					}
 				} else {
-					// Context has not timed out, record connection error
-					// Note: if context times out later, timeout error will override connection error
+					// Context has not timed out or been canceled, record connection error
+					// Note: if context times out or is canceled later, context error will override connection error
 					if retErr == nil {
 						retErr = errors.Wrapf(res.err, "failed to get result from %s", res.nodeAddr)
 					}
@@ -297,16 +303,21 @@ func RequestMultipleCn(ctx context.Context,
 				}
 			}
 		case <-ctx.Done():
-			// Context timeout: prioritize timeout error, override previous connection error
-			// Timeout is a higher-level error and should take precedence over connection errors
+			// Context timeout/cancellation: prioritize context error, override previous connection error
+			// Context termination is a higher-level error and should take precedence over connection errors
 			if retErr != nil {
 				// Log the overridden error for debugging purposes
 				logger.GetLogger("RequestMultipleCn").Infof(
-					"[timeout override] %s context timeout overrides previous error: %v",
+					"[context override] %s context termination overrides previous error: %v",
 					qc.ServiceID(), retErr,
 				)
 			}
-			retErr = moerr.NewInternalError(ctx, "RequestMultipleCn : context deadline exceeded")
+			// Set appropriate error message based on context error type
+			if ctx.Err() == context.Canceled {
+				retErr = moerr.NewInternalError(ctx, "RequestMultipleCn : context canceled")
+			} else {
+				retErr = moerr.NewInternalError(ctx, "RequestMultipleCn : context deadline exceeded")
+			}
 			// Don't add "context timeout" to failedNodes - keep it as real node addresses only
 			// Timeout info is already in retErr
 			// Continue receiving remaining responses to avoid goroutine leaks
