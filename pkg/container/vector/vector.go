@@ -203,8 +203,33 @@ func (v *Vector) GetType() *types.Type {
 	return &v.typ
 }
 
+// Bug #23240
+// This is very dangerous.   We changed vector type
+// but did not change the underlying data.   So the length
+// and capacity are all messed up.
 func (v *Vector) SetType(typ types.Type) {
 	v.typ = typ
+}
+
+// Bug #23240
+// Neither this function, nor the SetType function are good
+// Maybe we should just disallow.
+func (v *Vector) SetTypeAndFixData(typ types.Type, mp *mpool.MPool) {
+	if v.typ.IsVarlen() && typ.IsVarlen() {
+		v.typ = typ
+		return
+	}
+
+	if v.typ.IsVarlen() || typ.IsVarlen() {
+		// this is a weird thing to do, we should not allow it.
+		panic("SetTypeAndFixData is not allowed to change from/to varlen type")
+	}
+
+	v.typ = typ
+	oldLength := v.length
+	v.length = 0
+	v.capacity = cap(v.data) / v.typ.TypeSize()
+	extend(v, oldLength, mp)
 }
 
 func (v *Vector) SetOffHeap(offHeap bool) {

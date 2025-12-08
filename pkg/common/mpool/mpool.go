@@ -316,6 +316,10 @@ func (mp *MPool) Cap() int64 {
 	return mp.cap
 }
 
+const (
+	xxxIWouldRatherUseAfterFreeCrashLaterThanLeak = true
+)
+
 func (mp *MPool) destroy() {
 	if mp.stats.NumAlloc.Load() < mp.stats.NumFree.Load() {
 		// this is a memory leak,
@@ -328,9 +332,10 @@ func (mp *MPool) destroy() {
 		// We are so messed up because the cross pool free.
 		// If a pointer is handed out to someone else and we free here
 		// it will be a use after free.   We risk a crash or a leak.
-		//
-		// Let is LEAK! LEAK! LEAK!
-		// mp.deallocateAllPtrs()
+		// Eitherway we are screwed.
+		if xxxIWouldRatherUseAfterFreeCrashLaterThanLeak {
+			mp.deallocateAllPtrs()
+		}
 	}
 
 	// Here we just compensate whatever left over in mp.stats
