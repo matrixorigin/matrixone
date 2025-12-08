@@ -79,8 +79,15 @@ func (t *traceInfo) GetConn(hostPort string) {
 func (t *traceInfo) GotConn(info httptrace.GotConnInfo) {
 	t.times.GotConn = time.Now()
 	metric.FSHTTPTraceCounter.WithLabelValues("GotConn").Inc()
-	metric.FSHTTPTraceCounter.WithLabelValues("GotConnReused").Inc()
-	metric.FSHTTPTraceCounter.WithLabelValues("GotConnIdle").Inc()
+	if info.Reused {
+		metric.FSHTTPTraceCounter.WithLabelValues("GotConnReused").Inc()
+	}
+	// WasIdle indicates whether the connection was obtained from an idle pool
+	// IdleTime is only meaningful when WasIdle is true, and can be 0 if the
+	// connection was just put into the idle pool and immediately retrieved
+	if info.WasIdle {
+		metric.FSHTTPTraceCounter.WithLabelValues("GotConnIdle").Inc()
+	}
 	metric.S3GetConnDurationHistogram.Observe(time.Since(t.times.GetConn).Seconds())
 }
 
@@ -102,6 +109,13 @@ func (t *traceInfo) DNSStart(di httptrace.DNSStartInfo) {
 }
 
 func (t *traceInfo) DNSDone(di httptrace.DNSDoneInfo) {
+	if di.Err != nil {
+		// Log DNS resolution failure for debugging
+		logutil.Debug("S3 DNS resolution failed",
+			zap.Error(di.Err),
+		)
+	}
+	// Record duration regardless of success/failure to track all DNS resolution attempts
 	metric.S3DNSResolveDurationHistogram.Observe(time.Since(t.times.DNSStart).Seconds())
 }
 
@@ -111,6 +125,15 @@ func (t *traceInfo) ConnectStart(network, addr string) {
 }
 
 func (t *traceInfo) ConnectDone(network, addr string, err error) {
+	if err != nil {
+		// Log connection failure for debugging
+		logutil.Debug("S3 connection failed",
+			zap.String("network", network),
+			zap.String("addr", addr),
+			zap.Error(err),
+		)
+	}
+	// Record duration regardless of success/failure to track all connection attempts
 	metric.S3ConnectDurationHistogram.Observe(time.Since(t.times.ConnectStart).Seconds())
 }
 
@@ -120,5 +143,12 @@ func (t *traceInfo) TLSHandshakeStart() {
 }
 
 func (t *traceInfo) TLSHandshakeDone(cs tls.ConnectionState, err error) {
+	if err != nil {
+		// Log TLS handshake failure for debugging
+		logutil.Debug("S3 TLS handshake failed",
+			zap.Error(err),
+		)
+	}
+	// Record duration regardless of success/failure to track all TLS handshake attempts
 	metric.S3TLSHandshakeDurationHistogram.Observe(time.Since(t.times.TSLHandshakeStart).Seconds())
 }
