@@ -15,36 +15,120 @@
 package brute_force
 
 import (
+	"fmt"
+	"runtime"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
+	usearch "github.com/unum-cloud/usearch/golang"
 )
 
-type BruteForceIndexIf[T types.RealNumbers] interface {
-	BuildIndex(metric.VectorSetIf[T], metric.MetricType)
-	SearchIndex(metric.VectorSetIf[T], uint, uint) ([]uint64, []float32, error)
-	Close() error
-}
-
 type BruteForceIndex[T types.RealNumbers] struct {
-	Dataset *metric.VectorSet[T]
-	Queries *metric.VectorSet[T]
-	Metric  metric.MetricType
+	Dataset      []T // flattend vector
+	Metric       usearch.Metric
+	Dimension    uint
+	Count        uint
+	NThreads     uint
+	Quantization usearch.Quantization
+	ElementSize  uint
 }
 
-func CreateIndex[T types.RealNumbers]() BruteForceIndexIf[T] {
-	return &BruteForceIndex[T]{}
+var _ cache.VectorIndexSearchIf = &BruteForceIndex[float32]{}
+
+func GetUsearchQuantizationFromType(v any) (usearch.Quantization, error) {
+	switch v.(type) {
+	case float32:
+		return usearch.F32, nil
+	case float64:
+		return usearch.F64, nil
+	default:
+		return 0, moerr.NewInternalErrorNoCtx(fmt.Sprintf("usearch not support type %T", v))
+	}
 }
 
-func (idx *BruteForceIndex[T]) BuildIndex(dataset metric.VectorSetIf[T], m metric.MetricType) {
-	idx.Dataset = dataset.(*metric.VectorSet[T])
-	idx.Metric = m
+func NewBruteForceIndex[T types.RealNumbers](dataset [][]T,
+	dimension uint,
+	m metric.MetricType,
+	nthreads uint,
+	elemsz uint) (cache.VectorIndexSearchIf, error) {
+	var err error
+
+	idx := &BruteForceIndex[T]{}
+	idx.Metric = metric.MetricTypeToUsearchMetric[m]
+	idx.Quantization, err = GetUsearchQuantizationFromType(T(0))
+	if err != nil {
+		return nil, err
+	}
+	idx.Dimension = dimension
+	idx.Count = uint(len(dataset))
+	idx.NThreads = nthreads
+	idx.ElementSize = elemsz
+
+	idx.Dataset = make([]T, idx.Count*idx.Dimension)
+	for i := 0; i < len(dataset); i++ {
+		offset := i * int(dimension)
+		copy(idx.Dataset[offset:], dataset[i])
+	}
+
+	//fmt.Printf("flattened %v\n", idx.Dataset)
+	//fmt.Printf("idx %v\n", idx)
+
+	return idx, nil
 }
 
-func (idx *BruteForceIndex[T]) SearchIndex(queries metric.VectorSetIf[T], maxResults uint, ncpu uint) ([]uint64, []float32, error) {
-	return metric.UsearchExactSearch[T](idx.Dataset, queries, idx.Metric, maxResults, ncpu)
-}
-
-func (idx *BruteForceIndex[T]) Close() error {
-
+func (idx *BruteForceIndex[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 	return nil
+}
+
+func (idx *BruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
+	queries, ok := _queries.([][]T)
+	if !ok {
+		return nil, nil, moerr.NewInternalErrorNoCtx("queries type invalid")
+	}
+
+	flatten := make([]T, len(queries)*int(idx.Dimension))
+	for i := 0; i < len(queries); i++ {
+		offset := i * int(idx.Dimension)
+		copy(flatten[offset:], queries[i])
+	}
+
+	//fmt.Printf("flattened %v\n", flatten)
+
+	keys, distancesf32, err := usearch.ExactSearchUnsafe(
+		util.UnsafePointer(&(idx.Dataset[0])),
+		util.UnsafePointer(&(flatten[0])),
+		uint(idx.Count),
+		uint(len(queries)),
+		idx.Dimension*idx.ElementSize,
+		idx.Dimension*idx.ElementSize,
+		idx.Dimension,
+		idx.Metric,
+		idx.Quantization,
+		rt.Limit,
+		idx.NThreads)
+
+	if err != nil {
+		return
+	}
+
+	distances = make([]float64, len(distancesf32))
+	for i, dist := range distancesf32 {
+		distances[i] = float64(dist)
+	}
+
+	runtime.KeepAlive(flatten)
+	runtime.KeepAlive(idx.Dataset)
+	return
+}
+
+func (idx *BruteForceIndex[T]) UpdateConfig(sif cache.VectorIndexSearchIf) error {
+	return nil
+}
+
+func (idx *BruteForceIndex[T]) Destroy() {
 }
