@@ -18,6 +18,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -40,16 +41,19 @@ func (MockTxnExecutor) LockTable(table string) error {
 }
 
 func (MockTxnExecutor) Exec(sql string, options executor.StatementOption) (executor.Result, error) {
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+
 	bat := batch.New([]string{"a", "b", "c", "d", "e"})
-	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil)
-	bat.Vecs[1] = testutil.MakeVarcharVector([]string{"Name"}, nil)
-	bat.Vecs[2] = testutil.MakeVarcharVector([]string{"Status"}, nil)
-	bat.Vecs[3] = testutil.MakeUint64Vector([]uint64{1}, nil)
-	bat.Vecs[4] = testutil.MakeScalarNull(nil, types.T_timestamp, 1)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, mp)
+	bat.Vecs[1] = testutil.MakeVarcharVector([]string{"Name"}, nil, mp)
+	bat.Vecs[2] = testutil.MakeVarcharVector([]string{"Status"}, nil, mp)
+	bat.Vecs[3] = testutil.MakeUint64Vector([]uint64{1}, nil, mp)
+	bat.Vecs[4] = testutil.MakeScalarNull(nil, types.T_timestamp, 1, mp)
 	bat.SetRowCount(1)
 	return executor.Result{
 		Batches: []*batch.Batch{bat},
-		Mp:      testutil.TestUtilMp,
+		Mp:      mp,
 	}, nil
 }
 

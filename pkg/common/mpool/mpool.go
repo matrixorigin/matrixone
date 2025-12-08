@@ -325,7 +325,10 @@ func (mp *MPool) destroy() {
 		// otherwise it is a memory leak.  Whoever still holds
 		// a pointer of this mpool is a bug (the cross pool case).
 		//
-		// We are so messed up ...
+		// We are so messed up because the cross pool free.
+		// If a pointer is handed out to someone else and we free here
+		// it will be a use after free.   We risk a crash or a leak.
+		//
 		mp.deallocateAllPtrs()
 	}
 
@@ -544,6 +547,9 @@ func (mp *MPool) freePtr(detailk string, ptr unsafe.Pointer) {
 		panic(moerr.NewInternalErrorNoCtx("free size -1, possible double free"))
 	}
 
+	// Save the original size before marking as freed (needed for offHeap deallocation)
+	originalAllocSz := pHdr.allocSz
+
 	recordSize := int64(pHdr.allocSz) + kMemHdrSz
 	mp.stats.RecordFree(mp.tag, recordSize)
 	globalStats.RecordFree("global", recordSize)
@@ -557,7 +563,7 @@ func (mp *MPool) freePtr(detailk string, ptr unsafe.Pointer) {
 	}
 	if pHdr.offHeap {
 		mp.removePtr(hdr)
-		allocateSize := int(pHdr.allocSz) + kMemHdrSz
+		allocateSize := int(originalAllocSz) + kMemHdrSz
 		simpleCAllocator().Deallocate(unsafe.Slice((*byte)(hdr), allocateSize), uint64(allocateSize))
 	}
 }

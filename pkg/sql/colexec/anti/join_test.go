@@ -79,8 +79,8 @@ func TestString(t *testing.T) {
 func TestAnti(t *testing.T) {
 	for _, tc := range makeTestCases(t) {
 
-		resetChildren(tc.arg)
-		resetHashBuildChildren(tc.barg)
+		resetChildren(tc.arg, tc.proc.Mp())
+		resetHashBuildChildren(tc.barg, tc.proc.Mp())
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		err = tc.barg.Prepare(tc.proc)
@@ -104,8 +104,8 @@ func TestAnti(t *testing.T) {
 		tc.arg.Reset(tc.proc, false, nil)
 		tc.barg.Reset(tc.proc, false, nil)
 
-		resetChildren(tc.arg)
-		resetHashBuildChildren(tc.barg)
+		resetChildren(tc.arg, tc.proc.Mp())
+		resetHashBuildChildren(tc.barg, tc.proc.Mp())
 		tc.proc.GetMessageBoard().Reset()
 		err = tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
@@ -241,7 +241,7 @@ func newTestCase(t *testing.T, m *mpool.MPool, flgs []bool, ts []types.Type, rp 
 	}
 	resultBatch := batch.NewWithSize(len(rp))
 	for i := range rp {
-		bat := colexec.MakeMockBatchs()
+		bat := colexec.MakeMockBatchs(m)
 		resultBatch.Vecs[i] = vector.NewVec(*bat.Vecs[rp[i]].GetType())
 	}
 	tag++
@@ -308,15 +308,15 @@ func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 }
 */
 
-func resetChildren(arg *AntiJoin) {
-	bat := colexec.MakeMockBatchs()
+func resetChildren(arg *AntiJoin, m *mpool.MPool) {
+	bat := colexec.MakeMockBatchs(m)
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 	arg.Children = nil
 	arg.AppendChild(op)
 }
 
-func resetHashBuildChildren(arg *hashbuild.HashBuild) {
-	bat := colexec.MakeMockBatchs()
+func resetHashBuildChildren(arg *hashbuild.HashBuild, m *mpool.MPool) {
+	bat := colexec.MakeMockBatchs(m)
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 	arg.Children = nil
 	arg.AppendChild(op)

@@ -117,7 +117,7 @@ func prepareUpdateTestBatchs(mp *mpool.MPool, size int, hasUniqueKey bool, hasSe
 		}
 
 		rows := makeTestPkArray(int64(affectRows), rowCount)
-		columnA := testutil.MakeInt64Vector(rows, nil)
+		columnA := testutil.MakeInt64Vector(rows, nil, mp)
 		columnB := testutil.NewStringVector(rowCount, types.T_varchar.ToType(), mp, false, nil)
 		columnC := testutil.NewInt32Vector(rowCount, types.T_int32.ToType(), mp, false, nil)
 		columnD := testutil.NewInt32Vector(rowCount, types.T_int32.ToType(), mp, false, nil)

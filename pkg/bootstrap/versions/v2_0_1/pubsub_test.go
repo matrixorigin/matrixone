@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -47,12 +48,15 @@ func (e MockTxnExecutor) Exec(sql string, options executor.StatementOption) (exe
 		return executor.Result{}, assert.AnError
 	}
 
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+
 	bat := batch.New([]string{"a"})
-	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, mp)
 	bat.SetRowCount(1)
 	return executor.Result{
 		Batches: []*batch.Batch{bat},
-		Mp:      testutil.TestUtilMp,
+		Mp:      mp,
 	}, nil
 }
 

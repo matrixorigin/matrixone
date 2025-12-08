@@ -48,7 +48,7 @@ func TestInsertSpecialTable(t *testing.T) {
 	bat1RowCount := oldBat.RowCount()
 	rows := makeTestPkArray(0, bat1RowCount)
 	// pk have null
-	columnA := testutil.MakeInt64Vector(rows, []uint64{0, 1, 2})
+	columnA := testutil.MakeInt64Vector(rows, []uint64{0, 1, 2}, proc.GetMPool())
 	oldBat.Vecs[0].Free(proc.GetMPool())
 	oldBat.ReplaceVector(oldBat.Vecs[0], columnA, 0)
 	case1.expectErr = true
@@ -62,7 +62,7 @@ func TestInsertSpecialTable(t *testing.T) {
 	oldBat = case1.inputBatchs[0]
 	bat1RowCount = oldBat.RowCount()
 	pkArr := makeTestVarcharArray(bat1RowCount)
-	uniquePk := testutil.MakeVarcharVector(pkArr, []uint64{0, 1, 2})
+	uniquePk := testutil.MakeVarcharVector(pkArr, []uint64{0, 1, 2}, proc.GetMPool())
 	oldBat.Vecs[4].Free(proc.GetMPool())
 	oldBat.ReplaceVector(oldBat.Vecs[4], uniquePk, 0)
 	runTestCases(t, proc, []*testCase{case1})
@@ -125,7 +125,7 @@ func prepareTestInsertBatchs(mp *mpool.MPool, size int, hasUniqueKey bool, hasSe
 			rowCount = rowCount / 2
 		}
 		rows := makeTestPkArray(int64(affectRows), rowCount)
-		columnA := testutil.MakeInt64Vector(rows, nil)
+		columnA := testutil.MakeInt64Vector(rows, nil, mp)
 		columnB := testutil.NewStringVector(rowCount, types.T_varchar.ToType(), mp, false, nil)
 		columnC := testutil.NewInt32Vector(rowCount, types.T_int32.ToType(), mp, false, nil)
 		columnD := testutil.NewInt32Vector(rowCount, types.T_int32.ToType(), mp, false, nil)

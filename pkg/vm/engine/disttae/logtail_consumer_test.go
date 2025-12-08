@@ -653,7 +653,7 @@ func TestPushClient_DoGCPartitionState(t *testing.T) {
 	defer packer.Close()
 	rowBatch := &batch.Batch{
 		Vecs: []*vector.Vector{
-			testutil.MakeVarcharVector([]string{"a", "b", "c"}, nil),
+			testutil.MakeVarcharVector([]string{"a", "b", "c"}, nil, m),
 		},
 		Attrs: []string{"varchar_column"},
 	}

@@ -16,7 +16,11 @@
 
 package malloc
 
-import "unsafe"
+import (
+	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+)
 
 /*
 #include <stdlib.h>
@@ -49,6 +53,9 @@ var _ Allocator = new(CAllocator)
 
 func (c *CAllocator) Allocate(size uint64, hints Hints) ([]byte, Deallocator, error) {
 	ptr := C.malloc(C.ulong(size))
+	if ptr == nil {
+		return nil, nil, moerr.NewOOMNoCtx()
+	}
 	if hints&NoClear == 0 {
 		clear(unsafe.Slice((*byte)(ptr), size))
 	}

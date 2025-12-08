@@ -39,11 +39,11 @@ func TestSortKey(t *testing.T) {
 	batch1 := &batch.Batch{
 		Attrs: []string{"a"},
 		Vecs: []*vector.Vector{
-			testutil.MakeUint16Vector([]uint16{1, 2, 0}, nil),
+			testutil.MakeUint16Vector([]uint16{1, 2, 0}, nil, proc.Mp()),
 		},
 	}
 	batch1.SetRowCount(3)
-	err := SortByKey(proc, batch1, 0, false, proc.GetMPool())
+	err := SortByKey(proc, batch1, 0, false, proc.Mp())
 	require.NoError(t, err)
 	cols := vector.ExpandFixedCol[uint16](batch1.Vecs[0])
 	for i := range cols {
@@ -53,12 +53,12 @@ func TestSortKey(t *testing.T) {
 	batch2 := &batch.Batch{
 		Attrs: []string{"a"},
 		Vecs: []*vector.Vector{
-			testutil.MakeTextVector([]string{"b", "a", "c"}, nil),
+			testutil.MakeTextVector([]string{"b", "a", "c"}, nil, proc.Mp()),
 		},
 	}
 	batch2.SetRowCount(3)
 	res := []string{"a", "b", "c"}
-	err = SortByKey(proc, batch2, 0, false, proc.GetMPool())
+	err = SortByKey(proc, batch2, 0, false, proc.Mp())
 	require.NoError(t, err)
 	cols2 := vector.ExpandStrCol(batch2.Vecs[0])
 	for i := range cols {

@@ -243,6 +243,9 @@ func makePlan2Int32ConstExpr(v int32) *plan.Expr_Lit {
 // new batchs with schema : (a int, b uuid, c varchar, d json, e datetime)
 func MakeFilterMockBatchs() *batch.Batch {
 	bat := batch.New([]string{"a", "b", "c"})
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+
 	vecs := make([]*vector.Vector, 3)
 	vecs[0] = testutil.MakeInt32Vector([]int32{
 		1,
@@ -275,7 +278,7 @@ func MakeFilterMockBatchs() *batch.Batch {
 		28,
 		29,
 		30,
-	}, nil)
+	}, nil, mp)
 	vecs[1] = testutil.MakeInt32Vector([]int32{
 		20,
 		21,
@@ -307,7 +310,7 @@ func MakeFilterMockBatchs() *batch.Batch {
 		47,
 		48,
 		49,
-	}, nil)
+	}, nil, mp)
 
 	vecs[2] = testutil.MakeVarcharVector([]string{
 		"xfgj",
@@ -341,7 +344,7 @@ func MakeFilterMockBatchs() *batch.Batch {
 		"prtx",
 		"xrtx",
 	},
-		nil)
+		nil, mp)
 	bat.Vecs = vecs
 	bat.SetRowCount(vecs[0].Length())
 	return bat

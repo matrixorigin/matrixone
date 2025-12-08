@@ -144,14 +144,14 @@ func TestString(t *testing.T) {
 
 func TestTimeWin(t *testing.T) {
 	for _, tc := range makeTestCases(t) {
-		resetChildren(tc.arg)
+		resetChildren(tc.arg, tc.proc.Mp())
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		_, _ = vm.Exec(tc.arg, tc.proc)
 
 		tc.arg.Reset(tc.proc, false, nil)
 
-		resetChildren(tc.arg)
+		resetChildren(tc.arg, tc.proc.Mp())
 		err = tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		_, _ = vm.Exec(tc.arg, tc.proc)
@@ -161,8 +161,8 @@ func TestTimeWin(t *testing.T) {
 	}
 }
 
-func resetChildren(arg *TimeWin) {
-	bat := colexec.MakeMockTimeWinBatchs()
+func resetChildren(arg *TimeWin, m *mpool.MPool) {
+	bat := colexec.MakeMockTimeWinBatchs(m)
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 	arg.Children = nil
 	arg.AppendChild(op)

@@ -28,6 +28,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -445,10 +446,13 @@ func Test_copyBytes(t *testing.T) {
 
 func Test_extractRowFromEveryVector(t *testing.T) {
 	var err error
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+
 	bat := batch.New([]string{"const_null", "const", "normal"})
-	bat.Vecs[0] = testutil.MakeScalarNull(t, types.T_int32, 3)
-	bat.Vecs[1] = testutil.MakeScalarInt64(1, 3)
-	bat.Vecs[2] = testutil.MakeInt32Vector([]int32{1, 2, 3}, nil)
+	bat.Vecs[0] = testutil.MakeScalarNull(t, types.T_int32, 3, mp)
+	bat.Vecs[1] = testutil.MakeScalarInt64(1, 3, mp)
+	bat.Vecs[2] = testutil.MakeInt32Vector([]int32{1, 2, 3}, nil, mp)
 
 	row := make([]any, 3)
 	err = extractRowFromEveryVector(context.Background(), bat, 0, row)
@@ -457,6 +461,9 @@ func Test_extractRowFromEveryVector(t *testing.T) {
 }
 
 func Test_extractRowFromVector(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+
 	bj, err := bytejson.ParseFromString("{\"a\": 1}")
 	require.Nil(t, err)
 
@@ -484,7 +491,7 @@ func Test_extractRowFromVector(t *testing.T) {
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      testutil.MakeScalarNull(t, types.T_int32, 3),
+				vec:      testutil.MakeScalarNull(t, types.T_int32, 3, mp),
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,
@@ -495,7 +502,7 @@ func Test_extractRowFromVector(t *testing.T) {
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      testutil.MakeJsonVector([]string{"{\"a\": 1}"}, nil),
+				vec:      testutil.MakeJsonVector([]string{"{\"a\": 1}"}, nil, mp),
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,
@@ -506,7 +513,7 @@ func Test_extractRowFromVector(t *testing.T) {
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      testutil.MakeBoolVector([]bool{true}, nil),
+				vec:      testutil.MakeBoolVector([]bool{true}, nil, mp),
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,
@@ -517,7 +524,7 @@ func Test_extractRowFromVector(t *testing.T) {
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      testutil.MakeBitVector([]uint64{1}, nil),
+				vec:      testutil.MakeBitVector([]uint64{1}, nil, mp),
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,
@@ -528,7 +535,7 @@ func Test_extractRowFromVector(t *testing.T) {
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      testutil.MakeInt8Vector([]int8{1, 2, 3}, nil),
+				vec:      testutil.MakeInt8Vector([]int8{1, 2, 3}, nil, mp),
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,
@@ -539,7 +546,7 @@ func Test_extractRowFromVector(t *testing.T) {
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      testutil.MakeInt16Vector([]int16{1, 2, 3}, nil),
+				vec:      testutil.MakeInt16Vector([]int16{1, 2, 3}, nil, mp),
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,
@@ -550,7 +557,7 @@ func Test_extractRowFromVector(t *testing.T) {
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      testutil.MakeInt32Vector([]int32{1, 2, 3}, nil),
+				vec:      testutil.MakeInt32Vector([]int32{1, 2, 3}, nil, mp),
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,
@@ -561,7 +568,7 @@ func Test_extractRowFromVector(t *testing.T) {
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      testutil.MakeInt64Vector([]int64{1, 2, 3}, nil),
+				vec:      testutil.MakeInt64Vector([]int64{1, 2, 3}, nil, mp),
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,
@@ -572,7 +579,7 @@ func Test_extractRowFromVector(t *testing.T) {
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      testutil.MakeUint8Vector([]uint8{1, 2, 3}, nil),
+				vec:      testutil.MakeUint8Vector([]uint8{1, 2, 3}, nil, mp),
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,
@@ -583,7 +590,7 @@ func Test_extractRowFromVector(t *testing.T) {
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      testutil.MakeUint16Vector([]uint16{1, 2, 3}, nil),
+				vec:      testutil.MakeUint16Vector([]uint16{1, 2, 3}, nil, mp),
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,
@@ -594,7 +601,7 @@ func Test_extractRowFromVector(t *testing.T) {
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      testutil.MakeUint32Vector([]uint32{1, 2, 3}, nil),
+				vec:      testutil.MakeUint32Vector([]uint32{1, 2, 3}, nil, mp),
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,
@@ -605,7 +612,7 @@ func Test_extractRowFromVector(t *testing.T) {
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      testutil.MakeUint64Vector([]uint64{1, 2, 3}, nil),
+				vec:      testutil.MakeUint64Vector([]uint64{1, 2, 3}, nil, mp),
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,
@@ -616,7 +623,7 @@ func Test_extractRowFromVector(t *testing.T) {
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      testutil.MakeFloat32Vector([]float32{1.1, 2.2, 3.3}, nil),
+				vec:      testutil.MakeFloat32Vector([]float32{1.1, 2.2, 3.3}, nil, mp),
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,
@@ -627,7 +634,7 @@ func Test_extractRowFromVector(t *testing.T) {
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      testutil.MakeFloat64Vector([]float64{1.1, 2.2, 3.3}, nil),
+				vec:      testutil.MakeFloat64Vector([]float64{1.1, 2.2, 3.3}, nil, mp),
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,
@@ -638,7 +645,7 @@ func Test_extractRowFromVector(t *testing.T) {
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      testutil.MakeVarcharVector([]string{"abc"}, nil),
+				vec:      testutil.MakeVarcharVector([]string{"abc"}, nil, mp),
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,
@@ -650,7 +657,7 @@ func Test_extractRowFromVector(t *testing.T) {
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      testutil.MakeDateVector([]string{"2023-02-03 01:23:45"}, nil),
+				vec:      testutil.MakeDateVector([]string{"2023-02-03 01:23:45"}, nil, mp),
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,
@@ -661,7 +668,7 @@ func Test_extractRowFromVector(t *testing.T) {
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      testutil.MakeTimeVector([]string{"2023-02-03 01:23:45"}, nil),
+				vec:      testutil.MakeTimeVector([]string{"2023-02-03 01:23:45"}, nil, mp),
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,
@@ -672,7 +679,7 @@ func Test_extractRowFromVector(t *testing.T) {
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      testutil.MakeDatetimeVector([]string{"2023-02-03 01:23:45"}, nil),
+				vec:      testutil.MakeDatetimeVector([]string{"2023-02-03 01:23:45"}, nil, mp),
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,
@@ -683,7 +690,7 @@ func Test_extractRowFromVector(t *testing.T) {
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      testutil.MakeTimestampVector([]string{"2023-02-03 01:23:45"}, nil),
+				vec:      testutil.MakeTimestampVector([]string{"2023-02-03 01:23:45"}, nil, mp),
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,
@@ -695,7 +702,7 @@ func Test_extractRowFromVector(t *testing.T) {
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      testutil.MakeUUIDVector([]types.Uuid{types.Uuid([]byte("1234567890123456"))}, nil),
+				vec:      testutil.MakeUUIDVector([]types.Uuid{types.Uuid([]byte("1234567890123456"))}, nil, mp),
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,
@@ -706,7 +713,7 @@ func Test_extractRowFromVector(t *testing.T) {
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      testutil.MakeRowIdVector([]types.Rowid{rowid}, nil),
+				vec:      testutil.MakeRowIdVector([]types.Rowid{rowid}, nil, mp),
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,
@@ -717,7 +724,7 @@ func Test_extractRowFromVector(t *testing.T) {
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      testutil.MakeBlockIdVector([]types.Blockid{blockid}, nil),
+				vec:      testutil.MakeBlockIdVector([]types.Blockid{blockid}, nil, mp),
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,
@@ -728,7 +735,7 @@ func Test_extractRowFromVector(t *testing.T) {
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      testutil.MakeTSVector([]types.TS{ts}, nil),
+				vec:      testutil.MakeTSVector([]types.TS{ts}, nil, mp),
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,
@@ -927,12 +934,15 @@ func TestAesCFBDecodeWithKey_EmptyKey(t *testing.T) {
 func Test_batchRowCount(t *testing.T) {
 	assert.Equal(t, 0, batchRowCount(nil))
 
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+
 	bat := batch.New([]string{})
 	assert.Equal(t, 0, batchRowCount(bat))
 
 	bat = batch.New([]string{"a", "ts"})
-	bat.Vecs[0] = testutil.MakeUint64Vector([]uint64{1, 2, 3}, nil)
-	bat.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 2, 3}, nil)
+	bat.Vecs[0] = testutil.MakeUint64Vector([]uint64{1, 2, 3}, nil, mp)
+	bat.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 2, 3}, nil, mp)
 	bat.SetRowCount(3)
 	assert.Equal(t, 3, batchRowCount(bat))
 }

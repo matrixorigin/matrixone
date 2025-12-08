@@ -17,6 +17,7 @@ package versions
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -39,19 +40,22 @@ func (MockTxnExecutor) LockTable(table string) error {
 }
 
 func (MockTxnExecutor) Exec(sql string, options executor.StatementOption) (executor.Result, error) {
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+
 	bat := batch.New([]string{"a", "b", "c", "d", "e", "f", "g", "h"})
-	bat.Vecs[0] = testutil.MakeVarcharVector([]string{"PubName"}, nil)
-	bat.Vecs[1] = testutil.MakeVarcharVector([]string{"DbName"}, nil)
-	bat.Vecs[2] = testutil.MakeUint64Vector([]uint64{1}, nil)
-	bat.Vecs[3] = testutil.MakeVarcharVector([]string{"TablesStr"}, nil)
-	bat.Vecs[4] = testutil.MakeVarcharVector([]string{"SubAccountsStr"}, nil)
-	bat.Vecs[5] = testutil.MakeTimestampVector([]string{"2023-02-03 01:23:45"}, nil)
-	bat.Vecs[6] = testutil.MakeTimestampVector([]string{"2023-02-03 01:23:45"}, nil)
-	bat.Vecs[7] = testutil.MakeVarcharVector([]string{"Comment"}, nil)
+	bat.Vecs[0] = testutil.MakeVarcharVector([]string{"PubName"}, nil, mp)
+	bat.Vecs[1] = testutil.MakeVarcharVector([]string{"DbName"}, nil, mp)
+	bat.Vecs[2] = testutil.MakeUint64Vector([]uint64{1}, nil, mp)
+	bat.Vecs[3] = testutil.MakeVarcharVector([]string{"TablesStr"}, nil, mp)
+	bat.Vecs[4] = testutil.MakeVarcharVector([]string{"SubAccountsStr"}, nil, mp)
+	bat.Vecs[5] = testutil.MakeTimestampVector([]string{"2023-02-03 01:23:45"}, nil, mp)
+	bat.Vecs[6] = testutil.MakeTimestampVector([]string{"2023-02-03 01:23:45"}, nil, mp)
+	bat.Vecs[7] = testutil.MakeVarcharVector([]string{"Comment"}, nil, mp)
 	bat.SetRowCount(1)
 	return executor.Result{
 		Batches: []*batch.Batch{bat},
-		Mp:      testutil.TestUtilMp,
+		Mp:      mp,
 	}, nil
 }
 
