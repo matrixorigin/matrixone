@@ -356,6 +356,9 @@ func OrderedBinarySearchOffsetByValFactory[T types.OrderedT](vals []T) func(*Vec
 	return func(vec *Vector) []int64 {
 		var sels []int64
 		rows := MustFixedColNoTypeCheck[T](vec)
+		if len(rows) == 0 || len(vals) == 0 {
+			return sels
+		}
 		subVals := vals
 		if len(vals) >= kMinLenForSubVector {
 			minVal := rows[0]
@@ -367,32 +370,54 @@ func OrderedBinarySearchOffsetByValFactory[T types.OrderedT](vals []T) func(*Vec
 				return maxVal < vals[i]
 			})
 			subVals = vals[lowerBound:upperBound]
+			if len(subVals) == 0 {
+				return sels
+			}
 		}
 
 		if len(subVals) <= kMaxLenForBinarySearch {
-			offset := 0
-			for i := range subVals {
-				idx := sort.Search(len(rows), func(idx int) bool {
-					return rows[idx] >= subVals[i]
+			start := 0
+			n1 := len(rows)
+			for i := 0; i < len(subVals); i++ {
+				if i > 0 && subVals[i] == subVals[i-1] {
+					continue
+				}
+				idx := sort.Search(n1-start, func(idx int) bool {
+					return rows[start+idx] >= subVals[i]
 				})
-				if idx < len(rows) {
-					if rows[idx] == subVals[i] {
-						sels = append(sels, int64(offset+idx))
-					}
-					offset += idx
-					rows = rows[idx:]
-				} else {
+				pos := start + idx
+				if pos >= n1 {
 					break
 				}
+				if rows[pos] == subVals[i] {
+					runEnd := pos + 1
+					for runEnd < n1 && rows[runEnd] == subVals[i] {
+						runEnd++
+					}
+					for j := pos; j < runEnd; j++ {
+						sels = append(sels, int64(j))
+					}
+					start = runEnd
+					continue
+				}
+				start = pos
 			}
 		} else {
 			n1, n2 := len(rows), len(subVals)
 			i1, i2 := 0, 0
 			for i1 < n1 && i2 < n2 {
 				if rows[i1] == subVals[i2] {
-					sels = append(sels, int64(i1))
-					i1++
-					i2++
+					val := subVals[i2]
+					runStart := i1
+					for i1 < n1 && rows[i1] == val {
+						i1++
+					}
+					for j := runStart; j < i1; j++ {
+						sels = append(sels, int64(j))
+					}
+					for i2 < n2 && subVals[i2] == val {
+						i2++
+					}
 				} else if rows[i1] < subVals[i2] {
 					i1++
 				} else {
@@ -409,57 +434,71 @@ func VarlenBinarySearchOffsetByValFactory(vals [][]byte) func(*Vector) []int64 {
 	return func(vec *Vector) []int64 {
 		var sels []int64
 		n1 := vec.Length()
-		if n1 == 0 {
+		if n1 == 0 || len(vals) == 0 {
 			return sels
 		}
+		varlenas := MustFixedColNoTypeCheck[types.Varlena](vec)
+		area := vec.GetArea()
+
 		subVals := vals
 		if len(vals) >= kMinLenForSubVector {
 			lowerBound := sort.Search(len(vals), func(i int) bool {
-				return bytes.Compare(vec.GetBytesAt(0), vals[i]) <= 0
+				return bytes.Compare(varlenas[0].GetByteSlice(area), vals[i]) <= 0
 			})
 			upperBound := sort.Search(len(vals), func(i int) bool {
-				return bytes.Compare(vec.GetBytesAt(n1-1), vals[i]) < 0
+				return bytes.Compare(varlenas[n1-1].GetByteSlice(area), vals[i]) < 0
 			})
 			subVals = vals[lowerBound:upperBound]
+			if len(subVals) == 0 {
+				return sels
+			}
 		}
 
 		if len(subVals) <= kMaxLenForBinarySearch {
-			offset := 0
-			for i := range subVals {
-				idx, found := sort.Find(n1, func(idx int) int {
-					return bytes.Compare(subVals[i], vec.GetBytesAt(offset+idx))
+			start := 0
+			for i := 0; i < len(subVals); i++ {
+				if i > 0 && bytes.Equal(subVals[i], subVals[i-1]) {
+					continue
+				}
+				idx := sort.Search(n1-start, func(idx int) bool {
+					return bytes.Compare(varlenas[start+idx].GetByteSlice(area), subVals[i]) >= 0
 				})
-				if idx < n1 {
-					if found {
-						sels = append(sels, int64(offset+idx))
-					}
-					offset += idx
-					n1 -= idx
-				} else {
+				pos := start + idx
+				if pos >= n1 {
 					break
 				}
+				if bytes.Equal(varlenas[pos].GetByteSlice(area), subVals[i]) {
+					runEnd := pos + 1
+					for runEnd < n1 && bytes.Equal(varlenas[runEnd].GetByteSlice(area), subVals[i]) {
+						runEnd++
+					}
+					for j := pos; j < runEnd; j++ {
+						sels = append(sels, int64(j))
+					}
+					start = runEnd
+					continue
+				}
+				start = pos
 			}
 		} else {
 			n2 := len(subVals)
 			i1, i2 := 0, 0
-			varlenas := MustFixedColNoTypeCheck[types.Varlena](vec)
-			s1 := varlenas[0].GetByteSlice(vec.GetArea())
-			for i2 < n2 {
-				ord := bytes.Compare(s1, subVals[i2])
+			for i1 < n1 && i2 < n2 {
+				ord := bytes.Compare(varlenas[i1].GetByteSlice(area), subVals[i2])
 				if ord == 0 {
-					sels = append(sels, int64(i1))
-					i1++
-					if i1 == n1 {
-						break
+					val := subVals[i2]
+					runStart := i1
+					for i1 < n1 && bytes.Equal(varlenas[i1].GetByteSlice(area), val) {
+						i1++
 					}
-					i2++
-					s1 = varlenas[i1].GetByteSlice(vec.GetArea())
+					for j := runStart; j < i1; j++ {
+						sels = append(sels, int64(j))
+					}
+					for i2 < n2 && bytes.Equal(subVals[i2], val) {
+						i2++
+					}
 				} else if ord < 0 {
 					i1++
-					if i1 == n1 {
-						break
-					}
-					s1 = varlenas[i1].GetByteSlice(vec.GetArea())
 				} else {
 					i2++
 				}
@@ -474,6 +513,9 @@ func FixedSizedBinarySearchOffsetByValFactory[T any](vals []T, cmp func(T, T) in
 	return func(vec *Vector) []int64 {
 		var sels []int64
 		rows := MustFixedColNoTypeCheck[T](vec)
+		if len(rows) == 0 || len(vals) == 0 {
+			return sels
+		}
 
 		subVals := vals
 		if len(vals) >= kMinLenForSubVector {
@@ -486,23 +528,37 @@ func FixedSizedBinarySearchOffsetByValFactory[T any](vals []T, cmp func(T, T) in
 				return cmp(maxVal, vals[i]) < 0
 			})
 			subVals = vals[lowerBound:upperBound]
+			if len(subVals) == 0 {
+				return sels
+			}
 		}
 
 		if len(subVals) <= kMaxLenForBinarySearch {
-			offset := 0
-			for i := range subVals {
-				idx, found := sort.Find(len(rows), func(idx int) int {
-					return cmp(subVals[i], rows[idx])
+			start := 0
+			n1 := len(rows)
+			for i := 0; i < len(subVals); i++ {
+				if i > 0 && cmp(subVals[i], subVals[i-1]) == 0 {
+					continue
+				}
+				idx := sort.Search(n1-start, func(idx int) bool {
+					return cmp(rows[start+idx], subVals[i]) >= 0
 				})
-				if idx < len(rows) {
-					if found {
-						sels = append(sels, int64(offset+idx))
-					}
-					offset += idx
-					rows = rows[idx:]
-				} else {
+				pos := start + idx
+				if pos >= n1 {
 					break
 				}
+				if cmp(rows[pos], subVals[i]) == 0 {
+					runEnd := pos + 1
+					for runEnd < n1 && cmp(rows[runEnd], subVals[i]) == 0 {
+						runEnd++
+					}
+					for j := pos; j < runEnd; j++ {
+						sels = append(sels, int64(j))
+					}
+					start = runEnd
+					continue
+				}
+				start = pos
 			}
 		} else {
 			n1, n2 := len(rows), len(subVals)
@@ -510,9 +566,17 @@ func FixedSizedBinarySearchOffsetByValFactory[T any](vals []T, cmp func(T, T) in
 			for i1 < n1 && i2 < n2 {
 				ord := cmp(rows[i1], subVals[i2])
 				if ord == 0 {
-					sels = append(sels, int64(i1))
-					i1++
-					i2++
+					val := subVals[i2]
+					runStart := i1
+					for i1 < n1 && cmp(rows[i1], val) == 0 {
+						i1++
+					}
+					for j := runStart; j < i1; j++ {
+						sels = append(sels, int64(j))
+					}
+					for i2 < n2 && cmp(subVals[i2], val) == 0 {
+						i2++
+					}
 				} else if ord < 0 {
 					i1++
 				} else {
