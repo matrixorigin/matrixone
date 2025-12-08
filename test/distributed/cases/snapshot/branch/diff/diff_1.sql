@@ -25,11 +25,11 @@ create table t0(a int, b int, primary key(a));
 insert into t0 values(1,1),(2,2),(3,3);
 create snapshot sp0 for table test t0;
 
-create table t1 clone t0{snapshot="sp0"};
+data branch create table t1 from t0{snapshot="sp0"};
 insert into t1 values(4,4);
 create snapshot sp1 for table test t1;
 
-create table t2 clone t0{snapshot="sp0"};
+data branch create table t2 from t0{snapshot="sp0"};
 insert into t2 values(5, 5);
 create snapshot sp2 for table test t2;
 
@@ -50,11 +50,11 @@ create snapshot sp00 for table test t0;
 insert into t0 values(2,2);
 create snapshot sp01 for table test t0;
 
-create table t1 clone t0{snapshot="sp00"};
+data branch create table t1 from t0{snapshot="sp00"};
 insert into t1 values(4,4);
 create snapshot sp1 for table test t1;
 
-create table t2 clone t0{snapshot="sp01"};
+data branch create table t2 from t0{snapshot="sp01"};
 insert into t2 values(5, 5);
 create snapshot sp2 for table test t2;
 
@@ -76,7 +76,7 @@ insert into t1 values(1,1),(2,2);
 create snapshot sp1 for table test t1;
 insert into t1 values(3,3);
 
-create table t2 clone t1;
+data branch create table t2 from t1;
 insert into t2 values(4, 4);
 create snapshot sp2 for table test t2;
 
@@ -94,7 +94,7 @@ insert into t1 values(1,1),(2,2);
 create snapshot sp1 for table test t1;
 insert into t1 values(3,3);
 
-create table t2 clone t1{snapshot="sp1"};
+data branch create table t2 from t1{snapshot="sp1"};
 insert into t2 values(4, 4);
 create snapshot sp2 for table test t2;
 
@@ -110,7 +110,7 @@ drop table t2;
 create table t1(a int, b int, primary key(a));
 insert into t1 values(1,1),(2,2);
 
-create table t2 clone t1;
+data branch create table t2 from t1;
 insert into t2 values(4, 4);
 create snapshot sp2 for table test t2;
 
