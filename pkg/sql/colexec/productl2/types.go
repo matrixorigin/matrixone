@@ -80,6 +80,8 @@ func NewArgument() *Productl2 {
 
 func (productl2 *Productl2) Release() {
 	if productl2 != nil {
+		productl2.ctr.release()
+
 		reuse.Free[Productl2](productl2, nil)
 	}
 }

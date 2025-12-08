@@ -263,6 +263,13 @@ func (ctr *container) probe(ap *Productl2, proc *process.Process, result *vm.Cal
 	return nil
 }
 
+func (ctr *container) release() {
+	if ctr.brute_force != nil {
+		ctr.brute_force.Destroy()
+		ctr.brute_force = nil
+	}
+}
+
 func probeRun[T types.RealNumbers](ctr *container, ap *Productl2, proc *process.Process, result *vm.CallResult) error {
 	probeCount := ctr.inBat.RowCount()
 	tblColPos := ap.OnExpr.GetF().GetArgs()[1].GetCol().GetColPos()
