@@ -181,4 +181,7 @@ func (idx *GpuBruteForceIndex[T]) Destroy() {
 	if idx.Resource != nil {
 		idx.Resource.Close()
 	}
+	if idx.Index != nil {
+		idx.Index.Close()
+	}
 }
