@@ -107,9 +107,30 @@ func newHTTPClient(args ObjectStorageArguments) *http.Client {
 		}
 	}
 
+	// use default transport if MaxConnsPerHost is not configured
+	transport := httpRoundTripper
+	if args.MaxConnsPerHost > 0 {
+		// create a custom transport with configured MaxConnsPerHost
+		customTransport := &http.Transport{
+			DialContext:           wrapDialContext(httpDialer.DialContext),
+			MaxIdleConns:          maxIdleConns,
+			IdleConnTimeout:       idleConnTimeout,
+			MaxIdleConnsPerHost:   maxIdleConnsPerHost,
+			MaxConnsPerHost:       args.MaxConnsPerHost,
+			TLSHandshakeTimeout:   connectTimeout,
+			ResponseHeaderTimeout: readWriteTimeout,
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: true,
+				RootCAs:            caPool,
+			},
+			Proxy: http.ProxyFromEnvironment,
+		}
+		transport = wrapRoundTripper(customTransport)
+	}
+
 	// client
 	client := &http.Client{
-		Transport: httpRoundTripper,
+		Transport: transport,
 	}
 
 	return client
