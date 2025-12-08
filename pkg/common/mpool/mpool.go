@@ -456,7 +456,7 @@ func (mp *MPool) Alloc(sz int, offHeap bool) ([]byte, error) {
 
 func (mp *MPool) allocWithDetailK(detailk string, sz int, offHeap bool) ([]byte, error) {
 	// reject unexpected alloc size.
-	if sz < 0 || sz > CapLimit {
+	if sz < 0 || sz+kMemHdrSz > CapLimit {
 		logutil.Errorf("mpool memory allocation exceed limit with requested size %d: %s", sz, string(debug.Stack()))
 		return nil, moerr.NewInternalErrorNoCtxf("mpool memory allocation exceed limit with requested size %d", sz)
 	}
@@ -471,6 +471,7 @@ func (mp *MPool) alloc(detailk string, sz int, requiredSpaceWithoutHeader int, o
 	allocateSize := requiredSpaceWithoutHeader + kMemHdrSz
 	var bs []byte
 	var err error
+
 	if offHeap {
 		gcurr := globalStats.RecordAlloc("global", int64(allocateSize))
 		if gcurr > GlobalCap() {
@@ -485,7 +486,7 @@ func (mp *MPool) alloc(detailk string, sz int, requiredSpaceWithoutHeader int, o
 			globalStats.RecordFree("global", int64(allocateSize))
 			return nil, moerr.NewInternalErrorNoCtxf("mpool out of space, alloc %d bytes, cap %d", sz, mp.cap)
 		}
-		bs, _, err = simpleCAllocator().Allocate(uint64(allocateSize), malloc.NoHints)
+		bs, err = simpleCAllocator().Allocate(uint64(allocateSize))
 		if err != nil {
 			panic(err)
 		}
@@ -549,26 +550,25 @@ func (mp *MPool) freePtr(detailk string, ptr unsafe.Pointer) {
 
 	// Save the original size before marking as freed (needed for offHeap deallocation)
 	originalAllocSz := pHdr.allocSz
-	recordSize := int64(pHdr.allocSz) + kMemHdrSz
+	allocateSize := int64(originalAllocSz) + kMemHdrSz
 
 	if !atomic.CompareAndSwapInt32(&pHdr.allocSz, pHdr.allocSz, -1) {
 		panic(moerr.NewInternalErrorNoCtx("free size -1, possible double free"))
 	}
 
 	// if not offHeap, just clean it up and return.
-	if !pHdr.offHeap {
+	offHeap := pHdr.offHeap
+	if !offHeap {
 		return
 	}
 
-	mp.stats.RecordFree(mp.tag, recordSize)
-	globalStats.RecordFree("global", recordSize)
+	mp.stats.RecordFree(mp.tag, allocateSize)
+	globalStats.RecordFree("global", allocateSize)
 	if mp.details != nil {
-		mp.details.recordFree(detailk, recordSize)
+		mp.details.recordFree(detailk, allocateSize)
 	}
 
 	mp.removePtr(hdr)
-	allocateSize := int(originalAllocSz) + kMemHdrSz
-
 	simpleCAllocator().Deallocate(unsafe.Slice((*byte)(hdr), allocateSize), uint64(allocateSize))
 }
 

@@ -56,10 +56,10 @@ func (c *CAllocator) Allocate(size uint64, hints Hints) ([]byte, Deallocator, er
 	if ptr == nil {
 		return nil, nil, moerr.NewOOMNoCtx()
 	}
-	if hints&NoClear == 0 {
-		clear(unsafe.Slice((*byte)(ptr), size))
-	}
 	slice := unsafe.Slice((*byte)(ptr), size)
+	if hints&NoClear == 0 {
+		clear(slice)
+	}
 	return slice, c.deallocatorPool.Get(cDeallocatorArgs{
 		ptr: ptr,
 	}), nil

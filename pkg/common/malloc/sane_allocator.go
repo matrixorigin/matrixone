@@ -18,13 +18,18 @@ import (
 	"runtime"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-type SimpleCAllocator struct {
-	ca *CAllocator
+/*
+#include <stdlib.h>
+*/
+import "C"
 
+type SimpleCAllocator struct {
 	allocateBytesCounter   prometheus.Counter
 	inuseBytesGauge        prometheus.Gauge
 	allocateObjectsCounter prometheus.Counter
@@ -45,7 +50,6 @@ func NewSimpleCAllocator(
 	inuseObjectsGauge prometheus.Gauge,
 ) *SimpleCAllocator {
 	sca := &SimpleCAllocator{
-		ca:                     NewCAllocator(),
 		allocateBytesCounter:   allocateBytesCounter,
 		inuseBytesGauge:        inuseBytesGauge,
 		allocateObjectsCounter: allocateObjectsCounter,
@@ -58,24 +62,37 @@ func NewSimpleCAllocator(
 	return sca
 }
 
-func (sca *SimpleCAllocator) Allocate(size uint64, hints Hints) ([]byte, Deallocator, error) {
-	ptr, dec, err := sca.ca.Allocate(size, hints)
-	if err != nil {
-		return nil, nil, err
+func (sca *SimpleCAllocator) Allocate(size uint64) ([]byte, error) {
+	ptr := C.malloc(C.ulong(size))
+	if ptr == nil {
+		return nil, moerr.NewOOMNoCtx()
 	}
+
+	slice := unsafe.Slice((*byte)(ptr), size)
+	clear(slice)
+
 	sca.allocateBytes.Add(size)
 	sca.inuseBytes.Add(int64(size))
 	sca.allocateObjects.Add(1)
 	sca.inuseObjects.Add(1)
 	sca.triggerUpdate()
-	return ptr, dec, nil
+	return slice, nil
 }
 
 func (sca *SimpleCAllocator) Deallocate(slice []byte, size uint64) {
+	if cap(slice) == 0 {
+		// free(nil) is a no-op.
+		return
+	}
+
+	if cap(slice) != int(size) {
+		panic(moerr.NewInternalErrorNoCtxf("deallocate size mismatch, expected %d, got %d", size, cap(slice)))
+	}
+
 	sca.inuseBytes.Add(-int64(size))
 	sca.inuseObjects.Add(-1)
 	sca.triggerUpdate()
-	sca.ca.Deallocate(slice)
+	C.free(unsafe.Pointer(unsafe.SliceData(slice)))
 }
 
 func (sca *SimpleCAllocator) triggerUpdate() {
