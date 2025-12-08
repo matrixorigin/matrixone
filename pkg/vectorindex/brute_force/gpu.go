@@ -17,11 +17,9 @@
 package brute_force
 
 import (
-	"fmt"
-	"runtime"
+	//	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
@@ -33,8 +31,8 @@ import (
 
 type GpuBruteForceIndex[T cuvs.TensorNumberType] struct {
 	Resource    *cuvs.Resource
-	Dataset     *cusv.Tensor[T]
-	Index       *cuvs.BruteForceIndex
+	Dataset     *cuvs.Tensor[T]
+	Index       *brute_force.BruteForceIndex
 	Metric      cuvs.Distance
 	Dimension   uint
 	Count       uint
@@ -43,22 +41,10 @@ type GpuBruteForceIndex[T cuvs.TensorNumberType] struct {
 
 var _ cache.VectorIndexSearchIf = &GpuBruteForceIndex[float32]{}
 
-func GetUsearchQuantizationFromType(v any) (usearch.Quantization, error) {
-	switch v.(type) {
-	case float32:
-		return usearch.F32, nil
-	case float64:
-		return usearch.F64, nil
-	default:
-		return 0, moerr.NewInternalErrorNoCtx(fmt.Sprintf("usearch not support type %T", v))
-	}
-}
-
 func NewBruteForceIndex[T types.RealNumbers](dataset [][]T,
 	dimension uint,
 	m metric.MetricType,
 	elemsz uint) (cache.VectorIndexSearchIf, error) {
-	var err error
 
 	switch dset := any(dataset).(type) {
 	case [][]float64:
@@ -66,12 +52,14 @@ func NewBruteForceIndex[T types.RealNumbers](dataset [][]T,
 	case [][]float32:
 		idx := &GpuBruteForceIndex[float32]{}
 
-		idx.Resource, _ := cuvs.NewResource(nil)
+		resource, _ := cuvs.NewResource(nil)
+		idx.Resource = &resource
 
-		idx.Dataset, err = cuvs.NewTensor(dset)
+		tensor, err := cuvs.NewTensor(dset)
 		if err != nil {
 			return nil, err
 		}
+		idx.Dataset = &tensor
 
 		idx.Metric = metric.MetricTypeToCuvsMetric[m]
 		idx.Dimension = dimension
@@ -85,7 +73,7 @@ func NewBruteForceIndex[T types.RealNumbers](dataset [][]T,
 }
 
 func (idx *GpuBruteForceIndex[T]) Load(sqlproc *sqlexec.SqlProcess) (err error) {
-	if _, err = idx.Dataset.ToDevice(&idx.Resource); err != nil {
+	if _, err = idx.Dataset.ToDevice(idx.Resource); err != nil {
 		return err
 	}
 
@@ -94,7 +82,7 @@ func (idx *GpuBruteForceIndex[T]) Load(sqlproc *sqlexec.SqlProcess) (err error) 
 		return
 	}
 
-	err = brute_force.BuildIndex[T](idx.Resource, idx.Dataset, idx.Metric, 0, idx.Index)
+	err = brute_force.BuildIndex[T](*idx.Resource, idx.Dataset, idx.Metric, 0, idx.Index)
 	if err != nil {
 		return
 	}
@@ -102,6 +90,8 @@ func (idx *GpuBruteForceIndex[T]) Load(sqlproc *sqlexec.SqlProcess) (err error) 
 	if err = idx.Resource.Sync(); err != nil {
 		return
 	}
+
+	return
 }
 
 func (idx *GpuBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, rt vectorindex.RuntimeConfig) (retkeys any, retdistances []float64, err error) {
@@ -125,7 +115,7 @@ func (idx *GpuBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any,
 	}
 	defer neighbors.Close()
 
-	distances, err := cuvs.NewTensorOnDevice[float32](&resource, []int64{int64(len(queriesvec)), int64(rt.Limit)})
+	distances, err := cuvs.NewTensorOnDevice[T](&resource, []int64{int64(len(queriesvec)), int64(rt.Limit)})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -135,7 +125,7 @@ func (idx *GpuBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any,
 		return nil, nil, err
 	}
 
-	err = brute_force.SearchIndex(resource, idx.Index, &queries, &neighbors, &distances)
+	err = brute_force.SearchIndex(resource, *idx.Index, &queries, &neighbors, &distances)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -163,15 +153,20 @@ func (idx *GpuBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any,
 	}
 
 	//fmt.Printf("flattened %v\n", flatten)
-	retdistances = make([]float64, len(distancesSlice))
-	for i, dist := range distancesSlice {
-		retdistances[i] = float64(dist)
+	retdistances = make([]float64, len(distancesSlice)*int(rt.Limit))
+	for i := range distancesSlice {
+		for j, dist := range distancesSlice[i] {
+			retdistances[i*int(rt.Limit)+j] = float64(dist)
+		}
 	}
 
-	retkeys := make([]int64, len(neighborsSlice))
-	for i, key := range neighborsSlice {
-		retkeys[i] = int64(key)
+	keys := make([]int64, len(neighborsSlice)*int(rt.Limit))
+	for i := range neighborsSlice {
+		for j, key := range neighborsSlice[i] {
+			keys[i*int(rt.Limit)+j] = int64(key)
+		}
 	}
+	retkeys = keys
 	return
 }
 

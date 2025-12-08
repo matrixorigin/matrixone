@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestBruteForce(t *testing.T) {
+func TestGpuBruteForce(t *testing.T) {
 
 	dataset := [][]float32{{1, 2, 3}, {3, 4, 5}}
 	query := [][]float32{{1, 2, 3}, {3, 4, 5}}
@@ -21,6 +21,9 @@ func TestBruteForce(t *testing.T) {
 	elemsz := uint(4) // float32
 
 	idx, err := NewBruteForceIndex[float32](dataset, dimension, metric.Metric_L2sqDistance, elemsz)
+	require.NoError(t, err)
+
+	err = idx.Load(nil)
 	require.NoError(t, err)
 
 	rt := vectorindex.RuntimeConfig{Limit: limit, NThreads: ncpu}
