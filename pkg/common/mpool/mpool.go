@@ -262,6 +262,7 @@ type MPool struct {
 
 const (
 	NoFixed = 1 << iota
+	DestroyOnFree
 )
 
 func (mp *MPool) recordPtr(ptr unsafe.Pointer) {
@@ -329,7 +330,8 @@ func (mp *MPool) destroy() {
 		// If a pointer is handed out to someone else and we free here
 		// it will be a use after free.   We risk a crash or a leak.
 		//
-		mp.deallocateAllPtrs()
+		// Let is LEAK! LEAK! LEAK!
+		// mp.deallocateAllPtrs()
 	}
 
 	// Here we just compensate whatever left over in mp.stats
@@ -533,9 +535,11 @@ func (mp *MPool) freePtr(detailk string, ptr unsafe.Pointer) {
 		globalStats.RecordXPoolFree(detailk, int64(pHdr.allocSz))
 		otherPool, ok := globalPools.Load(pHdr.poolId)
 		if !ok {
-			panic(moerr.NewInternalErrorNoCtxf("invalid mpool id %d", pHdr.poolId))
+			// panic(moerr.NewInternalErrorNoCtxf("invalid mpool id %d", pHdr.poolId))
+			logutil.Errorf("invalid mpool id %d", pHdr.poolId)
+		} else {
+			(otherPool.(*MPool)).freePtr(detailk, ptr)
 		}
-		(otherPool.(*MPool)).freePtr(detailk, ptr)
 		return
 	}
 
@@ -565,6 +569,7 @@ func (mp *MPool) freePtr(detailk string, ptr unsafe.Pointer) {
 
 	mp.removePtr(hdr)
 	allocateSize := int(originalAllocSz) + kMemHdrSz
+
 	simpleCAllocator().Deallocate(unsafe.Slice((*byte)(hdr), allocateSize), uint64(allocateSize))
 }
 
