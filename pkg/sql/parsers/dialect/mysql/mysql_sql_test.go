@@ -3513,10 +3513,10 @@ func TestLimitByRank(t *testing.T) {
 				selectStmt, ok := stmt.(*tree.Select)
 				require.True(t, ok)
 				require.NotNil(t, selectStmt.Limit)
-				require.True(t, selectStmt.Limit.ByRank)
-				require.NotNil(t, selectStmt.Limit.Option)
-				require.Equal(t, "3.0", selectStmt.Limit.Option["fudge_factor"])
-				require.Equal(t, "10", selectStmt.Limit.Option["nprobe"])
+				require.NotNil(t, selectStmt.RankOption)
+				require.NotNil(t, selectStmt.RankOption.Option)
+				require.Equal(t, "3.0", selectStmt.RankOption.Option["fudge_factor"])
+				require.Equal(t, "10", selectStmt.RankOption.Option["nprobe"])
 			},
 		},
 		{
@@ -3526,10 +3526,10 @@ func TestLimitByRank(t *testing.T) {
 				selectStmt, ok := stmt.(*tree.Select)
 				require.True(t, ok)
 				require.NotNil(t, selectStmt.Limit)
-				require.True(t, selectStmt.Limit.ByRank)
-				require.NotNil(t, selectStmt.Limit.Option)
-				require.Equal(t, "2.5", selectStmt.Limit.Option["fudge_factor"])
-				require.Equal(t, "pre", selectStmt.Limit.Option["mode"])
+				require.NotNil(t, selectStmt.RankOption)
+				require.NotNil(t, selectStmt.RankOption.Option)
+				require.Equal(t, "2.5", selectStmt.RankOption.Option["fudge_factor"])
+				require.Equal(t, "pre", selectStmt.RankOption.Option["mode"])
 			},
 		},
 		{
@@ -3539,10 +3539,10 @@ func TestLimitByRank(t *testing.T) {
 				selectStmt, ok := stmt.(*tree.Select)
 				require.True(t, ok)
 				require.NotNil(t, selectStmt.Limit)
-				require.True(t, selectStmt.Limit.ByRank)
-				require.NotNil(t, selectStmt.Limit.Option)
-				require.Equal(t, "1.0", selectStmt.Limit.Option["fudge_factor"])
-				require.Equal(t, "post", selectStmt.Limit.Option["mode"])
+				require.NotNil(t, selectStmt.RankOption)
+				require.NotNil(t, selectStmt.RankOption.Option)
+				require.Equal(t, "1.0", selectStmt.RankOption.Option["fudge_factor"])
+				require.Equal(t, "post", selectStmt.RankOption.Option["mode"])
 			},
 		},
 		{
@@ -3552,9 +3552,9 @@ func TestLimitByRank(t *testing.T) {
 				selectStmt, ok := stmt.(*tree.Select)
 				require.True(t, ok)
 				require.NotNil(t, selectStmt.Limit)
-				require.True(t, selectStmt.Limit.ByRank)
-				require.NotNil(t, selectStmt.Limit.Option)
-				require.Equal(t, "20", selectStmt.Limit.Option["nprobe"])
+				require.NotNil(t, selectStmt.RankOption)
+				require.NotNil(t, selectStmt.RankOption.Option)
+				require.Equal(t, "20", selectStmt.RankOption.Option["nprobe"])
 				require.NotNil(t, selectStmt.Limit.Offset)
 			},
 		},
@@ -3565,9 +3565,9 @@ func TestLimitByRank(t *testing.T) {
 				selectStmt, ok := stmt.(*tree.Select)
 				require.True(t, ok)
 				require.NotNil(t, selectStmt.Limit)
-				require.True(t, selectStmt.Limit.ByRank)
-				require.NotNil(t, selectStmt.Limit.Option)
-				require.Equal(t, "4.0", selectStmt.Limit.Option["fudge_factor"])
+				require.NotNil(t, selectStmt.RankOption)
+				require.NotNil(t, selectStmt.RankOption.Option)
+				require.Equal(t, "4.0", selectStmt.RankOption.Option["fudge_factor"])
 				require.NotNil(t, selectStmt.Limit.Offset)
 			},
 		},
