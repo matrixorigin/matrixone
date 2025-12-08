@@ -234,6 +234,7 @@ import (
     conflictOpt *tree.ConflictOpt
     diffOutputOpt   *tree.DiffOutputOpt
     objectList      *tree.ObjectList
+    getObject       *tree.GetObject
     statementOption tree.StatementOption
 
     tableLock tree.TableLock
@@ -364,7 +365,7 @@ import (
 %token <str> EXTENSION
 %token <str> RETENTION PERIOD
 %token <str> CLONE BRANCH LOG REVERT REBASE DIFF
-%token <str> CONFLICT CONFLICT_FAIL CONFLICT_SKIP CONFLICT_ACCEPT OUTPUT OBJECTLIST
+%token <str> CONFLICT CONFLICT_FAIL CONFLICT_SKIP CONFLICT_ACCEPT OUTPUT OBJECTLIST GETOBJECT
 
 // Sequence
 %token <str> INCREMENT CYCLE MINVALUE
@@ -8115,6 +8116,12 @@ branch_stmt:
     		snapshot := tree.Identifier($5)
     		t.AgainstSnapshot = &snapshot
     	}
+    	$$ = t
+    }
+|   GETOBJECT ident
+    {
+    	t := tree.NewGetObject()
+    	t.ObjectName = tree.Identifier($2.Compare())
     	$$ = t
     }
 

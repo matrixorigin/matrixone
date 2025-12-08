@@ -392,6 +392,8 @@ func handleDataBranch(
 		return handleBranchMerge(execCtx, ses, st)
 	case *tree.ObjectList:
 		return handleObjectList(execCtx.reqCtx, ses, st)
+	case *tree.GetObject:
+		return handleGetObject(execCtx.reqCtx, ses, st)
 	default:
 		return moerr.NewNotSupportedNoCtxf("data branch not supported: %v", st)
 	}

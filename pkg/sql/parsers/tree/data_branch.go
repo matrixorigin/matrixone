@@ -81,6 +81,16 @@ func init() {
 		reuse.DefaultOptions[ObjectList](),
 	)
 
+	reuse.CreatePool[GetObject](
+		func() *GetObject {
+			return &GetObject{}
+		},
+		func(c *GetObject) {
+			c.reset()
+		},
+		reuse.DefaultOptions[GetObject](),
+	)
+
 }
 
 type DataBranchType int
@@ -450,4 +460,47 @@ func (s *ObjectList) GetQueryType() string {
 
 func (s *ObjectList) Free() {
 	reuse.Free[ObjectList](s, nil)
+}
+
+type GetObject struct {
+	statementImpl
+
+	ObjectName Identifier // object name
+}
+
+func (s *GetObject) TypeName() string {
+	return "get object"
+}
+
+func (s *GetObject) reset() {
+	*s = GetObject{}
+}
+
+func NewGetObject() *GetObject {
+	return reuse.Alloc[GetObject](nil)
+}
+
+func (s *GetObject) StmtKind() StmtKind {
+	return compositeResRowType
+}
+
+func (s *GetObject) Format(ctx *FmtCtx) {
+	ctx.WriteString("GETOBJECT ")
+	ctx.WriteString(string(s.ObjectName))
+}
+
+func (s *GetObject) String() string {
+	return s.GetStatementType()
+}
+
+func (s *GetObject) GetStatementType() string {
+	return "get object"
+}
+
+func (s *GetObject) GetQueryType() string {
+	return QueryTypeOth
+}
+
+func (s *GetObject) Free() {
+	reuse.Free[GetObject](s, nil)
 }

@@ -666,5 +666,6 @@ func init() {
 		"conflict":                   CONFLICT,
 		"output":                     OUTPUT,
 		"objectlist":                 OBJECTLIST,
+		"getobject":                  GETOBJECT,
 	}
 }
