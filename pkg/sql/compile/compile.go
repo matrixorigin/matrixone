@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
+	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -520,7 +521,7 @@ func (c *Compile) runOnce() (err error) {
 					if e := recover(); e != nil {
 						err := moerr.ConvertPanicError(c.proc.Ctx, e)
 						c.proc.Error(c.proc.Ctx, "panic in run",
-							zap.String("sql", c.sql),
+							zap.String("sql", commonutil.Abbreviate(c.sql, 500)),
 							zap.String("error", err.Error()))
 						errC <- err
 					}
@@ -4858,7 +4859,7 @@ func detectFkSelfRefer(c *Compile, detectSqls []string) error {
 
 // runDetectSql runs the fk detecting sql
 func runDetectSql(c *Compile, sql string) error {
-	res, err := c.runSqlWithResult(sql, NoAccountId)
+	res, err := c.runSqlWithResultAndOptions(sql, NoAccountId, executor.StatementOption{}.WithDisableLog())
 	if err != nil {
 		c.proc.Errorf(c.proc.Ctx, "The sql that caused the fk self refer check failed is %s, and generated background sql is %s", c.sql, sql)
 		return err
@@ -4879,7 +4880,7 @@ func runDetectSql(c *Compile, sql string) error {
 
 // runDetectFkReferToDBSql runs the fk detecting sql
 func runDetectFkReferToDBSql(c *Compile, sql string) error {
-	res, err := c.runSqlWithResult(sql, NoAccountId)
+	res, err := c.runSqlWithResultAndOptions(sql, NoAccountId, executor.StatementOption{}.WithDisableLog())
 	if err != nil {
 		c.proc.Errorf(c.proc.Ctx, "The sql that caused the fk self refer check failed is %s, and generated background sql is %s", c.sql, sql)
 		return err

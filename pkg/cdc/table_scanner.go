@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -561,7 +562,7 @@ func (s *TableDetector) cleanupOrphanWatermarks(ctx context.Context) {
 		fields := []zap.Field{
 			zap.Uint64("deleted-rows", res.AffectedRows),
 			zap.Duration("duration", duration),
-			zap.String("sql", sql),
+			zap.String("sql", commonutil.Abbreviate(sql, 500)),
 		}
 		if duration > s.cleanupWarn {
 			logutil.Warn(

@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	log "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -785,4 +786,220 @@ func TestPushClient_LoadAndConsumeLatestCkp(t *testing.T) {
 	state, err = c.loadAndConsumeLatestCkp(ctx, 0, tableID3, "table3", dbID3, "db3")
 	assert.NoError(t, err)
 	assert.Equal(t, Unsubscribing, state)
+}
+
+func TestRoutineController_SendSubscribeResponse(t *testing.T) {
+	t.Run("warning buffer len updated when channel length exceeds", func(t *testing.T) {
+		rc := &routineController{
+			routineId:        1,
+			signalChan:       make(chan routineControlCmd, 10),
+			warningBufferLen: 0,
+		}
+
+		// Fill the channel to make len(rc.signalChan) > rc.warningBufferLen
+		// We'll add 3 items, so len will be 3, which is > 0
+		for i := 0; i < 3; i++ {
+			rc.signalChan <- &cmdToConsumeSub{
+				log:       &logtail.SubscribeResponse{},
+				receiveAt: time.Now(),
+			}
+		}
+
+		// Verify initial state
+		assert.Equal(t, 3, len(rc.signalChan))
+		assert.Equal(t, 0, rc.warningBufferLen)
+
+		// Call sendSubscribeResponse - this should trigger the warning logic
+		ctx := context.Background()
+		rc.sendSubscribeResponse(ctx, &logtail.SubscribeResponse{}, time.Now())
+
+		// Verify warningBufferLen was updated to the length at check time (3), not after send (4)
+		assert.Equal(t, 4, len(rc.signalChan))
+		assert.Equal(t, 3, rc.warningBufferLen)
+	})
+
+	t.Run("warning buffer len not updated when channel length is less", func(t *testing.T) {
+		rc := &routineController{
+			routineId:        2,
+			signalChan:       make(chan routineControlCmd, 10),
+			warningBufferLen: 5,
+		}
+
+		// Fill the channel but keep it less than warningBufferLen
+		for i := 0; i < 3; i++ {
+			rc.signalChan <- &cmdToConsumeSub{
+				log:       &logtail.SubscribeResponse{},
+				receiveAt: time.Now(),
+			}
+		}
+
+		// Verify initial state
+		assert.Equal(t, 3, len(rc.signalChan))
+		assert.Equal(t, 5, rc.warningBufferLen)
+
+		// Call sendSubscribeResponse - this should NOT trigger the warning logic
+		ctx := context.Background()
+		rc.sendSubscribeResponse(ctx, &logtail.SubscribeResponse{}, time.Now())
+
+		// Verify warningBufferLen was NOT updated
+		assert.Equal(t, 4, len(rc.signalChan))
+		assert.Equal(t, 5, rc.warningBufferLen)
+	})
+}
+
+func TestRoutineController_CommandPools(t *testing.T) {
+	t.Run("object pools are properly initialized", func(t *testing.T) {
+		// Create a PushClient to test pool initialization
+		c := &PushClient{}
+		ctx := context.Background()
+		rc := c.createRoutineToConsumeLogTails(ctx, 1, 10, nil)
+
+		// Verify that existing pools are properly initialized
+		assert.NotNil(t, rc.cmdLogPool.New)
+		assert.NotNil(t, rc.cmdTimePool.New)
+
+		// Close the routine to avoid goroutine leaks
+		rc.close()
+	})
+
+	t.Run("sendSubscribeResponse creates commands correctly", func(t *testing.T) {
+		rc := &routineController{
+			routineId:  1,
+			signalChan: make(chan routineControlCmd, 5),
+		}
+
+		// Call sendSubscribeResponse multiple times
+		ctx := context.Background()
+		for i := 0; i < 3; i++ {
+			rc.sendSubscribeResponse(ctx, &logtail.SubscribeResponse{}, time.Now())
+		}
+
+		// Verify that commands were added to the channel
+		assert.Equal(t, 3, len(rc.signalChan))
+
+		// Drain the channel and verify the commands
+		for i := 0; i < 3; i++ {
+			cmd := <-rc.signalChan
+			assert.IsType(t, &cmdToConsumeSub{}, cmd)
+		}
+	})
+
+	t.Run("sendUnSubscribeResponse creates commands correctly", func(t *testing.T) {
+		rc := &routineController{
+			routineId:  1,
+			signalChan: make(chan routineControlCmd, 5),
+		}
+
+		// Call sendUnSubscribeResponse multiple times
+		for i := 0; i < 3; i++ {
+			rc.sendUnSubscribeResponse(&logtail.UnSubscribeResponse{}, time.Now())
+		}
+
+		// Verify that commands were added to the channel
+		assert.Equal(t, 3, len(rc.signalChan))
+
+		// Drain the channel and verify the commands
+		for i := 0; i < 3; i++ {
+			cmd := <-rc.signalChan
+			assert.IsType(t, &cmdToConsumeUnSub{}, cmd)
+		}
+	})
+
+	t.Run("sendTableLogTail creates commands correctly", func(t *testing.T) {
+		rc := &routineController{
+			routineId:  1,
+			signalChan: make(chan routineControlCmd, 5),
+			cmdLogPool: sync.Pool{
+				New: func() any {
+					return &cmdToConsumeLog{}
+				},
+			},
+		}
+
+		// Call sendTableLogTail multiple times
+		for i := 0; i < 3; i++ {
+			rc.sendTableLogTail(logtail.TableLogtail{}, time.Now())
+		}
+
+		// Verify that commands were added to the channel
+		assert.Equal(t, 3, len(rc.signalChan))
+
+		// Drain the channel and verify the commands
+		for i := 0; i < 3; i++ {
+			cmd := <-rc.signalChan
+			assert.IsType(t, &cmdToConsumeLog{}, cmd)
+		}
+	})
+
+	t.Run("updateTimeFromT creates commands correctly", func(t *testing.T) {
+		rc := &routineController{
+			routineId:  1,
+			signalChan: make(chan routineControlCmd, 5),
+			cmdTimePool: sync.Pool{
+				New: func() any {
+					return &cmdToUpdateTime{}
+				},
+			},
+		}
+
+		// Call updateTimeFromT multiple times
+		for i := 0; i < 3; i++ {
+			rc.updateTimeFromT(timestamp.Timestamp{
+				PhysicalTime: 123456,
+				LogicalTime:  1,
+				NodeID:       1,
+			}, time.Now())
+		}
+
+		// Verify that commands were added to the channel
+		assert.Equal(t, 3, len(rc.signalChan))
+
+		// Drain the channel and verify the commands
+		for i := 0; i < 3; i++ {
+			cmd := <-rc.signalChan
+			assert.IsType(t, &cmdToUpdateTime{}, cmd)
+		}
+	})
+}
+
+// TestCommandActions verifies that command actions can be created and their basic functionality works
+func TestCommandActions(t *testing.T) {
+	t.Run("cmdToConsumeSub creation and basic properties", func(t *testing.T) {
+		// Test that we can create a cmdToConsumeSub command
+		log := &logtail.SubscribeResponse{
+			Logtail: logtail.TableLogtail{
+				// Set some basic properties for TableLogtail if needed
+			},
+		}
+		receiveAt := time.Now()
+
+		cmd := &cmdToConsumeSub{
+			log:       log,
+			receiveAt: receiveAt,
+		}
+
+		// Verify the command has the correct properties
+		assert.Equal(t, log, cmd.log)
+		assert.Equal(t, receiveAt, cmd.receiveAt)
+	})
+
+	t.Run("cmdToConsumeUnSub creation and basic properties", func(t *testing.T) {
+		// Test that we can create a cmdToConsumeUnSub command
+		log := &logtail.UnSubscribeResponse{
+			Table: &api.TableID{
+				DbId: 1,
+				TbId: 2,
+			},
+		}
+		receiveAt := time.Now()
+
+		cmd := &cmdToConsumeUnSub{
+			log:       log,
+			receiveAt: receiveAt,
+		}
+
+		// Verify the command has the correct properties
+		assert.Equal(t, log, cmd.log)
+		assert.Equal(t, receiveAt, cmd.receiveAt)
+	})
 }

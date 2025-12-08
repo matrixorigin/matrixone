@@ -1526,7 +1526,7 @@ func DisableFaultInjection(
 		fault.Disable()
 		finalVal = true
 	} else {
-		sql := "select fault_inject('all.','disable_fault_injection','');"
+		sql := "SELECT fault_inject('all.','disable_fault_injection','');"
 
 		if finalVal, err = doFaultPoint(proc, sql); err != nil {
 			return err
@@ -1556,7 +1556,7 @@ func EnableFaultInjection(
 		fault.Enable()
 		finalVal = true
 	} else {
-		sql := "select fault_inject('all.','enable_fault_injection','');"
+		sql := "SELECT fault_inject('all.','enable_fault_injection','');"
 
 		if finalVal, err = doFaultPoint(proc, sql); err != nil {
 			return err
