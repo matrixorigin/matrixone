@@ -44,7 +44,6 @@ import (
 	client2 "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/util/stack"
 	"github.com/matrixorigin/matrixone/pkg/version"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
@@ -297,13 +296,18 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 func (e *Engine) loadDatabaseFromStorage(
 	ctx context.Context,
 	accountID uint32,
-	name string, op client.TxnOperator) (*cache.DatabaseItem, error) {
+	name string,
+	op client.TxnOperator,
+) (*cache.DatabaseItem, error) {
 	sql := fmt.Sprintf(catalog.MoDatabaseAllQueryFormat, accountID, name)
 	now := time.Now()
 	defer func() {
 		if time.Since(now) > time.Second {
-			logutil.Info("FIND_TABLE slow loadDatabaseFromStorage",
-				zap.String("sql", sql), zap.Duration("cost", time.Since(now)))
+			logutil.Info(
+				"engine.database.load.from.storage.slow",
+				zap.String("sql", sql),
+				zap.Duration("cost", time.Since(now)),
+			)
 		}
 	}()
 	res, err := execReadSql(ctx, op, sql, true)
@@ -312,10 +316,14 @@ func (e *Engine) loadDatabaseFromStorage(
 	}
 	defer res.Close()
 	logerror := func() {
-		logutil.Error("FIND_TABLE bad loadDatabaseFromStorage", zap.String("batch", stringifySlice(res.Batches, func(a any) string {
-			bat := a.(*batch.Batch)
-			return common.MoBatchToString(bat, 10)
-		})), zap.String("sql", sql))
+		logutil.Error(
+			"engine.database.load.from.storage.bad",
+			zap.String("sql", sql),
+			zap.String("batch", stringifySlice(res.Batches, func(a any) string {
+				bat := a.(*batch.Batch)
+				return common.MoBatchToString(bat, 10)
+			})),
+		)
 	}
 
 	if len(res.Batches) != 1 { // not found
@@ -391,7 +399,12 @@ func (e *Engine) Database(
 
 	if ok := catalog.GetDatabase(item); !ok {
 		if !catalog.CanServe(types.TimestampToTS(op.SnapshotTS())) {
-			logutil.Info("FIND_TABLE loadDatabaseFromStorage", zap.String("name", name), zap.String("cacheTs", catalog.GetStartTS().ToString()), zap.String("txn", op.Txn().DebugString()))
+			logutil.Info(
+				"engine.database.load.from.storage",
+				zap.String("name", name),
+				zap.String("cache-start", catalog.GetStartTS().ToString()),
+				zap.String("txn", op.Txn().DebugString()),
+			)
 			// read batch from storage
 			if item, err = e.loadDatabaseFromStorage(ctx, accountId, name, op); err != nil {
 				return nil, err
@@ -441,7 +454,12 @@ func (e *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId
 	return
 }
 
-func loadNameByIdFromStorage(ctx context.Context, op client.TxnOperator, accountId uint32, tableId uint64) (dbName string, tblName string, err error) {
+func loadNameByIdFromStorage(
+	ctx context.Context,
+	op client.TxnOperator,
+	accountId uint32,
+	tableId uint64,
+) (dbName string, tblName string, err error) {
 	sql := fmt.Sprintf(catalog.MoTablesQueryNameById, accountId, tableId)
 	tblanmes, dbnames := []string{}, []string{}
 	result, err := execReadSql(ctx, op, sql, true)
@@ -455,9 +473,14 @@ func loadNameByIdFromStorage(ctx context.Context, op client.TxnOperator, account
 		}
 	}
 	if len(tblanmes) != 1 {
-		logutil.Warn("FIND_TABLE GetRelationById sql failed",
-			zap.Uint64("tableId", tableId), zap.Uint32("accountId", accountId),
-			zap.Strings("tblanmes", tblanmes), zap.Strings("dbnames", dbnames), zap.String("txn", op.Txn().DebugString()))
+		logutil.Warn(
+			"engine.relation.load.from.storage.bad",
+			zap.Uint64("table-id", tableId),
+			zap.Uint32("account-id", accountId),
+			zap.Strings("table-names", tblanmes),
+			zap.Strings("db-names", dbnames),
+			zap.String("txn", op.Txn().DebugString()),
+		)
 	} else {
 		tblName = tblanmes[0]
 		dbName = dbnames[0]
@@ -489,7 +512,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 	txn := op.GetWorkspace().(*Transaction)
 	dbName, tableName, deleted := txn.tableOps.queryNameByTid(tableId)
 	if tableName == "" && deleted {
-		return "", "", nil, moerr.NewInternalErrorf(ctx, "can not find table by id %d: accountId: %v. Deleted in txn", tableId, accountId)
+		return "", "", nil, moerr.NewInternalErrorf(ctx, "can not find table by id %d: accountId: %d. Deleted in txn", tableId, accountId)
 	}
 
 	// not found in tableOps, try cache
@@ -501,9 +524,14 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 			dbName = cacheItem.DatabaseName
 		} else if !cache.CanServe(types.TimestampToTS(op.SnapshotTS())) {
 			// not found in cache, try storage
-			logutil.Info("FIND_TABLE loadNameByIdFromStorage", zap.String("txn", op.Txn().DebugString()), zap.Uint64("tableId", tableId))
-			dbName, tableName, err = loadNameByIdFromStorage(ctx, op, accountId, tableId)
-			if err != nil {
+			logutil.Info(
+				"engine.relation.load.from.storage",
+				zap.String("txn", op.Txn().DebugString()),
+				zap.Uint64("table-id", tableId),
+			)
+			if dbName, tableName, err = loadNameByIdFromStorage(
+				ctx, op, accountId, tableId,
+			); err != nil {
 				return "", "", nil, err
 			}
 		}
@@ -511,9 +539,11 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 
 	if tableName == "" {
 		accountId, _ := defines.GetAccountId(ctx)
-		logutil.Error("FIND_TABLE GetRelationById failed",
-			zap.Uint64("tableId", tableId), zap.Uint32("accountId", accountId), zap.String("workspace", txn.PPString()))
-		return "", "", nil, moerr.NewInternalErrorf(ctx, "can not find table by id %d: accountId: %v ", tableId, accountId)
+		return "", "", nil, moerr.NewInternalErrorf(
+			ctx,
+			"can not find table by id %d: accountId: %d",
+			tableId, accountId,
+		)
 	}
 
 	txnDb, err := e.Database(ctx, dbName, op)
@@ -534,15 +564,6 @@ func (e *Engine) AllocateIDByKey(ctx context.Context, key string) (uint64, error
 }
 
 func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator) (err error) {
-	defer func() {
-		if err != nil {
-			if strings.Contains(name, "sysbench_db") {
-				logutil.Errorf("delete database %s failed: %v", name, err)
-				logutil.Errorf("stack: %s", stack.Callers(3))
-				logutil.Errorf("txnmeta %v", op.Txn().DebugString())
-			}
-		}
-	}()
 	if op.IsSnapOp() {
 		return moerr.NewInternalErrorNoCtx("delete database in snapshot txn")
 	}
@@ -576,20 +597,24 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 	if err != nil {
 		return err
 	}
-	res, err := execReadSql(ctx, op, fmt.Sprintf(catalog.MoDatabaseRowidQueryFormat, accountId, name), true)
+	res, err := execReadSql(
+		ctx, op, fmt.Sprintf(catalog.MoDatabaseRowidQueryFormat, accountId, name), true,
+	)
 	if err != nil {
 		return err
 	}
 	if len(res.Batches) != 1 || res.Batches[0].Vecs[0].Length() != 1 {
-		logutil.Error("FIND_TABLE deleteDatabaseError",
+		logutil.Error(
+			"engine.delete.relation.bad",
+			zap.Uint64("db-id", databaseId),
+			zap.Uint32("account-id", accountId),
+			zap.String("name", name),
+			zap.String("workspace", op.GetWorkspace().PPString()),
 			zap.String("bat", stringifySlice(res.Batches, func(a any) string {
 				bat := a.(*batch.Batch)
 				return common.MoBatchToString(bat, 10)
 			})),
-			zap.Uint32("accountId", accountId),
-			zap.String("name", name),
-			zap.Uint64("did", databaseId),
-			zap.String("workspace", op.GetWorkspace().PPString()))
+		)
 		panic("delete table failed: query failed")
 	}
 	rowId := vector.GetFixedAtNoTypeCheck[types.Rowid](res.Batches[0].Vecs[0], 0)
@@ -863,7 +888,7 @@ func (e *Engine) RunGCScheduler(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			logutil.Infof("GC scheduler exit.")
+			logutil.Info("engine.gc.scheduler.stopped")
 			return
 
 		case <-unusedTableTicker.C:
@@ -889,6 +914,5 @@ func (e *Engine) gcPartitionState(ctx context.Context) {
 	if !e.pClient.receivedLogTailTime.ready.Load() {
 		return
 	}
-	logutil.Debugf("Running partition state GC")
 	e.pClient.doGCPartitionState(ctx, e)
 }

@@ -582,7 +582,7 @@ func (c *Conn) Append(elems ...byte) (err error) {
 	for cutIndex < len(elems) {
 		// if bufferLength > 16MB, split packet
 		remainPacketSpace := int(MaxPayloadSize) - c.packetLength
-		writeLength := Min(remainPacketSpace, len(elems[cutIndex:]))
+		writeLength := min(remainPacketSpace, len(elems[cutIndex:]))
 		err = AppendPart(c, elems[cutIndex:cutIndex+writeLength])
 		if err != nil {
 			return err

@@ -678,20 +678,10 @@ func determineShuffleForGroupBy(node *plan.Node, builder *QueryBuilder) {
 }
 
 func getShuffleDop(ncpu int, lencn int, hashmapSize float64) (dop int) {
-	// XXX
-	// why do we ever need to do this to ncpu?   What is the reason to ever
-	// return a value that is more than ncpu?
-	//
-	// Shouldn't just be this?
-	// // // // // // // // maxret := ncpu
-	//
-	// See #19054, #20302
-	// I don't think either make any sense.
 	if ncpu <= 4 {
 		ncpu = 4
 	}
 	maxret := ncpu * 4
-
 	// these magic number comes from hashmap resize factor. see hashtable/common.go, in maxElemCnt function
 	ret1 := int(hashmapSize/float64(lencn)/12800000) + 1
 	if ret1 >= maxret {

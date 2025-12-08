@@ -816,7 +816,8 @@ func NewBadS3Config(ctx context.Context, msg string) *Error {
 }
 
 func NewInternalErrorf(ctx context.Context, format string, args ...any) *Error {
-	return NewInternalError(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrInternal, msg)
 }
 
 func NewInternalError(ctx context.Context, msg string) *Error {
@@ -836,7 +837,8 @@ func NewNYI(ctx context.Context, msg string) *Error {
 }
 
 func NewNotSupportedf(ctx context.Context, format string, args ...any) *Error {
-	return NewNotSupported(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrNotSupported, msg)
 }
 
 func NewNotSupported(ctx context.Context, msg string) *Error {
@@ -856,7 +858,8 @@ func NewDivByZero(ctx context.Context) *Error {
 }
 
 func NewOutOfRangef(ctx context.Context, typ string, format string, args ...any) *Error {
-	return NewOutOfRange(ctx, typ, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrOutOfRange, typ, msg)
 }
 
 func NewOutOfRange(ctx context.Context, typ string, msg string) *Error {
@@ -864,15 +867,13 @@ func NewOutOfRange(ctx context.Context, typ string, msg string) *Error {
 }
 
 func NewDataTruncatedf(ctx context.Context, typ string, format string, args ...any) *Error {
-	return NewDataTruncated(ctx, typ, fmt.Sprintf(format, args...))
-}
-
-func NewDataTruncated(ctx context.Context, typ string, msg string) *Error {
+	msg := fmt.Sprintf(format, args...)
 	return newError(ctx, ErrDataTruncated, typ, msg)
 }
 
 func NewInvalidArg(ctx context.Context, arg string, val any) *Error {
-	return newError(ctx, ErrInvalidArg, arg, fmt.Sprintf("%v", val))
+	msg := fmt.Sprintf("%v", val)
+	return newError(ctx, ErrInvalidArg, arg, msg)
 }
 
 func NewTruncatedValueForField(ctx context.Context, t, v, c string, idx int) *Error {
@@ -880,7 +881,8 @@ func NewTruncatedValueForField(ctx context.Context, t, v, c string, idx int) *Er
 }
 
 func NewBadConfigf(ctx context.Context, format string, args ...any) *Error {
-	return NewBadConfig(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrBadConfig, msg)
 }
 
 func NewBadConfig(ctx context.Context, msg string) *Error {
@@ -888,7 +890,8 @@ func NewBadConfig(ctx context.Context, msg string) *Error {
 }
 
 func NewInvalidInputf(ctx context.Context, format string, args ...any) *Error {
-	return NewInvalidInput(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrInvalidInput, msg)
 }
 
 func NewInvalidInput(ctx context.Context, msg string) *Error {
@@ -896,7 +899,8 @@ func NewInvalidInput(ctx context.Context, msg string) *Error {
 }
 
 func NewSyntaxErrorf(ctx context.Context, format string, args ...any) *Error {
-	return NewSyntaxError(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrSyntaxError, msg)
 }
 
 func NewSyntaxError(ctx context.Context, msg string) *Error {
@@ -904,23 +908,26 @@ func NewSyntaxError(ctx context.Context, msg string) *Error {
 }
 
 func NewParseErrorf(ctx context.Context, format string, args ...any) *Error {
-	return NewParseError(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrParseError, msg)
 }
 func NewParseError(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrParseError, msg)
 }
 
 func NewConstraintViolationf(ctx context.Context, format string, args ...any) *Error {
-	return NewConstraintViolation(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrConstraintViolation, msg)
 }
 
 func NewConstraintViolation(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrConstraintViolation, msg)
 }
 
-func NewUnsupportedDML(ctx context.Context, msg string, args ...any) *Error {
-	xmsg := fmt.Sprintf(msg, args...)
-	return newError(ctx, ErrUnsupportedDML, xmsg)
+func NewUnsupportedDML(ctx context.Context, format string, args ...any) *Error {
+	msg := fmt.Sprintf(format, args...)
+	noReportCtx := errutil.ContextWithNoReport(ctx, true)
+	return newError(noReportCtx, ErrUnsupportedDML, msg)
 }
 
 func NewEmptyVector(ctx context.Context) *Error {
@@ -972,7 +979,8 @@ func NewInvalidPath(ctx context.Context, f string) *Error {
 }
 
 func NewInvalidStatef(ctx context.Context, format string, args ...any) *Error {
-	return NewInvalidState(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrInvalidState, msg)
 }
 
 func NewInvalidState(ctx context.Context, msg string) *Error {
@@ -1072,7 +1080,8 @@ func NewTxnClosed(ctx context.Context, txnID []byte) *Error {
 }
 
 func NewTxnWriteConflictf(ctx context.Context, format string, args ...any) *Error {
-	return NewTxnWriteConflict(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrTxnWriteConflict, msg)
 }
 
 func NewTxnWriteConflict(ctx context.Context, msg string) *Error {
@@ -1088,7 +1097,8 @@ func NewUnresolvedConflict(ctx context.Context) *Error {
 }
 
 func NewTxnErrorf(ctx context.Context, format string, args ...any) *Error {
-	return NewTxnError(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrTxnError, msg)
 }
 
 func NewTxnError(ctx context.Context, msg string) *Error {
@@ -1096,7 +1106,8 @@ func NewTxnError(ctx context.Context, msg string) *Error {
 }
 
 func NewTAEErrorf(ctx context.Context, format string, args ...any) *Error {
-	return NewTAEError(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrTAEError, msg)
 }
 
 func NewTAEError(ctx context.Context, msg string) *Error {
@@ -1112,7 +1123,8 @@ func NewShardNotReported(ctx context.Context, uuid string, id uint64) *Error {
 }
 
 func NewDragonboatTimeoutf(ctx context.Context, format string, args ...any) *Error {
-	return NewDragonboatTimeout(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrDragonboatTimeout, msg)
 }
 
 func NewDragonboatTimeout(ctx context.Context, msg string) *Error {
@@ -1120,7 +1132,8 @@ func NewDragonboatTimeout(ctx context.Context, msg string) *Error {
 }
 
 func NewDragonboatTimeoutTooSmallf(ctx context.Context, format string, args ...any) *Error {
-	return NewDragonboatTimeoutTooSmall(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrDragonboatTimeoutTooSmall, msg)
 }
 
 func NewDragonboatTimeoutTooSmall(ctx context.Context, msg string) *Error {
@@ -1128,7 +1141,8 @@ func NewDragonboatTimeoutTooSmall(ctx context.Context, msg string) *Error {
 }
 
 func NewDragonboatInvalidDeadlinef(ctx context.Context, format string, args ...any) *Error {
-	return NewDragonboatInvalidDeadline(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrDragonboatInvalidDeadline, msg)
 }
 
 func NewDragonboatInvalidDeadline(ctx context.Context, msg string) *Error {
@@ -1136,7 +1150,8 @@ func NewDragonboatInvalidDeadline(ctx context.Context, msg string) *Error {
 }
 
 func NewDragonboatRejectedf(ctx context.Context, format string, args ...any) *Error {
-	return NewDragonboatRejected(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrDragonboatRejected, msg)
 }
 
 func NewDragonboatRejected(ctx context.Context, msg string, args ...any) *Error {
@@ -1144,7 +1159,8 @@ func NewDragonboatRejected(ctx context.Context, msg string, args ...any) *Error 
 }
 
 func NewDragonboatInvalidPayloadSizef(ctx context.Context, format string, args ...any) *Error {
-	return NewDragonboatInvalidPayloadSize(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrDragonboatInvalidPayloadSize, msg)
 }
 
 func NewDragonboatInvalidPayloadSize(ctx context.Context, msg string) *Error {
@@ -1152,7 +1168,8 @@ func NewDragonboatInvalidPayloadSize(ctx context.Context, msg string) *Error {
 }
 
 func NewDragonboatShardNotReadyf(ctx context.Context, format string, args ...any) *Error {
-	return NewDragonboatShardNotReady(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrDragonboatShardNotReady, msg)
 }
 
 func NewDragonboatShardNotReady(ctx context.Context, msg string) *Error {
@@ -1160,21 +1177,24 @@ func NewDragonboatShardNotReady(ctx context.Context, msg string) *Error {
 }
 
 func NewDragonboatSystemClosedf(ctx context.Context, format string, args ...any) *Error {
-	return NewDragonboatSystemClosed(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrDragonboatSystemClosed, msg)
 }
 func NewDragonboatSystemClosed(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrDragonboatSystemClosed, msg)
 }
 
 func NewDragonboatInvalidRangef(ctx context.Context, format string, args ...any) *Error {
-	return NewDragonboatInvalidRange(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrDragonboatInvalidRange, msg)
 }
 func NewDragonboatInvalidRange(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrDragonboatInvalidRange, msg)
 }
 
 func NewDragonboatShardNotFoundf(ctx context.Context, format string, args ...any) *Error {
-	return NewDragonboatShardNotFound(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrDragonboatShardNotFound, msg)
 }
 
 func NewDragonboatShardNotFound(ctx context.Context, msg string) *Error {
@@ -1182,7 +1202,8 @@ func NewDragonboatShardNotFound(ctx context.Context, msg string) *Error {
 }
 
 func NewDragonboatOtherSystemErrorf(ctx context.Context, format string, args ...any) *Error {
-	return NewDragonboatOtherSystemError(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrDragonboatOtherSystemError, msg)
 }
 
 func NewDragonboatOtherSystemError(ctx context.Context, msg string) *Error {
@@ -1218,7 +1239,8 @@ func NewTAEWrite(ctx context.Context) *Error {
 }
 
 func NewTAECommitf(ctx context.Context, format string, args ...any) *Error {
-	return NewTAECommit(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrTAECommit, msg)
 }
 
 func NewTAECommit(ctx context.Context, msg string) *Error {
@@ -1226,7 +1248,8 @@ func NewTAECommit(ctx context.Context, msg string) *Error {
 }
 
 func NewTAERollbackf(ctx context.Context, format string, args ...any) *Error {
-	return NewTAERollback(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrTAERollback, msg)
 }
 
 func NewTAERollback(ctx context.Context, msg string) *Error {
@@ -1234,7 +1257,8 @@ func NewTAERollback(ctx context.Context, msg string) *Error {
 }
 
 func NewTAEPreparef(ctx context.Context, format string, args ...any) *Error {
-	return NewTAEPrepare(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrTAEPrepare, msg)
 }
 
 func NewTAEPrepare(ctx context.Context, msg string) *Error {
