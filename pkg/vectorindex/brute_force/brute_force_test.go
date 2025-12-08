@@ -18,10 +18,10 @@ func TestBruteForce(t *testing.T) {
 	limit := uint(2)
 	elemsz := uint(4) // float32
 
-	idx, err := NewBruteForceIndex[float32](dataset, dimension, metric.Metric_L2sqDistance, ncpu, elemsz)
+	idx, err := NewBruteForceIndex[float32](dataset, dimension, metric.Metric_L2sqDistance, elemsz)
 	require.NoError(t, err)
 
-	rt := vectorindex.RuntimeConfig{Limit: limit}
+	rt := vectorindex.RuntimeConfig{Limit: limit, NThreads: ncpu}
 
 	keys, distances, err := idx.Search(nil, query, rt)
 	require.NoError(t, err)

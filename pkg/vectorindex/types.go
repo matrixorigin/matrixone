@@ -110,6 +110,9 @@ type RuntimeConfig struct {
 	BackgroundQueries []*plan.Query
 	// Optional BloomFilter bytes for entries table scan (runtime filter)
 	BloomFilter []byte
+
+	// Brute Force Index
+	NThreads uint
 }
 
 type VectorIndexCdc[T types.RealNumbers] struct {

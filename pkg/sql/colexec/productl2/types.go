@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -39,9 +40,7 @@ type container struct {
 	rbat        *batch.Batch
 	inBat       *batch.Batch // probe batch
 	metrictype  metric.MetricType
-	brute_force any // brute_force.BruteForceIndexIf[T]
-	centers     any // *metric.VectorSetIf[T]
-	queries     any // *metric.VectorSetIf[T]
+	brute_force cache.VectorIndexSearchIf // brute_force.BruteForceIndex
 }
 
 type Productl2 struct {

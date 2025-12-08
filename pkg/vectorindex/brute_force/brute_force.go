@@ -33,7 +33,6 @@ type BruteForceIndex[T types.RealNumbers] struct {
 	Metric       usearch.Metric
 	Dimension    uint
 	Count        uint
-	NThreads     uint
 	Quantization usearch.Quantization
 	ElementSize  uint
 }
@@ -54,7 +53,6 @@ func GetUsearchQuantizationFromType(v any) (usearch.Quantization, error) {
 func NewBruteForceIndex[T types.RealNumbers](dataset [][]T,
 	dimension uint,
 	m metric.MetricType,
-	nthreads uint,
 	elemsz uint) (cache.VectorIndexSearchIf, error) {
 	var err error
 
@@ -66,7 +64,6 @@ func NewBruteForceIndex[T types.RealNumbers](dataset [][]T,
 	}
 	idx.Dimension = dimension
 	idx.Count = uint(len(dataset))
-	idx.NThreads = nthreads
 	idx.ElementSize = elemsz
 
 	idx.Dataset = make([]T, idx.Count*idx.Dimension)
@@ -99,7 +96,7 @@ func (idx *BruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, rt
 
 	//fmt.Printf("flattened %v\n", flatten)
 
-	keys, distancesf32, err := usearch.ExactSearchUnsafe(
+	keys_ui64, distances_f32, err := usearch.ExactSearchUnsafe(
 		util.UnsafePointer(&(idx.Dataset[0])),
 		util.UnsafePointer(&(flatten[0])),
 		uint(idx.Count),
@@ -110,16 +107,22 @@ func (idx *BruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, rt
 		idx.Metric,
 		idx.Quantization,
 		rt.Limit,
-		idx.NThreads)
+		rt.NThreads)
 
 	if err != nil {
 		return
 	}
 
-	distances = make([]float64, len(distancesf32))
-	for i, dist := range distancesf32 {
+	distances = make([]float64, len(distances_f32))
+	for i, dist := range distances_f32 {
 		distances[i] = float64(dist)
 	}
+
+	keys_i64 := make([]int64, len(keys_ui64))
+	for i, key := range keys_ui64 {
+		keys_i64[i] = int64(key)
+	}
+	keys = keys_i64
 
 	runtime.KeepAlive(flatten)
 	runtime.KeepAlive(idx.Dataset)
