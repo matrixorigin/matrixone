@@ -409,7 +409,7 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 		nmp, _ := mpool.NewMPool("test", mpool.MB, mpool.NoFixed)
 
 		ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
-		_, err = reader.Read(ctx, ret.Attrs, nil, nmp, ret)
+		reader.Read(ctx, ret.Attrs, nil, nmp, ret)
 		// ?  what is the expected error? require.Error(t, err)
 		require.NoError(t, txn.Commit(ctx))
 	}

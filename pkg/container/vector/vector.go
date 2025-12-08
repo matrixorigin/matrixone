@@ -230,6 +230,7 @@ func (v *Vector) SetTypeAndFixData(typ types.Type, mp *mpool.MPool) {
 	v.length = 0
 	v.capacity = cap(v.data) / v.typ.TypeSize()
 	extend(v, oldLength, mp)
+	v.length = oldLength
 }
 
 func (v *Vector) SetOffHeap(offHeap bool) {

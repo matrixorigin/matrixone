@@ -162,7 +162,11 @@ func Test_migrateMoPubs_deleteFailed(t *testing.T) {
 	)
 	defer getSubbedAccNamesStub.Reset()
 
-	txn := &MockTxnExecutor{flag: true}
+	txn := &MockTxnExecutor{
+		flag: true,
+		mp:   mpool.MustNewZeroNoFixed(),
+	}
+	defer mpool.DeleteMPool(txn.mp)
 	err := migrateMoPubs(txn)
 	assert.Error(t, err)
 }
