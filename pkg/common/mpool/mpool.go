@@ -459,39 +459,39 @@ func (mp *MPool) allocWithDetailK(detailk string, sz int, offHeap bool) ([]byte,
 		logutil.Errorf("mpool memory allocation exceed limit with requested size %d: %s", sz, string(debug.Stack()))
 		return nil, moerr.NewInternalErrorNoCtxf("mpool memory allocation exceed limit with requested size %d", sz)
 	}
-
 	if sz == 0 {
 		return nil, nil
 	}
-
 	requiredSpaceWithoutHeader := sz
-
-	tempSize := int64(requiredSpaceWithoutHeader + kMemHdrSz)
-	gcurr := globalStats.RecordAlloc("global", tempSize)
-	if gcurr > GlobalCap() {
-		globalStats.RecordFree("global", tempSize)
-		return nil, moerr.NewOOMNoCtx()
-	}
-	mycurr := mp.stats.RecordAlloc(mp.tag, tempSize)
-	if mycurr > mp.Cap() {
-		mp.stats.RecordFree(mp.tag, tempSize)
-		globalStats.RecordFree("global", tempSize)
-		return nil, moerr.NewInternalErrorNoCtxf("mpool out of space, alloc %d bytes, cap %d", sz, mp.cap)
-	}
-
-	return mp.alloc(detailk, sz, requiredSpaceWithoutHeader, offHeap), nil
+	return mp.alloc(detailk, sz, requiredSpaceWithoutHeader, offHeap)
 }
 
-func (mp *MPool) alloc(detailk string, sz int, requiredSpaceWithoutHeader int, offHeap bool) []byte {
+func (mp *MPool) alloc(detailk string, sz int, requiredSpaceWithoutHeader int, offHeap bool) ([]byte, error) {
 	allocateSize := requiredSpaceWithoutHeader + kMemHdrSz
 	var bs []byte
 	var err error
 	if offHeap {
+		gcurr := globalStats.RecordAlloc("global", int64(allocateSize))
+		if gcurr > GlobalCap() {
+			// compensate global
+			globalStats.RecordFree("global", int64(allocateSize))
+			return nil, moerr.NewOOMNoCtx()
+		}
+		mycurr := mp.stats.RecordAlloc(mp.tag, int64(allocateSize))
+		if mycurr > mp.Cap() {
+			// compensate both global and my
+			mp.stats.RecordFree(mp.tag, int64(allocateSize))
+			globalStats.RecordFree("global", int64(allocateSize))
+			return nil, moerr.NewInternalErrorNoCtxf("mpool out of space, alloc %d bytes, cap %d", sz, mp.cap)
+		}
 		bs, _, err = simpleCAllocator().Allocate(uint64(allocateSize), malloc.NoHints)
 		if err != nil {
 			panic(err)
 		}
 		mp.recordPtr(unsafe.Pointer(&bs[0]))
+		if mp.details != nil {
+			mp.details.recordAlloc(detailk, int64(allocateSize))
+		}
 	} else {
 		bs = make([]byte, allocateSize)
 	}
@@ -501,11 +501,8 @@ func (mp *MPool) alloc(detailk string, sz int, requiredSpaceWithoutHeader int, o
 	pHdr.poolId = mp.id
 	pHdr.allocSz = int32(sz)
 	pHdr.SetGuard()
-	if mp.details != nil {
-		mp.details.recordAlloc(detailk, int64(pHdr.allocSz))
-	}
 	pHdr.offHeap = offHeap
-	return pHdr.ToSlice(sz, requiredSpaceWithoutHeader)
+	return pHdr.ToSlice(sz, requiredSpaceWithoutHeader), nil
 }
 
 func (mp *MPool) Free(bs []byte) {
@@ -549,23 +546,26 @@ func (mp *MPool) freePtr(detailk string, ptr unsafe.Pointer) {
 
 	// Save the original size before marking as freed (needed for offHeap deallocation)
 	originalAllocSz := pHdr.allocSz
-
 	recordSize := int64(pHdr.allocSz) + kMemHdrSz
-	mp.stats.RecordFree(mp.tag, recordSize)
-	globalStats.RecordFree("global", recordSize)
-	if mp.details != nil {
-		mp.details.recordFree(detailk, int64(pHdr.allocSz))
-	}
 
-	// non fixed pool just mark it freed
 	if !atomic.CompareAndSwapInt32(&pHdr.allocSz, pHdr.allocSz, -1) {
 		panic(moerr.NewInternalErrorNoCtx("free size -1, possible double free"))
 	}
-	if pHdr.offHeap {
-		mp.removePtr(hdr)
-		allocateSize := int(originalAllocSz) + kMemHdrSz
-		simpleCAllocator().Deallocate(unsafe.Slice((*byte)(hdr), allocateSize), uint64(allocateSize))
+
+	// if not offHeap, just clean it up and return.
+	if !pHdr.offHeap {
+		return
 	}
+
+	mp.stats.RecordFree(mp.tag, recordSize)
+	globalStats.RecordFree("global", recordSize)
+	if mp.details != nil {
+		mp.details.recordFree(detailk, recordSize)
+	}
+
+	mp.removePtr(hdr)
+	allocateSize := int(originalAllocSz) + kMemHdrSz
+	simpleCAllocator().Deallocate(unsafe.Slice((*byte)(hdr), allocateSize), uint64(allocateSize))
 }
 
 func (mp *MPool) reAllocWithDetailK(detailk string, old []byte, sz int, offHeap bool) ([]byte, error) {

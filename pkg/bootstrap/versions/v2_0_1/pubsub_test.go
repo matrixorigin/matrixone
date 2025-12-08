@@ -31,6 +31,7 @@ import (
 
 type MockTxnExecutor struct {
 	flag bool
+	mp   *mpool.MPool
 }
 
 func (MockTxnExecutor) Use(db string) {
@@ -48,15 +49,12 @@ func (e MockTxnExecutor) Exec(sql string, options executor.StatementOption) (exe
 		return executor.Result{}, assert.AnError
 	}
 
-	mp := mpool.MustNewZeroNoFixed()
-	defer mpool.DeleteMPool(mp)
-
 	bat := batch.New([]string{"a"})
-	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, mp)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, e.mp)
 	bat.SetRowCount(1)
 	return executor.Result{
 		Batches: []*batch.Batch{bat},
-		Mp:      mp,
+		Mp:      e.mp,
 	}, nil
 }
 
@@ -66,7 +64,12 @@ func (MockTxnExecutor) Txn() client.TxnOperator {
 }
 
 func Test_getSubbedAccNames(t *testing.T) {
-	txn := &MockTxnExecutor{}
+	txn := &MockTxnExecutor{
+		mp: mpool.MustNewZeroNoFixed(),
+	}
+	txn.mp.EnableDetailRecording()
+	defer mpool.DeleteMPool(txn.mp)
+
 	accIdInfoMap := map[int32]*pubsub.AccountInfo{
 		1: {Id: 1, Name: "acc1"},
 	}

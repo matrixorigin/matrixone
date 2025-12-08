@@ -27,35 +27,34 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-type MockTxnExecutor struct{}
+type MockTxnExecutor struct {
+	mp *mpool.MPool
+}
 
-func (MockTxnExecutor) Use(db string) {
+func (mock *MockTxnExecutor) Use(db string) {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (MockTxnExecutor) LockTable(table string) error {
+func (mock *MockTxnExecutor) LockTable(table string) error {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (MockTxnExecutor) Exec(sql string, options executor.StatementOption) (executor.Result, error) {
-	mp := mpool.MustNewZeroNoFixed()
-	defer mpool.DeleteMPool(mp)
-
+func (mock *MockTxnExecutor) Exec(sql string, options executor.StatementOption) (executor.Result, error) {
 	bat := batch.New([]string{"a", "b", "c", "d", "e", "f", "g", "h"})
-	bat.Vecs[0] = testutil.MakeVarcharVector([]string{"PubName"}, nil, mp)
-	bat.Vecs[1] = testutil.MakeVarcharVector([]string{"DbName"}, nil, mp)
-	bat.Vecs[2] = testutil.MakeUint64Vector([]uint64{1}, nil, mp)
-	bat.Vecs[3] = testutil.MakeVarcharVector([]string{"TablesStr"}, nil, mp)
-	bat.Vecs[4] = testutil.MakeVarcharVector([]string{"SubAccountsStr"}, nil, mp)
-	bat.Vecs[5] = testutil.MakeTimestampVector([]string{"2023-02-03 01:23:45"}, nil, mp)
-	bat.Vecs[6] = testutil.MakeTimestampVector([]string{"2023-02-03 01:23:45"}, nil, mp)
-	bat.Vecs[7] = testutil.MakeVarcharVector([]string{"Comment"}, nil, mp)
+	bat.Vecs[0] = testutil.MakeVarcharVector([]string{"PubName"}, nil, mock.mp)
+	bat.Vecs[1] = testutil.MakeVarcharVector([]string{"DbName"}, nil, mock.mp)
+	bat.Vecs[2] = testutil.MakeUint64Vector([]uint64{1}, nil, mock.mp)
+	bat.Vecs[3] = testutil.MakeVarcharVector([]string{"TablesStr"}, nil, mock.mp)
+	bat.Vecs[4] = testutil.MakeVarcharVector([]string{"SubAccountsStr"}, nil, mock.mp)
+	bat.Vecs[5] = testutil.MakeTimestampVector([]string{"2023-02-03 01:23:45"}, nil, mock.mp)
+	bat.Vecs[6] = testutil.MakeTimestampVector([]string{"2023-02-03 01:23:45"}, nil, mock.mp)
+	bat.Vecs[7] = testutil.MakeVarcharVector([]string{"Comment"}, nil, mock.mp)
 	bat.SetRowCount(1)
 	return executor.Result{
 		Batches: []*batch.Batch{bat},
-		Mp:      mp,
+		Mp:      mock.mp,
 	}, nil
 }
 
@@ -73,7 +72,13 @@ func TestGetAllPubInfos(t *testing.T) {
 	accNameInfoMap := map[string]*pubsub.AccountInfo{
 		"sys": {Id: 0, Name: "sys"},
 	}
-	infos, err := GetAllPubInfos(&MockTxnExecutor{}, accNameInfoMap)
+
+	mock := &MockTxnExecutor{
+		mp: mpool.MustNewZeroNoFixed(),
+	}
+	defer mpool.DeleteMPool(mock.mp)
+
+	infos, err := GetAllPubInfos(mock, accNameInfoMap)
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(infos))
 }

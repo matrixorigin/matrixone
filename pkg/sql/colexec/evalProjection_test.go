@@ -78,6 +78,7 @@ func makeTestCases(t *testing.T) []projectionTestCase {
 }
 
 func TestProjection(t *testing.T) {
+
 	for _, tc := range makeTestCases(t) {
 		bat := MakeMockBatchs(tc.proc.Mp())
 		err := tc.PrepareProjection(tc.proc)
@@ -85,6 +86,7 @@ func TestProjection(t *testing.T) {
 		_, err = tc.EvalProjection(bat, tc.proc)
 		require.NoError(t, err)
 		tc.ResetProjection(tc.proc)
+		bat.Clean(tc.proc.Mp())
 
 		bat = MakeMockBatchs(tc.proc.Mp())
 		err = tc.PrepareProjection(tc.proc)
@@ -92,6 +94,7 @@ func TestProjection(t *testing.T) {
 		_, err = tc.EvalProjection(bat, tc.proc)
 		require.NoError(t, err)
 		tc.ResetProjection(tc.proc)
+		bat.Clean(tc.proc.Mp())
 
 		tc.FreeProjection(tc.proc)
 		tc.proc.Free()

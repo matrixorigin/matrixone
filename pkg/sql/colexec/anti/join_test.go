@@ -78,9 +78,14 @@ func TestString(t *testing.T) {
 
 func TestAnti(t *testing.T) {
 	for _, tc := range makeTestCases(t) {
+		mp := tc.proc.Mp()
+		mp.EnableDetailRecording()
 
-		resetChildren(tc.arg, tc.proc.Mp())
-		resetHashBuildChildren(tc.barg, tc.proc.Mp())
+		nb0 := mp.CurrNB()
+
+		op := resetChildren(tc.arg, mp)
+		op2 := resetHashBuildChildren(tc.barg, mp)
+
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		err = tc.barg.Prepare(tc.proc)
@@ -104,7 +109,11 @@ func TestAnti(t *testing.T) {
 		tc.arg.Reset(tc.proc, false, nil)
 		tc.barg.Reset(tc.proc, false, nil)
 
-		resetChildren(tc.arg, tc.proc.Mp())
+		op.Free(tc.proc, false, nil)
+		op2.Free(tc.proc, false, nil)
+
+		op = resetChildren(tc.arg, tc.proc.Mp())
+		op2 = resetHashBuildChildren(tc.barg, tc.proc.Mp())
 		resetHashBuildChildren(tc.barg, tc.proc.Mp())
 		tc.proc.GetMessageBoard().Reset()
 		err = tc.arg.Prepare(tc.proc)
@@ -126,14 +135,18 @@ func TestAnti(t *testing.T) {
 			require.Equal(t, bytes.Compare(vec1.GetArea(), vec2.GetArea()), 0)
 			require.Equal(t, bytes.Compare(vec1.UnsafeGetRawData(), vec2.UnsafeGetRawData()), 0)
 		}
-
 		tc.arg.Reset(tc.proc, false, nil)
 		tc.barg.Reset(tc.proc, false, nil)
+
+		op.Free(tc.proc, false, nil)
+		op2.Free(tc.proc, false, nil)
 
 		tc.arg.Free(tc.proc, false, nil)
 		tc.barg.Free(tc.proc, false, nil)
 		tc.proc.Free()
-		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+
+		nb1 := mp.CurrNB()
+		require.Equal(t, nb0, nb1)
 	}
 }
 
@@ -308,16 +321,18 @@ func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 }
 */
 
-func resetChildren(arg *AntiJoin, m *mpool.MPool) {
+func resetChildren(arg *AntiJoin, m *mpool.MPool) *colexec.MockOperator {
 	bat := colexec.MakeMockBatchs(m)
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 	arg.Children = nil
 	arg.AppendChild(op)
+	return op
 }
 
-func resetHashBuildChildren(arg *hashbuild.HashBuild, m *mpool.MPool) {
+func resetHashBuildChildren(arg *hashbuild.HashBuild, m *mpool.MPool) *colexec.MockOperator {
 	bat := colexec.MakeMockBatchs(m)
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 	arg.Children = nil
 	arg.AppendChild(op)
+	return op
 }
