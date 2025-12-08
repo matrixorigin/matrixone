@@ -1196,6 +1196,10 @@ func (m *mockRelation) CollectChanges(ctx context.Context, from, to types.TS, _ 
 	return nil, nil
 }
 
+func (m *mockRelation) CollectObjectList(ctx context.Context, from, to types.TS, mp *mpool.MPool) (*batch.Batch, error) {
+	return nil, nil
+}
+
 func (m *mockRelation) ApproxObjectsNum(ctx context.Context) int {
 	if m.approxObjectsNumFunc != nil {
 		return m.approxObjectsNumFunc(ctx)

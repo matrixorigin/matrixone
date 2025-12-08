@@ -141,6 +141,14 @@ func (tbl *txnTableDelegate) CollectChanges(ctx context.Context, from, to types.
 	return tbl.origin.CollectChanges(ctx, from, to, skipDeletes, mp)
 }
 
+func (tbl *txnTableDelegate) CollectObjectList(ctx context.Context, from, to types.TS, mp *mpool.MPool) (*batch.Batch, error) {
+	if tbl.combined.is {
+		return tbl.combined.tbl.CollectObjectList(ctx, from, to, mp)
+	}
+
+	return tbl.origin.CollectObjectList(ctx, from, to, mp)
+}
+
 func (tbl *txnTableDelegate) Stats(
 	ctx context.Context,
 	sync bool,

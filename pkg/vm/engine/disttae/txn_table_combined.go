@@ -252,6 +252,14 @@ func (t *combinedTxnTable) CollectChanges(
 	panic("not implemented")
 }
 
+func (t *combinedTxnTable) CollectObjectList(
+	ctx context.Context,
+	from, to types.TS,
+	mp *mpool.MPool,
+) (*batch.Batch, error) {
+	panic("not implemented")
+}
+
 func (t *combinedTxnTable) ApproxObjectsNum(ctx context.Context) int {
 	tables, err := t.tablesFunc()
 	if err != nil {

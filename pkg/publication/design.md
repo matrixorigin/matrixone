@@ -71,3 +71,5 @@ collect change scan object
 **优化alter不删表？**
 
 **检查权限**
+
+**检查get object list的snapshot是否全部刷盘了**

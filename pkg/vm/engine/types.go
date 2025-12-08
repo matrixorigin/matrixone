@@ -1003,6 +1003,8 @@ type Relation interface {
 
 	CollectChanges(ctx context.Context, from, to types.TS, skipDeletes bool, mp *mpool.MPool) (ChangesHandle, error)
 
+	CollectObjectList(ctx context.Context, from, to types.TS, mp *mpool.MPool) (*batch.Batch, error)
+
 	TableDefs(context.Context) ([]TableDef, error)
 
 	GetExtraInfo() *api.SchemaExtra

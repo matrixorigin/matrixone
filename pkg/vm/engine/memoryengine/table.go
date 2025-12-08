@@ -46,6 +46,10 @@ func (t *Table) CollectChanges(_ context.Context, from, to types.TS, skipDeletes
 	panic("not support")
 }
 
+func (t *Table) CollectObjectList(_ context.Context, from, to types.TS, _ *mpool.MPool) (*batch.Batch, error) {
+	panic("not support")
+}
+
 func (t *Table) Stats(ctx context.Context, sync bool) (*pb.StatsInfo, error) {
 	return nil, nil
 }
