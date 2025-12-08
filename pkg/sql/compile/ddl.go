@@ -2760,10 +2760,17 @@ func (s *Scope) DropTable(c *Compile) error {
 		return err
 	}
 
-	deleteSql := fmt.Sprintf(deleteMoIndexesWithTableIdFormat, qry.GetTableDef().TblId)
-	err = c.runSqlWithOptions(
-		deleteSql, executor.StatementOption{}.WithDisableLog(),
-	)
+	// delete all index objects record of the table in mo_catalog.mo_indexes
+	if !qry.IsView && qry.Database != catalog.MO_CATALOG && qry.Table != catalog.MO_INDEXES {
+		if qry.GetTableDef().Pkey != nil || len(qry.GetTableDef().Indexes) > 0 {
+			deleteSql := fmt.Sprintf(deleteMoIndexesWithTableIdFormat, qry.GetTableDef().TblId)
+			if err = c.runSqlWithOptions(
+				deleteSql, executor.StatementOption{}.WithDisableLog(),
+			); err != nil {
+				return err
+			}
+		}
+	}
 
 	if isTemp {
 		if err := dbSource.Delete(c.proc.Ctx, engine.GetTempTableName(dbName, tblName)); err != nil {
