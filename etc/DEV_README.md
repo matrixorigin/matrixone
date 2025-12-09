@@ -130,6 +130,30 @@ make dev-help
 | `make dev-shell-cn2` | Open shell in CN2 container |
 | `make dev-setup-docker-mirror` | Configure Docker registry mirror (for faster pulls) |
 
+### Dashboard Creation
+
+| Command | Description |
+|---------|-------------|
+| `make dev-create-dashboard` | Create dashboard (default: local mode, port 3001) |
+| `make dev-create-dashboard-local` | Create local dashboard (port 3001) |
+| `make dev-create-dashboard-cluster` | Create cluster dashboard (port 3000, docker compose) |
+| `make dev-create-dashboard-k8s` | Create K8S dashboard |
+| `make dev-create-dashboard-cloud-ctrl` | Create cloud control-plane dashboard |
+
+**Custom Options:**
+```bash
+# Using make (recommended)
+DASHBOARD_PORT=3001 make dev-create-dashboard
+DASHBOARD_HOST=localhost make dev-create-dashboard
+DASHBOARD_MODE=cloud make dev-create-dashboard
+DASHBOARD_USERNAME=admin DASHBOARD_PASSWORD=admin make dev-create-dashboard
+
+# Or directly using mo-tool
+./mo-tool dashboard --host localhost --port 3001 --mode local
+./mo-tool dashboard --mode cloud --port 3000 --datasource Prometheus
+./mo-tool dashboard --username admin --password mypass
+```
+
 ---
 
 ## Standalone MatrixOne Setup
@@ -597,13 +621,59 @@ make dev-up-grafana-local
 
 **Note for Linux:** If `host.docker.internal` doesn't work, edit `prometheus-local.yml` and replace with your host IP address.
 
+### Creating Dashboards
+
+After starting Grafana, you need to create the dashboards. MatrixOne provides a convenient make command:
+
+**For Local Standalone MatrixOne (port 3001):**
+```bash
+make dev-create-dashboard-local
+# Or with custom port:
+DASHBOARD_PORT=3001 make dev-create-dashboard
+# Or directly using mo-tool:
+./mo-tool dashboard --mode local --port 3001
+```
+
+**For Docker Compose Cluster (port 3000):**
+```bash
+make dev-create-dashboard-cluster
+# Or:
+DASHBOARD_MODE=cloud DASHBOARD_PORT=3000 make dev-create-dashboard
+# Or directly using mo-tool:
+./mo-tool dashboard --mode cloud --port 3000
+```
+
+**Other Modes:**
+```bash
+# K8S mode
+make dev-create-dashboard-k8s
+
+# Cloud control-plane mode
+make dev-create-dashboard-cloud-ctrl
+```
+
+**Custom Options:**
+```bash
+# Custom host and port
+DASHBOARD_HOST=localhost DASHBOARD_PORT=3001 make dev-create-dashboard
+
+# Custom credentials
+DASHBOARD_USERNAME=admin DASHBOARD_PASSWORD=yourpassword make dev-create-dashboard
+
+# Custom datasource name (for cloud/k8s modes)
+DASHBOARD_MODE=cloud DASHBOARD_DATASOURCE=Prometheus make dev-create-dashboard
+```
+
+**Note:** The dashboard creation tool connects to Grafana and creates all MatrixOne dashboards. Make sure Grafana is running before executing this command.
+
 ### Accessing Metrics
 
 #### Via Grafana (Recommended)
 
-1. Open Grafana: http://localhost:3000 (cluster) or http://localhost:3001 (local)
-2. Navigate to **Dashboards** → **Browse**
-3. Select MatrixOne dashboards (auto-provisioned from `pkg/util/metric/dashboard/`)
+1. Create dashboards (see above)
+2. Open Grafana: http://localhost:3000 (cluster) or http://localhost:3001 (local)
+3. Navigate to **Dashboards** → **Browse**
+4. Select MatrixOne dashboards from the folder (Matrixone for cluster, Matrixone-Standalone for local)
 
 #### Via Prometheus Query API
 

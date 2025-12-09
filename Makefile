@@ -357,6 +357,22 @@ dev-help:
 	@echo "  make dev-edit-common    - Edit common configuration (all services)"
 	@echo "  make dev-setup-docker-mirror - Configure Docker registry mirror (for faster pulls)"
 	@echo ""
+	@echo "Dashboard Creation (via mo-tool):"
+	@echo "  make dev-create-dashboard        - Create dashboard (default: local mode, port 3001)"
+	@echo "  make dev-create-dashboard-local  - Create local dashboard (port 3001)"
+	@echo "  make dev-create-dashboard-cluster - Create cluster dashboard (port 3000, docker compose)"
+	@echo "  make dev-create-dashboard-k8s     - Create K8S dashboard"
+	@echo "  make dev-create-dashboard-cloud-ctrl - Create cloud control-plane dashboard"
+	@echo ""
+	@echo "  Custom options:"
+	@echo "    DASHBOARD_PORT=3001 make dev-create-dashboard        # Custom port"
+	@echo "    DASHBOARD_HOST=localhost make dev-create-dashboard   # Custom host"
+	@echo "    DASHBOARD_MODE=cloud make dev-create-dashboard      # Custom mode"
+	@echo ""
+	@echo "  Or use mo-tool directly:"
+	@echo "    ./mo-tool dashboard --mode local --port 3001"
+	@echo "    ./mo-tool dashboard --mode cloud --port 3000"
+	@echo ""
 	@echo "Examples:"
 	@echo "  make dev-build && make dev-up              # Build and start"
 	@echo "  make dev-up-test                           # Start with test files"
@@ -688,6 +704,47 @@ dev-edit-tn:
 .PHONY: dev-edit-common
 dev-edit-common:
 	@cd $(DEV_DIR) && ./edit-config.sh common
+
+###############################################################################
+# Dashboard Creation
+###############################################################################
+
+DASHBOARD_PORT ?= 3001
+DASHBOARD_HOST ?= 127.0.0.1
+DASHBOARD_MODE ?= local
+DASHBOARD_USERNAME ?= admin
+DASHBOARD_PASSWORD ?= admin
+DASHBOARD_DATASOURCE ?= Prometheus
+
+.PHONY: dev-create-dashboard
+dev-create-dashboard: mo-tool
+	@echo "Creating dashboard..."
+	@echo "  Mode: $(DASHBOARD_MODE)"
+	@echo "  Host: $(DASHBOARD_HOST):$(DASHBOARD_PORT)"
+	@echo "  Username: $(DASHBOARD_USERNAME)"
+	@./mo-tool dashboard \
+		--host $(DASHBOARD_HOST) \
+		--port $(DASHBOARD_PORT) \
+		--mode $(DASHBOARD_MODE) \
+		--username $(DASHBOARD_USERNAME) \
+		--password $(DASHBOARD_PASSWORD) \
+		--datasource $(DASHBOARD_DATASOURCE)
+
+.PHONY: dev-create-dashboard-local
+dev-create-dashboard-local:
+	@$(MAKE) DASHBOARD_MODE=local DASHBOARD_PORT=3001 dev-create-dashboard
+
+.PHONY: dev-create-dashboard-cluster
+dev-create-dashboard-cluster:
+	@$(MAKE) DASHBOARD_MODE=cloud DASHBOARD_PORT=3000 DASHBOARD_DATASOURCE=Prometheus dev-create-dashboard
+
+.PHONY: dev-create-dashboard-k8s
+dev-create-dashboard-k8s:
+	@$(MAKE) DASHBOARD_MODE=k8s DASHBOARD_PORT=$(DASHBOARD_PORT) dev-create-dashboard
+
+.PHONY: dev-create-dashboard-cloud-ctrl
+dev-create-dashboard-cloud-ctrl:
+	@$(MAKE) DASHBOARD_MODE=cloud-ctrl DASHBOARD_PORT=$(DASHBOARD_PORT) dev-create-dashboard
 
 ###############################################################################
 # clean
