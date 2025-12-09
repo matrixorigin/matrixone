@@ -36,6 +36,7 @@ mysql -h 127.0.0.1 -P 16001 -u root -p111
 make dev-up-grafana
 
 # Access Grafana at http://localhost:3000 (admin/admin)
+# Note: Wait 2-3 minutes after first startup for Grafana to initialize
 ```
 
 ### View All Available Commands
@@ -66,6 +67,7 @@ make dev-help
 | `make dev-down` | Stop multi-CN cluster |
 | `make dev-restart` | Restart all services |
 | `make dev-ps` | Show service status |
+| `make dev-cleanup` | Interactive cleanup (stops containers, removes data directories) |
 
 ### Service-Specific Restart
 
@@ -126,6 +128,7 @@ make dev-help
 | Command | Description |
 |---------|-------------|
 | `make dev-clean` | Stop and remove all data (WARNING: destructive!) |
+| `make dev-cleanup` | Interactive cleanup (stops containers, removes data directories with confirmation) |
 | `make dev-shell-cn1` | Open shell in CN1 container |
 | `make dev-shell-cn2` | Open shell in CN2 container |
 | `make dev-setup-docker-mirror` | Configure Docker registry mirror (for faster pulls) |
@@ -587,6 +590,8 @@ make dev-up-grafana
 # Password: admin
 ```
 
+**Important:** On first startup, Grafana needs a few minutes to initialize its database and services. Wait 2-3 minutes after starting before creating dashboards. You can check if Grafana is ready by accessing http://localhost:3000 - if the login page loads, Grafana is ready.
+
 **What's included:**
 - Prometheus: Collects metrics from all MatrixOne services
 - Grafana: Visualization dashboard with pre-configured MatrixOne dashboards
@@ -610,6 +615,8 @@ make dev-up-grafana-local
 # Password: admin
 ```
 
+**Important:** On first startup, Grafana needs a few minutes to initialize its database and services. Wait 2-3 minutes after starting before creating dashboards. You can check if Grafana is ready by accessing http://localhost:3001 - if the login page loads, Grafana is ready.
+
 **What's included:**
 - Prometheus: Collects metrics from local MatrixOne services
 - Grafana: Visualization dashboard
@@ -623,7 +630,9 @@ make dev-up-grafana-local
 
 ### Creating Dashboards
 
-After starting Grafana, you need to create the dashboards. MatrixOne provides a convenient make command:
+**Important:** Wait 2-3 minutes after starting Grafana before creating dashboards. Grafana needs time to initialize its database and services on first startup. You can verify Grafana is ready by accessing the web UI - if the login page loads, it's ready.
+
+After Grafana is ready, you need to create the dashboards. MatrixOne provides a convenient make command:
 
 **For Local Standalone MatrixOne (port 3001):**
 ```bash
@@ -664,7 +673,7 @@ DASHBOARD_USERNAME=admin DASHBOARD_PASSWORD=yourpassword make dev-create-dashboa
 DASHBOARD_MODE=cloud DASHBOARD_DATASOURCE=Prometheus make dev-create-dashboard
 ```
 
-**Note:** The dashboard creation tool connects to Grafana and creates all MatrixOne dashboards. Make sure Grafana is running before executing this command.
+**Note:** The dashboard creation tool connects to Grafana and creates all MatrixOne dashboards. Make sure Grafana is running and has finished initializing (wait 2-3 minutes after first startup) before executing this command.
 
 ### Accessing Metrics
 
@@ -1003,12 +1012,17 @@ sudo chown -R $(id -u):$(id -g) mo-data logs
 If you need to start fresh:
 
 ```bash
-# WARNING: This deletes all data!
+# Option 1: Interactive cleanup (recommended - shows what will be deleted)
+make dev-cleanup
+
+# Option 2: Quick cleanup (WARNING: This deletes all data without confirmation!)
 make dev-clean
 
 # Then rebuild and start
 make dev-build && make dev-up
 ```
+
+**Note:** `make dev-cleanup` provides an interactive interface that shows all data directories and asks for confirmation before deletion. It also handles root-owned files that may require sudo.
 
 ### Build Failures
 

@@ -159,24 +159,49 @@ get_owner_uid() {
 # Pre-create directories with correct permissions (before docker creates them as root)
 if [[ " ${DOCKER_COMPOSE_ARGS[*]} " =~ " up " ]]; then
     echo "Pre-creating directories with correct permissions..."
-    mkdir -p ../../mo-data ../../logs ../../prometheus-data ../../prometheus-local-data
-    # Ensure they have the correct ownership (in case they exist but owned by root)
-    mo_data_uid=$(get_owner_uid "../../mo-data")
-    logs_uid=$(get_owner_uid "../../logs")
+    DATA_DIRS=("../../mo-data" "../../logs" "../../prometheus-data" "../../prometheus-local-data" "../../grafana-data" "../../grafana-local-data")
+    mkdir -p "${DATA_DIRS[@]}"
     
-    if [ "$mo_data_uid" -eq 0 ] || [ "$logs_uid" -eq 0 ]; then
-        echo "Warning: Directories are owned by root. Attempting to fix..."
-        echo "You may need to run: sudo chown -R $DOCKER_UID:$DOCKER_GID ../../mo-data ../../logs ../../prometheus-data ../../prometheus-local-data"
-        if [ -w ../../mo-data ] && [ -w ../../logs ]; then
-            # If we have write permission, directories are fine
-            :
-        else
-            echo "Error: Cannot write to directories. Please run:"
-            echo "  sudo chown -R $DOCKER_UID:$DOCKER_GID ../../mo-data ../../logs ../../prometheus-data ../../prometheus-local-data"
-            echo "Or delete and recreate:"
-            echo "  sudo rm -rf ../../mo-data ../../logs ../../prometheus-data ../../prometheus-local-data"
-            exit 1
+    # Pre-create subdirectories that Grafana might create
+    mkdir -p ../../grafana-data/dashboards ../../grafana-local-data/dashboards 2>/dev/null || true
+    
+    # Fix ownership for all directories (in case they exist but owned by root)
+    # Recursively check and fix all subdirectories, not just top-level
+    NEEDS_FIX=false
+    for dir in "${DATA_DIRS[@]}"; do
+        if [ -d "$dir" ]; then
+            # Check if any files/directories are owned by root (UID 0)
+            if find "$dir" -user root 2>/dev/null | grep -q .; then
+                NEEDS_FIX=true
+                echo "Fixing ownership for $dir (found root-owned files)..."
+                sudo chown -R "$DOCKER_UID:$DOCKER_GID" "$dir" 2>/dev/null || {
+                    echo "Warning: Could not fix ownership for $dir. You may need to run:"
+                    echo "  sudo chown -R $DOCKER_UID:$DOCKER_GID $dir"
+                }
+            else
+                # Also check if top-level directory is not writable
+                dir_uid=$(get_owner_uid "$dir")
+                if [ "$dir_uid" -eq 0 ] || [ ! -w "$dir" ]; then
+                    NEEDS_FIX=true
+                    echo "Fixing ownership for $dir..."
+                    sudo chown -R "$DOCKER_UID:$DOCKER_GID" "$dir" 2>/dev/null || {
+                        echo "Warning: Could not fix ownership for $dir. You may need to run:"
+                        echo "  sudo chown -R $DOCKER_UID:$DOCKER_GID $dir"
+                    }
+                fi
+            fi
         fi
+    done
+    
+    # Set permissions to ensure user can delete files
+    for dir in "${DATA_DIRS[@]}"; do
+        if [ -d "$dir" ] && [ -w "$dir" ]; then
+            chmod -R u+rwX "$dir" 2>/dev/null || true
+        fi
+    done
+    
+    if [ "$NEEDS_FIX" = true ]; then
+        echo "Directory permissions have been fixed."
     fi
 fi
 

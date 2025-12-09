@@ -346,6 +346,7 @@ dev-help:
 	@echo "  make dev-logs-grafana - Show Grafana logs"
 	@echo "  make dev-logs-grafana-local - Show local Grafana logs"
 	@echo "  make dev-clean          - Stop and remove all data (WARNING: destructive!)"
+	@echo "  make dev-cleanup        - Interactive cleanup (stops containers, removes data directories)"
 	@echo "  make dev-config         - Generate config from config.env"
 	@echo "  make dev-config-example - Create config.env.example file"
 	@echo "  make dev-setup-docker-mirror - Configure Docker registry mirror (for faster pulls)"
@@ -469,8 +470,21 @@ dev-up-grafana-local:
 	@echo "  Or: sudo make dev-setup-docker-mirror"
 	@echo ""
 	@echo "Pre-creating directories with correct permissions..."
-	@mkdir -p prometheus-local-data grafana-local-data && \
-		chmod 755 prometheus-local-data grafana-local-data
+	@mkdir -p prometheus-local-data grafana-local-data grafana-local-data/dashboards && \
+		chmod 755 prometheus-local-data grafana-local-data grafana-local-data/dashboards
+	@echo "Checking and fixing ownership for existing directories..."
+	@DOCKER_UID=$$(id -u) && \
+		DOCKER_GID=$$(id -g) && \
+		if [ -d grafana-local-data ] && find grafana-local-data -user root 2>/dev/null | grep -q .; then \
+			echo "Fixing ownership for grafana-local-data (found root-owned files)..." && \
+			sudo chown -R $$DOCKER_UID:$$DOCKER_GID grafana-local-data 2>/dev/null || \
+			echo "Warning: Could not fix ownership. You may need to run: sudo chown -R $$DOCKER_UID:$$DOCKER_GID grafana-local-data"; \
+		fi && \
+		if [ -d prometheus-local-data ] && find prometheus-local-data -user root 2>/dev/null | grep -q .; then \
+			echo "Fixing ownership for prometheus-local-data (found root-owned files)..." && \
+			sudo chown -R $$DOCKER_UID:$$DOCKER_GID prometheus-local-data 2>/dev/null || \
+			echo "Warning: Could not fix ownership. You may need to run: sudo chown -R $$DOCKER_UID:$$DOCKER_GID prometheus-local-data"; \
+		fi
 	@cd $(DEV_DIR) && \
 		export DOCKER_UID=$$(id -u) && \
 		export DOCKER_GID=$$(id -g) && \
@@ -631,6 +645,11 @@ dev-clean:
 	else \
 		echo "Cancelled."; \
 	fi
+
+.PHONY: dev-cleanup
+dev-cleanup:
+	@echo "Running interactive cleanup script..."
+	@cd $(DEV_DIR) && ./cleanup.sh
 
 .PHONY: dev-shell-cn1
 dev-shell-cn1:

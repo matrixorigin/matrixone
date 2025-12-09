@@ -180,6 +180,7 @@ services:
     hostname: mo-prometheus
     profiles:
       - prometheus
+    user: "${DOCKER_UID:-501}:${DOCKER_GID:-20}"  # Run as current user (macOS default: 501:20, Linux: use 1000:1000)
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
@@ -266,6 +267,12 @@ services:
       - matrixone-net
     environment:
       - TZ=Asia/Shanghai
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9090/-/ready"]
+      interval: 3s
+      timeout: 2s
+      retries: 5
+      start_period: 5s
     restart: unless-stopped
 
   # Grafana for Local MatrixOne - Visualization dashboard
@@ -295,7 +302,14 @@ services:
     networks:
       - matrixone-net
     depends_on:
-      - prometheus-local
+      prometheus-local:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:3000/api/health || exit 1"]
+      interval: 3s
+      timeout: 2s
+      retries: 5
+      start_period: 10s
     restart: unless-stopped
 
 networks:
