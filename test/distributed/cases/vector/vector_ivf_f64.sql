@@ -1,7 +1,7 @@
 DROP TABLE IF EXISTS `ca_specify_answer_dataset`;
 CREATE TABLE `ca_specify_answer_dataset` (
   `id` bigint NOT NULL AUTO_INCREMENT,
-  `question_vector` vecf32(1024) DEFAULT NULL,
+  `question_vector` vecf64(1024) DEFAULT NULL,
   `question` varchar(255) DEFAULT NULL,
   `type` varchar(255) DEFAULT NULL,
   `output_result` text DEFAULT NULL,
