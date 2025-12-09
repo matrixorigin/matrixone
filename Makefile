@@ -107,7 +107,8 @@ help:
 	@echo ""
 	@echo "Development Environment (Local Multi-CN Cluster):"
 	@echo "  make dev-help           - Show all dev-* commands (full list)"
-	@echo "  make dev-build          - Build docker image"
+	@echo "  make dev-build          - Build docker image (smart cache - rebuilds when code changes)"
+	@echo "  make dev-build-force    - Build docker image (forces complete rebuild, no cache)"
 	@echo "  make dev-up             - Start multi-CN cluster (default: local image)"
 	@echo "  make dev-up-latest      - Start with official latest image"
 	@echo "  make dev-up-test        - Start with test directory mounted"
@@ -322,7 +323,8 @@ DEV_MOUNT ?=
 .PHONY: dev-help
 dev-help:
 	@echo "Local Multi-CN Development Environment Commands:"
-	@echo "  make dev-build          - Build MatrixOne docker image (local tag)"
+	@echo "  make dev-build          - Build MatrixOne docker image (forces rebuild, no cache)"
+	@echo "  make dev-build-fast     - Build MatrixOne docker image (uses cache if available)"
 	@echo "  make dev-up             - Start multi-CN cluster with local image"
 	@echo "  make dev-up-latest      - Start multi-CN cluster with latest official image"
 	@echo "  make dev-up-test        - Start with test directory mounted"
@@ -398,8 +400,13 @@ dev-help:
 
 .PHONY: dev-build
 dev-build:
-	@echo "Building MatrixOne docker image..."
-	@cd $(DEV_DIR) && ./start.sh build
+	@echo "Building MatrixOne docker image (using smart cache - only rebuilds when code changes)..."
+	@cd $(DEV_DIR) && ./start.sh build mo-log
+
+.PHONY: dev-build-force
+dev-build-force:
+	@echo "Building MatrixOne docker image (forcing complete rebuild, no cache)..."
+	@cd $(DEV_DIR) && ./start.sh build --no-cache mo-log
 
 .PHONY: dev-up
 dev-up:
@@ -437,7 +444,7 @@ dev-up-grafana:
 	@cd $(DEV_DIR) && \
 		export DOCKER_UID=$$(id -u) && \
 		export DOCKER_GID=$$(id -g) && \
-		./start.sh -v $(DEV_VERSION) --profile prometheus up -d
+		./start.sh -v $(DEV_VERSION) --profile matrixone --profile prometheus up -d
 	@echo ""
 	@echo "Services started! Connect with:"
 	@echo "  mysql -h 127.0.0.1 -P 6001 -u root -p111  # Via proxy (recommended)"
@@ -535,7 +542,10 @@ dev-up-grafana-local:
 .PHONY: dev-down
 dev-down:
 	@echo "Stopping MatrixOne Multi-CN cluster..."
-	@cd $(DEV_DIR) && ./start.sh down
+	@cd $(DEV_DIR) && \
+		export DOCKER_UID=$$(id -u) && \
+		export DOCKER_GID=$$(id -g) && \
+		./start.sh --profile matrixone --profile prometheus --profile prometheus-local down
 
 .PHONY: dev-restart
 dev-restart:

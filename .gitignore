@@ -21,7 +21,9 @@ coverage.txt
 out.txt
 logs/
 prometheus-local-data/
+prometheus-data/
 grafana-local-data/
+grafana-data/
 sdk_demo/
 vendor/
 gen_config
