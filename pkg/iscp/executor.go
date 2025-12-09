@@ -567,6 +567,12 @@ func (exec *ISCPTaskExecutor) applyISCPLog(ctx context.Context, from, to types.T
 		return
 	}
 	rel, err := db.Relation(ctx, MOISCPLogTableName, nil)
+
+	tid := rel.GetTableID(ctx)
+	if tid != exec.prevISCPTableID {
+		err = moerr.NewInternalErrorNoCtx(fmt.Sprintf("table id changes, %d -> %d", exec.prevISCPTableID, tid))
+		return
+	}
 	// injection is for ut
 	if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "applyISCPLog" {
 		err = moerr.NewInternalErrorNoCtx(msg)
@@ -693,7 +699,6 @@ func (exec *ISCPTaskExecutor) replay(ctx context.Context) (err error) {
 			zap.Error(err),
 		)
 	}()
-	sql := cdc.CDCSQLBuilder.ISCPLogSelectSQL()
 	txn, err := getTxn(ctx, exec.txnEngine, exec.cnTxnClient, "iscp replay")
 	if err != nil {
 		return
@@ -702,6 +707,14 @@ func (exec *ISCPTaskExecutor) replay(ctx context.Context) (err error) {
 	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
 	defer cancel()
 	defer txn.Commit(ctx)
+
+	tid, _, err := getTableID(ctx, exec.cnUUID, txn, catalog.System_Account, catalog.MO_CATALOG, catalog.MO_ISCP_LOG)
+	if err != nil {
+		return
+	}
+	exec.prevISCPTableID = tid
+
+	sql := cdc.CDCSQLBuilder.ISCPLogSelectSQL()
 	result, err := ExecWithResult(ctx, sql, exec.cnUUID, txn)
 	if err != nil {
 		return
@@ -747,6 +760,7 @@ func (exec *ISCPTaskExecutor) replay(ctx context.Context) (err error) {
 		return true
 	})
 	exec.iscpLogWm = types.TimestampToTS(txn.SnapshotTS())
+
 	return
 }
 
