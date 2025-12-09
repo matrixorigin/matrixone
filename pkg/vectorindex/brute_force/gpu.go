@@ -46,6 +46,16 @@ func NewBruteForceIndex[T types.RealNumbers](dataset [][]T,
 	m metric.MetricType,
 	elemsz uint) (cache.VectorIndexSearchIf, error) {
 
+	return NewCpuBruteForceIndex[T](dataset, dimension, m, elemsz)
+}
+
+// cuvs library has bug.  comment out the GPU version until cuvs fix the bug
+/*
+func NewBruteForceIndex[T types.RealNumbers](dataset [][]T,
+	dimension uint,
+	m metric.MetricType,
+	elemsz uint) (cache.VectorIndexSearchIf, error) {
+
 	switch dset := any(dataset).(type) {
 	case [][]float64:
 		return NewCpuBruteForceIndex[T](dataset, dimension, m, elemsz)
@@ -71,6 +81,7 @@ func NewBruteForceIndex[T types.RealNumbers](dataset [][]T,
 	}
 
 }
+*/
 
 func (idx *GpuBruteForceIndex[T]) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 	if _, err = idx.Dataset.ToDevice(idx.Resource); err != nil {
