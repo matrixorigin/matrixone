@@ -60,13 +60,18 @@ type IndexTableConfig struct {
 	IndexCapacity int64  `json:"index_capacity"`
 
 	// IVF related
-	EntriesTable       string `json:"entries"`
-	DataSize           int64  `json:"datasize"`
-	Nprobe             uint   `json:"nprobe"`
-	PKeyType           int32  `json:"pktype"`
-	KeyPartType        int32  `json:"parttype"`
-	KmeansTrainPercent int64  `json:"kmeans_train_percent"`
-	KmeansMaxIteration int64  `json:"kmeans_max_iteration"`
+	EntriesTable       string  `json:"entries"`
+	DataSize           int64   `json:"datasize"`
+	Nprobe             uint    `json:"nprobe"`
+	PKeyType           int32   `json:"pktype"`
+	KeyPartType        int32   `json:"parttype"`
+	KmeansTrainPercent int64   `json:"kmeans_train_percent"`
+	KmeansMaxIteration int64   `json:"kmeans_max_iteration"`
+	Limit              uint64  `json:"limit"`
+	LowerBoundType     int8    `json:"lower_bound_type"`
+	LowerBound         float64 `json:"lower_bound"`
+	UpperBoundType     int8    `json:"upper_bound_type"`
+	UpperBound         float64 `json:"upper_bound"`
 }
 
 // HNSW specified parameters
@@ -108,8 +113,6 @@ type RuntimeConfig struct {
 	Probe             uint
 	OrigFuncName      string
 	BackgroundQueries []*plan.Query
-	// Optional BloomFilter bytes for entries table scan (runtime filter)
-	BloomFilter []byte
 }
 
 type VectorIndexCdc[T types.RealNumbers] struct {

@@ -188,7 +188,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 
 				s.DataSource.R = readers[0]
 				s.DataSource.R.SetOrderBy(s.DataSource.OrderBy)
-				s.DataSource.R.SetBlockTop(s.DataSource.BlockOrderBy, s.DataSource.BlockLimit)
+				s.DataSource.R.SetIndexParam(s.DataSource.IndexReaderParam)
 			}
 
 			var tag int32
@@ -535,7 +535,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	if s.NodeInfo.Mcpu == 1 {
 		s.DataSource.R = readers[0]
 		s.DataSource.R.SetOrderBy(s.DataSource.OrderBy)
-		s.DataSource.R.SetBlockTop(s.DataSource.BlockOrderBy, s.DataSource.BlockLimit)
+		s.DataSource.R.SetIndexParam(s.DataSource.IndexReaderParam)
 		return s, nil
 	}
 
@@ -548,7 +548,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 			}
 		}
 
-		readers[i].SetBlockTop(s.DataSource.BlockOrderBy, s.DataSource.BlockLimit)
+		readers[i].SetIndexParam(s.DataSource.IndexReaderParam)
 
 		ss[i].DataSource = &Source{
 			R:            readers[i],
@@ -1082,6 +1082,15 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 					hint.BloomFilter = bf
 				}
 			}
+
+			if s.DataSource.IndexReaderParam != nil {
+				if readerParam := c.proc.Ctx.Value(defines.IvfReaderParam{}); readerParam != nil {
+					if rp, ok := readerParam.(*plan.IndexReaderParam); ok {
+						s.DataSource.IndexReaderParam.OrigFuncName = rp.OrigFuncName
+						s.DataSource.IndexReaderParam.DistRange = rp.DistRange
+					}
+				}
+			}
 		}
 
 		readers, err = s.DataSource.Rel.BuildReaders(
@@ -1153,6 +1162,15 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 			if bfVal := c.proc.Ctx.Value(defines.IvfBloomFilter{}); bfVal != nil {
 				if bf, ok := bfVal.([]byte); ok && len(bf) > 0 {
 					hint.BloomFilter = bf
+				}
+			}
+
+			if s.DataSource.IndexReaderParam != nil {
+				if readerParam := c.proc.Ctx.Value(defines.IvfReaderParam{}); readerParam != nil {
+					if rp, ok := readerParam.(*plan.IndexReaderParam); ok {
+						s.DataSource.IndexReaderParam.OrigFuncName = rp.OrigFuncName
+						s.DataSource.IndexReaderParam.DistRange = rp.DistRange
+					}
 				}
 			}
 		}
