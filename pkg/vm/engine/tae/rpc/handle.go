@@ -297,7 +297,7 @@ func (h *Handle) handleRequests(
 		persistedTombstoneRows
 	if totalAffectedRows > 100000 {
 		logutil.Info(
-			"BIG-COMMIT-TRACE-LOG",
+			"tn.handle.big.commit.trace.log",
 			zap.Int("in-memory-rows", inMemoryInsertRows),
 			zap.Int("persisted-rows", persistedMemoryInsertRows),
 			zap.Int("in-memory-tombstones", inMemoryTombstoneRows),
@@ -421,13 +421,13 @@ func (h *Handle) HandleCommit(
 					tnTxnInfo = txn.String()
 				}
 				logger := logutil.Warn
-				msg := "HandleCommit-SLOW-LOG"
+				msg := "tn.handle.commit.slow.log"
 				if err != nil {
 					logger = logutil.Error
-					msg = "HandleCommit-Error"
+					msg = "tn.handle.commit.error"
 				} else if hasDDL {
 					logger = logutil.Info
-					msg = "HandleCommit-With-DDL"
+					msg = "tn.handle.commit.with.ddl"
 				}
 				logger(
 					msg,
@@ -482,7 +482,7 @@ func (h *Handle) HandleCommit(
 				return
 			}
 			logutil.Info(
-				"TAE-RETRY-TXN",
+				"tn.handle.retry.txn",
 				zap.String("old-txn", string(meta.GetID())),
 				zap.String("new-txn", txn.GetID()),
 			)
@@ -572,7 +572,7 @@ func (h *Handle) HandleCreateDatabase(
 	for i, c := range req.Cmds {
 		common.DoIfInfoEnabled(func() {
 			logutil.Info(
-				"PreCommit-CreateDB",
+				"tn.handle.create.database",
 				zap.String("txn", txn.String()),
 				zap.String("i/cnt", fmt.Sprintf("%d/%d", i+1, len(req.Cmds))),
 				zap.String("cmd", fmt.Sprintf("%+v", c)),
@@ -606,7 +606,7 @@ func (h *Handle) HandleDropDatabase(
 	for i, c := range req.Cmds {
 		common.DoIfInfoEnabled(func() {
 			logutil.Info(
-				"PreCommit-DropDB",
+				"tn.handle.drop.database",
 				zap.String("txn", txn.String()),
 				zap.String("i/cnt", fmt.Sprintf("%d/%d", i+1, len(req.Cmds))),
 				zap.String("cmd", fmt.Sprintf("%+v", c)),
@@ -638,7 +638,7 @@ func (h *Handle) HandleCreateRelation(
 	for i, c := range req.Cmds {
 		common.DoIfInfoEnabled(func() {
 			logutil.Info(
-				"PreCommit-CreateTBL",
+				"tn.handle.create.relation",
 				zap.String("txn", txn.String()),
 				zap.String("i/cnt", fmt.Sprintf("%d/%d", i+1, len(req.Cmds))),
 				zap.String("cmd", fmt.Sprintf("%+v", c)),
@@ -679,7 +679,7 @@ func (h *Handle) HandleDropRelation(
 	for i, c := range req.Cmds {
 		common.DoIfInfoEnabled(func() {
 			logutil.Info(
-				"PreCommit-DropTBL",
+				"tn.handle.drop.relation",
 				zap.String("txn", txn.String()),
 				zap.String("i/cnt", fmt.Sprintf("%d/%d", i+1, len(req.Cmds))),
 				zap.String("cmd", fmt.Sprintf("%+v", c)),
@@ -1029,7 +1029,7 @@ func (h *Handle) HandleAlterTable(
 			logger = logutil.Error
 		}
 		logger(
-			"PreCommit-AlterTBL",
+			"tn.handle.alter.relation",
 			zap.String("req", req.String()),
 			zap.String("txn", txn.String()),
 			zap.Error(err),
