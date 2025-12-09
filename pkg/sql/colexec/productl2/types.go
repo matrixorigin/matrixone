@@ -91,6 +91,7 @@ func (productl2 *Productl2) Reset(proc *process.Process, pipelineFailed bool, er
 	if productl2.ctr.rbat != nil {
 		productl2.ctr.rbat.CleanOnlyData()
 	}
+	productl2.ctr.release()
 	productl2.ctr.inBat = nil
 	productl2.ctr.state = Build
 }
