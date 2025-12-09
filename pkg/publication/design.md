@@ -73,3 +73,5 @@ collect change scan object
 **检查权限**
 
 **检查get object list的snapshot是否全部刷盘了**
+
+**object 分包**

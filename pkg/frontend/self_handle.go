@@ -543,7 +543,8 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		*tree.DataBranchDeleteTable,
 		*tree.DataBranchDeleteDatabase,
 		*tree.DataBranchCreateDatabase,
-		*tree.ObjectList:
+		*tree.ObjectList,
+		*tree.GetObject:
 
 		ses.EnterFPrint(FPDataBranch)
 		defer ses.ExitFPrint(FPDataBranch)
