@@ -5508,7 +5508,6 @@ func TestISCPTableIDChange(t *testing.T) {
 	assert.NoError(t, txn.Commit(ctxWithTimeout))
 
 	// wait for synchronization to initialize prevISCPTableID
-	
 
 	// enable injection to trigger table id change check
 	fault.Enable()
@@ -5525,7 +5524,7 @@ func TestISCPTableIDChange(t *testing.T) {
 	require.Nil(t, err)
 
 	txn.Commit(ctxWithTimeout)
-	
+
 	now := taeHandler.GetDB().TxnMgr.Now()
 	testutils.WaitExpect(
 		4000,
