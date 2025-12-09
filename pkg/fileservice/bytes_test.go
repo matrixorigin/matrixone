@@ -15,7 +15,9 @@
 package fileservice
 
 import (
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/stretchr/testify/assert"
@@ -29,6 +31,77 @@ func TestBytes(t *testing.T) {
 			bytes:       bytes,
 			deallocator: deallocator,
 		}
+		bs.refs.Store(1)
 		bs.Release()
 	})
+}
+
+func TestBytesError(t *testing.T) {
+	t.Run("Bytes get invalid memory", func(t *testing.T) {
+		bytes, deallocator, err := ioAllocator().Allocate(42, malloc.NoHints)
+		assert.Nil(t, err)
+		bs := &Bytes{
+			bytes:       bytes,
+			deallocator: deallocator,
+		}
+		bs.refs.Store(1)
+
+		// deallocate memory
+		bs.Release()
+
+		// nil pointer
+		assert.Panics(t, func() { bs.Bytes() }, "get invalid memory")
+	})
+
+	t.Run("Bytes double free", func(t *testing.T) {
+		bytes, deallocator, err := ioAllocator().Allocate(42, malloc.NoHints)
+		assert.Nil(t, err)
+		bs := &Bytes{
+			bytes:       bytes,
+			deallocator: deallocator,
+		}
+		bs.refs.Store(1)
+
+		// deallocate memory
+		bs.Release()
+
+		// double free
+		assert.Panics(t, func() { bs.Release() }, "double free")
+	})
+
+	t.Run("Bytes nil deallocator", func(t *testing.T) {
+		data := []byte("123")
+		bs := NewBytes(data)
+
+		// deallocate memory
+		bs.Release()
+
+		assert.Panics(t, func() { bs.Release() }, "double free")
+	})
+}
+
+func TestBytesConcurrent(t *testing.T) {
+	data := []byte("123")
+	bs := NewBytes(data)
+	nthread := 5
+	var wg sync.WaitGroup
+	for i := 0; i < nthread; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+
+			bs.Retain()
+
+			time.Sleep(1 * time.Millisecond)
+
+			bs.Release()
+		}(i)
+	}
+
+	wg.Wait()
+
+	bs.Release()
+
+	// double free
+	assert.Panics(t, func() { bs.Release() }, "double free")
 }

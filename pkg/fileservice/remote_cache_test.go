@@ -89,7 +89,7 @@ func TestRemoteCache(t *testing.T) {
 		err = sf2.rc.Read(ctx, ioVec2)
 		assert.NoError(t, err)
 		assert.Equal(t, 1, len(ioVec2.Entries))
-		assert.Equal(t, &Bytes{bytes: []byte{1, 2}}, ioVec2.Entries[0].CachedData)
+		assert.Equal(t, NewBytes([]byte{1, 2}), ioVec2.Entries[0].CachedData)
 		assert.Equal(t, true, ioVec2.Entries[0].done)
 		assert.NotNil(t, ioVec2.Entries[0].fromCache)
 
