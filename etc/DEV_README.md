@@ -1,0 +1,1107 @@
+# MatrixOne Development Guide
+
+This guide provides comprehensive instructions for developers working with MatrixOne, covering local standalone deployment, multi-CN cluster setup, monitoring, and all `make dev-*` commands.
+
+## Table of Contents
+
+- [Quick Start](#quick-start)
+- [Development Commands Overview](#development-commands-overview)
+- [Standalone MatrixOne Setup](#standalone-matrixone-setup)
+- [Multi-CN Cluster Setup (Docker Compose)](#multi-cn-cluster-setup-docker-compose)
+- [Monitoring and Metrics](#monitoring-and-metrics)
+- [Configuration Management](#configuration-management)
+- [Troubleshooting](#troubleshooting)
+
+---
+
+## Quick Start
+
+### Start Multi-CN Cluster (Recommended for Development)
+
+```bash
+# Build and start local multi-CN cluster
+make dev-build && make dev-up
+
+# Connect via proxy (load balanced across CNs)
+mysql -h 127.0.0.1 -P 6001 -u root -p111
+
+# Or connect directly to CN1
+mysql -h 127.0.0.1 -P 16001 -u root -p111
+```
+
+### Start with Monitoring Dashboard
+
+```bash
+# Start cluster with Grafana monitoring
+make dev-up-grafana
+
+# Access Grafana at http://localhost:3000 (admin/admin)
+```
+
+### View All Available Commands
+
+```bash
+make dev-help
+```
+
+---
+
+## Development Commands Overview
+
+### Build Commands
+
+| Command | Description |
+|---------|-------------|
+| `make dev-build` | Build MatrixOne Docker image with `local` tag |
+| `make dev-help` | Show all available `dev-*` commands |
+
+### Cluster Management
+
+| Command | Description |
+|---------|-------------|
+| `make dev-up` | Start multi-CN cluster (default: local image) |
+| `make dev-up-latest` | Start with official latest image from Docker Hub |
+| `make dev-up-nightly` | Start with nightly build image |
+| `make dev-up-test` | Start with test directory mounted at `/test` |
+| `make dev-down` | Stop multi-CN cluster |
+| `make dev-restart` | Restart all services |
+| `make dev-ps` | Show service status |
+
+### Service-Specific Restart
+
+| Command | Description |
+|---------|-------------|
+| `make dev-restart-cn1` | Restart CN1 only |
+| `make dev-restart-cn2` | Restart CN2 only |
+| `make dev-restart-proxy` | Restart Proxy only |
+| `make dev-restart-tn` | Restart TN only |
+| `make dev-restart-log` | Restart Log service only |
+
+### Monitoring Commands
+
+| Command | Description |
+|---------|-------------|
+| `make dev-up-grafana` | Start cluster with Grafana monitoring (port 3000) |
+| `make dev-up-grafana-local` | Start Grafana dashboard for local MatrixOne (port 3001) |
+| `make dev-restart-grafana` | Restart Grafana and Prometheus (cluster mode) |
+| `make dev-restart-grafana-local` | Restart Grafana and Prometheus (local mode) |
+| `make dev-down-grafana-local` | Stop and remove local monitoring services |
+
+### Logs
+
+| Command | Description |
+|---------|-------------|
+| `make dev-logs` | View all logs (tail -f) |
+| `make dev-logs-cn1` | View CN1 logs |
+| `make dev-logs-cn2` | View CN2 logs |
+| `make dev-logs-proxy` | View proxy logs |
+| `make dev-logs-tn` | View TN logs |
+| `make dev-logs-log` | View Log service logs |
+| `make dev-logs-grafana` | View Grafana logs (cluster mode) |
+| `make dev-logs-grafana-local` | View Grafana logs (local mode) |
+
+### Database Connection
+
+| Command | Description |
+|---------|-------------|
+| `make dev-mysql` | Connect to database via proxy (port 6001) |
+| `make dev-mysql-cn1` | Connect directly to CN1 (port 16001) |
+| `make dev-mysql-cn2` | Connect directly to CN2 (port 16002) |
+
+### Configuration
+
+| Command | Description |
+|---------|-------------|
+| `make dev-edit-cn1` | Edit CN1 configuration interactively |
+| `make dev-edit-cn2` | Edit CN2 configuration interactively |
+| `make dev-edit-proxy` | Edit Proxy configuration interactively |
+| `make dev-edit-tn` | Edit TN configuration interactively |
+| `make dev-edit-log` | Edit Log service configuration interactively |
+| `make dev-edit-common` | Edit common configuration (all services) |
+| `make dev-config` | Generate config files from `config.env` |
+| `make dev-config-example` | Create `config.env.example` file |
+
+### Utilities
+
+| Command | Description |
+|---------|-------------|
+| `make dev-clean` | Stop and remove all data (WARNING: destructive!) |
+| `make dev-shell-cn1` | Open shell in CN1 container |
+| `make dev-shell-cn2` | Open shell in CN2 container |
+| `make dev-setup-docker-mirror` | Configure Docker registry mirror (for faster pulls) |
+
+---
+
+## Standalone MatrixOne Setup
+
+For development and testing, you can run MatrixOne in standalone mode (single process with all services).
+
+### Prerequisites
+
+- Go 1.22 or later
+- GCC/Clang compiler
+- Make
+
+### Build from Source
+
+```bash
+# Build mo-service binary
+make build
+
+# Or build with race detector and debug symbols
+make debug
+```
+
+### Start Standalone MatrixOne
+
+```bash
+# Start with default configuration
+./mo-service -launch ./etc/launch/launch.toml
+
+# Or start individual services manually:
+# 1. Start Log service (contains HAKeeper)
+./mo-service -cfg ./etc/launch/log.toml
+
+# 2. Start TN (Transaction Node)
+./mo-service -cfg ./etc/launch/tn.toml
+
+# 3. Start CN (Compute Node)
+./mo-service -cfg ./etc/launch/cn.toml
+```
+
+### Connect to Standalone MatrixOne
+
+```bash
+# Default connection (if using launch.toml)
+mysql -h 127.0.0.1 -P 6001 -u root -p111
+
+# Or if connecting directly to CN
+mysql -h 127.0.0.1 -P 18001 -u root -p111
+```
+
+### Enable Metrics in Standalone Mode
+
+Edit the configuration files (`etc/launch/cn.toml`, `etc/launch/tn.toml`, `etc/launch/log.toml`) and ensure:
+
+```toml
+[observability]
+disableMetric = false
+enable-metric-to-prom = true
+status-port = 7001
+```
+
+Then restart the services.
+
+### View Metrics for Standalone MatrixOne
+
+After enabling metrics, you can:
+
+1. **Use Grafana Dashboard (Recommended)**
+   ```bash
+   # Start Grafana dashboard for local MatrixOne
+   make dev-up-grafana-local
+   
+   # Access at http://localhost:3001 (admin/admin)
+   ```
+
+2. **Query Prometheus Directly** (if exposed)
+   ```bash
+   # If Prometheus port is uncommented in docker-compose.yml
+   curl http://localhost:9091/api/v1/query?query=mo_sql_statement_total
+   ```
+
+3. **Check Status Endpoint**
+   ```bash
+   # Query metrics directly from MatrixOne
+   curl http://localhost:7001/metrics
+   ```
+
+---
+
+## Multi-CN Cluster Setup (Docker Compose)
+
+The multi-CN setup provides a complete distributed cluster with:
+- **Multi-CN**: 2 CN nodes (scalable)
+- **Local Disk**: Local disk shared storage (DISK backend)
+- **With Proxy**: Load balancing proxy included
+- **Docker Compose**: Containerized deployment, easy to manage
+- **Bridge Network**: Bridge network with service isolation
+- **Enhanced Script**: `start.sh` with auto permissions, versioning, and dynamic mounts
+- **No Root Files**: All generated files use your user's permissions
+
+### Architecture
+
+```
+┌─────────────────────────────────────────┐
+│   MatrixOne Multi-CN Local Disk        │
+├─────────────────────────────────────────┤
+│                                         │
+│  ┌────────┐  ┌────────┐  ┌──────────┐  │
+│  │ mo-log │  │ mo-tn  │  │ mo-proxy │  │
+│  │ :32001 │  │        │  │  :6001   │  │
+│  └───┬────┘  └───┬────┘  └────┬─────┘  │
+│      │           │             │        │
+│  ┌───┴───────────┴─────────────┴────┐   │
+│  │    Local Shared Disk Storage     │   │
+│  │      (mo-data/shared)            │   │
+│  └───┬───────────┬──────────────────┘   │
+│      │           │                      │
+│  ┌───┴────┐  ┌───┴────┐                │
+│  │ mo-cn1 │  │ mo-cn2 │                │
+│  │ :16001 │  │ :16002 │                │
+│  └────────┘  └────────┘                │
+│                                         │
+└─────────────────────────────────────────┘
+```
+
+### Service Components
+
+| Service | Container | Port | Description |
+|---------|-----------|------|-------------|
+| LogService | mo-log | 32001, 7001 | Log service and HAKeeper |
+| TN | mo-tn | - | Transaction Node |
+| CN1 | mo-cn1 | 16001 | Compute Node 1 |
+| CN2 | mo-cn2 | 16002 | Compute Node 2 |
+| Proxy | mo-proxy | 6001 | Load balancer proxy |
+
+### Quick Start
+
+```bash
+# 1. Build Docker image
+make dev-build
+
+# 2. Start cluster
+make dev-up
+
+# 3. Connect
+mysql -h 127.0.0.1 -P 6001 -u root -p111
+```
+
+**Note:** On first startup, default TOML configuration files will be automatically generated. These files are not tracked by git to prevent accidental commits of your local configurations.
+
+### Using Official Images
+
+```bash
+# Start with latest official image
+make dev-up-latest
+
+# Or use specific version
+make DEV_VERSION=1.0.0 dev-up
+
+# Or use nightly build
+make dev-up-nightly
+```
+
+### Mount Test Directory
+
+```bash
+# Start with test directory mounted
+make dev-up-test
+
+# In MySQL client:
+mysql> source /test/distributed/cases/your_test.sql;
+```
+
+### Custom Mounts
+
+```bash
+# Mount custom directory
+make DEV_MOUNT="../../test:/test:ro" dev-up
+make DEV_MOUNT="/path/to/data:/data:ro" dev-up
+
+# Combine options (version + mount)
+make DEV_VERSION=latest DEV_MOUNT="../../test:/test:ro" dev-up
+```
+
+### Using start.sh Script (Alternative Method)
+
+The `start.sh` script provides an enhanced wrapper with automatic permission handling:
+
+```bash
+cd etc/docker-multi-cn-local-disk
+
+# Show help
+./start.sh -h
+
+# Default: Build and start with local image
+./start.sh build
+./start.sh up -d
+
+# Use official latest version
+./start.sh -v latest up -d
+
+# Use specific version
+./start.sh -v 3.0 up -d
+./start.sh -v nightly up -d
+
+# Mount test directory for source command
+./start.sh -m "../../test:/test:ro" up -d
+
+# Combine options
+./start.sh -v latest -m "../../test:/test:ro" up -d
+
+# Other commands
+./start.sh down
+./start.sh logs -f
+./start.sh ps
+./start.sh restart
+```
+
+**start.sh Quick Reference:**
+
+| Option | Description | Example |
+|--------|-------------|---------|
+| `-v, --version` | Specify image version | `./start.sh -v latest up -d` |
+| | Default: `local` (built image) | `./start.sh -v nightly up -d` |
+| | Options: `local`, `latest`, `nightly`, `3.0` | `./start.sh -v 1.2.3 up -d` |
+| `-m, --mount` | Mount extra directory | `./start.sh -m "../../test:/test:ro" up -d` |
+| | Useful for SQL test files | Multiple mounts: separate calls |
+| `-h, --help` | Show help message | `./start.sh -h` |
+| (no options) | Use local image + auto UID/GID | `./start.sh up -d` |
+
+**Why use start.sh?**
+- ✅ **Auto Permissions**: Automatically detects your UID/GID (no root-owned files!)
+- ✅ **Default Local Image**: Uses local build by default, no version confusion
+- ✅ **Easy Versioning**: Switch versions with `-v latest|nightly|3.0`
+- ✅ **Dynamic Mounts**: Add test directory with `-m` option
+- ✅ **Clear Output**: Shows configuration before executing
+- ✅ **No Manual Config**: Just works out of the box
+
+### Running SQL Scripts
+
+**Method 1: Mount with start.sh or make (Easiest)**
+
+```bash
+# Using make
+make dev-up-test
+
+# Using start.sh
+./start.sh -m "../../test:/test:ro" up -d
+
+# Connect and run
+mysql -h 127.0.0.1 -P 6001 -u root -p111
+mysql> source /test/distributed/cases/your_test.sql;
+```
+
+**Method 2: Pipe SQL file directly**
+```bash
+mysql -h 127.0.0.1 -P 6001 -u root -p111 < test/distributed/cases/your_test.sql
+```
+
+**Method 3: Use mysql with -e option**
+```bash
+mysql -h 127.0.0.1 -P 6001 -u root -p111 -e "$(cat test/distributed/cases/your_test.sql)"
+```
+
+**Method 4: Copy file to container**
+```bash
+docker cp test/distributed/cases/your_test.sql mo-cn1:/tmp/test.sql
+mysql -h 127.0.0.1 -P 16001 -u root -p111 -e "source /tmp/test.sql"
+```
+
+### Image Selection
+
+#### Building from Source (Default - Recommended)
+
+**Advantages:**
+- ✅ Use latest code from repository
+- ✅ Custom modifications
+- ✅ Debug with source code
+- ✅ Test unreleased features
+
+**Build Process:**
+```bash
+# Build from source (creates matrixorigin/matrixone:local)
+make dev-build
+
+# Or using start.sh
+cd etc/docker-multi-cn-local-disk
+./start.sh build
+```
+
+**Build Requirements:**
+- Docker with buildx support
+- Go 1.22+
+- ~10-15 minutes build time (depending on network and CPU)
+
+**Go Proxy Configuration:**
+
+The build uses Go proxy to speed up dependency downloads. Default proxies (in order):
+1. `https://goproxy.cn` - Alibaba Cloud
+2. `https://mirrors.aliyun.com/goproxy/` - Aliyun Mirror
+3. `https://goproxy.io` - Global
+4. `direct` - Fallback to source
+
+**Available Go Proxies:**
+
+| Provider | Proxy | Usage |
+|----------|-------|-------|
+| Alibaba | `https://goproxy.cn` | `GOPROXY="https://goproxy.cn,direct" docker compose build` |
+| Aliyun | `https://mirrors.aliyun.com/goproxy/` | `GOPROXY="https://mirrors.aliyun.com/goproxy/,direct" docker compose build` |
+| GoProxy.io | `https://goproxy.io` | `GOPROXY="https://goproxy.io,direct" docker compose build` |
+| Official | `https://proxy.golang.org` | `GOPROXY="https://proxy.golang.org,direct" docker compose build` |
+| Athens | `https://athens.azurefd.net` | `GOPROXY="https://athens.azurefd.net,direct" docker compose build` |
+
+**For faster builds in different regions:**
+```bash
+# Use regional mirror (Alibaba)
+export GOPROXY="https://goproxy.cn,direct"
+make dev-build
+
+# Or combine multiple proxies for better redundancy
+export GOPROXY="https://goproxy.cn,https://mirrors.aliyun.com/goproxy/,direct"
+make dev-build
+```
+
+#### Using Docker Hub Image (Alternative)
+
+**Advantages:**
+- ✅ No build time - start immediately
+- ✅ Official stable releases
+- ✅ Smaller download size
+- ✅ Updated regularly
+
+**Disadvantages:**
+- ⚠️ May be slow in some regions (Docker Hub access limitations)
+- ⚠️ Requires Docker mirror configuration for faster access
+
+**Available Tags:**
+- `matrixorigin/matrixone:latest` - Latest stable release
+- `matrixorigin/matrixone:nightly` - Nightly builds
+- `matrixorigin/matrixone:v1.0.0` - Specific version
+
+**Usage:**
+```bash
+# Use latest
+make dev-up-latest
+
+# Use specific version
+make DEV_VERSION=1.0.0 dev-up
+
+# Use nightly build
+make dev-up-nightly
+```
+
+### Data Storage
+
+All containers share local disk storage:
+- **Data Directory**: `mo-data/` (under project root)
+- **Shared Storage**: `mo-data/shared/` (DISK backend)
+- **Log Directory**: `logs/` (service-specific log files)
+
+**File Permissions:**
+- When using `make dev-*` or `./start.sh`: Files are automatically created with your user's permissions ✅
+- When using `docker compose` directly: Set `DOCKER_UID` and `DOCKER_GID` environment variables
+- Default fallback: `501:20` (macOS first user) - may need adjustment for Linux users
+
+### Scale CN Nodes
+
+To add more CN nodes:
+
+1. Copy config: `cp etc/docker-multi-cn-local-disk/cn2.toml etc/docker-multi-cn-local-disk/cn3.toml`
+2. Modify UUID, ports, etc. in `cn3.toml`
+3. Add `mo-cn3` service in `docker-compose.yml`
+4. Start: `docker compose up -d mo-cn3`
+
+---
+
+## Monitoring and Metrics
+
+MatrixOne provides comprehensive monitoring through Prometheus and Grafana.
+
+### Enable Metrics Collection
+
+Metrics are **disabled by default**. To enable:
+
+#### Method 1: Interactive Configuration (Recommended)
+
+```bash
+# Edit service configuration
+make dev-edit-cn1
+
+# In the editor, find and uncomment:
+# [observability]
+# disableMetric = false
+# enable-metric-to-prom = true
+# status-port = 7001
+
+# Save and restart
+make dev-restart-cn1
+```
+
+#### Method 2: Manual Configuration
+
+Edit the configuration files directly:
+- `etc/docker-multi-cn-local-disk/cn1.toml`
+- `etc/docker-multi-cn-local-disk/cn2.toml`
+- `etc/docker-multi-cn-local-disk/tn.toml`
+- `etc/docker-multi-cn-local-disk/proxy.toml`
+- `etc/docker-multi-cn-local-disk/log.toml`
+
+Add or uncomment:
+
+```toml
+[observability]
+disableMetric = false
+enable-metric-to-prom = true
+status-port = 7001
+```
+
+Then restart the services.
+
+### Monitoring Scenarios
+
+#### Scenario 1: Monitor Docker Compose Cluster
+
+```bash
+# Start cluster with Grafana
+make dev-up-grafana
+
+# Access Grafana
+# URL: http://localhost:3000
+# Username: admin
+# Password: admin
+```
+
+**What's included:**
+- Prometheus: Collects metrics from all MatrixOne services
+- Grafana: Visualization dashboard with pre-configured MatrixOne dashboards
+- Auto-discovery: Automatically connects to all services in the cluster
+
+**Prometheus Configuration:**
+- Config file: `etc/docker-multi-cn-local-disk/prometheus.yml`
+- Scrapes: `mo-cn1:7001`, `mo-cn2:7001`, `mo-tn:7001`, `mo-proxy:7001`, `mo-log:7001`
+
+#### Scenario 2: Monitor Local Standalone MatrixOne
+
+If you're running MatrixOne locally (not in Docker):
+
+```bash
+# Start Grafana dashboard for local MatrixOne
+make dev-up-grafana-local
+
+# Access Grafana
+# URL: http://localhost:3001
+# Username: admin
+# Password: admin
+```
+
+**What's included:**
+- Prometheus: Collects metrics from local MatrixOne services
+- Grafana: Visualization dashboard
+- Host access: Uses `host.docker.internal` to reach local services
+
+**Prometheus Configuration:**
+- Config file: `etc/docker-multi-cn-local-disk/prometheus-local.yml`
+- Scrapes: `host.docker.internal:7001` (or your configured status-port)
+
+**Note for Linux:** If `host.docker.internal` doesn't work, edit `prometheus-local.yml` and replace with your host IP address.
+
+### Accessing Metrics
+
+#### Via Grafana (Recommended)
+
+1. Open Grafana: http://localhost:3000 (cluster) or http://localhost:3001 (local)
+2. Navigate to **Dashboards** → **Browse**
+3. Select MatrixOne dashboards (auto-provisioned from `pkg/util/metric/dashboard/`)
+
+#### Via Prometheus Query API
+
+If Prometheus port is exposed (uncomment in `docker-compose.yml`):
+
+```bash
+# Query total SQL statements
+curl 'http://localhost:9090/api/v1/query?query=mo_sql_statement_total'
+
+# Query CN1 CPU usage
+curl 'http://localhost:9090/api/v1/query?query=process_cpu_seconds_total{instance="mo-cn1:7001"}'
+```
+
+#### Direct from MatrixOne
+
+```bash
+# Query metrics endpoint directly
+curl http://localhost:7001/metrics
+
+# Or from container
+docker exec mo-cn1 curl http://localhost:7001/metrics
+```
+
+### Available Metrics
+
+MatrixOne exposes various metrics including:
+
+- **SQL Metrics**: `mo_sql_statement_total`, `mo_sql_statement_duration_seconds`
+- **Transaction Metrics**: `mo_txn_total`, `mo_txn_duration_seconds`
+- **Storage Metrics**: `mo_storage_size_bytes`, `mo_storage_io_total`
+- **Connection Metrics**: `mo_connection_total`, `mo_connection_active`
+- **System Metrics**: CPU, memory, disk usage
+
+See `pkg/util/metric/` for complete metric definitions.
+
+---
+
+## Configuration Management
+
+### Configuration Files
+
+Configuration files are located in `etc/docker-multi-cn-local-disk/`:
+
+- `cn1.toml` - CN1 configuration
+- `cn2.toml` - CN2 configuration
+- `tn.toml` - TN configuration
+- `proxy.toml` - Proxy configuration
+- `log.toml` - Log service configuration
+
+### Interactive Configuration Editor
+
+```bash
+# Edit specific service config
+make dev-edit-cn1      # Opens CN1 config in your default editor
+make dev-edit-cn2      # Opens CN2 config
+make dev-edit-proxy    # Opens Proxy config
+make dev-edit-tn       # Opens TN config
+make dev-edit-log      # Opens Log service config
+make dev-edit-common   # Opens common config (affects all services)
+```
+
+The editor will:
+1. Open the configuration file
+2. Show commented examples
+3. Auto-generate config on save (if using `config.env`)
+
+### Environment-Based Configuration
+
+You can use `config.env` for centralized configuration:
+
+```bash
+# Create config.env from example
+make dev-config-example
+# or: cp etc/docker-multi-cn-local-disk/config.env.example etc/docker-multi-cn-local-disk/config.env
+
+# Edit configuration (uncomment and modify lines)
+vim etc/docker-multi-cn-local-disk/config.env
+
+# Generate config files
+make dev-config
+
+# Or start (will auto-generate TOML configs)
+make dev-up
+```
+
+**How it works:**
+- `*.toml` files are automatically generated from `config.env` (or defaults if no config.env exists)
+- These generated files are ignored by git to avoid commit conflicts
+- On first `make dev-up`, default configurations are generated automatically
+- When `config.env` exists, configurations are regenerated on every startup
+
+**Common Configuration Options:**
+- `LOG_LEVEL` - debug, info, warn, error, fatal (default: info)
+- `LOG_FORMAT` - console, json (default: console)
+- `MEMORY_CACHE` - e.g., 512MB, 2GB, 4GB (default: 512MB)
+- `DISK_CACHE` - e.g., 8GB, 20GB, 50GB (default: 8GB)
+- `DISABLE_TRACE` - true, false (default: true)
+- `DISABLE_METRIC` - true, false (default: true)
+
+**Service-Specific Configuration:**
+Use service prefixes to override settings for specific services:
+- `CN1_*` - CN1 only (e.g., `CN1_MEMORY_CACHE=2GB`)
+- `CN2_*` - CN2 only (e.g., `CN2_MEMORY_CACHE=2GB`)
+- `PROXY_*` - Proxy only (e.g., `PROXY_LOG_LEVEL=debug`)
+- `LOG_*` - Log service only (e.g., `LOG_LOG_LEVEL=debug`)
+- `TN_*` - Transaction Node only (e.g., `TN_MEMORY_CACHE=4GB`)
+
+**Configuration Priority:**
+1. Service-specific (highest priority)
+2. Common configuration
+3. Default values
+
+### Advanced Configuration Examples
+
+#### Example 1: Increase Memory Cache for CNs Only
+
+```bash
+# Only increase cache for CN1 and CN2, keep others default
+cat > etc/docker-multi-cn-local-disk/config.env << 'EOF'
+CN1_MEMORY_CACHE=2GB
+CN2_MEMORY_CACHE=2GB
+EOF
+
+# Apply and restart
+make dev-config
+make dev-restart
+```
+
+#### Example 2: Debug Logging for Proxy Only
+
+```bash
+# Enable debug logging only for proxy, others stay at info
+cat > etc/docker-multi-cn-local-disk/config.env << 'EOF'
+PROXY_LOG_LEVEL=debug
+PROXY_LOG_FORMAT=json
+EOF
+
+# Apply
+make dev-config
+make dev-restart
+```
+
+#### Example 3: Different Cache Sizes Per Service
+
+```bash
+# Different cache sizes for each service
+cat > etc/docker-multi-cn-local-disk/config.env << 'EOF'
+CN1_MEMORY_CACHE=4GB
+CN2_MEMORY_CACHE=2GB
+TN_MEMORY_CACHE=1GB
+EOF
+
+# Apply
+make dev-down
+make dev-up
+```
+
+#### Example 4: Mixed - Common + Service-Specific
+
+```bash
+# Common log level for all, but debug for proxy
+cat > etc/docker-multi-cn-local-disk/config.env << 'EOF'
+LOG_LEVEL=info              # Default for all services
+PROXY_LOG_LEVEL=debug        # Override for proxy only
+CN1_MEMORY_CACHE=2GB         # Override for CN1 only
+EOF
+
+# Apply
+make dev-config
+make dev-restart
+```
+
+#### Example 5: High Performance Setup (All Services)
+
+```bash
+# Increase cache for all services
+cat > etc/docker-multi-cn-local-disk/config.env << 'EOF'
+MEMORY_CACHE=4GB
+DISK_CACHE=50GB
+LOG_LEVEL=warn
+EOF
+
+# Apply
+make dev-down
+make dev-up
+```
+
+#### Quick Config Changes
+
+```bash
+# One-liner: increase CN1 memory cache only
+echo "CN1_MEMORY_CACHE=2GB" > etc/docker-multi-cn-local-disk/config.env
+make dev-config && make dev-restart
+
+# View current configs
+cat etc/docker-multi-cn-local-disk/cn1.toml | grep -A3 "\[fileservice.cache\]"
+```
+
+### Common Configuration Options
+
+#### Enable Metrics
+
+```toml
+[observability]
+disableMetric = false
+enable-metric-to-prom = true
+status-port = 7001
+```
+
+#### Adjust Log Level
+
+```toml
+[log]
+level = "debug"  # Options: debug, info, warn, error
+```
+
+#### Memory Configuration
+
+```toml
+[cn]
+memory-capacity = "8GB"  # Adjust based on available RAM
+```
+
+#### Port Configuration
+
+```toml
+[cn]
+port-base = 18000  # CN1 uses 18000, CN2 uses 18001, etc.
+```
+
+---
+
+## Troubleshooting
+
+### Docker Image Pull Failures
+
+If `docker pull` is slow or fails:
+
+```bash
+# Configure Docker registry mirror
+sudo make dev-setup-docker-mirror
+
+# Or manually:
+cd etc/docker-multi-cn-local-disk
+sudo ./setup-docker-mirror.sh
+```
+
+### Services Not Starting
+
+1. **Check logs:**
+   ```bash
+   make dev-logs
+   ```
+
+2. **Check service status:**
+   ```bash
+   make dev-ps
+   ```
+
+3. **Verify ports are not in use:**
+   ```bash
+   # Check if ports are occupied
+   lsof -i :6001
+   lsof -i :16001
+   lsof -i :16002
+   ```
+
+4. **Check data directory permissions:**
+   ```bash
+   # Ensure mo-data and logs directories are writable
+   ls -la mo-data logs
+   ```
+
+### Metrics Not Showing in Grafana
+
+1. **Verify metrics are enabled:**
+   ```bash
+   # Check if metrics endpoint responds
+   curl http://localhost:7001/metrics
+   ```
+
+2. **Check Prometheus targets:**
+   - Open Prometheus UI (if port exposed): http://localhost:9090/targets
+   - Verify all targets are "UP"
+
+3. **Check Grafana data source:**
+   - Open Grafana: http://localhost:3000
+   - Go to **Configuration** → **Data Sources**
+   - Verify Prometheus connection is working
+
+4. **Restart monitoring services:**
+   ```bash
+   make dev-restart-grafana
+   ```
+
+### Connection Refused
+
+1. **Verify services are running:**
+   ```bash
+   make dev-ps
+   ```
+
+2. **Check service logs:**
+   ```bash
+   make dev-logs-cn1
+   ```
+
+3. **Verify port mapping:**
+   ```bash
+   docker ps | grep mo-
+   ```
+
+### Permission Issues
+
+If you see permission errors:
+
+```bash
+# Check file ownership
+ls -la mo-data logs
+
+# Fix ownership (if needed)
+sudo chown -R $(id -u):$(id -g) mo-data logs
+```
+
+### Clean Start
+
+If you need to start fresh:
+
+```bash
+# WARNING: This deletes all data!
+make dev-clean
+
+# Then rebuild and start
+make dev-build && make dev-up
+```
+
+### Build Failures
+
+If `make dev-build` fails:
+
+1. **Check Docker is running:**
+   ```bash
+   docker ps
+   ```
+
+2. **Check disk space:**
+   ```bash
+   df -h
+   ```
+
+3. **Check build logs:**
+   ```bash
+   cd etc/docker-multi-cn-local-disk
+   ./start.sh build
+   ```
+
+4. **Try different Go proxy:**
+   ```bash
+   # Check Docker build context with verbose output
+   cd etc/docker-multi-cn-local-disk
+   docker compose build --progress=plain
+   
+   # Try different Go proxy
+   GOPROXY="https://goproxy.io,direct" docker compose build
+   
+   # Or use pre-built image (if Docker Hub is accessible)
+   docker compose up -d  # Uses matrixorigin/matrixone:latest
+   ```
+
+### Fix Existing Root-Owned Files
+
+If you already ran containers and have root-owned files:
+
+```bash
+cd etc/docker-multi-cn-local-disk
+
+# Stop containers
+./start.sh down
+
+# Fix permissions (need sudo because files are currently root-owned)
+sudo chown -R $(id -u):$(id -g) ../../mo-data ../../logs
+
+# Restart with correct permissions
+./start.sh up -d
+```
+
+**Or clean restart (removes all data):**
+```bash
+./start.sh down
+sudo rm -rf ../../mo-data ../../logs
+./start.sh up -d  # Will create with your user permissions
+```
+
+### Image Not Found
+
+If you see `image not found` error:
+
+```bash
+# Use official image
+cd etc/docker-multi-cn-local-disk
+docker compose up -d
+
+# Or build from source
+docker compose build
+IMAGE_NAME=matrixorigin/matrixone:local docker compose up -d
+```
+
+### Docker Hub Access Issues
+
+If you see "pull access denied" or timeout errors when using Docker Hub image:
+
+**Solution 1: Use local build (recommended)**
+```bash
+make dev-build
+make dev-up
+```
+
+**Solution 2: Configure Docker mirror**
+```bash
+sudo make dev-setup-docker-mirror
+# Or manually:
+cd etc/docker-multi-cn-local-disk
+sudo ./setup-docker-mirror.sh
+```
+
+### Network Issues
+
+If containers can't communicate:
+
+```bash
+# Check network
+docker network ls
+docker network inspect docker-multi-cn-local-disk_matrixone-net
+
+# Verify container names resolve
+docker exec mo-cn1 ping mo-log
+```
+
+---
+
+## Comparison with Other Deployment Methods
+
+| Method | Location | Features |
+|--------|----------|----------|
+| Standalone | `etc/launch/` | Single node, quick test |
+| Manual Multi-CN | `etc/launch-multi-cn/` | Multi-CN, manual start |
+| Manual with Proxy | `etc/launch-with-proxy/` | Proxy+Multi-CN, manual |
+| **Docker Multi-CN** | `etc/docker-multi-cn-local-disk/` | **Containerized+Multi-CN+Local Storage** ✨ |
+
+## Additional Resources
+
+- **Main README**: See project root `README.md`
+- **Build Guide**: See `BUILD.md` for detailed build instructions
+- **Installation Guide**: See `INSTALLATION.md` for production deployment
+- **Makefile Help**: Run `make help` or `make dev-help`
+- **Docker Compose**: See `etc/docker-multi-cn-local-disk/docker-compose.yml` for service definitions
+- **MatrixOne Documentation**: https://docs.matrixorigin.cn/
+- **Docker Hub - MatrixOne**: https://hub.docker.com/r/matrixorigin/matrixone
+
+---
+
+## Quick Reference
+
+### Most Common Workflows
+
+**Daily Development:**
+```bash
+make dev-up                    # Start cluster
+make dev-mysql                 # Connect to database
+make dev-logs-cn1              # Check logs
+make dev-restart-cn1           # Restart after config change
+```
+
+**With Monitoring:**
+```bash
+make dev-up-grafana            # Start with monitoring
+# Access http://localhost:3000
+```
+
+**Testing:**
+```bash
+make dev-up-test               # Start with test directory
+mysql -h 127.0.0.1 -P 6001 -u root -p111
+mysql> source /test/distributed/cases/your_test.sql;
+```
+
+**Configuration Changes:**
+```bash
+make dev-edit-cn1              # Edit config
+make dev-restart-cn1           # Apply changes
+```
+
+**Cleanup:**
+```bash
+make dev-down                  # Stop services
+make dev-clean                 # Remove all data (WARNING!)
+```
+
+---
+
+For more information, see the main project documentation or run `make dev-help` for a complete command list.

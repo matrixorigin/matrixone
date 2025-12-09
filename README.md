@@ -292,7 +292,7 @@ make dev-edit-cn1          # Edit CN1 config
 make dev-restart-cn1       # Restart only CN1 (fast!)
 ```
 
-📖 **[Full Guide & All Commands →](etc/docker-multi-cn-local-disk/)**
+📖 **[Complete Development Guide →](etc/DEV_README.md)** - Comprehensive guide covering standalone setup, multi-CN clusters, monitoring, metrics, configuration, and all `make dev-*` commands
 
 ### 🎯 Using mo_ctl Tool (Recommended for Production)
 

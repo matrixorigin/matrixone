@@ -5,6 +5,8 @@
 *.lib
 *.swp
 *.fatbin
+*.py
+*.sh
 bin/
 y.go
 *.output
@@ -18,6 +20,8 @@ tags
 coverage.txt
 out.txt
 logs/
+prometheus-local-data/
+grafana-local-data/
 sdk_demo/
 vendor/
 gen_config

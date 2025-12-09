@@ -111,6 +111,8 @@ help:
 	@echo "  make dev-up             - Start multi-CN cluster (default: local image)"
 	@echo "  make dev-up-latest      - Start with official latest image"
 	@echo "  make dev-up-test        - Start with test directory mounted"
+	@echo "  make dev-up-grafana     - Start cluster with Grafana monitoring"
+	@echo "  make dev-up-grafana-local - Start Grafana dashboard for local MatrixOne"
 	@echo "  make dev-down           - Stop cluster"
 	@echo "  make dev-restart        - Restart all services"
 	@echo "  make dev-restart-cn1    - Restart CN1 only (also: cn2, proxy, tn, log)"
@@ -324,6 +326,8 @@ dev-help:
 	@echo "  make dev-up             - Start multi-CN cluster with local image"
 	@echo "  make dev-up-latest      - Start multi-CN cluster with latest official image"
 	@echo "  make dev-up-test        - Start with test directory mounted"
+	@echo "  make dev-up-grafana     - Start cluster with Grafana monitoring"
+	@echo "  make dev-up-grafana-local - Start Grafana dashboard for local MatrixOne"
 	@echo "  make dev-down           - Stop multi-CN cluster"
 	@echo "  make dev-restart        - Restart multi-CN cluster (all services)"
 	@echo "  make dev-restart-cn1    - Restart CN1 only"
@@ -331,27 +335,40 @@ dev-help:
 	@echo "  make dev-restart-proxy  - Restart Proxy only"
 	@echo "  make dev-restart-log    - Restart Log service only"
 	@echo "  make dev-restart-tn     - Restart TN only"
+	@echo "  make dev-restart-grafana - Restart Grafana (and Prometheus)"
+	@echo "  make dev-restart-grafana-local - Restart local Grafana (and Prometheus)"
+	@echo "  make dev-down-grafana-local - Stop and remove local Grafana (and Prometheus)"
 	@echo "  make dev-ps             - Show service status"
 	@echo "  make dev-logs           - Show all logs (tail -f)"
 	@echo "  make dev-logs-cn1       - Show CN1 logs"
 	@echo "  make dev-logs-cn2       - Show CN2 logs"
 	@echo "  make dev-logs-proxy     - Show proxy logs"
+	@echo "  make dev-logs-grafana - Show Grafana logs"
+	@echo "  make dev-logs-grafana-local - Show local Grafana logs"
 	@echo "  make dev-clean          - Stop and remove all data (WARNING: destructive!)"
 	@echo "  make dev-config         - Generate config from config.env"
 	@echo "  make dev-config-example - Create config.env.example file"
+	@echo "  make dev-setup-docker-mirror - Configure Docker registry mirror (for faster pulls)"
 	@echo "  make dev-edit-cn1       - Edit CN1 configuration interactively"
 	@echo "  make dev-edit-cn2       - Edit CN2 configuration interactively"
 	@echo "  make dev-edit-proxy     - Edit Proxy configuration interactively"
 	@echo "  make dev-edit-log       - Edit Log service configuration interactively"
 	@echo "  make dev-edit-tn        - Edit TN configuration interactively"
 	@echo "  make dev-edit-common    - Edit common configuration (all services)"
+	@echo "  make dev-setup-docker-mirror - Configure Docker registry mirror (for faster pulls)"
 	@echo ""
 	@echo "Examples:"
 	@echo "  make dev-build && make dev-up              # Build and start"
 	@echo "  make dev-up-test                           # Start with test files"
+	@echo "  make dev-up-grafana                        # Start with Grafana monitoring"
+	@echo "  make dev-up-grafana-local                  # Start Grafana dashboard for local MO"
 	@echo "  make DEV_VERSION=latest dev-up             # Use official latest"
 	@echo "  make DEV_VERSION=nightly dev-up            # Use nightly build"
 	@echo "  make DEV_MOUNT='../../test:/test:ro' dev-up  # Custom mount"
+	@echo ""
+	@echo "Grafana Monitoring:"
+	@echo "  Access Grafana UI at http://localhost:3000 (admin/admin)"
+	@echo "  Note: Enable metrics in service configs (disableMetric = false)"
 	@echo ""
 	@echo "Configuration (Choose one method):"
 	@echo "  Method 1 (Interactive - Recommended):"
@@ -397,6 +414,94 @@ dev-up-test:
 	@echo "Test directory mounted at /test in containers"
 	@echo "Run SQL files with: mysql> source /test/distributed/cases/your_test.sql;"
 
+.PHONY: dev-up-grafana
+dev-up-grafana:
+	@echo "Starting MatrixOne Multi-CN cluster with Grafana monitoring (version: $(DEV_VERSION))..."
+	@cd $(DEV_DIR) && \
+		export DOCKER_UID=$$(id -u) && \
+		export DOCKER_GID=$$(id -g) && \
+		./start.sh -v $(DEV_VERSION) --profile prometheus up -d
+	@echo ""
+	@echo "Services started! Connect with:"
+	@echo "  mysql -h 127.0.0.1 -P 6001 -u root -p111  # Via proxy (recommended)"
+	@echo "  mysql -h 127.0.0.1 -P 16001 -u root -p111  # Direct to CN1"
+	@echo "  mysql -h 127.0.0.1 -P 16002 -u root -p111  # Direct to CN2"
+	@echo ""
+	@echo "✅ Monitoring dashboard started! Access at:"
+	@echo "  http://localhost:3000  # Grafana UI (admin/admin)"
+	@echo ""
+	@echo "Note: Prometheus runs internally and is accessed by Grafana only."
+	@echo "      If you need direct Prometheus access, uncomment ports in docker-compose.yml"
+	@echo ""
+	@echo "To enable metrics collection, edit service configs and set:"
+	@echo "  [observability]"
+	@echo "  disableMetric = false"
+	@echo "  enable-metric-to-prom = true"
+	@echo "  status-port = 7001"
+	@echo ""
+	@echo "Grafana automatically:"
+	@echo "  - Connects to Prometheus as data source (via Docker network)"
+	@echo "  - Loads MatrixOne dashboards from pkg/util/metric/dashboard/"
+
+.PHONY: dev-up-grafana-local
+dev-up-grafana-local:
+	@echo "Starting Grafana dashboard for local MatrixOne services..."
+	@echo ""
+	@echo "Note: This will pull prom/prometheus:latest from Docker Hub."
+	@echo "If pull fails due to timeout, configure Docker mirror first:"
+	@echo "  cd $(DEV_DIR) && sudo ./setup-docker-mirror.sh"
+	@echo "  Or: sudo make dev-setup-docker-mirror"
+	@echo ""
+	@echo "Pre-creating directories with correct permissions..."
+	@mkdir -p prometheus-local-data grafana-local-data && \
+		chmod 755 prometheus-local-data grafana-local-data
+	@cd $(DEV_DIR) && \
+		export DOCKER_UID=$$(id -u) && \
+		export DOCKER_GID=$$(id -g) && \
+		docker compose --profile prometheus-local up -d || \
+		(echo "" && \
+		 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" && \
+		 echo "❌ Docker pull failed! Please configure Docker mirror:" && \
+		 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" && \
+		 echo "" && \
+		 echo "Quick fix (recommended):" && \
+		 echo "  cd $(DEV_DIR)" && \
+		 echo "  sudo ./setup-docker-mirror.sh" && \
+		 echo "" && \
+		 echo "Or use Makefile command:" && \
+		 echo "  sudo make dev-setup-docker-mirror" && \
+		 echo "" && \
+		 echo "Then retry:" && \
+		 echo "  make dev-up-grafana-local" && \
+		 echo "" && \
+		 exit 1)
+	@echo ""
+	@echo "✅ Monitoring dashboard started! Access at:"
+	@echo "  http://localhost:3001  # Grafana UI (admin/admin)"
+	@echo ""
+	@echo "Note: Prometheus runs internally and is accessed by Grafana only."
+	@echo "      If you need direct Prometheus access, uncomment ports in docker-compose.yml"
+	@echo ""
+	@echo "Configuration:"
+	@echo "  - Prometheus: Internal service (not exposed)"
+	@echo "  - Grafana: Main monitoring interface at http://localhost:3001"
+	@echo "  - Prometheus config: $(DEV_DIR)/prometheus-local.yml"
+	@echo "  - Grafana provisioning: $(DEV_DIR)/grafana-provisioning/"
+	@echo "  - Monitoring local MatrixOne services on host.docker.internal"
+	@echo ""
+	@echo "Make sure your local MatrixOne has metrics enabled:"
+	@echo "  [observability]"
+	@echo "  disableMetric = false"
+	@echo "  enable-metric-to-prom = true"
+	@echo "  status-port = 7001  # Or your configured port"
+	@echo ""
+	@echo "Grafana automatically:"
+	@echo "  - Connects to Prometheus as data source (via Docker network)"
+	@echo "  - Loads MatrixOne dashboards from pkg/util/metric/dashboard/"
+	@echo ""
+	@echo "If host.docker.internal doesn't work on Linux, edit prometheus-local.yml"
+	@echo "and replace 'host.docker.internal' with your host IP address."
+
 .PHONY: dev-down
 dev-down:
 	@echo "Stopping MatrixOne Multi-CN cluster..."
@@ -433,6 +538,22 @@ dev-restart-tn:
 	@echo "Restarting TN..."
 	@cd $(DEV_DIR) && docker compose restart mo-tn
 
+.PHONY: dev-restart-grafana
+dev-restart-grafana:
+	@echo "Restarting Grafana and Prometheus..."
+	@cd $(DEV_DIR) && docker compose --profile prometheus restart grafana prometheus
+
+.PHONY: dev-restart-grafana-local
+dev-restart-grafana-local:
+	@echo "Restarting local Grafana and Prometheus..."
+	@cd $(DEV_DIR) && docker compose --profile prometheus-local restart grafana-local prometheus-local
+
+.PHONY: dev-down-grafana-local
+dev-down-grafana-local:
+	@echo "Stopping and removing local monitoring services (Grafana + Prometheus)..."
+	@cd $(DEV_DIR) && docker compose --profile prometheus-local down
+	@echo "✅ Monitoring services stopped and removed"
+
 .PHONY: dev-ps
 dev-ps:
 	@cd $(DEV_DIR) && ./start.sh ps
@@ -460,6 +581,25 @@ dev-logs-tn:
 .PHONY: dev-logs-log
 dev-logs-log:
 	@cd $(DEV_DIR) && ./start.sh logs -f mo-log
+
+.PHONY: dev-logs-grafana
+dev-logs-grafana:
+	@cd $(DEV_DIR) && docker compose --profile prometheus logs -f grafana
+
+.PHONY: dev-logs-grafana-local
+dev-logs-grafana-local:
+	@cd $(DEV_DIR) && docker compose --profile prometheus-local logs -f grafana-local
+
+.PHONY: dev-setup-docker-mirror
+dev-setup-docker-mirror:
+	@echo "Setting up Docker registry mirror for faster image pulls..."
+	@echo ""
+	@if [ "$$(id -u)" -ne 0 ]; then \
+		echo "This command needs to be run with sudo:"; \
+		echo "  sudo make dev-setup-docker-mirror"; \
+		exit 1; \
+	fi
+	@bash -c 'cd $(DEV_DIR) && ./setup-docker-mirror.sh'
 
 .PHONY: dev-clean
 dev-clean:
