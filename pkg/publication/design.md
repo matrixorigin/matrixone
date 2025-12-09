@@ -122,13 +122,85 @@ query mo columns
 * 7. 更新系统表
   - 在ccpr表里更新iteration上下文，更新iteration_state，iteration_lsn, context, error_message
 
+**iteration 函数签名和参数**
 
+```go
+func ExecuteIteration(
+    ctx context.Context,
+    cnUUID string,
+    cnEngine engine.Engine,
+    cnTxnClient client.TxnClient,
+    iterCtx *IterationContext,
+    mp *mpool.MPool,
+    sinker Sinker,                    // 上游集群连接器，用于执行SQL和获取数据
+    localFS fileservice.FileService,  // 本地文件服务，用于存储object
+    upstreamFS fileservice.FileService, // 上游文件服务，用于读取object
+) error
+```
 
-* iterationcontext
-upstream sinker
-query executor
-source info(id映射)
-prev aobj
+**IterationContext 结构体**
+```go
+type IterationContext struct {
+    // 任务标识
+    taskID           uint64           // 对应 mo_ccpr_log.task_id
+    subscriptionName string           // 订阅名称
+    
+    // 复制级别和范围
+    syncLevel        string           // 'database' 或 'table'
+    dbName           string           // 数据库名（database/table级别必填）
+    tableName        string           // 表名（table级别必填）
+    
+    // 上游连接配置
+    upstreamConn     string           // 上游连接字符串
+    
+    // 复制配置
+    syncConfig       map[string]any  // 同步配置，如 sync_interval 等
+    
+    // 执行状态
+    accountID        uint32           // 账户ID
+    tableID          uint64           // 表ID
+    iterationLSN     uint64           // 当前iteration的LSN
+    fromTS           types.TS         // 起始时间戳
+    toTS             types.TS         // 结束时间戳
+    cnUUID           string           // 执行任务的CN标识
+    
+    // 上下文信息
+    context          map[string]any  // iteration上下文，如snapshot名称等
+    sourceInfo       *SourceInfo     // ID映射关系（上游rel_id/dat_id -> 下游对应id）
+    prevAObj         []*ObjectInfo   // 之前的object信息，用于去重和对比
+}
+```
+
+**SourceInfo 结构体（ID映射）**
+```go
+type SourceInfo struct {
+    UpstreamDBID   uint64           // 上游数据库ID
+    DownstreamDBID uint64           // 下游数据库ID
+    UpstreamRelID  map[string]uint64 // 上游表名 -> 上游表ID映射
+    DownstreamRelID map[string]uint64 // 下游表名 -> 下游表ID映射
+}
+```
+
+**ObjectInfo 结构体**
+```go
+type ObjectInfo struct {
+    ObjectName  string           // object名称
+    CreateAt    types.TS         // 创建时间戳
+    DeleteAt    types.TS         // 删除时间戳（如果已删除）
+    IsTombstone bool             // 是否为墓碑标记
+    Stats       *ObjectStats     // object统计信息
+}
+```
+
+**Sinker 接口**
+```go
+type Sinker interface {
+    StartTxn(ctx context.Context) error
+    ExecSQL(ctx context.Context, sql string) (*Result, error)
+    EndTxn(ctx context.Context, commit bool) error
+    GetObject(ctx context.Context, objectName string) (io.Reader, error)
+}
+```
 
 **sinker**
 start txn
