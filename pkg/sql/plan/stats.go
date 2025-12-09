@@ -1887,7 +1887,9 @@ func CalcNodeDOP(p *plan.Plan, rootID int32, ncpu int32, lencn int) {
 		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_DEDUP {
 			setNodeDOP(p, rootID, ncpu)
 		} else {
-			dop := int32(getShuffleDop(int(ncpu), lencn, node.Stats.HashmapStats.HashmapSize))
+			// there was a weird calculate shuffle dop logic here, which does not really make any sense.
+			// just use ncpu.
+			dop := ncpu
 			childDop := qry.Nodes[node.Children[0]].Stats.Dop
 			if dop < childDop {
 				dop = childDop
