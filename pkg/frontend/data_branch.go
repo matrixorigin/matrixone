@@ -2049,6 +2049,12 @@ func writeCSV(
 		case <-inputCtx.Done():
 			err = errors.Join(err, inputCtx.Err())
 			stop = true
+		case e := <-writerErr:
+			if e != nil {
+				err = errors.Join(err, e)
+			}
+			stop = true
+			cancelCtx()
 		case e, ok := <-errChan:
 			if !ok {
 				errOpen = false

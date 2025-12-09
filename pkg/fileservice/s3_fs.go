@@ -452,8 +452,24 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 		expire = &vector.ExpireAt
 	}
 	key := s.pathToKey(path.File)
-	if err := s.storage.Write(ctx, key, reader, size, expire); err != nil {
-		return 0, err
+	disableParallel := vector.DisableParallel || vector.Policy.Any(DisableParallelWrite)
+	forceParallel := vector.ForceParallel || vector.Policy.Any(ForceParallelWrite)
+
+	if pmw, ok := s.storage.(ParallelMultipartWriter); ok && pmw.SupportsParallelMultipart() &&
+		!disableParallel &&
+		(forceParallel || size == nil || *size >= minMultipartPartSize) {
+		opt := &ParallelMultipartOption{
+			PartSize:    defaultParallelMultipartPartSize,
+			Concurrency: runtime.NumCPU(),
+			Expire:      expire,
+		}
+		if err := pmw.WriteMultipartParallel(ctx, key, reader, size, opt); err != nil {
+			return 0, err
+		}
+	} else {
+		if err := s.storage.Write(ctx, key, reader, size, expire); err != nil {
+			return 0, err
+		}
 	}
 
 	// write to disk cache

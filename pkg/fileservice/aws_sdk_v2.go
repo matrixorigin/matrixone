@@ -23,7 +23,9 @@ import (
 	"iter"
 	"math"
 	gotrace "runtime/trace"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -191,6 +193,7 @@ func NewAwsSDKv2(
 }
 
 var _ ObjectStorage = new(AwsSDKv2)
+var _ ParallelMultipartWriter = new(AwsSDKv2)
 
 func (a *AwsSDKv2) List(
 	ctx context.Context,
@@ -442,6 +445,253 @@ func (a *AwsSDKv2) Write(
 	}
 
 	return
+}
+
+func (a *AwsSDKv2) SupportsParallelMultipart() bool {
+	return true
+}
+
+func (a *AwsSDKv2) WriteMultipartParallel(
+	ctx context.Context,
+	key string,
+	r io.Reader,
+	sizeHint *int64,
+	opt *ParallelMultipartOption,
+) (err error) {
+	defer wrapSizeMismatchErr(&err)
+
+	options := normalizeParallelOption(opt)
+	if sizeHint != nil && *sizeHint < minMultipartPartSize {
+		return a.Write(ctx, key, r, sizeHint, options.Expire)
+	}
+	if sizeHint != nil {
+		expectedParts := (*sizeHint + options.PartSize - 1) / options.PartSize
+		if expectedParts > maxMultipartParts {
+			return moerr.NewInternalErrorNoCtxf("too many parts for multipart upload: %d", expectedParts)
+		}
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	bufPool := sync.Pool{
+		New: func() any {
+			return make([]byte, options.PartSize)
+		},
+	}
+
+	readChunk := func() (buf []byte, n int, err error) {
+		raw := bufPool.Get().([]byte)
+		n, err = io.ReadFull(r, raw)
+		switch {
+		case errors.Is(err, io.EOF):
+			bufPool.Put(raw)
+			return nil, 0, io.EOF
+		case errors.Is(err, io.ErrUnexpectedEOF):
+			err = io.EOF
+			return raw, n, err
+		case err != nil:
+			bufPool.Put(raw)
+			return nil, 0, err
+		default:
+			return raw, n, nil
+		}
+	}
+
+	firstBuf, firstN, err := readChunk()
+	if err != nil && !errors.Is(err, io.EOF) {
+		return err
+	}
+	if firstN == 0 && errors.Is(err, io.EOF) {
+		return nil
+	}
+	if errors.Is(err, io.EOF) && int64(firstN) < minMultipartPartSize {
+		data := make([]byte, firstN)
+		copy(data, firstBuf[:firstN])
+		bufPool.Put(firstBuf)
+		size := int64(firstN)
+		return a.Write(ctx, key, bytes.NewReader(data), &size, options.Expire)
+	}
+
+	output, createErr := DoWithRetry("create multipart upload", func() (*s3.CreateMultipartUploadOutput, error) {
+		return a.client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
+			Bucket:  ptrTo(a.bucket),
+			Key:     ptrTo(key),
+			Expires: options.Expire,
+		})
+	}, maxRetryAttemps, IsRetryableError)
+	if createErr != nil {
+		bufPool.Put(firstBuf)
+		return createErr
+	}
+
+	defer func() {
+		if err != nil {
+			_, abortErr := a.client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
+				Bucket:   ptrTo(a.bucket),
+				Key:      ptrTo(key),
+				UploadId: output.UploadId,
+			})
+			err = errors.Join(err, abortErr)
+		}
+	}()
+
+	type partJob struct {
+		num int32
+		buf []byte
+		n   int
+	}
+
+	var (
+		partNum   int32
+		parts     []types.CompletedPart
+		partsLock sync.Mutex
+		wg        sync.WaitGroup
+		errOnce   sync.Once
+		firstErr  error
+	)
+
+	setErr := func(e error) {
+		if e == nil {
+			return
+		}
+		errOnce.Do(func() {
+			firstErr = e
+			cancel()
+		})
+	}
+
+	jobCh := make(chan partJob, options.Concurrency*2)
+
+	startWorker := func() error {
+		wg.Add(1)
+		return getParallelUploadPool().Submit(func() {
+			defer wg.Done()
+			for job := range jobCh {
+				if ctx.Err() != nil {
+					bufPool.Put(job.buf)
+					continue
+				}
+				uploadOutput, uploadErr := DoWithRetry("upload part", func() (*s3.UploadPartOutput, error) {
+					return a.client.UploadPart(ctx, &s3.UploadPartInput{
+						Bucket:     ptrTo(a.bucket),
+						Key:        ptrTo(key),
+						PartNumber: &job.num,
+						UploadId:   output.UploadId,
+						Body:       bytes.NewReader(job.buf[:job.n]),
+					})
+				}, maxRetryAttemps, IsRetryableError)
+				if uploadErr != nil {
+					setErr(uploadErr)
+					bufPool.Put(job.buf)
+					continue
+				}
+				bufPool.Put(job.buf)
+				partsLock.Lock()
+				parts = append(parts, types.CompletedPart{
+					ETag:       uploadOutput.ETag,
+					PartNumber: ptrTo(job.num),
+				})
+				partsLock.Unlock()
+			}
+		})
+	}
+
+	for i := 0; i < options.Concurrency; i++ {
+		if submitErr := startWorker(); submitErr != nil {
+			setErr(submitErr)
+			break
+		}
+	}
+
+	sendJob := func(buf []byte, n int) bool {
+		partNum++
+		if partNum > maxMultipartParts {
+			setErr(moerr.NewInternalErrorNoCtxf("too many parts for multipart upload: %d", partNum))
+			bufPool.Put(buf)
+			return false
+		}
+		job := partJob{
+			num: partNum,
+			buf: buf,
+			n:   n,
+		}
+		select {
+		case jobCh <- job:
+			return true
+		case <-ctx.Done():
+			bufPool.Put(buf)
+			setErr(ctx.Err())
+			return false
+		}
+	}
+
+	if !sendJob(firstBuf, firstN) {
+		close(jobCh)
+		wg.Wait()
+		if firstErr != nil {
+			return firstErr
+		}
+		return ctx.Err()
+	}
+
+	for {
+		nextBuf, nextN, readErr := readChunk()
+		if errors.Is(readErr, io.EOF) && nextN == 0 {
+			break
+		}
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			setErr(readErr)
+			if nextBuf != nil {
+				bufPool.Put(nextBuf)
+			}
+			break
+		}
+		if nextN == 0 {
+			if nextBuf != nil {
+				bufPool.Put(nextBuf)
+			}
+			break
+		}
+		if !sendJob(nextBuf, nextN) {
+			break
+		}
+		if readErr != nil && errors.Is(readErr, io.EOF) {
+			break
+		}
+	}
+
+	close(jobCh)
+	wg.Wait()
+
+	if firstErr != nil {
+		err = firstErr
+		return err
+	}
+	if len(parts) == 0 {
+		return nil
+	}
+	if len(parts) != int(partNum) {
+		return moerr.NewInternalErrorNoCtxf("multipart upload incomplete, expect %d parts got %d", partNum, len(parts))
+	}
+
+	sort.Slice(parts, func(i, j int) bool {
+		return *parts[i].PartNumber < *parts[j].PartNumber
+	})
+
+	_, err = DoWithRetry("complete multipart upload", func() (*s3.CompleteMultipartUploadOutput, error) {
+		return a.client.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
+			Bucket:          ptrTo(a.bucket),
+			Key:             ptrTo(key),
+			UploadId:        output.UploadId,
+			MultipartUpload: &types.CompletedMultipartUpload{Parts: parts},
+		})
+	}, maxRetryAttemps, IsRetryableError)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (a *AwsSDKv2) Read(

@@ -25,7 +25,9 @@ import (
 	"net/url"
 	"os"
 	gotrace "runtime/trace"
+	"sort"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -125,6 +127,7 @@ func NewQCloudSDK(
 }
 
 var _ ObjectStorage = new(QCloudSDK)
+var _ ParallelMultipartWriter = new(QCloudSDK)
 
 func (a *QCloudSDK) List(
 	ctx context.Context,
@@ -278,6 +281,255 @@ func (a *QCloudSDK) Write(
 	}
 
 	return
+}
+
+func (a *QCloudSDK) SupportsParallelMultipart() bool {
+	return true
+}
+
+func (a *QCloudSDK) WriteMultipartParallel(
+	ctx context.Context,
+	key string,
+	r io.Reader,
+	sizeHint *int64,
+	opt *ParallelMultipartOption,
+) (err error) {
+	defer wrapSizeMismatchErr(&err)
+
+	options := normalizeParallelOption(opt)
+	if sizeHint != nil && *sizeHint < minMultipartPartSize {
+		return a.Write(ctx, key, r, sizeHint, options.Expire)
+	}
+	if sizeHint != nil {
+		expectedParts := (*sizeHint + options.PartSize - 1) / options.PartSize
+		if expectedParts > maxMultipartParts {
+			return moerr.NewInternalErrorNoCtxf("too many parts for multipart upload: %d", expectedParts)
+		}
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	bufPool := sync.Pool{
+		New: func() any {
+			return make([]byte, options.PartSize)
+		},
+	}
+
+	readChunk := func() (buf []byte, n int, err error) {
+		raw := bufPool.Get().([]byte)
+		n, err = io.ReadFull(r, raw)
+		switch {
+		case errors.Is(err, io.EOF):
+			bufPool.Put(raw)
+			return nil, 0, io.EOF
+		case errors.Is(err, io.ErrUnexpectedEOF):
+			err = io.EOF
+			return raw, n, err
+		case err != nil:
+			bufPool.Put(raw)
+			return nil, 0, err
+		default:
+			return raw, n, nil
+		}
+	}
+
+	firstBuf, firstN, err := readChunk()
+	if err != nil && !errors.Is(err, io.EOF) {
+		return err
+	}
+	if firstN == 0 && errors.Is(err, io.EOF) {
+		return nil
+	}
+	if errors.Is(err, io.EOF) && int64(firstN) < minMultipartPartSize {
+		data := make([]byte, firstN)
+		copy(data, firstBuf[:firstN])
+		bufPool.Put(firstBuf)
+		size := int64(firstN)
+		return a.Write(ctx, key, bytes.NewReader(data), &size, options.Expire)
+	}
+
+	var expiresHeader string
+	if options.Expire != nil {
+		expiresHeader = options.Expire.UTC().Format(http.TimeFormat)
+	}
+
+	initOpt := &cos.InitiateMultipartUploadOptions{
+		ObjectPutHeaderOptions: &cos.ObjectPutHeaderOptions{
+			Expires: expiresHeader,
+		},
+	}
+	output, createErr := DoWithRetry("cos initiate multipart upload", func() (*cos.InitiateMultipartUploadResult, error) {
+		res, _, e := a.client.Object.InitiateMultipartUpload(ctx, key, initOpt)
+		return res, e
+	}, maxRetryAttemps, IsRetryableError)
+	if createErr != nil {
+		bufPool.Put(firstBuf)
+		return createErr
+	}
+
+	defer func() {
+		if err != nil {
+			_, _ = a.client.Object.AbortMultipartUpload(ctx, key, output.UploadID)
+		}
+	}()
+
+	type partJob struct {
+		num int32
+		buf []byte
+		n   int
+	}
+
+	var (
+		partNum   int32
+		parts     []cos.Object
+		partsLock sync.Mutex
+		wg        sync.WaitGroup
+		errOnce   sync.Once
+		firstErr  error
+	)
+
+	setErr := func(e error) {
+		if e == nil {
+			return
+		}
+		errOnce.Do(func() {
+			firstErr = e
+			cancel()
+		})
+	}
+
+	jobCh := make(chan partJob, options.Concurrency*2)
+
+	startWorker := func() error {
+		wg.Add(1)
+		return getParallelUploadPool().Submit(func() {
+			defer wg.Done()
+			for job := range jobCh {
+				if ctx.Err() != nil {
+					bufPool.Put(job.buf)
+					continue
+				}
+				uploadOpt := &cos.ObjectUploadPartOptions{
+					ContentLength: int64(job.n),
+				}
+				resp, uploadErr := DoWithRetry("cos upload part", func() (*cos.Response, error) {
+					return a.client.Object.UploadPart(ctx, key, output.UploadID, int(job.num), bytes.NewReader(job.buf[:job.n]), uploadOpt)
+				}, maxRetryAttemps, IsRetryableError)
+				if uploadErr != nil {
+					setErr(uploadErr)
+					bufPool.Put(job.buf)
+					continue
+				}
+				etag := ""
+				if resp != nil && resp.Header != nil {
+					etag = resp.Header.Get("ETag")
+				}
+				bufPool.Put(job.buf)
+				partsLock.Lock()
+				parts = append(parts, cos.Object{
+					PartNumber: int(job.num),
+					ETag:       etag,
+				})
+				partsLock.Unlock()
+			}
+		})
+	}
+
+	for i := 0; i < options.Concurrency; i++ {
+		if submitErr := startWorker(); submitErr != nil {
+			setErr(submitErr)
+			break
+		}
+	}
+
+	sendJob := func(buf []byte, n int) bool {
+		partNum++
+		if partNum > maxMultipartParts {
+			setErr(moerr.NewInternalErrorNoCtxf("too many parts for multipart upload: %d", partNum))
+			bufPool.Put(buf)
+			return false
+		}
+		job := partJob{
+			num: partNum,
+			buf: buf,
+			n:   n,
+		}
+		select {
+		case jobCh <- job:
+			return true
+		case <-ctx.Done():
+			bufPool.Put(buf)
+			setErr(ctx.Err())
+			return false
+		}
+	}
+
+	if !sendJob(firstBuf, firstN) {
+		close(jobCh)
+		wg.Wait()
+		if firstErr != nil {
+			return firstErr
+		}
+		return ctx.Err()
+	}
+
+	for {
+		nextBuf, nextN, readErr := readChunk()
+		if errors.Is(readErr, io.EOF) && nextN == 0 {
+			break
+		}
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			setErr(readErr)
+			if nextBuf != nil {
+				bufPool.Put(nextBuf)
+			}
+			break
+		}
+		if nextN == 0 {
+			if nextBuf != nil {
+				bufPool.Put(nextBuf)
+			}
+			break
+		}
+		if !sendJob(nextBuf, nextN) {
+			break
+		}
+		if readErr != nil && errors.Is(readErr, io.EOF) {
+			break
+		}
+	}
+
+	close(jobCh)
+	wg.Wait()
+
+	if firstErr != nil {
+		err = firstErr
+		return err
+	}
+	if len(parts) == 0 {
+		return nil
+	}
+	if len(parts) != int(partNum) {
+		return moerr.NewInternalErrorNoCtxf("multipart upload incomplete, expect %d parts got %d", partNum, len(parts))
+	}
+
+	sort.Slice(parts, func(i, j int) bool {
+		return parts[i].PartNumber < parts[j].PartNumber
+	})
+
+	completeOpt := &cos.CompleteMultipartUploadOptions{
+		Parts: parts,
+	}
+	_, err = DoWithRetry("cos complete multipart upload", func() (*cos.CompleteMultipartUploadResult, error) {
+		res, _, e := a.client.Object.CompleteMultipartUpload(ctx, key, output.UploadID, completeOpt)
+		return res, e
+	}, maxRetryAttemps, IsRetryableError)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (a *QCloudSDK) Read(

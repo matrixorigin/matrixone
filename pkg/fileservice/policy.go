@@ -22,6 +22,8 @@ const (
 	SkipDiskCacheReads
 	SkipDiskCacheWrites
 	SkipFullFilePreloads
+	DisableParallelWrite
+	ForceParallelWrite
 )
 
 const (
