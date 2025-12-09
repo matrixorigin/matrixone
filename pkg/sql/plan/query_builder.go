@@ -461,8 +461,10 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			increaseRefCnt(orderBy.Expr, 1, colRefCnt)
 		}
 
-		for _, blockOrderBy := range node.BlockOrderBy {
-			increaseRefCnt(blockOrderBy.Expr, 1, colRefCnt)
+		if node.IndexReaderParam != nil {
+			for _, orderBy := range node.IndexReaderParam.OrderBy {
+				increaseRefCnt(orderBy.Expr, 1, colRefCnt)
+			}
 		}
 
 		internalRemapping := &ColRefRemapping{
@@ -548,13 +550,15 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			}
 		}
 
-		remapInfo.tip = "BlockOrderBy"
-		for idx, blockOrderBy := range node.BlockOrderBy {
-			increaseRefCnt(blockOrderBy.Expr, -1, colRefCnt)
-			remapInfo.srcExprIdx = idx
-			err := builder.remapColRefForExpr(blockOrderBy.Expr, colMap, &remapInfo)
-			if err != nil {
-				return nil, err
+		remapInfo.tip = "IndexOrderBy"
+		if node.IndexReaderParam != nil {
+			for idx, orderBy := range node.IndexReaderParam.OrderBy {
+				increaseRefCnt(orderBy.Expr, -1, colRefCnt)
+				remapInfo.srcExprIdx = idx
+				err := builder.remapColRefForExpr(orderBy.Expr, colMap, &remapInfo)
+				if err != nil {
+					return nil, err
+				}
 			}
 		}
 
@@ -584,7 +588,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				remapping.addColRef([2]int32{orderFuncTag, 0})
 
 				node.ProjectList = append(node.ProjectList, &plan.Expr{
-					Typ: node.BlockOrderBy[0].Expr.Typ,
+					Typ: node.IndexReaderParam.OrderBy[0].Expr.Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: 0,

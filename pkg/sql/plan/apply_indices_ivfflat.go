@@ -123,6 +123,82 @@ func (builder *QueryBuilder) prepareIvfIndexContext(vecCtx *vectorSortContext, m
 	}, nil
 }
 
+func (builder *QueryBuilder) getDistRangeFromFilters(filters []*plan.Expr, ivfCtx *ivfIndexContext) ([]*plan.Expr, *plan.DistRange) {
+	var distRange *plan.DistRange
+
+	currIdx := 0
+	for _, filter := range filters {
+		var (
+			vecLit string
+			fdist  *plan.Function
+		)
+
+		f := filter.GetF()
+		if f == nil || len(f.Args) != 2 {
+			goto NO_RANGE
+		}
+
+		fdist = f.Args[0].GetF()
+		if fdist == nil || len(fdist.Args) != 2 {
+			goto NO_RANGE
+		}
+
+		if partCol := fdist.Args[0].GetCol(); partCol == nil || partCol.ColPos != ivfCtx.partPos {
+			goto NO_RANGE
+		}
+
+		if fdist.Func.ObjName != ivfCtx.origFuncName {
+			goto NO_RANGE
+		}
+
+		vecLit = fdist.Args[1].GetLit().GetVecVal()
+		if vecLit == "" || vecLit != ivfCtx.vecLitArg.GetLit().GetVecVal() {
+			goto NO_RANGE
+		}
+
+		switch f.Func.ObjName {
+		case "<":
+			if distRange == nil {
+				distRange = &plan.DistRange{}
+			}
+			distRange.UpperBoundType = plan.BoundType_EXCLUSIVE
+			distRange.UpperBound = f.Args[1]
+
+		case "<=":
+			if distRange == nil {
+				distRange = &plan.DistRange{}
+			}
+			distRange.UpperBoundType = plan.BoundType_INCLUSIVE
+			distRange.UpperBound = f.Args[1]
+
+		case ">":
+			if distRange == nil {
+				distRange = &plan.DistRange{}
+			}
+			distRange.LowerBoundType = plan.BoundType_EXCLUSIVE
+			distRange.LowerBound = f.Args[1]
+
+		case ">=":
+			if distRange == nil {
+				distRange = &plan.DistRange{}
+			}
+			distRange.LowerBoundType = plan.BoundType_INCLUSIVE
+			distRange.LowerBound = f.Args[1]
+
+		default:
+			goto NO_RANGE
+		}
+
+		continue
+
+	NO_RANGE:
+		filters[currIdx] = filter
+		currIdx++
+	}
+
+	return filters[:currIdx], distRange
+}
+
 func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
 
 	if vecCtx == nil || vecCtx.sortNode == nil || vecCtx.scanNode == nil {
@@ -143,7 +219,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		return nodeID, err
 	}
 
-	tblCfgStr := fmt.Sprintf(`{"db": "%s", "src": "%s", "metadata":"%s", "index":"%s", "threads_search": %d,
+	tableConfigStr := fmt.Sprintf(`{"db": "%s", "src": "%s", "metadata":"%s", "index":"%s", "threads_search": %d,
 			"entries": "%s", "nprobe" : %d, "pktype" : %d, "pkey" : "%s", "part" : "%s", "parttype" : %d, "orig_func_name": "%s"}`,
 		scanNode.ObjRef.SchemaName,
 		scanNode.TableDef.Name,
@@ -181,7 +257,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 				Expr: &plan.Expr_Lit{
 					Lit: &plan.Literal{
 						Value: &plan.Literal_Sval{
-							Sval: tblCfgStr,
+							Sval: tableConfigStr,
 						},
 					},
 				},
@@ -199,9 +275,13 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 	// change doc_id type to the primary type here
 	tableFuncNode.TableDef.Cols[0].Typ = ivfCtx.pkType
 
+	newFilterList, distRange := builder.getDistRangeFromFilters(scanNode.FilterList, ivfCtx)
+	scanNode.FilterList = newFilterList
+
 	// pushdown limit to Table Function
 	// When there are filters, over-fetch to get more candidates
 	// This ensures we have enough candidates after filtering
+	limitExpr := DeepCopyExpr(limit)
 	if len(scanNode.FilterList) > 0 {
 		// Over-fetch strategy: dynamically adjust factor based on limit size
 		// Smaller limits need more over-fetching due to higher variance
@@ -212,7 +292,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 			overFetchFactor := calculatePostFilterOverFetchFactor(originalLimit)
 
 			newLimit := max(uint64(float64(originalLimit)*overFetchFactor), originalLimit+10)
-			tableFuncNode.Limit = &Expr{
+			limitExpr = &Expr{
 				Typ: limit.Typ,
 				Expr: &plan.Expr_Lit{
 					Lit: &plan.Literal{
@@ -223,13 +303,13 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 					},
 				},
 			}
-		} else {
-			// If limit is not a constant, just copy it
-			tableFuncNode.Limit = DeepCopyExpr(limit)
 		}
-	} else {
-		// No filters, use original limit
-		tableFuncNode.Limit = DeepCopyExpr(limit)
+	}
+
+	tableFuncNode.IndexReaderParam = &plan.IndexReaderParam{
+		Limit:        limitExpr,
+		OrigFuncName: ivfCtx.origFuncName,
+		DistRange:    distRange,
 	}
 
 	// Determine join structure based on rankOption.mode:
