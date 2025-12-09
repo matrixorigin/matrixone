@@ -16,27 +16,63 @@ This guide provides comprehensive instructions for developers working with Matri
 
 ## Quick Start
 
-### Start Multi-CN Cluster (Recommended for Development)
+### Option 1: Multi-CN Cluster (Recommended for Development)
 
+**Basic Setup:**
 ```bash
 # Build and start local multi-CN cluster
 make dev-build && make dev-up
 
 # Connect via proxy (load balanced across CNs)
 mysql -h 127.0.0.1 -P 6001 -u root -p111
-
-# Or connect directly to CN1
-mysql -h 127.0.0.1 -P 16001 -u root -p111
 ```
 
-### Start with Monitoring Dashboard
-
+**With Monitoring:**
 ```bash
-# Start cluster with Grafana monitoring
+# Build and start
+make dev-build && make dev-up
+
+# Enable metrics (edit configs - see Multi-CN Workflow section)
+make dev-edit-cn1  # Enable metrics in each service config
+make dev-restart
+
+# Start monitoring
 make dev-up-grafana
+make dev-check-grafana              # Wait until ready
+make dev-create-dashboard-cluster   # Create dashboards
 
 # Access Grafana at http://localhost:3000 (admin/admin)
-# Note: Wait 2-3 minutes after first startup for Grafana to initialize
+```
+
+### Option 2: Standalone MatrixOne
+
+**Basic Setup:**
+```bash
+# Build and launch standalone MatrixOne
+make build
+./mo-service -launch ./etc/launch/launch.toml
+
+# Connect
+mysql -h 127.0.0.1 -P 6001 -u root -p111
+```
+
+**With Monitoring:**
+```bash
+# Build
+make build
+
+# Enable metrics (edit etc/launch/cn.toml, tn.toml, log.toml)
+# Set: disableMetric = false, enable-metric-to-prom = true, status-port = 7001
+
+# Launch
+./mo-service -launch ./etc/launch/launch.toml
+
+# Start monitoring
+make dev-up-grafana-local
+make dev-check-grafana              # Wait until ready
+make dev-create-dashboard-local     # Create dashboards
+
+# Access Grafana at http://localhost:3001 (admin/admin)
 ```
 
 ### View All Available Commands
@@ -44,6 +80,10 @@ make dev-up-grafana
 ```bash
 make dev-help
 ```
+
+**For detailed workflows, see:**
+- [Standalone MatrixOne Setup](#standalone-matrixone-setup) - Complete standalone workflow
+- [Multi-CN Cluster Setup](#multi-cn-cluster-setup-docker-compose) - Complete multi-CN workflow
 
 ---
 
@@ -85,6 +125,7 @@ make dev-help
 |---------|-------------|
 | `make dev-up-grafana` | Start cluster with Grafana monitoring (port 3000) |
 | `make dev-up-grafana-local` | Start Grafana dashboard for local MatrixOne (port 3001) |
+| `make dev-check-grafana` | Check if Grafana services are ready (ports 3000, 3001) |
 | `make dev-restart-grafana` | Restart Grafana and Prometheus (cluster mode) |
 | `make dev-restart-grafana-local` | Restart Grafana and Prometheus (local mode) |
 | `make dev-down-grafana-local` | Stop and remove local monitoring services |
@@ -169,46 +210,73 @@ For development and testing, you can run MatrixOne in standalone mode (single pr
 - GCC/Clang compiler
 - Make
 
-### Build from Source
+### Complete Standalone Workflow
+
+Here's the complete workflow for building, launching, and monitoring standalone MatrixOne:
+
+#### Step 1: Build MatrixOne
 
 ```bash
 # Build mo-service binary
 make build
 
-# Or build with race detector and debug symbols
+# Or build with race detector and debug symbols (for debugging)
 make debug
 ```
 
-### Start Standalone MatrixOne
+**Output:** The `mo-service` binary will be created in the project root directory.
+
+#### Step 2: Launch MatrixOne
 
 ```bash
-# Start with default configuration
+# Start with default configuration (recommended - launches all services)
 ./mo-service -launch ./etc/launch/launch.toml
+```
 
-# Or start individual services manually:
-# 1. Start Log service (contains HAKeeper)
+**Alternative: Manual Service Startup**
+
+If you prefer to start services individually (useful for debugging):
+
+```bash
+# Terminal 1: Start Log service (contains HAKeeper)
 ./mo-service -cfg ./etc/launch/log.toml
 
-# 2. Start TN (Transaction Node)
+# Terminal 2: Start TN (Transaction Node)
 ./mo-service -cfg ./etc/launch/tn.toml
 
-# 3. Start CN (Compute Node)
+# Terminal 3: Start CN (Compute Node)
 ./mo-service -cfg ./etc/launch/cn.toml
 ```
 
-### Connect to Standalone MatrixOne
+**Note:** When using `launch.toml`, all services start in a single process. The manual approach requires three separate terminals.
+
+#### Step 3: Connect to MatrixOne
 
 ```bash
 # Default connection (if using launch.toml)
 mysql -h 127.0.0.1 -P 6001 -u root -p111
 
-# Or if connecting directly to CN
+# Or if connecting directly to CN (when started manually)
 mysql -h 127.0.0.1 -P 18001 -u root -p111
 ```
 
-### Enable Metrics in Standalone Mode
+#### Step 4: Enable Metrics (Optional but Recommended)
 
-Edit the configuration files (`etc/launch/cn.toml`, `etc/launch/tn.toml`, `etc/launch/log.toml`) and ensure:
+To enable metrics collection, edit the configuration files:
+
+**For launch.toml mode:**
+```bash
+# Edit CN configuration
+vim ./etc/launch/cn.toml
+
+# Edit TN configuration
+vim ./etc/launch/tn.toml
+
+# Edit Log service configuration
+vim ./etc/launch/log.toml
+```
+
+In each file, ensure the following section is present and configured:
 
 ```toml
 [observability]
@@ -217,31 +285,97 @@ enable-metric-to-prom = true
 status-port = 7001
 ```
 
-Then restart the services.
+**Then restart MatrixOne:**
+```bash
+# Stop current instance (Ctrl+C)
+# Restart with updated configuration
+./mo-service -launch ./etc/launch/launch.toml
+```
 
-### View Metrics for Standalone MatrixOne
+#### Step 5: Start Metrics Monitoring (Grafana Dashboard)
 
-After enabling metrics, you can:
+After enabling metrics, start the Grafana dashboard:
 
-1. **Use Grafana Dashboard (Recommended)**
-   ```bash
-   # Start Grafana dashboard for local MatrixOne
-   make dev-up-grafana-local
-   
-   # Access at http://localhost:3001 (admin/admin)
-   ```
+```bash
+# Start Grafana dashboard for local standalone MatrixOne
+make dev-up-grafana-local
 
-2. **Query Prometheus Directly** (if exposed)
-   ```bash
-   # If Prometheus port is uncommented in docker-compose.yml
-   curl http://localhost:9091/api/v1/query?query=mo_sql_statement_total
-   ```
+# Wait for Grafana to initialize (2-3 minutes on first startup)
+# Check if ready:
+make dev-check-grafana
 
-3. **Check Status Endpoint**
-   ```bash
-   # Query metrics directly from MatrixOne
-   curl http://localhost:7001/metrics
-   ```
+# Access Grafana at http://localhost:3001
+# Username: admin
+# Password: admin
+```
+
+**Create Dashboards:**
+
+After Grafana is ready, create the MatrixOne dashboards:
+
+```bash
+# Create dashboards for standalone MatrixOne
+make dev-create-dashboard-local
+
+# Or with custom options:
+DASHBOARD_PORT=3001 make dev-create-dashboard
+```
+
+**Verify Metrics:**
+
+You can verify metrics are working:
+
+```bash
+# Check metrics endpoint directly
+curl http://localhost:7001/metrics
+
+# Or query Prometheus (if port exposed)
+curl http://localhost:9091/api/v1/query?query=mo_sql_statement_total
+```
+
+### Standalone Workflow Summary
+
+**Quick Start (Without Metrics):**
+```bash
+make build                                    # Build binary
+./mo-service -launch ./etc/launch/launch.toml  # Launch MatrixOne
+mysql -h 127.0.0.1 -P 6001 -u root -p111      # Connect
+```
+
+**Complete Workflow (With Metrics):**
+```bash
+# 1. Build
+make build
+
+# 2. Enable metrics in config files (edit cn.toml, tn.toml, log.toml)
+#    Set: disableMetric = false, enable-metric-to-prom = true, status-port = 7001
+
+# 3. Launch
+./mo-service -launch ./etc/launch/launch.toml
+
+# 4. Start monitoring
+make dev-up-grafana-local
+make dev-check-grafana                        # Wait until ready
+make dev-create-dashboard-local               # Create dashboards
+
+# 5. Connect and use
+mysql -h 127.0.0.1 -P 6001 -u root -p111
+
+# 6. Access Grafana at http://localhost:3001 (admin/admin)
+```
+
+### Build Options
+
+```bash
+# Standard build
+make build
+
+# Build with race detector and debug symbols
+make debug
+
+# Clean build artifacts
+make clean
+```
 
 ---
 
@@ -290,6 +424,189 @@ The multi-CN setup provides a complete distributed cluster with:
 | CN1 | mo-cn1 | 16001 | Compute Node 1 |
 | CN2 | mo-cn2 | 16002 | Compute Node 2 |
 | Proxy | mo-proxy | 6001 | Load balancer proxy |
+
+### Complete Multi-CN Workflow
+
+Here's the complete workflow for building, launching, and monitoring a multi-CN cluster:
+
+#### Step 1: Build Docker Image
+
+```bash
+# Build MatrixOne Docker image with 'local' tag
+make dev-build
+```
+
+**Note:** This builds the image from source code. Build time: ~10-15 minutes depending on network and CPU.
+
+**Alternative: Use Official Images**
+```bash
+# Skip build and use official latest image
+make dev-up-latest
+
+# Or use nightly build
+make dev-up-nightly
+```
+
+#### Step 2: Start Multi-CN Cluster
+
+```bash
+# Start cluster with local image
+make dev-up
+```
+
+**What happens:**
+- Starts 2 CN nodes (mo-cn1, mo-cn2)
+- Starts TN (Transaction Node)
+- Starts Log service (HAKeeper)
+- Starts Proxy (load balancer on port 6001)
+- Auto-generates configuration files if not present
+
+**Note:** On first startup, default TOML configuration files will be automatically generated. These files are not tracked by git to prevent accidental commits of your local configurations.
+
+#### Step 3: Connect to Cluster
+
+```bash
+# Connect via proxy (load balanced across CNs)
+mysql -h 127.0.0.1 -P 6001 -u root -p111
+
+# Or connect directly to CN1
+mysql -h 127.0.0.1 -P 16001 -u root -p111
+
+# Or connect directly to CN2
+mysql -h 127.0.0.1 -P 16002 -u root -p111
+```
+
+#### Step 4: Enable Metrics (Optional but Recommended)
+
+Metrics are **disabled by default**. To enable:
+
+**Method 1: Interactive Configuration (Recommended)**
+```bash
+# Edit CN1 configuration
+make dev-edit-cn1
+
+# In the editor, find and uncomment:
+# [observability]
+# disableMetric = false
+# enable-metric-to-prom = true
+# status-port = 7001
+
+# Save and repeat for other services
+make dev-edit-cn2
+make dev-edit-tn
+make dev-edit-log
+make dev-edit-proxy
+
+# Restart services to apply changes
+make dev-restart
+```
+
+**Method 2: Manual Configuration**
+```bash
+# Edit configuration files directly
+vim etc/docker-multi-cn-local-disk/cn1.toml
+vim etc/docker-multi-cn-local-disk/cn2.toml
+vim etc/docker-multi-cn-local-disk/tn.toml
+vim etc/docker-multi-cn-local-disk/log.toml
+vim etc/docker-multi-cn-local-disk/proxy.toml
+
+# Add or uncomment in each file:
+# [observability]
+# disableMetric = false
+# enable-metric-to-prom = true
+# status-port = 7001
+
+# Restart services
+make dev-restart
+```
+
+#### Step 5: Start Metrics Monitoring (Grafana Dashboard)
+
+After enabling metrics, start the Grafana monitoring dashboard:
+
+```bash
+# Start cluster with Grafana monitoring
+make dev-up-grafana
+
+# Wait for Grafana to initialize (2-3 minutes on first startup)
+# Check if ready:
+make dev-check-grafana
+
+# Access Grafana at http://localhost:3000
+# Username: admin
+# Password: admin
+```
+
+**Create Dashboards:**
+
+After Grafana is ready, create the MatrixOne dashboards:
+
+```bash
+# Create dashboards for multi-CN cluster
+make dev-create-dashboard-cluster
+
+# Or with custom options:
+DASHBOARD_MODE=cloud DASHBOARD_PORT=3000 make dev-create-dashboard
+```
+
+**Verify Metrics:**
+
+```bash
+# Check metrics from a service
+docker exec mo-cn1 curl http://localhost:7001/metrics
+
+# Or query Prometheus (if port exposed)
+curl http://localhost:9090/api/v1/query?query=mo_sql_statement_total
+```
+
+### Multi-CN Workflow Summary
+
+**Quick Start (Without Metrics):**
+```bash
+make dev-build                              # Build Docker image
+make dev-up                                 # Start cluster
+mysql -h 127.0.0.1 -P 6001 -u root -p111   # Connect
+```
+
+**Complete Workflow (With Metrics):**
+```bash
+# 1. Build
+make dev-build
+
+# 2. Start cluster
+make dev-up
+
+# 3. Enable metrics (edit configs or use interactive editor)
+make dev-edit-cn1    # Edit and enable metrics
+make dev-edit-cn2    # Edit and enable metrics
+make dev-edit-tn     # Edit and enable metrics
+make dev-edit-log    # Edit and enable metrics
+make dev-edit-proxy  # Edit and enable metrics
+
+# 4. Restart to apply metrics configuration
+make dev-restart
+
+# 5. Start monitoring
+make dev-up-grafana
+make dev-check-grafana                      # Wait until ready
+make dev-create-dashboard-cluster           # Create dashboards
+
+# 6. Connect and use
+mysql -h 127.0.0.1 -P 6001 -u root -p111
+
+# 7. Access Grafana at http://localhost:3000 (admin/admin)
+```
+
+**Using Official Images (Skip Build):**
+```bash
+# Start with latest official image
+make dev-up-latest
+
+# Or with nightly build
+make dev-up-nightly
+
+# Then follow steps 3-7 above for metrics
+```
 
 ### Quick Start
 
@@ -590,7 +907,14 @@ make dev-up-grafana
 # Password: admin
 ```
 
-**Important:** On first startup, Grafana needs a few minutes to initialize its database and services. Wait 2-3 minutes after starting before creating dashboards. You can check if Grafana is ready by accessing http://localhost:3000 - if the login page loads, Grafana is ready.
+**Important:** On first startup, Grafana needs a few minutes to initialize its database and services. You can check if Grafana is ready using:
+
+```bash
+# Check Grafana service status (recommended)
+make dev-check-grafana
+```
+
+This command checks both ports 3000 (cluster) and 3001 (local) and verifies that Grafana is responding to HTTP requests. Alternatively, you can manually check by accessing http://localhost:3000 - if the login page loads, Grafana is ready.
 
 **What's included:**
 - Prometheus: Collects metrics from all MatrixOne services
@@ -615,7 +939,14 @@ make dev-up-grafana-local
 # Password: admin
 ```
 
-**Important:** On first startup, Grafana needs a few minutes to initialize its database and services. Wait 2-3 minutes after starting before creating dashboards. You can check if Grafana is ready by accessing http://localhost:3001 - if the login page loads, Grafana is ready.
+**Important:** On first startup, Grafana needs a few minutes to initialize its database and services. You can check if Grafana is ready using:
+
+```bash
+# Check Grafana service status (recommended)
+make dev-check-grafana
+```
+
+This command checks both ports 3000 (cluster) and 3001 (local) and verifies that Grafana is responding to HTTP requests. Alternatively, you can manually check by accessing http://localhost:3001 - if the login page loads, Grafana is ready.
 
 **What's included:**
 - Prometheus: Collects metrics from local MatrixOne services
@@ -630,7 +961,17 @@ make dev-up-grafana-local
 
 ### Creating Dashboards
 
-**Important:** Wait 2-3 minutes after starting Grafana before creating dashboards. Grafana needs time to initialize its database and services on first startup. You can verify Grafana is ready by accessing the web UI - if the login page loads, it's ready.
+**Important:** Wait for Grafana to be ready before creating dashboards. Grafana needs time to initialize its database and services on first startup (typically 2-3 minutes). 
+
+**Check if Grafana is ready:**
+```bash
+# Recommended: Use the check command
+make dev-check-grafana
+
+# Or manually: Access the web UI - if the login page loads, it's ready
+# Cluster: http://localhost:3000
+# Local:   http://localhost:3001
+```
 
 After Grafana is ready, you need to create the dashboards. MatrixOne provides a convenient make command:
 

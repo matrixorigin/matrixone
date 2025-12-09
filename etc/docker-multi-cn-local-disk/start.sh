@@ -12,6 +12,7 @@ cd "$SCRIPT_DIR"
 IMAGE_VERSION="local"
 EXTRA_MOUNTS=""
 SHOW_HELP=false
+CHECK_GRAFANA=false
 
 # Parse custom arguments
 DOCKER_COMPOSE_ARGS=()
@@ -27,6 +28,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         -h|--help)
             SHOW_HELP=true
+            shift
+            ;;
+        check-grafana|--check-grafana)
+            CHECK_GRAFANA=true
             shift
             ;;
         *)
@@ -75,6 +80,9 @@ Examples:
   ./start.sh down
   ./start.sh restart
 
+  # Check Grafana service status
+  ./start.sh check-grafana        # Check if Grafana is ready (ports 3000 and 3001)
+
 Environment Variables:
   DOCKER_UID              Automatically set to $(id -u)
   DOCKER_GID              Automatically set to $(id -g)
@@ -84,6 +92,115 @@ Environment Variables:
 
 EOF
     exit 0
+fi
+
+# Function to check if a port is listening and responding
+check_port() {
+    local port=$1
+    local name=$2
+    local url=$3
+    
+    # Check if port is listening
+    if command -v nc >/dev/null 2>&1; then
+        if ! nc -z localhost "$port" 2>/dev/null; then
+            echo "  ✗ $name (port $port): Not listening"
+            return 1
+        fi
+    elif command -v ss >/dev/null 2>&1; then
+        if ! ss -lnt | grep -q ":$port "; then
+            echo "  ✗ $name (port $port): Not listening"
+            return 1
+        fi
+    fi
+    
+    # Try to connect via HTTP/HTTPS
+    if [ -n "$url" ]; then
+        if command -v curl >/dev/null 2>&1; then
+            if curl -sf --max-time 2 "$url" >/dev/null 2>&1; then
+                echo "  ✓ $name (port $port): Ready and responding"
+                return 0
+            else
+                echo "  ⏳ $name (port $port): Listening but not ready yet"
+                return 1
+            fi
+        elif command -v wget >/dev/null 2>&1; then
+            if wget -q --spider --timeout=2 "$url" 2>/dev/null; then
+                echo "  ✓ $name (port $port): Ready and responding"
+                return 0
+            else
+                echo "  ⏳ $name (port $port): Listening but not ready yet"
+                return 1
+            fi
+        else
+            echo "  ? $name (port $port): Listening (cannot verify HTTP response)"
+            return 0
+        fi
+    else
+        echo "  ✓ $name (port $port): Listening"
+        return 0
+    fi
+}
+
+# Function to check Grafana services
+check_grafana_services() {
+    echo "Checking Grafana services..."
+    echo ""
+    
+    local all_ready=true
+    
+    # Check if containers are running
+    local grafana_running=false
+    local grafana_local_running=false
+    
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^mo-grafana$'; then
+        grafana_running=true
+    fi
+    
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^mo-grafana-local$'; then
+        grafana_local_running=true
+    fi
+    
+    # Check Grafana (cluster monitoring) on port 3000
+    if [ "$grafana_running" = false ]; then
+        echo "  ⚠ Grafana (Cluster) (port 3000): Container not running"
+        echo "    Start with: make dev-up-grafana"
+        all_ready=false
+    elif check_port 3000 "Grafana (Cluster)" "http://localhost:3000/api/health"; then
+        echo "    URL: http://localhost:3000 (admin/admin)"
+    else
+        all_ready=false
+    fi
+    echo ""
+    
+    # Check Grafana Local on port 3001
+    if [ "$grafana_local_running" = false ]; then
+        echo "  ⚠ Grafana (Local) (port 3001): Container not running"
+        echo "    Start with: make dev-up-grafana-local"
+        all_ready=false
+    elif check_port 3001 "Grafana (Local)" "http://localhost:3001/api/health"; then
+        echo "    URL: http://localhost:3001 (admin/admin)"
+    else
+        all_ready=false
+    fi
+    echo ""
+    
+    if [ "$all_ready" = true ]; then
+        echo "✓ All Grafana services are ready!"
+        return 0
+    else
+        echo "⚠ Some Grafana services are not ready yet."
+        if [ "$grafana_running" = true ] || [ "$grafana_local_running" = true ]; then
+            echo "  Grafana may take a while to start, especially on first run."
+            echo "  Keep checking with: make dev-check-grafana"
+        fi
+        return 1
+    fi
+}
+
+# Handle check-grafana command
+if [ "$CHECK_GRAFANA" = true ]; then
+    check_grafana_services
+    exit $?
 fi
 
 # Auto-detect current user's UID and GID

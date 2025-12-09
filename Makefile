@@ -324,7 +324,6 @@ DEV_MOUNT ?=
 dev-help:
 	@echo "Local Multi-CN Development Environment Commands:"
 	@echo "  make dev-build          - Build MatrixOne docker image (forces rebuild, no cache)"
-	@echo "  make dev-build-fast     - Build MatrixOne docker image (uses cache if available)"
 	@echo "  make dev-up             - Start multi-CN cluster with local image"
 	@echo "  make dev-up-latest      - Start multi-CN cluster with latest official image"
 	@echo "  make dev-up-test        - Start with test directory mounted"
@@ -341,12 +340,14 @@ dev-help:
 	@echo "  make dev-restart-grafana-local - Restart local Grafana (and Prometheus)"
 	@echo "  make dev-down-grafana-local - Stop and remove local Grafana (and Prometheus)"
 	@echo "  make dev-ps             - Show service status"
+	@echo "  make dev-check-grafana - Check if Grafana services are ready (ports 3000, 3001)"
 	@echo "  make dev-logs           - Show all logs (tail -f)"
 	@echo "  make dev-logs-cn1       - Show CN1 logs"
 	@echo "  make dev-logs-cn2       - Show CN2 logs"
 	@echo "  make dev-logs-proxy     - Show proxy logs"
 	@echo "  make dev-logs-grafana - Show Grafana logs"
 	@echo "  make dev-logs-grafana-local - Show local Grafana logs"
+	@echo "  make dev-check-grafana - Check if Grafana services are ready (ports 3000, 3001)"
 	@echo "  make dev-clean          - Stop and remove all data (WARNING: destructive!)"
 	@echo "  make dev-cleanup        - Interactive cleanup (stops containers, removes data directories)"
 	@echo "  make dev-config         - Generate config from config.env"
@@ -629,6 +630,10 @@ dev-logs-grafana:
 .PHONY: dev-logs-grafana-local
 dev-logs-grafana-local:
 	@cd $(DEV_DIR) && docker compose --profile prometheus-local logs -f grafana-local
+
+.PHONY: dev-check-grafana
+dev-check-grafana:
+	@cd $(DEV_DIR) && ./start.sh check-grafana
 
 .PHONY: dev-setup-docker-mirror
 dev-setup-docker-mirror:
