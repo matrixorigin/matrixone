@@ -545,3 +545,66 @@ func Test_AngularDistance(t *testing.T) {
 		})
 	}
 }
+
+func Test_AngularDistance32(t *testing.T) {
+	type args struct {
+		v1 []float32
+		v2 []float32
+	}
+	tests := []struct {
+		name string
+		args args
+		want float64
+	}{
+		{
+			name: "Test 1",
+			args: args{
+				v1: []float32{1, 2, 3, 4},
+				v2: []float32{1, 2, 4, 5},
+			},
+			want: 0,
+		},
+		{
+			name: "Test 2",
+			args: args{
+				v1: []float32{10, 20, 30, 40},
+				v2: []float32{10.5, 21.5, 31.5, 43.5},
+			},
+			want: 0,
+		},
+		// Test 3:  Triangle Inequality check on **un-normalized** vector
+		// A(1,0),B(2,2), C(0,1) => AB + AC !>= BC => 0 + 0 !>= 0.5
+		{
+			name: "Test 3.a",
+			args: args{
+				v1: []float32{1, 0},
+				v2: []float32{2, 2},
+			},
+			want: 0,
+		},
+		{
+			name: "Test 3.b",
+			args: args{
+				v1: []float32{2, 2},
+				v2: []float32{0, 1},
+			},
+			want: 0,
+		},
+		{
+			name: "Test 3.c",
+			args: args{
+				v1: []float32{0, 1},
+				v2: []float32{1, 0},
+			},
+			want: 0.5,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+
+			if got, err := SphericalDistance(tt.args.v1, tt.args.v2); err != nil || !assertx.InEpsilonF64(float64(got), tt.want) {
+				t.Errorf("SphericalDistance() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

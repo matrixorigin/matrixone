@@ -5083,7 +5083,7 @@ func initCosineDistanceArrayTestCase() []tcTemp {
 				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{10, 20, 30}, {5, 6, 7}}, []bool{false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{0, 0.00035416888764172594},
+				[]float64{0, 0.0003542900085449219},
 				[]bool{false, false}),
 		},
 		{

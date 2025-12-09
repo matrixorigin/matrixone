@@ -118,7 +118,25 @@ func CosineDistance[T types.RealNumbers](v1, v2 []T) (T, error) {
 	default:
 		return 0, moerr.NewInternalErrorNoCtx("CosineDistance type not supported")
 	}
+}
 
+func CosineSimilarity[T types.RealNumbers](v1, v2 []T) (T, error) {
+	switch any(v1).(type) {
+	case []float32:
+		_v1 := any(v1).([]float32)
+		_v2 := any(v2).([]float32)
+
+		return T(vek32.CosineSimilarity(_v1, _v2)), nil
+
+	case []float64:
+		_v1 := any(v1).([]float64)
+		_v2 := any(v2).([]float64)
+
+		return T(vek.CosineSimilarity(_v1, _v2)), nil
+
+	default:
+		return 0, moerr.NewInternalErrorNoCtx("CosineSimilarity type not supported")
+	}
 }
 
 // SphericalDistance is used for InnerProduct and CosineDistance in Spherical Kmeans.
@@ -260,7 +278,7 @@ func ResolveDistanceFn[T types.RealNumbers](metric MetricType) (DistanceFunction
 	var distanceFunction DistanceFunction[T]
 	switch metric {
 	case Metric_L2Distance:
-		distanceFunction = L2Distance[T]
+		distanceFunction = L2DistanceSq[T]
 	case Metric_L2sqDistance:
 		distanceFunction = L2DistanceSq[T]
 	case Metric_InnerProduct:

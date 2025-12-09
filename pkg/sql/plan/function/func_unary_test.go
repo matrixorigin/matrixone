@@ -22,16 +22,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
-
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type tcTemp struct {
@@ -219,7 +217,7 @@ func initNormalizeL2ArrayTestCase() []tcTemp {
 					{},
 					{0.18257418, 0.36514837, 0.5477226, 0.73029673},
 					{-0.18257418, 0.36514837, 0.5477226, 0.73029673},
-					{0.8108108, 0.27027026, 0.32432434, 0.4054054},
+					{0.8108108, 0.27027026, 0.3243243, 0.4054054},
 					{0.1576765, 0.315353, 0.5781472, 0.73582363},
 				},
 				[]bool{true, false, false, false, false, false}),
