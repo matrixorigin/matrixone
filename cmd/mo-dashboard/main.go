@@ -17,6 +17,7 @@ package mo_dashboard
 import (
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/v2/dashboard"
 	"github.com/spf13/cobra"
 )
@@ -59,7 +60,7 @@ Supports different modes: local (standalone), cloud (docker compose cluster), k8
 					password,
 					"Matrixone-Standalone",
 				)
-				fmt.Printf("Creating local dashboard at %s (folder: Matrixone-Standalone)\n", grafanaURL)
+				logutil.Infof("Creating local dashboard at %s (folder: Matrixone-Standalone)", grafanaURL)
 
 			case "cloud":
 				creator = dashboard.NewCloudDashboardCreator(
@@ -69,7 +70,7 @@ Supports different modes: local (standalone), cloud (docker compose cluster), k8
 					datasource,
 					"Matrixone",
 				)
-				fmt.Printf("Creating cloud dashboard at %s (datasource: %s, folder: Matrixone)\n", grafanaURL, datasource)
+				logutil.Infof("Creating cloud dashboard at %s (datasource: %s, folder: Matrixone)", grafanaURL, datasource)
 
 			case "k8s":
 				creator = dashboard.NewK8SDashboardCreator(
@@ -79,7 +80,7 @@ Supports different modes: local (standalone), cloud (docker compose cluster), k8
 					datasource,
 					"Matrixone",
 				)
-				fmt.Printf("Creating K8S dashboard at %s (datasource: %s, folder: Matrixone)\n", grafanaURL, datasource)
+				logutil.Infof("Creating K8S dashboard at %s (datasource: %s, folder: Matrixone)", grafanaURL, datasource)
 
 			case "cloud-ctrl":
 				creator = dashboard.NewCloudCtrlPlaneDashboardCreator(
@@ -89,7 +90,7 @@ Supports different modes: local (standalone), cloud (docker compose cluster), k8
 					datasource,
 					"Matrixone",
 				)
-				fmt.Printf("Creating cloud control-plane dashboard at %s (datasource: %s, folder: Matrixone)\n", grafanaURL, datasource)
+				logutil.Infof("Creating cloud control-plane dashboard at %s (datasource: %s, folder: Matrixone)", grafanaURL, datasource)
 
 			default:
 				return fmt.Errorf("invalid mode '%s'. Valid modes: local, cloud, k8s, cloud-ctrl", mode)
@@ -99,7 +100,7 @@ Supports different modes: local (standalone), cloud (docker compose cluster), k8
 				return fmt.Errorf("failed to create dashboard: %w", err)
 			}
 
-			fmt.Println("✅ Dashboard created successfully!")
+			logutil.Infof("Dashboard created successfully!")
 			return nil
 		},
 	}
