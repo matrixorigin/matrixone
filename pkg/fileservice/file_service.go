@@ -97,6 +97,11 @@ type IOVector struct {
 
 	// Caches indicates extra caches to operate on
 	Caches []IOVectorCache
+
+	// DisableParallel controls whether to skip parallel multipart uploads even if supported.
+	DisableParallel bool
+	// ForceParallel controls whether to try parallel multipart uploads when possible.
+	ForceParallel bool
 }
 
 type IOEntry struct {
