@@ -168,21 +168,30 @@ var httpTransport = &http.Transport{
 func init() {
 	// Note: Even though IdleConnTimeout, MaxIdleConnsPerHost, and MaxConnsPerHost
 	// are configured, we still need to periodically close idle connections because:
-	// 1. IdleConnTimeout only closes connections that have been idle for >10s
-	// 2. MaxConnsPerHost limits total connections but doesn't actively close idle ones
-	// 3. There may be edge cases where connections accumulate despite these settings
 	//
-	// We close idle connections and cleanup metrics together to ensure consistency:
-	// - CloseIdleConnections() closes connections at the transport level
-	// - cleanupStaleConnections() removes them from metrics tracking
-	// This ensures metrics stay accurate after connections are closed.
+	// 1. IdleConnTimeout (10s) only checks and closes connections when they are
+	//    retrieved from the idle pool, not proactively. If connections are never
+	//    retrieved, they may remain open indefinitely.
+	//
+	// 2. MaxIdleConns and MaxIdleConnsPerHost are limits, not active cleanup mechanisms.
+	//    They prevent new idle connections when limits are reached, but don't actively
+	//    close existing connections that exceed the limits.
+	//
+	// 3. MaxConnsPerHost limits total connections but doesn't actively close idle ones.
+	//
+	// 4. We need to sync metrics: CloseIdleConnections() closes connections at the
+	//    transport level, and cleanupStaleConnections() removes them from metrics tracking.
+	//    This ensures S3ConnActiveGauge stays accurate after connections are closed.
+	//
+	// By calling CloseIdleConnections() every 5s (more frequent than IdleConnTimeout's 10s),
+	// we proactively close idle connections and keep metrics in sync with actual state.
 	go func() {
 		// Use a reasonable interval (5s) that's less aggressive than IdleConnTimeout (10s)
-		// but frequent enough to control connection count
+		// but frequent enough to control connection count proactively
 		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
 		for range ticker.C {
-			// Close idle connections to control connection count
+			// Close idle connections to control connection count proactively
 			// This may close connections that are still in activeConnMap
 			httpTransport.CloseIdleConnections()
 			// Immediately cleanup stale connections to sync metrics with actual state
