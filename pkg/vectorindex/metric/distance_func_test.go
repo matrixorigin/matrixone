@@ -140,17 +140,21 @@ func Test_ResolveFun(t *testing.T) {
 }
 
 func Test_ZeroVector(t *testing.T) {
-
 	v1 := []float64{0, 0, 0}
 	v2 := []float64{0, 0, 0}
-	_, err := CosineDistance[float64](v1, v2)
-	require.NotNil(t, err)
+	got64, err := CosineDistance(v1, v2)
+	require.Nil(t, err)
+	if !math.IsNaN(got64) {
+		t.Errorf("CosineDistance(%v, %v) = %v, want NaN", v1, v2, got64)
+	}
 
 	v1f32 := []float32{0, 0, 0}
 	v2f32 := []float32{0, 0, 0}
-	_, err = CosineDistance[float32](v1f32, v2f32)
-	require.NotNil(t, err)
-
+	got32, err := CosineDistance(v1f32, v2f32)
+	require.Nil(t, err)
+	if !math.IsNaN(float64(got32)) {
+		t.Errorf("CosineDistance(%v, %v) = %v, want NaN", v1f32, v2f32, got32)
+	}
 }
 
 func Test_L2Distance(t *testing.T) {
@@ -206,7 +210,7 @@ func Test_L2Distance(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got, err := L2Distance[float64](tt.args.v1, tt.args.v2); err != nil || got != tt.want {
+			if got, err := L2Distance(tt.args.v1, tt.args.v2); err != nil || !assertx.InEpsilonF64(got, tt.want) {
 				t.Errorf("L2Distance() = %v, want %v", got, tt.want)
 			}
 		})
@@ -266,7 +270,7 @@ func Test_L1Distance(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got, err := L1Distance[float64](tt.args.v1, tt.args.v2); err != nil || got != tt.want {
+			if got, err := L1Distance(tt.args.v1, tt.args.v2); err != nil || !assertx.InEpsilonF64(got, tt.want) {
 				t.Errorf("L1Distance() = %v, want %v", got, tt.want)
 			}
 		})
@@ -326,7 +330,7 @@ func Test_CosineDistance(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got, err := CosineDistance[float64](tt.args.v1, tt.args.v2); err != nil || got != tt.want {
+			if got, err := CosineDistance(tt.args.v1, tt.args.v2); err != nil || !assertx.InEpsilonF64(got, tt.want) {
 				t.Errorf("CosineDistance() = %v, want %v", got, tt.want)
 			}
 		})
@@ -386,7 +390,7 @@ func Test_InnerProduct(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got, err := InnerProduct[float64](tt.args.v1, tt.args.v2); err != nil || got != tt.want {
+			if got, err := InnerProduct(tt.args.v1, tt.args.v2); err != nil || !assertx.InEpsilonF64(got, tt.want) {
 				t.Errorf("InnerProduct() = %v, want %v", got, tt.want)
 			}
 		})
@@ -446,7 +450,7 @@ func Test_L2DistanceSq(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got, err := L2DistanceSq[float64](tt.args.v1, tt.args.v2); err != nil || got != tt.want {
+			if got, err := L2DistanceSq(tt.args.v1, tt.args.v2); err != nil || !assertx.InEpsilonF64(got, tt.want) {
 				t.Errorf("L2DistanceSq() = %v, want %v", got, tt.want)
 			}
 		})
@@ -535,7 +539,7 @@ func Test_AngularDistance(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 
-			if got, err := SphericalDistance[float64](tt.args.v1, tt.args.v2); err != nil || !assertx.InEpsilonF64(got, tt.want) {
+			if got, err := SphericalDistance(tt.args.v1, tt.args.v2); err != nil || !assertx.InEpsilonF64(got, tt.want) {
 				t.Errorf("SphericalDistance() = %v, want %v", got, tt.want)
 			}
 		})

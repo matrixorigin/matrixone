@@ -21,8 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/viterin/vek"
 	"github.com/viterin/vek/vek32"
-	"gonum.org/v1/gonum/blas/blas32"
-	"gonum.org/v1/gonum/blas/blas64"
 )
 
 func L2Distance[T types.RealNumbers](v1, v2 []T) (T, error) {
@@ -90,13 +88,13 @@ func InnerProduct[T types.RealNumbers](v1, v2 []T) (T, error) {
 		_v1 := any(v1).([]float32)
 		_v2 := any(v2).([]float32)
 
-		return T(vek32.Dot(_v1, _v2)), nil
+		return T(-vek32.Dot(_v1, _v2)), nil
 
 	case []float64:
 		_v1 := any(v1).([]float64)
 		_v2 := any(v2).([]float64)
 
-		return T(vek.Dot(_v1, _v2)), nil
+		return T(-vek.Dot(_v1, _v2)), nil
 
 	default:
 		return 0, moerr.NewInternalErrorNoCtx("InnerProduct type not supported")
@@ -136,14 +134,17 @@ func SphericalDistance[T types.RealNumbers](v1, v2 []T) (T, error) {
 
 	switch any(v1).(type) {
 	case []float32:
-		_v1 := blas32.Vector{N: len(v1), Inc: 1, Data: any(v1).([]float32)}
-		_v2 := blas32.Vector{N: len(v2), Inc: 1, Data: any(v2).([]float32)}
-		dp = float64(blas32.Dot(_v1, _v2))
+		_v1 := any(v1).([]float32)
+		_v2 := any(v2).([]float32)
+
+		dp = float64(vek32.Dot(_v1, _v2))
 
 	case []float64:
-		_v1 := blas64.Vector{N: len(v1), Inc: 1, Data: any(v1).([]float64)}
-		_v2 := blas64.Vector{N: len(v2), Inc: 1, Data: any(v2).([]float64)}
-		dp = blas64.Dot(_v1, _v2)
+		_v1 := any(v1).([]float64)
+		_v2 := any(v2).([]float64)
+
+		dp = vek.Dot(_v1, _v2)
+
 	default:
 		return 0, moerr.NewInternalErrorNoCtx("SphericalDistance type not supported")
 	}
