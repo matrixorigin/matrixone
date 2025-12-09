@@ -17,6 +17,9 @@
 package device
 
 import (
+	"os"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/kmeans"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/kmeans/elkans"
@@ -31,6 +34,8 @@ type GpuClusterer[T cuvs.TensorNumberType] struct {
 	indexParams *ivf_flat.IndexParams
 	dataset     *cuvs.Tensor[T]
 	centroids   *cuvs.Tensor[T]
+	nlist       int
+	dim         int
 }
 
 func (c *GpuClusterer[T]) InitCentroids() error {
@@ -44,31 +49,17 @@ func (c *GpuClusterer[T]) Cluster() (any, error) {
 		return nil, err
 	}
 
-	if err := ivf_flat.BuildIndex(*c.resource, c.indexParams, c.dataset, c.index); err != nil {
-		return nil, err
-	}
-
-	if err := c.resource.Sync(); err != nil {
-		return nil, err
-	}
-
-	nlist, err := ivf_flat.GetNLists(c.index)
-	if err != nil {
-		return nil, err
-	}
-
-	dim, err := ivf_flat.GetDim(c.index)
-	if err != nil {
-		return nil, err
-	}
-
-	centers, err := cuvs.NewTensorOnDevice[T](c.resource, []int64{int64(nlist), int64(dim)})
+	centers, err := cuvs.NewTensorOnDevice[T](c.resource, []int64{int64(c.nlist), int64(c.dim)})
 	if err != nil {
 		return nil, err
 	}
 	c.centroids = &centers
 
-	if _, err := centers.ToDevice(c.resource); err != nil {
+	if err := ivf_flat.BuildIndex(*c.resource, c.indexParams, c.dataset, c.index); err != nil {
+		return nil, err
+	}
+
+	if err := c.resource.Sync(); err != nil {
 		return nil, err
 	}
 
@@ -97,16 +88,14 @@ func (c *GpuClusterer[T]) SSE() (float64, error) {
 }
 
 func (c *GpuClusterer[T]) Close() error {
-
+	if c.resource != nil {
+		c.resource.Close()
+	}
 	if c.indexParams != nil {
 		c.indexParams.Close()
 	}
 	if c.dataset != nil {
 		c.dataset.Close()
-
-	}
-	if c.resource != nil {
-		c.resource.Close()
 	}
 	if c.index != nil {
 		c.index.Close()
@@ -144,6 +133,12 @@ func NewKMeans[T types.RealNumbers](vectors [][]T, clusterCnt,
 	case [][]float32:
 
 		c := &GpuClusterer[float32]{}
+		c.nlist = clusterCnt
+		if len(vectors) == 0 {
+			return nil, moerr.NewInternalErrorNoCtx("empty dataset")
+		}
+		c.dim = len(vectors[0])
+
 		resources, err := cuvs.NewResource(nil)
 		if err != nil {
 			return nil, err
