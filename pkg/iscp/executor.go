@@ -569,8 +569,13 @@ func (exec *ISCPTaskExecutor) applyISCPLog(ctx context.Context, from, to types.T
 	rel, err := db.Relation(ctx, MOISCPLogTableName, nil)
 
 	tid := rel.GetTableID(ctx)
-	if tid != exec.prevISCPTableID {
-		err = moerr.NewInternalErrorNoCtx(fmt.Sprintf("table id changes, %d -> %d", exec.prevISCPTableID, tid))
+	// injection is for ut - simulate table id change
+	var injectChangeTableID bool
+	if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "tableIDChange" {
+		injectChangeTableID = true
+	}
+	if tid != exec.prevISCPTableID || injectChangeTableID {
+		err = moerr.NewErrStaleReadNoCtx("0-0", "0-0")
 		return
 	}
 	// injection is for ut
