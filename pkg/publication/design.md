@@ -22,7 +22,7 @@ CREATE TABLE mo_catalog.mo_ccpr_log (
     state                TINYINT,  -- 'running', 'stopped'
     
     -- 执行状态
-    iteration_state      TINYINT NOT NULL DEFAULT 'pending',  -- 'pending', 'running', 'complete', 'error', 'cancel'
+    iteration_state      TINYINT NOT NULL DEFAULT 0,  -- 'pending', 'running', 'complete', 'error', 'cancel'
     iteration_lsn        BIGINT DEFAULT 0,               -- Job序列号
     context              JSON,                           -- iteration上下文，如snapshot名称等
     cn_uuid              VARCHAR(64),                    -- 执行任务的CN标识
@@ -32,9 +32,17 @@ CREATE TABLE mo_catalog.mo_ccpr_log (
     
     -- 时间戳
     created_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-);
+    updated_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+)
 ```
+
+**兼容性说明**
+- 系统表 `mo_ccpr_log` 已添加到系统初始化流程中
+- 在 `catalog/types.go` 中定义了常量 `MO_CCPR_LOG = "mo_ccpr_log"`
+- 在 `predefined.go` 中定义了 DDL: `MoCatalogMoCcprLogDDL`
+- 在 `authenticate.go` 中注册到 `createSqls`、`sysWantedTables` 和 `predefinedTables`
+- 新部署的集群会自动创建该表
+- 对于已存在的集群，系统会在下次初始化时自动创建该表（如果不存在）
 
 **sql**
 * snapshot diff 
@@ -149,3 +157,5 @@ collect change scan object
 **object 分包**
 
 **索引表**
+
+**兼容性**

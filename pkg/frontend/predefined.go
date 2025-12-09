@@ -282,6 +282,24 @@ var (
 				primary key(account_id, table_id, job_name, job_id)
 			)`
 
+	MoCatalogMoCcprLogDDL = `CREATE TABLE mo_catalog.mo_ccpr_log (
+				task_id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+				subscription_name VARCHAR(5000) NOT NULL,
+				sync_level VARCHAR(16) NOT NULL,
+				db_name VARCHAR(5000),
+				table_name VARCHAR(5000),
+				upstream_conn VARCHAR(5000) NOT NULL,
+				sync_config JSON NOT NULL,
+				state TINYINT,
+				iteration_state TINYINT NOT NULL DEFAULT 0,
+				iteration_lsn BIGINT DEFAULT 0,
+				context JSON,
+				cn_uuid VARCHAR(64),
+				error_message VARCHAR(5000),
+				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+				updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+			)`
+
 	MoCatalogMoSessionsDDL       = `CREATE VIEW mo_catalog.mo_sessions AS SELECT node_id, conn_id, session_id, account, user, host, db, session_start, command, info, txn_id, statement_id, statement_type, query_type, sql_source_type, query_start, client_host, role, proxy_host FROM mo_sessions() AS mo_sessions_tmp`
 	MoCatalogMoConfigurationsDDL = `CREATE VIEW mo_catalog.mo_configurations AS SELECT node_type, node_id, name, current_value, default_value, internal FROM mo_configurations() AS mo_configurations_tmp`
 	MoCatalogMoLocksDDL          = `CREATE VIEW mo_catalog.mo_locks AS SELECT cn_id, txn_id, table_id, lock_key, lock_content, lock_mode, lock_status, lock_wait FROM mo_locks() AS mo_locks_tmp`

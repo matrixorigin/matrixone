@@ -175,6 +175,8 @@ const (
 	MO_STORED_PROCEDURE = "mo_stored_procedure"
 
 	MO_BRANCH_METADATA = "mo_branch_metadata"
+
+	MO_CCPR_LOG = "mo_ccpr_log"
 )
 
 func IsSystemTable(id uint64) bool {

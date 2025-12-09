@@ -934,6 +934,7 @@ var (
 		catalog.MO_MERGE_SETTINGS:     0,
 		catalog.MO_ISCP_LOG:           0,
 		catalog.MO_BRANCH_METADATA:    0,
+		catalog.MO_CCPR_LOG:           0,
 	}
 	sysAccountTables = map[string]struct{}{
 		catalog.MOVersionTable:       {},
@@ -980,6 +981,7 @@ var (
 		catalog.MO_MERGE_SETTINGS:     0,
 		catalog.MO_ISCP_LOG:           0,
 		catalog.MO_BRANCH_METADATA:    0,
+		catalog.MO_CCPR_LOG:           0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
 	createAutoTableSql           = MoCatalogMoAutoIncrTableDDL
@@ -1022,6 +1024,7 @@ var (
 		MoCatalogMergeSettingsInitData,
 		MoCatalogMoISCPLogDDL,
 		MoCatalogBranchMetadataDDL,
+		MoCatalogMoCcprLogDDL,
 	}
 
 	//drop tables for the tenant
