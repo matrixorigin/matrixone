@@ -182,3 +182,18 @@ var (
 		},
 	)
 )
+
+// S3 connection pool state metrics
+// Tracks the current number of active (in-use) HTTP connections
+var (
+	// S3ConnActiveGauge tracks the current number of active S3 HTTP connections
+	// Active connections are connections currently being used for HTTP requests
+	S3ConnActiveGauge = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "fs",
+			Name:      "s3_conn_active",
+			Help:      "Current number of active S3 HTTP connections (connections currently in use)",
+		},
+	)
+)

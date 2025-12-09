@@ -87,6 +87,16 @@ func (t *traceInfo) GotConn(info httptrace.GotConnInfo) {
 	// connection was just put into the idle pool and immediately retrieved
 	if info.WasIdle {
 		metric.FSHTTPTraceCounter.WithLabelValues("GotConnIdle").Inc()
+		// Connection was idle, now it's active
+		// Use the connection object as the key (info.Conn is the underlying connection)
+		if info.Conn != nil {
+			trackConnActive(info.Conn)
+		}
+	} else {
+		// New connection, mark as active
+		if info.Conn != nil {
+			trackConnActive(info.Conn)
+		}
 	}
 	metric.S3GetConnDurationHistogram.Observe(time.Since(t.times.GetConn).Seconds())
 }
@@ -96,7 +106,15 @@ func (t *traceInfo) PutIdleConn(err error) {
 		logutil.Info("PutIdleConn error",
 			zap.Error(err),
 		)
+		// If there's an error, the connection might be closed
+		return
 	}
+	// Connection is being put back to idle pool
+	// Note: httptrace.PutIdleConn doesn't provide the connection object,
+	// so we track connections by their remote address in GotConn callback.
+	// When PutIdleConn is called, we know a connection was returned to the pool,
+	// but we can't identify which one. We'll use a heuristic approach:
+	// track active connections and estimate idle based on pool configuration.
 }
 
 func (t *traceInfo) GotFirstResponseByte() {

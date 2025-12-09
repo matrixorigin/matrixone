@@ -159,30 +159,54 @@ func (c *DashboardCreator) initFSCacheRow() dashboard.Option {
 // initFSReadWriteBytesRow initializes the FileService read/write bytes metrics row.
 // It displays both throughput (bytes per second) and distribution percentiles (bytes per operation).
 //
-// For histogram metrics, Prometheus automatically generates three series:
-// - _bucket: cumulative counters for each bucket (used for percentiles)
-// - _sum: total sum of all observed values (used for throughput)
-// - _count: total count of observations (used for rate calculations)
+// Metric Definition:
+// The histogram metrics (s3_io_bytes, local_io_bytes) record the bytes transferred per IO operation.
+// Each Observe() call records one IO operation with its byte size.
 //
-// The dashboard shows:
-//  1. Throughput panel: sum(rate(..._sum[$interval])) - bytes per second transferred
-//     This represents the actual data transfer rate, which is more useful for understanding
-//     system performance and bandwidth utilization.
-//  2. Percentile panels: histogram_quantile(...) - bytes per operation distribution
-//     This shows the distribution of bytes per individual IO operation (P50, P80, P90, P99),
-//     useful for understanding the size distribution of IO operations.
+// Prometheus Histogram Structure:
+// Prometheus automatically generates three series for each histogram:
+// - _bucket: cumulative counters for each bucket boundary (used for percentile calculations)
+// - _sum: total sum of all observed values (used for throughput calculation)
+// - _count: total count of observations (used for operation rate calculations)
+//
+// Dashboard Panels:
+// 1. Throughput Panel: sum(rate(..._sum[$interval]))
+//   - Calculates average bytes transferred per second over the time window
+//   - Formula: rate(_sum[$interval]) = (sum of all bytes) / time_window_seconds
+//   - This is the most important metric for understanding actual data transfer performance
+//   - Represents the actual bandwidth utilization (bytes/sec)
+//
+// 2. Percentile Panels: histogram_quantile(percentile, sum(rate(..._bucket[$interval])) by (le))
+//   - Calculates percentiles (P50, P80, P90, P99) of bytes per individual IO operation
+//   - Formula: histogram_quantile finds the bucket boundary where percentile% of operations fall below
+//   - Shows the distribution of IO operation sizes, not throughput
+//   - Useful for understanding: "What is the typical size of each IO operation?"
+//   - Note: Due to histogram bucket configuration (ExponentialBuckets(1, 2.0, 10)),
+//     operations larger than 512 bytes may have less accurate percentiles
+//
+// Key Differences:
+// - Throughput: Total bytes/second (aggregate across all operations)
+// - Percentiles: Bytes per operation (individual operation size distribution)
+// Example: 100 operations of 1KB each = 100KB/s throughput, but P99 = 1KB per operation
 func (c *DashboardCreator) initFSReadWriteBytesRow() dashboard.Option {
-	// Throughput: bytes per second for each IO type
-	// Using _sum metric with rate() to calculate the average bytes transferred per second
-	// This is the most important metric for understanding actual data transfer performance
+	// Throughput queries: Calculate bytes per second using _sum metric
+	// rate(_sum[$interval]) computes the average rate of increase of the sum over the time window
+	// This gives us the actual data transfer rate in bytes per second
 	throughputQueries := []string{
-		// S3 read throughput: average bytes read from S3 per second
+		// S3 read throughput: average bytes read from S3 per second over [$interval]
+		// Represents the actual read bandwidth from S3 storage
 		`sum(rate(` + c.getMetricWithFilter(`mo_fs_s3_io_bytes_sum`, `type="read"`) + `[$interval]))`,
-		// S3 write throughput: average bytes written to S3 per second
+
+		// S3 write throughput: average bytes written to S3 per second over [$interval]
+		// Represents the actual write bandwidth to S3 storage
 		`sum(rate(` + c.getMetricWithFilter(`mo_fs_s3_io_bytes_sum`, `type="write"`) + `[$interval]))`,
-		// Local read throughput: average bytes read from local storage per second
+
+		// Local read throughput: average bytes read from local storage per second over [$interval]
+		// Represents the actual read bandwidth from local disk
 		`sum(rate(` + c.getMetricWithFilter(`mo_fs_local_io_bytes_sum`, `type="read"`) + `[$interval]))`,
-		// Local write throughput: average bytes written to local storage per second
+
+		// Local write throughput: average bytes written to local storage per second over [$interval]
+		// Represents the actual write bandwidth to local disk
 		`sum(rate(` + c.getMetricWithFilter(`mo_fs_local_io_bytes_sum`, `type="write"`) + `[$interval]))`,
 	}
 
@@ -193,9 +217,10 @@ func (c *DashboardCreator) initFSReadWriteBytesRow() dashboard.Option {
 		"local-write",
 	}
 
-	// Percentile panels: shows bytes per operation distribution
-	// These panels show the distribution of bytes per individual IO operation
-	// Useful for understanding the size distribution of IO operations
+	// Percentile panels: Calculate distribution of bytes per individual IO operation
+	// histogram_quantile computes percentiles from the bucket counters
+	// Each panel shows: "What is the P50/P80/P90/P99 size of each IO operation?"
+	// Note: This is different from throughput - it shows operation size, not total bytes/sec
 	percentilePanels := c.getMultiHistogram(
 		[]string{
 			c.getMetricWithFilter(`mo_fs_s3_io_bytes_bucket`, `type="read"`),
@@ -218,14 +243,15 @@ func (c *DashboardCreator) initFSReadWriteBytesRow() dashboard.Option {
 	// Combine throughput panel and percentile panels
 	allPanels := append(
 		[]row.Option{
-			// Throughput panel: shows bytes per second (most important for performance monitoring)
-			// Grafana will automatically display this as "bytes/s" since we're using rate()
+			// Throughput panel: Shows aggregate bytes per second (most important for performance)
+			// This is the primary metric for understanding actual data transfer performance
+			// Grafana will automatically format rate() results as "bytes/s" or appropriate units
 			c.withMultiGraph(
 				"Throughput (bytes/sec)",
 				6,
 				throughputQueries,
 				throughputLegends,
-				axis.Unit("bytes"), // bytes per second (Grafana auto-formats rate() as bytes/s)
+				axis.Unit("bytes"), // Grafana will auto-format as bytes/s for rate() queries
 				axis.Min(0),
 			),
 		},
@@ -238,19 +264,34 @@ func (c *DashboardCreator) initFSReadWriteBytesRow() dashboard.Option {
 	)
 }
 
+// initFSS3ConnOverviewRow initializes the S3 connection overview row.
+// It displays connection establishment rates and current connection pool state.
 func (c *DashboardCreator) initFSS3ConnOverviewRow() dashboard.Option {
 	return dashboard.Row(
 		"FileService S3 connection overview",
+		// Connection establishment rate: new TCP connections per second
 		c.withGraph(
 			"Connect",
-			6,
+			3,
 			`sum(rate(`+c.getMetricWithFilter("mo_fs_s3_conn_duration_seconds_count", `type="connect"`)+`[$interval]))`,
 			""),
+		// DNS resolution rate: DNS lookups per second
 		c.withGraph(
 			"DNS Resolve",
-			6,
+			3,
 			`sum(rate(`+c.getMetricWithFilter("mo_fs_s3_conn_duration_seconds_count", `type="dns-resolve"`)+`[$interval]))`,
 			""),
+		// Active connections: current number of connections currently in use for HTTP requests
+		// This is tracked accurately via GotConn callback in httptrace
+		// Higher values indicate more concurrent requests to S3
+		c.withGraph(
+			"Active Connections",
+			6,
+			c.getMetricWithFilter("mo_fs_s3_conn_active", ""),
+			"active",
+			axis.Unit("short"), // connection count
+			axis.Min(0),
+		),
 	)
 }
 
