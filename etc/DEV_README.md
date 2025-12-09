@@ -5,6 +5,11 @@ This guide provides comprehensive instructions for developers working with Matri
 ## Table of Contents
 
 - [Quick Start](#quick-start)
+- [Local Development Methods](#local-development-methods)
+  - [Method 1: Simple Launch (File System Storage)](#method-1-simple-launch-file-system-storage)
+  - [Method 2: Launch with MinIO Storage](#method-2-launch-with-minio-storage)
+  - [Method 3: Multi-CN Cluster (Docker Compose)](#method-3-multi-cn-cluster-docker-compose)
+  - [Important: Data Directory Compatibility](#important-data-directory-compatibility)
 - [Development Commands Overview](#development-commands-overview)
 - [Standalone MatrixOne Setup](#standalone-matrixone-setup)
 - [Multi-CN Cluster Setup (Docker Compose)](#multi-cn-cluster-setup-docker-compose)
@@ -82,8 +87,300 @@ make dev-help
 ```
 
 **For detailed workflows, see:**
-- [Standalone MatrixOne Setup](#standalone-matrixone-setup) - Complete standalone workflow
-- [Multi-CN Cluster Setup](#multi-cn-cluster-setup-docker-compose) - Complete multi-CN workflow
+- [Local Development Methods](#local-development-methods) - **Start here!** Three ways to run MatrixOne locally with complete setup, data directories, and cleanup instructions
+- [Standalone MatrixOne Setup](#standalone-matrixone-setup) - Complete standalone workflow details
+- [Multi-CN Cluster Setup](#multi-cn-cluster-setup-docker-compose) - Complete multi-CN workflow details
+
+---
+
+## Local Development Methods
+
+MatrixOne provides three methods for local development, each with different storage backends and use cases. Choose the method that best fits your needs.
+
+### Method 1: Simple Launch (File System Storage)
+
+**Best for:** Quick testing, simple development, learning MatrixOne
+
+**Storage:** Local file system (DISK backend)
+
+#### Quick Start
+
+```bash
+# 1. Build MatrixOne
+make build
+
+# 2. Start MatrixOne
+./mo-service -launch ./etc/launch/launch.toml
+
+# 3. Connect (in another terminal)
+mysql -h 127.0.0.1 -P 6001 -u root -p111
+```
+
+#### With Grafana Monitoring
+
+```bash
+# 1. Enable metrics in config files
+# Edit: etc/launch/cn.toml, etc/launch/tn.toml, etc/launch/log.toml
+# Set: disableMetric = false, enable-metric-to-prom = true, status-port = 7001
+
+# 2. Start MatrixOne
+./mo-service -launch ./etc/launch/launch.toml
+
+# 3. Start Grafana (in another terminal)
+make dev-up-grafana-local
+
+# 4. Wait for Grafana to be ready
+make dev-check-grafana
+
+# 5. Create dashboards
+make dev-create-dashboard-local
+
+# 6. Access Grafana at http://localhost:3001 (admin/admin)
+```
+
+#### Data Directories
+
+- **MatrixOne Data**: `./mo-data/` (project root directory)
+- **Metrics Data**: `prometheus-local-data/` (project root directory)
+- **Grafana Data**: `grafana-local-data/` (project root directory)
+
+#### Stop Services
+
+```bash
+# Stop MatrixOne process
+# Press Ctrl+C in the terminal where mo-service is running
+# Or find and kill the process:
+ps aux | grep mo-service
+kill <PID>
+
+# Stop Grafana and Prometheus
+make dev-down-grafana-local
+```
+
+#### Clean Up Data
+
+```bash
+# Stop all services first
+# Then remove data directories:
+rm -rf ./mo-data
+rm -rf prometheus-local-data
+rm -rf grafana-local-data
+```
+
+---
+
+### Method 2: Launch with MinIO Storage
+
+**Best for:** Testing object storage, S3-compatible storage, distributed storage scenarios
+
+**Storage:** MinIO (S3-compatible object storage) + local file system
+
+#### Quick Start
+
+```bash
+# 1. Build MatrixOne
+make build
+
+# 2. Start MinIO service
+make dev-up-minio-local
+
+# 3. Start MatrixOne with MinIO storage
+make launch-minio
+# Or manually:
+# ./mo-service -launch etc/launch-minio-local/launch.toml
+
+# 4. Connect (in another terminal)
+mysql -h 127.0.0.1 -P 6001 -u root -p111
+```
+
+#### With Grafana Monitoring
+
+```bash
+# 1. Enable metrics in config files
+# Edit: etc/launch-minio-local/cn.toml, etc/launch-minio-local/tn.toml, etc/launch-minio-local/log.toml
+# Set: disableMetric = false, enable-metric-to-prom = true, status-port = 7001
+
+# 2. Start MinIO
+make dev-up-minio-local
+
+# 3. Start MatrixOne
+./mo-service -launch etc/launch-minio-local/launch.toml
+
+# 4. Start Grafana (in another terminal)
+make dev-up-grafana-local
+
+# 5. Wait for Grafana to be ready
+make dev-check-grafana
+
+# 6. Create dashboards
+make dev-create-dashboard-local
+
+# 7. Access Grafana at http://localhost:3001 (admin/admin)
+```
+
+#### Data Directories
+
+- **MatrixOne Data**: `etc/launch-minio-local/mo-data/`
+- **MinIO Data**: `etc/launch-minio-local/mo-data/minio-data/`
+- **Metrics Data**: `prometheus-local-data/` (project root directory)
+- **Grafana Data**: `grafana-local-data/` (project root directory)
+
+#### Stop Services
+
+```bash
+# Stop MatrixOne process
+# Press Ctrl+C in the terminal where mo-service is running
+# Or find and kill the process:
+ps aux | grep mo-service
+kill <PID>
+
+# Stop MinIO
+make dev-down-minio-local
+
+# Stop Grafana and Prometheus
+make dev-down-grafana-local
+```
+
+#### Clean Up Data
+
+```bash
+# Stop all services first
+# Then remove the entire directory (contains both MatrixOne and MinIO data):
+rm -rf etc/launch-minio-local/
+
+# Also clean up monitoring data if needed:
+rm -rf prometheus-local-data
+rm -rf grafana-local-data
+```
+
+---
+
+### Method 3: Multi-CN Cluster (Docker Compose)
+
+**Best for:** Testing multi-node scenarios, load balancing, distributed features, production-like setup
+
+**Storage:** Local disk shared storage (DISK backend)
+
+#### Quick Start
+
+```bash
+# 1. Build Docker image
+make dev-build
+
+# 2. Start multi-CN cluster
+make dev-up
+
+# 3. Connect via proxy (load balanced)
+mysql -h 127.0.0.1 -P 6001 -u root -p111
+```
+
+#### With Grafana Monitoring
+
+```bash
+# 1. Start cluster with Grafana
+make dev-up-grafana
+
+# 2. Enable metrics (edit configs interactively)
+make dev-edit-cn1  # Enable metrics in each service config
+make dev-edit-cn2
+make dev-edit-tn
+make dev-edit-log
+make dev-edit-proxy
+
+# 3. Restart services to apply changes
+make dev-restart
+
+# 4. Wait for Grafana to be ready
+make dev-check-grafana
+
+# 5. Create dashboards
+make dev-create-dashboard-cluster
+
+# 6. Access Grafana at http://localhost:3000 (admin/admin)
+```
+
+#### Data Directories
+
+- **MatrixOne Data**: `mo-data/` (project root directory)
+  - Shared storage: `mo-data/shared/`
+- **Logs**: `logs/` (project root directory)
+- **Metrics Data**: `prometheus-data/` (project root directory)
+- **Grafana Data**: `grafana-data/` (project root directory)
+
+#### Stop Services
+
+```bash
+# Stop all cluster services (including Grafana if started with dev-up-grafana)
+make dev-down
+
+# Note: If you started Grafana separately, you can stop it with:
+# cd etc/docker-multi-cn-local-disk && docker compose --profile prometheus down
+```
+
+#### Clean Up Data
+
+```bash
+# Interactive cleanup (recommended - shows what will be deleted)
+make dev-cleanup
+
+# Or quick cleanup (WARNING: deletes all data without confirmation!)
+make dev-clean
+
+# This removes:
+# - mo-data/ directory
+# - logs/ directory
+# - prometheus-data/ directory (if exists)
+# - grafana-data/ directory (if exists)
+```
+
+---
+
+### Important: Data Directory Compatibility
+
+⚠️ **CRITICAL:** The `mo-data` directories used by **launch methods** (Method 1 and Method 2) and **multi-CN method** (Method 3) are **NOT compatible**.
+
+- **Launch methods** use `./mo-data/` at project root with a different data format
+- **Multi-CN method** uses `mo-data/` at project root with Docker volume mounts and shared storage
+
+**Do NOT mix them!** If you switch between methods:
+
+1. **Stop all services** first
+2. **Backup or remove** the existing `mo-data/` directory
+3. **Start fresh** with the new method
+
+**Example:**
+```bash
+# Switching from launch to multi-CN:
+# 1. Stop launch method (Ctrl+C)
+# 2. Backup or remove:
+mv mo-data mo-data-launch-backup
+# 3. Start multi-CN:
+make dev-up
+
+# Switching from multi-CN to launch:
+# 1. Stop multi-CN:
+make dev-down
+# 2. Backup or remove:
+mv mo-data mo-data-multicn-backup
+# 3. Start launch method:
+./mo-service -launch ./etc/launch/launch.toml
+```
+
+---
+
+### Comparison Table
+
+| Feature | Method 1: Launch | Method 2: Launch + MinIO | Method 3: Multi-CN |
+|---------|------------------|--------------------------|-------------------|
+| **Storage** | Local file system | MinIO (S3-compatible) | Local shared disk |
+| **Nodes** | Single process | Single process | Multi-CN (2+ nodes) |
+| **Proxy** | No | No | Yes (load balancer) |
+| **Containerized** | No | MinIO only | Yes (all services) |
+| **Best For** | Quick testing | Object storage testing | Production-like testing |
+| **Data Dir** | `./mo-data/` | `etc/launch-minio-local/mo-data/` | `mo-data/` |
+| **Grafana Port** | 3001 | 3001 | 3000 |
+| **Stop Command** | Ctrl+C or kill | Ctrl+C + `make dev-down-minio-local` | `make dev-down` |
+| **Clean Command** | `rm -rf ./mo-data` | `rm -rf etc/launch-minio-local/` | `make dev-clean` |
 
 ---
 

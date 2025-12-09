@@ -105,6 +105,16 @@ help:
 	@echo "  make ci                 - Run CI tests (BVT + optional UT)"
 	@echo "  make compose            - Run docker compose BVT tests"
 	@echo ""
+	@echo "Local Development with MinIO:"
+	@echo "  make dev-up-minio-local     - Start MinIO service (local storage)"
+	@echo "  make dev-down-minio-local   - Stop MinIO service"
+	@echo "  make dev-restart-minio-local - Restart MinIO service"
+	@echo "  make dev-status-minio-local - Show MinIO service status"
+	@echo "  make dev-logs-minio-local   - Show MinIO logs"
+	@echo "  make dev-clean-minio-local  - Clean MinIO data"
+	@echo "  make launch-minio           - Build and start MO with MinIO storage"
+	@echo "  make launch-minio-debug     - Build (debug) and start MO with MinIO"
+	@echo ""
 	@echo "Development Environment (Local Multi-CN Cluster):"
 	@echo "  make dev-help           - Show all dev-* commands (full list)"
 	@echo "  make dev-build          - Build docker image (smart cache - rebuilds when code changes)"
@@ -779,6 +789,80 @@ dev-create-dashboard-k8s:
 .PHONY: dev-create-dashboard-cloud-ctrl
 dev-create-dashboard-cloud-ctrl:
 	@$(MAKE) DASHBOARD_MODE=cloud-ctrl DASHBOARD_PORT=$(DASHBOARD_PORT) dev-create-dashboard
+
+###############################################################################
+# Local Development with MinIO Storage
+###############################################################################
+
+MINIO_DIR := etc/launch-minio-local
+MINIO_DATA_DIR := $(MINIO_DIR)/mo-data/minio-data
+
+.PHONY: dev-up-minio-local
+dev-up-minio-local:
+	@echo "Starting MinIO service for local MatrixOne..."
+	@mkdir -p $(MINIO_DATA_DIR)
+	@DOCKER_PLATFORM=$$(uname -m | sed 's/x86_64/linux\/amd64/; s/arm64/linux\/arm64/; s/aarch64/linux\/arm64/') && \
+		echo "Detected platform: $$DOCKER_PLATFORM" && \
+		cd $(MINIO_DIR) && \
+		DOCKER_UID=$$(id -u) DOCKER_GID=$$(id -g) DOCKER_PLATFORM=$$DOCKER_PLATFORM docker compose up -d
+	@echo ""
+	@echo "✅ MinIO started!"
+	@echo "  - API: http://127.0.0.1:9000"
+	@echo "  - Console: http://127.0.0.1:9001"
+	@echo "  - Access Key: minio"
+	@echo "  - Secret Key: minio123"
+	@echo "  - Data directory: $(MINIO_DATA_DIR)"
+
+.PHONY: dev-down-minio-local
+dev-down-minio-local:
+	@echo "Stopping MinIO service..."
+	@cd $(MINIO_DIR) && docker compose down
+	@echo "✅ MinIO stopped"
+
+.PHONY: dev-restart-minio-local
+dev-restart-minio-local:
+	@echo "Restarting MinIO service..."
+	@cd $(MINIO_DIR) && docker compose restart minio
+	@echo "✅ MinIO restarted"
+
+.PHONY: dev-status-minio-local
+dev-status-minio-local:
+	@cd $(MINIO_DIR) && docker compose ps
+
+.PHONY: dev-logs-minio-local
+dev-logs-minio-local:
+	@cd $(MINIO_DIR) && docker compose logs -f minio
+
+.PHONY: dev-clean-minio-local
+dev-clean-minio-local:
+	@echo "WARNING: This will delete all MinIO data!"
+	@read -p "Continue? [y/N] " -n 1 -r; \
+	echo; \
+	if [[ $$REPLY =~ ^[Yy]$$ ]]; then \
+		echo "Stopping MinIO..."; \
+		cd $(MINIO_DIR) && docker compose down; \
+		echo "Removing data..."; \
+		rm -rf $(MINIO_DATA_DIR); \
+		echo "✅ MinIO data cleaned!"; \
+	else \
+		echo "Cancelled."; \
+	fi
+
+.PHONY: launch-minio
+launch-minio: build dev-up-minio-local
+	@echo ""
+	@echo "Starting MatrixOne with MinIO storage..."
+	@echo "  Launch config: $(MINIO_DIR)/launch.toml"
+	@echo ""
+	@./mo-service -launch $(MINIO_DIR)/launch.toml
+
+.PHONY: launch-minio-debug
+launch-minio-debug: debug dev-up-minio-local
+	@echo ""
+	@echo "Starting MatrixOne (debug mode) with MinIO storage..."
+	@echo "  Launch config: $(MINIO_DIR)/launch.toml"
+	@echo ""
+	@./mo-service -launch $(MINIO_DIR)/launch.toml
 
 ###############################################################################
 # clean
