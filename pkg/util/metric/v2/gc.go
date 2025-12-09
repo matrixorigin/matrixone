@@ -45,26 +45,9 @@ var (
 		}, []string{"type", "reason"})
 
 	GCDataFileDeletionCounter       = gcFileDeletionCounter.WithLabelValues("data", "expired")
-	GCTombstoneFileDeletionCounter  = gcFileDeletionCounter.WithLabelValues("tombstone", "expired")
 	GCCheckpointFileDeletionCounter = gcFileDeletionCounter.WithLabelValues("checkpoint", "merged")
 	GCMetaFileDeletionCounter       = gcFileDeletionCounter.WithLabelValues("meta", "stale")
 	GCSnapshotFileDeletionCounter   = gcFileDeletionCounter.WithLabelValues("snapshot", "stale")
-
-	// GC file size statistics
-	gcFileSizeHistogram = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace: "mo",
-			Subsystem: "gc",
-			Name:      "file_size_bytes",
-			Help:      "Bucketed histogram of GC deleted file sizes.",
-			Buckets:   prometheus.ExponentialBuckets(1024, 2.0, 20), // 1KB to 1GB
-		}, []string{"type"})
-
-	GCDataFileSizeHistogram       = gcFileSizeHistogram.WithLabelValues("data")
-	GCTombstoneFileSizeHistogram  = gcFileSizeHistogram.WithLabelValues("tombstone")
-	GCCheckpointFileSizeHistogram = gcFileSizeHistogram.WithLabelValues("checkpoint")
-	GCMetaFileSizeHistogram       = gcFileSizeHistogram.WithLabelValues("meta")
-	GCSnapshotFileSizeHistogram   = gcFileSizeHistogram.WithLabelValues("snapshot")
 
 	// GC execution duration statistics
 	gcDurationHistogram = prometheus.NewHistogramVec(
@@ -83,7 +66,6 @@ var (
 	GCCheckpointTotalDurationHistogram  = gcDurationHistogram.WithLabelValues("checkpoint", "total")
 
 	// Merge GC phases
-	GCMergeScanDurationHistogram    = gcDurationHistogram.WithLabelValues("merge", "scan")
 	GCMergeCollectDurationHistogram = gcDurationHistogram.WithLabelValues("merge", "collect")
 	GCMergeWriteDurationHistogram   = gcDurationHistogram.WithLabelValues("merge", "write")
 	GCMergeTotalDurationHistogram   = gcDurationHistogram.WithLabelValues("merge", "total")
@@ -118,37 +100,7 @@ var (
 		}, []string{"type", "action"})
 
 	GCTableScannedCounter   = gcTableCounter.WithLabelValues("table", "scanned")
-	GCTableDeletedCounter   = gcTableCounter.WithLabelValues("table", "deleted")
 	GCTableProtectedCounter = gcTableCounter.WithLabelValues("table", "protected")
-	GCTableSkippedCounter   = gcTableCounter.WithLabelValues("table", "skipped")
-
-	// GC snapshot statistics
-	gcSnapshotCounter = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "mo",
-			Subsystem: "gc",
-			Name:      "snapshot_total",
-			Help:      "Total number of snapshots processed by GC.",
-		}, []string{"level", "action"})
-
-	GCSnapshotClusterCounter  = gcSnapshotCounter.WithLabelValues("cluster", "processed")
-	GCSnapshotAccountCounter  = gcSnapshotCounter.WithLabelValues("account", "processed")
-	GCSnapshotDatabaseCounter = gcSnapshotCounter.WithLabelValues("database", "processed")
-	GCSnapshotTableCounter    = gcSnapshotCounter.WithLabelValues("table", "processed")
-
-	// GC PITR statistics
-	gcPitrCounter = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "mo",
-			Subsystem: "gc",
-			Name:      "pitr_total",
-			Help:      "Total number of PITR processed by GC.",
-		}, []string{"level", "action"})
-
-	GCPitrClusterCounter  = gcPitrCounter.WithLabelValues("cluster", "processed")
-	GCPitrAccountCounter  = gcPitrCounter.WithLabelValues("account", "processed")
-	GCPitrDatabaseCounter = gcPitrCounter.WithLabelValues("database", "processed")
-	GCPitrTableCounter    = gcPitrCounter.WithLabelValues("table", "processed")
 
 	// GC memory usage statistics
 	gcMemoryGauge = prometheus.NewGaugeVec(
@@ -160,7 +112,6 @@ var (
 		}, []string{"type"})
 
 	GCMemoryBufferGauge  = gcMemoryGauge.WithLabelValues("buffer")
-	GCMemoryCacheGauge   = gcMemoryGauge.WithLabelValues("cache")
 	GCMemoryObjectsGauge = gcMemoryGauge.WithLabelValues("objects")
 
 	// GC queue statistics
@@ -185,11 +136,7 @@ var (
 			Help:      "Total number of GC errors.",
 		}, []string{"type", "error"})
 
-	GCErrorFileNotFoundCounter     = gcErrorCounter.WithLabelValues("file", "not_found")
-	GCErrorPermissionDeniedCounter = gcErrorCounter.WithLabelValues("file", "permission_denied")
-	GCErrorIOErrorCounter          = gcErrorCounter.WithLabelValues("file", "io_error")
-	GCErrorTimeoutCounter          = gcErrorCounter.WithLabelValues("operation", "timeout")
-	GCErrorContextCanceledCounter  = gcErrorCounter.WithLabelValues("operation", "context_canceled")
+	GCErrorIOErrorCounter = gcErrorCounter.WithLabelValues("file", "io_error")
 
 	// GC alert metrics
 	gcAlertGauge = prometheus.NewGaugeVec(
@@ -200,7 +147,6 @@ var (
 			Help:      "GC alert status (1 = alerting, 0 = normal).",
 		}, []string{"type"})
 
-	GCAlertNoDeletionGauge    = gcAlertGauge.WithLabelValues("no_deletion")
 	GCAlertHighMemoryGauge    = gcAlertGauge.WithLabelValues("high_memory")
 	GCAlertSlowExecutionGauge = gcAlertGauge.WithLabelValues("slow_execution")
 	GCAlertErrorRateGauge     = gcAlertGauge.WithLabelValues("error_rate")
@@ -228,7 +174,6 @@ var (
 		}, []string{"type"})
 
 	GCLastDataDeletionGauge       = gcLastDeletionGauge.WithLabelValues("data")
-	GCLastTombstoneDeletionGauge  = gcLastDeletionGauge.WithLabelValues("tombstone")
 	GCLastCheckpointDeletionGauge = gcLastDeletionGauge.WithLabelValues("checkpoint")
 	GCLastMetaDeletionGauge       = gcLastDeletionGauge.WithLabelValues("meta")
 	GCLastSnapshotDeletionGauge   = gcLastDeletionGauge.WithLabelValues("snapshot")
@@ -237,12 +182,9 @@ var (
 func initGCMetrics() {
 	registry.MustRegister(gcExecutionCounter)
 	registry.MustRegister(gcFileDeletionCounter)
-	registry.MustRegister(gcFileSizeHistogram)
 	registry.MustRegister(gcDurationHistogram)
 	registry.MustRegister(gcObjectCounter)
 	registry.MustRegister(gcTableCounter)
-	registry.MustRegister(gcSnapshotCounter)
-	registry.MustRegister(gcPitrCounter)
 	registry.MustRegister(gcMemoryGauge)
 	registry.MustRegister(gcQueueGauge)
 	registry.MustRegister(gcErrorCounter)

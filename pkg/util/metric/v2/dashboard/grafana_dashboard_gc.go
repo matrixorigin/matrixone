@@ -20,7 +20,6 @@ import (
 
 	"github.com/K-Phoen/grabana/dashboard"
 	"github.com/K-Phoen/grabana/timeseries"
-	tsaxis "github.com/K-Phoen/grabana/timeseries/axis"
 )
 
 func (c *DashboardCreator) initGCDashboard() error {
@@ -79,17 +78,7 @@ func (c *DashboardCreator) initGCFileDeletionRow() dashboard.Option {
 				c.getMetricWithFilter(`mo_gc_file_deletion_total`, ``),
 			)},
 			[]string{"{{ type }}"},
-			timeseries.Span(6),
-		),
-		c.getTimeSeries(
-			"File Size Deleted",
-			[]string{fmt.Sprintf(
-				"sum(increase(%s[$interval])) by (type)",
-				c.getMetricWithFilter(`mo_gc_file_size_bytes_sum`, ``),
-			)},
-			[]string{"{{ type }}"},
-			timeseries.Span(6),
-			timeseries.Axis(tsaxis.Unit("decbytes")),
+			timeseries.Span(12),
 		),
 	)
 }
