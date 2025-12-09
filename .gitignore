@@ -26,6 +26,7 @@ sdk_demo/
 vendor/
 gen_config
 main
+mo-tool
 /mo-server
 /mo-service
 /mo-debug
