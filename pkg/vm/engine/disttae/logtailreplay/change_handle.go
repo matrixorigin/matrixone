@@ -1471,7 +1471,7 @@ func updateDataBatch(bat *batch.Batch, start, end types.TS, mp *mpool.MPool) {
 func updateCNTombstoneBatch(bat *batch.Batch, committs types.TS, mp *mpool.MPool) {
 	var pk *vector.Vector
 	for _, vec := range bat.Vecs {
-		if vec.GetType().Oid != types.T_Rowid {
+		if vec.GetType().Oid != types.T_Rowid || vec.GetType().Oid != types.T_TS {
 			pk = vec
 		} else {
 			vec.Free(mp)
@@ -1485,6 +1485,12 @@ func updateCNTombstoneBatch(bat *batch.Batch, committs types.TS, mp *mpool.MPool
 	bat.Attrs = []string{objectio.TombstoneAttr_PK_Attr, objectio.DefaultCommitTS_Attr}
 }
 func updateCNDataBatch(bat *batch.Batch, commitTS types.TS, mp *mpool.MPool) {
+	for i, vec := range bat.Vecs {
+		if vec.GetType().Oid == types.T_TS {
+			vec.Free(mp)
+			bat.Vecs = append(bat.Vecs[:i], bat.Vecs[i+1:]...)
+		}
+	}
 	commitTSVec, err := vector.NewConstFixed(types.T_TS.ToType(), commitTS, bat.Vecs[0].Length(), mp)
 	if err != nil {
 		return
