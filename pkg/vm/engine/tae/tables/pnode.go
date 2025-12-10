@@ -21,12 +21,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"go.uber.org/zap"
 )
 
 var _ NodeT = (*persistedNode)(nil)
@@ -102,6 +104,20 @@ func (node *persistedNode) Scan(
 	vecs, deletes, err := LoadPersistedColumnDatas(
 		ctx, readSchema, node.object.rt, id, colIdxes, location, mp, tsForAppendable,
 	)
+	replaceCommitts := func(vecs []containers.Vector, i int) {
+		stats := node.object.meta.Load().GetObjectStats()
+		createTS := node.object.meta.Load().GetCreatedAt()
+		length := vecs[0].Length()
+		logutil.Info("committs replace",
+			zap.Bool("createdByCN", stats.GetCNCreated()),
+			zap.Bool("appendable", stats.GetAppendable()),
+			zap.String("createdTS", createTS.String()),
+			zap.Int("length", length),
+		)
+		vecs[i].Close()
+		vecs[i] = node.object.rt.VectorPool.Transient.GetVector(&objectio.TSType)
+		vector.AppendMultiFixed(vecs[i].GetDownstreamVector(), createTS, false, length, mp)
+	}
 	if err != nil {
 		return err
 	}
@@ -113,12 +129,10 @@ func (node *persistedNode) Scan(
 			var attr string
 			if idx == objectio.SEQNUM_COMMITTS {
 				attr = objectio.TombstoneAttr_CommitTs_Attr
-				if vecs[i].GetType().Oid != types.T_TS {
-					vecs[i].Close()
-					vecs[i] = node.object.rt.VectorPool.Transient.GetVector(&objectio.TSType)
-					createTS := node.object.meta.Load().GetCreatedAt()
-					vector.AppendMultiFixed(vecs[i].GetDownstreamVector(), createTS, false, vecs[0].Length(), mp)
+				if vecs[i].IsConstNull() {
+					replaceCommitts(vecs, i)
 				}
+				/// TODO: Read old version of nonappendable block?
 			} else {
 				attr = readSchema.ColDefs[idx].Name
 			}
@@ -137,11 +151,8 @@ func (node *persistedNode) Scan(
 			var attr string
 			if idx == objectio.SEQNUM_COMMITTS {
 				attr = objectio.TombstoneAttr_CommitTs_Attr
-				if vecs[i].GetType().Oid != types.T_TS {
-					vecs[i].Close()
-					vecs[i] = node.object.rt.VectorPool.Transient.GetVector(&objectio.TSType)
-					createTS := node.object.meta.Load().GetCreatedAt()
-					vector.AppendMultiFixed(vecs[i].GetDownstreamVector(), createTS, false, vecs[0].Length(), mp)
+				if vecs[i].IsConstNull() {
+					replaceCommitts(vecs, i)
 				}
 			} else {
 				attr = readSchema.ColDefs[idx].Name
