@@ -82,6 +82,14 @@ const (
 	// Drop snapshot SQL templates
 	PublicationDropSnapshotSqlTemplate         = `DROP SNAPSHOT %s`
 	PublicationDropSnapshotIfExistsSqlTemplate = `DROP SNAPSHOT IF EXISTS %s`
+
+	// Query mo_ccpr_log SQL template
+	PublicationQueryMoCcprLogSqlTemplate = `SELECT ` +
+		`cn_uuid, ` +
+		`iteration_state, ` +
+		`iteration_lsn ` +
+		`FROM mo_catalog.mo_ccpr_log ` +
+		`WHERE task_id = %d`
 )
 
 const (
@@ -95,6 +103,7 @@ const (
 	PublicationGetObjectSqlTemplate_Idx
 	PublicationDropSnapshotSqlTemplate_Idx
 	PublicationDropSnapshotIfExistsSqlTemplate_Idx
+	PublicationQueryMoCcprLogSqlTemplate_Idx
 
 	PublicationSqlTemplateCount
 )
@@ -171,6 +180,14 @@ var PublicationSQLTemplates = [PublicationSqlTemplateCount]struct {
 	},
 	PublicationDropSnapshotIfExistsSqlTemplate_Idx: {
 		SQL: PublicationDropSnapshotIfExistsSqlTemplate,
+	},
+	PublicationQueryMoCcprLogSqlTemplate_Idx: {
+		SQL: PublicationQueryMoCcprLogSqlTemplate,
+		OutputAttrs: []string{
+			"cn_uuid",
+			"iteration_state",
+			"iteration_lsn",
+		},
 	},
 }
 
@@ -437,6 +454,22 @@ func (b publicationSQLBuilder) GetObjectSQL(
 	return fmt.Sprintf(
 		PublicationSQLTemplates[PublicationGetObjectSqlTemplate_Idx].SQL,
 		escapeSQLString(objectName),
+	)
+}
+
+// ------------------------------------------------------------------------------------------------
+// Query mo_ccpr_log SQL
+// ------------------------------------------------------------------------------------------------
+
+// QueryMoCcprLogSQL creates SQL for querying mo_ccpr_log by task_id
+// Returns cn_uuid, iteration_state, iteration_lsn
+// Example: SELECT cn_uuid, iteration_state, iteration_lsn FROM mo_catalog.mo_ccpr_log WHERE task_id = 1
+func (b publicationSQLBuilder) QueryMoCcprLogSQL(
+	taskID uint64,
+) string {
+	return fmt.Sprintf(
+		PublicationSQLTemplates[PublicationQueryMoCcprLogSqlTemplate_Idx].SQL,
+		taskID,
 	)
 }
 

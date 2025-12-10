@@ -130,6 +130,8 @@ func ExecuteIteration(
     cnEngine engine.Engine,
     cnTxnClient client.TxnClient,
     taskID uint64,
+    iterationLSN uint64,
+    iterationState int8,
     localFS fileservice.FileService,  // 本地文件服务，用于存储object
 ) error
 ```
