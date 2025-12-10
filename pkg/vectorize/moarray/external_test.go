@@ -907,7 +907,7 @@ func TestScalarOp(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 
 			if tt.args.argVecF32 != nil {
-				if gotRes, _ := ScalarOp[float32](tt.args.argVecF32, tt.args.argOp, tt.args.argSca); !reflect.DeepEqual(gotRes, tt.wantVecF32) {
+				if gotRes, _ := ScalarOp[float32](tt.args.argVecF32, tt.args.argOp, float32(tt.args.argSca)); !reflect.DeepEqual(gotRes, tt.wantVecF32) {
 					t.Errorf("ScalarOp() = %v, want %v", gotRes, tt.wantVecF32)
 				}
 			} else if tt.args.argVecF64 != nil {

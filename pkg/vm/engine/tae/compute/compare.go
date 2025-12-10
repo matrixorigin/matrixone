@@ -18,10 +18,10 @@ import (
 	"bytes"
 	"cmp"
 	"fmt"
+	"slices"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 )
 
 func CompareOrdered[T types.OrderedT](a, b T) int {
@@ -42,7 +42,7 @@ func CompareBytes(a, b []byte) int {
 }
 
 func compareArrayFromBytes[T types.RealNumbers](a, b []byte) int {
-	return moarray.Compare[T](types.BytesToArray[T](a), types.BytesToArray[T](b))
+	return slices.Compare(types.BytesToArray[T](a), types.BytesToArray[T](b))
 }
 
 func Compare(a, b []byte, t types.T, scale1, scale2 int32) int {

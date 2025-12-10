@@ -15,10 +15,11 @@
 package compare
 
 import (
+	"slices"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -72,7 +73,7 @@ func CompareArrayFromBytes[T types.RealNumbers](_x, _y []byte, desc bool) int {
 	y := types.BytesToArray[T](_y)
 
 	if desc {
-		return moarray.Compare[T](y, x)
+		return slices.Compare(y, x)
 	}
-	return moarray.Compare[T](x, y)
+	return slices.Compare(x, y)
 }

@@ -158,12 +158,12 @@ func vectorScalarOp[T types.RealNumbers](ivecs []*vector.Vector, result vector.F
 					return err
 				}
 			} else {
-				out, err := moarray.ScalarOp[T](types.BytesToArray[T](vec), op, float64(sca))
+				out, err := moarray.ScalarOp(types.BytesToArray[T](vec), op, sca)
 				if err != nil {
 					return err
 				}
 
-				if err = rs.AppendBytes(types.ArrayToBytes[T](out), false); err != nil {
+				if err = rs.AppendBytes(types.ArrayToBytes(out), false); err != nil {
 					return err
 				}
 			}
@@ -184,12 +184,12 @@ func vectorScalarOp[T types.RealNumbers](ivecs []*vector.Vector, result vector.F
 					return err
 				}
 			} else {
-				out, err := moarray.ScalarOp[T](types.BytesToArray[T](vec), op, float64(sca))
+				out, err := moarray.ScalarOp(types.BytesToArray[T](vec), op, sca)
 				if err != nil {
 					return err
 				}
 
-				if err = rs.AppendBytes(types.ArrayToBytes[T](out), false); err != nil {
+				if err = rs.AppendBytes(types.ArrayToBytes(out), false); err != nil {
 					return err
 				}
 			}

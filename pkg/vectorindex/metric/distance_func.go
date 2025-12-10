@@ -19,27 +19,13 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/viterin/vek"
 	"github.com/viterin/vek/vek32"
 )
 
 func L2Distance[T types.RealNumbers](v1, v2 []T) (T, error) {
-	switch any(v1).(type) {
-	case []float32:
-		_v1 := any(v1).([]float32)
-		_v2 := any(v2).([]float32)
-
-		return T(vek32.Distance(_v1, _v2)), nil
-
-	case []float64:
-		_v1 := any(v1).([]float64)
-		_v2 := any(v2).([]float64)
-
-		return T(vek.Distance(_v1, _v2)), nil
-
-	default:
-		return 0, moerr.NewInternalErrorNoCtx("L2Distance type not supported")
-	}
+	return moarray.L2Distance(v1, v2)
 }
 
 func L2DistanceSq[T types.RealNumbers](v1, v2 []T) (T, error) {

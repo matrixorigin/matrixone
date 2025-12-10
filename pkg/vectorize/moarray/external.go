@@ -15,7 +15,6 @@
 package moarray
 
 import (
-	"math"
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -102,16 +101,89 @@ func Divide[T types.RealNumbers](v1, v2 []T) ([]T, error) {
 	switch _v1 := any(v1).(type) {
 	case []float32:
 		_v2 := any(v2).([]float32)
-		res := vek32.Mul(_v1, _v2)
+		res := vek32.Div(_v1, _v2)
 		return any(res).([]T), nil
 
 	case []float64:
 		_v2 := any(v2).([]float64)
-		res := vek.Mul(_v1, _v2)
+		res := vek.Div(_v1, _v2)
 		return any(res).([]T), nil
 
 	default:
-		panic("Multiply type not supported")
+		panic("Divide type not supported")
+	}
+}
+
+func AddScalar[T types.RealNumbers](v1 []T, v2 T) ([]T, error) {
+	switch _v1 := any(v1).(type) {
+	case []float32:
+		_v2 := float32(v2)
+		res := vek32.AddNumber(_v1, _v2)
+		return any(res).([]T), nil
+
+	case []float64:
+		_v2 := float64(v2)
+		res := vek.AddNumber(_v1, _v2)
+		return any(res).([]T), nil
+
+	default:
+		panic("AddScalar type not supported")
+	}
+}
+
+func SubtractScalar[T types.RealNumbers](v1 []T, v2 T) ([]T, error) {
+	switch _v1 := any(v1).(type) {
+	case []float32:
+		_v2 := float32(v2)
+		res := vek32.SubNumber(_v1, _v2)
+		return any(res).([]T), nil
+
+	case []float64:
+		_v2 := float64(v2)
+		res := vek.SubNumber(_v1, _v2)
+		return any(res).([]T), nil
+
+	default:
+		panic("SubtractScalar type not supported")
+	}
+}
+
+func MultiplyScalar[T types.RealNumbers](v1 []T, v2 T) ([]T, error) {
+	switch _v1 := any(v1).(type) {
+	case []float32:
+		_v2 := float32(v2)
+		res := vek32.MulNumber(_v1, _v2)
+		return any(res).([]T), nil
+
+	case []float64:
+		_v2 := float64(v2)
+		res := vek.MulNumber(_v1, _v2)
+		return any(res).([]T), nil
+
+	default:
+		panic("MultiplyScalar type not supported")
+	}
+}
+
+func DivideScalar[T types.RealNumbers](v1 []T, v2 T) ([]T, error) {
+	// pre-check for division by zero
+	if v2 == 0 {
+		return nil, moerr.NewDivByZeroNoCtx()
+	}
+
+	switch _v1 := any(v1).(type) {
+	case []float32:
+		_v2 := float32(v2)
+		res := vek32.DivNumber(_v1, _v2)
+		return any(res).([]T), nil
+
+	case []float64:
+		_v2 := float64(v2)
+		res := vek.DivNumber(_v1, _v2)
+		return any(res).([]T), nil
+
+	default:
+		panic("DivideScalar type not supported")
 	}
 }
 
@@ -284,46 +356,19 @@ func L2Norm[T types.RealNumbers](v []T) (T, error) {
 	}
 }
 
-func ScalarOp[T types.RealNumbers](v []T, operation string, scalar float64) ([]T, error) {
-	ret := make([]T, len(v))
-
+func ScalarOp[T types.RealNumbers](v []T, operation string, scalar T) ([]T, error) {
 	switch operation {
-	case "+", "-":
-		//TODO: optimize this in future.
-		if operation == "+" {
-			for i := range v {
-				ret[i] = v[i] + T(scalar)
-			}
-		} else {
-			for i := range v {
-				ret[i] = v[i] - T(scalar)
-			}
-		}
-	case "*", "/":
-		var scale float64
-		if operation == "/" {
-			if scalar == 0 {
-				return nil, moerr.NewDivByZeroNoCtx()
-			}
-			scale = float64(1) / scalar
-		} else {
-			scale = scalar
-		}
-
-		for i := range v {
-			ret[i] = v[i] * T(scale)
-		}
+	case "+":
+		return AddScalar(v, scalar)
+	case "-":
+		return SubtractScalar(v, scalar)
+	case "*":
+		return MultiplyScalar(v, scalar)
+	case "/":
+		return DivideScalar(v, scalar)
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("scale_vector: invalid operation")
 	}
-
-	// check overflow
-	for i := range ret {
-		if math.IsInf(float64(ret[i]), 0) {
-			return nil, moerr.NewInternalErrorNoCtx("vector contains infinity values")
-		}
-	}
-	return ret, nil
 }
 
 /* ------------ [END] Performance critical functions. ------- */
