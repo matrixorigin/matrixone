@@ -88,13 +88,23 @@ func (idx *BruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, rt
 		return nil, nil, moerr.NewInternalErrorNoCtx("queries type invalid")
 	}
 
-	flatten := make([]T, len(queries)*int(idx.Dimension))
-	for i := 0; i < len(queries); i++ {
-		offset := i * int(idx.Dimension)
-		copy(flatten[offset:], queries[i])
+	var flatten []T
+	if len(queries) == 1 {
+		flatten = queries[0]
+	} else {
+		flatten = make([]T, len(queries)*int(idx.Dimension))
+		for i := 0; i < len(queries); i++ {
+			offset := i * int(idx.Dimension)
+			copy(flatten[offset:], queries[i])
+		}
 	}
-
 	//fmt.Printf("flattened %v\n", flatten)
+
+	// limit must be less than idx.Count
+	limit := rt.Limit
+	if limit > idx.Count {
+		limit = idx.Count
+	}
 
 	keys_ui64, distances_f32, err := usearch.ExactSearchUnsafe(
 		util.UnsafePointer(&(idx.Dataset[0])),
