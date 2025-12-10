@@ -72,23 +72,22 @@ query mo columns
 
 **iteration**
 * 0. 初始化阶段
+  - 检查iteration状态
   - new txn(engine, client)txn: 创建本地事务，用于操作本地表
   - lock table(本地的表): 锁定本地目标表，防止并发修改冲突
-  - sinker开启事务: 在上游集群开启事务，用于执行查询操作
+  - upstream executor开启事务: 在上游集群开启事务，用于执行查询操作
 
 * 1. 获取上游元数据和DDL
   - 1.1 请求上游snapshot
-    - 通过sinker向上游发送: CREATE SNAPSHOT sp1 FOR TABLE db1 t1 (或 FOR DATABASE db1)
+    - 通过upstream executor向上游发送: CREATE SNAPSHOT sp1 FOR TABLE db1 t1 (或 FOR DATABASE db1)
     - 传入参数: table info/db info (用于确定snapshot范围)
     - 返回: snapshot名称
 
     1.1.2 请求上游的snapshot ts，用新建的snapshot来取ts
   
   - 1.2 查询上游三表获取DDL
-    - 通过sinker查询上游: mo_catalog.mo_databases, mo_catalog.mo_tables, mo_catalog.mo_columns
-    - 根据table info/db info进行过滤
-    - 获取原始id映射关系(上游rel_id/dat_id -> 下游对应id)
-    - 查询下游对应表结构，对比差异
+    - 通过upstream executor查询上游: mo_catalog.mo_databases, mo_catalog.mo_tables, mo_catalog.mo_columns
+    - 检查：1. 是否行数内容不对 2. id是否不对
     - 生成DDL变更语句(create table/alter table等)
 
 * 2. 计算snapshot diff获取object list
@@ -99,7 +98,7 @@ query mo columns
 
 * 3. 获取object数据
   - 遍历object list中的每个object
-  - 通过sinker执行: GETOBJECT object_name
+  - 通过upstream executor执行: GETOBJECT object_name
   - 从上游fileservice复制object文件到本地fileservice
   - 验证object完整性(checksum等)
 
@@ -117,7 +116,7 @@ query mo columns
 * 6. 清理阶段
   - drop snapshot: 在上游执行 DROP SNAPSHOT sp1, DROP SNAPSHOT sp2 (清理临时snapshot)
   - unlock table(本地的表): 释放表锁
-  - sinker结束事务: 提交或回滚上游事务
+  - upstream executor结束事务: 提交或回滚上游事务
 
 * 7. 更新系统表
   - 在ccpr表里更新iteration上下文，更新iteration_state，iteration_lsn, context, error_message
@@ -130,11 +129,8 @@ func ExecuteIteration(
     cnUUID string,
     cnEngine engine.Engine,
     cnTxnClient client.TxnClient,
-    iterCtx *IterationContext,
-    mp *mpool.MPool,
-    sinker Sinker,                    // 上游集群连接器，用于执行SQL和获取数据
+    taskID uint64,
     localFS fileservice.FileService,  // 本地文件服务，用于存储object
-    upstreamFS fileservice.FileService, // 上游文件服务，用于读取object
 ) error
 ```
 
@@ -144,61 +140,38 @@ type IterationContext struct {
     // 任务标识
     taskID           uint64           // 对应 mo_ccpr_log.task_id
     subscriptionName string           // 订阅名称
-    
-    // 复制级别和范围
     syncLevel        string           // 'database' 或 'table'
     dbName           string           // 数据库名（database/table级别必填）
     tableName        string           // 表名（table级别必填）
+    accountID        uint32           // 账户ID
+    tableID          uint64           // 表ID
     
     // 上游连接配置
-    upstreamConn     string           // 上游连接字符串
+    upstreamExecutor     UpstreamExecutor           // 上游连接字符串
     
     // 复制配置
     syncConfig       map[string]any  // 同步配置，如 sync_interval 等
     
     // 执行状态
-    accountID        uint32           // 账户ID
-    tableID          uint64           // 表ID
     iterationLSN     uint64           // 当前iteration的LSN
-    fromTS           types.TS         // 起始时间戳
-    toTS             types.TS         // 结束时间戳
     cnUUID           string           // 执行任务的CN标识
     
     // 上下文信息
-    context          map[string]any  // iteration上下文，如snapshot名称等
-    sourceInfo       *SourceInfo     // ID映射关系（上游rel_id/dat_id -> 下游对应id）
-    prevAObj         []*ObjectInfo   // 之前的object信息，用于去重和对比
-}
-```
-
-**SourceInfo 结构体（ID映射）**
-```go
-type SourceInfo struct {
-    UpstreamDBID   uint64           // 上游数据库ID
-    DownstreamDBID uint64           // 下游数据库ID
-    UpstreamRelID  map[string]uint64 // 上游表名 -> 上游表ID映射
-    DownstreamRelID map[string]uint64 // 下游表名 -> 下游表ID映射
-}
-```
-
-**ObjectInfo 结构体**
-```go
-type ObjectInfo struct {
-    ObjectName  string           // object名称
-    CreateAt    types.TS         // 创建时间戳
-    DeleteAt    types.TS         // 删除时间戳（如果已删除）
-    IsTombstone bool             // 是否为墓碑标记
-    Stats       *ObjectStats     // object统计信息
+    prevSnapshotName string
+    prevSnapshotTS types.TS
+    currentSnapshotName string
+    currentSnapshotTS types.TS
+    activeAObj         []ObjectStats   // 之前的object信息，用于去重和对比
+    tableIDs map[string]uint64
 }
 ```
 
 **Sinker 接口**
 ```go
-type Sinker interface {
+type UpstreamExecutor interface {
     StartTxn(ctx context.Context) error
     ExecSQL(ctx context.Context, sql string) (*Result, error)
     EndTxn(ctx context.Context, commit bool) error
-    GetObject(ctx context.Context, objectName string) (io.Reader, error)
 }
 ```
 
