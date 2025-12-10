@@ -371,12 +371,25 @@ dev-help:
 	@echo "  make dev-edit-common    - Edit common configuration (all services)"
 	@echo "  make dev-setup-docker-mirror - Configure Docker registry mirror (for faster pulls)"
 	@echo ""
-	@echo "Dashboard Creation (via mo-tool):"
-	@echo "  make dev-create-dashboard        - Create dashboard (default: local mode, port 3001)"
-	@echo "  make dev-create-dashboard-local  - Create local dashboard (port 3001)"
-	@echo "  make dev-create-dashboard-cluster - Create cluster dashboard (port 3000, docker compose)"
-	@echo "  make dev-create-dashboard-k8s     - Create K8S dashboard"
-	@echo "  make dev-create-dashboard-cloud-ctrl - Create cloud control-plane dashboard"
+	@echo "Dashboard Management (via mo-tool):"
+	@echo "  Create:"
+	@echo "    make dev-create-dashboard        - Create dashboard (default: local mode, port 3001)"
+	@echo "    make dev-create-dashboard-local  - Create local dashboard (port 3001)"
+	@echo "    make dev-create-dashboard-cluster - Create cluster dashboard (port 3000, docker compose)"
+	@echo "    make dev-create-dashboard-k8s     - Create K8S dashboard"
+	@echo "    make dev-create-dashboard-cloud-ctrl - Create cloud control-plane dashboard"
+	@echo "  List:"
+	@echo "    make dev-list-dashboard          - List dashboards (default: local mode, port 3001)"
+	@echo "    make dev-list-dashboard-local    - List local dashboards (port 3001)"
+	@echo "    make dev-list-dashboard-cluster  - List cluster dashboards (port 3000)"
+	@echo "    make dev-list-dashboard-k8s       - List K8S dashboards"
+	@echo "    make dev-list-dashboard-cloud-ctrl - List cloud control-plane dashboards"
+	@echo "  Delete:"
+	@echo "    make dev-delete-dashboard        - Delete all dashboards in folder (default: local mode, port 3001)"
+	@echo "    make dev-delete-dashboard-local  - Delete all local dashboards (port 3001)"
+	@echo "    make dev-delete-dashboard-cluster - Delete all cluster dashboards (port 3000)"
+	@echo "    make dev-delete-dashboard-k8s     - Delete all K8S dashboards"
+	@echo "    make dev-delete-dashboard-cloud-ctrl - Delete all cloud control-plane dashboards"
 	@echo ""
 	@echo "  Custom options:"
 	@echo "    DASHBOARD_PORT=3001 make dev-create-dashboard        # Custom port"
@@ -384,8 +397,11 @@ dev-help:
 	@echo "    DASHBOARD_MODE=cloud make dev-create-dashboard      # Custom mode"
 	@echo ""
 	@echo "  Or use mo-tool directly:"
-	@echo "    ./mo-tool dashboard --mode local --port 3001"
-	@echo "    ./mo-tool dashboard --mode cloud --port 3000"
+	@echo "    ./mo-tool dashboard create --mode local --port 3001"
+	@echo "    ./mo-tool dashboard list --mode cloud --port 3000"
+	@echo "    ./mo-tool dashboard delete --mode local --port 3001          # Delete all dashboards in folder"
+	@echo "    ./mo-tool dashboard delete-dashboard --uid <uid>             # Delete single dashboard by UID"
+	@echo "    ./mo-tool dashboard delete-folder --mode local --port 3001   # Delete entire folder and all dashboards"
 	@echo ""
 	@echo "Examples:"
 	@echo "  make dev-build && make dev-up              # Build and start"
@@ -789,6 +805,68 @@ dev-create-dashboard-k8s:
 .PHONY: dev-create-dashboard-cloud-ctrl
 dev-create-dashboard-cloud-ctrl:
 	@$(MAKE) DASHBOARD_MODE=cloud-ctrl DASHBOARD_PORT=$(DASHBOARD_PORT) dev-create-dashboard
+
+# List dashboards
+.PHONY: dev-list-dashboard
+dev-list-dashboard: mo-tool
+	@echo "Listing dashboards..."
+	@echo "  Mode: $(DASHBOARD_MODE)"
+	@echo "  Host: $(DASHBOARD_HOST):$(DASHBOARD_PORT)"
+	@echo "  Username: $(DASHBOARD_USERNAME)"
+	@./mo-tool dashboard list \
+		--host $(DASHBOARD_HOST) \
+		--port $(DASHBOARD_PORT) \
+		--mode $(DASHBOARD_MODE) \
+		--username $(DASHBOARD_USERNAME) \
+		--password $(DASHBOARD_PASSWORD) \
+		--datasource $(DASHBOARD_DATASOURCE)
+
+.PHONY: dev-list-dashboard-local
+dev-list-dashboard-local:
+	@$(MAKE) DASHBOARD_MODE=local DASHBOARD_PORT=3001 dev-list-dashboard
+
+.PHONY: dev-list-dashboard-cluster
+dev-list-dashboard-cluster:
+	@$(MAKE) DASHBOARD_MODE=cloud DASHBOARD_PORT=3000 DASHBOARD_DATASOURCE=Prometheus dev-list-dashboard
+
+.PHONY: dev-list-dashboard-k8s
+dev-list-dashboard-k8s:
+	@$(MAKE) DASHBOARD_MODE=k8s DASHBOARD_PORT=$(DASHBOARD_PORT) dev-list-dashboard
+
+.PHONY: dev-list-dashboard-cloud-ctrl
+dev-list-dashboard-cloud-ctrl:
+	@$(MAKE) DASHBOARD_MODE=cloud-ctrl DASHBOARD_PORT=$(DASHBOARD_PORT) dev-list-dashboard
+
+# Delete dashboards
+.PHONY: dev-delete-dashboard
+dev-delete-dashboard: mo-tool
+	@echo "Deleting dashboards..."
+	@echo "  Mode: $(DASHBOARD_MODE)"
+	@echo "  Host: $(DASHBOARD_HOST):$(DASHBOARD_PORT)"
+	@echo "  Username: $(DASHBOARD_USERNAME)"
+	@./mo-tool dashboard delete \
+		--host $(DASHBOARD_HOST) \
+		--port $(DASHBOARD_PORT) \
+		--mode $(DASHBOARD_MODE) \
+		--username $(DASHBOARD_USERNAME) \
+		--password $(DASHBOARD_PASSWORD) \
+		--datasource $(DASHBOARD_DATASOURCE)
+
+.PHONY: dev-delete-dashboard-local
+dev-delete-dashboard-local:
+	@$(MAKE) DASHBOARD_MODE=local DASHBOARD_PORT=3001 dev-delete-dashboard
+
+.PHONY: dev-delete-dashboard-cluster
+dev-delete-dashboard-cluster:
+	@$(MAKE) DASHBOARD_MODE=cloud DASHBOARD_PORT=3000 DASHBOARD_DATASOURCE=Prometheus dev-delete-dashboard
+
+.PHONY: dev-delete-dashboard-k8s
+dev-delete-dashboard-k8s:
+	@$(MAKE) DASHBOARD_MODE=k8s DASHBOARD_PORT=$(DASHBOARD_PORT) dev-delete-dashboard
+
+.PHONY: dev-delete-dashboard-cloud-ctrl
+dev-delete-dashboard-cloud-ctrl:
+	@$(MAKE) DASHBOARD_MODE=cloud-ctrl DASHBOARD_PORT=$(DASHBOARD_PORT) dev-delete-dashboard
 
 ###############################################################################
 # Local Development with MinIO Storage

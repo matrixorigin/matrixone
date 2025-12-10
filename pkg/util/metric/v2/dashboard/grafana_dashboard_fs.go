@@ -157,7 +157,7 @@ func (c *DashboardCreator) initFSCacheRow() dashboard.Option {
 }
 
 // initFSReadWriteBytesRow initializes the FileService read/write bytes metrics row.
-// It displays both throughput (bytes per second) and distribution percentiles (bytes per operation).
+// It displays throughput (bytes per second) for S3 and local IO operations.
 //
 // Metric Definition:
 // The histogram metrics (s3_io_bytes, local_io_bytes) record the bytes transferred per IO operation.
@@ -169,25 +169,18 @@ func (c *DashboardCreator) initFSCacheRow() dashboard.Option {
 // - _sum: total sum of all observed values (used for throughput calculation)
 // - _count: total count of observations (used for operation rate calculations)
 //
-// Dashboard Panels:
-// 1. Throughput Panel: sum(rate(..._sum[$interval]))
+// Dashboard Panel:
+// Throughput Panel: sum(rate(..._sum[$interval]))
 //   - Calculates average bytes transferred per second over the time window
 //   - Formula: rate(_sum[$interval]) = (sum of all bytes) / time_window_seconds
 //   - This is the most important metric for understanding actual data transfer performance
 //   - Represents the actual bandwidth utilization (bytes/sec)
 //
-// 2. Percentile Panels: histogram_quantile(percentile, sum(rate(..._bucket[$interval])) by (le))
-//   - Calculates percentiles (P50, P80, P90, P99) of bytes per individual IO operation
-//   - Formula: histogram_quantile finds the bucket boundary where percentile% of operations fall below
-//   - Shows the distribution of IO operation sizes, not throughput
-//   - Useful for understanding: "What is the typical size of each IO operation?"
-//   - Note: Due to histogram bucket configuration (ExponentialBuckets(1, 2.0, 10)),
-//     operations larger than 512 bytes may have less accurate percentiles
-//
-// Key Differences:
-// - Throughput: Total bytes/second (aggregate across all operations)
-// - Percentiles: Bytes per operation (individual operation size distribution)
-// Example: 100 operations of 1KB each = 100KB/s throughput, but P99 = 1KB per operation
+// Note: Percentile panels (P50/P80/P90/P99) for IO operation sizes are not included
+// because the histogram bucket configuration (ExponentialBuckets(1, 2.0, 10)) has a
+// maximum bucket of 512B. Since most IO operations are larger than 256B, all percentiles
+// would show as 512B, providing no useful information. The throughput metric is the
+// primary and most useful metric for understanding IO performance.
 func (c *DashboardCreator) initFSReadWriteBytesRow() dashboard.Option {
 	// Throughput queries: Calculate bytes per second using _sum metric
 	// rate(_sum[$interval]) computes the average rate of increase of the sum over the time window
@@ -217,50 +210,22 @@ func (c *DashboardCreator) initFSReadWriteBytesRow() dashboard.Option {
 		"local-write",
 	}
 
-	// Percentile panels: Calculate distribution of bytes per individual IO operation
-	// histogram_quantile computes percentiles from the bucket counters
-	// Each panel shows: "What is the P50/P80/P90/P99 size of each IO operation?"
-	// Note: This is different from throughput - it shows operation size, not total bytes/sec
-	percentilePanels := c.getMultiHistogram(
-		[]string{
-			c.getMetricWithFilter(`mo_fs_s3_io_bytes_bucket`, `type="read"`),
-			c.getMetricWithFilter(`mo_fs_s3_io_bytes_bucket`, `type="write"`),
-			c.getMetricWithFilter(`mo_fs_local_io_bytes_bucket`, `type="read"`),
-			c.getMetricWithFilter(`mo_fs_local_io_bytes_bucket`, `type="write"`),
-		},
-		[]string{
-			"s3-read",
-			"s3-write",
-			"local-read",
-			"local-write",
-		},
-		[]float64{0.50, 0.8, 0.90, 0.99},
-		[]float32{3, 3, 3, 3},
-		axis.Unit("bytes"),
-		axis.Min(0),
-	)
-
-	// Combine throughput panel and percentile panels
-	allPanels := append(
-		[]row.Option{
-			// Throughput panel: Shows aggregate bytes per second (most important for performance)
-			// This is the primary metric for understanding actual data transfer performance
-			// Grafana will automatically format rate() results as "bytes/s" or appropriate units
-			c.withMultiGraph(
-				"Throughput (bytes/sec)",
-				6,
-				throughputQueries,
-				throughputLegends,
-				axis.Unit("bytes"), // Grafana will auto-format as bytes/s for rate() queries
-				axis.Min(0),
-			),
-		},
-		percentilePanels...,
-	)
+	// Note: Percentile panels (P50/P80/P90/P99) for IO operation sizes are not included
+	// because the histogram bucket configuration (ExponentialBuckets(1, 2.0, 10)) has a
+	// maximum bucket of 512B. Since most IO operations are larger than 256B, all percentiles
+	// would show as 512B, providing no useful information. The throughput panel (bytes/sec)
+	// is the primary and most useful metric for understanding IO performance.
 
 	return dashboard.Row(
-		"FileService read write bytes",
-		allPanels...,
+		"FileService IO Throughput",
+		c.withMultiGraph(
+			"Throughput (bytes/sec)",
+			12,
+			throughputQueries,
+			throughputLegends,
+			axis.Unit("bytes"), // Grafana will auto-format as bytes/s for rate() queries
+			axis.Min(0),
+		),
 	)
 }
 
