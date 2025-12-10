@@ -157,12 +157,12 @@ func initExporter(ctx context.Context, config *tracerProviderConfig) error {
 	p.Register(&MOZapLog{}, NewBufferPipe2CSVWorker(defaultOptions...))
 	p.Register(&StatementInfo{}, NewBufferPipe2CSVWorker(defaultOptions...))
 	p.Register(&MOErrorHolder{}, NewBufferPipe2CSVWorker(defaultOptions...))
-	logutil.Info("init GlobalBatchProcessor")
+	logutil.Info("trace.init.global.batch.processor")
 	if !p.Start() {
 		return moerr.NewInternalError(ctx, "trace exporter already started")
 	}
 	config.spanProcessors = append(config.spanProcessors, NewBatchSpanProcessor(p))
-	logutil.Info("init trace span processor")
+	logutil.Info("trace.init.span.processor")
 	return nil
 }
 
@@ -222,7 +222,7 @@ func Shutdown(ctx context.Context) error {
 			return moerr.AttachCause(shutdownCtx, err)
 		}
 	}
-	logutil.Info("Shutdown trace complete.")
+	logutil.Info("trace.shutdown.complete")
 	return nil
 }
 

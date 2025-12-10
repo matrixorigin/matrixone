@@ -762,9 +762,12 @@ func (c *objGetArg) GetData(ctx context.Context) (res string, err error) {
 			return
 		}
 		col := blk.ColumnMeta(idx)
-		col.ZoneMap()
-		idxs = append(idxs, idx)
 		tp := types.T(col.DataType()).ToType()
+		if col.DataType() == uint8(types.T_TS) && i == len(c.cols)-1 {
+			idxs = append(idxs, objectio.SEQNUM_COMMITTS)
+		} else {
+			idxs = append(idxs, idx)
+		}
 		typs = append(typs, tp)
 	}
 
