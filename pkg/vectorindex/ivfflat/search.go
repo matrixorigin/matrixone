@@ -212,7 +212,10 @@ func (idx *IvfflatSearchIndex[T]) Search(
 }
 
 func (idx *IvfflatSearchIndex[T]) Destroy() {
-	idx.Centroids = nil
+	if idx.Centroids != nil {
+		idx.Centroids.Destroy()
+		idx.Centroids = nil
+	}
 }
 
 func NewIvfflatSearch[T types.RealNumbers](
