@@ -418,6 +418,13 @@ func Abs[T types.RealNumbers](v []T) (res []T, err error) {
 }
 
 func Sqrt[T types.RealNumbers](v []T) (res []T, err error) {
+	hasNegative := slices.ContainsFunc(v, func(n T) bool {
+		return n < 0
+	})
+	if hasNegative {
+		return nil, moerr.NewInvalidInputNoCtx("sqrt: cannot take square root of negative number")
+	}
+
 	switch _v := any(v).(type) {
 	case []float32:
 		res = any(vek32.Sqrt(_v)).([]T)
