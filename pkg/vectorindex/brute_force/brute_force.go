@@ -116,7 +116,7 @@ func (idx *BruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, rt
 		idx.Dimension,
 		idx.Metric,
 		idx.Quantization,
-		rt.Limit,
+		limit,
 		rt.NThreads)
 
 	if err != nil {
