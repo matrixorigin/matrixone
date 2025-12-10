@@ -88,8 +88,12 @@ query mo columns
   
   - 1.2 查询上游三表获取DDL
     - 通过upstream executor查询上游: mo_catalog.mo_databases, mo_catalog.mo_tables, mo_catalog.mo_columns
+    - 输入：internal_sql_executor, upstream executor
     - 检查：1. 是否行数内容不对 2. id是否不对
-    - 生成DDL变更语句(create table/alter table等)
+    - id从iteration context里取
+    - iteration context里加一下，返回是不是第一次同步，根据是否又上一个snapshot来判断。
+    - 如果是第一次取，根据表里的内容生成ddl语句，查询本地的sql，然后记录table id, db_id
+    - 如果不是第一次取检查上游的三表和本地是否相同，id是否对应的上，有变化就生成ddl，然后记录新的table id, db id
 
 * 2. 计算snapshot diff获取object list
   - 在上游执行: OBJECTLIST DATABASE db1 TABLE t1 SNAPSHOT sp2 AGAINST SNAPSHOT sp1
@@ -205,3 +209,5 @@ collect change scan object
 **兼容性**
 
 **on error, reset and do snapshot**
+
+**ddl检查**

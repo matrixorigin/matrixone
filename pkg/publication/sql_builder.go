@@ -41,6 +41,7 @@ const (
 	PublicationQueryMoDatabasesSqlTemplate = `SELECT ` +
 		`dat_id, ` +
 		`datname, ` +
+		`dat_createsql, ` +
 		`account_id ` +
 		`FROM mo_catalog.mo_databases ` +
 		`WHERE 1=1%s`
@@ -144,6 +145,7 @@ var PublicationSQLTemplates = [PublicationSqlTemplateCount]struct {
 		OutputAttrs: []string{
 			"dat_id",
 			"datname",
+			"dat_createsql",
 			"account_id",
 		},
 	},
