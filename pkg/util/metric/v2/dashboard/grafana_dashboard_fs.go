@@ -36,6 +36,7 @@ func (c *DashboardCreator) initFileServiceDashboard() error {
 		c.withRowOptions(
 			c.initFSOverviewRow(),
 			c.initFSCacheRow(),
+			c.initFSCacheEvictErrorRow(),
 			c.initFSObjectStorageRow(),
 			c.initFSIOMergerDurationRow(),
 			c.initFSReadWriteDurationRow(),
@@ -153,6 +154,36 @@ func (c *DashboardCreator) initFSCacheRow() dashboard.Option {
 		onePanel("Mem", `component=~".*mem"`),
 		onePanel("Meta", `component=~".*meta"`),
 		onePanel("Disk", `component=~".*disk"`),
+	)
+}
+
+func (c *DashboardCreator) initFSCacheEvictErrorRow() dashboard.Option {
+	return dashboard.Row(
+		"FileService Cache Evict & Error",
+		c.withMultiGraph(
+			"Disk Cache Evict Rate",
+			6,
+			[]string{
+				`sum(rate(` + c.getMetricWithFilter("mo_fs_disk_cache_evict_total", "") + `[$interval]))`,
+			},
+			[]string{
+				"evict",
+			},
+			axis.Unit("short"),
+			axis.Min(0),
+		),
+		c.withMultiGraph(
+			"Disk Cache Error Rate",
+			6,
+			[]string{
+				`sum(rate(` + c.getMetricWithFilter("mo_fs_disk_cache_error_total", "") + `[$interval]))`,
+			},
+			[]string{
+				"error",
+			},
+			axis.Unit("short"),
+			axis.Min(0),
+		),
 	)
 }
 

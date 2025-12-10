@@ -197,3 +197,28 @@ var (
 		},
 	)
 )
+
+// Disk cache metrics
+var (
+	// FSDiskCacheEvictCounter tracks the number of disk cache evictions
+	// Evictions occur when cache capacity is exceeded and old entries are removed
+	FSDiskCacheEvictCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "fs",
+			Name:      "disk_cache_evict_total",
+			Help:      "Total number of disk cache evictions",
+		},
+	)
+
+	// FSDiskCacheErrorCounter tracks the number of disk cache errors
+	// Errors include file I/O failures, permission issues, etc.
+	FSDiskCacheErrorCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "fs",
+			Name:      "disk_cache_error_total",
+			Help:      "Total number of disk cache errors",
+		},
+	)
+)
