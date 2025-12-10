@@ -90,6 +90,12 @@ const (
 		`iteration_lsn ` +
 		`FROM mo_catalog.mo_ccpr_log ` +
 		`WHERE task_id = %d`
+
+	// Query snapshot TS SQL template
+	PublicationQuerySnapshotTsSqlTemplate = `SELECT ` +
+		`ts ` +
+		`FROM mo_catalog.mo_snapshots ` +
+		`WHERE sname = '%s'`
 )
 
 const (
@@ -104,6 +110,7 @@ const (
 	PublicationDropSnapshotSqlTemplate_Idx
 	PublicationDropSnapshotIfExistsSqlTemplate_Idx
 	PublicationQueryMoCcprLogSqlTemplate_Idx
+	PublicationQuerySnapshotTsSqlTemplate_Idx
 
 	PublicationSqlTemplateCount
 )
@@ -187,6 +194,12 @@ var PublicationSQLTemplates = [PublicationSqlTemplateCount]struct {
 			"cn_uuid",
 			"iteration_state",
 			"iteration_lsn",
+		},
+	},
+	PublicationQuerySnapshotTsSqlTemplate_Idx: {
+		SQL: PublicationQuerySnapshotTsSqlTemplate,
+		OutputAttrs: []string{
+			"ts",
 		},
 	},
 }
@@ -470,6 +483,18 @@ func (b publicationSQLBuilder) QueryMoCcprLogSQL(
 	return fmt.Sprintf(
 		PublicationSQLTemplates[PublicationQueryMoCcprLogSqlTemplate_Idx].SQL,
 		taskID,
+	)
+}
+
+// QuerySnapshotTsSQL creates SQL for querying snapshot TS by snapshot name
+// Returns ts (bigint)
+// Example: SELECT ts FROM mo_catalog.mo_snapshots WHERE sname = 'sp1'
+func (b publicationSQLBuilder) QuerySnapshotTsSQL(
+	snapshotName string,
+) string {
+	return fmt.Sprintf(
+		PublicationSQLTemplates[PublicationQuerySnapshotTsSqlTemplate_Idx].SQL,
+		escapeSQLString(snapshotName),
 	)
 }
 

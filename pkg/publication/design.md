@@ -80,8 +80,9 @@ query mo columns
 * 1. 获取上游元数据和DDL
   - 1.1 请求上游snapshot
     - 通过upstream executor向上游发送: CREATE SNAPSHOT sp1 FOR TABLE db1 t1 (或 FOR DATABASE db1)
-    - 传入参数: table info/db info (用于确定snapshot范围)
-    - 返回: snapshot名称
+    - 传入参数: IterationContext
+    - 取iterationcontext里的srcinfo来定制sql，新建的snapshot的name存入iteration context里。
+    - snapshot name用一个函数用一个规则编码，比如ccpr_taskid...
 
     1.1.2 请求上游的snapshot ts，用新建的snapshot来取ts
   
@@ -142,11 +143,7 @@ type IterationContext struct {
     // 任务标识
     taskID           uint64           // 对应 mo_ccpr_log.task_id
     subscriptionName string           // 订阅名称
-    syncLevel        string           // 'database' 或 'table'
-    dbName           string           // 数据库名（database/table级别必填）
-    tableName        string           // 表名（table级别必填）
-    accountID        uint32           // 账户ID
-    tableID          uint64           // 表ID
+    srcinfo SrcInfo//订阅信息，可能是account/database/table级别的，database/table通过name确定，account通过连接本身确定不用另外存，连过去能读到什么就存什么
     
     // 上游连接配置
     upstreamExecutor     UpstreamExecutor           // 上游连接字符串
@@ -206,3 +203,5 @@ collect change scan object
 **索引表**
 
 **兼容性**
+
+**on error, reset and do snapshot**

@@ -17,8 +17,10 @@ package publication
 import (
 	"context"
 	"database/sql"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 // IterationState represents the state of an iteration
@@ -88,6 +90,100 @@ func CheckIterationStatus(
 	if iterationState != IterationStateCompleted {
 		return moerr.NewInternalErrorf(ctx, "iteration_state is not completed: expected %d (completed), got %d", IterationStateCompleted, iterationState)
 	}
+
+	return nil
+}
+
+// GenerateSnapshotName generates a snapshot name using a rule-based encoding
+// Format: ccpr_<taskID>_<iterationLSN>
+func GenerateSnapshotName(taskID uint64, iterationLSN uint64) string {
+	return fmt.Sprintf("ccpr_%d_%d", taskID, iterationLSN)
+}
+
+// RequestUpstreamSnapshot requests a snapshot from upstream cluster
+// It creates a snapshot based on the srcinfo in IterationContext and stores the snapshot name in the context
+func RequestUpstreamSnapshot(
+	ctx context.Context,
+	iterationCtx *IterationContext,
+) error {
+	if iterationCtx == nil {
+		return moerr.NewInternalError(ctx, "iteration context is nil")
+	}
+
+	if iterationCtx.UpstreamExecutor == nil {
+		return moerr.NewInternalError(ctx, "upstream executor is nil")
+	}
+
+	// Generate snapshot name using rule-based encoding
+	snapshotName := GenerateSnapshotName(iterationCtx.TaskID, iterationCtx.IterationLSN)
+
+	// Build SQL based on srcinfo
+	var createSnapshotSQL string
+	switch iterationCtx.SrcInfo.SyncLevel {
+	case SyncLevelTable:
+		if iterationCtx.SrcInfo.DBName == "" || iterationCtx.SrcInfo.TableName == "" {
+			return moerr.NewInternalError(ctx, "db_name and table_name are required for table level snapshot")
+		}
+		createSnapshotSQL = PublicationSQLBuilder.CreateSnapshotForTableSQL(
+			snapshotName,
+			iterationCtx.SrcInfo.DBName,
+			iterationCtx.SrcInfo.TableName,
+		)
+	case SyncLevelDatabase:
+		if iterationCtx.SrcInfo.DBName == "" {
+			return moerr.NewInternalError(ctx, "db_name is required for database level snapshot")
+		}
+		createSnapshotSQL = PublicationSQLBuilder.CreateSnapshotForDatabaseSQL(
+			snapshotName,
+			iterationCtx.SrcInfo.DBName,
+		)
+	case SyncLevelAccount:
+		createSnapshotSQL = PublicationSQLBuilder.CreateSnapshotForAccountSQL(
+			snapshotName,
+			iterationCtx.SrcInfo.AccountName,
+		)
+	default:
+		return moerr.NewInternalErrorf(ctx, "unsupported sync_level: %s", iterationCtx.SrcInfo.SyncLevel)
+	}
+
+	// Execute SQL through upstream executor
+	result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, createSnapshotSQL)
+	if err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to create snapshot: %v", err)
+	}
+	defer result.Close()
+
+	// Store snapshot name in iteration context
+	iterationCtx.CurrentSnapshotName = snapshotName
+
+	// Query snapshot TS from mo_snapshots table
+	querySnapshotTsSQL := PublicationSQLBuilder.QuerySnapshotTsSQL(snapshotName)
+	tsResult, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, querySnapshotTsSQL)
+	if err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to query snapshot TS: %v", err)
+	}
+	defer tsResult.Close()
+
+	// Scan the TS result
+	var tsValue sql.NullInt64
+	if !tsResult.Next() {
+		if err := tsResult.Err(); err != nil {
+			return moerr.NewInternalErrorf(ctx, "failed to read snapshot TS result: %v", err)
+		}
+		return moerr.NewInternalErrorf(ctx, "no rows returned for snapshot %s", snapshotName)
+	}
+
+	if err := tsResult.Scan(&tsValue); err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to scan snapshot TS result: %v", err)
+	}
+
+	if !tsValue.Valid {
+		return moerr.NewInternalErrorf(ctx, "snapshot TS is null for snapshot %s", snapshotName)
+	}
+
+	// Convert bigint TS to types.TS (logical time is set to 0)
+	snapshotTS := types.BuildTS(tsValue.Int64, 0)
+	iterationCtx.CurrentSnapshotTS = snapshotTS
 
 	return nil
 }

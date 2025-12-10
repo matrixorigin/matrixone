@@ -13,3 +13,54 @@
 // limitations under the License.
 
 package publication
+
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+)
+
+// SyncLevel represents the level of synchronization
+const (
+	SyncLevelAccount  = "account"
+	SyncLevelDatabase = "database"
+	SyncLevelTable    = "table"
+)
+
+// SrcInfo contains source information for subscription
+// It can be account/database/table level
+type SrcInfo struct {
+	SyncLevel string // 'account', 'database', or 'table'
+	DBName    string // Required for database/table level
+	TableName string // Required for table level
+	AccountName string // Optional, for account level
+}
+
+// ObjectStats represents object statistics
+type ObjectStats struct {
+	// TODO: Add fields as needed
+}
+
+// IterationContext contains context information for an iteration
+type IterationContext struct {
+	// Task identification
+	TaskID           uint64
+	SubscriptionName string
+	SrcInfo          SrcInfo
+
+	// Upstream connection
+	UpstreamExecutor SQLExecutor
+
+	// Sync configuration
+	SyncConfig map[string]any
+
+	// Execution state
+	IterationLSN uint64
+	CNUUID       string
+
+	// Context information
+	PrevSnapshotName    string
+	PrevSnapshotTS      types.TS
+	CurrentSnapshotName string
+	CurrentSnapshotTS   types.TS
+	ActiveAObj          []ObjectStats
+	TableIDs            map[string]uint64
+}
