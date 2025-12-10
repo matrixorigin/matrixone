@@ -937,7 +937,7 @@ func NewPartitionState(
 		prefetch:                  prefetch,
 	}
 	logutil.Info(
-		"PS-CREATED",
+		"partition.state.created",
 		zap.Uint64("table-id", tid),
 		zap.String("service", service),
 		zap.String("addr", fmt.Sprintf("%p", ps)),
@@ -969,7 +969,7 @@ func (p *PartitionState) truncateTombstoneObjects(
 
 	if gcLog.Len() > 0 {
 		logutil.Info(
-			"PS-GC-TombstoneIndex",
+			"partition.state.gc.tombstone.index",
 			zap.String("db.tbl", fmt.Sprintf("%d.%d", dbId, tblId)),
 			zap.String("ts", ts.ToString()),
 			zap.String("files", gcLog.String()))
@@ -1030,7 +1030,7 @@ func (p *PartitionState) truncate(ids [2]uint64, ts types.TS) (updated bool) {
 	}
 	if gced {
 		logutil.Info(
-			"PS-GC-DataObject",
+			"partition.state.gc.data.object",
 			zap.String("ts", ts.ToString()),
 			zap.String("db.tbl", fmt.Sprintf("%d.%d", ids[0], ids[1])),
 			zap.String("files", objectsToDelete),
@@ -1068,7 +1068,7 @@ func (p *PartitionState) truncate(ids [2]uint64, ts types.TS) (updated bool) {
 	objsToDelete := objectsToDeleteBuilder.String()
 	if objGced {
 		logutil.Info(
-			"PS-GC-NameIndex",
+			"partition.state.gc.name.index",
 			zap.String("ts", ts.ToString()),
 			zap.String("db.tbl", fmt.Sprintf("%d.%d", ids[0], ids[1])),
 			zap.String("files", objsToDelete),

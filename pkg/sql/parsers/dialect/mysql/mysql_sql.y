@@ -87,6 +87,7 @@ import (
     orderBy tree.OrderBy
     order *tree.Order
     limit *tree.Limit
+    rankOption *tree.RankOption
     unionTypeRecord *tree.UnionTypeRecord
     parenTableExpr *tree.ParenTableExpr
     identifierList tree.IdentifierList
@@ -591,7 +592,7 @@ import (
 %type <order> order
 %type <orderBy> order_list order_by_clause order_by_opt
 %type <limit> limit_opt limit_clause
-%type <limit> limit_rank_suffix
+%type <rankOption> rank_opt
 %type <str> insert_column optype_opt
 %type <str> optype
 %type <identifierList> column_list column_list_opt partition_clause_opt partition_id_list insert_column_list accounts_list restore_db_scope restore_table_scope
@@ -5417,29 +5418,29 @@ select_stmt:
     }
 
 select_no_parens:
-    simple_select time_window_opt order_by_opt limit_opt export_data_param_opt select_lock_opt
+    simple_select time_window_opt order_by_opt limit_opt rank_opt export_data_param_opt select_lock_opt
     {
-        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Limit: $4, Ep: $5, SelectLockInfo: $6}
+        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: $6, SelectLockInfo: $7}
     }
 |   select_with_parens time_window_opt order_by_clause export_data_param_opt
     {
         $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Ep: $4}
     }
-|   select_with_parens time_window_opt order_by_opt limit_clause export_data_param_opt
+|   select_with_parens time_window_opt order_by_opt limit_clause rank_opt export_data_param_opt
     {
-        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Limit: $4, Ep: $5}
+        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: $6}
     }
-|   with_clause simple_select time_window_opt order_by_opt limit_opt export_data_param_opt select_lock_opt
+|   with_clause simple_select time_window_opt order_by_opt limit_opt rank_opt export_data_param_opt select_lock_opt
     {
-        $$ = &tree.Select{Select: $2, TimeWindow: $3, OrderBy: $4, Limit: $5, Ep: $6, SelectLockInfo:$7, With: $1}
+        $$ = &tree.Select{Select: $2, TimeWindow: $3, OrderBy: $4, Limit: $5, RankOption: $6, Ep: $7, SelectLockInfo:$8, With: $1}
     }
 |   with_clause select_with_parens order_by_clause export_data_param_opt
     {
         $$ = &tree.Select{Select: $2, OrderBy: $3, Ep: $4, With: $1}
     }
-|   with_clause select_with_parens order_by_opt limit_clause export_data_param_opt
+|   with_clause select_with_parens order_by_opt limit_clause rank_opt export_data_param_opt
     {
-        $$ = &tree.Select{Select: $2, OrderBy: $3, Limit: $4, Ep: $5, With: $1}
+        $$ = &tree.Select{Select: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: $6, With: $1}
     }
 
 time_window_opt:
@@ -5589,35 +5590,20 @@ limit_opt:
     }
 
 limit_clause:
-    LIMIT expression limit_rank_suffix
+    LIMIT expression
     {
-        l := &tree.Limit{Count: $2}
-        if $3 != nil {
-            l.ByRank = $3.ByRank
-            l.Option = $3.Option
-        }
-        $$ = l
+        $$ = &tree.Limit{Count: $2}
     }
-|   LIMIT expression ',' expression limit_rank_suffix
+|   LIMIT expression ',' expression
     {
-        l := &tree.Limit{Offset: $2, Count: $4}
-        if $5 != nil {
-            l.ByRank = $5.ByRank
-            l.Option = $5.Option
-        }
-        $$ = l
+        $$ = &tree.Limit{Offset: $2, Count: $4}
     }
-|   LIMIT expression OFFSET expression limit_rank_suffix
+|   LIMIT expression OFFSET expression
     {
-        l := &tree.Limit{Offset: $4, Count: $2}
-        if $5 != nil {
-            l.ByRank = $5.ByRank
-            l.Option = $5.Option
-        }
-        $$ = l
+        $$ = &tree.Limit{Offset: $4, Count: $2}
     }
 
-limit_rank_suffix:
+rank_opt:
     {
         $$ = nil
     }
@@ -5651,8 +5637,7 @@ limit_rank_suffix:
             }
         }
         
-        $$ = &tree.Limit{
-            ByRank: true,
+        $$ = &tree.RankOption{
             Option: optionMap,
         }
     }
@@ -8068,8 +8053,8 @@ branch_stmt:
 |   DATA BRANCH CREATE DATABASE db_name FROM db_name table_snapshot_opt to_account_opt
     {
     	t := tree.NewDataBranchCreateDatabase()
-        t.DstDatabase = tree.Identifier($4)
-        t.SrcDatabase = tree.Identifier($6)
+        t.DstDatabase = tree.Identifier($5)
+        t.SrcDatabase = tree.Identifier($7)
         t.AtTsExpr = $8
         t.ToAccountOpt = $9
         $$ = t
