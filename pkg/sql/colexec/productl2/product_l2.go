@@ -69,16 +69,6 @@ func (productl2 *Productl2) Call(proc *process.Process) (vm.CallResult, error) {
 	result := vm.NewCallResult()
 	var err error
 
-	// TODO: create End() for ProductL2
-	/*
-		defer func() {
-			if ctr.brute_force != nil {
-				ctr.brute_force.Destroy()
-				ctr.brute_force = nil
-			}
-		}()
-	*/
-
 	for {
 		switch ctr.state {
 		case Build:
