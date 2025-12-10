@@ -227,7 +227,7 @@ func (r *TableMetaReader) collect(
 			rowCnt += int(obj.ObjectStats.Rows())
 
 			if err = colexec.ExpandObjectStatsToBatch(
-				mp, isTombstone, outBatch, true, obj.ObjectStats); err != nil {
+				mp, isTombstone, outBatch, false, obj.ObjectStats); err != nil {
 				return nil, err
 			}
 
