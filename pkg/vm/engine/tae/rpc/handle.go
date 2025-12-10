@@ -790,9 +790,10 @@ func (h *Handle) HandleWrite(
 			statsVec := req.Batch.Vecs[0]
 			for i := 0; i < statsVec.Length(); i++ {
 				s := objectio.ObjectStats(statsVec.GetBytesAt(i))
-				if !s.GetCNCreated() {
-					logutil.Fatalf("the `CNCreated` mask not set: %s", s.String())
-				}
+				// do not check because clone will send reusable objects to tn
+				// if !s.GetCNCreated() {
+				// logutil.Infof("the `CNCreated` mask not set: %s", s.String())
+				// }
 				persistedMemoryInsertRows += int(s.Rows())
 			}
 			err = tb.AddDataFiles(
