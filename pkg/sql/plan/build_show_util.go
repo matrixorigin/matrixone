@@ -358,14 +358,19 @@ func ConstructCreateTableSQL(
 			fkTableDef = tableDef
 		} else {
 			if ctx.GetQueryingSubscription() != nil {
-				_, fkTableDef, err = ctx.ResolveSubscriptionTableById(fk.ForeignTbl, ctx.GetQueryingSubscription())
-				fkTableDef, err = updateFKTableDef(fkTableDef)
+				if _, fkTableDef, err = ctx.ResolveSubscriptionTableById(fk.ForeignTbl, ctx.GetQueryingSubscription()); err != nil {
+					return "", nil, err
+				}
+				if fkTableDef, err = updateFKTableDef(fkTableDef); err != nil {
+					return "", nil, err
+				}
 			} else {
-				_, fkTableDef, err = ctx.ResolveById(fk.ForeignTbl, snapshot)
-				fkTableDef, err = updateFKTableDef(fkTableDef)
-			}
-			if err != nil {
-				return "", nil, err
+				if _, fkTableDef, err = ctx.ResolveById(fk.ForeignTbl, snapshot); err != nil {
+					return "", nil, err
+				}
+				if fkTableDef, err = updateFKTableDef(fkTableDef); err != nil {
+					return "", nil, err
+				}
 			}
 		}
 
