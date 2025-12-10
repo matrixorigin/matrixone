@@ -397,7 +397,7 @@ func (c *Config) createFileService(
 
 func (c *Config) getLogServiceConfig() logservice.Config {
 	cfg := c.LogService
-	logutil.Infof("hakeeper client cfg: %v", c.HAKeeperClient)
+	logutil.Info("logservice.get.config", zap.Any("hakeeper.client", c.HAKeeperClient))
 	cfg.HAKeeperClientConfig = c.HAKeeperClient
 	cfg.DataDir = filepath.Join(c.DataDir, "logservice-data", cfg.UUID)
 	var hostname string
