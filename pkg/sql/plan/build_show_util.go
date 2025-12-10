@@ -357,7 +357,12 @@ func ConstructCreateTableSQL(
 
 		// fkTable may not exist in snapshot restoration
 		if fkTableDef == nil {
-			return "", nil, moerr.NewInternalErrorNoCtxf("can't find fkTable from fk %s.(%s) {%s}", tableDef.Name, strings.Join(colOriginNames, ","), snapshot.String())
+			return "", nil, moerr.NewInternalErrorNoCtxf(
+				"can't find fkTable from fk %s.%s.(%s) {%s}",
+				tableDef.DbName, tableDef.Name,
+				strings.Join(colOriginNames, ","),
+				snapshot.String(),
+			)
 		}
 
 		fkColIdToOriginName := make(map[uint64]string)
