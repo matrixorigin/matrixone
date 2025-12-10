@@ -34,9 +34,10 @@ import (
 	"go.uber.org/zap"
 )
 
-// Result wraps sql.Rows to provide query result access
+// Result wraps sql.Rows or InternalResult to provide query result access
 type Result struct {
-	rows *sql.Rows
+	rows           *sql.Rows
+	internalResult *InternalResult
 }
 
 // Close closes the result rows
@@ -44,40 +45,66 @@ func (r *Result) Close() error {
 	if r.rows != nil {
 		return r.rows.Close()
 	}
+	if r.internalResult != nil {
+		return r.internalResult.Close()
+	}
 	return nil
 }
 
 // Next moves to the next row
 func (r *Result) Next() bool {
-	if r.rows == nil {
-		return false
+	if r.rows != nil {
+		return r.rows.Next()
 	}
-	return r.rows.Next()
+	if r.internalResult != nil {
+		return r.internalResult.Next()
+	}
+	return false
 }
 
 // Scan scans the current row into the provided destinations
 func (r *Result) Scan(dest ...interface{}) error {
-	if r.rows == nil {
-		return moerr.NewInternalErrorNoCtx("result rows is nil")
+	if r.rows != nil {
+		return r.rows.Scan(dest...)
 	}
-	return r.rows.Scan(dest...)
+	if r.internalResult != nil {
+		return r.internalResult.Scan(dest...)
+	}
+	return moerr.NewInternalErrorNoCtx("result is nil")
 }
 
 // Columns returns the column names
 func (r *Result) Columns() ([]string, error) {
-	if r.rows == nil {
-		return nil, moerr.NewInternalErrorNoCtx("result rows is nil")
+	if r.rows != nil {
+		return r.rows.Columns()
 	}
-	return r.rows.Columns()
+	if r.internalResult != nil {
+		return r.internalResult.Columns()
+	}
+	return nil, moerr.NewInternalErrorNoCtx("result is nil")
 }
 
 // Err returns any error encountered during iteration
 func (r *Result) Err() error {
-	if r.rows == nil {
-		return nil
+	if r.rows != nil {
+		return r.rows.Err()
 	}
-	return r.rows.Err()
+	if r.internalResult != nil {
+		return r.internalResult.Err()
+	}
+	return nil
 }
+
+type SQLExecutor interface {
+	Close() error
+	Connect() error
+	EndTxn(ctx context.Context, commit bool) error
+	ExecSQL(ctx context.Context, query string) (*Result, error)
+	ExecSQLWithOptions(ctx context.Context, ar *ActiveRoutine, query string, needRetry bool) (*Result, error)
+	HasActiveTx() bool
+}
+
+var _ SQLExecutor = (*UpstreamExecutor)(nil)
 
 // UpstreamExecutor manages database connection, transaction lifecycle, and SQL execution
 // for upstream MatrixOne cluster operations.
