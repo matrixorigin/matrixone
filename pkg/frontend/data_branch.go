@@ -919,15 +919,19 @@ func writeReplaceRowValues(
 	tblStuff tableStuff,
 	row []any,
 	buf *bytes.Buffer,
-) {
+) error {
 	buf.WriteString("(")
 	for i, idx := range tblStuff.def.visibleIdxes {
-		formatValIntoString(ses, row[idx], tblStuff.def.colTypes[idx], buf)
+		if err := formatValIntoString(ses, row[idx], tblStuff.def.colTypes[idx], buf); err != nil {
+			return err
+		}
 		if i != len(tblStuff.def.visibleIdxes)-1 {
 			buf.WriteString(",")
 		}
 	}
 	buf.WriteString(")")
+
+	return nil
 }
 
 func writeDeleteRowValues(
@@ -935,12 +939,14 @@ func writeDeleteRowValues(
 	tblStuff tableStuff,
 	row []any,
 	buf *bytes.Buffer,
-) {
+) error {
 	if len(tblStuff.def.pkColIdxes) > 1 {
 		buf.WriteString("(")
 	}
 	for i, colIdx := range tblStuff.def.pkColIdxes {
-		formatValIntoString(ses, row[colIdx], tblStuff.def.colTypes[colIdx], buf)
+		if err := formatValIntoString(ses, row[colIdx], tblStuff.def.colTypes[colIdx], buf); err != nil {
+			return err
+		}
 		if i != len(tblStuff.def.pkColIdxes)-1 {
 			buf.WriteString(",")
 		}
@@ -948,6 +954,8 @@ func writeDeleteRowValues(
 	if len(tblStuff.def.pkColIdxes) > 1 {
 		buf.WriteString(")")
 	}
+
+	return nil
 }
 
 func appendBatchRowsAsSQLValues(
@@ -1015,9 +1023,13 @@ func appendBatchRowsAsSQLValues(
 
 		tmpValsBuffer.Reset()
 		if wrapped.kind == diffDelete {
-			writeDeleteRowValues(ses, tblStuff, row, tmpValsBuffer)
+			if err = writeDeleteRowValues(ses, tblStuff, row, tmpValsBuffer); err != nil {
+				return
+			}
 		} else {
-			writeReplaceRowValues(ses, tblStuff, row, tmpValsBuffer)
+			if err = writeReplaceRowValues(ses, tblStuff, row, tmpValsBuffer); err != nil {
+				return
+			}
 		}
 
 		if tmpValsBuffer.Len() == 0 {
@@ -2592,7 +2604,12 @@ func hashDiffIfHasLCA(
 						}
 
 						buf := tblStuff.acquireBuffer()
-						formatValIntoString(ses, tarRow[0], tblStuff.def.colTypes[tblStuff.def.pkColIdx], buf)
+						if err3 = formatValIntoString(
+							ses, tarRow[0], tblStuff.def.colTypes[tblStuff.def.pkColIdx], buf,
+						); err3 != nil {
+							tblStuff.releaseBuffer(buf)
+							return
+						}
 
 						err3 = moerr.NewInternalErrorNoCtxf(
 							"conflict: %s %s and %s %s on pk(%v) with different values",
@@ -3021,7 +3038,10 @@ func checkConflictAndAppendToBat(
 		case tree.CONFLICT_FAIL:
 			buf := tblStuff.acquireBuffer()
 			for i, idx := range tblStuff.def.pkColIdxes {
-				formatValIntoString(ses, tarTuple[idx], tblStuff.def.colTypes[idx], buf)
+				if err2 = formatValIntoString(ses, tarTuple[idx], tblStuff.def.colTypes[idx], buf); err2 != nil {
+					tblStuff.releaseBuffer(buf)
+					return err2
+				}
 				if i < len(tblStuff.def.pkColIdxes)-1 {
 					buf.WriteString(",")
 				}
@@ -3329,7 +3349,11 @@ func handleDelsOnLCA(
 			valsBuf.WriteString(fmt.Sprintf("row(%d,", i))
 
 			for j := range tuple {
-				formatValIntoString(ses, tuple[j], colTypes[expandedPKColIdxes[j]], valsBuf)
+				if err = formatValIntoString(
+					ses, tuple[j], colTypes[expandedPKColIdxes[j]], valsBuf,
+				); err != nil {
+					return nil, err
+				}
 				if j != len(tuple)-1 {
 					valsBuf.WriteString(", ")
 				}
@@ -3477,10 +3501,10 @@ func handleDelsOnLCA(
 	return
 }
 
-func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer) {
+func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer) error {
 	if val == nil {
 		buf.WriteString("NULL")
-		return
+		return nil
 	}
 
 	var scratch [64]byte
@@ -3511,7 +3535,7 @@ func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer)
 				strVal = x.String()
 			case *bytejson.ByteJson:
 				if x == nil {
-					panic(moerr.NewInternalErrorNoCtx("formatValIntoString: nil *bytejson.ByteJson"))
+					return moerr.NewInternalErrorNoCtx("formatValIntoString: nil *bytejson.ByteJson")
 				}
 				strVal = x.String()
 			case []byte:
@@ -3519,14 +3543,14 @@ func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer)
 			case string:
 				strVal = x
 			default:
-				panic(moerr.NewInternalErrorNoCtxf("formatValIntoString: unexpected json type %T", val))
+				return moerr.NewInternalErrorNoCtxf("formatValIntoString: unexpected json type %T", val)
 			}
 			jsonLiteral := escapeJSONControlBytes([]byte(strVal))
 			if !json.Valid(jsonLiteral) {
-				panic(moerr.NewInternalErrorNoCtxf("formatValIntoString: invalid json input %q", strVal))
+				return moerr.NewInternalErrorNoCtxf("formatValIntoString: invalid json input %q", strVal)
 			}
 			writeEscapedSQLString(buf, jsonLiteral)
-			return
+			return nil
 		}
 		switch x := val.(type) {
 		case []byte:
@@ -3534,7 +3558,7 @@ func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer)
 		case string:
 			writeEscapedSQLString(buf, []byte(x))
 		default:
-			panic(moerr.NewInternalErrorNoCtxf("formatValIntoString: unexpected string type %T", val))
+			return moerr.NewInternalErrorNoCtxf("formatValIntoString: unexpected string type %T", val)
 		}
 	case types.T_timestamp:
 		buf.WriteString("'")
@@ -3589,8 +3613,10 @@ func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer)
 		buf.WriteString(types.ArrayToString[float64](val.([]float64)))
 		buf.WriteString("'")
 	default:
-		panic(moerr.NewInternalErrorNoCtxf("formatValIntoString: unsupported type %v", t.Oid))
+		return moerr.NewNotSupportedNoCtxf("formatValIntoString: not support type %v", t.Oid)
 	}
+
+	return nil
 }
 
 // writeEscapedSQLString escapes special and control characters for SQL literal output.
