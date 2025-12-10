@@ -266,27 +266,33 @@ func (c *DashboardCreator) initFSS3ConnOverviewRow() dashboard.Option {
 	return dashboard.Row(
 		"FileService S3 connection overview",
 		// Connection establishment rate: new TCP connections per second
-		c.withGraph(
-			"Connect",
+		c.withTimeSeries(
+			"TCP Connections/sec",
 			3,
-			`sum(rate(`+c.getMetricWithFilter("mo_fs_s3_conn_duration_seconds_count", `type="connect"`)+`[$interval]))`,
-			""),
+			[]string{`sum(rate(` + c.getMetricWithFilter("mo_fs_s3_conn_duration_seconds_count", `type="connect"`) + `[$interval]))`},
+			[]string{"connections/sec"},
+			timeseries.Axis(tsaxis.Unit("short")), // connections per second
+			timeseries.FillOpacity(0),
+		),
 		// DNS resolution rate: DNS lookups per second
-		c.withGraph(
-			"DNS Resolve",
+		c.withTimeSeries(
+			"DNS Resolutions/sec",
 			3,
-			`sum(rate(`+c.getMetricWithFilter("mo_fs_s3_conn_duration_seconds_count", `type="dns-resolve"`)+`[$interval]))`,
-			""),
+			[]string{`sum(rate(` + c.getMetricWithFilter("mo_fs_s3_conn_duration_seconds_count", `type="dns-resolve"`) + `[$interval]))`},
+			[]string{"resolutions/sec"},
+			timeseries.Axis(tsaxis.Unit("short")), // resolutions per second
+			timeseries.FillOpacity(0),
+		),
 		// Active connections: current number of connections currently in use for HTTP requests
 		// This is tracked accurately via GotConn callback in httptrace
 		// Higher values indicate more concurrent requests to S3
-		c.withGraph(
+		c.withTimeSeries(
 			"Active Connections",
 			6,
-			c.getMetricWithFilter("mo_fs_s3_conn_active", ""),
-			"active",
-			axis.Unit("short"), // connection count
-			axis.Min(0),
+			[]string{c.getMetricWithFilter("mo_fs_s3_conn_active", "")},
+			[]string{"active"},
+			timeseries.Axis(tsaxis.Unit("short")), // connection count
+			timeseries.FillOpacity(0),
 		),
 	)
 }
