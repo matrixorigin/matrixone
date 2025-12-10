@@ -43,8 +43,9 @@ create publication pub_fk_cross database sys_fk_cross account acc_fk1;
 create database sys_fk_cross from sys publication pub_fk_cross;
 create database clone_fk_cross clone sys_fk_cross;
 internal error: cannot clone a db to another account when it has foreign key reference on another db
-drop account acc_fk1;
+drop database if exists clone_fk_cross;
 drop publication pub_fk_cross;
+drop account acc_fk1;
 drop database sys_fk_cross;
 drop database sys_fk_base;
 drop database if exists sys_self_ref;
@@ -62,6 +63,51 @@ id    parent_id
 2    1
 3    2
 insert into clone_self_ref.org values(4,3);
+drop database if exists clone_self_ref;
+drop database if exists sub_self_ref;
 drop publication pub_self_ref;
 drop account acc_self;
 drop database sys_self_ref;
+drop database if exists sys_fk_chain;
+create database sys_fk_chain;
+create table sys_fk_chain.t4(id int primary key);
+create table sys_fk_chain.t3(id int primary key, t4_id int, foreign key (t4_id) references sys_fk_chain.t4(id));
+create table sys_fk_chain.t2(id int primary key, t3_id int, foreign key (t3_id) references sys_fk_chain.t3(id));
+create table sys_fk_chain.t1(id int primary key, t2_id int, foreign key (t2_id) references sys_fk_chain.t2(id));
+insert into sys_fk_chain.t4 values(1),(2);
+insert into sys_fk_chain.t3 values(1,1),(2,2);
+insert into sys_fk_chain.t2 values(1,1),(2,2);
+insert into sys_fk_chain.t1 values(1,1),(2,2);
+drop account if exists acc_chain;
+create account acc_chain admin_name "root_chain" identified by "111";
+create publication pub_fk_chain database sys_fk_chain account acc_chain;
+create database sub_fk_chain from sys publication pub_fk_chain;
+create database clone_fk_chain clone sub_fk_chain;
+select * from clone_fk_chain.t1;
+id    t2_id
+1    1
+2    2
+select * from clone_fk_chain.t2;
+id    t3_id
+1    1
+2    2
+select * from clone_fk_chain.t3;
+id    t4_id
+1    1
+2    2
+select * from clone_fk_chain.t4;
+id
+1
+2
+insert into clone_fk_chain.t4 values(3);
+insert into clone_fk_chain.t3 values(3,3);
+insert into clone_fk_chain.t2 values(3,3);
+insert into clone_fk_chain.t1 values(3,3);
+select count(*) from clone_fk_chain.t1;
+count(*)
+3
+drop database if exists clone_fk_chain;
+drop database if exists sub_fk_chain;
+drop publication pub_fk_chain;
+drop account acc_chain;
+drop database sys_fk_chain;

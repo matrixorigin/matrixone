@@ -83,7 +83,7 @@ func buildCloneTable(
 		string(stmt.SrcTable.Schema()), string(stmt.SrcTable.Name()), bindCtx.snapshot,
 	); err != nil {
 		return nil, err
-	} else if srcTblDef == nil {
+	} else if srcTblDef == nil || srcObj == nil {
 		return nil, moerr.NewParseErrorf(builder.GetContext(),
 			"table %v-%v does not exist", stmt.SrcTable.Schema(), stmt.SrcTable.Name())
 	}
@@ -122,8 +122,13 @@ func buildCloneTable(
 		srcAccount = bindCtx.snapshot.Tenant.TenantID
 	}
 
-	if srcObj != nil && srcObj.PubInfo != nil {
-		srcAccount = uint32(srcObj.PubInfo.TenantId)
+	var subMeta *plan.SubscriptionMeta
+	if srcObj.PubInfo != nil {
+		if subMeta, err = ctx.GetSubscriptionMeta(
+			string(stmt.SrcTable.SchemaName), bindCtx.snapshot,
+		); err != nil {
+			return nil, err
+		}
 		stmt.SrcTable.ObjectName = tree.Identifier(srcTblDef.Name)
 		stmt.SrcTable.SchemaName = tree.Identifier(srcTblDef.DbName)
 	}
@@ -131,11 +136,14 @@ func buildCloneTable(
 	stmt.StmtType = tree.DecideCloneStmtType(
 		ctx.GetContext(), stmt,
 		srcTblDef.DbName, dstDatabaseName,
-		dstAccount, srcAccount,
+		dstAccount, srcAccount, subMeta,
 	)
 
 	if err = checkPrivilege(
-		ctx.GetContext(), opAccount, srcAccount, srcTblDef, dstDatabaseName, bindCtx.snapshot, stmt.StmtType,
+		ctx.GetContext(),
+		opAccount, srcAccount, subMeta,
+		srcTblDef, dstDatabaseName,
+		bindCtx.snapshot, stmt.StmtType,
 	); err != nil {
 		return nil, err
 	}
@@ -167,6 +175,7 @@ func checkPrivilege(
 	ctx context.Context,
 	opAccount uint32,
 	srcAccount uint32,
+	subMeta *plan.SubscriptionMeta,
 	srcTblDef *TableDef,
 	dstDatabaseName string,
 	scanSnapshot *Snapshot,
