@@ -16,7 +16,9 @@ package publication
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -25,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
-
 
 var _ SQLExecutor = (*InternalSQLExecutor)(nil)
 
@@ -245,6 +246,27 @@ func (r *InternalResult) Scan(dest ...interface{}) error {
 			switch d := dest[i].(type) {
 			case *string:
 				*d = ""
+			case *sql.NullString:
+				d.Valid = false
+				d.String = ""
+			case *sql.NullInt16:
+				d.Valid = false
+				d.Int16 = 0
+			case *sql.NullInt32:
+				d.Valid = false
+				d.Int32 = 0
+			case *sql.NullInt64:
+				d.Valid = false
+				d.Int64 = 0
+			case *sql.NullBool:
+				d.Valid = false
+				d.Bool = false
+			case *sql.NullFloat64:
+				d.Valid = false
+				d.Float64 = 0
+			case *sql.NullTime:
+				d.Valid = false
+				d.Time = time.Time{}
 			case *int8:
 				*d = 0
 			case *int16:
@@ -285,8 +307,11 @@ func extractVectorValue(vec *vector.Vector, idx uint64, dest interface{}) error 
 		val := vec.GetStringAt(int(idx))
 		if d, ok := dest.(*string); ok {
 			*d = val
+		} else if d, ok := dest.(*sql.NullString); ok {
+			d.String = val
+			d.Valid = true
 		} else {
-			return moerr.NewInternalErrorNoCtx("destination type mismatch for string")
+			return moerr.NewInternalErrorNoCtx(fmt.Sprintf("destination type mismatch for string, type %T", dest))
 		}
 
 	case types.T_int8:
@@ -294,31 +319,47 @@ func extractVectorValue(vec *vector.Vector, idx uint64, dest interface{}) error 
 		if d, ok := dest.(*int8); ok {
 			*d = val
 		} else {
-			return moerr.NewInternalErrorNoCtx("destination type mismatch for int8")
+			return moerr.NewInternalErrorNoCtx(fmt.Sprintf("destination type mismatch for int8, type %T", dest))
 		}
 
 	case types.T_int16:
 		val := vector.GetFixedAtWithTypeCheck[int16](vec, int(idx))
 		if d, ok := dest.(*int16); ok {
 			*d = val
+		} else if d, ok := dest.(*sql.NullInt16); ok {
+			d.Int16 = val
+			d.Valid = true
 		} else {
-			return moerr.NewInternalErrorNoCtx("destination type mismatch for int16")
+			return moerr.NewInternalErrorNoCtx(fmt.Sprintf("destination type mismatch for int16, type %T", dest))
 		}
 
 	case types.T_int32:
 		val := vector.GetFixedAtWithTypeCheck[int32](vec, int(idx))
 		if d, ok := dest.(*int32); ok {
 			*d = val
+		} else if d, ok := dest.(*sql.NullInt32); ok {
+			d.Int32 = val
+			d.Valid = true
 		} else {
-			return moerr.NewInternalErrorNoCtx("destination type mismatch for int32")
+			return moerr.NewInternalErrorNoCtx(fmt.Sprintf("destination type mismatch for int32, type %T", dest))
 		}
 
 	case types.T_int64:
 		val := vector.GetFixedAtWithTypeCheck[int64](vec, int(idx))
 		if d, ok := dest.(*int64); ok {
 			*d = val
+		} else if d, ok := dest.(*sql.NullInt64); ok {
+			d.Int64 = val
+			d.Valid = true
+		} else if d, ok := dest.(*uint64); ok {
+			// Allow conversion from int64 to uint64 for compatibility
+			// This is safe for non-negative values (e.g., iteration_lsn, LSN values)
+			if val < 0 {
+				return moerr.NewInternalErrorNoCtx(fmt.Sprintf("cannot convert negative int64 value %d to uint64", val))
+			}
+			*d = uint64(val)
 		} else {
-			return moerr.NewInternalErrorNoCtx("destination type mismatch for int64")
+			return moerr.NewInternalErrorNoCtx(fmt.Sprintf("destination type mismatch for int64, type %T", dest))
 		}
 
 	case types.T_uint8:
@@ -326,7 +367,7 @@ func extractVectorValue(vec *vector.Vector, idx uint64, dest interface{}) error 
 		if d, ok := dest.(*uint8); ok {
 			*d = val
 		} else {
-			return moerr.NewInternalErrorNoCtx("destination type mismatch for uint8")
+			return moerr.NewInternalErrorNoCtx(fmt.Sprintf("destination type mismatch for uint8, type %T", dest))
 		}
 
 	case types.T_uint16:
@@ -334,7 +375,7 @@ func extractVectorValue(vec *vector.Vector, idx uint64, dest interface{}) error 
 		if d, ok := dest.(*uint16); ok {
 			*d = val
 		} else {
-			return moerr.NewInternalErrorNoCtx("destination type mismatch for uint16")
+			return moerr.NewInternalErrorNoCtx(fmt.Sprintf("destination type mismatch for uint16, type %T", dest))
 		}
 
 	case types.T_uint32:
@@ -342,7 +383,7 @@ func extractVectorValue(vec *vector.Vector, idx uint64, dest interface{}) error 
 		if d, ok := dest.(*uint32); ok {
 			*d = val
 		} else {
-			return moerr.NewInternalErrorNoCtx("destination type mismatch for uint32")
+			return moerr.NewInternalErrorNoCtx(fmt.Sprintf("destination type mismatch for uint32, type %T", dest))
 		}
 
 	case types.T_uint64:
@@ -350,7 +391,7 @@ func extractVectorValue(vec *vector.Vector, idx uint64, dest interface{}) error 
 		if d, ok := dest.(*uint64); ok {
 			*d = val
 		} else {
-			return moerr.NewInternalErrorNoCtx("destination type mismatch for uint64")
+			return moerr.NewInternalErrorNoCtx(fmt.Sprintf("destination type mismatch for uint64, type %T", dest))
 		}
 
 	case types.T_timestamp:
@@ -358,11 +399,11 @@ func extractVectorValue(vec *vector.Vector, idx uint64, dest interface{}) error 
 		if d, ok := dest.(*types.Timestamp); ok {
 			*d = val
 		} else {
-			return moerr.NewInternalErrorNoCtx("destination type mismatch for timestamp")
+			return moerr.NewInternalErrorNoCtx(fmt.Sprintf("destination type mismatch for timestamp, type %T", dest))
 		}
 
 	default:
-		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("unsupported vector type: %v", vec.GetType().Oid))
+		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("unsupported vector type: %v, type %T", vec.GetType().Oid, dest))
 	}
 
 	return nil

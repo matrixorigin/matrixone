@@ -33,9 +33,9 @@ const (
 // CheckIterationStatus checks the iteration status in mo_ccpr_log table
 // It verifies that cn_uuid, iteration_lsn match the expected values,
 // and that iteration_state is completed
-func checkIterationStatus(
+func CheckIterationStatus(
 	ctx context.Context,
-	executor *UpstreamExecutor,
+	executor SQLExecutor,
 	taskID uint64,
 	expectedCNUUID string,
 	expectedIterationLSN uint64,
