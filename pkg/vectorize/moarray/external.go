@@ -233,6 +233,25 @@ func InnerProduct[T types.RealNumbers](v1, v2 []T) (T, error) {
 	}
 }
 
+func L1Distance[T types.RealNumbers](v1, v2 []T) (T, error) {
+	if len(v1) != len(v2) {
+		return 0, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
+	}
+
+	switch _v1 := any(v1).(type) {
+	case []float32:
+		_v2 := any(v2).([]float32)
+		return T(vek32.ManhattanDistance(_v1, _v2)), nil
+
+	case []float64:
+		_v2 := any(v2).([]float64)
+		return T(vek.ManhattanDistance(_v1, _v2)), nil
+
+	default:
+		panic("L1Distance type not supported")
+	}
+}
+
 func L2Distance[T types.RealNumbers](v1, v2 []T) (T, error) {
 	if len(v1) != len(v2) {
 		return 0, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
@@ -315,11 +334,19 @@ func NormalizeL2[T types.RealNumbers](v1 []T, normalized []T) error {
 	switch _v1 := any(v1).(type) {
 	case []float32:
 		_normalized := any(normalized).([]float32)
-		vek32.DivNumber_Into(_normalized, _v1, vek32.Norm(_v1))
+		copy(_normalized, _v1)
+		norm := vek32.Norm(_v1)
+		if norm > 0 {
+			vek32.DivNumber_Inplace(_normalized, norm)
+		}
 
 	case []float64:
 		_normalized := any(normalized).([]float64)
-		vek.DivNumber_Into(_normalized, _v1, vek.Norm(_v1))
+		copy(_normalized, _v1)
+		norm := vek.Norm(_v1)
+		if norm > 0 {
+			vek.DivNumber_Inplace(_normalized, norm)
+		}
 
 	default:
 		panic("NormalizeL2 type not supported")

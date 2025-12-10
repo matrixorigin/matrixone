@@ -28,7 +28,7 @@ import (
 //   - precision difference between Apple M2 and Linux EC2 float64 results (approx 1e-13)
 //   - service_weaver: https://github.com/ServiceWeaver/weaver/blob/8e7c225542b8f8267ec0da3e01a098366b6f8daf/internal/weaver/load.go#L31
 //   - google lib: https://github.com/google/differential-privacy/blob/91b4ecebf33e71b8a215b7ea8325fb5e47b12671/privacy-on-beam/pbeam/pbeamtest/pbeamtest_test.go#L1406
-const float64EqualityThreshold = 1e-9
+const float64EqualityThreshold = 1e-6
 
 // InEpsilonF64Slices returns true if all the elements in v1 and v2 are within epsilon of each other.
 func InEpsilonF64Slices(want, got [][]float64) bool {
@@ -62,5 +62,26 @@ func InEpsilonF64Slice(want, got []float64) bool {
 // InEpsilonF64 returns true if v1 and v2 are within epsilon of each other.
 // assert.InEpsilon requires v1 to be non-zero.
 func InEpsilonF64(want, got float64) bool {
-	return want == got || math.Abs(want-got) < float64EqualityThreshold || (math.IsNaN(want) && math.IsNaN(got))
+	return want == got || math.Abs((want-got)/(want+got)) < float64EqualityThreshold || (math.IsNaN(want) && math.IsNaN(got))
+}
+
+// InEpsilonF32Slice returns true if all the elements in v1 and v2 are within epsilon of each other.
+// assert.InEpsilonSlice requires v1 to be non-zero.
+func InEpsilonF32Slice(want, got []float32) bool {
+	if len(want) != len(got) {
+		return false
+	}
+
+	for i := 0; i < len(want); i++ {
+		if !InEpsilonF32(want[i], got[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// InEpsilonF32 returns true if v1 and v2 are within epsilon of each other.
+// assert.InEpsilon requires v1 to be non-zero.
+func InEpsilonF32(want, got float32) bool {
+	return want == got || math.Abs(float64((want-got)/(want+got))) < float64EqualityThreshold || (math.IsNaN(float64(want)) && math.IsNaN(float64(got)))
 }

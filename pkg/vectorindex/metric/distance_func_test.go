@@ -21,7 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/assertx"
 	"github.com/stretchr/testify/require"
-	"gonum.org/v1/gonum/blas/blas32"
 )
 
 func Test_MaxFloat(t *testing.T) {
@@ -32,22 +31,14 @@ func Test_MaxFloat(t *testing.T) {
 	require.Equal(t, max64, float64(math.MaxFloat64))
 }
 
-func Test_Blas32(t *testing.T) {
+func Test_Vek(t *testing.T) {
 
-	v1 := blas32.Vector{
-		N:    3,
-		Inc:  1,
-		Data: []float32{4, 5, 6},
-	}
-	v2 := blas32.Vector{
-		N:    3,
-		Inc:  1,
-		Data: []float32{1, 2, 3},
-	}
+	v1 := []float32{4, 5, 6}
+	v2 := []float32{1, 2, 3}
 	distfn, _, err := ResolveKmeansDistanceFn[float32](Metric_L2Distance, false)
 	require.Nil(t, err)
 
-	v, err := distfn(v1.Data, v2.Data)
+	v, err := distfn(v1, v2)
 	require.Nil(t, err)
 
 	fmt.Printf("blas32 v = %v\n", v)

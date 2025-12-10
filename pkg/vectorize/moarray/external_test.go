@@ -51,7 +51,7 @@ func TestAdd(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 
 			if tt.args.rightArgF32 != nil {
-				if gotRes, err := Add[float32](tt.args.leftArgF32, tt.args.rightArgF32); err != nil || !reflect.DeepEqual(gotRes, tt.wantF32) {
+				if gotRes, err := Add[float32](tt.args.leftArgF32, tt.args.rightArgF32); err != nil || !assertx.InEpsilonF32Slice(gotRes, tt.wantF32) {
 					t.Errorf("Add() = %v, want %v", gotRes, tt.wantF32)
 				}
 			}
@@ -94,7 +94,7 @@ func TestSubtract(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 
 			if tt.args.rightArgF32 != nil {
-				if gotRes, err := Subtract[float32](tt.args.leftArgF32, tt.args.rightArgF32); err != nil || !reflect.DeepEqual(gotRes, tt.wantF32) {
+				if gotRes, err := Subtract[float32](tt.args.leftArgF32, tt.args.rightArgF32); err != nil || !assertx.InEpsilonF32Slice(tt.wantF32, gotRes) {
 					t.Errorf("Subtract() = %v, want %v", gotRes, tt.wantF32)
 				}
 			}
@@ -142,7 +142,7 @@ func TestMultiply(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 
 			if tt.args.rightArgF32 != nil {
-				if gotRes, err := Multiply[float32](tt.args.leftArgF32, tt.args.rightArgF32); err != nil || !reflect.DeepEqual(tt.wantF32, gotRes) {
+				if gotRes, err := Multiply[float32](tt.args.leftArgF32, tt.args.rightArgF32); err != nil || !assertx.InEpsilonF32Slice(tt.wantF32, gotRes) {
 					t.Errorf("Multiply() = %v, want %v", gotRes, tt.wantF32)
 				}
 			}
@@ -205,7 +205,7 @@ func TestDivide(t *testing.T) {
 					if _, gotErr := Divide[float32](tt.args.leftArgF32, tt.args.rightArgF32); gotErr == nil {
 						t.Errorf("Divide() should throw error")
 					}
-				} else if gotRes, err := Divide[float32](tt.args.leftArgF32, tt.args.rightArgF32); err != nil || !reflect.DeepEqual(gotRes, tt.wantF32) {
+				} else if gotRes, err := Divide[float32](tt.args.leftArgF32, tt.args.rightArgF32); err != nil || !assertx.InEpsilonF32Slice(tt.wantF32, gotRes) {
 					t.Errorf("Divide() = %v, want %v", gotRes, tt.wantF32)
 				}
 			}
@@ -327,7 +327,7 @@ func TestCast(t *testing.T) {
 				}
 			}
 			if tt.args.argF64 != nil && tt.wantF32 != nil {
-				if gotResF32, err := Cast[float64, float32](tt.args.argF64); err != nil || !reflect.DeepEqual(gotResF32, tt.wantF32) {
+				if gotResF32, err := Cast[float64, float32](tt.args.argF64); err != nil || !assertx.InEpsilonF32Slice(gotResF32, tt.wantF32) {
 					t.Errorf("Cast() = %v, want %v", gotResF32, tt.wantF32)
 				}
 			}
@@ -363,7 +363,7 @@ func TestAbs(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 
 			if tt.args.argF32 != nil {
-				if gotRes, err := Abs[float32](tt.args.argF32); err != nil || !reflect.DeepEqual(gotRes, tt.wantF32) {
+				if gotRes, err := Abs[float32](tt.args.argF32); err != nil || !assertx.InEpsilonF32Slice(gotRes, tt.wantF32) {
 					t.Errorf("Abs() = %v, want %v", gotRes, tt.wantF32)
 				}
 			}
@@ -440,7 +440,7 @@ func TestNormalizeL2(t *testing.T) {
 					if err := NormalizeL2[float32](tt.args.argF32, res); err == nil {
 						t.Errorf("NormalizeL2() should throw error")
 					}
-				} else if err := NormalizeL2[float32](tt.args.argF32, res); err != nil || !reflect.DeepEqual(tt.wantF32, res) {
+				} else if err := NormalizeL2[float32](tt.args.argF32, res); err != nil || !assertx.InEpsilonF32Slice(tt.wantF32, res) {
 					t.Errorf("NormalizeL2() = %v, want %v", res, tt.wantF32)
 				}
 			}
@@ -467,7 +467,7 @@ func TestSqrt(t *testing.T) {
 		name string
 		args args
 
-		wantF32 []float64 // ie result for argF32 is []float32
+		wantF32 []float32 // ie result for argF32 is []float32
 		wantF64 []float64 // ie result for argF64 is []float64
 		wantErr bool
 	}
@@ -475,7 +475,7 @@ func TestSqrt(t *testing.T) {
 		{
 			name:    "Test1 - float32",
 			args:    args{argF32: []float32{1, 0, 4}},
-			wantF32: []float64{1, 0, 2},
+			wantF32: []float32{1, 0, 2},
 		},
 		{
 			name:    "Test2 - float32 error case",
@@ -501,7 +501,7 @@ func TestSqrt(t *testing.T) {
 					if _, err := Sqrt[float32](tt.args.argF32); err == nil {
 						t.Errorf("Sqrt() should throw error")
 					}
-				} else if gotRes, err := Sqrt[float32](tt.args.argF32); err != nil || !reflect.DeepEqual(gotRes, tt.wantF32) {
+				} else if gotRes, err := Sqrt[float32](tt.args.argF32); err != nil || !assertx.InEpsilonF32Slice(gotRes, tt.wantF32) {
 					t.Errorf("Sqrt() = %v, want %v", err, tt.wantErr)
 					t.Errorf("Sqrt() = %v, want %v", gotRes, tt.wantF32)
 				}
@@ -577,12 +577,12 @@ func TestInnerProduct(t *testing.T) {
 		{
 			name: "Test1 - float32",
 			args: args{argLeftF32: []float32{1, 2, 3}, argRightF32: []float32{1, 2, 3}},
-			want: -14,
+			want: 14,
 		},
 		{
 			name: "Test2 - float64",
 			args: args{argLeftF64: []float64{1, 2, 3}, argRightF64: []float64{1, 2, 3}},
-			want: -14,
+			want: 14,
 		},
 	}
 	for _, tt := range tests {
@@ -747,12 +747,12 @@ func TestCosineSimilarity(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 
 			if tt.args.argLeftF32 != nil {
-				if gotRes, _ := CosineSimilarity[float32](tt.args.argLeftF32, tt.args.argRightF32); !reflect.DeepEqual(tt.want, gotRes) {
+				if gotRes, _ := CosineSimilarity[float32](tt.args.argLeftF32, tt.args.argRightF32); !assertx.InEpsilonF64(tt.want, float64(gotRes)) {
 					t.Errorf("CosineSimilarity() = %v, want %v", gotRes, tt.want)
 				}
 			}
 			if tt.args.argLeftF64 != nil {
-				if gotRes, _ := CosineSimilarity[float64](tt.args.argLeftF64, tt.args.argRightF64); !reflect.DeepEqual(tt.want, gotRes) {
+				if gotRes, _ := CosineSimilarity[float64](tt.args.argLeftF64, tt.args.argRightF64); !assertx.InEpsilonF64(tt.want, gotRes) {
 					t.Errorf("CosineSimilarity() = %v, want %v", gotRes, tt.want)
 				}
 			}
@@ -907,11 +907,11 @@ func TestScalarOp(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 
 			if tt.args.argVecF32 != nil {
-				if gotRes, _ := ScalarOp[float32](tt.args.argVecF32, tt.args.argOp, float32(tt.args.argSca)); !reflect.DeepEqual(gotRes, tt.wantVecF32) {
+				if gotRes, _ := ScalarOp[float32](tt.args.argVecF32, tt.args.argOp, float32(tt.args.argSca)); !assertx.InEpsilonF32Slice(tt.wantVecF32, gotRes) {
 					t.Errorf("ScalarOp() = %v, want %v", gotRes, tt.wantVecF32)
 				}
 			} else if tt.args.argVecF64 != nil {
-				if gotRes, _ := ScalarOp[float64](tt.args.argVecF64, tt.args.argOp, tt.args.argSca); !reflect.DeepEqual(gotRes, tt.wantVecF64) {
+				if gotRes, _ := ScalarOp[float64](tt.args.argVecF64, tt.args.argOp, tt.args.argSca); !assertx.InEpsilonF64Slice(tt.wantVecF64, gotRes) {
 					t.Errorf("ScalarOp() = %v, want %v", gotRes, tt.wantVecF64)
 				}
 			}

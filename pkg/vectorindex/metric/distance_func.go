@@ -29,100 +29,27 @@ func L2Distance[T types.RealNumbers](v1, v2 []T) (T, error) {
 }
 
 func L2DistanceSq[T types.RealNumbers](v1, v2 []T) (T, error) {
-	switch any(v1).(type) {
-	case []float32:
-		_v1 := any(v1).([]float32)
-		_v2 := any(v2).([]float32)
-		dist := vek32.Distance(_v1, _v2)
-
-		return T(dist * dist), nil
-
-	case []float64:
-		_v1 := any(v1).([]float64)
-		_v2 := any(v2).([]float64)
-		dist := vek.Distance(_v1, _v2)
-
-		return T(dist * dist), nil
-
-	default:
-		return 0, moerr.NewInternalErrorNoCtx("L2DistanceSq type not supported")
-	}
+	return moarray.L2DistanceSq(v1, v2)
 }
 
 func L1Distance[T types.RealNumbers](v1, v2 []T) (T, error) {
-	switch any(v1).(type) {
-	case []float32:
-		_v1 := any(v1).([]float32)
-		_v2 := any(v2).([]float32)
-
-		return T(vek32.ManhattanDistance(_v1, _v2)), nil
-
-	case []float64:
-		_v1 := any(v1).([]float64)
-		_v2 := any(v2).([]float64)
-
-		return T(vek.ManhattanDistance(_v1, _v2)), nil
-
-	default:
-		return 0, moerr.NewInternalErrorNoCtx("L1Distance type not supported")
-	}
+	return moarray.L1Distance(v1, v2)
 }
 
 func InnerProduct[T types.RealNumbers](v1, v2 []T) (T, error) {
-	switch any(v1).(type) {
-	case []float32:
-		_v1 := any(v1).([]float32)
-		_v2 := any(v2).([]float32)
-
-		return T(-vek32.Dot(_v1, _v2)), nil
-
-	case []float64:
-		_v1 := any(v1).([]float64)
-		_v2 := any(v2).([]float64)
-
-		return T(-vek.Dot(_v1, _v2)), nil
-
-	default:
-		return 0, moerr.NewInternalErrorNoCtx("InnerProduct type not supported")
+	dist, err := moarray.InnerProduct(v1, v2)
+	if err != nil {
+		return 0, err
 	}
+	return -dist, nil
 }
 
 func CosineDistance[T types.RealNumbers](v1, v2 []T) (T, error) {
-	switch any(v1).(type) {
-	case []float32:
-		_v1 := any(v1).([]float32)
-		_v2 := any(v2).([]float32)
-
-		return T(1 - vek32.CosineSimilarity(_v1, _v2)), nil
-
-	case []float64:
-		_v1 := any(v1).([]float64)
-		_v2 := any(v2).([]float64)
-
-		return T(1 - vek.CosineSimilarity(_v1, _v2)), nil
-
-	default:
-		return 0, moerr.NewInternalErrorNoCtx("CosineDistance type not supported")
-	}
+	return moarray.CosineDistance(v1, v2)
 }
 
 func CosineSimilarity[T types.RealNumbers](v1, v2 []T) (T, error) {
-	switch any(v1).(type) {
-	case []float32:
-		_v1 := any(v1).([]float32)
-		_v2 := any(v2).([]float32)
-
-		return T(vek32.CosineSimilarity(_v1, _v2)), nil
-
-	case []float64:
-		_v1 := any(v1).([]float64)
-		_v2 := any(v2).([]float64)
-
-		return T(vek.CosineSimilarity(_v1, _v2)), nil
-
-	default:
-		return 0, moerr.NewInternalErrorNoCtx("CosineSimilarity type not supported")
-	}
+	return moarray.CosineSimilarity(v1, v2)
 }
 
 // SphericalDistance is used for InnerProduct and CosineDistance in Spherical Kmeans.
@@ -167,31 +94,21 @@ func SphericalDistance[T types.RealNumbers](v1, v2 []T) (T, error) {
 }
 
 func NormalizeL2[T types.RealNumbers](v1 []T, normalized []T) error {
-	switch any(v1).(type) {
-	case []float32:
-		_v1 := any(v1).([]float32)
-		_normalized := any(normalized).([]float32)
-
-		copy(_normalized, _v1)
-		vek32.DivNumber_Inplace(_normalized, vek32.Norm(_v1))
-
-	case []float64:
-		_v1 := any(v1).([]float64)
-		_normalized := any(normalized).([]float64)
-
-		copy(_normalized, _v1)
-		vek.DivNumber_Inplace(_normalized, vek.Norm(_v1))
-
-	default:
-		return moerr.NewInternalErrorNoCtx("NormalizeL2 type not supported")
-	}
-
-	return nil
+	return moarray.NormalizeL2(v1, normalized)
 }
 
 func ScaleInPlace[T types.RealNumbers](v []T, scale T) {
-	for i := range v {
-		v[i] *= scale
+	switch _v := any(v).(type) {
+	case []float32:
+		_scale := float32(scale)
+		vek32.MulNumber_Inplace(_v, _scale)
+
+	case []float64:
+		_scale := float64(scale)
+		vek.MulNumber_Inplace(_v, _scale)
+
+	default:
+		panic("Scale type not supported")
 	}
 }
 
