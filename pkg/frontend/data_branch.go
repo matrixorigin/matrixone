@@ -637,11 +637,17 @@ func diffMergeAgency(
 	}()
 
 	var (
-		dagInfo     branchMetaInfo
-		tblStuff    tableStuff
-		copt        compositeOption
-		ctx, cancel = context.WithCancel(execCtx.reqCtx)
+		ctx    context.Context
+		cancel context.CancelFunc
+	)
 
+	//ctx = fileservice.WithParallelMode(execCtx.reqCtx, fileservice.ParallelForce)
+	ctx, cancel = context.WithCancel(execCtx.reqCtx)
+
+	var (
+		dagInfo   branchMetaInfo
+		tblStuff  tableStuff
+		copt      compositeOption
 		ok        bool
 		diffStmt  *tree.DataBranchDiff
 		mergeStmt *tree.DataBranchMerge
@@ -3491,6 +3497,10 @@ func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer)
 		buf.Write(strconv.AppendFloat(scratch[:0], v, 'g', -1, bitSize))
 	}
 
+	writeBool := func(v bool) {
+		buf.WriteString(strconv.FormatBool(v))
+	}
+
 	switch t.Oid {
 	case types.T_varchar, types.T_text, types.T_json, types.T_char, types.
 		T_varbinary, types.T_binary:
@@ -3534,6 +3544,10 @@ func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer)
 		buf.WriteString("'")
 		buf.WriteString(val.(types.Datetime).String2(t.Scale))
 		buf.WriteString("'")
+	case types.T_time:
+		buf.WriteString("'")
+		buf.WriteString(val.(types.Time).String2(t.Scale))
+		buf.WriteString("'")
 	case types.T_date:
 		buf.WriteString("'")
 		buf.WriteString(val.(types.Date).String())
@@ -3544,6 +3558,8 @@ func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer)
 		buf.WriteString(val.(types.Decimal128).Format(t.Scale))
 	case types.T_decimal256:
 		buf.WriteString(val.(types.Decimal256).Format(t.Scale))
+	case types.T_bool:
+		writeBool(val.(bool))
 	case types.T_uint8:
 		writeUint(uint64(val.(uint8)))
 	case types.T_uint16:

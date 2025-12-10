@@ -27,12 +27,13 @@ import (
 
 type ObjectStorageArguments struct {
 	// misc
-	Name                 string `toml:"name"`
-	KeyPrefix            string `toml:"key-prefix"`
-	SharedConfigProfile  string `toml:"shared-config-profile"`
-	NoDefaultCredentials bool   `toml:"no-default-credentials"`
-	NoBucketValidation   bool   `toml:"no-bucket-validation"`
-	Concurrency          int64  `toml:"concurrency"`
+	Name                 string       `toml:"name"`
+	KeyPrefix            string       `toml:"key-prefix"`
+	SharedConfigProfile  string       `toml:"shared-config-profile"`
+	NoDefaultCredentials bool         `toml:"no-default-credentials"`
+	NoBucketValidation   bool         `toml:"no-bucket-validation"`
+	Concurrency          int64        `toml:"concurrency"`
+	ParallelMode         ParallelMode `toml:"parallel-mode"`
 
 	// s3
 	Bucket    string   `toml:"bucket"`
@@ -99,6 +100,10 @@ func (o *ObjectStorageArguments) SetFromString(arguments []string) error {
 			n, err := strconv.ParseInt(value, 10, 64)
 			if err == nil {
 				o.Concurrency = n
+			}
+		case "parallel-mode", "parallel":
+			if mode, ok := parseParallelMode(value); ok {
+				o.ParallelMode = mode
 			}
 
 		case "bucket":
