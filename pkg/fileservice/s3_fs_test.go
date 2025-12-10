@@ -226,6 +226,69 @@ func TestDynamicS3Opts(t *testing.T) {
 	})
 }
 
+func TestDynamicS3NoKey(t *testing.T) {
+	ctx := WithParallelMode(context.Background(), ParallelForce)
+	prefix := "etl-prefix"
+	buf := new(strings.Builder)
+	w := csv.NewWriter(buf)
+	err := w.Write([]string{
+		"s3-no-key",
+		"disk",
+		"",
+		t.TempDir(),
+		prefix,
+		"s3-nokey",
+	})
+	assert.Nil(t, err)
+	w.Flush()
+
+	fs, path, err := GetForETL(ctx, nil, JoinPath(buf.String(), "foo.txt"))
+	assert.Nil(t, err)
+	assert.Equal(t, "foo.txt", path)
+	s3fs, ok := fs.(*S3FS)
+	assert.True(t, ok)
+	assert.Equal(t, ParallelForce, s3fs.parallelMode)
+	assert.Equal(t, prefix, s3fs.keyPrefix)
+	assert.IsType(t, &diskObjectStorage{}, baseStorage(t, s3fs))
+}
+
+func TestDynamicMinio(t *testing.T) {
+	ctx := WithParallelMode(context.Background(), ParallelForce)
+	buf := new(strings.Builder)
+	w := csv.NewWriter(buf)
+	err := w.Write([]string{
+		"minio",
+		"http://127.0.0.1:9000",
+		"us-east-1",
+		"bucket",
+		"ak",
+		"sk",
+		"pref",
+		"minio-etl",
+	})
+	assert.Nil(t, err)
+	w.Flush()
+
+	fs, path, err := GetForETL(ctx, nil, JoinPath(buf.String(), "bar.txt"))
+	assert.Nil(t, err)
+	assert.Equal(t, "bar.txt", path)
+	s3fs, ok := fs.(*S3FS)
+	assert.True(t, ok)
+	assert.Equal(t, ParallelForce, s3fs.parallelMode)
+	assert.Equal(t, "pref", s3fs.keyPrefix)
+	assert.IsType(t, &MinioSDK{}, baseStorage(t, s3fs))
+}
+
+func baseStorage(t *testing.T, fs *S3FS) ObjectStorage {
+	trace, ok := fs.storage.(*objectStorageHTTPTrace)
+	assert.True(t, ok)
+	metrics, ok := trace.upstream.(*objectStorageMetrics)
+	assert.True(t, ok)
+	sem, ok := metrics.upstream.(*objectStorageSemaphore)
+	assert.True(t, ok)
+	return sem.upstream
+}
+
 func BenchmarkS3FS(b *testing.B) {
 	cacheDir := b.TempDir()
 	b.ResetTimer()
