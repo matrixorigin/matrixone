@@ -69,7 +69,6 @@ func TestNormalizeParallelOption(t *testing.T) {
 	}
 
 	for _, c := range cases {
-		c := c
 		t.Run(c.name, func(t *testing.T) {
 			res := normalizeParallelOption(c.opt)
 			if res.PartSize != c.expectSize {
