@@ -446,6 +446,11 @@ func (c *DashboardCreator) initFSObjectStorageRow() dashboard.Option {
 // It displays connection-related metrics including connection acquisition, reuse, and connection establishment phases.
 // All metrics are shown as rates (per second) for better observability.
 func (c *DashboardCreator) initFSHTTPTraceRow() dashboard.Option {
+	gotConnRate := `sum(rate(` + c.getMetricWithFilter("mo_fs_http_trace", `op="GotConn"`) + `[$interval]))`
+	gotConnReusedRate := `sum(rate(` + c.getMetricWithFilter("mo_fs_http_trace", `op="GotConnReused"`) + `[$interval]))`
+	gotConnIdleRate := `sum(rate(` + c.getMetricWithFilter("mo_fs_http_trace", `op="GotConnIdle"`) + `[$interval]))`
+	getConnRate := `sum(rate(` + c.getMetricWithFilter("mo_fs_http_trace", `op="GetConn"`) + `[$interval]))`
+
 	return dashboard.Row(
 		"HTTP Trace",
 
@@ -456,21 +461,21 @@ func (c *DashboardCreator) initFSHTTPTraceRow() dashboard.Option {
 				// GotConn: Average rate of successfully obtained connections per second over the time window.
 				// rate() calculates the per-second average rate of increase over [$interval] time range.
 				// This represents the number of connections successfully acquired from the pool or newly established.
-				`sum(rate(` + c.getMetricWithFilter("mo_fs_http_trace", `op="GotConn"`) + `[$interval]))`,
+				gotConnRate,
 
 				// GotConnReused: Average rate of reused connections per second over the time window.
 				// This indicates how many connections were reused (either from active pool or idle pool).
 				// Higher values indicate better connection pool efficiency.
-				`sum(rate(` + c.getMetricWithFilter("mo_fs_http_trace", `op="GotConnReused"`) + `[$interval]))`,
+				gotConnReusedRate,
 
 				// GotConnIdle: Average rate of connections obtained from idle pool per second over the time window.
 				// This is a subset of GotConnReused, showing connections that were retrieved from the idle connection pool.
-				`sum(rate(` + c.getMetricWithFilter("mo_fs_http_trace", `op="GotConnIdle"`) + `[$interval]))`,
+				gotConnIdleRate,
 
 				// GetConnFailed: Average rate of failed connection attempts per second over the time window.
 				// Calculated as rate(GetConn) - rate(GotConn), representing connection acquisition failures.
 				// Non-zero values indicate connection establishment issues that need investigation.
-				`sum(rate(` + c.getMetricWithFilter("mo_fs_http_trace", `op="GetConn"`) + `[$interval])) - sum(rate(` + c.getMetricWithFilter("mo_fs_http_trace", `op="GotConn"`) + `[$interval]))`,
+				getConnRate + ` - ` + gotConnRate,
 
 				// DNSStart: Average rate of DNS resolution attempts per second over the time window.
 				// Only triggered for new connections that require DNS lookup.
@@ -493,6 +498,38 @@ func (c *DashboardCreator) initFSHTTPTraceRow() dashboard.Option {
 				"ConnectStart",
 				"TLSHandshakeStart",
 			},
+		),
+
+		// Connection ratio metrics: shows percentages of connection reuse, idle pool usage, and failure rates
+		// Grafana will automatically handle NaN values (from division by zero) by not displaying them
+		c.withTimeSeries(
+			"Connection Ratios (%)",
+			4,
+			[]string{
+				// Connection reuse rate: percentage of connections that were reused
+				// Higher values indicate better connection pool efficiency
+				`( ` + gotConnReusedRate + ` / ` + gotConnRate + ` ) * 100`,
+
+				// Idle pool reuse rate: percentage of connections obtained from idle pool
+				// This is a subset of reused connections, showing idle pool effectiveness
+				`( ` + gotConnIdleRate + ` / ` + gotConnRate + ` ) * 100`,
+
+				// New connection rate: percentage of connections that were newly established
+				// Lower values indicate better connection reuse
+				`( ( ` + gotConnRate + ` - ` + gotConnReusedRate + ` ) / ` + gotConnRate + ` ) * 100`,
+
+				// Connection failure rate: percentage of connection attempts that failed
+				// Non-zero values indicate connection establishment issues
+				`( ( ` + getConnRate + ` - ` + gotConnRate + ` ) / ` + getConnRate + ` ) * 100`,
+			},
+			[]string{
+				"Reuse Rate",
+				"Idle Pool Rate",
+				"New Connection Rate",
+				"Failure Rate",
+			},
+			timeseries.Axis(tsaxis.Unit("percent")), // percentage unit
+			timeseries.FillOpacity(20),              // slight fill for better visualization (0-100 range)
 		),
 	)
 }
