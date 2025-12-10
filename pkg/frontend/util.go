@@ -54,7 +54,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 )
 
 type CloseFlag struct {
@@ -1275,12 +1274,6 @@ func attachValue(ctx context.Context, key, val any) context.Context {
 	}
 
 	return context.WithValue(ctx, key, val)
-}
-
-func updateTempEngine(storage engine.Engine, te *memoryengine.Engine) {
-	if ee, ok := storage.(*engine.EntireEngine); ok && ee != nil {
-		ee.TempEngine = te
-	}
 }
 
 const KeySep = "#"

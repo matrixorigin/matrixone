@@ -62,10 +62,6 @@ func (e *Engine) LatestLogtailAppliedTime() timestamp.Timestamp {
 	return timestamp.Timestamp{}
 }
 
-func (e *Engine) HasTempEngine() bool {
-	return false
-}
-
 func (e *Engine) GetService() string {
 	return e.sid
 }
