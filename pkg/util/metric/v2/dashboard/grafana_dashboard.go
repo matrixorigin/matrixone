@@ -652,10 +652,7 @@ func (c *DashboardCreator) List() ([]DashboardInfo, error) {
 	// Convert internal dashboardInfo to exported DashboardInfo
 	result := make([]DashboardInfo, len(dashboards))
 	for i, dash := range dashboards {
-		result[i] = DashboardInfo{
-			UID:   dash.UID,
-			Title: dash.Title,
-		}
+		result[i] = DashboardInfo(dash)
 	}
 
 	return result, nil
