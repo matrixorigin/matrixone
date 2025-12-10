@@ -155,16 +155,16 @@ func (m *mockParallelStorage) WriteMultipartParallel(ctx context.Context, key st
 func TestS3FSWriteUsesParallelWhenForced(t *testing.T) {
 	storage := &mockParallelStorage{supports: true}
 	fs := &S3FS{
-		name:        "s3",
-		storage:     storage,
-		ioMerger:    NewIOMerger(),
-		asyncUpdate: true,
+		name:         "s3",
+		storage:      storage,
+		ioMerger:     NewIOMerger(),
+		asyncUpdate:  true,
+		parallelMode: ParallelForce,
 	}
 
 	data := []byte("hello")
 	vector := IOVector{
-		FilePath:      "obj",
-		ForceParallel: true,
+		FilePath: "obj",
 		Entries: []IOEntry{
 			{Offset: 0, Size: int64(len(data)), Data: data},
 		},
@@ -190,16 +190,16 @@ func TestS3FSWriteUsesParallelWhenForced(t *testing.T) {
 func TestS3FSWriteDisableParallel(t *testing.T) {
 	storage := &mockParallelStorage{supports: true}
 	fs := &S3FS{
-		name:        "s3",
-		storage:     storage,
-		ioMerger:    NewIOMerger(),
-		asyncUpdate: true,
+		name:         "s3",
+		storage:      storage,
+		ioMerger:     NewIOMerger(),
+		asyncUpdate:  true,
+		parallelMode: ParallelOff,
 	}
 
 	data := bytes.Repeat([]byte("a"), int(minMultipartPartSize+1))
 	vector := IOVector{
-		FilePath:        "large",
-		DisableParallel: true,
+		FilePath: "large",
 		Entries: []IOEntry{
 			{Offset: 0, Size: int64(len(data)), Data: data},
 		},
@@ -219,13 +219,14 @@ func TestS3FSWriteDisableParallel(t *testing.T) {
 	}
 }
 
-func TestS3FSWriteUnknownSizeUsesParallel(t *testing.T) {
+func TestS3FSWriteUnknownSizeUsesParallelWhenForced(t *testing.T) {
 	storage := &mockParallelStorage{supports: true}
 	fs := &S3FS{
-		name:        "s3",
-		storage:     storage,
-		ioMerger:    NewIOMerger(),
-		asyncUpdate: true,
+		name:         "s3",
+		storage:      storage,
+		ioMerger:     NewIOMerger(),
+		asyncUpdate:  true,
+		parallelMode: ParallelForce,
 	}
 
 	reader := strings.NewReader("data")
@@ -247,13 +248,43 @@ func TestS3FSWriteUnknownSizeUsesParallel(t *testing.T) {
 	}
 }
 
+func TestS3FSWriteUnknownSizeDefaultNoParallel(t *testing.T) {
+	storage := &mockParallelStorage{supports: true}
+	fs := &S3FS{
+		name:         "s3",
+		storage:      storage,
+		ioMerger:     NewIOMerger(),
+		asyncUpdate:  true,
+		parallelMode: ParallelOff,
+	}
+
+	reader := strings.NewReader("data")
+	vector := IOVector{
+		FilePath: "unknown",
+		Entries: []IOEntry{
+			{Offset: 0, Size: -1, ReaderForWrite: reader},
+		},
+	}
+
+	if err := fs.Write(context.Background(), vector); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+	if storage.mpCalled != 0 {
+		t.Fatalf("parallel write should not be used by default")
+	}
+	if storage.writeCalled != 1 {
+		t.Fatalf("expected single write by default")
+	}
+}
+
 func TestS3FSSmallSizeSkipsParallel(t *testing.T) {
 	storage := &mockParallelStorage{supports: true}
 	fs := &S3FS{
-		name:        "s3",
-		storage:     storage,
-		ioMerger:    NewIOMerger(),
-		asyncUpdate: true,
+		name:         "s3",
+		storage:      storage,
+		ioMerger:     NewIOMerger(),
+		asyncUpdate:  true,
+		parallelMode: ParallelAuto,
 	}
 
 	data := bytes.Repeat([]byte("b"), int(minMultipartPartSize-1))
@@ -275,19 +306,74 @@ func TestS3FSSmallSizeSkipsParallel(t *testing.T) {
 	}
 }
 
+func TestS3FSLargeSizeDefaultNoParallel(t *testing.T) {
+	storage := &mockParallelStorage{supports: true}
+	fs := &S3FS{
+		name:         "s3",
+		storage:      storage,
+		ioMerger:     NewIOMerger(),
+		asyncUpdate:  true,
+		parallelMode: ParallelOff,
+	}
+
+	data := bytes.Repeat([]byte("d"), int(minMultipartPartSize+1))
+	vector := IOVector{
+		FilePath: "large-default",
+		Entries: []IOEntry{
+			{Offset: 0, Size: int64(len(data)), Data: data},
+		},
+	}
+
+	if err := fs.Write(context.Background(), vector); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+	if storage.mpCalled != 0 {
+		t.Fatalf("parallel write should be disabled by default")
+	}
+	if storage.writeCalled != 1 {
+		t.Fatalf("expected single write by default, got %d", storage.writeCalled)
+	}
+}
+
+func TestS3FSAutoUsesParallelForLarge(t *testing.T) {
+	storage := &mockParallelStorage{supports: true}
+	fs := &S3FS{
+		name:         "s3",
+		storage:      storage,
+		ioMerger:     NewIOMerger(),
+		asyncUpdate:  true,
+		parallelMode: ParallelAuto,
+	}
+
+	data := bytes.Repeat([]byte("p"), int(minMultipartPartSize+1))
+	vector := IOVector{
+		FilePath: "auto-large",
+		Entries: []IOEntry{
+			{Offset: 0, Size: int64(len(data)), Data: data},
+		},
+	}
+
+	if err := fs.Write(context.Background(), vector); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+	if storage.mpCalled != 1 {
+		t.Fatalf("expected parallel write with auto mode")
+	}
+}
+
 func TestS3FSForceParallelFallbackWhenUnsupported(t *testing.T) {
 	storage := &mockParallelStorage{supports: false}
 	fs := &S3FS{
-		name:        "s3",
-		storage:     storage,
-		ioMerger:    NewIOMerger(),
-		asyncUpdate: true,
+		name:         "s3",
+		storage:      storage,
+		ioMerger:     NewIOMerger(),
+		asyncUpdate:  true,
+		parallelMode: ParallelForce,
 	}
 
 	data := []byte("force")
 	vector := IOVector{
-		FilePath:      "force",
-		ForceParallel: true,
+		FilePath: "force",
 		Entries: []IOEntry{
 			{Offset: 0, Size: int64(len(data)), Data: data},
 		},
@@ -307,10 +393,11 @@ func TestS3FSForceParallelFallbackWhenUnsupported(t *testing.T) {
 func TestS3FSParallelPassesExpire(t *testing.T) {
 	storage := &mockParallelStorage{supports: true}
 	fs := &S3FS{
-		name:        "s3",
-		storage:     storage,
-		ioMerger:    NewIOMerger(),
-		asyncUpdate: true,
+		name:         "s3",
+		storage:      storage,
+		ioMerger:     NewIOMerger(),
+		asyncUpdate:  true,
+		parallelMode: ParallelForce,
 	}
 
 	data := bytes.Repeat([]byte("c"), int(minMultipartPartSize+1))
@@ -337,10 +424,11 @@ func TestS3FSParallelPassesExpire(t *testing.T) {
 func TestS3FSWriteFileExists(t *testing.T) {
 	storage := &mockParallelStorage{supports: true, exists: true}
 	fs := &S3FS{
-		name:        "s3",
-		storage:     storage,
-		ioMerger:    NewIOMerger(),
-		asyncUpdate: true,
+		name:         "s3",
+		storage:      storage,
+		ioMerger:     NewIOMerger(),
+		asyncUpdate:  true,
+		parallelMode: ParallelOff,
 	}
 	vector := IOVector{
 		FilePath: "dup",
