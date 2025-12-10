@@ -1471,7 +1471,7 @@ func updateDataBatch(bat *batch.Batch, start, end types.TS, mp *mpool.MPool) {
 func updateCNTombstoneBatch(bat *batch.Batch, committs types.TS, mp *mpool.MPool) {
 	var pk *vector.Vector
 	for _, vec := range bat.Vecs {
-		if vec.GetType().Oid != types.T_Rowid && vec.GetType().Oid != types.T_TS {
+		if vec.GetType().Oid != types.T_Rowid {
 			pk = vec
 		} else {
 			vec.Free(mp)
