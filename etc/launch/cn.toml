@@ -21,3 +21,7 @@ prefetch-on-subscribed = [
 check-fraction = 65536
 enable-metrics = true
 
+[observability]
+disableMetric = false
+enable-metric-to-prom = true
+status-port = 7001

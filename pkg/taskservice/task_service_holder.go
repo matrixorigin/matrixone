@@ -477,22 +477,31 @@ func (s *refreshableTaskStorage) refresh(ctx context.Context, lastAddress string
 	}
 	connectAddress, err := s.addressFactory(ctx, true)
 	if err != nil {
-		s.rt.Logger().Error("failed to refresh task storage",
+		s.rt.Logger().Error(
+			"taskservice.holder.refresh.failed",
+			zap.String("address", lastAddress),
 			zap.Error(err))
 		return
 	}
 
 	s.mu.lastAddress = connectAddress
-	s.rt.Logger().Debug("trying to refresh task storage", zap.String("address", connectAddress))
+	s.rt.Logger().Debug(
+		"taskservice.holder.refresh.trying",
+		zap.String("address", connectAddress),
+	)
 	store, err := s.storeFactory.Create(connectAddress)
 	if err != nil {
-		s.rt.Logger().Error("failed to refresh task storage",
+		s.rt.Logger().Error(
+			"taskservice.holder.refresh.failed",
 			zap.String("address", connectAddress),
 			zap.Error(err))
 		return
 	}
 	s.mu.store = store
-	s.rt.Logger().Debug("refresh task storage completed", zap.String("sql-address", connectAddress))
+	s.rt.Logger().Debug(
+		"taskservice.holder.refresh.completed",
+		zap.String("sql-address", connectAddress),
+	)
 }
 
 type mysqlBasedStorageFactory struct {
