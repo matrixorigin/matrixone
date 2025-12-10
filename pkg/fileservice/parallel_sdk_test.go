@@ -17,7 +17,6 @@ package fileservice
 import (
 	"bytes"
 	"context"
-	"encoding/xml"
 	"fmt"
 	"io"
 	"net/http"
@@ -293,11 +292,6 @@ func TestAwsMultipartCreateFail(t *testing.T) {
 	if err := sdk.WriteMultipartParallel(context.Background(), "object", bytes.NewReader(data), &size, nil); err == nil {
 		t.Fatalf("expected create multipart error")
 	}
-}
-
-type qcloudResult struct {
-	XMLName  xml.Name `xml:"InitiateMultipartUploadResult"`
-	UploadID string   `xml:"UploadId"`
 }
 
 func newMockCOSServer(t *testing.T, failPart int) (*httptest.Server, *cosServerState) {
