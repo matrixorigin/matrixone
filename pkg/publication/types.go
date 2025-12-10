@@ -16,6 +16,7 @@ package publication
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 )
 
 // SyncLevel represents the level of synchronization
@@ -64,6 +65,6 @@ type IterationContext struct {
 	PrevSnapshotTS      types.TS
 	CurrentSnapshotName string
 	CurrentSnapshotTS   types.TS
-	ActiveAObj          []ObjectStats
+	ActiveAObj          map[string]objectio.ObjectStats // Map from upstream aobj UUID to new objectio.ObjectStats
 	TableIDs            map[string]uint64
 }

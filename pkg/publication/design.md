@@ -106,10 +106,22 @@ query mo columns
   - 验证object完整性(checksum等)
 
 * 4. 写入和过滤object
-  - write(filter) object: 将object写入本地fileservice
-  - aobj排序: 按object的create_at时间戳排序，保证应用顺序
-  - 删除ts abort: 过滤掉abort事务产生的object(is_tombstone=true且delete_at在abort范围内)
-  - truncate: 处理truncate操作(可能需要清空表或特殊标记)
+```go
+var ObjectListAttrs = []string{
+	ObjectListAttr_Stats,
+	ObjectListAttr_CreateAt,
+	ObjectListAttr_DeleteAt,
+	ObjectListAttr_IsTombstone,
+}
+```
+  - 输入的参数是database name, table name + ObjectListAttrs
+  - 根据objectstats生成object name，用GETOBJECT从上游获取object文件内容
+  - 根据create/delete用iteration context上的txn新建/删除object
+  - 处理object的文件，检查iteration context里的aobj，如果这次删除里没有，这些aobj也要处理：
+  4.1 aobj
+  - 如果是新建的，用getobject获取文件后按current snapshot ts过滤排序
+  - 过滤好的文件用一个新的uuid提交object，在iteration context activeaobj里记录这个新uuid和上游aobj的对应关系
+  4.2 如果是nobj直接写到fs里
 
 * 5. TN apply object
   - 在TN节点应用object(需要覆盖旧值，即upsert语义)
@@ -209,3 +221,5 @@ collect change scan object
 **on error, reset and do snapshot**
 
 **ddl检查**
+
+**从云上读到本地和从本地读到云上**
