@@ -133,6 +133,14 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		return buildShowCreateView(newStmt, ctx)
 	}
 
+	if tableDef.IsTemporary {
+		// If it is a temporary table, we need to show the original table name.
+		// We copy the tableDef to avoid modifying the cache.
+		newTableDef := *tableDef
+		newTableDef.Name = tblName
+		tableDef = &newTableDef
+	}
+
 	ddlStr, _, err := ConstructCreateTableSQL(ctx, tableDef, snapshot, false, nil)
 	if err != nil {
 		return nil, err
@@ -324,7 +332,7 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 	mustShowTable := "relname = 'mo_database' or relname = 'mo_tables' or relname = 'mo_columns'"
 	clusterTable := fmt.Sprintf(" or relkind = '%s'", catalog.SystemClusterRel)
 	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
-	sql = fmt.Sprintf("SELECT relname as `Tables_in_%s` %s FROM %s.mo_tables %s WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and relname != '%s' and relkind != '%s' and (%s)",
+	sql = fmt.Sprintf("SELECT relname as `Tables_in_%s` %s FROM %s.mo_tables %s WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and relname not like '__mo_tmp_%%' and relname != '%s' and relkind != '%s' and (%s)",
 		subName, tableType, MO_CATALOG_DB_NAME, snapshotSpec, dbName, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix+"%", catalog.MO_ACCOUNT_LOCK, catalog.SystemPartitionRel, accountClause)
 
 	// Do not show views in sub-db
@@ -847,7 +855,7 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 	}
 
 	sql := "select " +
-		"`tcl`.`att_relname` as `Table`, " +
+		"'%s' as `Table`, " +
 		"if(`idx`.`type` = 'MULTIPLE', 1, 0) as `Non_unique`, " +
 		"`idx`.`name` as `Key_name`, " +
 		"`idx`.`ordinal_position` as `Seq_in_index`, " +
@@ -894,7 +902,11 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 		"`idx`.`column_name`, `tcl`.`attnotnull`, `idx`.`algo`, `idx`.`comment`, " +
 		"`idx`.`algo_params`, `idx`.`is_visible`"
 
-	showIndexSql := fmt.Sprintf(sql, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, dbName, tblName, catalog.AliasPrefix+"%")
+	displayTblName := tblName
+	if tableDef.IsTemporary {
+		tblName = tableDef.Name
+	}
+	showIndexSql := fmt.Sprintf(sql, displayTblName, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, dbName, tblName, catalog.AliasPrefix+"%")
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSQL(ctx, showIndexSql, stmt.Where, ddlType)

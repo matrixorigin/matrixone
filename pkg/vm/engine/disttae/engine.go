@@ -871,10 +871,6 @@ func (e *Engine) LatestLogtailAppliedTime() timestamp.Timestamp {
 	return e.pClient.LatestLogtailAppliedTime()
 }
 
-func (e *Engine) HasTempEngine() bool {
-	return false
-}
-
 // RunGCScheduler runs all GC tasks in a single goroutine with different intervals
 func (e *Engine) RunGCScheduler(ctx context.Context) {
 	unusedTableTicker := time.NewTicker(unsubscribeProcessTicker)

@@ -1316,7 +1316,7 @@ drop table if exists max_customer;
 create temporary table max_customer as select customer_id, total_amount from customer_totals order by total_amount asc limit 1;
 show create table max_customer;
 Table    Create Table
-max_customer    CREATE TABLE `max_customer` (\n  `customer_id` int DEFAULT NULL,\n  `total_amount` decimal(38,0) DEFAULT NULL\n)
+max_customer    CREATE TEMPORARY TABLE `max_customer` (\n  `customer_id` int DEFAULT NULL,\n  `total_amount` decimal(38,0) DEFAULT NULL\n)
 select * from max_customer;
 customer_id    total_amount
 101    325
