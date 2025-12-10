@@ -422,6 +422,7 @@ message TableDef {
   Partition partition = 34;
 
   uint64 FeatureFlag = 35;
+  string original_name = 36;
 }
 
 message TableFunction {

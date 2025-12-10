@@ -1181,8 +1181,6 @@ type Engine interface {
 	GetService() string
 
 	LatestLogtailAppliedTime() timestamp.Timestamp
-
-	HasTempEngine() bool
 }
 
 type VectorPool interface {
@@ -1196,8 +1194,7 @@ type Hints struct {
 
 // EntireEngine is a wrapper for Engine to support temporary table
 type EntireEngine struct {
-	Engine     Engine // original engine
-	TempEngine Engine // new engine for temporarily table
+	Engine Engine // original engine
 }
 
 type forceBuildRemoteDSConfig struct {
