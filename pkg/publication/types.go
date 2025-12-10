@@ -36,7 +36,10 @@ type SrcInfo struct {
 
 // ObjectStats represents object statistics
 type ObjectStats struct {
-	// TODO: Add fields as needed
+	Stats      string      // Object stats information
+	CreateAt   types.TS    // Creation timestamp
+	DeleteAt   types.TS    // Deletion timestamp (0 if not deleted)
+	IsTombstone bool       // Whether this is a tombstone (deleted object)
 }
 
 // IterationContext contains context information for an iteration

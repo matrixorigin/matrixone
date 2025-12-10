@@ -519,3 +519,58 @@ func queryLocalTables(ctx context.Context, executor SQLExecutor, iterationCtx *I
 
 	return tables, nil
 }
+
+// GetObjectListFromSnapshotDiff calculates snapshot diff and gets object list from upstream
+// It executes: OBJECTLIST DATABASE db1 TABLE t1 SNAPSHOT sp2 AGAINST SNAPSHOT sp1
+// Returns: query result containing db name, table name, object list (stats, create_at, delete_at, is_tombstone)
+// The caller is responsible for closing the result
+func GetObjectListFromSnapshotDiff(
+	ctx context.Context,
+	iterationCtx *IterationContext,
+) (*Result, error) {
+	if iterationCtx == nil {
+		return nil, moerr.NewInternalError(ctx, "iteration context is nil")
+	}
+
+	if iterationCtx.UpstreamExecutor == nil {
+		return nil, moerr.NewInternalError(ctx, "upstream executor is nil")
+	}
+
+	// Check if we have current snapshot
+	if iterationCtx.CurrentSnapshotName == "" {
+		return nil, moerr.NewInternalError(ctx, "current snapshot name is empty")
+	}
+
+	// Determine database and table names based on sync level
+	var dbName, tableName string
+	if iterationCtx.SrcInfo.SyncLevel == SyncLevelDatabase || iterationCtx.SrcInfo.SyncLevel == SyncLevelTable {
+		dbName = iterationCtx.SrcInfo.DBName
+	}
+	if iterationCtx.SrcInfo.SyncLevel == SyncLevelTable {
+		tableName = iterationCtx.SrcInfo.TableName
+	}
+
+	// Determine against snapshot name
+	var againstSnapshotName string
+	if iterationCtx.PrevSnapshotName != "" {
+		// Not first sync: get diff between current and previous snapshots
+		againstSnapshotName = iterationCtx.PrevSnapshotName
+	}
+	// For first sync, againstSnapshotName is empty, which means get all objects from current snapshot
+
+	// Build OBJECTLIST SQL
+	objectListSQL := PublicationSQLBuilder.ObjectListSQL(
+		dbName,
+		tableName,
+		iterationCtx.CurrentSnapshotName,
+		againstSnapshotName,
+	)
+
+	// Execute SQL through upstream executor and return result directly
+	result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, objectListSQL)
+	if err != nil {
+		return nil, moerr.NewInternalErrorf(ctx, "failed to execute object list query: %v", err)
+	}
+
+	return result, nil
+}

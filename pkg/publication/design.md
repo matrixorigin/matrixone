@@ -98,8 +98,6 @@ query mo columns
 * 2. 计算snapshot diff获取object list
   - 在上游执行: OBJECTLIST DATABASE db1 TABLE t1 SNAPSHOT sp2 AGAINST SNAPSHOT sp1
   - 返回: db name, table name, object list (包含stats, create_at, delete_at, is_tombstone)
-  - 下游snapshot diff: 如果下游也有snapshot，计算下游的object list用于对比和去重
-  - 结果按CN分片: 每个CN处理自己负责的partition的object list
 
 * 3. 获取object数据
   - 遍历object list中的每个object
