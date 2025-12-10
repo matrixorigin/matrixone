@@ -3292,8 +3292,7 @@ var supportedArrayOperations = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_array_float32},
 				retType: func(parameters []types.Type) types.Type {
-					// NOTE summation(vecf32) --> float64
-					return types.T_float64.ToType()
+					return types.T_float32.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return SummationArray[float32]
@@ -3324,7 +3323,7 @@ var supportedArrayOperations = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_array_float32},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_float64.ToType()
+					return types.T_float32.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return L1NormArray[float32]
@@ -3355,7 +3354,7 @@ var supportedArrayOperations = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_array_float32},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_float64.ToType()
+					return types.T_float32.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return L2NormArray[float32]
@@ -3417,7 +3416,7 @@ var supportedArrayOperations = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_array_float32, types.T_array_float32},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_float64.ToType()
+					return types.T_float32.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return InnerProductArray[float32]
@@ -3448,7 +3447,7 @@ var supportedArrayOperations = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_array_float32, types.T_array_float32},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_float64.ToType()
+					return types.T_float32.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return CosineSimilarityArray[float32]
@@ -3479,7 +3478,7 @@ var supportedArrayOperations = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_array_float32, types.T_array_float32},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_float64.ToType()
+					return types.T_float32.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return L2DistanceArray[float32]
@@ -3541,7 +3540,7 @@ var supportedArrayOperations = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_array_float32, types.T_array_float32},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_float64.ToType()
+					return types.T_float32.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return L2DistanceSqArray[float32]
@@ -3603,7 +3602,7 @@ var supportedArrayOperations = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_array_float32, types.T_array_float32},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_float64.ToType()
+					return types.T_float32.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return CosineDistanceArray[float32]
@@ -3806,7 +3805,7 @@ var supportedMathBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_array_float32},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_array_float64.ToType()
+					return types.T_array_float32.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return builtInSqrtArray[float32]

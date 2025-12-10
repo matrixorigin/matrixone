@@ -546,7 +546,7 @@ func TestSummation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 
 			if tt.args.argF32 != nil {
-				if gotRes, err := Summation[float32](tt.args.argF32); err != nil || !assertx.InEpsilonF64(tt.want, gotRes) {
+				if gotRes, err := Summation[float32](tt.args.argF32); err != nil || !assertx.InEpsilonF64(float64(gotRes), tt.want) {
 					t.Errorf("Summation() = %v, want %v", gotRes, tt.want)
 				}
 			}
@@ -589,7 +589,7 @@ func TestInnerProduct(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 
 			if tt.args.argLeftF32 != nil {
-				if gotRes, _ := InnerProduct[float32](tt.args.argLeftF32, tt.args.argRightF32); !assertx.InEpsilonF64(tt.want, gotRes) {
+				if gotRes, _ := InnerProduct[float32](tt.args.argLeftF32, tt.args.argRightF32); !assertx.InEpsilonF64(tt.want, float64(gotRes)) {
 					t.Errorf("InnerProduct() = %v, want %v", gotRes, tt.want)
 				}
 			}
@@ -629,7 +629,7 @@ func TestL1Norm(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 
 			if tt.args.argF32 != nil {
-				if gotRes, _ := L1Norm[float32](tt.args.argF32); !assertx.InEpsilonF64(tt.want, gotRes) {
+				if gotRes, _ := L1Norm[float32](tt.args.argF32); !assertx.InEpsilonF64(tt.want, float64(gotRes)) {
 					t.Errorf("L1Norm() = %v, want %v", gotRes, tt.want)
 				}
 			}
@@ -669,7 +669,7 @@ func TestL2Norm(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 
 			if tt.args.argF32 != nil {
-				if gotRes, _ := L2Norm[float32](tt.args.argF32); !assertx.InEpsilonF64(tt.want, gotRes) {
+				if gotRes, _ := L2Norm[float32](tt.args.argF32); !assertx.InEpsilonF64(tt.want, float64(gotRes)) {
 					t.Errorf("L2Norm() = %v, want %v", gotRes, tt.want)
 				}
 			}
@@ -790,7 +790,7 @@ func TestL2Distance(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 
 			if tt.args.argLeftF32 != nil {
-				if gotRes, _ := L2Distance[float32](tt.args.argLeftF32, tt.args.argRightF32); !assertx.InEpsilonF64(tt.want, gotRes) {
+				if gotRes, _ := L2Distance[float32](tt.args.argLeftF32, tt.args.argRightF32); !assertx.InEpsilonF64(tt.want, float64(gotRes)) {
 					t.Errorf("L2Distance() = %v, want %v", gotRes, tt.want)
 				}
 			}
@@ -833,7 +833,7 @@ func TestCosineDistance(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 
 			if tt.args.argLeftF32 != nil {
-				if gotRes, _ := CosineDistance[float32](tt.args.argLeftF32, tt.args.argRightF32); !assertx.InEpsilonF64(tt.want, gotRes) {
+				if gotRes, _ := CosineDistance[float32](tt.args.argLeftF32, tt.args.argRightF32); !assertx.InEpsilonF64(tt.want, float64(gotRes)) {
 					t.Errorf("CosineDistance() = %v, want %v", gotRes, tt.want)
 				}
 			}

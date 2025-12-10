@@ -262,14 +262,14 @@ func NormalizeL2Array[T types.RealNumbers](parameters []*vector.Vector, result v
 }
 
 func L1NormArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(in []byte) (float64, error) {
+	return opUnaryBytesToFixedWithErrorCheck[T](ivecs, result, proc, length, func(in []byte) (T, error) {
 		_in := types.BytesToArray[T](in)
 		return moarray.L1Norm(_in)
 	}, selectList)
 }
 
 func L2NormArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(in []byte) (out float64, err error) {
+	return opUnaryBytesToFixedWithErrorCheck[T](ivecs, result, proc, length, func(in []byte) (T, error) {
 		_in := types.BytesToArray[T](in)
 		return moarray.L2Norm(_in)
 	}, selectList)
@@ -283,7 +283,7 @@ func VectorDimsArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.
 }
 
 func SummationArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(in []byte) (out float64, err error) {
+	return opUnaryBytesToFixedWithErrorCheck[T](ivecs, result, proc, length, func(in []byte) (out T, err error) {
 		_in := types.BytesToArray[T](in)
 
 		return moarray.Summation[T](_in)
