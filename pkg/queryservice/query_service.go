@@ -196,9 +196,25 @@ func RequestMultipleCn(ctx context.Context,
 		case res := <-responseChan:
 			responsesReceived++
 			if res.err != nil {
-				// Record first error
-				if retErr == nil {
-					retErr = errors.Wrapf(res.err, "failed to get result from %s", res.nodeAddr)
+				// Check if the error itself is a context timeout/cancellation error
+				// or if the context has already timed out/canceled (handles race condition)
+				// If context has timed out or been canceled, prioritize context error over connection error
+				ctxErr := ctx.Err()
+				if ctxErr == context.DeadlineExceeded || ctxErr == context.Canceled ||
+					errors.Is(res.err, context.DeadlineExceeded) || errors.Is(res.err, context.Canceled) {
+					// Context has timed out or been canceled, prioritize context error
+					// Always override retErr with context error if context is canceled/timed out
+					if ctxErr == context.Canceled || errors.Is(res.err, context.Canceled) {
+						retErr = moerr.NewInternalError(ctx, "RequestMultipleCn : context canceled")
+					} else {
+						retErr = moerr.NewInternalError(ctx, "RequestMultipleCn : context deadline exceeded")
+					}
+				} else {
+					// Context has not timed out or been canceled, record connection error
+					// Only set if retErr is nil (first error) or if context is not canceled
+					if retErr == nil {
+						retErr = errors.Wrapf(res.err, "failed to get result from %s", res.nodeAddr)
+					}
 				}
 				failedNodes = append(failedNodes, res.nodeAddr)
 				// Notify caller about invalid response (network error, etc.)
@@ -242,7 +258,15 @@ func RequestMultipleCn(ctx context.Context,
 
 				// If handler panicked, treat as failure
 				if handlerPanicked {
-					if retErr == nil {
+					// Check if context was canceled - context errors take precedence
+					ctxErr := ctx.Err()
+					if ctxErr == context.DeadlineExceeded || ctxErr == context.Canceled {
+						if ctxErr == context.Canceled {
+							retErr = moerr.NewInternalError(ctx, "RequestMultipleCn : context canceled")
+						} else {
+							retErr = moerr.NewInternalError(ctx, "RequestMultipleCn : context deadline exceeded")
+						}
+					} else if retErr == nil {
 						retErr = moerr.NewInternalErrorf(ctx, "handleValidResponse panicked for %s", res.nodeAddr)
 					}
 					failedNodes = append(failedNodes, res.nodeAddr)
@@ -265,7 +289,15 @@ func RequestMultipleCn(ctx context.Context,
 				}
 			} else {
 				// Response type assertion failed - this is an error condition
-				if retErr == nil {
+				// Check if context was canceled - context errors take precedence
+				ctxErr := ctx.Err()
+				if ctxErr == context.DeadlineExceeded || ctxErr == context.Canceled {
+					if ctxErr == context.Canceled {
+						retErr = moerr.NewInternalError(ctx, "RequestMultipleCn : context canceled")
+					} else {
+						retErr = moerr.NewInternalError(ctx, "RequestMultipleCn : context deadline exceeded")
+					}
+				} else if retErr == nil {
 					retErr = moerr.NewInternalErrorf(ctx, "invalid response type from %s", res.nodeAddr)
 				}
 				failedNodes = append(failedNodes, res.nodeAddr)
@@ -309,6 +341,21 @@ func RequestMultipleCn(ctx context.Context,
 	// - Therefore, channel must be empty, no need to drain
 	wg.Wait()
 
+	// Check if context was canceled/timed out after all responses are received
+	// This ensures context errors take precedence over connection errors
+	// (connection errors may arrive before ctx.Done() is selected in the loop)
+	// Only override if there was already an error - if all requests succeeded,
+	// we should return success even if context was canceled
+	if retErr != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			if ctxErr == context.Canceled {
+				retErr = moerr.NewInternalError(ctx, "RequestMultipleCn : context canceled")
+			} else if ctxErr == context.DeadlineExceeded {
+				retErr = moerr.NewInternalError(ctx, "RequestMultipleCn : context deadline exceeded")
+			}
+		}
+	}
+
 	// Log error summary if any node failed
 	// This provides aggregated view without repeating individual node errors
 	// which are already logged by lower-level morpc layer
@@ -324,5 +371,11 @@ func RequestMultipleCn(ctx context.Context,
 		)
 	}
 
+	// Note on partial success semantics:
+	// - If any node fails, this function returns an error (retErr != nil)
+	// - However, handleValidResponse may have already been called for successful nodes
+	// - Callers should check both the error return value AND the data collected via handleValidResponse
+	// - The error indicates the overall operation was not fully successful, but partial data may be available
+	// - This design allows callers to decide how to handle partial success scenarios
 	return retErr
 }

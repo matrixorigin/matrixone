@@ -156,7 +156,89 @@ MatrixOne is a hyper-converged cloud & edge native distributed database with a s
      It is challenging to balance performance and scalability to achieve an optimum price-performance ratio in current data warehousing solutions. MatrixOne's disaggregated storage and compute architecture makes it fully automated and efficient to scale in/out and up/down without disrupting applications.
 </details>
 
-<br>
+**That's it!** 🎉 You're now running a production-ready database with Git-like snapshots, vector search, and full ACID compliance.
+
+> 💡 **Want more control?** Check out the [Installation & Deployment](#️-installation--deployment) section below for production-grade installation options.
+
+📖 **[Python SDK Documentation →](clients/python/README.md)**
+
+## 📚 Tutorials & Demos
+
+Ready to dive deeper? Explore our comprehensive collection of hands-on tutorials and real-world demos:
+
+### 🎯 Getting Started Tutorials
+
+| Tutorial | Language/Framework | Description |
+|----------|-------------------|-------------|
+| [Java CRUD Demo](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/develop-java-crud-demo/) | Java | Java application development |
+| [SpringBoot and JPA CRUD Demo](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/springboot-hibernate-crud-demo/) | Java | SpringBoot with Hibernate/JPA |
+| [PyMySQL CRUD Demo](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/develop-python-crud-demo/) | Python | Basic database operations with Python |
+| [SQLAlchemy CRUD Demo](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/sqlalchemy-python-crud-demo/) | Python | Python with SQLAlchemy ORM |
+| [Django CRUD Demo](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/django-python-crud-demo/) | Python | Django web framework |
+| [Golang CRUD Demo](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/develop-golang-crud-demo/) | Go | Go application development |
+| [Gorm CRUD Demo](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/gorm-golang-crud-demo/) | Go | Go with Gorm ORM |
+| [C# CRUD Demo](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/c-net-crud-demo/) | C# | .NET application development |
+| [TypeScript CRUD Demo](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/typescript-crud-demo/) | TypeScript | TypeScript application development |
+
+### 🚀 Advanced Features Tutorials
+
+| Tutorial | Use Case | Related MatrixOne Features |
+|----------|----------|---------------------------|
+| [Pinecone-Compatible Vector Search](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/pinecone-vector-demo/) | AI & Search | vector search, Pinecone-compatible API |
+| [IVF Index Health Monitoring](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/ivf-index-health-demo/) | AI & Search | vector search, IVF index |
+| [HNSW Vector Index](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/hnsw-vector-demo/) | AI & Search | vector search, HNSW index |
+| [Fulltext Natural Search](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/fulltext-natural-search-demo/) | AI & Search | fulltext search, natural language |
+| [Fulltext Boolean Search](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/fulltext-boolean-search-demo/) | AI & Search | fulltext search, boolean operators |
+| [Fulltext JSON Search](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/fulltext-json-search-demo/) | AI & Search | fulltext search, JSON data |
+| [Hybrid Search](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/hybrid-search-demo/) | AI & Search | hybrid search, vector + fulltext + SQL |
+| [RAG Application Demo](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/rag-demo/) | AI & Search | RAG, vector search, fulltext search |
+| [Picture(Text)-to-Picture Search](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/search-picture-demo/) | AI & Search | multimodal search, image similarity |
+| [Dify Integration Demo](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/dify-mo-demo/) | AI & Search | AI platform integration |
+| [HTAP Application Demo](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/htap-demo/) | Performance | HTAP, real-time analytics |
+| [Instant Clone for Multi-Team Development](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/efficient-clone-demo/) | Performance | instant clone, Git for Data |
+| [Safe Production Upgrade with Instant Rollback](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/snapshot-rollback-demo/) | Performance | snapshot, rollback, Git for Data |
+
+📖 **[View All Tutorials →](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/snapshot-rollback-demo/)**
+
+## 🛠️ <a id="installation--deployment">Installation & Deployment</a>
+
+MatrixOne supports multiple installation methods. Choose the one that best fits your needs:
+
+### 🐳 Local Multi-CN Development
+
+Run a complete distributed cluster locally with multiple CN nodes, load balancing, and easy configuration management.
+
+```bash
+# Quick start
+make dev-build && make dev-up
+
+# Connect via proxy (load balanced)
+mysql -h 127.0.0.1 -P 6001 -u root -p111
+
+# Configure specific service (interactive editor)
+make dev-edit-cn1          # Edit CN1 config
+make dev-restart-cn1       # Restart only CN1 (fast!)
+```
+
+📖 **[Complete Development Guide →](etc/DEV_README.md)** - Comprehensive guide covering standalone setup, multi-CN clusters, monitoring, metrics, configuration, and all `make dev-*` commands
+
+### 🎯 Using mo_ctl Tool (Recommended for Production)
+
+One-command deployment and lifecycle management with the official [mo_ctl](https://github.com/matrixorigin/mo_ctl_standalone) tool. Handles installation, upgrades, backups, and health monitoring automatically.
+
+📖 **[Complete mo_ctl Installation Guide →](INSTALLATION.md#using-moctl-tool)**
+
+### ⚙️ Building from Source
+
+Build MatrixOne from source for development, customization, or contributing. Requires Go 1.22, GCC/Clang, Git, and Make.
+
+📖 **[Complete Build from Source Guide →](BUILD.md)**
+
+### 🐳 Other Methods
+
+Docker standalone, Kubernetes, binary packages, and more deployment options.
+
+📖 **[All Installation Options →](INSTALLATION.md)**
 
 ## 🔎 <a id="architecture">Architecture</a>
 
@@ -268,7 +350,7 @@ __Note__: The login account in the above code snippet is the initial account; pl
 
 ## 🙌 <a id="contributing">Contributing</a>
 
-Contributions to MatrixOne are welcome from everyone.  
+Contributions to MatrixOne are welcome from everyone.
  See [Contribution Guide](https://docs.matrixorigin.cn/en/latest/MatrixOne/Contribution-Guide/make-your-first-contribution/) for details on submitting patches and the contribution workflow.
 
 ### 👏 All contributors
