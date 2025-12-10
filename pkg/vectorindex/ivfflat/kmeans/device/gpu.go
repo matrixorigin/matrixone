@@ -17,6 +17,9 @@
 package device
 
 import (
+	//"os"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/kmeans"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/kmeans/elkans"
@@ -26,11 +29,17 @@ import (
 )
 
 type GpuClusterer[T cuvs.TensorNumberType] struct {
-	resource    *cuvs.Resource
-	index       *ivf_flat.IvfFlatIndex
+	/*
+		resource    *cuvs.Resource
+		index       *ivf_flat.IvfFlatIndex
+		indexParams *ivf_flat.IndexParams
+		dataset     *cuvs.Tensor[T]
+		centroids   *cuvs.Tensor[T]
+	*/
 	indexParams *ivf_flat.IndexParams
-	dataset     *cuvs.Tensor[T]
-	centroids   *cuvs.Tensor[T]
+	nlist       int
+	dim         int
+	vectors     [][]T
 }
 
 func (c *GpuClusterer[T]) InitCentroids() error {
@@ -40,47 +49,52 @@ func (c *GpuClusterer[T]) InitCentroids() error {
 
 func (c *GpuClusterer[T]) Cluster() (any, error) {
 
-	if _, err := c.dataset.ToDevice(c.resource); err != nil {
-		return nil, err
-	}
-
-	if err := ivf_flat.BuildIndex(*c.resource, c.indexParams, c.dataset, c.index); err != nil {
-		return nil, err
-	}
-
-	if err := c.resource.Sync(); err != nil {
-		return nil, err
-	}
-
-	nlist, err := ivf_flat.GetNLists(c.index)
+	resource, err := cuvs.NewResource(nil)
 	if err != nil {
 		return nil, err
 	}
+	defer resource.Close()
 
-	dim, err := ivf_flat.GetDim(c.index)
+	//f32vecs := any(c.vectors).([][]float32)
+	dataset, err := cuvs.NewTensor(c.vectors)
 	if err != nil {
 		return nil, err
 	}
+	defer dataset.Close()
 
-	centers, err := cuvs.NewTensorOnDevice[T](c.resource, []int64{int64(nlist), int64(dim)})
+	index, err := ivf_flat.CreateIndex(c.indexParams, &dataset)
 	if err != nil {
 		return nil, err
 	}
-	c.centroids = &centers
+	defer index.Close()
 
-	if _, err := centers.ToDevice(c.resource); err != nil {
+	if _, err := dataset.ToDevice(&resource); err != nil {
 		return nil, err
 	}
 
-	if err := ivf_flat.GetCenters(c.index, &centers); err != nil {
+	centers, err := cuvs.NewTensorOnDevice[T](&resource, []int64{int64(c.nlist), int64(c.dim)})
+	if err != nil {
+		return nil, err
+	}
+	defer centers.Close()
+
+	if err := ivf_flat.BuildIndex(resource, c.indexParams, &dataset, index); err != nil {
 		return nil, err
 	}
 
-	if _, err := centers.ToHost(c.resource); err != nil {
+	if err := resource.Sync(); err != nil {
 		return nil, err
 	}
 
-	if err := c.resource.Sync(); err != nil {
+	if err := ivf_flat.GetCenters(index, &centers); err != nil {
+		return nil, err
+	}
+
+	if _, err := centers.ToHost(&resource); err != nil {
+		return nil, err
+	}
+
+	if err := resource.Sync(); err != nil {
 		return nil, err
 	}
 
@@ -97,23 +111,25 @@ func (c *GpuClusterer[T]) SSE() (float64, error) {
 }
 
 func (c *GpuClusterer[T]) Close() error {
-
+	/*
+		if c.resource != nil {
+			c.resource.Close()
+		}
+	*/
 	if c.indexParams != nil {
 		c.indexParams.Close()
 	}
-	if c.dataset != nil {
-		c.dataset.Close()
-
-	}
-	if c.resource != nil {
-		c.resource.Close()
-	}
-	if c.index != nil {
-		c.index.Close()
-	}
-	if c.centroids != nil {
-		c.centroids.Close()
-	}
+	/*
+		if c.dataset != nil {
+			c.dataset.Close()
+		}
+		if c.index != nil {
+			c.index.Close()
+		}
+		if c.centroids != nil {
+			c.centroids.Close()
+		}
+	*/
 	return nil
 }
 
@@ -144,11 +160,20 @@ func NewKMeans[T types.RealNumbers](vectors [][]T, clusterCnt,
 	case [][]float32:
 
 		c := &GpuClusterer[float32]{}
-		resources, err := cuvs.NewResource(nil)
-		if err != nil {
-			return nil, err
+		c.nlist = clusterCnt
+		if len(vectors) == 0 {
+			return nil, moerr.NewInternalErrorNoCtx("empty dataset")
 		}
-		c.resource = &resources
+		c.vectors = vecs
+		c.dim = len(vecs[0])
+
+		/*
+			resources, err := cuvs.NewResource(nil)
+			if err != nil {
+				return nil, err
+			}
+			c.resource = &resources
+		*/
 
 		indexParams, err := ivf_flat.CreateIndexParams()
 		if err != nil {
@@ -160,13 +185,15 @@ func NewKMeans[T types.RealNumbers](vectors [][]T, clusterCnt,
 		indexParams.SetKMeansTrainsetFraction(1) // train all sample
 		c.indexParams = indexParams
 
-		dataset, err := cuvs.NewTensor(vecs)
-		if err != nil {
-			return nil, err
-		}
-		c.dataset = &dataset
+		/*
+			dataset, err := cuvs.NewTensor(vecs)
+			if err != nil {
+				return nil, err
+			}
+			c.dataset = &dataset
 
-		c.index, _ = ivf_flat.CreateIndex(c.indexParams, c.dataset)
+			c.index, _ = ivf_flat.CreateIndex(c.indexParams, c.dataset)
+		*/
 
 		return c, nil
 	default:

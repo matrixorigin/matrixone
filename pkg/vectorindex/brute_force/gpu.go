@@ -46,6 +46,16 @@ func NewBruteForceIndex[T types.RealNumbers](dataset [][]T,
 	m metric.MetricType,
 	elemsz uint) (cache.VectorIndexSearchIf, error) {
 
+	return NewCpuBruteForceIndex[T](dataset, dimension, m, elemsz)
+}
+
+// cuvs library has bug.  comment out the GPU version until cuvs fix the bug
+/*
+func NewBruteForceIndex[T types.RealNumbers](dataset [][]T,
+	dimension uint,
+	m metric.MetricType,
+	elemsz uint) (cache.VectorIndexSearchIf, error) {
+
 	switch dset := any(dataset).(type) {
 	case [][]float64:
 		return NewCpuBruteForceIndex[T](dataset, dimension, m, elemsz)
@@ -71,6 +81,7 @@ func NewBruteForceIndex[T types.RealNumbers](dataset [][]T,
 	}
 
 }
+*/
 
 func (idx *GpuBruteForceIndex[T]) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 	if _, err = idx.Dataset.ToDevice(idx.Resource); err != nil {
@@ -100,45 +111,42 @@ func (idx *GpuBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any,
 		return nil, nil, moerr.NewInternalErrorNoCtx("queries type invalid")
 	}
 
-	resource, _ := cuvs.NewResource(nil)
-	defer resource.Close()
-
 	queries, err := cuvs.NewTensor(queriesvec)
 	if err != nil {
 		return nil, nil, err
 	}
 	defer queries.Close()
 
-	neighbors, err := cuvs.NewTensorOnDevice[int64](&resource, []int64{int64(len(queriesvec)), int64(rt.Limit)})
+	neighbors, err := cuvs.NewTensorOnDevice[int64](idx.Resource, []int64{int64(len(queriesvec)), int64(rt.Limit)})
 	if err != nil {
 		return nil, nil, err
 	}
 	defer neighbors.Close()
 
-	distances, err := cuvs.NewTensorOnDevice[T](&resource, []int64{int64(len(queriesvec)), int64(rt.Limit)})
+	distances, err := cuvs.NewTensorOnDevice[float32](idx.Resource, []int64{int64(len(queriesvec)), int64(rt.Limit)})
 	if err != nil {
 		return nil, nil, err
 	}
 	defer distances.Close()
 
-	if _, err = queries.ToDevice(&resource); err != nil {
+	if _, err = queries.ToDevice(idx.Resource); err != nil {
 		return nil, nil, err
 	}
 
-	err = brute_force.SearchIndex(resource, *idx.Index, &queries, &neighbors, &distances)
+	err = brute_force.SearchIndex(*idx.Resource, *idx.Index, &queries, &neighbors, &distances)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	if _, err = neighbors.ToHost(&resource); err != nil {
+	if _, err = neighbors.ToHost(idx.Resource); err != nil {
 		return nil, nil, err
 	}
 
-	if _, err = distances.ToHost(&resource); err != nil {
+	if _, err = distances.ToHost(idx.Resource); err != nil {
 		return nil, nil, err
 	}
 
-	if err = resource.Sync(); err != nil {
+	if err = idx.Resource.Sync(); err != nil {
 		return nil, nil, err
 	}
 
@@ -180,5 +188,8 @@ func (idx *GpuBruteForceIndex[T]) Destroy() {
 	}
 	if idx.Resource != nil {
 		idx.Resource.Close()
+	}
+	if idx.Index != nil {
+		idx.Index.Close()
 	}
 }
