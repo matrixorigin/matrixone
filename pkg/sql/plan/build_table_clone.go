@@ -79,15 +79,13 @@ func buildCloneTable(
 		builder.compCtx.SetSnapshot(bindCtx.snapshot)
 	}
 
-	srcTableName := stmt.SrcTable.Name()
-	srcDatabaseName := stmt.SrcTable.Schema()
 	if srcObj, srcTblDef, err = builder.compCtx.Resolve(
-		srcDatabaseName.String(), srcTableName.String(), bindCtx.snapshot,
+		string(stmt.SrcTable.Schema()), string(stmt.SrcTable.Name()), bindCtx.snapshot,
 	); err != nil {
 		return nil, err
 	} else if srcTblDef == nil {
 		return nil, moerr.NewParseErrorf(builder.GetContext(),
-			"table %v-%v does not exist", srcDatabaseName.String(), srcTableName.String())
+			"table %v-%v does not exist", stmt.SrcTable.Schema(), stmt.SrcTable.Name())
 	}
 
 	var (
@@ -122,6 +120,12 @@ func buildCloneTable(
 
 	if bindCtx.snapshot != nil && bindCtx.snapshot.Tenant != nil {
 		srcAccount = bindCtx.snapshot.Tenant.TenantID
+	}
+
+	if srcObj != nil && srcObj.PubInfo != nil {
+		srcAccount = uint32(srcObj.PubInfo.TenantId)
+		stmt.SrcTable.ObjectName = tree.Identifier(srcTblDef.Name)
+		stmt.SrcTable.SchemaName = tree.Identifier(srcTblDef.DbName)
 	}
 
 	stmt.StmtType = tree.DecideCloneStmtType(
