@@ -192,6 +192,14 @@ Supports different modes: local (standalone), cloud (docker compose cluster), k8
 			}
 
 			if err := creator.Delete(); err != nil {
+				errStr := err.Error()
+				// Check if it's a warning about skipped provisioned dashboards
+				if strings.Contains(errStr, "skipped") && strings.Contains(errStr, "provisioned dashboard") {
+					// This is a warning, not a real error - dashboards were deleted successfully
+					logutil.Warnf("%v", err)
+					logutil.Infof("Dashboards deleted successfully!")
+					return nil
+				}
 				return moerr.NewInternalErrorNoCtxf("failed to delete dashboards: %v", err)
 			}
 

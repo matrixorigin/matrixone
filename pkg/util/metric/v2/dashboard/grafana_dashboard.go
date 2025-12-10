@@ -598,17 +598,32 @@ func (c *DashboardCreator) Delete() error {
 
 	// Step 3: Delete each dashboard
 	var deletedCount int
+	var skippedCount int
 	var errors []error
 	for _, dash := range dashboards {
 		if err := c.deleteDashboard(client, dash.UID); err != nil {
+			// Check if it's a provisioned dashboard error
+			errStr := err.Error()
+			if strings.Contains(errStr, "provisioned dashboard cannot be deleted") {
+				skippedCount++
+				// Log but don't treat as fatal error
+				continue
+			}
 			errors = append(errors, moerr.NewInternalErrorNoCtxf("failed to delete dashboard %s (UID: %s): %v", dash.Title, dash.UID, err))
 			continue
 		}
 		deletedCount++
 	}
 
+	// Report summary if there were any issues
 	if len(errors) > 0 {
-		return moerr.NewInternalErrorNoCtxf("deleted %d/%d dashboards, errors: %v", deletedCount, len(dashboards), errors)
+		return moerr.NewInternalErrorNoCtxf("deleted %d/%d dashboards, skipped %d provisioned dashboards, errors: %v", deletedCount, len(dashboards), skippedCount, errors)
+	}
+
+	if skippedCount > 0 {
+		// Return a special error that indicates success but with warnings
+		// The main.go will check for this and display it as a warning
+		return moerr.NewInternalErrorNoCtxf("deleted %d/%d dashboards, skipped %d provisioned dashboard(s) (they cannot be deleted via API and will be recreated on next provisioning)", deletedCount, len(dashboards), skippedCount)
 	}
 
 	return nil
