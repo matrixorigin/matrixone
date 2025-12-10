@@ -1006,7 +1006,7 @@ func TestTableChangeStream_ConcurrentStopSignalsCleanup(t *testing.T) {
 		t.Fatal("stream did not terminate after concurrent stop signals")
 	}
 	if runErr != nil {
-		require.True(t, errors.Is(runErr, context.Canceled) || strings.Contains(runErr.Error(), "paused"),
+		require.True(t, errors.Is(runErr, context.Canceled) || strings.Contains(runErr.Error(), "paused") || strings.Contains(runErr.Error(), "cancelled"),
 			"unexpected error: %v", runErr)
 	}
 

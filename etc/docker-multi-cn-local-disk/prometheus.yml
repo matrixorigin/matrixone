@@ -1,0 +1,53 @@
+# Prometheus configuration for MatrixOne cluster
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'matrixone-docker'
+
+# Scrape configurations
+scrape_configs:
+  # LogService metrics
+  - job_name: 'mo-log'
+    static_configs:
+      - targets: ['mo-log:7001']
+        labels:
+          service: 'logservice'
+          instance: 'mo-log'
+
+  # Transaction Node metrics
+  - job_name: 'mo-tn'
+    static_configs:
+      - targets: ['mo-tn:7001']
+        labels:
+          service: 'tn'
+          instance: 'mo-tn'
+
+  # Compute Node 1 metrics
+  - job_name: 'mo-cn1'
+    static_configs:
+      - targets: ['mo-cn1:7001']
+        labels:
+          service: 'cn'
+          instance: 'mo-cn1'
+
+  # Compute Node 2 metrics
+  - job_name: 'mo-cn2'
+    static_configs:
+      - targets: ['mo-cn2:7001']
+        labels:
+          service: 'cn'
+          instance: 'mo-cn2'
+
+  # Proxy metrics
+  - job_name: 'mo-proxy'
+    static_configs:
+      - targets: ['mo-proxy:7001']
+        labels:
+          service: 'proxy'
+          instance: 'mo-proxy'
+
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
