@@ -130,6 +130,9 @@ type Session struct {
 	ep              *ExportConfig
 	showStmtType    ShowStatementType
 	userDefinedVars map[string]*UserDefinedVar
+	// tempTables records the relationship between the temporary table created by the session and the actual table.
+	// Key: alias, Value: realName
+	tempTables map[string]string
 
 	prepareStmts map[string]*PrepareStmt
 	lastStmtId   uint32
@@ -314,6 +317,41 @@ func (ses *Session) GetUserDefinedVar(name string) (*UserDefinedVar, error) {
 		return nil, moerr.NewInternalErrorNoCtxf(errorUserVariableDoesNotExist(), name)
 	}
 	return val, nil
+}
+
+// AddTempTable adds the temporary table to the session
+func (ses *Session) AddTempTable(dbName, alias, realName string) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.tempTables[dbName+"."+alias] = realName
+}
+
+// GetTempTable gets the real name of the temporary table
+func (ses *Session) GetTempTable(dbName, alias string) (string, bool) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	val, ok := ses.tempTables[dbName+"."+alias]
+	return val, ok
+}
+
+// RemoveTempTable removes the temporary table alias
+func (ses *Session) RemoveTempTable(dbName, alias string) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	delete(ses.tempTables, dbName+"."+alias)
+}
+
+// RemoveTempTableByRealName removes the temporary table alias by its real name
+func (ses *Session) RemoveTempTableByRealName(realName string) {
+
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	for alias, val := range ses.tempTables {
+		if val == realName {
+			delete(ses.tempTables, alias)
+			break
+		}
+	}
 }
 
 func (ses *Session) SetPlan(plan *plan.Plan) {
@@ -565,6 +603,7 @@ func NewSession(
 	}
 
 	ses.userDefinedVars = make(map[string]*UserDefinedVar)
+	ses.tempTables = make(map[string]string)
 	ses.prepareStmts = make(map[string]*PrepareStmt)
 	// For seq init values.
 	ses.seqCurValues = make(map[uint64]string)
@@ -606,6 +645,7 @@ func NewSession(
 	ses.proc.Base.Lim.PartitionRows = pu.SV.ProcessLimitationPartitionRows
 
 	ses.proc.SetStmtProfile(&ses.stmtProfile)
+	ses.proc.Session = ses
 	// ses.proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
 
 	runtime.SetFinalizer(ses, func(ss *Session) {
@@ -623,6 +663,52 @@ func (ses *Session) ReserveConnAndClose() {
 }
 
 func (ses *Session) Close() {
+	// Clean up temporary tables
+	type tempTableEntry struct {
+		dbName   string
+		realName string
+	}
+	var tempTables []tempTableEntry
+	ses.mu.Lock()
+	for key, realName := range ses.tempTables {
+		if db, _, ok := strings.Cut(key, "."); ok {
+			tempTables = append(tempTables, tempTableEntry{dbName: db, realName: realName})
+		} else {
+			tempTables = append(tempTables, tempTableEntry{realName: realName})
+		}
+	}
+	ses.mu.Unlock()
+
+	if len(tempTables) > 0 {
+		// use a new context to clean up temp tables
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		// If the session is closed, the txnHandler may be nil or closed.
+		// But Close is called to close the session, so txnHandler should be valid here for a moment if we are careful.
+		// However, we need to be carefully because GetBackgroundExec uses ses which might be locked if we are not careful.
+		// We already unlocked ses.mu.
+
+		_, _ = ExecuteFuncWithRecover(func() error {
+			// We need to check if existing txnHandler is valid/usable?
+			// GetBackgroundExec will use ses.GetTxnHandler().
+
+			bh := ses.GetBackgroundExec(ctx)
+			defer bh.Close()
+			for _, tbl := range tempTables {
+				var dropSQL string
+				if tbl.dbName != "" {
+					dropSQL = fmt.Sprintf("DROP TABLE IF EXISTS `%s`.`%s`", tbl.dbName, tbl.realName)
+				} else {
+					dropSQL = fmt.Sprintf("DROP TABLE IF EXISTS %s", tbl.realName)
+				}
+				if err := bh.Exec(ctx, dropSQL); err != nil {
+					logutil.Errorf("failed to drop temp table %s: %v", tbl.realName, err)
+				}
+			}
+			return nil
+		})
+	}
+
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	ses.feSessionImpl.Close()
@@ -640,6 +726,7 @@ func (ses *Session) Close() {
 	}
 	ses.sql = ""
 	ses.userDefinedVars = nil
+	ses.tempTables = nil
 	ses.gSysVars = nil
 	for _, stmt := range ses.prepareStmts {
 		stmt.Close()

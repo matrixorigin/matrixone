@@ -390,6 +390,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 	}
 
 	tblName := qry.GetTableDef().GetName()
+	isTemp := qry.GetTableDef().GetIsTemporary()
 	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		return convertDBEOB(c.proc.Ctx, err, dbName)
@@ -656,6 +657,32 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 
 			indexInfo := act.AddIndex.IndexInfo // IndexInfo is named same as planner's IndexInfo
 			indexTableDef := act.AddIndex.IndexInfo.TableDef
+
+			if isTemp {
+				session := c.proc.GetSession()
+				if session == nil {
+					return moerr.NewInternalError(c.proc.Ctx, "session not found for temporary table")
+				}
+				tmpDb := act.AddIndex.DbName
+				if tmpDb == "" {
+					tmpDb = dbName
+				}
+				indexNameMap := make(map[string]string, len(indexInfo.IndexTables))
+				for _, def := range indexInfo.IndexTables {
+					orig := def.Name
+					if !defines.IsTempTableName(orig) {
+						def.Name = defines.GenTempTableName(c.proc.Base.SessionInfo.SessionId, tmpDb, orig)
+					}
+					def.TableType = catalog.SystemTemporaryTable
+					def.IsTemporary = true
+					indexNameMap[orig] = def.Name
+				}
+				for _, idx := range indexTableDef.Indexes {
+					if renamed, ok := indexNameMap[idx.IndexTableName]; ok {
+						idx.IndexTableName = renamed
+					}
+				}
+			}
 
 			// indexName -> meta      -> indexDef
 			//     		 -> centroids -> indexDef
@@ -1070,6 +1097,44 @@ func (s *Scope) CreateTable(c *Compile) error {
 	defer s.ScopeAnalyzer.Stop()
 
 	qry := s.Plan.GetDdl().GetCreateTable()
+	dbName := c.db
+	if qry.GetDatabase() != "" {
+		dbName = qry.GetDatabase()
+	}
+	aliasName := qry.GetTableDef().GetName()
+	session := c.proc.GetSession()
+	isTemp := qry.GetTemporary()
+	if isTemp {
+		if session == nil {
+			return moerr.NewInternalError(c.proc.Ctx, "session not found for temporary table")
+		}
+		if _, exists := session.GetTempTable(dbName, aliasName); exists {
+			if qry.GetIfNotExists() {
+				return nil
+			}
+			return moerr.NewTableAlreadyExists(c.proc.Ctx, aliasName)
+		}
+
+		realName := defines.GenTempTableName(c.proc.Base.SessionInfo.SessionId, dbName, aliasName)
+		qry.TableDef.Name = realName
+		indexNameMap := make(map[string]string, len(qry.IndexTables))
+		for _, def := range qry.IndexTables {
+			orig := def.Name
+			newName := defines.GenTempTableName(c.proc.Base.SessionInfo.SessionId, dbName, orig)
+			def.Name = newName
+			def.TableType = catalog.SystemTemporaryTable
+			def.IsTemporary = true
+			indexNameMap[orig] = newName
+		}
+		for _, idx := range qry.TableDef.Indexes {
+			if renamed, ok := indexNameMap[idx.IndexTableName]; ok {
+				idx.IndexTableName = renamed
+			}
+		}
+		if len(qry.GetTableDef().Fkeys) > 0 {
+			return moerr.NewNotSupported(c.proc.Ctx, "add foreign key for temporary table")
+		}
+	}
 	// convert the plan's cols to the execution's cols
 	planCols := qry.GetTableDef().GetCols()
 	exeCols := engine.PlanColsToExeCols(planCols)
@@ -1091,10 +1156,6 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 	}
 
-	dbName := c.db
-	if qry.GetDatabase() != "" {
-		dbName = qry.GetDatabase()
-	}
 	tblName := qry.GetTableDef().GetName()
 
 	if !c.disableLock {
@@ -1125,34 +1186,6 @@ func (s *Scope) CreateTable(c *Compile) error {
 			return nil
 		}
 		return moerr.NewTableAlreadyExists(c.proc.Ctx, tblName)
-	}
-
-	// check in EntireEngine.TempEngine, notice that TempEngine may not init
-	if c.e.HasTempEngine() {
-		var tmpDBSource engine.Database
-		if tmpDBSource, err = c.e.Database(
-			c.proc.Ctx,
-			defines.TEMPORARY_DBNAME,
-			c.proc.GetTxnOperator(),
-		); err == nil {
-			exists, err := tmpDBSource.RelationExists(c.proc.Ctx, engine.GetTempTableName(dbName, tblName), nil)
-			if err != nil {
-				c.proc.Error(
-					c.proc.Ctx,
-					"temp-table-exists-check-failed",
-					zap.String("db-name", dbName),
-					zap.String("table-name", tblName),
-					zap.Error(err),
-				)
-				return err
-			}
-			if exists {
-				if qry.GetIfNotExists() {
-					return nil
-				}
-				return moerr.NewTableAlreadyExists(c.proc.Ctx, fmt.Sprintf("temporary '%s'", tblName))
-			}
-		}
 	}
 
 	if !c.disableLock {
@@ -1188,6 +1221,10 @@ func (s *Scope) CreateTable(c *Compile) error {
 			zap.Error(err),
 		)
 		return err
+	}
+
+	if isTemp && session != nil {
+		session.AddTempTable(dbName, aliasName, tblName)
 	}
 
 	//update mo_foreign_keys
@@ -1302,6 +1339,11 @@ func (s *Scope) CreateTable(c *Compile) error {
 		//2. need to append TableId to parent's TableDef.RefChildTbls
 		for i, fkTableName := range fkTables {
 			fkDbName := fkDbs[i]
+			if session != nil {
+				if _, ok := session.GetTempTable(fkDbName, fkTableName); ok {
+					return moerr.NewNotSupported(c.proc.Ctx, "foreign key references temporary table")
+				}
+			}
 			fkey := qry.GetTableDef().Fkeys[i]
 			if fkey.ForeignTbl == 0 {
 				//fk self refer
@@ -1768,38 +1810,6 @@ func (s *Scope) CreateView(c *Compile) error {
 		}
 	}
 
-	// check in EntireEngine.TempEngine, notice that TempEngine may not init
-	if c.e.HasTempEngine() {
-		var tmpDBSource engine.Database
-		if tmpDBSource, err = c.e.Database(
-			c.proc.Ctx,
-			defines.TEMPORARY_DBNAME,
-			c.proc.GetTxnOperator(),
-		); err == nil {
-			exists, err := tmpDBSource.RelationExists(
-				c.proc.Ctx,
-				engine.GetTempTableName(dbName, viewName),
-				nil,
-			)
-			if err != nil {
-				c.proc.Error(
-					c.proc.Ctx,
-					"temp-table-exists-check-failed",
-					zap.String("db-name", dbName),
-					zap.String("table-name", viewName),
-					zap.Error(err),
-				)
-				return err
-			}
-			if exists {
-				if qry.GetIfNotExists() {
-					return nil
-				}
-				return moerr.NewTableAlreadyExists(c.proc.Ctx, fmt.Sprintf("temporary '%s'", viewName))
-			}
-		}
-	}
-
 	if err = lockMoTable(c, dbName, viewName, lock.LockMode_Exclusive); err != nil {
 		getLogger(s.Proc.GetService()).Info("createView",
 			zap.String("databaseName", c.db),
@@ -1836,96 +1846,6 @@ var checkIndexInitializable = func(dbName string, tblName string) bool {
 	return true
 }
 
-func (s *Scope) CreateTempTable(c *Compile) error {
-	qry := s.Plan.GetDdl().GetCreateTable()
-	// convert the plan's cols to the execution's cols
-	planCols := qry.GetTableDef().GetCols()
-	exeCols := engine.PlanColsToExeCols(planCols)
-
-	// convert the plan's defs to the execution's defs
-	exeDefs, _, err := engine.PlanDefsToExeDefs(qry.GetTableDef())
-	if err != nil {
-		return err
-	}
-
-	// Temporary table names and persistent table names are not allowed to be duplicated
-	// So before create temporary table, need to check if it exists a table has same name
-	dbName := c.db
-	if qry.GetDatabase() != "" {
-		dbName = qry.GetDatabase()
-	}
-
-	// check in EntireEngine.TempEngine
-	tmpDBSource, err := c.e.Database(c.proc.Ctx, defines.TEMPORARY_DBNAME, c.proc.GetTxnOperator())
-	if err != nil {
-		return err
-	}
-	tblName := qry.GetTableDef().GetName()
-	if _, err := tmpDBSource.Relation(c.proc.Ctx, engine.GetTempTableName(dbName, tblName), nil); err == nil {
-		if qry.GetIfNotExists() {
-			return nil
-		}
-		return moerr.NewTableAlreadyExists(c.proc.Ctx, fmt.Sprintf("temporary '%s'", tblName))
-	}
-
-	// check in EntireEngine.Engine
-	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
-	if err != nil {
-		return err
-	}
-	if _, err := dbSource.Relation(c.proc.Ctx, tblName, nil); err == nil {
-		if qry.GetIfNotExists() {
-			return nil
-		}
-		return moerr.NewTableAlreadyExists(c.proc.Ctx, tblName)
-	}
-
-	// create temporary table
-	if err := tmpDBSource.Create(c.proc.Ctx, engine.GetTempTableName(dbName, tblName), append(exeCols, exeDefs...)); err != nil {
-		return err
-	}
-
-	// build index table
-	for _, def := range qry.IndexTables {
-		planCols = def.GetCols()
-		exeCols = engine.PlanColsToExeCols(planCols)
-		exeDefs, _, err = engine.PlanDefsToExeDefs(def)
-		if err != nil {
-			return err
-		}
-		if _, err := tmpDBSource.Relation(c.proc.Ctx, engine.GetTempTableName(dbName, def.Name), nil); err == nil {
-			return moerr.NewTableAlreadyExists(c.proc.Ctx, def.Name)
-		}
-
-		if err := tmpDBSource.Create(c.proc.Ctx, engine.GetTempTableName(dbName, def.Name), append(exeCols, exeDefs...)); err != nil {
-			return err
-		}
-
-		err = maybeCreateAutoIncrement(
-			c.proc.Ctx,
-			c.proc.GetService(),
-			tmpDBSource,
-			def,
-			c.proc.GetTxnOperator(),
-			func() string {
-				return engine.GetTempTableName(dbName, def.Name)
-			})
-		if err != nil {
-			return err
-		}
-	}
-
-	return maybeCreateAutoIncrement(
-		c.proc.Ctx,
-		c.proc.GetService(),
-		tmpDBSource,
-		qry.GetTableDef(),
-		c.proc.GetTxnOperator(),
-		func() string {
-			return engine.GetTempTableName(dbName, tblName)
-		})
-}
-
 func (s *Scope) CreateIndex(c *Compile) error {
 	if s.ScopeAnalyzer == nil {
 		s.ScopeAnalyzer = NewScopeAnalyzer()
@@ -1934,6 +1854,32 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	defer s.ScopeAnalyzer.Stop()
 
 	qry := s.Plan.GetDdl().GetCreateIndex()
+
+	if qry.GetTableDef().GetIsTemporary() {
+		session := c.proc.GetSession()
+		if session == nil {
+			return moerr.NewInternalError(c.proc.Ctx, "session not found for temporary table")
+		}
+		if realName, ok := session.GetTempTable(qry.Database, qry.Table); ok {
+			qry.Table = realName
+			qry.TableDef.Name = realName
+		}
+		indexNameMap := make(map[string]string, len(qry.Index.IndexTables))
+		for _, def := range qry.Index.IndexTables {
+			orig := def.Name
+			if !defines.IsTempTableName(orig) {
+				def.Name = defines.GenTempTableName(c.proc.Base.SessionInfo.SessionId, qry.Database, orig)
+			}
+			def.TableType = catalog.SystemTemporaryTable
+			def.IsTemporary = true
+			indexNameMap[orig] = def.Name
+		}
+		for _, idx := range qry.Index.TableDef.Indexes {
+			if renamed, ok := indexNameMap[idx.IndexTableName]; ok {
+				idx.IndexTableName = renamed
+			}
+		}
+	}
 	{
 		// lockMoTable will lock Table  mo_catalog.mo_tables
 		// for the row with db_name=dbName & table_name = tblName。
@@ -2259,6 +2205,14 @@ func (s *Scope) DropIndex(c *Compile) error {
 	defer s.ScopeAnalyzer.Stop()
 
 	qry := s.Plan.GetDdl().GetDropIndex()
+
+	// resolve temporary table real name if needed
+	if session := c.proc.GetSession(); session != nil {
+		if realName, ok := session.GetTempTable(qry.Database, qry.Table); ok {
+			qry.Table = realName
+		}
+	}
+
 	if err := lockMoDatabase(c, qry.Database, lock.LockMode_Shared); err != nil {
 		return err
 	}
@@ -2710,11 +2664,6 @@ func (s *Scope) DropTable(c *Compile) error {
 	dbName := qry.GetDatabase()
 	tblName := qry.GetTable()
 	isView := qry.GetIsView()
-	if !isView && qry.TableDef == nil {
-		if qry.IfExists {
-			return nil
-		}
-	}
 	var isSource = false
 	if qry.TableDef != nil {
 		isSource = qry.TableDef.TableType == catalog.SystemSourceRel
@@ -2723,6 +2672,22 @@ func (s *Scope) DropTable(c *Compile) error {
 	var rel engine.Relation
 	var err error
 	var isTemp bool
+	var originTableName string
+
+	if session := c.proc.GetSession(); session != nil {
+		if real, ok := session.GetTempTable(dbName, tblName); ok {
+			originTableName = tblName
+			tblName = real
+			qry.Table = real
+			isTemp = true
+		}
+	}
+
+	if !isView && qry.TableDef == nil && !isTemp {
+		if qry.IfExists {
+			return nil
+		}
+	}
 
 	if !c.disableLock {
 		if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
@@ -2740,22 +2705,10 @@ func (s *Scope) DropTable(c *Compile) error {
 	}
 
 	if rel, err = dbSource.Relation(c.proc.Ctx, tblName, nil); err != nil {
-		var e error // avoid contamination of error messages
-		dbSource, e = c.e.Database(c.proc.Ctx, defines.TEMPORARY_DBNAME, c.proc.GetTxnOperator())
-		if dbSource == nil && qry.GetIfExists() {
+		if qry.GetIfExists() {
 			return nil
-		} else if e != nil {
-			return err
 		}
-		rel, e = dbSource.Relation(c.proc.Ctx, engine.GetTempTableName(dbName, tblName), nil)
-		if e != nil {
-			if qry.GetIfExists() {
-				return nil
-			} else {
-				return err
-			}
-		}
-		isTemp = true
+		return err
 	}
 
 	if !c.disableLock &&
@@ -2879,91 +2832,57 @@ func (s *Scope) DropTable(c *Compile) error {
 		}
 	}
 
-	if isTemp {
-		if err := dbSource.Delete(c.proc.Ctx, engine.GetTempTableName(dbName, tblName)); err != nil {
+	if err := dbSource.Delete(c.proc.Ctx, tblName); err != nil {
+		return err
+	}
+	// Try to remove temp table alias from session if it exists.
+	// tblName is the real name here (because Binder resolved it using the temp name from session if it was an alias).
+	// If tblName is not a temp table (e.g. regular table), this call will just do nothing (scan map and find no match).
+	if sess := c.proc.GetSession(); sess != nil {
+		if isTemp {
+			sess.RemoveTempTable(dbName, originTableName)
+		} else {
+			sess.RemoveTempTableByRealName(tblName)
+		}
+	}
+
+	for _, name := range qry.IndexTableNames {
+		if err = maybeDeleteAutoIncrement(c.proc.Ctx, c.proc.GetService(), dbSource, name, c.proc.GetTxnOperator()); err != nil {
 			return err
 		}
-		for _, name := range qry.IndexTableNames {
-			if err = maybeDeleteAutoIncrement(c.proc.Ctx, c.proc.GetService(), dbSource,
-				engine.GetTempTableName(dbName, name), c.proc.GetTxnOperator()); err != nil {
-				return err
-			}
 
-			if err := dbSource.Delete(c.proc.Ctx, engine.GetTempTableName(dbName, name)); err != nil {
-				return err
-			}
-		}
-
-		if dbName != catalog.MO_CATALOG && tblName != catalog.MO_INDEXES {
-			tblDef := rel.GetTableDef(c.proc.Ctx)
-			var containAuto bool
-			for _, col := range tblDef.Cols {
-				if col.Typ.AutoIncr {
-					containAuto = true
-					break
-				}
-			}
-			if containAuto {
-				err := incrservice.GetAutoIncrementService(c.proc.GetService()).Delete(
-					c.proc.Ctx,
-					rel.GetTableID(c.proc.Ctx),
-					c.proc.GetTxnOperator())
-				if err != nil {
-					return err
-				}
-			}
-
-			if err := shardservice.GetService(c.proc.GetService()).Delete(
-				c.proc.Ctx,
-				rel.GetTableID(c.proc.Ctx),
-				c.proc.GetTxnOperator(),
-			); err != nil {
-				return err
-			}
-		}
-
-	} else {
-		if err := dbSource.Delete(c.proc.Ctx, tblName); err != nil {
+		if err := dbSource.Delete(c.proc.Ctx, name); err != nil {
 			return err
 		}
-		for _, name := range qry.IndexTableNames {
-			if err = maybeDeleteAutoIncrement(c.proc.Ctx, c.proc.GetService(), dbSource, name, c.proc.GetTxnOperator()); err != nil {
-				return err
-			}
 
-			if err := dbSource.Delete(c.proc.Ctx, name); err != nil {
-				return err
-			}
+	}
 
+	if dbName != catalog.MO_CATALOG && tblName != catalog.MO_INDEXES {
+		tblDef := rel.GetTableDef(c.proc.Ctx)
+		var containAuto bool
+		for _, col := range tblDef.Cols {
+			if col.Typ.AutoIncr {
+				containAuto = true
+				break
+			}
 		}
-
-		if dbName != catalog.MO_CATALOG && tblName != catalog.MO_INDEXES {
-			tblDef := rel.GetTableDef(c.proc.Ctx)
-			var containAuto bool
-			for _, col := range tblDef.Cols {
-				if col.Typ.AutoIncr {
-					containAuto = true
-					break
-				}
-			}
-			if containAuto && !c.disableDropAutoIncrement {
-				// When drop table 'mo_catalog.mo_indexes', there is no need to delete the auto increment data
-				err := incrservice.GetAutoIncrementService(c.proc.GetService()).Delete(
-					c.proc.Ctx,
-					rel.GetTableID(c.proc.Ctx),
-					c.proc.GetTxnOperator())
-				if err != nil {
-					return err
-				}
-			}
-
-			if err := shardservice.GetService(c.proc.GetService()).Delete(
+		if containAuto && !c.disableDropAutoIncrement {
+			// When drop table 'mo_catalog.mo_indexes', there is no need to delete the auto increment data
+			err := incrservice.GetAutoIncrementService(c.proc.GetService()).Delete(
 				c.proc.Ctx,
 				rel.GetTableID(c.proc.Ctx),
-				c.proc.GetTxnOperator(),
-			); err != nil {
+				c.proc.GetTxnOperator())
+			if err != nil {
 				return err
 			}
+		}
+
+		if err := shardservice.GetService(c.proc.GetService()).Delete(
+			c.proc.Ctx,
+			rel.GetTableID(c.proc.Ctx),
+			c.proc.GetTxnOperator(),
+		); err != nil {
+			return err
 		}
 	}
 

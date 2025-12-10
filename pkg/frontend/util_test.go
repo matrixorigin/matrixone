@@ -50,7 +50,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
@@ -639,9 +638,6 @@ func TestGetExprValue(t *testing.T) {
 		setPu("", pu)
 		ses := NewSession(ctx, "", &testMysqlWriter{}, testutil.NewProc(t).Mp())
 		ses.SetDatabaseName("db")
-		var c clock.Clock
-		err := ses.GetTxnHandler().CreateTempStorage(c)
-		assert.Nil(t, err)
 		ec := newTestExecCtx(ctx, ctrl)
 		ec.proc = testutil.NewProc(t)
 		ec.ses = ses
@@ -748,9 +744,6 @@ func TestGetExprValue(t *testing.T) {
 		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
 		setPu("", pu)
 		ses := NewSession(ctx, "", &testMysqlWriter{}, testutil.NewProc(t).Mp())
-		var c clock.Clock
-		err := ses.GetTxnHandler().CreateTempStorage(c)
-		assert.Nil(t, err)
 		ec := newTestExecCtx(ctx, ctrl)
 		ec.reqCtx = ctx
 		ses.txnCompileCtx.execCtx = ec

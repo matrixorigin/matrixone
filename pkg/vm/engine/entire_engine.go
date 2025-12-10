@@ -16,34 +16,19 @@ package engine
 
 import (
 	"context"
-	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
-func GetTempTableName(DbName string, TblName string) string {
-	return strings.ReplaceAll(DbName, ".", "DOT") + "." + strings.ReplaceAll(TblName, ".", "DOT")
-}
-
 func (e *EntireEngine) New(ctx context.Context, op client.TxnOperator) error {
-	err := e.Engine.New(ctx, op)
-	if err == nil && e.TempEngine != nil {
-		return e.TempEngine.New(ctx, op)
-	}
-	return err
+	return e.Engine.New(ctx, op)
 }
 
 func (e *EntireEngine) LatestLogtailAppliedTime() timestamp.Timestamp {
 	return e.Engine.LatestLogtailAppliedTime()
-}
-
-func (e *EntireEngine) HasTempEngine() bool {
-	return e.TempEngine != nil
 }
 
 func (e *EntireEngine) Delete(ctx context.Context, databaseName string, op client.TxnOperator) error {
@@ -59,13 +44,7 @@ func (e *EntireEngine) Databases(ctx context.Context, op client.TxnOperator) (da
 }
 
 func (e *EntireEngine) Database(ctx context.Context, databaseName string, op client.TxnOperator) (Database, error) {
-	if databaseName == defines.TEMPORARY_DBNAME {
-		if e.TempEngine != nil {
-			return e.TempEngine.Database(ctx, defines.TEMPORARY_DBNAME, op)
-		} else {
-			return nil, moerr.NewInternalError(ctx, "temporary engine not init yet")
-		}
-	}
+
 	return e.Engine.Database(ctx, databaseName, op)
 }
 

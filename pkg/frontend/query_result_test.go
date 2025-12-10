@@ -41,7 +41,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -79,9 +78,7 @@ func newTestSession(t *testing.T, ctrl *gomock.Controller) *Session {
 	testutil.SetupAutoIncrService("")
 	//new session
 	ses := NewSession(context.TODO(), "", proto, testPool)
-	var c clock.Clock
 	catalog.SetupDefines("")
-	_ = ses.GetTxnHandler().CreateTempStorage(c)
 	tenant := &TenantInfo{
 		Tenant:        sysAccountName,
 		User:          rootName,

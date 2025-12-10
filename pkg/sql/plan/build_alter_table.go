@@ -419,7 +419,11 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	}
 
 	if tableDef.IsTemporary {
-		return nil, moerr.NewNYI(ctx.GetContext(), "alter table for temporary table")
+		// Only allow a safe subset of alter operations on temporary tables.
+		// For now: add index / drop index.
+		if !allowTempTableAlterForIndex(stmt) {
+			return nil, moerr.NewNYI(ctx.GetContext(), "alter table for temporary table")
+		}
 	}
 
 	if tableDef.ViewSql != nil {
@@ -453,6 +457,36 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	} else {
 		return buildAlterTableInplace(stmt, ctx)
 	}
+}
+
+// allowTempTableAlterForIndex returns true if the alter table statement
+// is limited to add/drop index operations, which we support for temp tables.
+func allowTempTableAlterForIndex(stmt *tree.AlterTable) bool {
+	// partition alter is not allowed for temp table
+	if stmt.PartitionOption != nil {
+		return false
+	}
+	for _, opt := range stmt.Options {
+		switch o := opt.(type) {
+		case *tree.AlterOptionAdd:
+			switch o.Def.(type) {
+			case *tree.Index, *tree.UniqueIndex, *tree.FullTextIndex:
+				// supported add index variants
+			default:
+				return false
+			}
+		case *tree.AlterOptionDrop:
+			switch o.Typ {
+			case tree.AlterTableDropIndex, tree.AlterTableDropKey:
+				// supported drop index/key
+			default:
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func ResolveAlterTableAlgorithm(
