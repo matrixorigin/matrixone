@@ -16,6 +16,7 @@ package publication
 
 import (
 	"context"
+	"database/sql"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
@@ -29,36 +30,53 @@ const (
 	IterationStateCanceled  int8 = 4 // 'cancel'
 )
 
-// SQLExecutor is an interface for executing SQL queries
-// This is a temporary interface, implementation will be added later
-type SQLExecutor interface {
-	// Exec executes a SQL query and returns the result
-	// The result should contain columns: cn_uuid, iteration_state, iteration_lsn
-	Exec(ctx context.Context, sql string) (cnUUID string, iterationState int8, iterationLSN uint64, err error)
-}
-
 // CheckIterationStatus checks the iteration status in mo_ccpr_log table
 // It verifies that cn_uuid, iteration_lsn match the expected values,
 // and that iteration_state is completed
 func checkIterationStatus(
 	ctx context.Context,
-	executor SQLExecutor,
+	executor *UpstreamExecutor,
 	taskID uint64,
 	expectedCNUUID string,
 	expectedIterationLSN uint64,
 ) error {
 	// Build SQL query using sql_builder
-	sql := PublicationSQLBuilder.QueryMoCcprLogSQL(taskID)
+	querySQL := PublicationSQLBuilder.QueryMoCcprLogSQL(taskID)
 
 	// Execute SQL query
-	cnUUID, iterationState, iterationLSN, err := executor.Exec(ctx, sql)
+	result, err := executor.ExecSQL(ctx, querySQL)
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to execute query: %v", err)
 	}
+	defer result.Close()
+
+	// Scan the result - expecting columns: cn_uuid, iteration_state, iteration_lsn
+	var cnUUID sql.NullString
+	var iterationState int8
+	var iterationLSN uint64
+
+	if !result.Next() {
+		if err := result.Err(); err != nil {
+			return moerr.NewInternalErrorf(ctx, "failed to read query result: %v", err)
+		}
+		return moerr.NewInternalErrorf(ctx, "no rows returned for task_id %d", taskID)
+	}
+
+	if err := result.Scan(&cnUUID, &iterationState, &iterationLSN); err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to scan query result: %v", err)
+	}
+
+	// Check if there are more rows (should not happen for a single task_id)
+	if result.Next() {
+		return moerr.NewInternalErrorf(ctx, "multiple rows returned for task_id %d", taskID)
+	}
 
 	// Check if cn_uuid matches
-	if cnUUID != expectedCNUUID {
-		return moerr.NewInternalErrorf(ctx, "cn_uuid mismatch: expected %s, got %s", expectedCNUUID, cnUUID)
+	if !cnUUID.Valid {
+		return moerr.NewInternalErrorf(ctx, "cn_uuid is null for task_id %d", taskID)
+	}
+	if cnUUID.String != expectedCNUUID {
+		return moerr.NewInternalErrorf(ctx, "cn_uuid mismatch: expected %s, got %s", expectedCNUUID, cnUUID.String)
 	}
 
 	// Check if iteration_lsn matches
