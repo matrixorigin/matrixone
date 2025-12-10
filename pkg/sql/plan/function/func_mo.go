@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
+	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -229,7 +230,7 @@ func isSubscribedTable(
 					zap.String("db name", dbName),
 					zap.String("tbl name", tblName),
 					zap.String("subscription", sub.String()),
-					zap.String("sql", sql),
+					zap.String("sql", commonutil.Abbreviate(sql, 500)),
 				)
 			}
 		}()

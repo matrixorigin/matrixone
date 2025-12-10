@@ -152,10 +152,8 @@ func NewMergeObjectsTask(
 		task.idxs = append(task.idxs, def.Idx)
 		task.attrs = append(task.attrs, def.Name)
 	}
-	if isTombstone {
-		task.idxs = append(task.idxs, objectio.SEQNUM_COMMITTS)
-		task.attrs = append(task.attrs, objectio.TombstoneAttr_CommitTs_Attr)
-	}
+	task.idxs = append(task.idxs, objectio.SEQNUM_COMMITTS)
+	task.attrs = append(task.attrs, objectio.TombstoneAttr_CommitTs_Attr)
 	task.BaseTask = tasks.NewBaseTask(task, tasks.DataCompactionTask, ctx)
 
 	if task.GetTotalSize() > 300*common.Const1MBytes {
@@ -369,9 +367,7 @@ func (task *mergeObjectsTask) PrepareNewWriter() *ioutil.BlockWriter {
 		}
 		seqnums = append(seqnums, def.SeqNum)
 	}
-	if task.isTombstone {
-		seqnums = append(seqnums, objectio.SEQNUM_COMMITTS)
-	}
+	seqnums = append(seqnums, objectio.SEQNUM_COMMITTS)
 	sortkeyIsPK := false
 	sortkeyPos := -1
 

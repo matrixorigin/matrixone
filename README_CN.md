@@ -270,6 +270,24 @@ for row in results.rows:
 
 MatrixOne 支持多种安装方式，选择最适合您需求的方式：
 
+### 🐳 本地多 CN 开发环境
+
+在本地运行完整的分布式集群，包含多个 CN 节点、负载均衡和便捷的配置管理。
+
+```bash
+# 快速开始
+make dev-build && make dev-up
+
+# 通过代理连接（负载均衡）
+mysql -h 127.0.0.1 -P 6001 -u root -p111
+
+# 配置特定服务（交互式编辑器）
+make dev-edit-cn1          # 编辑 CN1 配置
+make dev-restart-cn1       # 仅重启 CN1（快速！）
+```
+
+📖 **[完整开发指南 →](etc/DEV_README.md)** - 涵盖单机设置、多 CN 集群、监控、指标、配置和所有 `make dev-*` 命令的完整指南
+
 ### 🎯 使用 mo_ctl 工具（推荐）
 
 官方 [mo_ctl](https://github.com/matrixorigin/mo_ctl_standalone) 工具提供一键部署和生命周期管理。自动处理安装、升级、备份和健康监控。

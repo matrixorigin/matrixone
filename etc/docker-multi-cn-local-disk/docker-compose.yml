@@ -2,12 +2,38 @@
 # Supports both official Docker Hub image and local build
 #
 # Usage:
-# 1. Use official image (default, will pull from Docker Hub if not exist locally):
-#    docker compose up -d
+# 1. Start MatrixOne cluster (all services):
+#    docker compose --profile matrixone up -d
+#    Or use official image (will pull from Docker Hub if not exist locally):
+#    docker compose --profile matrixone up -d
 #
 # 2. Build from source (for developers, creates 'local' tag):
 #    docker compose build
-#    IMAGE_NAME=matrixorigin/matrixone:local docker compose up -d
+#    IMAGE_NAME=matrixorigin/matrixone:local docker compose --profile matrixone up -d
+#
+# 3. Start with Grafana monitoring (MatrixOne + Grafana + Prometheus):
+#    docker compose --profile matrixone --profile prometheus up -d
+#    Access Grafana UI at http://localhost:3000 (admin/admin)
+#    Prometheus runs internally and is accessed by Grafana only
+#
+# 4. Start monitoring for local MatrixOne (MatrixOne runs locally, not in Docker):
+#    docker compose --profile prometheus-local up -d
+#    Access Grafana UI at http://localhost:3001 (admin/admin)
+#    Prometheus runs internally and is accessed by Grafana only
+#    Make sure your local MatrixOne has metrics enabled and listens on status-port
+#    Note: This will start Prometheus (internal) and Grafana (exposed), not MatrixOne services
+#
+# Docker Registry Mirror (for faster image pulls):
+#    If docker pull is slow, configure Docker registry mirror:
+#    sudo ./setup-docker-mirror.sh
+#    Or manually edit /etc/docker/daemon.json and add registry-mirrors
+#
+# Note: To enable metrics collection, you need to modify the service config files
+# (cn1.toml, cn2.toml, tn.toml, proxy.toml) and set:
+#   [observability]
+#   disableMetric = false
+#   enable-metric-to-prom = true
+#   status-port = 7001
 
 # Build configuration (only used when building locally)
 # Local builds use tag 'local' to avoid overwriting the official 'latest' tag
@@ -29,6 +55,8 @@ services:
     build: *common-build
     container_name: mo-log
     hostname: mo-log
+    profiles:
+      - matrixone
     user: "${DOCKER_UID:-501}:${DOCKER_GID:-20}"  # Run as current user (macOS default: 501:20, Linux: use 1000:1000)
     entrypoint: ["/mo-service"]
     command: ["-cfg", "/etc/docker-multi-cn-local-disk/log.toml"]
@@ -55,6 +83,8 @@ services:
     image: ${IMAGE_NAME:-matrixorigin/matrixone:latest}
     container_name: mo-tn
     hostname: mo-tn
+    profiles:
+      - matrixone
     user: "${DOCKER_UID:-501}:${DOCKER_GID:-20}"  # Run as current user (macOS default: 501:20, Linux: use 1000:1000)
     entrypoint: ["/mo-service"]
     command: ["-cfg", "/etc/docker-multi-cn-local-disk/tn.toml"]
@@ -75,6 +105,8 @@ services:
     image: ${IMAGE_NAME:-matrixorigin/matrixone:latest}
     container_name: mo-cn1
     hostname: mo-cn1
+    profiles:
+      - matrixone
     user: "${DOCKER_UID:-501}:${DOCKER_GID:-20}"  # Run as current user (macOS default: 501:20, Linux: use 1000:1000)
     entrypoint: ["/mo-service"]
     command: ["-cfg", "/etc/docker-multi-cn-local-disk/cn1.toml"]
@@ -97,6 +129,8 @@ services:
     image: ${IMAGE_NAME:-matrixorigin/matrixone:latest}
     container_name: mo-cn2
     hostname: mo-cn2
+    profiles:
+      - matrixone
     user: "${DOCKER_UID:-501}:${DOCKER_GID:-20}"  # Run as current user (macOS default: 501:20, Linux: use 1000:1000)
     entrypoint: ["/mo-service"]
     command: ["-cfg", "/etc/docker-multi-cn-local-disk/cn2.toml"]
@@ -119,6 +153,8 @@ services:
     image: ${IMAGE_NAME:-matrixorigin/matrixone:latest}
     container_name: mo-proxy
     hostname: mo-proxy
+    profiles:
+      - matrixone
     user: "${DOCKER_UID:-501}:${DOCKER_GID:-20}"  # Run as current user (macOS default: 501:20, Linux: use 1000:1000)
     entrypoint: ["/mo-service"]
     command: ["-cfg", "/etc/docker-multi-cn-local-disk/proxy.toml"]
@@ -136,6 +172,146 @@ services:
       mo-log:
         condition: service_healthy
 
+  # Prometheus - Monitoring (optional, use --profile prometheus to enable)
+  # Prometheus runs internally and is accessed by Grafana only
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: mo-prometheus
+    hostname: mo-prometheus
+    profiles:
+      - prometheus
+    user: "${DOCKER_UID:-501}:${DOCKER_GID:-20}"  # Run as current user (macOS default: 501:20, Linux: use 1000:1000)
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    # Prometheus port is NOT exposed - only accessible via Docker network (for Grafana)
+    # Uncomment the following line if you need direct Prometheus access:
+    # ports:
+    #   - "9090:9090"    # Prometheus web UI (only if needed for debugging)
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../../prometheus-data:/prometheus  # Local directory for easy access
+    networks:
+      - matrixone-net
+    depends_on:
+      - mo-log
+      - mo-tn
+      - mo-cn1
+      - mo-cn2
+      - mo-proxy
+    restart: unless-stopped
+
+  # Grafana - Visualization dashboard for MatrixOne cluster
+  # This is the main entry point for monitoring - Prometheus runs internally
+  # Grafana connects to Prometheus via Docker network (prometheus:9090)
+  grafana:
+    image: grafana/grafana:latest
+    container_name: mo-grafana
+    hostname: mo-grafana
+    profiles:
+      - prometheus
+    user: "${DOCKER_UID:-501}:${DOCKER_GID:-20}"  # Run as current user
+    ports:
+      - "3000:3000"    # Grafana web UI - main monitoring interface
+    volumes:
+      - ../../grafana-data:/var/lib/grafana  # Grafana data directory
+      - ./grafana-provisioning/datasources/prometheus-cluster.yml:/etc/grafana/provisioning/datasources/prometheus.yml:ro  # Prometheus data source for cluster
+      - ./grafana-provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro  # Dashboard provisioning
+      - ../../pkg/util/metric/dashboard:/var/lib/grafana/dashboards/matrixone:ro  # MatrixOne dashboards
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_INSTALL_PLUGINS=
+      - GF_SERVER_ROOT_URL=http://localhost:3000
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - TZ=Asia/Shanghai
+    networks:
+      - matrixone-net
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+  # Prometheus for Local MatrixOne - Monitoring local (non-Docker) services
+  # This service runs internally and is accessed by Grafana only
+  # Prometheus is not exposed externally - use Grafana UI instead
+  prometheus-local:
+    image: prom/prometheus:latest
+    container_name: mo-prometheus-local
+    hostname: mo-prometheus-local
+    profiles:
+      - prometheus-local
+    user: "${DOCKER_UID:-501}:${DOCKER_GID:-20}"  # Run as current user (macOS default: 501:20, Linux: use 1000:1000)
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    # Prometheus port is NOT exposed - only accessible via Docker network (for Grafana)
+    # Uncomment the following line if you need direct Prometheus access:
+    # ports:
+    #   - "9091:9090"    # Prometheus web UI (only if needed for debugging)
+    volumes:
+      - ./prometheus-local.yml:/etc/prometheus/prometheus.yml:ro
+      - ../../prometheus-local-data:/prometheus  # Local directory for easy access
+    # Use host network on Linux for better host access, or bridge with extra_hosts
+    # For Linux, we'll use extra_hosts to map host.docker.internal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"  # Linux support for host.docker.internal
+    networks:
+      - matrixone-net
+    environment:
+      - TZ=Asia/Shanghai
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9090/-/ready"]
+      interval: 3s
+      timeout: 2s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
+  # Grafana for Local MatrixOne - Visualization dashboard
+  # This is the main entry point for monitoring - Prometheus runs internally
+  # Grafana connects to Prometheus via Docker network (prometheus-local:9090)
+  grafana-local:
+    image: grafana/grafana:latest
+    container_name: mo-grafana-local
+    hostname: mo-grafana-local
+    profiles:
+      - prometheus-local
+    user: "${DOCKER_UID:-501}:${DOCKER_GID:-20}"  # Run as current user
+    ports:
+      - "3001:3000"    # Grafana web UI - main monitoring interface
+    volumes:
+      - ../../grafana-local-data:/var/lib/grafana  # Grafana data directory
+      - ./grafana-provisioning/datasources/prometheus.yml:/etc/grafana/provisioning/datasources/prometheus.yml:ro  # Prometheus data source for local
+      - ./grafana-provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro  # Dashboard provisioning
+      - ../../pkg/util/metric/dashboard:/var/lib/grafana/dashboards/matrixone:ro  # MatrixOne dashboards
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_INSTALL_PLUGINS=
+      - GF_SERVER_ROOT_URL=http://localhost:3001
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - TZ=Asia/Shanghai
+    networks:
+      - matrixone-net
+    depends_on:
+      prometheus-local:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:3000/api/health || exit 1"]
+      interval: 3s
+      timeout: 2s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
 networks:
   matrixone-net:
     driver: bridge
@@ -143,4 +319,6 @@ networks:
 volumes:
   mo-data:
   logs:
+  # Prometheus data is stored in local directories (../../prometheus-data and ../../prometheus-local-data)
+  # instead of Docker volumes for easier access and management
 

@@ -21,6 +21,7 @@ import (
 
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -76,6 +77,9 @@ type SqlProcess struct {
 	// Optional BloomFilter bytes attached by vector index runtime.
 	// Used to drive additional filtering in internal SQL executor (e.g. ivf entries scan).
 	BloomFilter []byte
+	// Optional IndexReaderParam attached by vector index runtime.
+	// Used to drive additional filtering in internal SQL executor (e.g. ivf entries scan).
+	IndexReaderParam *plan.IndexReaderParam
 }
 
 func NewSqlProcess(proc *process.Process) *SqlProcess {
@@ -129,6 +133,14 @@ func RunSql(sqlproc *SqlProcess, sql string) (executor.Result, error) {
 				sqlproc.BloomFilter,
 			)
 		}
+		// Attach optional DistRange to context for internal executor.
+		if sqlproc.IndexReaderParam != nil {
+			topContext = context.WithValue(
+				topContext,
+				defines.IvfReaderParam{},
+				sqlproc.IndexReaderParam,
+			)
+		}
 		accountId, err := defines.GetAccountId(proc.Ctx)
 		if err != nil {
 			return executor.Result{}, err
@@ -144,7 +156,8 @@ func RunSql(sqlproc *SqlProcess, sql string) (executor.Result, error) {
 			WithDatabase(proc.GetSessionInfo().Database).
 			WithTimeZone(proc.GetSessionInfo().TimeZone).
 			WithAccountID(accountId).
-			WithResolveVariableFunc(proc.GetResolveVariableFunc())
+			WithResolveVariableFunc(proc.GetResolveVariableFunc()).
+			WithStatementOption(executor.StatementOption{}.WithDisableLog())
 		return exec.Exec(topContext, sql, opts)
 	} else {
 
@@ -163,7 +176,8 @@ func RunSql(sqlproc *SqlProcess, sql string) (executor.Result, error) {
 			WithDisableIncrStatement().
 			WithTxn(sqlctx.Txn()).
 			WithAccountID(accountId).
-			WithResolveVariableFunc(sqlctx.GetResolveVariableFunc())
+			WithResolveVariableFunc(sqlctx.GetResolveVariableFunc()).
+			WithStatementOption(executor.StatementOption{}.WithDisableLog())
 		return exec.Exec(sqlctx.Ctx, sql, opts)
 
 	}
@@ -201,7 +215,8 @@ func RunStreamingSql(
 			WithTimeZone(proc.GetSessionInfo().TimeZone).
 			WithAccountID(accountId).
 			WithStreaming(stream_chan, error_chan).
-			WithResolveVariableFunc(proc.GetResolveVariableFunc())
+			WithResolveVariableFunc(proc.GetResolveVariableFunc()).
+			WithStatementOption(executor.StatementOption{}.WithDisableLog())
 		return exec.Exec(ctx, sql, opts)
 	} else {
 
@@ -222,7 +237,8 @@ func RunStreamingSql(
 			WithTxn(sqlctx.Txn()).
 			WithAccountID(accountId).
 			WithStreaming(stream_chan, error_chan).
-			WithResolveVariableFunc(sqlctx.GetResolveVariableFunc())
+			WithResolveVariableFunc(sqlctx.GetResolveVariableFunc()).
+			WithStatementOption(executor.StatementOption{}.WithDisableLog())
 		return exec.Exec(ctx, sql, opts)
 
 	}

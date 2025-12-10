@@ -57,69 +57,69 @@ INSERT INTO t1 VALUES ('A', 10), ('FF', 255), ('1010', 10);
 SELECT CONV(num_str, 16, 10) AS hex_val, CONV(num_val, 10, 16) AS hex_str FROM t1;
 internal error: panic type mismatch: casting INT vector to []int64: 
 github.com/matrixorigin/matrixone/pkg/container/vector.checkType[...]
-	/home/fengttt/m/matrixone/pkg/container/vector/vector.go:107
+	/Users/ariznawl/matrixone/pkg/container/vector/vector.go:107
 github.com/matrixorigin/matrixone/pkg/container/vector.ToSlice[...]
-	/home/fengttt/m/matrixone/pkg/container/vector/vector.go:101
+	/Users/ariznawl/matrixone/pkg/container/vector/vector.go:101
 github.com/matrixorigin/matrixone/pkg/container/vector.ToFixedCol[...]
-	/home/fengttt/m/matrixone/pkg/container/vector/tools.go:42
+	/Users/ariznawl/matrixone/pkg/container/vector/tools.go:42
 github.com/matrixorigin/matrixone/pkg/container/vector.MustFixedColWithTypeCheck[...]
-	/home/fengttt/m/matrixone/pkg/container/vector/tools.go:56
+	/Users/ariznawl/matrixone/pkg/container/vector/tools.go:56
 github.com/matrixorigin/matrixone/pkg/container/vector.GenerateFunctionFixedTypeParameter[...]
-	/home/fengttt/m/matrixone/pkg/container/vector/functionTools.go:67
+	/Users/ariznawl/matrixone/pkg/container/vector/functionTools.go:67
 github.com/matrixorigin/matrixone/pkg/sql/plan/function.convInt64Direct
-	/home/fengttt/m/matrixone/pkg/sql/plan/function/func_binary.go:1624
+	/Users/ariznawl/matrixone/pkg/sql/plan/function/func_binary.go:2470
 github.com/matrixorigin/matrixone/pkg/sql/plan/function.Conv
-	/home/fengttt/m/matrixone/pkg/sql/plan/function/func_binary.go:1553
+	/Users/ariznawl/matrixone/pkg/sql/plan/function/func_binary.go:2399
 github.com/matrixorigin/matrixone/pkg/sql/colexec.(*FunctionExpressionExecutor).Eval
-	/home/fengttt/m/matrixone/pkg/sql/colexec/evalExpression.go:633
+	/Users/ariznawl/matrixone/pkg/sql/colexec/evalExpression.go:633
 github.com/matrixorigin/matrixone/pkg/sql/colexec/projection.(*Projection).Call
-	/home/fengttt/m/matrixone/pkg/sql/colexec/projection/projection.go:76
+	/Users/ariznawl/matrixone/pkg/sql/colexec/projection/projection.go:76
 github.com/matrixorigin/matrixone/pkg/vm.Exec
-	/home/fengttt/m/matrixone/pkg/vm/types.go:514
+	/Users/ariznawl/matrixone/pkg/vm/types.go:514
 github.com/matrixorigin/matrixone/pkg/vm.ChildrenCall
-	/home/fengttt/m/matrixone/pkg/vm/types.go:525
+	/Users/ariznawl/matrixone/pkg/vm/types.go:525
 github.com/matrixorigin/matrixone/pkg/sql/colexec/output.(*Output).Call
-	/home/fengttt/m/matrixone/pkg/sql/colexec/output/output.go:55
+	/Users/ariznawl/matrixone/pkg/sql/colexec/output/output.go:55
 github.com/matrixorigin/matrixone/pkg/vm.Exec
-	/home/fengttt/m/matrixone/pkg/vm/types.go:514
+	/Users/ariznawl/matrixone/pkg/vm/types.go:514
 github.com/matrixorigin/matrixone/pkg/vm/pipeline.(*Pipeline).Run
-	/home/fengttt/m/matrixone/pkg/vm/pipeline/pipeline.go:71
+	/Users/ariznawl/matrixone/pkg/vm/pipeline/pipeline.go:71
 github.com/matrixorigin/matrixone/pkg/vm/pipeline.(*Pipeline).RunWithReader
-	/home/fengttt/m/matrixone/pkg/vm/pipeline/pipeline.go:59
+	/Users/ariznawl/matrixone/pkg/vm/pipeline/pipeline.go:59
 github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).Run
-	/home/fengttt/m/matrixone/pkg/sql/compile/scope.go:198
+	/Users/ariznawl/matrixone/pkg/sql/compile/scope.go:198
 github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).ParallelRun
-	/home/fengttt/m/matrixone/pkg/sql/compile/scope.go:490
+	/Users/ariznawl/matrixone/pkg/sql/compile/scope.go:490
 github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).MergeRun
-	/home/fengttt/m/matrixone/pkg/sql/compile/scope.go:276
+	/Users/ariznawl/matrixone/pkg/sql/compile/scope.go:276
 github.com/matrixorigin/matrixone/pkg/sql/compile.(*Scope).RemoteRun
-	/home/fengttt/m/matrixone/pkg/sql/compile/scope.go:395
+	/Users/ariznawl/matrixone/pkg/sql/compile/scope.go:395
 github.com/matrixorigin/matrixone/pkg/sql/compile.(*Compile).run
-	/home/fengttt/m/matrixone/pkg/sql/compile/compile.go:375
+	/Users/ariznawl/matrixone/pkg/sql/compile/compile.go:375
 github.com/matrixorigin/matrixone/pkg/sql/compile.(*Compile).runOnce
-	/home/fengttt/m/matrixone/pkg/sql/compile/compile.go:522
+	/Users/ariznawl/matrixone/pkg/sql/compile/compile.go:522
 github.com/matrixorigin/matrixone/pkg/sql/compile.(*Compile).Run
-	/home/fengttt/m/matrixone/pkg/sql/compile/compile2.go:250
+	/Users/ariznawl/matrixone/pkg/sql/compile/compile2.go:250
 github.com/matrixorigin/matrixone/pkg/frontend.executeResultRowStmt
-	/home/fengttt/m/matrixone/pkg/frontend/result_row_stmt.go:87
+	/Users/ariznawl/matrixone/pkg/frontend/result_row_stmt.go:87
 github.com/matrixorigin/matrixone/pkg/frontend.executeStmt
-	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2994
+	/Users/ariznawl/matrixone/pkg/frontend/mysql_cmd_executor.go:2995
 github.com/matrixorigin/matrixone/pkg/frontend.dispatchStmt
-	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2847
+	/Users/ariznawl/matrixone/pkg/frontend/mysql_cmd_executor.go:2848
 github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithIncrStmt
-	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2812
+	/Users/ariznawl/matrixone/pkg/frontend/mysql_cmd_executor.go:2813
 github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithWorkspace
-	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2756
+	/Users/ariznawl/matrixone/pkg/frontend/mysql_cmd_executor.go:2757
 github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithTxn
-	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2631
+	/Users/ariznawl/matrixone/pkg/frontend/mysql_cmd_executor.go:2632
 github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithResponse
-	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2594
+	/Users/ariznawl/matrixone/pkg/frontend/mysql_cmd_executor.go:2595
 github.com/matrixorigin/matrixone/pkg/frontend.doComQuery
-	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:3237
+	/Users/ariznawl/matrixone/pkg/frontend/mysql_cmd_executor.go:3238
 github.com/matrixorigin/matrixone/pkg/frontend.ExecRequest
-	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:3317
+	/Users/ariznawl/matrixone/pkg/frontend/mysql_cmd_executor.go:3318
 github.com/matrixorigin/matrixone/pkg/frontend.(*Routine).handleRequest
-	/home/fengttt/m/matrixone/pkg/frontend/routine.go:298
+	/Users/ariznawl/matrixone/pkg/frontend/routine.go:298
 DROP TABLE t1;
 CREATE TABLE t1(val VARCHAR(10));
 INSERT INTO t1 VALUES ('A'), ('B'), ('C');
