@@ -74,14 +74,15 @@ func TestObjectStorageSemaphoreReleasesOnError(t *testing.T) {
 	}
 	sem := newObjectStorageSemaphore(upstream, 1)
 
+	// release the blocked write once it has started
+	go func() {
+		<-start
+		close(wait)
+	}()
+
 	err := sem.Write(context.Background(), "a", nil, nil, nil)
 	require.Error(t, err)
-	close(wait)
 
 	// another call should proceed after the failed one
-	select {
-	case start <- struct{}{}:
-	default:
-	}
 	require.NoError(t, sem.Delete(context.Background(), "x"))
 }
