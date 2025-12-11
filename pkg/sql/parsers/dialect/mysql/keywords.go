@@ -40,6 +40,7 @@ func init() {
 		"auto_increment":             AUTO_INCREMENT,
 		"autoextend_size":            AUTOEXTEND_SIZE,
 		"auto_random":                AUTO_RANDOM,
+		"auto_update":                AUTO_UPDATE,
 		"avg_row_length":             AVG_ROW_LENGTH,
 		"avg":                        AVG,
 		"bsi":                        BSI,

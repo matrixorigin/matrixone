@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -748,6 +749,57 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					break
 				}
 			}
+		case *plan.AlterTable_Action_AlterAutoUpdate:
+			hasUpdateConstraints = true
+			tableAlterIndex := act.AlterAutoUpdate
+			constraintName := tableAlterIndex.IndexName
+
+			autoupdate := tableAlterIndex.AutoUpdate
+			interval := tableAlterIndex.Interval
+
+			// simply update the index configuration
+			for i, indexDef := range oTableDef.Indexes {
+				if indexDef.IndexName == constraintName {
+					alterIndex = indexDef
+
+					indexAlgo := catalog.ToLower(alterIndex.IndexAlgo)
+					switch catalog.ToLower(indexAlgo) {
+					case catalog.MoIndexIvfFlatAlgo.ToString():
+						// 1. Get old AlgoParams
+						newAlgoParamsMap, err := catalog.IndexParamsStringToMap(alterIndex.IndexAlgoParams)
+						if err != nil {
+							return err
+						}
+						// 2.a update AlgoParams for the index to be re-indexed
+						// NOTE: this will throw error if the algo type is not supported for reindex.
+						// So Step 4. will not be executed if error is thrown here.
+						newAlgoParamsMap[catalog.AutoUpdate] = fmt.Sprintf("%v", tableAlterIndex.AutoUpdate)
+						newAlgoParamsMap[catalog.Interval] = fmt.Sprintf("%d", tableAlterIndex.Interval)
+						// 2.b generate new AlgoParams string
+						newAlgoParams, err := catalog.IndexParamsMapToJsonString(newAlgoParamsMap)
+						if err != nil {
+							return err
+						}
+
+						// 3.a Update IndexDef and TableDef
+						alterIndex.IndexAlgoParams = newAlgoParams
+						oTableDef.Indexes[i].IndexAlgoParams = newAlgoParams
+
+						// 3.b Update mo_catalog.mo_indexes
+						updateSql := fmt.Sprintf(updateMoIndexesAlgoParams, newAlgoParams, oTableDef.TblId, alterIndex.IndexName)
+						if err = c.runSqlWithOptions(
+							updateSql, executor.StatementOption{}.WithDisableLog(),
+						); err != nil {
+							return err
+						}
+					default:
+						return moerr.NewInternalError(c.proc.Ctx, "invalid index algo type for alter reindex")
+					}
+				}
+			}
+
+			os.Stderr.WriteString(fmt.Sprintf("index %s, autoupdate %v interval %d\n", constraintName, autoupdate, interval))
+
 		case *plan.AlterTable_Action_AlterReindex:
 			// NOTE: We hold lock (with retry) during alter reindex, as "alter table" takes an exclusive lock
 			//in the beginning for pessimistic mode. We need to see how to reduce the critical section.

@@ -376,7 +376,7 @@ import (
 
 // Secondary Index
 %token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT MASTER HNSW
-%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_SEARCH EF_CONSTRUCTION M ASYNC FORCE_SYNC
+%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_SEARCH EF_CONSTRUCTION M ASYNC FORCE_SYNC AUTO_UPDATE
 
 // Alter
 %token <str> EXPIRE ACCOUNT ACCOUNTS UNLOCK DAY NEVER PUMP MYSQL_COMPATIBILITY_MODE UNIQUE_CHECK_ON_AUTOINCR
@@ -644,6 +644,7 @@ import (
 %type <alterColumnOrder> alter_column_order
 %type <alterColumnOrderBy> alter_column_order_list
 %type <indexVisibility> visibility
+%type <boolVal> auto_update
 %type <PartitionNames> AllOrPartitionNameList PartitionNameList
 
 %type <tableOption> table_option source_option
@@ -3858,6 +3859,21 @@ alter_table_alter:
         var visibility = $3
         $$ = tree.NewAlterOptionAlterIndex(indexName, visibility)
     }
+| INDEX ident IVFFLAT auto_update index_option_list
+    {
+        var io *tree.IndexOption = nil
+        if $5 == nil {
+            io = tree.NewIndexOption()
+            io.IType = tree.INDEX_TYPE_IVFFLAT
+        } else {
+            io = $5
+            io.IType = tree.INDEX_TYPE_IVFFLAT
+        }
+        var name = tree.Identifier($2.Compare())
+	var auto_update = $4
+	io.AutoUpdate = auto_update
+        $$ = tree.NewAlterOptionAlterAutoUpdate(name, io)
+    }
 | REINDEX ident IVFFLAT index_option_list
     {
         var io *tree.IndexOption = nil
@@ -3901,6 +3917,16 @@ visibility:
 |   INVISIBLE
     {
    	    $$ = tree.VISIBLE_TYPE_INVISIBLE
+    }
+
+auto_update:
+    AUTO_UPDATE '=' TRUE
+    {
+	$$ = true
+    }
+|   AUTO_UPDATE '=' FALSE
+    {
+	$$ = false
     }
 
 alter_account_stmt:
@@ -7670,6 +7696,10 @@ index_option_list:
 	      opt1.Async = opt2.Async
  	    } else if opt2.ForceSync {
 	      opt1.ForceSync = opt2.ForceSync
+ 	    } else if opt2.AutoUpdate {
+	      opt1.AutoUpdate = opt2.AutoUpdate
+ 	    } else if opt2.Interval > 0 {
+	      opt1.Interval = opt2.Interval
 	    }
             $$ = opt1
         }
@@ -7769,6 +7799,30 @@ index_option:
 	io.ForceSync = true	
 	$$ = io
      }
+|    AUTO_UPDATE '=' TRUE
+     {
+	io := tree.NewIndexOption()
+	io.AutoUpdate = true
+	$$ = io
+     }
+|    AUTO_UPDATE '=' FALSE
+     {
+	io := tree.NewIndexOption()
+	io.AutoUpdate = false
+	$$ = io
+     }
+|    INTERVAL INTEGRAL DAY
+     {
+        val := int64($2.(int64))
+	if val <= 0 {
+		yylex.Error("INTERVAL should be greater than 0")
+		return 1
+	}
+	io := tree.NewIndexOption()
+	io.Interval = val
+	$$ = io
+     }
+
 
 index_column_list:
     index_column

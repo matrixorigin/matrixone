@@ -86,6 +86,8 @@ const (
 	HnswQuantization     = "quantization"
 	HnswEfSearch         = "ef_search"
 	Async                = "async"
+	AutoUpdate           = "auto_update"
+	Interval             = "interval"
 )
 
 /* 1. ToString Functions */
@@ -231,6 +233,12 @@ func indexParamsToMap(def interface{}) (map[string]string, error) {
 
 			if idx.IndexOption.Async {
 				res[Async] = "true"
+			}
+			if idx.IndexOption.AutoUpdate {
+				res[AutoUpdate] = "true"
+			}
+			if idx.IndexOption.Interval > 0 {
+				res[Interval] = strconv.FormatInt(idx.IndexOption.Interval, 10)
 			}
 		case tree.INDEX_TYPE_HNSW:
 			if idx.IndexOption.HnswM < 0 {

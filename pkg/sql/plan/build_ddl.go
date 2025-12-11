@@ -4038,6 +4038,50 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				},
 			}
 
+		case *tree.AlterOptionAlterAutoUpdate:
+			alterTableAutoUpdate := new(plan.AlterTableAlterAutoUpdate)
+			constraintName := string(opt.Name)
+			alterTableAutoUpdate.IndexName = constraintName
+
+			switch opt.KeyType {
+			case tree.INDEX_TYPE_IVFFLAT:
+				if opt.Interval < 0 {
+					return nil, moerr.NewInternalErrorf(
+						ctx.GetContext(),
+						"interval should be >= 0.",
+					)
+				}
+				alterTableAutoUpdate.AutoUpdate = opt.AutoUpdate
+				alterTableAutoUpdate.Interval = opt.Interval
+			default:
+				return nil, moerr.NewInternalErrorf(
+					ctx.GetContext(),
+					unsupportedErrFmt,
+					opt.KeyType.ToString(),
+				)
+			}
+
+			name_not_found := true
+			// check index
+			for _, indexdef := range tableDef.Indexes {
+				if constraintName == indexdef.IndexName {
+					name_not_found = false
+					break
+				}
+			}
+			if name_not_found {
+				return nil, moerr.NewInternalErrorf(
+					ctx.GetContext(),
+					"Can't REINDEX '%s'; check that column/key exists",
+					constraintName,
+				)
+			}
+			alterTable.Actions[i] = &plan.AlterTable_Action{
+				Action: &plan.AlterTable_Action_AlterAutoUpdate{
+					AlterAutoUpdate: alterTableAutoUpdate,
+				},
+			}
+
 		case *tree.TableOptionComment:
 			if getNumOfCharacters(opt.Comment) > maxLengthOfTableComment {
 				return nil, moerr.NewInvalidInputf(

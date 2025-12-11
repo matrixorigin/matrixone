@@ -495,6 +495,8 @@ func ResolveAlterTableAlgorithm(
 			algorithm = plan.AlterTable_INPLACE
 		case *tree.AlterOptionAlterReIndex:
 			algorithm = plan.AlterTable_INPLACE
+		case *tree.AlterOptionAlterAutoUpdate:
+			algorithm = plan.AlterTable_INPLACE
 		case *tree.TableOptionComment:
 			algorithm = plan.AlterTable_INPLACE
 		case *tree.AlterOptionTableName:

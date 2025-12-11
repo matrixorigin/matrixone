@@ -185,6 +185,12 @@ var (
 		input:  "alter table t1 alter reindex idx1 IVFFLAT force_sync",
 		output: "alter table t1 alter reindex idx1 ivfflat force_sync",
 	}, {
+		input:  "alter table t1 alter index idx1 IVFFLAT auto_update = true interval 33 day",
+		output: "alter table t1 alter index idx1 ivfflat auto_update = true interval 33 day",
+	}, {
+		input:  "alter table t1 alter index idx1 IVFFLAT auto_update = false",
+		output: "alter table t1 alter index idx1 ivfflat auto_update = false",
+	}, {
 		input:  "create connector for s with (\"type\"='kafka', \"topic\"= 'user', \"partition\" = '1', \"value\"= 'json', \"bootstrap.servers\" = '127.0.0.1:62610');",
 		output: "create connector for s with (type = kafka, topic = user, partition = 1, value = json, bootstrap.servers = 127.0.0.1:62610)",
 	}, {
@@ -1574,6 +1580,12 @@ var (
 			output: "create index idx1 using btree on a (a) KEY_BLOCK_SIZE 10 with parser x comment x invisible",
 		}, {
 			input:  "create index idx using ivfflat on A (a) LISTS 10",
+			output: "create index idx using ivfflat on a (a) LISTS 10 ",
+		}, {
+			input:  "create index idx using ivfflat on A (a) LISTS 10 AUTO_UPDATE=TRUE INTERVAL 10 DAY",
+			output: "create index idx using ivfflat on a (a) LISTS 10 AUTO_UPDATE=TRUE INTERVAL 10 DAY ",
+		}, {
+			input:  "create index idx using ivfflat on A (a) LISTS 10 AUTO_UPDATE=FALSE",
 			output: "create index idx using ivfflat on a (a) LISTS 10 ",
 		}, {
 			input:  "create index idx using ivfflat on A (a) LISTS 10 op_type 'vector_l2_ops'",
