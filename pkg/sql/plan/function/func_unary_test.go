@@ -322,8 +322,8 @@ func initL1NormArrayTestCase() []tcTemp {
 					[][]float32{{1, 2, 3}, {4, 5, 6}},
 					[]bool{false, false}),
 			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{6, 15},
+			expect: NewFunctionTestResult(types.T_float32.ToType(), false,
+				[]float32{6, 15},
 				[]bool{false, false}),
 		},
 		{
@@ -368,8 +368,8 @@ func initL2NormArrayTestCase() []tcTemp {
 					[][]float32{{1, 2, 3}, {4, 5, 6}},
 					[]bool{false, false}),
 			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{3.741657257080078, 8.774964332580566},
+			expect: NewFunctionTestResult(types.T_float32.ToType(), false,
+				[]float32{3.741657257080078, 8.774964332580566},
 				[]bool{false, false}),
 		},
 		{
