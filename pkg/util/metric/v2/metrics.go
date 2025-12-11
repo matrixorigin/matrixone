@@ -109,6 +109,10 @@ func initFileServiceMetrics() {
 	registry.MustRegister(FSObjectStorageOperations)
 
 	registry.MustRegister(FSHTTPTraceCounter)
+	registry.MustRegister(S3ConnActiveGauge)
+
+	registry.MustRegister(FSDiskCacheEvictCounter)
+	registry.MustRegister(FSDiskCacheErrorCounter)
 }
 
 func initLogtailMetrics() {

@@ -17,8 +17,11 @@ package dashboard
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"strings"
 
 	"github.com/K-Phoen/grabana"
 	"github.com/K-Phoen/grabana/axis"
@@ -33,6 +36,7 @@ import (
 	"github.com/K-Phoen/grabana/variable/interval"
 	"github.com/K-Phoen/grabana/variable/query"
 	"github.com/K-Phoen/sdk"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 var (
@@ -45,6 +49,9 @@ var UnitPercent0100 = axis.Unit("percent")
 
 type DashboardCreator struct {
 	cli             *grabana.Client
+	host            string
+	username        string
+	password        string
 	dataSource      string
 	extraFilterFunc func() string
 	by              string
@@ -60,6 +67,9 @@ func NewCloudDashboardCreator(
 	folderName string) *DashboardCreator {
 	dc := &DashboardCreator{
 		cli:        grabana.NewClient(http.DefaultClient, host, grabana.WithBasicAuth(username, password)),
+		host:       host,
+		username:   username,
+		password:   password,
 		dataSource: dataSource,
 	}
 	dc.extraFilterFunc = dc.getCloudFilters
@@ -77,6 +87,9 @@ func NewLocalDashboardCreator(
 	datasourceVariableName := "datasource"
 	dc := &DashboardCreator{
 		cli:        grabana.NewClient(http.DefaultClient, host, grabana.WithBasicAuth(username, password)),
+		host:       host,
+		username:   username,
+		password:   password,
 		dataSource: fmt.Sprintf("${%s}", datasourceVariableName),
 	}
 	dc.extraFilterFunc = dc.getLocalFilters
@@ -94,6 +107,9 @@ func NewK8SDashboardCreator(
 	folderName string) *DashboardCreator {
 	dc := &DashboardCreator{
 		cli:        grabana.NewClient(http.DefaultClient, host, grabana.WithBasicAuth(username, password)),
+		host:       host,
+		username:   username,
+		password:   password,
 		dataSource: dataSource,
 	}
 	dc.extraFilterFunc = dc.getK8SFilters
@@ -111,6 +127,9 @@ func NewCloudCtrlPlaneDashboardCreator(
 	folderName string) *DashboardCreator {
 	dc := &DashboardCreator{
 		cli:        grabana.NewClient(http.DefaultClient, host, grabana.WithBasicAuth(username, password)),
+		host:       host,
+		username:   username,
+		password:   password,
 		dataSource: AutoUnitPrometheusDatasource,
 	}
 	dc.extraFilterFunc = dc.getCloudFilters
@@ -556,4 +575,299 @@ func (c *DashboardCreator) initK8SFilterOptions() {
 			query.Request(`label_values(kube_pod_info{namespace="$namespace"},pod)`),
 			query.Refresh(query.TimeChange),
 		))
+}
+
+// Delete deletes all dashboards in the specified folder using Grafana HTTP API.
+func (c *DashboardCreator) Delete() error {
+	client := &http.Client{}
+
+	// Step 1: Find the folder by name
+	folder, err := c.findFolderByName(client, c.folderName)
+	if err != nil {
+		return moerr.NewInternalErrorNoCtxf("failed to find folder %s: %v", c.folderName, err)
+	}
+	if folder == nil {
+		return moerr.NewInternalErrorNoCtxf("folder %s not found", c.folderName)
+	}
+
+	// Step 2: List all dashboards in the folder
+	dashboards, err := c.listDashboardsInFolder(client, folder.UID)
+	if err != nil {
+		return moerr.NewInternalErrorNoCtxf("failed to list dashboards in folder %s: %v", c.folderName, err)
+	}
+
+	if len(dashboards) == 0 {
+		return moerr.NewInternalErrorNoCtxf("no dashboards found in folder %s", c.folderName)
+	}
+
+	// Step 3: Delete each dashboard
+	var deletedCount int
+	var skippedCount int
+	var errors []error
+	for _, dash := range dashboards {
+		if err := c.deleteDashboard(client, dash.UID); err != nil {
+			// Check if it's a provisioned dashboard error
+			errStr := err.Error()
+			if strings.Contains(errStr, "provisioned dashboard cannot be deleted") {
+				skippedCount++
+				// Log but don't treat as fatal error
+				continue
+			}
+			errors = append(errors, moerr.NewInternalErrorNoCtxf("failed to delete dashboard %s (UID: %s): %v", dash.Title, dash.UID, err))
+			continue
+		}
+		deletedCount++
+	}
+
+	// Report summary if there were any issues
+	if len(errors) > 0 {
+		return moerr.NewInternalErrorNoCtxf("deleted %d/%d dashboards, skipped %d provisioned dashboards, errors: %v", deletedCount, len(dashboards), skippedCount, errors)
+	}
+
+	if skippedCount > 0 {
+		// Return a special error that indicates success but with warnings
+		// The main.go will check for this and display it as a warning
+		return moerr.NewInternalErrorNoCtxf("deleted %d/%d dashboards, skipped %d provisioned dashboard(s) (they cannot be deleted via API and will be recreated on next provisioning)", deletedCount, len(dashboards), skippedCount)
+	}
+
+	return nil
+}
+
+// List lists all dashboards in the specified folder.
+// Returns a slice of dashboard information including UID and Title.
+func (c *DashboardCreator) List() ([]DashboardInfo, error) {
+	client := &http.Client{}
+
+	// Step 1: Find the folder by name
+	folder, err := c.findFolderByName(client, c.folderName)
+	if err != nil {
+		return nil, moerr.NewInternalErrorNoCtxf("failed to find folder %s: %v", c.folderName, err)
+	}
+	if folder == nil {
+		return nil, moerr.NewInternalErrorNoCtxf("folder %s not found", c.folderName)
+	}
+
+	// Step 2: List all dashboards in the folder
+	dashboards, err := c.listDashboardsInFolder(client, folder.UID)
+	if err != nil {
+		return nil, moerr.NewInternalErrorNoCtxf("failed to list dashboards in folder %s: %v", c.folderName, err)
+	}
+
+	// Convert internal dashboardInfo to exported DashboardInfo
+	result := make([]DashboardInfo, len(dashboards))
+	for i, dash := range dashboards {
+		result[i] = DashboardInfo(dash)
+	}
+
+	return result, nil
+}
+
+type folderInfo struct {
+	UID   string `json:"uid"`
+	Title string `json:"title"`
+}
+
+type dashboardInfo struct {
+	UID   string `json:"uid"`
+	Title string `json:"title"`
+}
+
+// DashboardInfo represents a dashboard in Grafana
+type DashboardInfo struct {
+	UID   string
+	Title string
+}
+
+func (c *DashboardCreator) findFolderByName(client *http.Client, folderName string) (*folderInfo, error) {
+	req, err := http.NewRequest("GET", fmt.Sprintf("%s/api/folders", c.host), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.SetBasicAuth(c.username, c.password)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, moerr.NewInternalErrorNoCtxf("failed to retrieve folders, status code: %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	var folders []folderInfo
+	if err := json.NewDecoder(resp.Body).Decode(&folders); err != nil {
+		return nil, err
+	}
+
+	for _, folder := range folders {
+		if folder.Title == folderName {
+			return &folder, nil
+		}
+	}
+
+	return nil, nil
+}
+
+func (c *DashboardCreator) listDashboardsInFolder(client *http.Client, folderUID string) ([]dashboardInfo, error) {
+	req, err := http.NewRequest("GET", fmt.Sprintf("%s/api/search?folderIds=%s", c.host, folderUID), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.SetBasicAuth(c.username, c.password)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, moerr.NewInternalErrorNoCtxf("failed to retrieve dashboards, status code: %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	var dashboards []dashboardInfo
+	if err := json.NewDecoder(resp.Body).Decode(&dashboards); err != nil {
+		return nil, err
+	}
+
+	return dashboards, nil
+}
+
+func (c *DashboardCreator) deleteDashboard(client *http.Client, dashboardUID string) error {
+	req, err := http.NewRequest("DELETE", fmt.Sprintf("%s/api/dashboards/uid/%s", c.host, dashboardUID), nil)
+	if err != nil {
+		return err
+	}
+	req.SetBasicAuth(c.username, c.password)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNotFound {
+		body, _ := io.ReadAll(resp.Body)
+		return moerr.NewInternalErrorNoCtxf("failed to delete dashboard, status code: %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	return nil
+}
+
+// DeleteDashboardByUID deletes a single dashboard by its UID.
+func (c *DashboardCreator) DeleteDashboardByUID(dashboardUID string) error {
+	client := &http.Client{}
+	return c.deleteDashboard(client, dashboardUID)
+}
+
+// DeleteDashboardByUIDWithAuth deletes a single dashboard by its UID using provided credentials.
+// This is a standalone function that doesn't require a DashboardCreator instance.
+func DeleteDashboardByUIDWithAuth(host, username, password, dashboardUID string) error {
+	client := &http.Client{}
+	req, err := http.NewRequest("DELETE", fmt.Sprintf("%s/api/dashboards/uid/%s", host, dashboardUID), nil)
+	if err != nil {
+		return err
+	}
+	req.SetBasicAuth(username, password)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNotFound {
+		body, _ := io.ReadAll(resp.Body)
+		return moerr.NewInternalErrorNoCtxf("failed to delete dashboard, status code: %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	return nil
+}
+
+// DeleteFolder deletes the entire folder and all dashboards in it.
+// Provisioned dashboards (created via configuration files) cannot be deleted via API
+// and will be skipped with a warning.
+func (c *DashboardCreator) DeleteFolder() error {
+	client := &http.Client{}
+
+	// Step 1: Find the folder by name
+	folder, err := c.findFolderByName(client, c.folderName)
+	if err != nil {
+		return moerr.NewInternalErrorNoCtxf("failed to find folder %s: %v", c.folderName, err)
+	}
+	if folder == nil {
+		return moerr.NewInternalErrorNoCtxf("folder %s not found", c.folderName)
+	}
+
+	// Step 2: List all dashboards in the folder
+	dashboards, err := c.listDashboardsInFolder(client, folder.UID)
+	if err != nil {
+		return moerr.NewInternalErrorNoCtxf("failed to list dashboards in folder %s: %v", c.folderName, err)
+	}
+
+	// Step 3: Delete each dashboard
+	var deletedCount int
+	var skippedCount int
+	var errors []error
+	for _, dash := range dashboards {
+		err := c.deleteDashboard(client, dash.UID)
+		if err != nil {
+			// Check if it's a provisioned dashboard error
+			errStr := err.Error()
+			if strings.Contains(errStr, "provisioned dashboard cannot be deleted") {
+				skippedCount++
+				// Log but don't treat as fatal error
+				continue
+			}
+			errors = append(errors, moerr.NewInternalErrorNoCtxf("failed to delete dashboard %s (UID: %s): %v", dash.Title, dash.UID, err))
+			continue
+		}
+		deletedCount++
+	}
+
+	// Step 4: Delete the folder itself (even if some dashboards couldn't be deleted)
+	if err := c.deleteFolder(client, folder.UID); err != nil {
+		// If folder deletion fails, return error with summary
+		if len(errors) > 0 || skippedCount > 0 {
+			return moerr.NewInternalErrorNoCtxf("deleted %d/%d dashboards, skipped %d provisioned dashboards, failed to delete folder: %v, errors: %v", deletedCount, len(dashboards), skippedCount, err, errors)
+		}
+		return moerr.NewInternalErrorNoCtxf("failed to delete folder %s: %v", c.folderName, err)
+	}
+
+	// Report summary if there were any issues
+	if len(errors) > 0 {
+		return moerr.NewInternalErrorNoCtxf("folder deleted, but deleted %d/%d dashboards, skipped %d provisioned dashboards, errors: %v", deletedCount, len(dashboards), skippedCount, errors)
+	}
+
+	if skippedCount > 0 {
+		// Return a special error that indicates success but with warnings
+		// The main.go will check for this and display it as a warning
+		return moerr.NewInternalErrorNoCtxf("folder deleted successfully, but skipped %d provisioned dashboard(s) (they cannot be deleted via API and will be recreated on next provisioning)", skippedCount)
+	}
+
+	return nil
+}
+
+func (c *DashboardCreator) deleteFolder(client *http.Client, folderUID string) error {
+	req, err := http.NewRequest("DELETE", fmt.Sprintf("%s/api/folders/%s", c.host, folderUID), nil)
+	if err != nil {
+		return err
+	}
+	req.SetBasicAuth(c.username, c.password)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNotFound {
+		body, _ := io.ReadAll(resp.Body)
+		return moerr.NewInternalErrorNoCtxf("failed to delete folder, status code: %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	return nil
 }
