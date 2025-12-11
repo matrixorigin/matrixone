@@ -302,6 +302,39 @@ func RequestUpstreamSnapshot(
 	return nil
 }
 
+// DropPreviousUpstreamSnapshot drops the previous snapshot from upstream cluster
+// It deletes the snapshot specified by PrevSnapshotName in IterationContext
+func DropPreviousUpstreamSnapshot(
+	ctx context.Context,
+	iterationCtx *IterationContext,
+) error {
+	if iterationCtx == nil {
+		return moerr.NewInternalError(ctx, "iteration context is nil")
+	}
+
+	if iterationCtx.UpstreamExecutor == nil {
+		return moerr.NewInternalError(ctx, "upstream executor is nil")
+	}
+
+	// Check if there's a previous snapshot to drop
+	if iterationCtx.PrevSnapshotName == "" {
+		// No previous snapshot to drop, silently return
+		return nil
+	}
+
+	// Build drop snapshot SQL using IF EXISTS to avoid errors if snapshot already deleted
+	dropSnapshotSQL := PublicationSQLBuilder.DropSnapshotIfExistsSQL(iterationCtx.PrevSnapshotName)
+
+	// Execute SQL through upstream executor
+	result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, dropSnapshotSQL)
+	if err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to drop previous snapshot %s: %v", iterationCtx.PrevSnapshotName, err)
+	}
+	defer result.Close()
+
+	return nil
+}
+
 // GetObjectListFromSnapshotDiff calculates snapshot diff and gets object list from upstream
 // It executes: OBJECTLIST DATABASE db1 TABLE t1 SNAPSHOT sp2 AGAINST SNAPSHOT sp1
 // Returns: query result containing db name, table name, object list (stats, create_at, delete_at, is_tombstone)
