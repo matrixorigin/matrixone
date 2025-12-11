@@ -159,6 +159,7 @@ func buildInsertPlans(
 	ifNeedCheckPkDup := !builder.qry.LoadTag
 	var indexSourceColTypes []*plan.Type
 	var fuzzymessage *OriginTableMessageForFuzzy
+	var skipIndexesCoyp map[string]bool
 
 	if v := builder.compCtx.GetContext().Value(defines.AlterCopyOpt{}); v != nil {
 		dedupOpt := v.(*plan.AlterCopyOpt)
@@ -179,10 +180,13 @@ func buildInsertPlans(
 				}
 			}
 		}
+		skipIndexesCoyp = dedupOpt.SkipIndexesCopy
 	}
 	return buildInsertPlansWithRelatedHiddenTable(stmt, ctx, builder, insertBindCtx, objRef, tableDef,
 		updateColLength, sourceStep, addAffectedRows, isFkRecursionCall, updatePkCol, pkFilterExpr,
-		newPartitionExpr, ifExistAutoPkCol, ifNeedCheckPkDup, indexSourceColTypes, fuzzymessage, insertWithoutUniqueKeyMap, ifInsertFromUniqueColMap, nil)
+		newPartitionExpr, ifExistAutoPkCol, ifNeedCheckPkDup, indexSourceColTypes, fuzzymessage,
+		insertWithoutUniqueKeyMap, ifInsertFromUniqueColMap, nil, skipIndexesCoyp,
+	)
 }
 
 // buildUpdatePlans  build update plan.
@@ -267,7 +271,7 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	return buildInsertPlansWithRelatedHiddenTable(nil, ctx, builder, insertBindCtx, updatePlanCtx.objRef, updatePlanCtx.tableDef,
 		updatePlanCtx.updateColLength, sourceStep, addAffectedRows, updatePlanCtx.isFkRecursionCall, updatePlanCtx.updatePkCol,
 		updatePlanCtx.pkFilterExprs, partitionExpr, ifExistAutoPkCol, ifNeedCheckPkDup, indexSourceColTypes, fuzzymessage, nil, nil,
-		updatePlanCtx.updateColPosMap)
+		updatePlanCtx.updateColPosMap, nil)
 }
 
 func getStepByNodeId(builder *QueryBuilder, nodeId int32) int {
@@ -855,7 +859,7 @@ func buildInsertPlansWithRelatedHiddenTable(
 	updatePkCol bool, pkFilterExprs []*Expr, partitionExpr *Expr, ifExistAutoPkCol bool,
 	checkInsertPkDupForHiddenIndexTable bool, indexSourceColTypes []*plan.Type, fuzzymessage *OriginTableMessageForFuzzy,
 	insertWithoutUniqueKeyMap map[string]bool, ifInsertFromUniqueColMap map[string]bool,
-	updateColPosMap map[string]int,
+	updateColPosMap map[string]int, skipIndexesCopy map[string]bool,
 ) error {
 	//var lastNodeId int32
 	var err error
@@ -869,6 +873,11 @@ func buildInsertPlansWithRelatedHiddenTable(
 	for idx, indexdef := range tableDef.Indexes {
 		if updateColLength == 0 {
 			if indexdef.GetUnique() && (insertWithoutUniqueKeyMap != nil && insertWithoutUniqueKeyMap[indexdef.IndexName]) {
+				continue
+			}
+
+			// we will clone this index data to new index table, skip insert.
+			if skipIndexesCopy != nil && skipIndexesCopy[indexdef.IndexName] {
 				continue
 			}
 
