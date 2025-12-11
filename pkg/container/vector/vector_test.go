@@ -1401,7 +1401,7 @@ func TestShuffle(t *testing.T) {
 		require.NoError(t, err)
 		v.Shuffle([]int64{1, 2}, mp)
 		require.Equal(t, vs[1:3], MustFixedColWithTypeCheck[types.TS](v))
-		require.Equal(t, "[[0 0 0 0 0 0 0 0 0 0 0 0] [0 0 0 0 0 0 0 0 0 0 0 0]]", v.String())
+		require.Equal(t, "[0-0 0-0]", v.String())
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
@@ -2989,7 +2989,7 @@ func TestRowToString(t *testing.T) {
 		v := NewVec(types.T_TS.ToType())
 		err := AppendFixedList(v, vs, nil, mp)
 		require.NoError(t, err)
-		require.Equal(t, "[0 0 0 0 0 0 0 0 0 0 0 0]", v.RowToString(1))
+		require.Equal(t, "0-0", v.RowToString(1))
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}

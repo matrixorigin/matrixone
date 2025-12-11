@@ -79,8 +79,25 @@ func (t *traceInfo) GetConn(hostPort string) {
 func (t *traceInfo) GotConn(info httptrace.GotConnInfo) {
 	t.times.GotConn = time.Now()
 	metric.FSHTTPTraceCounter.WithLabelValues("GotConn").Inc()
-	metric.FSHTTPTraceCounter.WithLabelValues("GotConnReused").Inc()
-	metric.FSHTTPTraceCounter.WithLabelValues("GotConnIdle").Inc()
+	if info.Reused {
+		metric.FSHTTPTraceCounter.WithLabelValues("GotConnReused").Inc()
+	}
+	// WasIdle indicates whether the connection was obtained from an idle pool
+	// IdleTime is only meaningful when WasIdle is true, and can be 0 if the
+	// connection was just put into the idle pool and immediately retrieved
+	if info.WasIdle {
+		metric.FSHTTPTraceCounter.WithLabelValues("GotConnIdle").Inc()
+		// Connection was idle, now it's active
+		// Use the connection object as the key (info.Conn is the underlying connection)
+		if info.Conn != nil {
+			trackConnActive(info.Conn)
+		}
+	} else {
+		// New connection, mark as active
+		if info.Conn != nil {
+			trackConnActive(info.Conn)
+		}
+	}
 	metric.S3GetConnDurationHistogram.Observe(time.Since(t.times.GetConn).Seconds())
 }
 
@@ -89,7 +106,15 @@ func (t *traceInfo) PutIdleConn(err error) {
 		logutil.Info("PutIdleConn error",
 			zap.Error(err),
 		)
+		// If there's an error, the connection might be closed
+		return
 	}
+	// Connection is being put back to idle pool
+	// Note: httptrace.PutIdleConn doesn't provide the connection object,
+	// so we track connections by their remote address in GotConn callback.
+	// When PutIdleConn is called, we know a connection was returned to the pool,
+	// but we can't identify which one. We'll use a heuristic approach:
+	// track active connections and estimate idle based on pool configuration.
 }
 
 func (t *traceInfo) GotFirstResponseByte() {
@@ -102,6 +127,13 @@ func (t *traceInfo) DNSStart(di httptrace.DNSStartInfo) {
 }
 
 func (t *traceInfo) DNSDone(di httptrace.DNSDoneInfo) {
+	if di.Err != nil {
+		// Log DNS resolution failure for debugging
+		logutil.Debug("S3 DNS resolution failed",
+			zap.Error(di.Err),
+		)
+	}
+	// Record duration regardless of success/failure to track all DNS resolution attempts
 	metric.S3DNSResolveDurationHistogram.Observe(time.Since(t.times.DNSStart).Seconds())
 }
 
@@ -111,6 +143,15 @@ func (t *traceInfo) ConnectStart(network, addr string) {
 }
 
 func (t *traceInfo) ConnectDone(network, addr string, err error) {
+	if err != nil {
+		// Log connection failure for debugging
+		logutil.Debug("S3 connection failed",
+			zap.String("network", network),
+			zap.String("addr", addr),
+			zap.Error(err),
+		)
+	}
+	// Record duration regardless of success/failure to track all connection attempts
 	metric.S3ConnectDurationHistogram.Observe(time.Since(t.times.ConnectStart).Seconds())
 }
 
@@ -120,5 +161,12 @@ func (t *traceInfo) TLSHandshakeStart() {
 }
 
 func (t *traceInfo) TLSHandshakeDone(cs tls.ConnectionState, err error) {
+	if err != nil {
+		// Log TLS handshake failure for debugging
+		logutil.Debug("S3 TLS handshake failed",
+			zap.Error(err),
+		)
+	}
+	// Record duration regardless of success/failure to track all TLS handshake attempts
 	metric.S3TLSHandshakeDurationHistogram.Observe(time.Since(t.times.TSLHandshakeStart).Seconds())
 }
