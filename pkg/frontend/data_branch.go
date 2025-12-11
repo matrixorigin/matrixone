@@ -4437,114 +4437,140 @@ func compareSingleValInVector(
 	// Use raw values to avoid format conversions in extractRowFromVector.
 	switch vec1.GetType().Oid {
 	case types.T_json:
-		val1 := types.DecodeJson(vec1.GetBytesAt(rowIdx1))
-		val2 := types.DecodeJson(vec2.GetBytesAt(rowIdx2))
-		return bytejson.CompareByteJson(val1, val2), nil
+		return bytejson.CompareByteJson(
+			types.DecodeJson(vec1.GetBytesAt(rowIdx1)),
+			types.DecodeJson(vec2.GetBytesAt(rowIdx2)),
+		), nil
 	case types.T_bool:
-		val1 := vector.GetFixedAtNoTypeCheck[bool](vec1, rowIdx1)
-		val2 := vector.GetFixedAtNoTypeCheck[bool](vec2, rowIdx2)
-		return types.CompareValue(val1, val2), nil
+		return types.CompareValue(
+			vector.GetFixedAtNoTypeCheck[bool](vec1, rowIdx1),
+			vector.GetFixedAtNoTypeCheck[bool](vec2, rowIdx2),
+		), nil
 	case types.T_bit:
-		val1 := vector.GetFixedAtNoTypeCheck[uint64](vec1, rowIdx1)
-		val2 := vector.GetFixedAtNoTypeCheck[uint64](vec2, rowIdx2)
-		return types.CompareValue(val1, val2), nil
+		return types.CompareValue(
+			vector.GetFixedAtNoTypeCheck[uint64](vec1, rowIdx1),
+			vector.GetFixedAtNoTypeCheck[uint64](vec2, rowIdx2),
+		), nil
 	case types.T_int8:
-		val1 := vector.GetFixedAtNoTypeCheck[int8](vec1, rowIdx1)
-		val2 := vector.GetFixedAtNoTypeCheck[int8](vec2, rowIdx2)
-		return types.CompareValue(val1, val2), nil
+		return types.CompareValue(
+			vector.GetFixedAtNoTypeCheck[int8](vec1, rowIdx1),
+			vector.GetFixedAtNoTypeCheck[int8](vec2, rowIdx2),
+		), nil
 	case types.T_uint8:
-		val1 := vector.GetFixedAtNoTypeCheck[uint8](vec1, rowIdx1)
-		val2 := vector.GetFixedAtNoTypeCheck[uint8](vec2, rowIdx2)
-		return types.CompareValue(val1, val2), nil
+		return types.CompareValue(
+			vector.GetFixedAtNoTypeCheck[uint8](vec1, rowIdx1),
+			vector.GetFixedAtNoTypeCheck[uint8](vec2, rowIdx2),
+		), nil
 	case types.T_int16:
-		val1 := vector.GetFixedAtNoTypeCheck[int16](vec1, rowIdx1)
-		val2 := vector.GetFixedAtNoTypeCheck[int16](vec2, rowIdx2)
-		return types.CompareValue(val1, val2), nil
+		return types.CompareValue(
+			vector.GetFixedAtNoTypeCheck[int16](vec1, rowIdx1),
+			vector.GetFixedAtNoTypeCheck[int16](vec2, rowIdx2),
+		), nil
 	case types.T_uint16:
-		val1 := vector.GetFixedAtNoTypeCheck[uint16](vec1, rowIdx1)
-		val2 := vector.GetFixedAtNoTypeCheck[uint16](vec2, rowIdx2)
-		return types.CompareValue(val1, val2), nil
+		return types.CompareValue(
+			vector.GetFixedAtNoTypeCheck[uint16](vec1, rowIdx1),
+			vector.GetFixedAtNoTypeCheck[uint16](vec2, rowIdx2),
+		), nil
 	case types.T_int32:
-		val1 := vector.GetFixedAtNoTypeCheck[int32](vec1, rowIdx1)
-		val2 := vector.GetFixedAtNoTypeCheck[int32](vec2, rowIdx2)
-		return types.CompareValue(val1, val2), nil
+		return types.CompareValue(
+			vector.GetFixedAtNoTypeCheck[int32](vec1, rowIdx1),
+			vector.GetFixedAtNoTypeCheck[int32](vec2, rowIdx2),
+		), nil
 	case types.T_uint32:
-		val1 := vector.GetFixedAtNoTypeCheck[uint32](vec1, rowIdx1)
-		val2 := vector.GetFixedAtNoTypeCheck[uint32](vec2, rowIdx2)
-		return types.CompareValue(val1, val2), nil
+		return types.CompareValue(
+			vector.GetFixedAtNoTypeCheck[uint32](vec1, rowIdx1),
+			vector.GetFixedAtNoTypeCheck[uint32](vec2, rowIdx2),
+		), nil
 	case types.T_int64:
-		val1 := vector.GetFixedAtNoTypeCheck[int64](vec1, rowIdx1)
-		val2 := vector.GetFixedAtNoTypeCheck[int64](vec2, rowIdx2)
-		return types.CompareValue(val1, val2), nil
+		return types.CompareValue(
+			vector.GetFixedAtNoTypeCheck[int64](vec1, rowIdx1),
+			vector.GetFixedAtNoTypeCheck[int64](vec2, rowIdx2),
+		), nil
 	case types.T_uint64:
-		val1 := vector.GetFixedAtNoTypeCheck[uint64](vec1, rowIdx1)
-		val2 := vector.GetFixedAtNoTypeCheck[uint64](vec2, rowIdx2)
-		return types.CompareValue(val1, val2), nil
+		return types.CompareValue(
+			vector.GetFixedAtNoTypeCheck[uint64](vec1, rowIdx1),
+			vector.GetFixedAtNoTypeCheck[uint64](vec2, rowIdx2),
+		), nil
 	case types.T_float32:
-		val1 := vector.GetFixedAtNoTypeCheck[float32](vec1, rowIdx1)
-		val2 := vector.GetFixedAtNoTypeCheck[float32](vec2, rowIdx2)
-		return types.CompareValue(val1, val2), nil
+		return types.CompareValue(
+			vector.GetFixedAtNoTypeCheck[float32](vec1, rowIdx1),
+			vector.GetFixedAtNoTypeCheck[float32](vec2, rowIdx2),
+		), nil
 	case types.T_float64:
-		val1 := vector.GetFixedAtNoTypeCheck[float64](vec1, rowIdx1)
-		val2 := vector.GetFixedAtNoTypeCheck[float64](vec2, rowIdx2)
-		return types.CompareValue(val1, val2), nil
+		return types.CompareValue(
+			vector.GetFixedAtNoTypeCheck[float64](vec1, rowIdx1),
+			vector.GetFixedAtNoTypeCheck[float64](vec2, rowIdx2),
+		), nil
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
 		return bytes.Compare(
 			vec1.GetBytesAt(rowIdx1),
 			vec2.GetBytesAt(rowIdx2),
 		), nil
 	case types.T_array_float32:
-		val1 := vector.GetArrayAt[float32](vec1, rowIdx1)
-		val2 := vector.GetArrayAt[float32](vec2, rowIdx2)
-		return types.CompareValue(val1, val2), nil
+		return types.CompareValue(
+			vector.GetArrayAt[float32](vec1, rowIdx1),
+			vector.GetArrayAt[float32](vec2, rowIdx2),
+		), nil
 	case types.T_array_float64:
-		val1 := vector.GetArrayAt[float64](vec1, rowIdx1)
-		val2 := vector.GetArrayAt[float64](vec2, rowIdx2)
-		return types.CompareValue(val1, val2), nil
+		return types.CompareValue(
+			vector.GetArrayAt[float64](vec1, rowIdx1),
+			vector.GetArrayAt[float64](vec2, rowIdx2),
+		), nil
 	case types.T_date:
-		val1 := vector.GetFixedAtNoTypeCheck[types.Date](vec1, rowIdx1)
-		val2 := vector.GetFixedAtNoTypeCheck[types.Date](vec2, rowIdx2)
-		return types.CompareValue(val1, val2), nil
+		return types.CompareValue(
+			vector.GetFixedAtNoTypeCheck[types.Date](vec1, rowIdx1),
+			vector.GetFixedAtNoTypeCheck[types.Date](vec2, rowIdx2),
+		), nil
 	case types.T_datetime:
-		val1 := vector.GetFixedAtNoTypeCheck[types.Datetime](vec1, rowIdx1)
-		val2 := vector.GetFixedAtNoTypeCheck[types.Datetime](vec2, rowIdx2)
-		return types.CompareValue(val1, val2), nil
+		return types.CompareValue(
+			vector.GetFixedAtNoTypeCheck[types.Datetime](vec1, rowIdx1),
+			vector.GetFixedAtNoTypeCheck[types.Datetime](vec2, rowIdx2),
+		), nil
 	case types.T_time:
-		val1 := vector.GetFixedAtNoTypeCheck[types.Time](vec1, rowIdx1)
-		val2 := vector.GetFixedAtNoTypeCheck[types.Time](vec2, rowIdx2)
-		return types.CompareValue(val1, val2), nil
+		return types.CompareValue(
+			vector.GetFixedAtNoTypeCheck[types.Time](vec1, rowIdx1),
+			vector.GetFixedAtNoTypeCheck[types.Time](vec2, rowIdx2),
+		), nil
 	case types.T_timestamp:
-		val1 := vector.GetFixedAtNoTypeCheck[types.Timestamp](vec1, rowIdx1)
-		val2 := vector.GetFixedAtNoTypeCheck[types.Timestamp](vec2, rowIdx2)
-		return types.CompareValue(val1, val2), nil
+		return types.CompareValue(
+			vector.GetFixedAtNoTypeCheck[types.Timestamp](vec1, rowIdx1),
+			vector.GetFixedAtNoTypeCheck[types.Timestamp](vec2, rowIdx2),
+		), nil
 	case types.T_decimal64:
-		val1 := vector.GetFixedAtNoTypeCheck[types.Decimal64](vec1, rowIdx1)
-		val2 := vector.GetFixedAtNoTypeCheck[types.Decimal64](vec2, rowIdx2)
-		return types.CompareValue(val1, val2), nil
+		return types.CompareValue(
+			vector.GetFixedAtNoTypeCheck[types.Decimal64](vec1, rowIdx1),
+			vector.GetFixedAtNoTypeCheck[types.Decimal64](vec2, rowIdx2),
+		), nil
 	case types.T_decimal128:
-		val1 := vector.GetFixedAtNoTypeCheck[types.Decimal128](vec1, rowIdx1)
-		val2 := vector.GetFixedAtNoTypeCheck[types.Decimal128](vec2, rowIdx2)
-		return types.CompareValue(val1, val2), nil
+		return types.CompareValue(
+			vector.GetFixedAtNoTypeCheck[types.Decimal128](vec1, rowIdx1),
+			vector.GetFixedAtNoTypeCheck[types.Decimal128](vec2, rowIdx2),
+		), nil
 	case types.T_uuid:
-		val1 := vector.GetFixedAtNoTypeCheck[types.Uuid](vec1, rowIdx1)
-		val2 := vector.GetFixedAtNoTypeCheck[types.Uuid](vec2, rowIdx2)
-		return types.CompareValue(val1, val2), nil
+		return types.CompareValue(
+			vector.GetFixedAtNoTypeCheck[types.Uuid](vec1, rowIdx1),
+			vector.GetFixedAtNoTypeCheck[types.Uuid](vec2, rowIdx2),
+		), nil
 	case types.T_Rowid:
-		val1 := vector.GetFixedAtNoTypeCheck[types.Rowid](vec1, rowIdx1)
-		val2 := vector.GetFixedAtNoTypeCheck[types.Rowid](vec2, rowIdx2)
-		return types.CompareValue(val1, val2), nil
+		return types.CompareValue(
+			vector.GetFixedAtNoTypeCheck[types.Rowid](vec1, rowIdx1),
+			vector.GetFixedAtNoTypeCheck[types.Rowid](vec2, rowIdx2),
+		), nil
 	case types.T_Blockid:
-		val1 := vector.GetFixedAtNoTypeCheck[types.Blockid](vec1, rowIdx1)
-		val2 := vector.GetFixedAtNoTypeCheck[types.Blockid](vec2, rowIdx2)
-		return types.CompareValue(val1, val2), nil
+		return types.CompareValue(
+			vector.GetFixedAtNoTypeCheck[types.Blockid](vec1, rowIdx1),
+			vector.GetFixedAtNoTypeCheck[types.Blockid](vec2, rowIdx2),
+		), nil
 	case types.T_TS:
-		val1 := vector.GetFixedAtNoTypeCheck[types.TS](vec1, rowIdx1)
-		val2 := vector.GetFixedAtNoTypeCheck[types.TS](vec2, rowIdx2)
-		return types.CompareValue(val1, val2), nil
+		return types.CompareValue(
+			vector.GetFixedAtNoTypeCheck[types.TS](vec1, rowIdx1),
+			vector.GetFixedAtNoTypeCheck[types.TS](vec2, rowIdx2),
+		), nil
 	case types.T_enum:
-		val1 := vector.GetFixedAtNoTypeCheck[types.Enum](vec1, rowIdx1)
-		val2 := vector.GetFixedAtNoTypeCheck[types.Enum](vec2, rowIdx2)
-		return types.CompareValue(val1, val2), nil
+		return types.CompareValue(
+			vector.GetFixedAtNoTypeCheck[types.Enum](vec1, rowIdx1),
+			vector.GetFixedAtNoTypeCheck[types.Enum](vec2, rowIdx2),
+		), nil
 	default:
 		return 0, moerr.NewInternalErrorNoCtxf("compareSingleValInVector : unsupported type %d", vec1.GetType().Oid)
 	}

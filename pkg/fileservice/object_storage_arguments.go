@@ -28,13 +28,13 @@ import (
 
 type ObjectStorageArguments struct {
 	// misc
-	Name                 string `toml:"name"`
-	KeyPrefix            string `toml:"key-prefix"`
-	SharedConfigProfile  string `toml:"shared-config-profile"`
-	NoDefaultCredentials bool   `toml:"no-default-credentials"`
-	NoBucketValidation   bool   `toml:"no-bucket-validation"`
-	Concurrency          int64  `toml:"concurrency"`
-	MaxConnsPerHost      int    `toml:"max-conns-per-host"`
+	Name                 string       `toml:"name"`
+	KeyPrefix            string       `toml:"key-prefix"`
+	SharedConfigProfile  string       `toml:"shared-config-profile"`
+	NoDefaultCredentials bool         `toml:"no-default-credentials"`
+	NoBucketValidation   bool         `toml:"no-bucket-validation"`
+	Concurrency          int64        `toml:"concurrency"`
+	MaxConnsPerHost      int          `toml:"max-conns-per-host"`
 	ParallelMode         ParallelMode `toml:"parallel-mode"`
 
 	// s3
