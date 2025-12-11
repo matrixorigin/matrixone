@@ -238,8 +238,6 @@ func ReadOneBlockWithMeta(
 				filledEntries[i] = readed[0]
 				readed = readed[1:]
 			} else {
-				logutil.Infof("block %s generate seqnum %d %v",
-					meta.BlockHeader().BlockID().String(), filledEntries[i].Size, typs[i])
 				buf := &bytes.Buffer{}
 				buf.Write(EncodeIOEntryHeader(&IOEntryHeader{Type: IOET_ColData, Version: IOET_ColumnData_CurrVer}))
 				if err = vector.NewConstNull(typs[i], length, m).MarshalBinaryWithBuffer(buf); err != nil {
