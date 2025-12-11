@@ -19,8 +19,13 @@ import (
 	"database/sql"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 // IterationState represents the state of an iteration
@@ -188,338 +193,6 @@ func RequestUpstreamSnapshot(
 	return nil
 }
 
-// DatabaseMetadata represents metadata from mo_databases table
-type DatabaseMetadata struct {
-	DatID        uint64
-	DatName      string
-	DatCreateSQL sql.NullString
-	AccountID    uint32
-}
-
-// TableMetadata represents metadata from mo_tables table
-type TableMetadata struct {
-	RelID         uint64
-	RelName       string
-	RelDatabaseID uint64
-	RelDatabase   string
-	RelCreateSQL  sql.NullString
-	AccountID     uint32
-}
-
-// IsFirstSync checks if this is the first sync based on whether there's a previous snapshot
-func IsFirstSync(iterationCtx *IterationContext) bool {
-	return iterationCtx.PrevSnapshotName == ""
-}
-
-// QueryUpstreamDDL queries upstream three tables (mo_databases, mo_tables, mo_columns) to get DDL statements
-// It compares with local metadata and generates DDL statements if there are changes
-// Input: internal_sql_executor (for local queries), upstream executor (for upstream queries), iteration context
-// Returns: list of DDL statements to execute, updated table IDs and database IDs
-func QueryUpstreamDDL(
-	ctx context.Context,
-	iterationCtx *IterationContext,
-	localExecutor SQLExecutor,
-) ([]string, error) {
-	if iterationCtx == nil {
-		return nil, moerr.NewInternalError(ctx, "iteration context is nil")
-	}
-
-	if iterationCtx.UpstreamExecutor == nil {
-		return nil, moerr.NewInternalError(ctx, "upstream executor is nil")
-	}
-
-	if localExecutor == nil {
-		return nil, moerr.NewInternalError(ctx, "local executor is nil")
-	}
-
-	isFirstSync := IsFirstSync(iterationCtx)
-	var ddlStatements []string
-
-	// Initialize TableIDs map if nil
-	if iterationCtx.TableIDs == nil {
-		iterationCtx.TableIDs = make(map[string]uint64)
-	}
-
-	// Query upstream databases
-	upstreamDBs, err := queryUpstreamDatabases(ctx, iterationCtx)
-	if err != nil {
-		return nil, moerr.NewInternalErrorf(ctx, "failed to query upstream databases: %v", err)
-	}
-
-	// Query upstream tables
-	upstreamTables, err := queryUpstreamTables(ctx, iterationCtx)
-	if err != nil {
-		return nil, moerr.NewInternalErrorf(ctx, "failed to query upstream tables: %v", err)
-	}
-
-	if isFirstSync {
-		// First sync: generate DDL from upstream metadata and record IDs
-		for _, db := range upstreamDBs {
-			if db.DatCreateSQL.Valid && db.DatCreateSQL.String != "" {
-				ddlStatements = append(ddlStatements, db.DatCreateSQL.String)
-				// Record database ID
-				iterationCtx.TableIDs[fmt.Sprintf("db_%s", db.DatName)] = db.DatID
-			}
-		}
-
-		for _, tbl := range upstreamTables {
-			if tbl.RelCreateSQL.Valid && tbl.RelCreateSQL.String != "" {
-				ddlStatements = append(ddlStatements, tbl.RelCreateSQL.String)
-				// Record table ID and database ID
-				key := fmt.Sprintf("%s.%s", tbl.RelDatabase, tbl.RelName)
-				iterationCtx.TableIDs[key] = tbl.RelID
-				iterationCtx.TableIDs[fmt.Sprintf("db_%s", tbl.RelDatabase)] = tbl.RelDatabaseID
-			}
-		}
-	} else {
-		// Not first sync: compare with local metadata and generate DDL if changed
-		localDBs, err := queryLocalDatabases(ctx, localExecutor, iterationCtx)
-		if err != nil {
-			return nil, moerr.NewInternalErrorf(ctx, "failed to query local databases: %v", err)
-		}
-
-		localTables, err := queryLocalTables(ctx, localExecutor, iterationCtx)
-		if err != nil {
-			return nil, moerr.NewInternalErrorf(ctx, "failed to query local tables: %v", err)
-		}
-
-		// Compare databases
-		for _, upstreamDB := range upstreamDBs {
-			var localDB *DatabaseMetadata
-			for _, db := range localDBs {
-				if db.DatName == upstreamDB.DatName {
-					localDB = &db
-					break
-				}
-			}
-
-			if localDB == nil {
-				// Database doesn't exist locally, create it
-				if upstreamDB.DatCreateSQL.Valid && upstreamDB.DatCreateSQL.String != "" {
-					ddlStatements = append(ddlStatements, upstreamDB.DatCreateSQL.String)
-					iterationCtx.TableIDs[fmt.Sprintf("db_%s", upstreamDB.DatName)] = upstreamDB.DatID
-				}
-			} else {
-				// Database exists, check if DDL changed
-				if upstreamDB.DatCreateSQL.Valid && localDB.DatCreateSQL.Valid {
-					if upstreamDB.DatCreateSQL.String != localDB.DatCreateSQL.String {
-						// DDL changed, regenerate
-						if upstreamDB.DatCreateSQL.String != "" {
-							ddlStatements = append(ddlStatements, upstreamDB.DatCreateSQL.String)
-						}
-					}
-				} else if upstreamDB.DatCreateSQL.Valid && !localDB.DatCreateSQL.Valid {
-					// Upstream has DDL but local doesn't
-					if upstreamDB.DatCreateSQL.String != "" {
-						ddlStatements = append(ddlStatements, upstreamDB.DatCreateSQL.String)
-					}
-				}
-
-				// Update database ID
-				iterationCtx.TableIDs[fmt.Sprintf("db_%s", upstreamDB.DatName)] = upstreamDB.DatID
-			}
-		}
-
-		// Compare tables
-		for _, upstreamTbl := range upstreamTables {
-			var localTbl *TableMetadata
-			for _, tbl := range localTables {
-				if tbl.RelDatabase == upstreamTbl.RelDatabase && tbl.RelName == upstreamTbl.RelName {
-					localTbl = &tbl
-					break
-				}
-			}
-
-			if localTbl == nil {
-				// Table doesn't exist locally, create it
-				if upstreamTbl.RelCreateSQL.Valid && upstreamTbl.RelCreateSQL.String != "" {
-					ddlStatements = append(ddlStatements, upstreamTbl.RelCreateSQL.String)
-					key := fmt.Sprintf("%s.%s", upstreamTbl.RelDatabase, upstreamTbl.RelName)
-					iterationCtx.TableIDs[key] = upstreamTbl.RelID
-					iterationCtx.TableIDs[fmt.Sprintf("db_%s", upstreamTbl.RelDatabase)] = upstreamTbl.RelDatabaseID
-				}
-			} else {
-				// Table exists, check if DDL changed or ID mismatch
-				if upstreamTbl.RelID != localTbl.RelID {
-					return nil, moerr.NewInternalErrorf(ctx, "table ID mismatch for %s.%s: upstream %d, local %d",
-						upstreamTbl.RelDatabase, upstreamTbl.RelName, upstreamTbl.RelID, localTbl.RelID)
-				}
-
-				if upstreamTbl.RelCreateSQL.Valid && localTbl.RelCreateSQL.Valid {
-					if upstreamTbl.RelCreateSQL.String != localTbl.RelCreateSQL.String {
-						// DDL changed, regenerate
-						if upstreamTbl.RelCreateSQL.String != "" {
-							ddlStatements = append(ddlStatements, upstreamTbl.RelCreateSQL.String)
-						}
-					}
-				} else if upstreamTbl.RelCreateSQL.Valid && !localTbl.RelCreateSQL.Valid {
-					// Upstream has DDL but local doesn't
-					if upstreamTbl.RelCreateSQL.String != "" {
-						ddlStatements = append(ddlStatements, upstreamTbl.RelCreateSQL.String)
-					}
-				}
-
-				// Update table ID
-				key := fmt.Sprintf("%s.%s", upstreamTbl.RelDatabase, upstreamTbl.RelName)
-				iterationCtx.TableIDs[key] = upstreamTbl.RelID
-				iterationCtx.TableIDs[fmt.Sprintf("db_%s", upstreamTbl.RelDatabase)] = upstreamTbl.RelDatabaseID
-			}
-		}
-	}
-
-	return ddlStatements, nil
-}
-
-// queryUpstreamDatabases queries mo_databases from upstream
-func queryUpstreamDatabases(ctx context.Context, iterationCtx *IterationContext) ([]DatabaseMetadata, error) {
-	var accountID uint32
-	// Extract account_id from context if available, otherwise use 0
-	// TODO: Get account_id from iteration context or connection
-
-	var dbName string
-	if iterationCtx.SrcInfo.SyncLevel == SyncLevelDatabase || iterationCtx.SrcInfo.SyncLevel == SyncLevelTable {
-		dbName = iterationCtx.SrcInfo.DBName
-	}
-
-	querySQL := PublicationSQLBuilder.QueryMoDatabasesSQL(accountID, dbName)
-	result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, querySQL)
-	if err != nil {
-		return nil, err
-	}
-	defer result.Close()
-
-	var databases []DatabaseMetadata
-	for result.Next() {
-		var db DatabaseMetadata
-		var datCreateSQL sql.NullString
-		if err := result.Scan(&db.DatID, &db.DatName, &datCreateSQL, &db.AccountID); err != nil {
-			return nil, moerr.NewInternalErrorf(ctx, "failed to scan database result: %v", err)
-		}
-		db.DatCreateSQL = datCreateSQL
-		databases = append(databases, db)
-	}
-
-	if err := result.Err(); err != nil {
-		return nil, moerr.NewInternalErrorf(ctx, "error reading database results: %v", err)
-	}
-
-	return databases, nil
-}
-
-// queryUpstreamTables queries mo_tables from upstream
-func queryUpstreamTables(ctx context.Context, iterationCtx *IterationContext) ([]TableMetadata, error) {
-	var accountID uint32
-	// Extract account_id from context if available, otherwise use 0
-	// TODO: Get account_id from iteration context or connection
-
-	var dbName, tableName string
-	if iterationCtx.SrcInfo.SyncLevel == SyncLevelDatabase || iterationCtx.SrcInfo.SyncLevel == SyncLevelTable {
-		dbName = iterationCtx.SrcInfo.DBName
-	}
-	if iterationCtx.SrcInfo.SyncLevel == SyncLevelTable {
-		tableName = iterationCtx.SrcInfo.TableName
-	}
-
-	querySQL := PublicationSQLBuilder.QueryMoTablesSQL(accountID, dbName, tableName)
-	result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, querySQL)
-	if err != nil {
-		return nil, err
-	}
-	defer result.Close()
-
-	var tables []TableMetadata
-	for result.Next() {
-		var tbl TableMetadata
-		var relCreateSQL sql.NullString
-		if err := result.Scan(&tbl.RelID, &tbl.RelName, &tbl.RelDatabaseID, &tbl.RelDatabase, &relCreateSQL, &tbl.AccountID); err != nil {
-			return nil, moerr.NewInternalErrorf(ctx, "failed to scan table result: %v", err)
-		}
-		tbl.RelCreateSQL = relCreateSQL
-		tables = append(tables, tbl)
-	}
-
-	if err := result.Err(); err != nil {
-		return nil, moerr.NewInternalErrorf(ctx, "error reading table results: %v", err)
-	}
-
-	return tables, nil
-}
-
-// queryLocalDatabases queries mo_databases from local
-func queryLocalDatabases(ctx context.Context, executor SQLExecutor, iterationCtx *IterationContext) ([]DatabaseMetadata, error) {
-	var accountID uint32
-	// Extract account_id from context if available, otherwise use 0
-	// TODO: Get account_id from iteration context or connection
-
-	var dbName string
-	if iterationCtx.SrcInfo.SyncLevel == SyncLevelDatabase || iterationCtx.SrcInfo.SyncLevel == SyncLevelTable {
-		dbName = iterationCtx.SrcInfo.DBName
-	}
-
-	querySQL := PublicationSQLBuilder.QueryMoDatabasesSQL(accountID, dbName)
-	result, err := executor.ExecSQL(ctx, querySQL)
-	if err != nil {
-		return nil, err
-	}
-	defer result.Close()
-
-	var databases []DatabaseMetadata
-	for result.Next() {
-		var db DatabaseMetadata
-		var datCreateSQL sql.NullString
-		if err := result.Scan(&db.DatID, &db.DatName, &datCreateSQL, &db.AccountID); err != nil {
-			return nil, moerr.NewInternalErrorf(ctx, "failed to scan local database result: %v", err)
-		}
-		db.DatCreateSQL = datCreateSQL
-		databases = append(databases, db)
-	}
-
-	if err := result.Err(); err != nil {
-		return nil, moerr.NewInternalErrorf(ctx, "error reading local database results: %v", err)
-	}
-
-	return databases, nil
-}
-
-// queryLocalTables queries mo_tables from local
-func queryLocalTables(ctx context.Context, executor SQLExecutor, iterationCtx *IterationContext) ([]TableMetadata, error) {
-	var accountID uint32
-	// Extract account_id from context if available, otherwise use 0
-	// TODO: Get account_id from iteration context or connection
-
-	var dbName, tableName string
-	if iterationCtx.SrcInfo.SyncLevel == SyncLevelDatabase || iterationCtx.SrcInfo.SyncLevel == SyncLevelTable {
-		dbName = iterationCtx.SrcInfo.DBName
-	}
-	if iterationCtx.SrcInfo.SyncLevel == SyncLevelTable {
-		tableName = iterationCtx.SrcInfo.TableName
-	}
-
-	querySQL := PublicationSQLBuilder.QueryMoTablesSQL(accountID, dbName, tableName)
-	result, err := executor.ExecSQL(ctx, querySQL)
-	if err != nil {
-		return nil, err
-	}
-	defer result.Close()
-
-	var tables []TableMetadata
-	for result.Next() {
-		var tbl TableMetadata
-		var relCreateSQL sql.NullString
-		if err := result.Scan(&tbl.RelID, &tbl.RelName, &tbl.RelDatabaseID, &tbl.RelDatabase, &relCreateSQL, &tbl.AccountID); err != nil {
-			return nil, moerr.NewInternalErrorf(ctx, "failed to scan local table result: %v", err)
-		}
-		tbl.RelCreateSQL = relCreateSQL
-		tables = append(tables, tbl)
-	}
-
-	if err := result.Err(); err != nil {
-		return nil, moerr.NewInternalErrorf(ctx, "error reading local table results: %v", err)
-	}
-
-	return tables, nil
-}
-
 // GetObjectListFromSnapshotDiff calculates snapshot diff and gets object list from upstream
 // It executes: OBJECTLIST DATABASE db1 TABLE t1 SNAPSHOT sp2 AGAINST SNAPSHOT sp1
 // Returns: query result containing db name, table name, object list (stats, create_at, delete_at, is_tombstone)
@@ -573,4 +246,191 @@ func GetObjectListFromSnapshotDiff(
 	}
 
 	return result, nil
+}
+
+// SubmitObjectsToTN submits objects to TN node using the transaction from iteration context
+// It processes:
+// 1. Objects from objectlist with DeleteAt == 0 (submit as INSERT)
+// 2. New objects from ActiveAObj (submit as INSERT)
+// 3. Objects from objectlist with DeleteAt != 0 (submit as DELETE)
+// 4. Previous objects from ActiveAObj (submit as DELETE)
+func SubmitObjectsToTN(
+	ctx context.Context,
+	iterationCtx *IterationContext,
+	objectListResult *Result,
+	rel engine.Relation,
+) error {
+	if iterationCtx == nil {
+		return moerr.NewInternalError(ctx, "iteration context is nil")
+	}
+	if rel == nil {
+		return moerr.NewInternalError(ctx, "relation is nil")
+	}
+
+	// Validate sync level - currently only support table level
+	if iterationCtx.SrcInfo.SyncLevel != SyncLevelTable {
+		return moerr.NewInternalErrorf(ctx, "table level sync required for submitting objects, got %s",
+			iterationCtx.SrcInfo.SyncLevel)
+	}
+
+	// Validate table ID exists
+	tableKey := fmt.Sprintf("%s.%s", iterationCtx.SrcInfo.DBName, iterationCtx.SrcInfo.TableName)
+	if _, ok := iterationCtx.TableIDs[tableKey]; !ok {
+		return moerr.NewInternalErrorf(ctx, "table ID not found for %s.%s",
+			iterationCtx.SrcInfo.DBName, iterationCtx.SrcInfo.TableName)
+	}
+
+	// Collect objects to insert and delete
+	var insertStats []objectio.ObjectStats
+	var deleteStats []objectio.ObjectStats
+
+	// Process objectlist result
+	if objectListResult != nil {
+		// Scan objectlist result
+		// Assuming the result has columns: stats, create_at, delete_at, is_tombstone
+		for objectListResult.Next() {
+			var statsBytes []byte
+			var createAt, deleteAt types.TS
+			var isTombstone bool
+
+			if err := objectListResult.Scan(&statsBytes, &createAt, &deleteAt, &isTombstone); err != nil {
+				return moerr.NewInternalErrorf(ctx, "failed to scan object list result: %v", err)
+			}
+
+			if len(statsBytes) != objectio.ObjectStatsLen {
+				return moerr.NewInternalErrorf(ctx, "invalid object stats length: expected %d, got %d",
+					objectio.ObjectStatsLen, len(statsBytes))
+			}
+
+			var stats objectio.ObjectStats
+			stats.UnMarshal(statsBytes)
+
+			if deleteAt.IsEmpty() {
+				// Object to insert: DeleteAt is empty
+				if !isTombstone {
+					insertStats = append(insertStats, stats)
+				} else {
+					// Tombstone object to insert
+					insertStats = append(insertStats, stats)
+				}
+			} else {
+				// Object to delete: DeleteAt is not empty
+				deleteStats = append(deleteStats, stats)
+			}
+		}
+
+		if err := objectListResult.Err(); err != nil {
+			return moerr.NewInternalErrorf(ctx, "error reading object list result: %v", err)
+		}
+	}
+
+	// Process ActiveAObj
+	if iterationCtx.ActiveAObj != nil {
+		for upstreamUUID, mapping := range iterationCtx.ActiveAObj {
+			// Check if current stats is valid (not zero value)
+			var zeroStats objectio.ObjectStats
+			if mapping.Current != zeroStats {
+				// New object to insert
+				insertStats = append(insertStats, mapping.Current)
+			}
+
+			// Check if previous stats is valid (not zero value)
+			if mapping.Previous != zeroStats {
+				// Previous object to delete
+				deleteStats = append(deleteStats, mapping.Previous)
+			}
+
+			// Update ActiveAObj: move current to previous for next iteration
+			// Note: This should be done after processing, but we do it here for clarity
+			_ = upstreamUUID // avoid unused variable warning
+		}
+	}
+
+	// Submit insert objects
+	if len(insertStats) > 0 {
+		if err := submitObjectsAsInsert(ctx, rel, insertStats); err != nil {
+			return moerr.NewInternalErrorf(ctx, "failed to submit insert objects: %v", err)
+		}
+	}
+
+	// Submit delete objects
+	if len(deleteStats) > 0 {
+		if err := submitObjectsAsDelete(ctx, rel, deleteStats); err != nil {
+			return moerr.NewInternalErrorf(ctx, "failed to submit delete objects: %v", err)
+		}
+	}
+
+	return nil
+}
+
+// submitObjectsAsInsert submits objects as INSERT operation
+func submitObjectsAsInsert(ctx context.Context, rel engine.Relation, statsList []objectio.ObjectStats) error {
+	if len(statsList) == 0 {
+		return nil
+	}
+
+	// Create batch with ObjectStats
+	bat := batch.NewWithSize(2)
+	bat.SetAttributes([]string{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats})
+	bat.SetRowCount(len(statsList))
+
+	// First column: BlockInfo (can be empty for object stats only)
+	blockInfoVec := vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[0] = blockInfoVec
+
+	// Second column: ObjectStats
+	statsVec := vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[1] = statsVec
+
+	// Append ObjectStats to the batch
+	for _, stats := range statsList {
+		statsBytes := stats[:]
+		if err := vector.AppendBytes(statsVec, statsBytes, false, nil); err != nil {
+			return moerr.NewInternalErrorf(ctx, "failed to append object stats: %v", err)
+		}
+		// Append empty block info (or you can construct proper block info if needed)
+		if err := vector.AppendBytes(blockInfoVec, nil, false, nil); err != nil {
+			return moerr.NewInternalErrorf(ctx, "failed to append block info: %v", err)
+		}
+	}
+
+	// Write through relation
+	if err := rel.Write(ctx, bat); err != nil {
+		bat.Clean(nil)
+		return moerr.NewInternalErrorf(ctx, "failed to write objects: %v", err)
+	}
+
+	return nil
+}
+
+// submitObjectsAsDelete submits objects as DELETE operation
+func submitObjectsAsDelete(ctx context.Context, rel engine.Relation, statsList []objectio.ObjectStats) error {
+	if len(statsList) == 0 {
+		return nil
+	}
+
+	// Create batch with ObjectStats for deletion
+	bat := batch.NewWithSize(1)
+	bat.SetAttributes([]string{catalog.ObjectMeta_ObjectStats})
+	bat.SetRowCount(len(statsList))
+
+	// ObjectStats column
+	statsVec := vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[0] = statsVec
+
+	// Append ObjectStats to the batch
+	for _, stats := range statsList {
+		statsBytes := stats[:]
+		if err := vector.AppendBytes(statsVec, statsBytes, false, nil); err != nil {
+			return moerr.NewInternalErrorf(ctx, "failed to append object stats: %v", err)
+		}
+	}
+
+	// Delete through relation
+	if err := rel.Delete(ctx, bat, ""); err != nil {
+		bat.Clean(nil)
+		return moerr.NewInternalErrorf(ctx, "failed to delete objects: %v", err)
+	}
+
+	return nil
 }

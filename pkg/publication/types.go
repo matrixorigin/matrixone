@@ -43,6 +43,12 @@ type ObjectStats struct {
 	IsTombstone bool       // Whether this is a tombstone (deleted object)
 }
 
+// AObjMapping contains both current and previous object stats for an upstream aobj
+type AObjMapping struct {
+	Current  objectio.ObjectStats // Newly written object stats in current iteration
+	Previous objectio.ObjectStats // Object stats written in previous iteration (zero value if not exists)
+}
+
 // IterationContext contains context information for an iteration
 type IterationContext struct {
 	// Task identification
@@ -65,6 +71,9 @@ type IterationContext struct {
 	PrevSnapshotTS      types.TS
 	CurrentSnapshotName string
 	CurrentSnapshotTS   types.TS
-	ActiveAObj          map[string]objectio.ObjectStats // Map from upstream aobj UUID to new objectio.ObjectStats
+	// ActiveAObj maps upstream aobj UUID to both current and previous object stats
+	// Current stats: the newly written object stats in this iteration
+	// Previous stats: the object stats written in the previous iteration (if exists)
+	ActiveAObj          map[string]AObjMapping
 	TableIDs            map[string]uint64
 }

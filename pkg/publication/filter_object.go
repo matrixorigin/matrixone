@@ -106,11 +106,16 @@ func filterAppendableObject(
 	}
 
 	// Record mapping in iteration context
-	// Map from upstream aobj UUID to new objectio.ObjectStats
+	// Map from upstream aobj UUID to both current and previous object stats
 	if iterationCtx.ActiveAObj == nil {
-		iterationCtx.ActiveAObj = make(map[string]objectio.ObjectStats)
+		iterationCtx.ActiveAObj = make(map[string]AObjMapping)
 	}
-	iterationCtx.ActiveAObj[upstreamAObjUUID] = objStats
+
+	// Get previous stats if exists, otherwise use zero value
+	mapping := iterationCtx.ActiveAObj[upstreamAObjUUID]
+	mapping.Previous = mapping.Current // Save previous stats
+	mapping.Current = objStats         // Set new current stats
+	iterationCtx.ActiveAObj[upstreamAObjUUID] = mapping
 
 	return nil
 }
