@@ -69,6 +69,7 @@ var (
 	GCMergeCollectDurationHistogram = gcDurationHistogram.WithLabelValues("merge", "collect")
 	GCMergeWriteDurationHistogram   = gcDurationHistogram.WithLabelValues("merge", "write")
 	GCMergeTotalDurationHistogram   = gcDurationHistogram.WithLabelValues("merge", "total")
+	GCMergeTableDurationHistogram   = gcDurationHistogram.WithLabelValues("merge", "table")
 
 	// Snapshot GC phases
 	GCSnapshotScanDurationHistogram    = gcDurationHistogram.WithLabelValues("snapshot", "scan")

@@ -33,7 +33,8 @@ func (c *DashboardCreator) initGCDashboard() error {
 		c.withRowOptions(
 			c.initGCExecutionRow(),
 			c.initGCFileDeletionRow(),
-			c.initGCDurationRow(),
+			c.initGCDurationMainRow(),
+			c.initGCDurationMergeRow(),
 			c.initGCCheckpointStatsRow(),
 			c.initGCTimestampRow(),
 		)...)
@@ -84,9 +85,9 @@ func (c *DashboardCreator) initGCFileDeletionRow() dashboard.Option {
 	)
 }
 
-func (c *DashboardCreator) initGCDurationRow() dashboard.Option {
+func (c *DashboardCreator) initGCDurationMainRow() dashboard.Option {
 	return dashboard.Row(
-		"GC Duration Metrics",
+		"GC Duration Metrics - Main Operations",
 		c.getPercentHist(
 			"GC Checkpoint Total Duration",
 			c.getMetricWithFilter(`mo_gc_duration_bucket`, `type="checkpoint",phase="total"`),
@@ -95,8 +96,8 @@ func (c *DashboardCreator) initGCDurationRow() dashboard.Option {
 			timeseries.Span(4),
 		),
 		c.getPercentHist(
-			"GC Merge Total Duration",
-			c.getMetricWithFilter(`mo_gc_duration_bucket`, `type="merge",phase="total"`),
+			"GC Soft GC Duration (Filter)",
+			c.getMetricWithFilter(`mo_gc_duration_bucket`, `type="checkpoint",phase="filter"`),
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			SpanNulls(true),
 			timeseries.Span(4),
@@ -107,6 +108,26 @@ func (c *DashboardCreator) initGCDurationRow() dashboard.Option {
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			SpanNulls(true),
 			timeseries.Span(4),
+		),
+	)
+}
+
+func (c *DashboardCreator) initGCDurationMergeRow() dashboard.Option {
+	return dashboard.Row(
+		"GC Duration Metrics - Merge Operations",
+		c.getPercentHist(
+			"GC Merge Checkpoint Duration",
+			c.getMetricWithFilter(`mo_gc_duration_bucket`, `type="merge",phase="total"`),
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			SpanNulls(true),
+			timeseries.Span(6),
+		),
+		c.getPercentHist(
+			"GC Merge Table Duration",
+			c.getMetricWithFilter(`mo_gc_duration_bucket`, `type="merge",phase="table"`),
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			SpanNulls(true),
+			timeseries.Span(6),
 		),
 	)
 }

@@ -1353,8 +1353,8 @@ func (c *checkpointCleaner) doGCAgainstGlobalCheckpointLocked(
 	c.updateGCWaterMark(gckp)
 	c.mutation.snapshotMeta.MergeTableInfo(snapshots, pitrs)
 	mergeDuration = time.Since(now)
-	// Record merge duration
-	v2.GCMergeTotalDurationHistogram.Observe(mergeDuration.Seconds())
+	// Record merge table duration (different from merge checkpoint duration)
+	v2.GCMergeTableDurationHistogram.Observe(mergeDuration.Seconds())
 	return filesToGC, nil
 }
 
