@@ -133,6 +133,15 @@ func IndexParamsToStringList(indexParams string) (string, error) {
 		}
 	}
 
+	if val, ok := result[AutoUpdate]; ok {
+		if val == "true" {
+			res += fmt.Sprintf(" %s = %s ", AutoUpdate, val)
+		}
+	}
+
+	if val, ok := result[Interval]; ok {
+		res += fmt.Sprintf(" %s %s day ", Interval, val)
+	}
 	return res, nil
 }
 
