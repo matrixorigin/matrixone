@@ -15,6 +15,7 @@
 package group
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
 	"io"
@@ -334,9 +335,11 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 	gbBatch := ctr.createNewGroupByBatch(nil, aggBatchSize)
 	totalCnt := int64(0)
 
+	bufferedFile := bufio.NewReaderSize(bkt.file, 1024*1024)
+
 	for {
 		// load next batch from the spill bucket.
-		cnt, err := types.ReadInt64(bkt.file)
+		cnt, err := types.ReadInt64(bufferedFile)
 		if err != nil {
 			if err == io.EOF {
 				break
@@ -367,11 +370,11 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 		if err = gbBatch.PreExtend(proc.Mp(), int(cnt)); err != nil {
 			return false, err
 		}
-		if err = gbBatch.UnmarshalFromReader(bkt.file, proc.Mp()); err != nil {
+		if err = gbBatch.UnmarshalFromReader(bufferedFile, proc.Mp()); err != nil {
 			return false, err
 		}
 
-		checkMagic, err := types.ReadUint64(bkt.file)
+		checkMagic, err := types.ReadUint64(bufferedFile)
 		if err != nil {
 			return false, err
 		}
@@ -379,7 +382,7 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 			return false, moerr.NewInternalError(proc.Ctx, "spill groupby cnt mismatch")
 		}
 
-		checkMagic, err = types.ReadUint64(bkt.file)
+		checkMagic, err = types.ReadUint64(bufferedFile)
 		if err != nil {
 			return false, err
 		}
@@ -387,7 +390,7 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 			return false, moerr.NewInternalError(proc.Ctx, "spill groupby magic number mismatch")
 		}
 
-		nAggs, err := types.ReadInt32(bkt.file)
+		nAggs, err := types.ReadInt32(bufferedFile)
 		if err != nil {
 			return false, err
 		}
@@ -397,10 +400,10 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 
 		// load aggs from the spill bucket.
 		for _, ag := range ctr.spillAggList {
-			ag.UnmarshalFromReader(bkt.file, proc.Mp())
+			ag.UnmarshalFromReader(bufferedFile, proc.Mp())
 		}
 
-		checkMagic, err = types.ReadUint64(bkt.file)
+		checkMagic, err = types.ReadUint64(bufferedFile)
 		if err != nil {
 			return false, err
 		}
@@ -408,7 +411,7 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 			return false, moerr.NewInternalError(proc.Ctx, "spill agg cnt mismatch")
 		}
 
-		checkMagic, err = types.ReadUint64(bkt.file)
+		checkMagic, err = types.ReadUint64(bufferedFile)
 		if err != nil {
 			return false, err
 		}
