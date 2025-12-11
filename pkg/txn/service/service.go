@@ -111,9 +111,9 @@ func (s *service) Start() error {
 	if err := s.storage.Start(); err != nil {
 		return err
 	}
-	s.logger.Info("start txn recovery")
+	s.logger.Info("txn.service.start.recovery")
 	s.startRecovery()
-	s.logger.Info("end txn recovery")
+	s.logger.Info("txn.service.end.recovery")
 	return nil
 }
 
@@ -129,8 +129,8 @@ func (s *service) Close(destroy bool) error {
 }
 
 func (s *service) gcZombieTxn(ctx context.Context) {
-	s.logger.Info("gc zombie txn task started")
-	defer s.logger.Info("gc zombie txn task stopped")
+	s.logger.Info("txn.service.gc.zombie.txn.task.started")
+	defer s.logger.Info("txn.service.gc.zombie.txn.task.stopped")
 
 	timer := time.NewTicker(s.zombieTimeout)
 	defer timer.Stop()

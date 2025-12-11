@@ -49,11 +49,12 @@ current_timestamp(6),
 date_add('2022-07-01 10:20:30.123456', interval 1 microsecond)
 ;
 now(0)    now(3)    now(6)    current_timestamp(0)    current_timestamp(3)    current_timestamp(6)    date_add(2022-07-01 10:20:30.123456, interval(1, microsecond))
-2025-11-28 06:17:09    2025-11-28 06:17:08.966000000    2025-11-28 06:17:08.966425000    2025-11-28 06:17:09    2025-11-28 06:17:08.966000000    2025-11-28 06:17:08.966425000    2022-07-01 10:20:30.123457
+2025-12-05 11:36:15    2025-12-05 11:36:14.668000000    2025-12-05 11:36:14.667877000    2025-12-05 11:36:15    2025-12-05 11:36:14.668000000    2025-12-05 11:36:14.667877000    2022-07-01 10:20:30.123457
 select
 timestampadd(microsecond, 1, '2022-07-01 10:20:30.123456')
 ;
-invalid input: column microsecond does not exist
+timestampadd(microsecond, 1, 2022-07-01 10:20:30.123456)
+2022-07-01 10:20:30.123457
 drop table if exists t_scale_storage;
 drop table if exists t_scale_comparison;
 create table t_scale_comparison (

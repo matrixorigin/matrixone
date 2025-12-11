@@ -1027,6 +1027,7 @@ func constructTableFunction(n *plan.Node, qry *plan.Query) *table_function.Table
 	arg.Limit = n.Limit
 	// probe side runtime filter specs
 	arg.RuntimeFilterSpecs = n.RuntimeFilterProbeList
+	arg.IndexReaderParam = n.IndexReaderParam
 	return arg
 }
 

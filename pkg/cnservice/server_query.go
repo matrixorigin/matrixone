@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
+	commonUtil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -345,15 +346,9 @@ func copyWaitTxn(src pblock.WaitTxn) *pblock.WaitTxn {
 	return dst
 }
 
-func copyBytes(src []byte) []byte {
-	dst := make([]byte, len(src))
-	copy(dst, src)
-	return dst
-}
-
 func copyTxnMeta(src txn.TxnMeta) *txn.TxnMeta {
 	dst := &txn.TxnMeta{
-		ID:         copyBytes(src.GetID()),
+		ID:         commonUtil.CloneBytes(src.GetID()),
 		Status:     src.GetStatus(),
 		SnapshotTS: src.GetSnapshotTS(),
 		PreparedTS: src.GetPreparedTS(),

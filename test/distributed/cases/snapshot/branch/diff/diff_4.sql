@@ -25,8 +25,8 @@ insert into customer_lifecycle values
 
 create snapshot sp_customer_base for table test_null_diff customer_lifecycle;
 
-create table customer_branch_alpha clone customer_lifecycle{snapshot='sp_customer_base'};
-create table customer_branch_beta clone customer_lifecycle{snapshot='sp_customer_base'};
+data branch create table customer_branch_alpha from customer_lifecycle{snapshot='sp_customer_base'};
+data branch create table customer_branch_beta from customer_lifecycle{snapshot='sp_customer_base'};
 
 update customer_branch_alpha
    set credit_score = null,
@@ -98,8 +98,8 @@ insert into instrument_positions values
 drop snapshot if exists sp_position_base;
 create snapshot sp_position_base for table test_null_diff instrument_positions;
 
-create table position_branch_live clone instrument_positions{snapshot='sp_position_base'};
-create table position_branch_model clone instrument_positions{snapshot='sp_position_base'};
+data branch create table position_branch_live from instrument_positions{snapshot='sp_position_base'};
+data branch create table position_branch_model from instrument_positions{snapshot='sp_position_base'};
 
 update position_branch_live
    set exposure = null,

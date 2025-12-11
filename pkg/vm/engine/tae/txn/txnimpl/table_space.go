@@ -169,12 +169,12 @@ func (space *tableSpace) prepareApplyANode(node *anode, startOffset uint32) erro
 	for appended < node.Rows() {
 		appender, err := space.tableHandle.GetAppender()
 		if moerr.IsMoErrCode(err, moerr.ErrAppendableObjectNotFound) {
-			objH, err := space.table.CreateObject(space.isTombstone)
-			if err != nil {
-				return err
+			objH, err2 := space.table.CreateObject(space.isTombstone)
+			if err2 != nil {
+				return err2
 			}
 			appender = space.tableHandle.SetAppender(objH.Fingerprint())
-			logutil.Info("CreateObject", zap.String("objH", appender.GetID().ObjectString()), zap.String("txn", node.GetTxn().String()))
+			// logutil.Info("CreateObject", zap.String("objH", appender.GetID().ObjectString()), zap.String("txn", node.GetTxn().String()))
 			objH.Close()
 		}
 		if !appender.IsSameColumns(space.table.GetLocalSchema(space.isTombstone)) {

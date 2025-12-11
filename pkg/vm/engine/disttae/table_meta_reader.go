@@ -176,7 +176,7 @@ func (r *TableMetaReader) Read(
 func (r *TableMetaReader) SetOrderBy(specs []*plan.OrderBySpec) {
 }
 
-func (r *TableMetaReader) SetBlockTop(specs []*plan.OrderBySpec, limit uint64) {
+func (r *TableMetaReader) SetIndexParam(param *plan.IndexReaderParam) {
 }
 
 func (r *TableMetaReader) GetOrderBy() []*plan.OrderBySpec {
@@ -227,7 +227,7 @@ func (r *TableMetaReader) collect(
 			rowCnt += int(obj.ObjectStats.Rows())
 
 			if err = colexec.ExpandObjectStatsToBatch(
-				mp, isTombstone, outBatch, true, obj.ObjectStats); err != nil {
+				mp, isTombstone, outBatch, false, obj.ObjectStats); err != nil {
 				return nil, err
 			}
 

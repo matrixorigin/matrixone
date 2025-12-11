@@ -1,0 +1,76 @@
+# Prometheus configuration for local MatrixOne services
+# This config is for monitoring MatrixOne running locally (not in Docker)
+# Prometheus itself runs in Docker and connects to host services
+#
+# Usage:
+#   1. Make sure your local MatrixOne has metrics enabled in config:
+#      [observability]
+#      disableMetric = false
+#      enable-metric-to-prom = true
+#      status-port = 7001  # Or your configured port
+#
+#   2. Start Prometheus:
+#      make dev-up-prometheus-local
+#      # Or: docker compose --profile prometheus-local up -d
+#
+#   3. Access Prometheus UI: http://localhost:9091
+#
+#   4. If host.docker.internal doesn't work (Linux), edit this file and replace
+#      'host.docker.internal' with your actual host IP address (e.g., 192.168.1.100)
+#
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'matrixone-local'
+
+# Scrape configurations
+scrape_configs:
+  # Local MatrixOne services
+  # Use host.docker.internal (works on Docker Desktop and Linux with extra_hosts)
+  # On Linux, if host.docker.internal doesn't work, replace with your host IP
+  # You can find your host IP with: ip addr show | grep "inet " | grep -v 127.0.0.1
+  
+  # Compute Node metrics (if running locally)
+  # Adjust the port (7001) to match your local MatrixOne status-port configuration
+  - job_name: 'mo-cn-local'
+    static_configs:
+      - targets: ['host.docker.internal:7001']  # Default status port, adjust if needed
+        labels:
+          service: 'cn'
+          instance: 'mo-cn-local'
+          deployment: 'local'
+
+  # If you have multiple local MatrixOne instances, add more targets:
+  # - job_name: 'mo-cn-local-2'
+  #   static_configs:
+  #     - targets: ['host.docker.internal:7002']  # Different port
+  #       labels:
+  #         service: 'cn'
+  #         instance: 'mo-cn-local-2'
+  #         deployment: 'local'
+
+  # LogService metrics (if running locally as separate service)
+  # Uncomment and adjust port if you have a local LogService:
+  # - job_name: 'mo-log-local'
+  #   static_configs:
+  #     - targets: ['host.docker.internal:7001']
+  #       labels:
+  #         service: 'logservice'
+  #         instance: 'mo-log-local'
+  #         deployment: 'local'
+
+  # Transaction Node metrics (if running locally as separate service)
+  # Uncomment and adjust port if you have a local TN:
+  # - job_name: 'mo-tn-local'
+  #   static_configs:
+  #     - targets: ['host.docker.internal:7001']
+  #       labels:
+  #         service: 'tn'
+  #         instance: 'mo-tn-local'
+  #         deployment: 'local'
+
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']

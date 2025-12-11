@@ -37,6 +37,16 @@
 # To construct a directory named vendor in the main module’s root directory that contains copies of all packages needed to support builds and tests of packages in the main module.
 # make vendor
 #
+# To compile mo-service with GPU support,
+# 1. install CUDA toolkit (version 1.30 or above)
+# 2. install cuVS Go bindings with conda
+#  % git clone git@github.com:rapidsai/cuvs.git
+#  % cd cuvs
+#  % conda env create --name go -f conda/environments/go_cuda-130_arch-$(uname -m).yaml
+#  % conda activate go
+# 3. compile matrixone
+#  % cd matrixone
+#  % MO_CL_CUDA=1 make
 
 # where am I
 ROOT_DIR = $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
@@ -95,12 +105,25 @@ help:
 	@echo "  make ci                 - Run CI tests (BVT + optional UT)"
 	@echo "  make compose            - Run docker compose BVT tests"
 	@echo ""
+	@echo "Local Development with MinIO:"
+	@echo "  make dev-up-minio-local     - Start MinIO service (local storage)"
+	@echo "  make dev-down-minio-local   - Stop MinIO service"
+	@echo "  make dev-restart-minio-local - Restart MinIO service"
+	@echo "  make dev-status-minio-local - Show MinIO service status"
+	@echo "  make dev-logs-minio-local   - Show MinIO logs"
+	@echo "  make dev-clean-minio-local  - Clean MinIO data"
+	@echo "  make launch-minio           - Build and start MO with MinIO storage"
+	@echo "  make launch-minio-debug     - Build (debug) and start MO with MinIO"
+	@echo ""
 	@echo "Development Environment (Local Multi-CN Cluster):"
 	@echo "  make dev-help           - Show all dev-* commands (full list)"
-	@echo "  make dev-build          - Build docker image"
+	@echo "  make dev-build          - Build docker image (smart cache - rebuilds when code changes)"
+	@echo "  make dev-build-force    - Build docker image (forces complete rebuild, no cache)"
 	@echo "  make dev-up             - Start multi-CN cluster (default: local image)"
 	@echo "  make dev-up-latest      - Start with official latest image"
 	@echo "  make dev-up-test        - Start with test directory mounted"
+	@echo "  make dev-up-grafana     - Start cluster with Grafana monitoring"
+	@echo "  make dev-up-grafana-local - Start Grafana dashboard for local MatrixOne"
 	@echo "  make dev-down           - Stop cluster"
 	@echo "  make dev-restart        - Restart all services"
 	@echo "  make dev-restart-cn1    - Restart CN1 only (also: cn2, proxy, tn, log)"
@@ -157,14 +180,21 @@ THIRDPARTIES_INSTALL_DIR=$(ROOT_DIR)/thirdparties/install
 RACE_OPT :=
 DEBUG_OPT :=
 CGO_DEBUG_OPT :=
+TAGS :=
 
 ifeq ($(MO_CL_CUDA),1)
-	CUDA_LDFLAGS := -L/usr/local/cuda/lib64/stubs -lcuda -L/usr/local/cuda/lib64 -lcudart -lstdc++
+  ifeq ($(CONDA_PREFIX),)
+    $(error CONDA_PREFIX env variable not found.)
+  endif
+	CUVS_CFLAGS := -I$(CONDA_PREFIX)/include
+	CUVS_LDFLAGS := -L$(CONDA_PREFIX)/envs/go/lib -lcuvs -lcuvs_c
+	CUDA_CFLAGS := -I/usr/local/cuda/include $(CUVS_CFLAGS)
+	CUDA_LDFLAGS := -L/usr/local/cuda/lib64/stubs -lcuda -L/usr/local/cuda/lib64 -lcudart $(CUVS_LDFLAGS) -lstdc++
+	TAGS += -tags "gpu"
 endif
 
-CGO_OPTS :=CGO_CFLAGS="-I$(THIRDPARTIES_INSTALL_DIR)/include"
+CGO_OPTS :=CGO_CFLAGS="-I$(THIRDPARTIES_INSTALL_DIR)/include $(CUDA_CFLAGS)"
 GOLDFLAGS=-ldflags="-extldflags '$(CUDA_LDFLAGS) -L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,\$${ORIGIN}/lib -fopenmp' $(VERSION_INFO)"
-TAGS :=
 
 ifeq ("$(UNAME_S)","darwin")
 GOLDFLAGS:=-ldflags="-extldflags '-L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,@executable_path/lib' $(VERSION_INFO)"
@@ -303,10 +333,12 @@ DEV_MOUNT ?=
 .PHONY: dev-help
 dev-help:
 	@echo "Local Multi-CN Development Environment Commands:"
-	@echo "  make dev-build          - Build MatrixOne docker image (local tag)"
+	@echo "  make dev-build          - Build MatrixOne docker image (forces rebuild, no cache)"
 	@echo "  make dev-up             - Start multi-CN cluster with local image"
 	@echo "  make dev-up-latest      - Start multi-CN cluster with latest official image"
 	@echo "  make dev-up-test        - Start with test directory mounted"
+	@echo "  make dev-up-grafana     - Start cluster with Grafana monitoring"
+	@echo "  make dev-up-grafana-local - Start Grafana dashboard for local MatrixOne"
 	@echo "  make dev-down           - Stop multi-CN cluster"
 	@echo "  make dev-restart        - Restart multi-CN cluster (all services)"
 	@echo "  make dev-restart-cn1    - Restart CN1 only"
@@ -314,27 +346,75 @@ dev-help:
 	@echo "  make dev-restart-proxy  - Restart Proxy only"
 	@echo "  make dev-restart-log    - Restart Log service only"
 	@echo "  make dev-restart-tn     - Restart TN only"
+	@echo "  make dev-restart-grafana - Restart Grafana (and Prometheus)"
+	@echo "  make dev-restart-grafana-local - Restart local Grafana (and Prometheus)"
+	@echo "  make dev-down-grafana-local - Stop and remove local Grafana (and Prometheus)"
 	@echo "  make dev-ps             - Show service status"
+	@echo "  make dev-check-grafana - Check if Grafana services are ready (ports 3000, 3001)"
 	@echo "  make dev-logs           - Show all logs (tail -f)"
 	@echo "  make dev-logs-cn1       - Show CN1 logs"
 	@echo "  make dev-logs-cn2       - Show CN2 logs"
 	@echo "  make dev-logs-proxy     - Show proxy logs"
+	@echo "  make dev-logs-grafana - Show Grafana logs"
+	@echo "  make dev-logs-grafana-local - Show local Grafana logs"
+	@echo "  make dev-check-grafana - Check if Grafana services are ready (ports 3000, 3001)"
 	@echo "  make dev-clean          - Stop and remove all data (WARNING: destructive!)"
+	@echo "  make dev-cleanup        - Interactive cleanup (stops containers, removes data directories)"
 	@echo "  make dev-config         - Generate config from config.env"
 	@echo "  make dev-config-example - Create config.env.example file"
+	@echo "  make dev-setup-docker-mirror - Configure Docker registry mirror (for faster pulls)"
 	@echo "  make dev-edit-cn1       - Edit CN1 configuration interactively"
 	@echo "  make dev-edit-cn2       - Edit CN2 configuration interactively"
 	@echo "  make dev-edit-proxy     - Edit Proxy configuration interactively"
 	@echo "  make dev-edit-log       - Edit Log service configuration interactively"
 	@echo "  make dev-edit-tn        - Edit TN configuration interactively"
 	@echo "  make dev-edit-common    - Edit common configuration (all services)"
+	@echo "  make dev-setup-docker-mirror - Configure Docker registry mirror (for faster pulls)"
+	@echo ""
+	@echo "Dashboard Management (via mo-tool):"
+	@echo "  Create:"
+	@echo "    make dev-create-dashboard        - Create dashboard (default: local mode, port 3001)"
+	@echo "    make dev-create-dashboard-local  - Create local dashboard (port 3001)"
+	@echo "    make dev-create-dashboard-cluster - Create cluster dashboard (port 3000, docker compose)"
+	@echo "    make dev-create-dashboard-k8s     - Create K8S dashboard"
+	@echo "    make dev-create-dashboard-cloud-ctrl - Create cloud control-plane dashboard"
+	@echo "  List:"
+	@echo "    make dev-list-dashboard          - List dashboards (default: local mode, port 3001)"
+	@echo "    make dev-list-dashboard-local    - List local dashboards (port 3001)"
+	@echo "    make dev-list-dashboard-cluster  - List cluster dashboards (port 3000)"
+	@echo "    make dev-list-dashboard-k8s       - List K8S dashboards"
+	@echo "    make dev-list-dashboard-cloud-ctrl - List cloud control-plane dashboards"
+	@echo "  Delete:"
+	@echo "    make dev-delete-dashboard        - Delete all dashboards in folder (default: local mode, port 3001)"
+	@echo "    make dev-delete-dashboard-local  - Delete all local dashboards (port 3001)"
+	@echo "    make dev-delete-dashboard-cluster - Delete all cluster dashboards (port 3000)"
+	@echo "    make dev-delete-dashboard-k8s     - Delete all K8S dashboards"
+	@echo "    make dev-delete-dashboard-cloud-ctrl - Delete all cloud control-plane dashboards"
+	@echo ""
+	@echo "  Custom options:"
+	@echo "    DASHBOARD_PORT=3001 make dev-create-dashboard        # Custom port"
+	@echo "    DASHBOARD_HOST=localhost make dev-create-dashboard   # Custom host"
+	@echo "    DASHBOARD_MODE=cloud make dev-create-dashboard      # Custom mode"
+	@echo ""
+	@echo "  Or use mo-tool directly:"
+	@echo "    ./mo-tool dashboard create --mode local --port 3001"
+	@echo "    ./mo-tool dashboard list --mode cloud --port 3000"
+	@echo "    ./mo-tool dashboard delete --mode local --port 3001          # Delete all dashboards in folder"
+	@echo "    ./mo-tool dashboard delete-dashboard --uid <uid>             # Delete single dashboard by UID"
+	@echo "    ./mo-tool dashboard delete-folder --mode local --port 3001   # Delete entire folder and all dashboards"
 	@echo ""
 	@echo "Examples:"
 	@echo "  make dev-build && make dev-up              # Build and start"
 	@echo "  make dev-up-test                           # Start with test files"
+	@echo "  make dev-up-grafana                        # Start with Grafana monitoring"
+	@echo "  make dev-up-grafana-local                  # Start Grafana dashboard for local MO"
 	@echo "  make DEV_VERSION=latest dev-up             # Use official latest"
 	@echo "  make DEV_VERSION=nightly dev-up            # Use nightly build"
 	@echo "  make DEV_MOUNT='../../test:/test:ro' dev-up  # Custom mount"
+	@echo ""
+	@echo "Grafana Monitoring:"
+	@echo "  Access Grafana UI at http://localhost:3000 (admin/admin)"
+	@echo "  Note: Enable metrics in service configs (disableMetric = false)"
 	@echo ""
 	@echo "Configuration (Choose one method):"
 	@echo "  Method 1 (Interactive - Recommended):"
@@ -347,8 +427,13 @@ dev-help:
 
 .PHONY: dev-build
 dev-build:
-	@echo "Building MatrixOne docker image..."
-	@cd $(DEV_DIR) && ./start.sh build
+	@echo "Building MatrixOne docker image (using smart cache - only rebuilds when code changes)..."
+	@cd $(DEV_DIR) && ./start.sh build mo-log
+
+.PHONY: dev-build-force
+dev-build-force:
+	@echo "Building MatrixOne docker image (forcing complete rebuild, no cache)..."
+	@cd $(DEV_DIR) && ./start.sh build --no-cache mo-log
 
 .PHONY: dev-up
 dev-up:
@@ -380,10 +465,114 @@ dev-up-test:
 	@echo "Test directory mounted at /test in containers"
 	@echo "Run SQL files with: mysql> source /test/distributed/cases/your_test.sql;"
 
+.PHONY: dev-up-grafana
+dev-up-grafana:
+	@echo "Starting MatrixOne Multi-CN cluster with Grafana monitoring (version: $(DEV_VERSION))..."
+	@cd $(DEV_DIR) && \
+		export DOCKER_UID=$$(id -u) && \
+		export DOCKER_GID=$$(id -g) && \
+		./start.sh -v $(DEV_VERSION) --profile matrixone --profile prometheus up -d
+	@echo ""
+	@echo "Services started! Connect with:"
+	@echo "  mysql -h 127.0.0.1 -P 6001 -u root -p111  # Via proxy (recommended)"
+	@echo "  mysql -h 127.0.0.1 -P 16001 -u root -p111  # Direct to CN1"
+	@echo "  mysql -h 127.0.0.1 -P 16002 -u root -p111  # Direct to CN2"
+	@echo ""
+	@echo "✅ Monitoring dashboard started! Access at:"
+	@echo "  http://localhost:3000  # Grafana UI (admin/admin)"
+	@echo ""
+	@echo "Note: Prometheus runs internally and is accessed by Grafana only."
+	@echo "      If you need direct Prometheus access, uncomment ports in docker-compose.yml"
+	@echo ""
+	@echo "To enable metrics collection, edit service configs and set:"
+	@echo "  [observability]"
+	@echo "  disableMetric = false"
+	@echo "  enable-metric-to-prom = true"
+	@echo "  status-port = 7001"
+	@echo ""
+	@echo "Grafana automatically:"
+	@echo "  - Connects to Prometheus as data source (via Docker network)"
+	@echo "  - Loads MatrixOne dashboards from pkg/util/metric/dashboard/"
+
+.PHONY: dev-up-grafana-local
+dev-up-grafana-local:
+	@echo "Starting Grafana dashboard for local MatrixOne services..."
+	@echo ""
+	@echo "Note: This will pull prom/prometheus:latest from Docker Hub."
+	@echo "If pull fails due to timeout, configure Docker mirror first:"
+	@echo "  cd $(DEV_DIR) && sudo ./setup-docker-mirror.sh"
+	@echo "  Or: sudo make dev-setup-docker-mirror"
+	@echo ""
+	@echo "Pre-creating directories with correct permissions..."
+	@mkdir -p prometheus-local-data grafana-local-data grafana-local-data/dashboards && \
+		chmod 755 prometheus-local-data grafana-local-data grafana-local-data/dashboards
+	@echo "Checking and fixing ownership for existing directories..."
+	@DOCKER_UID=$$(id -u) && \
+		DOCKER_GID=$$(id -g) && \
+		if [ -d grafana-local-data ] && find grafana-local-data -user root 2>/dev/null | grep -q .; then \
+			echo "Fixing ownership for grafana-local-data (found root-owned files)..." && \
+			sudo chown -R $$DOCKER_UID:$$DOCKER_GID grafana-local-data 2>/dev/null || \
+			echo "Warning: Could not fix ownership. You may need to run: sudo chown -R $$DOCKER_UID:$$DOCKER_GID grafana-local-data"; \
+		fi && \
+		if [ -d prometheus-local-data ] && find prometheus-local-data -user root 2>/dev/null | grep -q .; then \
+			echo "Fixing ownership for prometheus-local-data (found root-owned files)..." && \
+			sudo chown -R $$DOCKER_UID:$$DOCKER_GID prometheus-local-data 2>/dev/null || \
+			echo "Warning: Could not fix ownership. You may need to run: sudo chown -R $$DOCKER_UID:$$DOCKER_GID prometheus-local-data"; \
+		fi
+	@cd $(DEV_DIR) && \
+		export DOCKER_UID=$$(id -u) && \
+		export DOCKER_GID=$$(id -g) && \
+		docker compose --profile prometheus-local up -d || \
+		(echo "" && \
+		 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" && \
+		 echo "❌ Docker pull failed! Please configure Docker mirror:" && \
+		 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" && \
+		 echo "" && \
+		 echo "Quick fix (recommended):" && \
+		 echo "  cd $(DEV_DIR)" && \
+		 echo "  sudo ./setup-docker-mirror.sh" && \
+		 echo "" && \
+		 echo "Or use Makefile command:" && \
+		 echo "  sudo make dev-setup-docker-mirror" && \
+		 echo "" && \
+		 echo "Then retry:" && \
+		 echo "  make dev-up-grafana-local" && \
+		 echo "" && \
+		 exit 1)
+	@echo ""
+	@echo "✅ Monitoring dashboard started! Access at:"
+	@echo "  http://localhost:3001  # Grafana UI (admin/admin)"
+	@echo ""
+	@echo "Note: Prometheus runs internally and is accessed by Grafana only."
+	@echo "      If you need direct Prometheus access, uncomment ports in docker-compose.yml"
+	@echo ""
+	@echo "Configuration:"
+	@echo "  - Prometheus: Internal service (not exposed)"
+	@echo "  - Grafana: Main monitoring interface at http://localhost:3001"
+	@echo "  - Prometheus config: $(DEV_DIR)/prometheus-local.yml"
+	@echo "  - Grafana provisioning: $(DEV_DIR)/grafana-provisioning/"
+	@echo "  - Monitoring local MatrixOne services on host.docker.internal"
+	@echo ""
+	@echo "Make sure your local MatrixOne has metrics enabled:"
+	@echo "  [observability]"
+	@echo "  disableMetric = false"
+	@echo "  enable-metric-to-prom = true"
+	@echo "  status-port = 7001  # Or your configured port"
+	@echo ""
+	@echo "Grafana automatically:"
+	@echo "  - Connects to Prometheus as data source (via Docker network)"
+	@echo "  - Loads MatrixOne dashboards from pkg/util/metric/dashboard/"
+	@echo ""
+	@echo "If host.docker.internal doesn't work on Linux, edit prometheus-local.yml"
+	@echo "and replace 'host.docker.internal' with your host IP address."
+
 .PHONY: dev-down
 dev-down:
 	@echo "Stopping MatrixOne Multi-CN cluster..."
-	@cd $(DEV_DIR) && ./start.sh down
+	@cd $(DEV_DIR) && \
+		export DOCKER_UID=$$(id -u) && \
+		export DOCKER_GID=$$(id -g) && \
+		./start.sh --profile matrixone --profile prometheus --profile prometheus-local down
 
 .PHONY: dev-restart
 dev-restart:
@@ -416,6 +605,22 @@ dev-restart-tn:
 	@echo "Restarting TN..."
 	@cd $(DEV_DIR) && docker compose restart mo-tn
 
+.PHONY: dev-restart-grafana
+dev-restart-grafana:
+	@echo "Restarting Grafana and Prometheus..."
+	@cd $(DEV_DIR) && docker compose --profile prometheus restart grafana prometheus
+
+.PHONY: dev-restart-grafana-local
+dev-restart-grafana-local:
+	@echo "Restarting local Grafana and Prometheus..."
+	@cd $(DEV_DIR) && docker compose --profile prometheus-local restart grafana-local prometheus-local
+
+.PHONY: dev-down-grafana-local
+dev-down-grafana-local:
+	@echo "Stopping and removing local monitoring services (Grafana + Prometheus)..."
+	@cd $(DEV_DIR) && docker compose --profile prometheus-local down
+	@echo "✅ Monitoring services stopped and removed"
+
 .PHONY: dev-ps
 dev-ps:
 	@cd $(DEV_DIR) && ./start.sh ps
@@ -444,6 +649,29 @@ dev-logs-tn:
 dev-logs-log:
 	@cd $(DEV_DIR) && ./start.sh logs -f mo-log
 
+.PHONY: dev-logs-grafana
+dev-logs-grafana:
+	@cd $(DEV_DIR) && docker compose --profile prometheus logs -f grafana
+
+.PHONY: dev-logs-grafana-local
+dev-logs-grafana-local:
+	@cd $(DEV_DIR) && docker compose --profile prometheus-local logs -f grafana-local
+
+.PHONY: dev-check-grafana
+dev-check-grafana:
+	@cd $(DEV_DIR) && ./start.sh check-grafana
+
+.PHONY: dev-setup-docker-mirror
+dev-setup-docker-mirror:
+	@echo "Setting up Docker registry mirror for faster image pulls..."
+	@echo ""
+	@if [ "$$(id -u)" -ne 0 ]; then \
+		echo "This command needs to be run with sudo:"; \
+		echo "  sudo make dev-setup-docker-mirror"; \
+		exit 1; \
+	fi
+	@bash -c 'cd $(DEV_DIR) && ./setup-docker-mirror.sh'
+
 .PHONY: dev-clean
 dev-clean:
 	@echo "WARNING: This will delete all data in mo-data/ and logs/!"
@@ -458,6 +686,11 @@ dev-clean:
 	else \
 		echo "Cancelled."; \
 	fi
+
+.PHONY: dev-cleanup
+dev-cleanup:
+	@echo "Running interactive cleanup script..."
+	@cd $(DEV_DIR) && ./cleanup.sh
 
 .PHONY: dev-shell-cn1
 dev-shell-cn1:
@@ -531,6 +764,183 @@ dev-edit-tn:
 .PHONY: dev-edit-common
 dev-edit-common:
 	@cd $(DEV_DIR) && ./edit-config.sh common
+
+###############################################################################
+# Dashboard Creation
+###############################################################################
+
+DASHBOARD_PORT ?= 3001
+DASHBOARD_HOST ?= 127.0.0.1
+DASHBOARD_MODE ?= local
+DASHBOARD_USERNAME ?= admin
+DASHBOARD_PASSWORD ?= admin
+DASHBOARD_DATASOURCE ?= Prometheus
+
+.PHONY: dev-create-dashboard
+dev-create-dashboard: mo-tool
+	@echo "Creating dashboard..."
+	@echo "  Mode: $(DASHBOARD_MODE)"
+	@echo "  Host: $(DASHBOARD_HOST):$(DASHBOARD_PORT)"
+	@echo "  Username: $(DASHBOARD_USERNAME)"
+	@./mo-tool dashboard \
+		--host $(DASHBOARD_HOST) \
+		--port $(DASHBOARD_PORT) \
+		--mode $(DASHBOARD_MODE) \
+		--username $(DASHBOARD_USERNAME) \
+		--password $(DASHBOARD_PASSWORD) \
+		--datasource $(DASHBOARD_DATASOURCE)
+
+.PHONY: dev-create-dashboard-local
+dev-create-dashboard-local:
+	@$(MAKE) DASHBOARD_MODE=local DASHBOARD_PORT=3001 dev-create-dashboard
+
+.PHONY: dev-create-dashboard-cluster
+dev-create-dashboard-cluster:
+	@$(MAKE) DASHBOARD_MODE=cloud DASHBOARD_PORT=3000 DASHBOARD_DATASOURCE=Prometheus dev-create-dashboard
+
+.PHONY: dev-create-dashboard-k8s
+dev-create-dashboard-k8s:
+	@$(MAKE) DASHBOARD_MODE=k8s DASHBOARD_PORT=$(DASHBOARD_PORT) dev-create-dashboard
+
+.PHONY: dev-create-dashboard-cloud-ctrl
+dev-create-dashboard-cloud-ctrl:
+	@$(MAKE) DASHBOARD_MODE=cloud-ctrl DASHBOARD_PORT=$(DASHBOARD_PORT) dev-create-dashboard
+
+# List dashboards
+.PHONY: dev-list-dashboard
+dev-list-dashboard: mo-tool
+	@echo "Listing dashboards..."
+	@echo "  Mode: $(DASHBOARD_MODE)"
+	@echo "  Host: $(DASHBOARD_HOST):$(DASHBOARD_PORT)"
+	@echo "  Username: $(DASHBOARD_USERNAME)"
+	@./mo-tool dashboard list \
+		--host $(DASHBOARD_HOST) \
+		--port $(DASHBOARD_PORT) \
+		--mode $(DASHBOARD_MODE) \
+		--username $(DASHBOARD_USERNAME) \
+		--password $(DASHBOARD_PASSWORD) \
+		--datasource $(DASHBOARD_DATASOURCE)
+
+.PHONY: dev-list-dashboard-local
+dev-list-dashboard-local:
+	@$(MAKE) DASHBOARD_MODE=local DASHBOARD_PORT=3001 dev-list-dashboard
+
+.PHONY: dev-list-dashboard-cluster
+dev-list-dashboard-cluster:
+	@$(MAKE) DASHBOARD_MODE=cloud DASHBOARD_PORT=3000 DASHBOARD_DATASOURCE=Prometheus dev-list-dashboard
+
+.PHONY: dev-list-dashboard-k8s
+dev-list-dashboard-k8s:
+	@$(MAKE) DASHBOARD_MODE=k8s DASHBOARD_PORT=$(DASHBOARD_PORT) dev-list-dashboard
+
+.PHONY: dev-list-dashboard-cloud-ctrl
+dev-list-dashboard-cloud-ctrl:
+	@$(MAKE) DASHBOARD_MODE=cloud-ctrl DASHBOARD_PORT=$(DASHBOARD_PORT) dev-list-dashboard
+
+# Delete dashboards
+.PHONY: dev-delete-dashboard
+dev-delete-dashboard: mo-tool
+	@echo "Deleting dashboards..."
+	@echo "  Mode: $(DASHBOARD_MODE)"
+	@echo "  Host: $(DASHBOARD_HOST):$(DASHBOARD_PORT)"
+	@echo "  Username: $(DASHBOARD_USERNAME)"
+	@./mo-tool dashboard delete \
+		--host $(DASHBOARD_HOST) \
+		--port $(DASHBOARD_PORT) \
+		--mode $(DASHBOARD_MODE) \
+		--username $(DASHBOARD_USERNAME) \
+		--password $(DASHBOARD_PASSWORD) \
+		--datasource $(DASHBOARD_DATASOURCE)
+
+.PHONY: dev-delete-dashboard-local
+dev-delete-dashboard-local:
+	@$(MAKE) DASHBOARD_MODE=local DASHBOARD_PORT=3001 dev-delete-dashboard
+
+.PHONY: dev-delete-dashboard-cluster
+dev-delete-dashboard-cluster:
+	@$(MAKE) DASHBOARD_MODE=cloud DASHBOARD_PORT=3000 DASHBOARD_DATASOURCE=Prometheus dev-delete-dashboard
+
+.PHONY: dev-delete-dashboard-k8s
+dev-delete-dashboard-k8s:
+	@$(MAKE) DASHBOARD_MODE=k8s DASHBOARD_PORT=$(DASHBOARD_PORT) dev-delete-dashboard
+
+.PHONY: dev-delete-dashboard-cloud-ctrl
+dev-delete-dashboard-cloud-ctrl:
+	@$(MAKE) DASHBOARD_MODE=cloud-ctrl DASHBOARD_PORT=$(DASHBOARD_PORT) dev-delete-dashboard
+
+###############################################################################
+# Local Development with MinIO Storage
+###############################################################################
+
+MINIO_DIR := etc/launch-minio-local
+MINIO_DATA_DIR := $(MINIO_DIR)/mo-data/minio-data
+
+.PHONY: dev-up-minio-local
+dev-up-minio-local:
+	@echo "Starting MinIO service for local MatrixOne..."
+	@mkdir -p $(MINIO_DATA_DIR)
+	@DOCKER_PLATFORM=$$(uname -m | sed 's/x86_64/linux\/amd64/; s/arm64/linux\/arm64/; s/aarch64/linux\/arm64/') && \
+		echo "Detected platform: $$DOCKER_PLATFORM" && \
+		cd $(MINIO_DIR) && \
+		DOCKER_UID=$$(id -u) DOCKER_GID=$$(id -g) DOCKER_PLATFORM=$$DOCKER_PLATFORM docker compose up -d
+	@echo ""
+	@echo "✅ MinIO started!"
+	@echo "  - API: http://127.0.0.1:9000"
+	@echo "  - Console: http://127.0.0.1:9001"
+	@echo "  - Access Key: minio"
+	@echo "  - Secret Key: minio123"
+	@echo "  - Data directory: $(MINIO_DATA_DIR)"
+
+.PHONY: dev-down-minio-local
+dev-down-minio-local:
+	@echo "Stopping MinIO service..."
+	@cd $(MINIO_DIR) && docker compose down
+	@echo "✅ MinIO stopped"
+
+.PHONY: dev-restart-minio-local
+dev-restart-minio-local:
+	@echo "Restarting MinIO service..."
+	@cd $(MINIO_DIR) && docker compose restart minio
+	@echo "✅ MinIO restarted"
+
+.PHONY: dev-status-minio-local
+dev-status-minio-local:
+	@cd $(MINIO_DIR) && docker compose ps
+
+.PHONY: dev-logs-minio-local
+dev-logs-minio-local:
+	@cd $(MINIO_DIR) && docker compose logs -f minio
+
+.PHONY: dev-clean-minio-local
+dev-clean-minio-local:
+	@echo "WARNING: This will delete all MinIO data!"
+	@read -p "Continue? [y/N] " -n 1 -r; \
+	echo; \
+	if [[ $$REPLY =~ ^[Yy]$$ ]]; then \
+		echo "Stopping MinIO..."; \
+		cd $(MINIO_DIR) && docker compose down; \
+		echo "Removing data..."; \
+		rm -rf $(MINIO_DATA_DIR); \
+		echo "✅ MinIO data cleaned!"; \
+	else \
+		echo "Cancelled."; \
+	fi
+
+.PHONY: launch-minio
+launch-minio: build dev-up-minio-local
+	@echo ""
+	@echo "Starting MatrixOne with MinIO storage..."
+	@echo "  Launch config: $(MINIO_DIR)/launch.toml"
+	@echo ""
+	@./mo-service -launch $(MINIO_DIR)/launch.toml
+
+.PHONY: launch-minio-debug
+launch-minio-debug: debug dev-up-minio-local
+	@echo ""
+	@echo "Starting MatrixOne (debug mode) with MinIO storage..."
+	@echo "  Launch config: $(MINIO_DIR)/launch.toml"
+	@echo ""
+	@./mo-service -launch $(MINIO_DIR)/launch.toml
 
 ###############################################################################
 # clean

@@ -35,3 +35,11 @@ func RegisterApproxCount(id int64) {
 func RegisterMedian(id int64) {
 	aggexec.RegisterMedian(id)
 }
+
+func RegisterJsonArrayAgg(id int64) {
+	aggexec.RegisterJsonArrayAgg(id)
+}
+
+func RegisterJsonObjectAgg(id int64) {
+	aggexec.RegisterJsonObjectAgg(id)
+}

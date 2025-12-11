@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -146,7 +147,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 		if e := recover(); e != nil {
 			err = moerr.ConvertPanicError(s.Proc.Ctx, e)
 			c.proc.Error(c.proc.Ctx, "panic in scope run",
-				zap.String("sql", c.sql),
+				zap.String("sql", commonutil.Abbreviate(c.sql, 500)),
 				zap.String("error", err.Error()))
 		}
 		if p != nil {
@@ -187,7 +188,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 
 				s.DataSource.R = readers[0]
 				s.DataSource.R.SetOrderBy(s.DataSource.OrderBy)
-				s.DataSource.R.SetBlockTop(s.DataSource.BlockOrderBy, s.DataSource.BlockLimit)
+				s.DataSource.R.SetIndexParam(s.DataSource.IndexReaderParam)
 			}
 
 			var tag int32
@@ -446,7 +447,7 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 		if e := recover(); e != nil {
 			err = moerr.ConvertPanicError(s.Proc.Ctx, e)
 			c.proc.Error(c.proc.Ctx, "panic in scope run",
-				zap.String("sql", c.sql),
+				zap.String("sql", commonutil.Abbreviate(c.sql, 500)),
 				zap.String("error", err.Error()))
 		}
 
@@ -534,7 +535,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	if s.NodeInfo.Mcpu == 1 {
 		s.DataSource.R = readers[0]
 		s.DataSource.R.SetOrderBy(s.DataSource.OrderBy)
-		s.DataSource.R.SetBlockTop(s.DataSource.BlockOrderBy, s.DataSource.BlockLimit)
+		s.DataSource.R.SetIndexParam(s.DataSource.IndexReaderParam)
 		return s, nil
 	}
 
@@ -547,7 +548,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 			}
 		}
 
-		readers[i].SetBlockTop(s.DataSource.BlockOrderBy, s.DataSource.BlockLimit)
+		readers[i].SetIndexParam(s.DataSource.IndexReaderParam)
 
 		ss[i].DataSource = &Source{
 			R:            readers[i],
@@ -906,7 +907,7 @@ func (s *Scope) replace(c *Compile) error {
 
 	delAffectedRows := uint64(0)
 	if deleteCond != "" {
-		result, err := c.runSqlWithResult(fmt.Sprintf("delete from `%s`.`%s` where %s", dbName, tblName, deleteCond), NoAccountId)
+		result, err := c.runSqlWithResult(fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE %s", dbName, tblName, deleteCond), NoAccountId)
 		if err != nil {
 			return err
 		}
@@ -1081,6 +1082,15 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 					hint.BloomFilter = bf
 				}
 			}
+
+			if s.DataSource.IndexReaderParam != nil {
+				if readerParam := c.proc.Ctx.Value(defines.IvfReaderParam{}); readerParam != nil {
+					if rp, ok := readerParam.(*plan.IndexReaderParam); ok {
+						s.DataSource.IndexReaderParam.OrigFuncName = rp.OrigFuncName
+						s.DataSource.IndexReaderParam.DistRange = rp.DistRange
+					}
+				}
+			}
 		}
 
 		readers, err = s.DataSource.Rel.BuildReaders(
@@ -1152,6 +1162,15 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 			if bfVal := c.proc.Ctx.Value(defines.IvfBloomFilter{}); bfVal != nil {
 				if bf, ok := bfVal.([]byte); ok && len(bf) > 0 {
 					hint.BloomFilter = bf
+				}
+			}
+
+			if s.DataSource.IndexReaderParam != nil {
+				if readerParam := c.proc.Ctx.Value(defines.IvfReaderParam{}); readerParam != nil {
+					if rp, ok := readerParam.(*plan.IndexReaderParam); ok {
+						s.DataSource.IndexReaderParam.OrigFuncName = rp.OrigFuncName
+						s.DataSource.IndexReaderParam.DistRange = rp.DistRange
+					}
 				}
 			}
 		}
