@@ -180,7 +180,7 @@ func DecideCloneStmtType(
 	if subMeta != nil {
 		srcAccount = uint32(subMeta.AccountId)
 	}
-	
+
 	var (
 		level = NormalCloneLevelTable
 	)
