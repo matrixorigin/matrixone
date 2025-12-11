@@ -262,6 +262,9 @@ func (ctr *container) spillDataToDisk(proc *process.Process, parentBkt *spillBuc
 		gbBatch.PreExtend(proc.Mp(), int(cnt))
 
 		for nthBatch, gb := range ctr.groupByBatches {
+			if gb.RowCount() == 0 {
+				continue
+			}
 			for j := range gb.Vecs {
 				err := gbBatch.Vecs[j].UnionBatch(
 					gb.Vecs[j], 0, len(flags[nthBatch]), flags[nthBatch], proc.Mp())
