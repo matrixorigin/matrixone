@@ -72,7 +72,6 @@ func (m *mockParallelObjectStorage) WriteMultipartParallel(ctx context.Context, 
 }
 
 type recordingObjectStorage struct {
-	dummyObjectStorage
 	calls []string
 	ctxs  []context.Context
 }
