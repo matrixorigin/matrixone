@@ -179,19 +179,13 @@ func (c *DashboardCreator) initGCTimestampRow() dashboard.Option {
 		"GC Timestamps",
 		c.getTimeSeries(
 			"GC Last Execution Time",
-			[]string{fmt.Sprintf(
-				"%s",
-				c.getMetricWithFilter(`mo_gc_last_execution_timestamp`, ``),
-			)},
+			[]string{c.getMetricWithFilter(`mo_gc_last_execution_timestamp`, ``)},
 			[]string{"{{ type }}"},
 			timeseries.Span(6),
 		),
 		c.getTimeSeries(
 			"GC Last Deletion Time",
-			[]string{fmt.Sprintf(
-				"%s",
-				c.getMetricWithFilter(`mo_gc_last_deletion_timestamp`, ``),
-			)},
+			[]string{c.getMetricWithFilter(`mo_gc_last_deletion_timestamp`, ``)},
 			[]string{"{{ type }}"},
 			timeseries.Span(6),
 		),

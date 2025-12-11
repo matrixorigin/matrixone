@@ -934,10 +934,10 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 		extraErrMsg = "MergeCheckpoint failed"
 		return err
 	}
-	
+
 	// Record checkpoint merge metrics
 	v2.GCCheckpointMergedCounter.Add(float64(len(toMergeCheckpoint)))
-	
+
 	logtail.FillUsageBatOfCompacted(
 		ctx,
 		c.checkpointCli.GetCatalog().GetUsageMemo().(*logtail.TNUsageMemo),
@@ -951,7 +951,7 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 			zap.String("task", c.TaskNameLocked()))
 		return
 	}
-	
+
 	// Record checkpoint row count metrics
 	if newCkpData != nil {
 		v2.GCCheckpointRowsMergedCounter.Add(float64(newCkpData.RowCount()))
@@ -1025,7 +1025,7 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 			v2.GCCheckpointFileDeletionCounter.Add(float64(len(deleteFiles)))
 			v2.GCLastCheckpointDeletionGauge.Set(float64(time.Now().Unix()))
 		}
-		
+
 		// Record deleted checkpoint count (each merged checkpoint is deleted)
 		if len(toMergeCheckpoint) > 0 {
 			v2.GCCheckpointDeletedCounter.Add(float64(len(toMergeCheckpoint)))
@@ -2026,7 +2026,7 @@ func (c *checkpointCleaner) scanCheckpointsLocked(
 		v2.GCObjectScannedCounter.Add(float64(len(ckps)))
 		// Record table statistics
 		v2.GCTableScannedCounter.Add(float64(tableSize))
-		
+
 		// Record scanned checkpoint count (approximate row count)
 		// Note: This is an approximation - we record checkpoint count as scanned rows
 		// since exact row count per checkpoint requires reading all checkpoint data
