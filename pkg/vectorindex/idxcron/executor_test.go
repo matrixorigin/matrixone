@@ -204,7 +204,7 @@ func TestCheckIndexUpdatable(t *testing.T) {
 			CreatedAt:    ta.createdAt,
 		}
 
-		ok, _, err := info.checkIndexUpdatable(context.Background(), ta.dsize, ta.nlists)
+		ok, _, err := info.checkIndexUpdatable(context.Background(), ta.dsize, ta.nlists, OneWeek)
 		require.NoError(t, err)
 		require.Equal(t, ta.expected, ok)
 
@@ -248,7 +248,7 @@ func newTestIvfTableDef(pkName string, pkType types.T, vecColName string, vecTyp
 				IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Metadata,
 				IndexTableName:     "meta_tbl",
 				Parts:              []string{vecColName},
-				IndexAlgoParams:    `{"lists":"1000","op_type":"vector_l2_ops"}`,
+				IndexAlgoParams:    `{"lists":"1000","op_type":"vector_l2_ops", "auto_update":"true"}`,
 			},
 			{
 				IndexName:          "ivf_idx",
@@ -257,7 +257,7 @@ func newTestIvfTableDef(pkName string, pkType types.T, vecColName string, vecTyp
 				IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Centroids,
 				IndexTableName:     "centriods",
 				Parts:              []string{vecColName},
-				IndexAlgoParams:    `{"lists":"1000","op_type":"vector_l2_ops"}`,
+				IndexAlgoParams:    `{"lists":"1000","op_type":"vector_l2_ops", "auto_update":"true"}`,
 			},
 			{
 				IndexName:          "ivf_idx",
@@ -266,7 +266,7 @@ func newTestIvfTableDef(pkName string, pkType types.T, vecColName string, vecTyp
 				IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
 				IndexTableName:     "entries",
 				Parts:              []string{vecColName},
-				IndexAlgoParams:    `{"lists":"1000","op_type":"vector_l2_ops"}`,
+				IndexAlgoParams:    `{"lists":"1000","op_type":"vector_l2_ops", "auto_update":"true"}`,
 			},
 		},
 	}

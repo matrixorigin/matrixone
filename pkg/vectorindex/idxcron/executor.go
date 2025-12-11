@@ -110,8 +110,7 @@ type IndexUpdateStatus struct {
 // Case 1: ivf_train_percent * dsize < 30 * nlist, always re-index
 // Case 2: 30 * nlist < ivf_train_percent * dsize < 256 * nlist, re-index every week
 // Case 3:  dsize > 256 * nlist, re-index every 1 week and ivf_train_percent = (256 * nlist) / dsize
-func (t *IndexUpdateTaskInfo) checkIndexUpdatable(ctx context.Context, dsize uint64, nlist int64) (ok bool, reason string, err error) {
-
+func (t *IndexUpdateTaskInfo) checkIndexUpdatable(ctx context.Context, dsize uint64, nlist int64, interval time.Duration) (ok bool, reason string, err error) {
 	now := time.Now()
 	createdAt := time.Unix(t.CreatedAt.Unix(), 0)
 	ts := createdAt.Add(createdAtDelay)
@@ -154,9 +153,9 @@ func (t *IndexUpdateTaskInfo) checkIndexUpdatable(ctx context.Context, dsize uin
 		}
 
 		ts = time.Unix(t.LastUpdateAt.Unix(), 0)
-		ts = ts.Add(OneWeek)
+		ts = ts.Add(interval)
 		if ts.After(now) {
-			reason = fmt.Sprintf("training sample size in between lower and upper limit (%f < %f < %f) AND current time < 1 week after lastUpdatedAt (%v < %v)",
+			reason = fmt.Sprintf("training sample size in between lower and upper limit (%f < %f < %f) AND current time < interval after lastUpdatedAt (%v < %v)",
 				lower, nsample, upper, now.Format("2006-01-02 15:04:05"), ts.Format("2006-01-02 15:04:05"))
 			return
 		} else {
@@ -169,9 +168,9 @@ func (t *IndexUpdateTaskInfo) checkIndexUpdatable(ctx context.Context, dsize uin
 		// reindex every week
 		if t.LastUpdateAt != nil {
 			ts = time.Unix(t.LastUpdateAt.Unix(), 0)
-			ts = ts.Add(2 * OneWeek)
+			ts = ts.Add(2 * interval)
 			if ts.After(now) {
-				reason = fmt.Sprintf("training sample size > upper limit ( %f > %f) AND current time < 2 week after lastUpdatedAt (%v < %v)",
+				reason = fmt.Sprintf("training sample size > upper limit ( %f > %f) AND current time < 2*interval after lastUpdatedAt (%v < %v)",
 					nsample, upper, now.Format("2006-01-02 15:04:05"), ts.Format("2006-01-02 15:04:05"))
 				return
 			}
@@ -415,6 +414,8 @@ func runIvfflatReindex(ctx context.Context,
 
 			// get number of list from indexDef
 			lists := int64(0)
+			auto_update := false
+			interval := time.Duration(0)
 			for _, idx := range tableDef.Indexes {
 				if idx.IndexName == task.IndexName {
 					listsAst, err2 := sonic.Get([]byte(idx.IndexAlgoParams), catalog.IndexAlgoParamLists)
@@ -425,12 +426,44 @@ func runIvfflatReindex(ctx context.Context,
 					if err2 != nil {
 						return err2
 					}
+
+					autoUpdateAst, err2 := sonic.Get([]byte(idx.IndexAlgoParams), catalog.AutoUpdate)
+					if err2 == nil {
+						auto_update_str, err2 := autoUpdateAst.StrictString()
+						if err2 != nil {
+							return err2
+						}
+
+						if auto_update_str == "true" {
+							auto_update = true
+						}
+					}
+
+					intervalAst, err2 := sonic.Get([]byte(idx.IndexAlgoParams), catalog.Interval)
+					if err2 != nil {
+						// interval not found. default one week
+						interval = OneWeek
+					} else {
+						interval_in_day := int64(0)
+						interval_in_day, err2 = intervalAst.Int64()
+						if err2 != nil {
+							return err2
+						}
+
+						// interval in Day
+						interval = time.Duration(interval_in_day) * 24 * time.Hour
+					}
+
 					break
 				}
 			}
 
 			if lists == 0 {
 				return moerr.NewInternalErrorNoCtx("IVFFLAT index parameter LISTS not found")
+			}
+
+			if !auto_update || interval == 0 {
+				return
 			}
 
 			// get number of rows from source table
@@ -451,7 +484,7 @@ func runIvfflatReindex(ctx context.Context,
 			}
 
 			ok := false
-			ok, reason, err2 = task.checkIndexUpdatable(ctx, dsize, lists)
+			ok, reason, err2 = task.checkIndexUpdatable(ctx, dsize, lists, interval)
 			if err2 != nil {
 				return
 			}
