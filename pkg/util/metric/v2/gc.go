@@ -148,7 +148,7 @@ var (
 			Help:      "Total number of checkpoints processed by GC.",
 		}, []string{"action"})
 
-	GCCheckpointMergedCounter = gcCheckpointCounter.WithLabelValues("merged")
+	GCCheckpointMergedCounter  = gcCheckpointCounter.WithLabelValues("merged")
 	GCCheckpointDeletedCounter = gcCheckpointCounter.WithLabelValues("deleted")
 
 	// GC checkpoint row statistics
@@ -160,7 +160,7 @@ var (
 			Help:      "Total number of checkpoint rows processed by GC.",
 		}, []string{"type"})
 
-	GCCheckpointRowsMergedCounter = gcCheckpointRowCounter.WithLabelValues("merged")
+	GCCheckpointRowsMergedCounter  = gcCheckpointRowCounter.WithLabelValues("merged")
 	GCCheckpointRowsScannedCounter = gcCheckpointRowCounter.WithLabelValues("scanned")
 
 	// GC last execution time
