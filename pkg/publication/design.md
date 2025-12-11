@@ -117,7 +117,7 @@ var ObjectListAttrs = []string{
   - 输入的参数是database name, table name + ObjectListAttrs
   - 根据objectstats生成object name，用GETOBJECT从上游获取object文件内容
   - 根据create/delete用iteration context上的txn新建/删除object
-  - 处理object的文件，检查iteration context里的aobj，如果这次删除里没有，这些aobj也要处理：
+  - 处理object的文件，检查iteration context里的aobj，如果这次删除里没有，这些aob也要处理：
   4.1 aobj
   - 如果是新建的，用getobject获取文件后按current snapshot ts过滤排序
   - 过滤好的文件用一个新的uuid提交object，在iteration context activeaobj里记录这个新uuid和上游aobj的对应关系
@@ -223,3 +223,5 @@ collect change scan object
 **ddl检查**
 
 **从云上读到本地和从本地读到云上**
+
+**如果写失败，要gc object**

@@ -64,7 +64,8 @@ func TestCheckIterationStatus(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create InternalSQLExecutor (only once)
-	executor, err := publication.NewInternalSQLExecutor("")
+	// Pass nil for txnClient - transactions will be managed externally via ExecTxn
+	executor, err := publication.NewInternalSQLExecutor("", nil)
 	require.NoError(t, err)
 	defer executor.Close()
 

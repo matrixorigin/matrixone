@@ -17,6 +17,7 @@ package publication
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
 // SyncLevel represents the level of synchronization
@@ -57,14 +58,12 @@ type IterationContext struct {
 	SrcInfo          SrcInfo
 
 	// Upstream connection
+	LocalTxn client.TxnOperator
 	UpstreamExecutor SQLExecutor
-
-	// Sync configuration
-	SyncConfig map[string]any
+	LocalExecutor    SQLExecutor
 
 	// Execution state
 	IterationLSN uint64
-	CNUUID       string
 
 	// Context information
 	PrevSnapshotName    string

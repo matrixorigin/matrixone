@@ -24,6 +24,7 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
@@ -36,10 +37,12 @@ type InternalSQLExecutor struct {
 	cnUUID       string
 	internalExec executor.SQLExecutor
 	txnOp        client.TxnOperator
+	txnClient    client.TxnClient
 }
 
 // NewInternalSQLExecutor creates a new InternalSQLExecutor
-func NewInternalSQLExecutor(cnUUID string) (*InternalSQLExecutor, error) {
+// txnClient is optional - if provided, StartTxn can create transactions
+func NewInternalSQLExecutor(cnUUID string, txnClient client.TxnClient) (*InternalSQLExecutor, error) {
 	v, ok := moruntime.ServiceRuntime(cnUUID).GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {
 		return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("internal SQL executor not found for CN %s", cnUUID))
@@ -53,6 +56,7 @@ func NewInternalSQLExecutor(cnUUID string) (*InternalSQLExecutor, error) {
 	return &InternalSQLExecutor{
 		cnUUID:       cnUUID,
 		internalExec: internalExec,
+		txnClient:    txnClient,
 	}, nil
 }
 
@@ -72,34 +76,49 @@ func (e *InternalSQLExecutor) Close() error {
 }
 
 // StartTxn starts a new transaction
-// Note: For internal executor, we use ExecTxn to create a transaction context
-// The transaction will be committed/rolled back via EndTxn
+// For internal executor, if txnClient is provided, it creates a new transaction.
+// Otherwise, it returns an error indicating that transaction should be managed externally.
 func (e *InternalSQLExecutor) StartTxn(ctx context.Context) error {
 	if e.txnOp != nil {
 		return moerr.NewInternalError(ctx, "transaction already active")
 	}
 
-	// For internal executor, we need to get a transaction operator
-	// This is typically done by the caller providing a txn via Options.WithTxn
-	// For now, we'll create a transaction context that will be used in ExecSQL
-	// Note: The actual transaction management is handled by ExecTxn in the executor
-	// This is a placeholder - in practice, the transaction should be provided by the caller
+	if e.txnClient == nil {
+		return moerr.NewInternalError(ctx, "TxnClient not provided, cannot start transaction. Use NewInternalSQLExecutor with TxnClient parameter or manage transactions externally via ExecTxn")
+	}
+
+	// Create a new transaction using TxnClient
+	// Use empty timestamp to let TxnClient determine the appropriate timestamp
+	txnOp, err := e.txnClient.New(ctx, timestamp.Timestamp{})
+	if err != nil {
+		return err
+	}
+
+	e.txnOp = txnOp
 	return nil
 }
 
+// SetTxn sets an external transaction operator for the executor
+// This allows the executor to use a transaction created outside of it
+func (e *InternalSQLExecutor) SetTxn(txnOp client.TxnOperator) {
+	e.txnOp = txnOp
+}
+
 // EndTxn ends the current transaction
-// Note: For internal executor, transactions are managed by ExecTxn
-// If a transaction was started via StartTxn, we need to commit/rollback it
+// If a transaction was started via StartTxn, it commits or rolls back the transaction
 func (e *InternalSQLExecutor) EndTxn(ctx context.Context, commit bool) error {
 	if e.txnOp == nil {
 		return nil // Idempotent
 	}
 
-	// For internal executor, if we have a transaction, we need to commit/rollback it
-	// However, since transactions are typically managed via ExecTxn, we just clear the reference
-	// The actual commit/rollback should be handled by the ExecTxn caller
-	e.txnOp = nil
-	return nil
+	var err error
+	if commit {
+		err = e.txnOp.Commit(ctx)
+	} else {
+		err = e.txnOp.Rollback(ctx)
+	}
+	e.txnOp = nil // Always clear, even on error
+	return err
 }
 
 // ExecSQL executes a SQL statement and returns the result

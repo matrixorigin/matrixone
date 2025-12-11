@@ -92,6 +92,17 @@ const (
 		`FROM mo_catalog.mo_ccpr_log ` +
 		`WHERE task_id = %d`
 
+	// Query mo_ccpr_log full SQL template (includes subscription_name, sync_level, db_name, table_name, upstream_conn, context)
+	PublicationQueryMoCcprLogFullSqlTemplate = `SELECT ` +
+		`subscription_name, ` +
+		`sync_level, ` +
+		`db_name, ` +
+		`table_name, ` +
+		`upstream_conn, ` +
+		`context ` +
+		`FROM mo_catalog.mo_ccpr_log ` +
+		`WHERE task_id = %d`
+
 	// Query snapshot TS SQL template
 	PublicationQuerySnapshotTsSqlTemplate = `SELECT ` +
 		`ts ` +
@@ -102,7 +113,8 @@ const (
 	PublicationUpdateMoCcprLogSqlTemplate = `UPDATE mo_catalog.mo_ccpr_log ` +
 		`SET iteration_state = %d, ` +
 		`iteration_lsn = %d, ` +
-		`context = '%s' ` +
+		`context = '%s', ` +
+		`error_message = '%s' ` +
 		`WHERE task_id = %d`
 )
 
@@ -118,6 +130,7 @@ const (
 	PublicationDropSnapshotSqlTemplate_Idx
 	PublicationDropSnapshotIfExistsSqlTemplate_Idx
 	PublicationQueryMoCcprLogSqlTemplate_Idx
+	PublicationQueryMoCcprLogFullSqlTemplate_Idx
 	PublicationQuerySnapshotTsSqlTemplate_Idx
 	PublicationUpdateMoCcprLogSqlTemplate_Idx
 
@@ -204,6 +217,17 @@ var PublicationSQLTemplates = [PublicationSqlTemplateCount]struct {
 			"cn_uuid",
 			"iteration_state",
 			"iteration_lsn",
+		},
+	},
+	PublicationQueryMoCcprLogFullSqlTemplate_Idx: {
+		SQL: PublicationQueryMoCcprLogFullSqlTemplate,
+		OutputAttrs: []string{
+			"subscription_name",
+			"sync_level",
+			"db_name",
+			"table_name",
+			"upstream_conn",
+			"context",
 		},
 	},
 	PublicationQuerySnapshotTsSqlTemplate_Idx: {
@@ -499,6 +523,18 @@ func (b publicationSQLBuilder) QueryMoCcprLogSQL(
 	)
 }
 
+// QueryMoCcprLogFullSQL creates SQL for querying full mo_ccpr_log record by task_id
+// Returns subscription_name, sync_level, db_name, table_name, upstream_conn, context
+// Example: SELECT subscription_name, sync_level, db_name, table_name, upstream_conn, context FROM mo_catalog.mo_ccpr_log WHERE task_id = 1
+func (b publicationSQLBuilder) QueryMoCcprLogFullSQL(
+	taskID uint64,
+) string {
+	return fmt.Sprintf(
+		PublicationSQLTemplates[PublicationQueryMoCcprLogFullSqlTemplate_Idx].SQL,
+		taskID,
+	)
+}
+
 // QuerySnapshotTsSQL creates SQL for querying snapshot TS by snapshot name
 // Returns ts (bigint)
 // Example: SELECT ts FROM mo_catalog.mo_snapshots WHERE sname = 'sp1'
@@ -512,19 +548,21 @@ func (b publicationSQLBuilder) QuerySnapshotTsSQL(
 }
 
 // UpdateMoCcprLogSQL creates SQL for updating mo_ccpr_log by task_id
-// Updates iteration_state, iteration_lsn, and context
-// Example: UPDATE mo_catalog.mo_ccpr_log SET iteration_state = 1, iteration_lsn = 1000, context = '{"key":"value"}' WHERE task_id = 1
+// Updates iteration_state, iteration_lsn, context, and error_message
+// Example: UPDATE mo_catalog.mo_ccpr_log SET iteration_state = 1, iteration_lsn = 1000, context = '{"key":"value"}', error_message = 'error msg' WHERE task_id = 1
 func (b publicationSQLBuilder) UpdateMoCcprLogSQL(
 	taskID uint64,
 	iterationState int8,
 	iterationLSN uint64,
 	contextJSON string,
+	errorMessage string,
 ) string {
 	return fmt.Sprintf(
 		PublicationSQLTemplates[PublicationUpdateMoCcprLogSqlTemplate_Idx].SQL,
 		iterationState,
 		iterationLSN,
 		escapeSQLString(contextJSON),
+		escapeSQLString(errorMessage),
 		taskID,
 	)
 }

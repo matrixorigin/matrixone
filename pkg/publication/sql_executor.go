@@ -18,11 +18,14 @@ import (
 	"context"
 	sql "database/sql"
 	"database/sql/driver"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
 	"net"
+	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -98,6 +101,7 @@ func (r *Result) Err() error {
 type SQLExecutor interface {
 	Close() error
 	Connect() error
+	StartTxn(ctx context.Context) error
 	EndTxn(ctx context.Context, commit bool) error
 	ExecSQL(ctx context.Context, query string) (*Result, error)
 	ExecSQLWithOptions(ctx context.Context, ar *ActiveRoutine, query string, needRetry bool) (*Result, error)
@@ -246,6 +250,112 @@ func (e *UpstreamExecutor) Connect() error {
 	}
 	e.conn = conn
 	return nil
+}
+
+// UpstreamConnConfig represents parsed upstream connection configuration
+type UpstreamConnConfig struct {
+	User     string
+	Password string
+	Host     string
+	Port     int
+	Timeout  string
+}
+
+// ParseUpstreamConn parses upstream connection string
+// Supports two formats:
+// 1. JSON format: {"user":"xxx","password":"xxx","host":"xxx","port":xxx,"timeout":"xxx"}
+// 2. MySQL DSN format: user:password@tcp(host:port)/?timeout=xxx
+func ParseUpstreamConn(connStr string) (*UpstreamConnConfig, error) {
+	if connStr == "" {
+		return nil, moerr.NewInternalErrorNoCtx("upstream connection string is empty")
+	}
+
+	// Try JSON format first
+	var jsonConfig struct {
+		User     string `json:"user"`
+		Password string `json:"password"`
+		Host     string `json:"host"`
+		Port     int    `json:"port"`
+		Timeout  string `json:"timeout"`
+	}
+	if err := json.Unmarshal([]byte(connStr), &jsonConfig); err == nil {
+		// JSON format parsed successfully
+		if jsonConfig.Host == "" {
+			return nil, moerr.NewInternalErrorNoCtx("host is required in connection config")
+		}
+		if jsonConfig.Port == 0 {
+			jsonConfig.Port = 6001 // Default MatrixOne port
+		}
+		if jsonConfig.Timeout == "" {
+			jsonConfig.Timeout = "10s" // Default timeout
+		}
+		return &UpstreamConnConfig{
+			User:     jsonConfig.User,
+			Password: jsonConfig.Password,
+			Host:     jsonConfig.Host,
+			Port:     jsonConfig.Port,
+			Timeout:  jsonConfig.Timeout,
+		}, nil
+	}
+
+	// Try MySQL DSN format: user:password@tcp(host:port)/?timeout=xxx
+	// Parse format: user:password@tcp(host:port)/?params
+	parts := strings.Split(connStr, "@")
+	if len(parts) != 2 {
+		return nil, moerr.NewInternalErrorNoCtx("invalid connection string format, expected user:password@tcp(host:port)/?params")
+	}
+
+	// Parse user:password
+	userPass := strings.Split(parts[0], ":")
+	if len(userPass) != 2 {
+		return nil, moerr.NewInternalErrorNoCtx("invalid user:password format")
+	}
+	user := userPass[0]
+	password := userPass[1]
+
+	// Parse tcp(host:port)/?params
+	addrPart := parts[1]
+	if !strings.HasPrefix(addrPart, "tcp(") {
+		return nil, moerr.NewInternalErrorNoCtx("invalid address format, expected tcp(host:port)")
+	}
+	addrPart = strings.TrimPrefix(addrPart, "tcp(")
+	closeIdx := strings.Index(addrPart, ")")
+	if closeIdx == -1 {
+		return nil, moerr.NewInternalErrorNoCtx("invalid address format, missing closing parenthesis")
+	}
+	hostPort := addrPart[:closeIdx]
+	paramsPart := addrPart[closeIdx+1:]
+
+	// Parse host:port
+	hostPortParts := strings.Split(hostPort, ":")
+	if len(hostPortParts) != 2 {
+		return nil, moerr.NewInternalErrorNoCtx("invalid host:port format")
+	}
+	host := hostPortParts[0]
+	port, err := strconv.Atoi(hostPortParts[1])
+	if err != nil {
+		return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid port: %v", err))
+	}
+
+	// Parse timeout from params
+	timeout := "10s" // Default timeout
+	if strings.HasPrefix(paramsPart, "/?") {
+		paramsStr := strings.TrimPrefix(paramsPart, "/?")
+		params, err := url.ParseQuery(paramsStr)
+		if err == nil {
+			if timeoutVal := params.Get("timeout"); timeoutVal != "" {
+				timeout = timeoutVal
+			}
+		}
+	}
+
+	return &UpstreamConnConfig{
+		User:     user,
+		Password: password,
+		Host:     host,
+		Port:     port,
+		Timeout:  timeout,
+	}, nil
 }
 
 // openDbConn opens a database connection (similar to cdc.OpenDbConn)
