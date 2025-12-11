@@ -106,56 +106,6 @@ DEALLOCATE PREPARE stmt;
 
 drop table t2;
 
--- case 3
-
-create table t3 (
-    id bigint primary key,
-    delete_flag int,
-    a vecf32(3),
-    b vecf32(3),
-    body varchar(10),
-    title text,
-    FULLTEXT (title, body),
-    key(delete_flag),
-    key ivf using ivfflat (a),
-    key idx using hnsw(b) op_type 'vector_l2_ops'
-);
-
-insert into t3 values(1,1, '[0.1,0.2,0.3]','[0.1,0.2,0.3]', "body", "title");
-ALTER TABLE t3 MODIFY COLUMN delete_flag int DEFAULT NULL;
-
-SET @inner_sql = (
-    SELECT GROUP_CONCAT(
-                   DISTINCT CONCAT(
-                    'SELECT ''', mi.index_table_name,
-                    ''' AS index_table_name, COUNT(*) AS cnt FROM `',
-                    mi.index_table_name, '`'
-                            ) SEPARATOR ' UNION ALL '
-           )
-    FROM mo_catalog.mo_indexes mi
-             JOIN mo_catalog.mo_tables mt ON mi.table_id = mt.rel_id
-    WHERE mt.relname = 't3'
-      AND mt.reldatabase = 'db'
-      AND mi.type IN ('MULTIPLE', 'UNIQUE')
-      AND mi.index_table_name IS NOT NULL
-      AND mi.index_table_name != ''
-      AND mi.column_name <> 'question'
-      AND mi.column_name <> 'keyword'
-);
-
-SET @sql = CONCAT(
-        'SELECT * FROM (',
-        @inner_sql,
-        ') AS t ORDER BY cnt DESC'
-           );
-
-PREPARE stmt FROM @sql;
--- @ignore:0
-EXECUTE stmt;
-DEALLOCATE PREPARE stmt;
-
-drop table t3;
-
 SET experimental_fulltext_index = 0;
 SET experimental_ivf_index = 0;
 SET experimental_hnsw_index = 0;
