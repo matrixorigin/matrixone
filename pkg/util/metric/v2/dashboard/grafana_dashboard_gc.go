@@ -34,7 +34,8 @@ func (c *DashboardCreator) initGCDashboard() error {
 			c.initGCExecutionRow(),
 			c.initGCFileDeletionRow(),
 			c.initGCDurationRow(),
-			c.initGCAlertsRow(),
+			c.initGCCheckpointStatsRow(),
+			c.initGCTimestampRow(),
 		)...)
 
 	if err != nil {
@@ -110,9 +111,51 @@ func (c *DashboardCreator) initGCDurationRow() dashboard.Option {
 	)
 }
 
-func (c *DashboardCreator) initGCAlertsRow() dashboard.Option {
+func (c *DashboardCreator) initGCCheckpointStatsRow() dashboard.Option {
 	return dashboard.Row(
-		"GC Alerts",
+		"GC Checkpoint Statistics",
+		c.getTimeSeries(
+			"Checkpoints Merged",
+			[]string{fmt.Sprintf(
+				"sum(increase(%s[$interval]))",
+				c.getMetricWithFilter(`mo_gc_checkpoint_total`, `action="merged"`),
+			)},
+			[]string{"merged"},
+			timeseries.Span(4),
+		),
+		c.getTimeSeries(
+			"Checkpoints Deleted",
+			[]string{fmt.Sprintf(
+				"sum(increase(%s[$interval]))",
+				c.getMetricWithFilter(`mo_gc_checkpoint_total`, `action="deleted"`),
+			)},
+			[]string{"deleted"},
+			timeseries.Span(4),
+		),
+		c.getTimeSeries(
+			"Checkpoint Rows Merged",
+			[]string{fmt.Sprintf(
+				"sum(increase(%s[$interval]))",
+				c.getMetricWithFilter(`mo_gc_checkpoint_rows_total`, `type="merged"`),
+			)},
+			[]string{"rows-merged"},
+			timeseries.Span(4),
+		),
+		c.getTimeSeries(
+			"Checkpoint Rows Scanned",
+			[]string{fmt.Sprintf(
+				"sum(increase(%s[$interval]))",
+				c.getMetricWithFilter(`mo_gc_checkpoint_rows_total`, `type="scanned"`),
+			)},
+			[]string{"rows-scanned"},
+			timeseries.Span(4),
+		),
+	)
+}
+
+func (c *DashboardCreator) initGCTimestampRow() dashboard.Option {
+	return dashboard.Row(
+		"GC Timestamps",
 		c.getTimeSeries(
 			"GC Last Execution Time",
 			[]string{fmt.Sprintf(
@@ -120,7 +163,7 @@ func (c *DashboardCreator) initGCAlertsRow() dashboard.Option {
 				c.getMetricWithFilter(`mo_gc_last_execution_timestamp`, ``),
 			)},
 			[]string{"{{ type }}"},
-			timeseries.Span(4),
+			timeseries.Span(6),
 		),
 		c.getTimeSeries(
 			"GC Last Deletion Time",
@@ -129,16 +172,7 @@ func (c *DashboardCreator) initGCAlertsRow() dashboard.Option {
 				c.getMetricWithFilter(`mo_gc_last_deletion_timestamp`, ``),
 			)},
 			[]string{"{{ type }}"},
-			timeseries.Span(4),
-		),
-		c.getTimeSeries(
-			"GC Alerts",
-			[]string{fmt.Sprintf(
-				"%s",
-				c.getMetricWithFilter(`mo_gc_alert`, ``),
-			)},
-			[]string{"{{ type }}"},
-			timeseries.Span(4),
+			timeseries.Span(6),
 		),
 	)
 }

@@ -934,6 +934,10 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 		extraErrMsg = "MergeCheckpoint failed"
 		return err
 	}
+	
+	// Record checkpoint merge metrics
+	v2.GCCheckpointMergedCounter.Add(float64(len(toMergeCheckpoint)))
+	
 	logtail.FillUsageBatOfCompacted(
 		ctx,
 		c.checkpointCli.GetCatalog().GetUsageMemo().(*logtail.TNUsageMemo),
@@ -946,6 +950,11 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 		logutil.Warn("GC-PANIC-NEW-CHECKPOINT-EMPTY",
 			zap.String("task", c.TaskNameLocked()))
 		return
+	}
+	
+	// Record checkpoint row count metrics
+	if newCkpData != nil {
+		v2.GCCheckpointRowsMergedCounter.Add(float64(newCkpData.RowCount()))
 	}
 	newFiles := tmpNewFiles
 	for _, stats := range c.GetScannedWindowLocked().files {
@@ -1015,6 +1024,11 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 		if len(deleteFiles) > 0 {
 			v2.GCCheckpointFileDeletionCounter.Add(float64(len(deleteFiles)))
 			v2.GCLastCheckpointDeletionGauge.Set(float64(time.Now().Unix()))
+		}
+		
+		// Record deleted checkpoint count (each merged checkpoint is deleted)
+		if len(toMergeCheckpoint) > 0 {
+			v2.GCCheckpointDeletedCounter.Add(float64(len(toMergeCheckpoint)))
 		}
 	}
 
@@ -1662,36 +1676,12 @@ func (c *checkpointCleaner) Process(
 		if memoryBuffer != nil {
 			bufferSize := float64(memoryBuffer.Len())
 			v2.GCMemoryBufferGauge.Set(bufferSize)
-			// Alert if memory usage is too high (>1GB)
-			if bufferSize > 1024*1024*1024 {
-				v2.GCAlertHighMemoryGauge.Set(1)
-			} else {
-				v2.GCAlertHighMemoryGauge.Set(0)
-			}
 		}
 
 		// Record queue metrics (simplified - pending tasks)
 		v2.GCQueuePendingGauge.Set(0)    // Reset after processing
 		v2.GCQueueProcessingGauge.Set(0) // Reset after processing
 		v2.GCQueueCompletedGauge.Set(1)  // Mark as completed
-
-		// Alert if GC execution is too slow (>5 minutes)
-		duration := time.Since(now)
-		if duration > 5*time.Minute {
-			v2.GCAlertSlowExecutionGauge.Set(1)
-		} else {
-			v2.GCAlertSlowExecutionGauge.Set(0)
-		}
-
-		// Calculate error rate and set alert (simplified calculation)
-		// In a real implementation, you might want to track error rate over time
-		if err != nil {
-			v2.GCAlertErrorRateGauge.Set(1)
-		} else {
-			v2.GCAlertErrorRateGauge.Set(0)
-		}
-
-		// removed periodic GC alert check
 
 		logutil.Info(
 			"GC-TRACE-PROCESS",
@@ -2036,6 +2026,13 @@ func (c *checkpointCleaner) scanCheckpointsLocked(
 		v2.GCObjectScannedCounter.Add(float64(len(ckps)))
 		// Record table statistics
 		v2.GCTableScannedCounter.Add(float64(tableSize))
+		
+		// Record scanned checkpoint count (approximate row count)
+		// Note: This is an approximation - we record checkpoint count as scanned rows
+		// since exact row count per checkpoint requires reading all checkpoint data
+		if len(ckps) > 0 {
+			v2.GCCheckpointRowsScannedCounter.Add(float64(len(ckps)))
+		}
 
 		// Record collect duration for snapshot processing
 		collectStart := time.Now()

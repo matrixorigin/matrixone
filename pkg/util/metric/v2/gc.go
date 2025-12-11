@@ -138,18 +138,29 @@ var (
 
 	GCErrorIOErrorCounter = gcErrorCounter.WithLabelValues("file", "io_error")
 
-	// GC alert metrics
-	gcAlertGauge = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
+	// GC checkpoint statistics
+	gcCheckpointCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
 			Namespace: "mo",
 			Subsystem: "gc",
-			Name:      "alert",
-			Help:      "GC alert status (1 = alerting, 0 = normal).",
+			Name:      "checkpoint_total",
+			Help:      "Total number of checkpoints processed by GC.",
+		}, []string{"action"})
+
+	GCCheckpointMergedCounter = gcCheckpointCounter.WithLabelValues("merged")
+	GCCheckpointDeletedCounter = gcCheckpointCounter.WithLabelValues("deleted")
+
+	// GC checkpoint row statistics
+	gcCheckpointRowCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "gc",
+			Name:      "checkpoint_rows_total",
+			Help:      "Total number of checkpoint rows processed by GC.",
 		}, []string{"type"})
 
-	GCAlertHighMemoryGauge    = gcAlertGauge.WithLabelValues("high_memory")
-	GCAlertSlowExecutionGauge = gcAlertGauge.WithLabelValues("slow_execution")
-	GCAlertErrorRateGauge     = gcAlertGauge.WithLabelValues("error_rate")
+	GCCheckpointRowsMergedCounter = gcCheckpointRowCounter.WithLabelValues("merged")
+	GCCheckpointRowsScannedCounter = gcCheckpointRowCounter.WithLabelValues("scanned")
 
 	// GC last execution time
 	gcLastExecutionGauge = prometheus.NewGaugeVec(
@@ -188,7 +199,8 @@ func initGCMetrics() {
 	registry.MustRegister(gcMemoryGauge)
 	registry.MustRegister(gcQueueGauge)
 	registry.MustRegister(gcErrorCounter)
-	registry.MustRegister(gcAlertGauge)
+	registry.MustRegister(gcCheckpointCounter)
+	registry.MustRegister(gcCheckpointRowCounter)
 	registry.MustRegister(gcLastExecutionGauge)
 	registry.MustRegister(gcLastDeletionGauge)
 }
