@@ -463,6 +463,7 @@ func runIvfflatReindex(ctx context.Context,
 			}
 
 			if !auto_update || interval == 0 {
+				reason = "auto update disabled"
 				return
 			}
 
