@@ -214,3 +214,12 @@ var (
 	MoTableSizeRowsForceUpdateCountingHistogram     = moTableStatsCountingHistogram.WithLabelValues("mo_table_size_rows_force_update_counting")
 	MoTableSizeRowsResetUpdateTimeCountingHistogram = moTableStatsCountingHistogram.WithLabelValues("mo_table_size_rows_reset_update_counting")
 )
+
+// GC task metrics
+var (
+	TaskGCDurationHistogram                = taskLongDurationHistogram.WithLabelValues("gc_total")
+	TaskGCScanDurationHistogram            = taskLongDurationHistogram.WithLabelValues("gc_scan")
+	TaskGCDeleteDurationHistogram          = taskLongDurationHistogram.WithLabelValues("gc_delete")
+	TaskGCCollectUsageDurationHistogram    = taskLongDurationHistogram.WithLabelValues("gc_collect_usage")
+	TaskGCMergeCheckpointDurationHistogram = taskLongDurationHistogram.WithLabelValues("gc_merge_checkpoint")
+)
