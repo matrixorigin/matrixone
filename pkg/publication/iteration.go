@@ -17,6 +17,8 @@ package publication
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -36,6 +38,113 @@ const (
 	IterationStateError     int8 = 3 // 'error'
 	IterationStateCanceled  int8 = 4 // 'cancel'
 )
+
+// AObjMappingJSON represents the serializable part of AObjMapping
+type AObjMappingJSON struct {
+	Current  string `json:"current"`  // ObjectStats as base64-encoded string
+	Previous string `json:"previous"` // ObjectStats as base64-encoded string
+}
+
+// IterationContextJSON represents the serializable part of IterationContext
+// This structure is used to store iteration context in mo_ccpr_log.context field
+type IterationContextJSON struct {
+	// Task identification
+	TaskID           uint64  `json:"task_id"`
+	SubscriptionName string  `json:"subscription_name"`
+	SrcInfo          SrcInfo `json:"src_info"`
+
+	// Sync configuration
+	SyncConfig map[string]any `json:"sync_config"`
+
+	// Execution state
+	CNUUID string `json:"cn_uuid"`
+
+	// Context information
+	PrevSnapshotName    string                     `json:"prev_snapshot_name"`
+	PrevSnapshotTS      int64                      `json:"prev_snapshot_ts"` // types.TS as int64
+	CurrentSnapshotName string                     `json:"current_snapshot_name"`
+	CurrentSnapshotTS   int64                      `json:"current_snapshot_ts"` // types.TS as int64
+	ActiveAObj          map[string]AObjMappingJSON `json:"active_aobj"`         // ActiveAObj as serializable map
+	TableIDs            map[string]uint64          `json:"table_ids"`
+}
+
+// UpdateIterationState updates iteration state, iteration LSN, and iteration context in mo_ccpr_log table
+// It serializes the relevant parts of IterationContext to JSON and updates the corresponding fields
+func UpdateIterationState(
+	ctx context.Context,
+	executor SQLExecutor,
+	taskID uint64,
+	iterationState int8,
+	iterationLSN uint64,
+	iterationCtx *IterationContext,
+) error {
+	if executor == nil {
+		return moerr.NewInternalError(ctx, "executor is nil")
+	}
+
+	// Serialize IterationContext to JSON
+	var contextJSON string
+	if iterationCtx != nil {
+		// Convert ActiveAObj to serializable format
+		activeAObjJSON := make(map[string]AObjMappingJSON)
+		if iterationCtx.ActiveAObj != nil {
+			for uuid, mapping := range iterationCtx.ActiveAObj {
+				mappingJSON := AObjMappingJSON{}
+				// Serialize Current ObjectStats to base64
+				if !mapping.Current.IsZero() {
+					currentBytes := mapping.Current.Marshal()
+					mappingJSON.Current = base64.StdEncoding.EncodeToString(currentBytes)
+				}
+				// Serialize Previous ObjectStats to base64
+				if !mapping.Previous.IsZero() {
+					previousBytes := mapping.Previous.Marshal()
+					mappingJSON.Previous = base64.StdEncoding.EncodeToString(previousBytes)
+				}
+				activeAObjJSON[uuid] = mappingJSON
+			}
+		}
+
+		// Create a serializable context structure
+		ctxJSON := IterationContextJSON{
+			TaskID:              iterationCtx.TaskID,
+			SubscriptionName:    iterationCtx.SubscriptionName,
+			SrcInfo:             iterationCtx.SrcInfo,
+			SyncConfig:          iterationCtx.SyncConfig,
+			CNUUID:              iterationCtx.CNUUID,
+			PrevSnapshotName:    iterationCtx.PrevSnapshotName,
+			PrevSnapshotTS:      iterationCtx.PrevSnapshotTS.Physical(),
+			CurrentSnapshotName: iterationCtx.CurrentSnapshotName,
+			CurrentSnapshotTS:   iterationCtx.CurrentSnapshotTS.Physical(),
+			ActiveAObj:          activeAObjJSON,
+			TableIDs:            iterationCtx.TableIDs,
+		}
+
+		contextBytes, err := json.Marshal(ctxJSON)
+		if err != nil {
+			return moerr.NewInternalErrorf(ctx, "failed to marshal iteration context: %v", err)
+		}
+		contextJSON = string(contextBytes)
+	} else {
+		contextJSON = "null"
+	}
+
+	// Build update SQL
+	updateSQL := PublicationSQLBuilder.UpdateMoCcprLogSQL(
+		taskID,
+		iterationState,
+		iterationLSN,
+		contextJSON,
+	)
+
+	// Execute update SQL
+	result, err := executor.ExecSQL(ctx, updateSQL)
+	if err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to execute update SQL: %v", err)
+	}
+	defer result.Close()
+
+	return nil
+}
 
 // CheckIterationStatus checks the iteration status in mo_ccpr_log table
 // It verifies that cn_uuid, iteration_lsn match the expected values,
