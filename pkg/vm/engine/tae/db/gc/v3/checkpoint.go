@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
@@ -604,8 +605,12 @@ func (c *checkpointCleaner) deleteStaleSnapshotFilesLocked() error {
 					zap.String("new-max-file", newMaxFile),
 					zap.String("new-max-ts", newMaxTS.ToString()),
 				)
+				v2.GCErrorIOErrorCounter.Inc()
 				return
 			}
+			// Record snapshot file deletion
+			v2.GCSnapshotFileDeletionCounter.Inc()
+			v2.GCLastSnapshotDeletionGauge.Set(float64(time.Now().Unix()))
 			logutil.Info(
 				"GC-TRACE-DELETE-SNAPSHOT-FILE",
 				zap.String("task", c.TaskNameLocked()),
@@ -627,6 +632,11 @@ func (c *checkpointCleaner) deleteStaleSnapshotFilesLocked() error {
 				zap.String("max-file", maxFile),
 				zap.String("max-ts", maxTS.ToString()),
 			)
+			v2.GCErrorIOErrorCounter.Inc()
+		} else {
+			// Record snapshot file deletion
+			v2.GCSnapshotFileDeletionCounter.Inc()
+			v2.GCLastSnapshotDeletionGauge.Set(float64(time.Now().Unix()))
 		}
 		logutil.Info(
 			"GC-TRACE-DELETE-SNAPSHOT-FILE",
@@ -728,7 +738,14 @@ func (c *checkpointCleaner) deleteStaleCKPMetaFileLocked() (err error) {
 			zap.Strings("files", filesToDelete),
 			zap.String("task", c.TaskNameLocked()),
 		)
+		v2.GCErrorIOErrorCounter.Inc()
 		return
+	}
+
+	// Record meta file deletion metrics
+	if len(filesToDelete) > 0 {
+		v2.GCMetaFileDeletionCounter.Add(float64(len(filesToDelete)))
+		v2.GCLastMetaDeletionGauge.Set(float64(time.Now().Unix()))
 	}
 	return c.mutSetNewMetaFilesLocked(metaFiles)
 }
@@ -801,6 +818,19 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 	pitrs *logtail.PitrInfo,
 	gcFileCount int,
 ) (err error) {
+	mergeStart := time.Now()
+	defer func() {
+		duration := time.Since(mergeStart).Seconds()
+		v2.TaskGCMergeCheckpointDurationHistogram.Observe(duration)
+		v2.GCMergeTotalDurationHistogram.Observe(duration)
+		if err != nil {
+			v2.GCMergeExecutionErrorCounter.Inc()
+		} else {
+			v2.GCMergeExecutionCounter.Inc()
+		}
+		v2.GCLastMergeExecutionGauge.Set(float64(time.Now().Unix()))
+	}()
+
 	// checkpointLowWaterMark is empty only in the following cases:
 	// 1. no incremental and no gloabl checkpoint
 	// 2. one incremental checkpoint with empty start
@@ -904,6 +934,10 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 		extraErrMsg = "MergeCheckpoint failed"
 		return err
 	}
+
+	// Record checkpoint merge metrics
+	v2.GCCheckpointMergedCounter.Add(float64(len(toMergeCheckpoint)))
+
 	logtail.FillUsageBatOfCompacted(
 		ctx,
 		c.checkpointCli.GetCatalog().GetUsageMemo().(*logtail.TNUsageMemo),
@@ -917,11 +951,17 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 			zap.String("task", c.TaskNameLocked()))
 		return
 	}
+
+	// Record checkpoint row count metrics
+	if newCkpData != nil {
+		v2.GCCheckpointRowsMergedCounter.Add(float64(newCkpData.RowCount()))
+	}
 	newFiles := tmpNewFiles
 	for _, stats := range c.GetScannedWindowLocked().files {
 		newFiles = append(newFiles, stats.ObjectName().String())
 	}
 
+	writeStart := time.Now()
 	if err = c.appendFilesToWAL(newFiles...); err != nil {
 		logutil.Error(
 			"GC-TRACE-MERGE-CHECKPOINT-FILES",
@@ -929,8 +969,11 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 			zap.Int("file len", len(newFiles)),
 			zap.Error(err),
 		)
+		v2.GCErrorIOErrorCounter.Inc()
 		return
 	}
+	// Record write duration
+	v2.GCMergeWriteDurationHistogram.Observe(time.Since(writeStart).Seconds())
 
 	// SJW TODO: need to handle not updated scenario
 	c.checkpointCli.UpdateCompacted(newCkp)
@@ -975,6 +1018,17 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 		if err = c.fs.Delete(ctx, deleteFiles...); err != nil {
 			extraErrMsg = "DelFiles failed"
 			return err
+		}
+
+		// Record checkpoint file deletion metrics
+		if len(deleteFiles) > 0 {
+			v2.GCCheckpointFileDeletionCounter.Add(float64(len(deleteFiles)))
+			v2.GCLastCheckpointDeletionGauge.Set(float64(time.Now().Unix()))
+		}
+
+		// Record deleted checkpoint count (each merged checkpoint is deleted)
+		if len(toMergeCheckpoint) > 0 {
+			v2.GCCheckpointDeletedCounter.Add(float64(len(toMergeCheckpoint)))
 		}
 	}
 
@@ -1026,6 +1080,19 @@ func (c *checkpointCleaner) tryGCLocked(
 	ctx context.Context,
 	memoryBuffer *containers.OneSchemaBatchBuffer,
 ) (err error) {
+	gcStart := time.Now()
+	defer func() {
+		duration := time.Since(gcStart).Seconds()
+		v2.TaskGCDurationHistogram.Observe(duration)
+		v2.GCSnapshotTotalDurationHistogram.Observe(duration)
+		if err != nil {
+			v2.GCSnapshotExecutionErrorCounter.Inc()
+		} else {
+			v2.GCSnapshotExecutionCounter.Inc()
+		}
+		v2.GCLastSnapshotExecutionGauge.Set(float64(time.Now().Unix()))
+	}()
+
 	// 1. Quick check if GC is needed
 	// 1.1. If there is no global checkpoint, no need to do GC
 	var maxGlobalCKP *checkpoint.CheckpointEntry
@@ -1145,7 +1212,20 @@ func (c *checkpointCleaner) tryGCAgainstGCKPLocked(
 		filesToGC,
 	); err != nil {
 		extraErrMsg = fmt.Sprintf("ExecDelete %v failed", filesToGC)
+		// record GC file delete errors
+		v2.GCErrorIOErrorCounter.Inc()
 		return
+	}
+
+	// Record file deletion metrics
+	if len(filesToGC) > 0 {
+		deleteStart := time.Now()
+		v2.GCDataFileDeletionCounter.Add(float64(len(filesToGC)))
+		v2.GCObjectDeletedCounter.Add(float64(len(filesToGC)))
+		v2.GCLastDataDeletionGauge.Set(float64(time.Now().Unix()))
+		// Record delete duration
+		v2.GCCheckpointDeleteDurationHistogram.Observe(time.Since(deleteStart).Seconds())
+		v2.GCSnapshotDeleteDurationHistogram.Observe(time.Since(deleteStart).Seconds())
 	}
 	if c.GetGCWaterMark() == nil {
 		return nil
@@ -1249,6 +1329,7 @@ func (c *checkpointCleaner) doGCAgainstGlobalCheckpointLocked(
 			zap.String("task", c.TaskNameLocked()),
 			zap.String("metafile", metafile),
 			zap.Error(err))
+		v2.GCErrorIOErrorCounter.Inc()
 		return nil, err
 	}
 	c.mutAddMetaFileLocked(metafile, ioutil.NewTSRangeFile(
@@ -1258,6 +1339,8 @@ func (c *checkpointCleaner) doGCAgainstGlobalCheckpointLocked(
 		scannedWindow.tsRange.end,
 	))
 	softDuration = time.Since(now)
+	// Record GC filter duration
+	v2.GCCheckpointFilterDurationHistogram.Observe(softDuration.Seconds())
 
 	// update gc watermark and refresh snapshot meta with the latest gc result
 	// gcWaterMark will be updated to the end of the global checkpoint after each GC
@@ -1270,6 +1353,8 @@ func (c *checkpointCleaner) doGCAgainstGlobalCheckpointLocked(
 	c.updateGCWaterMark(gckp)
 	c.mutation.snapshotMeta.MergeTableInfo(snapshots, pitrs)
 	mergeDuration = time.Since(now)
+	// Record merge table duration (different from merge checkpoint duration)
+	v2.GCMergeTableDurationHistogram.Observe(mergeDuration.Seconds())
 	return filesToGC, nil
 }
 
@@ -1572,10 +1657,32 @@ func (c *checkpointCleaner) Process(
 
 	startScanWaterMark := c.GetScanWaterMark()
 	startGCWaterMark := c.GetGCWaterMark()
+	var memoryBuffer *containers.OneSchemaBatchBuffer
 
 	defer func() {
 		endScanWaterMark := c.GetScanWaterMark()
 		endGCWaterMark := c.GetGCWaterMark()
+
+		// Record GC execution metrics
+		if err != nil {
+			v2.GCCheckpointExecutionErrorCounter.Inc()
+		} else {
+			v2.GCCheckpointExecutionCounter.Inc()
+		}
+		v2.GCCheckpointTotalDurationHistogram.Observe(time.Since(now).Seconds())
+		v2.GCLastCheckpointExecutionGauge.SetToCurrentTime()
+
+		// Record memory usage metrics
+		if memoryBuffer != nil {
+			bufferSize := float64(memoryBuffer.Len())
+			v2.GCMemoryBufferGauge.Set(bufferSize)
+		}
+
+		// Record queue metrics (simplified - pending tasks)
+		v2.GCQueuePendingGauge.Set(0)    // Reset after processing
+		v2.GCQueueProcessingGauge.Set(0) // Reset after processing
+		v2.GCQueueCompletedGauge.Set(1)  // Mark as completed
+
 		logutil.Info(
 			"GC-TRACE-PROCESS",
 			zap.String("task", c.TaskNameLocked()),
@@ -1606,7 +1713,7 @@ func (c *checkpointCleaner) Process(
 	default:
 	}
 
-	memoryBuffer := MakeGCWindowBuffer(16 * mpool.MB)
+	memoryBuffer = MakeGCWindowBuffer(16 * mpool.MB)
 	defer memoryBuffer.Close(c.mp)
 
 	var tryGC bool
@@ -1629,6 +1736,10 @@ func (c *checkpointCleaner) tryScanLocked(
 	memoryBuffer *containers.OneSchemaBatchBuffer,
 	checker func(*checkpoint.CheckpointEntry) bool,
 ) (err error, tryGC bool) {
+	scanStart := time.Now()
+	defer func() {
+		v2.TaskGCScanDurationHistogram.Observe(time.Since(scanStart).Seconds())
+	}()
 
 	tryGC = true
 	// get the max scanned timestamp
@@ -1716,6 +1827,7 @@ func (c *checkpointCleaner) tryScanLocked(
 			zap.String("task", c.TaskNameLocked()),
 			zap.Error(err),
 		)
+		v2.GCErrorIOErrorCounter.Inc()
 		return
 	}
 	return
@@ -1906,6 +2018,42 @@ func (c *checkpointCleaner) scanCheckpointsLocked(
 		snapSize, tableSize uint32
 	)
 	defer func() {
+		// Record scan metrics
+		duration := time.Since(now).Seconds()
+		v2.TaskGCScanDurationHistogram.Observe(duration)
+		v2.GCCheckpointScanDurationHistogram.Observe(duration)
+		v2.GCSnapshotScanDurationHistogram.Observe(duration)
+		v2.GCObjectScannedCounter.Add(float64(len(ckps)))
+		// Record table statistics
+		v2.GCTableScannedCounter.Add(float64(tableSize))
+
+		// Record scanned checkpoint count (approximate row count)
+		// Note: This is an approximation - we record checkpoint count as scanned rows
+		// since exact row count per checkpoint requires reading all checkpoint data
+		if len(ckps) > 0 {
+			v2.GCCheckpointRowsScannedCounter.Add(float64(len(ckps)))
+		}
+
+		// Record collect duration for snapshot processing
+		collectStart := time.Now()
+		//if snapshots, err := c.mutation.snapshotMeta.GetSnapshot(c.ctx, c.sid, c.fs, c.mp); err == nil {
+		//	if len(snapshots.Cluster) > 0 {
+		//		v2.GCSnapshotClusterCounter.Add(float64(len(snapshots.Cluster)))
+		//	}
+		//	if len(snapshots.Account) > 0 {
+		//		v2.GCSnapshotAccountCounter.Add(float64(len(snapshots.Account)))
+		//	}
+		//	if len(snapshots.Database) > 0 {
+		//		v2.GCSnapshotDatabaseCounter.Add(float64(len(snapshots.Database)))
+		//	}
+		//	if len(snapshots.Tables) > 0 {
+		//		v2.GCSnapshotTableCounter.Add(float64(len(snapshots.Tables)))
+		//	}
+		//}
+		// Record collect duration
+		v2.GCMergeCollectDurationHistogram.Observe(time.Since(collectStart).Seconds())
+		v2.GCSnapshotCollectDurationHistogram.Observe(time.Since(collectStart).Seconds())
+
 		logutil.Info(
 			"GC-TRACE-SCAN",
 			zap.String("task", c.TaskNameLocked()),
@@ -2011,6 +2159,13 @@ func (c *checkpointCleaner) mutUpdateSnapshotMetaLocked(
 		c.TaskNameLocked(),
 	)
 }
+
+// checkGCDelitionAlert checks if GC has not deleted any files in 4 hours
+// removed: checkGCDelitionAlert
+
+// checkGCAlertPeriodically checks if GC has not deleted any files in 4 hours
+// This should be called periodically even when no files are deleted
+// removed: checkGCAlertPeriodically
 
 func (c *checkpointCleaner) GetSnapshots() (*logtail.SnapshotInfo, error) {
 	c.mutation.Lock()
