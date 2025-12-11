@@ -37,11 +37,7 @@ func L1Distance[T types.RealNumbers](v1, v2 []T) (T, error) {
 }
 
 func InnerProduct[T types.RealNumbers](v1, v2 []T) (T, error) {
-	dist, err := moarray.InnerProduct(v1, v2)
-	if err != nil {
-		return 0, err
-	}
-	return -dist, nil
+	return moarray.InnerProduct(v1, v2)
 }
 
 func CosineDistance[T types.RealNumbers](v1, v2 []T) (T, error) {

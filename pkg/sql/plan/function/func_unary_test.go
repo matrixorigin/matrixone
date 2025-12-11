@@ -276,8 +276,8 @@ func initSummationArrayTestCase() []tcTemp {
 					[][]float32{{1, 2, 3}, {4, 5, 6}},
 					[]bool{false, false}),
 			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{6, 15},
+			expect: NewFunctionTestResult(types.T_float32.ToType(), false,
+				[]float32{6, 15},
 				[]bool{false, false}),
 		},
 		{

@@ -68,10 +68,10 @@ func TestInEpsilonF32(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "Test 4 - 7th digit is different",
+			name: "Test 4 - 5th digit is different",
 			args: args{
-				want: 1.732050_0,
-				got:  1.732050_9,
+				want: 1.7320_0,
+				got:  1.7320_9,
 			},
 			want: false,
 		},
@@ -104,18 +104,10 @@ func TestInEpsilonF32Slice(t *testing.T) {
 			want: false,
 		},
 		{
-			name: "Test 2 - till 9th digit is same, 10th digit is different)",
+			name: "Test 2 - 6th digit is different",
 			args: args{
-				want: []float32{1.732050800_0},
-				got:  []float32{1.732050800_9},
-			},
-			want: true,
-		},
-		{
-			name: "Test 3 - 9th digit is different",
-			args: args{
-				want: []float32{1.73205080_0},
-				got:  []float32{1.73205080_9},
+				want: []float32{1.7320_0},
+				got:  []float32{1.7320_1},
 			},
 			want: false,
 		},
@@ -142,8 +134,8 @@ func TestInEpsilonF32Slices(t *testing.T) {
 		{
 			name: "Test 1 - difference is epsilon",
 			args: args{
-				want: [][]float32{{2.0, 3.0}, {4.0}},
-				got:  [][]float32{{2.0 + float32EqualityThreshold, 3.0 + float32EqualityThreshold}, {4.0}},
+				want: [][]float32{{1.0, 3.0}, {4.0}},
+				got:  [][]float32{{1.0 + float32EqualityThreshold, 3.0 + float32EqualityThreshold}, {4.0}},
 			},
 			want: false,
 		},

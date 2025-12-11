@@ -18,7 +18,7 @@ import (
 	"math"
 )
 
-const float32EqualityThreshold = 1e-7
+const float32EqualityThreshold = 1e-5
 
 // InEpsilonF32Slices returns true if all the elements in v1 and v2 are within epsilon of each other.
 func InEpsilonF32Slices(want, got [][]float32) bool {

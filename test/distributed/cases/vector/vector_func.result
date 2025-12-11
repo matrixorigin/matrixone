@@ -61,7 +61,7 @@ null
 837.3288311958313
 select sum(SUMMATION(vecf32_3)) from vtab32;
 sum(SUMMATION(vecf32_3))
-873.1968674659729
+873.1968944072723
 select min(SUMMATION(vecf32_3)) from vtab32;
 min(SUMMATION(vecf32_3))
 1.9714266657829285
@@ -70,7 +70,7 @@ max(SUMMATION(vecf32_3))
 837.3288311958313
 select avg(SUMMATION(vecf32_3)) from vtab32;
 avg(SUMMATION(vecf32_3))
-291.06562248865765
+291.06563146909076
 select count(SUMMATION(vecf32_3)) from vtab32;
 count(SUMMATION(vecf32_3))
 3
@@ -412,7 +412,7 @@ null
 822.0504150390625
 select sum(l2_norm(vecf32_3)) from vtab32;
 sum(l2_norm(vecf32_3))
-853.8230618238449
+853.8231209516525
 select min(l2_norm(vecf32_3)) from vtab32;
 min(l2_norm(vecf32_3))
 1.161650538444519
@@ -421,7 +421,7 @@ max(l2_norm(vecf32_3))
 822.0504150390625
 select avg(l2_norm(vecf32_3)) from vtab32;
 avg(l2_norm(vecf32_3))
-284.607687274615
+284.60770698388416
 select count(l2_norm(vecf32_3)) from vtab32;
 count(l2_norm(vecf32_3))
 3
@@ -757,8 +757,8 @@ null    null
 select cosine_similarity(vecf32_3,vecf32_3), cosine_similarity(vecf32_5,vecf32_5) from vtab32;
 cosine_similarity(vecf32_3, vecf32_3)    cosine_similarity(vecf32_5, vecf32_5)
 null    null
-1.0    null
-0.9999998589068639    0.9999999473078075
+0.99999994    null
+1.0    0.99999994
 1.0    1.0
 select cosine_similarity(vecf64_3,vecf64_3), cosine_similarity(vecf64_5,vecf64_5) from vtab64;
 cosine_similarity(vecf64_3, vecf64_3)    cosine_similarity(vecf64_5, vecf64_5)

@@ -222,11 +222,11 @@ func InnerProduct[T types.RealNumbers](v1, v2 []T) (T, error) {
 	switch _v1 := any(v1).(type) {
 	case []float32:
 		_v2 := any(v2).([]float32)
-		return T(vek32.Dot(_v1, _v2)), nil
+		return T(-vek32.Dot(_v1, _v2)), nil
 
 	case []float64:
 		_v2 := any(v2).([]float64)
-		return T(vek.Dot(_v1, _v2)), nil
+		return T(-vek.Dot(_v1, _v2)), nil
 
 	default:
 		panic("InnerProduct type not supported")
@@ -417,26 +417,24 @@ func Abs[T types.RealNumbers](v []T) (res []T, err error) {
 	return
 }
 
-func Sqrt[T types.RealNumbers](v []T) (res []T, err error) {
-	hasNegative := slices.ContainsFunc(v, func(n T) bool {
+func Sqrt[T types.RealNumbers](v []T) ([]T, error) {
+	firstNegIdx := slices.IndexFunc(v, func(n T) bool {
 		return n < 0
 	})
-	if hasNegative {
-		return nil, moerr.NewInvalidInputNoCtx("sqrt: cannot take square root of negative number")
+	if firstNegIdx != -1 {
+		return nil, moerr.NewInvalidArgNoCtx("Sqrt", v[firstNegIdx])
 	}
 
 	switch _v := any(v).(type) {
 	case []float32:
-		res = any(vek32.Sqrt(_v)).([]T)
+		return any(vek32.Sqrt(_v)).([]T), nil
 
 	case []float64:
-		res = any(vek.Sqrt(_v)).([]T)
+		return any(vek.Sqrt(_v)).([]T), nil
 
 	default:
 		panic("Sqrt type not supported")
 	}
-
-	return
 }
 
 func Summation[T types.RealNumbers](v []T) (T, error) {
