@@ -29,6 +29,12 @@ import (
 // readObjectFromFS reads the object file from fileservice and returns its content as []byte
 func readObjectFromFS(ctx context.Context, ses *Session, objectName string) ([]byte, error) {
 	eng := getPu(ses.GetService()).StorageEngine
+	return ReadObjectFromEngine(ctx, eng, objectName)
+}
+
+// ReadObjectFromEngine reads the object file from engine's fileservice and returns its content as []byte
+// This is a version that doesn't require Session
+func ReadObjectFromEngine(ctx context.Context, eng engine.Engine, objectName string) ([]byte, error) {
 	if eng == nil {
 		return nil, moerr.NewInternalError(ctx, "engine is not available")
 	}

@@ -17,7 +17,6 @@ package test
 import (
 	"context"
 	"fmt"
-	"io"
 	"math"
 	"strings"
 	"time"
@@ -29,7 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/publication"
@@ -39,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"go.uber.org/zap"
 )
 
@@ -295,52 +293,29 @@ func (h *UpstreamSQLHelper) handleObjectListDirectly(
 	// Get database name and table name
 	dbname := string(stmt.Database)
 	tablename := string(stmt.Table)
-	if len(tablename) == 0 {
-		return nil, moerr.NewInternalError(ctx, "table name is required")
-	}
 
-	// Parse snapshot timestamps
-	var from, to types.TS
-	if stmt.AgainstSnapshot != nil && len(string(*stmt.AgainstSnapshot)) > 0 {
-		// For simplicity, use MinTs if snapshot name is provided
-		// In production, should resolve snapshot name to timestamp
-		from = types.MinTs()
-	} else {
-		from = types.MinTs()
-	}
-
-	if len(string(stmt.Snapshot)) > 0 {
-		// For simplicity, use current timestamp if snapshot name is provided
-		// In production, should resolve snapshot name to timestamp
-		to = types.TimestampToTS(h.txnOp.SnapshotTS())
-	} else {
-		to = types.TimestampToTS(h.txnOp.SnapshotTS())
-	}
-
-	// Get database from engine using txn
-	db, err := h.engine.Database(ctx, dbname, h.txnOp)
-	if err != nil {
-		return nil, moerr.NewInternalErrorf(ctx, "failed to get database: %v", err)
-	}
-
-	// Get table from database
-	table, err := db.Relation(ctx, tablename, nil)
-	if err != nil {
-		return nil, moerr.NewInternalErrorf(ctx, "failed to get table: %v", err)
-	}
-
-	// Get mpool from internal executor (use a default one if not available)
+	// Get mpool
 	mp := mpool.MustNewZero()
 
-	// Call CollectObjectList on table
-	bat, err := table.CollectObjectList(ctx, from, to, mp)
+	// Resolve snapshot using executor
+	resolveSnapshot := func(ctx context.Context, snapshotName string) (*timestamp.Timestamp, error) {
+		return frontend.ResolveSnapshotWithSnapshotNameWithoutSession(ctx, snapshotName, h.executor, h.txnOp)
+	}
+
+	// Get current timestamp from txn
+	getCurrentTS := func() types.TS {
+		return types.TimestampToTS(h.txnOp.SnapshotTS())
+	}
+
+	// Process object list using core function
+	resultBatch, err := frontend.ProcessObjectList(ctx, stmt, h.engine, h.txnOp, mp, resolveSnapshot, getCurrentTS, dbname, tablename)
 	if err != nil {
 		return nil, err
 	}
 
 	// Convert batch to result
 	return h.convertExecutorResult(executor.Result{
-		Batches: []*batch.Batch{bat},
+		Batches: []*batch.Batch{resultBatch},
 		Mp:      mp,
 	}), nil
 }
@@ -356,36 +331,8 @@ func (h *UpstreamSQLHelper) handleGetObjectDirectly(
 
 	objectName := stmt.ObjectName.String()
 
-	// Get fileservice from engine
-	var de *disttae.Engine
-	var ok bool
-	if de, ok = h.engine.(*disttae.Engine); !ok {
-		return nil, moerr.NewInternalError(ctx, "failed to get disttae engine")
-	}
-
-	fs := de.FS()
-	if fs == nil {
-		return nil, moerr.NewInternalError(ctx, "fileservice is not available")
-	}
-
-	// Read object from fileservice
-	var r io.ReadCloser
-	err := fs.Read(ctx, &fileservice.IOVector{
-		FilePath: objectName,
-		Entries: []fileservice.IOEntry{
-			{
-				Offset:            0,
-				Size:              -1,
-				ReadCloserForRead: &r,
-			},
-		},
-	})
-	if err != nil {
-		return nil, err
-	}
-	defer r.Close()
-
-	content, err := io.ReadAll(r)
+	// Read object from engine using frontend function
+	content, err := frontend.ReadObjectFromEngine(ctx, h.engine, objectName)
 	if err != nil {
 		return nil, err
 	}
