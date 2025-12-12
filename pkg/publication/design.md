@@ -225,3 +225,5 @@ collect change scan object
 **从云上读到本地和从本地读到云上**
 
 **如果写失败，要gc object**
+
+**检查关事务，关batch**

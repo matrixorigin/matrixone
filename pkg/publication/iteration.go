@@ -27,10 +27,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 )
 
 // IterationState represents the state of an iteration
@@ -91,7 +91,7 @@ func InitializeIterationContext(
 	}
 
 	// Create local executor first (without transaction) to query mo_ccpr_log
-	localExecutorInternal, err := NewInternalSQLExecutor(cnUUID, cnTxnClient)
+	localExecutorInternal, err := NewInternalSQLExecutor(cnUUID, nil)
 	if err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "failed to create local executor: %v", err)
 	}
@@ -258,6 +258,19 @@ func InitializeIterationContext(
 	}
 
 	return iterationCtx, nil
+}
+
+func (iterCtx *IterationContext) Close() error {
+	ctx := context.Background()
+	if iterCtx.LocalExecutor != nil {
+		iterCtx.LocalExecutor.EndTxn(ctx, false)
+		iterCtx.LocalExecutor.Close()
+	}
+	if iterCtx.UpstreamExecutor != nil {
+		iterCtx.UpstreamExecutor.EndTxn(ctx, false)
+		iterCtx.UpstreamExecutor.Close()
+	}
+	return nil
 }
 
 // UpdateIterationState updates iteration state, iteration LSN, iteration context, and error message in mo_ccpr_log table
@@ -591,14 +604,14 @@ func GetObjectListFromSnapshotDiff(
 func SubmitObjectsToTN(
 	ctx context.Context,
 	iterationCtx *IterationContext,
+	cnEngine engine.Engine,
 	objectListResult *Result,
-	rel engine.Relation,
 ) error {
 	if iterationCtx == nil {
 		return moerr.NewInternalError(ctx, "iteration context is nil")
 	}
-	if rel == nil {
-		return moerr.NewInternalError(ctx, "relation is nil")
+	if cnEngine == nil {
+		return moerr.NewInternalError(ctx, "engine is nil")
 	}
 
 	// Validate sync level - currently only support table level
@@ -682,14 +695,14 @@ func SubmitObjectsToTN(
 
 	// Submit insert objects
 	if len(insertStats) > 0 {
-		if err := submitObjectsAsInsert(ctx, rel, insertStats); err != nil {
+		if err := submitObjectsAsInsert(ctx, iterationCtx, cnEngine, iterationCtx.SrcInfo.DBName, iterationCtx.SrcInfo.TableName, insertStats); err != nil {
 			return moerr.NewInternalErrorf(ctx, "failed to submit insert objects: %v", err)
 		}
 	}
 
 	// Submit delete objects
 	if len(deleteStats) > 0 {
-		if err := submitObjectsAsDelete(ctx, rel, deleteStats); err != nil {
+		if err := submitObjectsAsDelete(ctx, iterationCtx, cnEngine, iterationCtx.SrcInfo.DBName, iterationCtx.SrcInfo.TableName, deleteStats); err != nil {
 			return moerr.NewInternalErrorf(ctx, "failed to submit delete objects: %v", err)
 		}
 	}
@@ -698,9 +711,31 @@ func SubmitObjectsToTN(
 }
 
 // submitObjectsAsInsert submits objects as INSERT operation
-func submitObjectsAsInsert(ctx context.Context, rel engine.Relation, statsList []objectio.ObjectStats) error {
+func submitObjectsAsInsert(ctx context.Context, iterationCtx *IterationContext, cnEngine engine.Engine, dbName, tableName string, statsList []objectio.ObjectStats) error {
 	if len(statsList) == 0 {
 		return nil
+	}
+
+	if iterationCtx == nil {
+		return moerr.NewInternalError(ctx, "iteration context is nil")
+	}
+	if cnEngine == nil {
+		return moerr.NewInternalError(ctx, "engine is nil")
+	}
+	if dbName == "" || tableName == "" {
+		return moerr.NewInternalError(ctx, "db name or table name is empty")
+	}
+
+	// Get database using transaction from iteration context
+	db, err := cnEngine.Database(ctx, dbName, iterationCtx.LocalTxn)
+	if err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to get database %s: %v", dbName, err)
+	}
+
+	// Get relation using transaction from iteration context
+	rel, err := db.Relation(ctx, tableName, nil)
+	if err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to get relation %s.%s: %v", dbName, tableName, err)
 	}
 
 	// Create batch with ObjectStats
@@ -738,9 +773,31 @@ func submitObjectsAsInsert(ctx context.Context, rel engine.Relation, statsList [
 }
 
 // submitObjectsAsDelete submits objects as DELETE operation
-func submitObjectsAsDelete(ctx context.Context, rel engine.Relation, statsList []objectio.ObjectStats) error {
+func submitObjectsAsDelete(ctx context.Context, iterationCtx *IterationContext, cnEngine engine.Engine, dbName, tableName string, statsList []objectio.ObjectStats) error {
 	if len(statsList) == 0 {
 		return nil
+	}
+
+	if iterationCtx == nil {
+		return moerr.NewInternalError(ctx, "iteration context is nil")
+	}
+	if cnEngine == nil {
+		return moerr.NewInternalError(ctx, "engine is nil")
+	}
+	if dbName == "" || tableName == "" {
+		return moerr.NewInternalError(ctx, "db name or table name is empty")
+	}
+
+	// Get database using transaction from iteration context
+	db, err := cnEngine.Database(ctx, dbName, iterationCtx.LocalTxn)
+	if err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to get database %s: %v", dbName, err)
+	}
+
+	// Get relation using transaction from iteration context
+	rel, err := db.Relation(ctx, tableName, nil)
+	if err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to get relation %s.%s: %v", dbName, tableName, err)
 	}
 
 	// Create batch with ObjectStats for deletion
@@ -776,64 +833,51 @@ func ExecuteIteration(
 	cnUUID string,
 	cnEngine engine.Engine,
 	cnTxnClient client.TxnClient,
-	localExecutor SQLExecutor,
 	taskID uint64,
 	iterationLSN uint64,
 	iterationState int8,
-	localFS fileservice.FileService,
-	iterationCtx *IterationContext,
 ) (err error) {
-	var finalState int8 = IterationStateCompleted
-	var finalError error
 	var objectListResult *Result
 	var ddlStatements []string
+	var iterationCtx *IterationContext
 
-	// Step 0: 初始化阶段
-	// 0.1 检查iteration状态
-	if err = CheckIterationStatus(ctx, localExecutor, taskID, cnUUID, iterationLSN); err != nil {
+	iterationCtx, err = InitializeIterationContext(ctx, cnUUID, cnEngine, cnTxnClient, taskID, iterationLSN)
+	if err != nil {
 		return
 	}
 
-	// 0.2 new txn(engine, client): 创建本地事务，用于操作本地表
-	// Start local transaction for operating on local tables
-	if err = localExecutor.StartTxn(ctx); err != nil {
-		finalState = IterationStateError
-		finalError = moerr.NewInternalErrorf(ctx, "failed to start local transaction: %v", err)
-		return finalError
+	// Step 0: 初始化阶段
+	// 0.1 检查iteration状态
+	if err = CheckIterationStatus(ctx, iterationCtx.LocalExecutor, taskID, cnUUID, iterationLSN); err != nil {
+		return
 	}
 
-	// Ensure transaction is properly ended (commit or rollback) on function exit
 	defer func() {
-		commit := finalError == nil
-		if err := localExecutor.EndTxn(ctx, commit); err != nil {
-			// Log error but don't override the original error
-			if finalError == nil {
-				finalError = moerr.NewInternalErrorf(ctx, "failed to end local transaction: %v", err)
-			}
-		}
+		iterationCtx.Close()
 	}()
 
 	// Update iteration state in defer to ensure it's always called
 	defer func() {
 		var errorMsg string
-		if finalError != nil {
-			errorMsg = finalError.Error()
+		if err != nil {
+			errorMsg = err.Error()
 		}
-		if err := UpdateIterationState(ctx, localExecutor, taskID, finalState, iterationLSN, iterationCtx, errorMsg); err != nil {
+		var finalState int8
+		if err == nil {
+			finalState = IterationStateCompleted
+		} else {
+			finalState = IterationStateError
+		}
+		if err := UpdateIterationState(ctx, iterationCtx.LocalExecutor, taskID, finalState, iterationLSN, iterationCtx, errorMsg); err != nil {
 			// Log error but don't override the original error
-			if finalError == nil {
-				finalError = moerr.NewInternalErrorf(ctx, "failed to update iteration state: %v", err)
-			}
+			err = moerr.NewInternalErrorf(ctx, "failed to update iteration state: %v", err)
 		}
-		// Assign finalError to named return value err
-		err = finalError
 	}()
 
 	// 1.2 查询上游三表获取DDL
-	ddlStatements, err = QueryUpstreamDDL(ctx, iterationCtx, localExecutor)
+	ddlStatements, err = QueryUpstreamDDL(ctx, iterationCtx, iterationCtx.LocalExecutor)
 	if err != nil {
-		finalState = IterationStateError
-		finalError = moerr.NewInternalErrorf(ctx, "failed to query upstream DDL: %v", err)
+		err = moerr.NewInternalErrorf(ctx, "failed to query upstream DDL: %v", err)
 		return
 	}
 
@@ -844,10 +888,9 @@ func ExecuteIteration(
 			// This might require executing through the local transaction
 			// For now, we'll execute through localExecutor
 			var result *Result
-			result, err = localExecutor.ExecSQL(ctx, ddl)
+			result, err = iterationCtx.LocalExecutor.ExecSQL(ctx, ddl)
 			if err != nil {
-				finalState = IterationStateError
-				finalError = moerr.NewInternalErrorf(ctx, "failed to execute DDL: %v", err)
+				err = moerr.NewInternalErrorf(ctx, "failed to execute DDL: %v", err)
 				return
 			}
 			if result != nil {
@@ -858,16 +901,14 @@ func ExecuteIteration(
 
 	// 1.1 请求上游snapshot (includes 1.1.2 请求上游的snapshot ts)
 	if err = RequestUpstreamSnapshot(ctx, iterationCtx); err != nil {
-		finalState = IterationStateError
-		finalError = moerr.NewInternalErrorf(ctx, "failed to request upstream snapshot: %v", err)
+		err = moerr.NewInternalErrorf(ctx, "failed to request upstream snapshot: %v", err)
 		return
 	}
 
 	// Step 2: 计算snapshot diff获取object list
 	objectListResult, err = GetObjectListFromSnapshotDiff(ctx, iterationCtx)
 	if err != nil {
-		finalState = IterationStateError
-		finalError = moerr.NewInternalErrorf(ctx, "failed to get object list from snapshot diff: %v", err)
+		err = moerr.NewInternalErrorf(ctx, "failed to get object list from snapshot diff: %v", err)
 		return
 	}
 	defer func() {
@@ -876,83 +917,25 @@ func ExecuteIteration(
 		}
 	}()
 
-	// Step 4: 获取 relation from engine for the target table (提前获取，用于 Step 5)
-	var rel engine.Relation
-	if iterationCtx.SrcInfo.SyncLevel == SyncLevelTable {
-		// Create transaction operator for CN engine operations
-		nowTs := cnEngine.LatestLogtailAppliedTime()
-		createByOpt := client.WithTxnCreateBy(
-			0,
-			"",
-			"publication iteration",
-			0)
-		txnOp, err2 := cnTxnClient.New(ctx, nowTs, createByOpt)
-		if err2 != nil {
-			finalState = IterationStateError
-			finalError = moerr.NewInternalErrorf(ctx, "failed to create transaction: %v", err2)
-			return
-		}
-		defer func() {
-			if txnOp != nil {
-				if finalError == nil {
-					if err2 := txnOp.Commit(ctx); err2 != nil {
-						if finalError == nil {
-							finalError = moerr.NewInternalErrorf(ctx, "failed to commit transaction: %v", err2)
-						}
-					}
-				} else {
-					if err2 := txnOp.Rollback(ctx); err2 != nil {
-						// Log rollback error but don't override the original error
-					}
-				}
-			}
-		}()
-
-		// Initialize engine with transaction
-		if err2 = cnEngine.New(ctx, txnOp); err2 != nil {
-			finalState = IterationStateError
-			finalError = moerr.NewInternalErrorf(ctx, "failed to initialize engine with transaction: %v", err2)
-			return
-		}
-
-		// Get database
-		dbName := iterationCtx.SrcInfo.DBName
-		tableName := iterationCtx.SrcInfo.TableName
-		db, err2 := cnEngine.Database(ctx, dbName, txnOp)
-		if err2 != nil {
-			finalState = IterationStateError
-			finalError = moerr.NewInternalErrorf(ctx, "failed to get database %s: %v", dbName, err2)
-			return
-		}
-
-		// Get relation
-		rel, err2 = db.Relation(ctx, tableName, nil)
-		if err2 != nil {
-			finalState = IterationStateError
-			finalError = moerr.NewInternalErrorf(ctx, "failed to get relation %s.%s: %v", dbName, tableName, err2)
-			return
-		}
-	}
-
 	// Step 3: 获取object数据
 	// 遍历object list中的每个object，调用FilterObject接口处理
 	// 同时收集对象数据用于 Step 5 提交到 TN
 	var collectedInsertStats []objectio.ObjectStats
 	var collectedDeleteStats []objectio.ObjectStats
 
+	fs := cnEngine.(*disttae.Engine).FS()
+
 	if objectListResult != nil {
 		// Check for errors during iteration
 		if err = objectListResult.Err(); err != nil {
-			finalState = IterationStateError
-			finalError = moerr.NewInternalErrorf(ctx, "error reading object list result: %v", err)
+			err = moerr.NewInternalErrorf(ctx, "error reading object list result: %v", err)
 			return
 		}
 		// Create a temporary mpool for FilterObject
 		var mp *mpool.MPool
 		mp, err = mpool.NewMPool("iteration_filter", 0, mpool.NoFixed)
 		if err != nil {
-			finalState = IterationStateError
-			finalError = moerr.NewInternalErrorf(ctx, "failed to create mpool: %v", err)
+			err = moerr.NewInternalErrorf(ctx, "failed to create mpool: %v", err)
 			return
 		}
 
@@ -968,8 +951,7 @@ func ExecuteIteration(
 			var isTombstone bool
 
 			if err = objectListResult.Scan(&dbName, &tableName, &statsBytes, &createAt, &deleteAt, &isTombstone); err != nil {
-				finalState = IterationStateError
-				finalError = moerr.NewInternalErrorf(ctx, "failed to scan object list result: %v", err)
+				err = moerr.NewInternalErrorf(ctx, "failed to scan object list result: %v", err)
 				return
 			}
 
@@ -990,75 +972,65 @@ func ExecuteIteration(
 			// FilterObject will:
 			// - For aobj: get object from upstream, convert to batch, filter by snapshot TS, create new object
 			// - For nobj: get object from upstream and write directly to fileservice
-			if err = FilterObject(ctx, statsBytes, snapshotTS, iterationCtx, localFS, mp); err != nil {
-				finalState = IterationStateError
-				finalError = moerr.NewInternalErrorf(ctx, "failed to filter object: %v", err)
+			if err = FilterObject(ctx, statsBytes, snapshotTS, iterationCtx, fs, mp); err != nil {
+				err = moerr.NewInternalErrorf(ctx, "failed to filter object: %v", err)
 				return
 			}
 		}
 	}
 
-	// Step 5: TN apply object (使用前面收集的对象数据)
-	// 在TN节点应用object(需要覆盖旧值，即upsert语义)
-	// 只支持 table level sync
-	if iterationCtx.SrcInfo.SyncLevel == SyncLevelTable && rel != nil {
-		// Submit collected objects to TN
-		// Process collected insert stats
-		if len(collectedInsertStats) > 0 {
-			if err = submitObjectsAsInsert(ctx, rel, collectedInsertStats); err != nil {
-				finalState = IterationStateError
-				finalError = moerr.NewInternalErrorf(ctx, "failed to submit insert objects: %v", err)
+	// Submit collected objects to TN
+	// Process collected insert stats
+	if len(collectedInsertStats) > 0 {
+		if err = submitObjectsAsInsert(ctx, iterationCtx, cnEngine, iterationCtx.SrcInfo.DBName, iterationCtx.SrcInfo.TableName, collectedInsertStats); err != nil {
+			err = moerr.NewInternalErrorf(ctx, "failed to submit insert objects: %v", err)
+			return
+		}
+	}
+
+	// Process collected delete stats
+	if len(collectedDeleteStats) > 0 {
+		if err = submitObjectsAsDelete(ctx, iterationCtx, cnEngine, iterationCtx.SrcInfo.DBName, iterationCtx.SrcInfo.TableName, collectedDeleteStats); err != nil {
+			err = moerr.NewInternalErrorf(ctx, "failed to submit delete objects: %v", err)
+			return
+		}
+	}
+
+	// Process ActiveAObj (same as SubmitObjectsToTN does)
+	if iterationCtx.ActiveAObj != nil {
+		var activeInsertStats []objectio.ObjectStats
+		var activeDeleteStats []objectio.ObjectStats
+
+		for upstreamUUID, mapping := range iterationCtx.ActiveAObj {
+			// Check if current stats is valid (not zero value)
+			var zeroStats objectio.ObjectStats
+			if mapping.Current != zeroStats {
+				// New object to insert
+				activeInsertStats = append(activeInsertStats, mapping.Current)
+			}
+
+			// Check if previous stats is valid (not zero value)
+			if mapping.Previous != zeroStats {
+				// Previous object to delete
+				activeDeleteStats = append(activeDeleteStats, mapping.Previous)
+			}
+
+			_ = upstreamUUID // avoid unused variable warning
+		}
+
+		// Submit active insert objects
+		if len(activeInsertStats) > 0 {
+			if err = submitObjectsAsInsert(ctx, iterationCtx, cnEngine, iterationCtx.SrcInfo.DBName, iterationCtx.SrcInfo.TableName, activeInsertStats); err != nil {
+				err = moerr.NewInternalErrorf(ctx, "failed to submit active insert objects: %v", err)
 				return
 			}
 		}
 
-		// Process collected delete stats
-		if len(collectedDeleteStats) > 0 {
-			if err = submitObjectsAsDelete(ctx, rel, collectedDeleteStats); err != nil {
-				finalState = IterationStateError
-				finalError = moerr.NewInternalErrorf(ctx, "failed to submit delete objects: %v", err)
+		// Submit active delete objects
+		if len(activeDeleteStats) > 0 {
+			if err = submitObjectsAsDelete(ctx, iterationCtx, cnEngine, iterationCtx.SrcInfo.DBName, iterationCtx.SrcInfo.TableName, activeDeleteStats); err != nil {
+				err = moerr.NewInternalErrorf(ctx, "failed to submit active delete objects: %v", err)
 				return
-			}
-		}
-
-		// Process ActiveAObj (same as SubmitObjectsToTN does)
-		if iterationCtx.ActiveAObj != nil {
-			var activeInsertStats []objectio.ObjectStats
-			var activeDeleteStats []objectio.ObjectStats
-
-			for upstreamUUID, mapping := range iterationCtx.ActiveAObj {
-				// Check if current stats is valid (not zero value)
-				var zeroStats objectio.ObjectStats
-				if mapping.Current != zeroStats {
-					// New object to insert
-					activeInsertStats = append(activeInsertStats, mapping.Current)
-				}
-
-				// Check if previous stats is valid (not zero value)
-				if mapping.Previous != zeroStats {
-					// Previous object to delete
-					activeDeleteStats = append(activeDeleteStats, mapping.Previous)
-				}
-
-				_ = upstreamUUID // avoid unused variable warning
-			}
-
-			// Submit active insert objects
-			if len(activeInsertStats) > 0 {
-				if err = submitObjectsAsInsert(ctx, rel, activeInsertStats); err != nil {
-					finalState = IterationStateError
-					finalError = moerr.NewInternalErrorf(ctx, "failed to submit active insert objects: %v", err)
-					return
-				}
-			}
-
-			// Submit active delete objects
-			if len(activeDeleteStats) > 0 {
-				if err = submitObjectsAsDelete(ctx, rel, activeDeleteStats); err != nil {
-					finalState = IterationStateError
-					finalError = moerr.NewInternalErrorf(ctx, "failed to submit active delete objects: %v", err)
-					return
-				}
 			}
 		}
 	}
