@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 var (
@@ -290,9 +291,11 @@ func (rb *remoteBackend) adjust() {
 	uid, _ := uuid.NewV7()
 	rb.logger = logutil.Adjust(rb.logger).With(zap.String("remote", rb.remote),
 		zap.String("backend-id", uid.String()))
+	// Create a filtered logger for goetty to suppress expected connection close errors
+	goettyLogger := newFilteredLogger(rb.logger)
 	rb.options.goettyOptions = append(rb.options.goettyOptions,
 		goetty.WithSessionCodec(rb.codec),
-		goetty.WithSessionLogger(rb.logger))
+		goetty.WithSessionLogger(goettyLogger))
 }
 
 func (rb *remoteBackend) Send(ctx context.Context, request Message) (*Future, error) {
@@ -1265,4 +1268,95 @@ func (s *stream) cleanCLocked() {
 			return
 		}
 	}
+}
+
+// filteredLogger wraps a zap.Logger and filters out expected goetty connection errors
+type filteredLogger struct {
+	*zap.Logger
+}
+
+// newFilteredLogger creates a logger that filters out expected goetty connection errors
+func newFilteredLogger(baseLogger *zap.Logger) *filteredLogger {
+	return &filteredLogger{Logger: baseLogger}
+}
+
+// Error filters out expected "close conneciton failed" errors from goetty
+func (fl *filteredLogger) Error(msg string, fields ...zap.Field) {
+	// Filter out goetty's "close conneciton failed" errors with expected error messages
+	if strings.Contains(msg, "close conneciton failed") {
+		// Check if the error field contains expected connection close errors
+		for _, field := range fields {
+			if field.Key == "error" {
+				var errStr string
+				// Try to extract error string from the field
+				if field.Interface != nil {
+					switch v := field.Interface.(type) {
+					case string:
+						errStr = v
+					case error:
+						if v != nil {
+							errStr = v.Error()
+						}
+					default:
+						// Try to convert to string as fallback
+						errStr = fmt.Sprintf("%v", v)
+					}
+				}
+				// Also check the String field if available
+				if errStr == "" && field.String != "" {
+					errStr = field.String
+				}
+				if errStr != "" && strings.Contains(errStr, "use of closed network connection") {
+					// Filter out this expected error by logging at DEBUG level instead
+					fl.Logger.Debug(msg, fields...)
+					return
+				}
+			}
+		}
+	}
+	// Allow other errors to be logged normally
+	fl.Logger.Error(msg, fields...)
+}
+
+// All other methods just delegate to the underlying logger
+func (fl *filteredLogger) Warn(msg string, fields ...zap.Field) {
+	fl.Logger.Warn(msg, fields...)
+}
+
+func (fl *filteredLogger) Info(msg string, fields ...zap.Field) {
+	fl.Logger.Info(msg, fields...)
+}
+
+func (fl *filteredLogger) Debug(msg string, fields ...zap.Field) {
+	fl.Logger.Debug(msg, fields...)
+}
+
+func (fl *filteredLogger) Fatal(msg string, fields ...zap.Field) {
+	fl.Logger.Fatal(msg, fields...)
+}
+
+func (fl *filteredLogger) Panic(msg string, fields ...zap.Field) {
+	fl.Logger.Panic(msg, fields...)
+}
+
+func (fl *filteredLogger) Check(lvl zapcore.Level, msg string) *zapcore.CheckedEntry {
+	return fl.Logger.Check(lvl, msg)
+}
+
+func (fl *filteredLogger) With(fields ...zap.Field) *zap.Logger {
+	// Return a new filteredLogger to maintain filtering capability
+	return &filteredLogger{Logger: fl.Logger.With(fields...)}
+}
+
+func (fl *filteredLogger) Named(name string) *zap.Logger {
+	// Return a new filteredLogger to maintain filtering capability
+	return &filteredLogger{Logger: fl.Logger.Named(name)}
+}
+
+func (fl *filteredLogger) Sync() error {
+	return fl.Logger.Sync()
+}
+
+func (fl *filteredLogger) Core() zapcore.Core {
+	return fl.Logger.Core()
 }
