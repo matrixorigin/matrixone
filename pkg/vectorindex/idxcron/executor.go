@@ -418,7 +418,7 @@ func runIvfflatReindex(ctx context.Context,
 			// get number of list from indexDef
 			lists := int64(0)
 			auto_update := false
-			interval := time.Duration(0)
+			interval := OneWeek
 			hour := int64(0)
 			for _, idx := range tableDef.Indexes {
 				if idx.IndexName == task.IndexName {
@@ -444,10 +444,7 @@ func runIvfflatReindex(ctx context.Context,
 					}
 
 					dayAst, err2 := sonic.Get([]byte(idx.IndexAlgoParams), catalog.Day)
-					if err2 != nil {
-						// interval not found. default one week
-						interval = OneWeek
-					} else {
+					if err2 == nil {
 						day := int64(0)
 						day, err2 = dayAst.Int64()
 						if err2 != nil {
@@ -455,7 +452,9 @@ func runIvfflatReindex(ctx context.Context,
 						}
 
 						// interval in Day
-						interval = time.Duration(day) * 24 * time.Hour
+						if day > 0 {
+							interval = time.Duration(day) * 24 * time.Hour
+						}
 					}
 
 					hourAst, err2 := sonic.Get([]byte(idx.IndexAlgoParams), catalog.Hour)
