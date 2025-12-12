@@ -17,6 +17,8 @@ package brute_force
 import (
 	"fmt"
 	"runtime"
+	"slices"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
@@ -26,9 +28,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	usearch "github.com/unum-cloud/usearch/golang"
+	"github.com/viterin/partial"
 )
 
-type BruteForceIndex[T types.RealNumbers] struct {
+type UsearchBruteForceIndex[T types.RealNumbers] struct {
 	Dataset      []T // flattend vector
 	Metric       usearch.Metric
 	Dimension    uint
@@ -37,7 +40,15 @@ type BruteForceIndex[T types.RealNumbers] struct {
 	ElementSize  uint
 }
 
-var _ cache.VectorIndexSearchIf = &BruteForceIndex[float32]{}
+type GoBruteForceIndex[T types.RealNumbers] struct {
+	Dataset   [][]T // flattend vector
+	Metric    metric.MetricType
+	Dimension uint
+	Count     uint
+}
+
+var _ cache.VectorIndexSearchIf = &UsearchBruteForceIndex[float32]{}
+var _ cache.VectorIndexSearchIf = &GoBruteForceIndex[float32]{}
 
 func GetUsearchQuantizationFromType(v any) (usearch.Quantization, error) {
 	switch v.(type) {
@@ -54,9 +65,35 @@ func NewCpuBruteForceIndex[T types.RealNumbers](dataset [][]T,
 	dimension uint,
 	m metric.MetricType,
 	elemsz uint) (cache.VectorIndexSearchIf, error) {
+
+	switch m {
+	case metric.Metric_L1Distance:
+		return NewGoBruteForceIndex(dataset, dimension, m, elemsz)
+	default:
+		return NewUsearchBruteForceIndex(dataset, dimension, m, elemsz)
+	}
+}
+
+func NewGoBruteForceIndex[T types.RealNumbers](dataset [][]T,
+	dimension uint,
+	m metric.MetricType,
+	elemsz uint) (cache.VectorIndexSearchIf, error) {
+
+	idx := &GoBruteForceIndex[T]{}
+	idx.Metric = m
+	idx.Dimension = dimension
+	idx.Count = uint(len(dataset))
+	idx.Dataset = dataset
+	return idx, nil
+}
+
+func NewUsearchBruteForceIndex[T types.RealNumbers](dataset [][]T,
+	dimension uint,
+	m metric.MetricType,
+	elemsz uint) (cache.VectorIndexSearchIf, error) {
 	var err error
 
-	idx := &BruteForceIndex[T]{}
+	idx := &UsearchBruteForceIndex[T]{}
 	idx.Metric = metric.MetricTypeToUsearchMetric[m]
 	idx.Quantization, err = GetUsearchQuantizationFromType(T(0))
 	if err != nil {
@@ -72,17 +109,14 @@ func NewCpuBruteForceIndex[T types.RealNumbers](dataset [][]T,
 		copy(idx.Dataset[offset:], dataset[i])
 	}
 
-	//fmt.Printf("flattened %v\n", idx.Dataset)
-	//fmt.Printf("idx %v\n", idx)
-
 	return idx, nil
 }
 
-func (idx *BruteForceIndex[T]) Load(sqlproc *sqlexec.SqlProcess) error {
+func (idx *UsearchBruteForceIndex[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 	return nil
 }
 
-func (idx *BruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
+func (idx *UsearchBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
 	queries, ok := _queries.([][]T)
 	if !ok {
 		return nil, nil, moerr.NewInternalErrorNoCtx("queries type invalid")
@@ -139,9 +173,132 @@ func (idx *BruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, rt
 	return
 }
 
-func (idx *BruteForceIndex[T]) UpdateConfig(sif cache.VectorIndexSearchIf) error {
+func (idx *UsearchBruteForceIndex[T]) UpdateConfig(sif cache.VectorIndexSearchIf) error {
 	return nil
 }
 
-func (idx *BruteForceIndex[T]) Destroy() {
+func (idx *UsearchBruteForceIndex[T]) Destroy() {
+}
+
+func (idx *GoBruteForceIndex[T]) Load(sqlproc *sqlexec.SqlProcess) error {
+	return nil
+}
+
+func (idx *GoBruteForceIndex[T]) UpdateConfig(sif cache.VectorIndexSearchIf) error {
+	return nil
+}
+
+func (idx *GoBruteForceIndex[T]) Destroy() {
+}
+
+func (idx *GoBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
+	queries, ok := _queries.([][]T)
+	if !ok {
+		return nil, nil, moerr.NewInternalErrorNoCtx("queries type invalid")
+	}
+
+	errs := make(chan error)
+	distfn, err := metric.ResolveDistanceFn[T](idx.Metric)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	nthreads := rt.NThreads
+	if nthreads == 0 {
+		runtime.NumCPU()
+	}
+
+	// datasize * nqueries
+
+	nqueries := len(queries)
+	ndataset := len(idx.Dataset)
+
+	// create distance matric
+	results := make([]vectorindex.SearchResult, nqueries*ndataset)
+
+	var wg sync.WaitGroup
+	for n := 0; n < int(nthreads); n++ {
+
+		wg.Add(1)
+		go func(tid int) {
+			defer wg.Done()
+			for i := 0; i < nqueries; i++ {
+				if i%int(nthreads) != tid {
+					continue
+				}
+				for j := 0; j < ndataset; j++ {
+					dist, err := distfn(queries[i], idx.Dataset[j])
+					if err != nil {
+						errs <- err
+						return
+					}
+					results[i*ndataset+j].Id = int64(j)
+					results[i*ndataset+j].Distance = float64(dist)
+				}
+			}
+
+		}(n)
+	}
+
+	wg.Wait()
+
+	if len(errs) > 0 {
+		return nil, nil, <-errs
+	}
+
+	if rt.Limit == 1 {
+		// get min
+		keys64 := make([]int64, nqueries)
+		distances = make([]float64, nqueries)
+		for i := 0; i < nqueries; i++ {
+			first := slices.MinFunc(results[i*ndataset:(i+1)*ndataset], func(a, b vectorindex.SearchResult) int {
+				if a.Distance < b.Distance {
+					return -1
+				} else if a.Distance == b.Distance {
+					return 0
+				}
+				return 1
+			})
+			keys64[i] = first.Id
+			distances[i] = first.Distance
+		}
+		return keys64, distances, nil
+	} else {
+		// partial sort
+		keys64 := make([]int64, nqueries*int(rt.Limit))
+		distances = make([]float64, nqueries*int(rt.Limit))
+
+		var wg2 sync.WaitGroup
+		for n := 0; n < int(nthreads); n++ {
+			wg2.Add(1)
+			go func(tid int) {
+				defer wg2.Done()
+				for i := 0; i < nqueries; i++ {
+					if i%int(nthreads) != tid {
+						continue
+					}
+					partial.SortFunc(results[i*ndataset:(i+1)*ndataset], int(rt.Limit), func(a, b vectorindex.SearchResult) int {
+						if a.Distance < b.Distance {
+							return -1
+						} else if a.Distance == b.Distance {
+							return 0
+						}
+						return 1
+					})
+				}
+			}(n)
+
+		}
+
+		wg2.Wait()
+
+		for i := 0; i < nqueries; i++ {
+			for j := 0; j < int(rt.Limit); j++ {
+				keys64[i*int(rt.Limit)+j] = results[i*ndataset+j].Id
+				distances[i*int(rt.Limit)+j] = results[i*ndataset+j].Distance
+			}
+		}
+
+		return keys64, distances, nil
+	}
 }

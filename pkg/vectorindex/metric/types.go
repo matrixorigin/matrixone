@@ -65,6 +65,7 @@ var (
 		OpType_L2sqDistance:   Metric_L2sqDistance,
 		OpType_InnerProduct:   Metric_InnerProduct,
 		OpType_CosineDistance: Metric_CosineDistance,
+		OpType_L1Distance:     Metric_L1Distance,
 	}
 
 	OpTypeToUsearchMetric = map[string]usearch.Metric{
