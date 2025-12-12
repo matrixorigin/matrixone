@@ -84,6 +84,7 @@ func InitializeIterationContext(
 	cnTxnClient client.TxnClient,
 	taskID uint64,
 	iterationLSN uint64,
+	upstreamSQLHelperFactory UpstreamSQLHelperFactory,
 ) (*IterationContext, error) {
 	if cnTxnClient == nil {
 		return nil, moerr.NewInternalError(ctx, "txn client is nil")
@@ -91,6 +92,7 @@ func InitializeIterationContext(
 
 	// Create local executor first (without transaction) to query mo_ccpr_log
 	// mo_ccpr_log is a system table, so we must use system account
+	// Local executor doesn't need upstream SQL helper (no special SQL statements)
 	localExecutorInternal, err := NewInternalSQLExecutor(cnUUID, nil, nil, catalog.System_Account)
 	if err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "failed to create local executor: %v", err)
@@ -177,10 +179,25 @@ func InitializeIterationContext(
 		}
 
 		// Create upstream executor with account ID
-		upstreamExecutor, err = NewInternalSQLExecutor(cnUUID, cnTxnClient, cnEngine, upstreamAccountID)
+		upstreamExecutorInternal, err := NewInternalSQLExecutor(cnUUID, cnTxnClient, cnEngine, upstreamAccountID)
 		if err != nil {
-			return nil, moerr.NewInternalErrorf(ctx, "failed to create local executor: %v", err)
+			return nil, moerr.NewInternalErrorf(ctx, "failed to create upstream executor: %v", err)
 		}
+		upstreamExecutor = upstreamExecutorInternal
+		// Create upstream SQL helper if factory is provided and upstream executor is InternalSQLExecutor
+		if upstreamSQLHelperFactory != nil {
+			if upstreamExecutorInternal, ok := upstreamExecutor.(*InternalSQLExecutor); ok {
+				// Create helper with nil txnOp - it will be updated when StartTxn is called
+				helper := upstreamSQLHelperFactory(
+					nil, // txnOp will be set when StartTxn is called
+					cnEngine,
+					upstreamAccountID,
+					upstreamExecutorInternal.GetInternalExec(),
+				)
+				upstreamExecutorInternal.SetUpstreamSQLHelper(helper)
+			}
+		}
+		// Helper will be created after local transaction is created (helper needs txnOp)
 	} else {
 		connConfig, err := ParseUpstreamConn(upstreamConn.String)
 		if err != nil {
@@ -199,6 +216,10 @@ func InitializeIterationContext(
 			return nil, moerr.NewInternalErrorf(ctx, "failed to create upstream executor: %v", err)
 		}
 
+	}
+	err = upstreamExecutor.StartTxn(ctx)
+	if err != nil {
+		return nil, moerr.NewInternalErrorf(ctx, "failed to start upstream transaction: %v", err)
 	}
 
 	// Create local transaction
@@ -875,6 +896,7 @@ func ExecuteIteration(
 	taskID uint64,
 	iterationLSN uint64,
 	iterationState int8,
+	upstreamSQLHelperFactory UpstreamSQLHelperFactory,
 ) (err error) {
 	var objectListResult *Result
 	var ddlStatements []string
@@ -887,7 +909,7 @@ func ExecuteIteration(
 		}
 	}
 
-	iterationCtx, err = InitializeIterationContext(ctx, cnUUID, cnEngine, cnTxnClient, taskID, iterationLSN)
+	iterationCtx, err = InitializeIterationContext(ctx, cnUUID, cnEngine, cnTxnClient, taskID, iterationLSN, upstreamSQLHelperFactory)
 	if err != nil {
 		return
 	}

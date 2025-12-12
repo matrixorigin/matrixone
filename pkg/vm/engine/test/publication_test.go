@@ -28,7 +28,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/publication"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
@@ -261,11 +263,7 @@ func TestExecuteIteration(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create mo_snapshots table (if needed)
-	moSnapshotsDDL := `CREATE TABLE IF NOT EXISTS mo_catalog.mo_snapshots (
-		sname VARCHAR(5000) NOT NULL PRIMARY KEY,
-		ts BIGINT NOT NULL,
-		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-	)`
+	moSnapshotsDDL := frontend.MoCatalogMoSnapshotsDDL
 	err = exec_sql(disttaeEngine, srcCtxWithTimeout, moSnapshotsDDL)
 	require.NoError(t, err)
 
@@ -357,8 +355,15 @@ func TestExecuteIteration(t *testing.T) {
 	require.NoError(t, err)
 
 	// Step 3: Call ExecuteIteration
-	// Use destination account context for local operations
-	// The upstream account ID is now read from upstream_conn in mo_ccpr_log table
+	// Create upstream SQL helper factory
+	upstreamSQLHelperFactory := func(
+		txnOp client.TxnOperator,
+		engine engine.Engine,
+		accountID uint32,
+		exec executor.SQLExecutor,
+	) publication.UpstreamSQLHelper {
+		return NewUpstreamSQLHelper(txnOp, engine, accountID, exec)
+	}
 
 	err = publication.ExecuteIteration(
 		srcCtxWithTimeout,
@@ -368,6 +373,7 @@ func TestExecuteIteration(t *testing.T) {
 		taskID,
 		iterationLSN,
 		iterationState,
+		upstreamSQLHelperFactory,
 	)
 
 	// The iteration should complete successfully

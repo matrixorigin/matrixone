@@ -33,22 +33,59 @@ import (
 
 var _ SQLExecutor = (*InternalSQLExecutor)(nil)
 
+// UpstreamSQLHelper interface for handling special SQL statements
+// (CREATE/DROP SNAPSHOT, OBJECTLIST, GET OBJECT) without requiring Session
+type UpstreamSQLHelper interface {
+	// HandleSpecialSQL checks if the SQL is a special statement and handles it directly
+	// Returns (handled, result, error) where handled indicates if the statement was handled
+	HandleSpecialSQL(ctx context.Context, query string) (bool, *Result, error)
+}
+
+// UpstreamSQLHelperFactory is a function type that creates an UpstreamSQLHelper
+// Parameters: txnOp, engine, accountID, executor
+type UpstreamSQLHelperFactory func(
+	txnOp client.TxnOperator,
+	engine engine.Engine,
+	accountID uint32,
+	executor executor.SQLExecutor,
+) UpstreamSQLHelper
+
 // InternalSQLExecutor implements SQLExecutor interface using MatrixOne's internal SQL executor
 // It does not support retry or circuit breaker, and uses the internal SQL builder
+// If upstreamSQLHelper is provided, special statements (CREATE/DROP SNAPSHOT, OBJECTLIST, GET OBJECT)
+// will be routed through the helper
 type InternalSQLExecutor struct {
-	cnUUID       string
-	internalExec executor.SQLExecutor
-	txnOp        client.TxnOperator
-	txnClient    client.TxnClient
-	engine       engine.Engine
-	accountID    uint32 // Account ID for tenant context
+	cnUUID            string
+	internalExec      executor.SQLExecutor
+	txnOp             client.TxnOperator
+	txnClient         client.TxnClient
+	engine            engine.Engine
+	accountID         uint32            // Account ID for tenant context
+	upstreamSQLHelper UpstreamSQLHelper // Optional helper for special SQL statements
+}
+
+// SetUpstreamSQLHelper sets the upstream SQL helper
+// This allows setting the helper after the executor is created (e.g., after StartTxn)
+func (e *InternalSQLExecutor) SetUpstreamSQLHelper(helper UpstreamSQLHelper) {
+	e.upstreamSQLHelper = helper
+}
+
+// GetInternalExec returns the internal executor (for creating helper)
+func (e *InternalSQLExecutor) GetInternalExec() executor.SQLExecutor {
+	return e.internalExec
 }
 
 // NewInternalSQLExecutor creates a new InternalSQLExecutor
 // txnClient is optional - if provided, StartTxn can create transactions
 // engine is required for registering transactions with the engine
 // accountID is the tenant account ID to use when executing SQL
-func NewInternalSQLExecutor(cnUUID string, txnClient client.TxnClient, engine engine.Engine, accountID uint32) (*InternalSQLExecutor, error) {
+// upstreamSQLHelper is optional - if provided, special SQL statements will be handled by it
+func NewInternalSQLExecutor(
+	cnUUID string,
+	txnClient client.TxnClient,
+	engine engine.Engine,
+	accountID uint32,
+) (*InternalSQLExecutor, error) {
 	v, ok := moruntime.ServiceRuntime(cnUUID).GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {
 		return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("internal SQL executor not found for CN %s", cnUUID))
@@ -111,6 +148,14 @@ func (e *InternalSQLExecutor) StartTxn(ctx context.Context) error {
 	}
 
 	e.txnOp = txnOp
+
+	// Update helper's txnOp if helper is set and supports SetTxnOp
+	if e.upstreamSQLHelper != nil {
+		if helperWithTxnOp, ok := e.upstreamSQLHelper.(interface{ SetTxnOp(client.TxnOperator) }); ok {
+			helperWithTxnOp.SetTxnOp(txnOp)
+		}
+	}
+
 	return nil
 }
 
@@ -144,6 +189,8 @@ func (e *InternalSQLExecutor) ExecSQL(ctx context.Context, query string) (*Resul
 
 // ExecSQLWithOptions executes a SQL statement with additional options
 // Note: needRetry and ar parameters are ignored for internal executor
+// If session is set and the statement is CREATE/DROP SNAPSHOT, OBJECTLIST, or GET OBJECT,
+// it will be routed through frontend layer
 func (e *InternalSQLExecutor) ExecSQLWithOptions(
 	ctx context.Context,
 	ar *ActiveRoutine,
@@ -167,6 +214,18 @@ func (e *InternalSQLExecutor) ExecSQLWithOptions(
 		execCtx = context.WithValue(ctx, defines.TenantIDKey{}, e.accountID)
 	}
 
+	// Check if upstreamSQLHelper can handle this SQL
+	if e.upstreamSQLHelper != nil {
+		handled, result, err := e.upstreamSQLHelper.HandleSpecialSQL(execCtx, query)
+		if err != nil {
+			return nil, err
+		}
+		if handled {
+			return result, nil
+		}
+	}
+
+	// For other statements, use internal executor
 	opts := executor.Options{}.
 		WithDisableIncrStatement()
 
@@ -195,6 +254,12 @@ func convertExecutorResult(execResult executor.Result) *Result {
 			executorResult: execResult,
 		},
 	}
+}
+
+// NewResultFromExecutorResult creates a new Result from executor.Result
+// This is exported so that external packages (like test helpers) can create Result objects
+func NewResultFromExecutorResult(execResult executor.Result) *Result {
+	return convertExecutorResult(execResult)
 }
 
 // InternalResult wraps executor.Result to provide sql.Rows-like interface

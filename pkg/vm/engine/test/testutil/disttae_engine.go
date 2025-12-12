@@ -676,7 +676,15 @@ func (ha *testHAKeeperClient) AllocateID(ctx context.Context) (uint64, error) {
 	return ha.id.Add(1), nil
 }
 func (ha *testHAKeeperClient) AllocateIDByKey(ctx context.Context, key string) (uint64, error) {
-	return 0, nil
+	// AllocateIDByKey should return a valid ID (>= MO_RESERVED_MAX=100)
+	// Use the same ID generator as AllocateID to ensure consistency
+	id := ha.id.Add(1)
+	// Ensure the ID is >= MO_RESERVED_MAX (100)
+	const MO_RESERVED_MAX = 100
+	if id < MO_RESERVED_MAX {
+		id = MO_RESERVED_MAX + ha.id.Add(1)
+	}
+	return id, nil
 }
 func (ha *testHAKeeperClient) AllocateIDByKeyWithBatch(ctx context.Context, key string, batch uint64) (uint64, error) {
 	return 0, nil
