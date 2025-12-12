@@ -729,7 +729,7 @@ func diffMergeAgency(
 		done      bool
 		wg        = new(sync.WaitGroup)
 		outputErr atomic.Value
-		retBatCh  = make(chan batchWithKind, 100)
+		retBatCh  = make(chan batchWithKind, 10)
 		stopCh    = make(chan struct{})
 		stopOnce  sync.Once
 		emit      emitFunc
@@ -796,7 +796,7 @@ func diffMergeAgency(
 	}()
 
 	if err = diffOnBase(
-		ctx, ses, bh, wg, dagInfo, tblStuff, retBatCh, copt, emit,
+		ctx, ses, bh, wg, dagInfo, tblStuff, copt, emit,
 	); err != nil {
 		return
 	}
@@ -2293,7 +2293,6 @@ func diffOnBase(
 	wg *sync.WaitGroup,
 	dagInfo branchMetaInfo,
 	tblStuff tableStuff,
-	retCh chan batchWithKind,
 	copt compositeOption,
 	emit emitFunc,
 ) (err error) {
@@ -2355,7 +2354,7 @@ func diffOnBase(
 	}
 
 	if err = hashDiff(
-		ctx, ses, bh, tblStuff, dagInfo, retCh,
+		ctx, ses, bh, tblStuff, dagInfo,
 		copt, emit, tarHandle, baseHandle,
 	); err != nil {
 		return
@@ -2484,7 +2483,6 @@ func hashDiff(
 	bh BackgroundExec,
 	tblStuff tableStuff,
 	dagInfo branchMetaInfo,
-	retCh chan batchWithKind,
 	copt compositeOption,
 	emit emitFunc,
 	tarHandle []engine.ChangesHandle,
@@ -2530,7 +2528,7 @@ func hashDiff(
 
 	if dagInfo.lcaType == lcaEmpty {
 		if err = hashDiffIfNoLCA(
-			ctx, ses, tblStuff, retCh, copt, emit,
+			ctx, ses, tblStuff, copt, emit,
 			tarDataHashmap, tarTombstoneHashmap,
 			baseDataHashmap, baseTombstoneHashmap,
 		); err != nil {
@@ -2538,7 +2536,7 @@ func hashDiff(
 		}
 	} else {
 		if err = hashDiffIfHasLCA(
-			ctx, ses, bh, dagInfo, tblStuff, retCh, copt, emit,
+			ctx, ses, bh, dagInfo, tblStuff, copt, emit,
 			tarDataHashmap, tarTombstoneHashmap,
 			baseDataHashmap, baseTombstoneHashmap,
 		); err != nil {
@@ -2555,7 +2553,6 @@ func hashDiffIfHasLCA(
 	bh BackgroundExec,
 	dagInfo branchMetaInfo,
 	tblStuff tableStuff,
-	retCh chan batchWithKind,
 	copt compositeOption,
 	emit emitFunc,
 	tarDataHashmap databranchutils.BranchHashmap,
@@ -2890,14 +2887,13 @@ func hashDiffIfHasLCA(
 		}
 	}
 
-	return diffDataHelper(ctx, ses, copt, tblStuff, retCh, emit, tarDataHashmap, baseDataHashmap)
+	return diffDataHelper(ctx, ses, copt, tblStuff, emit, tarDataHashmap, baseDataHashmap)
 }
 
 func hashDiffIfNoLCA(
 	ctx context.Context,
 	ses *Session,
 	tblStuff tableStuff,
-	retCh chan batchWithKind,
 	copt compositeOption,
 	emit emitFunc,
 	tarDataHashmap databranchutils.BranchHashmap,
@@ -2926,7 +2922,7 @@ func hashDiffIfNoLCA(
 		return
 	}
 
-	return diffDataHelper(ctx, ses, copt, tblStuff, retCh, emit, tarDataHashmap, baseDataHashmap)
+	return diffDataHelper(ctx, ses, copt, tblStuff, emit, tarDataHashmap, baseDataHashmap)
 }
 
 func compareRowInWrappedBatches(
@@ -3168,7 +3164,6 @@ func diffDataHelper(
 	ses *Session,
 	copt compositeOption,
 	tblStuff tableStuff,
-	retCh chan batchWithKind,
 	emit emitFunc,
 	tarDataHashmap databranchutils.BranchHashmap,
 	baseDataHashmap databranchutils.BranchHashmap,
