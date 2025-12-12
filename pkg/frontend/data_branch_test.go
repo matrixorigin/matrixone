@@ -53,6 +53,17 @@ func TestFormatValIntoString_ByteEscaping(t *testing.T) {
 	require.Equal(t, `'x\0\\\x07\''`, buf.String())
 }
 
+func TestFormatValIntoString_Time(t *testing.T) {
+	var buf bytes.Buffer
+	ses := &Session{}
+
+	val, err := types.ParseTime("12:34:56.123456", 6)
+	require.NoError(t, err)
+
+	require.NoError(t, formatValIntoString(ses, val, types.New(types.T_time, 0, 6), &buf))
+	require.Equal(t, `'12:34:56.123456'`, buf.String())
+}
+
 func TestFormatValIntoString_JSONEscaping(t *testing.T) {
 	var buf bytes.Buffer
 	ses := &Session{}
