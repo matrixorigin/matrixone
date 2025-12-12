@@ -36,7 +36,6 @@ func (c *DashboardCreator) initGCDashboard() error {
 			c.initGCDurationMainRow(),
 			c.initGCDurationMergeRow(),
 			c.initGCCheckpointStatsRow(),
-			c.initGCTimestampRow(),
 		)...)
 
 	if err != nil {
@@ -174,20 +173,3 @@ func (c *DashboardCreator) initGCCheckpointStatsRow() dashboard.Option {
 	)
 }
 
-func (c *DashboardCreator) initGCTimestampRow() dashboard.Option {
-	return dashboard.Row(
-		"GC Timestamps",
-		c.getTimeSeries(
-			"GC Last Execution Time",
-			[]string{c.getMetricWithFilter(`mo_gc_last_execution_timestamp`, ``)},
-			[]string{"{{ type }}"},
-			timeseries.Span(6),
-		),
-		c.getTimeSeries(
-			"GC Last Deletion Time",
-			[]string{c.getMetricWithFilter(`mo_gc_last_deletion_timestamp`, ``)},
-			[]string{"{{ type }}"},
-			timeseries.Span(6),
-		),
-	)
-}
