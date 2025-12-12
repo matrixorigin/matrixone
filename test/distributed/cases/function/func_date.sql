@@ -73,4 +73,15 @@ select id,c,vc from t1 where month(d) > 2;
 select id,c,vc from t1 where month(d) < 3;
 select id,c,vc from t1 where month(d) <> 4;
 
+-- @case
+-- @desc:test for week func with mode parameter
+-- @label:bvt
+select week(d), week(dt) from t1;
+select week(d, 0), week(d, 1) from t1;
+select week(d, 2), week(d, 3) from t1;
+select week(dt, 0), week(dt, 1) from t1;
+select week('2023-01-01', 0), week('2023-01-01', 1);
+select week('2023-01-02', 0), week('2023-01-02', 1);
+select week('2023-12-31', 0), week('2023-12-31', 1);
+
 drop table t1;
