@@ -63,6 +63,8 @@ const (
 	OneWeek                 = 24 * 7 * time.Hour
 	KmeansTrainPercentParam = "kmeans_train_percent"
 	KmeansMaxIterationParam = "kmeans_max_iteration"
+
+	Reason_Skipped = "skipped"
 )
 
 var (
@@ -113,10 +115,10 @@ type IndexUpdateStatus struct {
 func (t *IndexUpdateTaskInfo) checkIndexUpdatable(ctx context.Context, dsize uint64, nlist int64, interval time.Duration) (ok bool, reason string, err error) {
 	now := time.Now()
 	createdAt := time.Unix(t.CreatedAt.Unix(), 0)
-	ts := createdAt.Add(createdAtDelay)
+	ts := createdAt.Add(interval)
 	if ts.After(now) {
 		// skip update when createdAt + delay is after current time
-		reason = fmt.Sprintf("current time < 2 days after createdAt (%v < %v)", createdAt.Format("2006-01-02 15:04:05"), ts.Format("2006-01-02 15:04:05"))
+		reason = fmt.Sprintf("current time < interval after createdAt (%v < %v)", createdAt.Format("2006-01-02 15:04:05"), ts.Format("2006-01-02 15:04:05"))
 		return
 	}
 
@@ -387,7 +389,8 @@ func runIvfflatReindex(ctx context.Context,
 	txnEngine engine.Engine,
 	txnClient client.TxnClient,
 	cnUUID string,
-	task *IndexUpdateTaskInfo) (updated bool, reason string, err error) {
+	task *IndexUpdateTaskInfo,
+	currentHour int) (updated bool, reason string, err error) {
 
 	if len(task.IndexName) == 0 {
 		err = moerr.NewInternalErrorNoCtx("table index name is empty string. skip reindex.")
@@ -416,6 +419,7 @@ func runIvfflatReindex(ctx context.Context,
 			lists := int64(0)
 			auto_update := false
 			interval := time.Duration(0)
+			hour := int64(0)
 			for _, idx := range tableDef.Indexes {
 				if idx.IndexName == task.IndexName {
 					listsAst, err2 := sonic.Get([]byte(idx.IndexAlgoParams), catalog.IndexAlgoParamLists)
@@ -439,19 +443,27 @@ func runIvfflatReindex(ctx context.Context,
 						}
 					}
 
-					intervalAst, err2 := sonic.Get([]byte(idx.IndexAlgoParams), catalog.Interval)
+					dayAst, err2 := sonic.Get([]byte(idx.IndexAlgoParams), catalog.Day)
 					if err2 != nil {
 						// interval not found. default one week
 						interval = OneWeek
 					} else {
-						interval_in_day := int64(0)
-						interval_in_day, err2 = intervalAst.Int64()
+						day := int64(0)
+						day, err2 = dayAst.Int64()
 						if err2 != nil {
 							return err2
 						}
 
 						// interval in Day
-						interval = time.Duration(interval_in_day) * 24 * time.Hour
+						interval = time.Duration(day) * 24 * time.Hour
+					}
+
+					hourAst, err2 := sonic.Get([]byte(idx.IndexAlgoParams), catalog.Hour)
+					if err2 == nil {
+						hour, err2 = hourAst.Int64()
+						if err2 != nil {
+							return err2
+						}
 					}
 
 					break
@@ -462,8 +474,8 @@ func runIvfflatReindex(ctx context.Context,
 				return moerr.NewInternalErrorNoCtx("IVFFLAT index parameter LISTS not found")
 			}
 
-			if !auto_update || interval == 0 {
-				reason = "auto update disabled"
+			if !auto_update || interval == 0 || currentHour != int(hour) {
+				reason = Reason_Skipped
 				return
 			}
 
@@ -513,6 +525,7 @@ func runIvfflatReindex(ctx context.Context,
 func (e *IndexUpdateTaskExecutor) run(ctx context.Context) (err error) {
 
 	logutil.Infof("IndexUpdateTaskExecutor START")
+	currentHour := time.Now().Hour()
 
 	defer func() {
 		logutil.Infof("IndexUpdateTaskExecutor END")
@@ -539,9 +552,14 @@ func (e *IndexUpdateTaskExecutor) run(ctx context.Context) (err error) {
 
 		switch t.Action {
 		case Action_Ivfflat_Reindex:
-			updated, reason, err2 = runIvfflatReindex(ctx, e.txnEngine, e.cnTxnClient, e.cnUUID, t)
+			updated, reason, err2 = runIvfflatReindex(ctx, e.txnEngine, e.cnTxnClient, e.cnUUID, t, currentHour)
 		default:
 			err2 = moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid index update action %v", t))
+		}
+
+		if !updated && reason == Reason_Skipped {
+			// skip save Status when update was skipped
+			continue
 		}
 
 		runTxnWithSqlContext(ctx, e.txnEngine, e.cnTxnClient, e.cnUUID,
@@ -555,7 +573,8 @@ func (e *IndexUpdateTaskExecutor) run(ctx context.Context) (err error) {
 	return nil
 }
 
-var IndexUpdateTaskCronExpr = "0 55 23 * * *" // 23:55:00 everyday
+var IndexUpdateTaskCronExpr = "0 0 * * * *" // run once an hour, beginning of hour
+// var IndexUpdateTaskCronExpr = "0 55 23 * * *" // 23:55:00 everyday
 
 // var IndexUpdateTaskCronExpr = "0 */5 * * * *" // every 5 minutes
 // var IndexUpdateTaskCronExpr = "*/15 * * * * *" // every 15 seconds

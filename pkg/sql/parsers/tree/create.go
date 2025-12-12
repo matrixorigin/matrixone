@@ -2072,7 +2072,8 @@ type IndexOption struct {
 	Async                    bool
 	ForceSync                bool
 	AutoUpdate               bool
-	Interval                 int64
+	Day                      int64
+	Hour                     int64
 }
 
 // Must follow the following sequence when test
@@ -2081,7 +2082,8 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 		node.Comment != "" || node.Visible != VISIBLE_TYPE_INVALID ||
 		node.AlgoParamList != 0 || node.AlgoParamVectorOpType != "" ||
 		node.HnswM != 0 || node.HnswEfConstruction != 0 ||
-		node.HnswEfSearch != 0 || node.AutoUpdate || node.Interval != 0 {
+		node.HnswEfSearch != 0 || node.AutoUpdate || node.Day != 0 ||
+		node.Hour != 0 {
 		ctx.WriteByte(' ')
 	}
 	if node.KeyBlockSize != 0 {
@@ -2136,10 +2138,15 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 	if node.AutoUpdate {
 		ctx.WriteString("AUTO_UPDATE=TRUE ")
 	}
-	if node.Interval != 0 {
-		ctx.WriteString("INTERVAL ")
-		ctx.WriteString(strconv.FormatInt(node.Interval, 10))
-		ctx.WriteString(" DAY ")
+	if node.Day != 0 {
+		ctx.WriteString("DAY ")
+		ctx.WriteString(strconv.FormatInt(node.Day, 10))
+		ctx.WriteByte(' ')
+	}
+	if node.Hour != 0 {
+		ctx.WriteString("HOUR ")
+		ctx.WriteString(strconv.FormatInt(node.Hour, 10))
+		ctx.WriteByte(' ')
 	}
 
 }

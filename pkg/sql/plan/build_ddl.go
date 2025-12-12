@@ -4045,14 +4045,21 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 
 			switch opt.KeyType {
 			case tree.INDEX_TYPE_IVFFLAT:
-				if opt.Interval < 0 {
+				if opt.Day < 0 {
 					return nil, moerr.NewInternalErrorf(
 						ctx.GetContext(),
-						"interval should be >= 0.",
+						"day should be >= 0.",
+					)
+				}
+				if opt.Hour < 0 || opt.Hour > 23 {
+					return nil, moerr.NewInternalErrorf(
+						ctx.GetContext(),
+						"hour should be between 0 and 23.",
 					)
 				}
 				alterTableAutoUpdate.AutoUpdate = opt.AutoUpdate
-				alterTableAutoUpdate.Interval = opt.Interval
+				alterTableAutoUpdate.Day = opt.Day
+				alterTableAutoUpdate.Hour = opt.Hour
 			default:
 				return nil, moerr.NewInternalErrorf(
 					ctx.GetContext(),

@@ -354,7 +354,7 @@ func TestIvfflatReindex(t *testing.T) {
 			})
 			defer stub3.Reset()
 
-			updated, reason, err := runIvfflatReindex(ctx, cnEngine, cnClient, cnUUID, &info)
+			updated, reason, err := runIvfflatReindex(ctx, cnEngine, cnClient, cnUUID, &info, 0)
 			fmt.Printf("updated = %v, reason = %s\n", updated, reason)
 			require.NoError(t, err)
 			require.Equal(t, ta.expected, updated)

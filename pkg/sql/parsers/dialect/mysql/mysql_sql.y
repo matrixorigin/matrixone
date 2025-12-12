@@ -7698,8 +7698,10 @@ index_option_list:
 	      opt1.ForceSync = opt2.ForceSync
  	    } else if opt2.AutoUpdate {
 	      opt1.AutoUpdate = opt2.AutoUpdate
- 	    } else if opt2.Interval > 0 {
-	      opt1.Interval = opt2.Interval
+ 	    } else if opt2.Day > 0 {
+	      opt1.Day = opt2.Day
+ 	    } else if opt2.Hour > 0 {
+	      opt1.Hour = opt2.Hour
 	    }
             $$ = opt1
         }
@@ -7811,15 +7813,26 @@ index_option:
 	io.AutoUpdate = false
 	$$ = io
      }
-|    INTERVAL INTEGRAL DAY
+|    DAY equal_opt INTEGRAL
      {
-        val := int64($2.(int64))
-	if val <= 0 {
-		yylex.Error("INTERVAL should be greater than 0")
+        val := int64($3.(int64))
+	if val < 0 {
+		yylex.Error("DAY should be greater than or equal to 0")
 		return 1
 	}
 	io := tree.NewIndexOption()
-	io.Interval = val
+	io.Day = val
+	$$ = io
+     }
+|    HOUR equal_opt INTEGRAL
+     {
+        val := int64($3.(int64))
+	if val < 0 || val > 23 {
+		yylex.Error("HOUR should be between 0 and 23")
+		return 1
+	}
+	io := tree.NewIndexOption()
+	io.Hour = val
 	$$ = io
      }
 

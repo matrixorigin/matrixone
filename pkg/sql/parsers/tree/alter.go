@@ -714,7 +714,6 @@ type AlterOptionAlterIndex struct {
 	alterOptionImpl
 	Name       Identifier
 	Visibility VisibleType
-	AutoUpdate int64
 }
 
 func NewAlterOptionAlterIndex(name Identifier, visibility VisibleType) *AlterOptionAlterIndex {
@@ -789,7 +788,8 @@ type AlterOptionAlterAutoUpdate struct {
 	Name       Identifier
 	KeyType    IndexType
 	AutoUpdate bool
-	Interval   int64
+	Day        int64
+	Hour       int64
 }
 
 func NewAlterOptionAlterAutoUpdate(name Identifier, option *IndexOption) *AlterOptionAlterAutoUpdate {
@@ -797,7 +797,8 @@ func NewAlterOptionAlterAutoUpdate(name Identifier, option *IndexOption) *AlterO
 	a.Name = name
 	a.KeyType = option.IType
 	a.AutoUpdate = option.AutoUpdate
-	a.Interval = option.Interval
+	a.Day = option.Day
+	a.Hour = option.Hour
 	return a
 }
 
@@ -810,12 +811,16 @@ func (node *AlterOptionAlterAutoUpdate) Format(ctx *FmtCtx) {
 		ctx.WriteString(" ")
 		ctx.WriteString(node.KeyType.ToString())
 	}
-	if node.AutoUpdate {
-		ctx.WriteString(" auto_update = true")
+
+	ctx.WriteString(fmt.Sprintf(" auto_update = %v", node.AutoUpdate))
+
+	if node.Day != 0 {
+		ctx.WriteString(fmt.Sprintf(" day = %d", node.Day))
 	}
-	if node.Interval != 0 {
-		ctx.WriteString(fmt.Sprintf(" interval %d day", node.Interval))
+	if node.Hour != 0 {
+		ctx.WriteString(fmt.Sprintf(" hour = %d", node.Hour))
 	}
+
 }
 
 func (node AlterOptionAlterAutoUpdate) TypeName() string { return "tree.AlterOptionAlterAutoUpdate" }

@@ -1355,7 +1355,8 @@ message AlterTableAlterAutoUpdate {
   string table_name = 2;
   string index_name = 3;
   bool auto_update = 4;
-  int64 interval = 5;
+  int64 day = 5;
+  int64 hour = 6;
 }
 
 message AlterTableComment { string new_comment = 1; }

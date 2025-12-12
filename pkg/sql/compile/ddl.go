@@ -20,7 +20,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -754,9 +753,6 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			tableAlterIndex := act.AlterAutoUpdate
 			constraintName := tableAlterIndex.IndexName
 
-			autoupdate := tableAlterIndex.AutoUpdate
-			interval := tableAlterIndex.Interval
-
 			// simply update the index configuration
 			for i, indexDef := range oTableDef.Indexes {
 				if indexDef.IndexName == constraintName {
@@ -774,7 +770,8 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 						// NOTE: this will throw error if the algo type is not supported for reindex.
 						// So Step 4. will not be executed if error is thrown here.
 						newAlgoParamsMap[catalog.AutoUpdate] = fmt.Sprintf("%v", tableAlterIndex.AutoUpdate)
-						newAlgoParamsMap[catalog.Interval] = fmt.Sprintf("%d", tableAlterIndex.Interval)
+						newAlgoParamsMap[catalog.Day] = fmt.Sprintf("%d", tableAlterIndex.Day)
+						newAlgoParamsMap[catalog.Hour] = fmt.Sprintf("%d", tableAlterIndex.Hour)
 						// 2.b generate new AlgoParams string
 						newAlgoParams, err := catalog.IndexParamsMapToJsonString(newAlgoParamsMap)
 						if err != nil {
@@ -797,8 +794,6 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					}
 				}
 			}
-
-			os.Stderr.WriteString(fmt.Sprintf("index %s, autoupdate %v interval %d\n", constraintName, autoupdate, interval))
 
 		case *plan.AlterTable_Action_AlterReindex:
 			// NOTE: We hold lock (with retry) during alter reindex, as "alter table" takes an exclusive lock

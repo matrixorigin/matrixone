@@ -185,8 +185,8 @@ var (
 		input:  "alter table t1 alter reindex idx1 IVFFLAT force_sync",
 		output: "alter table t1 alter reindex idx1 ivfflat force_sync",
 	}, {
-		input:  "alter table t1 alter index idx1 IVFFLAT auto_update = true interval 33 day",
-		output: "alter table t1 alter index idx1 ivfflat auto_update = true interval 33 day",
+		input:  "alter table t1 alter index idx1 IVFFLAT auto_update = true day = 33 hour = 12",
+		output: "alter table t1 alter index idx1 ivfflat auto_update = true day = 33 hour = 12",
 	}, {
 		input:  "alter table t1 alter index idx1 IVFFLAT auto_update = false",
 		output: "alter table t1 alter index idx1 ivfflat auto_update = false",
@@ -1582,8 +1582,8 @@ var (
 			input:  "create index idx using ivfflat on A (a) LISTS 10",
 			output: "create index idx using ivfflat on a (a) LISTS 10 ",
 		}, {
-			input:  "create index idx using ivfflat on A (a) LISTS 10 AUTO_UPDATE=TRUE INTERVAL 10 DAY",
-			output: "create index idx using ivfflat on a (a) LISTS 10 AUTO_UPDATE=TRUE INTERVAL 10 DAY ",
+			input:  "create index idx using ivfflat on A (a) LISTS 10 AUTO_UPDATE=TRUE DAY 10 HOUR 23",
+			output: "create index idx using ivfflat on a (a) LISTS 10 AUTO_UPDATE=TRUE DAY 10 HOUR 23 ",
 		}, {
 			input:  "create index idx using ivfflat on A (a) LISTS 10 AUTO_UPDATE=FALSE",
 			output: "create index idx using ivfflat on a (a) LISTS 10 ",

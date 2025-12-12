@@ -87,7 +87,8 @@ const (
 	HnswEfSearch         = "ef_search"
 	Async                = "async"
 	AutoUpdate           = "auto_update"
-	Interval             = "interval"
+	Day                  = "day"
+	Hour                 = "hour"
 )
 
 /* 1. ToString Functions */
@@ -139,9 +140,14 @@ func IndexParamsToStringList(indexParams string) (string, error) {
 		}
 	}
 
-	if val, ok := result[Interval]; ok {
-		res += fmt.Sprintf(" %s %s day ", Interval, val)
+	if val, ok := result[Day]; ok {
+		res += fmt.Sprintf(" %s = %s ", Day, val)
 	}
+
+	if val, ok := result[Hour]; ok {
+		res += fmt.Sprintf(" %s = %s ", Hour, val)
+	}
+
 	return res, nil
 }
 
@@ -246,8 +252,14 @@ func indexParamsToMap(def interface{}) (map[string]string, error) {
 			if idx.IndexOption.AutoUpdate {
 				res[AutoUpdate] = "true"
 			}
-			if idx.IndexOption.Interval > 0 {
-				res[Interval] = strconv.FormatInt(idx.IndexOption.Interval, 10)
+			if idx.IndexOption.Day > 0 {
+				res[Day] = strconv.FormatInt(idx.IndexOption.Day, 10)
+			}
+
+			if idx.IndexOption.Hour >= 0 && idx.IndexOption.Hour <= 23 {
+				res[Hour] = strconv.FormatInt(idx.IndexOption.Hour, 10)
+			} else {
+				return nil, moerr.NewInternalErrorNoCtx("invalid hour. hour must be between 0 and 23")
 			}
 		case tree.INDEX_TYPE_HNSW:
 			if idx.IndexOption.HnswM < 0 {
