@@ -224,7 +224,9 @@ func newMat[T types.RealNumbers](ctr *container, ap *Productl2) ([][]T, error) {
 	probeCount := ctr.inBat.RowCount()
 	tblColPos := ap.OnExpr.GetF().GetArgs()[1].GetCol().GetColPos()
 
-	dim := ctr.inBat.Vecs[tblColPos].GetType().Width
+	// dimension can only get from centroid column.  probe column input values can be null and dimension is 0.
+	centroidColPos := ap.OnExpr.GetF().GetArgs()[0].GetCol().GetColPos()
+	dim := ctr.bat.Vecs[centroidColPos].GetType().Width
 	nullvec := NewNullVector[T](dim)
 
 	// embedding mat
