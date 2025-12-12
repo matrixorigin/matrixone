@@ -195,8 +195,8 @@ github.com/coreos/go-systemd/v22 v22.3.2 h1:D9/bQk5vlXQFZ6Kwuu6zaiXJ9oTPe68++AzA
 github.com/coreos/go-systemd/v22 v22.3.2/go.mod h1:Y58oyj3AT4RCenI/lSvhwexgC+NSVTIJ3seZv2GcEnc=
 github.com/cpegeric/pdftotext-go v0.0.0-20241112123704-49cb86a3790e h1:tQSCiEjYPRU+AuuVR+zd+xYVOsEqX1clPhmIAM6FCHU=
 github.com/cpegeric/pdftotext-go v0.0.0-20241112123704-49cb86a3790e/go.mod h1:zt7uTOYu0EEeKatGaTi9JiP0I9ePHpDvjAwpfPXh/N0=
-github.com/cpegeric/usearch/golang v0.0.0-20251211094635-2fe344a3dcff h1:f9SWjjVV9zK89w502M4rAb9L6ugPdTVh+8gL1JxUtJY=
-github.com/cpegeric/usearch/golang v0.0.0-20251211094635-2fe344a3dcff/go.mod h1:3SN8SakyyBWzb14DNZn4t5yX8dOa7ae45KpqDioi4RA=
+github.com/cpegeric/usearch/golang v0.0.0-20251212130039-afde3fa5e527 h1:A8qDoMLqBZRv5Fi7RC+KA9hMngZAIK4cSuL1ME3Jy7w=
+github.com/cpegeric/usearch/golang v0.0.0-20251212130039-afde3fa5e527/go.mod h1:3SN8SakyyBWzb14DNZn4t5yX8dOa7ae45KpqDioi4RA=
 github.com/cpuguy83/dockercfg v0.3.1 h1:/FpZ+JaygUR/lZP2NlFI2DVfrOEMAIKP5wWEJdoYe9E=
 github.com/cpuguy83/dockercfg v0.3.1/go.mod h1:sugsbF4//dDlL/i+S+rtpIWp+5h0BHJHfjj5/jFyUJc=
 github.com/cpuguy83/go-md2man v1.0.10/go.mod h1:SmD6nW6nTyfqj6ABTjUi3V3JVMnlJmwcJI5acqYI6dE=
