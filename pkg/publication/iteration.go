@@ -694,13 +694,14 @@ func SubmitObjectsToTN(
 	// Process objectlist result
 	if objectListResult != nil {
 		// Scan objectlist result
-		// Assuming the result has columns: stats, create_at, delete_at, is_tombstone
+		// Assuming the result has columns: db name, table name, stats, create_at, delete_at, is_tombstone
 		for objectListResult.Next() {
+			var dbName, tableName string
 			var statsBytes []byte
 			var createAt, deleteAt types.TS
 			var isTombstone bool
 
-			if err := objectListResult.Scan(&statsBytes, &createAt, &deleteAt, &isTombstone); err != nil {
+			if err := objectListResult.Scan(&dbName, &tableName, &statsBytes, &createAt, &deleteAt, &isTombstone); err != nil {
 				return moerr.NewInternalErrorf(ctx, "failed to scan object list result: %v", err)
 			}
 
