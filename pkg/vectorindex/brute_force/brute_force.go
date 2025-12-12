@@ -246,6 +246,15 @@ func (idx *GoBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, 
 		return nil, nil, <-errs
 	}
 
+	cmpfn := func(a, b vectorindex.SearchResult) int {
+		if a.Distance < b.Distance {
+			return -1
+		} else if a.Distance == b.Distance {
+			return 0
+		}
+		return 1
+	}
+
 	// get min
 	keys64 := make([]int64, nqueries*int(rt.Limit))
 	distances = make([]float64, nqueries*int(rt.Limit))
@@ -261,29 +270,12 @@ func (idx *GoBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, 
 
 				if rt.Limit == 1 {
 					// min
-
-					first := slices.MinFunc(results[i*ndataset:(i+1)*ndataset], func(a, b vectorindex.SearchResult) int {
-						if a.Distance < b.Distance {
-							return -1
-						} else if a.Distance == b.Distance {
-							return 0
-						}
-						return 1
-					})
-
+					first := slices.MinFunc(results[i*ndataset:(i+1)*ndataset], cmpfn)
 					results[i*ndataset] = first
 
 				} else {
 					// partial sort
-
-					partial.SortFunc(results[i*ndataset:(i+1)*ndataset], int(rt.Limit), func(a, b vectorindex.SearchResult) int {
-						if a.Distance < b.Distance {
-							return -1
-						} else if a.Distance == b.Distance {
-							return 0
-						}
-						return 1
-					})
+					partial.SortFunc(results[i*ndataset:(i+1)*ndataset], int(rt.Limit), cmpfn)
 
 				}
 			}
