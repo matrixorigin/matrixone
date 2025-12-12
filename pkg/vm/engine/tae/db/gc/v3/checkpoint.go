@@ -610,7 +610,6 @@ func (c *checkpointCleaner) deleteStaleSnapshotFilesLocked() error {
 			}
 			// Record snapshot file deletion
 			v2.GCSnapshotFileDeletionCounter.Inc()
-			v2.GCLastSnapshotDeletionGauge.Set(float64(time.Now().Unix()))
 			logutil.Info(
 				"GC-TRACE-DELETE-SNAPSHOT-FILE",
 				zap.String("task", c.TaskNameLocked()),
@@ -636,7 +635,6 @@ func (c *checkpointCleaner) deleteStaleSnapshotFilesLocked() error {
 		} else {
 			// Record snapshot file deletion
 			v2.GCSnapshotFileDeletionCounter.Inc()
-			v2.GCLastSnapshotDeletionGauge.Set(float64(time.Now().Unix()))
 		}
 		logutil.Info(
 			"GC-TRACE-DELETE-SNAPSHOT-FILE",
@@ -745,7 +743,6 @@ func (c *checkpointCleaner) deleteStaleCKPMetaFileLocked() (err error) {
 	// Record meta file deletion metrics
 	if len(filesToDelete) > 0 {
 		v2.GCMetaFileDeletionCounter.Add(float64(len(filesToDelete)))
-		v2.GCLastMetaDeletionGauge.Set(float64(time.Now().Unix()))
 	}
 	return c.mutSetNewMetaFilesLocked(metaFiles)
 }
@@ -828,7 +825,6 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 		} else {
 			v2.GCMergeExecutionCounter.Inc()
 		}
-		v2.GCLastMergeExecutionGauge.Set(float64(time.Now().Unix()))
 	}()
 
 	// checkpointLowWaterMark is empty only in the following cases:
@@ -1023,7 +1019,6 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 		// Record checkpoint file deletion metrics
 		if len(deleteFiles) > 0 {
 			v2.GCCheckpointFileDeletionCounter.Add(float64(len(deleteFiles)))
-			v2.GCLastCheckpointDeletionGauge.Set(float64(time.Now().Unix()))
 		}
 
 		// Record deleted checkpoint count (each merged checkpoint is deleted)
@@ -1090,7 +1085,6 @@ func (c *checkpointCleaner) tryGCLocked(
 		} else {
 			v2.GCSnapshotExecutionCounter.Inc()
 		}
-		v2.GCLastSnapshotExecutionGauge.Set(float64(time.Now().Unix()))
 	}()
 
 	// 1. Quick check if GC is needed
@@ -1222,7 +1216,6 @@ func (c *checkpointCleaner) tryGCAgainstGCKPLocked(
 		deleteStart := time.Now()
 		v2.GCDataFileDeletionCounter.Add(float64(len(filesToGC)))
 		v2.GCObjectDeletedCounter.Add(float64(len(filesToGC)))
-		v2.GCLastDataDeletionGauge.Set(float64(time.Now().Unix()))
 		// Record delete duration
 		v2.GCCheckpointDeleteDurationHistogram.Observe(time.Since(deleteStart).Seconds())
 		v2.GCSnapshotDeleteDurationHistogram.Observe(time.Since(deleteStart).Seconds())
@@ -1670,7 +1663,6 @@ func (c *checkpointCleaner) Process(
 			v2.GCCheckpointExecutionCounter.Inc()
 		}
 		v2.GCCheckpointTotalDurationHistogram.Observe(time.Since(now).Seconds())
-		v2.GCLastCheckpointExecutionGauge.SetToCurrentTime()
 
 		// Record memory usage metrics
 		if memoryBuffer != nil {

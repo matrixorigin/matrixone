@@ -162,33 +162,6 @@ var (
 
 	GCCheckpointRowsMergedCounter  = gcCheckpointRowCounter.WithLabelValues("merged")
 	GCCheckpointRowsScannedCounter = gcCheckpointRowCounter.WithLabelValues("scanned")
-
-	// GC last execution time
-	gcLastExecutionGauge = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "mo",
-			Subsystem: "gc",
-			Name:      "last_execution_timestamp",
-			Help:      "Timestamp of last GC execution.",
-		}, []string{"type"})
-
-	GCLastCheckpointExecutionGauge = gcLastExecutionGauge.WithLabelValues("checkpoint")
-	GCLastMergeExecutionGauge      = gcLastExecutionGauge.WithLabelValues("merge")
-	GCLastSnapshotExecutionGauge   = gcLastExecutionGauge.WithLabelValues("snapshot")
-
-	// GC last deletion time
-	gcLastDeletionGauge = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "mo",
-			Subsystem: "gc",
-			Name:      "last_deletion_timestamp",
-			Help:      "Timestamp of last GC file deletion.",
-		}, []string{"type"})
-
-	GCLastDataDeletionGauge       = gcLastDeletionGauge.WithLabelValues("data")
-	GCLastCheckpointDeletionGauge = gcLastDeletionGauge.WithLabelValues("checkpoint")
-	GCLastMetaDeletionGauge       = gcLastDeletionGauge.WithLabelValues("meta")
-	GCLastSnapshotDeletionGauge   = gcLastDeletionGauge.WithLabelValues("snapshot")
 )
 
 func initGCMetrics() {
@@ -202,6 +175,4 @@ func initGCMetrics() {
 	registry.MustRegister(gcErrorCounter)
 	registry.MustRegister(gcCheckpointCounter)
 	registry.MustRegister(gcCheckpointRowCounter)
-	registry.MustRegister(gcLastExecutionGauge)
-	registry.MustRegister(gcLastDeletionGauge)
 }
