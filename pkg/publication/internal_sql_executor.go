@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 var _ SQLExecutor = (*InternalSQLExecutor)(nil)
@@ -39,13 +40,15 @@ type InternalSQLExecutor struct {
 	internalExec executor.SQLExecutor
 	txnOp        client.TxnOperator
 	txnClient    client.TxnClient
+	engine       engine.Engine
 	accountID    uint32 // Account ID for tenant context
 }
 
 // NewInternalSQLExecutor creates a new InternalSQLExecutor
 // txnClient is optional - if provided, StartTxn can create transactions
+// engine is required for registering transactions with the engine
 // accountID is the tenant account ID to use when executing SQL
-func NewInternalSQLExecutor(cnUUID string, txnClient client.TxnClient, accountID uint32) (*InternalSQLExecutor, error) {
+func NewInternalSQLExecutor(cnUUID string, txnClient client.TxnClient, engine engine.Engine, accountID uint32) (*InternalSQLExecutor, error) {
 	v, ok := moruntime.ServiceRuntime(cnUUID).GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {
 		return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("internal SQL executor not found for CN %s", cnUUID))
@@ -60,6 +63,7 @@ func NewInternalSQLExecutor(cnUUID string, txnClient client.TxnClient, accountID
 		cnUUID:       cnUUID,
 		internalExec: internalExec,
 		txnClient:    txnClient,
+		engine:       engine,
 		accountID:    accountID,
 	}, nil
 }
@@ -96,6 +100,14 @@ func (e *InternalSQLExecutor) StartTxn(ctx context.Context) error {
 	txnOp, err := e.txnClient.New(ctx, timestamp.Timestamp{})
 	if err != nil {
 		return err
+	}
+
+	// Register the transaction with the engine
+	if e.engine != nil {
+		err = e.engine.New(ctx, txnOp)
+		if err != nil {
+			return moerr.NewInternalErrorf(ctx, "failed to register transaction with engine: %v", err)
+		}
 	}
 
 	e.txnOp = txnOp

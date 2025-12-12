@@ -65,13 +65,15 @@ func TestCheckIterationStatus(t *testing.T) {
 	err := exec_sql(disttaeEngine, ctxWithTimeout, frontend.MoCatalogMoIndexesDDL)
 	require.NoError(t, err)
 
-	// Create mo_ccpr_log table using DDL from frontend/predefine (only once)
-	err = exec_sql(disttaeEngine, ctxWithTimeout, frontend.MoCatalogMoCcprLogDDL)
+	// Create mo_ccpr_log table using system account context (only once)
+	// mo_ccpr_log is a system table, so we must use system account
+	systemCtx := context.WithValue(ctxWithTimeout, defines.TenantIDKey{}, catalog.System_Account)
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprLogDDL)
 	require.NoError(t, err)
 
 	// Create InternalSQLExecutor (only once)
 	// Pass nil for txnClient - transactions will be managed externally via ExecTxn
-	executor, err := publication.NewInternalSQLExecutor("", nil, accountId)
+	executor, err := publication.NewInternalSQLExecutor("", nil, nil, accountId)
 	require.NoError(t, err)
 	defer executor.Close()
 
@@ -186,7 +188,9 @@ func TestCheckIterationStatus(t *testing.T) {
 					tc.cnUUID,
 				)
 
-				err := exec_sql(disttaeEngine, ctxWithTimeout, insertSQL)
+				// mo_ccpr_log is a system table, so we must use system account
+				systemCtx := context.WithValue(ctxWithTimeout, defines.TenantIDKey{}, catalog.System_Account)
+				err := exec_sql(disttaeEngine, systemCtx, insertSQL)
 				require.NoError(t, err)
 			}
 
@@ -217,7 +221,7 @@ func TestExecuteIteration(t *testing.T) {
 	var (
 		srcAccountID  = catalog.System_Account
 		destAccountID = uint32(2)
-		cnUUID        = "test-cn-uuid-execute-iteration"
+		cnUUID        = ""
 	)
 
 	// Setup source account context
@@ -251,8 +255,9 @@ func TestExecuteIteration(t *testing.T) {
 	err := exec_sql(disttaeEngine, srcCtxWithTimeout, frontend.MoCatalogMoIndexesDDL)
 	require.NoError(t, err)
 
-	// Create mo_ccpr_log table
-	err = exec_sql(disttaeEngine, srcCtxWithTimeout, frontend.MoCatalogMoCcprLogDDL)
+	// Create mo_ccpr_log table using system account context
+	systemCtx := context.WithValue(srcCtxWithTimeout, defines.TenantIDKey{}, catalog.System_Account)
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprLogDDL)
 	require.NoError(t, err)
 
 	// Create mo_snapshots table (if needed)
@@ -307,6 +312,8 @@ func TestExecuteIteration(t *testing.T) {
 	// Note: We need to use destination account context to write mo_ccpr_log
 	// but the upstream_conn should point to InternalSQLExecutorType
 	taskID := uint64(1)
+	iterationLSN := uint64(1)
+	iterationState := publication.IterationStatePending
 	subscriptionName := "test_subscription"
 	insertSQL := fmt.Sprintf(
 		`INSERT INTO mo_catalog.mo_ccpr_log (
@@ -340,25 +347,21 @@ func TestExecuteIteration(t *testing.T) {
 		srcTableName,
 		fmt.Sprintf("%s:%d", publication.InternalSQLExecutorType, srcAccountID),
 		publication.IterationStatePending,
-		0,
+		iterationLSN,
 		cnUUID,
 	)
 
-	// Write mo_ccpr_log using destination account context
-	// But we need to ensure the table exists in destination account's mo_catalog
-	// Actually, mo_ccpr_log should be a system table accessible from all accounts
-	// Let's write it using destination context
-	err = exec_sql(disttaeEngine, destCtxWithTimeout, insertSQL)
+	// Write mo_ccpr_log using system account context
+	// mo_ccpr_log is a system table, so we must use system account
+	err = exec_sql(disttaeEngine, systemCtx, insertSQL)
 	require.NoError(t, err)
 
 	// Step 3: Call ExecuteIteration
 	// Use destination account context for local operations
 	// The upstream account ID is now read from upstream_conn in mo_ccpr_log table
-	iterationLSN := uint64(1)
-	iterationState := publication.IterationStatePending
 
 	err = publication.ExecuteIteration(
-		destCtxWithTimeout,
+		srcCtxWithTimeout,
 		cnUUID,
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
@@ -371,7 +374,7 @@ func TestExecuteIteration(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify that the iteration state was updated
-	// Query mo_ccpr_log to check iteration_state
+	// Query mo_ccpr_log to check iteration_state using system account
 	querySQL := fmt.Sprintf(
 		`SELECT iteration_state, iteration_lsn FROM mo_catalog.mo_ccpr_log WHERE task_id = %d`,
 		taskID,
@@ -381,10 +384,11 @@ func TestExecuteIteration(t *testing.T) {
 	require.True(t, ok)
 	exec := v.(executor.SQLExecutor)
 
-	txn, err = disttaeEngine.NewTxnOperator(destCtxWithTimeout, disttaeEngine.Now())
+	querySystemCtx := context.WithValue(destCtxWithTimeout, defines.TenantIDKey{}, catalog.System_Account)
+	txn, err = disttaeEngine.NewTxnOperator(querySystemCtx, disttaeEngine.Now())
 	require.NoError(t, err)
 
-	res, err := exec.Exec(destCtxWithTimeout, querySQL, executor.Options{}.WithTxn(txn))
+	res, err := exec.Exec(querySystemCtx, querySQL, executor.Options{}.WithTxn(txn))
 	require.NoError(t, err)
 	defer res.Close()
 
@@ -404,6 +408,8 @@ func TestExecuteIteration(t *testing.T) {
 	})
 	require.True(t, found, "should find the updated iteration record")
 
-	err = txn.Commit(destCtxWithTimeout)
+	err = txn.Commit(querySystemCtx)
 	require.NoError(t, err)
+
+	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 }

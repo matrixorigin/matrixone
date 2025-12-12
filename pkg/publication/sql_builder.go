@@ -43,7 +43,7 @@ const (
 		`datname, ` +
 		`dat_createsql, ` +
 		`account_id ` +
-		`FROM mo_catalog.mo_databases ` +
+		`FROM mo_catalog.mo_database ` +
 		`WHERE 1=1%s`
 
 	PublicationQueryMoColumnsSqlTemplate = `SELECT ` +

@@ -85,31 +85,23 @@ func InitializeIterationContext(
 	taskID uint64,
 	iterationLSN uint64,
 ) (*IterationContext, error) {
-	if cnUUID == "" {
-		return nil, moerr.NewInternalError(ctx, "cnUUID is empty")
-	}
 	if cnTxnClient == nil {
 		return nil, moerr.NewInternalError(ctx, "txn client is nil")
 	}
 
-	// Get local account ID from context
-	var localAccountID uint32
-	if v := ctx.Value(defines.TenantIDKey{}); v != nil {
-		if accountID, ok := v.(uint32); ok {
-			localAccountID = accountID
-		}
-	}
-
 	// Create local executor first (without transaction) to query mo_ccpr_log
-	localExecutorInternal, err := NewInternalSQLExecutor(cnUUID, nil, localAccountID)
+	// mo_ccpr_log is a system table, so we must use system account
+	localExecutorInternal, err := NewInternalSQLExecutor(cnUUID, nil, nil, catalog.System_Account)
 	if err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "failed to create local executor: %v", err)
 	}
 	var localExecutor SQLExecutor = localExecutorInternal
 
 	// Query mo_ccpr_log table to get subscription_name, sync_level, db_name, table_name, upstream_conn, context
+	// mo_ccpr_log is a system table, so we must use system account context
+	systemCtx := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	querySQL := PublicationSQLBuilder.QueryMoCcprLogFullSQL(taskID)
-	result, err := localExecutor.ExecSQL(ctx, querySQL)
+	result, err := localExecutor.ExecSQL(systemCtx, querySQL)
 	if err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "failed to query mo_ccpr_log: %v", err)
 	}
@@ -185,7 +177,7 @@ func InitializeIterationContext(
 		}
 
 		// Create upstream executor with account ID
-		upstreamExecutor, err = NewInternalSQLExecutor(cnUUID, cnTxnClient, upstreamAccountID)
+		upstreamExecutor, err = NewInternalSQLExecutor(cnUUID, cnTxnClient, cnEngine, upstreamAccountID)
 		if err != nil {
 			return nil, moerr.NewInternalErrorf(ctx, "failed to create local executor: %v", err)
 		}
@@ -220,6 +212,13 @@ func InitializeIterationContext(
 	if err != nil {
 		upstreamExecutor.Close()
 		return nil, moerr.NewInternalErrorf(ctx, "failed to create local transaction: %v", err)
+	}
+
+	// Register the transaction with the engine
+	err = cnEngine.New(ctx, localTxn)
+	if err != nil {
+		upstreamExecutor.Close()
+		return nil, moerr.NewInternalErrorf(ctx, "failed to register transaction with engine: %v", err)
 	}
 
 	// Set the transaction in local executor
@@ -377,8 +376,10 @@ func UpdateIterationState(
 		errorMessage,
 	)
 
-	// Execute update SQL
-	result, err := executor.ExecSQL(ctx, updateSQL)
+	// Execute update SQL using system account context
+	// mo_ccpr_log is a system table, so we must use system account
+	systemCtx := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	result, err := executor.ExecSQL(systemCtx, updateSQL)
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to execute update SQL: %v", err)
 	}
@@ -400,8 +401,10 @@ func CheckIterationStatus(
 	// Build SQL query using sql_builder
 	querySQL := PublicationSQLBuilder.QueryMoCcprLogSQL(taskID)
 
-	// Execute SQL query
-	result, err := executor.ExecSQL(ctx, querySQL)
+	// Execute SQL query using system account context
+	// mo_ccpr_log is a system table, so we must use system account
+	systemCtx := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	result, err := executor.ExecSQL(systemCtx, querySQL)
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to execute query: %v", err)
 	}
@@ -442,8 +445,8 @@ func CheckIterationStatus(
 	}
 
 	// Check if iteration_state is completed
-	if iterationState != IterationStateCompleted {
-		return moerr.NewInternalErrorf(ctx, "iteration_state is not completed: expected %d (completed), got %d", IterationStateCompleted, iterationState)
+	if iterationState != IterationStatePending {
+		return moerr.NewInternalErrorf(ctx, "iteration_state is not pending: expected %d (pending), got %d", IterationStatePending, iterationState)
 	}
 
 	return nil
@@ -876,6 +879,13 @@ func ExecuteIteration(
 	var objectListResult *Result
 	var ddlStatements []string
 	var iterationCtx *IterationContext
+
+	// Check if account ID exists in context and is not 0
+	if v := ctx.Value(defines.TenantIDKey{}); v != nil {
+		if accountID, ok := v.(uint32); ok && accountID != 0 {
+			return moerr.NewInternalErrorf(ctx, "account ID must be 0 or not set in context, got %d", accountID)
+		}
+	}
 
 	iterationCtx, err = InitializeIterationContext(ctx, cnUUID, cnEngine, cnTxnClient, taskID, iterationLSN)
 	if err != nil {
