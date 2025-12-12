@@ -789,6 +789,12 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 						); err != nil {
 							return err
 						}
+
+						// 4. register auto update again
+						err = s.handleIvfIndexRegisterUpdate(c, indexDef, qry.Database, oTableDef)
+						if err != nil {
+							return err
+						}
 					default:
 						return moerr.NewInternalError(c.proc.Ctx, "invalid index algo type for alter reindex")
 					}
