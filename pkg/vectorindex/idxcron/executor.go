@@ -75,9 +75,6 @@ var (
 	runTxnWithSqlContext = sqlexec.RunTxnWithSqlContext
 	runCmdSql            = sqlexec.RunSql
 
-	// createdAt Delay update duration
-	createdAtDelay = 2 * 24 * time.Hour
-
 	getTableDef = getTableDefFunc
 	getTasks    = getTasksFunc
 )

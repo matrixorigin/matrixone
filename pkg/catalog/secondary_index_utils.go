@@ -256,10 +256,8 @@ func indexParamsToMap(def interface{}) (map[string]string, error) {
 				res[Day] = strconv.FormatInt(idx.IndexOption.Day, 10)
 			}
 
-			if idx.IndexOption.Hour >= 0 && idx.IndexOption.Hour <= 23 {
+			if idx.IndexOption.Hour > 0 {
 				res[Hour] = strconv.FormatInt(idx.IndexOption.Hour, 10)
-			} else {
-				return nil, moerr.NewInternalErrorNoCtx("invalid hour. hour must be between 0 and 23")
 			}
 		case tree.INDEX_TYPE_HNSW:
 			if idx.IndexOption.HnswM < 0 {
