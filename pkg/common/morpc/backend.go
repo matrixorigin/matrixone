@@ -20,6 +20,7 @@ import (
 	"math"
 	"net"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -558,7 +559,14 @@ func (rb *remoteBackend) doWrite(id uint64, f *Future) time.Duration {
 
 func (rb *remoteBackend) readLoop(ctx context.Context) {
 	rb.logger.Debug("read loop started")
-	defer rb.logger.Error("read loop stopped")
+	normalExit := false
+	defer func() {
+		if normalExit {
+			rb.logger.Debug("read loop stopped")
+		} else {
+			rb.logger.Error("read loop stopped")
+		}
+	}()
 
 	wg := &sync.WaitGroup{}
 	var cb func()
@@ -578,6 +586,7 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			normalExit = true
 			rb.clean()
 			return
 		default:
@@ -588,7 +597,13 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 					err = backendClosed
 				}
 
-				rb.logger.Error("read from backend failed", zap.Error(err))
+				// Filter out expected errors that occur during normal connection lifecycle
+				if rb.isExpectedReadError(err) {
+					normalExit = true
+					rb.logger.Debug("read from backend failed", zap.Error(err))
+				} else {
+					rb.logger.Error("read from backend failed", zap.Error(err))
+				}
 				rb.inactiveReadLoop()
 				rb.cancelActiveStreams()
 				rb.scheduleResetConn(err)
@@ -970,8 +985,40 @@ func (rb *remoteBackend) closeConn(close bool) {
 	}
 
 	if err := fn(); err != nil {
-		rb.logger.Error("close remote conn failed", zap.Error(err))
+		// Filter out expected errors when closing already closed connections
+		if rb.isExpectedCloseError(err) {
+			rb.logger.Debug("close remote conn failed", zap.Error(err))
+		} else {
+			rb.logger.Error("close remote conn failed", zap.Error(err))
+		}
 	}
+}
+
+// isExpectedReadError checks if the error is an expected error during normal connection lifecycle
+func (rb *remoteBackend) isExpectedReadError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := err.Error()
+	// These errors are expected during normal connection lifecycle:
+	// - "use of closed network connection": connection was closed by peer or locally
+	// - "illegal state": connection is in an invalid state (often during shutdown)
+	// - "EOF": end of file, connection closed normally
+	return strings.Contains(errStr, "use of closed network connection") ||
+		strings.Contains(errStr, "illegal state") ||
+		strings.Contains(errStr, "EOF") ||
+		err == backendClosed
+}
+
+// isExpectedCloseError checks if the error is an expected error when closing connections
+func (rb *remoteBackend) isExpectedCloseError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := err.Error()
+	// These errors are expected when closing connections:
+	// - "use of closed network connection": connection was already closed
+	return strings.Contains(errStr, "use of closed network connection")
 }
 
 func (rb *remoteBackend) newFuture() *Future {
