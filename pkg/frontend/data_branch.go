@@ -148,6 +148,42 @@ type batchWithKind struct {
 	batch *batch.Batch
 }
 
+type emitFunc func(batchWithKind) (stop bool, err error)
+
+func newEmitter(
+	ctx context.Context, stopCh <-chan struct{}, retCh chan batchWithKind,
+) emitFunc {
+	return func(wrapped batchWithKind) (bool, error) {
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-stopCh:
+			return true, nil
+		default:
+		}
+
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-stopCh:
+			return true, nil
+		case retCh <- wrapped:
+			return false, nil
+		}
+	}
+}
+
+func emitBatch(
+	emit emitFunc, wrapped batchWithKind, forTombstone bool, pool *retBatchList,
+) (bool, error) {
+	stop, err := emit(wrapped)
+	if stop || err != nil {
+		pool.releaseRetBatch(wrapped.batch, forTombstone)
+		return stop, err
+	}
+	return false, nil
+}
+
 type retBatchList struct {
 	mu sync.Mutex
 	// 0: data
@@ -694,6 +730,10 @@ func diffMergeAgency(
 		wg        = new(sync.WaitGroup)
 		outputErr atomic.Value
 		retBatCh  = make(chan batchWithKind, 100)
+		stopCh    = make(chan struct{})
+		stopOnce  sync.Once
+		emit      emitFunc
+		stop      func()
 		waited    bool
 	)
 
@@ -708,6 +748,13 @@ func diffMergeAgency(
 			tblStuff.retPool.freeAllRetBatches(ses.proc.Mp())
 		}
 	}()
+
+	emit = newEmitter(ctx, stopCh, retBatCh)
+	stop = func() {
+		stopOnce.Do(func() {
+			close(stopCh)
+		})
+	}
 
 	if diffStmt != nil {
 		if err = buildOutputSchema(ctx, ses, diffStmt, tblStuff); err != nil {
@@ -735,7 +782,7 @@ func diffMergeAgency(
 			// 5. as file
 
 			if err2 := satisfyDiffOutputOpt(
-				ctx, cancel, ses, bh, diffStmt, dagInfo, tblStuff, retBatCh,
+				ctx, cancel, stop, ses, bh, diffStmt, dagInfo, tblStuff, retBatCh,
 			); err2 != nil {
 				outputErr.Store(err2)
 			}
@@ -749,7 +796,7 @@ func diffMergeAgency(
 	}()
 
 	if err = diffOnBase(
-		ctx, ses, bh, wg, dagInfo, tblStuff, retBatCh, copt,
+		ctx, ses, bh, wg, dagInfo, tblStuff, retBatCh, copt, emit,
 	); err != nil {
 		return
 	}
@@ -1126,6 +1173,7 @@ func mergeDiffs(
 func satisfyDiffOutputOpt(
 	ctx context.Context,
 	cancel context.CancelFunc,
+	stop func(),
 	ses *Session,
 	bh BackgroundExec,
 	stmt *tree.DataBranchDiff,
@@ -1183,10 +1231,10 @@ func satisfyDiffOutputOpt(
 
 				rows = append(rows, row)
 				if stmt.OutputOpt != nil && stmt.OutputOpt.Limit != nil &&
-					int64(mrs.GetRowCount()) >= *stmt.OutputOpt.Limit {
+					int64(len(rows)) >= *stmt.OutputOpt.Limit {
 					// hit limit, cancel producers but keep draining the channel
 					hitLimit = true
-					cancel()
+					stop()
 					break
 				}
 			}
@@ -2247,6 +2295,7 @@ func diffOnBase(
 	tblStuff tableStuff,
 	retCh chan batchWithKind,
 	copt compositeOption,
+	emit emitFunc,
 ) (err error) {
 
 	defer func() {
@@ -2307,7 +2356,7 @@ func diffOnBase(
 
 	if err = hashDiff(
 		ctx, ses, bh, tblStuff, dagInfo, retCh,
-		copt, tarHandle, baseHandle,
+		copt, emit, tarHandle, baseHandle,
 	); err != nil {
 		return
 	}
@@ -2437,6 +2486,7 @@ func hashDiff(
 	dagInfo branchMetaInfo,
 	retCh chan batchWithKind,
 	copt compositeOption,
+	emit emitFunc,
 	tarHandle []engine.ChangesHandle,
 	baseHandle []engine.ChangesHandle,
 ) (
@@ -2480,7 +2530,7 @@ func hashDiff(
 
 	if dagInfo.lcaType == lcaEmpty {
 		if err = hashDiffIfNoLCA(
-			ctx, ses, tblStuff, retCh, copt,
+			ctx, ses, tblStuff, retCh, copt, emit,
 			tarDataHashmap, tarTombstoneHashmap,
 			baseDataHashmap, baseTombstoneHashmap,
 		); err != nil {
@@ -2488,7 +2538,7 @@ func hashDiff(
 		}
 	} else {
 		if err = hashDiffIfHasLCA(
-			ctx, ses, bh, dagInfo, tblStuff, retCh, copt,
+			ctx, ses, bh, dagInfo, tblStuff, retCh, copt, emit,
 			tarDataHashmap, tarTombstoneHashmap,
 			baseDataHashmap, baseTombstoneHashmap,
 		); err != nil {
@@ -2507,6 +2557,7 @@ func hashDiffIfHasLCA(
 	tblStuff tableStuff,
 	retCh chan batchWithKind,
 	copt compositeOption,
+	emit emitFunc,
 	tarDataHashmap databranchutils.BranchHashmap,
 	tarTombstoneHashmap databranchutils.BranchHashmap,
 	baseDataHashmap databranchutils.BranchHashmap,
@@ -2539,7 +2590,11 @@ func hashDiffIfHasLCA(
 	handleTarDeleteAndUpdates := func(wrapped batchWithKind) (err2 error) {
 		if len(baseUpdateBatches) == 0 && len(baseDeleteBatches) == 0 {
 			// no need to check conflict
-			retCh <- wrapped
+			if stop, e := emitBatch(emit, wrapped, false, tblStuff.retPool); e != nil {
+				return e
+			} else if stop {
+				return nil
+			}
 			return nil
 		}
 
@@ -2686,7 +2741,13 @@ func hashDiffIfHasLCA(
 			return
 		}
 
-		retCh <- wrapped
+		stop, e := emitBatch(emit, wrapped, false, tblStuff.retPool)
+		if e != nil {
+			return e
+		}
+		if stop {
+			return nil
+		}
 
 		return
 	}
@@ -2758,12 +2819,16 @@ func hashDiffIfHasLCA(
 				} else {
 					err2 = handleTarDeleteAndUpdates(wrapped)
 				}
+
+				if errors.Is(err2, context.Canceled) {
+					err2 = nil
+					cancel()
+				}
 			}
 
 			if err2 != nil {
 				first = err2
 				cancel()
-				tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
 			}
 		}
 
@@ -2791,16 +2856,41 @@ func hashDiffIfHasLCA(
 
 	// what can I do with these left base updates/inserts ?
 	if copt.conflictOpt == nil {
-		for _, w := range baseUpdateBatches {
-			retCh <- w
+		stopped := false
+		for i, w := range baseUpdateBatches {
+			var stop bool
+			if stop, err = emitBatch(emit, w, false, tblStuff.retPool); err != nil {
+				return err
+			}
+			if stop {
+				stopped = true
+				for j := i + 1; j < len(baseUpdateBatches); j++ {
+					tblStuff.retPool.releaseRetBatch(baseUpdateBatches[j].batch, false)
+				}
+				for _, bw := range baseDeleteBatches {
+					tblStuff.retPool.releaseRetBatch(bw.batch, false)
+				}
+				break
+			}
 		}
 
-		for _, w := range baseDeleteBatches {
-			retCh <- w
+		if !stopped {
+			for i, w := range baseDeleteBatches {
+				var stop bool
+				if stop, err = emitBatch(emit, w, false, tblStuff.retPool); err != nil {
+					return err
+				}
+				if stop {
+					for j := i + 1; j < len(baseDeleteBatches); j++ {
+						tblStuff.retPool.releaseRetBatch(baseDeleteBatches[j].batch, false)
+					}
+					break
+				}
+			}
 		}
 	}
 
-	return diffDataHelper(ctx, ses, copt, tblStuff, retCh, tarDataHashmap, baseDataHashmap)
+	return diffDataHelper(ctx, ses, copt, tblStuff, retCh, emit, tarDataHashmap, baseDataHashmap)
 }
 
 func hashDiffIfNoLCA(
@@ -2809,6 +2899,7 @@ func hashDiffIfNoLCA(
 	tblStuff tableStuff,
 	retCh chan batchWithKind,
 	copt compositeOption,
+	emit emitFunc,
 	tarDataHashmap databranchutils.BranchHashmap,
 	tarTombstoneHashmap databranchutils.BranchHashmap,
 	baseDataHashmap databranchutils.BranchHashmap,
@@ -2835,7 +2926,7 @@ func hashDiffIfNoLCA(
 		return
 	}
 
-	return diffDataHelper(ctx, ses, copt, tblStuff, retCh, tarDataHashmap, baseDataHashmap)
+	return diffDataHelper(ctx, ses, copt, tblStuff, retCh, emit, tarDataHashmap, baseDataHashmap)
 }
 
 func compareRowInWrappedBatches(
@@ -3078,6 +3169,7 @@ func diffDataHelper(
 	copt compositeOption,
 	tblStuff tableStuff,
 	retCh chan batchWithKind,
+	emit emitFunc,
 	tarDataHashmap databranchutils.BranchHashmap,
 	baseDataHashmap databranchutils.BranchHashmap,
 ) (err error) {
@@ -3192,16 +3284,24 @@ func diffDataHelper(
 		default:
 		}
 
-		retCh <- batchWithKind{
+		if stop, err3 := emitBatch(emit, batchWithKind{
 			batch: tarBat,
 			kind:  diffInsert,
 			name:  tblStuff.tarRel.GetTableName(),
+		}, false, tblStuff.retPool); err3 != nil {
+			return err3
+		} else if stop {
+			return nil
 		}
 
-		retCh <- batchWithKind{
+		if stop, err3 := emitBatch(emit, batchWithKind{
 			batch: baseBat,
 			kind:  diffInsert,
 			name:  tblStuff.baseRel.GetTableName(),
+		}, false, tblStuff.retPool); err3 != nil {
+			return err3
+		} else if stop {
+			return nil
 		}
 
 		return nil
@@ -3250,10 +3350,14 @@ func diffDataHelper(
 		default:
 		}
 
-		retCh <- batchWithKind{
+		if stop, err3 := emitBatch(emit, batchWithKind{
 			batch: bat,
 			kind:  diffInsert,
 			name:  tblStuff.baseRel.GetTableName(),
+		}, false, tblStuff.retPool); err3 != nil {
+			return err3
+		} else if stop {
+			return nil
 		}
 		return nil
 	}, -1); err != nil {

@@ -152,6 +152,12 @@ func TestDataBranchDiffAsFile(t *testing.T) {
 			t.Log("csv diff covers rich data type payloads")
 			runCSVLoadRichTypes(t, ctx, sqlDB)
 
+			t.Log("diff output limit returns subset of full diff")
+			runDiffOutputLimitSubset(t, ctx, sqlDB)
+
+			t.Log("diff output limit without branch relationship returns subset of full diff")
+			runDiffOutputLimitNoBase(t, ctx, sqlDB)
+
 			t.Log("diff output to stage and load via datalink")
 			runDiffOutputToStage(t, ctx, sqlDB)
 		})
@@ -532,6 +538,97 @@ insert into %s values
 	assertTablesEqual(t, ctx, db, dbName, target, base)
 }
 
+func runDiffOutputLimitSubset(t *testing.T, parentCtx context.Context, db *sql.DB) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(parentCtx, time.Second*90)
+	defer cancel()
+
+	dbName := testutils.GetDatabaseName(t)
+	base := "limit_base"
+	branch := "limit_branch"
+
+	execSQLDB(t, ctx, db, fmt.Sprintf("create database `%s`", dbName))
+	defer func() {
+		execSQLDB(t, ctx, db, "use mo_catalog")
+		execSQLDB(t, ctx, db, fmt.Sprintf("drop database if exists `%s`", dbName))
+	}()
+	execSQLDB(t, ctx, db, fmt.Sprintf("use `%s`", dbName))
+
+	execSQLDB(t, ctx, db, fmt.Sprintf("create table %s (id int primary key, val int, note varchar(16))", base))
+	execSQLDB(t, ctx, db, fmt.Sprintf("insert into %s values (1, 10, 'seed'), (2, 20, 'seed'), (3, 30, 'seed'), (4, 40, 'seed'), (5, 50, 'seed'), (6, 60, 'seed')", base))
+
+	execSQLDB(t, ctx, db, fmt.Sprintf("data branch create table %s from %s", branch, base))
+	execSQLDB(t, ctx, db, fmt.Sprintf("insert into %s values (7, 70, 'inserted'), (8, 80, 'inserted')", branch))
+	execSQLDB(t, ctx, db, fmt.Sprintf("update %s set val = val + 100, note = 'updated' where id in (2,3)", branch))
+	execSQLDB(t, ctx, db, fmt.Sprintf("delete from %s where id in (4,5)", branch))
+
+	fullStmt := fmt.Sprintf("data branch diff %s against %s", branch, base)
+	fullRows := fetchDiffRowsAsStrings(t, ctx, db, fullStmt)
+	require.GreaterOrEqual(t, len(fullRows), 6)
+
+	limit := 3
+	limitStmt := fmt.Sprintf("data branch diff %s against %s output limit %d", branch, base, limit)
+	limitedRows := fetchDiffRowsAsStrings(t, ctx, db, limitStmt)
+
+	require.NotEmpty(t, limitedRows, "limited diff returned no rows")
+	require.LessOrEqual(t, len(limitedRows), limit, "limited diff returned too many rows")
+
+	fullSet := make(map[string]struct{}, len(fullRows))
+	for _, row := range fullRows {
+		fullSet[strings.Join(row, "||")] = struct{}{}
+	}
+	for _, row := range limitedRows {
+		_, ok := fullSet[strings.Join(row, "||")]
+		require.Truef(t, ok, "limited diff row not contained in full diff: %v", row)
+	}
+}
+
+func runDiffOutputLimitNoBase(t *testing.T, parentCtx context.Context, db *sql.DB) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(parentCtx, time.Second*90)
+	defer cancel()
+
+	dbName := testutils.GetDatabaseName(t)
+	base := "limit_nobranch_base"
+	target := "limit_nobranch_target"
+
+	execSQLDB(t, ctx, db, fmt.Sprintf("create database `%s`", dbName))
+	defer func() {
+		execSQLDB(t, ctx, db, "use mo_catalog")
+		execSQLDB(t, ctx, db, fmt.Sprintf("drop database if exists `%s`", dbName))
+	}()
+	execSQLDB(t, ctx, db, fmt.Sprintf("use `%s`", dbName))
+
+	execSQLDB(t, ctx, db, fmt.Sprintf("create table %s (id int primary key, val int, note varchar(16))", base))
+	execSQLDB(t, ctx, db, fmt.Sprintf("create table %s (id int primary key, val int, note varchar(16))", target))
+
+	execSQLDB(t, ctx, db, fmt.Sprintf("insert into %s values (1, 10, 'seed'), (2, 20, 'seed'), (3, 30, 'seed'), (4, 40, 'seed')", base))
+
+	execSQLDB(t, ctx, db, fmt.Sprintf("insert into %s values (1, 110, 'updated'), (2, 20, 'seed'), (5, 500, 'added'), (6, 600, 'added')", target))
+
+	fullStmt := fmt.Sprintf("data branch diff %s against %s", target, base)
+	fullRows := fetchDiffRowsAsStrings(t, ctx, db, fullStmt)
+	require.GreaterOrEqual(t, len(fullRows), 3)
+
+	limit := 1
+	limitStmt := fmt.Sprintf("data branch diff %s against %s output limit %d", target, base, limit)
+	limitedRows := fetchDiffRowsAsStrings(t, ctx, db, limitStmt)
+
+	require.NotEmpty(t, limitedRows, "limited diff returned no rows")
+	require.LessOrEqual(t, len(limitedRows), limit, "limited diff returned too many rows")
+
+	fullSet := make(map[string]struct{}, len(fullRows))
+	for _, row := range fullRows {
+		fullSet[strings.Join(row, "||")] = struct{}{}
+	}
+	for _, row := range limitedRows {
+		_, ok := fullSet[strings.Join(row, "||")]
+		require.Truef(t, ok, "limited diff row not contained in full diff: %v", row)
+	}
+}
+
 func runDiffOutputToStage(t *testing.T, parentCtx context.Context, db *sql.DB) {
 	t.Helper()
 
@@ -676,6 +773,40 @@ func parseSQLStatements(content string) []string {
 		stmts = append(stmts, stmt)
 	}
 	return stmts
+}
+
+func fetchDiffRowsAsStrings(t *testing.T, ctx context.Context, db *sql.DB, stmt string) [][]string {
+	t.Helper()
+
+	rows, err := db.QueryContext(ctx, stmt)
+	require.NoErrorf(t, err, "sql: %s", stmt)
+	defer rows.Close()
+
+	cols, err := rows.Columns()
+	require.NoError(t, err)
+
+	result := make([][]string, 0, 8)
+	for rows.Next() {
+		raw := make([]sql.RawBytes, len(cols))
+		dest := make([]any, len(cols))
+		for i := range raw {
+			dest[i] = &raw[i]
+		}
+		require.NoError(t, rows.Scan(dest...))
+
+		row := make([]string, len(cols))
+		for i, b := range raw {
+			if b == nil {
+				row[i] = "NULL"
+				continue
+			}
+			row[i] = string(b)
+		}
+		result = append(result, row)
+	}
+	require.NoErrorf(t, rows.Err(), "sql: %s", stmt)
+	require.NotEmpty(t, result, "diff statement returned no rows: %s", stmt)
+	return result
 }
 
 func execDiffAndFetchFile(t *testing.T, ctx context.Context, db *sql.DB, stmt string) string {
