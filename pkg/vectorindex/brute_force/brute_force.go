@@ -246,19 +246,22 @@ func (idx *GoBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, 
 		return nil, nil, <-errs
 	}
 
-	if rt.Limit == 1 {
-		// get min
-		keys64 := make([]int64, nqueries)
-		distances = make([]float64, nqueries)
-		var wg2 sync.WaitGroup
-		for n := 0; n < int(nthreads); n++ {
-			wg2.Add(1)
-			go func(tid int) {
-				defer wg2.Done()
-				for i := 0; i < nqueries; i++ {
-					if i%int(nthreads) != tid {
-						continue
-					}
+	// get min
+	keys64 := make([]int64, nqueries*int(rt.Limit))
+	distances = make([]float64, nqueries*int(rt.Limit))
+	var wg2 sync.WaitGroup
+	for n := 0; n < int(nthreads); n++ {
+		wg2.Add(1)
+		go func(tid int) {
+			defer wg2.Done()
+			for i := 0; i < nqueries; i++ {
+				if i%int(nthreads) != tid {
+					continue
+				}
+
+				if rt.Limit == 1 {
+					// min
+
 					first := slices.MinFunc(results[i*ndataset:(i+1)*ndataset], func(a, b vectorindex.SearchResult) int {
 						if a.Distance < b.Distance {
 							return -1
@@ -267,28 +270,12 @@ func (idx *GoBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, 
 						}
 						return 1
 					})
-					keys64[i] = first.Id
-					distances[i] = first.Distance
-				}
-			}(n)
-		}
 
-		wg2.Wait()
-		return keys64, distances, nil
-	} else {
-		// partial sort
-		keys64 := make([]int64, nqueries*int(rt.Limit))
-		distances = make([]float64, nqueries*int(rt.Limit))
+					results[i*ndataset] = first
 
-		var wg2 sync.WaitGroup
-		for n := 0; n < int(nthreads); n++ {
-			wg2.Add(1)
-			go func(tid int) {
-				defer wg2.Done()
-				for i := 0; i < nqueries; i++ {
-					if i%int(nthreads) != tid {
-						continue
-					}
+				} else {
+					// partial sort
+
 					partial.SortFunc(results[i*ndataset:(i+1)*ndataset], int(rt.Limit), func(a, b vectorindex.SearchResult) int {
 						if a.Distance < b.Distance {
 							return -1
@@ -297,20 +284,20 @@ func (idx *GoBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, 
 						}
 						return 1
 					})
+
 				}
-			}(n)
-
-		}
-
-		wg2.Wait()
-
-		for i := 0; i < nqueries; i++ {
-			for j := 0; j < int(rt.Limit); j++ {
-				keys64[i*int(rt.Limit)+j] = results[i*ndataset+j].Id
-				distances[i*int(rt.Limit)+j] = results[i*ndataset+j].Distance
 			}
-		}
-
-		return keys64, distances, nil
+		}(n)
 	}
+
+	wg2.Wait()
+
+	for i := 0; i < nqueries; i++ {
+		for j := 0; j < int(rt.Limit); j++ {
+			keys64[i*int(rt.Limit)+j] = results[i*ndataset+j].Id
+			distances[i*int(rt.Limit)+j] = results[i*ndataset+j].Distance
+		}
+	}
+
+	return keys64, distances, nil
 }
