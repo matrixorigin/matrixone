@@ -20,6 +20,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -27,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -90,8 +92,16 @@ func InitializeIterationContext(
 		return nil, moerr.NewInternalError(ctx, "txn client is nil")
 	}
 
+	// Get local account ID from context
+	var localAccountID uint32
+	if v := ctx.Value(defines.TenantIDKey{}); v != nil {
+		if accountID, ok := v.(uint32); ok {
+			localAccountID = accountID
+		}
+	}
+
 	// Create local executor first (without transaction) to query mo_ccpr_log
-	localExecutorInternal, err := NewInternalSQLExecutor(cnUUID, nil)
+	localExecutorInternal, err := NewInternalSQLExecutor(cnUUID, nil, localAccountID)
 	if err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "failed to create local executor: %v", err)
 	}
@@ -145,11 +155,37 @@ func InitializeIterationContext(
 
 	// Create upstream executor from upstream_conn
 	var upstreamExecutor SQLExecutor
+	var upstreamAccountID uint32
 	if !upstreamConn.Valid || upstreamConn.String == "" {
 		return nil, moerr.NewInternalErrorf(ctx, "upstream_conn is null or empty for task_id %d", taskID)
 	}
-	if upstreamConn.String == InternalSQLExecutorType {
-		upstreamExecutor, err = NewInternalSQLExecutor(cnUUID, cnTxnClient)
+
+	// Parse upstream_conn to check if it's internal_sql_executor with account ID
+	// Format: internal_sql_executor or internal_sql_executor:<account_id>
+	if strings.HasPrefix(upstreamConn.String, InternalSQLExecutorType) {
+		// Check if account ID is specified after colon
+		parts := strings.Split(upstreamConn.String, ":")
+		if len(parts) == 2 {
+			// Parse account ID from upstream_conn
+			var accountID uint32
+			_, err := fmt.Sscanf(parts[1], "%d", &accountID)
+			if err != nil {
+				return nil, moerr.NewInternalErrorf(ctx, "failed to parse account ID from upstream_conn %s: %v", upstreamConn.String, err)
+			}
+			upstreamAccountID = accountID
+		} else if len(parts) == 1 {
+			// No account ID specified, use account ID from context as fallback
+			if v := ctx.Value(defines.TenantIDKey{}); v != nil {
+				if accountID, ok := v.(uint32); ok {
+					upstreamAccountID = accountID
+				}
+			}
+		} else {
+			return nil, moerr.NewInternalErrorf(ctx, "invalid upstream_conn format: %s, expected internal_sql_executor or internal_sql_executor:<account_id>", upstreamConn.String)
+		}
+
+		// Create upstream executor with account ID
+		upstreamExecutor, err = NewInternalSQLExecutor(cnUUID, cnTxnClient, upstreamAccountID)
 		if err != nil {
 			return nil, moerr.NewInternalErrorf(ctx, "failed to create local executor: %v", err)
 		}
@@ -465,7 +501,7 @@ func RequestUpstreamSnapshot(
 		return moerr.NewInternalErrorf(ctx, "unsupported sync_level: %s", iterationCtx.SrcInfo.SyncLevel)
 	}
 
-	// Execute SQL through upstream executor
+	// Execute SQL through upstream executor (account ID is handled internally)
 	result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, createSnapshotSQL)
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to create snapshot: %v", err)

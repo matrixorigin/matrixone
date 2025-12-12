@@ -24,6 +24,7 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -38,11 +39,13 @@ type InternalSQLExecutor struct {
 	internalExec executor.SQLExecutor
 	txnOp        client.TxnOperator
 	txnClient    client.TxnClient
+	accountID    uint32 // Account ID for tenant context
 }
 
 // NewInternalSQLExecutor creates a new InternalSQLExecutor
 // txnClient is optional - if provided, StartTxn can create transactions
-func NewInternalSQLExecutor(cnUUID string, txnClient client.TxnClient) (*InternalSQLExecutor, error) {
+// accountID is the tenant account ID to use when executing SQL
+func NewInternalSQLExecutor(cnUUID string, txnClient client.TxnClient, accountID uint32) (*InternalSQLExecutor, error) {
 	v, ok := moruntime.ServiceRuntime(cnUUID).GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {
 		return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("internal SQL executor not found for CN %s", cnUUID))
@@ -57,6 +60,7 @@ func NewInternalSQLExecutor(cnUUID string, txnClient client.TxnClient) (*Interna
 		cnUUID:       cnUUID,
 		internalExec: internalExec,
 		txnClient:    txnClient,
+		accountID:    accountID,
 	}, nil
 }
 
@@ -145,6 +149,12 @@ func (e *InternalSQLExecutor) ExecSQLWithOptions(
 		}
 	}
 
+	// Create context with account ID if specified
+	execCtx := ctx
+	if e.accountID > 0 {
+		execCtx = context.WithValue(ctx, defines.TenantIDKey{}, e.accountID)
+	}
+
 	opts := executor.Options{}.
 		WithDisableIncrStatement()
 
@@ -152,7 +162,7 @@ func (e *InternalSQLExecutor) ExecSQLWithOptions(
 		opts = opts.WithTxn(e.txnOp)
 	}
 
-	execResult, err := e.internalExec.Exec(ctx, query, opts)
+	execResult, err := e.internalExec.Exec(execCtx, query, opts)
 	if err != nil {
 		return nil, err
 	}

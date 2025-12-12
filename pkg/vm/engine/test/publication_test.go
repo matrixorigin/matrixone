@@ -21,10 +21,16 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/publication"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -65,7 +71,7 @@ func TestCheckIterationStatus(t *testing.T) {
 
 	// Create InternalSQLExecutor (only once)
 	// Pass nil for txnClient - transactions will be managed externally via ExecTxn
-	executor, err := publication.NewInternalSQLExecutor("", nil)
+	executor, err := publication.NewInternalSQLExecutor("", nil, accountId)
 	require.NoError(t, err)
 	defer executor.Close()
 
@@ -203,4 +209,201 @@ func TestCheckIterationStatus(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestExecuteIteration(t *testing.T) {
+	catalog.SetupDefines("")
+
+	var (
+		srcAccountID  = catalog.System_Account
+		destAccountID = uint32(2)
+		cnUUID        = "test-cn-uuid-execute-iteration"
+	)
+
+	// Setup source account context
+	srcCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	srcCtx = context.WithValue(srcCtx, defines.TenantIDKey{}, srcAccountID)
+	srcCtxWithTimeout, cancelSrc := context.WithTimeout(srcCtx, time.Minute*5)
+	defer cancelSrc()
+
+	// Setup destination account context
+	destCtx, cancelDest := context.WithCancel(context.Background())
+	defer cancelDest()
+	destCtx = context.WithValue(destCtx, defines.TenantIDKey{}, destAccountID)
+	destCtxWithTimeout, cancelDestTimeout := context.WithTimeout(destCtx, time.Minute*5)
+	defer cancelDestTimeout()
+
+	// Create engines with source account context
+	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(srcCtx, testutil.TestOptions{}, t)
+	defer func() {
+		disttaeEngine.Close(srcCtx)
+		taeHandler.Close(true)
+		rpcAgent.Close()
+	}()
+
+	// Register mock auto increment service
+	mockIncrService := NewMockAutoIncrementService(cnUUID)
+	incrservice.SetAutoIncrementServiceByID("", mockIncrService)
+	defer mockIncrService.Close()
+
+	// Create mo_indexes table
+	err := exec_sql(disttaeEngine, srcCtxWithTimeout, frontend.MoCatalogMoIndexesDDL)
+	require.NoError(t, err)
+
+	// Create mo_ccpr_log table
+	err = exec_sql(disttaeEngine, srcCtxWithTimeout, frontend.MoCatalogMoCcprLogDDL)
+	require.NoError(t, err)
+
+	// Create mo_snapshots table (if needed)
+	moSnapshotsDDL := `CREATE TABLE IF NOT EXISTS mo_catalog.mo_snapshots (
+		sname VARCHAR(5000) NOT NULL PRIMARY KEY,
+		ts BIGINT NOT NULL,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+	)`
+	err = exec_sql(disttaeEngine, srcCtxWithTimeout, moSnapshotsDDL)
+	require.NoError(t, err)
+
+	// Step 1: Create source database and table in source account
+	srcDBName := "src_db"
+	srcTableName := "src_table"
+	schema := catalog2.MockSchemaAll(4, 3)
+	schema.Name = srcTableName
+
+	// Create database and table in source account
+	txn, err := disttaeEngine.NewTxnOperator(srcCtxWithTimeout, disttaeEngine.Now())
+	require.NoError(t, err)
+
+	err = disttaeEngine.Engine.Create(srcCtxWithTimeout, srcDBName, txn)
+	require.NoError(t, err)
+
+	db, err := disttaeEngine.Engine.Database(srcCtxWithTimeout, srcDBName, txn)
+	require.NoError(t, err)
+
+	defs, err := testutil.EngineTableDefBySchema(schema)
+	require.NoError(t, err)
+
+	err = db.Create(srcCtxWithTimeout, srcTableName, defs)
+	require.NoError(t, err)
+
+	rel, err := db.Relation(srcCtxWithTimeout, srcTableName, nil)
+	require.NoError(t, err)
+
+	// Insert data into source table
+	bat := catalog2.MockBatch(schema, 10)
+	err = rel.Write(srcCtxWithTimeout, containers.ToCNBatch(bat))
+	require.NoError(t, err)
+
+	err = txn.Commit(srcCtxWithTimeout)
+	require.NoError(t, err)
+
+	// Force flush the table
+	dbID := rel.GetDBID(srcCtxWithTimeout)
+	tableID := rel.GetTableID(srcCtxWithTimeout)
+	err = taeHandler.GetDB().FlushTable(srcCtxWithTimeout, srcAccountID, dbID, tableID, types.TimestampToTS(disttaeEngine.Now()))
+	require.NoError(t, err)
+
+	// Step 2: Write mo_ccpr_log table in destination account context
+	// Note: We need to use destination account context to write mo_ccpr_log
+	// but the upstream_conn should point to InternalSQLExecutorType
+	taskID := uint64(1)
+	subscriptionName := "test_subscription"
+	insertSQL := fmt.Sprintf(
+		`INSERT INTO mo_catalog.mo_ccpr_log (
+			task_id, 
+			subscription_name, 
+			sync_level, 
+			db_name, 
+			table_name, 
+			upstream_conn, 
+			sync_config, 
+			state, 
+			iteration_state, 
+			iteration_lsn, 
+			cn_uuid
+		) VALUES (
+			%d, 
+			'%s', 
+			'table', 
+			'%s', 
+			'%s', 
+			'%s', 
+			'{}', 
+			0, 
+			%d, 
+			%d, 
+			'%s'
+		)`,
+		taskID,
+		subscriptionName,
+		srcDBName,
+		srcTableName,
+		fmt.Sprintf("%s:%d", publication.InternalSQLExecutorType, srcAccountID),
+		publication.IterationStatePending,
+		0,
+		cnUUID,
+	)
+
+	// Write mo_ccpr_log using destination account context
+	// But we need to ensure the table exists in destination account's mo_catalog
+	// Actually, mo_ccpr_log should be a system table accessible from all accounts
+	// Let's write it using destination context
+	err = exec_sql(disttaeEngine, destCtxWithTimeout, insertSQL)
+	require.NoError(t, err)
+
+	// Step 3: Call ExecuteIteration
+	// Use destination account context for local operations
+	// The upstream account ID is now read from upstream_conn in mo_ccpr_log table
+	iterationLSN := uint64(1)
+	iterationState := publication.IterationStatePending
+
+	err = publication.ExecuteIteration(
+		destCtxWithTimeout,
+		cnUUID,
+		disttaeEngine.Engine,
+		disttaeEngine.GetTxnClient(),
+		taskID,
+		iterationLSN,
+		iterationState,
+	)
+
+	// The iteration should complete successfully
+	require.NoError(t, err)
+
+	// Verify that the iteration state was updated
+	// Query mo_ccpr_log to check iteration_state
+	querySQL := fmt.Sprintf(
+		`SELECT iteration_state, iteration_lsn FROM mo_catalog.mo_ccpr_log WHERE task_id = %d`,
+		taskID,
+	)
+
+	v, ok := runtime.ServiceRuntime("").GetGlobalVariables(runtime.InternalSQLExecutor)
+	require.True(t, ok)
+	exec := v.(executor.SQLExecutor)
+
+	txn, err = disttaeEngine.NewTxnOperator(destCtxWithTimeout, disttaeEngine.Now())
+	require.NoError(t, err)
+
+	res, err := exec.Exec(destCtxWithTimeout, querySQL, executor.Options{}.WithTxn(txn))
+	require.NoError(t, err)
+	defer res.Close()
+
+	// Check that iteration_state is completed
+	var found bool
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		require.Equal(t, 1, rows)
+		require.Equal(t, 2, len(cols))
+
+		state := vector.GetFixedAtWithTypeCheck[int8](cols[0], 0)
+		lsn := vector.GetFixedAtWithTypeCheck[int64](cols[1], 0)
+
+		require.Equal(t, publication.IterationStateCompleted, state)
+		require.Equal(t, int64(iterationLSN), lsn)
+		found = true
+		return true
+	})
+	require.True(t, found, "should find the updated iteration record")
+
+	err = txn.Commit(destCtxWithTimeout)
+	require.NoError(t, err)
 }
