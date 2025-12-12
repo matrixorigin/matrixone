@@ -182,3 +182,43 @@ var (
 		},
 	)
 )
+
+// S3 connection pool state metrics
+// Tracks the current number of active (in-use) HTTP connections
+var (
+	// S3ConnActiveGauge tracks the current number of active S3 HTTP connections
+	// Active connections are connections currently being used for HTTP requests
+	S3ConnActiveGauge = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "fs",
+			Name:      "s3_conn_active",
+			Help:      "Current number of active S3 HTTP connections (connections currently in use)",
+		},
+	)
+)
+
+// Disk cache metrics
+var (
+	// FSDiskCacheEvictCounter tracks the number of disk cache evictions
+	// Evictions occur when cache capacity is exceeded and old entries are removed
+	FSDiskCacheEvictCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "fs",
+			Name:      "disk_cache_evict_total",
+			Help:      "Total number of disk cache evictions",
+		},
+	)
+
+	// FSDiskCacheErrorCounter tracks the number of disk cache errors
+	// Errors include file I/O failures, permission issues, etc.
+	FSDiskCacheErrorCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "fs",
+			Name:      "disk_cache_error_total",
+			Help:      "Total number of disk cache errors",
+		},
+	)
+)
