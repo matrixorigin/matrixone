@@ -316,14 +316,14 @@ func InitializeIterationContext(
 	return iterationCtx, nil
 }
 
-func (iterCtx *IterationContext) Close() error {
+func (iterCtx *IterationContext) Close(commit bool) error {
 	ctx := context.Background()
 	if iterCtx.LocalExecutor != nil {
-		iterCtx.LocalExecutor.EndTxn(ctx, false)
+		iterCtx.LocalExecutor.EndTxn(ctx, commit)
 		iterCtx.LocalExecutor.Close()
 	}
 	if iterCtx.UpstreamExecutor != nil {
-		iterCtx.UpstreamExecutor.EndTxn(ctx, false)
+		iterCtx.UpstreamExecutor.EndTxn(ctx, commit)
 		iterCtx.UpstreamExecutor.Close()
 	}
 	return nil
@@ -915,15 +915,21 @@ func ExecuteIteration(
 		return
 	}
 
+	defer func() {
+		commitErr := iterationCtx.Close(err == nil)
+		if commitErr != nil {
+			if err != nil {
+				err = moerr.NewInternalErrorf(ctx, "failed to close iteration context: %v; previous error: %v", commitErr, err)
+			} else {
+				err = moerr.NewInternalErrorf(ctx, "failed to close iteration context: %v", commitErr)
+			}
+		}
+	}()
 	// Step 0: 初始化阶段
 	// 0.1 检查iteration状态
 	if err = CheckIterationStatus(ctx, iterationCtx.LocalExecutor, taskID, cnUUID, iterationLSN); err != nil {
 		return
 	}
-
-	defer func() {
-		iterationCtx.Close()
-	}()
 
 	// Update iteration state in defer to ensure it's always called
 	defer func() {
