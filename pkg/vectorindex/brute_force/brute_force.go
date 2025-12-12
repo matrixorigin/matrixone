@@ -250,18 +250,30 @@ func (idx *GoBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, 
 		// get min
 		keys64 := make([]int64, nqueries)
 		distances = make([]float64, nqueries)
-		for i := 0; i < nqueries; i++ {
-			first := slices.MinFunc(results[i*ndataset:(i+1)*ndataset], func(a, b vectorindex.SearchResult) int {
-				if a.Distance < b.Distance {
-					return -1
-				} else if a.Distance == b.Distance {
-					return 0
+		var wg2 sync.WaitGroup
+		for n := 0; n < int(nthreads); n++ {
+			wg2.Add(1)
+			go func(tid int) {
+				defer wg2.Done()
+				for i := 0; i < nqueries; i++ {
+					if i%int(nthreads) != tid {
+						continue
+					}
+					first := slices.MinFunc(results[i*ndataset:(i+1)*ndataset], func(a, b vectorindex.SearchResult) int {
+						if a.Distance < b.Distance {
+							return -1
+						} else if a.Distance == b.Distance {
+							return 0
+						}
+						return 1
+					})
+					keys64[i] = first.Id
+					distances[i] = first.Distance
 				}
-				return 1
-			})
-			keys64[i] = first.Id
-			distances[i] = first.Distance
+			}(n)
 		}
+
+		wg2.Wait()
 		return keys64, distances, nil
 	} else {
 		// partial sort
