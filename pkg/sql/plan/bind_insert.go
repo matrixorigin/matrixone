@@ -521,7 +521,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				continue
 			}
 
-			// clone mode
+			// we will clone this index data to new index table, skip insert.
 			if option != nil && option.SkipIndexesCopy[idxDef.IndexName] {
 				continue
 			}

@@ -21,14 +21,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-	"go.uber.org/zap"
 )
 
 var _ NodeT = (*persistedNode)(nil)
@@ -105,15 +103,8 @@ func (node *persistedNode) Scan(
 		ctx, readSchema, node.object.rt, id, colIdxes, location, mp, tsForAppendable,
 	)
 	replaceCommitts := func(vecs []containers.Vector, i int) {
-		stats := node.object.meta.Load().GetObjectStats()
 		createTS := node.object.meta.Load().GetCreatedAt()
 		length := vecs[0].Length()
-		logutil.Info("committs replace",
-			zap.Bool("createdByCN", stats.GetCNCreated()),
-			zap.Bool("appendable", stats.GetAppendable()),
-			zap.String("createdTS", createTS.String()),
-			zap.Int("length", length),
-		)
 		vecs[i].Close()
 		vecs[i] = node.object.rt.VectorPool.Transient.GetVector(&objectio.TSType)
 		vector.AppendMultiFixed(vecs[i].GetDownstreamVector(), createTS, false, length, mp)

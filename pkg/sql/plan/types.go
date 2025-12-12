@@ -193,6 +193,10 @@ type QueryBuilder struct {
 	aggSpillMem int64
 
 	optimizerHints *OptimizerHints
+
+	// optimizationHistory records key optimization steps for debugging remap errors
+	// Only records when optimizations actually change the plan structure
+	optimizationHistory []string
 }
 
 type OptimizerHints struct {
