@@ -172,4 +172,3 @@ func (c *DashboardCreator) initGCCheckpointStatsRow() dashboard.Option {
 		),
 	)
 }
-
