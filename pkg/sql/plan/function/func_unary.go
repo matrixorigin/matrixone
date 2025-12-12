@@ -3035,14 +3035,11 @@ func DateToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 	dates := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[0])
 
 	// Get mode (default 0 if not provided)
+	// MySQL uses mode % 8 for out-of-range values
 	mode := 0
 	if len(ivecs) > 1 && !ivecs[1].IsConstNull() {
 		mode = int(vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0])
-		if mode < 0 {
-			mode = 0
-		} else if mode > 7 {
-			mode = 7
-		}
+		mode = ((mode % 8) + 8) % 8
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
@@ -3074,14 +3071,11 @@ func DatetimeToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 	datetimes := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
 
 	// Get mode (default 0 if not provided)
+	// MySQL uses mode % 8 for out-of-range values
 	mode := 0
 	if len(ivecs) > 1 && !ivecs[1].IsConstNull() {
 		mode = int(vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0])
-		if mode < 0 {
-			mode = 0
-		} else if mode > 7 {
-			mode = 7
-		}
+		mode = ((mode % 8) + 8) % 8
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
