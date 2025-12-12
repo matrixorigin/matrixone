@@ -326,6 +326,7 @@ func handleCloneDatabase(
 		snapCondition string
 
 		snapshotTS int64
+		subMeta    *plan2.SubscriptionMeta
 	)
 
 	oldDefault := ses.GetTxnCompileCtx().DefaultDatabase()
@@ -372,9 +373,26 @@ func handleCloneDatabase(
 		return
 	}
 
+	if subMeta, err = ses.GetTxnCompileCtx().GetSubscriptionMeta(
+		string(stmt.SrcDatabase), snapshot,
+	); err != nil {
+		return
+	}
+
+	srcDBName := stmt.SrcDatabase.String()
+	if subMeta != nil {
+		srcDBName = subMeta.DbName
+		if snapshot != nil {
+			snapshot.Tenant = &plan.SnapshotTenant{TenantID: uint32(subMeta.AccountId)}
+		} else {
+			snapshot = &plan.Snapshot{
+				Tenant: &plan.SnapshotTenant{TenantID: uint32(subMeta.AccountId)},
+			}
+		}
+	}
+
 	if srcTblInfos, err = getTableInfos(
-		reqCtx, ses.GetService(), bh, snapshot,
-		stmt.SrcDatabase.String(), "",
+		reqCtx, ses.GetService(), bh, snapshot, srcDBName, "",
 	); err != nil {
 		return
 	}
@@ -382,13 +400,13 @@ func handleCloneDatabase(
 	snapCondition = snapConditionRegex.FindString(execCtx.input.sql)
 
 	if sortedFkTbls, err = fkTablesTopoSort(
-		reqCtx, bh, snapshot, stmt.SrcDatabase.String(), "",
+		reqCtx, bh, snapshot, srcDBName, "",
 	); err != nil {
 		return
 	}
 
 	if fkTableMap, err = getTableInfoMap(
-		reqCtx, ses.GetService(), bh, snapshot, stmt.SrcDatabase.String(), "", sortedFkTbls,
+		reqCtx, ses.GetService(), bh, snapshot, srcDBName, "", sortedFkTbls,
 	); err != nil {
 		return
 	}
