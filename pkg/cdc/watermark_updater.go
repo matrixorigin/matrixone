@@ -638,7 +638,10 @@ func (u *CDCWatermarkUpdater) execBatchUpdateWM() (errMsg string, err error) {
 		ctx, cancel := context.WithTimeoutCause(context.Background(), 20*time.Second, moerr.CauseWatermarkUpdate)
 		defer cancel()
 		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+		startTime := time.Now()
 		err = u.ie.Exec(ctx, commitSql, ie.SessionOverrideOptions{})
+		duration := time.Since(startTime)
+		v2.CdcWatermarkCommitDuration.Observe(duration.Seconds())
 	}
 
 	u.Lock()
@@ -677,6 +680,10 @@ func (u *CDCWatermarkUpdater) execBatchUpdateWM() (errMsg string, err error) {
 		}
 	} else {
 		// commit watermarks from committing to committed
+		// Record successful batch commit
+		if committingCount > 0 {
+			v2.CdcWatermarkCommitBatchCounter.Inc()
+		}
 		for key, watermark := range u.cacheCommitting {
 			u.cacheCommitted[key] = watermark
 			if _, existed := u.commitCircuitOpen[key]; existed {
@@ -1103,6 +1110,10 @@ func (u *CDCWatermarkUpdater) UpdateWatermarkOnly(
 	oldWatermark, hasOld := u.cacheUncommitted[*key]
 	u.cacheUncommitted[*key] = *watermark
 
+	// Record metrics: watermark update counter
+	tableLabel := key.String()
+	v2.CdcWatermarkUpdateCounter.WithLabelValues(tableLabel, "commit").Inc()
+
 	// Log watermark updates for better observability
 	logutil.Debug(
 		"cdc.watermark.buffer_update",
@@ -1334,12 +1345,25 @@ func (u *CDCWatermarkUpdater) wrapCronJob(job func(ctx context.Context)) func(ct
 			v2.CdcWatermarkCacheGauge.WithLabelValues("committed").Set(float64(committedCount))
 
 			// Metrics: watermark lag for each table
+			// Default expected frequency: 200ms (typical CDC polling interval)
+			// This is a simplified calculation - actual frequency-aware ratio would require task config
+			// Baseline for lag ratio: 3 seconds (allows for batch processing delays and network latency)
+			// This is more realistic than 0.4s (200ms * 2) which was too small for practical scenarios
+			defaultExpectedLagSeconds := 3.0
 			for key, watermark := range u.cacheCommitted {
 				if !watermark.IsEmpty() {
 					wmTime := watermark.ToTimestamp().ToStdTime()
 					lagSeconds := time.Since(wmTime).Seconds()
 					tableLabel := key.String()
 					v2.CdcWatermarkLagSeconds.WithLabelValues(tableLabel).Set(lagSeconds)
+
+					// Calculate lag ratio: actual lag / expected lag
+					// Expected lag = 3 seconds (realistic baseline for batch processing)
+					// Ratio < 2: normal, 2-5: warning, > 5: critical
+					if defaultExpectedLagSeconds > 0 {
+						lagRatio := lagSeconds / defaultExpectedLagSeconds
+						v2.CdcWatermarkLagRatio.WithLabelValues(tableLabel).Set(lagRatio)
+					}
 				}
 			}
 			u.RUnlock()

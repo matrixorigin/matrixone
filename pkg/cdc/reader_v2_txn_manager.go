@@ -227,6 +227,11 @@ func (tm *TransactionManager) CommitTransaction(ctx context.Context) error {
 		zap.String("to-ts", toTs.ToString()),
 	)
 
+	// Step 4: Clean up tracker to allow next transaction to begin
+	// This is critical: without cleanup, processTailDone will see tracker.hasBegin == true
+	// and won't call BeginTransaction again
+	tm.tracker = nil
+
 	return nil
 }
 

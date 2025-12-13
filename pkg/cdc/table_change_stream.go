@@ -578,6 +578,13 @@ func (s *TableChangeStream) cleanup(ctx context.Context) {
 	)
 	defer s.wg.Done()
 	defer func() {
+		// Decrement table stream state gauge on cleanup
+		if s.progressTracker != nil {
+			state, _ := s.progressTracker.GetState()
+			if state != "" {
+				v2.CdcTableStreamTotalGauge.WithLabelValues(state).Dec()
+			}
+		}
 		logutil.Debug(
 			"cdc.table_stream.cleanup_done",
 			zap.String("table", s.tableInfo.String()),

@@ -17,6 +17,7 @@ package cdc
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -123,12 +124,15 @@ func NewProgressTracker(accountId uint64, taskId, dbName, tableName string) *Pro
 	}
 	pt.initialSyncState.Store(initialSyncStateNotStarted)
 	v2.CdcInitialSyncStatusGauge.WithLabelValues(pt.tableKey()).Set(initialSyncStatusNotStartedValue)
+	// Initialize table stream state gauge
+	v2.CdcTableStreamTotalGauge.WithLabelValues("idle").Inc()
 	return pt
 }
 
 // SetState updates the current state
 func (pt *ProgressTracker) SetState(state string) {
 	pt.mu.Lock()
+	oldState := pt.state
 	defer pt.mu.Unlock()
 
 	if pt.state != state {
@@ -136,9 +140,16 @@ func (pt *ProgressTracker) SetState(state string) {
 		pt.lastStateChange = time.Now()
 		pt.stateChangeCount.Add(1)
 
+		// Update table stream total gauge: decrement old state, increment new state
+		if oldState != "" {
+			v2.CdcTableStreamTotalGauge.WithLabelValues(oldState).Dec()
+		}
+		v2.CdcTableStreamTotalGauge.WithLabelValues(state).Inc()
+
 		logutil.Debug(
 			"cdc.progress_tracker.state_change",
 			zap.String("table", pt.tableKey()),
+			zap.String("old-state", oldState),
 			zap.String("new-state", state),
 			zap.Uint64("state-changes", pt.stateChangeCount.Load()),
 		)
@@ -266,6 +277,24 @@ func (pt *ProgressTracker) EndRound(success bool, err error) {
 		zap.Error(err),
 	)
 
+	// Record table stream round metrics
+	status := "success"
+	if !success {
+		status = "failed"
+		if err != nil {
+			// More detailed status based on error type
+			if strings.Contains(err.Error(), "paused") {
+				status = "paused"
+			} else if strings.Contains(err.Error(), "cancelled") {
+				status = "cancelled"
+			}
+		}
+	}
+	v2.CdcTableStreamRoundCounter.WithLabelValues(tableLabel, status).Inc()
+	if duration > 0 {
+		v2.CdcTableStreamRoundDuration.WithLabelValues(tableLabel).Observe(duration.Seconds())
+	}
+
 	if success {
 		if duration > 0 {
 			throughput := float64(currentRoundRows) / duration.Seconds()
@@ -281,6 +310,9 @@ func (pt *ProgressTracker) EndRound(success bool, err error) {
 					lag = 0
 				}
 				v2.CdcWatermarkLagSeconds.WithLabelValues(tableLabel).Set(lag)
+				// Record end-to-end latency: from source write (watermark timestamp) to target commit (now)
+				// This represents the time from when data was written to source DB to when it's committed to target
+				v2.CdcLatencyHistogram.WithLabelValues(tableLabel).Observe(lag)
 			}
 		}
 		v2.CdcTableLastActivityTimestamp.WithLabelValues(tableLabel).Set(float64(time.Now().Unix()))
@@ -359,6 +391,16 @@ func (pt *ProgressTracker) RecordBatch(rows, bytes uint64) {
 		pt.initialSyncRows.Add(rows)
 		pt.initialSyncBytes.Add(bytes)
 		pt.initialSyncBatches.Add(1)
+	}
+
+	// Record Prometheus metrics
+	tableLabel := pt.tableKey()
+	if rows > 0 {
+		// Record as "read" operation since this is during data reading phase
+		v2.CdcRowsProcessedCounter.WithLabelValues("read", tableLabel).Add(float64(rows))
+		v2.CdcBytesProcessedCounter.WithLabelValues("read", tableLabel).Add(float64(bytes))
+		// Record batch size (use "tail" as default, will be updated if we know it's snapshot)
+		v2.CdcBatchSizeHistogram.WithLabelValues("tail").Observe(float64(rows))
 	}
 
 	// Log progress periodically
@@ -565,6 +607,11 @@ func (pt *ProgressTracker) CheckStuck(stuckThreshold time.Duration) (bool, strin
 
 func (pt *ProgressTracker) tableKey() string {
 	return fmt.Sprintf("%d.%s.%s.%s", pt.accountId, pt.taskId, pt.dbName, pt.tableName)
+}
+
+// TableKey returns the table key for metrics labeling (public method)
+func (pt *ProgressTracker) TableKey() string {
+	return pt.tableKey()
 }
 
 // ProgressMonitor monitors multiple progress trackers and detects stuck tables

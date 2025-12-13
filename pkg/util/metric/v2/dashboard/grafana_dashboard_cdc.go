@@ -21,7 +21,42 @@ import (
 	"github.com/K-Phoen/grabana/dashboard"
 	"github.com/K-Phoen/grabana/timeseries"
 	tsaxis "github.com/K-Phoen/grabana/timeseries/axis"
+	"github.com/K-Phoen/sdk"
 )
+
+// floatPtr returns a pointer to the given float64 value
+func floatPtr(f float64) *float64 {
+	return &f
+}
+
+// thresholdStep represents a threshold step in Grafana
+type thresholdStep struct {
+	Value *float64
+	Color string
+}
+
+// withThresholds adds threshold configuration to a timeseries panel
+func (c *DashboardCreator) withThresholds(mode string, steps []thresholdStep) timeseries.Option {
+	return func(ts *timeseries.TimeSeries) error {
+		// Initialize Thresholds if not already set
+		if ts.Builder.TimeseriesPanel.FieldConfig.Defaults.Thresholds.Mode == "" {
+			ts.Builder.TimeseriesPanel.FieldConfig.Defaults.Thresholds.Mode = mode
+		}
+		ts.Builder.TimeseriesPanel.FieldConfig.Defaults.Thresholds.Steps = make([]sdk.ThresholdStep, 0, len(steps))
+
+		for _, step := range steps {
+			thresholdStep := sdk.ThresholdStep{
+				Color: step.Color,
+				Value: step.Value,
+			}
+			ts.Builder.TimeseriesPanel.FieldConfig.Defaults.Thresholds.Steps = append(
+				ts.Builder.TimeseriesPanel.FieldConfig.Defaults.Thresholds.Steps,
+				thresholdStep,
+			)
+		}
+		return nil
+	}
+}
 
 func (c *DashboardCreator) initCDCDashboard() error {
 	folder, err := c.createFolder(c.folderName)
@@ -83,6 +118,11 @@ func (c *DashboardCreator) initCDCTaskRow() dashboard.Option {
 				"{{ error_type }}",
 			},
 			timeseries.Axis(tsaxis.Unit("short")),
+			c.withThresholds("absolute", []thresholdStep{
+				{Value: nil, Color: "green"},             // < 0.01/s: normal
+				{Value: floatPtr(0.01), Color: "yellow"}, // 0.01-0.1/s: warning
+				{Value: floatPtr(0.1), Color: "red"},     // > 0.1/s: critical
+			}),
 		),
 	)
 }
@@ -113,32 +153,52 @@ func (c *DashboardCreator) initCDCWatermarkRow() dashboard.Option {
 			},
 			timeseries.Axis(tsaxis.Unit("short")),
 			SpanNulls(true),
+			c.withThresholds("absolute", []thresholdStep{
+				{Value: nil, Color: "green"},            // < 2: normal (lag < 6s)
+				{Value: floatPtr(2.0), Color: "yellow"}, // 2-5: warning (lag 6-15s)
+				{Value: floatPtr(5.0), Color: "red"},    // > 5: critical (lag > 15s)
+			}),
 		),
 		c.withTimeSeries(
 			"Watermark Cache Size",
 			6,
 			[]string{
-				`sum(` + c.getMetricWithFilter("mo_cdc_watermark_cache_size", "") + `) by (tier)`,
+				`sum(` + c.getMetricWithFilter("mo_cdc_watermark_cache_size", `tier="uncommitted"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_cdc_watermark_cache_size", `tier="committing"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_cdc_watermark_cache_size", `tier="committed"`) + `)`,
 			},
 			[]string{
-				"{{ tier }}",
+				"uncommitted (buffered in memory, not yet persisted to DB)",
+				"committing (being persisted to database, transitional state)",
+				"committed (persisted to database, synced with mo_cdc_watermark table)",
 			},
 			timeseries.Axis(tsaxis.Unit("short")),
 			SpanNulls(true),
 		),
 		c.withTimeSeries(
-			"Watermark Updates /s",
-			6,
+			"Watermark Memory Updates /s",
+			3,
 			[]string{
 				`sum(rate(` + c.getMetricWithFilter("mo_cdc_watermark_update_total", "") + `[$interval])) by (update_type)`,
 			},
 			[]string{
-				"{{ update_type }}",
+				"{{ update_type }} (memory cache)",
+			},
+			timeseries.Axis(tsaxis.Unit("short")),
+		),
+		c.withTimeSeries(
+			"Watermark DB Commits /s",
+			3,
+			[]string{
+				`rate(` + c.getMetricWithFilter("mo_cdc_watermark_commit_batch_total", "") + `[$interval])`,
+			},
+			[]string{
+				"batch commits to database",
 			},
 			timeseries.Axis(tsaxis.Unit("short")),
 		),
 		c.getPercentHist(
-			"Watermark Commit Duration",
+			"Watermark DB Commit Duration (UPDATE SQL)",
 			c.getMetricWithFilter("mo_cdc_watermark_commit_duration_seconds_bucket", ""),
 			[]float64{0.50, 0.90, 0.99},
 			timeseries.Axis(tsaxis.Unit("s")),
@@ -184,7 +244,9 @@ func (c *DashboardCreator) initCDCProcessingRow() dashboard.Option {
 			"Throughput (rows/s)",
 			6,
 			[]string{
-				`sum(` + c.getMetricWithFilter("mo_cdc_throughput_rows_per_second", "") + `) by (table)`,
+				// Use Counter-based calculation for more accurate and continuous throughput
+				// This shows the actual processing rate, not just the last round's throughput
+				`sum(rate(` + c.getMetricWithFilter("mo_cdc_rows_processed_total", `operation="insert"`) + `[$interval])) by (table)`,
 			},
 			[]string{
 				"{{ table }}",
@@ -258,6 +320,11 @@ func (c *DashboardCreator) initCDCTableStreamRow() dashboard.Option {
 				"{{ table }} ({{ error_type }})",
 			},
 			timeseries.Axis(tsaxis.Unit("short")),
+			c.withThresholds("absolute", []thresholdStep{
+				{Value: nil, Color: "green"},            // < 1/s: normal
+				{Value: floatPtr(1.0), Color: "yellow"}, // 1-5/s: warning
+				{Value: floatPtr(5.0), Color: "red"},    // > 5/s: critical
+			}),
 		),
 		c.withTimeSeries(
 			"Retry Outcomes /s",
@@ -342,10 +409,10 @@ func (c *DashboardCreator) initCDCSinkerRow() dashboard.Option {
 			"Retry Rate /s",
 			6,
 			[]string{
-				`sum(rate(` + c.getMetricWithFilter("mo_cdc_sinker_retry_total", "") + `[$interval])) by (reason)`,
+				`sum(rate(` + c.getMetricWithFilter("mo_cdc_sinker_retry_total", "") + `[$interval])) by (reason, result)`,
 			},
 			[]string{
-				"{{ reason }}",
+				"{{ reason }} ({{ result }})",
 			},
 			timeseries.Axis(tsaxis.Unit("short")),
 		),
@@ -378,10 +445,10 @@ func (c *DashboardCreator) initCDCHealthRow() dashboard.Option {
 			timeseries.Axis(tsaxis.Unit("short")),
 		),
 		c.withTimeSeries(
-			"Last Activity Timestamp",
+			"Last Activity (seconds ago)",
 			6,
 			[]string{
-				`max(` + c.getMetricWithFilter("mo_cdc_table_last_activity_timestamp", "") + `) by (table)`,
+				`(time() - max(` + c.getMetricWithFilter("mo_cdc_table_last_activity_timestamp", "") + `) by (table))`,
 			},
 			[]string{
 				"{{ table }}",
