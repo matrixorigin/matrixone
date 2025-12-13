@@ -394,13 +394,16 @@ func (pt *ProgressTracker) RecordBatch(rows, bytes uint64) {
 	}
 
 	// Record Prometheus metrics
-	tableLabel := pt.tableKey()
 	if rows > 0 {
-		// Record as "read" operation since this is during data reading phase
-		v2.CdcRowsProcessedCounter.WithLabelValues("read", tableLabel).Add(float64(rows))
-		v2.CdcBytesProcessedCounter.WithLabelValues("read", tableLabel).Add(float64(bytes))
-		// Record batch size (use "tail" as default, will be updated if we know it's snapshot)
-		v2.CdcBatchSizeHistogram.WithLabelValues("tail").Observe(float64(rows))
+		// Record batch size: use "snapshot" during initial sync, "tail" otherwise
+		// Note: We don't record rows/bytes as "read" here to avoid double counting.
+		// The same rows will be recorded as "insert" or "delete" operations in the sinker
+		// (see sinker_v2.go handleInsertDeleteBatch), which represents the actual data flow.
+		batchType := "tail"
+		if pt.initialSyncState.Load() == initialSyncStateRunning {
+			batchType = "snapshot"
+		}
+		v2.CdcBatchSizeHistogram.WithLabelValues(batchType).Observe(float64(rows))
 	}
 
 	// Log progress periodically
