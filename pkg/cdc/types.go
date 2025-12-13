@@ -357,8 +357,11 @@ func (row AtomicBatchRow) Less(other AtomicBatchRow) bool {
 }
 
 func (bat *AtomicBatch) RowCount() int {
-	if bat == nil || bat.Rows == nil {
+	if bat == nil {
 		return 0
+	}
+	if bat.Rows == nil {
+		panic("RowCount() called on closed AtomicBatch (Fail Fast)")
 	}
 	unique := bat.Rows.Len()
 	if bat.duplicateRows > 0 && !bat.duplicateLogged {

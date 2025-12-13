@@ -358,9 +358,8 @@ func TestTransactionManager_CommitTransaction(t *testing.T) {
 	assert.True(t, sinker.commitCalled)
 	assert.True(t, sinker.dummyCalled)
 	assert.True(t, updater.updateCalled)
-	assert.True(t, tm.tracker.hasCommitted)
-	assert.True(t, tm.tracker.IsWatermarkUpdated())
-	assert.False(t, tm.tracker.NeedsRollback())
+	// Note: tracker is set to nil after successful commit, so we can't check its state
+	// The commit success is verified by checking external effects (sinker, watermark)
 
 	// Verify watermark was updated
 	wm, err := updater.GetFromCache(ctx, tm.watermarkKey)

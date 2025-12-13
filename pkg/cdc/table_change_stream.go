@@ -455,9 +455,14 @@ func (s *TableChangeStream) Run(ctx context.Context, ar *ActiveRoutine) {
 
 			// Check if cleanup failed with rollback error (set by processWithTxn defer)
 			// If so, override retryable to false even if main error is retryable
+			// However, preserve retryable state if error is a pause/cancel control signal
 			s.stateMu.Lock()
 			if s.cleanupRollbackErr != nil {
-				s.retryable = false
+				// Only set retryable to false if error is not a pause/cancel control signal
+				// This preserves retryable state after successful stale read recovery
+				if !IsPauseOrCancelError(err.Error()) {
+					s.retryable = false
+				}
 			}
 			retryable := s.retryable
 			retryCount := s.retryCount
@@ -763,10 +768,15 @@ func (s *TableChangeStream) processOneRound(ctx context.Context, ar *ActiveRouti
 
 	// If cleanup failed with rollback error, mark as non-retryable but return original error
 	// (test expects original error to be returned, but retryable should be false)
+	// However, preserve retryable state if error is a pause/cancel control signal
 	if cleanupRollbackErr != nil {
 		// Update error state to mark as non-retryable, but keep original error
+		// Only set retryable to false if error is not a pause/cancel control signal
+		// This preserves retryable state after successful stale read recovery
 		s.stateMu.Lock()
-		s.retryable = false
+		if err == nil || !IsPauseOrCancelError(err.Error()) {
+			s.retryable = false
+		}
 		s.stateMu.Unlock()
 		// Return original error (not cleanup error) as expected by tests
 		return err
