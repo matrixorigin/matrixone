@@ -934,6 +934,13 @@ func (u *CDCWatermarkUpdater) UpdateWatermarkErrMsg(
 		delete(u.errorMetadataCache, *key)
 		u.Unlock()
 
+		// Clear metric when error is cleared
+		tableLabel := key.String()
+		errorTypes := []string{"network", "commit", "table_relation", "sinker", "max_retry_exceeded", "unknown"}
+		for _, et := range errorTypes {
+			v2.CdcTableNonRetryableErrorGauge.WithLabelValues(tableLabel, et).Set(0)
+		}
+
 		job := NewUpdateWMErrMsgJob(ctx, key, "")
 		if _, err = u.queue.Enqueue(job); err != nil {
 			if errors.Is(err, sm.ErrClose) {
@@ -1019,6 +1026,21 @@ func (u *CDCWatermarkUpdater) UpdateWatermarkErrMsg(
 		newMetadata.IsRetryable = false
 		newMetadata.Message = fmt.Sprintf("max retry exceeded (%d): %s",
 			newMetadata.RetryCount, newMetadata.Message)
+	}
+
+	// 6.5. Update metric if non-retryable error
+	if !newMetadata.IsRetryable {
+		tableLabel := key.String()
+		errorType := extractErrorType(newMetadata.Message)
+		v2.CdcTableNonRetryableErrorGauge.WithLabelValues(tableLabel, errorType).Set(1)
+	} else {
+		// Clear metric for retryable errors (they may become non-retryable later)
+		// Reset all possible error_type labels for this table
+		tableLabel := key.String()
+		errorTypes := []string{"network", "commit", "table_relation", "sinker", "max_retry_exceeded", "unknown"}
+		for _, et := range errorTypes {
+			v2.CdcTableNonRetryableErrorGauge.WithLabelValues(tableLabel, et).Set(0)
+		}
 	}
 
 	// 7. Update memory cache (like UpdateWatermarkOnly - no SQL)
@@ -1378,6 +1400,9 @@ func (u *CDCWatermarkUpdater) wrapCronJob(job func(ctx context.Context)) func(ct
 				zap.Int("committed-watermarks", committedCount),
 				zap.Float64("skip-ratio", float64(u.stats.skipTimes.Load())/float64(u.stats.runTimes.Load())),
 			)
+
+			// Scan all tables with errors and update non-retryable error metrics
+			u.scanAndUpdateNonRetryableErrorMetrics(ctx)
 		}
 		u.stats.runTimes.Add(1)
 		job(ctx)
@@ -1390,6 +1415,131 @@ func (u *CDCWatermarkUpdater) scheduleJob(job *UpdaterJob) (err error) {
 		return
 	}
 	return
+}
+
+// extractErrorType extracts error type from error message for metric labels
+// This is a simplified version that extracts common error patterns
+func extractErrorType(errMsg string) string {
+	if errMsg == "" {
+		return "none"
+	}
+
+	// Network/system errors
+	if strings.Contains(errMsg, "connection") ||
+		strings.Contains(errMsg, "timeout") ||
+		strings.Contains(errMsg, "network") ||
+		strings.Contains(errMsg, "unavailable") ||
+		strings.Contains(errMsg, "rpc") ||
+		strings.Contains(errMsg, "backend") {
+		return "network"
+	}
+
+	// Commit errors
+	if strings.Contains(errMsg, "commit") {
+		return "commit"
+	}
+
+	// Table relation errors
+	if strings.Contains(errMsg, "relation") ||
+		strings.Contains(errMsg, "truncated") ||
+		strings.Contains(errMsg, "table not found") ||
+		strings.Contains(errMsg, "table") {
+		return "table_relation"
+	}
+
+	// Sinker errors
+	if strings.Contains(errMsg, "sinker") {
+		return "sinker"
+	}
+
+	// Max retry exceeded
+	if strings.Contains(errMsg, "max retry exceeded") {
+		return "max_retry_exceeded"
+	}
+
+	// Default category
+	return "unknown"
+}
+
+// scanAndUpdateNonRetryableErrorMetrics scans all tables with errors from database
+// and updates non-retryable error metrics
+func (u *CDCWatermarkUpdater) scanAndUpdateNonRetryableErrorMetrics(ctx context.Context) {
+	// Query all watermarks with err_msg != ''
+	// Use System_Account context for querying
+	queryCtx := defines.AttachAccountId(ctx, catalog.System_Account)
+	projection := "account_id, task_id, db_name, table_name, err_msg"
+	whereClause := "err_msg != ''"
+	sql := CDCSQLBuilder.GetWatermarkWhereSQL(projection, whereClause)
+
+	res := u.ie.Query(queryCtx, sql, ie.SessionOverrideOptions{})
+	if res.Error() != nil {
+		logutil.Warn(
+			"cdc.watermark.scan_errors_failed",
+			zap.Error(res.Error()),
+		)
+		return
+	}
+
+	// Track all tables we've seen to reset metrics for tables that no longer have errors
+	seenTables := make(map[string]bool)
+	nonRetryableCount := 0
+
+	// Process each row
+	for i := uint64(0); i < res.RowCount(); i++ {
+		accountId, err := res.GetUint64(queryCtx, i, 0)
+		if err != nil {
+			logutil.Warn(
+				"cdc.watermark.scan_errors_get_account_id_failed",
+				zap.Error(err),
+				zap.Uint64("row", i),
+			)
+			continue
+		}
+		taskId, _ := res.GetString(queryCtx, i, 1)
+		dbName, _ := res.GetString(queryCtx, i, 2)
+		tableName, _ := res.GetString(queryCtx, i, 3)
+		errMsg, _ := res.GetString(queryCtx, i, 4)
+
+		if errMsg == "" {
+			continue
+		}
+
+		// Build table label: account_id.task_id.db_name.table_name (format matches WatermarkKey.String())
+		tableLabel := fmt.Sprintf("%d.%s.%s.%s", accountId, taskId, dbName, tableName)
+		seenTables[tableLabel] = true
+
+		// Parse error metadata
+		metadata := ParseErrorMetadata(errMsg)
+		if metadata == nil {
+			continue
+		}
+
+		// Check if non-retryable (ShouldRetry returns false)
+		if !ShouldRetry(metadata) {
+			// Extract error type from message
+			errorType := extractErrorType(metadata.Message)
+			// Set metric to 1 (has non-retryable error)
+			v2.CdcTableNonRetryableErrorGauge.WithLabelValues(tableLabel, errorType).Set(1)
+			nonRetryableCount++
+		} else {
+			// Retryable error or no error - set to 0
+			// We need to reset all possible error_type labels for this table
+			// Since we don't know which error_type was previously set, we'll reset common ones
+			errorTypes := []string{"network", "commit", "table_relation", "sinker", "max_retry_exceeded", "unknown"}
+			for _, et := range errorTypes {
+				v2.CdcTableNonRetryableErrorGauge.WithLabelValues(tableLabel, et).Set(0)
+			}
+		}
+	}
+
+	// Update total count
+	v2.CdcTableNonRetryableErrorTotalGauge.Set(float64(nonRetryableCount))
+
+	logutil.Debug(
+		"cdc.watermark.scan_errors_complete",
+		zap.Int("total-tables-with-errors", int(res.RowCount())),
+		zap.Int("non-retryable-count", nonRetryableCount),
+	)
 }
 
 // cronRun is the periodic job that moves watermarks from cacheUncommitted to database.

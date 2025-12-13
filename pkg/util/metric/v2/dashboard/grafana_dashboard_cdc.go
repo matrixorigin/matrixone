@@ -549,7 +549,7 @@ func (c *DashboardCreator) initCDCHealthRow() dashboard.Option {
 		"Heartbeat & Table Health",
 		c.withTimeSeries(
 			"Heartbeat Rate /s",
-			6,
+			4,
 			[]string{
 				`sum(rate(` + c.getMetricWithFilter("mo_cdc_heartbeat_total", "") + `[$interval])) by (table)`,
 			},
@@ -560,7 +560,7 @@ func (c *DashboardCreator) initCDCHealthRow() dashboard.Option {
 		),
 		c.withTimeSeries(
 			"Stuck Tables",
-			6,
+			4,
 			[]string{
 				`max(` + c.getMetricWithFilter("mo_cdc_table_stuck", "") + `) by (table)`,
 			},
@@ -571,7 +571,7 @@ func (c *DashboardCreator) initCDCHealthRow() dashboard.Option {
 		),
 		c.withTimeSeries(
 			"Last Activity (seconds ago)",
-			6,
+			4,
 			[]string{
 				`(time() - max(` + c.getMetricWithFilter("mo_cdc_table_last_activity_timestamp", "") + `) by (table))`,
 			},
@@ -579,6 +579,49 @@ func (c *DashboardCreator) initCDCHealthRow() dashboard.Option {
 				"{{ table }}",
 			},
 			timeseries.Axis(tsaxis.Unit("s")),
+		),
+		c.withTimeSeries(
+			"Non-Retryable Errors",
+			4,
+			[]string{
+				`sum(` + c.getMetricWithFilter("mo_cdc_table_non_retryable_error", "") + `) by (table, error_type)`,
+			},
+			[]string{
+				"{{ table }} ({{ error_type }})",
+			},
+			timeseries.Axis(tsaxis.Unit("short")),
+			c.withThresholds("absolute", []thresholdStep{
+				{Value: nil, Color: "green"},            // 0: no error
+				{Value: floatPtr(0.5), Color: "yellow"}, // 0.5-1: warning
+				{Value: floatPtr(1.0), Color: "red"},    // 1: has error
+			}),
+		),
+		c.withTimeSeries(
+			"Total Non-Retryable Errors",
+			4,
+			[]string{
+				c.getMetricWithFilter("mo_cdc_table_non_retryable_error_total", ""),
+			},
+			[]string{
+				"total",
+			},
+			timeseries.Axis(tsaxis.Unit("short")),
+			c.withThresholds("absolute", []thresholdStep{
+				{Value: nil, Color: "green"},            // 0: no errors
+				{Value: floatPtr(1.0), Color: "yellow"}, // 1-5: warning
+				{Value: floatPtr(5.0), Color: "red"},    // > 5: critical
+			}),
+		),
+		c.withTimeSeries(
+			"Non-Retryable Errors by Type",
+			4,
+			[]string{
+				`sum(` + c.getMetricWithFilter("mo_cdc_table_non_retryable_error", "") + `) by (error_type)`,
+			},
+			[]string{
+				"{{ error_type }}",
+			},
+			timeseries.Axis(tsaxis.Unit("short")),
 		),
 	)
 }

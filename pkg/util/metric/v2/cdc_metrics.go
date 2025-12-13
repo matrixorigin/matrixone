@@ -335,6 +335,26 @@ var (
 			Name:      "table_snapshot_no_progress_total",
 			Help:      "Number of times a table round observed snapshot timestamp not advancing",
 		}, []string{"table"})
+
+	// CdcTableNonRetryableErrorGauge tracks tables with non-retryable errors
+	// Value: 1 = has non-retryable error, 0 = no error or error cleared
+	// Labels: table (account_id.task_id.db_name.table_name), error_type (extracted from error message)
+	CdcTableNonRetryableErrorGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "cdc",
+			Name:      "table_non_retryable_error",
+			Help:      "Tables with non-retryable errors (1=has error, 0=no error)",
+		}, []string{"table", "error_type"})
+
+	// CdcTableNonRetryableErrorTotalGauge tracks total count of tables with non-retryable errors
+	CdcTableNonRetryableErrorTotalGauge = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "cdc",
+			Name:      "table_non_retryable_error_total",
+			Help:      "Total number of tables with non-retryable errors",
+		})
 )
 
 // CDC Initial Sync Metrics
@@ -473,6 +493,8 @@ func initCDCMetrics() {
 	registry.MustRegister(CdcTableStuckGauge)
 	registry.MustRegister(CdcTableLastActivityTimestamp)
 	registry.MustRegister(CdcTableNoProgressCounter)
+	registry.MustRegister(CdcTableNonRetryableErrorGauge)
+	registry.MustRegister(CdcTableNonRetryableErrorTotalGauge)
 
 	// Initial sync metrics
 	registry.MustRegister(CdcInitialSyncStatusGauge)
