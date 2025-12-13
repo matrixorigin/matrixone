@@ -16,6 +16,7 @@ package v3_0_0
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
@@ -26,6 +27,7 @@ var clusterUpgEntries = []versions.UpgradeEntry{
 	upg_mo_pitr,
 	upg_drop_mo_stored_procedure,
 	upg_create_mo_stored_procedure,
+	upg_create_mo_branch_metadata,
 }
 
 var upg_mo_pitr = versions.UpgradeEntry{
@@ -72,6 +74,17 @@ var upg_create_mo_stored_procedure = versions.UpgradeEntry{
 	UpgSql:    frontend.MoCatalogMoStoredProcedureDDL,
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		exist, err := versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, catalog.MO_STORED_PROCEDURE)
+		return exist, err
+	},
+}
+
+var upg_create_mo_branch_metadata = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MO_BRANCH_METADATA,
+	UpgType:   versions.CREATE_NEW_TABLE,
+	UpgSql:    frontend.MoCatalogBranchMetadataDDL,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		exist, err := versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA)
 		return exist, err
 	},
 }
