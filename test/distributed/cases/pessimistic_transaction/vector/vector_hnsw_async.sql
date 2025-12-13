@@ -8,7 +8,7 @@ use hnsw_cdc;
 create table t1(a bigint primary key, b vecf32(3),c int,key c_k(c));
 
 -- empty data
-create index idx01 using hnsw on t1(b) op_type "vector_l2_ops" M 20 EF_CONSTRUCTION 100 EF_SEARCH 100 ASYNC;
+create index idx01 using hnsw on t1(b) op_type "vector_l2_ops" M 64 EF_CONSTRUCTION 200 EF_SEARCH 200 ASYNC;
 
 -- select sleep(10);
 
@@ -40,7 +40,7 @@ drop table t1;
 
 -- t2
 create table t2(a bigint primary key, b vecf32(128));
-create index idx2 using hnsw on t2(b) op_type "vector_l2_ops" M 20 EF_CONSTRUCTION 100 EF_SEARCH 100 ASYNC;
+create index idx2 using hnsw on t2(b) op_type "vector_l2_ops" M 64 EF_CONSTRUCTION 200 EF_SEARCH 200 ASYNC;
 -- select sleep(10);
 
 load data infile {'filepath'='$resources/vector/sift128_base_10k.csv.gz', 'compression'='gzip'} into table t2 fields terminated by ':' parallel 'true';
@@ -72,7 +72,7 @@ load data infile {'filepath'='$resources/vector/sift128_base_10k.csv.gz', 'compr
 
 select count(*) from t3;
 
-create index idx3 using hnsw on t3(b) op_type "vector_l2_ops" M 20 EF_CONSTRUCTION 100 EF_SEARCH 100 ASYNC;
+create index idx3 using hnsw on t3(b) op_type "vector_l2_ops" M 64 EF_CONSTRUCTION 200 EF_SEARCH 200 ASYNC;
 
 select sleep(10);
 
