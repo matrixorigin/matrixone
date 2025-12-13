@@ -86,13 +86,6 @@ func (c *DashboardCreator) initTaskMergeTransferPageRow() dashboard.Option {
 			timeseries.Span(3),
 		),
 		c.getPercentHist(
-			"Transfer duration since born",
-			c.getMetricWithFilter(`mo_task_transfer_duration_bucket`, `type="page_since_born_duration"`),
-			[]float64{0.50, 0.8, 0.90, 0.99},
-			SpanNulls(true),
-			timeseries.Span(3),
-		),
-		c.getPercentHist(
 			"Transfer memory latency",
 			c.getMetricWithFilter(`mo_task_transfer_short_duration_bucket`, `type="mem_latency"`),
 			[]float64{0.50, 0.8, 0.90, 0.99},

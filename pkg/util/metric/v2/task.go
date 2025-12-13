@@ -145,11 +145,10 @@ var (
 		Buckets:   getDurationBuckets(),
 	}, []string{"type"})
 
-	TransferDiskLatencyHistogram           = transferDurationHistogram.WithLabelValues("disk_latency")
-	TransferPageSinceBornDurationHistogram = transferDurationHistogram.WithLabelValues("page_since_born_duration")
-	TransferTableRunTTLDurationHistogram   = transferDurationHistogram.WithLabelValues("table_run_ttl_duration")
-	TransferPageFlushLatencyHistogram      = transferDurationHistogram.WithLabelValues("page_flush_latency")
-	TransferPageMergeLatencyHistogram      = transferDurationHistogram.WithLabelValues("page_merge_latency")
+	TransferDiskLatencyHistogram         = transferDurationHistogram.WithLabelValues("disk_latency")
+	TransferTableRunTTLDurationHistogram = transferDurationHistogram.WithLabelValues("table_run_ttl_duration")
+	TransferPageFlushLatencyHistogram    = transferDurationHistogram.WithLabelValues("page_flush_latency")
+	TransferPageMergeLatencyHistogram    = transferDurationHistogram.WithLabelValues("page_merge_latency")
 
 	transferShortDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: "mo",
