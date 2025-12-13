@@ -20,7 +20,6 @@ import (
 
 	"github.com/K-Phoen/grabana/axis"
 	"github.com/K-Phoen/grabana/dashboard"
-	"github.com/K-Phoen/grabana/row"
 	"github.com/K-Phoen/grabana/timeseries"
 )
 
@@ -144,35 +143,32 @@ func (c *DashboardCreator) initTxnRangesSelectivityRow() dashboard.Option {
 }
 
 func (c *DashboardCreator) initTxnReadSelectivityRow() dashboard.Option {
-	// Read filter metrics: show filter effectiveness
-	// Filter rate = filtered / total (higher means more filters are effective)
-	filterRateFunc := func(title string) row.Option {
-		return c.getTimeSeries(
-			title,
-			[]string{
-				fmt.Sprintf(
-					"sum(rate(%s[$interval])) by (%s) / on(%s) sum(rate(%s[$interval])) by (%s)",
-					c.getMetricWithFilter(`mo_txn_selectivity`, `type="readfilter_filtered"`), c.by, c.by,
-					c.getMetricWithFilter(`mo_txn_selectivity`, `type="readfilter_total"`), c.by),
-			},
-			[]string{fmt.Sprintf("filter-rate-{{ %s }}", c.by)},
-			timeseries.Span(4),
-		)
-	}
+	// Block filter operations rate: number of blocks with filter operations per second
+	// This metric records each block read that performs a filter operation, not high-level filter requests
+	readFilterRequestRate := c.getTimeSeries(
+		"Block filter operations rate",
+		[]string{
+			fmt.Sprintf(
+				"sum(rate(%s[$interval])) by (%s)",
+				c.getMetricWithFilter(`mo_txn_selectivity_count`, `type="readfilter_total"`), c.by),
+		},
+		[]string{fmt.Sprintf("blocks/sec-{{ %s }}", c.by)},
+		timeseries.Span(4),
+	)
 
-	// Counter rate functions
-	counterRateFunc := func(title, metricType string) row.Option {
-		return c.getTimeSeries(
-			title,
-			[]string{
-				fmt.Sprintf(
-					"sum(rate(%s[$interval])) by (%s)",
-					c.getMetricWithFilter(`mo_txn_selectivity`, `type="`+metricType+`_total"`), c.by),
-			},
-			[]string{fmt.Sprintf("req-{{ %s }}", c.by)},
-			timeseries.Span(4),
-		)
-	}
+	// Read filter completely filtered rate: rate of operations where all rows were filtered (len(sels) == 0)
+	// Filtered_count / Total_count gives the ratio of completely filtered operations
+	readFilterCompletelyFilteredRate := c.getTimeSeries(
+		"Read filter completely filtered rate",
+		[]string{
+			fmt.Sprintf(
+				`sum(rate(%s[$interval])) by (%s) / on(%s) sum(rate(%s[$interval])) by (%s)`,
+				c.getMetricWithFilter(`mo_txn_selectivity_count`, `type="readfilter_filtered"`), c.by, c.by,
+				c.getMetricWithFilter(`mo_txn_selectivity_count`, `type="readfilter_total"`), c.by),
+		},
+		[]string{fmt.Sprintf("completely-filtered-rate-{{ %s }}", c.by)},
+		timeseries.Span(4),
+	)
 
 	// Column read histogram: show per-read column count percentiles
 	// P50, P90, P99 of column read count per read operation
@@ -216,8 +212,8 @@ func (c *DashboardCreator) initTxnReadSelectivityRow() dashboard.Option {
 
 	return dashboard.Row(
 		"Read Selectivity",
-		filterRateFunc("Read filter rate"),
-		counterRateFunc("Read filter request", "readfilter"),
+		readFilterRequestRate,
+		readFilterCompletelyFilteredRate,
 		columnReadCountHistogram,
 		columnTotalCountHistogram,
 		columnReadRatioHistogram,

@@ -421,19 +421,20 @@ var (
 
 // selectivity metrics for read filter and column
 var (
-	txnSelectivityCounter = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
+	txnSelectivityHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
 			Namespace: "mo",
 			Subsystem: "txn",
 			Name:      "selectivity",
-			Help:      "Selectivity counter for read filter and column.",
+			Help:      "Bucketed histogram of selectivity for read filter and column.",
+			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 15),
 		}, []string{"type"})
 
 	// Read filter metrics: track filter effectiveness
-	// Total: total number of filter operations
-	// Filtered: number of filters that filtered out all data (len(sels) == 0)
-	TxnSelReadFilterTotal    = txnSelectivityCounter.WithLabelValues("readfilter_total")
-	TxnSelReadFilterFiltered = txnSelectivityCounter.WithLabelValues("readfilter_filtered")
+	// Total: total number of filter operations per read (observe 1.0 for each operation)
+	// Filtered: number of operations where all rows were filtered out (observe 1.0 when len(sels) == 0)
+	TxnSelReadFilterTotal    = txnSelectivityHistogram.WithLabelValues("readfilter_total")
+	TxnSelReadFilterFiltered = txnSelectivityHistogram.WithLabelValues("readfilter_filtered")
 )
 
 // Column read histogram metrics: track per-read column counts

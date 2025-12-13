@@ -165,7 +165,7 @@ func initTxnMetrics() {
 	registry.MustRegister(txnTransferDurationHistogram)
 	registry.MustRegister(TransferTombstonesCountHistogram)
 	registry.MustRegister(TxnExtraWorkspaceQuotaGauge)
-	registry.MustRegister(txnSelectivityCounter)
+	registry.MustRegister(txnSelectivityHistogram)
 	registry.MustRegister(txnColumnReadHistogram)
 }
 
