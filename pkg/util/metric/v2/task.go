@@ -51,24 +51,6 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 13),
 		}, []string{"type"})
 
-	taskBytesHistogram = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace: "mo",
-			Subsystem: "task",
-			Name:      "hist_bytes",
-			Help:      "Bucketed histogram of task result bytes.",
-			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 30),
-		}, []string{"type"})
-
-	taskCountHistogram = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace: "mo",
-			Subsystem: "task",
-			Name:      "hist_total",
-			Help:      "Bucketed histogram of task result count.",
-			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 30),
-		}, []string{"type"})
-
 	TaskCkpEntryPendingDurationHistogram = taskLongDurationHistogram.WithLabelValues("ckp_entry_pending")
 )
 

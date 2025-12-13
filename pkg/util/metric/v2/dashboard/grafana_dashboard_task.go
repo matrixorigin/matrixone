@@ -328,14 +328,6 @@ func (c *DashboardCreator) initTaskSelectivityRow() dashboard.Option {
 		counterRateFunc("Read filter request", "readfilter"),
 		counterRateFunc("Block range request", "block"),
 		counterRateFunc("Column update request", "column"),
-		c.getPercentHist(
-			"Iterate deletes rows count per block",
-			c.getMetricWithFilter(`mo_task_hist_total_bucket`, `type="load_mem_deletes_per_block"`),
-			[]float64{0.5, 0.7, 0.8, 0.9},
-			timeseries.Axis(tsaxis.Unit("")),
-			timeseries.Span(4),
-			SpanNulls(true),
-		),
 	)
 }
 
