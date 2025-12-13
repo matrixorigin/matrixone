@@ -95,8 +95,6 @@ var (
 
 	TaskSelReadFilterTotal = taskSelectivityCounter.WithLabelValues("readfilter_total")
 	TaskSelReadFilterHit   = taskSelectivityCounter.WithLabelValues("readfilter_hit")
-	TaskSelBlockTotal      = taskSelectivityCounter.WithLabelValues("block_total")
-	TaskSelBlockHit        = taskSelectivityCounter.WithLabelValues("block_hit")
 	TaskSelColumnTotal     = taskSelectivityCounter.WithLabelValues("column_total")
 	TaskSelColumnHit       = taskSelectivityCounter.WithLabelValues("column_hit")
 )

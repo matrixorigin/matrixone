@@ -288,16 +288,16 @@ func (c *DashboardCreator) initTaskStorageUsageRow() dashboard.Option {
 
 func (c *DashboardCreator) initTaskSelectivityRow() dashboard.Option {
 
-	hitRateFunc := func(title, metricType string) row.Option {
+	hitRateFunc := func(title, metricType, selectedLabel string) row.Option {
 		return c.getTimeSeries(
 			title,
 			[]string{
 				fmt.Sprintf(
 					"sum(%s) by (%s) / on(%s) sum(%s) by (%s)",
-					c.getMetricWithFilter(`mo_task_selectivity`, `type="`+metricType+`_hit"`), c.by, c.by,
+					c.getMetricWithFilter(`mo_task_selectivity`, `type="`+selectedLabel+`"`), c.by, c.by,
 					c.getMetricWithFilter(`mo_task_selectivity`, `type="`+metricType+`_total"`), c.by),
 			},
-			[]string{fmt.Sprintf("filterout-{{ %s }}", c.by)},
+			[]string{fmt.Sprintf("selectivity-{{ %s }}", c.by)},
 			timeseries.Span(4),
 		)
 	}
@@ -315,11 +315,9 @@ func (c *DashboardCreator) initTaskSelectivityRow() dashboard.Option {
 	}
 	return dashboard.Row(
 		"Read Selectivity",
-		hitRateFunc("Read filter rate", "readfilter"),
-		hitRateFunc("Block range filter rate", "block"),
-		hitRateFunc("Column update filter rate", "column"),
+		hitRateFunc("Read filter rate", "readfilter", "readfilter_hit"),
+		hitRateFunc("Column update filter rate", "column", "column_hit"),
 		counterRateFunc("Read filter request", "readfilter"),
-		counterRateFunc("Block range request", "block"),
 		counterRateFunc("Column update request", "column"),
 	)
 }
