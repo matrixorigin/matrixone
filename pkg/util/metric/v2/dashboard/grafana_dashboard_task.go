@@ -20,7 +20,6 @@ import (
 
 	"github.com/K-Phoen/grabana/axis"
 	"github.com/K-Phoen/grabana/dashboard"
-	"github.com/K-Phoen/grabana/row"
 	"github.com/K-Phoen/grabana/timeseries"
 	tsaxis "github.com/K-Phoen/grabana/timeseries/axis"
 )
@@ -38,7 +37,6 @@ func (c *DashboardCreator) initTaskDashboard() error {
 			c.initTaskMergeRow(),
 			c.initTaskMergeTransferPageRow(),
 			c.initTaskCheckpointRow(),
-			c.initTaskSelectivityRow(),
 			c.initTaskStorageUsageRow(),
 			c.initMoTableStatsTaskDurationRow(),
 			c.initMoTableStatsTaskCountingRow(),
@@ -284,42 +282,6 @@ func (c *DashboardCreator) initTaskStorageUsageRow() dashboard.Option {
 		rows...,
 	)
 
-}
-
-func (c *DashboardCreator) initTaskSelectivityRow() dashboard.Option {
-
-	hitRateFunc := func(title, metricType, selectedLabel string) row.Option {
-		return c.getTimeSeries(
-			title,
-			[]string{
-				fmt.Sprintf(
-					"sum(%s) by (%s) / on(%s) sum(%s) by (%s)",
-					c.getMetricWithFilter(`mo_task_selectivity`, `type="`+selectedLabel+`"`), c.by, c.by,
-					c.getMetricWithFilter(`mo_task_selectivity`, `type="`+metricType+`_total"`), c.by),
-			},
-			[]string{fmt.Sprintf("selectivity-{{ %s }}", c.by)},
-			timeseries.Span(4),
-		)
-	}
-	counterRateFunc := func(title, metricType string) row.Option {
-		return c.getTimeSeries(
-			title,
-			[]string{
-				fmt.Sprintf(
-					"sum(rate(%s[$interval])) by (%s)",
-					c.getMetricWithFilter(`mo_task_selectivity`, `type="`+metricType+`_total"`), c.by),
-			},
-			[]string{fmt.Sprintf("req-{{ %s }}", c.by)},
-			timeseries.Span(4),
-		)
-	}
-	return dashboard.Row(
-		"Read Selectivity",
-		hitRateFunc("Read filter rate", "readfilter", "readfilter_hit"),
-		hitRateFunc("Column update filter rate", "column", "column_hit"),
-		counterRateFunc("Read filter request", "readfilter"),
-		counterRateFunc("Column update request", "column"),
-	)
 }
 
 func (c *DashboardCreator) initMoTableStatsTaskDurationRow() dashboard.Option {

@@ -83,22 +83,6 @@ var (
 	TaskTombstoneMergeDurationHistogram       = taskDNMergeDurationHistogram.WithLabelValues("merge", "tombstone")
 )
 
-// selectivity metrics
-var (
-	taskSelectivityCounter = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "mo",
-			Subsystem: "task",
-			Name:      "selectivity",
-			Help:      "Selectivity counter for read filter, block etc.",
-		}, []string{"type"})
-
-	TaskSelReadFilterTotal = taskSelectivityCounter.WithLabelValues("readfilter_total")
-	TaskSelReadFilterHit   = taskSelectivityCounter.WithLabelValues("readfilter_hit")
-	TaskSelColumnTotal     = taskSelectivityCounter.WithLabelValues("column_total")
-	TaskSelColumnHit       = taskSelectivityCounter.WithLabelValues("column_hit")
-)
-
 var (
 	TaskMergeTransferPageLengthGauge = prometheus.NewGauge(
 		prometheus.GaugeOpts{

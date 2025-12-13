@@ -78,8 +78,6 @@ func initTaskMetrics() {
 	registry.MustRegister(taskDNMergeStuffCounter)
 	registry.MustRegister(taskDNMergeDurationHistogram)
 
-	registry.MustRegister(taskSelectivityCounter)
-
 	registry.MustRegister(transferPageHitHistogram)
 	registry.MustRegister(TransferPageRowHistogram)
 	registry.MustRegister(TaskMergeTransferPageLengthGauge)
@@ -167,6 +165,8 @@ func initTxnMetrics() {
 	registry.MustRegister(txnTransferDurationHistogram)
 	registry.MustRegister(TransferTombstonesCountHistogram)
 	registry.MustRegister(TxnExtraWorkspaceQuotaGauge)
+	registry.MustRegister(txnSelectivityCounter)
+	registry.MustRegister(txnColumnReadHistogram)
 }
 
 func initRPCMetrics() {
