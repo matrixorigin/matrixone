@@ -67,9 +67,11 @@ func (c *DashboardCreator) initCDCDashboard() error {
 	build, err := dashboard.New(
 		"CDC Metrics",
 		c.withRowOptions(
+			c.initCDCOverviewRow(),
 			c.initCDCTaskRow(),
 			c.initCDCWatermarkRow(),
 			c.initCDCProcessingRow(),
+			c.initCDCDurationRow(),
 			c.initCDCTableStreamRow(),
 			c.initCDCSinkerRow(),
 			c.initCDCHealthRow(),
@@ -82,12 +84,15 @@ func (c *DashboardCreator) initCDCDashboard() error {
 	return err
 }
 
-func (c *DashboardCreator) initCDCTaskRow() dashboard.Option {
+// initCDCOverviewRow creates a high-level overview with the most important CDC metrics
+// This consolidates the frontend Cdc Overview into the main CDC dashboard
+// Overview focuses on key metrics: task status, throughput, latency, and errors
+func (c *DashboardCreator) initCDCOverviewRow() dashboard.Option {
 	return dashboard.Row(
-		"CDC Task Overview",
+		"CDC Overview",
 		c.withTimeSeries(
 			"Tasks by State",
-			6,
+			4,
 			[]string{
 				`sum(` + c.getMetricWithFilter("mo_cdc_task_total", "") + `) by (state)`,
 			},
@@ -97,6 +102,59 @@ func (c *DashboardCreator) initCDCTaskRow() dashboard.Option {
 			timeseries.Axis(tsaxis.Unit("short")),
 			SpanNulls(true),
 		),
+		c.withTimeSeries(
+			"Throughput (rows/s)",
+			4,
+			[]string{
+				`sum(rate(` + c.getMetricWithFilter("mo_cdc_rows_processed_total", `operation="insert"`) + `[$interval]))`,
+			},
+			[]string{
+				"insert",
+			},
+			timeseries.Axis(tsaxis.Unit("short")),
+		),
+		c.withTimeSeries(
+			"Max Watermark Lag (s)",
+			4,
+			[]string{
+				`max(` + c.getMetricWithFilter("mo_cdc_watermark_lag_seconds", "") + `)`,
+			},
+			[]string{
+				"max lag",
+			},
+			timeseries.Axis(tsaxis.Unit("s")),
+			SpanNulls(true),
+			c.withThresholds("absolute", []thresholdStep{
+				{Value: nil, Color: "green"},            // < 6s: normal
+				{Value: floatPtr(6.0), Color: "yellow"}, // 6-15s: warning
+				{Value: floatPtr(15.0), Color: "red"},   // > 15s: critical
+			}),
+		),
+		c.withTimeSeries(
+			"Error Rate /s",
+			4,
+			[]string{
+				`sum(rate(` + c.getMetricWithFilter("mo_cdc_task_error_total", "") + `[$interval]))`,
+				`sum(rate(` + c.getMetricWithFilter("mo_cdc_sinker_retry_total", `outcome="failed"`) + `[$interval]))`,
+			},
+			[]string{
+				"task errors",
+				"sinker failures",
+			},
+			timeseries.Axis(tsaxis.Unit("short")),
+			c.withThresholds("absolute", []thresholdStep{
+				{Value: nil, Color: "green"},             // < 0.01/s: normal
+				{Value: floatPtr(0.01), Color: "yellow"}, // 0.01-0.1/s: warning
+				{Value: floatPtr(0.1), Color: "red"},     // > 0.1/s: critical
+			}),
+		),
+	)
+}
+
+func (c *DashboardCreator) initCDCTaskRow() dashboard.Option {
+	return dashboard.Row(
+		"CDC Task Details",
+		// Note: "Tasks by State" moved to CDC Overview row to avoid duplication
 		c.withTimeSeries(
 			"State Changes /s",
 			6,
@@ -116,6 +174,24 @@ func (c *DashboardCreator) initCDCTaskRow() dashboard.Option {
 			},
 			[]string{
 				"{{ error_type }}",
+			},
+			timeseries.Axis(tsaxis.Unit("short")),
+			c.withThresholds("absolute", []thresholdStep{
+				{Value: nil, Color: "green"},             // < 0.01/s: normal
+				{Value: floatPtr(0.01), Color: "yellow"}, // 0.01-0.1/s: warning
+				{Value: floatPtr(0.1), Color: "red"},     // > 0.1/s: critical
+			}),
+		),
+		c.withTimeSeries(
+			"MySQL Connection Errors /s",
+			6,
+			[]string{
+				`sum(rate(` + c.getMetricWithFilter("mo_frontend_cdc_error_count", `type="mysql-conn"`) + `[$interval]))`,
+				`sum(rate(` + c.getMetricWithFilter("mo_frontend_cdc_error_count", `type="mysql-sink"`) + `[$interval]))`,
+			},
+			[]string{
+				"mysql-conn",
+				"mysql-sink",
 			},
 			timeseries.Axis(tsaxis.Unit("short")),
 			c.withThresholds("absolute", []thresholdStep{
@@ -210,6 +286,32 @@ func (c *DashboardCreator) initCDCProcessingRow() dashboard.Option {
 	return dashboard.Row(
 		"Data Processing",
 		c.withTimeSeries(
+			"Memory Usage (bytes)",
+			6,
+			[]string{
+				`sum(` + c.getMetricWithFilter("mo_frontend_cdc_memory", `type="mpool-inuse"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_frontend_cdc_memory", `type="hold-changes"`) + `)`,
+			},
+			[]string{
+				"mpool-inuse",
+				"hold-changes",
+			},
+			timeseries.Axis(tsaxis.Unit("bytes")),
+			SpanNulls(true),
+		),
+		c.withTimeSeries(
+			"Processing Record Count",
+			6,
+			[]string{
+				`sum(` + c.getMetricWithFilter("mo_frontend_cdc_processing_record_count", `type="total"`) + `)`,
+			},
+			[]string{
+				"total (read but not sunk)",
+			},
+			timeseries.Axis(tsaxis.Unit("short")),
+			SpanNulls(true),
+		),
+		c.withTimeSeries(
 			"Rows Processed /s",
 			6,
 			[]string{
@@ -262,6 +364,29 @@ func (c *DashboardCreator) initCDCProcessingRow() dashboard.Option {
 			axis.Unit("s"),
 			axis.Min(0),
 		),
+	)
+}
+
+func (c *DashboardCreator) initCDCDurationRow() dashboard.Option {
+	return dashboard.Row(
+		"CDC Phase Duration",
+		c.getMultiHistogram(
+			[]string{
+				c.getMetricWithFilter(`mo_frontend_cdc_duration_bucket`, `type="read"`),
+				c.getMetricWithFilter(`mo_frontend_cdc_duration_bucket`, `type="append"`),
+				c.getMetricWithFilter(`mo_frontend_cdc_duration_bucket`, `type="sink"`),
+				c.getMetricWithFilter(`mo_frontend_cdc_duration_bucket`, `type="send-sql"`),
+			},
+			[]string{
+				"read",
+				"append",
+				"sink",
+				"send-sql",
+			},
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			[]float32{3, 3, 3, 3},
+			axis.Unit("s"),
+			axis.Min(0))...,
 	)
 }
 
