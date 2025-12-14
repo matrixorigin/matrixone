@@ -34,6 +34,7 @@ type ObjectStorageArguments struct {
 	NoDefaultCredentials bool   `toml:"no-default-credentials"`
 	NoBucketValidation   bool   `toml:"no-bucket-validation"`
 	Concurrency          int64  `toml:"concurrency"`
+	MaxConnsPerHost      int    `toml:"max-conns-per-host"`
 
 	// s3
 	Bucket    string   `toml:"bucket"`
@@ -100,6 +101,11 @@ func (o *ObjectStorageArguments) SetFromString(arguments []string) error {
 			n, err := strconv.ParseInt(value, 10, 64)
 			if err == nil {
 				o.Concurrency = n
+			}
+		case "max-conns-per-host":
+			n, err := strconv.Atoi(value)
+			if err == nil {
+				o.MaxConnsPerHost = n
 			}
 
 		case "bucket":

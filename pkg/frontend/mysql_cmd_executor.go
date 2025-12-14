@@ -1481,6 +1481,11 @@ func handleDropRole(ses FeSession, execCtx *ExecCtx, dr *tree.DropRole) error {
 	return doDropRole(execCtx.reqCtx, ses.(*Session), dr)
 }
 
+// handleAlterRole renames the role
+func handleAlterRole(ses FeSession, execCtx *ExecCtx, ar *tree.AlterRole) error {
+	return doAlterRole(execCtx.reqCtx, ses.(*Session), ar)
+}
+
 func handleCreateFunction(ses FeSession, execCtx *ExecCtx, cf *tree.CreateFunction) error {
 	tenant := ses.GetTenantInfo()
 	return InitFunction(ses.(*Session), execCtx, tenant, cf)

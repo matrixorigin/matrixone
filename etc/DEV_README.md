@@ -471,7 +471,9 @@ mv mo-data mo-data-multicn-backup
 | `make dev-shell-cn2` | Open shell in CN2 container |
 | `make dev-setup-docker-mirror` | Configure Docker registry mirror (for faster pulls) |
 
-### Dashboard Creation
+### Dashboard Management
+
+#### Create Dashboards
 
 | Command | Description |
 |---------|-------------|
@@ -480,6 +482,26 @@ mv mo-data mo-data-multicn-backup
 | `make dev-create-dashboard-cluster` | Create cluster dashboard (port 3000, docker compose) |
 | `make dev-create-dashboard-k8s` | Create K8S dashboard |
 | `make dev-create-dashboard-cloud-ctrl` | Create cloud control-plane dashboard |
+
+#### List Dashboards
+
+| Command | Description |
+|---------|-------------|
+| `make dev-list-dashboard` | List dashboards (default: local mode, port 3001) |
+| `make dev-list-dashboard-local` | List local dashboards (port 3001) |
+| `make dev-list-dashboard-cluster` | List cluster dashboards (port 3000) |
+| `make dev-list-dashboard-k8s` | List K8S dashboards |
+| `make dev-list-dashboard-cloud-ctrl` | List cloud control-plane dashboards |
+
+#### Delete Dashboards
+
+| Command | Description |
+|---------|-------------|
+| `make dev-delete-dashboard` | Delete all dashboards in folder (default: local mode, port 3001) |
+| `make dev-delete-dashboard-local` | Delete all local dashboards (port 3001) |
+| `make dev-delete-dashboard-cluster` | Delete all cluster dashboards (port 3000) |
+| `make dev-delete-dashboard-k8s` | Delete all K8S dashboards |
+| `make dev-delete-dashboard-cloud-ctrl` | Delete all cloud control-plane dashboards |
 
 **Custom Options:**
 ```bash
@@ -490,9 +512,20 @@ DASHBOARD_MODE=cloud make dev-create-dashboard
 DASHBOARD_USERNAME=admin DASHBOARD_PASSWORD=admin make dev-create-dashboard
 
 # Or directly using mo-tool
-./mo-tool dashboard --host localhost --port 3001 --mode local
-./mo-tool dashboard --mode cloud --port 3000 --datasource Prometheus
-./mo-tool dashboard --username admin --password mypass
+# Create dashboards
+./mo-tool dashboard create --host localhost --port 3001 --mode local
+./mo-tool dashboard create --mode cloud --port 3000 --datasource Prometheus
+
+# List dashboards (to get UIDs)
+./mo-tool dashboard list --mode local --port 3001
+
+# Delete operations
+./mo-tool dashboard delete --mode local --port 3001          # Delete all dashboards in folder
+./mo-tool dashboard delete-dashboard --uid <uid>             # Delete single dashboard by UID
+./mo-tool dashboard delete-folder --mode local --port 3001   # Delete entire folder and all dashboards
+
+# Note: Provisioned dashboards (created via config files) cannot be deleted via API
+# They will be skipped with a warning when deleting folders
 ```
 
 ---
