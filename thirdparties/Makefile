@@ -15,8 +15,8 @@
 PWD=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 UNAME_S=$(shell uname -s | tr A-Z a-z)
 UNAME_M=$(shell uname -m)
-USEARCH_DIR=USearch-2.21.1
-USEARCH_TAR=usearch-2.21.1.tar.gz
+USEARCH_DIR=usearch-2.21.1-hotfix-20251212
+USEARCH_TAR=usearch-2.21.1-hotfix-20251212.tar.gz
 STRINGZILLA_DIR=StringZilla-4.2.1
 STRINGZILLA_TAR=$(STRINGZILLA_DIR).tar.gz
 SIMSIMD_DIR=SimSIMD-6.5.3
@@ -59,13 +59,13 @@ ifeq ($(UNAME_S),linux)
   ifeq ($(MUSL),)
 	USEARCH_CMAKE_FLAG += -DUSEARCH_USE_OPENMP=1
   endif
-  AVX512FP16 := $(shell lscpu | grep avx512fp16)
+  AVX512FP16 := $(shell lscpu | grep -e avx512fp16 -e avx512_bf16)
 endif
 
 ifeq ($(UNAME_M),x86_64)
   ifneq ($(AVX512FP16),)
     ifeq ($(MUSL),)
-	USEARCH_CMAKE_FLAG += -DUSEARCH_USE_SIMSIMD=1
+	USEARCH_CMAKE_FLAG += -DUSEARCH_USE_SIMSIMD=1 -DUSEARCH_DEFINED_CLANG=1
     endif
   endif
 endif

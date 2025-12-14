@@ -565,6 +565,16 @@ func (t Type) DescString() string {
 	return t.Oid.String()
 }
 
+func (t Type) GetArrayElementSize() int {
+	switch t.Oid {
+	case T_array_float32:
+		return 4
+	case T_array_float64:
+		return 8
+	}
+	panic(moerr.NewInternalErrorNoCtx(fmt.Sprintf("unknown array type %d", t)))
+}
+
 func (t Type) Eq(b Type) bool {
 	switch t.Oid {
 	// XXX need to find out why these types have different size/width
