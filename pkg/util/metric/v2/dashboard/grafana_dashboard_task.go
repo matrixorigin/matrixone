@@ -42,6 +42,7 @@ func (c *DashboardCreator) initTaskDashboard() error {
 			c.initTaskStorageUsageRow(),
 			c.initMoTableStatsTaskDurationRow(),
 			c.initMoTableStatsTaskCountingRow(),
+			c.initTaskGCRow(),
 		)...)
 
 	if err != nil {
@@ -398,4 +399,31 @@ func (c *DashboardCreator) initMoTableStatsTaskCountingRow() dashboard.Option {
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			[]float32{3, 3, 3, 3},
 			axis.Min(0))...)
+}
+
+func (c *DashboardCreator) initTaskGCRow() dashboard.Option {
+	return dashboard.Row(
+		"GC Task Metrics",
+		c.getPercentHist(
+			"GC Total Duration",
+			c.getMetricWithFilter(`mo_task_long_duration_bucket`, `type="gc_total"`),
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			SpanNulls(true),
+			timeseries.Span(4),
+		),
+		c.getPercentHist(
+			"GC Scan Duration",
+			c.getMetricWithFilter(`mo_task_long_duration_bucket`, `type="gc_scan"`),
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			SpanNulls(true),
+			timeseries.Span(4),
+		),
+		c.getPercentHist(
+			"GC Delete Duration",
+			c.getMetricWithFilter(`mo_task_long_duration_bucket`, `type="gc_delete"`),
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			SpanNulls(true),
+			timeseries.Span(4),
+		),
+	)
 }
