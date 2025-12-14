@@ -20,6 +20,7 @@ import (
 	"iter"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -55,6 +56,7 @@ func newObjectStorageMetrics(
 }
 
 var _ ObjectStorage = new(objectStorageMetrics)
+var _ ParallelMultipartWriter = new(objectStorageMetrics)
 
 func (o *objectStorageMetrics) Delete(ctx context.Context, keys ...string) (err error) {
 	o.numDelete.Inc()
@@ -98,4 +100,19 @@ func (o *objectStorageMetrics) Stat(ctx context.Context, key string) (size int64
 func (o *objectStorageMetrics) Write(ctx context.Context, key string, r io.Reader, sizeHint *int64, expire *time.Time) (err error) {
 	o.numWrite.Inc()
 	return o.upstream.Write(ctx, key, r, sizeHint, expire)
+}
+
+func (o *objectStorageMetrics) SupportsParallelMultipart() bool {
+	if p, ok := o.upstream.(ParallelMultipartWriter); ok {
+		return p.SupportsParallelMultipart()
+	}
+	return false
+}
+
+func (o *objectStorageMetrics) WriteMultipartParallel(ctx context.Context, key string, r io.Reader, sizeHint *int64, opt *ParallelMultipartOption) error {
+	o.numWrite.Inc()
+	if p, ok := o.upstream.(ParallelMultipartWriter); ok {
+		return p.WriteMultipartParallel(ctx, key, r, sizeHint, opt)
+	}
+	return moerr.NewNotSupportedNoCtx("parallel multipart upload")
 }
