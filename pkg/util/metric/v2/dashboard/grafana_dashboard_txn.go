@@ -321,11 +321,17 @@ func (c *DashboardCreator) initTxnOverviewRow() dashboard.Option {
 				"tn-handle",
 			}),
 
-		c.withGraph(
+		c.withMultiGraph(
 			"Rollback requests",
 			3,
-			`sum(rate(`+c.getMetricWithFilter("mo_txn_rollback_total", "")+`[$interval])) by (`+c.by+`)`,
-			"{{ "+c.by+" }}"),
+			[]string{
+				`sum(rate(` + c.getMetricWithFilter("mo_txn_rollback_total", "") + `[$interval])) by (` + c.by + `)`,
+				`sum(rate(` + c.getMetricWithFilter("mo_txn_rollback_last_statement_total", "") + `[$interval])) by (` + c.by + `)`,
+			},
+			[]string{
+				"rollback",
+				"rollback-last-statement",
+			}),
 
 		c.withMultiGraph(
 			"Txn Queue Status",
