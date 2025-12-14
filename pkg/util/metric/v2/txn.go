@@ -64,6 +64,14 @@ var (
 			Help:      "Total number of txn rollback handled.",
 		})
 
+	TxnUserRollbackCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "user_rollback_total",
+			Help:      "Total number of user-initiated txn rollback handled.",
+		})
+
 	TxnRollbackLastStatementCounter = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "mo",

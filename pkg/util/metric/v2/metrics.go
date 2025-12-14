@@ -134,6 +134,7 @@ func initTxnMetrics() {
 	registry.MustRegister(txnStatementCounter)
 	registry.MustRegister(txnCommitCounter)
 	registry.MustRegister(TxnRollbackCounter)
+	registry.MustRegister(TxnUserRollbackCounter)
 	registry.MustRegister(TxnRollbackLastStatementCounter)
 	registry.MustRegister(txnLockCounter)
 	registry.MustRegister(txnPKChangeCheckCounter)

@@ -327,10 +327,12 @@ func (c *DashboardCreator) initTxnOverviewRow() dashboard.Option {
 			[]string{
 				`sum(rate(` + c.getMetricWithFilter("mo_txn_rollback_total", "") + `[$interval])) by (` + c.by + `)`,
 				`sum(rate(` + c.getMetricWithFilter("mo_txn_rollback_last_statement_total", "") + `[$interval])) by (` + c.by + `)`,
+				`sum(rate(` + c.getMetricWithFilter("mo_txn_user_rollback_total", "") + `[$interval])) by (` + c.by + `)`,
 			},
 			[]string{
 				"rollback",
 				"rollback-last-statement",
+				"user-rollback",
 			}),
 
 		c.withMultiGraph(
