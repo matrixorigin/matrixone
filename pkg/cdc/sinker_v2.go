@@ -337,7 +337,11 @@ func (s *mysqlSinker2) Run(ctx context.Context, ar *ActiveRoutine) {
 // processCommand processes a single command
 func (s *mysqlSinker2) processCommand(ctx context.Context, cmd *Command) {
 	// Check error state - skip processing if error exists
-	if s.Error() != nil {
+	if err := s.Error(); err != nil {
+		logutil.Debug("cdc.mysql_sinker2.command_skipped_due_to_error",
+			zap.String("table", s.dbTblInfo.String()),
+			zap.String("command", cmd.String()),
+			zap.Error(err))
 		return
 	}
 
@@ -355,6 +359,9 @@ func (s *mysqlSinker2) processCommand(ctx context.Context, cmd *Command) {
 	var err error
 	switch cmd.Type {
 	case CmdBegin:
+		logutil.Debug("cdc.mysql_sinker2.processing_begin",
+			zap.String("table", s.dbTblInfo.String()),
+			zap.Int32("current-state", s.txnState.Load()))
 		err = s.handleBegin(ctx)
 	case CmdCommit:
 		err = s.handleCommit(ctx)
@@ -388,19 +395,43 @@ func (s *mysqlSinker2) handleBegin(ctx context.Context) error {
 	// Check current state
 	currentState := s.txnState.Load()
 	if currentState != v2TxnStateIdle {
-		return moerr.NewInternalError(ctx, "cannot begin transaction: not in idle state")
+		// If already active, this is idempotent - just return success
+		// This can happen if BEGIN was called multiple times
+		if currentState == v2TxnStateActive {
+			logutil.Debug("cdc.mysql_sinker2.begin_already_active",
+				zap.String("table", s.dbTblInfo.String()))
+			v2.CdcSinkerTransactionCounter.WithLabelValues("begin", "skipped").Inc()
+			return nil
+		}
+		// Other states (COMMITTED, ROLLED_BACK) - reset to IDLE and continue
+		// This is idempotent behavior - log at Debug level
+		logutil.Debug("cdc.mysql_sinker2.begin_not_idle",
+			zap.String("table", s.dbTblInfo.String()),
+			zap.Int32("current-state", currentState),
+			zap.Int32("expected-state", v2TxnStateIdle))
+		// Reset to IDLE and continue with BEGIN
+		s.txnState.Store(v2TxnStateIdle)
+		// Fall through to execute BEGIN
 	}
 
 	// Begin transaction
 	if err := s.executor.BeginTx(ctx); err != nil {
+		v2.CdcSinkerTransactionCounter.WithLabelValues("begin", "error").Inc()
+		logutil.Error("cdc.mysql_sinker2.begin_tx_failed",
+			zap.String("table", s.dbTblInfo.String()),
+			zap.Error(err))
 		return err
 	}
 
 	// Update state
 	s.txnState.Store(v2TxnStateActive)
 
-	logutil.Debug("cdc.mysql_sinker2.begin_txn",
-		zap.String("table", s.dbTblInfo.String()))
+	// Record metrics
+	v2.CdcSinkerTransactionCounter.WithLabelValues("begin", "success").Inc()
+
+	// logutil.Debug("cdc.mysql_sinker2.begin_txn",
+	// 	zap.String("table", s.dbTblInfo.String()),
+	// 	zap.Int32("new-state", s.txnState.Load()))
 
 	return nil
 }
@@ -411,9 +442,13 @@ func (s *mysqlSinker2) handleCommit(ctx context.Context) error {
 	currentState := s.txnState.Load()
 	if currentState != v2TxnStateActive {
 		// Not an error - idempotent behavior
+		// Log at Debug level to avoid noise, metrics still recorded for observability
 		logutil.Debug("cdc.mysql_sinker2.commit_no_active_txn",
 			zap.String("table", s.dbTblInfo.String()),
-			zap.Int32("state", currentState))
+			zap.Int32("current-state", currentState),
+			zap.Int32("expected-state", v2TxnStateActive))
+		// Record as skipped (no active transaction to commit)
+		v2.CdcSinkerTransactionCounter.WithLabelValues("commit", "skipped").Inc()
 		return nil
 	}
 
@@ -422,6 +457,9 @@ func (s *mysqlSinker2) handleCommit(ctx context.Context) error {
 	if err := s.executor.CommitTx(ctx); err != nil {
 		// Even on error, transition to ROLLED_BACK (tx is cleaned up in executor)
 		s.txnState.Store(v2TxnStateRolledBack)
+
+		// Record metrics
+		v2.CdcSinkerTransactionCounter.WithLabelValues("commit", "error").Inc()
 
 		logutil.Error("cdc.mysql_sinker2.commit_failed",
 			zap.String("table", s.dbTblInfo.String()),
@@ -436,10 +474,14 @@ func (s *mysqlSinker2) handleCommit(ctx context.Context) error {
 	// Transition back to IDLE
 	s.txnState.Store(v2TxnStateIdle)
 
-	logutil.Debug("cdc.mysql_sinker2.commit_success",
-		zap.String("task-id", s.taskId),
-		zap.String("table", s.dbTblInfo.String()),
-		zap.Duration("commit-duration", time.Since(start)))
+	// Record metrics
+	v2.CdcSinkerTransactionCounter.WithLabelValues("commit", "success").Inc()
+
+	// logutil.Debug("cdc.mysql_sinker2.commit_success",
+	// 	zap.String("task-id", s.taskId),
+	// 	zap.String("table", s.dbTblInfo.String()),
+	// 	zap.Duration("commit-duration", time.Since(start)),
+	// 	zap.Int32("final-state", s.txnState.Load()))
 
 	return nil
 }
@@ -450,9 +492,12 @@ func (s *mysqlSinker2) handleRollback(ctx context.Context) error {
 	currentState := s.txnState.Load()
 	if currentState != v2TxnStateActive {
 		// Not an error - idempotent behavior
+		// But we should still record metrics for observability
 		logutil.Debug("cdc.mysql_sinker2.rollback_no_active_txn",
 			zap.String("table", s.dbTblInfo.String()),
 			zap.Int32("state", currentState))
+		// Record as skipped (no active transaction to rollback)
+		v2.CdcSinkerTransactionCounter.WithLabelValues("rollback", "skipped").Inc()
 		return nil
 	}
 
@@ -461,6 +506,10 @@ func (s *mysqlSinker2) handleRollback(ctx context.Context) error {
 		// Even on error, transition to ROLLED_BACK (tx is cleaned up in executor)
 		s.txnState.Store(v2TxnStateRolledBack)
 		s.txnState.Store(v2TxnStateIdle)
+
+		// Record metrics
+		v2.CdcSinkerTransactionCounter.WithLabelValues("rollback", "error").Inc()
+
 		return err
 	}
 
@@ -469,6 +518,9 @@ func (s *mysqlSinker2) handleRollback(ctx context.Context) error {
 
 	// Transition back to IDLE
 	s.txnState.Store(v2TxnStateIdle)
+
+	// Record metrics
+	v2.CdcSinkerTransactionCounter.WithLabelValues("rollback", "success").Inc()
 
 	logutil.Debug("cdc.mysql_sinker2.rollback_txn",
 		zap.String("task-id", s.taskId),
@@ -492,7 +544,7 @@ func (s *mysqlSinker2) recordSQLFailure(sqlType string, duration time.Duration) 
 
 // handleInsertBatch handles INSERT batch command (snapshot data)
 func (s *mysqlSinker2) handleInsertBatch(ctx context.Context, cmd *Command) error {
-	start := time.Now()
+	// start := time.Now()
 	rows := 0
 	if cmd.InsertBatch != nil {
 		rows = cmd.InsertBatch.RowCount()
@@ -508,13 +560,13 @@ func (s *mysqlSinker2) handleInsertBatch(ctx context.Context, cmd *Command) erro
 		return err
 	}
 
-	logutil.Debug("cdc.mysql_sinker2.insert_batch_start",
-		zap.String("task-id", s.taskId),
-		zap.String("table", s.dbTblInfo.String()),
-		zap.Int("rows", rows),
-		zap.Int("sql-count", len(sqls)),
-		zap.String("from-ts", cmd.Meta.FromTs.ToString()),
-		zap.String("to-ts", cmd.Meta.ToTs.ToString()))
+	// logutil.Debug("cdc.mysql_sinker2.insert_batch_start",
+	// 	zap.String("task-id", s.taskId),
+	// 	zap.String("table", s.dbTblInfo.String()),
+	// 	zap.Int("rows", rows),
+	// 	zap.Int("sql-count", len(sqls)),
+	// 	zap.String("from-ts", cmd.Meta.FromTs.ToString()),
+	// 	zap.String("to-ts", cmd.Meta.ToTs.ToString()))
 
 	// Execute each SQL statement
 	for i, sql := range sqls {
@@ -542,14 +594,14 @@ func (s *mysqlSinker2) handleInsertBatch(ctx context.Context, cmd *Command) erro
 		}
 	}
 
-	logutil.Debug("cdc.mysql_sinker2.insert_batch_complete",
-		zap.String("task-id", s.taskId),
-		zap.String("table", s.dbTblInfo.String()),
-		zap.Int("rows", rows),
-		zap.Int("sql-count", len(sqls)),
-		zap.String("from-ts", cmd.Meta.FromTs.ToString()),
-		zap.String("to-ts", cmd.Meta.ToTs.ToString()),
-		zap.Duration("total-duration", time.Since(start)))
+	// logutil.Debug("cdc.mysql_sinker2.insert_batch_complete",
+	// 	zap.String("task-id", s.taskId),
+	// 	zap.String("table", s.dbTblInfo.String()),
+	// 	zap.Int("rows", rows),
+	// 	zap.Int("sql-count", len(sqls)),
+	// 	zap.String("from-ts", cmd.Meta.FromTs.ToString()),
+	// 	zap.String("to-ts", cmd.Meta.ToTs.ToString()),
+	// 	zap.Duration("total-duration", time.Since(start)))
 
 	return nil
 }
@@ -600,6 +652,15 @@ func (s *mysqlSinker2) handleInsertDeleteBatch(ctx context.Context, cmd *Command
 
 	// Build and execute INSERT SQL
 	if cmd.InsertAtmBatch != nil && cmd.InsertAtmBatch.RowCount() > 0 {
+		// Record metrics for insert operation
+		insertRows := cmd.InsertAtmBatch.RowCount()
+		insertBytes := uint64(insertRows * 100) // Rough estimate: 100 bytes per row
+		if s.progressTracker != nil {
+			tableLabel := s.progressTracker.TableKey()
+			v2.CdcRowsProcessedCounter.WithLabelValues("insert", tableLabel).Add(float64(insertRows))
+			v2.CdcBytesProcessedCounter.WithLabelValues("insert", tableLabel).Add(float64(insertBytes))
+		}
+
 		// AtomicBatch contains multiple source batches, we need to process each one
 		for _, srcBatch := range cmd.InsertAtmBatch.Batches {
 			if srcBatch == nil || srcBatch.RowCount() == 0 {
@@ -644,6 +705,15 @@ func (s *mysqlSinker2) handleInsertDeleteBatch(ctx context.Context, cmd *Command
 
 	// Build and execute DELETE SQL
 	if cmd.DeleteAtmBatch != nil && cmd.DeleteAtmBatch.RowCount() > 0 {
+		// Record metrics for delete operation
+		deleteRows := cmd.DeleteAtmBatch.RowCount()
+		deleteBytes := uint64(deleteRows * 100) // Rough estimate: 100 bytes per row
+		if s.progressTracker != nil {
+			tableLabel := s.progressTracker.TableKey()
+			v2.CdcRowsProcessedCounter.WithLabelValues("delete", tableLabel).Add(float64(deleteRows))
+			v2.CdcBytesProcessedCounter.WithLabelValues("delete", tableLabel).Add(float64(deleteBytes))
+		}
+
 		sqls, err := s.builder.BuildDeleteSQL(ctx, cmd.DeleteAtmBatch, cmd.Meta.FromTs, cmd.Meta.ToTs)
 		if err != nil {
 			logutil.Error("cdc.mysql_sinker2.build_delete_sql_failed",

@@ -99,6 +99,21 @@ func (tm *TransactionManager) BeginTransaction(ctx context.Context, fromTs, toTs
 		}
 	}
 
+	// If tracker exists and is already rolled back
+	if tm.tracker != nil && tm.tracker.IsCompleted() {
+		existingFromTs := tm.tracker.GetFromTs()
+		existingToTs := tm.tracker.GetToTs()
+		if existingFromTs.Equal(&fromTs) && existingToTs.Equal(&toTs) {
+			// Same data range, already rolled back - this should not happen in normal flow
+			// as processTailDone should check IsCompleted() before calling BeginTransaction
+			// But if it does happen, clear tracker to allow retry
+			tm.tracker = nil
+		} else {
+			// Different data range - clear old tracker
+			tm.tracker = nil
+		}
+	}
+
 	// Create new tracker
 	tm.tracker = NewTransactionTracker(fromTs, toTs)
 
@@ -227,6 +242,11 @@ func (tm *TransactionManager) CommitTransaction(ctx context.Context) error {
 		zap.String("to-ts", toTs.ToString()),
 	)
 
+	// Step 4: Clean up tracker to allow next transaction to begin
+	// This is critical: without cleanup, processTailDone will see tracker.hasBegin == true
+	// and won't call BeginTransaction again
+	tm.tracker = nil
+
 	return nil
 }
 
@@ -288,11 +308,19 @@ func (tm *TransactionManager) RollbackTransaction(ctx context.Context) error {
 		// Mark as rolled back even if it failed
 		// to avoid infinite retry loops
 		tm.tracker.MarkRollback()
+		// Keep tracker to ensure EnsureCleanup is idempotent
+		// BeginTransaction will clear it when starting a new transaction
 		return err
 	}
 
 	// Mark tracker as rolled back
 	tm.tracker.MarkRollback()
+
+	// Keep tracker instead of setting to nil
+	// Reason: This ensures EnsureCleanup is idempotent - if called again,
+	// it will see hasRolledBack == true and won't trigger another rollback.
+	// BeginTransaction will clear the tracker when starting a new transaction
+	// (either for retry of same data or new data range).
 
 	logutil.Debug(
 		"cdc.txn_manager.rollback_success",
@@ -439,11 +467,19 @@ func (tm *TransactionManager) rollbackLocked(ctx context.Context) error {
 		// Mark as rolled back even if it failed
 		// to avoid infinite retry loops
 		tm.tracker.MarkRollback()
+		// Keep tracker to ensure EnsureCleanup is idempotent
+		// BeginTransaction will clear it when starting a new transaction
 		return err
 	}
 
 	// Mark tracker as rolled back
 	tm.tracker.MarkRollback()
+
+	// Keep tracker instead of setting to nil
+	// Reason: This ensures EnsureCleanup is idempotent - if called again,
+	// it will see hasRolledBack == true and won't trigger another rollback.
+	// BeginTransaction will clear the tracker when starting a new transaction
+	// (either for retry of same data or new data range).
 
 	logutil.Debug(
 		"cdc.txn_manager.rollback_success",
