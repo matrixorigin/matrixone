@@ -231,7 +231,11 @@ const (
 	// 		see the codes in pkg/sql/colexec/dispatch/dispatch.go:waitRemoteRegsReady()
 	//
 	// need to fix this in the future. for now, increase it to make tpch1T can run on 3 CN
-	HandleNotifyTimeout = 300 * time.Second
+	//
+	// This is completely wrong.  We must remove this timeout value.
+	// #23277
+
+	HandleNotifyTimeout = 3600 * time.Second
 )
 
 // message receiver's cn information.
