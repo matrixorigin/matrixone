@@ -723,11 +723,11 @@ func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesPara
 			slowStep = uint64(1)
 		}
 		tbl.enableLogFilterExpr.Store(false)
-		if traceFilterExprInterval.Add(step) >= 2000000 {
+		if traceFilterExprInterval.Add(step) >= 10000000 {
 			traceFilterExprInterval.Store(0)
 			tbl.enableLogFilterExpr.Store(true)
 		}
-		if traceFilterExprInterval2.Add(slowStep) >= 100 {
+		if traceFilterExprInterval2.Add(slowStep) >= 500 {
 			traceFilterExprInterval2.Store(0)
 			tbl.enableLogFilterExpr.Store(true)
 		}
@@ -741,7 +741,7 @@ func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesPara
 			tbl.enableLogFilterExpr.Load() ||
 			cost > 5*time.Second {
 			logutil.Info(
-				"TXN-FILTER-RANGE-LOG",
+				"txn.table.ranges.log",
 				zap.String("name", tbl.tableDef.Name),
 				zap.String("exprs", plan2.FormatExprs(
 					rangesParam.BlockFilters, plan2.FormatOption{
@@ -1006,8 +1006,6 @@ func (tbl *txnTable) rangesOnePart(
 	}
 
 	bhit, btotal := outBlocks.Len()-1, int(s3BlkCnt)
-	v2.TaskSelBlockTotal.Add(float64(btotal))
-	v2.TaskSelBlockHit.Add(float64(btotal - bhit))
 	if btotal > 0 {
 		v2.TxnRangesSlowPathLoadObjCntHistogram.Observe(float64(loadObjCnt))
 		v2.TxnRangesSlowPathSelectedBlockCntHistogram.Observe(float64(bhit))

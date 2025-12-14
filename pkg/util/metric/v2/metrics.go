@@ -74,13 +74,9 @@ func initMemMetrics() {
 func initTaskMetrics() {
 	registry.MustRegister(taskShortDurationHistogram)
 	registry.MustRegister(taskLongDurationHistogram)
-	registry.MustRegister(taskBytesHistogram)
-	registry.MustRegister(taskCountHistogram)
 
 	registry.MustRegister(taskDNMergeStuffCounter)
 	registry.MustRegister(taskDNMergeDurationHistogram)
-
-	registry.MustRegister(taskSelectivityCounter)
 
 	registry.MustRegister(transferPageHitHistogram)
 	registry.MustRegister(TransferPageRowHistogram)
@@ -124,7 +120,6 @@ func initLogtailMetrics() {
 	registry.MustRegister(logTailApplyDurationHistogram)
 	registry.MustRegister(logtailUpdatePartitionDurationHistogram)
 	registry.MustRegister(LogTailAppendDurationHistogram)
-	registry.MustRegister(logTailSendDurationHistogram)
 	registry.MustRegister(LogTailLoadCheckpointDurationHistogram)
 
 	registry.MustRegister(LogTailPushCollectionDurationHistogram)
@@ -170,6 +165,8 @@ func initTxnMetrics() {
 	registry.MustRegister(txnTransferDurationHistogram)
 	registry.MustRegister(TransferTombstonesCountHistogram)
 	registry.MustRegister(TxnExtraWorkspaceQuotaGauge)
+	registry.MustRegister(txnSelectivityHistogram)
+	registry.MustRegister(txnColumnReadHistogram)
 }
 
 func initRPCMetrics() {

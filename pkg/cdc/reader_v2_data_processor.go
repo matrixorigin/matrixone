@@ -296,7 +296,7 @@ func (dp *DataProcessor) processTailDone(ctx context.Context, data *ChangeData) 
 
 	// Begin transaction if not already begun
 	tracker := dp.txnManager.GetTracker()
-	if tracker == nil || !tracker.hasBegin {
+	if tracker == nil || !tracker.hasBegin || tracker.IsCompleted() {
 		if err := dp.txnManager.BeginTransaction(ctx, dp.fromTs, dp.toTs); err != nil {
 			return err
 		}
@@ -307,6 +307,17 @@ func (dp *DataProcessor) processTailDone(ctx context.Context, data *ChangeData) 
 	}
 
 	// Send accumulated data to sinker
+	// Get row counts before Sink() since Sink() is asynchronous and batches
+	// may be closed by the sinker goroutine after being queued
+	insertRows := 0
+	deleteRows := 0
+	if dp.insertAtmBatch != nil {
+		insertRows = dp.insertAtmBatch.RowCount()
+	}
+	if dp.deleteAtmBatch != nil {
+		deleteRows = dp.deleteAtmBatch.RowCount()
+	}
+
 	dp.sinker.Sink(ctx, &DecoderOutput{
 		outputTyp:      OutputTypeTail,
 		insertAtmBatch: dp.insertAtmBatch,
@@ -321,12 +332,10 @@ func (dp *DataProcessor) processTailDone(ctx context.Context, data *ChangeData) 
 		zap.Uint64("account-id", dp.accountId),
 		zap.String("db", dp.dbName),
 		zap.String("table", dp.tableName),
-		zap.Int("insert-rows", dp.insertAtmBatch.RowCount()),
-		zap.Int("delete-rows", dp.deleteAtmBatch.RowCount()),
+		zap.Int("insert-rows", insertRows),
+		zap.Int("delete-rows", deleteRows),
 		zap.String("from-ts", dp.fromTs.ToString()),
 		zap.String("to-ts", dp.toTs.ToString()),
-		zap.Int("insert-rows", dp.insertAtmBatch.RowCount()),
-		zap.Int("delete-rows", dp.deleteAtmBatch.RowCount()),
 	)
 
 	// Note: Sink() takes ownership of the atomic batches

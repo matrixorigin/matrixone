@@ -1,7 +1,7 @@
 # MatrixOne CDC User Guide
 
-**Version**: 1.0  
-**Last Updated**: November 2025  
+**Version**: 2.0  
+**Last Updated**: December 2024  
 **Target Audience**: Database Users, Testers, QA Engineers, Technical Writers
 
 ---
@@ -344,16 +344,19 @@ The CDC system is designed with the following principles:
    - All state is persisted (watermarks, errors)
    - Errors are classified and handled appropriately
    - System can recover from any error state via manual intervention
+   - **Dual-layer safety mechanism** ensures transaction consistency
 
 2. **Automatic Recovery**:
    - Transient errors (network, system unavailability) are automatically retried
    - Retry mechanism with exponential backoff prevents retry storms
    - Circuit breaker protects against persistent failures
+   - **Original error preservation** ensures deterministic error reporting
 
 3. **Precise State Management**:
    - Watermark represents exact synchronization point
    - Errors are tracked with metadata (retryable, count, timestamps)
    - State survives system restarts
+   - **Idempotent operations** ensure safe retries
 
 4. **Performance Optimization**:
    - Asynchronous processing (command channel pattern)
@@ -376,6 +379,312 @@ The CDC system is designed with the following principles:
    - Clear error messages guide troubleshooting
    - Task operations (pause/resume/restart) provide full control
 
+### Deep Dive: Core Implementation Mechanisms
+
+This section provides detailed insights into the internal implementation of CDC, helping users understand how the system ensures reliability and consistency.
+
+#### 1. Dual-Layer Safety Mechanism
+
+The CDC system implements a **dual-layer safety check** to ensure transaction consistency and prevent data loss:
+
+**Layer 1: TransactionTracker (Fast, Explicit State Check)**
+- **Purpose**: Fast in-memory state tracking for immediate decisions
+- **Implementation**: `TransactionTracker` maintains explicit transaction state flags:
+  - `hasBegin`: Whether BEGIN has been sent to sinker
+  - `hasCommitted`: Whether COMMIT has been sent to sinker
+  - `hasRolledBack`: Whether ROLLBACK has been sent to sinker
+- **Key Method**: `NeedsRollback()` - quickly determines if transaction needs cleanup
+- **Advantage**: Fast, no I/O required, immediate response
+
+**Layer 2: Watermark Verification (Reliable, Persistent Check)**
+- **Purpose**: Persistent verification using database state
+- **Implementation**: Compares tracker's expected watermark with actual persisted watermark
+- **Key Method**: `GetFromCache()` - retrieves persisted watermark from database
+- **Advantage**: Reliable, survives crashes, authoritative source of truth
+
+**How It Works**:
+
+The `EnsureCleanup()` method implements the dual-layer check:
+
+```go
+// Layer 1: Fast check using tracker state
+if tm.tracker.NeedsRollback() {
+    return tm.rollbackLocked(ctx)
+}
+
+// Layer 2: Verify watermark matches tracker expectation
+current, err := tm.watermarkUpdater.GetFromCache(ctx, tm.watermarkKey)
+if !current.Equal(&toTs) && tm.tracker.hasBegin {
+    // Watermark mismatch - rollback needed
+    return tm.rollbackLocked(ctx)
+}
+```
+
+**Why This Design**:
+- **Performance**: Layer 1 avoids expensive database queries in common cases
+- **Reliability**: Layer 2 catches inconsistencies that Layer 1 might miss (e.g., after crashes)
+- **Idempotency**: Both layers are idempotent - safe to call multiple times
+- **Recovery**: System can recover from any inconsistent state
+
+**Use Cases**:
+- **Normal Operation**: Layer 1 handles most cases efficiently
+- **After Crash**: Layer 2 verifies state consistency on restart
+- **Commit Failures**: Both layers ensure proper cleanup
+- **Concurrent Access**: Mutex protection ensures thread safety
+
+#### 2. Transaction Lifecycle Management
+
+The CDC system uses `TransactionTracker` to manage transaction state throughout the lifecycle:
+
+**State Transitions**:
+```
+Initial State (no tracker)
+    ↓ BeginTransaction()
+Tracker Created → hasBegin = true
+    ↓ CommitTransaction()
+hasCommitted = true → tracker = nil (cleanup)
+    OR
+    ↓ RollbackTransaction()
+hasRolledBack = true → tracker kept (for idempotency)
+    ↓ BeginTransaction() (next transaction)
+tracker = nil (cleared for new transaction)
+```
+
+**Key Design Decisions**:
+
+1. **Tracker Retention After Rollback**:
+   - Tracker is **kept** after rollback (not set to nil)
+   - **Reason**: Ensures `EnsureCleanup()` is idempotent
+   - If tracker is nil, `EnsureCleanup()` cannot determine if rollback already occurred
+   - Tracker is cleared when `BeginTransaction()` starts a new transaction
+
+2. **Defensive Handling in BeginTransaction**:
+   - Checks if tracker exists and is already completed
+   - Clears completed tracker to allow retry
+   - **Reason**: Handles edge cases where `processTailDone` might call `BeginTransaction` with completed tracker
+
+3. **Idempotent Operations**:
+   - `RollbackTransaction()` can be called multiple times safely
+   - `EnsureCleanup()` can be called multiple times safely
+   - State checks prevent duplicate operations
+
+**Example Flow**:
+
+```go
+// Round 1: Normal flow
+BeginTransaction() → tracker created, hasBegin = true
+CommitTransaction() → hasCommitted = true, tracker = nil
+
+// Round 2: Commit failure
+BeginTransaction() → tracker created, hasBegin = true
+CommitTransaction() → fails, tracker still exists
+EnsureCleanup() → detects NeedsRollback(), calls RollbackTransaction()
+RollbackTransaction() → hasRolledBack = true, tracker kept
+
+// Round 3: Retry
+BeginTransaction() → detects completed tracker, clears it, creates new tracker
+CommitTransaction() → succeeds, tracker = nil
+```
+
+#### 3. Error Handling and Retry Mechanism
+
+The CDC system implements sophisticated error handling with **original error preservation**:
+
+**Original Error Preservation**:
+
+The system preserves the **original error** that triggered retry attempts, ensuring deterministic error reporting:
+
+**Why This Matters**:
+- Users see the **root cause** of problems, not transient issues during retries
+- Error messages remain consistent across retry attempts
+- Debugging is easier with clear, stable error information
+
+**How It Works**:
+
+1. **First Error**: Stored as `originalError`
+2. **During Retries**: If auxiliary errors occur (e.g., cache failures during cleanup), they are logged but **do not replace** the original error
+3. **Error Classification**: Errors are classified as:
+   - **Primary Errors**: Replace original error (new error type, fatal errors)
+   - **Auxiliary Errors**: Do not replace original error (infrastructure errors during cleanup)
+
+**Auxiliary Error Detection**:
+- Errors containing: `get_from_cache`, `cache error`, `ensure_cleanup`
+- These are infrastructure errors that occur during retry/cleanup operations
+- They should not mask the original problem
+
+**Example Scenario**:
+```
+1. Commit failure occurs → Original error: "commit failure"
+2. Retry attempt 1 → Cleanup encounters cache error → Original preserved: "commit failure"
+3. Retry attempt 2 → Commit failure again → Original preserved: "commit failure"
+4. Retry attempt 3 → Commit failure again → Original preserved: "commit failure"
+5. Max retries exceeded → System reports: "commit failure" (not "cache error")
+```
+
+**Error Classification Priority**:
+
+The system uses priority-based classification (checked in order):
+
+1. **Control Signals** (Non-retryable): Pause/cancel signals
+2. **MatrixOne System Errors** (Retryable): RPC timeout, backend unavailable, etc.
+3. **Context Timeout** (Retryable): Operation timeouts
+4. **Pattern Matching** (Retryable/Non-retryable): Based on error message patterns
+5. **Default** (Non-retryable): Unknown errors default to non-retryable for safety
+
+**Exponential Backoff**:
+
+Retry delays increase exponentially:
+- Retry 1: Base delay (e.g., 200ms)
+- Retry 2: Base × factor (e.g., 400ms)
+- Retry 3: Base × factor² (e.g., 800ms)
+- Capped at maximum delay (e.g., 30s)
+
+#### 4. State Management and Idempotency
+
+**Atomic State Updates**:
+
+All state updates are protected by mutex (`stateMu`) to ensure consistency:
+- `lastError` and `retryable` are updated atomically
+- Prevents race conditions between error handling and retry logic
+
+**Idempotent Operations**:
+
+Key operations are designed to be idempotent:
+
+1. **EnsureCleanup()**: Can be called multiple times safely
+   - Checks tracker state before acting
+   - If already rolled back, returns without action
+   - If needs rollback, performs rollback and marks as complete
+
+2. **RollbackTransaction()**: Can be called multiple times safely
+   - Checks `hasRolledBack` flag before acting
+   - If already rolled back, returns immediately
+   - Prevents duplicate rollback operations
+
+3. **BeginTransaction()**: Handles edge cases defensively
+   - Clears completed trackers before creating new ones
+   - Prevents state inconsistencies
+
+**State Persistence**:
+
+- **In-Memory State**: Fast access during processing
+- **Persistent State**: Survives restarts (watermark, errors in database)
+- **Synchronization**: State is persisted asynchronously to avoid blocking
+
+#### 5. Concurrency Control
+
+**Mutex Protection**:
+
+- `TransactionManager.mu`: Protects tracker state and transaction operations
+- `TableChangeStream.stateMu`: Protects error state and retry state
+- All public methods are serialized by mutexes
+
+**Thread Safety Guarantees**:
+
+- **TransactionManager**: All public methods are thread-safe
+- **State Updates**: Atomic updates prevent race conditions
+- **Concurrent Calls**: Multiple goroutines can call `EnsureCleanup()` safely
+
+**Lock Ordering**:
+
+To prevent deadlocks:
+- Public methods acquire `TransactionManager.mu`
+- Private methods (`rollbackLocked`) assume lock is already held
+- No nested mutex acquisitions
+
+#### 6. StaleRead Recovery Mechanism
+
+**What is StaleRead**:
+
+StaleRead occurs when requested data is not yet available at the requested timestamp. This can happen when:
+- Data is being written but not yet committed
+- System is catching up after a delay
+- Transaction timestamps are ahead of actual data availability
+
+**Recovery Strategy**:
+
+The system implements automatic StaleRead recovery:
+
+1. **Detection**: `moerr.ErrStaleRead` is caught during processing
+2. **Recovery Attempt**: `handleStaleRead()` is called
+3. **Watermark Reset**: If possible, watermark is reset to allow retry
+4. **Success**: If recovery succeeds, error is swallowed, processing continues
+5. **Failure**: If recovery fails, error is returned (non-retryable)
+
+**Recovery Conditions**:
+
+- **Recoverable**: `startTs` is not set OR `noFull` is true
+  - System can reset watermark and retry
+- **Non-Recoverable**: `startTs` is set AND `noFull` is false
+  - Cannot reset watermark (startTs is fixed)
+  - Error is fatal, requires manual intervention
+
+**Example Flow**:
+
+```
+1. Read data at timestamp T
+2. StaleRead error: data not available at T
+3. handleStaleRead() called
+4. If recoverable: Reset watermark, return nil (success)
+5. Stream continues, retries with new watermark
+6. If non-recoverable: Return error, stream stops
+```
+
+#### 7. Control Signal Handling
+
+**Pause/Cancel Signals**:
+
+The system distinguishes between **control signals** (pause/cancel) and **errors**:
+
+**Why This Matters**:
+- Control signals are intentional stops, not failures
+- They should not trigger error state or retry logic
+- Successful recovery states should be preserved
+
+**Implementation**:
+
+- `IsPauseOrCancelError()` detects control signals
+- Control signals do not replace original errors
+- Retryable state is preserved if error is a control signal
+- This ensures successful recovery states are not overwritten
+
+**Example**:
+
+```
+1. StaleRead recovery succeeds → retryable = true
+2. Pause signal received → IsPauseOrCancelError() = true
+3. retryable state preserved (remains true)
+4. On resume, system can continue with retryable state
+```
+
+#### 8. Data Processing Pipeline
+
+**Atomic Batch Processing**:
+
+The system uses `AtomicBatch` to ensure atomicity:
+
+- **Purpose**: Groups changes from multiple batches into atomic units
+- **Implementation**: Uses B-tree to deduplicate and order rows
+- **Lifecycle**: 
+  - Created when processing starts
+  - Rows appended from multiple batches
+  - Sent to sinker when complete
+  - Closed after sinker processes it
+
+**Row Count Safety**:
+
+- `RowCount()` must be called **before** `Sink()` (asynchronous operation)
+- After `Sink()`, batch may be closed by sinker goroutine
+- Calling `RowCount()` on closed batch triggers panic (fail-fast design)
+- This prevents silent bugs from accessing closed batches
+
+**Transaction Coordination**:
+
+- `DataProcessor` coordinates between Reader and Sinker
+- Sends BEGIN before data, COMMIT after data
+- Handles multiple Tail batches in one transaction
+- Updates `toTs` as more batches arrive
+
 ### Component Isolation
 
 Each component is designed to be **loosely coupled**:
@@ -389,6 +698,314 @@ This design allows:
 - Easy testing (components can be mocked)
 - Independent scaling (each table stream is independent)
 - Clear error boundaries (errors are contained and handled appropriately)
+
+---
+
+## Deep Dive: Core Implementation Mechanisms
+
+This section provides detailed insights into the internal implementation of CDC, helping users understand how the system ensures reliability and consistency.
+
+### 1. Dual-Layer Safety Mechanism
+
+The CDC system implements a **dual-layer safety check** to ensure transaction consistency and prevent data loss:
+
+**Layer 1: TransactionTracker (Fast, Explicit State Check)**
+- **Purpose**: Fast in-memory state tracking for immediate decisions
+- **Implementation**: `TransactionTracker` maintains explicit transaction state flags:
+  - `hasBegin`: Whether BEGIN has been sent to sinker
+  - `hasCommitted`: Whether COMMIT has been sent to sinker
+  - `hasRolledBack`: Whether ROLLBACK has been sent to sinker
+- **Key Method**: `NeedsRollback()` - quickly determines if transaction needs cleanup
+- **Advantage**: Fast, no I/O required, immediate response
+
+**Layer 2: Watermark Verification (Reliable, Persistent Check)**
+- **Purpose**: Persistent verification using database state
+- **Implementation**: Compares tracker's expected watermark with actual persisted watermark
+- **Key Method**: `GetFromCache()` - retrieves persisted watermark from database
+- **Advantage**: Reliable, survives crashes, authoritative source of truth
+
+**How It Works**:
+
+The `EnsureCleanup()` method implements the dual-layer check:
+
+```go
+// Layer 1: Fast check using tracker state
+if tm.tracker.NeedsRollback() {
+    return tm.rollbackLocked(ctx)
+}
+
+// Layer 2: Verify watermark matches tracker expectation
+current, err := tm.watermarkUpdater.GetFromCache(ctx, tm.watermarkKey)
+if !current.Equal(&toTs) && tm.tracker.hasBegin {
+    // Watermark mismatch - rollback needed
+    return tm.rollbackLocked(ctx)
+}
+```
+
+**Why This Design**:
+- **Performance**: Layer 1 avoids expensive database queries in common cases
+- **Reliability**: Layer 2 catches inconsistencies that Layer 1 might miss (e.g., after crashes)
+- **Idempotency**: Both layers are idempotent - safe to call multiple times
+- **Recovery**: System can recover from any inconsistent state
+
+**Use Cases**:
+- **Normal Operation**: Layer 1 handles most cases efficiently
+- **After Crash**: Layer 2 verifies state consistency on restart
+- **Commit Failures**: Both layers ensure proper cleanup
+- **Concurrent Access**: Mutex protection ensures thread safety
+
+### 2. Transaction Lifecycle Management
+
+The CDC system uses `TransactionTracker` to manage transaction state throughout the lifecycle:
+
+**State Transitions**:
+```
+Initial State (no tracker)
+    ↓ BeginTransaction()
+Tracker Created → hasBegin = true
+    ↓ CommitTransaction()
+hasCommitted = true → tracker = nil (cleanup)
+    OR
+    ↓ RollbackTransaction()
+hasRolledBack = true → tracker kept (for idempotency)
+    ↓ BeginTransaction() (next transaction)
+tracker = nil (cleared for new transaction)
+```
+
+**Key Design Decisions**:
+
+1. **Tracker Retention After Rollback**:
+   - Tracker is **kept** after rollback (not set to nil)
+   - **Reason**: Ensures `EnsureCleanup()` is idempotent
+   - If tracker is nil, `EnsureCleanup()` cannot determine if rollback already occurred
+   - Tracker is cleared when `BeginTransaction()` starts a new transaction
+
+2. **Defensive Handling in BeginTransaction**:
+   - Checks if tracker exists and is already completed
+   - Clears completed tracker to allow retry
+   - **Reason**: Handles edge cases where `processTailDone` might call `BeginTransaction` with completed tracker
+
+3. **Idempotent Operations**:
+   - `RollbackTransaction()` can be called multiple times safely
+   - `EnsureCleanup()` can be called multiple times safely
+   - State checks prevent duplicate operations
+
+**Example Flow**:
+
+```go
+// Round 1: Normal flow
+BeginTransaction() → tracker created, hasBegin = true
+CommitTransaction() → hasCommitted = true, tracker = nil
+
+// Round 2: Commit failure
+BeginTransaction() → tracker created, hasBegin = true
+CommitTransaction() → fails, tracker still exists
+EnsureCleanup() → detects NeedsRollback(), calls RollbackTransaction()
+RollbackTransaction() → hasRolledBack = true, tracker kept
+
+// Round 3: Retry
+BeginTransaction() → detects completed tracker, clears it, creates new tracker
+CommitTransaction() → succeeds, tracker = nil
+```
+
+### 3. Error Handling and Retry Mechanism
+
+The CDC system implements sophisticated error handling with **original error preservation**:
+
+**Original Error Preservation**:
+
+The system preserves the **original error** that triggered retry attempts, ensuring deterministic error reporting:
+
+**Why This Matters**:
+- Users see the **root cause** of problems, not transient issues during retries
+- Error messages remain consistent across retry attempts
+- Debugging is easier with clear, stable error information
+
+**How It Works**:
+
+1. **First Error**: Stored as `originalError`
+2. **During Retries**: If auxiliary errors occur (e.g., cache failures during cleanup), they are logged but **do not replace** the original error
+3. **Error Classification**: Errors are classified as:
+   - **Primary Errors**: Replace original error (new error type, fatal errors)
+   - **Auxiliary Errors**: Do not replace original error (infrastructure errors during cleanup)
+
+**Auxiliary Error Detection**:
+- Errors containing: `get_from_cache`, `cache error`, `ensure_cleanup`
+- These are infrastructure errors that occur during retry/cleanup operations
+- They should not mask the original problem
+
+**Example Scenario**:
+```
+1. Commit failure occurs → Original error: "commit failure"
+2. Retry attempt 1 → Cleanup encounters cache error → Original preserved: "commit failure"
+3. Retry attempt 2 → Commit failure again → Original preserved: "commit failure"
+4. Retry attempt 3 → Commit failure again → Original preserved: "commit failure"
+5. Max retries exceeded → System reports: "commit failure" (not "cache error")
+```
+
+**Error Classification Priority**:
+
+The system uses priority-based classification (checked in order):
+
+1. **Control Signals** (Non-retryable): Pause/cancel signals
+2. **MatrixOne System Errors** (Retryable): RPC timeout, backend unavailable, etc.
+3. **Context Timeout** (Retryable): Operation timeouts
+4. **Pattern Matching** (Retryable/Non-retryable): Based on error message patterns
+5. **Default** (Non-retryable): Unknown errors default to non-retryable for safety
+
+**Exponential Backoff**:
+
+Retry delays increase exponentially:
+- Retry 1: Base delay (e.g., 200ms)
+- Retry 2: Base × factor (e.g., 400ms)
+- Retry 3: Base × factor² (e.g., 800ms)
+- Capped at maximum delay (e.g., 30s)
+
+### 4. State Management and Idempotency
+
+**Atomic State Updates**:
+
+All state updates are protected by mutex (`stateMu`) to ensure consistency:
+- `lastError` and `retryable` are updated atomically
+- Prevents race conditions between error handling and retry logic
+
+**Idempotent Operations**:
+
+Key operations are designed to be idempotent:
+
+1. **EnsureCleanup()**: Can be called multiple times safely
+   - Checks tracker state before acting
+   - If already rolled back, returns without action
+   - If needs rollback, performs rollback and marks as complete
+
+2. **RollbackTransaction()**: Can be called multiple times safely
+   - Checks `hasRolledBack` flag before acting
+   - If already rolled back, returns immediately
+   - Prevents duplicate rollback operations
+
+3. **BeginTransaction()**: Handles edge cases defensively
+   - Clears completed trackers before creating new ones
+   - Prevents state inconsistencies
+
+**State Persistence**:
+
+- **In-Memory State**: Fast access during processing
+- **Persistent State**: Survives restarts (watermark, errors in database)
+- **Synchronization**: State is persisted asynchronously to avoid blocking
+
+### 5. Concurrency Control
+
+**Mutex Protection**:
+
+- `TransactionManager.mu`: Protects tracker state and transaction operations
+- `TableChangeStream.stateMu`: Protects error state and retry state
+- All public methods are serialized by mutexes
+
+**Thread Safety Guarantees**:
+
+- **TransactionManager**: All public methods are thread-safe
+- **State Updates**: Atomic updates prevent race conditions
+- **Concurrent Calls**: Multiple goroutines can call `EnsureCleanup()` safely
+
+**Lock Ordering**:
+
+To prevent deadlocks:
+- Public methods acquire `TransactionManager.mu`
+- Private methods (`rollbackLocked`) assume lock is already held
+- No nested mutex acquisitions
+
+### 6. StaleRead Recovery Mechanism
+
+**What is StaleRead**:
+
+StaleRead occurs when requested data is not yet available at the requested timestamp. This can happen when:
+- Data is being written but not yet committed
+- System is catching up after a delay
+- Transaction timestamps are ahead of actual data availability
+
+**Recovery Strategy**:
+
+The system implements automatic StaleRead recovery:
+
+1. **Detection**: `moerr.ErrStaleRead` is caught during processing
+2. **Recovery Attempt**: `handleStaleRead()` is called
+3. **Watermark Reset**: If possible, watermark is reset to allow retry
+4. **Success**: If recovery succeeds, error is swallowed, processing continues
+5. **Failure**: If recovery fails, error is returned (non-retryable)
+
+**Recovery Conditions**:
+
+- **Recoverable**: `startTs` is not set OR `noFull` is true
+  - System can reset watermark and retry
+- **Non-Recoverable**: `startTs` is set AND `noFull` is false
+  - Cannot reset watermark (startTs is fixed)
+  - Error is fatal, requires manual intervention
+
+**Example Flow**:
+
+```
+1. Read data at timestamp T
+2. StaleRead error: data not available at T
+3. handleStaleRead() called
+4. If recoverable: Reset watermark, return nil (success)
+5. Stream continues, retries with new watermark
+6. If non-recoverable: Return error, stream stops
+```
+
+### 7. Control Signal Handling
+
+**Pause/Cancel Signals**:
+
+The system distinguishes between **control signals** (pause/cancel) and **errors**:
+
+**Why This Matters**:
+- Control signals are intentional stops, not failures
+- They should not trigger error state or retry logic
+- Successful recovery states should be preserved
+
+**Implementation**:
+
+- `IsPauseOrCancelError()` detects control signals
+- Control signals do not replace original errors
+- Retryable state is preserved if error is a control signal
+- This ensures successful recovery states are not overwritten
+
+**Example**:
+
+```
+1. StaleRead recovery succeeds → retryable = true
+2. Pause signal received → IsPauseOrCancelError() = true
+3. retryable state preserved (remains true)
+4. On resume, system can continue with retryable state
+```
+
+### 8. Data Processing Pipeline
+
+**Atomic Batch Processing**:
+
+The system uses `AtomicBatch` to ensure atomicity:
+
+- **Purpose**: Groups changes from multiple batches into atomic units
+- **Implementation**: Uses B-tree to deduplicate and order rows
+- **Lifecycle**: 
+  - Created when processing starts
+  - Rows appended from multiple batches
+  - Sent to sinker when complete
+  - Closed after sinker processes it
+
+**Row Count Safety**:
+
+- `RowCount()` must be called **before** `Sink()` (asynchronous operation)
+- After `Sink()`, batch may be closed by sinker goroutine
+- Calling `RowCount()` on closed batch triggers panic (fail-fast design)
+- This prevents silent bugs from accessing closed batches
+
+**Transaction Coordination**:
+
+- `DataProcessor` coordinates between Reader and Sinker
+- Sends BEGIN before data, COMMIT after data
+- Handles multiple Tail batches in one transaction
+- Updates `toTs` as more batches arrive
 
 ---
 
@@ -2951,8 +3568,8 @@ Sink (MatrixOne):
 
 ## Document Information
 
-**Version**: 1.0  
-**Last Updated**: November 6, 2025  
+**Version**: 2.0  
+**Last Updated**: December 2024  
 **Maintainer**: MatrixOne CDC Team  
 **Feedback**: Please report documentation issues to the development team
 
