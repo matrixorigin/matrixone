@@ -7261,6 +7261,26 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return DatetimeToWeek
 				},
 			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_date, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint8.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return DateToWeek
+				},
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_datetime, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint8.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return DatetimeToWeek
+				},
+			},
 		},
 	},
 

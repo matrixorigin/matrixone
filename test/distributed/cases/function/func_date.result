@@ -99,29 +99,29 @@ weekday(c)    weekday(vc)
 2    2
 null    null
 select max(month(d)),max(month(dt)) from t1;
-max(month(d))	max(month(dt))
-12	12
+max(month(d))    max(month(dt))
+12    12
 select min(month(d)),min(month(d)) from t1;
-min(month(d))	min(month(d))
-1	1
+min(month(d))    min(month(d))
+1    1
 select avg(month(d)),avg(month(d)) from t1;
-avg(month(d))	avg(month(d))
+avg(month(d))    avg(month(d))
 6.176470588235294    6.176470588235294
 select sum(month(d)),sum(month(d)) from t1;
-sum(month(d))	sum(month(d))
+sum(month(d))    sum(month(d))
 105    105
 select max(weekday(d)),max(weekday(dt)) from t1;
-max(weekday(d))	max(weekday(dt))
-6	6
+max(weekday(d))    max(weekday(dt))
+6    6
 select min(weekday(d)),min(weekday(d)) from t1;
-min(weekday(d))	min(weekday(d))
-0	0
+min(weekday(d))    min(weekday(d))
+0    0
 select avg(weekday(d)),avg(weekday(d)) from t1;
-avg(weekday(d))	avg(weekday(d))
+avg(weekday(d))    avg(weekday(d))
 3.411764705882353    3.411764705882353
 select sum(weekday(d)),sum(weekday(d)) from t1;
-sum(weekday(d))	sum(weekday(d))
-58	58
+sum(weekday(d))    sum(weekday(d))
+58    58
 select distinct(month(d)) from t1;
 month(d)
 1
@@ -152,14 +152,14 @@ id    c    vc
 14    2016-11-01    2016-11-01
 15    2023-11-08    2023-11-08
 select id,c,vc from t1 where month(d) < 3;
-id	c	vc
-1	2021-12-15	2021-12-16
-1	2021-12-15	2021-12-16
-2	2021-02-15	2021-02-15
-2	2021-02-15	2021-02-15
-3	2021-02-15	2021-02-15
+id    c    vc
+1    2021-12-15    2021-12-16
+1    2021-12-15    2021-12-16
+2    2021-02-15    2021-02-15
+2    2021-02-15    2021-02-15
+3    2021-02-15    2021-02-15
 select id,c,vc from t1 where month(d) <> 4;
-id	c	vc
+id    c    vc
 1    2021-12-15    2021-12-16
 1    2021-12-15    2021-12-16
 2    2021-02-15    2021-02-15
@@ -176,4 +176,93 @@ id	c	vc
 13    2013-12-01    2013-12-01
 14    2016-11-01    2016-11-01
 15    2023-11-08    2023-11-08
+select week(d), week(dt) from t1;
+week(d)    week(dt)
+2    2
+5    5
+7    7
+9    9
+9    9
+11    7
+15    15
+20    20
+25    25
+30    29
+35    34
+39    39
+44    44
+48    48
+48    48
+44    44
+45    45
+null    null
+select week(d, 0), week(d, 1) from t1;
+week(d, 0)    week(d, 1)
+2    2
+5    4
+7    7
+9    9
+9    9
+11    11
+15    16
+20    21
+25    25
+30    29
+35    34
+39    39
+44    43
+48    48
+48    48
+44    44
+45    45
+null    null
+select week(d, 2), week(d, 3) from t1;
+week(d, 2)    week(d, 3)
+2    2
+5    4
+7    7
+9    9
+9    9
+11    11
+15    16
+20    21
+25    25
+30    29
+35    34
+39    39
+44    43
+48    48
+48    48
+44    44
+45    45
+null    null
+select week(dt, 0), week(dt, 1) from t1;
+week(dt, 0)    week(dt, 1)
+2    2
+5    4
+7    7
+9    9
+9    9
+7    7
+15    16
+20    21
+25    25
+29    30
+34    35
+39    39
+44    43
+48    48
+48    48
+44    44
+45    45
+null    null
+select week('2023-01-01', 0), week('2023-01-01', 1);
+week(2023-01-01, 0)    week(2023-01-01, 1)
+1    0
+select week('2023-01-02', 0), week('2023-01-02', 1);
+week(2023-01-02, 0)    week(2023-01-02, 1)
+1    1
+select week('2023-12-31', 0), week('2023-12-31', 1);
+week(2023-12-31, 0)    week(2023-12-31, 1)
+53    52
 drop table t1;

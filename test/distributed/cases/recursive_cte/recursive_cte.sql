@@ -33,3 +33,14 @@ create table t1(id bigint primary key, parent_id bigint, tenant_id varchar(50));
 insert into t1 select *,*,* from generate_series(1000000) g;
 WITH recursive tb (id, parent_id) AS (SELECT id,parent_id FROM t1 WHERE id IN ( 1937478033946447874, 1,2,3) AND tenant_id != '000000' UNION ALL SELECT c.id, c.parent_id FROM t1 c JOIN tb t ON c.id = t.parent_id WHERE c.tenant_id != '000000') select count(*) from tb;
 drop table if exists t1;
+
+-- test for cte_max_recursion_depth variable
+drop table if exists t_cte_depth;
+create table t_cte_depth(a int);
+insert into t_cte_depth values (1);
+set cte_max_recursion_depth = 200;
+with recursive c as (select a from t_cte_depth union all select a+1 from c where a < 150) select count(*) from c;
+set cte_max_recursion_depth = 50;
+with recursive c as (select a from t_cte_depth union all select a+1 from c where a < 100) select count(*) from c;
+set cte_max_recursion_depth = 100;
+drop table if exists t_cte_depth;
