@@ -17,9 +17,8 @@ package momath
 import (
 	"math"
 
-	"golang.org/x/exp/constraints"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"golang.org/x/exp/constraints"
 )
 
 func Acos(v float64) (float64, error) {

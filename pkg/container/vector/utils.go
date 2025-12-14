@@ -16,9 +16,9 @@ package vector
 
 import (
 	"bytes"
+	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 )
 
 // FindFirstIndexInSortedSlice finds the first index of v in a sorted slice s
@@ -308,10 +308,10 @@ func ArrayGetMinMax[T types.RealNumbers](vec *Vector) (minv, maxv []T) {
 				minv, maxv = val, val
 				first = false
 			} else {
-				if moarray.Compare[T](minv, val) > 0 {
+				if slices.Compare(minv, val) > 0 {
 					minv = val
 				}
-				if moarray.Compare[T](maxv, val) < 0 {
+				if slices.Compare(maxv, val) < 0 {
 					maxv = val
 				}
 			}
@@ -321,10 +321,10 @@ func ArrayGetMinMax[T types.RealNumbers](vec *Vector) (minv, maxv []T) {
 		minv, maxv = val, val
 		for i, j := 1, vec.Length(); i < j; i++ {
 			val := types.GetArray[T](&col[i], area)
-			if moarray.Compare[T](minv, val) > 0 {
+			if slices.Compare(minv, val) > 0 {
 				minv = val
 			}
-			if moarray.Compare[T](maxv, val) < 0 {
+			if slices.Compare(maxv, val) < 0 {
 				maxv = val
 			}
 		}

@@ -19,139 +19,33 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"gonum.org/v1/gonum/blas/blas32"
-	"gonum.org/v1/gonum/blas/blas64"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
+	"github.com/viterin/vek"
+	"github.com/viterin/vek/vek32"
 )
 
 func L2Distance[T types.RealNumbers](v1, v2 []T) (T, error) {
-	switch any(v1).(type) {
-	case []float32:
-		_v1 := any(v1).([]float32)
-		_v2 := any(v2).([]float32)
-
-		diff := blas32.Vector{
-			N:    len(_v1),
-			Inc:  1,
-			Data: make([]float32, len(_v1)),
-		}
-
-		for i := range _v1 {
-			diff.Data[i] = _v1[i] - _v2[i]
-		}
-		return T(blas32.Nrm2(diff)), nil
-
-	case []float64:
-		_v1 := any(v1).([]float64)
-		_v2 := any(v2).([]float64)
-
-		diff := blas64.Vector{
-			N:    len(_v1),
-			Inc:  1,
-			Data: make([]float64, len(_v1)),
-		}
-
-		for i := range _v1 {
-			diff.Data[i] = _v1[i] - _v2[i]
-		}
-		return T(blas64.Nrm2(diff)), nil
-	default:
-		return 0, moerr.NewInternalErrorNoCtx("L2Distance type not supported")
-	}
-
+	return moarray.L2Distance(v1, v2)
 }
 
 func L2DistanceSq[T types.RealNumbers](v1, v2 []T) (T, error) {
-	var sumOfSquares T
-	for i := range v1 {
-		diff := v1[i] - v2[i]
-		sumOfSquares += diff * diff
-	}
-	return sumOfSquares, nil
-
+	return moarray.L2DistanceSq(v1, v2)
 }
 
 func L1Distance[T types.RealNumbers](v1, v2 []T) (T, error) {
-	switch any(v1).(type) {
-	case []float32:
-		_v1 := any(v1).([]float32)
-		_v2 := any(v2).([]float32)
-
-		diff := blas32.Vector{
-			N:    len(_v1),
-			Inc:  1,
-			Data: make([]float32, len(_v1)),
-		}
-
-		for i := range _v1 {
-			diff.Data[i] = _v1[i] - _v2[i]
-		}
-
-		return T(blas32.Asum(diff)), nil
-
-	case []float64:
-		_v1 := any(v1).([]float64)
-		_v2 := any(v2).([]float64)
-
-		diff := blas64.Vector{
-			N:    len(_v1),
-			Inc:  1,
-			Data: make([]float64, len(_v1)),
-		}
-
-		for i := range _v1 {
-			diff.Data[i] = _v1[i] - _v2[i]
-		}
-		return T(blas64.Asum(diff)), nil
-	default:
-		return 0, moerr.NewInternalErrorNoCtx("L1Distance type not supported")
-	}
+	return moarray.L1Distance(v1, v2)
 }
 
 func InnerProduct[T types.RealNumbers](v1, v2 []T) (T, error) {
-	switch any(v1).(type) {
-	case []float32:
-		_v1 := blas32.Vector{N: len(v1), Inc: 1, Data: any(v1).([]float32)}
-		_v2 := blas32.Vector{N: len(v2), Inc: 1, Data: any(v2).([]float32)}
-
-		return T(-blas32.Dot(_v1, _v2)), nil
-
-	case []float64:
-		_v1 := blas64.Vector{N: len(v1), Inc: 1, Data: any(v1).([]float64)}
-		_v2 := blas64.Vector{N: len(v2), Inc: 1, Data: any(v2).([]float64)}
-		return T(-blas64.Dot(_v1, _v2)), nil
-	default:
-		return 0, moerr.NewInternalErrorNoCtx("InnerProduct type not supported")
-	}
+	return moarray.InnerProduct(v1, v2)
 }
 
 func CosineDistance[T types.RealNumbers](v1, v2 []T) (T, error) {
-	switch any(v1).(type) {
-	case []float32:
-		_v1 := blas32.Vector{N: len(v1), Inc: 1, Data: any(v1).([]float32)}
-		_v2 := blas32.Vector{N: len(v2), Inc: 1, Data: any(v2).([]float32)}
+	return moarray.CosineDistance(v1, v2)
+}
 
-		mag1 := blas32.Nrm2(_v1)
-		mag2 := blas32.Nrm2(_v2)
-		if mag1 == 0 || mag2 == 0 {
-			return 0, moerr.NewInternalErrorNoCtx("cannot compute cosine similarity with zero vector")
-		}
-		score := blas32.Dot(_v1, _v2) / (mag1 * mag2)
-		return T(1 - score), nil
-
-	case []float64:
-		_v1 := blas64.Vector{N: len(v1), Inc: 1, Data: any(v1).([]float64)}
-		_v2 := blas64.Vector{N: len(v2), Inc: 1, Data: any(v2).([]float64)}
-		mag1 := blas64.Nrm2(_v1)
-		mag2 := blas64.Nrm2(_v2)
-		if mag1 == 0 || mag2 == 0 {
-			return 0, moerr.NewInternalErrorNoCtx("cannot compute cosine similarity with zero vector")
-		}
-		score := blas64.Dot(_v1, _v2) / (mag1 * mag2)
-		return T(1 - score), nil
-	default:
-		return 0, moerr.NewInternalErrorNoCtx("CosineDistance type not supported")
-	}
-
+func CosineSimilarity[T types.RealNumbers](v1, v2 []T) (T, error) {
+	return moarray.CosineSimilarity(v1, v2)
 }
 
 // SphericalDistance is used for InnerProduct and CosineDistance in Spherical Kmeans.
@@ -167,14 +61,17 @@ func SphericalDistance[T types.RealNumbers](v1, v2 []T) (T, error) {
 
 	switch any(v1).(type) {
 	case []float32:
-		_v1 := blas32.Vector{N: len(v1), Inc: 1, Data: any(v1).([]float32)}
-		_v2 := blas32.Vector{N: len(v2), Inc: 1, Data: any(v2).([]float32)}
-		dp = float64(blas32.Dot(_v1, _v2))
+		_v1 := any(v1).([]float32)
+		_v2 := any(v2).([]float32)
+
+		dp = float64(vek32.Dot(_v1, _v2))
 
 	case []float64:
-		_v1 := blas64.Vector{N: len(v1), Inc: 1, Data: any(v1).([]float64)}
-		_v2 := blas64.Vector{N: len(v2), Inc: 1, Data: any(v2).([]float64)}
-		dp = blas64.Dot(_v1, _v2)
+		_v1 := any(v1).([]float64)
+		_v2 := any(v2).([]float64)
+
+		dp = vek.Dot(_v1, _v2)
+
 	default:
 		return 0, moerr.NewInternalErrorNoCtx("SphericalDistance type not supported")
 	}
@@ -193,33 +90,21 @@ func SphericalDistance[T types.RealNumbers](v1, v2 []T) (T, error) {
 }
 
 func NormalizeL2[T types.RealNumbers](v1 []T, normalized []T) error {
-
-	if len(v1) == 0 {
-		return moerr.NewInternalErrorNoCtx("cannot normalize empty vector")
-	}
-
-	// Compute the norm of the vector
-	var sumSquares float64
-	for _, val := range v1 {
-		sumSquares += float64(val) * float64(val)
-	}
-	norm := math.Sqrt(sumSquares)
-	if norm == 0 {
-		copy(normalized, v1)
-		return nil
-	}
-
-	// Divide each element by the norm
-	for i, val := range v1 {
-		normalized[i] = T(float64(val) / norm)
-	}
-
-	return nil
+	return moarray.NormalizeL2(v1, normalized)
 }
 
 func ScaleInPlace[T types.RealNumbers](v []T, scale T) {
-	for i := range v {
-		v[i] *= scale
+	switch _v := any(v).(type) {
+	case []float32:
+		_scale := float32(scale)
+		vek32.MulNumber_Inplace(_v, _scale)
+
+	case []float64:
+		_scale := float64(scale)
+		vek.MulNumber_Inplace(_v, _scale)
+
+	default:
+		panic("Scale type not supported")
 	}
 }
 

@@ -479,9 +479,16 @@ func (r *reader) SetIndexParam(param *plan.IndexReaderParam) {
 
 	if param.DistRange != nil {
 		r.orderByLimit.LowerBoundType = param.DistRange.LowerBoundType
-		r.orderByLimit.LowerBound = param.DistRange.LowerBound.GetLit().GetDval()
 		r.orderByLimit.UpperBoundType = param.DistRange.UpperBoundType
-		r.orderByLimit.UpperBound = param.DistRange.UpperBound.GetLit().GetDval()
+
+		switch r.orderByLimit.Typ {
+		case types.T_array_float32:
+			r.orderByLimit.LowerBound = float64(param.DistRange.LowerBound.GetLit().GetFval())
+			r.orderByLimit.UpperBound = float64(param.DistRange.UpperBound.GetLit().GetFval())
+		case types.T_array_float64:
+			r.orderByLimit.LowerBound = param.DistRange.LowerBound.GetLit().GetDval()
+			r.orderByLimit.UpperBound = param.DistRange.UpperBound.GetLit().GetDval()
+		}
 
 		if param.OrigFuncName == metric.DistFn_L2Distance {
 			r.orderByLimit.LowerBound *= r.orderByLimit.LowerBound

@@ -409,9 +409,9 @@ LIMIT 1 by rank with option 'mode=pre')
 ORDER BY dist LIMIT 4;
 id    category    dist
 1    A    0.14142133490046585
-2    A    0.14142136782769238
-3    B    0.8485281542825963
-8    B    1.1045360607064578
+2    A    0.1414213612422477
+3    B    0.8485281894049685
+4    B    1.1045360607064578
 WITH q1 AS (
 SELECT id, text, l2_distance(vec, '[0.1,-0.2,0.3,0.4,-0.1,0.2,0.0,0.5]') AS dist
 FROM mini_vector_data

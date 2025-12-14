@@ -36,7 +36,7 @@ func InEpsilonF64Slices(want, got [][]float64) bool {
 		return false
 	}
 
-	for i := 0; i < len(want); i++ {
+	for i := range want {
 		if !InEpsilonF64Slice(want[i], got[i]) {
 			return false
 		}
@@ -51,7 +51,7 @@ func InEpsilonF64Slice(want, got []float64) bool {
 		return false
 	}
 
-	for i := 0; i < len(want); i++ {
+	for i := range want {
 		if !InEpsilonF64(want[i], got[i]) {
 			return false
 		}

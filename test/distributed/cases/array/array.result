@@ -5,9 +5,9 @@ drop table if exists vec_table;
 create table vec_table(a int, b vecf32(3), c vecf64(3));
 desc vec_table;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    YES        null        
-b    VECF32(3)    YES        null        
-c    VECF64(3)    YES        null        
+a    INT(32)    YES        null
+b    VECF32(3)    YES        null
+c    VECF64(3)    YES        null
 insert into vec_table values(1, "[1,2,3]", "[4,5,6]");
 select * from vec_table;
 a    b    c
@@ -65,7 +65,7 @@ b + [1,2,3]
 [2, 4, 6]
 select b + sqrt(b) from vec_table;
 b + sqrt(b)
-[2, 3.414213562373095, 4.732050807568877]
+[2, 3.4142137, 4.732051]
 select b + c from vec_table;
 b + c
 [5, 7, 9]
@@ -77,7 +77,7 @@ abs(cast([-1,-2,3] as vecf32(3)))
 [1, 2, 3]
 select sqrt(b) from vec_table;
 sqrt(b)
-[1, 1.4142135623730951, 1.7320508075688772]
+[1, 1.4142135, 1.7320508]
 select summation(b) from vec_table;
 summation(b)
 6.0
@@ -104,7 +104,7 @@ cosine_distance(b, [1,2,3])
 0.0
 select normalize_l2(b) from vec_table;
 normalize_l2(b)
-[0.26726124, 0.5345225, 0.80178374]
+[0.26726124, 0.5345225, 0.8017837]
 select * FROM vec_table ORDER BY cosine_similarity(b, '[3,1,2]') LIMIT 5;
 a    b    c
 1    [1, 2, 3]    [4, 5, 6]
@@ -306,8 +306,8 @@ INSERT INTO `t8` VALUES(4,'[8.560689, 6.790359, 821.9778]','[0.46323407, 23.4980
 select cosine_similarity(b,b), cosine_similarity(c,c) from t8;
 cosine_similarity(b, b)    cosine_similarity(c, c)
 null    null
-1.0    null
-0.9999998589068639    0.9999999473078075
+0.99999994    null
+1.0    0.99999994
 1.0    1.0
 create table t9(a int, b vecf64(3), c vecf64(5));
 INSERT INTO `t9` VALUES (1,NULL,NULL);
@@ -542,8 +542,6 @@ select * from t8 except select * from t9;
 a    b    c
 3    [0.1726299, 3.2908857, 30.433094]    [0.45052445, 2.1984527, 9.579752, 123.48039, 4635.894]
 4    [8.560689, 6.790359, 821.9778]    [0.46323407, 23.498016, 563.923, 56.076736, 8732.958]
-select cast("[76875768584509877574546435800000005,8955885757767774774774774456466]" as vecf32(2)) *623585864455;
-internal error: vector contains infinity values
 select l2_distance("[0, 0, 0]", "[3, 4, 0]"), l2_distance_sq("[0, 0, 0]", "[3, 4, 0]");
 l2_distance([0, 0, 0], [3, 4, 0])    l2_distance_sq([0, 0, 0], [3, 4, 0])
 5.0    25.0

@@ -16,12 +16,12 @@ package sort
 
 import (
 	"math/bits"
+	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 )
 
 const (
@@ -360,7 +360,7 @@ func uuidLess(data []types.Uuid, i, j int64) bool {
 }
 
 func arrayLess[T types.RealNumbers](data [][]T, i, j int64) bool {
-	return moarray.Compare[T](data[i], data[j]) < 0
+	return slices.Compare(data[i], data[j]) < 0
 }
 
 func uuidGreater(data []types.Uuid, i, j int64) bool {
@@ -368,7 +368,7 @@ func uuidGreater(data []types.Uuid, i, j int64) bool {
 }
 
 func arrayGreater[T types.RealNumbers](data [][]T, i, j int64) bool {
-	return moarray.Compare[T](data[i], data[j]) > 0
+	return slices.Compare(data[i], data[j]) > 0
 }
 
 func genericLess[T types.OrderedT](data []T, i, j int64) bool {

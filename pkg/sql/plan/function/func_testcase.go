@@ -16,13 +16,13 @@ package function
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/assertx"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -616,7 +616,7 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 			if null2 {
 				return false, fmt.Sprintf("the %dth row expected %s, but get NULL", i+1, string(want))
 			}
-			if moarray.Compare[float32](types.BytesToArray[float32](want), types.BytesToArray[float32](get)) != 0 {
+			if slices.Compare(types.BytesToArray[float32](want), types.BytesToArray[float32](get)) != 0 {
 				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
 					i+1, types.BytesToArray[float32](want), types.BytesToArray[float32](get))
 			}

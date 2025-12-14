@@ -25,7 +25,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -2674,7 +2673,7 @@ func builtInSqrtArray[T types.RealNumbers](parameters []*vector.Vector, result v
 		if err != nil {
 			return nil, err
 		}
-		return types.ArrayToBytes[float64](_out), nil
+		return types.ArrayToBytes[T](_out), nil
 
 	}, selectList)
 }

@@ -41,27 +41,26 @@ import (
 	"unicode/utf8"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/common/util"
-	"github.com/matrixorigin/matrixone/pkg/datalink"
-
 	"github.com/RoaringBitmap/roaring"
-	"golang.org/x/exp/constraints"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/datalink"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/lengthutf8"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/momath"
 	"github.com/matrixorigin/matrixone/pkg/version"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"golang.org/x/exp/constraints"
 )
 
 func AbsUInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -234,7 +233,7 @@ func NormalizeL2Array[T types.RealNumbers](parameters []*vector.Vector, result v
 			} else {
 				outArrayF32 = outArrayF32[:len(inArrayF32)]
 			}
-			_ = moarray.NormalizeL2(inArrayF32, outArrayF32)
+			_ = metric.NormalizeL2(inArrayF32, outArrayF32)
 			_ = rs.AppendBytes(types.ArrayToBytes[float32](outArrayF32), false)
 
 			*outArrayF32Ptr = outArrayF32
@@ -250,7 +249,7 @@ func NormalizeL2Array[T types.RealNumbers](parameters []*vector.Vector, result v
 			} else {
 				outArrayF64 = outArrayF64[:len(inArrayF64)]
 			}
-			_ = moarray.NormalizeL2(inArrayF64, outArrayF64)
+			_ = metric.NormalizeL2(inArrayF64, outArrayF64)
 			_ = rs.AppendBytes(types.ArrayToBytes[float64](outArrayF64), false)
 
 			*outArrayF64Ptr = outArrayF64
@@ -263,14 +262,14 @@ func NormalizeL2Array[T types.RealNumbers](parameters []*vector.Vector, result v
 }
 
 func L1NormArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(in []byte) (float64, error) {
+	return opUnaryBytesToFixedWithErrorCheck[T](ivecs, result, proc, length, func(in []byte) (T, error) {
 		_in := types.BytesToArray[T](in)
 		return moarray.L1Norm(_in)
 	}, selectList)
 }
 
 func L2NormArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(in []byte) (out float64, err error) {
+	return opUnaryBytesToFixedWithErrorCheck[T](ivecs, result, proc, length, func(in []byte) (T, error) {
 		_in := types.BytesToArray[T](in)
 		return moarray.L2Norm(_in)
 	}, selectList)
@@ -284,7 +283,7 @@ func VectorDimsArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.
 }
 
 func SummationArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(in []byte) (out float64, err error) {
+	return opUnaryBytesToFixedWithErrorCheck[T](ivecs, result, proc, length, func(in []byte) (out T, err error) {
 		_in := types.BytesToArray[T](in)
 
 		return moarray.Summation[T](_in)
