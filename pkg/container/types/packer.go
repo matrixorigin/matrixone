@@ -68,7 +68,7 @@ func NewPackerArrayWithSize(length int, size uint64) []*Packer {
 
 func (p *Packer) Close() {
 	if p.bufferDeallocator != nil {
-		p.bufferDeallocator.Deallocate(malloc.NoHints)
+		p.bufferDeallocator.Deallocate()
 	}
 	*p = Packer{}
 }
@@ -92,7 +92,7 @@ func (p *Packer) ensureSizeSlow(n int) {
 	newBuffer = newBuffer[:len(p.buffer)]
 	copy(newBuffer, p.buffer)
 	if p.bufferDeallocator != nil {
-		p.bufferDeallocator.Deallocate(malloc.NoHints)
+		p.bufferDeallocator.Deallocate()
 	}
 	p.buffer = newBuffer
 	p.bufferDeallocator = newDec

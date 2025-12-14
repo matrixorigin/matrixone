@@ -48,7 +48,7 @@ func TestReadOnlyAllocator(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = slice
-	defer dec.Deallocate(NoHints)
+	defer dec.Deallocate()
 
 	var freeze Freezer
 	if !dec.As(&freeze) {

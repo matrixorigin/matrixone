@@ -1072,7 +1072,7 @@ func (txn *Transaction) deleteBatch(
 	if bat.RowCount() == 0 {
 		return bat
 	}
-	sels := txn.proc.Mp().GetSels()
+	sels := vector.GetSels()
 	txn.deleteTableWrites(databaseId, tableId, sels, deleteBlkId, min1, max1, mp)
 
 	sels = sels[:0]
@@ -1084,7 +1084,7 @@ func (txn *Transaction) deleteBatch(
 		}
 	}
 	bat.Shrink(sels, true)
-	txn.proc.Mp().PutSels(sels)
+	vector.PutSels(sels)
 	return bat
 }
 
@@ -1320,9 +1320,9 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 
 	// this threshold may have a bad effect on the performance
 	if inserts.Count()+deletes.Count() >= 30 {
-		arr := common.DefaultAllocator.GetSels()
+		arr := vector.GetSels()
 		defer func() {
-			common.DefaultAllocator.PutSels(arr)
+			vector.PutSels(arr)
 		}()
 
 		ins := inserts.ToI64Array(&arr)

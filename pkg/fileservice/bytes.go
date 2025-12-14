@@ -54,13 +54,13 @@ func (b *Bytes) Release() {
 		if n := b.refs.Add(-1); n == 0 {
 			if b.deallocator != nil &&
 				atomic.CompareAndSwapUint32(&b.deallocated, 0, 1) {
-				b.deallocator.Deallocate(malloc.NoHints)
+				b.deallocator.Deallocate()
 			}
 		}
 	} else {
 		if b.deallocator != nil &&
 			atomic.CompareAndSwapUint32(&b.deallocated, 0, 1) {
-			b.deallocator.Deallocate(malloc.NoHints)
+			b.deallocator.Deallocate()
 		}
 	}
 }

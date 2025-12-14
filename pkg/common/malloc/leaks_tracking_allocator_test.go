@@ -49,7 +49,7 @@ func TestLeaksTrackingAllocator(t *testing.T) {
 			t.Fatal()
 		}
 
-		dec.Deallocate(NoHints)
+		dec.Deallocate()
 		buf = new(bytes.Buffer)
 		leaks = tracker.ReportLeaks(buf)
 		if leaks {

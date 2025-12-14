@@ -84,26 +84,31 @@ func TestPrepare(t *testing.T) {
 
 func TestProjection(t *testing.T) {
 	for _, tc := range makeTestCases(t) {
-		resetChildren(tc.arg)
+		nb0 := tc.proc.Mp().CurrNB()
+		op := resetChildren(tc.arg, tc.proc.Mp())
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		_, _ = vm.Exec(tc.arg, tc.proc)
 
 		tc.arg.Reset(tc.proc, false, nil)
+		op.Free(tc.proc, false, nil)
 
-		resetChildren(tc.arg)
+		op = resetChildren(tc.arg, tc.proc.Mp())
 		err = tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		_, _ = vm.Exec(tc.arg, tc.proc)
 		tc.arg.Free(tc.proc, false, nil)
+		op.Free(tc.proc, false, nil)
 		tc.proc.Free()
-		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+		nb1 := tc.proc.Mp().CurrNB()
+		require.Equal(t, nb0, nb1)
 	}
 }
 
-func resetChildren(arg *Projection) {
-	bat := colexec.MakeMockBatchs()
+func resetChildren(arg *Projection, m *mpool.MPool) *colexec.MockOperator {
+	bat := colexec.MakeMockBatchs(m)
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 	arg.Children = nil
 	arg.AppendChild(op)
+	return op
 }

@@ -64,24 +64,26 @@ func TestBuildHashMap(t *testing.T) {
 }
 
 func TestHashMapAllocAndFree(t *testing.T) {
+	mp := mpool.MustNewZero()
+
 	var hb HashmapBuilder
 	var err error
-	hb.IntHashMap, err = hashmap.NewIntHashMap(false)
+	hb.IntHashMap, err = hashmap.NewIntHashMap(false, mp)
 	require.NoError(t, err)
 	err = hb.IntHashMap.PreAlloc(100)
 	require.NoError(t, err)
 	hb.IntHashMap.Free()
-	hb.IntHashMap, err = hashmap.NewIntHashMap(false)
+	hb.IntHashMap, err = hashmap.NewIntHashMap(false, mp)
 	require.NoError(t, err)
 	err = hb.IntHashMap.PreAlloc(10000)
 	require.NoError(t, err)
 	hb.IntHashMap.Free()
-	hb.IntHashMap, err = hashmap.NewIntHashMap(false)
+	hb.IntHashMap, err = hashmap.NewIntHashMap(false, mp)
 	require.NoError(t, err)
 	err = hb.IntHashMap.PreAlloc(1000000)
 	require.NoError(t, err)
 	hb.IntHashMap.Free()
-	hb.IntHashMap, err = hashmap.NewIntHashMap(false)
+	hb.IntHashMap, err = hashmap.NewIntHashMap(false, mp)
 	require.NoError(t, err)
 	err = hb.IntHashMap.PreAlloc(100000000)
 	require.NoError(t, err)
@@ -128,8 +130,8 @@ func TestResetWithMixedNilAndValidPointers(t *testing.T) {
 	var hb HashmapBuilder
 
 	// Create some valid vectors
-	vec1 := testutil.MakeInt32Vector([]int32{1, 2, 3}, nil)
-	vec2 := testutil.MakeInt32Vector([]int32{4, 5, 6}, nil)
+	vec1 := testutil.MakeInt32Vector([]int32{1, 2, 3}, nil, proc.Mp())
+	vec2 := testutil.MakeInt32Vector([]int32{4, 5, 6}, nil, proc.Mp())
 
 	// Test case: vecs with mix of nil and valid vectors
 	hb.needDupVec = true
@@ -170,8 +172,8 @@ func TestFreeWithMixedNilAndValidPointers(t *testing.T) {
 	var hb HashmapBuilder
 
 	// Create some valid vectors
-	vec1 := testutil.MakeInt32Vector([]int32{1, 2, 3}, nil)
-	vec2 := testutil.MakeInt32Vector([]int32{4, 5, 6}, nil)
+	vec1 := testutil.MakeInt32Vector([]int32{1, 2, 3}, nil, proc.Mp())
+	vec2 := testutil.MakeInt32Vector([]int32{4, 5, 6}, nil, proc.Mp())
 
 	// Test case: UniqueJoinKeys with mix of nil and valid vectors
 	hb.UniqueJoinKeys = []*vector.Vector{vec1, nil, vec2}

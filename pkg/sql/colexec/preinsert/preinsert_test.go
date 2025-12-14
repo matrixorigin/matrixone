@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
@@ -82,13 +83,13 @@ func TestPreInsertNormal(t *testing.T) {
 			},
 		},
 	}
-	resetChildren(&argument1)
+	resetChildren(&argument1, proc.Mp())
 	err := argument1.Prepare(proc)
 	require.NoError(t, err)
 	_, err = vm.Exec(&argument1, proc)
 	require.NoError(t, err)
 	argument1.Reset(proc, false, nil)
-	resetChildren(&argument1)
+	resetChildren(&argument1, proc.Mp())
 	err = argument1.Prepare(proc)
 	require.NoError(t, err)
 	_, err = vm.Exec(&argument1, proc)
@@ -148,13 +149,13 @@ func TestPreInsertNullCheck(t *testing.T) {
 		},
 	}
 
-	resetChildren(&argument2)
+	resetChildren(&argument2, proc.Mp())
 	err2 := argument2.Prepare(proc)
 	require.NoError(t, err2)
 	_, err2 = vm.Exec(&argument2, proc)
 	require.Error(t, err2, "should return error when insert null into primary key column")
 	argument2.Reset(proc, false, nil)
-	resetChildren(&argument2)
+	resetChildren(&argument2, proc.Mp())
 	err2 = argument2.Prepare(proc)
 	require.NoError(t, err2)
 	_, err2 = vm.Exec(&argument2, proc)
@@ -214,13 +215,13 @@ func TestPreInsertHasAutoCol(t *testing.T) {
 		},
 	}
 
-	resetChildren(&argument1)
+	resetChildren(&argument1, proc.Mp())
 	err := argument1.Prepare(proc)
 	require.NoError(t, err)
 	_, err = vm.Exec(&argument1, proc)
 	require.NoError(t, err)
 	argument1.Reset(proc, false, nil)
-	resetChildren(&argument1)
+	resetChildren(&argument1, proc.Mp())
 	err = argument1.Prepare(proc)
 	require.NoError(t, err)
 	_, err = vm.Exec(&argument1, proc)
@@ -279,7 +280,7 @@ func TestPreInsertIsUpdate(t *testing.T) {
 		},
 	}
 
-	resetChildren2(&argument1)
+	resetChildren2(&argument1, proc.Mp())
 	err := argument1.Prepare(proc)
 	require.NoError(t, err)
 	res, err := vm.Exec(&argument1, proc)
@@ -291,7 +292,7 @@ func TestPreInsertIsUpdate(t *testing.T) {
 	require.Equal(t, vecsNum1, vecsNum2)
 
 	argument1.Reset(proc, false, nil)
-	resetChildren2(&argument1)
+	resetChildren2(&argument1, proc.Mp())
 	err = argument1.Prepare(proc)
 	require.NoError(t, err)
 	res, err = vm.Exec(&argument1, proc)
@@ -302,16 +303,16 @@ func TestPreInsertIsUpdate(t *testing.T) {
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
 }
 
-func resetChildren(arg *PreInsert) {
-	bat := colexec.MakeMockBatchsWithNullVec()
+func resetChildren(arg *PreInsert, m *mpool.MPool) {
+	bat := colexec.MakeMockBatchsWithNullVec(m)
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 	arg.Children = nil
 	arg.AppendChild(op)
 }
 
-func resetChildren2(arg *PreInsert) {
-	bat1 := colexec.MakeMockBatchs()
-	bat2 := colexec.MakeMockBatchs()
+func resetChildren2(arg *PreInsert, m *mpool.MPool) {
+	bat1 := colexec.MakeMockBatchs(m)
+	bat2 := colexec.MakeMockBatchs(m)
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat1, bat2})
 	arg.Children = nil
 	arg.AppendChild(op)

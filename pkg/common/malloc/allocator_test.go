@@ -66,7 +66,7 @@ func testAllocator(
 				freeze.Freeze()
 			}
 			// deallocate
-			dec.Deallocate(NoHints)
+			dec.Deallocate()
 		}
 	})
 

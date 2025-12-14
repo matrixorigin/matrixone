@@ -1517,7 +1517,7 @@ func (eb *entryBlock) release() {
 		}
 		if eb.remaining.CompareAndSwap(cur, cur-1) {
 			if cur-1 == 0 && eb.deallocator != nil {
-				eb.deallocator.Deallocate(malloc.NoHints)
+				eb.deallocator.Deallocate()
 				eb.deallocator = nil
 			}
 			return

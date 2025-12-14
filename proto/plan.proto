@@ -1061,6 +1061,9 @@ message Query {
   repeated string detectSqls = 8;
 
   repeated Query background_queries = 9;
+
+  // run time config that can change query behaviors
+  int64 maxDop = 10;
 }
 
 message TransationControl {

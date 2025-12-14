@@ -29,19 +29,24 @@ import (
 )
 
 func TestNewAtomicBatch(t *testing.T) {
-	actual := NewAtomicBatch(testutil.TestUtilMp)
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+	actual := NewAtomicBatch(mp)
 	assert.NotNil(t, actual.Rows)
 	assert.Equal(t, 0, actual.Rows.Len())
 }
 
 func TestAtomicBatch_Append(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+
 	atomicBat := &AtomicBatch{
 		Batches: []*batch.Batch{},
 		Rows:    btree.NewBTreeGOptions(AtomicBatchRow.Less, btree.Options{Degree: 64}),
 	}
 	bat := batch.New([]string{"pk", "ts"})
-	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil)
-	bat.Vecs[1] = testutil.MakeTSVector([]types.TS{types.BuildTS(1, 1)}, nil)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, mp)
+	bat.Vecs[1] = testutil.MakeTSVector([]types.TS{types.BuildTS(1, 1)}, nil, mp)
 
 	atomicBat.Append(types.NewPacker(), bat, 1, 0)
 	assert.Equal(t, 1, len(atomicBat.Batches))
@@ -49,8 +54,11 @@ func TestAtomicBatch_Append(t *testing.T) {
 }
 
 func TestAtomicBatch_Close(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+
 	bat := batch.New([]string{"attr1"})
-	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, mp)
 
 	type fields struct {
 		Mp      *mpool.MPool
@@ -63,7 +71,7 @@ func TestAtomicBatch_Close(t *testing.T) {
 	}{
 		{
 			fields: fields{
-				Mp:      testutil.TestUtilMp,
+				Mp:      mp,
 				Batches: []*batch.Batch{bat},
 				Rows:    btree.NewBTreeGOptions(AtomicBatchRow.Less, btree.Options{Degree: 64}),
 			},
@@ -174,8 +182,11 @@ func Test_atomicBatchRowIter(t *testing.T) {
 	rows.Set(row2)
 	rows.Set(row3)
 
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+
 	bat := batch.New([]string{"attr1"})
-	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, mp)
 
 	// at init position (before the first row)
 	iter := &atomicBatchRowIter{
@@ -204,13 +215,16 @@ func Test_atomicBatchRowIter(t *testing.T) {
 }
 
 func TestAtomicBatch_RowCountDeduplicates(t *testing.T) {
-	bat := NewAtomicBatch(testutil.TestUtilMp)
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+
+	bat := NewAtomicBatch(mp)
 	ts := types.BuildTS(10, 2)
 
 	createBatch := func(pk int32) *batch.Batch {
 		b := batch.New([]string{"pk", "ts"})
-		b.Vecs[0] = testutil.MakeInt32Vector([]int32{pk}, nil)
-		b.Vecs[1] = testutil.MakeTSVector([]types.TS{ts}, nil)
+		b.Vecs[0] = testutil.MakeInt32Vector([]int32{pk}, nil, mp)
+		b.Vecs[1] = testutil.MakeTSVector([]types.TS{ts}, nil, mp)
 		return b
 	}
 

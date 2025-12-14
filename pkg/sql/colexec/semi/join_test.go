@@ -94,8 +94,8 @@ func TestJoin(t *testing.T) {
 
 	for _, tc := range makeTestCases(t) {
 
-		resetChildren(tc.arg)
-		resetHashBuildChildren(tc.barg)
+		resetChildren(tc.arg, tc.proc.Mp())
+		resetHashBuildChildren(tc.barg, tc.proc.Mp())
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		err = tc.barg.Prepare(tc.proc)
@@ -119,8 +119,8 @@ func TestJoin(t *testing.T) {
 		tc.arg.Reset(tc.proc, false, nil)
 		tc.barg.Reset(tc.proc, false, nil)
 
-		resetChildren(tc.arg)
-		resetHashBuildChildren(tc.barg)
+		resetChildren(tc.arg, tc.proc.Mp())
+		resetHashBuildChildren(tc.barg, tc.proc.Mp())
 		tc.proc.GetMessageBoard().Reset()
 		err = tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
@@ -256,7 +256,7 @@ func newTestCase(t *testing.T, m *mpool.MPool, flgs []bool, hashOnPk bool, ts []
 	resultBatch := batch.NewWithSize(len(rp))
 	resultBatch.SetRowCount(2)
 	for i := range rp {
-		bat := colexec.MakeMockBatchs()
+		bat := colexec.MakeMockBatchs(proc.Mp())
 		resultBatch.Vecs[i] = bat.Vecs[rp[i]]
 	}
 	tag++
@@ -298,15 +298,15 @@ func newTestCase(t *testing.T, m *mpool.MPool, flgs []bool, hashOnPk bool, ts []
 	}
 }
 
-func resetChildren(arg *SemiJoin) {
-	bat := colexec.MakeMockBatchs()
+func resetChildren(arg *SemiJoin, m *mpool.MPool) {
+	bat := colexec.MakeMockBatchs(m)
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 	arg.Children = nil
 	arg.AppendChild(op)
 }
 
-func resetHashBuildChildren(arg *hashbuild.HashBuild) {
-	bat := colexec.MakeMockBatchs()
+func resetHashBuildChildren(arg *hashbuild.HashBuild, m *mpool.MPool) {
+	bat := colexec.MakeMockBatchs(m)
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 	arg.Children = nil
 	arg.AppendChild(op)

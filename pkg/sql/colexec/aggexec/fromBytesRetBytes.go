@@ -15,7 +15,11 @@
 package aggexec
 
 import (
+	"bytes"
 	"fmt"
+	io "io"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
@@ -73,7 +77,7 @@ func RegisterAggFromBytesRetBytes(
 }
 
 func newAggregatorFromBytesToBytes(
-	mg AggMemoryManager, info singleAggInfo, impl aggImplementation) AggFuncExec {
+	mg *mpool.MPool, info singleAggInfo, impl aggImplementation) AggFuncExec {
 	e := &aggregatorFromBytesToBytes{}
 	e.init(mg, info, impl)
 	return e
@@ -102,9 +106,12 @@ func (exec *aggregatorFromBytesToBytes) GetOptResult() SplitResult {
 
 func (exec *aggregatorFromBytesToBytes) marshal() ([]byte, error) {
 	d := exec.singleAggInfo.getEncoded()
-	r, em, err := exec.ret.marshalToBytes()
+	r, em, dist, err := exec.ret.marshalToBytes()
 	if err != nil {
 		return nil, err
+	}
+	if dist != nil {
+		return nil, moerr.NewInternalErrorNoCtx("dist should have been nil")
 	}
 	encoded := EncodedAgg{
 		Info:    d,
@@ -117,23 +124,52 @@ func (exec *aggregatorFromBytesToBytes) marshal() ([]byte, error) {
 
 func (exec *aggregatorFromBytesToBytes) unmarshal(_ *mpool.MPool, result, empties, groups [][]byte) error {
 	exec.execContext.decodeGroupContexts(groups, exec.singleAggInfo.retType, exec.singleAggInfo.argType)
-	return exec.ret.unmarshalFromBytes(result, empties)
+	// this groups is not distict
+	return exec.ret.unmarshalFromBytes(result, empties, nil)
+}
+
+func (exec *aggregatorFromBytesToBytes) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
+	return marshalRetAndGroupsToBuffer[dummyBinaryMarshaler](
+		cnt, flags, buf,
+		&exec.ret.optSplitResult, nil, exec.execContext.getGroupContextEncodingsForFlags(cnt, flags))
+}
+
+func (exec *aggregatorFromBytesToBytes) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
+	start := exec.ret.optSplitResult.optInformation.chunkSize * chunk
+	chunkNGroup := exec.ret.optSplitResult.getNthChunkSize(chunk)
+	return marshalChunkToBuffer[dummyBinaryMarshaler](
+		chunk, buf,
+		&exec.ret.optSplitResult, nil, exec.execContext.getGroupContextEncodingsForChunk(start, chunkNGroup))
+}
+
+func (exec *aggregatorFromBytesToBytes) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
+	_, bs, err := unmarshalFromReader[dummyBinaryUnmarshaler](reader, &exec.ret.optSplitResult)
+	if err != nil {
+		return err
+	}
+	// XXX FIXME
+	// exec.ret.setupT()
+	exec.execContext.decodeGroupContexts(bs, exec.singleAggInfo.retType, exec.singleAggInfo.argType)
+	return nil
 }
 
 func (exec *aggregatorFromBytesToBytes) init(
-	mg AggMemoryManager,
+	mg *mpool.MPool,
 	info singleAggInfo,
 	impl aggImplementation) {
 
+	// XXX distinct really messged up
 	if info.IsDistinct() {
-		exec.distinctHash = newDistinctHash()
+		exec.distinctHash = newDistinctHash(mg)
 	}
 
 	var v string
 	if resultInitMethod := impl.logic.init; resultInitMethod != nil {
 		v = string(resultInitMethod.(InitBytesResultOfAgg)(info.retType, info.argType))
 	}
-	exec.ret = initAggResultWithBytesTypeResult(mg, info.retType, info.emptyNull, v)
+
+	// XXX distinct is always false?
+	exec.ret = initAggResultWithBytesTypeResult(mg, info.retType, info.emptyNull, v, false)
 
 	exec.singleAggInfo = info
 	exec.singleAggExecExtraInformation = emptyExtraInfo

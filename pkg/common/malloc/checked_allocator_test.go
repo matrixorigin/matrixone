@@ -39,7 +39,7 @@ func TestCheckedAllocator(t *testing.T) {
 		}
 		// comment the following line to trigger a missing-free panic
 		// this panic will be raised in SetFinalizer func so it's not recoverable and not testable
-		dec.Deallocate(NoHints)
+		dec.Deallocate()
 		_ = ptr
 		_ = dec
 		runtime.GC()
@@ -64,8 +64,8 @@ func TestCheckedAllocator(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		dec.Deallocate(NoHints)
-		dec.Deallocate(NoHints)
+		dec.Deallocate()
+		dec.Deallocate()
 	})
 
 	// use after free
@@ -80,7 +80,7 @@ func TestCheckedAllocator(t *testing.T) {
 		for i := range slice {
 			slice[i] = byte(i)
 		}
-		dec.Deallocate(NoHints)
+		dec.Deallocate()
 		// zero or segfault
 		//for i := range slice {
 		//	if slice[i] != 0 {

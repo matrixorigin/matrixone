@@ -58,7 +58,7 @@ func TestPrepare(t *testing.T) {
 
 func TestMergeCTE(t *testing.T) {
 	for _, tc := range makeTestCases(t) {
-		resetChildren(tc.arg)
+		resetChildren(tc.arg, tc.proc.Mp())
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		_, err = vm.Exec(tc.arg, tc.proc)
@@ -66,7 +66,7 @@ func TestMergeCTE(t *testing.T) {
 
 		tc.arg.Reset(tc.proc, false, nil)
 
-		resetChildren(tc.arg)
+		resetChildren(tc.arg, tc.proc.Mp())
 		err = tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		_, err = vm.Exec(tc.arg, tc.proc)
@@ -77,8 +77,8 @@ func TestMergeCTE(t *testing.T) {
 	}
 }
 
-func resetChildren(arg *MergeCTE) {
-	bat := colexec.MakeMockBatchs()
+func resetChildren(arg *MergeCTE, m *mpool.MPool) {
+	bat := colexec.MakeMockBatchs(m)
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 	arg.Children = nil
 	arg.AppendChild(op)
