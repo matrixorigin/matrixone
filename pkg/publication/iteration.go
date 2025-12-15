@@ -255,7 +255,7 @@ func InitializeIterationContext(
 		UpstreamExecutor: upstreamExecutor,
 		IterationLSN:     iterationLSN,
 		ActiveAObj:       make(map[string]AObjMapping),
-		TableIDs:         make(map[string]uint64),
+		TableIDs:         make(map[TableKey]uint64),
 	}
 
 	// Parse context JSON if available
@@ -295,7 +295,15 @@ func InitializeIterationContext(
 
 		// Restore TableIDs from JSON
 		if ctxJSON.TableIDs != nil {
-			iterationCtx.TableIDs = ctxJSON.TableIDs
+			iterationCtx.TableIDs = make(map[TableKey]uint64)
+			for keyStr, id := range ctxJSON.TableIDs {
+				// Parse key string format: "dbname.tablename"
+				key := parseTableKeyFromString(keyStr)
+				// Only store valid table keys (skip empty keys from legacy database format)
+				if key.DBName != "" && key.TableName != "" {
+					iterationCtx.TableIDs[key] = id
+				}
+			}
 		}
 
 		// Restore snapshot information if available
@@ -366,6 +374,13 @@ func UpdateIterationState(
 			}
 		}
 
+		// Convert TableIDs to string map for JSON serialization
+		tableIDsJSON := make(map[string]uint64)
+		for key, id := range iterationCtx.TableIDs {
+			keyStr := tableKeyToString(key)
+			tableIDsJSON[keyStr] = id
+		}
+
 		// Create a serializable context structure
 		ctxJSON := IterationContextJSON{
 			TaskID:              iterationCtx.TaskID,
@@ -376,7 +391,7 @@ func UpdateIterationState(
 			CurrentSnapshotName: iterationCtx.CurrentSnapshotName,
 			CurrentSnapshotTS:   iterationCtx.CurrentSnapshotTS.Physical(),
 			ActiveAObj:          activeAObjJSON,
-			TableIDs:            iterationCtx.TableIDs,
+			TableIDs:            tableIDsJSON,
 		}
 
 		contextBytes, err := json.Marshal(ctxJSON)
@@ -681,7 +696,7 @@ func SubmitObjectsToTN(
 	}
 
 	// Validate table ID exists
-	tableKey := fmt.Sprintf("%s.%s", iterationCtx.SrcInfo.DBName, iterationCtx.SrcInfo.TableName)
+	tableKey := TableKey{DBName: iterationCtx.SrcInfo.DBName, TableName: iterationCtx.SrcInfo.TableName}
 	if _, ok := iterationCtx.TableIDs[tableKey]; !ok {
 		return moerr.NewInternalErrorf(ctx, "table ID not found for %s.%s",
 			iterationCtx.SrcInfo.DBName, iterationCtx.SrcInfo.TableName)
@@ -1111,4 +1126,28 @@ func ExecuteIteration(
 	}
 
 	return
+}
+
+// tableKeyToString converts TableKey to string format for JSON serialization
+// Format: "dbname.tablename"
+func tableKeyToString(key TableKey) string {
+	return fmt.Sprintf("%s.%s", key.DBName, key.TableName)
+}
+
+// parseTableKeyFromString parses string format to TableKey
+// Format: "dbname.tablename" for table keys
+// Legacy format "db_dbname" is ignored (database IDs are no longer stored)
+func parseTableKeyFromString(keyStr string) TableKey {
+	// Ignore legacy database key format "db_dbname"
+	if strings.HasPrefix(keyStr, "db_") {
+		// Return empty key for legacy database keys (they are no longer used)
+		return TableKey{}
+	}
+	// Table key format: "dbname.tablename"
+	parts := strings.SplitN(keyStr, ".", 2)
+	if len(parts) == 2 {
+		return TableKey{DBName: parts[0], TableName: parts[1]}
+	}
+	// Invalid format, return empty key
+	return TableKey{}
 }

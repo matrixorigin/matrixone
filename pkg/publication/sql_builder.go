@@ -74,11 +74,22 @@ const (
 		`FROM mo_catalog.mo_columns ` +
 		`WHERE 1=1%s`
 
+	PublicationQueryMoIndexesSqlTemplate = `SELECT ` +
+		`table_id, ` +
+		`name, ` +
+		`algo_table_type, ` +
+		`index_table_name ` +
+		`FROM mo_catalog.mo_indexes ` +
+		`WHERE 1=1%s`
+
 	// Object list SQL template
 	PublicationObjectListSqlTemplate = `OBJECTLIST%s SNAPSHOT %s%s`
 
 	// Get object SQL template
 	PublicationGetObjectSqlTemplate = `GET OBJECT %s`
+
+	// Get DDL SQL template
+	PublicationGetDdlSqlTemplate = `GETDDL%s`
 
 	// Drop snapshot SQL templates
 	PublicationDropSnapshotSqlTemplate         = `DROP SNAPSHOT %s`
@@ -125,8 +136,10 @@ const (
 	PublicationQueryMoTablesSqlTemplate_Idx
 	PublicationQueryMoDatabasesSqlTemplate_Idx
 	PublicationQueryMoColumnsSqlTemplate_Idx
+	PublicationQueryMoIndexesSqlTemplate_Idx
 	PublicationObjectListSqlTemplate_Idx
 	PublicationGetObjectSqlTemplate_Idx
+	PublicationGetDdlSqlTemplate_Idx
 	PublicationDropSnapshotSqlTemplate_Idx
 	PublicationDropSnapshotIfExistsSqlTemplate_Idx
 	PublicationQueryMoCcprLogSqlTemplate_Idx
@@ -199,11 +212,23 @@ var PublicationSQLTemplates = [PublicationSqlTemplateCount]struct {
 			"att_enum_values",
 		},
 	},
+	PublicationQueryMoIndexesSqlTemplate_Idx: {
+		SQL: PublicationQueryMoIndexesSqlTemplate,
+		OutputAttrs: []string{
+			"table_id",
+			"name",
+			"algo_table_type",
+			"index_table_name",
+		},
+	},
 	PublicationObjectListSqlTemplate_Idx: {
 		SQL: PublicationObjectListSqlTemplate,
 	},
 	PublicationGetObjectSqlTemplate_Idx: {
 		SQL: PublicationGetObjectSqlTemplate,
+	},
+	PublicationGetDdlSqlTemplate_Idx: {
+		SQL: PublicationGetDdlSqlTemplate,
 	},
 	PublicationDropSnapshotSqlTemplate_Idx: {
 		SQL: PublicationDropSnapshotSqlTemplate,
@@ -399,6 +424,38 @@ func (b publicationSQLBuilder) QueryMoColumnsSQL(
 	)
 }
 
+// QueryMoIndexesSQL creates SQL for querying mo_indexes
+// Note: mo_indexes table does not have account_id field
+// Supports filtering by table_id, index_name, and algo_table_type
+func (b publicationSQLBuilder) QueryMoIndexesSQL(
+	accountID uint32,
+	tableID uint64,
+	indexName string,
+	algoTableType string,
+) string {
+	var conditions []string
+
+	// Note: mo_indexes table does not have account_id field, so we ignore accountID parameter
+
+	if tableID > 0 {
+		conditions = append(conditions, fmt.Sprintf(" AND table_id = %d", tableID))
+	}
+
+	if indexName != "" {
+		conditions = append(conditions, fmt.Sprintf(" AND name = '%s'", escapeSQLString(indexName)))
+	}
+
+	if algoTableType != "" {
+		conditions = append(conditions, fmt.Sprintf(" AND algo_table_type = '%s'", escapeSQLString(algoTableType)))
+	}
+
+	whereClause := strings.Join(conditions, "")
+	return fmt.Sprintf(
+		PublicationSQLTemplates[PublicationQueryMoIndexesSqlTemplate_Idx].SQL,
+		whereClause,
+	)
+}
+
 // QueryMoColumnsWithJoinSQL creates SQL for querying mo_columns with JOIN to mo_tables
 // This allows filtering by db_name and table_name directly using mo_tables fields
 // Useful when you need to ensure consistency between mo_columns and mo_tables
@@ -504,6 +561,36 @@ func (b publicationSQLBuilder) GetObjectSQL(
 	return fmt.Sprintf(
 		PublicationSQLTemplates[PublicationGetObjectSqlTemplate_Idx].SQL,
 		escapeSQLString(objectName),
+	)
+}
+
+// GetDdlSQL creates SQL for get DDL statement
+// Example: GETDDL DATABASE db1 TABLE t1 SNAPSHOT sp1
+// Example: GETDDL DATABASE db1 SNAPSHOT sp1
+// Example: GETDDL SNAPSHOT sp1
+func (b publicationSQLBuilder) GetDdlSQL(
+	dbName string,
+	tableName string,
+	snapshotName string,
+) string {
+	var parts []string
+
+	if dbName != "" {
+		parts = append(parts, fmt.Sprintf(" DATABASE %s", escapeSQLIdentifier(dbName)))
+	}
+
+	if tableName != "" {
+		parts = append(parts, fmt.Sprintf(" TABLE %s", escapeSQLIdentifier(tableName)))
+	}
+
+	if snapshotName != "" {
+		parts = append(parts, fmt.Sprintf(" SNAPSHOT %s", escapeSQLIdentifier(snapshotName)))
+	}
+
+	optsPart := strings.Join(parts, "")
+	return fmt.Sprintf(
+		PublicationSQLTemplates[PublicationGetDdlSqlTemplate_Idx].SQL,
+		optsPart,
 	)
 }
 
