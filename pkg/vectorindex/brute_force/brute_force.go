@@ -18,8 +18,8 @@ import (
 	"fmt"
 	"runtime"
 	"slices"
-	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/executor"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -197,7 +197,6 @@ func (idx *GoBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, 
 		return nil, nil, moerr.NewInternalErrorNoCtx("queries type invalid")
 	}
 
-	errs := make(chan error)
 	distfn, err := metric.ResolveDistanceFn[T](idx.Metric)
 	if err != nil {
 		return nil, nil, err
@@ -216,34 +215,21 @@ func (idx *GoBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, 
 	// create distance matric
 	results := make([]vectorindex.SearchResult, nqueries*ndataset)
 
-	var wg sync.WaitGroup
-	for n := 0; n < int(nthreads); n++ {
-
-		wg.Add(1)
-		go func(tid int) {
-			defer wg.Done()
-			for i := 0; i < nqueries; i++ {
-				if i%int(nthreads) != tid {
-					continue
-				}
-				for j := 0; j < ndataset; j++ {
-					dist, err := distfn(queries[i], idx.Dataset[j])
-					if err != nil {
-						errs <- err
-						return
-					}
-					results[i*ndataset+j].Id = int64(j)
-					results[i*ndataset+j].Distance = float64(dist)
-				}
+	exec := executor.NewExecutor(int(nthreads))
+	err = exec.Execute(nqueries, func(thread_id int, query_id int) (err2 error) {
+		for j := 0; j < ndataset; j++ {
+			dist, err2 := distfn(queries[query_id], idx.Dataset[j])
+			if err2 != nil {
+				return err2
 			}
+			results[query_id*ndataset+j].Id = int64(j)
+			results[query_id*ndataset+j].Distance = float64(dist)
+		}
+		return
+	})
 
-		}(n)
-	}
-
-	wg.Wait()
-
-	if len(errs) > 0 {
-		return nil, nil, <-errs
+	if err != nil {
+		return nil, nil, err
 	}
 
 	cmpfn := func(a, b vectorindex.SearchResult) int {
@@ -258,31 +244,22 @@ func (idx *GoBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, 
 	// get min
 	keys64 := make([]int64, nqueries*int(rt.Limit))
 	distances = make([]float64, nqueries*int(rt.Limit))
-	var wg2 sync.WaitGroup
-	for n := 0; n < int(nthreads); n++ {
-		wg2.Add(1)
-		go func(tid int) {
-			defer wg2.Done()
-			for i := 0; i < nqueries; i++ {
-				if i%int(nthreads) != tid {
-					continue
-				}
+	err = exec.Execute(nqueries, func(thread_id int, query_id int) (err2 error) {
+		if rt.Limit == 1 {
+			// min
+			first := slices.MinFunc(results[query_id*ndataset:(query_id+1)*ndataset], cmpfn)
+			results[query_id*ndataset] = first
 
-				if rt.Limit == 1 {
-					// min
-					first := slices.MinFunc(results[i*ndataset:(i+1)*ndataset], cmpfn)
-					results[i*ndataset] = first
+		} else {
+			// partial sort
+			partial.SortFunc(results[query_id*ndataset:(query_id+1)*ndataset], int(rt.Limit), cmpfn)
 
-				} else {
-					// partial sort
-					partial.SortFunc(results[i*ndataset:(i+1)*ndataset], int(rt.Limit), cmpfn)
-
-				}
-			}
-		}(n)
+		}
+		return
+	})
+	if err != nil {
+		return nil, nil, err
 	}
-
-	wg2.Wait()
 
 	for i := 0; i < nqueries; i++ {
 		for j := 0; j < int(rt.Limit); j++ {
