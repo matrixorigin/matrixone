@@ -337,6 +337,15 @@ var (
 	TxnTNAppendDeduplicateDurationHistogram     = txnTNDeduplicateDurationHistogram.WithLabelValues("append_deduplicate")
 	TxnTNPrePrepareDeduplicateDurationHistogram = txnTNDeduplicateDurationHistogram.WithLabelValues("prePrepare_deduplicate")
 
+	TxnTNLogServiceAppendDurationHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "tn_logservice_append_duration_seconds",
+			Help:      "Bucketed histogram of txn tn logservice append duration.",
+			Buckets:   getDurationBuckets(),
+		})
+
 	txnMpoolDurationHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "mo",

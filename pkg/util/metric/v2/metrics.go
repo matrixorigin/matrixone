@@ -160,6 +160,7 @@ func initTxnMetrics() {
 
 	registry.MustRegister(txnRangesSelectivityHistogram)
 	registry.MustRegister(txnTNDeduplicateDurationHistogram)
+	registry.MustRegister(TxnTNLogServiceAppendDurationHistogram)
 
 	registry.MustRegister(TxnReaderScannedTotalTombstoneHistogram)
 	registry.MustRegister(TxnReaderEachBLKLoadedTombstoneHistogram)

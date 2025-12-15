@@ -46,6 +46,7 @@ func (c *DashboardCreator) initTxnDashboard() error {
 			c.initTxnOnPrepareWALRow(),
 			c.initTxnBeforeCommitRow(),
 			c.initTxnTNDeduplicateDurationRow(),
+			c.initTxnTNLogServiceAppendDurationRow(),
 			c.initTxnTableRangesRow(),
 			c.initTxnRangesSelectivityRow(),
 			c.initTxnReadSelectivityRow(),
@@ -444,6 +445,19 @@ func (c *DashboardCreator) initTxnTNDeduplicateDurationRow() dashboard.Option {
 			[]float32{3, 3, 3, 3},
 			axis.Unit("s"),
 			axis.Min(0))...,
+	)
+}
+
+func (c *DashboardCreator) initTxnTNLogServiceAppendDurationRow() dashboard.Option {
+	return dashboard.Row(
+		"Txn TN LogService Append Duration",
+		c.getHistogram(
+			"Txn TN LogService Append Duration",
+			c.getMetricWithFilter("mo_txn_tn_logservice_append_duration_seconds_bucket", ``),
+			[]float64{0.50, 0.90, 0.99},
+			12,
+			axis.Unit("s"),
+			axis.Min(0)),
 	)
 }
 
