@@ -34,7 +34,11 @@ func NewThreadPoolExecutor(nthreads int) ThreadPoolExecutor {
 	return ThreadPoolExecutor{nthreads: nthreads}
 }
 
-func (e ThreadPoolExecutor) Execute(ctx context.Context, nitems int, fn func(ctx context.Context, thread_id int, item_id int) error) (err error) {
+func (e ThreadPoolExecutor) Execute(
+	ctx context.Context,
+	nitems int,
+	fn func(ctx context.Context, thread_id int, item_id int) error) (err error) {
+
 	var wg sync.WaitGroup
 	errs := make(chan error, e.nthreads)
 
