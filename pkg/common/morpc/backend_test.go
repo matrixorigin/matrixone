@@ -751,6 +751,26 @@ func TestIssue7678(t *testing.T) {
 	assert.Equal(t, uint32(0), s.lastReceivedSequence)
 }
 
+func TestIsExpectedCloseError(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	// Create a minimal backend instance for testing
+	rb := &remoteBackend{
+		logger: logutil.GetPanicLoggerWithLevel(zap.DebugLevel),
+	}
+
+	// Test with expected error: "use of closed network connection"
+	err := fmt.Errorf("close tcp4 127.0.0.1:43420->127.0.0.1:32001: use of closed network connection")
+	assert.True(t, rb.isExpectedCloseError(err), "should recognize expected close error")
+
+	// Test with unexpected error
+	unexpectedErr := fmt.Errorf("some other error")
+	assert.False(t, rb.isExpectedCloseError(unexpectedErr), "should not recognize unexpected error")
+
+	// Test with nil error
+	assert.False(t, rb.isExpectedCloseError(nil), "should return false for nil error")
+}
+
 func TestWaitingFutureMustGetClosedError(t *testing.T) {
 	testBackendSend(t,
 		func(conn goetty.IOSession, msg interface{}, _ uint64) error {
