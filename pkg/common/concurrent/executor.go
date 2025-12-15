@@ -19,6 +19,8 @@ import (
 	"errors"
 	"runtime"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 type ThreadPoolExecutor struct {
@@ -45,6 +47,13 @@ func (e ThreadPoolExecutor) Execute(ctx context.Context, nitems int, fn func(ctx
 				if j%e.nthreads != thread_id {
 					continue
 				}
+				select {
+				case <-ctx.Done():
+					errs <- moerr.NewInternalError(ctx, "context cancelled")
+					return
+				default:
+				}
+
 				err2 := fn(ctx, thread_id, j)
 				if err2 != nil {
 					errs <- err2
