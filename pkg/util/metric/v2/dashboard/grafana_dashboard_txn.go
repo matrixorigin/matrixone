@@ -48,6 +48,7 @@ func (c *DashboardCreator) initTxnDashboard() error {
 			c.initTxnTNDeduplicateDurationRow(),
 			c.initTxnTableRangesRow(),
 			c.initTxnRangesSelectivityRow(),
+			c.initTxnReadSelectivityRow(),
 			c.initTxnTombstoneRow(),
 			c.initTxnRangesCountRow(),
 			c.initTxnShowAccountsRow(),
@@ -138,6 +139,84 @@ func (c *DashboardCreator) initTxnRangesSelectivityRow() dashboard.Option {
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			[]float32{3, 3, 3, 3},
 			axis.Min(0))...,
+	)
+}
+
+func (c *DashboardCreator) initTxnReadSelectivityRow() dashboard.Option {
+	// Block filter operations rate: number of blocks with filter operations per second
+	// This metric records each block read that performs a filter operation, not high-level filter requests
+	readFilterRequestRate := c.getTimeSeries(
+		"Block filter operations rate",
+		[]string{
+			fmt.Sprintf(
+				"sum(rate(%s[$interval])) by (%s)",
+				c.getMetricWithFilter(`mo_txn_selectivity_count`, `type="readfilter_total"`), c.by),
+		},
+		[]string{fmt.Sprintf("blocks/sec-{{ %s }}", c.by)},
+		timeseries.Span(4),
+	)
+
+	// Read filter completely filtered rate: rate of operations where all rows were filtered (len(sels) == 0)
+	// Filtered_count / Total_count gives the ratio of completely filtered operations
+	readFilterCompletelyFilteredRate := c.getTimeSeries(
+		"Read filter completely filtered rate",
+		[]string{
+			fmt.Sprintf(
+				`sum(rate(%s[$interval])) by (%s) / on(%s) sum(rate(%s[$interval])) by (%s)`,
+				c.getMetricWithFilter(`mo_txn_selectivity_count`, `type="readfilter_filtered"`), c.by, c.by,
+				c.getMetricWithFilter(`mo_txn_selectivity_count`, `type="readfilter_total"`), c.by),
+		},
+		[]string{fmt.Sprintf("completely-filtered-rate-{{ %s }}", c.by)},
+		timeseries.Span(4),
+	)
+
+	// Column read histogram: show per-read column count percentiles
+	// P50, P90, P99 of column read count per read operation
+	columnReadCountHistogram := c.getHistogram(
+		"Column read count per operation",
+		c.getMetricWithFilter(`mo_txn_column_read_count_bucket`, `type="read"`),
+		[]float64{0.50, 0.90, 0.99},
+		6,
+		axis.Min(0))
+
+	// Column total histogram: show per-read total column count percentiles
+	// P50, P90, P99 of total column count per read operation
+	columnTotalCountHistogram := c.getHistogram(
+		"Column total count per operation",
+		c.getMetricWithFilter(`mo_txn_column_read_count_bucket`, `type="total"`),
+		[]float64{0.50, 0.90, 0.99},
+		6,
+		axis.Min(0))
+
+	// Column read ratio histogram: show ratio (read/total) percentiles
+	// P50, P90, P99 of column read ratio per operation
+	columnReadRatioHistogram := c.getTimeSeries(
+		"Column read ratio per operation",
+		[]string{
+			fmt.Sprintf(
+				"histogram_quantile(0.50, sum(rate(%s[$interval])) by (le)) / histogram_quantile(0.50, sum(rate(%s[$interval])) by (le))",
+				c.getMetricWithFilter(`mo_txn_column_read_count_bucket`, `type="read"`),
+				c.getMetricWithFilter(`mo_txn_column_read_count_bucket`, `type="total"`)),
+			fmt.Sprintf(
+				"histogram_quantile(0.90, sum(rate(%s[$interval])) by (le)) / histogram_quantile(0.90, sum(rate(%s[$interval])) by (le))",
+				c.getMetricWithFilter(`mo_txn_column_read_count_bucket`, `type="read"`),
+				c.getMetricWithFilter(`mo_txn_column_read_count_bucket`, `type="total"`)),
+			fmt.Sprintf(
+				"histogram_quantile(0.99, sum(rate(%s[$interval])) by (le)) / histogram_quantile(0.99, sum(rate(%s[$interval])) by (le))",
+				c.getMetricWithFilter(`mo_txn_column_read_count_bucket`, `type="read"`),
+				c.getMetricWithFilter(`mo_txn_column_read_count_bucket`, `type="total"`)),
+		},
+		[]string{"P50", "P90", "P99"},
+		timeseries.Span(6),
+	)
+
+	return dashboard.Row(
+		"Read Selectivity",
+		readFilterRequestRate,
+		readFilterCompletelyFilteredRate,
+		columnReadCountHistogram,
+		columnTotalCountHistogram,
+		columnReadRatioHistogram,
 	)
 }
 

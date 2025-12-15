@@ -1251,6 +1251,8 @@ const (
 
 	roleIdOfRoleFormat = `select role_id from mo_catalog.mo_role where role_name = "%s" order by role_id;`
 
+	updateRoleNameFormat = `update mo_catalog.mo_role set role_name = "%s" where role_name = "%s" order by role_id;`
+
 	//operations on the mo_user_grant
 	getRoleOfUserFormat = `select r.role_id from  mo_catalog.mo_role r, mo_catalog.mo_user_grant ug where ug.role_id = r.role_id and ug.user_id = %d and r.role_name = "%s";`
 
@@ -1755,6 +1757,18 @@ func getSqlForRoleIdOfRole(ctx context.Context, roleName string) (string, error)
 		return "", err
 	}
 	return fmt.Sprintf(roleIdOfRoleFormat, roleName), nil
+}
+
+func getSqlForUpdateRoleName(ctx context.Context, oldName, newName string) (string, error) {
+	err := inputNameIsInvalid(ctx, oldName)
+	if err != nil {
+		return "", err
+	}
+	err = inputNameIsInvalid(ctx, newName)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(updateRoleNameFormat, newName, oldName), nil
 }
 
 func getSqlForRoleOfUser(ctx context.Context, userID int64, roleName string) (string, error) {
@@ -4287,6 +4301,135 @@ func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) (err error
 	return err
 }
 
+// doAlterRole accomplishes the AlterRole statement
+func doAlterRole(ctx context.Context, ses *Session, ar *tree.AlterRole) (err error) {
+	var vr *verifiedRole
+	var sql string
+	var erArray []ExecResult
+	var exists int
+	account := ses.GetTenantInfo()
+
+	// Normalize old and new role names
+	oldName, err := normalizeName(ctx, ar.OldName)
+	if err != nil {
+		return err
+	}
+	newName, err := normalizeName(ctx, ar.NewName)
+	if err != nil {
+		return err
+	}
+
+	// Check if old name and new name are the same
+	if oldName == newName {
+		return moerr.NewInternalErrorf(ctx, "the new role name is the same as the old role name")
+	}
+
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	//put it into the single transaction
+	err = bh.Exec(ctx, "begin;")
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+	if err != nil {
+		return err
+	}
+
+	//step1: check old role exists or not.
+	sql, err = getSqlForRoleIdOfRole(ctx, oldName)
+	if err != nil {
+		return err
+	}
+	vr, err = verifyRoleFunc(ctx, bh, sql, oldName, roleType)
+	if err != nil {
+		return err
+	}
+
+	if vr == nil {
+		if !ar.IfExists {
+			return moerr.NewInternalErrorf(ctx, "there is no role %s", oldName)
+		}
+		// If IF EXISTS is set and role doesn't exist, just return success
+		return nil
+	}
+
+	//step2: check if the role is the admin role (moadmin,accountadmin) or public,
+	//the role can not be renamed.
+	if account.IsNameOfAdminRoles(vr.name) || isPublicRole(vr.name) {
+		return moerr.NewInternalErrorf(ctx, "can not rename the role %s", vr.name)
+	}
+
+	//step3: check if new role name already exists (as role or user)
+	exists = 0
+	if isPredefinedRole(newName) {
+		exists = 3
+	} else {
+		// Check if new name exists as a role
+		sql, err = getSqlForRoleIdOfRole(ctx, newName)
+		if err != nil {
+			return err
+		}
+		bh.ClearExecResultSet()
+		err = bh.Exec(ctx, sql)
+		if err != nil {
+			return err
+		}
+
+		erArray, err = getResultSet(ctx, bh)
+		if err != nil {
+			return err
+		}
+		if execResultArrayHasData(erArray) {
+			exists = 1
+		}
+
+		// Check if new name exists as a user
+		if exists == 0 {
+			sql, err = getSqlForPasswordOfUser(ctx, newName)
+			if err != nil {
+				return err
+			}
+			bh.ClearExecResultSet()
+			err = bh.Exec(ctx, sql)
+			if err != nil {
+				return err
+			}
+
+			erArray, err = getResultSet(ctx, bh)
+			if err != nil {
+				return err
+			}
+			if execResultArrayHasData(erArray) {
+				exists = 2
+			}
+		}
+	}
+
+	if exists != 0 {
+		if exists == 1 {
+			return moerr.NewInternalErrorf(ctx, "the role %s already exists", newName)
+		} else if exists == 2 {
+			return moerr.NewInternalErrorf(ctx, "there is a user with the same name as the role %s", newName)
+		} else if exists == 3 {
+			return moerr.NewInternalErrorf(ctx, "can not use the name %s. it is the name of the predefined role", newName)
+		}
+	}
+
+	//step4: update the role name
+	sql, err = getSqlForUpdateRoleName(ctx, oldName, newName)
+	if err != nil {
+		return err
+	}
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		return err
+	}
+
+	return err
+}
+
 type rmPkg func(path string) error
 
 func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction, rm rmPkg) (err error) {
@@ -5435,6 +5578,8 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		typs = append(typs, PrivilegeTypeCreateRole, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
 	case *tree.DropRole:
 		typs = append(typs, PrivilegeTypeDropRole, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership, PrivilegeTypeRoleOwnership*/)
+	case *tree.AlterRole:
+		typs = append(typs, PrivilegeTypeAlterRole, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership, PrivilegeTypeRoleOwnership*/)
 	case *tree.Grant:
 		if st.Typ == tree.GrantTypeRole {
 			kind = privilegeKindInherit
