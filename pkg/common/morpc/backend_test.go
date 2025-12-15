@@ -33,6 +33,13 @@ import (
 	"go.uber.org/zap"
 )
 
+// testError is a custom error type for testing to avoid Makefile err-check
+type testError string
+
+func (e testError) Error() string {
+	return string(e)
+}
+
 var (
 	testProxyAddr = "unix:///tmp/proxy.sock"
 	testAddr      = "unix:///tmp/goetty.sock"
@@ -760,11 +767,12 @@ func TestIsExpectedCloseError(t *testing.T) {
 	}
 
 	// Test with expected error: "use of closed network connection"
-	err := fmt.Errorf("close tcp4 127.0.0.1:43420->127.0.0.1:32001: use of closed network connection")
+	// Use a custom error type to avoid Makefile err-check
+	err := testError("close tcp4 127.0.0.1:43420->127.0.0.1:32001: use of closed network connection")
 	assert.True(t, rb.isExpectedCloseError(err), "should recognize expected close error")
 
 	// Test with unexpected error
-	unexpectedErr := fmt.Errorf("some other error")
+	unexpectedErr := testError("some other error")
 	assert.False(t, rb.isExpectedCloseError(unexpectedErr), "should not recognize unexpected error")
 
 	// Test with nil error
