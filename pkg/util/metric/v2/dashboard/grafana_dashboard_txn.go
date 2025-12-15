@@ -43,10 +43,11 @@ func (c *DashboardCreator) initTxnDashboard() error {
 			c.initTxnTNSideRow(),
 			// Lock operations
 			c.initTxnLockDurationRow(),
-			// Data access: Range scan, Read selectivity, Reader
+			// Data access: Range scan, Read selectivity, Reader, Read Size
 			c.initTxnTableRangesRow(),
 			c.initTxnReadSelectivityRow(),
 			c.initTxnReaderDurationRow(),
+			c.initTxnReadSizeRow(),
 			// Primary key operations
 			c.initTxnPKMayBeChangedRow(),
 			// Tombstone operations
@@ -730,6 +731,27 @@ func (c *DashboardCreator) initTxnReaderDurationRow() dashboard.Option {
 			[]float64{0.80, 0.90, 0.95, 0.99},
 			[]float32{3, 3, 3, 3},
 			axis.Unit("s"),
+			axis.Min(0))...,
+	)
+}
+
+func (c *DashboardCreator) initTxnReadSizeRow() dashboard.Option {
+	return dashboard.Row(
+		"Read Size",
+		c.getMultiHistogram(
+			[]string{
+				c.getMetricWithFilter(`mo_txn_read_size_bytes_bucket`, `type="total"`),
+				c.getMetricWithFilter(`mo_txn_read_size_bytes_bucket`, `type="s3"`),
+				c.getMetricWithFilter(`mo_txn_read_size_bytes_bucket`, `type="disk"`),
+			},
+			[]string{
+				"Total Read Size",
+				"S3 Read Size",
+				"Disk Read Size",
+			},
+			[]float64{0.50, 0.80, 0.90, 0.99},
+			[]float32{4, 4, 4, 4},
+			axis.Unit("decbytes"),
 			axis.Min(0))...,
 	)
 }

@@ -517,3 +517,22 @@ var (
 	// Column total count: total number of columns in table per operation
 	TxnColumnTotalCountHistogram = txnColumnReadHistogram.WithLabelValues("total")
 )
+
+// Read size histogram metrics: track per-read operation read sizes
+var (
+	txnReadSizeHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "read_size_bytes",
+			Help:      "Bucketed histogram of read size per read operation (bytes).",
+			Buckets:   prometheus.ExponentialBuckets(1024, 2.0, 20), // 1KB to ~1GB
+		}, []string{"type"})
+
+	// Total read size: actual bytes read from storage layer (excluding rowid tombstone)
+	TxnReadSizeHistogram = txnReadSizeHistogram.WithLabelValues("total")
+	// S3 read size: actual bytes read from S3 (excluding rowid tombstone)
+	TxnS3ReadSizeHistogram = txnReadSizeHistogram.WithLabelValues("s3")
+	// Disk read size: actual bytes read from disk cache (excluding rowid tombstone)
+	TxnDiskReadSizeHistogram = txnReadSizeHistogram.WithLabelValues("disk")
+)

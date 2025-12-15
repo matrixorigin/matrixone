@@ -176,6 +176,7 @@ func initTxnMetrics() {
 	registry.MustRegister(TxnExtraWorkspaceQuotaGauge)
 	registry.MustRegister(txnSelectivityHistogram)
 	registry.MustRegister(txnColumnReadHistogram)
+	registry.MustRegister(txnReadSizeHistogram)
 }
 
 func initRPCMetrics() {

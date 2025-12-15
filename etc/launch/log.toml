@@ -13,17 +13,3 @@ enable-metrics = true
 disableMetric = false
 enable-metric-to-prom = true
 status-port = 7001
-
-[[fileservice]]
-name = "LOCAL"
-backend = "DISK"
-
-[[fileservice]]
-name = "SHARED"
-backend = "DISK"
-data-dir = "mo-data/shared"
-
-[fileservice.cache]
-memory-capacity = "4GB"
-disk-capacity = "8GB"
-disk-path = "mo-data/file-service-cache"
