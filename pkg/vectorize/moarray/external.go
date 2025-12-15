@@ -211,7 +211,7 @@ func CosineDistance[T types.RealNumbers](v1, v2 []T) (T, error) {
 	}
 
 	if norm1 == 0 || norm2 == 0 {
-		return 0, nil
+		return 0, moerr.NewInternalErrorNoCtx("cannot compute cosine distance with zero vector")
 	}
 
 	return 1 - dotProduct/T(math.Sqrt(float64(norm1*norm2))), nil
@@ -231,7 +231,7 @@ func CosineSimilarity[T types.RealNumbers](v1, v2 []T) (T, error) {
 	}
 
 	if norm1 == 0 || norm2 == 0 {
-		return 0, nil
+		return 0, moerr.NewInternalErrorNoCtx("cannot compute cosine similarity with zero vector")
 	}
 
 	return dotProduct / T(math.Sqrt(float64(norm1*norm2))), nil

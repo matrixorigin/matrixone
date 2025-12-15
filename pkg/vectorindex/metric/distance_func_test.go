@@ -133,19 +133,13 @@ func Test_ResolveFun(t *testing.T) {
 func Test_ZeroVector(t *testing.T) {
 	v1 := []float64{0, 0, 0}
 	v2 := []float64{0, 0, 0}
-	got64, err := CosineDistance(v1, v2)
-	require.Nil(t, err)
-	if !math.IsNaN(got64) {
-		t.Errorf("CosineDistance(%v, %v) = %v, want NaN", v1, v2, got64)
-	}
+	_, err := CosineDistance(v1, v2)
+	require.NotNil(t, err)
 
 	v1f32 := []float32{0, 0, 0}
 	v2f32 := []float32{0, 0, 0}
-	got32, err := CosineDistance(v1f32, v2f32)
-	require.Nil(t, err)
-	if !math.IsNaN(float64(got32)) {
-		t.Errorf("CosineDistance(%v, %v) = %v, want NaN", v1f32, v2f32, got32)
-	}
+	_, err = CosineDistance(v1f32, v2f32)
+	require.NotNil(t, err)
 }
 
 func Test_L2Distance(t *testing.T) {
