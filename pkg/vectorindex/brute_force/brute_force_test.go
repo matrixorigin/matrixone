@@ -20,12 +20,19 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/stretchr/testify/require"
 )
 
 func TestBruteForce(t *testing.T) {
+
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	dataset := [][]float32{{1, 2, 3}, {3, 4, 5}}
 	query := [][]float32{{1, 2, 3}, {3, 4, 5}}
@@ -39,13 +46,17 @@ func TestBruteForce(t *testing.T) {
 
 	rt := vectorindex.RuntimeConfig{Limit: limit, NThreads: ncpu}
 
-	keys, distances, err := idx.Search(nil, query, rt)
+	keys, distances, err := idx.Search(sqlproc, query, rt)
 	require.NoError(t, err)
 	fmt.Printf("keys %v, dist %v\n", keys, distances)
 
 }
 
 func TestGoBruteForce(t *testing.T) {
+
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	dataset := [][]float32{{1, 2, 3}, {3, 4, 5}}
 	query := [][]float32{{1, 2, 3}, {3, 4, 5}}
@@ -59,7 +70,7 @@ func TestGoBruteForce(t *testing.T) {
 
 	rt := vectorindex.RuntimeConfig{Limit: limit, NThreads: ncpu}
 
-	keys, distances, err := idx.Search(nil, query, rt)
+	keys, distances, err := idx.Search(sqlproc, query, rt)
 	require.NoError(t, err)
 	fmt.Printf("keys %v, dist %v\n", keys, distances)
 

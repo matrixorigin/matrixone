@@ -15,11 +15,12 @@
 package brute_force
 
 import (
+	"context"
 	"fmt"
 	"runtime"
 	"slices"
 
-	"github.com/matrixorigin/matrixone/pkg/common/executor"
+	"github.com/matrixorigin/matrixone/pkg/common/concurrent"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -211,8 +212,8 @@ func (idx *GoBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, 
 	// create distance matric
 	results := make([]vectorindex.SearchResult, nqueries*ndataset)
 
-	exec := executor.NewExecutor(int(nthreads))
-	err = exec.Execute(nqueries, func(thread_id int, query_id int) (err2 error) {
+	exec := concurrent.NewThreadPoolExecutor(int(nthreads))
+	err = exec.Execute(proc.GetContext(), nqueries, func(ctx context.Context, thread_id int, query_id int) (err2 error) {
 		for j := 0; j < ndataset; j++ {
 			dist, err2 := distfn(queries[query_id], idx.Dataset[j])
 			if err2 != nil {
@@ -240,7 +241,7 @@ func (idx *GoBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, 
 	// get min
 	keys64 := make([]int64, nqueries*int(rt.Limit))
 	distances = make([]float64, nqueries*int(rt.Limit))
-	err = exec.Execute(nqueries, func(thread_id int, query_id int) (err2 error) {
+	err = exec.Execute(proc.GetContext(), nqueries, func(ctx context.Context, thread_id int, query_id int) (err2 error) {
 		if rt.Limit == 1 {
 			// min
 			first := slices.MinFunc(results[query_id*ndataset:(query_id+1)*ndataset], cmpfn)
