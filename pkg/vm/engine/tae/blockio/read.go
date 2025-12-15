@@ -251,12 +251,10 @@ func BlockDataRead(
 		); err != nil {
 			return err
 		}
-		v2.TaskSelReadFilterTotal.Inc()
-		if len(sels) == 0 {
-			v2.TaskSelReadFilterHit.Inc()
-		}
+		v2.TxnSelReadFilterTotal.Observe(1.0)
 
 		if len(sels) == 0 {
+			v2.TxnSelReadFilterFiltered.Observe(1.0)
 			return nil
 		}
 	}

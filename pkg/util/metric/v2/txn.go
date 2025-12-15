@@ -418,3 +418,38 @@ var (
 			Help:      "Extra workspace quota for txn.",
 		})
 )
+
+// selectivity metrics for read filter and column
+var (
+	txnSelectivityHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "selectivity",
+			Help:      "Bucketed histogram of selectivity for read filter and column.",
+			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 15),
+		}, []string{"type"})
+
+	// Read filter metrics: track filter effectiveness
+	// Total: total number of filter operations per read (observe 1.0 for each operation)
+	// Filtered: number of operations where all rows were filtered out (observe 1.0 when len(sels) == 0)
+	TxnSelReadFilterTotal    = txnSelectivityHistogram.WithLabelValues("readfilter_total")
+	TxnSelReadFilterFiltered = txnSelectivityHistogram.WithLabelValues("readfilter_filtered")
+)
+
+// Column read histogram metrics: track per-read column counts
+var (
+	txnColumnReadHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "column_read_count",
+			Help:      "Bucketed histogram of column read count per read operation.",
+			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 15),
+		}, []string{"type"})
+
+	// Column read count: number of columns actually read per operation
+	TxnColumnReadCountHistogram = txnColumnReadHistogram.WithLabelValues("read")
+	// Column total count: total number of columns in table per operation
+	TxnColumnTotalCountHistogram = txnColumnReadHistogram.WithLabelValues("total")
+)
