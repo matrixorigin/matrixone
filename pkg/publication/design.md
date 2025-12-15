@@ -61,6 +61,11 @@ scan partition state
 
 * get object
 
+* getddl  [database d] [table t] snapshot <ts>
+
+dbname tablename tableid tablesql
+
+
 **subscribe**
 update mo_sync_configs
 

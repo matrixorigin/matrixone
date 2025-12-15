@@ -667,5 +667,6 @@ func init() {
 		"output":                     OUTPUT,
 		"objectlist":                 OBJECTLIST,
 		"getobject":                  GETOBJECT,
+		"getddl":                     GETDDL,
 	}
 }

@@ -537,14 +537,33 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 			return
 		}
 
+	case *tree.ObjectList:
+		ses.EnterFPrint(FPObjectList)
+		defer ses.ExitFPrint(FPObjectList)
+		if err = handleObjectList(execCtx.reqCtx, ses, st); err != nil {
+			return
+		}
+
+	case *tree.GetDdl:
+		ses.EnterFPrint(FPGetDdl)
+		defer ses.ExitFPrint(FPGetDdl)
+		if err = handleGetDdl(execCtx.reqCtx, ses, st); err != nil {
+			return
+		}
+
+	case *tree.GetObject:
+		ses.EnterFPrint(FPGetObject)
+		defer ses.ExitFPrint(FPGetObject)
+		if err = handleGetObject(execCtx.reqCtx, ses, st); err != nil {
+			return
+		}
+
 	case *tree.DataBranchDiff,
 		*tree.DataBranchMerge,
 		*tree.DataBranchCreateTable,
 		*tree.DataBranchDeleteTable,
 		*tree.DataBranchDeleteDatabase,
-		*tree.DataBranchCreateDatabase,
-		*tree.ObjectList,
-		*tree.GetObject:
+		*tree.DataBranchCreateDatabase:
 
 		ses.EnterFPrint(FPDataBranch)
 		defer ses.ExitFPrint(FPDataBranch)

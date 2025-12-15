@@ -91,6 +91,16 @@ func init() {
 		reuse.DefaultOptions[GetObject](),
 	)
 
+	reuse.CreatePool[GetDdl](
+		func() *GetDdl {
+			return &GetDdl{}
+		},
+		func(c *GetDdl) {
+			c.reset()
+		},
+		reuse.DefaultOptions[GetDdl](),
+	)
+
 }
 
 type DataBranchType int
@@ -503,4 +513,60 @@ func (s *GetObject) GetQueryType() string {
 
 func (s *GetObject) Free() {
 	reuse.Free[GetObject](s, nil)
+}
+
+type GetDdl struct {
+	statementImpl
+
+	Database *Identifier // optional database name
+	Table    *Identifier // optional table name
+	Snapshot *Identifier // optional snapshot name
+}
+
+func (s *GetDdl) TypeName() string {
+	return "get ddl"
+}
+
+func (s *GetDdl) reset() {
+	*s = GetDdl{}
+}
+
+func NewGetDdl() *GetDdl {
+	return reuse.Alloc[GetDdl](nil)
+}
+
+func (s *GetDdl) StmtKind() StmtKind {
+	return compositeResRowType
+}
+
+func (s *GetDdl) Format(ctx *FmtCtx) {
+	ctx.WriteString("GETDDL")
+	if s.Database != nil {
+		ctx.WriteString(" DATABASE ")
+		ctx.WriteString(string(*s.Database))
+	}
+	if s.Table != nil {
+		ctx.WriteString(" TABLE ")
+		ctx.WriteString(string(*s.Table))
+	}
+	if s.Snapshot != nil {
+		ctx.WriteString(" SNAPSHOT ")
+		ctx.WriteString(string(*s.Snapshot))
+	}
+}
+
+func (s *GetDdl) String() string {
+	return s.GetStatementType()
+}
+
+func (s *GetDdl) GetStatementType() string {
+	return "get ddl"
+}
+
+func (s *GetDdl) GetQueryType() string {
+	return QueryTypeOth
+}
+
+func (s *GetDdl) Free() {
+	reuse.Free[GetDdl](s, nil)
 }

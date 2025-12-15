@@ -191,6 +191,9 @@ const (
 	FPShowRecoveryWindow
 	FPCloneDatabase
 	FPCloneTable
+	FPObjectList
+	FPGetDdl
+	FPGetObject
 	FPDataBranch
 )
 

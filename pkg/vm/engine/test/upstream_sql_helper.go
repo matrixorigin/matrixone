@@ -35,13 +35,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"go.uber.org/zap"
 )
 
-// UpstreamSQLHelper handles special SQL statements (CREATE/DROP SNAPSHOT, OBJECTLIST, GET OBJECT)
+// UpstreamSQLHelper handles special SQL statements (CREATE/DROP SNAPSHOT, OBJECTLIST, GET OBJECT, GETDDL)
 // by routing them through frontend processing logic without requiring a Session
 type UpstreamSQLHelper struct {
 	txnOp     client.TxnOperator
@@ -131,6 +132,16 @@ func (h *UpstreamSQLHelper) HandleSpecialSQL(
 			zap.String("sql", query),
 		)
 		result, err := h.handleGetObjectDirectly(ctx, s)
+		if err != nil {
+			return true, nil, err
+		}
+		return true, result, nil
+
+	case *tree.GetDdl:
+		logutil.Info("UpstreamSQLHelper: routing GETDDL to frontend",
+			zap.String("sql", query),
+		)
+		result, err := h.handleGetDdlDirectly(ctx, s)
 		if err != nil {
 			return true, nil, err
 		}
@@ -376,6 +387,63 @@ func (h *UpstreamSQLHelper) tryToIncreaseTxnPhysicalTS(ctx context.Context) (int
 	}
 
 	return h.txnOp.SnapshotTS().PhysicalTime, nil
+}
+
+// handleGetDdlDirectly handles GETDDL by directly calling frontend logic
+func (h *UpstreamSQLHelper) handleGetDdlDirectly(
+	ctx context.Context,
+	stmt *tree.GetDdl,
+) (*publication.Result, error) {
+	if h.txnOp == nil {
+		return nil, moerr.NewInternalError(ctx, "transaction is required for GETDDL")
+	}
+	if h.engine == nil {
+		return nil, moerr.NewInternalError(ctx, "engine is required for GETDDL")
+	}
+
+	// Get database name and table name
+	var databaseName string
+	var tableName string
+	if stmt.Database != nil {
+		databaseName = string(*stmt.Database)
+	}
+	if stmt.Table != nil {
+		tableName = string(*stmt.Table)
+	}
+
+	// Get mpool
+	mp := mpool.MustNewZero()
+
+	// Resolve snapshot if provided
+	var snapshot *plan2.Snapshot
+	if stmt.Snapshot != nil {
+		snapshotName := string(*stmt.Snapshot)
+		ts, err := frontend.ResolveSnapshotWithSnapshotNameWithoutSession(ctx, snapshotName, h.executor, h.txnOp)
+		if err != nil {
+			return nil, err
+		}
+		if ts != nil {
+			// Create snapshot with timestamp and account ID
+			snapshot = &plan2.Snapshot{
+				TS: ts,
+				Tenant: &plan2.SnapshotTenant{
+					TenantID: h.accountID,
+				},
+			}
+		}
+	}
+
+	// Call GetDdlBatchWithoutSession
+	resultBatch, err := frontend.GetDdlBatchWithoutSession(ctx, databaseName, tableName, h.engine, h.txnOp, mp, snapshot)
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert batch to result
+	return h.convertExecutorResult(executor.Result{
+		Batches: []*batch.Batch{resultBatch},
+		Mp:      mp,
+	}), nil
 }
 
 // convertExecutorResult converts executor.Result to publication.Result

@@ -365,7 +365,7 @@ import (
 %token <str> EXTENSION
 %token <str> RETENTION PERIOD
 %token <str> CLONE BRANCH LOG REVERT REBASE DIFF
-%token <str> CONFLICT CONFLICT_FAIL CONFLICT_SKIP CONFLICT_ACCEPT OUTPUT OBJECTLIST GETOBJECT
+%token <str> CONFLICT CONFLICT_FAIL CONFLICT_SKIP CONFLICT_ACCEPT OUTPUT OBJECTLIST GETOBJECT GETDDL
 
 // Sequence
 %token <str> INCREMENT CYCLE MINVALUE
@@ -575,8 +575,9 @@ import (
 %type <str> alter_publication_db_name_opt
 %type <statement> branch_stmt
 %type <objectList> objectlist_opt
-%type <str> against_snapshot_opt
+%type <str> against_snapshot_opt getddl_snapshot_opt
 %type <toAccountOpt> to_account_opt
+%type <statement> getddl_opts
 %type <conflictOpt> conflict_opt
 %type <diffOutputOpt> diff_output_opt
 
@@ -8124,6 +8125,10 @@ branch_stmt:
     	t.ObjectName = tree.Identifier($2.Compare())
     	$$ = t
     }
+|   GETDDL getddl_opts
+    {
+    	$$ = $2
+    }
 
 diff_output_opt:
     {
@@ -8200,12 +8205,79 @@ objectlist_opt:
     		Table: tree.Identifier($4.Compare()),
     	}
     }
+
+getddl_snapshot_opt:
+    {
+    	$$ = ""
+    }
+    | SNAPSHOT ident
+    {
+    	$$ = $2.Compare()
+    }
+
+getddl_opts:
+    {
+    	t := tree.NewGetDdl()
+    	$$ = t
+    }
+    | DATABASE ident
+    {
+    	t := tree.NewGetDdl()
+    	dbName := tree.Identifier($2.Compare())
+    	t.Database = &dbName
+    	$$ = t
+    }
+    | DATABASE ident TABLE ident
+    {
+    	t := tree.NewGetDdl()
+    	dbName := tree.Identifier($2.Compare())
+    	t.Database = &dbName
+    	tableName := tree.Identifier($4.Compare())
+    	t.Table = &tableName
+    	$$ = t
+    }
+    | DATABASE ident SNAPSHOT ident
+    {
+    	t := tree.NewGetDdl()
+    	dbName := tree.Identifier($2.Compare())
+    	t.Database = &dbName
+    	snapshot := tree.Identifier($4.Compare())
+    	t.Snapshot = &snapshot
+    	$$ = t
+    }
+    | DATABASE ident TABLE ident SNAPSHOT ident
+    {
+    	t := tree.NewGetDdl()
+    	dbName := tree.Identifier($2.Compare())
+    	t.Database = &dbName
+    	tableName := tree.Identifier($4.Compare())
+    	t.Table = &tableName
+    	snapshot := tree.Identifier($6.Compare())
+    	t.Snapshot = &snapshot
+    	$$ = t
+    }
     | TABLE ident
     {
-    	$$ = &tree.ObjectList{
-    		Database: "",
-    		Table: tree.Identifier($2.Compare()),
-    	}
+    	t := tree.NewGetDdl()
+    	tableName := tree.Identifier($2.Compare())
+    	t.Table = &tableName
+    	$$ = t
+    }
+    | TABLE ident SNAPSHOT ident
+    {
+    	t := tree.NewGetDdl()
+    	tableName := tree.Identifier($2.Compare())
+    	t.Table = &tableName
+    	snapshot := tree.Identifier($4.Compare())
+    	t.Snapshot = &snapshot
+    	$$ = t
+    }
+    | SNAPSHOT ident
+    {
+    	t := tree.NewGetDdl()
+    	snapshot := tree.Identifier($2.Compare())
+    	t.Snapshot = &snapshot
+    	$$ = t
     }
 
 against_snapshot_opt:
