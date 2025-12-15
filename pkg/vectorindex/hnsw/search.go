@@ -15,11 +15,12 @@
 package hnsw
 
 import (
-	"errors"
+	"context"
 	"fmt"
 	"sync"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/common/concurrent"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -87,39 +88,29 @@ func (s *HnswSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt vec
 	// search
 	size := len(s.Indexes) * int(limit)
 	heap := vectorindex.NewSearchResultSafeHeap(size)
-	var wg sync.WaitGroup
-
-	var errs error
 
 	nthread := int(vectorindex.GetConcurrency(0))
 	if nthread > len(s.Indexes) {
 		nthread = len(s.Indexes)
 	}
 
-	for i := 0; i < nthread; i++ {
-		wg.Add(1)
-		go func(tid int) {
-			defer wg.Done()
-			for j, idx := range s.Indexes {
-				if j%nthread == tid {
-					keys, distances, err := idx.Search(query, limit)
-					if err != nil {
-						errs = errors.Join(errs, err)
-						return
-					}
-
-					for k := range keys {
-						heap.Push(&vectorindex.SearchResult{Id: int64(keys[k]), Distance: float64(distances[k])})
-					}
-				}
+	exec := concurrent.NewThreadPoolExecutor(nthread)
+	err = exec.Execute(sqlproc.GetContext(),
+		len(s.Indexes),
+		func(ctx context.Context, thread_id int, idx_id int) (err2 error) {
+			idx := s.Indexes[idx_id]
+			keys, distances, err2 := idx.Search(query, limit)
+			if err2 != nil {
+				return err2
 			}
-		}(i)
-	}
 
-	wg.Wait()
-
-	if errs != nil {
-		return nil, nil, errs
+			for k := range keys {
+				heap.Push(&vectorindex.SearchResult{Id: int64(keys[k]), Distance: float64(distances[k])})
+			}
+			return
+		})
+	if err != nil {
+		return nil, nil, err
 	}
 
 	reskeys := make([]int64, 0, limit)
