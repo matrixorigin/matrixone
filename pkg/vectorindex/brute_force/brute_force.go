@@ -213,17 +213,20 @@ func (idx *GoBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, 
 	results := make([]vectorindex.SearchResult, nqueries*ndataset)
 
 	exec := concurrent.NewThreadPoolExecutor(int(nthreads))
-	err = exec.Execute(proc.GetContext(), nqueries, func(ctx context.Context, thread_id int, query_id int) (err2 error) {
-		for j := 0; j < ndataset; j++ {
-			dist, err2 := distfn(queries[query_id], idx.Dataset[j])
-			if err2 != nil {
-				return err2
+	err = exec.Execute(
+		proc.GetContext(),
+		nqueries,
+		func(ctx context.Context, thread_id int, query_id int) (err2 error) {
+			for j := 0; j < ndataset; j++ {
+				dist, err2 := distfn(queries[query_id], idx.Dataset[j])
+				if err2 != nil {
+					return err2
+				}
+				results[query_id*ndataset+j].Id = int64(j)
+				results[query_id*ndataset+j].Distance = float64(dist)
 			}
-			results[query_id*ndataset+j].Id = int64(j)
-			results[query_id*ndataset+j].Distance = float64(dist)
-		}
-		return
-	})
+			return
+		})
 
 	if err != nil {
 		return nil, nil, err
@@ -241,19 +244,22 @@ func (idx *GoBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, 
 	// get min
 	keys64 := make([]int64, nqueries*int(rt.Limit))
 	distances = make([]float64, nqueries*int(rt.Limit))
-	err = exec.Execute(proc.GetContext(), nqueries, func(ctx context.Context, thread_id int, query_id int) (err2 error) {
-		if rt.Limit == 1 {
-			// min
-			first := slices.MinFunc(results[query_id*ndataset:(query_id+1)*ndataset], cmpfn)
-			results[query_id*ndataset] = first
+	err = exec.Execute(
+		proc.GetContext(),
+		nqueries,
+		func(ctx context.Context, thread_id int, query_id int) (err2 error) {
+			if rt.Limit == 1 {
+				// min
+				first := slices.MinFunc(results[query_id*ndataset:(query_id+1)*ndataset], cmpfn)
+				results[query_id*ndataset] = first
 
-		} else {
-			// partial sort
-			partial.SortFunc(results[query_id*ndataset:(query_id+1)*ndataset], int(rt.Limit), cmpfn)
+			} else {
+				// partial sort
+				partial.SortFunc(results[query_id*ndataset:(query_id+1)*ndataset], int(rt.Limit), cmpfn)
 
-		}
-		return
-	})
+			}
+			return
+		})
 	if err != nil {
 		return nil, nil, err
 	}
