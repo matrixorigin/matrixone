@@ -184,6 +184,7 @@ import (
     fullOpt bool
     boolVal bool
     int64Val int64
+    uint64Val uint64
     strs []string
 
     duplicateKey tree.DuplicateKey
@@ -464,7 +465,7 @@ import (
 %token <str> ARROW
 
 // Insert
-%token <str> ROW OUTFILE HEADER MAX_FILE_SIZE FORCE_QUOTE PARALLEL STRICT
+%token <str> ROW OUTFILE HEADER MAX_FILE_SIZE FORCE_QUOTE PARALLEL STRICT SPLITSIZE
 
 %token <str> UNUSED BINDINGS
 
@@ -779,6 +780,8 @@ import (
 %type <fieldsList> field_item_list
 %type <str> field_terminator starting_opt lines_terminated_opt starting lines_terminated
 %type <lines> load_lines export_lines_opt
+%type <str> export_format_opt
+%type <uint64Val> export_splitsize_opt
 %type <int64Val> ignore_lines
 %type <varExpr> user_variable variable system_variable
 %type <varExprs> variable_list
@@ -5277,17 +5280,47 @@ export_data_param_opt:
     {
         $$ = nil
     }
-|   INTO OUTFILE STRING export_fields export_lines_opt header_opt max_file_size_opt force_quote_opt
+|   INTO OUTFILE STRING export_format_opt export_splitsize_opt export_fields export_lines_opt header_opt max_file_size_opt force_quote_opt
     {
         $$ = &tree.ExportParam{
-            Outfile:    true,
-            FilePath :  $3,
-            Fields:     $4,
-            Lines:      $5,
-            Header:     $6,
-            MaxFileSize:uint64($7)*1024,
-            ForceQuote: $8,
+            Outfile:      true,
+            FilePath:     $3,
+            ExportFormat: $4,
+            SplitSize:    $5,
+            Fields:       $6,
+            Lines:        $7,
+            Header:       $8,
+            MaxFileSize:  uint64($9)*1024,
+            ForceQuote:   $10,
         }
+    }
+
+export_format_opt:
+    {
+        $$ = ""
+    }
+|   FORMAT STRING
+    {
+        str := strings.ToLower($2)
+        if str != "csv" && str != "jsonline" && str != "parquet" {
+            yylex.Error("invalid format, must be csv, jsonline or parquet")
+            goto ret1
+        }
+        $$ = str
+    }
+
+export_splitsize_opt:
+    {
+        $$ = uint64(0)
+    }
+|   SPLITSIZE STRING
+    {
+        size, err := util.ParseDataSize($2)
+        if err != nil {
+            yylex.Error("invalid splitsize format: " + err.Error())
+            goto ret1
+        }
+        $$ = size
     }
 
 export_fields:
@@ -13020,6 +13053,7 @@ non_reserved_keyword:
 |   HEADER
 |   MAX_FILE_SIZE
 |   FORCE_QUOTE
+|   SPLITSIZE
 |   QUARTER
 |   UNKNOWN
 |   ANY
