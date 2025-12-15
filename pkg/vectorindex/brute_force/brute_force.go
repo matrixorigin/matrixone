@@ -203,12 +203,8 @@ func (idx *GoBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, 
 	}
 
 	nthreads := rt.NThreads
-	if nthreads == 0 {
-		runtime.NumCPU()
-	}
 
 	// datasize * nqueries
-
 	nqueries := len(queries)
 	ndataset := len(idx.Dataset)
 

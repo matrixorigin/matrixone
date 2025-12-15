@@ -2,6 +2,7 @@ package executor
 
 import (
 	"errors"
+	"runtime"
 	"sync"
 )
 
@@ -10,6 +11,9 @@ type Executor struct {
 }
 
 func NewExecutor(nthreads int) Executor {
+	if nthreads == 0 {
+		nthreads = runtime.NumCPU()
+	}
 	return Executor{nthreads: nthreads}
 }
 
