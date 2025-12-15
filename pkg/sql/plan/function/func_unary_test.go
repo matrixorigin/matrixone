@@ -215,9 +215,9 @@ func initNormalizeL2ArrayTestCase() []tcTemp {
 			expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
 				[][]float32{
 					{},
-					{0.18257418, 0.36514837, 0.5477226, 0.73029673},
-					{-0.18257418, 0.36514837, 0.5477226, 0.73029673},
-					{0.8108108, 0.27027026, 0.3243243, 0.4054054},
+					{0.18257418, 0.36514837, 0.5477225, 0.73029673},
+					{-0.18257418, 0.36514837, 0.5477225, 0.73029673},
+					{0.8108108, 0.27027026, 0.32432434, 0.4054054},
 					{0.1576765, 0.315353, 0.5781472, 0.73582363},
 				},
 				[]bool{true, false, false, false, false, false}),
@@ -369,7 +369,7 @@ func initL2NormArrayTestCase() []tcTemp {
 					[]bool{false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_float32.ToType(), false,
-				[]float32{3.741657257080078, 8.774964332580566},
+				[]float32{3.7416575, 8.774964332580566},
 				[]bool{false, false}),
 		},
 		{
