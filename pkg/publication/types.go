@@ -29,9 +29,9 @@ const (
 
 // DDL operation types
 const (
-	DDLOperationCreate = "create"
-	DDLOperationAlter  = "alter"
-	DDLOperationDrop   = "drop"
+	DDLOperationCreate int8 = 1
+	DDLOperationAlter  int8 = 2
+	DDLOperationDrop   int8 = 3
 )
 
 // SrcInfo contains source information for subscription

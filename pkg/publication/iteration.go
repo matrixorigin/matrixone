@@ -915,7 +915,6 @@ func ExecuteIteration(
 	upstreamSQLHelperFactory UpstreamSQLHelperFactory,
 ) (err error) {
 	var objectListResult *Result
-	var ddlStatements []string
 	var iterationCtx *IterationContext
 
 	// Check if account ID exists in context and is not 0
@@ -964,29 +963,9 @@ func ExecuteIteration(
 		}
 	}()
 
-	// 1.2 查询上游三表获取DDL
-	ddlStatements, err = QueryUpstreamDDL(ctx, iterationCtx, iterationCtx.LocalExecutor)
-	if err != nil {
-		err = moerr.NewInternalErrorf(ctx, "failed to query upstream DDL: %v", err)
+	if err = ProcessDDLChanges(ctx, cnEngine, iterationCtx); err != nil {
+		err = moerr.NewInternalErrorf(ctx, "failed to process DDL changes: %v", err)
 		return
-	}
-
-	// Execute DDL statements locally
-	for _, ddl := range ddlStatements {
-		if ddl != "" {
-			// TODO: Execute DDL using local executor or transaction
-			// This might require executing through the local transaction
-			// For now, we'll execute through localExecutor
-			var result *Result
-			result, err = iterationCtx.LocalExecutor.ExecSQL(ctx, ddl)
-			if err != nil {
-				err = moerr.NewInternalErrorf(ctx, "failed to execute DDL: %v", err)
-				return
-			}
-			if result != nil {
-				result.Close()
-			}
-		}
 	}
 
 	// 1.1 请求上游snapshot (includes 1.1.2 请求上游的snapshot ts)

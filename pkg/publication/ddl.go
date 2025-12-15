@@ -20,7 +20,9 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -47,234 +49,7 @@ type TableMetadata struct {
 type TableDDLInfo struct {
 	TableID        uint64
 	TableCreateSQL string
-	Operation      string // DDLOperationCreate, DDLOperationAlter, or DDLOperationDrop
-}
-
-// IsFirstSync checks if this is the first sync based on whether there's a previous snapshot
-func IsFirstSync(iterationCtx *IterationContext) bool {
-	return iterationCtx.PrevSnapshotName == ""
-}
-
-// QueryUpstreamDDL queries upstream three tables (mo_databases, mo_tables, mo_columns) to get DDL statements
-// It compares with local metadata and generates DDL statements if there are changes
-// Input: internal_sql_executor (for local queries), upstream executor (for upstream queries), iteration context
-// Returns: list of DDL statements to execute, updated table IDs and database IDs
-func QueryUpstreamDDL(
-	ctx context.Context,
-	iterationCtx *IterationContext,
-	localExecutor SQLExecutor,
-) ([]string, error) {
-	if iterationCtx == nil {
-		return nil, moerr.NewInternalError(ctx, "iteration context is nil")
-	}
-
-	if iterationCtx.UpstreamExecutor == nil {
-		return nil, moerr.NewInternalError(ctx, "upstream executor is nil")
-	}
-
-	if localExecutor == nil {
-		return nil, moerr.NewInternalError(ctx, "local executor is nil")
-	}
-
-	isFirstSync := IsFirstSync(iterationCtx)
-	var ddlStatements []string
-
-	// Initialize TableIDs map if nil
-	if iterationCtx.TableIDs == nil {
-		iterationCtx.TableIDs = make(map[TableKey]uint64)
-	}
-
-	// Query upstream databases
-	upstreamDBs, err := queryUpstreamDatabases(ctx, iterationCtx)
-	if err != nil {
-		return nil, moerr.NewInternalErrorf(ctx, "failed to query upstream databases: %v", err)
-	}
-
-	// Query upstream tables
-	upstreamTables, err := queryUpstreamTables(ctx, iterationCtx)
-	if err != nil {
-		return nil, moerr.NewInternalErrorf(ctx, "failed to query upstream tables: %v", err)
-	}
-
-	if isFirstSync {
-		// First sync: generate DDL from upstream metadata and record IDs
-		for _, db := range upstreamDBs {
-			if db.DatCreateSQL.Valid && db.DatCreateSQL.String != "" {
-				ddlStatements = append(ddlStatements, db.DatCreateSQL.String)
-			}
-		}
-
-		for _, tbl := range upstreamTables {
-			if tbl.RelCreateSQL.Valid && tbl.RelCreateSQL.String != "" {
-				ddlStatements = append(ddlStatements, tbl.RelCreateSQL.String)
-				// Record table ID
-				iterationCtx.TableIDs[TableKey{DBName: tbl.RelDatabase, TableName: tbl.RelName}] = tbl.RelID
-			}
-		}
-	} else {
-		// Not first sync: compare with local metadata and generate DDL if changed
-		localDBs, err := queryLocalDatabases(ctx, localExecutor, iterationCtx)
-		if err != nil {
-			return nil, moerr.NewInternalErrorf(ctx, "failed to query local databases: %v", err)
-		}
-
-		localTables, err := queryLocalTables(ctx, localExecutor, iterationCtx)
-		if err != nil {
-			return nil, moerr.NewInternalErrorf(ctx, "failed to query local tables: %v", err)
-		}
-
-		// Compare databases
-		for _, upstreamDB := range upstreamDBs {
-			var localDB *DatabaseMetadata
-			for _, db := range localDBs {
-				if db.DatName == upstreamDB.DatName {
-					localDB = &db
-					break
-				}
-			}
-
-			if localDB == nil {
-				// Database doesn't exist locally, create it
-				if upstreamDB.DatCreateSQL.Valid && upstreamDB.DatCreateSQL.String != "" {
-					ddlStatements = append(ddlStatements, upstreamDB.DatCreateSQL.String)
-				}
-			} else {
-				// Database exists, check if DDL changed
-				if upstreamDB.DatCreateSQL.Valid && localDB.DatCreateSQL.Valid {
-					if upstreamDB.DatCreateSQL.String != localDB.DatCreateSQL.String {
-						// DDL changed, regenerate
-						if upstreamDB.DatCreateSQL.String != "" {
-							ddlStatements = append(ddlStatements, upstreamDB.DatCreateSQL.String)
-						}
-					}
-				} else if upstreamDB.DatCreateSQL.Valid && !localDB.DatCreateSQL.Valid {
-					// Upstream has DDL but local doesn't
-					if upstreamDB.DatCreateSQL.String != "" {
-						ddlStatements = append(ddlStatements, upstreamDB.DatCreateSQL.String)
-					}
-				}
-			}
-		}
-
-		// Compare tables
-		for _, upstreamTbl := range upstreamTables {
-			var localTbl *TableMetadata
-			for _, tbl := range localTables {
-				if tbl.RelDatabase == upstreamTbl.RelDatabase && tbl.RelName == upstreamTbl.RelName {
-					localTbl = &tbl
-					break
-				}
-			}
-
-			if localTbl == nil {
-				// Table doesn't exist locally, create it
-				if upstreamTbl.RelCreateSQL.Valid && upstreamTbl.RelCreateSQL.String != "" {
-					ddlStatements = append(ddlStatements, upstreamTbl.RelCreateSQL.String)
-					iterationCtx.TableIDs[TableKey{DBName: upstreamTbl.RelDatabase, TableName: upstreamTbl.RelName}] = upstreamTbl.RelID
-				}
-			} else {
-				// Table exists, check if DDL changed or ID mismatch
-				if upstreamTbl.RelID != localTbl.RelID {
-					return nil, moerr.NewInternalErrorf(ctx, "table ID mismatch for %s.%s: upstream %d, local %d",
-						upstreamTbl.RelDatabase, upstreamTbl.RelName, upstreamTbl.RelID, localTbl.RelID)
-				}
-
-				if upstreamTbl.RelCreateSQL.Valid && localTbl.RelCreateSQL.Valid {
-					if upstreamTbl.RelCreateSQL.String != localTbl.RelCreateSQL.String {
-						// DDL changed, regenerate
-						if upstreamTbl.RelCreateSQL.String != "" {
-							ddlStatements = append(ddlStatements, upstreamTbl.RelCreateSQL.String)
-						}
-					}
-				} else if upstreamTbl.RelCreateSQL.Valid && !localTbl.RelCreateSQL.Valid {
-					// Upstream has DDL but local doesn't
-					if upstreamTbl.RelCreateSQL.String != "" {
-						ddlStatements = append(ddlStatements, upstreamTbl.RelCreateSQL.String)
-					}
-				}
-
-				// Update table ID
-				iterationCtx.TableIDs[TableKey{DBName: upstreamTbl.RelDatabase, TableName: upstreamTbl.RelName}] = upstreamTbl.RelID
-			}
-		}
-	}
-
-	return ddlStatements, nil
-}
-
-// queryUpstreamDatabases queries mo_databases from upstream
-func queryUpstreamDatabases(ctx context.Context, iterationCtx *IterationContext) ([]DatabaseMetadata, error) {
-	var accountID uint32
-	// Extract account_id from context if available, otherwise use 0
-	// TODO: Get account_id from iteration context or connection
-
-	var dbName string
-	if iterationCtx.SrcInfo.SyncLevel == SyncLevelDatabase || iterationCtx.SrcInfo.SyncLevel == SyncLevelTable {
-		dbName = iterationCtx.SrcInfo.DBName
-	}
-
-	querySQL := PublicationSQLBuilder.QueryMoDatabasesSQL(accountID, dbName)
-	result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, querySQL)
-	if err != nil {
-		return nil, err
-	}
-	defer result.Close()
-
-	var databases []DatabaseMetadata
-	for result.Next() {
-		var db DatabaseMetadata
-		var datCreateSQL sql.NullString
-		if err := result.Scan(&db.DatID, &db.DatName, &datCreateSQL, &db.AccountID); err != nil {
-			return nil, moerr.NewInternalErrorf(ctx, "failed to scan database result: %v", err)
-		}
-		db.DatCreateSQL = datCreateSQL
-		databases = append(databases, db)
-	}
-
-	if err := result.Err(); err != nil {
-		return nil, moerr.NewInternalErrorf(ctx, "error reading database results: %v", err)
-	}
-
-	return databases, nil
-}
-
-// queryUpstreamTables queries mo_tables from upstream
-func queryUpstreamTables(ctx context.Context, iterationCtx *IterationContext) ([]TableMetadata, error) {
-	var accountID uint32
-	// Extract account_id from context if available, otherwise use 0
-	// TODO: Get account_id from iteration context or connection
-
-	var dbName, tableName string
-	if iterationCtx.SrcInfo.SyncLevel == SyncLevelDatabase || iterationCtx.SrcInfo.SyncLevel == SyncLevelTable {
-		dbName = iterationCtx.SrcInfo.DBName
-	}
-	if iterationCtx.SrcInfo.SyncLevel == SyncLevelTable {
-		tableName = iterationCtx.SrcInfo.TableName
-	}
-
-	querySQL := PublicationSQLBuilder.QueryMoTablesSQL(accountID, dbName, tableName)
-	result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, querySQL)
-	if err != nil {
-		return nil, err
-	}
-	defer result.Close()
-
-	var tables []TableMetadata
-	for result.Next() {
-		var tbl TableMetadata
-		var relCreateSQL sql.NullString
-		if err := result.Scan(&tbl.RelID, &tbl.RelName, &tbl.RelDatabaseID, &tbl.RelDatabase, &relCreateSQL, &tbl.AccountID); err != nil {
-			return nil, moerr.NewInternalErrorf(ctx, "failed to scan table result: %v", err)
-		}
-		tbl.RelCreateSQL = relCreateSQL
-		tables = append(tables, tbl)
-	}
-
-	if err := result.Err(); err != nil {
-		return nil, moerr.NewInternalErrorf(ctx, "error reading table results: %v", err)
-	}
-
-	return tables, nil
+	Operation      int8 // DDLOperationCreate (1), DDLOperationAlter (2), or DDLOperationDrop (3), 0 means no operation
 }
 
 // GetUpstreamDDLUsingGetDdl queries upstream DDL using GETDDL statement
@@ -373,79 +148,152 @@ func GetUpstreamDDLUsingGetDdl(
 	return ddlMap, nil
 }
 
-// queryLocalDatabases queries mo_databases from local
-func queryLocalDatabases(ctx context.Context, executor SQLExecutor, iterationCtx *IterationContext) ([]DatabaseMetadata, error) {
-	var accountID uint32
-	// Extract account_id from context if available, otherwise use 0
-	// TODO: Get account_id from iteration context or connection
-
-	var dbName string
-	if iterationCtx.SrcInfo.SyncLevel == SyncLevelDatabase || iterationCtx.SrcInfo.SyncLevel == SyncLevelTable {
-		dbName = iterationCtx.SrcInfo.DBName
+// ProcessDDLChanges processes DDL changes by:
+// 1. Getting upstream DDL map using GetUpstreamDDLUsingGetDdl
+// 2. Filling DDL operations using FillDDLOperation
+// 3. Executing DDL operations for tables with non-empty operations:
+//   - create/drop: execute directly
+//   - alter: drop first, then create
+//
+// 4. Dropping databases returned by FillDDLOperation
+func ProcessDDLChanges(
+	ctx context.Context,
+	cnEngine engine.Engine,
+	iterationCtx *IterationContext,
+) error {
+	if iterationCtx == nil {
+		return moerr.NewInternalError(ctx, "iteration context is nil")
+	}
+	if iterationCtx.LocalExecutor == nil {
+		return moerr.NewInternalError(ctx, "local executor is nil")
+	}
+	if iterationCtx.LocalTxn == nil {
+		return moerr.NewInternalError(ctx, "local transaction is nil")
 	}
 
-	querySQL := PublicationSQLBuilder.QueryMoDatabasesSQL(accountID, dbName)
-	result, err := executor.ExecSQL(ctx, querySQL)
+	// Step 1: Get upstream DDL map
+	ddlMap, err := GetUpstreamDDLUsingGetDdl(ctx, iterationCtx)
 	if err != nil {
-		return nil, err
+		return moerr.NewInternalErrorf(ctx, "failed to get upstream DDL: %v", err)
 	}
-	defer result.Close()
 
-	var databases []DatabaseMetadata
-	for result.Next() {
-		var db DatabaseMetadata
-		var datCreateSQL sql.NullString
-		if err := result.Scan(&db.DatID, &db.DatName, &datCreateSQL, &db.AccountID); err != nil {
-			return nil, moerr.NewInternalErrorf(ctx, "failed to scan local database result: %v", err)
+	// Step 2: Fill DDL operations
+	dbToDrop, err := FillDDLOperation(
+		ctx,
+		cnEngine,
+		ddlMap,
+		iterationCtx.TableIDs,
+		iterationCtx.LocalTxn,
+		iterationCtx,
+	)
+	if err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to fill DDL operations: %v", err)
+	}
+
+	// Step 3: Execute DDL operations for tables with non-empty operations
+	for dbName, tables := range ddlMap {
+		for tableName, ddlInfo := range tables {
+			if ddlInfo.Operation == 0 {
+				// Skip tables with no operation needed
+				continue
+			}
+
+			switch ddlInfo.Operation {
+			case DDLOperationCreate:
+				// Execute CREATE TABLE
+				if ddlInfo.TableCreateSQL != "" {
+					if err := createTable(ctx, iterationCtx.LocalExecutor, dbName, tableName, ddlInfo.TableCreateSQL); err != nil {
+						return moerr.NewInternalErrorf(ctx, "failed to create table %s.%s: %v", dbName, tableName, err)
+					}
+					// Update TableIDs after successful table creation
+					if ddlInfo.TableID > 0 {
+						key := TableKey{DBName: dbName, TableName: tableName}
+						if iterationCtx.TableIDs == nil {
+							iterationCtx.TableIDs = make(map[TableKey]uint64)
+						}
+						iterationCtx.TableIDs[key] = ddlInfo.TableID
+					}
+				}
+			case DDLOperationDrop:
+				// Execute DROP TABLE
+				if err := dropTable(ctx, iterationCtx.LocalExecutor, dbName, tableName); err != nil {
+					return moerr.NewInternalErrorf(ctx, "failed to drop table %s.%s: %v", dbName, tableName, err)
+				}
+			case DDLOperationAlter:
+				// For alter, drop first then create
+				if err := dropTable(ctx, iterationCtx.LocalExecutor, dbName, tableName); err != nil {
+					return moerr.NewInternalErrorf(ctx, "failed to drop table %s.%s for alter: %v", dbName, tableName, err)
+				}
+				if ddlInfo.TableCreateSQL != "" {
+					if err := createTable(ctx, iterationCtx.LocalExecutor, dbName, tableName, ddlInfo.TableCreateSQL); err != nil {
+						return moerr.NewInternalErrorf(ctx, "failed to create table %s.%s after alter: %v", dbName, tableName, err)
+					}
+					// Update TableIDs after successful table creation
+					if ddlInfo.TableID > 0 {
+						key := TableKey{DBName: dbName, TableName: tableName}
+						if iterationCtx.TableIDs == nil {
+							iterationCtx.TableIDs = make(map[TableKey]uint64)
+						}
+						iterationCtx.TableIDs[key] = ddlInfo.TableID
+					}
+				}
+			}
 		}
-		db.DatCreateSQL = datCreateSQL
-		databases = append(databases, db)
 	}
 
-	if err := result.Err(); err != nil {
-		return nil, moerr.NewInternalErrorf(ctx, "error reading local database results: %v", err)
+	// Step 4: Drop databases
+	for _, dbName := range dbToDrop {
+		dropDBSQL := fmt.Sprintf("DROP DATABASE IF EXISTS `%s`", escapeSQLIdentifierForDDL(dbName))
+		result, err := iterationCtx.LocalExecutor.ExecSQL(ctx, dropDBSQL)
+		if err != nil {
+			return moerr.NewInternalErrorf(ctx, "failed to drop database %s: %v", dbName, err)
+		}
+		if result != nil {
+			result.Close()
+		}
 	}
 
-	return databases, nil
+	return nil
 }
 
-// queryLocalTables queries mo_tables from local
-func queryLocalTables(ctx context.Context, executor SQLExecutor, iterationCtx *IterationContext) ([]TableMetadata, error) {
-	var accountID uint32
-	// Extract account_id from context if available, otherwise use 0
-	// TODO: Get account_id from iteration context or connection
+// isIndexTable checks if a table name is an index table
+func isIndexTable(name string) bool {
+	return strings.HasPrefix(name, catalog.IndexTableNamePrefix)
+}
 
-	var dbName, tableName string
-	if iterationCtx.SrcInfo.SyncLevel == SyncLevelDatabase || iterationCtx.SrcInfo.SyncLevel == SyncLevelTable {
-		dbName = iterationCtx.SrcInfo.DBName
-	}
-	if iterationCtx.SrcInfo.SyncLevel == SyncLevelTable {
-		tableName = iterationCtx.SrcInfo.TableName
+// getCurrentTableCreateSQL gets the current table's create SQL using the same method as CDC
+func getCurrentTableCreateSQL(
+	ctx context.Context,
+	rel engine.Relation,
+	dbName string,
+	tableName string,
+) (string, error) {
+	// Get tableDef from relation
+	tableDef := rel.CopyTableDef(ctx)
+	if tableDef == nil {
+		return "", moerr.NewInternalError(ctx, "failed to get table definition")
 	}
 
-	querySQL := PublicationSQLBuilder.QueryMoTablesSQL(accountID, dbName, tableName)
-	result, err := executor.ExecSQL(ctx, querySQL)
+	// Generate create SQL using the same method as CDC
+	newTableDef := *tableDef
+	newTableDef.DbName = dbName
+	newTableDef.Name = tableName
+	newTableDef.Fkeys = nil
+	newTableDef.Partition = nil
+
+	if newTableDef.TableType == catalog.SystemClusterRel {
+		return "", moerr.NewInternalError(ctx, "cluster table is not supported")
+	}
+	if newTableDef.TableType == catalog.SystemExternalRel {
+		return "", moerr.NewInternalError(ctx, "external table is not supported")
+	}
+
+	createSQL, _, err := plan2.ConstructCreateTableSQL(nil, &newTableDef, nil, true, nil)
 	if err != nil {
-		return nil, err
-	}
-	defer result.Close()
-
-	var tables []TableMetadata
-	for result.Next() {
-		var tbl TableMetadata
-		var relCreateSQL sql.NullString
-		if err := result.Scan(&tbl.RelID, &tbl.RelName, &tbl.RelDatabaseID, &tbl.RelDatabase, &relCreateSQL, &tbl.AccountID); err != nil {
-			return nil, moerr.NewInternalErrorf(ctx, "failed to scan local table result: %v", err)
-		}
-		tbl.RelCreateSQL = relCreateSQL
-		tables = append(tables, tbl)
+		return "", moerr.NewInternalErrorf(ctx, "failed to construct create table SQL: %v", err)
 	}
 
-	if err := result.Err(); err != nil {
-		return nil, moerr.NewInternalErrorf(ctx, "error reading local table results: %v", err)
-	}
-
-	return tables, nil
+	return createSQL, nil
 }
 
 // FillDDLOperation fills DDL operation type for each table in the ddlMap
@@ -454,6 +302,8 @@ func queryLocalTables(ctx context.Context, executor SQLExecutor, iterationCtx *I
 // - If table doesn't exist but table ID exists in TableIDs: DDLOperationAlter
 // - If table exists but table ID changed: DDLOperationDrop (then will be followed by create)
 // - If table exists and ID matches: empty string (no operation needed)
+// Additionally, it traverses local tables based on iterationCtx.SrcInfo and marks tables that exist locally
+// but not in ddlMap as DDLOperationDrop
 // The ddlMap is modified in-place with operation types filled
 func FillDDLOperation(
 	ctx context.Context,
@@ -461,13 +311,15 @@ func FillDDLOperation(
 	ddlMap map[string]map[string]TableDDLInfo,
 	tableIDs map[TableKey]uint64,
 	txn client.TxnOperator,
-) error {
+	iterationCtx *IterationContext,
+) (dbToDrop []string, err error) {
 	if cnEngine == nil {
-		return moerr.NewInternalError(ctx, "engine is nil")
+		return nil, moerr.NewInternalError(ctx, "engine is nil")
 	}
 	if ddlMap == nil {
-		return moerr.NewInternalError(ctx, "ddlMap is nil")
+		return nil, moerr.NewInternalError(ctx, "ddlMap is nil")
 	}
+	dbToDrop = make([]string, 0)
 
 	// Process each database and table
 	for dbName, tables := range ddlMap {
@@ -492,7 +344,7 @@ func FillDDLOperation(
 			tableID := rel.GetTableID(ctx)
 			expectedTableID, idExists := tableIDs[key]
 			if !idExists {
-				return moerr.NewInternalErrorf(ctx, "table %s.%s id not exists", dbName, tableName)
+				return nil, moerr.NewInternalErrorf(ctx, "table %s.%s id not exists", dbName, tableName)
 			}
 
 			// Check if table ID changed
@@ -500,6 +352,16 @@ func FillDDLOperation(
 				// Table ID changed, need to drop and recreate
 				ddlInfo.Operation = DDLOperationAlter
 				// Note: After drop, a create operation will be needed separately
+			} else if ddlInfo.TableCreateSQL != "" {
+				// Table ID matches, check if create SQL changed
+				currentCreateSQL, err := getCurrentTableCreateSQL(ctx, rel, dbName, tableName)
+				if err != nil {
+					return nil, moerr.NewInternalErrorf(ctx, "failed to get current table create SQL for %s.%s: %v", dbName, tableName, err)
+				}
+				if currentCreateSQL != ddlInfo.TableCreateSQL {
+					// Create SQL changed, need to alter
+					ddlInfo.Operation = DDLOperationAlter
+				}
 			}
 
 			// Update the ddlMap with the modified ddlInfo
@@ -507,7 +369,104 @@ func FillDDLOperation(
 		}
 	}
 
-	return nil
+	// Traverse local tables based on iterationCtx.SrcInfo
+	// Find tables that exist locally but not in ddlMap, and mark them as drop
+	if iterationCtx != nil {
+		dbToDropLocal, err := findMissingTablesInDdlMap(ctx, cnEngine, ddlMap, tableIDs, txn, iterationCtx)
+		if err != nil {
+			return nil, err
+		}
+		dbToDrop = append(dbToDrop, dbToDropLocal...)
+	}
+
+	return dbToDrop, nil
+}
+
+// findMissingTablesInDdlMap traverses local tables based on SrcInfo and marks tables
+// that exist locally but not in ddlMap as DDLOperationDrop
+func findMissingTablesInDdlMap(
+	ctx context.Context,
+	cnEngine engine.Engine,
+	ddlMap map[string]map[string]TableDDLInfo,
+	tableIDs map[TableKey]uint64,
+	txn client.TxnOperator,
+	iterationCtx *IterationContext,
+) (dbToDrop []string, err error) {
+	var dbNames []string
+
+	// Determine which databases to traverse based on SrcInfo
+	switch iterationCtx.SrcInfo.SyncLevel {
+	case SyncLevelAccount:
+		// Traverse all databases
+		var err error
+		dbNames, err = cnEngine.Databases(ctx, txn)
+		if err != nil {
+			return nil, moerr.NewInternalErrorf(ctx, "failed to get database names: %v", err)
+		}
+	case SyncLevelDatabase, SyncLevelTable:
+		// Traverse only the specified database
+		if iterationCtx.SrcInfo.DBName == "" {
+			return nil, moerr.NewInternalError(ctx, "database name is empty")
+		}
+		dbNames = []string{iterationCtx.SrcInfo.DBName}
+	default:
+		return nil, moerr.NewInternalError(ctx, "invalid sync level")
+	}
+
+	// Traverse each database
+	for _, dbName := range dbNames {
+		db, err := cnEngine.Database(ctx, dbName, txn)
+		if err != nil {
+			// Skip databases that don't exist
+			continue
+		}
+
+		// Get all table names in the database
+		tableNames, err := db.Relations(ctx)
+		if err != nil {
+			return nil, moerr.NewInternalErrorf(ctx, "failed to get table names from database %s: %v", dbName, err)
+		}
+
+		// Process each table
+		for _, tableName := range tableNames {
+			// Filter out index tables
+			if isIndexTable(tableName) {
+				continue
+			}
+
+			// If SyncLevelTable, only process the specified table
+			if iterationCtx.SrcInfo.SyncLevel == SyncLevelTable {
+				if tableName != iterationCtx.SrcInfo.TableName {
+					continue
+				}
+			}
+
+			// Check if table exists in ddlMap
+			if tables, exists := ddlMap[dbName]; exists {
+				if _, existsInMap := tables[tableName]; existsInMap {
+					// Table exists in ddlMap, skip
+					continue
+				} else {
+					// Initialize inner map if needed
+					if ddlMap[dbName] == nil {
+						ddlMap[dbName] = make(map[string]TableDDLInfo)
+					}
+
+					// Add table to ddlMap with drop operation
+					// for tables to drop, table id may be 0
+					ddlMap[dbName][tableName] = TableDDLInfo{
+						Operation: DDLOperationDrop,
+					}
+
+				}
+			} else {
+				dbToDrop = append(dbToDrop, dbName)
+			}
+
+		}
+	}
+
+	return dbToDrop, nil
 }
 
 // createTable creates a table using the provided CREATE TABLE SQL statement
@@ -556,174 +515,4 @@ func escapeSQLIdentifierForDDL(s string) string {
 	// Replace backticks with double backticks
 	s = strings.ReplaceAll(s, "`", "``")
 	return s
-}
-
-// IndexInfo represents minimal index information from mo_indexes table
-type IndexInfo struct {
-	TableID        uint64
-	Name           string
-	AlgoTableType  sql.NullString
-	IndexTableName sql.NullString
-}
-
-// QueryIndexTableMapping queries index table mapping between downstream and upstream
-// It queries local mo_indexes to get index information, then queries upstream mo_indexes
-// to get corresponding upstream index table names, and stores the mapping in iterationCtx
-func QueryIndexTableMapping(
-	ctx context.Context,
-	upstreamTableID uint64,
-	downstreamTableID uint64,
-	iterationCtx *IterationContext,
-) error {
-	if iterationCtx == nil {
-		return moerr.NewInternalError(ctx, "iteration context is nil")
-	}
-
-	if iterationCtx.LocalExecutor == nil {
-		return moerr.NewInternalError(ctx, "local executor is nil")
-	}
-
-	if iterationCtx.UpstreamExecutor == nil {
-		return moerr.NewInternalError(ctx, "upstream executor is nil")
-	}
-
-	// Initialize IndexTableMappings map if nil
-	if iterationCtx.IndexTableMappings == nil {
-		iterationCtx.IndexTableMappings = make(map[IndexKey]IndexTableMapping)
-	}
-
-	// Step 1: Query local (downstream) mo_indexes to get index information
-	var accountID uint32 // TODO: Get account_id from iteration context or connection
-	querySQL := PublicationSQLBuilder.QueryMoIndexesSQL(accountID, downstreamTableID, "", "")
-	result, err := iterationCtx.LocalExecutor.ExecSQL(ctx, querySQL)
-	if err != nil {
-		return moerr.NewInternalErrorf(ctx, "failed to query local mo_indexes: %v", err)
-	}
-	defer result.Close()
-
-	var localIndexes []IndexInfo
-	for result.Next() {
-		var idx IndexInfo
-		var algoTableType, indexTableName sql.NullString
-
-		if err := result.Scan(
-			&idx.TableID,
-			&idx.Name,
-			&algoTableType,
-			&indexTableName,
-		); err != nil {
-			return moerr.NewInternalErrorf(ctx, "failed to scan local index result: %v", err)
-		}
-
-		idx.AlgoTableType = algoTableType
-		idx.IndexTableName = indexTableName
-
-		// Only process indexes that have index_table_name (skip NULL)
-		if indexTableName.Valid && indexTableName.String != "" {
-			localIndexes = append(localIndexes, idx)
-		}
-	}
-
-	if err := result.Err(); err != nil {
-		return moerr.NewInternalErrorf(ctx, "error reading local index results: %v", err)
-	}
-
-	// Step 2: Deduplicate local indexes by table_id + index_name + algo_table_type
-	// Since the same index may have multiple rows (one per column), we only need to process each unique index once
-	indexMap := make(map[string]IndexInfo) // key: table_id:index_name:algo_table_type
-	for _, localIdx := range localIndexes {
-		algoTableTypeStr := ""
-		if localIdx.AlgoTableType.Valid {
-			algoTableTypeStr = localIdx.AlgoTableType.String
-		}
-		key := fmt.Sprintf("%s:%s", localIdx.Name, algoTableTypeStr)
-		if _, exists := indexMap[key]; !exists {
-			indexMap[key] = localIdx
-		}
-	}
-
-	// Step 3: For each unique local index, query upstream to get corresponding upstream index table name
-	for _, localIdx := range indexMap {
-		// Get algo_table_type, default to empty string if NULL
-		algoTableTypeStr := ""
-		if localIdx.AlgoTableType.Valid {
-			algoTableTypeStr = localIdx.AlgoTableType.String
-		}
-
-		// Query upstream mo_indexes using index name, algo_table_type, and upstream table_id
-		upstreamQuerySQL := PublicationSQLBuilder.QueryMoIndexesSQL(
-			accountID,
-			upstreamTableID,
-			localIdx.Name,
-			algoTableTypeStr,
-		)
-		upstreamResult, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, upstreamQuerySQL)
-		if err != nil {
-			return moerr.NewInternalErrorf(ctx, "failed to query upstream mo_indexes for index %s: %v", localIdx.Name, err)
-		}
-
-		// Find matching upstream index
-		var upstreamIndexTableName string
-		found := false
-		for upstreamResult.Next() {
-			var upstreamIdx IndexInfo
-			var upstreamAlgoTableType, upstreamIndexTableNameNull sql.NullString
-
-			if err := upstreamResult.Scan(
-				&upstreamIdx.TableID,
-				&upstreamIdx.Name,
-				&upstreamAlgoTableType,
-				&upstreamIndexTableNameNull,
-			); err != nil {
-				upstreamResult.Close()
-				return moerr.NewInternalErrorf(ctx, "failed to scan upstream index result: %v", err)
-			}
-
-			// Check if algo_table_type matches
-			upstreamAlgoTableTypeStr := ""
-			if upstreamAlgoTableType.Valid {
-				upstreamAlgoTableTypeStr = upstreamAlgoTableType.String
-			}
-
-			if upstreamAlgoTableTypeStr == algoTableTypeStr {
-				// Found matching upstream index
-				if upstreamIndexTableNameNull.Valid && upstreamIndexTableNameNull.String != "" {
-					upstreamIndexTableName = upstreamIndexTableNameNull.String
-					found = true
-					break
-				}
-			}
-		}
-
-		upstreamResult.Close()
-
-		if err := upstreamResult.Err(); err != nil {
-			return moerr.NewInternalErrorf(ctx, "error reading upstream index results: %v", err)
-		}
-
-		// Step 4: Store the mapping in iterationCtx
-		if found {
-			downstreamIndexTableName := ""
-			if localIdx.IndexTableName.Valid {
-				downstreamIndexTableName = localIdx.IndexTableName.String
-			}
-
-			key := IndexKey{
-				TableID:       localIdx.TableID,
-				IndexName:     localIdx.Name,
-				AlgoTableType: algoTableTypeStr,
-			}
-
-			mapping := IndexTableMapping{
-				IndexName:                localIdx.Name,
-				AlgoTableType:            algoTableTypeStr,
-				DownstreamIndexTableName: downstreamIndexTableName,
-				UpstreamIndexTableName:   upstreamIndexTableName,
-			}
-
-			iterationCtx.IndexTableMappings[key] = mapping
-		}
-	}
-
-	return nil
 }
