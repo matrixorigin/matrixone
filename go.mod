@@ -92,7 +92,6 @@ require (
 	github.com/tidwall/pretty v1.2.1
 	github.com/tmc/langchaingo v0.1.13
 	github.com/unum-cloud/usearch/golang v0.0.0-20251130095425-a2f175991017
-	github.com/viterin/vek v0.4.3
 	go.starlark.net v0.0.0-20250701195324-d457b4515e0e
 	go.uber.org/automaxprocs v1.5.3
 	go.uber.org/ratelimit v0.2.0
@@ -134,7 +133,6 @@ require (
 	github.com/bytedance/gopkg v0.1.3 // indirect
 	github.com/bytedance/sonic/loader v0.3.0 // indirect
 	github.com/cespare/xxhash v1.1.0 // indirect
-	github.com/chewxy/math32 v1.10.1 // indirect
 	github.com/cilium/ebpf v0.9.1 // indirect
 	github.com/clbanning/mxj v1.8.4 // indirect
 	github.com/cloudwego/base64x v0.1.6 // indirect
@@ -218,7 +216,6 @@ require (
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/valyala/fastrand v1.1.0 // indirect
 	github.com/valyala/histogram v1.2.0 // indirect
-	github.com/viterin/partial v1.1.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.3 // indirect
 	go.opentelemetry.io/proto/otlp v1.3.1 // indirect
 	go.uber.org/atomic v1.11.0 // indirect

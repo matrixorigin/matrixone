@@ -15,12 +15,11 @@
 package moarray
 
 import (
+	"math"
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/viterin/vek"
-	"github.com/viterin/vek/vek32"
 )
 
 // These functions are exposed externally via SQL API.
@@ -30,20 +29,11 @@ func Add[T types.RealNumbers](v1, v2 []T) ([]T, error) {
 		return nil, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
 	}
 
-	switch _v1 := any(v1).(type) {
-	case []float32:
-		_v2 := any(v2).([]float32)
-		res := vek32.Add(_v1, _v2)
-		return any(res).([]T), nil
-
-	case []float64:
-		_v2 := any(v2).([]float64)
-		res := vek.Add(_v1, _v2)
-		return any(res).([]T), nil
-
-	default:
-		panic("Add type not supported")
+	res := make([]T, len(v1))
+	for i := range v1 {
+		res[i] = v1[i] + v2[i]
 	}
+	return res, nil
 }
 
 func Subtract[T types.RealNumbers](v1, v2 []T) ([]T, error) {
@@ -51,20 +41,11 @@ func Subtract[T types.RealNumbers](v1, v2 []T) ([]T, error) {
 		return nil, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
 	}
 
-	switch _v1 := any(v1).(type) {
-	case []float32:
-		_v2 := any(v2).([]float32)
-		res := vek32.Sub(_v1, _v2)
-		return any(res).([]T), nil
-
-	case []float64:
-		_v2 := any(v2).([]float64)
-		res := vek.Sub(_v1, _v2)
-		return any(res).([]T), nil
-
-	default:
-		panic("Subtract type not supported")
+	res := make([]T, len(v1))
+	for i := range v1 {
+		res[i] = v1[i] - v2[i]
 	}
+	return res, nil
 }
 
 func Multiply[T types.RealNumbers](v1, v2 []T) ([]T, error) {
@@ -72,20 +53,11 @@ func Multiply[T types.RealNumbers](v1, v2 []T) ([]T, error) {
 		return nil, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
 	}
 
-	switch _v1 := any(v1).(type) {
-	case []float32:
-		_v2 := any(v2).([]float32)
-		res := vek32.Mul(_v1, _v2)
-		return any(res).([]T), nil
-
-	case []float64:
-		_v2 := any(v2).([]float64)
-		res := vek.Mul(_v1, _v2)
-		return any(res).([]T), nil
-
-	default:
-		panic("Multiply type not supported")
+	res := make([]T, len(v1))
+	for i := range v1 {
+		res[i] = v1[i] * v2[i]
 	}
+	return res, nil
 }
 
 func Divide[T types.RealNumbers](v1, v2 []T) ([]T, error) {
@@ -98,71 +70,35 @@ func Divide[T types.RealNumbers](v1, v2 []T) ([]T, error) {
 		return nil, moerr.NewDivByZeroNoCtx()
 	}
 
-	switch _v1 := any(v1).(type) {
-	case []float32:
-		_v2 := any(v2).([]float32)
-		res := vek32.Div(_v1, _v2)
-		return any(res).([]T), nil
-
-	case []float64:
-		_v2 := any(v2).([]float64)
-		res := vek.Div(_v1, _v2)
-		return any(res).([]T), nil
-
-	default:
-		panic("Divide type not supported")
+	res := make([]T, len(v1))
+	for i := range v1 {
+		res[i] = v1[i] / v2[i]
 	}
+	return res, nil
 }
 
 func AddScalar[T types.RealNumbers](v1 []T, v2 T) ([]T, error) {
-	switch _v1 := any(v1).(type) {
-	case []float32:
-		_v2 := float32(v2)
-		res := vek32.AddNumber(_v1, _v2)
-		return any(res).([]T), nil
-
-	case []float64:
-		_v2 := float64(v2)
-		res := vek.AddNumber(_v1, _v2)
-		return any(res).([]T), nil
-
-	default:
-		panic("AddScalar type not supported")
+	res := make([]T, len(v1))
+	for i := range v1 {
+		res[i] = v1[i] + v2
 	}
+	return res, nil
 }
 
 func SubtractScalar[T types.RealNumbers](v1 []T, v2 T) ([]T, error) {
-	switch _v1 := any(v1).(type) {
-	case []float32:
-		_v2 := float32(v2)
-		res := vek32.SubNumber(_v1, _v2)
-		return any(res).([]T), nil
-
-	case []float64:
-		_v2 := float64(v2)
-		res := vek.SubNumber(_v1, _v2)
-		return any(res).([]T), nil
-
-	default:
-		panic("SubtractScalar type not supported")
+	res := make([]T, len(v1))
+	for i := range v1 {
+		res[i] = v1[i] - v2
 	}
+	return res, nil
 }
 
 func MultiplyScalar[T types.RealNumbers](v1 []T, v2 T) ([]T, error) {
-	switch _v1 := any(v1).(type) {
-	case []float32:
-		_v2 := float32(v2)
-		res := vek32.MulNumber(_v1, _v2)
-		return any(res).([]T), nil
-
-	case []float64:
-		_v2 := float64(v2)
-		res := vek.MulNumber(_v1, _v2)
-		return any(res).([]T), nil
-
-	default:
-		panic("MultiplyScalar type not supported")
+	res := make([]T, len(v1))
+	for i := range v1 {
+		res[i] = v1[i] * v2
 	}
+	return res, nil
 }
 
 func DivideScalar[T types.RealNumbers](v1 []T, v2 T) ([]T, error) {
@@ -171,20 +107,11 @@ func DivideScalar[T types.RealNumbers](v1 []T, v2 T) ([]T, error) {
 		return nil, moerr.NewDivByZeroNoCtx()
 	}
 
-	switch _v1 := any(v1).(type) {
-	case []float32:
-		_v2 := float32(v2)
-		res := vek32.DivNumber(_v1, _v2)
-		return any(res).([]T), nil
-
-	case []float64:
-		_v2 := float64(v2)
-		res := vek.DivNumber(_v1, _v2)
-		return any(res).([]T), nil
-
-	default:
-		panic("DivideScalar type not supported")
+	res := make([]T, len(v1))
+	for i := range v1 {
+		res[i] = v1[i] / v2
 	}
+	return res, nil
 }
 
 // Compare returns an integer comparing two arrays/vectors lexicographically.
@@ -219,18 +146,12 @@ func InnerProduct[T types.RealNumbers](v1, v2 []T) (T, error) {
 		return 0, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
 	}
 
-	switch _v1 := any(v1).(type) {
-	case []float32:
-		_v2 := any(v2).([]float32)
-		return T(-vek32.Dot(_v1, _v2)), nil
-
-	case []float64:
-		_v2 := any(v2).([]float64)
-		return T(-vek.Dot(_v1, _v2)), nil
-
-	default:
-		panic("InnerProduct type not supported")
+	var sum T
+	for i := range v1 {
+		sum -= v1[i] * v2[i]
 	}
+
+	return sum, nil
 }
 
 func L1Distance[T types.RealNumbers](v1, v2 []T) (T, error) {
@@ -238,18 +159,12 @@ func L1Distance[T types.RealNumbers](v1, v2 []T) (T, error) {
 		return 0, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
 	}
 
-	switch _v1 := any(v1).(type) {
-	case []float32:
-		_v2 := any(v2).([]float32)
-		return T(vek32.ManhattanDistance(_v1, _v2)), nil
-
-	case []float64:
-		_v2 := any(v2).([]float64)
-		return T(vek.ManhattanDistance(_v1, _v2)), nil
-
-	default:
-		panic("L1Distance type not supported")
+	var sum T
+	for i := range v1 {
+		sum += T(math.Abs(float64(v1[i] - v2[i])))
 	}
+
+	return sum, nil
 }
 
 func L2Distance[T types.RealNumbers](v1, v2 []T) (T, error) {
@@ -257,18 +172,13 @@ func L2Distance[T types.RealNumbers](v1, v2 []T) (T, error) {
 		return 0, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
 	}
 
-	switch _v1 := any(v1).(type) {
-	case []float32:
-		_v2 := any(v2).([]float32)
-		return T(vek32.Distance(_v1, _v2)), nil
-
-	case []float64:
-		_v2 := any(v2).([]float64)
-		return T(vek.Distance(_v1, _v2)), nil
-
-	default:
-		panic("L2Distance type not supported")
+	var sumOfSquares T
+	for i := range v1 {
+		diff := v1[i] - v2[i]
+		sumOfSquares += diff * diff
 	}
+
+	return T(math.Sqrt(float64(sumOfSquares))), nil
 }
 
 // L2DistanceSq returns the squared L2 distance between two vectors.
@@ -278,20 +188,13 @@ func L2DistanceSq[T types.RealNumbers](v1, v2 []T) (T, error) {
 		return 0, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
 	}
 
-	switch _v1 := any(v1).(type) {
-	case []float32:
-		_v2 := any(v2).([]float32)
-		dist := vek32.Distance(_v1, _v2)
-		return T(dist * dist), nil
-
-	case []float64:
-		_v2 := any(v2).([]float64)
-		dist := vek.Distance(_v1, _v2)
-		return T(dist * dist), nil
-
-	default:
-		panic("L2DistanceSq type not supported")
+	var sumOfSquares T
+	for i := range v1 {
+		diff := v1[i] - v2[i]
+		sumOfSquares += diff * diff
 	}
+
+	return sumOfSquares, nil
 }
 
 func CosineDistance[T types.RealNumbers](v1, v2 []T) (T, error) {
@@ -299,12 +202,19 @@ func CosineDistance[T types.RealNumbers](v1, v2 []T) (T, error) {
 		return 0, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
 	}
 
-	cosine, err := CosineSimilarity(v1, v2)
-	if err != nil {
-		return 0, err
+	var norm1, norm2, dotProduct T
+
+	for i := range v1 {
+		norm1 += v1[i] * v1[i]
+		norm2 += v2[i] * v2[i]
+		dotProduct += v1[i] * v2[i]
 	}
 
-	return 1 - cosine, nil
+	if norm1 == 0 || norm2 == 0 {
+		return 0, nil
+	}
+
+	return 1 - dotProduct/T(math.Sqrt(float64(norm1*norm2))), nil
 }
 
 func CosineSimilarity[T types.RealNumbers](v1, v2 []T) (T, error) {
@@ -312,18 +222,19 @@ func CosineSimilarity[T types.RealNumbers](v1, v2 []T) (T, error) {
 		return 0, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
 	}
 
-	switch _v1 := any(v1).(type) {
-	case []float32:
-		_v2 := any(v2).([]float32)
-		return T(vek32.CosineSimilarity(_v1, _v2)), nil
+	var norm1, norm2, dotProduct T
 
-	case []float64:
-		_v2 := any(v2).([]float64)
-		return T(vek.CosineSimilarity(_v1, _v2)), nil
-
-	default:
-		panic("CosineSimilarity type not supported")
+	for i := range v1 {
+		norm1 += v1[i] * v1[i]
+		norm2 += v2[i] * v2[i]
+		dotProduct += v1[i] * v2[i]
 	}
+
+	if norm1 == 0 || norm2 == 0 {
+		return 0, nil
+	}
+
+	return dotProduct / T(math.Sqrt(float64(norm1*norm2))), nil
 }
 
 func NormalizeL2[T types.RealNumbers](v1 []T, normalized []T) error {
@@ -331,25 +242,18 @@ func NormalizeL2[T types.RealNumbers](v1 []T, normalized []T) error {
 		return moerr.NewInternalErrorNoCtx("cannot normalize empty vector")
 	}
 
-	switch _v1 := any(v1).(type) {
-	case []float32:
-		_normalized := any(normalized).([]float32)
-		copy(_normalized, _v1)
-		norm := vek32.Norm(_v1)
-		if norm > 0 {
-			vek32.DivNumber_Inplace(_normalized, norm)
-		}
+	var norm T
+	for _, val := range v1 {
+		norm += val * val
+	}
 
-	case []float64:
-		_normalized := any(normalized).([]float64)
-		copy(_normalized, _v1)
-		norm := vek.Norm(_v1)
-		if norm > 0 {
-			vek.DivNumber_Inplace(_normalized, norm)
-		}
+	if norm == 0 {
+		return nil
+	}
 
-	default:
-		panic("NormalizeL2 type not supported")
+	norm = T(math.Sqrt(float64(norm)))
+	for i, val := range v1 {
+		normalized[i] = val / norm
 	}
 
 	return nil
@@ -357,30 +261,20 @@ func NormalizeL2[T types.RealNumbers](v1 []T, normalized []T) error {
 
 // L1Norm returns l1 distance to origin.
 func L1Norm[T types.RealNumbers](v []T) (T, error) {
-	switch _v := any(v).(type) {
-	case []float32:
-		return T(vek32.ManhattanNorm(_v)), nil
-
-	case []float64:
-		return T(vek.ManhattanNorm(_v)), nil
-
-	default:
-		panic("L1Norm type not supported")
+	var sum T
+	for _, val := range v {
+		sum += T(math.Abs(float64(val)))
 	}
+	return sum, nil
 }
 
 // L2Norm returns l2 distance to origin.
 func L2Norm[T types.RealNumbers](v []T) (T, error) {
-	switch _v := any(v).(type) {
-	case []float32:
-		return T(vek32.Norm(_v)), nil
-
-	case []float64:
-		return T(vek.Norm(_v)), nil
-
-	default:
-		panic("L2Norm type not supported")
+	var sumOfSquares T
+	for _, val := range v {
+		sumOfSquares += val * val
 	}
+	return T(math.Sqrt(float64(sumOfSquares))), nil
 }
 
 func ScalarOp[T types.RealNumbers](v []T, operation string, scalar T) ([]T, error) {
@@ -402,19 +296,12 @@ func ScalarOp[T types.RealNumbers](v []T, operation string, scalar T) ([]T, erro
 
 /* ------------ [START] mat.VecDense not supported functions ------- */
 
-func Abs[T types.RealNumbers](v []T) (res []T, err error) {
-	switch _v := any(v).(type) {
-	case []float32:
-		res = any(vek32.Abs(_v)).([]T)
-
-	case []float64:
-		res = any(vek.Abs(_v)).([]T)
-
-	default:
-		panic("Abs type not supported")
+func Abs[T types.RealNumbers](v []T) ([]T, error) {
+	res := make([]T, len(v))
+	for i, val := range v {
+		res[i] = T(math.Abs(float64(val)))
 	}
-
-	return
+	return res, nil
 }
 
 func Sqrt[T types.RealNumbers](v []T) ([]T, error) {
@@ -425,29 +312,19 @@ func Sqrt[T types.RealNumbers](v []T) ([]T, error) {
 		return nil, moerr.NewInvalidArgNoCtx("Sqrt", v[firstNegIdx])
 	}
 
-	switch _v := any(v).(type) {
-	case []float32:
-		return any(vek32.Sqrt(_v)).([]T), nil
-
-	case []float64:
-		return any(vek.Sqrt(_v)).([]T), nil
-
-	default:
-		panic("Sqrt type not supported")
+	res := make([]T, len(v))
+	for i, val := range v {
+		res[i] = T(math.Sqrt(float64(val)))
 	}
+	return res, nil
 }
 
 func Summation[T types.RealNumbers](v []T) (T, error) {
-	switch _v := any(v).(type) {
-	case []float32:
-		return T(vek32.Sum(_v)), nil
-
-	case []float64:
-		return T(vek.Sum(_v)), nil
-
-	default:
-		panic("Sum type not supported")
+	var sum T
+	for _, val := range v {
+		sum += val
 	}
+	return sum, nil
 }
 
 func Cast[I types.RealNumbers, O types.RealNumbers](in []I) (out []O, err error) {

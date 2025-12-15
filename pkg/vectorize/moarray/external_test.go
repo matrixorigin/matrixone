@@ -657,7 +657,7 @@ func TestL2Norm(t *testing.T) {
 		{
 			name: "Test1 - float32",
 			args: args{argF32: []float32{1, 2, 3}},
-			want: 3.741657257080078,
+			want: 3.7416575,
 		},
 		{
 			name: "Test2 - float64",
@@ -669,7 +669,7 @@ func TestL2Norm(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 
 			if tt.args.argF32 != nil {
-				if gotRes, _ := L2Norm[float32](tt.args.argF32); !assertx.InEpsilonF64(tt.want, float64(gotRes)) {
+				if gotRes, _ := L2Norm[float32](tt.args.argF32); !assertx.InEpsilonF32(float32(tt.want), gotRes) {
 					t.Errorf("L2Norm() = %v, want %v", gotRes, tt.want)
 				}
 			}

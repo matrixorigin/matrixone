@@ -20,8 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
-	"github.com/viterin/vek"
-	"github.com/viterin/vek/vek32"
 )
 
 func L2Distance[T types.RealNumbers](v1, v2 []T) (T, error) {
@@ -57,23 +55,9 @@ func SphericalDistance[T types.RealNumbers](v1, v2 []T) (T, error) {
 	// Compute the dot product of the two vectors.
 	// The dot product of two vectors is a measure of their similarity,
 	// and it can be used to calculate the angle between them.
-	dp := float64(0)
-
-	switch any(v1).(type) {
-	case []float32:
-		_v1 := any(v1).([]float32)
-		_v2 := any(v2).([]float32)
-
-		dp = float64(vek32.Dot(_v1, _v2))
-
-	case []float64:
-		_v1 := any(v1).([]float64)
-		_v2 := any(v2).([]float64)
-
-		dp = vek.Dot(_v1, _v2)
-
-	default:
-		return 0, moerr.NewInternalErrorNoCtx("SphericalDistance type not supported")
+	var dp T
+	for i := range v1 {
+		dp += v1[i] * v2[i]
 	}
 
 	// Prevent NaN with acos with loss of precision.
@@ -83,7 +67,7 @@ func SphericalDistance[T types.RealNumbers](v1, v2 []T) (T, error) {
 		dp = -1.0
 	}
 
-	theta := math.Acos(dp)
+	theta := math.Acos(float64(dp))
 
 	//To scale the result to the range [0, 1], we divide by Pi.
 	return T(theta / math.Pi), nil
@@ -94,17 +78,8 @@ func NormalizeL2[T types.RealNumbers](v1 []T, normalized []T) error {
 }
 
 func ScaleInPlace[T types.RealNumbers](v []T, scale T) {
-	switch _v := any(v).(type) {
-	case []float32:
-		_scale := float32(scale)
-		vek32.MulNumber_Inplace(_v, _scale)
-
-	case []float64:
-		_scale := float64(scale)
-		vek.MulNumber_Inplace(_v, _scale)
-
-	default:
-		panic("Scale type not supported")
+	for i := range v {
+		v[i] *= scale
 	}
 }
 

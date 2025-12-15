@@ -31,7 +31,7 @@ func Test_MaxFloat(t *testing.T) {
 	require.Equal(t, max64, float64(math.MaxFloat64))
 }
 
-func Test_Vek(t *testing.T) {
+func Test_DistFunc(t *testing.T) {
 
 	v1 := []float32{4, 5, 6}
 	v2 := []float32{1, 2, 3}
@@ -41,7 +41,7 @@ func Test_Vek(t *testing.T) {
 	v, err := distfn(v1, v2)
 	require.Nil(t, err)
 
-	fmt.Printf("blas32 v = %v\n", v)
+	fmt.Printf("moarray v = %v\n", v)
 }
 
 func Test_ResolveFun(t *testing.T) {
