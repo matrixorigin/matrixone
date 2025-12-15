@@ -22,11 +22,13 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	mobf "github.com/matrixorigin/matrixone/pkg/vectorindex/brute_force"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/stretchr/testify/require"
-
 )
 
 func TestGpu(t *testing.T) {
@@ -52,14 +54,17 @@ func TestGpu(t *testing.T) {
 	require.True(t, ok)
 
 	/*
-	for k, center := range centroids {
-		fmt.Printf("center[%d] = %v\n", k, center)
-	}
+		for k, center := range centroids {
+			fmt.Printf("center[%d] = %v\n", k, center)
+		}
 	*/
 }
 
 func TestIVFAndBruteForce(t *testing.T) {
 
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
 	dimension := uint(128)
 	ncpu := uint(1)
 	limit := uint(1)
@@ -85,9 +90,9 @@ func TestIVFAndBruteForce(t *testing.T) {
 	require.True(t, ok)
 
 	/*
-	for k, center := range centroids {
-		fmt.Printf("center[%d] = %v\n", k, center)
-	}
+		for k, center := range centroids {
+			fmt.Printf("center[%d] = %v\n", k, center)
+		}
 	*/
 
 	queries := vecs[:8192]
@@ -108,7 +113,7 @@ func TestIVFAndBruteForce(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for i := 0; i < 1000; i++ {
-				keys, distances, err := idx.Search(nil, queries, rt)
+				keys, distances, err := idx.Search(sqlproc, queries, rt)
 				require.NoError(t, err)
 
 				keys_i64, ok := keys.([]int64)

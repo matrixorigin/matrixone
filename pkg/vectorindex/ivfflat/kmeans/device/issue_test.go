@@ -216,8 +216,8 @@ func TestIvfAndBruteForceForIssue(t *testing.T) {
 	dimension := uint(128)
 	limit := uint(1)
 	/*
-	ncpu := uint(1)
-	elemsz := uint(4) // float32
+		ncpu := uint(1)
+		elemsz := uint(4) // float32
 	*/
 
 	dsize := 100000
@@ -246,13 +246,13 @@ func TestIvfAndBruteForceForIssue(t *testing.T) {
 				require.NoError(t, err)
 
 				/*
-				keys_i64, ok := keys.([]int64)
-				require.Equal(t, ok, true)
+					keys_i64, ok := keys.([]int64)
+					require.Equal(t, ok, true)
 
-				for j, key := range keys_i64 {
-					require.Equal(t, key, int64(j))
-					require.Equal(t, distances[j], float64(0))
-				}
+					for j, key := range keys_i64 {
+						require.Equal(t, key, int64(j))
+						require.Equal(t, distances[j], float64(0))
+					}
 				*/
 				// fmt.Printf("keys %v, dist %v\n", keys, distances)
 			}
