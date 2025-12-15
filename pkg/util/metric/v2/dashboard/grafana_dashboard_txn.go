@@ -20,6 +20,7 @@ import (
 
 	"github.com/K-Phoen/grabana/axis"
 	"github.com/K-Phoen/grabana/dashboard"
+	"github.com/K-Phoen/grabana/row"
 	"github.com/K-Phoen/grabana/timeseries"
 )
 
@@ -30,33 +31,32 @@ func (c *DashboardCreator) initTxnDashboard() error {
 	}
 
 	build, err := dashboard.New(
-		"Txn Metrics",
+		"Transaction Metrics",
 		c.withRowOptions(
+			// Overview and high-level metrics
 			c.initTxnOverviewRow(),
+			// Transaction lifecycle: Creation -> Execution -> Commit
 			c.initTxnDurationRow(),
-			c.initTxnCommitDurationRow(),
-			c.initTxnLockDurationRow(),
-			c.initTxnUnlockTablesRow(),
-			c.initTxnLockWaitersRow(),
 			c.initTxnStatementDurationRow(),
 			c.initTxnStatementsCountRow(),
-			c.initTxnCheckPKDupRow(),
-			c.initTxnReaderDurationRow(),
-			c.initTxnMpoolRow(),
-			c.initTxnOnPrepareWALRow(),
-			c.initTxnBeforeCommitRow(),
-			c.initTxnTNDeduplicateDurationRow(),
-			c.initTxnTNLogServiceAppendDurationRow(),
+			c.initTxnCommitDurationRow(),
+			c.initTxnTNSideRow(),
+			// Lock operations
+			c.initTxnLockDurationRow(),
+			// Data access: Range scan, Read selectivity, Reader
 			c.initTxnTableRangesRow(),
-			c.initTxnRangesSelectivityRow(),
 			c.initTxnReadSelectivityRow(),
+			c.initTxnReaderDurationRow(),
+			// Primary key operations
+			c.initTxnPKMayBeChangedRow(),
+			// Tombstone operations
 			c.initTxnTombstoneRow(),
-			c.initTxnRangesCountRow(),
+			// Resource management
+			c.initTxnMpoolRow(),
+			c.initTxnExtraWorkspaceQuota(),
+			// Special operations
 			c.initTxnShowAccountsRow(),
 			c.initCNCommittedObjectQuantityRow(),
-			c.initTombstoneTransferRow(),
-			c.initTxnExtraWorkspaceQuota(),
-			c.initTxnCheckPKChangedRow(),
 		)...)
 	if err != nil {
 		return err
@@ -67,15 +67,15 @@ func (c *DashboardCreator) initTxnDashboard() error {
 
 func (c *DashboardCreator) initCNCommittedObjectQuantityRow() dashboard.Option {
 	return dashboard.Row(
-		"Quantity of Object Location The CN Have Committed to TN",
+		"Committed Object Locations (CN to TN)",
 		c.withGraph(
-			"meta location",
+			"Meta Location",
 			6,
 			`sum(`+c.getMetricWithFilter("mo_txn_cn_committed_location_quantity_size", `type="meta_location"`)+`)`,
 			""),
 
 		c.withGraph(
-			"delta location",
+			"Delta Location",
 			6,
 			`sum(`+c.getMetricWithFilter("mo_txn_cn_committed_location_quantity_size", `type="delta_location"`)+`)`,
 			""),
@@ -83,20 +83,62 @@ func (c *DashboardCreator) initCNCommittedObjectQuantityRow() dashboard.Option {
 }
 
 func (c *DashboardCreator) initTxnTableRangesRow() dashboard.Option {
+	durationHistogram := c.getHistogram(
+		"Table Range Scan Duration",
+		c.getMetricWithFilter(`mo_txn_ranges_duration_seconds_bucket`, ``),
+		[]float64{0.50, 0.8, 0.90, 0.99},
+		4,
+		axis.Unit("s"),
+		axis.Min(0))
+
+	selectivityHistograms := c.getMultiHistogram(
+		[]string{
+			c.getMetricWithFilter(`mo_txn_ranges_selectivity_percentage_bucket`, `type="slow_path_block_selectivity"`),
+			c.getMetricWithFilter(`mo_txn_ranges_selectivity_percentage_bucket`, `type="fast_path_block_selectivity"`),
+			c.getMetricWithFilter(`mo_txn_ranges_selectivity_percentage_bucket`, `type="fast_path_obj_sort_key_zm_selectivity"`),
+			c.getMetricWithFilter(`mo_txn_ranges_selectivity_percentage_bucket`, `type="fast_path_obj_column_zm_selectivity"`),
+			c.getMetricWithFilter(`mo_txn_ranges_selectivity_percentage_bucket`, `type="fast_path_blk_column_zm_selectivity"`),
+		},
+		[]string{
+			"Slow Path (Block)",
+			"Fast Path (Block)",
+			"Fast Path (Object Sort Key Zone Map)",
+			"Fast Path (Object Column Zone Map)",
+			"Fast Path (Block Column Zone Map)",
+		},
+		[]float64{0.50, 0.8, 0.90, 0.99},
+		[]float32{3, 3, 3, 3},
+		axis.Min(0))
+
+	countHistograms := c.getMultiHistogram(
+		[]string{
+			c.getMetricWithFilter(`mo_txn_ranges_selected_block_cnt_total_bucket`, `type="slow_path_selected_block_cnt"`),
+			c.getMetricWithFilter(`mo_txn_ranges_selected_block_cnt_total_bucket`, `type="fast_path_selected_block_cnt"`),
+			c.getMetricWithFilter(`mo_txn_ranges_selected_block_cnt_total_bucket`, `type="fast_path_load_obj_cnt"`),
+			c.getMetricWithFilter(`mo_txn_ranges_selected_block_cnt_total_bucket`, `type="slow_path_load_obj_cnt"`),
+		},
+		[]string{
+			"Slow Path Selected Blocks",
+			"Fast Path Selected Blocks",
+			"Fast Path Loaded Objects",
+			"Slow Path Loaded Objects",
+		},
+		[]float64{0.50, 0.8, 0.90, 0.99},
+		[]float32{3, 3, 3, 3},
+		axis.Min(0))
+
+	options := []row.Option{durationHistogram}
+	options = append(options, selectivityHistograms...)
+	options = append(options, countHistograms...)
+
 	return dashboard.Row(
-		"Txn Table Ranges Duration",
-		c.getHistogram(
-			"Txn table ranges duration",
-			c.getMetricWithFilter(`mo_txn_ranges_duration_seconds_bucket`, ``),
-			[]float64{0.50, 0.8, 0.90, 0.99},
-			12,
-			axis.Unit("s"),
-			axis.Min(0)),
+		"Table Range Scan",
+		options...,
 	)
 }
 
 func (c *DashboardCreator) initTxnTombstoneRow() dashboard.Option {
-	rows := c.getMultiHistogram(
+	statisticsHistograms := c.getMultiHistogram(
 		[]string{
 			c.getMetricWithFilter(`mo_txn_reader_scanned_total_tombstone_bucket`, ``),
 			c.getMetricWithFilter(`mo_txn_reader_each_blk_loaded_bucket`, ``),
@@ -104,42 +146,80 @@ func (c *DashboardCreator) initTxnTombstoneRow() dashboard.Option {
 			c.getMetricWithFilter(`mo_txn_reader_tombstone_selectivity_bucket`, `type="bl_selectivity"`),
 		},
 		[]string{
-			"total_scanned_each_read",
-			"total_loaded_each_read",
-			"zm_selectivity_on_obj",
-			"bl_selectivity_on_blk",
+			"Total Scanned per Read",
+			"Total Loaded per Read",
+			"Zone Map Selectivity (Object)",
+			"Block List Selectivity (Block)",
 		},
 		[]float64{0.50, 0.8, 0.90, 0.99},
 		[]float32{3, 3, 3, 3},
 		axis.Min(0))
 
-	return dashboard.Row(
-		"Tombstone Overview",
-		rows...,
-	)
-}
+	transferTimeSeries := c.getTimeSeries(
+		"Transferred Tombstones Count",
+		[]string{fmt.Sprintf(
+			"sum (increase(%s[$interval]))",
+			c.getMetricWithFilter(`mo_txn_transfer_tombstones_count_sum`, ""),
+		)},
+		[]string{"Count"},
+		timeseries.Span(3))
 
-func (c *DashboardCreator) initTxnRangesSelectivityRow() dashboard.Option {
-	return dashboard.Row(
-		"Ranges Selectivity",
-		c.getMultiHistogram(
-			[]string{
-				c.getMetricWithFilter(`mo_txn_ranges_selectivity_percentage_bucket`, `type="slow_path_block_selectivity"`),
-				c.getMetricWithFilter(`mo_txn_ranges_selectivity_percentage_bucket`, `type="fast_path_block_selectivity"`),
-				c.getMetricWithFilter(`mo_txn_ranges_selectivity_percentage_bucket`, `type="fast_path_obj_sort_key_zm_selectivity"`),
-				c.getMetricWithFilter(`mo_txn_ranges_selectivity_percentage_bucket`, `type="fast_path_obj_column_zm_selectivity"`),
-				c.getMetricWithFilter(`mo_txn_ranges_selectivity_percentage_bucket`, `type="fast_path_blk_column_zm_selectivity"`),
-			},
-			[]string{
-				"slow_path_block_selectivity",
-				"fast_path_block_selectivity",
-				"fast_path_obj_sort_key_zm_selectivity",
-				"fast_path_obj_column_zm_selectivity",
-				"fast_path_blk_column_zm_selectivity",
-			},
+	transferHistograms := []row.Option{
+		c.getPercentHist(
+			"Tombstone Transfer Duration",
+			c.getMetricWithFilter(`mo_txn_transfer_duration_bucket`, `type="tombstones"`),
 			[]float64{0.50, 0.8, 0.90, 0.99},
-			[]float32{3, 3, 3, 3},
-			axis.Min(0))...,
+			SpanNulls(true),
+			timeseries.Span(3)),
+		c.getPercentHist(
+			"Batch Tombstone Transfer Duration",
+			c.getMetricWithFilter(`mo_txn_transfer_duration_bucket`, `type="batch"`),
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			SpanNulls(true),
+			timeseries.Span(3)),
+	}
+
+	s3CounterGraph := c.withMultiGraph(
+		"S3 Tombstone Operations",
+		3,
+		[]string{
+			`sum(rate(` + c.getMetricWithFilter("mo_txn_S3_tombstone", `type="softdelete objects"`) + `[$interval]))`,
+			`sum(rate(` + c.getMetricWithFilter("mo_txn_S3_tombstone", `type="transfer data objects"`) + `[$interval]))`,
+			`sum(rate(` + c.getMetricWithFilter("mo_txn_S3_tombstone", `type="transfer tombstones"`) + `[$interval]))`,
+		},
+		[]string{
+			"Soft Delete Objects",
+			"Transfer Data Objects",
+			"Transfer Tombstones",
+		})
+
+	s3DurationHistograms := c.getMultiHistogram(
+		[]string{
+			c.getMetricWithFilter(`mo_txn_S3_tombstone_duration_bucket`, `step="1-GetSoftdeleteObjects"`),
+			c.getMetricWithFilter(`mo_txn_S3_tombstone_duration_bucket`, `step="2-FindTombstonesOfObject"`),
+			c.getMetricWithFilter(`mo_txn_S3_tombstone_duration_bucket`, `step="3-ReadTombstone"`),
+			c.getMetricWithFilter(`mo_txn_S3_tombstone_duration_bucket`, `step="4-TransferDeleteRows"`),
+		},
+		[]string{
+			"Get Soft Delete Objects",
+			"Find Tombstones of Object",
+			"Read Tombstone",
+			"Transfer Delete Rows",
+		},
+		[]float64{0.50, 0.8, 0.90, 0.99},
+		[]float32{3, 3, 3, 3},
+		axis.Unit("s"),
+		axis.Min(0))
+
+	options := append([]row.Option{}, statisticsHistograms...)
+	options = append(options, transferTimeSeries)
+	options = append(options, transferHistograms...)
+	options = append(options, s3CounterGraph)
+	options = append(options, s3DurationHistograms...)
+
+	return dashboard.Row(
+		"Tombstone Operations",
+		options...,
 	)
 }
 
@@ -221,46 +301,56 @@ func (c *DashboardCreator) initTxnReadSelectivityRow() dashboard.Option {
 	)
 }
 
-func (c *DashboardCreator) initTxnRangesCountRow() dashboard.Option {
-	return dashboard.Row(
-		"Ranges Count",
-		c.getMultiHistogram(
-			[]string{
-				c.getMetricWithFilter(`mo_txn_ranges_selected_block_cnt_total_bucket`, `type="slow_path_selected_block_cnt"`),
-				c.getMetricWithFilter(`mo_txn_ranges_selected_block_cnt_total_bucket`, `type="fast_path_selected_block_cnt"`),
-				c.getMetricWithFilter(`mo_txn_ranges_selected_block_cnt_total_bucket`, `type="fast_path_load_obj_cnt"`),
-				c.getMetricWithFilter(`mo_txn_ranges_selected_block_cnt_total_bucket`, `type="slow_path_load_obj_cnt"`),
-			},
-			[]string{
-				"slow_path_selected_block_cnt",
-				"fast_path_selected_block_cnt",
-				"fast_path_load_obj_cnt",
-				"slow_path_load_obj_cnt",
-			},
-			[]float64{0.50, 0.8, 0.90, 0.99},
-			[]float32{3, 3, 3, 3},
-			axis.Min(0))...,
-	)
-}
+func (c *DashboardCreator) initTxnPKMayBeChangedRow() dashboard.Option {
+	histograms := c.getMultiHistogram(
+		[]string{
+			c.getMetricWithFilter(`mo_txn_lazy_load_ckp_duration_seconds_bucket`, ``),
+			c.getMetricWithFilter(`mo_txn_pk_exist_in_mem_duration_seconds_bucket`, ``),
+		},
+		[]string{
+			"Lazy Load Checkpoint",
+			"Primary Key Exist in Memory",
+		},
+		[]float64{0.50, 0.8, 0.90, 0.99},
+		[]float32{3, 3, 3, 3},
+		axis.Unit("s"),
+		axis.Min(0))
 
-func (c *DashboardCreator) initTxnCheckPKDupRow() dashboard.Option {
-	return dashboard.Row(
-		"Txn check pk dup",
+	options := []row.Option{
 		c.getHistogram(
-			"Txn check pk dup duration",
+			"Primary Key Duplicate Check Duration",
 			c.getMetricWithFilter(`mo_txn_check_pk_dup_duration_seconds_bucket`, ``),
 			[]float64{0.50, 0.8, 0.90, 0.99},
-			12,
+			6,
 			axis.Unit("s"),
 			axis.Min(0)),
-	)
-}
-
-func (c *DashboardCreator) initTxnCheckPKChangedRow() dashboard.Option {
-	return dashboard.Row(
-		"Txn check pk changed",
+		c.getHistogram(
+			"Primary Key Change Detection Duration",
+			c.getMetricWithFilter(`mo_txn_pk_may_be_changed_duration_seconds_bucket`, ``),
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			6,
+			axis.Unit("s"),
+			axis.Min(0)),
+	}
+	options = append(options, histograms...)
+	options = append(options,
 		c.withMultiGraph(
-			"Check Persisted PK",
+			"Primary Key Change Detection Paths",
+			4,
+			[]string{
+				`sum(rate(` + c.getMetricWithFilter("mo_txn_pk_may_be_changed_total", `type="total"`) + `[$interval]))`,
+				`sum(rate(` + c.getMetricWithFilter("mo_txn_pk_may_be_changed_total", `type="mem_hit"`) + `[$interval]))`,
+				`sum(rate(` + c.getMetricWithFilter("mo_txn_pk_may_be_changed_total", `type="mem_not_flushed"`) + `[$interval]))`,
+				`sum(rate(` + c.getMetricWithFilter("mo_txn_pk_may_be_changed_total", `type="persisted"`) + `[$interval]))`,
+			},
+			[]string{
+				"Total Checks",
+				"Memory Hit",
+				"Memory Not Flushed",
+				"Persisted Storage",
+			}),
+		c.withMultiGraph(
+			"Persisted Primary Key Change Check",
 			3,
 			[]string{
 				`sum(rate(` + c.getMetricWithFilter("mo_txn_pk_change_check_total", `type="total"`) + `[$interval]))`,
@@ -268,18 +358,22 @@ func (c *DashboardCreator) initTxnCheckPKChangedRow() dashboard.Option {
 				`sum(rate(` + c.getMetricWithFilter("mo_txn_pk_change_check_total", `type="io"`) + `[$interval]))`,
 			},
 			[]string{
-				"total",
-				"changed",
-				"io",
-			}),
+				"Total Checks",
+				"Changed Keys",
+				"I/O Operations",
+			}))
+
+	return dashboard.Row(
+		"Primary Key Operations",
+		options...,
 	)
 }
 
 func (c *DashboardCreator) initTxnOverviewRow() dashboard.Option {
 	return dashboard.Row(
-		"Txn overview",
+		"Transaction Overview",
 		c.withMultiGraph(
-			"Txn requests",
+			"Transaction Requests",
 			3,
 			[]string{
 				`sum(rate(` + c.getMetricWithFilter("mo_txn_total", `type="user"`) + `[$interval]))`,
@@ -295,21 +389,21 @@ func (c *DashboardCreator) initTxnOverviewRow() dashboard.Option {
 				`sum(rate(` + c.getMetricWithFilter("mo_txn_lock_total", `type="remote"`) + `[$interval]))`,
 			},
 			[]string{
-				"user-txn",
-				"internal-txn",
-				"leak",
-				"long-running",
-				"stuck-in-commit",
-				"stuck-in-rollback",
-				"statement",
-				"statement-retry",
-				"lock",
-				"local-lock",
-				"remote-lock",
+				"User Transaction",
+				"Internal Transaction",
+				"Leaked Transaction",
+				"Long Running Transaction",
+				"Stuck in Commit",
+				"Stuck in Rollback",
+				"Statement",
+				"Statement Retry",
+				"Lock Operations",
+				"Local Lock",
+				"Remote Lock",
 			}),
 
 		c.withMultiGraph(
-			"Commit requests",
+			"Commit Operations",
 			3,
 			[]string{
 				`sum(rate(` + c.getMetricWithFilter("mo_txn_commit_total", `type="cn"`) + `[$interval]))`,
@@ -317,13 +411,13 @@ func (c *DashboardCreator) initTxnOverviewRow() dashboard.Option {
 				`sum(rate(` + c.getMetricWithFilter("mo_txn_commit_total", `type="tn-handle"`) + `[$interval]))`,
 			},
 			[]string{
-				"cn",
-				"tn-receive",
-				"tn-handle",
+				"CN Side",
+				"TN Receive",
+				"TN Handle",
 			}),
 
 		c.withMultiGraph(
-			"Rollback requests",
+			"Rollback Operations",
 			3,
 			[]string{
 				`sum(rate(` + c.getMetricWithFilter("mo_txn_rollback_total", "") + `[$interval])) by (` + c.by + `)`,
@@ -331,13 +425,13 @@ func (c *DashboardCreator) initTxnOverviewRow() dashboard.Option {
 				`sum(rate(` + c.getMetricWithFilter("mo_txn_user_rollback_total", "") + `[$interval])) by (` + c.by + `)`,
 			},
 			[]string{
-				"rollback",
-				"rollback-last-statement",
-				"user-rollback",
+				"Total Rollback",
+				"Rollback Last Statement",
+				"User Rollback",
 			}),
 
 		c.withMultiGraph(
-			"Txn Queue Status",
+			"Transaction Queue Status",
 			3,
 			[]string{
 				`sum(` + c.getMetricWithFilter("mo_txn_queue_size", `type="active"`) + `)`,
@@ -346,17 +440,17 @@ func (c *DashboardCreator) initTxnOverviewRow() dashboard.Option {
 				`sum(` + c.getMetricWithFilter("mo_txn_queue_size", `type="lock-rpc"`) + `)`,
 			},
 			[]string{
-				"active",
-				"wait-active",
-				"commit",
-				"lock-rpc",
+				"Active Queue",
+				"Wait Active Queue",
+				"Commit Queue",
+				"Lock RPC Queue",
 			}),
 	)
 }
 
 func (c *DashboardCreator) initTxnDurationRow() dashboard.Option {
 	return dashboard.Row(
-		"Txn create duration",
+		"Transaction Creation",
 		c.getMultiHistogram(
 			[]string{
 				c.getMetricWithFilter(`mo_txn_life_duration_seconds_bucket`, ``),
@@ -365,10 +459,10 @@ func (c *DashboardCreator) initTxnDurationRow() dashboard.Option {
 				c.getMetricWithFilter(`mo_txn_create_duration_seconds_bucket`, `type="determine-snapshot"`),
 			},
 			[]string{
-				"life",
-				"create",
-				"wait-active",
-				"determine-snapshot",
+				"Transaction Lifecycle",
+				"Total Creation Time",
+				"Wait for Active Transaction",
+				"Determine Snapshot",
 			},
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			[]float32{3, 3, 3, 3},
@@ -379,7 +473,7 @@ func (c *DashboardCreator) initTxnDurationRow() dashboard.Option {
 
 func (c *DashboardCreator) initTxnCommitDurationRow() dashboard.Option {
 	return dashboard.Row(
-		"Txn CN commit duration",
+		"Transaction Commit (CN Side)",
 		c.getMultiHistogram(
 			[]string{
 				c.getMetricWithFilter("mo_txn_commit_duration_seconds_bucket", `type="cn"`),
@@ -389,11 +483,11 @@ func (c *DashboardCreator) initTxnCommitDurationRow() dashboard.Option {
 				c.getMetricWithFilter(`mo_txn_commit_duration_seconds_bucket`, `type="tn"`),
 			},
 			[]string{
-				"total",
-				"send",
-				"response",
-				"logtail-applied",
-				"tn",
+				"Total Commit Time",
+				"Send Commit Request",
+				"Receive Commit Response",
+				"Wait for Logtail Applied",
+				"TN Side Processing",
 			},
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			[]float32{3, 3, 3, 3},
@@ -402,81 +496,70 @@ func (c *DashboardCreator) initTxnCommitDurationRow() dashboard.Option {
 	)
 }
 
-func (c *DashboardCreator) initTxnOnPrepareWALRow() dashboard.Option {
-	return dashboard.Row(
-		"txn on prepare wal duration",
-		c.getMultiHistogram(
-			[]string{
-				c.getMetricWithFilter("mo_txn_tn_side_duration_seconds_bucket", `step="1-PreparingWait"`),
-				c.getMetricWithFilter("mo_txn_tn_side_duration_seconds_bucket", `step="2-Preparing"`),
-				c.getMetricWithFilter("mo_txn_tn_side_duration_seconds_bucket", `step="3-PrepareWalWait"`),
-				c.getMetricWithFilter("mo_txn_tn_side_duration_seconds_bucket", `step="4-PrepareWal"`),
-				c.getMetricWithFilter("mo_txn_tn_side_duration_seconds_bucket", `step="5-PreparedWait"`),
-				c.getMetricWithFilter("mo_txn_tn_side_duration_seconds_bucket", `step="6-Prepared"`),
-			},
-			[]string{
-				"1-PreparingWait",
-				"2-Preparing",
-				"3-PrepareWalWait",
-				"4-PrepareWal",
-				"5-PreparedWait",
-				"6-Prepared",
-			},
-			[]float64{0.80, 0.90, 0.95, 0.99},
-			[]float32{3, 3, 3, 3},
-			axis.Unit("s"),
-			axis.Min(0))...,
-	)
-}
+func (c *DashboardCreator) initTxnTNSideRow() dashboard.Option {
+	prepareWALHistograms := c.getMultiHistogram(
+		[]string{
+			c.getMetricWithFilter("mo_txn_tn_side_duration_seconds_bucket", `step="1-PreparingWait"`),
+			c.getMetricWithFilter("mo_txn_tn_side_duration_seconds_bucket", `step="2-Preparing"`),
+			c.getMetricWithFilter("mo_txn_tn_side_duration_seconds_bucket", `step="3-PrepareWalWait"`),
+			c.getMetricWithFilter("mo_txn_tn_side_duration_seconds_bucket", `step="4-PrepareWal"`),
+			c.getMetricWithFilter("mo_txn_tn_side_duration_seconds_bucket", `step="5-PreparedWait"`),
+			c.getMetricWithFilter("mo_txn_tn_side_duration_seconds_bucket", `step="6-Prepared"`),
+		},
+		[]string{
+			"Preparing Wait",
+			"Preparing",
+			"Prepare WAL Wait",
+			"Prepare WAL",
+			"Prepared Wait",
+			"Prepared",
+		},
+		[]float64{0.80, 0.90, 0.95, 0.99},
+		[]float32{3, 3, 3, 3},
+		axis.Unit("s"),
+		axis.Min(0))
 
-func (c *DashboardCreator) initTxnTNDeduplicateDurationRow() dashboard.Option {
-	return dashboard.Row(
-		"Txn TN Deduplication Duration",
-		c.getMultiHistogram(
-			[]string{
-				c.getMetricWithFilter("mo_txn_tn_deduplicate_duration_seconds_bucket", `type="append_deduplicate"`),
-				c.getMetricWithFilter("mo_txn_tn_deduplicate_duration_seconds_bucket", `type="prePrepare_deduplicate"`),
-			},
-			[]string{
-				"append_deduplicate",
-				"prePrepare_deduplicate",
-			},
-			[]float64{0.80, 0.90, 0.95, 0.99},
-			[]float32{3, 3, 3, 3},
-			axis.Unit("s"),
-			axis.Min(0))...,
-	)
-}
+	deduplicateHistograms := c.getMultiHistogram(
+		[]string{
+			c.getMetricWithFilter("mo_txn_tn_deduplicate_duration_seconds_bucket", `type="append_deduplicate"`),
+			c.getMetricWithFilter("mo_txn_tn_deduplicate_duration_seconds_bucket", `type="prePrepare_deduplicate"`),
+		},
+		[]string{
+			"Append Deduplicate",
+			"Pre-Prepare Deduplicate",
+		},
+		[]float64{0.80, 0.90, 0.95, 0.99},
+		[]float32{3, 3, 3, 3},
+		axis.Unit("s"),
+		axis.Min(0))
 
-func (c *DashboardCreator) initTxnTNLogServiceAppendDurationRow() dashboard.Option {
-	return dashboard.Row(
-		"Txn TN LogService Append Duration",
+	options := append([]row.Option{}, prepareWALHistograms...)
+	options = append(options, deduplicateHistograms...)
+	options = append(options,
 		c.getHistogram(
-			"Txn TN LogService Append Duration",
+			"LogService Append Duration",
 			c.getMetricWithFilter("mo_txn_tn_logservice_append_duration_seconds_bucket", ``),
 			[]float64{0.50, 0.90, 0.99},
-			12,
+			4,
 			axis.Unit("s"),
 			axis.Min(0)),
-	)
-}
-
-func (c *DashboardCreator) initTxnBeforeCommitRow() dashboard.Option {
-	return dashboard.Row(
-		"txn handle commit but before txn.commit duration",
 		c.getHistogram(
-			"txn handle commit but before txn.commit duration",
+			"Handle Commit Before Transaction Commit",
 			c.getMetricWithFilter("mo_txn_tn_side_duration_seconds_bucket", `step="before_txn_commit"`),
 			[]float64{0.50, 0.8, 0.90, 0.99},
-			12,
+			4,
 			axis.Unit("s"),
-			axis.Min(0)),
+			axis.Min(0)))
+
+	return dashboard.Row(
+		"Transaction Processing (TN Side)",
+		options...,
 	)
 }
 
 func (c *DashboardCreator) initTxnStatementDurationRow() dashboard.Option {
 	return dashboard.Row(
-		"Txn statement duration",
+		"Statement Execution",
 		c.getMultiHistogram(
 			[]string{
 				c.getMetricWithFilter(`mo_txn_statement_duration_seconds_bucket`, `type="execute"`),
@@ -506,31 +589,31 @@ func (c *DashboardCreator) initTxnStatementDurationRow() dashboard.Option {
 				c.getMetricWithFilter(`mo_txn_statement_duration_seconds_bucket`, `type="BuildLoad"`),
 			},
 			[]string{
-				"execute",
-				"execute-latency",
-				"build-plan",
-				"compile",
-				"scan",
-				"external-scan",
-				"insert-s3",
-				"stats",
-				"resolve",
-				"resolve-udf",
-				"update-stats",
-				"update-info-from-zonemap",
-				"update-stats-info-map",
-				"nodes",
-				"compileScope",
-				"compileQuery",
-				"compilePlanScope",
-				"BuildPlan",
-				"BuildSelect",
-				"BuildInsert",
-				"BuildExplain",
-				"BuildReplace",
-				"BuildUpdate",
-				"BuildDelete",
-				"BuildLoad",
+				"Execute",
+				"Execute Latency",
+				"Build Plan",
+				"Compile",
+				"Scan",
+				"External Scan",
+				"Insert to S3",
+				"Statistics",
+				"Resolve",
+				"Resolve UDF",
+				"Update Statistics",
+				"Update Info from Zone Map",
+				"Update Stats Info Map",
+				"Nodes",
+				"Compile Scope",
+				"Compile Query",
+				"Compile Plan Scope",
+				"Build Plan",
+				"Build Select",
+				"Build Insert",
+				"Build Explain",
+				"Build Replace",
+				"Build Update",
+				"Build Delete",
+				"Build Load",
 			},
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			[]float32{3, 3, 3, 3},
@@ -541,13 +624,13 @@ func (c *DashboardCreator) initTxnStatementDurationRow() dashboard.Option {
 
 func (c *DashboardCreator) initTxnStatementsCountRow() dashboard.Option {
 	return dashboard.Row(
-		"Txn statements count",
+		"Statements per Transaction",
 		c.getMultiHistogram(
 			[]string{
 				c.getMetricWithFilter(`mo_txn_life_statements_total_bucket`, ``),
 			},
 			[]string{
-				"statements/txn",
+				"Statements per Transaction",
 			},
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			[]float32{3, 3, 3, 3})...,
@@ -556,7 +639,7 @@ func (c *DashboardCreator) initTxnStatementsCountRow() dashboard.Option {
 
 func (c *DashboardCreator) initTxnShowAccountsRow() dashboard.Option {
 	return dashboard.Row(
-		"Show Accounts Duration",
+		"Show Accounts",
 		c.getHistogram(
 			"Show Accounts Duration",
 			c.getMetricWithFilter(`mo_txn_show_accounts_duration_seconds_bucket`, ``),
@@ -568,58 +651,60 @@ func (c *DashboardCreator) initTxnShowAccountsRow() dashboard.Option {
 }
 
 func (c *DashboardCreator) initTxnLockDurationRow() dashboard.Option {
-	return dashboard.Row(
-		"Txn lock duration",
-		c.getMultiHistogram(
-			[]string{
-				c.getMetricWithFilter(`mo_txn_lock_duration_seconds_bucket`, `type="acquire"`),
-				c.getMetricWithFilter(`mo_txn_lock_duration_seconds_bucket`, `type="acquire-wait"`),
-				c.getMetricWithFilter(`mo_txn_unlock_duration_seconds_bucket`, `type="total"`),
-				c.getMetricWithFilter(`mo_txn_unlock_duration_seconds_bucket`, `type="btree-get-lock"`),
-				c.getMetricWithFilter(`mo_txn_unlock_duration_seconds_bucket`, `type="btree-total"`),
-				c.getMetricWithFilter(`mo_txn_unlock_duration_seconds_bucket`, `type="worker-handle"`),
-			},
-			[]string{
-				"lock-total",
-				"lock-wait",
-				"unlock-total",
-				"unlock-btree-get-lock",
-				"unlock-btree-total",
-				"worker-handle",
-			},
-			[]float64{0.50, 0.8, 0.90, 0.99},
-			[]float32{3, 3, 3, 3},
-			axis.Unit("s"),
-			axis.Min(0))...,
-	)
-}
+	lockDurationHistograms := c.getMultiHistogram(
+		[]string{
+			c.getMetricWithFilter(`mo_txn_lock_duration_seconds_bucket`, `type="acquire"`),
+			c.getMetricWithFilter(`mo_txn_lock_duration_seconds_bucket`, `type="acquire-wait"`),
+			c.getMetricWithFilter(`mo_txn_unlock_duration_seconds_bucket`, `type="total"`),
+			c.getMetricWithFilter(`mo_txn_unlock_duration_seconds_bucket`, `type="btree-get-lock"`),
+			c.getMetricWithFilter(`mo_txn_unlock_duration_seconds_bucket`, `type="btree-total"`),
+			c.getMetricWithFilter(`mo_txn_unlock_duration_seconds_bucket`, `type="worker-handle"`),
+		},
+		[]string{
+			"Acquire Lock",
+			"Acquire Lock Wait",
+			"Unlock Total",
+			"Unlock BTree Get Lock",
+			"Unlock BTree Total",
+			"Worker Handle",
+		},
+		[]float64{0.50, 0.8, 0.90, 0.99},
+		[]float32{3, 3, 3, 3},
+		axis.Unit("s"),
+		axis.Min(0))
 
-func (c *DashboardCreator) initTxnLockWaitersRow() dashboard.Option {
+	lockStatsHistograms := c.getMultiHistogram(
+		[]string{
+			c.getMetricWithFilter(`mo_txn_lock_waiters_total_bucket`, ``),
+			c.getMetricWithFilter(`mo_txn_unlock_table_total_bucket`, ``),
+		},
+		[]string{
+			"Number of Waiters per Lock",
+			"Number of Tables per Unlock",
+		},
+		[]float64{0.50, 0.8, 0.90, 0.99},
+		[]float32{3, 3, 3, 3})
+
+	options := append([]row.Option{}, lockDurationHistograms...)
+	options = append(options, lockStatsHistograms...)
+
 	return dashboard.Row(
-		"Txn lock waiters",
-		c.getMultiHistogram(
-			[]string{
-				c.getMetricWithFilter(`mo_txn_lock_waiters_total_bucket`, ``),
-			},
-			[]string{
-				"waiters",
-			},
-			[]float64{0.50, 0.8, 0.90, 0.99},
-			[]float32{3, 3, 3, 3})...,
+		"Lock Operations",
+		options...,
 	)
 }
 
 func (c *DashboardCreator) initTxnMpoolRow() dashboard.Option {
 	return dashboard.Row(
-		"Txn MPool",
+		"Memory Pool Operations",
 		c.getMultiHistogram(
 			[]string{
 				c.getMetricWithFilter(`mo_txn_mpool_duration_seconds_bucket`, `type="new"`),
 				c.getMetricWithFilter(`mo_txn_mpool_duration_seconds_bucket`, `type="delete"`),
 			},
 			[]string{
-				"new",
-				"delete",
+				"Allocate",
+				"Deallocate",
 			},
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			[]float32{3, 3, 3, 3},
@@ -628,24 +713,9 @@ func (c *DashboardCreator) initTxnMpoolRow() dashboard.Option {
 	)
 }
 
-func (c *DashboardCreator) initTxnUnlockTablesRow() dashboard.Option {
-	return dashboard.Row(
-		"Txn unlock tables",
-		c.getMultiHistogram(
-			[]string{
-				c.getMetricWithFilter(`mo_txn_unlock_table_total_bucket`, ``),
-			},
-			[]string{
-				"tables",
-			},
-			[]float64{0.50, 0.8, 0.90, 0.99},
-			[]float32{3, 3, 3, 3})...,
-	)
-}
-
 func (c *DashboardCreator) initTxnReaderDurationRow() dashboard.Option {
 	return dashboard.Row(
-		"Txn reader duration",
+		"Data Reader",
 		c.getMultiHistogram(
 			[]string{
 				c.getMetricWithFilter(`mo_txn_reader_duration_seconds_bucket`, `type="block-reader"`),
@@ -653,43 +723,14 @@ func (c *DashboardCreator) initTxnReaderDurationRow() dashboard.Option {
 				c.getMetricWithFilter(`mo_txn_reader_duration_seconds_bucket`, `type="block-merge-reader"`),
 			},
 			[]string{
-				"block-reader",
-				"merge-reader",
-				"block-merge-reader",
+				"Block Reader",
+				"Merge Reader",
+				"Block Merge Reader",
 			},
 			[]float64{0.80, 0.90, 0.95, 0.99},
 			[]float32{3, 3, 3, 3},
 			axis.Unit("s"),
 			axis.Min(0))...,
-	)
-}
-
-func (c *DashboardCreator) initTombstoneTransferRow() dashboard.Option {
-	return dashboard.Row(
-		"Tombstone transfer duration",
-		c.getTimeSeries(
-			"Transfer tombstones count",
-			[]string{fmt.Sprintf(
-				"sum (increase(%s[$interval]))",
-				c.getMetricWithFilter(`mo_txn_transfer_tombstones_count_sum`, ""),
-			)},
-			[]string{"count"},
-			timeseries.Span(4),
-		),
-		c.getPercentHist(
-			"Transfer tombstone duration",
-			c.getMetricWithFilter(`mo_txn_transfer_duration_bucket`, `type="tombstones"`),
-			[]float64{0.50, 0.8, 0.90, 0.99},
-			SpanNulls(true),
-			timeseries.Span(4),
-		),
-		c.getPercentHist(
-			"Batch transfer tombstone duration",
-			c.getMetricWithFilter(`mo_txn_transfer_duration_bucket`, `type="batch"`),
-			[]float64{0.50, 0.8, 0.90, 0.99},
-			SpanNulls(true),
-			timeseries.Span(4),
-		),
 	)
 }
 

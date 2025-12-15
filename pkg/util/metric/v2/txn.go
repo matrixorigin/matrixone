@@ -101,6 +101,18 @@ var (
 	TxnPKChangeCheckTotalCounter   = txnPKChangeCheckCounter.WithLabelValues("total")
 	TxnPKChangeCheckChangedCounter = txnPKChangeCheckCounter.WithLabelValues("changed")
 	TxnPKChangeCheckIOCounter      = txnPKChangeCheckCounter.WithLabelValues("io")
+
+	txnPKMayBeChangedCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "pk_may_be_changed_total",
+			Help:      "Total number of pk may be changed check.",
+		}, []string{"type"})
+	TxnPKMayBeChangedTotalCounter         = txnPKMayBeChangedCounter.WithLabelValues("total")
+	TxnPKMayBeChangedMemHitCounter        = txnPKMayBeChangedCounter.WithLabelValues("mem_hit")
+	TxnPKMayBeChangedMemNotFlushedCounter = txnPKMayBeChangedCounter.WithLabelValues("mem_not_flushed")
+	TxnPKMayBeChangedPersistedCounter     = txnPKMayBeChangedCounter.WithLabelValues("persisted")
 )
 
 var (
@@ -265,6 +277,33 @@ var (
 			Subsystem: "txn",
 			Name:      "check_pk_dup_duration_seconds",
 			Help:      "Bucketed histogram of txn check pk dup duration.",
+			Buckets:   getDurationBuckets(),
+		})
+
+	TxnPKMayBeChangedDurationHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "pk_may_be_changed_duration_seconds",
+			Help:      "Bucketed histogram of txn pk may be changed check duration.",
+			Buckets:   getDurationBuckets(),
+		})
+
+	TxnLazyLoadCkpDurationHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "lazy_load_ckp_duration_seconds",
+			Help:      "Bucketed histogram of txn lazy load checkpoint duration.",
+			Buckets:   getDurationBuckets(),
+		})
+
+	TxnPKExistInMemDurationHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "pk_exist_in_mem_duration_seconds",
+			Help:      "Bucketed histogram of txn pk exist in memory check duration.",
 			Buckets:   getDurationBuckets(),
 		})
 
