@@ -1560,6 +1560,15 @@ var (
 			input:  "create role 'admin', 'developer'",
 			output: "create role admin, developer",
 		}, {
+			input:  "alter role old_role rename to new_role",
+			output: "alter role old_role rename to new_role",
+		}, {
+			input:  "alter role if exists old_role rename to new_role",
+			output: "alter role if exists old_role rename to new_role",
+		}, {
+			input:  "alter role 'old_role' rename to 'new_role'",
+			output: "alter role old_role rename to new_role",
+		}, {
 			input:  "create index idx1 on a (a) KEY_BLOCK_SIZE 10 with parser x comment 'x' invisible",
 			output: "create index idx1 on a (a) KEY_BLOCK_SIZE 10 with parser x comment x invisible",
 		}, {
@@ -1919,6 +1928,13 @@ var (
 			input: "drop role if exists role1",
 		}, {
 			input: "drop role role1",
+		}, {
+			input: "alter role role1 rename to role2",
+		}, {
+			input: "alter role if exists role1 rename to role2",
+		}, {
+			input:  "alter role 'role1' rename to 'role2'",
+			output: "alter role role1 rename to role2",
 		}, {
 			input: "grant all, all(a, b), create(a, b), select(a, b), super(a, b, c) on table db.a to u1, u2 with grant option",
 		}, {
