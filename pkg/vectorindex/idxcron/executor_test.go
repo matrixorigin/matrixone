@@ -45,6 +45,8 @@ type TestTask struct {
 	nlists    int64
 	ts        types.Timestamp
 	createdAt types.Timestamp
+	hour      int
+	skipped   bool
 	expected  bool
 }
 
@@ -61,6 +63,8 @@ func getTestCases(t *testing.T) []TestTask {
 			nlists:    int64(1000),
 			ts:        types.UnixToTimestamp(0),
 			createdAt: types.UnixToTimestamp(time.Now().Unix()),
+			hour:      3,
+			skipped:   false,
 			expected:  false,
 		},
 
@@ -74,6 +78,8 @@ func getTestCases(t *testing.T) []TestTask {
 			nlists:    int64(1000),
 			ts:        types.UnixToTimestamp(0),
 			createdAt: types.UnixToTimestamp(time.Now().Unix()),
+			hour:      3,
+			skipped:   false,
 			expected:  false,
 		},
 
@@ -86,6 +92,8 @@ func getTestCases(t *testing.T) []TestTask {
 			nlists:    int64(1000),
 			ts:        types.UnixToTimestamp(0),
 			createdAt: types.UnixToTimestamp(time.Now().Add(-4 * OneWeek).Unix()),
+			hour:      3,
+			skipped:   false,
 			expected:  true,
 		},
 
@@ -97,6 +105,8 @@ func getTestCases(t *testing.T) []TestTask {
 			dsize:    uint64(1000000),
 			nlists:   int64(1000),
 			ts:       types.UnixToTimestamp(0),
+			hour:     3,
+			skipped:  false,
 			expected: true,
 		},
 
@@ -113,6 +123,8 @@ func getTestCases(t *testing.T) []TestTask {
 				unixts := now.Add(-2 * OneWeek).Unix()
 				return types.UnixToTimestamp(unixts)
 			}(),
+			hour:     3,
+			skipped:  false,
 			expected: true,
 		},
 
@@ -129,6 +141,8 @@ func getTestCases(t *testing.T) []TestTask {
 				unixts := now.Add(-time.Hour).Unix()
 				return types.UnixToTimestamp(unixts)
 			}(),
+			hour:     3,
+			skipped:  false,
 			expected: false,
 		},
 
@@ -145,6 +159,8 @@ func getTestCases(t *testing.T) []TestTask {
 				unixts := now.Add(-1 * time.Hour).Unix()
 				return types.UnixToTimestamp(unixts)
 			}(),
+			hour:     3,
+			skipped:  false,
 			expected: false,
 		},
 
@@ -161,6 +177,8 @@ func getTestCases(t *testing.T) []TestTask {
 				unixts := now.Add(-2 * OneWeek).Unix()
 				return types.UnixToTimestamp(unixts)
 			}(),
+			hour:     3,
+			skipped:  false,
 			expected: true,
 		},
 		{
@@ -173,6 +191,22 @@ func getTestCases(t *testing.T) []TestTask {
 				unixts := now.Add(-2 * OneWeek).Unix()
 				return types.UnixToTimestamp(unixts)
 			}(),
+			hour:     3,
+			skipped:  false,
+			expected: true,
+		},
+		{
+			jstr:      "",
+			dsize:     uint64(10000000),
+			nlists:    int64(1000),
+			createdAt: types.UnixToTimestamp(time.Now().Add(-4 * OneWeek).Unix()),
+			ts: func() types.Timestamp {
+				now := time.Now()
+				unixts := now.Add(-2 * OneWeek).Unix()
+				return types.UnixToTimestamp(unixts)
+			}(),
+			hour:     4, // wrong hour
+			skipped:  true,
 			expected: true,
 		},
 	}
@@ -248,7 +282,7 @@ func newTestIvfTableDef(pkName string, pkType types.T, vecColName string, vecTyp
 				IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Metadata,
 				IndexTableName:     "meta_tbl",
 				Parts:              []string{vecColName},
-				IndexAlgoParams:    `{"lists":"1000","op_type":"vector_l2_ops", "auto_update":"true"}`,
+				IndexAlgoParams:    `{"lists":"1000","op_type":"vector_l2_ops", "auto_update":"true", "day":"7", "hour":"3"}`,
 			},
 			{
 				IndexName:          "ivf_idx",
@@ -257,7 +291,7 @@ func newTestIvfTableDef(pkName string, pkType types.T, vecColName string, vecTyp
 				IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Centroids,
 				IndexTableName:     "centriods",
 				Parts:              []string{vecColName},
-				IndexAlgoParams:    `{"lists":"1000","op_type":"vector_l2_ops", "auto_update":"true"}`,
+				IndexAlgoParams:    `{"lists":"1000","op_type":"vector_l2_ops", "auto_update":"true", "day":"7", "hour":"3"}`,
 			},
 			{
 				IndexName:          "ivf_idx",
@@ -266,7 +300,7 @@ func newTestIvfTableDef(pkName string, pkType types.T, vecColName string, vecTyp
 				IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
 				IndexTableName:     "entries",
 				Parts:              []string{vecColName},
-				IndexAlgoParams:    `{"lists":"1000","op_type":"vector_l2_ops", "auto_update":"true"}`,
+				IndexAlgoParams:    `{"lists":"1000","op_type":"vector_l2_ops", "auto_update":"true", "day":"7", "hour":"3"}`,
 			},
 		},
 	}
@@ -354,10 +388,86 @@ func TestIvfflatReindex(t *testing.T) {
 			})
 			defer stub3.Reset()
 
-			updated, reason, err := runIvfflatReindex(ctx, cnEngine, cnClient, cnUUID, &info, 0)
+			updated, reason, err := runIvfflatReindex(ctx, cnEngine, cnClient, cnUUID, &info, ta.hour)
 			fmt.Printf("updated = %v, reason = %s\n", updated, reason)
 			require.NoError(t, err)
-			require.Equal(t, ta.expected, updated)
+			require.Equal(t, ta.expected && !ta.skipped, updated)
+
+		}()
+	}
+}
+
+func TestIvfflatReindexAutoUpdateOff(t *testing.T) {
+
+	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, catalog.System_Account)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	mp := mpool.MustNewZero()
+
+	catalog.SetupDefines("")
+	cnEngine, cnClient, _ := testengine.New(ctx)
+	cnUUID := "a-b-c-d"
+	tableid := uint64(1)
+	dbname := "test"
+	tablename := "test_orig_tbl"
+	indexname := "ivf_idx"
+
+	stub1 := gostub.Stub(&getTableDef, func(sqlproc *sqlexec.SqlProcess, txnEngine engine.Engine, dbname string, tablename string) (tableDef *plan.TableDef, err error) {
+		tbldef := newTestIvfTableDef("a", types.T_int64, "b", types.T_array_float32, 3)
+
+		// reset auto_update = false
+		for _, idxdef := range tbldef.Indexes {
+			idxdef.IndexAlgoParams = `{"lists":"1000","op_type":"vector_l2_ops", "auto_update":"false"}`
+		}
+		return tbldef, nil
+	})
+	defer stub1.Reset()
+
+	tasks := getTestCases(t)
+	for _, ta := range tasks {
+
+		func() {
+			var err error
+
+			m := (*sqlexec.Metadata)(nil)
+			if len(ta.jstr) > 0 {
+				m, err = sqlexec.NewMetadataFromJson(ta.jstr)
+				require.Nil(t, err)
+			}
+
+			info := IndexUpdateTaskInfo{
+				DbName:       dbname,
+				TableName:    tablename,
+				IndexName:    indexname,
+				Action:       Action_Ivfflat_Reindex,
+				AccountId:    catalog.System_Account,
+				TableId:      tableid,
+				Metadata:     m,
+				LastUpdateAt: &ta.ts,
+				CreatedAt:    ta.createdAt,
+			}
+
+			stub2 := gostub.Stub(&runGetCountSql, func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+				bat := batch.NewWithSize(1)
+				bat.Vecs[0] = vector.NewVec(types.New(types.T_uint64, 8, 0))
+				vector.AppendFixed[uint64](bat.Vecs[0], ta.dsize, false, mp)
+				bat.SetRowCount(1)
+				return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}, nil
+
+			})
+			defer stub2.Reset()
+
+			stub3 := gostub.Stub(&runReindexSql, func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+				return executor.Result{}, nil
+			})
+			defer stub3.Reset()
+
+			updated, reason, err := runIvfflatReindex(ctx, cnEngine, cnClient, cnUUID, &info, ta.hour)
+			fmt.Printf("updated = %v, reason = %s\n", updated, reason)
+			require.NoError(t, err)
+			require.Equal(t, false, updated)
+			require.Equal(t, Reason_Skipped, reason)
 
 		}()
 	}
