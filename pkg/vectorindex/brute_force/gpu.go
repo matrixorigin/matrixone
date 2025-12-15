@@ -41,16 +41,7 @@ type GpuBruteForceIndex[T cuvs.TensorNumberType] struct {
 
 var _ cache.VectorIndexSearchIf = &GpuBruteForceIndex[float32]{}
 
-func NewBruteForceIndex[T types.RealNumbers](dataset [][]T,
-	dimension uint,
-	m metric.MetricType,
-	elemsz uint) (cache.VectorIndexSearchIf, error) {
-
-	return NewCpuBruteForceIndex[T](dataset, dimension, m, elemsz)
-}
-
 // cuvs library has bug.  comment out the GPU version until cuvs fix the bug
-/*
 func NewBruteForceIndex[T types.RealNumbers](dataset [][]T,
 	dimension uint,
 	m metric.MetricType,
@@ -60,28 +51,35 @@ func NewBruteForceIndex[T types.RealNumbers](dataset [][]T,
 	case [][]float64:
 		return NewCpuBruteForceIndex[T](dataset, dimension, m, elemsz)
 	case [][]float32:
-		idx := &GpuBruteForceIndex[float32]{}
-
-		resource, _ := cuvs.NewResource(nil)
-		idx.Resource = &resource
-
-		tensor, err := cuvs.NewTensor(dset)
-		if err != nil {
-			return nil, err
-		}
-		idx.Dataset = &tensor
-
-		idx.Metric = metric.MetricTypeToCuvsMetric[m]
-		idx.Dimension = dimension
-		idx.Count = uint(len(dataset))
-		idx.ElementSize = elemsz
-		return idx, nil
+		return NewCpuBruteForceIndex[float32](dset, dimension, m, elemsz)
+		//return NewGpuBruteForceIndex[float32](dset, dimension, m, elemsz)
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("type not supported for BruteForceIndex")
 	}
 
 }
-*/
+
+func NewGpuBruteForceIndex[T cuvs.TensorNumberType](dataset [][]T,
+	dimension uint,
+	m metric.MetricType,
+	elemsz uint) (cache.VectorIndexSearchIf, error) {
+
+	idx := &GpuBruteForceIndex[T]{}
+	resource, _ := cuvs.NewResource(nil)
+	idx.Resource = &resource
+	tensor, err := cuvs.NewTensor(dataset)
+	if err != nil {
+		return nil, err
+	}
+	idx.Dataset = &tensor
+	idx.Metric = metric.MetricTypeToCuvsMetric[m]
+	idx.Dimension = dimension
+	idx.Count = uint(len(dataset))
+
+	idx.ElementSize = elemsz
+	return idx, nil
+
+}
 
 func (idx *GpuBruteForceIndex[T]) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 	if _, err = idx.Dataset.ToDevice(idx.Resource); err != nil {
