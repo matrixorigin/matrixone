@@ -115,6 +115,10 @@ func GetUpstreamDDLUsingGetDdl(
 
 		dbNameStr := dbNameResult.String
 		tableNameStr := tableNameResult.String
+		
+		if isIndexTable(tableNameStr) {
+			continue
+		}
 
 		// Initialize inner map if needed
 		if ddlMap[dbNameStr] == nil {

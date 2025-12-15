@@ -963,10 +963,6 @@ func ExecuteIteration(
 		}
 	}()
 
-	if err = ProcessDDLChanges(ctx, cnEngine, iterationCtx); err != nil {
-		err = moerr.NewInternalErrorf(ctx, "failed to process DDL changes: %v", err)
-		return
-	}
 
 	// 1.1 请求上游snapshot (includes 1.1.2 请求上游的snapshot ts)
 	if err = RequestUpstreamSnapshot(ctx, iterationCtx); err != nil {
@@ -974,6 +970,11 @@ func ExecuteIteration(
 		return
 	}
 
+	// TODO: 找到做snapshot的table，获取objectlist snapshot, 需要当前snapshot
+	if err = ProcessDDLChanges(ctx, cnEngine, iterationCtx); err != nil {
+		err = moerr.NewInternalErrorf(ctx, "failed to process DDL changes: %v", err)
+		return
+	}
 	// Step 2: 计算snapshot diff获取object list
 	objectListResult, err = GetObjectListFromSnapshotDiff(ctx, iterationCtx)
 	if err != nil {
