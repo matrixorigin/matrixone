@@ -291,8 +291,9 @@ func (rb *remoteBackend) adjust() {
 	rb.logger = logutil.Adjust(rb.logger).With(zap.String("remote", rb.remote),
 		zap.String("backend-id", uid.String()))
 	rb.options.goettyOptions = append(rb.options.goettyOptions,
-		goetty.WithSessionCodec(rb.codec),
-		goetty.WithSessionLogger(rb.logger))
+		goetty.WithSessionCodec(rb.codec))
+	// Don't pass logger to goetty to avoid noisy error logs from goetty library
+	// (e.g., "close connection failed" which is expected during normal connection lifecycle)
 }
 
 func (rb *remoteBackend) Send(ctx context.Context, request Message) (*Future, error) {
