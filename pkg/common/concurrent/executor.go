@@ -45,10 +45,7 @@ func (e ThreadPoolExecutor) Execute(
 		go func(thread_id int) {
 			defer wg.Done()
 
-			for j := 0; j < nitems; j++ {
-				if j%e.nthreads != thread_id {
-					continue
-				}
+			for j := thread_id; j < nitems; j += e.nthreads {
 
 				if ctx.Err() != nil {
 					// context is cancelled or deadline exceeded
