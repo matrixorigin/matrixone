@@ -17,6 +17,7 @@ package vector
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"slices"
 	"sort"
 	"time"
@@ -202,8 +203,34 @@ func (v *Vector) GetType() *types.Type {
 	return &v.typ
 }
 
+// Bug #23240
+// This is very dangerous.   We changed vector type
+// but did not change the underlying data.   So the length
+// and capacity are all messed up.
 func (v *Vector) SetType(typ types.Type) {
 	v.typ = typ
+}
+
+// Bug #23240
+// Neither this function, nor the SetType function are good
+// Maybe we should just disallow.
+func (v *Vector) SetTypeAndFixData(typ types.Type, mp *mpool.MPool) {
+	if v.typ.IsVarlen() && typ.IsVarlen() {
+		v.typ = typ
+		return
+	}
+
+	if v.typ.IsVarlen() || typ.IsVarlen() {
+		// this is a weird thing to do, we should not allow it.
+		panic("SetTypeAndFixData is not allowed to change from/to varlen type")
+	}
+
+	v.typ = typ
+	oldLength := v.length
+	v.length = 0
+	v.capacity = cap(v.data) / v.typ.TypeSize()
+	extend(v, oldLength, mp)
+	v.length = oldLength
 }
 
 func (v *Vector) SetOffHeap(offHeap bool) {
@@ -817,6 +844,61 @@ func (v *Vector) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
 
 	v.sorted = types.DecodeBool(data[:1])
 	//data = data[1:]
+
+	return nil
+}
+
+func (v *Vector) UnmarshalWithReader(r io.Reader, mp *mpool.MPool) error {
+	var err error
+
+	if v.class, err = types.ReadByteAsInt(r); err != nil {
+		return err
+	}
+
+	if v.typ, err = types.ReadType(r); err != nil {
+		return err
+	}
+
+	if v.length, err = types.ReadInt32AsInt(r); err != nil {
+		return err
+	}
+
+	// read data
+	dataLen, dataBuf, err := types.ReadSizeBytesMp(r, v.data, mp, v.offHeap)
+	if err != nil {
+		return err
+	}
+	if dataLen > 0 {
+		v.data = dataBuf
+		v.setupFromData()
+	}
+
+	// read area
+	areaLen, areaBuf, err := types.ReadSizeBytesMp(r, v.area, mp, v.offHeap)
+	if err != nil {
+		return err
+	}
+	if areaLen > 0 {
+		v.area = areaBuf
+	}
+
+	// read nsp, do not use mpool.  nspBuf is different because
+	// it is not managed by vector.  In the following, it will
+	// be unmarshalled into v.nsp
+	nspLen, nspBuf, err := types.ReadSizeBytes(r)
+	if err != nil {
+		return err
+	}
+	if nspLen > 0 {
+		v.nsp.Read(nspBuf)
+	} else {
+		v.nsp.Reset()
+	}
+
+	v.sorted, err = types.ReadBool(r)
+	if err != nil {
+		return err
+	}
 
 	return nil
 }

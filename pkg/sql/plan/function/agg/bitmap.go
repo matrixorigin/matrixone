@@ -58,6 +58,7 @@ func (a *aggBitmapGroupContext) Marshal() []byte {
 	b, _ := a.bmp.ToBytes()
 	return b
 }
+func (a *aggBitmapGroupContext) MarshalBinary() ([]byte, error) { return a.Marshal(), nil }
 func (a *aggBitmapGroupContext) Unmarshal(bs []byte) {
 	a.bmp = roaring.New()
 	_ = a.bmp.UnmarshalBinary(bs)

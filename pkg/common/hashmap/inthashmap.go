@@ -19,7 +19,7 @@ import (
 	"io"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -30,9 +30,9 @@ func init() {
 	zeroUint32 = make([]uint32, UnitLimit)
 }
 
-func NewIntHashMap(hasNull bool) (*IntHashMap, error) {
+func NewIntHashMap(hasNull bool, memPool *mpool.MPool) (*IntHashMap, error) {
 	mp := &hashtable.Int64HashMap{}
-	if err := mp.Init(nil); err != nil {
+	if err := mp.Init(memPool); err != nil {
 		return nil, err
 	}
 	return &IntHashMap{
@@ -301,9 +301,9 @@ func (m *IntHashMap) MarshalBinary() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func (m *IntHashMap) UnmarshalBinary(data []byte, allocator malloc.Allocator) error {
+func (m *IntHashMap) UnmarshalBinary(data []byte, mp *mpool.MPool) error {
 	r := bytes.NewReader(data)
-	_, err := m.UnmarshalFrom(r, allocator)
+	_, err := m.UnmarshalFrom(r, mp)
 	return err
 }
 
@@ -340,7 +340,7 @@ func (m *IntHashMap) WriteTo(w io.Writer) (int64, error) {
 	return n, nil
 }
 
-func (m *IntHashMap) UnmarshalFrom(r io.Reader, allocator malloc.Allocator) (int64, error) {
+func (m *IntHashMap) UnmarshalFrom(r io.Reader, mp *mpool.MPool) (int64, error) {
 	var n int64
 
 	// Deserialize hasNull
@@ -362,11 +362,15 @@ func (m *IntHashMap) UnmarshalFrom(r io.Reader, allocator malloc.Allocator) (int
 
 	// Deserialize the underlying Int64HashMap
 	m.hashMap = &hashtable.Int64HashMap{}
-	subn, err := m.hashMap.UnmarshalFrom(r, allocator)
+	subn, err := m.hashMap.UnmarshalFrom(r, mp)
 	if err != nil {
 		return 0, err
 	}
 	n += subn
 
 	return n, nil
+}
+
+func (m *IntHashMap) AllGroupHash() []uint64 {
+	return m.hashMap.AllGroupHash()
 }

@@ -20,5 +20,5 @@ type Allocator interface {
 
 type Deallocator interface {
 	TraitHolder
-	Deallocate(hint Hints)
+	Deallocate()
 }

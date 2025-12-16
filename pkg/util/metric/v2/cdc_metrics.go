@@ -149,13 +149,16 @@ var (
 
 // CDC Watermark Metrics
 var (
-	// CdcWatermarkUpdateCounter tracks watermark updates
+	// CdcWatermarkUpdateCounter tracks watermark updates to memory cache
+	// This counts calls to UpdateWatermarkOnly(), which buffers watermarks in memory.
+	// Watermarks are persisted to database in batches every 3 seconds (not per call).
+	// Note: This is NOT the database commit count - use CdcWatermarkCommitBatchCounter for that.
 	CdcWatermarkUpdateCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "mo",
 			Subsystem: "cdc",
 			Name:      "watermark_update_total",
-			Help:      "Total number of watermark updates",
+			Help:      "Total number of watermark updates to memory cache (buffered, not yet persisted to database)",
 		}, []string{"table", "update_type"}) // update_type: commit, heartbeat
 
 	// CdcWatermarkLagSeconds tracks watermark lag (current time - watermark time)
@@ -168,33 +171,54 @@ var (
 		}, []string{"table"})
 
 	// CdcWatermarkLagRatio tracks the ratio of actual lag to expected lag
-	// Value < 2: normal, 2-5: warning, > 5: critical
+	// Baseline: 3 seconds (realistic for batch processing delays and network latency)
+	// Value < 2: normal (lag < 6s), 2-5: warning (lag 6-15s), > 5: critical (lag > 15s)
 	// This metric is frequency-agnostic and suitable for unified alerting
 	CdcWatermarkLagRatio = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "mo",
 			Subsystem: "cdc",
 			Name:      "watermark_lag_ratio",
-			Help:      "Ratio of actual watermark lag to expected lag (based on task frequency)",
+			Help:      "Ratio of actual watermark lag to expected lag (baseline: 3s, normal < 2, warning 2-5, critical > 5)",
 		}, []string{"table"})
 
+	// CdcWatermarkCommitBatchCounter tracks actual database commit batches
+	// This counts successful batch commits to the database (one batch per execBatchUpdateWM() call).
+	// Each batch may contain multiple watermark keys. Batches occur every ~3 seconds via cronJob.
+	CdcWatermarkCommitBatchCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "cdc",
+			Name:      "watermark_commit_batch_total",
+			Help:      "Total number of batch commits to database (each batch may contain multiple watermark keys)",
+		})
+
 	// CdcWatermarkCommitDuration tracks watermark commit duration
+	// This measures the time to execute the batch UPDATE SQL statement that persists
+	// watermarks from cacheCommitting to the database (mo_cdc_watermark table).
+	// This is the actual database transaction duration.
 	CdcWatermarkCommitDuration = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "mo",
 			Subsystem: "cdc",
 			Name:      "watermark_commit_duration_seconds",
-			Help:      "Duration of watermark commit to database",
+			Help:      "Duration of batch UPDATE SQL execution to persist watermarks to database (database transaction duration)",
 			Buckets:   prometheus.ExponentialBuckets(0.0001, 2, 15), // 0.1ms to 1.6s
 		})
 
 	// CdcWatermarkCacheGauge tracks watermark cache sizes
+	// Three-tier cache architecture:
+	// - uncommitted: Watermarks buffered in memory by UpdateWatermarkOnly(), not yet persisted
+	// - committing: Watermarks being persisted to database (transitional state during batch commit)
+	// - committed: Watermarks successfully persisted to database (synced with mo_cdc_watermark table)
+	// Note: Each watermark key (account_id.task_id.db_name.table_name) appears once per tier.
+	// Normally uncommitted > 0 while watermarks are buffered, and committed contains all persisted keys.
 	CdcWatermarkCacheGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "mo",
 			Subsystem: "cdc",
 			Name:      "watermark_cache_size",
-			Help:      "Number of watermarks in each cache tier",
+			Help:      "Number of watermarks in each cache tier (uncommitted: buffered in memory, committing: being persisted, committed: persisted to database)",
 		}, []string{"tier"}) // tier: uncommitted, committing, committed
 
 	// CdcWatermarkCommitErrorCounter tracks commit failures by reason
@@ -311,6 +335,26 @@ var (
 			Name:      "table_snapshot_no_progress_total",
 			Help:      "Number of times a table round observed snapshot timestamp not advancing",
 		}, []string{"table"})
+
+	// CdcTableNonRetryableErrorGauge tracks tables with non-retryable errors
+	// Value: 1 = has non-retryable error, 0 = no error or error cleared
+	// Labels: table (account_id.task_id.db_name.table_name), error_type (extracted from error message)
+	CdcTableNonRetryableErrorGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "cdc",
+			Name:      "table_non_retryable_error",
+			Help:      "Tables with non-retryable errors (1=has error, 0=no error)",
+		}, []string{"table", "error_type"})
+
+	// CdcTableNonRetryableErrorTotalGauge tracks total count of tables with non-retryable errors
+	CdcTableNonRetryableErrorTotalGauge = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "cdc",
+			Name:      "table_non_retryable_error_total",
+			Help:      "Total number of tables with non-retryable errors",
+		})
 )
 
 // CDC Initial Sync Metrics
@@ -428,6 +472,7 @@ func initCDCMetrics() {
 
 	// Watermark metrics
 	registry.MustRegister(CdcWatermarkUpdateCounter)
+	registry.MustRegister(CdcWatermarkCommitBatchCounter)
 	registry.MustRegister(CdcWatermarkLagSeconds)
 	registry.MustRegister(CdcWatermarkLagRatio)
 	registry.MustRegister(CdcWatermarkCommitDuration)
@@ -448,6 +493,8 @@ func initCDCMetrics() {
 	registry.MustRegister(CdcTableStuckGauge)
 	registry.MustRegister(CdcTableLastActivityTimestamp)
 	registry.MustRegister(CdcTableNoProgressCounter)
+	registry.MustRegister(CdcTableNonRetryableErrorGauge)
+	registry.MustRegister(CdcTableNonRetryableErrorTotalGauge)
 
 	// Initial sync metrics
 	registry.MustRegister(CdcInitialSyncStatusGauge)

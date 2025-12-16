@@ -30,8 +30,8 @@ func (a *ClosureDeallocator[T, P]) SetArgument(arg T) {
 	a.argument = arg
 }
 
-func (a *ClosureDeallocator[T, P]) Deallocate(hints Hints) {
-	a.fn(hints, &a.argument)
+func (a *ClosureDeallocator[T, P]) Deallocate() {
+	a.fn(NoHints, &a.argument)
 }
 
 func (a *ClosureDeallocator[T, P]) As(target Trait) bool {

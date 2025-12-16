@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	pbpipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -39,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -621,18 +619,20 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 		return err
 	}
 
-	average := float64(s.DataSource.node.Stats.BlockNum / s.NodeInfo.CNCNT)
-	if commited.DataCnt() < int(average*0.8) ||
-		commited.DataCnt() > int(average*1.2) {
-		logutil.Warnf(
-			"workload table %v maybe not balanced! stats blocks %v, cncnt %v cnidx %v average %v , get %v blocks",
-			s.DataSource.TableDef.Name,
-			s.DataSource.node.Stats.BlockNum,
-			s.NodeInfo.CNCNT,
-			s.NodeInfo.CNIDX,
-			average,
-			commited.DataCnt())
-	}
+	// TODO: the below warning is not useful, we should replace it with a more useful warning.
+	//       temporarily disable it.
+	// average := float64(s.DataSource.node.Stats.BlockNum / s.NodeInfo.CNCNT)
+	// if commited.DataCnt() < int(average*0.8) ||
+	// 	commited.DataCnt() > int(average*1.2) {
+	// 	logutil.Warnf(
+	// 		"workload table %v maybe not balanced! stats blocks %v, cncnt %v cnidx %v average %v , get %v blocks",
+	// 		s.DataSource.TableDef.Name,
+	// 		s.DataSource.node.Stats.BlockNum,
+	// 		s.NodeInfo.CNCNT,
+	// 		s.NodeInfo.CNIDX,
+	// 		average,
+	// 		commited.DataCnt())
+	// }
 
 	//collect uncommited data if it's local cn
 	if !s.IsRemote {
@@ -1002,11 +1002,11 @@ func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context
 }
 
 // find scan->group->mergegroup
-func findMergeGroup(op vm.Operator) *mergegroup.MergeGroup {
+func findMergeGroup(op vm.Operator) *group.MergeGroup {
 	if op == nil {
 		return nil
 	}
-	if mergeGroup, ok := op.(*mergegroup.MergeGroup); ok {
+	if mergeGroup, ok := op.(*group.MergeGroup); ok {
 		child := op.GetOperatorBase().GetChildren(0)
 		if _, ok = child.(*group.Group); ok {
 			child = child.GetOperatorBase().GetChildren(0)

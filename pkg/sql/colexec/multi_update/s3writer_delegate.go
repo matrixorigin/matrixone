@@ -785,7 +785,7 @@ func (writer *s3WriterDelegate) addBatchToOutput(
 	}
 
 	var val []byte
-	val, err = bat.MarshalBinaryWithBuffer(&writer.buf)
+	val, err = bat.MarshalBinaryWithBuffer(&writer.buf, true)
 	if err != nil {
 		return
 	}

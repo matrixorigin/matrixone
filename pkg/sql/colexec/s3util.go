@@ -370,9 +370,9 @@ func SortByKey(
 		}
 	}
 	rowCount := int64(bat.RowCount())
-	sels := proc.GetMPool().GetSels()
+	sels := vector.GetSels()
 	defer func() {
-		proc.GetMPool().PutSels(sels)
+		vector.PutSels(sels)
 	}()
 	for i := int64(0); i < rowCount; i++ {
 		sels = append(sels, i)

@@ -16,9 +16,10 @@ package process
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 
 	"github.com/hayageek/threadsafe"
 
@@ -233,6 +234,12 @@ func (proc *Process) ResetCloneTxnOperator() {
 func (proc *Process) Free() {
 	if proc == nil {
 		return
+	}
+
+	// reset message board to avoid memory leak
+	if proc.Base.messageBoard != nil {
+		proc.Base.messageBoard.Reset()
+		proc.Base.messageBoard = nil
 	}
 }
 
