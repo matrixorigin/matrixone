@@ -193,7 +193,7 @@ func Test_L2Distance(t *testing.T) {
 				v1: []float64{4, 1},
 				v2: []float64{1, 4},
 			},
-			want: 4.242640687119286,
+			want: 4.242640687119285,
 		},
 		{
 			name: "Test 3.c",
