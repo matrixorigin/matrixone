@@ -654,6 +654,16 @@ func (s *TableChangeStream) cleanup(ctx context.Context) {
 		detector.cdcStateManager.RemoveActiveRunner(s.tableInfo)
 	}
 
+	// Clean up table-level metrics to prevent stale metrics after task deletion
+	// This ensures metrics are removed even if watermark cache was already cleared
+	if s.progressTracker != nil {
+		tableLabel := s.progressTracker.tableKey()
+		v2.CdcTableLastActivityTimestamp.DeleteLabelValues(tableLabel)
+		v2.CdcTableStuckGauge.DeleteLabelValues(tableLabel)
+		// Note: Other metrics like CdcWatermarkLagSeconds are cleaned up by watermark_updater
+		// orphan cleanup logic, but we clean up table-specific metrics here for completeness
+	}
+
 	logutil.Debug(
 		"cdc.table_stream.end",
 		zap.String("table", s.tableInfo.String()),
@@ -1145,11 +1155,30 @@ func (s *TableChangeStream) processWithTxn(
 	}
 
 	toTs := types.TimestampToTS(GetSnapshotTS(txnOp))
+	tsCapped := false
 	if !s.endTs.IsEmpty() && toTs.GT(&s.endTs) {
 		toTs = s.endTs
+		tsCapped = true
 	}
 
+	// Consolidated debug log for time range (avoid excessive INFO logging in hot path)
+	logutil.Debug(
+		"cdc.table_stream.time_range",
+		zap.String("table", s.tableInfo.String()),
+		zap.String("from-ts", fromTs.ToString()),
+		zap.String("to-ts", toTs.ToString()),
+		zap.String("end-ts", s.endTs.ToString()),
+		zap.Bool("ts-capped", tsCapped),
+	)
+
 	if !toTs.GT(&fromTs) {
+		logutil.Info(
+			"cdc.table_stream.no_progress_detected",
+			zap.String("table", s.tableInfo.String()),
+			zap.String("from-ts", fromTs.ToString()),
+			zap.String("to-ts", toTs.ToString()),
+			zap.Bool("to-ts-gt-from-ts", toTs.GT(&fromTs)),
+		)
 		return s.handleSnapshotNoProgress(ctx, fromTs, toTs)
 	}
 
@@ -1179,7 +1208,7 @@ func (s *TableChangeStream) processWithTxn(
 		zap.String("table", s.tableInfo.String()),
 		zap.String("from-ts", fromTs.ToString()),
 		zap.String("to-ts", toTs.ToString()),
-		zap.Duration("collect-duration", time.Since(start)),
+		zap.Duration("duration", time.Since(start)),
 	)
 
 	// Create change collector
@@ -1345,7 +1374,7 @@ func (s *TableChangeStream) processWithTxn(
 			s.progressTracker.RecordTransaction()
 			s.onWatermarkAdvanced()
 
-			logutil.Debug(
+			logutil.Info(
 				"cdc.table_stream.round_complete",
 				zap.String("task-id", s.taskId),
 				zap.String("table", s.tableInfo.String()),
