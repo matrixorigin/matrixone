@@ -573,12 +573,12 @@ func (mp *MPool) freePtr(detailk string, ptr unsafe.Pointer) {
 	simpleCAllocator().Deallocate(unsafe.Slice((*byte)(ptr), sz), uint64(sz))
 }
 
-func (mp *MPool) reAllocWithDetailK(detailk string, old []byte, sz int, offHeap bool) ([]byte, error) {
-	if sz <= cap(old) {
+func (mp *MPool) reAllocWithDetailK(detailk string, old []byte, sz int64, offHeap bool) ([]byte, error) {
+	if sz <= int64(cap(old)) {
 		return old[:sz], nil
 	}
 
-	newSz := calculateNewCap(cap(old), sz)
+	newSz := calculateNewCap(int64(cap(old)), sz)
 	ret, err := mp.allocWithDetailK(detailk, int64(newSz), offHeap)
 	if err != nil {
 		return nil, err
@@ -590,7 +590,7 @@ func (mp *MPool) reAllocWithDetailK(detailk string, old []byte, sz int, offHeap 
 
 func (mp *MPool) Grow(old []byte, sz int, offHeap bool) ([]byte, error) {
 	detailk := mp.getDetailK()
-	return mp.reAllocWithDetailK(detailk, old, sz, offHeap)
+	return mp.reAllocWithDetailK(detailk, old, int64(sz), offHeap)
 }
 
 func (mp *MPool) Grow2(old []byte, old2 []byte, sz int, offHeap bool) ([]byte, error) {
@@ -600,7 +600,7 @@ func (mp *MPool) Grow2(old []byte, old2 []byte, sz int, offHeap bool) ([]byte, e
 		return nil, moerr.NewInternalErrorNoCtxf("mpool grow2 actually shrinks, %d+%d, %d", len1, len2, sz)
 	}
 	detailk := mp.getDetailK()
-	ret, err := mp.reAllocWithDetailK(detailk, old, sz, offHeap)
+	ret, err := mp.reAllocWithDetailK(detailk, old, int64(sz), offHeap)
 	if err != nil {
 		return nil, err
 	}
@@ -612,7 +612,7 @@ func (mp *MPool) Grow2(old []byte, old2 []byte, sz int, offHeap bool) ([]byte, e
 func (mp *MPool) Realloc(old []byte, sz int, offHeap bool) ([]byte, error) {
 	detailk := mp.getDetailK()
 	if !offHeap {
-		return mp.reAllocWithDetailK(detailk, old, sz, offHeap)
+		return mp.reAllocWithDetailK(detailk, old, int64(sz), offHeap)
 	}
 
 	oldsz := cap(old)
@@ -756,24 +756,24 @@ func gRemovePtr(ptr unsafe.Pointer) (memHdr, bool) {
 }
 
 // alignUp rounds n up to a multiple of a. a must be a power of 2.
-func alignUp(n, a int) int {
+func alignUp(n, a int64) int64 {
 	return (n + a - 1) &^ (a - 1)
 }
 
 // divRoundUp returns ceil(n / a).
-func divRoundUp(n, a int) int {
+func divRoundUp(n, a int64) int64 {
 	// a is generally a power of two. This will get inlined and
 	// the compiler will optimize the division.
 	return (n + a - 1) / a
 }
 
 // Returns size of the memory block that mallocgc will allocate if you ask for the size.
-func roundupsize(size int) int {
+func roundupsize(size int64) int64 {
 	if size < _MaxSmallSize {
 		if size <= smallSizeMax-8 {
-			return int(class_to_size[size_to_class8[divRoundUp(size, smallSizeDiv)]])
+			return int64(class_to_size[size_to_class8[divRoundUp(size, smallSizeDiv)]])
 		} else {
-			return int(class_to_size[size_to_class128[divRoundUp(size-smallSizeMax, largeSizeDiv)]])
+			return int64(class_to_size[size_to_class128[divRoundUp(size-smallSizeMax, largeSizeDiv)]])
 		}
 	}
 	if size+_PageSize < size {
@@ -783,7 +783,7 @@ func roundupsize(size int) int {
 }
 
 // copy-paste from go slice grow strategy.
-func calculateNewCap(oldCap int, requiredSize int) int {
+func calculateNewCap(oldCap int64, requiredSize int64) int64 {
 	newcap := oldCap
 	doublecap := newcap + newcap
 	if requiredSize > doublecap {
@@ -803,8 +803,8 @@ func calculateNewCap(oldCap int, requiredSize int) int {
 		}
 	}
 	newcap = roundupsize(newcap)
-	if newcap > CapLimit && requiredSize <= CapLimit {
-		newcap = CapLimit
+	if newcap > int64(CapLimit) && requiredSize <= int64(CapLimit) {
+		newcap = int64(CapLimit)
 	}
 	return newcap
 }

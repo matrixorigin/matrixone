@@ -193,6 +193,12 @@ func MustVarlenaRawData(v *Vector) (data []types.Varlena, area []byte) {
 
 // XXX extend will extend the vector's Data to accommodate rows more entry.
 func extend(v *Vector, rows int, m *mpool.MPool) error {
+	if rows <= 0 {
+		// we will at least extent by 1.
+		// This is a pure hack to
+		rows = 1
+	}
+
 	if tgtCap := v.length + rows; tgtCap > v.capacity {
 		sz := v.typ.TypeSize()
 		ndata, err := m.Grow(v.data, tgtCap*sz, v.offHeap)

@@ -47,7 +47,7 @@ func TestMPool(t *testing.T) {
 		a[0] = 0xF0
 		require.True(t, a[1] == 0, "allocation result not zeroed.")
 		a[i*10-1] = 0xBA
-		a, err = m.reAllocWithDetailK(m.getDetailK(), a, i*20, true)
+		a, err = m.reAllocWithDetailK(m.getDetailK(), a, int64(i*20), true)
 		require.True(t, err == nil, "realloc failure %v", err)
 		require.True(t, len(a) == i*20, "allocation i size error")
 		require.True(t, a[0] == 0xF0, "reallocation not copied")
@@ -125,12 +125,12 @@ func TestMpoolReAllocate(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(cap(d1)), m.CurrNB())
 
-	d2, err := m.reAllocWithDetailK(m.getDetailK(), d1, cap(d1)-1, true)
+	d2, err := m.reAllocWithDetailK(m.getDetailK(), d1, int64(cap(d1)-1), true)
 	require.NoError(t, err)
 	require.Equal(t, cap(d1), cap(d2))
 	require.Equal(t, int64(cap(d1)), m.CurrNB())
 
-	d3, err := m.reAllocWithDetailK(m.getDetailK(), d2, cap(d2)+1025, true)
+	d3, err := m.reAllocWithDetailK(m.getDetailK(), d2, int64(cap(d2)+1025), true)
 	require.NoError(t, err)
 	require.Equal(t, int64(cap(d3)), m.CurrNB())
 

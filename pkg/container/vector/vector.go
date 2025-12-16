@@ -3286,7 +3286,8 @@ func appendMultiFixed[T any](vec *Vector, val T, isNull bool, cnt int, mp *mpool
 	vec.length += cnt
 	if isNull {
 		nulls.AddRange(&vec.nsp, uint64(length), uint64(length+cnt))
-	} else {
+	} else if cnt > 0 {
+		// XXX check cnt > 0 to avoid issue #23295
 		var col []T
 		ToSlice(vec, &col)
 		for i := 0; i < cnt; i++ {
