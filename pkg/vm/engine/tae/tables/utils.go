@@ -95,7 +95,7 @@ func LoadPersistedColumnDatas(
 		if colIdx == objectio.SEQNUM_COMMITTS {
 			cols = append(cols, objectio.SEQNUM_COMMITTS)
 			typs = append(typs, objectio.TSType)
-			committsIdx = i
+			committsIdx = len(cols) - 1
 			assignedCommitts = true
 			continue
 		}

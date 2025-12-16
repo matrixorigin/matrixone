@@ -88,3 +88,34 @@ create table test_pub01.pub_table01 clone db8.vector_index_01 {snapshot = 'sp1'}
 drop database db8;
 drop account acc2;
 drop snapshot sp1;
+
+-- case: chain reference
+drop database if exists db9;
+create database db9;
+
+create table db9.t4(id int primary key);
+create table db9.t3(id int primary key, t4_id int, foreign key (t4_id) references db9.t4(id));
+create table db9.t2(id int primary key, t3_id int, foreign key (t3_id) references db9.t3(id));
+create table db9.t1(id int primary key, t2_id int, foreign key (t2_id) references db9.t2(id));
+
+insert into db9.t4 values(1),(2);
+insert into db9.t3 values(1,1),(2,2);
+insert into db9.t2 values(1,1),(2,2);
+insert into db9.t1 values(1,1),(2,2);
+
+create database db10 clone db9;
+
+select * from db10.t1;
+select * from db10.t2;
+select * from db10.t3;
+select * from db10.t4;
+
+insert into db10.t4 values(3);
+insert into db10.t3 values(3,3);
+insert into db10.t2 values(3,3);
+insert into db10.t1 values(3,3);
+
+select count(*) from db10.t1;
+
+drop database db9;
+drop database db10;
