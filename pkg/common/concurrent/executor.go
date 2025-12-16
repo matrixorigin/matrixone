@@ -16,9 +16,9 @@ package concurrent
 
 import (
 	"context"
-	"errors"
 	"runtime"
-	"sync"
+
+	"golang.org/x/sync/errgroup"
 )
 
 type ThreadPoolExecutor struct {
@@ -35,41 +35,31 @@ func NewThreadPoolExecutor(nthreads int) ThreadPoolExecutor {
 func (e ThreadPoolExecutor) Execute(
 	ctx context.Context,
 	nitems int,
-	fn func(ctx context.Context, thread_id int, item_id int) error) (err error) {
+	fn func(ctx context.Context, thread_id int, start, end int) error) (err error) {
 
-	var wg sync.WaitGroup
-	errs := make(chan error, e.nthreads)
-
+	g, ctx := errgroup.WithContext(ctx)
+	chunksz := (nitems + e.nthreads - 1) / e.nthreads
 	for i := 0; i < e.nthreads; i++ {
-		wg.Add(1)
-		go func(thread_id int) {
-			defer wg.Done()
 
-			for j := thread_id; j < nitems; j += e.nthreads {
+		start := i * chunksz
+		if start >= nitems {
+			break
+		}
 
-				if ctx.Err() != nil {
-					// context is cancelled or deadline exceeded
-					errs <- ctx.Err()
-					return
-				}
+		end := start + chunksz
+		if end > nitems {
+			end = nitems
+		}
 
-				err2 := fn(ctx, thread_id, j)
-				if err2 != nil {
-					errs <- err2
-					return
-				}
+		thread_id := i
+		g.Go(func() error {
+			if err2 := fn(ctx, thread_id, start, end); err2 != nil {
+				return err2
 			}
 
-		}(i)
+			return nil
+		})
 	}
 
-	wg.Wait()
-
-	if len(errs) > 0 {
-		for i := 0; i < len(errs); i++ {
-			err = errors.Join(err, <-errs)
-		}
-	}
-	return
-
+	return g.Wait()
 }

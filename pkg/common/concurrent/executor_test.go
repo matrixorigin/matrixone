@@ -36,8 +36,15 @@ func TestExecutor(t *testing.T) {
 
 	r := make([]int, nthreads)
 
-	err := e.Execute(ctx, len(vec), func(ctx context.Context, thread_id int, id int) error {
-		r[thread_id] += vec[id]
+	err := e.Execute(ctx, len(vec), func(ctx context.Context, thread_id int, start, end int) error {
+		subSlice := vec[start:end]
+		for j := range subSlice {
+			if j%100 == 0 && ctx.Err() != nil {
+				return ctx.Err()
+			}
+
+			r[thread_id] += subSlice[j]
+		}
 		return nil
 	})
 

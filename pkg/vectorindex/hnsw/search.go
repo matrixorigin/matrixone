@@ -97,15 +97,21 @@ func (s *HnswSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt vec
 	exec := concurrent.NewThreadPoolExecutor(nthread)
 	err = exec.Execute(sqlproc.GetContext(),
 		len(s.Indexes),
-		func(ctx context.Context, thread_id int, idx_id int) (err2 error) {
-			idx := s.Indexes[idx_id]
-			keys, distances, err2 := idx.Search(query, limit)
-			if err2 != nil {
-				return err2
-			}
+		func(ctx context.Context, thread_id int, start, end int) (err2 error) {
+			subindex := s.Indexes[start:end]
+			for j := range subindex {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
 
-			for k := range keys {
-				heap.Push(&vectorindex.SearchResult{Id: int64(keys[k]), Distance: float64(distances[k])})
+				keys, distances, err2 := subindex[j].Search(query, limit)
+				if err2 != nil {
+					return err2
+				}
+
+				for k := range keys {
+					heap.Push(&vectorindex.SearchResult{Id: int64(keys[k]), Distance: float64(distances[k])})
+				}
 			}
 			return
 		})

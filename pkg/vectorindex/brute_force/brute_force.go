@@ -210,20 +210,31 @@ func (idx *GoBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, 
 	ndataset := len(idx.Dataset)
 
 	// create distance matric
-	results := make([]vectorindex.SearchResult, nqueries*ndataset)
+	results := make([][]vectorindex.SearchResult, nqueries)
+	for i := range results {
+		results[i] = make([]vectorindex.SearchResult, ndataset)
+	}
 
 	exec := concurrent.NewThreadPoolExecutor(int(nthreads))
 	err = exec.Execute(
 		proc.GetContext(),
 		nqueries,
-		func(ctx context.Context, thread_id int, query_id int) (err2 error) {
-			for j := 0; j < ndataset; j++ {
-				dist, err2 := distfn(queries[query_id], idx.Dataset[j])
-				if err2 != nil {
-					return err2
+		func(ctx context.Context, thread_id int, start, end int) (err2 error) {
+			subqueries := queries[start:end]
+			subresults := results[start:end]
+			for k, q := range subqueries {
+				if k%100 == 0 && ctx.Err() != nil {
+					return ctx.Err()
 				}
-				results[query_id*ndataset+j].Id = int64(j)
-				results[query_id*ndataset+j].Distance = float64(dist)
+
+				for j := range idx.Dataset {
+					dist, err2 := distfn(q, idx.Dataset[j])
+					if err2 != nil {
+						return err2
+					}
+					subresults[k][j].Id = int64(j)
+					subresults[k][j].Distance = float64(dist)
+				}
 			}
 			return
 		})
@@ -247,16 +258,23 @@ func (idx *GoBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, 
 	err = exec.Execute(
 		proc.GetContext(),
 		nqueries,
-		func(ctx context.Context, thread_id int, query_id int) (err2 error) {
-			if rt.Limit == 1 {
-				// min
-				first := slices.MinFunc(results[query_id*ndataset:(query_id+1)*ndataset], cmpfn)
-				results[query_id*ndataset] = first
+		func(ctx context.Context, thread_id int, start, end int) (err2 error) {
+			subresults := results[start:end]
+			for j := range subresults {
+				if j%100 == 0 && ctx.Err() != nil {
+					return ctx.Err()
+				}
 
-			} else {
-				// partial sort
-				partial.SortFunc(results[query_id*ndataset:(query_id+1)*ndataset], int(rt.Limit), cmpfn)
+				if rt.Limit == 1 {
+					// min
+					first := slices.MinFunc(subresults[j], cmpfn)
+					subresults[j][0] = first
 
+				} else {
+					// partial sort
+					partial.SortFunc(subresults[j], int(rt.Limit), cmpfn)
+
+				}
 			}
 			return
 		})
@@ -266,8 +284,8 @@ func (idx *GoBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, 
 
 	for i := 0; i < nqueries; i++ {
 		for j := 0; j < int(rt.Limit); j++ {
-			keys64[i*int(rt.Limit)+j] = results[i*ndataset+j].Id
-			distances[i*int(rt.Limit)+j] = results[i*ndataset+j].Distance
+			keys64[i*int(rt.Limit)+j] = results[i][j].Id
+			distances[i*int(rt.Limit)+j] = results[i][j].Distance
 		}
 	}
 
