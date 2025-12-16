@@ -17,6 +17,8 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"slices"
@@ -186,7 +188,12 @@ var openNewFile = func(ctx context.Context, ep *ExportConfig, mrs *MysqlResultSe
 	ep.AsyncGroup, _ = errgroup.WithContext(ctx)
 	ep.AsyncGroup.Go(asyncWriteFunc)
 
-	if ep.userConfig.Header {
+	// Only write CSV header for CSV format (not for jsonline or parquet)
+	exportFormat := ep.userConfig.ExportFormat
+	if exportFormat == "" {
+		exportFormat = "csv"
+	}
+	if ep.userConfig.Header && exportFormat == "csv" {
 		var header string
 		n := len(mrs.Columns)
 		if n == 0 {
@@ -828,11 +835,21 @@ func (ec *ExportConfig) Write(execCtx *ExecCtx, crs *perfcounter.CounterSet, bat
 	if err != nil {
 		return err
 	}
-	go constructByte(execCtx.reqCtx, execCtx.ses, copied, ec.Index.Load(), ec.ByteChan, ec)
+
+	// Choose the appropriate constructor based on export format
+	switch ec.getExportFormat() {
+	case "jsonline":
+		go constructJSONLine(execCtx.reqCtx, execCtx.ses, copied, ec.Index.Load(), ec.ByteChan, ec)
+	case "parquet":
+		// TODO: implement parquet export in Phase 5
+		return moerr.NewInternalError(execCtx.reqCtx, "parquet export not yet implemented")
+	default: // csv
+		go constructByte(execCtx.reqCtx, execCtx.ses, copied, ec.Index.Load(), ec.ByteChan, ec)
+	}
 
 	if err = exportDataFromBatchToCSVFile(ec); err != nil {
 		execCtx.ses.Error(execCtx.reqCtx,
-			"Error occurred while exporting to CSV file",
+			"Error occurred while exporting to file",
 			zap.Error(err))
 		return err
 	}
@@ -843,5 +860,174 @@ func (ec *ExportConfig) Close() {
 	if ec != nil {
 		ec.mrs = nil
 		ec.ctx = nil
+	}
+}
+
+// getExportFormat returns the export format, defaulting to "csv" if not specified
+func (ec *ExportConfig) getExportFormat() string {
+	if ec.userConfig.ExportFormat == "" {
+		return "csv"
+	}
+	return ec.userConfig.ExportFormat
+}
+
+// constructJSONLine constructs JSONLINE format output from a batch
+func constructJSONLine(ctx context.Context, obj FeSession, bat *batch.Batch, index int32, ByteChan chan *BatchByte, ep *ExportConfig) {
+	var (
+		ok      bool
+		backSes *backSession
+		ss      *Session
+		mp      *mpool.MPool
+	)
+
+	if ss, ok = obj.(*Session); !ok {
+		backSes = obj.(*backSession)
+		mp = backSes.GetMemPool()
+	} else {
+		mp = ss.GetMemPool()
+	}
+
+	buffer := &bytes.Buffer{}
+	columnNames := make([]string, len(ep.mrs.Columns))
+	for i, col := range ep.mrs.Columns {
+		columnNames[i] = col.Name()
+	}
+
+	for i := 0; i < bat.RowCount(); i++ {
+		row := make(map[string]interface{})
+		for j, vec := range bat.Vecs {
+			colName := columnNames[j]
+			if vec.GetNulls().Contains(uint64(i)) {
+				row[colName] = nil
+				continue
+			}
+			val, err := vectorValueToJSON(vec, i, ss, backSes)
+			if err != nil {
+				ByteChan <- &BatchByte{
+					err: err,
+				}
+				bat.Clean(mp)
+				return
+			}
+			row[colName] = val
+		}
+		jsonBytes, err := json.Marshal(row)
+		if err != nil {
+			ByteChan <- &BatchByte{
+				err: moerr.NewInternalErrorf(ctx, "failed to marshal JSON: %v", err),
+			}
+			bat.Clean(mp)
+			return
+		}
+		buffer.Write(jsonBytes)
+		buffer.WriteByte('\n')
+	}
+
+	reslen := buffer.Len()
+	result := make([]byte, reslen)
+	copy(result, buffer.Bytes())
+	buffer = nil
+
+	ByteChan <- &BatchByte{
+		index:     index,
+		writeByte: result,
+		err:       nil,
+	}
+
+	if ss != nil {
+		ss.writeCsvBytes.Add(int64(reslen))
+	}
+
+	bat.Clean(mp)
+}
+
+// vectorValueToJSON converts a vector value at index i to a JSON-compatible Go value
+func vectorValueToJSON(vec *vector.Vector, i int, ss *Session, backSes *backSession) (interface{}, error) {
+	switch vec.GetType().Oid {
+	case types.T_json:
+		val := types.DecodeJson(vec.GetBytesAt(i))
+		// Return as raw JSON string to be embedded
+		return json.RawMessage(val.String()), nil
+	case types.T_bool:
+		return vector.GetFixedAtNoTypeCheck[bool](vec, i), nil
+	case types.T_bit:
+		val := vector.GetFixedAtNoTypeCheck[uint64](vec, i)
+		return val, nil
+	case types.T_int8:
+		return vector.GetFixedAtNoTypeCheck[int8](vec, i), nil
+	case types.T_int16:
+		return vector.GetFixedAtNoTypeCheck[int16](vec, i), nil
+	case types.T_int32:
+		return vector.GetFixedAtNoTypeCheck[int32](vec, i), nil
+	case types.T_int64:
+		return vector.GetFixedAtNoTypeCheck[int64](vec, i), nil
+	case types.T_uint8:
+		return vector.GetFixedAtNoTypeCheck[uint8](vec, i), nil
+	case types.T_uint16:
+		return vector.GetFixedAtNoTypeCheck[uint16](vec, i), nil
+	case types.T_uint32:
+		return vector.GetFixedAtNoTypeCheck[uint32](vec, i), nil
+	case types.T_uint64:
+		return vector.GetFixedAtNoTypeCheck[uint64](vec, i), nil
+	case types.T_float32:
+		return vector.GetFixedAtNoTypeCheck[float32](vec, i), nil
+	case types.T_float64:
+		return vector.GetFixedAtNoTypeCheck[float64](vec, i), nil
+	case types.T_char, types.T_varchar, types.T_text:
+		return string(vec.GetBytesAt(i)), nil
+	case types.T_binary, types.T_varbinary, types.T_blob:
+		// Encode binary data as base64
+		return base64.StdEncoding.EncodeToString(vec.GetBytesAt(i)), nil
+	case types.T_datalink:
+		return string(vec.GetBytesAt(i)), nil
+	case types.T_array_float32:
+		return types.BytesToArray[float32](vec.GetBytesAt(i)), nil
+	case types.T_array_float64:
+		return types.BytesToArray[float64](vec.GetBytesAt(i)), nil
+	case types.T_date:
+		val := vector.GetFixedAtNoTypeCheck[types.Date](vec, i)
+		return val.String(), nil
+	case types.T_datetime:
+		scale := vec.GetType().Scale
+		val := vector.GetFixedAtNoTypeCheck[types.Datetime](vec, i).String2(scale)
+		return val, nil
+	case types.T_time:
+		scale := vec.GetType().Scale
+		val := vector.GetFixedAtNoTypeCheck[types.Time](vec, i).String2(scale)
+		return val, nil
+	case types.T_timestamp:
+		var timeZone *time.Location
+		if ss != nil {
+			timeZone = ss.GetTimeZone()
+		} else if backSes != nil {
+			timeZone = backSes.GetTimeZone()
+		} else {
+			timeZone = time.UTC
+		}
+		scale := vec.GetType().Scale
+		val := vector.GetFixedAtNoTypeCheck[types.Timestamp](vec, i).String2(timeZone, scale)
+		return val, nil
+	case types.T_decimal64:
+		scale := vec.GetType().Scale
+		val := vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, i).Format(scale)
+		return val, nil
+	case types.T_decimal128:
+		scale := vec.GetType().Scale
+		val := vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, i).Format(scale)
+		return val, nil
+	case types.T_uuid:
+		val := vector.GetFixedAtNoTypeCheck[types.Uuid](vec, i).String()
+		return val, nil
+	case types.T_Rowid:
+		val := vector.GetFixedAtNoTypeCheck[types.Rowid](vec, i)
+		return val.String(), nil
+	case types.T_Blockid:
+		val := vector.GetFixedAtNoTypeCheck[types.Blockid](vec, i)
+		return val.String(), nil
+	case types.T_enum:
+		val := vector.GetFixedAtNoTypeCheck[types.Enum](vec, i).String()
+		return val, nil
+	default:
+		return nil, moerr.NewInternalErrorf(context.Background(), "vectorValueToJSON: unsupported type %d", vec.GetType().Oid)
 	}
 }
