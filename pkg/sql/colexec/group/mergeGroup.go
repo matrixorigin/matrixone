@@ -29,7 +29,7 @@ import (
 
 func (mergeGroup *MergeGroup) Prepare(proc *process.Process) error {
 	mergeGroup.ctr.state = vm.Build
-	mergeGroup.ctr.mp = mpool.MustNewNoFixed("merge_group_mpool")
+	mergeGroup.ctr.mp = mpool.MustNew("merge_group_mpool")
 
 	if mergeGroup.OpAnalyzer != nil {
 		mergeGroup.OpAnalyzer.Reset()

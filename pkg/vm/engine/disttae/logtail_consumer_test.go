@@ -649,7 +649,7 @@ func TestPushClient_DoGCPartitionState(t *testing.T) {
 	state := ps.Snapshot()
 	assert.NotNil(t, state)
 
-	m := mpool.MustNewNoFixed("test")
+	m := mpool.MustNew("test")
 	packer := types.NewPacker()
 	defer packer.Close()
 	rowBatch := &batch.Batch{

@@ -43,7 +43,7 @@ const (
 
 func (group *Group) Prepare(proc *process.Process) (err error) {
 	group.ctr.state = vm.Build
-	group.ctr.mp = mpool.MustNewNoFixed("group_mpool")
+	group.ctr.mp = mpool.MustNew("group_mpool")
 
 	// debug,
 	// group.ctr.mp.EnableDetailRecording()
