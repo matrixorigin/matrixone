@@ -64,6 +64,22 @@ var (
 			Help:      "Total number of txn rollback handled.",
 		})
 
+	TxnUserRollbackCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "user_rollback_total",
+			Help:      "Total number of user-initiated txn rollback handled.",
+		})
+
+	TxnRollbackLastStatementCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "rollback_last_statement_total",
+			Help:      "Total number of rollback last statement handled.",
+		})
+
 	txnLockCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "mo",
@@ -85,6 +101,18 @@ var (
 	TxnPKChangeCheckTotalCounter   = txnPKChangeCheckCounter.WithLabelValues("total")
 	TxnPKChangeCheckChangedCounter = txnPKChangeCheckCounter.WithLabelValues("changed")
 	TxnPKChangeCheckIOCounter      = txnPKChangeCheckCounter.WithLabelValues("io")
+
+	txnPKMayBeChangedCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "pk_may_be_changed_total",
+			Help:      "Total number of pk may be changed check.",
+		}, []string{"type"})
+	TxnPKMayBeChangedTotalCounter         = txnPKMayBeChangedCounter.WithLabelValues("total")
+	TxnPKMayBeChangedMemHitCounter        = txnPKMayBeChangedCounter.WithLabelValues("mem_hit")
+	TxnPKMayBeChangedMemNotFlushedCounter = txnPKMayBeChangedCounter.WithLabelValues("mem_not_flushed")
+	TxnPKMayBeChangedPersistedCounter     = txnPKMayBeChangedCounter.WithLabelValues("persisted")
 )
 
 var (
@@ -252,6 +280,33 @@ var (
 			Buckets:   getDurationBuckets(),
 		})
 
+	TxnPKMayBeChangedDurationHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "pk_may_be_changed_duration_seconds",
+			Help:      "Bucketed histogram of txn pk may be changed check duration.",
+			Buckets:   getDurationBuckets(),
+		})
+
+	TxnLazyLoadCkpDurationHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "lazy_load_ckp_duration_seconds",
+			Help:      "Bucketed histogram of txn lazy load checkpoint duration.",
+			Buckets:   getDurationBuckets(),
+		})
+
+	TxnPKExistInMemDurationHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "pk_exist_in_mem_duration_seconds",
+			Help:      "Bucketed histogram of txn pk exist in memory check duration.",
+			Buckets:   getDurationBuckets(),
+		})
+
 	txnTableRangeTotalHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "mo",
@@ -320,6 +375,15 @@ var (
 
 	TxnTNAppendDeduplicateDurationHistogram     = txnTNDeduplicateDurationHistogram.WithLabelValues("append_deduplicate")
 	TxnTNPrePrepareDeduplicateDurationHistogram = txnTNDeduplicateDurationHistogram.WithLabelValues("prePrepare_deduplicate")
+
+	TxnTNLogServiceAppendDurationHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "tn_logservice_append_duration_seconds",
+			Help:      "Bucketed histogram of txn tn logservice append duration.",
+			Buckets:   getDurationBuckets(),
+		})
 
 	txnMpoolDurationHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -452,4 +516,23 @@ var (
 	TxnColumnReadCountHistogram = txnColumnReadHistogram.WithLabelValues("read")
 	// Column total count: total number of columns in table per operation
 	TxnColumnTotalCountHistogram = txnColumnReadHistogram.WithLabelValues("total")
+)
+
+// Read size histogram metrics: track per-read operation read sizes
+var (
+	txnReadSizeHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "read_size_bytes",
+			Help:      "Bucketed histogram of read size per read operation (bytes).",
+			Buckets:   prometheus.ExponentialBuckets(1024, 2.0, 20), // 1KB to ~1GB
+		}, []string{"type"})
+
+	// Total read size: actual bytes read from storage layer (excluding rowid tombstone)
+	TxnReadSizeHistogram = txnReadSizeHistogram.WithLabelValues("total")
+	// S3 read size: actual bytes read from S3 (excluding rowid tombstone)
+	TxnS3ReadSizeHistogram = txnReadSizeHistogram.WithLabelValues("s3")
+	// Disk read size: actual bytes read from disk cache (excluding rowid tombstone)
+	TxnDiskReadSizeHistogram = txnReadSizeHistogram.WithLabelValues("disk")
 )
