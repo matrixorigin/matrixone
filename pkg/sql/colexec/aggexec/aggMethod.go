@@ -127,6 +127,7 @@ type (
 
 type AggCanMarshal interface {
 	Marshal() []byte
+	MarshalBinary() ([]byte, error)
 	Unmarshal([]byte)
 	Size() int64
 }

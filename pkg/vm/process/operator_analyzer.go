@@ -39,6 +39,8 @@ type Analyzer interface {
 	Stop()
 	ChildrenCallStop(time time.Time)
 	Alloc(int64)
+	SetMemUsed(int64)
+	Spill(int64)
 	Input(batch *batch.Batch)
 	Output(*batch.Batch)
 	WaitStop(time.Time)
@@ -153,6 +155,13 @@ func (opAlyzr *operatorAnalyzer) Alloc(size int64) {
 		panic("operatorAnalyzer.Alloc: operatorAnalyzer.opStats is nil")
 	}
 	opAlyzr.opStats.MemorySize += size
+}
+
+func (opAlyzr *operatorAnalyzer) SetMemUsed(size int64) {
+	if opAlyzr.opStats == nil {
+		panic("operatorAnalyzer.SetMemUsed: operatorAnalyzer.opStats is nil")
+	}
+	opAlyzr.opStats.MemorySize = max(opAlyzr.opStats.MemorySize, size)
 }
 
 func (opAlyzr *operatorAnalyzer) Spill(size int64) {

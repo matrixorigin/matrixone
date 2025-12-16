@@ -62,7 +62,7 @@ func TestMergeDelete(t *testing.T) {
 			catalog.BlockMetaOffset,
 		},
 		Vecs: []*vector.Vector{
-			testutil.MakeInt64Vector([]int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14}, nil),
+			testutil.MakeInt64Vector([]int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14}, nil, proc.Mp()),
 		},
 	}
 	bytes, err := metaLocBat0.MarshalBinary()
@@ -78,10 +78,10 @@ func TestMergeDelete(t *testing.T) {
 			catalog.BlockMeta_Deletes_Length,
 		},
 		Vecs: []*vector.Vector{
-			testutil.MakeTextVector([]string{"mock_block_id0"}, nil),
-			testutil.MakeTextVector([]string{string(bytes)}, nil),
-			testutil.MakeInt8Vector([]int8{0}, nil),
-			testutil.MakeInt32Vector([]int32{0}, nil),
+			testutil.MakeTextVector([]string{"mock_block_id0"}, nil, proc.Mp()),
+			testutil.MakeTextVector([]string{string(bytes)}, nil, proc.Mp()),
+			testutil.MakeInt8Vector([]int8{0}, nil, proc.Mp()),
+			testutil.MakeInt32Vector([]int32{0}, nil, proc.Mp()),
 			vcu32,
 		},
 	}
@@ -109,7 +109,7 @@ func TestMergeDelete(t *testing.T) {
 				objectio.NewRowid(blkId1, 12),
 				objectio.NewRowid(blkId1, 13),
 				objectio.NewRowid(blkId1, 14),
-			}, nil),
+			}, nil, proc.Mp()),
 		},
 	}
 	bytes1, err := metaLocBat1.MarshalBinary()
@@ -120,7 +120,7 @@ func TestMergeDelete(t *testing.T) {
 			catalog.BlockMetaOffset,
 		},
 		Vecs: []*vector.Vector{
-			testutil.MakeInt64Vector([]int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14}, nil),
+			testutil.MakeInt64Vector([]int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14}, nil, proc.Mp()),
 		},
 	}
 	bytes2, err := metaLocBat2.MarshalBinary()
@@ -131,7 +131,7 @@ func TestMergeDelete(t *testing.T) {
 			catalog.BlockMeta_DeltaLoc,
 		},
 		Vecs: []*vector.Vector{
-			testutil.MakeTextVector([]string{"d:magic:15"}, nil),
+			testutil.MakeTextVector([]string{"d:magic:15"}, nil, proc.Mp()),
 		},
 	}
 	bytes3, err := metaLocBat3.MarshalBinary()
@@ -147,10 +147,10 @@ func TestMergeDelete(t *testing.T) {
 			catalog.BlockMeta_Deletes_Length,
 		},
 		Vecs: []*vector.Vector{
-			testutil.MakeTextVector([]string{"mock_block_id1", "mock_block_id2", "mock_block_id3"}, nil),
-			testutil.MakeTextVector([]string{string(bytes1), string(bytes2), string(bytes3)}, nil),
-			testutil.MakeInt8Vector([]int8{0, 1, 2}, nil),
-			testutil.MakeInt32Vector([]int32{0, 0, 0}, nil),
+			testutil.MakeTextVector([]string{"mock_block_id1", "mock_block_id2", "mock_block_id3"}, nil, proc.Mp()),
+			testutil.MakeTextVector([]string{string(bytes1), string(bytes2), string(bytes3)}, nil, proc.Mp()),
+			testutil.MakeInt8Vector([]int8{0, 1, 2}, nil, proc.Mp()),
+			testutil.MakeInt32Vector([]int32{0, 0, 0}, nil, proc.Mp()),
 			vcu32_2,
 		},
 	}

@@ -471,6 +471,9 @@ func Test_getDataFromPipeline(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
+		mp := mpool.MustNewZeroNoFixed()
+		defer mpool.DeleteMPool(mp)
+
 		eng := mock_frontend.NewMockEngine(ctrl)
 		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(nil, nil).AnyTimes()
@@ -493,6 +496,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 
 		genBatch := func() *batch.Batch {
 			return allocTestBatch(
+				mp,
 				[]string{
 					"a", "b", "c", "d", "e", "f",
 					"g", "h", "i", "j", "k", "l",
@@ -544,6 +548,9 @@ func Test_getDataFromPipeline(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
+		mp := mpool.MustNewZeroNoFixed()
+		defer mpool.DeleteMPool(mp)
+
 		eng := mock_frontend.NewMockEngine(ctrl)
 		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
@@ -569,6 +576,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 
 		genBatch := func() *batch.Batch {
 			return allocTestBatch(
+				mp,
 				[]string{
 					"a", "b", "c", "d", "e", "f",
 					"g", "h", "i", "j", "k", "l",
@@ -679,13 +687,13 @@ func Test_typeconvert(t *testing.T) {
 	})
 }
 
-func allocTestBatch(attrName []string, tt []types.Type, batchSize int) *batch.Batch {
+func allocTestBatch(mp *mpool.MPool, attrName []string, tt []types.Type, batchSize int) *batch.Batch {
 	batchData := batch.New(attrName)
 
 	//alloc space for vector
 	for i := 0; i < len(attrName); i++ {
 		vec := vector.NewVec(tt[i])
-		if err := vec.PreExtend(batchSize, testutil.TestUtilMp); err != nil {
+		if err := vec.PreExtend(batchSize, mp); err != nil {
 			panic(err)
 		}
 		vec.SetLength(batchSize)

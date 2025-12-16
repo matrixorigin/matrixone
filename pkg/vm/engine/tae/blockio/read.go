@@ -37,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"go.uber.org/zap"
 )
@@ -251,12 +250,10 @@ func BlockDataRead(
 		); err != nil {
 			return err
 		}
-		v2.TaskSelReadFilterTotal.Inc()
-		if len(sels) == 0 {
-			v2.TaskSelReadFilterHit.Inc()
-		}
+		v2.TxnSelReadFilterTotal.Observe(1.0)
 
 		if len(sels) == 0 {
+			v2.TxnSelReadFilterFiltered.Observe(1.0)
 			return nil
 		}
 	}
@@ -641,9 +638,9 @@ func BlockDataReadInner(
 	// transform delete mask to deleted rows
 	// TODO: avoid this transformation
 	if !deleteMask.IsEmpty() {
-		arr := common.DefaultAllocator.GetSels()
+		arr := vector.GetSels()
 		defer func() {
-			common.DefaultAllocator.PutSels(arr)
+			vector.PutSels(arr)
 		}()
 
 		deletedRows = deleteMask.ToI64Array(&arr)

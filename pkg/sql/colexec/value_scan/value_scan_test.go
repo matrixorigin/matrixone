@@ -68,14 +68,14 @@ func TestPrepare(t *testing.T) {
 
 func TestValueScan(t *testing.T) {
 	for _, tc := range makeTestCases(t) {
-		resetBatchs(tc.arg)
+		resetBatchs(tc.arg, tc.proc.Mp())
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		_, _ = vm.Exec(tc.arg, tc.proc)
 
 		tc.arg.Reset(tc.proc, false, nil)
 
-		resetBatchs(tc.arg)
+		resetBatchs(tc.arg, tc.proc.Mp())
 		err = tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		_, _ = vm.Exec(tc.arg, tc.proc)
@@ -85,8 +85,8 @@ func TestValueScan(t *testing.T) {
 	}
 }
 
-func resetBatchs(arg *ValueScan) {
-	bat := colexec.MakeMockBatchs()
+func resetBatchs(arg *ValueScan, m *mpool.MPool) {
+	bat := colexec.MakeMockBatchs(m)
 	arg.Batchs = append(arg.Batchs, bat)
 }
 

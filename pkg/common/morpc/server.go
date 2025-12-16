@@ -135,8 +135,9 @@ func NewRPCServer(
 	s.adjust()
 
 	s.options.goettyOptions = append(s.options.goettyOptions,
-		goetty.WithSessionCodec(codec),
-		goetty.WithSessionLogger(s.logger))
+		goetty.WithSessionCodec(codec))
+	// Don't pass session logger to goetty to avoid noisy error logs from goetty library
+	// (e.g., "close connection failed" which is expected during normal connection lifecycle)
 
 	app, err := goetty.NewApplication(
 		s.address,

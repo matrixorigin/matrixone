@@ -1828,7 +1828,7 @@ func Test_strToSigned_Binary(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			inputVec := testutil.MakeVarlenaVector(tt.inputs, tt.nulls, mp)
+			inputVec := testutil.MakeVarlenaVector(tt.inputs, tt.nulls, types.T_blob.ToType(), mp)
 			defer inputVec.Free(mp)
 			inputVec.SetIsBin(true)
 
@@ -1927,7 +1927,7 @@ func Benchmark_strToSigned_Binary(b *testing.B) {
 
 	for _, bc := range benchCases {
 		b.Run(bc.name, func(b *testing.B) {
-			inputVec := testutil.MakeVarlenaVector(bc.inputs, bc.nulls, mp)
+			inputVec := testutil.MakeVarlenaVector(bc.inputs, bc.nulls, types.T_blob.ToType(), mp)
 			defer inputVec.Free(mp)
 			inputVec.SetIsBin(true)
 
@@ -2058,9 +2058,9 @@ func Test_strToStr_TextToCharVarchar(t *testing.T) {
 			// Create input vector based on source type
 			var inputVec *vector.Vector
 			if tt.fromType.Oid == types.T_text {
-				inputVec = testutil.MakeTextVector(tt.inputs, tt.nulls)
+				inputVec = testutil.MakeTextVector(tt.inputs, tt.nulls, mp)
 			} else {
-				inputVec = testutil.MakeVarcharVector(tt.inputs, tt.nulls)
+				inputVec = testutil.MakeVarcharVector(tt.inputs, tt.nulls, mp)
 				// Set the type explicitly for non-TEXT types
 				inputVec.SetType(tt.fromType)
 			}

@@ -19,6 +19,7 @@ import (
 	"container/heap"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -131,7 +132,9 @@ func (top *Top) Call(proc *process.Process) (vm.CallResult, error) {
 			top.ctr.buildBat.Recursive = bat.Recursive
 			top.ctr.buildBat.ShuffleIDX = bat.ShuffleIDX
 			top.ctr.buildBat.Attrs = bat.Attrs
-			top.ctr.buildBat.Aggs = bat.Aggs
+			if len(bat.ExtraBuf1) > 0 || len(bat.ExtraBuf2) > 0 {
+				return result, moerr.NewInternalError(proc.Ctx, "top build should not have extra buffers")
+			}
 			copy(top.ctr.buildBat.Vecs, bat.Vecs)
 			top.ctr.buildBat.SetRowCount(bat.RowCount())
 

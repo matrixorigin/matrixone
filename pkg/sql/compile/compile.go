@@ -61,7 +61,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergecte"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergedelete"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
@@ -873,7 +872,12 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 		return nil, cantCompileForPrepareErr
 	}
 
-	plan2.CalcQueryDOP(c.pn, int32(c.ncpu), len(c.cnList), c.execType)
+	ncpu := int32(c.ncpu)
+	if qry.MaxDop > 0 {
+		ncpu = min(ncpu, int32(qry.MaxDop))
+	}
+
+	plan2.CalcQueryDOP(c.pn, ncpu, len(c.cnList), c.execType)
 
 	c.initAnalyzeModule(qry)
 	// deal with sink scan first.
@@ -2234,7 +2238,7 @@ func (c *Compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
 			} else {
 				c.setProjection(n, ss[i])
 			}
-		case *mergegroup.MergeGroup:
+		case *group.MergeGroup:
 			if op.ProjectList == nil {
 				op.ProjectList = n.ProjectList
 			} else {
@@ -3205,7 +3209,7 @@ func (c *Compile) compileTPGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*
 		op := constructGroup(c.proc.Ctx, n, ns[n.Children[0]], false, 0, c.proc)
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[0].setRootOperator(op)
-		arg := constructMergeGroup()
+		arg := constructMergeGroup(n)
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[0].setRootOperator(arg)
 	} else {
@@ -3240,7 +3244,7 @@ func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node, 
 		rs := c.newMergeScope([]*Scope{mergeToGroup})
 
 		currentFirstFlag = c.anal.isFirst
-		arg := constructMergeGroup()
+		arg := constructMergeGroup(n)
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		rs.setRootOperator(arg)
 		c.anal.isFirst = false
@@ -3259,7 +3263,7 @@ func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node, 
 		rs := c.newMergeScope(ss)
 
 		currentFirstFlag = c.anal.isFirst
-		arg := constructMergeGroup()
+		arg := constructMergeGroup(n)
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		rs.setRootOperator(arg)
 		c.anal.isFirst = false

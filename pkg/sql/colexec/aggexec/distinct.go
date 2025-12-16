@@ -20,12 +20,13 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
 type distinctHash struct {
+	mp   *mpool.MPool
 	maps []*hashmap.StrHashMap
 	itrs []hashmap.Iterator
 
@@ -34,8 +35,9 @@ type distinctHash struct {
 	bs1 []bool
 }
 
-func newDistinctHash() distinctHash {
+func newDistinctHash(mp *mpool.MPool) distinctHash {
 	return distinctHash{
+		mp:   mp,
 		maps: nil,
 		itrs: nil,
 	}
@@ -48,7 +50,7 @@ func (d *distinctHash) grows(more int) error {
 
 	var err error
 	for i := oldLen; i < newLen; i++ {
-		if d.maps[i], err = hashmap.NewStrHashMap(true); err != nil {
+		if d.maps[i], err = hashmap.NewStrHashMap(true, d.mp); err != nil {
 			return err
 		}
 		d.itrs[i] = d.maps[i].NewIterator()
@@ -157,6 +159,7 @@ func (d *distinctHash) free() {
 			m.Free()
 		}
 	}
+
 }
 
 func (d *distinctHash) Size() int64 {
@@ -202,12 +205,38 @@ func (d *distinctHash) marshal() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func (d *distinctHash) unmarshal(data []byte) error {
+func (d *distinctHash) marshalToBuffers(flags []uint8, buf *bytes.Buffer) error {
+	var cnt int64
+	if flags == nil {
+		cnt = int64(len(d.maps))
+	} else {
+		for _, f := range flags {
+			if f != 0 {
+				cnt += 1
+			}
+		}
+	}
+
+	types.WriteInt64(buf, cnt)
+	for i := range d.maps {
+		if flags != nil && flags[i] != 0 {
+			if _, err := d.maps[i].WriteTo(buf); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (d *distinctHash) unmarshal(data []byte, mp *mpool.MPool) error {
 	if len(data) == 0 {
 		return nil
 	}
 	buf := bytes.NewBuffer(data)
+	return d.unmarshalFromReader(buf, mp)
+}
 
+func (d *distinctHash) unmarshalFromReader(buf io.Reader, mp *mpool.MPool) error {
 	var n uint64
 	if _, err := buf.Read(types.EncodeUint64(&n)); err != nil {
 		return err
@@ -225,7 +254,7 @@ func (d *distinctHash) unmarshal(data []byte) error {
 			return err
 		}
 		d.maps[i] = &hashmap.StrHashMap{}
-		if err := d.maps[i].UnmarshalBinary(mapData, hashtable.DefaultAllocator()); err != nil {
+		if err := d.maps[i].UnmarshalBinary(mapData, mp); err != nil {
 			return err
 		}
 		d.itrs[i] = d.maps[i].NewIterator()

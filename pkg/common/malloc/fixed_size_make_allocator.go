@@ -27,5 +27,5 @@ func NewFixedSizeMakeAllocator(size uint64) (ret *fixedSizeMakeAllocator) {
 var _ FixedSizeAllocator = new(fixedSizeMakeAllocator)
 
 func (f *fixedSizeMakeAllocator) Allocate(Hints, uint64) ([]byte, Deallocator, error) {
-	return make([]byte, f.size), FuncDeallocator(func(Hints) {}), nil
+	return make([]byte, f.size), FuncDeallocator(func() {}), nil
 }
