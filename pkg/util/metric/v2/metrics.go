@@ -52,6 +52,7 @@ func init() {
 	initPipelineMetrics()
 	initLogServiceMetrics()
 	initShardingMetrics()
+	initGCMetrics()
 
 	registry.MustRegister(HeartbeatHistogram)
 	registry.MustRegister(HeartbeatFailureCounter)
@@ -74,13 +75,9 @@ func initMemMetrics() {
 func initTaskMetrics() {
 	registry.MustRegister(taskShortDurationHistogram)
 	registry.MustRegister(taskLongDurationHistogram)
-	registry.MustRegister(taskBytesHistogram)
-	registry.MustRegister(taskCountHistogram)
 
 	registry.MustRegister(taskDNMergeStuffCounter)
 	registry.MustRegister(taskDNMergeDurationHistogram)
-
-	registry.MustRegister(taskSelectivityCounter)
 
 	registry.MustRegister(transferPageHitHistogram)
 	registry.MustRegister(TransferPageRowHistogram)
@@ -124,7 +121,6 @@ func initLogtailMetrics() {
 	registry.MustRegister(logTailApplyDurationHistogram)
 	registry.MustRegister(logtailUpdatePartitionDurationHistogram)
 	registry.MustRegister(LogTailAppendDurationHistogram)
-	registry.MustRegister(logTailSendDurationHistogram)
 	registry.MustRegister(LogTailLoadCheckpointDurationHistogram)
 
 	registry.MustRegister(LogTailPushCollectionDurationHistogram)
@@ -139,8 +135,11 @@ func initTxnMetrics() {
 	registry.MustRegister(txnStatementCounter)
 	registry.MustRegister(txnCommitCounter)
 	registry.MustRegister(TxnRollbackCounter)
+	registry.MustRegister(TxnUserRollbackCounter)
+	registry.MustRegister(TxnRollbackLastStatementCounter)
 	registry.MustRegister(txnLockCounter)
 	registry.MustRegister(txnPKChangeCheckCounter)
+	registry.MustRegister(txnPKMayBeChangedCounter)
 
 	registry.MustRegister(txnQueueSizeGauge)
 
@@ -153,6 +152,9 @@ func initTxnMetrics() {
 	registry.MustRegister(txnUnlockDurationHistogram)
 	registry.MustRegister(TxnTableRangeDurationHistogram)
 	registry.MustRegister(TxnCheckPKDupDurationHistogram)
+	registry.MustRegister(TxnPKMayBeChangedDurationHistogram)
+	registry.MustRegister(TxnLazyLoadCkpDurationHistogram)
+	registry.MustRegister(TxnPKExistInMemDurationHistogram)
 	registry.MustRegister(TxnLockWaitersTotalHistogram)
 	registry.MustRegister(txnTableRangeTotalHistogram)
 	registry.MustRegister(txnMpoolDurationHistogram)
@@ -163,13 +165,19 @@ func initTxnMetrics() {
 
 	registry.MustRegister(txnRangesSelectivityHistogram)
 	registry.MustRegister(txnTNDeduplicateDurationHistogram)
+	registry.MustRegister(TxnTNLogServiceAppendDurationHistogram)
 
 	registry.MustRegister(TxnReaderScannedTotalTombstoneHistogram)
 	registry.MustRegister(TxnReaderEachBLKLoadedTombstoneHistogram)
 	registry.MustRegister(txnReaderTombstoneSelectivityHistogram)
 	registry.MustRegister(txnTransferDurationHistogram)
 	registry.MustRegister(TransferTombstonesCountHistogram)
+	registry.MustRegister(txnS3TombstoneCounter)
+	registry.MustRegister(txnS3TombstoneDurationHistogram)
 	registry.MustRegister(TxnExtraWorkspaceQuotaGauge)
+	registry.MustRegister(txnSelectivityHistogram)
+	registry.MustRegister(txnColumnReadHistogram)
+	registry.MustRegister(txnReadSizeHistogram)
 }
 
 func initRPCMetrics() {
