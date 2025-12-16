@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/stretchr/testify/require"
@@ -77,7 +78,7 @@ func TestGoBruteForce(t *testing.T) {
 
 }
 
-func TestGoBruteForceConcurrent(t *testing.T) {
+func runBruteForceConcurrent(t *testing.T, is_usearch bool) {
 
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
@@ -98,7 +99,13 @@ func TestGoBruteForceConcurrent(t *testing.T) {
 
 	query := dataset
 
-	idx, err := NewGoBruteForceIndex[float32](dataset, dimension, metric.Metric_L2sqDistance, elemsz)
+	var idx cache.VectorIndexSearchIf
+	var err error
+	if is_usearch {
+		idx, err = NewUsearchBruteForceIndex[float32](dataset, dimension, metric.Metric_L2sqDistance, elemsz)
+	} else {
+		idx, err = NewGoBruteForceIndex[float32](dataset, dimension, metric.Metric_L2sqDistance, elemsz)
+	}
 	require.NoError(t, err)
 
 	// limit 3
@@ -135,4 +142,12 @@ func TestGoBruteForceConcurrent(t *testing.T) {
 		}
 	}
 
+}
+
+func TestGoBruteForceConcurrent(t *testing.T) {
+	runBruteForceConcurrent(t, false)
+}
+
+func TestUsearchBruteForceConcurrent(t *testing.T) {
+	runBruteForceConcurrent(t, true)
 }
