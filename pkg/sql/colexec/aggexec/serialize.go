@@ -23,7 +23,7 @@ func MarshalAggFuncExec(exec AggFuncExec) ([]byte, error) {
 }
 
 func UnmarshalAggFuncExec(
-	mg AggMemoryManager,
+	mg *mpool.MPool,
 	data []byte) (AggFuncExec, error) {
 	encoded := &EncodedAgg{}
 	if err := encoded.Unmarshal(data); err != nil {
@@ -43,13 +43,8 @@ func UnmarshalAggFuncExec(
 		}
 	}
 
-	var mp *mpool.MPool = nil
-	if mg != nil {
-		mp = mg.Mp()
-	}
-
 	if err := exec.unmarshal(
-		mp, encoded.Result, encoded.Empties, encoded.Groups); err != nil {
+		mg, encoded.Result, encoded.Empties, encoded.Groups); err != nil {
 		exec.Free()
 		return nil, err
 	}
@@ -58,10 +53,10 @@ func UnmarshalAggFuncExec(
 
 var _ = CopyAggFuncExec
 
-func CopyAggFuncExec(mg AggMemoryManager, exec AggFuncExec) (AggFuncExec, error) {
+func CopyAggFuncExec(mp *mpool.MPool, exec AggFuncExec) (AggFuncExec, error) {
 	bs, err := MarshalAggFuncExec(exec)
 	if err != nil {
 		return nil, err
 	}
-	return UnmarshalAggFuncExec(mg, bs)
+	return UnmarshalAggFuncExec(mp, bs)
 }

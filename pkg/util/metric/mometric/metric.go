@@ -168,8 +168,7 @@ func startCrossServicesMetricsTask(ctx context.Context) {
 }
 
 func mpoolRelatedMetrics() {
-	v2.MemTotalCrossPoolFreeCounter.Add(float64(mpool.TotalCrossPoolFreeCounter()))
-
+	v2.MemTotalCrossPoolFreeCounter.Add(float64(mpool.GlobalStats().NumCrossPoolFree.Load()))
 	v2.MemGlobalStatsAllocatedGauge.Set(float64(mpool.GlobalStats().NumCurrBytes.Load()))
 	v2.MemGlobalStatsHighWaterMarkGauge.Set(float64(mpool.GlobalStats().HighWaterMark.Load()))
 }

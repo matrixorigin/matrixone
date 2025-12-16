@@ -15,10 +15,21 @@
 package vector
 
 import (
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 )
 
+var selsPool *sync.Pool
+
 func init() {
+	selsPool = &sync.Pool{
+		New: func() any {
+			ss := make([]int64, 0, 32)
+			return &ss
+		},
+	}
+
 	reuse.CreatePool[Vector](
 		func() *Vector {
 			res := new(Vector)
@@ -53,4 +64,13 @@ func NewVecFromReuse() *Vector {
 	// v.AllocMsg = append(v.AllocMsg, time.Now().String()+" : "+string(debug.Stack()))
 	// v.OnUsed = true
 	return v
+}
+
+func PutSels(sels []int64) {
+	selsPool.Put(&sels)
+}
+
+func GetSels() []int64 {
+	ss := selsPool.Get().(*[]int64)
+	return (*ss)[:0]
 }
