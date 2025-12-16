@@ -126,7 +126,16 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 		analyzer.AddDiskIO(crs)
 		analyzer.AddReadSizeInfo(crs)
 
+		// Record ReadSize metrics when scan completes all blocks (isEnd == true)
+		// This matches explain analyze output which shows total read size for the entire scan
 		if isEnd {
+			if analyzer != nil {
+				opStats := analyzer.GetOpStats()
+				// GetOpStats() will panic if opStats is nil, so we can safely access it here
+				v2.TxnReadSizeHistogram.Observe(float64(opStats.ReadSize))
+				v2.TxnS3ReadSizeHistogram.Observe(float64(opStats.S3ReadSize))
+				v2.TxnDiskReadSizeHistogram.Observe(float64(opStats.DiskReadSize))
+			}
 			e = err
 			return vm.CancelResult, err
 		}

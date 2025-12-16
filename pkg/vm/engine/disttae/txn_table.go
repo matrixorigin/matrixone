@@ -2334,10 +2334,19 @@ func (tbl *txnTable) primaryKeysMayBeChanged(
 	keysVector *vector.Vector,
 	checkTombstone bool,
 ) (bool, error) {
+	start := time.Now()
+	defer func() {
+		v2.TxnPKMayBeChangedDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
+
+	v2.TxnPKMayBeChangedTotalCounter.Inc()
+
 	if tbl.db.op.IsSnapOp() {
 		return false,
 			moerr.NewInternalErrorNoCtx("primary key modification is not allowed in snapshot transaction")
 	}
+	// Measure LazyLoadLatestCkp duration
+	lazyLoadStart := time.Now()
 	part, err := tbl.eng.(*Engine).LazyLoadLatestCkp(
 		ctx,
 		uint64(tbl.accountId),
@@ -2345,6 +2354,7 @@ func (tbl *txnTable) primaryKeysMayBeChanged(
 		tbl.tableName,
 		tbl.db.databaseId,
 		tbl.db.databaseName)
+	v2.TxnLazyLoadCkpDurationHistogram.Observe(time.Since(lazyLoadStart).Seconds())
 	if err != nil {
 		return false, err
 	}
@@ -2356,15 +2366,22 @@ func (tbl *txnTable) primaryKeysMayBeChanged(
 	packer.Reset()
 
 	keys := readutil.EncodePrimaryKeyVector(keysVector, packer)
+	// Measure PKExistInMemBetween duration
+	memCheckStart := time.Now()
 	exist, flushed := snap.PKExistInMemBetween(from, to, keys)
+	v2.TxnPKExistInMemDurationHistogram.Observe(time.Since(memCheckStart).Seconds())
+
 	if exist {
+		v2.TxnPKMayBeChangedMemHitCounter.Inc()
 		return true, nil
 	}
 	if !flushed {
+		v2.TxnPKMayBeChangedMemNotFlushedCounter.Inc()
 		return false, nil
 	}
 
 	//need check pk whether exist on S3 block.
+	v2.TxnPKMayBeChangedPersistedCounter.Inc()
 	return tbl.PKPersistedBetween(
 		snap,
 		from,
