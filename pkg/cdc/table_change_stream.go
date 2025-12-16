@@ -1374,7 +1374,7 @@ func (s *TableChangeStream) processWithTxn(
 			s.progressTracker.RecordTransaction()
 			s.onWatermarkAdvanced()
 
-			logutil.Info(
+			logutil.Debug(
 				"cdc.table_stream.round_complete",
 				zap.String("task-id", s.taskId),
 				zap.String("table", s.tableInfo.String()),
