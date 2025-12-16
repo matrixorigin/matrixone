@@ -306,8 +306,8 @@ INSERT INTO `t8` VALUES(4,'[8.560689, 6.790359, 821.9778]','[0.46323407, 23.4980
 select cosine_similarity(b,b), cosine_similarity(c,c) from t8;
 cosine_similarity(b, b)    cosine_similarity(c, c)
 null    null
-0.99999994    null
-1.0    0.99999994
+1.0    null
+1.0    1.0
 1.0    1.0
 create table t9(a int, b vecf64(3), c vecf64(5));
 INSERT INTO `t9` VALUES (1,NULL,NULL);
