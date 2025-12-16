@@ -68,16 +68,19 @@ func TestTableScanner1(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
 	bat := batch.New([]string{"tblId", "tblName", "dbId", "dbName", "createSql", "accountId"})
-	bat.Vecs[0] = testutil.MakeUint64Vector([]uint64{1}, nil)
-	bat.Vecs[1] = testutil.MakeVarcharVector([]string{"tblName"}, nil)
-	bat.Vecs[2] = testutil.MakeUint64Vector([]uint64{1}, nil)
-	bat.Vecs[3] = testutil.MakeVarcharVector([]string{"dbName"}, nil)
-	bat.Vecs[4] = testutil.MakeVarcharVector([]string{"createSql"}, nil)
-	bat.Vecs[5] = testutil.MakeUint32Vector([]uint32{1}, nil)
+	bat.Vecs[0] = testutil.MakeUint64Vector([]uint64{1}, nil, proc.Mp())
+	bat.Vecs[1] = testutil.MakeVarcharVector([]string{"tblName"}, nil, proc.Mp())
+	bat.Vecs[2] = testutil.MakeUint64Vector([]uint64{1}, nil, proc.Mp())
+	bat.Vecs[3] = testutil.MakeVarcharVector([]string{"dbName"}, nil, proc.Mp())
+	bat.Vecs[4] = testutil.MakeVarcharVector([]string{"createSql"}, nil, proc.Mp())
+	bat.Vecs[5] = testutil.MakeUint32Vector([]uint32{1}, nil, proc.Mp())
 	bat.SetRowCount(1)
 	res := executor.Result{
-		Mp:      testutil.TestUtilMp,
+		Mp:      proc.Mp(),
 		Batches: []*batch.Batch{bat},
 	}
 
@@ -850,29 +853,32 @@ func TestTableScanner_UpdateTableInfo(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
 	bat1 := batch.New([]string{"tblId", "tblName", "dbId", "dbName", "createSql", "accountId"})
-	bat1.Vecs[0] = testutil.MakeUint64Vector([]uint64{1001}, nil)
-	bat1.Vecs[1] = testutil.MakeVarcharVector([]string{"tbl1"}, nil)
-	bat1.Vecs[2] = testutil.MakeUint64Vector([]uint64{1}, nil)
-	bat1.Vecs[3] = testutil.MakeVarcharVector([]string{"db1"}, nil)
-	bat1.Vecs[4] = testutil.MakeVarcharVector([]string{"create table tbl1 (a int)"}, nil)
-	bat1.Vecs[5] = testutil.MakeUint32Vector([]uint32{1}, nil)
+	bat1.Vecs[0] = testutil.MakeUint64Vector([]uint64{1001}, nil, proc.Mp())
+	bat1.Vecs[1] = testutil.MakeVarcharVector([]string{"tbl1"}, nil, proc.Mp())
+	bat1.Vecs[2] = testutil.MakeUint64Vector([]uint64{1}, nil, proc.Mp())
+	bat1.Vecs[3] = testutil.MakeVarcharVector([]string{"db1"}, nil, proc.Mp())
+	bat1.Vecs[4] = testutil.MakeVarcharVector([]string{"create table tbl1 (a int)"}, nil, proc.Mp())
+	bat1.Vecs[5] = testutil.MakeUint32Vector([]uint32{1}, nil, proc.Mp())
 	bat1.SetRowCount(1)
 	res1 := executor.Result{
-		Mp:      testutil.TestUtilMp,
+		Mp:      proc.Mp(),
 		Batches: []*batch.Batch{bat1},
 	}
 
 	bat2 := batch.New([]string{"tblId", "tblName", "dbId", "dbName", "createSql", "accountId"})
-	bat2.Vecs[0] = testutil.MakeUint64Vector([]uint64{1002}, nil) // 新的表ID
-	bat2.Vecs[1] = testutil.MakeVarcharVector([]string{"tbl1"}, nil)
-	bat2.Vecs[2] = testutil.MakeUint64Vector([]uint64{1}, nil)
-	bat2.Vecs[3] = testutil.MakeVarcharVector([]string{"db1"}, nil)
-	bat2.Vecs[4] = testutil.MakeVarcharVector([]string{"create table tbl1 (a int)"}, nil)
-	bat2.Vecs[5] = testutil.MakeUint32Vector([]uint32{1}, nil)
+	bat2.Vecs[0] = testutil.MakeUint64Vector([]uint64{1002}, nil, proc.Mp())
+	bat2.Vecs[1] = testutil.MakeVarcharVector([]string{"tbl1"}, nil, proc.Mp())
+	bat2.Vecs[2] = testutil.MakeUint64Vector([]uint64{1}, nil, proc.Mp())
+	bat2.Vecs[3] = testutil.MakeVarcharVector([]string{"db1"}, nil, proc.Mp())
+	bat2.Vecs[4] = testutil.MakeVarcharVector([]string{"create table tbl1 (a int)"}, nil, proc.Mp())
+	bat2.Vecs[5] = testutil.MakeUint32Vector([]uint32{1}, nil, proc.Mp())
 	bat2.SetRowCount(1)
 	res2 := executor.Result{
-		Mp:      testutil.TestUtilMp,
+		Mp:      proc.Mp(),
 		Batches: []*batch.Batch{bat2},
 	}
 

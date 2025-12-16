@@ -946,7 +946,7 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 		}
 
 		bs := vector.MustFixedColWithTypeCheck[bool](vec)
-		sels := execCtx.proc.Mp().GetSels()
+		sels := vector.GetSels()
 		for i, b := range bs {
 			if b {
 				sels = append(sels, int64(i))
@@ -955,7 +955,7 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 		executor.Free()
 
 		bat.Shrink(sels, false)
-		execCtx.proc.Mp().PutSels(sels)
+		vector.PutSels(sels)
 
 		v0 := vector.GenerateFunctionStrParameter(bat.Vecs[0])
 		v1 := vector.GenerateFunctionStrParameter(bat.Vecs[1])
@@ -1718,7 +1718,7 @@ func doShowCollation(ses *Session, execCtx *ExecCtx, proc *process.Process, sc *
 		}
 
 		bs := vector.MustFixedColWithTypeCheck[bool](vec)
-		sels := proc.Mp().GetSels()
+		sels := vector.GetSels()
 		for i, b := range bs {
 			if b {
 				sels = append(sels, int64(i))
@@ -1727,7 +1727,7 @@ func doShowCollation(ses *Session, execCtx *ExecCtx, proc *process.Process, sc *
 		executor.Free()
 
 		bat.Shrink(sels, false)
-		proc.Mp().PutSels(sels)
+		vector.PutSels(sels)
 		v0, area0 := vector.MustVarlenaRawData(bat.Vecs[0])
 		v1, area1 := vector.MustVarlenaRawData(bat.Vecs[1])
 		v2 := vector.MustFixedColWithTypeCheck[int64](bat.Vecs[2])

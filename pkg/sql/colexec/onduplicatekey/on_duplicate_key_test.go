@@ -64,7 +64,7 @@ func TestPrepare(t *testing.T) {
 
 func TestOnDuplicateKey(t *testing.T) {
 	for _, tc := range makeTestCases(t) {
-		resetChildren(tc.arg)
+		resetChildren(tc.arg, tc.proc.Mp())
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		ret, _ := vm.Exec(tc.arg, tc.proc)
@@ -72,7 +72,7 @@ func TestOnDuplicateKey(t *testing.T) {
 
 		tc.arg.Reset(tc.proc, false, nil)
 
-		resetChildren(tc.arg)
+		resetChildren(tc.arg, tc.proc.Mp())
 		err = tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		ret, _ = vm.Exec(tc.arg, tc.proc)
@@ -84,18 +84,18 @@ func TestOnDuplicateKey(t *testing.T) {
 	}
 }
 
-func resetChildren(arg *OnDuplicatekey) {
+func resetChildren(arg *OnDuplicatekey, m *mpool.MPool) {
 	bat := batch.New([]string{"a", "b", "a", "b", catalog.Row_ID})
 	vecs := make([]*vector.Vector, 5)
-	vecs[0] = testutil.MakeInt64Vector([]int64{1, 1}, nil)
-	vecs[1] = testutil.MakeInt64Vector([]int64{2, 2}, nil)
-	vecs[2] = testutil.MakeInt64Vector([]int64{1, 1}, []uint64{0, 1})
-	vecs[3] = testutil.MakeInt64Vector([]int64{2, 2}, []uint64{0, 1})
+	vecs[0] = testutil.MakeInt64Vector([]int64{1, 1}, nil, m)
+	vecs[1] = testutil.MakeInt64Vector([]int64{2, 2}, nil, m)
+	vecs[2] = testutil.MakeInt64Vector([]int64{1, 1}, []uint64{0, 1}, m)
+	vecs[3] = testutil.MakeInt64Vector([]int64{2, 2}, []uint64{0, 1}, m)
 	uuid1 := objectio.NewSegmentid()
 	blkId1 := objectio.NewBlockid(uuid1, 0, 0)
 	rowid1 := objectio.NewRowid(blkId1, 0)
 	rowid2 := objectio.NewRowid(blkId1, 0)
-	vecs[4] = testutil.MakeRowIdVector([]types.Rowid{rowid1, rowid2}, []uint64{0, 1})
+	vecs[4] = testutil.MakeRowIdVector([]types.Rowid{rowid1, rowid2}, []uint64{0, 1}, m)
 	bat.Vecs = vecs
 	bat.SetRowCount(vecs[0].Length())
 

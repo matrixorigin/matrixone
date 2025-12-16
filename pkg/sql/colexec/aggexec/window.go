@@ -15,6 +15,9 @@
 package aggexec
 
 import (
+	"bytes"
+	io "io"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -25,23 +28,30 @@ func SingleWindowReturnType(_ []types.Type) types.Type {
 	return types.T_int64.ToType()
 }
 
+type i64Slice []int64
+
+func (s i64Slice) MarshalBinary() ([]byte, error) {
+	return types.EncodeSlice[int64](s), nil
+}
+
 // special structure for a single column window function.
 type singleWindowExec struct {
 	singleAggInfo
 	ret aggResultWithFixedType[int64]
 
-	groups [][]int64
+	// groups [][]int64
+	groups []i64Slice
 }
 
-func makeRankDenseRankRowNumber(mg AggMemoryManager, info singleAggInfo) AggFuncExec {
+func makeRankDenseRankRowNumber(mp *mpool.MPool, info singleAggInfo) AggFuncExec {
 	return &singleWindowExec{
 		singleAggInfo: info,
-		ret:           initAggResultWithFixedTypeResult[int64](mg, info.retType, info.emptyNull, 0),
+		ret:           initAggResultWithFixedTypeResult[int64](mp, info.retType, info.emptyNull, 0, false),
 	}
 }
 
 func (exec *singleWindowExec) GroupGrow(more int) error {
-	exec.groups = append(exec.groups, make([][]int64, more)...)
+	exec.groups = append(exec.groups, make([]i64Slice, more)...)
 	return exec.ret.grows(more)
 }
 
@@ -61,9 +71,12 @@ func (exec *singleWindowExec) GetOptResult() SplitResult {
 
 func (exec *singleWindowExec) marshal() ([]byte, error) {
 	d := exec.singleAggInfo.getEncoded()
-	r, em, err := exec.ret.marshalToBytes()
+	r, em, dist, err := exec.ret.marshalToBytes()
 	if err != nil {
 		return nil, err
+	}
+	if dist != nil {
+		return nil, moerr.NewInternalErrorNoCtx("dist should have been nil")
 	}
 
 	encoded := EncodedAgg{
@@ -81,16 +94,53 @@ func (exec *singleWindowExec) marshal() ([]byte, error) {
 	return encoded.Marshal()
 }
 
+func (exec *singleWindowExec) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
+	return marshalRetAndGroupsToBuffer(
+		cnt, flags, buf,
+		&exec.ret.optSplitResult, exec.groups, nil)
+}
+
+func (exec *singleWindowExec) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
+	return marshalChunkToBuffer(
+		chunk, buf,
+		&exec.ret.optSplitResult, exec.groups, nil)
+}
+
+func (exec *singleWindowExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
+	err := unmarshalFromReaderNoGroup(reader, &exec.ret.optSplitResult)
+	if err != nil {
+		return err
+	}
+	exec.ret.setupT()
+
+	ngrp, err := types.ReadInt64(reader)
+	if err != nil {
+		return err
+	}
+	if ngrp != 0 {
+		exec.groups = make([]i64Slice, ngrp)
+		for i := range exec.groups {
+			_, bs, err := types.ReadSizeBytes(reader)
+			if err != nil {
+				return err
+			}
+			exec.groups[i] = types.DecodeSlice[int64](bs)
+		}
+	}
+	return nil
+}
+
 func (exec *singleWindowExec) unmarshal(mp *mpool.MPool, result, empties, groups [][]byte) error {
 	if len(exec.groups) > 0 {
-		exec.groups = make([][]int64, len(groups))
+		exec.groups = make([]i64Slice, len(groups))
 		for i := range exec.groups {
 			if len(groups[i]) > 0 {
 				exec.groups[i] = types.DecodeSlice[int64](groups[i])
 			}
 		}
 	}
-	return exec.ret.unmarshalFromBytes(result, empties)
+	// group used by above,
+	return exec.ret.unmarshalFromBytes(result, empties, nil)
 }
 
 func (exec *singleWindowExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {

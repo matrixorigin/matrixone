@@ -196,14 +196,14 @@ func TestPrepare(t *testing.T) {
 func TestFill(t *testing.T) {
 	for _, tc := range makeTestCases(t) {
 		tc.arg.ctr.bats = make([]*batch.Batch, 10)
-		resetChildren(tc.arg)
+		resetChildren(tc.arg, tc.proc.Mp())
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		_, _ = vm.Exec(tc.arg, tc.proc)
 
 		tc.arg.Reset(tc.proc, false, nil)
 
-		resetChildren(tc.arg)
+		resetChildren(tc.arg, tc.proc.Mp())
 		err = tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		_, _ = vm.Exec(tc.arg, tc.proc)
@@ -213,9 +213,9 @@ func TestFill(t *testing.T) {
 	}
 }
 
-func resetChildren(arg *Fill) {
-	bat1 := colexec.MakeMockBatchsWithNullVec1()
-	bat := colexec.MakeMockBatchsWithNullVec()
+func resetChildren(arg *Fill, m *mpool.MPool) {
+	bat1 := colexec.MakeMockBatchsWithNullVec1(m)
+	bat := colexec.MakeMockBatchsWithNullVec(m)
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat1, bat, bat})
 	arg.Children = nil
 	arg.AppendChild(op)

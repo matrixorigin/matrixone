@@ -487,13 +487,13 @@ func (vec *vectorWrapper) CompactByBitmap(mask *nulls.Bitmap) {
 	}
 	vec.tryCOW()
 
-	dels := vec.mpool.GetSels()
+	dels := vector.GetSels()
 	mask.Foreach(func(i uint64) bool {
 		dels = append(dels, int64(i))
 		return true
 	})
 	vec.wrapped.Shrink(dels, true)
-	vec.mpool.PutSels(dels)
+	vector.PutSels(dels)
 }
 
 func (vec *vectorWrapper) Compact(deletes *roaring.Bitmap) {
@@ -502,7 +502,7 @@ func (vec *vectorWrapper) Compact(deletes *roaring.Bitmap) {
 	}
 	vec.tryCOW()
 
-	dels := vec.mpool.GetSels()
+	dels := vector.GetSels()
 	itr := deletes.Iterator()
 	for itr.HasNext() {
 		r := itr.Next()
@@ -510,7 +510,7 @@ func (vec *vectorWrapper) Compact(deletes *roaring.Bitmap) {
 	}
 
 	vec.wrapped.Shrink(dels, true)
-	vec.mpool.PutSels(dels)
+	vector.PutSels(dels)
 }
 
 func (vec *vectorWrapper) GetDownstreamVector() *vector.Vector {

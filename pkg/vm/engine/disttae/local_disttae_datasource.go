@@ -1198,10 +1198,10 @@ func (ls *LocalDisttaeDataSource) applyPStateInMemDeletes(
 		// stack allocation
 		deletedOffsets = make([]int64, 0, stepCnt)
 	} else {
-		deletedOffsets = common.DefaultAllocator.GetSels()
+		deletedOffsets = vector.GetSels()
 		defer func() {
 			if deletedOffsets != nil {
-				common.DefaultAllocator.PutSels(deletedOffsets)
+				vector.PutSels(deletedOffsets)
 			}
 		}()
 	}

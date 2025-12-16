@@ -18,6 +18,7 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -108,69 +109,69 @@ func (op *MockOperator) Call(proc *process.Process) (vm.CallResult, error) {
 	return result, nil
 }
 
-func makeMockVecs() []*vector.Vector {
+func makeMockVecs(mp *mpool.MPool) []*vector.Vector {
 	vecs := make([]*vector.Vector, 5)
-	vecs[0] = testutil.MakeInt32Vector([]int32{1, 1000}, nil)
+	vecs[0] = testutil.MakeInt32Vector([]int32{1, 1000}, nil, mp)
 	uuid1, _ := types.BuildUuid()
 	uuid2, _ := types.BuildUuid()
-	vecs[1] = testutil.MakeUUIDVector([]types.Uuid{uuid1, uuid2}, nil)
-	vecs[2] = testutil.MakeVarcharVector([]string{"abcd", "中文..............................................."}, nil)
-	vecs[3] = testutil.MakeJsonVector([]string{"{\"a\":1, \"b\":\"dd\"}", "{\"a\":2, \"b\":\"dd\"}"}, nil)
-	vecs[4] = testutil.MakeDatetimeVector([]string{"2021-01-01 00:00:00", "2025-01-01 00:00:00"}, nil)
+	vecs[1] = testutil.MakeUUIDVector([]types.Uuid{uuid1, uuid2}, nil, mp)
+	vecs[2] = testutil.MakeVarcharVector([]string{"abcd", "中文..............................................."}, nil, mp)
+	vecs[3] = testutil.MakeJsonVector([]string{"{\"a\":1, \"b\":\"dd\"}", "{\"a\":2, \"b\":\"dd\"}"}, nil, mp)
+	vecs[4] = testutil.MakeDatetimeVector([]string{"2021-01-01 00:00:00", "2025-01-01 00:00:00"}, nil, mp)
 	return vecs
 }
 
 // new batchs with schema : (a int, b uuid, c varchar, d json, e datetime)
-func MakeMockBatchs() *batch.Batch {
+func MakeMockBatchs(mp *mpool.MPool) *batch.Batch {
 	bat := batch.New([]string{"a", "b", "c", "d", "e"})
-	vecs := makeMockVecs()
+	vecs := makeMockVecs(mp)
 	bat.Vecs = vecs
 	bat.SetRowCount(vecs[0].Length())
 	return bat
 }
 
-func MakeMockPartitionBatchs(val int32) *batch.Batch {
+func MakeMockPartitionBatchs(val int32, mp *mpool.MPool) *batch.Batch {
 	bat := batch.New([]string{"a"})
-	vecs := makeMockPartitionVecs(val)
+	vecs := makeMockPartitionVecs(val, mp)
 	bat.Vecs = vecs
 	bat.SetRowCount(vecs[0].Length())
 	return bat
 }
 
-func makeMockPartitionVecs(val int32) []*vector.Vector {
+func makeMockPartitionVecs(val int32, mp *mpool.MPool) []*vector.Vector {
 	vecs := make([]*vector.Vector, 1)
-	vecs[0] = testutil.MakeInt32Vector([]int32{val, val, val}, nil)
+	vecs[0] = testutil.MakeInt32Vector([]int32{val, val, val}, nil, mp)
 	return vecs
 }
 
-func makeMockTimeWinVecs() []*vector.Vector {
+func makeMockTimeWinVecs(mp *mpool.MPool) []*vector.Vector {
 	vecs := make([]*vector.Vector, 2)
 	vecs[0] = testutil.MakeDatetimeVector([]string{
 		"2021-01-01 00:00:01", "2025-01-01 00:00:02",
 		"2021-01-01 00:00:03", "2025-01-01 00:00:04",
-	}, nil)
-	vecs[1] = testutil.MakeInt32Vector([]int32{1, 4, 5, 1000}, nil)
+	}, nil, mp)
+	vecs[1] = testutil.MakeInt32Vector([]int32{1, 4, 5, 1000}, nil, mp)
 	return vecs
 }
 
-func MakeMockTimeWinBatchs() *batch.Batch {
+func MakeMockTimeWinBatchs(mp *mpool.MPool) *batch.Batch {
 	bat := batch.New([]string{"ts", "b"})
-	vecs := makeMockTimeWinVecs()
+	vecs := makeMockTimeWinVecs(mp)
 	bat.Vecs = vecs
 	bat.SetRowCount(vecs[0].Length())
 	return bat
 }
 
 // new batchs with schema : (a int, b uuid, c varchar, d json, e date)
-func MakeMockBatchsWithRowID() *batch.Batch {
+func MakeMockBatchsWithRowID(mp *mpool.MPool) *batch.Batch {
 	bat := batch.New([]string{catalog.Row_ID, "a", "b", "c", "d", "e"})
-	vecs := makeMockVecs()
+	vecs := makeMockVecs(mp)
 
 	uuid1 := objectio.NewSegmentid()
 	blkId1 := objectio.NewBlockid(uuid1, 0, 0)
 	rowid1 := objectio.NewRowid(blkId1, 0)
 	rowid2 := objectio.NewRowid(blkId1, 0)
-	bat.Vecs[0] = testutil.MakeRowIdVector([]types.Rowid{rowid1, rowid2}, nil)
+	bat.Vecs[0] = testutil.MakeRowIdVector([]types.Rowid{rowid1, rowid2}, nil, mp)
 	for i := range vecs {
 		bat.Vecs[i+1] = vecs[i]
 	}
@@ -180,19 +181,19 @@ func MakeMockBatchsWithRowID() *batch.Batch {
 
 // new batchs with schema : (a int auto_increment, b uuid, c varchar, d json, e date)
 // vecs[0] is null,  use for test preinsert...
-func MakeMockBatchsWithNullVec() *batch.Batch {
+func MakeMockBatchsWithNullVec(mp *mpool.MPool) *batch.Batch {
 	bat := batch.New([]string{"a", "b", "c", "d", "e"})
-	vecs := makeMockVecs()
-	vecs[0] = testutil.MakeInt32Vector([]int32{1, 1}, []uint64{0, 1})
+	vecs := makeMockVecs(mp)
+	vecs[0] = testutil.MakeInt32Vector([]int32{1, 1}, []uint64{0, 1}, mp)
 	bat.Vecs = vecs
 	bat.SetRowCount(vecs[0].Length())
 	return bat
 }
 
-func MakeMockBatchsWithNullVec1() *batch.Batch {
+func MakeMockBatchsWithNullVec1(mp *mpool.MPool) *batch.Batch {
 	bat := batch.New([]string{"a", "b", "c", "d", "e"})
-	vecs := makeMockVecs()
-	vecs[0] = testutil.MakeInt32Vector([]int32{1, 1}, []uint64{1})
+	vecs := makeMockVecs(mp)
+	vecs[0] = testutil.MakeInt32Vector([]int32{1, 1}, []uint64{1}, mp)
 	bat.Vecs = vecs
 	bat.SetRowCount(vecs[0].Length())
 	return bat
