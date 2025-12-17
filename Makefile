@@ -317,13 +317,13 @@ DEV_MOUNT ?=
 dev-help:
 	@echo "Local Multi-CN Development Environment Commands:"
 	@echo "  make dev-build          - Build MatrixOne docker image (forces rebuild, no cache)"
-	@echo "  make dev-up             - Start multi-CN cluster with local image"
+	@echo "  make dev-up             - Start multi-CN cluster with local image (with NET_ADMIN for network chaos)"
 	@echo "  make dev-up-latest      - Start multi-CN cluster with latest official image"
 	@echo "  make dev-up-test        - Start with test directory mounted"
 	@echo "  make dev-up-grafana     - Start cluster with Grafana monitoring"
 	@echo "  make dev-up-grafana-local - Start Grafana dashboard for local MatrixOne"
 	@echo "  make dev-down           - Stop multi-CN cluster"
-	@echo "  make dev-restart        - Restart multi-CN cluster (all services)"
+	@echo "  make dev-restart        - Restart multi-CN cluster (all services, preserves NET_ADMIN)"
 	@echo "  make dev-restart-cn1    - Restart CN1 only"
 	@echo "  make dev-restart-cn2    - Restart CN2 only"
 	@echo "  make dev-restart-proxy  - Restart Proxy only"
@@ -395,6 +395,39 @@ dev-help:
 	@echo "  make DEV_VERSION=nightly dev-up            # Use nightly build"
 	@echo "  make DEV_MOUNT='../../test:/test:ro' dev-up  # Custom mount"
 	@echo ""
+	@echo "Network Chaos Testing:"
+	@echo "  Containers (mo-cn1, mo-cn2, mo-tn) are configured with NET_ADMIN capability"
+	@echo "  This enables network chaos testing using tc (traffic control) tool"
+	@echo ""
+	@echo "  Network-only mode (containers keep running):"
+	@echo "    make dev-chaos-light          - Light network chaos (10-30ms delay, 1-3% loss)"
+	@echo "    make dev-chaos-moderate      - Moderate network chaos (50-150ms delay, 5-10% loss)"
+	@echo "    make dev-chaos-severe        - Severe network chaos (200-400ms delay, 15-25% loss)"
+	@echo "    make dev-chaos-inter-region  - Inter-region network (100-200ms delay, 2-5% loss)"
+	@echo "    make dev-chaos-inter-continent - Inter-continent network (300-500ms delay, 5-10% loss)"
+	@echo "    make dev-chaos-congestion     - Network congestion (50-100ms delay, 10-20% loss)"
+	@echo "    make dev-chaos-bandwidth     - Bandwidth limitation (10Mbps)"
+	@echo "    make dev-chaos-random        - Random delay or loss"
+	@echo ""
+	@echo "  Custom network chaos:"
+	@echo "    make dev-chaos CN=cn1 TYPE=delay DELAY=100    # 100ms delay on cn1 (inject until Ctrl+C)"
+	@echo "    make dev-chaos CN=cn2 TYPE=loss LOSS=20        # 20% loss on cn2 (inject until Ctrl+C)"
+	@echo "    make dev-chaos CN=cn1,cn2 TYPE=delay DELAY=100  # 100ms delay on cn1 and cn2 (inject until Ctrl+C)"
+	@echo "    make dev-chaos CN=cn1,tn TYPE=loss LOSS=20      # 20% loss on cn1 and tn (inject until Ctrl+C)"
+	@echo "    make dev-chaos CN=cn1,cn2,tn TYPE=delay DELAY=150  # 150ms delay on all nodes (inject until Ctrl+C)"
+	@echo ""
+	@echo "  Combined network chaos (delay + loss + bandwidth):"
+	@echo "    make dev-chaos CN=cn1 TYPE=combined DELAY=100 LOSS=20 BANDWIDTH=10  # All three effects"
+	@echo "    make dev-chaos CN=cn1,cn2 TYPE=combined DELAY=150 LOSS=15 BANDWIDTH=5 DURATION=60  # For 60 seconds"
+	@echo ""
+	@echo "  Network chaos with duration (auto-restore after duration):"
+	@echo "    make dev-chaos CN=cn1 TYPE=delay DELAY=100 DURATION=60    # 100ms delay for 60 seconds"
+	@echo "    make dev-chaos CN=cn1,cn2 TYPE=loss LOSS=20 DURATION=120  # 20% loss for 120 seconds"
+	@echo "    make dev-chaos CN=cn1,tn TYPE=delay DELAY=150 DURATION=300  # 150ms delay for 5 minutes"
+	@echo ""
+	@echo "  Use chaos-test.sh script directly for advanced options:"
+	@echo "    cd $(DEV_DIR) && ./chaos-test.sh --network-only -c cn1 --scenario moderate"
+	@echo ""
 	@echo "Grafana Monitoring:"
 	@echo "  Access Grafana UI at http://localhost:3000 (admin/admin)"
 	@echo "  Note: Enable metrics in service configs (disableMetric = false)"
@@ -421,6 +454,8 @@ dev-build-force:
 .PHONY: dev-up
 dev-up:
 	@echo "Starting MatrixOne Multi-CN cluster (version: $(DEV_VERSION))..."
+	@echo "Note: Containers (mo-cn1, mo-cn2, mo-tn) are configured with NET_ADMIN capability"
+	@echo "      for network chaos testing using tc (traffic control) tool"
 ifeq ($(DEV_MOUNT),)
 	@cd $(DEV_DIR) && ./start.sh -v $(DEV_VERSION) up -d
 else
@@ -431,6 +466,9 @@ endif
 	@echo "  mysql -h 127.0.0.1 -P 6001 -u root -p111  # Via proxy (recommended)"
 	@echo "  mysql -h 127.0.0.1 -P 16001 -u root -p111  # Direct to CN1"
 	@echo "  mysql -h 127.0.0.1 -P 16002 -u root -p111  # Direct to CN2"
+	@echo ""
+	@echo "Network chaos testing:"
+	@echo "  cd $(DEV_DIR) && ./chaos-test.sh -c cn1 -n loss --loss 20"
 
 .PHONY: dev-up-latest
 dev-up-latest:
@@ -560,6 +598,7 @@ dev-down:
 .PHONY: dev-restart
 dev-restart:
 	@echo "Restarting MatrixOne Multi-CN cluster..."
+	@echo "Note: NET_ADMIN capability is preserved for network chaos testing"
 	@cd $(DEV_DIR) && ./start.sh restart
 
 # Restart individual services
@@ -643,6 +682,49 @@ dev-logs-grafana-local:
 .PHONY: dev-check-grafana
 dev-check-grafana:
 	@cd $(DEV_DIR) && ./start.sh check-grafana
+
+# Network Chaos Testing Commands
+.PHONY: dev-chaos dev-chaos-light dev-chaos-moderate dev-chaos-severe dev-chaos-inter-region dev-chaos-inter-continent dev-chaos-congestion dev-chaos-bandwidth dev-chaos-random
+dev-chaos:
+	@if [ -z "$(CN)" ]; then \
+		echo "Error: CN is required. Use: make dev-chaos CN=cn1 TYPE=delay DELAY=100"; \
+		echo "  For multiple nodes: make dev-chaos CN=cn1,cn2,tn TYPE=delay DELAY=100"; \
+		exit 1; \
+	fi
+	@if [ -z "$(TYPE)" ]; then \
+		echo "Error: TYPE is required. Use: make dev-chaos CN=cn1 TYPE=delay DELAY=100"; \
+		echo "  For multiple nodes: make dev-chaos CN=cn1,cn2,tn TYPE=delay DELAY=100"; \
+		exit 1; \
+	fi
+	@cd $(DEV_DIR) && ./chaos-test.sh --network-only -c $(CN) -n $(TYPE) \
+		$$([ -n "$(DELAY)" ] && echo "--delay $(DELAY)") \
+		$$([ -n "$(LOSS)" ] && echo "--loss $(LOSS)") \
+		$$([ -n "$(BANDWIDTH)" ] && echo "--bandwidth $(BANDWIDTH)") \
+		$$([ -n "$(DURATION)" ] && echo "--duration $(DURATION)")
+
+dev-chaos-light:
+	@cd $(DEV_DIR) && ./chaos-test.sh --network-only -c $(or $(CN),cn1) --scenario light
+
+dev-chaos-moderate:
+	@cd $(DEV_DIR) && ./chaos-test.sh --network-only -c $(or $(CN),cn1) --scenario moderate
+
+dev-chaos-severe:
+	@cd $(DEV_DIR) && ./chaos-test.sh --network-only -c $(or $(CN),cn1) --scenario severe
+
+dev-chaos-inter-region:
+	@cd $(DEV_DIR) && ./chaos-test.sh --network-only -c $(or $(CN),cn1) --scenario inter-region
+
+dev-chaos-inter-continent:
+	@cd $(DEV_DIR) && ./chaos-test.sh --network-only -c $(or $(CN),cn1) --scenario inter-continent
+
+dev-chaos-congestion:
+	@cd $(DEV_DIR) && ./chaos-test.sh --network-only -c $(or $(CN),cn1) --scenario congestion
+
+dev-chaos-bandwidth:
+	@cd $(DEV_DIR) && ./chaos-test.sh --network-only -c $(or $(CN),cn1) --scenario bandwidth
+
+dev-chaos-random:
+	@cd $(DEV_DIR) && ./chaos-test.sh --network-only -c $(or $(CN),cn1) --random
 
 .PHONY: dev-setup-docker-mirror
 dev-setup-docker-mirror:
