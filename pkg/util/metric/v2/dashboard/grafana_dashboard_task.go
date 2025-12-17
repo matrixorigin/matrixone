@@ -20,7 +20,6 @@ import (
 
 	"github.com/K-Phoen/grabana/axis"
 	"github.com/K-Phoen/grabana/dashboard"
-	"github.com/K-Phoen/grabana/row"
 	"github.com/K-Phoen/grabana/timeseries"
 	tsaxis "github.com/K-Phoen/grabana/timeseries/axis"
 )
@@ -38,7 +37,6 @@ func (c *DashboardCreator) initTaskDashboard() error {
 			c.initTaskMergeRow(),
 			c.initTaskMergeTransferPageRow(),
 			c.initTaskCheckpointRow(),
-			c.initTaskSelectivityRow(),
 			c.initTaskStorageUsageRow(),
 			c.initMoTableStatsTaskDurationRow(),
 			c.initMoTableStatsTaskCountingRow(),
@@ -82,13 +80,6 @@ func (c *DashboardCreator) initTaskMergeTransferPageRow() dashboard.Option {
 		c.getPercentHist(
 			"Transfer run ttl duration",
 			c.getMetricWithFilter(`mo_task_transfer_duration_bucket`, `type="table_run_ttl_duration"`),
-			[]float64{0.50, 0.8, 0.90, 0.99},
-			SpanNulls(true),
-			timeseries.Span(3),
-		),
-		c.getPercentHist(
-			"Transfer duration since born",
-			c.getMetricWithFilter(`mo_task_transfer_duration_bucket`, `type="page_since_born_duration"`),
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			SpanNulls(true),
 			timeseries.Span(3),
@@ -292,52 +283,6 @@ func (c *DashboardCreator) initTaskStorageUsageRow() dashboard.Option {
 		rows...,
 	)
 
-}
-
-func (c *DashboardCreator) initTaskSelectivityRow() dashboard.Option {
-
-	hitRateFunc := func(title, metricType string) row.Option {
-		return c.getTimeSeries(
-			title,
-			[]string{
-				fmt.Sprintf(
-					"sum(%s) by (%s) / on(%s) sum(%s) by (%s)",
-					c.getMetricWithFilter(`mo_task_selectivity`, `type="`+metricType+`_hit"`), c.by, c.by,
-					c.getMetricWithFilter(`mo_task_selectivity`, `type="`+metricType+`_total"`), c.by),
-			},
-			[]string{fmt.Sprintf("filterout-{{ %s }}", c.by)},
-			timeseries.Span(4),
-		)
-	}
-	counterRateFunc := func(title, metricType string) row.Option {
-		return c.getTimeSeries(
-			title,
-			[]string{
-				fmt.Sprintf(
-					"sum(rate(%s[$interval])) by (%s)",
-					c.getMetricWithFilter(`mo_task_selectivity`, `type="`+metricType+`_total"`), c.by),
-			},
-			[]string{fmt.Sprintf("req-{{ %s }}", c.by)},
-			timeseries.Span(4),
-		)
-	}
-	return dashboard.Row(
-		"Read Selectivity",
-		hitRateFunc("Read filter rate", "readfilter"),
-		hitRateFunc("Block range filter rate", "block"),
-		hitRateFunc("Column update filter rate", "column"),
-		counterRateFunc("Read filter request", "readfilter"),
-		counterRateFunc("Block range request", "block"),
-		counterRateFunc("Column update request", "column"),
-		c.getPercentHist(
-			"Iterate deletes rows count per block",
-			c.getMetricWithFilter(`mo_task_hist_total_bucket`, `type="load_mem_deletes_per_block"`),
-			[]float64{0.5, 0.7, 0.8, 0.9},
-			timeseries.Axis(tsaxis.Unit("")),
-			timeseries.Span(4),
-			SpanNulls(true),
-		),
-	)
 }
 
 func (c *DashboardCreator) initMoTableStatsTaskDurationRow() dashboard.Option {

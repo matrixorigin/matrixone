@@ -257,7 +257,7 @@ func waitHAKeeperRunning(client logservice.CNHAKeeperClient) error {
 		if moerr.IsMoErrCode(err, moerr.ErrNoHAKeeper) ||
 			state.State != logpb.HAKeeperRunning {
 			// not ready
-			logutil.Info("hakeeper not ready, retry")
+			logutil.Info("retry.wait.hakeeper.running")
 			time.Sleep(time.Second)
 			continue
 		}
@@ -276,10 +276,10 @@ func waitAnyShardReady(client logservice.CNHAKeeperClient) error {
 			if err != nil {
 				if errors.Is(err, context.DeadlineExceeded) {
 					err = moerr.AttachCause(ctx, err)
-					logutil.Errorf("wait TN ready timeout: %s", err)
+					logutil.Error("wait.tn.ready.timeout", zap.Error(err))
 					return false, err
 				}
-				logutil.Errorf("failed to get cluster details %s", err)
+				logutil.Error("wait.tn.ready.failed", zap.Error(err))
 				return false, nil
 			}
 			for _, store := range details.TNStores {
@@ -287,12 +287,12 @@ func waitAnyShardReady(client logservice.CNHAKeeperClient) error {
 					return true, nil
 				}
 			}
-			logutil.Info("shard not ready")
+			logutil.Info("wait.tn.ready.not.ready")
 			return false, nil
 		}(); err != nil {
 			return err
 		} else if ok {
-			logutil.Info("shard ready")
+			logutil.Info("wait.tn.ready.ready.completed")
 			return nil
 		}
 		time.Sleep(time.Second)
@@ -312,7 +312,7 @@ func waitClusterCondition(
 		return err
 	}
 	if err := client.Close(); err != nil {
-		logutil.Error("close hakeeper client failed", zap.Error(err))
+		logutil.Error("wait.cluster.condition.close.hakeeper.client.failed", zap.Error(err))
 	}
 	return nil
 }

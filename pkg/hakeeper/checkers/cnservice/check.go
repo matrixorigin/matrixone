@@ -39,18 +39,20 @@ func NewCNServiceChecker(
 
 func (c *cnServiceChecker) Check() (operators []*operator.Operator) {
 	if c.User.Username == "" {
-		runtime.ServiceRuntime(c.ServiceID).Logger().Warn("username is still empty.")
+		runtime.ServiceRuntime(c.ServiceID).Logger().Warn("hakeeper.checker.cnservice.username.empty")
 		return
 	}
 	working, expired := parseCNStores(c.Cfg, c.cnState, c.CurrentTick)
 	if len(working)+len(expired) == 0 {
-		runtime.ServiceRuntime(c.ServiceID).Logger().Error("there are no CNs yet.")
+		runtime.ServiceRuntime(c.ServiceID).Logger().Error("hakeeper.checker.cnservice.no.cn.found")
 		return
 	}
 	for _, store := range working {
 		if !c.cnState.Stores[store].TaskServiceCreated {
-			runtime.ServiceRuntime(c.ServiceID).Logger().Info("create task service for CN.",
-				zap.String("uuid", store))
+			runtime.ServiceRuntime(c.ServiceID).Logger().Info(
+				"hakeeper.checker.cnservice.create.task.service",
+				zap.String("uuid", store),
+			)
 			operators = append(operators, operator.CreateTaskServiceOp("",
 				store, pb.CNService, c.User))
 		}
@@ -58,17 +60,21 @@ func (c *cnServiceChecker) Check() (operators []*operator.Operator) {
 		if !c.cnState.Stores[store].GossipJoined {
 			addresses := getGossipAddresses(c.Cfg, c.cnState, c.CurrentTick, store)
 			if len(addresses) > 0 {
-				runtime.ServiceRuntime(c.ServiceID).Logger().Info("join gossip cluster for CN",
+				runtime.ServiceRuntime(c.ServiceID).Logger().Info(
+					"hakeeper.checker.cnservice.join.gossip.cluster",
 					zap.String("uuid", store),
-					zap.Any("addresses", addresses))
+					zap.Any("addresses", addresses),
+				)
 				operators = append(operators, operator.JoinGossipClusterOp("",
 					store, addresses))
 			}
 		}
 	}
 	for _, store := range expired {
-		runtime.ServiceRuntime(c.ServiceID).Logger().Warn("expired CN.",
-			zap.String("uuid", store))
+		runtime.ServiceRuntime(c.ServiceID).Logger().Warn(
+			"hakeeper.checker.cnservice.expired.cn",
+			zap.String("uuid", store),
+		)
 		operators = append(operators, operator.CreateDeleteCNOp("", store))
 	}
 	return operators

@@ -17,7 +17,6 @@ package disttae
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
@@ -54,6 +53,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -882,17 +882,20 @@ func (txn *Transaction) GCObjsByIdxRange(start, end int) (err error) {
 func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 	txn.op.EnterRollbackStmt()
 	defer txn.op.ExitRollbackStmt()
+	v2.TxnRollbackLastStatementCounter.Inc()
 	var (
 		beforeEntries int
 		afterEntries  int
 	)
 	defer func() {
-		logutil.Info(
-			"RollbackLastStatement",
-			zap.String("txn", hex.EncodeToString(txn.op.Txn().ID)),
-			zap.Int("before", beforeEntries),
-			zap.Int("after", afterEntries),
-		)
+		common.DoIfDebugEnabled(func() {
+			logutil.Debug(
+				"RollbackLastStatement",
+				zap.String("txn", txn.op.Txn().DebugString()),
+				zap.Int("before", beforeEntries),
+				zap.Int("after", afterEntries),
+			)
+		})
 	}()
 	txn.Lock()
 	defer txn.Unlock()

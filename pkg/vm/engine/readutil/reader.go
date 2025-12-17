@@ -98,9 +98,10 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 
 	// record the column selectivity
 	chit, ctotal := len(cols), len(mixin.tableDef.Cols)
-	v2.TaskSelColumnTotal.Add(float64(ctotal))
+	// record per-read column counts for histogram metrics
 	if ctotal >= chit {
-		v2.TaskSelColumnHit.Add(float64(ctotal - chit))
+		v2.TxnColumnReadCountHistogram.Observe(float64(chit))
+		v2.TxnColumnTotalCountHistogram.Observe(float64(ctotal))
 	}
 
 	mixin.columns.seqnums = make([]uint16, len(cols))

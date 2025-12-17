@@ -17,6 +17,7 @@ package checkpoint
 import (
 	"context"
 	"fmt"
+	"math"
 	"math/rand"
 	"slices"
 	"sync"
@@ -186,7 +187,7 @@ func (f *flusher) Start() {
 	if impl := f.impl.Load(); impl != nil {
 		impl.Start()
 	} else {
-		logutil.Info("flushImpl-noop-Started")
+		logutil.Info("flusher.noop.start")
 	}
 }
 
@@ -252,7 +253,7 @@ func (f *flusher) ForceFlushWithInterval(
 func (f *flusher) ChangeForceFlushTimeout(timeout time.Duration) {
 	impl := f.impl.Load()
 	if impl == nil {
-		logutil.Warn("flusher stopped")
+		logutil.Warn("flusher.stopped")
 		return
 	}
 	impl.ChangeForceFlushTimeout(timeout)
@@ -261,7 +262,7 @@ func (f *flusher) ChangeForceFlushTimeout(timeout time.Duration) {
 func (f *flusher) ChangeForceCheckInterval(interval time.Duration) {
 	impl := f.impl.Load()
 	if impl == nil {
-		logutil.Warn("flusher stopped")
+		logutil.Warn("flusher.stopped")
 		return
 	}
 	impl.ChangeForceCheckInterval(interval)
@@ -301,6 +302,12 @@ type flushImpl struct {
 	flushRequestQ sm.Queue
 
 	objMemSizeList []tableAndSize
+
+	// Log throttling for collectTableMemUsage
+	logThrottleMu   sync.Mutex
+	lastLogTime     time.Time
+	lastLogPressure float64
+	lastLogSize     int64
 
 	onceStart sync.Once
 	onceStop  sync.Once
@@ -512,11 +519,54 @@ func (flusher *flushImpl) collectTableMemUsage(entry *logtail.DirtyTreeEntry, la
 	if pressure > 1.0 {
 		pressure = 1.0
 	}
-	logutil.Info(
-		"Flush-CollectMemUsage",
-		zap.Float64("pressure", pressure),
-		zap.String("size", common.HumanReadableBytes(totalSize)),
+
+	// Throttle logging: only log if enough time has passed or values changed significantly
+	flusher.logThrottleMu.Lock()
+	now := time.Now()
+	shouldLog := false
+	const (
+		logInterval           = 1 * time.Minute   // 距离上次打印超过1分钟
+		changeThreshold       = 0.2               // 相对变化超过20%
+		absoluteSizeThreshold = 256 * 1024 * 1024 // 绝对大小超过256MB (约1/4的总体上限)
+		pressureThreshold     = 0.5               // pressure占比超过50%
 	)
+
+	if flusher.lastLogTime.IsZero() {
+		// First time, always log
+		shouldLog = true
+	} else {
+		timeSinceLastLog := now.Sub(flusher.lastLogTime)
+		pressureChange := math.Abs(pressure - flusher.lastLogPressure)
+		sizeChange := math.Abs(float64(totalSize)-float64(flusher.lastLogSize)) / float64(max(flusher.lastLogSize, int64(1)))
+
+		// Log if:
+		// 1. 距离上次打印超过1分钟，或者
+		// 2. 相对变化比较大（pressure或size变化超过阈值），或者
+		// 3. 绝对值比较大（totalSize超过绝对阈值），或者
+		// 4. 占比比较大（pressure超过阈值）
+		if timeSinceLastLog >= logInterval ||
+			pressureChange >= changeThreshold ||
+			sizeChange >= changeThreshold ||
+			totalSize >= absoluteSizeThreshold ||
+			pressure >= pressureThreshold {
+			shouldLog = true
+		}
+	}
+
+	if shouldLog {
+		flusher.lastLogTime = now
+		flusher.lastLogPressure = pressure
+		flusher.lastLogSize = int64(totalSize)
+		flusher.logThrottleMu.Unlock()
+
+		logutil.Info(
+			"flusher.collect.mem.usage",
+			zap.Float64("pressure", pressure),
+			zap.String("size", common.HumanReadableBytes(totalSize)),
+		)
+	} else {
+		flusher.logThrottleMu.Unlock()
+	}
 
 	return pressure
 }
@@ -536,7 +586,12 @@ func (flusher *flushImpl) fireFlushTabletail(
 	}
 	foreachAobjBefore(context.Background(), table, end, lastCkp, df, tf)
 	if len(metas) == 0 && len(tombstoneMetas) == 0 {
-		logutil.Warn("[FlushTabletail] empty fire", zap.String("table", tableDesc), zap.String("end", end.ToString()), zap.String("lastCkp", lastCkp.ToString()))
+		logutil.Warn(
+			"flusher.table.tail.empty.fire",
+			zap.String("table", tableDesc),
+			zap.String("end", end.ToString()),
+			zap.String("last-ckp", lastCkp.ToString()),
+		)
 		return nil
 	}
 
@@ -555,7 +610,8 @@ nextChunk:
 		scopes := make([]common.ID, 0, len(chunk))
 		for _, meta := range chunk {
 			if !meta.GetObjectData().PrepareCompact() {
-				logutil.Info("[FlushTabletail] data prepareCompact false",
+				logutil.Info(
+					"flusher.data.prepare.compact.false",
 					zap.String("table", tableDesc),
 					zap.String("obj", meta.ID().String()),
 				)
@@ -566,7 +622,8 @@ nextChunk:
 		if firstChunk {
 			for _, meta := range tombstoneMetas {
 				if !meta.GetObjectData().PrepareCompact() {
-					logutil.Info("[FlushTabletail] tomb prepareCompact false",
+					logutil.Info(
+						"flusher.tombstones.prepare.compact.false",
 						zap.String("table", tableDesc),
 						zap.String("obj", meta.ID().String()),
 					)
@@ -582,7 +639,7 @@ nextChunk:
 			factory = jobs.FlushTableTailTaskFactory(chunk, tombstoneMetas, flusher.rt)
 			firstChunk = false
 		} else {
-			logutil.Info("[FlushTabletail] fire chunk",
+			logutil.Info("flusher.table.tail.fire.chunk",
 				zap.String("table", tableDesc),
 				zap.Int("chunk-size", len(chunk)),
 			)
@@ -593,7 +650,7 @@ nextChunk:
 			nil, tasks.FlushTableTailTask, scopes, factory)
 		if err != nil {
 			if err != tasks.ErrScheduleScopeConflict {
-				logutil.Error("[FlushTabletail] Sched Failure",
+				logutil.Error("flusher.table.tail.sched.failure",
 					zap.String("table", tableDesc),
 					zap.Error(err),
 				)
@@ -615,7 +672,7 @@ func (flusher *flushImpl) checkFlushConditionAndFire(
 
 		if force {
 			logutil.Info(
-				"Flush-Force",
+				"flusher.force",
 				zap.Uint64("id", table.ID),
 				zap.String("name", table.GetLastestSchemaLocked(false).Name),
 			)
@@ -655,7 +712,7 @@ func (flusher *flushImpl) checkFlushConditionAndFire(
 
 		if asize+dsize > 2*1000*1024 {
 			logutil.Info(
-				"Flush-Tabletail",
+				"flusher.table.tail",
 				zap.String("name", table.GetLastestSchemaLocked(false).Name),
 				zap.String("size", common.HumanReadableBytes(asize+dsize)),
 				zap.String("dsize", common.HumanReadableBytes(dsize)),
@@ -803,7 +860,7 @@ func (flusher *flushImpl) Start() {
 		flusher.cronTrigger.Start()
 		cfg := flusher.mutableCfg.Load()
 		logutil.Info(
-			"flushImpl-Started",
+			"flusher.start",
 			zap.Duration("cron-period", flusher.cronPeriod),
 			zap.Duration("flush-interval", flusher.flushInterval),
 			zap.Duration("flush-lag", flusher.flushLag),
@@ -817,6 +874,6 @@ func (flusher *flushImpl) Stop() {
 	flusher.onceStop.Do(func() {
 		flusher.cronTrigger.Stop()
 		flusher.flushRequestQ.Stop()
-		logutil.Info("flushImpl-Stopped")
+		logutil.Info("flusher.stop")
 	})
 }

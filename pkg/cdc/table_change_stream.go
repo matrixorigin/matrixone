@@ -455,9 +455,14 @@ func (s *TableChangeStream) Run(ctx context.Context, ar *ActiveRoutine) {
 
 			// Check if cleanup failed with rollback error (set by processWithTxn defer)
 			// If so, override retryable to false even if main error is retryable
+			// Rollback failure indicates system state may be inconsistent, so should not retry
+			// However, preserve retryable state if error is a pause/cancel control signal
 			s.stateMu.Lock()
 			if s.cleanupRollbackErr != nil {
-				s.retryable = false
+				// Mark as non-retryable unless it's a pause/cancel control signal
+				if !IsPauseOrCancelError(err.Error()) {
+					s.retryable = false
+				}
 			}
 			retryable := s.retryable
 			retryCount := s.retryCount
@@ -578,6 +583,13 @@ func (s *TableChangeStream) cleanup(ctx context.Context) {
 	)
 	defer s.wg.Done()
 	defer func() {
+		// Decrement table stream state gauge on cleanup
+		if s.progressTracker != nil {
+			state, _ := s.progressTracker.GetState()
+			if state != "" {
+				v2.CdcTableStreamTotalGauge.WithLabelValues(state).Dec()
+			}
+		}
 		logutil.Debug(
 			"cdc.table_stream.cleanup_done",
 			zap.String("table", s.tableInfo.String()),
@@ -640,6 +652,16 @@ func (s *TableChangeStream) cleanup(ctx context.Context) {
 	// Unregister from CDC detector
 	if detector != nil && detector.cdcStateManager != nil {
 		detector.cdcStateManager.RemoveActiveRunner(s.tableInfo)
+	}
+
+	// Clean up table-level metrics to prevent stale metrics after task deletion
+	// This ensures metrics are removed even if watermark cache was already cleared
+	if s.progressTracker != nil {
+		tableLabel := s.progressTracker.tableKey()
+		v2.CdcTableLastActivityTimestamp.DeleteLabelValues(tableLabel)
+		v2.CdcTableStuckGauge.DeleteLabelValues(tableLabel)
+		// Note: Other metrics like CdcWatermarkLagSeconds are cleaned up by watermark_updater
+		// orphan cleanup logic, but we clean up table-specific metrics here for completeness
 	}
 
 	logutil.Debug(
@@ -755,11 +777,14 @@ func (s *TableChangeStream) processOneRound(ctx context.Context, ar *ActiveRouti
 	}
 
 	// If cleanup failed with rollback error, mark as non-retryable but return original error
-	// (test expects original error to be returned, but retryable should be false)
+	// Rollback failure indicates system state may be inconsistent, so should not retry
+	// However, preserve retryable state if error is a pause/cancel control signal
 	if cleanupRollbackErr != nil {
-		// Update error state to mark as non-retryable, but keep original error
 		s.stateMu.Lock()
-		s.retryable = false
+		// Mark as non-retryable unless it's a pause/cancel control signal
+		if err == nil || !IsPauseOrCancelError(err.Error()) {
+			s.retryable = false
+		}
 		s.stateMu.Unlock()
 		// Return original error (not cleanup error) as expected by tests
 		return err
@@ -1130,11 +1155,30 @@ func (s *TableChangeStream) processWithTxn(
 	}
 
 	toTs := types.TimestampToTS(GetSnapshotTS(txnOp))
+	tsCapped := false
 	if !s.endTs.IsEmpty() && toTs.GT(&s.endTs) {
 		toTs = s.endTs
+		tsCapped = true
 	}
 
+	// Consolidated debug log for time range (avoid excessive INFO logging in hot path)
+	logutil.Debug(
+		"cdc.table_stream.time_range",
+		zap.String("table", s.tableInfo.String()),
+		zap.String("from-ts", fromTs.ToString()),
+		zap.String("to-ts", toTs.ToString()),
+		zap.String("end-ts", s.endTs.ToString()),
+		zap.Bool("ts-capped", tsCapped),
+	)
+
 	if !toTs.GT(&fromTs) {
+		logutil.Info(
+			"cdc.table_stream.no_progress_detected",
+			zap.String("table", s.tableInfo.String()),
+			zap.String("from-ts", fromTs.ToString()),
+			zap.String("to-ts", toTs.ToString()),
+			zap.Bool("to-ts-gt-from-ts", toTs.GT(&fromTs)),
+		)
 		return s.handleSnapshotNoProgress(ctx, fromTs, toTs)
 	}
 
@@ -1164,7 +1208,7 @@ func (s *TableChangeStream) processWithTxn(
 		zap.String("table", s.tableInfo.String()),
 		zap.String("from-ts", fromTs.ToString()),
 		zap.String("to-ts", toTs.ToString()),
-		zap.Duration("collect-duration", time.Since(start)),
+		zap.Duration("duration", time.Since(start)),
 	)
 
 	// Create change collector

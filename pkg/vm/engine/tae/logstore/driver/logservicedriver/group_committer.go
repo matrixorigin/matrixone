@@ -79,6 +79,7 @@ func (a *groupCommitter) Commit() (err error) {
 	start := time.Now()
 	defer func() {
 		v2.LogTailAppendDurationHistogram.Observe(time.Since(start).Seconds())
+		v2.TxnTNLogServiceAppendDurationHistogram.Observe(time.Since(start).Seconds())
 		task.End()
 	}()
 

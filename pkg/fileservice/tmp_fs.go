@@ -17,7 +17,6 @@ package fileservice
 import (
 	"context"
 	"path"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -117,8 +116,8 @@ func (fs *TmpFileService) GetOrCreateApp(appConfig *AppConfig) (*AppFS, error) {
 		return app, nil
 	}
 	logutil.Info(
-		"TMP-FILE-CREATE-APP",
-		zap.String("app", appConfig.Name),
+		"fs.tmp.create.app",
+		zap.String("name", appConfig.Name),
 	)
 	app = &AppFS{
 		tmpFS:     fs,
@@ -146,12 +145,22 @@ func (fs *TmpFileService) gc(ctx context.Context) {
 		gcedFiles := make([]string, 0)
 		for entry, err := range entries {
 			if err != nil {
-				logutil.Warnf("TMP-FILE-GC failed, err: %v", err)
+				logutil.Warn(
+					"fs.tmp.gc.failed",
+					zap.String("app", appConfig.Name),
+					zap.String("file", path.Join(appPath, entry.Name)),
+					zap.Error(err),
+				)
 				continue
 			}
 			needGC, err := appFS.appConfig.GCFn(entry.Name, appFS)
 			if err != nil {
-				logutil.Warnf("TMP-FILE-GC failed, err: %v, filePath: %v", err, path.Join(appPath, entry.Name))
+				logutil.Warn(
+					"fs.tmp.gc.failed",
+					zap.String("app", appConfig.Name),
+					zap.String("file", path.Join(appPath, entry.Name)),
+					zap.Error(err),
+				)
 				continue
 			}
 			if needGC {
@@ -159,17 +168,17 @@ func (fs *TmpFileService) gc(ctx context.Context) {
 			}
 		}
 		logutil.Info(
-			"TMP-FILE-GC",
+			"fs.tmp.gc",
 			zap.String("app", appConfig.Name),
-			zap.String("gced_files", strings.Join(gcedFiles, ",")),
+			zap.Strings("files", gcedFiles),
 		)
 	}
 }
 
 func (fs *TmpFileService) tmpFileServiceGCTicker(ctx context.Context) {
 	logutil.Info(
-		"TMP-FILE-GC-START",
-		zap.String("gc interval", fs.gcInterval.String()),
+		"fs.tmp.gc.start",
+		zap.String("interval", fs.gcInterval.String()),
 	)
 	fs.wg.Add(1)
 	defer fs.wg.Done()
@@ -178,7 +187,7 @@ func (fs *TmpFileService) tmpFileServiceGCTicker(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			logutil.Infof("GC tmp_file_service process exit.")
+			logutil.Info("fs.tmp.gc.stop")
 			return
 
 		case <-ticker.C:
@@ -191,7 +200,7 @@ func (fs *TmpFileService) Close(ctx context.Context) {
 	if fs.closed.Load() {
 		return
 	}
-	defer logutil.Infof("TMP-FILE Service closed.")
+	defer logutil.Info("fs.tmp.close")
 	fs.closed.Store(true)
 	fs.cancel()
 	fs.wg.Wait()
@@ -202,12 +211,19 @@ func (fs *TmpFileService) init() {
 	entries := fs.List(context.Background(), "")
 	for entry, err := range entries {
 		if err != nil {
-			logutil.Warnf("TMP-FILE-INIT failed, err: %v", err)
+			logutil.Warn(
+				"fs.tmp.init.failed",
+				zap.String("name", entry.Name),
+				zap.Error(err),
+			)
 			continue
 		}
 		config, ok := appConfigs[entry.Name]
 		if !ok {
-			logutil.Warnf("TMP-FILE-INIT failed, %v not Existed", entry.Name)
+			logutil.Warn(
+				"fs.tmp.init.not.found",
+				zap.String("name", entry.Name),
+			)
 			continue
 		}
 		fs.GetOrCreateApp(config)
