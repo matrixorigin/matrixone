@@ -31,7 +31,7 @@ const (
 )
 
 const (
-	moDefaultRecursionMax = 1000
+	moDefaultRecursionMax = 100
 )
 
 type container struct {
