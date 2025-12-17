@@ -53,7 +53,8 @@ SELECT WEEKOFYEAR(NULL) AS null_result;
 null_result
 null
 SELECT WEEKOFYEAR('2008-02-20') AS weekofyear_result, WEEK('2008-02-20', 3) AS week_mode3_result;
-invalid argument function week, bad value [VARCHAR BIGINT]
+weekofyear_result    week_mode3_result
+8    8
 SELECT WEEKOFYEAR('2008-01-15') AS jan_week;
 jan_week
 3
