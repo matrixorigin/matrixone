@@ -288,9 +288,9 @@ ORDER BY dist LIMIT 4;
  ORDER BY id, l2_distance(vec, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]')
  LIMIT 2 by rank with option 'mode=pre')
 UNION
-(SELECT id, content, cosine_distance(embedding, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]') AS dist
+(SELECT id, content, cosine_distance(embedding, '[0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2]') AS dist
  FROM mini_embed_data 
- ORDER BY cosine_distance(embedding, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]') 
+ ORDER BY cosine_distance(embedding, '[0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2]') 
  LIMIT 2 by rank with option 'mode=pre')
 LIMIT 4;
 
@@ -352,13 +352,13 @@ ORDER BY dist LIMIT 3;
 (SELECT id, content
  FROM mini_embed_data 
  WHERE file_id = 'file01'
- ORDER BY cosine_distance(embedding, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]') 
+ ORDER BY cosine_distance(embedding, '[0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2]') 
  LIMIT 1 by rank with option 'mode=pre')
 UNION ALL
 (SELECT id, content
  FROM mini_embed_data 
  WHERE file_id = 'file02'
- ORDER BY cosine_distance(embedding, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]') 
+ ORDER BY cosine_distance(embedding, '[0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2]') 
  LIMIT 2 by rank with option 'mode=pre')
 LIMIT 3;
 

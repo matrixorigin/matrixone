@@ -364,16 +364,16 @@ FROM mini_vector_data
 ORDER BY id, l2_distance(vec, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]')
 LIMIT 2 by rank with option 'mode=pre')
 UNION
-(SELECT id, content, cosine_distance(embedding, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]') AS dist
+(SELECT id, content, cosine_distance(embedding, '[0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2]') AS dist
 FROM mini_embed_data
-ORDER BY cosine_distance(embedding, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]')
+ORDER BY cosine_distance(embedding, '[0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2]')
 LIMIT 2 by rank with option 'mode=pre')
 LIMIT 4;
 id    content    dist
 id1    hello world    1.5163443088531494
 id10    additional entry    1.4459599256515503
-id04    mysql is a relational database    0.0
-id01    ai is artificial intelligence    0.0
+id03    it stores high dimensional vectors    0.0
+id05    an ai assistant by openai    0.2728450298309326
 (SELECT id, category, l2_distance(vec, '[0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9]') AS dist
 FROM vec_with_multi_idx
 WHERE category = 'A' AND status = 1
@@ -438,19 +438,19 @@ id10    additional entry    1.0718208877650799
 (SELECT id, content
 FROM mini_embed_data
 WHERE file_id = 'file01'
-ORDER BY cosine_distance(embedding, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]')
+ORDER BY cosine_distance(embedding, '[0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2]')
 LIMIT 1 by rank with option 'mode=pre')
 UNION ALL
 (SELECT id, content
 FROM mini_embed_data
 WHERE file_id = 'file02'
-ORDER BY cosine_distance(embedding, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]')
+ORDER BY cosine_distance(embedding, '[0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2]')
 LIMIT 2 by rank with option 'mode=pre')
 LIMIT 3;
 id    content
-id04    mysql is a relational database
 id03    it stores high dimensional vectors
-id01    ai is artificial intelligence
+id04    mysql is a relational database
+id05    an ai assistant by openai
 (SELECT id, text, l2_distance(vec, '[0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5]') AS dist
 FROM mini_vector_data
 WHERE id LIKE 'id1%'
