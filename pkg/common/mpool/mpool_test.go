@@ -47,7 +47,7 @@ func TestMPool(t *testing.T) {
 		a[0] = 0xF0
 		require.True(t, a[1] == 0, "allocation result not zeroed.")
 		a[i*10-1] = 0xBA
-		a, err = m.reAllocWithDetailK(m.getDetailK(), a, int64(i*20), true)
+		a, err = m.reAllocWithDetailK(m.getDetailK(), a, int64(i*20), true, true)
 		require.True(t, err == nil, "realloc failure %v", err)
 		require.True(t, len(a) == i*20, "allocation i size error")
 		require.True(t, a[0] == 0xF0, "reallocation not copied")
@@ -125,12 +125,12 @@ func TestMpoolReAllocate(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(cap(d1)), m.CurrNB())
 
-	d2, err := m.reAllocWithDetailK(m.getDetailK(), d1, int64(cap(d1)-1), true)
+	d2, err := m.reAllocWithDetailK(m.getDetailK(), d1, int64(cap(d1)-1), true, true)
 	require.NoError(t, err)
 	require.Equal(t, cap(d1), cap(d2))
 	require.Equal(t, int64(cap(d1)), m.CurrNB())
 
-	d3, err := m.reAllocWithDetailK(m.getDetailK(), d2, int64(cap(d2)+1025), true)
+	d3, err := m.reAllocWithDetailK(m.getDetailK(), d2, int64(cap(d2)+1025), true, true)
 	require.NoError(t, err)
 	require.Equal(t, int64(cap(d3)), m.CurrNB())
 
@@ -171,7 +171,7 @@ func TestMPoolNoLock(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(100), mp1.CurrNB())
 
-	bs1, err = mp1.Realloc(bs1, 200, true)
+	bs1, err = mp1.ReallocZero(bs1, 200, true)
 	require.NoError(t, err)
 	require.Equal(t, int64(200), mp1.CurrNB())
 
@@ -182,7 +182,7 @@ func TestMPoolNoLock(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(100), mp2.CurrNB())
 
-	bs22, err := mp2.Realloc(bs2, 2000000, true)
+	bs22, err := mp2.ReallocZero(bs2, 2000000, true)
 	require.NoError(t, err)
 	require.Equal(t, int64(2000000), mp2.CurrNB())
 
@@ -190,7 +190,8 @@ func TestMPoolNoLock(t *testing.T) {
 
 	// cross pool free is not allowed for no lock mpool.
 	// mp1.Free(bs22)
-	bs22, err = mp2.Realloc(bs22, 100, true)
+	bs22, err = mp2.ReallocZero(bs22, 100, true)
+	require.NoError(t, err)
 	require.Equal(t, int64(2000000), mp2.CurrNB())
 
 	mp2.Free(bs22)

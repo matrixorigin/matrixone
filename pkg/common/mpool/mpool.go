@@ -33,7 +33,6 @@ import (
 )
 
 // Mo's extremely simple memory pool.
-
 // Stats
 type MPoolStats struct {
 	NumAlloc         atomic.Int64 // number of allocations
@@ -573,12 +572,16 @@ func (mp *MPool) freePtr(detailk string, ptr unsafe.Pointer) {
 	simpleCAllocator().Deallocate(unsafe.Slice((*byte)(ptr), sz), uint64(sz))
 }
 
-func (mp *MPool) reAllocWithDetailK(detailk string, old []byte, sz int64, offHeap bool) ([]byte, error) {
+func (mp *MPool) reAllocWithDetailK(detailk string, old []byte, sz int64, offHeap bool, bufferMore bool) ([]byte, error) {
 	if sz <= int64(cap(old)) {
 		return old[:sz], nil
 	}
 
-	newSz := calculateNewCap(int64(cap(old)), sz)
+	newSz := sz
+	if bufferMore {
+		newSz = calculateNewCap(int64(cap(old)), sz)
+	}
+
 	ret, err := mp.allocWithDetailK(detailk, int64(newSz), offHeap)
 	if err != nil {
 		return nil, err
@@ -590,7 +593,7 @@ func (mp *MPool) reAllocWithDetailK(detailk string, old []byte, sz int64, offHea
 
 func (mp *MPool) Grow(old []byte, sz int, offHeap bool) ([]byte, error) {
 	detailk := mp.getDetailK()
-	return mp.reAllocWithDetailK(detailk, old, int64(sz), offHeap)
+	return mp.reAllocWithDetailK(detailk, old, int64(sz), offHeap, true)
 }
 
 func (mp *MPool) Grow2(old []byte, old2 []byte, sz int, offHeap bool) ([]byte, error) {
@@ -600,7 +603,7 @@ func (mp *MPool) Grow2(old []byte, old2 []byte, sz int, offHeap bool) ([]byte, e
 		return nil, moerr.NewInternalErrorNoCtxf("mpool grow2 actually shrinks, %d+%d, %d", len1, len2, sz)
 	}
 	detailk := mp.getDetailK()
-	ret, err := mp.reAllocWithDetailK(detailk, old, int64(sz), offHeap)
+	ret, err := mp.reAllocWithDetailK(detailk, old, int64(sz), offHeap, true)
 	if err != nil {
 		return nil, err
 	}
@@ -609,10 +612,11 @@ func (mp *MPool) Grow2(old []byte, old2 []byte, sz int, offHeap bool) ([]byte, e
 	return ret, nil
 }
 
-func (mp *MPool) Realloc(old []byte, sz int, offHeap bool) ([]byte, error) {
+// ReallocZero is like Realloc, but it clears the memory.
+func (mp *MPool) ReallocZero(old []byte, sz int, offHeap bool) ([]byte, error) {
 	detailk := mp.getDetailK()
 	if !offHeap {
-		return mp.reAllocWithDetailK(detailk, old, int64(sz), offHeap)
+		return mp.reAllocWithDetailK(detailk, old, int64(sz), offHeap, false)
 	}
 
 	oldsz := cap(old)
@@ -621,7 +625,7 @@ func (mp *MPool) Realloc(old []byte, sz int, offHeap bool) ([]byte, error) {
 	}
 
 	oldptr := unsafe.Pointer(&old[0])
-	newbs, err := simpleCAllocator().Realloc(old, uint64(sz))
+	newbs, err := simpleCAllocator().ReallocZero(old, uint64(sz))
 	if err != nil {
 		return nil, err
 	}

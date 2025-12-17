@@ -191,7 +191,7 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 	if len(bat.Vecs) == 0 {
 		// no group by columns, group grow 1 for each agg.
 		for i := range mergeGroup.ctr.aggList {
-			if err := mergeGroup.ctr.aggList[i].Merge(mergeGroup.ctr.spillAggList[i], 0, 0); err != nil {
+			if err := mergeGroup.ctr.aggList[i].BatchMerge(mergeGroup.ctr.spillAggList[i], 0, []uint64{0}); err != nil {
 				return false, err
 			}
 		}

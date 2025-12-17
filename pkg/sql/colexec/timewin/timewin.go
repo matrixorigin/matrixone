@@ -372,7 +372,7 @@ func (ctr *container) fillRows() error {
 
 		if vals[ctr.curRowIdx] >= ctr.left && vals[ctr.curRowIdx] < ctr.right {
 			for j, agg := range ctr.aggs {
-				if err := agg.Fill(ctr.group, ctr.curRowIdx, []*vector.Vector{ctr.aggVec[ctr.curVecIdx][j]}); err != nil {
+				if err := agg.BatchFill(ctr.curRowIdx, []uint64{uint64(ctr.group)}, []*vector.Vector{ctr.aggVec[ctr.curVecIdx][j]}); err != nil {
 					return err
 				}
 			}
