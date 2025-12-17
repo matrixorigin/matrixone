@@ -149,7 +149,7 @@ func (km *ElkanClusterer[T]) Close() error {
 }
 
 // InitCentroids initializes the centroids using initialization algorithms like random or kmeans++.
-func (km *ElkanClusterer[T]) InitCentroids() error {
+func (km *ElkanClusterer[T]) InitCentroids(ctx context.Context) error {
 	var initializer Initializer
 	switch km.initType {
 	case kmeans.Random:
@@ -159,7 +159,7 @@ func (km *ElkanClusterer[T]) InitCentroids() error {
 	default:
 		initializer = NewRandomInitializer()
 	}
-	anycentroids, err := initializer.InitCentroids(km.vectorList, km.clusterCnt)
+	anycentroids, err := initializer.InitCentroids(ctx, km.vectorList, km.clusterCnt)
 	if err != nil {
 		return err
 	}
@@ -184,7 +184,7 @@ func (km *ElkanClusterer[T]) Cluster(ctx context.Context) (any, error) {
 		return km.vectorList, nil
 	}
 
-	err := km.InitCentroids() // step 0.1
+	err := km.InitCentroids(ctx) // step 0.1
 	if err != nil {
 		return nil, err
 	}

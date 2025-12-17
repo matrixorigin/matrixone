@@ -15,6 +15,7 @@
 package elkans
 
 import (
+	"context"
 	"reflect"
 	"testing"
 
@@ -59,10 +60,12 @@ func TestRandom_InitCentroids(t *testing.T) {
 			},
 		},
 	}
+	ctx := context.Background()
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			r := NewRandomInitializer()
-			_gotCentroids, err := r.InitCentroids(tt.args.vectors, tt.args.k)
+			_gotCentroids, err := r.InitCentroids(ctx, tt.args.vectors, tt.args.k)
 			require.Nil(t, err)
 			gotCentroids, ok := _gotCentroids.([][]float64)
 			require.True(t, ok)
@@ -110,10 +113,11 @@ func TestKMeansPlusPlus_InitCentroids(t *testing.T) {
 			},
 		},
 	}
+	ctx := context.Background()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			r := NewKMeansPlusPlusInitializer[float64](metric.L2Distance[float64])
-			_gotCentroids, err := r.InitCentroids(tt.args.vectors, tt.args.k)
+			_gotCentroids, err := r.InitCentroids(ctx, tt.args.vectors, tt.args.k)
 			require.Nil(t, err)
 			gotCentroids := _gotCentroids.([][]float64)
 			if !reflect.DeepEqual(gotCentroids, tt.wantCentroids) {
@@ -138,6 +142,7 @@ func Benchmark_InitCentroids(b *testing.B) {
 	rowCnt := 10_000
 	dims := 1024
 	k := 10
+	ctx := context.Background()
 
 	data := make([][]float64, rowCnt)
 	populateRandData(rowCnt, dims, data)
@@ -148,7 +153,7 @@ func Benchmark_InitCentroids(b *testing.B) {
 	b.Run("RANDOM", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			_, err := random.InitCentroids(data, k)
+			_, err := random.InitCentroids(ctx, data, k)
 			require.Nil(b, err)
 		}
 	})
@@ -156,7 +161,7 @@ func Benchmark_InitCentroids(b *testing.B) {
 	b.Run("KMEANS++", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			_, err := kmeanspp.InitCentroids(data, k)
+			_, err := kmeanspp.InitCentroids(ctx, data, k)
 			require.Nil(b, err)
 		}
 	})

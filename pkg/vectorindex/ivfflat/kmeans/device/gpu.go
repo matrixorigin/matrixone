@@ -19,6 +19,8 @@ package device
 import (
 	//"os"
 
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/kmeans"
@@ -35,12 +37,12 @@ type GpuClusterer[T cuvs.TensorNumberType] struct {
 	vectors     [][]T
 }
 
-func (c *GpuClusterer[T]) InitCentroids() error {
+func (c *GpuClusterer[T]) InitCentroids(ctx context.Context) error {
 
 	return nil
 }
 
-func (c *GpuClusterer[T]) Cluster() (any, error) {
+func (c *GpuClusterer[T]) Cluster(ctx context.Context) (any, error) {
 
 	resource, err := cuvs.NewResource(nil)
 	if err != nil {
