@@ -204,8 +204,9 @@ var openNewFile = func(ctx context.Context, ep *ExportConfig, mrs *MysqlResultSe
 			header += mrs.Columns[i].Name() + ep.userConfig.Fields.Terminated.Value
 		}
 		header += mrs.Columns[n-1].Name() + ep.userConfig.Lines.TerminatedBy.Value
-		if ep.userConfig.MaxFileSize != 0 && uint64(len(header)) >= ep.userConfig.MaxFileSize {
-			return moerr.NewInternalError(ctx, "the header line size is over the maxFileSize")
+		maxSize := getEffectiveMaxFileSize(ep)
+		if maxSize != 0 && uint64(len(header)) >= maxSize {
+			return moerr.NewInternalError(ctx, "the header line size is over the maxFileSize/splitSize")
 		}
 		if err := writeDataToCSVFile(ep, []byte(header)); err != nil {
 			return err
@@ -286,9 +287,20 @@ var Write = func(ep *ExportConfig, output []byte) (int, error) {
 	return n, err
 }
 
-// wrtieToCSVFile function may create a new file. Make sure the output buffer contains the complete CSV row to keep the CSV parser happy.
+// getEffectiveMaxFileSize returns the effective max file size for splitting.
+// SplitSize takes precedence over MaxFileSize if both are set.
+// SplitSize is in bytes, MaxFileSize is in bytes (already converted from KB in parser).
+func getEffectiveMaxFileSize(ep *ExportConfig) uint64 {
+	if ep.userConfig.SplitSize != 0 {
+		return ep.userConfig.SplitSize
+	}
+	return ep.userConfig.MaxFileSize
+}
+
+// writeToCSVFile function may create a new file. Make sure the output buffer contains the complete CSV row to keep the CSV parser happy.
 func writeToCSVFile(ep *ExportConfig, output []byte) error {
-	if ep.userConfig.MaxFileSize != 0 && ep.CurFileSize+uint64(len(output)) > ep.userConfig.MaxFileSize {
+	maxSize := getEffectiveMaxFileSize(ep)
+	if maxSize != 0 && ep.CurFileSize+uint64(len(output)) > maxSize {
 		if err := Close(ep); err != nil {
 			return err
 		}

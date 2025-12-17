@@ -648,3 +648,58 @@ func Test_getExportFilePath(t *testing.T) {
 		})
 	}
 }
+
+func Test_getEffectiveMaxFileSize(t *testing.T) {
+	tests := []struct {
+		name        string
+		maxFileSize uint64
+		splitSize   uint64
+		expected    uint64
+	}{
+		{
+			name:        "both zero",
+			maxFileSize: 0,
+			splitSize:   0,
+			expected:    0,
+		},
+		{
+			name:        "only MaxFileSize set",
+			maxFileSize: 1024 * 1024, // 1MB
+			splitSize:   0,
+			expected:    1024 * 1024,
+		},
+		{
+			name:        "only SplitSize set",
+			maxFileSize: 0,
+			splitSize:   10 * 1024 * 1024 * 1024, // 10GB
+			expected:    10 * 1024 * 1024 * 1024,
+		},
+		{
+			name:        "SplitSize takes precedence over MaxFileSize",
+			maxFileSize: 1024 * 1024,             // 1MB
+			splitSize:   10 * 1024 * 1024 * 1024, // 10GB
+			expected:    10 * 1024 * 1024 * 1024,
+		},
+		{
+			name:        "SplitSize smaller than MaxFileSize",
+			maxFileSize: 10 * 1024 * 1024 * 1024, // 10GB
+			splitSize:   1024 * 1024,             // 1MB
+			expected:    1024 * 1024,             // SplitSize wins
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ep := &ExportConfig{
+				userConfig: &tree.ExportParam{
+					MaxFileSize: tt.maxFileSize,
+					SplitSize:   tt.splitSize,
+				},
+			}
+			result := getEffectiveMaxFileSize(ep)
+			if result != tt.expected {
+				t.Errorf("getEffectiveMaxFileSize() = %d, want %d", result, tt.expected)
+			}
+		})
+	}
+}
