@@ -22,6 +22,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/common/concurrent"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -260,7 +261,7 @@ func validateArgs[T types.RealNumbers](vectorList [][]T, clusterCnt,
 }
 
 // initBounds initializes the lower bounds, upper bound and assignment for each vector.
-func (km *ElkanClusterer[T]) initBounds(ctx context.Context) error {
+func (km *ElkanClusterer[T]) initBounds(ctx context.Context) (err error) {
 	// step 0.2
 	// Set the lower bound l(x, c)=0 for each point x and center c.
 	// Assign each x to its closest initial center c(x)=min{ d(x, c) }, using Lemma 1 to avoid
@@ -272,44 +273,43 @@ func (km *ElkanClusterer[T]) initBounds(ctx context.Context) error {
 		ncpu = len(km.vectorList)
 	}
 
-	errs := make(chan error, ncpu)
-	var wg sync.WaitGroup
+	exec := concurrent.NewThreadPoolExecutor(ncpu)
+	err = exec.Execute(
+		ctx,
+		len(km.vectorList),
+		func(ctx context.Context, thread_id int, start, end int) (err2 error) {
+			subvec := km.vectorList[start:end]
+			submetas := km.vectorMetas[start:end]
+			subassigns := km.assignments[start:end]
 
-	for n := 0; n < ncpu; n++ {
-		wg.Add(1)
-		go func(tid int) {
-			defer wg.Done()
-			for x := range km.vectorList {
-				if x%ncpu != tid {
-					continue
+			for x := range subvec {
+
+				if x%100 == 0 && ctx.Err() != nil {
+					return ctx.Err()
 				}
+
 				minDist := metric.MaxFloat[T]()
 				closestCenter := 0
 				for c := range km.centroids {
-					dist, err := km.distFn(km.vectorList[x], km.centroids[c])
-					if err != nil {
-						errs <- err
-						return
+					dist, err2 := km.distFn(subvec[x], km.centroids[c])
+					if err2 != nil {
+						return err2
 					}
 
-					km.vectorMetas[x].lower[c] = dist
+					submetas[x].lower[c] = dist
 					if dist < minDist {
 						minDist = dist
 						closestCenter = c
 					}
 				}
 
-				km.vectorMetas[x].upper = minDist
-				km.assignments[x] = closestCenter
+				submetas[x].upper = minDist
+				subassigns[x] = closestCenter
 			}
-		}(n)
-	}
+			return
+		})
 
-	wg.Wait()
-	if len(errs) > 0 {
-		return <-errs
-	}
-	return nil
+	return
 }
 
 // computeCentroidDistances computes the centroid distances and the min centroid distances.
@@ -318,39 +318,41 @@ func (km *ElkanClusterer[T]) computeCentroidDistances(ctx context.Context) error
 
 	// step 1.a
 	// For all centers c and c', compute 0.5 x d(c, c').
-	var wg sync.WaitGroup
 	ncpu := km.nworker
 	if km.clusterCnt < ncpu {
 		ncpu = km.clusterCnt
 	}
-	errs := make(chan error, ncpu)
 
-	for n := 0; n < ncpu; n++ {
-		wg.Add(1)
-		go func(tid int) {
-			defer wg.Done()
-			for i := 0; i < km.clusterCnt; i++ {
-				if i%ncpu != tid {
-					continue
+	exec := concurrent.NewThreadPoolExecutor(ncpu)
+	err := exec.Execute(
+		ctx,
+		km.clusterCnt,
+		func(ctx context.Context, thread_id int, start, end int) error {
+			subcentroids := km.centroids[start:end]
+
+			for x := range subcentroids {
+
+				if x%100 == 0 && ctx.Err() != nil {
+					return ctx.Err()
 				}
+
+				i := start + x
 				for j := i + 1; j < km.clusterCnt; j++ {
-					dist, err := km.distFn(km.centroids[i], km.centroids[j])
-					if err != nil {
-						errs <- err
-						return
+					dist, err2 := km.distFn(subcentroids[x], km.centroids[j])
+					if err2 != nil {
+						return err2
 					}
 					dist *= 0.5
 					km.halfInterCentroidDistMatrix[i][j] = dist
 					km.halfInterCentroidDistMatrix[j][i] = dist
-
 				}
 			}
-		}(n)
-	}
-	wg.Wait()
 
-	if len(errs) > 0 {
-		return <-errs
+			return nil
+		})
+
+	if err != nil {
+		return err
 	}
 
 	// step 1.b
