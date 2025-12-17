@@ -17,9 +17,9 @@ insert into vtab64(vecf64_3,vecf64_5) values ("[0.9260021,0.26637346,0.06567037]
 select SUMMATION(vecf32_3),SUMMATION(vecf32_5) from vtab32;
 SUMMATION(vecf32_3)    SUMMATION(vecf32_5)
 null    null
-1.9714266657829285    null
-33.89660960435867    4771.603164553642
-837.3288311958313    9376.918968319893
+1.9714267    null
+33.89661    4771.603
+837.32886    9376.919
 select SUMMATION(vecf64_3),SUMMATION(vecf64_5) from vtab64;
 SUMMATION(vecf64_3)    SUMMATION(vecf64_5)
 null    null
@@ -43,7 +43,7 @@ id    count(vecf32_3)
 4    1
 select count(*), SUMMATION(vecf32_3) from vtab32 group by SUMMATION(vecf32_3) Having SUMMATION(vecf32_3) > 33.89660960435867 order by SUMMATION(vecf32_3) desc ;
 count(*)    SUMMATION(vecf32_3)
-1    837.3288311958313
+1    837.32886
 select * from vtab32 where SUMMATION(vecf32_3) is null;
 id    vecf32_3    vecf32_5
 1    null    null
@@ -56,9 +56,9 @@ id    vecf32_3    vecf32_5
 select distinct(SUMMATION(vecf32_3)) from vtab32;
 SUMMATION(vecf32_3)
 null
-1.9714266657829285
-33.89660960435867
-837.3288311958313
+1.9714267
+33.89661
+837.32886
 select sum(SUMMATION(vecf32_3)) from vtab32;
 sum(SUMMATION(vecf32_3))
 873.1968944072723
@@ -67,7 +67,7 @@ min(SUMMATION(vecf32_3))
 1.9714266657829285
 select max(SUMMATION(vecf32_3)) from vtab32;
 max(SUMMATION(vecf32_3))
-837.3288311958313
+837.32886
 select avg(SUMMATION(vecf32_3)) from vtab32;
 avg(SUMMATION(vecf32_3))
 291.06563146909076
@@ -113,9 +113,9 @@ null
 select * from (select SUMMATION(vecf32_3),SUMMATION(vecf32_5) from vtab32);
 summation(vecf32_3)    summation(vecf32_5)
 null    null
-1.9714266657829285    null
-33.89660960435867    4771.603164553642
-837.3288311958313    9376.918968319893
+1.9714267    null
+33.89661    4771.603
+837.32886    9376.919
 select SUMMATION(vecf64_3),SUMMATION(vecf64_5) from (select * from vtab64);
 SUMMATION(vecf64_3)    SUMMATION(vecf64_5)
 null    null
@@ -125,9 +125,9 @@ null    null
 WITH qn AS (select SUMMATION(vecf32_3),SUMMATION(vecf32_5) from vtab32) SELECT * FROM qn;
 summation(vtab32.vecf32_3)    summation(vtab32.vecf32_5)
 null    null
-1.9714266657829285    null
-33.89660960435867    4771.603164553642
-837.3288311958313    9376.918968319893
+1.9714267    null
+33.89661    4771.603
+837.32886    9376.919
 select inner_product(vecf32_3,"[1,1,1]") from vtab32;
 inner_product(vecf32_3, [1,1,1])
 null
@@ -217,8 +217,8 @@ select inner_product(vecf32_3,vecf32_3) * inner_product(vecf32_5,vecf32_5) from 
 inner_product(vecf32_3, vecf32_3) * inner_product(vecf32_5, vecf32_5)
 null
 null
-2.0152634222080513E10
-5.175445836024754E13
+2.0152635E10
+5.1754457E13
 select inner_product(vecf64_3,vecf64_3) + inner_product(vecf64_5,vecf64_5) from vtab64;
 inner_product(vecf64_3, vecf64_3) + inner_product(vecf64_5, vecf64_5)
 null
@@ -367,9 +367,9 @@ null    null
 select l2_norm(vecf32_3), l2_norm(vecf32_5) from vtab32;
 l2_norm(vecf32_3)    l2_norm(vecf32_5)
 null    null
-1.161650538444519    null
-30.61099624633789    4637.548828125
-822.0504150390625    8751.357421875
+1.1616505    null
+30.610994    4637.549
+822.0504    8751.357
 select l2_norm(vecf64_3), l2_norm(vecf64_5) from vtab64;
 l2_norm(vecf64_3)    l2_norm(vecf64_5)
 null    null
@@ -392,8 +392,8 @@ l2_norm([1,2,3])
 3.741657257080078
 select count(*), l2_norm(vecf32_3) from vtab32 group by l2_norm(vecf32_3) Having l2_norm(vecf32_3) > 1.16166 order by l2_norm(vecf32_3) desc ;
 count(*)    l2_norm(vecf32_3)
-1    822.0504150390625
-1    30.61099624633789
+1    822.0504
+1    30.610994
 select * from vtab32 where l2_norm(vecf32_3) is null;
 id    vecf32_3    vecf32_5
 1    null    null
@@ -407,9 +407,9 @@ id    vecf32_3    vecf32_5
 select distinct(l2_norm(vecf32_3)) from vtab32;
 l2_norm(vecf32_3)
 null
-1.161650538444519
-30.61099624633789
-822.0504150390625
+1.1616505
+30.610994
+822.0504
 select sum(l2_norm(vecf32_3)) from vtab32;
 sum(l2_norm(vecf32_3))
 853.8230599164963
@@ -447,8 +447,8 @@ select l2_norm(vecf32_3) * l2_norm(vecf32_5) from vtab32;
 l2_norm(vecf32_3) * l2_norm(vecf32_5)
 null
 null
-141959.98976994306
-7194057.000807524
+141959.98
+7194057.0
 select l2_norm(vecf64_3) + l2_norm(vecf64_5) from vtab64;
 l2_norm(vecf64_3) + l2_norm(vecf64_5)
 null
@@ -464,9 +464,9 @@ null
 select * from (select l2_norm(vecf32_3),l2_norm(vecf32_5) from vtab32);
 l2_norm(vecf32_3)    l2_norm(vecf32_5)
 null    null
-1.161650538444519    null
-30.61099624633789    4637.548828125
-822.0504150390625    8751.357421875
+1.1616505    null
+30.610994    4637.549
+822.0504    8751.357
 select l2_norm(vecf64_3),l2_norm(vecf64_5) from (select * from vtab64);
 l2_norm(vecf64_3)    l2_norm(vecf64_5)
 null    null
@@ -476,9 +476,9 @@ null    null
 WITH qn AS (select l2_norm(vecf32_3),l2_norm(vecf32_5) from vtab32) SELECT * FROM qn;
 l2_norm(vtab32.vecf32_3)    l2_norm(vtab32.vecf32_5)
 null    null
-1.161650538444519    null
-30.61099624633789    4637.548828125
-822.0504150390625    8751.357421875
+1.1616505    null
+30.610994    4637.549
+822.0504    8751.357
 select vector_dims(vecf32_5),vector_dims(vecf32_3) from vtab32;
 vector_dims(vecf32_5)    vector_dims(vecf32_3)
 null    null

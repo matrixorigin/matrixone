@@ -106,9 +106,9 @@ invalid input: column 'vtab64.vecf32_5' does not exist
 select count(*), SUMMATION(vecf32_3) from vtab32 group by SUMMATION(vecf32_3) order by SUMMATION(vecf32_3);
 count(*)    SUMMATION(vecf32_3)
 1    null
-1    1.9714266657829285
-1    33.89660960435867
-1    837.3288311958313
+1    1.9714267
+1    33.89661
+1    837.32886
 select id,vecf32_3 + vecf32_3, vecf32_5 + vecf32_5 from vtab32;
 id    vecf32_3 + vecf32_3    vecf32_5 + vecf32_5
 1    null    null
