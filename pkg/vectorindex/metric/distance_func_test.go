@@ -143,13 +143,15 @@ func Test_ZeroVector(t *testing.T) {
 
 	v1 := []float64{0, 0, 0}
 	v2 := []float64{0, 0, 0}
-	_, err := CosineDistance[float64](v1, v2)
-	require.NotNil(t, err)
+	dist64, err := CosineDistance[float64](v1, v2)
+	require.NoError(t, err)
+	require.Equal(t, dist64, float64(1))
 
 	v1f32 := []float32{0, 0, 0}
 	v2f32 := []float32{0, 0, 0}
-	_, err = CosineDistance[float32](v1f32, v2f32)
-	require.NotNil(t, err)
+	dist32, err := CosineDistance[float32](v1f32, v2f32)
+	require.NoError(t, err)
+	require.Equal(t, dist32, float32(1))
 
 }
 
