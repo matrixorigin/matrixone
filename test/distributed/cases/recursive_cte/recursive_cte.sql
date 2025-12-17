@@ -42,5 +42,8 @@ set cte_max_recursion_depth = 200;
 with recursive c as (select a from t_cte_depth union all select a+1 from c where a < 150) select count(*) from c;
 set cte_max_recursion_depth = 50;
 with recursive c as (select a from t_cte_depth union all select a+1 from c where a < 100) select count(*) from c;
+-- test for cte_max_recursion_depth = 0 (should prevent any recursion)
+set cte_max_recursion_depth = 0;
+with recursive c as (select a from t_cte_depth union all select a+1 from c where a < 5) select count(*) from c;
 set cte_max_recursion_depth = 100;
 drop table if exists t_cte_depth;
