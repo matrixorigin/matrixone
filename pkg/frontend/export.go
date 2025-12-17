@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -215,12 +216,22 @@ var openNewFile = func(ctx context.Context, ep *ExportConfig, mrs *MysqlResultSe
 	return nil
 }
 
+// formatSpecifierRegex matches printf-style integer format specifiers like %d, %5d, %05d
+var formatSpecifierRegex = regexp.MustCompile(`%[0-9]*d`)
+
+// getExportFilePath returns the file path for export, supporting printf-style format specifiers.
+// If filename contains a format specifier like %d or %05d, it uses fmt.Sprintf to format the fileCnt.
+// Otherwise, it falls back to legacy behavior: append ".N" suffix for fileCnt > 0.
 func getExportFilePath(filename string, fileCnt uint) string {
+	// Check if filename contains a valid format specifier
+	if formatSpecifierRegex.MatchString(filename) {
+		return fmt.Sprintf(filename, fileCnt)
+	}
+	// Legacy behavior
 	if fileCnt == 0 {
 		return filename
-	} else {
-		return fmt.Sprintf("%s.%d", filename, fileCnt)
 	}
+	return fmt.Sprintf("%s.%d", filename, fileCnt)
 }
 
 var formatOutputString = func(oq *ExportConfig, tmp, symbol []byte, enclosed byte, flag bool, buffer *bytes.Buffer) error {

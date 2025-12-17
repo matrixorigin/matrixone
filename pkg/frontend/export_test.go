@@ -24,9 +24,11 @@ import (
 	"github.com/smartystreets/goconvey/convey"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
 
 var colName1, colName2 = "DATABASE()", "VARIABLE_VALUE"
@@ -303,6 +305,139 @@ func Test_exportDataToCSVFile(t *testing.T) {
 	})
 }
 
+func Test_getExportFormat(t *testing.T) {
+	convey.Convey("getExportFormat returns correct format", t, func() {
+		// Test default format (empty string returns "csv")
+		ep := &ExportConfig{
+			userConfig: &tree.ExportParam{
+				ExportFormat: "",
+			},
+		}
+		convey.So(ep.getExportFormat(), convey.ShouldEqual, "csv")
+
+		// Test explicit csv format
+		ep.userConfig.ExportFormat = "csv"
+		convey.So(ep.getExportFormat(), convey.ShouldEqual, "csv")
+
+		// Test jsonline format
+		ep.userConfig.ExportFormat = "jsonline"
+		convey.So(ep.getExportFormat(), convey.ShouldEqual, "jsonline")
+
+		// Test parquet format
+		ep.userConfig.ExportFormat = "parquet"
+		convey.So(ep.getExportFormat(), convey.ShouldEqual, "parquet")
+	})
+}
+
+func Test_vectorValueToJSON(t *testing.T) {
+	mp := mpool.MustNewZero()
+	convey.Convey("vectorValueToJSON converts types correctly", t, func() {
+		// Test bool type
+		convey.Convey("bool type", func() {
+			vec := testutil.NewVector(1, types.T_bool.ToType(), mp, false, []bool{true})
+			val, err := vectorValueToJSON(vec, 0, nil, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, true)
+		})
+
+		// Test int8 type
+		convey.Convey("int8 type", func() {
+			vec := testutil.NewVector(1, types.T_int8.ToType(), mp, false, []int8{42})
+			val, err := vectorValueToJSON(vec, 0, nil, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, int8(42))
+		})
+
+		// Test int16 type
+		convey.Convey("int16 type", func() {
+			vec := testutil.NewVector(1, types.T_int16.ToType(), mp, false, []int16{1234})
+			val, err := vectorValueToJSON(vec, 0, nil, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, int16(1234))
+		})
+
+		// Test int32 type
+		convey.Convey("int32 type", func() {
+			vec := testutil.NewVector(1, types.T_int32.ToType(), mp, false, []int32{123456})
+			val, err := vectorValueToJSON(vec, 0, nil, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, int32(123456))
+		})
+
+		// Test int64 type
+		convey.Convey("int64 type", func() {
+			vec := testutil.NewVector(1, types.T_int64.ToType(), mp, false, []int64{1234567890})
+			val, err := vectorValueToJSON(vec, 0, nil, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, int64(1234567890))
+		})
+
+		// Test uint8 type
+		convey.Convey("uint8 type", func() {
+			vec := testutil.NewVector(1, types.T_uint8.ToType(), mp, false, []uint8{255})
+			val, err := vectorValueToJSON(vec, 0, nil, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, uint8(255))
+		})
+
+		// Test uint16 type
+		convey.Convey("uint16 type", func() {
+			vec := testutil.NewVector(1, types.T_uint16.ToType(), mp, false, []uint16{65535})
+			val, err := vectorValueToJSON(vec, 0, nil, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, uint16(65535))
+		})
+
+		// Test uint32 type
+		convey.Convey("uint32 type", func() {
+			vec := testutil.NewVector(1, types.T_uint32.ToType(), mp, false, []uint32{4294967295})
+			val, err := vectorValueToJSON(vec, 0, nil, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, uint32(4294967295))
+		})
+
+		// Test uint64 type
+		convey.Convey("uint64 type", func() {
+			vec := testutil.NewVector(1, types.T_uint64.ToType(), mp, false, []uint64{18446744073709551615})
+			val, err := vectorValueToJSON(vec, 0, nil, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, uint64(18446744073709551615))
+		})
+
+		// Test float32 type
+		convey.Convey("float32 type", func() {
+			vec := testutil.NewVector(1, types.T_float32.ToType(), mp, false, []float32{3.14})
+			val, err := vectorValueToJSON(vec, 0, nil, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, float32(3.14))
+		})
+
+		// Test float64 type
+		convey.Convey("float64 type", func() {
+			vec := testutil.NewVector(1, types.T_float64.ToType(), mp, false, []float64{3.14159265359})
+			val, err := vectorValueToJSON(vec, 0, nil, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, 3.14159265359)
+		})
+
+		// Test varchar type
+		convey.Convey("varchar type", func() {
+			vec := testutil.NewVector(1, types.T_varchar.ToType(), mp, false, []string{"hello world"})
+			val, err := vectorValueToJSON(vec, 0, nil, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, "hello world")
+		})
+
+		// Test date type
+		convey.Convey("date type", func() {
+			vec := testutil.NewVector(1, types.T_date.ToType(), mp, false, []string{"2023-12-25"})
+			val, err := vectorValueToJSON(vec, 0, nil, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, "2023-12-25")
+		})
+	})
+}
+
 func TestEscapeJSONControl(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -386,6 +521,129 @@ func TestEscapeJSONControl(t *testing.T) {
 			res := escapeJSONControlChars(tt.input)
 			if res != tt.expected {
 				t.Errorf("EscapeJSONControl(%v) =\n%v,\nwant\n%v", tt.input, res, tt.expected)
+			}
+		})
+	}
+}
+
+func Test_getExportFilePath(t *testing.T) {
+	tests := []struct {
+		name     string
+		filename string
+		fileCnt  uint
+		expected string
+	}{
+		// Legacy behavior: no format specifier
+		{
+			name:     "no format specifier, fileCnt 0",
+			filename: "output.csv",
+			fileCnt:  0,
+			expected: "output.csv",
+		},
+		{
+			name:     "no format specifier, fileCnt 1",
+			filename: "output.csv",
+			fileCnt:  1,
+			expected: "output.csv.1",
+		},
+		{
+			name:     "no format specifier, fileCnt 10",
+			filename: "output.csv",
+			fileCnt:  10,
+			expected: "output.csv.10",
+		},
+
+		// New behavior: %d format specifier
+		{
+			name:     "simple %d, fileCnt 0",
+			filename: "data_%d.csv",
+			fileCnt:  0,
+			expected: "data_0.csv",
+		},
+		{
+			name:     "simple %d, fileCnt 1",
+			filename: "data_%d.csv",
+			fileCnt:  1,
+			expected: "data_1.csv",
+		},
+		{
+			name:     "simple %d, fileCnt 9999",
+			filename: "data_%d.parquet",
+			fileCnt:  9999,
+			expected: "data_9999.parquet",
+		},
+
+		// Padded format specifier: %05d
+		{
+			name:     "%05d padding, fileCnt 0",
+			filename: "data_%05d.parquet",
+			fileCnt:  0,
+			expected: "data_00000.parquet",
+		},
+		{
+			name:     "%05d padding, fileCnt 1",
+			filename: "data_%05d.parquet",
+			fileCnt:  1,
+			expected: "data_00001.parquet",
+		},
+		{
+			name:     "%05d padding, fileCnt 12345",
+			filename: "data_%05d.parquet",
+			fileCnt:  12345,
+			expected: "data_12345.parquet",
+		},
+		{
+			name:     "%05d padding, fileCnt exceeds width",
+			filename: "data_%05d.parquet",
+			fileCnt:  123456,
+			expected: "data_123456.parquet",
+		},
+
+		// Other padding widths
+		{
+			name:     "%03d padding",
+			filename: "file_%03d.jsonl",
+			fileCnt:  7,
+			expected: "file_007.jsonl",
+		},
+		{
+			name:     "%010d zero padding",
+			filename: "file_%010d.csv",
+			fileCnt:  42,
+			expected: "file_0000000042.csv",
+		},
+
+		// Stage URL with format specifier
+		{
+			name:     "stage URL with %05d",
+			filename: "stage://bucket/data_%05d.parquet",
+			fileCnt:  1,
+			expected: "stage://bucket/data_00001.parquet",
+		},
+
+		// Multiple path components
+		{
+			name:     "path with directories",
+			filename: "/path/to/output_%04d.csv",
+			fileCnt:  99,
+			expected: "/path/to/output_0099.csv",
+		},
+
+		// Edge case: % but not a valid format specifier (should use legacy behavior)
+		{
+			name:     "percent sign but not format specifier",
+			filename: "file_100%.csv",
+			fileCnt:  1,
+			expected: "file_100%.csv.1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := getExportFilePath(tt.filename, tt.fileCnt)
+			if result != tt.expected {
+				t.Errorf("getExportFilePath(%q, %d) = %q, want %q",
+					tt.filename, tt.fileCnt, result, tt.expected)
 			}
 		})
 	}
