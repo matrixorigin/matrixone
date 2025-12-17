@@ -372,7 +372,7 @@ LIMIT 4;
 id    content    dist
 id1    hello world    1.5163443088531494
 id10    additional entry    1.4459599256515503
-id04    mysql is a relational database    -3.8635327825886634E-8
+id04    mysql is a relational database    0.0
 id01    ai is artificial intelligence    0.0
 (SELECT id, category, l2_distance(vec, '[0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9]') AS dist
 FROM vec_with_multi_idx

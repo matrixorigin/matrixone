@@ -253,6 +253,13 @@ func CosineDistance[T types.RealNumbers](v1, v2 []T) (T, error) {
 	// Calculate cosine similarity.
 	similarity := float64(dotProduct) / denominator
 
+	// handle precision issues. Clamp the cosine simliarity to the range [-1, 1].
+	if similarity > 1.0 {
+		similarity = 1.0
+	} else if similarity < -1.0 {
+		similarity = -1.0
+	}
+
 	// Cosine distance is 1 minus the similarity.
 	// The result is cast back to the original type T.
 	distance := 1.0 - similarity
