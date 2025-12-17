@@ -43,7 +43,7 @@ const (
 
 func (group *Group) Prepare(proc *process.Process) (err error) {
 	group.ctr.state = vm.Build
-	group.ctr.mp = mpool.MustNew("group_mpool")
+	group.ctr.mp = mpool.MustNewNoLock("group_mpool")
 
 	// debug,
 	// group.ctr.mp.EnableDetailRecording()
@@ -289,8 +289,12 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 	if group.ctr.mtyp == H0 {
 		// note that in prepare we already called GroupGrow(1) for each agg.
 		// just fill the result.
+		count := bat.RowCount()
+		if len(group.ctr.dummyOnes) < count {
+			group.ctr.dummyOnes = append(group.ctr.dummyOnes, make([]uint64, bat.RowCount()-len(group.ctr.dummyOnes))...)
+		}
 		for i, ag := range group.ctr.aggList {
-			if err = ag.BulkFill(0, group.ctr.aggArgEvaluate[i].Vec); err != nil {
+			if err = ag.BatchFill(0, group.ctr.dummyOnes[:count], group.ctr.aggArgEvaluate[i].Vec); err != nil {
 				return false, err
 			}
 		}

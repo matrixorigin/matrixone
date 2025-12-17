@@ -15,6 +15,7 @@
 package util
 
 import (
+	"fmt"
 	"unsafe"
 )
 
@@ -36,11 +37,33 @@ func UnsafeToBytesWithLength[P *T, T any](p P, length int) []byte {
 	return unsafe.Slice((*byte)(unsafe.Pointer(p)), length)
 }
 
-func UnsafeSliceCast[B any, From []A, A any, To []B](from From) To {
+func UnsafeSliceCast[B any, A any](from []A) []B {
+	if len(from) == 0 {
+		return nil
+	}
+
+	var b B
+	szA := int(unsafe.Sizeof(from[0]))
+	szB := int(unsafe.Sizeof(b))
+
+	lenA := len(from) * szA
+	capA := cap(from) * szA
+
+	if lenA%szB != 0 || capA%szB != 0 {
+		panic(fmt.Sprintf("unsafe slice cast: from length %d:%d is not a multiple of %d", lenA, capA, szB))
+	}
+
+	lenB := lenA / szB
+	capB := capA / szB
+
 	return unsafe.Slice(
 		(*B)(unsafe.Pointer(unsafe.SliceData(from))),
-		cap(from),
-	)[:len(from)]
+		capB,
+	)[:lenB]
+}
+
+func UnsafeSliceToBytes[T any](from []T) []byte {
+	return UnsafeSliceCast[byte](from)
 }
 
 func UnsafeUintptr[P *T, T any](p P) uintptr {

@@ -48,3 +48,13 @@ func ConvertBytesToHumanReadable(bytes int64) string {
 	}
 	return fmt.Sprintf("%.2f TiB", num/TiB)
 }
+
+type OffsetLen struct {
+	Offset int32
+	Len    int32
+}
+
+type OffsetLen64 struct {
+	Offset int64
+	Len    int64
+}

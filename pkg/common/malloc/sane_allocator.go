@@ -94,8 +94,8 @@ func (sca *SimpleCAllocator) Allocate(size uint64) ([]byte, error) {
 	return slice, nil
 }
 
-// realloc(ptr, size)
-func (sca *SimpleCAllocator) Realloc(old []byte, size uint64) ([]byte, error) {
+// RreallocZero realloc(ptr, size) and zeros the memory
+func (sca *SimpleCAllocator) ReallocZero(old []byte, size uint64) ([]byte, error) {
 	oldptr := unsafe.Pointer(unsafe.SliceData(old))
 	oldsize := uint64(len(old))
 	ptr := C.realloc(oldptr, C.ulong(size))
