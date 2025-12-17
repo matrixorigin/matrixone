@@ -24,6 +24,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -98,7 +99,7 @@ func TestNormalDeletion(t *testing.T) {
 		ctr: container{},
 	}
 
-	resetChildren(&arg)
+	resetChildren(&arg, proc.Mp())
 	err := arg.Prepare(proc)
 	require.NoError(t, err)
 	_, err = vm.Exec(&arg, proc)
@@ -134,7 +135,7 @@ func TestNormalDeletionError(t *testing.T) {
 		ctr: container{},
 	}
 
-	resetChildren(&arg)
+	resetChildren(&arg, proc.Mp())
 	err := arg.Prepare(proc)
 	require.NoError(t, err)
 	_, err = vm.Exec(&arg, proc)
@@ -149,9 +150,9 @@ func TestNormalDeletionError(t *testing.T) {
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
 }
 
-func resetChildren(arg *Deletion) {
+func resetChildren(arg *Deletion, m *mpool.MPool) {
 	op := colexec.NewMockOperator()
-	bat := colexec.MakeMockBatchsWithRowID()
+	bat := colexec.MakeMockBatchsWithRowID(m)
 	op.WithBatchs([]*batch.Batch{bat})
 	arg.Children = nil
 	arg.AppendChild(op)

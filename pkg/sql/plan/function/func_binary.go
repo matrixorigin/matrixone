@@ -1817,7 +1817,7 @@ func TimestampAddDate(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 			if resultType == types.T_date {
 				// Result wrapper is DATE, but we need to return DATETIME
 				// Convert to DATETIME type
-				vec.SetType(types.New(types.T_datetime, 0, scale))
+				vec.SetTypeAndFixData(types.New(types.T_datetime, 0, scale), proc.GetMPool())
 				rss := vector.MustFixedColNoTypeCheck[types.Datetime](vec)
 				rsNull := vec.GetNulls()
 
@@ -1901,7 +1901,7 @@ func TimestampAddDate(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 			} else {
 				// Result wrapper is DATETIME (backward compatibility)
 				// Use SetType to change vector type to DATE
-				vec.SetType(types.New(types.T_date, 0, 0))
+				vec.SetTypeAndFixData(types.New(types.T_date, 0, 0), proc.GetMPool())
 				rss := vector.MustFixedColNoTypeCheck[types.Date](vec)
 				rsNull := vec.GetNulls()
 
@@ -1959,7 +1959,7 @@ func TimestampAddDate(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 		scale := maxScale
 		if resultType == types.T_date {
 			// Result wrapper is DATE, but we need to return DATETIME
-			vec.SetType(types.New(types.T_datetime, 0, scale))
+			vec.SetTypeAndFixData(types.New(types.T_datetime, 0, scale), proc.GetMPool())
 			rss := vector.MustFixedColNoTypeCheck[types.Datetime](vec)
 			rsNull := vec.GetNulls()
 
@@ -2056,7 +2056,7 @@ func TimestampAddDate(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 			}
 		} else {
 			// Result wrapper is DATETIME, but all units are date units, so return DATE
-			vec.SetType(types.New(types.T_date, 0, 0))
+			vec.SetTypeAndFixData(types.New(types.T_date, 0, 0), proc.GetMPool())
 			rss := vector.MustFixedColNoTypeCheck[types.Date](vec)
 			rsNull := vec.GetNulls()
 

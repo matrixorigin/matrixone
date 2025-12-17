@@ -60,7 +60,7 @@ func runTest(
 	})
 	defer lk.Close()
 	rt.SetGlobalVariables(runtime.LockService, lk)
-	mp, err := mpool.NewMPool(sid, 1024*1024, 0)
+	mp, err := mpool.NewMPool(sid, 1024*1024, mpool.NoFixed)
 	catalog.SetupDefines(sid)
 	assert.NoError(t, err)
 	e := New(

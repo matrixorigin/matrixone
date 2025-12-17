@@ -132,6 +132,7 @@ func (a *aggVarSampleGroupContext) Marshal() []byte {
 	bs = append(bs, types.EncodeInt64(&a.count)...)
 	return bs
 }
+func (a *aggVarSampleGroupContext) MarshalBinary() ([]byte, error) { return a.Marshal(), nil }
 func (a *aggVarSampleGroupContext) Unmarshal(bs []byte) {
 	a.sum = types.DecodeFloat64(bs[:8])
 	a.count = types.DecodeInt64(bs[8:])
@@ -219,6 +220,7 @@ func (a *aggVarSampleOfDecimalGroupContext) Marshal() []byte {
 	bs = append(bs, types.EncodeDecimal128(&a.sum)...)
 	return bs
 }
+func (a *aggVarSampleOfDecimalGroupContext) MarshalBinary() ([]byte, error) { return a.Marshal(), nil }
 func (a *aggVarSampleOfDecimalGroupContext) Unmarshal(bs []byte) {
 	a.count = types.DecodeInt64(bs[:8])
 	a.overflow = types.DecodeBool(bs[8:9])
@@ -246,6 +248,7 @@ func (a *aggVarSampleOfDecimalCommonContext) Marshal() []byte {
 	bs = append(bs, types.EncodeInt32(&a.resultScale)...)
 	return bs
 }
+func (a *aggVarSampleOfDecimalCommonContext) MarshalBinary() ([]byte, error) { return a.Marshal(), nil }
 func (a *aggVarSampleOfDecimalCommonContext) Unmarshal(bs []byte) {
 	a.argScale = types.DecodeInt32(bs[:4])
 	a.resultScale = types.DecodeInt32(bs[4:])

@@ -983,7 +983,7 @@ func TestConstructBasePKFilterWithOr(t *testing.T) {
 }
 
 func TestConstructBlockPKFilter(t *testing.T) {
-	mp, err := mpool.NewMPool("", mpool.GB*2, 0)
+	mp, err := mpool.NewMPool("", mpool.GB*2, mpool.NoFixed)
 	require.NoError(t, err)
 
 	ops := []int{
@@ -1466,7 +1466,7 @@ func TestConstructBlockPKFilter(t *testing.T) {
 }
 
 func TestConstructBlockPKFilterWithOr(t *testing.T) {
-	mp, err := mpool.NewMPool("", mpool.GB*2, 0)
+	mp, err := mpool.NewMPool("", mpool.GB*2, mpool.NoFixed)
 	require.NoError(t, err)
 
 	buildConst := func(ty types.T, v float64) []byte {
@@ -1720,7 +1720,7 @@ func TestConstructBlockPKFilterWithOr(t *testing.T) {
 }
 
 func TestMergeBaseFilterInKind(t *testing.T) {
-	mp, err := mpool.NewMPool("", mpool.GB, 0)
+	mp, err := mpool.NewMPool("", mpool.GB, mpool.NoFixed)
 	require.NoError(t, err)
 
 	proc := testutil.NewProc(t)

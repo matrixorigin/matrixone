@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -78,7 +79,7 @@ func TestCall(t *testing.T) {
 	typ1 := types.T_Rowid.ToType()
 	typ2 := types.T_uint64.ToType()
 	typ3 := types.T_varbinary.ToType()
-	reader := getReader(t, ctrl)
+	reader := getReader(t, ctrl, proc.Mp())
 	arg := &TableScan{
 		Reader: reader,
 		Attrs:  []string{catalog.Row_ID, "int_col", "varchar_col"},
@@ -91,7 +92,7 @@ func TestCall(t *testing.T) {
 
 	arg.Reset(proc, false, nil)
 
-	reader = getReader(t, ctrl)
+	reader = getReader(t, ctrl, proc.Mp())
 	arg.Reader = reader
 	err = arg.Prepare(proc)
 	require.NoError(t, err)
@@ -102,24 +103,24 @@ func TestCall(t *testing.T) {
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
 }
 
-func getReader(t *testing.T, ctrl *gomock.Controller) engine.Reader {
+func getReader(t *testing.T, ctrl *gomock.Controller, m *mpool.MPool) engine.Reader {
 	reader := mock_frontend.NewMockReader(ctrl)
 	reader.EXPECT().Read(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, attrs []string, expr *plan.Expr, b interface{}, bat *batch.Batch) (bool, error) {
 		// bat = batch.NewWithSize(3)
 		// bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
 		// bat.Vecs[1] = vector.NewVec(types.T_uint64.ToType())
 		// bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
-		err := vector.AppendFixed(bat.GetVector(0), types.Rowid([types.RowidSize]byte{}), false, testutil.TestUtilMp)
+		err := vector.AppendFixed(bat.GetVector(0), types.Rowid([types.RowidSize]byte{}), false, m)
 		if err != nil {
 			require.Nil(t, err)
 		}
 
-		err = vector.AppendFixed(bat.GetVector(1), uint64(272464), false, testutil.TestUtilMp)
+		err = vector.AppendFixed(bat.GetVector(1), uint64(272464), false, m)
 		if err != nil {
 			require.Nil(t, err)
 		}
 
-		err = vector.AppendBytes(bat.GetVector(2), []byte("empno"), false, testutil.TestUtilMp)
+		err = vector.AppendBytes(bat.GetVector(2), []byte("empno"), false, m)
 		if err != nil {
 			require.Nil(t, err)
 		}

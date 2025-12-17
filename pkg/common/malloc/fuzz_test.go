@@ -41,7 +41,7 @@ func fuzzAllocator(
 			t.Fatal()
 		}
 		// deallocate
-		defer dec.Deallocate(NoHints)
+		defer dec.Deallocate()
 
 		// read
 		for _, i := range slice {

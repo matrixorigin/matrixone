@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -251,6 +252,9 @@ func TestIvfSnapshot(t *testing.T) {
 		consumer, err := NewConsumer(cnUUID, cnEngine, cnClient, tblDef, job, info)
 		require.NoError(t, err)
 
+		mp := mpool.MustNewZeroNoFixed()
+		defer mpool.DeleteMPool(mp)
+
 		bat := testutil.NewBatchWithVectors(
 			[]*vector.Vector{
 				testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{1, 2}),
@@ -258,7 +262,7 @@ func TestIvfSnapshot(t *testing.T) {
 				testutil.NewVector(2, types.T_int32.ToType(), proc.Mp(), false, []int32{1, 2}),
 			}, nil)
 
-		defer bat.Clean(testutil.TestUtilMp)
+		defer bat.Clean(mp)
 
 		insertAtomicBat := &AtomicBatch{
 			Mp:      nil,
@@ -331,7 +335,7 @@ func TestIvfTail(t *testing.T) {
 			testutil.NewVector(2, types.T_array_float32.ToType(), proc.Mp(), false, [][]float32{{0.1, 0.2}, {0.3, 0.4}}),
 			testutil.NewVector(2, types.T_int32.ToType(), proc.Mp(), false, []int64{1, 2}),
 		}, nil)
-	defer bat.Clean(testutil.TestUtilMp)
+	defer bat.Clean(proc.Mp())
 
 	fromTs := types.BuildTS(1, 0)
 	insertAtomicBat := &AtomicBatch{
@@ -349,7 +353,7 @@ func TestIvfTail(t *testing.T) {
 			testutil.NewVector(2, types.T_int32.ToType(), proc.Mp(), false, []int64{1, 2}),
 		}, nil)
 
-	defer delbat.Clean(testutil.TestUtilMp)
+	defer delbat.Clean(proc.Mp())
 
 	delfromTs := types.BuildTS(2, 0)
 	delAtomicBat := &AtomicBatch{

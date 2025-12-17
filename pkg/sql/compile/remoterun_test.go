@@ -57,7 +57,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
@@ -224,7 +223,7 @@ func Test_convertToPipelineInstruction(t *testing.T) {
 		&intersectall.IntersectAll{},
 		&merge.Merge{},
 		&mergerecursive.MergeRecursive{},
-		&mergegroup.MergeGroup{},
+		&group.MergeGroup{},
 		&mergetop.MergeTop{},
 		&mergeorder.MergeOrder{},
 		&table_function.TableFunction{},
@@ -349,28 +348,12 @@ func Test_convertToProcessSessionInfo(t *testing.T) {
 
 func Test_decodeBatch(t *testing.T) {
 	mp := &mpool.MPool{}
-	vp := process.NewTopProcess(
-		context.TODO(),
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil)
 	aggexec.RegisterGroupConcatAgg(0, ",")
-	agg0, err := aggexec.MakeAgg(
-		vp, 0, false, []types.Type{types.T_varchar.ToType()}...)
-	require.Nil(t, err)
 	bat := &batch.Batch{
 		Recursive:  0,
 		ShuffleIDX: 0,
 		Attrs:      []string{"1"},
 		Vecs:       []*vector.Vector{vector.NewVec(types.T_int64.ToType())},
-		Aggs:       []aggexec.AggFuncExec{agg0},
 	}
 	bat.SetRowCount(1)
 	data, err := types.Encode(bat)

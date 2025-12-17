@@ -458,7 +458,7 @@ func TestCompareValues(t *testing.T) {
 	require.Equal(t, bytes.Compare([]byte("a"), []byte("b")), CompareValue([]byte("a"), []byte("b")))
 	enumA, enumB := Enum(1), Enum(2)
 	require.Equal(t, int(enumA-enumB), CompareValue(enumA, enumB))
-	require.Equal(t, int(int32a-int32a), CompareValue(int32a, int32a))
+	require.Equal(t, 0, CompareValue(int32a, int32a))
 }
 
 func TestCompareValuesNULL(t *testing.T) {

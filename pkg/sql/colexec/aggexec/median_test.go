@@ -17,6 +17,7 @@ package aggexec
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/assert"
@@ -24,23 +25,23 @@ import (
 )
 
 func TestMedianMarshal(t *testing.T) {
-	m := hackAggMemoryManager()
+	mp := mpool.MustNewZeroNoFixed()
 
 	vs := NewVectors[int64](types.T_int64.ToType())
-	defer vs.Free(m.mp)
-	AppendMultiFixed(vs, 1, false, 262145, m.mp)
+	defer vs.Free(mp)
+	AppendMultiFixed(vs, 1, false, 262145, mp)
 	assert.Equal(t, vs.Length(), 262145)
 	assert.Equal(t, 2, len(vs.vecs))
 	size1 := vs.Size()
 	assert.Greater(t, size1, int64(0))
 
 	vs2 := NewVectors[int64](types.T_int64.ToType())
-	defer vs2.Free(m.mp)
-	AppendMultiFixed(vs2, 1, false, 262145, m.mp)
+	defer vs2.Free(mp)
+	AppendMultiFixed(vs2, 1, false, 262145, mp)
 	assert.Equal(t, vs2.Length(), 262145)
 	assert.Equal(t, 2, len(vs2.vecs))
 
-	vs.Union(vs2, m.mp)
+	vs.Union(vs2, mp)
 	assert.Equal(t, vs.Length(), 262145*2)
 	assert.Equal(t, 3, len(vs.vecs))
 	size2 := vs.Size()
@@ -49,8 +50,8 @@ func TestMedianMarshal(t *testing.T) {
 	b, err := vs.MarshalBinary()
 	assert.NoError(t, err)
 	vs3 := NewEmptyVectors[int64]()
-	defer vs3.Free(m.mp)
-	err = vs3.Unmarshal(b, types.T_int64.ToType(), m.mp)
+	defer vs3.Free(mp)
+	err = vs3.Unmarshal(b, types.T_int64.ToType(), mp)
 	assert.NoError(t, err)
 	assert.Equal(t, vs.Length(), vs3.Length())
 	assert.Equal(t, vs.vecs[0].Length(), vs3.vecs[0].Length())
@@ -58,12 +59,12 @@ func TestMedianMarshal(t *testing.T) {
 }
 
 func TestMedianAggSize(t *testing.T) {
-	m := hackAggMemoryManager()
+	mp := mpool.MustNewZeroNoFixed()
 	defer func() {
-		require.Equal(t, int64(0), m.Mp().CurrNB())
+		require.Equal(t, int64(0), mp.CurrNB())
 	}()
 
-	agg, err := newMedianExecutor(m, singleAggInfo{
+	agg, err := newMedianExecutor(mp, singleAggInfo{
 		aggID:     AggIdOfMedian,
 		distinct:  false,
 		argType:   types.T_int64.ToType(),
@@ -84,8 +85,8 @@ func TestMedianAggSize(t *testing.T) {
 
 	// fill
 	v := vector.NewVec(types.T_int64.ToType())
-	defer v.Free(m.Mp())
-	err = vector.AppendFixedList(v, []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, nil, m.Mp())
+	defer v.Free(mp)
+	err = vector.AppendFixedList(v, []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, nil, mp)
 	require.NoError(t, err)
 
 	for i := 0; i < groupCount; i++ {

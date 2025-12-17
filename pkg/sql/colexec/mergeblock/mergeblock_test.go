@@ -92,17 +92,17 @@ func TestMergeBlock(t *testing.T) {
 	batch1 := &batch.Batch{
 		Attrs: []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats},
 		Vecs: []*vector.Vector{
-			testutil.MakeInt16Vector([]int16{0, 0, 0}, nil),
+			testutil.MakeInt16Vector([]int16{0, 0, 0}, nil, proc.Mp()),
 			testutil.MakeTextVector([]string{
 				string(objectio.EncodeBlockInfo(&blkInfo1)),
 				string(objectio.EncodeBlockInfo(&blkInfo2)),
 				string(objectio.EncodeBlockInfo(&blkInfo3))},
-				nil),
+				nil, proc.Mp()),
 			testutil.MakeTextVector([]string{
 				string(objectio.ZeroObjectStats[:]),
 				string(objectio.ZeroObjectStats[:]),
 				string(objectio.ZeroObjectStats[:])},
-				nil),
+				nil, proc.Mp()),
 		},
 	}
 	batch1.SetRowCount(3)

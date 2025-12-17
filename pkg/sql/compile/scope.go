@@ -38,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -1003,11 +1002,11 @@ func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context
 }
 
 // find scan->group->mergegroup
-func findMergeGroup(op vm.Operator) *mergegroup.MergeGroup {
+func findMergeGroup(op vm.Operator) *group.MergeGroup {
 	if op == nil {
 		return nil
 	}
-	if mergeGroup, ok := op.(*mergegroup.MergeGroup); ok {
+	if mergeGroup, ok := op.(*group.MergeGroup); ok {
 		child := op.GetOperatorBase().GetChildren(0)
 		if _, ok = child.(*group.Group); ok {
 			child = child.GetOperatorBase().GetChildren(0)

@@ -60,17 +60,17 @@ func TestInsertIndexMetadata(t *testing.T) {
 		bat.Vecs[1] = vector.NewVec(types.T_uint64.ToType())
 		bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
 
-		err := vector.AppendFixed(bat.GetVector(0), types.Rowid([types.RowidSize]byte{}), false, testutil.TestUtilMp)
+		err := vector.AppendFixed(bat.GetVector(0), types.Rowid([types.RowidSize]byte{}), false, proc.Mp())
 		if err != nil {
 			require.Nil(t, err)
 		}
 
-		err = vector.AppendFixed(bat.GetVector(1), uint64(272464), false, testutil.TestUtilMp)
+		err = vector.AppendFixed(bat.GetVector(1), uint64(272464), false, proc.Mp())
 		if err != nil {
 			require.Nil(t, err)
 		}
 
-		err = vector.AppendBytes(bat.GetVector(2), []byte("empno"), false, testutil.TestUtilMp)
+		err = vector.AppendBytes(bat.GetVector(2), []byte("empno"), false, proc.Mp())
 		if err != nil {
 			require.Nil(t, err)
 		}

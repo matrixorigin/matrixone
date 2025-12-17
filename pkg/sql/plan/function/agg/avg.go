@@ -121,8 +121,9 @@ func AvgReturnType(typs []types.Type) types.Type {
 
 type aggAvgContext int64
 
-func (a *aggAvgContext) Marshal() []byte     { return types.EncodeInt64((*int64)(a)) }
-func (a *aggAvgContext) Unmarshal(bs []byte) { *a = aggAvgContext(types.DecodeInt64(bs)) }
+func (a *aggAvgContext) Marshal() []byte                { return types.EncodeInt64((*int64)(a)) }
+func (a *aggAvgContext) MarshalBinary() ([]byte, error) { return a.Marshal(), nil }
+func (a *aggAvgContext) Unmarshal(bs []byte)            { *a = aggAvgContext(types.DecodeInt64(bs)) }
 func generateAggAvgContext(_ types.Type, _ ...types.Type) aggexec.AggGroupExecContext {
 	c := aggAvgContext(0)
 	return &c
@@ -177,7 +178,8 @@ func aggAvgFlush(
 
 type aggAvgDecimalCommonCtx int32
 
-func (a *aggAvgDecimalCommonCtx) Marshal() []byte { return types.EncodeInt32((*int32)(a)) }
+func (a *aggAvgDecimalCommonCtx) Marshal() []byte                { return types.EncodeInt32((*int32)(a)) }
+func (a *aggAvgDecimalCommonCtx) MarshalBinary() ([]byte, error) { return a.Marshal(), nil }
 func (a *aggAvgDecimalCommonCtx) Unmarshal(bs []byte) {
 	*a = aggAvgDecimalCommonCtx(types.DecodeInt32(bs))
 }

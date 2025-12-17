@@ -100,7 +100,7 @@ func prepareTestDeleteBatchs(mp *mpool.MPool, size int, hasUniqueKey bool, hasSe
 		}
 
 		rows := makeTestPkArray(int64(affectRows), rowCount)
-		columnA := testutil.MakeInt64Vector(rows, nil)
+		columnA := testutil.MakeInt64Vector(rows, nil, mp)
 		columnRowID := makeTestRowIDVector(mp, &mainObjectID, uint16(i), rowCount)
 		attrs := []string{"main_rowid", "a"}
 

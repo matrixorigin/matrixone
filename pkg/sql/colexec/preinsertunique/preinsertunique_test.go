@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
@@ -112,13 +113,13 @@ func TestPreInsertUnique(t *testing.T) {
 
 	var err error
 	for _, tc := range tcs {
-		resetChildren(tc.arg)
+		resetChildren(tc.arg, proc.Mp())
 		err = tc.arg.Prepare(proc)
 		require.NoError(t, err)
 		_, err = vm.Exec(tc.arg, proc)
 		require.NoError(t, err)
 		tc.arg.Reset(proc, false, nil)
-		resetChildren(tc.arg)
+		resetChildren(tc.arg, proc.Mp())
 		err = tc.arg.Prepare(proc)
 		require.NoError(t, err)
 		_, err = vm.Exec(tc.arg, proc)
@@ -129,8 +130,8 @@ func TestPreInsertUnique(t *testing.T) {
 
 }
 
-func resetChildren(arg *PreInsertUnique) {
-	bat := colexec.MakeMockBatchs()
+func resetChildren(arg *PreInsertUnique, m *mpool.MPool) {
+	bat := colexec.MakeMockBatchs(m)
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 	arg.Children = nil
 	arg.AppendChild(op)

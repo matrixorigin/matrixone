@@ -1254,7 +1254,11 @@ func entryIsDir(path string, name string, entry fs.FileInfo) (bool, error) {
 	return false, nil
 }
 
-// open for read and write
+// open for read and write, raw os.File API.
+func (l *LocalFS) EnsureDir(ctx context.Context, filePath string) error {
+	return l.ensureDir(l.toNativeFilePath(filePath))
+}
+
 func (l *LocalFS) OpenFile(ctx context.Context, filePath string) (*os.File, error) {
 	err := ctx.Err()
 	if err != nil {
