@@ -703,3 +703,206 @@ func Test_getEffectiveMaxFileSize(t *testing.T) {
 		})
 	}
 }
+
+func Test_buildParquetNode(t *testing.T) {
+	tests := []struct {
+		name     string
+		mysqlTyp defines.MysqlType
+	}{
+		{"bool", defines.MYSQL_TYPE_BOOL},
+		{"tiny", defines.MYSQL_TYPE_TINY},
+		{"short", defines.MYSQL_TYPE_SHORT},
+		{"int24", defines.MYSQL_TYPE_INT24},
+		{"long", defines.MYSQL_TYPE_LONG},
+		{"longlong", defines.MYSQL_TYPE_LONGLONG},
+		{"float", defines.MYSQL_TYPE_FLOAT},
+		{"double", defines.MYSQL_TYPE_DOUBLE},
+		{"date", defines.MYSQL_TYPE_DATE},
+		{"datetime", defines.MYSQL_TYPE_DATETIME},
+		{"timestamp", defines.MYSQL_TYPE_TIMESTAMP},
+		{"time", defines.MYSQL_TYPE_TIME},
+		{"decimal", defines.MYSQL_TYPE_DECIMAL},
+		{"varchar", defines.MYSQL_TYPE_VARCHAR},
+		{"var_string", defines.MYSQL_TYPE_VAR_STRING},
+		{"string", defines.MYSQL_TYPE_STRING},
+		{"json", defines.MYSQL_TYPE_JSON},
+		{"uuid", defines.MYSQL_TYPE_UUID},
+		{"text", defines.MYSQL_TYPE_TEXT},
+		{"blob", defines.MYSQL_TYPE_BLOB},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			node := buildParquetNode(tt.mysqlTyp)
+			if node == nil {
+				t.Errorf("buildParquetNode(%v) returned nil", tt.mysqlTyp)
+			}
+		})
+	}
+}
+
+func Test_vectorValueToParquet(t *testing.T) {
+	mp := mpool.MustNewZero()
+	convey.Convey("vectorValueToParquet converts types correctly", t, func() {
+		// Test bool type
+		convey.Convey("bool type", func() {
+			vec := testutil.NewVector(1, types.T_bool.ToType(), mp, false, []bool{true})
+			val, err := vectorValueToParquet(vec, 0, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, true)
+		})
+
+		// Test int8 type (converted to int32 for parquet)
+		convey.Convey("int8 type", func() {
+			vec := testutil.NewVector(1, types.T_int8.ToType(), mp, false, []int8{42})
+			val, err := vectorValueToParquet(vec, 0, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, int32(42))
+		})
+
+		// Test int16 type (converted to int32 for parquet)
+		convey.Convey("int16 type", func() {
+			vec := testutil.NewVector(1, types.T_int16.ToType(), mp, false, []int16{1234})
+			val, err := vectorValueToParquet(vec, 0, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, int32(1234))
+		})
+
+		// Test int32 type
+		convey.Convey("int32 type", func() {
+			vec := testutil.NewVector(1, types.T_int32.ToType(), mp, false, []int32{123456})
+			val, err := vectorValueToParquet(vec, 0, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, int32(123456))
+		})
+
+		// Test int64 type
+		convey.Convey("int64 type", func() {
+			vec := testutil.NewVector(1, types.T_int64.ToType(), mp, false, []int64{1234567890})
+			val, err := vectorValueToParquet(vec, 0, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, int64(1234567890))
+		})
+
+		// Test uint8 type (converted to int32 for parquet)
+		convey.Convey("uint8 type", func() {
+			vec := testutil.NewVector(1, types.T_uint8.ToType(), mp, false, []uint8{255})
+			val, err := vectorValueToParquet(vec, 0, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, int32(255))
+		})
+
+		// Test uint16 type (converted to int32 for parquet)
+		convey.Convey("uint16 type", func() {
+			vec := testutil.NewVector(1, types.T_uint16.ToType(), mp, false, []uint16{65535})
+			val, err := vectorValueToParquet(vec, 0, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, int32(65535))
+		})
+
+		// Test uint32 type (converted to int32 for parquet)
+		convey.Convey("uint32 type", func() {
+			vec := testutil.NewVector(1, types.T_uint32.ToType(), mp, false, []uint32{100000})
+			val, err := vectorValueToParquet(vec, 0, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, int32(100000))
+		})
+
+		// Test uint64 type (converted to int64 for parquet)
+		convey.Convey("uint64 type", func() {
+			vec := testutil.NewVector(1, types.T_uint64.ToType(), mp, false, []uint64{1234567890})
+			val, err := vectorValueToParquet(vec, 0, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, int64(1234567890))
+		})
+
+		// Test float32 type
+		convey.Convey("float32 type", func() {
+			vec := testutil.NewVector(1, types.T_float32.ToType(), mp, false, []float32{3.14})
+			val, err := vectorValueToParquet(vec, 0, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, float32(3.14))
+		})
+
+		// Test float64 type
+		convey.Convey("float64 type", func() {
+			vec := testutil.NewVector(1, types.T_float64.ToType(), mp, false, []float64{3.14159265359})
+			val, err := vectorValueToParquet(vec, 0, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, 3.14159265359)
+		})
+
+		// Test varchar type
+		convey.Convey("varchar type", func() {
+			vec := testutil.NewVector(1, types.T_varchar.ToType(), mp, false, []string{"hello world"})
+			val, err := vectorValueToParquet(vec, 0, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, "hello world")
+		})
+
+		// Test date type
+		convey.Convey("date type", func() {
+			vec := testutil.NewVector(1, types.T_date.ToType(), mp, false, []string{"2023-12-25"})
+			val, err := vectorValueToParquet(vec, 0, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, "2023-12-25")
+		})
+	})
+}
+
+func Test_NewParquetWriter(t *testing.T) {
+	convey.Convey("NewParquetWriter creates writer correctly", t, func() {
+		// Test with nil MysqlResultSet
+		convey.Convey("nil result set returns error", func() {
+			_, err := NewParquetWriter(context.Background(), nil)
+			convey.So(err, convey.ShouldNotBeNil)
+		})
+
+		// Test with empty columns
+		convey.Convey("empty columns returns error", func() {
+			mrs := &MysqlResultSet{}
+			_, err := NewParquetWriter(context.Background(), mrs)
+			convey.So(err, convey.ShouldNotBeNil)
+		})
+
+		// Test with valid columns
+		convey.Convey("valid columns creates writer", func() {
+			mrs := &MysqlResultSet{}
+			col1 := new(MysqlColumn)
+			col1.SetName("id")
+			col1.SetColumnType(defines.MYSQL_TYPE_LONG)
+			col2 := new(MysqlColumn)
+			col2.SetName("name")
+			col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+			mrs.AddColumn(col1)
+			mrs.AddColumn(col2)
+
+			pw, err := NewParquetWriter(context.Background(), mrs)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(pw, convey.ShouldNotBeNil)
+			convey.So(len(pw.columnNames), convey.ShouldEqual, 2)
+			convey.So(pw.columnNames[0], convey.ShouldEqual, "id")
+			convey.So(pw.columnNames[1], convey.ShouldEqual, "name")
+		})
+	})
+}
+
+func Test_ParquetWriter_Close(t *testing.T) {
+	convey.Convey("ParquetWriter Close returns valid parquet data", t, func() {
+		mrs := &MysqlResultSet{}
+		col1 := new(MysqlColumn)
+		col1.SetName("id")
+		col1.SetColumnType(defines.MYSQL_TYPE_LONG)
+		mrs.AddColumn(col1)
+
+		pw, err := NewParquetWriter(context.Background(), mrs)
+		convey.So(err, convey.ShouldBeNil)
+
+		// Close without writing any data
+		data, err := pw.Close()
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(len(data), convey.ShouldBeGreaterThan, 0)
+		// Parquet files start with "PAR1" magic bytes
+		convey.So(string(data[:4]), convey.ShouldEqual, "PAR1")
+	})
+}

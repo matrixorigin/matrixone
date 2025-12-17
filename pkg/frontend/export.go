@@ -68,6 +68,9 @@ type ExportConfig struct {
 	mrs         *MysqlResultSet
 	ctx         context.Context
 	service     string
+
+	// Parquet writer for parquet format export
+	parquetWriter *ParquetWriter
 }
 
 type writeParam struct {
@@ -808,6 +811,11 @@ func exportDataFromBatchToCSVFile(ep *ExportConfig) error {
 }
 
 func exportAllDataFromBatches(ep *ExportConfig) error {
+	// Handle parquet format separately
+	if ep.getExportFormat() == "parquet" {
+		return finalizeParquetExport(ep)
+	}
+
 	var tmp *BatchByte
 	for {
 		tmp = nil
@@ -843,6 +851,69 @@ func exportAllDataFromBatches(ep *ExportConfig) error {
 	return nil
 }
 
+// finalizeParquetExport closes the parquet writer and writes the complete parquet file
+func finalizeParquetExport(ep *ExportConfig) error {
+	if ep.parquetWriter == nil {
+		// No data was written
+		return nil
+	}
+
+	// Close the parquet writer to get the complete parquet data (including footer)
+	parquetData, err := ep.parquetWriter.Close()
+	if err != nil {
+		return err
+	}
+
+	// Write the parquet data to file
+	if err := writeParquetToFile(ep, parquetData); err != nil {
+		return err
+	}
+
+	ep.parquetWriter = nil
+	return nil
+}
+
+// writeParquetToFile writes the complete parquet data to the output file
+func writeParquetToFile(ep *ExportConfig, data []byte) error {
+	var filePath string
+	if len(ep.userConfig.StageFilePath) != 0 {
+		filePath = getExportFilePath(ep.userConfig.StageFilePath, ep.FileCnt)
+	} else {
+		filePath = getExportFilePath(ep.userConfig.FilePath, ep.FileCnt)
+	}
+
+	// Parse file path to determine file service
+	fspath, err := fileservice.ParsePath(filePath)
+	if err != nil {
+		return err
+	}
+
+	var fs fileservice.FileService
+	var readPath string
+	if fspath.Service == defines.SharedFileServiceName {
+		fs = getPu(ep.service).FileService
+		readPath = filePath
+	} else {
+		fs, readPath, err = fileservice.GetForETL(ep.ctx, nil, filePath)
+		if err != nil {
+			return err
+		}
+	}
+
+	// Write the parquet data to file service
+	vec := fileservice.IOVector{
+		FilePath: readPath,
+		Entries: []fileservice.IOEntry{
+			{
+				Data: data,
+				Size: int64(len(data)),
+			},
+		},
+	}
+
+	return fs.Write(ep.ctx, vec)
+}
+
 var _ CsvWriter = &ExportConfig{}
 
 func (ec *ExportConfig) init() {
@@ -864,8 +935,8 @@ func (ec *ExportConfig) Write(execCtx *ExecCtx, crs *perfcounter.CounterSet, bat
 	case "jsonline":
 		go constructJSONLine(execCtx.reqCtx, execCtx.ses, copied, ec.Index.Load(), ec.ByteChan, ec)
 	case "parquet":
-		// TODO: implement parquet export in Phase 5
-		return moerr.NewInternalError(execCtx.reqCtx, "parquet export not yet implemented")
+		// Parquet export: write batch to parquet writer
+		return ec.writeParquet(execCtx, copied)
 	default: // csv
 		go constructByte(execCtx.reqCtx, execCtx.ses, copied, ec.Index.Load(), ec.ByteChan, ec)
 	}
@@ -877,6 +948,31 @@ func (ec *ExportConfig) Write(execCtx *ExecCtx, crs *perfcounter.CounterSet, bat
 		return err
 	}
 	return nil
+}
+
+// writeParquet writes a batch to the parquet writer
+func (ec *ExportConfig) writeParquet(execCtx *ExecCtx, bat *batch.Batch) error {
+	defer bat.Clean(execCtx.ses.GetMemPool())
+
+	// Initialize parquet writer if not already done
+	if ec.parquetWriter == nil {
+		var err error
+		ec.parquetWriter, err = NewParquetWriter(execCtx.reqCtx, ec.mrs)
+		if err != nil {
+			return err
+		}
+	}
+
+	// Get timezone from session
+	var timeZone *time.Location
+	if ss, ok := execCtx.ses.(*Session); ok {
+		timeZone = ss.GetTimeZone()
+	} else {
+		timeZone = time.UTC
+	}
+
+	// Write batch to parquet writer
+	return ec.parquetWriter.WriteBatch(bat, execCtx.ses.GetMemPool(), timeZone)
 }
 
 func (ec *ExportConfig) Close() {
