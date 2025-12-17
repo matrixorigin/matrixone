@@ -283,16 +283,16 @@ UNION
 ORDER BY dist LIMIT 4;
 
 -- Test Case: UNION with mode=pre on different tables (mini_vector_data and mini_embed_data)
-(SELECT id, text AS content
+(SELECT id, text AS content, l2_distance(vec, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]') AS dist
  FROM mini_vector_data 
  ORDER BY id, l2_distance(vec, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]')
  LIMIT 2 by rank with option 'mode=pre')
 UNION
-(SELECT id, content
+(SELECT id, content, cosine_distance(embedding, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]') AS dist
  FROM mini_embed_data 
  ORDER BY cosine_distance(embedding, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]') 
  LIMIT 2 by rank with option 'mode=pre')
-LIMIT 3;
+LIMIT 4;
 
 -- Test Case: UNION with mode=pre and complex WHERE conditions
 (SELECT id, category, l2_distance(vec, '[0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9]') AS dist 

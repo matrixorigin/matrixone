@@ -192,12 +192,8 @@ func CosineDistance[T types.RealNumbers](v1, v2 []T) (float64, error) {
 		return 0, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
 	}
 
-	cosine, err := CosineSimilarity[T](v1, v2)
-	if err != nil {
-		return 0, err
-	}
-
-	return float64(1 - cosine), nil
+	ret, err := metric.CosineDistance[T](v1, v2)
+	return float64(ret), err
 }
 
 func CosineSimilarity[T types.RealNumbers](v1, v2 []T) (float64, error) {
