@@ -19,7 +19,6 @@ import (
 	"math"
 	"math/rand"
 	"runtime"
-	"sync"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/concurrent"
@@ -379,23 +378,25 @@ func (km *ElkanClusterer[T]) assignData(ctx context.Context) (int, error) {
 	if len(km.vectorList) < ncpu {
 		ncpu = len(km.vectorList)
 	}
-	errs := make(chan error, ncpu)
 
-	var wg sync.WaitGroup
-	for n := 0; n < ncpu; n++ {
+	exec := concurrent.NewThreadPoolExecutor(ncpu)
+	err := exec.Execute(
+		ctx,
+		len(km.vectorList),
+		func(ctx context.Context, thread_id int, start, end int) (err2 error) {
+			subvec := km.vectorList[start:end]
+			submetas := km.vectorMetas[start:end]
+			subassigns := km.assignments[start:end]
 
-		wg.Add(1)
-		go func(tid int) {
-			defer wg.Done()
+			for currVector := range subvec {
 
-			for currVector := range km.vectorList {
-
-				if currVector%ncpu != tid {
-					continue
+				if currVector%100 == 0 && ctx.Err() != nil {
+					return ctx.Err()
 				}
+
 				// step 2
 				// u(x) <= s(c(x))
-				if km.vectorMetas[currVector].upper <= km.minHalfInterCentroidDist[km.assignments[currVector]] {
+				if submetas[currVector].upper <= km.minHalfInterCentroidDist[subassigns[currVector]] {
 					continue
 				}
 
@@ -405,66 +406,61 @@ func (km *ElkanClusterer[T]) assignData(ctx context.Context) (int, error) {
 					// (i) c != c(x) and
 					// (ii) u(x)>l(x, c) and
 					// (iii) u(x)> 0.5 x d(c(x), c)
-					if c != km.assignments[currVector] &&
-						km.vectorMetas[currVector].upper > km.vectorMetas[currVector].lower[c] &&
-						km.vectorMetas[currVector].upper > km.halfInterCentroidDistMatrix[km.assignments[currVector]][c] {
+					if c != subassigns[currVector] &&
+						submetas[currVector].upper > submetas[currVector].lower[c] &&
+						submetas[currVector].upper > km.halfInterCentroidDistMatrix[subassigns[currVector]][c] {
 
 						//step 3.a - Bounds update
 						// If r(x) then compute d(x, c(x)) and assign r(x)= false.
 						var dxcx T
-						if km.vectorMetas[currVector].recompute {
-							var err error
-							km.vectorMetas[currVector].recompute = false
+						if submetas[currVector].recompute {
+							submetas[currVector].recompute = false
 
-							dxcx, err = km.distFn(km.vectorList[currVector], km.centroids[km.assignments[currVector]])
-							if err != nil {
-								errs <- err
-								return
+							dxcx, err2 = km.distFn(subvec[currVector], km.centroids[subassigns[currVector]])
+							if err2 != nil {
+								return err2
 							}
-							km.vectorMetas[currVector].upper = dxcx
-							km.vectorMetas[currVector].lower[km.assignments[currVector]] = dxcx
+							submetas[currVector].upper = dxcx
+							submetas[currVector].lower[subassigns[currVector]] = dxcx
 
-							if km.vectorMetas[currVector].upper <= km.vectorMetas[currVector].lower[c] {
+							if submetas[currVector].upper <= submetas[currVector].lower[c] {
 								continue // Pruned by triangle inequality on lower bound.
 							}
 
-							if km.vectorMetas[currVector].upper <= km.halfInterCentroidDistMatrix[km.assignments[currVector]][c] {
+							if submetas[currVector].upper <= km.halfInterCentroidDistMatrix[subassigns[currVector]][c] {
 								continue // Pruned by triangle inequality on cluster distances.
 							}
 
 						} else {
-							dxcx = km.vectorMetas[currVector].upper //  Otherwise, d(x, c(x))=u(x).
+							dxcx = submetas[currVector].upper //  Otherwise, d(x, c(x))=u(x).
 						}
 
 						//step 3.b - Update
 						// If d(x, c(x))>l(x, c) or d(x, c(x))> 0.5 d(c(x), c) then
 						// Compute d(x, c)
 						// If d(x, c)<d(x, c(x)) then assign c(x)=c.
-						if dxcx > km.vectorMetas[currVector].lower[c] ||
-							dxcx > km.halfInterCentroidDistMatrix[km.assignments[currVector]][c] {
+						if dxcx > submetas[currVector].lower[c] ||
+							dxcx > km.halfInterCentroidDistMatrix[subassigns[currVector]][c] {
 
-							dxc, err := km.distFn(km.vectorList[currVector], km.centroids[c]) // d(x,c) in the paper
-							if err != nil {
-								errs <- err
-								return
+							dxc, err2 := km.distFn(subvec[currVector], km.centroids[c]) // d(x,c) in the paper
+							if err2 != nil {
+								return err2
 							}
-							km.vectorMetas[currVector].lower[c] = dxc
+							submetas[currVector].lower[c] = dxc
 							if dxc < dxcx {
-								km.vectorMetas[currVector].upper = dxc
-								km.assignments[currVector] = c
+								submetas[currVector].upper = dxc
+								subassigns[currVector] = c
 								changes.Add(1)
 							}
 						}
 					}
 				}
 			}
-		}(n)
-	}
+			return
+		})
 
-	wg.Wait()
-
-	if len(errs) > 0 {
-		return 0, <-errs
+	if err != nil {
+		return 0, err
 	}
 
 	return int(changes.Load()), nil
