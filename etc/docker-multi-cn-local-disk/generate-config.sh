@@ -46,7 +46,7 @@ DEFAULT_LOG_FORMAT="console"
 DEFAULT_LOG_MAX_SIZE="512"
 DEFAULT_MEMORY_CACHE="512MB"
 DEFAULT_DISK_CACHE="8GB"
-DEFAULT_CACHE_DIR="mo-data/file-service-cache"
+DEFAULT_CACHE_DIR="/mo-data/file-service-cache"
 DEFAULT_DISABLE_TRACE="true"
 DEFAULT_DISABLE_METRIC="true"
 
@@ -117,7 +117,7 @@ CN1_DISABLE_METRIC=$(get_config "CN1" "CN1_" "$DEFAULT_DISABLE_METRIC" "DISABLE_
 # Generate CN1 config
 cat > cn1.toml << EOF
 service-type = "CN"
-data-dir = "./mo-data"
+data-dir = "/mo-data"
 
 [log]
 level = "$CN1_LOG_LEVEL"
@@ -137,7 +137,7 @@ backend = "DISK"
 [[fileservice]]
 name = "SHARED"
 backend = "DISK"
-data-dir = "mo-data/shared"
+data-dir = "/mo-data/shared"
 
 [fileservice.cache]
 memory-capacity = "$CN1_MEMORY_CACHE"
@@ -182,7 +182,7 @@ CN2_DISABLE_METRIC=$(get_config "CN2" "CN2_" "$DEFAULT_DISABLE_METRIC" "DISABLE_
 # Generate CN2 config
 cat > cn2.toml << EOF
 service-type = "CN"
-data-dir = "./mo-data"
+data-dir = "/mo-data"
 
 [log]
 level = "$CN2_LOG_LEVEL"
@@ -202,7 +202,7 @@ backend = "DISK"
 [[fileservice]]
 name = "SHARED"
 backend = "DISK"
-data-dir = "mo-data/shared"
+data-dir = "/mo-data/shared"
 
 [fileservice.cache]
 memory-capacity = "$CN2_MEMORY_CACHE"
@@ -246,7 +246,7 @@ LOG_CACHE_DIR=$(get_config "LOG" "LOG_" "$DEFAULT_CACHE_DIR" "CACHE_DIR")
 cat > log.toml << EOF
 # service node type, [DN|CN|LOG]
 service-type = "LOG"
-data-dir = "./mo-data"
+data-dir = "/mo-data"
 
 [log]
 level = "$LOG_LOG_LEVEL"
@@ -261,7 +261,7 @@ backend = "DISK"
 [[fileservice]]
 name = "SHARED"
 backend = "DISK"
-data-dir = "mo-data/shared"
+data-dir = "/mo-data/shared"
 
 [fileservice.cache]
 memory-capacity = "$LOG_MEMORY_CACHE"
@@ -289,7 +289,7 @@ TN_DISABLE_METRIC=$(get_config "TN" "TN_" "$DEFAULT_DISABLE_METRIC" "DISABLE_MET
 # Generate TN config
 cat > tn.toml << EOF
 service-type = "DN"
-data-dir = "./mo-data"
+data-dir = "/mo-data"
 
 [log]
 level = "$TN_LOG_LEVEL"
@@ -309,7 +309,7 @@ backend = "DISK"
 [[fileservice]]
 name = "SHARED"
 backend = "DISK"
-data-dir = "mo-data/shared"
+data-dir = "/mo-data/shared"
 
 [fileservice.cache]
 memory-capacity = "$TN_MEMORY_CACHE"
@@ -355,7 +355,7 @@ PROXY_DISABLE_METRIC=$(get_config "PROXY" "PROXY_" "$DEFAULT_DISABLE_METRIC" "DI
 # Generate proxy config  
 cat > proxy.toml << EOF
 service-type = "PROXY"
-data-dir = "./mo-data"
+data-dir = "/mo-data"
 
 [log]
 level = "$PROXY_LOG_LEVEL"
@@ -375,7 +375,7 @@ backend = "DISK"
 [[fileservice]]
 name = "SHARED"
 backend = "DISK"
-data-dir = "mo-data/shared"
+data-dir = "/mo-data/shared"
 
 [fileservice.cache]
 memory-capacity = "$PROXY_MEMORY_CACHE"
