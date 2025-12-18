@@ -39,7 +39,7 @@
 # Local builds use tag 'local' to avoid overwriting the official 'latest' tag
 x-build: &common-build
   context: ../../
-  dockerfile: optools/images/Dockerfile
+  dockerfile: optools/images/Dockerfile.dev
   tags:
     - ${IMAGE_NAME:-matrixorigin/matrixone:latest}
     - matrixorigin/matrixone:local
@@ -57,22 +57,24 @@ services:
     hostname: mo-log
     profiles:
       - matrixone
-    user: "${DOCKER_UID:-501}:${DOCKER_GID:-20}"  # Run as current user (macOS default: 501:20, Linux: use 1000:1000)
-    entrypoint: ["/mo-service"]
-    command: ["-cfg", "/etc/docker-multi-cn-local-disk/log.toml"]
+    user: "${DOCKER_UID:-501}:${DOCKER_GID:-20}" # Run as current user (macOS default: 501:20, Linux: use 1000:1000)
+    entrypoint: [ "/mo-service" ]
+    command: [ "-cfg", "/etc/docker-multi-cn-local-disk/log.toml" ]
     ports:
-      - "32001:32001"  # HAKeeper port
-      - "7001:7001"    # Status port
+      - "32001:32001" # HAKeeper port
+      - "7001:7001" # Status port
     volumes:
       - ../../mo-data:/mo-data
       - ../../logs:/logs
       - .:/etc/docker-multi-cn-local-disk:ro
+      # Note: Local mo-service mount removed due to GLIBC version mismatch
+      # Use image-built binary or build inside container for compatibility
     environment:
       - TZ=Asia/Shanghai
     networks:
       - matrixone-net
     healthcheck:
-      test: ["CMD-SHELL", "pgrep mo-service || exit 1"]
+      test: [ "CMD-SHELL", "pgrep mo-service || exit 1" ]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -85,13 +87,17 @@ services:
     hostname: mo-tn
     profiles:
       - matrixone
-    user: "${DOCKER_UID:-501}:${DOCKER_GID:-20}"  # Run as current user (macOS default: 501:20, Linux: use 1000:1000)
-    entrypoint: ["/mo-service"]
-    command: ["-cfg", "/etc/docker-multi-cn-local-disk/tn.toml"]
+    user: "${DOCKER_UID:-501}:${DOCKER_GID:-20}" # Run as current user (macOS default: 501:20, Linux: use 1000:1000)
+    entrypoint: [ "/mo-service" ]
+    command: [ "-cfg", "/etc/docker-multi-cn-local-disk/tn.toml" ]
+    cap_add:
+      - NET_ADMIN # Required for network chaos testing with tc (traffic control)
     volumes:
       - ../../mo-data:/mo-data
       - ../../logs:/logs
       - .:/etc/docker-multi-cn-local-disk:ro
+      # Note: Local mo-service mount removed due to GLIBC version mismatch
+      # Use image-built binary or build inside container for compatibility
     environment:
       - TZ=Asia/Shanghai
     networks:
@@ -107,15 +113,19 @@ services:
     hostname: mo-cn1
     profiles:
       - matrixone
-    user: "${DOCKER_UID:-501}:${DOCKER_GID:-20}"  # Run as current user (macOS default: 501:20, Linux: use 1000:1000)
-    entrypoint: ["/mo-service"]
-    command: ["-cfg", "/etc/docker-multi-cn-local-disk/cn1.toml"]
+    user: "${DOCKER_UID:-501}:${DOCKER_GID:-20}" # Run as current user (macOS default: 501:20, Linux: use 1000:1000)
+    entrypoint: [ "/mo-service" ]
+    command: [ "-cfg", "/etc/docker-multi-cn-local-disk/cn1.toml" ]
+    cap_add:
+      - NET_ADMIN # Required for network chaos testing with tc (traffic control)
     ports:
-      - "16001:16001"  # SQL port
+      - "16001:16001" # SQL port
     volumes:
       - ../../mo-data:/mo-data
       - ../../logs:/logs
       - .:/etc/docker-multi-cn-local-disk:ro
+      # Note: Local mo-service mount removed due to GLIBC version mismatch
+      # Use image-built binary or build inside container for compatibility
     environment:
       - TZ=Asia/Shanghai
     networks:
@@ -131,15 +141,19 @@ services:
     hostname: mo-cn2
     profiles:
       - matrixone
-    user: "${DOCKER_UID:-501}:${DOCKER_GID:-20}"  # Run as current user (macOS default: 501:20, Linux: use 1000:1000)
-    entrypoint: ["/mo-service"]
-    command: ["-cfg", "/etc/docker-multi-cn-local-disk/cn2.toml"]
+    user: "${DOCKER_UID:-501}:${DOCKER_GID:-20}" # Run as current user (macOS default: 501:20, Linux: use 1000:1000)
+    entrypoint: [ "/mo-service" ]
+    command: [ "-cfg", "/etc/docker-multi-cn-local-disk/cn2.toml" ]
+    cap_add:
+      - NET_ADMIN # Required for network chaos testing with tc (traffic control)
     ports:
-      - "16002:16002"  # SQL port
+      - "16002:16002" # SQL port
     volumes:
       - ../../mo-data:/mo-data
       - ../../logs:/logs
       - .:/etc/docker-multi-cn-local-disk:ro
+      # Note: Local mo-service mount removed due to GLIBC version mismatch
+      # Use image-built binary or build inside container for compatibility
     environment:
       - TZ=Asia/Shanghai
     networks:
@@ -155,15 +169,17 @@ services:
     hostname: mo-proxy
     profiles:
       - matrixone
-    user: "${DOCKER_UID:-501}:${DOCKER_GID:-20}"  # Run as current user (macOS default: 501:20, Linux: use 1000:1000)
-    entrypoint: ["/mo-service"]
-    command: ["-cfg", "/etc/docker-multi-cn-local-disk/proxy.toml"]
+    user: "${DOCKER_UID:-501}:${DOCKER_GID:-20}" # Run as current user (macOS default: 501:20, Linux: use 1000:1000)
+    entrypoint: [ "/mo-service" ]
+    command: [ "-cfg", "/etc/docker-multi-cn-local-disk/proxy.toml" ]
     ports:
-      - "6001:6009"    # Proxy SQL port (host:container)
+      - "6001:6009" # Proxy SQL port (host:container)
     volumes:
       - ../../mo-data:/mo-data
       - ../../logs:/logs
       - .:/etc/docker-multi-cn-local-disk:ro
+      # Note: Local mo-service mount removed due to GLIBC version mismatch
+      # Use image-built binary or build inside container for compatibility
     environment:
       - TZ=Asia/Shanghai
     networks:
@@ -180,7 +196,7 @@ services:
     hostname: mo-prometheus
     profiles:
       - prometheus
-    user: "${DOCKER_UID:-501}:${DOCKER_GID:-20}"  # Run as current user (macOS default: 501:20, Linux: use 1000:1000)
+    user: "${DOCKER_UID:-501}:${DOCKER_GID:-20}" # Run as current user (macOS default: 501:20, Linux: use 1000:1000)
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
@@ -194,7 +210,7 @@ services:
     #   - "9090:9090"    # Prometheus web UI (only if needed for debugging)
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ../../prometheus-data:/prometheus  # Local directory for easy access
+      - ../../prometheus-data:/prometheus # Local directory for easy access
     networks:
       - matrixone-net
     depends_on:
@@ -214,14 +230,14 @@ services:
     hostname: mo-grafana
     profiles:
       - prometheus
-    user: "${DOCKER_UID:-501}:${DOCKER_GID:-20}"  # Run as current user
+    user: "${DOCKER_UID:-501}:${DOCKER_GID:-20}" # Run as current user
     ports:
-      - "3000:3000"    # Grafana web UI - main monitoring interface
+      - "3000:3000" # Grafana web UI - main monitoring interface
     volumes:
-      - ../../grafana-data:/var/lib/grafana  # Grafana data directory
-      - ./grafana-provisioning/datasources/prometheus-cluster.yml:/etc/grafana/provisioning/datasources/prometheus.yml:ro  # Prometheus data source for cluster
-      - ./grafana-provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro  # Dashboard provisioning
-      - ../../pkg/util/metric/dashboard:/var/lib/grafana/dashboards/matrixone:ro  # MatrixOne dashboards
+      - ../../grafana-data:/var/lib/grafana # Grafana data directory
+      - ./grafana-provisioning/datasources/prometheus-cluster.yml:/etc/grafana/provisioning/datasources/prometheus.yml:ro # Prometheus data source for cluster
+      - ./grafana-provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro # Dashboard provisioning
+      - ../../pkg/util/metric/dashboard:/var/lib/grafana/dashboards/matrixone:ro # MatrixOne dashboards
     environment:
       - GF_SECURITY_ADMIN_USER=admin
       - GF_SECURITY_ADMIN_PASSWORD=admin
@@ -244,7 +260,7 @@ services:
     hostname: mo-prometheus-local
     profiles:
       - prometheus-local
-    user: "${DOCKER_UID:-501}:${DOCKER_GID:-20}"  # Run as current user (macOS default: 501:20, Linux: use 1000:1000)
+    user: "${DOCKER_UID:-501}:${DOCKER_GID:-20}" # Run as current user (macOS default: 501:20, Linux: use 1000:1000)
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
@@ -258,17 +274,17 @@ services:
     #   - "9091:9090"    # Prometheus web UI (only if needed for debugging)
     volumes:
       - ./prometheus-local.yml:/etc/prometheus/prometheus.yml:ro
-      - ../../prometheus-local-data:/prometheus  # Local directory for easy access
+      - ../../prometheus-local-data:/prometheus # Local directory for easy access
     # Use host network on Linux for better host access, or bridge with extra_hosts
     # For Linux, we'll use extra_hosts to map host.docker.internal
     extra_hosts:
-      - "host.docker.internal:host-gateway"  # Linux support for host.docker.internal
+      - "host.docker.internal:host-gateway" # Linux support for host.docker.internal
     networks:
       - matrixone-net
     environment:
       - TZ=Asia/Shanghai
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9090/-/ready"]
+      test: [ "CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9090/-/ready" ]
       interval: 3s
       timeout: 2s
       retries: 5
@@ -284,14 +300,14 @@ services:
     hostname: mo-grafana-local
     profiles:
       - prometheus-local
-    user: "${DOCKER_UID:-501}:${DOCKER_GID:-20}"  # Run as current user
+    user: "${DOCKER_UID:-501}:${DOCKER_GID:-20}" # Run as current user
     ports:
-      - "3001:3000"    # Grafana web UI - main monitoring interface
+      - "3001:3000" # Grafana web UI - main monitoring interface
     volumes:
-      - ../../grafana-local-data:/var/lib/grafana  # Grafana data directory
-      - ./grafana-provisioning/datasources/prometheus.yml:/etc/grafana/provisioning/datasources/prometheus.yml:ro  # Prometheus data source for local
-      - ./grafana-provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro  # Dashboard provisioning
-      - ../../pkg/util/metric/dashboard:/var/lib/grafana/dashboards/matrixone:ro  # MatrixOne dashboards
+      - ../../grafana-local-data:/var/lib/grafana # Grafana data directory
+      - ./grafana-provisioning/datasources/prometheus.yml:/etc/grafana/provisioning/datasources/prometheus.yml:ro # Prometheus data source for local
+      - ./grafana-provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro # Dashboard provisioning
+      - ../../pkg/util/metric/dashboard:/var/lib/grafana/dashboards/matrixone:ro # MatrixOne dashboards
     environment:
       - GF_SECURITY_ADMIN_USER=admin
       - GF_SECURITY_ADMIN_PASSWORD=admin
@@ -305,7 +321,7 @@ services:
       prometheus-local:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:3000/api/health || exit 1"]
+      test: [ "CMD-SHELL", "curl -sf http://localhost:3000/api/health || exit 1" ]
       interval: 3s
       timeout: 2s
       retries: 5
@@ -319,6 +335,6 @@ networks:
 volumes:
   mo-data:
   logs:
-  # Prometheus data is stored in local directories (../../prometheus-data and ../../prometheus-local-data)
-  # instead of Docker volumes for easier access and management
+    # Prometheus data is stored in local directories (../../prometheus-data and ../../prometheus-local-data)
+    # instead of Docker volumes for easier access and management
 
