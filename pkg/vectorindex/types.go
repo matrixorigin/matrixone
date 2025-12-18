@@ -113,6 +113,7 @@ type RuntimeConfig struct {
 	Probe             uint
 	OrigFuncName      string
 	BackgroundQueries []*plan.Query
+	NThreads          uint // Brute Force Index
 }
 
 type VectorIndexCdc[T types.RealNumbers] struct {

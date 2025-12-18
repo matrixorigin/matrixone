@@ -1,4 +1,6 @@
-// Copyright 2023 Matrix Origin
+//go:build gpu
+
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,22 +14,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package kmeans
+package metric
 
-import "context"
-
-const DefaultRandSeed = 1
-
-type Clusterer interface {
-	InitCentroids(context.Context) error
-	Cluster(context.Context) (any, error)
-	SSE() (float64, error)
-	Close() error
-}
-
-type InitType uint16
-
-const (
-	Random InitType = iota
-	KmeansPlusPlus
+import (
+        cuvs "github.com/rapidsai/cuvs/go"
 )
+
+var (
+        MetricTypeToCuvsMetric = map[MetricType]cuvs.Distance{
+                Metric_L2sqDistance:   cuvs.DistanceSQEuclidean,
+                Metric_L2Distance:     cuvs.DistanceSQEuclidean,
+                Metric_InnerProduct:   cuvs.DistanceInnerProduct,
+                Metric_CosineDistance: cuvs.DistanceCosine,
+                Metric_L1Distance:     cuvs.DistanceL1,
+        }
+)
+

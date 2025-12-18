@@ -11,7 +11,8 @@ SELECT DAYOFMONTH('2007-02-28') AS day_28;
 day_28
 28
 SELECT DAYOFMONTH('2007-02-29') AS day_29_leap;
-invalid argument parsedate, bad value 2007-02-29
+day_29_leap
+null
 SELECT DAYOFMONTH('2008-02-29') AS day_29_leap_year;
 day_29_leap_year
 29

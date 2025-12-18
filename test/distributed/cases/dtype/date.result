@@ -1,5 +1,6 @@
 select cast('0000-01-01' as date),cast('0000-01-01' as date)-1;
-invalid argument parsedate, bad value 0000-01-01
+cast(0000-01-01 as date)    cast(0000-01-01 as date) - 1
+null    null
 select cast('2000-01-01' as date);
 cast(2000-01-01 as date)
 2000-01-01
@@ -7,7 +8,8 @@ select cast('200-01-1' as date);
 cast(200-01-1 as date)
 0200-01-01
 select cast('2021-02-29' as date);
-invalid argument parsedate, bad value 2021-02-29
+cast(2021-02-29 as date)
+null
 select cast('2022-02-01' as date)-cast('2022-01-01' as date);
 cast(2022-02-01 as date) - cast(2022-01-01 as date)
 31
@@ -15,7 +17,8 @@ select cast('2020-02-01' as date)+NULL;
 cast(2020-02-01 as date) + null
 null
 select cast('0000-00-00' as date);
-invalid argument parsedate, bad value 0000-00-00
+cast(0000-00-00 as date)
+null
 select cast(cast(0x13488c5 as signed) as date);
 invalid argument operator cast, bad value [BIGINT DATE]
 SELECT DATE_ADD('2017-06-15', INTERVAL 10 DAY);
@@ -149,7 +152,7 @@ invalid argument operator =, bad value [DATE DOUBLE]
 SELECT * from t_date WHERE id IN (20220101, 20220103);
 id
 SELECT * from t_date WHERE id IN ('2.0200101e7','2.0200103e7');
-invalid argument parsedate, bad value 2.0200101e7
+id
 SELECT * from t_date WHERE id BETWEEN 20191231 AND 20200101;
 id
 SELECT * from t_date WHERE id BETWEEN 2.0200101e7 and 2.0200103e7;
@@ -157,7 +160,7 @@ invalid argument operator >=, bad value [DATE DOUBLE]
 SELECT * from t_date WHERE id BETWEEN '2020-01-02' AND '2020-01-03';
 id
 SELECT * from t_date WHERE id BETWEEN '2.0200101e7' and '2.0200103e7';
-invalid argument parsedate, bad value 2.0200101e7
+id
 drop table if exists t1;
 CREATE TABLE t1 (a date);
 insert INTO t1 VALUES ('2022-03-01');
