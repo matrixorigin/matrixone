@@ -25,6 +25,7 @@ import (
 var clusterUpgEntries = []versions.UpgradeEntry{
 	upg_mo_iscp_log_new,
 	upg_mo_iscp_task,
+	upg_mo_index_update_new,
 	upg_create_mo_branch_metadata,
 	upg_rename_system_stmt_info_4000,
 	upg_create_system_stmt_info_4000,
@@ -50,6 +51,16 @@ var upg_mo_iscp_task = versions.UpgradeEntry{
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		ok, err := versions.CheckTableDataExist(txn, accountId, predefine.GenISCPTaskCheckSQL())
 		return ok, err
+	},
+}
+
+var upg_mo_index_update_new = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MO_INDEX_UPDATE,
+	UpgType:   versions.CREATE_NEW_TABLE,
+	UpgSql:    frontend.MoCatalogMoIndexUpdateDDL,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		return versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, catalog.MO_INDEX_UPDATE)
 	},
 }
 

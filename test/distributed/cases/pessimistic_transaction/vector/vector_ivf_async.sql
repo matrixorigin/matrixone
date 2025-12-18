@@ -82,6 +82,8 @@ select * from ivf3 order by L2_DISTANCE(b, "[0, 0, 0, 0, 0, 101, 82, 4, 2, 0, 0,
 
 select *, L2_DISTANCE(c, "[2,2,3]") from ivf4 order by L2_DISTANCE(c, "[2,2,3]") LIMIT 6;
 
+alter table ivf4 alter reindex idx01 ivfflat force_sync;
+
 -- end t4
 
 -- drop tables

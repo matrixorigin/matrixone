@@ -75,6 +75,12 @@ func init() {
 		reuse.DefaultOptions[AlterOptionAlterCheck](), //.
 	) // WithEnableChecker()
 
+	reuse.CreatePool[AlterOptionAlterAutoUpdate](
+		func() *AlterOptionAlterAutoUpdate { return &AlterOptionAlterAutoUpdate{} },
+		func(a *AlterOptionAlterAutoUpdate) { a.reset() },
+		reuse.DefaultOptions[AlterOptionAlterAutoUpdate](), //.
+	) // WithEnableChecker()
+
 	reuse.CreatePool[AlterOptionAdd](
 		func() *AlterOptionAdd { return &AlterOptionAdd{} },
 		func(a *AlterOptionAdd) { a.reset() },
@@ -576,6 +582,8 @@ func (node *AlterTable) reset() {
 				opt.Free()
 			case *AlterOptionAlterReIndex:
 				opt.Free()
+			case *AlterOptionAlterAutoUpdate:
+				opt.Free()
 			case *AlterOptionAlterCheck:
 				opt.Free()
 			case *AlterOptionAdd:
@@ -782,13 +790,15 @@ type AlterOptionAlterReIndex struct {
 	Name          Identifier
 	KeyType       IndexType
 	AlgoParamList int64
+	ForceSync     bool
 }
 
-func NewAlterOptionAlterReIndex(name Identifier, keyType IndexType, algoParamList int64) *AlterOptionAlterReIndex {
+func NewAlterOptionAlterReIndex(name Identifier, option *IndexOption) *AlterOptionAlterReIndex {
 	a := reuse.Alloc[AlterOptionAlterReIndex](nil)
 	a.Name = name
-	a.KeyType = keyType
-	a.AlgoParamList = algoParamList
+	a.KeyType = option.IType
+	a.AlgoParamList = option.AlgoParamList
+	a.ForceSync = option.ForceSync
 	return a
 }
 
@@ -804,12 +814,62 @@ func (node *AlterOptionAlterReIndex) Format(ctx *FmtCtx) {
 	if node.AlgoParamList != 0 {
 		ctx.WriteString(fmt.Sprintf(" lists = %d", node.AlgoParamList))
 	}
+	if node.ForceSync {
+		ctx.WriteString(" ")
+		ctx.WriteString("force_sync")
+	}
 }
 
 func (node AlterOptionAlterReIndex) TypeName() string { return "tree.AlterOptionAlterReIndex" }
 
 func (node *AlterOptionAlterReIndex) reset() {
 	*node = AlterOptionAlterReIndex{}
+}
+
+type AlterOptionAlterAutoUpdate struct {
+	alterOptionImpl
+	Name       Identifier
+	KeyType    IndexType
+	AutoUpdate bool
+	Day        int64
+	Hour       int64
+}
+
+func NewAlterOptionAlterAutoUpdate(name Identifier, option *IndexOption) *AlterOptionAlterAutoUpdate {
+	a := reuse.Alloc[AlterOptionAlterAutoUpdate](nil)
+	a.Name = name
+	a.KeyType = option.IType
+	a.AutoUpdate = option.AutoUpdate
+	a.Day = option.Day
+	a.Hour = option.Hour
+	return a
+}
+
+func (node *AlterOptionAlterAutoUpdate) Free() { reuse.Free[AlterOptionAlterAutoUpdate](node, nil) }
+
+func (node *AlterOptionAlterAutoUpdate) Format(ctx *FmtCtx) {
+	ctx.WriteString("alter index ")
+	node.Name.Format(ctx)
+	if node.KeyType != INDEX_TYPE_INVALID {
+		ctx.WriteString(" ")
+		ctx.WriteString(node.KeyType.ToString())
+	}
+
+	ctx.WriteString(fmt.Sprintf(" auto_update = %v", node.AutoUpdate))
+
+	if node.Day != 0 {
+		ctx.WriteString(fmt.Sprintf(" day = %d", node.Day))
+	}
+	if node.Hour != 0 {
+		ctx.WriteString(fmt.Sprintf(" hour = %d", node.Hour))
+	}
+
+}
+
+func (node AlterOptionAlterAutoUpdate) TypeName() string { return "tree.AlterOptionAlterAutoUpdate" }
+
+func (node *AlterOptionAlterAutoUpdate) reset() {
+	*node = AlterOptionAlterAutoUpdate{}
 }
 
 type AlterOptionAlterCheck struct {

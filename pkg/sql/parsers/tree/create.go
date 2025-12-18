@@ -2070,6 +2070,10 @@ type IndexOption struct {
 	HnswEfConstruction       int64
 	HnswEfSearch             int64
 	Async                    bool
+	ForceSync                bool
+	AutoUpdate               bool
+	Day                      int64
+	Hour                     int64
 }
 
 // Must follow the following sequence when test
@@ -2078,7 +2082,8 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 		node.Comment != "" || node.Visible != VISIBLE_TYPE_INVALID ||
 		node.AlgoParamList != 0 || node.AlgoParamVectorOpType != "" ||
 		node.HnswM != 0 || node.HnswEfConstruction != 0 ||
-		node.HnswEfSearch != 0 {
+		node.HnswEfSearch != 0 || node.AutoUpdate || node.Day != 0 ||
+		node.Hour != 0 {
 		ctx.WriteByte(' ')
 	}
 	if node.KeyBlockSize != 0 {
@@ -2127,6 +2132,23 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 	if node.Async {
 		ctx.WriteString("ASYNC ")
 	}
+	if node.ForceSync {
+		ctx.WriteString("FORCE_SYNC ")
+	}
+	if node.AutoUpdate {
+		ctx.WriteString("AUTO_UPDATE=TRUE ")
+	}
+	if node.Day != 0 {
+		ctx.WriteString("DAY ")
+		ctx.WriteString(strconv.FormatInt(node.Day, 10))
+		ctx.WriteByte(' ')
+	}
+	if node.Hour != 0 {
+		ctx.WriteString("HOUR ")
+		ctx.WriteString(strconv.FormatInt(node.Hour, 10))
+		ctx.WriteByte(' ')
+	}
+
 }
 
 func (node IndexOption) TypeName() string { return "tree.IndexOption" }

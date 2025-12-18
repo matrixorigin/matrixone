@@ -22,6 +22,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/idxcron"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
 var (
@@ -206,4 +208,168 @@ func CreateAllIndexCdcTasks(c *Compile, indexes []*plan.IndexDef, dbname string,
 		}
 	}
 	return nil
+}
+
+func getIvfflatMetadata(c *Compile) (metadata []byte, frontend bool, err error) {
+	var val any
+
+	// only frontend has ivf_threads_search variable declared
+	_, err = c.proc.GetResolveVariableFunc()("ivf_threads_search", true, false)
+	if err == nil {
+		frontend = true
+	}
+
+	// When Clone, variables are nil. Set variable to default value
+	val, err = c.proc.GetResolveVariableFunc()("ivf_threads_build", true, false)
+	if err != nil {
+		return
+	}
+	threadsBuild := int64(0)
+	if val != nil {
+		threadsBuild = val.(int64)
+	}
+
+	val, err = c.proc.GetResolveVariableFunc()("kmeans_train_percent", true, false)
+	if err != nil {
+		return
+	}
+	kmeansTrainPercent := float64(10)
+	if val != nil {
+		kmeansTrainPercent = val.(float64)
+	}
+
+	val, err = c.proc.GetResolveVariableFunc()("kmeans_max_iteration", true, false)
+	if err != nil {
+		return
+	}
+	kmeansMaxIteration := int64(20)
+	if val != nil {
+		kmeansMaxIteration = val.(int64)
+	}
+
+	val, err = c.proc.GetResolveVariableFunc()("lower_case_table_names", true, false)
+	if err != nil {
+		return
+	}
+	lowerCaseTableNames := int64(1)
+	if val != nil {
+		lowerCaseTableNames = val.(int64)
+	}
+
+	val, err = c.proc.GetResolveVariableFunc()("experimental_ivf_index", true, false)
+	if err != nil {
+		return
+	}
+	experimentalIvfIndex := int8(1)
+	if val != nil {
+		experimentalIvfIndex = val.(int8)
+	}
+
+	w := sqlexec.NewMetadataWriter()
+	w.AddInt("ivf_threads_build", threadsBuild)
+	w.AddFloat("kmeans_train_percent", kmeansTrainPercent)
+	w.AddInt("kmeans_max_iteration", kmeansMaxIteration)
+	w.AddInt("lower_case_table_names", lowerCaseTableNames)
+	w.AddInt8("experimental_ivf_index", experimentalIvfIndex)
+
+	metadata, err = w.Marshal()
+	if err != nil {
+		return
+	}
+
+	return
+}
+
+func checkValidIndexUpdateByIndexdef(idx *plan.IndexDef) (bool, error) {
+	if idx.TableExist && catalog.IsIvfIndexAlgo(idx.IndexAlgo) {
+		return true, nil
+	}
+	return false, nil
+}
+
+// idxcron function
+func CreateAllIndexUpdateTasks(c *Compile, indexes []*plan.IndexDef, dbname string, tablename string, tableid uint64) (err error) {
+	var (
+		ivf_metadata []byte
+	)
+
+	if c.proc.GetResolveVariableFunc() == nil {
+		return
+	}
+
+	idxmap := make(map[string]bool)
+	for _, idx := range indexes {
+		_, ok := idxmap[idx.IndexName]
+		if ok {
+			continue
+		}
+
+		valid := false
+		valid, err = checkValidIndexUpdateByIndexdef(idx)
+		if err != nil {
+			return
+		}
+		if valid {
+			idxmap[idx.IndexName] = true
+
+			if len(idx.IndexName) == 0 {
+				// skip empty index name because alter reindex sql don't support empty index name
+				continue
+			}
+
+			if ivf_metadata == nil {
+				ivf_metadata, _, err = getIvfflatMetadata(c)
+				if err != nil {
+					return
+				}
+			}
+
+			err = idxcron.RegisterUpdate(c.proc.Ctx,
+				c.proc.GetService(),
+				c.proc.GetTxnOperator(),
+				tableid,
+				dbname,
+				tablename,
+				idx.IndexName,
+				idxcron.Action_Ivfflat_Reindex,
+				string(ivf_metadata))
+			if err != nil {
+				return
+			}
+		}
+	}
+	return
+}
+
+// drop all cdc tasks according to tableDef
+func DropAllIndexUpdateTasks(c *Compile, tabledef *plan.TableDef, dbname string, tablename string) (err error) {
+	idxmap := make(map[string]bool)
+	for _, idx := range tabledef.Indexes {
+
+		_, ok := idxmap[idx.IndexName]
+		if ok {
+			continue
+		}
+
+		valid := false
+		valid, err = checkValidIndexUpdateByIndexdef(idx)
+		if err != nil {
+			return
+		}
+		if valid {
+			idxmap[idx.IndexName] = true
+			//hasindex = true
+
+			err = idxcron.UnregisterUpdate(c.proc.Ctx,
+				c.proc.GetService(),
+				c.proc.GetTxnOperator(),
+				tabledef.TblId,
+				idx.IndexName,
+				idxcron.Action_Ivfflat_Reindex)
+			if err != nil {
+				return
+			}
+		}
+	}
+	return
 }
