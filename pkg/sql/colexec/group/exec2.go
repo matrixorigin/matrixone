@@ -77,6 +77,9 @@ func (group *Group) prepareGroupAndAggArg(proc *process.Process) (err error) {
 		group.ctr.keyWidth, group.ctr.keyNullable = 0, false
 		for _, expr := range group.Exprs {
 			group.ctr.keyNullable = group.ctr.keyNullable || (!expr.Typ.NotNullable)
+			if expr.Typ.Id == int32(types.T_tuple) {
+				return moerr.NewInternalErrorNoCtx("tuple is not supported as group by column")
+			}
 			width := GetKeyWidth(types.T(expr.Typ.Id), expr.Typ.Width, group.ctr.keyNullable)
 			group.ctr.keyWidth += int32(width)
 		}

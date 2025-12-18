@@ -67,7 +67,8 @@ null_mode
 SELECT YEARWEEK('1987-01-01') AS yearweek_result,
 YEAR('1987-01-01') AS year_result,
 WEEK('1987-01-01', 0) AS week_result;
-invalid argument function week, bad value [VARCHAR BIGINT]
+yearweek_result    year_result    week_result
+198652    1987    0
 SELECT YEARWEEK('2008-01-15') AS jan_week;
 jan_week
 200802

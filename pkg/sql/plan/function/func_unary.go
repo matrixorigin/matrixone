@@ -3031,15 +3031,75 @@ func DateStringToYear(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 }
 
 func DateToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixed[types.Date, uint8](ivecs, result, proc, length, func(v types.Date) uint8 {
-		return v.WeekOfYear2()
-	}, selectList)
+	rs := vector.MustFunctionResult[uint8](result)
+	dates := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[0])
+
+	// Get mode (default 0 if not provided)
+	// MySQL uses mode % 8 for out-of-range values
+	mode := 0
+	if len(ivecs) > 1 && !ivecs[1].IsConstNull() {
+		mode = int(vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0])
+		mode = ((mode % 8) + 8) % 8
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		date, null := dates.GetValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		week := date.Week(mode)
+		if err := rs.Append(uint8(week), false); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func DatetimeToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixed[types.Datetime, uint8](ivecs, result, proc, length, func(v types.Datetime) uint8 {
-		return v.ToDate().WeekOfYear2()
-	}, selectList)
+	rs := vector.MustFunctionResult[uint8](result)
+	datetimes := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
+
+	// Get mode (default 0 if not provided)
+	// MySQL uses mode % 8 for out-of-range values
+	mode := 0
+	if len(ivecs) > 1 && !ivecs[1].IsConstNull() {
+		mode = int(vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0])
+		mode = ((mode % 8) + 8) % 8
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		dt, null := datetimes.GetValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		week := dt.ToDate().Week(mode)
+		if err := rs.Append(uint8(week), false); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // weekOfYearHelper calculates the week of year for a given date.
