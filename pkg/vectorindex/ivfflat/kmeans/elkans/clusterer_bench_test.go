@@ -15,6 +15,7 @@
 package elkans
 
 import (
+	"context"
 	"math/rand"
 	"strconv"
 	"testing"
@@ -39,6 +40,7 @@ func Benchmark_kmeans(b *testing.B) {
 	//	Level:  "debug",
 	//	Format: "console",
 	//})
+	ctx := context.Background()
 
 	rowCnt := 1000_000
 	k := 1000
@@ -53,7 +55,7 @@ func Benchmark_kmeans(b *testing.B) {
 		clusterRand, _ := NewKMeans(data, k,
 			500, 0.01,
 			metric.Metric_L2Distance, kmeans.Random, true, 0)
-		_, err := clusterRand.Cluster()
+		_, err := clusterRand.Cluster(ctx)
 		if err != nil {
 			panic(err)
 		}
@@ -71,7 +73,7 @@ func Benchmark_kmeans(b *testing.B) {
 		kmeansPlusPlus, _ := NewKMeans(data, k,
 			500, 0.01,
 			metric.Metric_L2Distance, kmeans.KmeansPlusPlus, true, 0)
-		_, err := kmeansPlusPlus.Cluster()
+		_, err := kmeansPlusPlus.Cluster(ctx)
 		if err != nil {
 			panic(err)
 		}
