@@ -65,7 +65,9 @@ endif
 ifeq ($(UNAME_M),x86_64)
   ifneq ($(AVX512FP16),)
     ifeq ($(MUSL),)
+      ifeq ($(MO_CL_FP16),1)
 	USEARCH_CMAKE_FLAG += -DUSEARCH_USE_SIMSIMD=1 -DUSEARCH_DEFINED_CLANG=1
+      endif
     endif
   endif
 endif
