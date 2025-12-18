@@ -140,7 +140,7 @@ func TestBuildMulti(t *testing.T) {
 			defer wg2.Done()
 			for i := 0; i < nitem; i++ {
 				key := int64(tid*nitem + i)
-				anykeys, distances, err := search.Search(nil, sample[key], vectorindex.RuntimeConfig{Limit: 10})
+				anykeys, distances, err := search.Search(sqlproc, sample[key], vectorindex.RuntimeConfig{Limit: 10})
 				require.Nil(t, err)
 				keys, ok := anykeys.([]int64)
 				require.True(t, ok)
@@ -323,7 +323,7 @@ func runBuildSingleThread[T types.RealNumbers](t *testing.T) {
 			defer wg2.Done()
 			for i := 0; i < nitem; i++ {
 				key := int64(tid*nitem + i)
-				anykeys, distances, err := search.Search(nil, sample[key], vectorindex.RuntimeConfig{Limit: 10})
+				anykeys, distances, err := search.Search(sqlproc, sample[key], vectorindex.RuntimeConfig{Limit: 10})
 				require.Nil(t, err)
 				keys, ok := anykeys.([]int64)
 				require.True(t, ok)

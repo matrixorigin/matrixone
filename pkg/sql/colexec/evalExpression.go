@@ -1526,3 +1526,43 @@ func isConst(expr *plan.Expr) bool {
 		return true
 	}
 }
+
+type ExprEvalVector struct {
+	Executor []ExpressionExecutor
+	Vec      []*vector.Vector
+	Typ      []types.Type
+}
+
+func MakeEvalVector(proc *process.Process, expressions []*plan.Expr) (ev ExprEvalVector, err error) {
+	if len(expressions) == 0 {
+		return
+	}
+
+	ev.Executor, err = NewExpressionExecutorsFromPlanExpressions(proc, expressions)
+	if err != nil {
+		return
+	}
+	ev.Vec = make([]*vector.Vector, len(ev.Executor))
+	ev.Typ = make([]types.Type, len(ev.Executor))
+	for i, expr := range expressions {
+		ev.Typ[i] = types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale)
+	}
+	return
+}
+
+func (ev *ExprEvalVector) Free() {
+	for i := range ev.Executor {
+		if ev.Executor[i] != nil {
+			ev.Executor[i].Free()
+		}
+	}
+	ev.Executor = nil
+}
+
+func (ev *ExprEvalVector) ResetForNextQuery() {
+	for i := range ev.Executor {
+		if ev.Executor[i] != nil {
+			ev.Executor[i].ResetForNextQuery()
+		}
+	}
+}

@@ -14,12 +14,10 @@
 
 package malloc
 
-type FuncDeallocator func(hints Hints)
+type FuncDeallocator func()
 
-var _ Deallocator = FuncDeallocator(nil)
-
-func (f FuncDeallocator) Deallocate(hints Hints) {
-	f(hints)
+func (f FuncDeallocator) Deallocate() {
+	f()
 }
 
 func (FuncDeallocator) As(target Trait) bool {

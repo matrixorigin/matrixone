@@ -18,8 +18,8 @@ import (
 	"bytes"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -54,10 +54,10 @@ func (window *Window) Prepare(proc *process.Process) (err error) {
 	ctr := &window.ctr
 
 	if len(ctr.aggVecs) == 0 {
-		ctr.aggVecs = make([]group.ExprEvalVector, len(window.Aggs))
+		ctr.aggVecs = make([]colexec.ExprEvalVector, len(window.Aggs))
 		for i, ag := range window.Aggs {
 			expressions := ag.GetArgExpressions()
-			if ctr.aggVecs[i], err = group.MakeEvalVector(proc, expressions); err != nil {
+			if ctr.aggVecs[i], err = colexec.MakeEvalVector(proc, expressions); err != nil {
 				return err
 			}
 		}
@@ -121,18 +121,18 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 
-			ctr.bat.Aggs = make([]aggexec.AggFuncExec, len(window.Aggs))
+			ctr.batAggs = make([]aggexec.AggFuncExec, len(window.Aggs))
 			for i, ag := range window.Aggs {
-				ctr.bat.Aggs[i], err = aggexec.MakeAgg(proc, ag.GetAggID(), ag.IsDistinct(), window.Types[i])
+				ctr.batAggs[i], err = aggexec.MakeAgg(proc.Mp(), ag.GetAggID(), ag.IsDistinct(), window.Types[i])
 				if err != nil {
 					return result, err
 				}
 				if config := ag.GetExtraConfig(); config != nil {
-					if err = ctr.bat.Aggs[i].SetExtraInformation(config, 0); err != nil {
+					if err = ctr.batAggs[i].SetExtraInformation(config, 0); err != nil {
 						return result, err
 					}
 				}
-				if err = ctr.bat.Aggs[i].GroupGrow(ctr.bat.RowCount()); err != nil {
+				if err = ctr.batAggs[i].GroupGrow(ctr.bat.RowCount()); err != nil {
 					return result, err
 				}
 			}
@@ -141,9 +141,9 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 				// sort and partitions
 				if window.Fs = makeOrderBy(w); window.Fs != nil {
 					if len(ctr.orderVecs) == 0 {
-						ctr.orderVecs = make([]group.ExprEvalVector, len(window.Fs))
+						ctr.orderVecs = make([]colexec.ExprEvalVector, len(window.Fs))
 						for j := range ctr.orderVecs {
-							ctr.orderVecs[j], err = group.MakeEvalVector(proc, []*plan.Expr{window.Fs[j].Expr})
+							ctr.orderVecs[j], err = colexec.MakeEvalVector(proc, []*plan.Expr{window.Fs[j].Expr})
 							if err != nil {
 								return result, err
 							}
@@ -235,8 +235,7 @@ func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, an
 			for ; o < len(ctr.os); o++ {
 
 				if ctr.os[o] <= ctr.ps[p] {
-
-					if err = ctr.bat.Aggs[idx].Fill(p-1, o, []*vector.Vector{vec}); err != nil {
+					if err = ctr.batAggs[idx].Fill(p-1, o, []*vector.Vector{vec}); err != nil {
 						return err
 					}
 
@@ -281,7 +280,7 @@ func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, an
 			}
 
 			for k := left; k < right; k++ {
-				if err = ctr.bat.Aggs[idx].Fill(j, k, ctr.aggVecs[idx].Vec); err != nil {
+				if err = ctr.batAggs[idx].Fill(j, k, ctr.aggVecs[idx].Vec); err != nil {
 					return err
 				}
 			}
@@ -293,7 +292,7 @@ func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, an
 	if ctr.vec != nil {
 		ctr.vec.Free(proc.Mp())
 	}
-	vecs, err := ctr.bat.Aggs[idx].Flush()
+	vecs, err := ctr.batAggs[idx].Flush()
 	if err != nil {
 		return err
 	}

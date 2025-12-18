@@ -4286,10 +4286,14 @@ func strToDate(
 			s := convertByteSliceToString(v)
 			val, err := types.ParseDateCast(s)
 			if err != nil {
-				return err
-			}
-			if err = to.Append(val, false); err != nil {
-				return err
+				// Invalid date string returns NULL (MySQL behavior)
+				if err := to.Append(dft, true); err != nil {
+					return err
+				}
+			} else {
+				if err = to.Append(val, false); err != nil {
+					return err
+				}
 			}
 		}
 	}

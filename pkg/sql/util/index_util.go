@@ -989,8 +989,10 @@ func XXHashVectors(vs []*vector.Vector,
 
 	// extend the hashCode slice if necessary
 	rowCount := vs[0].Length()
-	if rowCount > cap(hashCode) {
+	if rowCount > len(hashCode) {
 		hashCode = make([]uint64, rowCount)
+	} else {
+		hashCode = hashCode[:rowCount]
 	}
 
 	// extend the packers slice if necessary

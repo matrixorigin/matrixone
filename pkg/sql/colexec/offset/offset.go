@@ -89,7 +89,7 @@ func (offset *Offset) Call(proc *process.Process) (vm.CallResult, error) {
 				return vm.CancelResult, err
 			}
 			offset.ctr.buf.Shrink(sels, false)
-			proc.Mp().PutSels(sels)
+			vector.PutSels(sels)
 			offset.ctr.seen += uint64(length)
 
 			return vm.CallResult{Batch: offset.ctr.buf, Status: vm.ExecNext}, nil
@@ -99,7 +99,7 @@ func (offset *Offset) Call(proc *process.Process) (vm.CallResult, error) {
 }
 
 func newSels(start, count int64, proc *process.Process) []int64 {
-	sels := proc.Mp().GetSels()
+	sels := vector.GetSels()
 	for i := int64(0); i < count; i++ {
 		sels = append(sels, start+i)
 	}

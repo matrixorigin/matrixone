@@ -122,9 +122,13 @@ func TestJoinSplit(t *testing.T) {
 		JoinMapTag:       tag,
 		JoinMapRefCnt:    1,
 	}
+
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc.SetMessageBoard(message.NewMessageBoard())
+
 	bat := batch.New([]string{"a", "b"})
-	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 4, 5, 6}, nil)
-	bat.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 2, 3, 4, 5}, nil)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 4, 5, 6}, nil, proc.Mp())
+	bat.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 2, 3, 4, 5}, nil, proc.Mp())
 	bat.SetRowCount(bat.Vecs[0].Length())
 	join.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat}))
 
@@ -133,14 +137,10 @@ func TestJoinSplit(t *testing.T) {
 	vals = append(vals, slices.Repeat([]int32{1}, 5000)...)
 	vals = append(vals, slices.Repeat([]int32{4}, 5000)...)
 	vals = append(vals, 5, 5, 7, 7)
-	bat2.Vecs[0] = testutil.MakeInt32Vector(vals, nil)
-	bat2.Vecs[1] = testutil.MakeInt32Vector(vals, nil)
+	bat2.Vecs[0] = testutil.MakeInt32Vector(vals, nil, proc.Mp())
+	bat2.Vecs[1] = testutil.MakeInt32Vector(vals, nil, proc.Mp())
 	bat2.SetRowCount(bat2.Vecs[0].Length())
 	hashbuild.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat2}))
-
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	proc.SetMessageBoard(message.NewMessageBoard())
-
 	err := join.Prepare(proc)
 	require.NoError(t, err)
 	err = hashbuild.Prepare(proc)
@@ -251,9 +251,13 @@ func TestJoinEvalCondFalse(t *testing.T) {
 		JoinMapTag:       tag,
 		JoinMapRefCnt:    1,
 	}
+
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc.SetMessageBoard(message.NewMessageBoard())
+
 	bat := batch.New([]string{"a", "b"})
-	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 4, 5, 6}, nil)
-	bat.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 2, 3, 4, 5}, nil)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 4, 5, 6}, nil, proc.Mp())
+	bat.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 2, 3, 4, 5}, nil, proc.Mp())
 	bat.SetRowCount(bat.Vecs[0].Length())
 	join.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat}))
 
@@ -263,14 +267,10 @@ func TestJoinEvalCondFalse(t *testing.T) {
 	vals = append(vals, slices.Repeat([]int32{4}, 5050)...) // 4 > 2, 4 will be selected
 	vals = append(vals, 5, 5, 7, 7)                         // 5 > 2, 5 will be selected
 	col2 := slices.Repeat([]int32{2}, len(vals))
-	bat2.Vecs[0] = testutil.MakeInt32Vector(vals, nil)
-	bat2.Vecs[1] = testutil.MakeInt32Vector(col2, nil)
+	bat2.Vecs[0] = testutil.MakeInt32Vector(vals, nil, proc.Mp())
+	bat2.Vecs[1] = testutil.MakeInt32Vector(col2, nil, proc.Mp())
 	bat2.SetRowCount(bat2.Vecs[0].Length())
 	hashbuild.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat2}))
-
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	proc.SetMessageBoard(message.NewMessageBoard())
-
 	err := join.Prepare(proc)
 	require.NoError(t, err)
 	err = hashbuild.Prepare(proc)
@@ -301,14 +301,13 @@ func TestJoinEvalCondFalse(t *testing.T) {
 	join.Free(proc, false, nil)
 	hashbuild.Free(proc, false, nil)
 	proc.Free()
-
 }
 
 func TestJoin(t *testing.T) {
 	for _, tc := range makeTestCases(t) {
 
-		resetChildren(tc.arg)
-		resetHashBuildChildren(tc.barg)
+		resetChildren(tc.arg, tc.proc.Mp())
+		resetHashBuildChildren(tc.barg, tc.proc.Mp())
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		err = tc.barg.Prepare(tc.proc)
@@ -332,8 +331,8 @@ func TestJoin(t *testing.T) {
 		tc.arg.Reset(tc.proc, false, nil)
 		tc.barg.Reset(tc.proc, false, nil)
 
-		resetChildren(tc.arg)
-		resetHashBuildChildren(tc.barg)
+		resetChildren(tc.arg, tc.proc.Mp())
+		resetHashBuildChildren(tc.barg, tc.proc.Mp())
 		tc.proc.GetMessageBoard().Reset()
 		err = tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
@@ -546,7 +545,7 @@ func newTestCase(t *testing.T, rows int, flgs []bool, ts []types.Type, rp []cole
 	resultBatch := batch.NewWithSize(len(rp))
 	resultBatch.SetRowCount(rows)
 	for i := range rp {
-		bat := colexec.MakeMockBatchs()
+		bat := colexec.MakeMockBatchs(proc.Mp())
 		resultBatch.Vecs[i] = bat.Vecs[rp[i].Pos]
 	}
 	tag++
@@ -628,15 +627,15 @@ func constructIndex(t *testing.T, v *vector.Vector, m *mpool.MPool) {
 }
 */
 
-func resetChildren(arg *InnerJoin) {
-	bat := colexec.MakeMockBatchs()
+func resetChildren(arg *InnerJoin, m *mpool.MPool) {
+	bat := colexec.MakeMockBatchs(m)
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 	arg.Children = nil
 	arg.AppendChild(op)
 }
 
-func resetHashBuildChildren(arg *hashbuild.HashBuild) {
-	bat := colexec.MakeMockBatchs()
+func resetHashBuildChildren(arg *hashbuild.HashBuild, m *mpool.MPool) {
+	bat := colexec.MakeMockBatchs(m)
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 	arg.Children = nil
 	arg.AppendChild(op)

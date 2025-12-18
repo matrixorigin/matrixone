@@ -16,7 +16,6 @@ package batch
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 )
 
 // special batch that will never been free.
@@ -52,10 +51,10 @@ type Batch struct {
 	// Vecs col data
 	Vecs []*vector.Vector
 
-	Aggs []aggexec.AggFuncExec
+	ExtraBuf1 []byte
+	ExtraBuf2 []byte
 
 	// row count of batch, to instead of old len(Zs).
 	rowCount int
-
-	offHeap bool
+	offHeap  bool
 }

@@ -151,8 +151,9 @@ func (a *aggSumDecimal) Size() int64 {
 	return 4 // int32
 }
 
-func (a *aggSumDecimal) Marshal() []byte     { return types.EncodeInt32(&a.argScale) }
-func (a *aggSumDecimal) Unmarshal(bs []byte) { a.argScale = types.DecodeInt32(bs) }
+func (a *aggSumDecimal) Marshal() []byte                { return types.EncodeInt32(&a.argScale) }
+func (a *aggSumDecimal) MarshalBinary() ([]byte, error) { return a.Marshal(), nil }
+func (a *aggSumDecimal) Unmarshal(bs []byte)            { a.argScale = types.DecodeInt32(bs) }
 func aggSumOfDecimalInitCommonContext(
 	resultType types.Type, parameters ...types.Type,
 ) aggexec.AggCommonExecContext {

@@ -34,7 +34,11 @@ var _ vm.Operator = new(Dispatch)
 
 const (
 	maxMessageSizeToMoRpc = 64 * mpool.MB
-	waitNotifyTimeout     = 45 * time.Second
+
+	// XXX BUG #23284
+	// This timeout does not make any sense.   We should just remove it.
+	// Bump it up from 45 seconds to 3600 seconds.
+	waitNotifyTimeout = 3600 * time.Second
 
 	SendToAllLocalFunc = iota
 	SendToAllFunc

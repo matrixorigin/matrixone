@@ -15,7 +15,11 @@
 package aggexec
 
 import (
+	"bytes"
+	io "io"
+
 	hll "github.com/axiomhq/hyperloglog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -37,9 +41,12 @@ func (exec *approxCountFixedExec[T]) GetOptResult() SplitResult {
 
 func (exec *approxCountFixedExec[T]) marshal() ([]byte, error) {
 	d := exec.singleAggInfo.getEncoded()
-	r, em, err := exec.ret.marshalToBytes()
+	r, em, dist, err := exec.ret.marshalToBytes()
 	if err != nil {
 		return nil, err
+	}
+	if dist != nil {
+		return nil, moerr.NewInternalErrorNoCtx("distinct should have been nil")
 	}
 
 	encoded := EncodedAgg{
@@ -60,8 +67,31 @@ func (exec *approxCountFixedExec[T]) marshal() ([]byte, error) {
 	return encoded.Marshal()
 }
 
+func (exec *approxCountFixedExec[T]) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
+	return marshalRetAndGroupsToBuffer(
+		cnt, flags, buf,
+		&exec.ret.optSplitResult, exec.groups, nil)
+}
+
+func (exec *approxCountFixedExec[T]) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
+	return marshalChunkToBuffer(
+		chunk, buf,
+		&exec.ret.optSplitResult, exec.groups, nil)
+}
+
+func (exec *approxCountFixedExec[T]) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
+	groups, _, err := unmarshalFromReader[*hll.Sketch](reader, &exec.ret.optSplitResult)
+	if err != nil {
+		return err
+	}
+	exec.ret.setupT()
+	exec.groups = groups
+	return nil
+}
+
 func (exec *approxCountFixedExec[T]) unmarshal(_ *mpool.MPool, result, empties, groups [][]byte) error {
-	err := exec.ret.unmarshalFromBytes(result, empties)
+	// distinct is nil
+	err := exec.ret.unmarshalFromBytes(result, empties, nil)
 	if err != nil {
 		return err
 	}
@@ -92,9 +122,12 @@ func (exec *approxCountVarExec) GetOptResult() SplitResult {
 
 func (exec *approxCountVarExec) marshal() ([]byte, error) {
 	d := exec.singleAggInfo.getEncoded()
-	r, em, err := exec.ret.marshalToBytes()
+	r, em, dist, err := exec.ret.marshalToBytes()
 	if err != nil {
 		return nil, err
+	}
+	if dist != nil {
+		return nil, moerr.NewInternalErrorNoCtx("dist should have been nil")
 	}
 
 	encoded := EncodedAgg{
@@ -115,8 +148,29 @@ func (exec *approxCountVarExec) marshal() ([]byte, error) {
 	return encoded.Marshal()
 }
 
+func (exec *approxCountVarExec) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
+	return marshalRetAndGroupsToBuffer(
+		cnt, flags, buf,
+		&exec.ret.optSplitResult, exec.groups, nil)
+}
+
+func (exec *approxCountVarExec) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
+	return marshalChunkToBuffer(chunk, buf,
+		&exec.ret.optSplitResult, exec.groups, nil)
+}
+
+func (exec *approxCountVarExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
+	groups, _, err := unmarshalFromReader[*hll.Sketch](reader, &exec.ret.optSplitResult)
+	if err != nil {
+		return err
+	}
+	exec.ret.setupT()
+	exec.groups = groups
+	return nil
+}
+
 func (exec *approxCountVarExec) unmarshal(_ *mpool.MPool, result, empties, groups [][]byte) error {
-	err := exec.ret.unmarshalFromBytes(result, empties)
+	err := exec.ret.unmarshalFromBytes(result, empties, nil)
 	if err != nil {
 		return err
 	}
@@ -132,14 +186,14 @@ func (exec *approxCountVarExec) unmarshal(_ *mpool.MPool, result, empties, group
 	return nil
 }
 
-func newApproxCountFixedExec[T types.FixedSizeTExceptStrType](mg AggMemoryManager, info singleAggInfo) AggFuncExec {
+func newApproxCountFixedExec[T types.FixedSizeTExceptStrType](mg *mpool.MPool, info singleAggInfo) AggFuncExec {
 	return &approxCountFixedExec[T]{
 		singleAggInfo: info,
-		ret:           initAggResultWithFixedTypeResult[uint64](mg, info.retType, false, 0),
+		ret:           initAggResultWithFixedTypeResult[uint64](mg, info.retType, false, 0, false),
 	}
 }
 
-func makeApproxCount(mg AggMemoryManager, id int64, arg types.Type) AggFuncExec {
+func makeApproxCount(mg *mpool.MPool, id int64, arg types.Type) AggFuncExec {
 	info := singleAggInfo{
 		aggID:     id,
 		distinct:  false,
@@ -151,7 +205,7 @@ func makeApproxCount(mg AggMemoryManager, id int64, arg types.Type) AggFuncExec 
 	if info.argType.IsVarlen() {
 		return &approxCountVarExec{
 			singleAggInfo: info,
-			ret:           initAggResultWithFixedTypeResult[uint64](mg, info.retType, false, 0),
+			ret:           initAggResultWithFixedTypeResult[uint64](mg, info.retType, false, 0, false),
 		}
 	}
 

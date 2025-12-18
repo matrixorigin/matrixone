@@ -15,6 +15,10 @@
 package aggexec
 
 import (
+	"bytes"
+	io "io"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -41,7 +45,7 @@ func (exec *countColumnExec) GetOptResult() SplitResult {
 
 func (exec *countColumnExec) marshal() ([]byte, error) {
 	d := exec.singleAggInfo.getEncoded()
-	r, em, err := exec.ret.marshalToBytes()
+	r, em, dist, err := exec.ret.marshalToBytes()
 	if err != nil {
 		return nil, err
 	}
@@ -49,38 +53,45 @@ func (exec *countColumnExec) marshal() ([]byte, error) {
 		Info:    d,
 		Result:  r,
 		Empties: em,
-		Groups:  nil,
-	}
-	if exec.IsDistinct() {
-		data, err := exec.distinctHash.marshal()
-		if err != nil {
-			return nil, err
-		}
-		if len(data) > 0 {
-			encoded.Groups = [][]byte{data}
-		}
+		Groups:  dist,
 	}
 	return encoded.Marshal()
 }
 
-func (exec *countColumnExec) unmarshal(_ *mpool.MPool, result, empties, groups [][]byte) error {
-	if exec.IsDistinct() {
-		if len(groups) > 0 {
-			if err := exec.distinctHash.unmarshal(groups[0]); err != nil {
-				return err
-			}
-		}
-	}
-	return exec.ret.unmarshalFromBytes(result, empties)
+func (exec *countColumnExec) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
+	return marshalRetAndGroupsToBuffer[dummyBinaryMarshaler](
+		cnt, flags, buf,
+		&exec.ret.optSplitResult, nil, nil)
 }
 
-func newCountColumnExecExec(mg AggMemoryManager, info singleAggInfo) AggFuncExec {
+func (exec *countColumnExec) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
+	return marshalChunkToBuffer[dummyBinaryMarshaler](
+		chunk, buf,
+		&exec.ret.optSplitResult, nil, nil)
+}
+
+func (exec *countColumnExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
+	_, _, err := unmarshalFromReader[dummyBinaryUnmarshaler](reader, &exec.ret.optSplitResult)
+	if err != nil {
+		return err
+	}
+	exec.ret.setupT()
+	return nil
+}
+
+func (exec *countColumnExec) unmarshal(_ *mpool.MPool, result, empties, groups [][]byte) error {
+	return exec.ret.unmarshalFromBytes(result, empties, groups)
+}
+
+func newCountColumnExecExec(mg *mpool.MPool, info singleAggInfo) AggFuncExec {
 	exec := &countColumnExec{
 		singleAggInfo: info,
-		ret:           initAggResultWithFixedTypeResult[int64](mg, info.retType, false, 0),
+		ret:           initAggResultWithFixedTypeResult[int64](mg, info.retType, false, 0, info.distinct),
 	}
-	if info.distinct {
-		exec.distinctHash = newDistinctHash()
+
+	// XXX distinct really messged up
+	if info.IsDistinct() {
+		exec.distinctHash.mp = mg
 	}
 	return exec
 }
@@ -288,9 +299,12 @@ func (exec *countStarExec) GetOptResult() SplitResult {
 
 func (exec *countStarExec) marshal() ([]byte, error) {
 	d := exec.singleAggInfo.getEncoded()
-	r, em, err := exec.ret.marshalToBytes()
+	r, em, dist, err := exec.ret.marshalToBytes()
 	if err != nil {
 		return nil, err
+	}
+	if dist != nil {
+		return nil, moerr.NewInternalErrorNoCtx("dist should has been nil")
 	}
 	encoded := EncodedAgg{
 		Info:    d,
@@ -301,15 +315,35 @@ func (exec *countStarExec) marshal() ([]byte, error) {
 	return encoded.Marshal()
 }
 
-func (exec *countStarExec) unmarshal(_ *mpool.MPool, result, empties, _ [][]byte) error {
-	return exec.ret.unmarshalFromBytes(result, empties)
+func (exec *countStarExec) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
+	return marshalRetAndGroupsToBuffer[dummyBinaryMarshaler](
+		cnt, flags, buf,
+		&exec.ret.optSplitResult, nil, nil)
+}
+func (exec *countStarExec) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
+	return marshalChunkToBuffer[dummyBinaryMarshaler](
+		chunk, buf,
+		&exec.ret.optSplitResult, nil, nil)
+}
+func (exec *countStarExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
+	_, _, err := unmarshalFromReader[dummyBinaryUnmarshaler](reader, &exec.ret.optSplitResult)
+	if err != nil {
+		return err
+	}
+	exec.ret.setupT()
+	return nil
 }
 
-func newCountStarExec(mg AggMemoryManager, info singleAggInfo) AggFuncExec {
-	return &countStarExec{
+func (exec *countStarExec) unmarshal(_ *mpool.MPool, result, empties, _ [][]byte) error {
+	return exec.ret.unmarshalFromBytes(result, empties, nil)
+}
+
+func newCountStarExec(mg *mpool.MPool, info singleAggInfo) AggFuncExec {
+	exec := &countStarExec{
 		singleAggInfo: info,
-		ret:           initAggResultWithFixedTypeResult[int64](mg, info.retType, false, 0),
+		ret:           initAggResultWithFixedTypeResult[int64](mg, info.retType, false, 0, false),
 	}
+	return exec
 }
 
 func (exec *countStarExec) GroupGrow(more int) error {

@@ -15,8 +15,12 @@
 package aggexec
 
 import (
+	"bytes"
+	"encoding"
 	"fmt"
+	io "io"
 
+	proto "github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -48,20 +52,20 @@ func MakeAggFunctionExpression(id int64, isDistinct bool, args []*plan.Expr, con
 	}
 }
 
-func (expr AggFuncExecExpression) GetAggID() int64 {
-	return expr.aggID
+func (ag *AggFuncExecExpression) GetAggID() int64 {
+	return ag.aggID
 }
 
-func (expr AggFuncExecExpression) IsDistinct() bool {
-	return expr.isDistinct
+func (ag *AggFuncExecExpression) IsDistinct() bool {
+	return ag.isDistinct
 }
 
-func (expr AggFuncExecExpression) GetArgExpressions() []*plan.Expr {
-	return expr.argExpressions
+func (ag *AggFuncExecExpression) GetArgExpressions() []*plan.Expr {
+	return ag.argExpressions
 }
 
-func (expr AggFuncExecExpression) GetExtraConfig() []byte {
-	return expr.extraConfig
+func (ag *AggFuncExecExpression) GetExtraConfig() []byte {
+	return ag.extraConfig
 }
 
 // AggFuncExec is an interface to do execution for aggregation.
@@ -109,6 +113,11 @@ type AggFuncExec interface {
 	// Flush return the aggregation result.
 	Flush() ([]*vector.Vector, error)
 
+	// Serialize intermediate result to bytes.
+	SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error
+	SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error
+	UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error
+
 	Size() int64
 
 	// Free clean the resource and reuse the aggregation if possible.
@@ -131,26 +140,10 @@ var (
 	}
 )
 
-type AggMemoryManager interface {
-	Mp() *mpool.MPool
-}
-
-type SimpleAggMemoryManager struct {
-	mp *mpool.MPool
-}
-
-func NewSimpleAggMemoryManager(mp *mpool.MPool) AggMemoryManager {
-	return SimpleAggMemoryManager{mp: mp}
-}
-
-func (m SimpleAggMemoryManager) Mp() *mpool.MPool {
-	return m.mp
-}
-
 // MakeAgg is the only exporting method to create an aggregation function executor.
 // all the aggID should be registered before calling this function.
 func MakeAgg(
-	mg AggMemoryManager,
+	mg *mpool.MPool,
 	aggID int64, isDistinct bool,
 	param ...types.Type,
 ) (AggFuncExec, error) {
@@ -168,7 +161,7 @@ func MakeAgg(
 	return nil, moerr.NewInternalErrorNoCtx(errmsg)
 }
 
-func MakeInitialAggListFromList(mg AggMemoryManager, list []AggFuncExec) ([]AggFuncExec, error) {
+func MakeInitialAggListFromList(mg *mpool.MPool, list []AggFuncExec) ([]AggFuncExec, error) {
 	result := make([]AggFuncExec, 0, len(list))
 	for _, v := range list {
 		param, _ := v.TypesInfo()
@@ -183,7 +176,7 @@ func MakeInitialAggListFromList(mg AggMemoryManager, list []AggFuncExec) ([]AggF
 
 // makeSingleAgg supports to create an aggregation function executor for single column.
 func makeSingleAgg(
-	mg AggMemoryManager,
+	mg *mpool.MPool,
 	aggID int64, isDistinct bool,
 	param types.Type) AggFuncExec {
 	agg, err := getSingleAggImplByInfo(aggID, param)
@@ -216,30 +209,30 @@ func makeSingleAgg(
 }
 
 func makeSpecialAggExec(
-	mg AggMemoryManager,
+	mp *mpool.MPool,
 	id int64, isDistinct bool, params ...types.Type,
 ) (AggFuncExec, bool, error) {
 	if _, ok := specialAgg[id]; ok {
 		switch id {
 		case AggIdOfCountColumn:
-			return makeCount(mg, false, id, isDistinct, params[0]), true, nil
+			return makeCount(mp, false, id, isDistinct, params[0]), true, nil
 		case AggIdOfCountStar:
-			return makeCount(mg, true, id, isDistinct, params[0]), true, nil
+			return makeCount(mp, true, id, isDistinct, params[0]), true, nil
 		case AggIdOfMedian:
-			exec, err := makeMedian(mg, id, isDistinct, params[0])
+			exec, err := makeMedian(mp, id, isDistinct, params[0])
 			return exec, true, err
 		case AggIdOfGroupConcat:
-			return makeGroupConcat(mg, id, isDistinct, params, getCroupConcatRet(params...), groupConcatSep), true, nil
+			return makeGroupConcat(mp, id, isDistinct, params, getCroupConcatRet(params...), groupConcatSep), true, nil
 		case AggIdOfApproxCount:
-			return makeApproxCount(mg, id, params[0]), true, nil
+			return makeApproxCount(mp, id, params[0]), true, nil
 		case AggIdOfJsonArrayAgg:
-			exec, err := makeJsonArrayAgg(mg, id, isDistinct, params)
+			exec, err := makeJsonArrayAgg(mp, id, isDistinct, params)
 			return exec, true, err
 		case AggIdOfJsonObjectAgg:
-			exec, err := makeJsonObjectAgg(mg, id, isDistinct, params)
+			exec, err := makeJsonObjectAgg(mp, id, isDistinct, params)
 			return exec, true, err
 		case WinIdOfRowNumber, WinIdOfRank, WinIdOfDenseRank:
-			exec, err := makeWindowExec(mg, id, isDistinct)
+			exec, err := makeWindowExec(mp, id, isDistinct)
 			return exec, true, err
 		}
 	}
@@ -249,7 +242,7 @@ func makeSpecialAggExec(
 // makeGroupConcat is one special case of makeMultiAgg.
 // it supports creating an aggregation function executor for special aggregation `group_concat()`.
 func makeGroupConcat(
-	mg AggMemoryManager,
+	mp *mpool.MPool,
 	aggID int64, isDistinct bool,
 	param []types.Type, result types.Type,
 	separator string) AggFuncExec {
@@ -260,11 +253,11 @@ func makeGroupConcat(
 		retType:   result,
 		emptyNull: true,
 	}
-	return newGroupConcatExec(mg, info, separator)
+	return newGroupConcatExec(mp, info, separator)
 }
 
 func makeJsonArrayAgg(
-	mg AggMemoryManager,
+	mp *mpool.MPool,
 	aggID int64, isDistinct bool,
 	param []types.Type) (AggFuncExec, error) {
 	if len(param) != 1 {
@@ -277,11 +270,11 @@ func makeJsonArrayAgg(
 		retType:   types.T_json.ToType(),
 		emptyNull: true,
 	}
-	return newJsonArrayAggExec(mg, info), nil
+	return newJsonArrayAggExec(mp, info), nil
 }
 
 func makeJsonObjectAgg(
-	mg AggMemoryManager,
+	mp *mpool.MPool,
 	aggID int64, isDistinct bool,
 	param []types.Type) (AggFuncExec, error) {
 	if len(param) != 2 {
@@ -294,11 +287,11 @@ func makeJsonObjectAgg(
 		retType:   types.T_json.ToType(),
 		emptyNull: true,
 	}
-	return newJsonObjectAggExec(mg, info), nil
+	return newJsonObjectAggExec(mp, info), nil
 }
 
 func makeCount(
-	mg AggMemoryManager, isStar bool,
+	mp *mpool.MPool, isStar bool,
 	aggID int64, isDistinct bool,
 	param types.Type) AggFuncExec {
 	info := singleAggInfo{
@@ -310,13 +303,13 @@ func makeCount(
 	}
 
 	if isStar {
-		return newCountStarExec(mg, info)
+		return newCountStarExec(mp, info)
 	}
-	return newCountColumnExecExec(mg, info)
+	return newCountColumnExecExec(mp, info)
 }
 
 func makeMedian(
-	mg AggMemoryManager, aggID int64, isDistinct bool, param types.Type) (AggFuncExec, error) {
+	mp *mpool.MPool, aggID int64, isDistinct bool, param types.Type) (AggFuncExec, error) {
 	info := singleAggInfo{
 		aggID:     aggID,
 		distinct:  isDistinct,
@@ -324,11 +317,11 @@ func makeMedian(
 		retType:   MedianReturnType([]types.Type{param}),
 		emptyNull: true,
 	}
-	return newMedianExecutor(mg, info)
+	return newMedianExecutor(mp, info)
 }
 
 func makeWindowExec(
-	mg AggMemoryManager, aggID int64, isDistinct bool) (AggFuncExec, error) {
+	mp *mpool.MPool, aggID int64, isDistinct bool) (AggFuncExec, error) {
 	if isDistinct {
 		return nil, moerr.NewInternalErrorNoCtx("window function does not support `distinct`")
 	}
@@ -340,5 +333,221 @@ func makeWindowExec(
 		retType:   types.T_int64.ToType(),
 		emptyNull: false,
 	}
-	return makeRankDenseRankRowNumber(mg, info), nil
+	return makeRankDenseRankRowNumber(mp, info), nil
+}
+
+type dummyBinaryMarshaler struct {
+	encoding.BinaryMarshaler
+}
+type dummyBinaryUnmarshaler struct {
+	encoding.BinaryUnmarshaler
+}
+
+func (d dummyBinaryMarshaler) MarshalBinary() ([]byte, error) {
+	return nil, nil
+}
+func (d dummyBinaryUnmarshaler) UnmarshalBinary(data []byte) error {
+	return nil
+}
+
+func marshalRetAndGroupsToBuffer[T encoding.BinaryMarshaler](
+	cnt int64, flags [][]uint8, buf *bytes.Buffer,
+	ret *optSplitResult, groups []T, extra [][]byte) error {
+	types.WriteInt64(buf, cnt)
+	if cnt == 0 {
+		return nil
+	}
+	if err := ret.marshalToBuffers(flags, buf); err != nil {
+		return err
+	}
+
+	if len(groups) == 0 {
+		types.WriteInt64(buf, 0)
+	} else {
+		types.WriteInt64(buf, cnt)
+		groupIdx := 0
+		for i := range flags {
+			for j := range flags[i] {
+				if flags[i][j] == 1 {
+					bs, err := groups[groupIdx].MarshalBinary()
+					if err != nil {
+						return err
+					}
+					if err = types.WriteSizeBytes(bs, buf); err != nil {
+						return err
+					}
+				}
+				groupIdx += 1
+			}
+		}
+	}
+
+	cnt = int64(len(extra))
+	types.WriteInt64(buf, cnt)
+	for i := range extra {
+		if err := types.WriteSizeBytes(extra[i], buf); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func marshalChunkToBuffer[T encoding.BinaryMarshaler](chunk int, buf *bytes.Buffer,
+	ret *optSplitResult, groups []T, extra [][]byte) error {
+	chunkSz := ret.optInformation.chunkSize
+	start := chunkSz * chunk
+	chunkNGroup := ret.getNthChunkSize(chunk)
+	if chunkSz < 0 {
+		return moerr.NewInternalErrorNoCtx("invalid chunk number.")
+	}
+
+	cnt := int64(chunkNGroup)
+	buf.Write(types.EncodeInt64(&cnt))
+
+	if err := ret.marshalChunkToBuffer(chunk, buf); err != nil {
+		return err
+	}
+
+	if len(groups) == 0 {
+		types.WriteInt64(buf, 0)
+	} else {
+		types.WriteInt64(buf, cnt)
+		for i := 0; i < chunkNGroup; i++ {
+			bs, err := groups[start+i].MarshalBinary()
+			if err != nil {
+				return err
+			}
+			if err = types.WriteSizeBytes(bs, buf); err != nil {
+				return err
+			}
+		}
+	}
+
+	cnt = int64(len(extra))
+	types.WriteInt64(buf, cnt)
+	for i := range extra {
+		if err := types.WriteSizeBytes(extra[i], buf); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func unmarshalFromReaderNoGroup(reader io.Reader, ret *optSplitResult) error {
+	var err error
+
+	cnt, err := types.ReadInt64(reader)
+	if err != nil {
+		return err
+	}
+	ret.optInformation.chunkSize = int(cnt)
+	if err := ret.unmarshalFromReader(reader); err != nil {
+		return err
+	}
+	return nil
+}
+
+func unmarshalFromReader[T encoding.BinaryUnmarshaler](reader io.Reader, ret *optSplitResult) ([]T, [][]byte, error) {
+	err := unmarshalFromReaderNoGroup(reader, ret)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var res []T
+	var extra [][]byte
+	// read groups
+	cnt, err := types.ReadInt64(reader)
+	if err != nil {
+		return nil, nil, err
+	}
+	if cnt != 0 {
+		res = make([]T, cnt)
+		for i := range res {
+			_, bs, err := types.ReadSizeBytes(reader)
+			if err != nil {
+				return nil, nil, err
+			}
+			if err = res[i].UnmarshalBinary(bs); err != nil {
+				return nil, nil, err
+			}
+		}
+	}
+
+	cnt, err = types.ReadInt64(reader)
+	if err != nil {
+		return nil, nil, err
+	}
+	if cnt > 0 {
+		extra = make([][]byte, cnt)
+		for i := range extra {
+			_, bs, err := types.ReadSizeBytes(reader)
+			if err != nil {
+				return nil, nil, err
+			}
+			extra[i] = bs
+		}
+	}
+
+	return res, extra, nil
+}
+
+func (ag *AggFuncExecExpression) MarshalToBuffer(buf *bytes.Buffer) error {
+	buf.Write(types.EncodeInt64(&ag.aggID))
+	buf.Write(types.EncodeBool(&ag.isDistinct))
+	argLen := int32(len(ag.argExpressions))
+	buf.Write(types.EncodeInt32(&argLen))
+	for _, expr := range ag.argExpressions {
+		bs, err := proto.Marshal(expr)
+		if err != nil {
+			return err
+		}
+		bsLen := int32(len(bs))
+		buf.Write(types.EncodeInt32(&bsLen))
+		buf.Write(bs)
+	}
+	exLen := int32(len(ag.extraConfig))
+	buf.Write(types.EncodeInt32(&exLen))
+	buf.Write(ag.extraConfig)
+	return nil
+}
+
+func (ag *AggFuncExecExpression) UnmarshalFromReader(r io.Reader) error {
+	var err error
+	if ag.aggID, err = types.ReadInt64(r); err != nil {
+		return err
+	}
+	if ag.isDistinct, err = types.ReadBool(r); err != nil {
+		return err
+	}
+	argLen, err := types.ReadInt32(r)
+	if err != nil {
+		return err
+	}
+	for i := int32(0); i < argLen; i++ {
+		_, bs, err := types.ReadSizeBytes(r)
+		if err != nil {
+			return err
+		}
+		expr := &plan.Expr{}
+		if err := proto.Unmarshal(bs, expr); err != nil {
+			return err
+		}
+		ag.argExpressions = append(ag.argExpressions, expr)
+	}
+	exLen, err := types.ReadInt32(r)
+	if err != nil {
+		return err
+	}
+
+	// if exLen is 0, the extra config is nil, we SHOULD NOT create a
+	// zero length slice, which will cause failure later when people
+	// check extraConfig != nil
+	if exLen > 0 {
+		ag.extraConfig = make([]byte, exLen)
+		if _, err := io.ReadFull(r, ag.extraConfig); err != nil {
+			return err
+		}
+	}
+	return nil
 }

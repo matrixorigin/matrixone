@@ -1,25 +1,25 @@
 select extract(YEAR FROM "1999-01-02 10:11:12");
-extract(YEAR FROM "1999-01-02 10:11:12")
+extract(year, 1999-01-02 10:11:12)
 1999
 select extract(YEAR_MONTH FROM "1999-01-02");
-extract(YEAR_MONTH FROM "1999-01-02")
+extract(year_month, 1999-01-02)
 199901
 select extract(DAY FROM "1999-01-02");
-extract(DAY FROM "1999-01-02")
-2
+extract(day, 1999-01-02)
+02
 select extract(DAY_HOUR FROM "1999-01-02 10:11:12");
-extract(DAY_HOUR FROM "1999-01-02 10:11:12")
+extract(day_hour, 1999-01-02 10:11:12)
 02 10
 select extract(HOUR FROM "1999-01-02 10:11:12");
-extract(HOUR FROM "1999-01-02 10:11:12")
+extract(hour, 1999-01-02 10:11:12)
 10
 select extract(SECOND FROM "1999-01-02 10:11:12");
-extract(SECOND FROM "1999-01-02 10:11:12")
+extract(second, 1999-01-02 10:11:12)
 12
 select extract(MONTH FROM "2001-02-00");
 internal error: invalid input
 select extract(HOUR FROM "2023-11-08 15:00");
-extract(HOUR FROM "2023-11-08 15:00")
+extract(hour, 2023-11-08 15:00)
 15
 SELECT EXTRACT(QUARTER FROM '2004-01-15') AS quarter;
 quarter
@@ -58,16 +58,16 @@ SELECT EXTRACT(QUARTER FROM '2004-12-15') AS quarter;
 quarter
 4
 select extract(month from NULL);
-extract(month from NULL)
+extract(month, null)
 null
 create table t1(a INT,  b date);
 create table t2(a INT,  b date);
 insert into t1 values(1, "2012-10-12"),(2, "2004-04-24"),(3, "2008-12-04"),(4, "2012-03-23");
 insert into t2 values(1, "2013-04-30"),(2, "1994-10-04"),(3, "2018-06-04"),(4, "2012-10-12");
 SELECT t1.a, t2.a FROM t1 JOIN t2 ON (extract(year from t1.b) = extract(year from t2.b));
-a	a
-4	4
-1	4
+a    a
+1    4
+4    4
 drop table t1;
 drop table t2;
 create table t1 (ctime varchar(20));
@@ -82,29 +82,29 @@ drop table t1;
 CREATE TABLE t1 (i1 INT,d1 DATETIME);
 INSERT INTO t1 SELECT MAX(1), "2023-04-23 08:23:21" FROM t1;
 SELECT i1, EXTRACT(YEAR FROM "2023-04-23 08:23:21"), EXTRACT(YEAR FROM d1) FROM t1;
-i1	EXTRACT(YEAR FROM "2023-04-23 08:23:21")	EXTRACT(YEAR FROM d1)
-null	2023	2023
+i1    EXTRACT(year, 2023-04-23 08:23:21)    EXTRACT(year, d1)
+null    2023    2023
 DROP TABLE t1;
 select extract(DAY_MINUTE FROM "02 10:11:12");
-extract(DAY_MINUTE FROM "02 10:11:12")
+extract(day_minute, 02 10:11:12)
 5811
 select extract(DAY_SECOND FROM "225 10:11:12");
-extract(DAY_SECOND FROM "225 10:11:12")
+extract(day_second, 225 10:11:12)
 54101112
 select extract(HOUR_MINUTE FROM "10:11:12");
-extract(HOUR_MINUTE FROM "10:11:12")
+extract(hour_minute, 10:11:12)
 1011
 select extract(HOUR_SECOND FROM "10:11:12");
-extract(HOUR_SECOND FROM "10:11:12")
+extract(hour_second, 10:11:12)
 101112
 select extract(MINUTE FROM "10:11:12");
-extract(MINUTE FROM "10:11:12")
+extract(minute, 10:11:12)
 11
 select extract(MINUTE_SECOND FROM "10:11:12");
-extract(MINUTE_SECOND FROM "10:11:12")
+extract(minute_second, 10:11:12)
 1112
 SELECT EXTRACT(HOUR FROM '100000:02:03');
-EXTRACT(HOUR FROM '100000:02:03')
+EXTRACT(hour, 100000:02:03)
 100000
 select reverse(concat_ws(",",extract(year from 20090702)));
 reverse(concat_ws(,, extract(year, 20090702)))
@@ -113,13 +113,13 @@ create table t1 (d date, dt datetime, t timestamp, c char(10));
 insert ignore into t1 values ("0000-00-00", "0000-00-00", "0000-00-00", "0000-00-00");
 invalid argument parsedate, bad value 0000-00-00
 select extract(MONTH FROM "0000-00-00"),extract(MONTH FROM d),extract(MONTH FROM dt),extract(MONTH FROM t),extract(MONTH FROM c) from t1;
-internal error: invalid input
+extract(month, 0000-00-00)    extract(month, d)    extract(month, dt)    extract(month, t)    extract(month, c)
 drop table t1;
 CREATE TABLE t1 (i1 INT,d1 DATETIME);
 INSERT INTO t1 values(1, "2023-04-23 08:23:21");
 SELECT i1, EXTRACT(HOUR FROM d1) FROM t1;
-i1	EXTRACT(HOUR FROM d1)
-1	08
+i1    EXTRACT(hour, d1)
+1    08
 DROP TABLE t1;
 CREATE TABLE t1
 (`date` date,
@@ -136,15 +136,15 @@ INSERT INTO t1 SELECT '2000-01-01', EXTRACT(WEEK FROM '2000-01-01'), weekday('20
 INSERT INTO t1 SELECT '2000-01-01', EXTRACT(WEEK FROM '2000-01-01'), weekday('2000-01-01'), WEEK('2000-01-01'), 7;
 INSERT INTO t1 SELECT '2000-01-01', EXTRACT(WEEK FROM '2000-01-01'), weekday('2000-01-01'), WEEK('2000-01-01'), 0;
 SELECT * FROM t1;
-date	extracted_week	weekday	week	default_week_format
-2000-01-01	52	5	52	1
-2000-01-01	52	5	52	2
-2000-01-01	52	5	52	3
-2000-01-01	52	5	52	4
-2000-01-01	52	5	52	5
-2000-01-01	52	5	52	6
-2000-01-01	52	5	52	7
-2000-01-01	52	5	52	0
+date    extracted_week    weekday    week    default_week_format
+2000-01-01    52    5    0    1
+2000-01-01    52    5    0    2
+2000-01-01    52    5    0    3
+2000-01-01    52    5    0    4
+2000-01-01    52    5    0    5
+2000-01-01    52    5    0    6
+2000-01-01    52    5    0    7
+2000-01-01    52    5    0    0
 SELECT distinct extracted_week from t1;
 extracted_week
 52
@@ -156,8 +156,8 @@ CREATE TABLE t1
 `extracted_week` int);
 INSERT INTO t1 select '2000-01-01', EXTRACT(WEEK FROM '2000-01-01');
 SELECT * FROM t1;
-date	extracted_week
-2000-01-01	52
+date    extracted_week
+2000-01-01    52
 SELECT distinct extracted_week from t1;
 extracted_week
 52

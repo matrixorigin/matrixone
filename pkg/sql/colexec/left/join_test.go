@@ -88,8 +88,8 @@ func TestString(t *testing.T) {
 func TestJoin(t *testing.T) {
 	for _, tc := range makeTestCases(t) {
 
-		resetChildren(tc.arg)
-		resetHashBuildChildren(tc.barg)
+		resetChildren(tc.arg, tc.proc.Mp())
+		resetHashBuildChildren(tc.barg, tc.proc.Mp())
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		err = tc.barg.Prepare(tc.proc)
@@ -113,8 +113,8 @@ func TestJoin(t *testing.T) {
 		tc.arg.Reset(tc.proc, false, nil)
 		tc.barg.Reset(tc.proc, false, nil)
 
-		resetChildren(tc.arg)
-		resetHashBuildChildren(tc.barg)
+		resetChildren(tc.arg, tc.proc.Mp())
+		resetHashBuildChildren(tc.barg, tc.proc.Mp())
 		tc.proc.GetMessageBoard().Reset()
 		err = tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
@@ -250,7 +250,7 @@ func newTestCase(t *testing.T, flgs []bool, ts []types.Type, rp []colexec.Result
 	resultBatch := batch.NewWithSize(len(rp))
 	resultBatch.SetRowCount(2)
 	for i := range rp {
-		bat := colexec.MakeMockBatchs()
+		bat := colexec.MakeMockBatchs(proc.Mp())
 		resultBatch.Vecs[i] = bat.Vecs[rp[i].Pos]
 	}
 	tag++
@@ -292,15 +292,15 @@ func newTestCase(t *testing.T, flgs []bool, ts []types.Type, rp []colexec.Result
 	}
 }
 
-func resetChildren(arg *LeftJoin) {
-	bat := colexec.MakeMockBatchs()
+func resetChildren(arg *LeftJoin, m *mpool.MPool) {
+	bat := colexec.MakeMockBatchs(m)
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 	arg.Children = nil
 	arg.AppendChild(op)
 }
 
-func resetHashBuildChildren(arg *hashbuild.HashBuild) {
-	bat := colexec.MakeMockBatchs()
+func resetHashBuildChildren(arg *hashbuild.HashBuild, m *mpool.MPool) {
+	bat := colexec.MakeMockBatchs(m)
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 	arg.Children = nil
 	arg.AppendChild(op)
@@ -346,9 +346,13 @@ func TestJoinSplitNoCond(t *testing.T) {
 		JoinMapTag:       tag,
 		JoinMapRefCnt:    1,
 	}
+
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc.SetMessageBoard(message.NewMessageBoard())
+
 	bat := batch.New([]string{"a", "b"})
-	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 4, 5, 6, 7}, nil)
-	bat.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 2, 3, 4, 5, 7}, nil)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 4, 5, 6, 7}, nil, proc.Mp())
+	bat.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 2, 3, 4, 5, 7}, nil, proc.Mp())
 	bat.SetRowCount(bat.Vecs[0].Length())
 	join.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat}))
 
@@ -357,13 +361,10 @@ func TestJoinSplitNoCond(t *testing.T) {
 	vals = append(vals, slices.Repeat([]int32{1}, 5000)...)
 	vals = append(vals, slices.Repeat([]int32{4}, 5000)...)
 	vals = append(vals, 5, 5, 7, 7)
-	bat2.Vecs[0] = testutil.MakeInt32Vector(vals, nil)
-	bat2.Vecs[1] = testutil.MakeInt32Vector(vals, nil)
+	bat2.Vecs[0] = testutil.MakeInt32Vector(vals, nil, proc.Mp())
+	bat2.Vecs[1] = testutil.MakeInt32Vector(vals, nil, proc.Mp())
 	bat2.SetRowCount(bat2.Vecs[0].Length())
 	hashbuild.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat2}))
-
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	proc.SetMessageBoard(message.NewMessageBoard())
 
 	err := join.Prepare(proc)
 	require.NoError(t, err)
@@ -476,10 +477,14 @@ func TestJoinEvalCondFalse(t *testing.T) {
 		JoinMapTag:       tag,
 		JoinMapRefCnt:    1,
 	}
+
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc.SetMessageBoard(message.NewMessageBoard())
+
 	// trigger sels for one row
 	bat := batch.New([]string{"a", "b"})
-	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 4, 5, 6, 7}, nil)
-	bat.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 2, 3, 4, 5, 7}, nil)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 4, 5, 6, 7}, nil, proc.Mp())
+	bat.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 2, 3, 4, 5, 7}, nil, proc.Mp())
 	bat.SetRowCount(bat.Vecs[0].Length())
 	join.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat}))
 
@@ -489,13 +494,10 @@ func TestJoinEvalCondFalse(t *testing.T) {
 	vals = append(vals, slices.Repeat([]int32{4}, 5050)...) // 4 > 2, 4 will be selected
 	vals = append(vals, 5, 5, 7, 7)                         // 5(7) > 2, 5(7) will be selected
 	col2 := slices.Repeat([]int32{2}, len(vals))
-	bat2.Vecs[0] = testutil.MakeInt32Vector(vals, nil)
-	bat2.Vecs[1] = testutil.MakeInt32Vector(col2, nil)
+	bat2.Vecs[0] = testutil.MakeInt32Vector(vals, nil, proc.Mp())
+	bat2.Vecs[1] = testutil.MakeInt32Vector(col2, nil, proc.Mp())
 	bat2.SetRowCount(bat2.Vecs[0].Length())
 	hashbuild.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat2}))
-
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	proc.SetMessageBoard(message.NewMessageBoard())
 
 	err := join.Prepare(proc)
 	require.NoError(t, err)
@@ -524,14 +526,17 @@ func TestJoinEvalCondFalse(t *testing.T) {
 	require.Equal(t, 1+1+5050+2+1+2, rowCount)
 
 	{
+		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		proc.SetMessageBoard(message.NewMessageBoard())
+
 		// trigger hashOnUnique
 		bat := batch.New([]string{"a", "b"})
 		lvals := make([]int32, 0, 9000)
 		for i := 0; i < 9000; i++ {
 			lvals = append(lvals, int32(i))
 		}
-		bat.Vecs[0] = testutil.MakeInt32Vector(lvals, nil)
-		bat.Vecs[1] = testutil.MakeInt32Vector(lvals, nil)
+		bat.Vecs[0] = testutil.MakeInt32Vector(lvals, nil, proc.Mp())
+		bat.Vecs[1] = testutil.MakeInt32Vector(lvals, nil, proc.Mp())
 		bat.SetRowCount(bat.Vecs[0].Length())
 		join.Reset(proc, false, nil)
 		join.Children = nil
@@ -540,15 +545,12 @@ func TestJoinEvalCondFalse(t *testing.T) {
 		bat2 := batch.New([]string{"a", "b"})
 		vals := []int32{0, 2, 3, 4, 6, 7, 8}         // no dup values
 		col2 := slices.Repeat([]int32{5}, len(vals)) // make 6, 7, 8 in left table not null
-		bat2.Vecs[0] = testutil.MakeInt32Vector(vals, nil)
-		bat2.Vecs[1] = testutil.MakeInt32Vector(col2, nil)
+		bat2.Vecs[0] = testutil.MakeInt32Vector(vals, nil, proc.Mp())
+		bat2.Vecs[1] = testutil.MakeInt32Vector(col2, nil, proc.Mp())
 		bat2.SetRowCount(bat2.Vecs[0].Length())
 		hashbuild.Reset(proc, false, nil)
 		hashbuild.Children = nil
 		hashbuild.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat2}))
-
-		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-		proc.SetMessageBoard(message.NewMessageBoard())
 
 		err := join.Prepare(proc)
 		require.NoError(t, err)

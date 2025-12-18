@@ -15,10 +15,11 @@
 package agg
 
 import (
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
-	"math"
 )
 
 func RegisterVarPop2(id int64) {
@@ -131,6 +132,7 @@ func (a *aggVarPopGroupContext) Marshal() []byte {
 	bs = append(bs, types.EncodeInt64(&a.count)...)
 	return bs
 }
+func (a *aggVarPopGroupContext) MarshalBinary() ([]byte, error) { return a.Marshal(), nil }
 func (a *aggVarPopGroupContext) Unmarshal(bs []byte) {
 	a.sum = types.DecodeFloat64(bs[:8])
 	a.count = types.DecodeInt64(bs[8:])
@@ -218,6 +220,7 @@ func (a *aggVarPopOfDecimalGroupContext) Marshal() []byte {
 	bs = append(bs, types.EncodeDecimal128(&a.sum)...)
 	return bs
 }
+func (a *aggVarPopOfDecimalGroupContext) MarshalBinary() ([]byte, error) { return a.Marshal(), nil }
 func (a *aggVarPopOfDecimalGroupContext) Unmarshal(bs []byte) {
 	a.count = types.DecodeInt64(bs[:8])
 	a.overflow = types.DecodeBool(bs[8:9])
@@ -245,6 +248,7 @@ func (a *aggVarPopOfDecimalCommonContext) Marshal() []byte {
 	bs = append(bs, types.EncodeInt32(&a.resultScale)...)
 	return bs
 }
+func (a *aggVarPopOfDecimalCommonContext) MarshalBinary() ([]byte, error) { return a.Marshal(), nil }
 func (a *aggVarPopOfDecimalCommonContext) Unmarshal(bs []byte) {
 	a.argScale = types.DecodeInt32(bs[:4])
 	a.resultScale = types.DecodeInt32(bs[4:])

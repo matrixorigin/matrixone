@@ -23,7 +23,7 @@ require (
 	github.com/aws/smithy-go v1.22.1
 	github.com/axiomhq/hyperloglog v0.0.0-20230201085229-3ddf4bad03dc
 	github.com/buger/jsonparser v1.1.1
-	github.com/bytedance/sonic v1.14.1
+	github.com/bytedance/sonic v1.14.2
 	github.com/cakturk/go-netstat v0.0.0-20200220111822-e5b49efee7a5
 	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/cockroachdb/errors v1.9.1
@@ -92,6 +92,7 @@ require (
 	github.com/tidwall/pretty v1.2.1
 	github.com/tmc/langchaingo v0.1.13
 	github.com/unum-cloud/usearch/golang v0.0.0-20251010193336-541e882da5a9
+	github.com/viterin/partial v1.1.0
 	go.starlark.net v0.0.0-20250701195324-d457b4515e0e
 	go.uber.org/automaxprocs v1.5.3
 	go.uber.org/ratelimit v0.2.0
@@ -131,7 +132,7 @@ require (
 	github.com/bits-and-blooms/bitset v1.8.0 // indirect
 	github.com/bufbuild/protocompile v0.6.0 // indirect
 	github.com/bytedance/gopkg v0.1.3 // indirect
-	github.com/bytedance/sonic/loader v0.3.0 // indirect
+	github.com/bytedance/sonic/loader v0.4.0 // indirect
 	github.com/cespare/xxhash v1.1.0 // indirect
 	github.com/cilium/ebpf v0.9.1 // indirect
 	github.com/clbanning/mxj v1.8.4 // indirect
@@ -242,6 +243,9 @@ replace (
 	github.com/lni/dragonboat/v4 v4.0.0-20220815145555-6f622e8bcbef => github.com/matrixorigin/dragonboat/v4 v4.0.0-20251214113216-2ddf81ef2a85
 	github.com/lni/goutils v1.3.1-0.20220604063047-388d67b4dbc4 => github.com/matrixorigin/goutils v1.3.1-0.20220604063047-388d67b4dbc4
 	github.com/lni/vfs v0.2.1-0.20220616104132-8852fd867376 => github.com/matrixorigin/vfs v0.2.1-0.20220616104132-8852fd867376
+
+	github.com/rapidsai/cuvs/go v0.0.0-20251126145430-91c51b1cc43d => github.com/cpegeric/cuvs/go v0.0.0-20251215111627-7e6a0b54cda6
+	github.com/unum-cloud/usearch/golang v0.0.0-20251010193336-541e882da5a9 => github.com/cpegeric/usearch/golang v0.0.0-20251212130039-afde3fa5e527
 )
 
 replace github.com/shoenig/go-m1cpu => github.com/shoenig/go-m1cpu v0.1.7
