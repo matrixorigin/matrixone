@@ -59,6 +59,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/idxcron"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
@@ -247,6 +248,12 @@ func (s *Scope) DropDatabase(c *Compile) error {
 
 	// 5.unregister iscp jobs
 	err = iscp.UnregisterJobsByDBName(c.proc.Ctx, c.proc.GetService(), c.proc.GetTxnOperator(), dbName)
+	if err != nil {
+		return err
+	}
+
+	// 6.unregister index update
+	err = idxcron.UnregisterUpdateByDbName(c.proc.Ctx, c.proc.GetService(), c.proc.GetTxnOperator(), dbName)
 	if err != nil {
 		return err
 	}
@@ -612,6 +619,17 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					return err
 				}
 
+				// unregister index update
+				err = idxcron.UnregisterUpdate(c.proc.Ctx,
+					c.proc.GetService(),
+					c.proc.GetTxnOperator(),
+					oTableDef.TblId,
+					constraintName,
+					idxcron.Action_Wildcard)
+				if err != nil {
+					return err
+				}
+
 				// Avoid modifying slice directly during iteration
 				oTableDef.Indexes = notDroppedIndex
 				extra.IndexTables = newIndexes
@@ -683,7 +701,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			for _, multiTableIndex := range multiTableIndexes {
 				switch multiTableIndex.IndexAlgo { // no need for catalog.ToLower() here
 				case catalog.MoIndexIvfFlatAlgo.ToString():
-					err = s.handleVectorIvfFlatIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, indexInfo)
+					err = s.handleVectorIvfFlatIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, indexInfo, false)
 				case catalog.MoIndexHnswAlgo.ToString():
 					err = s.handleVectorHnswIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, indexInfo)
 				}
@@ -730,6 +748,59 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					break
 				}
 			}
+		case *plan.AlterTable_Action_AlterAutoUpdate:
+			hasUpdateConstraints = true
+			tableAlterIndex := act.AlterAutoUpdate
+			constraintName := tableAlterIndex.IndexName
+
+			// simply update the index configuration
+			for i, indexDef := range oTableDef.Indexes {
+				if indexDef.IndexName == constraintName {
+					alterIndex = indexDef
+
+					indexAlgo := catalog.ToLower(alterIndex.IndexAlgo)
+					switch catalog.ToLower(indexAlgo) {
+					case catalog.MoIndexIvfFlatAlgo.ToString():
+						// 1. Get old AlgoParams
+						newAlgoParamsMap, err := catalog.IndexParamsStringToMap(alterIndex.IndexAlgoParams)
+						if err != nil {
+							return err
+						}
+						// 2.a update AlgoParams for the index to be re-indexed
+						// NOTE: this will throw error if the algo type is not supported for reindex.
+						// So Step 4. will not be executed if error is thrown here.
+						newAlgoParamsMap[catalog.AutoUpdate] = fmt.Sprintf("%v", tableAlterIndex.AutoUpdate)
+						newAlgoParamsMap[catalog.Day] = fmt.Sprintf("%d", tableAlterIndex.Day)
+						newAlgoParamsMap[catalog.Hour] = fmt.Sprintf("%d", tableAlterIndex.Hour)
+						// 2.b generate new AlgoParams string
+						newAlgoParams, err := catalog.IndexParamsMapToJsonString(newAlgoParamsMap)
+						if err != nil {
+							return err
+						}
+
+						// 3.a Update IndexDef and TableDef
+						alterIndex.IndexAlgoParams = newAlgoParams
+						oTableDef.Indexes[i].IndexAlgoParams = newAlgoParams
+
+						// 3.b Update mo_catalog.mo_indexes
+						updateSql := fmt.Sprintf(updateMoIndexesAlgoParams, newAlgoParams, oTableDef.TblId, alterIndex.IndexName)
+						if err = c.runSqlWithOptions(
+							updateSql, executor.StatementOption{}.WithDisableLog(),
+						); err != nil {
+							return err
+						}
+
+						// 4. register auto update again
+						err = s.handleIvfIndexRegisterUpdate(c, indexDef, qry.Database, oTableDef)
+						if err != nil {
+							return err
+						}
+					default:
+						return moerr.NewInternalError(c.proc.Ctx, "invalid index algo type for alter reindex")
+					}
+				}
+			}
+
 		case *plan.AlterTable_Action_AlterReindex:
 			// NOTE: We hold lock (with retry) during alter reindex, as "alter table" takes an exclusive lock
 			//in the beginning for pessimistic mode. We need to see how to reduce the critical section.
@@ -753,24 +824,25 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 						// 2.a update AlgoParams for the index to be re-indexed
 						// NOTE: this will throw error if the algo type is not supported for reindex.
 						// So Step 4. will not be executed if error is thrown here.
-						newAlgoParamsMap[catalog.IndexAlgoParamLists] = fmt.Sprintf("%d", tableAlterIndex.IndexAlgoParamList)
+						if tableAlterIndex.IndexAlgoParamList > 0 {
+							newAlgoParamsMap[catalog.IndexAlgoParamLists] = fmt.Sprintf("%d", tableAlterIndex.IndexAlgoParamList)
+							// 2.b generate new AlgoParams string
+							newAlgoParams, err := catalog.IndexParamsMapToJsonString(newAlgoParamsMap)
+							if err != nil {
+								return err
+							}
 
-						// 2.b generate new AlgoParams string
-						newAlgoParams, err := catalog.IndexParamsMapToJsonString(newAlgoParamsMap)
-						if err != nil {
-							return err
-						}
+							// 3.a Update IndexDef and TableDef
+							alterIndex.IndexAlgoParams = newAlgoParams
+							oTableDef.Indexes[i].IndexAlgoParams = newAlgoParams
 
-						// 3.a Update IndexDef and TableDef
-						alterIndex.IndexAlgoParams = newAlgoParams
-						oTableDef.Indexes[i].IndexAlgoParams = newAlgoParams
-
-						// 3.b Update mo_catalog.mo_indexes
-						updateSql := fmt.Sprintf(updateMoIndexesAlgoParams, newAlgoParams, oTableDef.TblId, alterIndex.IndexName)
-						if err = c.runSqlWithOptions(
-							updateSql, executor.StatementOption{}.WithDisableLog(),
-						); err != nil {
-							return err
+							// 3.b Update mo_catalog.mo_indexes
+							updateSql := fmt.Sprintf(updateMoIndexesAlgoParams, newAlgoParams, oTableDef.TblId, alterIndex.IndexName)
+							if err = c.runSqlWithOptions(
+								updateSql, executor.StatementOption{}.WithDisableLog(),
+							); err != nil {
+								return err
+							}
 						}
 					case catalog.MoIndexHnswAlgo.ToString():
 						// PASS
@@ -793,7 +865,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			for _, multiTableIndex := range multiTableIndexes {
 				switch multiTableIndex.IndexAlgo {
 				case catalog.MoIndexIvfFlatAlgo.ToString():
-					err = s.handleVectorIvfFlatIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, nil)
+					err = s.handleVectorIvfFlatIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, nil, tableAlterIndex.ForceSync)
 				case catalog.MoIndexHnswAlgo.ToString():
 					// TODO: we should call refresh Hnsw Index function instead of CreateHnswIndex function
 					err = s.handleVectorHnswIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, nil)
@@ -920,7 +992,20 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 		if req.Kind == api.AlterKind_RenameTable {
 			op, ok := req.Operation.(*api.AlterTableReq_RenameTable)
 			if ok {
+				// iscp
 				err = iscp.RenameSrcTable(c.proc.Ctx,
+					c.proc.GetService(),
+					c.proc.GetTxnOperator(),
+					req.DbId,
+					req.TableId,
+					op.RenameTable.OldName,
+					op.RenameTable.NewName)
+				if err != nil {
+					return err
+				}
+
+				// idxcron
+				err = idxcron.RenameSrcTable(c.proc.Ctx,
 					c.proc.GetService(),
 					c.proc.GetTxnOperator(),
 					req.DbId,
@@ -1529,6 +1614,12 @@ func (s *Scope) CreateTable(c *Compile) error {
 				if err != nil {
 					return err
 				}
+
+				// register index update for IVFFLAT
+				err = CreateAllIndexUpdateTasks(c, idxdef.Indexes, dbName, tblName, newRelation.GetTableID(c.proc.Ctx))
+				if err != nil {
+					return err
+				}
 			}
 		}
 
@@ -1961,7 +2052,7 @@ func (s *Scope) doCreateIndex(
 	for _, multiTableIndex := range multiTableIndexes {
 		switch multiTableIndex.IndexAlgo {
 		case catalog.MoIndexIvfFlatAlgo.ToString():
-			err = s.handleVectorIvfFlatIndex(c, tableId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, originalTableDef, indexInfo)
+			err = s.handleVectorIvfFlatIndex(c, tableId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, originalTableDef, indexInfo, false)
 		case catalog.MoIndexHnswAlgo.ToString():
 			err = s.handleVectorHnswIndex(c, tableId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, originalTableDef, indexInfo)
 		}
@@ -2082,6 +2173,7 @@ func (s *Scope) handleVectorIvfFlatIndex(
 	qryDatabase string,
 	originalTableDef *plan.TableDef,
 	indexInfo *plan.CreateTable,
+	forceSync bool,
 ) error {
 	// 1. static check
 	if len(indexDefs) != 3 {
@@ -2123,12 +2215,13 @@ func (s *Scope) handleVectorIvfFlatIndex(
 	// 4.b populate centroids table
 	err = s.handleIvfIndexCentroidsTable(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids], qryDatabase, originalTableDef,
 		totalCnt,
-		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName)
+		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName,
+		forceSync)
 	if err != nil {
 		return err
 	}
 
-	if !async {
+	if !async || forceSync {
 		// 4.c populate entries table
 		err = s.handleIvfIndexEntriesTable(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries], qryDatabase, originalTableDef,
 			indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName,
@@ -2148,24 +2241,12 @@ func (s *Scope) handleVectorIvfFlatIndex(
 		return err
 	}
 
-	/*
-		// create ISCP job when Async is true
-		if async {
-			// unregister ISCP job so that it can restart index update from ts=0
-			err = DropIndexCdcTask(c, originalTableDef, qryDatabase, originalTableDef.Name, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexName)
-			if err != nil {
-				return err
-			}
+	// 4.e register auto index update (reindex)
+	err = s.handleIvfIndexRegisterUpdate(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata], qryDatabase, originalTableDef)
+	if err != nil {
+		return err
+	}
 
-			logutil.Infof("Ivfflat index Async is true")
-			sinker_type := getSinkerTypeFromAlgo(catalog.MoIndexIvfFlatAlgo.ToString())
-			err = CreateIndexCdcTask(c, qryDatabase, originalTableDef.Name,
-				indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexName, sinker_type, false)
-			if err != nil {
-				return err
-			}
-		}
-	*/
 	return nil
 
 }
@@ -2228,6 +2309,18 @@ func (s *Scope) DropIndex(c *Compile) error {
 		return err
 	}
 
+	// 4. unregister index update
+	err = idxcron.UnregisterUpdate(c.proc.Ctx,
+		c.proc.GetService(),
+		c.proc.GetTxnOperator(),
+		oldTableDef.TblId,
+		qry.IndexName,
+		idxcron.Action_Wildcard)
+	if err != nil {
+		return err
+	}
+
+	//5. delete index object from mo_catalog.mo_indexes
 	deleteSql := fmt.Sprintf(deleteMoIndexesWithTableIdAndIndexNameFormat, r.GetTableID(c.proc.Ctx), qry.IndexName)
 	err = c.runSqlWithOptions(
 		deleteSql, executor.StatementOption{}.WithDisableLog(),
@@ -2758,6 +2851,12 @@ func (s *Scope) DropTable(c *Compile) error {
 
 	// delete cdc task of the vector and fulltext index here
 	err = DropAllIndexCdcTasks(c, rel.GetTableDef(c.proc.Ctx), qry.Database, qry.Table)
+	if err != nil {
+		return err
+	}
+
+	// unregister index update by Table Id
+	err = DropAllIndexUpdateTasks(c, rel.GetTableDef(c.proc.Ctx), qry.Database, qry.Table)
 	if err != nil {
 		return err
 	}

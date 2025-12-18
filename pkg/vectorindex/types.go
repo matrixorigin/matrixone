@@ -65,7 +65,7 @@ type IndexTableConfig struct {
 	Nprobe             uint    `json:"nprobe"`
 	PKeyType           int32   `json:"pktype"`
 	KeyPartType        int32   `json:"parttype"`
-	KmeansTrainPercent int64   `json:"kmeans_train_percent"`
+	KmeansTrainPercent float64 `json:"kmeans_train_percent"`
 	KmeansMaxIteration int64   `json:"kmeans_max_iteration"`
 	Limit              uint64  `json:"limit"`
 	LowerBoundType     int8    `json:"lower_bound_type"`
