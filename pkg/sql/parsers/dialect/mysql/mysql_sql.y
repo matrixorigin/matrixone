@@ -376,7 +376,7 @@ import (
 
 // Secondary Index
 %token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT MASTER HNSW
-%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_SEARCH EF_CONSTRUCTION M ASYNC
+%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_SEARCH EF_CONSTRUCTION M ASYNC FORCE_SYNC AUTO_UPDATE
 
 // Alter
 %token <str> EXPIRE ACCOUNT ACCOUNTS UNLOCK DAY NEVER PUMP MYSQL_COMPATIBILITY_MODE UNIQUE_CHECK_ON_AUTOINCR
@@ -644,6 +644,7 @@ import (
 %type <alterColumnOrder> alter_column_order
 %type <alterColumnOrderBy> alter_column_order_list
 %type <indexVisibility> visibility
+%type <boolVal> auto_update
 %type <PartitionNames> AllOrPartitionNameList PartitionNameList
 
 %type <tableOption> table_option source_option
@@ -3868,23 +3869,42 @@ alter_table_alter:
         var visibility = $3
         $$ = tree.NewAlterOptionAlterIndex(indexName, visibility)
     }
-| REINDEX ident IVFFLAT LISTS equal_opt INTEGRAL
+| INDEX ident IVFFLAT auto_update index_option_list
     {
-    	val := int64($6.(int64))
-    	if val <= 0 {
-		yylex.Error("LISTS should be greater than 0")
-		return 1
-    	}
-        var keyType = tree.INDEX_TYPE_IVFFLAT
-        var algoParamList = val
+        var io *tree.IndexOption = nil
+        if $5 == nil {
+            io = tree.NewIndexOption()
+            io.IType = tree.INDEX_TYPE_IVFFLAT
+        } else {
+            io = $5
+            io.IType = tree.INDEX_TYPE_IVFFLAT
+        }
         var name = tree.Identifier($2.Compare())
-        $$ = tree.NewAlterOptionAlterReIndex(name, keyType, algoParamList)
+	var auto_update = $4
+	io.AutoUpdate = auto_update
+        $$ = tree.NewAlterOptionAlterAutoUpdate(name, io)
+    }
+| REINDEX ident IVFFLAT index_option_list
+    {
+        var io *tree.IndexOption = nil
+        if $4 == nil {
+            io = tree.NewIndexOption()
+            io.IType = tree.INDEX_TYPE_IVFFLAT
+        } else {
+            io = $4
+            io.IType = tree.INDEX_TYPE_IVFFLAT
+        }
+        var name = tree.Identifier($2.Compare())
+        $$ = tree.NewAlterOptionAlterReIndex(name, io)
     }
 | REINDEX ident HNSW
     {
-        var keyType = tree.INDEX_TYPE_HNSW
+	
+        var io *tree.IndexOption = nil
+        io = tree.NewIndexOption()
+        io.IType = tree.INDEX_TYPE_HNSW
         var name = tree.Identifier($2.Compare())
-        $$ = tree.NewAlterOptionAlterReIndex(name, keyType, 0)
+        $$ = tree.NewAlterOptionAlterReIndex(name, io)
     }
 |   CHECK ident enforce
     {
@@ -3907,6 +3927,16 @@ visibility:
 |   INVISIBLE
     {
    	    $$ = tree.VISIBLE_TYPE_INVISIBLE
+    }
+
+auto_update:
+    AUTO_UPDATE '=' TRUE
+    {
+	$$ = true
+    }
+|   AUTO_UPDATE '=' FALSE
+    {
+	$$ = false
     }
 
 alter_account_stmt:
@@ -7674,7 +7704,15 @@ index_option_list:
 	      opt1.HnswEfSearch = opt2.HnswEfSearch
  	    } else if opt2.Async {
 	      opt1.Async = opt2.Async
- 	    }
+ 	    } else if opt2.ForceSync {
+	      opt1.ForceSync = opt2.ForceSync
+ 	    } else if opt2.AutoUpdate {
+	      opt1.AutoUpdate = opt2.AutoUpdate
+ 	    } else if opt2.Day > 0 {
+	      opt1.Day = opt2.Day
+ 	    } else if opt2.Hour > 0 {
+	      opt1.Hour = opt2.Hour
+	    }
             $$ = opt1
         }
     }
@@ -7767,7 +7805,47 @@ index_option:
 	io.Async = true
 	$$ = io
      }
-	
+|    FORCE_SYNC
+     {
+	io := tree.NewIndexOption()
+	io.ForceSync = true	
+	$$ = io
+     }
+|    AUTO_UPDATE '=' TRUE
+     {
+	io := tree.NewIndexOption()
+	io.AutoUpdate = true
+	$$ = io
+     }
+|    AUTO_UPDATE '=' FALSE
+     {
+	io := tree.NewIndexOption()
+	io.AutoUpdate = false
+	$$ = io
+     }
+|    DAY equal_opt INTEGRAL
+     {
+        val := int64($3.(int64))
+	if val < 0 {
+		yylex.Error("DAY should be greater than or equal to 0")
+		return 1
+	}
+	io := tree.NewIndexOption()
+	io.Day = val
+	$$ = io
+     }
+|    HOUR equal_opt INTEGRAL
+     {
+        val := int64($3.(int64))
+	if val < 0 || val > 23 {
+		yylex.Error("HOUR should be between 0 and 23")
+		return 1
+	}
+	io := tree.NewIndexOption()
+	io.Hour = val
+	$$ = io
+     }
+
 
 index_column_list:
     index_column

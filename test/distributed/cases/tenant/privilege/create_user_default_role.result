@@ -23,7 +23,6 @@ show tables;
 Tables_in_mo_catalog
 mo_account
 mo_branch_metadata
-mo_iscp_log
 mo_cache
 mo_cdc_task
 mo_cdc_watermark
@@ -32,7 +31,9 @@ mo_configurations
 mo_data_key
 mo_database
 mo_foreign_keys
+mo_index_update
 mo_indexes
+mo_iscp_log
 mo_locks
 mo_merge_settings
 mo_mysql_compatibility_mode
