@@ -15,6 +15,7 @@ count(*)
 drop snapshot if exists sp01;
 create snapshot sp01 for account;
 delete from rs01 where col1 = 1;
+drop database if exists test02;
 create database test02 clone test01 {snapshot = 'sp01'};
 create table test01.rs02 clone test01.rs01 {snapshot = 'sp01'};
 create table test01.rs02 clone test01.rs01 {snapshot = 'sp01'};
