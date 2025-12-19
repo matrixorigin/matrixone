@@ -143,35 +143,18 @@ check_port() {
 
 # Function to check Grafana services
 check_grafana_services() {
-    echo "Checking Grafana services..."
+    echo "Checking Grafana service..."
     echo ""
-    
+
     local all_ready=true
-    
-    # Check if containers are running
-    local grafana_running=false
+
+    # Check if container is running
     local grafana_local_running=false
-    
-    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^mo-grafana$'; then
-        grafana_running=true
-    fi
-    
+
     if docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^mo-grafana-local$'; then
         grafana_local_running=true
     fi
-    
-    # Check Grafana (cluster monitoring) on port 3000
-    if [ "$grafana_running" = false ]; then
-        echo "  ⚠ Grafana (Cluster) (port 3000): Container not running"
-        echo "    Start with: make dev-up-grafana"
-        all_ready=false
-    elif check_port 3000 "Grafana (Cluster)" "http://localhost:3000/api/health"; then
-        echo "    URL: http://localhost:3000 (admin/admin)"
-    else
-        all_ready=false
-    fi
-    echo ""
-    
+
     # Check Grafana Local on port 3001
     if [ "$grafana_local_running" = false ]; then
         echo "  ⚠ Grafana (Local) (port 3001): Container not running"
@@ -185,11 +168,11 @@ check_grafana_services() {
     echo ""
     
     if [ "$all_ready" = true ]; then
-        echo "✓ All Grafana services are ready!"
+        echo "✓ Grafana is ready!"
         return 0
     else
-        echo "⚠ Some Grafana services are not ready yet."
-        if [ "$grafana_running" = true ] || [ "$grafana_local_running" = true ]; then
+        echo "⚠ Grafana is not ready yet."
+        if [ "$grafana_local_running" = true ]; then
             echo "  Grafana may take a while to start, especially on first run."
             echo "  Keep checking with: make dev-check-grafana"
         fi
@@ -248,15 +231,61 @@ for config in "${REQUIRED_CONFIGS[@]}"; do
     fi
 done
 
+# Always enable metrics for dev-up (unless explicitly disabled via config.env)
+if [ -z "${DISABLE_METRIC:-}" ]; then
+    export DISABLE_METRIC=false
+fi
+
 # Generate configuration files if missing or if config.env exists
 if [ "$MISSING_CONFIGS" = true ]; then
-    echo "Configuration files not found. Generating with defaults..."
+    echo "Configuration files not found. Generating with defaults (metrics enabled)..."
     ./generate-config.sh
     echo ""
 elif [ -f "config.env" ]; then
     echo "Regenerating configuration from config.env..."
     ./generate-config.sh
     echo ""
+fi
+
+# Generate Grafana datasource config if using prometheus-local profile
+# If HOST_PROMETHEUS_PORT is set, use host Prometheus, otherwise use prometheus-local
+if [[ " ${DOCKER_COMPOSE_ARGS[*]} " =~ " --profile prometheus-local " ]]; then
+    mkdir -p grafana-provisioning/datasources
+    if [ -n "${HOST_PROMETHEUS_PORT:-}" ]; then
+        echo "Generating Grafana datasource config for host Prometheus (port ${HOST_PROMETHEUS_PORT})..."
+        cat > grafana-provisioning/datasources/prometheus.yml << EOF
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://host.docker.internal:${HOST_PROMETHEUS_PORT}
+    isDefault: true
+    editable: true
+    jsonData:
+      timeInterval: "15s"
+EOF
+        echo "✓ Grafana will connect to host Prometheus at port ${HOST_PROMETHEUS_PORT}"
+    else
+        echo "Using default Grafana datasource config (prometheus-local:9090)"
+        # Ensure default config exists (should already be in repo)
+        if [ ! -f "grafana-provisioning/datasources/prometheus.yml" ]; then
+            cat > grafana-provisioning/datasources/prometheus.yml << EOF
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus-local:9090
+    isDefault: true
+    editable: true
+    jsonData:
+      timeInterval: "15s"
+EOF
+        fi
+    fi
 fi
 
 # Function to get file owner UID (cross-platform)
@@ -277,7 +306,30 @@ get_owner_uid() {
     # Pre-create directories with correct permissions (before docker creates them as root)
     if [[ " ${DOCKER_COMPOSE_ARGS[*]} " =~ " up " ]]; then
         echo "Pre-creating directories with correct permissions..."
-        DATA_DIRS=("../../mo-data" "../../logs" "../../prometheus-data" "../../prometheus-local-data" "../../grafana-data" "../../grafana-local-data")
+        
+        # Initialize empty array for directories to create
+        DATA_DIRS=()
+        
+        # Add directories based on profile
+        # Check for prometheus-local profile first (only monitoring, no MatrixOne services)
+        if [[ " ${DOCKER_COMPOSE_ARGS[*]} " =~ " --profile prometheus-local " ]]; then
+            # Only create directories for prometheus-local profile
+            DATA_DIRS=("../../prometheus-local-data" "../../grafana-local-data")
+            # Pre-create subdirectories that Grafana might create
+            mkdir -p ../../grafana-local-data/dashboards 2>/dev/null || true
+            chown -R "$DOCKER_UID:$DOCKER_GID" ../../grafana-local-data/dashboards 2>/dev/null || true
+        else
+            # For matrixone profile, always need base directories
+            DATA_DIRS=("../../mo-data" "../../logs")
+            
+            # Add monitoring directories if prometheus profile is also used
+            if [[ " ${DOCKER_COMPOSE_ARGS[*]} " =~ " --profile prometheus " ]]; then
+                DATA_DIRS+=("../../prometheus-data" "../../grafana-data")
+                # Pre-create subdirectories that Grafana might create
+                mkdir -p ../../grafana-data/dashboards 2>/dev/null || true
+                chown -R "$DOCKER_UID:$DOCKER_GID" ../../grafana-data/dashboards 2>/dev/null || true
+            fi
+        fi
         
         # Create directories and set ownership immediately to prevent root ownership
         for dir in "${DATA_DIRS[@]}"; do
@@ -285,10 +337,6 @@ get_owner_uid() {
             # Try to set ownership immediately (may fail if dir exists and is root-owned, but that's OK)
             chown "$DOCKER_UID:$DOCKER_GID" "$dir" 2>/dev/null || true
         done
-        
-        # Pre-create subdirectories that Grafana might create
-        mkdir -p ../../grafana-data/dashboards ../../grafana-local-data/dashboards 2>/dev/null || true
-        chown -R "$DOCKER_UID:$DOCKER_GID" ../../grafana-data/dashboards ../../grafana-local-data/dashboards 2>/dev/null || true
         
         # Fix ownership for all directories (in case they exist but owned by root)
         # Recursively check and fix all subdirectories, not just top-level
