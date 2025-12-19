@@ -97,7 +97,7 @@ func clustering[T types.RealNumbers](u *ivfCreateState, tf *TableFunction, proc 
 	}
 	defer clusterer.Close()
 
-	anycenters, err := clusterer.Cluster()
+	anycenters, err := clusterer.Cluster(proc.Ctx)
 	if err != nil {
 		return err
 	}

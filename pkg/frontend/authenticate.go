@@ -933,6 +933,7 @@ var (
 		catalog.MO_TABLE_STATS:        0,
 		catalog.MO_MERGE_SETTINGS:     0,
 		catalog.MO_ISCP_LOG:           0,
+		catalog.MO_INDEX_UPDATE:       0,
 		catalog.MO_BRANCH_METADATA:    0,
 	}
 	sysAccountTables = map[string]struct{}{
@@ -979,6 +980,7 @@ var (
 		catalog.MO_ACCOUNT_LOCK:       0,
 		catalog.MO_MERGE_SETTINGS:     0,
 		catalog.MO_ISCP_LOG:           0,
+		catalog.MO_INDEX_UPDATE:       0,
 		catalog.MO_BRANCH_METADATA:    0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
@@ -1021,6 +1023,7 @@ var (
 		MoCatalogMergeSettingsDDL,
 		MoCatalogMergeSettingsInitData,
 		MoCatalogMoISCPLogDDL,
+		MoCatalogMoIndexUpdateDDL,
 		MoCatalogBranchMetadataDDL,
 	}
 
@@ -7977,7 +7980,9 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccoun
 		if strings.HasPrefix(sql, fmt.Sprintf("CREATE TABLE mo_catalog.%s", catalog.MO_ISCP_LOG)) {
 			return true
 		}
-
+		if strings.HasPrefix(sql, fmt.Sprintf("CREATE TABLE mo_catalog.%s", catalog.MO_INDEX_UPDATE)) {
+			return true
+		}
 		if strings.HasPrefix(sql, fmt.Sprintf("create table mo_catalog.%s", catalog.MO_BRANCH_METADATA)) {
 			return true
 		}

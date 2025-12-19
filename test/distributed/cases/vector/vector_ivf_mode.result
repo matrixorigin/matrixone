@@ -28,11 +28,11 @@ id2    greeting message    1.1550325221482527
 id3    vector search test    1.1828778308075465
 WITH q AS (SELECT id, text, l2_distance(vec, '[0.1,-0.2,0.3,0.4,-0.1,0.2,0.0,0.5]') AS dist FROM mini_vector_data) SELECT * FROM q ORDER BY dist LIMIT 5 by rank with option 'mode=force';
 id    text    dist
-id8    semantic item    0.7760798335075378
+id8    semantic item    0.7760798931121826
 id1    hello world    1.0551303625106812
 id10    additional entry    1.071820855140686
-id2    greeting message    1.1550323963165283
-id3    vector search test    1.1828778982162476
+id2    greeting message    1.1550325155258179
+id3    vector search test    1.182877779006958
 CREATE TABLE mini_embed_data (id VARCHAR(64) NOT NULL, embedding VECF32(8) DEFAULT NULL, content TEXT DEFAULT NULL, description VARCHAR(255) DEFAULT NULL, file_id VARCHAR(64) DEFAULT NULL, score FLOAT DEFAULT NULL, disabled TINYINT DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (id), KEY idx_file_id (file_id));
 CREATE INDEX idx_vec_embedding USING ivfflat ON mini_embed_data (embedding) LISTS = 16 OP_TYPE 'vector_cosine_ops';
 INSERT INTO mini_embed_data (id, embedding, content, description, file_id, score, disabled) VALUES('id01','[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]','ai is artificial intelligence','what is ai?','file01',0.0,0);
@@ -57,8 +57,8 @@ id05    an ai assistant by openai    what is chatgpt?    [0.12, 0.32, 0.52, 0.72
 SELECT mini_embed_data.id, mini_embed_data.content, mini_embed_data.description, mini_embed_data.embedding, mini_embed_data.file_id, mini_embed_data.disabled FROM mini_embed_data WHERE mini_embed_data.file_id IN ('file01','file02') AND mini_embed_data.embedding IS NOT NULL AND (mini_embed_data.disabled IS NULL OR mini_embed_data.disabled = false) ORDER BY cosine_distance(mini_embed_data.embedding,"[0.12,0.55,0.33,0.88,0.22,0.44,0.66,0.11]") DESC LIMIT 10 by rank with option 'mode=force';
 id    content    description    embedding    file_id    disabled
 id02    sql is structured query language    what is sql?    [0.01, 0.03, 0.05, 0.07, 0.09, 0.11, 0.13, 0.15]    file01    0
-id04    mysql is a relational database    what is mysql?    [0.11, 0.22, 0.33, 0.44, 0.55, 0.66, 0.77, 0.88]    file02    0
 id01    ai is artificial intelligence    what is ai?    [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]    file01    0
+id04    mysql is a relational database    what is mysql?    [0.11, 0.22, 0.33, 0.44, 0.55, 0.66, 0.77, 0.88]    file02    0
 id03    it stores high dimensional vectors    what is vector db?    [0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2]    file02    0
 id05    an ai assistant by openai    what is chatgpt?    [0.12, 0.32, 0.52, 0.72, 0.11, 0.31, 0.51, 0.71]    file01    0
 WITH q AS (SELECT id, text, l2_distance(vec, '[0.1,-0.2,0.3,0.4,-0.1,0.2,0.0,0.5]') AS dist FROM mini_vector_data WHERE id LIKE 'id%') SELECT * FROM q ORDER BY dist LIMIT 3 by rank with option 'mode=pre';
@@ -83,7 +83,7 @@ id1    hello world    1.0551303640156267
 id10    additional entry    1.0718208877650799
 WITH q AS (SELECT id, text, l2_distance(vec, '[0.1,-0.2,0.3,0.4,-0.1,0.2,0.0,0.5]') AS dist FROM mini_vector_data WHERE id LIKE 'id%') SELECT * FROM q ORDER BY dist LIMIT 3 by rank with option 'mode=force';
 id    text    dist
-id8    semantic item    0.7760798335075378
+id8    semantic item    0.7760798931121826
 id1    hello world    1.0551303625106812
 id10    additional entry    1.071820855140686
 SELECT mini_embed_data.id, mini_embed_data.content FROM mini_embed_data WHERE mini_embed_data.file_id IN ('file01','file02') AND mini_embed_data.embedding IS NOT NULL AND mini_embed_data.disabled = 0 AND mini_embed_data.score = 0.0 ORDER BY cosine_distance(mini_embed_data.embedding,"[0.12,0.55,0.33,0.88,0.22,0.44,0.66,0.11]") DESC LIMIT 3 by rank with option 'mode=pre';
@@ -113,9 +113,9 @@ id1    hello world    1.0551303640156267
 id10    additional entry    1.0718208877650799
 WITH q AS (SELECT id, text, cosine_distance(vec, '[0.1,-0.2,0.3,0.4,-0.1,0.2,0.0,0.5]') AS dist FROM mini_vector_data) SELECT * FROM q ORDER BY dist DESC LIMIT 3 by rank with option 'mode=pre';
 id    text    dist
-id4    example data    1.1711897501680237
-id7    random note    0.9494411010292958
-id6    short text    0.8904764598385896
+id4    example data    1.171189785003662
+id7    random note    0.9494410753250122
+id6    short text    0.8904764652252197
 WITH q AS (SELECT id, text, l2_distance(vec, '[0.1,-0.2,0.3,0.4,-0.1,0.2,0.0,0.5]') AS dist FROM mini_vector_data WHERE id LIKE 'id%') SELECT * FROM q ORDER BY dist LIMIT 1 by rank with option 'mode=pre';
 id    text    dist
 id8    semantic item    0.7760798852372132
@@ -359,20 +359,21 @@ id8    semantic item    0.7760798852372132
 id1    hello world    1.0551303640156267
 id2    greeting message    1.1550325221482527
 id7    random note    1.1910499415172193
-(SELECT id, text AS content
+(SELECT id, text AS content, l2_distance(vec, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]') AS dist
 FROM mini_vector_data
 ORDER BY id, l2_distance(vec, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]')
 LIMIT 2 by rank with option 'mode=pre')
 UNION
-(SELECT id, content
+(SELECT id, content, cosine_distance(embedding, '[0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2]') AS dist
 FROM mini_embed_data
-ORDER BY cosine_distance(embedding, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]')
+ORDER BY cosine_distance(embedding, '[0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2]')
 LIMIT 2 by rank with option 'mode=pre')
-LIMIT 3;
-id    content
-id1    hello world
-id10    additional entry
-id04    mysql is a relational database
+LIMIT 4;
+id    content    dist
+id1    hello world    1.5163443088531494
+id10    additional entry    1.4459599256515503
+id03    it stores high dimensional vectors    0.0
+id05    an ai assistant by openai    0.2728450298309326
 (SELECT id, category, l2_distance(vec, '[0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9]') AS dist
 FROM vec_with_multi_idx
 WHERE category = 'A' AND status = 1
@@ -437,19 +438,19 @@ id10    additional entry    1.0718208877650799
 (SELECT id, content
 FROM mini_embed_data
 WHERE file_id = 'file01'
-ORDER BY cosine_distance(embedding, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]')
+ORDER BY cosine_distance(embedding, '[0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2]')
 LIMIT 1 by rank with option 'mode=pre')
 UNION ALL
 (SELECT id, content
 FROM mini_embed_data
 WHERE file_id = 'file02'
-ORDER BY cosine_distance(embedding, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]')
+ORDER BY cosine_distance(embedding, '[0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2]')
 LIMIT 2 by rank with option 'mode=pre')
 LIMIT 3;
 id    content
-id04    mysql is a relational database
 id03    it stores high dimensional vectors
-id01    ai is artificial intelligence
+id04    mysql is a relational database
+id05    an ai assistant by openai
 (SELECT id, text, l2_distance(vec, '[0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5]') AS dist
 FROM mini_vector_data
 WHERE id LIKE 'id1%'

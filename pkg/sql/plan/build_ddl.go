@@ -3999,13 +3999,14 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 
 			switch opt.KeyType {
 			case tree.INDEX_TYPE_IVFFLAT:
-				if opt.AlgoParamList <= 0 {
+				if opt.AlgoParamList < 0 {
 					return nil, moerr.NewInternalErrorf(
 						ctx.GetContext(),
-						"lists should be > 0.",
+						"lists should be >= 0. lists = 0 will keep the original configuration.",
 					)
 				}
 				alterTableReIndex.IndexAlgoParamList = opt.AlgoParamList
+				alterTableReIndex.ForceSync = opt.ForceSync
 			case tree.INDEX_TYPE_HNSW:
 				// PASS: keep options on change for incremental update
 			default:
@@ -4034,6 +4035,57 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			alterTable.Actions[i] = &plan.AlterTable_Action{
 				Action: &plan.AlterTable_Action_AlterReindex{
 					AlterReindex: alterTableReIndex,
+				},
+			}
+
+		case *tree.AlterOptionAlterAutoUpdate:
+			alterTableAutoUpdate := new(plan.AlterTableAlterAutoUpdate)
+			constraintName := string(opt.Name)
+			alterTableAutoUpdate.IndexName = constraintName
+
+			switch opt.KeyType {
+			case tree.INDEX_TYPE_IVFFLAT:
+				if opt.Day < 0 {
+					return nil, moerr.NewInternalErrorf(
+						ctx.GetContext(),
+						"day should be >= 0.",
+					)
+				}
+				if opt.Hour < 0 || opt.Hour > 23 {
+					return nil, moerr.NewInternalErrorf(
+						ctx.GetContext(),
+						"hour should be between 0 and 23.",
+					)
+				}
+				alterTableAutoUpdate.AutoUpdate = opt.AutoUpdate
+				alterTableAutoUpdate.Day = opt.Day
+				alterTableAutoUpdate.Hour = opt.Hour
+			default:
+				return nil, moerr.NewInternalErrorf(
+					ctx.GetContext(),
+					unsupportedErrFmt,
+					opt.KeyType.ToString(),
+				)
+			}
+
+			name_not_found := true
+			// check index
+			for _, indexdef := range tableDef.Indexes {
+				if constraintName == indexdef.IndexName {
+					name_not_found = false
+					break
+				}
+			}
+			if name_not_found {
+				return nil, moerr.NewInternalErrorf(
+					ctx.GetContext(),
+					"Can't REINDEX '%s'; check that column/key exists",
+					constraintName,
+				)
+			}
+			alterTable.Actions[i] = &plan.AlterTable_Action{
+				Action: &plan.AlterTable_Action_AlterAutoUpdate{
+					AlterAutoUpdate: alterTableAutoUpdate,
 				},
 			}
 
