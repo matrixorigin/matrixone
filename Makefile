@@ -474,8 +474,10 @@ dev-up-grafana-local:
 	fi
 	@echo ""
 	@echo "Pre-creating directories with correct permissions..."
-	@mkdir -p prometheus-local-data grafana-local-data grafana-local-data/dashboards && \
-		chmod 755 prometheus-local-data grafana-local-data grafana-local-data/dashboards
+	@DOCKER_UID=$$(id -u) && \
+		DOCKER_GID=$$(id -g) && \
+		mkdir -p prometheus-local-data grafana-local-data grafana-local-data/dashboards && \
+		chown -R $$DOCKER_UID:$$DOCKER_GID prometheus-local-data grafana-local-data 2>/dev/null || true
 	@echo "Checking and fixing ownership for existing directories..."
 	@DOCKER_UID=$$(id -u) && \
 		DOCKER_GID=$$(id -g) && \
