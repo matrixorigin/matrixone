@@ -1,4 +1,7 @@
 drop database if exists test01;
+drop database if exists test02;
+drop database if exists test03;
+
 create database test01;
 use test01;
 
@@ -16,7 +19,6 @@ drop snapshot if exists sp01;
 create snapshot sp01 for account;
 delete from rs01 where col1 = 1;
 
-drop database if exists test02;
 create database test02 clone test01 {snapshot = 'sp01'};
 create table test01.rs02 clone test01.rs01 {snapshot = 'sp01'};
 create table test01.rs02 clone test01.rs01 {snapshot = 'sp01'};
@@ -32,10 +34,6 @@ drop database test01;
 drop database test02;
 drop snapshot sp01;
 
-
-
-
-drop database if exists test03;
 create database test03;
 use test03;
 drop table if exists pri01;

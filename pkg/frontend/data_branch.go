@@ -372,6 +372,21 @@ func runSql(
 		useBackExec = true
 	}
 
+	var exec executor.SQLExecutor
+	if !useBackExec {
+		rt := moruntime.ServiceRuntime(ses.service)
+		if rt == nil {
+			useBackExec = true
+		} else {
+			val, exist := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
+			if !exist {
+				useBackExec = true
+			} else {
+				exec = val.(executor.SQLExecutor)
+			}
+		}
+	}
+
 	if useBackExec {
 		// export as CSV need this
 		// bh.(*backExec).backSes.SetMysqlResultSet(&MysqlResultSet{})
@@ -381,25 +396,37 @@ func runSql(
 		if err = bh.Exec(ctx, sql); err != nil {
 			return
 		}
+		if _, ok := bh.(*backExec); ok {
+			bh.ClearExecResultSet()
+			sqlRet.Mp = ses.proc.Mp()
+			sqlRet.Batches = bh.GetExecResultBatches()
+			return
+		}
+
+		rs := bh.GetExecResultSet()
 		bh.ClearExecResultSet()
+		if len(rs) == 0 || rs[0] == nil {
+			return
+		}
+		mrs, ok := rs[0].(*MysqlResultSet)
+		if !ok {
+			return sqlRet, moerr.NewInternalError(ctx, "unexpected result set type")
+		}
+		if len(mrs.Columns) == 0 {
+			return
+		}
+		var bat *batch.Batch
+		bat, _, err = convertRowsIntoBatch(ses.proc.Mp(), mrs.Columns, mrs.Data)
+		if err != nil {
+			return sqlRet, err
+		}
 		sqlRet.Mp = ses.proc.Mp()
-		sqlRet.Batches = bh.GetExecResultBatches()
+		sqlRet.Batches = []*batch.Batch{bat}
 		return
 	}
 
-	var (
-		val   any
-		exist bool
-		exec  executor.SQLExecutor
-	)
-
 	// we do not use the bh.Exec here, it's too slow.
 	// use internal sql instead.
-	if val, exist = moruntime.ServiceRuntime(ses.service).GetGlobalVariables(moruntime.InternalSQLExecutor); !exist {
-		return sqlRet, moerr.NewInternalErrorNoCtxf("get internalExecutor failed")
-	}
-
-	exec = val.(executor.SQLExecutor)
 
 	backSes := bh.(*backExec).backSes
 
@@ -442,8 +469,6 @@ func handleDataBranch(
 	default:
 		return moerr.NewNotSupportedNoCtxf("data branch not supported: %v", st)
 	}
-
-	return nil
 }
 
 func dataBranchCreateTable(
