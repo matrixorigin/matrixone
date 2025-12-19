@@ -292,8 +292,8 @@ services:
     restart: unless-stopped
 
   # Grafana for Local MatrixOne - Visualization dashboard
-  # This is the main entry point for monitoring - Prometheus runs internally
-  # Grafana connects to Prometheus via Docker network (prometheus-local:9090)
+  # This is the main entry point for monitoring
+  # If HOST_PROMETHEUS_PORT is set, connects to host Prometheus, otherwise uses prometheus-local
   grafana-local:
     image: grafana/grafana:latest
     container_name: mo-grafana-local
@@ -308,6 +308,8 @@ services:
       - ./grafana-provisioning/datasources/prometheus.yml:/etc/grafana/provisioning/datasources/prometheus.yml:ro # Prometheus data source for local
       - ./grafana-provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro # Dashboard provisioning
       - ../../pkg/util/metric/dashboard:/var/lib/grafana/dashboards/matrixone:ro # MatrixOne dashboards
+    extra_hosts:
+      - "host.docker.internal:host-gateway" # Linux support for host.docker.internal
     environment:
       - GF_SECURITY_ADMIN_USER=admin
       - GF_SECURITY_ADMIN_PASSWORD=admin
@@ -315,11 +317,11 @@ services:
       - GF_SERVER_ROOT_URL=http://localhost:3001
       - GF_USERS_ALLOW_SIGN_UP=false
       - TZ=Asia/Shanghai
+      - HOST_PROMETHEUS_PORT=${HOST_PROMETHEUS_PORT:-} # Host Prometheus port (default: use prometheus-local)
     networks:
       - matrixone-net
     depends_on:
-      prometheus-local:
-        condition: service_healthy
+      - prometheus-local
     healthcheck:
       test: [ "CMD-SHELL", "curl -sf http://localhost:3000/api/health || exit 1" ]
       interval: 3s
