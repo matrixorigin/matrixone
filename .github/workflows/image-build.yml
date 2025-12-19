@@ -15,5 +15,5 @@ permissions:
 jobs:
   image-build:
     name: Build And Push Matrixone Image
-    uses: matrixorigin/CI/.github/workflows/image-build.yaml@main
+    uses: matrixorigin/CI/.github/workflows/image-build.yaml@release/3.0-dev
     secrets: inherit
