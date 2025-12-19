@@ -733,6 +733,7 @@ func (p *baseHandle) getObjectEntries(objIter btree.IterG[objectio.ObjectEntry],
 
 type ChangeHandler struct {
 	skipDeletes     bool
+	isRecoveryMode  bool // When true, Case 2.2 (insert->delete) will keep the delete for CDC restart scenarios
 	tombstoneHandle *baseHandle
 	dataHandle      *baseHandle
 	coarseMaxRow    int
@@ -766,16 +767,17 @@ func NewChangesHandlerWithCheckpointEntries(
 	fs fileservice.FileService,
 ) (changeHandle *ChangeHandler, err error) {
 	changeHandle = &ChangeHandler{
-		coarseMaxRow:  int(maxRow),
-		skipDeletes:   skipDeletes,
-		start:         start,
-		end:           end,
-		fs:            fs,
-		minTS:         start,
-		LogThreshold:  LogThreshold,
-		primarySeqnum: primarySeqnum,
-		mp:            mp,
-		scheduler:     tasks.NewParallelJobScheduler(LoadParallism),
+		coarseMaxRow:   int(maxRow),
+		skipDeletes:    skipDeletes,
+		isRecoveryMode: true, // Checkpoint-based recovery: keep deletes in Case 2.2 for CDC consistency
+		start:          start,
+		end:            end,
+		fs:             fs,
+		minTS:          start,
+		LogThreshold:   LogThreshold,
+		primarySeqnum:  primarySeqnum,
+		mp:             mp,
+		scheduler:      tasks.NewParallelJobScheduler(LoadParallism),
 	}
 	dataAobj, dataCNObj, tombstoneAobj, tombstoneCNObj, err := getObjectsFromCheckpointEntries(ctx, tid, sid, start, end, checkpoints, mp, fs)
 	if err != nil {
@@ -890,8 +892,9 @@ func NewChangesHandler(
 		return nil, moerr.NewErrStaleReadNoCtx(state.start.ToString(), start.ToString())
 	}
 	changeHandle = &ChangeHandler{
-		coarseMaxRow:  int(maxRow),
-		skipDeletes:   skipDeletes,
+		coarseMaxRow: int(maxRow),
+		skipDeletes:  skipDeletes,
+		// isRecoveryMode: false (default) - normal operation, Case 2.2 deletes all rows
 		start:         start,
 		end:           end,
 		fs:            fs,
@@ -971,7 +974,7 @@ func (p *ChangeHandler) quickNext(ctx context.Context, mp *mpool.MPool) (data, t
 		if err != nil {
 			return
 		}
-		if err = filterBatch(data, tombstone, p.primarySeqnum, p.skipDeletes); err != nil {
+		if err = filterBatch(data, tombstone, p.primarySeqnum, p.skipDeletes, p.isRecoveryMode); err != nil {
 			return
 		}
 		if tombstoneEnd && dataEnd {
@@ -1003,7 +1006,11 @@ func (p *ChangeHandler) quickNext(ctx context.Context, mp *mpool.MPool) (data, t
 //
 // This ensures that for any pk, we only keep the most recent operation,
 // whether it's an insert/update from data batch or a delete from tombstone batch.
-func filterBatch(data, tombstone *batch.Batch, primarySeqnum int, skipDeletes bool) (err error) {
+//
+// isRecoveryMode: When true (e.g., CDC restart from checkpoint), Case 2.2 (first insert, last delete)
+// will keep the delete to ensure downstream consistency. When false (normal operation),
+// Case 2.2 deletes all rows since the net effect is "no change".
+func filterBatch(data, tombstone *batch.Batch, primarySeqnum int, skipDeletes bool, isRecoveryMode bool) (err error) {
 	if data == nil || tombstone == nil {
 		return
 	}
@@ -1051,9 +1058,6 @@ func filterBatch(data, tombstone *batch.Batch, primarySeqnum int, skipDeletes bo
 
 	dataRowsToDelete := make([]int64, 0)
 	tombstoneRowsToDelete := make([]int64, 0)
-
-	// Counter for Case 2.2 (insert->delete) to help diagnose CDC restart issues
-	case2InsertDeleteCount := 0
 
 	for _, rowInfos := range rowInfoMap {
 		// Sort by timestamp
@@ -1119,32 +1123,30 @@ func filterBatch(data, tombstone *batch.Batch, primarySeqnum int, skipDeletes bo
 				}
 			} else {
 				// Case 2.2: First is insert, last is delete
-				// FIX: Keep the last delete, delete all other rows
-				// This ensures that if a PK was inserted and then deleted in this range,
-				// we still send the delete to downstream in case the insert was already
-				// sent before a CDC restart.
-				// Previously: deleted all rows including the delete, which caused
-				// downstream to have stale data (insert sent before restart,
-				// but delete not sent after restart).
-				case2InsertDeleteCount++
-				for _, ri := range rowInfos[:len(rowInfos)-1] {
-					if ri.isDelete {
-						tombstoneRowsToDelete = append(tombstoneRowsToDelete, int64(ri.row))
-					} else {
-						dataRowsToDelete = append(dataRowsToDelete, int64(ri.row))
+				if isRecoveryMode {
+					// Recovery mode (e.g., CDC restart): Keep the last delete
+					// This ensures that if the insert was already sent to downstream
+					// before CDC restart, the delete will still be sent to maintain consistency.
+					for _, ri := range rowInfos[:len(rowInfos)-1] {
+						if ri.isDelete {
+							tombstoneRowsToDelete = append(tombstoneRowsToDelete, int64(ri.row))
+						} else {
+							dataRowsToDelete = append(dataRowsToDelete, int64(ri.row))
+						}
+					}
+				} else {
+					// Normal mode: Delete all rows (both insert and delete)
+					// Net effect: PK was created and deleted in this range, so no change to report
+					for _, ri := range rowInfos {
+						if ri.isDelete {
+							tombstoneRowsToDelete = append(tombstoneRowsToDelete, int64(ri.row))
+						} else {
+							dataRowsToDelete = append(dataRowsToDelete, int64(ri.row))
+						}
 					}
 				}
 			}
 		}
-	}
-
-	// Log Case 2.2 occurrences - critical for CDC restart diagnosis
-	if case2InsertDeleteCount > 0 {
-		logutil.Debug(
-			"cdc.filter_batch.case2_insert_delete_fixed",
-			zap.Int("pk-count", case2InsertDeleteCount),
-			zap.Bool("skip-deletes", skipDeletes),
-		)
 	}
 
 	goSort.Slice(tombstoneRowsToDelete, func(i, j int) bool {
@@ -1211,7 +1213,7 @@ func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombst
 		case NextChangeHandle_Data:
 			err = p.dataHandle.Next(ctx, &data, mp)
 			if err == nil && data.Vecs[0].Length() >= p.coarseMaxRow*2 {
-				if err = filterBatch(data, tombstone, p.primarySeqnum, p.skipDeletes); err != nil {
+				if err = filterBatch(data, tombstone, p.primarySeqnum, p.skipDeletes, p.isRecoveryMode); err != nil {
 					return
 				}
 				if data.Vecs[0].Length() > p.coarseMaxRow {
@@ -1228,7 +1230,7 @@ func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombst
 		case NextChangeHandle_Tombstone:
 			err = p.tombstoneHandle.Next(ctx, &tombstone, mp)
 			if err == nil && tombstone.Vecs[0].Length() >= p.coarseMaxRow*2 {
-				if err = filterBatch(data, tombstone, p.primarySeqnum, p.skipDeletes); err != nil {
+				if err = filterBatch(data, tombstone, p.primarySeqnum, p.skipDeletes, p.isRecoveryMode); err != nil {
 					return
 				}
 				if tombstone.Vecs[0].Length() > p.coarseMaxRow {
@@ -1245,7 +1247,7 @@ func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombst
 		}
 		if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
 			err = nil
-			if err = filterBatch(data, tombstone, p.primarySeqnum, p.skipDeletes); err != nil {
+			if err = filterBatch(data, tombstone, p.primarySeqnum, p.skipDeletes, p.isRecoveryMode); err != nil {
 				return
 			}
 			p.totalDuration += time.Since(t0)
