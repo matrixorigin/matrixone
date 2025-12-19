@@ -59,16 +59,11 @@ ifeq ($(UNAME_S),linux)
   ifeq ($(MUSL),)
 	USEARCH_CMAKE_FLAG += -DUSEARCH_USE_OPENMP=1
   endif
-  AVX512FP16 := $(shell lscpu | grep -e avx512fp16 -e avx512_bf16)
 endif
 
-ifeq ($(UNAME_M),x86_64)
-  ifneq ($(AVX512FP16),)
-    ifeq ($(MUSL),)
-      ifeq ($(MO_CL_FP16),1)
-	USEARCH_CMAKE_FLAG += -DUSEARCH_USE_SIMSIMD=1 -DUSEARCH_DEFINED_CLANG=1
-      endif
-    endif
+ifeq ($(MO_CL_SIMSIMD),1)
+  ifeq ($(MUSL),)
+	USEARCH_CMAKE_FLAG += -DUSEARCH_USE_SIMSIMD=1 -DUSEARCH_DEFINED_CLANG=1 -DSIMSIMD_DYNAMIC_DISPATCH=1
   endif
 endif
 
