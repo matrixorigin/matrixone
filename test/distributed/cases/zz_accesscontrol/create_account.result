@@ -180,6 +180,8 @@ mo_stored_procedure
 mo_stages
 mo_snapshots
 mo_database
+mo_feature_limit
+mo_feature_registry
 mo_columns
 mo_sessions
 mo_configurations
