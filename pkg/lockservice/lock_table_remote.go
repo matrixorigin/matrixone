@@ -150,18 +150,24 @@ func (l *remoteLockTable) unlock(
 		txn,
 		l.bind,
 	)
+	retryCount := 0
 	for {
 		err := l.doUnlock(txn, commitTS, mutations...)
 		if err == nil {
 			return
 		}
 
-		logUnlockTableOnRemoteFailed(
-			l.logger,
-			txn,
-			l.bind,
-			err,
-		)
+		retryCount++
+		// Rate limit unlock error logs: log first 3, then every 100th
+		if retryCount <= 3 || retryCount%100 == 0 {
+			logUnlockTableOnRemoteFailedWithCount(
+				l.logger,
+				txn,
+				l.bind,
+				err,
+				retryCount,
+			)
+		}
 		// unlock cannot fail and must ensure that all locks have been
 		// released.
 		//

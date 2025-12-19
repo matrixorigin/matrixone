@@ -143,23 +143,24 @@ func WithDisconnectAfterRead(n int) BackendOption {
 }
 
 type remoteBackend struct {
-	remote       string
-	metrics      *metrics
-	logger       *zap.Logger
-	codec        Codec
-	conn         goetty.IOSession
-	writeC       chan *Future
-	waitWriteC   chan struct{}
-	stopWriteC   chan struct{}
-	resetConnC   chan error
-	stopper      *stopper.Stopper
-	readStopper  *stopper.Stopper
-	closeOnce    sync.Once
-	ctx          context.Context
-	cancel       context.CancelFunc
-	cancelOnce   sync.Once
-	pingTimer    *time.Timer
-	lastPingTime time.Time
+	remote          string
+	metrics         *metrics
+	logger          *zap.Logger
+	rateLimitLogger *logutil.RateLimitedLogger
+	codec           Codec
+	conn            goetty.IOSession
+	writeC          chan *Future
+	waitWriteC      chan struct{}
+	stopWriteC      chan struct{}
+	resetConnC      chan error
+	stopper         *stopper.Stopper
+	readStopper     *stopper.Stopper
+	closeOnce       sync.Once
+	ctx             context.Context
+	cancel          context.CancelFunc
+	cancelOnce      sync.Once
+	pingTimer       *time.Timer
+	lastPingTime    time.Time
 
 	options struct {
 		hasPayloadResponse  bool
@@ -290,6 +291,7 @@ func (rb *remoteBackend) adjust() {
 	uid, _ := uuid.NewV7()
 	rb.logger = logutil.Adjust(rb.logger).With(zap.String("remote", rb.remote),
 		zap.String("backend-id", uid.String()))
+	rb.rateLimitLogger = logutil.NewRateLimitedLogger(rb.logger)
 	rb.options.goettyOptions = append(rb.options.goettyOptions,
 		goetty.WithSessionCodec(rb.codec))
 	// Don't pass logger to goetty to avoid noisy error logs from goetty library
@@ -501,7 +503,8 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 				if err := rb.conn.Flush(writeTimeout); err != nil {
 					for _, f := range written {
 						id := f.getSendMessageID()
-						rb.logger.Error("write request failed",
+						rb.rateLimitLogger.Error("write-flush",
+							"write request failed",
 							zap.Uint64("request-id", id),
 							zap.Error(err))
 						f.messageSent(err)
@@ -550,7 +553,8 @@ func (rb *remoteBackend) doWrite(id uint64, f *Future) time.Duration {
 			zap.String("request", f.send.Message.DebugString()))
 	}
 	if err := rb.conn.Write(f.send, goetty.WriteOptions{}); err != nil {
-		rb.logger.Error("write request failed",
+		rb.rateLimitLogger.Error("write-conn",
+			"write request failed",
 			zap.Uint64("request-id", id), zap.Error(err))
 		f.messageSent(err)
 		return 0
@@ -603,7 +607,9 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 					normalExit = true
 					rb.logger.Debug("read from backend failed", zap.Error(err))
 				} else {
-					rb.logger.Error("read from backend failed", zap.Error(err))
+					rb.rateLimitLogger.Error("read-loop",
+						"read from backend failed",
+						zap.Error(err))
 				}
 				rb.inactiveReadLoop()
 				rb.cancelActiveStreams()
@@ -726,7 +732,9 @@ func (rb *remoteBackend) makeAllWaitingFutureFailed(err error) {
 
 func (rb *remoteBackend) handleResetConn() error {
 	if err := rb.resetConn(); err != nil {
-		rb.logger.Error("fail to reset backend connection", zap.Error(err))
+		rb.rateLimitLogger.Error("reset-conn",
+			"fail to reset backend connection",
+			zap.Error(err))
 		rb.inactive()
 		return err
 	}
@@ -895,7 +903,8 @@ func (rb *remoteBackend) resetConn() error {
 		if ne, ok := err.(net.Error); ok && ne.Timeout() {
 			canRetry = true
 		}
-		rb.logger.Error("init remote connection failed, retry later",
+		rb.rateLimitLogger.Error("connect-retry",
+			"init remote connection failed, retry later",
 			zap.Bool("can-retry", canRetry),
 			zap.Error(err))
 
