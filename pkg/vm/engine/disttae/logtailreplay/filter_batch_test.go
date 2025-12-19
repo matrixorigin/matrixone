@@ -88,7 +88,7 @@ func TestFilterBatchSkipDeletes(t *testing.T) {
 	tombstoneBatch.SetRowCount(2)
 
 	// Test with skipDeletes=true
-	err := filterBatch(dataBatch, tombstoneBatch, primarySeqnum, true)
+	err := filterBatch(dataBatch, tombstoneBatch, primarySeqnum, true, false)
 	require.NoError(t, err)
 
 	// After filtering with skipDeletes=true:
@@ -137,7 +137,7 @@ func TestFilterBatchSkipDeletes(t *testing.T) {
 	tombstoneBatch.SetRowCount(2)
 
 	// Test with skipDeletes=false (for comparison)
-	err = filterBatch(dataBatch, tombstoneBatch, primarySeqnum, false)
+	err = filterBatch(dataBatch, tombstoneBatch, primarySeqnum, false, false)
 	require.NoError(t, err)
 
 	// When skipDeletes=false, the behavior should be the same in this case
@@ -215,7 +215,7 @@ func TestFilterBatchSkipDeletesFalse(t *testing.T) {
 
 	// Test Case 1: skipDeletes=true
 	dataBatch1, tombstoneBatch1 := createTestBatches()
-	err := filterBatch(dataBatch1, tombstoneBatch1, primarySeqnum, true)
+	err := filterBatch(dataBatch1, tombstoneBatch1, primarySeqnum, true, false)
 	require.NoError(t, err)
 
 	// Record results for skipDeletes=true
@@ -224,7 +224,7 @@ func TestFilterBatchSkipDeletesFalse(t *testing.T) {
 
 	// Test Case 2: skipDeletes=false (this exercises lines 1087-1095)
 	dataBatch2, tombstoneBatch2 := createTestBatches()
-	err = filterBatch(dataBatch2, tombstoneBatch2, primarySeqnum, false)
+	err = filterBatch(dataBatch2, tombstoneBatch2, primarySeqnum, false, false)
 	require.NoError(t, err)
 
 	// Record results for skipDeletes=false
