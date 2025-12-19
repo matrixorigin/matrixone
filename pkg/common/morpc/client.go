@@ -16,6 +16,7 @@ package morpc
 
 import (
 	"context"
+	"math/rand"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -27,10 +28,84 @@ import (
 	"go.uber.org/zap"
 )
 
+var (
+	// DefaultRetryPolicy is the default retry policy for morpc client.
+	// It retries indefinitely (MaxRetries=0) with exponential backoff starting at 10ms,
+	// maxing out at 1s, with 20% jitter. The retry loop exits when context is cancelled.
+	// This matches the original design intent where context timeout is the exit mechanism.
+	DefaultRetryPolicy = RetryPolicy{
+		MaxRetries:     0, // 0 means unlimited, rely on context timeout
+		InitialBackoff: 10 * time.Millisecond,
+		MaxBackoff:     1 * time.Second,
+		Multiplier:     2.0,
+		JitterFraction: 0.2,
+	}
+
+	// NoRetryPolicy disables retry (only 1 attempt).
+	NoRetryPolicy = RetryPolicy{
+		MaxRetries:     1,
+		InitialBackoff: 0,
+		MaxBackoff:     0,
+		Multiplier:     1.0,
+		JitterFraction: 0,
+	}
+)
+
+// RetryPolicy defines retry behavior for morpc client operations.
+type RetryPolicy struct {
+	// MaxRetries is the maximum number of retry attempts.
+	// 0 means unlimited (rely on context timeout), which is the default behavior.
+	MaxRetries int
+	// InitialBackoff is the initial backoff duration before the first retry.
+	InitialBackoff time.Duration
+	// MaxBackoff is the maximum backoff duration.
+	MaxBackoff time.Duration
+	// Multiplier is the factor by which backoff increases after each retry.
+	Multiplier float64
+	// JitterFraction adds randomness to backoff (0.2 means ±20%).
+	JitterFraction float64
+}
+
+// nextBackoff calculates the next backoff duration with jitter.
+func (p RetryPolicy) nextBackoff(currentBackoff time.Duration) time.Duration {
+	if currentBackoff == 0 {
+		currentBackoff = p.InitialBackoff
+	} else {
+		currentBackoff = time.Duration(float64(currentBackoff) * p.Multiplier)
+	}
+	if currentBackoff > p.MaxBackoff {
+		currentBackoff = p.MaxBackoff
+	}
+	// Add jitter: ±JitterFraction
+	if p.JitterFraction > 0 {
+		jitter := float64(currentBackoff) * p.JitterFraction * (2*rand.Float64() - 1)
+		currentBackoff = time.Duration(float64(currentBackoff) + jitter)
+		if currentBackoff < 0 {
+			currentBackoff = 0
+		}
+	}
+	return currentBackoff
+}
+
 // WithClientMaxBackendPerHost maximum number of connections per host
 func WithClientMaxBackendPerHost(maxBackendsPerHost int) ClientOption {
 	return func(c *client) {
 		c.options.maxBackendsPerHost = maxBackendsPerHost
+	}
+}
+
+// WithClientRetryPolicy sets the retry policy for the client.
+// If not set, DefaultRetryPolicy is used.
+func WithClientRetryPolicy(policy RetryPolicy) ClientOption {
+	return func(c *client) {
+		c.options.retryPolicy = policy
+	}
+}
+
+// WithClientDisableRetry disables retry for the client.
+func WithClientDisableRetry() ClientOption {
+	return func(c *client) {
+		c.options.retryPolicy = NoRetryPolicy
 	}
 }
 
@@ -101,6 +176,7 @@ type client struct {
 		initBackends       []string
 		initBackendCounts  []int
 		enableAutoCreate   bool
+		retryPolicy        RetryPolicy
 	}
 }
 
@@ -162,6 +238,10 @@ func (c *client) adjust() {
 	if c.options.maxIdleDuration == 0 {
 		c.options.maxIdleDuration = defaultMaxIdleDuration
 	}
+	// Set default retry policy if not configured
+	if c.options.retryPolicy.MaxRetries == 0 && c.options.retryPolicy.InitialBackoff == 0 {
+		c.options.retryPolicy = DefaultRetryPolicy
+	}
 }
 
 func (c *client) maybeInitBackends() error {
@@ -188,6 +268,11 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 	if ctx == nil {
 		panic("client Send nil context")
 	}
+
+	policy := c.options.retryPolicy
+	var backoff time.Duration
+	retryCount := 0
+
 	for {
 		b, err := c.getBackend(backend, false)
 		if err != nil {
@@ -196,6 +281,32 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 
 		f, err := b.Send(ctx, request)
 		if err != nil && err == backendClosed {
+			retryCount++
+			// Check if max retries exceeded (0 means unlimited)
+			if policy.MaxRetries > 0 && retryCount >= policy.MaxRetries {
+				c.logger.Warn("max retries exceeded for Send",
+					zap.String("backend", backend),
+					zap.Int("retries", retryCount),
+					zap.Error(err))
+				return nil, err
+			}
+
+			// Calculate next backoff with jitter
+			backoff = policy.nextBackoff(backoff)
+			if backoff > 0 {
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				case <-time.After(backoff):
+				}
+			}
+
+			if retryCount <= 3 || retryCount%10 == 0 {
+				c.logger.Debug("retrying Send after backend closed",
+					zap.String("backend", backend),
+					zap.Int("retry", retryCount),
+					zap.Duration("backoff", backoff))
+			}
 			continue
 		}
 		return f, err
@@ -203,6 +314,10 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 }
 
 func (c *client) NewStream(backend string, lock bool) (Stream, error) {
+	policy := c.options.retryPolicy
+	var backoff time.Duration
+	retryCount := 0
+
 	for {
 		b, err := c.getBackend(backend, lock)
 		if err != nil {
@@ -211,6 +326,28 @@ func (c *client) NewStream(backend string, lock bool) (Stream, error) {
 
 		st, err := b.NewStream(lock)
 		if err != nil && err == backendClosed {
+			retryCount++
+			// Check if max retries exceeded
+			if policy.MaxRetries > 0 && retryCount >= policy.MaxRetries {
+				c.logger.Warn("max retries exceeded for NewStream",
+					zap.String("backend", backend),
+					zap.Int("retries", retryCount),
+					zap.Error(err))
+				return nil, err
+			}
+
+			// Calculate next backoff with jitter
+			backoff = policy.nextBackoff(backoff)
+			if backoff > 0 {
+				time.Sleep(backoff)
+			}
+
+			if retryCount <= 3 || retryCount%10 == 0 {
+				c.logger.Debug("retrying NewStream after backend closed",
+					zap.String("backend", backend),
+					zap.Int("retry", retryCount),
+					zap.Duration("backoff", backoff))
+			}
 			continue
 		}
 		return st, err
@@ -221,6 +358,11 @@ func (c *client) Ping(ctx context.Context, backend string) error {
 	if ctx == nil {
 		panic("client Ping nil context")
 	}
+
+	policy := c.options.retryPolicy
+	var backoff time.Duration
+	retryCount := 0
+
 	for {
 		b, err := c.getBackend(backend, false)
 		if err != nil {
@@ -230,6 +372,32 @@ func (c *client) Ping(ctx context.Context, backend string) error {
 		f, err := b.SendInternal(ctx, &flagOnlyMessage{flag: flagPing})
 		if err != nil {
 			if err == backendClosed {
+				retryCount++
+				// Check if max retries exceeded
+				if policy.MaxRetries > 0 && retryCount >= policy.MaxRetries {
+					c.logger.Warn("max retries exceeded for Ping",
+						zap.String("backend", backend),
+						zap.Int("retries", retryCount),
+						zap.Error(err))
+					return err
+				}
+
+				// Calculate next backoff with jitter
+				backoff = policy.nextBackoff(backoff)
+				if backoff > 0 {
+					select {
+					case <-ctx.Done():
+						return ctx.Err()
+					case <-time.After(backoff):
+					}
+				}
+
+				if retryCount <= 3 || retryCount%10 == 0 {
+					c.logger.Debug("retrying Ping after backend closed",
+						zap.String("backend", backend),
+						zap.Int("retry", retryCount),
+						zap.Duration("backoff", backoff))
+				}
 				continue
 			}
 			return err
