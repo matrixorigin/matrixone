@@ -1052,6 +1052,9 @@ func filterBatch(data, tombstone *batch.Batch, primarySeqnum int, skipDeletes bo
 	dataRowsToDelete := make([]int64, 0)
 	tombstoneRowsToDelete := make([]int64, 0)
 
+	// Counter for Case 2.2 (insert->delete) to help diagnose CDC restart issues
+	case2InsertDeleteCount := 0
+
 	for _, rowInfos := range rowInfoMap {
 		// Sort by timestamp
 		goSort.Slice(rowInfos, func(i, j int) bool {
@@ -1115,8 +1118,16 @@ func filterBatch(data, tombstone *batch.Batch, primarySeqnum int, skipDeletes bo
 					}
 				}
 			} else {
-				// Delete all rows
-				for _, ri := range rowInfos {
+				// Case 2.2: First is insert, last is delete
+				// FIX: Keep the last delete, delete all other rows
+				// This ensures that if a PK was inserted and then deleted in this range,
+				// we still send the delete to downstream in case the insert was already
+				// sent before a CDC restart.
+				// Previously: deleted all rows including the delete, which caused
+				// downstream to have stale data (insert sent before restart,
+				// but delete not sent after restart).
+				case2InsertDeleteCount++
+				for _, ri := range rowInfos[:len(rowInfos)-1] {
 					if ri.isDelete {
 						tombstoneRowsToDelete = append(tombstoneRowsToDelete, int64(ri.row))
 					} else {
@@ -1125,6 +1136,15 @@ func filterBatch(data, tombstone *batch.Batch, primarySeqnum int, skipDeletes bo
 				}
 			}
 		}
+	}
+
+	// Log Case 2.2 occurrences - critical for CDC restart diagnosis
+	if case2InsertDeleteCount > 0 {
+		logutil.Debug(
+			"cdc.filter_batch.case2_insert_delete_fixed",
+			zap.Int("pk-count", case2InsertDeleteCount),
+			zap.Bool("skip-deletes", skipDeletes),
+		)
 	}
 
 	goSort.Slice(tombstoneRowsToDelete, func(i, j int) bool {
