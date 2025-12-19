@@ -182,10 +182,8 @@ func (mo *MOServer) handleConn(ctx context.Context, conn net.Conn) {
 	var err error
 	defer func() {
 		if rs != nil {
-			err = rs.Close()
-			if err != nil {
-				logutil.Error("Handle conn error", zap.Error(err))
-				return
+			if err := rs.Close(); err != nil {
+				logutil.LogConnectionCloseError("Close conn error", err)
 			}
 		}
 	}()
@@ -210,7 +208,7 @@ func (mo *MOServer) handleConn(ctx context.Context, conn net.Conn) {
 
 func (mo *MOServer) handleLoop(ctx context.Context, rs *Conn) {
 	if err := mo.handleMessage(ctx, rs); err != nil {
-		logutil.Error("handle session failed", zap.Error(err))
+		logutil.LogConnectionCloseError("handle session failed", err)
 	}
 }
 
@@ -498,8 +496,7 @@ func (mo *MOServer) handleMessage(ctx context.Context, rs *Conn) error {
 				return nil
 			}
 
-			logutil.Error("session read failed",
-				zap.Error(err))
+			logutil.LogConnectionCloseError("session read failed", err)
 			return err
 		}
 	}
@@ -519,8 +516,7 @@ func (mo *MOServer) handleRequest(rs *Conn) error {
 			return err
 		}
 
-		logutil.Error("session read failed",
-			zap.Error(err))
+		logutil.LogConnectionCloseError("session read failed", err)
 		return err
 	}
 
@@ -529,7 +525,7 @@ func (mo *MOServer) handleRequest(rs *Conn) error {
 		if skipClientQuit(err.Error()) {
 			return nil
 		} else {
-			logutil.Error("session handle failed, close this session", zap.Error(err))
+			logutil.LogConnectionCloseError("session handle failed, close this session", err)
 		}
 		return err
 	}
