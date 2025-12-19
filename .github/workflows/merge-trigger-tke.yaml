@@ -14,5 +14,5 @@ on:
 jobs:
   mo-checkin-regression:
     name: MO Checkin Regression On TKE
-    uses: matrixorigin/CI/.github/workflows/merge-trigger-tke.yaml@main
+    uses: matrixorigin/CI/.github/workflows/merge-trigger-tke.yaml@release/3.0-dev
     secrets: inherit
