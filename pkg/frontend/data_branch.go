@@ -462,6 +462,10 @@ func dataBranchCreateTable(
 		}
 	}()
 
+	if err = checkBranchQuota(execCtx.reqCtx, ses, bh, 1); err != nil {
+		return err
+	}
+
 	cloneStmt = &tree.CloneTable{
 		SrcTable:     stmt.SrcTable,
 		CreateTable:  stmt.CreateTable,
@@ -527,6 +531,10 @@ func dataBranchCreateDatabase(
 
 	if receipts, err = handleCloneDatabase(execCtx, ses, bh, &stmt.CloneDatabase); err != nil {
 		return
+	}
+
+	if err = checkBranchQuota(execCtx.reqCtx, ses, bh, int64(len(receipts))); err != nil {
+		return err
 	}
 
 	for _, rcpt := range receipts {
