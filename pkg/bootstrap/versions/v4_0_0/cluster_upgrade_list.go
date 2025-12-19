@@ -107,13 +107,7 @@ var upg_init_mo_feature_registry = versions.UpgradeEntry{
 	Schema:    catalog.MO_CATALOG,
 	TableName: catalog.MO_FEATURE_REGISTRY,
 	UpgType:   versions.CREATE_NEW_TABLE,
-	UpgSql: fmt.Sprintf(
-		"insert into %s.%s(feature_code, scope_spec) values "+
-			"('SNAPSHOT', '{\"allowed_scope\":[\"account\",\"database\",\"table\"]}'),"+
-			"('BRANCH', '{\"allowed_scope\":[]}');",
-		catalog.MO_CATALOG,
-		catalog.MO_FEATURE_REGISTRY,
-	),
+	UpgSql:    frontend.MoCatalogFeatureRegistryInitData,
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		exist, err := versions.CheckTableDataExist(txn, accountId, fmt.Sprintf(
 			"select * from %s.%s where feature_code in ('SNAPSHOT', 'BRANCH')",

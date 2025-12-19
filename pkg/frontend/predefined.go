@@ -376,6 +376,11 @@ var (
 		updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     	primary key(feature_code)
 	)`, catalog.MO_FEATURE_REGISTRY)
+
+	MoCatalogFeatureRegistryInitData = fmt.Sprintf(`insert into mo_catalog.%s(feature_code, scope_spec) values 
+		('SNAPSHOT', '{"allowed_scope":["account","database","table"]}'),
+		('BRANCH', '{"allowed_scope":[]}')
+		on duplicate key update scope_spec = values(scope_spec);`, catalog.MO_FEATURE_REGISTRY)
 )
 
 // `mo_catalog` database system tables

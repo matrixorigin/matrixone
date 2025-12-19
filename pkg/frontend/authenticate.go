@@ -1031,6 +1031,7 @@ var (
 		MoCatalogBranchMetadataDDL,
 		MoCatalogFeatureLimitDDL,
 		MoCatalogFeatureRegistryDDL,
+		MoCatalogFeatureRegistryInitData,
 	}
 
 	//drop tables for the tenant
