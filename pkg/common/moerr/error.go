@@ -166,19 +166,34 @@ const (
 	ErrCantCompileForPrepare                    uint16 = 20473
 	ErrTableMustHaveAVisibleColumn              uint16 = 20474
 
-	// Group 5: rpc timeout
+	// Group 5: rpc errors
+	//
 	// ErrRPCTimeout rpc timeout
+	// Indicates the operation timed out before completion.
 	ErrRPCTimeout uint16 = 20500
 	// ErrClientClosed rpc client closed
+	// Indicates the rpc client has been closed. The caller should check
+	// their shutdown logic to determine if retry is appropriate.
 	ErrClientClosed uint16 = 20501
-	// ErrBackendClosed backend closed
+	// ErrBackendClosed backend connection closed
+	// Indicates the backend connection was closed. This may be due to
+	// network issues or server-side closure.
 	ErrBackendClosed uint16 = 20502
 	// ErrStreamClosed rpc stream closed
+	// Indicates the rpc stream has ended.
 	ErrStreamClosed uint16 = 20503
 	// ErrNoAvailableBackend no available backend
+	// Indicates no healthy backend is currently available.
 	ErrNoAvailableBackend uint16 = 20504
-	// ErrBackendCannotConnect can not connect to remote backend
+	// ErrBackendCannotConnect cannot establish connection
+	// Indicates the connection attempt to backend failed.
 	ErrBackendCannotConnect uint16 = 20505
+	// ErrServiceUnavailable service temporarily unavailable
+	// Indicates the service is temporarily overloaded or down.
+	ErrServiceUnavailable uint16 = 20506
+	// ErrConnectionReset connection was reset by peer
+	// Indicates the connection was forcibly closed by remote.
+	ErrConnectionReset uint16 = 20507
 
 	// Group 6: txn
 	// ErrTxnAborted read and write a transaction that has been rolled back.
@@ -430,14 +445,16 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrBlobCantHaveDefault:                      {ER_BLOB_CANT_HAVE_DEFAULT, []string{MySQLDefaultSqlState}, "BLOB, TEXT, GEOMETRY or JSON column '%-.192s' can't have a default value"},
 	ErrTableMustHaveAVisibleColumn:              {ER_TABLE_MUST_HAVE_A_VISIBLE_COLUMN, []string{MySQLDefaultSqlState}, "A table must have at least one visible column."},
 
-	// Group 5: rpc timeout
+	// Group 5: rpc errors
 	ErrRPCTimeout:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc timeout"},
-	ErrClientClosed: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "client closed"},
+	ErrClientClosed: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc client closed"},
 	ErrBackendClosed: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState},
-		"the connection has been disconnected"},
-	ErrStreamClosed:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "stream closed"},
+		"backend connection closed"},
+	ErrStreamClosed:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc stream closed"},
 	ErrNoAvailableBackend:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "no available backend"},
-	ErrBackendCannotConnect: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "can not connect to remote backend, %v"},
+	ErrBackendCannotConnect: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "cannot connect to backend: %v"},
+	ErrServiceUnavailable:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "service unavailable: %s"},
+	ErrConnectionReset:      {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "connection reset by peer"},
 
 	// Group 6: txn
 	ErrTxnClosed:                  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "the transaction %s has been committed or aborted"},
@@ -1069,6 +1086,38 @@ func NewNoAvailableBackend(ctx context.Context) *Error {
 
 func NewBackendCannotConnect(ctx context.Context) *Error {
 	return newError(ctx, ErrBackendCannotConnect)
+}
+
+func NewServiceUnavailable(ctx context.Context, reason string) *Error {
+	return newError(ctx, ErrServiceUnavailable, reason)
+}
+
+func NewConnectionReset(ctx context.Context) *Error {
+	return newError(ctx, ErrConnectionReset)
+}
+
+// IsConnectionRelatedRPCError returns true if the error is related to network/connection
+// issues. This includes backend closed, connection failures, and service unavailability.
+// Note: Whether to retry on these errors depends on the caller's specific requirements.
+// Some callers (e.g., CDC) may retry on ErrClientClosed, while others may not.
+func IsConnectionRelatedRPCError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return IsMoErrCode(err, ErrBackendClosed) ||
+		IsMoErrCode(err, ErrNoAvailableBackend) ||
+		IsMoErrCode(err, ErrBackendCannotConnect) ||
+		IsMoErrCode(err, ErrServiceUnavailable) ||
+		IsMoErrCode(err, ErrConnectionReset)
+}
+
+// IsRPCClientClosed returns true if the error indicates the RPC client
+// has been closed. Whether to retry depends on the caller's shutdown logic.
+func IsRPCClientClosed(err error) bool {
+	if err == nil {
+		return false
+	}
+	return IsMoErrCode(err, ErrClientClosed)
 }
 
 func NewTxnClosed(ctx context.Context, txnID []byte) *Error {

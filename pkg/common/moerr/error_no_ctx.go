@@ -230,6 +230,14 @@ func NewBackendCannotConnectNoCtx(args ...any) *Error {
 	return newError(Context(), ErrBackendCannotConnect, args...)
 }
 
+func NewServiceUnavailableNoCtx(reason string) *Error {
+	return newError(Context(), ErrServiceUnavailable, reason)
+}
+
+func NewConnectionResetNoCtx() *Error {
+	return newError(Context(), ErrConnectionReset)
+}
+
 func NewTxnClosedNoCtx(txnID []byte) *Error {
 	id := "unknown"
 	if len(txnID) > 0 {
