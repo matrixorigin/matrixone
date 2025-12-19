@@ -306,7 +306,30 @@ get_owner_uid() {
     # Pre-create directories with correct permissions (before docker creates them as root)
     if [[ " ${DOCKER_COMPOSE_ARGS[*]} " =~ " up " ]]; then
         echo "Pre-creating directories with correct permissions..."
-        DATA_DIRS=("../../mo-data" "../../logs" "../../prometheus-data" "../../prometheus-local-data" "../../grafana-data" "../../grafana-local-data")
+        
+        # Initialize empty array for directories to create
+        DATA_DIRS=()
+        
+        # Add directories based on profile
+        # Check for prometheus-local profile first (only monitoring, no MatrixOne services)
+        if [[ " ${DOCKER_COMPOSE_ARGS[*]} " =~ " --profile prometheus-local " ]]; then
+            # Only create directories for prometheus-local profile
+            DATA_DIRS=("../../prometheus-local-data" "../../grafana-local-data")
+            # Pre-create subdirectories that Grafana might create
+            mkdir -p ../../grafana-local-data/dashboards 2>/dev/null || true
+            chown -R "$DOCKER_UID:$DOCKER_GID" ../../grafana-local-data/dashboards 2>/dev/null || true
+        else
+            # For matrixone profile, always need base directories
+            DATA_DIRS=("../../mo-data" "../../logs")
+            
+            # Add monitoring directories if prometheus profile is also used
+            if [[ " ${DOCKER_COMPOSE_ARGS[*]} " =~ " --profile prometheus " ]]; then
+                DATA_DIRS+=("../../prometheus-data" "../../grafana-data")
+                # Pre-create subdirectories that Grafana might create
+                mkdir -p ../../grafana-data/dashboards 2>/dev/null || true
+                chown -R "$DOCKER_UID:$DOCKER_GID" ../../grafana-data/dashboards 2>/dev/null || true
+            fi
+        fi
         
         # Create directories and set ownership immediately to prevent root ownership
         for dir in "${DATA_DIRS[@]}"; do
@@ -314,10 +337,6 @@ get_owner_uid() {
             # Try to set ownership immediately (may fail if dir exists and is root-owned, but that's OK)
             chown "$DOCKER_UID:$DOCKER_GID" "$dir" 2>/dev/null || true
         done
-        
-        # Pre-create subdirectories that Grafana might create
-        mkdir -p ../../grafana-data/dashboards ../../grafana-local-data/dashboards 2>/dev/null || true
-        chown -R "$DOCKER_UID:$DOCKER_GID" ../../grafana-data/dashboards ../../grafana-local-data/dashboards 2>/dev/null || true
         
         # Fix ownership for all directories (in case they exist but owned by root)
         # Recursively check and fix all subdirectories, not just top-level
