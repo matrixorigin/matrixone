@@ -1671,6 +1671,10 @@ func NewErrTooBigPrecision(ctx context.Context, precision int32, funcName string
 
 var contextFunc atomic.Value
 
+// noReportCtx is a cached context that suppresses error reporting.
+// Used by NoCtx functions for high-frequency errors that should not log.
+var noReportCtx context.Context
+
 func SetContextFunc(f func() context.Context) {
 	contextFunc.Store(f)
 }
@@ -1680,6 +1684,16 @@ func Context() context.Context {
 	return contextFunc.Load().(func() context.Context)()
 }
 
+// NoReportContext returns a context that suppresses error logging.
+// Use this for errors that are expected in retry loops or high-frequency paths.
+// When this context is passed to NewXXX functions, no log will be emitted,
+// but the error will still contain proper stack information.
+func NoReportContext() context.Context {
+	return noReportCtx
+}
+
 func init() {
 	SetContextFunc(func() context.Context { return context.Background() })
+	// Initialize the no-report context for high-frequency errors
+	noReportCtx = errutil.ContextWithNoReport(context.Background(), true)
 }
