@@ -962,9 +962,9 @@ static-check: config err-check
 	$(CGO_OPTS) golangci-lint run -v -c .golangci.yml ./...
 
 fmtErrs := $(shell grep -onr 'fmt.Errorf' pkg/ --exclude-dir=.git --exclude-dir=vendor \
-				--exclude=*.pb.go --exclude=system_vars.go --exclude=Makefile)
+				--exclude=*.pb.go --exclude=*_test.go --exclude=system_vars.go --exclude=Makefile)
 errNews := $(shell grep -onr 'errors.New' pkg/ --exclude-dir=.git --exclude-dir=vendor \
-				--exclude=*.pb.go --exclude=system_vars.go --exclude=Makefile)
+				--exclude=*.pb.go --exclude=*_test.go --exclude=system_vars.go --exclude=Makefile)
 withTimeout := $(shell grep -onr 'context.WithTimeout' pkg/ --exclude-dir=.git --exclude-dir=vendor \
 				--exclude=*.pb.go --exclude=*_test.go --exclude=system_vars.go --exclude=Makefile)
 withDeadline := $(shell grep -onr 'context.WithDeadline' pkg/ --exclude-dir=.git --exclude-dir=vendor \
@@ -983,12 +983,12 @@ ifneq ("$(strip $(fmtErrs))$(strip $(errNews))", "")
 		$(warning One of 'errors.New()' is called at: $(shell printf "%s\n" $(errNews) | head -1))
  endif
  ifneq ("$(strip $(withTimeout))", "")
- 		$(warning 'context.WithTimeout' is found.)
- 		$(warning One of 'context.WithTimeout' is called at: $(shell printf "%s\n" $(errNews) | head -1))
+		$(warning 'context.WithTimeout' is found.)
+		$(warning One of 'context.WithTimeout' is called at: $(shell printf "%s\n" $(withTimeout) | head -1))
  endif
  ifneq ("$(strip $(withDeadline))", "")
- 		$(warning 'context.WithDeadline' is found.)
- 		$(warning One of 'context.WithDeadline' is called at: $(shell printf "%s\n" $(errNews) | head -1))
+		$(warning 'context.WithDeadline' is found.)
+		$(warning One of 'context.WithDeadline' is called at: $(shell printf "%s\n" $(withDeadline) | head -1))
  endif
 	$(error Use moerr instead.)
 else

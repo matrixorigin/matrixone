@@ -61,7 +61,7 @@ func TestService(t *testing.T) {
 	rpcClient, err := morpc.NewClient("", bf, morpc.WithClientMaxBackendPerHost(1))
 	require.NoError(t, err)
 
-	rpcStream, err := rpcClient.NewStream(address, false)
+	rpcStream, err := rpcClient.NewStream(context.Background(), address, false)
 	require.NoError(t, err)
 
 	logtailClient, err := NewLogtailClient(context.TODO(), rpcStream, WithClientRequestPerSecond(100))

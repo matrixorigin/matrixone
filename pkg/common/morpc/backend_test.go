@@ -27,6 +27,7 @@ import (
 	"github.com/fagongzi/goetty/v2"
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/lni/goutils/leaktest"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1087,3 +1088,91 @@ var (
 		},
 	}
 )
+
+// TestIsExpectedReadErrorWithStandardEOF tests that standard io.EOF is recognized as expected error
+func TestIsExpectedReadErrorWithStandardEOF(t *testing.T) {
+	rb := &remoteBackend{}
+
+	// Standard io.EOF should be recognized
+	assert.True(t, rb.isExpectedReadError(io.EOF),
+		"standard io.EOF should be recognized as expected error")
+
+	// io.ErrUnexpectedEOF should also be recognized
+	assert.True(t, rb.isExpectedReadError(io.ErrUnexpectedEOF),
+		"io.ErrUnexpectedEOF should be recognized as expected error")
+
+	// backendClosed should be recognized
+	assert.True(t, rb.isExpectedReadError(backendClosed),
+		"backendClosed should be recognized as expected error")
+
+	// nil error should not be recognized
+	assert.False(t, rb.isExpectedReadError(nil),
+		"nil error should not be recognized as expected error")
+}
+
+// TestIsExpectedReadErrorWithWrappedEOF tests that wrapped io.EOF is correctly identified
+func TestIsExpectedReadErrorWithWrappedEOF(t *testing.T) {
+	rb := &remoteBackend{}
+
+	// Wrapped io.EOF using fmt.Errorf with %w should be recognized
+	wrappedEOF := fmt.Errorf("connection: %w", io.EOF)
+	assert.True(t, rb.isExpectedReadError(wrappedEOF),
+		"wrapped io.EOF should be recognized as expected error")
+
+	// Deeply wrapped io.EOF should also be recognized
+	deepWrappedEOF := fmt.Errorf("outer: %w", fmt.Errorf("inner: %w", io.EOF))
+	assert.True(t, rb.isExpectedReadError(deepWrappedEOF),
+		"deeply wrapped io.EOF should be recognized as expected error")
+
+	// Wrapped io.ErrUnexpectedEOF should also be recognized
+	wrappedUnexpectedEOF := fmt.Errorf("read failed: %w", io.ErrUnexpectedEOF)
+	assert.True(t, rb.isExpectedReadError(wrappedUnexpectedEOF),
+		"wrapped io.ErrUnexpectedEOF should be recognized as expected error")
+}
+
+// TestIsExpectedReadErrorWithConnectionErrors tests platform-specific connection errors
+func TestIsExpectedReadErrorWithConnectionErrors(t *testing.T) {
+	rb := &remoteBackend{}
+
+	// "use of closed network connection" should be recognized
+	closedConnErr := testError("use of closed network connection")
+	assert.True(t, rb.isExpectedReadError(closedConnErr),
+		"'use of closed network connection' should be recognized")
+
+	// "illegal state" should be recognized
+	illegalStateErr := testError("illegal state")
+	assert.True(t, rb.isExpectedReadError(illegalStateErr),
+		"'illegal state' should be recognized")
+
+	// "connection reset" should be recognized
+	connResetErr := testError("connection reset by peer")
+	assert.True(t, rb.isExpectedReadError(connResetErr),
+		"'connection reset' should be recognized")
+
+	// "broken pipe" should be recognized
+	brokenPipeErr := testError("broken pipe")
+	assert.True(t, rb.isExpectedReadError(brokenPipeErr),
+		"'broken pipe' should be recognized")
+
+	// Random error should not be recognized
+	randomErr := testError("some random error")
+	assert.False(t, rb.isExpectedReadError(randomErr),
+		"random error should not be recognized as expected error")
+}
+
+// TestIsExpectedReadErrorWithMoErrWrappedEOF tests moerr-wrapped EOF (moerr.Error doesn't implement Unwrap)
+func TestIsExpectedReadErrorWithMoErrWrappedEOF(t *testing.T) {
+	rb := &remoteBackend{}
+
+	// moerr.ConvertGoError converts io.EOF to moerr.NewUnexpectedEOF with "EOF" in message
+	// Since moerr.Error doesn't implement Unwrap(), errors.Is() won't match io.EOF
+	// But our string fallback "EOF" should catch it because the message is "unexpected end of file EOF"
+	convertedEOF := moerr.ConvertGoError(context.Background(), io.EOF)
+	assert.True(t, rb.isExpectedReadError(convertedEOF),
+		"moerr.ConvertGoError(io.EOF) should be recognized via string fallback, got: %q", convertedEOF.Error())
+
+	// Note: moerr.NewUnexpectedEOFNoCtx("something") produces "unexpected end of file something"
+	// which does NOT contain "EOF" substring, so it won't match.
+	// However, in practice, readLoop errors come from goetty conn.Read() which returns raw io.EOF,
+	// not moerr-wrapped errors. moerr wrapping only happens in RPC response serialization.
+}

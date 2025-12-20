@@ -15,6 +15,7 @@
 package cnclient
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/fagongzi/goetty/v2"
@@ -110,11 +111,11 @@ func NewPipelineClient(
 	return c, nil
 }
 
-func (c *pipelineClient) NewStream(backend string) (morpc.Stream, error) {
+func (c *pipelineClient) NewStream(ctx context.Context, backend string) (morpc.Stream, error) {
 	if backend == c.localServiceAddress {
 		return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("remote run pipeline in local: %s", backend))
 	}
-	return c.client.NewStream(backend, true)
+	return c.client.NewStream(ctx, backend, true)
 }
 
 func (c *pipelineClient) Raw() morpc.RPCClient {

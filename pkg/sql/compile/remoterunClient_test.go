@@ -44,7 +44,7 @@ type testPipelineClient struct {
 	genStream func(string) morpc.Stream
 }
 
-func (tPCli *testPipelineClient) NewStream(backend string) (morpc.Stream, error) {
+func (tPCli *testPipelineClient) NewStream(ctx context.Context, backend string) (morpc.Stream, error) {
 	return tPCli.genStream(backend), nil
 }
 

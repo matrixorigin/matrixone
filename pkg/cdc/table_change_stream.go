@@ -928,7 +928,8 @@ func (s *TableChangeStream) determineRetryable(err error) bool {
 		moerr.IsMoErrCode(err, moerr.ErrTNShardNotFound) ||
 		moerr.IsMoErrCode(err, moerr.ErrRpcError) ||
 		moerr.IsMoErrCode(err, moerr.ErrClientClosed) ||
-		moerr.IsMoErrCode(err, moerr.ErrBackendClosed) {
+		moerr.IsMoErrCode(err, moerr.ErrBackendClosed) ||
+		moerr.IsMoErrCode(err, moerr.ErrServiceUnavailable) {
 		return true
 	}
 
@@ -1015,6 +1016,7 @@ func (s *TableChangeStream) classifyErrorType(err error) string {
 		moerr.IsMoErrCode(err, moerr.ErrRpcError) ||
 		moerr.IsMoErrCode(err, moerr.ErrClientClosed) ||
 		moerr.IsMoErrCode(err, moerr.ErrBackendClosed) ||
+		moerr.IsMoErrCode(err, moerr.ErrServiceUnavailable) ||
 		errors.Is(err, context.DeadlineExceeded) ||
 		strings.Contains(errMsg, "connection") ||
 		strings.Contains(errMsg, "timeout") ||

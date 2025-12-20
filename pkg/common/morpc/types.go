@@ -89,8 +89,9 @@ type RPCClient interface {
 	Send(ctx context.Context, backend string, request Message) (*Future, error)
 	// NewStream create a stream used to asynchronous stream of sending and receiving messages.
 	// If the underlying connection is reset during the duration of the stream, then the stream will
-	// be closed.
-	NewStream(backend string, lock bool) (Stream, error)
+	// be closed. The context is used to control cancellation of stream creation; if the context
+	// is cancelled during connection establishment or retry backoff, NewStream will return immediately.
+	NewStream(ctx context.Context, backend string, lock bool) (Stream, error)
 	// Ping is used to check if the remote service is available. The remote service will reply with
 	// a pong when it receives the ping.
 	Ping(ctx context.Context, backend string) error
