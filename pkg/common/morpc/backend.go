@@ -16,7 +16,9 @@ package morpc
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net"
 	"runtime"
@@ -605,7 +607,8 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 				// Filter out expected errors that occur during normal connection lifecycle
 				if rb.isExpectedReadError(err) {
 					normalExit = true
-					rb.logger.Debug("read from backend failed", zap.Error(err))
+					// Per specification: io.EOF is a normal connection closure signal,
+					// do not log it to avoid unnecessary noise
 				} else {
 					rb.rateLimitLogger.Error("read-loop",
 						"read from backend failed",
@@ -1009,15 +1012,26 @@ func (rb *remoteBackend) isExpectedReadError(err error) bool {
 	if err == nil {
 		return false
 	}
+
+	// Use errors.Is() for accurate matching that supports wrapped errors
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+
+	if err == backendClosed {
+		return true
+	}
+
+	// String pattern matching as fallback for:
+	// 1. Platform-specific errors that don't implement Unwrap()
+	// 2. moerr-wrapped EOF (moerr.Error doesn't implement Unwrap())
+	// 3. goetty or other library wrapped errors
 	errStr := err.Error()
-	// These errors are expected during normal connection lifecycle:
-	// - "use of closed network connection": connection was closed by peer or locally
-	// - "illegal state": connection is in an invalid state (often during shutdown)
-	// - "EOF": end of file, connection closed normally
 	return strings.Contains(errStr, "use of closed network connection") ||
 		strings.Contains(errStr, "illegal state") ||
-		strings.Contains(errStr, "EOF") ||
-		err == backendClosed
+		strings.Contains(errStr, "EOF") || // Fallback for moerr-wrapped EOF
+		strings.Contains(errStr, "connection reset") ||
+		strings.Contains(errStr, "broken pipe")
 }
 
 // isExpectedCloseError checks if the error is an expected error when closing connections
