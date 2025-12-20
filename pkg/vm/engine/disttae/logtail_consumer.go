@@ -125,7 +125,6 @@ var (
 //		 1. if we want to lock both subscriber and subscribed, we should lock subscriber first.
 //		-----------------------------------------------------------------------------------------------------
 type PushClient struct {
-	ctx       context.Context
 	serviceID string
 	// Responsible for sending subscription / unsubscription requests to the service
 	// and receiving the log tail from service.
@@ -160,7 +159,7 @@ type PushClient struct {
 	receiver    []*routineController
 	eng         *Engine
 
-	LogtailRPCClientFactory func(string, string, morpc.RPCClient) (morpc.RPCClient, morpc.Stream, error)
+	LogtailRPCClientFactory func(context.Context, string, string, morpc.RPCClient) (morpc.RPCClient, morpc.Stream, error)
 
 	reconnectHandler func()
 }
@@ -288,6 +287,7 @@ func (c *connector) run(ctx context.Context) {
 }
 
 func (c *PushClient) init(
+	ctx context.Context,
 	serviceAddr string,
 	timestampWaiter client.TimestampWaiter,
 	e *Engine,
@@ -324,7 +324,7 @@ func (c *PushClient) init(
 	c.initialized = true
 
 	return c.subscriber.init(
-		c.ctx,
+		ctx,
 		e.GetService(),
 		serviceAddr,
 		c.LogtailRPCClientFactory,
@@ -877,7 +877,7 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 				time.Sleep(time.Second)
 
 				tnLogTailServerBackend := e.getLogTailServiceAddr()
-				if err := c.init(tnLogTailServerBackend, c.timestampWaiter, e); err != nil {
+				if err := c.init(ctx, tnLogTailServerBackend, c.timestampWaiter, e); err != nil {
 					logutil.Errorf("%s init push client failed: %v", logTag, err)
 					continue
 				}
@@ -912,7 +912,7 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 		}
 
 		tnLogTailServerBackend := e.getLogTailServiceAddr()
-		if err := c.init(tnLogTailServerBackend, c.timestampWaiter, e); err != nil {
+		if err := c.init(ctx, tnLogTailServerBackend, c.timestampWaiter, e); err != nil {
 			logutil.Errorf("%s rebuild the cn log tail client failed, reason: %s", logTag, err)
 			time.Sleep(retryReconnect)
 			continue
@@ -1518,6 +1518,7 @@ type logTailSubscriberResponse struct {
 // XXX generate a rpc client and new a stream.
 // we should hide these code into service's NewClient method next day.
 func DefaultNewRpcStreamToTnLogTailService(
+	ctx context.Context,
 	sid string,
 	serviceAddr string,
 	rpcClient morpc.RPCClient,
@@ -1549,7 +1550,7 @@ func DefaultNewRpcStreamToTnLogTailService(
 		rpcClient = c
 	}
 
-	stream, err := rpcClient.NewStream(serviceAddr, true)
+	stream, err := rpcClient.NewStream(ctx, serviceAddr, true)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1561,7 +1562,7 @@ func (s *logTailSubscriber) init(
 	ctx context.Context,
 	sid string,
 	serviceAddr string,
-	rpcStreamFactory func(string, string, morpc.RPCClient) (morpc.RPCClient, morpc.Stream, error)) (err error) {
+	rpcStreamFactory func(context.Context, string, string, morpc.RPCClient) (morpc.RPCClient, morpc.Stream, error)) (err error) {
 	// XXX we assume that we have only 1 tn now.
 	s.tnNodeID = 0
 	s.sid = sid
@@ -1574,7 +1575,7 @@ func (s *logTailSubscriber) init(
 		s.logTailClient = nil
 	}
 
-	rpcClient, rpcStream, err := rpcStreamFactory(sid, serviceAddr, s.rpcClient)
+	rpcClient, rpcStream, err := rpcStreamFactory(ctx, sid, serviceAddr, s.rpcClient)
 	if err != nil {
 		return err
 	}
@@ -1735,7 +1736,7 @@ func (e *Engine) InitLogTailPushModel(ctx context.Context, timestampWaiter clien
 		}
 
 		// get log tail service address.
-		if err := e.pClient.init(logTailServerAddr, timestampWaiter, e); err != nil {
+		if err := e.pClient.init(ctx, logTailServerAddr, timestampWaiter, e); err != nil {
 			logutil.Error(
 				"logtail.consumer.init.push.model.client.failed",
 				zap.Error(err),

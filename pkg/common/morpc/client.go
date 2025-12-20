@@ -357,7 +357,11 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 	}
 }
 
-func (c *client) NewStream(backend string, lock bool) (Stream, error) {
+func (c *client) NewStream(ctx context.Context, backend string, lock bool) (Stream, error) {
+	if ctx == nil {
+		panic("client NewStream nil context")
+	}
+
 	// Check circuit breaker before attempting
 	if !c.circuitBreakers.Allow(backend) {
 		return nil, ErrCircuitOpen
@@ -368,6 +372,13 @@ func (c *client) NewStream(backend string, lock bool) (Stream, error) {
 	retryCount := 0
 
 	for {
+		// Check context before attempting
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
 		b, err := c.getBackend(backend, lock)
 		if err != nil {
 			// Don't count client-level errors (like ErrClientClosed) as circuit breaker failures
@@ -398,7 +409,11 @@ func (c *client) NewStream(backend string, lock bool) (Stream, error) {
 			// Calculate next backoff with jitter
 			backoff = policy.nextBackoff(backoff)
 			if backoff > 0 {
-				time.Sleep(backoff)
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				case <-time.After(backoff):
+				}
 			}
 
 			if retryCount <= 3 || retryCount%10 == 0 {

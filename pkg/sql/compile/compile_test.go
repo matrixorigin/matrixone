@@ -301,7 +301,7 @@ func (tRpcClient *testRpcClient) Send(ctx context.Context, backend string, reque
 	panic("implement me")
 }
 
-func (tRpcClient *testRpcClient) NewStream(backend string, lock bool) (morpc.Stream, error) {
+func (tRpcClient *testRpcClient) NewStream(ctx context.Context, backend string, lock bool) (morpc.Stream, error) {
 	//TODO implement me
 	panic("implement me")
 }
