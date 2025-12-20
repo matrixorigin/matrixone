@@ -199,34 +199,50 @@ func TestIsDefinitiveFailure(t *testing.T) {
 // TestLockserviceCompatibility verifies that the new API is compatible with
 // lockservice's isRetryError semantics.
 // lockservice: isRetryError returns FALSE for ErrBackendClosed/ErrBackendCannotConnect
-// Our equivalent: IsDefinitiveFailure returns TRUE for these errors
+// Our equivalent: IsRemoteUnavailable returns TRUE for these errors (exact match)
 func TestLockserviceCompatibility(t *testing.T) {
-	// These should be "definitive" (lockservice: !isRetryError)
-	definitiveErrors := []error{
+	// These should be "remote unavailable" (lockservice: !isRetryError)
+	// IsRemoteUnavailable is the exact equivalent of !isRetryError
+	remoteUnavailableErrors := []error{
 		moerr.NewBackendClosedNoCtx(),
 		moerr.NewBackendCannotConnectNoCtx(errors.New("test")),
 	}
 
-	for _, err := range definitiveErrors {
-		assert.True(t, IsDefinitiveFailure(err),
-			"lockservice expects this to be definitive: %v", err)
+	for _, err := range remoteUnavailableErrors {
+		assert.True(t, IsRemoteUnavailable(err),
+			"lockservice expects this to be remote unavailable: %v", err)
 		assert.True(t, IsUnavailable(err),
 			"should be unavailable: %v", err)
 	}
 
-	// These should be "transient" (lockservice: isRetryError returns true)
-	transientErrors := []error{
+	// These should NOT be "remote unavailable" (lockservice: isRetryError returns true)
+	// But some ARE still definitive in broader terms
+	nonRemoteUnavailableErrors := []error{
 		moerr.NewRPCTimeoutNoCtx(),
 		context.DeadlineExceeded,
 		io.EOF,
+		moerr.NewNoAvailableBackendNoCtx(), // NOT remote unavailable (could be routing issue)
+		moerr.NewClientClosedNoCtx(),       // NOT remote unavailable (local shutdown)
 	}
 
-	for _, err := range transientErrors {
-		assert.False(t, IsDefinitiveFailure(err),
-			"lockservice expects this to be transient: %v", err)
-		assert.True(t, IsTransient(err),
-			"should be transient: %v", err)
+	for _, err := range nonRemoteUnavailableErrors {
+		assert.False(t, IsRemoteUnavailable(err),
+			"lockservice expects this to NOT be remote unavailable: %v", err)
 	}
+}
+
+func TestIsRemoteUnavailable(t *testing.T) {
+	// Only these two errors should be "remote unavailable"
+	assert.True(t, IsRemoteUnavailable(moerr.NewBackendClosedNoCtx()))
+	assert.True(t, IsRemoteUnavailable(moerr.NewBackendCannotConnectNoCtx(errors.New("test"))))
+
+	// These are NOT remote unavailable (different semantics)
+	assert.False(t, IsRemoteUnavailable(nil))
+	assert.False(t, IsRemoteUnavailable(moerr.NewNoAvailableBackendNoCtx()))    // routing issue
+	assert.False(t, IsRemoteUnavailable(moerr.NewClientClosedNoCtx()))          // local shutdown
+	assert.False(t, IsRemoteUnavailable(moerr.NewRPCTimeoutNoCtx()))            // timeout
+	assert.False(t, IsRemoteUnavailable(moerr.NewServiceUnavailableNoCtx("x"))) // transient
+	assert.False(t, IsRemoteUnavailable(context.Canceled))                      // cancelled
 }
 
 // TestCDCCompatibility verifies that the new API is compatible with

@@ -190,10 +190,35 @@ func IsRetryableForCDC(err error) bool {
 // where the remote service is considered unavailable.
 // This is the opposite of "transient" - the failure is not temporary.
 //
-// Usage (lockservice style):
-//   - If true: The remote is definitely gone, take action (refresh bindings, etc.)
+// This is a BROAD definition that includes:
+//   - StatusUnavailable: ErrBackendClosed, ErrBackendCannotConnect, ErrNoAvailableBackend
+//   - StatusCancelled: ErrClientClosed, context.Canceled
+//
+// Usage (CDC/general style):
+//   - If true: The remote is definitely gone, take action
 //   - If false: Be conservative, assume things might still be OK
+//
+// For lockservice-specific semantics (more conservative), use IsRemoteUnavailable().
 func IsDefinitiveFailure(err error) bool {
 	cat := GetStatusCategory(err)
 	return cat == StatusUnavailable || cat == StatusCancelled
+}
+
+// IsRemoteUnavailable returns true ONLY if the specific remote backend is
+// definitely unreachable. This matches lockservice's original isRetryError semantics.
+//
+// Only these errors qualify:
+//   - ErrBackendClosed: The specific backend connection is closed
+//   - ErrBackendCannotConnect: Cannot connect to the specific backend
+//
+// This is MORE CONSERVATIVE than IsDefinitiveFailure() because:
+//   - ErrNoAvailableBackend is NOT included (could be temporary routing issue)
+//   - ErrClientClosed is NOT included (local shutdown, not remote failure)
+//
+// Usage (lockservice style):
+//   - If true: The SPECIFIC remote backend is gone, refresh bindings immediately
+//   - If false: Be conservative, the remote might still be there
+func IsRemoteUnavailable(err error) bool {
+	return moerr.IsMoErrCode(err, moerr.ErrBackendClosed) ||
+		moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect)
 }
