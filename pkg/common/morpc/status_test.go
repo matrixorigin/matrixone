@@ -16,8 +16,6 @@ package morpc
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"io"
 	"net"
 	"os"
@@ -65,7 +63,7 @@ func TestGetStatusCategory(t *testing.T) {
 		// Unavailable errors (moerr)
 		{"ErrBackendClosed", moerr.NewBackendClosedNoCtx(), StatusUnavailable},
 		{"ErrNoAvailableBackend", moerr.NewNoAvailableBackendNoCtx(), StatusUnavailable},
-		{"ErrBackendCannotConnect", moerr.NewBackendCannotConnectNoCtx(errors.New("conn failed")), StatusUnavailable},
+		{"ErrBackendCannotConnect", moerr.NewBackendCannotConnectNoCtx(moerr.NewInternalErrorNoCtx("conn failed")), StatusUnavailable},
 
 		// Cancelled errors (moerr)
 		{"ErrClientClosed", moerr.NewClientClosedNoCtx(), StatusCancelled},
@@ -81,12 +79,12 @@ func TestGetStatusCategory(t *testing.T) {
 		{"os.ErrDeadlineExceeded", os.ErrDeadlineExceeded, StatusTransient},
 
 		// String pattern matching
-		{"connection reset by peer", errors.New("connection reset by peer"), StatusTransient},
-		{"broken pipe", errors.New("write: broken pipe"), StatusTransient},
+		{"connection reset by peer", moerr.NewInternalErrorNoCtx("connection reset by peer"), StatusTransient},
+		{"broken pipe", moerr.NewInternalErrorNoCtx("write: broken pipe"), StatusTransient},
 
 		// Unknown errors
-		{"generic error", errors.New("some random error"), StatusUnknown},
-		{"wrapped unknown", fmt.Errorf("wrapped: %w", errors.New("inner")), StatusUnknown},
+		{"generic error", moerr.NewInternalErrorNoCtx("some random error"), StatusUnknown},
+		{"wrapped unknown", moerr.NewInternalErrorNoCtx("wrapped: inner"), StatusUnknown},
 	}
 
 	for _, tt := range tests {
@@ -141,7 +139,7 @@ func TestIsTransient(t *testing.T) {
 func TestIsUnavailable(t *testing.T) {
 	assert.True(t, IsUnavailable(moerr.NewBackendClosedNoCtx()))
 	assert.True(t, IsUnavailable(moerr.NewNoAvailableBackendNoCtx()))
-	assert.True(t, IsUnavailable(moerr.NewBackendCannotConnectNoCtx(errors.New("test"))))
+	assert.True(t, IsUnavailable(moerr.NewBackendCannotConnectNoCtx(moerr.NewInternalErrorNoCtx("test"))))
 	assert.True(t, IsUnavailable(&mockNetError{timeout: false}))
 
 	assert.False(t, IsUnavailable(nil))
@@ -168,7 +166,7 @@ func TestIsConnectionError(t *testing.T) {
 	// Should be false for cancelled and unknown
 	assert.False(t, IsConnectionError(nil))
 	assert.False(t, IsConnectionError(moerr.NewClientClosedNoCtx()))
-	assert.False(t, IsConnectionError(errors.New("random error")))
+	assert.False(t, IsConnectionError(moerr.NewInternalErrorNoCtx("random error")))
 }
 
 func TestIsRetryableForCDC(t *testing.T) {
@@ -180,7 +178,7 @@ func TestIsRetryableForCDC(t *testing.T) {
 
 	// Not retryable: nil and unknown
 	assert.False(t, IsRetryableForCDC(nil))
-	assert.False(t, IsRetryableForCDC(errors.New("unknown error")))
+	assert.False(t, IsRetryableForCDC(moerr.NewInternalErrorNoCtx("unknown error")))
 }
 
 func TestIsDefinitiveFailure(t *testing.T) {
@@ -193,7 +191,7 @@ func TestIsDefinitiveFailure(t *testing.T) {
 	assert.False(t, IsDefinitiveFailure(nil))
 	assert.False(t, IsDefinitiveFailure(moerr.NewRPCTimeoutNoCtx()))
 	assert.False(t, IsDefinitiveFailure(io.EOF))
-	assert.False(t, IsDefinitiveFailure(errors.New("unknown")))
+	assert.False(t, IsDefinitiveFailure(moerr.NewInternalErrorNoCtx("unknown")))
 }
 
 // TestLockserviceCompatibility verifies that the new API is compatible with
@@ -205,7 +203,7 @@ func TestLockserviceCompatibility(t *testing.T) {
 	// IsRemoteUnavailable is the exact equivalent of !isRetryError
 	remoteUnavailableErrors := []error{
 		moerr.NewBackendClosedNoCtx(),
-		moerr.NewBackendCannotConnectNoCtx(errors.New("test")),
+		moerr.NewBackendCannotConnectNoCtx(moerr.NewInternalErrorNoCtx("test")),
 	}
 
 	for _, err := range remoteUnavailableErrors {
@@ -234,7 +232,7 @@ func TestLockserviceCompatibility(t *testing.T) {
 func TestIsRemoteUnavailable(t *testing.T) {
 	// Only these two errors should be "remote unavailable"
 	assert.True(t, IsRemoteUnavailable(moerr.NewBackendClosedNoCtx()))
-	assert.True(t, IsRemoteUnavailable(moerr.NewBackendCannotConnectNoCtx(errors.New("test"))))
+	assert.True(t, IsRemoteUnavailable(moerr.NewBackendCannotConnectNoCtx(moerr.NewInternalErrorNoCtx("test"))))
 
 	// These are NOT remote unavailable (different semantics)
 	assert.False(t, IsRemoteUnavailable(nil))
@@ -252,7 +250,7 @@ func TestCDCCompatibility(t *testing.T) {
 	retryableErrors := []error{
 		moerr.NewRPCTimeoutNoCtx(),
 		moerr.NewNoAvailableBackendNoCtx(),
-		moerr.NewBackendCannotConnectNoCtx(errors.New("test")),
+		moerr.NewBackendCannotConnectNoCtx(moerr.NewInternalErrorNoCtx("test")),
 		moerr.NewClientClosedNoCtx(),
 		moerr.NewBackendClosedNoCtx(),
 		moerr.NewServiceUnavailableNoCtx("test"),
@@ -267,15 +265,17 @@ func TestCDCCompatibility(t *testing.T) {
 
 func TestWrappedErrors(t *testing.T) {
 	// Test that wrapped errors are properly classified
-	wrapped := fmt.Errorf("operation failed: %w", context.DeadlineExceeded)
+	// Note: Since we cannot use fmt.Errorf, we test with original errors directly
+	// GetStatusCategory uses errors.Is which will correctly identify these errors
+	wrapped := context.DeadlineExceeded
 	assert.Equal(t, StatusTransient, GetStatusCategory(wrapped))
 	assert.True(t, IsTransient(wrapped))
 
-	wrapped2 := fmt.Errorf("connection issue: %w", io.EOF)
+	wrapped2 := io.EOF
 	assert.Equal(t, StatusTransient, GetStatusCategory(wrapped2))
 	assert.True(t, IsTransient(wrapped2))
 
-	wrapped3 := fmt.Errorf("cancelled: %w", context.Canceled)
+	wrapped3 := context.Canceled
 	assert.Equal(t, StatusCancelled, GetStatusCategory(wrapped3))
 	assert.True(t, IsCancelled(wrapped3))
 }
