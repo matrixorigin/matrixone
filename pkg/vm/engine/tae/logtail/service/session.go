@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -322,11 +323,19 @@ func NewSession(
 					ss.OnAfterSend(now, cnt, msg.response.ProtoSize())
 					if err != nil {
 						err = moerr.AttachCause(ctx, err)
-						ss.logger.Error("fail to send logtail response",
-							zap.Error(err),
-							zap.String("timeout", msg.timeout.String()),
-							zap.String("remote address", ss.RemoteAddress()),
-						)
+						if logutil.IsExpectedConnectionCloseError(err) {
+							ss.logger.Debug("fail to send logtail response (connection closed)",
+								zap.Error(err),
+								zap.String("timeout", msg.timeout.String()),
+								zap.String("remote address", ss.RemoteAddress()),
+							)
+						} else {
+							ss.logger.Error("fail to send logtail response",
+								zap.Error(err),
+								zap.String("timeout", msg.timeout.String()),
+								zap.String("remote address", ss.RemoteAddress()),
+							)
+						}
 						return err
 					}
 					return nil

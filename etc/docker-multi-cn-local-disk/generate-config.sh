@@ -48,7 +48,7 @@ DEFAULT_MEMORY_CACHE="512MB"
 DEFAULT_DISK_CACHE="8GB"
 DEFAULT_CACHE_DIR="/mo-data/file-service-cache"
 DEFAULT_DISABLE_TRACE="true"
-DEFAULT_DISABLE_METRIC="true"
+DEFAULT_DISABLE_METRIC="false"  # Always enable metrics for dev-up
 
 echo "Configuration Summary:"
 echo "======================"
@@ -151,6 +151,17 @@ backend = "DISK-ETL"
 [observability]
 disableTrace = $CN1_DISABLE_TRACE
 disableMetric = $CN1_DISABLE_METRIC
+EOF
+
+# Add metrics config if enabled
+if [ "$CN1_DISABLE_METRIC" = "false" ]; then
+    cat >> cn1.toml << EOF
+enable-metric-to-prom = true
+status-port = 7001
+EOF
+fi
+
+cat >> cn1.toml << EOF
 
 [cn]
 uuid = "dd1dccb4-4d3c-41f8-b482-5251dc7a41bf"
@@ -216,6 +227,17 @@ backend = "DISK-ETL"
 [observability]
 disableTrace = $CN2_DISABLE_TRACE
 disableMetric = $CN2_DISABLE_METRIC
+EOF
+
+# Add metrics config if enabled
+if [ "$CN2_DISABLE_METRIC" = "false" ]; then
+    cat >> cn2.toml << EOF
+enable-metric-to-prom = true
+status-port = 7001
+EOF
+fi
+
+cat >> cn2.toml << EOF
 
 [cn]
 uuid = "dd2dccb4-4d3c-41f8-b482-5251dc7a41be"
@@ -241,6 +263,7 @@ LOG_LOG_MAX_SIZE=$(get_config "LOG" "LOG_" "$DEFAULT_LOG_MAX_SIZE" "LOG_MAX_SIZE
 LOG_MEMORY_CACHE=$(get_config "LOG" "LOG_" "$DEFAULT_MEMORY_CACHE" "MEMORY_CACHE")
 LOG_DISK_CACHE=$(get_config "LOG" "LOG_" "$DEFAULT_DISK_CACHE" "DISK_CACHE")
 LOG_CACHE_DIR=$(get_config "LOG" "LOG_" "$DEFAULT_CACHE_DIR" "CACHE_DIR")
+LOG_DISABLE_METRIC=$(get_config "LOG" "LOG_" "$DEFAULT_DISABLE_METRIC" "DISABLE_METRIC")
 
 # Generate log service config
 cat > log.toml << EOF
@@ -273,8 +296,21 @@ name = "ETL"
 backend = "DISK-ETL"
 
 [observability]
+EOF
+
+# Add metrics config based on LOG_DISABLE_METRIC
+if [ "$LOG_DISABLE_METRIC" = "false" ]; then
+    cat >> log.toml << EOF
+disableMetric = false
+enable-metric-to-prom = true
 status-port = 7001
 EOF
+else
+    cat >> log.toml << EOF
+disableMetric = true
+status-port = 7001
+EOF
+fi
 
 # Get TN-specific configs
 TN_LOG_LEVEL=$(get_config "TN" "TN_" "$DEFAULT_LOG_LEVEL" "LOG_LEVEL")
@@ -323,6 +359,17 @@ backend = "DISK-ETL"
 [observability]
 disableTrace = $TN_DISABLE_TRACE
 disableMetric = $TN_DISABLE_METRIC
+EOF
+
+# Add metrics config if enabled
+if [ "$TN_DISABLE_METRIC" = "false" ]; then
+    cat >> tn.toml << EOF
+enable-metric-to-prom = true
+status-port = 7001
+EOF
+fi
+
+cat >> tn.toml << EOF
 
 [dn]
 uuid = "dd4dccb4-4d3c-41f8-b482-5251dc7a41bd"
@@ -389,6 +436,17 @@ backend = "DISK-ETL"
 [observability]
 disableTrace = $PROXY_DISABLE_TRACE
 disableMetric = $PROXY_DISABLE_METRIC
+EOF
+
+# Add metrics config if enabled
+if [ "$PROXY_DISABLE_METRIC" = "false" ]; then
+    cat >> proxy.toml << EOF
+enable-metric-to-prom = true
+status-port = 7001
+EOF
+fi
+
+cat >> proxy.toml << EOF
 
 [proxy]
 uuid = "rd1dccb4-4d3c-41f8-b482-5251dc7a41bf"

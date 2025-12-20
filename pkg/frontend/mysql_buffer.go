@@ -25,8 +25,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -274,7 +272,7 @@ func (c *Conn) Close() error {
 
 		err = c.closeConn()
 		if err != nil {
-			logutil.Error("close conn error", zap.Error(err))
+			logutil.LogConnectionCloseError("close conn error", err)
 		}
 		c.ses.Store(&holder[*Session]{})
 		rm := getRtMgr(c.service)
