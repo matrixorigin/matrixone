@@ -698,15 +698,6 @@ func logUnlockTableOnRemote(
 	}
 }
 
-func logUnlockTableOnRemoteFailed(
-	logger *log.MOLogger,
-	txn *activeTxn,
-	bind pb.LockTable,
-	err error,
-) {
-	logUnlockTableOnRemoteFailedWithCount(logger, txn, bind, err, 0)
-}
-
 func logUnlockTableOnRemoteFailedWithCount(
 	logger *log.MOLogger,
 	txn *activeTxn,
