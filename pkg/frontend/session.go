@@ -1572,11 +1572,12 @@ func (ses *Session) getCNLabels() map[string]string {
 func (ses *Session) SetNewResponse(category int, affectedRows uint64, cmd int, d interface{}, isLastStmt bool) *Response {
 	// If the stmt has next stmt, should add SERVER_MORE_RESULTS_EXISTS to the server status.
 	var resp *Response
+	serverStatus := ses.GetTxnHandler().GetServerStatus()
 	if !isLastStmt {
 		resp = NewResponse(category, affectedRows, 0, 0,
-			ses.GetTxnHandler().GetServerStatus()|SERVER_MORE_RESULTS_EXISTS, cmd, d)
+			serverStatus|SERVER_MORE_RESULTS_EXISTS, cmd, d)
 	} else {
-		resp = NewResponse(category, affectedRows, 0, 0, ses.GetTxnHandler().GetServerStatus(), cmd, d)
+		resp = NewResponse(category, affectedRows, 0, 0, serverStatus, cmd, d)
 	}
 	return resp
 }
