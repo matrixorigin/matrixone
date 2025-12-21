@@ -446,8 +446,6 @@ func handleDataBranch(
 	default:
 		return moerr.NewNotSupportedNoCtxf("data branch not supported: %v", st)
 	}
-
-	return nil
 }
 
 func dataBranchCreateTable(
