@@ -1055,9 +1055,29 @@ func (c *PushClient) doGCPartitionState(ctx context.Context, e *Engine) {
 	}
 	e.Unlock()
 	ts := types.BuildTS(time.Now().UTC().UnixNano()-gcPartitionStateTimer.Nanoseconds()*5, 0)
+	collector := logtailreplay.NewTruncateCollector()
 	for ids, part := range parts {
-		part.Truncate(ctx, ids, ts)
+		part.Truncate(ctx, ids, ts, collector)
 	}
+
+	// Batch print: every 100 items per line
+	infos := collector.GetAll()
+	const itemsPerLine = 100
+	for i := 0; i < len(infos); i += itemsPerLine {
+		end := i + itemsPerLine
+		if end > len(infos) {
+			end = len(infos)
+		}
+		items := infos[i:end]
+
+		logutil.Info(
+			"partition.state.truncate",
+			zap.Int("count", len(items)),
+			zap.Int("total-count", len(infos)),
+			zap.Any("items", items),
+		)
+	}
+
 	e.catalog.Load().GC(ts.ToTimestamp())
 }
 
