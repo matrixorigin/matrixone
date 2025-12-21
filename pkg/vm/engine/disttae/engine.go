@@ -223,8 +223,9 @@ func (e *Engine) ForceGC(ctx context.Context, ts types.TS) {
 		parts[ids] = part
 	}
 	e.Unlock()
+	collector := logtailreplay.NewTruncateCollector()
 	for ids, part := range parts {
-		part.Truncate(ctx, ids, ts)
+		part.Truncate(ctx, ids, ts, collector)
 	}
 	e.catalog.Load().GC(ts.ToTimestamp())
 }
