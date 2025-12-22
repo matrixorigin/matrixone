@@ -314,8 +314,16 @@ func TestExecuteIteration(t *testing.T) {
 	require.NoError(t, err)
 
 	// Insert data into source table
-	bat := catalog2.MockBatch(schema, 10)
-	err = rel.Write(srcCtxWithTimeout, containers.ToCNBatch(bat))
+	// Create a batch with 15 rows, then split it: first 10 rows, then 5 rows
+	// Use CloneWindow to create deep copies to avoid modifying the original batch
+	bat := catalog2.MockBatch(schema, 15)
+	mpForBatch, err := mpool.NewMPool("test_batch_split", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	bat1 := bat.CloneWindow(0, 10, mpForBatch)
+	defer bat1.Close()
+	bat2 := bat.CloneWindow(10, 5, mpForBatch)
+	defer bat2.Close()
+	err = rel.Write(srcCtxWithTimeout, containers.ToCNBatch(bat1))
 	require.NoError(t, err)
 
 	err = txn.Commit(srcCtxWithTimeout)
@@ -444,6 +452,129 @@ func TestExecuteIteration(t *testing.T) {
 	require.True(t, found, "should find the updated iteration record")
 
 	err = txn.Commit(querySystemCtx)
+	require.NoError(t, err)
+
+	// Step 4: Check destination table row count after first iteration
+	// The destination table should have 10 rows (same as source table)
+	checkRowCountSQL := fmt.Sprintf(`SELECT COUNT(*) FROM %s.%s`, srcDBName, srcTableName)
+	queryDestCtx := context.WithValue(destCtxWithTimeout, defines.TenantIDKey{}, destAccountID)
+	txn, err = disttaeEngine.NewTxnOperator(queryDestCtx, disttaeEngine.Now())
+	require.NoError(t, err)
+
+	rowCountRes, err := exec.Exec(queryDestCtx, checkRowCountSQL, executor.Options{}.WithTxn(txn))
+	require.NoError(t, err)
+	defer rowCountRes.Close()
+
+	var firstIterationRowCount int64
+	rowCountRes.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		require.Equal(t, 1, rows)
+		require.Equal(t, 1, len(cols))
+		firstIterationRowCount = vector.GetFixedAtWithTypeCheck[int64](cols[0], 0)
+		return true
+	})
+	require.Equal(t, int64(10), firstIterationRowCount, "destination table should have 10 rows after first iteration")
+
+	err = txn.Commit(queryDestCtx)
+	require.NoError(t, err)
+
+	// Step 5: Insert more data into source table
+	txn, err = disttaeEngine.NewTxnOperator(srcCtxWithTimeout, disttaeEngine.Now())
+	require.NoError(t, err)
+
+	db, err = disttaeEngine.Engine.Database(srcCtxWithTimeout, srcDBName, txn)
+	require.NoError(t, err)
+
+	rel, err = db.Relation(srcCtxWithTimeout, srcTableName, nil)
+	require.NoError(t, err)
+
+	// Insert 5 more rows into source table from the same batch (rows 10-15)
+	// bat2 was already created above using CloneWindow, before the first write
+	err = rel.Write(srcCtxWithTimeout, containers.ToCNBatch(bat2))
+	require.NoError(t, err)
+
+	err = txn.Commit(srcCtxWithTimeout)
+	require.NoError(t, err)
+
+	// Force flush the table again
+	err = taeHandler.GetDB().FlushTable(srcCtxWithTimeout, srcAccountID, dbID, tableID, types.TimestampToTS(disttaeEngine.Now()))
+	require.NoError(t, err)
+
+	// Step 6: Update mo_ccpr_log for second iteration
+	iterationLSN = uint64(2)
+	iterationState = publication.IterationStatePending
+	updateSQL := fmt.Sprintf(
+		`UPDATE mo_catalog.mo_ccpr_log 
+		SET iteration_state = %d, iteration_lsn = %d 
+		WHERE task_id = %d`,
+		publication.IterationStatePending,
+		iterationLSN,
+		taskID,
+	)
+
+	err = exec_sql(disttaeEngine, systemCtx, updateSQL)
+	require.NoError(t, err)
+
+	// Step 7: Call ExecuteIteration again
+	err = publication.ExecuteIteration(
+		srcCtxWithTimeout,
+		cnUUID,
+		disttaeEngine.Engine,
+		disttaeEngine.GetTxnClient(),
+		taskID,
+		iterationLSN,
+		iterationState,
+		upstreamSQLHelperFactory,
+		mp,
+	)
+
+	// The second iteration should complete successfully
+	require.NoError(t, err)
+
+	// Step 8: Verify that the second iteration state was updated
+	txn, err = disttaeEngine.NewTxnOperator(querySystemCtx, disttaeEngine.Now())
+	require.NoError(t, err)
+
+	res, err = exec.Exec(querySystemCtx, querySQL, executor.Options{}.WithTxn(txn))
+	require.NoError(t, err)
+	defer res.Close()
+
+	found = false
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		require.Equal(t, 1, rows)
+		require.Equal(t, 2, len(cols))
+
+		state := vector.GetFixedAtWithTypeCheck[int8](cols[0], 0)
+		lsn := vector.GetFixedAtWithTypeCheck[int64](cols[1], 0)
+
+		require.Equal(t, publication.IterationStateCompleted, state)
+		require.Equal(t, int64(iterationLSN), lsn)
+		found = true
+		return true
+	})
+	require.True(t, found, "should find the updated iteration record for second iteration")
+
+	err = txn.Commit(querySystemCtx)
+	require.NoError(t, err)
+
+	// Step 9: Check destination table row count after second iteration
+	// The destination table should now have 15 rows (10 + 5)
+	txn, err = disttaeEngine.NewTxnOperator(queryDestCtx, disttaeEngine.Now())
+	require.NoError(t, err)
+
+	rowCountRes, err = exec.Exec(queryDestCtx, checkRowCountSQL, executor.Options{}.WithTxn(txn))
+	require.NoError(t, err)
+	defer rowCountRes.Close()
+
+	var secondIterationRowCount int64
+	rowCountRes.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		require.Equal(t, 1, rows)
+		require.Equal(t, 1, len(cols))
+		secondIterationRowCount = vector.GetFixedAtWithTypeCheck[int64](cols[0], 0)
+		return true
+	})
+	require.Equal(t, int64(15), secondIterationRowCount, "destination table should have 15 rows after second iteration")
+
+	err = txn.Commit(queryDestCtx)
 	require.NoError(t, err)
 
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))

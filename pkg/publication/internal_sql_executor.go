@@ -549,6 +549,22 @@ func extractVectorValue(vec *vector.Vector, idx uint64, dest interface{}) error 
 			return moerr.NewInternalErrorNoCtx(fmt.Sprintf("destination type mismatch for TS, type %T", dest))
 		}
 
+	case types.T_json:
+		bytesVal := vec.GetBytesAt(int(idx))
+		byteJson := types.DecodeJson(bytesVal)
+		if d, ok := dest.(*string); ok {
+			*d = byteJson.String()
+		} else if d, ok := dest.(*sql.NullString); ok {
+			d.String = byteJson.String()
+			d.Valid = true
+		} else if d, ok := dest.(*[]byte); ok {
+			// For byte slice, get the JSON bytes and make a copy
+			*d = make([]byte, len(bytesVal))
+			copy(*d, bytesVal)
+		} else {
+			return moerr.NewInternalErrorNoCtx(fmt.Sprintf("destination type mismatch for JSON, type %T", dest))
+		}
+
 	default:
 		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("unsupported vector type: %v, type %T", vec.GetType().Oid, dest))
 	}
