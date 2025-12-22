@@ -37,10 +37,10 @@ const (
 // SrcInfo contains source information for subscription
 // It can be account/database/table level
 type SrcInfo struct {
-	SyncLevel   string // 'account', 'database', or 'table'
-	DBName      string // Required for database/table level
-	TableName   string // Required for table level
-	AccountName string // Optional, for account level
+	SyncLevel string // 'account', 'database', or 'table'
+	DBName    string // Required for database/table level
+	TableName string // Required for table level
+	AccountID uint32 // Account ID for downstream operations
 }
 
 // ObjectStats represents object statistics

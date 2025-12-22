@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -115,7 +116,7 @@ func GetUpstreamDDLUsingGetDdl(
 
 		dbNameStr := dbNameResult.String
 		tableNameStr := tableNameResult.String
-		
+
 		if isIndexTable(tableNameStr) {
 			continue
 		}
@@ -182,8 +183,10 @@ func ProcessDDLChanges(
 	}
 
 	// Step 2: Fill DDL operations
+	// Use downstream account ID from iterationCtx.SrcInfo
+	downstreamCtx := context.WithValue(ctx, defines.TenantIDKey{}, iterationCtx.SrcInfo.AccountID)
 	dbToDrop, err := FillDDLOperation(
-		ctx,
+		downstreamCtx,
 		cnEngine,
 		ddlMap,
 		iterationCtx.TableIDs,
@@ -195,6 +198,7 @@ func ProcessDDLChanges(
 	}
 
 	// Step 3: Execute DDL operations for tables with non-empty operations
+	// Use downstream account ID from iterationCtx.SrcInfo
 	for dbName, tables := range ddlMap {
 		for tableName, ddlInfo := range tables {
 			if ddlInfo.Operation == 0 {
@@ -206,7 +210,7 @@ func ProcessDDLChanges(
 			case DDLOperationCreate:
 				// Execute CREATE TABLE
 				if ddlInfo.TableCreateSQL != "" {
-					if err := createTable(ctx, iterationCtx.LocalExecutor, dbName, tableName, ddlInfo.TableCreateSQL); err != nil {
+					if err := createTable(downstreamCtx, iterationCtx.LocalExecutor, dbName, tableName, ddlInfo.TableCreateSQL); err != nil {
 						return moerr.NewInternalErrorf(ctx, "failed to create table %s.%s: %v", dbName, tableName, err)
 					}
 					// Update TableIDs after successful table creation
@@ -220,16 +224,16 @@ func ProcessDDLChanges(
 				}
 			case DDLOperationDrop:
 				// Execute DROP TABLE
-				if err := dropTable(ctx, iterationCtx.LocalExecutor, dbName, tableName); err != nil {
+				if err := dropTable(downstreamCtx, iterationCtx.LocalExecutor, dbName, tableName); err != nil {
 					return moerr.NewInternalErrorf(ctx, "failed to drop table %s.%s: %v", dbName, tableName, err)
 				}
 			case DDLOperationAlter:
 				// For alter, drop first then create
-				if err := dropTable(ctx, iterationCtx.LocalExecutor, dbName, tableName); err != nil {
+				if err := dropTable(downstreamCtx, iterationCtx.LocalExecutor, dbName, tableName); err != nil {
 					return moerr.NewInternalErrorf(ctx, "failed to drop table %s.%s for alter: %v", dbName, tableName, err)
 				}
 				if ddlInfo.TableCreateSQL != "" {
-					if err := createTable(ctx, iterationCtx.LocalExecutor, dbName, tableName, ddlInfo.TableCreateSQL); err != nil {
+					if err := createTable(downstreamCtx, iterationCtx.LocalExecutor, dbName, tableName, ddlInfo.TableCreateSQL); err != nil {
 						return moerr.NewInternalErrorf(ctx, "failed to create table %s.%s after alter: %v", dbName, tableName, err)
 					}
 					// Update TableIDs after successful table creation
@@ -248,7 +252,7 @@ func ProcessDDLChanges(
 	// Step 4: Drop databases
 	for _, dbName := range dbToDrop {
 		dropDBSQL := fmt.Sprintf("DROP DATABASE IF EXISTS `%s`", escapeSQLIdentifierForDDL(dbName))
-		result, err := iterationCtx.LocalExecutor.ExecSQL(ctx, dropDBSQL)
+		result, err := iterationCtx.LocalExecutor.ExecSQL(downstreamCtx, dropDBSQL)
 		if err != nil {
 			return moerr.NewInternalErrorf(ctx, "failed to drop database %s: %v", dbName, err)
 		}

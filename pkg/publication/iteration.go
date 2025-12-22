@@ -112,6 +112,7 @@ func InitializeIterationContext(
 	// Scan the result
 	var subscriptionName sql.NullString
 	var syncLevel sql.NullString
+	var accountID sql.NullInt64
 	var dbName sql.NullString
 	var tableName sql.NullString
 	var upstreamConn sql.NullString
@@ -124,7 +125,7 @@ func InitializeIterationContext(
 		return nil, moerr.NewInternalErrorf(ctx, "no rows returned for task_id %d", taskID)
 	}
 
-	if err := result.Scan(&subscriptionName, &syncLevel, &dbName, &tableName, &upstreamConn, &contextJSON); err != nil {
+	if err := result.Scan(&subscriptionName, &syncLevel, &accountID, &dbName, &tableName, &upstreamConn, &contextJSON); err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "failed to scan query result: %v", err)
 	}
 
@@ -135,10 +136,14 @@ func InitializeIterationContext(
 	if !syncLevel.Valid {
 		return nil, moerr.NewInternalErrorf(ctx, "sync_level is null for task_id %d", taskID)
 	}
+	if !accountID.Valid {
+		return nil, moerr.NewInternalErrorf(ctx, "account_id is null for task_id %d", taskID)
+	}
 
-	// Build SrcInfo from sync_level, db_name, table_name
+	// Build SrcInfo from sync_level, account_id, db_name, table_name
 	srcInfo := SrcInfo{
 		SyncLevel: syncLevel.String,
+		AccountID: uint32(accountID.Int64),
 	}
 	if dbName.Valid {
 		srcInfo.DBName = dbName.String
@@ -532,9 +537,12 @@ func RequestUpstreamSnapshot(
 			iterationCtx.SrcInfo.DBName,
 		)
 	case SyncLevelAccount:
+		// Note: CreateSnapshotForAccountSQL currently uses account name, not account ID
+		// This is for upstream snapshot creation, which may require account name
+		// For now, we use empty string to create snapshot for current account
 		createSnapshotSQL = PublicationSQLBuilder.CreateSnapshotForAccountSQL(
 			snapshotName,
-			iterationCtx.SrcInfo.AccountName,
+			"", // Empty account name means current account
 		)
 	default:
 		return moerr.NewInternalErrorf(ctx, "unsupported sync_level: %s", iterationCtx.SrcInfo.SyncLevel)
@@ -770,15 +778,17 @@ func SubmitObjectsToTN(
 	}
 
 	// Submit insert objects
+	// Use downstream account ID from iterationCtx.SrcInfo
+	downstreamCtx := context.WithValue(ctx, defines.TenantIDKey{}, iterationCtx.SrcInfo.AccountID)
 	if len(insertStats) > 0 {
-		if err := submitObjectsAsInsert(ctx, iterationCtx, cnEngine, iterationCtx.SrcInfo.DBName, iterationCtx.SrcInfo.TableName, insertStats); err != nil {
+		if err := submitObjectsAsInsert(downstreamCtx, iterationCtx, cnEngine, iterationCtx.SrcInfo.DBName, iterationCtx.SrcInfo.TableName, insertStats); err != nil {
 			return moerr.NewInternalErrorf(ctx, "failed to submit insert objects: %v", err)
 		}
 	}
 
 	// Submit delete objects
 	if len(deleteStats) > 0 {
-		if err := submitObjectsAsDelete(ctx, iterationCtx, cnEngine, iterationCtx.SrcInfo.DBName, iterationCtx.SrcInfo.TableName, deleteStats); err != nil {
+		if err := submitObjectsAsDelete(downstreamCtx, iterationCtx, cnEngine, iterationCtx.SrcInfo.DBName, iterationCtx.SrcInfo.TableName, deleteStats); err != nil {
 			return moerr.NewInternalErrorf(ctx, "failed to submit delete objects: %v", err)
 		}
 	}
@@ -963,7 +973,6 @@ func ExecuteIteration(
 		}
 	}()
 
-
 	// 1.1 请求上游snapshot (includes 1.1.2 请求上游的snapshot ts)
 	if err = RequestUpstreamSnapshot(ctx, iterationCtx); err != nil {
 		err = moerr.NewInternalErrorf(ctx, "failed to request upstream snapshot: %v", err)
@@ -1050,9 +1059,11 @@ func ExecuteIteration(
 	}
 
 	// Submit collected objects to TN
+	// Use downstream account ID from iterationCtx.SrcInfo
+	downstreamCtx := context.WithValue(ctx, defines.TenantIDKey{}, iterationCtx.SrcInfo.AccountID)
 	// Process collected insert stats
 	if len(collectedInsertStats) > 0 {
-		if err = submitObjectsAsInsert(ctx, iterationCtx, cnEngine, iterationCtx.SrcInfo.DBName, iterationCtx.SrcInfo.TableName, collectedInsertStats); err != nil {
+		if err = submitObjectsAsInsert(downstreamCtx, iterationCtx, cnEngine, iterationCtx.SrcInfo.DBName, iterationCtx.SrcInfo.TableName, collectedInsertStats); err != nil {
 			err = moerr.NewInternalErrorf(ctx, "failed to submit insert objects: %v", err)
 			return
 		}
@@ -1060,7 +1071,7 @@ func ExecuteIteration(
 
 	// Process collected delete stats
 	if len(collectedDeleteStats) > 0 {
-		if err = submitObjectsAsDelete(ctx, iterationCtx, cnEngine, iterationCtx.SrcInfo.DBName, iterationCtx.SrcInfo.TableName, collectedDeleteStats); err != nil {
+		if err = submitObjectsAsDelete(downstreamCtx, iterationCtx, cnEngine, iterationCtx.SrcInfo.DBName, iterationCtx.SrcInfo.TableName, collectedDeleteStats); err != nil {
 			err = moerr.NewInternalErrorf(ctx, "failed to submit delete objects: %v", err)
 			return
 		}
@@ -1090,7 +1101,7 @@ func ExecuteIteration(
 
 		// Submit active insert objects
 		if len(activeInsertStats) > 0 {
-			if err = submitObjectsAsInsert(ctx, iterationCtx, cnEngine, iterationCtx.SrcInfo.DBName, iterationCtx.SrcInfo.TableName, activeInsertStats); err != nil {
+			if err = submitObjectsAsInsert(downstreamCtx, iterationCtx, cnEngine, iterationCtx.SrcInfo.DBName, iterationCtx.SrcInfo.TableName, activeInsertStats); err != nil {
 				err = moerr.NewInternalErrorf(ctx, "failed to submit active insert objects: %v", err)
 				return
 			}
@@ -1098,7 +1109,7 @@ func ExecuteIteration(
 
 		// Submit active delete objects
 		if len(activeDeleteStats) > 0 {
-			if err = submitObjectsAsDelete(ctx, iterationCtx, cnEngine, iterationCtx.SrcInfo.DBName, iterationCtx.SrcInfo.TableName, activeDeleteStats); err != nil {
+			if err = submitObjectsAsDelete(downstreamCtx, iterationCtx, cnEngine, iterationCtx.SrcInfo.DBName, iterationCtx.SrcInfo.TableName, activeDeleteStats); err != nil {
 				err = moerr.NewInternalErrorf(ctx, "failed to submit active delete objects: %v", err)
 				return
 			}

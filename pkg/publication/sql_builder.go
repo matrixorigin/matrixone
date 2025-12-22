@@ -103,10 +103,11 @@ const (
 		`FROM mo_catalog.mo_ccpr_log ` +
 		`WHERE task_id = %d`
 
-	// Query mo_ccpr_log full SQL template (includes subscription_name, sync_level, db_name, table_name, upstream_conn, context)
+	// Query mo_ccpr_log full SQL template (includes subscription_name, sync_level, account_id, db_name, table_name, upstream_conn, context)
 	PublicationQueryMoCcprLogFullSqlTemplate = `SELECT ` +
 		`subscription_name, ` +
 		`sync_level, ` +
+		`account_id, ` +
 		`db_name, ` +
 		`table_name, ` +
 		`upstream_conn, ` +
@@ -249,6 +250,7 @@ var PublicationSQLTemplates = [PublicationSqlTemplateCount]struct {
 		OutputAttrs: []string{
 			"subscription_name",
 			"sync_level",
+			"account_id",
 			"db_name",
 			"table_name",
 			"upstream_conn",

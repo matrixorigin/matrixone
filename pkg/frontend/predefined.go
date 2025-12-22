@@ -286,6 +286,7 @@ var (
 				task_id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
 				subscription_name VARCHAR(5000) NOT NULL,
 				sync_level VARCHAR(16) NOT NULL,
+				account_id INT UNSIGNED NOT NULL,
 				db_name VARCHAR(5000),
 				table_name VARCHAR(5000),
 				upstream_conn VARCHAR(5000) NOT NULL,
