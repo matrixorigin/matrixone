@@ -349,14 +349,13 @@ func FillDDLOperation(
 			key := TableKey{DBName: dbName, TableName: tableName}
 
 			// Table exists, check table ID
-			tableID := rel.GetTableID(ctx)
 			expectedTableID, idExists := tableIDs[key]
 			if !idExists {
 				return nil, moerr.NewInternalErrorf(ctx, "table %s.%s id not exists", dbName, tableName)
 			}
 
 			// Check if table ID changed
-			if tableID != expectedTableID {
+			if ddlInfo.TableID != expectedTableID {
 				// Table ID changed, need to drop and recreate
 				ddlInfo.Operation = DDLOperationAlter
 				// Note: After drop, a create operation will be needed separately
