@@ -56,7 +56,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergecte"
@@ -2508,7 +2507,7 @@ func constructShuffleJoinOP(c *Compile, shuffleJoins []*Scope, node, left, right
 		}
 	case plan.Node_RIGHT:
 		for i := range shuffleJoins {
-			op := constructRight(node, leftTyps, rightTyps, c.proc)
+			op := constructHashJoin(node, leftTyps, rightTyps, c.proc)
 			op.ShuffleIdx = int32(i)
 			if shuffleV2 {
 				op.ShuffleIdx = -1
@@ -2607,7 +2606,7 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 					op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 					rs[i].setRootOperator(op)
 				} else {
-					op := constructLoopJoin(node, rightTyps, c.proc, loopjoin.LoopInner)
+					op := constructLoopJoin(node, rightTyps, c.proc)
 					op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 					rs[i].setRootOperator(op)
 				}
@@ -2664,7 +2663,7 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 			rs = c.newProbeScopeListForBroadcastJoin(probeScopes, false)
 			currentFirstFlag := c.anal.isFirst
 			for i := range rs {
-				op := constructLoopJoin(node, rightTyps, c.proc, loopjoin.LoopSemi)
+				op := constructLoopJoin(node, rightTyps, c.proc)
 				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 				rs[i].setRootOperator(op)
 			}
@@ -2679,7 +2678,7 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 				rs[i].setRootOperator(op)
 			} else {
-				op := constructLoopJoin(node, rightTyps, c.proc, loopjoin.LoopLeft)
+				op := constructLoopJoin(node, rightTyps, c.proc)
 				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 				rs[i].setRootOperator(op)
 			}
@@ -2690,7 +2689,7 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 			rs = c.newProbeScopeListForBroadcastJoin(probeScopes, true)
 			currentFirstFlag := c.anal.isFirst
 			for i := range rs {
-				op := constructRight(node, leftTyps, rightTyps, c.proc)
+				op := constructHashJoin(node, leftTyps, rightTyps, c.proc)
 				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 				rs[i].setRootOperator(op)
 			}
@@ -2707,7 +2706,7 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 				rs[i].setRootOperator(op)
 			} else {
-				op := constructLoopJoin(node, rightTyps, c.proc, loopjoin.LoopSingle)
+				op := constructLoopJoin(node, rightTyps, c.proc)
 				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 				rs[i].setRootOperator(op)
 			}
@@ -2738,7 +2737,7 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 			rs = c.newProbeScopeListForBroadcastJoin(probeScopes, false)
 			currentFirstFlag := c.anal.isFirst
 			for i := range rs {
-				op := constructLoopJoin(node, rightTyps, c.proc, loopjoin.LoopAnti)
+				op := constructLoopJoin(node, rightTyps, c.proc)
 				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 				rs[i].setRootOperator(op)
 			}
@@ -2776,7 +2775,7 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 			//		Arg: constructMark(n, typs, c.proc),
 			//	})
 			//} else {
-			op := constructLoopJoin(node, rightTyps, c.proc, loopjoin.LoopMark)
+			op := constructLoopJoin(node, rightTyps, c.proc)
 			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			rs[i].setRootOperator(op)
 			//}

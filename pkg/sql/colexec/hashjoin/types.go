@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package right
+package hashjoin
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
@@ -28,7 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ vm.Operator = new(RightJoin)
+var _ vm.Operator = new(HashJoin)
 
 const (
 	Build = iota
@@ -49,8 +49,10 @@ type container struct {
 
 	batches       []*batch.Batch
 	batchRowCount int64
+	inbat         *batch.Batch
 	rbat          *batch.Batch
-	buf           *batch.Batch
+
+	lastRow int
 
 	expr colexec.ExpressionExecutor
 
@@ -72,13 +74,17 @@ type container struct {
 	maxAllocSize int64
 }
 
-type RightJoin struct {
-	ctr        container
-	Result     []colexec.ResultPos
+type HashJoin struct {
+	ctr container
+
+	JoinType    plan.Node_JoinType
+	IsRightJoin bool
+
+	ResultCols []colexec.ResultPos
 	LeftTypes  []types.Type
 	RightTypes []types.Type
-	Cond       *plan.Expr
-	Conditions [][]*plan.Expr
+	NonEqCond  *plan.Expr
+	EqConds    [][]*plan.Expr
 
 	Channel chan *bitmap.Bitmap
 	NumCPU  uint64
@@ -89,49 +95,50 @@ type RightJoin struct {
 	IsMerger           bool
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 	JoinMapTag         int32
+
 	vm.OperatorBase
 }
 
-func (rightJoin *RightJoin) GetOperatorBase() *vm.OperatorBase {
-	return &rightJoin.OperatorBase
+func (hashJoin *HashJoin) GetOperatorBase() *vm.OperatorBase {
+	return &hashJoin.OperatorBase
 }
 
 func init() {
-	reuse.CreatePool[RightJoin](
-		func() *RightJoin {
-			return &RightJoin{}
+	reuse.CreatePool[HashJoin](
+		func() *HashJoin {
+			return &HashJoin{}
 		},
-		func(a *RightJoin) {
-			*a = RightJoin{}
+		func(a *HashJoin) {
+			*a = HashJoin{}
 		},
-		reuse.DefaultOptions[RightJoin]().
+		reuse.DefaultOptions[HashJoin]().
 			WithEnableChecker(),
 	)
 }
 
-func (rightJoin RightJoin) TypeName() string {
+func (hashJoin HashJoin) TypeName() string {
 	return opName
 }
 
-func NewArgument() *RightJoin {
-	return reuse.Alloc[RightJoin](nil)
+func NewArgument() *HashJoin {
+	return reuse.Alloc[HashJoin](nil)
 }
 
-func (rightJoin *RightJoin) Release() {
-	if rightJoin != nil {
-		reuse.Free[RightJoin](rightJoin, nil)
+func (hashJoin *HashJoin) Release() {
+	if hashJoin != nil {
+		reuse.Free[HashJoin](hashJoin, nil)
 	}
 }
 
-func (rightJoin *RightJoin) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+func (hashJoin *HashJoin) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
 	return input, nil
 }
 
-func (rightJoin *RightJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := &rightJoin.ctr
+func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := &hashJoin.ctr
 	ctr.itr = nil
-	if !ctr.handledLast && rightJoin.NumCPU > 1 && !rightJoin.IsMerger {
-		rightJoin.Channel <- nil
+	if !ctr.handledLast && hashJoin.NumCPU > 1 && !hashJoin.IsMerger {
+		hashJoin.Channel <- nil
 	}
 	ctr.cleanHashMap()
 	ctr.resetExprExecutor()
@@ -141,15 +148,15 @@ func (rightJoin *RightJoin) Reset(proc *process.Process, pipelineFailed bool, er
 	ctr.state = Build
 	ctr.lastPos = 0
 
-	if rightJoin.OpAnalyzer != nil {
-		rightJoin.OpAnalyzer.Alloc(ctr.maxAllocSize)
+	if hashJoin.OpAnalyzer != nil {
+		hashJoin.OpAnalyzer.Alloc(ctr.maxAllocSize)
 	}
-	rightJoin.ctr.buf = nil
+	hashJoin.ctr.inbat = nil
 	ctr.maxAllocSize = 0
 }
 
-func (rightJoin *RightJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
-	ctr := &rightJoin.ctr
+func (hashJoin *HashJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := &hashJoin.ctr
 	ctr.cleanBatch(proc)
 	ctr.cleanHashMap()
 	ctr.cleanExprExecutor()

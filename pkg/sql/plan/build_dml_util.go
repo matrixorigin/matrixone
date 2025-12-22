@@ -2459,13 +2459,12 @@ func appendDeleteIndexTablePlan(
 		While secondary indexes don't store NULL values, they DO need RIGHT JOIN to handle
 		new inserts that don't yet exist in the index table.
 	*/
-	joinType := plan.Node_RIGHT
-
 	sid := builder.compCtx.GetProcess().GetService()
 	lastNodeId = builder.appendNode(&plan.Node{
 		NodeType:               plan.Node_JOIN,
 		Children:               []int32{leftId, lastNodeId},
-		JoinType:               joinType,
+		JoinType:               plan.Node_RIGHT,
+		IsRightJoin:            true,
 		OnList:                 joinConds,
 		ProjectList:            projectList,
 		RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, GetInFilterCardLimitOnPK(sid, builder.qry.Nodes[leftId].Stats.TableCnt), buildExpr, false)},

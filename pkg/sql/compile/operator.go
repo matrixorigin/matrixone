@@ -44,6 +44,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/fuzzyfilter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
@@ -73,7 +74,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightdedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
@@ -213,14 +213,16 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		}
 		op.SetInfo(&info)
 		return op
-	case vm.Right:
-		t := sourceOp.(*right.RightJoin)
-		op := right.NewArgument()
-		op.Cond = t.Cond
-		op.Result = t.Result
+	case vm.HashJoin:
+		t := sourceOp.(*hashjoin.HashJoin)
+		op := hashjoin.NewArgument()
+		op.JoinType = t.JoinType
+		op.IsRightJoin = t.IsRightJoin
+		op.NonEqCond = t.NonEqCond
+		op.ResultCols = t.ResultCols
 		op.RightTypes = t.RightTypes
 		op.LeftTypes = t.LeftTypes
-		op.Conditions = t.Conditions
+		op.EqConds = t.EqConds
 		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
 		op.JoinMapTag = t.JoinMapTag
 		op.HashOnPK = t.HashOnPK
@@ -1118,18 +1120,20 @@ func constructLeft(n *plan.Node, typs []types.Type, proc *process.Process) *left
 	return arg
 }
 
-func constructRight(n *plan.Node, left_typs, right_typs []types.Type, proc *process.Process) *right.RightJoin {
+func constructHashJoin(n *plan.Node, left_typs, right_typs []types.Type, proc *process.Process) *hashjoin.HashJoin {
 	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
-	cond, conds := extraJoinConditions(n.OnList)
-	arg := right.NewArgument()
+	nonEqCond, eqConds := extraJoinConditions(n.OnList)
+	arg := hashjoin.NewArgument()
+	arg.JoinType = n.JoinType
+	arg.IsRightJoin = n.IsRightJoin
 	arg.LeftTypes = left_typs
 	arg.RightTypes = right_typs
-	arg.Result = result
-	arg.Cond = cond
-	arg.Conditions = constructJoinConditions(conds, proc)
+	arg.ResultCols = result
+	arg.NonEqCond = nonEqCond
+	arg.EqConds = constructJoinConditions(eqConds, proc)
 	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
 	arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
 	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
@@ -1802,7 +1806,7 @@ func constructProductL2(n *plan.Node, proc *process.Process) *productl2.Productl
 	return arg
 }
 
-func constructLoopJoin(n *plan.Node, typs []types.Type, proc *process.Process, jointype int) *loopjoin.LoopJoin {
+func constructLoopJoin(n *plan.Node, typs []types.Type, proc *process.Process) *loopjoin.LoopJoin {
 	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
@@ -1811,7 +1815,7 @@ func constructLoopJoin(n *plan.Node, typs []types.Type, proc *process.Process, j
 	arg.Result = result
 	arg.Typs = typs
 	arg.Cond = colexec.RewriteFilterExprList(n.OnList)
-	arg.JoinType = jointype
+	arg.JoinType = n.JoinType
 	for i := range n.SendMsgList {
 		if n.SendMsgList[i].MsgType == int32(message.MsgJoinMap) {
 			arg.JoinMapTag = n.SendMsgList[i].MsgTag
@@ -1925,10 +1929,10 @@ func constructHashBuild(op vm.Operator, proc *process.Process, mcpu int32) *hash
 		}
 		ret.JoinMapTag = arg.JoinMapTag
 
-	case vm.Right:
-		arg := op.(*right.RightJoin)
+	case vm.HashJoin:
+		arg := op.(*hashjoin.HashJoin)
 		ret.NeedHashMap = true
-		ret.Conditions = rewriteJoinExprToHashBuildExpr(arg.Conditions[1])
+		ret.Conditions = rewriteJoinExprToHashBuildExpr(arg.EqConds[1])
 		ret.NeedBatches = true
 		ret.HashOnPK = arg.HashOnPK
 		ret.NeedAllocateSels = true
@@ -2105,9 +2109,9 @@ func constructShuffleBuild(op vm.Operator, proc *process.Process) *shufflebuild.
 		ret.JoinMapTag = arg.JoinMapTag
 		ret.ShuffleIdx = arg.ShuffleIdx
 
-	case vm.Right:
-		arg := op.(*right.RightJoin)
-		ret.Conditions = rewriteJoinExprToHashBuildExpr(arg.Conditions[1])
+	case vm.HashJoin:
+		arg := op.(*hashjoin.HashJoin)
+		ret.Conditions = rewriteJoinExprToHashBuildExpr(arg.EqConds[1])
 		ret.NeedBatches = true
 		ret.HashOnPK = arg.HashOnPK
 		ret.NeedAllocateSels = true
