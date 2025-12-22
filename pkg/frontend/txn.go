@@ -28,6 +28,7 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	txnclient "github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
@@ -506,6 +507,11 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 		moerr.CauseCommitUnsafe,
 	)
 	defer cancel()
+	if sess, ok := execCtx.ses.(*Session); ok {
+		if token := sess.currentRunSQLToken(); token != 0 {
+			ctx2 = txnclient.WithRunSQLSkipToken(ctx2, token)
+		}
+	}
 	val, e := execCtx.ses.GetSessionSysVar("mo_pk_check_by_dn")
 	if e != nil {
 		return e
@@ -637,6 +643,11 @@ func (th *TxnHandler) rollbackUnsafe(execCtx *ExecCtx) error {
 		moerr.CauseRollbackUnsafe,
 	)
 	defer cancel()
+	if sess, ok := execCtx.ses.(*Session); ok {
+		if token := sess.currentRunSQLToken(); token != 0 {
+			ctx2 = txnclient.WithRunSQLSkipToken(ctx2, token)
+		}
+	}
 	defer func() {
 		// metric count
 		tenant := execCtx.ses.GetTenantName()

@@ -1933,8 +1933,10 @@ func (n *noopTxnOperator) NextSequence() uint64 {
 	return 0
 }
 
-func (n *noopTxnOperator) EnterRunSql()            {}
-func (n *noopTxnOperator) ExitRunSql()             {}
+func (n *noopTxnOperator) EnterRunSqlWithTokenAndSQL(_ context.CancelFunc, _ string) uint64 {
+	return 0
+}
+func (n *noopTxnOperator) ExitRunSqlWithToken(_ uint64) {}
 func (n *noopTxnOperator) EnterIncrStmt()          {}
 func (n *noopTxnOperator) ExitIncrStmt()           {}
 func (n *noopTxnOperator) EnterRollbackStmt()      {}
@@ -2046,8 +2048,7 @@ type tableStreamHarness struct {
 	getTxn         func(context.Context, engine.Engine, client.TxnOperator) error
 	getRelation    func(context.Context, engine.Engine, client.TxnOperator, uint64) (string, string, engine.Relation, error)
 	getSnapshotTS  func(client.TxnOperator) timestamp.Timestamp
-	enterRunSql    func(client.TxnOperator)
-	exitRunSql     func(client.TxnOperator)
+	enterRunSql    func(context.Context, client.TxnOperator, string) func()
 	collectFactory func(fromTs, toTs types.TS) (engine.ChangesHandle, error)
 
 	collectCallsMu sync.Mutex
@@ -2162,8 +2163,7 @@ func newTableStreamHarness(t *testing.T, opts ...tableStreamHarnessOption) *tabl
 		}
 		return ts
 	}
-	h.enterRunSql = func(client.TxnOperator) {}
-	h.exitRunSql = func(client.TxnOperator) {}
+	h.enterRunSql = func(context.Context, client.TxnOperator, string) func() { return func() {} }
 	h.collectFactory = func(fromTs, toTs types.TS) (engine.ChangesHandle, error) {
 		return newImmediateChangesHandle(nil), nil
 	}
@@ -2189,11 +2189,8 @@ func (h *tableStreamHarness) installStubs() {
 	h.addStub(gostub.Stub(&GetSnapshotTS, func(op client.TxnOperator) timestamp.Timestamp {
 		return h.getSnapshotTS(op)
 	}))
-	h.addStub(gostub.Stub(&EnterRunSql, func(op client.TxnOperator) {
-		h.enterRunSql(op)
-	}))
-	h.addStub(gostub.Stub(&ExitRunSql, func(op client.TxnOperator) {
-		h.exitRunSql(op)
+	h.addStub(gostub.Stub(&EnterRunSql, func(ctx context.Context, op client.TxnOperator, sql string) func() {
+		return h.enterRunSql(ctx, op, sql)
 	}))
 	h.addStub(gostub.Stub(&CollectChanges, func(ctx context.Context, rel engine.Relation, fromTs, toTs types.TS, mp *mpool.MPool) (engine.ChangesHandle, error) {
 		h.collectCallsMu.Lock()
@@ -2321,18 +2318,11 @@ func (h *tableStreamHarness) SetGetSnapshotTS(fn func(client.TxnOperator) timest
 	}
 }
 
-func (h *tableStreamHarness) SetEnterRunSql(fn func(client.TxnOperator)) {
+func (h *tableStreamHarness) SetEnterRunSql(fn func(context.Context, client.TxnOperator, string) func()) {
 	if fn == nil {
-		fn = func(client.TxnOperator) {}
+		fn = func(context.Context, client.TxnOperator, string) func() { return func() {} }
 	}
 	h.enterRunSql = fn
-}
-
-func (h *tableStreamHarness) SetExitRunSql(fn func(client.TxnOperator)) {
-	if fn == nil {
-		fn = func(client.TxnOperator) {}
-	}
-	h.exitRunSql = fn
 }
 
 func (h *tableStreamHarness) SetCollectFactory(factory func(fromTs, toTs types.TS) (engine.ChangesHandle, error)) {
