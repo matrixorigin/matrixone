@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -313,9 +314,19 @@ func (tbl *txnTableDelegate) Ranges(ctx context.Context, rangesParam engine.Rang
 		return nil, err
 	}
 
-	part, err := tbl.origin.getPartitionState(ctx)
-	if err != nil {
-		return nil, err
+	// Use cached partition state if provided to ensure consistency within the same statement,
+	// otherwise get partition state from the local CN
+	var part *logtailreplay.PartitionState
+	if rangesParam.CachedPartitionState != nil {
+		if cachedPart, ok := rangesParam.CachedPartitionState.(*logtailreplay.PartitionState); ok && cachedPart != nil {
+			part = cachedPart
+		}
+	}
+	if part == nil {
+		part, err = tbl.origin.getPartitionState(ctx)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	ret := readutil.NewBlockListRelationData(
@@ -332,6 +343,38 @@ func (tbl *txnTableDelegate) Ranges(ctx context.Context, rangesParam engine.Rang
 	}
 
 	return ret, nil
+}
+
+// CollectTombstonesWithPartitionState is a helper function that collects tombstones
+// with an optional cached partition state. This is used to ensure consistency within
+// the same statement/query.
+func CollectTombstonesWithPartitionState(
+	rel engine.Relation,
+	ctx context.Context,
+	txnOffset int,
+	policy engine.TombstoneCollectPolicy,
+	cachedPartState *logtailreplay.PartitionState,
+) (engine.Tombstoner, error) {
+	if delegate, ok := rel.(*txnTableDelegate); ok {
+		if delegate.combined.is {
+			return delegate.combined.tbl.CollectTombstones(ctx, txnOffset, policy)
+		}
+
+		is, err := delegate.isLocal()
+		if err != nil {
+			return nil, err
+		}
+		if is {
+			return delegate.origin.collectTombstonesWithPartitionState(
+				ctx,
+				txnOffset,
+				policy,
+				cachedPartState,
+			)
+		}
+	}
+	// If not txnTableDelegate or not local, fall back to normal CollectTombstones
+	return rel.CollectTombstones(ctx, txnOffset, policy)
 }
 
 func (tbl *txnTableDelegate) CollectTombstones(
@@ -580,9 +623,23 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 
 	//relData maybe is nil, indicate that only read data from memory.
 	if relData == nil || relData.DataCnt() == 0 {
-		part, err2 := tbl.origin.getPartitionState(ctx)
-		if err2 != nil {
-			return nil, err2
+		var part *logtailreplay.PartitionState
+		var err2 error
+
+		// Try to extract partition state from relData if it exists and has one
+		// Use extractPStateFromRelData to handle both BlockListRelData and ObjListRelData types
+		if relData != nil {
+			part, err2 = extractPStateFromRelData(ctx, tbl.origin, relData)
+			if err2 != nil {
+				return nil, err2
+			}
+		}
+
+		// If no partition state found in relData, get a new one
+		if part == nil {
+			if part, err2 = tbl.origin.getPartitionState(ctx); err2 != nil {
+				return nil, err2
+			}
 		}
 
 		relData = readutil.NewBlockListRelationData(
