@@ -296,6 +296,15 @@ func newRunSQLTracker() runSQLTracker {
 	}
 }
 
+func (t *runSQLTracker) ensureInitLocked() {
+	if t.activeTokens == nil {
+		t.activeTokens = make(map[uint64]context.CancelFunc)
+	}
+	if t.notifyCh == nil {
+		t.notifyCh = make(chan struct{})
+	}
+}
+
 func (t *runSQLTracker) notifyLocked() {
 	close(t.notifyCh)
 	t.notifyCh = make(chan struct{})
@@ -304,6 +313,7 @@ func (t *runSQLTracker) notifyLocked() {
 func (t *runSQLTracker) enterToken(cancel context.CancelFunc) uint64 {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.ensureInitLocked()
 	t.nextID++
 	token := t.nextID
 	t.activeTokens[token] = cancel
@@ -314,6 +324,7 @@ func (t *runSQLTracker) enterToken(cancel context.CancelFunc) uint64 {
 func (t *runSQLTracker) exitToken(token uint64) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.ensureInitLocked()
 	delete(t.activeTokens, token)
 	t.notifyLocked()
 }
@@ -321,6 +332,7 @@ func (t *runSQLTracker) exitToken(token uint64) {
 func (t *runSQLTracker) enterAnonymous() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.ensureInitLocked()
 	t.anonActive++
 	t.notifyLocked()
 }
@@ -328,6 +340,7 @@ func (t *runSQLTracker) enterAnonymous() {
 func (t *runSQLTracker) exitAnonymous() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.ensureInitLocked()
 	if t.anonActive > 0 {
 		t.anonActive--
 	}
@@ -336,6 +349,7 @@ func (t *runSQLTracker) exitAnonymous() {
 
 func (t *runSQLTracker) cancelAllExcept(keepToken uint64) {
 	t.mu.Lock()
+	t.ensureInitLocked()
 	cancels := make([]context.CancelFunc, 0, len(t.activeTokens))
 	for token, cancel := range t.activeTokens {
 		if token == keepToken || cancel == nil {
@@ -367,6 +381,7 @@ func (t *runSQLTracker) waitExcept(ctx context.Context, keepToken uint64) error 
 }
 
 func (t *runSQLTracker) shouldWaitLocked(keepToken uint64) (bool, chan struct{}) {
+	t.ensureInitLocked()
 	// Anonymous runners have no cancel token, so we must wait for them explicitly.
 	if t.anonActive > 0 {
 		return true, t.notifyCh
