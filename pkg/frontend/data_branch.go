@@ -585,10 +585,6 @@ func markBranchTablesDeleted(
 	accId uint32,
 	tableIDs []uint64,
 ) error {
-	if len(tableIDs) == 0 {
-		return nil
-	}
-
 	updateCtx := ctx
 	if accId != sysAccountID {
 		updateCtx = defines.AttachAccountId(updateCtx, sysAccountID)
@@ -658,10 +654,6 @@ func dataBranchDeleteTable(
 
 	if len(dbName) == 0 {
 		dbName = tree.Identifier(ses.GetTxnCompileCtx().DefaultDatabase())
-	}
-
-	if len(dbName) == 0 {
-		return moerr.NewInternalErrorNoCtxf("no db selected for the table %s", tblName)
 	}
 
 	if accId, err = defines.GetAccountId(execCtx.reqCtx); err != nil {
@@ -736,10 +728,6 @@ func dataBranchDeleteDatabase(
 		sqlRet   executor.Result
 		tableIDs []uint64
 	)
-
-	if len(dbName) == 0 {
-		return moerr.NewInternalErrorNoCtxf("no database specified for data branch delete")
-	}
 
 	if accId, err = defines.GetAccountId(execCtx.reqCtx); err != nil {
 		return
