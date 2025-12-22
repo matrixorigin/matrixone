@@ -256,7 +256,21 @@ func queryFeatureRegistry(
 		return false, nil, false, moerr.NewInternalErrorNoCtxf("query feature registry for %s failed", code)
 	}
 
-	enabled = vector.GetFixedAtNoTypeCheck[bool](sqlRet.Batches[0].Vecs[0], 0)
+	enabledVec := sqlRet.Batches[0].Vecs[0]
+	switch enabledVec.GetType().Oid {
+	case types.T_bool:
+		enabled = vector.GetFixedAtNoTypeCheck[bool](enabledVec, 0)
+	case types.T_int8:
+		enabled = vector.GetFixedAtNoTypeCheck[int8](enabledVec, 0) != 0
+	case types.T_uint8:
+		enabled = vector.GetFixedAtNoTypeCheck[uint8](enabledVec, 0) != 0
+	default:
+		return false, nil, false, moerr.NewInternalErrorNoCtxf(
+			"invalid enabled type %s for feature %s",
+			enabledVec.GetType().Oid.String(),
+			code,
+		)
+	}
 
 	scopeSpecVec := sqlRet.Batches[0].Vecs[1]
 	if scopeSpecVec.IsNull(0) {
