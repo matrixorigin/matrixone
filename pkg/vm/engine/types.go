@@ -984,6 +984,11 @@ type RangesParam struct {
 	Policy             DataCollectPolicy
 	Rsp                *RangesShuffleParam
 	DontSupportRelData bool
+	// CachedPartitionState is an optional cached partition state to ensure consistency
+	// within a single statement/query. When provided, it will be used instead of
+	// calling getPartitionState again. This prevents data inconsistency when
+	// multiple expandRanges calls happen within the same statement.
+	CachedPartitionState any // *logtailreplay.PartitionState, using any to avoid circular dependency
 }
 
 var DefaultRangesParam RangesParam = RangesParam{

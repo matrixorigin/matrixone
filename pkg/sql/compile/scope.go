@@ -637,18 +637,41 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 
 	//collect uncommited data if it's local cn
 	if !s.IsRemote {
-		s.NodeInfo.Data, err = c.expandRanges(
-			s.DataSource.node,
-			rel,
-			db,
-			ctx,
-			blockExprList,
-			engine.Policy_CollectUncommittedData|
-				engine.Policy_CollectCommittedInmemData,
-			nil)
+		// Extract partition state from the first expandRanges call to ensure consistency
+		// within the same statement/query. This prevents data inconsistency when
+		// partition state is updated between multiple expandRanges calls.
+		var sharedPartState any
+		if blkListData, ok := commited.(*readutil.BlockListRelData); ok {
+			sharedPartState = blkListData.GetPState() // GetPState() returns any, which is *logtailreplay.PartitionState
+		}
+
+		// Use the cached partition state for the second expandRanges call
+		// to ensure both calls use the same partition state
+		counterSet := new(perfcounter.CounterSet)
+		newCtx := perfcounter.AttachS3RequestKey(ctx, counterSet)
+		rangesParam := engine.RangesParam{
+			BlockFilters:         blockExprList,
+			PreAllocBlocks:       2,
+			TxnOffset:            c.TxnOffset,
+			Policy:               engine.Policy_CollectUncommittedData | engine.Policy_CollectCommittedInmemData,
+			Rsp:                  nil,
+			DontSupportRelData:   false,
+			CachedPartitionState: sharedPartState, // Reuse partition state from first call
+		}
+		s.NodeInfo.Data, err = rel.Ranges(newCtx, rangesParam)
 		if err != nil {
 			return err
 		}
+
+		stats := statistic.StatsInfoFromContext(ctx)
+		stats.AddScopePrepareS3Request(statistic.S3Request{
+			List:      counterSet.FileService.S3.List.Load(),
+			Head:      counterSet.FileService.S3.Head.Load(),
+			Put:       counterSet.FileService.S3.Put.Load(),
+			Get:       counterSet.FileService.S3.Get.Load(),
+			Delete:    counterSet.FileService.S3.Delete.Load(),
+			DeleteMul: counterSet.FileService.S3.DeleteMulti.Load(),
+		})
 
 		s.NodeInfo.Data.AppendBlockInfoSlice(commited.GetBlockInfoSlice())
 	} else {
@@ -964,7 +987,14 @@ func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context
 				return err
 			}
 
-			tombstones, err := collectTombstones(c, node, rel, engine.Policy_CollectAllTombstones)
+			// Extract partition state from s.NodeInfo.Data to ensure consistency
+			// within the same statement/query
+			var cachedPartState any
+			if blkListData, ok := s.NodeInfo.Data.(*readutil.BlockListRelData); ok {
+				cachedPartState = blkListData.GetPState()
+			}
+
+			tombstones, err := collectTombstones(c, node, rel, engine.Policy_CollectAllTombstones, cachedPartState)
 			if err != nil {
 				return err
 			}

@@ -85,6 +85,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -4108,6 +4109,7 @@ func collectTombstones(
 	node *plan.Node,
 	rel engine.Relation,
 	policy engine.TombstoneCollectPolicy,
+	cachedPartState any, // optional *logtailreplay.PartitionState
 ) (engine.Tombstoner, error) {
 	var err error
 	//var relData engine.RelData
@@ -4139,6 +4141,14 @@ func collectTombstones(
 	}
 	if util.TableIsLoggingTable(node.ObjRef.SchemaName, node.ObjRef.ObjName) {
 		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+	}
+
+	// Try to use cached partition state if provided
+	if cachedPartState != nil {
+		if ps, ok := cachedPartState.(*logtailreplay.PartitionState); ok && ps != nil {
+			// Use the helper function to collect tombstones with cached partition state
+			return disttae.CollectTombstonesWithPartitionState(rel, ctx, c.TxnOffset, policy, ps)
+		}
 	}
 
 	tombstone, err = rel.CollectTombstones(ctx, c.TxnOffset, policy)
@@ -4348,7 +4358,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			CNIDX: int32(i),
 		}
 		if node.Addr != c.addr {
-			uncommittedTombs, err := collectTombstones(c, n, rel, engine.Policy_CollectAllTombstones)
+			uncommittedTombs, err := collectTombstones(c, n, rel, engine.Policy_CollectAllTombstones, nil)
 			if err != nil {
 				return nil, err
 			}

@@ -537,10 +537,13 @@ func (tbl *txnTable) GetProcess() any {
 	return tbl.proc.Load()
 }
 
-func (tbl *txnTable) CollectTombstones(
+// collectTombstonesWithPartitionState is an internal method that collects tombstones
+// with an optional cached partition state to ensure consistency within the same statement/query.
+func (tbl *txnTable) collectTombstonesWithPartitionState(
 	ctx context.Context,
 	txnOffset int,
 	policy engine.TombstoneCollectPolicy,
+	cachedPartState *logtailreplay.PartitionState,
 ) (engine.Tombstoner, error) {
 	tombstone := readutil.NewEmptyTombstoneData()
 
@@ -594,12 +597,20 @@ func (tbl *txnTable) CollectTombstones(
 	//collect committed tombstones.
 
 	if policy&engine.Policy_CollectCommittedTombstones != 0 {
+		var state *logtailreplay.PartitionState
+		var err error
+
+		// Use cached partition state if provided, otherwise get a new one
+		if cachedPartState != nil {
+			state = cachedPartState
+		} else {
+			state, err = tbl.getPartitionState(ctx)
+			if err != nil {
+				return nil, err
+			}
+		}
 
 		//collect committed in-memory tombstones from partition state.
-		state, err := tbl.getPartitionState(ctx)
-		if err != nil {
-			return nil, err
-		}
 		{
 			ts := tbl.db.op.SnapshotTS()
 			iter := state.NewRowsIter(types.TimestampToTS(ts), nil, true)
@@ -626,6 +637,14 @@ func (tbl *txnTable) CollectTombstones(
 	return tombstone, nil
 }
 
+func (tbl *txnTable) CollectTombstones(
+	ctx context.Context,
+	txnOffset int,
+	policy engine.TombstoneCollectPolicy,
+) (engine.Tombstoner, error) {
+	return tbl.collectTombstonesWithPartitionState(ctx, txnOffset, policy, nil)
+}
+
 // Ranges returns all unmodified blocks from the table.
 // Parameters:
 //   - ctx: Context used to control the lifecycle of the request.
@@ -642,9 +661,17 @@ func (tbl *txnTable) Ranges(ctx context.Context, rangesParam engine.RangesParam)
 func (tbl *txnTable) getObjList(ctx context.Context, rangesParam engine.RangesParam) (data engine.RelData, err error) {
 	needUncommited := rangesParam.Policy&engine.Policy_CollectUncommittedData != 0
 
+	// Priority: use cached partition state if provided, otherwise get a new one
 	var part *logtailreplay.PartitionState
-	if part, err = tbl.getPartitionState(ctx); err != nil {
-		return
+	if rangesParam.CachedPartitionState != nil {
+		if cachedPart, ok := rangesParam.CachedPartitionState.(*logtailreplay.PartitionState); ok && cachedPart != nil {
+			part = cachedPart
+		}
+	}
+	if part == nil {
+		if part, err = tbl.getPartitionState(ctx); err != nil {
+			return
+		}
 	}
 
 	objRelData := &readutil.ObjListRelData{
@@ -786,10 +813,19 @@ func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesPara
 	}
 
 	// get the table's snapshot
-	if rangesParam.Policy&engine.Policy_CollectCommittedPersistedData != 0 {
+	// Priority: use cached partition state if provided, otherwise get a new one
+	hasCachedPart := false
+	if rangesParam.CachedPartitionState != nil {
+		if cachedPart, ok := rangesParam.CachedPartitionState.(*logtailreplay.PartitionState); ok && cachedPart != nil {
+			part = cachedPart
+			hasCachedPart = true
+		}
+	}
+	if part == nil && rangesParam.Policy&engine.Policy_CollectCommittedPersistedData != 0 {
 		if part, err = tbl.getPartitionState(ctx); err != nil {
 			return
 		}
+		hasCachedPart = true // Mark that we have a valid partition state
 	}
 
 	if err = tbl.rangesOnePart(
@@ -804,7 +840,8 @@ func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesPara
 		return
 	}
 
-	if part == nil {
+	// Only get partition state if we don't already have one from cache or earlier call
+	if part == nil && !hasCachedPart {
 		if part, err = tbl.getPartitionState(ctx); err != nil {
 			return
 		}
@@ -1950,9 +1987,23 @@ func (tbl *txnTable) BuildReaders(
 
 	//relData maybe is nil, indicate that only read data from memory.
 	if relData == nil || relData.DataCnt() == 0 {
-		part, err := tbl.getPartitionState(ctx)
-		if err != nil {
-			return nil, err
+		var part *logtailreplay.PartitionState
+		var err error
+
+		// Try to extract partition state from relData if it exists and has one
+		// Use extractPStateFromRelData to handle both BlockListRelData and ObjListRelData types
+		if relData != nil {
+			part, err = extractPStateFromRelData(ctx, tbl, relData)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		// If no partition state found in relData, get a new one
+		if part == nil {
+			if part, err = tbl.getPartitionState(ctx); err != nil {
+				return nil, err
+			}
 		}
 
 		relData = readutil.NewBlockListRelationData(
