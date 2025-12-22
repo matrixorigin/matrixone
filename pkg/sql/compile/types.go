@@ -269,6 +269,8 @@ type Compile struct {
 
 	// proc stores the execution context.
 	proc *process.Process
+	// runSqlToken tracks the current statement in txn operator coordination.
+	runSqlToken uint64
 	// TxnOffset read starting offset position within the transaction during the execute current statement
 	TxnOffset int
 

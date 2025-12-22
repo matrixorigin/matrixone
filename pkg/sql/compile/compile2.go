@@ -39,6 +39,10 @@ import (
 	"go.uber.org/zap"
 )
 
+type runSQLCoordinator interface {
+	CancelAndWaitRunningSQL(ctx context.Context, keepToken uint64) error
+}
+
 // I create this file to store the two most important entry functions for the Compile struct and their helper functions.
 // These functions are used to build the pipeline from the query plan and execute the pipeline respectively.
 //
@@ -325,6 +329,13 @@ func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
 	c.proc.GetTxnOperator().GetWorkspace().IncrSQLCount()
 
 	topContext := c.proc.GetTopContext()
+	if txnOp := c.proc.GetTxnOperator(); txnOp != nil {
+		if coordinator, ok := txnOp.(runSQLCoordinator); ok {
+			if err := coordinator.CancelAndWaitRunningSQL(topContext, c.runSqlToken); err != nil {
+				return nil, err
+			}
+		}
+	}
 
 	// clear the workspace of the failed statement
 	if e := c.proc.GetTxnOperator().GetWorkspace().RollbackLastStatement(topContext); e != nil {
