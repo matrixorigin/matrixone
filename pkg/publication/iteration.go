@@ -298,6 +298,7 @@ func InitializeIterationContext(
 						mapping.Previous.UnMarshal(previousBytes)
 					}
 				}
+				// Delete flag is not persisted, it's only used in current iteration
 				iterationCtx.ActiveAObj[uuid] = mapping
 			}
 		}
@@ -384,6 +385,7 @@ func UpdateIterationState(
 					previousBytes := mapping.Previous.Marshal()
 					mappingJSON.Previous = base64.StdEncoding.EncodeToString(previousBytes)
 				}
+				// Delete flag is not persisted, it's only used in current iteration
 				activeAObjJSON[uuid] = mappingJSON
 			}
 		}
@@ -1189,6 +1191,15 @@ func ExecuteIteration(
 
 	fs := cnEngine.(*disttae.Engine).FS()
 
+	// Map to deduplicate objects by ObjectId
+	// Key: ObjectId, Value: object info (stats, isTombstone, delete)
+	type objectInfo struct {
+		stats       objectio.ObjectStats
+		isTombstone bool
+		delete      bool
+	}
+	objectMap := make(map[objectio.ObjectId]objectInfo)
+
 	if objectListResult != nil {
 		// Check for errors during iteration
 		if err = objectListResult.Err(); err != nil {
@@ -1212,131 +1223,150 @@ func ExecuteIteration(
 				return
 			}
 
-			// Collect object stats for Step 5 (SubmitObjectsToTN)
-			if len(statsBytes) == objectio.ObjectStatsLen {
-				var stats objectio.ObjectStats
-				stats.UnMarshal(statsBytes)
-				if deleteAt.IsEmpty() {
-					// Object to insert: DeleteAt is empty
-					if isTombstone {
-						collectedTombstoneInsertStats = append(collectedTombstoneInsertStats, stats)
-					} else {
-						collectedDataInsertStats = append(collectedDataInsertStats, stats)
+			// Parse ObjectStats from bytes
+			var stats objectio.ObjectStats
+			stats.UnMarshal(statsBytes)
+
+			// Get ObjectId from stats
+			objID := *stats.ObjectName().ObjectId()
+			delete := !deleteAt.IsEmpty()
+
+			// Check if this object already exists in map
+			if existing, exists := objectMap[objID]; exists {
+				// If there are two records, one without delete and one with delete, use delete to override
+				if delete {
+					// New record is delete, override existing record
+					objectMap[objID] = objectInfo{
+						stats:       stats,
+						isTombstone: isTombstone,
+						delete:      true,
 					}
+				} else if existing.delete {
+					// Existing record is delete, keep delete (don't override)
+					// Keep existing record
 				} else {
-					// Object to delete: DeleteAt is not empty
-					if isTombstone {
-						collectedTombstoneDeleteStats = append(collectedTombstoneDeleteStats, stats)
-					} else {
-						collectedDataDeleteStats = append(collectedDataDeleteStats, stats)
+					// Both are non-delete, update with new record
+					objectMap[objID] = objectInfo{
+						stats:       stats,
+						isTombstone: isTombstone,
+						delete:      false,
 					}
+				}
+			} else {
+				// New object, add to map
+				objectMap[objID] = objectInfo{
+					stats:       stats,
+					isTombstone: isTombstone,
+					delete:      delete,
 				}
 			}
 
-			// Call FilterObject to handle the object
-			// FilterObject will:
-			// - For aobj: get object from upstream, convert to batch, filter by snapshot TS, create new object
-			// - For nobj: get object from upstream and write directly to fileservice
-			if err = FilterObject(ctx, statsBytes, snapshotTS, iterationCtx, fs, mp); err != nil {
-				err = moerr.NewInternalErrorf(ctx, "failed to filter object: %v", err)
-				return
+		}
+
+		// Extract objects from map to collected stats lists
+		for _, info := range objectMap {
+			if info.delete {
+				// Object to delete
+				if info.isTombstone {
+					collectedTombstoneDeleteStats = append(collectedTombstoneDeleteStats, info.stats)
+				} else {
+					collectedDataDeleteStats = append(collectedDataDeleteStats, info.stats)
+				}
+			} else {
+				// Object to insert
+				if info.isTombstone {
+					collectedTombstoneInsertStats = append(collectedTombstoneInsertStats, info.stats)
+				} else {
+					collectedDataInsertStats = append(collectedDataInsertStats, info.stats)
+				}
+				statsBytes := info.stats.Marshal()
+				delete := info.delete
+				// Call FilterObject to handle the object (for both insert and delete)
+				// FilterObject will:
+				// - For aobj: get object from upstream, convert to batch, filter by snapshot TS, create new object
+				// - For nobj: get object from upstream and write directly to fileservice
+				if err = FilterObject(ctx, statsBytes, snapshotTS, iterationCtx, fs, mp, delete); err != nil {
+					err = moerr.NewInternalErrorf(ctx, "failed to filter object: %v", err)
+					return
+				}
 			}
 		}
 	}
 
-	// Submit collected objects to TN in order: tombstone delete -> tombstone insert -> data delete -> data insert
-	// Use downstream account ID from iterationCtx.SrcInfo
-	// Set PkCheckByTN to SkipAllDedup to completely skip all deduplication checks in TN
-	downstreamCtx := context.WithValue(ctx, defines.TenantIDKey{}, iterationCtx.SrcInfo.AccountID)
-	downstreamCtx = context.WithValue(downstreamCtx, defines.PkCheckByTN{}, int8(cmd_util.SkipAllDedup))
-
-	// 1. Submit collected tombstone delete objects (soft delete)
-	if len(collectedTombstoneDeleteStats) > 0 {
-		if err = submitObjectsAsDelete(downstreamCtx, iterationCtx, cnEngine, iterationCtx.SrcInfo.DBName, iterationCtx.SrcInfo.TableName, collectedTombstoneDeleteStats, mp); err != nil {
-			err = moerr.NewInternalErrorf(ctx, "failed to submit collected tombstone delete objects: %v", err)
-			return
-		}
-	}
-
-	// 2. Submit collected tombstone insert objects
-	if len(collectedTombstoneInsertStats) > 0 {
-		if err = submitObjectsAsInsert(downstreamCtx, iterationCtx, cnEngine, iterationCtx.SrcInfo.DBName, iterationCtx.SrcInfo.TableName, collectedTombstoneInsertStats, nil, mp); err != nil {
-			err = moerr.NewInternalErrorf(ctx, "failed to submit collected tombstone insert objects: %v", err)
-			return
-		}
-	}
-
-	// 3. Submit collected data delete objects (soft delete)
-	if len(collectedDataDeleteStats) > 0 {
-		if err = submitObjectsAsDelete(downstreamCtx, iterationCtx, cnEngine, iterationCtx.SrcInfo.DBName, iterationCtx.SrcInfo.TableName, collectedDataDeleteStats, mp); err != nil {
-			err = moerr.NewInternalErrorf(ctx, "failed to submit collected data delete objects: %v", err)
-			return
-		}
-	}
-
-	// 4. Submit collected data insert objects
-	if len(collectedDataInsertStats) > 0 {
-		if err = submitObjectsAsInsert(downstreamCtx, iterationCtx, cnEngine, iterationCtx.SrcInfo.DBName, iterationCtx.SrcInfo.TableName, nil, collectedDataInsertStats, mp); err != nil {
-			err = moerr.NewInternalErrorf(ctx, "failed to submit collected data insert objects: %v", err)
-			return
-		}
-	}
-
-	// Process ActiveAObj (same as SubmitObjectsToTN does)
+	// Process ActiveAObj and merge into collected stats
+	// All objects (aobj and nobj) will be submitted together after processing
 	if iterationCtx.ActiveAObj != nil {
-		var activeTombstoneDeleteStats []objectio.ObjectStats
-		var activeTombstoneInsertStats []objectio.ObjectStats
-		var activeDataDeleteStats []objectio.ObjectStats
-		var activeDataInsertStats []objectio.ObjectStats
+		var objectsToDelete []string // Track UUIDs to delete from map
 
 		for upstreamUUID, mapping := range iterationCtx.ActiveAObj {
+			// If delete is true, delete the object and remove from map
+			if mapping.Delete {
+				// Delete previous object if it exists (previous object was created in earlier iteration)
+				var zeroStats objectio.ObjectStats
+				if mapping.Previous != zeroStats {
+					// Delete the previous object (assume data object, not tombstone)
+					collectedDataDeleteStats = append(collectedDataDeleteStats, mapping.Previous)
+				}
+				// Mark for removal from map (no need to record in table)
+				objectsToDelete = append(objectsToDelete, upstreamUUID)
+				continue
+			}
+
 			// Check if current stats is valid (not zero value)
 			var zeroStats objectio.ObjectStats
 			if mapping.Current != zeroStats {
 				// New object to insert (not tombstone by default for ActiveAObj)
-				activeDataInsertStats = append(activeDataInsertStats, mapping.Current)
+				collectedDataInsertStats = append(collectedDataInsertStats, mapping.Current)
 			}
 
 			// Check if previous stats is valid (not zero value)
 			if mapping.Previous != zeroStats {
 				// Previous object to delete (assume data object, not tombstone)
-				activeDataDeleteStats = append(activeDataDeleteStats, mapping.Previous)
-			}
-
-			_ = upstreamUUID // avoid unused variable warning
-		}
-
-		// Submit active objects in order: tombstone delete -> tombstone insert -> data delete -> data insert
-		// 1. Submit active tombstone delete objects (soft delete)
-		if len(activeTombstoneDeleteStats) > 0 {
-			if err = submitObjectsAsDelete(downstreamCtx, iterationCtx, cnEngine, iterationCtx.SrcInfo.DBName, iterationCtx.SrcInfo.TableName, activeTombstoneDeleteStats, mp); err != nil {
-				err = moerr.NewInternalErrorf(ctx, "failed to submit active tombstone delete objects: %v", err)
-				return
+				collectedDataDeleteStats = append(collectedDataDeleteStats, mapping.Previous)
 			}
 		}
 
-		// 2. Submit active tombstone insert objects
-		if len(activeTombstoneInsertStats) > 0 {
-			if err = submitObjectsAsInsert(downstreamCtx, iterationCtx, cnEngine, iterationCtx.SrcInfo.DBName, iterationCtx.SrcInfo.TableName, activeTombstoneInsertStats, nil, mp); err != nil {
-				err = moerr.NewInternalErrorf(ctx, "failed to submit active tombstone insert objects: %v", err)
-				return
-			}
+		// Remove objects marked for deletion from map
+		for _, uuid := range objectsToDelete {
+			delete(iterationCtx.ActiveAObj, uuid)
 		}
+	}
 
-		// 3. Submit active data delete objects (soft delete)
-		if len(activeDataDeleteStats) > 0 {
-			if err = submitObjectsAsDelete(downstreamCtx, iterationCtx, cnEngine, iterationCtx.SrcInfo.DBName, iterationCtx.SrcInfo.TableName, activeDataDeleteStats, mp); err != nil {
-				err = moerr.NewInternalErrorf(ctx, "failed to submit active data delete objects: %v", err)
-				return
-			}
+	// Submit all collected objects to TN in order: tombstone delete -> tombstone insert -> data delete -> data insert
+	// Use downstream account ID from iterationCtx.SrcInfo
+	// Set PkCheckByTN to SkipAllDedup to completely skip all deduplication checks in TN
+	downstreamCtx := context.WithValue(ctx, defines.TenantIDKey{}, iterationCtx.SrcInfo.AccountID)
+	downstreamCtx = context.WithValue(downstreamCtx, defines.PkCheckByTN{}, int8(cmd_util.SkipAllDedup))
+
+	// 1. Submit tombstone delete objects (soft delete)
+	if len(collectedTombstoneDeleteStats) > 0 {
+		if err = submitObjectsAsDelete(downstreamCtx, iterationCtx, cnEngine, iterationCtx.SrcInfo.DBName, iterationCtx.SrcInfo.TableName, collectedTombstoneDeleteStats, mp); err != nil {
+			err = moerr.NewInternalErrorf(ctx, "failed to submit tombstone delete objects: %v", err)
+			return
 		}
+	}
 
-		// 4. Submit active data insert objects
-		if len(activeDataInsertStats) > 0 {
-			if err = submitObjectsAsInsert(downstreamCtx, iterationCtx, cnEngine, iterationCtx.SrcInfo.DBName, iterationCtx.SrcInfo.TableName, nil, activeDataInsertStats, mp); err != nil {
-				err = moerr.NewInternalErrorf(ctx, "failed to submit active data insert objects: %v", err)
-				return
-			}
+	// 2. Submit tombstone insert objects
+	if len(collectedTombstoneInsertStats) > 0 {
+		if err = submitObjectsAsInsert(downstreamCtx, iterationCtx, cnEngine, iterationCtx.SrcInfo.DBName, iterationCtx.SrcInfo.TableName, collectedTombstoneInsertStats, nil, mp); err != nil {
+			err = moerr.NewInternalErrorf(ctx, "failed to submit tombstone insert objects: %v", err)
+			return
+		}
+	}
+
+	// 3. Submit data delete objects (soft delete)
+	if len(collectedDataDeleteStats) > 0 {
+		if err = submitObjectsAsDelete(downstreamCtx, iterationCtx, cnEngine, iterationCtx.SrcInfo.DBName, iterationCtx.SrcInfo.TableName, collectedDataDeleteStats, mp); err != nil {
+			err = moerr.NewInternalErrorf(ctx, "failed to submit data delete objects: %v", err)
+			return
+		}
+	}
+
+	// 4. Submit data insert objects
+	if len(collectedDataInsertStats) > 0 {
+		if err = submitObjectsAsInsert(downstreamCtx, iterationCtx, cnEngine, iterationCtx.SrcInfo.DBName, iterationCtx.SrcInfo.TableName, nil, collectedDataInsertStats, mp); err != nil {
+			err = moerr.NewInternalErrorf(ctx, "failed to submit data insert objects: %v", err)
+			return
 		}
 	}
 
