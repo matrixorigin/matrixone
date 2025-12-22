@@ -813,24 +813,33 @@ func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesPara
 	}
 
 	// get the table's snapshot
-	// Priority: use cached partition state if provided, otherwise get a new one
-	hasCachedPart := false
+	// Note: CachedPartitionState is ONLY for storing in the result BlockListRelData
+	// to ensure consistency. It should NOT be used for object iteration in rangesOnePart
+	// unless the policy explicitly requests committed persisted data.
+	var cachedPart *logtailreplay.PartitionState
 	if rangesParam.CachedPartitionState != nil {
-		if cachedPart, ok := rangesParam.CachedPartitionState.(*logtailreplay.PartitionState); ok && cachedPart != nil {
-			part = cachedPart
-			hasCachedPart = true
+		if cp, ok := rangesParam.CachedPartitionState.(*logtailreplay.PartitionState); ok && cp != nil {
+			cachedPart = cp
 		}
 	}
-	if part == nil && rangesParam.Policy&engine.Policy_CollectCommittedPersistedData != 0 {
-		if part, err = tbl.getPartitionState(ctx); err != nil {
-			return
+
+	// Only get partition state for rangesOnePart when policy requires persisted data
+	var partForRanges *logtailreplay.PartitionState
+	if rangesParam.Policy&engine.Policy_CollectCommittedPersistedData != 0 {
+		if cachedPart != nil {
+			partForRanges = cachedPart
+		} else {
+			if partForRanges, err = tbl.getPartitionState(ctx); err != nil {
+				return
+			}
 		}
-		hasCachedPart = true // Mark that we have a valid partition state
+		// Also set part for later use in BlockListRelData
+		part = partForRanges
 	}
 
 	if err = tbl.rangesOnePart(
 		ctx,
-		part,
+		partForRanges,
 		tbl.GetTableDef(ctx),
 		rangesParam,
 		&blocks,
@@ -840,10 +849,15 @@ func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesPara
 		return
 	}
 
-	// Only get partition state if we don't already have one from cache or earlier call
-	if part == nil && !hasCachedPart {
-		if part, err = tbl.getPartitionState(ctx); err != nil {
-			return
+	// Get partition state for BlockListRelData if not already set
+	// Use cached partition state if available, otherwise get a new one
+	if part == nil {
+		if cachedPart != nil {
+			part = cachedPart
+		} else {
+			if part, err = tbl.getPartitionState(ctx); err != nil {
+				return
+			}
 		}
 	}
 
