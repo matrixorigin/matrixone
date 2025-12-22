@@ -29,12 +29,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"go.uber.org/zap"
 )
 
 // IterationState represents the state of an iteration
@@ -861,6 +863,17 @@ func submitObjectsAsInsert(ctx context.Context, iterationCtx *IterationContext, 
 
 	// Handle tombstone objects: call rel.Delete instead of rel.Write
 	if len(tombstoneInsertStats) > 0 {
+		// Log tombstone insert objects
+		for _, stats := range tombstoneInsertStats {
+			logutil.Info("ccpr-iteration submitting object",
+				zap.Uint64("task_id", iterationCtx.TaskID),
+				zap.Uint64("lsn", iterationCtx.IterationLSN),
+				zap.String("object_name", stats.ObjectName().String()),
+				zap.String("object_type", "tombstone"),
+				zap.String("operation", "insert"),
+			)
+		}
+
 		// Create batch with ObjectStats for deletion
 		deleteBat := batch.NewWithSize(1)
 		deleteBat.SetAttributes([]string{catalog.ObjectMeta_ObjectStats})
@@ -890,6 +903,17 @@ func submitObjectsAsInsert(ctx context.Context, iterationCtx *IterationContext, 
 
 	// Handle regular data objects: use the original Write logic
 	if len(dataInsertStats) > 0 {
+		// Log data insert objects
+		for _, stats := range dataInsertStats {
+			logutil.Info("ccpr-iteration submitting object",
+				zap.Uint64("task_id", iterationCtx.TaskID),
+				zap.Uint64("lsn", iterationCtx.IterationLSN),
+				zap.String("object_name", stats.ObjectName().String()),
+				zap.String("object_type", "data"),
+				zap.String("operation", "insert"),
+			)
+		}
+
 		// Create batch with ObjectStats using the same structure as s3util
 		bat := batch.NewWithSize(2)
 		bat.SetAttributes([]string{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats})
@@ -972,6 +996,20 @@ func submitObjectsAsDelete(ctx context.Context, iterationCtx *IterationContext, 
 			if strings.Contains(objName, "tombstone") || strings.Contains(objName, "del_") {
 				isTombstone = true
 			}
+
+			// Log object deletion
+			objectType := "data"
+			if isTombstone {
+				objectType = "tombstone"
+			}
+			logutil.Info("ccpr-iteration submitting object",
+				zap.Uint64("task_id", iterationCtx.TaskID),
+				zap.Uint64("lsn", iterationCtx.IterationLSN),
+				zap.String("object_name", objName),
+				zap.String("object_type", objectType),
+				zap.String("operation", "delete"),
+			)
+
 			// objID is already *objectio.ObjectId, so we pass it directly
 			if err := delegate.SoftDeleteObject(ctx, objID, isTombstone); err != nil {
 				return moerr.NewInternalErrorf(ctx, "failed to soft delete object %s: %v", objID.ShortStringEx(), err)
@@ -981,6 +1019,27 @@ func submitObjectsAsDelete(ctx context.Context, iterationCtx *IterationContext, 
 	}
 
 	// Fallback to old Delete method for other relation types
+	// Log objects before deletion
+	for _, stats := range statsList {
+		objName := stats.ObjectName().String()
+		// Check if it's a tombstone object by checking the object name pattern
+		isTombstone := false
+		if strings.Contains(objName, "tombstone") || strings.Contains(objName, "del_") {
+			isTombstone = true
+		}
+		objectType := "data"
+		if isTombstone {
+			objectType = "tombstone"
+		}
+		logutil.Info("ccpr-iteration submitting object",
+			zap.Uint64("task_id", iterationCtx.TaskID),
+			zap.Uint64("lsn", iterationCtx.IterationLSN),
+			zap.String("object_name", objName),
+			zap.String("object_type", objectType),
+			zap.String("operation", "delete"),
+		)
+	}
+
 	// Create batch with ObjectStats for deletion
 	bat := batch.NewWithSize(1)
 	bat.SetAttributes([]string{catalog.ObjectMeta_ObjectStats})
@@ -1036,6 +1095,17 @@ func ExecuteIteration(
 		return
 	}
 
+	// Log iteration start with task id, lsn, and src info
+	logutil.Info("ccpr-iteration iteration start",
+		zap.Uint64("task_id", iterationCtx.TaskID),
+		zap.Uint64("lsn", iterationCtx.IterationLSN),
+		zap.String("src_info", fmt.Sprintf("sync_level=%s, account_id=%d, db_name=%s, table_name=%s",
+			iterationCtx.SrcInfo.SyncLevel,
+			iterationCtx.SrcInfo.AccountID,
+			iterationCtx.SrcInfo.DBName,
+			iterationCtx.SrcInfo.TableName)),
+	)
+
 	defer func() {
 		commitErr := iterationCtx.Close(err == nil)
 		if commitErr != nil {
@@ -1075,6 +1145,16 @@ func ExecuteIteration(
 		err = moerr.NewInternalErrorf(ctx, "failed to request upstream snapshot: %v", err)
 		return
 	}
+
+	// Log snapshot information
+	logutil.Info("ccpr-iteration snapshot info",
+		zap.Uint64("task_id", iterationCtx.TaskID),
+		zap.Uint64("lsn", iterationCtx.IterationLSN),
+		zap.String("current_snapshot_name", iterationCtx.CurrentSnapshotName),
+		zap.Int64("current_snapshot_ts", iterationCtx.CurrentSnapshotTS.Physical()),
+		zap.String("prev_snapshot_name", iterationCtx.PrevSnapshotName),
+		zap.Int64("prev_snapshot_ts", iterationCtx.PrevSnapshotTS.Physical()),
+	)
 
 	// TODO: 找到做snapshot的table，获取objectlist snapshot, 需要当前snapshot
 	if err = ProcessDDLChanges(ctx, cnEngine, iterationCtx); err != nil {

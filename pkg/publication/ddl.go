@@ -23,9 +23,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"go.uber.org/zap"
 )
 
 // DatabaseMetadata represents metadata from mo_databases table
@@ -199,6 +201,39 @@ func ProcessDDLChanges(
 
 	// Step 3: Execute DDL operations for tables with non-empty operations
 	// Use downstream account ID from iterationCtx.SrcInfo
+	// Log DDL operations to be executed
+	var ddlOperations []string
+	for dbName, tables := range ddlMap {
+		for tableName, ddlInfo := range tables {
+			if ddlInfo.Operation == 0 {
+				// Skip tables with no operation needed
+				continue
+			}
+
+			var operationStr string
+			switch ddlInfo.Operation {
+			case DDLOperationCreate:
+				operationStr = "CREATE"
+			case DDLOperationAlter:
+				operationStr = "ALTER"
+			case DDLOperationDrop:
+				operationStr = "DROP"
+			default:
+				operationStr = fmt.Sprintf("UNKNOWN(%d)", ddlInfo.Operation)
+			}
+			ddlOperations = append(ddlOperations, fmt.Sprintf("%s TABLE %s.%s", operationStr, dbName, tableName))
+		}
+	}
+
+	// Log DDL operations with task id and lsn
+	if len(ddlOperations) > 0 {
+		logutil.Info("ccpr-iteration DDL operations to execute",
+			zap.Uint64("task_id", iterationCtx.TaskID),
+			zap.Uint64("lsn", iterationCtx.IterationLSN),
+			zap.Strings("ddl_operations", ddlOperations),
+		)
+	}
+
 	for dbName, tables := range ddlMap {
 		for tableName, ddlInfo := range tables {
 			if ddlInfo.Operation == 0 {
