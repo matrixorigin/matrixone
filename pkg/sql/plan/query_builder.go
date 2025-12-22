@@ -5211,13 +5211,13 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 		return 0, err
 	}
 
-	nodeID := builder.appendNode(&plan.Node{
+	node := &plan.Node{
 		NodeType:     plan.Node_JOIN,
 		Children:     []int32{leftChildID, rightChildID},
 		JoinType:     joinType,
 		ExtraOptions: tbl.Option,
-	}, ctx)
-	node := builder.qry.Nodes[nodeID]
+	}
+	nodeID := builder.appendNode(node, ctx)
 
 	ctx.binder = NewTableBinder(builder, ctx)
 

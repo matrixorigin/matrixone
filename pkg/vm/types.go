@@ -41,9 +41,8 @@ const (
 	Connector
 	Projection
 
-	Join
+	HashJoin
 	LoopJoin
-	Left
 	Single
 	Semi
 	RightSemi
@@ -90,7 +89,6 @@ const (
 	MergeBlock
 	// MergeDelete is used to recieve S3 Blcok Delete Info from remote Cn
 	MergeDelete
-	Right
 	OnDuplicateKey
 	FuzzyFilter
 	PreInsert
@@ -118,8 +116,8 @@ const (
 
 var OperatorToStrMap map[OpType]string
 var StrToOperatorMap map[string]OpType
-var MinorOpMap map[string]struct{}
-var MajorOpMap map[string]struct{}
+var MinorOpMap map[string]bool
+var MajorOpMap map[string]bool
 
 func init() {
 	// Initialize OperatorToStrMap
@@ -138,9 +136,8 @@ func init() {
 		Dispatch:                "Dispatch",
 		Connector:               "Connector",
 		Projection:              "Projection",
-		Join:                    "Join",
+		HashJoin:                "HashJoin",
 		LoopJoin:                "LoopJoin",
-		Left:                    "Left",
 		Single:                  "Single",
 		Semi:                    "Semi",
 		RightSemi:               "RightSemi",
@@ -173,7 +170,6 @@ func init() {
 		ValueScan:               "ValueScan",
 		MergeBlock:              "MergeBlock",
 		MergeDelete:             "MergeDelete",
-		Right:                   "Right",
 		OnDuplicateKey:          "OnDuplicateKey",
 		FuzzyFilter:             "FuzzyFilter",
 		PreInsert:               "PreInsert",
@@ -196,173 +192,42 @@ func init() {
 	}
 
 	// Initialize MinorOpMap (small impact on time consumption)
-	MinorOpMap = map[string]struct{}{
-		OperatorToStrMap[HashBuild]:    {},
-		OperatorToStrMap[ShuffleBuild]: {},
-		OperatorToStrMap[IndexBuild]:   {},
-		OperatorToStrMap[Filter]:       {},
-		OperatorToStrMap[MergeGroup]:   {},
-		OperatorToStrMap[MergeOrder]:   {},
+	MinorOpMap = map[string]bool{
+		OperatorToStrMap[HashBuild]:    true,
+		OperatorToStrMap[ShuffleBuild]: true,
+		OperatorToStrMap[IndexBuild]:   true,
+		OperatorToStrMap[Filter]:       true,
+		OperatorToStrMap[MergeGroup]:   true,
+		OperatorToStrMap[MergeOrder]:   true,
 	}
 
 	// Initialize MajorOpMap (large impact on time consumption)
-	MajorOpMap = map[string]struct{}{
-		OperatorToStrMap[TableScan]: {},
-		OperatorToStrMap[External]:  {},
-		OperatorToStrMap[Order]:     {},
-		OperatorToStrMap[Window]:    {},
-		OperatorToStrMap[Group]:     {},
-		OperatorToStrMap[Join]:      {},
-		OperatorToStrMap[LoopJoin]:  {},
-		OperatorToStrMap[Left]:      {},
-		OperatorToStrMap[Single]:    {},
-		OperatorToStrMap[Semi]:      {},
-		OperatorToStrMap[RightSemi]: {},
-		OperatorToStrMap[Anti]:      {},
-		OperatorToStrMap[RightAnti]: {},
-		OperatorToStrMap[Mark]:      {},
-		OperatorToStrMap[Product]:   {},
-		OperatorToStrMap[ProductL2]: {},
+	MajorOpMap = map[string]bool{
+		OperatorToStrMap[TableScan]: true,
+		OperatorToStrMap[External]:  true,
+		OperatorToStrMap[Order]:     true,
+		OperatorToStrMap[Window]:    true,
+		OperatorToStrMap[Group]:     true,
+		OperatorToStrMap[HashJoin]:  true,
+		OperatorToStrMap[LoopJoin]:  true,
+		OperatorToStrMap[Single]:    true,
+		OperatorToStrMap[Semi]:      true,
+		OperatorToStrMap[RightSemi]: true,
+		OperatorToStrMap[Anti]:      true,
+		OperatorToStrMap[RightAnti]: true,
+		OperatorToStrMap[Mark]:      true,
+		OperatorToStrMap[Product]:   true,
+		OperatorToStrMap[ProductL2]: true,
 	}
 }
 
 func (op OpType) String() string {
-	switch op {
-	case Top:
-		return "Top"
-	case Limit:
-		return "Limit"
-	case Order:
-		return "Order"
-	case Group:
-		return "Group"
-	case Window:
-		return "Window"
-	case TimeWin:
-		return "TimeWin"
-	case Fill:
-		return "Fill"
-	case Output:
-		return "Output"
-	case Offset:
-		return "Offset"
-	case Product:
-		return "Product"
-	case Filter:
-		return "Filter"
-	case Dispatch:
-		return "Dispatch"
-	case Connector:
-		return "Connector"
-	case Projection:
-		return "Projection"
-	case Join:
-		return "Join"
-	case LoopJoin:
-		return "LoopJoin"
-	case Left:
-		return "Left"
-	case Single:
-		return "Single"
-	case Semi:
-		return "Semi"
-	case RightSemi:
-		return "RightSemi"
-	case Anti:
-		return "Anti"
-	case RightAnti:
-		return "RightAnti"
-	case Mark:
-		return "Mark"
-	case IndexJoin:
-		return "IndexJoin"
-	case IndexBuild:
-		return "IndexBuild"
-	case Merge:
-		return "Merge"
-	case MergeTop:
-		return "MergeTop"
-	case MergeLimit:
-		return "MergeLimit"
-	case MergeOrder:
-		return "MergeOrder"
-	case MergeGroup:
-		return "MergeGroup"
-	case MergeOffset:
-		return "MergeOffset"
-	case MergeRecursive:
-		return "MergeRecursive"
-	case MergeCTE:
-		return "MergeCTE"
-	case Partition:
-		return "Partition"
-	case Deletion:
-		return "Deletion"
-	case Insert:
-		return "Insert"
-	case MultiUpdate:
-		return "MultiUpdate"
-	case External:
-		return "External"
-	case Source:
-		return "Source"
-	case Minus:
-		return "Minus"
-	case Intersect:
-		return "Intersect"
-	case IntersectAll:
-		return "IntersectAll"
-	case UnionAll:
-		return "UnionAll"
-	case HashBuild:
-		return "HashBuild"
-	case ShuffleBuild:
-		return "ShuffleBuild"
-	case TableFunction:
-		return "TableFunction"
-	case TableScan:
-		return "TableScan"
-	case ValueScan:
-		return "ValueScan"
-	case MergeBlock:
-		return "MergeBlock"
-	case MergeDelete:
-		return "MergeDelete"
-	case Right:
-		return "Right"
-	case OnDuplicateKey:
-		return "OnDuplicateKey"
-	case FuzzyFilter:
-		return "FuzzyFilter"
-	case PreInsert:
-		return "PreInsert"
-	case PreInsertUnique:
-		return "PreInsertUnique"
-	case PreInsertSecondaryIndex:
-		return "PreInsertSecondaryIndex"
-	case LastInstructionOp:
-		return "LastInstructionOp"
-	case LockOp:
-		return "LockOp"
-	case Shuffle:
-		return "Shuffle"
-	case Sample:
-		return "Sample"
-	case ProductL2:
-		return "ProductL2"
-	case Mock:
-		return "Mock"
-	case Apply:
-		return "Apply"
-	case PostDml:
-		return "PostDml"
-	case DedupJoin:
-		return "DedupJoin"
-	case RightDedupJoin:
-		return "RightDedupJoin"
-	default:
-		return "Unknown"
+	str := OperatorToStrMap[op]
+	if str == "" {
+		str = "Unknown"
 	}
+
+	return str
 }
 
 type Operator interface {

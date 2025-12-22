@@ -21,8 +21,6 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
-	"github.com/stretchr/testify/require"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -47,12 +45,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/join"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/left"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
@@ -69,7 +66,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertunique"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
@@ -85,6 +81,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/stretchr/testify/require"
 )
 
 func Test_EncodeProcessInfo(t *testing.T) {
@@ -189,14 +186,8 @@ func Test_convertToPipelineInstruction(t *testing.T) {
 		&shuffle.Shuffle{},
 		&dispatch.Dispatch{},
 		&group.Group{},
-		&join.InnerJoin{
-			Conditions: [][]*plan.Expr{nil, nil},
-		},
-		&left.LeftJoin{
-			Conditions: [][]*plan.Expr{nil, nil},
-		},
-		&right.RightJoin{
-			Conditions: [][]*plan.Expr{nil, nil},
+		&hashjoin.HashJoin{
+			EqConds: [][]*plan.Expr{nil, nil},
 		},
 		&rightsemi.RightSemi{
 			Conditions: [][]*plan.Expr{nil, nil},
@@ -287,13 +278,11 @@ func Test_convertToVmInstruction(t *testing.T) {
 		{Op: int32(vm.Shuffle), Shuffle: &pipeline.Shuffle{}},
 		{Op: int32(vm.Dispatch), Dispatch: &pipeline.Dispatch{}},
 		{Op: int32(vm.Group), Agg: &pipeline.Group{}},
-		{Op: int32(vm.Join), Join: &pipeline.Join{}},
-		{Op: int32(vm.Left), LeftJoin: &pipeline.LeftJoin{}},
-		{Op: int32(vm.Right), RightJoin: &pipeline.RightJoin{}},
+		{Op: int32(vm.HashJoin), HashJoin: &pipeline.HashJoin{}},
 		{Op: int32(vm.RightSemi), RightSemiJoin: &pipeline.RightSemiJoin{}},
 		{Op: int32(vm.RightAnti), RightAntiJoin: &pipeline.RightAntiJoin{}},
 		{Op: int32(vm.Limit), Limit: plan.MakePlan2Int64ConstExprWithType(1)},
-		{Op: int32(vm.LoopJoin), Join: &pipeline.Join{}},
+		{Op: int32(vm.LoopJoin), LoopJoin: &pipeline.LoopJoin{}},
 		{Op: int32(vm.Offset), Offset: plan.MakePlan2Int64ConstExprWithType(0)},
 		{Op: int32(vm.Order), OrderBy: []*plan.OrderBySpec{}},
 		{Op: int32(vm.Product), Product: &pipeline.Product{}},
