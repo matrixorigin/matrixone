@@ -21,8 +21,6 @@ import (
 	"strings"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -31,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -43,6 +42,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 var (
@@ -367,6 +367,12 @@ func LockRows(
 	txnOp := proc.GetTxnOperator()
 	if !txnOp.Txn().IsPessimistic() {
 		return nil
+	}
+
+	if faultInjected, _ := objectio.LogCNNeedRetryErrorInjected(
+		rel.GetTableDef(proc.Ctx).DbName, rel.GetTableName(),
+	); faultInjected {
+		return retryError
 	}
 
 	parker := types.NewPacker()
