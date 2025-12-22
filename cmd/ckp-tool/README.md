@@ -1,10 +1,10 @@
-# ckp-reader
+# ckp-tool
 
 A command-line tool for reading and modifying checkpoint meta files in MatrixOne.
 
 ## Overview
 
-`ckp-reader` is a utility tool designed to inspect and manipulate checkpoint meta files. It provides functionality to:
+`ckp-tool` is a utility tool designed to inspect and manipulate checkpoint meta files. It provides functionality to:
 - Read and display checkpoint meta file contents in a human-readable format
 - Delete specific rows from checkpoint meta files by index or by matching end_ts value
 
@@ -13,10 +13,10 @@ A command-line tool for reading and modifying checkpoint meta files in MatrixOne
 To build the tool:
 
 ```bash
-make ckp-reader
+make ckp-tool
 ```
 
-The binary will be generated as `ckp-reader` in the project root directory.
+The binary will be generated as `ckp-tool` in the project root directory.
 
 ## Usage
 
@@ -25,7 +25,7 @@ The binary will be generated as `ckp-reader` in the project root directory.
 The tool uses a subcommand-based interface:
 
 ```
-ckp-reader <command> [flags]
+ckp-tool <command> [flags]
 ```
 
 ### Commands
@@ -36,7 +36,7 @@ Reads and displays the contents of a checkpoint meta file.
 
 **Syntax:**
 ```bash
-ckp-reader read -file <path> [-s3=true|false]
+ckp-tool read -file <path> [-s3=true|false]
 ```
 
 **Flags:**
@@ -46,10 +46,10 @@ ckp-reader read -file <path> [-s3=true|false]
 **Example:**
 ```bash
 # Read a checkpoint file
-ckp-reader read -file ./meta_123_456.ckp
+ckp-tool read -file ./meta_123_456.ckp
 
 # Read with LocalFS mode (with checksum validation)
-ckp-reader read -file ./meta_123_456.ckp -s3=false
+ckp-tool read -file ./meta_123_456.ckp -s3=false
 ```
 
 **Output:**
@@ -70,7 +70,7 @@ Deletes one or more rows from a checkpoint meta file. You can specify the row to
 
 **Syntax:**
 ```bash
-ckp-reader delete -file <path> [-index <row> | -end-ts <ts>] [-output <path>] [-s3=true|false]
+ckp-tool delete -file <path> [-index <row> | -end-ts <ts>] [-output <path>] [-s3=true|false]
 ```
 
 **Flags:**
@@ -86,16 +86,16 @@ ckp-reader delete -file <path> [-index <row> | -end-ts <ts>] [-output <path>] [-
 
 ```bash
 # Delete row by index (delete the first row, index 0)
-ckp-reader delete -file ./meta_123_456.ckp -index 0
+ckp-tool delete -file ./meta_123_456.ckp -index 0
 
 # Delete row by end_ts value
-ckp-reader delete -file ./meta_123_456.ckp -end-ts '1766148146913695795-1'
+ckp-tool delete -file ./meta_123_456.ckp -end-ts '1766148146913695795-1'
 
 # Delete row and save to a new file
-ckp-reader delete -file ./meta_123_456.ckp -index 1 -output ./meta_new.ckp
+ckp-tool delete -file ./meta_123_456.ckp -index 1 -output ./meta_new.ckp
 
 # Delete with LocalFS mode
-ckp-reader delete -file ./meta_123_456.ckp -index 0 -s3=false
+ckp-tool delete -file ./meta_123_456.ckp -index 0 -s3=false
 ```
 
 **Verification:**
@@ -106,11 +106,11 @@ After deletion, the tool automatically verifies the result by reading the modifi
 Displays the help message with usage information.
 
 ```bash
-ckp-reader help
+ckp-tool help
 # or
-ckp-reader -h
+ckp-tool -h
 # or
-ckp-reader --help
+ckp-tool --help
 ```
 
 ## File Modes
@@ -152,7 +152,7 @@ Checkpoint meta files contain the following columns:
 When you need to see what's in a checkpoint file:
 
 ```bash
-ckp-reader read -file /path/to/meta_123_456.ckp
+ckp-tool read -file /path/to/meta_123_456.ckp
 ```
 
 ### 2. Remove a Corrupted Entry
@@ -161,10 +161,10 @@ If you know the index of a corrupted entry:
 
 ```bash
 # First, read to find the problematic row
-ckp-reader read -file /path/to/meta_123_456.ckp
+ckp-tool read -file /path/to/meta_123_456.ckp
 
 # Then delete it by index
-ckp-reader delete -file /path/to/meta_123_456.ckp -index 2
+ckp-tool delete -file /path/to/meta_123_456.ckp -index 2
 ```
 
 ### 3. Remove Entry by Timestamp
@@ -172,7 +172,7 @@ ckp-reader delete -file /path/to/meta_123_456.ckp -index 2
 If you know the end_ts value of the entry to remove:
 
 ```bash
-ckp-reader delete -file /path/to/meta_123_456.ckp -end-ts '1766148146913695795-1'
+ckp-tool delete -file /path/to/meta_123_456.ckp -end-ts '1766148146913695795-1'
 ```
 
 ### 4. Create a Backup Before Modification
@@ -184,7 +184,7 @@ Always create a backup before modifying checkpoint files:
 cp /path/to/meta_123_456.ckp /path/to/meta_123_456.ckp.backup
 
 # Delete and save to new file
-ckp-reader delete -file /path/to/meta_123_456.ckp -index 0 -output /path/to/meta_123_456_fixed.ckp
+ckp-tool delete -file /path/to/meta_123_456.ckp -index 0 -output /path/to/meta_123_456_fixed.ckp
 ```
 
 ## Error Handling
@@ -213,7 +213,7 @@ If you encounter checksum validation errors:
 
 ```bash
 # Use S3 mode to skip checksum validation
-ckp-reader read -file /path/to/file.ckp -s3=true
+ckp-tool read -file /path/to/file.ckp -s3=true
 ```
 
 ### Row Not Found
@@ -222,10 +222,10 @@ When deleting by `end_ts`, ensure the value matches exactly. Use the `read` comm
 
 ```bash
 # First, read to see the exact end_ts format
-ckp-reader read -file /path/to/file.ckp
+ckp-tool read -file /path/to/file.ckp
 
 # Then use the exact value shown
-ckp-reader delete -file /path/to/file.ckp -end-ts '1766148146913695795-1'
+ckp-tool delete -file /path/to/file.ckp -end-ts '1766148146913695795-1'
 ```
 
 ## Testing
@@ -233,7 +233,7 @@ ckp-reader delete -file /path/to/file.ckp -end-ts '1766148146913695795-1'
 Run the test suite:
 
 ```bash
-cd cmd/ckp-reader
+cd cmd/ckp-tool
 go test -v
 ```
 

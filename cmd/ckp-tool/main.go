@@ -71,10 +71,10 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Println("ckp-reader - A tool for reading and modifying checkpoint meta files")
+	fmt.Println("ckp-tool - A tool for reading and modifying checkpoint meta files")
 	fmt.Println()
 	fmt.Println("Usage:")
-	fmt.Println("  ckp-reader <command> [flags]")
+	fmt.Println("  ckp-tool <command> [flags]")
 	fmt.Println()
 	fmt.Println("Commands:")
 	fmt.Println("  read      Read and display checkpoint meta file contents")
@@ -82,14 +82,14 @@ func printUsage() {
 	fmt.Println("  help      Show this help message")
 	fmt.Println()
 	fmt.Println("Read Command:")
-	fmt.Println("  ckp-reader read -file <path> [-s3=true|false]")
+	fmt.Println("  ckp-tool read -file <path> [-s3=true|false]")
 	fmt.Println()
 	fmt.Println("    Flags:")
 	fmt.Println("      -file string    Path to the checkpoint meta file (required)")
 	fmt.Println("      -s3 bool        Use S3 mode (DISK backend) to skip checksum validation (default: true)")
 	fmt.Println()
 	fmt.Println("Delete Command:")
-	fmt.Println("  ckp-reader delete -file <path> [-index <row> | -end-ts <ts>] [-output <path>] [-s3=true|false]")
+	fmt.Println("  ckp-tool delete -file <path> [-index <row> | -end-ts <ts>] [-output <path>] [-s3=true|false]")
 	fmt.Println()
 	fmt.Println("    Flags:")
 	fmt.Println("      -file string    Path to the checkpoint meta file (required)")
@@ -100,13 +100,13 @@ func printUsage() {
 	fmt.Println()
 	fmt.Println("Examples:")
 	fmt.Println("  # Read a checkpoint file")
-	fmt.Println("  ckp-reader read -file ./meta_123_456.ckp")
+	fmt.Println("  ckp-tool read -file ./meta_123_456.ckp")
 	fmt.Println()
 	fmt.Println("  # Delete row by index")
-	fmt.Println("  ckp-reader delete -file ./meta_123_456.ckp -index 0")
+	fmt.Println("  ckp-tool delete -file ./meta_123_456.ckp -index 0")
 	fmt.Println()
 	fmt.Println("  # Delete row by end_ts")
-	fmt.Println("  ckp-reader delete -file ./meta_123_456.ckp -end-ts '1766148146913695795-1' -output ./meta_new.ckp")
+	fmt.Println("  ckp-tool delete -file ./meta_123_456.ckp -end-ts '1766148146913695795-1' -output ./meta_new.ckp")
 	fmt.Println()
 }
 
@@ -345,7 +345,7 @@ func createFileService(ctx context.Context, dir string, useS3Mode bool) (fileser
 
 func deleteRowByEndTS(inputPath string, targetEndTS string, outputPath string, useS3Mode bool) error {
 	ctx := context.Background()
-	mp, err := mpool.NewMPool("ckp-reader", 0, mpool.NoFixed)
+	mp, err := mpool.NewMPool("ckp-tool", 0, mpool.NoFixed)
 	if err != nil {
 		return fmt.Errorf("failed to create mpool: %w", err)
 	}
@@ -442,7 +442,7 @@ func deleteRowByEndTS(inputPath string, targetEndTS string, outputPath string, u
 
 func deleteRowFromCkpFile(inputPath string, rowToDelete int, outputPath string, useS3Mode bool) error {
 	ctx := context.Background()
-	mp, err := mpool.NewMPool("ckp-reader", 0, mpool.NoFixed)
+	mp, err := mpool.NewMPool("ckp-tool", 0, mpool.NoFixed)
 	if err != nil {
 		return fmt.Errorf("failed to create mpool: %w", err)
 	}
