@@ -15,8 +15,6 @@
 package compile
 
 import (
-	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	txnClient "github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -34,27 +32,18 @@ func doCompileRelease(c *Compile) {
 	}
 }
 
-type runSQLTokenRegistrar interface {
-	EnterRunSqlWithToken(cancel context.CancelFunc) uint64
-}
-
-type runSQLTokenFinisher interface {
-	ExitRunSqlWithToken(token uint64)
-}
-
 func MarkQueryRunning(c *Compile, txn txnClient.TxnOperator) {
 	c.proc.SetBaseProcessRunningStatus(true)
 	if txn == nil {
 		c.runSqlToken = 0
 		return
 	}
-	if registrar, ok := txn.(runSQLTokenRegistrar); ok {
-		_, cancel := process.GetQueryCtxFromProc(c.proc)
-		c.runSqlToken = registrar.EnterRunSqlWithToken(cancel)
-		return
+	_, cancel := process.GetQueryCtxFromProc(c.proc)
+	sqlText := c.originSQL
+	if sqlText == "" {
+		sqlText = c.sql
 	}
-	c.runSqlToken = 0
-	txn.EnterRunSql()
+	c.runSqlToken = txn.EnterRunSqlWithTokenAndSQL(cancel, sqlText)
 }
 
 func MarkQueryDone(c *Compile, txn txnClient.TxnOperator) {
@@ -63,11 +52,7 @@ func MarkQueryDone(c *Compile, txn txnClient.TxnOperator) {
 		c.runSqlToken = 0
 		return
 	}
-	if finisher, ok := txn.(runSQLTokenFinisher); ok {
-		finisher.ExitRunSqlWithToken(c.runSqlToken)
-		c.runSqlToken = 0
-		return
-	}
+	token := c.runSqlToken
 	c.runSqlToken = 0
-	txn.ExitRunSql()
+	txn.ExitRunSqlWithToken(token)
 }

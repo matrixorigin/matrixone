@@ -201,9 +201,8 @@ type TxnOperator interface {
 	Debug(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error)
 
 	NextSequence() uint64
-
-	EnterRunSql()
-	ExitRunSql()
+	EnterRunSqlWithTokenAndSQL(cancel context.CancelFunc, sql string) uint64
+	ExitRunSqlWithToken(token uint64)
 	EnterIncrStmt()
 	ExitIncrStmt()
 	EnterRollbackStmt()

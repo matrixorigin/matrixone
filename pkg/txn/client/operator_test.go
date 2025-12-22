@@ -564,7 +564,9 @@ func TestCannotCommitRunningSQLTxn(t *testing.T) {
 				}
 			}()
 
-			tc.EnterRunSql()
+			ctx, cancel := context.WithCancel(ctx)
+			defer cancel()
+			tc.EnterRunSqlWithTokenAndSQL(cancel, "test")
 			_ = tc.Commit(ctx)
 		},
 	)
@@ -584,7 +586,9 @@ func TestCannotRollbackRunningSQLTxn(t *testing.T) {
 				}
 			}()
 
-			tc.EnterRunSql()
+			ctx, cancel := context.WithCancel(ctx)
+			defer cancel()
+			tc.EnterRunSqlWithTokenAndSQL(cancel, "test")
 			_ = tc.Rollback(ctx)
 		},
 	)
