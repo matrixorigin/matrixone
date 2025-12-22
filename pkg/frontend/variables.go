@@ -3567,6 +3567,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableIntType("ivf_threads_search", 0, 1024, false),
 		Default:           int64(0),
 	},
+	"pre_filter_for_vector_test": {
+		Name:              "pre_filter_for_vector_test",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("pre_filter_for_vector_test"),
+		Default:           int8(0),
+	},
 	"probe_limit": {
 		Name:              "probe_limit",
 		Scope:             ScopeBoth,
