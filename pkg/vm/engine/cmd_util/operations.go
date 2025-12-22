@@ -149,6 +149,8 @@ const (
 	//FullSkipWorkspaceDedup do not check uniqueness of PK against txn's workspace.
 	FullSkipWorkspaceDedup PKCheckType = 1
 	FullDedup              PKCheckType = 2
+	//SkipAllDedup skip all deduplication checks including workspace, committed data, and persisted source.
+	SkipAllDedup PKCheckType = 3
 )
 
 type LocationKey struct{}

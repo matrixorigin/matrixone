@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 )
 
@@ -331,7 +332,12 @@ func InitializeIterationContext(
 }
 
 func (iterCtx *IterationContext) Close(commit bool) error {
+	// Create context with PkCheckByTN set to SkipAllDedup for publication iteration
+	// This ensures that all deduplication checks are skipped when committing the transaction
 	ctx := context.Background()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, iterCtx.SrcInfo.AccountID)
+	ctx = context.WithValue(ctx, defines.PkCheckByTN{}, int8(cmd_util.SkipAllDedup))
+
 	if iterCtx.LocalExecutor != nil {
 		iterCtx.LocalExecutor.EndTxn(ctx, commit)
 		iterCtx.LocalExecutor.Close()
@@ -790,7 +796,9 @@ func SubmitObjectsToTN(
 
 	// Submit objects in order: tombstone delete -> tombstone insert -> data delete -> data insert
 	// Use downstream account ID from iterationCtx.SrcInfo
+	// Set PkCheckByTN to SkipAllDedup to completely skip all deduplication checks in TN
 	downstreamCtx := context.WithValue(ctx, defines.TenantIDKey{}, iterationCtx.SrcInfo.AccountID)
+	downstreamCtx = context.WithValue(downstreamCtx, defines.PkCheckByTN{}, int8(cmd_util.SkipAllDedup))
 
 	// 1. Submit tombstone delete objects (soft delete)
 	if len(tombstoneDeleteStats) > 0 {
@@ -1152,7 +1160,9 @@ func ExecuteIteration(
 
 	// Submit collected objects to TN in order: tombstone delete -> tombstone insert -> data delete -> data insert
 	// Use downstream account ID from iterationCtx.SrcInfo
+	// Set PkCheckByTN to SkipAllDedup to completely skip all deduplication checks in TN
 	downstreamCtx := context.WithValue(ctx, defines.TenantIDKey{}, iterationCtx.SrcInfo.AccountID)
+	downstreamCtx = context.WithValue(downstreamCtx, defines.PkCheckByTN{}, int8(cmd_util.SkipAllDedup))
 
 	// 1. Submit collected tombstone delete objects (soft delete)
 	if len(collectedTombstoneDeleteStats) > 0 {

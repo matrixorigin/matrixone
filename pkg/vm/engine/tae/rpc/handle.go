@@ -786,6 +786,9 @@ func (h *Handle) HandleWrite(
 		}
 	case cmd_util.FullSkipWorkspaceDedup:
 		txn.SetDedupType(txnif.DedupPolicy_SkipWorkspace)
+	case cmd_util.SkipAllDedup:
+		// Skip all deduplication: workspace, committed data (old and new), and persisted source
+		txn.SetDedupType(txnif.DedupPolicy_SkipAll | txnif.DedupPolicy_SkipSourcePersisted)
 	}
 	common.DoIfDebugEnabled(func() {
 		logutil.Debugf("[precommit] handle write typ: %v, %d-%s, %d-%s txn: %s",
