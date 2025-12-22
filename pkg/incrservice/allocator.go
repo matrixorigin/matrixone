@@ -93,13 +93,15 @@ func (a *allocator) allocate(
 			}
 			close(c)
 		})
-	if err2.Load() != nil && err2.Load().(error) != nil {
-		err = err2.Load().(error)
-	}
 	if err != nil {
 		return 0, 0, timestamp.Timestamp{}, err
 	}
 	<-c
+	if v := err2.Load(); v != nil {
+		if e, ok := v.(error); ok && e != nil {
+			return 0, 0, timestamp.Timestamp{}, e
+		}
+	}
 	return from.Load(), to.Load(), lastAllocateAt, err
 }
 

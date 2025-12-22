@@ -372,7 +372,7 @@ func LockRows(
 	if faultInjected, _ := objectio.LogCNNeedRetryErrorInjected(
 		rel.GetTableDef(proc.Ctx).DbName, rel.GetTableName(),
 	); faultInjected {
-		return retryError
+		return retryWithDefChangedError
 	}
 
 	parker := types.NewPacker()
