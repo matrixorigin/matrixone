@@ -1625,12 +1625,6 @@ func (tc *txnOperator) addFlag(flags ...uint32) {
 	}
 }
 
-func (tc *txnOperator) markAborted() bool {
-	tc.mu.RLock()
-	defer tc.mu.RUnlock()
-	return tc.markAbortedLocked()
-}
-
 func (tc *txnOperator) markAbortedLocked() bool {
 	return tc.mu.flag&AbortedFlag != 0
 }
