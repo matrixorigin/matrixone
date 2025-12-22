@@ -183,7 +183,8 @@ func (ae *aggExec[S]) unmarshal(mp *mpool.MPool, result, empties, groups [][]byt
 }
 
 func (ae *aggExec[S]) GetOptResult() SplitResult {
-	panic("not implemented")
+	// useless.
+	return nil
 }
 
 func (ae *aggExec[S]) GetXY(u uint64) (int, int) {

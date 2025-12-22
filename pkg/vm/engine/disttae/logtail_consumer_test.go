@@ -285,7 +285,7 @@ func TestSubscribedTable(t *testing.T) {
 	}
 	for _, tbl := range tbls {
 		subscribeRecord.setTableSubscribed(tbl.db, tbl.tb)
-		_ = subscribeRecord.eng.GetOrCreateLatestPart(nil, 0, tbl.db, tbl.tb)
+		_ = subscribeRecord.eng.GetOrCreateLatestPart(context.Background(), 0, tbl.db, tbl.tb)
 	}
 	assert.Equal(t, 4, len(subscribeRecord.m))
 	assert.Equal(t, true, subscribeRecord.isSubscribed(tbls[0].db, tbls[0].tb))

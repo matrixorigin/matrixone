@@ -25,10 +25,10 @@ import (
 )
 
 func ToFixedColNoTypeCheck[T any](v *Vector, ret *[]T) {
-	ToSliceNoTypeCheck(v, ret)
 	if v.class == CONSTANT {
-		*ret = (*ret)[:1]
+		*ret = toSliceOfLengthNoTypeCheck[T](v, 1)
 	} else {
+		ToSliceNoTypeCheck(v, ret)
 		*ret = (*ret)[:v.length]
 	}
 }
@@ -39,10 +39,10 @@ func ToFixedCol[T any](v *Vector, ret *[]T) {
 	if v.GetType().Oid == types.T_any || len(v.data) == 0 {
 		return
 	}
-	ToSlice(v, ret)
 	if v.class == CONSTANT {
-		*ret = (*ret)[:1]
+		*ret = toSliceOfLengthNoTypeCheck[T](v, 1)
 	} else {
+		ToSlice(v, ret)
 		*ret = (*ret)[:v.length]
 	}
 }
@@ -199,79 +199,17 @@ func extend(v *Vector, rows int, m *mpool.MPool) error {
 		rows = 1
 	}
 
-	if tgtCap := v.length + rows; tgtCap > v.capacity {
-		sz := v.typ.TypeSize()
-		ndata, err := m.Grow(v.data, tgtCap*sz, v.offHeap)
+	tgtLen := v.length + rows
+	tgtDataCap := tgtLen * v.typ.TypeSize()
+	if tgtDataCap > cap(v.data) {
+		ndata, err := m.Grow(v.data, tgtDataCap, v.offHeap)
 		if err != nil {
 			return err
 		}
-		v.data = ndata[:cap(ndata)]
-		v.setupFromData()
+		v.data = ndata
 	}
+	v.data = v.data[:tgtDataCap]
 	return nil
-}
-
-func (v *Vector) setupFromData() {
-	if v.GetType().IsVarlen() {
-		v.col.setFromVector(v)
-	} else {
-		// The followng switch attach the correct type to v.col
-		// even though v.col is only an interface.
-		switch v.typ.Oid {
-		case types.T_bool:
-			v.col.setFromVector(v)
-		case types.T_bit:
-			v.col.setFromVector(v)
-		case types.T_int8:
-			v.col.setFromVector(v)
-		case types.T_int16:
-			v.col.setFromVector(v)
-		case types.T_int32:
-			v.col.setFromVector(v)
-		case types.T_int64:
-			v.col.setFromVector(v)
-		case types.T_uint8:
-			v.col.setFromVector(v)
-		case types.T_uint16:
-			v.col.setFromVector(v)
-		case types.T_uint32:
-			v.col.setFromVector(v)
-		case types.T_uint64:
-			v.col.setFromVector(v)
-		case types.T_float32:
-			v.col.setFromVector(v)
-		case types.T_float64:
-			v.col.setFromVector(v)
-		case types.T_decimal64:
-			v.col.setFromVector(v)
-		case types.T_decimal128:
-			v.col.setFromVector(v)
-		case types.T_decimal256:
-			v.col.setFromVector(v)
-		case types.T_uuid:
-			v.col.setFromVector(v)
-		case types.T_date:
-			v.col.setFromVector(v)
-		case types.T_time:
-			v.col.setFromVector(v)
-		case types.T_datetime:
-			v.col.setFromVector(v)
-		case types.T_timestamp:
-			v.col.setFromVector(v)
-		case types.T_TS:
-			v.col.setFromVector(v)
-		case types.T_Rowid:
-			v.col.setFromVector(v)
-		case types.T_Blockid:
-			v.col.setFromVector(v)
-		case types.T_enum:
-			v.col.setFromVector(v)
-		default:
-			panic(fmt.Sprintf("unknown type %s", v.typ.Oid))
-		}
-	}
-	tlen := v.GetType().TypeSize()
-	v.capacity = cap(v.data) / tlen
 }
 
 func VectorToProtoVector(vec *Vector) (ret api.Vector, err error) {
@@ -312,7 +250,6 @@ func ProtoVectorToVector(vec api.Vector) (*Vector, error) {
 		return rvec, nil
 	}
 	rvec.data = vec.Data
-	rvec.setupFromData()
 	return rvec, nil
 }
 

@@ -42,15 +42,16 @@ func UnsafeSliceCast[B any, A any](from []A) []B {
 		return nil
 	}
 
+	var a A
 	var b B
-	szA := int(unsafe.Sizeof(from[0]))
+	szA := int(unsafe.Sizeof(a))
 	szB := int(unsafe.Sizeof(b))
 
 	lenA := len(from) * szA
 	capA := cap(from) * szA
 
-	if lenA%szB != 0 || capA%szB != 0 {
-		panic(fmt.Sprintf("unsafe slice cast: from length %d:%d is not a multiple of %d", lenA, capA, szB))
+	if lenA%szB != 0 {
+		panic(fmt.Sprintf("unsafe slice cast: from length %d is not a multiple of %d", lenA, szB))
 	}
 
 	lenB := lenA / szB
@@ -64,6 +65,38 @@ func UnsafeSliceCast[B any, A any](from []A) []B {
 
 func UnsafeSliceToBytes[T any](from []T) []byte {
 	return UnsafeSliceCast[byte](from)
+}
+
+func UnsafeSliceCastToLength[B any, A any](from []A, length int) []B {
+	if len(from) == 0 {
+		return nil
+	}
+
+	var a A
+	var b B
+	szA := int(unsafe.Sizeof(a))
+	szB := int(unsafe.Sizeof(b))
+
+	lenA := len(from) * szA
+	capA := cap(from) * szA
+
+	// BUG: #23350
+	if lenA < length*szB {
+		panic(fmt.Sprintf("unsafe slice cast: from length %d is not enough for length %d", lenA, length*szB))
+	}
+	// lenA = length * szB
+	// lenB := lenA / szB
+
+	// BUG: #23350
+	// if lenA%szB != 0 {
+	//	panic(fmt.Sprintf("unsafe slice cast: from length %d is not a multiple of %d", lenA, szB))
+	// }
+
+	capB := capA / szB
+	return unsafe.Slice(
+		(*B)(unsafe.Pointer(unsafe.SliceData(from))),
+		capB,
+	)[:length]
 }
 
 func UnsafeUintptr[P *T, T any](p P) uintptr {
