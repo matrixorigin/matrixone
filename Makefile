@@ -254,6 +254,12 @@ mo-tool: config cgo thirdparties
 	$(info [Build mo-tool tool])
 	$(CGO_OPTS) go build $(GOLDFLAGS) -o mo-tool ./cmd/mo-tool
 
+# build ckp-reader tool (for reading checkpoint meta files)
+.PHONY: ckp-reader
+ckp-reader: config cgo thirdparties
+	$(info [Build ckp-reader tool])
+	$(CGO_OPTS) go build $(GOLDFLAGS) -o ckp-reader ./cmd/ckp-reader
+
 # build mo-service binary for debugging with go's race detector enabled
 # produced executable is 10x slower and consumes much more memory
 .PHONY: debug
