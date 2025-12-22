@@ -278,6 +278,9 @@ type txnOperator struct {
 }
 
 type runSQLTracker struct {
+	// Tracks running SQL by token so callers can cancel and wait during retry/rollback/commit.
+	// Usage: EnterRunSqlWithToken registers a token+cancel; ExitRunSqlWithToken unregisters it;
+	// CancelAndWaitRunningSQL cancels other tokens and waits for them to exit.
 	mu           sync.Mutex
 	activeTokens map[uint64]context.CancelFunc
 	anonActive   int
@@ -287,6 +290,7 @@ type runSQLTracker struct {
 
 func newRunSQLTracker() runSQLTracker {
 	return runSQLTracker{
+		// notifyCh is replaced on each state change to wake all waiters.
 		activeTokens: make(map[uint64]context.CancelFunc),
 		notifyCh:     make(chan struct{}),
 	}
@@ -363,15 +367,18 @@ func (t *runSQLTracker) waitExcept(ctx context.Context, keepToken uint64) error 
 }
 
 func (t *runSQLTracker) shouldWaitLocked(keepToken uint64) (bool, chan struct{}) {
+	// Anonymous runners have no cancel token, so we must wait for them explicitly.
 	if t.anonActive > 0 {
 		return true, t.notifyCh
 	}
 	if keepToken == 0 {
+		// Commit/Rollback waits for all running SQL to exit.
 		if len(t.activeTokens) == 0 {
 			return false, nil
 		}
 		return true, t.notifyCh
 	}
+	// Wait only for higher tokens to break circular waits between concurrent retries.
 	for token := range t.activeTokens {
 		if token > keepToken {
 			return true, t.notifyCh
@@ -1528,6 +1535,7 @@ func (tc *txnOperator) ExitRunSqlWithToken(token uint64) {
 }
 
 func (tc *txnOperator) CancelAndWaitRunningSQL(ctx context.Context, keepToken uint64) error {
+	// Cancel other running SQL first, then wait for them to exit to avoid workspace races.
 	tc.reset.runSQLTracker.cancelAllExcept(keepToken)
 	timeoutCtx, cancel := context.WithTimeout(ctx, runningSQLWaitTimeout)
 	defer cancel()
