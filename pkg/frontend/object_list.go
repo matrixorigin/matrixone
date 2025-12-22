@@ -339,6 +339,7 @@ func BuildObjectListResultBatch(
 		// Don't clean objBatch here as its vectors are now used by resultBatch
 		// resultBatch.Clean will clean all vectors including the ones from objBatch
 	}
+	resultBatch.SetRowCount(resultBatch.Vecs[0].Length())
 
 	return resultBatch, nil
 }

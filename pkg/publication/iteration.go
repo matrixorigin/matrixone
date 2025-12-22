@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
@@ -689,6 +690,7 @@ func SubmitObjectsToTN(
 	iterationCtx *IterationContext,
 	cnEngine engine.Engine,
 	objectListResult *Result,
+	mp *mpool.MPool,
 ) error {
 	if iterationCtx == nil {
 		return moerr.NewInternalError(ctx, "iteration context is nil")
@@ -781,14 +783,14 @@ func SubmitObjectsToTN(
 	// Use downstream account ID from iterationCtx.SrcInfo
 	downstreamCtx := context.WithValue(ctx, defines.TenantIDKey{}, iterationCtx.SrcInfo.AccountID)
 	if len(insertStats) > 0 {
-		if err := submitObjectsAsInsert(downstreamCtx, iterationCtx, cnEngine, iterationCtx.SrcInfo.DBName, iterationCtx.SrcInfo.TableName, insertStats); err != nil {
+		if err := submitObjectsAsInsert(downstreamCtx, iterationCtx, cnEngine, iterationCtx.SrcInfo.DBName, iterationCtx.SrcInfo.TableName, insertStats, mp); err != nil {
 			return moerr.NewInternalErrorf(ctx, "failed to submit insert objects: %v", err)
 		}
 	}
 
 	// Submit delete objects
 	if len(deleteStats) > 0 {
-		if err := submitObjectsAsDelete(downstreamCtx, iterationCtx, cnEngine, iterationCtx.SrcInfo.DBName, iterationCtx.SrcInfo.TableName, deleteStats); err != nil {
+		if err := submitObjectsAsDelete(downstreamCtx, iterationCtx, cnEngine, iterationCtx.SrcInfo.DBName, iterationCtx.SrcInfo.TableName, deleteStats, mp); err != nil {
 			return moerr.NewInternalErrorf(ctx, "failed to submit delete objects: %v", err)
 		}
 	}
@@ -797,7 +799,7 @@ func SubmitObjectsToTN(
 }
 
 // submitObjectsAsInsert submits objects as INSERT operation
-func submitObjectsAsInsert(ctx context.Context, iterationCtx *IterationContext, cnEngine engine.Engine, dbName, tableName string, statsList []objectio.ObjectStats) error {
+func submitObjectsAsInsert(ctx context.Context, iterationCtx *IterationContext, cnEngine engine.Engine, dbName, tableName string, statsList []objectio.ObjectStats, mp *mpool.MPool) error {
 	if len(statsList) == 0 {
 		return nil
 	}
@@ -824,34 +826,33 @@ func submitObjectsAsInsert(ctx context.Context, iterationCtx *IterationContext, 
 		return moerr.NewInternalErrorf(ctx, "failed to get relation %s.%s: %v", dbName, tableName, err)
 	}
 
-	// Create batch with ObjectStats
+	// Create batch with ObjectStats using the same structure as s3util
 	bat := batch.NewWithSize(2)
 	bat.SetAttributes([]string{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats})
-	bat.SetRowCount(len(statsList))
 
-	// First column: BlockInfo (can be empty for object stats only)
-	blockInfoVec := vector.NewVec(types.T_varchar.ToType())
+	// First column: BlockInfo (T_text)
+	blockInfoVec := vector.NewVec(types.T_text.ToType())
 	bat.Vecs[0] = blockInfoVec
 
-	// Second column: ObjectStats
-	statsVec := vector.NewVec(types.T_varchar.ToType())
+	// Second column: ObjectStats (T_binary)
+	statsVec := vector.NewVec(types.T_binary.ToType())
 	bat.Vecs[1] = statsVec
 
-	// Append ObjectStats to the batch
-	for _, stats := range statsList {
-		statsBytes := stats[:]
-		if err := vector.AppendBytes(statsVec, statsBytes, false, nil); err != nil {
-			return moerr.NewInternalErrorf(ctx, "failed to append object stats: %v", err)
-		}
-		// Append empty block info (or you can construct proper block info if needed)
-		if err := vector.AppendBytes(blockInfoVec, nil, false, nil); err != nil {
-			return moerr.NewInternalErrorf(ctx, "failed to append block info: %v", err)
-		}
+	// Use ExpandObjectStatsToBatch to properly expand ObjectStats to batch
+	// This handles the correct mapping between blocks and their parent objects
+	if err := colexec.ExpandObjectStatsToBatch(
+		mp,
+		false, // isTombstone = false for INSERT
+		bat,
+		true, // isCNCreated = true
+		statsList...,
+	); err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to expand object stats to batch: %v", err)
 	}
 
 	// Write through relation
 	if err := rel.Write(ctx, bat); err != nil {
-		bat.Clean(nil)
+		bat.Clean(mp)
 		return moerr.NewInternalErrorf(ctx, "failed to write objects: %v", err)
 	}
 
@@ -859,7 +860,7 @@ func submitObjectsAsInsert(ctx context.Context, iterationCtx *IterationContext, 
 }
 
 // submitObjectsAsDelete submits objects as DELETE operation
-func submitObjectsAsDelete(ctx context.Context, iterationCtx *IterationContext, cnEngine engine.Engine, dbName, tableName string, statsList []objectio.ObjectStats) error {
+func submitObjectsAsDelete(ctx context.Context, iterationCtx *IterationContext, cnEngine engine.Engine, dbName, tableName string, statsList []objectio.ObjectStats, mp *mpool.MPool) error {
 	if len(statsList) == 0 {
 		return nil
 	}
@@ -889,23 +890,24 @@ func submitObjectsAsDelete(ctx context.Context, iterationCtx *IterationContext, 
 	// Create batch with ObjectStats for deletion
 	bat := batch.NewWithSize(1)
 	bat.SetAttributes([]string{catalog.ObjectMeta_ObjectStats})
-	bat.SetRowCount(len(statsList))
 
-	// ObjectStats column
-	statsVec := vector.NewVec(types.T_varchar.ToType())
+	// ObjectStats column (T_binary)
+	statsVec := vector.NewVec(types.T_binary.ToType())
 	bat.Vecs[0] = statsVec
 
-	// Append ObjectStats to the batch
+	// Append ObjectStats to the batch using Marshal()
 	for _, stats := range statsList {
-		statsBytes := stats[:]
-		if err := vector.AppendBytes(statsVec, statsBytes, false, nil); err != nil {
+		statsBytes := stats.Marshal()
+		if err := vector.AppendBytes(statsVec, statsBytes, false, mp); err != nil {
 			return moerr.NewInternalErrorf(ctx, "failed to append object stats: %v", err)
 		}
 	}
 
+	bat.SetRowCount(len(statsList))
+
 	// Delete through relation
 	if err := rel.Delete(ctx, bat, ""); err != nil {
-		bat.Clean(nil)
+		bat.Clean(mp)
 		return moerr.NewInternalErrorf(ctx, "failed to delete objects: %v", err)
 	}
 
@@ -923,6 +925,7 @@ func ExecuteIteration(
 	iterationLSN uint64,
 	iterationState int8,
 	upstreamSQLHelperFactory UpstreamSQLHelperFactory,
+	mp *mpool.MPool,
 ) (err error) {
 	var objectListResult *Result
 	var iterationCtx *IterationContext
@@ -1010,13 +1013,6 @@ func ExecuteIteration(
 			err = moerr.NewInternalErrorf(ctx, "error reading object list result: %v", err)
 			return
 		}
-		// Create a temporary mpool for FilterObject
-		var mp *mpool.MPool
-		mp, err = mpool.NewMPool("iteration_filter", 0, mpool.NoFixed)
-		if err != nil {
-			err = moerr.NewInternalErrorf(ctx, "failed to create mpool: %v", err)
-			return
-		}
 
 		// Get snapshot TS from iteration context
 		snapshotTS := iterationCtx.CurrentSnapshotTS
@@ -1063,7 +1059,7 @@ func ExecuteIteration(
 	downstreamCtx := context.WithValue(ctx, defines.TenantIDKey{}, iterationCtx.SrcInfo.AccountID)
 	// Process collected insert stats
 	if len(collectedInsertStats) > 0 {
-		if err = submitObjectsAsInsert(downstreamCtx, iterationCtx, cnEngine, iterationCtx.SrcInfo.DBName, iterationCtx.SrcInfo.TableName, collectedInsertStats); err != nil {
+		if err = submitObjectsAsInsert(downstreamCtx, iterationCtx, cnEngine, iterationCtx.SrcInfo.DBName, iterationCtx.SrcInfo.TableName, collectedInsertStats, mp); err != nil {
 			err = moerr.NewInternalErrorf(ctx, "failed to submit insert objects: %v", err)
 			return
 		}
@@ -1071,7 +1067,7 @@ func ExecuteIteration(
 
 	// Process collected delete stats
 	if len(collectedDeleteStats) > 0 {
-		if err = submitObjectsAsDelete(downstreamCtx, iterationCtx, cnEngine, iterationCtx.SrcInfo.DBName, iterationCtx.SrcInfo.TableName, collectedDeleteStats); err != nil {
+		if err = submitObjectsAsDelete(downstreamCtx, iterationCtx, cnEngine, iterationCtx.SrcInfo.DBName, iterationCtx.SrcInfo.TableName, collectedDeleteStats, mp); err != nil {
 			err = moerr.NewInternalErrorf(ctx, "failed to submit delete objects: %v", err)
 			return
 		}
@@ -1101,7 +1097,7 @@ func ExecuteIteration(
 
 		// Submit active insert objects
 		if len(activeInsertStats) > 0 {
-			if err = submitObjectsAsInsert(downstreamCtx, iterationCtx, cnEngine, iterationCtx.SrcInfo.DBName, iterationCtx.SrcInfo.TableName, activeInsertStats); err != nil {
+			if err = submitObjectsAsInsert(downstreamCtx, iterationCtx, cnEngine, iterationCtx.SrcInfo.DBName, iterationCtx.SrcInfo.TableName, activeInsertStats, mp); err != nil {
 				err = moerr.NewInternalErrorf(ctx, "failed to submit active insert objects: %v", err)
 				return
 			}
@@ -1109,7 +1105,7 @@ func ExecuteIteration(
 
 		// Submit active delete objects
 		if len(activeDeleteStats) > 0 {
-			if err = submitObjectsAsDelete(downstreamCtx, iterationCtx, cnEngine, iterationCtx.SrcInfo.DBName, iterationCtx.SrcInfo.TableName, activeDeleteStats); err != nil {
+			if err = submitObjectsAsDelete(downstreamCtx, iterationCtx, cnEngine, iterationCtx.SrcInfo.DBName, iterationCtx.SrcInfo.TableName, activeDeleteStats, mp); err != nil {
 				err = moerr.NewInternalErrorf(ctx, "failed to submit active delete objects: %v", err)
 				return
 			}

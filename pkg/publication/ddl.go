@@ -55,11 +55,11 @@ type TableDDLInfo struct {
 
 // GetUpstreamDDLUsingGetDdl queries upstream DDL using GETDDL statement
 // It uses the format: GETDDL [DATABASE dbname] [TABLE tablename] SNAPSHOT <current snapshot>
-// Returns a map: map[dbname][table name] TableDDLInfo{TableID, TableCreateSQL}
+// Returns a map: map[dbname][table name] *TableDDLInfo{TableID, TableCreateSQL}
 func GetUpstreamDDLUsingGetDdl(
 	ctx context.Context,
 	iterationCtx *IterationContext,
-) (map[string]map[string]TableDDLInfo, error) {
+) (map[string]map[string]*TableDDLInfo, error) {
 	if iterationCtx == nil {
 		return nil, moerr.NewInternalError(ctx, "iteration context is nil")
 	}
@@ -98,9 +98,9 @@ func GetUpstreamDDLUsingGetDdl(
 	}
 	defer result.Close()
 
-	// Parse results into map: map[dbname][table name] TableDDLInfo
+	// Parse results into map: map[dbname][table name] *TableDDLInfo
 	// GETDDL returns: dbname, tablename, tableid, tablesql
-	ddlMap := make(map[string]map[string]TableDDLInfo)
+	ddlMap := make(map[string]map[string]*TableDDLInfo)
 	for result.Next() {
 		var dbNameResult, tableNameResult, tableSQL sql.NullString
 		var tableID sql.NullInt64
@@ -123,11 +123,11 @@ func GetUpstreamDDLUsingGetDdl(
 
 		// Initialize inner map if needed
 		if ddlMap[dbNameStr] == nil {
-			ddlMap[dbNameStr] = make(map[string]TableDDLInfo)
+			ddlMap[dbNameStr] = make(map[string]*TableDDLInfo)
 		}
 
 		// Create TableDDLInfo
-		ddlInfo := TableDDLInfo{
+		ddlInfo := &TableDDLInfo{
 			TableID:        0,
 			TableCreateSQL: "",
 		}
@@ -316,7 +316,7 @@ func getCurrentTableCreateSQL(
 func FillDDLOperation(
 	ctx context.Context,
 	cnEngine engine.Engine,
-	ddlMap map[string]map[string]TableDDLInfo,
+	ddlMap map[string]map[string]*TableDDLInfo,
 	tableIDs map[TableKey]uint64,
 	txn client.TxnOperator,
 	iterationCtx *IterationContext,
@@ -371,9 +371,6 @@ func FillDDLOperation(
 					ddlInfo.Operation = DDLOperationAlter
 				}
 			}
-
-			// Update the ddlMap with the modified ddlInfo
-			tables[tableName] = ddlInfo
 		}
 	}
 
@@ -395,7 +392,7 @@ func FillDDLOperation(
 func findMissingTablesInDdlMap(
 	ctx context.Context,
 	cnEngine engine.Engine,
-	ddlMap map[string]map[string]TableDDLInfo,
+	ddlMap map[string]map[string]*TableDDLInfo,
 	tableIDs map[TableKey]uint64,
 	txn client.TxnOperator,
 	iterationCtx *IterationContext,
@@ -457,12 +454,12 @@ func findMissingTablesInDdlMap(
 				} else {
 					// Initialize inner map if needed
 					if ddlMap[dbName] == nil {
-						ddlMap[dbName] = make(map[string]TableDDLInfo)
+						ddlMap[dbName] = make(map[string]*TableDDLInfo)
 					}
 
 					// Add table to ddlMap with drop operation
 					// for tables to drop, table id may be 0
-					ddlMap[dbName][tableName] = TableDDLInfo{
+					ddlMap[dbName][tableName] = &TableDDLInfo{
 						Operation: DDLOperationDrop,
 					}
 
@@ -478,6 +475,7 @@ func findMissingTablesInDdlMap(
 }
 
 // createTable creates a table using the provided CREATE TABLE SQL statement
+// It also creates the database if it doesn't exist
 func createTable(
 	ctx context.Context,
 	executor SQLExecutor,
@@ -488,7 +486,19 @@ func createTable(
 	if createSQL == "" {
 		return moerr.NewInternalError(ctx, "create SQL is empty")
 	}
-	result, err := executor.ExecSQL(ctx, createSQL)
+
+	// Create database if not exists
+	createDBSQL := fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s`", escapeSQLIdentifierForDDL(dbName))
+	result, err := executor.ExecSQL(ctx, createDBSQL)
+	if err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to create database %s: %v", dbName, err)
+	}
+	if result != nil {
+		result.Close()
+	}
+
+	// Create table
+	result, err = executor.ExecSQL(ctx, createSQL)
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to create table %s.%s: %v", dbName, tableName, err)
 	}

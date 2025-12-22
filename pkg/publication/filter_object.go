@@ -26,10 +26,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/sort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"go.uber.org/zap"
 )
 
 // FilterObject filters an object based on snapshot TS
@@ -149,7 +151,38 @@ func filterNonAppendableObject(
 		},
 	})
 	if err != nil {
-		return moerr.NewInternalErrorf(ctx, "failed to write object to fileservice: %v", err)
+		// Check if the error is due to file already exists
+		if moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists) {
+			// Log warning instead of returning error
+			logutil.Warn("file already exists, deleting and rewriting",
+				zap.String("file", objectName),
+				logutil.ErrorField(err))
+
+			// Delete the existing file
+			deleteErr := localFS.Delete(ctx, objectName)
+			if deleteErr != nil {
+				logutil.Warn("failed to delete existing file, ignoring",
+					zap.String("file", objectName),
+					logutil.ErrorField(deleteErr))
+			}
+
+			// Retry writing after deletion
+			err = localFS.Write(ctx, fileservice.IOVector{
+				FilePath: objectName,
+				Entries: []fileservice.IOEntry{
+					{
+						Offset: 0,
+						Size:   int64(len(objectContent)),
+						Data:   objectContent,
+					},
+				},
+			})
+			if err != nil {
+				return moerr.NewInternalErrorf(ctx, "failed to write object to fileservice after deletion: %v", err)
+			}
+		} else {
+			return moerr.NewInternalErrorf(ctx, "failed to write object to fileservice: %v", err)
+		}
 	}
 
 	return nil

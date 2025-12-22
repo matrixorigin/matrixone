@@ -357,6 +357,8 @@ func (r *InternalResult) Scan(dest ...interface{}) error {
 			switch d := dest[i].(type) {
 			case *string:
 				*d = ""
+			case *[]byte:
+				*d = nil
 			case *sql.NullString:
 				d.Valid = false
 				d.String = ""
@@ -372,6 +374,8 @@ func (r *InternalResult) Scan(dest ...interface{}) error {
 			case *sql.NullBool:
 				d.Valid = false
 				d.Bool = false
+			case *bool:
+				*d = false
 			case *sql.NullFloat64:
 				d.Valid = false
 				d.Float64 = 0
@@ -394,6 +398,8 @@ func (r *InternalResult) Scan(dest ...interface{}) error {
 				*d = 0
 			case *uint64:
 				*d = 0
+			case *types.TS:
+				*d = types.TS{}
 			default:
 				// For other types, try to set to nil if possible
 				// This is a simplified implementation
@@ -414,15 +420,32 @@ func (r *InternalResult) Scan(dest ...interface{}) error {
 // extractVectorValue extracts a value from a vector at the given index
 func extractVectorValue(vec *vector.Vector, idx uint64, dest interface{}) error {
 	switch vec.GetType().Oid {
-	case types.T_varchar, types.T_char, types.T_text:
-		val := vec.GetStringAt(int(idx))
-		if d, ok := dest.(*string); ok {
+	case types.T_varchar, types.T_char, types.T_text, types.T_blob, types.T_binary, types.T_varbinary, types.T_datalink:
+		if d, ok := dest.(*[]byte); ok {
+			// For byte slice, get bytes directly and make a copy
+			bytesVal := vec.GetBytesAt(int(idx))
+			*d = make([]byte, len(bytesVal))
+			copy(*d, bytesVal)
+		} else if d, ok := dest.(*string); ok {
+			val := vec.GetStringAt(int(idx))
 			*d = val
 		} else if d, ok := dest.(*sql.NullString); ok {
+			val := vec.GetStringAt(int(idx))
 			d.String = val
 			d.Valid = true
 		} else {
 			return moerr.NewInternalErrorNoCtx(fmt.Sprintf("destination type mismatch for string, type %T", dest))
+		}
+
+	case types.T_bool:
+		val := vector.GetFixedAtWithTypeCheck[bool](vec, int(idx))
+		if d, ok := dest.(*bool); ok {
+			*d = val
+		} else if d, ok := dest.(*sql.NullBool); ok {
+			d.Bool = val
+			d.Valid = true
+		} else {
+			return moerr.NewInternalErrorNoCtx(fmt.Sprintf("destination type mismatch for bool, type %T", dest))
 		}
 
 	case types.T_int8:
@@ -493,6 +516,11 @@ func extractVectorValue(vec *vector.Vector, idx uint64, dest interface{}) error 
 		val := vector.GetFixedAtWithTypeCheck[uint32](vec, int(idx))
 		if d, ok := dest.(*uint32); ok {
 			*d = val
+		} else if d, ok := dest.(*sql.NullInt64); ok {
+			// Support sql.NullInt64 for uint32 values (e.g., account_id)
+			// This is safe as uint32 max (4294967295) is well within int64 range
+			d.Int64 = int64(val)
+			d.Valid = true
 		} else {
 			return moerr.NewInternalErrorNoCtx(fmt.Sprintf("destination type mismatch for uint32, type %T", dest))
 		}
@@ -511,6 +539,14 @@ func extractVectorValue(vec *vector.Vector, idx uint64, dest interface{}) error 
 			*d = val
 		} else {
 			return moerr.NewInternalErrorNoCtx(fmt.Sprintf("destination type mismatch for timestamp, type %T", dest))
+		}
+
+	case types.T_TS:
+		val := vector.GetFixedAtWithTypeCheck[types.TS](vec, int(idx))
+		if d, ok := dest.(*types.TS); ok {
+			*d = val
+		} else {
+			return moerr.NewInternalErrorNoCtx(fmt.Sprintf("destination type mismatch for TS, type %T", dest))
 		}
 
 	default:

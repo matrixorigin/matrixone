@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -256,7 +257,7 @@ func TestExecuteIteration(t *testing.T) {
 	incrservice.SetAutoIncrementServiceByID("", mockIncrService)
 	defer mockIncrService.Close()
 
-	// Create mo_indexes table
+	// Create mo_indexes table for source account
 	err := exec_sql(disttaeEngine, srcCtxWithTimeout, frontend.MoCatalogMoIndexesDDL)
 	require.NoError(t, err)
 
@@ -265,9 +266,26 @@ func TestExecuteIteration(t *testing.T) {
 	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprLogDDL)
 	require.NoError(t, err)
 
-	// Create mo_snapshots table (if needed)
+	// Create mo_snapshots table for source account
 	moSnapshotsDDL := frontend.MoCatalogMoSnapshotsDDL
 	err = exec_sql(disttaeEngine, srcCtxWithTimeout, moSnapshotsDDL)
+	require.NoError(t, err)
+
+	// Create system tables for destination account
+	// These tables are needed when creating tables in the destination account
+	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoIndexesDDL)
+	require.NoError(t, err)
+
+	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoTablePartitionsDDL)
+	require.NoError(t, err)
+
+	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoAutoIncrTableDDL)
+	require.NoError(t, err)
+
+	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoForeignKeysDDL)
+	require.NoError(t, err)
+
+	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoSnapshotsDDL)
 	require.NoError(t, err)
 
 	// Step 1: Create source database and table in source account
@@ -371,6 +389,10 @@ func TestExecuteIteration(t *testing.T) {
 		return NewUpstreamSQLHelper(txnOp, engine, accountID, exec)
 	}
 
+	// Create mpool for ExecuteIteration
+	mp, err := mpool.NewMPool("test_execute_iteration", 0, mpool.NoFixed)
+	require.NoError(t, err)
+
 	err = publication.ExecuteIteration(
 		srcCtxWithTimeout,
 		cnUUID,
@@ -380,6 +402,7 @@ func TestExecuteIteration(t *testing.T) {
 		iterationLSN,
 		iterationState,
 		upstreamSQLHelperFactory,
+		mp,
 	)
 
 	// The iteration should complete successfully

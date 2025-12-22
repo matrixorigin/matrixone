@@ -357,6 +357,7 @@ func (h *UpstreamSQLHelper) handleGetObjectDirectly(
 		bat.Clean(mp)
 		return nil, err
 	}
+	bat.SetRowCount(bat.Vecs[0].Length())
 
 	return h.convertExecutorResult(executor.Result{
 		Batches: []*batch.Batch{bat},
