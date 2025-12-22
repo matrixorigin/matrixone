@@ -243,7 +243,23 @@ func convertObjectToBatch(
 		return nil, moerr.NewInternalErrorf(ctx, "object content too small for meta extent")
 	}
 	metaBytes := objectContent[metaExtent.Offset() : metaExtent.Offset()+metaExtent.Length()]
-	meta := objectio.MustObjectMeta(metaBytes)
+
+	// Check if meta needs decompression (same as ReadExtent does)
+	var decompressedMetaBytes []byte
+	if metaExtent.Alg() == compress.None {
+		decompressedMetaBytes = metaBytes
+	} else {
+		// Allocate buffer for decompressed data
+		allocator := fileservice.DefaultCacheDataAllocator()
+		decompressedBuf := allocator.AllocateCacheDataWithHint(ctx, int(metaExtent.OriginSize()), malloc.NoClear)
+		bs, err := compress.Decompress(metaBytes, decompressedBuf.Bytes(), compress.Lz4)
+		if err != nil {
+			return nil, moerr.NewInternalErrorf(ctx, "failed to decompress meta data: %v", err)
+		}
+		decompressedMetaBytes = decompressedBuf.Bytes()[:len(bs)]
+	}
+
+	meta := objectio.MustObjectMeta(decompressedMetaBytes)
 
 	dataMeta := meta.MustGetMeta(objectio.SchemaData)
 	blkCnt := dataMeta.BlockCount()
@@ -451,8 +467,10 @@ func createObjectFromBatch(
 	}
 
 	// Create new batch without commit TS column
-	newBat := batch.NewWithSize(len(cnBat.Vecs) - 1)
-	newBat.Attrs = make([]string, 0, len(cnBat.Attrs)-1)
+	newBat := &batch.Batch{
+		Vecs:  make([]*vector.Vector, 0, len(cnBat.Vecs)-1),
+		Attrs: make([]string, 0, len(cnBat.Attrs)-1),
+	}
 	for i, vec := range cnBat.Vecs {
 		if i != commitTSIdx {
 			newBat.Attrs = append(newBat.Attrs, cnBat.Attrs[i])

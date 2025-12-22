@@ -564,6 +564,12 @@ func RequestUpstreamSnapshot(
 	}
 	defer result.Close()
 
+	// Before setting new current snapshot, save old current snapshot as prev snapshot
+	if iterationCtx.CurrentSnapshotName != "" {
+		iterationCtx.PrevSnapshotName = iterationCtx.CurrentSnapshotName
+		iterationCtx.PrevSnapshotTS = iterationCtx.CurrentSnapshotTS
+	}
+
 	// Store snapshot name in iteration context
 	iterationCtx.CurrentSnapshotName = snapshotName
 
