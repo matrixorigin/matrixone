@@ -1,4 +1,4 @@
-sion:id=0&user=dump&password=111
+-- @session:id=0&user=dump&password=111
 -- Test cases for Group 0
 create user user1_group0 identified by '1234';
 -- Clean up Group 0

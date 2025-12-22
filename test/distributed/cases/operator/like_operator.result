@@ -406,6 +406,6 @@ a
 abc
 ABC
 abC
-show variables where value ilike "%system%" and variable_name = "time_zone";
+show variables where value ilike "%cst%" and variable_name = "system_time_zone";
 Variable_name    Value
-time_zone    SYSTEM
+system_time_zone    CST

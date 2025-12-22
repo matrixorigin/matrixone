@@ -19,10 +19,7 @@ insert into tbh3(id, val) values(1,1.5),(2,2.5),(3,3.5);
 -- @desc:test if-elseif-else (hit if)
 -- @label:bvt
 drop procedure if exists test_if_hit_if;
--- @delimiter .
-create procedure test_if_hit_if () 'begin DECLARE v1 INT; SET v1 = 10; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end'
-.
--- @delimiter ;
+create procedure test_if_hit_if () 'begin DECLARE v1 INT; SET v1 = 10; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end';
 call test_if_hit_if();
 drop procedure test_if_hit_if;
 
@@ -30,10 +27,7 @@ drop procedure test_if_hit_if;
 -- @desc:test if-elseif-else (hit first elseif)
 -- @label:bvt
 drop procedure if exists test_if_hit_elseif_first_elseif;
--- @delimiter .
-create procedure test_if_hit_elseif_first_elseif() 'begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end'
-.
--- @delimiter ;
+create procedure test_if_hit_elseif_first_elseif() 'begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end';
 call test_if_hit_elseif_first_elseif();
 drop procedure test_if_hit_elseif_first_elseif;
 
@@ -41,10 +35,7 @@ drop procedure test_if_hit_elseif_first_elseif;
 -- @desc:test if-elseif-else (hit second elseif)
 -- @label:bvt
 drop procedure if exists test_if_hit_second_elseif;
--- @delimiter .
-create procedure test_if_hit_second_elseif() 'begin DECLARE v1 INT; SET v1 = 4; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 order by id limit 1; ELSE select * from tbh3; END IF; end'
-.
--- @delimiter ;
+create procedure test_if_hit_second_elseif() 'begin DECLARE v1 INT; SET v1 = 4; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 order by id limit 1; ELSE select * from tbh3; END IF; end';
 call test_if_hit_second_elseif();
 drop procedure test_if_hit_second_elseif;
 
@@ -52,10 +43,7 @@ drop procedure test_if_hit_second_elseif;
 -- @desc:test if-elseif-else (hit else)
 -- @label:bvt
 drop procedure if exists test_if_hit_else;
--- @delimiter .
-create procedure test_if_hit_else() 'begin DECLARE v1 INT; SET v1 = 3; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end'
-.
--- @delimiter ;
+create procedure test_if_hit_else() 'begin DECLARE v1 INT; SET v1 = 3; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end';
 call test_if_hit_else();
 drop procedure test_if_hit_else;
 
@@ -63,10 +51,7 @@ drop procedure test_if_hit_else;
 -- @desc:test while
 -- @label:bvt
 drop procedure if exists test_while;
--- @delimiter .
-create procedure test_while() 'begin DECLARE v1 INT default 10; WHILE v1 < 100 DO insert into tmp(id) values(v1); set v1 = v1 + 10; END WHILE; select * from tmp; end'
-.
--- @delimiter ;
+create procedure test_while() 'begin DECLARE v1 INT default 10; WHILE v1 < 100 DO insert into tmp(id) values(v1); set v1 = v1 + 10; END WHILE; select * from tmp; end';
 create table if not exists tmp(id int); 
 call test_while();
 drop table if exists tmp; 
@@ -76,10 +61,7 @@ drop procedure test_while;
 -- @desc:test repeat
 -- @label:bvt
 drop procedure if exists test_repeat;
--- @delimiter .
 create procedure test_repeat() 'begin declare p1 int default 10; declare v1 int default 5; repeat set v1 = v1 + 1; until v1 > p1 end repeat; select v1; end';
-.
--- @delimiter ;
 -- @bvt:issue#10477
 call test_repeat();
 -- @bvt:issue
@@ -89,10 +71,7 @@ drop procedure test_repeat;
 -- @desc:test loop
 -- @label:bvt
 drop procedure if exists test_loop;
--- @delimiter .
-create procedure test_loop() 'begin declare p1 int default 5; label1: loop set p1 = p1 + 1; if p1 < 10 THEN iterate label1; end if; leave label1; end loop label1; select p1; end'
-.
--- @delimiter ;
+create procedure test_loop() 'begin declare p1 int default 5; label1: loop set p1 = p1 + 1; if p1 < 10 THEN iterate label1; end if; leave label1; end loop label1; select p1; end';
 call test_loop();
 drop procedure test_loop;
 
@@ -100,10 +79,7 @@ drop procedure test_loop;
 -- @desc:test inner scope variable access
 -- @label:bvt
 drop procedure if exists test_var_access;
--- @delimiter .
-create procedure test_var_access() 'begin declare v1 int default 10; begin declare v1 int default 5; select v1; end; select v1; end'
-.
--- @delimiter ;
+create procedure test_var_access() 'begin declare v1 int default 10; begin declare v1 int default 5; select v1; end; select v1; end';
 call test_var_access();
 drop procedure test_var_access;
 
@@ -111,10 +87,7 @@ drop procedure test_var_access;
 -- @desc:test IN parameter access (both expression and variable passing)
 -- @label:bvt
 drop procedure if exists test_in_param;
--- @delimiter .
-create procedure test_in_param(in sid int) 'begin select val from tbh2 where id = sid; end'
-.
--- @delimiter ;
+create procedure test_in_param(in sid int) 'begin select val from tbh2 where id = sid; end';
 call test_in_param(3);
 drop procedure test_in_param;
 
@@ -122,10 +95,7 @@ drop procedure test_in_param;
 -- @desc:test OUT parameter access
 -- @label:bvt
 drop procedure if exists test_out_param;
--- @delimiter .
-create procedure test_out_param(out sid int) 'begin set sid = 1000; end'
-.
--- @delimiter ;
+create procedure test_out_param(out sid int) 'begin set sid = 1000; end';
 call test_out_param(@id);
 select @id;
 drop procedure test_out_param;
@@ -134,10 +104,7 @@ drop procedure test_out_param;
 -- @desc:test INOUT parameter access
 -- @label:bvt
 drop procedure if exists test_inout_param;
--- @delimiter .
-create procedure test_inout_param(inout sid int) 'begin select sid; set sid = 1000 end'
-.
--- @delimiter ;
+create procedure test_inout_param(inout sid int) 'begin select sid; set sid = 1000 end';
 set @id = 100;
 call test_inout_param(@id);
 select @id;

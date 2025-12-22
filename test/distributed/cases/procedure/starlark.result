@@ -61,10 +61,10 @@ call sp_quote('''', @qs);
 select @qs;
 @qs
 ''
-call sp_quote($$foo'bar''zoo$$, @qs2);
+call sp_quote($$foo'bar'zoo$$, @qs2);
 select @qs2;
 @qs2
-foo''bar''''zoo
+foo''bar''zoo
 create or replace procedure sp_jq(in jq varchar, in data varchar, out jqresult varchar, out errstr varchar) language 'starlark'
 '
 res, err = mo.jq(jq, data)

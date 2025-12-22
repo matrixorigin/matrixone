@@ -167,6 +167,9 @@ use test_creatsql;
 select rel_createsql from mo_catalog.mo_tables where relname = 't' and reldatabase = 'test_creatsql';
 drop database test_creatsql;
 
+drop database if exists test03;
+drop database if exists test04;
+drop database if exists test05;
 create database test03;
 create database test04;
 create database test05;
