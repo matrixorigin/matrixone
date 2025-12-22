@@ -1734,6 +1734,40 @@ func (tbl *txnTable) Delete(
 	}
 }
 
+// SoftDeleteObject soft deletes an object by setting its deleteat timestamp
+// This is similar to merge's soft delete mechanism
+func (tbl *txnTable) SoftDeleteObject(ctx context.Context, objID *objectio.ObjectId, isTombstone bool) error {
+	if tbl.db.op.IsSnapOp() {
+		return moerr.NewInternalErrorNoCtx("soft delete object operation is not allowed in snapshot transaction")
+	}
+
+	// Create a special entry for soft delete object
+	// We use FileName to pass ObjectID and IsTombstone as a special format
+	objIDBytes := objID[:]
+	objIDHex := fmt.Sprintf("%x", objIDBytes)
+	fileName := fmt.Sprintf("soft_delete_object:%s:%v", objIDHex, isTombstone)
+
+	// Create an empty batch (not used for soft delete object)
+	emptyBat := batch.NewWithSize(0)
+	emptyBat.SetRowCount(0)
+
+	// Create entry with EntrySoftDeleteObject type
+	entry := Entry{
+		typ:          SOFT_DELETE_OBJECT,
+		bat:          emptyBat,
+		tnStore:      tbl.getTxn().tnStores[0],
+		tableId:      tbl.tableId,
+		databaseId:   tbl.db.databaseId,
+		tableName:    tbl.tableName,
+		databaseName: tbl.db.databaseName,
+		accountId:    tbl.accountId,
+		fileName:     fileName,
+	}
+
+	tbl.getTxn().writes = append(tbl.getTxn().writes, entry)
+	return nil
+}
+
 func (tbl *txnTable) writeTnPartition(_ context.Context, bat *batch.Batch) error {
 	ibat, err := util.CopyBatch(bat, tbl.getTxn().proc)
 	if err != nil {

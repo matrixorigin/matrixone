@@ -939,6 +939,15 @@ func (tbl *txnTableDelegate) Delete(
 	return tbl.origin.Delete(ctx, bat, name)
 }
 
+func (tbl *txnTableDelegate) SoftDeleteObject(ctx context.Context, objID *objectio.ObjectId, isTombstone bool) error {
+	if tbl.combined.is {
+		// For combined table, we need to handle it differently
+		// For now, delegate to origin
+		return tbl.origin.SoftDeleteObject(ctx, objID, isTombstone)
+	}
+	return tbl.origin.SoftDeleteObject(ctx, objID, isTombstone)
+}
+
 func (tbl *txnTableDelegate) AddTableDef(
 	ctx context.Context,
 	def engine.TableDef,

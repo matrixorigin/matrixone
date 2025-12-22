@@ -136,8 +136,9 @@ func (m *FaultPoint) UnmarshalBinary(data []byte) error {
 type EntryType int32
 
 const (
-	EntryInsert EntryType = 0
-	EntryDelete EntryType = 1
+	EntryInsert           EntryType = 0
+	EntryDelete           EntryType = 1
+	EntrySoftDeleteObject EntryType = 2
 )
 
 type PKCheckType int32
@@ -172,6 +173,10 @@ type WriteReq struct {
 	DataObjectStats []objectio.ObjectStats
 	//for delete on S3
 	TombstoneStats []objectio.ObjectStats
+	//for soft delete object: object ID to delete
+	ObjectID *objectio.ObjectId
+	//for soft delete object: whether it's a tombstone object
+	IsTombstone bool
 	//tasks for loading primary keys or deleted row ids
 	Jobs []*tasks.Job
 	//loaded sorted primary keys or deleted row ids.

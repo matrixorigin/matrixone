@@ -16,10 +16,12 @@ package rpc
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
 	"regexp"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -253,8 +255,25 @@ func (h *Handle) handleRequests(
 			var wr *cmd_util.WriteReq
 			if ae, ok := req.(*api.Entry); ok {
 				wr = h.apiEntryToWriteEntry(ctx, txnMeta, ae, true)
+				// Check if this is a soft delete object request
+				if wr.FileName != "" && strings.HasPrefix(wr.FileName, "soft_delete_object:") {
+					// Handle soft delete object separately
+					err = h.HandleSoftDeleteObject(ctx, txn, wr)
+					if err != nil {
+						return
+					}
+					continue
+				}
 			} else {
 				wr = req.(*cmd_util.WriteReq)
+				// Check if this is a soft delete object request
+				if wr.Type == cmd_util.EntrySoftDeleteObject {
+					err = h.HandleSoftDeleteObject(ctx, txn, wr)
+					if err != nil {
+						return
+					}
+					continue
+				}
 			}
 
 			if delM == nil {
@@ -353,6 +372,20 @@ func (h *Handle) apiEntryToWriteEntry(
 		FileName:     pe.GetFileName(),
 		Batch:        moBat,
 		PkCheck:      cmd_util.PKCheckType(pe.GetPkCheckByTn()),
+	}
+
+	// Handle soft delete object: parse ObjectID and IsTombstone from FileName
+	// Format: "soft_delete_object:<object_id_hex>:<is_tombstone>"
+	if req.Type == cmd_util.EntrySoftDeleteObject && req.FileName != "" {
+		parts := strings.Split(req.FileName, ":")
+		if len(parts) == 3 && parts[0] == "soft_delete_object" {
+			objIDBytes, err := hex.DecodeString(parts[1])
+			if err == nil && len(objIDBytes) == 16 {
+				objID := objectio.ObjectId(objIDBytes)
+				req.ObjectID = &objID
+				req.IsTombstone = parts[2] == "true"
+			}
+		}
 	}
 
 	if req.FileName != "" {
@@ -962,6 +995,36 @@ func (h *Handle) HandleWrite(
 	//}
 	err = tb.DeleteByPhyAddrKeys(rowIDVec, pkVec, handle.DT_Normal)
 	return
+}
+
+// HandleSoftDeleteObject handles soft delete object request
+// It sets the object's deleteat timestamp to the transaction's commit timestamp
+// Similar to merge's soft delete mechanism
+func (h *Handle) HandleSoftDeleteObject(
+	ctx context.Context,
+	txn txnif.AsyncTxn,
+	req *cmd_util.WriteReq,
+) error {
+
+	dbase, err := txn.GetDatabaseByID(req.DatabaseId)
+	if err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to get database %d: %v", req.DatabaseId, err)
+	}
+
+	tb, err := dbase.GetRelationByID(req.TableID)
+	if err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to get relation %d: %v", req.TableID, err)
+	}
+
+	err = tb.SoftDeleteObject(req.ObjectID, req.IsTombstone)
+	if err != nil {
+		logutil.Errorf("failed to soft delete object %s: %v", req.ObjectID.ShortStringEx(), err)
+		return moerr.NewInternalErrorf(ctx, "failed to soft delete object %s: %v", req.ObjectID.ShortStringEx(), err)
+	}
+
+	logutil.Debugf("[precommit] soft delete object %s, isTombstone: %v, txn: %s",
+		req.ObjectID.ShortStringEx(), req.IsTombstone, txn.String())
+	return nil
 }
 
 func parse_merge_settings_set(
