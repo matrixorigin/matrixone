@@ -115,5 +115,5 @@ func CheckSnapshotFlushed(ctx context.Context, snapshotTS types.TS, fs fileservi
 
 	maxFile := metaFiles[len(metaFiles)-1]
 	maxEndTS := maxFile.GetEnd()
-	return maxEndTS.LE(&snapshotTS), nil
+	return maxEndTS.GE(&snapshotTS), nil
 }
