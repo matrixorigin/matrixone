@@ -121,6 +121,9 @@ const (
 		`FROM mo_catalog.mo_snapshots ` +
 		`WHERE sname = '%s'`
 
+	// Check snapshot flushed SQL template
+	PublicationCheckSnapshotFlushedSqlTemplate = `CHECKSNAPSHOTFLUSHED %s`
+
 	// Update mo_ccpr_log SQL template
 	PublicationUpdateMoCcprLogSqlTemplate = `UPDATE mo_catalog.mo_ccpr_log ` +
 		`SET iteration_state = %d, ` +
@@ -147,6 +150,7 @@ const (
 	PublicationQueryMoCcprLogFullSqlTemplate_Idx
 	PublicationQuerySnapshotTsSqlTemplate_Idx
 	PublicationUpdateMoCcprLogSqlTemplate_Idx
+	PublicationCheckSnapshotFlushedSqlTemplate_Idx
 
 	PublicationSqlTemplateCount
 )
@@ -265,6 +269,9 @@ var PublicationSQLTemplates = [PublicationSqlTemplateCount]struct {
 	},
 	PublicationUpdateMoCcprLogSqlTemplate_Idx: {
 		SQL: PublicationUpdateMoCcprLogSqlTemplate,
+	},
+	PublicationCheckSnapshotFlushedSqlTemplate_Idx: {
+		SQL: PublicationCheckSnapshotFlushedSqlTemplate,
 	},
 }
 
@@ -633,6 +640,18 @@ func (b publicationSQLBuilder) QuerySnapshotTsSQL(
 	return fmt.Sprintf(
 		PublicationSQLTemplates[PublicationQuerySnapshotTsSqlTemplate_Idx].SQL,
 		escapeSQLString(snapshotName),
+	)
+}
+
+// CheckSnapshotFlushedSQL creates SQL for checking if snapshot is flushed
+// Returns result (bool)
+// Example: CHECKSNAPSHOTFLUSHED sp1
+func (b publicationSQLBuilder) CheckSnapshotFlushedSQL(
+	snapshotName string,
+) string {
+	return fmt.Sprintf(
+		PublicationSQLTemplates[PublicationCheckSnapshotFlushedSqlTemplate_Idx].SQL,
+		escapeSQLIdentifier(snapshotName),
 	)
 }
 

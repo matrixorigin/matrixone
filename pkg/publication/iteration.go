@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -76,12 +77,12 @@ type IterationContextJSON struct {
 	SrcInfo          SrcInfo `json:"src_info"`
 
 	// Context information
-	PrevSnapshotName    string                     `json:"prev_snapshot_name"`
-	PrevSnapshotTS      int64                      `json:"prev_snapshot_ts"` // types.TS as int64
-	CurrentSnapshotName string                     `json:"current_snapshot_name"`
-	CurrentSnapshotTS   int64                      `json:"current_snapshot_ts"` // types.TS as int64
+	PrevSnapshotName    string                                `json:"prev_snapshot_name"`
+	PrevSnapshotTS      int64                                 `json:"prev_snapshot_ts"` // types.TS as int64
+	CurrentSnapshotName string                                `json:"current_snapshot_name"`
+	CurrentSnapshotTS   int64                                 `json:"current_snapshot_ts"` // types.TS as int64
 	ActiveAObj          map[objectio.ObjectId]AObjMappingJSON `json:"active_aobj"`         // ActiveAObj as serializable map
-	TableIDs            map[string]uint64          `json:"table_ids"`
+	TableIDs            map[string]uint64                     `json:"table_ids"`
 }
 
 // InitializeIterationContext initializes IterationContext from mo_ccpr_log table
@@ -616,6 +617,114 @@ func RequestUpstreamSnapshot(
 	return nil
 }
 
+// WaitForSnapshotFlushed waits for the snapshot to be flushed with exponential backoff
+// It checks if the snapshot is flushed, and if not, waits and retries
+// firstInterval: initial wait time (default: 1s)
+// totalTimeout: total time to wait before giving up (default: 30min)
+func WaitForSnapshotFlushed(
+	ctx context.Context,
+	iterationCtx *IterationContext,
+	firstInterval time.Duration,
+	totalTimeout time.Duration,
+) error {
+	if iterationCtx == nil {
+		return moerr.NewInternalError(ctx, "iteration context is nil")
+	}
+
+	if iterationCtx.UpstreamExecutor == nil {
+		return moerr.NewInternalError(ctx, "upstream executor is nil")
+	}
+
+	if iterationCtx.CurrentSnapshotName == "" {
+		return moerr.NewInternalError(ctx, "current snapshot name is empty")
+	}
+
+	// Set default values if not provided
+	if firstInterval <= 0 {
+		firstInterval = 1 * time.Second
+	}
+	if totalTimeout <= 0 {
+		totalTimeout = 30 * time.Minute
+	}
+
+	snapshotName := iterationCtx.CurrentSnapshotName
+	checkSQL := PublicationSQLBuilder.CheckSnapshotFlushedSQL(snapshotName)
+
+	startTime := time.Now()
+	currentInterval := firstInterval
+	attempt := 0
+
+	for {
+		// Check if we've exceeded total timeout
+		if time.Since(startTime) > totalTimeout {
+			return moerr.NewInternalErrorf(
+				ctx,
+				"timeout waiting for snapshot %s to be flushed after %v",
+				snapshotName,
+				totalTimeout,
+			)
+		}
+
+		// Check if context is cancelled
+		select {
+		case <-ctx.Done():
+			return moerr.NewInternalErrorf(ctx, "context cancelled while waiting for snapshot %s to be flushed", snapshotName)
+		default:
+		}
+
+		// Execute check snapshot flushed SQL
+		result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, checkSQL)
+		if err != nil {
+			logutil.Warn("ccpr-iteration check snapshot flushed failed",
+				zap.String("snapshot_name", snapshotName),
+				zap.Int("attempt", attempt),
+				zap.Error(err),
+			)
+			// Continue to retry on error
+		} else {
+			// Read the result
+			var flushed bool
+			var found bool
+			if result.Next() {
+				var resultValue sql.NullBool
+				if err := result.Scan(&resultValue); err == nil && resultValue.Valid {
+					flushed = resultValue.Bool
+					found = true
+				}
+			}
+			result.Close()
+
+			if found && flushed {
+				logutil.Info("ccpr-iteration snapshot flushed",
+					zap.String("snapshot_name", snapshotName),
+					zap.Int("attempt", attempt),
+					zap.Duration("elapsed", time.Since(startTime)),
+				)
+				return nil
+			}
+		}
+
+		// Log retry attempt
+		attempt++
+		logutil.Info("ccpr-iteration waiting for snapshot to be flushed",
+			zap.String("snapshot_name", snapshotName),
+			zap.Int("attempt", attempt),
+			zap.Duration("next_interval", currentInterval),
+			zap.Duration("elapsed", time.Since(startTime)),
+			zap.Duration("remaining", totalTimeout-time.Since(startTime)),
+		)
+
+		// Wait before next retry
+		select {
+		case <-ctx.Done():
+			return moerr.NewInternalErrorf(ctx, "context cancelled while waiting for snapshot %s to be flushed", snapshotName)
+		case <-time.After(currentInterval):
+			// Double the interval for next retry (exponential backoff)
+			currentInterval *= 2
+		}
+	}
+}
+
 // DropPreviousUpstreamSnapshot drops the previous snapshot from upstream cluster
 // It deletes the snapshot specified by PrevSnapshotName in IterationContext
 func DropPreviousUpstreamSnapshot(
@@ -1070,6 +1179,12 @@ func ExecuteIteration(
 	// 1.1 请求上游snapshot (includes 1.1.2 请求上游的snapshot ts)
 	if err = RequestUpstreamSnapshot(ctx, iterationCtx); err != nil {
 		err = moerr.NewInternalErrorf(ctx, "failed to request upstream snapshot: %v", err)
+		return
+	}
+
+	// 1.2 等待上游snapshot刷盘
+	if err = WaitForSnapshotFlushed(ctx, iterationCtx, 1*time.Second, 30*time.Minute); err != nil {
+		err = moerr.NewInternalErrorf(ctx, "failed to wait for snapshot to be flushed: %v", err)
 		return
 	}
 
