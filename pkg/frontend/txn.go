@@ -28,7 +28,6 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	txnclient "github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
@@ -368,11 +367,11 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 		return moerr.NewInternalError(execCtx.reqCtx, "NewTxnOperator: the share txn is not allowed to create new txn")
 	}
 
-	var opts []client.TxnOption
+	var opts []txnclient.TxnOption
 	rt := moruntime.ServiceRuntime(execCtx.ses.GetService())
 	if rt != nil {
 		if v, ok := rt.GetGlobalVariables(moruntime.TxnOptions); ok {
-			opts = v.([]client.TxnOption)
+			opts = v.([]txnclient.TxnOption)
 		}
 	}
 	if th.txnCtx == nil {
@@ -391,22 +390,22 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 	}
 	sessionInfo := execCtx.ses.GetDebugString()
 	opts = append(opts,
-		client.WithTxnCreateBy(
+		txnclient.WithTxnCreateBy(
 			accountID,
 			userName,
 			execCtx.ses.GetUUIDString(),
 			connectionID),
-		client.WithSessionInfo(sessionInfo),
-		client.WithBeginAutoCommit(execCtx.txnOpt.byBegin, execCtx.txnOpt.autoCommit))
+		txnclient.WithSessionInfo(sessionInfo),
+		txnclient.WithBeginAutoCommit(execCtx.txnOpt.byBegin, execCtx.txnOpt.autoCommit))
 
 	if execCtx.ses.GetFromRealUser() {
 		opts = append(opts,
-			client.WithUserTxn())
+			txnclient.WithUserTxn())
 	}
 
 	if execCtx.ses.IsBackgroundSession() ||
 		execCtx.ses.DisableTrace() {
-		opts = append(opts, client.WithDisableTrace(true))
+		opts = append(opts, txnclient.WithDisableTrace(true))
 	} else {
 		varVal, err := execCtx.ses.GetSessionSysVar("disable_txn_trace")
 		if err != nil {
@@ -415,7 +414,7 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 		if def, ok := gSysVarsDefs["disable_txn_trace"]; ok {
 			if boolType, ok := def.GetType().(SystemVariableBoolType); ok {
 				if boolType.IsTrue(varVal) {
-					opts = append(opts, client.WithDisableTrace(true))
+					opts = append(opts, txnclient.WithDisableTrace(true))
 				}
 			}
 		}
@@ -509,7 +508,7 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 	defer cancel()
 	if sess, ok := execCtx.ses.(*Session); ok {
 		if token := sess.currentRunSQLToken(); token != 0 {
-			ctx2 = txnclient.WithRunSQLSkipToken(ctx2, token)
+			ctx2 = txntxnclient.WithRunSQLSkipToken(ctx2, token)
 		}
 	}
 	val, e := execCtx.ses.GetSessionSysVar("mo_pk_check_by_dn")
@@ -645,7 +644,7 @@ func (th *TxnHandler) rollbackUnsafe(execCtx *ExecCtx) error {
 	defer cancel()
 	if sess, ok := execCtx.ses.(*Session); ok {
 		if token := sess.currentRunSQLToken(); token != 0 {
-			ctx2 = txnclient.WithRunSQLSkipToken(ctx2, token)
+			ctx2 = txntxnclient.WithRunSQLSkipToken(ctx2, token)
 		}
 	}
 	defer func() {
