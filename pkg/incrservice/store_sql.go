@@ -226,6 +226,12 @@ func (s *sqlStore) Allocate(
 
 	from, to := getNextRange(current, next, int(step))
 	commitTs := txnOp.GetOverview().Meta.CommitTS
+	// Fix: When the transaction has not committed yet (e.g., during CREATE TABLE),
+	// CommitTS is zero. Use SnapshotTS as a fallback to avoid setting lastAllocateAt to zero,
+	// which would cause PrimaryKeysMayBeUpserted to scan an excessively large time range.
+	if commitTs.IsEmpty() {
+		commitTs = txnOp.SnapshotTS()
+	}
 	return from, to, commitTs, nil
 }
 

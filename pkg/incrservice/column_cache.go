@@ -465,14 +465,12 @@ func (col *columnCache) applyAllocateLocked(
 	}
 
 	if to > from {
-		if col.ranges.minCanAdded < to {
-			if col.lastAllocateAt.IsEmpty() {
-				col.lastAllocateAt = allocateAt
-			} else {
-				if col.lastAllocateAt.Less(allocateAt) {
-					col.lastAllocateAt = allocateAt
-				}
-			}
+		// Always update lastAllocateAt to the latest allocation timestamp.
+		// In multi-CN scenario, the allocation is globally serialized via FOR UPDATE lock
+		// on mo_increment_columns table, so each allocation's CommitTS is globally ordered.
+		// We should always use the latest timestamp for PrimaryKeysMayBeUpserted check.
+		if !allocateAt.IsEmpty() && (col.lastAllocateAt.IsEmpty() || col.lastAllocateAt.Less(allocateAt)) {
+			col.lastAllocateAt = allocateAt
 		}
 		col.ranges.add(from, to)
 		if col.logger.Enabled(zap.DebugLevel) {
