@@ -361,51 +361,53 @@ func (tTxnOp *testTxnOperator) Delete(string) {
 }
 
 func Test_Allocate(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
+	sid := "test-lock-service" // Must match testLockService.GetConfig().ServiceID
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			ctx := context.TODO()
+			ctx = defines.AttachAccountId(ctx, 12)
 
-	ctx := context.TODO()
-	ctx = defines.AttachAccountId(ctx, 12)
+			txnOp := &testTxnOperator{}
 
-	txnOp := &testTxnOperator{}
+			var updateCnt atomic.Int32
 
-	var updateCnt atomic.Int32
+			sqlExecutor := executor.NewMemExecutor2(
+				func(sql string) (executor.Result, error) {
+					if strings.HasPrefix(sql, "select offset, step from mo_increment_columns where table_id") {
+						typs := []types.Type{
+							types.New(types.T_uint64, 64, 0),
+							types.New(types.T_uint64, 64, 0),
+						}
 
-	sqlExecutor := executor.NewMemExecutor2(
-		func(sql string) (executor.Result, error) {
-			if strings.HasPrefix(sql, "select offset, step from mo_increment_columns where table_id") {
-				typs := []types.Type{
-					types.New(types.T_uint64, 64, 0),
-					types.New(types.T_uint64, 64, 0),
-				}
+						memRes := executor.NewMemResult(
+							typs,
+							mpool.MustNewZero())
+						memRes.NewBatch()
+						executor.AppendFixedRows(memRes, 0, []uint64{1})
+						executor.AppendFixedRows(memRes, 1, []uint64{1})
+						return memRes.GetResult(), nil
+					} else if strings.HasPrefix(sql, "update mo_increment_columns set offset =") {
+						if updateCnt.Load() > 0 {
+							return executor.Result{AffectedRows: 1}, nil
+						}
+						updateCnt.Add(1)
+					}
 
-				memRes := executor.NewMemResult(
-					typs,
-					mpool.MustNewZero())
-				memRes.NewBatch()
-				executor.AppendFixedRows(memRes, 0, []uint64{1})
-				executor.AppendFixedRows(memRes, 1, []uint64{1})
-				return memRes.GetResult(), nil
-			} else if strings.HasPrefix(sql, "update mo_increment_columns set offset =") {
-				if updateCnt.Load() > 0 {
-					return executor.Result{AffectedRows: 1}, nil
-				}
-				updateCnt.Add(1)
+					return executor.Result{}, nil
+				},
+				txnOp,
+			)
+
+			s := &sqlStore{
+				exec: sqlExecutor,
+				ls:   &testLockService{},
 			}
 
-			return executor.Result{}, nil
+			_, _, _, err := s.Allocate(ctx, 10, "a", 1, nil)
+			require.NoError(t, err)
 		},
-		txnOp,
 	)
-
-	s := &sqlStore{
-		exec: sqlExecutor,
-		ls:   &testLockService{},
-	}
-
-	_, _, _, err := s.Allocate(ctx, 10, "a", 1, nil)
-	require.NoError(t, err)
-	//require.Equal(t, 2, len(executedSQLs))
 }
 
 // TestAllocateWithEmptyCommitTS verifies that when CommitTS is empty (e.g., during CREATE TABLE),
