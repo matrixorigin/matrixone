@@ -38,6 +38,40 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// checkpointUTHelper implements publication.UTHelper for unit testing
+// It performs force checkpoint when snapshot is created
+type checkpointUTHelper struct {
+	taeHandler    *testutil.TestTxnStorage
+	disttaeEngine *testutil.TestDisttaeEngine
+	checkpointC   chan struct{}
+}
+
+func (h *checkpointUTHelper) OnSnapshotCreated(ctx context.Context, snapshotName string, snapshotTS types.TS) error {
+	// Perform force checkpoint
+	err := h.taeHandler.GetDB().ForceCheckpoint(ctx, types.TimestampToTS(h.disttaeEngine.Now()))
+	if err != nil {
+		return err
+	}
+	// Start a goroutine to checkpoint every 100ms until ExecuteIteration completes
+	if h.checkpointC != nil {
+		go func() {
+			ticker := time.NewTicker(100 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-h.checkpointC:
+					// ExecuteIteration completed, stop checkpointing
+					return
+				case <-ticker.C:
+					// Execute checkpoint every 100ms
+					_ = h.taeHandler.GetDB().ForceCheckpoint(ctx, types.TimestampToTS(h.disttaeEngine.Now()))
+				}
+			}
+		}()
+	}
+	return nil
+}
+
 func TestCheckIterationStatus(t *testing.T) {
 	catalog.SetupDefines("")
 
@@ -387,60 +421,33 @@ func TestExecuteIteration1(t *testing.T) {
 	mp, err := mpool.NewMPool("test_execute_iteration2", 0, mpool.NoFixed)
 	require.NoError(t, err)
 
-	// Step 4: Execute ExecuteIteration and ForceCheckpoint in parallel
-	var executeIterationErr error
-	var forceCheckpointErr error
-	executeIterationDone := make(chan bool, 1)
-	forceCheckpointDone := make(chan bool, 1)
+	// Step 4: Create UTHelper for checkpointing
+	checkpointDone := make(chan struct{}, 1)
+	utHelper := &checkpointUTHelper{
+		taeHandler:    taeHandler,
+		disttaeEngine: disttaeEngine,
+		checkpointC:   checkpointDone,
+	}
 
-	// Start ExecuteIteration in a goroutine
-	go func() {
-		defer func() {
-			executeIterationDone <- true
-		}()
-		executeIterationErr = publication.ExecuteIteration(
-			srcCtxWithTimeout,
-			cnUUID,
-			disttaeEngine.Engine,
-			disttaeEngine.GetTxnClient(),
-			taskID,
-			iterationLSN,
-			iterationState,
-			upstreamSQLHelperFactory,
-			mp,
-		)
-	}()
+	// Execute ExecuteIteration with UTHelper
+	err = publication.ExecuteIteration(
+		srcCtxWithTimeout,
+		cnUUID,
+		disttaeEngine.Engine,
+		disttaeEngine.GetTxnClient(),
+		taskID,
+		iterationLSN,
+		iterationState,
+		upstreamSQLHelperFactory,
+		mp,
+		utHelper,
+	)
 
-	// Start ForceCheckpoint in parallel - execute every 100ms until ExecuteIteration completes
-	go func() {
-		defer func() {
-			forceCheckpointDone <- true
-		}()
-		ticker := time.NewTicker(100 * time.Millisecond)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-executeIterationDone:
-				// ExecuteIteration completed, stop checkpointing
-				return
-			case <-ticker.C:
-				// Execute checkpoint every 100ms
-				err := taeHandler.GetDB().ForceCheckpoint(srcCtxWithTimeout, types.TimestampToTS(disttaeEngine.Now()))
-				if err != nil {
-					forceCheckpointErr = err
-					return
-				}
-			}
-		}
-	}()
-
-	// Wait for both operations to complete
-	<-forceCheckpointDone
+	// Signal checkpoint goroutine to stop
+	close(checkpointDone)
 
 	// Check errors
-	require.NoError(t, executeIterationErr, "ExecuteIteration should complete successfully")
-	require.NoError(t, forceCheckpointErr, "ForceCheckpoint should complete successfully")
+	require.NoError(t, err, "ExecuteIteration should complete successfully")
 
 	// Step 5: Verify that the iteration state was updated
 	// Query mo_ccpr_log to check iteration_state using system account

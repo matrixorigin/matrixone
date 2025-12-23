@@ -54,6 +54,13 @@ const (
 	InternalSQLExecutorType = "internal_sql_executor"
 )
 
+// UTHelper is an interface for unit test helpers
+// It provides hooks for testing purposes
+type UTHelper interface {
+	// OnSnapshotCreated is called after a snapshot is created in the upstream
+	OnSnapshotCreated(ctx context.Context, snapshotName string, snapshotTS types.TS) error
+}
+
 // ObjectWithTableInfo contains ObjectStats with its table and database information
 type ObjectWithTableInfo struct {
 	Stats       objectio.ObjectStats
@@ -1122,6 +1129,7 @@ func ExecuteIteration(
 	iterationState int8,
 	upstreamSQLHelperFactory UpstreamSQLHelperFactory,
 	mp *mpool.MPool,
+	utHelper UTHelper,
 ) (err error) {
 	var objectListResult *Result
 	var iterationCtx *IterationContext
@@ -1187,6 +1195,14 @@ func ExecuteIteration(
 	if err = RequestUpstreamSnapshot(ctx, iterationCtx); err != nil {
 		err = moerr.NewInternalErrorf(ctx, "failed to request upstream snapshot: %v", err)
 		return
+	}
+
+	// Call OnSnapshotCreated callback if utHelper is provided
+	if utHelper != nil {
+		if err = utHelper.OnSnapshotCreated(ctx, iterationCtx.CurrentSnapshotName, iterationCtx.CurrentSnapshotTS); err != nil {
+			err = moerr.NewInternalErrorf(ctx, "failed to call OnSnapshotCreated: %v", err)
+			return
+		}
 	}
 
 	// 1.2 等待上游snapshot刷盘
