@@ -469,15 +469,20 @@ func (col *columnCache) applyAllocateLocked(
 		// In multi-CN scenario, the allocation is globally serialized via FOR UPDATE lock
 		// on mo_increment_columns table, so each allocation's CommitTS is globally ordered.
 		// We should always use the latest timestamp for PrimaryKeysMayBeUpserted check.
+		oldAllocateAt := col.lastAllocateAt
 		if !allocateAt.IsEmpty() && (col.lastAllocateAt.IsEmpty() || col.lastAllocateAt.Less(allocateAt)) {
 			col.lastAllocateAt = allocateAt
 		}
 		col.ranges.add(from, to)
 		if col.logger.Enabled(zap.DebugLevel) {
-			col.logger.Debug("new range added",
+			col.logger.Debug("auto-increment range allocated",
 				zap.String("col", col.col.ColName),
+				zap.Uint64("table-id", col.col.TableID),
 				zap.Uint64("from", from),
-				zap.Uint64("to", to))
+				zap.Uint64("to", to),
+				zap.String("old-lastAllocateAt", oldAllocateAt.DebugString()),
+				zap.String("new-lastAllocateAt", col.lastAllocateAt.DebugString()),
+				zap.String("allocateAt", allocateAt.DebugString()))
 		}
 	}
 	close(col.allocatingC)
