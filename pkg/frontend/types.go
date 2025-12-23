@@ -133,6 +133,7 @@ const (
 	FPBackupStart
 	FPCreateSnapShot
 	FPDropSnapShot
+	FPCheckSnapshotFlushed
 	FPRestoreSnapShot
 	FPUpgradeStatement
 	FPCreatePitr

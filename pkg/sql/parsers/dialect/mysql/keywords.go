@@ -114,6 +114,7 @@ func init() {
 		"subpartitions":              SUBPARTITIONS,
 		"snapshot":                   SNAPSHOT,
 		"snapshots":                  SNAPSHOTS,
+		"checksnapshotflushed":       CHECKSNAPSHOTFLUSHED,
 		"sysdate":                    SYSDATE,
 		"create":                     CREATE,
 		"cluster":                    CLUSTER,

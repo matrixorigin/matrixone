@@ -467,6 +467,9 @@ import (
 // Insert
 %token <str> ROW OUTFILE HEADER MAX_FILE_SIZE FORCE_QUOTE PARALLEL STRICT
 
+// Snapshot
+%token <str> CHECKSNAPSHOTFLUSHED
+
 %token <str> UNUSED BINDINGS
 
 // Do
@@ -566,7 +569,7 @@ import (
 %type <statement> loop_stmt iterate_stmt leave_stmt repeat_stmt while_stmt
 %type <statement> create_publication_stmt drop_publication_stmt alter_publication_stmt show_publications_stmt show_subscriptions_stmt
 %type <statement> create_stage_stmt drop_stage_stmt alter_stage_stmt
-%type <statement> create_snapshot_stmt drop_snapshot_stmt
+%type <statement> create_snapshot_stmt drop_snapshot_stmt check_snapshot_flushed_stmt
 %type <statement> create_pitr_stmt drop_pitr_stmt show_pitr_stmt alter_pitr_stmt restore_pitr_stmt show_recovery_window_stmt
 %type <str> urlparams
 %type <str> comment_opt view_list_opt view_opt security_opt view_tail check_type
@@ -974,6 +977,7 @@ normal_stmt:
 |   resume_cdc_stmt
 |   restart_cdc_stmt
 |   branch_stmt
+|   check_snapshot_flushed_stmt
 
 backup_stmt:
     BACKUP STRING FILESYSTEM STRING PARALLELISM STRING backup_type_opt backup_timestamp_opt
@@ -7310,6 +7314,14 @@ drop_snapshot_stmt:
         var ifExists = $3
         var name = tree.Identifier($4.Compare())
         $$ = tree.NewDropSnapShot(ifExists, name)
+    }
+
+check_snapshot_flushed_stmt:
+    CHECKSNAPSHOTFLUSHED ident
+    {
+        $$ = &tree.CheckSnapshotFlushed{
+            Name: tree.Identifier($2.Compare()),
+        }
     }
 
 drop_pitr_stmt:

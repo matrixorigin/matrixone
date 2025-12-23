@@ -5722,6 +5722,11 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		typs = append(typs, PrivilegeTypeAccountAll)
 		objType = objectTypeDatabase
 		kind = privilegeKindNone
+	case *tree.CheckSnapshotFlushed:
+		typs = append(typs, PrivilegeTypeAccountAll)
+		objType = objectTypeDatabase
+		kind = privilegeKindNone
+		canExecInRestricted = true
 	case *tree.RestoreSnapShot:
 		typs = append(typs, PrivilegeTypeAccountAll)
 		objType = objectTypeDatabase

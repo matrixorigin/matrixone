@@ -218,3 +218,21 @@ func (node *RestoreSnapShot) Format(ctx *FmtCtx) {
 func (node *RestoreSnapShot) GetStatementType() string { return "Restore Snapshot" }
 
 func (node *RestoreSnapShot) GetQueryType() string { return QueryTypeOth }
+
+type CheckSnapshotFlushed struct {
+	statementImpl
+	Name Identifier // snapshot name
+}
+
+func (node *CheckSnapshotFlushed) Format(ctx *FmtCtx) {
+	ctx.WriteString("checkSnapshotFlushed ")
+	node.Name.Format(ctx)
+}
+
+func (node *CheckSnapshotFlushed) GetStatementType() string { return "Check Snapshot Flushed" }
+
+func (node *CheckSnapshotFlushed) GetQueryType() string { return QueryTypeDQL }
+
+func (node *CheckSnapshotFlushed) StmtKind() StmtKind {
+	return compositeResRowType
+}

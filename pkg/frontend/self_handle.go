@@ -417,6 +417,12 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		if err = handleDropSnapshot(ses, execCtx, st); err != nil {
 			return
 		}
+	case *tree.CheckSnapshotFlushed:
+		ses.EnterFPrint(FPCheckSnapshotFlushed)
+		defer ses.ExitFPrint(FPCheckSnapshotFlushed)
+		if err = handleCheckSnapshotFlushed(ses, execCtx, st); err != nil {
+			return
+		}
 	case *tree.RestoreSnapShot:
 		ses.EnterFPrint(FPRestoreSnapShot)
 		defer ses.ExitFPrint(FPRestoreSnapShot)

@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -39,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"go.uber.org/zap"
 )
 
@@ -142,6 +144,16 @@ func (h *UpstreamSQLHelper) HandleSpecialSQL(
 			zap.String("sql", query),
 		)
 		result, err := h.handleGetDdlDirectly(ctx, s)
+		if err != nil {
+			return true, nil, err
+		}
+		return true, result, nil
+
+	case *tree.CheckSnapshotFlushed:
+		logutil.Info("UpstreamSQLHelper: routing CHECK SNAPSHOT FLUSHED to frontend",
+			zap.String("sql", query),
+		)
+		result, err := h.handleCheckSnapshotFlushedDirectly(ctx, s)
 		if err != nil {
 			return true, nil, err
 		}
@@ -363,6 +375,110 @@ func (h *UpstreamSQLHelper) handleGetObjectDirectly(
 		Batches: []*batch.Batch{bat},
 		Mp:      mp,
 	}), nil
+}
+
+// handleCheckSnapshotFlushedDirectly handles CHECK SNAPSHOT FLUSHED by directly calling frontend logic
+func (h *UpstreamSQLHelper) handleCheckSnapshotFlushedDirectly(
+	ctx context.Context,
+	stmt *tree.CheckSnapshotFlushed,
+) (*publication.Result, error) {
+	if h.engine == nil {
+		return nil, moerr.NewInternalError(ctx, "engine is required for CHECK SNAPSHOT FLUSHED")
+	}
+	if h.txnOp == nil {
+		return nil, moerr.NewInternalError(ctx, "transaction is required for CHECK SNAPSHOT FLUSHED")
+	}
+
+	snapshotName := string(stmt.Name)
+
+	// Query snapshot ts from mo_catalog.mo_snapshots
+	querySQL := fmt.Sprintf(`select ts from mo_catalog.mo_snapshots where sname = "%s" order by snapshot_id;`, snapshotName)
+	opts := executor.Options{}.WithDisableIncrStatement().WithTxn(h.txnOp)
+	queryResult, err := h.executor.Exec(ctx, querySQL, opts)
+	if err != nil {
+		return nil, err
+	}
+	defer queryResult.Close()
+
+	var snapshotTS int64
+	var found bool
+	queryResult.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		if rows > 0 && cols[0].Length() > 0 {
+			snapshotTS = vector.GetFixedAtWithTypeCheck[int64](cols[0], 0)
+			found = true
+		}
+		return true
+	})
+
+	if !found {
+		// Snapshot not found, return false
+		mp := mpool.MustNewZero()
+		bat := batch.New([]string{"result"})
+		bat.Vecs[0] = vector.NewVec(types.T_bool.ToType())
+		err = vector.AppendFixed(bat.Vecs[0], false, false, mp)
+		if err != nil {
+			bat.Clean(mp)
+			return nil, err
+		}
+		bat.SetRowCount(1)
+		return h.convertExecutorResult(executor.Result{
+			Batches: []*batch.Batch{bat},
+			Mp:      mp,
+		}), nil
+	}
+
+	// Get fileservice from engine
+	fs, err := h.getFileserviceFromEngine()
+	if err != nil {
+		return nil, err
+	}
+
+	// Call frontend.CheckSnapshotFlushed
+	result, err := frontend.CheckSnapshotFlushed(ctx, types.BuildTS(snapshotTS, 0), fs)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create a batch with one column containing the result
+	mp := mpool.MustNewZero()
+	bat := batch.New([]string{"result"})
+	bat.Vecs[0] = vector.NewVec(types.T_bool.ToType())
+	err = vector.AppendFixed(bat.Vecs[0], result, false, mp)
+	if err != nil {
+		bat.Clean(mp)
+		return nil, err
+	}
+	bat.SetRowCount(1)
+
+	return h.convertExecutorResult(executor.Result{
+		Batches: []*batch.Batch{bat},
+		Mp:      mp,
+	}), nil
+}
+
+// getFileserviceFromEngine gets fileservice from engine (similar to ReadObjectFromEngine)
+func (h *UpstreamSQLHelper) getFileserviceFromEngine() (fileservice.FileService, error) {
+	if h.engine == nil {
+		return nil, moerr.NewInternalError(context.Background(), "engine is not available")
+	}
+
+	var de *disttae.Engine
+	var ok bool
+	if de, ok = h.engine.(*disttae.Engine); !ok {
+		if entireEngine, ok := h.engine.(*engine.EntireEngine); ok {
+			de, ok = entireEngine.Engine.(*disttae.Engine)
+		}
+		if !ok {
+			return nil, moerr.NewInternalError(context.Background(), "failed to get disttae engine")
+		}
+	}
+
+	fs := de.FS()
+	if fs == nil {
+		return nil, moerr.NewInternalError(context.Background(), "fileservice is not available")
+	}
+
+	return fs, nil
 }
 
 // tryToIncreaseTxnPhysicalTS increases the transaction physical timestamp
