@@ -16,6 +16,7 @@ package incrservice
 
 import (
 	"context"
+	"go.uber.org/zap"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
