@@ -2024,9 +2024,6 @@ func doCreateSubscription(ctx context.Context, ses *Session, cs *tree.CreateSubs
 		dbName = ses.GetDatabaseName()
 	}
 
-	// State: 1 = running (as per design.md, state is TINYINT for 'running', 'stopped')
-	state := int8(1) // running
-
 	// iteration_state: 2 = complete (based on design.md: 0='pending', 1='running', 2='complete', 3='error', 4='cancel')
 	iterationState := int8(2) // complete
 
@@ -2039,7 +2036,6 @@ func doCreateSubscription(ctx context.Context, ses *Session, cs *tree.CreateSubs
 			table_name,
 			upstream_conn,
 			sync_config,
-			state,
 			iteration_state,
 			iteration_lsn
 		) VALUES (
@@ -2051,7 +2047,6 @@ func doCreateSubscription(ctx context.Context, ses *Session, cs *tree.CreateSubs
 			'%s',
 			'%s',
 			%d,
-			%d,
 			0
 		)`,
 		string(cs.PubName),
@@ -2061,7 +2056,6 @@ func doCreateSubscription(ctx context.Context, ses *Session, cs *tree.CreateSubs
 		tableName,
 		encryptedUri,
 		string(syncConfigJSON),
-		state,
 		iterationState,
 	)
 

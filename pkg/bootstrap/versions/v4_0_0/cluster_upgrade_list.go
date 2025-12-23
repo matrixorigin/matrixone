@@ -25,6 +25,7 @@ import (
 var clusterUpgEntries = []versions.UpgradeEntry{
 	upg_mo_iscp_log_new,
 	upg_mo_iscp_task,
+	upg_mo_publication_task,
 	upg_create_mo_branch_metadata,
 	upg_rename_system_stmt_info_4000,
 	upg_create_system_stmt_info_4000,
@@ -49,6 +50,17 @@ var upg_mo_iscp_task = versions.UpgradeEntry{
 	UpgSql:    predefine.GenInitISCPTaskSQL(),
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		ok, err := versions.CheckTableDataExist(txn, accountId, predefine.GenISCPTaskCheckSQL())
+		return ok, err
+	},
+}
+
+var upg_mo_publication_task = versions.UpgradeEntry{
+	Schema:    catalog.MOTaskDB,
+	TableName: catalog.MOSysDaemonTask,
+	UpgType:   versions.CREATE_NEW_TABLE,
+	UpgSql:    predefine.GenInitPublicationTaskSQL(),
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		ok, err := versions.CheckTableDataExist(txn, accountId, predefine.GenPublicationTaskCheckSQL())
 		return ok, err
 	},
 }

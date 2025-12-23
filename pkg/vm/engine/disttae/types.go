@@ -72,7 +72,7 @@ const (
 const (
 	INSERT = iota
 	DELETE
-	ALTER // alter command for TN. Update batches for mo_tables and mo_columns will fall into the category of INSERT and DELETE.
+	ALTER              // alter command for TN. Update batches for mo_tables and mo_columns will fall into the category of INSERT and DELETE.
 	SOFT_DELETE_OBJECT // soft delete object command for TN
 )
 
@@ -86,9 +86,9 @@ const (
 
 var (
 	typesNames = map[int]string{
-		INSERT:           "insert",
-		DELETE:           "delete",
-		ALTER:            "alter",
+		INSERT:             "insert",
+		DELETE:             "delete",
+		ALTER:              "alter",
 		SOFT_DELETE_OBJECT: "soft_delete_object",
 	}
 )

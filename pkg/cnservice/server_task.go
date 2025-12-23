@@ -30,6 +30,7 @@ import (
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/proxy"
+	"github.com/matrixorigin/matrixone/pkg/publication"
 	moconnector "github.com/matrixorigin/matrixone/pkg/stream/connector"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
@@ -336,6 +337,17 @@ func (s *service) registerExecutorsLocked() {
 			s.task.runner.Attach,
 			s.cfg.UUID,
 			common.ISCPAllocator,
+		),
+	)
+
+	s.task.runner.RegisterExecutor(task.TaskCode_PublicationExecutor,
+		publication.PublicationTaskExecutorFactory(
+			s.storeEngine,
+			s._txnClient,
+			s.task.runner.Attach,
+			s.cfg.UUID,
+			common.PublicationAllocator,
+			nil, // upstreamSQLHelperFactory can be nil for now
 		),
 	)
 }

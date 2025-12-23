@@ -74,9 +74,11 @@ option (gogoproto.protosizer_all) = true;
    InitCdc = 7;
    // MO Table Stats Task
    MOTableStats = 8;
-   // ISCP task
-   ISCPExecutor = 9;
- }
+  // ISCP task
+  ISCPExecutor = 9;
+  // Publication task
+  PublicationExecutor = 10;
+}
  
  // TaskMetadata is a task metadata abstraction that can be scheduled for execution at any CN node.
  message TaskMetadata {
@@ -178,6 +180,7 @@ enum TaskType {
   reserved 2;
   CreateCdc = 3 [(gogoproto.enumvalue_customname) = "CreateCdc"];
   ISCP = 4 [(gogoproto.enumvalue_customname) = "ISCP"];
+  Publication = 5 [(gogoproto.enumvalue_customname) = "Publication"];
 }
 
 message ConnectorDetails {
@@ -208,6 +211,13 @@ message ISCPDetails {
   string TaskName = 2;
 }
 
+message PublicationDetails {
+  // publication task uuid
+  string TaskId = 1;
+  // publication task name
+  string TaskName = 2;
+}
+
 message Details {
   string Description = 1;
   uint32 AccountID = 2;
@@ -219,6 +229,7 @@ message Details {
     ConnectorDetails Connector = 10;
     CreateCdcDetails CreateCdc = 12;
     ISCPDetails ISCP = 13;
+    PublicationDetails Publication = 14;
   }
 }
 
