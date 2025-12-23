@@ -508,7 +508,7 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 	defer cancel()
 	if sess, ok := execCtx.ses.(*Session); ok {
 		if token := sess.currentRunSQLToken(); token != 0 {
-			ctx2 = txntxnclient.WithRunSQLSkipToken(ctx2, token)
+			ctx2 = txnclient.WithRunSQLSkipToken(ctx2, token)
 		}
 	}
 	val, e := execCtx.ses.GetSessionSysVar("mo_pk_check_by_dn")
@@ -644,7 +644,7 @@ func (th *TxnHandler) rollbackUnsafe(execCtx *ExecCtx) error {
 	defer cancel()
 	if sess, ok := execCtx.ses.(*Session); ok {
 		if token := sess.currentRunSQLToken(); token != 0 {
-			ctx2 = txntxnclient.WithRunSQLSkipToken(ctx2, token)
+			ctx2 = txnclient.WithRunSQLSkipToken(ctx2, token)
 		}
 	}
 	defer func() {
