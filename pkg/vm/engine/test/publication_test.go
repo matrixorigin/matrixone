@@ -491,6 +491,8 @@ func TestExecuteIteration1(t *testing.T) {
 	require.NoError(t, err)
 	defer rowCountRes.Close()
 
+	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
+
 	var rowCount int64
 	rowCountRes.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		require.Equal(t, 1, rows)
