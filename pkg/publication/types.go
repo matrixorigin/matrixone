@@ -103,7 +103,7 @@ type IterationContext struct {
 	// ActiveAObj maps upstream aobj UUID to both current and previous object stats
 	// Current stats: the newly written object stats in this iteration
 	// Previous stats: the object stats written in the previous iteration (if exists)
-	ActiveAObj         map[string]AObjMapping
+	ActiveAObj         map[objectio.ObjectId]AObjMapping
 	TableIDs           map[TableKey]uint64
 	IndexTableMappings map[IndexKey]IndexTableMapping // Maps index name and algo_table_type to index table mapping
 }

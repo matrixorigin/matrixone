@@ -81,28 +81,28 @@ func filterAppendableObject(
 	delete bool,
 ) error {
 	// Get object name from stats (upstream aobj UUID)
-	upstreamAObjUUID := stats.ObjectName().String()
+	upstreamAObjUUID := stats.ObjectName().ObjectId()
 
 	// Record mapping in iteration context
 	// Map from upstream aobj UUID to both current and previous object stats
 	if iterationCtx.ActiveAObj == nil {
-		iterationCtx.ActiveAObj = make(map[string]AObjMapping)
+		iterationCtx.ActiveAObj = make(map[objectio.ObjectId]AObjMapping)
 	}
 
 	// Get previous stats if exists, otherwise use zero value
-	mapping := iterationCtx.ActiveAObj[upstreamAObjUUID]
+	mapping := iterationCtx.ActiveAObj[*upstreamAObjUUID]
 
 	// If delete is true, don't create new object, just mark for deletion
 	if delete {
 		mapping.Previous = mapping.Current       // Save previous stats
 		mapping.Current = objectio.ObjectStats{} // Clear current stats (zero value)
 		mapping.Delete = true                    // Record delete flag
-		iterationCtx.ActiveAObj[upstreamAObjUUID] = mapping
+		iterationCtx.ActiveAObj[*upstreamAObjUUID] = mapping
 		return nil
 	}
 
 	// Get object file from upstream using GETOBJECT
-	objectContent, err := getObjectFromUpstream(ctx, iterationCtx, upstreamAObjUUID)
+	objectContent, err := getObjectFromUpstream(ctx, iterationCtx, stats.ObjectName().String())
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to get object from upstream: %v", err)
 	}
@@ -131,7 +131,7 @@ func filterAppendableObject(
 	mapping.Previous = mapping.Current // Save previous stats
 	mapping.Current = objStats         // Set new current stats
 	mapping.Delete = false             // Not marked for deletion
-	iterationCtx.ActiveAObj[upstreamAObjUUID] = mapping
+	iterationCtx.ActiveAObj[*upstreamAObjUUID] = mapping
 
 	return nil
 }
