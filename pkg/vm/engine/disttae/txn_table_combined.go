@@ -255,8 +255,9 @@ func (t *combinedTxnTable) CollectChanges(
 func (t *combinedTxnTable) CollectObjectList(
 	ctx context.Context,
 	from, to types.TS,
+	bat *batch.Batch,
 	mp *mpool.MPool,
-) (*batch.Batch, error) {
+) error {
 	panic("not implemented")
 }
 

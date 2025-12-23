@@ -30,6 +30,8 @@ import (
 )
 
 const (
+	ObjectListAttr_DbName      = "dbname"
+	ObjectListAttr_TableName   = "tablename"
 	ObjectListAttr_Stats       = "stats"
 	ObjectListAttr_CreateAt    = "create_at"
 	ObjectListAttr_DeleteAt    = "delete_at"
@@ -37,13 +39,17 @@ const (
 )
 
 const (
-	ObjectListAttr_Stats_Idx       = 0
-	ObjectListAttr_CreateAt_Idx    = 1
-	ObjectListAttr_DeleteAt_Idx    = 2
-	ObjectListAttr_IsTombstone_Idx = 3
+	ObjectListAttr_DbName_Idx      = 0
+	ObjectListAttr_TableName_Idx   = 1
+	ObjectListAttr_Stats_Idx       = 2
+	ObjectListAttr_CreateAt_Idx    = 3
+	ObjectListAttr_DeleteAt_Idx    = 4
+	ObjectListAttr_IsTombstone_Idx = 5
 )
 
 var ObjectListAttrs = []string{
+	ObjectListAttr_DbName,
+	ObjectListAttr_TableName,
 	ObjectListAttr_Stats,
 	ObjectListAttr_CreateAt,
 	ObjectListAttr_DeleteAt,
@@ -51,10 +57,12 @@ var ObjectListAttrs = []string{
 }
 
 var ObjectListTypes = []types.Type{
-	types.T_char.ToType(), // objectio.ObjectStats as bytes
-	types.T_TS.ToType(),   // create_at
-	types.T_TS.ToType(),   // delete_at
-	types.T_bool.ToType(), // is_tombstone
+	types.T_varchar.ToType(), // dbname
+	types.T_varchar.ToType(), // tablename
+	types.T_char.ToType(),    // objectio.ObjectStats as bytes
+	types.T_TS.ToType(),      // create_at
+	types.T_TS.ToType(),      // delete_at
+	types.T_bool.ToType(),    // is_tombstone
 }
 
 type ObjectList struct {
@@ -95,6 +103,7 @@ func CollectObjectList(
 	ctx context.Context,
 	state *PartitionState,
 	start, end types.TS,
+	dbname, tablename string,
 	bat **batch.Batch,
 	mp *mpool.MPool,
 ) (objectList string, err error) {
@@ -102,6 +111,10 @@ func CollectObjectList(
 		for iter.Next() {
 			objEntry := iter.Item()
 			if tailCheckFn(objEntry, start, end) {
+				// Append dbname
+				vector.AppendBytes((*bat).Vecs[ObjectListAttr_DbName_Idx], []byte(dbname), false, mp)
+				// Append tablename
+				vector.AppendBytes((*bat).Vecs[ObjectListAttr_TableName_Idx], []byte(tablename), false, mp)
 				// Append ObjectStats as bytes
 				vector.AppendBytes((*bat).Vecs[ObjectListAttr_Stats_Idx], objEntry.ObjectStats[:], false, mp)
 				// Append CreateTime
@@ -123,6 +136,7 @@ func CollectSnapshotObjectList(
 	ctx context.Context,
 	state *PartitionState,
 	snapshotTS types.TS,
+	dbname, tablename string,
 	bat **batch.Batch,
 	mp *mpool.MPool,
 ) (objectList string, err error) {
@@ -130,6 +144,10 @@ func CollectSnapshotObjectList(
 		for iter.Next() {
 			objEntry := iter.Item()
 			if snapshotCheckFn(objEntry, snapshotTS) {
+				// Append dbname
+				vector.AppendBytes((*bat).Vecs[ObjectListAttr_DbName_Idx], []byte(dbname), false, mp)
+				// Append tablename
+				vector.AppendBytes((*bat).Vecs[ObjectListAttr_TableName_Idx], []byte(tablename), false, mp)
 				// Append ObjectStats as bytes
 				vector.AppendBytes((*bat).Vecs[ObjectListAttr_Stats_Idx], objEntry.ObjectStats[:], false, mp)
 				// Append CreateTime
@@ -154,6 +172,7 @@ func GetObjectListFromCKP(
 	tid uint64,
 	sid string,
 	start, end types.TS,
+	dbname, tablename string,
 	checkpointEntries []*checkpoint.CheckpointEntry,
 	bat **batch.Batch,
 	mp *mpool.MPool,
@@ -167,6 +186,10 @@ func GetObjectListFromCKP(
 	// Fill function to append object entry to batch
 	fillInObjectListFn := func(objEntry objectio.ObjectEntry, isTombstone bool, mp *mpool.MPool) {
 		if tailCheckFn(objEntry, start, end) {
+			// Append dbname
+			vector.AppendBytes((*bat).Vecs[ObjectListAttr_DbName_Idx], []byte(dbname), false, mp)
+			// Append tablename
+			vector.AppendBytes((*bat).Vecs[ObjectListAttr_TableName_Idx], []byte(tablename), false, mp)
 			// Append ObjectStats as bytes
 			vector.AppendBytes((*bat).Vecs[ObjectListAttr_Stats_Idx], objEntry.ObjectStats[:], false, mp)
 			// Append CreateTime

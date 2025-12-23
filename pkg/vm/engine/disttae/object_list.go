@@ -32,53 +32,58 @@ import (
 func (tbl *txnTable) CollectObjectList(
 	ctx context.Context,
 	from, to types.TS,
+	bat *batch.Batch,
 	mp *mpool.MPool,
-) (*batch.Batch, error) {
+) error {
 	if from.IsEmpty() {
-		return collectObjectListFromSnapshot(ctx, tbl, to, mp)
+		return collectObjectListFromSnapshot(ctx, tbl, to, bat, mp)
 	}
-	return collectObjectListFromPartition(ctx, tbl, from, to, mp)
+	return collectObjectListFromPartition(ctx, tbl, from, to, bat, mp)
 }
 
 func collectObjectListFromSnapshot(
 	ctx context.Context,
 	tbl *txnTable,
 	snapshotTS types.TS,
+	bat *batch.Batch,
 	mp *mpool.MPool,
-) (*batch.Batch, error) {
+) error {
 	// Get partition state for snapshot
 	state, err := tbl.getPartitionState(ctx)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	// Create batch
-	bat := logtailreplay.CreateObjectListBatch()
+	// Get dbname and tablename
+	dbname := tbl.db.databaseName
+	tablename := tbl.tableName
 
 	// Collect object list from snapshot partition state
-	_, err = logtailreplay.CollectSnapshotObjectList(ctx, state, snapshotTS, &bat, mp)
+	_, err = logtailreplay.CollectSnapshotObjectList(ctx, state, snapshotTS, dbname, tablename, &bat, mp)
 	if err != nil {
-		bat.Clean(mp)
-		return nil, err
+		return err
 	}
 
-	return bat, nil
+	return nil
 }
 
 func collectObjectListFromPartition(
 	ctx context.Context,
 	tbl *txnTable,
 	from, to types.TS,
+	bat *batch.Batch,
 	mp *mpool.MPool,
-) (*batch.Batch, error) {
+) error {
 	if to.IsEmpty() || from.GT(&to) {
-		return nil, moerr.NewInternalErrorNoCtx("invalid timestamp")
+		return moerr.NewInternalErrorNoCtx("invalid timestamp")
 	}
-
-	bat := logtailreplay.CreateObjectListBatch()
 	currentPSFrom := types.TS{}
 	currentPSTo := types.TS{}
 	handleIdx := 0
+
+	// Get dbname and tablename
+	dbname := tbl.db.databaseName
+	tablename := tbl.tableName
 
 	fs := tbl.getTxn().engine.fs
 
@@ -91,8 +96,7 @@ func collectObjectListFromPartition(
 		state, err := tbl.getPartitionState(ctxWithTimeout)
 		cancel()
 		if err != nil {
-			bat.Clean(mp)
-			return nil, err
+			return err
 		}
 
 		var nextFrom types.TS
@@ -117,10 +121,9 @@ func collectObjectListFromPartition(
 			)
 
 			// Collect object list from partition state
-			_, err = logtailreplay.CollectObjectList(ctx, state, currentPSFrom, currentPSTo, &bat, mp)
+			_, err = logtailreplay.CollectObjectList(ctx, state, currentPSFrom, currentPSTo, dbname, tablename, &bat, mp)
 			if err != nil {
-				bat.Clean(mp)
-				return nil, err
+				return err
 			}
 
 			handleIdx++
@@ -140,8 +143,7 @@ func collectObjectListFromPartition(
 		response, err := RequestSnapshotRead(ctxWithDeadline, tbl, &nextFrom)
 		cancel()
 		if err != nil {
-			bat.Clean(mp)
-			return nil, err
+			return err
 		}
 
 		resp, ok := response.(*cmd_util.SnapshotReadResp)
@@ -171,8 +173,7 @@ func collectObjectListFromPartition(
 
 		if nextFrom.LT(&minTS) || nextFrom.GT(&maxTS) {
 			logutil.Infof("ObjectList-Split nextFrom is not in the checkpoint entry range: %s-%s", minTS.ToString(), maxTS.ToString())
-			bat.Clean(mp)
-			return nil, moerr.NewErrStaleReadNoCtx(minTS.ToString(), nextFrom.ToString())
+			return moerr.NewErrStaleReadNoCtx(minTS.ToString(), nextFrom.ToString())
 		}
 
 		currentPSFrom = nextFrom
@@ -197,14 +198,15 @@ func collectObjectListFromPartition(
 			sid,
 			currentPSFrom,
 			currentPSTo,
+			dbname,
+			tablename,
 			checkpointEntries,
 			&bat,
 			mp,
 			fs,
 		)
 		if err != nil {
-			bat.Clean(mp)
-			return nil, err
+			return err
 		}
 
 		handleIdx++
@@ -213,5 +215,5 @@ func collectObjectListFromPartition(
 		}
 	}
 
-	return bat, nil
+	return nil
 }

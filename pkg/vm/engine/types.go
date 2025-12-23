@@ -1003,7 +1003,7 @@ type Relation interface {
 
 	CollectChanges(ctx context.Context, from, to types.TS, skipDeletes bool, mp *mpool.MPool) (ChangesHandle, error)
 
-	CollectObjectList(ctx context.Context, from, to types.TS, mp *mpool.MPool) (*batch.Batch, error)
+	CollectObjectList(ctx context.Context, from, to types.TS, bat *batch.Batch, mp *mpool.MPool) error
 
 	TableDefs(context.Context) ([]TableDef, error)
 

@@ -23,17 +23,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 )
 
 // ProcessObjectList is the core function that processes OBJECTLIST statement
 // It returns a batch with "table name", "db name" columns plus object list columns
 // This function can be used by both handleObjectList and test utilities
+// If dbname is empty, it will iterate over all databases
+// If tablename is empty (but dbname is not), it will iterate over all tables in the database
 func ProcessObjectList(
 	ctx context.Context,
 	stmt *tree.ObjectList,
@@ -45,9 +47,6 @@ func ProcessObjectList(
 	dbname string,
 	tablename string,
 ) (*batch.Batch, error) {
-	if len(tablename) == 0 {
-		return nil, moerr.NewInternalError(ctx, "table name is required")
-	}
 
 	// Parse snapshot timestamps if specified
 	var from, to types.TS
@@ -80,19 +79,14 @@ func ProcessObjectList(
 		to = getCurrentTS()
 	}
 
-	// Get object list batch
+	// Get object list batch (batch is created inside GetObjectListWithoutSession)
 	objBatch, err := GetObjectListWithoutSession(ctx, from, to, dbname, tablename, eng, txnOp, mp)
 	if err != nil {
 		return nil, err
 	}
 
-	// Build result batch with table name, db name + object list batch columns
-	resultBatch, err := BuildObjectListResultBatch(objBatch, dbname, tablename, mp)
-	if err != nil {
-		return nil, err
-	}
-
-	return resultBatch, nil
+	// objBatch already contains dbname and tablename columns, so we can return it directly
+	return objBatch, nil
 }
 
 func handleObjectList(
@@ -144,23 +138,19 @@ func handleObjectList(
 	}
 	defer resultBatch.Clean(mp)
 
-	// Build columns: table name, db name + object list batch columns
-	col1 := new(MysqlColumn)
-	col1.SetName("table name")
-	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
-	showCols = append(showCols, col1)
-
-	col2 := new(MysqlColumn)
-	col2.SetName("db name")
-	col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
-	showCols = append(showCols, col2)
-
-	// Add object list batch columns
-	if resultBatch != nil && resultBatch.Attrs != nil && len(resultBatch.Attrs) > 2 {
-		for i := 2; i < len(resultBatch.Attrs); i++ {
+	// Build columns from result batch (which already includes dbname and tablename)
+	if resultBatch != nil && resultBatch.Attrs != nil {
+		for i := 0; i < len(resultBatch.Attrs); i++ {
 			attr := resultBatch.Attrs[i]
 			col := new(MysqlColumn)
-			col.SetName(attr)
+			// Map dbname/tablename to "db name"/"table name" for display
+			if attr == "dbname" {
+				col.SetName("db name")
+			} else if attr == "tablename" {
+				col.SetName("table name")
+			} else {
+				col.SetName(attr)
+			}
 			// Convert batch column type to MySQL type
 			if i < len(resultBatch.Vecs) {
 				typ := resultBatch.Vecs[i].GetType()
@@ -194,8 +184,114 @@ func handleObjectList(
 	return trySaveQueryResult(ctx, ses, mrs)
 }
 
-// GetObjectListWithoutSession gets object list from the specified table without requiring Session
+// collectObjectListForTable collects object list for a specific table in a specific database
+func collectObjectListForTable(
+	ctx context.Context,
+	from, to types.TS,
+	dbname, tablename string,
+	eng engine.Engine,
+	txn client.TxnOperator,
+	bat *batch.Batch,
+	mp *mpool.MPool,
+) error {
+	if eng == nil {
+		return moerr.NewInternalError(ctx, "engine is nil")
+	}
+	if txn == nil {
+		return moerr.NewInternalError(ctx, "txn is nil")
+	}
+	if mp == nil {
+		return moerr.NewInternalError(ctx, "mpool is nil")
+	}
+	if bat == nil {
+		return moerr.NewInternalError(ctx, "batch is nil")
+	}
+	if len(dbname) == 0 {
+		return moerr.NewInternalError(ctx, "dbname is required")
+	}
+	if len(tablename) == 0 {
+		return moerr.NewInternalError(ctx, "tablename is required")
+	}
+
+	// Get database from engine using txn
+	db, err := eng.Database(ctx, dbname, txn)
+	if err != nil {
+		return moerr.NewInternalError(ctx, fmt.Sprintf("failed to get database: %v", err))
+	}
+
+	// Get table from database
+	table, err := db.Relation(ctx, tablename, nil)
+	if err != nil {
+		return moerr.NewInternalError(ctx, fmt.Sprintf("failed to get table: %v", err))
+	}
+
+	// Call CollectObjectList on table
+	err = table.CollectObjectList(ctx, from, to, bat, mp)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// collectObjectListForDatabase collects object list for a specific database
+// If tablename is empty, it will iterate over all tables in the database
+func collectObjectListForDatabase(
+	ctx context.Context,
+	from, to types.TS,
+	dbname, tablename string,
+	eng engine.Engine,
+	txn client.TxnOperator,
+	bat *batch.Batch,
+	mp *mpool.MPool,
+) error {
+	if eng == nil {
+		return moerr.NewInternalError(ctx, "engine is nil")
+	}
+	if txn == nil {
+		return moerr.NewInternalError(ctx, "txn is nil")
+	}
+	if mp == nil {
+		return moerr.NewInternalError(ctx, "mpool is nil")
+	}
+	if bat == nil {
+		return moerr.NewInternalError(ctx, "batch is nil")
+	}
+	if len(dbname) == 0 {
+		return moerr.NewInternalError(ctx, "dbname is required")
+	}
+
+	// Get database from engine using txn
+	db, err := eng.Database(ctx, dbname, txn)
+	if err != nil {
+		return moerr.NewInternalError(ctx, fmt.Sprintf("failed to get database: %v", err))
+	}
+
+	// If tablename is specified, collect for that specific table
+	if len(tablename) > 0 {
+		return collectObjectListForTable(ctx, from, to, dbname, tablename, eng, txn, bat, mp)
+	}
+
+	// Otherwise, iterate over all tables in the database
+	tableNames, err := db.Relations(ctx)
+	if err != nil {
+		return moerr.NewInternalError(ctx, fmt.Sprintf("failed to get relations: %v", err))
+	}
+
+	for _, tableName := range tableNames {
+		err = collectObjectListForTable(ctx, from, to, dbname, tableName, eng, txn, bat, mp)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// GetObjectListWithoutSession gets object list from the specified table/database without requiring Session
 // This is a version that can be used by test utilities
+// If dbname is empty, it will iterate over all databases
+// If tablename is empty (but dbname is not), it will iterate over all tables in the database
 func GetObjectListWithoutSession(
 	ctx context.Context,
 	from, to types.TS,
@@ -214,80 +310,35 @@ func GetObjectListWithoutSession(
 		return nil, moerr.NewInternalError(ctx, "mpool is nil")
 	}
 
-	// Get database from engine using txn
-	db, err := eng.Database(ctx, dbname, txn)
-	if err != nil {
-		return nil, moerr.NewInternalError(ctx, fmt.Sprintf("failed to get database: %v", err))
+	// Create object list batch
+	bat := logtailreplay.CreateObjectListBatch()
+
+	// If dbname is specified, collect for that specific database
+	if len(dbname) > 0 {
+		err := collectObjectListForDatabase(ctx, from, to, dbname, tablename, eng, txn, bat, mp)
+		if err != nil {
+			bat.Clean(mp)
+			return nil, err
+		}
+		return bat, nil
 	}
 
-	// Get table from database
-	table, err := db.Relation(ctx, tablename, nil)
+	// Otherwise, iterate over all databases
+	dbNames, err := eng.Databases(ctx, txn)
 	if err != nil {
-		return nil, moerr.NewInternalError(ctx, fmt.Sprintf("failed to get table: %v", err))
+		bat.Clean(mp)
+		return nil, moerr.NewInternalError(ctx, fmt.Sprintf("failed to get databases: %v", err))
 	}
 
-	// Call CollectObjectList on table
-	bat, err := table.CollectObjectList(ctx, from, to, mp)
-	if err != nil {
-		return nil, err
+	for _, dbName := range dbNames {
+		err = collectObjectListForDatabase(ctx, from, to, dbName, tablename, eng, txn, bat, mp)
+		if err != nil {
+			bat.Clean(mp)
+			return nil, err
+		}
 	}
 
 	return bat, nil
-}
-
-// BuildObjectListResultBatch builds a result batch with table name, db name + object list batch columns
-// This function adds "table name" and "db name" columns to the object list batch
-func BuildObjectListResultBatch(
-	objBatch *batch.Batch,
-	dbname, tablename string,
-	mp *mpool.MPool,
-) (*batch.Batch, error) {
-	// Column names: "table name", "db name" + object list batch columns
-	colNames := []string{"table name", "db name"}
-	if objBatch != nil && objBatch.Attrs != nil {
-		colNames = append(colNames, objBatch.Attrs...)
-	}
-
-	resultBatch := batch.New(colNames)
-
-	// Create "table name" column (varchar)
-	resultBatch.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
-	// Create "db name" column (varchar)
-	resultBatch.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
-
-	// Copy object list batch columns to result batch
-	// We directly use objBatch vectors and will not clean objBatch
-	// to avoid double cleanup
-	if objBatch != nil && objBatch.Vecs != nil {
-		for i := 0; i < len(objBatch.Vecs); i++ {
-			resultBatch.Vecs[i+2] = objBatch.Vecs[i]
-		}
-	}
-
-	// Extract rows from batch and add table name and db name
-	if objBatch != nil {
-		n := objBatch.RowCount()
-		for j := 0; j < n; j++ {
-			// Append table name
-			err := vector.AppendBytes(resultBatch.Vecs[0], []byte(tablename), false, mp)
-			if err != nil {
-				resultBatch.Clean(mp)
-				return nil, err
-			}
-
-			// Append db name
-			err = vector.AppendBytes(resultBatch.Vecs[1], []byte(dbname), false, mp)
-			if err != nil {
-				resultBatch.Clean(mp)
-				return nil, err
-			}
-		}
-		// Don't clean objBatch here as its vectors are now used by resultBatch
-		// resultBatch.Clean will clean all vectors including the ones from objBatch
-	}
-	resultBatch.SetRowCount(resultBatch.Vecs[0].Length())
-
-	return resultBatch, nil
 }
 
 // ResolveSnapshotWithSnapshotNameWithoutSession resolves snapshot name to timestamp without requiring Session
