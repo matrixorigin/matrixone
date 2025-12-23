@@ -307,6 +307,12 @@ func (exec *txnExecutor) Exec(
 			defines.AlterCopyOpt{}, v)
 	}
 
+	if logicalId := statementOption.KeepLogicalId(); logicalId != 0 {
+		exec.ctx = context.WithValue(exec.ctx,
+			defines.LogicalIdKey{},
+			logicalId)
+	}
+
 	exec.ctx = context.WithValue(
 		exec.ctx,
 		defines.InternalExecutorKey{},

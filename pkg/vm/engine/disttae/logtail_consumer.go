@@ -821,7 +821,7 @@ func (c *PushClient) replayCatalogCache(ctx context.Context, e *Engine) (err err
 		if err = fillTsVecForSysTableQueryBatch(b, typeTs, result.Mp); err != nil {
 			return err
 		}
-		e.tryAdjustThreeTablesCreatedTimeWithBatch(b)
+		e.tryAdjustSysTablesCreatedTimeWithBatch(b)
 		ccache.InsertTable(b)
 	}
 
@@ -1777,7 +1777,7 @@ func (e *Engine) InitLogTailPushModel(ctx context.Context, timestampWaiter clien
 }
 
 func ifShouldNotDistribute(dbId, tblId uint64) bool {
-	return dbId == catalog.MO_CATALOG_ID && tblId <= catalog.MO_RESERVED_MAX
+	return dbId == catalog.MO_CATALOG_ID && tblId <= catalog.MO_COLUMNS_ID
 }
 
 func dispatchSubscribeResponse(

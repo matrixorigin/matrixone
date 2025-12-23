@@ -112,7 +112,12 @@ func (catalog *Catalog) InitSystemDB() {
 	dbTables := NewSystemTableEntry(sysDB, pkgcatalog.MO_DATABASE_ID, SystemDBSchema)
 	tableTables := NewSystemTableEntry(sysDB, pkgcatalog.MO_TABLES_ID, SystemTableSchema)
 	columnTables := NewSystemTableEntry(sysDB, pkgcatalog.MO_COLUMNS_ID, SystemColumnSchema)
-	err := sysDB.AddEntryLocked(dbTables, nil, false)
+
+	// Create schema for index table (using definitions from Defines)
+	indexTableTables := NewSystemTableEntry(sysDB, pkgcatalog.MO_TABLES_LOGICAL_ID_INDEX_ID, SystemIndexTableSchema)
+
+	var err error
+	err = sysDB.AddEntryLocked(dbTables, nil, false)
 	if err != nil {
 		panic(err)
 	}
@@ -120,6 +125,10 @@ func (catalog *Catalog) InitSystemDB() {
 		panic(err)
 	}
 	if err = sysDB.AddEntryLocked(columnTables, nil, false); err != nil {
+		panic(err)
+	}
+	// Add index table
+	if err = sysDB.AddEntryLocked(indexTableTables, nil, false); err != nil {
 		panic(err)
 	}
 	if err = catalog.AddEntryLocked(sysDB, nil, false); err != nil {

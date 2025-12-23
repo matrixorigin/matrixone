@@ -74,6 +74,7 @@ func newTxnTableWithItem(
 		partitioned:   item.Partitioned,
 		partition:     item.Partition,
 		extraInfo:     item.ExtraInfo,
+		logicalId:     item.LogicalId,
 		lastTS:        db.op.SnapshotTS(),
 		eng:           eng,
 	}

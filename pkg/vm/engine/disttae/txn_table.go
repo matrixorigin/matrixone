@@ -1260,6 +1260,7 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 			Version:       tbl.version,
 			DbId:          tbl.GetDBID(ctx),
 			Partition:     partition,
+			LogicalId:     tbl.logicalId,
 		}
 		if tbl.extraInfo != nil {
 			tbl.tableDef.FeatureFlag = tbl.extraInfo.FeatureFlag
@@ -1448,6 +1449,8 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	// update table defs after deleting old table metadata
 	tbl.defs = append(baseDefs, appendDef...)
 	tbl.RefeshTableDef(ctx)
+
+	ctx = context.WithValue(ctx, defines.LogicalIdKey{}, tbl.logicalId)
 
 	//------------------------------------------------------------------------------------------------------------------
 	// 2. insert new table metadata
