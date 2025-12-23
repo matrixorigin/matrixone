@@ -329,10 +329,8 @@ func TestExecuteIteration(t *testing.T) {
 	err = txn.Commit(srcCtxWithTimeout)
 	require.NoError(t, err)
 
-	// Force flush the table
-	dbID := rel.GetDBID(srcCtxWithTimeout)
-	tableID := rel.GetTableID(srcCtxWithTimeout)
-	err = taeHandler.GetDB().FlushTable(srcCtxWithTimeout, srcAccountID, dbID, tableID, types.TimestampToTS(disttaeEngine.Now()))
+	// Force checkpoint
+	err = taeHandler.GetDB().ForceCheckpoint(srcCtxWithTimeout, types.TimestampToTS(disttaeEngine.Now()))
 	require.NoError(t, err)
 
 	// Step 2: Write mo_ccpr_log table in destination account context
@@ -495,8 +493,8 @@ func TestExecuteIteration(t *testing.T) {
 	err = txn.Commit(srcCtxWithTimeout)
 	require.NoError(t, err)
 
-	// Force flush the table again
-	err = taeHandler.GetDB().FlushTable(srcCtxWithTimeout, srcAccountID, dbID, tableID, types.TimestampToTS(disttaeEngine.Now()))
+	// Force checkpoint again
+	err = taeHandler.GetDB().ForceCheckpoint(srcCtxWithTimeout, types.TimestampToTS(disttaeEngine.Now()))
 	require.NoError(t, err)
 
 	// Step 6: Update mo_ccpr_log for second iteration

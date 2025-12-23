@@ -1341,6 +1341,8 @@ func ExecuteIteration(
 				continue
 			}
 			isTombstone := upstreamInfo.IsTombstone
+			dbName := upstreamInfo.DBName
+			tableName := upstreamInfo.TableName
 			// If delete is true, delete the object and remove from map
 			if mapping.Delete {
 				// Delete previous object if it exists (previous object was created in earlier iteration)
@@ -1350,8 +1352,8 @@ func ExecuteIteration(
 					if isTombstone {
 						collectedTombstoneDeleteStats = append(collectedTombstoneDeleteStats, ObjectWithTableInfo{
 							Stats:       mapping.Previous,
-							DBName:      iterationCtx.SrcInfo.DBName,
-							TableName:   iterationCtx.SrcInfo.TableName,
+							DBName:      dbName,
+							TableName:   tableName,
 							IsTombstone: isTombstone,
 							Delete:      true,
 						})
@@ -1359,8 +1361,8 @@ func ExecuteIteration(
 					} else {
 						collectedDataDeleteStats = append(collectedDataDeleteStats, ObjectWithTableInfo{
 							Stats:       mapping.Previous,
-							DBName:      iterationCtx.SrcInfo.DBName,
-							TableName:   iterationCtx.SrcInfo.TableName,
+							DBName:      dbName,
+							TableName:   tableName,
 							IsTombstone: isTombstone,
 							Delete:      true,
 						})
@@ -1378,16 +1380,16 @@ func ExecuteIteration(
 				if isTombstone {
 					collectedTombstoneInsertStats = append(collectedTombstoneInsertStats, ObjectWithTableInfo{
 						Stats:       mapping.Current,
-						DBName:      iterationCtx.SrcInfo.DBName,
-						TableName:   iterationCtx.SrcInfo.TableName,
+						DBName:      dbName,
+						TableName:   tableName,
 						IsTombstone: isTombstone,
 						Delete:      false,
 					})
 				} else {
 					collectedDataInsertStats = append(collectedDataInsertStats, ObjectWithTableInfo{
 						Stats:       mapping.Current,
-						DBName:      iterationCtx.SrcInfo.DBName,
-						TableName:   iterationCtx.SrcInfo.TableName,
+						DBName:      dbName,
+						TableName:   tableName,
 						IsTombstone: isTombstone,
 						Delete:      false,
 					})
@@ -1401,16 +1403,16 @@ func ExecuteIteration(
 				if isTombstone {
 					collectedTombstoneDeleteStats = append(collectedTombstoneDeleteStats, ObjectWithTableInfo{
 						Stats:       mapping.Previous,
-						DBName:      iterationCtx.SrcInfo.DBName,
-						TableName:   iterationCtx.SrcInfo.TableName,
+						DBName:      dbName,
+						TableName:   tableName,
 						IsTombstone: isTombstone,
 						Delete:      true,
 					})
 				} else {
 					collectedDataDeleteStats = append(collectedDataDeleteStats, ObjectWithTableInfo{
 						Stats:       mapping.Previous,
-						DBName:      iterationCtx.SrcInfo.DBName,
-						TableName:   iterationCtx.SrcInfo.TableName,
+						DBName:      dbName,
+						TableName:   tableName,
 						IsTombstone: isTombstone,
 						Delete:      true,
 					})

@@ -194,60 +194,6 @@ func handleObjectList(
 	return trySaveQueryResult(ctx, ses, mrs)
 }
 
-// GetObjectList gets object list from the specified table within the given time range
-func GetObjectList(
-	ctx context.Context,
-	from, to types.TS,
-	dbname, tablename string,
-	ses *Session,
-) (*batch.Batch, error) {
-	// Get txnHandler from session
-	txnHandler := ses.GetTxnHandler()
-	if txnHandler == nil {
-		return nil, moerr.NewInternalError(ctx, "txn handler is nil")
-	}
-
-	// Get txn from txnHandler
-	txn := txnHandler.GetTxn()
-	if txn == nil {
-		return nil, moerr.NewInternalError(ctx, "txn is nil")
-	}
-
-	// Get engine from txnHandler
-	eng := txnHandler.GetStorage()
-	if eng == nil {
-		return nil, moerr.NewInternalError(ctx, "engine is nil")
-	}
-
-	// Get database from engine using txn
-	var db engine.Database
-	var err error
-	db, err = eng.Database(ctx, dbname, txn)
-	if err != nil {
-		return nil, moerr.NewInternalError(ctx, fmt.Sprintf("failed to get database: %v", err))
-	}
-
-	// Get table from database
-	var table engine.Relation
-	table, err = db.Relation(ctx, tablename, nil)
-	if err != nil {
-		return nil, moerr.NewInternalError(ctx, fmt.Sprintf("failed to get table: %v", err))
-	}
-
-	// Call CollectObjectList on table
-	mp := ses.GetMemPool()
-	if mp == nil {
-		return nil, moerr.NewInternalError(ctx, "mpool is nil")
-	}
-
-	bat, err := table.CollectObjectList(ctx, from, to, mp)
-	if err != nil {
-		return nil, err
-	}
-
-	return bat, nil
-}
-
 // GetObjectListWithoutSession gets object list from the specified table without requiring Session
 // This is a version that can be used by test utilities
 func GetObjectListWithoutSession(
