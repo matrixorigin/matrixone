@@ -615,6 +615,10 @@ func (mp *MPool) Grow2(old []byte, old2 []byte, sz int, offHeap bool) ([]byte, e
 // ReallocZero is like Realloc, but it clears the memory.
 func (mp *MPool) ReallocZero(old []byte, sz int, offHeap bool) ([]byte, error) {
 	detailk := mp.getDetailK()
+	if cap(old) == 0 {
+		return mp.allocWithDetailK(detailk, int64(sz), offHeap)
+	}
+
 	if !offHeap {
 		return mp.reAllocWithDetailK(detailk, old, int64(sz), offHeap, false)
 	}
@@ -624,6 +628,7 @@ func (mp *MPool) ReallocZero(old []byte, sz int, offHeap bool) ([]byte, error) {
 		return old[:sz], nil
 	}
 
+	old = old[:1]
 	oldptr := unsafe.Pointer(&old[0])
 	newbs, err := simpleCAllocator().ReallocZero(old, uint64(sz))
 	if err != nil {

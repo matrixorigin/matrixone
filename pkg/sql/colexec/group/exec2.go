@@ -291,7 +291,10 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 		// just fill the result.
 		count := bat.RowCount()
 		if len(group.ctr.dummyOnes) < count {
-			group.ctr.dummyOnes = append(group.ctr.dummyOnes, make([]uint64, bat.RowCount()-len(group.ctr.dummyOnes))...)
+			add := count - len(group.ctr.dummyOnes)
+			for i := 0; i < add; i++ {
+				group.ctr.dummyOnes = append(group.ctr.dummyOnes, 1)
+			}
 		}
 		for i, ag := range group.ctr.aggList {
 			if err = ag.BatchFill(0, group.ctr.dummyOnes[:count], group.ctr.aggArgEvaluate[i].Vec); err != nil {

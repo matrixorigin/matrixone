@@ -25,11 +25,11 @@ type countStarExec struct {
 }
 
 func (exec *countStarExec) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
-	for i := range groups {
-		if groups[i] == GroupNotMatched {
+	for _, grp := range groups {
+		if grp == GroupNotMatched {
 			continue
 		}
-		pt := exec.GetState(groups[i])
+		pt := exec.GetState(grp - 1)
 		*pt += 1
 	}
 	return nil
@@ -37,11 +37,11 @@ func (exec *countStarExec) BatchFill(offset int, groups []uint64, vectors []*vec
 
 func (exec *countStarExec) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
 	other := next.(*countStarExec)
-	for i := range groups {
-		if groups[i] == GroupNotMatched {
+	for i, grp := range groups {
+		if grp == GroupNotMatched {
 			continue
 		}
-		pt1 := exec.GetState(groups[i])
+		pt1 := exec.GetState(grp - 1)
 		pt2 := other.GetState(uint64(offset + i))
 		*pt1 += *pt2
 	}
@@ -75,8 +75,8 @@ func (exec *countColumnExec) BatchFill(offset int, groups []uint64, vectors []*v
 	if exec.IsDistinct() {
 		return exec.batchFillArgs(offset, groups, vectors, true)
 	}
-	for i := range groups {
-		if groups[i] == GroupNotMatched {
+	for i, grp := range groups {
+		if grp == GroupNotMatched {
 			continue
 		}
 
@@ -84,7 +84,7 @@ func (exec *countColumnExec) BatchFill(offset int, groups []uint64, vectors []*v
 		if vectors[0].IsNull(idx) {
 			continue
 		} else {
-			pt := exec.GetState(groups[i])
+			pt := exec.GetState(grp - 1)
 			*pt += 1
 		}
 	}
@@ -98,11 +98,11 @@ func (exec *countColumnExec) BatchMerge(next AggFuncExec, offset int, groups []u
 	}
 
 	other := next.(*countColumnExec)
-	for i := range groups {
-		if groups[i] == GroupNotMatched {
+	for i, grp := range groups {
+		if grp == GroupNotMatched {
 			continue
 		}
-		pt1 := exec.GetState(groups[i])
+		pt1 := exec.GetState(grp - 1)
 		pt2 := other.GetState(uint64(offset + i))
 		*pt1 += *pt2
 	}

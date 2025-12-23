@@ -428,7 +428,7 @@ func batchFillFixed[T comparable, S any](ae *aggExec[S], offset int, groups []ui
 		if vectors[0].IsNull(idx) {
 			continue
 		} else {
-			ptr := ae.GetPtrLen(group)
+			ptr := ae.GetPtrLen(group - 1)
 			if distinct {
 				if mpool.PtrLenFindFixed(ptr, ts[offset+i]) != -1 {
 					continue
@@ -450,7 +450,7 @@ func batchFillVarLen[S any](ae *aggExec[S], offset int, groups []uint64, vectors
 		if vectors[0].IsNull(idx) {
 			continue
 		}
-		ptr := ae.GetPtrLen(group)
+		ptr := ae.GetPtrLen(group - 1)
 		bs := vectors[0].GetBytesAt(int(offset + i))
 		if distinct {
 			if ptr.FindBytes(bs) != -1 {
@@ -533,7 +533,7 @@ func batchMergeFixed[T comparable, S any](ae *aggExec[S], next *aggExec[S], offs
 			continue
 		}
 
-		ptr := ae.GetPtrLen(group)
+		ptr := ae.GetPtrLen(group - 1)
 		otherPtr := next.GetPtrLen(uint64(offset + i))
 		otherTs := mpool.PtrLenToSlice[T](otherPtr)
 
@@ -550,7 +550,7 @@ func batchMergeVarLen[S any](ae *aggExec[S], next *aggExec[S], offset int, group
 			continue
 		}
 
-		ptr := ae.GetPtrLen(group)
+		ptr := ae.GetPtrLen(group - 1)
 		otherPtr := next.GetPtrLen(uint64(offset + i))
 		if err := ptr.AppendBytesList(ae.mp, otherPtr, distinct); err != nil {
 			return err
