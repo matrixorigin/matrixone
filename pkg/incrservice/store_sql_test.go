@@ -105,8 +105,7 @@ type testLockService struct {
 }
 
 func (tls *testLockService) GetServiceID() string {
-	//TODO implement me
-	panic("implement me")
+	return ""
 }
 
 func (tls *testLockService) GetConfig() lockservice.Config {
@@ -515,4 +514,112 @@ func TestAllocateWithValidCommitTS(t *testing.T) {
 			require.Equal(t, commitTS, allocateTS, "When CommitTS is valid, should use CommitTS directly")
 		},
 	)
+}
+
+func Test_Allocate_Retry_When_Rows_Count_Invalid(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ctx := context.TODO()
+	ctx = defines.AttachAccountId(ctx, 12)
+
+	txnOp := &testTxnOperator{}
+
+	var selectCnt atomic.Int32
+
+	sqlExecutor := executor.NewMemExecutor2(
+		func(sql string) (executor.Result, error) {
+			if strings.HasPrefix(sql, "select offset, step from mo_increment_columns where table_id") {
+				cnt := selectCnt.Add(1)
+				if cnt == 1 {
+					// Return 0 rows
+					typs := []types.Type{
+						types.New(types.T_uint64, 64, 0),
+						types.New(types.T_uint64, 64, 0),
+					}
+					memRes := executor.NewMemResult(typs, mpool.MustNewZero())
+					// No rows added
+					return memRes.GetResult(), nil
+				}
+
+				// Return 1 row
+				typs := []types.Type{
+					types.New(types.T_uint64, 64, 0),
+					types.New(types.T_uint64, 64, 0),
+				}
+
+				memRes := executor.NewMemResult(
+					typs,
+					mpool.MustNewZero())
+				memRes.NewBatch()
+				executor.AppendFixedRows(memRes, 0, []uint64{1})
+				executor.AppendFixedRows(memRes, 1, []uint64{1})
+				return memRes.GetResult(), nil
+
+			} else if strings.HasPrefix(sql, "update mo_increment_columns set offset =") {
+				return executor.Result{AffectedRows: 1}, nil
+			}
+
+			return executor.Result{}, nil
+		},
+		txnOp,
+	)
+
+	s := &sqlStore{
+		exec: sqlExecutor,
+		ls:   &testLockService{},
+	}
+
+	_, _, _, err := s.Allocate(ctx, 10, "a", 1, nil)
+	require.NoError(t, err)
+	require.Equal(t, int32(2), selectCnt.Load())
+}
+
+func Test_Allocate_Retry_When_AffectedRows_Invalid(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ctx := context.TODO()
+	ctx = defines.AttachAccountId(ctx, 12)
+
+	txnOp := &testTxnOperator{}
+
+	var updateCnt atomic.Int32
+
+	sqlExecutor := executor.NewMemExecutor2(
+		func(sql string) (executor.Result, error) {
+			if strings.HasPrefix(sql, "select offset, step from mo_increment_columns where table_id") {
+				typs := []types.Type{
+					types.New(types.T_uint64, 64, 0),
+					types.New(types.T_uint64, 64, 0),
+				}
+
+				memRes := executor.NewMemResult(
+					typs,
+					mpool.MustNewZero())
+				memRes.NewBatch()
+				executor.AppendFixedRows(memRes, 0, []uint64{1})
+				executor.AppendFixedRows(memRes, 1, []uint64{1})
+				return memRes.GetResult(), nil
+			} else if strings.HasPrefix(sql, "update mo_increment_columns set offset =") {
+				cnt := updateCnt.Add(1)
+				if cnt == 1 {
+					return executor.Result{AffectedRows: 0}, nil
+				}
+				return executor.Result{AffectedRows: 1}, nil
+			}
+
+			return executor.Result{}, nil
+		},
+		txnOp,
+	)
+
+	s := &sqlStore{
+		exec: sqlExecutor,
+		ls:   &testLockService{},
+	}
+
+	_, _, _, err := s.Allocate(ctx, 10, "a", 1, nil)
+	require.NoError(t, err)
+	require.Equal(t, int32(2), updateCnt.Load())
 }
