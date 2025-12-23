@@ -20,8 +20,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -56,7 +58,6 @@ type worker struct {
 type TaskContext struct {
 	TaskID uint64
 	LSN    uint64
-	State  int8
 }
 
 func NewWorker(
@@ -103,7 +104,6 @@ func (w *worker) Submit(taskID uint64, lsn uint64, state int8) error {
 	w.taskChan <- &TaskContext{
 		TaskID: taskID,
 		LSN:    lsn,
-		State:  state,
 	}
 	return nil
 }
@@ -112,6 +112,17 @@ func (w *worker) onItem(taskCtx *TaskContext) {
 	err := retryPublication(
 		w.ctx,
 		func() error {
+			// Ensure ccpr state is set to pending before executing iteration
+			if err := w.updateIterationStatePending(w.ctx, taskCtx.TaskID, taskCtx.LSN); err != nil {
+				logutil.Error(
+					"Publication-Task update iteration state to pending failed",
+					zap.Uint64("taskID", taskCtx.TaskID),
+					zap.Uint64("lsn", taskCtx.LSN),
+					zap.Error(err),
+				)
+				return err
+			}
+
 			err := ExecuteIteration(
 				w.ctx,
 				w.cnUUID,
@@ -119,7 +130,6 @@ func (w *worker) onItem(taskCtx *TaskContext) {
 				w.cnTxnClient,
 				taskCtx.TaskID,
 				taskCtx.LSN,
-				taskCtx.State,
 				w.upstreamSQLHelperFactory,
 				w.mp,
 				nil, // utHelper
@@ -129,7 +139,6 @@ func (w *worker) onItem(taskCtx *TaskContext) {
 					"Publication-Task execute iteration failed",
 					zap.Uint64("taskID", taskCtx.TaskID),
 					zap.Uint64("lsn", taskCtx.LSN),
-					zap.Int8("state", taskCtx.State),
 					zap.Error(err),
 				)
 			}
@@ -154,4 +163,35 @@ func (w *worker) Stop() {
 	w.cancel()
 	w.wg.Wait()
 	close(w.taskChan)
+}
+
+func (w *worker) updateIterationStatePending(ctx context.Context, taskID uint64, lsn uint64) error {
+	executor, err := NewInternalSQLExecutor(
+		w.cnUUID,
+		w.cnTxnClient,
+		w.cnEngine,
+		catalog.System_Account,
+	)
+	if err != nil {
+		return err
+	}
+
+	updateSQL := PublicationSQLBuilder.UpdateMoCcprLogStateSQL(
+		taskID,
+		IterationStatePending,
+		lsn,
+	)
+
+	systemCtx := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	systemCtx, cancel := context.WithTimeout(systemCtx, 10*time.Second)
+	defer cancel()
+	result, err := executor.ExecSQL(systemCtx, updateSQL)
+	if err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to update iteration state to pending: %v", err)
+	}
+	if result != nil {
+		defer result.Close()
+	}
+
+	return nil
 }

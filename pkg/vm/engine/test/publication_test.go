@@ -362,7 +362,6 @@ func TestExecuteIteration1(t *testing.T) {
 	// Step 2: Write mo_ccpr_log table in destination account context
 	taskID := uint64(1)
 	iterationLSN := uint64(1)
-	iterationState := publication.IterationStatePending
 	subscriptionName := "test_subscription"
 	insertSQL := fmt.Sprintf(
 		`INSERT INTO mo_catalog.mo_ccpr_log (
@@ -437,7 +436,6 @@ func TestExecuteIteration1(t *testing.T) {
 		disttaeEngine.GetTxnClient(),
 		taskID,
 		iterationLSN,
-		iterationState,
 		upstreamSQLHelperFactory,
 		mp,
 		utHelper,

@@ -337,18 +337,16 @@ func (exec *PublicationTaskExecutor) run(ctx context.Context) {
 			candidateTasks := exec.getCandidateTasks()
 			for _, task := range candidateTasks {
 				// Only trigger tasks that are not completed
-				if task.state != IterationStateCompleted {
-					err = exec.worker.Submit(task.taskID, task.lsn, task.state)
-					if err != nil {
-						logutil.Error(
-							"Publication-Task submit task failed",
-							zap.Uint64("taskID", task.taskID),
-							zap.Uint64("lsn", task.lsn),
-							zap.Int8("state", task.state),
-							zap.Error(err),
-						)
-						continue
-					}
+				err = exec.worker.Submit(task.taskID, task.lsn, task.state)
+				if err != nil {
+					logutil.Error(
+						"Publication-Task submit task failed",
+						zap.Uint64("taskID", task.taskID),
+						zap.Uint64("lsn", task.lsn),
+						zap.Int8("state", task.state),
+						zap.Error(err),
+					)
+					continue
 				}
 			}
 		case <-gcTrigger.C:
@@ -461,22 +459,22 @@ func (exec *PublicationTaskExecutor) applyCcprLogWithRel(ctx context.Context, re
 		}
 		// Parse mo_ccpr_log columns:
 		// task_id, subscription_name, sync_level, account_id, db_name, table_name,
-		// upstream_conn, sync_config, state, iteration_state, iteration_lsn, context,
+		// upstream_conn, sync_config, iteration_state, iteration_lsn, context,
 		// cn_uuid, error_message, created_at, drop_at
 		taskIDVector := insertData.Vecs[0]
 		taskIDs := vector.MustFixedColWithTypeCheck[uint32](taskIDVector)
-		iterationStateVector := insertData.Vecs[9]
+		iterationStateVector := insertData.Vecs[8]
 		states := vector.MustFixedColWithTypeCheck[int8](iterationStateVector)
-		iterationLSNVector := insertData.Vecs[10]
+		iterationLSNVector := insertData.Vecs[9]
 		lsns := vector.MustFixedColWithTypeCheck[int64](iterationLSNVector)
-		// drop_at is at index 15
-		dropAtVector := insertData.Vecs[15]
+		// drop_at is at index 14
+		dropAtVector := insertData.Vecs[14]
 		dropAts := vector.MustFixedColWithTypeCheck[types.Timestamp](dropAtVector)
 		// commit_ts is typically the last column (after all data columns)
-		// The number of columns in mo_ccpr_log is 16 (0-15), so commit_ts should be at index 16
+		// The number of columns in mo_ccpr_log is 15 (0-14), so commit_ts should be at index 15
 		var commitTSs []types.TS
-		if len(insertData.Vecs) > 16 {
-			commitTSVector := insertData.Vecs[16]
+		if len(insertData.Vecs) > 15 {
+			commitTSVector := insertData.Vecs[15]
 			commitTSs = vector.MustFixedColWithTypeCheck[types.TS](commitTSVector)
 		} else {
 			// If commit_ts is not available, use empty TS
@@ -598,6 +596,7 @@ func (exec *PublicationTaskExecutor) addOrUpdateTask(
 ) error {
 	task, ok := exec.getTask(taskID)
 	if !ok {
+		logutil.Infof("Publication-Task add task %v", taskID)
 		task = &TaskEntry{
 			taskID:  taskID,
 			lsn:     lsn,
@@ -607,6 +606,7 @@ func (exec *PublicationTaskExecutor) addOrUpdateTask(
 		exec.setTask(task)
 		return nil
 	}
+	logutil.Infof("Publication-Task update task %v-%d-%d", taskID, lsn, state)
 	// Update existing task
 	task.lsn = lsn
 	task.state = state

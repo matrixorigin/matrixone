@@ -112,6 +112,24 @@ func InitializeIterationContext(
 		return nil, moerr.NewInternalError(ctx, "txn client is nil")
 	}
 
+	// Create local transaction
+	nowTs := cnEngine.LatestLogtailAppliedTime()
+	createByOpt := client.WithTxnCreateBy(
+		0,
+		"",
+		"publication iteration",
+		0)
+	localTxn, err := cnTxnClient.New(ctx, nowTs, createByOpt)
+	if err != nil {
+		return nil, moerr.NewInternalErrorf(ctx, "failed to create local transaction: %v", err)
+	}
+
+	// Register the transaction with the engine
+	err = cnEngine.New(ctx, localTxn)
+	if err != nil {
+		return nil, moerr.NewInternalErrorf(ctx, "failed to register transaction with engine: %v", err)
+	}
+
 	// Create local executor first (without transaction) to query mo_ccpr_log
 	// mo_ccpr_log is a system table, so we must use system account
 	// Local executor doesn't need upstream SQL helper (no special SQL statements)
@@ -119,6 +137,8 @@ func InitializeIterationContext(
 	if err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "failed to create local executor: %v", err)
 	}
+	// Set the transaction in local executor
+	localExecutorInternal.SetTxn(localTxn)
 	var localExecutor SQLExecutor = localExecutorInternal
 
 	// Query mo_ccpr_log table to get subscription_name, sync_level, db_name, table_name, upstream_conn, context
@@ -249,28 +269,6 @@ func InitializeIterationContext(
 		return nil, moerr.NewInternalErrorf(ctx, "failed to start upstream transaction: %v", err)
 	}
 
-	// Create local transaction
-	nowTs := cnEngine.LatestLogtailAppliedTime()
-	createByOpt := client.WithTxnCreateBy(
-		0,
-		"",
-		"publication iteration",
-		0)
-	localTxn, err := cnTxnClient.New(ctx, nowTs, createByOpt)
-	if err != nil {
-		upstreamExecutor.Close()
-		return nil, moerr.NewInternalErrorf(ctx, "failed to create local transaction: %v", err)
-	}
-
-	// Register the transaction with the engine
-	err = cnEngine.New(ctx, localTxn)
-	if err != nil {
-		upstreamExecutor.Close()
-		return nil, moerr.NewInternalErrorf(ctx, "failed to register transaction with engine: %v", err)
-	}
-
-	// Set the transaction in local executor
-	localExecutorInternal.SetTxn(localTxn)
 
 	// Initialize IterationContext
 	iterationCtx := &IterationContext{
@@ -1126,7 +1124,6 @@ func ExecuteIteration(
 	cnTxnClient client.TxnClient,
 	taskID uint64,
 	iterationLSN uint64,
-	iterationState int8,
 	upstreamSQLHelperFactory UpstreamSQLHelperFactory,
 	mp *mpool.MPool,
 	utHelper UTHelper,
