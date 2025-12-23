@@ -111,6 +111,7 @@ func CollectObjectList(
 		for iter.Next() {
 			objEntry := iter.Item()
 			if tailCheckFn(objEntry, start, end) {
+				deleted := !objEntry.DeleteTime.IsEmpty() && objEntry.DeleteTime.LE(&end)
 				// Append dbname
 				vector.AppendBytes((*bat).Vecs[ObjectListAttr_DbName_Idx], []byte(dbname), false, mp)
 				// Append tablename
@@ -120,7 +121,11 @@ func CollectObjectList(
 				// Append CreateTime
 				vector.AppendFixed[types.TS]((*bat).Vecs[ObjectListAttr_CreateAt_Idx], objEntry.CreateTime, false, mp)
 				// Append DeleteTime
-				vector.AppendFixed[types.TS]((*bat).Vecs[ObjectListAttr_DeleteAt_Idx], objEntry.DeleteTime, false, mp)
+				if deleted {
+					vector.AppendFixed[types.TS]((*bat).Vecs[ObjectListAttr_DeleteAt_Idx], objEntry.DeleteTime, false, mp)
+				} else {
+					vector.AppendFixed[types.TS]((*bat).Vecs[ObjectListAttr_DeleteAt_Idx], types.TS{}, false, mp)
+				}
 				// Append isTombstone
 				vector.AppendFixed[bool]((*bat).Vecs[ObjectListAttr_IsTombstone_Idx], isTombstone, false, mp)
 			}
@@ -144,6 +149,8 @@ func CollectSnapshotObjectList(
 		for iter.Next() {
 			objEntry := iter.Item()
 			if snapshotCheckFn(objEntry, snapshotTS) {
+
+				deleted := !objEntry.DeleteTime.IsEmpty() && objEntry.DeleteTime.LE(&snapshotTS)
 				// Append dbname
 				vector.AppendBytes((*bat).Vecs[ObjectListAttr_DbName_Idx], []byte(dbname), false, mp)
 				// Append tablename
@@ -153,7 +160,11 @@ func CollectSnapshotObjectList(
 				// Append CreateTime
 				vector.AppendFixed[types.TS]((*bat).Vecs[ObjectListAttr_CreateAt_Idx], objEntry.CreateTime, false, mp)
 				// Append DeleteTime
-				vector.AppendFixed[types.TS]((*bat).Vecs[ObjectListAttr_DeleteAt_Idx], objEntry.DeleteTime, false, mp)
+				if deleted {
+					vector.AppendFixed[types.TS]((*bat).Vecs[ObjectListAttr_DeleteAt_Idx], objEntry.DeleteTime, false, mp)
+				} else {
+					vector.AppendFixed[types.TS]((*bat).Vecs[ObjectListAttr_DeleteAt_Idx], types.TS{}, false, mp)
+				}
 				// Append isTombstone
 				vector.AppendFixed[bool]((*bat).Vecs[ObjectListAttr_IsTombstone_Idx], isTombstone, false, mp)
 			}
@@ -187,6 +198,8 @@ func GetObjectListFromCKP(
 	fillInObjectListFn := func(objEntry objectio.ObjectEntry, isTombstone bool, mp *mpool.MPool) {
 		if tailCheckFn(objEntry, start, end) {
 			// Append dbname
+
+			deleted := !objEntry.DeleteTime.IsEmpty() && objEntry.DeleteTime.LE(&end)
 			vector.AppendBytes((*bat).Vecs[ObjectListAttr_DbName_Idx], []byte(dbname), false, mp)
 			// Append tablename
 			vector.AppendBytes((*bat).Vecs[ObjectListAttr_TableName_Idx], []byte(tablename), false, mp)
@@ -195,7 +208,11 @@ func GetObjectListFromCKP(
 			// Append CreateTime
 			vector.AppendFixed[types.TS]((*bat).Vecs[ObjectListAttr_CreateAt_Idx], objEntry.CreateTime, false, mp)
 			// Append DeleteTime
-			vector.AppendFixed[types.TS]((*bat).Vecs[ObjectListAttr_DeleteAt_Idx], objEntry.DeleteTime, false, mp)
+			if deleted {
+				vector.AppendFixed[types.TS]((*bat).Vecs[ObjectListAttr_DeleteAt_Idx], objEntry.DeleteTime, false, mp)
+			} else {
+				vector.AppendFixed[types.TS]((*bat).Vecs[ObjectListAttr_DeleteAt_Idx], types.TS{}, false, mp)
+			}
 			// Append isTombstone
 			vector.AppendFixed[bool]((*bat).Vecs[ObjectListAttr_IsTombstone_Idx], isTombstone, false, mp)
 		}
