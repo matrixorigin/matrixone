@@ -1937,12 +1937,12 @@ func (n *noopTxnOperator) EnterRunSqlWithTokenAndSQL(_ context.CancelFunc, _ str
 	return 0
 }
 func (n *noopTxnOperator) ExitRunSqlWithToken(_ uint64) {}
-func (n *noopTxnOperator) EnterIncrStmt()            {}
-func (n *noopTxnOperator) ExitIncrStmt()             {}
-func (n *noopTxnOperator) EnterRollbackStmt()        {}
-func (n *noopTxnOperator) ExitRollbackStmt()         {}
-func (n *noopTxnOperator) SetFootPrints(int, bool)   {}
-func (n *noopTxnOperator) Set(key string, value any) {}
+func (n *noopTxnOperator) EnterIncrStmt()               {}
+func (n *noopTxnOperator) ExitIncrStmt()                {}
+func (n *noopTxnOperator) EnterRollbackStmt()           {}
+func (n *noopTxnOperator) ExitRollbackStmt()            {}
+func (n *noopTxnOperator) SetFootPrints(int, bool)      {}
+func (n *noopTxnOperator) Set(key string, value any)    {}
 func (n *noopTxnOperator) Get(key string) (any, bool) {
 	return nil, false
 }
