@@ -779,7 +779,7 @@ func (ses *feSessionImpl) Reset() {
 	}
 	if ses.txnCompileCtx != nil {
 		ses.txnCompileCtx.Close()
-	ses.txnCompileCtx = nil
+		ses.txnCompileCtx = nil
 	}
 	ses.sql = ""
 	ses.runSQLTokens = nil

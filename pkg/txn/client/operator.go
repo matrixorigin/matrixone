@@ -317,14 +317,6 @@ type runSQLInfo struct {
 	start  time.Time
 }
 
-func newRunSQLTracker() runSQLTracker {
-	tracker := runSQLTracker{
-		activeTokens: make(map[uint64]runSQLInfo),
-	}
-	tracker.cond = sync.NewCond(&tracker.mu)
-	return tracker
-}
-
 func (t *runSQLTracker) ensureInitLocked() {
 	if t.activeTokens == nil {
 		t.activeTokens = make(map[uint64]runSQLInfo)
@@ -332,6 +324,12 @@ func (t *runSQLTracker) ensureInitLocked() {
 	if t.cond == nil {
 		t.cond = sync.NewCond(&t.mu)
 	}
+}
+
+func (t *runSQLTracker) reset() {
+	t.activeTokens = make(map[uint64]runSQLInfo)
+	t.nextID = 0
+	t.cond = sync.NewCond(&t.mu)
 }
 
 func (t *runSQLTracker) notifyLocked() {
@@ -520,7 +518,7 @@ func (tc *txnOperator) initReset() {
 	tc.reset.commitCounter = counter{}
 	tc.reset.rollbackCounter = counter{}
 	tc.reset.runSqlCounter = counter{}
-	tc.reset.runSQLTracker = newRunSQLTracker()
+	tc.reset.runSQLTracker.reset()
 	tc.reset.incrStmtCounter = counter{}
 	tc.reset.rollbackStmtCounter = counter{}
 	tc.reset.fprints = footPrints{}
