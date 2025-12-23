@@ -105,6 +105,7 @@ const (
 	FPCreatePublication
 	FPAlterPublication
 	FPDropPublication
+	FPCreateSubscription
 	FPShowSubscriptions
 	FPCreateStage
 	FPDropStage

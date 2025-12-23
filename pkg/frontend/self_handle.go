@@ -187,6 +187,12 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		if err = handleCreatePublication(ses, execCtx, st); err != nil {
 			return
 		}
+	case *tree.CreateSubscription:
+		ses.EnterFPrint(FPCreateSubscription)
+		defer ses.ExitFPrint(FPCreateSubscription)
+		if err = handleCreateSubscription(ses, execCtx, st); err != nil {
+			return
+		}
 	case *tree.AlterPublication:
 		ses.EnterFPrint(FPAlterPublication)
 		defer ses.ExitFPrint(FPAlterPublication)

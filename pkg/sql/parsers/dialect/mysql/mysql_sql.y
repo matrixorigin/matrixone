@@ -370,7 +370,7 @@ import (
 // Sequence
 %token <str> INCREMENT CYCLE MINVALUE
 // publication
-%token <str> PUBLICATION SUBSCRIPTIONS PUBLICATIONS
+%token <str> PUBLICATION SUBSCRIPTIONS PUBLICATIONS SYNC_INTERVAL
 
 // MO table option
 %token <str> PROPERTIES
@@ -749,7 +749,7 @@ import (
 %type <frameBound> frame_bound frame_bound_start
 %type <frameType> frame_type
 %type <str> fields_or_columns
-%type <int64Val> algorithm_opt partition_num_opt sub_partition_num_opt opt_retry pitr_value
+%type <int64Val> algorithm_opt partition_num_opt sub_partition_num_opt opt_retry pitr_value sync_interval_opt
 %type <boolVal> linear_opt
 %type <partition> partition
 %type <partitions> partition_list_opt partition_list
@@ -7158,6 +7158,23 @@ stage_comment_opt:
         }
     }
 
+
+sync_interval_opt:
+    {
+        $$ = int64(0)
+    }
+|   SYNC_INTERVAL '=' INTEGRAL
+    {
+        switch v := $3.(type) {
+        case int64:
+            $$ = v
+        case uint64:
+            $$ = int64(v)
+        default:
+            $$ = int64(0)
+        }
+    }
+
 stage_url_opt:
     {
         $$ = tree.StageUrl{
@@ -7887,6 +7904,21 @@ create_database_stmt:
     	t.ToAccountOpt = $8
     	$$ = t
     }
+|   CREATE database_or_schema not_exists_opt db_name FROM STRING PUBLICATION ident sync_interval_opt
+    {
+        var DbName = tree.Identifier($4)
+        var FromUri = $6
+        var PubName = tree.Identifier($8.Compare())
+        var SyncInterval = $9
+        $$ = tree.NewCreateSubscription(
+            true,  // isDatabase
+            DbName,
+            "",
+            FromUri,
+            PubName,
+            SyncInterval,
+        )
+    }
 
 subscription_opt:
     {
@@ -8425,6 +8457,22 @@ create_table_stmt:
 	t.SrcTable = *$7
 	t.ToAccountOpt = $8
 	$$ = t
+    }
+|   CREATE temporary_opt TABLE not_exists_opt table_name FROM STRING PUBLICATION ident sync_interval_opt
+    {
+        var TableName = $5
+        var FromUri = $7
+        var PubName = tree.Identifier($9.Compare())
+        var SyncInterval = $10
+        var TableNameStr = string(TableName.ObjectName)
+        $$ = tree.NewCreateSubscription(
+            false,  // isDatabase
+            "",
+            TableNameStr,
+            FromUri,
+            PubName,
+            SyncInterval,
+        )
     }
 
 load_param_opt_2:

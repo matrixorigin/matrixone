@@ -713,6 +713,12 @@ func init() {
 		reuse.DefaultOptions[CreatePublication](), //.
 	) //WithEnableChecker()
 
+	reuse.CreatePool[CreateSubscription](
+		func() *CreateSubscription { return &CreateSubscription{} },
+		func(c *CreateSubscription) { c.reset() },
+		reuse.DefaultOptions[CreateSubscription](), //.
+	) //WithEnableChecker()
+
 	reuse.CreatePool[AttributeVisable](
 		func() *AttributeVisable { return &AttributeVisable{} },
 		func(a *AttributeVisable) { a.reset() },
@@ -5413,6 +5419,61 @@ func (node *CreatePublication) reset() {
 
 func (node *CreatePublication) Free() {
 	reuse.Free[CreatePublication](node, nil)
+}
+
+type CreateSubscription struct {
+	statementImpl
+	IsDatabase   bool
+	DbName       Identifier
+	TableName    string
+	FromUri      string
+	PubName      Identifier
+	SyncInterval int64
+}
+
+func NewCreateSubscription(isDb bool, dbName Identifier, tableName string, fromUri string, pubName Identifier, syncInterval int64) *CreateSubscription {
+	cs := reuse.Alloc[CreateSubscription](nil)
+	cs.IsDatabase = isDb
+	cs.DbName = dbName
+	cs.TableName = tableName
+	cs.FromUri = fromUri
+	cs.PubName = pubName
+	cs.SyncInterval = syncInterval
+	return cs
+}
+
+func (node *CreateSubscription) Format(ctx *FmtCtx) {
+	if node.IsDatabase {
+		ctx.WriteString("create database ")
+		node.DbName.Format(ctx)
+	} else {
+		ctx.WriteString("create table ")
+		ctx.WriteString(node.TableName)
+	}
+	ctx.WriteString(" from ")
+	ctx.WriteString(fmt.Sprintf("'%s'", node.FromUri))
+	ctx.WriteString(" publication ")
+	node.PubName.Format(ctx)
+	if node.SyncInterval > 0 {
+		ctx.WriteString(fmt.Sprintf(" sync_interval = %d", node.SyncInterval))
+	}
+}
+
+func (node *CreateSubscription) GetStatementType() string { return "Create Subscription" }
+func (node *CreateSubscription) GetQueryType() string     { return QueryTypeDCL }
+
+func (node *CreateSubscription) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
+func (node CreateSubscription) TypeName() string { return "tree.CreateSubscription" }
+
+func (node *CreateSubscription) reset() {
+	*node = CreateSubscription{}
+}
+
+func (node *CreateSubscription) Free() {
+	reuse.Free[CreateSubscription](node, nil)
 }
 
 type AttributeVisable struct {

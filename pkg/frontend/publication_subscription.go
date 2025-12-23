@@ -16,14 +16,17 @@ package frontend
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -1859,4 +1862,213 @@ func checkColExists(ctx context.Context, bh BackgroundExec, dbName, tblName, col
 	}
 
 	return execResultArrayHasData(erArray), nil
+}
+
+// parseSubscriptionUri parses URI in format: mysql://<account>#<user>:<password>@<host>:<port>
+// Returns account, user, password, host, port
+func parseSubscriptionUri(uri string) (account, user, password, host string, port int, err error) {
+	const uriPrefix = "mysql://"
+	if !strings.HasPrefix(uri, uriPrefix) {
+		return "", "", "", "", 0, moerr.NewInternalErrorNoCtx("invalid URI format, must start with mysql://")
+	}
+
+	rest := uri[len(uriPrefix):]
+	// Split by @ to separate credentials from host:port
+	parts := strings.Split(rest, "@")
+	if len(parts) != 2 {
+		return "", "", "", "", 0, moerr.NewInternalErrorNoCtx("invalid URI format, missing @ separator")
+	}
+
+	// Parse credentials part: account#user:password or user:password
+	credPart := parts[0]
+	var accountPart, userPassPart string
+	if strings.Contains(credPart, "#") {
+		credParts := strings.SplitN(credPart, "#", 2)
+		accountPart = credParts[0]
+		userPassPart = credParts[1]
+	} else {
+		userPassPart = credPart
+	}
+
+	// Parse user:password
+	userPassParts := strings.SplitN(userPassPart, ":", 2)
+	if len(userPassParts) != 2 {
+		return "", "", "", "", 0, moerr.NewInternalErrorNoCtx("invalid URI format, missing password")
+	}
+	user = userPassParts[0]
+	password = userPassParts[1]
+
+	// Parse host:port
+	hostPortPart := parts[1]
+	hostPortParts := strings.Split(hostPortPart, ":")
+	if len(hostPortParts) != 2 {
+		return "", "", "", "", 0, moerr.NewInternalErrorNoCtx("invalid URI format, missing port")
+	}
+	host = hostPortParts[0]
+	portInt, err := strconv.Atoi(hostPortParts[1])
+	if err != nil {
+		return "", "", "", "", 0, moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid port: %v", err))
+	}
+	port = portInt
+
+	return accountPart, user, password, host, port, nil
+}
+
+func doCreateSubscription(ctx context.Context, ses *Session, cs *tree.CreateSubscription) (err error) {
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	tenantInfo := ses.GetTenantInfo()
+	if !tenantInfo.IsAdminRole() {
+		return moerr.NewInternalError(ctx, "only admin can create subscription")
+	}
+
+	if err = bh.Exec(ctx, "begin;"); err != nil {
+		return
+	}
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+
+	ctx = defines.AttachAccount(ctx, tenantInfo.TenantID, tenantInfo.GetUserID(), tenantInfo.GetDefaultRoleID())
+	accountId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
+	}
+
+	// Parse URI
+	account, user, password, host, port, err := parseSubscriptionUri(cs.FromUri)
+	if err != nil {
+		return err
+	}
+
+	// Initialize AES key for encryption (similar to CDC)
+	// Query the data key from mo_data_key table
+	querySql := cdc.CDCSQLBuilder.GetDataKeySQL(uint64(catalog.System_Account), cdc.InitKeyId)
+	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+	bh.ClearExecResultSet()
+	if err = bh.Exec(ctx, querySql); err != nil {
+		return err
+	}
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return err
+	}
+	if len(erArray) == 0 || erArray[0].GetRowCount() == 0 {
+		return moerr.NewInternalError(ctx, "no data key")
+	}
+	encryptedKey, err := erArray[0].GetString(ctx, 0, 0)
+	if err != nil {
+		return err
+	}
+	// Get KeyEncryptionKey from service
+	pu := getPu(ses.GetService())
+	cdc.AesKey, err = cdc.AesCFBDecodeWithKey(
+		ctx,
+		encryptedKey,
+		[]byte(pu.SV.KeyEncryptionKey),
+	)
+	if err != nil {
+		return err
+	}
+
+	// Create UriInfo and encrypt password
+	uriInfo := cdc.UriInfo{
+		User:     user,
+		Password: password,
+		Ip:       host,
+		Port:     port,
+	}
+	encodedPassword, err := uriInfo.GetEncodedPassword()
+	if err != nil {
+		return err
+	}
+
+	// Build encrypted URI (similar to CDC format)
+	// Format: mysql://account#user:encrypted_password@host:port
+	var encryptedUri string
+	if account != "" {
+		encryptedUri = fmt.Sprintf("mysql://%s#%s:%s@%s:%d", account, user, encodedPassword, host, port)
+	} else {
+		encryptedUri = fmt.Sprintf("mysql://%s:%s@%s:%d", user, encodedPassword, host, port)
+	}
+
+	// Determine sync_level
+	syncLevel := "database"
+	if !cs.IsDatabase {
+		syncLevel = "table"
+	}
+
+	// Build sync_config JSON
+	syncConfig := map[string]interface{}{}
+	if cs.SyncInterval > 0 {
+		syncConfig["sync_interval"] = cs.SyncInterval
+	}
+	syncConfigJSON, err := json.Marshal(syncConfig)
+	if err != nil {
+		return err
+	}
+
+	// Build INSERT SQL
+	var dbName, tableName string
+	if cs.IsDatabase {
+		dbName = string(cs.DbName)
+		tableName = ""
+	} else {
+		dbName = "" // Will be determined from current database context
+		tableName = cs.TableName
+	}
+
+	// Get current database if table subscription
+	if !cs.IsDatabase && dbName == "" {
+		dbName = ses.GetDatabaseName()
+	}
+
+	// State: 1 = running (as per design.md, state is TINYINT for 'running', 'stopped')
+	state := int8(1) // running
+
+	// iteration_state: 2 = complete (based on design.md: 0='pending', 1='running', 2='complete', 3='error', 4='cancel')
+	iterationState := int8(2) // complete
+
+	sql := fmt.Sprintf(
+		`INSERT INTO mo_catalog.mo_ccpr_log (
+			subscription_name,
+			sync_level,
+			account_id,
+			db_name,
+			table_name,
+			upstream_conn,
+			sync_config,
+			state,
+			iteration_state,
+			iteration_lsn
+		) VALUES (
+			'%s',
+			'%s',
+			%d,
+			'%s',
+			'%s',
+			'%s',
+			'%s',
+			%d,
+			%d,
+			0
+		)`,
+		string(cs.PubName),
+		syncLevel,
+		accountId,
+		dbName,
+		tableName,
+		encryptedUri,
+		string(syncConfigJSON),
+		state,
+		iterationState,
+	)
+
+	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+	if err = bh.Exec(ctx, sql); err != nil {
+		return err
+	}
+
+	return nil
 }

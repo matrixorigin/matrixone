@@ -5755,6 +5755,10 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		typs = append(typs, PrivilegeTypeAccountAll)
 		objType = objectTypeDatabase
 		kind = privilegeKindNone
+	case *tree.CreateSubscription:
+		typs = append(typs, PrivilegeTypeAccountAll)
+		objType = objectTypeDatabase
+		kind = privilegeKindNone
 	case *tree.SetTransaction:
 		objType = objectTypeNone
 		kind = privilegeKindNone
