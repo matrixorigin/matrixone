@@ -22,6 +22,7 @@ import (
 
 type countStarExec struct {
 	aggExec[int64]
+	extra int64
 }
 
 func (exec *countStarExec) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
@@ -48,7 +49,8 @@ func (exec *countStarExec) BatchMerge(next AggFuncExec, offset int, groups []uin
 	return nil
 }
 
-func (exec *countStarExec) SetExtraInformation(partialResult any, groupIndex int) error {
+func (exec *countStarExec) SetExtraInformation(partialResult any, _ int) error {
+	exec.extra = partialResult.(int64)
 	return nil
 }
 
@@ -63,12 +65,20 @@ func (exec *countStarExec) Flush() ([]*vector.Vector, error) {
 		exec.state[i].states = nil
 		exec.state[i].length = 0
 		exec.state[i].capacity = 0
+
+		if exec.extra != 0 {
+			vals := vector.MustFixedColNoTypeCheck[int64](vecs[i])
+			for j := range vals {
+				vals[j] += exec.extra
+			}
+		}
 	}
 	return vecs, nil
 }
 
 type countColumnExec struct {
 	aggExec[int64]
+	extra int64
 }
 
 func (exec *countColumnExec) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
@@ -109,7 +119,8 @@ func (exec *countColumnExec) BatchMerge(next AggFuncExec, offset int, groups []u
 	return nil
 }
 
-func (exec *countColumnExec) SetExtraInformation(partialResult any, groupIndex int) error {
+func (exec *countColumnExec) SetExtraInformation(partialResult any, _ int) error {
+	exec.extra = partialResult.(int64)
 	return nil
 }
 
@@ -119,12 +130,19 @@ func (exec *countColumnExec) Flush() ([]*vector.Vector, error) {
 		for i := range vecs {
 			vecs[i] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
 			vecs[i].PreExtend(int(exec.state[i].length), exec.mp)
+			vecs[i].SetLength(int(exec.state[i].length))
+
 			ptrs := exec.state[i].getPtrLenSlice()
 			vals := vector.MustFixedColNoTypeCheck[int64](vecs[i])
 			for j := range ptrs {
 				vals[j] = int64(ptrs[j].Len())
 			}
-			vecs[i].SetLength(int(exec.state[i].length))
+
+			if exec.extra != 0 {
+				for j := range vals {
+					vals[j] += exec.extra
+				}
+			}
 		}
 	} else {
 		for i := range vecs {
@@ -136,6 +154,13 @@ func (exec *countColumnExec) Flush() ([]*vector.Vector, error) {
 			exec.state[i].states = nil
 			exec.state[i].length = 0
 			exec.state[i].capacity = 0
+
+			if exec.extra != 0 {
+				vals := vector.MustFixedColNoTypeCheck[int64](vecs[i])
+				for j := range vals {
+					vals[j] += exec.extra
+				}
+			}
 		}
 	}
 	return vecs, nil
