@@ -110,8 +110,15 @@ func (r *Result) Scan(dest ...interface{}) error {
 		// Unmarshal the TS buffers into the actual TS destinations
 		for bufIdx, destIdx := range tsIndices {
 			if tsDest, ok := dest[destIdx].(*types.TS); ok {
-				if err := tsDest.Unmarshal(*tsBuffers[bufIdx]); err != nil {
-					return moerr.NewInternalErrorNoCtx(fmt.Sprintf("failed to unmarshal TS at column %d: %v", destIdx, err))
+				buf := *tsBuffers[bufIdx]
+				// Handle NULL values: if buffer is nil, empty, or has insufficient length,
+				// set TS to empty value instead of unmarshaling
+				if buf == nil || len(buf) < types.TxnTsSize {
+					*tsDest = types.TS{}
+				} else {
+					if err := tsDest.Unmarshal(buf); err != nil {
+						return moerr.NewInternalErrorNoCtx(fmt.Sprintf("failed to unmarshal TS at column %d: %v", destIdx, err))
+					}
 				}
 			}
 		}

@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"reflect"
 	"strings"
 	"time"
 
@@ -47,26 +48,33 @@ import (
 // UpstreamSQLHelper handles special SQL statements (CREATE/DROP SNAPSHOT, OBJECTLIST, GET OBJECT, GETDDL)
 // by routing them through frontend processing logic without requiring a Session
 type UpstreamSQLHelper struct {
-	txnOp     client.TxnOperator
-	engine    engine.Engine
-	accountID uint32
-	executor  executor.SQLExecutor
+	txnOp        client.TxnOperator
+	txnClient    client.TxnClient // Optional: if provided, used to create new transactions
+	engine       engine.Engine
+	accountID    uint32
+	executor     executor.SQLExecutor
+	createdTxnOp client.TxnOperator // Track if we created a new txn (to commit at end)
 }
 
 // SetTxnOp sets the transaction operator (called after StartTxn)
+// This clears the createdTxnOp flag since the txn is now managed externally
 func (h *UpstreamSQLHelper) SetTxnOp(txnOp client.TxnOperator) {
 	h.txnOp = txnOp
+	h.createdTxnOp = nil // Clear created flag since txn is now managed externally
 }
 
 // NewUpstreamSQLHelper creates a new UpstreamSQLHelper
+// txnClient is optional - if provided, it will be used to create new transactions when needed
 func NewUpstreamSQLHelper(
 	txnOp client.TxnOperator,
 	engine engine.Engine,
 	accountID uint32,
 	executor executor.SQLExecutor,
+	txnClient client.TxnClient, // Optional: if nil, will try to get from engine
 ) *UpstreamSQLHelper {
 	return &UpstreamSQLHelper{
 		txnOp:     txnOp,
+		txnClient: txnClient,
 		engine:    engine,
 		accountID: accountID,
 		executor:  executor,
@@ -75,6 +83,7 @@ func NewUpstreamSQLHelper(
 
 // HandleSpecialSQL checks if the SQL is a special statement and handles it directly
 // Returns (handled, result, error) where handled indicates if the statement was handled
+// If a new transaction was created (because there was no txn initially), it will be committed on success or rolled back on error
 func (h *UpstreamSQLHelper) HandleSpecialSQL(
 	ctx context.Context,
 	query string,
@@ -92,75 +101,175 @@ func (h *UpstreamSQLHelper) HandleSpecialSQL(
 		}
 	}()
 
+	// Track if we need to commit/rollback the transaction at the end
+	// Save the original txnOp to check if we created a new one
+	originalTxnOp := h.txnOp
+	var result *publication.Result
+	var handleErr error
+
+	// Use defer to ensure transaction is always committed/rolled back if we created it
+	defer func() {
+		// If we created a new transaction (originalTxnOp was nil but now we have one), commit/rollback it
+		if originalTxnOp == nil && h.createdTxnOp != nil {
+			createdTxn := h.createdTxnOp
+			if handleErr != nil {
+				// Rollback on error
+				if rollbackErr := createdTxn.Rollback(ctx); rollbackErr != nil {
+					logutil.Error("UpstreamSQLHelper: failed to rollback created transaction",
+						zap.Error(rollbackErr),
+					)
+				}
+			} else {
+				// Commit on success
+				if commitErr := createdTxn.Commit(ctx); commitErr != nil {
+					logutil.Error("UpstreamSQLHelper: failed to commit created transaction",
+						zap.Error(commitErr),
+					)
+					// Update handleErr so caller knows about commit failure
+					handleErr = commitErr
+				}
+			}
+			// Clear the created txn references only if txnOp still points to the created one
+			if h.txnOp == createdTxn {
+				h.txnOp = nil
+			}
+			h.createdTxnOp = nil
+		}
+	}()
+
 	// Route special statements through frontend layer processing
 	switch s := stmt.(type) {
 	case *tree.CreateSnapShot:
 		logutil.Info("UpstreamSQLHelper: routing CREATE SNAPSHOT to frontend",
 			zap.String("sql", query),
 		)
-		err := h.handleCreateSnapshotDirectly(ctx, s)
-		if err != nil {
-			return true, nil, err
+		handleErr = h.handleCreateSnapshotDirectly(ctx, s)
+		if handleErr != nil {
+			return true, nil, handleErr
 		}
 		// CREATE SNAPSHOT doesn't return rows
 		// Create empty result using internal executor's convertExecutorResult equivalent
 		emptyResult := executor.Result{}
-		return true, h.convertExecutorResult(emptyResult), nil
+		result = h.convertExecutorResult(emptyResult)
 
 	case *tree.DropSnapShot:
 		logutil.Info("UpstreamSQLHelper: routing DROP SNAPSHOT to frontend",
 			zap.String("sql", query),
 		)
-		err := h.handleDropSnapshotDirectly(ctx, s)
-		if err != nil {
-			return true, nil, err
+		handleErr = h.handleDropSnapshotDirectly(ctx, s)
+		if handleErr != nil {
+			return true, nil, handleErr
 		}
 		// DROP SNAPSHOT doesn't return rows
 		emptyResult := executor.Result{}
-		return true, h.convertExecutorResult(emptyResult), nil
+		result = h.convertExecutorResult(emptyResult)
 
 	case *tree.ObjectList:
 		logutil.Info("UpstreamSQLHelper: routing OBJECTLIST to frontend",
 			zap.String("sql", query),
 		)
-		result, err := h.handleObjectListDirectly(ctx, s)
-		if err != nil {
-			return true, nil, err
+		result, handleErr = h.handleObjectListDirectly(ctx, s)
+		if handleErr != nil {
+			return true, nil, handleErr
 		}
-		return true, result, nil
 
 	case *tree.GetObject:
 		logutil.Info("UpstreamSQLHelper: routing GET OBJECT to frontend",
 			zap.String("sql", query),
 		)
-		result, err := h.handleGetObjectDirectly(ctx, s)
-		if err != nil {
-			return true, nil, err
+		result, handleErr = h.handleGetObjectDirectly(ctx, s)
+		if handleErr != nil {
+			return true, nil, handleErr
 		}
-		return true, result, nil
 
 	case *tree.GetDdl:
 		logutil.Info("UpstreamSQLHelper: routing GETDDL to frontend",
 			zap.String("sql", query),
 		)
-		result, err := h.handleGetDdlDirectly(ctx, s)
-		if err != nil {
-			return true, nil, err
+		result, handleErr = h.handleGetDdlDirectly(ctx, s)
+		if handleErr != nil {
+			return true, nil, handleErr
 		}
-		return true, result, nil
 
 	case *tree.CheckSnapshotFlushed:
 		logutil.Info("UpstreamSQLHelper: routing CHECK SNAPSHOT FLUSHED to frontend",
 			zap.String("sql", query),
 		)
-		result, err := h.handleCheckSnapshotFlushedDirectly(ctx, s)
-		if err != nil {
-			return true, nil, err
+		result, handleErr = h.handleCheckSnapshotFlushedDirectly(ctx, s)
+		if handleErr != nil {
+			return true, nil, handleErr
 		}
-		return true, result, nil
+
+	default:
+		return false, nil, nil // Not a special statement
 	}
 
-	return false, nil, nil // Not a special statement
+	return true, result, handleErr
+}
+
+// ensureTxnOp ensures txnOp exists, creating one if necessary
+// Returns the txnOp and a boolean indicating if a new transaction was created
+func (h *UpstreamSQLHelper) ensureTxnOp(ctx context.Context) (client.TxnOperator, error) {
+	if h.txnOp != nil {
+		return h.txnOp, nil
+	}
+
+	if h.engine == nil {
+		return nil, moerr.NewInternalError(ctx, "engine is required to create transaction")
+	}
+
+	// Get txnClient - prefer the one passed in, otherwise try to get from engine
+	txnClient := h.txnClient
+	if txnClient == nil {
+		var err error
+		txnClient, err = h.getTxnClientFromEngine()
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// Get latest logtail applied time as snapshot timestamp
+	snapshotTS := h.engine.LatestLogtailAppliedTime()
+
+	// Create new txn operator
+	txnOp, err := txnClient.New(ctx, snapshotTS)
+	if err != nil {
+		return nil, err
+	}
+
+	// Initialize engine with the new txn
+	if err := h.engine.New(ctx, txnOp); err != nil {
+		return nil, err
+	}
+
+	// Store the created txnOp and mark it as created by us
+	h.txnOp = txnOp
+	h.createdTxnOp = txnOp
+	return txnOp, nil
+}
+
+// getTxnClientFromEngine gets txnClient from engine using reflection (fallback when txnClient is not provided)
+func (h *UpstreamSQLHelper) getTxnClientFromEngine() (client.TxnClient, error) {
+	// Get disttae.Engine to access txnClient
+	var de *disttae.Engine
+	var ok bool
+	if de, ok = h.engine.(*disttae.Engine); !ok {
+		if entireEngine, ok := h.engine.(*engine.EntireEngine); ok {
+			de, ok = entireEngine.Engine.(*disttae.Engine)
+		}
+		if !ok {
+			return nil, moerr.NewInternalError(context.Background(), "failed to get disttae engine to create transaction")
+		}
+	}
+
+	// Use reflection to access private cli field
+	engineValue := reflect.ValueOf(de).Elem()
+	cliField := engineValue.FieldByName("cli")
+	if !cliField.IsValid() || cliField.IsNil() {
+		return nil, moerr.NewInternalError(context.Background(), "txnClient is not available in engine")
+	}
+
+	return cliField.Interface().(client.TxnClient), nil
 }
 
 // handleCreateSnapshotDirectly handles CREATE SNAPSHOT by directly calling frontend logic
@@ -168,11 +277,13 @@ func (h *UpstreamSQLHelper) handleCreateSnapshotDirectly(
 	ctx context.Context,
 	stmt *tree.CreateSnapShot,
 ) error {
-	if h.txnOp == nil {
-		return moerr.NewInternalError(ctx, "transaction is required for CREATE SNAPSHOT")
-	}
 	if h.engine == nil {
 		return moerr.NewInternalError(ctx, "engine is required for CREATE SNAPSHOT")
+	}
+
+	txnOp, err := h.ensureTxnOp(ctx)
+	if err != nil {
+		return err
 	}
 
 	snapshotName := string(stmt.Name)
@@ -180,7 +291,7 @@ func (h *UpstreamSQLHelper) handleCreateSnapshotDirectly(
 
 	// Check if snapshot already exists
 	checkSQL := fmt.Sprintf(`select snapshot_id from mo_catalog.mo_snapshots where sname = "%s" order by snapshot_id;`, snapshotName)
-	opts := executor.Options{}.WithDisableIncrStatement().WithTxn(h.txnOp)
+	opts := executor.Options{}.WithDisableIncrStatement().WithTxn(txnOp)
 	checkResult, err := h.executor.Exec(ctx, checkSQL, opts)
 	if err != nil {
 		return err
@@ -288,16 +399,17 @@ func (h *UpstreamSQLHelper) handleDropSnapshotDirectly(
 	ctx context.Context,
 	stmt *tree.DropSnapShot,
 ) error {
-	if h.txnOp == nil {
-		return moerr.NewInternalError(ctx, "transaction is required for DROP SNAPSHOT")
+	txnOp, err := h.ensureTxnOp(ctx)
+	if err != nil {
+		return err
 	}
 
 	snapshotName := string(stmt.Name)
 	sql := fmt.Sprintf(`delete from mo_catalog.mo_snapshots where sname = '%s' order by snapshot_id;`, snapshotName)
 
-	opts := executor.Options{}.WithDisableIncrStatement().WithTxn(h.txnOp)
+	opts := executor.Options{}.WithDisableIncrStatement().WithTxn(txnOp)
 	logutil.Info("UpstreamSQLHelper: executing DROP SNAPSHOT SQL", zap.String("sql", sql))
-	_, err := h.executor.Exec(ctx, sql, opts)
+	_, err = h.executor.Exec(ctx, sql, opts)
 	return err
 }
 
@@ -306,11 +418,13 @@ func (h *UpstreamSQLHelper) handleObjectListDirectly(
 	ctx context.Context,
 	stmt *tree.ObjectList,
 ) (*publication.Result, error) {
-	if h.txnOp == nil {
-		return nil, moerr.NewInternalError(ctx, "transaction is required for OBJECTLIST")
-	}
 	if h.engine == nil {
 		return nil, moerr.NewInternalError(ctx, "engine is required for OBJECTLIST")
+	}
+
+	txnOp, err := h.ensureTxnOp(ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	// Get database name and table name
@@ -322,16 +436,16 @@ func (h *UpstreamSQLHelper) handleObjectListDirectly(
 
 	// Resolve snapshot using executor
 	resolveSnapshot := func(ctx context.Context, snapshotName string) (*timestamp.Timestamp, error) {
-		return frontend.ResolveSnapshotWithSnapshotNameWithoutSession(ctx, snapshotName, h.executor, h.txnOp)
+		return frontend.ResolveSnapshotWithSnapshotNameWithoutSession(ctx, snapshotName, h.executor, txnOp)
 	}
 
 	// Get current timestamp from txn
 	getCurrentTS := func() types.TS {
-		return types.TimestampToTS(h.txnOp.SnapshotTS())
+		return types.TimestampToTS(txnOp.SnapshotTS())
 	}
 
 	// Process object list using core function
-	resultBatch, err := frontend.ProcessObjectList(ctx, stmt, h.engine, h.txnOp, mp, resolveSnapshot, getCurrentTS, dbname, tablename)
+	resultBatch, err := frontend.ProcessObjectList(ctx, stmt, h.engine, txnOp, mp, resolveSnapshot, getCurrentTS, dbname, tablename)
 	if err != nil {
 		return nil, err
 	}
@@ -385,15 +499,17 @@ func (h *UpstreamSQLHelper) handleCheckSnapshotFlushedDirectly(
 	if h.engine == nil {
 		return nil, moerr.NewInternalError(ctx, "engine is required for CHECK SNAPSHOT FLUSHED")
 	}
-	if h.txnOp == nil {
-		return nil, moerr.NewInternalError(ctx, "transaction is required for CHECK SNAPSHOT FLUSHED")
+
+	txnOp, err := h.ensureTxnOp(ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	snapshotName := string(stmt.Name)
 
 	// Query snapshot ts from mo_catalog.mo_snapshots
 	querySQL := fmt.Sprintf(`select ts from mo_catalog.mo_snapshots where sname = "%s" order by snapshot_id;`, snapshotName)
-	opts := executor.Options{}.WithDisableIncrStatement().WithTxn(h.txnOp)
+	opts := executor.Options{}.WithDisableIncrStatement().WithTxn(txnOp)
 	queryResult, err := h.executor.Exec(ctx, querySQL, opts)
 	if err != nil {
 		return nil, err
@@ -483,11 +599,12 @@ func (h *UpstreamSQLHelper) getFileserviceFromEngine() (fileservice.FileService,
 
 // tryToIncreaseTxnPhysicalTS increases the transaction physical timestamp
 func (h *UpstreamSQLHelper) tryToIncreaseTxnPhysicalTS(ctx context.Context) (int64, error) {
-	if h.txnOp == nil {
-		return 0, moerr.NewInternalError(ctx, "transaction is nil")
+	txnOp, err := h.ensureTxnOp(ctx)
+	if err != nil {
+		return 0, err
 	}
 
-	curTxnPhysicalTS := h.txnOp.SnapshotTS().PhysicalTime
+	curTxnPhysicalTS := txnOp.SnapshotTS().PhysicalTime
 
 	if ctx.Value(defines.TenantIDKey{}) == nil {
 		return curTxnPhysicalTS, nil
@@ -496,14 +613,14 @@ func (h *UpstreamSQLHelper) tryToIncreaseTxnPhysicalTS(ctx context.Context) (int
 	// A slight increase added to the physical to make sure
 	// the updated ts is greater than the old txn timestamp (physical + logic)
 	curTxnPhysicalTS += int64(time.Microsecond)
-	err := h.txnOp.UpdateSnapshot(ctx, timestamp.Timestamp{
+	err = txnOp.UpdateSnapshot(ctx, timestamp.Timestamp{
 		PhysicalTime: curTxnPhysicalTS,
 	})
 	if err != nil {
 		return 0, err
 	}
 
-	return h.txnOp.SnapshotTS().PhysicalTime, nil
+	return txnOp.SnapshotTS().PhysicalTime, nil
 }
 
 // handleGetDdlDirectly handles GETDDL by directly calling frontend logic
@@ -511,11 +628,13 @@ func (h *UpstreamSQLHelper) handleGetDdlDirectly(
 	ctx context.Context,
 	stmt *tree.GetDdl,
 ) (*publication.Result, error) {
-	if h.txnOp == nil {
-		return nil, moerr.NewInternalError(ctx, "transaction is required for GETDDL")
-	}
 	if h.engine == nil {
 		return nil, moerr.NewInternalError(ctx, "engine is required for GETDDL")
+	}
+
+	txnOp, err := h.ensureTxnOp(ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	// Get database name and table name
@@ -535,7 +654,7 @@ func (h *UpstreamSQLHelper) handleGetDdlDirectly(
 	var snapshot *plan2.Snapshot
 	if stmt.Snapshot != nil {
 		snapshotName := string(*stmt.Snapshot)
-		ts, err := frontend.ResolveSnapshotWithSnapshotNameWithoutSession(ctx, snapshotName, h.executor, h.txnOp)
+		ts, err := frontend.ResolveSnapshotWithSnapshotNameWithoutSession(ctx, snapshotName, h.executor, txnOp)
 		if err != nil {
 			return nil, err
 		}
@@ -551,7 +670,7 @@ func (h *UpstreamSQLHelper) handleGetDdlDirectly(
 	}
 
 	// Call GetDdlBatchWithoutSession
-	resultBatch, err := frontend.GetDdlBatchWithoutSession(ctx, databaseName, tableName, h.engine, h.txnOp, mp, snapshot)
+	resultBatch, err := frontend.GetDdlBatchWithoutSession(ctx, databaseName, tableName, h.engine, txnOp, mp, snapshot)
 	if err != nil {
 		return nil, err
 	}

@@ -235,11 +235,13 @@ func InitializeIterationContext(
 		if upstreamSQLHelperFactory != nil {
 			if upstreamExecutorInternal, ok := upstreamExecutor.(*InternalSQLExecutor); ok {
 				// Create helper with nil txnOp - it will be updated when StartTxn is called
+				// Pass txnClient from InternalSQLExecutor so helper can create transactions when needed
 				helper := upstreamSQLHelperFactory(
 					nil, // txnOp will be set when StartTxn is called
 					cnEngine,
 					upstreamAccountID,
 					upstreamExecutorInternal.GetInternalExec(),
+					upstreamExecutorInternal.GetTxnClient(), // Pass txnClient so helper can create txn if needed
 				)
 				upstreamExecutorInternal.SetUpstreamSQLHelper(helper)
 			}

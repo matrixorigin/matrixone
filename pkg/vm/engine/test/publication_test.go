@@ -410,8 +410,9 @@ func TestExecuteIteration1(t *testing.T) {
 		engine engine.Engine,
 		accountID uint32,
 		exec executor.SQLExecutor,
+		txnClient client.TxnClient,
 	) publication.UpstreamSQLHelper {
-		return NewUpstreamSQLHelper(txnOp, engine, accountID, exec)
+		return NewUpstreamSQLHelper(txnOp, engine, accountID, exec, txnClient)
 	}
 
 	// Create mpool for ExecuteIteration

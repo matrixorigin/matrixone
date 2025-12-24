@@ -43,12 +43,13 @@ type UpstreamSQLHelper interface {
 }
 
 // UpstreamSQLHelperFactory is a function type that creates an UpstreamSQLHelper
-// Parameters: txnOp, engine, accountID, executor
+// Parameters: txnOp, engine, accountID, executor, txnClient (optional)
 type UpstreamSQLHelperFactory func(
 	txnOp client.TxnOperator,
 	engine engine.Engine,
 	accountID uint32,
 	executor executor.SQLExecutor,
+	txnClient client.TxnClient, // Optional: if nil, helper will try to get from engine
 ) UpstreamSQLHelper
 
 // InternalSQLExecutor implements SQLExecutor interface using MatrixOne's internal SQL executor
@@ -74,6 +75,11 @@ func (e *InternalSQLExecutor) SetUpstreamSQLHelper(helper UpstreamSQLHelper) {
 // GetInternalExec returns the internal executor (for creating helper)
 func (e *InternalSQLExecutor) GetInternalExec() executor.SQLExecutor {
 	return e.internalExec
+}
+
+// GetTxnClient returns the txnClient (for creating helper)
+func (e *InternalSQLExecutor) GetTxnClient() client.TxnClient {
+	return e.txnClient
 }
 
 // NewInternalSQLExecutor creates a new InternalSQLExecutor
