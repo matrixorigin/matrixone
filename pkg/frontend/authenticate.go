@@ -3563,6 +3563,35 @@ func tryDecodeStagePath(
 	return
 }
 
+// tryDecodeStagePathForExport is similar to tryDecodeStagePath but preserves printf-style
+// format specifiers like %d, %05d in the path. This is used for SELECT INTO OUTFILE with
+// SPLITSIZE where the filename template contains format specifiers for file numbering.
+func tryDecodeStagePathForExport(
+	ses *Session,
+	filePath string,
+) (retPath string, ok bool, err error) {
+
+	var (
+		s stage.StageDef
+	)
+
+	if strings.HasPrefix(filePath, stage.STAGE_PROTOCOL+"://") {
+		// stage:// URL - use export-specific function that preserves % format specifiers
+		if s, err = stageutil.UrlToStageDefForExport(filePath, ses.proc); err != nil {
+			return
+		}
+
+		// s.ToPath() returns the fileservice filepath, i.e. s3,...:/path for S3 or /path for local file
+		if retPath, _, err = s.ToPath(); err != nil {
+			return
+		}
+
+		ok = true
+	}
+
+	return
+}
+
 func doCheckFilePath(ctx context.Context, ses *Session, ep *tree.ExportParam) (err error) {
 	if ep == nil {
 		return err
@@ -3580,7 +3609,7 @@ func doCheckFilePath(ctx context.Context, ses *Session, ep *tree.ExportParam) (e
 		filePath string
 	)
 
-	if filePath, ok, err = tryDecodeStagePath(ses, ep.FilePath); err != nil {
+	if filePath, ok, err = tryDecodeStagePathForExport(ses, ep.FilePath); err != nil {
 		return
 	}
 

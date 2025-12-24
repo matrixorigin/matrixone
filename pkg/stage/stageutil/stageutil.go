@@ -144,6 +144,41 @@ func UrlToPath(furl string, proc *process.Process) (path string, query string, e
 }
 
 func UrlToStageDef(furl string, proc *process.Process) (s stage.StageDef, err error) {
+
+	aurl, err := url.Parse(furl)
+	if err != nil {
+		return stage.StageDef{}, err
+	}
+
+	if aurl.Scheme != stage.STAGE_PROTOCOL {
+		return stage.StageDef{}, moerr.NewBadConfig(context.TODO(), "URL is not stage URL")
+	}
+
+	stagename, subpath, query, err := stage.ParseStageUrl(aurl)
+	if err != nil {
+		return stage.StageDef{}, err
+	}
+
+	sdef, err := StageLoadCatalog(proc, stagename)
+	if err != nil {
+		return stage.StageDef{}, err
+	}
+
+	s, err = ExpandSubStage(sdef, proc)
+	if err != nil {
+		return stage.StageDef{}, err
+	}
+
+	s.Url = s.Url.JoinPath(subpath)
+	s.Url.RawQuery = query
+
+	return s, nil
+}
+
+// UrlToStageDefForExport is similar to UrlToStageDef but preserves printf-style format
+// specifiers like %d, %05d in the path. This is used for SELECT INTO OUTFILE with SPLITSIZE
+// where the filename template contains format specifiers for file numbering.
+func UrlToStageDefForExport(furl string, proc *process.Process) (s stage.StageDef, err error) {
 	// Use double URL-encoding for % to avoid issues with printf-style format specifiers
 	// like %d, %05d. After url.Parse decodes once, %2525 becomes %25, which is correct.
 	escapedUrl := strings.ReplaceAll(furl, "%", "%2525")
