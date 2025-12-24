@@ -116,6 +116,7 @@ const (
 	FPCreateUser
 	FPDropUser
 	FPAlterUser
+	FPAlterRole
 	FPCreateRole
 	FPDropRole
 	FPCreateFunction

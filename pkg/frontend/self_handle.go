@@ -298,6 +298,13 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		if err = handleDropRole(ses, execCtx, st); err != nil {
 			return
 		}
+	case *tree.AlterRole:
+		ses.EnterFPrint(FPAlterRole)
+		defer ses.ExitFPrint(FPAlterRole)
+		ses.InvalidatePrivilegeCache()
+		if err = handleAlterRole(ses, execCtx, st); err != nil {
+			return
+		}
 	case *tree.CreateFunction:
 		ses.EnterFPrint(FPCreateFunction)
 		defer ses.ExitFPrint(FPCreateFunction)
