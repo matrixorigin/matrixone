@@ -180,6 +180,7 @@ select * from export_format_test into outfile 'stage://export_test_stage/test_in
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. invalid splitsize format: internal error: empty size string at line 1 column 125 near " '';";
 select * from export_format_test into outfile 'stage://export_test_stage/test_invalid_nan_%d.csv' format 'csv' splitsize 'abc';
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. invalid splitsize format: internal error: invalid size value: strconv.ParseUint: parsing "abc": invalid syntax at line 1 column 126 near " 'abc';";
+select * from export_format_test into outfile 'stage://export_test_stage/test_split_zero.csv' format 'csv' splitsize '0';
 select * from export_format_test into outfile 'stage://export_test_stage/test_very_long_filename_that_is_quite_long_indeed_for_testing_purposes.csv' format 'csv';
 select * from export_format_test where id = 1 into outfile 'stage://export_test_stage/test_single_row.csv' format 'csv';
 select name from export_format_test into outfile 'stage://export_test_stage/test_single_col.csv' format 'csv';

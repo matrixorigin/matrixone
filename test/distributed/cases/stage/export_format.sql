@@ -363,6 +363,9 @@ select * from export_format_test into outfile 'stage://export_test_stage/test_in
 select * from export_format_test into outfile 'stage://export_test_stage/test_invalid_nan_%d.csv' format 'csv' splitsize 'abc';
 -- @bvt:issue
 
+-- Test 9.5: SPLITSIZE with zero value (should mean no split, single file)
+select * from export_format_test into outfile 'stage://export_test_stage/test_split_zero.csv' format 'csv' splitsize '0';
+
 -- ============================================================================
 -- PART 10: Edge Cases
 -- ============================================================================
