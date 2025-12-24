@@ -733,7 +733,7 @@ func Test_buildParquetNode(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			node := buildParquetNode(tt.mysqlTyp)
+			node := buildParquetNode(tt.mysqlTyp, 0)
 			if node == nil {
 				t.Errorf("buildParquetNode(%v) returned nil", tt.mysqlTyp)
 			}
