@@ -79,6 +79,11 @@ func (m model) handleBrowseMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case ":":
 		m.cmdMode = true
 		m.cmdInput = ""
+		m.historyIndex = len(m.cmdHistory)
+	case "/":
+		m.cmdMode = true
+		m.cmdInput = "search "
+		m.historyIndex = len(m.cmdHistory)
 	case "?":
 		m.message = generalHelp
 	default:
@@ -167,22 +172,22 @@ func (m model) handleCommandInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m model) View() string {
 	var b strings.Builder
 	
-	// 标题
-	info := m.state.reader.Info()
-	b.WriteString(strings.Repeat("=", 120))
-	b.WriteString(fmt.Sprintf("\nObject: %s\n", info.Path))
-	b.WriteString(fmt.Sprintf("Blocks: %d | Rows: %d | Cols: %d\n", info.BlockCount, info.RowCount, info.ColCount))
-	b.WriteString(strings.Repeat("=", 120))
-	b.WriteString("\n")
-	
-	// 数据表格
+	// 数据表格 - 撑满屏幕
 	if m.state.verticalMode {
 		m.renderVertical(&b)
 	} else {
 		m.renderTable(&b)
 	}
 	
-	// 状态栏
+	// 消息显示（如果有）
+	if m.message != "" {
+		b.WriteString("\n► ")
+		b.WriteString(m.message)
+		b.WriteString("\n")
+	}
+	
+	// 底部状态栏 - 始终在最下面
+	info := m.state.reader.Info()
 	rows, _, _ := m.state.CurrentRows()
 	start := m.state.GlobalRowOffset() + 1
 	end := start + int64(len(rows)) - 1
@@ -190,30 +195,40 @@ func (m model) View() string {
 	if m.state.verticalMode {
 		mode = "Vertical"
 	}
-	widthStr := fmt.Sprintf("%d", m.state.maxColWidth)
-	if m.state.maxColWidth == 0 {
-		widthStr = "unlimited"
-	}
+	
 	cols := m.state.reader.Columns()
 	visibleCols := m.getVisibleColumns(cols)
-	b.WriteString(fmt.Sprintf("\n[%d-%d of %d] Block %d/%d | Mode: %s | Width: %s | Cols: %d-%d of %d\n",
-		start, end, info.RowCount, m.state.currentBlock+1, info.BlockCount, mode, widthStr, 
-		m.hScrollOffset, m.hScrollOffset+len(visibleCols)-1, len(cols)))
+	termWidth := 120
 	
-	// 消息
-	if m.message != "" {
-		b.WriteString("\n")
-		b.WriteString(m.message)
-		b.WriteString("\n")
+	// 状态栏颜色 - 深灰背景，白字
+	bgColor := "\033[100m"   // 深灰背景
+	textColor := "\033[97m"  // 亮白文字
+	reset := "\033[0m"       // 重置颜色
+	
+	// 状态信息
+	statusText := fmt.Sprintf(" %s │ Rows %d-%d/%d │ Block %d/%d │ Cols %d-%d/%d ", 
+		mode, start, end, info.RowCount, m.state.currentBlock+1, info.BlockCount,
+		m.hScrollOffset+1, m.hScrollOffset+len(visibleCols), len(cols))
+	
+	// 计算需要填充的空格数
+	padding := termWidth - len(statusText)
+	if padding < 0 {
+		padding = 0
 	}
 	
-	// 提示符
+	// 带颜色的状态栏 - 撑满整行
+	b.WriteString("\n")
+	b.WriteString(bgColor + textColor)
+	b.WriteString(statusText)
+	b.WriteString(strings.Repeat(" ", padding))
+	b.WriteString(reset)
+	
+	// 命令行 - 普通样式，不带背景色
 	b.WriteString("\n")
 	if m.cmdMode {
 		b.WriteString(":")
 		b.WriteString(m.cmdInput)
-	} else {
-		b.WriteString("(j/k/Enter/q or : for command) ")
+		b.WriteString("█")
 	}
 	
 	return b.String()
