@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cdc/retry"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/mysql"
@@ -82,7 +83,40 @@ func (r *Result) Next() bool {
 // Scan scans the current row into the provided destinations
 func (r *Result) Scan(dest ...interface{}) error {
 	if r.rows != nil {
-		return r.rows.Scan(dest...)
+		// When using sql.Rows, we need to handle types.TS specially
+		// because the SQL driver doesn't know how to scan directly into types.TS
+		// We'll scan into temporary []byte buffers and then unmarshal
+		tsIndices := make([]int, 0)     // Track which indices are TS fields
+		tsBuffers := make([]*[]byte, 0) // Store pointers to buffers
+		scanDest := make([]interface{}, len(dest))
+
+		for i, d := range dest {
+			if _, ok := d.(*types.TS); ok {
+				// Create a temporary buffer for this TS field
+				buf := make([]byte, types.TxnTsSize)
+				tsBuffers = append(tsBuffers, &buf)
+				tsIndices = append(tsIndices, i)
+				scanDest[i] = &buf
+			} else {
+				scanDest[i] = d
+			}
+		}
+
+		// Scan into the destinations (which may include temporary buffers)
+		if err := r.rows.Scan(scanDest...); err != nil {
+			return err
+		}
+
+		// Unmarshal the TS buffers into the actual TS destinations
+		for bufIdx, destIdx := range tsIndices {
+			if tsDest, ok := dest[destIdx].(*types.TS); ok {
+				if err := tsDest.Unmarshal(*tsBuffers[bufIdx]); err != nil {
+					return moerr.NewInternalErrorNoCtx(fmt.Sprintf("failed to unmarshal TS at column %d: %v", destIdx, err))
+				}
+			}
+		}
+
+		return nil
 	}
 	if r.internalResult != nil {
 		return r.internalResult.Scan(dest...)
