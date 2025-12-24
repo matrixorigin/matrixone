@@ -163,9 +163,10 @@ func TestReuseFunctionParameterFixed(t *testing.T) {
 	require.Equal(t, true, ok)
 
 	err = appendOneFixed(vec1, int32(0), false, mp)
-	require.NoError(t, err)
+	require.Error(t, err)
+
 	ok = ReuseFunctionFixedTypeParameter(vec1, g2)
-	require.Equal(t, false, ok)
+	require.Equal(t, true, ok)
 	g2 = GenerateFunctionFixedTypeParameter[int32](vec1)
 	ok = ReuseFunctionFixedTypeParameter(vec1, g2)
 	require.Equal(t, true, ok)

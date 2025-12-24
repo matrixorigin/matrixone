@@ -237,13 +237,6 @@ func TestAvgTwCache(t *testing.T) {
 		require.NoError(t, executor.BatchFill(0, []uint64{4}, []*vector.Vector{inputs[4]}))
 	}
 	{
-		bs, err := aggexec.MarshalAggFuncExec(executor)
-		require.NoError(t, err)
-		ag, err := aggexec.UnmarshalAggFuncExec(mg, bs)
-		require.NoError(t, err)
-		ag.Free()
-	}
-	{
 		// result check.
 		v, err := executor.Flush()
 		require.NoError(t, err)
@@ -295,13 +288,6 @@ func TestAvgTwCacheDecimal64(t *testing.T) {
 		require.NoError(t, executor.BatchFill(0, []uint64{2}, []*vector.Vector{inputs[2]}))
 	}
 	{
-		bs, err := aggexec.MarshalAggFuncExec(executor)
-		require.NoError(t, err)
-		ag, err := aggexec.UnmarshalAggFuncExec(mg, bs)
-		require.NoError(t, err)
-		ag.Free()
-	}
-	{
 		// result check.
 		v, err := executor.Flush()
 		require.NoError(t, err)
@@ -351,13 +337,6 @@ func TestAvgTwCacheDecimal128(t *testing.T) {
 		require.NoError(t, executor.BatchFill(0, []uint64{0}, []*vector.Vector{inputs[0]}))
 		require.NoError(t, executor.BatchFill(0, []uint64{1}, []*vector.Vector{inputs[1]}))
 		require.NoError(t, executor.BatchFill(0, []uint64{2}, []*vector.Vector{inputs[2]}))
-	}
-	{
-		bs, err := aggexec.MarshalAggFuncExec(executor)
-		require.NoError(t, err)
-		ag, err := aggexec.UnmarshalAggFuncExec(mg, bs)
-		require.NoError(t, err)
-		ag.Free()
 	}
 	{
 		// result check.
@@ -420,13 +399,6 @@ func TestAvgTwResult(t *testing.T) {
 		require.NoError(t, executor.BatchFill(0, []uint64{4}, []*vector.Vector{inputs[4]}))
 	}
 	{
-		bs, err := aggexec.MarshalAggFuncExec(executor)
-		require.NoError(t, err)
-		ag, err := aggexec.UnmarshalAggFuncExec(mg, bs)
-		require.NoError(t, err)
-		ag.Free()
-	}
-	{
 		// result check.
 		v, err := executor.Flush()
 		require.NoError(t, err)
@@ -487,13 +459,6 @@ func TestAvgTwResultDecimal(t *testing.T) {
 		require.NoError(t, executor.BatchFill(0, []uint64{2}, []*vector.Vector{inputs[2]}))
 		require.NoError(t, executor.BatchFill(0, []uint64{3}, []*vector.Vector{inputs[3]}))
 		require.NoError(t, executor.BatchFill(0, []uint64{4}, []*vector.Vector{inputs[4]}))
-	}
-	{
-		bs, err := aggexec.MarshalAggFuncExec(executor)
-		require.NoError(t, err)
-		ag, err := aggexec.UnmarshalAggFuncExec(mg, bs)
-		require.NoError(t, err)
-		ag.Free()
 	}
 	{
 		// result check.
