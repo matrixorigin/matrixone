@@ -300,3 +300,4 @@ SELECT * FROM inventory;
 id    stock_items
 1    {"items": ["apple", "cherry"]}
 2    {"items": [2, "3", 4]}
+DROP DATABASE IF EXISTS moc4504;

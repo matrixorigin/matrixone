@@ -4,8 +4,8 @@ create account tenant_test admin_name = 'root' identified by '111' open comment 
 create account tenant_test admin_name = 'root' identified by '111' open comment 'tenant_test';
 create account if not exists tenant_test admin_name = 'root' identified by '111' open comment 'tenant_test';
 create account tenant_test admin_name = 'root' open comment 'tenant_test';
--- @ignore:2,6,7,8
+-- @regex("tenant_test", true)
 show accounts;
 drop account if exists tenant_test;
-select account_id,relname,relkind from mo_catalog.mo_tables where reldatabase = 'mo_catalog' and relname not like '__mo_index%' and relname != '__mo_account_lock' order by relname;
+select account_id,relname,relkind from mo_catalog.mo_tables where account_id = 0 and reldatabase = 'mo_catalog' and relname not like '__mo_index%' and relname != '__mo_account_lock' order by relname;
 set global enable_privilege_cache = on;
