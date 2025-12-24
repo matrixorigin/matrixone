@@ -230,11 +230,11 @@ func TestAvgTwCache(t *testing.T) {
 	{
 		require.NoError(t, executor.GroupGrow(1))
 		// data Fill.
-		require.NoError(t, executor.BatchFill(0, []uint64{0}, []*vector.Vector{inputs[0]}))
-		require.NoError(t, executor.BatchFill(0, []uint64{1}, []*vector.Vector{inputs[1]}))
-		require.NoError(t, executor.BatchFill(0, []uint64{2}, []*vector.Vector{inputs[2]}))
-		require.NoError(t, executor.BatchFill(0, []uint64{3}, []*vector.Vector{inputs[3]}))
-		require.NoError(t, executor.BatchFill(0, []uint64{4}, []*vector.Vector{inputs[4]}))
+		require.NoError(t, executor.BatchFill(0, []uint64{1}, []*vector.Vector{inputs[0]}))
+		require.NoError(t, executor.BatchFill(1, []uint64{1}, []*vector.Vector{inputs[1]}))
+		require.NoError(t, executor.BatchFill(0, []uint64{1}, []*vector.Vector{inputs[2]}))
+		require.NoError(t, executor.BatchFill(0, []uint64{1}, []*vector.Vector{inputs[3]}))
+		require.NoError(t, executor.BatchFill(0, []uint64{1}, []*vector.Vector{inputs[4]}))
 	}
 	{
 		// result check.
@@ -283,9 +283,9 @@ func TestAvgTwCacheDecimal64(t *testing.T) {
 	{
 		require.NoError(t, executor.GroupGrow(1))
 		// data Fill.
-		require.NoError(t, executor.BatchFill(0, []uint64{0}, []*vector.Vector{inputs[0]}))
-		require.NoError(t, executor.BatchFill(0, []uint64{1}, []*vector.Vector{inputs[1]}))
-		require.NoError(t, executor.BatchFill(0, []uint64{2}, []*vector.Vector{inputs[2]}))
+		require.NoError(t, executor.BatchFill(0, []uint64{1}, []*vector.Vector{inputs[0]}))
+		require.NoError(t, executor.BatchFill(1, []uint64{1}, []*vector.Vector{inputs[1]}))
+		require.NoError(t, executor.BatchFill(0, []uint64{1}, []*vector.Vector{inputs[2]}))
 	}
 	{
 		// result check.
@@ -334,9 +334,9 @@ func TestAvgTwCacheDecimal128(t *testing.T) {
 	{
 		require.NoError(t, executor.GroupGrow(1))
 		// data Fill.
-		require.NoError(t, executor.BatchFill(0, []uint64{0}, []*vector.Vector{inputs[0]}))
-		require.NoError(t, executor.BatchFill(0, []uint64{1}, []*vector.Vector{inputs[1]}))
-		require.NoError(t, executor.BatchFill(0, []uint64{2}, []*vector.Vector{inputs[2]}))
+		require.NoError(t, executor.BatchFill(0, []uint64{1}, []*vector.Vector{inputs[0]}))
+		require.NoError(t, executor.BatchFill(1, []uint64{1}, []*vector.Vector{inputs[1]}))
+		require.NoError(t, executor.BatchFill(0, []uint64{1}, []*vector.Vector{inputs[2]}))
 	}
 	{
 		// result check.
@@ -392,11 +392,11 @@ func TestAvgTwResult(t *testing.T) {
 	{
 		require.NoError(t, executor.GroupGrow(1))
 		// data Fill.
-		require.NoError(t, executor.BatchFill(0, []uint64{0}, []*vector.Vector{inputs[0]}))
-		require.NoError(t, executor.BatchFill(0, []uint64{1}, []*vector.Vector{inputs[1]}))
-		require.NoError(t, executor.BatchFill(0, []uint64{2}, []*vector.Vector{inputs[2]}))
-		require.NoError(t, executor.BatchFill(0, []uint64{3}, []*vector.Vector{inputs[3]}))
-		require.NoError(t, executor.BatchFill(0, []uint64{4}, []*vector.Vector{inputs[4]}))
+		require.NoError(t, executor.BatchFill(0, []uint64{1}, []*vector.Vector{inputs[0]}))
+		require.NoError(t, executor.BatchFill(1, []uint64{1}, []*vector.Vector{inputs[1]}))
+		require.NoError(t, executor.BatchFill(0, []uint64{1}, []*vector.Vector{inputs[2]}))
+		require.NoError(t, executor.BatchFill(0, []uint64{1}, []*vector.Vector{inputs[3]}))
+		require.NoError(t, executor.BatchFill(0, []uint64{1}, []*vector.Vector{inputs[4]}))
 	}
 	{
 		// result check.
@@ -454,11 +454,11 @@ func TestAvgTwResultDecimal(t *testing.T) {
 	{
 		require.NoError(t, executor.GroupGrow(1))
 		// data Fill.
-		require.NoError(t, executor.BatchFill(0, []uint64{0}, []*vector.Vector{inputs[0]}))
-		require.NoError(t, executor.BatchFill(0, []uint64{1}, []*vector.Vector{inputs[1]}))
-		require.NoError(t, executor.BatchFill(0, []uint64{2}, []*vector.Vector{inputs[2]}))
-		require.NoError(t, executor.BatchFill(0, []uint64{3}, []*vector.Vector{inputs[3]}))
-		require.NoError(t, executor.BatchFill(0, []uint64{4}, []*vector.Vector{inputs[4]}))
+		require.NoError(t, executor.BatchFill(0, []uint64{1}, []*vector.Vector{inputs[0]}))
+		require.NoError(t, executor.BatchFill(1, []uint64{1}, []*vector.Vector{inputs[1]}))
+		require.NoError(t, executor.BatchFill(0, []uint64{1}, []*vector.Vector{inputs[2]}))
+		require.NoError(t, executor.BatchFill(0, []uint64{1}, []*vector.Vector{inputs[3]}))
+		require.NoError(t, executor.BatchFill(0, []uint64{1}, []*vector.Vector{inputs[4]}))
 	}
 	{
 		// result check.
