@@ -57,7 +57,7 @@ func NewParquetWriter(ctx context.Context, mrs *MysqlResultSet) (*ParquetWriter,
 			return nil, moerr.NewInternalError(ctx, "invalid column type")
 		}
 		columnTypes[i] = mysqlCol.ColumnType()
-		group[columnNames[i]] = buildParquetNode(columnTypes[i])
+		group[columnNames[i]] = buildParquetNode(columnTypes[i], mysqlCol.Flag())
 	}
 
 	schema := parquet.NewSchema("export", group)
@@ -75,13 +75,22 @@ func NewParquetWriter(ctx context.Context, mrs *MysqlResultSet) (*ParquetWriter,
 }
 
 // buildParquetNode creates a parquet node from MySQL type
-func buildParquetNode(typ defines.MysqlType) parquet.Node {
+func buildParquetNode(typ defines.MysqlType, flag uint16) parquet.Node {
+	isUnsigned := flag&uint16(defines.UNSIGNED_FLAG) != 0
 	// All fields are optional (nullable) by default
 	switch typ {
 	case defines.MYSQL_TYPE_BOOL:
 		return parquet.Optional(parquet.Leaf(parquet.BooleanType))
-	case defines.MYSQL_TYPE_TINY, defines.MYSQL_TYPE_SHORT, defines.MYSQL_TYPE_INT24, defines.MYSQL_TYPE_LONG:
+	case defines.MYSQL_TYPE_TINY, defines.MYSQL_TYPE_SHORT, defines.MYSQL_TYPE_INT24:
 		return parquet.Optional(parquet.Leaf(parquet.Int32Type))
+	case defines.MYSQL_TYPE_LONG:
+		// For unsigned int32, use Int64 to avoid overflow
+		if isUnsigned {
+			return parquet.Optional(parquet.Leaf(parquet.Int64Type))
+		}
+		return parquet.Optional(parquet.Leaf(parquet.Int32Type))
+	case defines.MYSQL_TYPE_BIT:
+		return parquet.Optional(parquet.Leaf(parquet.Int64Type))
 	case defines.MYSQL_TYPE_LONGLONG:
 		return parquet.Optional(parquet.Leaf(parquet.Int64Type))
 	case defines.MYSQL_TYPE_FLOAT:
@@ -156,8 +165,11 @@ func vectorValueToParquet(vec *vector.Vector, i int, timeZone *time.Location) (a
 	case types.T_uint16:
 		return int32(vector.GetFixedAtNoTypeCheck[uint16](vec, i)), nil
 	case types.T_uint32:
-		return int32(vector.GetFixedAtNoTypeCheck[uint32](vec, i)), nil
+		// Use int64 to avoid overflow (uint32 max > int32 max)
+		return int64(vector.GetFixedAtNoTypeCheck[uint32](vec, i)), nil
 	case types.T_uint64:
+		return int64(vector.GetFixedAtNoTypeCheck[uint64](vec, i)), nil
+	case types.T_bit:
 		return int64(vector.GetFixedAtNoTypeCheck[uint64](vec, i)), nil
 	case types.T_float32:
 		return vector.GetFixedAtNoTypeCheck[float32](vec, i), nil
