@@ -51,6 +51,9 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 			// open new file
 			ep.DefaultBufSize = getPu(ses.GetService()).SV.ExportDataDefaultFlushSize
 			initExportFileParam(ep, mrs)
+			ep.mrs = mrs
+			ep.ctx = execCtx.reqCtx
+			ep.service = ses.GetService()
 			if err = openNewFile(execCtx.reqCtx, ep, mrs); err != nil {
 				return
 			}
@@ -75,8 +78,12 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 				return
 			}
 
-			if err = Close(ep); err != nil {
-				return
+			// For parquet format, file is written in exportAllDataFromBatches
+			// No need to close pipe-based writer
+			if ep.getExportFormat() != "parquet" {
+				if err = Close(ep); err != nil {
+					return
+				}
 			}
 
 		} else {

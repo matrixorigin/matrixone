@@ -88,12 +88,9 @@ func buildParquetNode(typ defines.MysqlType) parquet.Node {
 		return parquet.Optional(parquet.Leaf(parquet.FloatType))
 	case defines.MYSQL_TYPE_DOUBLE:
 		return parquet.Optional(parquet.Leaf(parquet.DoubleType))
-	case defines.MYSQL_TYPE_DATE:
-		return parquet.Optional(parquet.Date())
-	case defines.MYSQL_TYPE_DATETIME, defines.MYSQL_TYPE_TIMESTAMP:
-		return parquet.Optional(parquet.Timestamp(parquet.Microsecond))
-	case defines.MYSQL_TYPE_TIME:
-		return parquet.Optional(parquet.Time(parquet.Microsecond))
+	case defines.MYSQL_TYPE_DATE, defines.MYSQL_TYPE_DATETIME, defines.MYSQL_TYPE_TIMESTAMP, defines.MYSQL_TYPE_TIME:
+		// Use string representation for date/time types for simplicity and compatibility
+		return parquet.Optional(parquet.String())
 	case defines.MYSQL_TYPE_DECIMAL:
 		// Use string representation for decimals
 		return parquet.Optional(parquet.String())

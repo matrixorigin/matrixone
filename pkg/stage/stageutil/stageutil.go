@@ -144,11 +144,16 @@ func UrlToPath(furl string, proc *process.Process) (path string, query string, e
 }
 
 func UrlToStageDef(furl string, proc *process.Process) (s stage.StageDef, err error) {
+	// Use double URL-encoding for % to avoid issues with printf-style format specifiers
+	// like %d, %05d. After url.Parse decodes once, %2525 becomes %25, which is correct.
+	escapedUrl := strings.ReplaceAll(furl, "%", "%2525")
 
-	aurl, err := url.Parse(furl)
+	aurl, err := url.Parse(escapedUrl)
 	if err != nil {
 		return stage.StageDef{}, err
 	}
+	// After parsing, %2525 becomes %25, we need to decode it to %
+	aurl.Path = strings.ReplaceAll(aurl.Path, "%25", "%")
 
 	if aurl.Scheme != stage.STAGE_PROTOCOL {
 		return stage.StageDef{}, moerr.NewBadConfig(context.TODO(), "URL is not stage URL")
@@ -169,7 +174,13 @@ func UrlToStageDef(furl string, proc *process.Process) (s stage.StageDef, err er
 		return stage.StageDef{}, err
 	}
 
-	s.Url = s.Url.JoinPath(subpath)
+	// Manually join path to preserve % in format specifiers like %d, %05d
+	// Using JoinPath would URL-encode the % character
+	basePath := strings.TrimSuffix(s.Url.Path, "/")
+	subpath = strings.TrimPrefix(subpath, "/")
+	if subpath != "" {
+		s.Url.Path = basePath + "/" + subpath
+	}
 	s.Url.RawQuery = query
 
 	return s, nil

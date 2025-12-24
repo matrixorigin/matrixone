@@ -141,6 +141,13 @@ var openNewFile = func(ctx context.Context, ep *ExportConfig, mrs *MysqlResultSe
 	var filePath string
 	ep.CurFileSize = 0
 
+	// For parquet format, we don't use pipe-based writing
+	// Parquet data is accumulated in memory and written at the end
+	if ep.getExportFormat() == "parquet" {
+		ep.Rows = 0
+		return nil
+	}
+
 	ep.AsyncReader, ep.AsyncWriter = io.Pipe()
 	if len(ep.userConfig.StageFilePath) != 0 {
 		filePath = getExportFilePath(ep.userConfig.StageFilePath, ep.FileCnt)
@@ -957,6 +964,9 @@ func (ec *ExportConfig) writeParquet(execCtx *ExecCtx, bat *batch.Batch) error {
 	// Initialize parquet writer if not already done
 	if ec.parquetWriter == nil {
 		var err error
+		if ec.mrs == nil {
+			return moerr.NewInternalError(execCtx.reqCtx, "mrs is nil for parquet export")
+		}
 		ec.parquetWriter, err = NewParquetWriter(execCtx.reqCtx, ec.mrs)
 		if err != nil {
 			return err

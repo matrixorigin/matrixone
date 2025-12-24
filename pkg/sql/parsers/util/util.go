@@ -15,10 +15,10 @@
 package util
 
 import (
-	"errors"
-	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 //func GetUint64(num interface{}) uint64 {
@@ -36,7 +36,7 @@ func GetInt64(num interface{}) (int64, string) {
 	case int64:
 		return v, ""
 	}
-	return -1, fmt.Sprintf("%d is out of range int64", num)
+	return -1, "value is out of range int64"
 }
 
 func DealCommentString(str string) string {
@@ -57,7 +57,7 @@ func DealCommentString(str string) string {
 func ParseDataSize(s string) (uint64, error) {
 	s = strings.TrimSpace(s)
 	if len(s) == 0 {
-		return 0, errors.New("empty size string")
+		return 0, moerr.NewInternalErrorNoCtx("empty size string")
 	}
 
 	// Check if the last character is a unit
@@ -85,12 +85,12 @@ func ParseDataSize(s string) (uint64, error) {
 
 	numStr = strings.TrimSpace(numStr)
 	if len(numStr) == 0 {
-		return 0, errors.New("invalid size format: no numeric value")
+		return 0, moerr.NewInternalErrorNoCtx("invalid size format: no numeric value")
 	}
 
 	num, err := strconv.ParseUint(numStr, 10, 64)
 	if err != nil {
-		return 0, fmt.Errorf("invalid size value: %s", err.Error())
+		return 0, moerr.NewInternalErrorNoCtx("invalid size value: " + err.Error())
 	}
 
 	return num * multiplier, nil
