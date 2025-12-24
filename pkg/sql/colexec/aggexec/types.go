@@ -86,8 +86,15 @@ type AggFuncExec interface {
 	// PreAllocateGroups pre-allocates more additional groups to reduce garbage collection overhead.
 	PreAllocateGroups(more int) error
 
+	// XXX: WTF.
+	Fill(groupIndex int, row int, vectors []*vector.Vector) error
+	BulkFill(groupIndex int, vectors []*vector.Vector) error
+
 	// BatchFill : add values to the aggregation for multiple groups at once.
 	BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error
+
+	// XXX: WTF.
+	Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error
 
 	// BatchMerge combines the aggregation result of multiple couples.
 	// next: offset + i
