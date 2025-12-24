@@ -245,19 +245,20 @@ func (s *State) ScrollDown() error {
 	}
 
 	totalRows := s.currentBatch.RowCount()
-	if s.rowOffset+s.pageSize < totalRows {
+	// 如果当前行不是当前页的最后一行，且不是 block 的最后一行，则向下滚动一行
+	if s.rowOffset+1 < totalRows {
 		s.rowOffset++
 		return nil
 	}
 
-	// 尝试切换到下一个block
+	// 已经在当前 block 的最后一行，尝试切换到下一个 block
 	if s.currentBlock+1 >= s.reader.BlockCount() {
 		return fmt.Errorf("already at last row")
 	}
 
 	s.releaseCurrentBatch()
 	s.currentBlock++
-	s.rowOffset = 0
+	s.rowOffset = 0  // 重置为下一个 block 的第一行
 	return s.ensureBlockLoaded()
 }
 
@@ -268,7 +269,7 @@ func (s *State) ScrollUp() error {
 		return nil
 	}
 
-	// 尝试切换到上一个block
+	// 已经在当前 block 的第一行，尝试切换到上一个 block
 	if s.currentBlock == 0 {
 		return fmt.Errorf("already at first row")
 	}
@@ -281,7 +282,7 @@ func (s *State) ScrollUp() error {
 	}
 
 	totalRows := s.currentBatch.RowCount()
-	s.rowOffset = totalRows - s.pageSize
+	s.rowOffset = totalRows - 1  // 跳到上一个 block 的最后一行
 	if s.rowOffset < 0 {
 		s.rowOffset = 0
 	}

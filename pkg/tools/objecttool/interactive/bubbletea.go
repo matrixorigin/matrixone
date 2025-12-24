@@ -24,10 +24,12 @@ import (
 )
 
 type model struct {
-	state    *State
-	message  string
-	cmdMode  bool
-	cmdInput string
+	state        *State
+	message      string
+	cmdMode      bool
+	cmdInput     string
+	cmdHistory   []string
+	historyIndex int
 }
 
 func (m model) Init() tea.Cmd {
@@ -92,6 +94,11 @@ func (m model) handleCommandInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if cmd == nil {
 			return m, nil
 		}
+		
+		// 添加到历史记录
+		m.cmdHistory = append(m.cmdHistory, m.cmdInput)
+		m.historyIndex = len(m.cmdHistory)
+		
 		output, quit, err := cmd.Execute(m.state)
 		if err != nil {
 			m.message = fmt.Sprintf("Error: %v", err)
@@ -101,14 +108,42 @@ func (m model) handleCommandInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 		m.message = output
+		m.cmdInput = ""
+		return m, nil
+	case "up":
+		// 历史记录向上
+		if len(m.cmdHistory) > 0 && m.historyIndex > 0 {
+			m.historyIndex--
+			m.cmdInput = m.cmdHistory[m.historyIndex]
+		}
+		return m, nil
+	case "down":
+		// 历史记录向下
+		if len(m.cmdHistory) > 0 && m.historyIndex < len(m.cmdHistory)-1 {
+			m.historyIndex++
+			m.cmdInput = m.cmdHistory[m.historyIndex]
+		} else if m.historyIndex == len(m.cmdHistory)-1 {
+			m.historyIndex = len(m.cmdHistory)
+			m.cmdInput = ""
+		}
 		return m, nil
 	case "esc", "ctrl+c":
 		m.cmdMode = false
 		m.cmdInput = ""
+		m.historyIndex = len(m.cmdHistory)
 	case "backspace":
 		if len(m.cmdInput) > 0 {
 			m.cmdInput = m.cmdInput[:len(m.cmdInput)-1]
 		}
+	case "tab":
+		// Tab 补全
+		if m.cmdInput != "" {
+			completed := m.completeCommand(m.cmdInput)
+			if completed != "" {
+				m.cmdInput = completed
+			}
+		}
+		return m, nil
 	default:
 		if len(msg.String()) == 1 {
 			m.cmdInput += msg.String()
@@ -326,4 +361,111 @@ func RunBubbletea(path string) error {
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	_, err = p.Run()
 	return err
+}
+
+// completeCommand 实现命令补全
+func (m model) completeCommand(input string) string {
+	commands := []string{
+		"quit", "q", "info", "schema", "format", "vertical", "v", "\\G", 
+		"table", "t", "set", "search", "cols", "columns", "help",
+	}
+	
+	var matches []string
+	for _, cmd := range commands {
+		if strings.HasPrefix(cmd, input) {
+			matches = append(matches, cmd)
+		}
+	}
+	
+	if len(matches) == 1 {
+		return matches[0]
+	}
+	
+	// 如果有多个匹配，返回最长公共前缀
+	if len(matches) > 1 {
+		return longestCommonPrefix(matches)
+	}
+	
+	return ""
+}
+
+// longestCommonPrefix 计算字符串数组的最长公共前缀
+func longestCommonPrefix(strs []string) string {
+	if len(strs) == 0 {
+		return ""
+	}
+	
+	prefix := strs[0]
+	for _, str := range strs[1:] {
+		for len(prefix) > 0 && !strings.HasPrefix(str, prefix) {
+			prefix = prefix[:len(prefix)-1]
+		}
+		if prefix == "" {
+			break
+		}
+	}
+	return prefix
+}
+
+// SearchCommand 搜索命令
+type SearchCommand struct {
+	Pattern string
+}
+
+func (c *SearchCommand) Execute(state *State) (string, bool, error) {
+	// 简单的文本搜索实现
+	rows, _, err := state.CurrentRows()
+	if err != nil {
+		return "", false, err
+	}
+	
+	var matches []string
+	for i, row := range rows {
+		for j, cell := range row {
+			if strings.Contains(strings.ToLower(cell), strings.ToLower(c.Pattern)) {
+				matches = append(matches, fmt.Sprintf("Row %d, Col %d: %s", i, j, cell))
+				if len(matches) >= 10 { // 限制显示前10个匹配
+					break
+				}
+			}
+		}
+		if len(matches) >= 10 {
+			break
+		}
+	}
+	
+	if len(matches) == 0 {
+		return fmt.Sprintf("No matches found for: %s", c.Pattern), false, nil
+	}
+	
+	result := fmt.Sprintf("Found %d matches for '%s':\n", len(matches), c.Pattern)
+	for _, match := range matches {
+		result += "  " + match + "\n"
+	}
+	
+	return result, false, nil
+}
+
+// ColumnsCommand 列过滤命令
+type ColumnsCommand struct {
+	ShowAll bool
+	Columns []uint16
+}
+
+func (c *ColumnsCommand) Execute(state *State) (string, bool, error) {
+	if c.ShowAll {
+		state.visibleCols = nil
+		return "Showing all columns", false, nil
+	}
+	
+	// 验证列索引
+	totalCols := len(state.reader.Columns())
+	for _, col := range c.Columns {
+		if int(col) >= totalCols {
+			return fmt.Sprintf("Column %d out of range (0-%d)", col, totalCols-1), false, nil
+		}
+	}
+	
+	state.visibleCols = c.Columns
+	return fmt.Sprintf("Showing columns: %v", c.Columns), false, nil
 }
