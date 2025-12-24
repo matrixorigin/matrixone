@@ -278,6 +278,15 @@ func (exec *PublicationTaskExecutor) initStateLocked() error {
 	if err != nil {
 		return err
 	}
+	// Update tasks with state != error and drop_at is empty to complete
+	err = exec.updateNonErrorTasksToComplete(exec.ctx)
+	if err != nil {
+		logutil.Error(
+			"Publication-Task update non-error tasks to complete failed",
+			zap.Error(err),
+		)
+		// Don't return error, continue execution
+	}
 	exec.wg.Add(1)
 	return nil
 }
@@ -402,7 +411,7 @@ func (exec *PublicationTaskExecutor) getCandidateTasks() []*TaskEntry {
 	candidates := make([]*TaskEntry, 0)
 	for _, task := range allTasks {
 		// Only include tasks that are not dropped
-		if task.dropped == 0&& task.state == IterationStateCompleted {
+		if task.dropped == 0 && task.state == IterationStateCompleted {
 			candidates = append(candidates, task)
 		}
 	}
@@ -622,6 +631,38 @@ func (exec *PublicationTaskExecutor) addOrUpdateTask(
 	task.state = state
 	task.dropped = dropped
 	exec.setTask(task)
+	return nil
+}
+
+func (exec *PublicationTaskExecutor) updateNonErrorTasksToComplete(ctx context.Context) error {
+	// Update tasks in database using SQL
+	// Update all rows where iteration_state != error and drop_at is NULL
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	txn, err := getTxn(ctx, exec.txnEngine, exec.cnTxnClient, "publication update non-error tasks")
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
+	defer txn.Commit(ctx)
+
+	// Use SQL to update all rows where state != error and drop_at IS NULL
+	updateSQL := fmt.Sprintf(
+		`UPDATE mo_catalog.mo_ccpr_log `+
+			`SET iteration_state = %d `+
+			`WHERE iteration_state != %d AND drop_at IS NULL`,
+		IterationStateCompleted,
+		IterationStateError,
+	)
+
+	result, err := ExecWithResult(ctx, updateSQL, exec.cnUUID, txn)
+	if err != nil {
+		return err
+	}
+	defer result.Close()
+
+	logutil.Info("Publication-Task updated non-error tasks with empty drop_at to complete")
 	return nil
 }
 
