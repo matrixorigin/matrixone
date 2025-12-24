@@ -15,6 +15,8 @@
 package aggexec
 
 import (
+	"slices"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -25,26 +27,42 @@ type countStarExec struct {
 	extra int64
 }
 
+func (exec *countStarExec) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
+	pt := exec.GetState(uint64(groupIndex))
+	*pt += 1
+	return nil
+}
+
+func (exec *countStarExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {
+	pt := exec.GetState(uint64(groupIndex))
+	*pt += int64(vectors[0].Length())
+	return nil
+}
+
 func (exec *countStarExec) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
 	for _, grp := range groups {
 		if grp == GroupNotMatched {
 			continue
 		}
-		pt := exec.GetState(grp - 1)
-		*pt += 1
+		exec.Fill(int(grp-1), 0, vectors)
 	}
 	return nil
 }
 
-func (exec *countStarExec) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
+func (exec *countStarExec) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
 	other := next.(*countStarExec)
+	pt1 := exec.GetState(uint64(groupIdx1))
+	pt2 := other.GetState(uint64(groupIdx2))
+	*pt1 += *pt2
+	return nil
+}
+
+func (exec *countStarExec) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
 	for i, grp := range groups {
 		if grp == GroupNotMatched {
 			continue
 		}
-		pt1 := exec.GetState(grp - 1)
-		pt2 := other.GetState(uint64(offset + i))
-		*pt1 += *pt2
+		exec.Merge(next, int(grp-1), int(offset+i))
 	}
 	return nil
 }
@@ -81,10 +99,19 @@ type countColumnExec struct {
 	extra int64
 }
 
+func (exec *countColumnExec) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
+	return exec.BatchFill(row, []uint64{uint64(groupIndex + 1)}, vectors)
+}
+
+func (exec *countColumnExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {
+	return exec.BatchFill(0, slices.Repeat([]uint64{uint64(groupIndex + 1)}, vectors[0].Length()), vectors)
+}
+
 func (exec *countColumnExec) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
 	if exec.IsDistinct() {
 		return exec.batchFillArgs(offset, groups, vectors, true)
 	}
+
 	for i, grp := range groups {
 		if grp == GroupNotMatched {
 			continue
@@ -99,6 +126,10 @@ func (exec *countColumnExec) BatchFill(offset int, groups []uint64, vectors []*v
 		}
 	}
 	return nil
+}
+
+func (exec *countColumnExec) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
+	return exec.BatchMerge(next, groupIdx2, []uint64{uint64(groupIdx1 + 1)})
 }
 
 func (exec *countColumnExec) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {

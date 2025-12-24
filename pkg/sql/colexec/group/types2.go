@@ -108,11 +108,6 @@ type container struct {
 	spillAggList    []aggexec.AggFuncExec
 	spillBkts       list.Deque[*spillBucket]
 	currentSpillBkt []*spillBucket
-
-	// dummyOnes is used to call BatchFill when there is no group by. (mtyp == H0).
-	// We pass a dummyOnes instead of loop BatchFill because in some cases, (for example count(*)),
-	// this could be more efficient.
-	dummyOnes []uint64
 }
 
 func (ctr *container) isSpilling() bool {
