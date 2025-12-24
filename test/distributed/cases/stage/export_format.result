@@ -77,6 +77,10 @@ select * from export_format_test into outfile 'stage://export_test_stage/test_js
 select * from export_format_test into outfile 'stage://export_test_stage/test_parquet_lower.parquet' format 'parquet';
 select * from export_format_test into outfile 'stage://export_test_stage/test_parquet_upper.parquet' format 'PARQUET';
 select * from export_format_test into outfile 'stage://export_test_stage/test_parquet_mixed.parquet' format 'Parquet';
+select * from export_format_test into outfile 'stage://export_test_stage/test_infer_jsonl.jsonl';
+select * from export_format_test into outfile 'stage://export_test_stage/test_infer_jsonline.jsonline';
+select * from export_format_test into outfile 'stage://export_test_stage/test_infer_ndjson.ndjson';
+select * from export_format_test into outfile 'stage://export_test_stage/test_infer_parquet.parquet';
 select * from export_format_test into outfile 'stage://export_test_stage/test_split_bytes_%d.csv' format 'csv' splitsize '1048576';
 select * from export_format_test into outfile 'stage://export_test_stage/test_split_k_lower_%d.csv' format 'csv' splitsize '100k';
 select * from export_format_test into outfile 'stage://export_test_stage/test_split_k_upper_%d.csv' format 'csv' splitsize '100K';
@@ -156,6 +160,16 @@ select * from export_format_test into outfile 'stage://export_test_stage/test_in
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. invalid format, must be csv, jsonline or parquet at line 1 column 106 near " '';";
 select * from export_format_test into outfile 'stage://export_test_stage/test_invalid_num.txt' format '123';
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. invalid format, must be csv, jsonline or parquet at line 1 column 107 near " '123';";
+select * from export_format_test into outfile 'stage://export_test_stage/test_mismatch1.csv' format 'jsonline';
+internal error: format 'jsonline' does not match file suffix '.csv'
+select * from export_format_test into outfile 'stage://export_test_stage/test_mismatch2.csv' format 'parquet';
+internal error: format 'parquet' does not match file suffix '.csv'
+select * from export_format_test into outfile 'stage://export_test_stage/test_mismatch3.jsonl' format 'csv';
+internal error: format 'csv' does not match file suffix '.jsonl'
+select * from export_format_test into outfile 'stage://export_test_stage/test_mismatch4.parquet' format 'csv';
+internal error: format 'csv' does not match file suffix '.parquet'
+select * from export_format_test into outfile 'stage://export_test_stage/test_mismatch5.parquet' format 'jsonline';
+internal error: format 'jsonline' does not match file suffix '.parquet'
 select * from export_format_test into outfile 'stage://export_test_stage/test_invalid_unit_%d.csv' format 'csv' splitsize '100X';
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. invalid splitsize format: internal error: invalid size value: strconv.ParseUint: parsing "100X": invalid syntax at line 1 column 128 near " '100X';";
 select * from export_format_test into outfile 'stage://export_test_stage/test_invalid_neg_%d.csv' format 'csv' splitsize '-100M';

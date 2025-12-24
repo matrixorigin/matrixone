@@ -124,6 +124,18 @@ select * from export_format_test into outfile 'stage://export_test_stage/test_pa
 -- Test 2.10: FORMAT 'Parquet' (mixed case)
 select * from export_format_test into outfile 'stage://export_test_stage/test_parquet_mixed.parquet' format 'Parquet';
 
+-- Test 2.11: Infer format from .jsonl suffix (no FORMAT keyword)
+select * from export_format_test into outfile 'stage://export_test_stage/test_infer_jsonl.jsonl';
+
+-- Test 2.12: Infer format from .jsonline suffix (no FORMAT keyword)
+select * from export_format_test into outfile 'stage://export_test_stage/test_infer_jsonline.jsonline';
+
+-- Test 2.13: Infer format from .ndjson suffix (no FORMAT keyword)
+select * from export_format_test into outfile 'stage://export_test_stage/test_infer_ndjson.ndjson';
+
+-- Test 2.14: Infer format from .parquet suffix (no FORMAT keyword)
+select * from export_format_test into outfile 'stage://export_test_stage/test_infer_parquet.parquet';
+
 -- ============================================================================
 -- PART 3: Normal/Valid Cases - SPLITSIZE keyword
 -- ============================================================================
@@ -294,6 +306,31 @@ select * from export_format_test into outfile 'stage://export_test_stage/test_in
 -- Test 8.5: Invalid format with number
 -- @bvt:issue#23270
 select * from export_format_test into outfile 'stage://export_test_stage/test_invalid_num.txt' format '123';
+-- @bvt:issue
+
+-- Test 8.6: FORMAT 'jsonline' does not match file suffix '.csv'
+-- @bvt:issue#23270
+select * from export_format_test into outfile 'stage://export_test_stage/test_mismatch1.csv' format 'jsonline';
+-- @bvt:issue
+
+-- Test 8.7: FORMAT 'parquet' does not match file suffix '.csv'
+-- @bvt:issue#23270
+select * from export_format_test into outfile 'stage://export_test_stage/test_mismatch2.csv' format 'parquet';
+-- @bvt:issue
+
+-- Test 8.8: FORMAT 'csv' does not match file suffix '.jsonl'
+-- @bvt:issue#23270
+select * from export_format_test into outfile 'stage://export_test_stage/test_mismatch3.jsonl' format 'csv';
+-- @bvt:issue
+
+-- Test 8.9: FORMAT 'csv' does not match file suffix '.parquet'
+-- @bvt:issue#23270
+select * from export_format_test into outfile 'stage://export_test_stage/test_mismatch4.parquet' format 'csv';
+-- @bvt:issue
+
+-- Test 8.10: FORMAT 'jsonline' does not match file suffix '.parquet'
+-- @bvt:issue#23270
+select * from export_format_test into outfile 'stage://export_test_stage/test_mismatch5.parquet' format 'jsonline';
 -- @bvt:issue
 
 -- ============================================================================
