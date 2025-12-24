@@ -29,6 +29,7 @@ type model struct {
 	message       string
 	cmdMode       bool
 	cmdInput      string
+	cmdCursor     int    // 命令行光标位置
 	cmdHistory    []string
 	historyIndex  int
 	hScrollOffset int  // 水平滚动偏移
@@ -91,10 +92,12 @@ func (m model) handleBrowseMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case ":":
 		m.cmdMode = true
 		m.cmdInput = ""
+		m.cmdCursor = 0
 		m.historyIndex = len(m.cmdHistory)
 	case "/":
 		m.cmdMode = true
 		m.cmdInput = "search "
+		m.cmdCursor = len(m.cmdInput)
 		m.historyIndex = len(m.cmdHistory)
 	case "n":
 		// 下一个搜索结果
@@ -115,6 +118,7 @@ func (m model) handleBrowseMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if len(msg.String()) == 1 && msg.String()[0] >= '0' && msg.String()[0] <= '9' {
 			m.cmdMode = true
 			m.cmdInput = msg.String()
+			m.cmdCursor = 1
 		}
 	}
 	return m, nil
@@ -144,6 +148,7 @@ func (m model) handleCommandInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if searchCmd, ok := cmd.(*SearchCommand); ok {
 			m.performSearch(searchCmd.Pattern)
 			m.cmdInput = ""
+			m.cmdCursor = 0
 			return m, nil
 		}
 		
@@ -157,12 +162,14 @@ func (m model) handleCommandInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.message = output
 		m.cmdInput = ""
+		m.cmdCursor = 0
 		return m, nil
 	case "up":
 		// 历史记录向上
 		if len(m.cmdHistory) > 0 && m.historyIndex > 0 {
 			m.historyIndex--
 			m.cmdInput = m.cmdHistory[m.historyIndex]
+			m.cmdCursor = len(m.cmdInput)
 		}
 		return m, nil
 	case "down":
@@ -170,18 +177,34 @@ func (m model) handleCommandInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if len(m.cmdHistory) > 0 && m.historyIndex < len(m.cmdHistory)-1 {
 			m.historyIndex++
 			m.cmdInput = m.cmdHistory[m.historyIndex]
+			m.cmdCursor = len(m.cmdInput)
 		} else if m.historyIndex == len(m.cmdHistory)-1 {
 			m.historyIndex = len(m.cmdHistory)
 			m.cmdInput = ""
+			m.cmdCursor = 0
+		}
+		return m, nil
+	case "left":
+		// 光标左移
+		if m.cmdCursor > 0 {
+			m.cmdCursor--
+		}
+		return m, nil
+	case "right":
+		// 光标右移
+		if m.cmdCursor < len(m.cmdInput) {
+			m.cmdCursor++
 		}
 		return m, nil
 	case "esc", "ctrl+c":
 		m.cmdMode = false
 		m.cmdInput = ""
+		m.cmdCursor = 0
 		m.historyIndex = len(m.cmdHistory)
 	case "backspace":
-		if len(m.cmdInput) > 0 {
-			m.cmdInput = m.cmdInput[:len(m.cmdInput)-1]
+		if m.cmdCursor > 0 {
+			m.cmdInput = m.cmdInput[:m.cmdCursor-1] + m.cmdInput[m.cmdCursor:]
+			m.cmdCursor--
 		}
 	case "tab":
 		// Tab 补全
@@ -189,12 +212,25 @@ func (m model) handleCommandInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			completed := m.completeCommand(m.cmdInput)
 			if completed != "" && completed != m.cmdInput {
 				m.cmdInput = completed
+				m.cmdCursor = len(completed)
 			}
 		}
 		return m, nil
 	default:
-		if len(msg.String()) == 1 {
-			m.cmdInput += msg.String()
+		// 支持粘贴和多字符输入
+		input := msg.String()
+		// 过滤掉控制字符，只保留可打印字符
+		var filtered strings.Builder
+		for _, r := range input {
+			if r >= 32 && r < 127 { // 可打印 ASCII 字符
+				filtered.WriteRune(r)
+			}
+		}
+		if filtered.Len() > 0 {
+			text := filtered.String()
+			// 在光标位置插入文本
+			m.cmdInput = m.cmdInput[:m.cmdCursor] + text + m.cmdInput[m.cmdCursor:]
+			m.cmdCursor += len(text)
 		}
 	}
 	return m, nil
@@ -258,8 +294,17 @@ func (m model) View() string {
 	b.WriteString("\n")
 	if m.cmdMode {
 		b.WriteString(":")
-		b.WriteString(m.cmdInput)
-		b.WriteString("█")
+		// 在光标位置插入光标字符
+		if m.cmdCursor <= len(m.cmdInput) {
+			before := m.cmdInput[:m.cmdCursor]
+			after := m.cmdInput[m.cmdCursor:]
+			b.WriteString(before)
+			b.WriteString("█")
+			b.WriteString(after)
+		} else {
+			b.WriteString(m.cmdInput)
+			b.WriteString("█")
+		}
 	}
 	
 	return b.String()
