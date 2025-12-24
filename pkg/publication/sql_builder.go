@@ -23,9 +23,9 @@ var PublicationSQLBuilder = publicationSQLBuilder{}
 
 const (
 	// Create snapshot SQL templates
-	PublicationCreateSnapshotForAccountSqlTemplate  = `CREATE SNAPSHOT %s FOR ACCOUNT%s`
-	PublicationCreateSnapshotForDatabaseSqlTemplate = `CREATE SNAPSHOT %s FOR DATABASE %s`
-	PublicationCreateSnapshotForTableSqlTemplate    = `CREATE SNAPSHOT %s FOR TABLE %s %s`
+	PublicationCreateSnapshotForAccountSqlTemplate  = `CREATE SNAPSHOT%s %s FOR ACCOUNT%s`
+	PublicationCreateSnapshotForDatabaseSqlTemplate = `CREATE SNAPSHOT%s %s FOR DATABASE %s`
+	PublicationCreateSnapshotForTableSqlTemplate    = `CREATE SNAPSHOT%s %s FOR TABLE %s %s`
 
 	// Query mo_catalog tables SQL templates
 	PublicationQueryMoTablesSqlTemplate = `SELECT ` +
@@ -135,7 +135,8 @@ const (
 	// Update mo_ccpr_log iteration_state (and lsn) only
 	PublicationUpdateMoCcprLogStateSqlTemplate = `UPDATE mo_catalog.mo_ccpr_log ` +
 		`SET iteration_state = %d, ` +
-		`iteration_lsn = %d ` +
+		`iteration_lsn = %d, ` +
+		`cn_uuid = '%s' ` +
 		`WHERE task_id = %d`
 )
 
@@ -295,16 +296,23 @@ type publicationSQLBuilder struct{}
 // If accountName is empty, creates snapshot for the current account
 // Example: CREATE SNAPSHOT sp1 FOR ACCOUNT
 // Example: CREATE SNAPSHOT sp1 FOR ACCOUNT acc01
+// Example: CREATE SNAPSHOT IF NOT EXISTS sp1 FOR ACCOUNT
 func (b publicationSQLBuilder) CreateSnapshotForAccountSQL(
 	snapshotName string,
 	accountName string,
+	ifNotExists bool,
 ) string {
+	var ifNotExistsPart string
+	if ifNotExists {
+		ifNotExistsPart = " IF NOT EXISTS"
+	}
 	var accountPart string
 	if accountName != "" {
 		accountPart = " " + escapeSQLIdentifier(accountName)
 	}
 	return fmt.Sprintf(
 		PublicationSQLTemplates[PublicationCreateSnapshotForAccountSqlTemplate_Idx].SQL,
+		ifNotExistsPart,
 		escapeSQLIdentifier(snapshotName),
 		accountPart,
 	)
@@ -312,12 +320,19 @@ func (b publicationSQLBuilder) CreateSnapshotForAccountSQL(
 
 // CreateSnapshotForDatabaseSQL creates SQL for creating snapshot for a database
 // Example: CREATE SNAPSHOT sp1 FOR DATABASE db1
+// Example: CREATE SNAPSHOT IF NOT EXISTS sp1 FOR DATABASE db1
 func (b publicationSQLBuilder) CreateSnapshotForDatabaseSQL(
 	snapshotName string,
 	dbName string,
+	ifNotExists bool,
 ) string {
+	var ifNotExistsPart string
+	if ifNotExists {
+		ifNotExistsPart = " IF NOT EXISTS"
+	}
 	return fmt.Sprintf(
 		PublicationSQLTemplates[PublicationCreateSnapshotForDatabaseSqlTemplate_Idx].SQL,
+		ifNotExistsPart,
 		escapeSQLIdentifier(snapshotName),
 		escapeSQLIdentifier(dbName),
 	)
@@ -325,13 +340,20 @@ func (b publicationSQLBuilder) CreateSnapshotForDatabaseSQL(
 
 // CreateSnapshotForTableSQL creates SQL for creating snapshot for a table
 // Example: CREATE SNAPSHOT sp1 FOR TABLE db1 t1
+// Example: CREATE SNAPSHOT IF NOT EXISTS sp1 FOR TABLE db1 t1
 func (b publicationSQLBuilder) CreateSnapshotForTableSQL(
 	snapshotName string,
 	dbName string,
 	tableName string,
+	ifNotExists bool,
 ) string {
+	var ifNotExistsPart string
+	if ifNotExists {
+		ifNotExistsPart = " IF NOT EXISTS"
+	}
 	return fmt.Sprintf(
 		PublicationSQLTemplates[PublicationCreateSnapshotForTableSqlTemplate_Idx].SQL,
+		ifNotExistsPart,
 		escapeSQLIdentifier(snapshotName),
 		escapeSQLIdentifier(dbName),
 		escapeSQLIdentifier(tableName),
@@ -685,17 +707,19 @@ func (b publicationSQLBuilder) UpdateMoCcprLogSQL(
 	)
 }
 
-// UpdateMoCcprLogStateSQL creates SQL for updating only iteration_state and iteration_lsn in mo_ccpr_log
-// Example: UPDATE mo_catalog.mo_ccpr_log SET iteration_state = 0, iteration_lsn = 1000 WHERE task_id = 1
+// UpdateMoCcprLogStateSQL creates SQL for updating iteration_state, iteration_lsn and cn_uuid in mo_ccpr_log
+// Example: UPDATE mo_catalog.mo_ccpr_log SET iteration_state = 0, iteration_lsn = 1000, cn_uuid = 'uuid' WHERE task_id = 1
 func (b publicationSQLBuilder) UpdateMoCcprLogStateSQL(
 	taskID uint64,
 	iterationState int8,
 	iterationLSN uint64,
+	cnUUID string,
 ) string {
 	return fmt.Sprintf(
 		PublicationSQLTemplates[PublicationUpdateMoCcprLogStateSqlTemplate_Idx].SQL,
 		iterationState,
 		iterationLSN,
+		escapeSQLString(cnUUID),
 		taskID,
 	)
 }

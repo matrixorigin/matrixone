@@ -1996,9 +1996,31 @@ func doCreateSubscription(ctx context.Context, ses *Session, cs *tree.CreateSubs
 	}
 
 	// Determine sync_level
-	syncLevel := "database"
-	if !cs.IsDatabase {
+	var syncLevel string
+	if cs.IsDatabase {
+		if string(cs.DbName) == "" {
+			syncLevel = "account"
+		} else {
+			syncLevel = "database"
+		}
+	} else {
 		syncLevel = "table"
+	}
+
+	// Validate level and corresponding names
+	if syncLevel == "account" {
+		// For account level, dbName and tableName should be empty
+		// No validation needed as they are already empty
+	} else if syncLevel == "database" {
+		// For database level, check dbName is not empty
+		if string(cs.DbName) == "" {
+			return moerr.NewInternalError(ctx, "database name cannot be empty for database level subscription")
+		}
+	} else {
+		// For table level, check tableName is not empty
+		if cs.TableName == "" {
+			return moerr.NewInternalError(ctx, "table name cannot be empty for table level subscription")
+		}
 	}
 
 	// Build sync_config JSON
@@ -2013,17 +2035,28 @@ func doCreateSubscription(ctx context.Context, ses *Session, cs *tree.CreateSubs
 
 	// Build INSERT SQL
 	var dbName, tableName string
-	if cs.IsDatabase {
+	if syncLevel == "account" {
+		// For account level, both dbName and tableName should be empty
+		dbName = ""
+		tableName = ""
+	} else if syncLevel == "database" {
+		// For database level, dbName is required, tableName is empty
 		dbName = string(cs.DbName)
 		tableName = ""
 	} else {
-		dbName = "" // Will be determined from current database context
+		// For table level, both dbName and tableName are required
 		tableName = cs.TableName
-	}
-
-	// Get current database if table subscription
-	if !cs.IsDatabase && dbName == "" {
-		dbName = ses.GetDatabaseName()
+		// First try to use database name from table name (e.g., `t`.`t`)
+		if string(cs.DbName) != "" {
+			dbName = string(cs.DbName)
+		} else {
+			// Fall back to current database context if not specified in table name
+			dbName = ses.GetDatabaseName()
+		}
+		// For table level, check dbName is not empty after getting current database
+		if dbName == "" {
+			return moerr.NewInternalError(ctx, "database name cannot be empty for table level subscription")
+		}
 	}
 
 	// iteration_state: 2 = complete (based on design.md: 0='pending', 1='running', 2='complete', 3='error', 4='cancel')

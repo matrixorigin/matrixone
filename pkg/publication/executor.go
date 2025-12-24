@@ -347,7 +347,7 @@ func (exec *PublicationTaskExecutor) run(ctx context.Context) {
 			candidateTasks := exec.getCandidateTasks()
 			for _, task := range candidateTasks {
 				// Only trigger tasks that are not completed
-				err = exec.worker.Submit(task.taskID, task.lsn, task.state)
+				err = exec.worker.Submit(task.taskID, task.lsn+1, task.state)
 				if err != nil {
 					logutil.Error(
 						"Publication-Task submit task failed",

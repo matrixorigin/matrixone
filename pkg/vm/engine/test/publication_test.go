@@ -373,7 +373,6 @@ func TestExecuteIteration1(t *testing.T) {
 			table_name, 
 			upstream_conn, 
 			sync_config, 
-			state, 
 			iteration_state, 
 			iteration_lsn, 
 			cn_uuid
@@ -386,7 +385,6 @@ func TestExecuteIteration1(t *testing.T) {
 			'%s', 
 			'%s', 
 			'{}', 
-			0, 
 			%d, 
 			%d, 
 			'%s'

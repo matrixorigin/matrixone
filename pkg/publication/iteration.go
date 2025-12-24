@@ -266,11 +266,6 @@ func InitializeIterationContext(
 		}
 
 	}
-	err = upstreamExecutor.StartTxn(ctx)
-	if err != nil {
-		return nil, moerr.NewInternalErrorf(ctx, "failed to start upstream transaction: %v", err)
-	}
-
 	// Initialize IterationContext
 	iterationCtx := &IterationContext{
 		TaskID:           taskID,
@@ -561,6 +556,7 @@ func RequestUpstreamSnapshot(
 			snapshotName,
 			iterationCtx.SrcInfo.DBName,
 			iterationCtx.SrcInfo.TableName,
+			true, // Use IF NOT EXISTS to handle existing snapshots gracefully
 		)
 	case SyncLevelDatabase:
 		if iterationCtx.SrcInfo.DBName == "" {
@@ -569,6 +565,7 @@ func RequestUpstreamSnapshot(
 		createSnapshotSQL = PublicationSQLBuilder.CreateSnapshotForDatabaseSQL(
 			snapshotName,
 			iterationCtx.SrcInfo.DBName,
+			true, // Use IF NOT EXISTS to handle existing snapshots gracefully
 		)
 	case SyncLevelAccount:
 		// Note: CreateSnapshotForAccountSQL currently uses account name, not account ID
@@ -576,7 +573,8 @@ func RequestUpstreamSnapshot(
 		// For now, we use empty string to create snapshot for current account
 		createSnapshotSQL = PublicationSQLBuilder.CreateSnapshotForAccountSQL(
 			snapshotName,
-			"", // Empty account name means current account
+			"",   // Empty account name means current account
+			true, // Use IF NOT EXISTS to handle existing snapshots gracefully
 		)
 	default:
 		return moerr.NewInternalErrorf(ctx, "unsupported sync_level: %s", iterationCtx.SrcInfo.SyncLevel)
@@ -1192,6 +1190,27 @@ func ExecuteIteration(
 	// 1.1 请求上游snapshot (includes 1.1.2 请求上游的snapshot ts)
 	if err = RequestUpstreamSnapshot(ctx, iterationCtx); err != nil {
 		err = moerr.NewInternalErrorf(ctx, "failed to request upstream snapshot: %v", err)
+		return
+	}
+
+	// Defer to drop snapshot if error occurs
+	defer func() {
+		if err != nil && iterationCtx.CurrentSnapshotName != "" {
+			// Drop the snapshot that was created if there's an error
+			dropSnapshotSQL := PublicationSQLBuilder.DropSnapshotIfExistsSQL(iterationCtx.CurrentSnapshotName)
+			if dropResult, dropErr := iterationCtx.UpstreamExecutor.ExecSQL(ctx, dropSnapshotSQL); dropErr != nil {
+				logutil.Warn("ccpr-iteration failed to drop snapshot on error",
+					zap.String("snapshot_name", iterationCtx.CurrentSnapshotName),
+					zap.Error(dropErr),
+				)
+			} else {
+				dropResult.Close()
+			}
+		}
+	}()
+	// Start upstream transaction after CREATE SNAPSHOT (CREATE SNAPSHOT cannot run in a transaction)
+	if err = iterationCtx.UpstreamExecutor.StartTxn(ctx); err != nil {
+		err = moerr.NewInternalErrorf(ctx, "failed to start upstream transaction: %v", err)
 		return
 	}
 

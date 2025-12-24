@@ -8465,9 +8465,14 @@ create_table_stmt:
         var PubName = tree.Identifier($9.Compare())
         var SyncInterval = $10
         var TableNameStr = string(TableName.ObjectName)
+        var DbName = tree.Identifier("")
+        // Extract database name from table name if explicitly specified
+        if TableName.ExplicitSchema {
+            DbName = TableName.SchemaName
+        }
         $$ = tree.NewCreateSubscription(
             false,  // isDatabase
-            "",
+            DbName,
             TableNameStr,
             FromUri,
             PubName,

@@ -180,6 +180,7 @@ func (w *worker) updateIterationStatePending(ctx context.Context, taskID uint64,
 		taskID,
 		IterationStatePending,
 		lsn,
+		w.cnUUID,
 	)
 
 	systemCtx := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
