@@ -2950,10 +2950,8 @@ func SetConstNull(vec *Vector, length int, mp *mpool.MPool) error {
 }
 
 func SetConstFixed[T any](vec *Vector, val T, length int, mp *mpool.MPool) error {
-	if vec.Capacity() == 0 {
-		if err := extend(vec, 1, mp); err != nil {
-			return err
-		}
+	if err := extend(vec, 1, mp); err != nil {
+		return err
 	}
 	vec.class = CONSTANT
 	vec.length = length
@@ -2964,16 +2962,12 @@ func SetConstFixed[T any](vec *Vector, val T, length int, mp *mpool.MPool) error
 }
 
 func SetConstBytes(vec *Vector, val []byte, length int, mp *mpool.MPool) error {
-	var err error
-	if vec.Capacity() == 0 {
-		if err := extend(vec, 1, mp); err != nil {
-			return err
-		}
+	if err := extend(vec, 1, mp); err != nil {
+		return err
 	}
 	vec.class = CONSTANT
 	col := toSliceOfLengthNoTypeCheck[types.Varlena](vec, 1)
-	err = BuildVarlenaFromByteSlice(vec, &col[0], &val, mp)
-	if err != nil {
+	if err := BuildVarlenaFromByteSlice(vec, &col[0], &val, mp); err != nil {
 		return err
 	}
 	vec.length = length
@@ -2981,16 +2975,12 @@ func SetConstBytes(vec *Vector, val []byte, length int, mp *mpool.MPool) error {
 }
 
 func SetConstByteJson(vec *Vector, bj bytejson.ByteJson, length int, mp *mpool.MPool) error {
-	var err error
-	if vec.Capacity() == 0 {
-		if err := extend(vec, 1, mp); err != nil {
-			return err
-		}
+	if err := extend(vec, 1, mp); err != nil {
+		return err
 	}
 	vec.class = CONSTANT
 	col := toSliceOfLengthNoTypeCheck[types.Varlena](vec, 1)
-	err = BuildVarlenaFromByteJson(vec, &col[0], bj, mp)
-	if err != nil {
+	if err := BuildVarlenaFromByteJson(vec, &col[0], bj, mp); err != nil {
 		return err
 	}
 	vec.length = length
@@ -3001,10 +2991,8 @@ func SetConstByteJson(vec *Vector, bj bytejson.ByteJson, length int, mp *mpool.M
 func SetConstArray[T types.RealNumbers](vec *Vector, val []T, length int, mp *mpool.MPool) error {
 	var err error
 
-	if vec.Capacity() == 0 {
-		if err := extend(vec, 1, mp); err != nil {
-			return err
-		}
+	if err := extend(vec, 1, mp); err != nil {
+		return err
 	}
 	vec.class = CONSTANT
 	col := toSliceOfLengthNoTypeCheck[types.Varlena](vec, 1)
