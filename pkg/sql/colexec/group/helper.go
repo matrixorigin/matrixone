@@ -586,6 +586,8 @@ func (ctr *container) makeAggList(aggExprs []aggexec.AggFuncExecExpression) ([]a
 
 	if ctr.mtyp != H0 {
 		aggexec.SyncAggregatorsToChunkSize(aggList, aggBatchSize)
+	} else {
+		aggexec.SyncAggregatorsToChunkSize(aggList, 1)
 	}
 	return aggList, nil
 }

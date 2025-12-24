@@ -3200,6 +3200,10 @@ func AppendArrayList[T types.RealNumbers](vec *Vector, ws [][]T, isNulls []bool,
 }
 
 func appendOneFixed[T any](vec *Vector, val T, isNull bool, mp *mpool.MPool) error {
+	if vec.IsConst() {
+		return moerr.NewInternalErrorNoCtx("append to const vector")
+	}
+
 	if err := extend(vec, 1, mp); err != nil {
 		return err
 	}

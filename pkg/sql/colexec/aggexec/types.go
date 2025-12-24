@@ -155,19 +155,6 @@ func MakeAgg(
 	return nil, moerr.NewInternalErrorNoCtx(errmsg)
 }
 
-func MakeInitialAggListFromList(mg *mpool.MPool, list []AggFuncExec) ([]AggFuncExec, error) {
-	result := make([]AggFuncExec, 0, len(list))
-	for _, v := range list {
-		param, _ := v.TypesInfo()
-		exec, err := MakeAgg(mg, v.AggID(), v.IsDistinct(), param...)
-		if err != nil {
-			return nil, err
-		}
-		result = append(result, exec)
-	}
-	return result, nil
-}
-
 // makeSingleAgg supports to create an aggregation function executor for single column.
 func makeSingleAgg(
 	mg *mpool.MPool,

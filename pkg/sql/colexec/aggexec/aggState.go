@@ -136,7 +136,7 @@ func (ag *aggState[S]) readState(mp *mpool.MPool,
 			ptrs[offset+int64(i)].AppendBytes(mp, bs)
 		}
 	}
-	return cnt - rn, nil
+	return rn, nil
 }
 
 func (ag *aggState[S]) getStateSlice(sz int) []S {
@@ -171,7 +171,8 @@ func (ag *aggState[S]) free(mp *mpool.MPool, usePtrLen bool, sz int) {
 type aggExec[S any] struct {
 	mp *mpool.MPool
 	aggInfo
-	state []aggState[S]
+	chunkSize int
+	state     []aggState[S]
 }
 
 func (ae *aggExec[S]) marshal() ([]byte, error) {
@@ -182,9 +183,19 @@ func (ae *aggExec[S]) unmarshal(mp *mpool.MPool, result, empties, groups [][]byt
 	panic("not implemented")
 }
 
+func (ae *aggExec[S]) getChunkSize() int {
+	return ae.chunkSize
+}
+
+func (ae *aggExec[S]) modifyChunkSize(n int) {
+	if n != 1 && n != AggBatchSize {
+		panic(moerr.NewInternalErrorNoCtxf("invalid chunk size: %d", n))
+	}
+	ae.chunkSize = n
+}
+
 func (ae *aggExec[S]) GetOptResult() SplitResult {
-	// useless.
-	return nil
+	return ae
 }
 
 func (ae *aggExec[S]) GetXY(u uint64) (int, int) {
@@ -304,6 +315,25 @@ func (ae *aggExec[S]) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) err
 	}
 
 	if cnt == 0 {
+		return nil
+	}
+
+	if ae.chunkSize == 1 {
+		// this is no group by case, in this case, caller has already called GroupGrow(1)
+		if cnt != 1 {
+			return moerr.NewInternalErrorNoCtxf("invalid count: %d", cnt)
+		}
+		if len(ae.state) != 1 || ae.state[0].length != 1 {
+			return moerr.NewInternalErrorNoCtx("invalid state, single group case but state is not initialized")
+		}
+		rc, err := ae.state[0].readState(mp, cnt, 0,
+			ae.aggInfo.entrySize, ae.aggInfo.usePtrLen, reader)
+		if err != nil {
+			return err
+		}
+		if rc != 1 {
+			return moerr.NewInternalErrorNoCtxf("invalid read count: %d", rc)
+		}
 		return nil
 	}
 
