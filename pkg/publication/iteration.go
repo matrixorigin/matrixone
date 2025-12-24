@@ -585,7 +585,7 @@ func RequestUpstreamSnapshot(
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to create snapshot: %v", err)
 	}
-	defer result.Close()
+	result.Close()
 
 	// Before setting new current snapshot, save old current snapshot as prev snapshot
 	if iterationCtx.CurrentSnapshotName != "" {
