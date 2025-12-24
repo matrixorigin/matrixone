@@ -402,7 +402,7 @@ func (exec *PublicationTaskExecutor) getCandidateTasks() []*TaskEntry {
 	candidates := make([]*TaskEntry, 0)
 	for _, task := range allTasks {
 		// Only include tasks that are not dropped
-		if task.dropped == 0 {
+		if task.dropped == 0&& task.state == IterationStateCompleted {
 			candidates = append(candidates, task)
 		}
 	}
