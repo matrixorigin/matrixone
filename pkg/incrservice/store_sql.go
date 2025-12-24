@@ -226,6 +226,19 @@ func (s *sqlStore) Allocate(
 
 	from, to := getNextRange(current, next, int(step))
 	commitTs := txnOp.GetOverview().Meta.CommitTS
+	// Fix: When the transaction has not committed yet (e.g., during CREATE TABLE),
+	// CommitTS is zero. Use SnapshotTS as a fallback to avoid setting lastAllocateAt to zero,
+	// which would cause PrimaryKeysMayBeUpserted to scan an excessively large time range.
+	if commitTs.IsEmpty() {
+		snapshotTs := txnOp.SnapshotTS()
+		getLogger(s.ls.GetConfig().ServiceID).Debug("auto-increment allocate: CommitTS is empty, using SnapshotTS as fallback",
+			zap.Uint64("table-id", tableID),
+			zap.String("col-name", colName),
+			zap.Uint64("from", from),
+			zap.Uint64("to", to),
+			zap.String("snapshot-ts", snapshotTs.DebugString()))
+		commitTs = snapshotTs
+	}
 	return from, to, commitTs, nil
 }
 
