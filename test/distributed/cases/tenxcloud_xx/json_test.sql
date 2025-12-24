@@ -874,3 +874,5 @@ SELECT * FROM inventory;
 -- |  2 | {"items": ["2", "3", "4"]}     |
 -- +----+--------------------------------+
 -- 2 rows in set (0.00 sec)
+
+DROP DATABASE IF EXISTS moc4504;

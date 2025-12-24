@@ -406,6 +406,6 @@ a
 abc
 ABC
 abC
-show variables where value ilike "%system%" and variable_name = "time_zone";
+show variables where value ilike "%matrixone%" and variable_name = "version_comment";
 Variable_name    Value
-time_zone    SYSTEM
+version_comment    MatrixOne

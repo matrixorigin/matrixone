@@ -190,7 +190,7 @@ select lastval();
 begin;
 create sequence seq_18 minvalue 1000;
 select nextval('seq_18');
--- @session:id=2&user=sys:dump&password=111
+-- @session:id=2
 select nextval('seq_18');
 create sequence seq_18;
 -- @session
@@ -202,7 +202,7 @@ drop sequence seq_18;
 begin;
 create sequence seq_19 minvalue 1000;
 select nextval('seq_19');
--- @session:id=2&user=sys:dump&password=111
+-- @session:id=2
 select nextval('seq_19');
 create sequence seq_19;
 -- @session

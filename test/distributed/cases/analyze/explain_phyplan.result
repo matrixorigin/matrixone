@@ -13,11 +13,11 @@ INSERT INTO dept VALUES (20,'RESEARCH','DALLAS');
 INSERT INTO dept VALUES (30,'SALES','CHICAGO');
 INSERT INTO dept VALUES (40,'OPERATIONS','BOSTON');
 explain phyplan select * from dept;
-tp query phyplan
-Scope 1 (Magic: Remote, mcpu: 1, Receiver: [])
-  DataSource: db1.dept[deptno dname loc]
-  Pipeline: └── output
-                └── projection
+tp query phyplan  𝄀
+Scope 1 (Magic: Remote, mcpu: 1, Receiver: [])  𝄀
+  DataSource: db1.dept[deptno dname loc]  𝄀
+  Pipeline: └── output  𝄀
+                └── projection  𝄀
                     └── tablescan
 DROP TABLE IF EXISTS emp;
 create table emp(
@@ -46,34 +46,44 @@ INSERT INTO emp VALUES (7900,'JAMES','CLERK',7698,'1981-12-03',950,NULL,30);
 INSERT INTO emp VALUES (7902,'FORD','ANALYST',7566,'1981-12-03',3000,NULL,20);
 INSERT INTO emp VALUES (7934,'MILLER','CLERK',7782,'1982-01-23',1300,NULL,10);
 explain phyplan select * from emp;
-tp query phyplan
-Scope 1 (Magic: Remote, mcpu: 1, Receiver: [])
-  DataSource: db1.emp[empno ename job mgr hiredate sal comm deptno]
-  Pipeline: └── output
-                └── projection
+tp query phyplan  𝄀
+Scope 1 (Magic: Remote, mcpu: 1, Receiver: [])  𝄀
+  DataSource: db1.emp[empno ename job mgr hiredate sal comm deptno]  𝄀
+  Pipeline: └── output  𝄀
+                └── projection  𝄀
                     └── tablescan
 explain phyplan select empno, ename, job from emp where sal > 2000;
-tp query phyplan
-Scope 1 (Magic: Remote, mcpu: 1, Receiver: [])
-  DataSource: db1.emp[empno ename job sal]
-  Pipeline: └── output
-                └── projection
-                    └── projection
-                        └── filter
+tp query phyplan  𝄀
+Scope 1 (Magic: Remote, mcpu: 1, Receiver: [])  𝄀
+  DataSource: db1.emp[empno ename job sal]  𝄀
+  Pipeline: └── output  𝄀
+                └── projection  𝄀
+                    └── projection  𝄀
+                        └── filter  𝄀
                             └── tablescan
-explain phyplan select a.ename,b.dname from emp a left join dept b on a.deptno = b.deptno;
-tp query phyplan
-Scope 1 (Magic: Remote, mcpu: 1, Receiver: [])
-  DataSource: db1.emp[ename deptno]
-  Pipeline: └── output
-                └── projection
-                    └── left
-                        └── tablescan
-  PreScopes: {
-    Scope 1 (Magic: Remote, mcpu: 1, Receiver: [])
-      DataSource: db1.dept[deptno dname]
-      Pipeline: └── hash build
-                    └── tablescan
+explain phyplan verbose select a.ename,b.dname from emp a left join dept b on a.deptno = b.deptno;
+-- @regex("(?s)MemoryUsage.*CPU", true)
+-- @regex("(?s)left\(idx:(\d+).*hash build\(idx:\1", true)
+tp query phyplan  𝄀
+Overview:  𝄀
+	MemoryUsage:34674B,  SpillSize:0B,  DiskI/O:0B,  NewWorkI/O:0B, AffectedRows: 0  𝄀
+	S3List:0, S3Head:0, S3Put:0, S3Get:0, S3Delete:0, S3DeleteMul:0, S3InputEstByRows((0+0)/8192):0.0000   𝄀
+	CPU Usage:   𝄀
+		- Total CPU Time: 281696ns   𝄀
+		- CPU Time Detail: Parse(23836)+BuildPlan(99317)+Compile(15642)+PhyExec(77916)+PrepareRun(64985)-PreRunWaitLock(0)-PlanStatsIO(0)-IOAccess(0)-IOMerge(0)  𝄀
+		- Permission Authentication Stats Array: [5 0 0 0 0 0 0 0 0 0 0]   𝄀
+Physical Plan Deployment:  𝄀
+Scope 1 (Magic: Remote, addr:127.0.0.1:18000, mcpu: 1, Receiver: []) PrepareTimeConsumed: 57246ns  𝄀
+  DataSource: db1.emp[ename deptno]  𝄀
+  Pipeline: └── output(idx:-1, isFirst:false, isLast:false)  𝄀
+                └── projection(idx:3, isFirst:true, isLast:true)  𝄀
+                    └── left(idx:2, isFirst:true, isLast:true)  𝄀
+                        └── tablescan(idx:0, isFirst:true, isLast:true)  𝄀
+  PreScopes: {  𝄀
+    Scope 1 (Magic: Remote, addr:127.0.0.1:18000, mcpu: 1, Receiver: []) PrepareTimeConsumed: 5572ns  𝄀
+      DataSource: db1.dept[deptno dname]  𝄀
+      Pipeline: └── hash build(idx:2, isFirst:true, isLast:false)  𝄀
+                    └── tablescan(idx:1, isFirst:true, isLast:true)  𝄀
   }
 drop table emp;
 drop table dept;
