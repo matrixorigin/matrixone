@@ -1053,20 +1053,6 @@ func inferFormatFromSuffix(filePath string) string {
 	}
 }
 
-// getSuffixForFormat returns the expected file suffixes for a given format
-func getSuffixForFormat(format string) []string {
-	switch format {
-	case "csv":
-		return []string{".csv"}
-	case "jsonline":
-		return []string{".jsonl", ".jsonline", ".ndjson"}
-	case "parquet":
-		return []string{".parquet"}
-	default:
-		return nil
-	}
-}
-
 // validateExportFormat validates that FORMAT matches file suffix,
 // or infers FORMAT from suffix if not specified.
 func validateExportFormat(ctx context.Context, ep *tree.ExportParam) error {
