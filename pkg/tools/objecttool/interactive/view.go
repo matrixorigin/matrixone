@@ -23,8 +23,9 @@ import (
 
 // View 终端视图（简化版）
 type View struct {
-	width  int
-	height int
+	width        int
+	height       int
+	verticalMode bool // \G 模式：垂直显示
 }
 
 func NewView() *View {
@@ -37,6 +38,9 @@ func NewView() *View {
 // Render 渲染当前状态
 func (v *View) Render(state *State, message string) error {
 	v.clear()
+
+	// 同步垂直模式状态
+	v.verticalMode = state.verticalMode
 
 	// 1. 标题栏
 	v.renderHeader(state)
@@ -51,6 +55,7 @@ func (v *View) Render(state *State, message string) error {
 
 	// 4. 消息/命令行
 	if message != "" {
+		fmt.Println()
 		fmt.Println(message)
 		fmt.Println()
 	}
@@ -72,22 +77,47 @@ func (v *View) renderHeader(state *State) {
 }
 
 func (v *View) renderTable(state *State) error {
-	rows, err := state.CurrentRows()
+	rows, rowNumbers, err := state.CurrentRows()
 	if err != nil {
 		return err
 	}
 
+	if v.verticalMode {
+		return v.renderVertical(state, rows, rowNumbers)
+	}
+
 	cols := state.reader.Columns()
+	
+	// 确定显示的列
+	displayCols := state.visibleCols
+	if displayCols == nil {
+		maxCols := 10
+		if len(cols) < maxCols {
+			maxCols = len(cols)
+		}
+		displayCols = make([]uint16, maxCols)
+		for i := 0; i < maxCols; i++ {
+			displayCols[i] = uint16(i)
+		}
+	}
+	
+	// 构建显示列信息
+	displayColInfo := make([]objecttool.ColInfo, len(displayCols))
+	for i, colIdx := range displayCols {
+		if int(colIdx) < len(cols) {
+			displayColInfo[i] = cols[colIdx]
+		}
+	}
 
 	// 计算列宽
-	widths := v.calcColWidths(cols, rows)
+	widths := v.calcColWidths(displayColInfo, rows)
 
 	// 表头
-	v.renderTableHeader(cols, widths)
+	v.renderTableHeader(displayColInfo, widths)
 
-	// 数据行
-	for _, row := range rows {
-		v.renderTableRow(row, widths)
+	// 数据行（带行号）
+	for i, row := range rows {
+		v.renderTableRowWithNumber(rowNumbers[i], row, widths)
 	}
 
 	// 表尾
@@ -96,14 +126,71 @@ func (v *View) renderTable(state *State) error {
 	return nil
 }
 
+// renderVertical 垂直显示（类似 MySQL \G）
+func (v *View) renderVertical(state *State, rows [][]string, rowNumbers []string) error {
+	cols := state.reader.Columns()
+	
+	// 确定显示的列
+	displayCols := state.visibleCols
+	if displayCols == nil {
+		// 垂直模式显示所有列
+		displayCols = make([]uint16, len(cols))
+		for i := range cols {
+			displayCols[i] = uint16(i)
+		}
+	}
+	
+	for rowIdx, row := range rows {
+		fmt.Printf("*************************** %s ***************************\n", rowNumbers[rowIdx])
+		for i, colIdx := range displayCols {
+			if int(colIdx) < len(cols) {
+				col := cols[colIdx]
+				value := ""
+				if i < len(row) {
+					value = row[i]
+				}
+				fmt.Printf("%10s (Col%d): %s\n", col.Type.String(), colIdx, value)
+			}
+		}
+	}
+	
+	return nil
+}
+
+func (v *View) renderTableRowWithNumber(rowNum string, row []string, widths []int) {
+	fmt.Printf("│ %-10s ", rowNum)
+	for i, cell := range row {
+		if i < len(widths) {
+			// 截断过长的内容
+			if len(cell) > widths[i] {
+				cell = cell[:widths[i]-3] + "..."
+			}
+			fmt.Printf("│ %-*s ", widths[i], cell)
+		}
+	}
+	fmt.Println("│")
+}
+
 func (v *View) renderStatus(state *State) {
 	info := state.reader.Info()
 	start := state.GlobalRowOffset() + 1
-	rows, _ := state.CurrentRows()
+	rows, _, _ := state.CurrentRows()
 	end := start + int64(len(rows)) - 1
 
-	fmt.Printf("\n[%d-%d of %d] Block %d/%d\n",
-		start, end, info.RowCount, state.currentBlock+1, info.BlockCount)
+	// 显示模式
+	mode := "Table"
+	if state.verticalMode {
+		mode = "Vertical"
+	}
+	
+	// 宽度设置
+	widthStr := fmt.Sprintf("%d", state.maxColWidth)
+	if state.maxColWidth == 0 {
+		widthStr = "unlimited"
+	}
+
+	fmt.Printf("\n[%d-%d of %d] Block %d/%d | Mode: %s | Width: %s\n",
+		start, end, info.RowCount, state.currentBlock+1, info.BlockCount, mode, widthStr)
 }
 
 func (v *View) calcColWidths(cols []objecttool.ColInfo, rows [][]string) []int {
@@ -126,8 +213,8 @@ func (v *View) calcColWidths(cols []objecttool.ColInfo, rows [][]string) []int {
 					widths[i] = cellLen
 				}
 				// 最大宽度限制
-				if widths[i] > 40 {
-					widths[i] = 40
+				if widths[i] > 30 {
+					widths[i] = 30
 				}
 			}
 		}
@@ -138,7 +225,7 @@ func (v *View) calcColWidths(cols []objecttool.ColInfo, rows [][]string) []int {
 
 func (v *View) renderTableHeader(cols []objecttool.ColInfo, widths []int) {
 	// ┌────┬────┐
-	fmt.Print("┌")
+	fmt.Print("┌────────────┬")
 	for i, w := range widths {
 		fmt.Print(strings.Repeat("─", w+2))
 		if i < len(widths)-1 {
@@ -147,8 +234,8 @@ func (v *View) renderTableHeader(cols []objecttool.ColInfo, widths []int) {
 	}
 	fmt.Println("┐")
 
-	// │Col0│Col1│
-	fmt.Print("│")
+	// │RowNum│Col0│Col1│
+	fmt.Print("│ RowNum     │")
 	for i, col := range cols {
 		header := fmt.Sprintf("Col%d", col.Idx)
 		fmt.Printf(" %-*s │", widths[i], header)
@@ -156,7 +243,7 @@ func (v *View) renderTableHeader(cols []objecttool.ColInfo, widths []int) {
 	fmt.Println()
 
 	// ├────┼────┤
-	fmt.Print("├")
+	fmt.Print("├────────────┼")
 	for i, w := range widths {
 		fmt.Print(strings.Repeat("─", w+2))
 		if i < len(widths)-1 {
@@ -182,7 +269,7 @@ func (v *View) renderTableRow(row []string, widths []int) {
 
 func (v *View) renderTableFooter(widths []int) {
 	// └────┴────┘
-	fmt.Print("└")
+	fmt.Print("└────────────┴")
 	for i, w := range widths {
 		fmt.Print(strings.Repeat("─", w+2))
 		if i < len(widths)-1 {

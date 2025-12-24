@@ -15,14 +15,24 @@
 package object
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/tools/objecttool/interactive"
 	"github.com/spf13/cobra"
 )
 
 func PrepareCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "object",
+		Use:   "object [file]",
 		Short: "Object file tools",
 		Long:  "Tools for analyzing and browsing MatrixOne object files",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// 如果提供了文件路径，直接进入 view 模式
+			if len(args) == 1 {
+				return interactive.Run(args[0])
+			}
+			// 否则显示帮助
+			return cmd.Help()
+		},
 	}
 
 	cmd.AddCommand(viewCommand())

@@ -33,9 +33,9 @@ func ParseCommand(input string) (Command, error) {
 		return nil, nil
 	}
 
-	// 单字符命令
+	// 单字符命令（浏览模式）
 	switch input {
-	case "q", ":q":
+	case "q":
 		return &QuitCommand{}, nil
 	case "j":
 		return &ScrollCommand{Down: true, Lines: 1}, nil
@@ -49,18 +49,24 @@ func ParseCommand(input string) (Command, error) {
 		return &HelpCommand{}, nil
 	}
 
-	// : 命令
+	// : 命令（命令模式）
 	if strings.HasPrefix(input, ":") {
 		return parseColonCommand(input[1:])
 	}
 
-	return nil, fmt.Errorf("unknown command: %s", input)
+	// 命令模式下不带 : 也支持
+	return parseColonCommand(input)
 }
 
 func parseColonCommand(cmd string) (Command, error) {
 	parts := strings.Fields(cmd)
 	if len(parts) == 0 {
 		return nil, nil
+	}
+
+	// 检查是否是纯数字（:123 跳转到 block 123）
+	if num, err := strconv.ParseUint(parts[0], 10, 32); err == nil {
+		return &GotoCommand{Block: uint32(num)}, nil
 	}
 
 	switch parts[0] {
@@ -72,8 +78,12 @@ func parseColonCommand(cmd string) (Command, error) {
 		return &SchemaCommand{}, nil
 	case "format":
 		return parseFormatCommand(parts[1:])
-	case "goto":
-		return parseGotoCommand(parts[1:])
+	case "vertical", "v", "\\G":
+		return &VerticalCommand{Enable: true}, nil
+	case "table", "t":
+		return &VerticalCommand{Enable: false}, nil
+	case "set":
+		return parseSetCommand(parts[1:])
 	case "help":
 		topic := ""
 		if len(parts) > 1 {
@@ -82,6 +92,26 @@ func parseColonCommand(cmd string) (Command, error) {
 		return &HelpCommand{Topic: topic}, nil
 	default:
 		return nil, fmt.Errorf("unknown command: %s", parts[0])
+	}
+}
+
+func parseSetCommand(args []string) (Command, error) {
+	if len(args) < 2 {
+		return nil, fmt.Errorf("usage: set <option> <value>")
+	}
+	
+	switch args[0] {
+	case "width":
+		if args[1] == "unlimited" || args[1] == "0" {
+			return &SetCommand{Option: "width", Value: 0}, nil
+		}
+		width, err := strconv.Atoi(args[1])
+		if err != nil {
+			return nil, fmt.Errorf("invalid width: %s", args[1])
+		}
+		return &SetCommand{Option: "width", Value: width}, nil
+	default:
+		return nil, fmt.Errorf("unknown option: %s", args[0])
 	}
 }
 
@@ -99,19 +129,6 @@ func parseFormatCommand(args []string) (Command, error) {
 		ColIdx:        uint16(colIdx),
 		FormatterName: args[1],
 	}, nil
-}
-
-func parseGotoCommand(args []string) (Command, error) {
-	if len(args) < 1 {
-		return nil, fmt.Errorf("usage: :goto <row>")
-	}
-
-	row, err := strconv.ParseInt(args[0], 10, 64)
-	if err != nil {
-		return nil, fmt.Errorf("invalid row number: %s", args[0])
-	}
-
-	return &GotoCommand{Row: row}, nil
 }
 
 // QuitCommand 退出命令
@@ -194,7 +211,7 @@ func (c *ScrollCommand) Execute(state *State) (string, bool, error) {
 type GotoCommand struct {
 	Top    bool
 	Bottom bool
-	Row    int64
+	Block  uint32 // block number
 }
 
 func (c *GotoCommand) Execute(state *State) (string, bool, error) {
@@ -203,7 +220,7 @@ func (c *GotoCommand) Execute(state *State) (string, bool, error) {
 	} else if c.Bottom {
 		return "", false, state.GotoRow(-1)
 	} else {
-		return "", false, state.GotoRow(c.Row)
+		return "", false, state.GotoBlock(c.Block)
 	}
 }
 
@@ -222,19 +239,71 @@ func (c *HelpCommand) Execute(state *State) (string, bool, error) {
 	return fmt.Sprintf("No help for: %s", c.Topic), false, nil
 }
 
-var generalHelp = `
-Commands:
-  :q          Quit
-  :info       Show object info
-  :schema     Show schema
-  :format N F Set column N format to F
-  :goto N     Go to row N
-  :help [cmd] Show help
+// VerticalCommand 切换垂直/表格模式
+type VerticalCommand struct {
+	Enable bool
+}
 
-Navigation:
-  j/k         Scroll down/up
+func (c *VerticalCommand) Execute(state *State) (string, bool, error) {
+	state.verticalMode = c.Enable
+	if c.Enable {
+		// 垂直模式使用更大的宽度
+		state.maxColWidth = 128
+		return "Switched to vertical mode (\\G), width=128", false, nil
+	}
+	// 表格模式恢复默认宽度
+	state.maxColWidth = 64
+	return "Switched to table mode, width=64", false, nil
+}
+
+// SetCommand 设置选项
+type SetCommand struct {
+	Option string
+	Value  int
+}
+
+func (c *SetCommand) Execute(state *State) (string, bool, error) {
+	switch c.Option {
+	case "width":
+		state.maxColWidth = c.Value
+		if c.Value == 0 {
+			return "Column width set to unlimited", false, nil
+		}
+		return fmt.Sprintf("Column width set to %d", c.Value), false, nil
+	default:
+		return fmt.Sprintf("Unknown option: %s", c.Option), false, nil
+	}
+}
+
+var generalHelp = `
+Browse Mode (default):
+  j/k/↑/↓     Scroll down/up one line
+  Enter       Next page
+  Ctrl+F      Next page (forward)
+  Ctrl+B      Previous page (backward)
   g/G         Go to top/bottom
-  ?           Show this help
+  q           Quit
+  :           Enter command mode
+
+Command Mode (press : to enter):
+  info        Show object info
+  schema      Show schema
+  format N F  Set column N format to F
+  N           Go to block N (e.g., :0, :1, :2)
+  vertical    Switch to vertical mode (width=128)
+  table       Switch to table mode (width=64)
+  set width N Set column width (0=unlimited)
+  help [cmd]  Show help
+  q           Quit
+
+Row Number Format: (block-offset)
+  Example: (0-0) = block 0, offset 0
+           (1-100) = block 1, offset 100
+
+Column Width:
+  Table mode: 64 chars (default)
+  Vertical mode: 128 chars
+  Unlimited: :set width 0
 `
 
 var topicHelp = map[string]string{

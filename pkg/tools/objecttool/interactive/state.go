@@ -36,28 +36,33 @@ type State struct {
 	batchRelease func()
 
 	// 显示状态
-	rowOffset int // 当前block内的行偏移
-	pageSize  int // 每页显示行数
+	rowOffset    int      // 当前block内的行偏移
+	pageSize     int      // 每页显示行数
+	visibleCols  []uint16 // 显示的列（nil表示全部）
+	maxColWidth  int      // 最大列宽
+	verticalMode bool     // 垂直显示模式
 }
 
 func NewState(ctx context.Context, reader *objecttool.ObjectReader) *State {
 	return &State{
-		reader:    reader,
-		formatter: objecttool.NewFormatterRegistry(),
-		ctx:       ctx,
-		pageSize:  20,
+		reader:      reader,
+		formatter:   objecttool.NewFormatterRegistry(),
+		ctx:         ctx,
+		pageSize:    20,
+		maxColWidth: 64, // 默认64字符
 	}
 }
 
 // CurrentRows 获取当前页的数据（格式化后的字符串）
-func (s *State) CurrentRows() ([][]string, error) {
+// 返回: rows, rowNumbers, error
+func (s *State) CurrentRows() ([][]string, []string, error) {
 	// 确保当前block已加载
 	if err := s.ensureBlockLoaded(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	if s.currentBatch == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	// 计算当前页的行范围
@@ -69,17 +74,40 @@ func (s *State) CurrentRows() ([][]string, error) {
 	}
 
 	if start >= totalRows {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	// 格式化数据
 	rows := make([][]string, end-start)
+	rowNumbers := make([]string, end-start)
 	cols := s.reader.Columns()
+	
+	// 确定要显示的列
+	displayCols := s.visibleCols
+	if displayCols == nil {
+		// 默认显示前10列或全部（如果少于10列）
+		maxCols := 10
+		if len(cols) < maxCols {
+			maxCols = len(cols)
+		}
+		displayCols = make([]uint16, maxCols)
+		for i := 0; i < maxCols; i++ {
+			displayCols[i] = uint16(i)
+		}
+	}
 
 	for i := start; i < end; i++ {
-		row := make([]string, len(cols))
-		for j, col := range cols {
-			vec := s.currentBatch.Vecs[j]
+		// 生成行号 (block-offset)
+		rowNumbers[i-start] = fmt.Sprintf("(%d-%d)", s.currentBlock, i)
+		
+		row := make([]string, len(displayCols))
+		for j, colIdx := range displayCols {
+			if int(colIdx) >= len(cols) {
+				row[j] = ""
+				continue
+			}
+			col := cols[colIdx]
+			vec := s.currentBatch.Vecs[colIdx]
 
 			// 检查NULL
 			if vec.IsNull(uint64(i)) {
@@ -126,12 +154,23 @@ func (s *State) CurrentRows() ([][]string, error) {
 
 			// 获取格式化器
 			formatter := s.formatter.GetFormatter(col.Idx, col.Type, value)
-			row[j] = formatter.Format(value)
+			formatted := formatter.Format(value)
+			
+			// 空字符串显示为空
+			if formatted == "" {
+				row[j] = ""
+			} else {
+				// 限制长度（如果 maxColWidth > 0）
+				if s.maxColWidth > 0 && len(formatted) > s.maxColWidth {
+					formatted = formatted[:s.maxColWidth-3] + "..."
+				}
+				row[j] = formatted
+			}
 		}
 		rows[i-start] = row
 	}
 
-	return rows, nil
+	return rows, rowNumbers, nil
 }
 
 func (s *State) ensureBlockLoaded() error {
@@ -288,6 +327,18 @@ func (s *State) GotoRow(globalRow int64) error {
 	}
 
 	return fmt.Errorf("row %d out of range", globalRow)
+}
+
+// GotoBlock 跳转到指定block
+func (s *State) GotoBlock(blockIdx uint32) error {
+	if blockIdx >= s.reader.BlockCount() {
+		return fmt.Errorf("block %d out of range [0, %d)", blockIdx, s.reader.BlockCount())
+	}
+	
+	s.releaseCurrentBatch()
+	s.currentBlock = blockIdx
+	s.rowOffset = 0
+	return s.ensureBlockLoaded()
 }
 
 // SetFormat 设置列格式
