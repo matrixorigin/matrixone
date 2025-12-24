@@ -85,13 +85,9 @@ func (s *State) CurrentRows() ([][]string, []string, error) {
 	// 确定要显示的列
 	displayCols := s.visibleCols
 	if displayCols == nil {
-		// 默认显示前10列或全部（如果少于10列）
-		maxCols := 10
-		if len(cols) < maxCols {
-			maxCols = len(cols)
-		}
-		displayCols = make([]uint16, maxCols)
-		for i := 0; i < maxCols; i++ {
+		// 显示所有列
+		displayCols = make([]uint16, len(cols))
+		for i := range cols {
 			displayCols[i] = uint16(i)
 		}
 	}
@@ -160,10 +156,7 @@ func (s *State) CurrentRows() ([][]string, []string, error) {
 			if formatted == "" {
 				row[j] = ""
 			} else {
-				// 限制长度（如果 maxColWidth > 0）
-				if s.maxColWidth > 0 && len(formatted) > s.maxColWidth {
-					formatted = formatted[:s.maxColWidth-3] + "..."
-				}
+				// 在 vertical 模式下不限制长度，在 table 模式下由 view 层处理
 				row[j] = formatted
 			}
 		}

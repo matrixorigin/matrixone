@@ -88,15 +88,11 @@ func (v *View) renderTable(state *State) error {
 
 	cols := state.reader.Columns()
 	
-	// 确定显示的列
+	// 确定显示的列 - table模式也显示所有列，但限制宽度
 	displayCols := state.visibleCols
 	if displayCols == nil {
-		maxCols := 10
-		if len(cols) < maxCols {
-			maxCols = len(cols)
-		}
-		displayCols = make([]uint16, maxCols)
-		for i := 0; i < maxCols; i++ {
+		displayCols = make([]uint16, len(cols))
+		for i := range cols {
 			displayCols[i] = uint16(i)
 		}
 	}
@@ -110,7 +106,7 @@ func (v *View) renderTable(state *State) error {
 	}
 
 	// 计算列宽
-	widths := v.calcColWidths(displayColInfo, rows)
+	widths := v.calcColWidths(displayColInfo, rows, state.maxColWidth)
 
 	// 表头
 	v.renderTableHeader(displayColInfo, widths)
@@ -140,6 +136,7 @@ func (v *View) renderVertical(state *State, rows [][]string, rowNumbers []string
 		}
 	}
 	
+	// 显示每一行
 	for rowIdx, row := range rows {
 		fmt.Printf("*************************** %s ***************************\n", rowNumbers[rowIdx])
 		for i, colIdx := range displayCols {
@@ -148,9 +145,16 @@ func (v *View) renderVertical(state *State, rows [][]string, rowNumbers []string
 				value := ""
 				if i < len(row) {
 					value = row[i]
+					// 在 vertical 模式下应用宽度限制
+					if state.maxColWidth > 0 && len(value) > state.maxColWidth {
+						value = value[:state.maxColWidth-3] + "..."
+					}
 				}
-				fmt.Printf("%10s (Col%d): %s\n", col.Type.String(), colIdx, value)
+				fmt.Printf("%15s (Col%d): %s\n", col.Type.String(), colIdx, value)
 			}
+		}
+		if rowIdx < len(rows)-1 {
+			fmt.Println() // 行之间空一行
 		}
 	}
 	
@@ -169,6 +173,26 @@ func (v *View) renderTableRowWithNumber(rowNum string, row []string, widths []in
 		}
 	}
 	fmt.Println("│")
+}
+
+func (v *View) renderStatusToBuilder(state *State, b *strings.Builder) {
+	info := state.reader.Info()
+	start := state.GlobalRowOffset() + 1
+	rows, _, _ := state.CurrentRows()
+	end := start + int64(len(rows)) - 1
+
+	mode := "Table"
+	if state.verticalMode {
+		mode = "Vertical"
+	}
+	
+	widthStr := fmt.Sprintf("%d", state.maxColWidth)
+	if state.maxColWidth == 0 {
+		widthStr = "unlimited"
+	}
+
+	fmt.Fprintf(b, "\n[%d-%d of %d] Block %d/%d | Mode: %s | Width: %s",
+		start, end, info.RowCount, state.currentBlock+1, info.BlockCount, mode, widthStr)
 }
 
 func (v *View) renderStatus(state *State) {
@@ -193,7 +217,7 @@ func (v *View) renderStatus(state *State) {
 		start, end, info.RowCount, state.currentBlock+1, info.BlockCount, mode, widthStr)
 }
 
-func (v *View) calcColWidths(cols []objecttool.ColInfo, rows [][]string) []int {
+func (v *View) calcColWidths(cols []objecttool.ColInfo, rows [][]string, maxColWidth int) []int {
 	widths := make([]int, len(cols))
 
 	// 初始宽度：列名长度
@@ -212,10 +236,18 @@ func (v *View) calcColWidths(cols []objecttool.ColInfo, rows [][]string) []int {
 				if cellLen > widths[i] {
 					widths[i] = cellLen
 				}
-				// 最大宽度限制
-				if widths[i] > 30 {
-					widths[i] = 30
-				}
+			}
+		}
+	}
+
+	// 应用最大宽度限制
+	for i := range widths {
+		if maxColWidth > 0 && widths[i] > maxColWidth {
+			widths[i] = maxColWidth
+		} else if maxColWidth == 0 {
+			// unlimited 模式，但仍然有一个合理的上限避免显示问题
+			if widths[i] > 200 {
+				widths[i] = 200
 			}
 		}
 	}

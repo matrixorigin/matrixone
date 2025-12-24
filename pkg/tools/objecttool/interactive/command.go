@@ -220,6 +220,11 @@ func (c *GotoCommand) Execute(state *State) (string, bool, error) {
 	} else if c.Bottom {
 		return "", false, state.GotoRow(-1)
 	} else {
+		// 检查 block 范围
+		blockCount := state.reader.BlockCount()
+		if c.Block >= blockCount {
+			return fmt.Sprintf("Block %d out of range. Available blocks: 0-%d", c.Block, blockCount-1), false, nil
+		}
 		return "", false, state.GotoBlock(c.Block)
 	}
 }
