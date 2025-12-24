@@ -1000,6 +1000,78 @@ func (ec *ExportConfig) getExportFormat() string {
 	return ec.userConfig.ExportFormat
 }
 
+// inferFormatFromSuffix infers the export format from file suffix.
+// Returns empty string if suffix is not recognized.
+func inferFormatFromSuffix(filePath string) string {
+	lowerPath := strings.ToLower(filePath)
+
+	// Check for known suffixes
+	switch {
+	case strings.HasSuffix(lowerPath, ".csv"):
+		return "csv"
+	case strings.HasSuffix(lowerPath, ".jsonl"),
+		strings.HasSuffix(lowerPath, ".jsonline"),
+		strings.HasSuffix(lowerPath, ".ndjson"):
+		return "jsonline"
+	case strings.HasSuffix(lowerPath, ".parquet"):
+		return "parquet"
+	default:
+		return ""
+	}
+}
+
+// getSuffixForFormat returns the expected file suffixes for a given format
+func getSuffixForFormat(format string) []string {
+	switch format {
+	case "csv":
+		return []string{".csv"}
+	case "jsonline":
+		return []string{".jsonl", ".jsonline", ".ndjson"}
+	case "parquet":
+		return []string{".parquet"}
+	default:
+		return nil
+	}
+}
+
+// validateExportFormat validates that FORMAT matches file suffix,
+// or infers FORMAT from suffix if not specified.
+func validateExportFormat(ctx context.Context, ep *tree.ExportParam) error {
+	if ep == nil {
+		return nil
+	}
+
+	inferredFormat := inferFormatFromSuffix(ep.FilePath)
+
+	// Case 1: No FORMAT specified - infer from suffix
+	if ep.ExportFormat == "" {
+		if inferredFormat != "" {
+			ep.ExportFormat = inferredFormat
+		} else {
+			// Unknown suffix, default to csv
+			ep.ExportFormat = "csv"
+		}
+		return nil
+	}
+
+	// Case 2: FORMAT specified - validate against suffix if suffix is recognized
+	if inferredFormat != "" && ep.ExportFormat != inferredFormat {
+		// Get the actual suffix for error message
+		lowerPath := strings.ToLower(ep.FilePath)
+		var suffix string
+		for _, s := range []string{".csv", ".jsonl", ".jsonline", ".ndjson", ".parquet"} {
+			if strings.HasSuffix(lowerPath, s) {
+				suffix = s
+				break
+			}
+		}
+		return moerr.NewInternalErrorf(ctx, "format '%s' does not match file suffix '%s'", ep.ExportFormat, suffix)
+	}
+
+	// Case 3: FORMAT specified with unknown suffix - allow
+	return nil
+}
+
 // constructJSONLine constructs JSONLINE format output from a batch
 func constructJSONLine(ctx context.Context, obj FeSession, bat *batch.Batch, index int32, ByteChan chan *BatchByte, ep *ExportConfig) {
 	var (

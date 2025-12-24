@@ -3565,6 +3565,11 @@ func doCheckFilePath(ctx context.Context, ses *Session, ep *tree.ExportParam) (e
 		return err
 	}
 
+	// Validate and infer export format based on file suffix
+	if err = validateExportFormat(ctx, ep); err != nil {
+		return
+	}
+
 	// detect filepath contain stage or not
 	//var err error
 	var (

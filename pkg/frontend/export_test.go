@@ -906,3 +906,146 @@ func Test_ParquetWriter_Close(t *testing.T) {
 		convey.So(string(data[:4]), convey.ShouldEqual, "PAR1")
 	})
 }
+
+func Test_inferFormatFromSuffix(t *testing.T) {
+	convey.Convey("inferFormatFromSuffix returns correct format based on file suffix", t, func() {
+		// CSV suffixes
+		convey.So(inferFormatFromSuffix("data.csv"), convey.ShouldEqual, "csv")
+		convey.So(inferFormatFromSuffix("data.CSV"), convey.ShouldEqual, "csv")
+		convey.So(inferFormatFromSuffix("/path/to/data.csv"), convey.ShouldEqual, "csv")
+		convey.So(inferFormatFromSuffix("stage://bucket/data.csv"), convey.ShouldEqual, "csv")
+
+		// JSONLINE suffixes
+		convey.So(inferFormatFromSuffix("data.jsonl"), convey.ShouldEqual, "jsonline")
+		convey.So(inferFormatFromSuffix("data.jsonline"), convey.ShouldEqual, "jsonline")
+		convey.So(inferFormatFromSuffix("data.ndjson"), convey.ShouldEqual, "jsonline")
+		convey.So(inferFormatFromSuffix("data.JSONL"), convey.ShouldEqual, "jsonline")
+
+		// Parquet suffixes
+		convey.So(inferFormatFromSuffix("data.parquet"), convey.ShouldEqual, "parquet")
+		convey.So(inferFormatFromSuffix("data.PARQUET"), convey.ShouldEqual, "parquet")
+		convey.So(inferFormatFromSuffix("/path/to/data.parquet"), convey.ShouldEqual, "parquet")
+
+		// With split pattern %d
+		convey.So(inferFormatFromSuffix("data_%05d.csv"), convey.ShouldEqual, "csv")
+		convey.So(inferFormatFromSuffix("data_%d.jsonl"), convey.ShouldEqual, "jsonline")
+		convey.So(inferFormatFromSuffix("data_%05d.parquet"), convey.ShouldEqual, "parquet")
+
+		// Unknown suffix returns empty string
+		convey.So(inferFormatFromSuffix("data.txt"), convey.ShouldEqual, "")
+		convey.So(inferFormatFromSuffix("data.json"), convey.ShouldEqual, "")
+		convey.So(inferFormatFromSuffix("data"), convey.ShouldEqual, "")
+	})
+}
+
+func Test_validateExportFormat(t *testing.T) {
+	ctx := context.Background()
+
+	convey.Convey("validateExportFormat validates and infers format correctly", t, func() {
+		// Test 1: No FORMAT specified, infer from .csv suffix
+		convey.Convey("infer csv from suffix", func() {
+			ep := &tree.ExportParam{
+				FilePath:     "data.csv",
+				ExportFormat: "",
+			}
+			err := validateExportFormat(ctx, ep)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(ep.ExportFormat, convey.ShouldEqual, "csv")
+		})
+
+		// Test 2: No FORMAT specified, infer from .jsonl suffix
+		convey.Convey("infer jsonline from suffix", func() {
+			ep := &tree.ExportParam{
+				FilePath:     "data.jsonl",
+				ExportFormat: "",
+			}
+			err := validateExportFormat(ctx, ep)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(ep.ExportFormat, convey.ShouldEqual, "jsonline")
+		})
+
+		// Test 3: No FORMAT specified, infer from .parquet suffix
+		convey.Convey("infer parquet from suffix", func() {
+			ep := &tree.ExportParam{
+				FilePath:     "data.parquet",
+				ExportFormat: "",
+			}
+			err := validateExportFormat(ctx, ep)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(ep.ExportFormat, convey.ShouldEqual, "parquet")
+		})
+
+		// Test 4: No FORMAT specified, unknown suffix defaults to csv
+		convey.Convey("unknown suffix defaults to csv", func() {
+			ep := &tree.ExportParam{
+				FilePath:     "data.txt",
+				ExportFormat: "",
+			}
+			err := validateExportFormat(ctx, ep)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(ep.ExportFormat, convey.ShouldEqual, "csv")
+		})
+
+		// Test 5: FORMAT matches suffix - ok
+		convey.Convey("format matches suffix", func() {
+			ep := &tree.ExportParam{
+				FilePath:     "data.csv",
+				ExportFormat: "csv",
+			}
+			err := validateExportFormat(ctx, ep)
+			convey.So(err, convey.ShouldBeNil)
+		})
+
+		// Test 6: FORMAT mismatches suffix - error
+		convey.Convey("format mismatches suffix", func() {
+			ep := &tree.ExportParam{
+				FilePath:     "data.csv",
+				ExportFormat: "jsonline",
+			}
+			err := validateExportFormat(ctx, ep)
+			convey.So(err, convey.ShouldNotBeNil)
+			convey.So(err.Error(), convey.ShouldContainSubstring, "format 'jsonline' does not match file suffix '.csv'")
+		})
+
+		// Test 7: FORMAT with parquet suffix mismatch
+		convey.Convey("format csv mismatches parquet suffix", func() {
+			ep := &tree.ExportParam{
+				FilePath:     "data.parquet",
+				ExportFormat: "csv",
+			}
+			err := validateExportFormat(ctx, ep)
+			convey.So(err, convey.ShouldNotBeNil)
+			convey.So(err.Error(), convey.ShouldContainSubstring, "format 'csv' does not match file suffix '.parquet'")
+		})
+
+		// Test 8: FORMAT with unknown suffix - ok (no suffix to validate against)
+		convey.Convey("format with unknown suffix is allowed", func() {
+			ep := &tree.ExportParam{
+				FilePath:     "data.txt",
+				ExportFormat: "jsonline",
+			}
+			err := validateExportFormat(ctx, ep)
+			convey.So(err, convey.ShouldBeNil)
+		})
+
+		// Test 9: Split pattern with suffix validation
+		convey.Convey("split pattern with suffix validation", func() {
+			ep := &tree.ExportParam{
+				FilePath:     "data_%05d.parquet",
+				ExportFormat: "csv",
+			}
+			err := validateExportFormat(ctx, ep)
+			convey.So(err, convey.ShouldNotBeNil)
+		})
+
+		// Test 10: Split pattern with matching format
+		convey.Convey("split pattern with matching format", func() {
+			ep := &tree.ExportParam{
+				FilePath:     "data_%05d.parquet",
+				ExportFormat: "parquet",
+			}
+			err := validateExportFormat(ctx, ep)
+			convey.So(err, convey.ShouldBeNil)
+		})
+	})
+}
