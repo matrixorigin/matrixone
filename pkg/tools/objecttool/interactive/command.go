@@ -84,6 +84,15 @@ func parseColonCommand(cmd string) (Command, error) {
 		return &VerticalCommand{Enable: false}, nil
 	case "set":
 		return parseSetCommand(parts[1:])
+	case "vrows":
+		if len(parts) < 2 {
+			return nil, fmt.Errorf("usage: vrows <number>")
+		}
+		rows, err := strconv.Atoi(parts[1])
+		if err != nil || rows < 1 {
+			return nil, fmt.Errorf("invalid number of rows: %s", parts[1])
+		}
+		return &VRowsCommand{Rows: rows}, nil
 	case "search", "/":
 		if len(parts) < 2 {
 			return nil, fmt.Errorf("usage: search <pattern> or /<pattern>")
@@ -314,15 +323,15 @@ type VerticalCommand struct {
 func (c *VerticalCommand) Execute(state *State) (string, bool, error) {
 	state.verticalMode = c.Enable
 	if c.Enable {
-		// 垂直模式使用更大的宽度，并且每次只显示一行
+		// 垂直模式使用更大的宽度，默认显示10行
 		state.maxColWidth = 128
-		state.pageSize = 1
-		return "Switched to vertical mode (\\G), width=128", false, nil
+		state.pageSize = 10
+		return "Switched to vertical mode (\\G), width=128, 10 rows/page", false, nil
 	}
 	// 表格模式恢复默认宽度和页大小
 	state.maxColWidth = 64
 	state.pageSize = 20
-	return "Switched to table mode, width=64", false, nil
+	return "Switched to table mode, width=64, 20 rows/page", false, nil
 }
 
 // SetCommand 设置选项
@@ -347,6 +356,7 @@ func (c *SetCommand) Execute(state *State) (string, bool, error) {
 var generalHelp = `
 Browse Mode (default):
   j/k/↑/↓     Scroll down/up one line
+  h/l/←/→     Scroll left/right (horizontal)
   Enter       Next page
   Ctrl+F      Next page (forward)
   Ctrl+B      Previous page (backward)
@@ -359,9 +369,10 @@ Command Mode (press : to enter):
   schema      Show schema
   format N F  Set column N format to F
   N           Go to block N (e.g., :0, :1, :2)
-  vertical    Switch to vertical mode (width=128)
-  table       Switch to table mode (width=64)
+  vertical    Switch to vertical mode (width=128, 10 rows/page)
+  table       Switch to table mode (width=64, 20 rows/page)
   set width N Set column width (0=unlimited)
+  vrows N     Set vertical mode rows per page (default=10)
   cols <list> Show specific columns (e.g., 1,3,5 or 1-5)
   cols all    Show all columns
   search <pattern>  Search for text in current page
@@ -373,6 +384,11 @@ Command History & Completion:
   ↑/↓         Navigate command history
   Tab         Auto-complete commands
   Ctrl+U      Clear current input
+
+Horizontal Scrolling:
+  h/←         Scroll left to see previous columns
+  l/→         Scroll right to see next columns
+  Status bar shows current column range
 
 Row Number Format: (block-offset)
   Example: (0-0) = block 0, offset 0

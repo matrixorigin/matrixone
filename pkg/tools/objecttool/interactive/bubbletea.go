@@ -30,6 +30,7 @@ type model struct {
 	cmdInput     string
 	cmdHistory   []string
 	historyIndex int
+	hScrollOffset int  // 水平滚动偏移
 }
 
 func (m model) Init() tea.Cmd {
@@ -64,6 +65,17 @@ func (m model) handleBrowseMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.state.NextPage()
 	case "ctrl+b", "pgup":
 		m.state.PrevPage()
+	case "left", "h":
+		// 水平向左滚动
+		if m.hScrollOffset > 0 {
+			m.hScrollOffset--
+		}
+	case "right", "l":
+		// 水平向右滚动
+		cols := m.state.reader.Columns()
+		if m.hScrollOffset < len(cols)-1 {
+			m.hScrollOffset++
+		}
 	case ":":
 		m.cmdMode = true
 		m.cmdInput = ""
@@ -182,8 +194,11 @@ func (m model) View() string {
 	if m.state.maxColWidth == 0 {
 		widthStr = "unlimited"
 	}
-	b.WriteString(fmt.Sprintf("\n[%d-%d of %d] Block %d/%d | Mode: %s | Width: %s\n",
-		start, end, info.RowCount, m.state.currentBlock+1, info.BlockCount, mode, widthStr))
+	cols := m.state.reader.Columns()
+	visibleCols := m.getVisibleColumns(cols)
+	b.WriteString(fmt.Sprintf("\n[%d-%d of %d] Block %d/%d | Mode: %s | Width: %s | Cols: %d-%d of %d\n",
+		start, end, info.RowCount, m.state.currentBlock+1, info.BlockCount, mode, widthStr, 
+		m.hScrollOffset, m.hScrollOffset+len(visibleCols)-1, len(cols)))
 	
 	// 消息
 	if m.message != "" {
@@ -213,14 +228,8 @@ func (m model) renderTable(b *strings.Builder) {
 	
 	cols := m.state.reader.Columns()
 	
-	// 确定显示的列 - 显示所有列
-	displayCols := m.state.visibleCols
-	if displayCols == nil {
-		displayCols = make([]uint16, len(cols))
-		for i := range cols {
-			displayCols[i] = uint16(i)
-		}
-	}
+	// 确定显示的列 - 根据水平滚动偏移和终端宽度
+	displayCols := m.getVisibleColumns(cols)
 	
 	// 计算列宽
 	widths := make([]int, len(displayCols))
@@ -236,7 +245,7 @@ func (m model) renderTable(b *strings.Builder) {
 	// 根据数据调整列宽
 	for _, row := range rows {
 		for i, cell := range row {
-			if i < len(widths) {
+			if i+m.hScrollOffset < len(widths) {
 				cellLen := len(cell)
 				if cellLen > widths[i] {
 					widths[i] = cellLen
@@ -250,7 +259,6 @@ func (m model) renderTable(b *strings.Builder) {
 		if m.state.maxColWidth > 0 && widths[i] > m.state.maxColWidth {
 			widths[i] = m.state.maxColWidth
 		} else if m.state.maxColWidth == 0 {
-			// unlimited 模式，但仍然有一个合理的上限避免显示问题
 			if widths[i] > 200 {
 				widths[i] = 200
 			}
@@ -290,8 +298,9 @@ func (m model) renderTable(b *strings.Builder) {
 	// 数据行
 	for i, row := range rows {
 		fmt.Fprintf(b, "│ %-10s │", rowNumbers[i])
-		for j, cell := range row {
-			if j < len(widths) {
+		for j, colIdx := range displayCols {
+			if j < len(widths) && int(colIdx) < len(row) {
+				cell := row[colIdx]
 				// 截断过长的内容
 				if len(cell) > widths[j] {
 					cell = cell[:widths[j]-3] + "..."
@@ -367,7 +376,7 @@ func RunBubbletea(path string) error {
 func (m model) completeCommand(input string) string {
 	commands := []string{
 		"quit", "q", "info", "schema", "format", "vertical", "v", "\\G", 
-		"table", "t", "set", "search", "cols", "columns", "help",
+		"table", "t", "set", "vrows", "search", "cols", "columns", "help",
 	}
 	
 	var matches []string
@@ -405,6 +414,49 @@ func longestCommonPrefix(strs []string) string {
 		}
 	}
 	return prefix
+}
+
+// getVisibleColumns 根据水平滚动偏移和终端宽度计算可见的列
+func (m model) getVisibleColumns(cols []objecttool.ColInfo) []uint16 {
+	// 如果用户设置了特定的可见列，优先使用
+	if m.state.visibleCols != nil {
+		return m.state.visibleCols
+	}
+	
+	// 使用更大的终端宽度估算，显示更多列
+	terminalWidth := 200  // 增加到200
+	usedWidth := 12 // RowNum 列的宽度
+	
+	var visibleCols []uint16
+	startCol := m.hScrollOffset
+	
+	for i := startCol; i < len(cols); i++ {
+		colWidth := m.state.maxColWidth
+		if colWidth == 0 || colWidth > 30 {
+			colWidth = 20 // 限制单列最大宽度为20，显示更多列
+		}
+		
+		if usedWidth + colWidth + 3 > terminalWidth { // +3 for borders
+			break
+		}
+		
+		visibleCols = append(visibleCols, uint16(i))
+		usedWidth += colWidth + 3
+	}
+	
+	// 至少显示8列（如果有的话）
+	if len(visibleCols) < 8 && startCol < len(cols) {
+		maxCols := len(cols) - startCol
+		if maxCols > 8 {
+			maxCols = 8
+		}
+		visibleCols = make([]uint16, maxCols)
+		for i := 0; i < maxCols; i++ {
+			visibleCols[i] = uint16(startCol + i)
+		}
+	}
+	
+	return visibleCols
 }
 
 // SearchCommand 搜索命令
@@ -468,4 +520,17 @@ func (c *ColumnsCommand) Execute(state *State) (string, bool, error) {
 	
 	state.visibleCols = c.Columns
 	return fmt.Sprintf("Showing columns: %v", c.Columns), false, nil
+}
+
+// VRowsCommand 设置 vertical 模式显示行数
+type VRowsCommand struct {
+	Rows int
+}
+
+func (c *VRowsCommand) Execute(state *State) (string, bool, error) {
+	if state.verticalMode {
+		state.pageSize = c.Rows
+		return fmt.Sprintf("Vertical mode now shows %d rows per page", c.Rows), false, nil
+	}
+	return "Command only works in vertical mode. Use :vertical first", false, nil
 }
