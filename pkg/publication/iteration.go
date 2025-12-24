@@ -363,7 +363,6 @@ func (iterCtx *IterationContext) Close(commit bool) error {
 		iterCtx.LocalExecutor.Close()
 	}
 	if iterCtx.UpstreamExecutor != nil {
-		iterCtx.UpstreamExecutor.EndTxn(ctx, commit)
 		iterCtx.UpstreamExecutor.Close()
 	}
 	return nil
@@ -1208,11 +1207,6 @@ func ExecuteIteration(
 			}
 		}
 	}()
-	// Start upstream transaction after CREATE SNAPSHOT (CREATE SNAPSHOT cannot run in a transaction)
-	if err = iterationCtx.UpstreamExecutor.StartTxn(ctx); err != nil {
-		err = moerr.NewInternalErrorf(ctx, "failed to start upstream transaction: %v", err)
-		return
-	}
 
 	// Call OnSnapshotCreated callback if utHelper is provided
 	if utHelper != nil {

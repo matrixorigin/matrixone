@@ -240,6 +240,13 @@ func statementCanBeExecutedInUncommittedTransaction(
 		// Call procedure can be executed in an uncommitted transaction, usually used in
 		// nested procedure call.
 		return true, nil
+	case *tree.CheckSnapshotFlushed,
+		*tree.ObjectList,
+		*tree.GetDdl,
+		*tree.GetObject:
+		// CheckSnapshotFlushed is a read-only operation that checks if a snapshot is flushed.
+		// It can be safely executed in an uncommitted transaction.
+		return true, nil
 	}
 
 	return false, nil
