@@ -17,6 +17,7 @@ package interactive
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -24,13 +25,24 @@ import (
 )
 
 type model struct {
-	state        *State
-	message      string
-	cmdMode      bool
-	cmdInput     string
-	cmdHistory   []string
-	historyIndex int
+	state         *State
+	message       string
+	cmdMode       bool
+	cmdInput      string
+	cmdHistory    []string
+	historyIndex  int
 	hScrollOffset int  // 水平滚动偏移
+	
+	// 搜索相关
+	searchTerm    string
+	searchMatches []SearchMatch
+	currentMatch  int
+}
+
+type SearchMatch struct {
+	Row    int64
+	Col    int
+	Value  string
 }
 
 func (m model) Init() tea.Cmd {
@@ -84,6 +96,18 @@ func (m model) handleBrowseMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cmdMode = true
 		m.cmdInput = "search "
 		m.historyIndex = len(m.cmdHistory)
+	case "n":
+		// 下一个搜索结果
+		if len(m.searchMatches) > 0 {
+			m.currentMatch = (m.currentMatch + 1) % len(m.searchMatches)
+			m.gotoSearchMatch()
+		}
+	case "N":
+		// 上一个搜索结果
+		if len(m.searchMatches) > 0 {
+			m.currentMatch = (m.currentMatch - 1 + len(m.searchMatches)) % len(m.searchMatches)
+			m.gotoSearchMatch()
+		}
 	case "?":
 		m.message = generalHelp
 	default:
@@ -115,6 +139,13 @@ func (m model) handleCommandInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// 添加到历史记录
 		m.cmdHistory = append(m.cmdHistory, m.cmdInput)
 		m.historyIndex = len(m.cmdHistory)
+		
+		// 特殊处理搜索命令
+		if searchCmd, ok := cmd.(*SearchCommand); ok {
+			m.performSearch(searchCmd.Pattern)
+			m.cmdInput = ""
+			return m, nil
+		}
 		
 		output, quit, err := cmd.Execute(m.state)
 		if err != nil {
@@ -234,6 +265,167 @@ func (m model) View() string {
 	return b.String()
 }
 
+// gotoSearchMatch 跳转到当前搜索匹配
+func (m *model) gotoSearchMatch() {
+	if len(m.searchMatches) == 0 || m.currentMatch < 0 || m.currentMatch >= len(m.searchMatches) {
+		return
+	}
+	
+	match := m.searchMatches[m.currentMatch]
+	// 跳转到匹配的行
+	m.state.GotoRow(match.Row)
+	
+	// 调整水平滚动以显示匹配的列
+	cols := m.state.reader.Columns()
+	if match.Col < len(cols) {
+		visibleCols := m.getVisibleColumns(cols)
+		if match.Col < m.hScrollOffset || match.Col >= m.hScrollOffset+len(visibleCols) {
+			m.hScrollOffset = match.Col
+			if m.hScrollOffset > len(cols)-5 {
+				m.hScrollOffset = len(cols) - 5
+			}
+			if m.hScrollOffset < 0 {
+				m.hScrollOffset = 0
+			}
+		}
+	}
+	
+	m.message = fmt.Sprintf("Match %d/%d: %s", m.currentMatch+1, len(m.searchMatches), match.Value)
+}
+
+// performSearch 执行搜索并保存结果
+func (m *model) performSearch(pattern string) {
+	m.searchTerm = pattern
+	m.searchMatches = nil
+	m.currentMatch = 0
+	
+	// 尝试编译正则表达式
+	var regex *regexp.Regexp
+	var err error
+	useRegex := false
+	
+	// 如果包含正则特殊字符，尝试作为正则处理
+	if strings.ContainsAny(pattern, ".*+?^${}[]|()\\") {
+		regex, err = regexp.Compile("(?i)" + pattern) // 忽略大小写
+		if err == nil {
+			useRegex = true
+		}
+	}
+	
+	// 搜索当前页面
+	rows, _, err := m.state.CurrentRows()
+	if err != nil {
+		m.message = fmt.Sprintf("Search error: %v", err)
+		return
+	}
+	
+	rowOffset := m.state.GlobalRowOffset()
+	for i, row := range rows {
+		for j, cell := range row {
+			var matched bool
+			if useRegex {
+				matched = regex.MatchString(cell)
+			} else {
+				matched = strings.Contains(strings.ToLower(cell), strings.ToLower(pattern))
+			}
+			
+			if matched {
+				m.searchMatches = append(m.searchMatches, SearchMatch{
+					Row:   rowOffset + int64(i),
+					Col:   j,
+					Value: cell,
+				})
+			}
+		}
+	}
+	
+	if len(m.searchMatches) == 0 {
+		searchType := "text"
+		if useRegex {
+			searchType = "regex"
+		}
+		m.message = fmt.Sprintf("No matches found for %s: %s", searchType, pattern)
+	} else {
+		searchType := "matches"
+		if useRegex {
+			searchType = "regex matches"
+		}
+		m.message = fmt.Sprintf("Found %d %s", len(m.searchMatches), searchType)
+		m.gotoSearchMatch()
+	}
+}
+
+// highlightSearchMatch 高亮搜索匹配的文本
+func (m model) highlightSearchMatch(text string, row int64, col int) string {
+	if m.searchTerm == "" {
+		return text
+	}
+	
+	// 检查是否是当前匹配
+	isCurrentMatch := false
+	if len(m.searchMatches) > 0 && m.currentMatch >= 0 && m.currentMatch < len(m.searchMatches) {
+		match := m.searchMatches[m.currentMatch]
+		isCurrentMatch = (match.Row == row && match.Col == col)
+	}
+	
+	// 高亮颜色
+	highlightColor := "\033[43m\033[30m"  // 黄色背景，黑色文字
+	currentColor := "\033[41m\033[97m"    // 红色背景，白色文字 (当前匹配)
+	reset := "\033[0m"
+	
+	// 尝试正则匹配
+	var regex *regexp.Regexp
+	var err error
+	useRegex := false
+	
+	if strings.ContainsAny(m.searchTerm, ".*+?^${}[]|()\\") {
+		regex, err = regexp.Compile("(?i)" + m.searchTerm)
+		if err == nil {
+			useRegex = true
+		}
+	}
+	
+	color := highlightColor
+	if isCurrentMatch {
+		color = currentColor
+	}
+	
+	if useRegex {
+		// 正则表达式高亮
+		return regex.ReplaceAllStringFunc(text, func(match string) string {
+			return color + match + reset
+		})
+	} else {
+		// 简单文本匹配高亮
+		lowerText := strings.ToLower(text)
+		lowerPattern := strings.ToLower(m.searchTerm)
+		
+		if strings.Contains(lowerText, lowerPattern) {
+			result := ""
+			remaining := text
+			lowerRemaining := lowerText
+			
+			for {
+				index := strings.Index(lowerRemaining, lowerPattern)
+				if index == -1 {
+					result += remaining
+					break
+				}
+				
+				result += remaining[:index]
+				result += color + remaining[index:index+len(m.searchTerm)] + reset
+				
+				remaining = remaining[index+len(m.searchTerm):]
+				lowerRemaining = lowerRemaining[index+len(m.searchTerm):]
+			}
+			
+			return result
+		}
+	}
+	
+	return text
+}
+
 func (m model) renderTable(b *strings.Builder) {
 	rows, rowNumbers, _ := m.state.CurrentRows()
 	if len(rows) == 0 {
@@ -320,6 +512,10 @@ func (m model) renderTable(b *strings.Builder) {
 				if len(cell) > widths[j] {
 					cell = cell[:widths[j]-3] + "..."
 				}
+				
+				// 高亮搜索匹配
+				cell = m.highlightSearchMatch(cell, int64(i)+m.state.GlobalRowOffset(), int(colIdx))
+				
 				fmt.Fprintf(b, " %-*s │", widths[j], cell)
 			}
 		}
@@ -356,6 +552,10 @@ func (m model) renderVertical(b *strings.Builder) {
 				if m.state.maxColWidth > 0 && len(value) > m.state.maxColWidth {
 					value = value[:m.state.maxColWidth-3] + "..."
 				}
+				
+				// 高亮搜索匹配
+				value = m.highlightSearchMatch(value, int64(rowIdx)+m.state.GlobalRowOffset(), i)
+				
 				fmt.Fprintf(b, "%15s (Col%d): %s\n", col.Type.String(), i, value)
 			}
 		}
