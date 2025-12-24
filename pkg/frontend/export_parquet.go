@@ -220,3 +220,8 @@ func (pw *ParquetWriter) Reset() {
 	pw.buf.Reset()
 	pw.writer.Reset(pw.buf)
 }
+
+// Size returns the current buffer size in bytes
+func (pw *ParquetWriter) Size() int {
+	return pw.buf.Len()
+}

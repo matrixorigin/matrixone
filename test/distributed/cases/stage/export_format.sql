@@ -170,6 +170,12 @@ select * from export_format_test into outfile 'stage://export_test_stage/test_sp
 -- Test 3.10: SPLITSIZE with jsonline format
 select * from export_format_test into outfile 'stage://export_test_stage/test_split_jsonline_%d.jsonl' format 'jsonline' splitsize '1M';
 
+-- Test 3.11: SPLITSIZE with parquet format
+select * from export_format_test into outfile 'stage://export_test_stage/test_split_parquet_%d.parquet' format 'parquet' splitsize '1M';
+
+-- Test 3.12: SPLITSIZE with parquet format and %05d padding
+select * from export_format_test into outfile 'stage://export_test_stage/test_split_parquet_05d_%05d.parquet' format 'parquet' splitsize '1M';
+
 -- ============================================================================
 -- PART 4: Normal/Valid Cases - CSV Options
 -- ============================================================================

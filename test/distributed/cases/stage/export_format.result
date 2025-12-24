@@ -91,6 +91,8 @@ select * from export_format_test into outfile 'stage://export_test_stage/test_sp
 select * from export_format_test into outfile 'stage://export_test_stage/test_split_d_%d.csv' format 'csv' splitsize '1M';
 select * from export_format_test into outfile 'stage://export_test_stage/test_split_05d_%05d.csv' format 'csv' splitsize '1M';
 select * from export_format_test into outfile 'stage://export_test_stage/test_split_jsonline_%d.jsonl' format 'jsonline' splitsize '1M';
+select * from export_format_test into outfile 'stage://export_test_stage/test_split_parquet_%d.parquet' format 'parquet' splitsize '1M';
+select * from export_format_test into outfile 'stage://export_test_stage/test_split_parquet_05d_%05d.parquet' format 'parquet' splitsize '1M';
 select * from export_format_test into outfile 'stage://export_test_stage/test_csv_tab.csv' format 'csv' fields terminated by '\t';
 select * from export_format_test into outfile 'stage://export_test_stage/test_csv_enclosed.csv' format 'csv' fields enclosed by '"';
 select * from export_format_test into outfile 'stage://export_test_stage/test_csv_lines.csv' format 'csv' lines terminated by '\r\n';

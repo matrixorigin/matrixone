@@ -860,24 +860,7 @@ func exportAllDataFromBatches(ep *ExportConfig) error {
 
 // finalizeParquetExport closes the parquet writer and writes the complete parquet file
 func finalizeParquetExport(ep *ExportConfig) error {
-	if ep.parquetWriter == nil {
-		// No data was written
-		return nil
-	}
-
-	// Close the parquet writer to get the complete parquet data (including footer)
-	parquetData, err := ep.parquetWriter.Close()
-	if err != nil {
-		return err
-	}
-
-	// Write the parquet data to file
-	if err := writeParquetToFile(ep, parquetData); err != nil {
-		return err
-	}
-
-	ep.parquetWriter = nil
-	return nil
+	return ep.flushParquetFile()
 }
 
 // writeParquetToFile writes the complete parquet data to the output file
@@ -982,7 +965,57 @@ func (ec *ExportConfig) writeParquet(execCtx *ExecCtx, bat *batch.Batch) error {
 	}
 
 	// Write batch to parquet writer
-	return ec.parquetWriter.WriteBatch(bat, execCtx.ses.GetMemPool(), timeZone)
+	if err := ec.parquetWriter.WriteBatch(bat, execCtx.ses.GetMemPool(), timeZone); err != nil {
+		return err
+	}
+
+	// Check if we need to split the file
+	splitSize := getEffectiveMaxFileSize(ec)
+	if shouldSplitParquetFile(uint64(ec.parquetWriter.Size()), splitSize) {
+		// Flush current parquet file
+		if err := ec.flushParquetFile(); err != nil {
+			return err
+		}
+		// Increment file counter
+		ec.FileCnt++
+		// Create new parquet writer for next file
+		var err error
+		ec.parquetWriter, err = NewParquetWriter(execCtx.reqCtx, ec.mrs)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// shouldSplitParquetFile checks if the parquet file should be split based on current size
+func shouldSplitParquetFile(currentSize, splitSize uint64) bool {
+	if splitSize == 0 {
+		return false
+	}
+	return currentSize >= splitSize
+}
+
+// flushParquetFile closes the current parquet writer and writes data to file
+func (ec *ExportConfig) flushParquetFile() error {
+	if ec.parquetWriter == nil {
+		return nil
+	}
+
+	// Close the parquet writer to get the complete parquet data (including footer)
+	parquetData, err := ec.parquetWriter.Close()
+	if err != nil {
+		return err
+	}
+
+	// Write the parquet data to file
+	if err := writeParquetToFile(ec, parquetData); err != nil {
+		return err
+	}
+
+	ec.parquetWriter = nil
+	return nil
 }
 
 func (ec *ExportConfig) Close() {

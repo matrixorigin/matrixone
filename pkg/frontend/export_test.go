@@ -1049,3 +1049,54 @@ func Test_validateExportFormat(t *testing.T) {
 		})
 	})
 }
+
+func Test_ParquetWriter_Size(t *testing.T) {
+	convey.Convey("ParquetWriter Size returns current buffer size", t, func() {
+		ctx := context.Background()
+		mrs := &MysqlResultSet{}
+		col1 := new(MysqlColumn)
+		col1.SetName("id")
+		col1.SetColumnType(defines.MYSQL_TYPE_LONG)
+		col2 := new(MysqlColumn)
+		col2.SetName("name")
+		col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+		mrs.AddColumn(col1)
+		mrs.AddColumn(col2)
+
+		pw, err := NewParquetWriter(ctx, mrs)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(pw, convey.ShouldNotBeNil)
+
+		// Initial size should be 0
+		convey.So(pw.Size(), convey.ShouldEqual, 0)
+
+		// After close, the buffer should have data
+		data, err := pw.Close()
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(len(data), convey.ShouldBeGreaterThan, 0)
+	})
+}
+
+func Test_shouldSplitParquetFile(t *testing.T) {
+	convey.Convey("shouldSplitParquetFile checks if file should be split", t, func() {
+		convey.Convey("returns false when splitSize is 0", func() {
+			result := shouldSplitParquetFile(1000, 0)
+			convey.So(result, convey.ShouldBeFalse)
+		})
+
+		convey.Convey("returns false when current size is below threshold", func() {
+			result := shouldSplitParquetFile(500, 1000)
+			convey.So(result, convey.ShouldBeFalse)
+		})
+
+		convey.Convey("returns true when current size exceeds threshold", func() {
+			result := shouldSplitParquetFile(1500, 1000)
+			convey.So(result, convey.ShouldBeTrue)
+		})
+
+		convey.Convey("returns true when current size equals threshold", func() {
+			result := shouldSplitParquetFile(1000, 1000)
+			convey.So(result, convey.ShouldBeTrue)
+		})
+	})
+}
