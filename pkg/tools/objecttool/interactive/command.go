@@ -64,6 +64,33 @@ func parseColonCommand(cmd string) (Command, error) {
 		return nil, nil
 	}
 
+	// 命令别名映射
+	aliases := map[string]string{
+		"v":  "vertical", 
+		"t":  "table",
+		"s":  "search",
+		"c":  "cols",
+		"h":  "help",
+		"i":  "info",
+		"?":  "help",
+		"/":  "search",
+	}
+	
+	// 处理别名
+	if alias, exists := aliases[parts[0]]; exists {
+		parts[0] = alias
+	}
+	
+	// 特殊处理 "w" 别名 -> "set width"
+	if parts[0] == "w" {
+		if len(parts) > 1 {
+			// "w 64" -> "set width 64"
+			parts = append([]string{"set", "width"}, parts[1:]...)
+		} else {
+			parts = []string{"set", "width"}
+		}
+	}
+
 	// 检查是否是纯数字（:123 跳转到 block 123）
 	if num, err := strconv.ParseUint(parts[0], 10, 32); err == nil {
 		return &GotoCommand{Block: uint32(num)}, nil
@@ -365,25 +392,34 @@ Browse Mode (default):
   :           Enter command mode
 
 Command Mode (press : to enter):
-  info        Show object info
+  info (i)    Show object info
   schema      Show schema
   format N F  Set column N format to F
   N           Go to block N (e.g., :0, :1, :2)
-  vertical    Switch to vertical mode (width=128, 10 rows/page)
-  table       Switch to table mode (width=64, 20 rows/page)
+  vertical (v) Switch to vertical mode (width=128, 10 rows/page)
+  table (t)   Switch to table mode (width=64, 20 rows/page)
   set width N Set column width (0=unlimited)
+  w N         Shortcut for 'set width N' (e.g., :w 100)
   vrows N     Set vertical mode rows per page (default=10)
-  cols <list> Show specific columns (e.g., 1,3,5 or 1-5)
+  cols (c) <list> Show specific columns (e.g., 1,3,5 or 1-5)
   cols all    Show all columns
-  search <pattern>  Search for text in current page
+  search (s) <pattern>  Search for text in current page
   /<pattern>  Same as search
-  help [cmd]  Show help
-  q           Quit
+  help (h,?)  Show help
+  quit (q)    Quit
 
 Command History & Completion:
   ↑/↓         Navigate command history
-  Tab         Auto-complete commands
+  Tab         Smart auto-complete commands and parameters
   Ctrl+U      Clear current input
+
+Tab Completion Examples:
+  :format <Tab>     → Show column indices
+  :format 5 <Tab>   → Show available formatters
+  :set <Tab>        → Show 'width' option
+  :set width <Tab>  → Show common width values
+  :cols <Tab>       → Show column range suggestions
+  :vrows <Tab>      → Show row count suggestions
 
 Horizontal Scrolling:
   h/←         Scroll left to see previous columns

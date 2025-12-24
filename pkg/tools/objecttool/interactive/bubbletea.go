@@ -151,7 +151,7 @@ func (m model) handleCommandInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Tab 补全
 		if m.cmdInput != "" {
 			completed := m.completeCommand(m.cmdInput)
-			if completed != "" {
+			if completed != "" && completed != m.cmdInput {
 				m.cmdInput = completed
 			}
 		}
@@ -372,11 +372,32 @@ func RunBubbletea(path string) error {
 	return err
 }
 
-// completeCommand 实现命令补全
+// completeCommand 实现智能命令补全
 func (m model) completeCommand(input string) string {
+	parts := strings.Fields(input)
+	if len(parts) == 0 {
+		return ""
+	}
+	
+	// 如果只有一个词且不是完整命令，补全命令名
+	if len(parts) == 1 {
+		completed := m.completeCommandName(parts[0])
+		if completed != parts[0] {
+			return completed
+		}
+		// 如果是完整命令，尝试补全参数
+		return m.completeCommandArgs(parts)
+	}
+	
+	// 多个词，补全参数
+	return m.completeCommandArgs(parts)
+}
+
+// completeCommandName 补全命令名
+func (m model) completeCommandName(input string) string {
 	commands := []string{
-		"quit", "q", "info", "schema", "format", "vertical", "v", "\\G", 
-		"table", "t", "set", "vrows", "search", "cols", "columns", "help",
+		"quit", "q", "info", "schema", "format", "vertical", "v", 
+		"table", "t", "set", "vrows", "search", "cols", "help",
 	}
 	
 	var matches []string
@@ -390,9 +411,48 @@ func (m model) completeCommand(input string) string {
 		return matches[0]
 	}
 	
-	// 如果有多个匹配，返回最长公共前缀
 	if len(matches) > 1 {
 		return longestCommonPrefix(matches)
+	}
+	
+	return ""
+}
+
+// completeCommandArgs 补全命令参数
+func (m model) completeCommandArgs(parts []string) string {
+	cmd := parts[0]
+	
+	switch cmd {
+	case "format":
+		if len(parts) == 1 {
+			return cmd + " 0"
+		}
+		if len(parts) == 2 {
+			return cmd + " " + parts[1] + " auto"
+		}
+		if len(parts) == 3 {
+			formatters := []string{"auto", "objectstats", "rowid", "ts", "hex"}
+			for _, fmt := range formatters {
+				if strings.HasPrefix(fmt, parts[2]) {
+					return cmd + " " + parts[1] + " " + fmt
+				}
+			}
+		}
+	case "set":
+		if len(parts) == 1 {
+			return cmd + " width"
+		}
+		if len(parts) == 2 && parts[1] == "width" {
+			return cmd + " width 32"
+		}
+	case "cols":
+		if len(parts) == 1 {
+			return cmd + " all"
+		}
+	case "vrows":
+		if len(parts) == 1 {
+			return cmd + " 10"
+		}
 	}
 	
 	return ""
