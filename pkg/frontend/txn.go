@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
@@ -120,6 +121,8 @@ func finishTxnFunc(ses FeSession, execErr error, execCtx *ExecCtx) (err error) {
 			logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
 			return err
 		}
+		// Increment user rollback counter when rollback is successful
+		v2.TxnUserRollbackCounter.Inc()
 	} else {
 		if execErr == nil {
 			err = commitTxnFunc(ses, execCtx)
@@ -239,10 +242,14 @@ func (th *TxnHandler) GetTxnCtx() context.Context {
 }
 
 // invalidateTxnUnsafe releases the txnOp and clears the server status bit SERVER_STATUS_IN_TRANS
+// It preserves autocommit-related flags (SERVER_STATUS_AUTOCOMMIT, OPTION_AUTOCOMMIT, OPTION_NOT_AUTOCOMMIT)
+// since they are session-level settings that should persist across transactions.
 func (th *TxnHandler) invalidateTxnUnsafe() {
 	th.txnOp = nil
-	resetBits(&th.serverStatus, defaultServerStatus)
-	resetBits(&th.optionBits, defaultOptionBits)
+	// Preserve SERVER_STATUS_AUTOCOMMIT flag, only clear SERVER_STATUS_IN_TRANS
+	clearBits(&th.serverStatus, uint32(SERVER_STATUS_IN_TRANS))
+	// Preserve autocommit option bits (OPTION_AUTOCOMMIT or OPTION_NOT_AUTOCOMMIT), only clear OPTION_BEGIN
+	clearBits(&th.optionBits, OPTION_BEGIN)
 }
 
 func (th *TxnHandler) InActiveTxn() bool {

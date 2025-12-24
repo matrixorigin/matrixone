@@ -350,7 +350,7 @@ func newMessageSenderOnClient(
 	mp *mpool.MPool,
 	analyzeModule *AnalyzeModule,
 ) (*messageSenderOnClient, error) {
-	streamSender, err := cnclient.GetPipelineClient(sid).NewStream(toAddr)
+	streamSender, err := cnclient.GetPipelineClient(sid).NewStream(ctx, toAddr)
 	if err != nil {
 		return nil, err
 	}

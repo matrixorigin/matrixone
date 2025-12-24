@@ -23,7 +23,7 @@ require (
 	github.com/aws/smithy-go v1.22.1
 	github.com/axiomhq/hyperloglog v0.0.0-20230201085229-3ddf4bad03dc
 	github.com/buger/jsonparser v1.1.1
-	github.com/bytedance/sonic v1.14.1
+	github.com/bytedance/sonic v1.14.2
 	github.com/cakturk/go-netstat v0.0.0-20200220111822-e5b49efee7a5
 	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/cockroachdb/errors v1.9.1
@@ -92,13 +92,14 @@ require (
 	github.com/tidwall/pretty v1.2.1
 	github.com/tmc/langchaingo v0.1.13
 	github.com/unum-cloud/usearch/golang v0.0.0-20251010193336-541e882da5a9
+	github.com/viterin/partial v1.1.0
 	go.starlark.net v0.0.0-20250701195324-d457b4515e0e
 	go.uber.org/automaxprocs v1.5.3
 	go.uber.org/ratelimit v0.2.0
 	go.uber.org/zap v1.24.0
 	golang.org/x/exp v0.0.0-20251009144603-d2f985daa21b
-	golang.org/x/sync v0.17.0
-	golang.org/x/sys v0.37.0
+	golang.org/x/sync v0.19.0
+	golang.org/x/sys v0.39.0
 	gonum.org/v1/gonum v0.14.0
 	google.golang.org/grpc v1.65.0
 	google.golang.org/protobuf v1.36.0
@@ -131,7 +132,7 @@ require (
 	github.com/bits-and-blooms/bitset v1.8.0 // indirect
 	github.com/bufbuild/protocompile v0.6.0 // indirect
 	github.com/bytedance/gopkg v0.1.3 // indirect
-	github.com/bytedance/sonic/loader v0.3.0 // indirect
+	github.com/bytedance/sonic/loader v0.4.0 // indirect
 	github.com/cespare/xxhash v1.1.0 // indirect
 	github.com/cilium/ebpf v0.9.1 // indirect
 	github.com/clbanning/mxj v1.8.4 // indirect
@@ -221,12 +222,12 @@ require (
 	go.uber.org/atomic v1.11.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	golang.org/x/arch v0.0.0-20210923205945-b76863e36670 // indirect
-	golang.org/x/crypto v0.43.0 // indirect
-	golang.org/x/mod v0.29.0 // indirect
-	golang.org/x/net v0.46.0 // indirect
-	golang.org/x/text v0.30.0 // indirect
+	golang.org/x/crypto v0.46.0 // indirect
+	golang.org/x/mod v0.30.0 // indirect
+	golang.org/x/net v0.48.0 // indirect
+	golang.org/x/text v0.32.0 // indirect
 	golang.org/x/time v0.13.0 // indirect
-	golang.org/x/tools v0.38.0 // indirect
+	golang.org/x/tools v0.39.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240814211410-ddb44dafa142 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
@@ -239,9 +240,12 @@ replace github.com/hashicorp/memberlist => github.com/matrixorigin/memberlist v0
 replace (
 	github.com/elastic/gosigar v0.14.2 => github.com/matrixorigin/gosigar v0.14.3-0.20241204071856-40aab500bfac
 	github.com/fagongzi/goetty/v2 v2.0.3-0.20230628075727-26c9a2fd5fb8 => github.com/matrixorigin/goetty/v2 v2.0.0-20240611082008-a4de209fff3d
-	github.com/lni/dragonboat/v4 v4.0.0-20220815145555-6f622e8bcbef => github.com/matrixorigin/dragonboat/v4 v4.0.0-20251203123148-9dcde946363f
+	github.com/lni/dragonboat/v4 v4.0.0-20220815145555-6f622e8bcbef => github.com/matrixorigin/dragonboat/v4 v4.0.0-20251214113216-2ddf81ef2a85
 	github.com/lni/goutils v1.3.1-0.20220604063047-388d67b4dbc4 => github.com/matrixorigin/goutils v1.3.1-0.20220604063047-388d67b4dbc4
 	github.com/lni/vfs v0.2.1-0.20220616104132-8852fd867376 => github.com/matrixorigin/vfs v0.2.1-0.20220616104132-8852fd867376
+
+	github.com/rapidsai/cuvs/go v0.0.0-20251126145430-91c51b1cc43d => github.com/cpegeric/cuvs/go v0.0.0-20251215111627-7e6a0b54cda6
+	github.com/unum-cloud/usearch/golang v0.0.0-20251010193336-541e882da5a9 => github.com/cpegeric/usearch/golang v0.0.0-20251212130039-afde3fa5e527
 )
 
 replace github.com/shoenig/go-m1cpu => github.com/shoenig/go-m1cpu v0.1.7

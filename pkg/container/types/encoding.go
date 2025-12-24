@@ -25,6 +25,7 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 )
@@ -665,4 +666,132 @@ func Uint32ToInt32(ux uint32) int32 {
 		x = ^x
 	}
 	return x
+}
+
+func WriteSizeBytes(bs []byte, w io.Writer) error {
+	sz := int32(len(bs))
+	if _, err := w.Write(EncodeInt32(&sz)); err != nil {
+		return err
+	}
+	if sz > 0 {
+		if _, err := w.Write(bs); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ReadInt64(r io.Reader) (int64, error) {
+	buf := make([]byte, 8)
+	if _, err := io.ReadFull(r, buf); err != nil {
+		return 0, err
+	}
+	return DecodeInt64(buf), nil
+}
+
+func ReadUint64(r io.Reader) (uint64, error) {
+	buf := make([]byte, 8)
+	if _, err := io.ReadFull(r, buf); err != nil {
+		return 0, err
+	}
+	return DecodeUint64(buf), nil
+}
+
+func WriteInt64(w io.Writer, v int64) error {
+	w.Write(EncodeInt64(&v))
+	return nil
+}
+
+func WriteUint64(w io.Writer, v uint64) error {
+	w.Write(EncodeUint64(&v))
+	return nil
+}
+
+func ReadBool(r io.Reader) (bool, error) {
+	buf := make([]byte, 1)
+	if _, err := io.ReadFull(r, buf); err != nil {
+		return false, err
+	}
+	return DecodeBool(buf), nil
+}
+
+func ReadInt32(r io.Reader) (int32, error) {
+	buf := make([]byte, 4)
+	if _, err := io.ReadFull(r, buf); err != nil {
+		return 0, err
+	}
+	return DecodeInt32(buf), nil
+}
+
+func WriteInt32(w io.Writer, v int32) error {
+	w.Write(EncodeInt32(&v))
+	return nil
+}
+
+func ReadInt32AsInt(r io.Reader) (int, error) {
+	buf := make([]byte, 4)
+	if _, err := io.ReadFull(r, buf); err != nil {
+		return 0, err
+	}
+	return int(DecodeInt32(buf)), nil
+}
+
+func ReadByte(r io.Reader) (byte, error) {
+	buf := make([]byte, 1)
+	if _, err := io.ReadFull(r, buf); err != nil {
+		return 0, err
+	}
+	return buf[0], nil
+}
+
+func ReadByteAsInt(r io.Reader) (int, error) {
+	buf := make([]byte, 1)
+	if _, err := io.ReadFull(r, buf); err != nil {
+		return 0, err
+	}
+	return int(buf[0]), nil
+}
+
+func ReadType(r io.Reader) (Type, error) {
+	buf := make([]byte, TSize)
+	if _, err := io.ReadFull(r, buf); err != nil {
+		return Type{}, err
+	}
+	return DecodeType(buf), nil
+}
+
+func ReadSizeBytes(r io.Reader) (int32, []byte, error) {
+	sz, err := ReadInt32(r)
+	if err != nil {
+		return 0, nil, err
+	}
+	if sz > 0 {
+		bs := make([]byte, sz)
+		if _, err := io.ReadFull(r, bs); err != nil {
+			return 0, nil, err
+		}
+		return sz, bs, nil
+	}
+	return sz, nil, nil
+}
+
+func ReadSizeBytesMp(r io.Reader, bs []byte, mp *mpool.MPool, offHeap bool) (int32, []byte, error) {
+	sz, err := ReadInt32(r)
+	if err != nil {
+		return 0, nil, err
+	}
+	if sz > 0 {
+		bs, err = mp.Grow(bs, int(sz), offHeap)
+		if err != nil {
+			return 0, nil, err
+		}
+		if _, err := io.ReadFull(r, bs); err != nil {
+			return 0, nil, err
+		}
+	} else {
+		if bs != nil {
+			bs = bs[:0]
+		}
+	}
+	return sz, bs, nil
 }

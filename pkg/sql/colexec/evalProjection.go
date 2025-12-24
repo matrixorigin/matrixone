@@ -87,8 +87,6 @@ func (projection *Projection) FreeProjection(proc *process.Process) {
 	projection.ProjectExecutors = nil
 
 	if projection.projectBat != nil {
-		// do not free projectBat's Vecs,  that will be free in ProjectExecutors[x].Free()
-		projection.projectBat.Vecs = nil
 		// allways call batch.Clean, even if there is no data
 		projection.projectBat.Clean(proc.Mp())
 		projection.projectBat = nil

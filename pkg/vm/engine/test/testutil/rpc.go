@@ -60,6 +60,7 @@ func (a *MockRPCAgent) Close() {
 }
 
 func (a *MockRPCAgent) MockLogtailRPCClientFactory(
+	ctx context.Context,
 	sid string,
 	serverAddr string,
 	ownClient morpc.RPCClient,
@@ -70,7 +71,7 @@ func (a *MockRPCAgent) MockLogtailRPCClientFactory(
 
 	var err error
 
-	stream, _ := a.client.NewStream("", false)
+	stream, _ := a.client.NewStream(ctx, "", false)
 	return a.client, stream, err
 }
 
@@ -106,7 +107,7 @@ func (c *MockLogtailRPCClient) Send(ctx context.Context, backend string, request
 	return nil, nil
 }
 
-func (c *MockLogtailRPCClient) NewStream(backend string, lock bool) (morpc.Stream, error) {
+func (c *MockLogtailRPCClient) NewStream(ctx context.Context, backend string, lock bool) (morpc.Stream, error) {
 	stream := new(MockRPCClientStream)
 	stream.receiver = c.responseReceiver
 	stream.sender = c.requestSender

@@ -83,6 +83,13 @@ var (
 		*/
 	}
 
+	MetricTypeToUsearchMetric = map[MetricType]usearch.Metric{
+		Metric_L2Distance:     usearch.L2sq,
+		Metric_L2sqDistance:   usearch.L2sq,
+		Metric_InnerProduct:   usearch.InnerProduct,
+		Metric_CosineDistance: usearch.Cosine,
+	}
+
 	MetricTypeToDistFuncName = map[MetricType]string{
 		Metric_L2Distance:     DistFn_L2Distance,
 		Metric_L2sqDistance:   DistFn_L2sqDistance,

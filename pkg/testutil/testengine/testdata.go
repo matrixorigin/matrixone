@@ -18,16 +18,16 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
-var testEngineMp = testutil.TestUtilMp
+var testEngineMp = mpool.MustNewZero()
 
 func CreateR(db engine.Database) {
 	ctx := context.TODO()
@@ -808,6 +808,32 @@ func CreateCompressFileTable(db engine.Database) {
 				}})
 		}
 		if err := db.Create(ctx, "pressTbl", attrs); err != nil {
+			logutil.Fatal(err.Error())
+		}
+	}
+}
+
+func CreateIvfSrcTable(db engine.Database) {
+	ctx := context.TODO()
+	{
+		var attrs []engine.TableDef
+
+		{
+			attrs = append(attrs, &engine.AttributeDef{
+				Attr: engine.Attribute{
+					Alg:     compress.Lz4,
+					Name:    "a",
+					Type:    types.T_int64.ToType(),
+					Primary: true,
+				}})
+			attrs = append(attrs, &engine.AttributeDef{
+				Attr: engine.Attribute{
+					Alg:  compress.Lz4,
+					Name: "b",
+					Type: types.T_array_float32.ToType(),
+				}})
+		}
+		if err := db.Create(ctx, "ivfsrc", attrs); err != nil {
 			logutil.Fatal(err.Error())
 		}
 	}

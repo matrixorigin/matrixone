@@ -207,27 +207,49 @@ func NewNoSuchTableNoCtx(db, tbl string) *Error {
 	return newError(Context(), ErrNoSuchTable, db, tbl)
 }
 
+// NewClientClosedNoCtx creates a client closed error without logging.
+// RPC errors use NoReportContext() to avoid log storms in retry loops.
 func NewClientClosedNoCtx() *Error {
-	return newError(Context(), ErrClientClosed)
+	return newError(NoReportContext(), ErrClientClosed)
 }
 
+// NewBackendClosedNoCtx creates a backend closed error without logging.
+// RPC errors use NoReportContext() to avoid log storms in retry loops.
 func NewBackendClosedNoCtx() *Error {
-	return newError(Context(), ErrBackendClosed)
+	return newError(NoReportContext(), ErrBackendClosed)
 }
 
+// NewStreamClosedNoCtx creates a stream closed error without logging.
+// RPC errors use NoReportContext() to avoid log storms in retry loops.
 func NewStreamClosedNoCtx() *Error {
-	return newError(Context(), ErrStreamClosed)
+	return newError(NoReportContext(), ErrStreamClosed)
 }
 
+// NewNoAvailableBackendNoCtx creates a no available backend error without logging.
+// RPC errors use NoReportContext() to avoid log storms in retry loops.
 func NewNoAvailableBackendNoCtx() *Error {
-	return newError(Context(), ErrNoAvailableBackend)
+	return newError(NoReportContext(), ErrNoAvailableBackend)
 }
 
+// NewBackendCannotConnectNoCtx creates a backend connection error without logging.
+// RPC errors use NoReportContext() to avoid log storms in retry loops.
 func NewBackendCannotConnectNoCtx(args ...any) *Error {
 	if len(args) == 0 {
-		return newError(Context(), ErrBackendCannotConnect, "none")
+		return newError(NoReportContext(), ErrBackendCannotConnect, "none")
 	}
-	return newError(Context(), ErrBackendCannotConnect, args...)
+	return newError(NoReportContext(), ErrBackendCannotConnect, args...)
+}
+
+// NewServiceUnavailableNoCtx creates a service unavailable error without logging.
+// RPC errors use NoReportContext() to avoid log storms in retry loops.
+func NewServiceUnavailableNoCtx(reason string) *Error {
+	return newError(NoReportContext(), ErrServiceUnavailable, reason)
+}
+
+// NewConnectionResetNoCtx creates a connection reset error without logging.
+// RPC errors use NoReportContext() to avoid log storms in retry loops.
+func NewConnectionResetNoCtx() *Error {
+	return newError(NoReportContext(), ErrConnectionReset)
 }
 
 func NewTxnClosedNoCtx(txnID []byte) *Error {
@@ -436,8 +458,10 @@ func NewTxnCannotRetryNoCtx() *Error {
 	return newError(Context(), ErrTxnCannotRetry)
 }
 
+// NewRPCTimeoutNoCtx creates an RPC timeout error without logging.
+// RPC errors use NoReportContext() to avoid log storms in retry loops.
 func NewRPCTimeoutNoCtx() *Error {
-	return newError(Context(), ErrRPCTimeout)
+	return newError(NoReportContext(), ErrRPCTimeout)
 }
 
 func NewKeyAlreadyExistsNoCtx() *Error {

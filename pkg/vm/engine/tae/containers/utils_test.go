@@ -141,6 +141,6 @@ func TestVectorsCopyToBatch(t *testing.T) {
 	mp2, err := mpool.NewMPool(t.Name(), mpool.MB, mpool.NoFixed)
 	require.NoError(t, err)
 	bat2 := batch.NewWithSize(2)
-	defer bat2.Clean(mp1)
-	require.Error(t, VectorsCopyToBatch(vecs, bat2, mp2))
+	defer bat2.Clean(mp2)
+	require.Equal(t, nil, VectorsCopyToBatch(vecs, bat2, mp2))
 }

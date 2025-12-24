@@ -15,8 +15,8 @@
 PWD=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 UNAME_S=$(shell uname -s | tr A-Z a-z)
 UNAME_M=$(shell uname -m)
-USEARCH_DIR=USearch-2.21.1
-USEARCH_TAR=usearch-2.21.1.tar.gz
+USEARCH_DIR=usearch-2.21.1-hotfix-20251212
+USEARCH_TAR=usearch-2.21.1-hotfix-20251212.tar.gz
 STRINGZILLA_DIR=StringZilla-4.2.1
 STRINGZILLA_TAR=$(STRINGZILLA_DIR).tar.gz
 SIMSIMD_DIR=SimSIMD-6.5.3
@@ -59,14 +59,13 @@ ifeq ($(UNAME_S),linux)
   ifeq ($(MUSL),)
 	USEARCH_CMAKE_FLAG += -DUSEARCH_USE_OPENMP=1
   endif
-  AVX512FP16 := $(shell lscpu | grep avx512fp16)
 endif
 
-ifeq ($(UNAME_M),x86_64)
-  ifneq ($(AVX512FP16),)
-    ifeq ($(MUSL),)
-	USEARCH_CMAKE_FLAG += -DUSEARCH_USE_SIMSIMD=1
-    endif
+ifeq ($(MO_CL_SIMSIMD),1)
+  ifeq ($(MUSL),)
+	USEARCH_CMAKE_FLAG += -DUSEARCH_USE_SIMSIMD=1 -DSIMSIMD_DYNAMIC_DISPATCH=1
+	SIMSIMD_TARGET := HASWELL SKYLAKE ICE GENOA SAPPHIRE TURIN SIERRA NEON NEON_I8 NEON_F16 NEON_BF16 SVE SVE_I8 SVE_F16 SVE_BF16 SVE2
+	USEARCH_CMAKE_FLAG += $(foreach target,$(SIMSIMD_TARGET),-DSIMSIMD_TARGET_$(target)=1)
   endif
 endif
 

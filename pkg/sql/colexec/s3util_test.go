@@ -39,11 +39,11 @@ func TestSortKey(t *testing.T) {
 	batch1 := &batch.Batch{
 		Attrs: []string{"a"},
 		Vecs: []*vector.Vector{
-			testutil.MakeUint16Vector([]uint16{1, 2, 0}, nil),
+			testutil.MakeUint16Vector([]uint16{1, 2, 0}, nil, proc.Mp()),
 		},
 	}
 	batch1.SetRowCount(3)
-	err := SortByKey(proc, batch1, 0, false, proc.GetMPool())
+	err := SortByKey(proc, batch1, 0, false, proc.Mp())
 	require.NoError(t, err)
 	cols := vector.ExpandFixedCol[uint16](batch1.Vecs[0])
 	for i := range cols {
@@ -53,12 +53,12 @@ func TestSortKey(t *testing.T) {
 	batch2 := &batch.Batch{
 		Attrs: []string{"a"},
 		Vecs: []*vector.Vector{
-			testutil.MakeTextVector([]string{"b", "a", "c"}, nil),
+			testutil.MakeTextVector([]string{"b", "a", "c"}, nil, proc.Mp()),
 		},
 	}
 	batch2.SetRowCount(3)
 	res := []string{"a", "b", "c"}
-	err = SortByKey(proc, batch2, 0, false, proc.GetMPool())
+	err = SortByKey(proc, batch2, 0, false, proc.Mp())
 	require.NoError(t, err)
 	cols2 := vector.ExpandStrCol(batch2.Vecs[0])
 	for i := range cols {
@@ -103,7 +103,7 @@ func TestSetStatsCNCreated(t *testing.T) {
 }
 
 func TestMergeSortBatches(t *testing.T) {
-	pool, err := mpool.NewMPool("", mpool.GB, 0)
+	pool, err := mpool.NewMPool("", mpool.GB, mpool.NoFixed)
 	require.NoError(t, err)
 	var restult *batch.Batch
 	sinker := func(bat *batch.Batch) error {
@@ -460,7 +460,7 @@ func TestMergeSortBatches(t *testing.T) {
 }
 
 func TestS3Writer_SortAndSync(t *testing.T) {
-	pool, err := mpool.NewMPool("", mpool.GB, 0)
+	pool, err := mpool.NewMPool("", mpool.GB, mpool.NoFixed)
 	require.NoError(t, err)
 
 	bat := batch.NewWithSize(2)
@@ -530,7 +530,7 @@ func TestS3Writer_SortAndSync(t *testing.T) {
 
 	// test data size larger than object size limit
 	{
-		pool, err = mpool.NewMPool("", mpool.GB, 0)
+		pool, err = mpool.NewMPool("", mpool.GB, mpool.NoFixed)
 		require.NoError(t, err)
 
 		proc := testutil.NewProc(

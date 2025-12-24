@@ -295,6 +295,10 @@ type CDCWatermarkUpdater struct {
 	commitFailureCount map[WatermarkKey]uint32    // consecutive persistence failures per key
 	commitCircuitOpen  map[WatermarkKey]time.Time // keys in circuit-breaker cool-down
 
+	// Tracks table labels that had non-retryable error metrics set in the previous scan
+	// Used for diff-based cleanup: (previous - current) labels get their metrics deleted
+	previousErrorLabels map[string]bool
+
 	// Pause registry: tracks which tasks are currently paused
 	// Used to prevent watermark updates during pause operations
 	// Key: taskId (string), Value: pause timestamp (time.Time)
@@ -330,13 +334,14 @@ func NewCDCWatermarkUpdater(
 	opts ...UpdateOption,
 ) *CDCWatermarkUpdater {
 	u := &CDCWatermarkUpdater{
-		ie:                 ie,
-		cacheUncommitted:   make(map[WatermarkKey]types.TS),
-		cacheCommitting:    make(map[WatermarkKey]types.TS),
-		cacheCommitted:     make(map[WatermarkKey]types.TS),
-		errorMetadataCache: make(map[WatermarkKey]*ErrorMetadata), // Initialize error cache
-		commitFailureCount: make(map[WatermarkKey]uint32),
-		commitCircuitOpen:  make(map[WatermarkKey]time.Time),
+		ie:                  ie,
+		cacheUncommitted:    make(map[WatermarkKey]types.TS),
+		cacheCommitting:     make(map[WatermarkKey]types.TS),
+		cacheCommitted:      make(map[WatermarkKey]types.TS),
+		errorMetadataCache:  make(map[WatermarkKey]*ErrorMetadata), // Initialize error cache
+		commitFailureCount:  make(map[WatermarkKey]uint32),
+		commitCircuitOpen:   make(map[WatermarkKey]time.Time),
+		previousErrorLabels: make(map[string]bool),
 
 		getOrAddCommittedBuffer: make([]*UpdaterJob, 0, 100),
 		addCommittedBuffer:      make([]*UpdaterJob, 0, 100),
@@ -467,6 +472,23 @@ func (u *CDCWatermarkUpdater) onJobs(jobs ...any) {
 			}
 			delete(u.commitFailureCount, *job.Key)
 			u.Unlock()
+
+			// Clean up all metrics for this table to prevent stale metrics
+			// This handles the gap where wrapCronJob only cleans metrics for keys still in cache
+			tableLabel := job.Key.String()
+			v2.CdcWatermarkLagSeconds.DeleteLabelValues(tableLabel)
+			v2.CdcWatermarkLagRatio.DeleteLabelValues(tableLabel)
+			v2.CdcTableLastActivityTimestamp.DeleteLabelValues(tableLabel)
+			v2.CdcTableStuckGauge.DeleteLabelValues(tableLabel)
+			v2.CdcWatermarkUpdateCounter.DeleteLabelValues(tableLabel, "commit")
+			v2.CdcWatermarkUpdateCounter.DeleteLabelValues(tableLabel, "heartbeat")
+			v2.CdcHeartbeatCounter.DeleteLabelValues(tableLabel)
+			v2.CdcTableNoProgressCounter.DeleteLabelValues(tableLabel)
+			// Clean up non-retryable error metrics for all error types
+			errorTypes := []string{"network", "commit", "table_relation", "sinker", "max_retry_exceeded", "unknown"}
+			for _, et := range errorTypes {
+				v2.CdcTableNonRetryableErrorGauge.DeleteLabelValues(tableLabel, et)
+			}
 
 			job.DoneWithErr(nil)
 
@@ -1198,6 +1220,23 @@ func (u *CDCWatermarkUpdater) removeCachedWMSynchronously(key *WatermarkKey, log
 	delete(u.commitFailureCount, *key)
 	u.Unlock()
 
+	// Clean up all metrics for this table to prevent stale metrics
+	// Same as JT_CDC_RemoveCachedWM in onJobs
+	tableLabel := key.String()
+	v2.CdcWatermarkLagSeconds.DeleteLabelValues(tableLabel)
+	v2.CdcWatermarkLagRatio.DeleteLabelValues(tableLabel)
+	v2.CdcTableLastActivityTimestamp.DeleteLabelValues(tableLabel)
+	v2.CdcTableStuckGauge.DeleteLabelValues(tableLabel)
+	v2.CdcWatermarkUpdateCounter.DeleteLabelValues(tableLabel, "commit")
+	v2.CdcWatermarkUpdateCounter.DeleteLabelValues(tableLabel, "heartbeat")
+	v2.CdcHeartbeatCounter.DeleteLabelValues(tableLabel)
+	v2.CdcTableNoProgressCounter.DeleteLabelValues(tableLabel)
+	// Clean up non-retryable error metrics for all error types
+	errorTypes := []string{"network", "commit", "table_relation", "sinker", "max_retry_exceeded", "unknown"}
+	for _, et := range errorTypes {
+		v2.CdcTableNonRetryableErrorGauge.DeleteLabelValues(tableLabel, et)
+	}
+
 	if !u.shouldLogFallback(key) {
 		return
 	}
@@ -1372,23 +1411,114 @@ func (u *CDCWatermarkUpdater) wrapCronJob(job func(ctx context.Context)) func(ct
 			// Baseline for lag ratio: 3 seconds (allows for batch processing delays and network latency)
 			// This is more realistic than 0.4s (200ms * 2) which was too small for practical scenarios
 			defaultExpectedLagSeconds := 3.0
+
+			// Collect keys to check BEFORE releasing lock (to avoid iterating during query)
+			cachedKeys := make([]WatermarkKey, 0, len(u.cacheCommitted))
+			cachedWatermarks := make(map[WatermarkKey]types.TS, len(u.cacheCommitted))
 			for key, watermark := range u.cacheCommitted {
 				if !watermark.IsEmpty() {
-					wmTime := watermark.ToTimestamp().ToStdTime()
-					lagSeconds := time.Since(wmTime).Seconds()
-					tableLabel := key.String()
-					v2.CdcWatermarkLagSeconds.WithLabelValues(tableLabel).Set(lagSeconds)
-
-					// Calculate lag ratio: actual lag / expected lag
-					// Expected lag = 3 seconds (realistic baseline for batch processing)
-					// Ratio < 2: normal, 2-5: warning, > 5: critical
-					if defaultExpectedLagSeconds > 0 {
-						lagRatio := lagSeconds / defaultExpectedLagSeconds
-						v2.CdcWatermarkLagRatio.WithLabelValues(tableLabel).Set(lagRatio)
-					}
+					cachedKeys = append(cachedKeys, key)
+					cachedWatermarks[key] = watermark
 				}
 			}
 			u.RUnlock()
+
+			// Query database OUTSIDE of lock to avoid holding lock during slow query
+			// This fixes the potential deadlock issue where RLock is held during DB query
+			queryCtx := defines.AttachAccountId(ctx, catalog.System_Account)
+			// Query watermarks that have valid tasks (JOIN with mo_cdc_task)
+			sql := "SELECT w.account_id, w.task_id, w.db_name, w.table_name " +
+				"FROM `mo_catalog`.`mo_cdc_watermark` AS w " +
+				"INNER JOIN `mo_catalog`.`mo_cdc_task` AS t " +
+				"ON t.account_id = w.account_id AND t.task_id = w.task_id"
+
+			validWatermarks := make(map[string]bool) // key: "accountId.taskId.dbName.tableName"
+			queryFailed := false
+			res := u.ie.Query(queryCtx, sql, ie.SessionOverrideOptions{})
+			if res.Error() == nil {
+				for i := uint64(0); i < res.RowCount(); i++ {
+					accountId, _ := res.GetUint64(queryCtx, i, 0)
+					taskId, _ := res.GetString(queryCtx, i, 1)
+					dbName, _ := res.GetString(queryCtx, i, 2)
+					tableName, _ := res.GetString(queryCtx, i, 3)
+					key := fmt.Sprintf("%d.%s.%s.%s", accountId, taskId, dbName, tableName)
+					validWatermarks[key] = true
+				}
+			} else {
+				logutil.Warn(
+					"cdc.watermark.query_valid_watermarks_failed",
+					zap.Error(res.Error()),
+				)
+				// On query failure, skip cleanup to avoid false removal
+				queryFailed = true
+			}
+
+			// Process cached keys - update metrics for valid ones, cleanup orphans
+			keysToRemove := make([]WatermarkKey, 0)
+			for _, key := range cachedKeys {
+				tableLabel := key.String()
+				watermark := cachedWatermarks[key]
+
+				if !queryFailed && !validWatermarks[tableLabel] {
+					// Watermark not in database (orphan)
+					keysToRemove = append(keysToRemove, key)
+					// Clean up metrics by deleting label values (avoids cardinality explosion)
+					v2.CdcWatermarkLagSeconds.DeleteLabelValues(tableLabel)
+					v2.CdcWatermarkLagRatio.DeleteLabelValues(tableLabel)
+					v2.CdcTableLastActivityTimestamp.DeleteLabelValues(tableLabel)
+					v2.CdcTableStuckGauge.DeleteLabelValues(tableLabel)
+					// Clean up non-retryable error metrics for all error types
+					errorTypes := []string{"network", "commit", "table_relation", "sinker", "max_retry_exceeded", "unknown"}
+					for _, et := range errorTypes {
+						v2.CdcTableNonRetryableErrorGauge.DeleteLabelValues(tableLabel, et)
+					}
+					continue
+				}
+
+				// Update metrics for valid watermarks
+				wmTime := watermark.ToTimestamp().ToStdTime()
+				lagSeconds := time.Since(wmTime).Seconds()
+				v2.CdcWatermarkLagSeconds.WithLabelValues(tableLabel).Set(lagSeconds)
+
+				// Calculate lag ratio: actual lag / expected lag
+				// Expected lag = 3 seconds (realistic baseline for batch processing)
+				// Ratio < 2: normal, 2-5: warning, > 5: critical
+				if defaultExpectedLagSeconds > 0 {
+					lagRatio := lagSeconds / defaultExpectedLagSeconds
+					v2.CdcWatermarkLagRatio.WithLabelValues(tableLabel).Set(lagRatio)
+				}
+			}
+
+			// Remove orphan keys from cache with double-check to handle race condition
+			if len(keysToRemove) > 0 {
+				u.Lock()
+				for _, key := range keysToRemove {
+					// Double-check: Verify key still exists and wasn't re-added
+					// This handles TOCTOU race where a new task with same key was created
+					if _, stillExists := u.cacheCommitted[key]; !stillExists {
+						continue // Already removed or never existed
+					}
+
+					delete(u.cacheCommitted, key)
+					delete(u.cacheUncommitted, key)
+					delete(u.cacheCommitting, key)
+					delete(u.errorMetadataCache, key)
+
+					// Clean up circuit breaker related caches
+					// Always decrement gauge when circuit exists (fixes gauge leak for old circuits)
+					if _, opened := u.commitCircuitOpen[key]; opened {
+						v2.CdcWatermarkCircuitEventCounter.WithLabelValues("reset").Inc()
+						v2.CdcWatermarkCircuitOpenGauge.Dec()
+						delete(u.commitCircuitOpen, key)
+					}
+					delete(u.commitFailureCount, key)
+				}
+				u.Unlock()
+				logutil.Debug(
+					"cdc.watermark.cleanup_orphan_cache",
+					zap.Int("removed-count", len(keysToRemove)),
+				)
+			}
 
 			logutil.Info(
 				"cdc.watermark.stats",
@@ -1402,7 +1532,8 @@ func (u *CDCWatermarkUpdater) wrapCronJob(job func(ctx context.Context)) func(ct
 			)
 
 			// Scan all tables with errors and update non-retryable error metrics
-			u.scanAndUpdateNonRetryableErrorMetrics(ctx)
+			// Pass validWatermarks to enable diff-based cleanup of stale metrics
+			u.scanAndUpdateNonRetryableErrorMetrics(ctx, validWatermarks, queryFailed)
 		}
 		u.stats.runTimes.Add(1)
 		job(ctx)
@@ -1462,8 +1593,16 @@ func extractErrorType(errMsg string) string {
 }
 
 // scanAndUpdateNonRetryableErrorMetrics scans all tables with errors from database
-// and updates non-retryable error metrics
-func (u *CDCWatermarkUpdater) scanAndUpdateNonRetryableErrorMetrics(ctx context.Context) {
+// and updates non-retryable error metrics.
+// Uses diff-based cleanup: compares current labels with previous run to delete stale metrics.
+// Parameters:
+//   - validWatermarks: map of valid table labels (from JOIN query), used to filter orphans
+//   - queryFailed: if true, skip cleanup to avoid false removal
+func (u *CDCWatermarkUpdater) scanAndUpdateNonRetryableErrorMetrics(
+	ctx context.Context,
+	validWatermarks map[string]bool,
+	queryFailed bool,
+) {
 	// Query all watermarks with err_msg != ''
 	// Use System_Account context for querying
 	queryCtx := defines.AttachAccountId(ctx, catalog.System_Account)
@@ -1480,9 +1619,13 @@ func (u *CDCWatermarkUpdater) scanAndUpdateNonRetryableErrorMetrics(ctx context.
 		return
 	}
 
-	// Track all tables we've seen to reset metrics for tables that no longer have errors
-	seenTables := make(map[string]bool)
+	// Track tables with non-retryable errors in THIS scan
+	// Used for diff-based cleanup: (previous - current) labels get deleted
+	currentErrorLabels := make(map[string]bool)
 	nonRetryableCount := 0
+
+	// Common error types for metric cleanup
+	errorTypes := []string{"network", "commit", "table_relation", "sinker", "max_retry_exceeded", "unknown"}
 
 	// Process each row
 	for i := uint64(0); i < res.RowCount(); i++ {
@@ -1504,9 +1647,14 @@ func (u *CDCWatermarkUpdater) scanAndUpdateNonRetryableErrorMetrics(ctx context.
 			continue
 		}
 
-		// Build table label: account_id.task_id.db_name.table_name (format matches WatermarkKey.String())
+		// Build table label: account_id.task_id.db_name.table_name
 		tableLabel := fmt.Sprintf("%d.%s.%s.%s", accountId, taskId, dbName, tableName)
-		seenTables[tableLabel] = true
+
+		// Skip orphan tables (not in validWatermarks)
+		// These will be cleaned up by the orphan cleanup in wrapCronJob
+		if !queryFailed && !validWatermarks[tableLabel] {
+			continue
+		}
 
 		// Parse error metadata
 		metadata := ParseErrorMetadata(errMsg)
@@ -1516,20 +1664,43 @@ func (u *CDCWatermarkUpdater) scanAndUpdateNonRetryableErrorMetrics(ctx context.
 
 		// Check if non-retryable (ShouldRetry returns false)
 		if !ShouldRetry(metadata) {
+			// Track this label as having non-retryable error
+			currentErrorLabels[tableLabel] = true
 			// Extract error type from message
 			errorType := extractErrorType(metadata.Message)
 			// Set metric to 1 (has non-retryable error)
 			v2.CdcTableNonRetryableErrorGauge.WithLabelValues(tableLabel, errorType).Set(1)
 			nonRetryableCount++
-		} else {
-			// Retryable error or no error - set to 0
-			// We need to reset all possible error_type labels for this table
-			// Since we don't know which error_type was previously set, we'll reset common ones
-			errorTypes := []string{"network", "commit", "table_relation", "sinker", "max_retry_exceeded", "unknown"}
-			for _, et := range errorTypes {
-				v2.CdcTableNonRetryableErrorGauge.WithLabelValues(tableLabel, et).Set(0)
+		}
+		// Note: For retryable errors, we don't set metrics here.
+		// The cleanup below handles labels that were previously non-retryable but now aren't.
+	}
+
+	// Diff-based cleanup: Delete metrics for labels that were in previous but not in current
+	// This handles:
+	// 1. Error cleared (err_msg became empty) - label not in query results
+	// 2. Error became retryable - label not in currentErrorLabels
+	// 3. Task deleted (orphan) - label not in validWatermarks
+	if !queryFailed {
+		cleanedCount := 0
+		for label := range u.previousErrorLabels {
+			if !currentErrorLabels[label] {
+				// This label no longer has non-retryable error
+				// Delete all error type metrics for this label
+				for _, et := range errorTypes {
+					v2.CdcTableNonRetryableErrorGauge.DeleteLabelValues(label, et)
+				}
+				cleanedCount++
 			}
 		}
+		if cleanedCount > 0 {
+			logutil.Debug(
+				"cdc.watermark.cleanup_stale_error_metrics",
+				zap.Int("cleaned-count", cleanedCount),
+			)
+		}
+		// Update previous for next run
+		u.previousErrorLabels = currentErrorLabels
 	}
 
 	// Update total count
@@ -1539,6 +1710,8 @@ func (u *CDCWatermarkUpdater) scanAndUpdateNonRetryableErrorMetrics(ctx context.
 		"cdc.watermark.scan_errors_complete",
 		zap.Int("total-tables-with-errors", int(res.RowCount())),
 		zap.Int("non-retryable-count", nonRetryableCount),
+		zap.Int("current-error-labels", len(currentErrorLabels)),
+		zap.Int("previous-error-labels", len(u.previousErrorLabels)),
 	)
 }
 

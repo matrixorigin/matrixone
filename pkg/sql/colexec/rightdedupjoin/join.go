@@ -150,12 +150,12 @@ func (rightDedupJoin *RightDedupJoin) build(analyzer process.Analyzer, proc *pro
 		}
 
 		if keyWidth <= 8 {
-			intHashMap, err = hashmap.NewIntHashMap(false)
+			intHashMap, err = hashmap.NewIntHashMap(false, proc.Mp())
 			if err != nil {
 				return err
 			}
 		} else {
-			strHashMap, err = hashmap.NewStrHashMap(false)
+			strHashMap, err = hashmap.NewStrHashMap(false, proc.Mp())
 			if err != nil {
 				return err
 			}

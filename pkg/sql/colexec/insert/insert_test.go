@@ -65,11 +65,11 @@ func TestInsertOperator(t *testing.T) {
 	proc.Ctx = ctx
 	batch1 := &batch.Batch{
 		Vecs: []*vector.Vector{
-			testutil.MakeInt64Vector([]int64{1, 2, 0}, []uint64{2}),
-			testutil.MakeScalarInt64(3, 3),
-			testutil.MakeVarcharVector([]string{"a", "b", "c"}, nil),
-			testutil.MakeScalarVarchar("d", 3),
-			testutil.MakeScalarNull(t, types.T_int64, 3),
+			testutil.MakeInt64Vector([]int64{1, 2, 0}, []uint64{2}, proc.Mp()),
+			testutil.MakeScalarInt64(3, 3, proc.Mp()),
+			testutil.MakeVarcharVector([]string{"a", "b", "c"}, nil, proc.Mp()),
+			testutil.MakeScalarVarchar("d", 3, proc.Mp()),
+			testutil.MakeScalarNull(t, types.T_int64, 3, proc.Mp()),
 		},
 		Attrs: []string{"int64_column", "scalar_int64", "varchar_column", "scalar_varchar", "int64_column"},
 	}

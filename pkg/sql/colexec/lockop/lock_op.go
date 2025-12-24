@@ -550,6 +550,7 @@ func doLock(
 	if err != nil {
 		return false, false, timestamp.Timestamp{}, err
 	}
+
 	// Record lock waiting time
 	analyzeLockWaitTime(analyzer, start)
 
@@ -595,19 +596,17 @@ func doLock(
 	// if has no conflict, lockedTS means the latest commit ts of this table
 	lockedTS := result.Timestamp
 
-	// if no conflict, maybe data has been updated in [snapshotTS, lockedTS]. So wen need check here
-	if result.NewLockAdd && // only check when new lock added, reentrant lock can skip check
+	// Normal path: NewLockAdd=true, no conflict - original check
+	if result.NewLockAdd &&
 		!result.HasConflict &&
-		snapshotTS.LessEq(lockedTS) && // only retry when snapshotTS <= lockedTS, means lost some update in rc mode.
+		snapshotTS.LessEq(lockedTS) &&
 		txnOp.Txn().IsRCIsolation() {
 
 		start = time.Now()
-		// wait last committed logtail applied, (IO wait not related to FileService)
 		newSnapshotTS, err := txnClient.WaitLogTailAppliedAt(ctx, lockedTS)
 		if err != nil {
 			return false, false, timestamp.Timestamp{}, err
 		}
-		// Record logtail waiting time
 		analyzeLockWaitTime(analyzer, start)
 
 		fn := opts.hasNewVersionInRangeFunc
@@ -615,7 +614,6 @@ func doLock(
 			fn = hasNewVersionInRange
 		}
 
-		// if [snapshotTS, newSnapshotTS] has been modified, need retry at new snapshot ts
 		changed, err := fn(proc, rel, analyzer, tableID, eng, bat, idx, partitionIdx, snapshotTS, newSnapshotTS)
 		if err != nil {
 			return false, false, timestamp.Timestamp{}, err
@@ -634,41 +632,122 @@ func doLock(
 		}
 	}
 
-	// no conflict or has conflict, but all prev txn all aborted
-	// current txn can read and write normally
-	if !result.HasConflict ||
-		!result.HasPrevCommit {
-		return true, false, timestamp.Timestamp{}, nil
-	} else if lockedTS.Less(snapshotTS) {
+	// CRITICAL FIX for low-frequency anomalous cases:
+	//
+	// The lock service can return stale/incorrect flags in certain scenarios:
+	// 1. NewLockAdd=false when it should be true: Remote lock failed with network timeout
+	//    but txn.lockAdded() was still called (lock_table_remote.go:119). Retry succeeds
+	//    with NewLockAdd=false because the lock was already "added" for cleanup.
+	// 2. HasPrevCommit=false when it should be true: Lock service doesn't have accurate
+	//    commit status due to network partitions.
+	//
+	// Detection strategy:
+	// - Case A (!NewLockAdd && !HasConflict): Could be normal reentrant lock OR
+	//   failed-then-retried. We can't distinguish, so we check defensively.
+	// - Case B (HasConflict && !HasPrevCommit): Could be legitimate "conflict aborted"
+	//   OR stale commit status. We check defensively.
+	//
+	// Performance: These checks are cheap (in-memory logtail lookup) and only run
+	// in the already-rare cases above. Normal path (NewLockAdd=true) is unchanged.
+	//
+	needsExtraCheck := false
+
+	if !result.NewLockAdd && !result.HasConflict {
+		// Case A: reentrant lock without conflict
+		// This includes both normal reentrant locks and failed-then-retried locks.
+		// We check defensively since we can't distinguish them.
+		needsExtraCheck = true
+	} else if result.HasConflict && !result.HasPrevCommit {
+		// Case B: conflict but no prev commit
+		// Could be legitimate (conflict aborted) or stale (commit not yet visible).
+		// We check defensively since we can't distinguish them.
+		needsExtraCheck = true
+	}
+
+	if needsExtraCheck && snapshotTS.LessEq(lockedTS) && txnOp.Txn().IsRCIsolation() {
+		start = time.Now()
+		newSnapshotTS, err := txnClient.WaitLogTailAppliedAt(ctx, lockedTS)
+		if err != nil {
+			return false, false, timestamp.Timestamp{}, err
+		}
+		analyzeLockWaitTime(analyzer, start)
+
+		fn := opts.hasNewVersionInRangeFunc
+		if fn == nil {
+			fn = hasNewVersionInRange
+		}
+
+		changed, err := fn(proc, rel, analyzer, tableID, eng, bat, idx, partitionIdx, snapshotTS, newSnapshotTS)
+		if err != nil {
+			return false, false, timestamp.Timestamp{}, err
+		}
+
+		if changed {
+			trace.GetService(proc.GetService()).TxnConflictChanged(
+				proc.GetTxnOperator(),
+				tableID,
+				newSnapshotTS)
+			if err := txnOp.UpdateSnapshot(ctx, newSnapshotTS); err != nil {
+				return false, false, timestamp.Timestamp{}, err
+			}
+			return true, result.TableDefChanged, newSnapshotTS, nil
+		}
+	}
+
+	// No conflict or conflict with all prev txn aborted - can proceed
+	if !result.HasConflict || !result.HasPrevCommit {
 		return true, false, timestamp.Timestamp{}, nil
 	}
 
-	// Arriving here means that at least one of the conflicting
-	// transactions has committed.
-	//
-	// For the RC schema we need some retries between
-	// [txn.snapshot ts, prev.commit ts] (de-duplication for insert, re-query for
-	// update and delete).
-	//
-	// For the SI schema the current transaction needs to be abort (TODO: later
-	// we can consider recording the ReadSet of the transaction and check if data
-	// is modified between [snapshotTS,prev.commits] and raise the SnapshotTS of
-	// the SI transaction to eliminate conflicts)
+	// lockedTS < snapshotTS means snapshot is already ahead
+	if lockedTS.Less(snapshotTS) {
+		return true, false, timestamp.Timestamp{}, nil
+	}
+
+	// SI isolation with conflict - not supported
 	if !txnOp.Txn().IsRCIsolation() {
 		return false, false, timestamp.Timestamp{}, moerr.NewTxnWWConflict(ctx, tableID, "SI not support retry")
 	}
 
-	// forward rc's snapshot ts
-	snapshotTS = result.Timestamp.Next()
+	// HasConflict=true, HasPrevCommit=true, RC isolation - check hasNewVersionInRange
+	start = time.Now()
+	newSnapshotTS, err := txnClient.WaitLogTailAppliedAt(ctx, lockedTS)
+	if err != nil {
+		return false, false, timestamp.Timestamp{}, err
+	}
+	analyzeLockWaitTime(analyzer, start)
 
+	fn := opts.hasNewVersionInRangeFunc
+	if fn == nil {
+		fn = hasNewVersionInRange
+	}
+
+	changed, err := fn(proc, rel, analyzer, tableID, eng, bat, idx, partitionIdx, snapshotTS, newSnapshotTS)
+	if err != nil {
+		return false, false, timestamp.Timestamp{}, err
+	}
+
+	if changed {
+		trace.GetService(proc.GetService()).TxnConflictChanged(
+			proc.GetTxnOperator(),
+			tableID,
+			newSnapshotTS)
+		if err := txnOp.UpdateSnapshot(ctx, newSnapshotTS); err != nil {
+			return false, false, timestamp.Timestamp{}, err
+		}
+		return true, result.TableDefChanged, newSnapshotTS, nil
+	}
+
+	// Target rows were NOT modified, forward snapshot and continue
+	newTS := result.Timestamp.Next()
 	trace.GetService(proc.GetService()).TxnConflictChanged(
 		proc.GetTxnOperator(),
 		tableID,
-		snapshotTS)
-	if err := txnOp.UpdateSnapshot(ctx, snapshotTS); err != nil {
+		newTS)
+	if err := txnOp.UpdateSnapshot(ctx, newTS); err != nil {
 		return false, false, timestamp.Timestamp{}, err
 	}
-	return true, result.TableDefChanged, snapshotTS, nil
+	return true, result.TableDefChanged, newTS, nil
 }
 
 const defaultWaitTimeOnRetryLock = time.Second
@@ -1081,7 +1160,10 @@ func hasNewVersionInRange(
 
 	fromTS := types.BuildTS(from.PhysicalTime, from.LogicalTime)
 	toTS := types.BuildTS(to.PhysicalTime, to.LogicalTime)
-	return rel.PrimaryKeysMayBeModified(newCtx, fromTS, toTS, bat, idx, partitionIdx)
+
+	changed, err := rel.PrimaryKeysMayBeModified(newCtx, fromTS, toTS, bat, idx, partitionIdx)
+
+	return changed, err
 }
 
 func analyzeLockWaitTime(analyzer process.Analyzer, start time.Time) {

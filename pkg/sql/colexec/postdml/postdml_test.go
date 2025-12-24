@@ -100,7 +100,7 @@ func TestFullText(t *testing.T) {
 	rows = *arg.GetAffectedRows()
 	require.Equal(t, rows, uint64(0))
 
-	resetChildren(&arg)
+	resetChildren(&arg, proc.Mp())
 	err := arg.Prepare(proc)
 	require.NoError(t, err)
 	_, err = vm.Exec(&arg, proc)
@@ -128,9 +128,9 @@ func TestFullText(t *testing.T) {
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
 }
 
-func resetChildren(arg *PostDml) {
+func resetChildren(arg *PostDml, m *mpool.MPool) {
 	op := colexec.NewMockOperator()
-	bat := colexec.MakeMockBatchsWithRowID()
+	bat := colexec.MakeMockBatchsWithRowID(m)
 	op.WithBatchs([]*batch.Batch{bat})
 	arg.Children = nil
 	arg.AppendChild(op)

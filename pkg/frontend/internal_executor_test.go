@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -170,10 +171,13 @@ func Test_internalProtocol_Write(t *testing.T) {
 		ses:    ses,
 	}
 
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+
 	mockBatch := func(vals []int64) *batch.Batch {
 		bat := batch.New([]string{"col1"})
 		vecs := make([]*vector.Vector, 1)
-		vecs[0] = testutil.MakeInt64Vector(vals, nil)
+		vecs[0] = testutil.MakeInt64Vector(vals, nil, mp)
 		bat.Vecs = vecs
 		bat.SetRowCount(len(vals))
 		return bat

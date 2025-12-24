@@ -16,10 +16,13 @@ package morpc
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -142,23 +145,24 @@ func WithDisconnectAfterRead(n int) BackendOption {
 }
 
 type remoteBackend struct {
-	remote       string
-	metrics      *metrics
-	logger       *zap.Logger
-	codec        Codec
-	conn         goetty.IOSession
-	writeC       chan *Future
-	waitWriteC   chan struct{}
-	stopWriteC   chan struct{}
-	resetConnC   chan error
-	stopper      *stopper.Stopper
-	readStopper  *stopper.Stopper
-	closeOnce    sync.Once
-	ctx          context.Context
-	cancel       context.CancelFunc
-	cancelOnce   sync.Once
-	pingTimer    *time.Timer
-	lastPingTime time.Time
+	remote          string
+	metrics         *metrics
+	logger          *zap.Logger
+	rateLimitLogger *logutil.RateLimitedLogger
+	codec           Codec
+	conn            goetty.IOSession
+	writeC          chan *Future
+	waitWriteC      chan struct{}
+	stopWriteC      chan struct{}
+	resetConnC      chan error
+	stopper         *stopper.Stopper
+	readStopper     *stopper.Stopper
+	closeOnce       sync.Once
+	ctx             context.Context
+	cancel          context.CancelFunc
+	cancelOnce      sync.Once
+	pingTimer       *time.Timer
+	lastPingTime    time.Time
 
 	options struct {
 		hasPayloadResponse  bool
@@ -289,9 +293,11 @@ func (rb *remoteBackend) adjust() {
 	uid, _ := uuid.NewV7()
 	rb.logger = logutil.Adjust(rb.logger).With(zap.String("remote", rb.remote),
 		zap.String("backend-id", uid.String()))
+	rb.rateLimitLogger = logutil.NewRateLimitedLogger(rb.logger)
 	rb.options.goettyOptions = append(rb.options.goettyOptions,
-		goetty.WithSessionCodec(rb.codec),
-		goetty.WithSessionLogger(rb.logger))
+		goetty.WithSessionCodec(rb.codec))
+	// Don't pass logger to goetty to avoid noisy error logs from goetty library
+	// (e.g., "close connection failed" which is expected during normal connection lifecycle)
 }
 
 func (rb *remoteBackend) Send(ctx context.Context, request Message) (*Future, error) {
@@ -499,7 +505,8 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 				if err := rb.conn.Flush(writeTimeout); err != nil {
 					for _, f := range written {
 						id := f.getSendMessageID()
-						rb.logger.Error("write request failed",
+						rb.rateLimitLogger.Error("write-flush",
+							"write request failed",
 							zap.Uint64("request-id", id),
 							zap.Error(err))
 						f.messageSent(err)
@@ -548,7 +555,8 @@ func (rb *remoteBackend) doWrite(id uint64, f *Future) time.Duration {
 			zap.String("request", f.send.Message.DebugString()))
 	}
 	if err := rb.conn.Write(f.send, goetty.WriteOptions{}); err != nil {
-		rb.logger.Error("write request failed",
+		rb.rateLimitLogger.Error("write-conn",
+			"write request failed",
 			zap.Uint64("request-id", id), zap.Error(err))
 		f.messageSent(err)
 		return 0
@@ -558,7 +566,14 @@ func (rb *remoteBackend) doWrite(id uint64, f *Future) time.Duration {
 
 func (rb *remoteBackend) readLoop(ctx context.Context) {
 	rb.logger.Debug("read loop started")
-	defer rb.logger.Error("read loop stopped")
+	normalExit := false
+	defer func() {
+		if normalExit {
+			rb.logger.Debug("read loop stopped")
+		} else {
+			rb.logger.Error("read loop stopped")
+		}
+	}()
 
 	wg := &sync.WaitGroup{}
 	var cb func()
@@ -578,6 +593,7 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			normalExit = true
 			rb.clean()
 			return
 		default:
@@ -588,7 +604,16 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 					err = backendClosed
 				}
 
-				rb.logger.Error("read from backend failed", zap.Error(err))
+				// Filter out expected errors that occur during normal connection lifecycle
+				if rb.isExpectedReadError(err) {
+					normalExit = true
+					// Per specification: io.EOF is a normal connection closure signal,
+					// do not log it to avoid unnecessary noise
+				} else {
+					rb.rateLimitLogger.Error("read-loop",
+						"read from backend failed",
+						zap.Error(err))
+				}
 				rb.inactiveReadLoop()
 				rb.cancelActiveStreams()
 				rb.scheduleResetConn(err)
@@ -710,7 +735,9 @@ func (rb *remoteBackend) makeAllWaitingFutureFailed(err error) {
 
 func (rb *remoteBackend) handleResetConn() error {
 	if err := rb.resetConn(); err != nil {
-		rb.logger.Error("fail to reset backend connection", zap.Error(err))
+		rb.rateLimitLogger.Error("reset-conn",
+			"fail to reset backend connection",
+			zap.Error(err))
 		rb.inactive()
 		return err
 	}
@@ -879,7 +906,8 @@ func (rb *remoteBackend) resetConn() error {
 		if ne, ok := err.(net.Error); ok && ne.Timeout() {
 			canRetry = true
 		}
-		rb.logger.Error("init remote connection failed, retry later",
+		rb.rateLimitLogger.Error("connect-retry",
+			"init remote connection failed, retry later",
 			zap.Bool("can-retry", canRetry),
 			zap.Error(err))
 
@@ -970,8 +998,51 @@ func (rb *remoteBackend) closeConn(close bool) {
 	}
 
 	if err := fn(); err != nil {
-		rb.logger.Error("close remote conn failed", zap.Error(err))
+		// Filter out expected errors when closing already closed connections
+		if rb.isExpectedCloseError(err) {
+			rb.logger.Debug("close remote conn failed", zap.Error(err))
+		} else {
+			rb.logger.Error("close remote conn failed", zap.Error(err))
+		}
 	}
+}
+
+// isExpectedReadError checks if the error is an expected error during normal connection lifecycle
+func (rb *remoteBackend) isExpectedReadError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	// Use errors.Is() for accurate matching that supports wrapped errors
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+
+	if err == backendClosed {
+		return true
+	}
+
+	// String pattern matching as fallback for:
+	// 1. Platform-specific errors that don't implement Unwrap()
+	// 2. moerr-wrapped EOF (moerr.Error doesn't implement Unwrap())
+	// 3. goetty or other library wrapped errors
+	errStr := err.Error()
+	return strings.Contains(errStr, "use of closed network connection") ||
+		strings.Contains(errStr, "illegal state") ||
+		strings.Contains(errStr, "EOF") || // Fallback for moerr-wrapped EOF
+		strings.Contains(errStr, "connection reset") ||
+		strings.Contains(errStr, "broken pipe")
+}
+
+// isExpectedCloseError checks if the error is an expected error when closing connections
+func (rb *remoteBackend) isExpectedCloseError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := err.Error()
+	// These errors are expected when closing connections:
+	// - "use of closed network connection": connection was already closed
+	return strings.Contains(errStr, "use of closed network connection")
 }
 
 func (rb *remoteBackend) newFuture() *Future {

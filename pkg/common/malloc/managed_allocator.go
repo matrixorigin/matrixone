@@ -55,10 +55,10 @@ func (m *ManagedAllocator[U]) Allocate(size uint64, hints Hints) ([]byte, error)
 	return slice, nil
 }
 
-func (m *ManagedAllocator[U]) Deallocate(slice []byte, hints Hints) {
+func (m *ManagedAllocator[U]) Deallocate(slice []byte) {
 	ptr := unsafe.Pointer(unsafe.SliceData(slice))
 	shard := &m.inUse[hashPointer(uintptr(ptr))]
-	shard.deallocate(ptr, hints)
+	shard.deallocate(ptr)
 }
 
 func (m *managedAllocatorShard) allocate(ptr unsafe.Pointer, deallocator Deallocator) {
@@ -67,14 +67,14 @@ func (m *managedAllocatorShard) allocate(ptr unsafe.Pointer, deallocator Dealloc
 	m.items[ptr] = deallocator
 }
 
-func (m *managedAllocatorShard) deallocate(ptr unsafe.Pointer, hints Hints) {
+func (m *managedAllocatorShard) deallocate(ptr unsafe.Pointer) {
 	m.Lock()
 	defer m.Unlock()
 	deallocator, ok := m.items[ptr]
 	if !ok {
 		panic("bad pointer")
 	} else {
-		deallocator.Deallocate(hints)
+		deallocator.Deallocate()
 		delete(m.items, ptr)
 	}
 }

@@ -76,8 +76,8 @@ func TestPrepare(t *testing.T) {
 func TestProduct(t *testing.T) {
 	for _, tc := range makeTestCases(t) {
 
-		resetChildren(tc.arg)
-		resetHashBuildChildren(tc.barg)
+		resetChildren(tc.arg, tc.proc.Mp())
+		resetHashBuildChildren(tc.barg, tc.proc.Mp())
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		err = tc.barg.Prepare(tc.proc)
@@ -99,8 +99,8 @@ func TestProduct(t *testing.T) {
 		tc.arg.Reset(tc.proc, false, nil)
 		tc.barg.Reset(tc.proc, false, nil)
 
-		resetChildren(tc.arg)
-		resetHashBuildChildren(tc.barg)
+		resetChildren(tc.arg, tc.proc.Mp())
+		resetHashBuildChildren(tc.barg, tc.proc.Mp())
 		tc.proc.GetMessageBoard().Reset()
 		err = tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
@@ -165,7 +165,7 @@ func newTestCase(t *testing.T, flgs []bool, ts []types.Type, rp []colexec.Result
 	_, cancel := context.WithCancel(context.Background())
 	resultBatch := batch.NewWithSize(len(rp))
 	resultBatch.SetRowCount(4)
-	bat := colexec.MakeMockBatchs()
+	bat := colexec.MakeMockBatchs(proc.Mp())
 	for i := range rp {
 		resultBatch.Vecs[i] = vector.NewVec(*bat.Vecs[rp[i].Pos].GetType())
 	}
@@ -201,15 +201,15 @@ func newTestCase(t *testing.T, flgs []bool, ts []types.Type, rp []colexec.Result
 		resultBatch: resultBatch,
 	}
 }
-func resetChildren(arg *Product) {
-	bat := colexec.MakeMockBatchs()
+func resetChildren(arg *Product, m *mpool.MPool) {
+	bat := colexec.MakeMockBatchs(m)
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 	arg.Children = nil
 	arg.AppendChild(op)
 }
 
-func resetHashBuildChildren(arg *hashbuild.HashBuild) {
-	bat := colexec.MakeMockBatchs()
+func resetHashBuildChildren(arg *hashbuild.HashBuild, m *mpool.MPool) {
+	bat := colexec.MakeMockBatchs(m)
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 	arg.Children = nil
 	arg.AppendChild(op)

@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/idxcron"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -232,7 +233,7 @@ func (s *Scope) handleIvfIndexMetaTable(c *Compile, indexDef *plan.IndexDef, qry
 }
 
 func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef,
-	qryDatabase string, originalTableDef *plan.TableDef, totalCnt int64, metadataTableName string) error {
+	qryDatabase string, originalTableDef *plan.TableDef, totalCnt int64, metadataTableName string, forceSync bool) error {
 
 	var cfg vectorindex.IndexTableConfig
 	src_alias := "src"
@@ -292,7 +293,7 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 		if err != nil {
 			return err
 		}
-		cfg.KmeansTrainPercent = val.(int64)
+		cfg.KmeansTrainPercent = val.(float64)
 
 		val, err = c.proc.GetResolveVariableFunc()("kmeans_max_iteration", true, false)
 		if err != nil {
@@ -323,18 +324,54 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 	}
 	if async {
 
-		// create ISCP job when Async is true
-		// unregister ISCP job so that it can restart index update from ts=0
-		err = DropIndexCdcTask(c, originalTableDef, qryDatabase, originalTableDef.Name, indexDef.IndexName)
-		if err != nil {
-			return err
-		}
+		if forceSync {
+			// background reindex must use force_sync = true so build index to run in single transaction
 
-		logutil.Infof("Ivfflat index Async is true")
-		sinker_type := getSinkerTypeFromAlgo(catalog.MoIndexIvfFlatAlgo.ToString())
-		err = CreateIndexCdcTask(c, qryDatabase, originalTableDef.Name, indexDef.IndexName, sinker_type, false, sql)
-		if err != nil {
-			return err
+			// build centroid in synchronous mode
+			err = s.logTimestamp(c, qryDatabase, metadataTableName, "clustering_start")
+			if err != nil {
+				return err
+			}
+
+			err = c.runSql(sql)
+			if err != nil {
+				return err
+			}
+
+			err = s.logTimestamp(c, qryDatabase, metadataTableName, "clustering_end")
+			if err != nil {
+				return err
+			}
+
+			// if forceSync == true, start index update from ts = transaction start time
+			err = DropIndexCdcTask(c, originalTableDef, qryDatabase, originalTableDef.Name, indexDef.IndexName)
+			if err != nil {
+				return err
+			}
+
+			logutil.Infof("Ivfflat index Async = true, forceSync = true")
+			sinker_type := getSinkerTypeFromAlgo(catalog.MoIndexIvfFlatAlgo.ToString())
+			err = CreateIndexCdcTask(c, qryDatabase, originalTableDef.Name, indexDef.IndexName, sinker_type, true, "")
+			if err != nil {
+				return err
+			}
+
+		} else {
+			// if forceSync == false, start index update from ts = 0
+
+			// create ISCP job when Async is true
+			// unregister ISCP job so that it can restart index update from ts=0
+			err = DropIndexCdcTask(c, originalTableDef, qryDatabase, originalTableDef.Name, indexDef.IndexName)
+			if err != nil {
+				return err
+			}
+
+			logutil.Infof("Ivfflat index Async is true")
+			sinker_type := getSinkerTypeFromAlgo(catalog.MoIndexIvfFlatAlgo.ToString())
+			err = CreateIndexCdcTask(c, qryDatabase, originalTableDef.Name, indexDef.IndexName, sinker_type, false, sql)
+			if err != nil {
+				return err
+			}
 		}
 
 	} else {
@@ -450,6 +487,30 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 	}
 
 	return nil
+}
+
+func (s *Scope) handleIvfIndexRegisterUpdate(c *Compile, indexDef *plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef) error {
+
+	metadata, frontend, err := getIvfflatMetadata(c)
+	if err != nil {
+		return err
+	}
+
+	if !frontend {
+		// this function call is from background so ignore it
+		logutil.Infof("Background invoke reindex and ignore register index update function call")
+		return nil
+	}
+
+	return idxcron.RegisterUpdate(c.proc.Ctx,
+		c.proc.GetService(),
+		c.proc.GetTxnOperator(),
+		originalTableDef.TblId,
+		qryDatabase,
+		originalTableDef.Name,
+		indexDef.IndexName,
+		idxcron.Action_Ivfflat_Reindex,
+		string(metadata))
 }
 
 func (s *Scope) logTimestamp(c *Compile, qryDatabase, metadataTableName, metrics string) error {

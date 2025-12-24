@@ -171,9 +171,13 @@ invalid input: invalid datetime value L
 SELECT col_char <> col_datetime FROM t;
 invalid input: invalid datetime value L
 SELECT CAST(col_char AS DATE) FROM t;
-invalid argument parsedate, bad value L
+cast(col_char as date)
+null
+null
 SELECT col_char <> col_date FROM t;
-invalid argument parsedate, bad value L
+col_char != col_date
+null
+null
 DROP TABLE t;
 CREATE TABLE `BB` (`col_char_key` char(1));
 CREATE TABLE `CC` ( `pk` int, `col_datetime_key` datetime);
@@ -190,9 +194,9 @@ insert into t1 values ("2006-01-02", "2006-01-02 12:01:02", "2006-01-02 12:01:02
 select f1 from t1 where f1 between CAST("2006-1-1" as date) and CAST(20060101 as date);
 invalid argument operator cast, bad value [BIGINT DATE]
 select f1 from t1 where f1 between cast("2006-1-1" as date) and cast("2006.1.1" as date);
-invalid argument parsedate, bad value 2006.1.1
+f1
 select f1 from t1 where date(f1) between cast("2006-1-1" as date) and cast("2006.1.1" as date);
-invalid argument parsedate, bad value 2006.1.1
+f1
 select f3 from t1 where f3 between cast("2006-1-1 12:1:1" as datetime) and cast("2006-1-1 12:1:2" as datetime);
 f3
 2006-01-01 12:01:01
@@ -206,7 +210,7 @@ select f1 from t1 where cast("2006-1-1" as date) between date(f1) and date(f3);
 f1
 2006-01-01
 select f1 from t1 where cast("2006-1-1" as date) between f1 and cast('zzz' as date);
-invalid argument parsedate, bad value zzz
+f1
 drop table t1;
 create table t1 (field DATE);
 insert into t1 values ('2006-11-06');

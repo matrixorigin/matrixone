@@ -17,6 +17,7 @@ package timewin
 import (
 	"bytes"
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -61,7 +62,7 @@ func (timeWin *TimeWin) Prepare(proc *process.Process) (err error) {
 		}
 		ctr.aggs = make([]aggexec.AggFuncExec, len(timeWin.Aggs))
 		for i, ag := range timeWin.Aggs {
-			ctr.aggs[i], err = aggexec.MakeAgg(proc, ag.GetAggID(), ag.IsDistinct(), timeWin.Types[i])
+			ctr.aggs[i], err = aggexec.MakeAgg(proc.Mp(), ag.GetAggID(), ag.IsDistinct(), timeWin.Types[i])
 			if err != nil {
 				return err
 			}
@@ -244,7 +245,7 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 			} else {
 				ctr.status = nextWindow
 				for i, ag := range timeWin.Aggs {
-					ctr.aggs[i], err = aggexec.MakeAgg(proc, ag.GetAggID(), ag.IsDistinct(), timeWin.Types[i])
+					ctr.aggs[i], err = aggexec.MakeAgg(proc.Mp(), ag.GetAggID(), ag.IsDistinct(), timeWin.Types[i])
 					if err != nil {
 						return result, err
 					}
