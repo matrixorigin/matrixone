@@ -1,0 +1,331 @@
+// Copyright 2021 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package interactive
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/tools/objecttool"
+)
+
+// State 浏览状态
+type State struct {
+	reader    *objecttool.ObjectReader
+	formatter *objecttool.FormatterRegistry
+	ctx       context.Context
+
+	// 当前数据
+	currentBlock uint32
+	currentBatch *batch.Batch
+	batchRelease func()
+
+	// 显示状态
+	rowOffset int // 当前block内的行偏移
+	pageSize  int // 每页显示行数
+}
+
+func NewState(ctx context.Context, reader *objecttool.ObjectReader) *State {
+	return &State{
+		reader:    reader,
+		formatter: objecttool.NewFormatterRegistry(),
+		ctx:       ctx,
+		pageSize:  20,
+	}
+}
+
+// CurrentRows 获取当前页的数据（格式化后的字符串）
+func (s *State) CurrentRows() ([][]string, error) {
+	// 确保当前block已加载
+	if err := s.ensureBlockLoaded(); err != nil {
+		return nil, err
+	}
+
+	if s.currentBatch == nil {
+		return nil, nil
+	}
+
+	// 计算当前页的行范围
+	totalRows := s.currentBatch.RowCount()
+	start := s.rowOffset
+	end := start + s.pageSize
+	if end > totalRows {
+		end = totalRows
+	}
+
+	if start >= totalRows {
+		return nil, nil
+	}
+
+	// 格式化数据
+	rows := make([][]string, end-start)
+	cols := s.reader.Columns()
+
+	for i := start; i < end; i++ {
+		row := make([]string, len(cols))
+		for j, col := range cols {
+			vec := s.currentBatch.Vecs[j]
+
+			// 检查NULL
+			if vec.IsNull(uint64(i)) {
+				row[j] = "NULL"
+				continue
+			}
+
+			// 根据类型获取值
+			var value any
+			switch col.Type.Oid {
+			case types.T_bool:
+				value = vector.GetFixedAtNoTypeCheck[bool](vec, i)
+			case types.T_int8:
+				value = vector.GetFixedAtNoTypeCheck[int8](vec, i)
+			case types.T_int16:
+				value = vector.GetFixedAtNoTypeCheck[int16](vec, i)
+			case types.T_int32:
+				value = vector.GetFixedAtNoTypeCheck[int32](vec, i)
+			case types.T_int64:
+				value = vector.GetFixedAtNoTypeCheck[int64](vec, i)
+			case types.T_uint8:
+				value = vector.GetFixedAtNoTypeCheck[uint8](vec, i)
+			case types.T_uint16:
+				value = vector.GetFixedAtNoTypeCheck[uint16](vec, i)
+			case types.T_uint32:
+				value = vector.GetFixedAtNoTypeCheck[uint32](vec, i)
+			case types.T_uint64:
+				value = vector.GetFixedAtNoTypeCheck[uint64](vec, i)
+			case types.T_float32:
+				value = vector.GetFixedAtNoTypeCheck[float32](vec, i)
+			case types.T_float64:
+				value = vector.GetFixedAtNoTypeCheck[float64](vec, i)
+			case types.T_char, types.T_varchar, types.T_text, types.T_blob, types.T_binary, types.T_varbinary:
+				value = vec.GetBytesAt(i)
+			case types.T_TS:
+				value = vector.GetFixedAtNoTypeCheck[types.TS](vec, i)
+			case types.T_Rowid:
+				value = vector.GetFixedAtNoTypeCheck[types.Rowid](vec, i)
+			case types.T_uuid:
+				value = vector.GetFixedAtNoTypeCheck[types.Uuid](vec, i)
+			default:
+				value = vec.GetRawBytesAt(i)
+			}
+
+			// 获取格式化器
+			formatter := s.formatter.GetFormatter(col.Idx, col.Type, value)
+			row[j] = formatter.Format(value)
+		}
+		rows[i-start] = row
+	}
+
+	return rows, nil
+}
+
+func (s *State) ensureBlockLoaded() error {
+	if s.currentBatch != nil {
+		return nil
+	}
+
+	bat, release, err := s.reader.ReadBlock(s.ctx, s.currentBlock)
+	if err != nil {
+		return err
+	}
+
+	s.currentBatch = bat
+	s.batchRelease = release
+	return nil
+}
+
+// NextPage 下一页
+func (s *State) NextPage() error {
+	if s.currentBatch == nil {
+		return s.ensureBlockLoaded()
+	}
+
+	totalRows := s.currentBatch.RowCount()
+	newOffset := s.rowOffset + s.pageSize
+
+	if newOffset < totalRows {
+		// 同一个block内
+		s.rowOffset = newOffset
+		return nil
+	}
+
+	// 需要切换到下一个block
+	if s.currentBlock+1 >= s.reader.BlockCount() {
+		return fmt.Errorf("already at last page")
+	}
+
+	s.releaseCurrentBatch()
+	s.currentBlock++
+	s.rowOffset = 0
+	return s.ensureBlockLoaded()
+}
+
+// PrevPage 上一页
+func (s *State) PrevPage() error {
+	if s.rowOffset >= s.pageSize {
+		// 同一个block内
+		s.rowOffset -= s.pageSize
+		return nil
+	}
+
+	// 需要切换到上一个block
+	if s.currentBlock == 0 {
+		return fmt.Errorf("already at first page")
+	}
+
+	s.releaseCurrentBatch()
+	s.currentBlock--
+
+	// 加载上一个block并定位到最后一页
+	if err := s.ensureBlockLoaded(); err != nil {
+		return err
+	}
+
+	totalRows := s.currentBatch.RowCount()
+	lastPageStart := (totalRows / s.pageSize) * s.pageSize
+	if lastPageStart == totalRows && totalRows > 0 {
+		lastPageStart -= s.pageSize
+	}
+	s.rowOffset = lastPageStart
+
+	return nil
+}
+
+// ScrollDown 向下滚动一行
+func (s *State) ScrollDown() error {
+	if s.currentBatch == nil {
+		return s.ensureBlockLoaded()
+	}
+
+	totalRows := s.currentBatch.RowCount()
+	if s.rowOffset+s.pageSize < totalRows {
+		s.rowOffset++
+		return nil
+	}
+
+	// 尝试切换到下一个block
+	if s.currentBlock+1 >= s.reader.BlockCount() {
+		return fmt.Errorf("already at last row")
+	}
+
+	s.releaseCurrentBatch()
+	s.currentBlock++
+	s.rowOffset = 0
+	return s.ensureBlockLoaded()
+}
+
+// ScrollUp 向上滚动一行
+func (s *State) ScrollUp() error {
+	if s.rowOffset > 0 {
+		s.rowOffset--
+		return nil
+	}
+
+	// 尝试切换到上一个block
+	if s.currentBlock == 0 {
+		return fmt.Errorf("already at first row")
+	}
+
+	s.releaseCurrentBatch()
+	s.currentBlock--
+
+	if err := s.ensureBlockLoaded(); err != nil {
+		return err
+	}
+
+	totalRows := s.currentBatch.RowCount()
+	s.rowOffset = totalRows - s.pageSize
+	if s.rowOffset < 0 {
+		s.rowOffset = 0
+	}
+
+	return nil
+}
+
+// GotoRow 跳转到指定行（全局行号）
+func (s *State) GotoRow(globalRow int64) error {
+	if globalRow < 0 {
+		// -1 表示最后一行
+		info := s.reader.Info()
+		globalRow = int64(info.RowCount) - 1
+	}
+
+	// 找到对应的block
+	var currentRow int64
+	for blockIdx := uint32(0); blockIdx < s.reader.BlockCount(); blockIdx++ {
+		// 临时加载block获取行数
+		bat, release, err := s.reader.ReadBlock(s.ctx, blockIdx)
+		if err != nil {
+			return err
+		}
+		blockRows := int64(bat.RowCount())
+		release()
+
+		if currentRow+blockRows > globalRow {
+			// 找到了
+			s.releaseCurrentBatch()
+			s.currentBlock = blockIdx
+			s.rowOffset = int(globalRow - currentRow)
+			return s.ensureBlockLoaded()
+		}
+
+		currentRow += blockRows
+	}
+
+	return fmt.Errorf("row %d out of range", globalRow)
+}
+
+// SetFormat 设置列格式
+func (s *State) SetFormat(colIdx uint16, formatterName string) error {
+	if formatterName == "auto" {
+		s.formatter.ClearFormatter(colIdx)
+		return nil
+	}
+
+	formatter, ok := objecttool.FormatterByName[formatterName]
+	if !ok {
+		return fmt.Errorf("unknown formatter: %s", formatterName)
+	}
+
+	s.formatter.SetFormatter(colIdx, formatter)
+	return nil
+}
+
+// GlobalRowOffset 返回当前全局行偏移
+func (s *State) GlobalRowOffset() int64 {
+	var offset int64
+	for i := uint32(0); i < s.currentBlock; i++ {
+		// 这里简化处理，实际应该缓存每个block的行数
+		// 暂时返回近似值
+		offset += 8192 // 假设每个block 8192行
+	}
+	return offset + int64(s.rowOffset)
+}
+
+func (s *State) releaseCurrentBatch() {
+	if s.batchRelease != nil {
+		s.batchRelease()
+		s.batchRelease = nil
+	}
+	s.currentBatch = nil
+}
+
+// Close 关闭状态
+func (s *State) Close() {
+	s.releaseCurrentBatch()
+}
