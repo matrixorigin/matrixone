@@ -246,7 +246,9 @@ func InitializeIterationContext(
 		}
 		// Helper will be created after local transaction is created (helper needs txnOp)
 	} else {
-		connConfig, err := ParseUpstreamConn(upstreamConn.String)
+		// Parse upstream connection string with optional password decryption
+		// KeyEncryptionKey will be read using cnUUID (similar to CDC's getGlobalPuWrapper)
+		connConfig, err := ParseUpstreamConnWithDecrypt(ctx, upstreamConn.String, localExecutor, cnUUID)
 		if err != nil {
 			return nil, moerr.NewInternalErrorf(ctx, "failed to parse upstream connection string: %v", err)
 		}
@@ -268,7 +270,6 @@ func InitializeIterationContext(
 	if err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "failed to start upstream transaction: %v", err)
 	}
-
 
 	// Initialize IterationContext
 	iterationCtx := &IterationContext{

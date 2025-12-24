@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -69,7 +70,16 @@ func PublicationTaskExecutorFactory(
 	cdUUID string,
 	mp *mpool.MPool,
 	upstreamSQLHelperFactory UpstreamSQLHelperFactory,
+	pu *config.ParameterUnit,
 ) func(ctx context.Context, task task.Task) (err error) {
+	// Set getParameterUnitWrapper to return the ParameterUnit passed from factory
+	// Similar to CDC's getGlobalPuWrapper, but using the ParameterUnit from service
+	if pu != nil {
+		SetGetParameterUnitWrapper(func(cnUUID string) *config.ParameterUnit {
+			return pu
+		})
+	}
+
 	return func(ctx context.Context, task task.Task) (err error) {
 		var exec *PublicationTaskExecutor
 

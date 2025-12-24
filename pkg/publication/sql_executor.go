@@ -18,24 +18,38 @@ import (
 	"context"
 	sql "database/sql"
 	"database/sql/driver"
-	"encoding/json"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
 	"net"
-	"net/url"
 	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/cdc/retry"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/mysql"
 	"go.uber.org/zap"
 )
+
+// getParameterUnitWrapper is a wrapper function to get ParameterUnit from cnUUID
+// Similar to getGlobalPuWrapper in pkg/frontend/cdc_util.go
+// This can be set by the caller to provide a way to get ParameterUnit
+var getParameterUnitWrapper func(cnUUID string) *config.ParameterUnit
+
+// SetGetParameterUnitWrapper sets the wrapper function to get ParameterUnit from cnUUID
+// This should be called during initialization to provide a way to get ParameterUnit
+func SetGetParameterUnitWrapper(fn func(cnUUID string) *config.ParameterUnit) {
+	getParameterUnitWrapper = fn
+}
 
 // Result wraps sql.Rows or InternalResult to provide query result access
 type Result struct {
@@ -261,97 +275,191 @@ type UpstreamConnConfig struct {
 	Timeout  string
 }
 
+// tryDecryptPassword attempts to decrypt password if it appears to be encrypted
+// Returns decrypted password if successful, original password otherwise
+func tryDecryptPassword(ctx context.Context, encryptedPassword string, executor SQLExecutor, cnUUID string) string {
+	// Check if password looks like encrypted (hex string, typically longer than 32 chars for AES CFB)
+	if len(encryptedPassword) < 32 {
+		return encryptedPassword // Too short to be encrypted
+	}
+
+	// Try to decode as hex to check if it's valid hex
+	_, err := hex.DecodeString(encryptedPassword)
+	if err != nil {
+		return encryptedPassword // Not valid hex, assume plaintext
+	}
+
+	// Try to initialize AES key and decrypt
+	if executor != nil && cnUUID != "" {
+		// Initialize AES key if not already initialized
+		if len(cdc.AesKey) == 0 {
+			if err := initAesKeyForPublication(ctx, executor, cnUUID); err != nil {
+				logutil.Warn("failed to initialize AES key for password decryption, using password as-is",
+					zap.Error(err))
+				return encryptedPassword
+			}
+		}
+
+		// Try to decrypt
+		decrypted, err := cdc.AesCFBDecode(ctx, encryptedPassword)
+		if err != nil {
+			logutil.Warn("failed to decrypt password, using password as-is",
+				zap.Error(err))
+			return encryptedPassword
+		}
+		return decrypted
+	}
+
+	return encryptedPassword
+}
+
+// initAesKeyForPublication initializes AES key for password decryption
+// Similar to initAesKeyBySqlExecutor in pkg/frontend/cdc_exector.go
+// Uses cnUUID to get ParameterUnit via getParameterUnitWrapper (similar to CDC's getGlobalPuWrapper)
+func initAesKeyForPublication(ctx context.Context, executor SQLExecutor, cnUUID string) error {
+	if len(cdc.AesKey) > 0 {
+		return nil // Already initialized
+	}
+
+	// Query the data key from mo_data_key table
+	querySQL := cdc.CDCSQLBuilder.GetDataKeySQL(uint64(catalog.System_Account), cdc.InitKeyId)
+	systemCtx := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	result, err := executor.ExecSQL(systemCtx, querySQL)
+	if err != nil {
+		return err
+	}
+	defer result.Close()
+
+	var encryptedKey string
+	if result.Next() {
+		if err := result.Scan(&encryptedKey); err != nil {
+			return err
+		}
+	} else {
+		return moerr.NewInternalError(ctx, "no data key found")
+	}
+
+	// Get KeyEncryptionKey using getParameterUnitWrapper (similar to CDC)
+	// First try getParameterUnitWrapper if available
+	var pu *config.ParameterUnit
+	if getParameterUnitWrapper != nil {
+		pu = getParameterUnitWrapper(cnUUID)
+	}
+
+	// Fallback to context if wrapper is not available or returned nil
+	if pu == nil {
+		puValue := ctx.Value(config.ParameterUnitKey)
+		if puValue != nil {
+			if puPtr, ok := puValue.(*config.ParameterUnit); ok && puPtr != nil {
+				pu = puPtr
+			}
+		}
+	}
+
+	if pu == nil || pu.SV == nil {
+		return moerr.NewInternalError(ctx, "ParameterUnit not available")
+	}
+
+	// Decrypt the data key using KeyEncryptionKey
+	cdc.AesKey, err = cdc.AesCFBDecodeWithKey(
+		ctx,
+		encryptedKey,
+		[]byte(pu.SV.KeyEncryptionKey),
+	)
+	return err
+}
+
 // ParseUpstreamConn parses upstream connection string
-// Supports two formats:
-// 1. JSON format: {"user":"xxx","password":"xxx","host":"xxx","port":xxx,"timeout":"xxx"}
-// 2. MySQL DSN format: user:password@tcp(host:port)/?timeout=xxx
+// Format: mysql://account#user:password@host:port (unified format, account may be empty)
+// If password appears to be encrypted (hex string), it will be decrypted if ctx and executor are provided
+// KeyEncryptionKey will be read from context (similar to CDC)
 func ParseUpstreamConn(connStr string) (*UpstreamConnConfig, error) {
+	return ParseUpstreamConnWithDecrypt(context.Background(), connStr, nil, "")
+}
+
+// ParseUpstreamConnWithDecrypt parses upstream connection string with optional password decryption
+// Format: mysql://account#user:password@host:port (account may be empty, i.e., mysql://#user:password@host:port)
+// If executor and cnUUID are provided, encrypted passwords will be decrypted using KeyEncryptionKey
+// Similar to CDC's implementation using getGlobalPuWrapper
+func ParseUpstreamConnWithDecrypt(ctx context.Context, connStr string, executor SQLExecutor, cnUUID string) (*UpstreamConnConfig, error) {
 	if connStr == "" {
 		return nil, moerr.NewInternalErrorNoCtx("upstream connection string is empty")
 	}
 
-	// Try JSON format first
-	var jsonConfig struct {
-		User     string `json:"user"`
-		Password string `json:"password"`
-		Host     string `json:"host"`
-		Port     int    `json:"port"`
-		Timeout  string `json:"timeout"`
-	}
-	if err := json.Unmarshal([]byte(connStr), &jsonConfig); err == nil {
-		// JSON format parsed successfully
-		if jsonConfig.Host == "" {
-			return nil, moerr.NewInternalErrorNoCtx("host is required in connection config")
-		}
-		if jsonConfig.Port == 0 {
-			jsonConfig.Port = 6001 // Default MatrixOne port
-		}
-		if jsonConfig.Timeout == "" {
-			jsonConfig.Timeout = "10s" // Default timeout
-		}
-		return &UpstreamConnConfig{
-			User:     jsonConfig.User,
-			Password: jsonConfig.Password,
-			Host:     jsonConfig.Host,
-			Port:     jsonConfig.Port,
-			Timeout:  jsonConfig.Timeout,
-		}, nil
+	// Must start with mysql://
+	if !strings.HasPrefix(connStr, "mysql://") {
+		return nil, moerr.NewInternalErrorNoCtx("invalid connection string format, expected mysql://account#user:password@host:port")
 	}
 
-	// Try MySQL DSN format: user:password@tcp(host:port)/?timeout=xxx
-	// Parse format: user:password@tcp(host:port)/?params
+	connStr = strings.TrimPrefix(connStr, "mysql://")
+
+	// Split by @ to separate user:password and host:port
 	parts := strings.Split(connStr, "@")
 	if len(parts) != 2 {
-		return nil, moerr.NewInternalErrorNoCtx("invalid connection string format, expected user:password@tcp(host:port)/?params")
+		return nil, moerr.NewInternalErrorNoCtx("invalid connection string format, expected mysql://account#user:password@host:port")
 	}
 
-	// Parse user:password
+	// Parse user:password part (must contain account# prefix)
 	userPass := strings.Split(parts[0], ":")
-	if len(userPass) != 2 {
-		return nil, moerr.NewInternalErrorNoCtx("invalid user:password format")
+	if len(userPass) < 2 {
+		return nil, moerr.NewInternalErrorNoCtx("invalid user:password format, expected account#user:password")
 	}
-	user := userPass[0]
-	password := userPass[1]
 
-	// Parse tcp(host:port)/?params
+	// Handle account#user format (account may be empty)
+	userPart := userPass[0]
+	if !strings.Contains(userPart, "#") {
+		return nil, moerr.NewInternalErrorNoCtx("invalid format, expected account#user prefix")
+	}
+
+	idx := strings.Index(userPart, "#")
+	if idx < 0 || idx == len(userPart)-1 {
+		return nil, moerr.NewInternalErrorNoCtx("invalid format, user cannot be empty after account#")
+	}
+
+	// Skip account part, only use user (account may be empty string)
+	user := userPart[idx+1:]
+	if user == "" {
+		return nil, moerr.NewInternalErrorNoCtx("invalid format, user cannot be empty")
+	}
+
+	// Join remaining parts as password (in case password contains ':')
+	password := strings.Join(userPass[1:], ":")
+	if password == "" {
+		return nil, moerr.NewInternalErrorNoCtx("invalid format, password cannot be empty")
+	}
+
+	// Parse host:port part
 	addrPart := parts[1]
-	if !strings.HasPrefix(addrPart, "tcp(") {
-		return nil, moerr.NewInternalErrorNoCtx("invalid address format, expected tcp(host:port)")
+	// Remove any query parameters after /
+	slashIdx := strings.Index(addrPart, "/")
+	if slashIdx != -1 {
+		addrPart = addrPart[:slashIdx]
 	}
-	addrPart = strings.TrimPrefix(addrPart, "tcp(")
-	closeIdx := strings.Index(addrPart, ")")
-	if closeIdx == -1 {
-		return nil, moerr.NewInternalErrorNoCtx("invalid address format, missing closing parenthesis")
-	}
-	hostPort := addrPart[:closeIdx]
-	paramsPart := addrPart[closeIdx+1:]
 
-	// Parse host:port
-	hostPortParts := strings.Split(hostPort, ":")
+	hostPortParts := strings.Split(addrPart, ":")
 	if len(hostPortParts) != 2 {
 		return nil, moerr.NewInternalErrorNoCtx("invalid host:port format")
 	}
+
 	host := hostPortParts[0]
+	if host == "" {
+		return nil, moerr.NewInternalErrorNoCtx("invalid format, host cannot be empty")
+	}
+
 	port, err := strconv.Atoi(hostPortParts[1])
 	if err != nil {
 		return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid port: %v", err))
 	}
 
-	// Parse timeout from params
-	timeout := "10s" // Default timeout
-	if strings.HasPrefix(paramsPart, "/?") {
-		paramsStr := strings.TrimPrefix(paramsPart, "/?")
-		params, err := url.ParseQuery(paramsStr)
-		if err == nil {
-			if timeoutVal := params.Get("timeout"); timeoutVal != "" {
-				timeout = timeoutVal
-			}
-		}
-	}
+	// Try to decrypt password if it appears to be encrypted
+	decryptedPassword := tryDecryptPassword(ctx, password, executor, cnUUID)
+
+	// Default timeout
+	timeout := "10s"
 
 	return &UpstreamConnConfig{
 		User:     user,
-		Password: password,
+		Password: decryptedPassword,
 		Host:     host,
 		Port:     port,
 		Timeout:  timeout,

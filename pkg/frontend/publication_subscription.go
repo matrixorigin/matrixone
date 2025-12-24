@@ -1986,11 +1986,13 @@ func doCreateSubscription(ctx context.Context, ses *Session, cs *tree.CreateSubs
 
 	// Build encrypted URI (similar to CDC format)
 	// Format: mysql://account#user:encrypted_password@host:port
+	// Always use account#user format for consistency, even if account is empty
 	var encryptedUri string
 	if account != "" {
 		encryptedUri = fmt.Sprintf("mysql://%s#%s:%s@%s:%d", account, user, encodedPassword, host, port)
 	} else {
-		encryptedUri = fmt.Sprintf("mysql://%s:%s@%s:%d", user, encodedPassword, host, port)
+		// Use empty account prefix for consistency
+		encryptedUri = fmt.Sprintf("mysql://#%s:%s@%s:%d", user, encodedPassword, host, port)
 	}
 
 	// Determine sync_level
