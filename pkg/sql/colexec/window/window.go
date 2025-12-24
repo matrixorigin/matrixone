@@ -235,7 +235,7 @@ func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, an
 			for ; o < len(ctr.os); o++ {
 
 				if ctr.os[o] <= ctr.ps[p] {
-					if err = ctr.batAggs[idx].BatchFill(o, []uint64{uint64(p - 1)}, []*vector.Vector{vec}); err != nil {
+					if err = ctr.batAggs[idx].BatchFill(o, []uint64{uint64(p)}, []*vector.Vector{vec}); err != nil {
 						return err
 					}
 
@@ -280,7 +280,7 @@ func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, an
 			}
 
 			for k := left; k < right; k++ {
-				if err = ctr.batAggs[idx].BatchFill(k, []uint64{uint64(j)}, ctr.aggVecs[idx].Vec); err != nil {
+				if err = ctr.batAggs[idx].BatchFill(k, []uint64{uint64(j) + 1}, ctr.aggVecs[idx].Vec); err != nil {
 					return err
 				}
 			}
