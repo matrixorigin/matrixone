@@ -16,6 +16,7 @@ package interactive
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/tools/objecttool"
@@ -55,25 +56,25 @@ func (v *View) Render(state *State, message string) error {
 
 	// 4. Message/command line
 	if message != "" {
-		fmt.Println()
-		fmt.Println(message)
-		fmt.Println()
+		fmt.Fprintln(os.Stdout)
+		fmt.Fprintln(os.Stdout, message)
+		fmt.Fprintln(os.Stdout)
 	}
 
 	return nil
 }
 
 func (v *View) clear() {
-	fmt.Print("\033[2J\033[H") // ANSI clear screen
+	fmt.Fprint(os.Stdout, "\033[2J\033[H") // ANSI clear screen
 }
 
 func (v *View) renderHeader(state *State) {
 	info := state.reader.Info()
-	fmt.Println(strings.Repeat("=", v.width))
-	fmt.Printf("Object: %s\n", info.Path)
-	fmt.Printf("Blocks: %d | Rows: %d | Cols: %d\n",
+	fmt.Fprintln(os.Stdout, strings.Repeat("=", v.width))
+	fmt.Fprintf(os.Stdout, "Object: %s\n", info.Path)
+	fmt.Fprintf(os.Stdout, "Blocks: %d | Rows: %d | Cols: %d\n",
 		info.BlockCount, info.RowCount, info.ColCount)
-	fmt.Println(strings.Repeat("=", v.width))
+	fmt.Fprintln(os.Stdout, strings.Repeat("=", v.width))
 }
 
 func (v *View) renderTable(state *State) error {
@@ -138,7 +139,7 @@ func (v *View) renderVertical(state *State, rows [][]string, rowNumbers []string
 
 	// Display each row
 	for rowIdx, row := range rows {
-		fmt.Printf("*************************** %s ***************************\n", rowNumbers[rowIdx])
+		fmt.Fprintf(os.Stdout, "*************************** %s ***************************\n", rowNumbers[rowIdx])
 		for i, colIdx := range displayCols {
 			if int(colIdx) < len(cols) {
 				col := cols[colIdx]
@@ -150,11 +151,11 @@ func (v *View) renderVertical(state *State, rows [][]string, rowNumbers []string
 						value = value[:state.maxColWidth-3] + "..."
 					}
 				}
-				fmt.Printf("%15s (Col%d): %s\n", col.Type.String(), colIdx, value)
+				fmt.Fprintf(os.Stdout, "%15s (Col%d): %s\n", col.Type.String(), colIdx, value)
 			}
 		}
 		if rowIdx < len(rows)-1 {
-			fmt.Println() // Empty line between rows
+			fmt.Fprintln(os.Stdout) // Empty line between rows
 		}
 	}
 
@@ -162,14 +163,14 @@ func (v *View) renderVertical(state *State, rows [][]string, rowNumbers []string
 }
 
 func (v *View) renderTableRowWithNumber(rowNum string, row []string, widths []int) {
-	fmt.Printf("│ %-10s ", rowNum)
+	fmt.Fprintf(os.Stdout, "│ %-10s ", rowNum)
 	for i, cell := range row {
 		if i < len(widths) {
 			// Don't truncate here, let content display fully
-			fmt.Printf("│ %-*s ", widths[i], cell)
+			fmt.Fprintf(os.Stdout, "│ %-*s ", widths[i], cell)
 		}
 	}
-	fmt.Println("│")
+	fmt.Fprintln(os.Stdout, "│")
 }
 
 func (v *View) renderStatusToBuilder(state *State, b *strings.Builder) {
@@ -210,7 +211,7 @@ func (v *View) renderStatus(state *State) {
 		widthStr = "unlimited"
 	}
 
-	fmt.Printf("\n[%d-%d of %d] Block %d/%d | Mode: %s | Width: %s\n",
+	fmt.Fprintf(os.Stdout, "\n[%d-%d of %d] Block %d/%d | Mode: %s | Width: %s\n",
 		start, end, info.RowCount, state.currentBlock+1, info.BlockCount, mode, widthStr)
 }
 
@@ -246,56 +247,56 @@ func (v *View) calcColWidths(cols []objecttool.ColInfo, rows [][]string, maxColW
 
 func (v *View) renderTableHeader(cols []objecttool.ColInfo, widths []int) {
 	// ┌────┬────┐
-	fmt.Print("┌────────────┬")
+	fmt.Fprint(os.Stdout, "┌────────────┬")
 	for i, w := range widths {
-		fmt.Print(strings.Repeat("─", w+2))
+		fmt.Fprint(os.Stdout, strings.Repeat("─", w+2))
 		if i < len(widths)-1 {
-			fmt.Print("┬")
+			fmt.Fprint(os.Stdout, "┬")
 		}
 	}
-	fmt.Println("┐")
+	fmt.Fprintln(os.Stdout, "┐")
 
 	// │RowNum│Col0│Col1│
-	fmt.Print("│ RowNum     │")
+	fmt.Fprint(os.Stdout, "│ RowNum     │")
 	for i, col := range cols {
 		header := fmt.Sprintf("Col%d", col.Idx)
-		fmt.Printf(" %-*s │", widths[i], header)
+		fmt.Fprintf(os.Stdout, " %-*s │", widths[i], header)
 	}
-	fmt.Println()
+	fmt.Fprintln(os.Stdout)
 
 	// ├────┼────┤
-	fmt.Print("├────────────┼")
+	fmt.Fprint(os.Stdout, "├────────────┼")
 	for i, w := range widths {
-		fmt.Print(strings.Repeat("─", w+2))
+		fmt.Fprint(os.Stdout, strings.Repeat("─", w+2))
 		if i < len(widths)-1 {
-			fmt.Print("┼")
+			fmt.Fprint(os.Stdout, "┼")
 		}
 	}
-	fmt.Println("┤")
+	fmt.Fprintln(os.Stdout, "┤")
 }
 
 func (v *View) renderTableRow(row []string, widths []int) {
-	fmt.Print("│")
+	fmt.Fprint(os.Stdout, "│")
 	for i, cell := range row {
 		if i < len(widths) {
 			// Truncate overly long content
 			if len(cell) > widths[i] {
 				cell = cell[:widths[i]-3] + "..."
 			}
-			fmt.Printf(" %-*s │", widths[i], cell)
+			fmt.Fprintf(os.Stdout, " %-*s │", widths[i], cell)
 		}
 	}
-	fmt.Println()
+	fmt.Fprintln(os.Stdout)
 }
 
 func (v *View) renderTableFooter(widths []int) {
 	// └────┴────┘
-	fmt.Print("└────────────┴")
+	fmt.Fprint(os.Stdout, "└────────────┴")
 	for i, w := range widths {
-		fmt.Print(strings.Repeat("─", w+2))
+		fmt.Fprint(os.Stdout, strings.Repeat("─", w+2))
 		if i < len(widths)-1 {
-			fmt.Print("┴")
+			fmt.Fprint(os.Stdout, "┴")
 		}
 	}
-	fmt.Println("┘")
+	fmt.Fprintln(os.Stdout, "┘")
 }

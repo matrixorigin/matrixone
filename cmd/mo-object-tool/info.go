@@ -17,7 +17,9 @@ package object
 import (
 	"context"
 	"fmt"
+	"os"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/tools/objecttool"
 	"github.com/spf13/cobra"
 )
@@ -42,20 +44,20 @@ func showInfo(path string) error {
 
 	reader, err := objecttool.Open(ctx, path)
 	if err != nil {
-		return fmt.Errorf("failed to open object: %w", err)
+		return moerr.NewInternalErrorf(ctx, "failed to open object: %v", err)
 	}
 	defer reader.Close()
 
 	info := reader.Info()
-	fmt.Printf("Object: %s\n", info.Path)
-	fmt.Printf("Blocks: %d\n", info.BlockCount)
-	fmt.Printf("Rows:   %d\n", info.RowCount)
-	fmt.Printf("Cols:   %d\n", info.ColCount)
+	fmt.Fprintf(os.Stdout, "Object: %s\n", info.Path)
+	fmt.Fprintf(os.Stdout, "Blocks: %d\n", info.BlockCount)
+	fmt.Fprintf(os.Stdout, "Rows:   %d\n", info.RowCount)
+	fmt.Fprintf(os.Stdout, "Cols:   %d\n", info.ColCount)
 
-	fmt.Println("\nColumns:")
+	fmt.Fprintln(os.Stdout, "\nColumns:")
 	cols := reader.Columns()
 	for _, col := range cols {
-		fmt.Printf("  %2d: %s\n", col.Idx, col.Type.String())
+		fmt.Fprintf(os.Stdout, "  %2d: %s\n", col.Idx, col.Type.String())
 	}
 
 	return nil
