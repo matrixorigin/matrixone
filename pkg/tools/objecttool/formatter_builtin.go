@@ -35,9 +35,7 @@ func (f *DefaultFormatter) Format(value any) string {
 		if len(v) == 0 {
 			return ""
 		}
-		if len(v) > 32 {
-			return hex.EncodeToString(v[:16]) + "..."
-		}
+		// 不截断，显示完整的十六进制内容
 		return hex.EncodeToString(v)
 	case nil:
 		return "NULL"

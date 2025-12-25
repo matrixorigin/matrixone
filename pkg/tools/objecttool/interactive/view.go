@@ -165,10 +165,7 @@ func (v *View) renderTableRowWithNumber(rowNum string, row []string, widths []in
 	fmt.Printf("│ %-10s ", rowNum)
 	for i, cell := range row {
 		if i < len(widths) {
-			// 截断过长的内容
-			if len(cell) > widths[i] {
-				cell = cell[:widths[i]-3] + "..."
-			}
+			// 不在这里截断，让内容完整显示
 			fmt.Printf("│ %-*s ", widths[i], cell)
 		}
 	}
@@ -233,21 +230,13 @@ func (v *View) calcColWidths(cols []objecttool.ColInfo, rows [][]string, maxColW
 		for i, cell := range row {
 			if i < len(widths) {
 				cellLen := len(cell)
+				// 如果用户设置了宽度限制，使用设置值；否则使用内容长度
+				if maxColWidth > 0 && cellLen > maxColWidth {
+					cellLen = maxColWidth
+				}
 				if cellLen > widths[i] {
 					widths[i] = cellLen
 				}
-			}
-		}
-	}
-
-	// 应用最大宽度限制
-	for i := range widths {
-		if maxColWidth > 0 && widths[i] > maxColWidth {
-			widths[i] = maxColWidth
-		} else if maxColWidth == 0 {
-			// unlimited 模式，但仍然有一个合理的上限避免显示问题
-			if widths[i] > 200 {
-				widths[i] = 200
 			}
 		}
 	}

@@ -411,7 +411,12 @@ Command Mode (press : to enter):
 Command History & Completion:
   ↑/↓         Navigate command history
   Tab         Smart auto-complete commands and parameters
+  Ctrl+A      Move cursor to beginning of line
+  Ctrl+E      Move cursor to end of line
   Ctrl+U      Clear current input
+  Ctrl+K      Delete from cursor to end of line
+  Ctrl+W      Delete word before cursor
+  ←/→         Move cursor left/right
 
 Tab Completion Examples:
   :format <Tab>     → Show column indices

@@ -17,6 +17,8 @@ package interactive
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -201,6 +203,36 @@ func (m model) handleCommandInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cmdInput = ""
 		m.cmdCursor = 0
 		m.historyIndex = len(m.cmdHistory)
+	case "ctrl+a":
+		// 移动光标到行首
+		m.cmdCursor = 0
+	case "ctrl+e":
+		// 移动光标到行尾
+		m.cmdCursor = len(m.cmdInput)
+	case "ctrl+u":
+		// 清空当前输入
+		m.cmdInput = ""
+		m.cmdCursor = 0
+	case "ctrl+k":
+		// 删除光标到行尾的内容
+		m.cmdInput = m.cmdInput[:m.cmdCursor]
+	case "ctrl+w":
+		// 删除光标前的一个单词
+		if m.cmdCursor > 0 {
+			// 找到前一个空格或行首
+			pos := m.cmdCursor - 1
+			for pos > 0 && m.cmdInput[pos] == ' ' {
+				pos--
+			}
+			for pos > 0 && m.cmdInput[pos] != ' ' {
+				pos--
+			}
+			if pos > 0 {
+				pos++
+			}
+			m.cmdInput = m.cmdInput[:pos] + m.cmdInput[m.cmdCursor:]
+			m.cmdCursor = pos
+		}
 	case "backspace":
 		if m.cmdCursor > 0 {
 			m.cmdInput = m.cmdInput[:m.cmdCursor-1] + m.cmdInput[m.cmdCursor:]
@@ -219,10 +251,16 @@ func (m model) handleCommandInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	default:
 		// 支持粘贴和多字符输入
 		input := msg.String()
-		// 过滤掉控制字符，只保留可打印字符
+		
+		// 处理粘贴内容，去掉可能的方括号包围
+		if strings.HasPrefix(input, "[") && strings.HasSuffix(input, "]") && len(input) > 2 {
+			input = input[1 : len(input)-1]
+		}
+		
+		// 过滤掉控制字符，只保留可打印字符和空格
 		var filtered strings.Builder
 		for _, r := range input {
-			if r >= 32 && r < 127 { // 可打印 ASCII 字符
+			if r >= 32 && r <= 126 { // 可打印 ASCII 字符包括空格
 				filtered.WriteRune(r)
 			}
 		}
@@ -483,7 +521,7 @@ func (m model) renderTable(b *strings.Builder) {
 	// 确定显示的列 - 根据水平滚动偏移和终端宽度
 	displayCols := m.getVisibleColumns(cols)
 	
-	// 计算列宽
+	// 计算列宽 - 使用用户设置或内容实际长度
 	widths := make([]int, len(displayCols))
 	for i, colIdx := range displayCols {
 		if int(colIdx) < len(cols) {
@@ -497,22 +535,17 @@ func (m model) renderTable(b *strings.Builder) {
 	// 根据数据调整列宽
 	for _, row := range rows {
 		for i, cell := range row {
-			if i+m.hScrollOffset < len(widths) {
+			if i < len(widths) {
 				cellLen := len(cell)
+				// 如果用户设置了宽度限制，使用设置值；否则使用内容长度
+				if m.state.maxColWidth > 0 {
+					if cellLen > m.state.maxColWidth {
+						cellLen = m.state.maxColWidth
+					}
+				}
 				if cellLen > widths[i] {
 					widths[i] = cellLen
 				}
-			}
-		}
-	}
-	
-	// 应用最大宽度限制
-	for i := range widths {
-		if m.state.maxColWidth > 0 && widths[i] > m.state.maxColWidth {
-			widths[i] = m.state.maxColWidth
-		} else if m.state.maxColWidth == 0 {
-			if widths[i] > 200 {
-				widths[i] = 200
 			}
 		}
 	}
@@ -553,9 +586,9 @@ func (m model) renderTable(b *strings.Builder) {
 		for j, colIdx := range displayCols {
 			if j < len(widths) && int(colIdx) < len(row) {
 				cell := row[colIdx]
-				// 截断过长的内容
-				if len(cell) > widths[j] {
-					cell = cell[:widths[j]-3] + "..."
+				// 根据用户设置的宽度截断内容
+				if m.state.maxColWidth > 0 && len(cell) > m.state.maxColWidth {
+					cell = cell[:m.state.maxColWidth-3] + "..."
 				}
 				
 				// 高亮搜索匹配
@@ -594,6 +627,7 @@ func (m model) renderVertical(b *strings.Builder) {
 			if i < len(cols) {
 				col := cols[i]
 				value := cell
+				// 根据用户设置的宽度截断内容
 				if m.state.maxColWidth > 0 && len(value) > m.state.maxColWidth {
 					value = value[:m.state.maxColWidth-3] + "..."
 				}
@@ -627,8 +661,17 @@ func RunBubbletea(path string) error {
 		state: state,
 	}
 	
+	// 加载历史记录
+	m.loadHistory()
+	
 	p := tea.NewProgram(m, tea.WithAltScreen())
-	_, err = p.Run()
+	result, err := p.Run()
+	
+	// 保存历史记录
+	if finalModel, ok := result.(model); ok {
+		finalModel.saveHistory()
+	}
+	
 	return err
 }
 
@@ -736,47 +779,75 @@ func longestCommonPrefix(strs []string) string {
 	return prefix
 }
 
-// getVisibleColumns 根据水平滚动偏移和终端宽度计算可见的列
+// getVisibleColumns 根据水平滚动偏移计算可见的列
 func (m model) getVisibleColumns(cols []objecttool.ColInfo) []uint16 {
 	// 如果用户设置了特定的可见列，优先使用
 	if m.state.visibleCols != nil {
 		return m.state.visibleCols
 	}
 	
-	// 使用更大的终端宽度估算，显示更多列
-	terminalWidth := 200  // 增加到200
-	usedWidth := 12 // RowNum 列的宽度
-	
+	// 显示更多列，不受终端宽度限制（由表格渲染时处理截断）
 	var visibleCols []uint16
 	startCol := m.hScrollOffset
+	maxCols := 15 // 一次最多显示15列
 	
-	for i := startCol; i < len(cols); i++ {
-		colWidth := m.state.maxColWidth
-		if colWidth == 0 || colWidth > 30 {
-			colWidth = 20 // 限制单列最大宽度为20，显示更多列
-		}
-		
-		if usedWidth + colWidth + 3 > terminalWidth { // +3 for borders
-			break
-		}
-		
+	for i := startCol; i < len(cols) && len(visibleCols) < maxCols; i++ {
 		visibleCols = append(visibleCols, uint16(i))
-		usedWidth += colWidth + 3
-	}
-	
-	// 至少显示8列（如果有的话）
-	if len(visibleCols) < 8 && startCol < len(cols) {
-		maxCols := len(cols) - startCol
-		if maxCols > 8 {
-			maxCols = 8
-		}
-		visibleCols = make([]uint16, maxCols)
-		for i := 0; i < maxCols; i++ {
-			visibleCols[i] = uint16(startCol + i)
-		}
 	}
 	
 	return visibleCols
+}
+
+// loadHistory 加载历史记录
+func (m *model) loadHistory() {
+	historyFile := getHistoryFile()
+	if historyFile == "" {
+		return
+	}
+	
+	data, err := os.ReadFile(historyFile)
+	if err != nil {
+		return
+	}
+	
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			m.cmdHistory = append(m.cmdHistory, line)
+		}
+	}
+	m.historyIndex = len(m.cmdHistory)
+}
+
+// saveHistory 保存历史记录
+func (m *model) saveHistory() {
+	historyFile := getHistoryFile()
+	if historyFile == "" {
+		return
+	}
+	
+	// 确保目录存在
+	dir := filepath.Dir(historyFile)
+	os.MkdirAll(dir, 0755)
+	
+	// 只保存最近100条记录
+	start := 0
+	if len(m.cmdHistory) > 100 {
+		start = len(m.cmdHistory) - 100
+	}
+	
+	content := strings.Join(m.cmdHistory[start:], "\n")
+	os.WriteFile(historyFile, []byte(content), 0644)
+}
+
+// getHistoryFile 获取历史记录文件路径
+func getHistoryFile() string {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(homeDir, ".mo_object_history")
 }
 
 // SearchCommand 搜索命令
