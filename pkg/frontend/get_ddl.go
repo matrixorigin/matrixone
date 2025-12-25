@@ -199,6 +199,43 @@ func visitTableDdl(
 	newTableDef.Fkeys = nil
 	newTableDef.Partition = nil
 
+	// Check if newTableDef already has this property
+	propertyExists := false
+	var propertiesDef *plan2.TableDef_DefType_Properties
+	for _, def := range newTableDef.Defs {
+		if proDef, ok := def.Def.(*plan2.TableDef_DefType_Properties); ok {
+			propertiesDef = proDef
+			for _, kv := range proDef.Properties.Properties {
+				if kv.Key == catalog.PropFromPublication {
+					propertyExists = true
+					break
+				}
+			}
+			if propertyExists {
+				break
+			}
+		}
+	}
+
+	// Add property if it doesn't exist in newTableDef
+	if !propertyExists {
+		if propertiesDef == nil {
+			// Create new PropertiesDef
+			propertiesDef = &plan2.TableDef_DefType_Properties{
+				Properties: &plan2.PropertiesDef{
+					Properties: []*plan2.Property{},
+				},
+			}
+			newTableDef.Defs = append(newTableDef.Defs, &plan2.TableDefType{
+				Def: propertiesDef,
+			})
+		}
+		propertiesDef.Properties.Properties = append(propertiesDef.Properties.Properties, &plan2.Property{
+			Key:   catalog.PropFromPublication,
+			Value: "true",
+		})
+	}
+
 	if newTableDef.TableType == catalog.SystemClusterRel {
 		return moerr.NewInternalError(ctx, "cluster table is not supported")
 	}

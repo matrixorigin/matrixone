@@ -1159,6 +1159,14 @@ func (p *launchPad) InitWithTrigger(trigger *MMsgTaskTrigger, lastMergeTime time
 		p.lastMergeTime = 30 * time.Minute * time.Duration(rand.Intn(9)+1) / 10
 	}
 
+	// Skip merge for tables created by publication
+	if p.table.IsFromPublication() {
+		logutil.Info("MergeScheduler: skipping merge for publication table",
+			zap.String("table", p.table.GetNameDesc()),
+			zap.Uint64("table_id", p.table.ID()))
+		return
+	}
+
 	checkCreateTime := trigger.table.IsSpecialBigTable() && !trigger.handleBigOld
 
 	if trigger.l0 != nil || trigger.ln != nil {

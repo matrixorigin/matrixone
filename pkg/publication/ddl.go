@@ -510,6 +510,7 @@ func findMissingTablesInDdlMap(
 
 // createTable creates a table using the provided CREATE TABLE SQL statement
 // It also creates the database if it doesn't exist
+// For tables created by publication, it adds the "from_publication" property to mark them
 func createTable(
 	ctx context.Context,
 	executor SQLExecutor,
@@ -532,6 +533,8 @@ func createTable(
 	}
 
 	// Create table
+	// Note: The "from_publication" property is already added in GetUpstreamDDLUsingGetDdl
+	// when processing the CREATE SQL from upstream
 	result, err = executor.ExecSQL(ctx, createSQL)
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to create table %s.%s: %v", dbName, tableName, err)
