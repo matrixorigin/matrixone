@@ -577,17 +577,17 @@ func (ctr *container) makeAggList(aggExprs []aggexec.AggFuncExecExpression) ([]a
 				return nil, err
 			}
 		}
-		if ctr.mtyp == H0 {
-			if err := aggList[i].GroupGrow(1); err != nil {
-				return nil, err
-			}
-		}
 	}
 
 	if ctr.mtyp != H0 {
 		aggexec.SyncAggregatorsToChunkSize(aggList, aggBatchSize)
 	} else {
 		aggexec.SyncAggregatorsToChunkSize(aggList, 1)
+		for _, ag := range aggList {
+			if err := ag.GroupGrow(1); err != nil {
+				return nil, err
+			}
+		}
 	}
 	return aggList, nil
 }

@@ -84,7 +84,7 @@ func AppendFixedList[T comparable](mp *MPool, p *PtrLen, vs []T, distinct bool) 
 		cnt := 0
 		flags = make([]bool, len(vs))
 		for i, v := range vs {
-			flags[i] = PtrLenFindFixed(p, v) != -1
+			flags[i] = PtrLenFindFixed(p, v) == -1
 			if flags[i] {
 				cnt++
 			}
@@ -110,6 +110,23 @@ func AppendFixedList[T comparable](mp *MPool, p *PtrLen, vs []T, distinct bool) 
 		copy(bs[oldNb:], util.UnsafeSliceToBytes(vs))
 	}
 	p.FromByteSlice(bs)
+	return nil
+}
+
+func (p *PtrLen) AppendRawBytes(mp *MPool, bs []byte) error {
+	if len(bs) == 0 {
+		return nil
+	}
+
+	pbs := p.ToByteSlice()
+	oldLen := len(pbs)
+	nb := oldLen + len(bs)
+	pbs, err := mp.ReallocZero(pbs, int(nb), true)
+	if err != nil {
+		return err
+	}
+	copy(pbs[oldLen:], bs)
+	p.FromByteSlice(pbs)
 	return nil
 }
 
@@ -195,4 +212,15 @@ func (p *PtrLen) FindBytes(bs []byte) int {
 		i += 4 + int(bssz)
 	}
 	return -1
+}
+
+func (p *PtrLen) NumberOfVarlenElements() int {
+	pbs := p.ToByteSlice()
+	var cnt int
+	for i := 0; i < len(pbs); {
+		bssz := decodeI32(pbs[i : i+4])
+		cnt += 1
+		i += 4 + int(bssz)
+	}
+	return cnt
 }
