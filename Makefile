@@ -95,6 +95,8 @@ help:
 	@echo ""
 	@echo "Build Commands:"
 	@echo "  make build              - Build mo-service binary"
+	@echo "  make build-typecheck    - Build with typecheck enabled (enables type checking)"
+	@echo "  make build TYPECHECK=1  - Build with typecheck enabled (alternative)"
 	@echo "  make debug              - Build with race detector and debug symbols"
 	@echo "  make musl               - Build static binary with musl"
 	@echo "  make mo-tool            - Build mo-tool utility"
@@ -192,6 +194,10 @@ ifeq ($(MO_CL_CUDA),1)
 	TAGS += -tags "gpu"
 endif
 
+ifeq ($(TYPECHECK),1)
+	TAGS += -tags "typecheck"
+endif
+
 CGO_OPTS :=CGO_CFLAGS="-I$(THIRDPARTIES_INSTALL_DIR)/include $(CUDA_CFLAGS)"
 GOLDFLAGS=-ldflags="-extldflags '$(CUDA_LDFLAGS) -L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,\$${ORIGIN}/lib -fopenmp' $(VERSION_INFO)"
 
@@ -262,6 +268,12 @@ debug: override RACE_OPT := -race
 debug: override DEBUG_OPT := -gcflags=all="-N -l"
 debug: override CGO_DEBUG_OPT := debug
 debug: build
+
+# build mo-service binary with typecheck enabled
+# enables type checking for ToSliceNoTypeCheck and ToSliceNoTypeCheck2
+.PHONY: build-typecheck
+build-typecheck: override TYPECHECK := 1
+build-typecheck: build
 
 ###############################################################################
 # run unit tests
