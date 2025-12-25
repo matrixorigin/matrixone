@@ -606,6 +606,9 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 		rsp.IsLocalCN = true
 	}
 
+	policyForLocal := engine.Policy_CollectAllData
+	policyForRemote := engine.Policy_CollectCommittedPersistedData
+
 	if s.IsRemote {
 		var commited engine.RelData
 		commited, err = c.expandRanges(
@@ -614,7 +617,7 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 			db,
 			ctx,
 			blockExprList,
-			engine.Policy_CollectCommittedPersistedData,
+			policyForRemote,
 			rsp)
 		if err != nil {
 			return err
@@ -629,7 +632,7 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 			db,
 			ctx,
 			blockExprList,
-			engine.Policy_CollectAllData,
+			policyForLocal,
 			rsp)
 		if err != nil {
 			return err
