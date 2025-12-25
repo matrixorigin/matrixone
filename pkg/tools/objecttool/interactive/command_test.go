@@ -425,13 +425,6 @@ func TestHelpCommand_Execute(t *testing.T) {
 	assert.Contains(t, output, "No help for")
 }
 
-// Mock state for testing commands that need state
-type MockState struct {
-	maxColWidth  int
-	verticalMode bool
-	pageSize     int
-}
-
 func TestSetCommand_Execute(t *testing.T) {
 	// Test command creation and properties
 	cmd := &SetCommand{Option: "width", Value: 100}

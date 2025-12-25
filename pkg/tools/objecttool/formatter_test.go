@@ -79,7 +79,7 @@ func TestDefaultFormatter(t *testing.T) {
 
 func TestDefaultFormatter_CanFormat(t *testing.T) {
 	formatter := &DefaultFormatter{}
-	
+
 	// DefaultFormatter should handle any value
 	assert.True(t, formatter.CanFormat("string", types.Type{}))
 	assert.True(t, formatter.CanFormat(123, types.Type{}))
@@ -122,7 +122,7 @@ func TestHexFormatter(t *testing.T) {
 
 func TestHexFormatter_CanFormat(t *testing.T) {
 	formatter := &HexFormatter{}
-	
+
 	assert.True(t, formatter.CanFormat([]byte{1, 2, 3}, types.Type{}))
 	assert.False(t, formatter.CanFormat("string", types.Type{}))
 	assert.False(t, formatter.CanFormat(123, types.Type{}))
@@ -134,7 +134,7 @@ func TestRowidFormatter(t *testing.T) {
 	// Test with Rowid type
 	var rowid types.Rowid
 	copy(rowid[:], []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24})
-	
+
 	result := formatter.Format(rowid)
 	assert.NotEmpty(t, result)
 	assert.Contains(t, result, "-") // Rowid string format contains dashes
@@ -144,36 +144,36 @@ func TestRowidFormatter(t *testing.T) {
 	for i := range rowidBytes {
 		rowidBytes[i] = byte(i + 1)
 	}
-	
+
 	result2 := formatter.Format(rowidBytes)
 	assert.NotEmpty(t, result2)
 }
 
 func TestRowidFormatter_CanFormat(t *testing.T) {
 	formatter := &RowidFormatter{}
-	
+
 	// Test with correct size byte slice
 	correctSize := make([]byte, types.RowidSize)
 	assert.True(t, formatter.CanFormat(correctSize, types.Type{}))
-	
+
 	// Test with incorrect size byte slice
 	wrongSize := make([]byte, 10)
 	assert.False(t, formatter.CanFormat(wrongSize, types.Type{}))
-	
+
 	// Test with Rowid type
 	var rowid types.Rowid
 	assert.True(t, formatter.CanFormat(rowid, types.Type{}))
-	
+
 	// Test with other types
 	assert.False(t, formatter.CanFormat("string", types.Type{}))
 }
 
 func TestTSFormatter(t *testing.T) {
 	formatter := &TSFormatter{}
-	
+
 	// Create a TS value
 	ts := types.BuildTS(1640995200, 0) // 2022-01-01 00:00:00 UTC
-	
+
 	result := formatter.Format(ts)
 	assert.NotEmpty(t, result)
 	// TS format might not contain year directly, just check it's not empty
@@ -182,28 +182,28 @@ func TestTSFormatter(t *testing.T) {
 
 func TestTSFormatter_CanFormat(t *testing.T) {
 	formatter := &TSFormatter{}
-	
+
 	tsType := types.Type{Oid: types.T_TS}
 	otherType := types.Type{Oid: types.T_int32}
-	
+
 	assert.True(t, formatter.CanFormat(types.TS{}, tsType))
 	assert.False(t, formatter.CanFormat(types.TS{}, otherType))
 }
 
 func TestFormatterRegistry(t *testing.T) {
 	registry := NewFormatterRegistry()
-	
+
 	// Test default behavior
 	formatter := registry.GetFormatter(0, types.Type{}, "test")
 	assert.IsType(t, &DefaultFormatter{}, formatter)
-	
+
 	// Test setting custom formatter
 	hexFormatter := &HexFormatter{}
 	registry.SetFormatter(1, hexFormatter)
-	
+
 	formatter = registry.GetFormatter(1, types.Type{}, []byte{1, 2, 3})
 	assert.Equal(t, hexFormatter, formatter)
-	
+
 	// Test clearing formatter
 	registry.ClearFormatter(1)
 	formatter = registry.GetFormatter(1, types.Type{}, []byte{1, 2, 3})
@@ -212,28 +212,28 @@ func TestFormatterRegistry(t *testing.T) {
 
 func TestFormatterRegistry_GetFormatterName(t *testing.T) {
 	registry := NewFormatterRegistry()
-	
+
 	// Test default name
 	assert.Equal(t, "auto", registry.GetFormatterName(0))
-	
+
 	// Test custom formatter names
 	registry.SetFormatter(1, &HexFormatter{})
 	assert.Equal(t, "hex", registry.GetFormatterName(1))
-	
+
 	registry.SetFormatter(2, &RowidFormatter{})
 	assert.Equal(t, "rowid", registry.GetFormatterName(2))
-	
+
 	registry.SetFormatter(3, &TSFormatter{})
 	assert.Equal(t, "ts", registry.GetFormatterName(3))
-	
+
 	registry.SetFormatter(4, &ObjectStatsFormatter{})
 	assert.Equal(t, "objectstats", registry.GetFormatterName(4))
 }
 
 func TestFormatterByName(t *testing.T) {
 	tests := []struct {
-		name          string
-		expectedType  interface{}
+		name         string
+		expectedType interface{}
 	}{
 		{"default", &DefaultFormatter{}},
 		{"hex", &HexFormatter{}},
@@ -241,7 +241,7 @@ func TestFormatterByName(t *testing.T) {
 		{"ts", &TSFormatter{}},
 		{"objectstats", &ObjectStatsFormatter{}},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			formatter, exists := FormatterByName[tt.name]
@@ -254,53 +254,52 @@ func TestFormatterByName(t *testing.T) {
 // TestObjectStatsFormatter tests ObjectStatsFormatter with proper data
 func TestObjectStatsFormatter(t *testing.T) {
 	formatter := &ObjectStatsFormatter{}
-	
+
 	// Test with wrong length - should reject
 	shortData := []byte{0x01, 0x02}
 	assert.False(t, formatter.CanFormat(shortData, types.Type{}))
-	
+
 	// Test with correct length
 	correctData := make([]byte, objectio.ObjectStatsLen)
 	assert.True(t, formatter.CanFormat(correctData, types.Type{}))
-	
+
 	// Test Format with valid data
 	result := formatter.Format(correctData)
 	assert.NotEmpty(t, result)
 }
 
-
 // TestFormatterRegistryAdvanced tests FormatterRegistry functionality
 func TestFormatterRegistryAdvanced(t *testing.T) {
 	registry := NewFormatterRegistry()
-	
+
 	// Test SetFormatter
 	hexFormatter := &HexFormatter{}
 	registry.SetFormatter(0, hexFormatter)
-	
+
 	// Test GetFormatter with custom formatter
 	testData := []byte{0x01, 0x02}
 	formatter := registry.GetFormatter(0, types.Type{}, testData)
 	assert.Equal(t, hexFormatter, formatter)
-	
+
 	// Test GetFormatterName
 	name := registry.GetFormatterName(0)
 	assert.Equal(t, "hex", name)
-	
+
 	// Test ClearFormatter
 	registry.ClearFormatter(0)
 	name = registry.GetFormatterName(0)
 	assert.Equal(t, "auto", name)
-	
+
 	// Test auto-detect with TS
 	var tsValue types.TS
 	formatter = registry.GetFormatter(1, types.Type{Oid: types.T_TS}, tsValue)
 	assert.IsType(t, &TSFormatter{}, formatter)
-	
+
 	// Test auto-detect with Rowid
 	var rowidValue types.Rowid
 	formatter = registry.GetFormatter(2, types.Type{Oid: types.T_Rowid}, rowidValue)
 	assert.IsType(t, &RowidFormatter{}, formatter)
-	
+
 	// Test default formatter
 	formatter = registry.GetFormatter(3, types.Type{Oid: types.T_int32}, int32(123))
 	assert.IsType(t, &DefaultFormatter{}, formatter)
@@ -312,22 +311,22 @@ func TestFormatterEdgeCases(t *testing.T) {
 	df := &DefaultFormatter{}
 	result := df.Format(nil)
 	assert.Equal(t, "NULL", result)
-	
+
 	// Test HexFormatter with empty slice
 	hf := &HexFormatter{}
 	result = hf.Format([]byte{})
 	assert.Empty(t, result)
-	
+
 	// Test HexFormatter with non-byte value
 	result = hf.Format("not bytes")
 	assert.NotEmpty(t, result)
-	
+
 	// Test RowidFormatter with different values
 	rf := &RowidFormatter{}
 	var rowid types.Rowid
 	result = rf.Format(rowid)
 	assert.NotEmpty(t, result)
-	
+
 	// Test TSFormatter with different values
 	tf := &TSFormatter{}
 	var ts types.TS

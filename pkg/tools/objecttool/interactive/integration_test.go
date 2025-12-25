@@ -252,13 +252,13 @@ func TestCommandExecution(t *testing.T) {
 	
 	// Test SetCommand - width
 	setCmd := &SetCommand{Option: "width", Value: 100}
-	output, status, err = setCmd.Execute(state)
+	_, _, err = setCmd.Execute(state)
 	require.NoError(t, err)
 	assert.Equal(t, 100, state.maxColWidth)
-	
+
 	// Test SetCommand - unlimited width
 	setCmd = &SetCommand{Option: "width", Value: 0}
-	output, status, err = setCmd.Execute(state)
+	_, _, err = setCmd.Execute(state)
 	require.NoError(t, err)
 	assert.Equal(t, 0, state.maxColWidth)
 	
@@ -270,7 +270,7 @@ func TestCommandExecution(t *testing.T) {
 	
 	// Test ColumnsCommand
 	colsCmd := &ColumnsCommand{Columns: []uint16{0, 2, 4}}
-	output, status, err = colsCmd.Execute(state)
+	_, _, err = colsCmd.Execute(state)
 	require.NoError(t, err)
 	assert.Equal(t, 3, len(state.visibleCols))
 	

@@ -52,14 +52,13 @@ type State struct {
 	maxColWidth  int               // Maximum column width
 	verticalMode bool              // Vertical display mode
 	colNames     map[uint16]string // Column rename mapping
-	
+
 	// View mode
-	viewMode ViewMode      // Current view mode
-	metaRows [][]string    // Metadata rows (for BlkMeta/ObjMeta mode)
-	metaCols []ColInfo     // Metadata columns schema
-	metaOffset int         // Offset for metadata rows
+	viewMode   ViewMode              // Current view mode
+	metaRows   [][]string            // Metadata rows (for BlkMeta/ObjMeta mode)
+	metaCols   []ColInfo             // Metadata columns schema
+	metaOffset int                   // Offset for metadata rows
 	blkSummary map[uint32]BlkSummary // Block summary info (for BlkMeta mode)
-	objSummary ObjSummary             // Object summary info (for ObjMeta mode)
 }
 
 // ColInfo contains column information
@@ -103,7 +102,7 @@ func (s *State) CurrentRows() ([][]string, []string, error) {
 	if s.viewMode == ViewModeBlkMeta || s.viewMode == ViewModeObjMeta {
 		return s.currentMetaRows()
 	}
-	
+
 	// Data mode - original logic
 	// Ensure current block is loaded
 	if err := s.ensureBlockLoaded(); err != nil {
@@ -234,7 +233,7 @@ func (s *State) NextPage() error {
 		}
 		return moerr.NewInternalErrorf(s.ctx, "already at last page")
 	}
-	
+
 	// Data mode
 	if s.currentBatch == nil {
 		return s.ensureBlockLoaded()
@@ -270,7 +269,7 @@ func (s *State) PrevPage() error {
 		}
 		return moerr.NewInternalErrorf(s.ctx, "already at first page")
 	}
-	
+
 	// Data mode
 	if s.rowOffset >= s.pageSize {
 		// Within the same block
@@ -311,7 +310,7 @@ func (s *State) ScrollDown() error {
 		}
 		return moerr.NewInternalErrorf(s.ctx, "already at last row")
 	}
-	
+
 	// Data mode
 	if s.currentBatch == nil {
 		return s.ensureBlockLoaded()
@@ -345,7 +344,7 @@ func (s *State) ScrollUp() error {
 		}
 		return moerr.NewInternalErrorf(s.ctx, "already at first row")
 	}
-	
+
 	// Data mode
 	if s.rowOffset > 0 {
 		s.rowOffset--
@@ -511,33 +510,33 @@ func (s *State) buildBlkMetaRows() ([][]string, map[uint32]BlkSummary) {
 	summary := make(map[uint32]BlkSummary)
 	info := s.reader.Info()
 	meta := s.reader.Meta()
-	
+
 	for blockID := uint32(0); blockID < info.BlockCount; blockID++ {
 		blockMeta := meta.GetBlockMeta(blockID)
 		var blockTotalOriginSize uint32
 		var blockTotalCompSize uint32
-		
+
 		for colIdx := uint16(0); colIdx < info.ColCount; colIdx++ {
 			colMeta := blockMeta.ColumnMeta(colIdx)
 			colName := s.getColumnName(colIdx)
-			
+
 			originSize := colMeta.Location().OriginSize()
 			compSize := colMeta.Location().Length()
 			nullCnt := colMeta.NullCnt()
 			blockTotalOriginSize += originSize
 			blockTotalCompSize += compSize
-			
+
 			// Calculate compression ratio for this column
 			colCompRatio := float64(0)
 			if originSize > 0 {
 				colCompRatio = float64(compSize) / float64(originSize) * 100
 			}
-			
+
 			// Format Min/Max as hex if binary
 			zm := colMeta.ZoneMap()
 			minBuf := zm.GetMinBuf()
 			maxBuf := zm.GetMaxBuf()
-			
+
 			// Check if ZoneMap is initialized and buffers are valid
 			var minStr, maxStr string
 			if len(zm) == 0 || !zm.IsInited() {
@@ -557,7 +556,7 @@ func (s *State) buildBlkMetaRows() ([][]string, map[uint32]BlkSummary) {
 					maxStr = fmt.Sprintf("%x", maxBuf)
 				}
 			}
-			
+
 			row := []string{
 				fmt.Sprintf("%d", colIdx),
 				colName,
@@ -571,7 +570,7 @@ func (s *State) buildBlkMetaRows() ([][]string, map[uint32]BlkSummary) {
 			}
 			rows = append(rows, row)
 		}
-		
+
 		// Store summary for this block (not in table)
 		compressionRatio := float64(0)
 		if blockTotalOriginSize > 0 {
@@ -584,19 +583,19 @@ func (s *State) buildBlkMetaRows() ([][]string, map[uint32]BlkSummary) {
 			CompressionRatio: compressionRatio,
 		}
 	}
-	
+
 	return rows, summary
 }
 
 func (s *State) buildObjMetaRows() [][]string {
 	info := s.reader.Info()
 	meta := s.reader.Meta()
-	
+
 	// Calculate totals across all blocks and columns
 	var totalOriginSize uint64
 	var totalCompSize uint64
 	var totalNullCnt uint64
-	
+
 	// Per-column statistics
 	colStats := make(map[uint16]struct {
 		totalOriginSize uint64
@@ -606,7 +605,7 @@ func (s *State) buildObjMetaRows() [][]string {
 		maxBuf          []byte
 		hasInitialized  bool
 	})
-	
+
 	// Iterate through all blocks and columns to collect data
 	for blockID := uint32(0); blockID < info.BlockCount; blockID++ {
 		blockMeta := meta.GetBlockMeta(blockID)
@@ -615,25 +614,25 @@ func (s *State) buildObjMetaRows() [][]string {
 			originSize := uint64(colMeta.Location().OriginSize())
 			compSize := uint64(colMeta.Location().Length())
 			nullCnt := uint64(colMeta.NullCnt())
-			
+
 			totalOriginSize += originSize
 			totalCompSize += compSize
 			totalNullCnt += nullCnt
-			
+
 			// Collect per-column statistics
 			stats := colStats[colIdx]
 			stats.totalOriginSize += originSize
 			stats.totalCompSize += compSize
 			stats.totalNullCnt += nullCnt
-			
+
 			// Collect min/max for each column (across all blocks)
 			zm := colMeta.ZoneMap()
 			minBuf := zm.GetMinBuf()
 			maxBuf := zm.GetMaxBuf()
-			
+
 			// Check if ZoneMap is initialized
 			hasInitialized := len(zm) > 0 && zm.IsInited()
-			
+
 			if hasInitialized {
 				stats.hasInitialized = true
 				// Update min: prefer non-empty values
@@ -662,13 +661,13 @@ func (s *State) buildObjMetaRows() [][]string {
 			colStats[colIdx] = stats
 		}
 	}
-	
+
 	// Calculate global compression ratio
 	globalCompRatio := float64(0)
 	if totalOriginSize > 0 {
 		globalCompRatio = float64(totalCompSize) / float64(totalOriginSize) * 100
 	}
-	
+
 	rows := [][]string{
 		{"Path", info.Path},
 		{"Blocks", fmt.Sprintf("%d", info.BlockCount)},
@@ -676,7 +675,7 @@ func (s *State) buildObjMetaRows() [][]string {
 		{"Sorted", fmt.Sprintf("%v", info.IsSorted)},
 		{"Appendable", fmt.Sprintf("%v", info.IsAppendable)},
 	}
-	
+
 	// Add global summary row
 	rows = append(rows, []string{
 		"TotalRows",
@@ -698,18 +697,18 @@ func (s *State) buildObjMetaRows() [][]string {
 		"CompressionRatio",
 		fmt.Sprintf("%.2f%%", globalCompRatio),
 	})
-	
+
 	// Add per-column statistics
 	for colIdx := uint16(0); colIdx < info.ColCount; colIdx++ {
 		colName := s.getColumnName(colIdx)
 		stats := colStats[colIdx]
-		
+
 		// Calculate column compression ratio
 		colCompRatio := float64(0)
 		if stats.totalOriginSize > 0 {
 			colCompRatio = float64(stats.totalCompSize) / float64(stats.totalOriginSize) * 100
 		}
-		
+
 		// Column summary
 		rows = append(rows, []string{
 			fmt.Sprintf("%s.TotalOriginSize", colName),
@@ -727,7 +726,7 @@ func (s *State) buildObjMetaRows() [][]string {
 			fmt.Sprintf("%s.TotalNullCount", colName),
 			fmt.Sprintf("%d", stats.totalNullCnt),
 		})
-		
+
 		// Column min/max
 		var minStr, maxStr string
 		if !stats.hasInitialized {
@@ -754,7 +753,7 @@ func (s *State) buildObjMetaRows() [][]string {
 			maxStr,
 		})
 	}
-	
+
 	return rows
 }
 
@@ -771,20 +770,20 @@ func (s *State) currentMetaRows() ([][]string, []string, error) {
 	if len(s.metaRows) == 0 {
 		return nil, nil, nil
 	}
-	
+
 	start := s.metaOffset
 	end := start + s.pageSize
 	if end > len(s.metaRows) {
 		end = len(s.metaRows)
 	}
-	
+
 	if start >= len(s.metaRows) {
 		return nil, nil, nil
 	}
-	
+
 	rows := s.metaRows[start:end]
 	rowNumbers := make([]string, len(rows))
-	
+
 	// For blkmeta, use block number from the first column
 	// For objmeta, use property name from the first column
 	for i := range rows {
@@ -805,7 +804,7 @@ func (s *State) currentMetaRows() ([][]string, []string, error) {
 			rowNumbers[i] = fmt.Sprintf("(%d)", start+i)
 		}
 	}
-	
+
 	return rows, rowNumbers, nil
 }
 
@@ -814,7 +813,7 @@ func (s *State) Columns() []objecttool.ColInfo {
 	if s.viewMode == ViewModeData {
 		return s.reader.Columns()
 	}
-	
+
 	// Convert internal ColInfo to objecttool.ColInfo
 	cols := make([]objecttool.ColInfo, len(s.metaCols))
 	for i, col := range s.metaCols {

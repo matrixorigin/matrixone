@@ -314,41 +314,6 @@ func (v *View) renderTableRowWithNumber(state *State, rowNum string, row []strin
 	}
 }
 
-func (v *View) renderStatusToBuilder(state *State, b *strings.Builder) {
-	info := state.reader.Info()
-	start := state.GlobalRowOffset() + 1
-	rows, _, _ := state.CurrentRows()
-	end := start + int64(len(rows)) - 1
-
-	// Display mode
-	mode := "Table"
-	if state.verticalMode {
-		mode = "Vertical"
-	}
-
-	// View mode prefix
-	switch state.viewMode {
-	case ViewModeBlkMeta:
-		mode = "BlkMeta-" + mode
-	case ViewModeObjMeta:
-		mode = "ObjMeta-" + mode
-	}
-
-	widthStr := fmt.Sprintf("%d", state.maxColWidth)
-	if state.maxColWidth == 0 {
-		widthStr = "unlimited"
-	}
-
-	// Different status bar for metadata modes
-	if state.viewMode == ViewModeBlkMeta || state.viewMode == ViewModeObjMeta {
-		fmt.Fprintf(b, "\n[%d-%d of %d] Mode: %s | Width: %s",
-			start, end, len(state.metaRows), mode, widthStr)
-	} else {
-		fmt.Fprintf(b, "\n[%d-%d of %d] Block %d/%d | Mode: %s | Width: %s",
-			start, end, info.RowCount, state.currentBlock+1, info.BlockCount, mode, widthStr)
-	}
-}
-
 func (v *View) renderStatus(state *State) {
 	info := state.reader.Info()
 	start := state.GlobalRowOffset() + 1
@@ -524,20 +489,6 @@ func (v *View) renderTableHeader(state *State, cols []objecttool.ColInfo, widths
 	fmt.Fprintln(os.Stdout, "┤")
 }
 
-func (v *View) renderTableRow(row []string, widths []int) {
-	fmt.Fprint(os.Stdout, "│")
-	for i, cell := range row {
-		if i < len(widths) {
-			// Truncate overly long content
-			if len(cell) > widths[i] {
-				cell = cell[:widths[i]-3] + "..."
-			}
-			fmt.Fprintf(os.Stdout, " %-*s │", widths[i], cell)
-		}
-	}
-	fmt.Fprintln(os.Stdout)
-}
-
 func (v *View) renderTableFooter(widths []int) {
 	// └────┴────┘
 	fmt.Fprint(os.Stdout, "└────────────")
@@ -567,7 +518,7 @@ func (v *View) renderTableFooterObjMeta(widths []int) {
 }
 
 func (v *View) renderBlkSummary(state *State) {
-	if state.blkSummary == nil || len(state.blkSummary) == 0 {
+	if len(state.blkSummary) == 0 {
 		return
 	}
 

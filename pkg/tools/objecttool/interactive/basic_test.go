@@ -39,14 +39,14 @@ func TestParseCommandBasic(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cmd, err := ParseCommand(tt.input)
-			
+
 			if tt.expectError {
 				assert.Error(t, err)
 				return
 			}
-			
+
 			require.NoError(t, err)
-			
+
 			if tt.expectNil {
 				assert.Nil(t, cmd)
 			} else {
@@ -71,7 +71,7 @@ func TestParseSetCommandBasic(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := parseSetCommand(tt.args)
-			
+
 			if tt.expectError {
 				assert.Error(t, err)
 			} else {
@@ -104,7 +104,7 @@ func TestLongestCommonPrefixBasic(t *testing.T) {
 func TestQuitCommandBasic(t *testing.T) {
 	cmd := &QuitCommand{}
 	output, quit, err := cmd.Execute(nil)
-	
+
 	assert.NoError(t, err)
 	assert.True(t, quit)
 	assert.Empty(t, output)
@@ -113,7 +113,7 @@ func TestQuitCommandBasic(t *testing.T) {
 func TestHelpCommandBasic(t *testing.T) {
 	cmd := &HelpCommand{}
 	output, quit, err := cmd.Execute(nil)
-	
+
 	assert.NoError(t, err)
 	assert.False(t, quit)
 	assert.Contains(t, output, "Browse Mode")
@@ -121,10 +121,10 @@ func TestHelpCommandBasic(t *testing.T) {
 
 func TestCommandAliases(t *testing.T) {
 	aliases := map[string]bool{
-		":v": true,  // vertical
-		":t": true,  // table
-		":q": true,  // quit
-		":h": true,  // help
+		":v": true, // vertical
+		":t": true, // table
+		":q": true, // quit
+		":h": true, // help
 	}
 
 	for input := range aliases {

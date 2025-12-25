@@ -678,12 +678,6 @@ func (m *model) matchPattern(cell string) bool {
 	return matched
 }
 
-// performSearch performs global search and saves results (kept for test compatibility)
-func (m *model) performSearch(pattern string) {
-	// For test compatibility, use startSearch
-	m.startSearch(pattern)
-}
-
 // highlightSearchMatch highlights search matched text
 func (m model) highlightSearchMatch(text string, row int64, col int) string {
 	if m.searchTerm == "" {
@@ -896,7 +890,7 @@ func (m model) renderTable(b *strings.Builder) {
 }
 
 func (m model) renderBlkSummary(b *strings.Builder) {
-	if m.state.blkSummary == nil || len(m.state.blkSummary) == 0 {
+	if len(m.state.blkSummary) == 0 {
 		return
 	}
 
