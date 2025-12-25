@@ -23,6 +23,8 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/tools/objecttool"
 )
 
@@ -149,6 +151,7 @@ func (m model) handleCommandInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// 特殊处理搜索命令
 		if searchCmd, ok := cmd.(*SearchCommand); ok {
 			m.performSearch(searchCmd.Pattern)
+			m.cmdMode = false
 			m.cmdInput = ""
 			m.cmdCursor = 0
 			return m, nil
@@ -386,7 +389,7 @@ func (m *model) gotoSearchMatch() {
 	m.message = fmt.Sprintf("Match %d/%d: %s", m.currentMatch+1, len(m.searchMatches), match.Value)
 }
 
-// performSearch 执行搜索并保存结果
+// performSearch 执行全局搜索并保存结果
 func (m *model) performSearch(pattern string) {
 	m.searchTerm = pattern
 	m.searchMatches = nil
@@ -397,40 +400,152 @@ func (m *model) performSearch(pattern string) {
 	var err error
 	useRegex := false
 	
-	// 如果包含正则特殊字符，尝试作为正则处理
 	if strings.ContainsAny(pattern, ".*+?^${}[]|()\\") {
-		regex, err = regexp.Compile("(?i)" + pattern) // 忽略大小写
+		regex, err = regexp.Compile("(?i)" + pattern)
 		if err == nil {
 			useRegex = true
 		}
 	}
 	
-	// 搜索当前页面
-	rows, _, err := m.state.CurrentRows()
-	if err != nil {
-		m.message = fmt.Sprintf("Search error: %v", err)
-		return
-	}
+	// 保存当前位置
+	currentBlock := m.state.currentBlock
+	currentOffset := m.state.rowOffset
 	
-	rowOffset := m.state.GlobalRowOffset()
-	for i, row := range rows {
-		for j, cell := range row {
-			var matched bool
-			if useRegex {
-				matched = regex.MatchString(cell)
-			} else {
-				matched = strings.Contains(strings.ToLower(cell), strings.ToLower(pattern))
-			}
-			
-			if matched {
-				m.searchMatches = append(m.searchMatches, SearchMatch{
-					Row:   rowOffset + int64(i),
-					Col:   j,
-					Value: cell,
-				})
+	// 搜索所有block
+	blockCount := m.state.reader.BlockCount()
+	globalRowOffset := int64(0)
+	
+	for blockIdx := uint32(0); blockIdx < blockCount; blockIdx++ {
+		// 读取block
+		batch, release, err := m.state.reader.ReadBlock(m.state.ctx, blockIdx)
+		if err != nil {
+			continue
+		}
+		
+		rowCount := batch.RowCount()
+		cols := m.state.reader.Columns()
+		
+		// 搜索block中的所有行
+		for rowIdx := 0; rowIdx < rowCount; rowIdx++ {
+			for colIdx := 0; colIdx < batch.VectorCount(); colIdx++ {
+				if colIdx >= len(cols) {
+					continue
+				}
+				
+				vec := batch.GetVector(int32(colIdx))
+				
+				// 格式化cell值
+				var cell string
+				if vec.IsNull(uint64(rowIdx)) {
+					cell = "NULL"
+				} else {
+					// 获取原始值
+					var value any
+					col := cols[colIdx]
+					switch col.Type.Oid {
+					case types.T_bool:
+						value = vector.GetFixedAtNoTypeCheck[bool](vec, rowIdx)
+					case types.T_int8:
+						value = vector.GetFixedAtNoTypeCheck[int8](vec, rowIdx)
+					case types.T_int16:
+						value = vector.GetFixedAtNoTypeCheck[int16](vec, rowIdx)
+					case types.T_int32:
+						value = vector.GetFixedAtNoTypeCheck[int32](vec, rowIdx)
+					case types.T_int64:
+						value = vector.GetFixedAtNoTypeCheck[int64](vec, rowIdx)
+					case types.T_uint8:
+						value = vector.GetFixedAtNoTypeCheck[uint8](vec, rowIdx)
+					case types.T_uint16:
+						value = vector.GetFixedAtNoTypeCheck[uint16](vec, rowIdx)
+					case types.T_uint32:
+						value = vector.GetFixedAtNoTypeCheck[uint32](vec, rowIdx)
+					case types.T_uint64:
+						value = vector.GetFixedAtNoTypeCheck[uint64](vec, rowIdx)
+					case types.T_float32:
+						value = vector.GetFixedAtNoTypeCheck[float32](vec, rowIdx)
+					case types.T_float64:
+						value = vector.GetFixedAtNoTypeCheck[float64](vec, rowIdx)
+					case types.T_varchar, types.T_char, types.T_text, types.T_json:
+						value = vec.GetBytesAt(rowIdx)
+					case types.T_blob:
+						value = vec.GetBytesAt(rowIdx)
+					case types.T_uuid:
+						value = vector.GetFixedAtNoTypeCheck[types.Uuid](vec, rowIdx)
+					case types.T_date:
+						value = vector.GetFixedAtNoTypeCheck[types.Date](vec, rowIdx)
+					case types.T_datetime:
+						value = vector.GetFixedAtNoTypeCheck[types.Datetime](vec, rowIdx)
+					case types.T_time:
+						value = vector.GetFixedAtNoTypeCheck[types.Time](vec, rowIdx)
+					case types.T_timestamp:
+						value = vector.GetFixedAtNoTypeCheck[types.Timestamp](vec, rowIdx)
+					case types.T_decimal64:
+						value = vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, rowIdx)
+					case types.T_decimal128:
+						value = vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, rowIdx)
+					default:
+						// 对于未知类型，尝试获取字节
+						if col.Type.IsFixedLen() {
+							value = fmt.Sprintf("<binary:%d bytes>", col.Type.TypeSize())
+						} else {
+							bs := vec.GetBytesAt(rowIdx)
+							value = string(bs)
+						}
+					}
+					
+					formatter := m.state.formatter.GetFormatter(uint16(colIdx), col.Type, value)
+					cell = formatter.Format(value)
+				}
+				
+				var matched bool
+				if useRegex {
+					matched = regex.MatchString(cell)
+				} else {
+					// 普通文本搜索（大小写不敏感）
+					matched = strings.Contains(strings.ToLower(cell), strings.ToLower(pattern))
+					
+					// 如果没匹配，且 cell 看起来像十六进制，尝试解码后搜索
+					if !matched && len(cell) > 0 && len(cell)%2 == 0 {
+						// 检查是否全是十六进制字符
+						isHex := true
+						for _, c := range cell {
+							if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+								isHex = false
+								break
+							}
+						}
+						
+						if isHex {
+							// 尝试解码十六进制
+							decoded := make([]byte, len(cell)/2)
+							for i := 0; i < len(cell); i += 2 {
+								var b byte
+								fmt.Sscanf(cell[i:i+2], "%02x", &b)
+								decoded[i/2] = b
+							}
+							decodedStr := string(decoded)
+							matched = strings.Contains(strings.ToLower(decodedStr), strings.ToLower(pattern))
+						}
+					}
+				}
+				
+				if matched {
+					m.searchMatches = append(m.searchMatches, SearchMatch{
+						Row:   globalRowOffset + int64(rowIdx),
+						Col:   colIdx,
+						Value: cell,
+					})
+				}
 			}
 		}
+		
+		globalRowOffset += int64(rowCount)
+		release()
 	}
+	
+	// 恢复原位置
+	m.state.GotoBlock(currentBlock)
+	m.state.rowOffset = currentOffset
 	
 	if len(m.searchMatches) == 0 {
 		searchType := "text"
@@ -439,6 +554,23 @@ func (m *model) performSearch(pattern string) {
 		}
 		m.message = fmt.Sprintf("No matches found for %s: %s", searchType, pattern)
 	} else {
+		// 找到最接近当前位置的匹配
+		currentRow := m.state.GlobalRowOffset()
+		closestIdx := 0
+		minDist := int64(1<<63 - 1)
+		
+		for i, match := range m.searchMatches {
+			dist := match.Row - currentRow
+			if dist < 0 {
+				dist = -dist
+			}
+			if dist < minDist || (dist == minDist && match.Row >= currentRow) {
+				minDist = dist
+				closestIdx = i
+			}
+		}
+		
+		m.currentMatch = closestIdx
 		searchType := "matches"
 		if useRegex {
 			searchType = "regex matches"

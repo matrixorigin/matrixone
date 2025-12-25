@@ -35,11 +35,16 @@ import (
 
 // createTestObjectFile creates an object file with various data types for testing
 func createTestObjectFile(t *testing.T, dir string, filename string) string {
-	return createTestObjectFileWithRows(t, dir, filename, 20)
+	return createTestObjectFileWithRowsAndCols(t, dir, filename, 20, 8)
 }
 
 // createTestObjectFileWithRows creates a test object file with specified number of rows
 func createTestObjectFileWithRows(t *testing.T, dir string, filename string, rowCount int) string {
+	return createTestObjectFileWithRowsAndCols(t, dir, filename, rowCount, 8)
+}
+
+// createTestObjectFileWithRowsAndCols creates a test object file with custom rows and columns
+func createTestObjectFileWithRowsAndCols(t *testing.T, dir string, filename string, rowCount, colCount int) string {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
 	
@@ -68,33 +73,79 @@ func createTestObjectFileWithRows(t *testing.T, dir string, filename string, row
 		}
 		blockRows := endRow - startRow
 		
-		bat := batch.NewWithSize(8)
-		bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
-		bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
-		bat.Vecs[3] = vector.NewVec(types.T_float64.ToType())
-		bat.Vecs[4] = vector.NewVec(types.T_bool.ToType())
-		bat.Vecs[5] = vector.NewVec(types.T_uint64.ToType())
-		bat.Vecs[6] = vector.NewVec(types.T_text.ToType())
-		bat.Vecs[7] = vector.NewVec(types.T_blob.ToType())
+		bat := batch.NewWithSize(colCount)
+		for i := 0; i < colCount; i++ {
+			switch i {
+			case 0:
+				bat.Vecs[i] = vector.NewVec(types.T_int32.ToType())
+			case 1:
+				bat.Vecs[i] = vector.NewVec(types.T_int64.ToType())
+			case 2:
+				bat.Vecs[i] = vector.NewVec(types.T_varchar.ToType())
+			case 3:
+				bat.Vecs[i] = vector.NewVec(types.T_float64.ToType())
+			case 4:
+				bat.Vecs[i] = vector.NewVec(types.T_bool.ToType())
+			case 5:
+				bat.Vecs[i] = vector.NewVec(types.T_uint64.ToType())
+			case 6:
+				bat.Vecs[i] = vector.NewVec(types.T_text.ToType())
+			case 7:
+				bat.Vecs[i] = vector.NewVec(types.T_blob.ToType())
+			default:
+				// For extra columns, cycle through basic types
+				switch i % 4 {
+				case 0:
+					bat.Vecs[i] = vector.NewVec(types.T_int32.ToType())
+				case 1:
+					bat.Vecs[i] = vector.NewVec(types.T_int64.ToType())
+				case 2:
+					bat.Vecs[i] = vector.NewVec(types.T_varchar.ToType())
+				case 3:
+					bat.Vecs[i] = vector.NewVec(types.T_float64.ToType())
+				}
+			}
+		}
 		
 		for i := startRow; i < endRow; i++ {
-			vector.AppendFixed(bat.Vecs[0], int32(i), false, mp)
-			vector.AppendFixed(bat.Vecs[1], int64(i*1000), false, mp)
-			
-			if i%3 == 0 {
-				vector.AppendBytes(bat.Vecs[2], []byte(longText), false, mp)
-			} else if i%3 == 1 {
-				vector.AppendBytes(bat.Vecs[2], []byte("medium length text"), false, mp)
-			} else {
-				vector.AppendBytes(bat.Vecs[2], []byte("short"), false, mp)
+			for colIdx := 0; colIdx < colCount; colIdx++ {
+				switch colIdx {
+				case 0:
+					vector.AppendFixed(bat.Vecs[colIdx], int32(i), false, mp)
+				case 1:
+					vector.AppendFixed(bat.Vecs[colIdx], int64(i*1000), false, mp)
+				case 2:
+					if i%3 == 0 {
+						vector.AppendBytes(bat.Vecs[colIdx], []byte(longText), false, mp)
+					} else if i%3 == 1 {
+						vector.AppendBytes(bat.Vecs[colIdx], []byte("medium length text"), false, mp)
+					} else {
+						vector.AppendBytes(bat.Vecs[colIdx], []byte("short"), false, mp)
+					}
+				case 3:
+					vector.AppendFixed(bat.Vecs[colIdx], float64(i)*1.5, false, mp)
+				case 4:
+					vector.AppendFixed(bat.Vecs[colIdx], i%2 == 0, false, mp)
+				case 5:
+					vector.AppendFixed(bat.Vecs[colIdx], uint64(i*100), false, mp)
+				case 6:
+					vector.AppendBytes(bat.Vecs[colIdx], []byte(longText[:50+i%50]), false, mp)
+				case 7:
+					vector.AppendBytes(bat.Vecs[colIdx], []byte{byte(i), byte(i + 1), byte(i + 2)}, false, mp)
+				default:
+					// For extra columns
+					switch colIdx % 4 {
+					case 0:
+						vector.AppendFixed(bat.Vecs[colIdx], int32(i), false, mp)
+					case 1:
+						vector.AppendFixed(bat.Vecs[colIdx], int64(i*1000), false, mp)
+					case 2:
+						vector.AppendBytes(bat.Vecs[colIdx], []byte("short"), false, mp)
+					case 3:
+						vector.AppendFixed(bat.Vecs[colIdx], float64(i)*1.5, false, mp)
+					}
+				}
 			}
-			
-			vector.AppendFixed(bat.Vecs[3], float64(i)*1.5, false, mp)
-			vector.AppendFixed(bat.Vecs[4], i%2 == 0, false, mp)
-			vector.AppendFixed(bat.Vecs[5], uint64(i*100), false, mp)
-			vector.AppendBytes(bat.Vecs[6], []byte(longText[:50+i%50]), false, mp)
-			vector.AppendBytes(bat.Vecs[7], []byte{byte(i), byte(i + 1), byte(i + 2)}, false, mp)
 		}
 		bat.SetRowCount(blockRows)
 		
@@ -1177,8 +1228,8 @@ func TestCrossBlockNavigation(t *testing.T) {
 	require.NoError(t, err)
 	defer os.RemoveAll(tmpDir)
 	
-	// Create file with 20000 rows to ensure multiple blocks
-	objectPath := createTestObjectFileWithRows(t, tmpDir, "test_crossblock.obj", 20000)
+	// Create file with 9000 rows and 4 columns to ensure multiple blocks
+	objectPath := createTestObjectFileWithRowsAndCols(t, tmpDir, "test_crossblock.obj", 9000, 4)
 	
 	ctx := context.Background()
 	reader, err := objecttool.Open(ctx, objectPath)
