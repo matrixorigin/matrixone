@@ -609,23 +609,8 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 	policyForLocal := engine.DataCollectPolicy(engine.Policy_CollectAllData)
 	policyForRemote := engine.DataCollectPolicy(engine.Policy_CollectCommittedPersistedData)
 
-	if s.IsRemote {
-		var commited engine.RelData
-		commited, err = c.expandRanges(
-			s.DataSource.node,
-			rel,
-			db,
-			ctx,
-			blockExprList,
-			policyForRemote,
-			rsp)
-		if err != nil {
-			return err
-		}
-		tombstones := s.NodeInfo.Data.GetTombstones()
-		commited.AttachTombstones(tombstones)
-		s.NodeInfo.Data = commited
-	} else {
+	// local
+	if !s.IsRemote {
 		s.NodeInfo.Data, err = c.expandRanges(
 			s.DataSource.node,
 			rel,
@@ -633,12 +618,30 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 			ctx,
 			blockExprList,
 			policyForLocal,
-			rsp)
-		if err != nil {
-			return err
-		}
+			rsp,
+		)
+		return err
 	}
-	return nil
+
+	// remote
+	var commited engine.RelData
+	commited, err = c.expandRanges(
+		s.DataSource.node,
+		rel,
+		db,
+		ctx,
+		blockExprList,
+		policyForRemote,
+		rsp,
+	)
+
+	if err == nil {
+		tombstones := s.NodeInfo.Data.GetTombstones()
+		commited.AttachTombstones(tombstones)
+		s.NodeInfo.Data = commited
+	}
+
+	return err
 }
 
 func (s *Scope) waitForRuntimeFilters(c *Compile) ([]*plan.Expr, bool, error) {
