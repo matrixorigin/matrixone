@@ -26,11 +26,11 @@ func PrepareCommand() *cobra.Command {
 		Long:  "Tools for analyzing and browsing MatrixOne object files",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// 如果提供了文件路径，直接进入 view 模式
+			// If file path is provided, enter view mode directly
 			if len(args) == 1 {
 				return interactive.Run(args[0])
 			}
-			// 否则显示帮助
+			// Otherwise show help
 			return cmd.Help()
 		},
 	}

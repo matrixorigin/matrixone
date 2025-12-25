@@ -28,7 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 )
 
-// ObjectInfo object元信息
+// ObjectInfo contains object metadata
 type ObjectInfo struct {
 	Path       string
 	ObjectName objectio.ObjectName
@@ -45,26 +45,26 @@ type ObjectInfo struct {
 	IsCNCreated  bool
 }
 
-// ColInfo 列信息
+// ColInfo contains column information
 type ColInfo struct {
 	Idx  uint16
 	Type types.Type
 }
 
-// ObjectReader object读取器
+// ObjectReader reads object files
 type ObjectReader struct {
-	fs       fileservice.FileService
-	reader   *ioutil.BlockReader
+	fs        fileservice.FileService
+	reader    *ioutil.BlockReader
 	objReader *objectio.ObjectReader
-	meta     objectio.ObjectDataMeta
-	info     *ObjectInfo
-	cols     []ColInfo
-	mp       *mpool.MPool
+	meta      objectio.ObjectDataMeta
+	info      *ObjectInfo
+	cols      []ColInfo
+	mp        *mpool.MPool
 }
 
-// Open 打开object文件
+// Open opens an object file
 func Open(ctx context.Context, path string) (*ObjectReader, error) {
-	// 1. 解析路径：目录和文件名
+	// 1. Parse path: directory and filename
 	dir := "/"
 	filename := path
 	if idx := strings.LastIndex(path, "/"); idx >= 0 {
@@ -75,13 +75,13 @@ func Open(ctx context.Context, path string) (*ObjectReader, error) {
 		filename = path[idx+1:]
 	}
 
-	// 2. 创建local file service
+	// 2. Create local file service
 	fs, err := fileservice.NewLocalFS(ctx, "local", dir, fileservice.DisabledCacheConfig, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create file service: %w", err)
 	}
 
-	// 3. 创建reader
+	// 3. Create reader
 	objReader, err := objectio.NewObjectReaderWithStr(filename, fs,
 		objectio.WithMetaCachePolicyOption(fileservice.SkipMemoryCache|fileservice.SkipFullFilePreloads))
 	if err != nil {
@@ -89,16 +89,16 @@ func Open(ctx context.Context, path string) (*ObjectReader, error) {
 	}
 
 	reader := &ioutil.BlockReader{}
-	// 使用反射或直接创建，这里简化处理
+	// Use reflection or direct creation, simplified here
 
-	// 4. 读取meta（使用ReadAllMeta会自动读取header获取extent）
+	// 4. Read meta (ReadAllMeta automatically reads header to get extent)
 	meta, err := objReader.ReadAllMeta(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("load meta: %w", err)
 	}
 	dataMeta := meta.MustDataMeta()
 
-	// 5. 构建info
+	// 5. Build info
 	info := buildObjectInfo(path, dataMeta)
 	cols := buildColInfo(dataMeta)
 
@@ -120,7 +120,7 @@ func buildObjectInfo(path string, meta objectio.ObjectDataMeta) *ObjectInfo {
 		ColCount:   meta.BlockHeader().ColumnCount(),
 	}
 
-	// 计算总行数
+	// Calculate total row count
 	for i := uint32(0); i < info.BlockCount; i++ {
 		info.RowCount += uint64(meta.GetBlockMeta(i).GetRows())
 	}
@@ -132,7 +132,7 @@ func buildColInfo(meta objectio.ObjectDataMeta) []ColInfo {
 	colCount := meta.BlockHeader().ColumnCount()
 	cols := make([]ColInfo, colCount)
 
-	// 从第一个block获取列类型
+	// Get column types from first block
 	if meta.BlockCount() > 0 {
 		blockMeta := meta.GetBlockMeta(0)
 		for i := uint16(0); i < colCount; i++ {
@@ -147,23 +147,23 @@ func buildColInfo(meta objectio.ObjectDataMeta) []ColInfo {
 	return cols
 }
 
-// Info 返回object信息
+// Info returns object information
 func (r *ObjectReader) Info() *ObjectInfo {
 	return r.info
 }
 
-// Columns 返回列信息
+// Columns returns column information
 func (r *ObjectReader) Columns() []ColInfo {
 	return r.cols
 }
 
-// ReadBlock 读取指定block的数据
+// ReadBlock reads data from specified block
 func (r *ObjectReader) ReadBlock(ctx context.Context, blockIdx uint32) (*batch.Batch, func(), error) {
 	if blockIdx >= r.info.BlockCount {
 		return nil, nil, fmt.Errorf("block index %d out of range [0, %d)", blockIdx, r.info.BlockCount)
 	}
 
-	// 读取所有列
+	// Read all columns
 	colIdxs := make([]uint16, len(r.cols))
 	colTypes := make([]types.Type, len(r.cols))
 	for i := range r.cols {
@@ -171,7 +171,7 @@ func (r *ObjectReader) ReadBlock(ctx context.Context, blockIdx uint32) (*batch.B
 		colTypes[i] = r.cols[i].Type
 	}
 
-	// 使用 objReader 直接读取
+	// Use objReader to read directly
 	ioVectors, err := r.objReader.ReadOneBlock(ctx, colIdxs, colTypes, uint16(blockIdx), r.mp)
 	if err != nil {
 		return nil, nil, err
@@ -181,7 +181,7 @@ func (r *ObjectReader) ReadBlock(ctx context.Context, blockIdx uint32) (*batch.B
 		objectio.ReleaseIOVector(&ioVectors)
 	}
 
-	// 解码为 batch
+	// Decode to batch
 	bat := batch.NewWithSize(len(colIdxs))
 	for i := range colIdxs {
 		obj, err := objectio.Decode(ioVectors.Entries[i].CachedData.Bytes())
@@ -196,12 +196,12 @@ func (r *ObjectReader) ReadBlock(ctx context.Context, blockIdx uint32) (*batch.B
 	return bat, release, nil
 }
 
-// BlockCount 返回block数量
+// BlockCount returns block count
 func (r *ObjectReader) BlockCount() uint32 {
 	return r.info.BlockCount
 }
 
-// Close 关闭reader
+// Close closes the reader
 func (r *ObjectReader) Close() error {
 	return nil
 }

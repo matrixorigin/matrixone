@@ -21,11 +21,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/tools/objecttool"
 )
 
-// View 终端视图（简化版）
+// View is a simplified terminal view
 type View struct {
 	width        int
 	height       int
-	verticalMode bool // \G 模式：垂直显示
+	verticalMode bool // \G mode: vertical display
 }
 
 func NewView() *View {
@@ -35,25 +35,25 @@ func NewView() *View {
 	}
 }
 
-// Render 渲染当前状态
+// Render renders the current state
 func (v *View) Render(state *State, message string) error {
 	v.clear()
 
-	// 同步垂直模式状态
+	// Sync vertical mode state
 	v.verticalMode = state.verticalMode
 
-	// 1. 标题栏
+	// 1. Header
 	v.renderHeader(state)
 
-	// 2. 数据表格
+	// 2. Data table
 	if err := v.renderTable(state); err != nil {
 		return err
 	}
 
-	// 3. 状态栏
+	// 3. Status bar
 	v.renderStatus(state)
 
-	// 4. 消息/命令行
+	// 4. Message/command line
 	if message != "" {
 		fmt.Println()
 		fmt.Println(message)
@@ -87,8 +87,8 @@ func (v *View) renderTable(state *State) error {
 	}
 
 	cols := state.reader.Columns()
-	
-	// 确定显示的列 - table模式也显示所有列，但限制宽度
+
+	// Determine columns to display - table mode shows all columns but limits width
 	displayCols := state.visibleCols
 	if displayCols == nil {
 		displayCols = make([]uint16, len(cols))
@@ -96,8 +96,8 @@ func (v *View) renderTable(state *State) error {
 			displayCols[i] = uint16(i)
 		}
 	}
-	
-	// 构建显示列信息
+
+	// Build display column info
 	displayColInfo := make([]objecttool.ColInfo, len(displayCols))
 	for i, colIdx := range displayCols {
 		if int(colIdx) < len(cols) {
@@ -105,38 +105,38 @@ func (v *View) renderTable(state *State) error {
 		}
 	}
 
-	// 计算列宽
+	// Calculate column widths
 	widths := v.calcColWidths(displayColInfo, rows, state.maxColWidth)
 
-	// 表头
+	// Table header
 	v.renderTableHeader(displayColInfo, widths)
 
-	// 数据行（带行号）
+	// Data rows (with row numbers)
 	for i, row := range rows {
 		v.renderTableRowWithNumber(rowNumbers[i], row, widths)
 	}
 
-	// 表尾
+	// Table footer
 	v.renderTableFooter(widths)
 
 	return nil
 }
 
-// renderVertical 垂直显示（类似 MySQL \G）
+// renderVertical renders vertical display (similar to MySQL \G)
 func (v *View) renderVertical(state *State, rows [][]string, rowNumbers []string) error {
 	cols := state.reader.Columns()
-	
-	// 确定显示的列
+
+	// Determine columns to display
 	displayCols := state.visibleCols
 	if displayCols == nil {
-		// 垂直模式显示所有列
+		// Vertical mode displays all columns
 		displayCols = make([]uint16, len(cols))
 		for i := range cols {
 			displayCols[i] = uint16(i)
 		}
 	}
-	
-	// 显示每一行
+
+	// Display each row
 	for rowIdx, row := range rows {
 		fmt.Printf("*************************** %s ***************************\n", rowNumbers[rowIdx])
 		for i, colIdx := range displayCols {
@@ -145,7 +145,7 @@ func (v *View) renderVertical(state *State, rows [][]string, rowNumbers []string
 				value := ""
 				if i < len(row) {
 					value = row[i]
-					// 在 vertical 模式下应用宽度限制
+					// Apply width limit in vertical mode
 					if state.maxColWidth > 0 && len(value) > state.maxColWidth {
 						value = value[:state.maxColWidth-3] + "..."
 					}
@@ -154,10 +154,10 @@ func (v *View) renderVertical(state *State, rows [][]string, rowNumbers []string
 			}
 		}
 		if rowIdx < len(rows)-1 {
-			fmt.Println() // 行之间空一行
+			fmt.Println() // Empty line between rows
 		}
 	}
-	
+
 	return nil
 }
 
@@ -165,7 +165,7 @@ func (v *View) renderTableRowWithNumber(rowNum string, row []string, widths []in
 	fmt.Printf("│ %-10s ", rowNum)
 	for i, cell := range row {
 		if i < len(widths) {
-			// 不在这里截断，让内容完整显示
+			// Don't truncate here, let content display fully
 			fmt.Printf("│ %-*s ", widths[i], cell)
 		}
 	}
@@ -182,7 +182,7 @@ func (v *View) renderStatusToBuilder(state *State, b *strings.Builder) {
 	if state.verticalMode {
 		mode = "Vertical"
 	}
-	
+
 	widthStr := fmt.Sprintf("%d", state.maxColWidth)
 	if state.maxColWidth == 0 {
 		widthStr = "unlimited"
@@ -198,13 +198,13 @@ func (v *View) renderStatus(state *State) {
 	rows, _, _ := state.CurrentRows()
 	end := start + int64(len(rows)) - 1
 
-	// 显示模式
+	// Display mode
 	mode := "Table"
 	if state.verticalMode {
 		mode = "Vertical"
 	}
-	
-	// 宽度设置
+
+	// Width setting
 	widthStr := fmt.Sprintf("%d", state.maxColWidth)
 	if state.maxColWidth == 0 {
 		widthStr = "unlimited"
@@ -217,7 +217,7 @@ func (v *View) renderStatus(state *State) {
 func (v *View) calcColWidths(cols []objecttool.ColInfo, rows [][]string, maxColWidth int) []int {
 	widths := make([]int, len(cols))
 
-	// 初始宽度：列名长度
+	// Initial width: column name length
 	for i, col := range cols {
 		widths[i] = len(fmt.Sprintf("Col%d", col.Idx))
 		if widths[i] < 8 {
@@ -225,12 +225,12 @@ func (v *View) calcColWidths(cols []objecttool.ColInfo, rows [][]string, maxColW
 		}
 	}
 
-	// 根据数据调整
+	// Adjust based on data
 	for _, row := range rows {
 		for i, cell := range row {
 			if i < len(widths) {
 				cellLen := len(cell)
-				// 如果用户设置了宽度限制，使用设置值；否则使用内容长度
+				// If user set width limit, use that value; otherwise use content length
 				if maxColWidth > 0 && cellLen > maxColWidth {
 					cellLen = maxColWidth
 				}
@@ -278,7 +278,7 @@ func (v *View) renderTableRow(row []string, widths []int) {
 	fmt.Print("│")
 	for i, cell := range row {
 		if i < len(widths) {
-			// 截断过长的内容
+			// Truncate overly long content
 			if len(cell) > widths[i] {
 				cell = cell[:widths[i]-3] + "..."
 			}

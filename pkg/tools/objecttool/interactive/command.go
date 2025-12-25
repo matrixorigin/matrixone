@@ -20,12 +20,12 @@ import (
 	"strings"
 )
 
-// Command 命令接口
+// Command is the command interface
 type Command interface {
 	Execute(state *State) (output string, quit bool, err error)
 }
 
-// ParseCommand 解析命令
+// ParseCommand parses a command
 func ParseCommand(input string) (Command, error) {
 	input = strings.TrimSpace(input)
 
@@ -33,7 +33,7 @@ func ParseCommand(input string) (Command, error) {
 		return nil, nil
 	}
 
-	// 单字符命令（浏览模式）
+	// Single character commands (browse mode)
 	switch input {
 	case "q":
 		return &QuitCommand{}, nil
@@ -49,12 +49,12 @@ func ParseCommand(input string) (Command, error) {
 		return &HelpCommand{}, nil
 	}
 
-	// : 命令（命令模式）
+	// : commands (command mode)
 	if strings.HasPrefix(input, ":") {
 		return parseColonCommand(input[1:])
 	}
 
-	// 命令模式下不带 : 也支持
+	// Command mode also supports commands without :
 	return parseColonCommand(input)
 }
 
@@ -64,24 +64,24 @@ func parseColonCommand(cmd string) (Command, error) {
 		return nil, nil
 	}
 
-	// 命令别名映射
+	// Command alias mapping
 	aliases := map[string]string{
-		"v":  "vertical", 
-		"t":  "table",
-		"s":  "search",
-		"c":  "cols",
-		"h":  "help",
-		"i":  "info",
-		"?":  "help",
-		"/":  "search",
+		"v": "vertical",
+		"t": "table",
+		"s": "search",
+		"c": "cols",
+		"h": "help",
+		"i": "info",
+		"?": "help",
+		"/": "search",
 	}
-	
-	// 处理别名
+
+	// Handle aliases
 	if alias, exists := aliases[parts[0]]; exists {
 		parts[0] = alias
 	}
-	
-	// 特殊处理 "w" 别名 -> "set width"
+
+	// Special handling for "w" alias -> "set width"
 	if parts[0] == "w" {
 		if len(parts) > 1 {
 			// "w 64" -> "set width 64"
@@ -91,7 +91,7 @@ func parseColonCommand(cmd string) (Command, error) {
 		}
 	}
 
-	// 检查是否是纯数字（:123 跳转到 block 123）
+	// Check if it's a pure number (:123 jumps to block 123)
 	if num, err := strconv.ParseUint(parts[0], 10, 32); err == nil {
 		return &GotoCommand{Block: uint32(num)}, nil
 	}
@@ -133,7 +133,7 @@ func parseColonCommand(cmd string) (Command, error) {
 		if parts[1] == "all" {
 			return &ColumnsCommand{ShowAll: true}, nil
 		}
-		// 解析列索引 "1,3,5" 或 "1-5"
+		// Parse column indices "1,3,5" or "1-5"
 		return parseColumnsCommand(parts[1:])
 	case "rename":
 		if len(parts) < 3 {
@@ -159,7 +159,7 @@ func parseSetCommand(args []string) (Command, error) {
 	if len(args) < 2 {
 		return nil, fmt.Errorf("usage: set <option> <value>")
 	}
-	
+
 	switch args[0] {
 	case "width":
 		if args[1] == "unlimited" || args[1] == "0" {
@@ -179,16 +179,16 @@ func parseColumnsCommand(args []string) (Command, error) {
 	if len(args) == 0 {
 		return &ColumnsCommand{ShowAll: true}, nil
 	}
-	
+
 	// Handle "all" explicitly
 	if len(args) == 1 && args[0] == "all" {
 		return &ColumnsCommand{ShowAll: true}, nil
 	}
-	
+
 	var cols []uint16
 	for _, arg := range args {
 		if strings.Contains(arg, "-") {
-			// 范围格式 "1-5"
+			// Range format "1-5"
 			parts := strings.Split(arg, "-")
 			if len(parts) != 2 {
 				return nil, fmt.Errorf("invalid range format: %s", arg)
@@ -205,7 +205,7 @@ func parseColumnsCommand(args []string) (Command, error) {
 				cols = append(cols, uint16(i))
 			}
 		} else if strings.Contains(arg, ",") {
-			// 逗号分隔格式 "1,3,5"
+			// Comma-separated format "1,3,5"
 			indices := strings.Split(arg, ",")
 			for _, idx := range indices {
 				col, err := strconv.Atoi(strings.TrimSpace(idx))
@@ -215,7 +215,7 @@ func parseColumnsCommand(args []string) (Command, error) {
 				cols = append(cols, uint16(col))
 			}
 		} else {
-			// 单个索引
+			// Single index
 			col, err := strconv.Atoi(arg)
 			if err != nil {
 				return nil, fmt.Errorf("invalid column index: %s", arg)
@@ -223,7 +223,7 @@ func parseColumnsCommand(args []string) (Command, error) {
 			cols = append(cols, uint16(col))
 		}
 	}
-	
+
 	return &ColumnsCommand{Columns: cols}, nil
 }
 
@@ -243,14 +243,14 @@ func parseFormatCommand(args []string) (Command, error) {
 	}, nil
 }
 
-// QuitCommand 退出命令
+// QuitCommand is the quit command
 type QuitCommand struct{}
 
 func (c *QuitCommand) Execute(state *State) (string, bool, error) {
 	return "", true, nil
 }
 
-// InfoCommand 显示信息
+// InfoCommand shows object information
 type InfoCommand struct{}
 
 func (c *InfoCommand) Execute(state *State) (string, bool, error) {
@@ -262,7 +262,7 @@ Cols:   %d`,
 		info.Path, info.BlockCount, info.RowCount, info.ColCount), false, nil
 }
 
-// SchemaCommand 显示schema
+// SchemaCommand shows schema
 type SchemaCommand struct{}
 
 func (c *SchemaCommand) Execute(state *State) (string, bool, error) {
@@ -279,7 +279,7 @@ func (c *SchemaCommand) Execute(state *State) (string, bool, error) {
 	return sb.String(), false, nil
 }
 
-// FormatCommand 设置格式
+// FormatCommand sets format
 type FormatCommand struct {
 	ColIdx        uint16
 	FormatterName string
@@ -292,7 +292,7 @@ func (c *FormatCommand) Execute(state *State) (string, bool, error) {
 	return fmt.Sprintf("Column %d format set to %s", c.ColIdx, c.FormatterName), false, nil
 }
 
-// ScrollCommand 滚动命令
+// ScrollCommand is the scroll command
 type ScrollCommand struct {
 	Down  bool
 	Lines int
@@ -315,11 +315,11 @@ func (c *ScrollCommand) Execute(state *State) (string, bool, error) {
 			}
 		}
 	}
-	// 忽略边界错误
+	// Ignore boundary errors
 	return "", false, nil
 }
 
-// GotoCommand 跳转命令
+// GotoCommand is the goto command
 type GotoCommand struct {
 	Top    bool
 	Bottom bool
@@ -332,7 +332,7 @@ func (c *GotoCommand) Execute(state *State) (string, bool, error) {
 	} else if c.Bottom {
 		return "", false, state.GotoRow(-1)
 	} else {
-		// 检查 block 范围
+		// Check block range
 		blockCount := state.reader.BlockCount()
 		if c.Block >= blockCount {
 			return fmt.Sprintf("Block %d out of range. Available blocks: 0-%d", c.Block, blockCount-1), false, nil
@@ -341,7 +341,7 @@ func (c *GotoCommand) Execute(state *State) (string, bool, error) {
 	}
 }
 
-// HelpCommand 帮助命令
+// HelpCommand is the help command
 type HelpCommand struct {
 	Topic string
 }
@@ -356,7 +356,7 @@ func (c *HelpCommand) Execute(state *State) (string, bool, error) {
 	return fmt.Sprintf("No help for: %s", c.Topic), false, nil
 }
 
-// VerticalCommand 切换垂直/表格模式
+// VerticalCommand switches vertical/table mode
 type VerticalCommand struct {
 	Enable bool
 }
@@ -364,18 +364,18 @@ type VerticalCommand struct {
 func (c *VerticalCommand) Execute(state *State) (string, bool, error) {
 	state.verticalMode = c.Enable
 	if c.Enable {
-		// 垂直模式使用更大的宽度，默认显示10行
+		// Vertical mode uses larger width, default 10 rows per page
 		state.maxColWidth = 128
 		state.pageSize = 10
 		return "Switched to vertical mode (\\G), width=128, 10 rows/page", false, nil
 	}
-	// 表格模式恢复默认宽度和页大小
+	// Table mode restores default width and page size
 	state.maxColWidth = 64
 	state.pageSize = 20
 	return "Switched to table mode, width=64, 20 rows/page", false, nil
 }
 
-// SetCommand 设置选项
+// SetCommand sets options
 type SetCommand struct {
 	Option string
 	Value  int

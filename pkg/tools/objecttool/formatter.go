@@ -18,13 +18,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-// Formatter 列格式化器接口
+// Formatter is the column formatter interface
 type Formatter interface {
 	Format(value any) string
 	CanFormat(value any, typ types.Type) bool
 }
 
-// FormatterRegistry 格式化器注册表
+// FormatterRegistry is the formatter registry
 type FormatterRegistry struct {
 	byColIdx   map[uint16]Formatter
 	autoDetect []Formatter
@@ -41,24 +41,24 @@ func NewFormatterRegistry() *FormatterRegistry {
 	}
 }
 
-// SetFormatter 为指定列设置格式化器
+// SetFormatter sets formatter for specified column
 func (r *FormatterRegistry) SetFormatter(colIdx uint16, f Formatter) {
 	r.byColIdx[colIdx] = f
 }
 
-// ClearFormatter 清除指定列的格式化器
+// ClearFormatter clears formatter for specified column
 func (r *FormatterRegistry) ClearFormatter(colIdx uint16) {
 	delete(r.byColIdx, colIdx)
 }
 
-// GetFormatter 获取列的格式化器
+// GetFormatter gets the formatter for a column
 func (r *FormatterRegistry) GetFormatter(colIdx uint16, typ types.Type, sample any) Formatter {
-	// 1. 用户指定
+	// 1. User specified
 	if f, ok := r.byColIdx[colIdx]; ok {
 		return f
 	}
 
-	// 2. 自动检测
+	// 2. Auto detect
 	if sample != nil {
 		for _, f := range r.autoDetect {
 			if f.CanFormat(sample, typ) {
@@ -67,11 +67,11 @@ func (r *FormatterRegistry) GetFormatter(colIdx uint16, typ types.Type, sample a
 		}
 	}
 
-	// 3. 默认
+	// 3. Default
 	return &DefaultFormatter{}
 }
 
-// GetFormatterName 获取格式化器名称（用于显示）
+// GetFormatterName gets formatter name (for display)
 func (r *FormatterRegistry) GetFormatterName(colIdx uint16) string {
 	if f, ok := r.byColIdx[colIdx]; ok {
 		return formatterName(f)

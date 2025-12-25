@@ -22,7 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 )
 
-// DefaultFormatter 默认格式化器
+// DefaultFormatter is the default formatter
 type DefaultFormatter struct{}
 
 func (f *DefaultFormatter) CanFormat(value any, typ types.Type) bool {
@@ -35,7 +35,7 @@ func (f *DefaultFormatter) Format(value any) string {
 		if len(v) == 0 {
 			return ""
 		}
-		// 不截断，显示完整的十六进制内容
+		// Don't truncate, display full hex content
 		return hex.EncodeToString(v)
 	case nil:
 		return "NULL"
@@ -44,7 +44,7 @@ func (f *DefaultFormatter) Format(value any) string {
 	}
 }
 
-// ObjectStatsFormatter ObjectStats格式化器
+// ObjectStatsFormatter formats ObjectStats
 type ObjectStatsFormatter struct{}
 
 func (f *ObjectStatsFormatter) CanFormat(value any, typ types.Type) bool {
@@ -61,7 +61,7 @@ func (f *ObjectStatsFormatter) Format(value any) string {
 	return stats.String()
 }
 
-// RowidFormatter Rowid格式化器
+// RowidFormatter formats Rowid
 type RowidFormatter struct{}
 
 func (f *RowidFormatter) CanFormat(value any, typ types.Type) bool {
@@ -86,7 +86,7 @@ func (f *RowidFormatter) Format(value any) string {
 	return fmt.Sprintf("%v", value)
 }
 
-// TSFormatter TS格式化器
+// TSFormatter formats TS
 type TSFormatter struct{}
 
 func (f *TSFormatter) CanFormat(value any, typ types.Type) bool {
@@ -101,7 +101,7 @@ func (f *TSFormatter) Format(value any) string {
 	return fmt.Sprintf("%v", value)
 }
 
-// HexFormatter 十六进制格式化器
+// HexFormatter formats as hexadecimal
 type HexFormatter struct{}
 
 func (f *HexFormatter) CanFormat(value any, typ types.Type) bool {
@@ -116,7 +116,7 @@ func (f *HexFormatter) Format(value any) string {
 	return fmt.Sprintf("%v", value)
 }
 
-// FormatterByName 格式化器名称映射
+// FormatterByName maps formatter names to formatters
 var FormatterByName = map[string]Formatter{
 	"default":     &DefaultFormatter{},
 	"objectstats": &ObjectStatsFormatter{},

@@ -14,7 +14,7 @@
 
 package interactive
 
-// Run 运行交互式界面
+// Run runs the interactive interface
 func Run(path string) error {
 	return RunBubbletea(path)
 }

@@ -24,24 +24,24 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/tools/objecttool"
 )
 
-// State 浏览状态
+// State represents the browsing state
 type State struct {
 	reader    *objecttool.ObjectReader
 	formatter *objecttool.FormatterRegistry
 	ctx       context.Context
 
-	// 当前数据
+	// Current data
 	currentBlock uint32
 	currentBatch *batch.Batch
 	batchRelease func()
 
-	// 显示状态
-	rowOffset    int      // 当前block内的行偏移
-	pageSize     int      // 每页显示行数
-	visibleCols  []uint16 // 显示的列（nil表示全部）
-	maxColWidth  int      // 最大列宽
-	verticalMode bool     // 垂直显示模式
-	colNames     map[uint16]string // 列重命名映射
+	// Display state
+	rowOffset    int               // Row offset within current block
+	pageSize     int               // Rows per page
+	visibleCols  []uint16          // Visible columns (nil means all)
+	maxColWidth  int               // Maximum column width
+	verticalMode bool              // Vertical display mode
+	colNames     map[uint16]string // Column rename mapping
 }
 
 func NewState(ctx context.Context, reader *objecttool.ObjectReader) *State {
@@ -50,14 +50,14 @@ func NewState(ctx context.Context, reader *objecttool.ObjectReader) *State {
 		formatter:   objecttool.NewFormatterRegistry(),
 		ctx:         ctx,
 		pageSize:    20,
-		maxColWidth: 64, // 默认64字符
+		maxColWidth: 64, // Default 64 characters
 	}
 }
 
-// CurrentRows 获取当前页的数据（格式化后的字符串）
-// 返回: rows, rowNumbers, error
+// CurrentRows returns the current page data (formatted strings)
+// Returns: rows, rowNumbers, error
 func (s *State) CurrentRows() ([][]string, []string, error) {
-	// 确保当前block已加载
+	// Ensure current block is loaded
 	if err := s.ensureBlockLoaded(); err != nil {
 		return nil, nil, err
 	}
@@ -66,7 +66,7 @@ func (s *State) CurrentRows() ([][]string, []string, error) {
 		return nil, nil, nil
 	}
 
-	// 计算当前页的行范围
+	// Calculate current page row range
 	totalRows := s.currentBatch.RowCount()
 	start := s.rowOffset
 	end := start + s.pageSize
@@ -78,15 +78,15 @@ func (s *State) CurrentRows() ([][]string, []string, error) {
 		return nil, nil, nil
 	}
 
-	// 格式化数据
+	// Format data
 	rows := make([][]string, end-start)
 	rowNumbers := make([]string, end-start)
 	cols := s.reader.Columns()
-	
-	// 确定要显示的列
+
+	// Determine columns to display
 	displayCols := s.visibleCols
 	if displayCols == nil {
-		// 显示所有列
+		// Display all columns
 		displayCols = make([]uint16, len(cols))
 		for i := range cols {
 			displayCols[i] = uint16(i)
@@ -94,9 +94,9 @@ func (s *State) CurrentRows() ([][]string, []string, error) {
 	}
 
 	for i := start; i < end; i++ {
-		// 生成行号 (block-offset)
+		// Generate row number (block-offset)
 		rowNumbers[i-start] = fmt.Sprintf("(%d-%d)", s.currentBlock, i)
-		
+
 		row := make([]string, len(displayCols))
 		for j, colIdx := range displayCols {
 			if int(colIdx) >= len(cols) {
@@ -106,13 +106,13 @@ func (s *State) CurrentRows() ([][]string, []string, error) {
 			col := cols[colIdx]
 			vec := s.currentBatch.Vecs[colIdx]
 
-			// 检查NULL
+			// Check NULL
 			if vec.IsNull(uint64(i)) {
 				row[j] = "NULL"
 				continue
 			}
 
-			// 根据类型获取值
+			// Get value by type
 			var value any
 			switch col.Type.Oid {
 			case types.T_bool:
@@ -149,15 +149,15 @@ func (s *State) CurrentRows() ([][]string, []string, error) {
 				value = vec.GetRawBytesAt(i)
 			}
 
-			// 获取格式化器
+			// Get formatter
 			formatter := s.formatter.GetFormatter(col.Idx, col.Type, value)
 			formatted := formatter.Format(value)
-			
-			// 空字符串显示为空
+
+			// Empty string displays as empty
 			if formatted == "" {
 				row[j] = ""
 			} else {
-				// 在 vertical 模式下不限制长度，在 table 模式下由 view 层处理
+				// In vertical mode, don't limit length; in table mode, handled by view layer
 				row[j] = formatted
 			}
 		}
@@ -182,7 +182,7 @@ func (s *State) ensureBlockLoaded() error {
 	return nil
 }
 
-// NextPage 下一页
+// NextPage moves to the next page
 func (s *State) NextPage() error {
 	if s.currentBatch == nil {
 		return s.ensureBlockLoaded()
@@ -192,12 +192,12 @@ func (s *State) NextPage() error {
 	newOffset := s.rowOffset + s.pageSize
 
 	if newOffset < totalRows {
-		// 同一个block内
+		// Within the same block
 		s.rowOffset = newOffset
 		return nil
 	}
 
-	// 需要切换到下一个block
+	// Need to switch to next block
 	if s.currentBlock+1 >= s.reader.BlockCount() {
 		return fmt.Errorf("already at last page")
 	}
@@ -208,15 +208,15 @@ func (s *State) NextPage() error {
 	return s.ensureBlockLoaded()
 }
 
-// PrevPage 上一页
+// PrevPage moves to the previous page
 func (s *State) PrevPage() error {
 	if s.rowOffset >= s.pageSize {
-		// 同一个block内
+		// Within the same block
 		s.rowOffset -= s.pageSize
 		return nil
 	}
 
-	// 需要切换到上一个block
+	// Need to switch to previous block
 	if s.currentBlock == 0 {
 		return fmt.Errorf("already at first page")
 	}
@@ -224,7 +224,7 @@ func (s *State) PrevPage() error {
 	s.releaseCurrentBatch()
 	s.currentBlock--
 
-	// 加载上一个block并定位到最后一页
+	// Load previous block and position to last page
 	if err := s.ensureBlockLoaded(); err != nil {
 		return err
 	}
@@ -239,38 +239,38 @@ func (s *State) PrevPage() error {
 	return nil
 }
 
-// ScrollDown 向下滚动一行
+// ScrollDown scrolls down one line
 func (s *State) ScrollDown() error {
 	if s.currentBatch == nil {
 		return s.ensureBlockLoaded()
 	}
 
 	totalRows := s.currentBatch.RowCount()
-	// 如果当前行不是当前页的最后一行，且不是 block 的最后一行，则向下滚动一行
+	// If current row is not the last row of current page and not the last row of block, scroll down one line
 	if s.rowOffset+1 < totalRows {
 		s.rowOffset++
 		return nil
 	}
 
-	// 已经在当前 block 的最后一行，尝试切换到下一个 block
+	// Already at the last row of current block, try to switch to next block
 	if s.currentBlock+1 >= s.reader.BlockCount() {
 		return fmt.Errorf("already at last row")
 	}
 
 	s.releaseCurrentBatch()
 	s.currentBlock++
-	s.rowOffset = 0  // 重置为下一个 block 的第一行
+	s.rowOffset = 0 // Reset to first row of next block
 	return s.ensureBlockLoaded()
 }
 
-// ScrollUp 向上滚动一行
+// ScrollUp scrolls up one line
 func (s *State) ScrollUp() error {
 	if s.rowOffset > 0 {
 		s.rowOffset--
 		return nil
 	}
 
-	// 已经在当前 block 的第一行，尝试切换到上一个 block
+	// Already at the first row of current block, try to switch to previous block
 	if s.currentBlock == 0 {
 		return fmt.Errorf("already at first row")
 	}
@@ -283,7 +283,7 @@ func (s *State) ScrollUp() error {
 	}
 
 	totalRows := s.currentBatch.RowCount()
-	s.rowOffset = totalRows - 1  // 跳到上一个 block 的最后一行
+	s.rowOffset = totalRows - 1 // Jump to last row of previous block
 	if s.rowOffset < 0 {
 		s.rowOffset = 0
 	}
@@ -291,18 +291,18 @@ func (s *State) ScrollUp() error {
 	return nil
 }
 
-// GotoRow 跳转到指定行（全局行号）
+// GotoRow jumps to specified row (global row number)
 func (s *State) GotoRow(globalRow int64) error {
 	if globalRow < 0 {
-		// -1 表示最后一行
+		// -1 means last row
 		info := s.reader.Info()
 		globalRow = int64(info.RowCount) - 1
 	}
 
-	// 找到对应的block
+	// Find corresponding block
 	var currentRow int64
 	for blockIdx := uint32(0); blockIdx < s.reader.BlockCount(); blockIdx++ {
-		// 临时加载block获取行数
+		// Temporarily load block to get row count
 		bat, release, err := s.reader.ReadBlock(s.ctx, blockIdx)
 		if err != nil {
 			return err
@@ -311,7 +311,7 @@ func (s *State) GotoRow(globalRow int64) error {
 		release()
 
 		if currentRow+blockRows > globalRow {
-			// 找到了
+			// Found
 			s.releaseCurrentBatch()
 			s.currentBlock = blockIdx
 			s.rowOffset = int(globalRow - currentRow)
@@ -324,19 +324,19 @@ func (s *State) GotoRow(globalRow int64) error {
 	return fmt.Errorf("row %d out of range", globalRow)
 }
 
-// GotoBlock 跳转到指定block
+// GotoBlock jumps to specified block
 func (s *State) GotoBlock(blockIdx uint32) error {
 	if blockIdx >= s.reader.BlockCount() {
 		return fmt.Errorf("block %d out of range [0, %d)", blockIdx, s.reader.BlockCount())
 	}
-	
+
 	s.releaseCurrentBatch()
 	s.currentBlock = blockIdx
 	s.rowOffset = 0
 	return s.ensureBlockLoaded()
 }
 
-// SetFormat 设置列格式
+// SetFormat sets column format
 func (s *State) SetFormat(colIdx uint16, formatterName string) error {
 	if formatterName == "auto" {
 		s.formatter.ClearFormatter(colIdx)
@@ -352,13 +352,13 @@ func (s *State) SetFormat(colIdx uint16, formatterName string) error {
 	return nil
 }
 
-// GlobalRowOffset 返回当前全局行偏移
+// GlobalRowOffset returns current global row offset
 func (s *State) GlobalRowOffset() int64 {
 	var offset int64
 	for i := uint32(0); i < s.currentBlock; i++ {
-		// 这里简化处理，实际应该缓存每个block的行数
-		// 暂时返回近似值
-		offset += 8192 // 假设每个block 8192行
+		// Simplified handling here, should actually cache row count for each block
+		// Temporarily return approximate value
+		offset += 8192 // Assume 8192 rows per block
 	}
 	return offset + int64(s.rowOffset)
 }
@@ -371,7 +371,7 @@ func (s *State) releaseCurrentBatch() {
 	s.currentBatch = nil
 }
 
-// Close 关闭状态
+// Close closes the state
 func (s *State) Close() {
 	s.releaseCurrentBatch()
 }

@@ -33,25 +33,25 @@ type model struct {
 	message       string
 	cmdMode       bool
 	cmdInput      string
-	cmdCursor     int    // 命令行光标位置
+	cmdCursor     int // Command line cursor position
 	cmdHistory    []string
 	historyIndex  int
-	hScrollOffset int  // 水平滚动偏移
-	
-	// 搜索相关
-	searchTerm    string
-	searchRegex   *regexp.Regexp
-	useRegex      bool
-	currentMatch  SearchMatch
-	hasMatch      bool
+	hScrollOffset int // Horizontal scroll offset
+
+	// Search related
+	searchTerm   string
+	searchRegex  *regexp.Regexp
+	useRegex     bool
+	currentMatch SearchMatch
+	hasMatch     bool
 }
 
 type SearchMatch struct {
 	Row        int64
 	Col        int
 	Value      string
-	RowNum     string  // 行号显示 (block-offset)
-	ColumnName string  // 列名
+	RowNum     string // Row number display (block-offset)
+	ColumnName string // Column name
 }
 
 func (m model) Init() tea.Cmd {
@@ -87,12 +87,12 @@ func (m model) handleBrowseMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+b", "pgup":
 		m.state.PrevPage()
 	case "left", "h":
-		// 水平向左滚动
+		// Scroll left horizontally
 		if m.hScrollOffset > 0 {
 			m.hScrollOffset--
 		}
 	case "right", "l":
-		// 水平向右滚动
+		// Scroll right horizontally
 		cols := m.state.reader.Columns()
 		if m.hScrollOffset < len(cols)-1 {
 			m.hScrollOffset++
@@ -108,19 +108,19 @@ func (m model) handleBrowseMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cmdCursor = len(m.cmdInput)
 		m.historyIndex = len(m.cmdHistory)
 	case "n":
-		// 下一个搜索结果
+		// Next search result
 		if m.searchTerm != "" {
 			m.findNextMatch()
 		}
 	case "N":
-		// 上一个搜索结果
+		// Previous search result
 		if m.searchTerm != "" {
 			m.findPrevMatch()
 		}
 	case "?":
 		m.message = generalHelp
 	default:
-		// 支持 :N 快捷跳转
+		// Support :N quick jump
 		if len(msg.String()) == 1 && msg.String()[0] >= '0' && msg.String()[0] <= '9' {
 			m.cmdMode = true
 			m.cmdInput = msg.String()
@@ -145,12 +145,12 @@ func (m model) handleCommandInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if cmd == nil {
 			return m, nil
 		}
-		
-		// 添加到历史记录
+
+		// Add to history
 		m.cmdHistory = append(m.cmdHistory, m.cmdInput)
 		m.historyIndex = len(m.cmdHistory)
-		
-		// 特殊处理搜索命令
+
+		// Special handling for search command
 		if searchCmd, ok := cmd.(*SearchCommand); ok {
 			m.startSearch(searchCmd.Pattern)
 			m.cmdMode = false
@@ -158,7 +158,7 @@ func (m model) handleCommandInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.cmdCursor = 0
 			return m, nil
 		}
-		
+
 		output, quit, err := cmd.Execute(m.state)
 		if err != nil {
 			m.message = fmt.Sprintf("Error: %v", err)
@@ -172,7 +172,7 @@ func (m model) handleCommandInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cmdCursor = 0
 		return m, nil
 	case "up":
-		// 历史记录向上
+		// History up
 		if len(m.cmdHistory) > 0 && m.historyIndex > 0 {
 			m.historyIndex--
 			m.cmdInput = m.cmdHistory[m.historyIndex]
@@ -180,7 +180,7 @@ func (m model) handleCommandInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "down":
-		// 历史记录向下
+		// History down
 		if len(m.cmdHistory) > 0 && m.historyIndex < len(m.cmdHistory)-1 {
 			m.historyIndex++
 			m.cmdInput = m.cmdHistory[m.historyIndex]
@@ -192,13 +192,13 @@ func (m model) handleCommandInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "left":
-		// 光标左移
+		// Move cursor left
 		if m.cmdCursor > 0 {
 			m.cmdCursor--
 		}
 		return m, nil
 	case "right":
-		// 光标右移
+		// Move cursor right
 		if m.cmdCursor < len(m.cmdInput) {
 			m.cmdCursor++
 		}
@@ -209,22 +209,22 @@ func (m model) handleCommandInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cmdCursor = 0
 		m.historyIndex = len(m.cmdHistory)
 	case "ctrl+a":
-		// 移动光标到行首
+		// Move cursor to beginning of line
 		m.cmdCursor = 0
 	case "ctrl+e":
-		// 移动光标到行尾
+		// Move cursor to end of line
 		m.cmdCursor = len(m.cmdInput)
 	case "ctrl+u":
-		// 清空当前输入
+		// Clear current input
 		m.cmdInput = ""
 		m.cmdCursor = 0
 	case "ctrl+k":
-		// 删除光标到行尾的内容
+		// Delete from cursor to end of line
 		m.cmdInput = m.cmdInput[:m.cmdCursor]
 	case "ctrl+w":
-		// 删除光标前的一个单词
+		// Delete word before cursor
 		if m.cmdCursor > 0 {
-			// 找到前一个空格或行首
+			// Find previous space or beginning of line
 			pos := m.cmdCursor - 1
 			for pos > 0 && m.cmdInput[pos] == ' ' {
 				pos--
@@ -244,7 +244,7 @@ func (m model) handleCommandInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.cmdCursor--
 		}
 	case "tab":
-		// Tab 补全
+		// Tab completion
 		if m.cmdInput != "" {
 			completed := m.completeCommand(m.cmdInput)
 			if completed != "" && completed != m.cmdInput {
@@ -254,24 +254,24 @@ func (m model) handleCommandInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	default:
-		// 支持粘贴和多字符输入
+		// Support paste and multi-character input
 		input := msg.String()
-		
-		// 处理粘贴内容，去掉可能的方括号包围
+
+		// Handle paste content, remove possible bracket wrapping
 		if strings.HasPrefix(input, "[") && strings.HasSuffix(input, "]") && len(input) > 2 {
 			input = input[1 : len(input)-1]
 		}
-		
-		// 过滤掉控制字符，只保留可打印字符和空格
+
+		// Filter out control characters, keep only printable characters and spaces
 		var filtered strings.Builder
 		for _, r := range input {
-			if r >= 32 && r <= 126 { // 可打印 ASCII 字符包括空格
+			if r >= 32 && r <= 126 { // Printable ASCII characters including space
 				filtered.WriteRune(r)
 			}
 		}
 		if filtered.Len() > 0 {
 			text := filtered.String()
-			// 在光标位置插入文本
+			// Insert text at cursor position
 			m.cmdInput = m.cmdInput[:m.cmdCursor] + text + m.cmdInput[m.cmdCursor:]
 			m.cmdCursor += len(text)
 		}
@@ -281,8 +281,8 @@ func (m model) handleCommandInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m model) View() string {
 	var b strings.Builder
-	
-	// 数据表格 - 撑满屏幕，但只在有有效 reader 时渲染
+
+	// Data table - fills screen, but only renders when there's a valid reader
 	if m.state != nil && m.state.reader != nil {
 		if m.state.verticalMode {
 			m.renderVertical(&b)
@@ -290,18 +290,18 @@ func (m model) View() string {
 			m.renderTable(&b)
 		}
 	} else {
-		// 没有数据时显示占位符
+		// Show placeholder when no data
 		b.WriteString("No data available\n")
 	}
-	
-	// 消息显示（如果有）
+
+	// Message display (if any)
 	if m.message != "" {
 		b.WriteString("\n► ")
 		b.WriteString(m.message)
 		b.WriteString("\n")
 	}
-	
-	// 底部状态栏 - 始终在最下面
+
+	// Bottom status bar - always at the bottom
 	if m.state != nil && m.state.reader != nil {
 		info := m.state.reader.Info()
 		rows, _, _ := m.state.CurrentRows()
@@ -311,43 +311,43 @@ func (m model) View() string {
 		if m.state.verticalMode {
 			mode = "Vertical"
 		}
-		
+
 		cols := m.state.reader.Columns()
 		visibleCols := m.getVisibleColumns(cols)
 		termWidth := 120
-		
-		// 状态栏颜色 - 深灰背景，白字
-		bgColor := "\033[100m"   // 深灰背景
-		textColor := "\033[97m"  // 亮白文字
-		reset := "\033[0m"       // 重置颜色
-		
-		// 状态信息
-		statusText := fmt.Sprintf(" %s │ Rows %d-%d/%d │ Block %d/%d │ Cols %d-%d/%d ", 
+
+		// Status bar colors - dark gray background, white text
+		bgColor := "\033[100m"  // Dark gray background
+		textColor := "\033[97m" // Bright white text
+		reset := "\033[0m"      // Reset color
+
+		// Status information
+		statusText := fmt.Sprintf(" %s │ Rows %d-%d/%d │ Block %d/%d │ Cols %d-%d/%d ",
 			mode, start, end, info.RowCount, m.state.currentBlock+1, info.BlockCount,
 			m.hScrollOffset+1, m.hScrollOffset+len(visibleCols), len(cols))
-		
-		// 计算需要填充的空格数
+
+		// Calculate number of spaces to fill
 		padding := termWidth - len(statusText)
 		if padding < 0 {
 			padding = 0
 		}
-		
-		// 带颜色的状态栏 - 撑满整行
+
+		// Colored status bar - fills entire line
 		b.WriteString("\n")
 		b.WriteString(bgColor + textColor)
 		b.WriteString(statusText)
 		b.WriteString(strings.Repeat(" ", padding))
 		b.WriteString(reset)
 	} else {
-		// 简单状态栏
+		// Simple status bar
 		b.WriteString("\nNo data loaded")
 	}
-	
-	// 命令行 - 普通样式，不带背景色
+
+	// Command line - normal style, no background color
 	b.WriteString("\n")
 	if m.cmdMode {
 		b.WriteString(":")
-		// 在光标位置插入光标字符
+		// Insert cursor character at cursor position
 		if m.cmdCursor <= len(m.cmdInput) {
 			before := m.cmdInput[:m.cmdCursor]
 			after := m.cmdInput[m.cmdCursor:]
@@ -359,21 +359,21 @@ func (m model) View() string {
 			b.WriteString("█")
 		}
 	}
-	
+
 	return b.String()
 }
 
-// gotoSearchMatch 跳转到当前搜索匹配
+// gotoSearchMatch jumps to current search match
 func (m *model) gotoSearchMatch() {
 	if !m.hasMatch {
 		return
 	}
-	
+
 	match := m.currentMatch
-	// 跳转到匹配的行
+	// Jump to matching row
 	m.state.GotoRow(match.Row)
-	
-	// 调整水平滚动以显示匹配的列
+
+	// Adjust horizontal scroll to show matching column
 	cols := m.state.reader.Columns()
 	if match.Col < len(cols) {
 		visibleCols := m.getVisibleColumns(cols)
@@ -387,16 +387,16 @@ func (m *model) gotoSearchMatch() {
 			}
 		}
 	}
-	
+
 	m.message = fmt.Sprintf("Match at %s [%s]: %s", match.RowNum, match.ColumnName, match.Value)
 }
 
-// startSearch 开始搜索
+// startSearch starts search
 func (m *model) startSearch(pattern string) {
 	m.searchTerm = pattern
 	m.hasMatch = false
-	
-	// 尝试编译正则表达式
+
+	// Try to compile regex
 	m.useRegex = false
 	if strings.ContainsAny(pattern, ".*+?^${}[]|()\\") {
 		regex, err := regexp.Compile("(?i)" + pattern)
@@ -405,35 +405,35 @@ func (m *model) startSearch(pattern string) {
 			m.searchRegex = regex
 		}
 	}
-	
-	// 从当前位置开始查找第一个匹配
+
+	// Find first match from current position
 	m.findNextMatch()
 }
 
-// findNextMatch 查找下一个匹配（从当前位置向后）
+// findNextMatch finds next match (from current position backward)
 func (m *model) findNextMatch() {
 	if m.searchTerm == "" {
 		return
 	}
-	
+
 	currentRow := m.state.GlobalRowOffset()
 	currentBlock := m.state.currentBlock
 	blockCount := m.state.reader.BlockCount()
-	
-	// 从当前位置的下一行开始搜索
+
+	// Start search from next row of current position
 	startRow := currentRow + 1
-	
-	// 搜索从当前位置到文件末尾
+
+	// Search from current position to end of file
 	for blockIdx := currentBlock; blockIdx < blockCount; blockIdx++ {
 		batch, release, err := m.state.reader.ReadBlock(m.state.ctx, blockIdx)
 		if err != nil {
 			continue
 		}
-		
+
 		rowCount := batch.RowCount()
 		cols := m.state.reader.Columns()
-		
-		// 计算这个 block 的起始行号
+
+		// Calculate starting row number of this block
 		blockStartRow := int64(0)
 		for i := uint32(0); i < blockIdx; i++ {
 			b, r, e := m.state.reader.ReadBlock(m.state.ctx, i)
@@ -442,8 +442,8 @@ func (m *model) findNextMatch() {
 				r()
 			}
 		}
-		
-		// 确定搜索起始行
+
+		// Determine search start row
 		startRowInBlock := 0
 		if blockIdx == currentBlock {
 			startRowInBlock = int(startRow - blockStartRow)
@@ -451,28 +451,28 @@ func (m *model) findNextMatch() {
 				startRowInBlock = 0
 			}
 		}
-		
-		// 搜索这个 block
+
+		// Search this block
 		for rowIdx := startRowInBlock; rowIdx < rowCount; rowIdx++ {
 			for colIdx := 0; colIdx < batch.VectorCount(); colIdx++ {
 				if colIdx >= len(cols) {
 					continue
 				}
-				
+
 				vec := batch.GetVector(int32(colIdx))
 				if vec.IsNull(uint64(rowIdx)) {
 					continue
 				}
-				
+
 				cell := m.formatCell(vec, rowIdx, cols[colIdx])
-				
+
 				if m.matchPattern(cell) {
 					rowNum := fmt.Sprintf("(%d-%d)", blockIdx, rowIdx)
 					colName := fmt.Sprintf("Col%d", colIdx)
 					if colIdx < len(cols) {
 						colName = fmt.Sprintf("Col%d", cols[colIdx].Idx)
 					}
-					
+
 					m.currentMatch = SearchMatch{
 						Row:        blockStartRow + int64(rowIdx),
 						Col:        colIdx,
@@ -487,40 +487,40 @@ func (m *model) findNextMatch() {
 				}
 			}
 		}
-		
+
 		release()
 	}
-	
+
 	m.message = "No more matches"
 }
 
-// findPrevMatch 查找上一个匹配（从当前位置向前）
+// findPrevMatch finds previous match (from current position forward)
 func (m *model) findPrevMatch() {
 	if m.searchTerm == "" {
 		return
 	}
-	
+
 	currentRow := m.state.GlobalRowOffset()
 	currentBlock := m.state.currentBlock
-	
-	// 从当前位置的上一行开始搜索
+
+	// Start search from previous row of current position
 	endRow := currentRow - 1
 	if endRow < 0 {
 		m.message = "No previous matches"
 		return
 	}
-	
-	// 从当前 block 向前搜索
+
+	// Search forward from current block
 	for blockIdx := int(currentBlock); blockIdx >= 0; blockIdx-- {
 		batch, release, err := m.state.reader.ReadBlock(m.state.ctx, uint32(blockIdx))
 		if err != nil {
 			continue
 		}
-		
+
 		rowCount := batch.RowCount()
 		cols := m.state.reader.Columns()
-		
-		// 计算这个 block 的起始行号
+
+		// Calculate starting row number of this block
 		blockStartRow := int64(0)
 		for i := uint32(0); i < uint32(blockIdx); i++ {
 			b, r, e := m.state.reader.ReadBlock(m.state.ctx, i)
@@ -529,8 +529,8 @@ func (m *model) findPrevMatch() {
 				r()
 			}
 		}
-		
-		// 确定搜索结束行
+
+		// Determine search end row
 		endRowInBlock := rowCount - 1
 		if uint32(blockIdx) == currentBlock {
 			endRowInBlock = int(endRow - blockStartRow)
@@ -538,28 +538,28 @@ func (m *model) findPrevMatch() {
 				endRowInBlock = rowCount - 1
 			}
 		}
-		
-		// 从后向前搜索这个 block
+
+		// Search this block from back to front
 		for rowIdx := endRowInBlock; rowIdx >= 0; rowIdx-- {
 			for colIdx := batch.VectorCount() - 1; colIdx >= 0; colIdx-- {
 				if colIdx >= len(cols) {
 					continue
 				}
-				
+
 				vec := batch.GetVector(int32(colIdx))
 				if vec.IsNull(uint64(rowIdx)) {
 					continue
 				}
-				
+
 				cell := m.formatCell(vec, rowIdx, cols[colIdx])
-				
+
 				if m.matchPattern(cell) {
 					rowNum := fmt.Sprintf("(%d-%d)", blockIdx, rowIdx)
 					colName := fmt.Sprintf("Col%d", colIdx)
 					if colIdx < len(cols) {
 						colName = fmt.Sprintf("Col%d", cols[colIdx].Idx)
 					}
-					
+
 					m.currentMatch = SearchMatch{
 						Row:        blockStartRow + int64(rowIdx),
 						Col:        colIdx,
@@ -574,14 +574,14 @@ func (m *model) findPrevMatch() {
 				}
 			}
 		}
-		
+
 		release()
 	}
-	
+
 	m.message = "No previous matches"
 }
 
-// formatCell 格式化 cell 值
+// formatCell formats cell value
 func (m *model) formatCell(vec *vector.Vector, rowIdx int, col objecttool.ColInfo) string {
 	var value any
 	switch col.Type.Oid {
@@ -632,21 +632,21 @@ func (m *model) formatCell(vec *vector.Vector, rowIdx int, col objecttool.ColInf
 			value = vec.GetBytesAt(rowIdx)
 		}
 	}
-	
+
 	formatter := m.state.formatter.GetFormatter(col.Idx, col.Type, value)
 	return formatter.Format(value)
 }
 
-// matchPattern 检查是否匹配搜索模式
+// matchPattern checks if matches search pattern
 func (m *model) matchPattern(cell string) bool {
 	if m.useRegex {
 		return m.searchRegex.MatchString(cell)
 	}
-	
-	// 普通文本搜索（大小写不敏感）
+
+	// Plain text search (case insensitive)
 	matched := strings.Contains(strings.ToLower(cell), strings.ToLower(m.searchTerm))
-	
-	// 如果没匹配，且 cell 看起来像十六进制，尝试解码后搜索
+
+	// If no match and cell looks like hex, try decoding and searching
 	if !matched && len(cell) > 0 && len(cell)%2 == 0 {
 		isHex := true
 		for _, c := range cell {
@@ -655,7 +655,7 @@ func (m *model) matchPattern(cell string) bool {
 				break
 			}
 		}
-		
+
 		if isHex {
 			decoded := make([]byte, len(cell)/2)
 			for i := 0; i < len(cell); i += 2 {
@@ -667,34 +667,34 @@ func (m *model) matchPattern(cell string) bool {
 			matched = strings.Contains(strings.ToLower(decodedStr), strings.ToLower(m.searchTerm))
 		}
 	}
-	
+
 	return matched
 }
 
-// performSearch 执行全局搜索并保存结果（保留用于测试兼容性）
+// performSearch performs global search and saves results (kept for test compatibility)
 func (m *model) performSearch(pattern string) {
-	// 为了测试兼容性，使用 startSearch
+	// For test compatibility, use startSearch
 	m.startSearch(pattern)
 }
 
-// highlightSearchMatch 高亮搜索匹配的文本
+// highlightSearchMatch highlights search matched text
 func (m model) highlightSearchMatch(text string, row int64, col int) string {
 	if m.searchTerm == "" {
 		return text
 	}
-	
-	// 检查是否是当前匹配
+
+	// Check if it's current match
 	isCurrentMatch := m.hasMatch && m.currentMatch.Row == row && m.currentMatch.Col == col
-	
-	// 高亮颜色
-	currentColor := "\033[41m\033[97m"    // 红色背景，白色文字 (当前匹配)
+
+	// Highlight colors
+	currentColor := "\033[41m\033[97m" // Red background, white text (current match)
 	reset := "\033[0m"
-	
-	// 简单匹配高亮
+
+	// Simple match highlighting
 	if isCurrentMatch {
 		return currentColor + text + reset
 	}
-	
+
 	return text
 }
 
@@ -704,13 +704,13 @@ func (m model) renderTable(b *strings.Builder) {
 		b.WriteString("No data\n")
 		return
 	}
-	
+
 	cols := m.state.reader.Columns()
-	
-	// 确定显示的列 - 根据水平滚动偏移和终端宽度
+
+	// Determine columns to display - based on horizontal scroll offset and terminal width
 	displayCols := m.getVisibleColumns(cols)
-	
-	// 计算列宽 - 使用用户设置或内容实际长度
+
+	// Calculate column width - use user setting or actual content length
 	widths := make([]int, len(displayCols))
 	for i, colIdx := range displayCols {
 		if int(colIdx) < len(cols) {
@@ -720,13 +720,13 @@ func (m model) renderTable(b *strings.Builder) {
 			}
 		}
 	}
-	
-	// 根据数据调整列宽
+
+	// Adjust column width based on data
 	for _, row := range rows {
 		for i, cell := range row {
 			if i < len(widths) {
 				cellLen := len(cell)
-				// 如果用户设置了宽度限制，使用设置值；否则使用内容长度
+				// If user set width limit, use that value; otherwise use content length
 				if m.state.maxColWidth > 0 {
 					if cellLen > m.state.maxColWidth {
 						cellLen = m.state.maxColWidth
@@ -738,8 +738,8 @@ func (m model) renderTable(b *strings.Builder) {
 			}
 		}
 	}
-	
-	// 表头
+
+	// Table header
 	b.WriteString("┌────────────┬")
 	for i, w := range widths {
 		b.WriteString(strings.Repeat("─", w+2))
@@ -748,8 +748,8 @@ func (m model) renderTable(b *strings.Builder) {
 		}
 	}
 	b.WriteString("┐\n")
-	
-	// 列标题
+
+	// Column headers
 	b.WriteString("│ RowNum     │")
 	for i, colIdx := range displayCols {
 		if int(colIdx) < len(cols) {
@@ -763,8 +763,8 @@ func (m model) renderTable(b *strings.Builder) {
 		}
 	}
 	b.WriteString("\n")
-	
-	// 分隔线
+
+	// Separator line
 	b.WriteString("├────────────┼")
 	for i, w := range widths {
 		b.WriteString(strings.Repeat("─", w+2))
@@ -773,28 +773,28 @@ func (m model) renderTable(b *strings.Builder) {
 		}
 	}
 	b.WriteString("┤\n")
-	
-	// 数据行
+
+	// Data rows
 	for i, row := range rows {
 		fmt.Fprintf(b, "│ %-10s │", rowNumbers[i])
 		for j, colIdx := range displayCols {
 			if j < len(widths) && j < len(row) {
-				cell := row[j]  // 使用 j 而不是 colIdx
-				// 根据用户设置的宽度截断内容
+				cell := row[j] // Use j instead of colIdx
+				// Truncate content based on user-set width
 				if m.state.maxColWidth > 0 && len(cell) > m.state.maxColWidth {
 					cell = cell[:m.state.maxColWidth-3] + "..."
 				}
-				
-				// 高亮搜索匹配
+
+				// Highlight search match
 				cell = m.highlightSearchMatch(cell, int64(i)+m.state.GlobalRowOffset(), int(colIdx))
-				
+
 				fmt.Fprintf(b, " %-*s │", widths[j], cell)
 			}
 		}
 		b.WriteString("\n")
 	}
-	
-	// 表尾
+
+	// Table footer
 	b.WriteString("└────────────┴")
 	for i, w := range widths {
 		b.WriteString(strings.Repeat("─", w+2))
@@ -811,7 +811,7 @@ func (m model) renderVertical(b *strings.Builder) {
 		b.WriteString("No data\n")
 		return
 	}
-	
+
 	cols := m.state.reader.Columns()
 	displayCols := m.state.visibleCols
 	if displayCols == nil {
@@ -820,10 +820,10 @@ func (m model) renderVertical(b *strings.Builder) {
 			displayCols[i] = uint16(i)
 		}
 	}
-	
-	// 在搜索模式下，只显示匹配的行
+
+	// In search mode, only show matching rows
 	if m.hasMatch && m.searchTerm != "" {
-		// 找到匹配行在当前页面中的索引
+		// Find index of matching row in current page
 		matchRowInPage := -1
 		for i, rowNum := range rowNumbers {
 			if rowNum == m.currentMatch.RowNum {
@@ -831,136 +831,136 @@ func (m model) renderVertical(b *strings.Builder) {
 				break
 			}
 		}
-		
+
 		if matchRowInPage >= 0 && matchRowInPage < len(rows) {
-			// 只显示匹配的行
+			// Only show matching row
 			rows = [][]string{rows[matchRowInPage]}
 			rowNumbers = []string{rowNumbers[matchRowInPage]}
 		}
 	}
-	
-	// 显示行
+
+	// Display row
 	for rowIdx, row := range rows {
 		fmt.Fprintf(b, "*************************** %s ***************************\n", rowNumbers[rowIdx])
 		for j, colIdx := range displayCols {
 			if j < len(row) && int(colIdx) < len(cols) {
 				col := cols[colIdx]
 				value := row[j]
-				
-				// 根据用户设置的宽度截断内容
+
+				// Truncate content based on user-set width
 				if m.state.maxColWidth > 0 && len(value) > m.state.maxColWidth {
 					value = value[:m.state.maxColWidth-3] + "..."
 				}
-				
-				// 高亮搜索匹配
+
+				// Highlight search match
 				value = m.highlightSearchMatch(value, int64(rowIdx)+m.state.GlobalRowOffset(), int(colIdx))
-				
-				// 使用自定义列名或默认列名
+
+				// Use custom column name or default column name
 				colName := fmt.Sprintf("Col%d", colIdx)
 				if m.state.colNames != nil {
 					if customName, exists := m.state.colNames[colIdx]; exists {
 						colName = customName
 					}
 				}
-				
+
 				fmt.Fprintf(b, "%15s (%s): %s\n", col.Type.String(), colName, value)
 			}
 		}
 		if rowIdx < len(rows)-1 {
-			b.WriteString("\n") // 行之间空一行
+			b.WriteString("\n") // Empty line between rows
 		}
 	}
 }
 
-// RunBubbletea 使用 Bubbletea 运行交互界面
+// RunBubbletea runs interactive interface using Bubbletea
 func RunBubbletea(path string) error {
 	ctx := context.Background()
-	
+
 	reader, err := objecttool.Open(ctx, path)
 	if err != nil {
 		return fmt.Errorf("failed to open object: %w", err)
 	}
 	defer reader.Close()
-	
+
 	state := NewState(ctx, reader)
 	defer state.Close()
-	
+
 	m := model{
 		state: state,
 	}
-	
-	// 加载历史记录
+
+	// Load history
 	m.loadHistory()
-	
+
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	result, err := p.Run()
-	
-	// 保存历史记录
+
+	// Save history
 	if finalModel, ok := result.(model); ok {
 		finalModel.saveHistory()
 	}
-	
+
 	return err
 }
 
-// completeCommand 实现智能命令补全
+// completeCommand implements smart command completion
 func (m model) completeCommand(input string) string {
 	parts := strings.Fields(input)
 	if len(parts) == 0 {
 		return ""
 	}
-	
-	// 如果只有一个词，尝试补全命令名
+
+	// If only one word, try to complete command name
 	if len(parts) == 1 {
 		completed := m.completeCommandName(parts[0])
-		// 如果补全结果不同于输入，返回补全结果
+		// If completion differs from input, return completion result
 		if completed != parts[0] && completed != "" {
 			return completed
 		}
-		// 如果是已知的完整命令，尝试补全参数
+		// If it's a known complete command, try to complete parameters
 		commands := []string{"quit", "info", "schema", "format", "vertical", "table", "set", "vrows", "search", "cols", "help"}
 		for _, cmd := range commands {
 			if parts[0] == cmd {
 				return m.completeCommandArgs(parts)
 			}
 		}
-		// 否则返回原始补全结果（可能是公共前缀）
+		// Otherwise return original completion result (might be common prefix)
 		return completed
 	}
-	
-	// 多个词，补全参数
+
+	// Multiple words, complete parameters
 	return m.completeCommandArgs(parts)
 }
 
-// completeCommandName 补全命令名
+// completeCommandName completes command name
 func (m model) completeCommandName(input string) string {
 	commands := []string{
-		"quit", "q", "info", "schema", "format", "vertical", "v", 
+		"quit", "q", "info", "schema", "format", "vertical", "v",
 		"table", "t", "set", "vrows", "search", "cols", "help",
 	}
-	
+
 	var matches []string
 	for _, cmd := range commands {
 		if strings.HasPrefix(cmd, input) {
 			matches = append(matches, cmd)
 		}
 	}
-	
+
 	if len(matches) == 1 {
 		return matches[0]
 	}
-	
+
 	if len(matches) > 1 {
 		return longestCommonPrefix(matches)
 	}
-	
+
 	return ""
 }
 
-// completeCommandArgs 补全命令参数
+// completeCommandArgs completes command arguments
 func (m model) completeCommandArgs(parts []string) string {
 	cmd := parts[0]
-	
+
 	switch cmd {
 	case "format":
 		if len(parts) == 1 {
@@ -993,16 +993,16 @@ func (m model) completeCommandArgs(parts []string) string {
 			return cmd + " 10"
 		}
 	}
-	
+
 	return ""
 }
 
-// longestCommonPrefix 计算字符串数组的最长公共前缀
+// longestCommonPrefix calculates longest common prefix of string array
 func longestCommonPrefix(strs []string) string {
 	if len(strs) == 0 {
 		return ""
 	}
-	
+
 	prefix := strs[0]
 	for _, str := range strs[1:] {
 		for len(prefix) > 0 && !strings.HasPrefix(str, prefix) {
@@ -1015,37 +1015,37 @@ func longestCommonPrefix(strs []string) string {
 	return prefix
 }
 
-// getVisibleColumns 根据水平滚动偏移计算可见的列
+// getVisibleColumns calculates visible columns based on horizontal scroll offset
 func (m model) getVisibleColumns(cols []objecttool.ColInfo) []uint16 {
-	// 如果用户设置了特定的可见列，优先使用
+	// If user set specific visible columns, use them first
 	if m.state.visibleCols != nil {
 		return m.state.visibleCols
 	}
-	
-	// 显示更多列，不受终端宽度限制（由表格渲染时处理截断）
+
+	// Show more columns, not limited by terminal width (truncation handled by table rendering)
 	var visibleCols []uint16
 	startCol := m.hScrollOffset
-	maxCols := 15 // 一次最多显示15列
-	
+	maxCols := 15 // Display at most 15 columns at once
+
 	for i := startCol; i < len(cols) && len(visibleCols) < maxCols; i++ {
 		visibleCols = append(visibleCols, uint16(i))
 	}
-	
+
 	return visibleCols
 }
 
-// loadHistory 加载历史记录
+// loadHistory loads command history
 func (m *model) loadHistory() {
 	historyFile := getHistoryFile()
 	if historyFile == "" {
 		return
 	}
-	
+
 	data, err := os.ReadFile(historyFile)
 	if err != nil {
 		return
 	}
-	
+
 	lines := strings.Split(string(data), "\n")
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
@@ -1056,28 +1056,28 @@ func (m *model) loadHistory() {
 	m.historyIndex = len(m.cmdHistory)
 }
 
-// saveHistory 保存历史记录
+// saveHistory saves command history
 func (m *model) saveHistory() {
 	historyFile := getHistoryFile()
 	if historyFile == "" {
 		return
 	}
-	
-	// 确保目录存在
+
+	// Ensure directory exists
 	dir := filepath.Dir(historyFile)
 	os.MkdirAll(dir, 0755)
-	
-	// 只保存最近100条记录
+
+	// Only save last 100 records
 	start := 0
 	if len(m.cmdHistory) > 100 {
 		start = len(m.cmdHistory) - 100
 	}
-	
+
 	content := strings.Join(m.cmdHistory[start:], "\n")
 	os.WriteFile(historyFile, []byte(content), 0644)
 }
 
-// getHistoryFile 获取历史记录文件路径
+// getHistoryFile gets history file path
 func getHistoryFile() string {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -1086,24 +1086,24 @@ func getHistoryFile() string {
 	return filepath.Join(homeDir, ".mo_object_history")
 }
 
-// SearchCommand 搜索命令
+// SearchCommand is the search command
 type SearchCommand struct {
 	Pattern string
 }
 
 func (c *SearchCommand) Execute(state *State) (string, bool, error) {
-	// 简单的文本搜索实现
+	// Simple text search implementation
 	rows, _, err := state.CurrentRows()
 	if err != nil {
 		return "", false, err
 	}
-	
+
 	var matches []string
 	for i, row := range rows {
 		for j, cell := range row {
 			if strings.Contains(strings.ToLower(cell), strings.ToLower(c.Pattern)) {
 				matches = append(matches, fmt.Sprintf("Row %d, Col %d: %s", i, j, cell))
-				if len(matches) >= 10 { // 限制显示前10个匹配
+				if len(matches) >= 10 { // Limit to first 10 matches
 					break
 				}
 			}
@@ -1112,20 +1112,20 @@ func (c *SearchCommand) Execute(state *State) (string, bool, error) {
 			break
 		}
 	}
-	
+
 	if len(matches) == 0 {
 		return fmt.Sprintf("No matches found for: %s", c.Pattern), false, nil
 	}
-	
+
 	result := fmt.Sprintf("Found %d matches for '%s':\n", len(matches), c.Pattern)
 	for _, match := range matches {
 		result += "  " + match + "\n"
 	}
-	
+
 	return result, false, nil
 }
 
-// ColumnsCommand 列过滤命令
+// ColumnsCommand is the column filter command
 type ColumnsCommand struct {
 	ShowAll bool
 	Columns []uint16
@@ -1136,20 +1136,20 @@ func (c *ColumnsCommand) Execute(state *State) (string, bool, error) {
 		state.visibleCols = nil
 		return "Showing all columns", false, nil
 	}
-	
-	// 验证列索引
+
+	// Validate column indices
 	totalCols := len(state.reader.Columns())
 	for _, col := range c.Columns {
 		if int(col) >= totalCols {
 			return fmt.Sprintf("Column %d out of range (0-%d)", col, totalCols-1), false, nil
 		}
 	}
-	
+
 	state.visibleCols = c.Columns
 	return fmt.Sprintf("Showing columns: %v", c.Columns), false, nil
 }
 
-// VRowsCommand 设置 vertical 模式显示行数
+// VRowsCommand sets number of rows to display in vertical mode
 type VRowsCommand struct {
 	Rows int
 }
@@ -1162,7 +1162,7 @@ func (c *VRowsCommand) Execute(state *State) (string, bool, error) {
 	return "Command only works in vertical mode. Use :vertical first", false, nil
 }
 
-// RenameCommand 重命名列
+// RenameCommand renames a column
 type RenameCommand struct {
 	ColIndex uint16
 	NewName  string
@@ -1173,11 +1173,11 @@ func (c *RenameCommand) Execute(state *State) (string, bool, error) {
 	if int(c.ColIndex) >= len(cols) {
 		return fmt.Sprintf("Column %d out of range (0-%d)", c.ColIndex, len(cols)-1), false, nil
 	}
-	
+
 	if state.colNames == nil {
 		state.colNames = make(map[uint16]string)
 	}
 	state.colNames[c.ColIndex] = c.NewName
-	
+
 	return fmt.Sprintf("Renamed Col%d to %s", c.ColIndex, c.NewName), false, nil
 }
