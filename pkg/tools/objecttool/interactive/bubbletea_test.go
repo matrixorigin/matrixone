@@ -268,25 +268,16 @@ func TestModel_SearchMatches(t *testing.T) {
 	}
 	
 	m := model{
-		state: mockState,
-		searchMatches: []SearchMatch{
-			{Row: 0, Col: 0, Value: "match1"},
-			{Row: 1, Col: 1, Value: "match2"},
-			{Row: 2, Col: 2, Value: "match3"},
-		},
-		currentMatch: 0,
+		state:        mockState,
+		searchTerm:   "test",
+		hasMatch:     true,
+		currentMatch: SearchMatch{Row: 0, Col: 0, Value: "match1", RowNum: "(0-0)", ColumnName: "Col0"},
 	}
 	
-	// Test that we can access search matches without crashing
-	assert.Equal(t, 3, len(m.searchMatches))
-	assert.Equal(t, 0, m.currentMatch)
-	
-	// Test match cycling logic (without calling methods that need full state)
-	m.currentMatch = (m.currentMatch + 1) % len(m.searchMatches)
-	assert.Equal(t, 1, m.currentMatch)
-	
-	m.currentMatch = (m.currentMatch - 1 + len(m.searchMatches)) % len(m.searchMatches)
-	assert.Equal(t, 0, m.currentMatch)
+	// Test that we can access search match without crashing
+	assert.True(t, m.hasMatch)
+	assert.Equal(t, int64(0), m.currentMatch.Row)
+	assert.Equal(t, "match1", m.currentMatch.Value)
 }
 
 func TestCompleteCommand(t *testing.T) {

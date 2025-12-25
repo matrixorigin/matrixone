@@ -773,8 +773,8 @@ func (m model) renderTable(b *strings.Builder) {
 	for i, row := range rows {
 		fmt.Fprintf(b, "│ %-10s │", rowNumbers[i])
 		for j, colIdx := range displayCols {
-			if j < len(widths) && int(colIdx) < len(row) {
-				cell := row[colIdx]
+			if j < len(widths) && j < len(row) {
+				cell := row[j]  // 使用 j 而不是 colIdx
 				// 根据用户设置的宽度截断内容
 				if m.state.maxColWidth > 0 && len(cell) > m.state.maxColWidth {
 					cell = cell[:m.state.maxColWidth-3] + "..."
