@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"go.uber.org/zap"
 )
 
 var _ SQLExecutor = (*InternalSQLExecutor)(nil)
@@ -53,7 +54,7 @@ type UpstreamSQLHelperFactory func(
 ) UpstreamSQLHelper
 
 // InternalSQLExecutor implements SQLExecutor interface using MatrixOne's internal SQL executor
-// It does not support retry or circuit breaker, and uses the internal SQL builder
+// It supports retry for RC mode transaction errors (txn need retry errors)
 // If upstreamSQLHelper is provided, special statements (CREATE/DROP SNAPSHOT, OBJECTLIST, GET OBJECT)
 // will be routed through the helper
 type InternalSQLExecutor struct {
@@ -64,6 +65,8 @@ type InternalSQLExecutor struct {
 	engine            engine.Engine
 	accountID         uint32            // Account ID for tenant context
 	upstreamSQLHelper UpstreamSQLHelper // Optional helper for special SQL statements
+	maxRetries        int               // Maximum number of retries for retryable errors
+	retryInterval     time.Duration     // Interval between retries
 }
 
 // SetUpstreamSQLHelper sets the upstream SQL helper
@@ -104,11 +107,13 @@ func NewInternalSQLExecutor(
 	}
 
 	return &InternalSQLExecutor{
-		cnUUID:       cnUUID,
-		internalExec: internalExec,
-		txnClient:    txnClient,
-		engine:       engine,
-		accountID:    accountID,
+		cnUUID:        cnUUID,
+		internalExec:  internalExec,
+		txnClient:     txnClient,
+		engine:        engine,
+		accountID:     accountID,
+		maxRetries:    5,                     // Default max retries
+		retryInterval: 10 * time.Millisecond, // Default retry interval
 	}, nil
 }
 
@@ -198,7 +203,7 @@ func (e *InternalSQLExecutor) ExecSQL(ctx context.Context, query string) (*Resul
 }
 
 // ExecSQLWithOptions executes a SQL statement with additional options
-// Note: needRetry and ar parameters are ignored for internal executor
+// It supports automatic retry for RC mode transaction errors (txn need retry errors)
 // If session is set and the statement is CREATE/DROP SNAPSHOT, OBJECTLIST, or GET OBJECT,
 // it will be routed through frontend layer
 func (e *InternalSQLExecutor) ExecSQLWithOptions(
@@ -235,7 +240,7 @@ func (e *InternalSQLExecutor) ExecSQLWithOptions(
 		}
 	}
 
-	// For other statements, use internal executor
+	// For other statements, use internal executor with retry logic
 	opts := executor.Options{}.
 		WithDisableIncrStatement()
 
@@ -243,18 +248,124 @@ func (e *InternalSQLExecutor) ExecSQLWithOptions(
 		opts = opts.WithTxn(e.txnOp)
 	}
 
-	execResult, err := e.internalExec.Exec(execCtx, query, opts)
-	if err != nil {
-		return nil, err
+	// Retry loop for retryable errors
+	var execResult executor.Result
+	var err error
+	var lastErr error
+	retryCount := 0
+
+	for retryCount <= e.maxRetries {
+		execResult, err = e.internalExec.Exec(execCtx, query, opts)
+		if err == nil {
+			// Success, return result
+			if retryCount > 0 {
+				logutil.Info("internal sql executor retry succeeded",
+					zap.String("query", truncateSQL(query)),
+					zap.Int("retryCount", retryCount),
+				)
+			}
+			return convertExecutorResult(execResult), nil
+		}
+
+		// Check if error is retryable
+		if !e.isRetryableError(err) {
+			// Not retryable, return error immediately
+			return nil, err
+		}
+
+		lastErr = err
+		retryCount++
+
+		// Log retry attempt
+		defChanged := moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)
+		logutil.Warn("internal sql executor retry attempt",
+			zap.String("query", truncateSQL(query)),
+			zap.Int("retryCount", retryCount),
+			zap.Int("maxRetries", e.maxRetries),
+			zap.Bool("defChanged", defChanged),
+			zap.Error(err),
+		)
+
+		// If defChanged, wait a bit longer for DDL to complete
+		if defChanged && retryCount == 1 {
+			// First retry after defChanged, wait a bit longer
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(e.retryInterval * 2):
+			}
+		} else {
+			// Regular retry interval
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(e.retryInterval):
+			}
+		}
+
+		// Check for cancellation before retry
+		if ar != nil {
+			select {
+			case <-ar.Pause:
+				return nil, moerr.NewInternalError(ctx, "task paused")
+			case <-ar.Cancel:
+				return nil, moerr.NewInternalError(ctx, "task cancelled")
+			default:
+			}
+		}
 	}
 
-	// Convert executor.Result to publication.Result
-	return convertExecutorResult(execResult), nil
+	// Max retries exceeded
+	logutil.Error("internal sql executor max retries exceeded",
+		zap.String("query", truncateSQL(query)),
+		zap.Int("retryCount", retryCount),
+		zap.Error(lastErr),
+	)
+	return nil, lastErr
 }
 
 // HasActiveTx returns true if there's an active transaction
 func (e *InternalSQLExecutor) HasActiveTx() bool {
 	return e.txnOp != nil
+}
+
+// SetMaxRetries sets the maximum number of retries for retryable errors
+func (e *InternalSQLExecutor) SetMaxRetries(maxRetries int) {
+	if maxRetries < 0 {
+		maxRetries = 0
+	}
+	e.maxRetries = maxRetries
+}
+
+// SetRetryInterval sets the interval between retries
+func (e *InternalSQLExecutor) SetRetryInterval(interval time.Duration) {
+	if interval < 0 {
+		interval = 0
+	}
+	e.retryInterval = interval
+}
+
+// isRetryableError checks if an error is retryable in RC mode
+func (e *InternalSQLExecutor) isRetryableError(err error) bool {
+	if err == nil {
+		return false
+	}
+	// Check if transaction is in RC mode
+	if e.txnOp != nil && e.txnOp.Txn().IsRCIsolation() {
+		// Check for retry errors
+		return moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
+			moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)
+	}
+	return false
+}
+
+// truncateSQL truncates SQL string for logging
+func truncateSQL(sql string) string {
+	const maxLen = 200
+	if len(sql) <= maxLen {
+		return sql
+	}
+	return sql[:maxLen] + "..."
 }
 
 // convertExecutorResult converts executor.Result (with Batches) to publication.Result
