@@ -816,11 +816,35 @@ func GetObjectListFromSnapshotDiff(
 		againstSnapshotName,
 	)
 
+	// Log before getting object list
+	logutil.Info("ccpr-iteration getting object list",
+		zap.Uint64("task_id", iterationCtx.TaskID),
+		zap.Uint64("lsn", iterationCtx.IterationLSN),
+		zap.String("db_name", dbName),
+		zap.String("table_name", tableName),
+		zap.String("current_snapshot", iterationCtx.CurrentSnapshotName),
+		zap.String("against_snapshot", againstSnapshotName),
+	)
+
 	// Execute SQL through upstream executor and return result directly
 	result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, objectListSQL)
 	if err != nil {
+		logutil.Error("ccpr-iteration failed to get object list",
+			zap.Uint64("task_id", iterationCtx.TaskID),
+			zap.Uint64("lsn", iterationCtx.IterationLSN),
+			zap.String("db_name", dbName),
+			zap.String("table_name", tableName),
+			zap.Error(err),
+		)
 		return nil, moerr.NewInternalErrorf(ctx, "failed to execute object list query: %v", err)
 	}
+
+	logutil.Info("ccpr-iteration got object list result",
+		zap.Uint64("task_id", iterationCtx.TaskID),
+		zap.Uint64("lsn", iterationCtx.IterationLSN),
+		zap.String("db_name", dbName),
+		zap.String("table_name", tableName),
+	)
 
 	return result, nil
 }
@@ -1343,8 +1367,17 @@ func ExecuteIteration(
 		// Get snapshot TS from iteration context
 		snapshotTS := iterationCtx.CurrentSnapshotTS
 
+		// Log start of object list iteration
+		logutil.Info("ccpr-iteration starting to iterate object list",
+			zap.Uint64("task_id", iterationCtx.TaskID),
+			zap.Uint64("lsn", iterationCtx.IterationLSN),
+			zap.Int64("snapshot_ts", snapshotTS.Physical()),
+		)
+
+		objectCount := 0
 		// Iterate through object list
 		for objectListResult.Next() {
+			objectCount++
 			// Read columns: db name, table name, object stats, create at, delete at, is tombstone
 			var dbName, tableName string
 			var statsBytes []byte
@@ -1402,11 +1435,36 @@ func ExecuteIteration(
 
 		}
 
+		// Log end of object list iteration
+		logutil.Info("ccpr-iteration finished iterating object list",
+			zap.Uint64("task_id", iterationCtx.TaskID),
+			zap.Uint64("lsn", iterationCtx.IterationLSN),
+			zap.Int("total_objects", objectCount),
+			zap.Int("unique_objects", len(objectMap)),
+		)
+
 		// Extract objects from map to collected stats lists
 		for _, info := range objectMap {
 			statsBytes := info.Stats.Marshal()
 			delete := info.Delete
+			objID := info.Stats.ObjectName().ObjectId()
+			objName := info.Stats.ObjectName().String()
+
 			if info.Stats.GetAppendable() {
+				// Log before registering object operation for aobj
+				logutil.Info("ccpr-iteration registering object operation",
+					zap.Uint64("task_id", iterationCtx.TaskID),
+					zap.Uint64("lsn", iterationCtx.IterationLSN),
+					zap.String("db_name", info.DBName),
+					zap.String("table_name", info.TableName),
+					zap.String("object_name", objName),
+					zap.String("object_id", objID.ShortStringEx()),
+					zap.Bool("is_appendable", true),
+					zap.Bool("is_tombstone", info.IsTombstone),
+					zap.Bool("delete", delete),
+					zap.String("operation", "filter_aobj"),
+				)
+
 				if err = FilterObject(ctx, statsBytes, snapshotTS, iterationCtx, fs, mp, delete); err != nil {
 					err = moerr.NewInternalErrorf(ctx, "failed to filter object: %v", err)
 					return
@@ -1427,6 +1485,23 @@ func ExecuteIteration(
 				// - For aobj: get object from upstream, convert to batch, filter by snapshot TS, create new object
 				//   For delete: mark object for deletion in ActiveAObj
 				// - For nobj: get object from upstream and write directly to fileservice
+
+				// Log before registering object operation for nobj
+				objID := info.Stats.ObjectName().ObjectId()
+				objName := info.Stats.ObjectName().String()
+				logutil.Info("ccpr-iteration registering object operation",
+					zap.Uint64("task_id", iterationCtx.TaskID),
+					zap.Uint64("lsn", iterationCtx.IterationLSN),
+					zap.String("db_name", info.DBName),
+					zap.String("table_name", info.TableName),
+					zap.String("object_name", objName),
+					zap.String("object_id", objID.ShortStringEx()),
+					zap.Bool("is_appendable", false),
+					zap.Bool("is_tombstone", info.IsTombstone),
+					zap.Bool("delete", delete),
+					zap.String("operation", "filter_nobj"),
+				)
+
 				if err = FilterObject(ctx, statsBytes, snapshotTS, iterationCtx, fs, mp, delete); err != nil {
 					err = moerr.NewInternalErrorf(ctx, "failed to filter object: %v", err)
 					return
@@ -1444,6 +1519,13 @@ func ExecuteIteration(
 	// Process ActiveAObj and merge into collected stats
 	// All objects (aobj and nobj) will be submitted together after processing
 	if iterationCtx.ActiveAObj != nil {
+		// Log start of ActiveAObj processing
+		logutil.Info("ccpr-iteration processing ActiveAObj",
+			zap.Uint64("task_id", iterationCtx.TaskID),
+			zap.Uint64("lsn", iterationCtx.IterationLSN),
+			zap.Int("active_aobj_count", len(iterationCtx.ActiveAObj)),
+		)
+
 		var objectsToDelete []objectio.ObjectId // Track UUIDs to delete from map
 
 		for upstreamUUID, mapping := range iterationCtx.ActiveAObj {
@@ -1454,6 +1536,20 @@ func ExecuteIteration(
 			isTombstone := upstreamInfo.IsTombstone
 			dbName := upstreamInfo.DBName
 			tableName := upstreamInfo.TableName
+
+			// Log registering object operation from ActiveAObj
+			logutil.Info("ccpr-iteration registering object operation from ActiveAObj",
+				zap.Uint64("task_id", iterationCtx.TaskID),
+				zap.Uint64("lsn", iterationCtx.IterationLSN),
+				zap.String("db_name", dbName),
+				zap.String("table_name", tableName),
+				zap.String("upstream_uuid", upstreamUUID.ShortStringEx()),
+				zap.Bool("is_tombstone", isTombstone),
+				zap.Bool("delete", mapping.Delete),
+				zap.Bool("has_current", !mapping.Current.IsZero()),
+				zap.Bool("has_previous", !mapping.Previous.IsZero()),
+			)
+
 			// If delete is true, delete the object and remove from map
 			if mapping.Delete {
 				// Delete previous object if it exists (previous object was created in earlier iteration)
@@ -1535,6 +1631,13 @@ func ExecuteIteration(
 		for _, uuid := range objectsToDelete {
 			delete(iterationCtx.ActiveAObj, uuid)
 		}
+
+		// Log end of ActiveAObj processing
+		logutil.Info("ccpr-iteration finished processing ActiveAObj",
+			zap.Uint64("task_id", iterationCtx.TaskID),
+			zap.Uint64("lsn", iterationCtx.IterationLSN),
+			zap.Int("remaining_active_aobj_count", len(iterationCtx.ActiveAObj)),
+		)
 	}
 
 	// Submit all collected objects to TN in order: tombstone delete -> tombstone insert -> data delete -> data insert
@@ -1543,8 +1646,23 @@ func ExecuteIteration(
 	downstreamCtx := context.WithValue(ctx, defines.TenantIDKey{}, iterationCtx.SrcInfo.AccountID)
 	downstreamCtx = context.WithValue(downstreamCtx, defines.PkCheckByTN{}, int8(cmd_util.SkipAllDedup))
 
+	// Log summary before submitting objects
+	logutil.Info("ccpr-iteration preparing to submit objects",
+		zap.Uint64("task_id", iterationCtx.TaskID),
+		zap.Uint64("lsn", iterationCtx.IterationLSN),
+		zap.Int("tombstone_delete_count", len(collectedTombstoneDeleteStats)),
+		zap.Int("tombstone_insert_count", len(collectedTombstoneInsertStats)),
+		zap.Int("data_delete_count", len(collectedDataDeleteStats)),
+		zap.Int("data_insert_count", len(collectedDataInsertStats)),
+	)
+
 	// 1. Submit tombstone delete objects (soft delete)
 	if len(collectedTombstoneDeleteStats) > 0 {
+		logutil.Info("ccpr-iteration submitting tombstone delete objects",
+			zap.Uint64("task_id", iterationCtx.TaskID),
+			zap.Uint64("lsn", iterationCtx.IterationLSN),
+			zap.Int("count", len(collectedTombstoneDeleteStats)),
+		)
 		if err = submitObjectsAsDelete(downstreamCtx, iterationCtx, cnEngine, collectedTombstoneDeleteStats, mp); err != nil {
 			err = moerr.NewInternalErrorf(ctx, "failed to submit tombstone delete objects: %v", err)
 			return
@@ -1553,6 +1671,11 @@ func ExecuteIteration(
 
 	// 2. Submit tombstone insert objects
 	if len(collectedTombstoneInsertStats) > 0 {
+		logutil.Info("ccpr-iteration submitting tombstone insert objects",
+			zap.Uint64("task_id", iterationCtx.TaskID),
+			zap.Uint64("lsn", iterationCtx.IterationLSN),
+			zap.Int("count", len(collectedTombstoneInsertStats)),
+		)
 		if err = submitObjectsAsInsert(downstreamCtx, iterationCtx, cnEngine, collectedTombstoneInsertStats, nil, mp); err != nil {
 			err = moerr.NewInternalErrorf(ctx, "failed to submit tombstone insert objects: %v", err)
 			return
@@ -1561,6 +1684,11 @@ func ExecuteIteration(
 
 	// 3. Submit data delete objects (soft delete)
 	if len(collectedDataDeleteStats) > 0 {
+		logutil.Info("ccpr-iteration submitting data delete objects",
+			zap.Uint64("task_id", iterationCtx.TaskID),
+			zap.Uint64("lsn", iterationCtx.IterationLSN),
+			zap.Int("count", len(collectedDataDeleteStats)),
+		)
 		if err = submitObjectsAsDelete(downstreamCtx, iterationCtx, cnEngine, collectedDataDeleteStats, mp); err != nil {
 			err = moerr.NewInternalErrorf(ctx, "failed to submit data delete objects: %v", err)
 			return
@@ -1569,11 +1697,22 @@ func ExecuteIteration(
 
 	// 4. Submit data insert objects
 	if len(collectedDataInsertStats) > 0 {
+		logutil.Info("ccpr-iteration submitting data insert objects",
+			zap.Uint64("task_id", iterationCtx.TaskID),
+			zap.Uint64("lsn", iterationCtx.IterationLSN),
+			zap.Int("count", len(collectedDataInsertStats)),
+		)
 		if err = submitObjectsAsInsert(downstreamCtx, iterationCtx, cnEngine, nil, collectedDataInsertStats, mp); err != nil {
 			err = moerr.NewInternalErrorf(ctx, "failed to submit data insert objects: %v", err)
 			return
 		}
 	}
+
+	// Log completion of all object submissions
+	logutil.Info("ccpr-iteration finished submitting all objects",
+		zap.Uint64("task_id", iterationCtx.TaskID),
+		zap.Uint64("lsn", iterationCtx.IterationLSN),
+	)
 
 	return
 }
