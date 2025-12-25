@@ -126,15 +126,19 @@ type Config struct {
 	}
 
 	GCCfg struct {
-		GCTTL          toml.Duration `toml:"gc-ttl"`
-		GCInMemoryTTL  toml.Duration `toml:"gc-in-memory-ttl"`
-		ScanGCInterval toml.Duration `toml:"scan-gc-interval"`
-		DisableGC      bool          `toml:"disable-gc"`
-		CheckGC        bool          `toml:"check-gc"`
-		CacheSize      int           `toml:"cache-size"`
-		GCMergeCount   int           `toml:"gc-merge-count"`
-		GCestimateRows int           `toml:"gc-estimate-rows"`
-		GCProbility    float64       `toml:"gc-probility"`
+		GCTTL             toml.Duration `toml:"gc-ttl"`
+		GCInMemoryTTL     toml.Duration `toml:"gc-in-memory-ttl"`
+		ScanGCInterval    toml.Duration `toml:"scan-gc-interval"`
+		DisableGC         bool          `toml:"disable-gc"`
+		CheckGC           bool          `toml:"check-gc"`
+		CacheSize         int           `toml:"cache-size"`
+		GCMergeCount      int           `toml:"gc-merge-count"`
+		GCScanCount       int           `toml:"gc-scan-count"`
+		GCestimateRows    int           `toml:"gc-estimate-rows"`
+		GCProbility       float64       `toml:"gc-probility"`
+		GCDeleteTimeout   toml.Duration `toml:"gc-delete-timeout"`
+		GCDeleteBatchSize int           `toml:"gc-delete-batch-size"`
+		GCDeleteWorkerNum int           `toml:"gc-delete-worker-num"`
 	}
 
 	Merge struct {
