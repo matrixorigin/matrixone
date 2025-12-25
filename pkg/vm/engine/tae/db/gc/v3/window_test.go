@@ -21,7 +21,6 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
-	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -523,11 +522,9 @@ func TestMultiTableGCWithRealCheckpointData(t *testing.T) {
 // before being sent to the deleter. This is the fix for the issue where
 // the same object could appear multiple times in filesToGC when referenced
 // by multiple tables.
-// Note: Using bloom filter for deduplication, which may have small false positive rate.
 func TestFilesToGCDeduplication(t *testing.T) {
 	// Simulate the deduplication logic used in ExecuteGlobalCheckpointBasedGC
-	// This tests the bloom filter based deduplication approach
-	mp := mpool.MustNewZeroNoFixed()
+	// This tests the map-based deduplication approach
 
 	// Create a list of file names with duplicates (simulating the bug scenario)
 	// In the original bug, vecToGC could contain the same object name multiple times
@@ -542,68 +539,74 @@ func TestFilesToGCDeduplication(t *testing.T) {
 		"018f4567-89ab-cdef-0123-456789abcdef_0.data",
 	}
 
-	// Build candidate vector (simulating what bf.Test produces)
-	candidateFiles := vector.NewVec(types.T_varchar.ToType())
-	defer candidateFiles.Free(mp)
+	// Apply the deduplication logic (same as in ExecuteGlobalCheckpointBasedGC)
+	filesToGCSet := make(map[string]struct{})
 	for _, file := range duplicateFiles {
-		_ = vector.AppendBytes(candidateFiles, []byte(file), false, mp)
+		filesToGCSet[file] = struct{}{}
 	}
 
-	// Apply bloom filter deduplication (same as in ExecuteGlobalCheckpointBasedGC)
-	dedupBF := bloomfilter.New(int64(candidateFiles.Length()), 0.01)
-	filesToGC := make([]string, 0, candidateFiles.Length()/2)
-	dedupBF.TestAndAdd(candidateFiles, func(found bool, i int) {
-		if !found {
-			filesToGC = append(filesToGC, string(candidateFiles.GetBytesAt(i)))
-		}
-	})
+	filesToGC := make([]string, 0, len(filesToGCSet))
+	for file := range filesToGCSet {
+		filesToGC = append(filesToGC, file)
+	}
 
 	// Verify deduplication worked correctly
-	// With bloom filter, we expect approximately 4 unique files (may have slight variation due to false positives)
-	require.LessOrEqual(t, len(filesToGC), 5, "Should have at most 5 files (4 unique + possible false negative)")
-	require.GreaterOrEqual(t, len(filesToGC), 3, "Should have at least 3 files (bloom filter may have false positives)")
+	require.Equal(t, 4, len(filesToGC), "Should have 4 unique files after deduplication")
 
-	// Verify significant reduction from original
+	// Verify all unique files are present
+	uniqueFiles := map[string]bool{
+		"018f1234-5678-9abc-def0-123456789abc_0.data": false,
+		"018f2345-6789-abcd-ef01-23456789abcd_0.data": false,
+		"018f3456-789a-bcde-f012-3456789abcde_0.data": false,
+		"018f4567-89ab-cdef-0123-456789abcdef_0.data": false,
+	}
+
+	for _, file := range filesToGC {
+		_, exists := uniqueFiles[file]
+		require.True(t, exists, "File %s should be in the unique files set", file)
+		uniqueFiles[file] = true
+	}
+
+	// Verify all unique files were found
+	for file, found := range uniqueFiles {
+		require.True(t, found, "File %s should have been found in filesToGC", file)
+	}
+
+	// Verify the original list had duplicates
+	require.Equal(t, 7, len(duplicateFiles), "Original list should have 7 entries (with duplicates)")
+
+	// Calculate the reduction ratio
 	reductionRatio := float64(len(duplicateFiles)-len(filesToGC)) / float64(len(duplicateFiles)) * 100
-	require.GreaterOrEqual(t, reductionRatio, 25.0, "Should reduce at least 25%% of duplicates")
-
 	t.Logf("Deduplication reduced file count from %d to %d (%.1f%% reduction)",
 		len(duplicateFiles), len(filesToGC), reductionRatio)
 }
 
 // TestFilesToGCDeduplicationWithEmptyInput tests deduplication with edge cases
 func TestFilesToGCDeduplicationWithEmptyInput(t *testing.T) {
-	mp := mpool.MustNewZeroNoFixed()
-
 	testCases := []struct {
-		name        string
-		input       []string
-		minExpected int
-		maxExpected int
+		name     string
+		input    []string
+		expected int
 	}{
 		{
-			name:        "empty input",
-			input:       []string{},
-			minExpected: 0,
-			maxExpected: 0,
+			name:     "empty input",
+			input:    []string{},
+			expected: 0,
 		},
 		{
-			name:        "single file",
-			input:       []string{"file1.data"},
-			minExpected: 1,
-			maxExpected: 1,
+			name:     "single file",
+			input:    []string{"file1.data"},
+			expected: 1,
 		},
 		{
-			name:        "all duplicates",
-			input:       []string{"file1.data", "file1.data", "file1.data"},
-			minExpected: 1,
-			maxExpected: 1,
+			name:     "all duplicates",
+			input:    []string{"file1.data", "file1.data", "file1.data"},
+			expected: 1,
 		},
 		{
-			name:        "no duplicates",
-			input:       []string{"file1.data", "file2.data", "file3.data"},
-			minExpected: 3,
-			maxExpected: 3,
+			name:     "no duplicates",
+			input:    []string{"file1.data", "file2.data", "file3.data"},
+			expected: 3,
 		},
 		{
 			name: "mixed duplicates",
@@ -611,39 +614,25 @@ func TestFilesToGCDeduplicationWithEmptyInput(t *testing.T) {
 				"file1.data", "file2.data", "file1.data",
 				"file3.data", "file2.data", "file4.data",
 			},
-			minExpected: 3, // at least 3 due to possible false positives
-			maxExpected: 5, // at most 5 due to possible false negatives
+			expected: 4,
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			if len(tc.input) == 0 {
-				// Empty input case
-				require.Equal(t, tc.minExpected, 0)
-				return
-			}
-
-			// Build candidate vector
-			candidateFiles := vector.NewVec(types.T_varchar.ToType())
-			defer candidateFiles.Free(mp)
+			// Apply deduplication
+			filesToGCSet := make(map[string]struct{})
 			for _, file := range tc.input {
-				_ = vector.AppendBytes(candidateFiles, []byte(file), false, mp)
+				filesToGCSet[file] = struct{}{}
 			}
 
-			// Apply bloom filter deduplication
-			dedupBF := bloomfilter.New(int64(candidateFiles.Length()), 0.01)
-			filesToGC := make([]string, 0, candidateFiles.Length()/2)
-			dedupBF.TestAndAdd(candidateFiles, func(found bool, i int) {
-				if !found {
-					filesToGC = append(filesToGC, string(candidateFiles.GetBytesAt(i)))
-				}
-			})
+			filesToGC := make([]string, 0, len(filesToGCSet))
+			for file := range filesToGCSet {
+				filesToGC = append(filesToGC, file)
+			}
 
-			require.GreaterOrEqual(t, len(filesToGC), tc.minExpected,
-				"Expected at least %d unique files, got %d", tc.minExpected, len(filesToGC))
-			require.LessOrEqual(t, len(filesToGC), tc.maxExpected,
-				"Expected at most %d unique files, got %d", tc.maxExpected, len(filesToGC))
+			require.Equal(t, tc.expected, len(filesToGC),
+				"Expected %d unique files, got %d", tc.expected, len(filesToGC))
 		})
 	}
 }
