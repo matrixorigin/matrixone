@@ -277,11 +277,16 @@ func (m model) handleCommandInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m model) View() string {
 	var b strings.Builder
 	
-	// 数据表格 - 撑满屏幕
-	if m.state.verticalMode {
-		m.renderVertical(&b)
+	// 数据表格 - 撑满屏幕，但只在有有效 reader 时渲染
+	if m.state != nil && m.state.reader != nil {
+		if m.state.verticalMode {
+			m.renderVertical(&b)
+		} else {
+			m.renderTable(&b)
+		}
 	} else {
-		m.renderTable(&b)
+		// 没有数据时显示占位符
+		b.WriteString("No data available\n")
 	}
 	
 	// 消息显示（如果有）
@@ -292,41 +297,46 @@ func (m model) View() string {
 	}
 	
 	// 底部状态栏 - 始终在最下面
-	info := m.state.reader.Info()
-	rows, _, _ := m.state.CurrentRows()
-	start := m.state.GlobalRowOffset() + 1
-	end := start + int64(len(rows)) - 1
-	mode := "Table"
-	if m.state.verticalMode {
-		mode = "Vertical"
+	if m.state != nil && m.state.reader != nil {
+		info := m.state.reader.Info()
+		rows, _, _ := m.state.CurrentRows()
+		start := m.state.GlobalRowOffset() + 1
+		end := start + int64(len(rows)) - 1
+		mode := "Table"
+		if m.state.verticalMode {
+			mode = "Vertical"
+		}
+		
+		cols := m.state.reader.Columns()
+		visibleCols := m.getVisibleColumns(cols)
+		termWidth := 120
+		
+		// 状态栏颜色 - 深灰背景，白字
+		bgColor := "\033[100m"   // 深灰背景
+		textColor := "\033[97m"  // 亮白文字
+		reset := "\033[0m"       // 重置颜色
+		
+		// 状态信息
+		statusText := fmt.Sprintf(" %s │ Rows %d-%d/%d │ Block %d/%d │ Cols %d-%d/%d ", 
+			mode, start, end, info.RowCount, m.state.currentBlock+1, info.BlockCount,
+			m.hScrollOffset+1, m.hScrollOffset+len(visibleCols), len(cols))
+		
+		// 计算需要填充的空格数
+		padding := termWidth - len(statusText)
+		if padding < 0 {
+			padding = 0
+		}
+		
+		// 带颜色的状态栏 - 撑满整行
+		b.WriteString("\n")
+		b.WriteString(bgColor + textColor)
+		b.WriteString(statusText)
+		b.WriteString(strings.Repeat(" ", padding))
+		b.WriteString(reset)
+	} else {
+		// 简单状态栏
+		b.WriteString("\nNo data loaded")
 	}
-	
-	cols := m.state.reader.Columns()
-	visibleCols := m.getVisibleColumns(cols)
-	termWidth := 120
-	
-	// 状态栏颜色 - 深灰背景，白字
-	bgColor := "\033[100m"   // 深灰背景
-	textColor := "\033[97m"  // 亮白文字
-	reset := "\033[0m"       // 重置颜色
-	
-	// 状态信息
-	statusText := fmt.Sprintf(" %s │ Rows %d-%d/%d │ Block %d/%d │ Cols %d-%d/%d ", 
-		mode, start, end, info.RowCount, m.state.currentBlock+1, info.BlockCount,
-		m.hScrollOffset+1, m.hScrollOffset+len(visibleCols), len(cols))
-	
-	// 计算需要填充的空格数
-	padding := termWidth - len(statusText)
-	if padding < 0 {
-		padding = 0
-	}
-	
-	// 带颜色的状态栏 - 撑满整行
-	b.WriteString("\n")
-	b.WriteString(bgColor + textColor)
-	b.WriteString(statusText)
-	b.WriteString(strings.Repeat(" ", padding))
-	b.WriteString(reset)
 	
 	// 命令行 - 普通样式，不带背景色
 	b.WriteString("\n")
@@ -682,14 +692,22 @@ func (m model) completeCommand(input string) string {
 		return ""
 	}
 	
-	// 如果只有一个词且不是完整命令，补全命令名
+	// 如果只有一个词，尝试补全命令名
 	if len(parts) == 1 {
 		completed := m.completeCommandName(parts[0])
-		if completed != parts[0] {
+		// 如果补全结果不同于输入，返回补全结果
+		if completed != parts[0] && completed != "" {
 			return completed
 		}
-		// 如果是完整命令，尝试补全参数
-		return m.completeCommandArgs(parts)
+		// 如果是已知的完整命令，尝试补全参数
+		commands := []string{"quit", "info", "schema", "format", "vertical", "table", "set", "vrows", "search", "cols", "help"}
+		for _, cmd := range commands {
+			if parts[0] == cmd {
+				return m.completeCommandArgs(parts)
+			}
+		}
+		// 否则返回原始补全结果（可能是公共前缀）
+		return completed
 	}
 	
 	// 多个词，补全参数

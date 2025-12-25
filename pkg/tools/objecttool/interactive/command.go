@@ -171,6 +171,11 @@ func parseColumnsCommand(args []string) (Command, error) {
 		return &ColumnsCommand{ShowAll: true}, nil
 	}
 	
+	// Handle "all" explicitly
+	if len(args) == 1 && args[0] == "all" {
+		return &ColumnsCommand{ShowAll: true}, nil
+	}
+	
 	var cols []uint16
 	for _, arg := range args {
 		if strings.Contains(arg, "-") {
