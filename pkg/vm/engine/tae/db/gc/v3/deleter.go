@@ -162,17 +162,18 @@ func (g *Deleter) DeleteMany(
 		defer cancelWorkers()
 
 		for _, batch := range batches {
+			// Try to acquire semaphore or check context cancellation
 			select {
 			case <-ctx.Done():
 				err = context.Cause(ctx)
 				// Wait for already started goroutines to finish
 				wg.Wait()
 				return
-			default:
+			case semaphore <- struct{}{}: // Acquire semaphore
+				// Got semaphore, continue
 			}
 
 			wg.Add(1)
-			semaphore <- struct{}{} // Acquire semaphore
 
 			go func(paths []string) {
 				defer wg.Done()
