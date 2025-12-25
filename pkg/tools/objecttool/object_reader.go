@@ -16,9 +16,9 @@ package objecttool
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -78,14 +78,14 @@ func Open(ctx context.Context, path string) (*ObjectReader, error) {
 	// 2. Create local file service
 	fs, err := fileservice.NewLocalFS(ctx, "local", dir, fileservice.DisabledCacheConfig, nil)
 	if err != nil {
-		return nil, fmt.Errorf("create file service: %w", err)
+		return nil, moerr.NewInternalErrorf(ctx, "create file service: %v", err)
 	}
 
 	// 3. Create reader
 	objReader, err := objectio.NewObjectReaderWithStr(filename, fs,
 		objectio.WithMetaCachePolicyOption(fileservice.SkipMemoryCache|fileservice.SkipFullFilePreloads))
 	if err != nil {
-		return nil, fmt.Errorf("create object reader: %w", err)
+		return nil, moerr.NewInternalErrorf(ctx, "create object reader: %v", err)
 	}
 
 	reader := &ioutil.BlockReader{}
@@ -94,7 +94,7 @@ func Open(ctx context.Context, path string) (*ObjectReader, error) {
 	// 4. Read meta (ReadAllMeta automatically reads header to get extent)
 	meta, err := objReader.ReadAllMeta(ctx, nil)
 	if err != nil {
-		return nil, fmt.Errorf("load meta: %w", err)
+		return nil, moerr.NewInternalErrorf(ctx, "load meta: %v", err)
 	}
 	dataMeta := meta.MustDataMeta()
 
@@ -160,7 +160,7 @@ func (r *ObjectReader) Columns() []ColInfo {
 // ReadBlock reads data from specified block
 func (r *ObjectReader) ReadBlock(ctx context.Context, blockIdx uint32) (*batch.Batch, func(), error) {
 	if blockIdx >= r.info.BlockCount {
-		return nil, nil, fmt.Errorf("block index %d out of range [0, %d)", blockIdx, r.info.BlockCount)
+		return nil, nil, moerr.NewInternalErrorf(ctx, "block index %d out of range [0, %d)", blockIdx, r.info.BlockCount)
 	}
 
 	// Read all columns

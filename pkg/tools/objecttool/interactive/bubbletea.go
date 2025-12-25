@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/tools/objecttool"
@@ -878,7 +879,7 @@ func RunBubbletea(path string) error {
 
 	reader, err := objecttool.Open(ctx, path)
 	if err != nil {
-		return fmt.Errorf("failed to open object: %w", err)
+		return moerr.NewInternalErrorf(ctx, "failed to open object: %v", err)
 	}
 	defer reader.Close()
 

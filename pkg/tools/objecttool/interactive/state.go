@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -199,7 +200,7 @@ func (s *State) NextPage() error {
 
 	// Need to switch to next block
 	if s.currentBlock+1 >= s.reader.BlockCount() {
-		return fmt.Errorf("already at last page")
+		return moerr.NewInternalErrorf(s.ctx, "already at last page")
 	}
 
 	s.releaseCurrentBatch()
@@ -218,7 +219,7 @@ func (s *State) PrevPage() error {
 
 	// Need to switch to previous block
 	if s.currentBlock == 0 {
-		return fmt.Errorf("already at first page")
+		return moerr.NewInternalErrorf(s.ctx, "already at first page")
 	}
 
 	s.releaseCurrentBatch()
@@ -254,7 +255,7 @@ func (s *State) ScrollDown() error {
 
 	// Already at the last row of current block, try to switch to next block
 	if s.currentBlock+1 >= s.reader.BlockCount() {
-		return fmt.Errorf("already at last row")
+		return moerr.NewInternalErrorf(s.ctx, "already at last row")
 	}
 
 	s.releaseCurrentBatch()
@@ -272,7 +273,7 @@ func (s *State) ScrollUp() error {
 
 	// Already at the first row of current block, try to switch to previous block
 	if s.currentBlock == 0 {
-		return fmt.Errorf("already at first row")
+		return moerr.NewInternalErrorf(s.ctx, "already at first row")
 	}
 
 	s.releaseCurrentBatch()
@@ -321,13 +322,13 @@ func (s *State) GotoRow(globalRow int64) error {
 		currentRow += blockRows
 	}
 
-	return fmt.Errorf("row %d out of range", globalRow)
+	return moerr.NewInternalErrorf(s.ctx, "row %d out of range", globalRow)
 }
 
 // GotoBlock jumps to specified block
 func (s *State) GotoBlock(blockIdx uint32) error {
 	if blockIdx >= s.reader.BlockCount() {
-		return fmt.Errorf("block %d out of range [0, %d)", blockIdx, s.reader.BlockCount())
+		return moerr.NewInternalErrorf(s.ctx, "block %d out of range [0, %d)", blockIdx, s.reader.BlockCount())
 	}
 
 	s.releaseCurrentBatch()
@@ -345,7 +346,7 @@ func (s *State) SetFormat(colIdx uint16, formatterName string) error {
 
 	formatter, ok := objecttool.FormatterByName[formatterName]
 	if !ok {
-		return fmt.Errorf("unknown formatter: %s", formatterName)
+		return moerr.NewInternalErrorf(s.ctx, "unknown formatter: %s", formatterName)
 	}
 
 	s.formatter.SetFormatter(colIdx, formatter)

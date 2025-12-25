@@ -18,6 +18,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // Command is the command interface
@@ -113,16 +115,16 @@ func parseColonCommand(cmd string) (Command, error) {
 		return parseSetCommand(parts[1:])
 	case "vrows":
 		if len(parts) < 2 {
-			return nil, fmt.Errorf("usage: vrows <number>")
+			return nil, moerr.NewInternalErrorNoCtxf("usage: vrows <number>")
 		}
 		rows, err := strconv.Atoi(parts[1])
 		if err != nil || rows < 1 {
-			return nil, fmt.Errorf("invalid number of rows: %s", parts[1])
+			return nil, moerr.NewInternalErrorNoCtxf("invalid number of rows: %s", parts[1])
 		}
 		return &VRowsCommand{Rows: rows}, nil
 	case "search", "/":
 		if len(parts) < 2 {
-			return nil, fmt.Errorf("usage: search <pattern> or /<pattern>")
+			return nil, moerr.NewInternalErrorNoCtxf("usage: search <pattern> or /<pattern>")
 		}
 		pattern := strings.Join(parts[1:], " ")
 		return &SearchCommand{Pattern: pattern}, nil
@@ -137,11 +139,11 @@ func parseColonCommand(cmd string) (Command, error) {
 		return parseColumnsCommand(parts[1:])
 	case "rename":
 		if len(parts) < 3 {
-			return nil, fmt.Errorf("usage: rename <col_index> <new_name>")
+			return nil, moerr.NewInternalErrorNoCtxf("usage: rename <col_index> <new_name>")
 		}
 		colIdx, err := strconv.Atoi(parts[1])
 		if err != nil {
-			return nil, fmt.Errorf("invalid column index: %s", parts[1])
+			return nil, moerr.NewInternalErrorNoCtxf("invalid column index: %s", parts[1])
 		}
 		return &RenameCommand{ColIndex: uint16(colIdx), NewName: parts[2]}, nil
 	case "help":
@@ -151,13 +153,13 @@ func parseColonCommand(cmd string) (Command, error) {
 		}
 		return &HelpCommand{Topic: topic}, nil
 	default:
-		return nil, fmt.Errorf("unknown command: %s", parts[0])
+		return nil, moerr.NewInternalErrorNoCtxf("unknown command: %s", parts[0])
 	}
 }
 
 func parseSetCommand(args []string) (Command, error) {
 	if len(args) < 2 {
-		return nil, fmt.Errorf("usage: set <option> <value>")
+		return nil, moerr.NewInternalErrorNoCtxf("usage: set <option> <value>")
 	}
 
 	switch args[0] {
@@ -167,11 +169,11 @@ func parseSetCommand(args []string) (Command, error) {
 		}
 		width, err := strconv.Atoi(args[1])
 		if err != nil {
-			return nil, fmt.Errorf("invalid width: %s", args[1])
+			return nil, moerr.NewInternalErrorNoCtxf("invalid width: %s", args[1])
 		}
 		return &SetCommand{Option: "width", Value: width}, nil
 	default:
-		return nil, fmt.Errorf("unknown option: %s", args[0])
+		return nil, moerr.NewInternalErrorNoCtxf("unknown option: %s", args[0])
 	}
 }
 
@@ -191,15 +193,15 @@ func parseColumnsCommand(args []string) (Command, error) {
 			// Range format "1-5"
 			parts := strings.Split(arg, "-")
 			if len(parts) != 2 {
-				return nil, fmt.Errorf("invalid range format: %s", arg)
+				return nil, moerr.NewInternalErrorNoCtxf("invalid range format: %s", arg)
 			}
 			start, err := strconv.Atoi(parts[0])
 			if err != nil {
-				return nil, fmt.Errorf("invalid start index: %s", parts[0])
+				return nil, moerr.NewInternalErrorNoCtxf("invalid start index: %s", parts[0])
 			}
 			end, err := strconv.Atoi(parts[1])
 			if err != nil {
-				return nil, fmt.Errorf("invalid end index: %s", parts[1])
+				return nil, moerr.NewInternalErrorNoCtxf("invalid end index: %s", parts[1])
 			}
 			for i := start; i <= end; i++ {
 				cols = append(cols, uint16(i))
@@ -210,7 +212,7 @@ func parseColumnsCommand(args []string) (Command, error) {
 			for _, idx := range indices {
 				col, err := strconv.Atoi(strings.TrimSpace(idx))
 				if err != nil {
-					return nil, fmt.Errorf("invalid column index: %s", idx)
+					return nil, moerr.NewInternalErrorNoCtxf("invalid column index: %s", idx)
 				}
 				cols = append(cols, uint16(col))
 			}
@@ -218,7 +220,7 @@ func parseColumnsCommand(args []string) (Command, error) {
 			// Single index
 			col, err := strconv.Atoi(arg)
 			if err != nil {
-				return nil, fmt.Errorf("invalid column index: %s", arg)
+				return nil, moerr.NewInternalErrorNoCtxf("invalid column index: %s", arg)
 			}
 			cols = append(cols, uint16(col))
 		}
@@ -229,12 +231,12 @@ func parseColumnsCommand(args []string) (Command, error) {
 
 func parseFormatCommand(args []string) (Command, error) {
 	if len(args) < 2 {
-		return nil, fmt.Errorf("usage: :format <col> <formatter>")
+		return nil, moerr.NewInternalErrorNoCtxf("usage: :format <col> <formatter>")
 	}
 
 	colIdx, err := strconv.ParseUint(args[0], 10, 16)
 	if err != nil {
-		return nil, fmt.Errorf("invalid column index: %s", args[0])
+		return nil, moerr.NewInternalErrorNoCtxf("invalid column index: %s", args[0])
 	}
 
 	return &FormatCommand{
