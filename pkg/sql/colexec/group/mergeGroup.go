@@ -125,6 +125,8 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 		// This info really should be set during query planning and prepare.
 		// We screwed up, so deal with it.
 		reader := bytes.NewReader(bat.ExtraBuf1)
+
+		// XXX: Here, the mtyp is critical.  It will affect how later we unmarshal and merge.
 		if mergeGroup.ctr.mtyp, err = types.ReadInt32(reader); err != nil {
 			return false, err
 		}

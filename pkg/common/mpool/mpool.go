@@ -623,12 +623,16 @@ func (mp *MPool) ReallocZero(old []byte, sz int, offHeap bool) ([]byte, error) {
 		return mp.reAllocWithDetailK(detailk, old, int64(sz), offHeap, false)
 	}
 
-	oldsz := cap(old)
+	oldsz := len(old)
+	oldcap := cap(old)
 	if sz <= oldsz {
 		return old[:sz], nil
+	} else if sz <= oldcap {
+		old = old[:sz]
+		clear(old[oldsz:])
+		return old, nil
 	}
 
-	old = old[:1]
 	oldptr := unsafe.Pointer(&old[0])
 	newbs, err := simpleCAllocator().ReallocZero(old, uint64(sz))
 	if err != nil {
@@ -641,8 +645,8 @@ func (mp *MPool) ReallocZero(old []byte, sz int, offHeap bool) ([]byte, error) {
 		allocSz: int32(sz),
 		offHeap: offHeap,
 	})
-	globalStats.RecordFree("global", int64(oldsz))
-	mp.stats.RecordFree(mp.tag, int64(oldsz))
+	globalStats.RecordFree("global", int64(oldcap))
+	mp.stats.RecordFree(mp.tag, int64(oldcap))
 	globalStats.RecordAlloc("global", int64(sz))
 	mp.stats.RecordAlloc(mp.tag, int64(sz))
 	return newbs, nil

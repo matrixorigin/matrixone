@@ -158,6 +158,8 @@ func (exec *countColumnExec) SetExtraInformation(partialResult any, _ int) error
 func (exec *countColumnExec) Flush() ([]*vector.Vector, error) {
 	vecs := make([]*vector.Vector, len(exec.state))
 	if exec.IsDistinct() {
+		argtsz := exec.aggInfo.argTypes[0].Oid.FixedLength()
+
 		for i := range vecs {
 			vecs[i] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
 			vecs[i].PreExtend(int(exec.state[i].length), exec.mp)
@@ -166,9 +168,12 @@ func (exec *countColumnExec) Flush() ([]*vector.Vector, error) {
 			ptrs := exec.state[i].getPtrLenSlice()
 			vals := vector.MustFixedColNoTypeCheck[int64](vecs[i])
 			for j := range ptrs {
-				vals[j] = int64(ptrs[j].Len())
+				if argtsz > 0 {
+					vals[j] = int64(ptrs[j].Len() / argtsz)
+				} else {
+					vals[j] = int64(ptrs[j].NumberOfVarlenElements())
+				}
 			}
-
 			if exec.extra != 0 {
 				for j := range vals {
 					vals[j] += exec.extra

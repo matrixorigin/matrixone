@@ -113,15 +113,15 @@ func (ag *aggState[S]) writeAllStatesToBuf(sz int, usePtrLen bool, buf *bytes.Bu
 	return nil
 }
 
-func (ag *aggState[S]) readState(mp *mpool.MPool,
-	cnt int64, offset int64, sz int, usePtrLen bool, reader io.Reader) (int64, error) {
+func (ag *aggState[S]) readState(mp *mpool.MPool, cnt int64, offset int64,
+	entrySize int, usePtrLen bool, reader io.Reader) (int64, error) {
 	rn := ag.length - offset
 	if rn >= cnt {
 		rn = cnt
 	}
 
-	if sz > 0 && !usePtrLen {
-		bs := ag.states[int(offset)*sz : int(offset+rn)*sz]
+	if !usePtrLen {
+		bs := ag.states[int(offset)*entrySize : int(offset+rn)*entrySize]
 		_, err := io.ReadFull(reader, bs)
 		if err != nil {
 			return 0, err
@@ -133,22 +133,22 @@ func (ag *aggState[S]) readState(mp *mpool.MPool,
 			if err != nil {
 				return 0, err
 			}
-			ptrs[offset+int64(i)].AppendBytes(mp, bs)
+			ptrs[offset+int64(i)].AppendRawBytes(mp, bs)
 		}
 	}
 	return rn, nil
 }
 
-func (ag *aggState[S]) getStateSlice(sz int) []S {
-	return util.UnsafeSliceCast[S](ag.states)
+func (ag *aggState[S]) getStateSlice() []S {
+	return util.UnsafeSliceCast[S](ag.states)[:ag.length]
 }
 
-func (ag *aggState[S]) getState(idx, sz int) *S {
-	return &ag.getStateSlice(sz)[idx]
+func (ag *aggState[S]) getState(idx int) *S {
+	return &ag.getStateSlice()[idx]
 }
 
 func (ag *aggState[S]) getPtrLenSlice() []mpool.PtrLen {
-	return util.UnsafeSliceCast[mpool.PtrLen](ag.states)
+	return util.UnsafeSliceCast[mpool.PtrLen](ag.states)[:ag.length]
 }
 
 func (ag *aggState[S]) getPtrLen(idx int) *mpool.PtrLen {
@@ -211,9 +211,21 @@ func (ae *aggExec[S]) NextXY(x, y int) (int, int) {
 	return x, y + 1
 }
 
+func (ae *aggExec[S]) GetNumChunks() int {
+	return len(ae.state)
+}
+
+func (ae *aggExec[S]) GetNumGroups() int {
+	num := 0
+	for _, state := range ae.state {
+		num += int(state.length)
+	}
+	return num
+}
+
 func (ae *aggExec[S]) GetState(idx uint64) *S {
 	x, y := ae.GetXY(idx)
-	return ae.state[x].getState(y, ae.aggInfo.entrySize)
+	return ae.state[x].getState(y)
 }
 
 func (ae *aggExec[S]) GetPtrLen(idx uint64) *mpool.PtrLen {
@@ -222,20 +234,19 @@ func (ae *aggExec[S]) GetPtrLen(idx uint64) *mpool.PtrLen {
 }
 
 func (ae *aggExec[S]) GroupGrow(more int) error {
-	// special case for calling first time with more = 1
-	// this is basically used for no group by case.
-	if more == 1 && len(ae.state) == 0 {
+	if ae.chunkSize == 1 {
+		// special grow 1
 		ae.state = make([]aggState[S], 1)
 		if err := ae.state[0].init(ae.mp, ae.aggInfo.usePtrLen, int(ae.aggInfo.entrySize), 1); err != nil {
-			return err
+			panic(err)
 		}
 		ae.state[0].grow(ae.mp, ae.aggInfo.usePtrLen, 1)
+		// special case for calling first time with more = 1
 		return nil
 	}
 
-	m64 := int64(more)
 	// grow the state until the more groups are added
-	for remain := m64; remain > 0; {
+	for remain := int64(more); remain > 0; {
 		if len(ae.state) != 0 {
 			remain = ae.state[len(ae.state)-1].grow(ae.mp, ae.aggInfo.usePtrLen, remain)
 		}
