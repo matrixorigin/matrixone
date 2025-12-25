@@ -344,7 +344,10 @@ DEV_MOUNT ?=
 .PHONY: dev-help
 dev-help:
 	@echo "Local Multi-CN Development Environment Commands:"
-	@echo "  make dev-build          - Build MatrixOne docker image (forces rebuild, no cache)"
+	@echo "  make dev-build          - Build MatrixOne docker image (typecheck enabled by default)"
+	@echo "  make dev-build TYPECHECK=0 - Build without typecheck (for performance testing)"
+	@echo "  make dev-build-force    - Force rebuild (typecheck enabled by default)"
+	@echo "  make dev-build-force TYPECHECK=0 - Force rebuild without typecheck"
 	@echo "  make dev-up             - Start multi-CN cluster with local image (with NET_ADMIN for network chaos)"
 	@echo "  make dev-up-latest      - Start multi-CN cluster with latest official image"
 	@echo "  make dev-up-test        - Start with test directory mounted"
@@ -453,12 +456,24 @@ dev-help:
 .PHONY: dev-build
 dev-build:
 	@echo "Building MatrixOne docker image (using smart cache - only rebuilds when code changes)..."
-	@cd $(DEV_DIR) && ./start.sh build mo-log
+	@if [ "$(TYPECHECK)" = "0" ]; then \
+		echo "Building WITHOUT typecheck (TYPECHECK=0)"; \
+		cd $(DEV_DIR) && TYPECHECK=0 ./start.sh build mo-log; \
+	else \
+		echo "Building WITH typecheck (default, use TYPECHECK=0 to disable)"; \
+		cd $(DEV_DIR) && TYPECHECK=1 ./start.sh build mo-log; \
+	fi
 
 .PHONY: dev-build-force
 dev-build-force:
 	@echo "Building MatrixOne docker image (forcing complete rebuild, no cache)..."
-	@cd $(DEV_DIR) && ./start.sh build --no-cache mo-log
+	@if [ "$(TYPECHECK)" = "0" ]; then \
+		echo "Building WITHOUT typecheck (TYPECHECK=0)"; \
+		cd $(DEV_DIR) && TYPECHECK=0 ./start.sh build --no-cache mo-log; \
+	else \
+		echo "Building WITH typecheck (default, use TYPECHECK=0 to disable)"; \
+		cd $(DEV_DIR) && TYPECHECK=1 ./start.sh build --no-cache mo-log; \
+	fi
 
 .PHONY: dev-up
 dev-up:

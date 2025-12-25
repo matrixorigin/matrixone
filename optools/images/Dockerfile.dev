@@ -53,9 +53,17 @@ COPY cmd ./cmd
 COPY proto ./proto
 COPY clients ./clients
 # Note: test/ is excluded by .dockerignore and not needed for building mo-service
-RUN make clean && make build && \
-    cp /matrixone/mo-service /mo-service && \
-    chmod +x /mo-service
+# Build argument: TYPECHECK (default: 1, set to 0 to disable)
+ARG TYPECHECK=1
+RUN if [ "$TYPECHECK" = "1" ]; then \
+        make clean && make build TYPECHECK=1 && \
+        cp /matrixone/mo-service /mo-service && \
+        chmod +x /mo-service; \
+    else \
+        make clean && make build && \
+        cp /matrixone/mo-service /mo-service && \
+        chmod +x /mo-service; \
+    fi
 
 # Copy shared libraries
 RUN mkdir -p /usr/local/lib && \
@@ -65,11 +73,18 @@ RUN mkdir -p /usr/local/lib && \
 RUN ldconfig
 
 # Create a build script that will be used to build the binary from mounted source
+# The script uses TYPECHECK environment variable (default: 1)
 RUN echo '#!/bin/bash\n\
     set -e\n\
     echo "Building MatrixOne from mounted source code..."\n\
     cd /matrixone\n\
-    make build\n\
+    if [ "${TYPECHECK:-1}" = "1" ]; then\n\
+        echo "Building with typecheck enabled..."\n\
+        make build TYPECHECK=1\n\
+    else\n\
+        echo "Building without typecheck..."\n\
+        make build\n\
+    fi\n\
     cp /matrixone/mo-service /mo-service\n\
     echo "Build completed! Binary: /mo-service"\n\
     ' > /usr/local/bin/build-mo.sh && \
