@@ -19,10 +19,12 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -329,7 +331,7 @@ func (h *UpstreamSQLHelper) handleCreateSnapshotDirectly(
 	// Get database name, table name and objId according to snapshot level
 	var sql string
 	var objId uint64
-	var databaseName, tableName string
+	var databaseName, tableName, accountName string
 
 	switch snapshotLevel {
 	case tree.SNAPSHOTLEVELCLUSTER:
@@ -343,6 +345,103 @@ func (h *UpstreamSQLHelper) handleCreateSnapshotDirectly(
 			table_name,
 			obj_id ) values ('%s', '%s', %d, '%s', '%s', '%s', '%s', %d);`,
 			snapshotId, snapshotName, snapshotTS, snapshotLevel.String(), "", "", "", uint64(math.MaxUint64))
+
+	case tree.SNAPSHOTLEVELACCOUNT:
+		accountName = string(stmt.Object.ObjName)
+		// Use system account context to query mo_account table
+		systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
+		// If account name is empty, use current account ID
+		if len(accountName) == 0 {
+			objId = uint64(h.accountID)
+			// Get account name from account ID
+			getAccountNameSQL := fmt.Sprintf(`select account_name from mo_catalog.mo_account where account_id = %d;`, h.accountID)
+			accountResult, err := h.executor.Exec(systemCtx, getAccountNameSQL, opts)
+			if err != nil {
+				return err
+			}
+			defer accountResult.Close()
+			accountResult.ReadRows(func(rows int, cols []*vector.Vector) bool {
+				if rows > 0 && len(cols) > 0 {
+					accountName = cols[0].GetStringAt(0)
+				}
+				return true
+			})
+		} else {
+			// Check account exists and get account ID
+			getAccountSQL := fmt.Sprintf(`select account_id from mo_catalog.mo_account where account_name = "%s" order by account_id;`, accountName)
+			accountResult, err := h.executor.Exec(systemCtx, getAccountSQL, opts)
+			if err != nil {
+				return err
+			}
+			defer accountResult.Close()
+
+			var found bool
+			accountResult.ReadRows(func(rows int, cols []*vector.Vector) bool {
+				if rows > 0 && len(cols) > 0 {
+					objId = vector.GetFixedAtWithTypeCheck[uint64](cols[0], 0)
+					found = true
+				}
+				return true
+			})
+			if !found {
+				return moerr.NewInternalErrorf(ctx, "account %s does not exist", accountName)
+			}
+		}
+
+		sql = fmt.Sprintf(`insert into mo_catalog.mo_snapshots(
+			snapshot_id,
+			sname,
+			ts,
+			level,
+			account_name,
+			database_name,
+			table_name,
+			obj_id ) values ('%s', '%s', %d, '%s', '%s', '%s', '%s', %d);`,
+			snapshotId, snapshotName, snapshotTS, snapshotLevel.String(), accountName, "", "", objId)
+
+	case tree.SNAPSHOTLEVELDATABASE:
+		databaseName = string(stmt.Object.ObjName)
+		if len(databaseName) == 0 {
+			return moerr.NewInternalError(ctx, "database name is required for database level snapshot")
+		}
+
+		// Check if it's a system database that cannot be snapshotted
+		skipDbs := []string{"mysql", "system", "system_metrics", "mo_task", "mo_debug", "information_schema", "mo_catalog"}
+		if slices.Contains(skipDbs, databaseName) {
+			return moerr.NewInternalErrorf(ctx, "can not create snapshot for system database %s", databaseName)
+		}
+
+		// Get database ID
+		getDatabaseSQL := fmt.Sprintf(`select dat_id from mo_catalog.mo_database where datname = "%s";`, databaseName)
+		dbResult, err := h.executor.Exec(ctx, getDatabaseSQL, opts)
+		if err != nil {
+			return err
+		}
+		defer dbResult.Close()
+
+		var found bool
+		dbResult.ReadRows(func(rows int, cols []*vector.Vector) bool {
+			if rows > 0 && len(cols) > 0 {
+				objId = vector.GetFixedAtWithTypeCheck[uint64](cols[0], 0)
+				found = true
+			}
+			return true
+		})
+		if !found {
+			return moerr.NewInternalErrorf(ctx, "database %s does not exist", databaseName)
+		}
+
+		// Temporarily set account_name to empty string for database level snapshot
+		sql = fmt.Sprintf(`insert into mo_catalog.mo_snapshots(
+			snapshot_id,
+			sname,
+			ts,
+			level,
+			account_name,
+			database_name,
+			table_name,
+			obj_id ) values ('%s', '%s', %d, '%s', '%s', '%s', '%s', %d);`,
+			snapshotId, snapshotName, snapshotTS, snapshotLevel.String(), "", databaseName, "", objId)
 
 	case tree.SNAPSHOTLEVELTABLE:
 		objectName := string(stmt.Object.ObjName)

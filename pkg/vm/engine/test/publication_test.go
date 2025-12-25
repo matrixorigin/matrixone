@@ -638,7 +638,7 @@ func TestExecuteIterationDatabaseLevel(t *testing.T) {
 	// Note: We do NOT force checkpoint here - that will be done in parallel
 
 	// Step 2: Write mo_ccpr_log table with database level sync
-	taskID := uint64(2)
+	taskID := uint64(1)
 	iterationLSN := uint64(1)
 	subscriptionName := "test_subscription_db"
 	insertSQL := fmt.Sprintf(
