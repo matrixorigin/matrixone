@@ -73,7 +73,6 @@ func parseColonCommand(cmd string) (Command, error) {
 		"s": "search",
 		"c": "cols",
 		"h": "help",
-		"i": "info",
 		"?": "help",
 		"/": "search",
 	}
@@ -101,8 +100,6 @@ func parseColonCommand(cmd string) (Command, error) {
 	switch parts[0] {
 	case "q", "quit":
 		return &QuitCommand{}, nil
-	case "info":
-		return &InfoCommand{}, nil
 	case "schema":
 		return &SchemaCommand{}, nil
 	case "format":
@@ -146,6 +143,12 @@ func parseColonCommand(cmd string) (Command, error) {
 			return nil, moerr.NewInternalErrorNoCtxf("invalid column index: %s", parts[1])
 		}
 		return &RenameCommand{ColIndex: uint16(colIdx), NewName: parts[2]}, nil
+	case "data":
+		return &SwitchModeCommand{Mode: ViewModeData}, nil
+	case "blkmeta":
+		return &SwitchModeCommand{Mode: ViewModeBlkMeta}, nil
+	case "objmeta":
+		return &SwitchModeCommand{Mode: ViewModeObjMeta}, nil
 	case "help":
 		topic := ""
 		if len(parts) > 1 {
@@ -250,18 +253,6 @@ type QuitCommand struct{}
 
 func (c *QuitCommand) Execute(state *State) (string, bool, error) {
 	return "", true, nil
-}
-
-// InfoCommand shows object information
-type InfoCommand struct{}
-
-func (c *InfoCommand) Execute(state *State) (string, bool, error) {
-	info := state.reader.Info()
-	return fmt.Sprintf(`Object: %s
-Blocks: %d
-Rows:   %d
-Cols:   %d`,
-		info.Path, info.BlockCount, info.RowCount, info.ColCount), false, nil
 }
 
 // SchemaCommand shows schema
@@ -396,6 +387,31 @@ func (c *SetCommand) Execute(state *State) (string, bool, error) {
 	}
 }
 
+// SwitchModeCommand switches view mode
+type SwitchModeCommand struct {
+	Mode ViewMode
+}
+
+func (c *SwitchModeCommand) Execute(state *State) (string, bool, error) {
+	switch c.Mode {
+	case ViewModeData:
+		state.SwitchToData()
+		return "Switched to Data mode", false, nil
+	case ViewModeBlkMeta:
+		if err := state.SwitchToBlkMeta(); err != nil {
+			return "", false, err
+		}
+		return fmt.Sprintf("Switched to Block Metadata mode (%d rows)", len(state.metaRows)), false, nil
+	case ViewModeObjMeta:
+		if err := state.SwitchToObjMeta(); err != nil {
+			return "", false, err
+		}
+		return fmt.Sprintf("Switched to Object Metadata mode (%d rows)", len(state.metaRows)), false, nil
+	default:
+		return "Unknown view mode", false, nil
+	}
+}
+
 var generalHelp = `
 Browse Mode (default):
   j/k/↑/↓     Scroll down/up one line
@@ -408,7 +424,6 @@ Browse Mode (default):
   :           Enter command mode
 
 Command Mode (press : to enter):
-  info (i)    Show object info
   schema      Show schema
   format N F  Set column N format to F
   N           Go to block N (e.g., :0, :1, :2)
@@ -419,8 +434,12 @@ Command Mode (press : to enter):
   vrows N     Set vertical mode rows per page (default=10)
   cols (c) <list> Show specific columns (e.g., 1,3,5 or 1-5)
   cols all    Show all columns
+  rename N name  Rename column N to name
   search (s) <pattern>  Search for text in current page
   /<pattern>  Same as search
+  data        Switch to data view mode
+  blkmeta     Switch to block metadata view mode
+  objmeta     Switch to object metadata view mode
   help (h,?)  Show help
   quit (q)    Quit
 

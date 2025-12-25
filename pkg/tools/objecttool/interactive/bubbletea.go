@@ -168,6 +168,12 @@ func (m model) handleCommandInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if quit {
 			return m, tea.Quit
 		}
+
+		// Reset horizontal scroll when switching view modes
+		if _, ok := cmd.(*SwitchModeCommand); ok {
+			m.hScrollOffset = 0
+		}
+
 		m.message = output
 		m.cmdInput = ""
 		m.cmdCursor = 0
@@ -706,16 +712,55 @@ func (m model) renderTable(b *strings.Builder) {
 		return
 	}
 
-	cols := m.state.reader.Columns()
+	cols := m.state.Columns()
 
 	// Determine columns to display - based on horizontal scroll offset and terminal width
 	displayCols := m.getVisibleColumns(cols)
+
+	// In metadata mode, limit displayCols to actual data columns
+	if m.state.viewMode == ViewModeBlkMeta || m.state.viewMode == ViewModeObjMeta {
+		if len(rows) > 0 {
+			maxCols := len(rows[0])
+			if len(displayCols) > maxCols {
+				displayCols = displayCols[:maxCols]
+			}
+			// For blkmeta mode, if displayCols is empty, show all columns
+			if m.state.viewMode == ViewModeBlkMeta && len(displayCols) == 0 && maxCols > 0 {
+				displayCols = make([]uint16, maxCols)
+				for i := 0; i < maxCols; i++ {
+					displayCols[i] = uint16(i)
+				}
+			}
+		}
+	}
+
+	// For objmeta mode, calculate Property column width separately
+	var propertyWidth int
+	if m.state.viewMode == ViewModeObjMeta {
+		propertyWidth = len("Property")
+		// Calculate max width from all property names (stored in rowNumbers)
+		for _, propName := range rowNumbers {
+			if len(propName) > propertyWidth {
+				propertyWidth = len(propName)
+			}
+		}
+		if propertyWidth < 8 {
+			propertyWidth = 8
+		}
+	} else {
+		propertyWidth = 10 // Default width for RowNum/BlockNo
+	}
 
 	// Calculate column width - use user setting or actual content length
 	widths := make([]int, len(displayCols))
 	for i, colIdx := range displayCols {
 		if int(colIdx) < len(cols) {
-			widths[i] = len(fmt.Sprintf("Col%d", colIdx))
+			// For blkmeta mode, use metaCols Name as initial width
+			if m.state.viewMode == ViewModeBlkMeta && int(colIdx) < len(m.state.metaCols) {
+				widths[i] = len(m.state.metaCols[colIdx].Name)
+			} else {
+				widths[i] = len(fmt.Sprintf("Col%d", colIdx))
+			}
 			if widths[i] < 8 {
 				widths[i] = 8
 			}
@@ -724,9 +769,9 @@ func (m model) renderTable(b *strings.Builder) {
 
 	// Adjust column width based on data
 	for _, row := range rows {
-		for i, cell := range row {
-			if i < len(widths) {
-				cellLen := len(cell)
+		for i, colIdx := range displayCols {
+			if int(colIdx) < len(row) {
+				cellLen := len(row[colIdx])
 				// If user set width limit, use that value; otherwise use content length
 				if m.state.maxColWidth > 0 {
 					if cellLen > m.state.maxColWidth {
@@ -741,7 +786,9 @@ func (m model) renderTable(b *strings.Builder) {
 	}
 
 	// Table header
-	b.WriteString("┌────────────┬")
+	b.WriteString("┌")
+	b.WriteString(strings.Repeat("─", propertyWidth+2))
+	b.WriteString("┬")
 	for i, w := range widths {
 		b.WriteString(strings.Repeat("─", w+2))
 		if i < len(widths)-1 {
@@ -751,22 +798,56 @@ func (m model) renderTable(b *strings.Builder) {
 	b.WriteString("┐\n")
 
 	// Column headers
-	b.WriteString("│ RowNum     │")
-	for i, colIdx := range displayCols {
-		if int(colIdx) < len(cols) {
-			header := fmt.Sprintf("Col%d", colIdx)
-			if m.state.colNames != nil {
-				if customName, exists := m.state.colNames[colIdx]; exists {
-					header = customName
+	// First column name depends on view mode
+	var firstColName string
+	switch m.state.viewMode {
+	case ViewModeBlkMeta:
+		firstColName = "BlockNo"
+	case ViewModeObjMeta:
+		firstColName = "Property"
+	default:
+		firstColName = "RowNum"
+	}
+
+	fmt.Fprintf(b, "│ %-*s │", propertyWidth, firstColName)
+
+	// For objmeta mode, only show Value column to avoid duplicate Property column
+	if m.state.viewMode == ViewModeObjMeta {
+		// Only show Value column
+		if len(widths) > 0 {
+			fmt.Fprintf(b, " %-*s │", widths[0], "Value")
+		}
+	} else {
+		// For other modes, show all columns
+		for i, colIdx := range displayCols {
+			if int(colIdx) < len(cols) {
+				var header string
+				if m.state.viewMode == ViewModeBlkMeta {
+					// Metadata mode: use metaCols Name
+					if int(colIdx) < len(m.state.metaCols) {
+						header = m.state.metaCols[colIdx].Name
+					} else {
+						header = fmt.Sprintf("Col%d", colIdx)
+					}
+				} else {
+					// Data mode: check for renamed columns
+					header = fmt.Sprintf("Col%d", colIdx)
+					if m.state.colNames != nil {
+						if customName, exists := m.state.colNames[colIdx]; exists {
+							header = customName
+						}
+					}
 				}
+				fmt.Fprintf(b, " %-*s │", widths[i], header)
 			}
-			fmt.Fprintf(b, " %-*s │", widths[i], header)
 		}
 	}
 	b.WriteString("\n")
 
 	// Separator line
-	b.WriteString("├────────────┼")
+	b.WriteString("├")
+	b.WriteString(strings.Repeat("─", propertyWidth+2))
+	b.WriteString("┼")
 	for i, w := range widths {
 		b.WriteString(strings.Repeat("─", w+2))
 		if i < len(widths)-1 {
@@ -777,10 +858,11 @@ func (m model) renderTable(b *strings.Builder) {
 
 	// Data rows
 	for i, row := range rows {
-		fmt.Fprintf(b, "│ %-10s │", rowNumbers[i])
+		fmt.Fprintf(b, "│ %-*s │", propertyWidth, rowNumbers[i])
 		for j, colIdx := range displayCols {
-			if j < len(widths) && j < len(row) {
-				cell := row[j] // Use j instead of colIdx
+			if j < len(widths) && int(colIdx) < len(row) {
+				cell := row[colIdx] // Always use colIdx now
+
 				// Truncate content based on user-set width
 				if m.state.maxColWidth > 0 && len(cell) > m.state.maxColWidth {
 					cell = cell[:m.state.maxColWidth-3] + "..."
@@ -796,7 +878,9 @@ func (m model) renderTable(b *strings.Builder) {
 	}
 
 	// Table footer
-	b.WriteString("└────────────┴")
+	b.WriteString("└")
+	b.WriteString(strings.Repeat("─", propertyWidth+2))
+	b.WriteString("┴")
 	for i, w := range widths {
 		b.WriteString(strings.Repeat("─", w+2))
 		if i < len(widths)-1 {
@@ -804,6 +888,30 @@ func (m model) renderTable(b *strings.Builder) {
 		}
 	}
 	b.WriteString("┘\n")
+
+	// Render summary for BlkMeta mode (outside the table)
+	if m.state.viewMode == ViewModeBlkMeta && m.state.blkSummary != nil {
+		m.renderBlkSummary(b)
+	}
+}
+
+func (m model) renderBlkSummary(b *strings.Builder) {
+	if m.state.blkSummary == nil || len(m.state.blkSummary) == 0 {
+		return
+	}
+
+	info := m.state.reader.Info()
+	b.WriteString("\n")
+	b.WriteString("Block Summary:\n")
+
+	for blockID := uint32(0); blockID < info.BlockCount; blockID++ {
+		if summary, exists := m.state.blkSummary[blockID]; exists {
+			fmt.Fprintf(b, "  Block %d:\n", blockID)
+			fmt.Fprintf(b, "    Origin Size:       %s (%d bytes)\n", formatSize(uint64(summary.TotalOriginSize)), summary.TotalOriginSize)
+			fmt.Fprintf(b, "    Compressed Size:   %s (%d bytes)\n", formatSize(uint64(summary.TotalCompSize)), summary.TotalCompSize)
+			fmt.Fprintf(b, "    Compression Ratio: %.2f%%\n", summary.CompressionRatio)
+		}
+	}
 }
 
 func (m model) renderVertical(b *strings.Builder) {
@@ -938,6 +1046,7 @@ func (m model) completeCommandName(input string) string {
 	commands := []string{
 		"quit", "q", "info", "schema", "format", "vertical", "v",
 		"table", "t", "set", "vrows", "search", "cols", "help",
+		"data", "blkmeta", "objmeta",
 	}
 
 	var matches []string
@@ -1018,6 +1127,14 @@ func longestCommonPrefix(strs []string) string {
 
 // getVisibleColumns calculates visible columns based on horizontal scroll offset
 func (m model) getVisibleColumns(cols []objecttool.ColInfo) []uint16 {
+	// For objmeta mode, always only show Value column (index 1)
+	if m.state.viewMode == ViewModeObjMeta {
+		if len(cols) > 1 {
+			return []uint16{1} // Only Value column
+		}
+		return []uint16{}
+	}
+
 	// If user set specific visible columns, use them first
 	if m.state.visibleCols != nil {
 		return m.state.visibleCols
@@ -1179,6 +1296,11 @@ func (c *RenameCommand) Execute(state *State) (string, bool, error) {
 		state.colNames = make(map[uint16]string)
 	}
 	state.colNames[c.ColIndex] = c.NewName
+
+	// If in blkmeta mode, rebuild metadata rows to reflect the new column name
+	if state.viewMode == ViewModeBlkMeta {
+		state.metaRows, state.blkSummary = state.buildBlkMetaRows()
+	}
 
 	return fmt.Sprintf("Renamed Col%d to %s", c.ColIndex, c.NewName), false, nil
 }

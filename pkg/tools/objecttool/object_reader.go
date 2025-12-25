@@ -157,6 +157,11 @@ func (r *ObjectReader) Columns() []ColInfo {
 	return r.cols
 }
 
+// Meta returns the object data meta
+func (r *ObjectReader) Meta() objectio.ObjectDataMeta {
+	return r.meta
+}
+
 // ReadBlock reads data from specified block
 func (r *ObjectReader) ReadBlock(ctx context.Context, blockIdx uint32) (*batch.Batch, func(), error) {
 	if blockIdx >= r.info.BlockCount {

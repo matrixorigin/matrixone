@@ -236,18 +236,9 @@ func TestCommandExecution(t *testing.T) {
 	state := NewState(ctx, reader)
 	defer state.Close()
 	
-	// Test InfoCommand
-	infoCmd := &InfoCommand{}
-	output, status, err := infoCmd.Execute(state)
-	require.NoError(t, err)
-	assert.NotEmpty(t, output)
-	assert.Empty(t, status)
-	assert.Contains(t, output, "Blocks")
-	assert.Contains(t, output, "Rows")
-	
 	// Test SchemaCommand
 	schemaCmd := &SchemaCommand{}
-	output, status, err = schemaCmd.Execute(state)
+	output, status, err := schemaCmd.Execute(state)
 	require.NoError(t, err)
 	assert.NotEmpty(t, output)
 	assert.Empty(t, status)
@@ -480,12 +471,12 @@ func TestStateDisplayModes(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEmpty(t, rows)
 	
-	// Test column filtering
+	// Test column filtering - CurrentRows returns all columns now
 	state.visibleCols = []uint16{0, 1, 2}
 	rows, _, err = state.CurrentRows()
 	require.NoError(t, err)
 	if len(rows) > 0 {
-		assert.Equal(t, 3, len(rows[0]))
+		assert.Equal(t, len(state.reader.Columns()), len(rows[0]))
 	}
 	
 	// Test width settings
@@ -578,7 +569,8 @@ func TestRealObjectFile(t *testing.T) {
 	rows, _, err = state.CurrentRows()
 	require.NoError(t, err)
 	if len(rows) > 0 {
-		assert.Equal(t, 3, len(rows[0]), "Should only show 3 columns")
+		// CurrentRows now returns all columns, filtering happens at render time
+		assert.Equal(t, len(state.reader.Columns()), len(rows[0]), "Should return all columns")
 	}
 	
 	state.visibleCols = nil
@@ -696,12 +688,12 @@ func TestStateBoundaryConditions(t *testing.T) {
 	// May return error at boundary
 	_ = err
 	
-	// Test with empty visible columns
+	// Test with empty visible columns - CurrentRows still returns all columns
 	state.visibleCols = []uint16{}
 	rows, _, err := state.CurrentRows()
 	require.NoError(t, err)
 	if len(rows) > 0 {
-		assert.Equal(t, 0, len(rows[0]))
+		assert.Equal(t, len(state.reader.Columns()), len(rows[0]))
 	}
 }
 
@@ -873,12 +865,12 @@ func TestStateEdgeCases(t *testing.T) {
 		assert.Equal(t, 8, len(rows[0]))
 	}
 	
-	// Test with single column
+	// Test with single column - CurrentRows still returns all columns
 	state.visibleCols = []uint16{0}
 	rows, _, err = state.CurrentRows()
 	require.NoError(t, err)
 	if len(rows) > 0 {
-		assert.Equal(t, 1, len(rows[0]))
+		assert.Equal(t, len(state.reader.Columns()), len(rows[0]))
 	}
 }
 
@@ -1189,11 +1181,8 @@ func TestCurrentRowsComprehensive(t *testing.T) {
 		rows, _, err := state.CurrentRows()
 		require.NoError(t, err)
 		if len(rows) > 0 {
-			if cols == nil {
-				assert.Equal(t, 8, len(rows[0]))
-			} else {
-				assert.Equal(t, len(cols), len(rows[0]))
-			}
+			// CurrentRows always returns all columns now
+			assert.Equal(t, len(state.reader.Columns()), len(rows[0]))
 		}
 	}
 	

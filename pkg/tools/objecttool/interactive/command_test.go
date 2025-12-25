@@ -68,11 +68,6 @@ func TestParseCommand(t *testing.T) {
 			expectedCmd: &QuitCommand{},
 		},
 		{
-			name:        "colon info",
-			input:       ":info",
-			expectedCmd: &InfoCommand{},
-		},
-		{
 			name:        "colon schema",
 			input:       ":schema",
 			expectedCmd: &SchemaCommand{},
@@ -462,7 +457,6 @@ func TestCommandTypes(t *testing.T) {
 	// Test that all command types can be created
 	commands := []Command{
 		&QuitCommand{},
-		&InfoCommand{},
 		&SchemaCommand{},
 		&FormatCommand{ColIdx: 0, FormatterName: "hex"},
 		&ScrollCommand{Down: true, Lines: 1},

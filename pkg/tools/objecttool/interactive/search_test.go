@@ -265,13 +265,15 @@ func TestColumnsCommandDataCorrectness(t *testing.T) {
 	require.NoError(t, err)
 	require.Greater(t, len(rows), 0)
 	
-	// Each row should have exactly 3 columns (0, 2, 3)
+	// CurrentRows returns all columns now, filtering happens at render time
 	for i, row := range rows {
-		assert.Equal(t, 3, len(row), "Row %d should have 3 columns", i)
+		assert.Equal(t, len(state.reader.Columns()), len(row), "Row %d should have all columns", i)
 		
-		// Verify data is not empty (unless it's actually empty)
-		for j, cell := range row {
-			assert.NotEmpty(t, cell, "Row %d, Col %d should not be empty", i, j)
+		// Verify selected columns are not empty
+		for _, colIdx := range state.visibleCols {
+			if int(colIdx) < len(row) {
+				assert.NotEmpty(t, row[colIdx], "Row %d, Col %d should not be empty", i, colIdx)
+			}
 		}
 	}
 	
@@ -292,7 +294,13 @@ func TestColumnsCommandDataCorrectness(t *testing.T) {
 		require.NoError(t, err)
 		
 		if len(rows) > 0 {
-			assert.Equal(t, tc.expected, len(rows[0]), "Columns %v should return %d columns", tc.cols, tc.expected)
+			// CurrentRows returns all columns, check that selected columns have data
+			assert.Equal(t, len(state.reader.Columns()), len(rows[0]))
+			for _, colIdx := range tc.cols {
+				if int(colIdx) < len(rows[0]) {
+					assert.NotEmpty(t, rows[0][colIdx], "Column %d should have data", colIdx)
+				}
+			}
 		}
 	}
 }

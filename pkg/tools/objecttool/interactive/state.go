@@ -25,6 +25,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/tools/objecttool"
 )
 
+// ViewMode represents the current view mode
+type ViewMode int
+
+const (
+	ViewModeData ViewMode = iota
+	ViewModeBlkMeta
+	ViewModeObjMeta
+)
+
 // State represents the browsing state
 type State struct {
 	reader    *objecttool.ObjectReader
@@ -43,6 +52,38 @@ type State struct {
 	maxColWidth  int               // Maximum column width
 	verticalMode bool              // Vertical display mode
 	colNames     map[uint16]string // Column rename mapping
+	
+	// View mode
+	viewMode ViewMode      // Current view mode
+	metaRows [][]string    // Metadata rows (for BlkMeta/ObjMeta mode)
+	metaCols []ColInfo     // Metadata columns schema
+	metaOffset int         // Offset for metadata rows
+	blkSummary map[uint32]BlkSummary // Block summary info (for BlkMeta mode)
+	objSummary ObjSummary             // Object summary info (for ObjMeta mode)
+}
+
+// ColInfo contains column information
+type ColInfo struct {
+	Idx  uint16
+	Name string
+	Type types.Type
+}
+
+// BlkSummary contains summary information for a block
+type BlkSummary struct {
+	BlockID          uint32
+	TotalOriginSize  uint32
+	TotalCompSize    uint32
+	CompressionRatio float64
+}
+
+// ObjSummary contains summary information for an object
+type ObjSummary struct {
+	TotalRows        uint64
+	TotalNullCnt     uint64
+	TotalOriginSize  uint64
+	TotalCompSize    uint64
+	CompressionRatio float64
 }
 
 func NewState(ctx context.Context, reader *objecttool.ObjectReader) *State {
@@ -58,6 +99,12 @@ func NewState(ctx context.Context, reader *objecttool.ObjectReader) *State {
 // CurrentRows returns the current page data (formatted strings)
 // Returns: rows, rowNumbers, error
 func (s *State) CurrentRows() ([][]string, []string, error) {
+	// Handle metadata modes
+	if s.viewMode == ViewModeBlkMeta || s.viewMode == ViewModeObjMeta {
+		return s.currentMetaRows()
+	}
+	
+	// Data mode - original logic
 	// Ensure current block is loaded
 	if err := s.ensureBlockLoaded(); err != nil {
 		return nil, nil, err
@@ -84,32 +131,25 @@ func (s *State) CurrentRows() ([][]string, []string, error) {
 	rowNumbers := make([]string, end-start)
 	cols := s.reader.Columns()
 
-	// Determine columns to display
-	displayCols := s.visibleCols
-	if displayCols == nil {
-		// Display all columns
-		displayCols = make([]uint16, len(cols))
-		for i := range cols {
-			displayCols[i] = uint16(i)
-		}
+	// Return all columns data (not filtered by displayCols)
+	// Filtering will be done at render time based on hScrollOffset
+	allCols := make([]uint16, len(cols))
+	for i := range cols {
+		allCols[i] = uint16(i)
 	}
 
 	for i := start; i < end; i++ {
 		// Generate row number (block-offset)
 		rowNumbers[i-start] = fmt.Sprintf("(%d-%d)", s.currentBlock, i)
 
-		row := make([]string, len(displayCols))
-		for j, colIdx := range displayCols {
-			if int(colIdx) >= len(cols) {
-				row[j] = ""
-				continue
-			}
+		row := make([]string, len(cols))
+		for colIdx := range cols {
 			col := cols[colIdx]
 			vec := s.currentBatch.Vecs[colIdx]
 
 			// Check NULL
 			if vec.IsNull(uint64(i)) {
-				row[j] = "NULL"
+				row[colIdx] = "NULL"
 				continue
 			}
 
@@ -156,10 +196,10 @@ func (s *State) CurrentRows() ([][]string, []string, error) {
 
 			// Empty string displays as empty
 			if formatted == "" {
-				row[j] = ""
+				row[colIdx] = ""
 			} else {
 				// In vertical mode, don't limit length; in table mode, handled by view layer
-				row[j] = formatted
+				row[colIdx] = formatted
 			}
 		}
 		rows[i-start] = row
@@ -185,6 +225,17 @@ func (s *State) ensureBlockLoaded() error {
 
 // NextPage moves to the next page
 func (s *State) NextPage() error {
+	// Metadata mode
+	if s.viewMode == ViewModeBlkMeta || s.viewMode == ViewModeObjMeta {
+		newOffset := s.metaOffset + s.pageSize
+		if newOffset < len(s.metaRows) {
+			s.metaOffset = newOffset
+			return nil
+		}
+		return moerr.NewInternalErrorf(s.ctx, "already at last page")
+	}
+	
+	// Data mode
 	if s.currentBatch == nil {
 		return s.ensureBlockLoaded()
 	}
@@ -211,6 +262,16 @@ func (s *State) NextPage() error {
 
 // PrevPage moves to the previous page
 func (s *State) PrevPage() error {
+	// Metadata mode
+	if s.viewMode == ViewModeBlkMeta || s.viewMode == ViewModeObjMeta {
+		if s.metaOffset >= s.pageSize {
+			s.metaOffset -= s.pageSize
+			return nil
+		}
+		return moerr.NewInternalErrorf(s.ctx, "already at first page")
+	}
+	
+	// Data mode
 	if s.rowOffset >= s.pageSize {
 		// Within the same block
 		s.rowOffset -= s.pageSize
@@ -242,6 +303,16 @@ func (s *State) PrevPage() error {
 
 // ScrollDown scrolls down one line
 func (s *State) ScrollDown() error {
+	// Metadata mode
+	if s.viewMode == ViewModeBlkMeta || s.viewMode == ViewModeObjMeta {
+		if s.metaOffset+1 < len(s.metaRows) {
+			s.metaOffset++
+			return nil
+		}
+		return moerr.NewInternalErrorf(s.ctx, "already at last row")
+	}
+	
+	// Data mode
 	if s.currentBatch == nil {
 		return s.ensureBlockLoaded()
 	}
@@ -266,6 +337,16 @@ func (s *State) ScrollDown() error {
 
 // ScrollUp scrolls up one line
 func (s *State) ScrollUp() error {
+	// Metadata mode
+	if s.viewMode == ViewModeBlkMeta || s.viewMode == ViewModeObjMeta {
+		if s.metaOffset > 0 {
+			s.metaOffset--
+			return nil
+		}
+		return moerr.NewInternalErrorf(s.ctx, "already at first row")
+	}
+	
+	// Data mode
 	if s.rowOffset > 0 {
 		s.rowOffset--
 		return nil
@@ -375,4 +456,372 @@ func (s *State) releaseCurrentBatch() {
 // Close closes the state
 func (s *State) Close() {
 	s.releaseCurrentBatch()
+}
+
+// Mode switching methods
+
+func (s *State) SwitchToData() {
+	s.viewMode = ViewModeData
+	s.metaOffset = 0
+}
+
+func (s *State) SwitchToBlkMeta() error {
+	s.viewMode = ViewModeBlkMeta
+	s.metaCols = s.blkMetaSchema()
+	s.metaRows, s.blkSummary = s.buildBlkMetaRows()
+	s.metaOffset = 0
+	return nil
+}
+
+func (s *State) SwitchToObjMeta() error {
+	s.viewMode = ViewModeObjMeta
+	s.metaCols = s.objMetaSchema()
+	s.metaRows = s.buildObjMetaRows()
+	s.metaOffset = 0
+	return nil
+}
+
+// Schema definitions
+
+func (s *State) blkMetaSchema() []ColInfo {
+	return []ColInfo{
+		{Idx: 0, Name: "ColIdx", Type: types.T_uint16.ToType()},
+		{Idx: 1, Name: "Name", Type: types.T_varchar.ToType()},
+		{Idx: 2, Name: "OriginSize", Type: types.T_uint32.ToType()},
+		{Idx: 3, Name: "CompSize", Type: types.T_uint32.ToType()},
+		{Idx: 4, Name: "CompRatio", Type: types.T_float64.ToType()},
+		{Idx: 5, Name: "Rows", Type: types.T_uint32.ToType()},
+		{Idx: 6, Name: "NullCnt", Type: types.T_uint32.ToType()},
+		{Idx: 7, Name: "Min", Type: types.T_varchar.ToType()},
+		{Idx: 8, Name: "Max", Type: types.T_varchar.ToType()},
+	}
+}
+
+func (s *State) objMetaSchema() []ColInfo {
+	return []ColInfo{
+		{Idx: 0, Name: "Property", Type: types.T_varchar.ToType()},
+		{Idx: 1, Name: "Value", Type: types.T_varchar.ToType()},
+	}
+}
+
+// Data building methods
+
+func (s *State) buildBlkMetaRows() ([][]string, map[uint32]BlkSummary) {
+	rows := make([][]string, 0)
+	summary := make(map[uint32]BlkSummary)
+	info := s.reader.Info()
+	meta := s.reader.Meta()
+	
+	for blockID := uint32(0); blockID < info.BlockCount; blockID++ {
+		blockMeta := meta.GetBlockMeta(blockID)
+		var blockTotalOriginSize uint32
+		var blockTotalCompSize uint32
+		
+		for colIdx := uint16(0); colIdx < info.ColCount; colIdx++ {
+			colMeta := blockMeta.ColumnMeta(colIdx)
+			colName := s.getColumnName(colIdx)
+			
+			originSize := colMeta.Location().OriginSize()
+			compSize := colMeta.Location().Length()
+			nullCnt := colMeta.NullCnt()
+			blockTotalOriginSize += originSize
+			blockTotalCompSize += compSize
+			
+			// Calculate compression ratio for this column
+			colCompRatio := float64(0)
+			if originSize > 0 {
+				colCompRatio = float64(compSize) / float64(originSize) * 100
+			}
+			
+			// Format Min/Max as hex if binary
+			zm := colMeta.ZoneMap()
+			minBuf := zm.GetMinBuf()
+			maxBuf := zm.GetMaxBuf()
+			
+			// Check if ZoneMap is initialized and buffers are valid
+			var minStr, maxStr string
+			if len(zm) == 0 || !zm.IsInited() {
+				// ZoneMap not initialized
+				minStr = "N/A"
+				maxStr = "N/A"
+			} else {
+				// ZoneMap initialized, check if min/max are empty
+				if len(minBuf) == 0 {
+					minStr = "<empty>"
+				} else {
+					minStr = fmt.Sprintf("%x", minBuf)
+				}
+				if len(maxBuf) == 0 {
+					maxStr = "<empty>"
+				} else {
+					maxStr = fmt.Sprintf("%x", maxBuf)
+				}
+			}
+			
+			row := []string{
+				fmt.Sprintf("%d", colIdx),
+				colName,
+				fmt.Sprintf("%s (%d)", formatSize(uint64(originSize)), originSize),
+				fmt.Sprintf("%s (%d)", formatSize(uint64(compSize)), compSize),
+				fmt.Sprintf("%.2f%%", colCompRatio),
+				fmt.Sprintf("%d", blockMeta.GetRows()),
+				fmt.Sprintf("%d", nullCnt),
+				minStr,
+				maxStr,
+			}
+			rows = append(rows, row)
+		}
+		
+		// Store summary for this block (not in table)
+		compressionRatio := float64(0)
+		if blockTotalOriginSize > 0 {
+			compressionRatio = float64(blockTotalCompSize) / float64(blockTotalOriginSize) * 100
+		}
+		summary[blockID] = BlkSummary{
+			BlockID:          blockID,
+			TotalOriginSize:  blockTotalOriginSize,
+			TotalCompSize:    blockTotalCompSize,
+			CompressionRatio: compressionRatio,
+		}
+	}
+	
+	return rows, summary
+}
+
+func (s *State) buildObjMetaRows() [][]string {
+	info := s.reader.Info()
+	meta := s.reader.Meta()
+	
+	// Calculate totals across all blocks and columns
+	var totalOriginSize uint64
+	var totalCompSize uint64
+	var totalNullCnt uint64
+	
+	// Per-column statistics
+	colStats := make(map[uint16]struct {
+		totalOriginSize uint64
+		totalCompSize   uint64
+		totalNullCnt    uint64
+		minBuf          []byte
+		maxBuf          []byte
+		hasInitialized  bool
+	})
+	
+	// Iterate through all blocks and columns to collect data
+	for blockID := uint32(0); blockID < info.BlockCount; blockID++ {
+		blockMeta := meta.GetBlockMeta(blockID)
+		for colIdx := uint16(0); colIdx < info.ColCount; colIdx++ {
+			colMeta := blockMeta.ColumnMeta(colIdx)
+			originSize := uint64(colMeta.Location().OriginSize())
+			compSize := uint64(colMeta.Location().Length())
+			nullCnt := uint64(colMeta.NullCnt())
+			
+			totalOriginSize += originSize
+			totalCompSize += compSize
+			totalNullCnt += nullCnt
+			
+			// Collect per-column statistics
+			stats := colStats[colIdx]
+			stats.totalOriginSize += originSize
+			stats.totalCompSize += compSize
+			stats.totalNullCnt += nullCnt
+			
+			// Collect min/max for each column (across all blocks)
+			zm := colMeta.ZoneMap()
+			minBuf := zm.GetMinBuf()
+			maxBuf := zm.GetMaxBuf()
+			
+			// Check if ZoneMap is initialized
+			hasInitialized := len(zm) > 0 && zm.IsInited()
+			
+			if hasInitialized {
+				stats.hasInitialized = true
+				// Update min: prefer non-empty values
+				if len(minBuf) > 0 {
+					if len(stats.minBuf) == 0 || string(minBuf) < string(stats.minBuf) {
+						stats.minBuf = minBuf
+					}
+				} else {
+					// Current is empty: only update if existing is also empty
+					if len(stats.minBuf) == 0 {
+						stats.minBuf = minBuf
+					}
+				}
+				// Update max: prefer non-empty values
+				if len(maxBuf) > 0 {
+					if len(stats.maxBuf) == 0 || string(maxBuf) > string(stats.maxBuf) {
+						stats.maxBuf = maxBuf
+					}
+				} else {
+					// Current is empty: only update if existing is also empty
+					if len(stats.maxBuf) == 0 {
+						stats.maxBuf = maxBuf
+					}
+				}
+			}
+			colStats[colIdx] = stats
+		}
+	}
+	
+	// Calculate global compression ratio
+	globalCompRatio := float64(0)
+	if totalOriginSize > 0 {
+		globalCompRatio = float64(totalCompSize) / float64(totalOriginSize) * 100
+	}
+	
+	rows := [][]string{
+		{"Path", info.Path},
+		{"Blocks", fmt.Sprintf("%d", info.BlockCount)},
+		{"Columns", fmt.Sprintf("%d", info.ColCount)},
+		{"Sorted", fmt.Sprintf("%v", info.IsSorted)},
+		{"Appendable", fmt.Sprintf("%v", info.IsAppendable)},
+	}
+	
+	// Add global summary row
+	rows = append(rows, []string{
+		"TotalRows",
+		fmt.Sprintf("%d", info.RowCount),
+	})
+	rows = append(rows, []string{
+		"TotalNullCount",
+		fmt.Sprintf("%d", totalNullCnt),
+	})
+	rows = append(rows, []string{
+		"TotalOriginSize",
+		fmt.Sprintf("%s (%d)", formatSize(totalOriginSize), totalOriginSize),
+	})
+	rows = append(rows, []string{
+		"TotalCompSize",
+		fmt.Sprintf("%s (%d)", formatSize(totalCompSize), totalCompSize),
+	})
+	rows = append(rows, []string{
+		"CompressionRatio",
+		fmt.Sprintf("%.2f%%", globalCompRatio),
+	})
+	
+	// Add per-column statistics
+	for colIdx := uint16(0); colIdx < info.ColCount; colIdx++ {
+		colName := s.getColumnName(colIdx)
+		stats := colStats[colIdx]
+		
+		// Calculate column compression ratio
+		colCompRatio := float64(0)
+		if stats.totalOriginSize > 0 {
+			colCompRatio = float64(stats.totalCompSize) / float64(stats.totalOriginSize) * 100
+		}
+		
+		// Column summary
+		rows = append(rows, []string{
+			fmt.Sprintf("%s.TotalOriginSize", colName),
+			fmt.Sprintf("%s (%d)", formatSize(stats.totalOriginSize), stats.totalOriginSize),
+		})
+		rows = append(rows, []string{
+			fmt.Sprintf("%s.TotalCompSize", colName),
+			fmt.Sprintf("%s (%d)", formatSize(stats.totalCompSize), stats.totalCompSize),
+		})
+		rows = append(rows, []string{
+			fmt.Sprintf("%s.CompressionRatio", colName),
+			fmt.Sprintf("%.2f%%", colCompRatio),
+		})
+		rows = append(rows, []string{
+			fmt.Sprintf("%s.TotalNullCount", colName),
+			fmt.Sprintf("%d", stats.totalNullCnt),
+		})
+		
+		// Column min/max
+		var minStr, maxStr string
+		if !stats.hasInitialized {
+			minStr = "N/A"
+			maxStr = "N/A"
+		} else {
+			if len(stats.minBuf) == 0 {
+				minStr = "<empty>"
+			} else {
+				minStr = fmt.Sprintf("%x", stats.minBuf)
+			}
+			if len(stats.maxBuf) == 0 {
+				maxStr = "<empty>"
+			} else {
+				maxStr = fmt.Sprintf("%x", stats.maxBuf)
+			}
+		}
+		rows = append(rows, []string{
+			fmt.Sprintf("%s.Min", colName),
+			minStr,
+		})
+		rows = append(rows, []string{
+			fmt.Sprintf("%s.Max", colName),
+			maxStr,
+		})
+	}
+	
+	return rows
+}
+
+func (s *State) getColumnName(colIdx uint16) string {
+	if s.colNames != nil {
+		if name, exists := s.colNames[colIdx]; exists {
+			return name
+		}
+	}
+	return fmt.Sprintf("Col%d", colIdx)
+}
+
+func (s *State) currentMetaRows() ([][]string, []string, error) {
+	if len(s.metaRows) == 0 {
+		return nil, nil, nil
+	}
+	
+	start := s.metaOffset
+	end := start + s.pageSize
+	if end > len(s.metaRows) {
+		end = len(s.metaRows)
+	}
+	
+	if start >= len(s.metaRows) {
+		return nil, nil, nil
+	}
+	
+	rows := s.metaRows[start:end]
+	rowNumbers := make([]string, len(rows))
+	
+	// For blkmeta, use block number from the first column
+	// For objmeta, use property name from the first column
+	for i := range rows {
+		if s.viewMode == ViewModeBlkMeta {
+			// Calculate block number from row index
+			info := s.reader.Info()
+			rowIdx := start + i
+			blockNo := rowIdx / int(info.ColCount)
+			rowNumbers[i] = fmt.Sprintf("%d", blockNo)
+		} else if s.viewMode == ViewModeObjMeta {
+			// Use the property name (first column)
+			if len(rows[i]) > 0 {
+				rowNumbers[i] = rows[i][0]
+			} else {
+				rowNumbers[i] = fmt.Sprintf("(%d)", start+i)
+			}
+		} else {
+			rowNumbers[i] = fmt.Sprintf("(%d)", start+i)
+		}
+	}
+	
+	return rows, rowNumbers, nil
+}
+
+// Columns returns column information based on current mode
+func (s *State) Columns() []objecttool.ColInfo {
+	if s.viewMode == ViewModeData {
+		return s.reader.Columns()
+	}
+	
+	// Convert internal ColInfo to objecttool.ColInfo
+	cols := make([]objecttool.ColInfo, len(s.metaCols))
+	for i, col := range s.metaCols {
+		cols[i] = objecttool.ColInfo{
+			Idx:  col.Idx,
+			Type: col.Type,
+		}
+	}
+	return cols
 }
