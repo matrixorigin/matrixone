@@ -346,3 +346,15 @@ drop table if exists fk_02;
 drop table if exists f1;
 drop table if exists fk_01;
 set autocommit=1;
+-- Test for issue 23344
+drop database if exists issue_23344;
+create database issue_23344;
+use issue_23344;
+create table parent (id int primary key);
+create table child (
+    id int primary key,
+    parent_id int,
+    constraint fk_parent foreign key (parent_id) references parent(id) on delete set null on update restrict
+);
+alter table child modify parent_id int null;
+drop database issue_23344;
