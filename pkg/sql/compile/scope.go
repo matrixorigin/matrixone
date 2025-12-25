@@ -606,7 +606,6 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 		rsp.IsLocalCN = true
 	}
 
-	time.Sleep(time.Second * 10)
 	if s.IsRemote {
 		var commited engine.RelData
 		commited, err = c.expandRanges(
