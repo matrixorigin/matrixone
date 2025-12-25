@@ -70,12 +70,12 @@ func TestModel_BrowseMode(t *testing.T) {
 		maxColWidth: 64,
 		pageSize:    20,
 	}
-	
+
 	m := model{
 		cmdMode: false,
 		state:   mockState,
 	}
-	
+
 	tests := []struct {
 		name     string
 		keyType  tea.KeyType
@@ -88,13 +88,13 @@ func TestModel_BrowseMode(t *testing.T) {
 		{"enter search mode", tea.KeyRunes, []rune("/"), false},
 		{"help", tea.KeyRunes, []rune("?"), false},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			msg := tea.KeyMsg{Type: tt.keyType, Runes: tt.keyRunes}
-			
+
 			newModel, cmd := m.handleBrowseMode(msg)
-			
+
 			if tt.expected {
 				// Check if it's a quit command (function pointer comparison doesn't work)
 				assert.NotNil(t, cmd)
@@ -116,13 +116,13 @@ func TestModel_BrowseMode(t *testing.T) {
 
 func TestModel_CommandMode(t *testing.T) {
 	m := model{
-		cmdMode:     true,
-		cmdInput:    "test",
-		cmdCursor:   4,
-		cmdHistory:  []string{"prev1", "prev2"},
+		cmdMode:      true,
+		cmdInput:     "test",
+		cmdCursor:    4,
+		cmdHistory:   []string{"prev1", "prev2"},
 		historyIndex: 2,
 	}
-	
+
 	tests := []struct {
 		name           string
 		keyType        tea.KeyType
@@ -181,14 +181,14 @@ func TestModel_CommandMode(t *testing.T) {
 			expectedMode:   true,
 		},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			msg := tea.KeyMsg{Type: tt.keyType, Runes: tt.keyRunes}
-			
+
 			newModel, _ := m.handleCommandInput(msg)
 			result := newModel.(model)
-			
+
 			assert.Equal(t, tt.expectedInput, result.cmdInput)
 			assert.Equal(t, tt.expectedCursor, result.cmdCursor)
 			assert.Equal(t, tt.expectedMode, result.cmdMode)
@@ -202,28 +202,28 @@ func TestModel_CommandHistory(t *testing.T) {
 		cmdHistory:   []string{"cmd1", "cmd2", "cmd3"},
 		historyIndex: 3,
 	}
-	
+
 	// Test up arrow (previous command)
 	msg := tea.KeyMsg{Type: tea.KeyUp}
 	newModel, _ := m.handleCommandInput(msg)
 	result := newModel.(model)
-	
+
 	assert.Equal(t, 2, result.historyIndex)
 	assert.Equal(t, "cmd3", result.cmdInput)
 	assert.Equal(t, 4, result.cmdCursor) // cursor at end
-	
+
 	// Test up arrow again
 	newModel, _ = result.handleCommandInput(msg)
 	result = newModel.(model)
-	
+
 	assert.Equal(t, 1, result.historyIndex)
 	assert.Equal(t, "cmd2", result.cmdInput)
-	
+
 	// Test down arrow (next command)
 	msg = tea.KeyMsg{Type: tea.KeyDown}
 	newModel, _ = result.handleCommandInput(msg)
 	result = newModel.(model)
-	
+
 	assert.Equal(t, 2, result.historyIndex)
 	assert.Equal(t, "cmd3", result.cmdInput)
 }
@@ -234,12 +234,12 @@ func TestModel_TextInput(t *testing.T) {
 		cmdInput:  "test",
 		cmdCursor: 2, // cursor between 'te' and 'st'
 	}
-	
+
 	// Test inserting text at cursor position
 	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("XY")}
 	newModel, _ := m.handleCommandInput(msg)
 	result := newModel.(model)
-	
+
 	assert.Equal(t, "teXYst", result.cmdInput)
 	assert.Equal(t, 4, result.cmdCursor) // cursor moved by 2
 }
@@ -250,12 +250,12 @@ func TestModel_PasteHandling(t *testing.T) {
 		cmdInput:  "",
 		cmdCursor: 0,
 	}
-	
+
 	// Test pasting text with brackets (should be removed)
 	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("[pasted content]")}
 	newModel, _ := m.handleCommandInput(msg)
 	result := newModel.(model)
-	
+
 	assert.Equal(t, "pasted content", result.cmdInput)
 	assert.Equal(t, 14, result.cmdCursor)
 }
@@ -266,14 +266,14 @@ func TestModel_SearchMatches(t *testing.T) {
 		maxColWidth: 64,
 		pageSize:    20,
 	}
-	
+
 	m := model{
 		state:        mockState,
 		searchTerm:   "test",
 		hasMatch:     true,
 		currentMatch: SearchMatch{Row: 0, Col: 0, Value: "match1", RowNum: "(0-0)", ColumnName: "Col0"},
 	}
-	
+
 	// Test that we can access search match without crashing
 	assert.True(t, m.hasMatch)
 	assert.Equal(t, int64(0), m.currentMatch.Row)
@@ -282,7 +282,7 @@ func TestModel_SearchMatches(t *testing.T) {
 
 func TestCompleteCommand(t *testing.T) {
 	m := model{}
-	
+
 	tests := []struct {
 		name     string
 		input    string
@@ -314,7 +314,7 @@ func TestCompleteCommand(t *testing.T) {
 			expected: "",
 		},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := m.completeCommand(tt.input)
@@ -325,7 +325,7 @@ func TestCompleteCommand(t *testing.T) {
 
 func TestCompleteCommandName(t *testing.T) {
 	m := model{}
-	
+
 	tests := []struct {
 		name     string
 		input    string
@@ -352,7 +352,7 @@ func TestCompleteCommandName(t *testing.T) {
 			expected: "quit",
 		},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := m.completeCommandName(tt.input)
@@ -397,7 +397,7 @@ func TestLongestCommonPrefix(t *testing.T) {
 			expected: "",
 		},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := longestCommonPrefix(tt.input)
@@ -409,37 +409,36 @@ func TestLongestCommonPrefix(t *testing.T) {
 func TestModel_View(t *testing.T) {
 	// Create a minimal state that won't cause nil pointer dereference
 	state := &State{
-		formatter:   objecttool.NewFormatterRegistry(),
-		ctx:         context.Background(),
-		pageSize:    20,
-		maxColWidth: 64,
+		formatter:    objecttool.NewFormatterRegistry(),
+		ctx:          context.Background(),
+		pageSize:     20,
+		maxColWidth:  64,
 		verticalMode: false,
 		currentBlock: 0,
-		rowOffset:   0,
+		rowOffset:    0,
 		// Don't set reader to avoid ReadBlock calls
 	}
-	
+
 	m := model{
 		message: "test message",
 		cmdMode: false,
 		state:   state,
 	}
-	
+
 	// Test command mode view (doesn't need data)
 	m.cmdMode = true
 	m.cmdInput = "test command"
 	m.cmdCursor = 4
-	
+
 	assert.NotPanics(t, func() {
 		view := m.View()
 		assert.IsType(t, "", view)
 		assert.Contains(t, view, ":")
 	})
-	
+
 	// Test basic model properties
 	assert.Equal(t, "test message", m.message)
 	assert.True(t, m.cmdMode)
 	assert.Equal(t, "test command", m.cmdInput)
 	assert.Equal(t, 4, m.cmdCursor)
 }
-

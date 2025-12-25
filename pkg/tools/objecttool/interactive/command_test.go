@@ -60,7 +60,7 @@ func TestParseCommand(t *testing.T) {
 			input:       "?",
 			expectedCmd: &HelpCommand{},
 		},
-		
+
 		// Colon commands
 		{
 			name:        "colon quit",
@@ -107,7 +107,7 @@ func TestParseCommand(t *testing.T) {
 			input:       ":vrows 10",
 			expectedCmd: &VRowsCommand{},
 		},
-		
+
 		// Aliases
 		{
 			name:        "v alias",
@@ -134,14 +134,14 @@ func TestParseCommand(t *testing.T) {
 			input:       ":w 64",
 			expectedCmd: &SetCommand{},
 		},
-		
+
 		// Block jump
 		{
 			name:        "block jump",
 			input:       ":123",
 			expectedCmd: &GotoCommand{},
 		},
-		
+
 		// Error cases
 		{
 			name:        "unknown command",
@@ -168,14 +168,14 @@ func TestParseCommand(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cmd, err := ParseCommand(tt.input)
-			
+
 			if tt.expectError {
 				assert.Error(t, err)
 				return
 			}
-			
+
 			require.NoError(t, err)
-			
+
 			if tt.expectedCmd == nil {
 				assert.Nil(t, cmd)
 			} else {
@@ -250,16 +250,16 @@ func TestParseSetCommand(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cmd, err := parseSetCommand(tt.args)
-			
+
 			if tt.expectError {
 				assert.Error(t, err)
 				return
 			}
-			
+
 			require.NoError(t, err)
 			setCmd, ok := cmd.(*SetCommand)
 			require.True(t, ok)
-			
+
 			assert.Equal(t, tt.expectedOpt, setCmd.Option)
 			assert.Equal(t, tt.expectedVal, setCmd.Value)
 		})
@@ -319,16 +319,16 @@ func TestParseColumnsCommand(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cmd, err := parseColumnsCommand(tt.args)
-			
+
 			if tt.expectError {
 				assert.Error(t, err)
 				return
 			}
-			
+
 			require.NoError(t, err)
 			colCmd, ok := cmd.(*ColumnsCommand)
 			require.True(t, ok)
-			
+
 			if tt.showAll {
 				assert.True(t, colCmd.ShowAll)
 			} else {
@@ -340,11 +340,11 @@ func TestParseColumnsCommand(t *testing.T) {
 
 func TestParseFormatCommand(t *testing.T) {
 	tests := []struct {
-		name          string
-		args          []string
-		expectedCol   uint16
-		expectedFmt   string
-		expectError   bool
+		name        string
+		args        []string
+		expectedCol uint16
+		expectedFmt string
+		expectError bool
 	}{
 		{
 			name:        "valid format",
@@ -373,16 +373,16 @@ func TestParseFormatCommand(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cmd, err := parseFormatCommand(tt.args)
-			
+
 			if tt.expectError {
 				assert.Error(t, err)
 				return
 			}
-			
+
 			require.NoError(t, err)
 			fmtCmd, ok := cmd.(*FormatCommand)
 			require.True(t, ok)
-			
+
 			assert.Equal(t, tt.expectedCol, fmtCmd.ColIdx)
 			assert.Equal(t, tt.expectedFmt, fmtCmd.FormatterName)
 		})
@@ -393,7 +393,7 @@ func TestParseFormatCommand(t *testing.T) {
 func TestQuitCommand_Execute(t *testing.T) {
 	cmd := &QuitCommand{}
 	output, quit, err := cmd.Execute(nil)
-	
+
 	assert.NoError(t, err)
 	assert.True(t, quit)
 	assert.Empty(t, output)
@@ -403,23 +403,23 @@ func TestHelpCommand_Execute(t *testing.T) {
 	// Test general help
 	cmd := &HelpCommand{}
 	output, quit, err := cmd.Execute(nil)
-	
+
 	assert.NoError(t, err)
 	assert.False(t, quit)
 	assert.Contains(t, output, "Browse Mode")
-	
+
 	// Test topic help
 	cmd = &HelpCommand{Topic: "format"}
 	output, quit, err = cmd.Execute(nil)
-	
+
 	assert.NoError(t, err)
 	assert.False(t, quit)
 	assert.Contains(t, output, "formatter")
-	
+
 	// Test unknown topic
 	cmd = &HelpCommand{Topic: "unknown"}
 	output, quit, err = cmd.Execute(nil)
-	
+
 	assert.NoError(t, err)
 	assert.False(t, quit)
 	assert.Contains(t, output, "No help for")
@@ -430,7 +430,7 @@ func TestSetCommand_Execute(t *testing.T) {
 	cmd := &SetCommand{Option: "width", Value: 100}
 	assert.Equal(t, "width", cmd.Option)
 	assert.Equal(t, 100, cmd.Value)
-	
+
 	// Test unlimited width
 	cmd = &SetCommand{Option: "width", Value: 0}
 	assert.Equal(t, "width", cmd.Option)
@@ -441,7 +441,7 @@ func TestVerticalCommand_Execute(t *testing.T) {
 	// Test command creation
 	cmd := &VerticalCommand{Enable: true}
 	assert.True(t, cmd.Enable)
-	
+
 	cmd = &VerticalCommand{Enable: false}
 	assert.False(t, cmd.Enable)
 }
@@ -461,7 +461,7 @@ func TestCommandTypes(t *testing.T) {
 		&ColumnsCommand{ShowAll: true},
 		&VRowsCommand{Rows: 10},
 	}
-	
+
 	for i, cmd := range commands {
 		t.Run(fmt.Sprintf("command_%d", i), func(t *testing.T) {
 			assert.NotNil(t, cmd)
@@ -500,7 +500,7 @@ func TestParseCommandEdgeCases(t *testing.T) {
 		{"format without args", "format", true},
 		{"format invalid col", "format abc hex", true},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cmd, err := ParseCommand(tt.input)
@@ -515,7 +515,6 @@ func TestParseCommandEdgeCases(t *testing.T) {
 		})
 	}
 }
-
 
 // TestParseColonCommandCoverage tests parseColonCommand edge cases
 func TestParseColonCommandCoverage(t *testing.T) {
@@ -540,7 +539,7 @@ func TestParseColonCommandCoverage(t *testing.T) {
 		{":set", ":set", true},
 		{":format", ":format", true},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cmd, err := ParseCommand(tt.input)
