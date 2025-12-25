@@ -34,7 +34,6 @@ type mockFileService struct {
 	deleteCount  atomic.Int64
 	deleteCalls  atomic.Int64
 	deleteDelay  time.Duration
-	mu           sync.Mutex
 }
 
 func newMockFileService() *mockFileService {
