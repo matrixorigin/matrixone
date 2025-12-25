@@ -20,13 +20,15 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	commonruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -70,7 +72,31 @@ var (
 		moerr.ErrTxnNotFound:  {},
 		moerr.ErrTxnNotActive: {},
 	}
+
+	//runningSQLWaitTimeout = 2 * time.Minute
+	runningSQLWaitTimeout = 30 * time.Second
 )
+
+type runSQLSkipTokenKey struct{}
+
+func WithRunSQLSkipToken(ctx context.Context, token uint64) context.Context {
+	if token == 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, runSQLSkipTokenKey{}, token)
+}
+
+func runSQLSkipTokenFromCtx(ctx context.Context) uint64 {
+	if ctx == nil {
+		return 0
+	}
+	if v := ctx.Value(runSQLSkipTokenKey{}); v != nil {
+		if token, ok := v.(uint64); ok {
+			return token
+		}
+	}
+	return 0
+}
 
 // WithUserTxn setup user transaction flag. Only user transactions need to be controlled for the maximum
 // number of active transactions.
@@ -259,6 +285,7 @@ type txnOperator struct {
 		commitCounter        counter
 		rollbackCounter      counter
 		runSqlCounter        counter
+		runSQLTracker        runSQLTracker
 		incrStmtCounter      counter
 		rollbackStmtCounter  counter
 		fprints              footPrints
@@ -273,6 +300,163 @@ type txnOperator struct {
 		options            txn.TxnOptions
 		waitActiveHandle   func()
 	}
+}
+
+type runSQLTracker struct {
+	// Tracks running SQL by token so callers can cancel and wait during retry/rollback/commit.
+	// Usage: EnterRunSqlWithTokenAndSQL registers a token+cancel; ExitRunSqlWithToken unregisters it;
+	// CancelAndWaitRunningSQL cancels other tokens and waits for them to exit.
+	mu           sync.Mutex
+	activeTokens map[uint64]runSQLInfo
+	nextID       uint64
+	cond         *sync.Cond
+}
+
+type runSQLInfo struct {
+	cancel context.CancelFunc
+	sql    string
+	start  time.Time
+}
+
+func (t *runSQLTracker) ensureInitLocked() {
+	if t.activeTokens == nil {
+		t.activeTokens = make(map[uint64]runSQLInfo)
+	}
+	if t.cond == nil {
+		t.cond = sync.NewCond(&t.mu)
+	}
+}
+
+func (t *runSQLTracker) reset() {
+	t.activeTokens = make(map[uint64]runSQLInfo)
+	t.nextID = 0
+	t.cond = sync.NewCond(&t.mu)
+}
+
+func (t *runSQLTracker) notifyLocked() {
+	t.cond.Broadcast()
+}
+
+func (t *runSQLTracker) enterTokenWithSQL(cancel context.CancelFunc, sql string) uint64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.ensureInitLocked()
+	t.nextID++
+	token := t.nextID
+	t.activeTokens[token] = runSQLInfo{
+		cancel: cancel,
+		sql:    trimSQLForTracker(sql),
+		start:  time.Now(),
+	}
+	t.notifyLocked()
+	return token
+}
+
+func (t *runSQLTracker) exitToken(token uint64) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.ensureInitLocked()
+	delete(t.activeTokens, token)
+	t.notifyLocked()
+}
+
+func (t *runSQLTracker) cancelAllExcept(keepToken uint64, skipToken uint64) {
+	t.mu.Lock()
+	t.ensureInitLocked()
+	cancels := make([]context.CancelFunc, 0, len(t.activeTokens))
+	for token, info := range t.activeTokens {
+		if token == keepToken || token == skipToken || info.cancel == nil {
+			continue
+		}
+		cancels = append(cancels, info.cancel)
+	}
+	t.mu.Unlock()
+
+	for _, cancel := range cancels {
+		cancel()
+	}
+}
+
+func (t *runSQLTracker) waitExcept(ctx context.Context, keepToken uint64, skipToken uint64) error {
+	for {
+		t.mu.Lock()
+		wait := t.shouldWaitLocked(keepToken, skipToken)
+		if !wait {
+			t.mu.Unlock()
+			return nil
+		}
+		if ctx.Err() != nil {
+			t.mu.Unlock()
+			return ctx.Err()
+		}
+		stop := context.AfterFunc(ctx, func() {
+			t.mu.Lock()
+			t.cond.Broadcast()
+			t.mu.Unlock()
+		})
+		t.cond.Wait()
+		stop()
+		t.mu.Unlock()
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+	}
+}
+
+func (t *runSQLTracker) shouldWaitLocked(keepToken uint64, skipToken uint64) bool {
+	t.ensureInitLocked()
+	if keepToken == 0 {
+		// Commit/Rollback waits for all running SQL to exit.
+		if len(t.activeTokens) == 0 {
+			return false
+		}
+		if skipToken == 0 && len(t.activeTokens) > 0 {
+			return true
+		}
+		for token := range t.activeTokens {
+			if token != skipToken {
+				return true
+			}
+		}
+		return false
+	}
+	// Wait only for higher tokens to break circular waits between concurrent retries.
+	for token := range t.activeTokens {
+		if token > keepToken && token != skipToken {
+			return true
+		}
+	}
+	return false
+}
+
+func (t *runSQLTracker) waitingInfo(keepToken uint64, skipToken uint64) []string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.ensureInitLocked()
+
+	type waitInfo struct {
+		token uint64
+		sql   string
+		start time.Time
+	}
+	infos := make([]waitInfo, 0, len(t.activeTokens))
+	for token, info := range t.activeTokens {
+		if (keepToken == 0 || token > keepToken) && token != skipToken {
+			infos = append(infos, waitInfo{token: token, sql: info.sql, start: info.start})
+		}
+	}
+	sort.Slice(infos, func(i, j int) bool {
+		return infos[i].token < infos[j].token
+	})
+	sqls := make([]string, 0, len(infos))
+	for _, info := range infos {
+		sql := strings.TrimSpace(info.sql)
+		if sql == "" {
+			sql = "<unknown>"
+		}
+		sqls = append(sqls, fmt.Sprintf("token=%d age=%s sql=%s", info.token, time.Since(info.start), trimSQL(sql)))
+	}
+	return sqls
 }
 
 func newTxnOperator(
@@ -335,6 +519,7 @@ func (tc *txnOperator) initReset() {
 	tc.reset.commitCounter = counter{}
 	tc.reset.rollbackCounter = counter{}
 	tc.reset.runSqlCounter = counter{}
+	tc.reset.runSQLTracker.reset()
 	tc.reset.incrStmtCounter = counter{}
 	tc.reset.rollbackStmtCounter = counter{}
 	tc.reset.fprints = footPrints{}
@@ -619,10 +804,8 @@ func (tc *txnOperator) WriteAndCommit(ctx context.Context, requests []txn.TxnReq
 }
 
 func (tc *txnOperator) Commit(ctx context.Context) (err error) {
-
-	if tc.reset.runningSQL.Load() && !tc.markAborted() {
-		tc.logger.Fatal("commit on running txn",
-			zap.String("txnID", hex.EncodeToString(tc.reset.txnID)))
+	if err := tc.CancelAndWaitRunningSQLWithSQL(ctx, 0, "<commit>"); err != nil {
+		return err
 	}
 
 	tc.reset.commitCounter.addEnter()
@@ -672,8 +855,8 @@ func (tc *txnOperator) Commit(ctx context.Context) (err error) {
 }
 
 func (tc *txnOperator) Rollback(ctx context.Context) (err error) {
-	if tc.reset.runningSQL.Load() {
-		tc.logger.Fatal("rollback on running txn")
+	if err := tc.CancelAndWaitRunningSQLWithSQL(ctx, 0, "<rollback>"); err != nil {
+		return err
 	}
 
 	tc.reset.rollbackCounter.addEnter()
@@ -1119,7 +1302,7 @@ func (tc *txnOperator) handleErrorResponse(ctx context.Context, resp txn.TxnResp
 
 		if moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) ||
 			moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
-			v, ok := runtime.ServiceRuntime(tc.sid).GetGlobalVariables(runtime.EnableCheckInvalidRCErrors)
+			v, ok := commonruntime.ServiceRuntime(tc.sid).GetGlobalVariables(commonruntime.EnableCheckInvalidRCErrors)
 			if ok && v.(bool) {
 				tc.logger.Fatal("failed",
 					zap.Error(err),
@@ -1418,14 +1601,69 @@ func (tc *txnOperator) doCostAction(
 	return cost, err
 }
 
-func (tc *txnOperator) EnterRunSql() {
+func (tc *txnOperator) EnterRunSqlWithTokenAndSQL(cancel context.CancelFunc, sql string) uint64 {
 	tc.reset.runningSQL.Store(true)
 	tc.reset.runSqlCounter.addEnter()
+	return tc.reset.runSQLTracker.enterTokenWithSQL(cancel, sql)
 }
 
-func (tc *txnOperator) ExitRunSql() {
-	tc.reset.runningSQL.Store(false)
+func (tc *txnOperator) ExitRunSqlWithToken(token uint64) {
 	tc.reset.runSqlCounter.addExit()
+	tc.reset.runSQLTracker.exitToken(token)
+	if !tc.reset.runSqlCounter.more() {
+		tc.reset.runningSQL.Store(false)
+	}
+}
+
+func (tc *txnOperator) CancelAndWaitRunningSQL(ctx context.Context, keepToken uint64) error {
+	return tc.cancelAndWaitRunningSQL(ctx, keepToken, "")
+}
+
+func (tc *txnOperator) CancelAndWaitRunningSQLWithSQL(ctx context.Context, keepToken uint64, currentSQL string) error {
+	return tc.cancelAndWaitRunningSQL(ctx, keepToken, currentSQL)
+}
+
+func (tc *txnOperator) cancelAndWaitRunningSQL(ctx context.Context, keepToken uint64, currentSQL string) error {
+	// Cancel other running SQL first, then wait for them to exit to avoid workspace races.
+	skipToken := runSQLSkipTokenFromCtx(ctx)
+	tc.reset.runSQLTracker.cancelAllExcept(keepToken, skipToken)
+	waitSQL := tc.reset.runSQLTracker.waitingInfo(keepToken, skipToken)
+	if len(waitSQL) > 0 {
+		fields := []zap.Field{
+			zap.String("txnID", hex.EncodeToString(tc.reset.txnID)),
+			zap.String("counters", tc.counter()),
+		}
+		if sql := strings.TrimSpace(currentSQL); sql != "" {
+			fields = append(fields, zap.String("current-sql", trimSQL(sql)))
+		}
+		if len(waitSQL) > 0 {
+			fields = append(fields, zap.Strings("waiting-sql", waitSQL))
+		}
+		tc.logger.Info("wait running sql", fields...)
+	}
+	timeoutCtx, cancel := context.WithTimeout(ctx, runningSQLWaitTimeout)
+	defer cancel()
+	if err := tc.reset.runSQLTracker.waitExcept(timeoutCtx, keepToken, skipToken); err != nil {
+		if ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded) {
+			waitSQL := tc.reset.runSQLTracker.waitingInfo(keepToken, skipToken)
+			fields := []zap.Field{
+				zap.String("txnID", hex.EncodeToString(tc.reset.txnID)),
+				zap.String("counters", tc.counter()),
+				zap.Duration("timeout", runningSQLWaitTimeout),
+			}
+			if sql := strings.TrimSpace(currentSQL); sql != "" {
+				fields = append(fields, zap.String("current-sql", trimSQL(sql)))
+			}
+			if len(waitSQL) > 0 {
+				fields = append(fields, zap.Strings("waiting-sql", waitSQL))
+			}
+			tc.logger.Error("wait running sql timeout",
+				fields...)
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 func (tc *txnOperator) inRunSql() bool {
@@ -1486,12 +1724,6 @@ func (tc *txnOperator) addFlag(flags ...uint32) {
 	}
 }
 
-func (tc *txnOperator) markAborted() bool {
-	tc.mu.RLock()
-	defer tc.mu.RUnlock()
-	return tc.markAbortedLocked()
-}
-
 func (tc *txnOperator) markAbortedLocked() bool {
 	return tc.mu.flag&AbortedFlag != 0
 }
@@ -1500,4 +1732,23 @@ func (tc *txnOperator) setWaitActive(v bool) {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
 	tc.mu.waitActive = v
+}
+
+// trimSQLForTracker caps stored SQL to keep tracker memory bounded.
+func trimSQLForTracker(sql string) string {
+	const maxLen = 128
+	sql = strings.TrimSpace(sql)
+	if len(sql) <= maxLen {
+		return sql
+	}
+	return sql[:maxLen]
+}
+
+func trimSQL(sql string) string {
+	const maxLen = 512
+	sql = strings.TrimSpace(sql)
+	if len(sql) <= maxLen {
+		return sql
+	}
+	return sql[:maxLen] + "..."
 }
