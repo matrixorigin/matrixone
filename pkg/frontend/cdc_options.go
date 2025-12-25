@@ -109,7 +109,8 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 		if _, err = cdc.OpenDbConn(
 			opts.SrcUriInfo.User, opts.SrcUriInfo.Password, opts.SrcUriInfo.Ip, opts.SrcUriInfo.Port, cdc.CDCDefaultSendSqlTimeout,
 		); err != nil {
-			err = moerr.NewInternalErrorf(ctx, "failed to connect to source, please check the connection, err: %v", err)
+			err = moerr.NewInternalErrorf(ctx, ""+
+				"failed to connect to source, please check the connection, err: %v", err)
 			return
 		}
 	}
