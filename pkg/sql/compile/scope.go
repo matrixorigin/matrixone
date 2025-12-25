@@ -606,8 +606,8 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 		rsp.IsLocalCN = true
 	}
 
-	policyForLocal := engine.Policy_CollectAllData
-	policyForRemote := engine.Policy_CollectCommittedPersistedData
+	policyForLocal := engine.DataCollectPolicy(engine.Policy_CollectAllData)
+	policyForRemote := engine.DataCollectPolicy(engine.Policy_CollectCommittedPersistedData)
 
 	if s.IsRemote {
 		var commited engine.RelData
