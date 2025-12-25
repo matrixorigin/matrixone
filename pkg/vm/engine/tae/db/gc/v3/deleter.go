@@ -81,6 +81,7 @@ func (g *Deleter) deleteBatch(
 	logutil.Info(
 		"GC-ExecDelete-Batch",
 		zap.String("task", taskName),
+		zap.Strings("paths", paths),
 		zap.Int("cnt", len(paths)),
 		zap.Duration("duration", time.Since(now)),
 		zap.Error(err),
