@@ -8,7 +8,7 @@ INSERT INTO mini_vector_data (id, text, vec) VALUES ('id3','vector search test',
 select id, text, vec from mini_vector_data order by l2_distance(vec, '[0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1]') limit 1;
 id    text    vec
 id2    greeting message    [0.44, 0.09, -0.31, 0.62, 0.18, -0.55, 0.21, 0.33]
-set pre_filter_for_vector_test = 1;
+set enable_vector_prefilter_by_default = 1;
 select id, text, vec from mini_vector_data order by l2_distance(vec, '[0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1]') limit 1;
 id    text    vec
 id2    greeting message    [0.44, 0.09, -0.31, 0.62, 0.18, -0.55, 0.21, 0.33]
@@ -21,5 +21,5 @@ id2    greeting message    [0.44, 0.09, -0.31, 0.62, 0.18, -0.55, 0.21, 0.33]
 select id, text, vec from mini_vector_data order by l2_distance(vec, '[0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1]') limit 1 by rank with option 'mode=pre';
 id    text    vec
 id2    greeting message    [0.44, 0.09, -0.31, 0.62, 0.18, -0.55, 0.21, 0.33]
-set pre_filter_for_vector_test = 0;
+set enable_vector_prefilter_by_default = 0;
 drop database vec_session_var_db;
