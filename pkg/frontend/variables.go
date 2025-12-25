@@ -3567,12 +3567,12 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableIntType("ivf_threads_search", 0, 1024, false),
 		Default:           int64(0),
 	},
-	"pre_filter_for_vector_test": {
-		Name:              "pre_filter_for_vector_test",
+	"enable_vector_prefilter_by_default": {
+		Name:              "enable_vector_prefilter_by_default",
 		Scope:             ScopeSession,
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              InitSystemVariableBoolType("pre_filter_for_vector_test"),
+		Type:              InitSystemVariableBoolType("enable_vector_prefilter_by_default"),
 		Default:           int8(0),
 	},
 	"probe_limit": {
