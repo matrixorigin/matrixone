@@ -3,6 +3,7 @@ package interactive
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/tools/objecttool"
@@ -414,4 +415,206 @@ func TestSearchNavigationFromCurrentPosition(t *testing.T) {
 	if m.hasMatch {
 		assert.GreaterOrEqual(t, m.currentMatch.Row, firstMatchRow, "Should find first match again")
 	}
+}
+
+// TestRenameCommand tests column renaming functionality
+func TestRenameCommand(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "mo_rename_test")
+	require.NoError(t, err)
+	defer os.RemoveAll(tmpDir)
+
+	objectPath := createTestObjectFileWithRowsAndCols(t, tmpDir, "test_rename.obj", 10, 4)
+
+	ctx := context.Background()
+	reader, err := objecttool.Open(ctx, objectPath)
+	require.NoError(t, err)
+	defer reader.Close()
+
+	state := NewState(ctx, reader)
+	defer state.Close()
+
+	// Test rename command
+	cmd := &RenameCommand{ColIndex: 0, NewName: "ID"}
+	output, quit, err := cmd.Execute(state)
+	require.NoError(t, err)
+	assert.False(t, quit)
+	assert.Contains(t, output, "Renamed Col0 to ID")
+
+	// Verify rename was applied
+	assert.NotNil(t, state.colNames)
+	assert.Equal(t, "ID", state.colNames[0])
+
+	// Test rename multiple columns
+	cmd2 := &RenameCommand{ColIndex: 1, NewName: "Name"}
+	output2, quit2, err2 := cmd2.Execute(state)
+	require.NoError(t, err2)
+	assert.False(t, quit2)
+	assert.Contains(t, output2, "Renamed Col1 to Name")
+
+	// Test invalid column index
+	cmd3 := &RenameCommand{ColIndex: 99, NewName: "Invalid"}
+	output3, quit3, err3 := cmd3.Execute(state)
+	require.NoError(t, err3)
+	assert.False(t, quit3)
+	assert.Contains(t, output3, "out of range")
+}
+
+// TestVerticalModeSearchHighlight tests search highlighting in vertical mode
+func TestVerticalModeSearchHighlight(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "mo_vertical_test")
+	require.NoError(t, err)
+	defer os.RemoveAll(tmpDir)
+
+	objectPath := createTestObjectFileWithRowsAndCols(t, tmpDir, "test_vertical.obj", 10, 4)
+
+	ctx := context.Background()
+	reader, err := objecttool.Open(ctx, objectPath)
+	require.NoError(t, err)
+	defer reader.Close()
+
+	state := NewState(ctx, reader)
+	defer state.Close()
+	state.verticalMode = true
+
+	m := &model{
+		state:    state,
+		hasMatch: false,
+	}
+
+	// Start search for "^5$" (should match exactly row 5 in Col0)
+	m.startSearch("^5$")
+	require.True(t, m.hasMatch, "Should find match")
+
+	// Render vertical mode
+	var b strings.Builder
+	m.renderVertical(&b)
+	output := b.String()
+
+	// Should contain search highlighting (ANSI color codes)
+	assert.Contains(t, output, "\033[41m", "Should contain red background color for current match")
+	assert.Contains(t, output, "\033[0m", "Should contain reset color code")
+	
+	// Should contain the match value
+	assert.Contains(t, output, m.currentMatch.Value, "Should contain the matched value")
+	
+	// In search mode, should only show one row block (the matched row)
+	blockCount := strings.Count(output, "***************************")
+	assert.Equal(t, 2, blockCount, "Should show exactly one row block (2 asterisk lines) when searching")
+	
+	// Should show the correct matched row (row 5)
+	assert.Contains(t, output, "(0-5)", "Should show the matched row (0-5)")
+	
+	t.Logf("Vertical output contains highlighting: %v", strings.Contains(output, "\033[41m"))
+	t.Logf("Shows only matched row: %v", blockCount == 2)
+	t.Logf("Output: %s", output)
+}
+
+// TestRenderTableWithCustomColumnNames tests table rendering with renamed columns
+func TestRenderTableWithCustomColumnNames(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "mo_table_test")
+	require.NoError(t, err)
+	defer os.RemoveAll(tmpDir)
+
+	objectPath := createTestObjectFileWithRowsAndCols(t, tmpDir, "test_table.obj", 5, 4)
+
+	ctx := context.Background()
+	reader, err := objecttool.Open(ctx, objectPath)
+	require.NoError(t, err)
+	defer reader.Close()
+
+	state := NewState(ctx, reader)
+	defer state.Close()
+
+	// Rename columns
+	state.colNames = map[uint16]string{
+		0: "ID",
+		1: "Name", 
+		2: "Email",
+	}
+
+	m := &model{
+		state: state,
+	}
+
+	// Render table
+	var b strings.Builder
+	m.renderTable(&b)
+	output := b.String()
+
+	// Should contain custom column names
+	assert.Contains(t, output, "ID", "Should contain renamed column 'ID'")
+	assert.Contains(t, output, "Name", "Should contain renamed column 'Name'")
+	assert.Contains(t, output, "Email", "Should contain renamed column 'Email'")
+	assert.Contains(t, output, "Col3", "Should contain default name for unrenamed column")
+	
+	t.Logf("Table header contains custom names: %v", strings.Contains(output, "ID"))
+}
+
+// TestRenderVerticalWithCustomColumnNames tests vertical rendering with renamed columns
+func TestRenderVerticalWithCustomColumnNames(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "mo_vertical_names_test")
+	require.NoError(t, err)
+	defer os.RemoveAll(tmpDir)
+
+	objectPath := createTestObjectFileWithRowsAndCols(t, tmpDir, "test_vertical_names.obj", 3, 4)
+
+	ctx := context.Background()
+	reader, err := objecttool.Open(ctx, objectPath)
+	require.NoError(t, err)
+	defer reader.Close()
+
+	state := NewState(ctx, reader)
+	defer state.Close()
+	state.verticalMode = true
+
+	// Rename columns
+	state.colNames = map[uint16]string{
+		0: "UserID",
+		2: "Status",
+	}
+
+	m := &model{
+		state: state,
+	}
+
+	// Render vertical
+	var b strings.Builder
+	m.renderVertical(&b)
+	output := b.String()
+
+	// Should contain custom column names in parentheses
+	assert.Contains(t, output, "(UserID)", "Should contain renamed column 'UserID'")
+	assert.Contains(t, output, "(Status)", "Should contain renamed column 'Status'")
+	assert.Contains(t, output, "(Col1)", "Should contain default name for unrenamed column")
+	assert.Contains(t, output, "(Col3)", "Should contain default name for unrenamed column")
+	
+	t.Logf("Vertical output contains custom names: %v", strings.Contains(output, "UserID"))
+}
+
+// TestHighlightSearchMatchFunction tests the highlightSearchMatch function directly
+func TestHighlightSearchMatchFunction(t *testing.T) {
+	m := &model{
+		searchTerm: "test",
+		hasMatch:   true,
+		currentMatch: SearchMatch{
+			Row: 0,
+			Col: 0,
+			Value: "test_value",
+		},
+	}
+
+	// Test highlighting current match
+	result := m.highlightSearchMatch("test_value", 0, 0)
+	assert.Contains(t, result, "\033[41m", "Should contain red background for current match")
+	assert.Contains(t, result, "test_value", "Should contain original text")
+	assert.Contains(t, result, "\033[0m", "Should contain reset code")
+
+	// Test non-matching cell
+	result2 := m.highlightSearchMatch("other_value", 1, 1)
+	assert.Equal(t, "other_value", result2, "Non-matching cell should not be highlighted")
+
+	// Test with no search term
+	m.searchTerm = ""
+	result3 := m.highlightSearchMatch("test_value", 0, 0)
+	assert.Equal(t, "test_value", result3, "Should not highlight when no search term")
 }

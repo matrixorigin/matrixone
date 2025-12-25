@@ -754,6 +754,11 @@ func (m model) renderTable(b *strings.Builder) {
 	for i, colIdx := range displayCols {
 		if int(colIdx) < len(cols) {
 			header := fmt.Sprintf("Col%d", colIdx)
+			if m.state.colNames != nil {
+				if customName, exists := m.state.colNames[colIdx]; exists {
+					header = customName
+				}
+			}
 			fmt.Fprintf(b, " %-*s │", widths[i], header)
 		}
 	}
@@ -808,23 +813,57 @@ func (m model) renderVertical(b *strings.Builder) {
 	}
 	
 	cols := m.state.reader.Columns()
+	displayCols := m.state.visibleCols
+	if displayCols == nil {
+		displayCols = make([]uint16, len(cols))
+		for i := range cols {
+			displayCols[i] = uint16(i)
+		}
+	}
 	
-	// 显示所有行
+	// 在搜索模式下，只显示匹配的行
+	if m.hasMatch && m.searchTerm != "" {
+		// 找到匹配行在当前页面中的索引
+		matchRowInPage := -1
+		for i, rowNum := range rowNumbers {
+			if rowNum == m.currentMatch.RowNum {
+				matchRowInPage = i
+				break
+			}
+		}
+		
+		if matchRowInPage >= 0 && matchRowInPage < len(rows) {
+			// 只显示匹配的行
+			rows = [][]string{rows[matchRowInPage]}
+			rowNumbers = []string{rowNumbers[matchRowInPage]}
+		}
+	}
+	
+	// 显示行
 	for rowIdx, row := range rows {
 		fmt.Fprintf(b, "*************************** %s ***************************\n", rowNumbers[rowIdx])
-		for i, cell := range row {
-			if i < len(cols) {
-				col := cols[i]
-				value := cell
+		for j, colIdx := range displayCols {
+			if j < len(row) && int(colIdx) < len(cols) {
+				col := cols[colIdx]
+				value := row[j]
+				
 				// 根据用户设置的宽度截断内容
 				if m.state.maxColWidth > 0 && len(value) > m.state.maxColWidth {
 					value = value[:m.state.maxColWidth-3] + "..."
 				}
 				
 				// 高亮搜索匹配
-				value = m.highlightSearchMatch(value, int64(rowIdx)+m.state.GlobalRowOffset(), i)
+				value = m.highlightSearchMatch(value, int64(rowIdx)+m.state.GlobalRowOffset(), int(colIdx))
 				
-				fmt.Fprintf(b, "%15s (Col%d): %s\n", col.Type.String(), i, value)
+				// 使用自定义列名或默认列名
+				colName := fmt.Sprintf("Col%d", colIdx)
+				if m.state.colNames != nil {
+					if customName, exists := m.state.colNames[colIdx]; exists {
+						colName = customName
+					}
+				}
+				
+				fmt.Fprintf(b, "%15s (%s): %s\n", col.Type.String(), colName, value)
 			}
 		}
 		if rowIdx < len(rows)-1 {
@@ -1121,4 +1160,24 @@ func (c *VRowsCommand) Execute(state *State) (string, bool, error) {
 		return fmt.Sprintf("Vertical mode now shows %d rows per page", c.Rows), false, nil
 	}
 	return "Command only works in vertical mode. Use :vertical first", false, nil
+}
+
+// RenameCommand 重命名列
+type RenameCommand struct {
+	ColIndex uint16
+	NewName  string
+}
+
+func (c *RenameCommand) Execute(state *State) (string, bool, error) {
+	cols := state.reader.Columns()
+	if int(c.ColIndex) >= len(cols) {
+		return fmt.Sprintf("Column %d out of range (0-%d)", c.ColIndex, len(cols)-1), false, nil
+	}
+	
+	if state.colNames == nil {
+		state.colNames = make(map[uint16]string)
+	}
+	state.colNames[c.ColIndex] = c.NewName
+	
+	return fmt.Sprintf("Renamed Col%d to %s", c.ColIndex, c.NewName), false, nil
 }

@@ -41,6 +41,7 @@ type State struct {
 	visibleCols  []uint16 // 显示的列（nil表示全部）
 	maxColWidth  int      // 最大列宽
 	verticalMode bool     // 垂直显示模式
+	colNames     map[uint16]string // 列重命名映射
 }
 
 func NewState(ctx context.Context, reader *objecttool.ObjectReader) *State {

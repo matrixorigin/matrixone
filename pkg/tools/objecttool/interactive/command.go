@@ -135,6 +135,15 @@ func parseColonCommand(cmd string) (Command, error) {
 		}
 		// 解析列索引 "1,3,5" 或 "1-5"
 		return parseColumnsCommand(parts[1:])
+	case "rename":
+		if len(parts) < 3 {
+			return nil, fmt.Errorf("usage: rename <col_index> <new_name>")
+		}
+		colIdx, err := strconv.Atoi(parts[1])
+		if err != nil {
+			return nil, fmt.Errorf("invalid column index: %s", parts[1])
+		}
+		return &RenameCommand{ColIndex: uint16(colIdx), NewName: parts[2]}, nil
 	case "help":
 		topic := ""
 		if len(parts) > 1 {
