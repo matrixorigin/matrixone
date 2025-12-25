@@ -825,6 +825,38 @@ func GetObjectListFromSnapshotDiff(
 	return result, nil
 }
 
+// updateObjectStatsFlags updates ObjectStats flags according to the requirements:
+// - appendable: always false
+// - sorted: true if tombstone, or if no fake pk; false if has fake pk
+// - cnCreated: always true
+func updateObjectStatsFlags(stats *objectio.ObjectStats, isTombstone bool, hasFakePK bool) {
+	// Get current level to preserve it
+	level := stats.GetLevel()
+
+	// Clear all flags (b0~b4) but preserve level bits (b5~b7)
+	statsBytes := stats.Marshal()
+	reservedByte := statsBytes[objectio.ObjectStatsLen-1]
+	reservedByte = reservedByte & 0xE0 // Keep only level bits (b5~b7), clear flags (b0~b4)
+
+	// Set sorted flag: true for tombstone, or if no fake pk; false if has fake pk
+	sorted := isTombstone || !hasFakePK
+	if sorted {
+		reservedByte |= objectio.ObjectFlag_Sorted
+	}
+
+	// Set cnCreated flag: always true
+	reservedByte |= objectio.ObjectFlag_CNCreated
+
+	// appendable is false (not set, cleared above)
+
+	// Update the reserved byte
+	statsBytes[objectio.ObjectStatsLen-1] = reservedByte
+	stats.UnMarshal(statsBytes)
+
+	// Restore level (in case it was affected)
+	stats.SetLevel(level)
+}
+
 // submitObjectsAsInsert submits objects as INSERT operation
 func submitObjectsAsInsert(ctx context.Context, iterationCtx *IterationContext, cnEngine engine.Engine, tombstoneInsertStats []ObjectWithTableInfo, dataInsertStats []ObjectWithTableInfo, mp *mpool.MPool) error {
 	if len(tombstoneInsertStats) == 0 && len(dataInsertStats) == 0 {
@@ -871,6 +903,18 @@ func submitObjectsAsInsert(ctx context.Context, iterationCtx *IterationContext, 
 		rel, err := db.Relation(ctx, key.tableName, nil)
 		if err != nil {
 			return moerr.NewInternalErrorf(ctx, "failed to get relation %s.%s: %v", key.dbName, key.tableName, err)
+		}
+
+		// Get table definition to check for fake pk
+		tableDef := rel.GetTableDef(ctx)
+		hasFakePK := false
+		if tableDef != nil && tableDef.Pkey != nil {
+			hasFakePK = catalog.IsFakePkName(tableDef.Pkey.PkeyColName)
+		}
+
+		// Update ObjectStats flags before submitting
+		for i := range tombstoneStats {
+			updateObjectStatsFlags(&tombstoneStats[i], true, hasFakePK) // isTombstone = true
 		}
 
 		// Log tombstone insert objects
@@ -930,6 +974,18 @@ func submitObjectsAsInsert(ctx context.Context, iterationCtx *IterationContext, 
 		rel, err := db.Relation(ctx, key.tableName, nil)
 		if err != nil {
 			return moerr.NewInternalErrorf(ctx, "failed to get relation %s.%s: %v", key.dbName, key.tableName, err)
+		}
+
+		// Get table definition to check for fake pk
+		tableDef := rel.GetTableDef(ctx)
+		hasFakePK := false
+		if tableDef != nil && tableDef.Pkey != nil {
+			hasFakePK = catalog.IsFakePkName(tableDef.Pkey.PkeyColName)
+		}
+
+		// Update ObjectStats flags before submitting
+		for i := range dataStats {
+			updateObjectStatsFlags(&dataStats[i], false, hasFakePK) // isTombstone = false
 		}
 
 		// Log data insert objects
@@ -1023,6 +1079,18 @@ func submitObjectsAsDelete(ctx context.Context, iterationCtx *IterationContext, 
 		rel, err := db.Relation(ctx, key.tableName, nil)
 		if err != nil {
 			return moerr.NewInternalErrorf(ctx, "failed to get relation %s.%s: %v", key.dbName, key.tableName, err)
+		}
+
+		// Get table definition to check for fake pk
+		tableDef := rel.GetTableDef(ctx)
+		hasFakePK := false
+		if tableDef != nil && tableDef.Pkey != nil {
+			hasFakePK = catalog.IsFakePkName(tableDef.Pkey.PkeyColName)
+		}
+
+		// Update ObjectStats flags before submitting
+		for i := range tableStats {
+			updateObjectStatsFlags(&tableStats[i].Stats, tableStats[i].IsTombstone, hasFakePK)
 		}
 
 		// Try to use SoftDeleteObject if available (for disttae txnTable or txnTableDelegate)
@@ -1338,6 +1406,13 @@ func ExecuteIteration(
 		for _, info := range objectMap {
 			statsBytes := info.Stats.Marshal()
 			delete := info.Delete
+			if info.Stats.GetAppendable() {
+				if err = FilterObject(ctx, statsBytes, snapshotTS, iterationCtx, fs, mp, delete); err != nil {
+					err = moerr.NewInternalErrorf(ctx, "failed to filter object: %v", err)
+					return
+				}
+				continue
+			}
 
 			if info.Delete {
 				// Object to delete
