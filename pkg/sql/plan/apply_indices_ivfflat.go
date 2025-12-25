@@ -51,10 +51,12 @@ func (builder *QueryBuilder) prepareIvfIndexContext(vecCtx *vectorSortContext, m
 		return nil, nil
 	}
 
-	var preFilterForVectorTest bool
-	if val, err := builder.compCtx.ResolveVariable("pre_filter_for_vector_test", true, false); err == nil && val != nil {
+	// Check if vector pre-filter pushdown should be enabled by default
+	// This session variable changes the default vector search behavior
+	var enableVectorPrefilterByDefault bool
+	if val, err := builder.compCtx.ResolveVariable("enable_vector_prefilter_by_default", true, false); err == nil && val != nil {
 		if v, ok := val.(int8); ok && v == 1 {
-			preFilterForVectorTest = true
+			enableVectorPrefilterByDefault = true
 		}
 	}
 
@@ -128,7 +130,7 @@ func (builder *QueryBuilder) prepareIvfIndexContext(vecCtx *vectorSortContext, m
 		params:          idxDef.IndexAlgoParams,
 		nThread:         nThread.(int64),
 		nProbe:          nProbe,
-		pushdownEnabled: (vecCtx.rankOption != nil && vecCtx.rankOption.Mode == "pre") || (vecCtx.rankOption == nil && preFilterForVectorTest),
+		pushdownEnabled: (vecCtx.rankOption != nil && vecCtx.rankOption.Mode == "pre") || (vecCtx.rankOption == nil && enableVectorPrefilterByDefault),
 	}, nil
 }
 

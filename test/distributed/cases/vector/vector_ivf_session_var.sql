@@ -10,7 +10,7 @@ INSERT INTO mini_vector_data (id, text, vec) VALUES ('id3','vector search test',
 select id, text, vec from mini_vector_data order by l2_distance(vec, '[0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1]') limit 1;
 
 -- Set session variable
-set pre_filter_for_vector_test = 1;
+set enable_vector_prefilter_by_default = 1;
 
 -- Test 1: Should trigger pushdown path (variable logic)
 select id, text, vec from mini_vector_data order by l2_distance(vec, '[0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1]') limit 1;
@@ -24,6 +24,6 @@ select id, text, vec from mini_vector_data order by l2_distance(vec, '[0.1,0.1,0
 -- Test 4: mode=pre should explicitly enable pushdown (consistent with variable)
 select id, text, vec from mini_vector_data order by l2_distance(vec, '[0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1]') limit 1 by rank with option 'mode=pre';
 
-set pre_filter_for_vector_test = 0;
+set enable_vector_prefilter_by_default = 0;
 
 drop database vec_session_var_db;
