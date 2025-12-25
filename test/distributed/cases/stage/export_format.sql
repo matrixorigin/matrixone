@@ -195,8 +195,8 @@ select * from export_format_test into outfile 'stage://export_test_stage/test_cs
 -- Test 4.5: CSV with header true
 select * from export_format_test into outfile 'stage://export_test_stage/test_csv_with_header.csv' format 'csv' header 'true';
 
--- Test 4.6: CSV with all options combined
-select * from export_format_test into outfile 'stage://export_test_stage/test_csv_all_opts.csv' format 'csv' fields terminated by '|' enclosed by '\'' lines terminated by '\n' header 'true';
+-- Test 4.6: CSV with all options combined (using pipe delimiter and double quotes)
+select * from export_format_test into outfile 'stage://export_test_stage/test_csv_all_opts.csv' format 'csv' fields terminated by '|' enclosed by '"' lines terminated by '\n' header 'true';
 
 -- ============================================================================
 -- PART 5: Normal/Valid Cases - Data Types Export
