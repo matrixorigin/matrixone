@@ -23,11 +23,11 @@ jobs:
           title_for_find_issue: "Which issue(s) this PR fixes:"
           title_for_find_content: "What this PR does / why we need it:"
 
+  # ============ 非 3.0-dev 分支使用 @main ============
   matrixone-ci:
     name: Matrixone CI
-    needs: 
-      - check-pr-valid
-    if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' }}
+    needs: check-pr-valid
+    if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' && github.base_ref != '3.0-dev' }}
     uses: matrixorigin/CI/.github/workflows/ci.yaml@main
     secrets:
       S3ENDPOINT: ${{ secrets.S3ENDPOINT }}
@@ -43,31 +43,81 @@ jobs:
 
   matrixone-upgrade-ci:
     name: Matrixone Upgrade CI
-    needs: 
-      - check-pr-valid
-    if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' }}
+    needs: check-pr-valid
+    if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' && github.base_ref != '3.0-dev' }}
     uses: matrixorigin/CI/.github/workflows/e2e-upgrade.yaml@main
 
   matrixone-compose-ci:
     name: Matrixone Compose CI
-    needs: 
-      - check-pr-valid
-    if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' }}
+    needs: check-pr-valid
+    if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' && github.base_ref != '3.0-dev' }}
     uses: matrixorigin/CI/.github/workflows/e2e-compose.yaml@main
 
   matrixone-standalone-ci:
     name: Matrixone Standlone CI
-    needs: 
-      - check-pr-valid
-    if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' }}
+    needs: check-pr-valid
+    if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' && github.base_ref != '3.0-dev' }}
     uses: matrixorigin/CI/.github/workflows/e2e-standalone.yaml@main
 
   matrixone-utils-ci:
     name: Matrixone Utils CI
-    needs: 
-      - check-pr-valid
-    if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' }}
+    needs: check-pr-valid
+    if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' && github.base_ref != '3.0-dev' }}
     uses: matrixorigin/CI/.github/workflows/utils.yaml@main
+    secrets:
+      TOKEN_ACTION: ${{ secrets.TOKEN_ACTION }}
+      TEST_S3FS_ALIYUN: ${{ secrets.TEST_S3FS_ALIYUN }}
+      TEST_S3FS_QCLOUD: ${{ secrets.TEST_S3FS_QCLOUD }}
+      DOCU_GROUP_HOOK: ${{ secrets.DOCU_GROUP_HOOK }}
+      EE_DB_ADDR: ${{ secrets.EE_DB_ADDR }}
+      EE_DB_PORT: ${{ secrets.EE_DB_PORT }}
+      EE_DB_USER: ${{ secrets.EE_DB_USER }}
+      EE_DB_PASSWORD: ${{ secrets.EE_DB_PASSWORD }}
+      EE_DB_DB: ${{ secrets.EE_DB_DB }}
+      TENCENT_AK: ${{ secrets.TENCENT_AK }}
+      TENCENT_SK: ${{ secrets.TENCENT_SK }}
+
+  # ============ 3.0-dev 分支使用 @release/3.0-dev ============
+  matrixone-ci-30:
+    name: Matrixone CI (3.0)
+    needs: check-pr-valid
+    if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' && github.base_ref == '3.0-dev' }}
+    uses: matrixorigin/CI/.github/workflows/ci.yaml@release/3.0-dev
+    secrets:
+      S3ENDPOINT: ${{ secrets.S3ENDPOINT }}
+      S3REGION: ${{ secrets.S3REGION }}
+      S3APIKEY: ${{ secrets.S3APIKEY }}
+      S3APISECRET: ${{ secrets.S3APISECRET }}
+      S3BUCKET: ${{ secrets.S3BUCKET }}
+      EE_DB_ADDR: ${{ secrets.EE_DB_ADDR }}
+      EE_DB_PORT: ${{ secrets.EE_DB_PORT }}
+      EE_DB_USER: ${{ secrets.EE_DB_USER }}
+      EE_DB_PASSWORD: ${{ secrets.EE_DB_PASSWORD }}
+      EE_DB_DB: ${{ secrets.EE_DB_DB }}
+
+  matrixone-upgrade-ci-30:
+    name: Matrixone Upgrade CI (3.0)
+    needs: check-pr-valid
+    if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' && github.base_ref == '3.0-dev' }}
+    uses: matrixorigin/CI/.github/workflows/e2e-upgrade.yaml@release/3.0-dev
+
+  matrixone-compose-ci-30:
+    name: Matrixone Compose CI (3.0)
+    needs: check-pr-valid
+    if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' && github.base_ref == '3.0-dev' }}
+    uses: matrixorigin/CI/.github/workflows/e2e-compose.yaml@release/3.0-dev
+
+  matrixone-standalone-ci-30:
+    name: Matrixone Standlone CI (3.0)
+    needs: check-pr-valid
+    if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' && github.base_ref == '3.0-dev' }}
+    uses: matrixorigin/CI/.github/workflows/e2e-standalone.yaml@release/3.0-dev
+
+  matrixone-utils-ci-30:
+    name: Matrixone Utils CI (3.0)
+    needs: check-pr-valid
+    if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' && github.base_ref == '3.0-dev' }}
+    uses: matrixorigin/CI/.github/workflows/utils.yaml@release/3.0-dev
     secrets:
       TOKEN_ACTION: ${{ secrets.TOKEN_ACTION }}
       TEST_S3FS_ALIYUN: ${{ secrets.TEST_S3FS_ALIYUN }}
