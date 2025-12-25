@@ -1937,11 +1937,11 @@ func (n *noopTxnOperator) EnterRunSqlWithTokenAndSQL(_ context.CancelFunc, _ str
 	return 0
 }
 func (n *noopTxnOperator) ExitRunSqlWithToken(_ uint64) {}
-func (n *noopTxnOperator) EnterIncrStmt()          {}
-func (n *noopTxnOperator) ExitIncrStmt()           {}
-func (n *noopTxnOperator) EnterRollbackStmt()      {}
-func (n *noopTxnOperator) ExitRollbackStmt()       {}
-func (n *noopTxnOperator) SetFootPrints(int, bool) {}
+func (n *noopTxnOperator) EnterIncrStmt()               {}
+func (n *noopTxnOperator) ExitIncrStmt()                {}
+func (n *noopTxnOperator) EnterRollbackStmt()           {}
+func (n *noopTxnOperator) ExitRollbackStmt()            {}
+func (n *noopTxnOperator) SetFootPrints(int, bool)      {}
 
 // tableStreamHarnessConfig captures the configurable parts of the test harness
 // so individual test cases can focus on behavior rather than boilerplate setup.
