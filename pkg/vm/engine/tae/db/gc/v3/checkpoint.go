@@ -94,6 +94,7 @@ type checkpointCleaner struct {
 	config struct {
 		canGCCacheSize          int
 		maxMergeCheckpointCount int
+		maxScanCheckpointCount  int
 		estimateRows            int
 		probility               float64
 	}
@@ -152,6 +153,14 @@ func WithMaxMergeCheckpointCount(
 ) CheckpointCleanerOption {
 	return func(e *checkpointCleaner) {
 		e.config.maxMergeCheckpointCount = count
+	}
+}
+
+func WithMaxScanCheckpointCount(
+	count int,
+) CheckpointCleanerOption {
+	return func(e *checkpointCleaner) {
+		e.config.maxScanCheckpointCount = count
 	}
 }
 
@@ -1764,8 +1773,8 @@ func (c *checkpointCleaner) tryScanLocked(
 		}
 	}
 
-	// get up to maxMergeCheckpointCount incremental checkpoints starting from the max scanned timestamp
-	ckps := c.checkpointCli.ICKPSeekLT(maxScannedTS, c.config.maxMergeCheckpointCount)
+	// get up to maxScanCheckpointCount incremental checkpoints starting from the max scanned timestamp
+	ckps := c.checkpointCli.ICKPSeekLT(maxScannedTS, c.config.maxScanCheckpointCount)
 
 	// quick return if there is no incremental checkpoint
 	if len(ckps) == 0 && len(candidates) == 0 {
