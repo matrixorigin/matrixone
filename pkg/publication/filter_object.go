@@ -16,6 +16,7 @@ package publication
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
@@ -377,7 +378,7 @@ func convertObjectToBatch(
 		if cols[i] == objectio.SEQNUM_COMMITTS {
 			attr = objectio.TombstoneAttr_CommitTs_Attr
 		} else {
-			attr = types.T(typs[i].Oid).String()
+			attr = fmt.Sprintf("tmp_%d", i)
 		}
 		bat.AddVector(attr, vec)
 	}
