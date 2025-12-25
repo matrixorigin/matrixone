@@ -965,13 +965,13 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 			if isNull {
 				rows[i][0] = ""
 			} else {
-				rows[i][0] = s0
+				rows[i][0] = string(s0)
 			}
 			s1, isNull := v1.GetStrValue(uint64(i))
 			if isNull {
 				rows[i][1] = ""
 			} else {
-				rows[i][1] = s1
+				rows[i][1] = string(s1)
 			}
 		}
 	}

@@ -114,10 +114,7 @@ insert into tbh3(id, val) values(1,1.5),(2,2.5),(3,3.5);
 
 select name from mo_catalog.mo_stored_procedure;
 drop procedure if exists test_if_hit_if;
--- @delimiter .
-create procedure test_if_hit_if () 'begin DECLARE v1 INT; SET v1 = 10; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end'
-.
--- @delimiter ;
+create procedure test_if_hit_if () 'begin DECLARE v1 INT; SET v1 = 10; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end';
 call test_if_hit_if();
 select name from mo_catalog.mo_stored_procedure;
 
@@ -128,10 +125,7 @@ show snapshots;
 
 drop procedure if exists test_if_hit_if;
 drop procedure if exists test_if_hit_elseif_first_elseif;
--- @delimiter .
-create procedure test_if_hit_elseif_first_elseif() 'begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end'
-.
--- @delimiter ;
+create procedure test_if_hit_elseif_first_elseif() 'begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end';
 call test_if_hit_elseif_first_elseif();
 select name from mo_catalog.mo_stored_procedure;
 
@@ -331,10 +325,7 @@ insert into tbh3(id, val) values(1,1.5),(2,2.5),(3,3.5);
 
 select name from mo_catalog.mo_stored_procedure;
 drop procedure if exists test_if_hit_if;
--- @delimiter .
-create procedure test_if_hit_if () 'begin DECLARE v1 INT; SET v1 = 10; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end'
-.
--- @delimiter ;
+create procedure test_if_hit_if () 'begin DECLARE v1 INT; SET v1 = 10; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end';
 call test_if_hit_if();
 select name from mo_catalog.mo_stored_procedure;
 
@@ -345,10 +336,7 @@ show snapshots;
 
 drop procedure if exists test_if_hit_if;
 drop procedure if exists test_if_hit_elseif_first_elseif;
--- @delimiter .
-create procedure test_if_hit_elseif_first_elseif() 'begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end'
-.
--- @delimiter ;
+create procedure test_if_hit_elseif_first_elseif() 'begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end';
 call test_if_hit_elseif_first_elseif();
 select name from mo_catalog.mo_stored_procedure;
 
@@ -466,10 +454,7 @@ insert into tbh3(id, val) values(1,1.5),(2,2.5),(3,3.5);
 
 select name from mo_catalog.mo_stored_procedure;
 drop procedure if exists test_if_hit_if;
--- @delimiter .
-create procedure test_if_hit_if () 'begin DECLARE v1 INT; SET v1 = 10; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end'
-.
--- @delimiter ;
+create procedure test_if_hit_if () 'begin DECLARE v1 INT; SET v1 = 10; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end';
 call test_if_hit_if();
 select name from mo_catalog.mo_stored_procedure;
 
@@ -502,10 +487,7 @@ select stage_name from mo_catalog.mo_stages;
 drop procedure if exists test_if_hit_if;
 drop procedure if exists test_if_hit_if;
 drop procedure if exists test_if_hit_elseif_first_elseif;
--- @delimiter .
-create procedure test_if_hit_elseif_first_elseif() 'begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end'
-.
--- @delimiter ;
+create procedure test_if_hit_elseif_first_elseif() 'begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end';
 call test_if_hit_elseif_first_elseif();
 select name from mo_catalog.mo_stored_procedure;
 

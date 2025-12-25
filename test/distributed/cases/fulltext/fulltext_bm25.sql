@@ -18,7 +18,6 @@ create fulltext index ftidx on src (body, title);
 create fulltext index ftidx02 on src (body, title);
 select * from src where match(body) against('red');
 select * from src where match(body,title) against('+]]]');
-select * from src where match(body,title) against('+I'm');
 
 select match(body) against('red') from src;
 

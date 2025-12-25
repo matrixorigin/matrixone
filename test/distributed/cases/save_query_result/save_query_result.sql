@@ -160,19 +160,23 @@ drop account acc_save;
 
 create account if not exists acc_save ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 set save_query_result = on;
--- @ignore:2,3,4,5,6,7,8,9
+-- @regex("acc_save",true)
+-- @regex("root",true)
 show accounts;
--- @ignore:2,5,6,7,8
+-- @regex("acc_save",true)
+-- @regex("root",true)
 select * from result_scan(last_query_id()) as t;
 set save_query_result = off;
 -- @session:id=2&user=acc_save:admin&password=123456
 set save_query_result = on;
--- @ignore:2,3,4,5,6,7,8,9
+-- @regex("acc_save",true)
+-- @regex("root",false)
 show accounts;
--- @ignore:2,5,6,7,8
+-- @regex("acc_save",true)
+-- @regex("root",false)
 select * from result_scan(last_query_id()) as t;
 set save_query_result = off;
 -- @session
 drop account acc_save;
-# reset to default(off)
+-- reset to default(off)
 set save_query_result = off;

@@ -645,13 +645,13 @@ load data infile '$resources/load_data/test_enclosed_by01.csv' into table test06
 invalid input: the data of row 1 contained is not equal to input columns
 select * from test06;
 col1    col2
-load data local infile '$resources_local/load_data/test_enclosed_by01.csv' into table test06 fields terminated by ',' enclosed by '"' escaped by '\\' lines terminated by '\n';
+load data local infile '$resources/load_data/test_enclosed_by01.csv' into table test06 fields terminated by ',' enclosed by '"' escaped by '\\' lines terminated by '\n';
 select * from test06;
 col1    col2
 Hello","Hi    null
 database    "db
 delete from test06;
-load data local infile {"filepath"="$resources_local/load_data/test_enclosed_by01.csv", "compression"='', "format"='csv'}  into table test06 fields terminated by ',' enclosed by '"' escaped by '\\' lines terminated by '\n';
+load data local infile {"filepath"="$resources/load_data/test_enclosed_by01.csv", "compression"='', "format"='csv'}  into table test06 fields terminated by ',' enclosed by '"' escaped by '\\' lines terminated by '\n';
 select * from test06;
 col1    col2
 Hello","Hi    null
@@ -799,37 +799,37 @@ invalid input: the data of row 1 contained is not equal to input columns
 drop table load_data_t4;
 drop table if exists load_data_t5;
 create table load_data_t5(col1 int, col2 int, col3 int);
-LOAD DATA local infile '$resources_local/load_data/test_columnlist_04.csv' into table load_data_t5 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (@col1, col2);
+LOAD DATA local infile '$resources/load_data/test_columnlist_04.csv' into table load_data_t5 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (@col1, col2);
 select * from load_data_t5;
 col1    col2    col3
 null    null    null
 null    null    null
 delete from load_data_t5;
-LOAD DATA local infile '$resources_local/load_data/test_columnlist_04.csv' into table load_data_t5 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (col1, col2);
+LOAD DATA local infile '$resources/load_data/test_columnlist_04.csv' into table load_data_t5 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (col1, col2);
 select * from load_data_t5;
 col1    col2    col3
 1    null    null
 2    null    null
 delete from load_data_t5;
-LOAD DATA local infile '$resources_local/load_data/test_columnlist_04.csv' into table load_data_t5 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n';
+LOAD DATA local infile '$resources/load_data/test_columnlist_04.csv' into table load_data_t5 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n';
 select * from load_data_t5;
 col1    col2    col3
 1    null    null
 2    null    null
 delete from load_data_t5;
-LOAD DATA local infile '$resources_local/load_data/test_columnlist_04.csv' into table load_data_t5 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n'(col1, @col2);
+LOAD DATA local infile '$resources/load_data/test_columnlist_04.csv' into table load_data_t5 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n'(col1, @col2);
 select * from load_data_t5;
 col1    col2    col3
 1    null    null
 2    null    null
 delete from load_data_t5;
-LOAD DATA local infile '$resources_local/load_data/test_columnlist_03.csv' into table load_data_t5 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n';
+LOAD DATA local infile '$resources/load_data/test_columnlist_03.csv' into table load_data_t5 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n';
 select * from load_data_t5;
 col1    col2    col3
 1    32    null
 2    35    null
 delete from load_data_t5;
-LOAD DATA local infile '$resources_local/load_data/test_columnlist_03.csv' into table load_data_t5 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n'(@col1, col2);
+LOAD DATA local infile '$resources/load_data/test_columnlist_03.csv' into table load_data_t5 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n'(@col1, col2);
 select * from load_data_t5;
 col1    col2    col3
 null    32    null
@@ -837,7 +837,7 @@ null    35    null
 drop table load_data_t5;
 drop table if exists load_data_t6;
 create table load_data_t6(col1 int);
-LOAD DATA local infile '$resources_local/load_data/test_columnlist_03.csv' into table load_data_t6 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n';
+LOAD DATA local infile '$resources/load_data/test_columnlist_03.csv' into table load_data_t6 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n';
 select * from load_data_t6;
 col1
 1
@@ -845,7 +845,7 @@ col1
 drop table load_data_t6;
 drop table if exists load_data_t7;
 create table load_data_t7 (col1 varchar(20), col2 varchar(20), col3 varchar(20));
-load data local infile '$resources_local/load_data/test_escaped_by03.csv' into table load_data_t7 fields terminated by ',' enclosed by '"' escaped by '\\' lines terminated by '\n';
+load data local infile '$resources/load_data/test_escaped_by03.csv' into table load_data_t7 fields terminated by ',' enclosed by '"' escaped by '\\' lines terminated by '\n';
 select * from load_data_t7;
 col1    col2    col3
 hello ", ,        null

@@ -14,7 +14,7 @@ INSERT INTO dept VALUES (10,'ACCOUNTING','NEW YORK');
 INSERT INTO dept VALUES (20,'RESEARCH','DALLAS');
 INSERT INTO dept VALUES (30,'SALES','CHICAGO');
 INSERT INTO dept VALUES (40,'OPERATIONS','BOSTON');
--- @separator:table
+
 explain phyplan select * from dept;
 
 
@@ -45,12 +45,16 @@ INSERT INTO emp VALUES (7876,'ADAMS','CLERK',7788,'0087-07-13',1100,NULL,20);
 INSERT INTO emp VALUES (7900,'JAMES','CLERK',7698,'1981-12-03',950,NULL,30);
 INSERT INTO emp VALUES (7902,'FORD','ANALYST',7566,'1981-12-03',3000,NULL,20);
 INSERT INTO emp VALUES (7934,'MILLER','CLERK',7782,'1982-01-23',1300,NULL,10);
--- @separator:table
+
 explain phyplan select * from emp;
--- @separator:table
+
 explain phyplan select empno, ename, job from emp where sal > 2000;
--- @separator:table
-explain phyplan select a.ename,b.dname from emp a left join dept b on a.deptno = b.deptno;
+
+-- check verbose headers, (?s) make . match any character, including newlines
+-- @regex("(?s)MemoryUsage.*CPU",true)
+-- check left join index keeps consistent in probe and build phase
+-- @regex("(?s)left\(idx:(\d+).*hash build\(idx:\1",true)
+explain phyplan verbose select a.ename,b.dname from emp a left join dept b on a.deptno = b.deptno;
 
 drop table emp;
 drop table dept;

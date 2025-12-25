@@ -1002,10 +1002,6 @@ func (a *MergeScheduler) doSched(todo *todoItem) {
 	if todo.table.HasDropCommitted() {
 		delete(a.supps, todo.table.ID())
 		heap.Pop(&a.pq)
-		logutil.Info(
-			"MergeExecutorEvent-RemoveTable",
-			zap.String("table", todo.table.GetNameDesc()),
-		)
 		return
 	}
 
