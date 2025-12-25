@@ -186,21 +186,31 @@ func (w *GCWindow) ExecuteGlobalCheckpointBasedGC(
 	if err != nil {
 		return nil, "", err
 	}
-	// Use a map to deduplicate file names, as the same object may appear
-	// multiple times in vecToGC (e.g., when referenced by multiple tables).
-	// This avoids sending duplicate delete requests to S3.
-	filesToGCSet := make(map[string]struct{}, 20)
+	// Collect all file names that passed the bloom filter test (not in remaining files)
+	candidateFiles := vector.NewVec(types.T_varchar.ToType())
+	defer candidateFiles.Free(w.mp)
 	bf.Test(vecToGC,
 		func(exists bool, i int) {
 			if !exists {
-				filesToGCSet[string(vecToGC.GetBytesAt(i))] = struct{}{}
-				return
+				_ = vector.AppendBytes(candidateFiles, vecToGC.GetBytesAt(i), false, w.mp)
 			}
 		})
-	filesToGC := make([]string, 0, len(filesToGCSet))
-	for file := range filesToGCSet {
-		filesToGC = append(filesToGC, file)
+
+	// Use bloom filter to deduplicate file names approximately.
+	// The same object may appear multiple times when referenced by multiple tables.
+	// Using bloom filter reduces memory usage compared to map, with acceptable false positive rate.
+	// False positives mean some files might not be deleted in this round, but will be deleted in next GC.
+	if candidateFiles.Length() == 0 {
+		return nil, metaFile, nil
 	}
+	dedupBF := bloomfilter.New(int64(candidateFiles.Length()), 0.01) // 1% false positive rate
+	defer dedupBF.Clean()
+	filesToGC := make([]string, 0, candidateFiles.Length()/2) // estimate half are duplicates
+	dedupBF.TestAndAdd(candidateFiles, func(found bool, i int) {
+		if !found {
+			filesToGC = append(filesToGC, string(candidateFiles.GetBytesAt(i)))
+		}
+	})
 	return filesToGC, metaFile, nil
 }
 
