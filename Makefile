@@ -370,7 +370,7 @@ dev-help:
 	@echo "  make dev-logs-grafana-local - Show Grafana logs"
 	@echo "  make dev-clean          - Stop and remove all data (WARNING: destructive!)"
 	@echo "  make dev-cleanup        - Interactive cleanup (stops containers, removes data directories)"
-	@echo "  make dev-config         - Generate config from config.env"
+	@echo "  make dev-config         - Generate config from config.env (default: check-fraction=1000)"
 	@echo "  make dev-config-example - Create config.env.example file"
 	@echo "  make dev-setup-docker-mirror - Configure Docker registry mirror (for faster pulls)"
 	@echo "  make dev-edit-cn1       - Edit CN1 configuration interactively"
@@ -452,6 +452,13 @@ dev-help:
 	@echo "    1. Copy: cp $(DEV_DIR)/config.env.example $(DEV_DIR)/config.env"
 	@echo "    2. Edit: vim $(DEV_DIR)/config.env (uncomment and modify)"
 	@echo "    3. Generate: make dev-config (or auto-generated on dev-up)"
+	@echo ""
+	@echo "Memory Allocation Check (check-fraction):"
+	@echo "  Default: 1000 (checks 1 in 1000 deallocations for double free/missing free)"
+	@echo "  Lower values = more checks (better error detection, higher overhead)"
+	@echo "  Higher values = fewer checks (better performance, may miss errors)"
+	@echo "  Set CHECK_FRACTION=0 to disable (maximum performance, no error detection)"
+	@echo "  Configure in config.env: CHECK_FRACTION=1000"
 
 .PHONY: dev-build
 dev-build:

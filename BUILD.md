@@ -248,6 +248,7 @@ make ut SKIP_TEST="pkg/frontend"
 | `make dev-build` | Build docker image (typecheck enabled by default) |
 | `make dev-build TYPECHECK=0` | Build without typecheck (for performance testing) |
 | `make dev-build-force` | Force rebuild (typecheck enabled by default) |
+| `make dev-config` | Generate config from config.env (default: check-fraction=1000) |
 | `make dev-up` | Start multi-CN cluster |
 | `make dev-help` | Show all dev-* commands |
 
@@ -461,6 +462,49 @@ docker build -f optools/images/Dockerfile . \
 - Default behavior (TYPECHECK=0) maintains backward compatibility
 - Typecheck is automatically enabled when race detector is used (`-race` flag)
 - For performance-critical tests, keep typecheck disabled
+
+---
+
+## Development Environment Configuration
+
+### Memory Allocation Check (check-fraction)
+
+The `check-fraction` configuration controls the frequency of memory deallocation safety checks. It helps detect memory management errors like double free and missing free (memory leaks).
+
+**Default Value:** `1000` (for development environment via `make dev-config`)
+
+**How it works:**
+- On average, 1 in `check-fraction` deallocations will be checked
+- Lower values = more frequent checks (better error detection, higher overhead)
+- Higher values = less frequent checks (better performance, may miss errors)
+- Set to `0` to disable checks (maximum performance, no error detection)
+
+**Configuration:**
+
+```bash
+# Generate config with default check-fraction=1000
+make dev-config
+
+# Or customize in config.env
+echo "CHECK_FRACTION=100" >> etc/docker-multi-cn-local-disk/config.env
+make dev-config
+
+# Service-specific override
+echo "CN1_CHECK_FRACTION=100" >> etc/docker-multi-cn-local-disk/config.env
+make dev-config
+```
+
+**Recommended Values:**
+- **Development/Testing:** `100-1000` (good balance of detection and performance)
+- **Production:** `65536` or higher (minimal overhead)
+- **Debugging memory issues:** `1-10` (maximum detection, significant overhead)
+- **Performance testing:** `0` or very large values (disable checks)
+
+**What it checks:**
+- **Double free:** Same memory address freed twice
+- **Missing free:** Allocated memory not freed (detected via finalizer)
+
+**Note:** This is different from production defaults (65536). Development environment uses 1000 by default to catch errors more frequently during development.
 
 ---
 
