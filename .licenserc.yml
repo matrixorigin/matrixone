@@ -31,3 +31,5 @@ header:
 dependency:
   files:
     - go.mod
+  ignore:
+    - github.com/mattn/go-localereader
