@@ -52,7 +52,7 @@ func TestSearchAcrossBlocks(t *testing.T) {
 
 	// Should find a match
 	assert.True(t, m.hasMatch, "Should find match for '8999'")
-	
+
 	if m.hasMatch {
 		firstMatch := m.currentMatch
 		t.Logf("First match at row %d, col %d: %s", firstMatch.Row, firstMatch.Col, firstMatch.Value)
@@ -81,7 +81,7 @@ func TestSearchWithRegex(t *testing.T) {
 	defer state.Close()
 
 	m := &model{
-		state:         state,
+		state:    state,
 		hasMatch: false,
 	}
 
@@ -90,14 +90,13 @@ func TestSearchWithRegex(t *testing.T) {
 
 	assert.True(t, m.hasMatch, "Should find regex matches")
 	t.Logf("Found match for regex '^1.*' at row %d", m.currentMatch.Row)
-	
+
 	// Test searching for text that might be hex-encoded
 	m.startSearch("short")
 	if m.hasMatch {
 		t.Logf("Found match for 'short' at row %d", m.currentMatch.Row)
 	}
 }
-
 
 // TestSearchWithAllDataTypes tests search with all 8 data types to catch type handling bugs
 func TestSearchWithAllDataTypes(t *testing.T) {
@@ -199,7 +198,6 @@ func TestSearchNavigationEdgeCases(t *testing.T) {
 	}
 }
 
-
 // TestSearchCommandExitsCmdMode tests that search command properly exits command mode
 func TestSearchCommandExitsCmdMode(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "mo_search_test")
@@ -240,7 +238,6 @@ func TestSearchCommandExitsCmdMode(t *testing.T) {
 	assert.Empty(t, m.cmdInput, "cmdInput should be empty after search")
 }
 
-
 // TestColumnsCommandDataCorrectness tests that :cols command displays correct data
 func TestColumnsCommandDataCorrectness(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "mo_cols_test")
@@ -260,15 +257,15 @@ func TestColumnsCommandDataCorrectness(t *testing.T) {
 
 	// Test selecting specific columns
 	state.visibleCols = []uint16{0, 2, 3}
-	
+
 	rows, _, err := state.CurrentRows()
 	require.NoError(t, err)
 	require.Greater(t, len(rows), 0)
-	
+
 	// CurrentRows returns all columns now, filtering happens at render time
 	for i, row := range rows {
 		assert.Equal(t, len(state.reader.Columns()), len(row), "Row %d should have all columns", i)
-		
+
 		// Verify selected columns are not empty
 		for _, colIdx := range state.visibleCols {
 			if int(colIdx) < len(row) {
@@ -276,7 +273,7 @@ func TestColumnsCommandDataCorrectness(t *testing.T) {
 			}
 		}
 	}
-	
+
 	// Test with different column combinations
 	testCases := []struct {
 		cols     []uint16
@@ -287,12 +284,12 @@ func TestColumnsCommandDataCorrectness(t *testing.T) {
 		{[]uint16{0, 2, 4}, 3},
 		{[]uint16{1, 3, 5, 7}, 4},
 	}
-	
+
 	for _, tc := range testCases {
 		state.visibleCols = tc.cols
 		rows, _, err := state.CurrentRows()
 		require.NoError(t, err)
-		
+
 		if len(rows) > 0 {
 			// CurrentRows returns all columns, check that selected columns have data
 			assert.Equal(t, len(state.reader.Columns()), len(rows[0]))
@@ -328,22 +325,22 @@ func TestSearchMatchInfo(t *testing.T) {
 
 	// Perform search
 	m.startSearch("0")
-	
+
 	// Should have found a match
 	require.True(t, m.hasMatch, "Should find at least one match")
-	
+
 	// Verify match info
 	match := m.currentMatch
 	assert.NotEmpty(t, match.RowNum, "RowNum should not be empty")
 	assert.NotEmpty(t, match.ColumnName, "ColumnName should not be empty")
 	assert.NotEmpty(t, match.Value, "Value should not be empty")
-	
+
 	// RowNum should be in format (block-offset)
 	assert.Regexp(t, `^\(\d+-\d+\)$`, match.RowNum, "RowNum should match pattern (block-offset)")
-	
+
 	// ColumnName should be in format ColN
 	assert.Regexp(t, `^Col\d+$`, match.ColumnName, "ColumnName should match pattern ColN")
-	
+
 	t.Logf("Match info: RowNum=%s, ColumnName=%s, Value=%s", match.RowNum, match.ColumnName, match.Value)
 }
 
@@ -371,14 +368,14 @@ func TestSearchLazyLoad(t *testing.T) {
 
 	// Search should find first match quickly without scanning all data
 	m.startSearch("100")
-	
+
 	// Should find a match
 	require.True(t, m.hasMatch, "Should find match")
-	
+
 	// Test next match
 	firstMatch := m.currentMatch
 	m.findNextMatch()
-	
+
 	if m.hasMatch {
 		secondMatch := m.currentMatch
 		// Second match should be different from first
@@ -412,24 +409,24 @@ func TestSearchNavigationFromCurrentPosition(t *testing.T) {
 	m.startSearch("5")
 	require.True(t, m.hasMatch)
 	firstMatchRow := m.currentMatch.Row
-	
+
 	// Move to middle of file
 	err = state.GotoRow(50)
 	require.NoError(t, err)
-	
+
 	// Find next match - should find match after row 50
 	m.findNextMatch()
 	if m.hasMatch {
 		nextMatchRow := m.currentMatch.Row
 		assert.Greater(t, nextMatchRow, int64(50), "Next match should be after current position")
-		
+
 		// Find previous match from this position
 		m.findPrevMatch()
 		if m.hasMatch {
 			assert.Less(t, m.currentMatch.Row, nextMatchRow, "Previous match should be before next match position")
 		}
 	}
-	
+
 	// Verify we can navigate back to first match
 	err = state.GotoRow(0)
 	require.NoError(t, err)
@@ -515,17 +512,17 @@ func TestVerticalModeSearchHighlight(t *testing.T) {
 	// Should contain search highlighting (ANSI color codes)
 	assert.Contains(t, output, "\033[41m", "Should contain red background color for current match")
 	assert.Contains(t, output, "\033[0m", "Should contain reset color code")
-	
+
 	// Should contain the match value
 	assert.Contains(t, output, m.currentMatch.Value, "Should contain the matched value")
-	
+
 	// In search mode, should only show one row block (the matched row)
 	blockCount := strings.Count(output, "***************************")
 	assert.Equal(t, 2, blockCount, "Should show exactly one row block (2 asterisk lines) when searching")
-	
+
 	// Should show the correct matched row (row 5)
 	assert.Contains(t, output, "(0-5)", "Should show the matched row (0-5)")
-	
+
 	t.Logf("Vertical output contains highlighting: %v", strings.Contains(output, "\033[41m"))
 	t.Logf("Shows only matched row: %v", blockCount == 2)
 	t.Logf("Output: %s", output)
@@ -550,7 +547,7 @@ func TestRenderTableWithCustomColumnNames(t *testing.T) {
 	// Rename columns
 	state.colNames = map[uint16]string{
 		0: "ID",
-		1: "Name", 
+		1: "Name",
 		2: "Email",
 	}
 
@@ -568,7 +565,7 @@ func TestRenderTableWithCustomColumnNames(t *testing.T) {
 	assert.Contains(t, output, "Name", "Should contain renamed column 'Name'")
 	assert.Contains(t, output, "Email", "Should contain renamed column 'Email'")
 	assert.Contains(t, output, "Col3", "Should contain default name for unrenamed column")
-	
+
 	t.Logf("Table header contains custom names: %v", strings.Contains(output, "ID"))
 }
 
@@ -609,7 +606,7 @@ func TestRenderVerticalWithCustomColumnNames(t *testing.T) {
 	assert.Contains(t, output, "(Status)", "Should contain renamed column 'Status'")
 	assert.Contains(t, output, "(Col1)", "Should contain default name for unrenamed column")
 	assert.Contains(t, output, "(Col3)", "Should contain default name for unrenamed column")
-	
+
 	t.Logf("Vertical output contains custom names: %v", strings.Contains(output, "UserID"))
 }
 
@@ -619,8 +616,8 @@ func TestHighlightSearchMatchFunction(t *testing.T) {
 		searchTerm: "test",
 		hasMatch:   true,
 		currentMatch: SearchMatch{
-			Row: 0,
-			Col: 0,
+			Row:   0,
+			Col:   0,
 			Value: "test_value",
 		},
 	}

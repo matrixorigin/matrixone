@@ -37,22 +37,22 @@ func TestState_SetFormat(t *testing.T) {
 		formatter: objecttool.NewFormatterRegistry(),
 		ctx:       ctx,
 	}
-	
+
 	// Test setting valid formatter
 	err := state.SetFormat(0, "hex")
 	assert.NoError(t, err)
-	
+
 	// Verify formatter was set
 	name := state.formatter.GetFormatterName(0)
 	assert.Equal(t, "hex", name)
-	
+
 	// Test clearing formatter
 	err = state.SetFormat(0, "auto")
 	assert.NoError(t, err)
-	
+
 	name = state.formatter.GetFormatterName(0)
 	assert.Equal(t, "auto", name)
-	
+
 	// Test invalid formatter
 	err = state.SetFormat(0, "invalid")
 	assert.Error(t, err)
@@ -67,17 +67,17 @@ func TestState_DisplayModes(t *testing.T) {
 		pageSize:    20,
 		maxColWidth: 64,
 	}
-	
+
 	// Test initial mode (table)
 	assert.False(t, state.verticalMode)
 	assert.Equal(t, 64, state.maxColWidth)
 	assert.Equal(t, 20, state.pageSize)
-	
+
 	// Test switching to vertical mode
 	state.verticalMode = true
 	state.maxColWidth = 128
 	state.pageSize = 10
-	
+
 	assert.True(t, state.verticalMode)
 	assert.Equal(t, 128, state.maxColWidth)
 	assert.Equal(t, 10, state.pageSize)
@@ -90,14 +90,14 @@ func TestState_WidthSettings(t *testing.T) {
 		ctx:         ctx,
 		maxColWidth: 64,
 	}
-	
+
 	// Test default width
 	assert.Equal(t, 64, state.maxColWidth)
-	
+
 	// Test setting custom width
 	state.maxColWidth = 100
 	assert.Equal(t, 100, state.maxColWidth)
-	
+
 	// Test unlimited width
 	state.maxColWidth = 0
 	assert.Equal(t, 0, state.maxColWidth)
@@ -109,16 +109,16 @@ func TestState_ColumnFiltering(t *testing.T) {
 		formatter: objecttool.NewFormatterRegistry(),
 		ctx:       ctx,
 	}
-	
+
 	// Test no filtering (show all)
 	assert.Nil(t, state.visibleCols)
-	
+
 	// Test filtering specific columns
 	state.visibleCols = []uint16{0, 2, 4, 6, 8}
 	assert.Equal(t, 5, len(state.visibleCols))
 	assert.Equal(t, uint16(0), state.visibleCols[0])
 	assert.Equal(t, uint16(8), state.visibleCols[4])
-	
+
 	// Test clearing filter
 	state.visibleCols = nil
 	assert.Nil(t, state.visibleCols)
@@ -130,22 +130,22 @@ func TestState_FormatterRegistry(t *testing.T) {
 		formatter: objecttool.NewFormatterRegistry(),
 		ctx:       ctx,
 	}
-	
+
 	// Test formatter registry is initialized
 	assert.NotNil(t, state.formatter)
-	
+
 	// Test setting formatter
 	err := state.SetFormat(0, "hex")
 	assert.NoError(t, err)
-	
+
 	// Test getting formatter name
 	name := state.formatter.GetFormatterName(0)
 	assert.Equal(t, "hex", name)
-	
+
 	// Test clearing formatter
 	err = state.SetFormat(0, "auto")
 	assert.NoError(t, err)
-	
+
 	name = state.formatter.GetFormatterName(0)
 	assert.Equal(t, "auto", name)
 }
@@ -156,7 +156,7 @@ func TestState_Close(t *testing.T) {
 		formatter: objecttool.NewFormatterRegistry(),
 		ctx:       ctx,
 	}
-	
+
 	// Should not panic
 	assert.NotPanics(t, func() {
 		state.Close()
@@ -171,16 +171,16 @@ func TestState_GlobalRowOffset(t *testing.T) {
 		currentBlock: 0,
 		rowOffset:    0,
 	}
-	
+
 	// Test initial offset
 	offset := state.GlobalRowOffset()
 	assert.Equal(t, int64(0), offset)
-	
+
 	// Test with different row offset
 	state.rowOffset = 100
 	offset = state.GlobalRowOffset()
 	assert.Equal(t, int64(100), offset)
-	
+
 	// Test with different block (approximate calculation)
 	state.currentBlock = 1
 	state.rowOffset = 50
@@ -192,15 +192,15 @@ func TestState_GlobalRowOffset(t *testing.T) {
 func TestNewState(t *testing.T) {
 	// We can't create a real ObjectReader easily, so test NewState logic
 	// by testing the components it should initialize
-	
+
 	// Test formatter registry creation
 	registry := objecttool.NewFormatterRegistry()
 	assert.NotNil(t, registry)
-	
+
 	// Test default values that NewState should set
 	expectedPageSize := 20
 	expectedMaxColWidth := 64
-	
+
 	assert.Equal(t, 20, expectedPageSize)
 	assert.Equal(t, 64, expectedMaxColWidth)
 }
@@ -225,59 +225,59 @@ func TestStateWithVariousDataTypes(t *testing.T) {
 		{"blob", types.T_blob, &DefaultFormatter{}, []byte{0x01, 0x02, 0x03}},
 		{"text", types.T_text, &DefaultFormatter{}, "text content"},
 	}
-	
+
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			colType := types.Type{Oid: tc.typeOid}
-			
+
 			// Test that formatter can handle the type
 			canFormat := tc.formatter.CanFormat(tc.testValue, colType)
 			assert.True(t, canFormat, "Formatter should handle type %s", tc.name)
-			
+
 			// Test that formatter produces non-empty output
 			result := tc.formatter.Format(tc.testValue)
 			assert.NotEmpty(t, result, "Formatter should produce output for type %s", tc.name)
 		})
 	}
-	
+
 	// Test special formatters
 	t.Run("ts_formatter", func(t *testing.T) {
 		formatter := &TSFormatter{}
 		tsType := types.Type{Oid: types.T_TS}
 		var tsValue types.TS // TS is [12]byte
-		
+
 		canFormat := formatter.CanFormat(tsValue, tsType)
 		assert.True(t, canFormat, "TSFormatter should handle TS type")
-		
+
 		// Zero TS may produce empty or "0" output, just check it doesn't panic
 		result := formatter.Format(tsValue)
 		_ = result // TSFormatter may return empty for zero value
 	})
-	
+
 	t.Run("rowid_formatter", func(t *testing.T) {
 		formatter := &RowidFormatter{}
 		rowidType := types.Type{Oid: types.T_Rowid}
 		var rowidValue types.Rowid // Rowid is [16]byte
-		
+
 		canFormat := formatter.CanFormat(rowidValue, rowidType)
 		assert.True(t, canFormat, "RowidFormatter should handle Rowid type")
-		
+
 		result := formatter.Format(rowidValue)
 		assert.NotEmpty(t, result, "RowidFormatter should produce output")
 	})
-	
+
 	t.Run("hex_formatter", func(t *testing.T) {
 		formatter := &HexFormatter{}
 		testData := []byte{0xDE, 0xAD, 0xBE, 0xEF}
-		
+
 		result := formatter.Format(testData)
 		assert.Contains(t, result, "de", "HexFormatter should produce hex output")
 		assert.Contains(t, result, "ad", "HexFormatter should produce hex output")
 	})
-	
+
 	t.Run("objectstats_formatter", func(t *testing.T) {
 		formatter := &objecttool.ObjectStatsFormatter{}
-		
+
 		// ObjectStatsFormatter requires specific length byte slice
 		// Just test that it doesn't panic with wrong length
 		testData := []byte{0x01, 0x02, 0x03, 0x04}
