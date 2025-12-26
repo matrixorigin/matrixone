@@ -1551,6 +1551,34 @@ func ExecuteIteration(
 				zap.Bool("has_previous", !mapping.Previous.IsZero()),
 			)
 
+			// Print upstream->current mapping when current exists and changed
+			if !mapping.Current.IsZero() {
+				// Check if current is different from previous (changed)
+				currentChanged := false
+				if mapping.Previous.IsZero() {
+					// New mapping (no previous)
+					currentChanged = true
+				} else {
+					// Check if current is different from previous by comparing object names
+					currentName := mapping.Current.ObjectName().String()
+					previousName := mapping.Previous.ObjectName().String()
+					if currentName != previousName {
+						currentChanged = true
+					}
+				}
+				if currentChanged {
+					logutil.Info("ccpr-iteration aobject mapping changed",
+						zap.Uint64("task_id", iterationCtx.TaskID),
+						zap.Uint64("lsn", iterationCtx.IterationLSN),
+						zap.String("db_name", dbName),
+						zap.String("table_name", tableName),
+						zap.String("upstream", upstreamUUID.ShortStringEx()),
+						zap.String("current", mapping.Current.ObjectName().String()),
+						zap.String("current_info", mapping.Current.String()),
+					)
+				}
+			}
+
 			// If delete is true, delete the object and remove from map
 			if mapping.Delete {
 				// Delete previous object if it exists (previous object was created in earlier iteration)
