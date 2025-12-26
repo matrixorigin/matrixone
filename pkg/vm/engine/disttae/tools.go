@@ -161,12 +161,8 @@ func toPBEntry(e Entry) (*api.Entry, error) {
 	} else if e.typ == ALTER {
 		typ = api.Entry_Alter
 	} else if e.typ == SOFT_DELETE_OBJECT {
-		// Use Entry_Delete type but with special FileName format
-		// TN side will parse FileName to get ObjectID and IsTombstone
 		typ = api.Entry_Delete
-		// Keep the empty batch
-		ebat = batch.NewWithSize(0)
-		ebat.SetRowCount(0)
+		ebat = e.bat
 	}
 	bat, err := toPBBatch(ebat)
 	if err != nil {

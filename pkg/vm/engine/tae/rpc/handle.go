@@ -16,7 +16,6 @@ package rpc
 
 import (
 	"context"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -363,6 +362,7 @@ func (h *Handle) apiEntryToWriteEntry(
 	if err != nil {
 		panic(err)
 	}
+
 	req := &cmd_util.WriteReq{
 		Type:         cmd_util.EntryType(pe.EntryType),
 		DatabaseId:   pe.GetDatabaseId(),
@@ -374,28 +374,52 @@ func (h *Handle) apiEntryToWriteEntry(
 		PkCheck:      cmd_util.PKCheckType(pe.GetPkCheckByTn()),
 	}
 
-	// Handle soft delete object: parse ObjectID and IsTombstone from FileName
-	// Format: "soft_delete_object:<object_id_hex>:<is_tombstone>"
-	if req.Type == cmd_util.EntrySoftDeleteObject && req.FileName != "" {
-		parts := strings.Split(req.FileName, ":")
-		if len(parts) == 3 && parts[0] == "soft_delete_object" {
-			objIDBytes, err := hex.DecodeString(parts[1])
-			if err == nil && len(objIDBytes) == 16 {
-				objID := objectio.ObjectId(objIDBytes)
-				req.ObjectID = &objID
-				req.IsTombstone = parts[2] == "true"
+	// Handle soft delete object: parse ObjectID from batch and IsTombstone from FileName
+	// FileName format: "soft_delete_object:<is_tombstone>"
+	// Batch contains ObjectID in first column (binary, 18 bytes)
+	isSoftDeleteObject := req.FileName != "" && strings.HasPrefix(req.FileName, "soft_delete_object:")
+	if isSoftDeleteObject {
+		// Parse ObjectID from batch
+		if req.Batch != nil && req.Batch.RowCount() > 0 && len(req.Batch.Vecs) > 0 {
+			objIDVec := req.Batch.Vecs[0]
+			if objIDVec.Length() > 0 {
+				objIDBytes := objIDVec.GetBytesAt(0)
+				if len(objIDBytes) == types.ObjectidSize {
+					objID := objectio.ObjectId(objIDBytes)
+					req.ObjectID = &objID
+					// Parse IsTombstone from FileName (format: "soft_delete_object:<bool>")
+					parts := strings.Split(req.FileName, ":")
+					if len(parts) == 2 && parts[0] == "soft_delete_object" {
+						req.IsTombstone = parts[1] == "true"
+					}
+					logutil.Info("TN parsed soft delete object from batch",
+						zap.String("object_id", objID.ShortStringEx()),
+						zap.Bool("is_tombstone", req.IsTombstone),
+					)
+				} else {
+					logutil.Errorf("TN invalid ObjectID size in batch: %d (expected %d)", len(objIDBytes), types.ObjectidSize)
+				}
+			} else {
+				logutil.Errorf("TN batch vector is empty for soft delete object")
 			}
+		} else {
+			logutil.Errorf("TN batch is empty or invalid for soft delete object")
 		}
+		// Set type to EntrySoftDeleteObject so it can be detected later
+		req.Type = cmd_util.EntrySoftDeleteObject
 	}
 
-	if req.FileName != "" {
-		col := req.Batch.Vecs[0]
-		for i := 0; i < req.Batch.RowCount(); i++ {
-			stats := objectio.ObjectStats(col.GetBytesAt(i))
-			if req.Type == cmd_util.EntryInsert {
-				req.DataObjectStats = append(req.DataObjectStats, stats)
-			} else {
-				req.TombstoneStats = append(req.TombstoneStats, stats)
+	// Skip parsing batch for soft delete object as it only contains ObjectID
+	if req.FileName != "" && !isSoftDeleteObject {
+		if req.Batch != nil && req.Batch.RowCount() > 0 && len(req.Batch.Vecs) > 0 {
+			col := req.Batch.Vecs[0]
+			for i := 0; i < req.Batch.RowCount(); i++ {
+				stats := objectio.ObjectStats(col.GetBytesAt(i))
+				if req.Type == cmd_util.EntryInsert {
+					req.DataObjectStats = append(req.DataObjectStats, stats)
+				} else {
+					req.TombstoneStats = append(req.TombstoneStats, stats)
+				}
 			}
 		}
 	}
@@ -1008,6 +1032,10 @@ func (h *Handle) HandleSoftDeleteObject(
 	txn txnif.AsyncTxn,
 	req *cmd_util.WriteReq,
 ) error {
+	// Check if ObjectID is valid
+	if req.ObjectID == nil {
+		return moerr.NewInternalErrorf(ctx, "ObjectID is nil for soft delete object request, FileName: %s", req.FileName)
+	}
 
 	dbase, err := txn.GetDatabaseByID(req.DatabaseId)
 	if err != nil {
@@ -1019,7 +1047,10 @@ func (h *Handle) HandleSoftDeleteObject(
 		return moerr.NewInternalErrorf(ctx, "failed to get relation %d: %v", req.TableID, err)
 	}
 
-	err = tb.SoftDeleteObject(req.ObjectID, req.IsTombstone)
+	// objectio.ObjectId is a type alias for types.Objectid, so we can use it directly
+	// But we need to convert the pointer type: *objectio.ObjectId -> *types.Objectid
+	objIDPtr := (*types.Objectid)(req.ObjectID)
+	err = tb.SoftDeleteObject(objIDPtr, req.IsTombstone)
 	if err != nil {
 		logutil.Errorf("failed to soft delete object %s: %v", req.ObjectID.ShortStringEx(), err)
 		return moerr.NewInternalErrorf(ctx, "failed to soft delete object %s: %v", req.ObjectID.ShortStringEx(), err)

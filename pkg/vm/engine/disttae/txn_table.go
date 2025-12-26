@@ -1741,27 +1741,30 @@ func (tbl *txnTable) SoftDeleteObject(ctx context.Context, objID *objectio.Objec
 		return moerr.NewInternalErrorNoCtx("soft delete object operation is not allowed in snapshot transaction")
 	}
 
-	// Create a special entry for soft delete object
-	// We use FileName to pass ObjectID and IsTombstone as a special format
+	// Create a batch containing ObjectID for soft delete object
+	// Batch structure: one column with ObjectID bytes (18 bytes as binary)
+	bat := batch.NewWithSize(1)
+	bat.SetAttributes([]string{"object_id"})
+	
+	objIDVec := vector.NewVec(types.T_binary.ToType())
 	objIDBytes := objID[:]
-	objIDHex := fmt.Sprintf("%x", objIDBytes)
-	fileName := fmt.Sprintf("soft_delete_object:%s:%v", objIDHex, isTombstone)
-
-	// Create an empty batch (not used for soft delete object)
-	emptyBat := batch.NewWithSize(0)
-	emptyBat.SetRowCount(0)
+	if err := vector.AppendBytes(objIDVec, objIDBytes, false, tbl.getTxn().proc.Mp()); err != nil {
+		return err
+	}
+	bat.Vecs[0] = objIDVec
+	bat.SetRowCount(1)
 
 	// Create entry with EntrySoftDeleteObject type
 	entry := Entry{
 		typ:          SOFT_DELETE_OBJECT,
-		bat:          emptyBat,
+		bat:          bat,
 		tnStore:      tbl.getTxn().tnStores[0],
 		tableId:      tbl.tableId,
 		databaseId:   tbl.db.databaseId,
 		tableName:    tbl.tableName,
 		databaseName: tbl.db.databaseName,
 		accountId:    tbl.accountId,
-		fileName:     fileName,
+		fileName:     fmt.Sprintf("soft_delete_object:%v", isTombstone), // Only store isTombstone in fileName
 	}
 
 	tbl.getTxn().writes = append(tbl.getTxn().writes, entry)
