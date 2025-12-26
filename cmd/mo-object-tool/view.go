@@ -1,6 +1,4 @@
-//go:build gpu
-
-// Copyright 2022 Matrix Origin
+// Copyright 2021 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,18 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package metric
+package object
 
 import (
-	cuvs "github.com/rapidsai/cuvs/go"
+	"github.com/matrixorigin/matrixone/pkg/tools/objecttool/interactive"
+	"github.com/spf13/cobra"
 )
 
-var (
-	MetricTypeToCuvsMetric = map[MetricType]cuvs.Distance{
-		Metric_L2sqDistance:   cuvs.DistanceSQEuclidean,
-		Metric_L2Distance:     cuvs.DistanceSQEuclidean,
-		Metric_InnerProduct:   cuvs.DistanceInnerProduct,
-		Metric_CosineDistance: cuvs.DistanceCosine,
-		Metric_L1Distance:     cuvs.DistanceL1,
+func viewCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "view <object-file>",
+		Short: "Interactive object file viewer",
+		Long:  "Open an object file in interactive mode for browsing and analysis",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			path := args[0]
+			return interactive.Run(path)
+		},
 	}
-)
+
+	return cmd
+}

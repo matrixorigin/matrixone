@@ -31,3 +31,6 @@ header:
 dependency:
   files:
     - go.mod
+  licenses:
+    - name: github.com/mattn/go-localereader
+      license: MIT

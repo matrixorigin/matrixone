@@ -12,13 +12,13 @@
 /.gitignore @fengttt
 /.dockerignore @fengttt
 /Makefile @zhangxu19830126 @XuPeng-SH
-/README.md @dengn
-/README_CN.md @dengn
+/README.md @dengn @XuPeng-SH
+/README_CN.md @dengn @XuPeng-SH
 /LICENSE @fengttt
 /CODEOWNERS @fengttt
 /CODE_OF_CONDUCT.md @fengttt
-/go.mod @zhangxu19830126
-/go.sum @zhangxu19830126
+/go.mod @zhangxu19830126 @XuPeng-SH
+/go.sum @zhangxu19830126 @XuPeng-SH
 
 # Top-level folders
 /cgo @aunjgr
@@ -34,6 +34,7 @@
 # cmd
 /cmd/mo-service @zhangxu19830126
 
+/pkg/tools @XuPeng-SH
 /pkg/backup @LeftHandCold
 
 /pkg/datasync @volgariver6 @LeftHandCold
