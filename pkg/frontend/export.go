@@ -364,6 +364,21 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 		mp = ss.GetMemPool()
 	}
 
+	// respect cancellation to avoid blocking when downstream writer stops
+	if ctx.Err() != nil {
+		bat.Clean(mp)
+		return
+	}
+
+	sendByte := func(bb *BatchByte) bool {
+		select {
+		case ByteChan <- bb:
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
+
 	symbol := ep.Symbol
 	closeby := ep.userConfig.Fields.EnclosedBy.Value
 	terminated := ep.userConfig.Fields.Terminated.Value
@@ -501,9 +516,10 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 						zap.Int("typeOid", int(vec.GetType().Oid)))
 				}
 
-				ByteChan <- &BatchByte{
+				// stop early if downstream already failed
+				sendByte(&BatchByte{
 					err: moerr.NewInternalErrorf(ctx, "constructByte : unsupported type %d", vec.GetType().Oid),
-				}
+				})
 				bat.Clean(mp)
 				return
 			}
@@ -516,10 +532,13 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 	copy(result, buffer.Bytes())
 	buffer = nil
 
-	ByteChan <- &BatchByte{
+	if !sendByte(&BatchByte{
 		index:     index,
 		writeByte: result,
 		err:       nil,
+	}) {
+		bat.Clean(mp)
+		return
 	}
 
 	if ss != nil {
