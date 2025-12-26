@@ -17,6 +17,7 @@ package publication
 import (
 	"context"
 	"fmt"
+	"math"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
@@ -99,6 +100,12 @@ func filterAppendableObject(
 		return moerr.NewInternalErrorf(ctx, "failed to get object from upstream: %v", err)
 	}
 
+	// Extract sortkey from original object metadata
+	sortKeySeqnum, err := extractSortKeyFromObject(ctx, objectContent, stats)
+	if err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to extract sortkey from object: %v", err)
+	}
+
 	// Convert object file to batch
 	bat, err := convertObjectToBatch(ctx, objectContent, stats, snapshotTS, localFS, mp)
 	if err != nil {
@@ -115,7 +122,7 @@ func filterAppendableObject(
 
 	// Sort batch by primary key, remove commit TS column, write to file, and record ObjectStats
 	// This is data object (not tombstone), so use SchemaData
-	objStats, err := createObjectFromBatch(ctx, filteredBat, stats, snapshotTS, isTombstone, localFS, mp)
+	objStats, err := createObjectFromBatch(ctx, filteredBat, stats, snapshotTS, isTombstone, localFS, mp, sortKeySeqnum)
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to create object from batch: %v", err)
 	}
@@ -225,6 +232,42 @@ func getObjectFromUpstream(
 	}
 
 	return objectContent, nil
+}
+
+// extractSortKeyFromObject extracts sortkey seqnum from object metadata
+func extractSortKeyFromObject(
+	ctx context.Context,
+	objectContent []byte,
+	stats *objectio.ObjectStats,
+) (uint16, error) {
+	// Read object meta from objectContent bytes
+	metaExtent := stats.Extent()
+	if int(metaExtent.Offset()+metaExtent.Length()) > len(objectContent) {
+		return 0, moerr.NewInternalErrorf(ctx, "object content too small for meta extent")
+	}
+	metaBytes := objectContent[metaExtent.Offset() : metaExtent.Offset()+metaExtent.Length()]
+
+	// Check if meta needs decompression
+	var decompressedMetaBytes []byte
+	if metaExtent.Alg() == compress.None {
+		decompressedMetaBytes = metaBytes
+	} else {
+		// Allocate buffer for decompressed data
+		allocator := fileservice.DefaultCacheDataAllocator()
+		decompressedBuf := allocator.AllocateCacheDataWithHint(ctx, int(metaExtent.OriginSize()), malloc.NoClear)
+		bs, err := compress.Decompress(metaBytes, decompressedBuf.Bytes(), compress.Lz4)
+		if err != nil {
+			return 0, moerr.NewInternalErrorf(ctx, "failed to decompress meta data: %v", err)
+		}
+		decompressedMetaBytes = decompressedBuf.Bytes()[:len(bs)]
+	}
+
+	meta := objectio.MustObjectMeta(decompressedMetaBytes)
+	dataMeta := meta.MustGetMeta(objectio.SchemaData)
+
+	// Get sortkey seqnum from block header
+	sortKeySeqnum := dataMeta.BlockHeader().SortKey()
+	return sortKeySeqnum, nil
 }
 
 // convertObjectToBatch converts object file content to batch directly from memory
@@ -427,6 +470,7 @@ func filterBatchBySnapshotTS(
 // createObjectFromBatch sorts batch by primary key, removes commit TS column,
 // writes to object file, and returns objectio.ObjectStats
 // isTombstone: true for tombstone objects, false for data objects
+// sortKeySeqnum: the seqnum of the sortkey column in the original object
 func createObjectFromBatch(
 	ctx context.Context,
 	bat *containers.Batch,
@@ -435,6 +479,7 @@ func createObjectFromBatch(
 	isTombstone bool,
 	localFS fileservice.FileService,
 	mp *mpool.MPool,
+	sortKeySeqnum uint16,
 ) (objectio.ObjectStats, error) {
 	if bat == nil || bat.Length() == 0 {
 		return objectio.ObjectStats{}, nil
@@ -495,6 +540,20 @@ func createObjectFromBatch(
 		seqnums = append(seqnums, i)
 	}
 
+	// Map sortkey seqnum to position in new batch
+	// Since commit TS is removed but data columns keep their original positions,
+	// the sortkey position is the same as its seqnum (assuming sortkey is a data column, not commit TS)
+	sortKeyPos := 0
+	if sortKeySeqnum != math.MaxUint16 {
+		// Convert seqnum to position in new batch
+		sortKeyPos = int(sortKeySeqnum)
+		// If sortkey position is invalid (out of range), fallback to 0
+		if sortKeyPos >= len(newBat.Vecs) {
+			sortKeyPos = 0
+		}
+	}
+	// If sortKeySeqnum is math.MaxUint16, it means no sortkey was set, use 0 as default
+
 	// Create block writer - use data schema for data objects, tombstone schema for tombstone objects
 	var writer *ioutil.BlockWriter
 	if isTombstone {
@@ -502,9 +561,9 @@ func createObjectFromBatch(
 		writer = ioutil.ConstructWriter(
 			0, // version
 			seqnums,
-			0,    // sortkeyPos (primary key is first column, which is rowid for tombstone)
-			true, // sortkeyIsPK
-			true, // isTombstone
+			sortKeyPos, // sortkeyPos from original object metadata
+			true,       // sortkeyIsPK
+			true,       // isTombstone
 			localFS,
 		)
 	} else {
@@ -512,9 +571,9 @@ func createObjectFromBatch(
 		writer = ioutil.ConstructWriter(
 			0, // version
 			seqnums,
-			0,     // sortkeyPos (primary key is first column)
-			true,  // sortkeyIsPK
-			false, // isTombstone
+			sortKeyPos, // sortkeyPos from original object metadata
+			true,       // sortkeyIsPK
+			false,      // isTombstone
 			localFS,
 		)
 	}
