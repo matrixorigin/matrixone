@@ -362,45 +362,15 @@ func (tcc *TxnCompilerContext) getRelation(
 	start = time.Now()
 
 	if table, err = db.Relation(tempCtx, tableName, nil); err != nil {
-		// quick return if the error is not ErrNoSuchTable
-		if !moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
-			return nil, nil, err
-		}
-		// for ErrNoSuchTable, try to get from the temp engine
-		eng := tcc.GetTxnHandler().GetStorage()
-		if !eng.HasTempEngine() {
-			// PXU: why not return err???
+		// maybe have (if exists)
+		if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
 			return nil, nil, nil
 		}
-		// get from the temp engine
-		tmpTableName := engine.GetTempTableName(dbName, tableName)
-		if tmpTable, err2 := tcc.getTmpRelation(tempCtx, tmpTableName); err2 != nil {
-			return nil, nil, nil
-		} else {
-			table = tmpTable
-		}
+		return nil, nil, err
 	}
 	v2.OpenTableDurationHistogram.Observe(time.Since(start).Seconds())
 
 	return tempCtx, table, nil
-}
-
-func (tcc *TxnCompilerContext) getTmpRelation(ctx context.Context, tableName string) (engine.Relation, error) {
-	start := time.Now()
-	defer func() {
-		v2.GetTmpTableDurationHistogram.Observe(time.Since(start).Seconds())
-	}()
-	e := tcc.execCtx.ses.GetTxnHandler().GetStorage()
-	txn := tcc.execCtx.ses.GetTxnHandler().GetTxn()
-	db, err := e.Database(ctx, defines.TEMPORARY_DBNAME, txn)
-	if err != nil {
-		tcc.execCtx.ses.Error(ctx,
-			"Failed to get temp database",
-			zap.Error(err))
-		return nil, err
-	}
-	table, err := db.Relation(ctx, tableName, nil)
-	return table, err
 }
 
 func (tcc *TxnCompilerContext) ensureDatabaseIsNotEmpty(dbName string, checkSub bool, snapshot *plan2.Snapshot) (string, *plan.SubscriptionMeta, error) {
@@ -508,6 +478,12 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot
 		}
 	}
 
+	// Check if it is a temporary table in the current session
+	realName, isTmpTable := tcc.GetSession().GetTempTable(dbName, tableName)
+	if isTmpTable {
+		tableName = realName
+	}
+
 	ctx, table, err := tcc.getRelation(dbName, tableName, sub, snapshot)
 	if err != nil {
 		return nil, nil, err
@@ -516,9 +492,7 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot
 		return nil, nil, nil
 	}
 	tableDef := table.CopyTableDef(ctx)
-	if tableDef.IsTemporary {
-		tableDef.Name = tableName
-	}
+	tableDef.IsTemporary = isTmpTable
 
 	// convert
 	var subscriptionName string
@@ -565,9 +539,18 @@ func (tcc *TxnCompilerContext) ResolveIndexTableByRef(
 		}
 	}
 
+	// Check if it is a temporary table in the current session
+	realName, isTmpTable := tcc.GetSession().GetTempTable(ref.SchemaName, tblName)
+	if isTmpTable {
+		tblName = realName
+	}
+
 	ctx, table, err := tcc.getRelation(ref.SchemaName, tblName, subMeta, snapshot)
 	if err != nil {
 		return nil, nil, err
+	}
+	if table == nil {
+		return nil, nil, moerr.NewNoSuchTable(ctx, ref.SchemaName, tblName)
 	}
 
 	tableID := int64(table.GetTableID(ctx))

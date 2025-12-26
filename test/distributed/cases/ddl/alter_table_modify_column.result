@@ -1498,7 +1498,7 @@ col1    col2
 2012-01-13 23:23:59    63298ufh3jcweuiv4h32jhf432ouy4hu3enjwfnwje4n3bj24f34573
 show create table abnormal05;
 Table    Create Table
-abnormal05    CREATE TABLE `abnormal05` (\n  `col1` datetime DEFAULT NULL,\n  `col2` blob DEFAULT NULL\n)
+abnormal05    CREATE TEMPORARY TABLE `abnormal05` (\n  `col1` datetime DEFAULT NULL,\n  `col2` blob DEFAULT NULL\n)
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'abnormal05' and COLUMN_NAME not like '__mo%';
 table_name    COLUMN_NAME    data_type    is_nullable
 drop table abnormal05;
