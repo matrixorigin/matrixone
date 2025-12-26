@@ -27,19 +27,20 @@ import (
 )
 
 type ivfIndexContext struct {
-	vecCtx       *vectorSortContext
-	metaDef      *plan.IndexDef
-	idxDef       *plan.IndexDef
-	entriesDef   *plan.IndexDef
-	vecLitArg    *plan.Expr
-	origFuncName string
-	partPos      int32
-	partType     plan.Type
-	pkPos        int32
-	pkType       plan.Type
-	params       string
-	nThread      int64
-	nProbe       int64
+	vecCtx          *vectorSortContext
+	metaDef         *plan.IndexDef
+	idxDef          *plan.IndexDef
+	entriesDef      *plan.IndexDef
+	vecLitArg       *plan.Expr
+	origFuncName    string
+	partPos         int32
+	partType        plan.Type
+	pkPos           int32
+	pkType          plan.Type
+	params          string
+	nThread         int64
+	nProbe          int64
+	pushdownEnabled bool
 }
 
 func (builder *QueryBuilder) prepareIvfIndexContext(vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex) (*ivfIndexContext, error) {
@@ -48,6 +49,15 @@ func (builder *QueryBuilder) prepareIvfIndexContext(vecCtx *vectorSortContext, m
 	}
 	if vecCtx.distFnExpr == nil {
 		return nil, nil
+	}
+
+	// Check if vector pre-filter pushdown should be enabled by default
+	// This session variable changes the default vector search behavior
+	var enableVectorPrefilterByDefault bool
+	if val, err := builder.compCtx.ResolveVariable("enable_vector_prefilter_by_default", true, false); err == nil && val != nil {
+		if v, ok := val.(int8); ok && v == 1 {
+			enableVectorPrefilterByDefault = true
+		}
 	}
 
 	// RankOption.Mode controls vector index behavior:
@@ -107,19 +117,20 @@ func (builder *QueryBuilder) prepareIvfIndexContext(vecCtx *vectorSortContext, m
 	partType := vecCtx.scanNode.TableDef.Cols[partPos].Typ
 
 	return &ivfIndexContext{
-		vecCtx:       vecCtx,
-		metaDef:      metaDef,
-		idxDef:       idxDef,
-		entriesDef:   entriesDef,
-		vecLitArg:    vecLitArg,
-		origFuncName: origFuncName,
-		partPos:      partPos,
-		partType:     partType,
-		pkPos:        pkPos,
-		pkType:       pkType,
-		params:       idxDef.IndexAlgoParams,
-		nThread:      nThread.(int64),
-		nProbe:       nProbe,
+		vecCtx:          vecCtx,
+		metaDef:         metaDef,
+		idxDef:          idxDef,
+		entriesDef:      entriesDef,
+		vecLitArg:       vecLitArg,
+		origFuncName:    origFuncName,
+		partPos:         partPos,
+		partType:        partType,
+		pkPos:           pkPos,
+		pkType:          pkType,
+		params:          idxDef.IndexAlgoParams,
+		nThread:         nThread.(int64),
+		nProbe:          nProbe,
+		pushdownEnabled: (vecCtx.rankOption != nil && vecCtx.rankOption.Mode == "pre") || (vecCtx.rankOption == nil && enableVectorPrefilterByDefault),
 	}, nil
 }
 
@@ -211,7 +222,6 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 	scanNode := vecCtx.scanNode
 	childNode := vecCtx.childNode
 	orderExpr := vecCtx.orderExpr
-	rankOption := vecCtx.rankOption
 	limit := vecCtx.limit
 
 	ivfCtx, err := builder.prepareIvfIndexContext(vecCtx, multiTableIndex)
@@ -317,7 +327,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 	//   mode == "pre": JOIN( scanNode, JOIN(ivf_search, secondScan) )
 	var joinRootID int32
 
-	pushdownEnabled := rankOption != nil && rankOption.Mode == "pre"
+	pushdownEnabled := ivfCtx.pushdownEnabled
 
 	if pushdownEnabled {
 		// secondScanNode: copy original scanNode for JOIN(ivf, table)
