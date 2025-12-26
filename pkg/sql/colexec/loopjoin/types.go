@@ -35,15 +35,6 @@ const (
 	End
 )
 
-const (
-	LoopInner = iota
-	LoopAnti
-	LoopLeft
-	LoopMark
-	LoopSemi
-	LoopSingle
-)
-
 type container struct {
 	state    int
 	probeIdx int
@@ -62,7 +53,7 @@ type LoopJoin struct {
 	Cond       *plan.Expr
 	Result     []colexec.ResultPos
 	JoinMapTag int32
-	JoinType   int
+	JoinType   plan.Node_JoinType
 	MarkPos    int
 
 	vm.OperatorBase

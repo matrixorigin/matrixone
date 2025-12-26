@@ -12,14 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package right
+package hashjoin
 
 import (
 	"bytes"
 	"context"
 	"testing"
-
-	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -32,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -41,7 +40,7 @@ const (
 
 // add unit tests for cases
 type joinTestCase struct {
-	arg         *RightJoin
+	arg         *HashJoin
 	flgs        []bool // flgs[i] == true: nullable
 	types       []types.Type
 	proc        *process.Process
@@ -258,14 +257,14 @@ func newTestCase(t *testing.T, flgs []bool, ts []types.Type, rp []colexec.Result
 		flgs:   flgs,
 		proc:   proc,
 		cancel: cancel,
-		arg: &RightJoin{
+		arg: &HashJoin{
 			LeftTypes:  ts,
 			RightTypes: ts,
-			Result:     rp,
-			Conditions: cs,
+			ResultCols: rp,
+			EqConds:    cs,
 			NumCPU:     1,
 			IsMerger:   true,
-			Cond:       cond,
+			NonEqCond:  cond,
 			OperatorBase: vm.OperatorBase{
 				OperatorInfo: vm.OperatorInfo{
 					Idx:     0,
@@ -294,7 +293,7 @@ func newTestCase(t *testing.T, flgs []bool, ts []types.Type, rp []colexec.Result
 	}
 }
 
-func resetChildren(arg *RightJoin, m *mpool.MPool) {
+func resetChildren(arg *HashJoin, m *mpool.MPool) {
 	bat := colexec.MakeMockBatchs(m)
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 	arg.Children = nil

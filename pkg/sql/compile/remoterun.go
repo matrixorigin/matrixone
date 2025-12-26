@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/fuzzyfilter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
@@ -65,7 +66,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightdedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
@@ -565,22 +565,6 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			ShuffleIdx:             t.ShuffleIdx,
 			JoinMapTag:             t.JoinMapTag,
 		}
-	case *right.RightJoin:
-		rels, poses := getRelColList(t.Result)
-		in.RightJoin = &pipeline.RightJoin{
-			RelList:                rels,
-			ColList:                poses,
-			Expr:                   t.Cond,
-			LeftTypes:              convertToPlanTypes(t.LeftTypes),
-			RightTypes:             convertToPlanTypes(t.RightTypes),
-			LeftCond:               t.Conditions[0],
-			RightCond:              t.Conditions[1],
-			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
-			HashOnPk:               t.HashOnPK,
-			IsShuffle:              t.IsShuffle,
-			ShuffleIdx:             t.ShuffleIdx,
-			JoinMapTag:             t.JoinMapTag,
-		}
 	case *rightsemi.RightSemi:
 		in.RightSemiJoin = &pipeline.RightSemiJoin{
 			Result:                 t.Result,
@@ -609,6 +593,24 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 	case *limit.Limit:
 		in.Limit = t.LimitExpr
+	case *hashjoin.HashJoin:
+		relList, colList := getRelColList(t.ResultCols)
+		in.HashJoin = &pipeline.HashJoin{
+			JoinType:               t.JoinType,
+			IsRightJoin:            t.IsRightJoin,
+			HashOnPk:               t.HashOnPK,
+			IsShuffle:              t.IsShuffle,
+			ShuffleIdx:             t.ShuffleIdx,
+			RelList:                relList,
+			ColList:                colList,
+			LeftTypes:              convertToPlanTypes(t.LeftTypes),
+			RightTypes:             convertToPlanTypes(t.RightTypes),
+			LeftConds:              t.EqConds[0],
+			RightConds:             t.EqConds[1],
+			NonEqCond:              t.NonEqCond,
+			JoinMapTag:             t.JoinMapTag,
+			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
+		}
 	case *loopjoin.LoopJoin:
 		relList, colList := getRelColList(t.Result)
 		in.Join = &pipeline.Join{
@@ -617,7 +619,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			Types:      convertToPlanTypes(t.Typs),
 			Expr:       t.Cond,
 			JoinMapTag: t.JoinMapTag,
-			JoinType:   int32(t.JoinType),
+			JoinType:   t.JoinType,
 		}
 	case *offset.Offset:
 		in.Offset = t.OffsetExpr
@@ -1096,14 +1098,16 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.ShuffleIdx = t.ShuffleIdx
 		arg.JoinMapTag = t.JoinMapTag
 		op = arg
-	case vm.Right:
-		t := opr.GetRightJoin()
-		arg := right.NewArgument()
-		arg.Result = convertToResultPos(t.RelList, t.ColList)
+	case vm.HashJoin:
+		t := opr.GetHashJoin()
+		arg := hashjoin.NewArgument()
+		arg.JoinType = t.JoinType
+		arg.IsRightJoin = t.IsRightJoin
+		arg.ResultCols = convertToResultPos(t.RelList, t.ColList)
 		arg.LeftTypes = convertToTypes(t.LeftTypes)
 		arg.RightTypes = convertToTypes(t.RightTypes)
-		arg.Cond = t.Expr
-		arg.Conditions = [][]*plan.Expr{t.LeftCond, t.RightCond}
+		arg.NonEqCond = t.NonEqCond
+		arg.EqConds = [][]*plan.Expr{t.LeftConds, t.RightConds}
 		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
 		arg.HashOnPK = t.HashOnPk
 		arg.IsShuffle = t.IsShuffle
@@ -1145,7 +1149,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.Typs = convertToTypes(t.Types)
 		arg.Cond = t.Expr
 		arg.JoinMapTag = t.JoinMapTag
-		arg.JoinType = int(t.JoinType)
+		arg.JoinType = t.JoinType
 		op = arg
 	case vm.IndexJoin:
 		t := opr.GetIndexJoin()
