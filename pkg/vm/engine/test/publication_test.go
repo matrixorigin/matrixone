@@ -510,6 +510,104 @@ func TestExecuteIteration1(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
+
+	// Step 7: Execute second iteration without inserting new data
+	iterationLSN2 := uint64(2)
+	updateSQL := fmt.Sprintf(
+		`UPDATE mo_catalog.mo_ccpr_log 
+		SET iteration_state = %d, iteration_lsn = %d 
+		WHERE task_id = %d`,
+		publication.IterationStatePending,
+		iterationLSN2,
+		taskID,
+	)
+
+	// Update mo_ccpr_log using system account context
+	err = exec_sql(disttaeEngine, systemCtx, updateSQL)
+	require.NoError(t, err)
+
+	// Create new checkpoint channel for second iteration
+	checkpointDone2 := make(chan struct{}, 1)
+	utHelper2 := &checkpointUTHelper{
+		taeHandler:    taeHandler,
+		disttaeEngine: disttaeEngine,
+		checkpointC:   checkpointDone2,
+	}
+
+	// Execute second ExecuteIteration
+	err = publication.ExecuteIteration(
+		srcCtxWithTimeout,
+		cnUUID,
+		disttaeEngine.Engine,
+		disttaeEngine.GetTxnClient(),
+		taskID,
+		iterationLSN2,
+		upstreamSQLHelperFactory,
+		mp,
+		utHelper2,
+	)
+
+	// Signal checkpoint goroutine to stop
+	close(checkpointDone2)
+
+	// Check errors
+	require.NoError(t, err, "Second ExecuteIteration should complete successfully")
+
+	// Step 8: Verify that the second iteration state was updated
+	querySQL2 := fmt.Sprintf(
+		`SELECT iteration_state, iteration_lsn FROM mo_catalog.mo_ccpr_log WHERE task_id = %d`,
+		taskID,
+	)
+
+	querySystemCtx2 := context.WithValue(destCtxWithTimeout, defines.TenantIDKey{}, catalog.System_Account)
+	txn2, err := disttaeEngine.NewTxnOperator(querySystemCtx2, disttaeEngine.Now())
+	require.NoError(t, err)
+
+	res2, err := exec.Exec(querySystemCtx2, querySQL2, executor.Options{}.WithTxn(txn2))
+	require.NoError(t, err)
+	defer res2.Close()
+
+	// Check that iteration_state is completed for second iteration
+	var found2 bool
+	res2.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		require.Equal(t, 1, rows)
+		require.Equal(t, 2, len(cols))
+
+		state := vector.GetFixedAtWithTypeCheck[int8](cols[0], 0)
+		lsn := vector.GetFixedAtWithTypeCheck[int64](cols[1], 0)
+
+		require.Equal(t, publication.IterationStateCompleted, state)
+		require.Equal(t, int64(iterationLSN2), lsn)
+		found2 = true
+		return true
+	})
+	require.True(t, found2, "should find the updated iteration record for second iteration")
+
+	err = txn2.Commit(querySystemCtx2)
+	require.NoError(t, err)
+
+	// Step 9: Check destination table row count after second iteration
+	// The destination table should still have 10 rows (no new data inserted)
+	checkRowCountSQL2 := fmt.Sprintf(`SELECT COUNT(*) FROM %s.%s`, srcDBName, srcTableName)
+	queryDestCtx2 := context.WithValue(destCtxWithTimeout, defines.TenantIDKey{}, destAccountID)
+	txn3, err := disttaeEngine.NewTxnOperator(queryDestCtx2, disttaeEngine.Now())
+	require.NoError(t, err)
+
+	rowCountRes2, err := exec.Exec(queryDestCtx2, checkRowCountSQL2, executor.Options{}.WithTxn(txn3))
+	require.NoError(t, err)
+	defer rowCountRes2.Close()
+
+	var rowCount2 int64
+	rowCountRes2.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		require.Equal(t, 1, rows)
+		require.Equal(t, 1, len(cols))
+		rowCount2 = vector.GetFixedAtWithTypeCheck[int64](cols[0], 0)
+		return true
+	})
+	require.Equal(t, int64(10), rowCount2, "destination table should still have 10 rows after second iteration")
+
+	err = txn3.Commit(queryDestCtx2)
+	require.NoError(t, err)
 }
 
 func TestExecuteIterationDatabaseLevel(t *testing.T) {
