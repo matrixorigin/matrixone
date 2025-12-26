@@ -47,7 +47,6 @@ func FilterObject(
 	iterationCtx *IterationContext,
 	localFS fileservice.FileService,
 	mp *mpool.MPool,
-	delete bool,
 ) error {
 	if len(objectStatsBytes) != objectio.ObjectStatsLen {
 		return moerr.NewInternalErrorf(ctx, "invalid object stats length: expected %d, got %d", objectio.ObjectStatsLen, len(objectStatsBytes))
@@ -62,7 +61,7 @@ func FilterObject(
 
 	if isAObj {
 		// Handle appendable object
-		return filterAppendableObject(ctx, &stats, snapshotTS, iterationCtx, localFS, mp, delete)
+		return filterAppendableObject(ctx, &stats, snapshotTS, iterationCtx, localFS, mp)
 	} else {
 		// Handle non-appendable object - write directly to fileservice
 		return filterNonAppendableObject(ctx, &stats, iterationCtx, localFS)
@@ -79,7 +78,6 @@ func filterAppendableObject(
 	iterationCtx *IterationContext,
 	localFS fileservice.FileService,
 	mp *mpool.MPool,
-	delete bool,
 ) error {
 	// Get object name from stats (upstream aobj UUID)
 	upstreamAObjUUID := stats.ObjectName().ObjectId()
@@ -92,15 +90,6 @@ func filterAppendableObject(
 
 	// Get previous stats if exists, otherwise use zero value
 	mapping := iterationCtx.ActiveAObj[*upstreamAObjUUID]
-
-	// If delete is true, don't create new object, just mark for deletion
-	if delete {
-		mapping.Previous = mapping.Current       // Save previous stats
-		mapping.Current = objectio.ObjectStats{} // Clear current stats (zero value)
-		mapping.Delete = true                    // Record delete flag
-		iterationCtx.ActiveAObj[*upstreamAObjUUID] = mapping
-		return nil
-	}
 
 	// Get object file from upstream using GETOBJECT
 	objectContent, err := getObjectFromUpstream(ctx, iterationCtx, stats.ObjectName().String())
@@ -131,7 +120,6 @@ func filterAppendableObject(
 	// Update mapping
 	mapping.Previous = mapping.Current // Save previous stats
 	mapping.Current = objStats         // Set new current stats
-	mapping.Delete = false             // Not marked for deletion
 	iterationCtx.ActiveAObj[*upstreamAObjUUID] = mapping
 
 	return nil

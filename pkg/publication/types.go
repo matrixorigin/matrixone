@@ -55,7 +55,6 @@ type ObjectStats struct {
 type AObjMapping struct {
 	Current  objectio.ObjectStats // Newly written object stats in current iteration
 	Previous objectio.ObjectStats // Object stats written in previous iteration (zero value if not exists)
-	Delete   bool                 // Whether to delete this object when submitting
 }
 
 // TableKey represents a key for TableIDs map

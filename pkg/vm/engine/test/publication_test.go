@@ -546,7 +546,8 @@ func TestExecuteIteration1(t *testing.T) {
 		mp,
 		utHelper2,
 	)
-
+	
+	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 	// Signal checkpoint goroutine to stop
 	close(checkpointDone2)
 

@@ -1465,10 +1465,11 @@ func ExecuteIteration(
 					zap.Bool("delete", delete),
 					zap.String("operation", "filter_aobj"),
 				)
-
-				if err = FilterObject(ctx, statsBytes, snapshotTS, iterationCtx, fs, mp, delete); err != nil {
-					err = moerr.NewInternalErrorf(ctx, "failed to filter object: %v", err)
-					return
+				if !info.Delete {
+					if err = FilterObject(ctx, statsBytes, snapshotTS, iterationCtx, fs, mp); err != nil {
+						err = moerr.NewInternalErrorf(ctx, "failed to filter object: %v", err)
+						return
+					}
 				}
 				continue
 			}
@@ -1503,7 +1504,7 @@ func ExecuteIteration(
 					zap.String("operation", "filter_nobj"),
 				)
 
-				if err = FilterObject(ctx, statsBytes, snapshotTS, iterationCtx, fs, mp, delete); err != nil {
+				if err = FilterObject(ctx, statsBytes, snapshotTS, iterationCtx, fs, mp); err != nil {
 					err = moerr.NewInternalErrorf(ctx, "failed to filter object: %v", err)
 					return
 				}
@@ -1546,7 +1547,7 @@ func ExecuteIteration(
 				zap.String("table_name", tableName),
 				zap.String("upstream_uuid", upstreamUUID.ShortStringEx()),
 				zap.Bool("is_tombstone", isTombstone),
-				zap.Bool("delete", mapping.Delete),
+				zap.Bool("delete", upstreamInfo.Delete),
 				zap.Bool("has_current", !mapping.Current.IsZero()),
 				zap.Bool("has_previous", !mapping.Previous.IsZero()),
 			)
@@ -1580,14 +1581,14 @@ func ExecuteIteration(
 			}
 
 			// If delete is true, delete the object and remove from map
-			if mapping.Delete {
+			if upstreamInfo.Delete {
 				// Delete previous object if it exists (previous object was created in earlier iteration)
-				if !mapping.Previous.IsZero() {
+				if !mapping.Current.IsZero() {
 					// Delete the previous object (assume data object, not tombstone)
 					// Use srcInfo for dbName and tableName since ActiveAObj doesn't have table info
 					if isTombstone {
 						collectedTombstoneDeleteStats = append(collectedTombstoneDeleteStats, ObjectWithTableInfo{
-							Stats:       mapping.Previous,
+							Stats:       mapping.Current,
 							DBName:      dbName,
 							TableName:   tableName,
 							IsTombstone: isTombstone,
@@ -1596,7 +1597,7 @@ func ExecuteIteration(
 
 					} else {
 						collectedDataDeleteStats = append(collectedDataDeleteStats, ObjectWithTableInfo{
-							Stats:       mapping.Previous,
+							Stats:       mapping.Current,
 							DBName:      dbName,
 							TableName:   tableName,
 							IsTombstone: isTombstone,
