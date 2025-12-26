@@ -1,0 +1,53 @@
+drop account if exists fl_params_acc;
+create account fl_params_acc admin_name = 'admin' identified by '111';
+set @acc_id = (select account_id from mo_catalog.mo_account where account_name = 'fl_params_acc');
+select mo_feature_registry_upsert('test_feat_1', 'Test Feature 1', '{"allowed_scope": ["account", "database"]}', true);
+mo_feature_registry_upsert(test_feat_1, Test Feature 1, {"allowed_scope": ["account", "database"]}, true)
+{\n  "now": {\n    "feature_code": "TEST_FEAT_1",\n    "description": "Test Feature 1",\n    "scope_spec": {\n      "allowed_scope": ["account", "database"]\n    },\n    "enabled": true\n  },\n  "old": {\n    "feature_code": "TEST_FEAT_1",\n    "description": "Updated Desc",\n    "scope_spec": {\n      "allowed_scope": ["table"]\n    },\n    "enabled": false\n  }\n}\n
+select mo_feature_registry_upsert('test_feat_1', 'Updated Desc', '{"allowed_scope": ["table"]}', false);
+mo_feature_registry_upsert(test_feat_1, Updated Desc, {"allowed_scope": ["table"]}, false)
+{\n  "now": {\n    "feature_code": "TEST_FEAT_1",\n    "description": "Updated Desc",\n    "scope_spec": {\n      "allowed_scope": ["table"]\n    },\n    "enabled": false\n  },\n  "old": {\n    "feature_code": "TEST_FEAT_1",\n    "description": "Test Feature 1",\n    "scope_spec": {\n      "allowed_scope": ["account", "database"]\n    },\n    "enabled": true\n  }\n}\n
+select mo_feature_registry_upsert('test_feat_2', 'Empty Scope', '{"allowed_scope": []}', true);
+mo_feature_registry_upsert(test_feat_2, Empty Scope, {"allowed_scope": []}, true)
+{\n  "now": {\n    "feature_code": "TEST_FEAT_2",\n    "description": "Empty Scope",\n    "scope_spec": {\n      "allowed_scope": []\n    },\n    "enabled": true\n  },\n  "old": {\n    "feature_code": "TEST_FEAT_2",\n    "description": "Empty Scope",\n    "scope_spec": {\n      "allowed_scope": []\n    },\n    "enabled": true\n  }\n}\n
+select mo_feature_registry_upsert('test_feat_3', 'Very long description string that might exceed some display limits but should be stored correctly in the registry for administrative purposes', '{"allowed_scope": ["account"]}', true);
+mo_feature_registry_upsert(test_feat_3, Very long description string that might exceed some display limits but should be stored correctly in the registry for administrative purposes, {"allowed_scope": ["account"]}, true)
+{\n  "now": {\n    "feature_code": "TEST_FEAT_3",\n    "description": "Very long description string that might exceed some display limits but should be stored correctly in the registry for administrative purposes",\n    "scope_spec": {\n      "allowed_scope": ["account"]\n    },\n    "enabled": true\n  },\n  "old": {\n    "feature_code": "TEST_FEAT_3",\n    "description": "Very long description string that might exceed some display limits but should be stored correctly in the registry for administrative purposes",\n    "scope_spec": {\n      "allowed_scope": ["account"]\n    },\n    "enabled": true\n  }\n}\n
+select mo_feature_registry_upsert('Test_Feat_4', 'Mixed Case Code', '{"allowed_scope": []}', true);
+mo_feature_registry_upsert(Test_Feat_4, Mixed Case Code, {"allowed_scope": []}, true)
+{\n  "now": {\n    "feature_code": "TEST_FEAT_4",\n    "description": "Mixed Case Code",\n    "scope_spec": {\n      "allowed_scope": []\n    },\n    "enabled": true\n  },\n  "old": {\n    "feature_code": "TEST_FEAT_4",\n    "description": "Mixed Case Code",\n    "scope_spec": {\n      "allowed_scope": []\n    },\n    "enabled": true\n  }\n}\n
+select mo_feature_registry_upsert('test_feat_5', 'JSON Spaces', '  { "allowed_scope" : [ "account" , "table" ] }  ', true);
+mo_feature_registry_upsert(test_feat_5, JSON Spaces,   { "allowed_scope" : [ "account" , "table" ] }  , true)
+{\n  "now": {\n    "feature_code": "TEST_FEAT_5",\n    "description": "JSON Spaces",\n    "scope_spec": {\n      "allowed_scope": ["account", "table"]\n    },\n    "enabled": true\n  },\n  "old": {\n    "feature_code": "TEST_FEAT_5",\n    "description": "JSON Spaces",\n    "scope_spec": {\n      "allowed_scope": ["account", "table"]\n    },\n    "enabled": true\n  }\n}\n
+select mo_feature_registry_upsert('test_feat_1', 'Re-enabled', '{"allowed_scope": ["table", "database"]}', true);
+mo_feature_registry_upsert(test_feat_1, Re-enabled, {"allowed_scope": ["table", "database"]}, true)
+{\n  "now": {\n    "feature_code": "TEST_FEAT_1",\n    "description": "Re-enabled",\n    "scope_spec": {\n      "allowed_scope": ["table", "database"]\n    },\n    "enabled": true\n  },\n  "old": {\n    "feature_code": "TEST_FEAT_1",\n    "description": "Updated Desc",\n    "scope_spec": {\n      "allowed_scope": ["table"]\n    },\n    "enabled": false\n  }\n}\n
+select mo_feature_limit_upsert(@acc_id, 'test_feat_1', 'table', 10);
+mo_feature_limit_upsert(@acc_id, test_feat_1, table, 10)
+{\n  "now": {\n    "account_id": 7,\n    "feature_code": "TEST_FEAT_1",\n    "scope": "table",\n    "quota": 10\n  },\n  "old": null\n}\n
+select mo_feature_limit_upsert(@acc_id, 'test_feat_1', 'table', 20);
+mo_feature_limit_upsert(@acc_id, test_feat_1, table, 20)
+{\n  "now": {\n    "account_id": 7,\n    "feature_code": "TEST_FEAT_1",\n    "scope": "table",\n    "quota": 20\n  },\n  "old": {\n    "account_id": 7,\n    "feature_code": "TEST_FEAT_1",\n    "scope": "table",\n    "quota": 10\n  }\n}\n
+select mo_feature_limit_upsert(@acc_id, 'test_feat_1', 'table', -1);
+mo_feature_limit_upsert(@acc_id, test_feat_1, table, -1)
+{\n  "now": {\n    "account_id": 7,\n    "feature_code": "TEST_FEAT_1",\n    "scope": "table",\n    "quota": -1\n  },\n  "old": {\n    "account_id": 7,\n    "feature_code": "TEST_FEAT_1",\n    "scope": "table",\n    "quota": 20\n  }\n}\n
+select mo_feature_limit_upsert(@acc_id, 'test_feat_1', 'table', 0);
+mo_feature_limit_upsert(@acc_id, test_feat_1, table, 0)
+{\n  "now": {\n    "account_id": 7,\n    "feature_code": "TEST_FEAT_1",\n    "scope": "table",\n    "quota": 0\n  },\n  "old": {\n    "account_id": 7,\n    "feature_code": "TEST_FEAT_1",\n    "scope": "table",\n    "quota": -1\n  }\n}\n
+select mo_feature_limit_upsert(@acc_id, 'test_feat_1', 'table', -100);
+invalid input: quota must be within [-1, 32767]
+select mo_feature_limit_upsert(@acc_id, 'test_feat_1', '', 5);
+mo_feature_limit_upsert(@acc_id, test_feat_1, , 5)
+{\n  "now": {\n    "account_id": 7,\n    "feature_code": "TEST_FEAT_1",\n    "scope": "",\n    "quota": 5\n  },\n  "old": null\n}\n
+select mo_feature_limit_upsert(@acc_id, 'unknown_feature', 'table', 5);
+invalid input: unknown feature_code "UNKNOWN_FEATURE"
+select mo_feature_limit_upsert(@acc_id, 'test_feat_1', 'account', 5);
+invalid input: scope "account" is not allowed for feature "TEST_FEAT_1"
+select mo_feature_limit_upsert(0, 'test_feat_1', 'table', 999);
+mo_feature_limit_upsert(0, test_feat_1, table, 999)
+{\n  "now": {\n    "account_id": 0,\n    "feature_code": "TEST_FEAT_1",\n    "scope": "table",\n    "quota": 999\n  },\n  "old": null\n}\n
+select mo_feature_limit_upsert(-1, 'test_feat_1', 'table', 5);
+invalid input: account_id must be non-negative
+select mo_feature_limit_upsert(-100, 'test_feat_1', 'table', 5);
+invalid input: account_id must be non-negative
+drop account fl_params_acc;

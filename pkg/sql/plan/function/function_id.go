@@ -576,9 +576,15 @@ const (
 	// function `json_objectagg`
 	JSON_OBJECTAGG = 401
 
+	// function `mo_feature_registry_upsert`
+	MO_FEATURE_REGISTRY_UPSERT = 402
+
+	// function `mo_feature_limit_upsert`
+	MO_FEATURE_LIMIT_UPSERT = 403
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 402
+	FUNCTION_END_NUMBER = 404
 )
 
 // functionIdRegister is what function we have registered already.
@@ -965,6 +971,9 @@ var functionIdRegister = map[string]int32{
 	"cosine_distance":   COSINE_DISTANCE,
 
 	"python_user_defined_function": PYTHON_UDF,
+
+	"mo_feature_registry_upsert": MO_FEATURE_REGISTRY_UPSERT,
+	"mo_feature_limit_upsert":    MO_FEATURE_LIMIT_UPSERT,
 
 	"mo_cpu":      MO_CPU,
 	"mo_memory":   MO_MEMORY,

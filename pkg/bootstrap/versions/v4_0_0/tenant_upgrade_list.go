@@ -15,6 +15,8 @@
 package v4_0_0
 
 import (
+	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/partitionservice"
@@ -24,6 +26,7 @@ import (
 var tenantUpgEntries = []versions.UpgradeEntry{
 	enablePartitionMetadata,
 	enablePartitionTables,
+	upg_alter_mo_snapshots,
 }
 
 var enablePartitionMetadata = versions.UpgradeEntry{
@@ -45,5 +48,25 @@ var enablePartitionTables = versions.UpgradeEntry{
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		exist, err := versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, catalog.MOPartitionTables)
 		return exist, err
+	},
+}
+
+const kind = "kind"
+
+var upg_alter_mo_snapshots = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MO_SNAPSHOTS,
+	UpgType:   versions.ADD_COLUMN,
+	UpgSql: fmt.Sprintf(
+		"alter table %s.%s add column %s varchar(32) not null default 'user'",
+		catalog.MO_CATALOG, catalog.MO_SNAPSHOTS, kind,
+	),
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		info, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, catalog.MO_SNAPSHOTS, "kind")
+		if err != nil {
+			return false, err
+		}
+
+		return info.IsExits, nil
 	},
 }

@@ -1,0 +1,59 @@
+drop account if exists fl_snap_acc;
+create account fl_snap_acc admin_name = 'admin' identified by '111';
+select mo_feature_registry_upsert(
+'snapshot',
+'Snapshot feature',
+'{"allowed_scope":["account","database","table"]}',
+true
+);
+mo_feature_registry_upsert(snapshot, Snapshot feature, {"allowed_scope":["account","database","table"]}, true)
+{\n  "now": {\n    "feature_code": "SNAPSHOT",\n    "description": "Snapshot feature",\n    "scope_spec": {\n      "allowed_scope": ["account", "database", "table"]\n    },\n    "enabled": true\n  },\n  "old": {\n    "feature_code": "SNAPSHOT",\n    "description": "Snapshot feature",\n    "scope_spec": {\n      "allowed_scope": ["account", "database", "table"]\n    },\n    "enabled": true\n  }\n}\n
+set @fl_snap_id = (select account_id from mo_catalog.mo_account where account_name = 'fl_snap_acc');
+select mo_feature_limit_upsert(@fl_snap_id, 'snapshot', 'table', 1);
+mo_feature_limit_upsert(@fl_snap_id, snapshot, table, 1)
+{\n  "now": {\n    "account_id": 2,\n    "feature_code": "SNAPSHOT",\n    "scope": "table",\n    "quota": 1\n  },\n  "old": null\n}\n
+select mo_feature_limit_upsert(@fl_snap_id, 'snapshot', 'database', 1);
+mo_feature_limit_upsert(@fl_snap_id, snapshot, database, 1)
+{\n  "now": {\n    "account_id": 2,\n    "feature_code": "SNAPSHOT",\n    "scope": "database",\n    "quota": 1\n  },\n  "old": null\n}\n
+select mo_feature_limit_upsert(@fl_snap_id, 'snapshot', 'account', 2);
+mo_feature_limit_upsert(@fl_snap_id, snapshot, account, 2)
+{\n  "now": {\n    "account_id": 2,\n    "feature_code": "SNAPSHOT",\n    "scope": "account",\n    "quota": 2\n  },\n  "old": null\n}\n
+drop database if exists fl_snap_db;
+create database fl_snap_db;
+use fl_snap_db;
+drop table if exists t;
+create table t(a int primary key, b varchar(10));
+insert into t values (1, 'a');
+drop snapshot if exists spt1;
+drop snapshot if exists spt2;
+drop snapshot if exists spt3;
+create snapshot spt1 for table fl_snap_db t;
+create snapshot spt2 for table fl_snap_db t;
+internal error: feature SNAPSHOT with scope table has reached the limit of 1
+drop snapshot spt1;
+create snapshot spt3 for table fl_snap_db t;
+drop snapshot spt3;
+drop snapshot if exists spd1;
+drop snapshot if exists spd2;
+drop snapshot if exists spd3;
+create snapshot spd1 for database fl_snap_db;
+create snapshot spd2 for database fl_snap_db;
+internal error: feature SNAPSHOT with scope database has reached the limit of 1
+drop snapshot spd1;
+create snapshot spd3 for database fl_snap_db;
+drop snapshot spd3;
+drop snapshot if exists spa1;
+drop snapshot if exists spa2;
+drop snapshot if exists spa3;
+drop snapshot if exists spa4;
+create snapshot spa1 for account;
+create snapshot spa2 for account;
+create snapshot spa3 for account;
+internal error: feature SNAPSHOT with scope account has reached the limit of 2
+drop snapshot spa1;
+create snapshot spa4 for account;
+drop snapshot spa2;
+drop snapshot spa4;
+drop table t;
+drop database fl_snap_db;
+drop account fl_snap_acc;

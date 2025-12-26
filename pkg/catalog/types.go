@@ -176,7 +176,9 @@ const (
 
 	MO_INDEX_UPDATE = "mo_index_update"
 
-	MO_BRANCH_METADATA = "mo_branch_metadata"
+	MO_BRANCH_METADATA  = "mo_branch_metadata"
+	MO_FEATURE_LIMIT    = "mo_feature_limit"
+	MO_FEATURE_REGISTRY = "mo_feature_registry"
 )
 
 func IsSystemTable(id uint64) bool {

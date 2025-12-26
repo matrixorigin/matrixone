@@ -324,18 +324,19 @@ level    ENUM('cluster','account','database','table')    YES        null
 account_name    VARCHAR(300)    YES        null        
 database_name    VARCHAR(5000)    YES        null        
 table_name    VARCHAR(5000)    YES        null        
-obj_id    BIGINT UNSIGNED(64)    YES        null        
+obj_id    BIGINT UNSIGNED(64)    YES        null
+kind    VARCHAR(32)    NO        user
 show columns from	mo_catalog.mo_database                ;
 Field    Type    Null    Key    Default    Extra    Comment
-dat_id    BIGINT UNSIGNED(0)    YES        null        
-datname    VARCHAR(5000)    YES    PRI    null        
-dat_catalog_name    VARCHAR(5000)    YES        null        
-dat_createsql    VARCHAR(5000)    YES        null        
-owner    INT UNSIGNED(0)    YES        null        
-creator    INT UNSIGNED(0)    YES        null        
-created_time    TIMESTAMP(0)    YES        null        
-account_id    INT UNSIGNED(0)    YES    PRI    null        
-dat_type    VARCHAR(32)    YES        null        
+dat_id    BIGINT UNSIGNED(0)    YES        null
+datname    VARCHAR(5000)    YES    PRI    null
+dat_catalog_name    VARCHAR(5000)    YES        null
+dat_createsql    VARCHAR(5000)    YES        null
+owner    INT UNSIGNED(0)    YES        null
+creator    INT UNSIGNED(0)    YES        null
+created_time    TIMESTAMP(0)    YES        null
+account_id    INT UNSIGNED(0)    YES    PRI    null
+dat_type    VARCHAR(32)    YES        null
 show columns from	mo_catalog.mo_tables                  ;
 Field    Type    Null    Key    Default    Extra    Comment
 rel_id    BIGINT UNSIGNED(0)    YES        null        
@@ -650,6 +651,7 @@ account_name    VARCHAR(300)    YES        null
 database_name    VARCHAR(5000)    YES        null        
 table_name    VARCHAR(5000)    YES        null        
 obj_id    BIGINT UNSIGNED(64)    YES        null        
+kind    VARCHAR(32)    NO        user
 desc	mo_catalog.mo_database                ;
 Field    Type    Null    Key    Default    Extra    Comment
 dat_id    BIGINT UNSIGNED(0)    YES        null        
@@ -953,6 +955,7 @@ account_name    VARCHAR(300)    YES        null
 database_name    VARCHAR(5000)    YES        null        
 table_name    VARCHAR(5000)    YES        null        
 obj_id    BIGINT UNSIGNED(64)    YES        null        
+kind    VARCHAR(32)    NO        user
 show columns from	mo_catalog.mo_database                ;
 Field    Type    Null    Key    Default    Extra    Comment
 dat_id    BIGINT UNSIGNED(0)    YES        null        
@@ -1256,4 +1259,5 @@ account_name    VARCHAR(300)    YES        null
 database_name    VARCHAR(5000)    YES        null        
 table_name    VARCHAR(5000)    YES        null        
 obj_id    BIGINT UNSIGNED(64)    YES        null        
+kind    VARCHAR(32)    NO        user
 drop account if exists fk_show_column;
