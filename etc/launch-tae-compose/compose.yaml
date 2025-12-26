@@ -7,6 +7,9 @@ x-mo-common: &mo-common
       dockerfile: ./optools/images/Dockerfile
       args:
         GOPROXY: "https://proxy.golang.org,direct"
+        # Typecheck: enable type checking for ToSliceNoTypeCheck and ToSliceNoTypeCheck2
+        # Default: 0 (disabled), set to 1 to enable
+        TYPECHECK: ${TYPECHECK:-0}
     image: matrixorigin/matrixone:latest
     volumes:
       - ../../etc/launch-tae-compose/config:/config
