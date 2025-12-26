@@ -172,10 +172,10 @@ type UpstreamExecutor struct {
 	tx   *sql.Tx
 
 	// Connection info (for reconnection)
-	user, password string
-	ip             string
-	port           int
-	timeout        string
+	account, user, password string
+	ip                      string
+	port                    int
+	timeout                 string
 
 	// Retry configuration
 	retryTimes    int           // -1 for infinite retry
@@ -270,14 +270,25 @@ func (cb *circuitBreaker) OnSuccess() {
 
 // NewUpstreamExecutor creates a new UpstreamExecutor with database connection
 func NewUpstreamExecutor(
-	user, password string,
+	account, user, password string,
 	ip string,
 	port int,
 	retryTimes int,
 	retryDuration time.Duration,
 	timeout string,
 ) (*UpstreamExecutor, error) {
+	// Validate that user is not empty
+	if user == "" {
+		return nil, moerr.NewInternalErrorNoCtx("user cannot be empty when creating upstream executor")
+	}
+	// If account is provided, ensure it's not empty (empty account means standard MySQL format)
+	// If account is not empty but user is empty, that's invalid
+	if account != "" && user == "" {
+		return nil, moerr.NewInternalErrorNoCtx("user cannot be empty when account is provided")
+	}
+
 	e := &UpstreamExecutor{
+		account:       account,
 		user:          user,
 		password:      password,
 		ip:            ip,
@@ -299,7 +310,7 @@ func NewUpstreamExecutor(
 
 // Connect establishes a database connection
 func (e *UpstreamExecutor) Connect() error {
-	conn, err := openDbConn(e.user, e.password, e.ip, e.port, e.timeout)
+	conn, err := openDbConn(e.account, e.user, e.password, e.ip, e.port, e.timeout)
 	if err != nil {
 		return err
 	}
@@ -309,6 +320,7 @@ func (e *UpstreamExecutor) Connect() error {
 
 // UpstreamConnConfig represents parsed upstream connection configuration
 type UpstreamConnConfig struct {
+	Account  string // Account name (may be empty)
 	User     string
 	Password string
 	Host     string
@@ -419,7 +431,9 @@ func ParseUpstreamConn(connStr string) (*UpstreamConnConfig, error) {
 }
 
 // ParseUpstreamConnWithDecrypt parses upstream connection string with optional password decryption
-// Format: mysql://account#user:password@host:port (account may be empty, i.e., mysql://#user:password@host:port)
+// Format: mysql://account#user:password@host:port or mysql://user:password@host:port
+// If account is provided, uses account#user format for MatrixOne authentication (in DSN)
+// If account is not provided (standard MySQL format), account will be empty and uses user format
 // If executor and cnUUID are provided, encrypted passwords will be decrypted using KeyEncryptionKey
 // Similar to CDC's implementation using getGlobalPuWrapper
 func ParseUpstreamConnWithDecrypt(ctx context.Context, connStr string, executor SQLExecutor, cnUUID string) (*UpstreamConnConfig, error) {
@@ -429,7 +443,7 @@ func ParseUpstreamConnWithDecrypt(ctx context.Context, connStr string, executor 
 
 	// Must start with mysql://
 	if !strings.HasPrefix(connStr, "mysql://") {
-		return nil, moerr.NewInternalErrorNoCtx("invalid connection string format, expected mysql://account#user:password@host:port")
+		return nil, moerr.NewInternalErrorNoCtx("invalid connection string format, expected mysql://account#user:password@host:port or mysql://user:password@host:port")
 	}
 
 	connStr = strings.TrimPrefix(connStr, "mysql://")
@@ -437,30 +451,38 @@ func ParseUpstreamConnWithDecrypt(ctx context.Context, connStr string, executor 
 	// Split by @ to separate user:password and host:port
 	parts := strings.Split(connStr, "@")
 	if len(parts) != 2 {
-		return nil, moerr.NewInternalErrorNoCtx("invalid connection string format, expected mysql://account#user:password@host:port")
+		return nil, moerr.NewInternalErrorNoCtx("invalid connection string format, expected mysql://account#user:password@host:port or mysql://user:password@host:port")
 	}
 
-	// Parse user:password part (must contain account# prefix)
+	// Parse user:password part
 	userPass := strings.Split(parts[0], ":")
 	if len(userPass) < 2 {
-		return nil, moerr.NewInternalErrorNoCtx("invalid user:password format, expected account#user:password")
+		return nil, moerr.NewInternalErrorNoCtx("invalid user:password format, expected account#user:password or user:password")
 	}
 
-	// Handle account#user format (account may be empty)
+	// Handle account#user format or standard user format
 	userPart := userPass[0]
-	if !strings.Contains(userPart, "#") {
-		return nil, moerr.NewInternalErrorNoCtx("invalid format, expected account#user prefix")
-	}
+	var account string
+	var user string
 
-	idx := strings.Index(userPart, "#")
-	if idx < 0 || idx == len(userPart)-1 {
-		return nil, moerr.NewInternalErrorNoCtx("invalid format, user cannot be empty after account#")
-	}
-
-	// Skip account part, only use user (account may be empty string)
-	user := userPart[idx+1:]
-	if user == "" {
-		return nil, moerr.NewInternalErrorNoCtx("invalid format, user cannot be empty")
+	if strings.Contains(userPart, "#") {
+		// Format: account#user
+		idx := strings.Index(userPart, "#")
+		if idx < 0 || idx == len(userPart)-1 {
+			return nil, moerr.NewInternalErrorNoCtx("invalid format, user cannot be empty after account#")
+		}
+		account = userPart[:idx]
+		user = userPart[idx+1:]
+		if user == "" {
+			return nil, moerr.NewInternalErrorNoCtx("invalid format, user cannot be empty")
+		}
+	} else {
+		// Format: user (standard MySQL format, no account)
+		account = ""
+		user = userPart
+		if user == "" {
+			return nil, moerr.NewInternalErrorNoCtx("invalid format, user cannot be empty")
+		}
 	}
 
 	// Join remaining parts as password (in case password contains ':')
@@ -498,7 +520,16 @@ func ParseUpstreamConnWithDecrypt(ctx context.Context, connStr string, executor 
 	// Default timeout
 	timeout := "10s"
 
+	// Log parsed connection config for debugging
+	logutil.Info("publication.executor.parse_upstream_conn",
+		zap.String("account", account),
+		zap.String("user", user),
+		zap.String("host", host),
+		zap.Int("port", port),
+		zap.Bool("password_encrypted", len(decryptedPassword) != len(password)))
+
 	return &UpstreamConnConfig{
+		Account:  account,
 		User:     user,
 		Password: decryptedPassword,
 		Host:     host,
@@ -508,10 +539,32 @@ func ParseUpstreamConnWithDecrypt(ctx context.Context, connStr string, executor 
 }
 
 // openDbConn opens a database connection (similar to cdc.OpenDbConn)
-func openDbConn(user, password string, ip string, port int, timeout string) (*sql.DB, error) {
-	logutil.Info("publication.executor.open_db_conn", zap.String("timeout", timeout))
+// If account is provided, uses account#user format for MatrixOne authentication
+func openDbConn(account, user, password string, ip string, port int, timeout string) (*sql.DB, error) {
+	logutil.Info("publication.executor.open_db_conn",
+		zap.String("account", account),
+		zap.String("user", user),
+		zap.String("timeout", timeout),
+		zap.String("host", ip),
+		zap.Int("port", port))
+	// Build user string: if account is provided, use account#user format (MatrixOne uses # as separator)
+	userStr := user
+	if account != "" {
+		if user == "" {
+			logutil.Error("publication.executor.open_db_conn_invalid",
+				zap.String("error", "account is provided but user is empty"),
+				zap.String("account", account))
+			return nil, moerr.NewInternalErrorNoCtx("account is provided but user is empty, cannot build connection string")
+		}
+		userStr = fmt.Sprintf("%s#%s", account, user)
+	} else if user == "" {
+		logutil.Error("publication.executor.open_db_conn_invalid",
+			zap.String("error", "both account and user are empty"))
+		return nil, moerr.NewInternalErrorNoCtx("user cannot be empty")
+	}
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/?readTimeout=%s&timeout=%s&writeTimeout=%s&multiStatements=true",
-		user, password, ip, port, timeout, timeout, timeout)
+		userStr, password, ip, port, timeout, timeout, timeout)
+	logutil.Info("publication.executor.open_db_conn_dsn", zap.String("dsn_user", userStr), zap.String("host", ip), zap.Int("port", port))
 
 	var db *sql.DB
 	var err error

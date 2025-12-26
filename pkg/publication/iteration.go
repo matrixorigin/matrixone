@@ -255,6 +255,7 @@ func InitializeIterationContext(
 			return nil, moerr.NewInternalErrorf(ctx, "failed to parse upstream connection string: %v", err)
 		}
 		upstreamExecutor, err = NewUpstreamExecutor(
+			connConfig.Account,
 			connConfig.User,
 			connConfig.Password,
 			connConfig.Host,
