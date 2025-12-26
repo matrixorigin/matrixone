@@ -34,6 +34,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	testutil2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -546,7 +548,7 @@ func TestExecuteIteration1(t *testing.T) {
 		mp,
 		utHelper2,
 	)
-	
+
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 	// Signal checkpoint goroutine to stop
 	close(checkpointDone2)
@@ -608,6 +610,132 @@ func TestExecuteIteration1(t *testing.T) {
 	require.Equal(t, int64(10), rowCount2, "destination table should still have 10 rows after second iteration")
 
 	err = txn3.Commit(queryDestCtx2)
+	require.NoError(t, err)
+
+	// Step 10: Execute third iteration with delete operations
+	// Delete some rows from source table
+	txn4, taeRel := testutil2.GetRelation(t, srcAccountID, taeHandler.GetDB(), srcDBName, srcTableName)
+	// Get primary key column index from schema
+	pkIdx := schema.GetPrimaryKey().Idx
+	// Delete first 3 rows using primary key filter
+	// Get the primary key value from the first row of the batch
+	pkVal := bat.Vecs[pkIdx].Get(0)
+	filter := handle.NewEQFilter(pkVal)
+	err = taeRel.DeleteByFilter(srcCtxWithTimeout, filter)
+	require.NoError(t, err)
+
+	// Delete second row
+	pkVal2 := bat.Vecs[pkIdx].Get(1)
+	filter2 := handle.NewEQFilter(pkVal2)
+	err = taeRel.DeleteByFilter(srcCtxWithTimeout, filter2)
+	require.NoError(t, err)
+
+	// Delete third row
+	pkVal3 := bat.Vecs[pkIdx].Get(2)
+	filter3 := handle.NewEQFilter(pkVal3)
+	err = taeRel.DeleteByFilter(srcCtxWithTimeout, filter3)
+	require.NoError(t, err)
+
+	err = txn4.Commit(srcCtxWithTimeout)
+	require.NoError(t, err)
+
+	// Update mo_ccpr_log for third iteration
+	iterationLSN3 := uint64(3)
+	updateSQL3 := fmt.Sprintf(
+		`UPDATE mo_catalog.mo_ccpr_log 
+		SET iteration_state = %d, iteration_lsn = %d 
+		WHERE task_id = %d`,
+		publication.IterationStatePending,
+		iterationLSN3,
+		taskID,
+	)
+
+	// Update mo_ccpr_log using system account context
+	err = exec_sql(disttaeEngine, systemCtx, updateSQL3)
+	require.NoError(t, err)
+
+	// Create new checkpoint channel for third iteration
+	checkpointDone3 := make(chan struct{}, 1)
+	utHelper3 := &checkpointUTHelper{
+		taeHandler:    taeHandler,
+		disttaeEngine: disttaeEngine,
+		checkpointC:   checkpointDone3,
+	}
+
+	// Execute third ExecuteIteration
+	err = publication.ExecuteIteration(
+		srcCtxWithTimeout,
+		cnUUID,
+		disttaeEngine.Engine,
+		disttaeEngine.GetTxnClient(),
+		taskID,
+		iterationLSN3,
+		upstreamSQLHelperFactory,
+		mp,
+		utHelper3,
+	)
+
+	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
+	// Signal checkpoint goroutine to stop
+	close(checkpointDone3)
+
+	// Check errors
+	require.NoError(t, err, "Third ExecuteIteration should complete successfully")
+
+	// Step 11: Verify that the third iteration state was updated
+	querySQL3 := fmt.Sprintf(
+		`SELECT iteration_state, iteration_lsn FROM mo_catalog.mo_ccpr_log WHERE task_id = %d`,
+		taskID,
+	)
+
+	querySystemCtx3 := context.WithValue(destCtxWithTimeout, defines.TenantIDKey{}, catalog.System_Account)
+	txn5, err := disttaeEngine.NewTxnOperator(querySystemCtx3, disttaeEngine.Now())
+	require.NoError(t, err)
+
+	res3, err := exec.Exec(querySystemCtx3, querySQL3, executor.Options{}.WithTxn(txn5))
+	require.NoError(t, err)
+	defer res3.Close()
+
+	// Check that iteration_state is completed for third iteration
+	var found3 bool
+	res3.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		require.Equal(t, 1, rows)
+		require.Equal(t, 2, len(cols))
+
+		state := vector.GetFixedAtWithTypeCheck[int8](cols[0], 0)
+		lsn := vector.GetFixedAtWithTypeCheck[int64](cols[1], 0)
+
+		require.Equal(t, publication.IterationStateCompleted, state)
+		require.Equal(t, int64(iterationLSN3), lsn)
+		found3 = true
+		return true
+	})
+	require.True(t, found3, "should find the updated iteration record for third iteration")
+
+	err = txn5.Commit(querySystemCtx3)
+	require.NoError(t, err)
+
+	// Step 12: Check destination table row count after third iteration
+	// The destination table should have 7 rows (10 - 3 deleted)
+	checkRowCountSQL3 := fmt.Sprintf(`SELECT COUNT(*) FROM %s.%s`, srcDBName, srcTableName)
+	queryDestCtx3 := context.WithValue(destCtxWithTimeout, defines.TenantIDKey{}, destAccountID)
+	txn6, err := disttaeEngine.NewTxnOperator(queryDestCtx3, disttaeEngine.Now())
+	require.NoError(t, err)
+
+	rowCountRes3, err := exec.Exec(queryDestCtx3, checkRowCountSQL3, executor.Options{}.WithTxn(txn6))
+	require.NoError(t, err)
+	defer rowCountRes3.Close()
+
+	var rowCount3 int64
+	rowCountRes3.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		require.Equal(t, 1, rows)
+		require.Equal(t, 1, len(cols))
+		rowCount3 = vector.GetFixedAtWithTypeCheck[int64](cols[0], 0)
+		return true
+	})
+	require.Equal(t, int64(7), rowCount3, "destination table should have 7 rows after third iteration (10 - 3 deleted)")
+
+	err = txn6.Commit(queryDestCtx3)
 	require.NoError(t, err)
 }
 
