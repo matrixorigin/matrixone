@@ -236,11 +236,18 @@ func (o *Options) FillDefaults(dirname string) *Options {
 		o.GCCfg.GCMergeCount = DefaultGCMergeCount
 	}
 
+	if o.GCCfg.GCScanCount <= 0 {
+		o.GCCfg.GCScanCount = DefaultGCScanCount
+	}
+
 	if o.GCCfg.GCDeleteTimeout <= 0 {
 		o.GCCfg.GCDeleteTimeout = DefaultGCDeleteTimeout
 	}
 	if o.GCCfg.GCDeleteBatchSize <= 0 {
 		o.GCCfg.GCDeleteBatchSize = DefaultGCDeleteBatchSize
+	}
+	if o.GCCfg.GCDeleteWorkerNum <= 0 {
+		o.GCCfg.GCDeleteWorkerNum = DefaultGCDeleteWorkerNum
 	}
 
 	if o.SchedulerCfg == nil {
