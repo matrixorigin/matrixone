@@ -4,6 +4,10 @@ FROM matrixorigin/golang:1.25-ubuntu22.04 AS builder
 ARG GOPROXY="https://proxy.golang.org,direct"
 RUN go env -w GOPROXY=${GOPROXY}
 
+# Typecheck: enable type checking for ToSliceNoTypeCheck and ToSliceNoTypeCheck2
+# Default: 0 (disabled), set to 1 to enable
+ARG TYPECHECK=0
+
 RUN mkdir -p /go/src/github.com/matrixorigin/matrixone
 
 WORKDIR /go/src/github.com/matrixorigin/matrixone
@@ -17,7 +21,11 @@ RUN go mod download
 
 COPY . .
 
-RUN make clean && make build
+RUN if [ "$TYPECHECK" = "1" ]; then \
+        make clean && make build TYPECHECK=1; \
+    else \
+        make clean && make build; \
+    fi
 
 FROM matrixorigin/ubuntu:22.04
 
