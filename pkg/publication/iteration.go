@@ -1466,7 +1466,7 @@ func ExecuteIteration(
 					zap.String("operation", "filter_aobj"),
 				)
 				if !info.Delete {
-					if err = FilterObject(ctx, statsBytes, snapshotTS, iterationCtx, fs, mp); err != nil {
+					if err = FilterObject(ctx, statsBytes, snapshotTS, iterationCtx, info.IsTombstone, fs, mp); err != nil {
 						err = moerr.NewInternalErrorf(ctx, "failed to filter object: %v", err)
 						return
 					}
@@ -1503,8 +1503,7 @@ func ExecuteIteration(
 					zap.Bool("delete", delete),
 					zap.String("operation", "filter_nobj"),
 				)
-
-				if err = FilterObject(ctx, statsBytes, snapshotTS, iterationCtx, fs, mp); err != nil {
+				if err = FilterObject(ctx, statsBytes, snapshotTS, iterationCtx, info.IsTombstone, fs, mp); err != nil {
 					err = moerr.NewInternalErrorf(ctx, "failed to filter object: %v", err)
 					return
 				}

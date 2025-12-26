@@ -45,6 +45,7 @@ func FilterObject(
 	objectStatsBytes []byte,
 	snapshotTS types.TS,
 	iterationCtx *IterationContext,
+	isTombstone bool,
 	localFS fileservice.FileService,
 	mp *mpool.MPool,
 ) error {
@@ -61,7 +62,7 @@ func FilterObject(
 
 	if isAObj {
 		// Handle appendable object
-		return filterAppendableObject(ctx, &stats, snapshotTS, iterationCtx, localFS, mp)
+		return filterAppendableObject(ctx, &stats, snapshotTS, iterationCtx, localFS, isTombstone, mp)
 	} else {
 		// Handle non-appendable object - write directly to fileservice
 		return filterNonAppendableObject(ctx, &stats, iterationCtx, localFS)
@@ -77,6 +78,7 @@ func filterAppendableObject(
 	snapshotTS types.TS,
 	iterationCtx *IterationContext,
 	localFS fileservice.FileService,
+	isTombstone bool,
 	mp *mpool.MPool,
 ) error {
 	// Get object name from stats (upstream aobj UUID)
@@ -112,7 +114,8 @@ func filterAppendableObject(
 	defer filteredBat.Close()
 
 	// Sort batch by primary key, remove commit TS column, write to file, and record ObjectStats
-	objStats, err := createObjectFromBatch(ctx, filteredBat, stats, snapshotTS, localFS, mp)
+	// This is data object (not tombstone), so use SchemaData
+	objStats, err := createObjectFromBatch(ctx, filteredBat, stats, snapshotTS, isTombstone, localFS, mp)
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to create object from batch: %v", err)
 	}
@@ -423,11 +426,13 @@ func filterBatchBySnapshotTS(
 
 // createObjectFromBatch sorts batch by primary key, removes commit TS column,
 // writes to object file, and returns objectio.ObjectStats
+// isTombstone: true for tombstone objects, false for data objects
 func createObjectFromBatch(
 	ctx context.Context,
 	bat *containers.Batch,
 	originalStats *objectio.ObjectStats,
 	snapshotTS types.TS,
+	isTombstone bool,
 	localFS fileservice.FileService,
 	mp *mpool.MPool,
 ) (objectio.ObjectStats, error) {
@@ -490,23 +495,41 @@ func createObjectFromBatch(
 		seqnums = append(seqnums, i)
 	}
 
-	// Create block writer
-	writer := ioutil.ConstructWriter(
-		0, // version
-		seqnums,
-		0,     // sortkeyPos (primary key is first column)
-		true,  // sortkeyIsPK
-		false, // isTombstone
-		localFS,
-	)
+	// Create block writer - use data schema for data objects, tombstone schema for tombstone objects
+	var writer *ioutil.BlockWriter
+	if isTombstone {
+		// Use tombstone schema
+		writer = ioutil.ConstructWriter(
+			0, // version
+			seqnums,
+			0,    // sortkeyPos (primary key is first column, which is rowid for tombstone)
+			true, // sortkeyIsPK
+			true, // isTombstone
+			localFS,
+		)
+	} else {
+		// Use data schema
+		writer = ioutil.ConstructWriter(
+			0, // version
+			seqnums,
+			0,     // sortkeyPos (primary key is first column)
+			true,  // sortkeyIsPK
+			false, // isTombstone
+			localFS,
+		)
+	}
 
-	// Write batch
+	// Write batch to appropriate schema
+	// WriteBatch will use isTombstone flag to write to correct schema (SchemaData or SchemaTombstone)
+	// and build objMetaBuilder and update zonemap
 	_, err := writer.WriteBatch(newBat)
 	if err != nil {
 		return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "failed to write batch: %v", err)
 	}
 
 	// Sync writer to flush data
+	// Sync will call WriteObjectMeta which sets colmeta (or tombstonesColmeta for tombstone),
+	// and then DescribeObject which uses colmeta[sortKeySeqnum] to set zonemap
 	_, _, err = writer.Sync(ctx)
 	if err != nil {
 		return objectio.ObjectStats{}, moerr.NewInternalErrorf(ctx, "failed to sync writer: %v", err)
