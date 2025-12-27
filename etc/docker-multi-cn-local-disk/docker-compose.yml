@@ -47,6 +47,9 @@ x-build: &common-build
     # Go proxy for faster dependency downloads
     # Override with: docker compose build --build-arg GOPROXY="https://goproxy.io,direct"
     GOPROXY: ${GOPROXY:-https://goproxy.cn,https://mirrors.aliyun.com/goproxy/,https://goproxy.io,direct}
+    # Typecheck: enable type checking for ToSliceNoTypeCheck and ToSliceNoTypeCheck2
+    # Default: 1 (enabled), set to 0 to disable
+    TYPECHECK: ${TYPECHECK:-1}
 
 services:
   # LogService - must start first as it contains HAKeeper

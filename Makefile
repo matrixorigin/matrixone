@@ -95,6 +95,8 @@ help:
 	@echo ""
 	@echo "Build Commands:"
 	@echo "  make build              - Build mo-service binary"
+	@echo "  make build-typecheck    - Build with typecheck enabled (enables type checking)"
+	@echo "  make build TYPECHECK=1  - Build with typecheck enabled (alternative)"
 	@echo "  make debug              - Build with race detector and debug symbols"
 	@echo "  make musl               - Build static binary with musl"
 	@echo "  make mo-tool            - Build mo-tool utility"
@@ -192,6 +194,10 @@ ifeq ($(MO_CL_CUDA),1)
 	TAGS += -tags "gpu"
 endif
 
+ifeq ($(TYPECHECK),1)
+	TAGS += -tags "typecheck"
+endif
+
 CGO_OPTS :=CGO_CFLAGS="-I$(THIRDPARTIES_INSTALL_DIR)/include $(CUDA_CFLAGS)"
 GOLDFLAGS=-ldflags="-extldflags '$(CUDA_LDFLAGS) -L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,\$${ORIGIN}/lib -fopenmp' $(VERSION_INFO)"
 
@@ -263,6 +269,12 @@ debug: override DEBUG_OPT := -gcflags=all="-N -l"
 debug: override CGO_DEBUG_OPT := debug
 debug: build
 
+# build mo-service binary with typecheck enabled
+# enables type checking for ToSliceNoTypeCheck and ToSliceNoTypeCheck2
+.PHONY: build-typecheck
+build-typecheck: override TYPECHECK := 1
+build-typecheck: build
+
 ###############################################################################
 # run unit tests
 ###############################################################################
@@ -332,7 +344,10 @@ DEV_MOUNT ?=
 .PHONY: dev-help
 dev-help:
 	@echo "Local Multi-CN Development Environment Commands:"
-	@echo "  make dev-build          - Build MatrixOne docker image (forces rebuild, no cache)"
+	@echo "  make dev-build          - Build MatrixOne docker image (typecheck enabled by default)"
+	@echo "  make dev-build TYPECHECK=0 - Build without typecheck (for performance testing)"
+	@echo "  make dev-build-force    - Force rebuild (typecheck enabled by default)"
+	@echo "  make dev-build-force TYPECHECK=0 - Force rebuild without typecheck"
 	@echo "  make dev-up             - Start multi-CN cluster with local image (with NET_ADMIN for network chaos)"
 	@echo "  make dev-up-latest      - Start multi-CN cluster with latest official image"
 	@echo "  make dev-up-test        - Start with test directory mounted"
@@ -355,7 +370,7 @@ dev-help:
 	@echo "  make dev-logs-grafana-local - Show Grafana logs"
 	@echo "  make dev-clean          - Stop and remove all data (WARNING: destructive!)"
 	@echo "  make dev-cleanup        - Interactive cleanup (stops containers, removes data directories)"
-	@echo "  make dev-config         - Generate config from config.env"
+	@echo "  make dev-config         - Generate config from config.env (default: check-fraction=1000)"
 	@echo "  make dev-config-example - Create config.env.example file"
 	@echo "  make dev-setup-docker-mirror - Configure Docker registry mirror (for faster pulls)"
 	@echo "  make dev-edit-cn1       - Edit CN1 configuration interactively"
@@ -437,16 +452,35 @@ dev-help:
 	@echo "    1. Copy: cp $(DEV_DIR)/config.env.example $(DEV_DIR)/config.env"
 	@echo "    2. Edit: vim $(DEV_DIR)/config.env (uncomment and modify)"
 	@echo "    3. Generate: make dev-config (or auto-generated on dev-up)"
+	@echo ""
+	@echo "Memory Allocation Check (check-fraction):"
+	@echo "  Default: 1000 (checks 1 in 1000 deallocations for double free/missing free)"
+	@echo "  Lower values = more checks (better error detection, higher overhead)"
+	@echo "  Higher values = fewer checks (better performance, may miss errors)"
+	@echo "  Set CHECK_FRACTION=0 to disable (maximum performance, no error detection)"
+	@echo "  Configure in config.env: CHECK_FRACTION=1000"
 
 .PHONY: dev-build
 dev-build:
 	@echo "Building MatrixOne docker image (using smart cache - only rebuilds when code changes)..."
-	@cd $(DEV_DIR) && ./start.sh build mo-log
+	@if [ "$(TYPECHECK)" = "0" ]; then \
+		echo "Building WITHOUT typecheck (TYPECHECK=0)"; \
+		cd $(DEV_DIR) && TYPECHECK=0 ./start.sh build mo-log; \
+	else \
+		echo "Building WITH typecheck (default, use TYPECHECK=0 to disable)"; \
+		cd $(DEV_DIR) && TYPECHECK=1 ./start.sh build mo-log; \
+	fi
 
 .PHONY: dev-build-force
 dev-build-force:
 	@echo "Building MatrixOne docker image (forcing complete rebuild, no cache)..."
-	@cd $(DEV_DIR) && ./start.sh build --no-cache mo-log
+	@if [ "$(TYPECHECK)" = "0" ]; then \
+		echo "Building WITHOUT typecheck (TYPECHECK=0)"; \
+		cd $(DEV_DIR) && TYPECHECK=0 ./start.sh build --no-cache mo-log; \
+	else \
+		echo "Building WITH typecheck (default, use TYPECHECK=0 to disable)"; \
+		cd $(DEV_DIR) && TYPECHECK=1 ./start.sh build --no-cache mo-log; \
+	fi
 
 .PHONY: dev-up
 dev-up:

@@ -12,14 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build !race && !typecheck
+//go:build !race && typecheck
 
 package vector
 
+import (
+	"slices"
+)
+
 func checkTypeIfRaceDetectorEnabled[T any](vec *Vector) {
-	// do nothing
+	checkType[T](vec)
 }
 
 func shrinkSortedCheckIfRaceDetectorEnabled(sels []int64) {
-	// do nothing
+	sorted := slices.IsSorted(sels)
+	if !sorted {
+		panic("vector shrink by unsorted sels")
+	}
 }
