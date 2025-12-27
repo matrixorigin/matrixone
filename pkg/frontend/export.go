@@ -470,6 +470,9 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 				scale := vec.GetType().Scale
 				val := vector.GetFixedAtNoTypeCheck[types.Timestamp](vec, i).String2(timeZone, scale)
 				formatOutputString(ep, []byte(val), symbol[j], closeby, flag[j], buffer)
+			case types.T_year:
+				val := vector.GetFixedAtNoTypeCheck[types.MoYear](vec, i).String()
+				formatOutputString(ep, []byte(val), symbol[j], closeby, flag[j], buffer)
 			case types.T_decimal64:
 				scale := vec.GetType().Scale
 				val := vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, i).Format(scale)
