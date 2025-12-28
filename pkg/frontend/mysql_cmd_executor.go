@@ -3649,8 +3649,22 @@ func (h *jsonPlanHandler) Marshal(ctx context.Context) []byte {
 	// If marshalPlan is available and has physical plan, generate analyze mode text output
 	// Otherwise, return original JSON (for error cases or when plan is not available)
 	if h.marshalPlan != nil && (len(h.marshalPlan.PhyPlan.LocalScope) > 0 || len(h.marshalPlan.PhyPlan.RemoteScope) > 0) {
-		// Generate analyze mode text output using mo_explain_phy logic
-		phyplanText := models.ExplainPhyPlan(&h.marshalPlan.PhyPlan, &h.marshalPlan.NewPlanStats, models.AnalyzeOption)
+		// Check execution time to determine output level
+		// Get total execution time from ExecutionDuration
+		totalExecTime := h.marshalPlan.NewPlanStats.ExecuteStage.ExecutionDuration
+		longQueryThreshold := motrace.GetLongQueryTime()
+		
+		// If execution time > (5s + longQueryThreshold) or > 3x longQueryThreshold, include Physical Plan
+		includePhysicalPlan := totalExecTime > (5*time.Second+longQueryThreshold) || totalExecTime > 3*longQueryThreshold
+		
+		var phyplanText string
+		if includePhysicalPlan {
+			// Generate full analyze mode text output including Physical Plan
+			phyplanText = models.ExplainPhyPlan(&h.marshalPlan.PhyPlan, &h.marshalPlan.NewPlanStats, models.AnalyzeOption)
+		} else {
+			// Generate only Overview section (without Physical Plan)
+			phyplanText = models.ExplainPhyPlanOverview(&h.marshalPlan.PhyPlan, &h.marshalPlan.NewPlanStats, models.AnalyzeOption)
+		}
 		return []byte(phyplanText)
 	}
 	// Fall back to original JSON for error cases or when physical plan is not available

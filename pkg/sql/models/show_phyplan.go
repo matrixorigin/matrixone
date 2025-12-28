@@ -574,3 +574,11 @@ func ExtractPhyPlanGlbStats(plan *PhyPlan) GblStats {
 
 	return stats
 }
+// ExplainPhyPlanOverview generates only the Overview section of the physical plan
+func ExplainPhyPlanOverview(phy *PhyPlan, statsInfo *statistic.StatsInfo, option ExplainOption) string {
+	buffer := bytes.NewBuffer(make([]byte, 0, 300))
+	if len(phy.LocalScope) > 0 || len(phy.RemoteScope) > 0 {
+		explainResourceOverview(phy, statsInfo, option, buffer)
+	}
+	return buffer.String()
+}
