@@ -149,7 +149,7 @@ func explainResourceOverview(phy *PhyPlan, statsInfo *statistic.StatsInfo, optio
 			if option == AnalyzeOption {
 				buffer.WriteString("\tQuery Build Plan Stage:\n")
 				buffer.WriteString(fmt.Sprintf("\t\t- CPU Time: %s \n", common.FormatDuration(int64(statsInfo.PlanStage.PlanDuration)-statsInfo.PlanStage.BuildPlanStatsIOConsumption)))
-				
+
 				// Format S3 request stats, only include non-zero values
 				s3ReqParts := []string{}
 				if statsInfo.PlanStage.BuildPlanS3Request.List > 0 {
@@ -174,12 +174,12 @@ func explainResourceOverview(phy *PhyPlan, statsInfo *statistic.StatsInfo, optio
 				if len(s3ReqParts) > 0 {
 					buffer.WriteString(fmt.Sprintf("\t\t- %s\n", strings.Join(s3ReqParts, ", ")))
 				}
-				
+
 				buffer.WriteString(fmt.Sprintf("\t\t- Build Plan Duration: %s \n", common.FormatDuration(int64(statsInfo.PlanStage.PlanDuration))))
 				buffer.WriteString(fmt.Sprintf("\t\t- Call Stats Duration: %s \n", common.FormatDuration(int64(statsInfo.PlanStage.BuildPlanStatsDuration))))
 				buffer.WriteString(fmt.Sprintf("\t\t- Call StatsInCache Duration: %s \n", common.FormatDuration(int64(statsInfo.PlanStage.BuildPlanStatsInCacheDuration))))
 				buffer.WriteString(fmt.Sprintf("\t\t- Call Stats IO Consumption: %s \n", common.FormatDuration(int64(statsInfo.PlanStage.BuildPlanStatsIOConsumption))))
-				
+
 				// Format Call Stats S3, only include non-zero values
 				s3StatsParts := []string{}
 				if statsInfo.PlanStage.BuildPlanStatsS3.List > 0 {
@@ -208,7 +208,7 @@ func explainResourceOverview(phy *PhyPlan, statsInfo *statistic.StatsInfo, optio
 				//-------------------------------------------------------------------------------------------------------
 				buffer.WriteString("\tQuery Compile Stage:\n")
 				buffer.WriteString(fmt.Sprintf("\t\t- CPU Time: %s \n", common.FormatDuration(int64(statsInfo.CompileStage.CompileDuration))))
-				
+
 				// Format S3 request stats, only include non-zero values
 				s3CompileParts := []string{}
 				if statsInfo.CompileStage.CompileS3Request.List > 0 {
@@ -242,7 +242,7 @@ func explainResourceOverview(phy *PhyPlan, statsInfo *statistic.StatsInfo, optio
 				buffer.WriteString(fmt.Sprintf("\t\t- PreRunOnce WaitLock: %s \n", common.FormatDuration(int64(statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock))))
 				buffer.WriteString(fmt.Sprintf("\t\t- ScopePrepareTimeConsumed: %s \n", common.FormatDuration(gblStats.ScopePrepareTimeConsumed)))
 				buffer.WriteString(fmt.Sprintf("\t\t- BuildReader Duration: %s \n", common.FormatDuration(int64(statsInfo.PrepareRunStage.BuildReaderDuration))))
-				
+
 				// Format S3 request stats, only include non-zero values
 				s3PrepareParts := []string{}
 				if statsInfo.PrepareRunStage.ScopePrepareS3Request.List > 0 {
@@ -271,7 +271,7 @@ func explainResourceOverview(phy *PhyPlan, statsInfo *statistic.StatsInfo, optio
 				//-------------------------------------------------------------------------------------------------------
 				buffer.WriteString("\tQuery Execution Stage:\n")
 				buffer.WriteString(fmt.Sprintf("\t\t- CPU Time: %s \n", common.FormatDuration(gblStats.OperatorTimeConsumed)))
-				
+
 				// Format S3 request stats, only include non-zero values
 				s3ExecParts := []string{}
 				if gblStats.S3ListRequest > 0 {
@@ -328,8 +328,12 @@ func explainPhyScope(scope PhyScope, index int, gap int, option ExplainOption, b
 	gapNextLine(gap, buffer)
 
 	// Scope Header
-	receiverStr := getReceiverStr(scope.Receiver)
-	buffer.WriteString(fmt.Sprintf("Scope %d (Magic: %s, mcpu: %v, Receiver: %s)", index+1, scope.Magic, scope.Mcpu, receiverStr))
+	if len(scope.Receiver) > 0 {
+		receiverStr := getReceiverStr(scope.Receiver)
+		buffer.WriteString(fmt.Sprintf("Scope %d (Magic: %s, mcpu: %v, Receiver: %s)", index+1, scope.Magic, scope.Mcpu, receiverStr))
+	} else {
+		buffer.WriteString(fmt.Sprintf("Scope %d (Magic: %s, mcpu: %v)", index+1, scope.Magic, scope.Mcpu))
+	}
 
 	// Scope DataSource
 	if scope.DataSource != nil {
@@ -349,6 +353,7 @@ func explainPhyScope(scope PhyScope, index int, gap int, option ExplainOption, b
 		for i := range scope.PreScopes {
 			explainPhyScope(scope.PreScopes[i], i, gap+4, option, buffer)
 		}
+		// Always output the closing brace on a new line with proper indentation
 		gapNextLine(gap, buffer)
 		buffer.WriteString("  }")
 	}
@@ -366,7 +371,7 @@ func PrintPipelineTree(node *PhyOperator, prefix string, isRoot, isTail bool, op
 		// Extract the original bool values
 		isFirst := (node.Status & IsFirstMask) != 0
 		isLast := (node.Status & IsLastMask) != 0
-		analyzeStr = fmt.Sprintf(" (idx:%v, isFirst:%v, isLast:%v)", node.NodeIdx, isFirst, isLast)
+		analyzeStr = fmt.Sprintf(" (%v,%v,%v)", node.NodeIdx, isFirst, isLast)
 	}
 	if option == AnalyzeOption && node.OpStats != nil {
 		analyzeStr += node.OpStats.String()

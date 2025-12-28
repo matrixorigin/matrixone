@@ -767,7 +767,7 @@ func explainPipeline(node vm.Operator, prefix string, isRoot bool, isTail bool, 
 
 	analyzeStr := ""
 	if option.Verbose {
-		analyzeStr = fmt.Sprintf("(idx:%v, isFirst:%v, isLast:%v)",
+		analyzeStr = fmt.Sprintf("(%v,%v,%v)",
 			node.GetOperatorBase().Idx,
 			node.GetOperatorBase().IsFirst,
 			node.GetOperatorBase().IsLast)

@@ -76,7 +76,7 @@ func FormatBytes(bytes int64) string {
 // Examples: 0 -> "0ms", 21625539 -> "21.63ms", 1000000000 -> "1.00s"
 func FormatDuration(ns int64) string {
 	if ns == 0 {
-		return "0ms"
+		return "0ns"
 	}
 	const (
 		nanosPerMilli = 1000000
