@@ -683,8 +683,8 @@ func TestShrinkByMask(t *testing.T) {
 	var bm bitmap.Bitmap
 	bm.InitWithSize(2)
 	bm.AddMany([]uint64{0, 1})
-	var bmask bitmap.BMask
-	bmask.Init(&bm)
+	var bmask bitmap.Bitmap
+	bmask.InitWith(&bm)
 
 	//{ // Array Float32
 	//	v := NewVec(types.T_array_float32.ToType())

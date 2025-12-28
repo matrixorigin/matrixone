@@ -1048,7 +1048,7 @@ func (v *Vector) Shrink(sels []int64, negate bool) {
 	}
 }
 
-func (v *Vector) ShrinkByMask(sels bitmap.Mask, negate bool, offset uint64) {
+func (v *Vector) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64) {
 	if v.IsConst() {
 		if negate {
 			v.length -= sels.Count()
@@ -3413,7 +3413,7 @@ func shrinkFixed[T types.FixedSizeT](v *Vector, sels []int64, negate bool) {
 	}
 }
 
-func shrinkFixedByMask[T types.FixedSizeT](v *Vector, sels bitmap.Mask, negate bool, offset uint64) {
+func shrinkFixedByMask[T types.FixedSizeT](v *Vector, sels *bitmap.Bitmap, negate bool, offset uint64) {
 	vs := MustFixedColNoTypeCheck[T](v)
 	length := sels.Count()
 	itr := sels.Iterator()
