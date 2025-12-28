@@ -183,7 +183,7 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 
 		for i := int32(0); i < nAggs; i++ {
 			ag := mergeGroup.ctr.spillAggList[i]
-			if err := ag.UnmarshalFromReader(r, proc.Mp()); err != nil {
+			if err := ag.UnmarshalFromReader(r, mergeGroup.ctr.mp); err != nil {
 				return false, err
 			}
 		}
@@ -199,7 +199,7 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 		}
 	} else {
 		if mergeGroup.ctr.hr.IsEmpty() {
-			if err := mergeGroup.ctr.buildHashTable(proc); err != nil {
+			if err := mergeGroup.ctr.buildHashTable(proc.Ctx); err != nil {
 				return false, err
 			}
 		}
