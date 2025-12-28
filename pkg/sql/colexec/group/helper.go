@@ -17,6 +17,7 @@ package group
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 
@@ -46,7 +47,7 @@ func (hr *ResHashRelated) IsEmpty() bool {
 }
 
 func (hr *ResHashRelated) BuildHashTable(
-	proc *process.Process, mp *mpool.MPool,
+	ctx context.Context, mp *mpool.MPool,
 	rebuild bool,
 	isStrHash bool, keyNullable bool, preAllocated uint64) error {
 
@@ -55,7 +56,7 @@ func (hr *ResHashRelated) BuildHashTable(
 	}
 
 	if hr.mp != mp {
-		return moerr.NewInternalError(proc.Ctx, "hr.map mpool reset to different mpool")
+		return moerr.NewInternalError(ctx, "hr.map mpool reset to different mpool")
 	}
 
 	if rebuild {
@@ -245,7 +246,7 @@ func (ctr *container) spillDataToDisk(proc *process.Process, parentBkt *spillBuc
 	// tmp batch and buffer to write.   it is OK to pass in a nil vec, as
 	// ctr.groupByTypes is already initialized.
 	gbBatch := ctr.createNewGroupByBatch(nil, aggBatchSize)
-	defer gbBatch.Clean(proc.Mp())
+	defer gbBatch.Clean(ctr.mp)
 	buf := bytes.NewBuffer(make([]byte, 0, common.MiB))
 
 	for i := 0; i < spillNumBuckets; i++ {
@@ -260,7 +261,7 @@ func (ctr *container) spillDataToDisk(proc *process.Process, parentBkt *spillBuc
 		// extend the group by batch to the new size, set row count to 0, then we union
 		// group by batches to the parent batch.
 		gbBatch.CleanOnlyData()
-		gbBatch.PreExtend(proc.Mp(), int(cnt))
+		gbBatch.PreExtend(ctr.mp, int(cnt))
 
 		for nthBatch, gb := range ctr.groupByBatches {
 			if gb.RowCount() == 0 {
@@ -268,7 +269,7 @@ func (ctr *container) spillDataToDisk(proc *process.Process, parentBkt *spillBuc
 			}
 			for j := range gb.Vecs {
 				err := gbBatch.Vecs[j].UnionBatch(
-					gb.Vecs[j], 0, len(flags[nthBatch]), flags[nthBatch], proc.Mp())
+					gb.Vecs[j], 0, len(flags[nthBatch]), flags[nthBatch], ctr.mp)
 				if err != nil {
 					return err
 				}
@@ -300,7 +301,7 @@ func (ctr *container) spillDataToDisk(proc *process.Process, parentBkt *spillBuc
 	}
 
 	// reset ctr for next spill
-	ctr.resetForSpill(proc)
+	ctr.resetForSpill()
 	return nil
 }
 
@@ -325,13 +326,13 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 
 	// popped bkt must be defer freed.
 	bkt := ctr.spillBkts.PopBack().Value
-	defer bkt.free(proc)
+	defer bkt.free()
 
 	// reposition to the start of the file.
 	bkt.file.Seek(0, io.SeekStart)
 
 	// we reset ctr state, and create a new group by batch.
-	ctr.resetForSpill(proc)
+	ctr.resetForSpill()
 	gbBatch := ctr.createNewGroupByBatch(nil, aggBatchSize)
 	totalCnt := int64(0)
 
@@ -367,10 +368,10 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 
 		// load group by batch from the spill bucket.
 		gbBatch.CleanOnlyData()
-		if err = gbBatch.PreExtend(proc.Mp(), int(cnt)); err != nil {
+		if err = gbBatch.PreExtend(ctr.mp, int(cnt)); err != nil {
 			return false, err
 		}
-		if err = gbBatch.UnmarshalFromReader(bufferedFile, proc.Mp()); err != nil {
+		if err = gbBatch.UnmarshalFromReader(bufferedFile, ctr.mp); err != nil {
 			return false, err
 		}
 
@@ -400,7 +401,7 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 
 		// load aggs from the spill bucket.
 		for _, ag := range ctr.spillAggList {
-			ag.UnmarshalFromReader(bufferedFile, proc.Mp())
+			ag.UnmarshalFromReader(bufferedFile, ctr.mp)
 		}
 
 		checkMagic, err = types.ReadUint64(bufferedFile)
@@ -420,7 +421,7 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 		}
 
 		if ctr.hr.IsEmpty() {
-			if err = ctr.buildHashTable(proc); err != nil {
+			if err = ctr.buildHashTable(proc.Ctx); err != nil {
 				return false, err
 			}
 		}

@@ -70,7 +70,7 @@ type spillBucket struct {
 	file *os.File // spill file
 }
 
-func (bkt *spillBucket) free(proc *process.Process) {
+func (bkt *spillBucket) free() {
 	if bkt != nil && bkt.file != nil {
 		bkt.file.Close()
 		bkt.file = nil
@@ -133,7 +133,7 @@ func (ctr *container) setSpillMem(m int64, aggs []aggexec.AggFuncExecExpression)
 	}
 }
 
-func (ctr *container) freeAggList(proc *process.Process) {
+func (ctr *container) freeAggList() {
 	for i := range ctr.aggList {
 		if ctr.aggList[i] != nil {
 			ctr.aggList[i].Free()
@@ -151,23 +151,23 @@ func (ctr *container) freeAggList(proc *process.Process) {
 	ctr.spillAggList = nil
 }
 
-func (ctr *container) freeSpillBkts(proc *process.Process) {
+func (ctr *container) freeSpillBkts() {
 	// free all spill buckets.
 	if ctr.spillBkts != nil {
 		ctr.spillBkts.Iter(0, func(bkt *spillBucket) bool {
-			bkt.free(proc)
+			bkt.free()
 			return true
 		})
 		ctr.spillBkts.Clear()
 	}
 
 	for _, bkt := range ctr.currentSpillBkt {
-		bkt.free(proc)
+		bkt.free()
 	}
 	ctr.currentSpillBkt = nil
 }
 
-func (ctr *container) freeGroupByBatches(proc *process.Process) {
+func (ctr *container) freeGroupByBatches() {
 	for i := range ctr.groupByBatches {
 		if ctr.groupByBatches[i] != nil {
 			ctr.groupByBatches[i].Clean(ctr.mp)
@@ -178,7 +178,7 @@ func (ctr *container) freeGroupByBatches(proc *process.Process) {
 	ctr.currBatchIdx = 0
 }
 
-func (ctr *container) free(proc *process.Process) {
+func (ctr *container) free() {
 	// free container stuff, WTH is the Free0?
 	ctr.inputDone = false
 	ctr.hr.Free0()
@@ -190,29 +190,29 @@ func (ctr *container) free(proc *process.Process) {
 	}
 	ctr.aggArgEvaluate = nil
 
-	ctr.freeGroupByBatches(proc)
-	ctr.freeAggList(proc)
-	ctr.freeSpillBkts(proc)
+	ctr.freeGroupByBatches()
+	ctr.freeAggList()
+	ctr.freeSpillBkts()
 
 	mpool.DeleteMPool(ctr.mp)
 	ctr.mp = nil
 }
 
-func (ctr *container) reset(proc *process.Process) {
+func (ctr *container) reset() {
 	// reset the container state, do not reuse anything
 	ctr.state = vm.Build
 
 	ctr.inputDone = false
 	ctr.hr.Free0()
 
-	ctr.resetForSpill(proc)
-	ctr.freeSpillBkts(proc)
+	ctr.resetForSpill()
+	ctr.freeSpillBkts()
 
 	mpool.DeleteMPool(ctr.mp)
 	ctr.mp = mpool.MustNew("group_mpool")
 }
 
-func (ctr *container) resetForSpill(proc *process.Process) {
+func (ctr *container) resetForSpill() {
 	// Reset also frees the hash related stuff.
 	ctr.hr.Free0()
 
@@ -222,10 +222,10 @@ func (ctr *container) resetForSpill(proc *process.Process) {
 		ctr.aggArgEvaluate[i].ResetForNextQuery()
 	}
 	// free group by batches, agg list and spill buckets, do not reuse for now.
-	ctr.freeGroupByBatches(proc)
+	ctr.freeGroupByBatches()
 	ctr.currBatchIdx = 0
 
-	ctr.freeAggList(proc)
+	ctr.freeAggList()
 }
 
 func (group *Group) evaluateGroupByAndAggArgs(proc *process.Process, bat *batch.Batch) (err error) {
@@ -279,13 +279,13 @@ func (group *Group) ExecProjection(proc *process.Process, input *batch.Batch) (*
 }
 
 func (group *Group) Free(proc *process.Process, _ bool, _ error) {
-	group.ctr.free(proc)
+	group.ctr.free()
 	// free projection stuff,
 	group.FreeProjection(proc)
 }
 
 func (group *Group) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	group.ctr.reset(proc)
+	group.ctr.reset()
 	group.ResetProjection(proc)
 }
 
@@ -355,12 +355,12 @@ func (mergeGroup *MergeGroup) ExecProjection(proc *process.Process, input *batch
 }
 
 func (mergeGroup *MergeGroup) Reset(proc *process.Process, _ bool, _ error) {
-	mergeGroup.ctr.reset(proc)
+	mergeGroup.ctr.reset()
 	mergeGroup.ResetProjection(proc)
 }
 
 func (mergeGroup *MergeGroup) Free(proc *process.Process, _ bool, _ error) {
-	mergeGroup.ctr.free(proc)
+	mergeGroup.ctr.free()
 	mergeGroup.FreeProjection(proc)
 }
 

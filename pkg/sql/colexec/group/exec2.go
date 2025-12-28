@@ -16,6 +16,7 @@ package group
 
 import (
 	"bytes"
+	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -298,7 +299,7 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 		return false, nil
 	} else {
 		if group.ctr.hr.IsEmpty() {
-			if err = group.ctr.buildHashTable(proc); err != nil {
+			if err = group.ctr.buildHashTable(proc.Ctx); err != nil {
 				return false, err
 			}
 		}
@@ -349,10 +350,10 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 	}
 }
 
-func (ctr *container) buildHashTable(proc *process.Process) error {
+func (ctr *container) buildHashTable(ctx context.Context) error {
 	// build hash table
 	if err := ctr.hr.BuildHashTable(
-		proc, ctr.mp,
+		ctx, ctr.mp,
 		false,
 		ctr.mtyp == HStr,
 		ctr.keyNullable,
@@ -450,7 +451,7 @@ func (group *Group) outputOneBatch(proc *process.Process) (vm.CallResult, error)
 				// switch back to build to receive more data.
 				// reset will set state to vm.Build, which will let us
 				// process more by Call child.
-				group.ctr.reset(proc)
+				group.ctr.reset()
 			}
 		}
 		return res, nil
