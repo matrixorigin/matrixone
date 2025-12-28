@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -454,39 +455,12 @@ func (ps *OperatorStats) String() string {
 		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("S3DeleteMul:%d ", ps.S3DeleteMul))
 	}
 	//---------------------------------------------------------------------------------------------
-	if ps.ReadSize > 0 {
-		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("ReadSize:%dbytes ", ps.ReadSize))
-	}
-	if ps.S3ReadSize > 0 {
-		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("S3ReadSize:%dbytes ", ps.S3ReadSize))
-	}
-	if ps.DiskReadSize > 0 {
-		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("DiskReadSize:%dbytes ", ps.DiskReadSize))
-	}
-	if ps.CacheRead > 0 {
-		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("CacheRead:%d ", ps.CacheRead))
-	}
-	if ps.CacheHit > 0 {
-		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("CacheHit:%d ", ps.CacheHit))
-	}
-	if ps.CacheMemoryRead > 0 {
-		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("CacheMemoryRead:%d ", ps.CacheMemoryRead))
-	}
-	if ps.CacheMemoryHit > 0 {
-		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("CacheMemoryHit:%d ", ps.CacheMemoryHit))
-	}
-	if ps.CacheDiskRead > 0 {
-		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("CacheDiskRead:%d ", ps.CacheDiskRead))
-	}
-	if ps.CacheDiskHit > 0 {
-		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("CacheDiskHit:%d ", ps.CacheDiskHit))
-	}
-	if ps.CacheRemoteRead > 0 {
-		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("CacheRemoteRead:%d ", ps.CacheRemoteRead))
-	}
-	if ps.CacheRemoteHit > 0 {
-		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("CacheRemoteHit:%d ", ps.CacheRemoteHit))
-	}
+	// ReadSize format: ReadSize=total|s3|disk (same as explain analyze)
+	// Always show ReadSize even if all values are 0, to match explain analyze format
+	dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("ReadSize=%s|%s|%s ",
+		common.ConvertBytesToHumanReadable(ps.ReadSize),
+		common.ConvertBytesToHumanReadable(ps.S3ReadSize),
+		common.ConvertBytesToHumanReadable(ps.DiskReadSize)))
 
 	// Join and append S3 stats if any
 	if len(dynamicAttrs) > 0 {
