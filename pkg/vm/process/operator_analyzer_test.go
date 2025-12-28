@@ -262,7 +262,8 @@ func TestOperatorStats_String(t *testing.T) {
 			},
 			// Format: ReadSize=total|s3|disk (same as explain analyze)
 			// Cache stats should NOT appear
-			want: " CallNum:154 TimeCost:54449492ns WaitTime:0ns InRows:1248064 OutRows:0 InSize:19969024bytes InBlock:153 OutSize:0bytes MemSize:131072bytes SpillSize:131072bytes ScanBytes:19969024bytes NetworkIO:0bytes DiskIO:7888601bytes WrittenRows:12 DeletedRows:12 S3List:2 S3Head:2 S3Put:2 S3Get:2 S3Delete:2 S3DeleteMul:2 ReadSize=15.26 MiB|14.31 MiB|976.56 KiB ScanTime:452ns ",
+			// NetworkIO and DiskIO are removed to avoid duplication with ReadSize
+			want: " CallNum:154 TimeCost:54449492ns WaitTime:0ns InRows:1248064 OutRows:0 InSize:19969024bytes InBlock:153 OutSize:0bytes MemSize:131072bytes SpillSize:131072bytes ScanBytes:19969024bytes WrittenRows:12 DeletedRows:12 S3List:2 S3Head:2 S3Put:2 S3Get:2 S3Delete:2 S3DeleteMul:2 ReadSize=15.26 MiB|14.31 MiB|976.56 KiB ScanTime:452ns ",
 		},
 		{
 			name: "test02 - ReadSize format always shown even when all values are zero (matches explain analyze)",
@@ -303,7 +304,8 @@ func TestOperatorStats_String(t *testing.T) {
 				OperatorMetrics:  nil,
 			},
 			// ReadSize format should always appear, even when all values are 0
-			want: " CallNum:10 TimeCost:1000000ns WaitTime:0ns InRows:100 OutRows:50 InSize:1024bytes InBlock:1 OutSize:512bytes MemSize:1024bytes SpillSize:0bytes ScanBytes:1024bytes NetworkIO:0bytes DiskIO:0bytes ReadSize=0 bytes|0 bytes|0 bytes ",
+			// NetworkIO and DiskIO are removed to avoid duplication with ReadSize
+			want: " CallNum:10 TimeCost:1000000ns WaitTime:0ns InRows:100 OutRows:50 InSize:1024bytes InBlock:1 OutSize:512bytes MemSize:1024bytes SpillSize:0bytes ScanBytes:1024bytes ReadSize=0 bytes|0 bytes|0 bytes ",
 		},
 		{
 			name: "test03 - ReadSize with KiB format (real-world example)",
@@ -344,7 +346,8 @@ func TestOperatorStats_String(t *testing.T) {
 				OperatorMetrics:  nil,
 			},
 			// Real-world example: ReadSize=335.01 KiB|0 bytes|0 bytes
-			want: " CallNum:77 TimeCost:1353592ns WaitTime:0ns InRows:622592 OutRows:622592 InSize:7471104bytes InBlock:76 OutSize:7471104bytes MemSize:196608bytes SpillSize:0bytes ScanBytes:7471104bytes NetworkIO:0bytes DiskIO:0bytes ReadSize=335.01 KiB|0 bytes|0 bytes ",
+			// NetworkIO and DiskIO are removed to avoid duplication with ReadSize
+			want: " CallNum:77 TimeCost:1353592ns WaitTime:0ns InRows:622592 OutRows:622592 InSize:7471104bytes InBlock:76 OutSize:7471104bytes MemSize:196608bytes SpillSize:0bytes ScanBytes:7471104bytes ReadSize=335.01 KiB|0 bytes|0 bytes ",
 		},
 		{
 			name: "test04 - ReadSize with MiB format",
@@ -384,7 +387,8 @@ func TestOperatorStats_String(t *testing.T) {
 				CacheRemoteHit:   200,     // Should not appear
 				OperatorMetrics:  nil,
 			},
-			want: " CallNum:1 TimeCost:1000000ns WaitTime:0ns InRows:1000000 OutRows:1000000 InSize:104857600bytes InBlock:100 OutSize:104857600bytes MemSize:1048576bytes SpillSize:0bytes ScanBytes:104857600bytes NetworkIO:0bytes DiskIO:0bytes ReadSize=50.00 MiB|30.00 MiB|20.00 MiB ",
+			// NetworkIO and DiskIO are removed to avoid duplication with ReadSize
+			want: " CallNum:1 TimeCost:1000000ns WaitTime:0ns InRows:1000000 OutRows:1000000 InSize:104857600bytes InBlock:100 OutSize:104857600bytes MemSize:1048576bytes SpillSize:0bytes ScanBytes:104857600bytes ReadSize=50.00 MiB|30.00 MiB|20.00 MiB ",
 		},
 		{
 			name: "test05 - ReadSize with GiB format",
@@ -424,7 +428,8 @@ func TestOperatorStats_String(t *testing.T) {
 				CacheRemoteHit:   0,
 				OperatorMetrics:  nil,
 			},
-			want: " CallNum:1 TimeCost:1000000ns WaitTime:0ns InRows:10000000 OutRows:10000000 InSize:10737418240bytes InBlock:1000 OutSize:10737418240bytes MemSize:1073741824bytes SpillSize:0bytes ScanBytes:10737418240bytes NetworkIO:0bytes DiskIO:0bytes ReadSize=5.00 GiB|3.00 GiB|2.00 GiB ",
+			// NetworkIO and DiskIO are removed to avoid duplication with ReadSize
+			want: " CallNum:1 TimeCost:1000000ns WaitTime:0ns InRows:10000000 OutRows:10000000 InSize:10737418240bytes InBlock:1000 OutSize:10737418240bytes MemSize:1073741824bytes SpillSize:0bytes ScanBytes:10737418240bytes ReadSize=5.00 GiB|3.00 GiB|2.00 GiB ",
 		},
 		{
 			name: "test06 - ReadSize with mixed formats (bytes, KiB, MiB)",
@@ -464,7 +469,8 @@ func TestOperatorStats_String(t *testing.T) {
 				CacheRemoteHit:   0,
 				OperatorMetrics:  nil,
 			},
-			want: " CallNum:1 TimeCost:1000000ns WaitTime:0ns InRows:1000 OutRows:1000 InSize:1048576bytes InBlock:1 OutSize:1048576bytes MemSize:1024bytes SpillSize:0bytes ScanBytes:1048576bytes NetworkIO:0bytes DiskIO:0bytes ReadSize=512 bytes|10.00 KiB|1.00 MiB ",
+			// NetworkIO and DiskIO are removed to avoid duplication with ReadSize
+			want: " CallNum:1 TimeCost:1000000ns WaitTime:0ns InRows:1000 OutRows:1000 InSize:1048576bytes InBlock:1 OutSize:1048576bytes MemSize:1024bytes SpillSize:0bytes ScanBytes:1048576bytes ReadSize=512 bytes|10.00 KiB|1.00 MiB ",
 		},
 		{
 			name: "test07 - Cache stats should NOT appear even with non-zero values",
@@ -505,7 +511,8 @@ func TestOperatorStats_String(t *testing.T) {
 				OperatorMetrics:  nil,
 			},
 			// Verify that no Cache* fields appear in output
-			want: " CallNum:1 TimeCost:1000000ns WaitTime:0ns InRows:100 OutRows:100 InSize:1024bytes InBlock:1 OutSize:1024bytes MemSize:1024bytes SpillSize:0bytes ScanBytes:1024bytes NetworkIO:0bytes DiskIO:0bytes ReadSize=1.00 KiB|512 bytes|256 bytes ",
+			// NetworkIO and DiskIO are removed to avoid duplication with ReadSize
+			want: " CallNum:1 TimeCost:1000000ns WaitTime:0ns InRows:100 OutRows:100 InSize:1024bytes InBlock:1 OutSize:1024bytes MemSize:1024bytes SpillSize:0bytes ScanBytes:1024bytes ReadSize=1.00 KiB|512 bytes|256 bytes ",
 		},
 	}
 	for _, tt := range tests {

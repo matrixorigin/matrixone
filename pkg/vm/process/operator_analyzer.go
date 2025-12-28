@@ -411,9 +411,7 @@ func (ps *OperatorStats) String() string {
 		"OutSize:%dbytes "+
 		"MemSize:%dbytes "+
 		"SpillSize:%dbytes "+
-		"ScanBytes:%dbytes "+
-		"NetworkIO:%dbytes "+
-		"DiskIO:%dbytes ",
+		"ScanBytes:%dbytes ",
 		ps.CallNum,
 		ps.TimeConsumed,
 		ps.WaitTimeConsumed,
@@ -424,9 +422,7 @@ func (ps *OperatorStats) String() string {
 		ps.OutputSize,
 		ps.MemorySize,
 		ps.SpillSize,
-		ps.ScanBytes,
-		ps.NetworkIO,
-		ps.DiskIO))
+		ps.ScanBytes))
 
 	// Collect S3 stats in a slice for efficient concatenation
 	dynamicAttrs := []string{}
