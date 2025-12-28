@@ -54,10 +54,18 @@ func TestUnsafeToBytesWithLength(t *testing.T) {
 }
 
 func TestUnsafeSliceCast(t *testing.T) {
-	s := UnsafeSliceCast[int]([]int64{1, 2})
-	assert.Equal(t, []int{1, 2}, s)
-	s = UnsafeSliceCast[int]([]int64(nil))
-	assert.Equal(t, []int(nil), s)
+	s := UnsafeSliceCast[int32]([]int64{1, 2})
+	// this is endian dependent, but we only support little endian anyway.
+	assert.Equal(t, []int32{1, 0, 2, 0}, s)
+	s = UnsafeSliceCast[int32, []int64](nil)
+	assert.Equal(t, []int32(nil), s)
+
+	si := UnsafeSliceCast[int]([]int64{1, 2})
+	// this is int size dependent.   the following test says we only support go int is int64.
+	assert.Equal(t, []int{1, 2}, si)
+	si = UnsafeSliceCast[int, []int64](nil)
+	assert.Equal(t, []int(nil), si)
+
 }
 
 func TestUnsafeUintptr(t *testing.T) {

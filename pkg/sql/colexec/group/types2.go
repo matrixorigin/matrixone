@@ -170,7 +170,7 @@ func (ctr *container) freeSpillBkts(proc *process.Process) {
 func (ctr *container) freeGroupByBatches(proc *process.Process) {
 	for i := range ctr.groupByBatches {
 		if ctr.groupByBatches[i] != nil {
-			ctr.groupByBatches[i].Clean(proc.Mp())
+			ctr.groupByBatches[i].Clean(ctr.mp)
 			ctr.groupByBatches[i] = nil
 		}
 	}
@@ -209,7 +209,7 @@ func (ctr *container) reset(proc *process.Process) {
 	ctr.freeSpillBkts(proc)
 
 	mpool.DeleteMPool(ctr.mp)
-	ctr.mp = mpool.MustNewNoFixed("group_mpool")
+	ctr.mp = mpool.MustNew("group_mpool")
 }
 
 func (ctr *container) resetForSpill(proc *process.Process) {

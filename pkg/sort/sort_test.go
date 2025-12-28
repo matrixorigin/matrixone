@@ -130,7 +130,7 @@ func BenchmarkSortInt(b *testing.B) {
 
 func BenchmarkSortIntVector(b *testing.B) {
 	m := mpool.MustNewZero()
-	vec := testutil.NewInt32Vector(BenchmarkRows, types.T_int32.ToType(), m, true, nil)
+	vec := testutil.NewInt32Vector(BenchmarkRows, types.T_int32.ToType(), m, true, nil, nil)
 	os := make([]int64, vec.Length())
 	for i := range os {
 		os[i] = int64(i)

@@ -42,7 +42,7 @@ import (
 )
 
 func Test_ConstructBasePKFilter(t *testing.T) {
-	m := mpool.MustNewNoFixed(t.Name())
+	m := mpool.MustNew(t.Name())
 	proc := testutil.NewProcessWithMPool(t, "", m)
 	exprStrings := []string{
 		"a=10",
@@ -779,7 +779,7 @@ func encodeIntToUUID(x int32) types.Uuid {
 }
 
 func TestConstructBasePKFilterWithOr(t *testing.T) {
-	m := mpool.MustNewNoFixed(t.Name())
+	m := mpool.MustNew(t.Name())
 	proc := testutil.NewProcessWithMPool(t, "", m)
 
 	tableDef := &plan.TableDef{

@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -31,7 +32,7 @@ import (
 const (
 	// we use this size as preferred output batch size, which is typical
 	// in MO.
-	aggBatchSize = 8192
+	aggBatchSize = aggexec.AggBatchSize
 
 	// we use this size as pre-allocated size for hash table.
 	aggHtPreAllocSize = 1024
@@ -43,7 +44,7 @@ const (
 
 func (group *Group) Prepare(proc *process.Process) (err error) {
 	group.ctr.state = vm.Build
-	group.ctr.mp = mpool.MustNewNoFixed("group_mpool")
+	group.ctr.mp = mpool.MustNewNoLock("group_mpool")
 
 	// debug,
 	// group.ctr.mp.EnableDetailRecording()

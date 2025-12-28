@@ -40,7 +40,9 @@ var supportedAggInNewFramework = []FuncNew{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    aggexec.CountReturnType,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
 				aggFramework: aggregationLogicOfOverload{
 					str:         "count",
 					aggRegister: agg.RegisterCountColumn,
@@ -67,7 +69,9 @@ var supportedAggInNewFramework = []FuncNew{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    aggexec.CountReturnType,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
 				aggFramework: aggregationLogicOfOverload{
 					str:         "count(*)",
 					aggRegister: agg.RegisterCountStar,
@@ -330,7 +334,9 @@ var supportedAggInNewFramework = []FuncNew{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    aggexec.CountReturnType,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint64.ToType()
+				},
 				aggFramework: aggregationLogicOfOverload{
 					str:         "approx_count",
 					aggRegister: agg.RegisterApproxCount,
@@ -358,7 +364,9 @@ var supportedAggInNewFramework = []FuncNew{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    aggexec.CountReturnType,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint64.ToType()
+				},
 				aggFramework: aggregationLogicOfOverload{
 					str:         "approx_count_distinct",
 					aggRegister: agg.RegisterApproxCount,

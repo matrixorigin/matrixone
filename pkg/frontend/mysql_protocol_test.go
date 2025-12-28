@@ -21,7 +21,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
-	"math/rand"
 	"net"
 	"reflect"
 	"strconv"
@@ -3627,13 +3626,13 @@ func makeKases() []kase {
 				for i := 0; i < len(mrs.Data); i++ {
 					vecData = append(vecData, mrs.Data[i][colIdx].(bool))
 				}
-				bat.Vecs[colIdx] = testutil.NewBoolVector(len(mrs.Data), types.T_bool.ToType(), mp, false, vecData)
+				bat.Vecs[colIdx] = testutil.NewBoolVector(len(mrs.Data), types.T_bool.ToType(), mp, false, nil, vecData)
 			case defines.MYSQL_TYPE_BIT:
 				vecData := make([]uint64, 0)
 				for i := 0; i < len(mrs.Data); i++ {
 					vecData = append(vecData, mrs.Data[i][colIdx].(uint64))
 				}
-				bat.Vecs[colIdx] = testutil.NewUInt64Vector(len(mrs.Data), types.T_bit.ToType(), mp, false, vecData)
+				bat.Vecs[colIdx] = testutil.NewUInt64Vector(len(mrs.Data), types.T_bit.ToType(), mp, false, nil, vecData)
 			case defines.MYSQL_TYPE_TINY:
 				switch mrs.Data[0][colIdx].(type) {
 				case int8:
@@ -3641,13 +3640,13 @@ func makeKases() []kase {
 					for i := 0; i < len(mrs.Data); i++ {
 						vecData = append(vecData, mrs.Data[i][colIdx].(int8))
 					}
-					bat.Vecs[colIdx] = testutil.NewInt8Vector(len(mrs.Data), types.T_int8.ToType(), mp, false, vecData)
+					bat.Vecs[colIdx] = testutil.NewInt8Vector(len(mrs.Data), types.T_int8.ToType(), mp, false, nil, vecData)
 				case uint8:
 					vecData := make([]uint8, 0)
 					for i := 0; i < len(mrs.Data); i++ {
 						vecData = append(vecData, mrs.Data[i][colIdx].(uint8))
 					}
-					bat.Vecs[colIdx] = testutil.NewUInt8Vector(len(mrs.Data), types.T_uint8.ToType(), mp, false, vecData)
+					bat.Vecs[colIdx] = testutil.NewUInt8Vector(len(mrs.Data), types.T_uint8.ToType(), mp, false, nil, vecData)
 				}
 			case defines.MYSQL_TYPE_SHORT, defines.MYSQL_TYPE_YEAR:
 				switch mrs.Data[0][colIdx].(type) {
@@ -3656,13 +3655,13 @@ func makeKases() []kase {
 					for i := 0; i < len(mrs.Data); i++ {
 						vecData = append(vecData, mrs.Data[i][colIdx].(int16))
 					}
-					bat.Vecs[colIdx] = testutil.NewInt16Vector(len(mrs.Data), types.T_int16.ToType(), mp, false, vecData)
+					bat.Vecs[colIdx] = testutil.NewInt16Vector(len(mrs.Data), types.T_int16.ToType(), mp, false, nil, vecData)
 				case uint16:
 					vecData := make([]uint16, 0)
 					for i := 0; i < len(mrs.Data); i++ {
 						vecData = append(vecData, mrs.Data[i][colIdx].(uint16))
 					}
-					bat.Vecs[colIdx] = testutil.NewUInt16Vector(len(mrs.Data), types.T_uint16.ToType(), mp, false, vecData)
+					bat.Vecs[colIdx] = testutil.NewUInt16Vector(len(mrs.Data), types.T_uint16.ToType(), mp, false, nil, vecData)
 				}
 			case defines.MYSQL_TYPE_LONG, defines.MYSQL_TYPE_INT24:
 				switch mrs.Data[0][colIdx].(type) {
@@ -3672,13 +3671,13 @@ func makeKases() []kase {
 					for i := 0; i < len(mrs.Data); i++ {
 						vecData = append(vecData, mrs.Data[i][colIdx].(int32))
 					}
-					bat.Vecs[colIdx] = testutil.NewInt32Vector(len(mrs.Data), types.T_int32.ToType(), mp, false, vecData)
+					bat.Vecs[colIdx] = testutil.NewInt32Vector(len(mrs.Data), types.T_int32.ToType(), mp, false, nil, vecData)
 				case uint32:
 					vecData := make([]uint32, 0)
 					for i := 0; i < len(mrs.Data); i++ {
 						vecData = append(vecData, mrs.Data[i][colIdx].(uint32))
 					}
-					bat.Vecs[colIdx] = testutil.NewUInt32Vector(len(mrs.Data), types.T_uint32.ToType(), mp, false, vecData)
+					bat.Vecs[colIdx] = testutil.NewUInt32Vector(len(mrs.Data), types.T_uint32.ToType(), mp, false, nil, vecData)
 				}
 
 			case defines.MYSQL_TYPE_LONGLONG:
@@ -3688,13 +3687,13 @@ func makeKases() []kase {
 					for i := 0; i < len(mrs.Data); i++ {
 						vecData = append(vecData, mrs.Data[i][colIdx].(int64))
 					}
-					bat.Vecs[colIdx] = testutil.NewInt64Vector(len(mrs.Data), types.T_int64.ToType(), mp, false, vecData)
+					bat.Vecs[colIdx] = testutil.NewInt64Vector(len(mrs.Data), types.T_int64.ToType(), mp, false, nil, vecData)
 				case uint64:
 					vecData := make([]uint64, 0)
 					for i := 0; i < len(mrs.Data); i++ {
 						vecData = append(vecData, mrs.Data[i][colIdx].(uint64))
 					}
-					bat.Vecs[colIdx] = testutil.NewUInt64Vector(len(mrs.Data), types.T_uint64.ToType(), mp, false, vecData)
+					bat.Vecs[colIdx] = testutil.NewUInt64Vector(len(mrs.Data), types.T_uint64.ToType(), mp, false, nil, vecData)
 				}
 			case defines.MYSQL_TYPE_VARCHAR:
 				switch mrs.Data[0][colIdx].(type) {
@@ -3703,13 +3702,13 @@ func makeKases() []kase {
 					for i := 0; i < len(mrs.Data); i++ {
 						vecData = append(vecData, string(mrs.Data[i][colIdx].([]uint8)))
 					}
-					bat.Vecs[colIdx] = testutil.NewStringVector(len(mrs.Data), types.T_binary.ToType(), mp, false, vecData)
+					bat.Vecs[colIdx] = testutil.NewStringVector(len(mrs.Data), types.T_binary.ToType(), mp, false, nil, vecData)
 				case types.Rowid:
 					vecData := make([]string, 0)
 					for i := 0; i < len(mrs.Data); i++ {
 						vecData = append(vecData, string(mrs.Data[i][colIdx].(types.Rowid).String()))
 					}
-					bat.Vecs[colIdx] = testutil.NewStringVector(len(mrs.Data), types.T_Rowid.ToType(), mp, false, vecData)
+					bat.Vecs[colIdx] = testutil.NewStringVector(len(mrs.Data), types.T_Rowid.ToType(), mp, false, nil, vecData)
 				}
 			case defines.MYSQL_TYPE_VAR_STRING:
 				switch mrs.Data[0][colIdx].(type) {
@@ -3718,26 +3717,26 @@ func makeKases() []kase {
 					for i := 0; i < len(mrs.Data); i++ {
 						vecData = append(vecData, string(mrs.Data[i][colIdx].([]uint8)))
 					}
-					bat.Vecs[colIdx] = testutil.NewStringVector(len(mrs.Data), types.T_varchar.ToType(), mp, false, vecData)
+					bat.Vecs[colIdx] = testutil.NewStringVector(len(mrs.Data), types.T_varchar.ToType(), mp, false, nil, vecData)
 				case types.Datetime:
 					vecData := make([]string, 0)
 					for i := 0; i < len(mrs.Data); i++ {
 						vecData = append(vecData, mrs.Data[i][colIdx].(types.Datetime).String())
 					}
-					bat.Vecs[colIdx] = testutil.NewDatetimeVector(len(mrs.Data), types.T_datetime.ToType(), mp, false, vecData)
+					bat.Vecs[colIdx] = testutil.NewDatetimeVector(len(mrs.Data), types.T_datetime.ToType(), mp, false, nil, vecData)
 				}
 			case defines.MYSQL_TYPE_STRING:
 				vecData := make([]string, 0)
 				for i := 0; i < len(mrs.Data); i++ {
 					vecData = append(vecData, string(mrs.Data[i][colIdx].([]uint8)))
 				}
-				bat.Vecs[colIdx] = testutil.NewStringVector(len(mrs.Data), types.T_char.ToType(), mp, false, vecData)
+				bat.Vecs[colIdx] = testutil.NewStringVector(len(mrs.Data), types.T_char.ToType(), mp, false, nil, vecData)
 			case defines.MYSQL_TYPE_DATE:
 				vecData := make([]string, 0)
 				for i := 0; i < len(mrs.Data); i++ {
 					vecData = append(vecData, mrs.Data[i][colIdx].(types.Date).String())
 				}
-				bat.Vecs[colIdx] = testutil.NewDateVector(len(mrs.Data), types.T_date.ToType(), mp, false, vecData)
+				bat.Vecs[colIdx] = testutil.NewDateVector(len(mrs.Data), types.T_date.ToType(), mp, false, nil, vecData)
 			case defines.MYSQL_TYPE_TIME:
 				scale := col.Length()
 				vecData := make([]string, 0)
@@ -3746,7 +3745,7 @@ func makeKases() []kase {
 				}
 				typ := types.T_time.ToType()
 				typ.Scale = int32(scale)
-				bat.Vecs[colIdx] = testutil.NewTimeVector(len(mrs.Data), typ, mp, false, vecData)
+				bat.Vecs[colIdx] = testutil.NewTimeVector(len(mrs.Data), typ, mp, false, nil, vecData)
 
 			case defines.MYSQL_TYPE_DATETIME:
 				scale := col.Length()
@@ -3756,41 +3755,41 @@ func makeKases() []kase {
 				}
 				typ := types.T_datetime.ToType()
 				typ.Scale = int32(scale)
-				bat.Vecs[colIdx] = testutil.NewDatetimeVector(len(mrs.Data), typ, mp, false, vecData)
+				bat.Vecs[colIdx] = testutil.NewDatetimeVector(len(mrs.Data), typ, mp, false, nil, vecData)
 			case defines.MYSQL_TYPE_FLOAT:
 				vecData := make([]float32, 0)
 				for i := 0; i < len(mrs.Data); i++ {
 					vecData = append(vecData, mrs.Data[i][colIdx].(float32))
 				}
-				bat.Vecs[colIdx] = testutil.NewFloat32Vector(len(mrs.Data), types.T_float32.ToType(), mp, false, vecData)
+				bat.Vecs[colIdx] = testutil.NewFloat32Vector(len(mrs.Data), types.T_float32.ToType(), mp, false, nil, vecData)
 
 			case defines.MYSQL_TYPE_DOUBLE:
 				vecData := make([]float64, 0)
 				for i := 0; i < len(mrs.Data); i++ {
 					vecData = append(vecData, mrs.Data[i][colIdx].(float64))
 				}
-				bat.Vecs[colIdx] = testutil.NewFloat64Vector(len(mrs.Data), types.T_float64.ToType(), mp, false, vecData)
+				bat.Vecs[colIdx] = testutil.NewFloat64Vector(len(mrs.Data), types.T_float64.ToType(), mp, false, nil, vecData)
 
 			case defines.MYSQL_TYPE_JSON:
-				bat.Vecs[colIdx] = testutil.NewJsonVector(len(mrs.Data), types.T_json.ToType(), mp, true, nil)
+				bat.Vecs[colIdx] = testutil.NewJsonVector(len(mrs.Data), types.T_json.ToType(), mp, true, nil, nil)
 			case defines.MYSQL_TYPE_DECIMAL:
 				vecData := make([]types.Decimal64, 0)
 				for i := 0; i < len(mrs.Data); i++ {
 					vecData = append(vecData, mrs.Data[i][colIdx].(types.Decimal64))
 				}
-				bat.Vecs[colIdx] = testutil.NewDecimal64Vector(len(mrs.Data), types.T_decimal64.ToType(), mp, false, vecData)
+				bat.Vecs[colIdx] = testutil.NewDecimal64Vector(len(mrs.Data), types.T_decimal64.ToType(), mp, false, nil, vecData)
 			case defines.MYSQL_TYPE_UUID:
 				vecData := make([]types.Uuid, 0)
 				for i := 0; i < len(mrs.Data); i++ {
 					vecData = append(vecData, mrs.Data[i][colIdx].(types.Uuid))
 				}
-				bat.Vecs[colIdx] = NewUUIDVector(len(mrs.Data), types.T_uuid.ToType(), mp, false, vecData)
+				bat.Vecs[colIdx] = testutil.NewUUIDVector(len(mrs.Data), types.T_uuid.ToType(), mp, false, nil, vecData)
 			case defines.MYSQL_TYPE_TIMESTAMP:
 				vecData := make([]string, 0)
 				for i := 0; i < len(mrs.Data); i++ {
 					vecData = append(vecData, mrs.Data[i][colIdx].(types.Timestamp).String2(time.UTC, 6))
 				}
-				bat.Vecs[colIdx] = NewTimestampVector(len(mrs.Data), types.T_timestamp.ToType(), mp, false, vecData)
+				bat.Vecs[colIdx] = testutil.NewTimestampVector(len(mrs.Data), types.T_timestamp.ToType(), mp, false, nil, vecData)
 
 			default:
 				panic(fmt.Sprintf("usp %v", col.ColumnType()))
@@ -3799,61 +3798,6 @@ func makeKases() []kase {
 		kases[i].bat = bat
 	}
 	return kases
-}
-
-func NewTimestampVector(n int, typ types.Type, m *mpool.MPool, random bool, vs []string) *vector.Vector {
-	vec := vector.NewVec(typ)
-	if vs != nil {
-		for i := range vs {
-			d, err := types.ParseTimestamp(time.UTC, vs[i], 6)
-			if err != nil {
-				return nil
-			}
-			if err := vector.AppendFixed(vec, d, false, m); err != nil {
-				vec.Free(m)
-				return nil
-			}
-		}
-		return vec
-	}
-	for i := 0; i < n; i++ {
-		v := i
-		if random {
-			v = rand.Int()
-		}
-		if err := vector.AppendFixed(vec, types.Timestamp(v), false, m); err != nil {
-			vec.Free(m)
-			return nil
-		}
-	}
-	return vec
-}
-
-func NewUUIDVector(n int, typ types.Type, m *mpool.MPool, random bool, vs []types.Uuid) *vector.Vector {
-	vec := vector.NewVec(typ)
-	if vs != nil {
-		for i := range vs {
-			if err := vector.AppendFixed(vec, vs[i], false, m); err != nil {
-				vec.Free(m)
-				return nil
-			}
-		}
-		return vec
-	}
-	for i := 0; i < n; i++ {
-		v := byte(0)
-		if random {
-			v = byte(rand.Intn(8))
-		}
-		d := types.Uuid{}
-		d[0] = 'a' + v
-		if err := vector.AppendFixed(vec, d, false, m); err != nil {
-
-			vec.Free(m)
-			return nil
-		}
-	}
-	return vec
 }
 
 func Test_appendResultSet2(t *testing.T) {

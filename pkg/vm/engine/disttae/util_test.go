@@ -79,7 +79,7 @@ func TestCheckExprIsZonemappable(t *testing.T) {
 }
 
 func TestEvalZonemapFilter(t *testing.T) {
-	m := mpool.MustNewNoFixed(t.Name())
+	m := mpool.MustNew(t.Name())
 	proc := testutil.NewProcessWithMPool(t, "", m)
 	type myCase = struct {
 		exprs  []*plan.Expr
