@@ -237,9 +237,9 @@ func TestOperatorStats_String(t *testing.T) {
 				DiskIO:           7888601,
 				InputBlocks:      153,
 				ScanBytes:        19969024,
-				ReadSize:         16000000,  // 15.26 MiB
-				S3ReadSize:       15000000,  // 14.31 MiB
-				DiskReadSize:     1000000,   // 976.56 KiB
+				ReadSize:         16000000, // 15.26 MiB
+				S3ReadSize:       15000000, // 14.31 MiB
+				DiskReadSize:     1000000,  // 976.56 KiB
 				WrittenRows:      12,
 				DeletedRows:      12,
 				S3List:           2,
@@ -248,14 +248,14 @@ func TestOperatorStats_String(t *testing.T) {
 				S3Get:            2,
 				S3Delete:         2,
 				S3DeleteMul:      2,
-				CacheRead:        428,       // Should not appear in output
-				CacheHit:         428,       // Should not appear in output
-				CacheMemoryRead:  428,       // Should not appear in output
-				CacheMemoryHit:   428,       // Should not appear in output
-				CacheDiskRead:    428,       // Should not appear in output
-				CacheDiskHit:     428,       // Should not appear in output
-				CacheRemoteRead:  428,       // Should not appear in output
-				CacheRemoteHit:   428,       // Should not appear in output
+				CacheRead:        428, // Should not appear in output
+				CacheHit:         428, // Should not appear in output
+				CacheMemoryRead:  428, // Should not appear in output
+				CacheMemoryHit:   428, // Should not appear in output
+				CacheDiskRead:    428, // Should not appear in output
+				CacheDiskHit:     428, // Should not appear in output
+				CacheRemoteRead:  428, // Should not appear in output
+				CacheRemoteHit:   428, // Should not appear in output
 				OperatorMetrics: map[MetricType]int64{
 					OpScanTime: 452,
 				},
@@ -331,7 +331,7 @@ func TestOperatorStats_String(t *testing.T) {
 				DiskIO:           0,
 				InputBlocks:      76,
 				ScanBytes:        7471104,
-				ReadSize:         343050,   // 335.01 KiB
+				ReadSize:         343050, // 335.01 KiB
 				S3ReadSize:       0,
 				DiskReadSize:     0,
 				WrittenRows:      0,
@@ -342,10 +342,10 @@ func TestOperatorStats_String(t *testing.T) {
 				S3Get:            0,
 				S3Delete:         0,
 				S3DeleteMul:      0,
-				CacheRead:        228,      // Should not appear
-				CacheHit:         228,      // Should not appear
-				CacheMemoryRead:  228,      // Should not appear
-				CacheMemoryHit:   228,      // Should not appear
+				CacheRead:        228, // Should not appear
+				CacheHit:         228, // Should not appear
+				CacheMemoryRead:  228, // Should not appear
+				CacheMemoryHit:   228, // Should not appear
 				CacheDiskRead:    0,
 				CacheDiskHit:     0,
 				CacheRemoteRead:  0,
@@ -377,9 +377,9 @@ func TestOperatorStats_String(t *testing.T) {
 				DiskIO:           0,
 				InputBlocks:      100,
 				ScanBytes:        100 * 1024 * 1024,
-				ReadSize:         50 * 1024 * 1024,   // 50 MiB
-				S3ReadSize:       30 * 1024 * 1024,   // 30 MiB
-				DiskReadSize:     20 * 1024 * 1024,   // 20 MiB
+				ReadSize:         50 * 1024 * 1024, // 50 MiB
+				S3ReadSize:       30 * 1024 * 1024, // 30 MiB
+				DiskReadSize:     20 * 1024 * 1024, // 20 MiB
 				WrittenRows:      0,
 				DeletedRows:      0,
 				S3List:           0,
@@ -388,14 +388,14 @@ func TestOperatorStats_String(t *testing.T) {
 				S3Get:            0,
 				S3Delete:         0,
 				S3DeleteMul:      0,
-				CacheRead:        1000,    // Should not appear
-				CacheHit:         1000,    // Should not appear
-				CacheMemoryRead:  500,     // Should not appear
-				CacheMemoryHit:   500,     // Should not appear
-				CacheDiskRead:    300,     // Should not appear
-				CacheDiskHit:     300,     // Should not appear
-				CacheRemoteRead:  200,     // Should not appear
-				CacheRemoteHit:   200,     // Should not appear
+				CacheRead:        1000, // Should not appear
+				CacheHit:         1000, // Should not appear
+				CacheMemoryRead:  500,  // Should not appear
+				CacheMemoryHit:   500,  // Should not appear
+				CacheDiskRead:    300,  // Should not appear
+				CacheDiskHit:     300,  // Should not appear
+				CacheRemoteRead:  200,  // Should not appear
+				CacheRemoteHit:   200,  // Should not appear
 				OperatorMetrics:  nil,
 			},
 			// SpillSize is 0, so it should not appear
@@ -422,9 +422,9 @@ func TestOperatorStats_String(t *testing.T) {
 				DiskIO:           0,
 				InputBlocks:      1000,
 				ScanBytes:        10 * 1024 * 1024 * 1024,
-				ReadSize:         5 * 1024 * 1024 * 1024,   // 5 GiB
-				S3ReadSize:       3 * 1024 * 1024 * 1024,   // 3 GiB
-				DiskReadSize:     2 * 1024 * 1024 * 1024,   // 2 GiB
+				ReadSize:         5 * 1024 * 1024 * 1024, // 5 GiB
+				S3ReadSize:       3 * 1024 * 1024 * 1024, // 3 GiB
+				DiskReadSize:     2 * 1024 * 1024 * 1024, // 2 GiB
 				WrittenRows:      0,
 				DeletedRows:      0,
 				S3List:           0,
@@ -467,8 +467,8 @@ func TestOperatorStats_String(t *testing.T) {
 				DiskIO:           0,
 				InputBlocks:      1,
 				ScanBytes:        1024 * 1024,
-				ReadSize:         512,        // 512 bytes
-				S3ReadSize:       10 * 1024,  // 10 KiB
+				ReadSize:         512,         // 512 bytes
+				S3ReadSize:       10 * 1024,   // 10 KiB
 				DiskReadSize:     1024 * 1024, // 1 MiB
 				WrittenRows:      0,
 				DeletedRows:      0,
@@ -518,19 +518,19 @@ func TestOperatorStats_String(t *testing.T) {
 				WrittenRows:      0,
 				DeletedRows:      0,
 				S3List:           0,
-				S3Head:         0,
+				S3Head:           0,
 				S3Put:            0,
 				S3Get:            0,
 				S3Delete:         0,
 				S3DeleteMul:      0,
-				CacheRead:        1000,    // Non-zero, but should NOT appear
-				CacheHit:         800,     // Non-zero, but should NOT appear
-				CacheMemoryRead:  500,     // Non-zero, but should NOT appear
-				CacheMemoryHit:   400,     // Non-zero, but should NOT appear
-				CacheDiskRead:    300,     // Non-zero, but should NOT appear
-				CacheDiskHit:     200,     // Non-zero, but should NOT appear
-				CacheRemoteRead:  100,     // Non-zero, but should NOT appear
-				CacheRemoteHit:   50,      // Non-zero, but should NOT appear
+				CacheRead:        1000, // Non-zero, but should NOT appear
+				CacheHit:         800,  // Non-zero, but should NOT appear
+				CacheMemoryRead:  500,  // Non-zero, but should NOT appear
+				CacheMemoryHit:   400,  // Non-zero, but should NOT appear
+				CacheDiskRead:    300,  // Non-zero, but should NOT appear
+				CacheDiskHit:     200,  // Non-zero, but should NOT appear
+				CacheRemoteRead:  100,  // Non-zero, but should NOT appear
+				CacheRemoteHit:   50,   // Non-zero, but should NOT appear
 				OperatorMetrics:  nil,
 			},
 			// Verify that no Cache* fields appear in output

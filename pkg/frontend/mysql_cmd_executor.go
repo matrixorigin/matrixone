@@ -3621,10 +3621,10 @@ func buildErrorJsonPlan(buffer *bytes.Buffer, uuid uuid.UUID, errcode uint16, ms
 }
 
 type jsonPlanHandler struct {
-	jsonBytes  []byte
-	statsBytes statistic.StatsArray
-	stats      motrace.Statistic
-	buffer     *bytes.Buffer
+	jsonBytes   []byte
+	statsBytes  statistic.StatsArray
+	stats       motrace.Statistic
+	buffer      *bytes.Buffer
 	marshalPlan *models.ExplainData // Store ExplainData reference to generate text output
 }
 
@@ -3653,10 +3653,10 @@ func (h *jsonPlanHandler) Marshal(ctx context.Context) []byte {
 		// Get total execution time from ExecutionDuration
 		totalExecTime := h.marshalPlan.NewPlanStats.ExecuteStage.ExecutionDuration
 		longQueryThreshold := motrace.GetLongQueryTime()
-		
+
 		// If execution time > (5s + longQueryThreshold) or > 3x longQueryThreshold, include Physical Plan
 		includePhysicalPlan := totalExecTime > (5*time.Second+longQueryThreshold) || totalExecTime > 3*longQueryThreshold
-		
+
 		var phyplanText string
 		if includePhysicalPlan {
 			// Generate full analyze mode text output including Physical Plan

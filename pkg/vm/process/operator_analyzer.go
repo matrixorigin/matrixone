@@ -415,7 +415,7 @@ func (ps *OperatorStats) String() string {
 		ps.OutputRows,
 		common.FormatBytes(ps.InputSize),
 		ps.InputBlocks))
-	
+
 	// Only include non-zero values for OutSize, MemSize, SpillSize, ScanBytes
 	if ps.OutputSize > 0 {
 		sb.WriteString(fmt.Sprintf("OutSize:%s ", common.FormatBytes(ps.OutputSize)))

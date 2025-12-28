@@ -574,6 +574,7 @@ func ExtractPhyPlanGlbStats(plan *PhyPlan) GblStats {
 
 	return stats
 }
+
 // ExplainPhyPlanOverview generates only the Overview section of the physical plan
 func ExplainPhyPlanOverview(phy *PhyPlan, statsInfo *statistic.StatsInfo, option ExplainOption) string {
 	buffer := bytes.NewBuffer(make([]byte, 0, 300))
@@ -586,56 +587,56 @@ func ExplainPhyPlanOverview(phy *PhyPlan, statsInfo *statistic.StatsInfo, option
 // ExplainPhyPlanCompressed generates a compressed version with key information but reduced verbosity
 func ExplainPhyPlanCompressed(phy *PhyPlan, statsInfo *statistic.StatsInfo, option ExplainOption) string {
 	buffer := bytes.NewBuffer(make([]byte, 0, 1000))
-	
+
 	// Always include Overview
 	if len(phy.LocalScope) > 0 || len(phy.RemoteScope) > 0 {
 		explainResourceOverview(phy, statsInfo, option, buffer)
 	}
-	
+
 	buffer.WriteString("\nPhysical Plan Deployment (Compressed):\n")
-	
+
 	if len(phy.LocalScope) > 0 {
 		buffer.WriteString("LOCAL SCOPES:\n")
 		for i, scope := range phy.LocalScope {
 			explainPhyScopeCompressed(scope, i, 0, buffer)
 		}
 	}
-	
+
 	if len(phy.RemoteScope) > 0 {
 		buffer.WriteString("REMOTE SCOPES:\n")
 		for i, scope := range phy.RemoteScope {
 			explainPhyScopeCompressed(scope, i, 0, buffer)
 		}
 	}
-	
+
 	return buffer.String()
 }
 
 // explainPhyScopeCompressed generates compressed scope information with key metrics only
 func explainPhyScopeCompressed(scope PhyScope, scopeIdx int, depth int, buffer *bytes.Buffer) {
 	indent := strings.Repeat("  ", depth)
-	
+
 	// Scope header with key info
 	buffer.WriteString(fmt.Sprintf("%sScope %d (%s, mcpu: %d", indent, scopeIdx+1, scope.Magic, scope.Mcpu))
 	if len(scope.Receiver) > 0 {
 		buffer.WriteString(fmt.Sprintf(", Receiver: %v", scope.Receiver))
 	}
 	buffer.WriteString(")\n")
-	
+
 	// DataSource if present
 	if scope.DataSource != nil && scope.DataSource.SchemaName != "" {
-		buffer.WriteString(fmt.Sprintf("%s  DataSource: %s.%s%s\n", 
-			indent, scope.DataSource.SchemaName, scope.DataSource.RelationName, 
+		buffer.WriteString(fmt.Sprintf("%s  DataSource: %s.%s%s\n",
+			indent, scope.DataSource.SchemaName, scope.DataSource.RelationName,
 			formatColumns(scope.DataSource.Attributes)))
 	}
-	
+
 	// Pipeline - only show operators with significant metrics
 	if scope.RootOperator != nil {
 		buffer.WriteString(fmt.Sprintf("%s  Pipeline: ", indent))
 		explainOperatorChainCompressed(scope.RootOperator, buffer)
 		buffer.WriteString("\n")
 	}
-	
+
 	// PreScopes - recursively but more compact
 	if len(scope.PreScopes) > 0 {
 		buffer.WriteString(fmt.Sprintf("%s  PreScopes: %d scope(s)\n", indent, len(scope.PreScopes)))
@@ -650,7 +651,7 @@ func explainOperatorChainCompressed(op *PhyOperator, buffer *bytes.Buffer) {
 	if op == nil {
 		return
 	}
-	
+
 	// Show operator with key metrics only
 	metrics := ""
 	if op.OpStats != nil {
@@ -673,9 +674,9 @@ func explainOperatorChainCompressed(op *PhyOperator, buffer *bytes.Buffer) {
 			metrics = " [" + strings.Join(parts, " ") + "]"
 		}
 	}
-	
+
 	buffer.WriteString(fmt.Sprintf("%s%s", op.OpName, metrics))
-	
+
 	// Show child operators in chain
 	if len(op.Children) > 0 {
 		buffer.WriteString(" → ")
