@@ -48,3 +48,42 @@ func ConvertBytesToHumanReadable(bytes int64) string {
 	}
 	return fmt.Sprintf("%.2f TiB", num/TiB)
 }
+
+// FormatBytes formats bytes to human-readable string using decimal units (B, KB, MB, GB, TB)
+// Examples: 0 -> "0B", 1386624 -> "1.39MB", 1024 -> "1.02KB"
+// This uses decimal units (1000-based) instead of 1024-based)
+func FormatBytes(bytes int64) string {
+	if bytes == 0 {
+		return "0B"
+	}
+	num := float64(bytes)
+	if bytes < THOUSAND {
+		return fmt.Sprintf("%dB", bytes)
+	}
+	if bytes < MILLION {
+		return fmt.Sprintf("%.2fKB", num/THOUSAND)
+	}
+	if bytes < BILLION {
+		return fmt.Sprintf("%.2fMB", num/MILLION)
+	}
+	if bytes < TRILLION {
+		return fmt.Sprintf("%.2fGB", num/BILLION)
+	}
+	return fmt.Sprintf("%.2fTB", num/TRILLION)
+}
+
+// FormatDuration formats nanoseconds to human-readable string (ms or s)
+// Examples: 0 -> "0ms", 21625539 -> "21.63ms", 1000000000 -> "1.00s"
+func FormatDuration(ns int64) string {
+	if ns == 0 {
+		return "0ms"
+	}
+	const (
+		nanosPerMilli = 1000000
+		nanosPerSec   = 1000000000
+	)
+	if ns < nanosPerSec {
+		return fmt.Sprintf("%.2fms", float64(ns)/nanosPerMilli)
+	}
+	return fmt.Sprintf("%.2fs", float64(ns)/nanosPerSec)
+}

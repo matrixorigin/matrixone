@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -68,11 +69,11 @@ func explainResourceOverview(phy *PhyPlan, statsInfo *statistic.StatsInfo, optio
 	if option == VerboseOption || option == AnalyzeOption {
 		gblStats := ExtractPhyPlanGlbStats(phy)
 		buffer.WriteString("Overview:\n")
-		buffer.WriteString(fmt.Sprintf("\tMemoryUsage:%dB,  SpillSize:%dB,  DiskI/O:%dB,  NewWorkI/O:%dB,  RetryTime: %v",
-			gblStats.MemorySize,
-			gblStats.SpillSize,
-			gblStats.DiskIOSize,
-			gblStats.NetWorkSize,
+		buffer.WriteString(fmt.Sprintf("\tMemoryUsage:%s,  SpillSize:%s,  DiskI/O:%s,  NewWorkI/O:%s,  RetryTime: %v",
+			common.FormatBytes(gblStats.MemorySize),
+			common.FormatBytes(gblStats.SpillSize),
+			common.FormatBytes(gblStats.DiskIOSize),
+			common.FormatBytes(gblStats.NetWorkSize),
 			phy.RetryTime,
 		))
 
@@ -93,23 +94,23 @@ func explainResourceOverview(phy *PhyPlan, statsInfo *statistic.StatsInfo, optio
 				(statsInfo.IOAccessTimeConsumption + statsInfo.S3FSPrefetchFileIOMergerTimeConsumption)
 
 			buffer.WriteString("\tCPU Usage: \n")
-			buffer.WriteString(fmt.Sprintf("\t\t- Total CPU Time: %dns \n", cpuTimeVal))
-			buffer.WriteString(fmt.Sprintf("\t\t- CPU Time Detail: Parse(%d)+BuildPlan(%d)+Compile(%d)+PhyExec(%d)+PrepareRun(%d)-PreRunWaitLock(%d)-PlanStatsIO(%d)-IOAccess(%d)-IOMerge(%d)\n",
-				statsInfo.ParseStage.ParseDuration,
-				statsInfo.PlanStage.PlanDuration,
-				statsInfo.CompileStage.CompileDuration,
-				gblStats.OperatorTimeConsumed,
-				gblStats.ScopePrepareTimeConsumed+statsInfo.PrepareRunStage.CompilePreRunOnceDuration,
-				statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock,
-				statsInfo.PlanStage.BuildPlanStatsIOConsumption,
-				statsInfo.IOAccessTimeConsumption,
-				statsInfo.S3FSPrefetchFileIOMergerTimeConsumption))
+			buffer.WriteString(fmt.Sprintf("\t\t- Total CPU Time: %s \n", common.FormatDuration(cpuTimeVal)))
+			buffer.WriteString(fmt.Sprintf("\t\t- CPU Time Detail: Parse(%s)+BuildPlan(%s)+Compile(%s)+PhyExec(%s)+PrepareRun(%s)-PreRunWaitLock(%s)-PlanStatsIO(%s)-IOAccess(%s)-IOMerge(%s)\n",
+				common.FormatDuration(int64(statsInfo.ParseStage.ParseDuration)),
+				common.FormatDuration(int64(statsInfo.PlanStage.PlanDuration)),
+				common.FormatDuration(int64(statsInfo.CompileStage.CompileDuration)),
+				common.FormatDuration(gblStats.OperatorTimeConsumed),
+				common.FormatDuration(gblStats.ScopePrepareTimeConsumed+statsInfo.PrepareRunStage.CompilePreRunOnceDuration),
+				common.FormatDuration(int64(statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock)),
+				common.FormatDuration(int64(statsInfo.PlanStage.BuildPlanStatsIOConsumption)),
+				common.FormatDuration(int64(statsInfo.IOAccessTimeConsumption)),
+				common.FormatDuration(int64(statsInfo.S3FSPrefetchFileIOMergerTimeConsumption))))
 			buffer.WriteString(fmt.Sprintf("\t\t- Permission Authentication Stats Array: %v \n", statsInfo.PermissionAuth))
 
 			//-------------------------------------------------------------------------------------------------------
 			if option == AnalyzeOption {
 				buffer.WriteString("\tQuery Build Plan Stage:\n")
-				buffer.WriteString(fmt.Sprintf("\t\t- CPU Time: %dns \n", int64(statsInfo.PlanStage.PlanDuration)-statsInfo.PlanStage.BuildPlanStatsIOConsumption))
+				buffer.WriteString(fmt.Sprintf("\t\t- CPU Time: %s \n", common.FormatDuration(int64(statsInfo.PlanStage.PlanDuration)-statsInfo.PlanStage.BuildPlanStatsIOConsumption)))
 				buffer.WriteString(fmt.Sprintf("\t\t- S3List:%d, S3Head:%d, S3Put:%d, S3Get:%d, S3Delete:%d, S3DeleteMul:%d\n",
 					statsInfo.PlanStage.BuildPlanS3Request.List,
 					statsInfo.PlanStage.BuildPlanS3Request.Head,
@@ -118,10 +119,10 @@ func explainResourceOverview(phy *PhyPlan, statsInfo *statistic.StatsInfo, optio
 					statsInfo.PlanStage.BuildPlanS3Request.Delete,
 					statsInfo.PlanStage.BuildPlanS3Request.DeleteMul,
 				))
-				buffer.WriteString(fmt.Sprintf("\t\t- Build Plan Duration: %dns \n", int64(statsInfo.PlanStage.PlanDuration)))
-				buffer.WriteString(fmt.Sprintf("\t\t- Call Stats Duration: %dns \n", statsInfo.PlanStage.BuildPlanStatsDuration))
-				buffer.WriteString(fmt.Sprintf("\t\t- Call StatsInCache Duration: %dns \n", statsInfo.PlanStage.BuildPlanStatsInCacheDuration))
-				buffer.WriteString(fmt.Sprintf("\t\t- Call Stats IO Consumption: %dns \n", statsInfo.PlanStage.BuildPlanStatsIOConsumption))
+				buffer.WriteString(fmt.Sprintf("\t\t- Build Plan Duration: %s \n", common.FormatDuration(int64(statsInfo.PlanStage.PlanDuration))))
+				buffer.WriteString(fmt.Sprintf("\t\t- Call Stats Duration: %s \n", common.FormatDuration(int64(statsInfo.PlanStage.BuildPlanStatsDuration))))
+				buffer.WriteString(fmt.Sprintf("\t\t- Call StatsInCache Duration: %s \n", common.FormatDuration(int64(statsInfo.PlanStage.BuildPlanStatsInCacheDuration))))
+				buffer.WriteString(fmt.Sprintf("\t\t- Call Stats IO Consumption: %s \n", common.FormatDuration(int64(statsInfo.PlanStage.BuildPlanStatsIOConsumption))))
 				buffer.WriteString(fmt.Sprintf("\t\t- Call Stats S3List:%d, S3Head:%d, S3Put:%d, S3Get:%d, S3Delete:%d, S3DeleteMul:%d\n",
 					statsInfo.PlanStage.BuildPlanStatsS3.List,
 					statsInfo.PlanStage.BuildPlanStatsS3.Head,
@@ -133,7 +134,7 @@ func explainResourceOverview(phy *PhyPlan, statsInfo *statistic.StatsInfo, optio
 
 				//-------------------------------------------------------------------------------------------------------
 				buffer.WriteString("\tQuery Compile Stage:\n")
-				buffer.WriteString(fmt.Sprintf("\t\t- CPU Time: %dns \n", statsInfo.CompileStage.CompileDuration))
+				buffer.WriteString(fmt.Sprintf("\t\t- CPU Time: %s \n", common.FormatDuration(int64(statsInfo.CompileStage.CompileDuration))))
 				buffer.WriteString(fmt.Sprintf("\t\t- S3List:%d, S3Head:%d, S3Put:%d, S3Get:%d, S3Delete:%d, S3DeleteMul:%d\n",
 					statsInfo.CompileStage.CompileS3Request.List,
 					statsInfo.CompileStage.CompileS3Request.Head,
@@ -142,15 +143,15 @@ func explainResourceOverview(phy *PhyPlan, statsInfo *statistic.StatsInfo, optio
 					statsInfo.CompileStage.CompileS3Request.Delete,
 					statsInfo.CompileStage.CompileS3Request.DeleteMul,
 				))
-				buffer.WriteString(fmt.Sprintf("\t\t- Compile TableScan Duration: %dns \n", statsInfo.CompileStage.CompileTableScanDuration))
+				buffer.WriteString(fmt.Sprintf("\t\t- Compile TableScan Duration: %s \n", common.FormatDuration(int64(statsInfo.CompileStage.CompileTableScanDuration))))
 
 				//-------------------------------------------------------------------------------------------------------
 				buffer.WriteString("\tQuery Prepare Exec Stage:\n")
-				buffer.WriteString(fmt.Sprintf("\t\t- CPU Time: %dns \n", gblStats.ScopePrepareTimeConsumed+statsInfo.PrepareRunStage.CompilePreRunOnceDuration-statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock))
-				buffer.WriteString(fmt.Sprintf("\t\t- CompilePreRunOnce Duration: %dns \n", statsInfo.PrepareRunStage.CompilePreRunOnceDuration))
-				buffer.WriteString(fmt.Sprintf("\t\t- PreRunOnce WaitLock: %dns \n", statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock))
-				buffer.WriteString(fmt.Sprintf("\t\t- ScopePrepareTimeConsumed: %dns \n", gblStats.ScopePrepareTimeConsumed))
-				buffer.WriteString(fmt.Sprintf("\t\t- BuildReader Duration: %dns \n", statsInfo.PrepareRunStage.BuildReaderDuration))
+				buffer.WriteString(fmt.Sprintf("\t\t- CPU Time: %s \n", common.FormatDuration(gblStats.ScopePrepareTimeConsumed+statsInfo.PrepareRunStage.CompilePreRunOnceDuration-statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock)))
+				buffer.WriteString(fmt.Sprintf("\t\t- CompilePreRunOnce Duration: %s \n", common.FormatDuration(int64(statsInfo.PrepareRunStage.CompilePreRunOnceDuration))))
+				buffer.WriteString(fmt.Sprintf("\t\t- PreRunOnce WaitLock: %s \n", common.FormatDuration(int64(statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock))))
+				buffer.WriteString(fmt.Sprintf("\t\t- ScopePrepareTimeConsumed: %s \n", common.FormatDuration(gblStats.ScopePrepareTimeConsumed)))
+				buffer.WriteString(fmt.Sprintf("\t\t- BuildReader Duration: %s \n", common.FormatDuration(int64(statsInfo.PrepareRunStage.BuildReaderDuration))))
 				buffer.WriteString(fmt.Sprintf("\t\t- S3List:%d, S3Head:%d, S3Put:%d, S3Get:%d, S3Delete:%d, S3DeleteMul:%d\n",
 					statsInfo.PrepareRunStage.ScopePrepareS3Request.List,
 					statsInfo.PrepareRunStage.ScopePrepareS3Request.Head,
@@ -162,7 +163,7 @@ func explainResourceOverview(phy *PhyPlan, statsInfo *statistic.StatsInfo, optio
 
 				//-------------------------------------------------------------------------------------------------------
 				buffer.WriteString("\tQuery Execution Stage:\n")
-				buffer.WriteString(fmt.Sprintf("\t\t- CPU Time: %dns \n", gblStats.OperatorTimeConsumed))
+				buffer.WriteString(fmt.Sprintf("\t\t- CPU Time: %s \n", common.FormatDuration(gblStats.OperatorTimeConsumed)))
 				buffer.WriteString(fmt.Sprintf("\t\t- S3List:%d, S3Head:%d, S3Put:%d, S3Get:%d, S3Delete:%d, S3DeleteMul:%d\n",
 					gblStats.S3ListRequest,
 					gblStats.S3HeadRequest,
@@ -172,11 +173,11 @@ func explainResourceOverview(phy *PhyPlan, statsInfo *statistic.StatsInfo, optio
 					gblStats.S3DeleteMultiRequest,
 				))
 
-				buffer.WriteString(fmt.Sprintf("\t\t- MemoryUsage: %dB,  SpillSize: %dB,  DiskI/O: %dB,  NewWorkI/O:%dB\n",
-					gblStats.MemorySize,
-					gblStats.SpillSize,
-					gblStats.DiskIOSize,
-					gblStats.NetWorkSize,
+				buffer.WriteString(fmt.Sprintf("\t\t- MemoryUsage: %s,  SpillSize: %s,  DiskI/O: %s,  NewWorkI/O:%s\n",
+					common.FormatBytes(gblStats.MemorySize),
+					common.FormatBytes(gblStats.SpillSize),
+					common.FormatBytes(gblStats.DiskIOSize),
+					common.FormatBytes(gblStats.NetWorkSize),
 				))
 			}
 			//-------------------------------------------------------------------------------------------------------

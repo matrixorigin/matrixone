@@ -25,51 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 )
 
-const (
-	KB = 1000
-	MB = 1000 * KB
-	GB = 1000 * MB
-	TB = 1000 * GB
-)
-
-// formatBytes formats bytes to human-readable string using decimal units (B, KB, MB, GB, TB)
-// Examples: 0 -> "0B", 1386624 -> "1.39MB", 1024 -> "1.02KB"
-func formatBytes(bytes int64) string {
-	if bytes == 0 {
-		return "0B"
-	}
-	num := float64(bytes)
-	if bytes < KB {
-		return fmt.Sprintf("%dB", bytes)
-	}
-	if bytes < MB {
-		return fmt.Sprintf("%.2fKB", num/KB)
-	}
-	if bytes < GB {
-		return fmt.Sprintf("%.2fMB", num/MB)
-	}
-	if bytes < TB {
-		return fmt.Sprintf("%.2fGB", num/GB)
-	}
-	return fmt.Sprintf("%.2fTB", num/TB)
-}
-
-// formatDuration formats nanoseconds to human-readable string (ms or s)
-// Examples: 0 -> "0ms", 21625539 -> "21.63ms", 1000000000 -> "1.00s"
-func formatDuration(ns int64) string {
-	if ns == 0 {
-		return "0ms"
-	}
-	const (
-		nanosPerMilli = 1000000
-		nanosPerSec   = 1000000000
-	)
-	if ns < nanosPerSec {
-		return fmt.Sprintf("%.2fms", float64(ns)/nanosPerMilli)
-	}
-	return fmt.Sprintf("%.2fs", float64(ns)/nanosPerSec)
-}
-
 type MetricType int
 
 const (
@@ -458,16 +413,16 @@ func (ps *OperatorStats) String() string {
 		"SpillSize:%s "+
 		"ScanBytes:%s ",
 		ps.CallNum,
-		formatDuration(ps.TimeConsumed),
-		formatDuration(ps.WaitTimeConsumed),
+		common.FormatDuration(ps.TimeConsumed),
+		common.FormatDuration(ps.WaitTimeConsumed),
 		ps.InputRows,
 		ps.OutputRows,
-		formatBytes(ps.InputSize),
+		common.FormatBytes(ps.InputSize),
 		ps.InputBlocks,
-		formatBytes(ps.OutputSize),
-		formatBytes(ps.MemorySize),
-		formatBytes(ps.SpillSize),
-		formatBytes(ps.ScanBytes)))
+		common.FormatBytes(ps.OutputSize),
+		common.FormatBytes(ps.MemorySize),
+		common.FormatBytes(ps.SpillSize),
+		common.FormatBytes(ps.ScanBytes)))
 
 	// Collect S3 stats in a slice for efficient concatenation
 	dynamicAttrs := []string{}
@@ -523,7 +478,7 @@ func (ps *OperatorStats) String() string {
 			case OpWaitLockTime:
 				metricName = "WaitLockTime"
 			}
-			metricsStr += fmt.Sprintf("%s:%s ", metricName, formatDuration(v))
+			metricsStr += fmt.Sprintf("%s:%s ", metricName, common.FormatDuration(v))
 		}
 	}
 
