@@ -394,6 +394,9 @@ func (top *Top) getTopValue() ([]byte, bool) {
 	case types.T_enum:
 		v := vector.GetFixedAtNoTypeCheck[types.Enum](vec, x)
 		return types.EncodeEnum(&v), true
+	case types.T_year:
+		v := vector.GetFixedAtNoTypeCheck[types.MoYear](vec, x)
+		return types.EncodeMoYear(&v), true
 	}
 	return nil, false
 }

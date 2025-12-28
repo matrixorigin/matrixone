@@ -238,6 +238,14 @@ func DecodeEnum(v []byte) Enum {
 	return *(*Enum)(unsafe.Pointer(&v[0]))
 }
 
+func EncodeMoYear(v *MoYear) []byte {
+	return util.UnsafeToBytes(v)
+}
+
+func DecodeMoYear(v []byte) MoYear {
+	return *(*MoYear)(unsafe.Pointer(&v[0]))
+}
+
 func EncodeDecimal64(v *Decimal64) []byte {
 	return util.UnsafeToBytes(v)
 }

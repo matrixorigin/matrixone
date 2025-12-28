@@ -260,6 +260,8 @@ func (v *Vector) setupFromData() {
 			v.col.setFromVector(v)
 		case types.T_enum:
 			v.col.setFromVector(v)
+		case types.T_year:
+			v.col.setFromVector(v)
 		default:
 			panic(fmt.Sprintf("unknown type %s", v.typ.Oid))
 		}
@@ -383,6 +385,8 @@ func MakeAppendBytesFunc(vec *Vector) func([]byte, bool, *mpool.MPool) error {
 		return appendBytesToFixSized[types.Rowid](vec)
 	case types.T_Blockid:
 		return appendBytesToFixSized[types.Blockid](vec)
+	case types.T_year:
+		return appendBytesToFixSized[types.MoYear](vec)
 	}
 	panic(fmt.Sprintf("unexpected type: %s", vec.GetType().String()))
 }

@@ -223,6 +223,7 @@ const (
 	bitCode        = 0x51
 	uuidCode       = 0x52
 	objectIdCode   = 0x53
+	yearCode       = 0x54
 )
 
 var sizeLimits = []uint64{
