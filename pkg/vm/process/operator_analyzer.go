@@ -407,22 +407,28 @@ func (ps *OperatorStats) String() string {
 		"InRows:%d "+
 		"OutRows:%d "+
 		"InSize:%s "+
-		"InBlock:%d "+
-		"OutSize:%s "+
-		"MemSize:%s "+
-		"SpillSize:%s "+
-		"ScanBytes:%s ",
+		"InBlock:%d ",
 		ps.CallNum,
 		common.FormatDuration(ps.TimeConsumed),
 		common.FormatDuration(ps.WaitTimeConsumed),
 		ps.InputRows,
 		ps.OutputRows,
 		common.FormatBytes(ps.InputSize),
-		ps.InputBlocks,
-		common.FormatBytes(ps.OutputSize),
-		common.FormatBytes(ps.MemorySize),
-		common.FormatBytes(ps.SpillSize),
-		common.FormatBytes(ps.ScanBytes)))
+		ps.InputBlocks))
+	
+	// Only include non-zero values for OutSize, MemSize, SpillSize, ScanBytes
+	if ps.OutputSize > 0 {
+		sb.WriteString(fmt.Sprintf("OutSize:%s ", common.FormatBytes(ps.OutputSize)))
+	}
+	if ps.MemorySize > 0 {
+		sb.WriteString(fmt.Sprintf("MemSize:%s ", common.FormatBytes(ps.MemorySize)))
+	}
+	if ps.SpillSize > 0 {
+		sb.WriteString(fmt.Sprintf("SpillSize:%s ", common.FormatBytes(ps.SpillSize)))
+	}
+	if ps.ScanBytes > 0 {
+		sb.WriteString(fmt.Sprintf("ScanBytes:%s ", common.FormatBytes(ps.ScanBytes)))
+	}
 
 	// Collect S3 stats in a slice for efficient concatenation
 	dynamicAttrs := []string{}
@@ -452,11 +458,14 @@ func (ps *OperatorStats) String() string {
 	}
 	//---------------------------------------------------------------------------------------------
 	// ReadSize format: ReadSize=total|s3|disk (same as explain analyze)
-	// Always show ReadSize even if all values are 0, to match explain analyze format
-	dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("ReadSize=%s|%s|%s ",
-		common.ConvertBytesToHumanReadable(ps.ReadSize),
-		common.ConvertBytesToHumanReadable(ps.S3ReadSize),
-		common.ConvertBytesToHumanReadable(ps.DiskReadSize)))
+	// Only show ReadSize if at least one value is non-zero
+	// Use FormatBytes instead of ConvertBytesToHumanReadable to get "B" instead of "bytes"
+	if ps.ReadSize > 0 || ps.S3ReadSize > 0 || ps.DiskReadSize > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("ReadSize=%s|%s|%s ",
+			common.FormatBytes(ps.ReadSize),
+			common.FormatBytes(ps.S3ReadSize),
+			common.FormatBytes(ps.DiskReadSize)))
+	}
 
 	// Join and append S3 stats if any
 	if len(dynamicAttrs) > 0 {

@@ -262,13 +262,16 @@ func TestOperatorStats_String(t *testing.T) {
 			},
 			// Format: ReadSize=total|s3|disk (same as explain analyze)
 			// Cache stats should NOT appear
+			// OutSize is 0, so it should not appear
 			// NetworkIO and DiskIO are removed to avoid duplication with ReadSize
 			// Bytes and time are formatted: 0bytes -> 0B, 1386624bytes -> 1.39MB, 21625539ns -> 21.63ms
 			// Note: ScanTime 452ns = 0.000452ms, rounded to 0.00ms
-			want: " CallNum:154 TimeCost:54.45ms WaitTime:0ms InRows:1248064 OutRows:0 InSize:19.97MB InBlock:153 OutSize:0B MemSize:131.07KB SpillSize:131.07KB ScanBytes:19.97MB WrittenRows:12 DeletedRows:12 S3List:2 S3Head:2 S3Put:2 S3Get:2 S3Delete:2 S3DeleteMul:2 ReadSize=15.26 MiB|14.31 MiB|976.56 KiB ScanTime:0.00ms ",
+			// ReadSize uses FormatBytes (decimal units: MB, KB) instead of ConvertBytesToHumanReadable (binary units: MiB, KiB)
+			// 16000000 bytes = 16.00MB (decimal), 15000000 bytes = 15.00MB (decimal), 1000000 bytes = 1.00MB (decimal)
+			want: " CallNum:154 TimeCost:54.45ms WaitTime:0ms InRows:1248064 OutRows:0 InSize:19.97MB InBlock:153 MemSize:131.07KB SpillSize:131.07KB ScanBytes:19.97MB WrittenRows:12 DeletedRows:12 S3List:2 S3Head:2 S3Put:2 S3Get:2 S3Delete:2 S3DeleteMul:2 ReadSize=16.00MB|15.00MB|1.00MB ScanTime:0.00ms ",
 		},
 		{
-			name: "test02 - ReadSize format always shown even when all values are zero (matches explain analyze)",
+			name: "test02 - SpillSize and ReadSize are zero, so they should not appear",
 			fields: fields{
 				OperatorName:     "testOp",
 				CallNum:          10,
@@ -305,10 +308,11 @@ func TestOperatorStats_String(t *testing.T) {
 				CacheRemoteHit:   0,
 				OperatorMetrics:  nil,
 			},
-			// ReadSize format should always appear, even when all values are 0
+			// SpillSize is 0, so it should not appear
+			// ReadSize all values are 0, so it should not appear
 			// NetworkIO and DiskIO are removed to avoid duplication with ReadSize
 			// Bytes and time are formatted: 0bytes -> 0B, 1386624bytes -> 1.39MB, 21625539ns -> 21.63ms
-			want: " CallNum:10 TimeCost:1.00ms WaitTime:0ms InRows:100 OutRows:50 InSize:1.02KB InBlock:1 OutSize:512B MemSize:1.02KB SpillSize:0B ScanBytes:1.02KB ReadSize=0 bytes|0 bytes|0 bytes ",
+			want: " CallNum:10 TimeCost:1.00ms WaitTime:0ms InRows:100 OutRows:50 InSize:1.02KB InBlock:1 OutSize:512B MemSize:1.02KB ScanBytes:1.02KB ",
 		},
 		{
 			name: "test03 - ReadSize with KiB format (real-world example)",
@@ -348,10 +352,13 @@ func TestOperatorStats_String(t *testing.T) {
 				CacheRemoteHit:   0,
 				OperatorMetrics:  nil,
 			},
-			// Real-world example: ReadSize=335.01 KiB|0 bytes|0 bytes
+			// Real-world example: ReadSize=343.05KB|0B|0B
+			// SpillSize is 0, so it should not appear
 			// NetworkIO and DiskIO are removed to avoid duplication with ReadSize
 			// Bytes and time are formatted: 0bytes -> 0B, 1386624bytes -> 1.39MB, 21625539ns -> 21.63ms
-			want: " CallNum:77 TimeCost:1.35ms WaitTime:0ms InRows:622592 OutRows:622592 InSize:7.47MB InBlock:76 OutSize:7.47MB MemSize:196.61KB SpillSize:0B ScanBytes:7.47MB ReadSize=335.01 KiB|0 bytes|0 bytes ",
+			// ReadSize uses FormatBytes (0B) instead of ConvertBytesToHumanReadable (0 bytes)
+			// 343050 bytes = 343.05KB (decimal), not 335.01 KiB (binary)
+			want: " CallNum:77 TimeCost:1.35ms WaitTime:0ms InRows:622592 OutRows:622592 InSize:7.47MB InBlock:76 OutSize:7.47MB MemSize:196.61KB ScanBytes:7.47MB ReadSize=343.05KB|0B|0B ",
 		},
 		{
 			name: "test04 - ReadSize with MiB format",
@@ -391,9 +398,12 @@ func TestOperatorStats_String(t *testing.T) {
 				CacheRemoteHit:   200,     // Should not appear
 				OperatorMetrics:  nil,
 			},
+			// SpillSize is 0, so it should not appear
 			// NetworkIO and DiskIO are removed to avoid duplication with ReadSize
 			// Bytes and time are formatted: 0bytes -> 0B, 1386624bytes -> 1.39MB, 21625539ns -> 21.63ms
-			want: " CallNum:1 TimeCost:1.00ms WaitTime:0ms InRows:1000000 OutRows:1000000 InSize:104.86MB InBlock:100 OutSize:104.86MB MemSize:1.05MB SpillSize:0B ScanBytes:104.86MB ReadSize=50.00 MiB|30.00 MiB|20.00 MiB ",
+			// ReadSize uses FormatBytes (decimal units: MB) instead of ConvertBytesToHumanReadable (binary units: MiB)
+			// 50*1024*1024 bytes = 52.43MB (decimal), 30*1024*1024 = 31.46MB, 20*1024*1024 = 20.97MB
+			want: " CallNum:1 TimeCost:1.00ms WaitTime:0ms InRows:1000000 OutRows:1000000 InSize:104.86MB InBlock:100 OutSize:104.86MB MemSize:1.05MB ScanBytes:104.86MB ReadSize=52.43MB|31.46MB|20.97MB ",
 		},
 		{
 			name: "test05 - ReadSize with GiB format",
@@ -433,9 +443,12 @@ func TestOperatorStats_String(t *testing.T) {
 				CacheRemoteHit:   0,
 				OperatorMetrics:  nil,
 			},
+			// SpillSize is 0, so it should not appear
 			// NetworkIO and DiskIO are removed to avoid duplication with ReadSize
 			// Bytes and time are formatted: 0bytes -> 0B, 1386624bytes -> 1.39MB, 21625539ns -> 21.63ms
-			want: " CallNum:1 TimeCost:1.00ms WaitTime:0ms InRows:10000000 OutRows:10000000 InSize:10.74GB InBlock:1000 OutSize:10.74GB MemSize:1.07GB SpillSize:0B ScanBytes:10.74GB ReadSize=5.00 GiB|3.00 GiB|2.00 GiB ",
+			// ReadSize uses FormatBytes (decimal units: GB) instead of ConvertBytesToHumanReadable (binary units: GiB)
+			// 5*1024*1024*1024 bytes = 5.37GB (decimal), 3*1024*1024*1024 = 3.22GB, 2*1024*1024*1024 = 2.15GB
+			want: " CallNum:1 TimeCost:1.00ms WaitTime:0ms InRows:10000000 OutRows:10000000 InSize:10.74GB InBlock:1000 OutSize:10.74GB MemSize:1.07GB ScanBytes:10.74GB ReadSize=5.37GB|3.22GB|2.15GB ",
 		},
 		{
 			name: "test06 - ReadSize with mixed formats (bytes, KiB, MiB)",
@@ -475,9 +488,12 @@ func TestOperatorStats_String(t *testing.T) {
 				CacheRemoteHit:   0,
 				OperatorMetrics:  nil,
 			},
+			// SpillSize is 0, so it should not appear
 			// NetworkIO and DiskIO are removed to avoid duplication with ReadSize
 			// Bytes and time are formatted: 0bytes -> 0B, 1386624bytes -> 1.39MB, 21625539ns -> 21.63ms
-			want: " CallNum:1 TimeCost:1.00ms WaitTime:0ms InRows:1000 OutRows:1000 InSize:1.05MB InBlock:1 OutSize:1.05MB MemSize:1.02KB SpillSize:0B ScanBytes:1.05MB ReadSize=512 bytes|10.00 KiB|1.00 MiB ",
+			// ReadSize uses FormatBytes (decimal units: B, KB, MB) instead of ConvertBytesToHumanReadable (binary units: bytes, KiB, MiB)
+			// 512 bytes = 512B, 10*1024 = 10.24KB, 1024*1024 = 1.05MB
+			want: " CallNum:1 TimeCost:1.00ms WaitTime:0ms InRows:1000 OutRows:1000 InSize:1.05MB InBlock:1 OutSize:1.05MB MemSize:1.02KB ScanBytes:1.05MB ReadSize=512B|10.24KB|1.05MB ",
 		},
 		{
 			name: "test07 - Cache stats should NOT appear even with non-zero values",
@@ -518,9 +534,12 @@ func TestOperatorStats_String(t *testing.T) {
 				OperatorMetrics:  nil,
 			},
 			// Verify that no Cache* fields appear in output
+			// SpillSize is 0, so it should not appear
 			// NetworkIO and DiskIO are removed to avoid duplication with ReadSize
 			// Bytes and time are formatted: 0bytes -> 0B, 1386624bytes -> 1.39MB, 21625539ns -> 21.63ms
-			want: " CallNum:1 TimeCost:1.00ms WaitTime:0ms InRows:100 OutRows:100 InSize:1.02KB InBlock:1 OutSize:1.02KB MemSize:1.02KB SpillSize:0B ScanBytes:1.02KB ReadSize=1.00 KiB|512 bytes|256 bytes ",
+			// ReadSize uses FormatBytes (decimal units: B, KB) instead of ConvertBytesToHumanReadable (binary units: bytes, KiB)
+			// 1024 bytes = 1.02KB (decimal), 512 bytes = 512B, 256 bytes = 256B
+			want: " CallNum:1 TimeCost:1.00ms WaitTime:0ms InRows:100 OutRows:100 InSize:1.02KB InBlock:1 OutSize:1.02KB MemSize:1.02KB ScanBytes:1.02KB ReadSize=1.02KB|512B|256B ",
 		},
 	}
 	for _, tt := range tests {
