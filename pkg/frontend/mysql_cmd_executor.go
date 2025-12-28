@@ -3625,6 +3625,7 @@ type jsonPlanHandler struct {
 	statsBytes statistic.StatsArray
 	stats      motrace.Statistic
 	buffer     *bytes.Buffer
+	marshalPlan *models.ExplainData // Store ExplainData reference to generate text output
 }
 
 func NewJsonPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, ses FeSession, plan *plan2.Plan, phyPlan *models.PhyPlan, opts ...marshalPlanOptions) *jsonPlanHandler {
@@ -3632,10 +3633,11 @@ func NewJsonPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, ses Fe
 	jsonBytes := h.Marshal(ctx)
 	statsBytes, stats := h.Stats(ctx, ses)
 	return &jsonPlanHandler{
-		jsonBytes:  jsonBytes,
-		statsBytes: statsBytes,
-		stats:      stats,
-		buffer:     h.handoverBuffer(),
+		jsonBytes:   jsonBytes,
+		statsBytes:  statsBytes,
+		stats:       stats,
+		buffer:      h.handoverBuffer(),
+		marshalPlan: h.marshalPlan, // Store ExplainData reference
 	}
 }
 
@@ -3644,6 +3646,14 @@ func (h *jsonPlanHandler) Stats(ctx context.Context) (statistic.StatsArray, motr
 }
 
 func (h *jsonPlanHandler) Marshal(ctx context.Context) []byte {
+	// If marshalPlan is available and has physical plan, generate analyze mode text output
+	// Otherwise, return original JSON (for error cases or when plan is not available)
+	if h.marshalPlan != nil && (len(h.marshalPlan.PhyPlan.LocalScope) > 0 || len(h.marshalPlan.PhyPlan.RemoteScope) > 0) {
+		// Generate analyze mode text output using mo_explain_phy logic
+		phyplanText := models.ExplainPhyPlan(&h.marshalPlan.PhyPlan, &h.marshalPlan.NewPlanStats, models.AnalyzeOption)
+		return []byte(phyplanText)
+	}
+	// Fall back to original JSON for error cases or when physical plan is not available
 	return h.jsonBytes
 }
 
