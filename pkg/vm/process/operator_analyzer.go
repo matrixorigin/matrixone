@@ -25,6 +25,51 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 )
 
+const (
+	KB = 1000
+	MB = 1000 * KB
+	GB = 1000 * MB
+	TB = 1000 * GB
+)
+
+// formatBytes formats bytes to human-readable string using decimal units (B, KB, MB, GB, TB)
+// Examples: 0 -> "0B", 1386624 -> "1.39MB", 1024 -> "1.02KB"
+func formatBytes(bytes int64) string {
+	if bytes == 0 {
+		return "0B"
+	}
+	num := float64(bytes)
+	if bytes < KB {
+		return fmt.Sprintf("%dB", bytes)
+	}
+	if bytes < MB {
+		return fmt.Sprintf("%.2fKB", num/KB)
+	}
+	if bytes < GB {
+		return fmt.Sprintf("%.2fMB", num/MB)
+	}
+	if bytes < TB {
+		return fmt.Sprintf("%.2fGB", num/GB)
+	}
+	return fmt.Sprintf("%.2fTB", num/TB)
+}
+
+// formatDuration formats nanoseconds to human-readable string (ms or s)
+// Examples: 0 -> "0ms", 21625539 -> "21.63ms", 1000000000 -> "1.00s"
+func formatDuration(ns int64) string {
+	if ns == 0 {
+		return "0ms"
+	}
+	const (
+		nanosPerMilli = 1000000
+		nanosPerSec   = 1000000000
+	)
+	if ns < nanosPerSec {
+		return fmt.Sprintf("%.2fms", float64(ns)/nanosPerMilli)
+	}
+	return fmt.Sprintf("%.2fs", float64(ns)/nanosPerSec)
+}
+
 type MetricType int
 
 const (
@@ -402,27 +447,27 @@ func (ps *OperatorStats) String() string {
 	// Use strings.Builder for efficient string concatenation
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf(" CallNum:%d "+
-		"TimeCost:%dns "+
-		"WaitTime:%dns "+
+		"TimeCost:%s "+
+		"WaitTime:%s "+
 		"InRows:%d "+
 		"OutRows:%d "+
-		"InSize:%dbytes "+
+		"InSize:%s "+
 		"InBlock:%d "+
-		"OutSize:%dbytes "+
-		"MemSize:%dbytes "+
-		"SpillSize:%dbytes "+
-		"ScanBytes:%dbytes ",
+		"OutSize:%s "+
+		"MemSize:%s "+
+		"SpillSize:%s "+
+		"ScanBytes:%s ",
 		ps.CallNum,
-		ps.TimeConsumed,
-		ps.WaitTimeConsumed,
+		formatDuration(ps.TimeConsumed),
+		formatDuration(ps.WaitTimeConsumed),
 		ps.InputRows,
 		ps.OutputRows,
-		ps.InputSize,
+		formatBytes(ps.InputSize),
 		ps.InputBlocks,
-		ps.OutputSize,
-		ps.MemorySize,
-		ps.SpillSize,
-		ps.ScanBytes))
+		formatBytes(ps.OutputSize),
+		formatBytes(ps.MemorySize),
+		formatBytes(ps.SpillSize),
+		formatBytes(ps.ScanBytes)))
 
 	// Collect S3 stats in a slice for efficient concatenation
 	dynamicAttrs := []string{}
@@ -478,7 +523,7 @@ func (ps *OperatorStats) String() string {
 			case OpWaitLockTime:
 				metricName = "WaitLockTime"
 			}
-			metricsStr += fmt.Sprintf("%s:%dns ", metricName, v)
+			metricsStr += fmt.Sprintf("%s:%s ", metricName, formatDuration(v))
 		}
 	}
 
