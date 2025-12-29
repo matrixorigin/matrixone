@@ -1561,16 +1561,21 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	stats.Cost = stats.TableCnt * blockSel
 	stats.BlockNum = int32(float64(s.BlockNumber)*blockSel) + 1
 	// estimate average row size from collected table stats: sum(SizeMap)/TableCnt
-	// SizeMap stores approximate persisted bytes per column; divide by total rows to get bytes/row
+	// SizeMap stores approximate persisted bytes per column (using OriginSize); divide by total rows to get bytes/row
 	{
 		var totalSize uint64
 		for _, v := range s.SizeMap {
 			totalSize += v
 		}
-		if stats.TableCnt > 0 {
+		if stats.TableCnt > 0 && totalSize > 0 {
 			stats.Rowsize = float64(totalSize) / stats.TableCnt
 		} else {
-			stats.Rowsize = 0
+			// Fallback: use table definition to estimate row size when SizeMap is empty or TableCnt is 0
+			if node.TableDef != nil {
+				stats.Rowsize = GetRowSizeFromTableDef(node.TableDef, true) * 0.8
+			} else {
+				stats.Rowsize = 0
+			}
 		}
 	}
 	return stats

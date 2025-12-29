@@ -669,8 +669,9 @@ func collectTableStats(
 				info.MaxNDVs[idx] = columnNDV
 				info.NDVinMinObject[idx] = columnNDV
 				info.NDVinMaxObject[idx] = columnNDV
-				info.ColumnSize[idx] = int64(meta.BlockHeader().ZoneMapArea().Length() +
-					meta.BlockHeader().BFExtent().Length() + columnMeta.Location().Length())
+				// Use OriginSize() instead of Length() for accurate data size estimation
+				// ZoneMapArea and BFExtent are block-level metadata, not column-level, so they are excluded
+				info.ColumnSize[idx] = int64(columnMeta.Location().OriginSize())
 				if info.ColumnNDVs[idx] > 100 || info.ColumnNDVs[idx] > 0.1*float64(meta.BlockHeader().Rows()) {
 					switch info.DataTypes[idx].Oid {
 					case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_time, types.T_timestamp, types.T_date, types.T_datetime, types.T_decimal64, types.T_decimal128:
@@ -730,7 +731,8 @@ func collectTableStats(
 					// Same row count as current min, but this column has lower NDV
 					info.NDVinMinObject[idx] = columnNDV
 				}
-				info.ColumnSize[idx] += int64(columnMeta.Location().Length())
+				// Use OriginSize() instead of Length() for accurate data size estimation
+				info.ColumnSize[idx] += int64(columnMeta.Location().OriginSize())
 				if info.ShuffleRanges[idx] != nil {
 					switch info.DataTypes[idx].Oid {
 					case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_time, types.T_timestamp, types.T_date, types.T_datetime, types.T_decimal64, types.T_decimal128:
