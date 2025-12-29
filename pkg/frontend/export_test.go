@@ -24,9 +24,11 @@ import (
 	"github.com/smartystreets/goconvey/convey"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
 
 var colName1, colName2 = "DATABASE()", "VARIABLE_VALUE"
@@ -303,6 +305,139 @@ func Test_exportDataToCSVFile(t *testing.T) {
 	})
 }
 
+func Test_getExportFormat(t *testing.T) {
+	convey.Convey("getExportFormat returns correct format", t, func() {
+		// Test default format (empty string returns "csv")
+		ep := &ExportConfig{
+			userConfig: &tree.ExportParam{
+				ExportFormat: "",
+			},
+		}
+		convey.So(ep.getExportFormat(), convey.ShouldEqual, "csv")
+
+		// Test explicit csv format
+		ep.userConfig.ExportFormat = "csv"
+		convey.So(ep.getExportFormat(), convey.ShouldEqual, "csv")
+
+		// Test jsonline format
+		ep.userConfig.ExportFormat = "jsonline"
+		convey.So(ep.getExportFormat(), convey.ShouldEqual, "jsonline")
+
+		// Test parquet format
+		ep.userConfig.ExportFormat = "parquet"
+		convey.So(ep.getExportFormat(), convey.ShouldEqual, "parquet")
+	})
+}
+
+func Test_vectorValueToJSON(t *testing.T) {
+	mp := mpool.MustNewZero()
+	convey.Convey("vectorValueToJSON converts types correctly", t, func() {
+		// Test bool type
+		convey.Convey("bool type", func() {
+			vec := testutil.NewVector(1, types.T_bool.ToType(), mp, false, []bool{true})
+			val, err := vectorValueToJSON(vec, 0, nil, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, true)
+		})
+
+		// Test int8 type
+		convey.Convey("int8 type", func() {
+			vec := testutil.NewVector(1, types.T_int8.ToType(), mp, false, []int8{42})
+			val, err := vectorValueToJSON(vec, 0, nil, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, int8(42))
+		})
+
+		// Test int16 type
+		convey.Convey("int16 type", func() {
+			vec := testutil.NewVector(1, types.T_int16.ToType(), mp, false, []int16{1234})
+			val, err := vectorValueToJSON(vec, 0, nil, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, int16(1234))
+		})
+
+		// Test int32 type
+		convey.Convey("int32 type", func() {
+			vec := testutil.NewVector(1, types.T_int32.ToType(), mp, false, []int32{123456})
+			val, err := vectorValueToJSON(vec, 0, nil, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, int32(123456))
+		})
+
+		// Test int64 type
+		convey.Convey("int64 type", func() {
+			vec := testutil.NewVector(1, types.T_int64.ToType(), mp, false, []int64{1234567890})
+			val, err := vectorValueToJSON(vec, 0, nil, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, int64(1234567890))
+		})
+
+		// Test uint8 type
+		convey.Convey("uint8 type", func() {
+			vec := testutil.NewVector(1, types.T_uint8.ToType(), mp, false, []uint8{255})
+			val, err := vectorValueToJSON(vec, 0, nil, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, uint8(255))
+		})
+
+		// Test uint16 type
+		convey.Convey("uint16 type", func() {
+			vec := testutil.NewVector(1, types.T_uint16.ToType(), mp, false, []uint16{65535})
+			val, err := vectorValueToJSON(vec, 0, nil, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, uint16(65535))
+		})
+
+		// Test uint32 type
+		convey.Convey("uint32 type", func() {
+			vec := testutil.NewVector(1, types.T_uint32.ToType(), mp, false, []uint32{4294967295})
+			val, err := vectorValueToJSON(vec, 0, nil, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, uint32(4294967295))
+		})
+
+		// Test uint64 type
+		convey.Convey("uint64 type", func() {
+			vec := testutil.NewVector(1, types.T_uint64.ToType(), mp, false, []uint64{18446744073709551615})
+			val, err := vectorValueToJSON(vec, 0, nil, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, uint64(18446744073709551615))
+		})
+
+		// Test float32 type
+		convey.Convey("float32 type", func() {
+			vec := testutil.NewVector(1, types.T_float32.ToType(), mp, false, []float32{3.14})
+			val, err := vectorValueToJSON(vec, 0, nil, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, float32(3.14))
+		})
+
+		// Test float64 type
+		convey.Convey("float64 type", func() {
+			vec := testutil.NewVector(1, types.T_float64.ToType(), mp, false, []float64{3.14159265359})
+			val, err := vectorValueToJSON(vec, 0, nil, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, 3.14159265359)
+		})
+
+		// Test varchar type
+		convey.Convey("varchar type", func() {
+			vec := testutil.NewVector(1, types.T_varchar.ToType(), mp, false, []string{"hello world"})
+			val, err := vectorValueToJSON(vec, 0, nil, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, "hello world")
+		})
+
+		// Test date type
+		convey.Convey("date type", func() {
+			vec := testutil.NewVector(1, types.T_date.ToType(), mp, false, []string{"2023-12-25"})
+			val, err := vectorValueToJSON(vec, 0, nil, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, "2023-12-25")
+		})
+	})
+}
+
 func TestEscapeJSONControl(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -389,4 +524,579 @@ func TestEscapeJSONControl(t *testing.T) {
 			}
 		})
 	}
+}
+
+func Test_getExportFilePath(t *testing.T) {
+	tests := []struct {
+		name     string
+		filename string
+		fileCnt  uint
+		expected string
+	}{
+		// Legacy behavior: no format specifier
+		{
+			name:     "no format specifier, fileCnt 0",
+			filename: "output.csv",
+			fileCnt:  0,
+			expected: "output.csv",
+		},
+		{
+			name:     "no format specifier, fileCnt 1",
+			filename: "output.csv",
+			fileCnt:  1,
+			expected: "output.csv.1",
+		},
+		{
+			name:     "no format specifier, fileCnt 10",
+			filename: "output.csv",
+			fileCnt:  10,
+			expected: "output.csv.10",
+		},
+
+		// New behavior: %d format specifier
+		{
+			name:     "simple %d, fileCnt 0",
+			filename: "data_%d.csv",
+			fileCnt:  0,
+			expected: "data_0.csv",
+		},
+		{
+			name:     "simple %d, fileCnt 1",
+			filename: "data_%d.csv",
+			fileCnt:  1,
+			expected: "data_1.csv",
+		},
+		{
+			name:     "simple %d, fileCnt 9999",
+			filename: "data_%d.parquet",
+			fileCnt:  9999,
+			expected: "data_9999.parquet",
+		},
+
+		// Padded format specifier: %05d
+		{
+			name:     "%05d padding, fileCnt 0",
+			filename: "data_%05d.parquet",
+			fileCnt:  0,
+			expected: "data_00000.parquet",
+		},
+		{
+			name:     "%05d padding, fileCnt 1",
+			filename: "data_%05d.parquet",
+			fileCnt:  1,
+			expected: "data_00001.parquet",
+		},
+		{
+			name:     "%05d padding, fileCnt 12345",
+			filename: "data_%05d.parquet",
+			fileCnt:  12345,
+			expected: "data_12345.parquet",
+		},
+		{
+			name:     "%05d padding, fileCnt exceeds width",
+			filename: "data_%05d.parquet",
+			fileCnt:  123456,
+			expected: "data_123456.parquet",
+		},
+
+		// Other padding widths
+		{
+			name:     "%03d padding",
+			filename: "file_%03d.jsonl",
+			fileCnt:  7,
+			expected: "file_007.jsonl",
+		},
+		{
+			name:     "%010d zero padding",
+			filename: "file_%010d.csv",
+			fileCnt:  42,
+			expected: "file_0000000042.csv",
+		},
+
+		// Stage URL with format specifier
+		{
+			name:     "stage URL with %05d",
+			filename: "stage://bucket/data_%05d.parquet",
+			fileCnt:  1,
+			expected: "stage://bucket/data_00001.parquet",
+		},
+
+		// Multiple path components
+		{
+			name:     "path with directories",
+			filename: "/path/to/output_%04d.csv",
+			fileCnt:  99,
+			expected: "/path/to/output_0099.csv",
+		},
+
+		// Edge case: % but not a valid format specifier (should use legacy behavior)
+		{
+			name:     "percent sign but not format specifier",
+			filename: "file_100%.csv",
+			fileCnt:  1,
+			expected: "file_100%.csv.1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := getExportFilePath(tt.filename, tt.fileCnt)
+			if result != tt.expected {
+				t.Errorf("getExportFilePath(%q, %d) = %q, want %q",
+					tt.filename, tt.fileCnt, result, tt.expected)
+			}
+		})
+	}
+}
+
+func Test_getEffectiveMaxFileSize(t *testing.T) {
+	tests := []struct {
+		name        string
+		maxFileSize uint64
+		splitSize   uint64
+		expected    uint64
+	}{
+		{
+			name:        "both zero",
+			maxFileSize: 0,
+			splitSize:   0,
+			expected:    0,
+		},
+		{
+			name:        "only MaxFileSize set",
+			maxFileSize: 1024 * 1024, // 1MB
+			splitSize:   0,
+			expected:    1024 * 1024,
+		},
+		{
+			name:        "only SplitSize set",
+			maxFileSize: 0,
+			splitSize:   10 * 1024 * 1024 * 1024, // 10GB
+			expected:    10 * 1024 * 1024 * 1024,
+		},
+		{
+			name:        "SplitSize takes precedence over MaxFileSize",
+			maxFileSize: 1024 * 1024,             // 1MB
+			splitSize:   10 * 1024 * 1024 * 1024, // 10GB
+			expected:    10 * 1024 * 1024 * 1024,
+		},
+		{
+			name:        "SplitSize smaller than MaxFileSize",
+			maxFileSize: 10 * 1024 * 1024 * 1024, // 10GB
+			splitSize:   1024 * 1024,             // 1MB
+			expected:    1024 * 1024,             // SplitSize wins
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ep := &ExportConfig{
+				userConfig: &tree.ExportParam{
+					MaxFileSize: tt.maxFileSize,
+					SplitSize:   tt.splitSize,
+				},
+			}
+			result := getEffectiveMaxFileSize(ep)
+			if result != tt.expected {
+				t.Errorf("getEffectiveMaxFileSize() = %d, want %d", result, tt.expected)
+			}
+		})
+	}
+}
+
+func Test_buildParquetNode(t *testing.T) {
+	tests := []struct {
+		name     string
+		mysqlTyp defines.MysqlType
+	}{
+		{"bool", defines.MYSQL_TYPE_BOOL},
+		{"tiny", defines.MYSQL_TYPE_TINY},
+		{"short", defines.MYSQL_TYPE_SHORT},
+		{"int24", defines.MYSQL_TYPE_INT24},
+		{"long", defines.MYSQL_TYPE_LONG},
+		{"longlong", defines.MYSQL_TYPE_LONGLONG},
+		{"float", defines.MYSQL_TYPE_FLOAT},
+		{"double", defines.MYSQL_TYPE_DOUBLE},
+		{"date", defines.MYSQL_TYPE_DATE},
+		{"datetime", defines.MYSQL_TYPE_DATETIME},
+		{"timestamp", defines.MYSQL_TYPE_TIMESTAMP},
+		{"time", defines.MYSQL_TYPE_TIME},
+		{"decimal", defines.MYSQL_TYPE_DECIMAL},
+		{"varchar", defines.MYSQL_TYPE_VARCHAR},
+		{"var_string", defines.MYSQL_TYPE_VAR_STRING},
+		{"string", defines.MYSQL_TYPE_STRING},
+		{"json", defines.MYSQL_TYPE_JSON},
+		{"uuid", defines.MYSQL_TYPE_UUID},
+		{"text", defines.MYSQL_TYPE_TEXT},
+		{"blob", defines.MYSQL_TYPE_BLOB},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			node := buildParquetNode(tt.mysqlTyp, 0)
+			if node == nil {
+				t.Errorf("buildParquetNode(%v) returned nil", tt.mysqlTyp)
+			}
+		})
+	}
+}
+
+func Test_vectorValueToParquet(t *testing.T) {
+	mp := mpool.MustNewZero()
+	convey.Convey("vectorValueToParquet converts types correctly", t, func() {
+		// Test bool type
+		convey.Convey("bool type", func() {
+			vec := testutil.NewVector(1, types.T_bool.ToType(), mp, false, []bool{true})
+			val, err := vectorValueToParquet(vec, 0, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, true)
+		})
+
+		// Test int8 type (converted to int32 for parquet)
+		convey.Convey("int8 type", func() {
+			vec := testutil.NewVector(1, types.T_int8.ToType(), mp, false, []int8{42})
+			val, err := vectorValueToParquet(vec, 0, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, int32(42))
+		})
+
+		// Test int16 type (converted to int32 for parquet)
+		convey.Convey("int16 type", func() {
+			vec := testutil.NewVector(1, types.T_int16.ToType(), mp, false, []int16{1234})
+			val, err := vectorValueToParquet(vec, 0, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, int32(1234))
+		})
+
+		// Test int32 type
+		convey.Convey("int32 type", func() {
+			vec := testutil.NewVector(1, types.T_int32.ToType(), mp, false, []int32{123456})
+			val, err := vectorValueToParquet(vec, 0, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, int32(123456))
+		})
+
+		// Test int64 type
+		convey.Convey("int64 type", func() {
+			vec := testutil.NewVector(1, types.T_int64.ToType(), mp, false, []int64{1234567890})
+			val, err := vectorValueToParquet(vec, 0, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, int64(1234567890))
+		})
+
+		// Test uint8 type (converted to int32 for parquet)
+		convey.Convey("uint8 type", func() {
+			vec := testutil.NewVector(1, types.T_uint8.ToType(), mp, false, []uint8{255})
+			val, err := vectorValueToParquet(vec, 0, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, int32(255))
+		})
+
+		// Test uint16 type (converted to int32 for parquet)
+		convey.Convey("uint16 type", func() {
+			vec := testutil.NewVector(1, types.T_uint16.ToType(), mp, false, []uint16{65535})
+			val, err := vectorValueToParquet(vec, 0, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, int32(65535))
+		})
+
+		// Test uint32 type (converted to int32 for parquet)
+		convey.Convey("uint32 type", func() {
+			vec := testutil.NewVector(1, types.T_uint32.ToType(), mp, false, []uint32{100000})
+			val, err := vectorValueToParquet(vec, 0, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, int32(100000))
+		})
+
+		// Test uint64 type (converted to int64 for parquet)
+		convey.Convey("uint64 type", func() {
+			vec := testutil.NewVector(1, types.T_uint64.ToType(), mp, false, []uint64{1234567890})
+			val, err := vectorValueToParquet(vec, 0, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, int64(1234567890))
+		})
+
+		// Test float32 type
+		convey.Convey("float32 type", func() {
+			vec := testutil.NewVector(1, types.T_float32.ToType(), mp, false, []float32{3.14})
+			val, err := vectorValueToParquet(vec, 0, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, float32(3.14))
+		})
+
+		// Test float64 type
+		convey.Convey("float64 type", func() {
+			vec := testutil.NewVector(1, types.T_float64.ToType(), mp, false, []float64{3.14159265359})
+			val, err := vectorValueToParquet(vec, 0, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, 3.14159265359)
+		})
+
+		// Test varchar type
+		convey.Convey("varchar type", func() {
+			vec := testutil.NewVector(1, types.T_varchar.ToType(), mp, false, []string{"hello world"})
+			val, err := vectorValueToParquet(vec, 0, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, "hello world")
+		})
+
+		// Test date type
+		convey.Convey("date type", func() {
+			vec := testutil.NewVector(1, types.T_date.ToType(), mp, false, []string{"2023-12-25"})
+			val, err := vectorValueToParquet(vec, 0, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldEqual, "2023-12-25")
+		})
+	})
+}
+
+func Test_NewParquetWriter(t *testing.T) {
+	convey.Convey("NewParquetWriter creates writer correctly", t, func() {
+		// Test with nil MysqlResultSet
+		convey.Convey("nil result set returns error", func() {
+			_, err := NewParquetWriter(context.Background(), nil)
+			convey.So(err, convey.ShouldNotBeNil)
+		})
+
+		// Test with empty columns
+		convey.Convey("empty columns returns error", func() {
+			mrs := &MysqlResultSet{}
+			_, err := NewParquetWriter(context.Background(), mrs)
+			convey.So(err, convey.ShouldNotBeNil)
+		})
+
+		// Test with valid columns
+		convey.Convey("valid columns creates writer", func() {
+			mrs := &MysqlResultSet{}
+			col1 := new(MysqlColumn)
+			col1.SetName("id")
+			col1.SetColumnType(defines.MYSQL_TYPE_LONG)
+			col2 := new(MysqlColumn)
+			col2.SetName("name")
+			col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+			mrs.AddColumn(col1)
+			mrs.AddColumn(col2)
+
+			pw, err := NewParquetWriter(context.Background(), mrs)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(pw, convey.ShouldNotBeNil)
+			convey.So(len(pw.columnNames), convey.ShouldEqual, 2)
+			convey.So(pw.columnNames[0], convey.ShouldEqual, "id")
+			convey.So(pw.columnNames[1], convey.ShouldEqual, "name")
+		})
+	})
+}
+
+func Test_ParquetWriter_Close(t *testing.T) {
+	convey.Convey("ParquetWriter Close returns valid parquet data", t, func() {
+		mrs := &MysqlResultSet{}
+		col1 := new(MysqlColumn)
+		col1.SetName("id")
+		col1.SetColumnType(defines.MYSQL_TYPE_LONG)
+		mrs.AddColumn(col1)
+
+		pw, err := NewParquetWriter(context.Background(), mrs)
+		convey.So(err, convey.ShouldBeNil)
+
+		// Close without writing any data
+		data, err := pw.Close()
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(len(data), convey.ShouldBeGreaterThan, 0)
+		// Parquet files start with "PAR1" magic bytes
+		convey.So(string(data[:4]), convey.ShouldEqual, "PAR1")
+	})
+}
+
+func Test_inferFormatFromSuffix(t *testing.T) {
+	convey.Convey("inferFormatFromSuffix returns correct format based on file suffix", t, func() {
+		// CSV suffixes
+		convey.So(inferFormatFromSuffix("data.csv"), convey.ShouldEqual, "csv")
+		convey.So(inferFormatFromSuffix("data.CSV"), convey.ShouldEqual, "csv")
+		convey.So(inferFormatFromSuffix("/path/to/data.csv"), convey.ShouldEqual, "csv")
+		convey.So(inferFormatFromSuffix("stage://bucket/data.csv"), convey.ShouldEqual, "csv")
+
+		// JSONLINE suffixes
+		convey.So(inferFormatFromSuffix("data.jsonl"), convey.ShouldEqual, "jsonline")
+		convey.So(inferFormatFromSuffix("data.jsonline"), convey.ShouldEqual, "jsonline")
+		convey.So(inferFormatFromSuffix("data.ndjson"), convey.ShouldEqual, "jsonline")
+		convey.So(inferFormatFromSuffix("data.JSONL"), convey.ShouldEqual, "jsonline")
+
+		// Parquet suffixes
+		convey.So(inferFormatFromSuffix("data.parquet"), convey.ShouldEqual, "parquet")
+		convey.So(inferFormatFromSuffix("data.PARQUET"), convey.ShouldEqual, "parquet")
+		convey.So(inferFormatFromSuffix("/path/to/data.parquet"), convey.ShouldEqual, "parquet")
+
+		// With split pattern %d
+		convey.So(inferFormatFromSuffix("data_%05d.csv"), convey.ShouldEqual, "csv")
+		convey.So(inferFormatFromSuffix("data_%d.jsonl"), convey.ShouldEqual, "jsonline")
+		convey.So(inferFormatFromSuffix("data_%05d.parquet"), convey.ShouldEqual, "parquet")
+
+		// Unknown suffix returns empty string
+		convey.So(inferFormatFromSuffix("data.txt"), convey.ShouldEqual, "")
+		convey.So(inferFormatFromSuffix("data.json"), convey.ShouldEqual, "")
+		convey.So(inferFormatFromSuffix("data"), convey.ShouldEqual, "")
+	})
+}
+
+func Test_validateExportFormat(t *testing.T) {
+	ctx := context.Background()
+
+	convey.Convey("validateExportFormat validates and infers format correctly", t, func() {
+		// Test 1: No FORMAT specified, infer from .csv suffix
+		convey.Convey("infer csv from suffix", func() {
+			ep := &tree.ExportParam{
+				FilePath:     "data.csv",
+				ExportFormat: "",
+			}
+			err := validateExportFormat(ctx, ep)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(ep.ExportFormat, convey.ShouldEqual, "csv")
+		})
+
+		// Test 2: No FORMAT specified, infer from .jsonl suffix
+		convey.Convey("infer jsonline from suffix", func() {
+			ep := &tree.ExportParam{
+				FilePath:     "data.jsonl",
+				ExportFormat: "",
+			}
+			err := validateExportFormat(ctx, ep)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(ep.ExportFormat, convey.ShouldEqual, "jsonline")
+		})
+
+		// Test 3: No FORMAT specified, infer from .parquet suffix
+		convey.Convey("infer parquet from suffix", func() {
+			ep := &tree.ExportParam{
+				FilePath:     "data.parquet",
+				ExportFormat: "",
+			}
+			err := validateExportFormat(ctx, ep)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(ep.ExportFormat, convey.ShouldEqual, "parquet")
+		})
+
+		// Test 4: No FORMAT specified, unknown suffix defaults to csv
+		convey.Convey("unknown suffix defaults to csv", func() {
+			ep := &tree.ExportParam{
+				FilePath:     "data.txt",
+				ExportFormat: "",
+			}
+			err := validateExportFormat(ctx, ep)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(ep.ExportFormat, convey.ShouldEqual, "csv")
+		})
+
+		// Test 5: FORMAT matches suffix - ok
+		convey.Convey("format matches suffix", func() {
+			ep := &tree.ExportParam{
+				FilePath:     "data.csv",
+				ExportFormat: "csv",
+			}
+			err := validateExportFormat(ctx, ep)
+			convey.So(err, convey.ShouldBeNil)
+		})
+
+		// Test 6: FORMAT mismatches suffix - error
+		convey.Convey("format mismatches suffix", func() {
+			ep := &tree.ExportParam{
+				FilePath:     "data.csv",
+				ExportFormat: "jsonline",
+			}
+			err := validateExportFormat(ctx, ep)
+			convey.So(err, convey.ShouldNotBeNil)
+			convey.So(err.Error(), convey.ShouldContainSubstring, "format 'jsonline' does not match file suffix '.csv'")
+		})
+
+		// Test 7: FORMAT with parquet suffix mismatch
+		convey.Convey("format csv mismatches parquet suffix", func() {
+			ep := &tree.ExportParam{
+				FilePath:     "data.parquet",
+				ExportFormat: "csv",
+			}
+			err := validateExportFormat(ctx, ep)
+			convey.So(err, convey.ShouldNotBeNil)
+			convey.So(err.Error(), convey.ShouldContainSubstring, "format 'csv' does not match file suffix '.parquet'")
+		})
+
+		// Test 8: FORMAT with unknown suffix - ok (no suffix to validate against)
+		convey.Convey("format with unknown suffix is allowed", func() {
+			ep := &tree.ExportParam{
+				FilePath:     "data.txt",
+				ExportFormat: "jsonline",
+			}
+			err := validateExportFormat(ctx, ep)
+			convey.So(err, convey.ShouldBeNil)
+		})
+
+		// Test 9: Split pattern with suffix validation
+		convey.Convey("split pattern with suffix validation", func() {
+			ep := &tree.ExportParam{
+				FilePath:     "data_%05d.parquet",
+				ExportFormat: "csv",
+			}
+			err := validateExportFormat(ctx, ep)
+			convey.So(err, convey.ShouldNotBeNil)
+		})
+
+		// Test 10: Split pattern with matching format
+		convey.Convey("split pattern with matching format", func() {
+			ep := &tree.ExportParam{
+				FilePath:     "data_%05d.parquet",
+				ExportFormat: "parquet",
+			}
+			err := validateExportFormat(ctx, ep)
+			convey.So(err, convey.ShouldBeNil)
+		})
+	})
+}
+
+func Test_ParquetWriter_Size(t *testing.T) {
+	convey.Convey("ParquetWriter Size returns current buffer size", t, func() {
+		ctx := context.Background()
+		mrs := &MysqlResultSet{}
+		col1 := new(MysqlColumn)
+		col1.SetName("id")
+		col1.SetColumnType(defines.MYSQL_TYPE_LONG)
+		col2 := new(MysqlColumn)
+		col2.SetName("name")
+		col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+		mrs.AddColumn(col1)
+		mrs.AddColumn(col2)
+
+		pw, err := NewParquetWriter(ctx, mrs)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(pw, convey.ShouldNotBeNil)
+
+		// Initial size should be 0
+		convey.So(pw.Size(), convey.ShouldEqual, 0)
+
+		// After close, the buffer should have data
+		data, err := pw.Close()
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(len(data), convey.ShouldBeGreaterThan, 0)
+	})
+}
+
+func Test_shouldSplitParquetFile(t *testing.T) {
+	convey.Convey("shouldSplitParquetFile checks if file should be split", t, func() {
+		convey.Convey("returns false when splitSize is 0", func() {
+			result := shouldSplitParquetFile(1000, 0)
+			convey.So(result, convey.ShouldBeFalse)
+		})
+
+		convey.Convey("returns false when current size is below threshold", func() {
+			result := shouldSplitParquetFile(500, 1000)
+			convey.So(result, convey.ShouldBeFalse)
+		})
+
+		convey.Convey("returns true when current size exceeds threshold", func() {
+			result := shouldSplitParquetFile(1500, 1000)
+			convey.So(result, convey.ShouldBeTrue)
+		})
+
+		convey.Convey("returns true when current size equals threshold", func() {
+			result := shouldSplitParquetFile(1000, 1000)
+			convey.So(result, convey.ShouldBeTrue)
+		})
+	})
 }
