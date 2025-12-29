@@ -250,19 +250,58 @@ func hasMoCtrl(p *plan2.Plan) bool {
 	return false
 }
 
-func isTargetMergeSettings(p *plan2.Plan) bool {
-	if p != nil && p.GetQuery() != nil {
-		q := p.GetQuery()
-		for _, node := range q.Nodes {
-			if node != nil && node.GetTableDef() != nil {
-				d := node.GetTableDef()
-				if d.DbName == catalog.MO_CATALOG && d.Name == catalog.MO_MERGE_SETTINGS {
-					return true
+// isTargetSysWhiteList checks if ALL DML target tables are in the whitelist.
+// Returns true only when all target tables are in the whitelist.
+// Returns false if any target table is not in the whitelist, or if there are no DML target tables.
+func isTargetSysWhiteList(p *plan2.Plan) bool {
+	if p == nil || p.GetQuery() == nil {
+		return false
+	}
+	q := p.GetQuery()
+
+	isInWhiteList := func(dbname, name string) bool {
+		return dbname == catalog.MO_CATALOG && sysWhiteListTables[name] > 0
+	}
+
+	foundTarget := false
+	for _, node := range q.Nodes {
+		if node == nil {
+			continue
+		}
+		// Only check actual DML target tables, not tables that are just being read
+		switch node.NodeType {
+		case plan.Node_MULTI_UPDATE:
+			// For UPDATE/DELETE via MULTI_UPDATE, check all target tables in UpdateCtxList
+			for _, updateCtx := range node.UpdateCtxList {
+				if ref := updateCtx.ObjRef; ref != nil {
+					foundTarget = true
+					if !isInWhiteList(ref.SchemaName, ref.ObjName) {
+						return false
+					}
+				}
+			}
+		case plan.Node_DELETE:
+			// For DELETE, check the target table in DeleteCtx
+			if node.DeleteCtx != nil && node.DeleteCtx.Ref != nil {
+				ref := node.DeleteCtx.Ref
+				foundTarget = true
+				if !isInWhiteList(ref.SchemaName, ref.ObjName) {
+					return false
+				}
+			}
+		case plan.Node_INSERT:
+			// For INSERT, check the target table in InsertCtx
+			if node.InsertCtx != nil && node.InsertCtx.Ref != nil {
+				ref := node.InsertCtx.Ref
+				foundTarget = true
+				if !isInWhiteList(ref.SchemaName, ref.ObjName) {
+					return false
 				}
 			}
 		}
 	}
-	return false
+	// Return true only if we found at least one target table and all are in whitelist
+	return foundTarget
 }
 
 // verifyAccountCanExecMoCtrl only sys account and moadmin role.

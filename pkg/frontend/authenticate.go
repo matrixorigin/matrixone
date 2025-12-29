@@ -1581,6 +1581,11 @@ var (
 		PrivilegeTypeDropAccount:    0,
 		PrivilegeTypeUpgradeAccount: 0,
 	}
+
+	sysWhiteListTables = map[string]int8{
+		catalog.MO_MERGE_SETTINGS:                     1,
+		catalog.MO_TABLES_LOGICAL_ID_INDEX_TABLE_NAME: 1,
+	}
 )
 
 func init() {
@@ -7145,7 +7150,7 @@ func authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx conte
 				return false, stats, moerr.NewInternalError(ctx, "do not have privilege to execute the statement")
 			}
 		}
-		if isTargetMergeSettings(p) && verifyAccountCanExecMoCtrl(ses.GetTenantInfo()) {
+		if isTargetSysWhiteList(p) && verifyAccountCanExecMoCtrl(ses.GetTenantInfo()) {
 			return true, stats, nil
 		}
 		arr := extractPrivilegeTipsFromPlan(p)

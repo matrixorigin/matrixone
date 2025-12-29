@@ -1,188 +1,186 @@
 show table_number from mo_task;
-Number of tables in mo_task
+➤ Number of tables in mo_task[-5,64,0]  𝄀
 3
 show table_number from information_schema;
-Number of tables in information_schema
+➤ Number of tables in information_schema[-5,64,0]  𝄀
 24
 show table_number from mysql;
-Number of tables in mysql
+➤ Number of tables in mysql[-5,64,0]  𝄀
 6
 show table_number from mo_catalog;
-Number of tables in mo_catalog
+➤ Number of tables in mo_catalog[-5,64,0]  𝄀
 41
 show table_number from system;
-Number of tables in system
-6
+[unknown result because it is related to issue#23182]
 use mo_task;
 show column_number from sys_async_task;
-Number of columns in sys_async_task
+➤ Number of columns in sys_async_task[-5,64,0]  𝄀
 14
 show column_number from sys_cron_task;
-Number of columns in sys_cron_task
+➤ Number of columns in sys_cron_task[-5,64,0]  𝄀
 10
 use information_schema;
 show column_number from key_column_usage;
-Number of columns in key_column_usage
+➤ Number of columns in key_column_usage[-5,64,0]  𝄀
 12
 show column_number from columns;
-Number of columns in columns
+➤ Number of columns in columns[-5,64,0]  𝄀
 22
 show column_number from profiling;
-Number of columns in profiling
+➤ Number of columns in profiling[-5,64,0]  𝄀
 18
 show column_number from processlist;
-Number of columns in processlist
+➤ Number of columns in processlist[-5,64,0]  𝄀
 19
 show column_number from schemata;
-Number of columns in schemata
+➤ Number of columns in schemata[-5,64,0]  𝄀
 6
 show column_number from character_sets;
-Number of columns in character_sets
+➤ Number of columns in character_sets[-5,64,0]  𝄀
 4
 show column_number from triggers;
-Number of columns in triggers
+➤ Number of columns in triggers[-5,64,0]  𝄀
 22
 show column_number from tables;
-Number of columns in tables
+➤ Number of columns in tables[-5,64,0]  𝄀
 21
 show column_number from engines;
-Number of columns in engines
+➤ Number of columns in engines[-5,64,0]  𝄀
 6
 show column_number from routines;
-Number of columns in routines
+➤ Number of columns in routines[-5,64,0]  𝄀
 31
 show column_number from parameters;
-Number of columns in parameters
+➤ Number of columns in parameters[-5,64,0]  𝄀
 16
 show column_number from keywords;
-Number of columns in keywords
+➤ Number of columns in keywords[-5,64,0]  𝄀
 2
 use mysql;
 show column_number from user;
-Number of columns in user
+➤ Number of columns in user[-5,64,0]  𝄀
 51
 show column_number from db;
-Number of columns in db
+➤ Number of columns in db[-5,64,0]  𝄀
 22
 show column_number from procs_priv;
-Number of columns in procs_priv
+➤ Number of columns in procs_priv[-5,64,0]  𝄀
 8
 show column_number from columns_priv;
-Number of columns in columns_priv
+➤ Number of columns in columns_priv[-5,64,0]  𝄀
 7
 show column_number from tables_priv;
-Number of columns in tables_priv
+➤ Number of columns in tables_priv[-5,64,0]  𝄀
 8
 use mo_catalog;
 show column_number from mo_user;
-Number of columns in mo_user
+➤ Number of columns in mo_user[-5,64,0]  𝄀
 15
 show column_number from mo_account;
-Number of columns in mo_account
+➤ Number of columns in mo_account[-5,64,0]  𝄀
 9
 show column_number from mo_role;
-Number of columns in mo_role
+➤ Number of columns in mo_role[-5,64,0]  𝄀
 6
 show column_number from mo_user_grant;
-Number of columns in mo_user_grant
+➤ Number of columns in mo_user_grant[-5,64,0]  𝄀
 4
 show column_number from mo_role_grant;
-Number of columns in mo_role_grant
+➤ Number of columns in mo_role_grant[-5,64,0]  𝄀
 6
 show column_number from mo_role_privs;
-Number of columns in mo_role_privs
+➤ Number of columns in mo_role_privs[-5,64,0]  𝄀
 10
 show column_number from mo_user_defined_function;
-Number of columns in mo_user_defined_function
+➤ Number of columns in mo_user_defined_function[-5,64,0]  𝄀
 17
 show column_number from mo_tables;
-Number of columns in mo_tables
-18
+➤ Number of columns in mo_tables[-5,64,0]  𝄀
+19
 show column_number from mo_database;
-Number of columns in mo_database
+➤ Number of columns in mo_database[-5,64,0]  𝄀
 9
 show column_number from mo_columns;
-Number of columns in mo_columns
+➤ Number of columns in mo_columns[-5,64,0]  𝄀
 24
 show column_number from mo_indexes;
-Number of columns in mo_indexes
+➤ Number of columns in mo_indexes[-5,64,0]  𝄀
 15
 show column_number from mo_table_partitions;
-Number of columns in mo_table_partitions
-10
+[unknown result because it is related to issue#16438]
 use system_metrics;
 show column_number from metric;
-Number of columns in metric
+➤ Number of columns in metric[-5,64,0]  𝄀
 8
 show column_number from sql_statement_cu;
-Number of columns in sql_statement_cu
+➤ Number of columns in sql_statement_cu[-5,64,0]  𝄀
 6
 show column_number from sql_statement_total;
-
+[unknown result because it is related to issue#23182]
 show column_number from sql_statement_errors;
-
+[unknown result because it is related to issue#23182]
 show column_number from sql_transaction_total;
-
+[unknown result because it is related to issue#23182]
 show column_number from sql_transaction_errors;
-
+[unknown result because it is related to issue#23182]
 show column_number from server_connections;
-
+[unknown result because it is related to issue#23182]
 show column_number from process_cpu_percent;
-Number of columns in process_cpu_percent
+➤ Number of columns in process_cpu_percent[-5,64,0]  𝄀
 5
 show column_number from process_resident_memory_bytes;
-Number of columns in process_resident_memory_bytes
+➤ Number of columns in process_resident_memory_bytes[-5,64,0]  𝄀
 5
 show column_number from process_open_fds;
-Number of columns in process_open_fds
+➤ Number of columns in process_open_fds[-5,64,0]  𝄀
 5
 show column_number from sys_cpu_seconds_total;
-Number of columns in sys_cpu_seconds_total
+➤ Number of columns in sys_cpu_seconds_total[-5,64,0]  𝄀
 5
 show column_number from sys_cpu_combined_percent;
-Number of columns in sys_cpu_combined_percent
+➤ Number of columns in sys_cpu_combined_percent[-5,64,0]  𝄀
 5
 show column_number from sys_memory_used;
-Number of columns in sys_memory_used
+➤ Number of columns in sys_memory_used[-5,64,0]  𝄀
 5
 show column_number from sys_memory_available;
-Number of columns in sys_memory_available
+➤ Number of columns in sys_memory_available[-5,64,0]  𝄀
 5
 show column_number from sys_disk_read_bytes;
-Number of columns in sys_disk_read_bytes
+➤ Number of columns in sys_disk_read_bytes[-5,64,0]  𝄀
 5
 show column_number from sys_disk_write_bytes;
-Number of columns in sys_disk_write_bytes
+➤ Number of columns in sys_disk_write_bytes[-5,64,0]  𝄀
 5
 show column_number from sys_net_recv_bytes;
-Number of columns in sys_net_recv_bytes
+➤ Number of columns in sys_net_recv_bytes[-5,64,0]  𝄀
 5
 show column_number from sys_net_sent_bytes;
-Number of columns in sys_net_sent_bytes
+➤ Number of columns in sys_net_sent_bytes[-5,64,0]  𝄀
 5
 use system;
 show column_number from statement_info;
-Number of columns in statement_info
+➤ Number of columns in statement_info[-5,64,0]  𝄀
 31
 show column_number from rawlog;
-Number of columns in rawlog
+➤ Number of columns in rawlog[-5,64,0]  𝄀
 23
 show column_number from log_info;
-Number of columns in log_info
+➤ Number of columns in log_info[-5,64,0]  𝄀
 14
 show column_number from error_info;
-Number of columns in error_info
+➤ Number of columns in error_info[-5,64,0]  𝄀
 9
 show column_number from span_info;
-Number of columns in span_info
+➤ Number of columns in span_info[-5,64,0]  𝄀
 12
 show column_number from sql_statement_hotspot;
-Number of columns in sql_statement_hotspot
+➤ Number of columns in sql_statement_hotspot[-5,64,0]  𝄀
 9
 drop database if exists test_db;
 create database test_db;
 show table_number from test_db;
-Number of tables in test_db
+➤ Number of tables in test_db[-5,64,0]  𝄀
 0
 use test_db;
 drop table if exists t1;
@@ -195,26 +193,26 @@ col6 date,
 col7 bool
 );
 show table_number from test_db;
-Number of tables in test_db
+➤ Number of tables in test_db[-5,64,0]  𝄀
 1
 show table_values from t1;
-max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
-null    null    null    null    null    null    null    null    null    null    null    null
+➤ max(col1)[4,32,0]  ¦  min(col1)[4,32,0]  ¦  max(col2)[7,24,0]  ¦  min(col2)[7,24,0]  ¦  max(col3)[12,-1,0]  ¦  min(col3)[12,-1,0]  ¦  max(col4)[12,0,0]  ¦  min(col4)[12,0,0]  ¦  max(col6)[91,64,0]  ¦  min(col6)[91,64,0]  ¦  max(col7)[12,4,0]  ¦  min(col7)[12,4,0]  𝄀
+null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null
 select mo_table_rows("test_db","t1"),mo_table_size("test_db","t1");
-mo_table_rows(test_db, t1)    mo_table_size(test_db, t1)
-0    0
+➤ mo_table_rows(test_db, t1)[-5,64,0]  ¦  mo_table_size(test_db, t1)[-5,64,0]  𝄀
+0  ¦  0
 insert into t1 values(100,10.34,"你好",'aaa','2011-10-10',0);
 show table_values from t1;
-max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
-100    100    10.34    10.34    你好    你好    aaa    aaa    2011-10-10    2011-10-10    false    false
+➤ max(col1)[4,32,0]  ¦  min(col1)[4,32,0]  ¦  max(col2)[7,24,0]  ¦  min(col2)[7,24,0]  ¦  max(col3)[12,-1,0]  ¦  min(col3)[12,-1,0]  ¦  max(col4)[12,0,0]  ¦  min(col4)[12,0,0]  ¦  max(col6)[91,64,0]  ¦  min(col6)[91,64,0]  ¦  max(col7)[12,4,0]  ¦  min(col7)[12,4,0]  𝄀
+100  ¦  100  ¦  10.34  ¦  10.34  ¦  你好  ¦  你好  ¦  aaa  ¦  aaa  ¦  2011-10-10  ¦  2011-10-10  ¦  false  ¦  false
 insert into t1 values(10,1.34,"你",'aa','2011-10-11',1);
 show table_values from t1;
-max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
-100    10    10.34    1.34    你好    你    aaa    aa    2011-10-11    2011-10-10    true    false
+➤ max(col1)[4,32,0]  ¦  min(col1)[4,32,0]  ¦  max(col2)[7,24,0]  ¦  min(col2)[7,24,0]  ¦  max(col3)[12,-1,0]  ¦  min(col3)[12,-1,0]  ¦  max(col4)[12,0,0]  ¦  min(col4)[12,0,0]  ¦  max(col6)[91,64,0]  ¦  min(col6)[91,64,0]  ¦  max(col7)[12,4,0]  ¦  min(col7)[12,4,0]  𝄀
+100  ¦  10  ¦  10.34  ¦  1.34  ¦  你好  ¦  你  ¦  aaa  ¦  aa  ¦  2011-10-11  ¦  2011-10-10  ¦  true  ¦  false
 set mo_table_stats.use_old_impl = yes;
 select mo_table_rows("test_db","t1"),mo_table_size("test_db","t1");
-mo_table_rows(test_db, t1)    mo_table_size(test_db, t1)
-2    186
+➤ mo_table_rows(test_db, t1)[-5,64,0]  ¦  mo_table_size(test_db, t1)[-5,64,0]  𝄀
+2  ¦  186
 set mo_table_stats.use_old_impl = no;
 drop table if exists t11;
 create table t11(
@@ -226,26 +224,26 @@ col6 date,
 col7 bool
 );
 show table_number from test_db;
-Number of tables in test_db
+➤ Number of tables in test_db[-5,64,0]  𝄀
 2
 show table_values from t11;
-max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
-null    null    null    null    null    null    null    null    null    null    null    null
+➤ max(col1)[4,32,0]  ¦  min(col1)[4,32,0]  ¦  max(col2)[7,24,0]  ¦  min(col2)[7,24,0]  ¦  max(col3)[12,-1,0]  ¦  min(col3)[12,-1,0]  ¦  max(col4)[12,0,0]  ¦  min(col4)[12,0,0]  ¦  max(col6)[91,64,0]  ¦  min(col6)[91,64,0]  ¦  max(col7)[12,4,0]  ¦  min(col7)[12,4,0]  𝄀
+null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null
 select mo_table_rows("test_db","t11"),mo_table_size("test_db","t11");
-mo_table_rows(test_db, t11)    mo_table_size(test_db, t11)
-0    0
+➤ mo_table_rows(test_db, t11)[-5,64,0]  ¦  mo_table_size(test_db, t11)[-5,64,0]  𝄀
+0  ¦  0
 insert into t11 values(100,10.34,"你好",'aaa','2011-10-10',0);
 show table_values from t11;
-max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
-100    100    10.34    10.34    你好    你好    aaa    aaa    2011-10-10    2011-10-10    false    false
+➤ max(col1)[4,32,0]  ¦  min(col1)[4,32,0]  ¦  max(col2)[7,24,0]  ¦  min(col2)[7,24,0]  ¦  max(col3)[12,-1,0]  ¦  min(col3)[12,-1,0]  ¦  max(col4)[12,0,0]  ¦  min(col4)[12,0,0]  ¦  max(col6)[91,64,0]  ¦  min(col6)[91,64,0]  ¦  max(col7)[12,4,0]  ¦  min(col7)[12,4,0]  𝄀
+100  ¦  100  ¦  10.34  ¦  10.34  ¦  你好  ¦  你好  ¦  aaa  ¦  aaa  ¦  2011-10-10  ¦  2011-10-10  ¦  false  ¦  false
 insert into t11 values(10,1.34,"你",'aa','2011-10-11',1);
 show table_values from t11;
-max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
-100    10    10.34    1.34    你好    你    aaa    aa    2011-10-11    2011-10-10    true    false
+➤ max(col1)[4,32,0]  ¦  min(col1)[4,32,0]  ¦  max(col2)[7,24,0]  ¦  min(col2)[7,24,0]  ¦  max(col3)[12,-1,0]  ¦  min(col3)[12,-1,0]  ¦  max(col4)[12,0,0]  ¦  min(col4)[12,0,0]  ¦  max(col6)[91,64,0]  ¦  min(col6)[91,64,0]  ¦  max(col7)[12,4,0]  ¦  min(col7)[12,4,0]  𝄀
+100  ¦  10  ¦  10.34  ¦  1.34  ¦  你好  ¦  你  ¦  aaa  ¦  aa  ¦  2011-10-11  ¦  2011-10-10  ¦  true  ¦  false
 set mo_table_stats.use_old_impl = yes;
 select mo_table_rows("test_db","t11"),mo_table_size("test_db","t11");
-mo_table_rows(test_db, t11)    mo_table_size(test_db, t11)
-2    170
+➤ mo_table_rows(test_db, t11)[-5,64,0]  ¦  mo_table_size(test_db, t11)[-5,64,0]  𝄀
+2  ¦  170
 set mo_table_stats.use_old_impl = no;
 create external table external_table(
 col1 int,
@@ -256,18 +254,18 @@ col6 date,
 col7 bool
 )infile{"filepath"='$resources/external_table_file/external_table.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select * from external_table;
-col1    col2    col3    col4    col6    col7
-null    null            null    null
-100    10.34    你好    aaa    2011-10-10    false
-10    1.34    你    aa    2011-10-11    true
+➤ col1[4,32,0]  ¦  col2[7,24,0]  ¦  col3[12,-1,0]  ¦  col4[12,0,0]  ¦  col6[91,64,0]  ¦  col7[12,4,0]  𝄀
+null  ¦  null  ¦    ¦    ¦  null  ¦  null  𝄀
+100  ¦  10.34  ¦  你好  ¦  aaa  ¦  2011-10-10  ¦  false  𝄀
+10  ¦  1.34  ¦  你  ¦  aa  ¦  2011-10-11  ¦  true
 show table_number from test_db;
-Number of tables in test_db
+➤ Number of tables in test_db[-5,64,0]  𝄀
 3
 show table_values from external_table;
-max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
-100    10    10.34    1.34    你好        aaa        2011-10-11    2011-10-10    true    false
+➤ max(col1)[4,32,0]  ¦  min(col1)[4,32,0]  ¦  max(col2)[7,24,0]  ¦  min(col2)[7,24,0]  ¦  max(col3)[12,-1,0]  ¦  min(col3)[12,-1,0]  ¦  max(col4)[12,0,0]  ¦  min(col4)[12,0,0]  ¦  max(col6)[91,64,0]  ¦  min(col6)[91,64,0]  ¦  max(col7)[12,4,0]  ¦  min(col7)[12,4,0]  𝄀
+100  ¦  10  ¦  10.34  ¦  1.34  ¦  你好  ¦    ¦  aaa  ¦    ¦  2011-10-11  ¦  2011-10-10  ¦  true  ¦  false
 DROP TABLE IF EXISTS partition_table;
-
+[unknown result because it is related to issue#16438]
 create table partition_table(
 empno int unsigned auto_increment,
 ename varchar(15),
@@ -281,182 +279,175 @@ primary key(empno, deptno)
 )
 PARTITION BY KEY(deptno)
 PARTITIONS 4;
-
+[unknown result because it is related to issue#16438]
 show table_number from test_db;
-Number of tables in test_db
-8
+[unknown result because it is related to issue#16438]
 show table_values from partition_table;
-max(empno)    min(empno)    max(ename)    min(ename)    max(job)    min(job)    max(mgr)    min(mgr)    max(hiredate)    min(hiredate)    max(sal)    min(sal)    max(comm)    min(comm)    max(deptno)    min(deptno)
-null    null    null    null    null    null    null    null    null    null    null    null    null    null    null    null
+[unknown result because it is related to issue#16438]
 select mo_table_rows("test_db", "partition_table"),mo_table_size("test_db", "partition_table");
-mo_table_rows(test_db, partition_table)    mo_table_size(test_db, partition_table)
-0    0
+[unknown result because it is related to issue#16438]
 INSERT INTO partition_table VALUES (7369,'SMITH','CLERK',7902,'1980-12-17',800,NULL,20);
-
+[unknown result because it is related to issue#16438]
 INSERT INTO partition_table VALUES (7499,'ALLEN','SALESMAN',7698,'1981-02-20',1600,300,30);
-
+[unknown result because it is related to issue#16438]
 show table_values from partition_table;
-max(empno)    min(empno)    max(ename)    min(ename)    max(job)    min(job)    max(mgr)    min(mgr)    max(hiredate)    min(hiredate)    max(sal)    min(sal)    max(comm)    min(comm)    max(deptno)    min(deptno)
-7499    7369    SMITH    ALLEN    SALESMAN    CLERK    7902    7698    1981-02-20    1980-12-17    1600.00    800.00    300.00    300.00    30    20
+[unknown result because it is related to issue#16438]
 INSERT INTO partition_table VALUES (7521,'WARD','SALESMAN',7698,'1981-02-22',1250,500,30);
-
+[unknown result because it is related to issue#16438]
 INSERT INTO partition_table VALUES (7566,'JONES','MANAGER',7839,'1981-04-02',2975,NULL,20);
-
+[unknown result because it is related to issue#16438]
 show table_values from partition_table;
-max(empno)    min(empno)    max(ename)    min(ename)    max(job)    min(job)    max(mgr)    min(mgr)    max(hiredate)    min(hiredate)    max(sal)    min(sal)    max(comm)    min(comm)    max(deptno)    min(deptno)
-7566    7369    WARD    ALLEN    SALESMAN    CLERK    7902    7698    1981-04-02    1980-12-17    2975.00    800.00    500.00    300.00    30    20
+[unknown result because it is related to issue#16438]
 set mo_table_stats.use_old_impl = yes;
-
+[unknown result because it is related to issue#16438]
 select mo_table_rows("test_db", "partition_table"),mo_table_size("test_db", "partition_table");
-mo_table_rows(test_db, partition_table)    mo_table_size(test_db, partition_table)
-4    512
+[unknown result because it is related to issue#16438]
 set mo_table_stats.use_old_impl = no;
-
+[unknown result because it is related to issue#16438]
 create table t2(
 col1 json
 );
 show table_values from t2;
-max(col1)    min(col1)
+➤ max(col1)[12,4,0]  ¦  min(col1)[12,4,0]
 insert into t2 values();
 show table_values from t2;
-max(col1)    min(col1)
-null    null
+➤ max(col1)[12,4,0]  ¦  min(col1)[12,4,0]  𝄀
+null  ¦  null
 insert into t2 values(('{"x": 17}'));
 show table_values from t2;
-max(col1)    min(col1)
-null    null
+➤ max(col1)[12,4,0]  ¦  min(col1)[12,4,0]  𝄀
+null  ¦  null
 insert into t2 values (('{"x": [18]}'));
 show table_values from t2;
-max(col1)    min(col1)
-null    null
+➤ max(col1)[12,4,0]  ¦  min(col1)[12,4,0]  𝄀
+null  ¦  null
 create table t3(
 col1 decimal(5,2)
 );
 show table_values from t3;
-max(col1)    min(col1)
-null    null
+➤ max(col1)[3,5,2]  ¦  min(col1)[3,5,2]  𝄀
+null  ¦  null
 insert into t3 values();
 show table_values from t3;
-max(col1)    min(col1)
-null    null
+➤ max(col1)[3,5,2]  ¦  min(col1)[3,5,2]  𝄀
+null  ¦  null
 insert into t3 values(3.3);
 show table_values from t3;
-max(col1)    min(col1)
-3.30    3.30
+➤ max(col1)[3,5,2]  ¦  min(col1)[3,5,2]  𝄀
+3.30  ¦  3.30
 insert into t3 values(3.2);
 show table_values from t3;
-max(col1)    min(col1)
-3.30    3.20
+➤ max(col1)[3,5,2]  ¦  min(col1)[3,5,2]  𝄀
+3.30  ¦  3.20
 drop database test_db;
 drop account if exists test_account;
 create account test_account admin_name = 'test_user' identified by '111';
 show table_number from information_schema;
-Number of tables in information_schema
+➤ Number of tables in information_schema[-5,64,0]  𝄀
 24
 show table_number from mysql;
-Number of tables in mysql
+➤ Number of tables in mysql[-5,64,0]  𝄀
 6
 show table_number from mo_catalog;
-Number of tables in mo_catalog
+➤ Number of tables in mo_catalog[-5,64,0]  𝄀
 24
 show table_number from system_metrics;
-Number of tables in system_metrics
+➤ Number of tables in system_metrics[-5,64,0]  𝄀
 11
 show table_number from system;
-Number of tables in system
+➤ Number of tables in system[-5,64,0]  𝄀
 1
 use information_schema;
 show column_number from key_column_usage;
-Number of columns in key_column_usage
+➤ Number of columns in key_column_usage[-5,64,0]  𝄀
 12
 show column_number from columns;
-Number of columns in columns
+➤ Number of columns in columns[-5,64,0]  𝄀
 22
 show column_number from profiling;
-Number of columns in profiling
+➤ Number of columns in profiling[-5,64,0]  𝄀
 18
 show column_number from processlist;
-Number of columns in processlist
+➤ Number of columns in processlist[-5,64,0]  𝄀
 19
 show column_number from schemata;
-Number of columns in schemata
+➤ Number of columns in schemata[-5,64,0]  𝄀
 6
 show column_number from character_sets;
-Number of columns in character_sets
+➤ Number of columns in character_sets[-5,64,0]  𝄀
 4
 show column_number from triggers;
-Number of columns in triggers
+➤ Number of columns in triggers[-5,64,0]  𝄀
 22
 show column_number from tables;
-Number of columns in tables
+➤ Number of columns in tables[-5,64,0]  𝄀
 21
 show column_number from engines;
-Number of columns in engines
+➤ Number of columns in engines[-5,64,0]  𝄀
 6
 show column_number from routines;
-Number of columns in routines
+➤ Number of columns in routines[-5,64,0]  𝄀
 31
 show column_number from parameters;
-Number of columns in parameters
+➤ Number of columns in parameters[-5,64,0]  𝄀
 16
 show column_number from keywords;
-Number of columns in keywords
+➤ Number of columns in keywords[-5,64,0]  𝄀
 2
 show column_number from partitions;
-Number of columns in partitions
-25
+[unknown result because it is related to issue#16438]
 use mysql;
 show column_number from user;
-Number of columns in user
+➤ Number of columns in user[-5,64,0]  𝄀
 51
 show column_number from db;
-Number of columns in db
+➤ Number of columns in db[-5,64,0]  𝄀
 22
 show column_number from procs_priv;
-Number of columns in procs_priv
+➤ Number of columns in procs_priv[-5,64,0]  𝄀
 8
 show column_number from columns_priv;
-Number of columns in columns_priv
+➤ Number of columns in columns_priv[-5,64,0]  𝄀
 7
 show column_number from tables_priv;
-Number of columns in tables_priv
+➤ Number of columns in tables_priv[-5,64,0]  𝄀
 8
 use mo_catalog;
 show column_number from mo_user;
-Number of columns in mo_user
+➤ Number of columns in mo_user[-5,64,0]  𝄀
 15
 show column_number from mo_role;
-Number of columns in mo_role
+➤ Number of columns in mo_role[-5,64,0]  𝄀
 6
 show column_number from mo_user_grant;
-Number of columns in mo_user_grant
+➤ Number of columns in mo_user_grant[-5,64,0]  𝄀
 4
 show column_number from mo_role_grant;
-Number of columns in mo_role_grant
+➤ Number of columns in mo_role_grant[-5,64,0]  𝄀
 6
 show column_number from mo_role_privs;
-Number of columns in mo_role_privs
+➤ Number of columns in mo_role_privs[-5,64,0]  𝄀
 10
 show column_number from mo_user_defined_function;
-Number of columns in mo_user_defined_function
+➤ Number of columns in mo_user_defined_function[-5,64,0]  𝄀
 17
 show column_number from mo_tables;
-Number of columns in mo_tables
-18
+➤ Number of columns in mo_tables[-5,64,0]  𝄀
+19
 show column_number from mo_database;
-Number of columns in mo_database
+➤ Number of columns in mo_database[-5,64,0]  𝄀
 9
 show column_number from mo_columns;
-Number of columns in mo_columns
+➤ Number of columns in mo_columns[-5,64,0]  𝄀
 24
 use system;
 show column_number from statement_info;
-Number of columns in statement_info
+➤ Number of columns in statement_info[-5,64,0]  𝄀
 31
 drop database if exists test_db;
 create database test_db;
 show table_number from test_db;
-Number of tables in test_db
+➤ Number of tables in test_db[-5,64,0]  𝄀
 0
 use test_db;
 drop table if exists t1;
@@ -469,26 +460,26 @@ col6 date,
 col7 bool
 );
 show table_number from test_db;
-Number of tables in test_db
+➤ Number of tables in test_db[-5,64,0]  𝄀
 1
 show table_values from t1;
-max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
-null    null    null    null    null    null    null    null    null    null    null    null
+➤ max(col1)[4,32,0]  ¦  min(col1)[4,32,0]  ¦  max(col2)[7,24,0]  ¦  min(col2)[7,24,0]  ¦  max(col3)[12,-1,0]  ¦  min(col3)[12,-1,0]  ¦  max(col4)[12,0,0]  ¦  min(col4)[12,0,0]  ¦  max(col6)[91,64,0]  ¦  min(col6)[91,64,0]  ¦  max(col7)[12,4,0]  ¦  min(col7)[12,4,0]  𝄀
+null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null
 select mo_table_rows("test_db","t1"),mo_table_size("test_db","t1");
-mo_table_rows(test_db, t1)    mo_table_size(test_db, t1)
-0    0
+➤ mo_table_rows(test_db, t1)[-5,64,0]  ¦  mo_table_size(test_db, t1)[-5,64,0]  𝄀
+0  ¦  0
 insert into t1 values(100,10.34,"你好",'aaa','2011-10-10',0);
 show table_values from t1;
-max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
-100    100    10.34    10.34    你好    你好    aaa    aaa    2011-10-10    2011-10-10    false    false
+➤ max(col1)[4,32,0]  ¦  min(col1)[4,32,0]  ¦  max(col2)[7,24,0]  ¦  min(col2)[7,24,0]  ¦  max(col3)[12,-1,0]  ¦  min(col3)[12,-1,0]  ¦  max(col4)[12,0,0]  ¦  min(col4)[12,0,0]  ¦  max(col6)[91,64,0]  ¦  min(col6)[91,64,0]  ¦  max(col7)[12,4,0]  ¦  min(col7)[12,4,0]  𝄀
+100  ¦  100  ¦  10.34  ¦  10.34  ¦  你好  ¦  你好  ¦  aaa  ¦  aaa  ¦  2011-10-10  ¦  2011-10-10  ¦  false  ¦  false
 insert into t1 values(10,1.34,"你",'aa','2011-10-11',1);
 show table_values from t1;
-max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
-100    10    10.34    1.34    你好    你    aaa    aa    2011-10-11    2011-10-10    true    false
+➤ max(col1)[4,32,0]  ¦  min(col1)[4,32,0]  ¦  max(col2)[7,24,0]  ¦  min(col2)[7,24,0]  ¦  max(col3)[12,-1,0]  ¦  min(col3)[12,-1,0]  ¦  max(col4)[12,0,0]  ¦  min(col4)[12,0,0]  ¦  max(col6)[91,64,0]  ¦  min(col6)[91,64,0]  ¦  max(col7)[12,4,0]  ¦  min(col7)[12,4,0]  𝄀
+100  ¦  10  ¦  10.34  ¦  1.34  ¦  你好  ¦  你  ¦  aaa  ¦  aa  ¦  2011-10-11  ¦  2011-10-10  ¦  true  ¦  false
 set mo_table_stats.use_old_impl = yes;
 select mo_table_rows("test_db","t1"),mo_table_size("test_db","t1");
-mo_table_rows(test_db, t1)    mo_table_size(test_db, t1)
-2    186
+➤ mo_table_rows(test_db, t1)[-5,64,0]  ¦  mo_table_size(test_db, t1)[-5,64,0]  𝄀
+2  ¦  186
 set mo_table_stats.use_old_impl = no;
 drop table if exists t11;
 create table t11(
@@ -500,26 +491,26 @@ col6 date,
 col7 bool
 );
 show table_number from test_db;
-Number of tables in test_db
+➤ Number of tables in test_db[-5,64,0]  𝄀
 2
 show table_values from t11;
-max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
-null    null    null    null    null    null    null    null    null    null    null    null
+➤ max(col1)[4,32,0]  ¦  min(col1)[4,32,0]  ¦  max(col2)[7,24,0]  ¦  min(col2)[7,24,0]  ¦  max(col3)[12,-1,0]  ¦  min(col3)[12,-1,0]  ¦  max(col4)[12,0,0]  ¦  min(col4)[12,0,0]  ¦  max(col6)[91,64,0]  ¦  min(col6)[91,64,0]  ¦  max(col7)[12,4,0]  ¦  min(col7)[12,4,0]  𝄀
+null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null
 select mo_table_rows("test_db","t11"),mo_table_size("test_db","t11");
-mo_table_rows(test_db, t11)    mo_table_size(test_db, t11)
-0    0
+➤ mo_table_rows(test_db, t11)[-5,64,0]  ¦  mo_table_size(test_db, t11)[-5,64,0]  𝄀
+0  ¦  0
 insert into t11 values(100,10.34,"你好",'aaa','2011-10-10',0);
 show table_values from t11;
-max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
-100    100    10.34    10.34    你好    你好    aaa    aaa    2011-10-10    2011-10-10    false    false
+➤ max(col1)[4,32,0]  ¦  min(col1)[4,32,0]  ¦  max(col2)[7,24,0]  ¦  min(col2)[7,24,0]  ¦  max(col3)[12,-1,0]  ¦  min(col3)[12,-1,0]  ¦  max(col4)[12,0,0]  ¦  min(col4)[12,0,0]  ¦  max(col6)[91,64,0]  ¦  min(col6)[91,64,0]  ¦  max(col7)[12,4,0]  ¦  min(col7)[12,4,0]  𝄀
+100  ¦  100  ¦  10.34  ¦  10.34  ¦  你好  ¦  你好  ¦  aaa  ¦  aaa  ¦  2011-10-10  ¦  2011-10-10  ¦  false  ¦  false
 insert into t11 values(10,1.34,"你",'aa','2011-10-11',1);
 show table_values from t11;
-max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
-100    10    10.34    1.34    你好    你    aaa    aa    2011-10-11    2011-10-10    true    false
+➤ max(col1)[4,32,0]  ¦  min(col1)[4,32,0]  ¦  max(col2)[7,24,0]  ¦  min(col2)[7,24,0]  ¦  max(col3)[12,-1,0]  ¦  min(col3)[12,-1,0]  ¦  max(col4)[12,0,0]  ¦  min(col4)[12,0,0]  ¦  max(col6)[91,64,0]  ¦  min(col6)[91,64,0]  ¦  max(col7)[12,4,0]  ¦  min(col7)[12,4,0]  𝄀
+100  ¦  10  ¦  10.34  ¦  1.34  ¦  你好  ¦  你  ¦  aaa  ¦  aa  ¦  2011-10-11  ¦  2011-10-10  ¦  true  ¦  false
 set mo_table_stats.use_old_impl = yes;
 select mo_table_rows("test_db","t11"),mo_table_size("test_db","t11");
-mo_table_rows(test_db, t11)    mo_table_size(test_db, t11)
-2    170
+➤ mo_table_rows(test_db, t11)[-5,64,0]  ¦  mo_table_size(test_db, t11)[-5,64,0]  𝄀
+2  ¦  170
 set mo_table_stats.use_old_impl = no;
 create external table external_table(
 col1 int,
@@ -530,50 +521,50 @@ col6 date,
 col7 bool
 )infile{"filepath"='$resources/external_table_file/external_table.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select * from external_table;
-col1    col2    col3    col4    col6    col7
-null    null            null    null
-100    10.34    你好    aaa    2011-10-10    false
-10    1.34    你    aa    2011-10-11    true
+➤ col1[4,32,0]  ¦  col2[7,24,0]  ¦  col3[12,-1,0]  ¦  col4[12,0,0]  ¦  col6[91,64,0]  ¦  col7[12,4,0]  𝄀
+null  ¦  null  ¦    ¦    ¦  null  ¦  null  𝄀
+100  ¦  10.34  ¦  你好  ¦  aaa  ¦  2011-10-10  ¦  false  𝄀
+10  ¦  1.34  ¦  你  ¦  aa  ¦  2011-10-11  ¦  true
 show table_number from test_db;
-Number of tables in test_db
+➤ Number of tables in test_db[-5,64,0]  𝄀
 3
 show table_values from external_table;
-max(col1)    min(col1)    max(col2)    min(col2)    max(col3)    min(col3)    max(col4)    min(col4)    max(col6)    min(col6)    max(col7)    min(col7)
-100    10    10.34    1.34    你好        aaa        2011-10-11    2011-10-10    true    false
+➤ max(col1)[4,32,0]  ¦  min(col1)[4,32,0]  ¦  max(col2)[7,24,0]  ¦  min(col2)[7,24,0]  ¦  max(col3)[12,-1,0]  ¦  min(col3)[12,-1,0]  ¦  max(col4)[12,0,0]  ¦  min(col4)[12,0,0]  ¦  max(col6)[91,64,0]  ¦  min(col6)[91,64,0]  ¦  max(col7)[12,4,0]  ¦  min(col7)[12,4,0]  𝄀
+100  ¦  10  ¦  10.34  ¦  1.34  ¦  你好  ¦    ¦  aaa  ¦    ¦  2011-10-11  ¦  2011-10-10  ¦  true  ¦  false
 create table t2(
 col1 json
 );
 show table_values from t2;
-max(col1)    min(col1)
+➤ max(col1)[12,4,0]  ¦  min(col1)[12,4,0]
 insert into t2 values();
 show table_values from t2;
-max(col1)    min(col1)
-null    null
+➤ max(col1)[12,4,0]  ¦  min(col1)[12,4,0]  𝄀
+null  ¦  null
 insert into t2 values(('{"x": 17}'));
 show table_values from t2;
-max(col1)    min(col1)
-null    null
+➤ max(col1)[12,4,0]  ¦  min(col1)[12,4,0]  𝄀
+null  ¦  null
 insert into t2 values (('{"x": [18]}'));
 show table_values from t2;
-max(col1)    min(col1)
-null    null
+➤ max(col1)[12,4,0]  ¦  min(col1)[12,4,0]  𝄀
+null  ¦  null
 create table t3(
 col1 decimal
 );
 show table_values from t3;
-max(col1)    min(col1)
-null    null
+➤ max(col1)[3,39,0]  ¦  min(col1)[3,39,0]  𝄀
+null  ¦  null
 insert into t3 values();
 show table_values from t3;
-max(col1)    min(col1)
-null    null
+➤ max(col1)[3,39,0]  ¦  min(col1)[3,39,0]  𝄀
+null  ¦  null
 insert into t3 values(3.3);
 show table_values from t3;
-max(col1)    min(col1)
-3    3
+➤ max(col1)[3,39,0]  ¦  min(col1)[3,39,0]  𝄀
+3  ¦  3
 insert into t3 values(3.2);
 show table_values from t3;
-max(col1)    min(col1)
-3    3
+➤ max(col1)[3,39,0]  ¦  min(col1)[3,39,0]  𝄀
+3  ¦  3
 drop database test_db;
 drop account if exists test_account;
