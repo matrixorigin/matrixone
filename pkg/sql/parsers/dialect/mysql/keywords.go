@@ -354,6 +354,7 @@ func init() {
 		"parallel":                   PARALLEL,
 		"max_file_size":              MAX_FILE_SIZE,
 		"force_quote":                FORCE_QUOTE,
+		"splitsize":                  SPLITSIZE,
 		"external":                   EXTERNAL,
 		"url":                        URL,
 		"pause":                      PAUSE,
