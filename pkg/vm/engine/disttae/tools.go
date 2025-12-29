@@ -46,7 +46,7 @@ func genWriteReqs(
 	var tnID string
 	var tn metadata.TNService
 	entries := make([]*api.Entry, 0, len(writes))
-	for i, e := range writes {
+	for _, e := range writes {
 		if tnID == "" {
 			tnID = e.tnStore.ServiceID
 			tn = e.tnStore

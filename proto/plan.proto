@@ -1601,6 +1601,7 @@ message MetadataScanInfo {
     MIN = 10;
     MAX = 11;
     SUM = 12;
+    LEVEL = 13;
   }
   string col_name = 1;
   string object_name = 2;
@@ -1613,6 +1614,7 @@ message MetadataScanInfo {
   int64 compress_size = 9;
   int64 origin_size = 10;
   bytes zone_map = 11;
+  int32 level = 12;
 }
 
 message CreatePitr {
