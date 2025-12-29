@@ -185,6 +185,61 @@ func TestAWSRegion(t *testing.T) {
 	assert.NotNil(t, args.validate())
 }
 
+func TestSetFromStringParallelMode(t *testing.T) {
+	var args ObjectStorageArguments
+	assert.NoError(t, args.SetFromString([]string{"parallel-mode=force"}))
+	assert.Equal(t, ParallelForce, args.ParallelMode)
+
+	args = ObjectStorageArguments{
+		ParallelMode: ParallelAuto,
+	}
+	assert.NoError(t, args.SetFromString([]string{"parallel-mode=unknown"}))
+	assert.Equal(t, ParallelAuto, args.ParallelMode)
+}
+
+func TestObjectStorageArgumentsValidateDefaults(t *testing.T) {
+	args := ObjectStorageArguments{
+		Endpoint: "example.com",
+	}
+	assert.NoError(t, args.validate())
+	assert.Equal(t, "https://example.com", args.Endpoint)
+	assert.Equal(t, "mo-service", args.RoleSessionName)
+}
+
+func TestObjectStorageArgumentsShouldLoadDefaultCredentials(t *testing.T) {
+	t.Setenv("AWS_ACCESS_KEY_ID", "ak")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "sk")
+	args := ObjectStorageArguments{}
+	assert.True(t, args.shouldLoadDefaultCredentials())
+
+	args = ObjectStorageArguments{
+		NoDefaultCredentials: true,
+		KeyID:                "id",
+		KeySecret:            "secret",
+	}
+	assert.False(t, args.shouldLoadDefaultCredentials())
+
+	args = ObjectStorageArguments{
+		NoDefaultCredentials: true,
+		RoleARN:              "arn",
+	}
+	assert.True(t, args.shouldLoadDefaultCredentials())
+}
+
+func TestObjectStorageArgumentsString(t *testing.T) {
+	args := ObjectStorageArguments{
+		Name:        "foo",
+		KeyPrefix:   "bar",
+		Concurrency: 3,
+	}
+	s := args.String()
+	var decoded ObjectStorageArguments
+	assert.NoError(t, json.Unmarshal([]byte(s), &decoded))
+	assert.Equal(t, args.Name, decoded.Name)
+	assert.Equal(t, args.KeyPrefix, decoded.KeyPrefix)
+	assert.Equal(t, args.Concurrency, decoded.Concurrency)
+}
+
 func TestParseHDFSArgs(t *testing.T) {
 	var args ObjectStorageArguments
 	if err := args.SetFromString([]string{
