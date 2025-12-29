@@ -114,6 +114,14 @@ func RegisterSum2(id int64) {
 		nil,
 		aggSumOfDecimalInitResult,
 		aggSumOfDecimal64Fill, aggSumOfDecimal64Fills, aggSumOfDecimal64Merge, nil)
+
+	// YEAR type: MoYear is int16, sum returns int64
+	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_year.ToType(), SumReturnType, true),
+		nil,
+		nil,
+		aggSumInitResult[int64],
+		aggSumYearFill, aggSumYearFills, aggSumYearMerge, nil)
 }
 
 var (
@@ -123,6 +131,7 @@ var (
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_float32, types.T_float64,
 		types.T_decimal64, types.T_decimal128,
+		types.T_year,
 	}
 	SumReturnType = func(typs []types.Type) types.Type {
 		switch typs[0].Oid {
@@ -134,6 +143,8 @@ var (
 			return types.T_uint64.ToType()
 		case types.T_bit:
 			return types.T_uint64.ToType()
+		case types.T_year:
+			return types.T_int64.ToType()
 		case types.T_decimal64:
 			return types.New(types.T_decimal128, 38, typs[0].Scale)
 		case types.T_decimal128:
@@ -332,5 +343,32 @@ func aggSumInt64Merge(
 		return err
 	}
 	resultSetter(result)
+	return nil
+}
+
+// YEAR type specific SUM functions
+func aggSumYearFill(
+	_ aggexec.AggGroupExecContext, _ aggexec.AggCommonExecContext,
+	value types.MoYear, isEmpty bool,
+	resultGetter aggexec.AggGetter[int64], resultSetter aggexec.AggSetter[int64]) error {
+	resultSetter(resultGetter() + int64(value))
+	return nil
+}
+
+func aggSumYearFills(
+	_ aggexec.AggGroupExecContext, _ aggexec.AggCommonExecContext,
+	value types.MoYear, count int, isEmpty bool,
+	resultGetter aggexec.AggGetter[int64], resultSetter aggexec.AggSetter[int64]) error {
+	resultSetter(resultGetter() + int64(value)*int64(count))
+	return nil
+}
+
+func aggSumYearMerge(
+	_, _ aggexec.AggGroupExecContext,
+	_ aggexec.AggCommonExecContext,
+	isEmpty1, isEmpty2 bool,
+	resultGetter1, resultGetter2 aggexec.AggGetter[int64],
+	resultSetter aggexec.AggSetter[int64]) error {
+	resultSetter(resultGetter1() + resultGetter2())
 	return nil
 }

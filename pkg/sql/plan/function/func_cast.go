@@ -195,7 +195,7 @@ var supportedTypeCast = map[types.T][]types.T{
 	types.T_date: {
 		types.T_int32, types.T_int64,
 		types.T_date, types.T_datetime,
-		types.T_time, types.T_timestamp,
+		types.T_time, types.T_timestamp, types.T_year,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 	},
@@ -203,7 +203,7 @@ var supportedTypeCast = map[types.T][]types.T{
 	types.T_datetime: {
 		types.T_int32, types.T_int64,
 		types.T_date, types.T_datetime,
-		types.T_time, types.T_timestamp,
+		types.T_time, types.T_timestamp, types.T_year,
 		types.T_decimal64, types.T_decimal128,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
@@ -212,7 +212,7 @@ var supportedTypeCast = map[types.T][]types.T{
 	types.T_timestamp: {
 		types.T_int32, types.T_int64,
 		types.T_date, types.T_datetime,
-		types.T_timestamp,
+		types.T_timestamp, types.T_year,
 		types.T_decimal64, types.T_decimal128,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
@@ -1332,6 +1332,9 @@ func dateToOthers(proc *process.Process,
 	case types.T_datetime:
 		rs := vector.MustFunctionResult[types.Datetime](result)
 		return dateToDatetime(source, rs, length, selectList)
+	case types.T_year:
+		rs := vector.MustFunctionResult[types.MoYear](result)
+		return dateToYear(source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
 		types.T_binary, types.T_varbinary, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
@@ -1366,6 +1369,9 @@ func datetimeToOthers(proc *process.Process,
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
 		return datetimeToTime(source, rs, length, selectList)
+	case types.T_year:
+		rs := vector.MustFunctionResult[types.MoYear](result)
+		return datetimeToYear(source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
 		types.T_binary, types.T_varbinary, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
@@ -1404,6 +1410,9 @@ func timestampToOthers(proc *process.Process,
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return timestampToTimestamp(proc.Ctx, source, rs, length, toType.Scale)
+	case types.T_year:
+		rs := vector.MustFunctionResult[types.MoYear](result)
+		return timestampToYear(source, rs, length, zone, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
 		types.T_binary, types.T_varbinary, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
@@ -5410,10 +5419,14 @@ func integerToYear[T constraints.Integer](ctx context.Context,
 		} else {
 			year, err := types.ParseMoYearFromInt(int64(v))
 			if err != nil {
-				return err
-			}
-			if err := rs.Append(year, false); err != nil {
-				return err
+				// MySQL returns NULL for invalid year values
+				if err := rs.Append(0, true); err != nil {
+					return err
+				}
+			} else {
+				if err := rs.Append(year, false); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -5433,9 +5446,80 @@ func strToYear(ctx context.Context,
 		} else {
 			year, err := types.ParseMoYear(string(v))
 			if err != nil {
+				// MySQL returns NULL for invalid year values
+				if err := rs.Append(0, true); err != nil {
+					return err
+				}
+			} else {
+				if err := rs.Append(year, false); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// dateToYear converts Date to Year by extracting the year component
+func dateToYear(
+	from vector.FunctionParameterWrapper[types.Date],
+	to *vector.FunctionResult[types.MoYear], length int, selectList *FunctionSelectList) error {
+	var i uint64
+	l := uint64(length)
+	for i = 0; i < l; i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(0, true); err != nil {
 				return err
 			}
-			if err := rs.Append(year, false); err != nil {
+		} else {
+			year := types.MoYear(v.Year())
+			if err := to.Append(year, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// datetimeToYear converts Datetime to Year by extracting the year component
+func datetimeToYear(
+	from vector.FunctionParameterWrapper[types.Datetime],
+	to *vector.FunctionResult[types.MoYear], length int, selectList *FunctionSelectList) error {
+	var i uint64
+	l := uint64(length)
+	for i = 0; i < l; i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			year := types.MoYear(v.Year())
+			if err := to.Append(year, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// timestampToYear converts Timestamp to Year by extracting the year component
+func timestampToYear(
+	from vector.FunctionParameterWrapper[types.Timestamp],
+	to *vector.FunctionResult[types.MoYear], length int, zone *time.Location, selectList *FunctionSelectList) error {
+	var i uint64
+	l := uint64(length)
+	for i = 0; i < l; i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			dt := v.ToDatetime(zone)
+			year := types.MoYear(dt.Year())
+			if err := to.Append(year, false); err != nil {
 				return err
 			}
 		}

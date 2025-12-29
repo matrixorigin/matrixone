@@ -1710,6 +1710,9 @@ var supportedOperators = []FuncNew{
 						}
 						return types.New(types.T_decimal128, 38, scale)
 					}
+					if parameters[0].Oid == types.T_year {
+						return types.T_int64.ToType()
+					}
 					return parameters[0]
 				},
 				newOp: func() executeLogicOfOverload {
@@ -1771,6 +1774,9 @@ var supportedOperators = []FuncNew{
 							scale = scale1 + 6
 						}
 						return types.New(types.T_decimal128, 38, scale)
+					}
+					if parameters[0].Oid == types.T_year {
+						return types.T_float64.ToType()
 					}
 					return parameters[0]
 				},

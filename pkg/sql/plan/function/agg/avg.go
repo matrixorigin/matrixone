@@ -84,6 +84,12 @@ func RegisterAvg2(id int64) {
 		aggexec.MakeSingleColumnAggInformation(id, types.T_decimal128.ToType(), AvgReturnType, true),
 		generateAggAvgDecimalCommonContext, generateAggAvgContext, aggAvgOfDecimalInitResult,
 		aggAvgOfDecimal128Fill, aggAvgOfDecimal128Fills, aggAvgOfDecimalMerge, aggAvgOfDecimalFlush)
+
+	// YEAR type: MoYear is int16, avg returns float64
+	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_year.ToType(), AvgReturnType, true),
+		nil, generateAggAvgContext, aggAvgInitResult,
+		aggAvgYearFill, aggAvgYearFills, aggAvgYearMerge, aggAvgFlush)
 }
 
 var AvgSupportedTypes = []types.T{
@@ -92,6 +98,7 @@ var AvgSupportedTypes = []types.T{
 	types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 	types.T_float32, types.T_float64,
 	types.T_decimal64, types.T_decimal128,
+	types.T_year,
 }
 
 func AvgReturnType(typs []types.Type) types.Type {
@@ -272,4 +279,33 @@ func aggAvgOfDecimal128Fills(
 	r, err = resultGetter().Add128(r)
 	resultSetter(r)
 	return err
+}
+
+// YEAR type specific AVG functions
+func aggAvgYearFill(
+	value types.MoYear, isEmpty bool,
+	resultGetter aggexec.AggGetter[float64], resultSetter aggexec.AggSetter[float64]) error {
+	*(groupCtx.(*aggAvgContext))++
+	resultSetter(resultGetter() + float64(value))
+	return nil
+}
+
+func aggAvgYearFills(
+	groupCtx aggexec.AggGroupExecContext, _ aggexec.AggCommonExecContext,
+	value types.MoYear, count int, isEmpty bool,
+	resultGetter aggexec.AggGetter[float64], resultSetter aggexec.AggSetter[float64]) error {
+	*(groupCtx.(*aggAvgContext)) += aggAvgContext(count)
+	resultSetter(resultGetter() + float64(value)*float64(count))
+	return nil
+}
+
+func aggAvgYearMerge(
+	groupCtx1, groupCtx2 aggexec.AggGroupExecContext,
+	_ aggexec.AggCommonExecContext,
+	isEmpty1, isEmpty2 bool,
+	resultGetter1, resultGetter2 aggexec.AggGetter[float64],
+	resultSetter aggexec.AggSetter[float64]) error {
+	*(groupCtx1.(*aggAvgContext)) += *(groupCtx2.(*aggAvgContext))
+	resultSetter(resultGetter1() + resultGetter2())
+	return nil
 }
