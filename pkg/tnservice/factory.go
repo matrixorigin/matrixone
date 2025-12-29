@@ -177,15 +177,19 @@ func (s *store) newTAEStorage(
 	}
 
 	gcCfg := &options.GCCfg{
-		GCTTL:          s.cfg.GCCfg.GCTTL.Duration,
-		GCInMemoryTTL:  s.cfg.GCCfg.GCInMemoryTTL.Duration,
-		ScanGCInterval: s.cfg.GCCfg.ScanGCInterval.Duration,
-		DisableGC:      s.cfg.GCCfg.DisableGC,
-		CheckGC:        s.cfg.GCCfg.CheckGC,
-		CacheSize:      s.cfg.GCCfg.CacheSize,
-		GCMergeCount:   s.cfg.GCCfg.GCMergeCount,
-		GCestimateRows: s.cfg.GCCfg.GCestimateRows,
-		GCProbility:    s.cfg.GCCfg.GCProbility,
+		GCTTL:             s.cfg.GCCfg.GCTTL.Duration,
+		GCInMemoryTTL:     s.cfg.GCCfg.GCInMemoryTTL.Duration,
+		ScanGCInterval:    s.cfg.GCCfg.ScanGCInterval.Duration,
+		DisableGC:         s.cfg.GCCfg.DisableGC,
+		CheckGC:           s.cfg.GCCfg.CheckGC,
+		CacheSize:         s.cfg.GCCfg.CacheSize,
+		GCMergeCount:      s.cfg.GCCfg.GCMergeCount,
+		GCScanCount:       s.cfg.GCCfg.GCScanCount,
+		GCestimateRows:    s.cfg.GCCfg.GCestimateRows,
+		GCProbility:       s.cfg.GCCfg.GCProbility,
+		GCDeleteTimeout:   s.cfg.GCCfg.GCDeleteTimeout.Duration,
+		GCDeleteBatchSize: s.cfg.GCCfg.GCDeleteBatchSize,
+		GCDeleteWorkerNum: s.cfg.GCCfg.GCDeleteWorkerNum,
 	}
 
 	mergeCfg := &options.MergeConfig{

@@ -186,14 +186,23 @@ func (w *GCWindow) ExecuteGlobalCheckpointBasedGC(
 	if err != nil {
 		return nil, "", err
 	}
-	filesToGC := make([]string, 0, 20)
+	// Use a map to deduplicate file names, as the same object may appear
+	// multiple times in vecToGC (e.g., when referenced by multiple tables).
+	// This avoids sending duplicate delete requests to S3.
+	// Note: We use map instead of bloom filter because bloom filter's false positive
+	// could cause file leaks (files that should be deleted but are skipped).
+	filesToGCSet := make(map[string]struct{})
 	bf.Test(vecToGC,
 		func(exists bool, i int) {
 			if !exists {
-				filesToGC = append(filesToGC, string(vecToGC.GetBytesAt(i)))
+				filesToGCSet[string(vecToGC.GetBytesAt(i))] = struct{}{}
 				return
 			}
 		})
+	filesToGC := make([]string, 0, len(filesToGCSet))
+	for file := range filesToGCSet {
+		filesToGC = append(filesToGC, file)
+	}
 	return filesToGC, metaFile, nil
 }
 

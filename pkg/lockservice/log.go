@@ -698,11 +698,12 @@ func logUnlockTableOnRemote(
 	}
 }
 
-func logUnlockTableOnRemoteFailed(
+func logUnlockTableOnRemoteFailedWithCount(
 	logger *log.MOLogger,
 	txn *activeTxn,
 	bind pb.LockTable,
 	err error,
+	retryCount int,
 ) {
 	if logger == nil {
 		return
@@ -713,6 +714,7 @@ func logUnlockTableOnRemoteFailed(
 		getLogOptions(zap.ErrorLevel),
 		txnField(txn),
 		zap.String("bind", bind.DebugString()),
+		zap.Int("retry-count", retryCount),
 		zap.Error(err),
 	)
 }

@@ -11,7 +11,7 @@ account_name    admin_name    created_time    status    suspended_time    db_cou
 tenant_test    root    2025-11-24 14:03:04    open    null    5    66    0.0    0.0    tenant_test
 sys    root    2025-11-21 09:44:39    open    null    8    114    348.925694    0.0    system account
 drop account if exists tenant_test;
-select account_id,relname,relkind from mo_catalog.mo_tables where reldatabase = 'mo_catalog' and relname not like '__mo_index%' and relname != '__mo_account_lock' order by relname;
+select account_id,relname,relkind from mo_catalog.mo_tables where account_id = 0 and reldatabase = 'mo_catalog' and relname not like '__mo_index%' and relname != '__mo_account_lock' order by relname;
 account_id    relname    relkind
 0    mo_account    r
 0    mo_branch_metadata    r

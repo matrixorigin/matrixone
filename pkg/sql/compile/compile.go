@@ -4226,9 +4226,13 @@ func (c *Compile) handleDbRelContext(node *plan.Node, onRemoteCN bool) (engine.R
 	var txnOp client.TxnOperator
 
 	if onRemoteCN {
-		ws := disttae.NewTxnWorkSpace(c.e.(*disttae.Engine), c.proc)
-		c.proc.GetTxnOperator().AddWorkspace(ws)
-		ws.BindTxnOp(c.proc.GetTxnOperator())
+		// Workspace may have been created earlier in remote run scenario (e.g., in remoterunServer.go).
+		// Only create if it doesn't exist to avoid duplicate creation.
+		if c.proc.GetTxnOperator().GetWorkspace() == nil {
+			ws := disttae.NewTxnWorkSpace(c.e.(*disttae.Engine), c.proc)
+			c.proc.GetTxnOperator().AddWorkspace(ws)
+			ws.BindTxnOp(c.proc.GetTxnOperator())
+		}
 	}
 
 	//------------------------------------------------------------------------------------------------------------------

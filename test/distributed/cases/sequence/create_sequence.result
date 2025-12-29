@@ -1,42 +1,42 @@
 create sequence seq_01 as int start 30;
 create sequence `123` start 30;
 select nextval('123');
-nextval(123)
+➤ nextval(123)[12,-1,0]  𝄀
 30
 create sequence SEQ increment 100 start 30;
 create sequence sEq increment 100 start 30;
 table seq already exists
 create sequence `中文` maxvalue 6899 cycle;
 select nextval('中文');
-nextval(中文)
+➤ nextval(中文)[12,-1,0]  𝄀
 1
 select nextval('中文'),currval('中文');
-nextval(中文)    currval(中文)
-2    2
+➤ nextval(中文)[12,-1,0]  ¦  currval(中文)[12,-1,0]  𝄀
+2  ¦  2
 create sequence `test@123456`;
 select nextval('test@123456');
-nextval(test@123456)
+➤ nextval(test@123456)[12,-1,0]  𝄀
 1
 select nextval('test@123456'),currval('test@123456');
-nextval(test@123456)    currval(test@123456)
-2    2
+➤ nextval(test@123456)[12,-1,0]  ¦  currval(test@123456)[12,-1,0]  𝄀
+2  ¦  2
 create sequence _acc;
 select nextval('_acc');
-nextval(_acc)
+➤ nextval(_acc)[12,-1,0]  𝄀
 1
 select nextval('_acc'),currval('_acc');
-nextval(_acc)    currval(_acc)
-2    2
+➤ nextval(_acc)[12,-1,0]  ¦  currval(_acc)[12,-1,0]  𝄀
+2  ¦  2
 create sequence `ab.cd` start with 1;
 select nextval('ab.cd');
-nextval(ab.cd)
+➤ nextval(ab.cd)[12,-1,0]  𝄀
 1
 select nextval('ab.cd'),currval('ab.cd');
-nextval(ab.cd)    currval(ab.cd)
-2    2
+➤ nextval(ab.cd)[12,-1,0]  ¦  currval(ab.cd)[12,-1,0]  𝄀
+2  ¦  2
 create sequence `abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffff` start 30;
 select nextval('abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffff') as s1;
-s1
+➤ s1[12,-1,0]  𝄀
 30
 create table if not exists seq_temp(col1 int);
 create sequence seq_temp start 10;
@@ -67,213 +67,213 @@ create sequence if not exists seq_02 as tinyint CYCLE;
 not supported: Unsupported type for sequence
 create sequence seq_03 increment 3;
 select nextval('seq_03');
-nextval(seq_03)
+➤ nextval(seq_03)[12,-1,0]  𝄀
 1
 select nextval('seq_03'),currval('seq_03');
-nextval(seq_03)    currval(seq_03)
-4    4
+➤ nextval(seq_03)[12,-1,0]  ¦  currval(seq_03)[12,-1,0]  𝄀
+4  ¦  4
 select nextval('seq_03');
-nextval(seq_03)
+➤ nextval(seq_03)[12,-1,0]  𝄀
 7
 select nextval('seq_03');
-nextval(seq_03)
+➤ nextval(seq_03)[12,-1,0]  𝄀
 10
 select * from seq_03;
-last_seq_num    min_value    max_value    start_value    increment_value    cycle    is_called
-10    1    9223372036854775807    1    3    false    true
+➤ last_seq_num[-5,64,0]  ¦  min_value[-5,64,0]  ¦  max_value[-5,64,0]  ¦  start_value[-5,64,0]  ¦  increment_value[-5,64,0]  ¦  cycle[12,4,0]  ¦  is_called[12,4,0]  𝄀
+10  ¦  1  ¦  9223372036854775807  ¦  1  ¦  3  ¦  false  ¦  true
 create sequence seq_04 increment by -10;
 select nextval('seq_04');
-nextval(seq_04)
+➤ nextval(seq_04)[12,-1,0]  𝄀
 -1
 select nextval('seq_04'),currval('seq_04');
-nextval(seq_04)    currval(seq_04)
--11    -11
+➤ nextval(seq_04)[12,-1,0]  ¦  currval(seq_04)[12,-1,0]  𝄀
+-11  ¦  -11
 select nextval('seq_04');
-nextval(seq_04)
+➤ nextval(seq_04)[12,-1,0]  𝄀
 -21
 select nextval('seq_04'),currval('seq_04');
-nextval(seq_04)    currval(seq_04)
--31    -31
+➤ nextval(seq_04)[12,-1,0]  ¦  currval(seq_04)[12,-1,0]  𝄀
+-31  ¦  -31
 create sequence seq_05 start 10000;
 select nextval('seq_05');
-nextval(seq_05)
+➤ nextval(seq_05)[12,-1,0]  𝄀
 10000
 select nextval('seq_05'),currval('seq_05');
-nextval(seq_05)    currval(seq_05)
-10001    10001
+➤ nextval(seq_05)[12,-1,0]  ¦  currval(seq_05)[12,-1,0]  𝄀
+10001  ¦  10001
 create table seq_table_01(col1 int);
 insert into seq_table_01 values(nextval('seq_05')),(nextval('seq_04')),(nextval('seq_05')),(nextval('seq_05'));
 select col1 from seq_table_01;
-col1
-10002
--41
-10003
+➤ col1[4,32,0]  𝄀
+10002  𝄀
+-41  𝄀
+10003  𝄀
 10004
 create sequence seq_06 start with 10000;
 select nextval('seq_06');
-nextval(seq_06)
+➤ nextval(seq_06)[12,-1,0]  𝄀
 10000
 select nextval('seq_06'),currval('seq_06');
-nextval(seq_06)    currval(seq_06)
-10001    10001
+➤ nextval(seq_06)[12,-1,0]  ¦  currval(seq_06)[12,-1,0]  𝄀
+10001  ¦  10001
 select nextval('seq_06'),currval('seq_06');
-nextval(seq_06)    currval(seq_06)
-10002    10002
+➤ nextval(seq_06)[12,-1,0]  ¦  currval(seq_06)[12,-1,0]  𝄀
+10002  ¦  10002
 select nextval('seq_06');
-nextval(seq_06)
+➤ nextval(seq_06)[12,-1,0]  𝄀
 10003
 select nextval('seq_06');
-nextval(seq_06)
+➤ nextval(seq_06)[12,-1,0]  𝄀
 10004
 select * from seq_06;
-last_seq_num    min_value    max_value    start_value    increment_value    cycle    is_called
-10004    1    9223372036854775807    10000    1    false    true
+➤ last_seq_num[-5,64,0]  ¦  min_value[-5,64,0]  ¦  max_value[-5,64,0]  ¦  start_value[-5,64,0]  ¦  increment_value[-5,64,0]  ¦  cycle[12,4,0]  ¦  is_called[12,4,0]  𝄀
+10004  ¦  1  ¦  9223372036854775807  ¦  10000  ¦  1  ¦  false  ¦  true
 truncate table seq_table_01;
 insert into seq_table_01 values(nextval('seq_06')),(nextval('seq_06'));
 insert into seq_table_01 values(nextval('seq_06'));
 select col1 from seq_table_01;
-col1
-10005
-10006
+➤ col1[4,32,0]  𝄀
+10005  𝄀
+10006  𝄀
 10007
 create sequence seq_07 minvalue 999 maxvalue 1999;
 select nextval('seq_07');
-nextval(seq_07)
+➤ nextval(seq_07)[12,-1,0]  𝄀
 999
 select nextval('seq_07'),currval('seq_07');
-nextval(seq_07)    currval(seq_07)
-1000    1000
+➤ nextval(seq_07)[12,-1,0]  ¦  currval(seq_07)[12,-1,0]  𝄀
+1000  ¦  1000
 select nextval('seq_07'),currval('seq_07');
-nextval(seq_07)    currval(seq_07)
-1001    1001
+➤ nextval(seq_07)[12,-1,0]  ¦  currval(seq_07)[12,-1,0]  𝄀
+1001  ¦  1001
 select nextval('seq_07');
-nextval(seq_07)
+➤ nextval(seq_07)[12,-1,0]  𝄀
 1002
 select setval('seq_07',1050,false);
-setval(seq_07, 1050, false)
+➤ setval(seq_07, 1050, false)[12,-1,0]  𝄀
 1050
 select lastval();
-lastval()
+➤ lastval()[12,-1,0]  𝄀
 1002
 truncate table seq_table_01;
 insert into seq_table_01 values(nextval('seq_07'));
 insert into seq_table_01 select nextval('seq_07');
 select * from seq_table_01;
-col1
-1051
+➤ col1[4,32,0]  𝄀
+1051  𝄀
 1052
 create sequence seq_08;
 select nextval('seq_08');
-nextval(seq_08)
+➤ nextval(seq_08)[12,-1,0]  𝄀
 1
 select nextval('seq_08'),currval('seq_08');
-nextval(seq_08)    currval(seq_08)
-2    2
+➤ nextval(seq_08)[12,-1,0]  ¦  currval(seq_08)[12,-1,0]  𝄀
+2  ¦  2
 select nextval('seq_08'),currval('seq_08');
-nextval(seq_08)    currval(seq_08)
-3    3
+➤ nextval(seq_08)[12,-1,0]  ¦  currval(seq_08)[12,-1,0]  𝄀
+3  ¦  3
 create sequence seq_09 minvalue 10 maxvalue 12 no cycle;
 select nextval('seq_09');
-nextval(seq_09)
+➤ nextval(seq_09)[12,-1,0]  𝄀
 10
 select nextval('seq_09');
-nextval(seq_09)
+➤ nextval(seq_09)[12,-1,0]  𝄀
 11
 select nextval('seq_09');
-nextval(seq_09)
+➤ nextval(seq_09)[12,-1,0]  𝄀
 12
 select nextval('seq_09');
 internal error: Reached maximum value of sequence seq_09
 drop sequence seq_09;
 create sequence seq_09 increment 2 minvalue 10 maxvalue 12 cycle;
 select nextval('seq_09');
-nextval(seq_09)
+➤ nextval(seq_09)[12,-1,0]  𝄀
 10
 select nextval('seq_09');
-nextval(seq_09)
+➤ nextval(seq_09)[12,-1,0]  𝄀
 12
 select nextval('seq_09');
-nextval(seq_09)
+➤ nextval(seq_09)[12,-1,0]  𝄀
 10
 select nextval('seq_09');
-nextval(seq_09)
+➤ nextval(seq_09)[12,-1,0]  𝄀
 12
 select * from seq_09;
-last_seq_num    min_value    max_value    start_value    increment_value    cycle    is_called
-12    10    12    10    2    true    true
+➤ last_seq_num[-5,64,0]  ¦  min_value[-5,64,0]  ¦  max_value[-5,64,0]  ¦  start_value[-5,64,0]  ¦  increment_value[-5,64,0]  ¦  cycle[12,4,0]  ¦  is_called[12,4,0]  𝄀
+12  ¦  10  ¦  12  ¦  10  ¦  2  ¦  true  ¦  true
 create sequence seq_10 minvalue 1000;
 select nextval('seq_10');
-nextval(seq_10)
+➤ nextval(seq_10)[12,-1,0]  𝄀
 1000
 select nextval('seq_10'),currval('seq_10');
-nextval(seq_10)    currval(seq_10)
-1001    1001
+➤ nextval(seq_10)[12,-1,0]  ¦  currval(seq_10)[12,-1,0]  𝄀
+1001  ¦  1001
 select nextval('seq_10');
-nextval(seq_10)
+➤ nextval(seq_10)[12,-1,0]  𝄀
 1002
 select nextval('seq_10');
-nextval(seq_10)
+➤ nextval(seq_10)[12,-1,0]  𝄀
 1003
 select nextval('seq_08'),currval('seq_08');
-nextval(seq_08)    currval(seq_08)
-4    4
+➤ nextval(seq_08)[12,-1,0]  ¦  currval(seq_08)[12,-1,0]  𝄀
+4  ¦  4
 create sequence seq_11 as smallint start 126;
 select nextval('seq_11');
-nextval(seq_11)
+➤ nextval(seq_11)[12,-1,0]  𝄀
 126
 select nextval('seq_11'),currval('seq_11');
-nextval(seq_11)    currval(seq_11)
-127    127
+➤ nextval(seq_11)[12,-1,0]  ¦  currval(seq_11)[12,-1,0]  𝄀
+127  ¦  127
 select nextval('seq_11');
-nextval(seq_11)
+➤ nextval(seq_11)[12,-1,0]  𝄀
 128
 select nextval('seq_11');
-nextval(seq_11)
+➤ nextval(seq_11)[12,-1,0]  𝄀
 129
 create sequence if not exists seq_12 as bigint increment by 10000 minvalue 500  start with 500 cycle;
 select nextval('seq_12');
-nextval(seq_12)
+➤ nextval(seq_12)[12,-1,0]  𝄀
 500
 select nextval('seq_12'),currval('seq_12');
-nextval(seq_12)    currval(seq_12)
-10500    10500
+➤ nextval(seq_12)[12,-1,0]  ¦  currval(seq_12)[12,-1,0]  𝄀
+10500  ¦  10500
 select nextval('seq_12'),currval('seq_12');
-nextval(seq_12)    currval(seq_12)
-20500    20500
+➤ nextval(seq_12)[12,-1,0]  ¦  currval(seq_12)[12,-1,0]  𝄀
+20500  ¦  20500
 select nextval('seq_12');
-nextval(seq_12)
+➤ nextval(seq_12)[12,-1,0]  𝄀
 30500
 select * from seq_12;
-last_seq_num    min_value    max_value    start_value    increment_value    cycle    is_called
-30500    500    9223372036854775807    500    10000    true    true
+➤ last_seq_num[-5,64,0]  ¦  min_value[-5,64,0]  ¦  max_value[-5,64,0]  ¦  start_value[-5,64,0]  ¦  increment_value[-5,64,0]  ¦  cycle[12,4,0]  ¦  is_called[12,4,0]  𝄀
+30500  ¦  500  ¦  9223372036854775807  ¦  500  ¦  10000  ¦  true  ¦  true
 truncate table seq_table_01;
 insert into seq_table_01 select nextval('seq_12');
 insert into seq_table_01 values(nextval('seq_12'));
 select * from seq_table_01;
-col1
-40500
+➤ col1[4,32,0]  𝄀
+40500  𝄀
 50500
 create sequence seq_13 as int increment -10000  no cycle;
 select nextval('seq_13');
-nextval(seq_13)
+➤ nextval(seq_13)[12,-1,0]  𝄀
 -1
 select nextval('seq_13'),currval('seq_13');
-nextval(seq_13)    currval(seq_13)
--10001    -10001
+➤ nextval(seq_13)[12,-1,0]  ¦  currval(seq_13)[12,-1,0]  𝄀
+-10001  ¦  -10001
 truncate table seq_table_01;
 insert into seq_table_01 select nextval('seq_13');
 insert into seq_table_01 values(nextval('seq_13'));
 select * from seq_table_01;
-col1
--20001
+➤ col1[4,32,0]  𝄀
+-20001  𝄀
 -30001
 create sequence seq_14  increment 50 start with 126 no cycle;
 select nextval('seq_14');
-nextval(seq_14)
+➤ nextval(seq_14)[12,-1,0]  𝄀
 126
 select nextval('seq_14'),currval('seq_14');
-nextval(seq_14)    currval(seq_14)
-176    176
+➤ nextval(seq_14)[12,-1,0]  ¦  currval(seq_14)[12,-1,0]  𝄀
+176  ¦  176
 truncate table seq_table_01;
 insert into seq_table_01 select nextval('seq_14');
 insert into seq_table_01 values(nextval('seq_14'));
@@ -281,11 +281,11 @@ insert into seq_table_01 values(nextval('seq_14'));
 insert into seq_table_01 values(nextval('seq_14'));
 insert into seq_table_01 values(nextval('seq_14'));
 select * from seq_table_01;
-col1
-226
-276
-326
-376
+➤ col1[4,32,0]  𝄀
+226  𝄀
+276  𝄀
+326  𝄀
+376  𝄀
 426
 create sequence seq_an_01 as smallint start -1000;
 invalid input: STARTVALUE (-1000) for sequence must between MINVALUE (1) and MAXVALUE (32767)
@@ -302,33 +302,33 @@ not supported: Unsupported type for sequence
 create sequence seq_an_03  increment -50 start with 126 no cycle;
 invalid input: STARTVALUE (126) for sequence must between MINVALUE (-9223372036854775808) and MAXVALUE (-1)
 show sequences;
-Names    Data Type
-seq_01    INT
-123    BIGINT
-seq    BIGINT
-中文    BIGINT
-test@123456    BIGINT
-_acc    BIGINT
-ab.cd    BIGINT
-abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffff    BIGINT
-seq_temp    BIGINT
-sequence    BIGINT
-seq_03    BIGINT
-seq_04    BIGINT
-seq_05    BIGINT
-seq_06    BIGINT
-seq_07    BIGINT
-seq_08    BIGINT
-seq_09    BIGINT
-seq_10    BIGINT
-seq_11    SMALLINT
-seq_12    BIGINT
-seq_13    INT
-seq_14    BIGINT
+➤ Names[12,-1,0]  ¦  Data Type[12,-1,0]  𝄀
+seq_01  ¦  INT  𝄀
+123  ¦  BIGINT  𝄀
+seq  ¦  BIGINT  𝄀
+中文  ¦  BIGINT  𝄀
+test@123456  ¦  BIGINT  𝄀
+_acc  ¦  BIGINT  𝄀
+ab.cd  ¦  BIGINT  𝄀
+abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffff  ¦  BIGINT  𝄀
+seq_temp  ¦  BIGINT  𝄀
+sequence  ¦  BIGINT  𝄀
+seq_03  ¦  BIGINT  𝄀
+seq_04  ¦  BIGINT  𝄀
+seq_05  ¦  BIGINT  𝄀
+seq_06  ¦  BIGINT  𝄀
+seq_07  ¦  BIGINT  𝄀
+seq_08  ¦  BIGINT  𝄀
+seq_09  ¦  BIGINT  𝄀
+seq_10  ¦  BIGINT  𝄀
+seq_11  ¦  SMALLINT  𝄀
+seq_12  ¦  BIGINT  𝄀
+seq_13  ¦  INT  𝄀
+seq_14  ¦  BIGINT
 show sequences where names in('seq_05','seq_06');
-names    data type
-seq_05    BIGINT
-seq_06    BIGINT
+➤ names[12,-1,0]  ¦  data type[12,-1,0]  𝄀
+seq_05  ¦  BIGINT  𝄀
+seq_06  ¦  BIGINT
 drop sequence seq_15;
 no such sequence create_sequence.seq_15
 drop sequence if exists seq_15;
@@ -343,83 +343,92 @@ prepare stmt1 from 'insert into seq_table_01 values(?)';
 set @a_var = nextval('seq_15');
 execute stmt1 using @a_var;
 select * from seq_table_01;
-col1
+➤ col1[4,32,0]  𝄀
 1
 execute stmt1 using @a_var;
 select * from seq_table_01;
-col1
-1
+➤ col1[4,32,0]  𝄀
+1  𝄀
 1
 execute stmt1 using @a_var;
 select * from seq_table_01;
-col1
-1
-1
+➤ col1[4,32,0]  𝄀
+1  𝄀
+1  𝄀
 1
 drop sequence seq_16;
 drop sequence seq_15;
 create sequence seq_17 increment 10 start with 20 no cycle;
 select lastval();
-lastval()
+➤ lastval()[12,-1,0]  𝄀
 1
 select nextval('seq_17');
-nextval(seq_17)
+➤ nextval(seq_17)[12,-1,0]  𝄀
 20
 select lastval();
-lastval()
+➤ lastval()[12,-1,0]  𝄀
 20
 select setval('seq_17',5);
-setval(seq_17, 5)
+➤ setval(seq_17, 5)[12,-1,0]  𝄀
 5
 select nextval('seq_17'),currval('seq_17');
-nextval(seq_17)    currval(seq_17)
-15    15
+➤ nextval(seq_17)[12,-1,0]  ¦  currval(seq_17)[12,-1,0]  𝄀
+15  ¦  15
 select setval('seq_17',8,false);
-setval(seq_17, 8, false)
+➤ setval(seq_17, 8, false)[12,-1,0]  𝄀
 8
 select nextval('seq_17'),currval('seq_17');
-nextval(seq_17)    currval(seq_17)
-18    18
+➤ nextval(seq_17)[12,-1,0]  ¦  currval(seq_17)[12,-1,0]  𝄀
+18  ¦  18
 select nextval('seq_17'),currval('seq_17');
-nextval(seq_17)    currval(seq_17)
-28    28
+➤ nextval(seq_17)[12,-1,0]  ¦  currval(seq_17)[12,-1,0]  𝄀
+28  ¦  28
 select lastval();
-lastval()
+➤ lastval()[12,-1,0]  𝄀
 28
 begin;
+[unknown result because it is related to issue#8890]
 create sequence seq_18 minvalue 1000;
+[unknown result because it is related to issue#8890]
 select nextval('seq_18');
-SQL parser error: table "seq_18" does not exist
+[unknown result because it is related to issue#8890]
 select nextval('seq_18');
-ExpectedEOB
+[unknown result because it is related to issue#8890]
 create sequence seq_18;
-ExpectedEOB
+[unknown result because it is related to issue#8890]
 select nextval('seq_18');
-SQL parser error: table "seq_18" does not exist
+[unknown result because it is related to issue#8890]
 commit;
+[unknown result because it is related to issue#8890]
 select nextval('seq_18'),currval('seq_18');
-SQL parser error: table "seq_18" does not exist
+[unknown result because it is related to issue#8890]
 drop sequence seq_18;
-no such sequence create_sequence.seq_18
+[unknown result because it is related to issue#8890]
 begin;
+[unknown result because it is related to issue#8890]
 create sequence seq_19 minvalue 1000;
+[unknown result because it is related to issue#8890]
 select nextval('seq_19');
-SQL parser error: table "seq_19" does not exist
+[unknown result because it is related to issue#8890]
 select nextval('seq_19');
-ExpectedEOB
+[unknown result because it is related to issue#8890]
 create sequence seq_19;
-ExpectedEOB
+[unknown result because it is related to issue#8890]
 rollback;
+[unknown result because it is related to issue#8890]
 select nextval('seq_19');
-SQL parser error: table "seq_19" does not exist
+[unknown result because it is related to issue#8890]
 drop sequence seq_19;
-no such sequence create_sequence.seq_19
+[unknown result because it is related to issue#8890]
 start transaction ;
+[unknown result because it is related to issue#8890]
 create sequence seq_20 increment by -10;
+[unknown result because it is related to issue#8890]
 select nextval('seq_20');
-SQL parser error: table "seq_20" does not exist
+[unknown result because it is related to issue#8890]
 rollback;
+[unknown result because it is related to issue#8890]
 select nextval('seq_20');
-SQL parser error: table "seq_20" does not exist
+[unknown result because it is related to issue#8890]
 drop sequence seq_20;
-no such sequence create_sequence.seq_20
+[unknown result because it is related to issue#8890]

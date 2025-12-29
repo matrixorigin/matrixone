@@ -25,6 +25,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -104,13 +105,13 @@ type testLockService struct {
 }
 
 func (tls *testLockService) GetServiceID() string {
-	//TODO implement me
-	panic("implement me")
+	return ""
 }
 
 func (tls *testLockService) GetConfig() lockservice.Config {
-	//TODO implement me
-	panic("implement me")
+	return lockservice.Config{
+		ServiceID: "test-lock-service",
+	}
 }
 
 func (tls *testLockService) Lock(ctx context.Context, tableID uint64, rows [][]byte, txnID []byte, options lock.LockOptions) (lock.Result, error) {
@@ -160,10 +161,19 @@ func (tls *testLockService) CloseRemoteLockTable(group uint32, tableID, version 
 var _ client.TxnOperator = new(testTxnOperator)
 
 type testTxnOperator struct {
+	// commitTS is used to simulate transaction commit timestamp
+	// If empty, Allocate should fallback to use SnapshotTS
+	commitTS timestamp.Timestamp
+	// snapshotTS is used to simulate transaction snapshot timestamp
+	snapshotTS timestamp.Timestamp
 }
 
 func (tTxnOp *testTxnOperator) GetOverview() client.TxnOverview {
-	return client.TxnOverview{}
+	return client.TxnOverview{
+		Meta: txn.TxnMeta{
+			CommitTS: tTxnOp.commitTS,
+		},
+	}
 }
 
 func (tTxnOp *testTxnOperator) CloneSnapshotOp(snapshot timestamp.Timestamp) client.TxnOperator {
@@ -201,8 +211,7 @@ func (tTxnOp *testTxnOperator) UpdateSnapshot(ctx context.Context, ts timestamp.
 }
 
 func (tTxnOp *testTxnOperator) SnapshotTS() timestamp.Timestamp {
-	//TODO implement me
-	panic("implement me")
+	return tTxnOp.snapshotTS
 }
 
 func (tTxnOp *testTxnOperator) CreateTS() timestamp.Timestamp {
@@ -300,12 +309,12 @@ func (tTxnOp *testTxnOperator) NextSequence() uint64 {
 	panic("implement me")
 }
 
-func (tTxnOp *testTxnOperator) EnterRunSql() {
+func (tTxnOp *testTxnOperator) EnterRunSqlWithTokenAndSQL(_ context.CancelFunc, _ string) uint64 {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (tTxnOp *testTxnOperator) ExitRunSql() {
+func (tTxnOp *testTxnOperator) ExitRunSqlWithToken(_ uint64) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -351,6 +360,237 @@ func (tTxnOp *testTxnOperator) Delete(string) {
 }
 
 func Test_Allocate(t *testing.T) {
+	sid := "test-lock-service" // Must match testLockService.GetConfig().ServiceID
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			ctx := context.TODO()
+			ctx = defines.AttachAccountId(ctx, 12)
+
+			txnOp := &testTxnOperator{}
+
+			var updateCnt atomic.Int32
+
+			sqlExecutor := executor.NewMemExecutor2(
+				func(sql string) (executor.Result, error) {
+					if strings.HasPrefix(sql, "select offset, step from mo_increment_columns where table_id") {
+						typs := []types.Type{
+							types.New(types.T_uint64, 64, 0),
+							types.New(types.T_uint64, 64, 0),
+						}
+
+						memRes := executor.NewMemResult(
+							typs,
+							mpool.MustNewZero())
+						memRes.NewBatch()
+						executor.AppendFixedRows(memRes, 0, []uint64{1})
+						executor.AppendFixedRows(memRes, 1, []uint64{1})
+						return memRes.GetResult(), nil
+					} else if strings.HasPrefix(sql, "update mo_increment_columns set offset =") {
+						if updateCnt.Load() > 0 {
+							return executor.Result{AffectedRows: 1}, nil
+						}
+						updateCnt.Add(1)
+					}
+
+					return executor.Result{}, nil
+				},
+				txnOp,
+			)
+
+			s := &sqlStore{
+				exec: sqlExecutor,
+				ls:   &testLockService{},
+			}
+
+			_, _, _, err := s.Allocate(ctx, 10, "a", 1, nil)
+			require.NoError(t, err)
+		},
+	)
+}
+
+// TestAllocateWithEmptyCommitTS verifies that when CommitTS is empty (e.g., during CREATE TABLE),
+// the Allocate function falls back to using SnapshotTS for lastAllocateAt.
+// This fix prevents PrimaryKeysMayBeUpserted from scanning an excessively large time range.
+func TestAllocateWithEmptyCommitTS(t *testing.T) {
+	sid := "test-lock-service" // Must match testLockService.GetConfig().ServiceID
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			ctx := context.TODO()
+			ctx = defines.AttachAccountId(ctx, 12)
+
+			// Create txnOp with empty CommitTS but valid SnapshotTS
+			snapshotTS := timestamp.Timestamp{PhysicalTime: 1000, LogicalTime: 1}
+			txnOp := &testTxnOperator{
+				commitTS:   timestamp.Timestamp{}, // Empty CommitTS
+				snapshotTS: snapshotTS,
+			}
+
+			var updateCnt atomic.Int32
+
+			sqlExecutor := executor.NewMemExecutor2(
+				func(sql string) (executor.Result, error) {
+					if strings.HasPrefix(sql, "select offset, step from mo_increment_columns where table_id") {
+						typs := []types.Type{
+							types.New(types.T_uint64, 64, 0),
+							types.New(types.T_uint64, 64, 0),
+						}
+
+						memRes := executor.NewMemResult(
+							typs,
+							mpool.MustNewZero())
+						memRes.NewBatch()
+						executor.AppendFixedRows(memRes, 0, []uint64{1})
+						executor.AppendFixedRows(memRes, 1, []uint64{1})
+						return memRes.GetResult(), nil
+					} else if strings.HasPrefix(sql, "update mo_increment_columns set offset =") {
+						if updateCnt.Load() > 0 {
+							return executor.Result{AffectedRows: 1}, nil
+						}
+						updateCnt.Add(1)
+					}
+
+					return executor.Result{}, nil
+				},
+				txnOp,
+			)
+
+			s := &sqlStore{
+				exec: sqlExecutor,
+				ls:   &testLockService{},
+			}
+
+			_, _, allocateTS, err := s.Allocate(ctx, 10, "a", 1, txnOp)
+			require.NoError(t, err)
+
+			// Verify that when CommitTS is empty, SnapshotTS is used as fallback
+			require.Equal(t, snapshotTS, allocateTS, "When CommitTS is empty, should fallback to SnapshotTS")
+		},
+	)
+}
+
+// TestAllocateWithValidCommitTS verifies that when CommitTS is valid,
+// the Allocate function uses CommitTS directly (not SnapshotTS).
+func TestAllocateWithValidCommitTS(t *testing.T) {
+	sid := "test-lock-service" // Must match testLockService.GetConfig().ServiceID
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			ctx := context.TODO()
+			ctx = defines.AttachAccountId(ctx, 12)
+
+			// Create txnOp with valid CommitTS
+			commitTS := timestamp.Timestamp{PhysicalTime: 2000, LogicalTime: 2}
+			snapshotTS := timestamp.Timestamp{PhysicalTime: 1000, LogicalTime: 1}
+			txnOp := &testTxnOperator{
+				commitTS:   commitTS,
+				snapshotTS: snapshotTS,
+			}
+
+			var updateCnt atomic.Int32
+
+			sqlExecutor := executor.NewMemExecutor2(
+				func(sql string) (executor.Result, error) {
+					if strings.HasPrefix(sql, "select offset, step from mo_increment_columns where table_id") {
+						typs := []types.Type{
+							types.New(types.T_uint64, 64, 0),
+							types.New(types.T_uint64, 64, 0),
+						}
+
+						memRes := executor.NewMemResult(
+							typs,
+							mpool.MustNewZero())
+						memRes.NewBatch()
+						executor.AppendFixedRows(memRes, 0, []uint64{1})
+						executor.AppendFixedRows(memRes, 1, []uint64{1})
+						return memRes.GetResult(), nil
+					} else if strings.HasPrefix(sql, "update mo_increment_columns set offset =") {
+						if updateCnt.Load() > 0 {
+							return executor.Result{AffectedRows: 1}, nil
+						}
+						updateCnt.Add(1)
+					}
+
+					return executor.Result{}, nil
+				},
+				txnOp,
+			)
+
+			s := &sqlStore{
+				exec: sqlExecutor,
+				ls:   &testLockService{},
+			}
+
+			_, _, allocateTS, err := s.Allocate(ctx, 10, "a", 1, txnOp)
+			require.NoError(t, err)
+
+			// Verify that when CommitTS is valid, it is used directly
+			require.Equal(t, commitTS, allocateTS, "When CommitTS is valid, should use CommitTS directly")
+		},
+	)
+}
+
+func Test_Allocate_Retry_When_Rows_Count_Invalid(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ctx := context.TODO()
+	ctx = defines.AttachAccountId(ctx, 12)
+
+	txnOp := &testTxnOperator{}
+
+	var selectCnt atomic.Int32
+
+	sqlExecutor := executor.NewMemExecutor2(
+		func(sql string) (executor.Result, error) {
+			if strings.HasPrefix(sql, "select offset, step from mo_increment_columns where table_id") {
+				cnt := selectCnt.Add(1)
+				if cnt == 1 {
+					// Return 0 rows
+					typs := []types.Type{
+						types.New(types.T_uint64, 64, 0),
+						types.New(types.T_uint64, 64, 0),
+					}
+					memRes := executor.NewMemResult(typs, mpool.MustNewZero())
+					// No rows added
+					return memRes.GetResult(), nil
+				}
+
+				// Return 1 row
+				typs := []types.Type{
+					types.New(types.T_uint64, 64, 0),
+					types.New(types.T_uint64, 64, 0),
+				}
+
+				memRes := executor.NewMemResult(
+					typs,
+					mpool.MustNewZero())
+				memRes.NewBatch()
+				executor.AppendFixedRows(memRes, 0, []uint64{1})
+				executor.AppendFixedRows(memRes, 1, []uint64{1})
+				return memRes.GetResult(), nil
+
+			} else if strings.HasPrefix(sql, "update mo_increment_columns set offset =") {
+				return executor.Result{AffectedRows: 1}, nil
+			}
+
+			return executor.Result{}, nil
+		},
+		txnOp,
+	)
+
+	s := &sqlStore{
+		exec: sqlExecutor,
+		ls:   &testLockService{},
+	}
+
+	_, _, _, err := s.Allocate(ctx, 10, "a", 1, nil)
+	require.NoError(t, err)
+	require.Equal(t, int32(2), selectCnt.Load())
+}
+
+func Test_Allocate_Retry_When_AffectedRows_Invalid(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -377,10 +617,11 @@ func Test_Allocate(t *testing.T) {
 				executor.AppendFixedRows(memRes, 1, []uint64{1})
 				return memRes.GetResult(), nil
 			} else if strings.HasPrefix(sql, "update mo_increment_columns set offset =") {
-				if updateCnt.Load() > 0 {
-					return executor.Result{AffectedRows: 1}, nil
+				cnt := updateCnt.Add(1)
+				if cnt == 1 {
+					return executor.Result{AffectedRows: 0}, nil
 				}
-				updateCnt.Add(1)
+				return executor.Result{AffectedRows: 1}, nil
 			}
 
 			return executor.Result{}, nil
@@ -395,5 +636,5 @@ func Test_Allocate(t *testing.T) {
 
 	_, _, _, err := s.Allocate(ctx, 10, "a", 1, nil)
 	require.NoError(t, err)
-	//require.Equal(t, 2, len(executedSQLs))
+	require.Equal(t, int32(2), updateCnt.Load())
 }

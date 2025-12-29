@@ -696,6 +696,7 @@ func (c *Controller) AssembleDB(ctx context.Context) (err error) {
 	// TODO: WithGCInterval requires configuration parameters
 	gc2.SetDeleteTimeout(db.Opts.GCCfg.GCDeleteTimeout)
 	gc2.SetDeleteBatchSize(db.Opts.GCCfg.GCDeleteBatchSize)
+	gc2.SetDeleteWorkerNum(db.Opts.GCCfg.GCDeleteWorkerNum)
 
 	// sjw TODO: cleaner need to support replay and write mode
 	cleaner := gc2.NewCheckpointCleaner(
@@ -706,6 +707,7 @@ func (c *Controller) AssembleDB(ctx context.Context) (err error) {
 		db.BGCheckpointRunner,
 		gc2.WithCanGCCacheSize(db.Opts.GCCfg.CacheSize),
 		gc2.WithMaxMergeCheckpointCount(db.Opts.GCCfg.GCMergeCount),
+		gc2.WithMaxScanCheckpointCount(db.Opts.GCCfg.GCScanCount),
 		gc2.WithEstimateRows(db.Opts.GCCfg.GCestimateRows),
 		gc2.WithGCProbility(db.Opts.GCCfg.GCProbility),
 		gc2.WithCheckOption(db.Opts.GCCfg.CheckGC),

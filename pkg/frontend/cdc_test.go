@@ -1006,8 +1006,8 @@ func TestRegisterCdcExecutor(t *testing.T) {
 	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
-	txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
-	txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
+	txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
+	txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 	txnOperator.EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
 
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
@@ -2200,8 +2200,8 @@ func Test_handleShowCdc(t *testing.T) {
 	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
-	txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
-	txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
+	txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
+	txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 	txnOperator.EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
 
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
@@ -3135,9 +3135,10 @@ func setupCDCTestStubs(t *testing.T) []*gostub.Stubs {
 		return "", "", nil, moerr.NewInternalError(ctx, "test stub - no relation")
 	}))
 
-	// Stub EnterRunSql and ExitRunSql
-	stubs = append(stubs, gostub.Stub(&cdc.EnterRunSql, func(client.TxnOperator) {}))
-	stubs = append(stubs, gostub.Stub(&cdc.ExitRunSql, func(client.TxnOperator) {}))
+	// Stub EnterRunSql to avoid touching real txn state in tests.
+	stubs = append(stubs, gostub.Stub(&cdc.EnterRunSql, func(context.Context, client.TxnOperator, string) func() {
+		return func() {}
+	}))
 
 	return stubs
 }

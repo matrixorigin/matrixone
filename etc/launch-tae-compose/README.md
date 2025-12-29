@@ -11,6 +11,12 @@ build new image
 docker-compose -f etc/launch-tae-compose/compose.yaml --profile launch-multi-cn up -d --build
 ```
 
+build with typecheck enabled (optional, default: disabled)
+
+```shell
+TYPECHECK=1 docker-compose -f etc/launch-tae-compose/compose.yaml --profile launch-multi-cn up -d --build
+```
+
 use default image
 
 ```shell
