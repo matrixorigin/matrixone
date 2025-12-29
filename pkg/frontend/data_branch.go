@@ -144,6 +144,42 @@ type batchWithKind struct {
 	batch *batch.Batch
 }
 
+type emitFunc func(batchWithKind) (stop bool, err error)
+
+func newEmitter(
+	ctx context.Context, stopCh <-chan struct{}, retCh chan batchWithKind,
+) emitFunc {
+	return func(wrapped batchWithKind) (bool, error) {
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-stopCh:
+			return true, nil
+		default:
+		}
+
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-stopCh:
+			return true, nil
+		case retCh <- wrapped:
+			return false, nil
+		}
+	}
+}
+
+func emitBatch(
+	emit emitFunc, wrapped batchWithKind, forTombstone bool, pool *retBatchList,
+) (bool, error) {
+	stop, err := emit(wrapped)
+	if stop || err != nil {
+		pool.releaseRetBatch(wrapped.batch, forTombstone)
+		return stop, err
+	}
+	return false, nil
+}
+
 type retBatchList struct {
 	mu sync.Mutex
 	// 0: data
@@ -633,11 +669,17 @@ func diffMergeAgency(
 	}()
 
 	var (
-		dagInfo     branchMetaInfo
-		tblStuff    tableStuff
-		copt        compositeOption
-		ctx, cancel = context.WithCancel(execCtx.reqCtx)
+		ctx    context.Context
+		cancel context.CancelFunc
+	)
 
+	//ctx = fileservice.WithParallelMode(execCtx.reqCtx, fileservice.ParallelForce)
+	ctx, cancel = context.WithCancel(execCtx.reqCtx)
+
+	var (
+		dagInfo   branchMetaInfo
+		tblStuff  tableStuff
+		copt      compositeOption
 		ok        bool
 		diffStmt  *tree.DataBranchDiff
 		mergeStmt *tree.DataBranchMerge
@@ -683,7 +725,11 @@ func diffMergeAgency(
 		done      bool
 		wg        = new(sync.WaitGroup)
 		outputErr atomic.Value
-		retBatCh  = make(chan batchWithKind, 100)
+		retBatCh  = make(chan batchWithKind, 10)
+		stopCh    = make(chan struct{})
+		stopOnce  sync.Once
+		emit      emitFunc
+		stop      func()
 		waited    bool
 	)
 
@@ -698,6 +744,13 @@ func diffMergeAgency(
 			tblStuff.retPool.freeAllRetBatches(ses.proc.Mp())
 		}
 	}()
+
+	emit = newEmitter(ctx, stopCh, retBatCh)
+	stop = func() {
+		stopOnce.Do(func() {
+			close(stopCh)
+		})
+	}
 
 	if diffStmt != nil {
 		if err = buildOutputSchema(ctx, ses, diffStmt, tblStuff); err != nil {
@@ -725,7 +778,7 @@ func diffMergeAgency(
 			// 5. as file
 
 			if err2 := satisfyDiffOutputOpt(
-				ctx, cancel, ses, bh, diffStmt, dagInfo, tblStuff, retBatCh,
+				ctx, cancel, stop, ses, bh, diffStmt, dagInfo, tblStuff, retBatCh,
 			); err2 != nil {
 				outputErr.Store(err2)
 			}
@@ -739,7 +792,7 @@ func diffMergeAgency(
 	}()
 
 	if err = diffOnBase(
-		ctx, ses, bh, wg, dagInfo, tblStuff, retBatCh, copt,
+		ctx, ses, bh, wg, dagInfo, tblStuff, copt, emit,
 	); err != nil {
 		return
 	}
@@ -909,15 +962,19 @@ func writeReplaceRowValues(
 	tblStuff tableStuff,
 	row []any,
 	buf *bytes.Buffer,
-) {
+) error {
 	buf.WriteString("(")
 	for i, idx := range tblStuff.def.visibleIdxes {
-		formatValIntoString(ses, row[idx], tblStuff.def.colTypes[idx], buf)
+		if err := formatValIntoString(ses, row[idx], tblStuff.def.colTypes[idx], buf); err != nil {
+			return err
+		}
 		if i != len(tblStuff.def.visibleIdxes)-1 {
 			buf.WriteString(",")
 		}
 	}
 	buf.WriteString(")")
+
+	return nil
 }
 
 func writeDeleteRowValues(
@@ -925,12 +982,14 @@ func writeDeleteRowValues(
 	tblStuff tableStuff,
 	row []any,
 	buf *bytes.Buffer,
-) {
+) error {
 	if len(tblStuff.def.pkColIdxes) > 1 {
 		buf.WriteString("(")
 	}
 	for i, colIdx := range tblStuff.def.pkColIdxes {
-		formatValIntoString(ses, row[colIdx], tblStuff.def.colTypes[colIdx], buf)
+		if err := formatValIntoString(ses, row[colIdx], tblStuff.def.colTypes[colIdx], buf); err != nil {
+			return err
+		}
 		if i != len(tblStuff.def.pkColIdxes)-1 {
 			buf.WriteString(",")
 		}
@@ -938,6 +997,8 @@ func writeDeleteRowValues(
 	if len(tblStuff.def.pkColIdxes) > 1 {
 		buf.WriteString(")")
 	}
+
+	return nil
 }
 
 func appendBatchRowsAsSQLValues(
@@ -1005,9 +1066,13 @@ func appendBatchRowsAsSQLValues(
 
 		tmpValsBuffer.Reset()
 		if wrapped.kind == diffDelete {
-			writeDeleteRowValues(ses, tblStuff, row, tmpValsBuffer)
+			if err = writeDeleteRowValues(ses, tblStuff, row, tmpValsBuffer); err != nil {
+				return
+			}
 		} else {
-			writeReplaceRowValues(ses, tblStuff, row, tmpValsBuffer)
+			if err = writeReplaceRowValues(ses, tblStuff, row, tmpValsBuffer); err != nil {
+				return
+			}
 		}
 
 		if tmpValsBuffer.Len() == 0 {
@@ -1104,6 +1169,7 @@ func mergeDiffs(
 func satisfyDiffOutputOpt(
 	ctx context.Context,
 	cancel context.CancelFunc,
+	stop func(),
 	ses *Session,
 	bh BackgroundExec,
 	stmt *tree.DataBranchDiff,
@@ -1161,10 +1227,10 @@ func satisfyDiffOutputOpt(
 
 				rows = append(rows, row)
 				if stmt.OutputOpt != nil && stmt.OutputOpt.Limit != nil &&
-					int64(mrs.GetRowCount()) >= *stmt.OutputOpt.Limit {
+					int64(len(rows)) >= *stmt.OutputOpt.Limit {
 					// hit limit, cancel producers but keep draining the channel
 					hitLimit = true
-					cancel()
+					stop()
 					break
 				}
 			}
@@ -2049,6 +2115,12 @@ func writeCSV(
 		case <-inputCtx.Done():
 			err = errors.Join(err, inputCtx.Err())
 			stop = true
+		case e := <-writerErr:
+			if e != nil {
+				err = errors.Join(err, e)
+			}
+			stop = true
+			cancelCtx()
 		case e, ok := <-errChan:
 			if !ok {
 				errOpen = false
@@ -2217,8 +2289,8 @@ func diffOnBase(
 	wg *sync.WaitGroup,
 	dagInfo branchMetaInfo,
 	tblStuff tableStuff,
-	retCh chan batchWithKind,
 	copt compositeOption,
+	emit emitFunc,
 ) (err error) {
 
 	defer func() {
@@ -2278,8 +2350,8 @@ func diffOnBase(
 	}
 
 	if err = hashDiff(
-		ctx, ses, bh, tblStuff, dagInfo, retCh,
-		copt, tarHandle, baseHandle,
+		ctx, ses, bh, tblStuff, dagInfo,
+		copt, emit, tarHandle, baseHandle,
 	); err != nil {
 		return
 	}
@@ -2407,8 +2479,8 @@ func hashDiff(
 	bh BackgroundExec,
 	tblStuff tableStuff,
 	dagInfo branchMetaInfo,
-	retCh chan batchWithKind,
 	copt compositeOption,
+	emit emitFunc,
 	tarHandle []engine.ChangesHandle,
 	baseHandle []engine.ChangesHandle,
 ) (
@@ -2452,7 +2524,7 @@ func hashDiff(
 
 	if dagInfo.lcaType == lcaEmpty {
 		if err = hashDiffIfNoLCA(
-			ctx, ses, tblStuff, retCh, copt,
+			ctx, ses, tblStuff, copt, emit,
 			tarDataHashmap, tarTombstoneHashmap,
 			baseDataHashmap, baseTombstoneHashmap,
 		); err != nil {
@@ -2460,7 +2532,7 @@ func hashDiff(
 		}
 	} else {
 		if err = hashDiffIfHasLCA(
-			ctx, ses, bh, dagInfo, tblStuff, retCh, copt,
+			ctx, ses, bh, dagInfo, tblStuff, copt, emit,
 			tarDataHashmap, tarTombstoneHashmap,
 			baseDataHashmap, baseTombstoneHashmap,
 		); err != nil {
@@ -2477,8 +2549,8 @@ func hashDiffIfHasLCA(
 	bh BackgroundExec,
 	dagInfo branchMetaInfo,
 	tblStuff tableStuff,
-	retCh chan batchWithKind,
 	copt compositeOption,
+	emit emitFunc,
 	tarDataHashmap databranchutils.BranchHashmap,
 	tarTombstoneHashmap databranchutils.BranchHashmap,
 	baseDataHashmap databranchutils.BranchHashmap,
@@ -2511,7 +2583,11 @@ func hashDiffIfHasLCA(
 	handleTarDeleteAndUpdates := func(wrapped batchWithKind) (err2 error) {
 		if len(baseUpdateBatches) == 0 && len(baseDeleteBatches) == 0 {
 			// no need to check conflict
-			retCh <- wrapped
+			if stop, e := emitBatch(emit, wrapped, false, tblStuff.retPool); e != nil {
+				return e
+			} else if stop {
+				return nil
+			}
 			return nil
 		}
 
@@ -2576,7 +2652,12 @@ func hashDiffIfHasLCA(
 						}
 
 						buf := acquireBuffer(tblStuff.bufPool)
-						formatValIntoString(ses, tarRow[0], tblStuff.def.colTypes[tblStuff.def.pkColIdx], buf)
+						if err3 = formatValIntoString(
+							ses, tarRow[0], tblStuff.def.colTypes[tblStuff.def.pkColIdx], buf,
+						); err3 != nil {
+							releaseBuffer(tblStuff.bufPool, buf)
+							return
+						}
 
 						err3 = moerr.NewInternalErrorNoCtxf(
 							"conflict: %s %s and %s %s on pk(%v) with different values",
@@ -2653,7 +2734,13 @@ func hashDiffIfHasLCA(
 			return
 		}
 
-		retCh <- wrapped
+		stop, e := emitBatch(emit, wrapped, false, tblStuff.retPool)
+		if e != nil {
+			return e
+		}
+		if stop {
+			return nil
+		}
 
 		return
 	}
@@ -2725,12 +2812,16 @@ func hashDiffIfHasLCA(
 				} else {
 					err2 = handleTarDeleteAndUpdates(wrapped)
 				}
+
+				if errors.Is(err2, context.Canceled) {
+					err2 = nil
+					cancel()
+				}
 			}
 
 			if err2 != nil {
 				first = err2
 				cancel()
-				tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
 			}
 		}
 
@@ -2758,24 +2849,49 @@ func hashDiffIfHasLCA(
 
 	// what can I do with these left base updates/inserts ?
 	if copt.conflictOpt == nil {
-		for _, w := range baseUpdateBatches {
-			retCh <- w
+		stopped := false
+		for i, w := range baseUpdateBatches {
+			var stop bool
+			if stop, err = emitBatch(emit, w, false, tblStuff.retPool); err != nil {
+				return err
+			}
+			if stop {
+				stopped = true
+				for j := i + 1; j < len(baseUpdateBatches); j++ {
+					tblStuff.retPool.releaseRetBatch(baseUpdateBatches[j].batch, false)
+				}
+				for _, bw := range baseDeleteBatches {
+					tblStuff.retPool.releaseRetBatch(bw.batch, false)
+				}
+				break
+			}
 		}
 
-		for _, w := range baseDeleteBatches {
-			retCh <- w
+		if !stopped {
+			for i, w := range baseDeleteBatches {
+				var stop bool
+				if stop, err = emitBatch(emit, w, false, tblStuff.retPool); err != nil {
+					return err
+				}
+				if stop {
+					for j := i + 1; j < len(baseDeleteBatches); j++ {
+						tblStuff.retPool.releaseRetBatch(baseDeleteBatches[j].batch, false)
+					}
+					break
+				}
+			}
 		}
 	}
 
-	return diffDataHelper(ctx, ses, copt, tblStuff, retCh, tarDataHashmap, baseDataHashmap)
+	return diffDataHelper(ctx, ses, copt, tblStuff, emit, tarDataHashmap, baseDataHashmap)
 }
 
 func hashDiffIfNoLCA(
 	ctx context.Context,
 	ses *Session,
 	tblStuff tableStuff,
-	retCh chan batchWithKind,
 	copt compositeOption,
+	emit emitFunc,
 	tarDataHashmap databranchutils.BranchHashmap,
 	tarTombstoneHashmap databranchutils.BranchHashmap,
 	baseDataHashmap databranchutils.BranchHashmap,
@@ -2802,7 +2918,7 @@ func hashDiffIfNoLCA(
 		return
 	}
 
-	return diffDataHelper(ctx, ses, copt, tblStuff, retCh, tarDataHashmap, baseDataHashmap)
+	return diffDataHelper(ctx, ses, copt, tblStuff, emit, tarDataHashmap, baseDataHashmap)
 }
 
 func compareRowInWrappedBatches(
@@ -3005,7 +3121,10 @@ func checkConflictAndAppendToBat(
 		case tree.CONFLICT_FAIL:
 			buf := acquireBuffer(tblStuff.bufPool)
 			for i, idx := range tblStuff.def.pkColIdxes {
-				formatValIntoString(ses, tarTuple[idx], tblStuff.def.colTypes[idx], buf)
+				if err2 = formatValIntoString(ses, tarTuple[idx], tblStuff.def.colTypes[idx], buf); err2 != nil {
+					releaseBuffer(tblStuff.bufPool, buf)
+					return err2
+				}
 				if i < len(tblStuff.def.pkColIdxes)-1 {
 					buf.WriteString(",")
 				}
@@ -3041,7 +3160,7 @@ func diffDataHelper(
 	ses *Session,
 	copt compositeOption,
 	tblStuff tableStuff,
-	retCh chan batchWithKind,
+	emit emitFunc,
 	tarDataHashmap databranchutils.BranchHashmap,
 	baseDataHashmap databranchutils.BranchHashmap,
 ) (err error) {
@@ -3156,16 +3275,24 @@ func diffDataHelper(
 		default:
 		}
 
-		retCh <- batchWithKind{
+		if stop, err3 := emitBatch(emit, batchWithKind{
 			batch: tarBat,
 			kind:  diffInsert,
 			name:  tblStuff.tarRel.GetTableName(),
+		}, false, tblStuff.retPool); err3 != nil {
+			return err3
+		} else if stop {
+			return nil
 		}
 
-		retCh <- batchWithKind{
+		if stop, err3 := emitBatch(emit, batchWithKind{
 			batch: baseBat,
 			kind:  diffInsert,
 			name:  tblStuff.baseRel.GetTableName(),
+		}, false, tblStuff.retPool); err3 != nil {
+			return err3
+		} else if stop {
+			return nil
 		}
 
 		return nil
@@ -3214,10 +3341,14 @@ func diffDataHelper(
 		default:
 		}
 
-		retCh <- batchWithKind{
+		if stop, err3 := emitBatch(emit, batchWithKind{
 			batch: bat,
 			kind:  diffInsert,
 			name:  tblStuff.baseRel.GetTableName(),
+		}, false, tblStuff.retPool); err3 != nil {
+			return err3
+		} else if stop {
+			return nil
 		}
 		return nil
 	}, -1); err != nil {
@@ -3313,7 +3444,11 @@ func handleDelsOnLCA(
 			valsBuf.WriteString(fmt.Sprintf("row(%d,", i))
 
 			for j := range tuple {
-				formatValIntoString(ses, tuple[j], colTypes[expandedPKColIdxes[j]], valsBuf)
+				if err = formatValIntoString(
+					ses, tuple[j], colTypes[expandedPKColIdxes[j]], valsBuf,
+				); err != nil {
+					return nil, err
+				}
 				if j != len(tuple)-1 {
 					valsBuf.WriteString(", ")
 				}
@@ -3461,10 +3596,10 @@ func handleDelsOnLCA(
 	return
 }
 
-func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer) {
+func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer) error {
 	if val == nil {
 		buf.WriteString("NULL")
-		return
+		return nil
 	}
 
 	var scratch [64]byte
@@ -3481,6 +3616,10 @@ func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer)
 		buf.Write(strconv.AppendFloat(scratch[:0], v, 'g', -1, bitSize))
 	}
 
+	writeBool := func(v bool) {
+		buf.WriteString(strconv.FormatBool(v))
+	}
+
 	switch t.Oid {
 	case types.T_varchar, types.T_text, types.T_json, types.T_char, types.
 		T_varbinary, types.T_binary:
@@ -3491,7 +3630,7 @@ func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer)
 				strVal = x.String()
 			case *bytejson.ByteJson:
 				if x == nil {
-					panic(moerr.NewInternalErrorNoCtx("formatValIntoString: nil *bytejson.ByteJson"))
+					return moerr.NewInternalErrorNoCtx("formatValIntoString: nil *bytejson.ByteJson")
 				}
 				strVal = x.String()
 			case []byte:
@@ -3499,14 +3638,14 @@ func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer)
 			case string:
 				strVal = x
 			default:
-				panic(moerr.NewInternalErrorNoCtxf("formatValIntoString: unexpected json type %T", val))
+				return moerr.NewInternalErrorNoCtxf("formatValIntoString: unexpected json type %T", val)
 			}
 			jsonLiteral := escapeJSONControlBytes([]byte(strVal))
 			if !json.Valid(jsonLiteral) {
-				panic(moerr.NewInternalErrorNoCtxf("formatValIntoString: invalid json input %q", strVal))
+				return moerr.NewInternalErrorNoCtxf("formatValIntoString: invalid json input %q", strVal)
 			}
 			writeEscapedSQLString(buf, jsonLiteral)
-			return
+			return nil
 		}
 		switch x := val.(type) {
 		case []byte:
@@ -3514,7 +3653,7 @@ func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer)
 		case string:
 			writeEscapedSQLString(buf, []byte(x))
 		default:
-			panic(moerr.NewInternalErrorNoCtxf("formatValIntoString: unexpected string type %T", val))
+			return moerr.NewInternalErrorNoCtxf("formatValIntoString: unexpected string type %T", val)
 		}
 	case types.T_timestamp:
 		buf.WriteString("'")
@@ -3523,6 +3662,10 @@ func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer)
 	case types.T_datetime:
 		buf.WriteString("'")
 		buf.WriteString(val.(types.Datetime).String2(t.Scale))
+		buf.WriteString("'")
+	case types.T_time:
+		buf.WriteString("'")
+		buf.WriteString(val.(types.Time).String2(t.Scale))
 		buf.WriteString("'")
 	case types.T_date:
 		buf.WriteString("'")
@@ -3534,6 +3677,8 @@ func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer)
 		buf.WriteString(val.(types.Decimal128).Format(t.Scale))
 	case types.T_decimal256:
 		buf.WriteString(val.(types.Decimal256).Format(t.Scale))
+	case types.T_bool:
+		writeBool(val.(bool))
 	case types.T_uint8:
 		writeUint(uint64(val.(uint8)))
 	case types.T_uint16:
@@ -3563,8 +3708,10 @@ func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer)
 		buf.WriteString(types.ArrayToString[float64](val.([]float64)))
 		buf.WriteString("'")
 	default:
-		panic(moerr.NewInternalErrorNoCtxf("formatValIntoString: unsupported type %v", t.Oid))
+		return moerr.NewNotSupportedNoCtxf("formatValIntoString: not support type %v", t.Oid)
 	}
+
+	return nil
 }
 
 // writeEscapedSQLString escapes special and control characters for SQL literal output.
@@ -4389,114 +4536,140 @@ func compareSingleValInVector(
 	// Use raw values to avoid format conversions in extractRowFromVector.
 	switch vec1.GetType().Oid {
 	case types.T_json:
-		val1 := types.DecodeJson(vec1.GetBytesAt(rowIdx1))
-		val2 := types.DecodeJson(vec2.GetBytesAt(rowIdx2))
-		return bytejson.CompareByteJson(val1, val2), nil
+		return bytejson.CompareByteJson(
+			types.DecodeJson(vec1.GetBytesAt(rowIdx1)),
+			types.DecodeJson(vec2.GetBytesAt(rowIdx2)),
+		), nil
 	case types.T_bool:
-		val1 := vector.GetFixedAtNoTypeCheck[bool](vec1, rowIdx1)
-		val2 := vector.GetFixedAtNoTypeCheck[bool](vec2, rowIdx2)
-		return types.CompareValue(val1, val2), nil
+		return types.CompareValue(
+			vector.GetFixedAtNoTypeCheck[bool](vec1, rowIdx1),
+			vector.GetFixedAtNoTypeCheck[bool](vec2, rowIdx2),
+		), nil
 	case types.T_bit:
-		val1 := vector.GetFixedAtNoTypeCheck[uint64](vec1, rowIdx1)
-		val2 := vector.GetFixedAtNoTypeCheck[uint64](vec2, rowIdx2)
-		return types.CompareValue(val1, val2), nil
+		return types.CompareValue(
+			vector.GetFixedAtNoTypeCheck[uint64](vec1, rowIdx1),
+			vector.GetFixedAtNoTypeCheck[uint64](vec2, rowIdx2),
+		), nil
 	case types.T_int8:
-		val1 := vector.GetFixedAtNoTypeCheck[int8](vec1, rowIdx1)
-		val2 := vector.GetFixedAtNoTypeCheck[int8](vec2, rowIdx2)
-		return types.CompareValue(val1, val2), nil
+		return types.CompareValue(
+			vector.GetFixedAtNoTypeCheck[int8](vec1, rowIdx1),
+			vector.GetFixedAtNoTypeCheck[int8](vec2, rowIdx2),
+		), nil
 	case types.T_uint8:
-		val1 := vector.GetFixedAtNoTypeCheck[uint8](vec1, rowIdx1)
-		val2 := vector.GetFixedAtNoTypeCheck[uint8](vec2, rowIdx2)
-		return types.CompareValue(val1, val2), nil
+		return types.CompareValue(
+			vector.GetFixedAtNoTypeCheck[uint8](vec1, rowIdx1),
+			vector.GetFixedAtNoTypeCheck[uint8](vec2, rowIdx2),
+		), nil
 	case types.T_int16:
-		val1 := vector.GetFixedAtNoTypeCheck[int16](vec1, rowIdx1)
-		val2 := vector.GetFixedAtNoTypeCheck[int16](vec2, rowIdx2)
-		return types.CompareValue(val1, val2), nil
+		return types.CompareValue(
+			vector.GetFixedAtNoTypeCheck[int16](vec1, rowIdx1),
+			vector.GetFixedAtNoTypeCheck[int16](vec2, rowIdx2),
+		), nil
 	case types.T_uint16:
-		val1 := vector.GetFixedAtNoTypeCheck[uint16](vec1, rowIdx1)
-		val2 := vector.GetFixedAtNoTypeCheck[uint16](vec2, rowIdx2)
-		return types.CompareValue(val1, val2), nil
+		return types.CompareValue(
+			vector.GetFixedAtNoTypeCheck[uint16](vec1, rowIdx1),
+			vector.GetFixedAtNoTypeCheck[uint16](vec2, rowIdx2),
+		), nil
 	case types.T_int32:
-		val1 := vector.GetFixedAtNoTypeCheck[int32](vec1, rowIdx1)
-		val2 := vector.GetFixedAtNoTypeCheck[int32](vec2, rowIdx2)
-		return types.CompareValue(val1, val2), nil
+		return types.CompareValue(
+			vector.GetFixedAtNoTypeCheck[int32](vec1, rowIdx1),
+			vector.GetFixedAtNoTypeCheck[int32](vec2, rowIdx2),
+		), nil
 	case types.T_uint32:
-		val1 := vector.GetFixedAtNoTypeCheck[uint32](vec1, rowIdx1)
-		val2 := vector.GetFixedAtNoTypeCheck[uint32](vec2, rowIdx2)
-		return types.CompareValue(val1, val2), nil
+		return types.CompareValue(
+			vector.GetFixedAtNoTypeCheck[uint32](vec1, rowIdx1),
+			vector.GetFixedAtNoTypeCheck[uint32](vec2, rowIdx2),
+		), nil
 	case types.T_int64:
-		val1 := vector.GetFixedAtNoTypeCheck[int64](vec1, rowIdx1)
-		val2 := vector.GetFixedAtNoTypeCheck[int64](vec2, rowIdx2)
-		return types.CompareValue(val1, val2), nil
+		return types.CompareValue(
+			vector.GetFixedAtNoTypeCheck[int64](vec1, rowIdx1),
+			vector.GetFixedAtNoTypeCheck[int64](vec2, rowIdx2),
+		), nil
 	case types.T_uint64:
-		val1 := vector.GetFixedAtNoTypeCheck[uint64](vec1, rowIdx1)
-		val2 := vector.GetFixedAtNoTypeCheck[uint64](vec2, rowIdx2)
-		return types.CompareValue(val1, val2), nil
+		return types.CompareValue(
+			vector.GetFixedAtNoTypeCheck[uint64](vec1, rowIdx1),
+			vector.GetFixedAtNoTypeCheck[uint64](vec2, rowIdx2),
+		), nil
 	case types.T_float32:
-		val1 := vector.GetFixedAtNoTypeCheck[float32](vec1, rowIdx1)
-		val2 := vector.GetFixedAtNoTypeCheck[float32](vec2, rowIdx2)
-		return types.CompareValue(val1, val2), nil
+		return types.CompareValue(
+			vector.GetFixedAtNoTypeCheck[float32](vec1, rowIdx1),
+			vector.GetFixedAtNoTypeCheck[float32](vec2, rowIdx2),
+		), nil
 	case types.T_float64:
-		val1 := vector.GetFixedAtNoTypeCheck[float64](vec1, rowIdx1)
-		val2 := vector.GetFixedAtNoTypeCheck[float64](vec2, rowIdx2)
-		return types.CompareValue(val1, val2), nil
+		return types.CompareValue(
+			vector.GetFixedAtNoTypeCheck[float64](vec1, rowIdx1),
+			vector.GetFixedAtNoTypeCheck[float64](vec2, rowIdx2),
+		), nil
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
 		return bytes.Compare(
 			vec1.GetBytesAt(rowIdx1),
 			vec2.GetBytesAt(rowIdx2),
 		), nil
 	case types.T_array_float32:
-		val1 := vector.GetArrayAt[float32](vec1, rowIdx1)
-		val2 := vector.GetArrayAt[float32](vec2, rowIdx2)
-		return types.CompareValue(val1, val2), nil
+		return types.CompareValue(
+			vector.GetArrayAt[float32](vec1, rowIdx1),
+			vector.GetArrayAt[float32](vec2, rowIdx2),
+		), nil
 	case types.T_array_float64:
-		val1 := vector.GetArrayAt[float64](vec1, rowIdx1)
-		val2 := vector.GetArrayAt[float64](vec2, rowIdx2)
-		return types.CompareValue(val1, val2), nil
+		return types.CompareValue(
+			vector.GetArrayAt[float64](vec1, rowIdx1),
+			vector.GetArrayAt[float64](vec2, rowIdx2),
+		), nil
 	case types.T_date:
-		val1 := vector.GetFixedAtNoTypeCheck[types.Date](vec1, rowIdx1)
-		val2 := vector.GetFixedAtNoTypeCheck[types.Date](vec2, rowIdx2)
-		return types.CompareValue(val1, val2), nil
+		return types.CompareValue(
+			vector.GetFixedAtNoTypeCheck[types.Date](vec1, rowIdx1),
+			vector.GetFixedAtNoTypeCheck[types.Date](vec2, rowIdx2),
+		), nil
 	case types.T_datetime:
-		val1 := vector.GetFixedAtNoTypeCheck[types.Datetime](vec1, rowIdx1)
-		val2 := vector.GetFixedAtNoTypeCheck[types.Datetime](vec2, rowIdx2)
-		return types.CompareValue(val1, val2), nil
+		return types.CompareValue(
+			vector.GetFixedAtNoTypeCheck[types.Datetime](vec1, rowIdx1),
+			vector.GetFixedAtNoTypeCheck[types.Datetime](vec2, rowIdx2),
+		), nil
 	case types.T_time:
-		val1 := vector.GetFixedAtNoTypeCheck[types.Time](vec1, rowIdx1)
-		val2 := vector.GetFixedAtNoTypeCheck[types.Time](vec2, rowIdx2)
-		return types.CompareValue(val1, val2), nil
+		return types.CompareValue(
+			vector.GetFixedAtNoTypeCheck[types.Time](vec1, rowIdx1),
+			vector.GetFixedAtNoTypeCheck[types.Time](vec2, rowIdx2),
+		), nil
 	case types.T_timestamp:
-		val1 := vector.GetFixedAtNoTypeCheck[types.Timestamp](vec1, rowIdx1)
-		val2 := vector.GetFixedAtNoTypeCheck[types.Timestamp](vec2, rowIdx2)
-		return types.CompareValue(val1, val2), nil
+		return types.CompareValue(
+			vector.GetFixedAtNoTypeCheck[types.Timestamp](vec1, rowIdx1),
+			vector.GetFixedAtNoTypeCheck[types.Timestamp](vec2, rowIdx2),
+		), nil
 	case types.T_decimal64:
-		val1 := vector.GetFixedAtNoTypeCheck[types.Decimal64](vec1, rowIdx1)
-		val2 := vector.GetFixedAtNoTypeCheck[types.Decimal64](vec2, rowIdx2)
-		return types.CompareValue(val1, val2), nil
+		return types.CompareValue(
+			vector.GetFixedAtNoTypeCheck[types.Decimal64](vec1, rowIdx1),
+			vector.GetFixedAtNoTypeCheck[types.Decimal64](vec2, rowIdx2),
+		), nil
 	case types.T_decimal128:
-		val1 := vector.GetFixedAtNoTypeCheck[types.Decimal128](vec1, rowIdx1)
-		val2 := vector.GetFixedAtNoTypeCheck[types.Decimal128](vec2, rowIdx2)
-		return types.CompareValue(val1, val2), nil
+		return types.CompareValue(
+			vector.GetFixedAtNoTypeCheck[types.Decimal128](vec1, rowIdx1),
+			vector.GetFixedAtNoTypeCheck[types.Decimal128](vec2, rowIdx2),
+		), nil
 	case types.T_uuid:
-		val1 := vector.GetFixedAtNoTypeCheck[types.Uuid](vec1, rowIdx1)
-		val2 := vector.GetFixedAtNoTypeCheck[types.Uuid](vec2, rowIdx2)
-		return types.CompareValue(val1, val2), nil
+		return types.CompareValue(
+			vector.GetFixedAtNoTypeCheck[types.Uuid](vec1, rowIdx1),
+			vector.GetFixedAtNoTypeCheck[types.Uuid](vec2, rowIdx2),
+		), nil
 	case types.T_Rowid:
-		val1 := vector.GetFixedAtNoTypeCheck[types.Rowid](vec1, rowIdx1)
-		val2 := vector.GetFixedAtNoTypeCheck[types.Rowid](vec2, rowIdx2)
-		return types.CompareValue(val1, val2), nil
+		return types.CompareValue(
+			vector.GetFixedAtNoTypeCheck[types.Rowid](vec1, rowIdx1),
+			vector.GetFixedAtNoTypeCheck[types.Rowid](vec2, rowIdx2),
+		), nil
 	case types.T_Blockid:
-		val1 := vector.GetFixedAtNoTypeCheck[types.Blockid](vec1, rowIdx1)
-		val2 := vector.GetFixedAtNoTypeCheck[types.Blockid](vec2, rowIdx2)
-		return types.CompareValue(val1, val2), nil
+		return types.CompareValue(
+			vector.GetFixedAtNoTypeCheck[types.Blockid](vec1, rowIdx1),
+			vector.GetFixedAtNoTypeCheck[types.Blockid](vec2, rowIdx2),
+		), nil
 	case types.T_TS:
-		val1 := vector.GetFixedAtNoTypeCheck[types.TS](vec1, rowIdx1)
-		val2 := vector.GetFixedAtNoTypeCheck[types.TS](vec2, rowIdx2)
-		return types.CompareValue(val1, val2), nil
+		return types.CompareValue(
+			vector.GetFixedAtNoTypeCheck[types.TS](vec1, rowIdx1),
+			vector.GetFixedAtNoTypeCheck[types.TS](vec2, rowIdx2),
+		), nil
 	case types.T_enum:
-		val1 := vector.GetFixedAtNoTypeCheck[types.Enum](vec1, rowIdx1)
-		val2 := vector.GetFixedAtNoTypeCheck[types.Enum](vec2, rowIdx2)
-		return types.CompareValue(val1, val2), nil
+		return types.CompareValue(
+			vector.GetFixedAtNoTypeCheck[types.Enum](vec1, rowIdx1),
+			vector.GetFixedAtNoTypeCheck[types.Enum](vec2, rowIdx2),
+		), nil
 	default:
 		return 0, moerr.NewInternalErrorNoCtxf("compareSingleValInVector : unsupported type %d", vec1.GetType().Oid)
 	}

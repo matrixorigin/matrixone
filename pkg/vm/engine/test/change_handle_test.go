@@ -3679,25 +3679,28 @@ func TestDropJobsByDBName(t *testing.T) {
 	registerFn("src_table", "job1")
 	registerFn("src_table2", "job2")
 
+	now := taeHandler.GetDB().TxnMgr.Now()
 	testutils.WaitExpect(
 		4000,
 		func() bool {
-			_, ok := cdcExecutor.GetWatermark(accountId, tableID, "job1")
-			return ok
+			ts, ok := cdcExecutor.GetWatermark(accountId, tableID, "job1")
+			return ok && ts.GE(&now)
 		},
 	)
-	_, ok := cdcExecutor.GetWatermark(accountId, tableID, "job1")
+	ts, ok := cdcExecutor.GetWatermark(accountId, tableID, "job1")
 	assert.True(t, ok)
+	assert.True(t, ts.GE(&now))
 
 	testutils.WaitExpect(
 		4000,
 		func() bool {
-			_, ok := cdcExecutor.GetWatermark(accountId, tableID2, "job2")
-			return ok
+			ts, ok := cdcExecutor.GetWatermark(accountId, tableID2, "job2")
+			return ok && ts.GE(&now)
 		},
 	)
-	_, ok = cdcExecutor.GetWatermark(accountId, tableID2, "job2")
+	ts, ok = cdcExecutor.GetWatermark(accountId, tableID2, "job2")
 	assert.True(t, ok)
+	assert.True(t, ts.GE(&now))
 
 	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
 	require.NoError(t, err)

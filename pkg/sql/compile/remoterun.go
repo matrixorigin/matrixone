@@ -333,6 +333,10 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 			isConst:            dsc.IsConst,
 			RecvMsgList:        dsc.RecvMsgList,
 		}
+		// Extract IndexReaderParam from node for remote CN execution
+		if dsc.Node != nil {
+			s.DataSource.IndexReaderParam = dsc.Node.IndexReaderParam
+		}
 	}
 	//var relData engine.RelData
 	if p.Node != nil {
