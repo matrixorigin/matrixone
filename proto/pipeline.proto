@@ -593,6 +593,8 @@ message Source {
   repeated plan.RuntimeFilterSpec runtime_filter_probe_list = 11;
   bool is_const = 12;
   repeated plan.msgHeader recv_msg_list = 13 [(gogoproto.nullable) = false];
+  repeated plan.OrderBySpec block_order_by = 14;
+  uint64 block_limit = 15;
 }
 
 message NodeInfo {
