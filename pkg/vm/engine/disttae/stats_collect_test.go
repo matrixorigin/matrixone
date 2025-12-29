@@ -522,16 +522,16 @@ func TestCollectTableStats_MultipleColumns(t *testing.T) {
 
 		// First object: small data
 		info.TableRowCount = 50
-		info.ColumnNDVs[0] = 30  // int64 column
-		info.ColumnNDVs[1] = 25  // varchar column
-		info.ColumnNDVs[2] = 20  // int32 column
+		info.ColumnNDVs[0] = 30 // int64 column
+		info.ColumnNDVs[1] = 25 // varchar column
+		info.ColumnNDVs[2] = 20 // int32 column
 		info.MaxObjectRowCount = 50
 		info.MinObjectRowCount = 50
 
 		// Second object: large data
 		info.TableRowCount += 1000
-		info.ColumnNDVs[0] += 800  // Cumulative: 830, meets condition
-		info.ColumnNDVs[1] += 700  // Cumulative: 725, meets condition
+		info.ColumnNDVs[0] += 800 // Cumulative: 830, meets condition
+		info.ColumnNDVs[1] += 700 // Cumulative: 725, meets condition
 		info.ColumnNDVs[2] += 50  // Cumulative: 70, doesn't meet condition
 
 		// Simulate the fix for each column
@@ -565,7 +565,7 @@ func TestCollectTableStats_EdgeCases(t *testing.T) {
 		info.DataTypes[0] = types.New(types.T_int64, 0, 0)
 
 		info.TableRowCount = 1000
-		info.ColumnNDVs[0] = 100  // Exactly 100
+		info.ColumnNDVs[0] = 100 // Exactly 100
 		// Condition: 100 > 100 (false) || 100 > 0.1*1000=100 (false) -> false
 		// Actually wait, 100 > 100 is false, but 100 > 100 is also false
 		// So it should NOT be created
@@ -585,7 +585,7 @@ func TestCollectTableStats_EdgeCases(t *testing.T) {
 		info.DataTypes[0] = types.New(types.T_int64, 0, 0)
 
 		info.TableRowCount = 1000
-		info.ColumnNDVs[0] = 100  // Exactly 10% of 1000
+		info.ColumnNDVs[0] = 100 // Exactly 10% of 1000
 		// Condition: 100 > 100 (false) || 100 > 0.1*1000=100 (false) -> false
 		shouldCreate := info.ColumnNDVs[0] > 100 || info.ColumnNDVs[0] > 0.1*float64(info.TableRowCount)
 		assert.False(t, shouldCreate, "NDV=100 (10% of 1000) should not meet condition")
@@ -603,7 +603,7 @@ func TestCollectTableStats_EdgeCases(t *testing.T) {
 		info.DataTypes[0] = types.New(types.T_int64, 0, 0)
 
 		info.TableRowCount = 50
-		info.ColumnNDVs[0] = 200  // NDV > 100, should meet condition
+		info.ColumnNDVs[0] = 200 // NDV > 100, should meet condition
 		shouldCreate := info.ColumnNDVs[0] > 100 || info.ColumnNDVs[0] > 0.1*float64(info.TableRowCount)
 		assert.True(t, shouldCreate, "NDV=200 > 100 should meet condition even with small row count")
 	})
@@ -615,7 +615,7 @@ func TestCollectTableStats_EdgeCases(t *testing.T) {
 		info.DataTypes[0] = types.New(types.T_int64, 0, 0)
 
 		info.TableRowCount = 100000
-		info.ColumnNDVs[0] = 50  // NDV=50, 0.05% of rows, doesn't meet condition
+		info.ColumnNDVs[0] = 50 // NDV=50, 0.05% of rows, doesn't meet condition
 		shouldCreate := info.ColumnNDVs[0] > 100 || info.ColumnNDVs[0] > 0.1*float64(info.TableRowCount)
 		assert.False(t, shouldCreate, "NDV=50 with rows=100000 should not meet condition")
 
@@ -779,7 +779,6 @@ func TestCollectTableStats_ShuffleRanges_DynamicCreation_Real(t *testing.T) {
 
 		// First object: 30 rows, NDV=2
 		if !init {
-			init = true
 			info.MaxObjectRowCount = 30
 			info.MinObjectRowCount = 30
 			info.TableRowCount = 30
@@ -841,7 +840,6 @@ func TestCollectTableStats_NDV_IndependentOfZoneMap_Real(t *testing.T) {
 
 		// First object: NDV=50, ZoneMap not initialized (simulated by empty ZoneMap)
 		if !init {
-			init = true
 			info.MaxObjectRowCount = 100
 			info.MinObjectRowCount = 100
 			info.TableRowCount = 100

@@ -708,7 +708,7 @@ func collectTableStats(
 				// ZoneMap initialization status should not affect size calculation
 				// Use OriginSize() instead of Length() for accurate data size estimation
 				info.ColumnSize[idx] += int64(columnMeta.Location().OriginSize())
-				
+
 				// CRITICAL FIX: Always accumulate NDV, even if ZoneMap is not initialized
 				// NDV is calculated independently using HyperLogLog sketch, not dependent on ZoneMap
 				columnNDV := float64(columnMeta.Ndv())
@@ -731,7 +731,7 @@ func collectTableStats(
 					// Same row count as current min, but this column has lower NDV
 					info.NDVinMinObject[idx] = columnNDV
 				}
-				
+
 				// CRITICAL FIX: Check if ShuffleRanges should be created based on accumulated stats
 				// This allows ShuffleRanges to be created even if the first object didn't meet the condition
 				// This check is done before ZoneMap check, so we can create ShuffleRanges even if current object's ZoneMap is not initialized
@@ -756,14 +756,14 @@ func collectTableStats(
 						}
 					}
 				}
-				
+
 				zoneMap := columnMeta.ZoneMap().Clone()
 				if !zoneMap.IsInited() {
 					continue
 				}
 				index.UpdateZM(info.ColumnZMs[idx], zoneMap.GetMaxBuf())
 				index.UpdateZM(info.ColumnZMs[idx], zoneMap.GetMinBuf())
-				
+
 				// Update existing ShuffleRanges with current object's data
 				if info.ShuffleRanges[idx] != nil {
 					switch info.DataTypes[idx].Oid {
