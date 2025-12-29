@@ -19,6 +19,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -535,7 +536,9 @@ func createTable(
 	// Create table
 	// Note: The "from_publication" property is already added in GetUpstreamDDLUsingGetDdl
 	// when processing the CREATE SQL from upstream
-	result, err = executor.ExecSQL(ctx, createSQL)
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	result, err = executor.ExecSQL(ctxWithTimeout, createSQL)
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to create table %s.%s: %v", dbName, tableName, err)
 	}
