@@ -2168,7 +2168,7 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	s.DataSource.AccountId = node.ObjRef.GetPubInfo()
 	s.DataSource.RuntimeFilterSpecs = node.RuntimeFilterProbeList
 	s.DataSource.OrderBy = node.OrderBy
-	s.DataSource.IndexReaderParam = node.IndexReaderParam
+	s.DataSource.IndexReaderParam = plan2.DeepCopyIndexReaderParam(node.IndexReaderParam)
 	s.DataSource.RecvMsgList = node.RecvMsgList
 
 	return nil
