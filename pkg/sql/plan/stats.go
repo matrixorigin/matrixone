@@ -954,9 +954,9 @@ func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableD
 		case 0:
 			blocksel = math.Min(blocksel, 0.2)
 		case 1:
-			return math.Min(blocksel, 0.5)
+			blocksel = math.Min(blocksel, 0.5)
 		case 2:
-			return math.Min(blocksel, 0.7)
+			blocksel = math.Min(blocksel, 0.7)
 		}
 		return blocksel
 	}
@@ -1562,8 +1562,8 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	stats.BlockNum = int32(float64(s.BlockNumber)*blockSel) + 1
 	// estimate average row size from collected table stats: sum(SizeMap)/TableCnt
 	// SizeMap stores approximate persisted bytes per column (using OriginSize); divide by total rows to get bytes/row
+	var totalSize uint64
 	{
-		var totalSize uint64
 		for _, v := range s.SizeMap {
 			totalSize += v
 		}
@@ -1578,6 +1578,7 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 			}
 		}
 	}
+
 	return stats
 }
 

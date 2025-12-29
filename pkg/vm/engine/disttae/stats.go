@@ -704,14 +704,14 @@ func collectTableStats(
 			for idx, col := range req.tableDef.Cols[:lenCols] {
 				columnMeta := meta.MustGetColumn(uint16(col.Seqnum))
 				info.NullCnts[idx] += int64(columnMeta.NullCnt())
-				zoneMap := columnMeta.ZoneMap().Clone()
-				if !zoneMap.IsInited() {
-					continue
-				}
-				index.UpdateZM(info.ColumnZMs[idx], zoneMap.GetMaxBuf())
-				index.UpdateZM(info.ColumnZMs[idx], zoneMap.GetMinBuf())
+				// CRITICAL FIX: Always accumulate ColumnSize, even if ZoneMap is not initialized
+				// ZoneMap initialization status should not affect size calculation
+				// Use OriginSize() instead of Length() for accurate data size estimation
+				info.ColumnSize[idx] += int64(columnMeta.Location().OriginSize())
+				
+				// CRITICAL FIX: Always accumulate NDV, even if ZoneMap is not initialized
+				// NDV is calculated independently using HyperLogLog sketch, not dependent on ZoneMap
 				columnNDV := float64(columnMeta.Ndv())
-
 				info.ColumnNDVs[idx] += columnNDV
 				if columnNDV > info.MaxNDVs[idx] {
 					info.MaxNDVs[idx] = columnNDV
@@ -731,8 +731,13 @@ func collectTableStats(
 					// Same row count as current min, but this column has lower NDV
 					info.NDVinMinObject[idx] = columnNDV
 				}
-				// Use OriginSize() instead of Length() for accurate data size estimation
-				info.ColumnSize[idx] += int64(columnMeta.Location().OriginSize())
+				
+				zoneMap := columnMeta.ZoneMap().Clone()
+				if !zoneMap.IsInited() {
+					continue
+				}
+				index.UpdateZM(info.ColumnZMs[idx], zoneMap.GetMaxBuf())
+				index.UpdateZM(info.ColumnZMs[idx], zoneMap.GetMinBuf())
 				if info.ShuffleRanges[idx] != nil {
 					switch info.DataTypes[idx].Oid {
 					case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_time, types.T_timestamp, types.T_date, types.T_datetime, types.T_decimal64, types.T_decimal128:
