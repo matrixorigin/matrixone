@@ -1029,3 +1029,296 @@ func TestExecuteIterationDatabaseLevel(t *testing.T) {
 
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 }
+
+func TestExecuteIterationWithIndex(t *testing.T) {
+	catalog.SetupDefines("")
+
+	var (
+		srcAccountID  = catalog.System_Account
+		destAccountID = uint32(2)
+		cnUUID        = ""
+	)
+
+	// Setup source account context
+	srcCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	srcCtx = context.WithValue(srcCtx, defines.TenantIDKey{}, srcAccountID)
+	srcCtxWithTimeout, cancelSrc := context.WithTimeout(srcCtx, time.Minute*5)
+	defer cancelSrc()
+
+	// Setup destination account context
+	destCtx, cancelDest := context.WithCancel(context.Background())
+	defer cancelDest()
+	destCtx = context.WithValue(destCtx, defines.TenantIDKey{}, destAccountID)
+	destCtxWithTimeout, cancelDestTimeout := context.WithTimeout(destCtx, time.Minute*5)
+	defer cancelDestTimeout()
+
+	// Create engines with source account context
+	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(srcCtx, testutil.TestOptions{}, t)
+	defer func() {
+		disttaeEngine.Close(srcCtx)
+		taeHandler.Close(true)
+		rpcAgent.Close()
+	}()
+
+	// Register mock auto increment service
+	mockIncrService := NewMockAutoIncrementService(cnUUID)
+	incrservice.SetAutoIncrementServiceByID("", mockIncrService)
+	defer mockIncrService.Close()
+
+	// Create mo_indexes table for source account
+	err := exec_sql(disttaeEngine, srcCtxWithTimeout, frontend.MoCatalogMoIndexesDDL)
+	require.NoError(t, err)
+
+	// Create mo_foreign_keys table for source account
+	err = exec_sql(disttaeEngine, srcCtxWithTimeout, frontend.MoCatalogMoForeignKeysDDL)
+	require.NoError(t, err)
+
+	// Create mo_ccpr_log table using system account context
+	systemCtx := context.WithValue(srcCtxWithTimeout, defines.TenantIDKey{}, catalog.System_Account)
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprLogDDL)
+	require.NoError(t, err)
+
+	// Create mo_snapshots table for source account
+	moSnapshotsDDL := frontend.MoCatalogMoSnapshotsDDL
+	err = exec_sql(disttaeEngine, srcCtxWithTimeout, moSnapshotsDDL)
+	require.NoError(t, err)
+
+	// Create system tables for destination account
+	// These tables are needed when creating tables in the destination account
+	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoIndexesDDL)
+	require.NoError(t, err)
+
+	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoTablePartitionsDDL)
+	require.NoError(t, err)
+
+	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoAutoIncrTableDDL)
+	require.NoError(t, err)
+
+	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoForeignKeysDDL)
+	require.NoError(t, err)
+
+	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoSnapshotsDDL)
+	require.NoError(t, err)
+
+	// Step 1: Create source database and table with index in source account using SQL
+	srcDBName := "src_db"
+	srcTableName := "src_table_with_index"
+
+	// Create database using SQL
+	createDBSQL := fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s", srcDBName)
+	err = exec_sql(disttaeEngine, srcCtxWithTimeout, createDBSQL)
+	require.NoError(t, err)
+
+	// Create table with regular column and index using SQL
+	// Using regular index instead of HNSW to avoid experimental feature check
+	createTableSQL := fmt.Sprintf(
+		`CREATE TABLE %s.%s (
+			id BIGINT PRIMARY KEY,
+			value_col INT,
+			name VARCHAR(100),
+			KEY idx_value (value_col)
+		)`,
+		srcDBName, srcTableName,
+	)
+	err = exec_sql(disttaeEngine, srcCtxWithTimeout, createTableSQL)
+	require.NoError(t, err)
+
+	// Insert data into source table using SQL
+	// Insert 10 rows with consistent column definitions
+	for i := 0; i < 10; i++ {
+		insertSQL := fmt.Sprintf(
+			`INSERT INTO %s.%s (id, value_col, name) VALUES (%d, %d, 'name_%d')`,
+			srcDBName, srcTableName, i, i*10, i,
+		)
+		err = exec_sql(disttaeEngine, srcCtxWithTimeout, insertSQL)
+		require.NoError(t, err)
+	}
+
+	// Step 2: Write mo_ccpr_log table in destination account context
+	taskID := uint64(1)
+	iterationLSN := uint64(1)
+	subscriptionName := "test_subscription_with_index"
+	insertSQL := fmt.Sprintf(
+		`INSERT INTO mo_catalog.mo_ccpr_log (
+			task_id, 
+			subscription_name, 
+			sync_level, 
+			account_id,
+			db_name, 
+			table_name, 
+			upstream_conn, 
+			sync_config, 
+			iteration_state, 
+			iteration_lsn, 
+			cn_uuid
+		) VALUES (
+			%d, 
+			'%s', 
+			'table', 
+			%d,
+			'%s', 
+			'%s', 
+			'%s', 
+			'{}', 
+			%d, 
+			%d, 
+			'%s'
+		)`,
+		taskID,
+		subscriptionName,
+		destAccountID,
+		srcDBName,
+		srcTableName,
+		fmt.Sprintf("%s:%d", publication.InternalSQLExecutorType, srcAccountID),
+		publication.IterationStatePending,
+		iterationLSN,
+		cnUUID,
+	)
+
+	// Write mo_ccpr_log using system account context
+	err = exec_sql(disttaeEngine, systemCtx, insertSQL)
+	require.NoError(t, err)
+
+	// Step 3: Create upstream SQL helper factory
+	upstreamSQLHelperFactory := func(
+		txnOp client.TxnOperator,
+		engine engine.Engine,
+		accountID uint32,
+		exec executor.SQLExecutor,
+		txnClient client.TxnClient,
+	) publication.UpstreamSQLHelper {
+		return NewUpstreamSQLHelper(txnOp, engine, accountID, exec, txnClient)
+	}
+
+	// Create mpool for ExecuteIteration
+	mp, err := mpool.NewMPool("test_execute_iteration_with_index", 0, mpool.NoFixed)
+	require.NoError(t, err)
+
+	// Step 4: Create UTHelper for checkpointing
+	checkpointDone := make(chan struct{}, 1)
+	utHelper := &checkpointUTHelper{
+		taeHandler:    taeHandler,
+		disttaeEngine: disttaeEngine,
+		checkpointC:   checkpointDone,
+	}
+
+	// Execute ExecuteIteration with UTHelper
+	err = publication.ExecuteIteration(
+		srcCtxWithTimeout,
+		cnUUID,
+		disttaeEngine.Engine,
+		disttaeEngine.GetTxnClient(),
+		taskID,
+		iterationLSN,
+		upstreamSQLHelperFactory,
+		mp,
+		utHelper,
+	)
+
+	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
+
+	// Signal checkpoint goroutine to stop
+	close(checkpointDone)
+
+	// Check errors
+	require.NoError(t, err, "ExecuteIteration should complete successfully")
+
+	// Step 5: Verify that the iteration state was updated
+	// Query mo_ccpr_log to check iteration_state using system account
+	querySQL := fmt.Sprintf(
+		`SELECT iteration_state, iteration_lsn FROM mo_catalog.mo_ccpr_log WHERE task_id = %d`,
+		taskID,
+	)
+
+	v, ok := runtime.ServiceRuntime("").GetGlobalVariables(runtime.InternalSQLExecutor)
+	require.True(t, ok)
+	exec := v.(executor.SQLExecutor)
+
+	querySystemCtx := context.WithValue(destCtxWithTimeout, defines.TenantIDKey{}, catalog.System_Account)
+	txn, err := disttaeEngine.NewTxnOperator(querySystemCtx, disttaeEngine.Now())
+	require.NoError(t, err)
+
+	res, err := exec.Exec(querySystemCtx, querySQL, executor.Options{}.WithTxn(txn))
+	require.NoError(t, err)
+	defer res.Close()
+
+	// Check that iteration_state is completed
+	var found bool
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		require.Equal(t, 1, rows)
+		require.Equal(t, 2, len(cols))
+
+		state := vector.GetFixedAtWithTypeCheck[int8](cols[0], 0)
+		lsn := vector.GetFixedAtWithTypeCheck[int64](cols[1], 0)
+
+		require.Equal(t, publication.IterationStateCompleted, state)
+		require.Equal(t, int64(iterationLSN), lsn)
+		found = true
+		return true
+	})
+	require.True(t, found, "should find the updated iteration record")
+
+	err = txn.Commit(querySystemCtx)
+	require.NoError(t, err)
+
+	// Step 6: Check destination table row count
+	// The destination table should have 10 rows (same as source table)
+	checkRowCountSQL := fmt.Sprintf(`SELECT COUNT(*) FROM %s.%s`, srcDBName, srcTableName)
+	queryDestCtx := context.WithValue(destCtxWithTimeout, defines.TenantIDKey{}, destAccountID)
+	txn2, err := disttaeEngine.NewTxnOperator(queryDestCtx, disttaeEngine.Now())
+	require.NoError(t, err)
+
+	rowCountRes, err := exec.Exec(queryDestCtx, checkRowCountSQL, executor.Options{}.WithTxn(txn2))
+	require.NoError(t, err)
+	defer rowCountRes.Close()
+
+	var rowCount int64
+	rowCountRes.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		require.Equal(t, 1, rows)
+		require.Equal(t, 1, len(cols))
+		rowCount = vector.GetFixedAtWithTypeCheck[int64](cols[0], 0)
+		return true
+	})
+	require.Equal(t, int64(10), rowCount, "destination table should have 10 rows after iteration")
+
+	err = txn2.Commit(queryDestCtx)
+	require.NoError(t, err)
+
+	// Step 7: Verify that the index was created in the destination table
+	// Query mo_indexes to check if the index exists in the destination account
+	queryIndexSQL := fmt.Sprintf(
+		`SELECT COUNT(*) FROM mo_catalog.mo_indexes 
+		WHERE database_id IN (
+			SELECT dat_id FROM mo_catalog.mo_database WHERE datname = '%s'
+		) 
+		AND table_id IN (
+			SELECT rel_id FROM mo_catalog.mo_tables WHERE relname = '%s' AND reldatabase = '%s'
+		)`,
+		srcDBName, srcTableName, srcDBName,
+	)
+
+	queryIndexCtx := context.WithValue(destCtxWithTimeout, defines.TenantIDKey{}, destAccountID)
+	txn3, err := disttaeEngine.NewTxnOperator(queryIndexCtx, disttaeEngine.Now())
+	require.NoError(t, err)
+
+	indexRes, err := exec.Exec(queryIndexCtx, queryIndexSQL, executor.Options{}.WithTxn(txn3))
+	require.NoError(t, err)
+	defer indexRes.Close()
+
+	var indexCount int64
+	indexRes.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		if rows > 0 && len(cols) > 0 {
+			indexCount = vector.GetFixedAtWithTypeCheck[int64](cols[0], 0)
+		}
+		return true
+	})
+	// The index should exist in the destination table
+	// Note: The exact count depends on how many index entries are created (metadata + storage tables)
+	require.Greater(t, indexCount, int64(0), "destination table should have at least one index entry")
+
+	err = txn3.Commit(queryIndexCtx)
+	require.NoError(t, err)
+
+	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
+}
