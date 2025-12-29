@@ -43,6 +43,7 @@ func otherCompareOperatorSupports(typ1, typ2 types.Type) bool {
 	case types.T_uuid:
 	case types.T_Rowid:
 	case types.T_array_float32, types.T_array_float64:
+	case types.T_year:
 	default:
 		return false
 	}
@@ -70,6 +71,7 @@ func equalAndNotEqualOperatorSupports(typ1, typ2 types.Type) bool {
 	case types.T_Rowid:
 	case types.T_array_float32, types.T_array_float64:
 	case types.T_enum:
+	case types.T_year:
 	default:
 		return false
 	}
@@ -190,6 +192,10 @@ func equalFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		}, selectList)
 	case types.T_enum:
 		return opBinaryFixedFixedToFixed[types.Enum, types.Enum, bool](parameters, rs, proc, length, func(a, b types.Enum) bool {
+			return a == b
+		}, selectList)
+	case types.T_year:
+		return opBinaryFixedFixedToFixed[types.MoYear, types.MoYear, bool](parameters, rs, proc, length, func(a, b types.MoYear) bool {
 			return a == b
 		}, selectList)
 	}
@@ -680,6 +686,10 @@ func greatThanFn(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		return opBinaryFixedFixedToFixed[types.Rowid, types.Rowid, bool](parameters, rs, proc, length, func(a, b types.Rowid) bool {
 			return a.GT(&b)
 		}, selectList)
+	case types.T_year:
+		return opBinaryFixedFixedToFixed[types.MoYear, types.MoYear, bool](parameters, rs, proc, length, func(a, b types.MoYear) bool {
+			return a > b
+		}, selectList)
 	}
 	panic("unreached code")
 }
@@ -789,6 +799,10 @@ func greatEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapp
 	case types.T_Rowid:
 		return opBinaryFixedFixedToFixed[types.Rowid, types.Rowid, bool](parameters, rs, proc, length, func(a, b types.Rowid) bool {
 			return a.GE(&b)
+		}, selectList)
+	case types.T_year:
+		return opBinaryFixedFixedToFixed[types.MoYear, types.MoYear, bool](parameters, rs, proc, length, func(a, b types.MoYear) bool {
+			return a >= b
 		}, selectList)
 	}
 	panic("unreached code")
@@ -900,6 +914,10 @@ func notEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 		return opBinaryFixedFixedToFixed[types.Rowid, types.Rowid, bool](parameters, rs, proc, length, func(a, b types.Rowid) bool {
 			return !a.EQ(&b)
 		}, selectList)
+	case types.T_year:
+		return opBinaryFixedFixedToFixed[types.MoYear, types.MoYear, bool](parameters, rs, proc, length, func(a, b types.MoYear) bool {
+			return a != b
+		}, selectList)
 	}
 	panic("unreached code")
 }
@@ -1010,6 +1028,10 @@ func lessThanFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 		return opBinaryFixedFixedToFixed[types.Rowid, types.Rowid, bool](parameters, rs, proc, length, func(a, b types.Rowid) bool {
 			return a.LT(&b)
 		}, selectList)
+	case types.T_year:
+		return opBinaryFixedFixedToFixed[types.MoYear, types.MoYear, bool](parameters, rs, proc, length, func(a, b types.MoYear) bool {
+			return a < b
+		}, selectList)
 	}
 	panic("unreached code")
 }
@@ -1119,6 +1141,10 @@ func lessEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	case types.T_Rowid:
 		return opBinaryFixedFixedToFixed[types.Rowid, types.Rowid, bool](parameters, rs, proc, length, func(a, b types.Rowid) bool {
 			return a.LE(&b)
+		}, selectList)
+	case types.T_year:
+		return opBinaryFixedFixedToFixed[types.MoYear, types.MoYear, bool](parameters, rs, proc, length, func(a, b types.MoYear) bool {
+			return a <= b
 		}, selectList)
 	}
 	panic("unreached code")

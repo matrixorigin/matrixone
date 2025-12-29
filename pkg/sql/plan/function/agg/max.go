@@ -129,6 +129,13 @@ func RegisterMax2(id int64) {
 		aggMaxFill[types.Time], aggMaxFills[types.Time], aggMaxMerge[types.Time], nil)
 
 	aggexec.RegisterAggFromFixedRetFixed(
+		aggexec.MakeSingleColumnAggInformation(id, types.T_year.ToType(), MaxReturnType, true),
+		nil,
+		nil,
+		aggMaxInitResult[types.MoYear],
+		aggMaxFill[types.MoYear], aggMaxFills[types.MoYear], aggMaxMerge[types.MoYear], nil)
+
+	aggexec.RegisterAggFromFixedRetFixed(
 		aggexec.MakeSingleColumnAggInformation(id, types.T_bool.ToType(), MaxReturnType, true),
 		nil,
 		nil,
@@ -179,7 +186,7 @@ var MaxSupportedTypes = []types.T{
 	types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 	types.T_float32, types.T_float64,
 	types.T_date, types.T_datetime,
-	types.T_timestamp, types.T_time,
+	types.T_timestamp, types.T_time, types.T_year,
 	types.T_decimal64, types.T_decimal128,
 	types.T_bool,
 	types.T_bit,
@@ -208,6 +215,7 @@ var fromTypeIDtoMinValue = map[types.T]interface{}{
 	types.T_datetime:   types.Datetime(0),
 	types.T_timestamp:  types.Timestamp(0),
 	types.T_time:       types.Time(0),
+	types.T_year:       types.MoYear(0),
 	types.T_bool:       false,
 	types.T_uuid:       types.Uuid([16]byte{}),
 	types.T_decimal64:  types.Decimal64Min,
