@@ -732,12 +732,39 @@ func collectTableStats(
 					info.NDVinMinObject[idx] = columnNDV
 				}
 				
+				// CRITICAL FIX: Check if ShuffleRanges should be created based on accumulated stats
+				// This allows ShuffleRanges to be created even if the first object didn't meet the condition
+				// This check is done before ZoneMap check, so we can create ShuffleRanges even if current object's ZoneMap is not initialized
+				if info.ShuffleRanges[idx] == nil {
+					// Use accumulated NDV and total row count to decide if ShuffleRanges should be created
+					if info.ColumnNDVs[idx] > 100 || info.ColumnNDVs[idx] > 0.1*float64(info.TableRowCount) {
+						switch info.DataTypes[idx].Oid {
+						case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_time, types.T_timestamp, types.T_date, types.T_datetime, types.T_decimal64, types.T_decimal128:
+							info.ShuffleRanges[idx] = plan2.NewShuffleRange(false)
+							// Initialize with accumulated ZoneMap if available
+							if info.ColumnZMs[idx].IsInited() {
+								minValue := getMinMaxValueByFloat64(info.DataTypes[idx], info.ColumnZMs[idx].GetMinBuf())
+								maxValue := getMinMaxValueByFloat64(info.DataTypes[idx], info.ColumnZMs[idx].GetMaxBuf())
+								// Use accumulated row count and null count
+								info.ShuffleRanges[idx].Update(minValue, maxValue, int64(info.TableRowCount), info.NullCnts[idx])
+							}
+						case types.T_varchar, types.T_char, types.T_text:
+							info.ShuffleRanges[idx] = plan2.NewShuffleRange(true)
+							if info.ColumnZMs[idx].IsInited() {
+								info.ShuffleRanges[idx].UpdateString(info.ColumnZMs[idx].GetMinBuf(), info.ColumnZMs[idx].GetMaxBuf(), int64(info.TableRowCount), info.NullCnts[idx])
+							}
+						}
+					}
+				}
+				
 				zoneMap := columnMeta.ZoneMap().Clone()
 				if !zoneMap.IsInited() {
 					continue
 				}
 				index.UpdateZM(info.ColumnZMs[idx], zoneMap.GetMaxBuf())
 				index.UpdateZM(info.ColumnZMs[idx], zoneMap.GetMinBuf())
+				
+				// Update existing ShuffleRanges with current object's data
 				if info.ShuffleRanges[idx] != nil {
 					switch info.DataTypes[idx].Oid {
 					case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_time, types.T_timestamp, types.T_date, types.T_datetime, types.T_decimal64, types.T_decimal128:
