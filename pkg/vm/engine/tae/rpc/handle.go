@@ -1052,6 +1052,11 @@ func (h *Handle) HandleSoftDeleteObject(
 	objIDPtr := (*types.Objectid)(req.ObjectID)
 	err = tb.SoftDeleteObject(objIDPtr, req.IsTombstone)
 	if err != nil {
+		// If object is not found (ExpectedEOB), just log a warning and return nil
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			logutil.Warnf("object %s not found when soft deleting, skipping: %v", req.ObjectID.ShortStringEx(), err)
+			return nil
+		}
 		logutil.Errorf("failed to soft delete object %s: %v", req.ObjectID.ShortStringEx(), err)
 		return moerr.NewInternalErrorf(ctx, "failed to soft delete object %s: %v", req.ObjectID.ShortStringEx(), err)
 	}
