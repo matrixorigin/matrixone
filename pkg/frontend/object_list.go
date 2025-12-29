@@ -17,7 +17,9 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -189,6 +191,39 @@ func handleObjectList(
 	return trySaveQueryResult(ctx, ses, mrs)
 }
 
+// getIndexTableNamesFromTableDef gets index table names from table's tableDef
+func getIndexTableNamesFromTableDef(
+	ctx context.Context,
+	table engine.Relation,
+) []string {
+	if table == nil {
+		return nil
+	}
+
+	// Get tableDef from table
+	tableDef := table.GetTableDef(ctx)
+	if tableDef == nil {
+		return nil
+	}
+
+	// Get index table names from Indexes
+	var indexTableNames []string
+	seen := make(map[string]bool)
+	if tableDef.Indexes != nil {
+		for _, indexDef := range tableDef.Indexes {
+			if indexDef != nil && len(indexDef.IndexTableName) > 0 {
+				indexTableName := indexDef.IndexTableName
+				if !seen[indexTableName] {
+					indexTableNames = append(indexTableNames, indexTableName)
+					seen[indexTableName] = true
+				}
+			}
+		}
+	}
+
+	return indexTableNames
+}
+
 // collectObjectListForTable collects object list for a specific table in a specific database
 func collectObjectListForTable(
 	ctx context.Context,
@@ -234,6 +269,25 @@ func collectObjectListForTable(
 	err = table.CollectObjectList(ctx, from, to, bat, mp)
 	if err != nil {
 		return err
+	}
+
+	// Get index table names from tableDef
+	indexTableNames := getIndexTableNamesFromTableDef(ctx, table)
+
+	// Collect object list for each index table
+	for _, indexTableName := range indexTableNames {
+		if len(indexTableName) > 0 {
+			indexTable, err := db.Relation(ctx, indexTableName, nil)
+			if err != nil {
+				// Log error but continue with other index tables
+				continue
+			}
+			err = indexTable.CollectObjectList(ctx, from, to, bat, mp)
+			if err != nil {
+				// Log error but continue with other index tables
+				continue
+			}
+		}
 	}
 
 	return nil
@@ -284,6 +338,10 @@ func collectObjectListForDatabase(
 	}
 
 	for _, tableName := range tableNames {
+		// Filter out index tables
+		if strings.HasPrefix(tableName, catalog.IndexTableNamePrefix) {
+			continue
+		}
 		err = collectObjectListForTable(ctx, from, to, dbname, tableName, eng, txn, bat, mp)
 		if err != nil {
 			return err
