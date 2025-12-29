@@ -104,6 +104,14 @@ func handleGetObject(
 
 	// Read object from fileservice
 	objectName := stmt.ObjectName.String()
+
+	// Check publication permission
+	// For GET OBJECT, we check if the account has permission to access any publication
+	// since objectName doesn't contain database/table information
+	if err := checkPublicationPermissionForGetObject(ctx, ses); err != nil {
+		return err
+	}
+
 	content, err := readObjectFromFS(ctx, ses, objectName)
 	if err != nil {
 		return err

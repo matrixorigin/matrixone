@@ -61,6 +61,23 @@ func doCheckSnapshotFlushed(ctx context.Context, ses *Session, stmt *tree.CheckS
 	if record == nil {
 		return moerr.NewInternalError(ctx, "snapshot not found")
 	}
+
+	// Check publication permission based on snapshot level
+	// For cluster level, no permission check needed (all accounts can access)
+	// For account/database/table level, check permission
+	if record.level != "cluster" {
+		var dbName, tblName string
+		if record.level == "database" || record.level == "table" {
+			dbName = record.databaseName
+		}
+		if record.level == "table" {
+			tblName = record.tableName
+		}
+		if err := checkPublicationPermission(ctx, ses, dbName, tblName); err != nil {
+			return err
+		}
+	}
+
 	// Get fileservice from session
 	eng := getPu(ses.GetService()).StorageEngine
 	if eng == nil {

@@ -109,6 +109,11 @@ func handleObjectList(
 	}
 	tablename := string(stmt.Table)
 
+	// Check publication permission
+	if err := checkPublicationPermission(ctx, ses, dbname, tablename); err != nil {
+		return err
+	}
+
 	// Resolve snapshot using session
 	resolveSnapshot := func(ctx context.Context, snapshotName string) (*timestamp.Timestamp, error) {
 		snapshot, err := ses.GetTxnCompileCtx().ResolveSnapshotWithSnapshotName(snapshotName)
