@@ -63,22 +63,6 @@ type TableKey struct {
 	TableName string // Table name
 }
 
-// IndexTableMapping represents the mapping between downstream and upstream index table names
-type IndexTableMapping struct {
-	IndexName                string // Index name
-	AlgoTableType            string // Algorithm table type (e.g., "metadata", "centroids", "entries", "hnsw_meta", "hnsw_index")
-	DownstreamIndexTableName string // Index table name in downstream (local)
-	UpstreamIndexTableName   string // Index table name in upstream
-}
-
-// IndexKey represents a key for IndexTableMappings map
-// Format: table_id + ":" + index_name + ":" + algo_table_type
-type IndexKey struct {
-	TableID       uint64
-	IndexName     string
-	AlgoTableType string
-}
-
 // IterationContext contains context information for an iteration
 type IterationContext struct {
 	// Task identification
@@ -104,5 +88,5 @@ type IterationContext struct {
 	// Previous stats: the object stats written in the previous iteration (if exists)
 	ActiveAObj         map[objectio.ObjectId]AObjMapping
 	TableIDs           map[TableKey]uint64
-	IndexTableMappings map[IndexKey]IndexTableMapping // Maps index name and algo_table_type to index table mapping
+	IndexTableMappings map[string]string // Maps upstream_index_table_name to downstream_index_table_name
 }

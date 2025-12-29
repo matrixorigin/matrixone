@@ -91,6 +91,7 @@ type IterationContextJSON struct {
 	CurrentSnapshotTS   int64                      `json:"current_snapshot_ts"` // types.TS as int64
 	ActiveAObj          map[string]AObjMappingJSON `json:"active_aobj"`         // ActiveAObj as serializable map (key is ObjectId as string)
 	TableIDs            map[string]uint64          `json:"table_ids"`
+	IndexTableMappings  map[string]string          `json:"index_table_mappings"` // IndexTableMappings as serializable map (key is upstream_index_table_name, value is downstream_index_table_name)
 }
 
 // InitializeIterationContext initializes IterationContext from mo_ccpr_log table
@@ -271,15 +272,16 @@ func InitializeIterationContext(
 	}
 	// Initialize IterationContext
 	iterationCtx := &IterationContext{
-		TaskID:           taskID,
-		SubscriptionName: subscriptionName.String,
-		SrcInfo:          srcInfo,
-		LocalTxn:         localTxn,
-		LocalExecutor:    localExecutor,
-		UpstreamExecutor: upstreamExecutor,
-		IterationLSN:     iterationLSN,
-		ActiveAObj:       make(map[objectio.ObjectId]AObjMapping),
-		TableIDs:         make(map[TableKey]uint64),
+		TaskID:             taskID,
+		SubscriptionName:   subscriptionName.String,
+		SrcInfo:            srcInfo,
+		LocalTxn:           localTxn,
+		LocalExecutor:      localExecutor,
+		UpstreamExecutor:   upstreamExecutor,
+		IterationLSN:       iterationLSN,
+		ActiveAObj:         make(map[objectio.ObjectId]AObjMapping),
+		TableIDs:           make(map[TableKey]uint64),
+		IndexTableMappings: make(map[string]string),
 	}
 
 	// Parse context JSON if available
@@ -332,6 +334,17 @@ func InitializeIterationContext(
 				// Only store valid table keys (skip empty keys from legacy database format)
 				if key.DBName != "" && key.TableName != "" {
 					iterationCtx.TableIDs[key] = id
+				}
+			}
+		}
+
+		// Restore IndexTableMappings from JSON
+		if ctxJSON.IndexTableMappings != nil {
+			iterationCtx.IndexTableMappings = make(map[string]string)
+			for upstreamName, downstreamName := range ctxJSON.IndexTableMappings {
+				// Only store valid mappings
+				if upstreamName != "" && downstreamName != "" {
+					iterationCtx.IndexTableMappings[upstreamName] = downstreamName
 				}
 			}
 		}
@@ -417,6 +430,14 @@ func UpdateIterationState(
 			tableIDsJSON[keyStr] = id
 		}
 
+		// Convert IndexTableMappings to string map for JSON serialization
+		indexTableMappingsJSON := make(map[string]string)
+		if iterationCtx.IndexTableMappings != nil {
+			for upstreamName, downstreamName := range iterationCtx.IndexTableMappings {
+				indexTableMappingsJSON[upstreamName] = downstreamName
+			}
+		}
+
 		// Create a serializable context structure
 		ctxJSON := IterationContextJSON{
 			TaskID:              iterationCtx.TaskID,
@@ -428,6 +449,7 @@ func UpdateIterationState(
 			CurrentSnapshotTS:   iterationCtx.CurrentSnapshotTS.Physical(),
 			ActiveAObj:          activeAObjJSON,
 			TableIDs:            tableIDsJSON,
+			IndexTableMappings:  indexTableMappingsJSON,
 		}
 
 		contextBytes, err := json.Marshal(ctxJSON)
@@ -1445,7 +1467,25 @@ func ExecuteIteration(
 		)
 
 		// Extract objects from map to collected stats lists
+		// Apply index table name mapping before collecting
 		for _, info := range objectMap {
+			// Check if this is an index table and apply mapping
+			downstreamTableName := info.TableName
+			if iterationCtx.IndexTableMappings != nil {
+				if downstreamName, exists := iterationCtx.IndexTableMappings[info.TableName]; exists {
+					downstreamTableName = downstreamName
+					logutil.Info("ccpr-iteration mapping index table name",
+						zap.Uint64("task_id", iterationCtx.TaskID),
+						zap.Uint64("lsn", iterationCtx.IterationLSN),
+						zap.String("upstream_table_name", info.TableName),
+						zap.String("downstream_table_name", downstreamTableName),
+						zap.String("db_name", info.DBName),
+					)
+				}
+			}
+			// Update table name in info
+			info.TableName = downstreamTableName
+
 			statsBytes := info.Stats.Marshal()
 			delete := info.Delete
 			objID := info.Stats.ObjectName().ObjectId()
