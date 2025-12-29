@@ -656,6 +656,9 @@ func collectTableStats(
 		info.TableRowCount += float64(objectRowCount)
 		if !init {
 			init = true
+			// Initialize table-level MaxObjectRowCount and MinObjectRowCount before column loop
+			info.MaxObjectRowCount = objectRowCount
+			info.MinObjectRowCount = objectRowCount
 			for idx, col := range req.tableDef.Cols[:lenCols] {
 				columnMeta := meta.MustGetColumn(uint16(col.Seqnum))
 				info.NullCnts[idx] = int64(columnMeta.NullCnt())
@@ -666,8 +669,6 @@ func collectTableStats(
 				info.MaxNDVs[idx] = columnNDV
 				info.NDVinMinObject[idx] = columnNDV
 				info.NDVinMaxObject[idx] = columnNDV
-				info.MaxObjectRowCount = objectRowCount
-				info.MinObjectRowCount = objectRowCount
 				info.ColumnSize[idx] = int64(meta.BlockHeader().ZoneMapArea().Length() +
 					meta.BlockHeader().BFExtent().Length() + columnMeta.Location().Length())
 				if info.ColumnNDVs[idx] > 100 || info.ColumnNDVs[idx] > 0.1*float64(meta.BlockHeader().Rows()) {
@@ -688,6 +689,17 @@ func collectTableStats(
 				}
 			}
 		} else {
+			// Update table-level MaxObjectRowCount and MinObjectRowCount before column loop
+			isMaxObject := false
+			isMinObject := false
+			if objectRowCount > info.MaxObjectRowCount {
+				info.MaxObjectRowCount = objectRowCount
+				isMaxObject = true
+			}
+			if objectRowCount < info.MinObjectRowCount {
+				info.MinObjectRowCount = objectRowCount
+				isMinObject = true
+			}
 			for idx, col := range req.tableDef.Cols[:lenCols] {
 				columnMeta := meta.MustGetColumn(uint16(col.Seqnum))
 				info.NullCnts[idx] += int64(columnMeta.NullCnt())
@@ -703,16 +715,19 @@ func collectTableStats(
 				if columnNDV > info.MaxNDVs[idx] {
 					info.MaxNDVs[idx] = columnNDV
 				}
-				if objectRowCount > info.MaxObjectRowCount {
-					info.MaxObjectRowCount = objectRowCount
+				// Update NDVinMaxObject and NDVinMinObject based on table-level MaxObjectRowCount/MinObjectRowCount
+				if isMaxObject {
+					// This is the new maximum object, update NDVinMaxObject for this column
 					info.NDVinMaxObject[idx] = columnNDV
 				} else if objectRowCount == info.MaxObjectRowCount && columnNDV > info.NDVinMaxObject[idx] {
+					// Same row count as current max, but this column has higher NDV
 					info.NDVinMaxObject[idx] = columnNDV
 				}
-				if objectRowCount < info.MinObjectRowCount {
-					info.MinObjectRowCount = objectRowCount
+				if isMinObject {
+					// This is the new minimum object, update NDVinMinObject for this column
 					info.NDVinMinObject[idx] = columnNDV
 				} else if objectRowCount == info.MinObjectRowCount && columnNDV < info.NDVinMinObject[idx] {
+					// Same row count as current min, but this column has lower NDV
 					info.NDVinMinObject[idx] = columnNDV
 				}
 				info.ColumnSize[idx] += int64(columnMeta.Location().Length())
