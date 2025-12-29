@@ -166,7 +166,7 @@ func NewStatsInfo() *pb.StatsInfo {
 	}
 }
 
-type InfoFromZoneMap struct {
+type TableStatsInfo struct {
 	ColumnZMs            []objectio.ZoneMap
 	DataTypes            []types.Type
 	ColumnNDVs           []float64
@@ -184,8 +184,8 @@ type InfoFromZoneMap struct {
 	TableCnt             float64
 }
 
-func NewInfoFromZoneMap(lenCols int) *InfoFromZoneMap {
-	info := &InfoFromZoneMap{
+func NewTableStatsInfo(lenCols int) *TableStatsInfo {
+	info := &TableStatsInfo{
 		ColumnZMs:     make([]objectio.ZoneMap, lenCols),
 		DataTypes:     make([]types.Type, lenCols),
 		ColumnNDVs:    make([]float64, lenCols),
@@ -199,7 +199,7 @@ func NewInfoFromZoneMap(lenCols int) *InfoFromZoneMap {
 	return info
 }
 
-func AdjustNDV(info *InfoFromZoneMap, tableDef *TableDef, s *pb.StatsInfo) {
+func AdjustNDV(info *TableStatsInfo, tableDef *TableDef, s *pb.StatsInfo) {
 	if info.AccurateObjectNumber > 1 {
 		for i, coldef := range tableDef.Cols[:len(tableDef.Cols)-1] {
 			if info.ColumnNDVs[i] > s.TableCnt {
@@ -285,7 +285,7 @@ func AdjustNDV(info *InfoFromZoneMap, tableDef *TableDef, s *pb.StatsInfo) {
 	}
 }
 
-func UpdateStatsInfo(info *InfoFromZoneMap, tableDef *plan.TableDef, s *pb.StatsInfo) {
+func UpdateStatsInfo(info *TableStatsInfo, tableDef *plan.TableDef, s *pb.StatsInfo) {
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementUpdateStatsInfoMapHistogram.Observe(time.Since(start).Seconds())

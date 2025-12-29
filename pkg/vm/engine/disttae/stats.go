@@ -626,8 +626,8 @@ func getMinMaxValueByFloat64(typ types.Type, buf []byte) float64 {
 }
 
 // get ndv, minval , maxval, datatype from zonemap. Retrieve all columns except for rowid, return accurate number of objects
-func updateInfoFromZoneMap(
-	ctx context.Context, req *updateStatsRequest, info *plan2.InfoFromZoneMap, executor ConcurrentExecutor,
+func collectTableStats(
+	ctx context.Context, req *updateStatsRequest, info *plan2.TableStatsInfo, executor ConcurrentExecutor,
 ) error {
 	start := time.Now()
 	defer func() {
@@ -750,13 +750,13 @@ func UpdateStats(ctx context.Context, req *updateStatsRequest, executor Concurre
 		v2.TxnStatementUpdateStatsDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 	lenCols := len(req.tableDef.Cols) - 1 /* row-id */
-	info := plan2.NewInfoFromZoneMap(lenCols)
+	info := plan2.NewTableStatsInfo(lenCols)
 	if req.approxObjectNum == 0 {
 		return nil
 	}
 	info.ApproxObjectNumber = req.approxObjectNum
 	baseTableDef := req.tableDef
-	if err := updateInfoFromZoneMap(ctx, req, info, executor); err != nil {
+	if err := collectTableStats(ctx, req, info, executor); err != nil {
 		return err
 	}
 	plan2.UpdateStatsInfo(info, baseTableDef, req.statsInfo)
