@@ -66,10 +66,12 @@ type GCCfg struct {
 	CheckGC           bool          `toml:"check-gc"`
 	CacheSize         int           `toml:"cache-size"`
 	GCMergeCount      int           `toml:"gc-merge-count"`
+	GCScanCount       int           `toml:"gc-scan-count"`
 	GCestimateRows    int           `toml:"gc-estimate-rows"`
 	GCProbility       float64       `toml:"gc-probility"`
 	GCDeleteTimeout   time.Duration `toml:"gc-delete-timeout"`
 	GCDeleteBatchSize int           `toml:"gc-delete-batch-size"`
+	GCDeleteWorkerNum int           `toml:"gc-delete-worker-num"`
 }
 
 type CatalogCfg struct {

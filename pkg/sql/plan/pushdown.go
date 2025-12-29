@@ -667,7 +667,7 @@ func (builder *QueryBuilder) pushdownVectorIndexTopToTableScan(nodeID int32) {
 	scanNode.IndexReaderParam = &plan.IndexReaderParam{
 		OrderBy: []*plan.OrderBySpec{
 			{
-				Expr:      orderFunc,
+				Expr:      DeepCopyExpr(orderFunc),
 				Collation: node.OrderBy[0].Collation,
 				Flag:      node.OrderBy[0].Flag,
 			},

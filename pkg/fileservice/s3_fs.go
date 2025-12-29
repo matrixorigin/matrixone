@@ -52,6 +52,8 @@ type S3FS struct {
 	perfCounterSets []*perfcounter.CounterSet
 
 	ioMerger *IOMerger
+
+	parallelMode ParallelMode
 }
 
 // key mapping scheme:
@@ -76,6 +78,7 @@ func NewS3FS(
 		asyncUpdate:     true,
 		perfCounterSets: perfCounterSets,
 		ioMerger:        NewIOMerger(),
+		parallelMode:    args.ParallelMode,
 	}
 
 	var err error
@@ -452,8 +455,30 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 		expire = &vector.ExpireAt
 	}
 	key := s.pathToKey(path.File)
-	if err := s.storage.Write(ctx, key, reader, size, expire); err != nil {
-		return 0, err
+	enableParallel := false
+	switch s.parallelMode {
+	case ParallelForce:
+		enableParallel = true
+	case ParallelAuto:
+		if size == nil || *size >= minMultipartPartSize {
+			enableParallel = true
+		}
+	}
+
+	if pmw, ok := s.storage.(ParallelMultipartWriter); ok && pmw.SupportsParallelMultipart() &&
+		enableParallel {
+		opt := &ParallelMultipartOption{
+			PartSize:    defaultParallelMultipartPartSize,
+			Concurrency: runtime.NumCPU(),
+			Expire:      expire,
+		}
+		if err := pmw.WriteMultipartParallel(ctx, key, reader, size, opt); err != nil {
+			return 0, err
+		}
+	} else {
+		if err := s.storage.Write(ctx, key, reader, size, expire); err != nil {
+			return 0, err
+		}
 	}
 
 	// write to disk cache

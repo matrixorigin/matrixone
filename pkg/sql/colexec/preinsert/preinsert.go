@@ -313,14 +313,8 @@ func genAutoIncrCol(bat *batch.Batch, proc *proc, preInsert *PreInsert) error {
 		for col, idx := range needReCheck {
 			fromTs := types.TimestampToTS(lastAllocateTSMap[col])
 			toTs := types.TimestampToTS(proc.Base.TxnOperator.SnapshotTS())
-			// INFO level for debugging multi-CN auto-increment conflict check
-			logutil.Infof("auto-increment PK conflict check: tableID=%d, col=%s, fromTS=%s, toTS=%s",
-				tableID, col, fromTs.ToString(), toTs.ToString())
 			if mayChanged, err := rel.PrimaryKeysMayBeUpserted(proc.Ctx, fromTs, toTs, bat, preInsert.ColOffset+int32(idx)); err == nil {
-				logutil.Infof("auto-increment PK conflict check result: tableID=%d, col=%s, mayChanged=%v",
-					tableID, col, mayChanged)
 				if mayChanged {
-					logutil.Infof("auto-increment PK conflict detected, need retry: tableID=%d, col=%s", tableID, col)
 					return moerr.NewTxnNeedRetry(proc.Ctx)
 				}
 			} else {
