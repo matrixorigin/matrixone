@@ -75,7 +75,7 @@ func createInnerServer() *MOServer {
 		addr:        "",
 		uaddr:       pu.SV.UnixSocketAddress,
 		rm:          rm,
-		readTimeout: pu.SV.SessionTimeout.Duration,
+		readTimeout: pu.SV.NetReadTimeout.Duration,
 		pu:          pu,
 		handler:     rm.Handler,
 	}

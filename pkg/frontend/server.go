@@ -458,7 +458,7 @@ func NewMOServer(
 		addr:        addr,
 		uaddr:       pu.SV.UnixSocketAddress,
 		rm:          rm,
-		readTimeout: pu.SV.SessionTimeout.Duration,
+		readTimeout: pu.SV.NetReadTimeout.Duration,
 		pu:          pu,
 		handler:     rm.Handler,
 		service:     service,
