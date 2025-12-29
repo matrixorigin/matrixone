@@ -652,78 +652,78 @@ func collectTableStats(
 		meta := objMeta.MustDataMeta()
 		info.AccurateObjectNumber++
 		info.BlockNumber += int64(obj.BlkCnt())
-		objSize := meta.BlockHeader().Rows()
-		info.TableCnt += float64(objSize)
+		objectRowCount := meta.BlockHeader().Rows()
+		info.TableRowCount += float64(objectRowCount)
 		if !init {
 			init = true
 			for idx, col := range req.tableDef.Cols[:lenCols] {
-				objColMeta := meta.MustGetColumn(uint16(col.Seqnum))
-				info.NullCnts[idx] = int64(objColMeta.NullCnt())
-				info.ColumnZMs[idx] = objColMeta.ZoneMap().Clone()
+				columnMeta := meta.MustGetColumn(uint16(col.Seqnum))
+				info.NullCnts[idx] = int64(columnMeta.NullCnt())
+				info.ColumnZMs[idx] = columnMeta.ZoneMap().Clone()
 				info.DataTypes[idx] = plan2.ExprType2Type(&col.Typ)
-				ndv := float64(objColMeta.Ndv())
-				info.ColumnNDVs[idx] = ndv
-				info.MaxNDVs[idx] = ndv
-				info.NDVinMinOBJ[idx] = ndv
-				info.NDVinMaxOBJ[idx] = ndv
-				info.MaxOBJSize = objSize
-				info.MinOBJSize = objSize
+				columnNDV := float64(columnMeta.Ndv())
+				info.ColumnNDVs[idx] = columnNDV
+				info.MaxNDVs[idx] = columnNDV
+				info.NDVinMinObject[idx] = columnNDV
+				info.NDVinMaxObject[idx] = columnNDV
+				info.MaxObjectRowCount = objectRowCount
+				info.MinObjectRowCount = objectRowCount
 				info.ColumnSize[idx] = int64(meta.BlockHeader().ZoneMapArea().Length() +
-					meta.BlockHeader().BFExtent().Length() + objColMeta.Location().Length())
+					meta.BlockHeader().BFExtent().Length() + columnMeta.Location().Length())
 				if info.ColumnNDVs[idx] > 100 || info.ColumnNDVs[idx] > 0.1*float64(meta.BlockHeader().Rows()) {
 					switch info.DataTypes[idx].Oid {
 					case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_time, types.T_timestamp, types.T_date, types.T_datetime, types.T_decimal64, types.T_decimal128:
 						info.ShuffleRanges[idx] = plan2.NewShuffleRange(false)
 						if info.ColumnZMs[idx].IsInited() {
-							minvalue := getMinMaxValueByFloat64(info.DataTypes[idx], info.ColumnZMs[idx].GetMinBuf())
-							maxvalue := getMinMaxValueByFloat64(info.DataTypes[idx], info.ColumnZMs[idx].GetMaxBuf())
-							info.ShuffleRanges[idx].Update(minvalue, maxvalue, int64(meta.BlockHeader().Rows()), int64(objColMeta.NullCnt()))
+							minValue := getMinMaxValueByFloat64(info.DataTypes[idx], info.ColumnZMs[idx].GetMinBuf())
+							maxValue := getMinMaxValueByFloat64(info.DataTypes[idx], info.ColumnZMs[idx].GetMaxBuf())
+							info.ShuffleRanges[idx].Update(minValue, maxValue, int64(meta.BlockHeader().Rows()), int64(columnMeta.NullCnt()))
 						}
 					case types.T_varchar, types.T_char, types.T_text:
 						info.ShuffleRanges[idx] = plan2.NewShuffleRange(true)
 						if info.ColumnZMs[idx].IsInited() {
-							info.ShuffleRanges[idx].UpdateString(info.ColumnZMs[idx].GetMinBuf(), info.ColumnZMs[idx].GetMaxBuf(), int64(meta.BlockHeader().Rows()), int64(objColMeta.NullCnt()))
+							info.ShuffleRanges[idx].UpdateString(info.ColumnZMs[idx].GetMinBuf(), info.ColumnZMs[idx].GetMaxBuf(), int64(meta.BlockHeader().Rows()), int64(columnMeta.NullCnt()))
 						}
 					}
 				}
 			}
 		} else {
 			for idx, col := range req.tableDef.Cols[:lenCols] {
-				objColMeta := meta.MustGetColumn(uint16(col.Seqnum))
-				info.NullCnts[idx] += int64(objColMeta.NullCnt())
-				zm := objColMeta.ZoneMap().Clone()
-				if !zm.IsInited() {
+				columnMeta := meta.MustGetColumn(uint16(col.Seqnum))
+				info.NullCnts[idx] += int64(columnMeta.NullCnt())
+				zoneMap := columnMeta.ZoneMap().Clone()
+				if !zoneMap.IsInited() {
 					continue
 				}
-				index.UpdateZM(info.ColumnZMs[idx], zm.GetMaxBuf())
-				index.UpdateZM(info.ColumnZMs[idx], zm.GetMinBuf())
-				ndv := float64(objColMeta.Ndv())
+				index.UpdateZM(info.ColumnZMs[idx], zoneMap.GetMaxBuf())
+				index.UpdateZM(info.ColumnZMs[idx], zoneMap.GetMinBuf())
+				columnNDV := float64(columnMeta.Ndv())
 
-				info.ColumnNDVs[idx] += ndv
-				if ndv > info.MaxNDVs[idx] {
-					info.MaxNDVs[idx] = ndv
+				info.ColumnNDVs[idx] += columnNDV
+				if columnNDV > info.MaxNDVs[idx] {
+					info.MaxNDVs[idx] = columnNDV
 				}
-				if objSize > info.MaxOBJSize {
-					info.MaxOBJSize = objSize
-					info.NDVinMaxOBJ[idx] = ndv
-				} else if objSize == info.MaxOBJSize && ndv > info.NDVinMaxOBJ[idx] {
-					info.NDVinMaxOBJ[idx] = ndv
+				if objectRowCount > info.MaxObjectRowCount {
+					info.MaxObjectRowCount = objectRowCount
+					info.NDVinMaxObject[idx] = columnNDV
+				} else if objectRowCount == info.MaxObjectRowCount && columnNDV > info.NDVinMaxObject[idx] {
+					info.NDVinMaxObject[idx] = columnNDV
 				}
-				if objSize < info.MinOBJSize {
-					info.MinOBJSize = objSize
-					info.NDVinMinOBJ[idx] = ndv
-				} else if objSize == info.MinOBJSize && ndv < info.NDVinMinOBJ[idx] {
-					info.NDVinMinOBJ[idx] = ndv
+				if objectRowCount < info.MinObjectRowCount {
+					info.MinObjectRowCount = objectRowCount
+					info.NDVinMinObject[idx] = columnNDV
+				} else if objectRowCount == info.MinObjectRowCount && columnNDV < info.NDVinMinObject[idx] {
+					info.NDVinMinObject[idx] = columnNDV
 				}
-				info.ColumnSize[idx] += int64(objColMeta.Location().Length())
+				info.ColumnSize[idx] += int64(columnMeta.Location().Length())
 				if info.ShuffleRanges[idx] != nil {
 					switch info.DataTypes[idx].Oid {
 					case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_time, types.T_timestamp, types.T_date, types.T_datetime, types.T_decimal64, types.T_decimal128:
-						minvalue := getMinMaxValueByFloat64(info.DataTypes[idx], zm.GetMinBuf())
-						maxvalue := getMinMaxValueByFloat64(info.DataTypes[idx], zm.GetMaxBuf())
-						info.ShuffleRanges[idx].Update(minvalue, maxvalue, int64(meta.BlockHeader().Rows()), int64(objColMeta.NullCnt()))
+						minValue := getMinMaxValueByFloat64(info.DataTypes[idx], zoneMap.GetMinBuf())
+						maxValue := getMinMaxValueByFloat64(info.DataTypes[idx], zoneMap.GetMaxBuf())
+						info.ShuffleRanges[idx].Update(minValue, maxValue, int64(meta.BlockHeader().Rows()), int64(columnMeta.NullCnt()))
 					case types.T_varchar, types.T_char, types.T_text:
-						info.ShuffleRanges[idx].UpdateString(zm.GetMinBuf(), zm.GetMaxBuf(), int64(meta.BlockHeader().Rows()), int64(objColMeta.NullCnt()))
+						info.ShuffleRanges[idx].UpdateString(zoneMap.GetMinBuf(), zoneMap.GetMaxBuf(), int64(meta.BlockHeader().Rows()), int64(columnMeta.NullCnt()))
 					}
 				}
 			}
@@ -778,8 +778,8 @@ func UpdateStats(ctx context.Context, req *updateStatsRequest, executor Concurre
 			)
 		}
 		logutil.Debugf("debug: table %v tablecnt %v  col %v max %v min %v ndv %v overlap %v maxndv %v maxobj %v ndvinmaxobj %v minobj %v ndvinminobj %v",
-			baseTableDef.Name, info.TableCnt, colName, req.statsInfo.MaxValMap[colName], req.statsInfo.MinValMap[colName],
-			req.statsInfo.NdvMap[colName], overlap, info.MaxNDVs[i], info.MaxOBJSize, info.NDVinMaxOBJ[i], info.MinOBJSize, info.NDVinMinOBJ[i])
+			baseTableDef.Name, info.TableRowCount, colName, req.statsInfo.MaxValMap[colName], req.statsInfo.MinValMap[colName],
+			req.statsInfo.NdvMap[colName], overlap, info.MaxNDVs[i], info.MaxObjectRowCount, info.NDVinMaxObject[i], info.MinObjectRowCount, info.NDVinMinObject[i])
 	}
 	return nil
 }

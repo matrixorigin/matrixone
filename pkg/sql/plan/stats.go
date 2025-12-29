@@ -171,30 +171,30 @@ type TableStatsInfo struct {
 	DataTypes            []types.Type
 	ColumnNDVs           []float64
 	MaxNDVs              []float64
-	NDVinMaxOBJ          []float64
-	NDVinMinOBJ          []float64
+	NDVinMaxObject       []float64 // NDV in the object with maximum row count, per column
+	NDVinMinObject       []float64 // NDV in the object with minimum row count, per column
 	NullCnts             []int64
 	ShuffleRanges        []*pb.ShuffleRange
 	ColumnSize           []int64
-	MaxOBJSize           uint32
-	MinOBJSize           uint32
+	MaxObjectRowCount    uint32 // Maximum row count among all objects in the table
+	MinObjectRowCount    uint32 // Minimum row count among all objects in the table
 	BlockNumber          int64
 	AccurateObjectNumber int64
 	ApproxObjectNumber   int64
-	TableCnt             float64
+	TableRowCount        float64 // Total row count in the table
 }
 
 func NewTableStatsInfo(lenCols int) *TableStatsInfo {
 	info := &TableStatsInfo{
-		ColumnZMs:     make([]objectio.ZoneMap, lenCols),
-		DataTypes:     make([]types.Type, lenCols),
-		ColumnNDVs:    make([]float64, lenCols),
-		MaxNDVs:       make([]float64, lenCols),
-		NDVinMaxOBJ:   make([]float64, lenCols),
-		NDVinMinOBJ:   make([]float64, lenCols),
-		NullCnts:      make([]int64, lenCols),
-		ColumnSize:    make([]int64, lenCols),
-		ShuffleRanges: make([]*pb.ShuffleRange, lenCols),
+		ColumnZMs:      make([]objectio.ZoneMap, lenCols),
+		DataTypes:      make([]types.Type, lenCols),
+		ColumnNDVs:     make([]float64, lenCols),
+		MaxNDVs:        make([]float64, lenCols),
+		NDVinMaxObject: make([]float64, lenCols),
+		NDVinMinObject: make([]float64, lenCols),
+		NullCnts:       make([]int64, lenCols),
+		ColumnSize:     make([]int64, lenCols),
+		ShuffleRanges:  make([]*pb.ShuffleRange, lenCols),
 	}
 	return info
 }
@@ -206,7 +206,7 @@ func AdjustNDV(info *TableStatsInfo, tableDef *TableDef, s *pb.StatsInfo) {
 				info.ColumnNDVs[i] = s.TableCnt * 0.99 // to avoid a bug
 			}
 			colName := coldef.Name
-			rate := info.ColumnNDVs[i] / info.TableCnt
+			rate := info.ColumnNDVs[i] / info.TableRowCount
 			if info.ColumnNDVs[i] < 3 {
 				info.ColumnNDVs[i] *= (4 - info.ColumnNDVs[i])
 				continue
@@ -224,29 +224,29 @@ func AdjustNDV(info *TableStatsInfo, tableDef *TableDef, s *pb.StatsInfo) {
 				overlap = s.ShuffleRangeMap[colName].Overlap
 			}
 			if overlap < overlapThreshold/3 {
-				info.ColumnNDVs[i] = info.TableCnt * rate
+				info.ColumnNDVs[i] = info.TableRowCount * rate
 				continue
 			}
 			if GetSortOrder(tableDef, int32(i)) != -1 && overlap < overlapThreshold/2 {
-				info.ColumnNDVs[i] = info.TableCnt * rate
+				info.ColumnNDVs[i] = info.TableRowCount * rate
 				continue
 			}
-			rateMin := info.NDVinMinOBJ[i] / float64(info.MinOBJSize)
-			rateMax := info.NDVinMaxOBJ[i] / float64(info.MaxOBJSize)
+			rateMin := info.NDVinMinObject[i] / float64(info.MinObjectRowCount)
+			rateMax := info.NDVinMaxObject[i] / float64(info.MaxObjectRowCount)
 			if rateMin/rateMax > 0.8 && rateMin/rateMax < 1.2 && overlap < overlapThreshold/2 {
-				info.ColumnNDVs[i] = info.TableCnt * rate * (1 - overlap)
+				info.ColumnNDVs[i] = info.TableRowCount * rate * (1 - overlap)
 				continue
 			}
 
-			if info.NDVinMinOBJ[i] == info.NDVinMaxOBJ[i] && info.NDVinMaxOBJ[i] == info.MaxNDVs[i] && overlap > overlapThreshold/2 {
+			if info.NDVinMinObject[i] == info.NDVinMaxObject[i] && info.NDVinMaxObject[i] == info.MaxNDVs[i] && overlap > overlapThreshold/2 {
 				info.ColumnNDVs[i] = info.MaxNDVs[i]
 				continue
 			}
-			if info.NDVinMinOBJ[i]/info.NDVinMaxOBJ[i] > 0.99 && info.NDVinMaxOBJ[i]/info.MaxNDVs[i] > 0.99 && overlap > overlapThreshold*2/3 {
+			if info.NDVinMinObject[i]/info.NDVinMaxObject[i] > 0.99 && info.NDVinMaxObject[i]/info.MaxNDVs[i] > 0.99 && overlap > overlapThreshold*2/3 {
 				info.ColumnNDVs[i] = info.MaxNDVs[i] * 1.1
 				continue
 			}
-			if info.NDVinMinOBJ[i]/info.NDVinMaxOBJ[i] > 0.95 && float64(info.MinOBJSize)/float64(info.MaxOBJSize) < 0.85 && overlap > overlapThreshold {
+			if info.NDVinMinObject[i]/info.NDVinMaxObject[i] > 0.95 && float64(info.MinObjectRowCount)/float64(info.MaxObjectRowCount) < 0.85 && overlap > overlapThreshold {
 				if rateMax < 0.3 {
 					info.ColumnNDVs[i] = info.MaxNDVs[i] * 1.1
 				} else {
@@ -293,7 +293,7 @@ func UpdateStatsInfo(info *TableStatsInfo, tableDef *plan.TableDef, s *pb.StatsI
 	s.ApproxObjectNumber = info.ApproxObjectNumber
 	s.AccurateObjectNumber = info.AccurateObjectNumber
 	s.BlockNumber = info.BlockNumber
-	s.TableCnt = info.TableCnt
+	s.TableCnt = info.TableRowCount
 	s.TableName = tableDef.Name
 
 	for i, coldef := range tableDef.Cols[:len(tableDef.Cols)-1] {
