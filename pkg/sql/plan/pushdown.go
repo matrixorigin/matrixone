@@ -18,6 +18,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
@@ -667,12 +668,18 @@ func (builder *QueryBuilder) pushdownVectorIndexTopToTableScan(nodeID int32) {
 	scanNode.IndexReaderParam = &plan.IndexReaderParam{
 		OrderBy: []*plan.OrderBySpec{
 			{
-				Expr:      DeepCopyExpr(orderFunc),
+				Expr:      orderFunc,
 				Collation: node.OrderBy[0].Collation,
 				Flag:      node.OrderBy[0].Flag,
 			},
 		},
 		Limit: DeepCopyExpr(node.Limit),
+	}
+	if ctxVal := builder.compCtx.GetProcess().Ctx.Value(defines.IvfReaderParam{}); ctxVal != nil {
+		if readerParam, ok := ctxVal.(*plan.IndexReaderParam); ok {
+			scanNode.IndexReaderParam.OrigFuncName = readerParam.OrigFuncName
+			scanNode.IndexReaderParam.DistRange = readerParam.DistRange
+		}
 	}
 
 	// if there is a limit, outcnt is limit number
