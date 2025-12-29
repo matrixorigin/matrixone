@@ -70,6 +70,9 @@ type Vector struct {
 }
 
 func toSliceOfLengthNoTypeCheck[T any](vec *Vector, length int) []T {
+	if length == 0 {
+		return nil
+	}
 	checkTypeIfRaceDetectorEnabled[T](vec)
 	return util.UnsafeSliceCastToLength[T](vec.data, length)
 }
