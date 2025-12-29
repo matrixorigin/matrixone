@@ -28,6 +28,7 @@ import (
 
 const (
 	AggBatchSize = 8192
+	magicNumber  = uint64(0xdeadbeefbeefdead)
 )
 
 type aggInfo struct {
@@ -100,7 +101,7 @@ func (ag *aggState[S]) writeStateToBuf(idx, sz int, usePtrLen bool, buf *bytes.B
 
 func (ag *aggState[S]) writeAllStatesToBuf(sz int, usePtrLen bool, buf *bytes.Buffer) error {
 	if sz > 0 && !usePtrLen {
-		buf.Write(ag.states)
+		buf.Write(ag.states[:sz*int(ag.length)])
 		return nil
 	}
 
@@ -272,28 +273,41 @@ func (ae *aggExec[S]) PreAllocateGroups(more int) error {
 // SetExtraInformation also implemented by each agg.
 
 func (ae *aggExec[S]) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
+
+	magic := magicNumber
+	if err := types.WriteUint64(buf, magic); err != nil {
+		return err
+	}
+
 	// write the number of groups
 	types.WriteInt32(buf, int32(ae.aggInfo.entrySize))
 	types.WriteInt64(buf, cnt)
 
-	if cnt == 0 {
-		return nil
-	}
-
-	for i := range flags {
-		st := &ae.state[i]
-		for j := range flags[i] {
-			if flags[i][j] == 1 {
-				if err := st.writeStateToBuf(j, ae.aggInfo.entrySize, ae.aggInfo.usePtrLen, buf); err != nil {
-					return err
+	if cnt != 0 {
+		for i := range flags {
+			st := &ae.state[i]
+			for j := range flags[i] {
+				if flags[i][j] == 1 {
+					if err := st.writeStateToBuf(j, ae.aggInfo.entrySize, ae.aggInfo.usePtrLen, buf); err != nil {
+						return err
+					}
 				}
 			}
 		}
+	}
+
+	if err := types.WriteUint64(buf, magic); err != nil {
+		return err
 	}
 	return nil
 }
 
 func (ae *aggExec[S]) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
+	magic := magicNumber
+	if err := types.WriteUint64(buf, magic); err != nil {
+		return err
+	}
+
 	if chunk >= len(ae.state) {
 		return moerr.NewInternalErrorNoCtx("chunk index out of range")
 	}
@@ -301,17 +315,29 @@ func (ae *aggExec[S]) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer
 	types.WriteInt32(buf, int32(ae.aggInfo.entrySize))
 	types.WriteInt64(buf, int64(st.length))
 
-	if st.length == 0 {
-		return nil
+	if st.length != 0 {
+		if err := st.writeAllStatesToBuf(ae.aggInfo.entrySize, ae.aggInfo.usePtrLen, buf); err != nil {
+			return err
+		}
 	}
 
-	if err := st.writeAllStatesToBuf(ae.aggInfo.entrySize, ae.aggInfo.usePtrLen, buf); err != nil {
+	if err := types.WriteUint64(buf, magic); err != nil {
 		return err
 	}
+
 	return nil
 }
 
 func (ae *aggExec[S]) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
+
+	magic, err := types.ReadUint64(reader)
+	if err != nil {
+		return err
+	}
+	if magic != magicNumber {
+		return moerr.NewInternalErrorNoCtx("invalid magic number")
+	}
+
 	sz32, err := types.ReadInt32(reader)
 	if err != nil {
 		return err
@@ -325,55 +351,71 @@ func (ae *aggExec[S]) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) err
 		return err
 	}
 
-	if cnt == 0 {
-		return nil
+	if cnt != 0 {
+		if ae.chunkSize == 1 {
+			// this is no group by case, in this case, caller has already called GroupGrow(1)
+			if cnt != 1 {
+				return moerr.NewInternalErrorNoCtxf("invalid count: %d", cnt)
+			}
+			if len(ae.state) != 1 || ae.state[0].length != 1 {
+				return moerr.NewInternalErrorNoCtx("invalid state, single group case but state is not initialized")
+			}
+			rc, err := ae.state[0].readState(mp, cnt, 0,
+				ae.aggInfo.entrySize, ae.aggInfo.usePtrLen, reader)
+			if err != nil {
+				return err
+			}
+			if rc != 1 {
+				return moerr.NewInternalErrorNoCtxf("invalid read count: %d", rc)
+			}
+
+			magic, err := types.ReadUint64(reader)
+			if err != nil {
+				return err
+			}
+
+			if magic != magicNumber {
+				return moerr.NewInternalErrorNoCtx("invalid magic number")
+			}
+			return nil
+		}
+
+		// compute oldX and oldY before GroupGrow
+		oldX := len(ae.state) - 1
+		oldY := int64(0)
+		if oldX < 0 {
+			oldX = 0
+		} else {
+			oldY = ae.state[oldX].length
+		}
+
+		if oldY == AggBatchSize {
+			oldX += 1
+			oldY = 0
+		}
+
+		ae.GroupGrow(int(cnt))
+
+		for cnt > 0 {
+			rc, err := ae.state[oldX].readState(mp, cnt, oldY,
+				ae.aggInfo.entrySize, ae.aggInfo.usePtrLen, reader)
+			if err != nil {
+				return err
+			}
+			cnt -= rc
+			oldX += 1
+			oldY = 0
+		}
 	}
 
-	if ae.chunkSize == 1 {
-		// this is no group by case, in this case, caller has already called GroupGrow(1)
-		if cnt != 1 {
-			return moerr.NewInternalErrorNoCtxf("invalid count: %d", cnt)
-		}
-		if len(ae.state) != 1 || ae.state[0].length != 1 {
-			return moerr.NewInternalErrorNoCtx("invalid state, single group case but state is not initialized")
-		}
-		rc, err := ae.state[0].readState(mp, cnt, 0,
-			ae.aggInfo.entrySize, ae.aggInfo.usePtrLen, reader)
-		if err != nil {
-			return err
-		}
-		if rc != 1 {
-			return moerr.NewInternalErrorNoCtxf("invalid read count: %d", rc)
-		}
-		return nil
+	magic, err = types.ReadUint64(reader)
+	if err != nil {
+		return err
+	}
+	if magic != magicNumber {
+		return moerr.NewInternalErrorNoCtx("invalid magic number")
 	}
 
-	// compute oldX and oldY before GroupGrow
-	oldX := len(ae.state) - 1
-	oldY := int64(0)
-	if oldX < 0 {
-		oldX = 0
-	} else {
-		oldY = ae.state[oldX].length
-	}
-
-	if oldY == AggBatchSize {
-		oldX += 1
-		oldY = 0
-	}
-
-	ae.GroupGrow(int(cnt))
-
-	for cnt > 0 {
-		rc, err := ae.state[oldX].readState(mp, cnt, oldY,
-			ae.aggInfo.entrySize, ae.aggInfo.usePtrLen, reader)
-		if err != nil {
-			return err
-		}
-		cnt -= rc
-		oldX += 1
-		oldY = 0
-	}
 	return nil
 }
 

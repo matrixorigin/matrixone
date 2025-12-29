@@ -160,12 +160,18 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 				return false, err
 			}
 		}
-		if len(mergeGroup.ctr.spillAggList) != len(mergeGroup.Aggs) {
-			mergeGroup.ctr.spillAggList, err = mergeGroup.ctr.makeAggList(mergeGroup.Aggs)
-			if err != nil {
-				return false, err
-			}
+	}
+
+	if len(mergeGroup.ctr.spillAggList) != 0 {
+		for i := range mergeGroup.ctr.spillAggList {
+			mergeGroup.ctr.spillAggList[i].Free()
 		}
+		mergeGroup.ctr.spillAggList = nil
+	}
+
+	mergeGroup.ctr.spillAggList, err = mergeGroup.ctr.makeAggList(mergeGroup.Aggs)
+	if err != nil {
+		return false, err
 	}
 
 	// deserialize extra buf2.
