@@ -552,14 +552,7 @@ func createTable(
 	// Process index table mappings after table creation
 	if iterationCtx != nil && cnEngine != nil {
 		if err := processIndexTableMappings(ctx, iterationCtx, cnEngine, dbName, tableName); err != nil {
-			logutil.Warn("ccpr-iteration failed to process index table mappings",
-				zap.Uint64("task_id", iterationCtx.TaskID),
-				zap.Uint64("lsn", iterationCtx.IterationLSN),
-				zap.String("db_name", dbName),
-				zap.String("table_name", tableName),
-				zap.Error(err),
-			)
-			// Don't fail the table creation if index mapping fails
+			return moerr.NewInternalErrorf(ctx, "failed to process index table mappings: %v", err)
 		}
 	}
 
@@ -784,7 +777,7 @@ func queryUpstreamIndexInfo(
 	// QueryMoIndexesSQL returns: table_id, name, algo_table_type, index_table_name
 	indexMap := make(map[string]string)
 	for result.Next() {
-		var tableID sql.NullInt64
+		var tableID uint64
 		var indexName, algoTableType, indexTableName sql.NullString
 
 		if err := result.Scan(&tableID, &indexName, &algoTableType, &indexTableName); err != nil {

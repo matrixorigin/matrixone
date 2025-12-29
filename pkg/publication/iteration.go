@@ -905,7 +905,7 @@ func updateObjectStatsFlags(stats *objectio.ObjectStats, isTombstone bool, hasFa
 }
 
 // submitObjectsAsInsert submits objects as INSERT operation
-func submitObjectsAsInsert(ctx context.Context, iterationCtx *IterationContext, cnEngine engine.Engine, tombstoneInsertStats []ObjectWithTableInfo, dataInsertStats []ObjectWithTableInfo, mp *mpool.MPool) error {
+func submitObjectsAsInsert(ctx context.Context, iterationCtx *IterationContext, cnEngine engine.Engine, tombstoneInsertStats []*ObjectWithTableInfo, dataInsertStats []*ObjectWithTableInfo, mp *mpool.MPool) error {
 	if len(tombstoneInsertStats) == 0 && len(dataInsertStats) == 0 {
 		return nil
 	}
@@ -1086,7 +1086,7 @@ func submitObjectsAsInsert(ctx context.Context, iterationCtx *IterationContext, 
 
 // submitObjectsAsDelete submits objects as DELETE operation
 // It uses SoftDeleteObject to soft delete objects by setting their deleteat timestamp
-func submitObjectsAsDelete(ctx context.Context, iterationCtx *IterationContext, cnEngine engine.Engine, statsList []ObjectWithTableInfo, mp *mpool.MPool) error {
+func submitObjectsAsDelete(ctx context.Context, iterationCtx *IterationContext, cnEngine engine.Engine, statsList []*ObjectWithTableInfo, mp *mpool.MPool) error {
 	if len(statsList) == 0 {
 		return nil
 	}
@@ -1103,7 +1103,7 @@ func submitObjectsAsDelete(ctx context.Context, iterationCtx *IterationContext, 
 		dbName    string
 		tableName string
 	}
-	statsByTable := make(map[tableKey][]ObjectWithTableInfo)
+	statsByTable := make(map[tableKey][]*ObjectWithTableInfo)
 
 	for _, obj := range statsList {
 		key := tableKey{dbName: obj.DBName, tableName: obj.TableName}
@@ -1369,16 +1369,16 @@ func ExecuteIteration(
 	// Step 3: 获取object数据
 	// 遍历object list中的每个object，调用FilterObject接口处理
 	// 同时收集对象数据用于 Step 5 提交到 TN
-	var collectedTombstoneDeleteStats []ObjectWithTableInfo
-	var collectedTombstoneInsertStats []ObjectWithTableInfo
-	var collectedDataDeleteStats []ObjectWithTableInfo
-	var collectedDataInsertStats []ObjectWithTableInfo
+	var collectedTombstoneDeleteStats []*ObjectWithTableInfo
+	var collectedTombstoneInsertStats []*ObjectWithTableInfo
+	var collectedDataDeleteStats []*ObjectWithTableInfo
+	var collectedDataInsertStats []*ObjectWithTableInfo
 
 	fs := cnEngine.(*disttae.Engine).FS()
 
 	// Map to deduplicate objects by ObjectId
 	// Key: ObjectId, Value: object info
-	objectMap := make(map[objectio.ObjectId]ObjectWithTableInfo)
+	objectMap := make(map[objectio.ObjectId]*ObjectWithTableInfo)
 
 	if objectListResult != nil {
 		// Check for errors during iteration
@@ -1425,7 +1425,7 @@ func ExecuteIteration(
 				// If there are two records, one without delete and one with delete, use delete to override
 				if delete {
 					// New record is delete, override existing record
-					objectMap[objID] = ObjectWithTableInfo{
+					objectMap[objID] = &ObjectWithTableInfo{
 						Stats:       stats,
 						IsTombstone: isTombstone,
 						Delete:      true,
@@ -1437,7 +1437,7 @@ func ExecuteIteration(
 					// Keep existing record
 				} else {
 					// Both are non-delete, update with new record
-					objectMap[objID] = ObjectWithTableInfo{
+					objectMap[objID] = &ObjectWithTableInfo{
 						Stats:       stats,
 						IsTombstone: isTombstone,
 						Delete:      false,
@@ -1447,7 +1447,7 @@ func ExecuteIteration(
 				}
 			} else {
 				// New object, add to map
-				objectMap[objID] = ObjectWithTableInfo{
+				objectMap[objID] = &ObjectWithTableInfo{
 					Stats:       stats,
 					IsTombstone: isTombstone,
 					Delete:      delete,
@@ -1626,7 +1626,7 @@ func ExecuteIteration(
 					// Delete the previous object (assume data object, not tombstone)
 					// Use srcInfo for dbName and tableName since ActiveAObj doesn't have table info
 					if isTombstone {
-						collectedTombstoneDeleteStats = append(collectedTombstoneDeleteStats, ObjectWithTableInfo{
+						collectedTombstoneDeleteStats = append(collectedTombstoneDeleteStats, &ObjectWithTableInfo{
 							Stats:       mapping.Current,
 							DBName:      dbName,
 							TableName:   tableName,
@@ -1635,7 +1635,7 @@ func ExecuteIteration(
 						})
 
 					} else {
-						collectedDataDeleteStats = append(collectedDataDeleteStats, ObjectWithTableInfo{
+						collectedDataDeleteStats = append(collectedDataDeleteStats, &ObjectWithTableInfo{
 							Stats:       mapping.Current,
 							DBName:      dbName,
 							TableName:   tableName,
@@ -1654,7 +1654,7 @@ func ExecuteIteration(
 				// New object to insert (not tombstone by default for ActiveAObj)
 				// Use srcInfo for dbName and tableName since ActiveAObj doesn't have table info
 				if isTombstone {
-					collectedTombstoneInsertStats = append(collectedTombstoneInsertStats, ObjectWithTableInfo{
+					collectedTombstoneInsertStats = append(collectedTombstoneInsertStats, &ObjectWithTableInfo{
 						Stats:       mapping.Current,
 						DBName:      dbName,
 						TableName:   tableName,
@@ -1662,7 +1662,7 @@ func ExecuteIteration(
 						Delete:      false,
 					})
 				} else {
-					collectedDataInsertStats = append(collectedDataInsertStats, ObjectWithTableInfo{
+					collectedDataInsertStats = append(collectedDataInsertStats, &ObjectWithTableInfo{
 						Stats:       mapping.Current,
 						DBName:      dbName,
 						TableName:   tableName,
@@ -1677,7 +1677,7 @@ func ExecuteIteration(
 				// Previous object to delete (assume data object, not tombstone)
 				// Use srcInfo for dbName and tableName since ActiveAObj doesn't have table info
 				if isTombstone {
-					collectedTombstoneDeleteStats = append(collectedTombstoneDeleteStats, ObjectWithTableInfo{
+					collectedTombstoneDeleteStats = append(collectedTombstoneDeleteStats, &ObjectWithTableInfo{
 						Stats:       mapping.Previous,
 						DBName:      dbName,
 						TableName:   tableName,
@@ -1685,7 +1685,7 @@ func ExecuteIteration(
 						Delete:      true,
 					})
 				} else {
-					collectedDataDeleteStats = append(collectedDataDeleteStats, ObjectWithTableInfo{
+					collectedDataDeleteStats = append(collectedDataDeleteStats, &ObjectWithTableInfo{
 						Stats:       mapping.Previous,
 						DBName:      dbName,
 						TableName:   tableName,

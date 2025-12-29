@@ -459,7 +459,6 @@ func (r *InternalResult) Scan(dest ...interface{}) error {
 
 	// Validate column count
 	if len(dest) != len(batch.Vecs) {
-		logutil.Infof("lalala batch attrs are %v", batch.Attrs)
 		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("column count mismatch: expected %d, got %d", len(batch.Vecs), len(dest)))
 	}
 
