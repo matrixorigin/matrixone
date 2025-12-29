@@ -1034,7 +1034,7 @@ func TestExecuteIterationWithIndex(t *testing.T) {
 	catalog.SetupDefines("")
 
 	var (
-		srcAccountID  = catalog.System_Account
+		srcAccountID  = uint32(1)
 		destAccountID = uint32(2)
 		cnUUID        = ""
 	)
@@ -1053,6 +1053,13 @@ func TestExecuteIterationWithIndex(t *testing.T) {
 	destCtxWithTimeout, cancelDestTimeout := context.WithTimeout(destCtx, time.Minute*5)
 	defer cancelDestTimeout()
 
+	// Setup system account context
+	systemCtxBase, cancelSystem := context.WithCancel(context.Background())
+	defer cancelSystem()
+	systemCtxBase = context.WithValue(systemCtxBase, defines.TenantIDKey{}, catalog.System_Account)
+	systemCtxWithTimeout, cancelSystemTimeout := context.WithTimeout(systemCtxBase, time.Minute*5)
+	defer cancelSystemTimeout()
+
 	// Create engines with source account context
 	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(srcCtx, testutil.TestOptions{}, t)
 	defer func() {
@@ -1066,22 +1073,44 @@ func TestExecuteIterationWithIndex(t *testing.T) {
 	incrservice.SetAutoIncrementServiceByID("", mockIncrService)
 	defer mockIncrService.Close()
 
-	// Create mo_indexes table for source account
+	// Create system tables for source account
+	// These tables are needed when creating tables in the source account
 	err := exec_sql(disttaeEngine, srcCtxWithTimeout, frontend.MoCatalogMoIndexesDDL)
 	require.NoError(t, err)
 
-	// Create mo_foreign_keys table for source account
-	err = exec_sql(disttaeEngine, srcCtxWithTimeout, frontend.MoCatalogMoForeignKeysDDL)
+	err = exec_sql(disttaeEngine, srcCtxWithTimeout, frontend.MoCatalogMoTablePartitionsDDL)
 	require.NoError(t, err)
 
-	// Create mo_ccpr_log table using system account context
-	systemCtx := context.WithValue(srcCtxWithTimeout, defines.TenantIDKey{}, catalog.System_Account)
-	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprLogDDL)
+	err = exec_sql(disttaeEngine, srcCtxWithTimeout, frontend.MoCatalogMoAutoIncrTableDDL)
+	require.NoError(t, err)
+
+	err = exec_sql(disttaeEngine, srcCtxWithTimeout, frontend.MoCatalogMoForeignKeysDDL)
 	require.NoError(t, err)
 
 	// Create mo_snapshots table for source account
 	moSnapshotsDDL := frontend.MoCatalogMoSnapshotsDDL
 	err = exec_sql(disttaeEngine, srcCtxWithTimeout, moSnapshotsDDL)
+	require.NoError(t, err)
+
+	// Create system tables for system account
+	// These tables are needed for system account operations
+	err = exec_sql(disttaeEngine, systemCtxWithTimeout, frontend.MoCatalogMoIndexesDDL)
+	require.NoError(t, err)
+
+	err = exec_sql(disttaeEngine, systemCtxWithTimeout, frontend.MoCatalogMoTablePartitionsDDL)
+	require.NoError(t, err)
+
+	err = exec_sql(disttaeEngine, systemCtxWithTimeout, frontend.MoCatalogMoAutoIncrTableDDL)
+	require.NoError(t, err)
+
+	err = exec_sql(disttaeEngine, systemCtxWithTimeout, frontend.MoCatalogMoForeignKeysDDL)
+	require.NoError(t, err)
+
+	err = exec_sql(disttaeEngine, systemCtxWithTimeout, frontend.MoCatalogMoCcprLogDDL)
+	require.NoError(t, err)
+
+	moSnapshotsDDLSystem := frontend.MoCatalogMoSnapshotsDDL
+	err = exec_sql(disttaeEngine, systemCtxWithTimeout, moSnapshotsDDLSystem)
 	require.NoError(t, err)
 
 	// Create system tables for destination account
@@ -1177,7 +1206,7 @@ func TestExecuteIterationWithIndex(t *testing.T) {
 	)
 
 	// Write mo_ccpr_log using system account context
-	err = exec_sql(disttaeEngine, systemCtx, insertSQL)
+	err = exec_sql(disttaeEngine, systemCtxWithTimeout, insertSQL)
 	require.NoError(t, err)
 
 	// Step 3: Create upstream SQL helper factory
@@ -1205,7 +1234,7 @@ func TestExecuteIterationWithIndex(t *testing.T) {
 
 	// Execute ExecuteIteration with UTHelper
 	err = publication.ExecuteIteration(
-		srcCtxWithTimeout,
+		systemCtxWithTimeout,
 		cnUUID,
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
