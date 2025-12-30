@@ -19,7 +19,6 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"net"
 	"strings"
 	"sync"
@@ -571,19 +570,7 @@ func (c *Conn) ReadFromConn(buf []byte) (int, error) {
 			return 0, err
 		}
 	}
-	n, err := c.conn.Read(buf)
-	if err != nil {
-		// Check if it's a timeout error
-		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-			// Send error to MySQL client and close connection
-			// ER_NET_READ_INTERRUPTED (1159): Got timeout reading communication packets
-			_ = c.respErr(moerr.ER_NET_READ_INTERRUPTED, "08S01",
-				fmt.Sprintf("Got timeout reading communication packets (timeout: %v)", c.readTimeout))
-			// Close the connection immediately like MySQL does
-			_ = c.conn.Close()
-		}
-	}
-	return n, err
+	return c.conn.Read(buf)
 }
 
 // Append Add bytes to buffer
@@ -825,6 +812,15 @@ func (c *Conn) closeConn() error {
 		}
 	}
 	return err
+}
+
+// Disconnect closes the underlying network connection without full cleanup.
+// This is used to forcefully disconnect the client (e.g., on timeout during LOAD DATA).
+func (c *Conn) Disconnect() error {
+	if c.conn != nil {
+		return c.conn.Close()
+	}
+	return nil
 }
 
 // Reset does not release fix buffer but release dynamical buffer

@@ -2531,11 +2531,15 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 				break
 			}
 
-			// Check if it's a network timeout error - don't retry, fail immediately
+			// Check if it's a network timeout error - don't retry, fail immediately and disconnect
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				ses.Errorf(execCtx.reqCtx, "load local file failed: network read timeout: %v", err)
+				ses.Errorf(execCtx.reqCtx, "load local file failed: network read timeout: %v, disconnecting client", err)
+				// Disconnect the client connection to force mysql client to exit with error
+				if disconnectErr := mysqlRwer.Disconnect(); disconnectErr != nil {
+					ses.Errorf(execCtx.reqCtx, "failed to disconnect client: %v", disconnectErr)
+				}
 				return moerr.NewInternalErrorf(execCtx.reqCtx,
-					"load local file failed: network read timeout, client may have disconnected")
+					"load local file failed: network read timeout, client connection closed")
 			}
 
 			retError = err

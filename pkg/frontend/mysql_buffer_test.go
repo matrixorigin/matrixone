@@ -1869,9 +1869,6 @@ func TestConn_ReadFromConn_Timeout(t *testing.T) {
 	assert.True(t, ok)
 	assert.True(t, netErr.Timeout())
 
-	// Connection should be closed after timeout
-	assert.True(t, tConn.closed)
-
 	_ = conn.Close()
 }
 

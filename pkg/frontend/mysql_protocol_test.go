@@ -3187,6 +3187,10 @@ func (fp *testMysqlWriter) SetUserName(s string) {
 
 func (fp *testMysqlWriter) Close() {}
 
+func (fp *testMysqlWriter) Disconnect() error {
+	return nil
+}
+
 func (fp *testMysqlWriter) WriteLocalInfileRequest(filename string) error {
 	return nil
 }
