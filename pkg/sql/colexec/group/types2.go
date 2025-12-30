@@ -194,6 +194,7 @@ func (ctr *container) free(proc *process.Process) {
 	ctr.freeAggList(proc)
 	ctr.freeSpillBkts(proc)
 
+	mpool.DeleteMPool(ctr.mp)
 	ctr.mp = nil
 }
 
@@ -206,9 +207,9 @@ func (ctr *container) reset(proc *process.Process) {
 
 	ctr.resetForSpill(proc)
 	ctr.freeSpillBkts(proc)
-	if ctr.mp == nil {
-		ctr.mp = proc.Mp()
-	}
+
+	mpool.DeleteMPool(ctr.mp)
+	ctr.mp = mpool.MustNewNoFixed("group_mpool")
 }
 
 func (ctr *container) resetForSpill(proc *process.Process) {

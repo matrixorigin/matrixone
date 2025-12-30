@@ -245,7 +245,7 @@ func (ctr *container) spillDataToDisk(proc *process.Process, parentBkt *spillBuc
 	// tmp batch and buffer to write.   it is OK to pass in a nil vec, as
 	// ctr.groupByTypes is already initialized.
 	gbBatch := ctr.createNewGroupByBatch(nil, aggBatchSize)
-	defer gbBatch.Clean(ctr.mp)
+	defer gbBatch.Clean(proc.Mp())
 	buf := bytes.NewBuffer(make([]byte, 0, common.MiB))
 
 	for i := 0; i < spillNumBuckets; i++ {
@@ -259,13 +259,8 @@ func (ctr *container) spillDataToDisk(proc *process.Process, parentBkt *spillBuc
 
 		// extend the group by batch to the new size, set row count to 0, then we union
 		// group by batches to the parent batch.
-		for _, vec := range gbBatch.Vecs {
-			vec.Free(ctr.mp)
-		}
 		gbBatch.CleanOnlyData()
-		if err := gbBatch.PreExtend(ctr.mp, int(cnt)); err != nil {
-			return err
-		}
+		gbBatch.PreExtend(proc.Mp(), int(cnt))
 
 		for nthBatch, gb := range ctr.groupByBatches {
 			if gb.RowCount() == 0 {

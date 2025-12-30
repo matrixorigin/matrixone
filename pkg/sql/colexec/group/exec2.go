@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -42,7 +43,7 @@ const (
 
 func (group *Group) Prepare(proc *process.Process) (err error) {
 	group.ctr.state = vm.Build
-	group.ctr.mp = proc.Mp()
+	group.ctr.mp = mpool.MustNewNoFixed("group_mpool")
 
 	// debug,
 	// group.ctr.mp.EnableDetailRecording()
