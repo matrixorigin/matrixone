@@ -567,7 +567,7 @@ import (
 
 // iteration
 %type <statement> loop_stmt iterate_stmt leave_stmt repeat_stmt while_stmt
-%type <statement> create_publication_stmt drop_publication_stmt alter_publication_stmt show_publications_stmt show_subscriptions_stmt
+%type <statement> create_publication_stmt drop_publication_stmt alter_publication_stmt show_publications_stmt show_subscriptions_stmt show_publication_coverage_stmt
 %type <statement> create_stage_stmt drop_stage_stmt alter_stage_stmt
 %type <statement> create_snapshot_stmt drop_snapshot_stmt check_snapshot_flushed_stmt
 %type <statement> create_pitr_stmt drop_pitr_stmt show_pitr_stmt alter_pitr_stmt restore_pitr_stmt show_recovery_window_stmt
@@ -4200,6 +4200,7 @@ show_stmt:
 |   show_upgrade_stmt
 |   show_publications_stmt
 |   show_subscriptions_stmt
+|   show_publication_coverage_stmt
 |   show_servers_stmt
 |   show_stages_stmt
 |   show_connectors_stmt
@@ -4595,6 +4596,12 @@ show_publications_stmt:
     SHOW PUBLICATIONS like_opt
     {
 	$$ = &tree.ShowPublications{Like: $3}
+    }
+
+show_publication_coverage_stmt:
+    SHOW PUBLICATION COVERAGE db_name
+    {
+	$$ = &tree.ShowPublicationCoverage{Name: $4}
     }
 
 show_upgrade_stmt:

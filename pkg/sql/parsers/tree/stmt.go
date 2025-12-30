@@ -442,6 +442,10 @@ func (node *ShowPublications) StmtKind() StmtKind {
 	return compositeResRowType
 }
 
+func (node *ShowPublicationCoverage) StmtKind() StmtKind {
+	return compositeResRowType
+}
+
 func (node *ShowTableSize) StmtKind() StmtKind {
 	return defaultResRowTyp
 }

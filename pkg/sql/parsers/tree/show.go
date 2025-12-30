@@ -792,6 +792,18 @@ func (node *ShowCreatePublications) Format(ctx *FmtCtx) {
 func (node *ShowCreatePublications) GetStatementType() string { return "Show Create Publication" }
 func (node *ShowCreatePublications) GetQueryType() string     { return QueryTypeOth }
 
+type ShowPublicationCoverage struct {
+	showImpl
+	Name string
+}
+
+func (node *ShowPublicationCoverage) Format(ctx *FmtCtx) {
+	ctx.WriteString("show publication coverage ")
+	ctx.WriteString(node.Name)
+}
+func (node *ShowPublicationCoverage) GetStatementType() string { return "Show Publication Coverage" }
+func (node *ShowPublicationCoverage) GetQueryType() string     { return QueryTypeOth }
+
 type ShowTableSize struct {
 	showImpl
 	Table  *UnresolvedObjectName

@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/publication"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
@@ -1397,6 +1398,92 @@ func doShowSubscriptions(ctx context.Context, ses *Session, ss *tree.ShowSubscri
 	return trySaveQueryResult(ctx, ses, rs)
 }
 
+func doShowPublicationCoverage(ctx context.Context, ses *Session, spc *tree.ShowPublicationCoverage) (err error) {
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	// Get current account name from session
+	tenantInfo := ses.GetTenantInfo()
+	if tenantInfo == nil {
+		return moerr.NewInternalError(ctx, "failed to get tenant info")
+	}
+	accountName := tenantInfo.GetTenant()
+
+	// Get publication info
+	pubInfo, err := getPubInfo(ctx, bh, spc.Name)
+	if err != nil {
+		return err
+	}
+	if pubInfo == nil {
+		return moerr.NewInternalErrorf(ctx, "publication '%s' does not exist", spc.Name)
+	}
+
+	// Check if current account is in subscribed accounts
+	if !pubInfo.InSubAccounts(accountName) {
+		return moerr.NewInternalErrorf(ctx, "account '%s' is not allowed to access publication '%s'", accountName, spc.Name)
+	}
+
+	// Build result set with columns: Database, Table
+	var rs = &MysqlResultSet{}
+	rs.AddColumn(&MysqlColumn{
+		ColumnImpl: ColumnImpl{
+			name:       "Database",
+			columnType: defines.MYSQL_TYPE_VARCHAR,
+		},
+	})
+	rs.AddColumn(&MysqlColumn{
+		ColumnImpl: ColumnImpl{
+			name:       "Table",
+			columnType: defines.MYSQL_TYPE_VARCHAR,
+		},
+	})
+
+	// Get database name
+	dbName := pubInfo.DbName
+
+	// Get table list
+	if pubInfo.TablesStr == pubsub.TableAll {
+		// If table_list is "*", query all tables from mo_tables
+		systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
+		querySQL := fmt.Sprintf(
+			`SELECT relname FROM mo_catalog.mo_tables WHERE reldatabase = '%s' AND account_id = %d AND relkind != '%s' ORDER BY relname`,
+			dbName, pubInfo.PubAccountId, catalog.SystemViewRel,
+		)
+
+		bh.ClearExecResultSet()
+		if err = bh.Exec(systemCtx, querySQL); err != nil {
+			return err
+		}
+
+		erArray, err := getResultSet(systemCtx, bh)
+		if err != nil {
+			return err
+		}
+
+		for _, result := range erArray {
+			for i := uint64(0); i < result.GetRowCount(); i++ {
+				tableName, err := result.GetString(systemCtx, i, 0)
+				if err != nil {
+					return err
+				}
+				rs.AddRow([]interface{}{dbName, tableName})
+			}
+		}
+	} else {
+		// If table_list is specific tables, split by comma
+		tableNames := strings.Split(pubInfo.TablesStr, pubsub.Sep)
+		for _, tableName := range tableNames {
+			tableName = strings.TrimSpace(tableName)
+			if tableName != "" {
+				rs.AddRow([]interface{}{dbName, tableName})
+			}
+		}
+	}
+
+	ses.SetMysqlResultSet(rs)
+	return trySaveQueryResult(ctx, ses, rs)
+}
+
 func getDbIdAndType(ctx context.Context, bh BackgroundExec, dbName string) (dbId uint64, dbType string, err error) {
 	accountId, err := defines.GetAccountId(ctx)
 	if err != nil {
@@ -1975,6 +2062,73 @@ func parseSubscriptionUri(uri string) (account, user, password, host string, por
 	return accountPart, user, password, host, port, nil
 }
 
+// checkUpstreamPublicationCoverage checks if the database/table is covered by the publication in upstream cluster
+func checkUpstreamPublicationCoverage(
+	ctx context.Context,
+	account, user, password, host string,
+	port int,
+	pubName string,
+	syncLevel string,
+	dbName string,
+	tableName string,
+) error {
+	// For account level, no need to check coverage
+	if syncLevel == "account" {
+		return nil
+	}
+
+	// Create upstream executor to connect to upstream cluster
+	upstreamExecutor, err := publication.NewUpstreamExecutor(account, user, password, host, port, 3, 30*time.Second, "30s")
+	if err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to connect to upstream cluster: %v", err)
+	}
+	defer upstreamExecutor.Close()
+
+	// Execute SHOW PUBLICATION COVERAGE on upstream
+	coverageSQL := fmt.Sprintf("SHOW PUBLICATION COVERAGE %s", pubName)
+	result, err := upstreamExecutor.ExecSQL(ctx, coverageSQL)
+	if err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to check publication coverage on upstream: %v", err)
+	}
+	defer result.Close()
+
+	// Read coverage results
+	coverageMap := make(map[string]map[string]bool) // dbName -> tableName -> exists
+	for result.Next() {
+		var coverageDbName, coverageTableName string
+		if err := result.Scan(&coverageDbName, &coverageTableName); err != nil {
+			return moerr.NewInternalErrorf(ctx, "failed to read coverage results: %v", err)
+		}
+
+		if coverageMap[coverageDbName] == nil {
+			coverageMap[coverageDbName] = make(map[string]bool)
+		}
+		coverageMap[coverageDbName][coverageTableName] = true
+	}
+
+	// Check for errors during iteration
+	if err := result.Err(); err != nil {
+		return moerr.NewInternalErrorf(ctx, "error while reading coverage results: %v", err)
+	}
+
+	// Check if the requested database/table is covered
+	if syncLevel == "database" {
+		// Check if database is covered (any table in the database means database is covered)
+		if _, exists := coverageMap[dbName]; !exists {
+			return moerr.NewInternalErrorf(ctx, "database '%s' is not covered by publication '%s' in upstream cluster", dbName, pubName)
+		}
+	} else if syncLevel == "table" {
+		// Check if table is covered
+		if tables, exists := coverageMap[dbName]; !exists {
+			return moerr.NewInternalErrorf(ctx, "database '%s' is not covered by publication '%s' in upstream cluster", dbName, pubName)
+		} else if !tables[tableName] {
+			return moerr.NewInternalErrorf(ctx, "table '%s.%s' is not covered by publication '%s' in upstream cluster", dbName, tableName, pubName)
+		}
+	}
+
+	return nil
+}
+
 func doCreateSubscription(ctx context.Context, ses *Session, cs *tree.CreateSubscription) (err error) {
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
@@ -2118,6 +2272,11 @@ func doCreateSubscription(ctx context.Context, ses *Session, cs *tree.CreateSubs
 		if dbName == "" {
 			return moerr.NewInternalError(ctx, "database name cannot be empty for table level subscription")
 		}
+	}
+
+	// Check upstream publication coverage before inserting into mo_ccpr_log
+	if err = checkUpstreamPublicationCoverage(ctx, account, user, password, host, port, string(cs.PubName), syncLevel, dbName, tableName); err != nil {
+		return err
 	}
 
 	// iteration_state: 2 = complete (based on design.md: 0='pending', 1='running', 2='complete', 3='error', 4='cancel')

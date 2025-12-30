@@ -1076,6 +1076,15 @@ func buildShowCreatePublications(stmt *tree.ShowCreatePublications, ctx Compiler
 	return returnByRewriteSQL(ctx, sql, ddlType)
 }
 
+func buildShowPublicationCoverage(stmt *tree.ShowPublicationCoverage, ctx CompilerContext) (*Plan, error) {
+	// This will be handled in frontend, return a placeholder plan
+	// The actual implementation will be in doShowPublicationCoverage
+	ddlType := plan.DataDefinition_SHOW_TARGET
+	sql := fmt.Sprintf("SELECT database_name as `Database`, table_name as `Table` FROM mo_catalog.mo_pubs WHERE pub_name = '%s' LIMIT 0", stmt.Name)
+	ctx.SetContext(defines.AttachAccountId(ctx.GetContext(), catalog.System_Account))
+	return returnByRewriteSQL(ctx, sql, ddlType)
+}
+
 func returnByRewriteSQL(ctx CompilerContext, sql string,
 	ddlType plan.DataDefinition_DdlType) (*Plan, error) {
 	newStmt, err := getRewriteSQLStmt(ctx, sql)
