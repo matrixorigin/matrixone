@@ -7089,6 +7089,22 @@ create_publication_stmt:
             Comment,
         )
     }
+|   CREATE PUBLICATION not_exists_opt ident DATABASE '*' create_publication_accounts comment_opt
+    {
+        var IfNotExists = $3
+        var Name = tree.Identifier($4.Compare())
+        var Database = tree.Identifier("*")
+        var AccountsSet = $7
+        var Comment = $8
+        $$ = tree.NewCreatePublication(
+            IfNotExists,
+            Name,
+            Database,
+            nil,
+            AccountsSet,
+            Comment,
+        )
+    }
 
 create_publication_accounts:
     ACCOUNT ALL
