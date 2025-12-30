@@ -1,6 +1,4 @@
-//go:build gpu
-
-// Copyright 2022 Matrix Origin
+// Copyright 2021 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,18 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package metric
+package interactive
 
-import (
-	cuvs "github.com/rapidsai/cuvs/go"
-)
-
-var (
-	MetricTypeToCuvsMetric = map[MetricType]cuvs.Distance{
-		Metric_L2sqDistance:   cuvs.DistanceSQEuclidean,
-		Metric_L2Distance:     cuvs.DistanceSQEuclidean,
-		Metric_InnerProduct:   cuvs.DistanceInnerProduct,
-		Metric_CosineDistance: cuvs.DistanceCosine,
-		Metric_L1Distance:     cuvs.DistanceL1,
-	}
-)
+// Run runs the interactive interface
+func Run(path string) error {
+	return RunBubbletea(path)
+}
