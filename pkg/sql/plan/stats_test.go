@@ -107,8 +107,8 @@ func TestUpdateStatsInfo_Decimal64_NegativeValues(t *testing.T) {
 		},
 	}
 
-	// Create InfoFromZoneMap
-	info := &InfoFromZoneMap{
+	// Create TableStatsInfo
+	info := &TableStatsInfo{
 		ColumnZMs:     []index2.ZM{zm},
 		DataTypes:     []types.Type{types.New(types.T_decimal64, 10, scale)},
 		ColumnNDVs:    []float64{2},
@@ -187,8 +187,8 @@ func TestUpdateStatsInfo_Decimal128_NegativeValues(t *testing.T) {
 		},
 	}
 
-	// Create InfoFromZoneMap
-	info := &InfoFromZoneMap{
+	// Create TableStatsInfo
+	info := &TableStatsInfo{
 		ColumnZMs:     []index2.ZM{zm},
 		DataTypes:     []types.Type{types.New(types.T_decimal128, 20, scale)},
 		ColumnNDVs:    []float64{2},
@@ -274,8 +274,8 @@ func TestUpdateStatsInfo_Decimal_DifferentScales(t *testing.T) {
 				},
 			}
 
-			// Create InfoFromZoneMap
-			info := &InfoFromZoneMap{
+			// Create TableStatsInfo
+			info := &TableStatsInfo{
 				ColumnZMs:     []index2.ZM{zm},
 				DataTypes:     []types.Type{types.New(types.T_decimal64, 18, tc.scale)},
 				ColumnNDVs:    []float64{2},
