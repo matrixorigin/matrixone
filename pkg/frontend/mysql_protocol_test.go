@@ -72,12 +72,11 @@ func createInnerServer() *MOServer {
 	rm := getRtMgr("")
 	pu := getPu("")
 	mo := &MOServer{
-		addr:        "",
-		uaddr:       pu.SV.UnixSocketAddress,
-		rm:          rm,
-		readTimeout: pu.SV.NetReadTimeout.Duration,
-		pu:          pu,
-		handler:     rm.Handler,
+		addr:    "",
+		uaddr:   pu.SV.UnixSocketAddress,
+		rm:      rm,
+		pu:      pu,
+		handler: rm.Handler,
 	}
 	mo.running = true
 	return mo
