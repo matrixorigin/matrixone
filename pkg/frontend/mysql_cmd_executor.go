@@ -2486,45 +2486,55 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 	if err != nil {
 		return
 	}
-	var skipWrite bool
-	skipWrite = false
-	var readTime, writeTime time.Duration
-	var retError error
-	start := time.Now()
-	epoch, printTime, minReadTime, maxReadTime, minWriteTime, maxWriteTime := uint64(0), uint64(1024*60), 24*time.Hour, time.Nanosecond, 24*time.Hour, time.Nanosecond
 
-	skipWrite, readTime, writeTime, err = readThenWrite(ses, execCtx, param, writer, mysqlRwer, skipWrite, epoch)
-	if err != nil {
-		if errors.Is(err, errorInvalidLength0) {
-			return nil
-		}
-
-		// Check if it's a network timeout error - don't retry, fail immediately and disconnect
+	// handleNetworkTimeout checks if the error is a network timeout and disconnects the client
+	handleNetworkTimeout := func(err error) error {
 		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 			ses.Errorf(execCtx.reqCtx, "load local file failed: network read timeout: %v, disconnecting client", err)
-			// Disconnect the client connection to force mysql client to exit with error
 			if disconnectErr := mysqlRwer.Disconnect(); disconnectErr != nil {
 				ses.Errorf(execCtx.reqCtx, "failed to disconnect client: %v", disconnectErr)
 			}
 			return moerr.NewInternalErrorf(execCtx.reqCtx,
 				"load local file failed: network read timeout, client connection closed")
 		}
+		return nil
+	}
 
+	var skipWrite bool
+	skipWrite = false
+	var readTime, writeTime time.Duration
+	var retError error
+	start := time.Now()
+	epoch, printTime := uint64(0), uint64(1024*60)
+	minReadTime, maxReadTime, minWriteTime, maxWriteTime := 24*time.Hour, time.Nanosecond, 24*time.Hour, time.Nanosecond
+
+	// updateTimeStats updates min/max time statistics
+	updateTimeStats := func(readTime, writeTime time.Duration) {
+		if readTime > maxReadTime {
+			maxReadTime = readTime
+		}
+		if readTime < minReadTime {
+			minReadTime = readTime
+		}
+		if writeTime > maxWriteTime {
+			maxWriteTime = writeTime
+		}
+		if writeTime < minWriteTime {
+			minWriteTime = writeTime
+		}
+	}
+
+	skipWrite, readTime, writeTime, err = readThenWrite(ses, execCtx, param, writer, mysqlRwer, skipWrite, epoch)
+	if err != nil {
+		if errors.Is(err, errorInvalidLength0) {
+			return nil
+		}
+		if timeoutErr := handleNetworkTimeout(err); timeoutErr != nil {
+			return timeoutErr
+		}
 		retError = err
 	}
-	if readTime > maxReadTime {
-		maxReadTime = readTime
-	}
-	if readTime < minReadTime {
-		minReadTime = readTime
-	}
-
-	if writeTime > maxWriteTime {
-		maxWriteTime = writeTime
-	}
-	if writeTime < minWriteTime {
-		minWriteTime = writeTime
-	}
+	updateTimeStats(readTime, writeTime)
 
 	const maxRetries = 100               // Maximum number of consecutive errors
 	const maxTotalTime = 3 * time.Minute // Maximum total consecutive processing time
@@ -2543,15 +2553,8 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 				break
 			}
 
-			// Check if it's a network timeout error - don't retry, fail immediately and disconnect
-			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				ses.Errorf(execCtx.reqCtx, "load local file failed: network read timeout: %v, disconnecting client", err)
-				// Disconnect the client connection to force mysql client to exit with error
-				if disconnectErr := mysqlRwer.Disconnect(); disconnectErr != nil {
-					ses.Errorf(execCtx.reqCtx, "failed to disconnect client: %v", disconnectErr)
-				}
-				return moerr.NewInternalErrorf(execCtx.reqCtx,
-					"load local file failed: network read timeout, client connection closed")
+			if timeoutErr := handleNetworkTimeout(err); timeoutErr != nil {
+				return timeoutErr
 			}
 
 			retError = err
@@ -2568,19 +2571,7 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 			consecutiveLoopStartTime = time.Now()
 		}
 
-		if readTime > maxReadTime {
-			maxReadTime = readTime
-		}
-		if readTime < minReadTime {
-			minReadTime = readTime
-		}
-
-		if writeTime > maxWriteTime {
-			maxWriteTime = writeTime
-		}
-		if writeTime < minWriteTime {
-			minWriteTime = writeTime
-		}
+		updateTimeStats(readTime, writeTime)
 
 		if epoch%printTime == 0 {
 			if execCtx.isIssue3482 {
