@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"iter"
 )
 
 func TestGetForBackup(t *testing.T) {
@@ -29,4 +30,57 @@ func TestGetForBackup(t *testing.T) {
 	localFS, ok := fs.(*LocalFS)
 	assert.True(t, ok)
 	assert.Equal(t, dir, localFS.rootPath)
+}
+
+func TestGetForBackupS3Opts(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	spec := JoinPath("s3-opts,endpoint=disk,bucket="+dir+",prefix=backup-prefix,name=backup", "object")
+	fs, err := GetForBackup(ctx, spec)
+	assert.Nil(t, err)
+	s3fs, ok := fs.(*S3FS)
+	assert.True(t, ok)
+	assert.Equal(t, "backup", s3fs.name)
+	assert.Equal(t, "backup-prefix", s3fs.keyPrefix)
+}
+
+type dummyFileService struct{ name string }
+
+func (d dummyFileService) Delete(ctx context.Context, filePaths ...string) error { return nil }
+func (d dummyFileService) Name() string                                          { return d.name }
+func (d dummyFileService) Read(ctx context.Context, vector *IOVector) error      { return nil }
+func (d dummyFileService) ReadCache(ctx context.Context, vector *IOVector) error { return nil }
+func (d dummyFileService) Write(ctx context.Context, vector IOVector) error      { return nil }
+func (d dummyFileService) List(ctx context.Context, dirPath string) iter.Seq2[*DirEntry, error] {
+	return func(yield func(*DirEntry, error) bool) {
+		yield(&DirEntry{Name: "a"}, nil)
+	}
+}
+func (d dummyFileService) StatFile(ctx context.Context, filePath string) (*DirEntry, error) {
+	return &DirEntry{Name: filePath}, nil
+}
+func (d dummyFileService) PrefetchFile(ctx context.Context, filePath string) error { return nil }
+func (d dummyFileService) Cost() *CostAttr                                         { return nil }
+func (d dummyFileService) Close(ctx context.Context)                               {}
+
+func TestGetFromMappings(t *testing.T) {
+	fs1 := dummyFileService{name: "first"}
+	fs2 := dummyFileService{name: "second"}
+	mapping, err := NewFileServices("first", fs1, fs2)
+	assert.NoError(t, err)
+
+	var res FileService
+	res, err = Get[FileService](mapping, "second")
+	assert.NoError(t, err)
+	assert.Equal(t, "second", res.Name())
+
+	_, err = Get[FileService](mapping, "missing")
+	assert.Error(t, err)
+
+	res, err = Get[FileService](fs1, "first")
+	assert.NoError(t, err)
+	assert.Equal(t, "first", res.Name())
+
+	_, err = Get[FileService](fs1, "other")
+	assert.Error(t, err)
 }

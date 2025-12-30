@@ -20,6 +20,7 @@ import (
 	dashboard "github.com/matrixorigin/matrixone/cmd/mo-dashboard"
 	debug "github.com/matrixorigin/matrixone/cmd/mo-debug"
 	inspect "github.com/matrixorigin/matrixone/cmd/mo-inspect"
+	object "github.com/matrixorigin/matrixone/cmd/mo-object-tool"
 	"github.com/spf13/cobra"
 )
 
@@ -33,6 +34,7 @@ func main() {
 	rootCmd.AddCommand(debug.PrepareCommand())
 	rootCmd.AddCommand(inspect.PrepareCommand())
 	rootCmd.AddCommand(dashboard.PrepareCommand())
+	rootCmd.AddCommand(object.PrepareCommand())
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
