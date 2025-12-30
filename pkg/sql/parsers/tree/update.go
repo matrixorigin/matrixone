@@ -503,6 +503,10 @@ type ExportParam struct {
 	ForceQuote []string
 	// stage filename path
 	StageFilePath string
+	// ExportFormat: "csv", "jsonline", "parquet", default is ""(csv)
+	ExportFormat string
+	// SplitSize: split file size in bytes, 0 means no split
+	SplitSize uint64
 }
 
 func (ep *ExportParam) String() string {
@@ -568,11 +572,22 @@ func (ep *ExportParam) format(ctx *FmtCtx, withOutfile bool) {
 	}
 	ctx.WriteByte(' ')
 	ctx.WriteString(ep.FilePath)
-	if ep.Fields != nil {
+	// Format option (csv, jsonline, parquet)
+	if ep.ExportFormat != "" {
+		ctx.WriteString(" format ")
+		ctx.WriteString(ep.ExportFormat)
+	}
+	// SplitSize option
+	if ep.SplitSize != 0 {
+		ctx.WriteString(" splitsize ")
+		ctx.WriteString(strconv.FormatUint(ep.SplitSize, 10))
+	}
+	// Fields option (only for csv format or when format is not specified)
+	if ep.Fields != nil && (ep.ExportFormat == "" || ep.ExportFormat == "csv") {
 		ctx.WriteByte(' ')
 		ep.Fields.Format(ctx)
 	}
-	if ep.Lines != nil {
+	if ep.Lines != nil && (ep.ExportFormat == "" || ep.ExportFormat == "csv") {
 		ctx.WriteByte(' ')
 		ep.Lines.Format(ctx)
 	}

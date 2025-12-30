@@ -1067,15 +1067,6 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 					hint.BloomFilter = bf
 				}
 			}
-
-			if s.DataSource.IndexReaderParam != nil {
-				if readerParam := c.proc.Ctx.Value(defines.IvfReaderParam{}); readerParam != nil {
-					if rp, ok := readerParam.(*plan.IndexReaderParam); ok {
-						s.DataSource.IndexReaderParam.OrigFuncName = rp.OrigFuncName
-						s.DataSource.IndexReaderParam.DistRange = rp.DistRange
-					}
-				}
-			}
 		}
 
 		readers, err = s.DataSource.Rel.BuildReaders(
@@ -1147,15 +1138,6 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 			if bfVal := c.proc.Ctx.Value(defines.IvfBloomFilter{}); bfVal != nil {
 				if bf, ok := bfVal.([]byte); ok && len(bf) > 0 {
 					hint.BloomFilter = bf
-				}
-			}
-
-			if s.DataSource.IndexReaderParam != nil {
-				if readerParam := c.proc.Ctx.Value(defines.IvfReaderParam{}); readerParam != nil {
-					if rp, ok := readerParam.(*plan.IndexReaderParam); ok {
-						s.DataSource.IndexReaderParam.OrigFuncName = rp.OrigFuncName
-						s.DataSource.IndexReaderParam.DistRange = rp.DistRange
-					}
 				}
 			}
 		}
