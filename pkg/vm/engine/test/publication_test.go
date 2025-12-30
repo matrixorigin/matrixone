@@ -440,6 +440,7 @@ func TestExecuteIteration1(t *testing.T) {
 		upstreamSQLHelperFactory,
 		mp,
 		utHelper,
+		100*time.Millisecond, // snapshotFlushInterval for test
 	)
 
 	// Signal checkpoint goroutine to stop
@@ -547,6 +548,7 @@ func TestExecuteIteration1(t *testing.T) {
 		upstreamSQLHelperFactory,
 		mp,
 		utHelper2,
+		100*time.Millisecond, // snapshotFlushInterval for test
 	)
 
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
@@ -673,6 +675,7 @@ func TestExecuteIteration1(t *testing.T) {
 		upstreamSQLHelperFactory,
 		mp,
 		utHelper3,
+		100*time.Millisecond, // snapshotFlushInterval for test
 	)
 
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
@@ -942,6 +945,7 @@ func TestExecuteIterationDatabaseLevel(t *testing.T) {
 		upstreamSQLHelperFactory,
 		mp,
 		utHelper,
+		100*time.Millisecond, // snapshotFlushInterval for test
 	)
 
 	// Signal checkpoint goroutine to stop
@@ -1243,6 +1247,7 @@ func TestExecuteIterationWithIndex(t *testing.T) {
 		upstreamSQLHelperFactory,
 		mp,
 		utHelper,
+		100*time.Millisecond, // snapshotFlushInterval for test
 	)
 
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))

@@ -652,14 +652,14 @@ func RequestUpstreamSnapshot(
 	return nil
 }
 
-// WaitForSnapshotFlushed waits for the snapshot to be flushed with exponential backoff
+// WaitForSnapshotFlushed waits for the snapshot to be flushed with fixed interval
 // It checks if the snapshot is flushed, and if not, waits and retries
-// firstInterval: initial wait time (default: 1s)
+// interval: fixed wait time between retries (default: 1min)
 // totalTimeout: total time to wait before giving up (default: 30min)
 func WaitForSnapshotFlushed(
 	ctx context.Context,
 	iterationCtx *IterationContext,
-	firstInterval time.Duration,
+	interval time.Duration,
 	totalTimeout time.Duration,
 ) error {
 	if iterationCtx == nil {
@@ -675,8 +675,8 @@ func WaitForSnapshotFlushed(
 	}
 
 	// Set default values if not provided
-	if firstInterval <= 0 {
-		firstInterval = 1 * time.Second
+	if interval <= 0 {
+		interval = 1 * time.Minute
 	}
 	if totalTimeout <= 0 {
 		totalTimeout = 30 * time.Minute
@@ -686,7 +686,6 @@ func WaitForSnapshotFlushed(
 	checkSQL := PublicationSQLBuilder.CheckSnapshotFlushedSQL(snapshotName)
 
 	startTime := time.Now()
-	currentInterval := firstInterval
 	attempt := 0
 
 	for {
@@ -744,18 +743,17 @@ func WaitForSnapshotFlushed(
 		logutil.Info("ccpr-iteration waiting for snapshot to be flushed",
 			zap.String("snapshot_name", snapshotName),
 			zap.Int("attempt", attempt),
-			zap.Duration("next_interval", currentInterval),
+			zap.Duration("next_interval", interval),
 			zap.Duration("elapsed", time.Since(startTime)),
 			zap.Duration("remaining", totalTimeout-time.Since(startTime)),
 		)
 
-		// Wait before next retry
+		// Wait before next retry with fixed interval
 		select {
 		case <-ctx.Done():
 			return moerr.NewInternalErrorf(ctx, "context cancelled while waiting for snapshot %s to be flushed", snapshotName)
-		case <-time.After(currentInterval):
-			// Double the interval for next retry (exponential backoff)
-			currentInterval *= 2
+		case <-time.After(interval):
+			// Use fixed interval for all retries
 		}
 	}
 }
@@ -1232,6 +1230,7 @@ func submitObjectsAsDelete(ctx context.Context, iterationCtx *IterationContext, 
 
 // ExecuteIteration executes a complete iteration according to the design document
 // It follows the sequence: initialization -> DDL -> snapshot diff -> object processing -> cleanup -> update system table
+// snapshotFlushInterval: interval between retries when waiting for snapshot to be flushed (default: 1min if 0)
 func ExecuteIteration(
 	ctx context.Context,
 	cnUUID string,
@@ -1242,6 +1241,7 @@ func ExecuteIteration(
 	upstreamSQLHelperFactory UpstreamSQLHelperFactory,
 	mp *mpool.MPool,
 	utHelper UTHelper,
+	snapshotFlushInterval time.Duration,
 ) (err error) {
 	var objectListResult *Result
 	var iterationCtx *IterationContext
@@ -1334,7 +1334,12 @@ func ExecuteIteration(
 	}
 
 	// 1.2 等待上游snapshot刷盘
-	if err = WaitForSnapshotFlushed(ctx, iterationCtx, 1*time.Second, 30*time.Minute); err != nil {
+	// Use provided interval, or default to 1 minute if not specified
+	flushInterval := snapshotFlushInterval
+	if flushInterval <= 0 {
+		flushInterval = 1 * time.Minute
+	}
+	if err = WaitForSnapshotFlushed(ctx, iterationCtx, flushInterval, 30*time.Minute); err != nil {
 		err = moerr.NewInternalErrorf(ctx, "failed to wait for snapshot to be flushed: %v", err)
 		return
 	}

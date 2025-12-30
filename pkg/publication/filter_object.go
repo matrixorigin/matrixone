@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
@@ -249,17 +250,26 @@ func extractSortKeyFromObject(
 
 	// Check if meta needs decompression
 	var decompressedMetaBytes []byte
+	var decompressedBuf fscache.Data
 	if metaExtent.Alg() == compress.None {
 		decompressedMetaBytes = metaBytes
 	} else {
 		// Allocate buffer for decompressed data
 		allocator := fileservice.DefaultCacheDataAllocator()
-		decompressedBuf := allocator.AllocateCacheDataWithHint(ctx, int(metaExtent.OriginSize()), malloc.NoClear)
+		decompressedBuf = allocator.AllocateCacheDataWithHint(ctx, int(metaExtent.OriginSize()), malloc.NoClear)
 		bs, err := compress.Decompress(metaBytes, decompressedBuf.Bytes(), compress.Lz4)
 		if err != nil {
+			if decompressedBuf != nil {
+				decompressedBuf.Release()
+			}
 			return 0, moerr.NewInternalErrorf(ctx, "failed to decompress meta data: %v", err)
 		}
 		decompressedMetaBytes = decompressedBuf.Bytes()[:len(bs)]
+		// Clone the data to ensure meta doesn't hold reference to buffer
+		decompressedMetaBytes = append([]byte(nil), decompressedMetaBytes...)
+		if decompressedBuf != nil {
+			decompressedBuf.Release()
+		}
 	}
 
 	meta := objectio.MustObjectMeta(decompressedMetaBytes)
@@ -295,17 +305,26 @@ func convertObjectToBatch(
 
 	// Check if meta needs decompression (same as ReadExtent does)
 	var decompressedMetaBytes []byte
+	var decompressedMetaBuf fscache.Data
 	if metaExtent.Alg() == compress.None {
 		decompressedMetaBytes = metaBytes
 	} else {
 		// Allocate buffer for decompressed data
 		allocator := fileservice.DefaultCacheDataAllocator()
-		decompressedBuf := allocator.AllocateCacheDataWithHint(ctx, int(metaExtent.OriginSize()), malloc.NoClear)
-		bs, err := compress.Decompress(metaBytes, decompressedBuf.Bytes(), compress.Lz4)
+		decompressedMetaBuf = allocator.AllocateCacheDataWithHint(ctx, int(metaExtent.OriginSize()), malloc.NoClear)
+		bs, err := compress.Decompress(metaBytes, decompressedMetaBuf.Bytes(), compress.Lz4)
 		if err != nil {
+			if decompressedMetaBuf != nil {
+				decompressedMetaBuf.Release()
+			}
 			return nil, moerr.NewInternalErrorf(ctx, "failed to decompress meta data: %v", err)
 		}
-		decompressedMetaBytes = decompressedBuf.Bytes()[:len(bs)]
+		decompressedMetaBytes = decompressedMetaBuf.Bytes()[:len(bs)]
+		// Clone the data to ensure meta doesn't hold reference to buffer
+		decompressedMetaBytes = append([]byte(nil), decompressedMetaBytes...)
+		if decompressedMetaBuf != nil {
+			decompressedMetaBuf.Release()
+		}
 	}
 
 	meta := objectio.MustObjectMeta(decompressedMetaBytes)
@@ -381,16 +400,26 @@ func convertObjectToBatch(
 
 		// Decompress if needed
 		var decompressedData []byte
+		var decompressedBuf fscache.Data
 		if ext.Alg() == compress.None {
 			decompressedData = colData
 		} else {
 			// Allocate buffer for decompressed data
-			decompressedBuf := allocator.AllocateCacheDataWithHint(ctx, int(ext.OriginSize()), malloc.NoClear)
+			decompressedBuf = allocator.AllocateCacheDataWithHint(ctx, int(ext.OriginSize()), malloc.NoClear)
 			bs, err := compress.Decompress(colData, decompressedBuf.Bytes(), compress.Lz4)
 			if err != nil {
+				if decompressedBuf != nil {
+					decompressedBuf.Release()
+				}
 				return nil, moerr.NewInternalErrorf(ctx, "failed to decompress column data: %v", err)
 			}
 			decompressedData = decompressedBuf.Bytes()[:len(bs)]
+			// Clone the data to ensure decoded vector doesn't hold reference to buffer
+			decompressedData = append([]byte(nil), decompressedData...)
+			// Release buffer immediately after cloning
+			if decompressedBuf != nil {
+				decompressedBuf.Release()
+			}
 		}
 
 		// Decode to vector.Vector

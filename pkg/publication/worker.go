@@ -133,6 +133,7 @@ func (w *worker) onItem(taskCtx *TaskContext) {
 				w.upstreamSQLHelperFactory,
 				w.mp,
 				nil, // utHelper
+				0,   // snapshotFlushInterval (use default 1min)
 			)
 			if err != nil {
 				logutil.Error(
