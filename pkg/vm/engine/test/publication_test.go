@@ -1446,20 +1446,20 @@ func TestGetObjectChunk(t *testing.T) {
 	// Read first chunk (100MB)
 	chunk0, err := frontend.ReadObjectFromEngine(ctxWithTimeout, de, testObjectName2, 0, chunkSize)
 	require.NoError(t, err)
-	require.Equal(t, chunkSize, int64(len(chunk0)))
+	require.Equal(t, int64(chunkSize), int64(len(chunk0)))
 	require.Equal(t, largeContent[0:chunkSize], chunk0)
 
 	// Read second chunk (50MB)
 	remainingSize := largeFileSize - chunkSize
 	chunk1, err := frontend.ReadObjectFromEngine(ctxWithTimeout, de, testObjectName2, chunkSize, remainingSize)
 	require.NoError(t, err)
-	require.Equal(t, remainingSize, int64(len(chunk1)))
+	require.Equal(t, int64(remainingSize), int64(len(chunk1)))
 	require.Equal(t, largeContent[chunkSize:], chunk1)
 
 	// Test ReadObjectFromEngine with partial chunk
 	partialSize := int64(1024) // 1KB
 	partialChunk, err := frontend.ReadObjectFromEngine(ctxWithTimeout, de, testObjectName2, 0, partialSize)
 	require.NoError(t, err)
-	require.Equal(t, partialSize, int64(len(partialChunk)))
+	require.Equal(t, int64(partialSize), int64(len(partialChunk)))
 	require.Equal(t, largeContent[0:partialSize], partialChunk)
 }
