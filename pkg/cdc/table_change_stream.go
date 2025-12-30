@@ -740,8 +740,8 @@ func (s *TableChangeStream) processOneRound(ctx context.Context, ar *ActiveRouti
 	}
 	defer FinishTxnOp(ctx, err, txnOp, s.cnEngine)
 
-	EnterRunSql(txnOp)
-	defer ExitRunSql(txnOp)
+	finishRunSQL := EnterRunSql(ctx, txnOp, "<cdc.table_change_stream>")
+	defer finishRunSQL()
 
 	if err = GetTxn(ctx, s.cnEngine, txnOp); err != nil {
 		return err
