@@ -283,6 +283,7 @@ func aggAvgOfDecimal128Fills(
 
 // YEAR type specific AVG functions
 func aggAvgYearFill(
+	groupCtx aggexec.AggGroupExecContext, _ aggexec.AggCommonExecContext,
 	value types.MoYear, isEmpty bool,
 	resultGetter aggexec.AggGetter[float64], resultSetter aggexec.AggSetter[float64]) error {
 	*(groupCtx.(*aggAvgContext))++

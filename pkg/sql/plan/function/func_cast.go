@@ -58,6 +58,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_bit,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_year,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 	},
@@ -238,6 +239,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 		types.T_time, types.T_timestamp,
+		types.T_year,
 	},
 
 	types.T_decimal128: {
@@ -248,6 +250,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_decimal64, types.T_decimal128,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_year,
 	},
 
 	types.T_char: {
@@ -342,6 +345,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_uuid,
 		types.T_date, types.T_datetime,
 		types.T_time, types.T_timestamp,
+		types.T_year,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 		types.T_array_float32, types.T_array_float64,
@@ -384,6 +388,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_year,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 	},
@@ -596,6 +601,9 @@ func boolToOthers(ctx context.Context,
 	case types.T_uint64:
 		rs := vector.MustFunctionResult[uint64](result)
 		return boolToInteger(source, rs, length, selectList)
+	case types.T_year:
+		rs := vector.MustFunctionResult[types.MoYear](result)
+		return boolToYear(source, rs, length, selectList)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from bool to %s", toType))
 }
@@ -1542,6 +1550,9 @@ func decimal64ToOthers(ctx context.Context,
 		types.T_binary, types.T_varbinary, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return decimal64ToStr(ctx, source, rs, length, toType)
+	case types.T_year:
+		rs := vector.MustFunctionResult[types.MoYear](result)
+		return decimal64ToYear(ctx, source, rs, length, selectList)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from decimal64 to %s", toType))
 }
@@ -1607,6 +1618,9 @@ func decimal128ToOthers(ctx context.Context,
 		types.T_binary, types.T_varbinary, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return decimal128ToStr(ctx, source, rs, length, toType)
+	case types.T_year:
+		rs := vector.MustFunctionResult[types.MoYear](result)
+		return decimal128ToYear(ctx, source, rs, length, selectList)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from decimal128 to %s", toType))
 }
@@ -2066,6 +2080,36 @@ func boolToInteger[T constraints.Integer](
 				}
 			} else {
 				if err := to.Append(0, false); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// boolToYear converts bool to YEAR type
+// MySQL behavior: true -> 2001, false -> 0
+func boolToYear(
+	from vector.FunctionParameterWrapper[bool],
+	to *vector.FunctionResult[types.MoYear], length int, selectList *FunctionSelectList) error {
+	var i uint64
+	l := uint64(length)
+	for i = 0; i < l; i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			if v {
+				// MySQL: true -> 2001
+				if err := to.Append(types.MoYear(2001), false); err != nil {
+					return err
+				}
+			} else {
+				// MySQL: false -> 0
+				if err := to.Append(types.MoYear(0), false); err != nil {
 					return err
 				}
 			}
@@ -3384,6 +3428,72 @@ func decimal128ToSigned[T constraints.Signed](
 			}
 			err = to.Append(T(result), false)
 			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// decimal64ToYear converts decimal64 to YEAR type
+func decimal64ToYear(
+	ctx context.Context,
+	from vector.FunctionParameterWrapper[types.Decimal64],
+	to *vector.FunctionResult[types.MoYear], length int, selectList *FunctionSelectList) error {
+	var i uint64
+	l := uint64(length)
+	fromTyp := from.GetType()
+	for i = 0; i < l; i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			x, _ := v.Scale(-fromTyp.Scale)
+			xStr := x.Format(0)
+			result, err := strconv.ParseInt(xStr, 10, 16)
+			if err != nil {
+				return moerr.NewOutOfRangef(ctx, "year", "value '%v'", xStr)
+			}
+			year, err := types.ParseMoYearFromInt(result)
+			if err != nil {
+				return err
+			}
+			if err = to.Append(year, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// decimal128ToYear converts decimal128 to YEAR type
+func decimal128ToYear(
+	ctx context.Context,
+	from vector.FunctionParameterWrapper[types.Decimal128],
+	to *vector.FunctionResult[types.MoYear], length int, selectList *FunctionSelectList) error {
+	var i uint64
+	l := uint64(length)
+	fromTyp := from.GetType()
+	for i = 0; i < l; i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			x, _ := v.Scale(-fromTyp.Scale)
+			xStr := x.Format(0)
+			result, err := strconv.ParseInt(xStr, 10, 16)
+			if err != nil {
+				return moerr.NewOutOfRangef(ctx, "year", "value '%v'", xStr)
+			}
+			year, err := types.ParseMoYearFromInt(result)
+			if err != nil {
+				return err
+			}
+			if err = to.Append(year, false); err != nil {
 				return err
 			}
 		}
@@ -5341,6 +5451,12 @@ func yearToOthers(ctx context.Context,
 	case types.T_uint64:
 		rs := vector.MustFunctionResult[uint64](result)
 		return yearToInteger(ctx, source, rs, length, selectList)
+	case types.T_float32:
+		rs := vector.MustFunctionResult[float32](result)
+		return yearToFloat(ctx, source, rs, length, selectList)
+	case types.T_float64:
+		rs := vector.MustFunctionResult[float64](result)
+		return yearToFloat(ctx, source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return yearToStr(ctx, source, rs, length, toType)
@@ -5369,6 +5485,25 @@ func yearToYear(ctx context.Context,
 
 // yearToInteger converts YEAR to integer types
 func yearToInteger[T constraints.Integer](ctx context.Context,
+	source vector.FunctionParameterWrapper[types.MoYear],
+	rs *vector.FunctionResult[T], length int, selectList *FunctionSelectList) error {
+	for i := 0; i < length; i++ {
+		v, isnull := source.GetValue(uint64(i))
+		if isnull {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			if err := rs.Append(T(v), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// yearToFloat converts YEAR to float types
+func yearToFloat[T constraints.Float](ctx context.Context,
 	source vector.FunctionParameterWrapper[types.MoYear],
 	rs *vector.FunctionResult[T], length int, selectList *FunctionSelectList) error {
 	for i := 0; i < length; i++ {

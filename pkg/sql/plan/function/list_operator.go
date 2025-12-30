@@ -1644,7 +1644,7 @@ var supportedOperators = []FuncNew{
 						}
 						return types.New(types.T_decimal128, 38, scale1)
 					}
-					if parameters[0].Oid == types.T_date || parameters[0].Oid == types.T_datetime {
+					if parameters[0].Oid == types.T_date || parameters[0].Oid == types.T_datetime || parameters[0].Oid == types.T_year {
 						return types.T_int64.ToType()
 					}
 					return parameters[0]
