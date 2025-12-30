@@ -1313,7 +1313,7 @@ const (
 
 	checkDatabaseWithOwnerFormat = `select dat_id, owner from mo_catalog.mo_database where datname = "%s" and account_id = %d;`
 
-	checkDatabaseTableFormat = `select rel_id from mo_catalog.mo_tables where relname = "%s" and reldatabase = "%s" and account_id = %d;`
+	checkDatabaseTableFormat = `select rel_logical_id from mo_catalog.mo_tables where relname = "%s" and reldatabase = "%s" and account_id = %d;`
 
 	//TODO:fix privilege_level string and obj_type string
 	//For object_type : table, privilege_level : *.*
@@ -1343,7 +1343,7 @@ const (
 	checkWithGrantOptionForTableDatabaseTable = `select rp.privilege_id,rp.with_grant_option
 				from mo_catalog.mo_database d, mo_catalog.mo_tables t, mo_catalog.mo_role_privs rp
 				where d.dat_id = t.reldatabase_id
-					and rp.obj_id = t.rel_id
+					and rp.obj_id = t.rel_logical_id
 					and rp.obj_type = "%s"
 					and rp.role_id = %d
 					and rp.privilege_id = %d
@@ -1402,7 +1402,7 @@ const (
 	checkRoleHasTableLevelPrivilegeFormat = `select rp.privilege_id,rp.with_grant_option
 				from mo_catalog.mo_database d, mo_catalog.mo_tables t, mo_catalog.mo_role_privs rp
 				where d.dat_id = t.reldatabase_id
-					and rp.obj_id = t.rel_id
+					and rp.obj_id = t.rel_logical_id
 					and rp.obj_type = "%s"
 					and rp.role_id = %d
 					and rp.privilege_id = %d
