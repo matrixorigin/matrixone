@@ -61,7 +61,6 @@ func FilterObject(
 
 	// Check if it's an appendable object
 	isAObj := stats.GetAppendable()
-
 	if isAObj {
 		// Handle appendable object
 		return filterAppendableObject(ctx, &stats, snapshotTS, iterationCtx, localFS, isTombstone, mp)
@@ -212,24 +211,74 @@ func getObjectFromUpstream(
 		return nil, moerr.NewInternalError(ctx, "upstream executor is nil")
 	}
 
-	// Build GETOBJECT SQL
-	getObjectSQL := PublicationSQLBuilder.GetObjectSQL(objectName)
-
-	// Execute SQL through upstream executor
-	result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, getObjectSQL)
+	// First, get chunk 0 to get metadata (total_chunks, total_size, etc.)
+	// GETOBJECT returns: data, total_size, chunk_index, total_chunks, is_complete
+	// chunk 0 returns metadata with data = nil
+	getChunk0SQL := PublicationSQLBuilder.GetObjectSQL(objectName, 0)
+	result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, getChunk0SQL)
 	if err != nil {
-		return nil, moerr.NewInternalErrorf(ctx, "failed to execute GETOBJECT query: %v", err)
+		return nil, moerr.NewInternalErrorf(ctx, "failed to execute GETOBJECT query for chunk 0: %v", err)
 	}
-	defer result.Close()
 
-	// Read result - GETOBJECT returns object content as blob
-	var objectContent []byte
-	if result.Next() {
-		if err := result.Scan(&objectContent); err != nil {
-			return nil, moerr.NewInternalErrorf(ctx, "failed to scan object content: %v", err)
-		}
-	} else {
+	var metadataData []byte
+	var totalSize int64
+	var chunkIndex int64
+	var totalChunks int64
+	var isComplete bool
+
+	if !result.Next() {
+		result.Close()
 		return nil, moerr.NewInternalErrorf(ctx, "no object content returned for %s", objectName)
+	}
+
+	if err := result.Scan(&metadataData, &totalSize, &chunkIndex, &totalChunks, &isComplete); err != nil {
+		result.Close()
+		return nil, moerr.NewInternalErrorf(ctx, "failed to scan chunk 0: %v", err)
+	}
+	result.Close()
+
+	if totalChunks <= 0 {
+		return nil, moerr.NewInternalErrorf(ctx, "invalid total_chunks: %d", totalChunks)
+	}
+
+	// Fetch data chunks starting from chunk 1
+	// chunk 0 is metadata, chunks 1 to totalChunks are data chunks
+	allChunks := make([][]byte, totalChunks)
+
+	for i := int64(1); i <= totalChunks; i++ {
+		getChunkSQL := PublicationSQLBuilder.GetObjectSQL(objectName, i)
+		result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, getChunkSQL)
+		if err != nil {
+			return nil, moerr.NewInternalErrorf(ctx, "failed to execute GETOBJECT query for chunk %d: %v", i, err)
+		}
+
+		if result.Next() {
+			var chunkData []byte
+			var totalSizeChk int64
+			var chunkIndexChk int64
+			var totalChunksChk int64
+			var isCompleteChk bool
+			if err := result.Scan(&chunkData, &totalSizeChk, &chunkIndexChk, &totalChunksChk, &isCompleteChk); err != nil {
+				result.Close()
+				return nil, moerr.NewInternalErrorf(ctx, "failed to scan chunk %d: %v", i, err)
+			}
+			// Store chunk at index i-1 since chunks are numbered 1 to totalChunks
+			allChunks[i-1] = chunkData
+		} else {
+			result.Close()
+			return nil, moerr.NewInternalErrorf(ctx, "no chunk content returned for chunk %d of %s", i, objectName)
+		}
+		result.Close()
+	}
+
+	// Combine all chunks
+	totalLen := 0
+	for _, chunk := range allChunks {
+		totalLen += len(chunk)
+	}
+	objectContent := make([]byte, 0, totalLen)
+	for _, chunk := range allChunks {
+		objectContent = append(objectContent, chunk...)
 	}
 
 	return objectContent, nil

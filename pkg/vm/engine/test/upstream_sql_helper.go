@@ -566,23 +566,116 @@ func (h *UpstreamSQLHelper) handleGetObjectDirectly(
 	}
 
 	objectName := stmt.ObjectName.String()
+	chunkIndex := stmt.ChunkIndex
 
-	// Read object from engine using frontend function
-	content, err := frontend.ReadObjectFromEngine(ctx, h.engine, objectName, 0, -1)
+	// Get fileservice from engine
+	fs, err := h.getFileserviceFromEngine()
 	if err != nil {
-		return nil, err
+		return nil, moerr.NewInternalErrorf(ctx, "failed to get fileservice: %v", err)
 	}
 
-	// Create a batch with one column containing the content
+	// Get file size
+	dirEntry, err := fs.StatFile(ctx, objectName)
+	if err != nil {
+		return nil, moerr.NewInternalErrorf(ctx, "failed to stat file: %v", err)
+	}
+	fileSize := dirEntry.Size
+
+	// Calculate total chunks
+	const chunkSize = 1 * 1024 // 1KB (matching frontend/get_object.go)
+	var totalChunks int64
+	if fileSize <= chunkSize {
+		totalChunks = 1
+	} else {
+		totalChunks = (fileSize + chunkSize - 1) / chunkSize // 向上取整
+	}
+
+	// Validate chunk index
+	if chunkIndex < -1 {
+		return nil, moerr.NewInvalidInput(ctx, "invalid chunk_index: must be >= -1")
+	}
+	if chunkIndex >= totalChunks {
+		return nil, moerr.NewInvalidInput(ctx, fmt.Sprintf("invalid chunk_index: %d, file has only %d chunks", chunkIndex, totalChunks))
+	}
+
+	var data []byte
+	var isComplete bool
+
+	if chunkIndex == -1 {
+		// Metadata only request
+		data = nil
+		isComplete = false
+	} else {
+		// Data chunk request
+		offset := chunkIndex * chunkSize
+		size := int64(chunkSize)
+		if chunkIndex == totalChunks-1 {
+			// Last chunk may be smaller
+			size = fileSize - offset
+		}
+
+		// Read object chunk from engine using frontend function
+		content, err := frontend.ReadObjectFromEngine(ctx, h.engine, objectName, offset, size)
+		if err != nil {
+			return nil, moerr.NewInternalErrorf(ctx, "failed to read object chunk: %v", err)
+		}
+		data = content
+		isComplete = (chunkIndex == totalChunks-1)
+	}
+
+	// Create a batch with 5 columns: data, total_size, chunk_index, total_chunks, is_complete
 	mp := mpool.MustNewZero()
-	bat := batch.New([]string{"data"})
+	bat := batch.New([]string{"data", "total_size", "chunk_index", "total_chunks", "is_complete"})
+	
+	// Column 0: data (BLOB)
 	bat.Vecs[0] = vector.NewVec(types.T_blob.ToType())
-	err = vector.AppendBytes(bat.Vecs[0], content, false, mp)
+	if data != nil {
+		err = vector.AppendBytes(bat.Vecs[0], data, false, mp)
+		if err != nil {
+			bat.Clean(mp)
+			return nil, err
+		}
+	} else {
+		err = vector.AppendBytes(bat.Vecs[0], nil, true, mp)
+		if err != nil {
+			bat.Clean(mp)
+			return nil, err
+		}
+	}
+
+	// Column 1: total_size (LONGLONG)
+	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	err = vector.AppendFixed(bat.Vecs[1], fileSize, false, mp)
 	if err != nil {
 		bat.Clean(mp)
 		return nil, err
 	}
-	bat.SetRowCount(bat.Vecs[0].Length())
+
+	// Column 2: chunk_index (LONG) - use int64 to match getObjectFromUpstream expectations
+	bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+	err = vector.AppendFixed(bat.Vecs[2], chunkIndex, false, mp)
+	if err != nil {
+		bat.Clean(mp)
+		return nil, err
+	}
+
+	// Column 3: total_chunks (LONG) - use int64 to match getObjectFromUpstream expectations
+	bat.Vecs[3] = vector.NewVec(types.T_int64.ToType())
+	err = vector.AppendFixed(bat.Vecs[3], totalChunks, false, mp)
+	if err != nil {
+		bat.Clean(mp)
+		return nil, err
+	}
+
+	// Column 4: is_complete (bool) - use bool to match getObjectFromUpstream expectations
+	bat.Vecs[4] = vector.NewVec(types.T_bool.ToType())
+	err = vector.AppendFixed(bat.Vecs[4], isComplete, false, mp)
+	if err != nil {
+		bat.Clean(mp)
+		return nil, err
+	}
+
+	bat.SetRowCount(1)
 
 	return h.convertExecutorResult(executor.Result{
 		Batches: []*batch.Batch{bat},

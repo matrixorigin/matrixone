@@ -19,6 +19,8 @@ import (
 	"fmt"
 	"io"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -70,8 +72,14 @@ func ReadObjectFromEngine(ctx context.Context, eng engine.Engine, objectName str
 		},
 	})
 	if err != nil {
+		// If ReadCloser was set even on error, close it to release resources
+		if r != nil {
+			r.Close()
+		}
 		return nil, err
 	}
+	// Ensure ReadCloser is closed to release memory allocated by fileservice
+	// The ReadCloser now properly manages memory lifecycle (see io_entry.go fix)
 	defer r.Close()
 
 	content, err := io.ReadAll(r)
@@ -161,8 +169,8 @@ func handleGetObject(
 	}
 	fileSize := dirEntry.Size
 
-	// Calculate total chunks
-	const chunkSize = 100 * 1024 * 1024 // 100MB
+	// Calculate total data chunks (chunk 0 is metadata, chunks 1+ are data)
+	const chunkSize = 1 * 1024 * 1024 // 1MB
 	var totalChunks int64
 	if fileSize <= chunkSize {
 		totalChunks = 1
@@ -171,36 +179,44 @@ func handleGetObject(
 	}
 
 	// Validate chunk index
-	if chunkIndex < -1 {
-		return moerr.NewInvalidInput(ctx, "invalid chunk_index: must be >= -1")
+	if chunkIndex < 0 {
+		return moerr.NewInvalidInput(ctx, "invalid chunk_index: must be >= 0")
 	}
-	if chunkIndex >= totalChunks {
-		return moerr.NewInvalidInput(ctx, fmt.Sprintf("invalid chunk_index: %d, file has only %d chunks", chunkIndex, totalChunks))
+	// chunk 0 is metadata, chunks 1 to totalChunks are data chunks
+	if chunkIndex > totalChunks {
+		return moerr.NewInvalidInput(ctx, fmt.Sprintf("invalid chunk_index: %d, file has only %d data chunks (chunk 0 is metadata)", chunkIndex, totalChunks))
 	}
 
 	var data []byte
 	var isComplete bool
 
-	if chunkIndex == -1 {
-		// Metadata only request
+	if chunkIndex == 0 {
+		// Metadata only request - return nil data with metadata information
 		data = nil
 		isComplete = false
+
+		// Print detailed chunk information if there are multiple chunks
+		if totalChunks > 1 {
+			chunkDetails := make([]zap.Field, 0, totalChunks+1)
+			chunkDetails = append(chunkDetails, zap.String("object", objectName))
+		}
 	} else {
-		// Data chunk request
-		offset := chunkIndex * chunkSize
+		// Data chunk request (chunkIndex >= 1)
+		// Calculate offset: chunk 1 starts at offset 0, chunk 2 at chunkSize, etc.
+		offset := (chunkIndex - 1) * chunkSize
 		size := int64(chunkSize)
-		if chunkIndex == totalChunks-1 {
+		if chunkIndex == totalChunks {
 			// Last chunk may be smaller
 			size = fileSize - offset
 		}
 
-		var err error
+		// Read the chunk data
 		data, err = readObjectFromFS(ctx, ses, objectName, offset, size)
 		if err != nil {
 			return err
 		}
 
-		isComplete = (chunkIndex == totalChunks-1)
+		isComplete = (chunkIndex == totalChunks)
 	}
 
 	// Add row with the result

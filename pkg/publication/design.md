@@ -226,4 +226,7 @@ collect change scan object
 
 **检查关事务，关batch**
 
-**检查上游的ts必须刷盘**
+1. 权限检查
+2. 长时间运行检查
+3. show subsription drop db/table
+4. 索引表，
