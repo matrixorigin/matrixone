@@ -162,12 +162,11 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 		}
 	}
 
-	if len(mergeGroup.ctr.spillAggList) != 0 {
-		for i := range mergeGroup.ctr.spillAggList {
-			mergeGroup.ctr.spillAggList[i].Free()
+	defer func() {
+		if err != nil {
+			mergeGroup.ctr.freeSpillAggList()
 		}
-		mergeGroup.ctr.spillAggList = nil
-	}
+	}()
 
 	mergeGroup.ctr.spillAggList, err = mergeGroup.ctr.makeAggList(mergeGroup.Aggs)
 	if err != nil {

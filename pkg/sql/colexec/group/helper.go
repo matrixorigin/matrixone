@@ -467,6 +467,9 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 		}
 	}
 
+	// free spill agg list,
+	ctr.freeSpillAggList()
+
 	// respilling happened, so we finish the last batch and recursive down
 	if ctr.isSpilling() {
 		if err := ctr.spillDataToDisk(proc, bkt); err != nil {
@@ -504,6 +507,8 @@ func (ctr *container) getNextFinalResult(proc *process.Process) (vm.CallResult, 
 					ctr.groupByBatches[j].Vecs, vecs[j])
 			}
 		}
+
+		ctr.freeAggList()
 	}
 
 	// get the groupby batch

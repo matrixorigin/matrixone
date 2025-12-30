@@ -141,7 +141,9 @@ func (ctr *container) freeAggList() {
 		}
 	}
 	ctr.aggList = nil
+}
 
+func (ctr *container) freeSpillAggList() {
 	for i := range ctr.spillAggList {
 		if ctr.spillAggList[i] != nil {
 			ctr.spillAggList[i].Free()
@@ -192,6 +194,7 @@ func (ctr *container) free() {
 
 	ctr.freeGroupByBatches()
 	ctr.freeAggList()
+	ctr.freeSpillAggList()
 	ctr.freeSpillBkts()
 
 	mpool.DeleteMPool(ctr.mp)
@@ -226,6 +229,7 @@ func (ctr *container) resetForSpill() {
 	ctr.currBatchIdx = 0
 
 	ctr.freeAggList()
+	ctr.freeSpillAggList()
 }
 
 func (group *Group) evaluateGroupByAndAggArgs(proc *process.Process, bat *batch.Batch) (err error) {
