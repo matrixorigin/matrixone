@@ -49,14 +49,14 @@ import (
 )
 
 var (
-	cpuProfilePathFlag       = flag.String("cpu-profile", "", "write cpu profile to the specified file")
-	allocsProfilePathFlag   = flag.String("allocs-profile", "", "write allocs profile to the specified file")
-	heapProfilePathFlag      = flag.String("heap-profile", "", "write heap profile to the specified file")
-	httpListenAddr          = flag.String("debug-http", "", "http server listen address")
-	profileInterval         = flag.Duration("profile-interval", 0, "profile interval")
-	blockProfileRate        = flag.Int("block-profile-rate", 0, "enable block profiling with the given rate. 0 means disabled. Recommended: 100 for production, 1 for debugging")
-	mutexProfileFraction    = flag.Int("mutex-profile-fraction", 0, "enable mutex profiling with the given fraction. 0 means disabled. Recommended: 100 for production, 1 for debugging")
-	statusServer            = status.NewServer()
+	cpuProfilePathFlag    = flag.String("cpu-profile", "", "write cpu profile to the specified file")
+	allocsProfilePathFlag = flag.String("allocs-profile", "", "write allocs profile to the specified file")
+	heapProfilePathFlag   = flag.String("heap-profile", "", "write heap profile to the specified file")
+	httpListenAddr        = flag.String("debug-http", "", "http server listen address")
+	profileInterval       = flag.Duration("profile-interval", 0, "profile interval")
+	blockProfileRate      = flag.Int("block-profile-rate", 0, "enable block profiling with the given rate. 0 means disabled. Recommended: 100 for production, 1 for debugging")
+	mutexProfileFraction  = flag.Int("mutex-profile-fraction", 0, "enable mutex profiling with the given fraction. 0 means disabled. Recommended: 100 for production, 1 for debugging")
+	statusServer          = status.NewServer()
 )
 
 func startCPUProfile() func() {
