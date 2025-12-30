@@ -103,10 +103,10 @@ func (r *CheckpointReader) loadEntries() error {
 	}
 	r.entries = unique
 
-	// Sort by end timestamp
+	// Sort by end timestamp (newest first)
 	sort.Slice(r.entries, func(i, j int) bool {
 		ei, ej := r.entries[i].GetEnd(), r.entries[j].GetEnd()
-		return ei.LT(&ej)
+		return ei.GT(&ej)
 	})
 	return nil
 }
