@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	gotrace "runtime/trace"
 	"slices"
 	"sort"
@@ -2529,6 +2530,14 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 				err = nil
 				break
 			}
+
+			// Check if it's a network timeout error - don't retry, fail immediately
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				ses.Errorf(execCtx.reqCtx, "load local file failed: network read timeout: %v", err)
+				return moerr.NewInternalErrorf(execCtx.reqCtx,
+					"load local file failed: network read timeout, client may have disconnected")
+			}
+
 			retError = err
 			consecutiveErrors++
 			ses.Errorf(execCtx.reqCtx, "readThenWrite error (attempt %d): %v", consecutiveErrors, err)

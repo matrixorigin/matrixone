@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"net"
 	"strings"
 	"sync"
@@ -570,7 +571,19 @@ func (c *Conn) ReadFromConn(buf []byte) (int, error) {
 			return 0, err
 		}
 	}
-	return c.conn.Read(buf)
+	n, err := c.conn.Read(buf)
+	if err != nil {
+		// Check if it's a timeout error
+		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+			// Send error to MySQL client and close connection
+			// ER_NET_READ_INTERRUPTED (1159): Got timeout reading communication packets
+			_ = c.respErr(moerr.ER_NET_READ_INTERRUPTED, "08S01",
+				fmt.Sprintf("Got timeout reading communication packets (timeout: %v)", c.readTimeout))
+			// Close the connection immediately like MySQL does
+			_ = c.conn.Close()
+		}
+	}
+	return n, err
 }
 
 // Append Add bytes to buffer
