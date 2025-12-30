@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"fmt"
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -27,14 +28,16 @@ import (
 )
 
 // readObjectFromFS reads the object file from fileservice and returns its content as []byte
-func readObjectFromFS(ctx context.Context, ses *Session, objectName string) ([]byte, error) {
+func readObjectFromFS(ctx context.Context, ses *Session, objectName string, offset int64, size int64) ([]byte, error) {
 	eng := getPu(ses.GetService()).StorageEngine
-	return ReadObjectFromEngine(ctx, eng, objectName)
+	return ReadObjectFromEngine(ctx, eng, objectName, offset, size)
 }
 
 // ReadObjectFromEngine reads the object file from engine's fileservice and returns its content as []byte
+// offset: 读取偏移，>=0
+// size: 读取大小，-1 表示读到末尾
 // This is a version that doesn't require Session
-func ReadObjectFromEngine(ctx context.Context, eng engine.Engine, objectName string) ([]byte, error) {
+func ReadObjectFromEngine(ctx context.Context, eng engine.Engine, objectName string, offset int64, size int64) ([]byte, error) {
 	if eng == nil {
 		return nil, moerr.NewInternalError(ctx, "engine is not available")
 	}
@@ -60,8 +63,8 @@ func ReadObjectFromEngine(ctx context.Context, eng engine.Engine, objectName str
 		FilePath: objectName,
 		Entries: []fileservice.IOEntry{
 			{
-				Offset:            0,
-				Size:              -1,
+				Offset:            offset,
+				Size:              size,
 				ReadCloserForRead: &r,
 			},
 		},
@@ -92,11 +95,31 @@ func handleGetObject(
 	ses.ClearAllMysqlResultSet()
 	ses.ClearResultBatches()
 
-	// Create column: data
-	col := new(MysqlColumn)
-	col.SetName("data")
-	col.SetColumnType(defines.MYSQL_TYPE_BLOB)
-	showCols = append(showCols, col)
+	// Create columns: data, total_size, chunk_index, total_chunks, is_complete
+	colData := new(MysqlColumn)
+	colData.SetName("data")
+	colData.SetColumnType(defines.MYSQL_TYPE_BLOB)
+	showCols = append(showCols, colData)
+
+	colTotalSize := new(MysqlColumn)
+	colTotalSize.SetName("total_size")
+	colTotalSize.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+	showCols = append(showCols, colTotalSize)
+
+	colChunkIndex := new(MysqlColumn)
+	colChunkIndex.SetName("chunk_index")
+	colChunkIndex.SetColumnType(defines.MYSQL_TYPE_LONG)
+	showCols = append(showCols, colChunkIndex)
+
+	colTotalChunks := new(MysqlColumn)
+	colTotalChunks.SetName("total_chunks")
+	colTotalChunks.SetColumnType(defines.MYSQL_TYPE_LONG)
+	showCols = append(showCols, colTotalChunks)
+
+	colIsComplete := new(MysqlColumn)
+	colIsComplete.SetName("is_complete")
+	colIsComplete.SetColumnType(defines.MYSQL_TYPE_TINY)
+	showCols = append(showCols, colIsComplete)
 
 	for _, col := range showCols {
 		mrs.AddColumn(col)
@@ -104,6 +127,7 @@ func handleGetObject(
 
 	// Read object from fileservice
 	objectName := stmt.ObjectName.String()
+	chunkIndex := stmt.ChunkIndex
 
 	// Check publication permission
 	// For GET OBJECT, we check if the account has permission to access any publication
@@ -112,14 +136,80 @@ func handleGetObject(
 		return err
 	}
 
-	content, err := readObjectFromFS(ctx, ses, objectName)
+	// Get fileservice
+	eng := getPu(ses.GetService()).StorageEngine
+	var de *disttae.Engine
+	var ok bool
+	if de, ok = eng.(*disttae.Engine); !ok {
+		if entireEngine, ok := eng.(*engine.EntireEngine); ok {
+			de, ok = entireEngine.Engine.(*disttae.Engine)
+		}
+		if !ok {
+			return moerr.NewInternalError(ctx, "failed to get disttae engine")
+		}
+	}
+
+	fs := de.FS()
+	if fs == nil {
+		return moerr.NewInternalError(ctx, "fileservice is not available")
+	}
+
+	// Get file size
+	dirEntry, err := fs.StatFile(ctx, objectName)
 	if err != nil {
 		return err
 	}
+	fileSize := dirEntry.Size
 
-	// Add one row with the file content
-	row := make([]any, 1)
-	row[0] = content
+	// Calculate total chunks
+	const chunkSize = 100 * 1024 * 1024 // 100MB
+	var totalChunks int64
+	if fileSize <= chunkSize {
+		totalChunks = 1
+	} else {
+		totalChunks = (fileSize + chunkSize - 1) / chunkSize // 向上取整
+	}
+
+	// Validate chunk index
+	if chunkIndex < -1 {
+		return moerr.NewInvalidInput(ctx, "invalid chunk_index: must be >= -1")
+	}
+	if chunkIndex >= totalChunks {
+		return moerr.NewInvalidInput(ctx, fmt.Sprintf("invalid chunk_index: %d, file has only %d chunks", chunkIndex, totalChunks))
+	}
+
+	var data []byte
+	var isComplete bool
+
+	if chunkIndex == -1 {
+		// Metadata only request
+		data = nil
+		isComplete = false
+	} else {
+		// Data chunk request
+		offset := chunkIndex * chunkSize
+		size := int64(chunkSize)
+		if chunkIndex == totalChunks-1 {
+			// Last chunk may be smaller
+			size = fileSize - offset
+		}
+
+		var err error
+		data, err = readObjectFromFS(ctx, ses, objectName, offset, size)
+		if err != nil {
+			return err
+		}
+
+		isComplete = (chunkIndex == totalChunks-1)
+	}
+
+	// Add row with the result
+	row := make([]any, 5)
+	row[0] = data
+	row[1] = fileSize
+	row[2] = chunkIndex
+	row[3] = totalChunks
+	row[4] = isComplete
 	mrs.AddRow(row)
 
 	// Save query result if needed

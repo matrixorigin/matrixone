@@ -14,7 +14,11 @@
 
 package tree
 
-import "github.com/matrixorigin/matrixone/pkg/common/reuse"
+import (
+	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+)
 
 func init() {
 	reuse.CreatePool[DataBranchCreateTable](
@@ -476,6 +480,7 @@ type GetObject struct {
 	statementImpl
 
 	ObjectName Identifier // object name
+	ChunkIndex int64      // -1 表示只获取元数据，>=0 表示请求第几块
 }
 
 func (s *GetObject) TypeName() string {
@@ -495,8 +500,10 @@ func (s *GetObject) StmtKind() StmtKind {
 }
 
 func (s *GetObject) Format(ctx *FmtCtx) {
-	ctx.WriteString("GETOBJECT ")
+	ctx.WriteString("GET OBJECT ")
 	ctx.WriteString(string(s.ObjectName))
+	ctx.WriteString(" CHUNK ")
+	ctx.WriteString(fmt.Sprintf("%d", s.ChunkIndex))
 }
 
 func (s *GetObject) String() string {

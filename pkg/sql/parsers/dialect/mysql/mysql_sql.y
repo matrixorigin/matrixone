@@ -365,7 +365,7 @@ import (
 %token <str> EXTENSION
 %token <str> RETENTION PERIOD
 %token <str> CLONE BRANCH LOG REVERT REBASE DIFF
-%token <str> CONFLICT CONFLICT_FAIL CONFLICT_SKIP CONFLICT_ACCEPT OUTPUT OBJECTLIST GETOBJECT GETDDL
+%token <str> CONFLICT CONFLICT_FAIL CONFLICT_SKIP CONFLICT_ACCEPT OUTPUT OBJECTLIST GETOBJECT GETDDL CHUNK
 
 // Sequence
 %token <str> INCREMENT CYCLE MINVALUE
@@ -8163,10 +8163,11 @@ branch_stmt:
     	}
     	$$ = t
     }
-|   GETOBJECT ident
+|   GETOBJECT ident CHUNK INTEGRAL
     {
     	t := tree.NewGetObject()
     	t.ObjectName = tree.Identifier($2.Compare())
+    	t.ChunkIndex = $4.(int64)
     	$$ = t
     }
 |   GETDDL getddl_opts

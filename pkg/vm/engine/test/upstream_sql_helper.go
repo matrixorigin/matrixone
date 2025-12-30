@@ -568,7 +568,7 @@ func (h *UpstreamSQLHelper) handleGetObjectDirectly(
 	objectName := stmt.ObjectName.String()
 
 	// Read object from engine using frontend function
-	content, err := frontend.ReadObjectFromEngine(ctx, h.engine, objectName)
+	content, err := frontend.ReadObjectFromEngine(ctx, h.engine, objectName, 0, -1)
 	if err != nil {
 		return nil, err
 	}

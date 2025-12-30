@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/publication"
@@ -1355,4 +1356,110 @@ func TestExecuteIterationWithIndex(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
+}
+
+func TestGetObjectChunk(t *testing.T) {
+	catalog.SetupDefines("")
+
+	var (
+		accountId = catalog.System_Account
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
+
+	// Start cluster
+	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeHandler.Close(true)
+		rpcAgent.Close()
+	}()
+
+	// Get fileservice from engine
+	de := disttaeEngine.Engine
+	fs := de.FS()
+	if fs == nil {
+		t.Fatal("fileservice is not available")
+	}
+
+	// Test case 1: Small file (<= 100MB) - should have 1 chunk
+	testObjectName1 := "test_object_small"
+	testContent1 := []byte("This is a small test file content")
+	err := fs.Write(ctxWithTimeout, fileservice.IOVector{
+		FilePath: testObjectName1,
+		Entries: []fileservice.IOEntry{
+			{
+				Offset: 0,
+				Size:   int64(len(testContent1)),
+				Data:   testContent1,
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	// Test ReadObjectFromEngine with chunk 0 (should return full content)
+	content, err := frontend.ReadObjectFromEngine(ctxWithTimeout, de, testObjectName1, 0, -1)
+	require.NoError(t, err)
+	require.Equal(t, testContent1, content)
+
+	// Test case 2: Large file (> 100MB) - should have multiple chunks
+	// Create a file larger than 100MB (e.g., 150MB)
+	const chunkSize = 100 * 1024 * 1024       // 100MB
+	largeFileSize := int64(150 * 1024 * 1024) // 150MB
+	testObjectName2 := "test_object_large"
+	largeContent := make([]byte, largeFileSize)
+	for i := range largeContent {
+		largeContent[i] = byte(i % 256)
+	}
+
+	// Write in chunks to avoid memory issues
+	const writeChunkSize = 10 * 1024 * 1024 // 10MB per write
+	writeVector := fileservice.IOVector{
+		FilePath: testObjectName2,
+	}
+	offset := int64(0)
+	for offset < largeFileSize {
+		chunkEnd := offset + writeChunkSize
+		if chunkEnd > largeFileSize {
+			chunkEnd = largeFileSize
+		}
+		writeVector.Entries = append(writeVector.Entries, fileservice.IOEntry{
+			Offset: offset,
+			Size:   chunkEnd - offset,
+			Data:   largeContent[offset:chunkEnd],
+		})
+		offset = chunkEnd
+	}
+	err = fs.Write(ctxWithTimeout, writeVector)
+	require.NoError(t, err)
+
+	// Verify file size
+	dirEntry, err := fs.StatFile(ctxWithTimeout, testObjectName2)
+	require.NoError(t, err)
+	require.Equal(t, largeFileSize, dirEntry.Size)
+
+	// Test ReadObjectFromEngine with different offsets and sizes
+	// Read first chunk (100MB)
+	chunk0, err := frontend.ReadObjectFromEngine(ctxWithTimeout, de, testObjectName2, 0, chunkSize)
+	require.NoError(t, err)
+	require.Equal(t, chunkSize, int64(len(chunk0)))
+	require.Equal(t, largeContent[0:chunkSize], chunk0)
+
+	// Read second chunk (50MB)
+	remainingSize := largeFileSize - chunkSize
+	chunk1, err := frontend.ReadObjectFromEngine(ctxWithTimeout, de, testObjectName2, chunkSize, remainingSize)
+	require.NoError(t, err)
+	require.Equal(t, remainingSize, int64(len(chunk1)))
+	require.Equal(t, largeContent[chunkSize:], chunk1)
+
+	// Test ReadObjectFromEngine with partial chunk
+	partialSize := int64(1024) // 1KB
+	partialChunk, err := frontend.ReadObjectFromEngine(ctxWithTimeout, de, testObjectName2, 0, partialSize)
+	require.NoError(t, err)
+	require.Equal(t, partialSize, int64(len(partialChunk)))
+	require.Equal(t, largeContent[0:partialSize], partialChunk)
 }
