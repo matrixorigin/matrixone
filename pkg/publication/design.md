@@ -216,19 +216,11 @@ collect change scan object
 
 **检查权限**
 
-**检查get object list的snapshot是否全部刷盘了**
-
 **object 分包**
-
-**索引表**
 
 **兼容性**
 
 **on error, reset and do snapshot**
-
-**ddl检查**
-
-**从云上读到本地和从本地读到云上**
 
 **如果写失败，要gc object**
 
