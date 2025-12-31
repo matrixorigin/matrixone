@@ -460,13 +460,13 @@ a    b    c    d    e
 alter table t7 add column f bool not null;
 select * from t7;
 a    b    c    d    e    f
-1    0    0.0    0    0.00    false
-2    0    0.0    0    0.00    false
+1    0    0.0    0    0.00    0
+2    0    0.0    0    0.00    0
 alter table t7 add column g double after a;
 select * from t7;
 a    g    b    c    d    e    f
-1    null    0    0.0    0    0.00    false
-2    null    0    0.0    0    0.00    false
+1    null    0    0.0    0    0.00    0
+2    null    0    0.0    0    0.00    0
 drop table t7;
 drop table if exists t8;
 create table t8(a int not null);
