@@ -234,6 +234,9 @@ func makeSpecialAggExec(
 		case WinIdOfRowNumber, WinIdOfRank, WinIdOfDenseRank:
 			exec, err := makeWindowExec(mp, id, isDistinct)
 			return exec, true, err
+		case WinIdOfLag, WinIdOfLead, WinIdOfFirstValue, WinIdOfLastValue, WinIdOfNthValue:
+			exec, err := makeValueWindowExec(mp, id, isDistinct, params)
+			return exec, true, err
 		}
 	}
 	return nil, false, nil
@@ -334,6 +337,40 @@ func makeWindowExec(
 		emptyNull: false,
 	}
 	return makeRankDenseRankRowNumber(mp, info), nil
+}
+
+func makeValueWindowExec(
+	mp *mpool.MPool, aggID int64, isDistinct bool, params []types.Type) (AggFuncExec, error) {
+	if isDistinct {
+		return nil, moerr.NewInternalErrorNoCtx("window function does not support `distinct`")
+	}
+
+	// Determine the return type based on the first parameter
+	var retType types.Type
+	if len(params) > 0 {
+		retType = params[0]
+	} else {
+		retType = types.T_any.ToType()
+	}
+
+	info := singleAggInfo{
+		aggID:     aggID,
+		distinct:  false,
+		argType:   retType,
+		retType:   retType,
+		emptyNull: true,
+	}
+	return makeValueWindowExecInternal(mp, info), nil
+}
+
+func makeValueWindowExecInternal(mp *mpool.MPool, info singleAggInfo) AggFuncExec {
+	return &valueWindowExec{
+		singleAggInfo: info,
+		mp:            mp,
+		values:        make([]*vector.Vector, 0),
+		partitions:    make([]int64, 0),
+		rowIndices:    make([]int64, 0),
+	}
 }
 
 type dummyBinaryMarshaler struct {

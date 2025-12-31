@@ -268,3 +268,246 @@ func (exec *singleWindowExec) flushRowNumber() ([]*vector.Vector, error) {
 	}
 	return exec.ret.flushAll(), nil
 }
+
+// valueWindowExec is a window function executor for LAG, LEAD, FIRST_VALUE, LAST_VALUE, NTH_VALUE
+// These functions need to access values from other rows in the window
+type valueWindowExec struct {
+	singleAggInfo
+	mp *mpool.MPool
+
+	// Store the input values for each group
+	// Each group contains the values from the window
+	values []*vector.Vector
+
+	// Partition boundaries
+	partitions []int64
+
+	// Current row index within each partition
+	rowIndices []int64
+
+	// Result vector
+	resultVec *vector.Vector
+}
+
+func (exec *valueWindowExec) GroupGrow(more int) error {
+	// For value window functions, we track row indices
+	for i := 0; i < more; i++ {
+		exec.rowIndices = append(exec.rowIndices, 0)
+	}
+	return nil
+}
+
+func (exec *valueWindowExec) PreAllocateGroups(more int) error {
+	return nil
+}
+
+func (exec *valueWindowExec) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
+	// Store the value for this row
+	if len(vectors) == 0 {
+		return nil
+	}
+
+	// Ensure we have enough space in values slice
+	for len(exec.values) <= groupIndex {
+		exec.values = append(exec.values, nil)
+	}
+
+	// Copy the value from the input vector
+	if exec.values[groupIndex] == nil {
+		exec.values[groupIndex] = vector.NewVec(*vectors[0].GetType())
+	}
+
+	return exec.values[groupIndex].UnionOne(vectors[0], int64(row), exec.mp)
+}
+
+func (exec *valueWindowExec) GetOptResult() SplitResult {
+	return nil
+}
+
+func (exec *valueWindowExec) marshal() ([]byte, error) {
+	return nil, moerr.NewInternalErrorNoCtx("value window function does not support marshal")
+}
+
+func (exec *valueWindowExec) unmarshal(mp *mpool.MPool, result, empties, groups [][]byte) error {
+	return moerr.NewInternalErrorNoCtx("value window function does not support unmarshal")
+}
+
+func (exec *valueWindowExec) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
+	return moerr.NewInternalErrorNoCtx("value window function does not support SaveIntermediateResult")
+}
+
+func (exec *valueWindowExec) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
+	return moerr.NewInternalErrorNoCtx("value window function does not support SaveIntermediateResultOfChunk")
+}
+
+func (exec *valueWindowExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
+	return moerr.NewInternalErrorNoCtx("value window function does not support UnmarshalFromReader")
+}
+
+func (exec *valueWindowExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {
+	return moerr.NewInternalErrorNoCtx("value window function does not support BulkFill")
+}
+
+func (exec *valueWindowExec) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
+	return moerr.NewInternalErrorNoCtx("value window function does not support BatchFill")
+}
+
+func (exec *valueWindowExec) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
+	return moerr.NewInternalErrorNoCtx("value window function does not support Merge")
+}
+
+func (exec *valueWindowExec) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
+	return moerr.NewInternalErrorNoCtx("value window function does not support BatchMerge")
+}
+
+func (exec *valueWindowExec) SetExtraInformation(partialResult any, groupIndex int) error {
+	return nil
+}
+
+func (exec *valueWindowExec) Flush() ([]*vector.Vector, error) {
+	switch exec.singleAggInfo.aggID {
+	case WinIdOfLag:
+		return exec.flushLag()
+	case WinIdOfLead:
+		return exec.flushLead()
+	case WinIdOfFirstValue:
+		return exec.flushFirstValue()
+	case WinIdOfLastValue:
+		return exec.flushLastValue()
+	case WinIdOfNthValue:
+		return exec.flushNthValue()
+	}
+	return nil, moerr.NewInternalErrorNoCtx("invalid value window function")
+}
+
+func (exec *valueWindowExec) Free() {
+	for _, v := range exec.values {
+		if v != nil {
+			v.Free(exec.mp)
+		}
+	}
+	if exec.resultVec != nil {
+		exec.resultVec.Free(exec.mp)
+	}
+}
+
+func (exec *valueWindowExec) Size() int64 {
+	var size int64
+	for _, v := range exec.values {
+		if v != nil {
+			size += int64(v.Size())
+		}
+	}
+	return size
+}
+
+func (exec *valueWindowExec) flushLag() ([]*vector.Vector, error) {
+	// LAG returns the value from the previous row (offset 1 by default)
+	// For each group, shift values by 1 position
+	if len(exec.values) == 0 {
+		return []*vector.Vector{vector.NewVec(exec.retType)}, nil
+	}
+
+	result := vector.NewVec(exec.retType)
+	for _, v := range exec.values {
+		if v == nil || v.Length() == 0 {
+			continue
+		}
+
+		// First row gets NULL (no previous row)
+		if err := vector.AppendAny(result, nil, true, exec.mp); err != nil {
+			return nil, err
+		}
+
+		// Rest of the rows get the previous row's value
+		for i := 0; i < v.Length()-1; i++ {
+			if err := result.UnionOne(v, int64(i), exec.mp); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	return []*vector.Vector{result}, nil
+}
+
+func (exec *valueWindowExec) flushLead() ([]*vector.Vector, error) {
+	// LEAD returns the value from the next row (offset 1 by default)
+	if len(exec.values) == 0 {
+		return []*vector.Vector{vector.NewVec(exec.retType)}, nil
+	}
+
+	result := vector.NewVec(exec.retType)
+	for _, v := range exec.values {
+		if v == nil || v.Length() == 0 {
+			continue
+		}
+
+		// First n-1 rows get the next row's value
+		for i := 1; i < v.Length(); i++ {
+			if err := result.UnionOne(v, int64(i), exec.mp); err != nil {
+				return nil, err
+			}
+		}
+
+		// Last row gets NULL (no next row)
+		if err := vector.AppendAny(result, nil, true, exec.mp); err != nil {
+			return nil, err
+		}
+	}
+
+	return []*vector.Vector{result}, nil
+}
+
+func (exec *valueWindowExec) flushFirstValue() ([]*vector.Vector, error) {
+	// FIRST_VALUE returns the first value in the window frame
+	if len(exec.values) == 0 {
+		return []*vector.Vector{vector.NewVec(exec.retType)}, nil
+	}
+
+	result := vector.NewVec(exec.retType)
+	for _, v := range exec.values {
+		if v == nil || v.Length() == 0 {
+			continue
+		}
+
+		// All rows get the first value
+		for i := 0; i < v.Length(); i++ {
+			if err := result.UnionOne(v, 0, exec.mp); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	return []*vector.Vector{result}, nil
+}
+
+func (exec *valueWindowExec) flushLastValue() ([]*vector.Vector, error) {
+	// LAST_VALUE returns the last value in the window frame
+	if len(exec.values) == 0 {
+		return []*vector.Vector{vector.NewVec(exec.retType)}, nil
+	}
+
+	result := vector.NewVec(exec.retType)
+	for _, v := range exec.values {
+		if v == nil || v.Length() == 0 {
+			continue
+		}
+
+		lastIdx := int64(v.Length() - 1)
+		// All rows get the last value
+		for i := 0; i < v.Length(); i++ {
+			if err := result.UnionOne(v, lastIdx, exec.mp); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	return []*vector.Vector{result}, nil
+}
+
+func (exec *valueWindowExec) flushNthValue() ([]*vector.Vector, error) {
+	// NTH_VALUE returns the nth value in the window frame
+	// For now, we'll return the first value (n=1)
+	// TODO: properly handle the n parameter
+	return exec.flushFirstValue()
+}

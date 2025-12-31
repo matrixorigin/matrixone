@@ -666,7 +666,15 @@ var functionIdRegister = map[string]int32{
 	"any_value":             ANY_VALUE,
 	"median":                MEDIAN,
 	// count window
-	"rank": RANK,
+	"rank":       RANK,
+	"row_number": ROW_NUMBER,
+	"dense_rank": DENSE_RANK,
+	// value window functions
+	"lag":         LAG,
+	"lead":        LEAD,
+	"first_value": FIRST_VALUE,
+	"last_value":  LAST_VALUE,
+	"nth_value":   NTH_VALUE,
 	// builtin
 	// whoever edit this, please follow the lexical order, or come up with a better ordering method
 	// binary functions
@@ -821,7 +829,6 @@ var functionIdRegister = map[string]int32{
 	"least":                          LEAST,
 	"roles_graphml":                  ROLES_GRAPHML,
 	"row_count":                      ROW_COUNT,
-	"row_number":                     ROW_NUMBER,
 	"version":                        VERSION,
 	"collation":                      COLLATION,
 	"json_array":                     JSON_ARRAY,
@@ -843,7 +850,6 @@ var functionIdRegister = map[string]int32{
 	"try_moplugin":                   TRY_WASM,
 	"enable_fault_injection":         ENABLE_FAULT_INJECTION,
 	"disable_fault_injection":        DISABLE_FAULT_INJECTION,
-	"dense_rank":                     DENSE_RANK,
 	"mo_win_divisor":                 MO_WIN_DIVISOR,
 	"add_fault_point":                ADD_FAULT_POINT,
 	"remove_fault_point":             REMOVE_FAULT_POINT,
