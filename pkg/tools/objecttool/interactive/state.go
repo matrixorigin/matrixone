@@ -63,6 +63,9 @@ type State struct {
 	metaCols   []ColInfo             // Metadata columns schema
 	metaOffset int                   // Offset for metadata rows
 	blkSummary map[uint32]BlkSummary // Block summary info (for BlkMeta mode)
+
+	// Block offsets cache (for fast search)
+	blockOffsets []int64 // Starting row number for each block
 }
 
 // ColInfo contains column information
@@ -90,7 +93,7 @@ type ObjSummary struct {
 }
 
 func NewState(ctx context.Context, reader *objecttool.ObjectReader) *State {
-	return &State{
+	s := &State{
 		reader:        reader,
 		formatter:     objecttool.NewFormatterRegistry(),
 		ctx:           ctx,
@@ -99,6 +102,32 @@ func NewState(ctx context.Context, reader *objecttool.ObjectReader) *State {
 		rowRangeStart: -1,
 		rowRangeEnd:   -1,
 	}
+	s.initBlockOffsets()
+	return s
+}
+
+// initBlockOffsets initializes the block offsets cache
+func (s *State) initBlockOffsets() {
+	blockCount := s.reader.BlockCount()
+	s.blockOffsets = make([]int64, blockCount)
+
+	offset := int64(0)
+	for i := uint32(0); i < blockCount; i++ {
+		s.blockOffsets[i] = offset
+		batch, release, err := s.reader.ReadBlock(s.ctx, i)
+		if err == nil {
+			offset += int64(batch.RowCount())
+			release()
+		}
+	}
+}
+
+// GetBlockStartRow returns the starting row number for a block
+func (s *State) GetBlockStartRow(blockIdx uint32) int64 {
+	if blockIdx >= uint32(len(s.blockOffsets)) {
+		return 0
+	}
+	return s.blockOffsets[blockIdx]
 }
 
 // SetRowRange sets the row range filter
@@ -153,12 +182,24 @@ func (s *State) CurrentRows() ([][]string, []string, error) {
 		end = totalRows
 	}
 
-	// Apply row range filter if set (only filter within current block)
-	if s.rowRangeStart >= 0 && start < int(s.rowRangeStart) {
-		start = int(s.rowRangeStart)
-	}
-	if s.rowRangeEnd >= 0 && end > int(s.rowRangeEnd)+1 {
-		end = int(s.rowRangeEnd) + 1
+	// Apply row range filter if set (convert global row numbers to block offsets)
+	if s.rowRangeStart >= 0 || s.rowRangeEnd >= 0 {
+		blockStartRow := s.GetBlockStartRow(s.currentBlock)
+
+		// Convert global range to block-relative offsets
+		if s.rowRangeStart >= 0 {
+			localStart := int(s.rowRangeStart - blockStartRow)
+			if localStart > start {
+				start = localStart
+			}
+		}
+
+		if s.rowRangeEnd >= 0 {
+			localEnd := int(s.rowRangeEnd-blockStartRow) + 1
+			if localEnd < end {
+				end = localEnd
+			}
+		}
 	}
 
 	if start >= end || start >= totalRows {
@@ -280,13 +321,13 @@ func (s *State) NextPage() error {
 	}
 
 	totalRows := s.currentBatch.RowCount()
-	
+
 	// Apply row range filter
 	maxRow := totalRows
 	if s.rowRangeEnd >= 0 && int(s.rowRangeEnd)+1 < maxRow {
 		maxRow = int(s.rowRangeEnd) + 1
 	}
-	
+
 	newOffset := s.rowOffset + s.pageSize
 
 	if newOffset < maxRow {
@@ -369,22 +410,25 @@ func (s *State) ScrollDown() error {
 	}
 
 	totalRows := s.currentBatch.RowCount()
-	
-	// Apply row range filter
-	maxRow := totalRows
-	if s.rowRangeEnd >= 0 && int(s.rowRangeEnd)+1 < maxRow {
-		maxRow = int(s.rowRangeEnd) + 1
+	blockStartRow := s.GetBlockStartRow(s.currentBlock)
+
+	// Check if we can scroll down within range filter
+	if s.rowRangeEnd >= 0 {
+		currentGlobalRow := blockStartRow + int64(s.rowOffset)
+		if currentGlobalRow >= s.rowRangeEnd {
+			return moerr.NewInternalErrorf(s.ctx, "already at last row of range")
+		}
 	}
-	
-	// If current row is not the last row of range, scroll down one line
-	if s.rowOffset+1 < maxRow {
+
+	// If current row is not the last row, scroll down one line
+	if s.rowOffset+1 < totalRows {
 		s.rowOffset++
 		return nil
 	}
 
 	// If row range is set, don't switch blocks
 	if s.rowRangeStart >= 0 || s.rowRangeEnd >= 0 {
-		return moerr.NewInternalErrorf(s.ctx, "already at last row")
+		return moerr.NewInternalErrorf(s.ctx, "already at last row of range")
 	}
 
 	// Already at the last row of current block, try to switch to next block
@@ -410,9 +454,24 @@ func (s *State) ScrollUp() error {
 	}
 
 	// Data mode
+	blockStartRow := s.GetBlockStartRow(s.currentBlock)
+
+	// Check if we can scroll up within range filter
+	if s.rowRangeStart >= 0 {
+		currentGlobalRow := blockStartRow + int64(s.rowOffset)
+		if currentGlobalRow <= s.rowRangeStart {
+			return moerr.NewInternalErrorf(s.ctx, "already at first row of range")
+		}
+	}
+
 	if s.rowOffset > 0 {
 		s.rowOffset--
 		return nil
+	}
+
+	// If row range is set, don't switch blocks
+	if s.rowRangeStart >= 0 || s.rowRangeEnd >= 0 {
+		return moerr.NewInternalErrorf(s.ctx, "already at first row of range")
 	}
 
 	// Already at the first row of current block, try to switch to previous block
@@ -499,13 +558,7 @@ func (s *State) SetFormat(colIdx uint16, formatterName string) error {
 
 // GlobalRowOffset returns current global row offset
 func (s *State) GlobalRowOffset() int64 {
-	var offset int64
-	for i := uint32(0); i < s.currentBlock; i++ {
-		// Simplified handling here, should actually cache row count for each block
-		// Temporarily return approximate value
-		offset += 8192 // Assume 8192 rows per block
-	}
-	return offset + int64(s.rowOffset)
+	return s.GetBlockStartRow(s.currentBlock) + int64(s.rowOffset)
 }
 
 func (s *State) releaseCurrentBatch() {

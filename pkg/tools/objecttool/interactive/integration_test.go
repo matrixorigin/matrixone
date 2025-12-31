@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/tools/interactive"
 	"github.com/matrixorigin/matrixone/pkg/tools/objecttool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -345,7 +346,7 @@ func TestViewRendering(t *testing.T) {
 	m := model{
 		state:      state,
 		cmdInput:   "",
-		cmdHistory: []string{},
+		cmdHistory: interactive.NewHistoryManager(100),
 	}
 
 	// Test View rendering - should show table
@@ -709,7 +710,7 @@ func TestModelView(t *testing.T) {
 	m := model{
 		state:      state,
 		cmdInput:   "",
-		cmdHistory: []string{},
+		cmdHistory: interactive.NewHistoryManager(100),
 	}
 
 	// Test View with different states

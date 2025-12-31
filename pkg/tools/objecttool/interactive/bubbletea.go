@@ -17,8 +17,6 @@ package interactive
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -26,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/tools/interactive"
 	"github.com/matrixorigin/matrixone/pkg/tools/objecttool"
 )
 
@@ -35,8 +34,7 @@ type model struct {
 	cmdMode       bool
 	cmdInput      string
 	cmdCursor     int // Command line cursor position
-	cmdHistory    []string
-	historyIndex  int
+	cmdHistory    *interactive.HistoryManager
 	hScrollOffset int // Horizontal scroll offset
 
 	// Search related
@@ -74,6 +72,7 @@ func (m model) handleBrowseMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.message = ""
 	switch msg.String() {
 	case "q", "ctrl+c":
+		m.cmdHistory.SaveToFile("object_cmd_history.txt")
 		return m, tea.Quit
 	case "j", "down":
 		m.state.ScrollDown()
@@ -102,12 +101,12 @@ func (m model) handleBrowseMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cmdMode = true
 		m.cmdInput = ""
 		m.cmdCursor = 0
-		m.historyIndex = len(m.cmdHistory)
+		m.cmdHistory.Reset()
 	case "/":
 		m.cmdMode = true
 		m.cmdInput = "search "
 		m.cmdCursor = len(m.cmdInput)
-		m.historyIndex = len(m.cmdHistory)
+		m.cmdHistory.Reset()
 	case "n":
 		// Next search result
 		if m.searchTerm != "" {
@@ -148,8 +147,7 @@ func (m model) handleCommandInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 		// Add to history
-		m.cmdHistory = append(m.cmdHistory, m.cmdInput)
-		m.historyIndex = len(m.cmdHistory)
+		m.cmdHistory.Add(m.cmdInput)
 
 		// Special handling for search command
 		if searchCmd, ok := cmd.(*SearchCommand); ok {
@@ -166,6 +164,7 @@ func (m model) handleCommandInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if quit {
+			m.cmdHistory.SaveToFile("object_cmd_history.txt")
 			return m, tea.Quit
 		}
 
@@ -180,23 +179,16 @@ func (m model) handleCommandInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "up":
 		// History up
-		if len(m.cmdHistory) > 0 && m.historyIndex > 0 {
-			m.historyIndex--
-			m.cmdInput = m.cmdHistory[m.historyIndex]
+		if cmd := m.cmdHistory.Up(); cmd != "" {
+			m.cmdInput = cmd
 			m.cmdCursor = len(m.cmdInput)
 		}
 		return m, nil
 	case "down":
 		// History down
-		if len(m.cmdHistory) > 0 && m.historyIndex < len(m.cmdHistory)-1 {
-			m.historyIndex++
-			m.cmdInput = m.cmdHistory[m.historyIndex]
-			m.cmdCursor = len(m.cmdInput)
-		} else if m.historyIndex == len(m.cmdHistory)-1 {
-			m.historyIndex = len(m.cmdHistory)
-			m.cmdInput = ""
-			m.cmdCursor = 0
-		}
+		cmd := m.cmdHistory.Down()
+		m.cmdInput = cmd
+		m.cmdCursor = len(m.cmdInput)
 		return m, nil
 	case "left":
 		// Move cursor left
@@ -214,7 +206,7 @@ func (m model) handleCommandInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cmdMode = false
 		m.cmdInput = ""
 		m.cmdCursor = 0
-		m.historyIndex = len(m.cmdHistory)
+		m.cmdHistory.Reset()
 	case "ctrl+a":
 		// Move cursor to beginning of line
 		m.cmdCursor = 0
@@ -312,8 +304,33 @@ func (m model) View() string {
 	if m.state != nil && m.state.reader != nil {
 		info := m.state.reader.Info()
 		rows, _, _ := m.state.CurrentRows()
-		start := m.state.GlobalRowOffset() + 1
-		end := start + int64(len(rows)) - 1
+
+		// Calculate row numbers
+		globalStart := m.state.GlobalRowOffset() + 1
+		globalEnd := globalStart + int64(len(rows)) - 1
+
+		var start, end, totalRows int64
+		rangeInfo := ""
+
+		if m.state.rowRangeStart >= 0 || m.state.rowRangeEnd >= 0 {
+			// With range filter: show relative position within range
+			totalRows = m.state.FilteredRowCount()
+			rangeInfo = fmt.Sprintf(" [Range: %d-%d]", m.state.rowRangeStart, m.state.rowRangeEnd)
+
+			// Calculate relative position (1-based within range)
+			rangeStart := m.state.rowRangeStart
+			if rangeStart < 0 {
+				rangeStart = 0
+			}
+			start = globalStart - rangeStart
+			end = globalEnd - rangeStart
+		} else {
+			// Without filter: show global position
+			start = globalStart
+			end = globalEnd
+			totalRows = int64(info.RowCount)
+		}
+
 		mode := "Table"
 		if m.state.verticalMode {
 			mode = "Vertical"
@@ -328,13 +345,6 @@ func (m model) View() string {
 		textColor := "\033[97m" // Bright white text
 		reset := "\033[0m"      // Reset color
 
-		// Status information - show filtered row count if range is set
-		totalRows := int64(info.RowCount)
-		rangeInfo := ""
-		if m.state.rowRangeStart >= 0 || m.state.rowRangeEnd >= 0 {
-			totalRows = m.state.FilteredRowCount()
-			rangeInfo = fmt.Sprintf(" [Range: %d-%d]", m.state.rowRangeStart, m.state.rowRangeEnd)
-		}
 		statusText := fmt.Sprintf(" %s │ Rows %d-%d/%d%s │ Block %d/%d │ Cols %d-%d/%d ",
 			mode, start, end, totalRows, rangeInfo, m.state.currentBlock+1, info.BlockCount,
 			m.hScrollOffset+1, m.hScrollOffset+len(visibleCols), len(cols))
@@ -446,15 +456,8 @@ func (m *model) findNextMatch() {
 		rowCount := batch.RowCount()
 		cols := m.state.reader.Columns()
 
-		// Calculate starting row number of this block
-		blockStartRow := int64(0)
-		for i := uint32(0); i < blockIdx; i++ {
-			b, r, e := m.state.reader.ReadBlock(m.state.ctx, i)
-			if e == nil {
-				blockStartRow += int64(b.RowCount())
-				r()
-			}
-		}
+		// Get block start row from cache
+		blockStartRow := m.state.GetBlockStartRow(blockIdx)
 
 		// Determine search start row
 		startRowInBlock := 0
@@ -542,15 +545,8 @@ func (m *model) findPrevMatch() {
 		rowCount := batch.RowCount()
 		cols := m.state.reader.Columns()
 
-		// Calculate starting row number of this block
-		blockStartRow := int64(0)
-		for i := uint32(0); i < uint32(blockIdx); i++ {
-			b, r, e := m.state.reader.ReadBlock(m.state.ctx, i)
-			if e == nil {
-				blockStartRow += int64(b.RowCount())
-				r()
-			}
-		}
+		// Get block start row from cache
+		blockStartRow := m.state.GetBlockStartRow(uint32(blockIdx))
 
 		// Determine search end row
 		endRowInBlock := rowCount - 1
@@ -1013,10 +1009,10 @@ func RunBubbletea(path string) error {
 
 // ViewOptions contains options for viewing object data
 type ViewOptions struct {
-	StartRow      int64               // Start row (0-based)
-	EndRow        int64               // End row (inclusive, -1 means all)
-	ColumnNames   map[uint16]string   // Custom column names
-	ColumnFormats map[uint16]string   // Custom column formats (e.g., "ts", "objectstats", "hex")
+	StartRow      int64             // Start row (0-based)
+	EndRow        int64             // End row (inclusive, -1 means all)
+	ColumnNames   map[uint16]string // Custom column names
+	ColumnFormats map[uint16]string // Custom column formats (e.g., "ts", "objectstats", "hex")
 }
 
 // RunBubbleteaWithOptions runs interactive interface with options
@@ -1051,18 +1047,19 @@ func RunBubbleteaWithOptions(path string, opts *ViewOptions) error {
 	}
 
 	m := model{
-		state: state,
+		state:      state,
+		cmdHistory: interactive.NewHistoryManager(100),
 	}
 
 	// Load history
-	m.loadHistory()
+	m.cmdHistory.LoadFromFile("object_cmd_history.txt")
 
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	result, err := p.Run()
 
 	// Save history
 	if finalModel, ok := result.(model); ok {
-		finalModel.saveHistory()
+		finalModel.cmdHistory.SaveToFile("object_cmd_history.txt")
 	}
 
 	return err
@@ -1209,57 +1206,6 @@ func (m model) getVisibleColumns(cols []objecttool.ColInfo) []uint16 {
 }
 
 // loadHistory loads command history
-func (m *model) loadHistory() {
-	historyFile := getHistoryFile()
-	if historyFile == "" {
-		return
-	}
-
-	data, err := os.ReadFile(historyFile)
-	if err != nil {
-		return
-	}
-
-	lines := strings.Split(string(data), "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line != "" {
-			m.cmdHistory = append(m.cmdHistory, line)
-		}
-	}
-	m.historyIndex = len(m.cmdHistory)
-}
-
-// saveHistory saves command history
-func (m *model) saveHistory() {
-	historyFile := getHistoryFile()
-	if historyFile == "" {
-		return
-	}
-
-	// Ensure directory exists
-	dir := filepath.Dir(historyFile)
-	os.MkdirAll(dir, 0755)
-
-	// Only save last 100 records
-	start := 0
-	if len(m.cmdHistory) > 100 {
-		start = len(m.cmdHistory) - 100
-	}
-
-	content := strings.Join(m.cmdHistory[start:], "\n")
-	os.WriteFile(historyFile, []byte(content), 0644)
-}
-
-// getHistoryFile gets history file path
-func getHistoryFile() string {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(homeDir, ".mo_object_history")
-}
-
 // SearchCommand is the search command
 type SearchCommand struct {
 	Pattern string

@@ -51,18 +51,18 @@ func setupLogFile() (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	logDir := homeDir + "/.mo-tool"
 	if err := os.MkdirAll(logDir, 0755); err != nil {
 		return nil, err
 	}
-	
+
 	logPath := logDir + "/ckp.log"
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// Redirect logs to file
 	logCfg := &logutil.LogConfig{
 		Level:    "info",
@@ -72,7 +72,7 @@ func setupLogFile() (*os.File, error) {
 		MaxDays:  7,
 	}
 	logutil.SetupMOLogger(logCfg)
-	
+
 	return logFile, nil
 }
 

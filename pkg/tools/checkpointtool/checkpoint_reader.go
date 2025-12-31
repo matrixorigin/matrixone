@@ -412,7 +412,7 @@ func (r *CheckpointReader) GetObjectEntries(entry *checkpoint.CheckpointEntry, t
 		if bat.RowCount() == 0 {
 			continue
 		}
-		
+
 		// Check if timestamp columns exist
 		var createTSVec, deleteTSVec []types.TS
 		if len(bat.Vecs) > ckputil.TableObjectsAttr_CreateTS_Idx {
@@ -426,10 +426,10 @@ func (r *CheckpointReader) GetObjectEntries(entry *checkpoint.CheckpointEntry, t
 			if rangeIdx >= len(allRanges) {
 				break
 			}
-			
+
 			rng := allRanges[rangeIdx]
 			rangeIdx++
-			
+
 			if rng.TableID != tableID {
 				continue
 			}
@@ -437,7 +437,7 @@ func (r *CheckpointReader) GetObjectEntries(entry *checkpoint.CheckpointEntry, t
 			entry := &ObjectEntryInfo{
 				Range: rng,
 			}
-			
+
 			// Set timestamps if available
 			if createTSVec != nil && i < len(createTSVec) {
 				entry.CreateTime = createTSVec[i]
@@ -577,4 +577,3 @@ func vecValueToString(vec *vector.Vector, idx int) string {
 		return fmt.Sprintf("<%s>", vec.GetType().String())
 	}
 }
-

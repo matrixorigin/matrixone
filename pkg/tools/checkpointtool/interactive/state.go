@@ -262,7 +262,7 @@ func (s *State) SelectTable(tableID uint64) error {
 	s.selectedTable = tableID
 	s.mode = ViewModeTableDetail
 	s.scrollOffset = 0
-	
+
 	// Load object entries with timestamps
 	dataEntries, tombEntries, err := s.reader.GetObjectEntries(s.entries[s.selectedEntry], tableID)
 	if err != nil {
@@ -270,7 +270,7 @@ func (s *State) SelectTable(tableID uint64) error {
 	}
 	s.dataEntries = dataEntries
 	s.tombEntries = tombEntries
-	
+
 	return nil
 }
 
@@ -486,7 +486,6 @@ func (s *State) Breadcrumb() string {
 		return "📍"
 	}
 }
-
 
 // IsRegexSearch returns if using regex search
 func (s *State) IsRegexSearch() bool {
