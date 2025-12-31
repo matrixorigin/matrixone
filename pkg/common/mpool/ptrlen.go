@@ -43,7 +43,41 @@ func (p *PtrLen) FromByteSlice(bs []byte) {
 }
 
 func (p *PtrLen) ToByteSlice() []byte {
+	if p.ptr == nil {
+		return nil
+	}
 	return unsafe.Slice((*byte)(unsafe.Pointer(p.ptr)), int(p.len))
+}
+
+func (p *PtrLen) Replace(mp *MPool, bs []byte) error {
+	if len(bs) == 0 {
+		p.Free(mp)
+		return nil
+	}
+
+	if len(bs) <= int(p.len) {
+		copy(p.ToByteSlice(), bs)
+		p.len = int32(len(bs))
+		return nil
+	}
+
+	pbs, err := mp.ReallocZero(p.ToByteSlice(), int(len(bs)), true)
+	if err != nil {
+		return err
+	}
+	copy(pbs, bs)
+	p.FromByteSlice(pbs)
+	return nil
+}
+
+func (p *PtrLen) Free(mp *MPool) {
+	if p.ptr == nil {
+		return
+	}
+
+	mp.Free(p.ToByteSlice())
+	p.ptr = nil
+	p.len = 0
 }
 
 func PtrLenToSlice[T any](p *PtrLen) []T {
