@@ -60,7 +60,7 @@ INSERT INTO t_sum_overflow VALUES (9223372036854775807);
 INSERT INTO t_sum_overflow VALUES (9223372036854775807);
 INSERT INTO t_sum_overflow VALUES (9223372036854775807);
 SELECT SUM(val) FROM t_sum_overflow;
-Data truncation: data out of range: data type int64, SUM overflow in (9223372036854775807 + 9223372036854775807)
+Data truncation: data out of range: data type int64, (9223372036854775807 + 9223372036854775807)
 SELECT SUM(CAST(val AS DECIMAL(38,0))) FROM t_sum_overflow;
 SUM(cast(val as decimal(38)))
 27670116110564327421
@@ -449,7 +449,7 @@ INSERT INTO t_unique (code) VALUES (NULL);
 INSERT INTO t_unique (code) VALUES (NULL);
 INSERT INTO t_unique (code) VALUES ('A');
 INSERT INTO t_unique (code) VALUES ('A');
-Duplicate entry 'A' for key '(.*)'
+Duplicate entry 'A' for key 'code'
 SELECT * FROM t_unique ORDER BY id;
 id    code
 1    null
@@ -467,7 +467,7 @@ INSERT INTO t_not_null (name) VALUES (NULL);
 constraint violation: Column 'name' cannot be null
 SELECT * FROM t_not_null ORDER BY id;
 id    name
-1
+1    
 2    test
 DROP TABLE t_not_null;
 DROP TABLE IF EXISTS t_mixed;
