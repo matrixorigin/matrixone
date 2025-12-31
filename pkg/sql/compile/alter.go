@@ -136,7 +136,14 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 	}
 
 	// 3. create temporary replica table which doesn't have foreign key constraints
-	err = c.runSql(qry.CreateTmpTableSql)
+	// Get logicalId from tableDef and pass it when creating the temporary table
+	oldLogicalId := qry.GetTableDef().GetLogicalId()
+	createTmpOpts := executor.StatementOption{}
+
+	if oldLogicalId != 0 {
+		createTmpOpts = createTmpOpts.WithKeepLogicalId(oldLogicalId)
+	}
+	err = c.runSqlWithOptions(qry.CreateTmpTableSql, createTmpOpts)
 	if err != nil {
 		c.proc.Error(c.proc.Ctx, "Create copy table for alter table",
 			zap.String("databaseName", dbName),
