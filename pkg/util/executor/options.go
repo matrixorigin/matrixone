@@ -367,6 +367,15 @@ func (opts StatementOption) WithKeepAutoIncrement(keep uint64) StatementOption {
 	return opts
 }
 
+func (opts StatementOption) KeepLogicalId() uint64 {
+	return opts.keepLogicalId
+}
+
+func (opts StatementOption) WithKeepLogicalId(keep uint64) StatementOption {
+	opts.keepLogicalId = keep
+	return opts
+}
+
 func (opts StatementOption) WithIgnorePublish() StatementOption {
 	opts.ignorePublish = true
 	return opts

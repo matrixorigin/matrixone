@@ -1,0 +1,48 @@
+set global enable_privilege_cache = off;
+drop user if exists truncate_test_user;
+drop role if exists truncate_test_role;
+drop database if exists truncate_test_db;
+create database truncate_test_db;
+use truncate_test_db;
+create table test_table (id int, name varchar(50));
+insert into test_table values (1, 'before_truncate');
+create role truncate_test_role;
+grant select on table truncate_test_db.test_table to truncate_test_role;
+create user truncate_test_user identified by '123456';
+grant truncate_test_role to truncate_test_user;
+select privilege_name, obj_type, privilege_level from mo_catalog.mo_role_privs where role_name = 'truncate_test_role';
+➤ privilege_name[12,-1,0]  ¦  obj_type[12,-1,0]  ¦  privilege_level[12,-1,0]  𝄀
+select  ¦  table  ¦  d.t
+select * from truncate_test_db.test_table;
+➤ id[4,32,0]  ¦  name[12,-1,0]  𝄀
+1  ¦  before_truncate
+truncate table test_table;
+insert into test_table values (2, 'after_truncate');
+alter table test_table add column age int DEFAULT 0;
+select * from truncate_test_db.test_table;
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  age[4,32,0]  𝄀
+2  ¦  after_truncate  ¦  0
+select privilege_name, obj_type, privilege_level from mo_catalog.mo_role_privs where role_name = 'truncate_test_role';
+➤ privilege_name[12,-1,0]  ¦  obj_type[12,-1,0]  ¦  privilege_level[12,-1,0]  𝄀
+select  ¦  table  ¦  d.t
+drop user if exists truncate_test_user;
+drop role if exists truncate_test_role;
+drop database if exists truncate_test_db;
+drop account if exists truncate_account_1;
+create account truncate_account_1 ADMIN_NAME admin IDENTIFIED BY '111111';
+create role role1;
+grant create database on account * to role1;
+create user user1 identified by '123456' default role role1;
+create database db1;
+create table db1.t1(a int);
+insert into db1.t1 values(1);
+select * from db1.t1;
+➤ a[4,32,0]  𝄀
+1
+truncate table db1.t1;
+insert into db1.t1 values(2);
+select * from db1.t1;
+➤ a[4,32,0]  𝄀
+2
+drop account if exists truncate_account_1;
+set global enable_privilege_cache = on;

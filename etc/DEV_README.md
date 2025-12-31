@@ -1797,6 +1797,69 @@ docker network inspect docker-multi-cn-local-disk_matrixone-net
 docker exec mo-cn1 ping mo-log
 ```
 
+### Performance Profiling
+
+For performance analysis and debugging, MatrixOne supports CPU, heap, goroutine, block, and mutex profiling.
+
+**For Docker Compose Multi-CN Cluster (`make dev-up`):**
+
+Profiling is **enabled by default** for all CN and TN services with HTTP endpoints exposed:
+
+```bash
+# After running make dev-up, access profiling endpoints:
+# CN1 profiling
+curl http://localhost:6061/debug/pprof/heap
+go tool pprof http://localhost:6061/debug/pprof/heap
+
+# CN2 profiling
+curl http://localhost:6062/debug/pprof/heap
+go tool pprof http://localhost:6062/debug/pprof/heap
+
+# TN profiling
+curl http://localhost:6063/debug/pprof/heap
+go tool pprof http://localhost:6063/debug/pprof/heap
+```
+
+**Default Configuration:**
+- Block profiling: `rate=100` (production recommended)
+- Mutex profiling: `fraction=100` (production recommended)
+- HTTP profiling endpoints: Enabled on ports 6061 (CN1), 6062 (CN2), 6063 (TN)
+
+**Customize Profiling Settings:**
+
+You can control profiling behavior via environment variables:
+
+```bash
+# Disable profiling completely (no overhead)
+BLOCK_PROFILE_RATE=0 MUTEX_PROFILE_FRACTION=0 make dev-up
+
+# Maximum detail for debugging (higher overhead)
+BLOCK_PROFILE_RATE=1 MUTEX_PROFILE_FRACTION=1 make dev-up
+
+# Custom rates
+BLOCK_PROFILE_RATE=1000 MUTEX_PROFILE_FRACTION=1000 make dev-up
+```
+
+**For Standalone Mode:**
+
+```bash
+# Enable block and mutex profiling
+./mo-service \
+  -block-profile-rate=100 \
+  -mutex-profile-fraction=100 \
+  -launch ./etc/launch/launch.toml
+
+# Or enable HTTP profiling endpoint
+./mo-service -debug-http=:6060 -launch ./etc/launch/launch.toml
+# Then access: http://localhost:6060/debug/pprof/
+```
+
+**Recommended Settings:**
+- **Production**: `-block-profile-rate=100 -mutex-profile-fraction=100` (low overhead)
+- **Debugging**: `-block-profile-rate=1 -mutex-profile-fraction=1` (detailed data)
+
+📖 **For detailed profiling documentation, see [BUILD.md Performance Profiling section](../../BUILD.md#performance-profiling)**
+
 ---
 
 ## Comparison with Other Deployment Methods

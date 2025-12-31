@@ -18,9 +18,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -425,6 +428,9 @@ type mergeTriggerArg struct {
 	tombstoneL1Size  int
 	tombstoneL1Count int
 	tombstoneL2Count int
+
+	objects      []string
+	objectsLevel int
 }
 
 func (arg *mergeTriggerArg) String() string {
@@ -441,6 +447,8 @@ func (arg *mergeTriggerArg) String() string {
 	case "vacuum":
 		return fmt.Sprintf("trigger vacuum for table %s, start: %d, end: %d, duration: %s, all: %v",
 			arg.tbl.GetNameDesc(), arg.vacuumStart, arg.vacuumEnd, arg.vacuumDuration, arg.vacuumAll)
+	case "objects":
+		return fmt.Sprintf("trigger merge for table %s, objects: %v, level: %d", arg.tbl.GetNameDesc(), arg.objects, arg.objectsLevel)
 	}
 	return ""
 }
@@ -454,7 +462,7 @@ func (arg *mergeTriggerArg) PrepareCommand() *cobra.Command {
 
 	cmd.Flags().SortFlags = false
 
-	cmd.Flags().StringVar(&arg.kind, "kind", "none", "trigger kind(none, l0, ln, tombstone, vacuum)")
+	cmd.Flags().StringVar(&arg.kind, "kind", "none", "trigger kind(none, l0, ln, tombstone, vacuum, objects)")
 	cmd.Flags().DurationVar(&arg.patchExpire, "patch-expire", 0, "patch expire, keep it zero will trigger once")
 
 	cmd.Flags().BoolVar(&arg.handleBigOld, "handle-big-old", false, "handle big old data objects for special big table")
@@ -480,6 +488,9 @@ func (arg *mergeTriggerArg) PrepareCommand() *cobra.Command {
 	cmd.Flags().IntVar(&arg.tombstoneL1Size, "tombstone-l1-size", merge.DefaultTombstoneOpts.L1Size, "tombstone l1 size")
 	cmd.Flags().IntVar(&arg.tombstoneL1Count, "tombstone-l1-count", merge.DefaultTombstoneOpts.L1Count, "tombstone l1 count")
 	cmd.Flags().IntVar(&arg.tombstoneL2Count, "tombstone-l2-count", merge.DefaultTombstoneOpts.L2Count, "tombstone l2 count")
+
+	cmd.Flags().StringSliceVar(&arg.objects, "objects", nil, "object names to merge (format: uuid_num, e.g., 018f27b6-c6e1-7bef-a1e8-0f639ddedeef_0)")
+	cmd.Flags().IntVar(&arg.objectsLevel, "objects-level", 0, "level for merged objects (0-7)")
 
 	return cmd
 }
@@ -557,9 +568,57 @@ func (arg *mergeTriggerArg) Run() error {
 			WithCheckBigOnly(!arg.vacuumAll)
 		trigger.WithVacuumCheck(opts)
 		return arg.ctx.db.MergeScheduler.SendTrigger(trigger)
+	case "objects":
+		if len(arg.objects) < 2 {
+			return moerr.NewInvalidInputNoCtxf("no enough objects specified")
+		}
+		if arg.objectsLevel < 0 || arg.objectsLevel > 7 {
+			return moerr.NewInvalidInputNoCtxf("invalid objects level: %d, must be between 0 and 7", arg.objectsLevel)
+		}
+		objStats, err := arg.parseObjectsToMergeTasks()
+		if err != nil {
+			return err
+		}
+		// Convert []objectio.ObjectStats to []*objectio.ObjectStats
+		objStatsPtrs := make([]*objectio.ObjectStats, len(objStats))
+		for i := range objStats {
+			objStatsPtrs[i] = &objStats[i]
+		}
+		tasks := merge.NewMergeTaskFromSpecObjects(objStatsPtrs, int8(arg.objectsLevel))
+		trigger.WithAssignedTasks(tasks)
+		return arg.ctx.db.MergeScheduler.SendTrigger(trigger)
 	default:
 		return moerr.NewInvalidInputNoCtxf("invalid kind: %s", arg.kind)
 	}
+}
+
+func (arg *mergeTriggerArg) parseObjectsToMergeTasks() ([]objectio.ObjectStats, error) {
+	objStats := make([]objectio.ObjectStats, 0, len(arg.objects))
+
+	for _, objStr := range arg.objects {
+		objStr = strings.TrimSpace(objStr)
+		parts := strings.Split(objStr, "_")
+		if len(parts) != 2 {
+			return nil, moerr.NewInvalidInputNoCtxf("invalid object name format: %s, expected format: uuid_num", objStr)
+		}
+
+		uuid, err := types.ParseUuid(parts[0])
+		if err != nil {
+			return nil, moerr.NewInvalidInputNoCtxf("invalid uuid in object name %s: %v", objStr, err)
+		}
+
+		num, err := strconv.Atoi(parts[1])
+		if err != nil {
+			return nil, moerr.NewInvalidInputNoCtxf("invalid num in object name %s: %v", objStr, err)
+		}
+
+		objectName := objectio.BuildObjectName(&uuid, uint16(num))
+		obj := objectio.NewObjectStats()
+		objectio.SetObjectStatsObjectName(obj, objectName)
+		objStats = append(objStats, *obj)
+	}
+
+	return objStats, nil
 }
 
 // endregion: trigger

@@ -467,6 +467,7 @@ func DeepCopyTableDef(table *plan.TableDef, withCols bool) *plan.TableDef {
 		Name:           table.Name,
 		Hidden:         table.Hidden,
 		TableType:      table.TableType,
+		LogicalId:      table.LogicalId,
 		Createsql:      table.Createsql,
 		Version:        table.Version,
 		Pkey:           DeepCopyPrimaryKeyDef(table.Pkey),

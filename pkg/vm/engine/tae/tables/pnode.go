@@ -17,6 +17,7 @@ package tables
 import (
 	"context"
 
+	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -127,6 +128,16 @@ func (node *persistedNode) Scan(
 			} else {
 				attr = readSchema.ColDefs[idx].Name
 			}
+
+			// RelLogicalID COMPAT
+			if attr == pkgcatalog.SystemRelAttr_LogicalID && vecs[i].IsConstNull() {
+				dup, err := (*bat).GetVectorByName(pkgcatalog.SystemRelAttr_ID).GetDownstreamVector().Dup(mp)
+				if err != nil {
+					return err
+				}
+				vecs[i].Close()
+				vecs[i] = containers.ToTNVector(dup, mp)
+			}
 			(*bat).AddVector(attr, vecs[i])
 		}
 	} else {
@@ -138,6 +149,9 @@ func (node *persistedNode) Scan(
 			(*bat).Deletes.Add(i + uint64(len))
 			return true
 		})
+
+		// RelLogicalID COMPAT
+		var tidvec containers.Vector
 		for i, idx := range colIdxes {
 			var attr string
 			if idx == objectio.SEQNUM_COMMITTS {
@@ -148,8 +162,24 @@ func (node *persistedNode) Scan(
 			} else {
 				attr = readSchema.ColDefs[idx].Name
 			}
+			// RelLogicalID COMPAT
+			if attr == pkgcatalog.SystemRelAttr_LogicalID && vecs[i].IsConstNull() {
+				vecs[i].Close()
+				vecs[i] = tidvec
+			}
+
 			(*bat).GetVectorByName(attr).Extend(vecs[i])
+
+			// RelLogicalID COMPAT
+			if attr == pkgcatalog.SystemRelAttr_ID {
+				tidvec = vecs[i]
+				continue
+			}
 			vecs[i].Close()
+		}
+		// RelLogicalID COMPAT
+		if tidvec != nil {
+			tidvec.Close()
 		}
 	}
 	return

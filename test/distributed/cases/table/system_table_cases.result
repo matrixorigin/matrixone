@@ -1,171 +1,230 @@
 USE mysql;
 SELECT COUNT(*) FROM (SELECT * FROM user LIMIT 10) AS temp;
-COUNT(*)
+➤ COUNT(*)[-5,64,0]  𝄀
 0
 SELECT COUNT(0) FROM (SELECT * FROM user LIMIT 10) AS temp;
-COUNT(0)
+➤ COUNT(0)[-5,64,0]  𝄀
 0
 SELECT COUNT('') FROM (SELECT * FROM user LIMIT 10) AS temp;
-COUNT()
+➤ COUNT()[-5,64,0]  𝄀
 0
 SELECT COUNT(NULL) FROM (SELECT * FROM user LIMIT 10) AS temp;
-COUNT(null)
+➤ COUNT(null)[-5,64,0]  𝄀
 0
 SELECT COUNT(*) FROM (SELECT * FROM db LIMIT 10) AS temp;
-COUNT(*)
+➤ COUNT(*)[-5,64,0]  𝄀
 0
 SELECT COUNT(0) FROM (SELECT * FROM db LIMIT 10) AS temp;
-COUNT(0)
+➤ COUNT(0)[-5,64,0]  𝄀
 0
 SELECT COUNT('') FROM (SELECT * FROM db LIMIT 10) AS temp;
-COUNT()
+➤ COUNT()[-5,64,0]  𝄀
 0
 SELECT COUNT(NULL) FROM (SELECT * FROM db LIMIT 10) AS temp;
-COUNT(null)
+➤ COUNT(null)[-5,64,0]  𝄀
 0
 SELECT COUNT(*) FROM (SELECT * FROM procs_priv LIMIT 10) AS temp;
-COUNT(*)
+➤ COUNT(*)[-5,64,0]  𝄀
 0
 SELECT COUNT(0) FROM (SELECT * FROM procs_priv LIMIT 10) AS temp;
-COUNT(0)
+➤ COUNT(0)[-5,64,0]  𝄀
 0
 SELECT COUNT('') FROM (SELECT * FROM procs_priv LIMIT 10) AS temp;
-COUNT()
+➤ COUNT()[-5,64,0]  𝄀
 0
 SELECT COUNT(NULL) FROM (SELECT * FROM procs_priv LIMIT 10) AS temp;
-COUNT(null)
+➤ COUNT(null)[-5,64,0]  𝄀
 0
 SELECT COUNT(*) FROM (SELECT * FROM columns_priv LIMIT 10) AS temp;
-COUNT(*)
+➤ COUNT(*)[-5,64,0]  𝄀
 0
 SELECT COUNT(0) FROM (SELECT * FROM columns_priv LIMIT 10) AS temp;
-COUNT(0)
+➤ COUNT(0)[-5,64,0]  𝄀
 0
 SELECT COUNT('') FROM (SELECT * FROM columns_priv LIMIT 10) AS temp;
-COUNT()
+➤ COUNT()[-5,64,0]  𝄀
 0
 SELECT COUNT(NULL) FROM (SELECT * FROM columns_priv LIMIT 10) AS temp;
-COUNT(null)
+➤ COUNT(null)[-5,64,0]  𝄀
 0
 SELECT COUNT(*) FROM (SELECT * FROM tables_priv LIMIT 10) AS temp;
-COUNT(*)
+➤ COUNT(*)[-5,64,0]  𝄀
 0
 SELECT COUNT(0) FROM (SELECT * FROM tables_priv LIMIT 10) AS temp;
-COUNT(0)
+➤ COUNT(0)[-5,64,0]  𝄀
 0
 SELECT COUNT('') FROM (SELECT * FROM tables_priv LIMIT 10) AS temp;
-COUNT()
+➤ COUNT()[-5,64,0]  𝄀
 0
 SELECT COUNT(NULL) FROM (SELECT * FROM tables_priv LIMIT 10) AS temp;
-COUNT(null)
+➤ COUNT(null)[-5,64,0]  𝄀
 0
 USE information_schema;
 SELECT COUNT(*) FROM (SELECT * FROM key_column_usage LIMIT 10) AS temp;
-COUNT(*)
+➤ COUNT(*)[-5,64,0]  𝄀
 0
 SELECT COUNT(0) FROM (SELECT * FROM key_column_usage LIMIT 10) AS temp;
-COUNT(0)
+➤ COUNT(0)[-5,64,0]  𝄀
 0
 SELECT COUNT('') FROM (SELECT * FROM key_column_usage LIMIT 10) AS temp;
-COUNT()
+➤ COUNT()[-5,64,0]  𝄀
 0
 SELECT COUNT(NULL) FROM (SELECT * FROM key_column_usage LIMIT 10) AS temp;
-COUNT(null)
+➤ COUNT(null)[-5,64,0]  𝄀
 0
 SELECT COUNT(*) FROM (SELECT * FROM columns LIMIT 10) AS temp;
-COUNT(*)
+➤ COUNT(*)[-5,64,0]  𝄀
 10
 SELECT COUNT(0) FROM (SELECT * FROM columns LIMIT 10) AS temp;
-COUNT(0)
+➤ COUNT(0)[-5,64,0]  𝄀
 10
 SELECT COUNT('') FROM (SELECT * FROM columns LIMIT 10) AS temp;
-COUNT()
+➤ COUNT()[-5,64,0]  𝄀
 10
 SELECT COUNT(NULL) FROM (SELECT * FROM columns LIMIT 10) AS temp;
-COUNT(null)
+➤ COUNT(null)[-5,64,0]  𝄀
 0
 SELECT COUNT(*) FROM (SELECT * FROM profiling LIMIT 10) AS temp;
-COUNT(*)
+➤ COUNT(*)[-5,64,0]  𝄀
 0
 SELECT COUNT(0) FROM (SELECT * FROM profiling LIMIT 10) AS temp;
-COUNT(0)
+➤ COUNT(0)[-5,64,0]  𝄀
 0
 SELECT COUNT('') FROM (SELECT * FROM profiling LIMIT 10) AS temp;
-COUNT()
+➤ COUNT()[-5,64,0]  𝄀
 0
 SELECT COUNT(NULL) FROM (SELECT * FROM profiling LIMIT 10) AS temp;
-COUNT(null)
+➤ COUNT(null)[-5,64,0]  𝄀
 0
 SELECT COUNT(*) FROM (SELECT * FROM user_privileges LIMIT 10) AS temp;
-COUNT(*)
+➤ COUNT(*)[-5,64,0]  𝄀
 0
 SELECT COUNT(0) FROM (SELECT * FROM user_privileges LIMIT 10) AS temp;
-COUNT(0)
+➤ COUNT(0)[-5,64,0]  𝄀
 0
 SELECT COUNT('') FROM (SELECT * FROM user_privileges LIMIT 10) AS temp;
-COUNT()
+➤ COUNT()[-5,64,0]  𝄀
 0
 SELECT COUNT(NULL) FROM (SELECT * FROM user_privileges LIMIT 10) AS temp;
-COUNT(null)
+➤ COUNT(null)[-5,64,0]  𝄀
 0
 SELECT COUNT(*) FROM (SELECT * FROM schemata where schema_name = 'mo_catalog' or schema_name = 'mo_task' LIMIT 10) AS temp;
-COUNT(*)
+➤ COUNT(*)[-5,64,0]  𝄀
 2
 SELECT COUNT(0) FROM (SELECT * FROM schemata where schema_name = 'mo_catalog' or schema_name = 'mo_task' LIMIT 10) AS temp;
-COUNT(0)
+➤ COUNT(0)[-5,64,0]  𝄀
 2
 SELECT COUNT('') FROM (SELECT * FROM schemata where schema_name = 'mo_catalog' or schema_name = 'mo_task' LIMIT 10) AS temp;
-COUNT()
+➤ COUNT()[-5,64,0]  𝄀
 2
 SELECT COUNT(NULL) FROM (SELECT * FROM schemata where schema_name = 'mo_catalog' or schema_name = 'mo_task' LIMIT 10) AS temp;
-COUNT(null)
+➤ COUNT(null)[-5,64,0]  𝄀
 0
 SELECT COUNT(*) FROM (SELECT * FROM character_sets LIMIT 10) AS temp;
-COUNT(*)
+➤ COUNT(*)[-5,64,0]  𝄀
 0
 SELECT COUNT(0) FROM (SELECT * FROM character_sets LIMIT 10) AS temp;
-COUNT(0)
+➤ COUNT(0)[-5,64,0]  𝄀
 0
 SELECT COUNT('') FROM (SELECT * FROM character_sets LIMIT 10) AS temp;
-COUNT()
+➤ COUNT()[-5,64,0]  𝄀
 0
 SELECT COUNT(NULL) FROM (SELECT * FROM character_sets LIMIT 10) AS temp;
-COUNT(null)
+➤ COUNT(null)[-5,64,0]  𝄀
 0
 SELECT COUNT(*) FROM (SELECT * FROM triggers LIMIT 10) AS temp;
-COUNT(*)
+➤ COUNT(*)[-5,64,0]  𝄀
 0
 SELECT COUNT(0) FROM (SELECT * FROM triggers LIMIT 10) AS temp;
-COUNT(0)
+➤ COUNT(0)[-5,64,0]  𝄀
 0
 SELECT COUNT('') FROM (SELECT * FROM triggers LIMIT 10) AS temp;
-COUNT()
+➤ COUNT()[-5,64,0]  𝄀
 0
 SELECT COUNT(NULL) FROM (SELECT * FROM triggers LIMIT 10) AS temp;
-COUNT(null)
+➤ COUNT(null)[-5,64,0]  𝄀
 0
 SELECT COUNT(*) FROM (SELECT * FROM tables LIMIT 10) AS temp;
-COUNT(*)
+➤ COUNT(*)[-5,64,0]  𝄀
 10
 SELECT COUNT(0) FROM (SELECT * FROM tables LIMIT 10) AS temp;
-COUNT(0)
+➤ COUNT(0)[-5,64,0]  𝄀
 10
 SELECT COUNT('') FROM (SELECT * FROM tables LIMIT 10) AS temp;
-COUNT()
+➤ COUNT()[-5,64,0]  𝄀
 10
 SELECT COUNT(NULL) FROM (SELECT * FROM tables LIMIT 10) AS temp;
-COUNT(null)
+➤ COUNT(null)[-5,64,0]  𝄀
 0
 SELECT COUNT(*) FROM table_constraints;
-COUNT(*)
+➤ COUNT(*)[-5,64,0]  𝄀
 125
 USE mo_catalog;
 SHOW CREATE TABLE mo_columns;
-Table    Create Table
-mo_columns    CREATE TABLE `mo_columns` (\n  `att_uniq_name` varchar(256) DEFAULT NULL,\n  `account_id` int unsigned DEFAULT NULL,\n  `att_database_id` bigint unsigned DEFAULT NULL,\n  `att_database` varchar(256) DEFAULT NULL,\n  `att_relname_id` bigint unsigned DEFAULT NULL,\n  `att_relname` varchar(256) DEFAULT NULL,\n  `attname` varchar(256) DEFAULT NULL,\n  `atttyp` varchar(256) DEFAULT NULL,\n  `attnum` int DEFAULT NULL,\n  `att_length` int DEFAULT NULL,\n  `attnotnull` tinyint DEFAULT NULL,\n  `atthasdef` tinyint DEFAULT NULL,\n  `att_default` varchar(2048) DEFAULT NULL,\n  `attisdropped` tinyint DEFAULT NULL,\n  `att_constraint_type` char(1) DEFAULT NULL,\n  `att_is_unsigned` tinyint DEFAULT NULL,\n  `att_is_auto_increment` tinyint DEFAULT NULL,\n  `att_comment` varchar(2048) DEFAULT NULL,\n  `att_is_hidden` tinyint DEFAULT NULL,\n  `attr_has_update` tinyint DEFAULT NULL,\n  `attr_update` varchar(2048) DEFAULT NULL,\n  `attr_is_clusterby` tinyint DEFAULT NULL,\n  `attr_seqnum` smallint unsigned DEFAULT NULL,\n  `attr_enum` varchar(65535) DEFAULT NULL,\n  PRIMARY KEY (`account_id`,`att_database`,`att_relname`,`attname`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+mo_columns  ¦  CREATE TABLE `mo_columns` (
+  `att_uniq_name` varchar(256) DEFAULT NULL,
+  `account_id` int unsigned DEFAULT NULL,
+  `att_database_id` bigint unsigned DEFAULT NULL,
+  `att_database` varchar(256) DEFAULT NULL,
+  `att_relname_id` bigint unsigned DEFAULT NULL,
+  `att_relname` varchar(256) DEFAULT NULL,
+  `attname` varchar(256) DEFAULT NULL,
+  `atttyp` varchar(256) DEFAULT NULL,
+  `attnum` int DEFAULT NULL,
+  `att_length` int DEFAULT NULL,
+  `attnotnull` tinyint DEFAULT NULL,
+  `atthasdef` tinyint DEFAULT NULL,
+  `att_default` varchar(2048) DEFAULT NULL,
+  `attisdropped` tinyint DEFAULT NULL,
+  `att_constraint_type` char(1) DEFAULT NULL,
+  `att_is_unsigned` tinyint DEFAULT NULL,
+  `att_is_auto_increment` tinyint DEFAULT NULL,
+  `att_comment` varchar(2048) DEFAULT NULL,
+  `att_is_hidden` tinyint DEFAULT NULL,
+  `attr_has_update` tinyint DEFAULT NULL,
+  `attr_update` varchar(2048) DEFAULT NULL,
+  `attr_is_clusterby` tinyint DEFAULT NULL,
+  `attr_seqnum` smallint unsigned DEFAULT NULL,
+  `attr_enum` varchar(65535) DEFAULT NULL,
+  PRIMARY KEY (`account_id`,`att_database`,`att_relname`,`attname`)
+)
 SHOW CREATE TABLE mo_database;
-Table    Create Table
-mo_database    CREATE TABLE `mo_database` (\n  `dat_id` bigint unsigned DEFAULT NULL,\n  `datname` varchar(5000) DEFAULT NULL,\n  `dat_catalog_name` varchar(5000) DEFAULT NULL,\n  `dat_createsql` varchar(5000) DEFAULT NULL,\n  `owner` int unsigned DEFAULT NULL,\n  `creator` int unsigned DEFAULT NULL,\n  `created_time` timestamp NULL DEFAULT NULL,\n  `account_id` int unsigned DEFAULT NULL,\n  `dat_type` varchar(32) DEFAULT NULL,\n  PRIMARY KEY (`account_id`,`datname`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+mo_database  ¦  CREATE TABLE `mo_database` (
+  `dat_id` bigint unsigned DEFAULT NULL,
+  `datname` varchar(5000) DEFAULT NULL,
+  `dat_catalog_name` varchar(5000) DEFAULT NULL,
+  `dat_createsql` varchar(5000) DEFAULT NULL,
+  `owner` int unsigned DEFAULT NULL,
+  `creator` int unsigned DEFAULT NULL,
+  `created_time` timestamp NULL DEFAULT NULL,
+  `account_id` int unsigned DEFAULT NULL,
+  `dat_type` varchar(32) DEFAULT NULL,
+  PRIMARY KEY (`account_id`,`datname`)
+)
 SHOW CREATE TABLE mo_tables;
-Table    Create Table
-mo_tables    CREATE TABLE `mo_tables` (\n  `rel_id` bigint unsigned DEFAULT NULL,\n  `relname` varchar(5000) DEFAULT NULL,\n  `reldatabase` varchar(5000) DEFAULT NULL,\n  `reldatabase_id` bigint unsigned DEFAULT NULL,\n  `relpersistence` varchar(5000) DEFAULT NULL,\n  `relkind` varchar(5000) DEFAULT NULL,\n  `rel_comment` varchar(5000) DEFAULT NULL,\n  `rel_createsql` text DEFAULT NULL,\n  `created_time` timestamp NULL DEFAULT NULL,\n  `creator` int unsigned DEFAULT NULL,\n  `owner` int unsigned DEFAULT NULL,\n  `account_id` int unsigned DEFAULT NULL,\n  `partitioned` tinyint DEFAULT NULL,\n  `partition_info` blob DEFAULT NULL,\n  `viewdef` varchar(5000) DEFAULT NULL,\n  `constraint` varchar(5000) DEFAULT NULL,\n  `rel_version` int unsigned DEFAULT NULL,\n  `catalog_version` int unsigned DEFAULT NULL,\n  PRIMARY KEY (`account_id`,`reldatabase`,`relname`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+mo_tables  ¦  CREATE TABLE `mo_tables` (
+  `rel_id` bigint unsigned DEFAULT NULL,
+  `relname` varchar(5000) DEFAULT NULL,
+  `reldatabase` varchar(5000) DEFAULT NULL,
+  `reldatabase_id` bigint unsigned DEFAULT NULL,
+  `relpersistence` varchar(5000) DEFAULT NULL,
+  `relkind` varchar(5000) DEFAULT NULL,
+  `rel_comment` varchar(5000) DEFAULT NULL,
+  `rel_createsql` text DEFAULT NULL,
+  `created_time` timestamp NULL DEFAULT NULL,
+  `creator` int unsigned DEFAULT NULL,
+  `owner` int unsigned DEFAULT NULL,
+  `account_id` int unsigned DEFAULT NULL,
+  `partitioned` tinyint DEFAULT NULL,
+  `partition_info` blob DEFAULT NULL,
+  `viewdef` varchar(5000) DEFAULT NULL,
+  `constraint` varchar(5000) DEFAULT NULL,
+  `rel_version` int unsigned DEFAULT NULL,
+  `catalog_version` int unsigned DEFAULT NULL,
+  `rel_logical_id` bigint unsigned DEFAULT NULL,
+  PRIMARY KEY (`account_id`,`reldatabase`,`relname`),
+  UNIQUE KEY `idx_rel_logical_id` (`rel_logical_id`)
+)
