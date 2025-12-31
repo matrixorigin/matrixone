@@ -271,28 +271,36 @@ func (exec *singleWindowExec) flushRowNumber() ([]*vector.Vector, error) {
 
 // valueWindowExec is a window function executor for LAG, LEAD, FIRST_VALUE, LAST_VALUE, NTH_VALUE
 // These functions need to access values from other rows in the window
+//
+// For these window functions, Fill is called for each row j with all values k in the window frame.
+// - groupIndex is the current row index (j)
+// - row is the index of a value within the window frame (k)
+// - vectors contains the expression values
+//
+// For LAG/LEAD: we need to track the current row and access values at specific offsets
+// For FIRST_VALUE/LAST_VALUE/NTH_VALUE: we need to track the first/last/nth value in the frame
 type valueWindowExec struct {
 	singleAggInfo
 	mp *mpool.MPool
 
-	// Store the input values for each group
-	// Each group contains the values from the window
-	values []*vector.Vector
-
-	// Partition boundaries
-	partitions []int64
-
-	// Current row index within each partition
-	rowIndices []int64
+	// For each output row (groupIndex), store the values from its window frame
+	// frameValues[groupIndex] contains all values in the window frame for that row
+	frameValues [][]*valueEntry
 
 	// Result vector
 	resultVec *vector.Vector
 }
 
+// valueEntry stores a single value from the window frame
+type valueEntry struct {
+	isNull bool
+	data   []byte
+}
+
 func (exec *valueWindowExec) GroupGrow(more int) error {
-	// For value window functions, we track row indices
+	// Grow the frameValues slice to accommodate more groups
 	for i := 0; i < more; i++ {
-		exec.rowIndices = append(exec.rowIndices, 0)
+		exec.frameValues = append(exec.frameValues, nil)
 	}
 	return nil
 }
@@ -302,22 +310,35 @@ func (exec *valueWindowExec) PreAllocateGroups(more int) error {
 }
 
 func (exec *valueWindowExec) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
-	// Store the value for this row
+	// Store the value for this row in the window frame
 	if len(vectors) == 0 {
 		return nil
 	}
 
-	// Ensure we have enough space in values slice
-	for len(exec.values) <= groupIndex {
-		exec.values = append(exec.values, nil)
+	// Ensure we have enough space
+	for len(exec.frameValues) <= groupIndex {
+		exec.frameValues = append(exec.frameValues, nil)
 	}
 
-	// Copy the value from the input vector
-	if exec.values[groupIndex] == nil {
-		exec.values[groupIndex] = vector.NewVec(*vectors[0].GetType())
+	vec := vectors[0]
+	entry := &valueEntry{
+		isNull: vec.IsNull(uint64(row)),
 	}
 
-	return exec.values[groupIndex].UnionOne(vectors[0], int64(row), exec.mp)
+	if !entry.isNull {
+		// Copy the value data
+		if vec.GetType().IsVarlen() {
+			bs := vec.GetBytesAt(row)
+			entry.data = make([]byte, len(bs))
+			copy(entry.data, bs)
+		} else {
+			// For fixed-size types, get the raw bytes
+			entry.data = vec.GetRawBytesAt(row)
+		}
+	}
+
+	exec.frameValues[groupIndex] = append(exec.frameValues[groupIndex], entry)
+	return nil
 }
 
 func (exec *valueWindowExec) GetOptResult() SplitResult {
@@ -381,11 +402,6 @@ func (exec *valueWindowExec) Flush() ([]*vector.Vector, error) {
 }
 
 func (exec *valueWindowExec) Free() {
-	for _, v := range exec.values {
-		if v != nil {
-			v.Free(exec.mp)
-		}
-	}
 	if exec.resultVec != nil {
 		exec.resultVec.Free(exec.mp)
 	}
@@ -393,36 +409,51 @@ func (exec *valueWindowExec) Free() {
 
 func (exec *valueWindowExec) Size() int64 {
 	var size int64
-	for _, v := range exec.values {
-		if v != nil {
-			size += int64(v.Size())
+	for _, frame := range exec.frameValues {
+		for _, entry := range frame {
+			if entry != nil {
+				size += int64(len(entry.data)) + 8 // data + isNull flag overhead
+			}
 		}
 	}
 	return size
 }
 
 func (exec *valueWindowExec) flushLag() ([]*vector.Vector, error) {
-	// LAG returns the value from the previous row (offset 1 by default)
-	// For each group, shift values by 1 position
-	if len(exec.values) == 0 {
-		return []*vector.Vector{vector.NewVec(exec.retType)}, nil
-	}
+	// LAG returns the value from the previous row in the window frame
+	// Since the window frame for LAG typically includes all preceding rows,
+	// we return the second-to-last value in the frame (the one before current row)
+	// If there's no previous row, return NULL
 
 	result := vector.NewVec(exec.retType)
-	for _, v := range exec.values {
-		if v == nil || v.Length() == 0 {
+	for _, frame := range exec.frameValues {
+		if len(frame) == 0 {
+			// No values in frame, append NULL
+			if err := vector.AppendAny(result, nil, true, exec.mp); err != nil {
+				return nil, err
+			}
 			continue
 		}
 
-		// First row gets NULL (no previous row)
-		if err := vector.AppendAny(result, nil, true, exec.mp); err != nil {
-			return nil, err
-		}
-
-		// Rest of the rows get the previous row's value
-		for i := 0; i < v.Length()-1; i++ {
-			if err := result.UnionOne(v, int64(i), exec.mp); err != nil {
+		// For LAG with default offset=1, we want the second-to-last value
+		// The frame contains values from left to right in the window
+		// The last value is the current row, so we want the one before it
+		if len(frame) < 2 {
+			// Only current row in frame, no previous row
+			if err := vector.AppendAny(result, nil, true, exec.mp); err != nil {
 				return nil, err
+			}
+		} else {
+			// Get the second-to-last value (the row before current)
+			entry := frame[len(frame)-2]
+			if entry.isNull {
+				if err := vector.AppendAny(result, nil, true, exec.mp); err != nil {
+					return nil, err
+				}
+			} else {
+				if err := appendValueToVector(result, entry.data, exec.retType, exec.mp); err != nil {
+					return nil, err
+				}
 			}
 		}
 	}
@@ -431,27 +462,41 @@ func (exec *valueWindowExec) flushLag() ([]*vector.Vector, error) {
 }
 
 func (exec *valueWindowExec) flushLead() ([]*vector.Vector, error) {
-	// LEAD returns the value from the next row (offset 1 by default)
-	if len(exec.values) == 0 {
-		return []*vector.Vector{vector.NewVec(exec.retType)}, nil
-	}
+	// LEAD returns the value from the next row in the window frame
+	// Since the window frame for LEAD typically includes all following rows,
+	// we return the second value in the frame (the one after current row)
+	// If there's no next row, return NULL
 
 	result := vector.NewVec(exec.retType)
-	for _, v := range exec.values {
-		if v == nil || v.Length() == 0 {
+	for _, frame := range exec.frameValues {
+		if len(frame) == 0 {
+			// No values in frame, append NULL
+			if err := vector.AppendAny(result, nil, true, exec.mp); err != nil {
+				return nil, err
+			}
 			continue
 		}
 
-		// First n-1 rows get the next row's value
-		for i := 1; i < v.Length(); i++ {
-			if err := result.UnionOne(v, int64(i), exec.mp); err != nil {
+		// For LEAD with default offset=1, we want the second value
+		// The frame contains values from left to right in the window
+		// The first value is the current row, so we want the one after it
+		if len(frame) < 2 {
+			// Only current row in frame, no next row
+			if err := vector.AppendAny(result, nil, true, exec.mp); err != nil {
 				return nil, err
 			}
-		}
-
-		// Last row gets NULL (no next row)
-		if err := vector.AppendAny(result, nil, true, exec.mp); err != nil {
-			return nil, err
+		} else {
+			// Get the second value (the row after current)
+			entry := frame[1]
+			if entry.isNull {
+				if err := vector.AppendAny(result, nil, true, exec.mp); err != nil {
+					return nil, err
+				}
+			} else {
+				if err := appendValueToVector(result, entry.data, exec.retType, exec.mp); err != nil {
+					return nil, err
+				}
+			}
 		}
 	}
 
@@ -460,19 +505,25 @@ func (exec *valueWindowExec) flushLead() ([]*vector.Vector, error) {
 
 func (exec *valueWindowExec) flushFirstValue() ([]*vector.Vector, error) {
 	// FIRST_VALUE returns the first value in the window frame
-	if len(exec.values) == 0 {
-		return []*vector.Vector{vector.NewVec(exec.retType)}, nil
-	}
 
 	result := vector.NewVec(exec.retType)
-	for _, v := range exec.values {
-		if v == nil || v.Length() == 0 {
+	for _, frame := range exec.frameValues {
+		if len(frame) == 0 {
+			// No values in frame, append NULL
+			if err := vector.AppendAny(result, nil, true, exec.mp); err != nil {
+				return nil, err
+			}
 			continue
 		}
 
-		// All rows get the first value
-		for i := 0; i < v.Length(); i++ {
-			if err := result.UnionOne(v, 0, exec.mp); err != nil {
+		// Get the first value in the frame
+		entry := frame[0]
+		if entry.isNull {
+			if err := vector.AppendAny(result, nil, true, exec.mp); err != nil {
+				return nil, err
+			}
+		} else {
+			if err := appendValueToVector(result, entry.data, exec.retType, exec.mp); err != nil {
 				return nil, err
 			}
 		}
@@ -483,20 +534,25 @@ func (exec *valueWindowExec) flushFirstValue() ([]*vector.Vector, error) {
 
 func (exec *valueWindowExec) flushLastValue() ([]*vector.Vector, error) {
 	// LAST_VALUE returns the last value in the window frame
-	if len(exec.values) == 0 {
-		return []*vector.Vector{vector.NewVec(exec.retType)}, nil
-	}
 
 	result := vector.NewVec(exec.retType)
-	for _, v := range exec.values {
-		if v == nil || v.Length() == 0 {
+	for _, frame := range exec.frameValues {
+		if len(frame) == 0 {
+			// No values in frame, append NULL
+			if err := vector.AppendAny(result, nil, true, exec.mp); err != nil {
+				return nil, err
+			}
 			continue
 		}
 
-		lastIdx := int64(v.Length() - 1)
-		// All rows get the last value
-		for i := 0; i < v.Length(); i++ {
-			if err := result.UnionOne(v, lastIdx, exec.mp); err != nil {
+		// Get the last value in the frame
+		entry := frame[len(frame)-1]
+		if entry.isNull {
+			if err := vector.AppendAny(result, nil, true, exec.mp); err != nil {
+				return nil, err
+			}
+		} else {
+			if err := appendValueToVector(result, entry.data, exec.retType, exec.mp); err != nil {
 				return nil, err
 			}
 		}
@@ -507,7 +563,67 @@ func (exec *valueWindowExec) flushLastValue() ([]*vector.Vector, error) {
 
 func (exec *valueWindowExec) flushNthValue() ([]*vector.Vector, error) {
 	// NTH_VALUE returns the nth value in the window frame
-	// For now, we'll return the first value (n=1)
-	// TODO: properly handle the n parameter
+	// For now, we default to n=1 (same as FIRST_VALUE)
+	// TODO: properly handle the n parameter from the function arguments
 	return exec.flushFirstValue()
+}
+
+// appendValueToVector appends a value to the result vector based on the type
+func appendValueToVector(result *vector.Vector, data []byte, typ types.Type, mp *mpool.MPool) error {
+	if typ.IsVarlen() {
+		return vector.AppendBytes(result, data, false, mp)
+	}
+
+	// For fixed-size types, we need to append based on the type
+	switch typ.Oid {
+	case types.T_bool:
+		return vector.AppendFixed(result, types.DecodeFixed[bool](data), false, mp)
+	case types.T_bit:
+		return vector.AppendFixed(result, types.DecodeFixed[uint64](data), false, mp)
+	case types.T_int8:
+		return vector.AppendFixed(result, types.DecodeFixed[int8](data), false, mp)
+	case types.T_int16:
+		return vector.AppendFixed(result, types.DecodeFixed[int16](data), false, mp)
+	case types.T_int32:
+		return vector.AppendFixed(result, types.DecodeFixed[int32](data), false, mp)
+	case types.T_int64:
+		return vector.AppendFixed(result, types.DecodeFixed[int64](data), false, mp)
+	case types.T_uint8:
+		return vector.AppendFixed(result, types.DecodeFixed[uint8](data), false, mp)
+	case types.T_uint16:
+		return vector.AppendFixed(result, types.DecodeFixed[uint16](data), false, mp)
+	case types.T_uint32:
+		return vector.AppendFixed(result, types.DecodeFixed[uint32](data), false, mp)
+	case types.T_uint64:
+		return vector.AppendFixed(result, types.DecodeFixed[uint64](data), false, mp)
+	case types.T_float32:
+		return vector.AppendFixed(result, types.DecodeFixed[float32](data), false, mp)
+	case types.T_float64:
+		return vector.AppendFixed(result, types.DecodeFixed[float64](data), false, mp)
+	case types.T_decimal64:
+		return vector.AppendFixed(result, types.DecodeFixed[types.Decimal64](data), false, mp)
+	case types.T_decimal128:
+		return vector.AppendFixed(result, types.DecodeFixed[types.Decimal128](data), false, mp)
+	case types.T_date:
+		return vector.AppendFixed(result, types.DecodeFixed[types.Date](data), false, mp)
+	case types.T_datetime:
+		return vector.AppendFixed(result, types.DecodeFixed[types.Datetime](data), false, mp)
+	case types.T_time:
+		return vector.AppendFixed(result, types.DecodeFixed[types.Time](data), false, mp)
+	case types.T_timestamp:
+		return vector.AppendFixed(result, types.DecodeFixed[types.Timestamp](data), false, mp)
+	case types.T_uuid:
+		return vector.AppendFixed(result, types.DecodeFixed[types.Uuid](data), false, mp)
+	case types.T_TS:
+		return vector.AppendFixed(result, types.DecodeFixed[types.TS](data), false, mp)
+	case types.T_Rowid:
+		return vector.AppendFixed(result, types.DecodeFixed[types.Rowid](data), false, mp)
+	case types.T_Blockid:
+		return vector.AppendFixed(result, types.DecodeFixed[types.Blockid](data), false, mp)
+	case types.T_enum:
+		return vector.AppendFixed(result, types.DecodeFixed[types.Enum](data), false, mp)
+	default:
+		// For other types, try to append as bytes
+		return vector.AppendBytes(result, data, false, mp)
+	}
 }

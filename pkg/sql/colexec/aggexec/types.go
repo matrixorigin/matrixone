@@ -367,9 +367,7 @@ func makeValueWindowExecInternal(mp *mpool.MPool, info singleAggInfo) AggFuncExe
 	return &valueWindowExec{
 		singleAggInfo: info,
 		mp:            mp,
-		values:        make([]*vector.Vector, 0),
-		partitions:    make([]int64, 0),
-		rowIndices:    make([]int64, 0),
+		frameValues:   make([][]*valueEntry, 0),
 	}
 }
 
