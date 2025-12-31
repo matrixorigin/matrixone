@@ -142,7 +142,8 @@ func (cs *countSumDec) avg(scale int32) (types.Decimal128, bool) {
 		return types.Decimal128{}, false
 	}
 	cnt128 := types.Decimal128FromInt64(cs.count)
-	a, _, _ := cs.sum.Div(cnt128, scale, 0)
+	a, s, _ := cs.sum.Div(cnt128, scale, 0)
+	a, _ = a.Scale(scale - s)
 	return a, true
 }
 
@@ -244,13 +245,7 @@ func (exec *sumAvgExec[T, A]) SetExtraInformation(partialResult any, _ int) erro
 }
 
 func (exec *sumAvgExec[T, A]) Flush() ([]*vector.Vector, error) {
-	var resultType types.Type
-	if exec.isSum {
-		resultType = sumResultType(exec.aggInfo.argTypes[0].Oid, exec.aggInfo.argTypes[0].Scale)
-	} else {
-		resultType = avgResultType(exec.aggInfo.argTypes[0].Oid, exec.aggInfo.argTypes[0].Scale)
-	}
-
+	resultType := exec.aggInfo.retType
 	vecs := make([]*vector.Vector, len(exec.state))
 	for i := range vecs {
 		vecs[i] = vector.NewOffHeapVecWithType(resultType)
@@ -365,13 +360,7 @@ func (exec *sumAvgDecExec) SetExtraInformation(partialResult any, _ int) error {
 }
 
 func (exec *sumAvgDecExec) Flush() ([]*vector.Vector, error) {
-	var resultType types.Type
-	if exec.isSum {
-		resultType = sumResultType(exec.aggInfo.argTypes[0].Oid, exec.aggInfo.argTypes[0].Scale)
-	} else {
-		resultType = avgResultType(exec.aggInfo.argTypes[0].Oid, exec.aggInfo.argTypes[0].Scale)
-	}
-
+	resultType := exec.aggInfo.retType
 	vecs := make([]*vector.Vector, len(exec.state))
 	for i := range vecs {
 		vecs[i] = vector.NewOffHeapVecWithType(resultType)
@@ -399,7 +388,7 @@ func (exec *sumAvgDecExec) Flush() ([]*vector.Vector, error) {
 				if exec.isSum {
 					vector.AppendFixed(vecs[i], st.sum, false, exec.mp)
 				} else {
-					avgVal, _ := st.avg(exec.aggInfo.argTypes[0].Scale)
+					avgVal, _ := st.avg(resultType.Scale)
 					vector.AppendFixed(vecs[i], avgVal, false, exec.mp)
 				}
 			}
@@ -416,7 +405,7 @@ func (exec *sumAvgDecExec) Flush() ([]*vector.Vector, error) {
 				if exec.isSum {
 					vector.AppendFixed(vecs[i], ss[j].sum, false, exec.mp)
 				} else {
-					avgVal, _ := ss[j].avg(exec.aggInfo.argTypes[0].Scale)
+					avgVal, _ := ss[j].avg(resultType.Scale)
 					vector.AppendFixed(vecs[i], avgVal, false, exec.mp)
 				}
 			}
