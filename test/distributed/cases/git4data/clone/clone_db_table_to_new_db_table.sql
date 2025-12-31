@@ -1,4 +1,7 @@
 drop database if exists test01;
+drop database if exists test02;
+drop database if exists test03;
+
 create database test01;
 use test01;
 
@@ -31,10 +34,6 @@ drop database test01;
 drop database test02;
 drop snapshot sp01;
 
-
-
-
-drop database if exists test03;
 create database test03;
 use test03;
 drop table if exists pri01;

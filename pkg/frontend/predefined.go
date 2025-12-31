@@ -135,7 +135,8 @@ var (
 	        account_name varchar(300),
 			database_name varchar(5000),
 			table_name  varchar(5000),
-			obj_id bigint unsigned
+			obj_id bigint unsigned,
+    		kind varchar(32) not null default 'user'
 			)`, catalog.MO_CATALOG, catalog.MO_SNAPSHOTS)
 
 	MoCatalogMoPitrDDL = fmt.Sprintf(`CREATE TABLE %s.%s (
@@ -154,6 +155,7 @@ var (
 			pitr_unit varchar(10),
 			pitr_status tinyint unsigned default 1 comment '1: active, 0: inactive',
 			pitr_status_changed_time bigint not null,
+    		kind varchar(32) not null default 'user',
 			primary key(pitr_name, create_account)
 			)`, catalog.MO_CATALOG, catalog.MO_PITR)
 
@@ -354,6 +356,31 @@ var (
     	index(creator),
     	primary key(table_id)
 	)`, catalog.MO_BRANCH_METADATA)
+
+	MoCatalogFeatureLimitDDL = fmt.Sprintf(`create table mo_catalog.%s(
+    	account_id bigint unsigned not null comment 'this limit applies on this account',
+    	feature_code varchar(50) NOT NULL comment 'snapshot/branch/...',
+		scope varchar(50) NOT NULL DEFAULT '' comment 'feature limit applies on this scope',
+    	quota bigint NOT NULL DEFAULT 100 comment '0: disabled this feature; -1 unlimited; >0: max allowed value',
+    	created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    	primary key(account_id, feature_code, scope)
+	)`, catalog.MO_FEATURE_LIMIT)
+
+	MoCatalogFeatureRegistryDDL = fmt.Sprintf(`create table mo_catalog.%s(
+    	feature_code varchar(50) NOT NULL comment 'snapshot/branch/...',
+    	description varchar(1024) NOT NULL DEFAULT '',
+        scope_spec JSON NOT NULL comment 'allowed scope values',
+		enabled boolean NOT NULL DEFAULT TRUE,
+    	created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    	primary key(feature_code)
+	)`, catalog.MO_FEATURE_REGISTRY)
+
+	MoCatalogFeatureRegistryInitData = fmt.Sprintf(`insert into mo_catalog.%s(feature_code, scope_spec) values 
+		('SNAPSHOT', '{"allowed_scope":["account","database","table"]}'),
+		('BRANCH', '{"allowed_scope":[]}')
+		on duplicate key update scope_spec = values(scope_spec);`, catalog.MO_FEATURE_REGISTRY)
 )
 
 // `mo_catalog` database system tables
