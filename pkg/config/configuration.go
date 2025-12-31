@@ -127,11 +127,20 @@ var (
 	// defaultSessionTimeout default: 24 hour
 	defaultSessionTimeout = 24 * time.Hour
 
-	// defaultNetReadTimeout default: 60 seconds
-	defaultNetReadTimeout = 60 * time.Second
+	// defaultNetReadTimeout default: 0 (no timeout for normal operations)
+	defaultNetReadTimeout = time.Duration(0)
 
-	// defaultNetWriteTimeout default: 60 seconds
-	defaultNetWriteTimeout = 60 * time.Second
+	// defaultNetWriteTimeout default: 0 (no timeout for normal operations)
+	defaultNetWriteTimeout = time.Duration(0)
+
+	// defaultLoadLocalReadTimeout default: 60 seconds
+	// Timeout for reading data from client during LOAD DATA LOCAL operations
+	// Used to detect F5/LoadBalancer idle timeout disconnections
+	defaultLoadLocalReadTimeout = 60 * time.Second
+
+	// defaultLoadLocalWriteTimeout default: 60 seconds
+	// Timeout for writing data to client during LOAD DATA LOCAL operations
+	defaultLoadLocalWriteTimeout = 60 * time.Second
 
 	// defaultOBShowStatsInterval default: 1min
 	defaultOBShowStatsInterval = time.Minute
@@ -272,11 +281,19 @@ type FrontendParameters struct {
 	//timeout of the session. the default is 10minutes
 	SessionTimeout toml.Duration `toml:"sessionTimeout"`
 
-	// NetReadTimeout is the timeout for reading from the network connection. Default is 60 seconds.
+	// NetReadTimeout is the timeout for reading from the network connection. Default is 0 (no timeout).
 	NetReadTimeout toml.Duration `toml:"netReadTimeout"`
 
 	// NetWriteTimeout is the timeout for writing to the network connection. Default is 60 seconds.
 	NetWriteTimeout toml.Duration `toml:"netWriteTimeout"`
+
+	// LoadLocalReadTimeout is the timeout for reading data from client during LOAD DATA LOCAL operations.
+	// Used to detect F5/LoadBalancer idle timeout disconnections. Default is 60 seconds.
+	LoadLocalReadTimeout toml.Duration `toml:"loadLocalReadTimeout"`
+
+	// LoadLocalWriteTimeout is the timeout for writing data to client during LOAD DATA LOCAL operations.
+	// Default is 60 seconds.
+	LoadLocalWriteTimeout toml.Duration `toml:"loadLocalWriteTimeout"`
 
 	// MaxMessageSize max size for read messages from dn. Default is 10M
 	MaxMessageSize uint64 `toml:"max-message-size"`
@@ -424,6 +441,14 @@ func (fp *FrontendParameters) SetDefaultValues() {
 
 	if fp.NetWriteTimeout.Duration == 0 {
 		fp.NetWriteTimeout.Duration = defaultNetWriteTimeout
+	}
+
+	if fp.LoadLocalReadTimeout.Duration == 0 {
+		fp.LoadLocalReadTimeout.Duration = defaultLoadLocalReadTimeout
+	}
+
+	if fp.LoadLocalWriteTimeout.Duration == 0 {
+		fp.LoadLocalWriteTimeout.Duration = defaultLoadLocalWriteTimeout
 	}
 
 	if fp.SaveQueryResult == "" {

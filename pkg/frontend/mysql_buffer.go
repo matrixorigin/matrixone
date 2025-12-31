@@ -187,27 +187,33 @@ type Conn struct {
 	timeout           time.Duration
 	readTimeout       time.Duration
 	writeTimeout      time.Duration
-	allocator         *BufferAllocator
-	ses               atomic.Pointer[holder[*Session]]
-	closeFunc         sync.Once
-	service           string
+	// loadLocalReadTimeout is the timeout for reading data from client during LOAD DATA LOCAL operations
+	loadLocalReadTimeout time.Duration
+	// loadLocalWriteTimeout is the timeout for writing data to client during LOAD DATA LOCAL operations
+	loadLocalWriteTimeout time.Duration
+	allocator             *BufferAllocator
+	ses                   atomic.Pointer[holder[*Session]]
+	closeFunc             sync.Once
+	service               string
 }
 
 // NewIOSession create a new io session
 func NewIOSession(conn net.Conn, pu *config.ParameterUnit, service string) (_ *Conn, err error) {
 	c := &Conn{
-		conn:              conn,
-		localAddr:         conn.LocalAddr().String(),
-		remoteAddr:        conn.RemoteAddr().String(),
-		fixBuf:            MemBlock{},
-		dynamicWrBuf:      list.New(),
-		allocator:         &BufferAllocator{allocator: getSessionAlloc(service)},
-		timeout:           pu.SV.SessionTimeout.Duration,
-		readTimeout:       pu.SV.NetReadTimeout.Duration,
-		writeTimeout:      pu.SV.NetWriteTimeout.Duration,
-		maxBytesToFlush:   int(pu.SV.MaxBytesInOutbufToFlush * 1024),
-		allowedPacketSize: int(MaxPayloadSize),
-		service:           service,
+		conn:                  conn,
+		localAddr:             conn.LocalAddr().String(),
+		remoteAddr:            conn.RemoteAddr().String(),
+		fixBuf:                MemBlock{},
+		dynamicWrBuf:          list.New(),
+		allocator:             &BufferAllocator{allocator: getSessionAlloc(service)},
+		timeout:               pu.SV.SessionTimeout.Duration,
+		readTimeout:           pu.SV.NetReadTimeout.Duration,
+		writeTimeout:          pu.SV.NetWriteTimeout.Duration,
+		loadLocalReadTimeout:  pu.SV.LoadLocalReadTimeout.Duration,
+		loadLocalWriteTimeout: pu.SV.LoadLocalWriteTimeout.Duration,
+		maxBytesToFlush:       int(pu.SV.MaxBytesInOutbufToFlush * 1024),
+		allowedPacketSize:     int(MaxPayloadSize),
+		service:               service,
 	}
 
 	defer func() {
@@ -316,7 +322,7 @@ func (c *Conn) ReadLoadLocalPacket() (_ []byte, err error) {
 			c.FreeLoadLocal()
 		}
 	}()
-	err = c.ReadNBytesIntoBuf(c.header[:], HeaderLengthOfTheProtocol)
+	err = c.ReadNBytesIntoBufWithTimeout(c.header[:], HeaderLengthOfTheProtocol, c.loadLocalReadTimeout)
 	if err != nil {
 		return
 	}
@@ -337,11 +343,27 @@ func (c *Conn) ReadLoadLocalPacket() (_ []byte, err error) {
 		}
 	}
 
-	err = c.ReadNBytesIntoBuf(c.loadLocalBuf.data, packetLength)
+	err = c.ReadNBytesIntoBufWithTimeout(c.loadLocalBuf.data, packetLength, c.loadLocalReadTimeout)
 	if err != nil {
 		return
 	}
 	return c.loadLocalBuf.data[:packetLength], err
+}
+
+// ReadNBytesIntoBufWithTimeout reads specified bytes from the network with a timeout.
+// This is used for LOAD DATA LOCAL operations.
+func (c *Conn) ReadNBytesIntoBufWithTimeout(buf []byte, n int, timeout time.Duration) error {
+	var err error
+	var read int
+	var readLength int
+	for readLength < n {
+		read, err = c.ReadFromConnWithTimeout(buf[readLength:n], timeout)
+		if err != nil {
+			return err
+		}
+		readLength += read
+	}
+	return err
 }
 
 func (c *Conn) FreeLoadLocal() {
@@ -569,6 +591,23 @@ func (c *Conn) ReadFromConn(buf []byte) (int, error) {
 		if err != nil {
 			return 0, err
 		}
+	}
+	return c.conn.Read(buf)
+}
+
+// ReadFromConnWithTimeout reads from the network with a specific timeout.
+// This is used for LOAD DATA LOCAL operations where we need timeout detection.
+func (c *Conn) ReadFromConnWithTimeout(buf []byte, timeout time.Duration) (int, error) {
+	var err error
+	if timeout > 0 {
+		err = c.conn.SetReadDeadline(time.Now().Add(timeout))
+		if err != nil {
+			return 0, err
+		}
+		// Clear the deadline after reading
+		defer func() {
+			_ = c.conn.SetReadDeadline(time.Time{})
+		}()
 	}
 	return c.conn.Read(buf)
 }
