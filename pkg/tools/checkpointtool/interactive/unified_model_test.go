@@ -223,3 +223,79 @@ func TestTSFormatting(t *testing.T) {
 		assert.Equal(t, "-", result)
 	})
 }
+
+// TestParseSize tests the size parsing function
+func TestParseSize(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected uint32
+	}{
+		{"0B", 0},
+		{"100B", 100},
+		{"1.0KB", 1024},
+		{"1.5KB", 1536},
+		{"2.0KB", 2048},
+		{"1.0MB", 1048576},
+		{"1.5MB", 1572864},
+		{"279.6KB", 286310},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			result := parseSize(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestCkpDataOverview tests the checkpoint data overview function
+func TestCkpDataOverview(t *testing.T) {
+	t.Run("empty_rows", func(t *testing.T) {
+		result := ckpDataOverview(nil)
+		assert.Equal(t, "No data", result)
+
+		result = ckpDataOverview([][]string{})
+		assert.Equal(t, "No data", result)
+	})
+
+	t.Run("with_data_objects", func(t *testing.T) {
+		rows := [][]string{
+			// account_id, db_id, table_id, object_type, object_name, flags, rows, osize, csize
+			{"0", "1", "100", "1", "obj1", "-", "50", "2.0KB", "1.0KB"},
+			{"0", "1", "100", "1", "obj1", "-", "50", "2.0KB", "1.0KB"}, // duplicate
+			{"0", "1", "100", "1", "obj2", "-", "30", "1.0KB", "512B"},
+		}
+		result := ckpDataOverview(rows)
+
+		assert.Contains(t, result, "3 ranges")
+		assert.Contains(t, result, "2 data objs")
+		assert.Contains(t, result, "0 tomb objs")
+		assert.Contains(t, result, "80 rows")
+		assert.Contains(t, result, "osize: 3.0KB")
+		assert.Contains(t, result, "csize: 1.5KB")
+		assert.Contains(t, result, "ratio: 50.0%")
+	})
+
+	t.Run("with_tombstone_objects", func(t *testing.T) {
+		rows := [][]string{
+			{"0", "1", "100", "1", "data1", "-", "100", "4.0KB", "2.0KB"},
+			{"0", "1", "100", "2", "tomb1", "-", "10", "1.0KB", "512B"},
+		}
+		result := ckpDataOverview(rows)
+
+		assert.Contains(t, result, "1 data objs")
+		assert.Contains(t, result, "1 tomb objs")
+		assert.Contains(t, result, "100 rows")
+		assert.Contains(t, result, "10 deletes")
+	})
+
+	t.Run("short_row_skipped", func(t *testing.T) {
+		rows := [][]string{
+			{"0", "1", "100"}, // too short, should be skipped
+			{"0", "1", "100", "1", "obj1", "-", "50", "2.0KB", "1.0KB"},
+		}
+		result := ckpDataOverview(rows)
+
+		assert.Contains(t, result, "1 data objs")
+	})
+}

@@ -51,6 +51,9 @@ func NewObjectUnifiedModel(ctx context.Context, reader *objecttool.ObjectReader,
 			state.objectNameCol = opts.ObjectNameCol
 			state.baseDir = opts.BaseDir
 		}
+		if opts.CustomOverview != nil {
+			state.customOverview = opts.CustomOverview
+		}
 		// Note: ColumnFormats are handled by the existing bubbletea.go
 	}
 

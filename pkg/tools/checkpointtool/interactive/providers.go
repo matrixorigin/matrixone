@@ -100,12 +100,19 @@ func (p *TablesListProvider) GetRowNums() []string {
 func (p *TablesListProvider) GetOverview() string {
 	tables := p.state.FilteredTables()
 	totalData, totalTomb := 0, 0
+	uniqueObjects := make(map[string]struct{})
 	for _, tbl := range tables {
 		totalData += len(tbl.DataRanges)
 		totalTomb += len(tbl.TombRanges)
+		for _, r := range tbl.DataRanges {
+			uniqueObjects[r.ObjectStats.ObjectName().String()] = struct{}{}
+		}
+		for _, r := range tbl.TombRanges {
+			uniqueObjects[r.ObjectStats.ObjectName().String()] = struct{}{}
+		}
 	}
-	overview := fmt.Sprintf("📊 %d tables │ %d data objects │ %d tombstone objects",
-		len(tables), totalData, totalTomb)
+	overview := fmt.Sprintf("📊 %d tables │ %d data │ %d tomb │ %d ckp objects",
+		len(tables), totalData, totalTomb, len(uniqueObjects))
 	if p.state.HasAccountFilter() {
 		overview += fmt.Sprintf(" │ Filter: Account=%d", p.state.GetAccountFilter())
 	}
@@ -200,8 +207,39 @@ func (p *TableDetailProvider) GetOverview() string {
 	}
 	dataEntries := p.state.DataEntries()
 	tombEntries := p.state.TombEntries()
-	return fmt.Sprintf("Table %d (Account: %d) │ %d data │ %d tomb",
-		tbl.TableID, tbl.AccountID, len(dataEntries), len(tombEntries))
+
+	// Count unique objects and stats (each object counted once)
+	type objStats struct {
+		originSize uint32
+		compSize   uint32
+	}
+	dataObjects := make(map[string]*objStats)
+	tombObjects := make(map[string]struct{})
+
+	for _, e := range dataEntries {
+		objName := e.Range.ObjectStats.ObjectName().String()
+		if _, exists := dataObjects[objName]; !exists {
+			dataObjects[objName] = &objStats{
+				originSize: e.Range.ObjectStats.OriginSize(),
+				compSize:   e.Range.ObjectStats.Size(),
+			}
+		}
+	}
+	for _, e := range tombEntries {
+		objName := e.Range.ObjectStats.ObjectName().String()
+		tombObjects[objName] = struct{}{}
+	}
+
+	var totalOriginSize, totalCompSize uint32
+	for _, s := range dataObjects {
+		totalOriginSize += s.originSize
+		totalCompSize += s.compSize
+	}
+
+	return fmt.Sprintf("Table %d (Account: %d) │ %d data objs │ %d tomb objs │ osize: %s │ csize: %s",
+		tbl.TableID, tbl.AccountID,
+		len(dataObjects), len(tombObjects),
+		formatSize(totalOriginSize), formatSize(totalCompSize))
 }
 
 // === Table Detail Handler ===

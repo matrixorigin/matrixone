@@ -65,6 +65,9 @@ type State struct {
 	baseDir       string // Base directory for opening nested objects
 	objectToOpen  string // Object path to open (set by OnSelect)
 
+	// Custom overview
+	customOverview func(rows [][]string) string
+
 	// View mode
 	viewMode   ViewMode              // Current view mode
 	metaRows   [][]string            // Metadata rows (for BlkMeta/ObjMeta mode)

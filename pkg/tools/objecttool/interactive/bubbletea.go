@@ -1147,13 +1147,14 @@ func RunBubbletea(path string) error {
 
 // ViewOptions contains options for viewing object data
 type ViewOptions struct {
-	StartRow       int64             // Start row (0-based)
-	EndRow         int64             // End row (inclusive, -1 means all)
-	ColumnNames    map[uint16]string // Custom column names
-	ColumnFormats  map[uint16]string // Custom column formats (e.g., "ts", "objectstats", "hex")
-	ColumnExpander *ColumnExpander   // Column expander for splitting columns
-	ObjectNameCol  int               // Column index containing object name for drill-down (-1 to disable)
-	BaseDir        string            // Base directory for opening nested objects
+	StartRow       int64                        // Start row (0-based)
+	EndRow         int64                        // End row (inclusive, -1 means all)
+	ColumnNames    map[uint16]string            // Custom column names
+	ColumnFormats  map[uint16]string            // Custom column formats (e.g., "ts", "objectstats", "hex")
+	ColumnExpander *ColumnExpander              // Column expander for splitting columns
+	ObjectNameCol  int                          // Column index containing object name for drill-down (-1 to disable)
+	BaseDir        string                       // Base directory for opening nested objects
+	CustomOverview func(rows [][]string) string // Custom overview function
 }
 
 // ColumnExpander defines how to expand a column into multiple columns

@@ -39,6 +39,12 @@ func (p *ObjectDataProvider) GetRowNums() []string {
 }
 
 func (p *ObjectDataProvider) GetOverview() string {
+	// Use custom overview if provided
+	if p.state.customOverview != nil {
+		rows, _, _ := p.state.AllRows()
+		return p.state.customOverview(rows)
+	}
+
 	info := p.state.reader.Info()
 	var parts []string
 
