@@ -29,12 +29,12 @@ type ObjectDataProvider struct {
 }
 
 func (p *ObjectDataProvider) GetRows() [][]string {
-	rows, _, _ := p.state.CurrentRows()
+	rows, _, _ := p.state.AllRows()
 	return rows
 }
 
 func (p *ObjectDataProvider) GetRowNums() []string {
-	_, rowNums, _ := p.state.CurrentRows()
+	_, rowNums, _ := p.state.AllRows()
 	return rowNums
 }
 
@@ -68,10 +68,25 @@ func (p *ObjectDataProvider) GetOverview() string {
 
 type ObjectDataHandler struct {
 	state *State
+	page  *interactive.GenericPage
 }
 
 func (h *ObjectDataHandler) OnSelect(rowIdx int) tea.Cmd {
-	// In object tool, Enter goes to next page
+	// Check if drill-down is enabled
+	if h.state.objectNameCol >= 0 && h.page != nil {
+		rows := h.page.GetVisibleRows()
+		if rowIdx >= 0 && rowIdx < len(rows) {
+			row := rows[rowIdx]
+			if h.state.objectNameCol < len(row) {
+				objectName := row[h.state.objectNameCol]
+				if objectName != "" && objectName != "NULL" {
+					h.state.objectToOpen = objectName
+					return tea.Quit
+				}
+			}
+		}
+	}
+	// Default: go to next page
 	h.state.NextPage()
 	return nil
 }
@@ -101,12 +116,12 @@ func (h *ObjectDataHandler) FilterRow(row []string, filter string) bool {
 // === Page Factory for Object Tool ===
 
 func NewObjectDataPage(state *State) *interactive.GenericPage {
-	// Build headers from columns
-	cols := state.reader.Columns()
+	// Build headers from columns - use expanded columns if expander is set
+	cols := state.Columns()
 	headers := make([]string, len(cols))
 	for i, col := range cols {
 		if state.colNames != nil {
-			if name, ok := state.colNames[col.Idx]; ok {
+			if name, ok := state.colNames[uint16(i)]; ok {
 				headers[i] = name
 				continue
 			}
@@ -126,7 +141,9 @@ func NewObjectDataPage(state *State) *interactive.GenericPage {
 
 	provider := &ObjectDataProvider{state: state}
 	handler := &ObjectDataHandler{state: state}
-	return interactive.NewGenericPage(config, provider, handler)
+	page := interactive.NewGenericPage(config, provider, handler)
+	handler.page = page
+	return page
 }
 
 // === Block Meta Provider ===

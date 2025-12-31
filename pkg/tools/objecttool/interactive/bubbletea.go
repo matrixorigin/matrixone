@@ -1152,6 +1152,8 @@ type ViewOptions struct {
 	ColumnNames    map[uint16]string // Custom column names
 	ColumnFormats  map[uint16]string // Custom column formats (e.g., "ts", "objectstats", "hex")
 	ColumnExpander *ColumnExpander   // Column expander for splitting columns
+	ObjectNameCol  int               // Column index containing object name for drill-down (-1 to disable)
+	BaseDir        string            // Base directory for opening nested objects
 }
 
 // ColumnExpander defines how to expand a column into multiple columns

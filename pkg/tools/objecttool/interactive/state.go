@@ -60,6 +60,11 @@ type State struct {
 	// Column expander (for splitting columns)
 	colExpander *ColumnExpander
 
+	// Drill-down support
+	objectNameCol int    // Column index containing object name (-1 to disable)
+	baseDir       string // Base directory for opening nested objects
+	objectToOpen  string // Object path to open (set by OnSelect)
+
 	// View mode
 	viewMode   ViewMode              // Current view mode
 	metaRows   [][]string            // Metadata rows (for BlkMeta/ObjMeta mode)
@@ -104,6 +109,7 @@ func NewState(ctx context.Context, reader *objecttool.ObjectReader) *State {
 		maxColWidth:   64, // Default 64 characters
 		rowRangeStart: -1,
 		rowRangeEnd:   -1,
+		objectNameCol: -1, // Disabled by default
 	}
 	s.initBlockOffsets()
 	return s
@@ -179,6 +185,145 @@ func (s *State) FilteredRowCount() int64 {
 		return 0
 	}
 	return end - start + 1
+}
+
+// AllRows returns all rows (loading all blocks)
+func (s *State) AllRows() ([][]string, []string, error) {
+	// Handle metadata modes
+	if s.viewMode == ViewModeBlkMeta || s.viewMode == ViewModeObjMeta {
+		return s.currentMetaRows()
+	}
+
+	blockCount := s.reader.BlockCount()
+	var allRows [][]string
+	var allRowNums []string
+
+	// Save original state
+	origBlock := s.currentBlock
+	origOffset := s.rowOffset
+
+	for blockIdx := uint32(0); blockIdx < blockCount; blockIdx++ {
+		s.currentBlock = blockIdx
+		s.releaseCurrentBatch()
+		if err := s.ensureBlockLoaded(); err != nil {
+			return nil, nil, err
+		}
+		if s.currentBatch == nil {
+			continue
+		}
+
+		totalRows := s.currentBatch.RowCount()
+		start := 0
+		end := totalRows
+
+		// Apply row range filter
+		if s.rowRangeStart >= 0 || s.rowRangeEnd >= 0 {
+			blockStartRow := s.GetBlockStartRow(blockIdx)
+			if s.rowRangeStart >= 0 {
+				localStart := int(s.rowRangeStart - blockStartRow)
+				if localStart > start {
+					start = localStart
+				}
+			}
+			if s.rowRangeEnd >= 0 {
+				localEnd := int(s.rowRangeEnd-blockStartRow) + 1
+				if localEnd < end {
+					end = localEnd
+				}
+			}
+		}
+
+		if start >= end || start >= totalRows {
+			continue
+		}
+
+		// Format rows for this block
+		rows, rowNums := s.formatRows(start, end)
+		allRows = append(allRows, rows...)
+		allRowNums = append(allRowNums, rowNums...)
+	}
+
+	// Restore original state
+	s.currentBlock = origBlock
+	s.rowOffset = origOffset
+	s.releaseCurrentBatch()
+
+	return allRows, allRowNums, nil
+}
+
+// formatRows formats rows in range [start, end) from current batch
+func (s *State) formatRows(start, end int) ([][]string, []string) {
+	cols := s.reader.Columns()
+	rows := make([][]string, end-start)
+	rowNumbers := make([]string, end-start)
+
+	for i := start; i < end; i++ {
+		rowNumbers[i-start] = fmt.Sprintf("(%d-%d)", s.currentBlock, i)
+
+		row := make([]string, len(cols))
+		var expandedValues []any
+		for colIdx := range cols {
+			col := cols[colIdx]
+			vec := s.currentBatch.Vecs[colIdx]
+
+			if vec.IsNull(uint64(i)) {
+				row[colIdx] = "NULL"
+				continue
+			}
+
+			var value any
+			switch col.Type.Oid {
+			case types.T_bool:
+				value = vector.GetFixedAtNoTypeCheck[bool](vec, i)
+			case types.T_int8:
+				value = vector.GetFixedAtNoTypeCheck[int8](vec, i)
+			case types.T_int16:
+				value = vector.GetFixedAtNoTypeCheck[int16](vec, i)
+			case types.T_int32:
+				value = vector.GetFixedAtNoTypeCheck[int32](vec, i)
+			case types.T_int64:
+				value = vector.GetFixedAtNoTypeCheck[int64](vec, i)
+			case types.T_uint8:
+				value = vector.GetFixedAtNoTypeCheck[uint8](vec, i)
+			case types.T_uint16:
+				value = vector.GetFixedAtNoTypeCheck[uint16](vec, i)
+			case types.T_uint32:
+				value = vector.GetFixedAtNoTypeCheck[uint32](vec, i)
+			case types.T_uint64:
+				value = vector.GetFixedAtNoTypeCheck[uint64](vec, i)
+			case types.T_float32:
+				value = vector.GetFixedAtNoTypeCheck[float32](vec, i)
+			case types.T_float64:
+				value = vector.GetFixedAtNoTypeCheck[float64](vec, i)
+			case types.T_char, types.T_varchar, types.T_text, types.T_blob, types.T_binary, types.T_varbinary:
+				value = vec.GetBytesAt(i)
+			case types.T_TS:
+				value = vector.GetFixedAtNoTypeCheck[types.TS](vec, i)
+			case types.T_Rowid:
+				value = vector.GetFixedAtNoTypeCheck[types.Rowid](vec, i)
+			case types.T_uuid:
+				value = vector.GetFixedAtNoTypeCheck[types.Uuid](vec, i)
+			default:
+				value = vec.GetRawBytesAt(i)
+			}
+
+			if s.colExpander != nil && uint16(colIdx) == s.colExpander.SourceCol {
+				expandedValues = s.colExpander.ExpandFunc(value)
+				row[colIdx] = ""
+				continue
+			}
+
+			formatter := s.formatter.GetFormatter(col.Idx, col.Type, value)
+			row[colIdx] = formatter.Format(value)
+		}
+
+		if s.colExpander != nil && expandedValues != nil {
+			row = s.expandRow(row, expandedValues)
+		}
+		rows[i-start] = row
+	}
+
+	return rows, rowNumbers
 }
 
 // CurrentRows returns the current page data (formatted strings)
@@ -1032,4 +1177,17 @@ func (s *State) expandColumns(cols []objecttool.ColInfo) []objecttool.ColInfo {
 		}
 	}
 	return result
+}
+
+// GetObjectToOpen returns the object path to open (if any)
+func (s *State) GetObjectToOpen() string {
+	if s.objectToOpen != "" && s.baseDir != "" {
+		return s.baseDir + "/" + s.objectToOpen
+	}
+	return s.objectToOpen
+}
+
+// ClearObjectToOpen clears the object to open
+func (s *State) ClearObjectToOpen() {
+	s.objectToOpen = ""
 }

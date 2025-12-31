@@ -409,3 +409,8 @@ func (p *GenericPage) GetSelectedRow() []string {
 	}
 	return nil
 }
+
+// GetVisibleRows returns all visible rows
+func (p *GenericPage) GetVisibleRows() [][]string {
+	return p.list.visibleRows()
+}

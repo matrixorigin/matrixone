@@ -47,6 +47,10 @@ func NewObjectUnifiedModel(ctx context.Context, reader *objecttool.ObjectReader,
 		if opts.ColumnExpander != nil {
 			state.colExpander = opts.ColumnExpander
 		}
+		if opts.ObjectNameCol >= 0 {
+			state.objectNameCol = opts.ObjectNameCol
+			state.baseDir = opts.BaseDir
+		}
 		// Note: ColumnFormats are handled by the existing bubbletea.go
 	}
 
@@ -174,6 +178,16 @@ func (m *ObjectUnifiedModel) View() string {
 	return view
 }
 
+// GetObjectToOpen returns the object path to open (if any)
+func (m *ObjectUnifiedModel) GetObjectToOpen() string {
+	return m.state.GetObjectToOpen()
+}
+
+// ClearObjectToOpen clears the object to open
+func (m *ObjectUnifiedModel) ClearObjectToOpen() {
+	m.state.ClearObjectToOpen()
+}
+
 // RunUnified runs the object viewer using the unified GenericPage framework
 func RunUnified(ctx context.Context, path string, opts *ViewOptions) error {
 	reader, err := objecttool.Open(ctx, path)
@@ -183,7 +197,31 @@ func RunUnified(ctx context.Context, path string, opts *ViewOptions) error {
 	defer reader.Close()
 
 	m := NewObjectUnifiedModel(ctx, reader, opts)
-	p := tea.NewProgram(m, tea.WithAltScreen())
-	_, err = p.Run()
-	return err
+
+	for {
+		p := tea.NewProgram(m, tea.WithAltScreen())
+		finalModel, err := p.Run()
+		if err != nil {
+			return err
+		}
+
+		um, ok := finalModel.(*ObjectUnifiedModel)
+		if !ok {
+			return nil
+		}
+
+		// Check if we need to open a nested object
+		if um.GetObjectToOpen() != "" {
+			nestedPath := um.GetObjectToOpen()
+			um.ClearObjectToOpen()
+			// Open nested object with no special options
+			if err := RunUnified(ctx, nestedPath, nil); err != nil {
+				return err
+			}
+			// Continue with current viewer after returning
+			continue
+		}
+
+		return nil
+	}
 }

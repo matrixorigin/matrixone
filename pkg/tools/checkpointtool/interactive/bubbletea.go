@@ -54,23 +54,27 @@ func Run(reader *checkpointtool.CheckpointReader) error {
 					3:  ckputil.TableObjectsAttr_ObjectType,
 					4:  "object_name",
 					5:  "flags",
-					6:  "osize",
-					7:  "csize",
-					8:  ckputil.TableObjectsAttr_CreateTS,
-					9:  ckputil.TableObjectsAttr_DeleteTS,
-					10: ckputil.TableObjectsAttr_Cluster,
+					6:  "rows",
+					7:  "osize",
+					8:  "csize",
+					9:  ckputil.TableObjectsAttr_CreateTS,
+					10: ckputil.TableObjectsAttr_DeleteTS,
+					11: ckputil.TableObjectsAttr_Cluster,
 				},
 				ColumnExpander: &objectinteractive.ColumnExpander{
 					SourceCol: 4, // id column
-					NewCols:   []string{"object_name", "flags", "osize", "csize"},
+					NewCols:   []string{"object_name", "flags", "rows", "osize", "csize"},
 					NewTypes: []types.Type{
 						types.T_varchar.ToType(),
 						types.T_varchar.ToType(),
+						types.T_uint32.ToType(),
 						types.T_varchar.ToType(),
 						types.T_varchar.ToType(),
 					},
 					ExpandFunc: expandObjectStats,
 				},
+				ObjectNameCol: 4,                    // object_name column after expansion
+				BaseDir:       m.state.reader.Dir(), // Base directory for nested objects
 			}
 			if err := objectinteractive.RunUnified(context.Background(), um.GetObjectToOpen(), opts); err != nil {
 				return err
@@ -88,7 +92,7 @@ func Run(reader *checkpointtool.CheckpointReader) error {
 func expandObjectStats(value any) []any {
 	data, ok := value.([]byte)
 	if !ok || len(data) != objectio.ObjectStatsLen {
-		return []any{"", "", "", ""}
+		return []any{"", "", "", "", ""}
 	}
 
 	var stats objectio.ObjectStats
@@ -112,6 +116,7 @@ func expandObjectStats(value any) []any {
 	return []any{
 		stats.ObjectName().String(),
 		flags,
+		stats.Rows(),
 		formatSize(stats.OriginSize()),
 		formatSize(stats.Size()),
 	}
