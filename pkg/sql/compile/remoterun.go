@@ -220,6 +220,8 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 			RuntimeFilterProbeList: s.DataSource.RuntimeFilterSpecs,
 			IsConst:                s.DataSource.isConst,
 			RecvMsgList:            s.DataSource.RecvMsgList,
+			BlockOrderBy:           s.DataSource.BlockOrderBy,
+			BlockLimit:             s.DataSource.BlockLimit,
 		}
 	}
 	// PreScope
@@ -333,6 +335,8 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 			RuntimeFilterSpecs: dsc.RuntimeFilterProbeList,
 			isConst:            dsc.IsConst,
 			RecvMsgList:        dsc.RecvMsgList,
+			BlockOrderBy:       dsc.BlockOrderBy,
+			BlockLimit:         dsc.BlockLimit,
 		}
 	}
 	//var relData engine.RelData
