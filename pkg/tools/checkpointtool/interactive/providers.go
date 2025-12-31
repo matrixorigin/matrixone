@@ -306,34 +306,3 @@ func (p *AccountListProvider) GetOverview() string {
 	accounts := p.state.Accounts()
 	return fmt.Sprintf("📊 %d accounts", len(accounts))
 }
-
-// === Account List Handler ===
-
-type accountListHandler struct {
-	state *State
-}
-
-func (h *accountListHandler) OnSelect(rowIdx int) tea.Cmd {
-	accounts := h.state.Accounts()
-	if rowIdx >= 0 && rowIdx < len(accounts) {
-		// TODO: implement account selection
-	}
-	return nil
-}
-
-func (h *accountListHandler) OnBack() tea.Cmd {
-	return func() tea.Msg { return goBackMsg{} }
-}
-
-func (h *accountListHandler) OnCustomKey(key string) tea.Cmd { return nil }
-
-func (h *accountListHandler) MatchRow(row []string, query string) bool {
-	if len(row) > 0 {
-		return strings.Contains(row[0], query)
-	}
-	return false
-}
-
-func (h *accountListHandler) FilterRow(row []string, filter string) bool {
-	return h.MatchRow(row, filter)
-}

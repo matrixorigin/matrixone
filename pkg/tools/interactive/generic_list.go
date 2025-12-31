@@ -56,10 +56,9 @@ type GenericList struct {
 	hScrollOffset int
 
 	// Search
-	searchMatches   map[int]bool
-	searchQuery     string
-	searchHistory   *HistoryManager // Persistent search history
-	currentMatchIdx int             // Current match index for highlighting
+	searchMatches map[int]bool
+	searchQuery   string
+	searchHistory *HistoryManager // Persistent search history
 
 	// Filter
 	filterActive bool
