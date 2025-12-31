@@ -27,11 +27,12 @@ type TableView struct {
 	cursor       int
 	scrollOffset int
 	screenHeight int
+	autoWidths   []int // Auto-calculated column widths
 }
 
 // NewTableView creates a new table view
 func NewTableView(config TableConfig, dataSource DataSource, screenHeight int) *TableView {
-	return &TableView{
+	tv := &TableView{
 		config:       config,
 		dataSource:   dataSource,
 		searchEngine: NewSearchEngine(),
@@ -39,6 +40,44 @@ func NewTableView(config TableConfig, dataSource DataSource, screenHeight int) *
 		scrollOffset: 0,
 		screenHeight: screenHeight,
 	}
+	tv.calculateColumnWidths()
+	return tv
+}
+
+// calculateColumnWidths calculates optimal column widths based on data
+func (tv *TableView) calculateColumnWidths() {
+	items := tv.dataSource.GetFilteredItems()
+	if len(items) == 0 {
+		tv.autoWidths = tv.config.ColumnWidths
+		return
+	}
+
+	// Start with header widths or configured widths
+	widths := make([]int, len(tv.config.Headers))
+	for i, header := range tv.config.Headers {
+		widths[i] = len(header)
+		if i < len(tv.config.ColumnWidths) && tv.config.ColumnWidths[i] > widths[i] {
+			widths[i] = tv.config.ColumnWidths[i]
+		}
+		if widths[i] < 8 {
+			widths[i] = 8
+		}
+	}
+
+	// Scan all items to find max width
+	for _, item := range items {
+		fields := item.GetFields()
+		for i, field := range fields {
+			if i < len(widths) {
+				fieldLen := len(field)
+				if fieldLen > widths[i] {
+					widths[i] = fieldLen
+				}
+			}
+		}
+	}
+
+	tv.autoWidths = widths
 }
 
 // SetCursor sets the cursor position
@@ -87,7 +126,14 @@ func (tv *TableView) Search(term string) error {
 	if tv.searchEngine.IsActive() && tv.searchEngine.GetMatchCount() > 0 {
 		tv.SetCursor(tv.searchEngine.GetCurrentIndex())
 	}
+	// Recalculate widths after search (filtered items may have changed)
+	tv.calculateColumnWidths()
 	return nil
+}
+
+// RefreshData recalculates column widths when data changes
+func (tv *TableView) RefreshData() {
+	tv.calculateColumnWidths()
 }
 
 // NextMatch jumps to next search match
@@ -147,6 +193,11 @@ func (tv *TableView) Render() string {
 
 // renderHeader renders table header
 func (tv *TableView) renderHeader(b *strings.Builder) {
+	widths := tv.autoWidths
+	if len(widths) == 0 {
+		widths = tv.config.ColumnWidths
+	}
+
 	// First column (cursor + number)
 	if tv.config.AllowCursor {
 		b.WriteString("  # │")
@@ -156,8 +207,10 @@ func (tv *TableView) renderHeader(b *strings.Builder) {
 
 	// Data columns
 	for i, header := range tv.config.Headers {
-		width := tv.config.ColumnWidths[i]
-		b.WriteString(fmt.Sprintf(" %-*s │", width, header))
+		if i < len(widths) {
+			width := widths[i]
+			b.WriteString(fmt.Sprintf(" %-*s │", width, header))
+		}
 	}
 	b.WriteString("\n")
 
@@ -167,15 +220,22 @@ func (tv *TableView) renderHeader(b *strings.Builder) {
 	} else {
 		b.WriteString("───┼")
 	}
-	for _, width := range tv.config.ColumnWidths {
-		b.WriteString(strings.Repeat("─", width+2))
-		b.WriteString("┼")
+	for i := range tv.config.Headers {
+		if i < len(widths) {
+			b.WriteString(strings.Repeat("─", widths[i]+2))
+			b.WriteString("┼")
+		}
 	}
 	b.WriteString("\n")
 }
 
 // renderRow renders a single table row
 func (tv *TableView) renderRow(b *strings.Builder, index int, item Item) {
+	widths := tv.autoWidths
+	if len(widths) == 0 {
+		widths = tv.config.ColumnWidths
+	}
+
 	// Cursor marker
 	cursor := " "
 	if tv.config.AllowCursor && index == tv.cursor {
@@ -198,12 +258,14 @@ func (tv *TableView) renderRow(b *strings.Builder, index int, item Item) {
 	// Data columns
 	fields := item.GetFields()
 	for i, field := range fields {
-		width := tv.config.ColumnWidths[i]
-		// Truncate if too long
-		if len(field) > width {
-			field = field[:width-3] + "..."
+		if i < len(widths) {
+			width := widths[i]
+			// Truncate if too long
+			if len(field) > width {
+				field = field[:width-3] + "..."
+			}
+			b.WriteString(fmt.Sprintf(" %-*s │", width, field))
 		}
-		b.WriteString(fmt.Sprintf(" %-*s │", width, field))
 	}
 	b.WriteString("\n")
 }

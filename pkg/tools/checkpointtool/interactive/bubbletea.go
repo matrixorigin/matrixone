@@ -32,12 +32,13 @@ import (
 const helpText = `Checkpoint Viewer - Keyboard Shortcuts:
   Navigation:
     j/↓     - Move down          k/↑     - Move up
+    h/←     - Scroll left        l/→     - Scroll right
     Enter   - Select/Drill down  b/Bksp  - Go back
     Esc     - Back to list       q       - Quit
 
   View Switching (in Entry view):
     a       - Account view       t       - Table view
-    l       - Logical view
+    L       - Logical view (uppercase L)
 
   Filter (Table view):
     f       - Filter by Account ID
@@ -57,6 +58,7 @@ const helpText = `Checkpoint Viewer - Keyboard Shortcuts:
 
   Scrolling:
     PgUp/PgDn - Page up/down     g/G     - Top/Bottom
+    h/l/←/→   - Scroll left/right (horizontal)
 
   Help:
     ?       - Show this help
@@ -67,6 +69,13 @@ type model struct {
 	message  string
 	cursor   int // Selection cursor
 	quitting bool
+
+	// Terminal size
+	width  int
+	height int
+
+	// Horizontal scroll
+	hScrollOffset int
 
 	// Shared view components
 	tableView *interactive.TableView
@@ -132,6 +141,10 @@ func (m model) Init() tea.Cmd {
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		return m, nil
 	case tea.KeyMsg:
 		return m.handleKey(msg)
 	}
@@ -278,6 +291,25 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.moveCursor(1)
 	case "k", "up":
 		m.moveCursor(-1)
+	case "h", "left":
+		// Scroll left horizontally
+		if m.hScrollOffset > 0 {
+			m.hScrollOffset--
+		}
+	case "l", "right":
+		// Scroll right horizontally
+		maxCols := 6 // Number of columns in checkpoint list (Type, Start, End, State, Version, LSN)
+		if m.hScrollOffset < maxCols-1 {
+			m.hScrollOffset++
+		}
+	case "L":
+		// Switch to Logical view (uppercase L)
+		if m.state.mode == ViewModeList || m.state.mode == ViewModeEntry {
+			if err := m.state.SwitchToLogical(); err != nil {
+				m.message = fmt.Sprintf("Error: %v", err)
+			}
+			m.cursor = 0
+		}
 	case "g":
 		m.cursor = 0
 		m.state.scrollOffset = 0
@@ -337,14 +369,6 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "t":
 		if m.state.mode == ViewModeEntry {
 			if err := m.state.SwitchToTables(); err != nil {
-				m.message = fmt.Sprintf("Error: %v", err)
-			}
-			m.cursor = 0
-		}
-
-	case "l":
-		if m.state.mode == ViewModeList || m.state.mode == ViewModeEntry {
-			if err := m.state.SwitchToLogical(); err != nil {
 				m.message = fmt.Sprintf("Error: %v", err)
 			}
 			m.cursor = 0
@@ -534,11 +558,76 @@ func (m model) renderFooter() string {
 }
 
 func (m model) renderList() string {
-	// Sync cursor with listView
-	m.listView.SetCursor(m.cursor)
-	m.listView.SetScrollOffset(m.state.scrollOffset)
+	var b strings.Builder
 
-	return m.listView.Render()
+	entries := m.state.entries
+	if len(entries) == 0 {
+		return "No checkpoints found"
+	}
+
+	// Title
+	b.WriteString("Checkpoints\n")
+	b.WriteString(strings.Repeat("─", 120))
+	b.WriteString("\n\n")
+
+	// Calculate visible range based on terminal height
+	// Reserve space for: breadcrumb(3) + title(3) + header(3) + footer(1) + status(2) = 12 lines
+	maxVisible := m.height - 12
+	if maxVisible < 5 {
+		maxVisible = 5 // Minimum 5 rows
+	}
+	if maxVisible > 50 {
+		maxVisible = 50 // Maximum 50 rows
+	}
+
+	start := m.state.scrollOffset
+	end := start + maxVisible
+	if end > len(entries) {
+		end = len(entries)
+	}
+
+	// Prepare visible rows only
+	visibleRows := make([][]string, end-start)
+	for i := start; i < end; i++ {
+		e := entries[i]
+		typeStr := "G"
+		if e.IsIncremental() {
+			typeStr = "I"
+		}
+		visibleRows[i-start] = []string{
+			typeStr,
+			formatTS(e.GetStart()),
+			formatTS(e.GetEnd()),
+			stateStr(e.GetState()),
+			fmt.Sprintf("%d", e.GetVersion()),
+			fmt.Sprintf("%d", e.LSN()),
+		}
+	}
+
+	// Use generic table renderer
+	renderer := interactive.NewTableRenderer()
+	renderer.Headers = []string{"Type", "Start", "End", "State", "Version", "LSN"}
+	renderer.Rows = visibleRows
+	renderer.HScrollOffset = m.hScrollOffset
+	renderer.VScrollOffset = 0 // Always 0 since we already sliced the rows
+	renderer.PageSize = len(visibleRows)
+	renderer.CursorEnabled = true
+	renderer.CursorPos = m.cursor
+	renderer.ShowRowNumber = true
+	renderer.RowNumLabel = "#"
+	renderer.RowNumberOffset = start // Display actual checkpoint indices
+
+	b.WriteString(renderer.Render())
+
+	// Status line with scroll indicator
+	scrollInfo := ""
+	if m.hScrollOffset > 0 {
+		scrollInfo = fmt.Sprintf(" │ Scroll: %d/%d", m.hScrollOffset+1, len(renderer.Headers))
+	}
+	b.WriteString(fmt.Sprintf("\n[%d-%d of %d]%s Press: [Enter] View  [h/l] Scroll  [q] Quit  [?] Help\n",
+		start+1, end, len(entries), scrollInfo))
+
+	return b.String()
 }
 
 func (m model) renderEntry() string {

@@ -429,8 +429,84 @@ func (m *model) startSearch(pattern string) {
 		}
 	}
 
-	// Find first match from current position
-	m.findNextMatch()
+	// Find first match from beginning of file (not current position)
+	m.findFirstMatch()
+}
+
+// findFirstMatch finds first match from beginning of file
+func (m *model) findFirstMatch() {
+	if m.searchTerm == "" {
+		return
+	}
+
+	blockCount := m.state.reader.BlockCount()
+
+	// Search from beginning of file
+	for blockIdx := uint32(0); blockIdx < blockCount; blockIdx++ {
+		batch, release, err := m.state.reader.ReadBlock(m.state.ctx, blockIdx)
+		if err != nil {
+			continue
+		}
+
+		rowCount := batch.RowCount()
+		cols := m.state.reader.Columns()
+
+		// Get block start row from cache
+		blockStartRow := m.state.GetBlockStartRow(blockIdx)
+
+		// Apply row range filter
+		startRowInBlock := 0
+		if m.state.rowRangeStart >= 0 && blockStartRow+int64(startRowInBlock) < m.state.rowRangeStart {
+			startRowInBlock = int(m.state.rowRangeStart - blockStartRow)
+			if startRowInBlock < 0 {
+				startRowInBlock = 0
+			}
+		}
+		endRowInBlock := rowCount
+		if m.state.rowRangeEnd >= 0 && blockStartRow+int64(endRowInBlock) > m.state.rowRangeEnd+1 {
+			endRowInBlock = int(m.state.rowRangeEnd - blockStartRow + 1)
+		}
+
+		// Search this block
+		for rowIdx := startRowInBlock; rowIdx < endRowInBlock; rowIdx++ {
+			for colIdx := 0; colIdx < batch.VectorCount(); colIdx++ {
+				if colIdx >= len(cols) {
+					continue
+				}
+
+				vec := batch.GetVector(int32(colIdx))
+				if vec.IsNull(uint64(rowIdx)) {
+					continue
+				}
+
+				cell := m.formatCell(vec, rowIdx, cols[colIdx])
+
+				if m.matchPattern(cell) {
+					rowNum := fmt.Sprintf("(%d-%d)", blockIdx, rowIdx)
+					colName := fmt.Sprintf("Col%d", colIdx)
+					if colIdx < len(cols) {
+						colName = fmt.Sprintf("Col%d", cols[colIdx].Idx)
+					}
+
+					m.currentMatch = SearchMatch{
+						Row:        blockStartRow + int64(rowIdx),
+						Col:        colIdx,
+						Value:      cell,
+						RowNum:     rowNum,
+						ColumnName: colName,
+					}
+					m.hasMatch = true
+					release()
+					m.gotoSearchMatch()
+					return
+				}
+			}
+		}
+
+		release()
+	}
+
+	m.message = "No matches found"
 }
 
 // findNextMatch finds next match (from current position backward)
@@ -719,6 +795,36 @@ func (m model) highlightSearchMatch(text string, row int64, col int) string {
 	return text
 }
 
+// visibleLen returns the visible length of a string (excluding ANSI codes)
+func visibleLen(s string) int {
+	// Remove ANSI escape sequences
+	inEscape := false
+	visLen := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\033' {
+			inEscape = true
+			continue
+		}
+		if inEscape {
+			if s[i] == 'm' {
+				inEscape = false
+			}
+			continue
+		}
+		visLen++
+	}
+	return visLen
+}
+
+// padRight pads string to width, considering ANSI codes
+func padRight(s string, width int) string {
+	visLen := visibleLen(s)
+	if visLen >= width {
+		return s
+	}
+	return s + strings.Repeat(" ", width-visLen)
+}
+
 func (m model) renderTable(b *strings.Builder) {
 	rows, rowNumbers, _ := m.state.CurrentRows()
 	if len(rows) == 0 {
@@ -892,7 +998,8 @@ func (m model) renderTable(b *strings.Builder) {
 				// Highlight search match
 				cell = m.highlightSearchMatch(cell, int64(i)+m.state.GlobalRowOffset(), int(colIdx))
 
-				fmt.Fprintf(b, " %-*s │", widths[j], cell)
+				// Use padRight to handle ANSI codes properly
+				fmt.Fprintf(b, " %s │", padRight(cell, widths[j]))
 			}
 		}
 		b.WriteString("\n")
