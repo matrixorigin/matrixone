@@ -12,11 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package interactive
+package aggexec
 
-import "context"
+import (
+	"unsafe"
 
-// Run runs the interactive interface
-func Run(path string) error {
-	return RunUnified(context.Background(), path, nil)
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+)
+
+func countSumSize[T float64 | int64 | uint64, A types.Ints | types.UInts | types.Floats]() int {
+	return int(unsafe.Sizeof(countSum[T, A]{}))
+}
+
+func countSumDecSize() int {
+	return int(unsafe.Sizeof(countSumDec{}))
 }
