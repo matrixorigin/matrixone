@@ -17,7 +17,9 @@ package ckp
 import (
 	"context"
 	"fmt"
+	"os"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/tools/checkpointtool"
 	"github.com/matrixorigin/matrixone/pkg/tools/checkpointtool/interactive"
 	"github.com/spf13/cobra"
@@ -44,7 +46,43 @@ func PrepareCommand() *cobra.Command {
 	return cmd
 }
 
+func setupLogFile() (*os.File, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return nil, err
+	}
+	
+	logDir := homeDir + "/.mo-tool"
+	if err := os.MkdirAll(logDir, 0755); err != nil {
+		return nil, err
+	}
+	
+	logPath := logDir + "/ckp.log"
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return nil, err
+	}
+	
+	// Redirect logs to file
+	logCfg := &logutil.LogConfig{
+		Level:    "info",
+		Format:   "console",
+		Filename: logPath,
+		MaxSize:  100,
+		MaxDays:  7,
+	}
+	logutil.SetupMOLogger(logCfg)
+	
+	return logFile, nil
+}
+
 func runViewer(dir string) error {
+	logFile, err := setupLogFile()
+	if err != nil {
+		return fmt.Errorf("setup log file: %w", err)
+	}
+	defer logFile.Close()
+
 	ctx := context.Background()
 	reader, err := checkpointtool.Open(ctx, dir)
 	if err != nil {
@@ -65,6 +103,12 @@ func infoCommand() *cobra.Command {
 			if len(args) == 1 {
 				dir = args[0]
 			}
+
+			logFile, err := setupLogFile()
+			if err != nil {
+				return fmt.Errorf("setup log file: %w", err)
+			}
+			defer logFile.Close()
 
 			ctx := context.Background()
 			reader, err := checkpointtool.Open(ctx, dir)
