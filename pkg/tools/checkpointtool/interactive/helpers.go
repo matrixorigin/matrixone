@@ -25,13 +25,12 @@ import (
 // Helper functions for formatting
 
 func formatTS(ts types.TS) string {
-	raw := ts.ToString()
 	physical := ts.Physical()
 	if physical == 0 {
-		return raw
+		return fmt.Sprintf("%d-%d", physical, ts.Logical())
 	}
 	t := time.Unix(0, physical)
-	return fmt.Sprintf("%s(%s)", raw, t.Format("2006/01/02 15:04:05.000000"))
+	return fmt.Sprintf("%d-%d(%s)", physical, ts.Logical(), t.Format("2006/01/02 15:04:05.000000"))
 }
 
 func formatTSShort(ts types.TS) string {
