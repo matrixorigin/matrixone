@@ -185,6 +185,8 @@ type Conn struct {
 	packetInBuf       int
 	allowedPacketSize int
 	timeout           time.Duration
+	readTimeout       time.Duration
+	writeTimeout      time.Duration
 	allocator         *BufferAllocator
 	ses               atomic.Pointer[holder[*Session]]
 	closeFunc         sync.Once
@@ -201,6 +203,8 @@ func NewIOSession(conn net.Conn, pu *config.ParameterUnit, service string) (_ *C
 		dynamicWrBuf:      list.New(),
 		allocator:         &BufferAllocator{allocator: getSessionAlloc(service)},
 		timeout:           pu.SV.SessionTimeout.Duration,
+		readTimeout:       pu.SV.NetReadTimeout.Duration,
+		writeTimeout:      pu.SV.NetWriteTimeout.Duration,
 		maxBytesToFlush:   int(pu.SV.MaxBytesInOutbufToFlush * 1024),
 		allowedPacketSize: int(MaxPayloadSize),
 		service:           service,
@@ -560,8 +564,8 @@ func (c *Conn) ReadIntoReadBuf() error {
 // The maximum read length is len(buf)
 func (c *Conn) ReadFromConn(buf []byte) (int, error) {
 	var err error
-	if c.timeout > 0 {
-		err = c.conn.SetReadDeadline(time.Now().Add(c.timeout))
+	if c.readTimeout > 0 {
+		err = c.conn.SetReadDeadline(time.Now().Add(c.readTimeout))
 		if err != nil {
 			return 0, err
 		}
@@ -779,6 +783,11 @@ func (c *Conn) Write(payload []byte) error {
 
 // WriteToConn is the base method for write data to network, calling net.Conn.Write().
 func (c *Conn) WriteToConn(buf []byte) error {
+	if c.writeTimeout > 0 {
+		if err := c.conn.SetWriteDeadline(time.Now().Add(c.writeTimeout)); err != nil {
+			return err
+		}
+	}
 	sendLength := 0
 	for sendLength < len(buf) {
 		n, err := c.conn.Write(buf[sendLength:])
@@ -803,6 +812,15 @@ func (c *Conn) closeConn() error {
 		}
 	}
 	return err
+}
+
+// Disconnect closes the underlying network connection without full cleanup.
+// This is used to forcefully disconnect the client (e.g., on timeout during LOAD DATA).
+func (c *Conn) Disconnect() error {
+	if c.conn != nil {
+		return c.conn.Close()
+	}
+	return nil
 }
 
 // Reset does not release fix buffer but release dynamical buffer
