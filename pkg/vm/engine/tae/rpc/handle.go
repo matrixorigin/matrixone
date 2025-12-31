@@ -741,6 +741,7 @@ func (h *Handle) HandleWrite(
 			req.Cancel()
 		}
 	}()
+
 	ctx = perfcounter.WithCounterSetFrom(ctx, h.db.Opts.Ctx)
 	switch req.PkCheck {
 	case cmd_util.FullDedup:
@@ -860,6 +861,7 @@ func (h *Handle) HandleWrite(
 		if req.DatabaseId == pkgcatalog.MO_CATALOG_ID && req.TableName == pkgcatalog.MO_MERGE_SETTINGS {
 			postFunc = append(postFunc, parse_merge_settings_set(req.Batch, h.db.MergeScheduler))
 		}
+
 		err = AppendDataToTable(ctx, tb, req.Batch)
 		return
 	}

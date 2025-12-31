@@ -16,7 +16,9 @@ package tables
 
 import (
 	"context"
+	"slices"
 
+	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -247,6 +249,14 @@ func (node *memoryNode) ApplyAppendLocked(
 		def := schema.ColDefs[schema.GetColIdx(attr)]
 		destVec := node.data.Vecs[def.Idx]
 		destVec.Extend(bat.Vecs[srcPos])
+	}
+	// RelLogicalID COMPAT
+	if node.object.meta.Load().GetTable().ID == 2 && len(node.data.Vecs) > 10 /*not tombstone*/ {
+		in_logical_idx := slices.Index(bat.Attrs, pkgcatalog.SystemRelAttr_LogicalID)
+		if in_logical_idx == -1 {
+			desc := node.data.GetVectorByName(pkgcatalog.SystemRelAttr_LogicalID)
+			desc.Extend(bat.GetVectorByName(pkgcatalog.SystemRelAttr_ID))
+		}
 	}
 	return
 }

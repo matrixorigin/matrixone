@@ -35,6 +35,7 @@ const (
 var SystemDBSchema *Schema
 var SystemTableSchema *Schema
 var SystemColumnSchema *Schema
+var SystemIndexTableSchema *Schema
 
 const (
 	ModelSchemaName   = "_ModelSchema"
@@ -64,6 +65,11 @@ func init() {
 	}
 
 	SystemColumnSchema, err = DefsToSchema(pkgcatalog.MO_COLUMNS, defs.MoColumnsTableDefs)
+	if err != nil {
+		panic(err)
+	}
+
+	SystemIndexTableSchema, err = DefsToSchema(pkgcatalog.MO_TABLES_LOGICAL_ID_INDEX_TABLE_NAME, defs.MoTablesLogicalIdIndexTableDefs)
 	if err != nil {
 		panic(err)
 	}

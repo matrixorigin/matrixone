@@ -485,6 +485,7 @@ func ParseTablesBatchAnd(bat *batch.Batch, f func(*TableItem)) {
 	catalogVersions := vector.MustFixedColWithTypeCheck[uint32](bat.GetVector(catalog.MO_TABLES_CATALOG_VERSION_IDX + MO_OFF))
 	extraInfos := bat.GetVector(catalog.MO_TABLES_EXTRA_INFO_IDX + MO_OFF)
 	pks := bat.GetVector(catalog.MO_TABLES_CPKEY_IDX + MO_OFF)
+	logicalIds := vector.MustFixedColWithTypeCheck[uint64](bat.GetVector(catalog.MO_TABLES_LOGICAL_ID_IDX + MO_OFF))
 	for i, account := range accounts {
 		item := new(TableItem)
 		item.Id = ids[i]
@@ -507,6 +508,7 @@ func ParseTablesBatchAnd(bat *batch.Batch, f func(*TableItem)) {
 		item.ClusterByIdx = -1
 		item.CPKey = append(item.CPKey, pks.GetBytesAt(i)...)
 		item.ExtraInfo = api.MustUnmarshalTblExtra(extraInfos.GetBytesAt(i))
+		item.LogicalId = logicalIds[i]
 		f(item)
 	}
 }
@@ -850,5 +852,6 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 		DbId:          tblItem.DatabaseId,
 		Partition:     partition,
 		FeatureFlag:   tblItem.ExtraInfo.GetFeatureFlag(),
+		LogicalId:     tblItem.LogicalId,
 	}, tableDef
 }

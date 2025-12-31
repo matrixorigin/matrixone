@@ -321,6 +321,18 @@ func (task *mergeObjectsTask) LoadNextBatch(
 			retBatch.Vecs[idx] = data.Vecs[i].GetDownstreamVector()
 		}
 	}
+
+	// // RelLogicalID COMPAT
+	if task.tid == 2 && !task.isTombstone {
+		// reuse the rel_id column
+		logical_idx := slices.Index(task.attrs, pkgcatalog.SystemRelAttr_LogicalID)
+		if data.Vecs[logical_idx].GetDownstreamVector().IsConstNull() {
+			tid_idx := slices.Index(task.attrs, pkgcatalog.SystemRelAttr_ID)
+			retBatch.Vecs[logical_idx] = data.Vecs[tid_idx].GetDownstreamVector()
+			logutil.Info("LIDX-DEBUG vector sub", zap.Int("logical_id", data.Length()))
+		}
+	}
+
 	retBatch.SetRowCount(data.Length())
 	return retBatch, data.Deletes, releaseF, nil
 }

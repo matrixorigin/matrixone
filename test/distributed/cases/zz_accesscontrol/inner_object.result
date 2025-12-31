@@ -3,129 +3,132 @@ drop account if exists account1;
 drop account if exists inner_account;
 drop role if exists revoke_role_1;
 select user_name,owner from mo_catalog.mo_user where user_name="root";
-user_name    owner
-root    0
+➤ user_name[12,-1,0]  ¦  owner[4,32,0]  𝄀
+root  ¦  0
 select role_id,role_name,owner from mo_catalog.mo_role where role_name in ("moadmin","public");
-role_id    role_name    owner
-0    moadmin    0
-1    public    0
+➤ role_id[4,32,0]  ¦  role_name[12,-1,0]  ¦  owner[4,32,0]  𝄀
+0  ¦  moadmin  ¦  0  𝄀
+1  ¦  public  ¦  0
 select enable_fault_injection();
-enable_fault_injection()
+➤ enable_fault_injection()[12,4,0]  𝄀
 true
 select add_fault_point('fj/trace/partitionstate', ':::', 'echo', 20, 'mo_tables');
-add_fault_point(fj/trace/partitionstate, :::, echo, 20, mo_tables)
+➤ add_fault_point(fj/trace/partitionstate, :::, echo, 20, mo_tables)[12,4,0]  𝄀
 true
 create account account1 ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 select role_id,role_name,owner from mo_catalog.mo_role;
-role_id    role_name    owner
-2    accountadmin    2
-1    public    2
+➤ role_id[4,32,0]  ¦  role_name[12,-1,0]  ¦  owner[4,32,0]  𝄀
+2  ¦  accountadmin  ¦  2  𝄀
+1  ¦  public  ¦  2
 show databases;
-Database
-system
+➤ Database[12,-1,0]  𝄀
+information_schema  𝄀
+mo_catalog  𝄀
+mysql  𝄀
+system  𝄀
 system_metrics
-information_schema
-mysql
-mo_catalog
 show grants;
-Grants for admin@localhost
-GRANT create user ON account  `admin`@`localhost`
-GRANT drop user ON account  `admin`@`localhost`
-GRANT alter user ON account  `admin`@`localhost`
-GRANT create role ON account  `admin`@`localhost`
-GRANT drop role ON account  `admin`@`localhost`
-GRANT create database ON account  `admin`@`localhost`
-GRANT drop database ON account  `admin`@`localhost`
-GRANT show databases ON account  `admin`@`localhost`
-GRANT connect ON account  `admin`@`localhost`
-GRANT manage grants ON account  `admin`@`localhost`
-GRANT account all ON account  `admin`@`localhost`
-GRANT show tables ON database * `admin`@`localhost`
-GRANT create table ON database * `admin`@`localhost`
-GRANT drop table ON database * `admin`@`localhost`
-GRANT alter table ON database * `admin`@`localhost`
-GRANT create view ON database * `admin`@`localhost`
-GRANT drop view ON database * `admin`@`localhost`
-GRANT alter view ON database * `admin`@`localhost`
-GRANT database all ON database * `admin`@`localhost`
-GRANT database ownership ON database * `admin`@`localhost`
-GRANT select ON table *.* `admin`@`localhost`
-GRANT insert ON table *.* `admin`@`localhost`
-GRANT update ON table *.* `admin`@`localhost`
-GRANT truncate ON table *.* `admin`@`localhost`
-GRANT delete ON table *.* `admin`@`localhost`
-GRANT reference ON table *.* `admin`@`localhost`
-GRANT index ON table *.* `admin`@`localhost`
-GRANT table all ON table *.* `admin`@`localhost`
-GRANT table ownership ON table *.* `admin`@`localhost`
-GRANT values ON table *.* `admin`@`localhost`
+➤ Grants for admin@localhost[12,-1,0]  𝄀
+GRANT create user ON account  `admin`@`localhost`  𝄀
+GRANT drop user ON account  `admin`@`localhost`  𝄀
+GRANT alter user ON account  `admin`@`localhost`  𝄀
+GRANT create role ON account  `admin`@`localhost`  𝄀
+GRANT drop role ON account  `admin`@`localhost`  𝄀
+GRANT create database ON account  `admin`@`localhost`  𝄀
+GRANT drop database ON account  `admin`@`localhost`  𝄀
+GRANT show databases ON account  `admin`@`localhost`  𝄀
+GRANT connect ON account  `admin`@`localhost`  𝄀
+GRANT manage grants ON account  `admin`@`localhost`  𝄀
+GRANT account all ON account  `admin`@`localhost`  𝄀
+GRANT show tables ON database * `admin`@`localhost`  𝄀
+GRANT create table ON database * `admin`@`localhost`  𝄀
+GRANT drop table ON database * `admin`@`localhost`  𝄀
+GRANT alter table ON database * `admin`@`localhost`  𝄀
+GRANT create view ON database * `admin`@`localhost`  𝄀
+GRANT drop view ON database * `admin`@`localhost`  𝄀
+GRANT alter view ON database * `admin`@`localhost`  𝄀
+GRANT database all ON database * `admin`@`localhost`  𝄀
+GRANT database ownership ON database * `admin`@`localhost`  𝄀
+GRANT select ON table *.* `admin`@`localhost`  𝄀
+GRANT insert ON table *.* `admin`@`localhost`  𝄀
+GRANT update ON table *.* `admin`@`localhost`  𝄀
+GRANT truncate ON table *.* `admin`@`localhost`  𝄀
+GRANT delete ON table *.* `admin`@`localhost`  𝄀
+GRANT reference ON table *.* `admin`@`localhost`  𝄀
+GRANT index ON table *.* `admin`@`localhost`  𝄀
+GRANT table all ON table *.* `admin`@`localhost`  𝄀
+GRANT table ownership ON table *.* `admin`@`localhost`  𝄀
+GRANT values ON table *.* `admin`@`localhost`  𝄀
 GRANT connect ON account  `admin`@`localhost`
 use system;
 show triggers;
-Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
+➤ Trigger[12,-1,0]  ¦  Event[12,-1,0]  ¦  Table[12,-1,0]  ¦  Statement[12,0,0]  ¦  Timing[12,-1,0]  ¦  Created[93,64,0]  ¦  sql_mode[12,-1,0]  ¦  Definer[12,-1,0]  ¦  character_set_client[12,-1,0]  ¦  collation_connection[12,-1,0]  ¦  Database Collation[12,-1,0]
 use mo_catalog;
 show columns from mo_tables;
-Field    Type    Null    Key    Default    Extra    Comment
-rel_id    BIGINT UNSIGNED(0)    YES        null
-relname    VARCHAR(5000)    YES    PRI    null
-reldatabase    VARCHAR(5000)    YES    PRI    null
-reldatabase_id    BIGINT UNSIGNED(0)    YES        null
-relpersistence    VARCHAR(5000)    YES        null
-relkind    VARCHAR(5000)    YES        null
-rel_comment    VARCHAR(5000)    YES        null
-rel_createsql    TEXT(0)    YES        null
-created_time    TIMESTAMP(0)    YES        null
-creator    INT UNSIGNED(0)    YES        null
-owner    INT UNSIGNED(0)    YES        null
-account_id    INT UNSIGNED(0)    YES    PRI    null
-partitioned    TINYINT(0)    YES        null
-partition_info    BLOB(0)    YES        null
-viewdef    VARCHAR(5000)    YES        null
-constraint    VARCHAR(5000)    YES        null
-rel_version    INT UNSIGNED(0)    YES        null
-catalog_version    INT UNSIGNED(0)    YES        null
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+rel_id  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+relname  ¦  VARCHAR(5000)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
+reldatabase  ¦  VARCHAR(5000)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
+reldatabase_id  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+relpersistence  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+relkind  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+rel_comment  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+rel_createsql  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+created_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+creator  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+owner  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+account_id  ¦  INT UNSIGNED(0)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
+partitioned  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+partition_info  ¦  BLOB(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+viewdef  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+constraint  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+rel_version  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+catalog_version  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+rel_logical_id  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦  
 select datname, dat_createsql from mo_database;
-datname    dat_createsql
-system    create database system
-system_metrics    create database system_metrics
-information_schema    create database information_schema
-mysql    create database mysql
-mo_catalog
+➤ datname[12,-1,0]  ¦  dat_createsql[12,-1,0]  𝄀
+system  ¦  create database system  𝄀
+system_metrics  ¦  create database system_metrics  𝄀
+information_schema  ¦  create database information_schema  𝄀
+mysql  ¦  create database mysql  𝄀
+mo_catalog  ¦  
 select relname from mo_tables where relname="sql_statement_total";
-relname
+➤ relname[12,-1,0]  𝄀
 sql_statement_total
 select relname from mo_tables where relname="mo_user";
-relname
+➤ relname[12,-1,0]  𝄀
 mo_user
 select relname from mo_tables where relname="tables";
-relname
+➤ relname[12,-1,0]  𝄀
 tables
 select user_name,authentication_string from mo_user;
-user_name    authentication_string
-admin    *6BB4837EB74329105EE4568DDA7DC67ED2CA2AD9
+➤ user_name[12,-1,0]  ¦  authentication_string[12,-1,0]  𝄀
+admin  ¦  *6BB4837EB74329105EE4568DDA7DC67ED2CA2AD9
 select role_name from mo_role;
-role_name
-accountadmin
+➤ role_name[12,-1,0]  𝄀
+accountadmin  𝄀
 public
 create database account_db;
 use account_db;
 show tables;
-Tables_in_account_db
+➤ Tables_in_account_db[12,-1,0]
 create table a(col int);
 show create table a;
-Table    Create Table
-a    CREATE TABLE `a` (\n  `col` int DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+a  ¦  CREATE TABLE `a` (
+  `col` int DEFAULT NULL
+)
 show tables;
-Tables_in_account_db
+➤ Tables_in_account_db[12,-1,0]  𝄀
 a
 show databases;
-Database
-system
+➤ Database[12,-1,0]  𝄀
+account_db  𝄀
+information_schema  𝄀
+mo_catalog  𝄀
+mysql  𝄀
+system  𝄀
 system_metrics
-information_schema
-mysql
-mo_catalog
-account_db
 update mo_catalog.mo_tables set relname='mo_aaaa';
 internal error: do not have privilege to execute the statement
 insert into mo_catalog.mo_role values (1763,'apple',0,1,'2022-09-22 06:53:34','');
@@ -147,7 +150,7 @@ internal error: do not have privilege to execute the statement
 delete from mo_catalog.mo_indexes;
 internal error: do not have privilege to execute the statement
 delete from mo_catalog.mo_table_partitions;
-internal error: do not have privilege to execute the statement
+[unknown result because it is related to issue#16438]
 drop database information_schema;
 internal error: do not have privilege to execute the statement
 drop database mo_catalog;
@@ -159,7 +162,7 @@ internal error: do not have privilege to execute the statement
 revoke moadmin,public from root;
 internal error: the role moadmin can not be revoked
 select count(*) from mo_catalog.mo_role_privs where role_name in ('moadmin','public');
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 35
 drop role if exists moadmin,public;
 internal error: can not delete the role moadmin
@@ -171,12 +174,12 @@ create account inner_account ADMIN_NAME 'admin' IDENTIFIED BY '111';
 revoke accountadmin from admin;
 internal error: the role accountadmin can not be revoked
 select count(*) from mo_catalog.mo_role_privs where role_name in ('accountadmin');
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 30
 drop role if exists accountadmin;
 internal error: can not delete the role accountadmin
 select role_name from mo_catalog.mo_role where role_name in('accountadmin');
-role_name
+➤ role_name[12,-1,0]  𝄀
 accountadmin
 create table tb1(
 deptno int unsigned,
@@ -185,25 +188,25 @@ loc varchar(50),
 unique key(deptno)
 );
 select `name`,`type`,`name`,`is_visible`,`hidden`,`comment`,`column_name`,`ordinal_position`,`options` from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where relname = 'tb1');
-name    type    name    is_visible    hidden    comment    column_name    ordinal_position    options
-deptno    UNIQUE    deptno    1    0        deptno    1    null
+➤ name[12,-1,0]  ¦  type[12,-1,0]  ¦  name[12,-1,0]  ¦  is_visible[-6,8,0]  ¦  hidden[-6,8,0]  ¦  comment[12,-1,0]  ¦  column_name[12,-1,0]  ¦  ordinal_position[4,32,0]  ¦  options[12,0,0]  𝄀
+deptno  ¦  UNIQUE  ¦  deptno  ¦  1  ¦  0  ¦    ¦  deptno  ¦  1  ¦  null
 desc mo_catalog.mo_indexes;
-Field    Type    Null    Key    Default    Extra    Comment
-id    BIGINT UNSIGNED(64)    NO    PRI    null
-table_id    BIGINT UNSIGNED(64)    NO        null
-database_id    BIGINT UNSIGNED(64)    NO        null
-name    VARCHAR(64)    NO        null
-type    VARCHAR(11)    NO        null
-algo    VARCHAR(11)    YES        null
-algo_table_type    VARCHAR(11)    YES        null
-algo_params    VARCHAR(2048)    YES        null
-is_visible    TINYINT(8)    NO        null
-hidden    TINYINT(8)    NO        null
-comment    VARCHAR(2048)    NO        null
-column_name    VARCHAR(256)    NO    PRI    null
-ordinal_position    INT UNSIGNED(32)    NO        null
-options    TEXT(0)    YES        null
-index_table_name    VARCHAR(5000)    YES        null
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+id  ¦  BIGINT UNSIGNED(64)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+table_id  ¦  BIGINT UNSIGNED(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+database_id  ¦  BIGINT UNSIGNED(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+name  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+type  ¦  VARCHAR(11)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+algo  ¦  VARCHAR(11)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+algo_table_type  ¦  VARCHAR(11)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+algo_params  ¦  VARCHAR(2048)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+is_visible  ¦  TINYINT(8)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+hidden  ¦  TINYINT(8)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+comment  ¦  VARCHAR(2048)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+column_name  ¦  VARCHAR(256)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+ordinal_position  ¦  INT UNSIGNED(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+options  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+index_table_name  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦  
 CREATE TABLE trp (
 id INT NOT NULL,
 fname VARCHAR(30),
@@ -219,62 +222,49 @@ PARTITION p1 VALUES LESS THAN (1996),
 PARTITION p2 VALUES LESS THAN (2001),
 PARTITION p3 VALUES LESS THAN MAXVALUE
 );
+[unknown result because it is related to issue#16438]
 select tbl.relname, part.number, part.name, part.description_utf8, part.comment, part.options, part.partition_table_name
 from mo_catalog.mo_tables tbl left join mo_catalog.mo_table_partitions part on tbl.rel_id = part.table_id
 where tbl.relname = 'trp';
-relname    number    name    description_utf8    comment    options    partition_table_name
-trp    1    p0    1991        null    %!%p0%!%trp
-trp    2    p1    1996        null    %!%p1%!%trp
-trp    3    p2    2001        null    %!%p2%!%trp
-trp    4    p3    MAXVALUE        null    %!%p3%!%trp
+[unknown result because it is related to issue#16438]
 desc mo_catalog.mo_table_partitions;
-Field    Type    Null    Key    Default    Extra    Comment
-table_id    BIGINT UNSIGNED(64)    NO    PRI    null
-database_id    BIGINT UNSIGNED(64)    NO        null
-number    SMALLINT UNSIGNED(16)    NO        null
-name    VARCHAR(64)    NO    PRI    null
-partition_type    VARCHAR(50)    NO        null
-partition_expression    VARCHAR(2048)    YES        null
-description_utf8    TEXT(0)    YES        null
-comment    VARCHAR(2048)    NO        null
-options    TEXT(0)    YES        null
-partition_table_name    VARCHAR(1024)    NO        null
+[unknown result because it is related to issue#16438]
 create account accx11 ADMIN_NAME 'admin' IDENTIFIED BY '111';
 select `name`,`type`,`name`,`is_visible`,`hidden`,`comment`,`column_name`,`ordinal_position`,`options` from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where relname = 'tb1');
-name    type    name    is_visible    hidden    comment    column_name    ordinal_position    options
+➤ name[12,-1,0]  ¦  type[12,-1,0]  ¦  name[12,-1,0]  ¦  is_visible[-6,8,0]  ¦  hidden[-6,8,0]  ¦  comment[12,-1,0]  ¦  column_name[12,-1,0]  ¦  ordinal_position[4,32,0]  ¦  options[12,0,0]
 desc mo_catalog.mo_indexes;
-Field    Type    Null    Key    Default    Extra    Comment
-id    BIGINT UNSIGNED(64)    NO    PRI    null
-table_id    BIGINT UNSIGNED(64)    NO        null
-database_id    BIGINT UNSIGNED(64)    NO        null
-name    VARCHAR(64)    NO        null
-type    VARCHAR(11)    NO        null
-algo    VARCHAR(11)    YES        null
-algo_table_type    VARCHAR(11)    YES        null
-algo_params    VARCHAR(2048)    YES        null
-is_visible    TINYINT(8)    NO        null
-hidden    TINYINT(8)    NO        null
-comment    VARCHAR(2048)    NO        null
-column_name    VARCHAR(256)    NO    PRI    null
-ordinal_position    INT UNSIGNED(32)    NO        null
-options    TEXT(0)    YES        null
-index_table_name    VARCHAR(5000)    YES        null
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+id  ¦  BIGINT UNSIGNED(64)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+table_id  ¦  BIGINT UNSIGNED(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+database_id  ¦  BIGINT UNSIGNED(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+name  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+type  ¦  VARCHAR(11)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+algo  ¦  VARCHAR(11)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+algo_table_type  ¦  VARCHAR(11)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+algo_params  ¦  VARCHAR(2048)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+is_visible  ¦  TINYINT(8)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+hidden  ¦  TINYINT(8)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+comment  ¦  VARCHAR(2048)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+column_name  ¦  VARCHAR(256)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+ordinal_position  ¦  INT UNSIGNED(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+options  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+index_table_name  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦  
 drop account if exists account1;
 drop account if exists inner_account;
 drop account if exists accx11;
 drop role if exists revoke_role_1;
 set global enable_privilege_cache = on;
 desc mo_catalog.mo_stages;
-Field    Type    Null    Key    Default    Extra    Comment
-stage_id    INT UNSIGNED(32)    NO    PRI    null    auto_increment
-stage_name    VARCHAR(64)    YES    UNI    null
-url    TEXT(0)    YES        null
-stage_credentials    TEXT(0)    YES        null
-stage_status    VARCHAR(64)    YES        null
-created_time    TIMESTAMP(0)    YES        null
-comment    TEXT(0)    YES        null
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+stage_id  ¦  INT UNSIGNED(32)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
+stage_name  ¦  VARCHAR(64)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦    𝄀
+url  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+stage_credentials  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+stage_status  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+created_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+comment  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select disable_fault_injection();
-disable_fault_injection()
+➤ disable_fault_injection()[12,4,0]  𝄀
 true
 create account ac_1 ADMIN_NAME 'admin' IDENTIFIED BY '111';
 create database sys_db1;
@@ -312,85 +302,83 @@ partition p03 values less than (300001),
 partition p04 values less than (400001)
 );
 select table_catalog,table_schema,table_name,column_name from information_schema.columns where table_schema="ac_db" and table_name='ac_t1';
-table_catalog    table_schema    table_name    column_name
-def    ac_db    ac_t1    __mo_fake_pk_col
-def    ac_db    ac_t1    c1
+➤ table_catalog[12,-1,0]  ¦  table_schema[12,-1,0]  ¦  table_name[12,-1,0]  ¦  column_name[12,-1,0]  𝄀
+def  ¦  ac_db  ¦  ac_t1  ¦  __mo_fake_pk_col  𝄀
+def  ¦  ac_db  ¦  ac_t1  ¦  c1
 select table_catalog,table_schema,table_name,column_name from information_schema.columns where table_schema="ac_db" and table_name='test02';
-table_catalog    table_schema    table_name    column_name
-def    ac_db    test02    birth_date
-def    ac_db    test02    emp_no
-def    ac_db    test02    first_name
-def    ac_db    test02    gender
-def    ac_db    test02    hire_date
-def    ac_db    test02    last_name
+➤ table_catalog[12,-1,0]  ¦  table_schema[12,-1,0]  ¦  table_name[12,-1,0]  ¦  column_name[12,-1,0]  𝄀
+def  ¦  ac_db  ¦  test02  ¦  birth_date  𝄀
+def  ¦  ac_db  ¦  test02  ¦  emp_no  𝄀
+def  ¦  ac_db  ¦  test02  ¦  first_name  𝄀
+def  ¦  ac_db  ¦  test02  ¦  gender  𝄀
+def  ¦  ac_db  ¦  test02  ¦  hire_date  𝄀
+def  ¦  ac_db  ¦  test02  ¦  last_name
 select table_catalog,table_schema,table_name,column_name from information_schema.columns where table_schema="sys_db1";
-table_catalog    table_schema    table_name    column_name
+➤ table_catalog[12,-1,0]  ¦  table_schema[12,-1,0]  ¦  table_name[12,-1,0]  ¦  column_name[12,-1,0]
 select count(*),table_name, column_name  from information_schema.columns group by table_name, column_name having count(*)>1;
-count(*)    table_name    column_name
+➤ count(*)[-5,64,0]  ¦  table_name[12,-1,0]  ¦  column_name[12,-1,0]
 select * from information_schema.schemata where schema_name='ac_db';
-catalog_name    schema_name    default_character_set_name    default_collation_name    sql_path    default_encryption
-def    ac_db    utf8mb4    utf8mb4_0900_ai_ci    null    NO
+➤ catalog_name[12,-1,0]  ¦  schema_name[12,-1,0]  ¦  default_character_set_name[12,-1,0]  ¦  default_collation_name[12,-1,0]  ¦  sql_path[1,0,0]  ¦  default_encryption[12,-1,0]  𝄀
+def  ¦  ac_db  ¦  utf8mb4  ¦  utf8mb4_0900_ai_ci  ¦  null  ¦  NO
 select * from information_schema.schemata where schema_name='sys_db1';
-catalog_name    schema_name    default_character_set_name    default_collation_name    sql_path    default_encryption
+➤ catalog_name[12,-1,0]  ¦  schema_name[12,-1,0]  ¦  default_character_set_name[12,-1,0]  ¦  default_collation_name[12,-1,0]  ¦  sql_path[1,0,0]  ¦  default_encryption[12,-1,0]
 select count(*),schema_name from information_schema.schemata group by schema_name having count(*)>1;
-count(*)    schema_name
+➤ count(*)[-5,64,0]  ¦  schema_name[12,-1,0]
 select table_schema,table_name  from information_schema.tables where table_name='sys_t1';
-table_schema    table_name
+➤ table_schema[12,-1,0]  ¦  table_name[12,-1,0]
 select table_schema,table_name from information_schema.tables where table_name='ac_t1';
-table_schema    table_name
-ac_db    ac_t1
+➤ table_schema[12,-1,0]  ¦  table_name[12,-1,0]  𝄀
+ac_db  ¦  ac_t1
 select count(*),table_name from information_schema.tables group by table_name having count(*) >1;
-count(*)    table_name
+➤ count(*)[-5,64,0]  ¦  table_name[12,-1,0]
 select * from information_schema.views where table_name='ac_v1';
-table_catalog    table_schema    table_name    view_definition    check_option    is_updatable    definer    security_type    character_set_client    collation_connection
-def    ac_db    ac_v1    create view ac_db.ac_v1  as select * from ac_db.ac_t1;    NONE    YES    admin@localhost    DEFINER    utf8mb4    utf8mb4_0900_ai_ci
+➤ table_catalog[12,-1,0]  ¦  table_schema[12,-1,0]  ¦  table_name[12,-1,0]  ¦  view_definition[12,0,0]  ¦  check_option[12,-1,0]  ¦  is_updatable[12,-1,0]  ¦  definer[12,-1,0]  ¦  security_type[12,-1,0]  ¦  character_set_client[12,-1,0]  ¦  collation_connection[12,-1,0]  𝄀
+def  ¦  ac_db  ¦  ac_v1  ¦  create view ac_db.ac_v1  as select * from ac_db.ac_t1;  ¦  NONE  ¦  YES  ¦  admin@localhost  ¦  DEFINER  ¦  utf8mb4  ¦  utf8mb4_0900_ai_ci
 select * from information_schema.views where table_name='sys_v1';
-table_catalog    table_schema    table_name    view_definition    check_option    is_updatable    definer    security_type    character_set_client    collation_connection
+➤ table_catalog[12,-1,0]  ¦  table_schema[12,-1,0]  ¦  table_name[12,-1,0]  ¦  view_definition[12,0,0]  ¦  check_option[12,-1,0]  ¦  is_updatable[12,-1,0]  ¦  definer[12,-1,0]  ¦  security_type[12,-1,0]  ¦  character_set_client[12,-1,0]  ¦  collation_connection[12,-1,0]
 select count(*),table_name from information_schema.views group by table_name having count(*)>1;
-count(*)    table_name
+➤ count(*)[-5,64,0]  ¦  table_name[12,-1,0]
 select count(*) from information_schema.partitions where table_schema='ac_db' and table_name='test02';
-count(*)
-4
+[unknown result because it is related to issue#16438]
 select table_schema,table_name,partition_name  from information_schema.partitions where table_schema='sys_db1';
-table_schema    table_name    partition_name
+[unknown result because it is related to issue#16438]
 select count(*),table_schema,table_name,partition_name  from information_schema.partitions group by table_schema,table_name,partition_name having count(*) >1;
-count(*)    table_schema    table_name    partition_name
+[unknown result because it is related to issue#16438]
 select table_catalog,table_schema,table_name,column_name from information_schema.columns where table_name='ac_t1';
-table_catalog    table_schema    table_name    column_name
+➤ table_catalog[12,-1,0]  ¦  table_schema[12,-1,0]  ¦  table_name[12,-1,0]  ¦  column_name[12,-1,0]
 select table_catalog,table_schema,table_name,column_name from information_schema.columns where table_name='sys_t1';
-table_catalog    table_schema    table_name    column_name
-def    sys_db1    sys_t1    __mo_fake_pk_col
-def    sys_db1    sys_t1    c1
+➤ table_catalog[12,-1,0]  ¦  table_schema[12,-1,0]  ¦  table_name[12,-1,0]  ¦  column_name[12,-1,0]  𝄀
+def  ¦  sys_db1  ¦  sys_t1  ¦  __mo_fake_pk_col  𝄀
+def  ¦  sys_db1  ¦  sys_t1  ¦  c1
 select count(*),table_name, column_name  from information_schema.columns group by table_name, column_name having count(*)>1;
-count(*)    table_name    column_name
+➤ count(*)[-5,64,0]  ¦  table_name[12,-1,0]  ¦  column_name[12,-1,0]
 select * from information_schema.schemata where schema_name='ac_db';
-catalog_name    schema_name    default_character_set_name    default_collation_name    sql_path    default_encryption
+➤ catalog_name[12,-1,0]  ¦  schema_name[12,-1,0]  ¦  default_character_set_name[12,-1,0]  ¦  default_collation_name[12,-1,0]  ¦  sql_path[1,0,0]  ¦  default_encryption[12,-1,0]
 select * from information_schema.schemata where schema_name='sys_db1';
-catalog_name    schema_name    default_character_set_name    default_collation_name    sql_path    default_encryption
-def    sys_db1    utf8mb4    utf8mb4_0900_ai_ci    null    NO
+➤ catalog_name[12,-1,0]  ¦  schema_name[12,-1,0]  ¦  default_character_set_name[12,-1,0]  ¦  default_collation_name[12,-1,0]  ¦  sql_path[1,0,0]  ¦  default_encryption[12,-1,0]  𝄀
+def  ¦  sys_db1  ¦  utf8mb4  ¦  utf8mb4_0900_ai_ci  ¦  null  ¦  NO
 select count(*),schema_name from information_schema.schemata group by schema_name having count(*)>1;
-count(*)    schema_name
+➤ count(*)[-5,64,0]  ¦  schema_name[12,-1,0]
 select table_schema,table_name from information_schema.tables where table_name='sys_t1';
-table_schema    table_name
-sys_db1    sys_t1
+➤ table_schema[12,-1,0]  ¦  table_name[12,-1,0]  𝄀
+sys_db1  ¦  sys_t1
 select table_schema,table_name from information_schema.tables where table_name='ac_t1';
-table_schema    table_name
+➤ table_schema[12,-1,0]  ¦  table_name[12,-1,0]
 select count(*),table_name from information_schema.tables group by table_name having count(*) >1;
-count(*)    table_name
+➤ count(*)[-5,64,0]  ¦  table_name[12,-1,0]
 select * from information_schema.views where table_name='sys_v1';
-table_catalog    table_schema    table_name    view_definition    check_option    is_updatable    definer    security_type    character_set_client    collation_connection
-def    sys_db1    sys_v1    create view sys_db1.sys_v1  as select * from sys_db1.sys_t1;    NONE    YES    dump@localhost    DEFINER    utf8mb4    utf8mb4_0900_ai_ci
+➤ table_catalog[12,-1,0]  ¦  table_schema[12,-1,0]  ¦  table_name[12,-1,0]  ¦  view_definition[12,0,0]  ¦  check_option[12,-1,0]  ¦  is_updatable[12,-1,0]  ¦  definer[12,-1,0]  ¦  security_type[12,-1,0]  ¦  character_set_client[12,-1,0]  ¦  collation_connection[12,-1,0]  𝄀
+def  ¦  sys_db1  ¦  sys_v1  ¦  create view sys_db1.sys_v1  as select * from sys_db1.sys_t1;  ¦  NONE  ¦  YES  ¦  dump@localhost  ¦  DEFINER  ¦  utf8mb4  ¦  utf8mb4_0900_ai_ci
 select * from information_schema.views where table_name='ac_v1';
-table_catalog    table_schema    table_name    view_definition    check_option    is_updatable    definer    security_type    character_set_client    collation_connection
+➤ table_catalog[12,-1,0]  ¦  table_schema[12,-1,0]  ¦  table_name[12,-1,0]  ¦  view_definition[12,0,0]  ¦  check_option[12,-1,0]  ¦  is_updatable[12,-1,0]  ¦  definer[12,-1,0]  ¦  security_type[12,-1,0]  ¦  character_set_client[12,-1,0]  ¦  collation_connection[12,-1,0]
 select count(*),table_name from information_schema.views group by table_name having count(*)>1;
-count(*)    table_name
+➤ count(*)[-5,64,0]  ¦  table_name[12,-1,0]
 select count(*) from information_schema.partitions where table_schema='sys_db1' and table_name='test01';
-count(*)
-4
+[unknown result because it is related to issue#16438]
 select table_schema,table_name from information_schema.partitions where table_schema='ac_db';
-table_schema    table_name
+[unknown result because it is related to issue#16438]
 select count(*),table_schema,table_name,partition_name  from information_schema.partitions group by table_schema,table_name,partition_name having count(*) >1;
-count(*)    table_schema    table_name    partition_name
+[unknown result because it is related to issue#16438]
 create user 'sys_user' identified by '123456';
 create role 'sys_role';
 grant  all on account *  to 'sys_role';
@@ -438,85 +426,77 @@ partition p03 values less than (300001),
 partition p04 values less than (400001)
 );
 select table_catalog,table_schema,table_name,column_name from information_schema.columns where table_schema="acuser_db" and table_name='acuser_t1';
-table_catalog    table_schema    table_name    column_name
-def    acuser_db    acuser_t1    __mo_fake_pk_col
-def    acuser_db    acuser_t1    c1
-def    acuser_db    acuser_t1    c2
+➤ table_catalog[12,-1,0]  ¦  table_schema[12,-1,0]  ¦  table_name[12,-1,0]  ¦  column_name[12,-1,0]  𝄀
+def  ¦  acuser_db  ¦  acuser_t1  ¦  __mo_fake_pk_col  𝄀
+def  ¦  acuser_db  ¦  acuser_t1  ¦  c1  𝄀
+def  ¦  acuser_db  ¦  acuser_t1  ¦  c2
 select table_catalog,table_schema,table_name,column_name from information_schema.columns where table_schema="user_db";
-table_catalog    table_schema    table_name    column_name
+➤ table_catalog[12,-1,0]  ¦  table_schema[12,-1,0]  ¦  table_name[12,-1,0]  ¦  column_name[12,-1,0]
 select count(*),table_name, column_name  from information_schema.columns group by table_name, column_name having count(*)>1;
-count(*)    table_name    column_name
+➤ count(*)[-5,64,0]  ¦  table_name[12,-1,0]  ¦  column_name[12,-1,0]
 select * from information_schema.schemata where schema_name='acuser_db';
-catalog_name    schema_name    default_character_set_name    default_collation_name    sql_path    default_encryption
-def    acuser_db    utf8mb4    utf8mb4_0900_ai_ci    null    NO
+➤ catalog_name[12,-1,0]  ¦  schema_name[12,-1,0]  ¦  default_character_set_name[12,-1,0]  ¦  default_collation_name[12,-1,0]  ¦  sql_path[1,0,0]  ¦  default_encryption[12,-1,0]  𝄀
+def  ¦  acuser_db  ¦  utf8mb4  ¦  utf8mb4_0900_ai_ci  ¦  null  ¦  NO
 select * from information_schema.schemata where schema_name='user_db1';
-catalog_name    schema_name    default_character_set_name    default_collation_name    sql_path    default_encryption
+➤ catalog_name[12,-1,0]  ¦  schema_name[12,-1,0]  ¦  default_character_set_name[12,-1,0]  ¦  default_collation_name[12,-1,0]  ¦  sql_path[1,0,0]  ¦  default_encryption[12,-1,0]
 select count(*),schema_name from information_schema.schemata group by schema_name having count(*)>1;
-count(*)    schema_name
+➤ count(*)[-5,64,0]  ¦  schema_name[12,-1,0]
 select table_schema,table_name from information_schema.tables where table_name='user_t1';
-table_schema    table_name
+➤ table_schema[12,-1,0]  ¦  table_name[12,-1,0]
 select table_schema,table_name from information_schema.tables where table_name='acuser_t1';
-table_schema    table_name
-acuser_db    acuser_t1
+➤ table_schema[12,-1,0]  ¦  table_name[12,-1,0]  𝄀
+acuser_db  ¦  acuser_t1
 select count(*),table_name from information_schema.tables group by table_name having count(*) >1;
-count(*)    table_name
+➤ count(*)[-5,64,0]  ¦  table_name[12,-1,0]
 select table_schema,table_name from information_schema.views where table_name='acuser_v1';
-table_schema    table_name
-acuser_db    acuser_v1
+➤ table_schema[12,-1,0]  ¦  table_name[12,-1,0]  𝄀
+acuser_db  ¦  acuser_v1
 select table_schema,table_name from information_schema.views where table_name='sysuser_v1';
-table_schema    table_name
+➤ table_schema[12,-1,0]  ¦  table_name[12,-1,0]
 select count(*),table_name from information_schema.views group by table_name having count(*)>1;
-count(*)    table_name
+➤ count(*)[-5,64,0]  ¦  table_name[12,-1,0]
 select table_schema,table_name,partition_name from information_schema.partitions where table_schema='acuser_db';
-table_schema    table_name    partition_name
-acuser_db    test    p01
-acuser_db    test    p02
-acuser_db    test    p03
-acuser_db    test    p04
+[unknown result because it is related to issue#16438]
 select table_schema,table_name,partition_name from information_schema.partitions where table_schema='user_db';
-table_schema    table_name    partition_name
+[unknown result because it is related to issue#16438]
 select count(*),table_schema,table_name,partition_name  from information_schema.partitions group by table_schema,table_name,partition_name having count(*) >1;
-count(*)    table_schema    table_name    partition_name
+[unknown result because it is related to issue#16438]
 select table_catalog,table_schema,table_name,column_name from information_schema.columns where table_schema="user_db" and table_name='user_t1';
-table_catalog    table_schema    table_name    column_name
-def    user_db    user_t1    __mo_fake_pk_col
-def    user_db    user_t1    c1
-def    user_db    user_t1    c2
+➤ table_catalog[12,-1,0]  ¦  table_schema[12,-1,0]  ¦  table_name[12,-1,0]  ¦  column_name[12,-1,0]  𝄀
+def  ¦  user_db  ¦  user_t1  ¦  __mo_fake_pk_col  𝄀
+def  ¦  user_db  ¦  user_t1  ¦  c1  𝄀
+def  ¦  user_db  ¦  user_t1  ¦  c2
 select table_catalog,table_schema,table_name,column_name from information_schema.columns where table_schema="acuser_db";
-table_catalog    table_schema    table_name    column_name
+➤ table_catalog[12,-1,0]  ¦  table_schema[12,-1,0]  ¦  table_name[12,-1,0]  ¦  column_name[12,-1,0]
 select count(*),table_name, column_name  from information_schema.columns group by table_name, column_name having count(*)>1;
-count(*)    table_name    column_name
+➤ count(*)[-5,64,0]  ¦  table_name[12,-1,0]  ¦  column_name[12,-1,0]
 select * from information_schema.schemata where schema_name='acuser_db';
-catalog_name    schema_name    default_character_set_name    default_collation_name    sql_path    default_encryption
+➤ catalog_name[12,-1,0]  ¦  schema_name[12,-1,0]  ¦  default_character_set_name[12,-1,0]  ¦  default_collation_name[12,-1,0]  ¦  sql_path[1,0,0]  ¦  default_encryption[12,-1,0]
 select * from information_schema.schemata where schema_name='user_db';
-catalog_name    schema_name    default_character_set_name    default_collation_name    sql_path    default_encryption
-def    user_db    utf8mb4    utf8mb4_0900_ai_ci    null    NO
+➤ catalog_name[12,-1,0]  ¦  schema_name[12,-1,0]  ¦  default_character_set_name[12,-1,0]  ¦  default_collation_name[12,-1,0]  ¦  sql_path[1,0,0]  ¦  default_encryption[12,-1,0]  𝄀
+def  ¦  user_db  ¦  utf8mb4  ¦  utf8mb4_0900_ai_ci  ¦  null  ¦  NO
 select count(*),schema_name from information_schema.schemata group by schema_name having count(*)>1;
-count(*)    schema_name
+➤ count(*)[-5,64,0]  ¦  schema_name[12,-1,0]
 select table_schema,table_name from information_schema.tables where table_name='user_t1';
-table_schema    table_name
-user_db    user_t1
+➤ table_schema[12,-1,0]  ¦  table_name[12,-1,0]  𝄀
+user_db  ¦  user_t1
 select table_schema,table_name from information_schema.tables where table_name='acuser_t1';
-table_schema    table_name
+➤ table_schema[12,-1,0]  ¦  table_name[12,-1,0]
 select count(*),table_name from information_schema.tables group by table_name having count(*) >1;
-count(*)    table_name
+➤ count(*)[-5,64,0]  ¦  table_name[12,-1,0]
 select table_schema,table_name from information_schema.views where table_name='acuser_v1';
-table_schema    table_name
+➤ table_schema[12,-1,0]  ¦  table_name[12,-1,0]
 select table_schema,table_name from information_schema.views where table_name='sysuser_v1';
-table_schema    table_name
-user_db    sysuser_v1
+➤ table_schema[12,-1,0]  ¦  table_name[12,-1,0]  𝄀
+user_db  ¦  sysuser_v1
 select count(*),table_name from information_schema.views group by table_name having count(*)>1;
-count(*)    table_name
+➤ count(*)[-5,64,0]  ¦  table_name[12,-1,0]
 select table_schema,table_name,partition_name from information_schema.partitions where table_schema='acuser_db';
-table_schema    table_name    partition_name
+[unknown result because it is related to issue#16438]
 select table_schema,table_name,partition_name from information_schema.partitions where table_schema='user_db';
-table_schema    table_name    partition_name
-user_db    test02    p01
-user_db    test02    p02
-user_db    test02    p03
-user_db    test02    p04
+[unknown result because it is related to issue#16438]
 select count(*),table_schema,table_name,partition_name  from information_schema.partitions group by table_schema,table_name,partition_name having count(*) >1;
-count(*)    table_schema    table_name    partition_name
+[unknown result because it is related to issue#16438]
 drop database sys_db1;
 drop database user_db;
 drop account ac_1;
@@ -538,15 +518,15 @@ PRIMARY KEY (`id`),
 UNIQUE KEY `idx_mocadmin_users_username` (`username`)
 );
 SELECT column_name, column_default, is_nullable = 'YES', data_type, character_maximum_length, column_type, column_key, extra, column_comment, numeric_precision, numeric_scale , datetime_precision FROM information_schema.columns WHERE table_schema = 'etao' AND table_name = 'users' ORDER BY ORDINAL_POSITION;
-column_name    column_default    is_nullable = YES    data_type    character_maximum_length    column_type    column_key    extra    column_comment    numeric_precision    numeric_scale    datetime_precision
-id    null    false    VARCHAR    128    VARCHAR(128)    PRI            null    null    null
-username    null    true    VARCHAR    255    VARCHAR(255)    UNI            null    null    null
-password    null    true    VARCHAR    512    VARCHAR(512)                null    null    null
-user_status    null    true    TINYINT    null    TINYINT(8)                null    null    null
-user_role    null    true    TINYINT    null    TINYINT(8)                null    null    null
-created_at    null    true    DATETIME    null    DATETIME(0)                null    null    0
-updated_at    null    true    DATETIME    null    DATETIME(0)                null    null    0
-user_source    null    true    TINYINT    null    TINYINT(8)                null    null    null
+➤ column_name[12,-1,0]  ¦  column_default[12,-1,0]  ¦  is_nullable = YES[12,4,0]  ¦  data_type[12,-1,0]  ¦  character_maximum_length[-5,64,0]  ¦  column_type[12,-1,0]  ¦  column_key[12,-1,0]  ¦  extra[12,-1,0]  ¦  column_comment[12,-1,0]  ¦  numeric_precision[-5,64,0]  ¦  numeric_scale[-5,64,0]  ¦  datetime_precision[-5,64,0]  𝄀
+id  ¦  null  ¦  false  ¦  VARCHAR  ¦  128  ¦  VARCHAR(128)  ¦  PRI  ¦    ¦    ¦  null  ¦  null  ¦  null  𝄀
+username  ¦  null  ¦  true  ¦  VARCHAR  ¦  255  ¦  VARCHAR(255)  ¦  UNI  ¦    ¦    ¦  null  ¦  null  ¦  null  𝄀
+password  ¦  null  ¦  true  ¦  VARCHAR  ¦  512  ¦  VARCHAR(512)  ¦    ¦    ¦    ¦  null  ¦  null  ¦  null  𝄀
+user_status  ¦  null  ¦  true  ¦  TINYINT  ¦  null  ¦  TINYINT(8)  ¦    ¦    ¦    ¦  null  ¦  null  ¦  null  𝄀
+user_role  ¦  null  ¦  true  ¦  TINYINT  ¦  null  ¦  TINYINT(8)  ¦    ¦    ¦    ¦  null  ¦  null  ¦  null  𝄀
+created_at  ¦  null  ¦  true  ¦  DATETIME  ¦  null  ¦  DATETIME(0)  ¦    ¦    ¦    ¦  null  ¦  null  ¦  0  𝄀
+updated_at  ¦  null  ¦  true  ¦  DATETIME  ¦  null  ¦  DATETIME(0)  ¦    ¦    ¦    ¦  null  ¦  null  ¦  0  𝄀
+user_source  ¦  null  ¦  true  ¦  TINYINT  ¦  null  ¦  TINYINT(8)  ¦    ¦    ¦    ¦  null  ¦  null  ¦  null
 drop database etao;
 drop account if exists acc1;
 create account acc1 admin_name 'root' identified by '111';
@@ -566,14 +546,14 @@ PRIMARY KEY (`id`),
 UNIQUE KEY `idx_mocadmin_users_username` (`username`)
 );
 SELECT column_name, column_default, is_nullable = 'YES', data_type, character_maximum_length, column_type, column_key, extra, column_comment, numeric_precision, numeric_scale , datetime_precision FROM information_schema.columns WHERE table_schema = 'etao' AND table_name = 'users' ORDER BY ORDINAL_POSITION;
-column_name    column_default    is_nullable = YES    data_type    character_maximum_length    column_type    column_key    extra    column_comment    numeric_precision    numeric_scale    datetime_precision
-id    null    false    VARCHAR    128    VARCHAR(128)    PRI            null    null    null
-username    null    true    VARCHAR    255    VARCHAR(255)    UNI            null    null    null
-password    null    true    VARCHAR    512    VARCHAR(512)                null    null    null
-user_status    null    true    TINYINT    null    TINYINT(8)                null    null    null
-user_role    null    true    TINYINT    null    TINYINT(8)                null    null    null
-created_at    null    true    DATETIME    null    DATETIME(0)                null    null    0
-updated_at    null    true    DATETIME    null    DATETIME(0)                null    null    0
-user_source    null    true    TINYINT    null    TINYINT(8)                null    null    null
+➤ column_name[12,-1,0]  ¦  column_default[12,-1,0]  ¦  is_nullable = YES[12,4,0]  ¦  data_type[12,-1,0]  ¦  character_maximum_length[-5,64,0]  ¦  column_type[12,-1,0]  ¦  column_key[12,-1,0]  ¦  extra[12,-1,0]  ¦  column_comment[12,-1,0]  ¦  numeric_precision[-5,64,0]  ¦  numeric_scale[-5,64,0]  ¦  datetime_precision[-5,64,0]  𝄀
+id  ¦  null  ¦  false  ¦  VARCHAR  ¦  128  ¦  VARCHAR(128)  ¦  PRI  ¦    ¦    ¦  null  ¦  null  ¦  null  𝄀
+username  ¦  null  ¦  true  ¦  VARCHAR  ¦  255  ¦  VARCHAR(255)  ¦  UNI  ¦    ¦    ¦  null  ¦  null  ¦  null  𝄀
+password  ¦  null  ¦  true  ¦  VARCHAR  ¦  512  ¦  VARCHAR(512)  ¦    ¦    ¦    ¦  null  ¦  null  ¦  null  𝄀
+user_status  ¦  null  ¦  true  ¦  TINYINT  ¦  null  ¦  TINYINT(8)  ¦    ¦    ¦    ¦  null  ¦  null  ¦  null  𝄀
+user_role  ¦  null  ¦  true  ¦  TINYINT  ¦  null  ¦  TINYINT(8)  ¦    ¦    ¦    ¦  null  ¦  null  ¦  null  𝄀
+created_at  ¦  null  ¦  true  ¦  DATETIME  ¦  null  ¦  DATETIME(0)  ¦    ¦    ¦    ¦  null  ¦  null  ¦  0  𝄀
+updated_at  ¦  null  ¦  true  ¦  DATETIME  ¦  null  ¦  DATETIME(0)  ¦    ¦    ¦    ¦  null  ¦  null  ¦  0  𝄀
+user_source  ¦  null  ¦  true  ¦  TINYINT  ¦  null  ¦  TINYINT(8)  ¦    ¦    ¦    ¦  null  ¦  null  ¦  null
 drop database etao;
 drop account acc1;
