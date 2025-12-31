@@ -421,40 +421,74 @@ func (m model) renderEntry() string {
 	}
 	e := m.state.entries[m.state.selectedEntry]
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("Entry #%d\n", m.state.selectedEntry))
+	
+	// Title
+	entryType := "Global"
+	if e.IsIncremental() {
+		entryType = "Incremental"
+	}
+	b.WriteString(fmt.Sprintf("Entry #%d (%s)\n", m.state.selectedEntry, entryType))
+	b.WriteString(strings.Repeat("─", 80))
+	b.WriteString("\n")
+	
+	// Properties
 	b.WriteString(fmt.Sprintf("  Type:     %s\n", e.GetType().String()))
 	b.WriteString(fmt.Sprintf("  Start:    %s\n", formatTS(e.GetStart())))
 	b.WriteString(fmt.Sprintf("  End:      %s\n", formatTS(e.GetEnd())))
 	b.WriteString(fmt.Sprintf("  State:    %s\n", stateStr(e.GetState())))
 	b.WriteString(fmt.Sprintf("  Version:  %d\n", e.GetVersion()))
+	b.WriteString(fmt.Sprintf("  CKP LSN:  %d\n", e.LSN()))
+	b.WriteString(fmt.Sprintf("  Trunc LSN:%d\n", e.GetTruncateLsn()))
+	
+	b.WriteString("\nLocations:\n")
 	b.WriteString(fmt.Sprintf("  CN Loc:   %s\n", e.GetLocation().String()))
 
 	tnLoc := e.GetTNLocation()
 	if !tnLoc.IsEmpty() && tnLoc.String() != e.GetLocation().String() {
 		b.WriteString(fmt.Sprintf("  TN Loc:   %s\n", tnLoc.String()))
+	} else {
+		b.WriteString("  TN Loc:   (same as CN)\n")
 	}
 
 	tableIDLocs := e.GetTableIDLocation()
 	if tableIDLocs.Len() > 0 {
-		b.WriteString(fmt.Sprintf("  TableID Locations (%d):\n", tableIDLocs.Len()))
-		for i := 0; i < tableIDLocs.Len(); i++ {
+		b.WriteString(fmt.Sprintf("  TableID Locations (%d files):\n", tableIDLocs.Len()))
+		maxShow := 5
+		for i := 0; i < tableIDLocs.Len() && i < maxShow; i++ {
 			b.WriteString(fmt.Sprintf("    [%d] %s\n", i, tableIDLocs.Get(i).String()))
 		}
+		if tableIDLocs.Len() > maxShow {
+			b.WriteString(fmt.Sprintf("    ... and %d more\n", tableIDLocs.Len()-maxShow))
+		}
 	}
-
-	b.WriteString(fmt.Sprintf("  CKP LSN:  %d\n", e.LSN()))
-	b.WriteString(fmt.Sprintf("  Trunc LSN:%d\n", e.GetTruncateLsn()))
+	
 	b.WriteString("\nPress: [a] Accounts  [t] Tables  [l] Logical  [b] Back")
 	return b.String()
 }
 
 func (m model) renderAccounts() string {
 	var b strings.Builder
+	
+	// Overview panel
+	accounts := m.state.accounts
+	totalTables := 0
+	totalData := 0
+	totalTomb := 0
+	for _, acc := range accounts {
+		totalTables += acc.TableCount
+		totalData += acc.DataRanges
+		totalTomb += acc.TombRanges
+	}
+	
 	b.WriteString(fmt.Sprintf("Accounts in Entry #%d\n", m.state.selectedEntry))
+	b.WriteString(fmt.Sprintf("Overview: %d accounts │ %d tables │ %d data objects │ %d tombstone objects\n",
+		len(accounts), totalTables, totalData, totalTomb))
+	b.WriteString(strings.Repeat("─", 80))
+	b.WriteString("\n")
+	
 	b.WriteString("  # │ AccountID │ Tables │ Data │ Tomb\n")
 	b.WriteString("────┼───────────┼────────┼──────┼──────\n")
 
-	accounts := m.state.accounts
 	searchResults := make(map[int]bool)
 	// Always show search results if they exist (even in search mode)
 	for _, idx := range m.state.SearchResult() {
@@ -498,15 +532,29 @@ func (m model) renderAccounts() string {
 
 func (m model) renderTables() string {
 	var b strings.Builder
+	
+	// Overview panel
+	tables := m.state.tables
+	totalData := 0
+	totalTomb := 0
+	for _, tbl := range tables {
+		totalData += len(tbl.DataRanges)
+		totalTomb += len(tbl.TombRanges)
+	}
+	
 	if m.state.mode == ViewModeAccountTables {
 		b.WriteString(fmt.Sprintf("Tables for Account %d\n", m.state.selectedAccount))
 	} else {
 		b.WriteString(fmt.Sprintf("All Tables in Entry #%d\n", m.state.selectedEntry))
 	}
+	b.WriteString(fmt.Sprintf("Overview: %d tables │ %d data objects │ %d tombstone objects\n", 
+		len(tables), totalData, totalTomb))
+	b.WriteString(strings.Repeat("─", 80))
+	b.WriteString("\n")
+	
 	b.WriteString("  # │ TableID            │ Account │ Data │ Tomb\n")
 	b.WriteString("────┼────────────────────┼─────────┼──────┼──────\n")
 
-	tables := m.state.tables
 	searchResults := make(map[int]bool)
 	// Always show search results if they exist (even in search mode)
 	for _, idx := range m.state.SearchResult() {
@@ -555,15 +603,20 @@ func (m model) renderTableDetail() string {
 	}
 
 	var b strings.Builder
+	
+	// Overview
 	b.WriteString(fmt.Sprintf("Table %d (Account: %d)\n", tbl.TableID, tbl.AccountID))
-	b.WriteString(fmt.Sprintf("  Data Ranges: %d\n", len(tbl.DataRanges)))
-	b.WriteString(fmt.Sprintf("  Tomb Ranges: %d\n", len(tbl.TombRanges)))
+	b.WriteString(fmt.Sprintf("Overview: %d data objects │ %d tombstone objects\n",
+		len(tbl.DataRanges), len(tbl.TombRanges)))
+	b.WriteString(strings.Repeat("─", 80))
+	b.WriteString("\n")
 
 	if len(tbl.DataRanges) > 0 {
-		b.WriteString("\nData Ranges:\n")
+		b.WriteString(fmt.Sprintf("\nData Ranges (%d):\n", len(tbl.DataRanges)))
+		maxShow := 10
 		for i, r := range tbl.DataRanges {
-			if i >= 10 {
-				b.WriteString(fmt.Sprintf("  ... and %d more\n", len(tbl.DataRanges)-10))
+			if i >= maxShow {
+				b.WriteString(fmt.Sprintf("  ... and %d more\n", len(tbl.DataRanges)-maxShow))
 				break
 			}
 			b.WriteString(fmt.Sprintf("  %s\n", rangeStr(r)))
@@ -571,15 +624,18 @@ func (m model) renderTableDetail() string {
 	}
 
 	if len(tbl.TombRanges) > 0 {
-		b.WriteString("\nTombstone Ranges:\n")
+		b.WriteString(fmt.Sprintf("\nTombstone Ranges (%d):\n", len(tbl.TombRanges)))
+		maxShow := 10
 		for i, r := range tbl.TombRanges {
-			if i >= 10 {
-				b.WriteString(fmt.Sprintf("  ... and %d more\n", len(tbl.TombRanges)-10))
+			if i >= maxShow {
+				b.WriteString(fmt.Sprintf("  ... and %d more\n", len(tbl.TombRanges)-maxShow))
 				break
 			}
 			b.WriteString(fmt.Sprintf("  %s\n", rangeStr(r)))
 		}
 	}
+	
+	b.WriteString("\nPress [b] Back")
 	return b.String()
 }
 
