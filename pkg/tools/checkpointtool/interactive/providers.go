@@ -38,11 +38,11 @@ func (p *CheckpointListProvider) GetRows() [][]string {
 		}
 		rows[i] = []string{
 			typeStr,
+			fmt.Sprintf("%d", e.LSN()),
 			formatTS(e.GetStart()),
 			formatTS(e.GetEnd()),
 			stateStr(e.GetState()),
 			fmt.Sprintf("%d", e.GetVersion()),
-			fmt.Sprintf("%d", e.LSN()),
 		}
 	}
 	return rows

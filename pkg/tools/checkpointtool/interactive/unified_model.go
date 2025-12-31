@@ -57,7 +57,7 @@ func NewUnifiedModel(reader *checkpointtool.CheckpointReader) *UnifiedModel {
 func (m *UnifiedModel) createCheckpointListPage() *interactive.GenericPage {
 	config := interactive.PageConfig{
 		Title:         "═══ Checkpoint List ═══",
-		Headers:       []string{"Type", "Start", "End", "State", "Ver", "LSN"},
+		Headers:       []string{"Type", "LSN", "Start", "End", "State", "Ver"},
 		ShowRowNumber: true,
 		EnableCursor:  true,
 		EnableSearch:  true,
