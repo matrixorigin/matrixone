@@ -16,12 +16,14 @@ package checkpointtool
 
 import (
 	"context"
+	"fmt"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
@@ -133,6 +135,11 @@ func (r *CheckpointReader) Info() *CheckpointInfo {
 		}
 	}
 	return info
+}
+
+// Dir returns the checkpoint directory
+func (r *CheckpointReader) Dir() string {
+	return r.dir
 }
 
 // Entries returns all checkpoint entries
@@ -370,3 +377,204 @@ func (r *CheckpointReader) Close() error {
 	r.entries = nil
 	return nil
 }
+
+// GetObjectEntries reads detailed object entries with timestamps for a table
+func (r *CheckpointReader) GetObjectEntries(entry *checkpoint.CheckpointEntry, tableID uint64) ([]*ObjectEntryInfo, []*ObjectEntryInfo, error) {
+	// First get all table ranges
+	allRanges, err := r.GetTableRanges(entry)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Now read the checkpoint file again to get timestamps
+	loc := entry.GetLocation()
+	if loc.IsEmpty() {
+		return nil, nil, nil
+	}
+
+	fileName := loc.Name().String()
+	reader, err := ioutil.NewFileReader(r.fs, fileName)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	bats, release, err := reader.LoadAllColumns(r.ctx, nil, r.mp)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer release()
+
+	// Build a map of ranges with their timestamps
+	var dataEntries, tombEntries []*ObjectEntryInfo
+	rangeIdx := 0
+
+	for _, bat := range bats {
+		if bat.RowCount() == 0 {
+			continue
+		}
+		
+		// Check if timestamp columns exist
+		var createTSVec, deleteTSVec []types.TS
+		if len(bat.Vecs) > ckputil.TableObjectsAttr_CreateTS_Idx {
+			createTSVec = vector.MustFixedColWithTypeCheck[types.TS](bat.Vecs[ckputil.TableObjectsAttr_CreateTS_Idx])
+		}
+		if len(bat.Vecs) > ckputil.TableObjectsAttr_DeleteTS_Idx {
+			deleteTSVec = vector.MustFixedColWithTypeCheck[types.TS](bat.Vecs[ckputil.TableObjectsAttr_DeleteTS_Idx])
+		}
+
+		for i := 0; i < bat.RowCount(); i++ {
+			if rangeIdx >= len(allRanges) {
+				break
+			}
+			
+			rng := allRanges[rangeIdx]
+			rangeIdx++
+			
+			if rng.TableID != tableID {
+				continue
+			}
+
+			entry := &ObjectEntryInfo{
+				Range: rng,
+			}
+			
+			// Set timestamps if available
+			if createTSVec != nil && i < len(createTSVec) {
+				entry.CreateTime = createTSVec[i]
+			}
+			if deleteTSVec != nil && i < len(deleteTSVec) {
+				entry.DeleteTime = deleteTSVec[i]
+			}
+
+			if rng.ObjectType == ckputil.ObjectType_Data {
+				dataEntries = append(dataEntries, entry)
+			} else if rng.ObjectType == ckputil.ObjectType_Tombstone {
+				tombEntries = append(tombEntries, entry)
+			}
+		}
+	}
+
+	return dataEntries, tombEntries, nil
+}
+
+// ReadRangeData reads actual data from a range and returns column names and row data as strings
+func (r *CheckpointReader) ReadRangeData(entry *checkpoint.CheckpointEntry, rng ckputil.TableRange) ([]string, [][]string, error) {
+	objName := rng.ObjectStats.ObjectName().String()
+	reader, err := ioutil.NewFileReader(r.fs, objName)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	bats, release, err := reader.LoadAllColumns(r.ctx, nil, r.mp)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer release()
+
+	if len(bats) == 0 {
+		return nil, nil, nil
+	}
+
+	// Use checkpoint schema for column names
+	columns := ckputil.TableObjectsAttrs
+	if len(columns) == 0 {
+		// Fallback: generate column names from vector count
+		bat := bats[0]
+		columns = make([]string, len(bat.Vecs))
+		for i := range columns {
+			columns[i] = fmt.Sprintf("col_%d", i)
+		}
+	}
+
+	// Extract rows within the range
+	startRow := uint32(rng.Start.GetRowOffset())
+	endRow := uint32(rng.End.GetRowOffset())
+
+	var rows [][]string
+	for _, b := range bats {
+		for rowIdx := 0; rowIdx < b.RowCount(); rowIdx++ {
+			if uint32(rowIdx) >= startRow && uint32(rowIdx) <= endRow {
+				row := make([]string, len(b.Vecs))
+				for colIdx, vec := range b.Vecs {
+					row[colIdx] = vecValueToString(vec, rowIdx)
+				}
+				rows = append(rows, row)
+			}
+		}
+	}
+
+	// Trim columns to match actual vector count
+	if len(bats) > 0 && len(columns) > len(bats[0].Vecs) {
+		columns = columns[:len(bats[0].Vecs)]
+	}
+
+	return columns, rows, nil
+}
+
+// vecValueToString converts a vector value at index to string
+func vecValueToString(vec *vector.Vector, idx int) string {
+	if vec.IsNull(uint64(idx)) {
+		return "NULL"
+	}
+
+	switch vec.GetType().Oid {
+	case types.T_bool:
+		v := vector.MustFixedColWithTypeCheck[bool](vec)
+		return fmt.Sprintf("%v", v[idx])
+	case types.T_int8:
+		v := vector.MustFixedColWithTypeCheck[int8](vec)
+		return fmt.Sprintf("%d", v[idx])
+	case types.T_int16:
+		v := vector.MustFixedColWithTypeCheck[int16](vec)
+		return fmt.Sprintf("%d", v[idx])
+	case types.T_int32:
+		v := vector.MustFixedColWithTypeCheck[int32](vec)
+		return fmt.Sprintf("%d", v[idx])
+	case types.T_int64:
+		v := vector.MustFixedColWithTypeCheck[int64](vec)
+		return fmt.Sprintf("%d", v[idx])
+	case types.T_uint8:
+		v := vector.MustFixedColWithTypeCheck[uint8](vec)
+		return fmt.Sprintf("%d", v[idx])
+	case types.T_uint16:
+		v := vector.MustFixedColWithTypeCheck[uint16](vec)
+		return fmt.Sprintf("%d", v[idx])
+	case types.T_uint32:
+		v := vector.MustFixedColWithTypeCheck[uint32](vec)
+		return fmt.Sprintf("%d", v[idx])
+	case types.T_uint64:
+		v := vector.MustFixedColWithTypeCheck[uint64](vec)
+		return fmt.Sprintf("%d", v[idx])
+	case types.T_float32:
+		v := vector.MustFixedColWithTypeCheck[float32](vec)
+		return fmt.Sprintf("%.4f", v[idx])
+	case types.T_float64:
+		v := vector.MustFixedColWithTypeCheck[float64](vec)
+		return fmt.Sprintf("%.4f", v[idx])
+	case types.T_char, types.T_varchar, types.T_text:
+		return vec.GetStringAt(idx)
+	case types.T_TS:
+		v := vector.MustFixedColWithTypeCheck[types.TS](vec)
+		return v[idx].ToString()
+	case types.T_Rowid:
+		v := vector.MustFixedColWithTypeCheck[types.Rowid](vec)
+		return fmt.Sprintf("%d-%d", v[idx].GetBlockOffset(), v[idx].GetRowOffset())
+	case types.T_Blockid:
+		v := vector.MustFixedColWithTypeCheck[types.Blockid](vec)
+		return v[idx].String()
+	case types.T_Objectid:
+		v := vector.MustFixedColWithTypeCheck[types.Objectid](vec)
+		return v[idx].ShortStringEx()
+	default:
+		// For binary/blob types, show hex or truncated
+		if vec.GetType().IsVarlen() {
+			bs := vec.GetBytesAt(idx)
+			if len(bs) > 16 {
+				return fmt.Sprintf("%x...", bs[:16])
+			}
+			return fmt.Sprintf("%x", bs)
+		}
+		return fmt.Sprintf("<%s>", vec.GetType().String())
+	}
+}
+

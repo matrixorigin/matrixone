@@ -66,6 +66,13 @@ type TableInfo struct {
 	TombRanges []ckputil.TableRange
 }
 
+// ObjectEntryInfo contains detailed object entry information with timestamps
+type ObjectEntryInfo struct {
+	Range      ckputil.TableRange
+	CreateTime types.TS
+	DeleteTime types.TS
+}
+
 // ComposedView represents logical checkpoint view at a timestamp
 type ComposedView struct {
 	Timestamp    types.TS

@@ -53,6 +53,10 @@ type State struct {
 	verticalMode bool              // Vertical display mode
 	colNames     map[uint16]string // Column rename mapping
 
+	// Row range filter (for checkpoint range viewing)
+	rowRangeStart int64 // Start row (0-based, -1 means no filter)
+	rowRangeEnd   int64 // End row (inclusive, -1 means no filter)
+
 	// View mode
 	viewMode   ViewMode              // Current view mode
 	metaRows   [][]string            // Metadata rows (for BlkMeta/ObjMeta mode)
@@ -87,12 +91,40 @@ type ObjSummary struct {
 
 func NewState(ctx context.Context, reader *objecttool.ObjectReader) *State {
 	return &State{
-		reader:      reader,
-		formatter:   objecttool.NewFormatterRegistry(),
-		ctx:         ctx,
-		pageSize:    20,
-		maxColWidth: 64, // Default 64 characters
+		reader:        reader,
+		formatter:     objecttool.NewFormatterRegistry(),
+		ctx:           ctx,
+		pageSize:      20,
+		maxColWidth:   64, // Default 64 characters
+		rowRangeStart: -1,
+		rowRangeEnd:   -1,
 	}
+}
+
+// SetRowRange sets the row range filter
+func (s *State) SetRowRange(start, end int64) {
+	s.rowRangeStart = start
+	s.rowRangeEnd = end
+}
+
+// FilteredRowCount returns the number of rows after filtering
+func (s *State) FilteredRowCount() int64 {
+	total := int64(s.reader.Info().RowCount)
+	if s.rowRangeStart < 0 && s.rowRangeEnd < 0 {
+		return total
+	}
+	start := s.rowRangeStart
+	if start < 0 {
+		start = 0
+	}
+	end := s.rowRangeEnd
+	if end < 0 || end >= total {
+		end = total - 1
+	}
+	if end < start {
+		return 0
+	}
+	return end - start + 1
 }
 
 // CurrentRows returns the current page data (formatted strings)
@@ -121,7 +153,15 @@ func (s *State) CurrentRows() ([][]string, []string, error) {
 		end = totalRows
 	}
 
-	if start >= totalRows {
+	// Apply row range filter if set (only filter within current block)
+	if s.rowRangeStart >= 0 && start < int(s.rowRangeStart) {
+		start = int(s.rowRangeStart)
+	}
+	if s.rowRangeEnd >= 0 && end > int(s.rowRangeEnd)+1 {
+		end = int(s.rowRangeEnd) + 1
+	}
+
+	if start >= end || start >= totalRows {
 		return nil, nil, nil
 	}
 
@@ -240,12 +280,24 @@ func (s *State) NextPage() error {
 	}
 
 	totalRows := s.currentBatch.RowCount()
+	
+	// Apply row range filter
+	maxRow := totalRows
+	if s.rowRangeEnd >= 0 && int(s.rowRangeEnd)+1 < maxRow {
+		maxRow = int(s.rowRangeEnd) + 1
+	}
+	
 	newOffset := s.rowOffset + s.pageSize
 
-	if newOffset < totalRows {
-		// Within the same block
+	if newOffset < maxRow {
+		// Within the same block and range
 		s.rowOffset = newOffset
 		return nil
+	}
+
+	// If row range is set, don't switch blocks
+	if s.rowRangeStart >= 0 || s.rowRangeEnd >= 0 {
+		return moerr.NewInternalErrorf(s.ctx, "already at last page")
 	}
 
 	// Need to switch to next block
@@ -317,10 +369,22 @@ func (s *State) ScrollDown() error {
 	}
 
 	totalRows := s.currentBatch.RowCount()
-	// If current row is not the last row of current page and not the last row of block, scroll down one line
-	if s.rowOffset+1 < totalRows {
+	
+	// Apply row range filter
+	maxRow := totalRows
+	if s.rowRangeEnd >= 0 && int(s.rowRangeEnd)+1 < maxRow {
+		maxRow = int(s.rowRangeEnd) + 1
+	}
+	
+	// If current row is not the last row of range, scroll down one line
+	if s.rowOffset+1 < maxRow {
 		s.rowOffset++
 		return nil
+	}
+
+	// If row range is set, don't switch blocks
+	if s.rowRangeStart >= 0 || s.rowRangeEnd >= 0 {
+		return moerr.NewInternalErrorf(s.ctx, "already at last row")
 	}
 
 	// Already at the last row of current block, try to switch to next block

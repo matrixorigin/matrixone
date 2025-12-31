@@ -24,6 +24,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/tools/checkpointtool"
+	objectinteractive "github.com/matrixorigin/matrixone/pkg/tools/objecttool/interactive"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 )
@@ -38,6 +39,10 @@ const helpText = `Checkpoint Viewer - Keyboard Shortcuts:
     a       - Account view       t       - Table view
     l       - Logical view
 
+  Filter (Table view):
+    f       - Filter by Account ID
+    Esc     - Clear filter
+
   Search (Table/Account views):
     /       - Enter search mode  Esc     - Exit search
     ↑/↓     - Navigate history   Enter   - Confirm & jump to first
@@ -45,6 +50,10 @@ const helpText = `Checkpoint Viewer - Keyboard Shortcuts:
     Supports regex: .* + ? ^ $ {} [] | () \
     Examples: /100.*  /^10  /[0-9]{3}
     History: ~/.mo_checkpoint_search_history
+
+  Object Expansion (Table Detail view):
+    Enter   - Toggle expand      e       - Expand all
+    c       - Collapse all
 
   Scrolling:
     PgUp/PgDn - Page up/down     g/G     - Top/Bottom
@@ -59,15 +68,27 @@ type model struct {
 	cursor   int // Selection cursor
 	quitting bool
 
+	// Filter input mode
+	filterInputMode bool
+	filterInput     string
+
 	// Search history
 	searchHistory []string
 	historyIndex  int
 	matchIndex    int // Current match index in search results
+
+	// Object expansion state (for table detail view)
+	expandedObjects map[int]bool // Index -> expanded
+
+	// Object to open after quit
+	objectToOpen  string
+	rangeToOpen   *ckputil.TableRange // Range info for filtering rows
 }
 
 func newModel(reader *checkpointtool.CheckpointReader) model {
 	m := model{
-		state: NewState(reader),
+		state:           NewState(reader),
+		expandedObjects: make(map[int]bool),
 	}
 	m.loadSearchHistory()
 	return m
@@ -87,6 +108,46 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.message = ""
+
+	// Handle filter input mode
+	if m.filterInputMode {
+		switch msg.String() {
+		case "esc":
+			m.filterInputMode = false
+			m.filterInput = ""
+			return m, nil
+		case "enter":
+			if m.filterInput == "" {
+				// Clear filter
+				m.state.ClearAccountFilter()
+				m.message = "Filter cleared"
+			} else {
+				// Parse and apply filter
+				var accountID int64
+				if _, err := fmt.Sscanf(m.filterInput, "%d", &accountID); err == nil {
+					m.state.SetAccountFilter(accountID)
+					m.cursor = 0
+					m.message = fmt.Sprintf("Filtered by Account ID: %d", accountID)
+				} else {
+					m.message = "Invalid Account ID"
+				}
+			}
+			m.filterInputMode = false
+			m.filterInput = ""
+			return m, nil
+		case "backspace":
+			if len(m.filterInput) > 0 {
+				m.filterInput = m.filterInput[:len(m.filterInput)-1]
+			}
+			return m, nil
+		default:
+			// Append digit
+			if len(msg.String()) == 1 && msg.String()[0] >= '0' && msg.String()[0] <= '9' {
+				m.filterInput += msg.String()
+			}
+			return m, nil
+		}
+	}
 
 	// Handle search mode
 	if m.state.IsSearchMode() {
@@ -201,6 +262,31 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		return m.handleEnter()
 
+	case "f":
+		// Enter filter mode (only in table view)
+		if m.state.mode == ViewModeTable || m.state.mode == ViewModeAccountTables {
+			m.filterInputMode = true
+			m.filterInput = ""
+		}
+		return m, nil
+
+	case "e":
+		// Expand all (in table detail view)
+		if m.state.mode == ViewModeTableDetail {
+			totalEntries := len(m.state.DataEntries()) + len(m.state.TombEntries())
+			for i := 0; i < totalEntries; i++ {
+				m.expandedObjects[i] = true
+			}
+		}
+		return m, nil
+
+	case "c":
+		// Collapse all (in table detail view)
+		if m.state.mode == ViewModeTableDetail {
+			m.expandedObjects = make(map[int]bool)
+		}
+		return m, nil
+
 	case "b", "backspace":
 		m.state.Back()
 		m.cursor = 0
@@ -264,7 +350,9 @@ func (m model) maxItems() int {
 	case ViewModeAccount:
 		return len(m.state.accounts)
 	case ViewModeAccountTables, ViewModeTable:
-		return len(m.state.tables)
+		return len(m.state.FilteredTables())
+	case ViewModeTableDetail:
+		return len(m.state.DataEntries()) + len(m.state.TombEntries())
 	default:
 		return 1
 	}
@@ -273,7 +361,9 @@ func (m model) maxItems() int {
 func (m model) handleEnter() (tea.Model, tea.Cmd) {
 	switch m.state.mode {
 	case ViewModeList:
-		if err := m.state.SelectEntry(m.cursor); err != nil {
+		// Go directly to table view instead of entry overview
+		m.state.selectedEntry = m.cursor
+		if err := m.state.SwitchToTables(); err != nil {
 			m.message = fmt.Sprintf("Error: %v", err)
 		}
 		m.cursor = 0
@@ -288,12 +378,24 @@ func (m model) handleEnter() (tea.Model, tea.Cmd) {
 		}
 
 	case ViewModeAccountTables, ViewModeTable:
-		if m.cursor < len(m.state.tables) {
-			tbl := m.state.tables[m.cursor]
+		tables := m.state.FilteredTables()
+		if m.cursor < len(tables) {
+			tbl := tables[m.cursor]
 			if err := m.state.SelectTable(tbl.TableID); err != nil {
 				m.message = fmt.Sprintf("Error: %v", err)
 			}
 			m.cursor = 0
+			m.expandedObjects = make(map[int]bool)
+		}
+
+	case ViewModeTableDetail:
+		// Open object file with objecttool viewer
+		entry := m.state.GetRangeEntry(m.cursor)
+		if entry != nil {
+			objPath := filepath.Join(m.state.reader.Dir(), entry.Range.ObjectStats.ObjectName().String())
+			m.objectToOpen = objPath
+			m.rangeToOpen = &entry.Range
+			return m, tea.Quit
 		}
 	}
 	return m, nil
@@ -312,6 +414,14 @@ func (m model) View() string {
 	b.WriteString("[?]Help [q]Quit\n")
 	b.WriteString(strings.Repeat("─", 80))
 	b.WriteString("\n")
+
+	// Filter input bar (if in filter mode)
+	if m.filterInputMode {
+		b.WriteString(fmt.Sprintf("🔍 Filter by Account ID: %s_\n", m.filterInput))
+		b.WriteString("   Enter number and press Enter (or just Enter to clear filter)\n")
+		b.WriteString(strings.Repeat("─", 80))
+		b.WriteString("\n")
+	}
 
 	// Search bar (if in search mode)
 	if m.state.IsSearchMode() {
@@ -534,7 +644,7 @@ func (m model) renderTables() string {
 	var b strings.Builder
 	
 	// Overview panel
-	tables := m.state.tables
+	tables := m.state.FilteredTables()
 	totalData := 0
 	totalTomb := 0
 	for _, tbl := range tables {
@@ -547,13 +657,19 @@ func (m model) renderTables() string {
 	} else {
 		b.WriteString(fmt.Sprintf("All Tables in Entry #%d\n", m.state.selectedEntry))
 	}
+	
+	// Show filter status
+	if m.state.HasAccountFilter() {
+		b.WriteString(fmt.Sprintf("🔍 Filtered by Account ID: %d │ ", m.state.GetAccountFilter()))
+	}
+	
 	b.WriteString(fmt.Sprintf("Overview: %d tables │ %d data objects │ %d tombstone objects\n", 
 		len(tables), totalData, totalTomb))
 	b.WriteString(strings.Repeat("─", 80))
 	b.WriteString("\n")
 	
 	b.WriteString("  # │ TableID            │ Account │ Data │ Tomb\n")
-	b.WriteString("────┼────────────────────┼─────────┼──────┼──────\n")
+	b.WriteString("────┼────────────────────┼─────────┼──────┼─────\n")
 
 	searchResults := make(map[int]bool)
 	// Always show search results if they exist (even in search mode)
@@ -569,27 +685,29 @@ func (m model) renderTables() string {
 
 	for i := start; i < end; i++ {
 		tbl := tables[i]
-		cursor := "  "
+		cursor := " "
 		if i == m.cursor {
-			cursor = "▶ "
+			cursor = "▶"
 		}
-		// Highlight search results
-		highlight := ""
+		highlight := " "
 		if searchResults[i] {
-			highlight = "✓ "
+			highlight = "✓"
 		}
-		b.WriteString(fmt.Sprintf("%s%s%2d │ %18d │ %7d │ %4d │ %4d\n",
+		b.WriteString(fmt.Sprintf("%s%s%2d│ %18d │ %7d │ %4d │ %4d\n",
 			cursor, highlight, i, tbl.TableID, tbl.AccountID, len(tbl.DataRanges), len(tbl.TombRanges)))
 	}
 
-	// Show search hint
+	// Show filter/search hint
 	if !m.state.IsSearchMode() && (m.state.mode == ViewModeTable || m.state.mode == ViewModeAccountTables) {
 		// Show active search info if exists
 		if results := m.state.SearchResult(); len(results) > 0 {
 			b.WriteString(fmt.Sprintf("\n🔍 Active search: \"%s\" (%d matches) - Press n/N to navigate, / for new search", 
 				m.state.SearchQuery(), len(results)))
 		} else {
-			b.WriteString("\nPress [/] to search by Table ID")
+			b.WriteString("\nPress [/] to search by Table ID │ [f] to filter by Account ID")
+			if m.state.HasAccountFilter() {
+				b.WriteString(" │ [f]+Enter to clear filter")
+			}
 		}
 	}
 
@@ -602,40 +720,102 @@ func (m model) renderTableDetail() string {
 		return "No table selected"
 	}
 
+	dataEntries := m.state.DataEntries()
+	tombEntries := m.state.TombEntries()
+
 	var b strings.Builder
 	
 	// Overview
 	b.WriteString(fmt.Sprintf("Table %d (Account: %d)\n", tbl.TableID, tbl.AccountID))
 	b.WriteString(fmt.Sprintf("Overview: %d data objects │ %d tombstone objects\n",
-		len(tbl.DataRanges), len(tbl.TombRanges)))
+		len(dataEntries), len(tombEntries)))
 	b.WriteString(strings.Repeat("─", 80))
 	b.WriteString("\n")
 
-	if len(tbl.DataRanges) > 0 {
-		b.WriteString(fmt.Sprintf("\nData Ranges (%d):\n", len(tbl.DataRanges)))
-		maxShow := 10
-		for i, r := range tbl.DataRanges {
-			if i >= maxShow {
-				b.WriteString(fmt.Sprintf("  ... and %d more\n", len(tbl.DataRanges)-maxShow))
-				break
+	// Data objects list
+	if len(dataEntries) > 0 {
+		b.WriteString(fmt.Sprintf("\nData Objects (%d):\n", len(dataEntries)))
+		b.WriteString(" # │ Object Name                                │ Range (Block-Row)    │ Rows │ Size   │ Create Time\n")
+		b.WriteString("───┼────────────────────────────────────────────┼──────────────────────┼──────┼────────┼────────────────────\n")
+		
+		start := m.state.scrollOffset
+		end := start + m.state.pageSize
+		if end > len(dataEntries) {
+			end = len(dataEntries)
+		}
+		
+		for i := start; i < end; i++ {
+			entry := dataEntries[i]
+			cursor := " "
+			if i == m.cursor {
+				cursor = "▶"
 			}
-			b.WriteString(fmt.Sprintf("  %s\n", rangeStr(r)))
+			
+			objName := entry.Range.ObjectStats.ObjectName().String()
+			if len(objName) > 42 {
+				objName = objName[:39] + "..."
+			}
+			
+			rangeStr := fmt.Sprintf("%d-%d ~ %d-%d",
+				entry.Range.Start.GetBlockOffset(), entry.Range.Start.GetRowOffset(),
+				entry.Range.End.GetBlockOffset(), entry.Range.End.GetRowOffset())
+			
+			b.WriteString(fmt.Sprintf("%s%2d│ %-42s │ %-20s │ %4d │ %6s │ %s\n",
+				cursor, i, objName, rangeStr,
+				entry.Range.ObjectStats.Rows(),
+				formatSize(entry.Range.ObjectStats.Size()),
+				formatTSShort(entry.CreateTime)))
 		}
 	}
 
-	if len(tbl.TombRanges) > 0 {
-		b.WriteString(fmt.Sprintf("\nTombstone Ranges (%d):\n", len(tbl.TombRanges)))
-		maxShow := 10
-		for i, r := range tbl.TombRanges {
-			if i >= maxShow {
-				b.WriteString(fmt.Sprintf("  ... and %d more\n", len(tbl.TombRanges)-maxShow))
-				break
+	// Tombstone objects list
+	if len(tombEntries) > 0 {
+		b.WriteString(fmt.Sprintf("\nTombstone Objects (%d):\n", len(tombEntries)))
+		b.WriteString(" # │ Object Name                                │ Range (Block-Row)    │ Rows │ Size   │ Create Time         │ Delete Time\n")
+		b.WriteString("───┼────────────────────────────────────────────┼──────────────────────┼──────┼────────┼─────────────────────┼────────────────────\n")
+		
+		dataCount := len(dataEntries)
+		start := m.state.scrollOffset - dataCount
+		if start < 0 {
+			start = 0
+		}
+		end := start + m.state.pageSize
+		if end > len(tombEntries) {
+			end = len(tombEntries)
+		}
+		
+		for i := start; i < end; i++ {
+			entry := tombEntries[i]
+			idx := dataCount + i
+			cursor := " "
+			if idx == m.cursor {
+				cursor = "▶"
 			}
-			b.WriteString(fmt.Sprintf("  %s\n", rangeStr(r)))
+			
+			objName := entry.Range.ObjectStats.ObjectName().String()
+			if len(objName) > 42 {
+				objName = objName[:39] + "..."
+			}
+			
+			rangeStr := fmt.Sprintf("%d-%d ~ %d-%d",
+				entry.Range.Start.GetBlockOffset(), entry.Range.Start.GetRowOffset(),
+				entry.Range.End.GetBlockOffset(), entry.Range.End.GetRowOffset())
+			
+			deleteTime := "-"
+			if !entry.DeleteTime.IsEmpty() {
+				deleteTime = formatTSShort(entry.DeleteTime)
+			}
+			
+			b.WriteString(fmt.Sprintf("%s%2d│ %-42s │ %-20s │ %4d │ %6s │ %s │ %s\n",
+				cursor, i, objName, rangeStr,
+				entry.Range.ObjectStats.Rows(),
+				formatSize(entry.Range.ObjectStats.Size()),
+				formatTSShort(entry.CreateTime),
+				deleteTime))
 		}
 	}
 	
-	b.WriteString("\nPress [b] Back")
+	b.WriteString("\nPress: [b] Back  [/] Search")
 	return b.String()
 }
 
@@ -722,14 +902,57 @@ func rangeStr(r ckputil.TableRange) string {
 
 // Run starts the interactive checkpoint viewer
 func Run(reader *checkpointtool.CheckpointReader) error {
-	p := tea.NewProgram(newModel(reader), tea.WithAltScreen())
-	finalModel, err := p.Run()
-	if err == nil {
-		if m, ok := finalModel.(model); ok {
-			m.saveSearchHistory()
+	m := newModel(reader)
+	
+	for {
+		// Reset object to open
+		m.objectToOpen = ""
+		m.rangeToOpen = nil
+		
+		p := tea.NewProgram(m, tea.WithAltScreen())
+		finalModel, err := p.Run()
+		if err != nil {
+			return err
 		}
+
+		var ok bool
+		m, ok = finalModel.(model)
+		if !ok {
+			return nil
+		}
+		m.saveSearchHistory()
+
+		// Check if we need to open an object file
+		if m.objectToOpen != "" && m.rangeToOpen != nil {
+			// Build options with range filtering, column names and formats
+			opts := &objectinteractive.ViewOptions{
+				StartRow: int64(m.rangeToOpen.Start.GetRowOffset()),
+				EndRow:   int64(m.rangeToOpen.End.GetRowOffset()),
+				ColumnNames: map[uint16]string{
+					0: ckputil.TableObjectsAttr_Accout,
+					1: ckputil.TableObjectsAttr_DB,
+					2: ckputil.TableObjectsAttr_Table,
+					3: ckputil.TableObjectsAttr_ObjectType,
+					4: ckputil.TableObjectsAttr_ID,
+					5: ckputil.TableObjectsAttr_CreateTS,
+					6: ckputil.TableObjectsAttr_DeleteTS,
+					7: ckputil.TableObjectsAttr_Cluster,
+				},
+				ColumnFormats: map[uint16]string{
+					4: "objectstats", // id -> objectstats format
+					5: "ts",          // create_ts -> timestamp format
+					6: "ts",          // delete_ts -> timestamp format
+				},
+			}
+			if err := objectinteractive.RunBubbleteaWithOptions(m.objectToOpen, opts); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Normal quit
+		return nil
 	}
-	return err
 }
 
 // loadSearchHistory loads search history from file
@@ -845,4 +1068,18 @@ func (m *model) adjustScrollToShowCursor() {
 	} else if m.cursor >= m.state.scrollOffset+m.state.pageSize {
 		m.state.scrollOffset = m.cursor - m.state.pageSize + 1
 	}
+}
+
+// formatSize formats byte size to human readable format
+func formatSize(bytes uint32) string {
+	const unit = 1024
+	if bytes < unit {
+		return fmt.Sprintf("%d B", bytes)
+	}
+	div, exp := uint32(unit), 0
+	for n := bytes / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
 }

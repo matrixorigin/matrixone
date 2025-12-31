@@ -32,7 +32,7 @@ const (
 	ViewModeAccount                       // Account list
 	ViewModeAccountTables                 // Tables under account
 	ViewModeTable                         // All tables
-	ViewModeTableDetail                   // Table detail
+	ViewModeTableDetail                   // Table detail (range list)
 	ViewModeLogical                       // Logical view
 )
 
@@ -60,6 +60,9 @@ type State struct {
 	selectedAccount uint32
 	selectedTable   uint64
 
+	// Filter state
+	filterAccountID int64 // -1 means no filter, >= 0 means filter by account id
+
 	// Search state
 	searchMode   bool
 	searchQuery  string
@@ -72,16 +75,21 @@ type State struct {
 	accounts []*checkpointtool.AccountInfo
 	tables   []*checkpointtool.TableInfo
 	info     *checkpointtool.CheckpointInfo
+
+	// Object entries cache (for table detail view)
+	dataEntries []*checkpointtool.ObjectEntryInfo
+	tombEntries []*checkpointtool.ObjectEntryInfo
 }
 
 // NewState creates a new state
 func NewState(reader *checkpointtool.CheckpointReader) *State {
 	s := &State{
-		reader:   reader,
-		mode:     ViewModeList,
-		pageSize: 20,
-		entries:  reader.Entries(),
-		info:     reader.Info(),
+		reader:          reader,
+		mode:            ViewModeList,
+		pageSize:        20,
+		entries:         reader.Entries(),
+		info:            reader.Info(),
+		filterAccountID: -1, // No filter by default
 	}
 	return s
 }
@@ -115,6 +123,29 @@ func (s *State) GetSelectedTable() *checkpointtool.TableInfo {
 		}
 	}
 	return nil
+}
+
+// GetRangeEntry returns the range entry at given index
+func (s *State) GetRangeEntry(index int) *checkpointtool.ObjectEntryInfo {
+	dataCount := len(s.dataEntries)
+	if index < dataCount {
+		return s.dataEntries[index]
+	}
+	tombIdx := index - dataCount
+	if tombIdx < len(s.tombEntries) {
+		return s.tombEntries[tombIdx]
+	}
+	return nil
+}
+
+// DataEntries returns cached data entries
+func (s *State) DataEntries() []*checkpointtool.ObjectEntryInfo {
+	return s.dataEntries
+}
+
+// TombEntries returns cached tombstone entries
+func (s *State) TombEntries() []*checkpointtool.ObjectEntryInfo {
+	return s.tombEntries
 }
 
 // ScrollOffset returns current scroll offset
@@ -187,12 +218,59 @@ func (s *State) SwitchToTables() error {
 	return nil
 }
 
+// FilteredTables returns tables filtered by account id if filter is active
+func (s *State) FilteredTables() []*checkpointtool.TableInfo {
+	if s.filterAccountID < 0 {
+		return s.tables
+	}
+	filtered := make([]*checkpointtool.TableInfo, 0)
+	for _, tbl := range s.tables {
+		if int64(tbl.AccountID) == s.filterAccountID {
+			filtered = append(filtered, tbl)
+		}
+	}
+	return filtered
+}
+
+// SetAccountFilter sets account id filter
+func (s *State) SetAccountFilter(accountID int64) {
+	s.filterAccountID = accountID
+	s.scrollOffset = 0
+	s.ClearSearch()
+}
+
+// ClearAccountFilter clears account id filter
+func (s *State) ClearAccountFilter() {
+	s.filterAccountID = -1
+	s.scrollOffset = 0
+	s.ClearSearch()
+}
+
+// HasAccountFilter returns true if account filter is active
+func (s *State) HasAccountFilter() bool {
+	return s.filterAccountID >= 0
+}
+
+// GetAccountFilter returns current account filter value
+func (s *State) GetAccountFilter() int64 {
+	return s.filterAccountID
+}
+
 // SelectTable selects a table for detail view
 func (s *State) SelectTable(tableID uint64) error {
 	s.pushHistory()
 	s.selectedTable = tableID
 	s.mode = ViewModeTableDetail
 	s.scrollOffset = 0
+	
+	// Load object entries with timestamps
+	dataEntries, tombEntries, err := s.reader.GetObjectEntries(s.entries[s.selectedEntry], tableID)
+	if err != nil {
+		return err
+	}
+	s.dataEntries = dataEntries
+	s.tombEntries = tombEntries
+	
 	return nil
 }
 
@@ -346,8 +424,9 @@ func (s *State) performSearch() {
 	query := s.searchQuery
 	switch s.mode {
 	case ViewModeTable, ViewModeAccountTables:
-		// Search by table ID
-		for i, tbl := range s.tables {
+		// Search by table ID in filtered tables
+		filteredTables := s.FilteredTables()
+		for i, tbl := range filteredTables {
 			if s.matchTableID(tbl.TableID, query) {
 				s.searchResult = append(s.searchResult, i)
 			}

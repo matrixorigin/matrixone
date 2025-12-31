@@ -328,9 +328,15 @@ func (m model) View() string {
 		textColor := "\033[97m" // Bright white text
 		reset := "\033[0m"      // Reset color
 
-		// Status information
-		statusText := fmt.Sprintf(" %s │ Rows %d-%d/%d │ Block %d/%d │ Cols %d-%d/%d ",
-			mode, start, end, info.RowCount, m.state.currentBlock+1, info.BlockCount,
+		// Status information - show filtered row count if range is set
+		totalRows := int64(info.RowCount)
+		rangeInfo := ""
+		if m.state.rowRangeStart >= 0 || m.state.rowRangeEnd >= 0 {
+			totalRows = m.state.FilteredRowCount()
+			rangeInfo = fmt.Sprintf(" [Range: %d-%d]", m.state.rowRangeStart, m.state.rowRangeEnd)
+		}
+		statusText := fmt.Sprintf(" %s │ Rows %d-%d/%d%s │ Block %d/%d │ Cols %d-%d/%d ",
+			mode, start, end, totalRows, rangeInfo, m.state.currentBlock+1, info.BlockCount,
 			m.hScrollOffset+1, m.hScrollOffset+len(visibleCols), len(cols))
 
 		// Calculate number of spaces to fill
@@ -459,8 +465,17 @@ func (m *model) findNextMatch() {
 			}
 		}
 
+		// Apply row range filter
+		if m.state.rowRangeStart >= 0 && startRowInBlock < int(m.state.rowRangeStart) {
+			startRowInBlock = int(m.state.rowRangeStart)
+		}
+		endRowInBlock := rowCount
+		if m.state.rowRangeEnd >= 0 && endRowInBlock > int(m.state.rowRangeEnd)+1 {
+			endRowInBlock = int(m.state.rowRangeEnd) + 1
+		}
+
 		// Search this block
-		for rowIdx := startRowInBlock; rowIdx < rowCount; rowIdx++ {
+		for rowIdx := startRowInBlock; rowIdx < endRowInBlock; rowIdx++ {
 			for colIdx := 0; colIdx < batch.VectorCount(); colIdx++ {
 				if colIdx >= len(cols) {
 					continue
@@ -546,8 +561,17 @@ func (m *model) findPrevMatch() {
 			}
 		}
 
+		// Apply row range filter
+		startRowInBlock := 0
+		if m.state.rowRangeStart >= 0 {
+			startRowInBlock = int(m.state.rowRangeStart)
+		}
+		if m.state.rowRangeEnd >= 0 && endRowInBlock > int(m.state.rowRangeEnd) {
+			endRowInBlock = int(m.state.rowRangeEnd)
+		}
+
 		// Search this block from back to front
-		for rowIdx := endRowInBlock; rowIdx >= 0; rowIdx-- {
+		for rowIdx := endRowInBlock; rowIdx >= startRowInBlock; rowIdx-- {
 			for colIdx := batch.VectorCount() - 1; colIdx >= 0; colIdx-- {
 				if colIdx >= len(cols) {
 					continue
@@ -752,6 +776,13 @@ func (m model) renderTable(b *strings.Builder) {
 			// For blkmeta mode, use metaCols Name as initial width
 			if m.state.viewMode == ViewModeBlkMeta && int(colIdx) < len(m.state.metaCols) {
 				widths[i] = len(m.state.metaCols[colIdx].Name)
+			} else if m.state.colNames != nil {
+				// Use custom column name if set
+				if customName, exists := m.state.colNames[colIdx]; exists {
+					widths[i] = len(customName)
+				} else {
+					widths[i] = len(fmt.Sprintf("Col%d", colIdx))
+				}
 			} else {
 				widths[i] = len(fmt.Sprintf("Col%d", colIdx))
 			}
@@ -977,6 +1008,19 @@ func (m model) renderVertical(b *strings.Builder) {
 
 // RunBubbletea runs interactive interface using Bubbletea
 func RunBubbletea(path string) error {
+	return RunBubbleteaWithOptions(path, nil)
+}
+
+// ViewOptions contains options for viewing object data
+type ViewOptions struct {
+	StartRow      int64               // Start row (0-based)
+	EndRow        int64               // End row (inclusive, -1 means all)
+	ColumnNames   map[uint16]string   // Custom column names
+	ColumnFormats map[uint16]string   // Custom column formats (e.g., "ts", "objectstats", "hex")
+}
+
+// RunBubbleteaWithOptions runs interactive interface with options
+func RunBubbleteaWithOptions(path string, opts *ViewOptions) error {
 	ctx := context.Background()
 
 	reader, err := objecttool.Open(ctx, path)
@@ -987,6 +1031,24 @@ func RunBubbletea(path string) error {
 
 	state := NewState(ctx, reader)
 	defer state.Close()
+
+	// Apply options
+	if opts != nil {
+		if opts.ColumnNames != nil {
+			state.colNames = opts.ColumnNames
+		}
+		if opts.ColumnFormats != nil {
+			for colIdx, fmtName := range opts.ColumnFormats {
+				state.SetFormat(colIdx, fmtName)
+			}
+		}
+		if opts.StartRow >= 0 || opts.EndRow >= 0 {
+			state.SetRowRange(opts.StartRow, opts.EndRow)
+		}
+		if opts.StartRow > 0 {
+			state.GotoRow(opts.StartRow)
+		}
+	}
 
 	m := model{
 		state: state,
