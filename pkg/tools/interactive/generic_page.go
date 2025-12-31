@@ -1,0 +1,375 @@
+// Copyright 2021 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package interactive
+
+import (
+	"strings"
+
+	tea "github.com/charmbracelet/bubbletea"
+)
+
+// PageConfig defines what features a page has (搭积木配置)
+type PageConfig struct {
+	// Content
+	Title   string   // Page title
+	Headers []string // Table headers
+
+	// Features (enable/disable)
+	ShowRowNumber bool
+	EnableCursor  bool
+	EnableSearch  bool
+	EnableFilter  bool
+	EnableBack    bool // Show back hint
+	EnableHScroll bool // Horizontal scroll
+
+	// Display
+	MaxColWidth int
+
+	// Hints (auto-generated if empty)
+	CustomHints string
+}
+
+// DataProvider provides data for a page
+type DataProvider interface {
+	GetRows() [][]string
+	GetOverview() string // Dynamic overview (can change based on data)
+}
+
+// ActionHandler handles page actions
+type ActionHandler interface {
+	OnSelect(rowIdx int) tea.Cmd           // Enter key
+	OnBack() tea.Cmd                       // ESC/b key
+	OnCustomKey(key string) tea.Cmd        // Other keys
+	MatchRow(row []string, query string) bool // For search
+	FilterRow(row []string, filter string) bool // For filter
+}
+
+// GenericPage is the highest level component
+// All pages use this: just provide config + data + handler
+type GenericPage struct {
+	config   PageConfig
+	provider DataProvider
+	handler  ActionHandler
+	list     *GenericList
+
+	// Input mode
+	inputMode    string // "", "search", "filter"
+	inputBuffer  string
+	inputCursor  int // Cursor position in input buffer
+	historyIndex int // -1 means not browsing history
+
+	// Screen size
+	width  int
+	height int
+}
+
+// NewGenericPage creates a page with config
+func NewGenericPage(config PageConfig, provider DataProvider, handler ActionHandler) *GenericPage {
+	listOpts := ListOptions{
+		Headers:       config.Headers,
+		ShowRowNumber: config.ShowRowNumber,
+		EnableCursor:  config.EnableCursor,
+		EnableSearch:  config.EnableSearch,
+		EnableFilter:  config.EnableFilter,
+		MaxColWidth:   config.MaxColWidth,
+		PageSize:      20,
+	}
+
+	p := &GenericPage{
+		config:       config,
+		provider:     provider,
+		handler:      handler,
+		list:         NewGenericList(listOpts),
+		width:        120,
+		height:       30,
+		historyIndex: -1,
+	}
+
+	// Load initial data
+	p.Refresh()
+	return p
+}
+
+// Refresh reloads data from provider
+func (p *GenericPage) Refresh() {
+	if p.provider != nil {
+		p.list.SetData(p.provider.GetRows())
+	}
+}
+
+// SetSize sets terminal size
+func (p *GenericPage) SetSize(w, h int) {
+	p.width = w
+	p.height = h
+	// Reserve: title(1) + overview(1) + separator(1) + hints(2) + status(1) = 6
+	p.list.SetScreenHeight(h - 6)
+}
+
+// === Bubbletea Interface ===
+
+func (p *GenericPage) Init() tea.Cmd {
+	return nil
+}
+
+func (p *GenericPage) Update(msg tea.Msg) (*GenericPage, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		p.SetSize(msg.Width, msg.Height)
+		return p, nil
+
+	case tea.KeyMsg:
+		return p.handleKey(msg)
+	}
+	return p, nil
+}
+
+func (p *GenericPage) handleKey(msg tea.KeyMsg) (*GenericPage, tea.Cmd) {
+	key := msg.String()
+
+	// Input mode handling
+	if p.inputMode != "" {
+		return p.handleInputMode(key)
+	}
+
+	// Normal mode
+	switch key {
+	case "q":
+		return p, tea.Quit
+	case "j", "down":
+		p.list.MoveDown()
+	case "k", "up":
+		p.list.MoveUp()
+	case "h", "left":
+		if p.config.EnableHScroll {
+			p.list.ScrollLeft()
+		}
+	case "l", "right":
+		if p.config.EnableHScroll {
+			p.list.ScrollRight()
+		}
+	case "g":
+		p.list.GoTop()
+	case "G":
+		p.list.GoBottom()
+	case "ctrl+f", "pgdown":
+		p.list.PageDown()
+	case "ctrl+b", "pgup":
+		p.list.PageUp()
+	case "enter":
+		if p.handler != nil {
+			return p, p.handler.OnSelect(p.list.GetCursor())
+		}
+	case "esc", "b":
+		if p.config.EnableBack && p.handler != nil {
+			return p, p.handler.OnBack()
+		}
+	case "/":
+		if p.config.EnableSearch {
+			p.inputMode = "search"
+			p.inputBuffer = ""
+			p.inputCursor = 0
+			p.historyIndex = -1
+		}
+	case "f":
+		if p.config.EnableFilter {
+			p.inputMode = "filter"
+			p.inputBuffer = ""
+			p.inputCursor = 0
+		}
+	case "n":
+		if p.config.EnableSearch {
+			p.list.NextMatch()
+		}
+	case "N":
+		if p.config.EnableSearch {
+			p.list.PrevMatch()
+		}
+	default:
+		if p.handler != nil {
+			return p, p.handler.OnCustomKey(key)
+		}
+	}
+	return p, nil
+}
+
+func (p *GenericPage) handleInputMode(key string) (*GenericPage, tea.Cmd) {
+	switch key {
+	case "esc":
+		p.inputMode = ""
+		p.inputBuffer = ""
+		p.inputCursor = 0
+		p.historyIndex = -1
+	case "enter":
+		if p.inputMode == "search" && p.handler != nil {
+			p.list.Search(p.inputBuffer, p.handler.MatchRow)
+			p.list.NextMatch()
+		} else if p.inputMode == "filter" && p.handler != nil {
+			if p.inputBuffer == "" {
+				p.list.ClearFilter()
+			} else {
+				p.list.SetFilter(func(row []string) bool {
+					return p.handler.FilterRow(row, p.inputBuffer)
+				}, "Filter: "+p.inputBuffer)
+			}
+		}
+		p.inputMode = ""
+		p.inputCursor = 0
+		p.historyIndex = -1
+	case "backspace":
+		if p.inputCursor > 0 {
+			p.inputBuffer = p.inputBuffer[:p.inputCursor-1] + p.inputBuffer[p.inputCursor:]
+			p.inputCursor--
+		}
+	case "delete":
+		if p.inputCursor < len(p.inputBuffer) {
+			p.inputBuffer = p.inputBuffer[:p.inputCursor] + p.inputBuffer[p.inputCursor+1:]
+		}
+	case "left":
+		if p.inputCursor > 0 {
+			p.inputCursor--
+		}
+	case "right":
+		if p.inputCursor < len(p.inputBuffer) {
+			p.inputCursor++
+		}
+	case "home", "ctrl+a":
+		p.inputCursor = 0
+	case "end", "ctrl+e":
+		p.inputCursor = len(p.inputBuffer)
+	case "up":
+		// Browse search history
+		if p.inputMode == "search" {
+			history := p.list.GetSearchHistory()
+			if len(history) > 0 {
+				if p.historyIndex < 0 {
+					p.historyIndex = len(history) - 1
+				} else if p.historyIndex > 0 {
+					p.historyIndex--
+				}
+				p.inputBuffer = history[p.historyIndex]
+				p.inputCursor = len(p.inputBuffer)
+			}
+		}
+	case "down":
+		// Browse search history
+		if p.inputMode == "search" {
+			history := p.list.GetSearchHistory()
+			if p.historyIndex >= 0 && p.historyIndex < len(history)-1 {
+				p.historyIndex++
+				p.inputBuffer = history[p.historyIndex]
+				p.inputCursor = len(p.inputBuffer)
+			} else {
+				p.historyIndex = -1
+				p.inputBuffer = ""
+				p.inputCursor = 0
+			}
+		}
+	default:
+		// Support paste - filter out control sequences
+		if key != "[" && key != "]" && key != "shift+tab" && key != "tab" {
+			// Insert at cursor position
+			p.inputBuffer = p.inputBuffer[:p.inputCursor] + key + p.inputBuffer[p.inputCursor:]
+			p.inputCursor += len(key)
+		}
+	}
+	return p, nil
+}
+
+func (p *GenericPage) View() string {
+	var b strings.Builder
+
+	// Title
+	if p.config.Title != "" {
+		b.WriteString(p.config.Title)
+		b.WriteString("\n")
+	}
+
+	// Overview (from provider, dynamic)
+	if p.provider != nil {
+		if overview := p.provider.GetOverview(); overview != "" {
+			b.WriteString(overview)
+			b.WriteString("\n")
+		}
+	}
+
+	// Separator
+	b.WriteString(strings.Repeat("─", 80))
+	b.WriteString("\n")
+
+	// Table
+	b.WriteString(p.list.Render())
+
+	// Status
+	b.WriteString("\n")
+	b.WriteString(p.list.GetStatus())
+
+	// Input mode or hints
+	b.WriteString("\n")
+	if p.inputMode != "" {
+		prompt := "Search"
+		if p.inputMode == "filter" {
+			prompt = "Filter"
+		}
+		// Show input with cursor
+		before := p.inputBuffer[:p.inputCursor]
+		after := p.inputBuffer[p.inputCursor:]
+		b.WriteString(prompt + ": " + before + "█" + after)
+	} else {
+		b.WriteString(p.getHints())
+	}
+
+	return b.String()
+}
+
+func (p *GenericPage) getHints() string {
+	if p.config.CustomHints != "" {
+		return p.config.CustomHints
+	}
+
+	var hints []string
+	if p.config.EnableCursor {
+		hints = append(hints, "[j/k] Navigate", "[Enter] Select")
+	}
+	if p.config.EnableHScroll {
+		hints = append(hints, "[h/l] Scroll")
+	}
+	if p.config.EnableSearch {
+		hints = append(hints, "[/] Search", "[n/N] Next/Prev")
+	}
+	if p.config.EnableFilter {
+		hints = append(hints, "[f] Filter")
+	}
+	if p.config.EnableBack {
+		hints = append(hints, "[b/ESC] Back")
+	}
+	hints = append(hints, "[q] Quit")
+
+	return strings.Join(hints, "  ")
+}
+
+// GetCursor returns current cursor position
+func (p *GenericPage) GetCursor() int {
+	return p.list.GetCursor()
+}
+
+// GetSelectedRow returns the row at cursor
+func (p *GenericPage) GetSelectedRow() []string {
+	rows := p.list.visibleRows()
+	idx := p.list.GetCursor()
+	if idx >= 0 && idx < len(rows) {
+		return rows[idx]
+	}
+	return nil
+}

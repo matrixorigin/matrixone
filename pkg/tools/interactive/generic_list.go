@@ -1,0 +1,328 @@
+// Copyright 2021 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package interactive
+
+import (
+	"fmt"
+	"strings"
+)
+
+// ListOptions configures GenericList behavior (搭积木)
+type ListOptions struct {
+	// Display
+	Headers       []string
+	ShowRowNumber bool
+	MaxColWidth   int
+
+	// Features (enable/disable)
+	EnableCursor bool
+	EnableSearch bool
+	EnableFilter bool
+
+	// Pagination
+	PageSize int
+}
+
+// GenericList wraps BaseRenderer with cursor, scroll, search, filter
+// This is the "building block" layer on top of BaseRenderer
+type GenericList struct {
+	opts ListOptions
+
+	// Data
+	rows         [][]string
+	filteredRows [][]string // nil means no filter
+
+	// State
+	cursor       int
+	scrollOffset int
+	screenHeight int
+
+	// Horizontal scroll
+	hScrollOffset int
+
+	// Search
+	searchMatches map[int]bool
+	searchQuery   string
+	searchHistory []string // Search history
+
+	// Filter
+	filterActive bool
+	filterInfo   string
+}
+
+// NewGenericList creates a GenericList with options
+func NewGenericList(opts ListOptions) *GenericList {
+	if opts.PageSize <= 0 {
+		opts.PageSize = 20
+	}
+	return &GenericList{
+		opts:          opts,
+		searchMatches: make(map[int]bool),
+	}
+}
+
+// SetData sets the data rows
+func (v *GenericList) SetData(rows [][]string) {
+	v.rows = rows
+	v.filteredRows = nil
+	v.cursor = 0
+	v.scrollOffset = 0
+}
+
+// SetScreenHeight sets available screen height
+func (v *GenericList) SetScreenHeight(h int) {
+	v.screenHeight = h
+	if v.screenHeight > 0 {
+		// Reserve space for header, borders, status
+		v.opts.PageSize = v.screenHeight - 6
+		if v.opts.PageSize < 5 {
+			v.opts.PageSize = 5
+		}
+	}
+}
+
+// === Cursor ===
+
+func (v *GenericList) GetCursor() int { return v.cursor }
+
+func (v *GenericList) SetCursor(pos int) {
+	rows := v.visibleRows()
+	if pos < 0 {
+		pos = 0
+	}
+	if pos >= len(rows) {
+		pos = len(rows) - 1
+	}
+	if pos < 0 {
+		pos = 0
+	}
+	v.cursor = pos
+	v.adjustScroll()
+}
+
+func (v *GenericList) MoveUp()   { v.SetCursor(v.cursor - 1) }
+func (v *GenericList) MoveDown() { v.SetCursor(v.cursor + 1) }
+func (v *GenericList) PageUp()   { v.SetCursor(v.cursor - v.opts.PageSize) }
+func (v *GenericList) PageDown() { v.SetCursor(v.cursor + v.opts.PageSize) }
+func (v *GenericList) GoTop()    { v.SetCursor(0) }
+func (v *GenericList) GoBottom() { v.SetCursor(len(v.visibleRows()) - 1) }
+
+func (v *GenericList) adjustScroll() {
+	if v.cursor < v.scrollOffset {
+		v.scrollOffset = v.cursor
+	}
+	if v.cursor >= v.scrollOffset+v.opts.PageSize {
+		v.scrollOffset = v.cursor - v.opts.PageSize + 1
+	}
+	if v.scrollOffset < 0 {
+		v.scrollOffset = 0
+	}
+}
+
+// === Search ===
+
+func (v *GenericList) Search(query string, matchFn func(row []string, query string) bool) {
+	v.searchQuery = query
+	v.searchMatches = make(map[int]bool)
+	if query == "" || matchFn == nil {
+		return
+	}
+	// Add to history (avoid duplicates)
+	if len(v.searchHistory) == 0 || v.searchHistory[len(v.searchHistory)-1] != query {
+		v.searchHistory = append(v.searchHistory, query)
+		if len(v.searchHistory) > 20 {
+			v.searchHistory = v.searchHistory[1:]
+		}
+	}
+	for i, row := range v.visibleRows() {
+		if matchFn(row, query) {
+			v.searchMatches[i] = true
+		}
+	}
+}
+
+func (v *GenericList) ClearSearch() {
+	v.searchQuery = ""
+	v.searchMatches = make(map[int]bool)
+}
+
+// GetSearchHistory returns search history
+func (v *GenericList) GetSearchHistory() []string { return v.searchHistory }
+
+// GetLastSearch returns last search query
+func (v *GenericList) GetLastSearch() string {
+	if len(v.searchHistory) > 0 {
+		return v.searchHistory[len(v.searchHistory)-1]
+	}
+	return ""
+}
+
+// === Horizontal Scroll ===
+
+func (v *GenericList) ScrollLeft() {
+	if v.hScrollOffset > 0 {
+		v.hScrollOffset--
+	}
+}
+
+func (v *GenericList) ScrollRight() {
+	totalCols := len(v.opts.Headers)
+	if v.hScrollOffset < totalCols-1 {
+		v.hScrollOffset++
+	}
+}
+
+func (v *GenericList) SetHScroll(offset int) {
+	if offset < 0 {
+		offset = 0
+	}
+	totalCols := len(v.opts.Headers)
+	if offset >= totalCols {
+		offset = totalCols - 1
+	}
+	v.hScrollOffset = offset
+}
+
+func (v *GenericList) GetHScroll() int { return v.hScrollOffset }
+
+func (v *GenericList) NextMatch() {
+	for i := v.cursor + 1; i < len(v.visibleRows()); i++ {
+		if v.searchMatches[i] {
+			v.SetCursor(i)
+			return
+		}
+	}
+	// Wrap around
+	for i := 0; i < v.cursor; i++ {
+		if v.searchMatches[i] {
+			v.SetCursor(i)
+			return
+		}
+	}
+}
+
+func (v *GenericList) PrevMatch() {
+	for i := v.cursor - 1; i >= 0; i-- {
+		if v.searchMatches[i] {
+			v.SetCursor(i)
+			return
+		}
+	}
+	// Wrap around
+	for i := len(v.visibleRows()) - 1; i > v.cursor; i-- {
+		if v.searchMatches[i] {
+			v.SetCursor(i)
+			return
+		}
+	}
+}
+
+func (v *GenericList) MatchCount() int { return len(v.searchMatches) }
+
+// === Filter ===
+
+func (v *GenericList) SetFilter(filterFn func(row []string) bool, info string) {
+	if filterFn == nil {
+		v.filteredRows = nil
+		v.filterActive = false
+		v.filterInfo = ""
+	} else {
+		v.filteredRows = make([][]string, 0)
+		for _, row := range v.rows {
+			if filterFn(row) {
+				v.filteredRows = append(v.filteredRows, row)
+			}
+		}
+		v.filterActive = true
+		v.filterInfo = info
+	}
+	v.cursor = 0
+	v.scrollOffset = 0
+}
+
+func (v *GenericList) ClearFilter() {
+	v.SetFilter(nil, "")
+}
+
+func (v *GenericList) IsFiltered() bool { return v.filterActive }
+
+// === Render ===
+
+func (v *GenericList) visibleRows() [][]string {
+	if v.filteredRows != nil {
+		return v.filteredRows
+	}
+	return v.rows
+}
+
+func (v *GenericList) Render() string {
+	rows := v.visibleRows()
+
+	r := NewBaseRenderer()
+	r.Headers = v.opts.Headers
+	r.Rows = rows
+	r.ShowBorder = true
+	r.ShowRowNumber = v.opts.ShowRowNumber
+	r.MaxColWidth = v.opts.MaxColWidth
+	r.HScrollOffset = v.hScrollOffset
+	r.MaxVisibleCols = 15 // Show at most 15 columns at once
+
+	// Pagination
+	r.StartRow = v.scrollOffset
+	r.EndRow = v.scrollOffset + v.opts.PageSize
+	r.RowNumOffset = 0
+
+	// Cursor
+	if v.opts.EnableCursor {
+		r.SelectedRow = v.cursor
+		r.RowDecorators = append(r.RowDecorators, CursorDecorator())
+	}
+
+	// Search highlights
+	if v.opts.EnableSearch && len(v.searchMatches) > 0 {
+		r.RowDecorators = append(r.RowDecorators, SearchHighlightDecorator(v.searchMatches))
+	}
+
+	return r.Render()
+}
+
+// TotalRows returns total row count
+func (v *GenericList) TotalRows() int { return len(v.visibleRows()) }
+
+// GetStatus returns status line info
+func (v *GenericList) GetStatus() string {
+	rows := v.visibleRows()
+	total := len(rows)
+	if total == 0 {
+		return "No data"
+	}
+
+	start := v.scrollOffset + 1
+	end := v.scrollOffset + v.opts.PageSize
+	if end > total {
+		end = total
+	}
+
+	var parts []string
+	if v.filterActive {
+		parts = append(parts, "🔍 "+v.filterInfo)
+	}
+	if v.searchQuery != "" {
+		parts = append(parts, fmt.Sprintf("Search: \"%s\" (%d matches)", v.searchQuery, len(v.searchMatches)))
+	}
+	parts = append(parts, fmt.Sprintf("[%d-%d of %d]", start, end, total))
+
+	return strings.Join(parts, " │ ")
+}
