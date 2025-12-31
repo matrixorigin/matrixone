@@ -16,6 +16,8 @@ package interactive
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -36,6 +38,14 @@ const helpText = `Checkpoint Viewer - Keyboard Shortcuts:
     a       - Account view       t       - Table view
     l       - Logical view
 
+  Search (Table/Account views):
+    /       - Enter search mode  Esc     - Exit search
+    ↑/↓     - Navigate history   Enter   - Confirm & jump to first
+    n       - Next match         N       - Previous match
+    Supports regex: .* + ? ^ $ {} [] | () \
+    Examples: /100.*  /^10  /[0-9]{3}
+    History: ~/.mo_checkpoint_search_history
+
   Scrolling:
     PgUp/PgDn - Page up/down     g/G     - Top/Bottom
 
@@ -48,12 +58,19 @@ type model struct {
 	message  string
 	cursor   int // Selection cursor
 	quitting bool
+
+	// Search history
+	searchHistory []string
+	historyIndex  int
+	matchIndex    int // Current match index in search results
 }
 
 func newModel(reader *checkpointtool.CheckpointReader) model {
-	return model{
+	m := model{
 		state: NewState(reader),
 	}
+	m.loadSearchHistory()
+	return m
 }
 
 func (m model) Init() tea.Cmd {
@@ -71,6 +88,70 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.message = ""
 
+	// Handle search mode
+	if m.state.IsSearchMode() {
+		switch msg.String() {
+		case "esc":
+			m.state.ExitSearchMode()
+			m.historyIndex = len(m.searchHistory)
+			return m, nil
+		case "enter":
+			// Save to history
+			query := m.state.SearchQuery()
+			if query != "" && (len(m.searchHistory) == 0 || m.searchHistory[len(m.searchHistory)-1] != query) {
+				m.searchHistory = append(m.searchHistory, query)
+				m.historyIndex = len(m.searchHistory)
+			}
+			m.state.ExitSearchMode()
+			// Jump to first result if any (even if not on current page)
+			if results := m.state.SearchResult(); len(results) > 0 {
+				m.cursor = results[0]
+				// Adjust scroll to show the result
+				m.state.scrollOffset = m.cursor
+				if m.state.scrollOffset > 0 {
+					m.state.scrollOffset-- // Show one line above for context
+				}
+			}
+			return m, nil
+		case "backspace":
+			m.state.BackspaceSearchQuery()
+			m.historyIndex = len(m.searchHistory)
+			return m, nil
+		case "up":
+			// History up
+			if len(m.searchHistory) > 0 && m.historyIndex > 0 {
+				m.historyIndex--
+				m.state.SetSearchQuery(m.searchHistory[m.historyIndex])
+			}
+			return m, nil
+		case "down":
+			// History down
+			if len(m.searchHistory) > 0 && m.historyIndex < len(m.searchHistory)-1 {
+				m.historyIndex++
+				m.state.SetSearchQuery(m.searchHistory[m.historyIndex])
+			} else if m.historyIndex == len(m.searchHistory)-1 {
+				m.historyIndex = len(m.searchHistory)
+				m.state.SetSearchQuery("")
+			}
+			return m, nil
+		case "n":
+			// Next match
+			m.jumpToNextMatch()
+			return m, nil
+		case "N":
+			// Previous match
+			m.jumpToPrevMatch()
+			return m, nil
+		default:
+			// Append character to search query
+			if len(msg.String()) == 1 {
+				m.state.AppendSearchQuery(rune(msg.String()[0]))
+				m.historyIndex = len(m.searchHistory)
+			}
+			return m, nil
+		}
+	}
+
 	switch msg.String() {
 	case "q", "ctrl+c":
 		m.quitting = true
@@ -78,6 +159,27 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "?":
 		m.message = helpText
+		return m, nil
+
+	case "/":
+		// Enter search mode for searchable views
+		if m.state.mode == ViewModeTable || m.state.mode == ViewModeAccountTables || m.state.mode == ViewModeAccount {
+			m.state.EnterSearchMode()
+		}
+		return m, nil
+
+	case "n":
+		// Next match (works even after exiting search mode)
+		if len(m.state.SearchResult()) > 0 {
+			m.jumpToNextMatch()
+		}
+		return m, nil
+
+	case "N":
+		// Previous match (works even after exiting search mode)
+		if len(m.state.SearchResult()) > 0 {
+			m.jumpToPrevMatch()
+		}
 		return m, nil
 
 	case "j", "down":
@@ -204,9 +306,28 @@ func (m model) View() string {
 
 	var b strings.Builder
 
-	// Header
-	b.WriteString(m.renderHeader())
+	// Breadcrumb
+	b.WriteString(m.state.Breadcrumb())
+	b.WriteString(strings.Repeat(" ", 60))
+	b.WriteString("[?]Help [q]Quit\n")
+	b.WriteString(strings.Repeat("─", 80))
 	b.WriteString("\n")
+
+	// Search bar (if in search mode)
+	if m.state.IsSearchMode() {
+		searchType := "Text"
+		if m.state.IsRegexSearch() {
+			searchType = "Regex"
+		}
+		b.WriteString(fmt.Sprintf("🔍 Search (%s): %s_\n", searchType, m.state.SearchQuery()))
+		if results := m.state.SearchResult(); len(results) > 0 {
+			b.WriteString(fmt.Sprintf("   Found %d matches (Press Enter to jump, n/N to navigate)\n", len(results)))
+		} else if m.state.SearchQuery() != "" {
+			b.WriteString("   No matches\n")
+		}
+		b.WriteString(strings.Repeat("─", 80))
+		b.WriteString("\n")
+	}
 
 	// Content
 	switch m.state.mode {
@@ -226,12 +347,13 @@ func (m model) View() string {
 
 	// Footer
 	b.WriteString("\n")
-	b.WriteString(m.renderFooter())
+	b.WriteString(strings.Repeat("─", 80))
+	b.WriteString("\n")
 
 	// Message
 	if m.message != "" {
-		b.WriteString("\n")
 		b.WriteString(m.message)
+		b.WriteString("\n")
 	}
 
 	return b.String()
@@ -333,6 +455,12 @@ func (m model) renderAccounts() string {
 	b.WriteString("────┼───────────┼────────┼──────┼──────\n")
 
 	accounts := m.state.accounts
+	searchResults := make(map[int]bool)
+	// Always show search results if they exist (even in search mode)
+	for _, idx := range m.state.SearchResult() {
+		searchResults[idx] = true
+	}
+
 	start := m.state.scrollOffset
 	end := start + m.state.pageSize
 	if end > len(accounts) {
@@ -345,9 +473,26 @@ func (m model) renderAccounts() string {
 		if i == m.cursor {
 			cursor = "▶ "
 		}
-		b.WriteString(fmt.Sprintf("%s%2d │ %9d │ %6d │ %4d │ %4d\n",
-			cursor, i, acc.AccountID, acc.TableCount, acc.DataRanges, acc.TombRanges))
+		// Highlight search results
+		highlight := ""
+		if searchResults[i] {
+			highlight = "✓ "
+		}
+		b.WriteString(fmt.Sprintf("%s%s%2d │ %9d │ %6d │ %4d │ %4d\n",
+			cursor, highlight, i, acc.AccountID, acc.TableCount, acc.DataRanges, acc.TombRanges))
 	}
+
+	// Show search hint
+	if !m.state.IsSearchMode() && m.state.mode == ViewModeAccount {
+		// Show active search info if exists
+		if results := m.state.SearchResult(); len(results) > 0 {
+			b.WriteString(fmt.Sprintf("\n🔍 Active search: \"%s\" (%d matches) - Press n/N to navigate, / for new search", 
+				m.state.SearchQuery(), len(results)))
+		} else {
+			b.WriteString("\nPress [/] to search by Account ID")
+		}
+	}
+
 	return b.String()
 }
 
@@ -362,6 +507,12 @@ func (m model) renderTables() string {
 	b.WriteString("────┼────────────────────┼─────────┼──────┼──────\n")
 
 	tables := m.state.tables
+	searchResults := make(map[int]bool)
+	// Always show search results if they exist (even in search mode)
+	for _, idx := range m.state.SearchResult() {
+		searchResults[idx] = true
+	}
+
 	start := m.state.scrollOffset
 	end := start + m.state.pageSize
 	if end > len(tables) {
@@ -374,9 +525,26 @@ func (m model) renderTables() string {
 		if i == m.cursor {
 			cursor = "▶ "
 		}
-		b.WriteString(fmt.Sprintf("%s%2d │ %18d │ %7d │ %4d │ %4d\n",
-			cursor, i, tbl.TableID, tbl.AccountID, len(tbl.DataRanges), len(tbl.TombRanges)))
+		// Highlight search results
+		highlight := ""
+		if searchResults[i] {
+			highlight = "✓ "
+		}
+		b.WriteString(fmt.Sprintf("%s%s%2d │ %18d │ %7d │ %4d │ %4d\n",
+			cursor, highlight, i, tbl.TableID, tbl.AccountID, len(tbl.DataRanges), len(tbl.TombRanges)))
 	}
+
+	// Show search hint
+	if !m.state.IsSearchMode() && (m.state.mode == ViewModeTable || m.state.mode == ViewModeAccountTables) {
+		// Show active search info if exists
+		if results := m.state.SearchResult(); len(results) > 0 {
+			b.WriteString(fmt.Sprintf("\n🔍 Active search: \"%s\" (%d matches) - Press n/N to navigate, / for new search", 
+				m.state.SearchQuery(), len(results)))
+		} else {
+			b.WriteString("\nPress [/] to search by Table ID")
+		}
+	}
+
 	return b.String()
 }
 
@@ -499,6 +667,126 @@ func rangeStr(r ckputil.TableRange) string {
 // Run starts the interactive checkpoint viewer
 func Run(reader *checkpointtool.CheckpointReader) error {
 	p := tea.NewProgram(newModel(reader), tea.WithAltScreen())
-	_, err := p.Run()
+	finalModel, err := p.Run()
+	if err == nil {
+		if m, ok := finalModel.(model); ok {
+			m.saveSearchHistory()
+		}
+	}
 	return err
+}
+
+// loadSearchHistory loads search history from file
+func (m *model) loadSearchHistory() {
+	historyFile := getSearchHistoryFile()
+	if historyFile == "" {
+		return
+	}
+
+	data, err := os.ReadFile(historyFile)
+	if err != nil {
+		return
+	}
+
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			m.searchHistory = append(m.searchHistory, line)
+		}
+	}
+	m.historyIndex = len(m.searchHistory)
+}
+
+// saveSearchHistory saves search history to file
+func (m *model) saveSearchHistory() {
+	historyFile := getSearchHistoryFile()
+	if historyFile == "" {
+		return
+	}
+
+	// Ensure directory exists
+	dir := filepath.Dir(historyFile)
+	os.MkdirAll(dir, 0755)
+
+	// Only save last 100 records
+	start := 0
+	if len(m.searchHistory) > 100 {
+		start = len(m.searchHistory) - 100
+	}
+
+	content := strings.Join(m.searchHistory[start:], "\n")
+	os.WriteFile(historyFile, []byte(content), 0644)
+}
+
+// getSearchHistoryFile returns search history file path
+func getSearchHistoryFile() string {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(homeDir, ".mo_checkpoint_search_history")
+}
+
+// jumpToNextMatch jumps to next search match
+func (m *model) jumpToNextMatch() {
+	results := m.state.SearchResult()
+	if len(results) == 0 {
+		return
+	}
+
+	// Find next match after current cursor
+	for i, idx := range results {
+		if idx > m.cursor {
+			m.matchIndex = i
+			m.cursor = idx
+			m.adjustScrollToShowCursor()
+			m.message = fmt.Sprintf("Match %d/%d", i+1, len(results))
+			return
+		}
+	}
+
+	// Wrap to first match
+	m.matchIndex = 0
+	m.cursor = results[0]
+	m.adjustScrollToShowCursor()
+	m.message = fmt.Sprintf("Match 1/%d (wrapped)", len(results))
+}
+
+// jumpToPrevMatch jumps to previous search match
+func (m *model) jumpToPrevMatch() {
+	results := m.state.SearchResult()
+	if len(results) == 0 {
+		return
+	}
+
+	// Find previous match before current cursor
+	for i := len(results) - 1; i >= 0; i-- {
+		if results[i] < m.cursor {
+			m.matchIndex = i
+			m.cursor = results[i]
+			m.adjustScrollToShowCursor()
+			m.message = fmt.Sprintf("Match %d/%d", i+1, len(results))
+			return
+		}
+	}
+
+	// Wrap to last match
+	m.matchIndex = len(results) - 1
+	m.cursor = results[m.matchIndex]
+	m.adjustScrollToShowCursor()
+	m.message = fmt.Sprintf("Match %d/%d (wrapped)", len(results), len(results))
+}
+
+// adjustScrollToShowCursor adjusts scroll offset to show cursor
+func (m *model) adjustScrollToShowCursor() {
+	// Ensure cursor is visible
+	if m.cursor < m.state.scrollOffset {
+		m.state.scrollOffset = m.cursor
+		if m.state.scrollOffset > 0 {
+			m.state.scrollOffset-- // Show one line above for context
+		}
+	} else if m.cursor >= m.state.scrollOffset+m.state.pageSize {
+		m.state.scrollOffset = m.cursor - m.state.pageSize + 1
+	}
 }

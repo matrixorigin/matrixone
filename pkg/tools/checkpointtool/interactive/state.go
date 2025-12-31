@@ -15,6 +15,10 @@
 package interactive
 
 import (
+	"fmt"
+	"regexp"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/tools/checkpointtool"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 )
@@ -56,6 +60,13 @@ type State struct {
 	selectedAccount uint32
 	selectedTable   uint64
 
+	// Search state
+	searchMode   bool
+	searchQuery  string
+	searchRegex  *regexp.Regexp
+	useRegex     bool
+	searchResult []int // Indices of matching items
+
 	// Cached data
 	entries  []*checkpoint.CheckpointEntry
 	accounts []*checkpointtool.AccountInfo
@@ -96,6 +107,16 @@ func (s *State) Accounts() []*checkpointtool.AccountInfo { return s.accounts }
 // Tables returns cached tables
 func (s *State) Tables() []*checkpointtool.TableInfo { return s.tables }
 
+// GetSelectedTable returns the currently selected table
+func (s *State) GetSelectedTable() *checkpointtool.TableInfo {
+	for _, tbl := range s.tables {
+		if tbl.TableID == s.selectedTable {
+			return tbl
+		}
+	}
+	return nil
+}
+
 // ScrollOffset returns current scroll offset
 func (s *State) ScrollOffset() int { return s.scrollOffset }
 
@@ -113,6 +134,7 @@ func (s *State) SelectEntry(index int) error {
 	s.selectedEntry = index
 	s.mode = ViewModeEntry
 	s.scrollOffset = 0
+	s.ClearSearch() // Clear search when changing view
 	return nil
 }
 
@@ -129,6 +151,7 @@ func (s *State) SwitchToAccounts() error {
 	s.accounts = accounts
 	s.mode = ViewModeAccount
 	s.scrollOffset = 0
+	s.ClearSearch() // Clear search when changing view
 	return nil
 }
 
@@ -143,6 +166,7 @@ func (s *State) SelectAccount(accountID uint32) error {
 	s.tables = tables
 	s.mode = ViewModeAccountTables
 	s.scrollOffset = 0
+	s.ClearSearch() // Clear search when changing view
 	return nil
 }
 
@@ -159,6 +183,7 @@ func (s *State) SwitchToTables() error {
 	s.tables = tables
 	s.mode = ViewModeTable
 	s.scrollOffset = 0
+	s.ClearSearch() // Clear search when changing view
 	return nil
 }
 
@@ -243,12 +268,148 @@ func (s *State) PageDown(maxItems int) {
 	}
 }
 
-// GetSelectedTable returns the currently selected table info
-func (s *State) GetSelectedTable() *checkpointtool.TableInfo {
-	for _, t := range s.tables {
-		if t.TableID == s.selectedTable {
-			return t
+// Search methods
+
+// EnterSearchMode enters search mode
+func (s *State) EnterSearchMode() {
+	s.searchMode = true
+	s.searchQuery = ""
+	s.searchResult = nil
+}
+
+// ExitSearchMode exits search mode but keeps search results
+func (s *State) ExitSearchMode() {
+	s.searchMode = false
+	// Keep searchQuery, searchRegex, useRegex, and searchResult for n/N navigation
+}
+
+// ClearSearch clears all search state
+func (s *State) ClearSearch() {
+	s.searchMode = false
+	s.searchQuery = ""
+	s.searchRegex = nil
+	s.useRegex = false
+	s.searchResult = nil
+}
+
+// IsSearchMode returns if in search mode
+func (s *State) IsSearchMode() bool {
+	return s.searchMode
+}
+
+// SearchQuery returns current search query
+func (s *State) SearchQuery() string {
+	return s.searchQuery
+}
+
+// SetSearchQuery sets search query and performs search
+func (s *State) SetSearchQuery(query string) {
+	s.searchQuery = query
+	s.performSearch()
+}
+
+// AppendSearchQuery appends character to search query
+func (s *State) AppendSearchQuery(ch rune) {
+	s.searchQuery += string(ch)
+	s.performSearch()
+}
+
+// BackspaceSearchQuery removes last character from search query
+func (s *State) BackspaceSearchQuery() {
+	if len(s.searchQuery) > 0 {
+		s.searchQuery = s.searchQuery[:len(s.searchQuery)-1]
+		s.performSearch()
+	}
+}
+
+// SearchResult returns search result indices
+func (s *State) SearchResult() []int {
+	return s.searchResult
+}
+
+func (s *State) performSearch() {
+	s.searchResult = nil
+	if s.searchQuery == "" {
+		return
+	}
+
+	// Try to compile regex if pattern contains regex characters
+	s.useRegex = false
+	if strings.ContainsAny(s.searchQuery, ".*+?^${}[]|()\\") {
+		regex, err := regexp.Compile("(?i)" + s.searchQuery)
+		if err == nil {
+			s.useRegex = true
+			s.searchRegex = regex
 		}
 	}
-	return nil
+
+	query := s.searchQuery
+	switch s.mode {
+	case ViewModeTable, ViewModeAccountTables:
+		// Search by table ID
+		for i, tbl := range s.tables {
+			if s.matchTableID(tbl.TableID, query) {
+				s.searchResult = append(s.searchResult, i)
+			}
+		}
+	case ViewModeAccount:
+		// Search by account ID
+		for i, acc := range s.accounts {
+			if s.matchAccountID(acc.AccountID, query) {
+				s.searchResult = append(s.searchResult, i)
+			}
+		}
+	}
+}
+
+func (s *State) matchTableID(tableID uint64, query string) bool {
+	idStr := fmt.Sprintf("%d", tableID)
+	if s.useRegex && s.searchRegex != nil {
+		return s.searchRegex.MatchString(idStr)
+	}
+	return strings.Contains(idStr, query)
+}
+
+func (s *State) matchAccountID(accountID uint32, query string) bool {
+	idStr := fmt.Sprintf("%d", accountID)
+	if s.useRegex && s.searchRegex != nil {
+		return s.searchRegex.MatchString(idStr)
+	}
+	return strings.Contains(idStr, query)
+}
+
+// Breadcrumb returns navigation path
+func (s *State) Breadcrumb() string {
+	switch s.mode {
+	case ViewModeList:
+		return "📍 Checkpoints"
+	case ViewModeEntry:
+		if s.selectedEntry >= 0 && s.selectedEntry < len(s.entries) {
+			entry := s.entries[s.selectedEntry]
+			typ := "Global"
+			if entry.IsIncremental() {
+				typ = "Incremental"
+			}
+			return fmt.Sprintf("📍 ckp #%d (%s)", s.selectedEntry+1, typ)
+		}
+		return "📍 Checkpoint"
+	case ViewModeAccount:
+		return fmt.Sprintf("📍 ckp #%d > Accounts", s.selectedEntry+1)
+	case ViewModeAccountTables:
+		return fmt.Sprintf("📍 ckp #%d > Account: %d", s.selectedEntry+1, s.selectedAccount)
+	case ViewModeTable:
+		return fmt.Sprintf("📍 ckp #%d > Tables", s.selectedEntry+1)
+	case ViewModeTableDetail:
+		return fmt.Sprintf("📍 ckp #%d > Table: %d", s.selectedEntry+1, s.selectedTable)
+	case ViewModeLogical:
+		return "📍 Logical View"
+	default:
+		return "📍"
+	}
+}
+
+
+// IsRegexSearch returns if using regex search
+func (s *State) IsRegexSearch() bool {
+	return s.useRegex
 }
