@@ -16,6 +16,7 @@ package aggexec
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -39,6 +40,65 @@ func buildVarlenVec(t *testing.T, mp *mpool.MPool, typ types.Type, vals []string
 		require.NoError(t, vector.AppendBytes(v, []byte(s), false, mp))
 	}
 	return v
+}
+func fromValueListToVector(
+	mp *mpool.MPool,
+	typ types.Type, values any, isNull []bool) *vector.Vector {
+	var err error
+
+	v := vector.NewVec(typ)
+
+	if typ.IsVarlen() {
+		sts := values.([]string)
+
+		if len(isNull) > 0 {
+			for i, value := range sts {
+				if err = vector.AppendBytes(v, []byte(value), isNull[i], mp); err != nil {
+					break
+				}
+			}
+		} else {
+			for _, value := range sts {
+				if err = vector.AppendBytes(v, []byte(value), false, mp); err != nil {
+					break
+				}
+			}
+		}
+
+	} else {
+		switch typ.Oid {
+		case types.T_int64:
+			err = vector.AppendFixedList[int64](v, values.([]int64), isNull, mp)
+
+		case types.T_bool:
+			err = vector.AppendFixedList[bool](v, values.([]bool), isNull, mp)
+
+		case types.T_decimal128:
+			err = vector.AppendFixedList[types.Decimal128](v, values.([]types.Decimal128), isNull, mp)
+
+		default:
+			panic(fmt.Sprintf("test util do not support the type %s now", typ))
+		}
+	}
+
+	if err != nil {
+		panic(err)
+	}
+	return v
+}
+
+func fromIdxListToNullList(start, end int, idxList []int) []bool {
+	if len(idxList) == 0 {
+		return nil
+	}
+
+	bs := make([]bool, end-start+1)
+	for _, idx := range idxList {
+		if realIndex := idx - start; realIndex >= 0 && idx <= end {
+			bs[realIndex] = true
+		}
+	}
+	return bs
 }
 
 func TestJsonArrayAggMarshalUnmarshal(t *testing.T) {

@@ -16,6 +16,7 @@ package group
 
 import (
 	"bytes"
+	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -24,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -31,7 +33,7 @@ import (
 const (
 	// we use this size as preferred output batch size, which is typical
 	// in MO.
-	aggBatchSize = 8192
+	aggBatchSize = aggexec.AggBatchSize
 
 	// we use this size as pre-allocated size for hash table.
 	aggHtPreAllocSize = 1024
@@ -43,7 +45,7 @@ const (
 
 func (group *Group) Prepare(proc *process.Process) (err error) {
 	group.ctr.state = vm.Build
-	group.ctr.mp = mpool.MustNewNoFixed("group_mpool")
+	group.ctr.mp = mpool.MustNewNoLock("group_mpool")
 
 	// debug,
 	// group.ctr.mp.EnableDetailRecording()
@@ -297,7 +299,7 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 		return false, nil
 	} else {
 		if group.ctr.hr.IsEmpty() {
-			if err = group.ctr.buildHashTable(proc); err != nil {
+			if err = group.ctr.buildHashTable(proc.Ctx); err != nil {
 				return false, err
 			}
 		}
@@ -348,10 +350,10 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 	}
 }
 
-func (ctr *container) buildHashTable(proc *process.Process) error {
+func (ctr *container) buildHashTable(ctx context.Context) error {
 	// build hash table
 	if err := ctr.hr.BuildHashTable(
-		proc, ctr.mp,
+		ctx, ctr.mp,
 		false,
 		ctr.mtyp == HStr,
 		ctr.keyNullable,
@@ -449,7 +451,7 @@ func (group *Group) outputOneBatch(proc *process.Process) (vm.CallResult, error)
 				// switch back to build to receive more data.
 				// reset will set state to vm.Build, which will let us
 				// process more by Call child.
-				group.ctr.reset(proc)
+				group.ctr.reset()
 			}
 		}
 		return res, nil
