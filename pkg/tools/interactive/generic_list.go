@@ -56,9 +56,10 @@ type GenericList struct {
 	hScrollOffset int
 
 	// Search
-	searchMatches map[int]bool
-	searchQuery   string
-	searchHistory []string // Search history
+	searchMatches   map[int]bool
+	searchQuery     string
+	searchHistory   *HistoryManager // Persistent search history
+	currentMatchIdx int             // Current match index for highlighting
 
 	// Filter
 	filterActive bool
@@ -70,10 +71,16 @@ func NewGenericList(opts ListOptions) *GenericList {
 	if opts.PageSize <= 0 {
 		opts.PageSize = 20
 	}
+
+	searchHist := NewHistoryManager(100)
+	// Try to load search history from file
+	searchHist.LoadFromFile("search_history.txt")
+
 	return &GenericList{
 		opts:          opts,
 		rowNumLabel:   "#", // Default label
 		searchMatches: make(map[int]bool),
+		searchHistory: searchHist,
 	}
 }
 
@@ -158,13 +165,10 @@ func (v *GenericList) Search(query string, matchFn func(row []string, query stri
 	if query == "" || matchFn == nil {
 		return
 	}
-	// Add to history (avoid duplicates)
-	if len(v.searchHistory) == 0 || v.searchHistory[len(v.searchHistory)-1] != query {
-		v.searchHistory = append(v.searchHistory, query)
-		if len(v.searchHistory) > 20 {
-			v.searchHistory = v.searchHistory[1:]
-		}
-	}
+	// Add to history and save to file
+	v.searchHistory.Add(query)
+	v.searchHistory.SaveToFile("search_history.txt")
+
 	for i, row := range v.visibleRows() {
 		if matchFn(row, query) {
 			v.searchMatches[i] = true
@@ -178,14 +182,30 @@ func (v *GenericList) ClearSearch() {
 }
 
 // GetSearchHistory returns search history
-func (v *GenericList) GetSearchHistory() []string { return v.searchHistory }
+func (v *GenericList) GetSearchHistory() []string { return v.searchHistory.GetAll() }
 
 // GetLastSearch returns last search query
 func (v *GenericList) GetLastSearch() string {
-	if len(v.searchHistory) > 0 {
-		return v.searchHistory[len(v.searchHistory)-1]
+	history := v.searchHistory.GetAll()
+	if len(history) > 0 {
+		return history[len(history)-1]
 	}
 	return ""
+}
+
+// HistoryUp moves to previous history entry
+func (v *GenericList) HistoryUp() string {
+	return v.searchHistory.Up()
+}
+
+// HistoryDown moves to next history entry
+func (v *GenericList) HistoryDown() string {
+	return v.searchHistory.Down()
+}
+
+// HistoryReset resets history index
+func (v *GenericList) HistoryReset() {
+	v.searchHistory.Reset()
 }
 
 // === Horizontal Scroll ===
@@ -318,9 +338,12 @@ func (v *GenericList) Render() string {
 		r.RowDecorators = append(r.RowDecorators, CursorDecorator())
 	}
 
-	// Search highlights
+	// Search highlights - highlight current match row with color
 	if v.opts.EnableSearch && len(v.searchMatches) > 0 {
-		r.RowDecorators = append(r.RowDecorators, SearchHighlightDecorator(v.searchMatches))
+		// Highlight current cursor position if it's a match
+		if v.searchMatches[v.cursor] {
+			r.RowDecorators = append(r.RowDecorators, CurrentMatchHighlightDecorator(v.cursor))
+		}
 	}
 
 	return r.Render()

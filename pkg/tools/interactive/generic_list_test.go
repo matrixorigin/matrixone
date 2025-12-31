@@ -102,12 +102,15 @@ func TestSearchHistory(t *testing.T) {
 	})
 
 	history := list.GetSearchHistory()
-	if len(history) != 3 {
-		t.Errorf("Expected 3 history entries, got %d", len(history))
+	// Check that our 3 entries are at the end (history may have previous entries from file)
+	if len(history) < 3 {
+		t.Errorf("Expected at least 3 history entries, got %d", len(history))
 	}
 
-	if history[0] != "first" || history[1] != "second" || history[2] != "third" {
-		t.Errorf("History order incorrect: %v", history)
+	// Check last 3 entries
+	last3 := history[len(history)-3:]
+	if last3[0] != "first" || last3[1] != "second" || last3[2] != "third" {
+		t.Errorf("Last 3 history entries incorrect: %v", last3)
 	}
 
 	// Test last search
@@ -225,4 +228,206 @@ func (h *testHandler) MatchRow(row []string, query string) bool {
 
 func (h *testHandler) FilterRow(row []string, filter string) bool {
 	return h.MatchRow(row, filter)
+}
+
+// TestSearchHighlight tests that search matches are highlighted
+func TestSearchHighlight(t *testing.T) {
+	list := NewGenericList(ListOptions{
+		Headers:       []string{"Name", "Value"},
+		ShowRowNumber: true,
+		EnableCursor:  true,
+		EnableSearch:  true,
+		PageSize:      10,
+	})
+
+	rows := [][]string{
+		{"apple", "100"},
+		{"banana", "200"},
+		{"apple pie", "300"},
+		{"cherry", "400"},
+	}
+	list.SetData(rows)
+
+	// Search for "apple"
+	list.Search("apple", func(row []string, query string) bool {
+		for _, cell := range row {
+			if strings.Contains(strings.ToLower(cell), strings.ToLower(query)) {
+				return true
+			}
+		}
+		return false
+	})
+
+	// Should have 2 matches (row 0 and row 2)
+	if list.MatchCount() != 2 {
+		t.Errorf("Expected 2 matches, got %d", list.MatchCount())
+	}
+
+	// Move to first match
+	list.NextMatch()
+
+	// Render and check for highlight
+	output := list.Render()
+
+	// Should contain ANSI color codes for highlight
+	if !strings.Contains(output, "\033[43m") {
+		t.Error("Expected yellow highlight ANSI code in output")
+	}
+	if !strings.Contains(output, "\033[0m") {
+		t.Error("Expected reset ANSI code in output")
+	}
+
+	// Should contain the matched data
+	if !strings.Contains(output, "apple") {
+		t.Error("Should contain matched text 'apple'")
+	}
+}
+
+// TestSearchNextPrevMatch tests navigation between search matches
+func TestSearchNextPrevMatch(t *testing.T) {
+	list := NewGenericList(ListOptions{
+		Headers:      []string{"Col1"},
+		EnableCursor: true,
+		EnableSearch: true,
+		PageSize:     10,
+	})
+
+	rows := [][]string{
+		{"yes"},
+		{"no"},
+		{"yes"},
+		{"no"},
+		{"yes"},
+	}
+	list.SetData(rows)
+
+	// Search for exact "yes"
+	list.Search("yes", func(row []string, query string) bool {
+		return row[0] == query
+	})
+
+	// Should have 3 matches (rows 0, 2, 4)
+	if list.MatchCount() != 3 {
+		t.Errorf("Expected 3 matches, got %d", list.MatchCount())
+	}
+
+	// Initial cursor at 0 (which is a match)
+	if list.GetCursor() != 0 {
+		t.Errorf("Expected cursor at 0, got %d", list.GetCursor())
+	}
+
+	// NextMatch should go to row 2 (next match after 0)
+	list.NextMatch()
+	if list.GetCursor() != 2 {
+		t.Errorf("Expected cursor at 2 after NextMatch, got %d", list.GetCursor())
+	}
+
+	// NextMatch should go to row 4
+	list.NextMatch()
+	if list.GetCursor() != 4 {
+		t.Errorf("Expected cursor at 4 after NextMatch, got %d", list.GetCursor())
+	}
+
+	// NextMatch should wrap to row 0
+	list.NextMatch()
+	if list.GetCursor() != 0 {
+		t.Errorf("Expected cursor at 0 after wrap, got %d", list.GetCursor())
+	}
+
+	// PrevMatch should go to row 4
+	list.PrevMatch()
+	if list.GetCursor() != 4 {
+		t.Errorf("Expected cursor at 4 after PrevMatch, got %d", list.GetCursor())
+	}
+}
+
+// TestCurrentMatchHighlightDecorator tests the highlight decorator
+func TestCurrentMatchHighlightDecorator(t *testing.T) {
+	decorator := CurrentMatchHighlightDecorator(2)
+
+	// Row 2 should be highlighted
+	prefix, suffix := decorator(2, false)
+	if prefix != "\033[43m" {
+		t.Errorf("Expected yellow highlight prefix, got %q", prefix)
+	}
+	if suffix != "\033[0m" {
+		t.Errorf("Expected reset suffix, got %q", suffix)
+	}
+
+	// Other rows should not be highlighted
+	prefix, suffix = decorator(0, false)
+	if prefix != "" || suffix != "" {
+		t.Error("Non-match row should not have highlight")
+	}
+
+	prefix, suffix = decorator(1, true) // Even if selected
+	if prefix != "" || suffix != "" {
+		t.Error("Non-match row should not have highlight even if selected")
+	}
+}
+
+// TestInputEditingShortcuts tests ctrl+u, ctrl+k, ctrl+w shortcuts
+func TestInputEditingShortcuts(t *testing.T) {
+	config := PageConfig{
+		Title:        "Test",
+		Headers:      []string{"Col1"},
+		EnableSearch: true,
+	}
+	provider := &testProvider{rows: [][]string{{"val1"}}}
+	handler := &testHandler{}
+	page := NewGenericPage(config, provider, handler)
+
+	// Enter search mode with some text
+	page.inputMode = "search"
+	page.inputBuffer = "hello world test"
+	page.inputCursor = 11 // After "world"
+
+	// Test ctrl+w - delete word before cursor
+	page, _ = page.handleInputMode("ctrl+w")
+	if page.inputBuffer != "hello  test" {
+		t.Errorf("ctrl+w: expected 'hello  test', got %q", page.inputBuffer)
+	}
+	if page.inputCursor != 6 {
+		t.Errorf("ctrl+w: expected cursor at 6, got %d", page.inputCursor)
+	}
+
+	// Reset
+	page.inputBuffer = "hello world"
+	page.inputCursor = 11 // At end
+
+	// Test ctrl+u - delete to beginning
+	page, _ = page.handleInputMode("ctrl+u")
+	if page.inputBuffer != "" {
+		t.Errorf("ctrl+u: expected empty, got %q", page.inputBuffer)
+	}
+	if page.inputCursor != 0 {
+		t.Errorf("ctrl+u: expected cursor at 0, got %d", page.inputCursor)
+	}
+
+	// Reset
+	page.inputBuffer = "hello world"
+	page.inputCursor = 5 // After "hello"
+
+	// Test ctrl+k - delete to end
+	page, _ = page.handleInputMode("ctrl+k")
+	if page.inputBuffer != "hello" {
+		t.Errorf("ctrl+k: expected 'hello', got %q", page.inputBuffer)
+	}
+	if page.inputCursor != 5 {
+		t.Errorf("ctrl+k: expected cursor at 5, got %d", page.inputCursor)
+	}
+
+	// Test ctrl+a - move to beginning
+	page.inputBuffer = "hello"
+	page.inputCursor = 5
+	page, _ = page.handleInputMode("ctrl+a")
+	if page.inputCursor != 0 {
+		t.Errorf("ctrl+a: expected cursor at 0, got %d", page.inputCursor)
+	}
+
+	// Test ctrl+e - move to end
+	page, _ = page.handleInputMode("ctrl+e")
+	if page.inputCursor != 5 {
+		t.Errorf("ctrl+e: expected cursor at 5, got %d", page.inputCursor)
+	}
 }

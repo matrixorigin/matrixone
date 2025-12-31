@@ -67,10 +67,9 @@ type GenericPage struct {
 	list     *GenericList
 
 	// Input mode
-	inputMode    string // "", "search", "filter"
-	inputBuffer  string
-	inputCursor  int // Cursor position in input buffer
-	historyIndex int // -1 means not browsing history
+	inputMode   string // "", "search", "filter"
+	inputBuffer string
+	inputCursor int // Cursor position in input buffer
 
 	// Screen size
 	width  int
@@ -90,13 +89,12 @@ func NewGenericPage(config PageConfig, provider DataProvider, handler ActionHand
 	}
 
 	p := &GenericPage{
-		config:       config,
-		provider:     provider,
-		handler:      handler,
-		list:         NewGenericList(listOpts),
-		width:        120,
-		height:       30,
-		historyIndex: -1,
+		config:   config,
+		provider: provider,
+		handler:  handler,
+		list:     NewGenericList(listOpts),
+		width:    120,
+		height:   30,
 	}
 
 	// Set row number label if provided
@@ -194,7 +192,7 @@ func (p *GenericPage) handleKey(msg tea.KeyMsg) (*GenericPage, tea.Cmd) {
 			p.inputMode = "search"
 			p.inputBuffer = ""
 			p.inputCursor = 0
-			p.historyIndex = -1
+			p.list.HistoryReset() // Reset history navigation
 		}
 	case "f":
 		if p.config.EnableFilter {
@@ -224,7 +222,7 @@ func (p *GenericPage) handleInputMode(key string) (*GenericPage, tea.Cmd) {
 		p.inputMode = ""
 		p.inputBuffer = ""
 		p.inputCursor = 0
-		p.historyIndex = -1
+		p.list.HistoryReset()
 	case "enter":
 		if p.inputMode == "search" && p.handler != nil {
 			p.list.Search(p.inputBuffer, p.handler.MatchRow)
@@ -240,7 +238,7 @@ func (p *GenericPage) handleInputMode(key string) (*GenericPage, tea.Cmd) {
 		}
 		p.inputMode = ""
 		p.inputCursor = 0
-		p.historyIndex = -1
+		p.list.HistoryReset()
 	case "backspace":
 		if p.inputCursor > 0 {
 			p.inputBuffer = p.inputBuffer[:p.inputCursor-1] + p.inputBuffer[p.inputCursor:]
@@ -262,33 +260,41 @@ func (p *GenericPage) handleInputMode(key string) (*GenericPage, tea.Cmd) {
 		p.inputCursor = 0
 	case "end", "ctrl+e":
 		p.inputCursor = len(p.inputBuffer)
+	case "ctrl+u":
+		// Delete from cursor to beginning
+		p.inputBuffer = p.inputBuffer[p.inputCursor:]
+		p.inputCursor = 0
+	case "ctrl+k":
+		// Delete from cursor to end
+		p.inputBuffer = p.inputBuffer[:p.inputCursor]
+	case "ctrl+w":
+		// Delete word before cursor
+		if p.inputCursor > 0 {
+			// Find start of word (skip trailing spaces, then find word boundary)
+			pos := p.inputCursor
+			for pos > 0 && p.inputBuffer[pos-1] == ' ' {
+				pos--
+			}
+			for pos > 0 && p.inputBuffer[pos-1] != ' ' {
+				pos--
+			}
+			p.inputBuffer = p.inputBuffer[:pos] + p.inputBuffer[p.inputCursor:]
+			p.inputCursor = pos
+		}
 	case "up":
-		// Browse search history
+		// Browse search history using HistoryManager
 		if p.inputMode == "search" {
-			history := p.list.GetSearchHistory()
-			if len(history) > 0 {
-				if p.historyIndex < 0 {
-					p.historyIndex = len(history) - 1
-				} else if p.historyIndex > 0 {
-					p.historyIndex--
-				}
-				p.inputBuffer = history[p.historyIndex]
+			if entry := p.list.HistoryUp(); entry != "" {
+				p.inputBuffer = entry
 				p.inputCursor = len(p.inputBuffer)
 			}
 		}
 	case "down":
 		// Browse search history
 		if p.inputMode == "search" {
-			history := p.list.GetSearchHistory()
-			if p.historyIndex >= 0 && p.historyIndex < len(history)-1 {
-				p.historyIndex++
-				p.inputBuffer = history[p.historyIndex]
-				p.inputCursor = len(p.inputBuffer)
-			} else {
-				p.historyIndex = -1
-				p.inputBuffer = ""
-				p.inputCursor = 0
-			}
+			entry := p.list.HistoryDown()
+			p.inputBuffer = entry
+			p.inputCursor = len(p.inputBuffer)
 		}
 	default:
 		// Support paste - handle bracketed paste and filter control chars

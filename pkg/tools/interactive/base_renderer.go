@@ -338,3 +338,14 @@ func SearchHighlightDecorator(matches map[int]bool) RowDecorator {
 		return "", ""
 	}
 }
+
+// CurrentMatchHighlightDecorator highlights the current match row with color
+func CurrentMatchHighlightDecorator(currentMatchRow int) RowDecorator {
+	return func(rowIdx int, isSelected bool) (string, string) {
+		if rowIdx == currentMatchRow {
+			// Yellow background for current match
+			return "\033[43m", "\033[0m"
+		}
+		return "", ""
+	}
+}
