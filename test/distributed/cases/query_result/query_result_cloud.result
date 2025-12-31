@@ -88,7 +88,7 @@ a
 2
 select result_size = 0 from meta_scan(last_query_id()) as u;
 result_size = 0
-true
+1
 set save_query_result = off;
 set save_query_result = on;
 set query_result_maxsize = 100;
@@ -392,10 +392,10 @@ _wstart    _wend    max(col2)    min(col2)
 create view v1 as SELECT 1 IN (SELECT 1);
 /* cloud_user */select * from v1;
 1 in (select 1)
-true
+1
 select * from result_scan(last_query_id()) as u;
 1 in (select 1)
-true
+1
 drop table time_window01;
 drop account abc;
 create account abc ADMIN_NAME 'admin' IDENTIFIED BY '123456';
@@ -584,7 +584,7 @@ no configure: save query result
 create view v1 as SELECT 1 IN (SELECT 1);
 /* cloud_user */select * from v1;
 1 in (select 1)
-true
+1
 select * from result_scan(last_query_id()) as u;
 no configure: save query result
 drop table time_window01;

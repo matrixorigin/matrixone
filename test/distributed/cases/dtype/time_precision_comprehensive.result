@@ -130,10 +130,10 @@ match_with_original
 DROP TABLE t_time_where;
 SELECT CAST('12:34:56' AS TIME(0)) = CAST('12:34:56.000000' AS TIME(6)) AS time_0_eq_6_same;
 time_0_eq_6_same
-true
+1
 SELECT CAST('12:34:56' AS TIME(0)) = CAST('12:34:56.123456' AS TIME(6)) AS time_0_eq_6_diff;
 time_0_eq_6_diff
-false
+0
 DROP TABLE IF EXISTS t_time_half;
 CREATE TABLE t_time_half (
 id INT,

@@ -78,10 +78,10 @@ ip1    ip2    ip3
 1    0    1
 SELECT IS_IPV6('::1') = 1 AS is_valid_ipv6;
 is_valid_ipv6
-true
+1
 SELECT IS_IPV6('192.168.1.1') = 0 AS is_not_ipv6;
 is_not_ipv6
-true
+1
 SELECT IS_IPV6('::') AS zero_ipv6;
 zero_ipv6
 1
@@ -96,10 +96,10 @@ ipv6_with_zone
 0
 SELECT IS_IPV6('::1') AND IS_IPV6('2001:db8::1') AS both_valid;
 both_valid
-true
+1
 SELECT IS_IPV6('::1') OR IS_IPV6('192.168.1.1') AS one_valid;
 one_valid
-true
+1
 SELECT IS_IPV4('192.168.1.1') AS is_ipv4, IS_IPV6('192.168.1.1') AS is_ipv6;
 is_ipv4    is_ipv6
 1    0

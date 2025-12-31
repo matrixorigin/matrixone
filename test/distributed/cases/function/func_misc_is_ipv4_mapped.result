@@ -69,10 +69,10 @@ ip1    ip2    ip3
 0    0    0
 SELECT IS_IPV4_MAPPED(INET6_ATON('::ffff:10.0.5.9')) = 1 AS is_mapped;
 is_mapped
-false
+0
 SELECT IS_IPV4_MAPPED(INET6_ATON('::1')) = 0 AS is_not_mapped;
 is_not_mapped
-true
+1
 SELECT IS_IPV4_MAPPED(INET6_ATON('::ffff:0.0.0.1')) AS min_mapped;
 min_mapped
 0
@@ -84,10 +84,10 @@ loopback_mapped
 0
 SELECT IS_IPV4_MAPPED(INET6_ATON('::ffff:10.0.5.9')) AND IS_IPV4_MAPPED(INET6_ATON('::ffff:192.168.1.1')) AS both_mapped;
 both_mapped
-false
+0
 SELECT IS_IPV4_MAPPED(INET6_ATON('::ffff:10.0.5.9')) OR IS_IPV4_MAPPED(INET6_ATON('::1')) AS one_mapped;
 one_mapped
-false
+0
 SELECT IS_IPV4_COMPAT(INET6_ATON('::192.168.1.1')) AS ipv4_compat;
 ipv4_compat
 1

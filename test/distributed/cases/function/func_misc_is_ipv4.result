@@ -84,10 +84,10 @@ ip1    ip2    ip3
 1    0    1
 SELECT IS_IPV4('192.168.1.1') = 1 AS is_valid_ip;
 is_valid_ip
-true
+1
 SELECT IS_IPV4('::1') = 0 AS is_not_ipv4;
 is_not_ipv4
-true
+1
 SELECT IS_IPV4('0.0.0.0') AS zero_ip;
 zero_ip
 1
@@ -114,10 +114,10 @@ from_ntoa
 1
 SELECT IS_IPV4('192.168.1.1') AND IS_IPV4('10.0.0.1') AS both_valid;
 both_valid
-true
+1
 SELECT IS_IPV4('192.168.1.1') OR IS_IPV4('::1') AS one_valid;
 one_valid
-true
+1
 CREATE TABLE t1(id INT, ip_str VARCHAR(50));
 INSERT INTO t1 VALUES (1, '192.168.1.1'), (2, '::1');
 SELECT (SELECT IS_IPV4(ip_str) FROM t1 WHERE id = 1) AS subquery_result;

@@ -38,7 +38,7 @@ dt6 > '2022-07-01 10:20:30.123455',
 dt6 < '2022-07-01 10:20:30.123457'
 from t_scale_storage;
 dt0 = dt6    dt3 = dt6    dt6 = 2022-07-01 10:20:30.123456    dt6 > 2022-07-01 10:20:30.123455    dt6 < 2022-07-01 10:20:30.123457
-false    false    true    true    true
+0    0    1    1    1
 select
 now(0),      -- no microseconds
 now(3),      -- 3 digits microseconds
@@ -75,7 +75,7 @@ dt0 = '2022-07-01 10:20:30',
 dt6 = '2022-07-01 10:20:30.000000'
 from t_scale_comparison where id = 1;
 dt0 = dt6    ts0 = ts6    dt0 = 2022-07-01 10:20:30    dt6 = 2022-07-01 10:20:30.000000
-false    false    true    false
+0    0    1    0
 select * from t_scale_comparison
 where dt6 = '2022-07-01 10:20:30.123456';
 id    dt0    dt3    dt6    ts0    ts6

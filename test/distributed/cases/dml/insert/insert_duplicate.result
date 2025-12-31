@@ -1265,7 +1265,7 @@ update_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 INSERT INTO users (id, counter) VALUES (112, 1);
 SELECT id, counter, create_at = update_at AS timestamps_equal FROM users;
 id    counter    timestamps_equal
-112    1    true
+112    1    1
 SELECT SLEEP(1);
 SLEEP(1)
 0
@@ -1275,7 +1275,7 @@ counter = counter + VALUES(counter),
 create_at = CURRENT_TIMESTAMP();
 SELECT id, counter, create_at = update_at AS timestamps_equal FROM users;
 id    counter    timestamps_equal
-112    3    true
+112    3    1
 DROP TABLE users;
 DROP TABLE IF EXISTS auto_test;
 CREATE TABLE auto_test (

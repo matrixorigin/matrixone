@@ -4,7 +4,7 @@ SELECT CURRENT_TIME() AS current_time;
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 37 near " current_time;";
 SELECT CURTIME() = CURRENT_TIME() AS same_value;
 same_value
-true
+1
 SELECT CURTIME(0) AS current_time_0;
 current_time_0
 20:03:47
@@ -34,7 +34,7 @@ casted_time
 20:03:47
 SELECT CURRENT_TIME() AS t1, CURTIME() AS t2, CURRENT_TIME() = CURTIME() AS equal;
 t1    t2    equal
-20:03:47    20:03:47    true
+20:03:47    20:03:47    1
 DROP TABLE t1;
 CREATE TABLE t2 (id INT, t0 TIME(0), t3 TIME(3), t6 TIME(6));
 INSERT INTO t2 VALUES (1, CURTIME(0), CURTIME(3), CURTIME(6));

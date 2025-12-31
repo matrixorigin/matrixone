@@ -1,6 +1,6 @@
 SELECT EXISTS(SELECT 1+1);
 EXISTS(SELECT 1+1)
-true
+1
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;
@@ -367,19 +367,19 @@ CREATE TABLE t1 ( a int, b int );
 INSERT INTO t1 VALUES (1,1),(2,2),(3,3);
 SELECT EXISTS(SELECT a FROM t1 WHERE b = 2 and a.a > t1.a) IS NULL from t1 a;
 EXISTS(SELECT a FROM t1 WHERE b = 2 and a.a > t1.a) IS NULL
-false
-false
-false
+0
+0
+0
 SELECT EXISTS(SELECT a FROM t1 WHERE b = 2 and a.a < t1.a) IS NOT NULL from t1 a;
 EXISTS(SELECT a FROM t1 WHERE b = 2 and a.a < t1.a) IS NOT NULL
-true
-true
-true
+1
+1
+1
 SELECT EXISTS(SELECT a FROM t1 WHERE b = 2 and a.a = t1.a) IS NULL from t1 a;
 EXISTS(SELECT a FROM t1 WHERE b = 2 and a.a = t1.a) IS NULL
-false
-false
-false
+0
+0
+0
 drop table if exists t1;
 drop table if exists t1;
 create table t1 (df decimal(5,1));

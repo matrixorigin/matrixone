@@ -77,7 +77,7 @@ const defaultSaltReadTimeout = time.Millisecond * 200
 
 const charsetBinary = 0x3f
 const charsetVarchar = 0x21
-const boolColumnLength = 12
+const boolColumnLength = 1
 
 func init() {
 	serverVersion.Store("1.3.0")
@@ -2173,11 +2173,11 @@ func (mp *MysqlProtocolImpl) makeColumnDefinition41Payload(column *MysqlColumn, 
 
 	if column.ColumnType() == defines.MYSQL_TYPE_BOOL {
 		//int<2>              character set
-		pos = mp.io.WriteUint16(data, pos, charsetVarchar)
+		pos = mp.io.WriteUint16(data, pos, charsetBinary)
 		//int<4>              column length
 		pos = mp.io.WriteUint32(data, pos, boolColumnLength)
 		//int<1>              type
-		pos = mp.io.WriteUint8(data, pos, uint8(defines.MYSQL_TYPE_VARCHAR))
+		pos = mp.io.WriteUint8(data, pos, uint8(defines.MYSQL_TYPE_TINY))
 	} else {
 		//int<2>              character set
 		pos = mp.io.WriteUint16(data, pos, column.Charset())
@@ -2348,10 +2348,10 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow(mrs *MysqlResultSet, rowId
 
 		switch mysqlColumn.ColumnType() {
 		case defines.MYSQL_TYPE_BOOL:
-			if value, err := mrs.GetString(mp.ctx, rowIdx, i); err != nil {
+			if value, err := mrs.GetInt64(mp.ctx, rowIdx, i); err != nil {
 				return err
 			} else {
-				err = mp.appendStringLenEnc(value)
+				err = mp.appendUint8(uint8(value))
 				if err != nil {
 					return err
 				}
@@ -2572,10 +2572,10 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow(mrs *MysqlResultSet, r uint6
 
 		switch mysqlColumn.ColumnType() {
 		case defines.MYSQL_TYPE_BOOL:
-			if value, err2 := mrs.GetString(mp.ctx, r, i); err2 != nil {
+			if value, err2 := mrs.GetInt64(mp.ctx, r, i); err2 != nil {
 				return err2
 			} else {
-				err = mp.appendStringLenEnc(value)
+				err = mp.appendStringLenEncOfInt64(value)
 				if err != nil {
 					return err
 				}
@@ -2876,7 +2876,11 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow2(mrs *MysqlResultSet, colS
 			if err != nil {
 				return err
 			}
-			err = AppendCountOfBytesLenEnc(mp, getBoolSlice(b))
+			value := uint8(0)
+			if b {
+				value = 1
+			}
+			err = mp.appendUint8(value)
 			if err != nil {
 				return err
 			}
@@ -3156,7 +3160,11 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 			if err != nil {
 				return err
 			}
-			err = AppendCountOfBytesLenEnc(mp, getBoolSlice(b))
+			value := int64(0)
+			if b {
+				value = 1
+			}
+			err = mp.appendStringLenEncOfInt64(value)
 			if err != nil {
 				return err
 			}

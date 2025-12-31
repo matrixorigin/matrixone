@@ -21,7 +21,7 @@ result6
 2.0
 SELECT POW(2, 3) = POWER(2, 3) AS same_result;
 same_result
-true
+1
 SELECT power(2,13);
 power(2, 13)
 8192.0
