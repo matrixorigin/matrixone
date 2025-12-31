@@ -29,6 +29,7 @@ type BaseRenderer struct {
 	// Data
 	Headers []string
 	Rows    [][]string
+	RowNums []string // Custom row numbers (optional, e.g., "(0-0)")
 
 	// Basic options
 	ShowBorder    bool
@@ -44,7 +45,7 @@ type BaseRenderer struct {
 	RowNumOffset int
 
 	// Horizontal scroll - column-based (which columns to show)
-	HScrollOffset int // Starting column index
+	HScrollOffset  int // Starting column index
 	MaxVisibleCols int // Max columns to display (0 = all)
 
 	// Decorators - add features without modifying base
@@ -52,6 +53,9 @@ type BaseRenderer struct {
 
 	// Selected row (for decorators to use)
 	SelectedRow int
+
+	// Cached row number width
+	cachedRowNumWidth int
 }
 
 // NewBaseRenderer creates a minimal renderer
@@ -86,6 +90,9 @@ func (r *BaseRenderer) Render() string {
 
 	rows := r.Rows[start:end]
 
+	// Calculate row number width once
+	r.calcRowNumWidth()
+
 	// Determine visible columns
 	visibleHeaders, visibleColIndices := r.getVisibleColumns()
 	widths := r.calcWidths(visibleColIndices)
@@ -110,6 +117,46 @@ func (r *BaseRenderer) Render() string {
 	}
 
 	return b.String()
+}
+
+func (r *BaseRenderer) calcRowNumWidth() {
+	w := len(r.RowNumLabel)
+
+	// If custom row numbers are provided, calculate max width from visible range
+	if r.RowNums != nil {
+		start := r.StartRow
+		end := r.EndRow
+		if end <= 0 || end > len(r.RowNums) {
+			end = len(r.RowNums)
+		}
+		if start < 0 {
+			start = 0
+		}
+
+		maxNumLen := 0
+		for i := start; i < end && i < len(r.RowNums); i++ {
+			numLen := len(r.RowNums[i])
+			if numLen > maxNumLen {
+				maxNumLen = numLen
+			}
+		}
+
+		// Account for cursor prefix if decorators are present
+		// Note: cursor symbol "▶" is 3 bytes in UTF-8 but displays as 1 character
+		// So we need to add 2 extra bytes (3 - 1) to account for the difference
+		if len(r.RowDecorators) > 0 {
+			maxNumLen += 2 // Add 2 bytes for cursor prefix overhead
+		}
+
+		if maxNumLen >= w {
+			w = maxNumLen
+		}
+	}
+
+	if w < 4 {
+		w = 4
+	}
+	r.cachedRowNumWidth = w
 }
 
 func (r *BaseRenderer) getVisibleColumns() ([]string, []int) {
@@ -172,11 +219,7 @@ func (r *BaseRenderer) calcWidths(colIndices []int) []int {
 }
 
 func (r *BaseRenderer) rowNumWidth() int {
-	w := len(r.RowNumLabel)
-	if w < 4 {
-		w = 4
-	}
-	return w
+	return r.cachedRowNumWidth
 }
 
 func (r *BaseRenderer) renderTopBorder(b *strings.Builder, widths []int) {
@@ -248,8 +291,14 @@ func (r *BaseRenderer) renderRow(b *strings.Builder, absIdx int, row []string, c
 
 	b.WriteString("│")
 	if r.ShowRowNumber {
-		displayNum := absIdx + r.RowNumOffset
-		numStr := fmt.Sprintf("%d", displayNum)
+		var numStr string
+		// Use custom row number if available
+		if r.RowNums != nil && absIdx < len(r.RowNums) {
+			numStr = r.RowNums[absIdx]
+		} else {
+			displayNum := absIdx + r.RowNumOffset
+			numStr = fmt.Sprintf("%d", displayNum)
+		}
 		// Apply prefix to row number cell
 		cell := prefix + numStr
 		fmt.Fprintf(b, " %-*s │", r.rowNumWidth(), cell)

@@ -35,6 +35,10 @@ func (p *testDataProvider) GetRows() [][]string {
 	return p.rows
 }
 
+func (p *testDataProvider) GetRowNums() []string {
+	return nil // Use default row numbers
+}
+
 func (p *testDataProvider) GetOverview() string {
 	return p.overview
 }

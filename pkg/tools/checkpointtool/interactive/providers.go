@@ -48,6 +48,10 @@ func (p *CheckpointListProvider) GetRows() [][]string {
 	return rows
 }
 
+func (p *CheckpointListProvider) GetRowNums() []string {
+	return nil // Use default row numbers
+}
+
 func (p *CheckpointListProvider) GetOverview() string {
 	info := p.state.info
 	return fmt.Sprintf("Dir: %s │ Total: %d (G:%d I:%d C:%d)",
@@ -97,6 +101,10 @@ func (p *TablesListProvider) GetRows() [][]string {
 		}
 	}
 	return rows
+}
+
+func (p *TablesListProvider) GetRowNums() []string {
+	return nil
 }
 
 func (p *TablesListProvider) GetOverview() string {
@@ -195,8 +203,11 @@ func (p *TableDetailProvider) GetRows() [][]string {
 			formatTSShort(entry.CreateTime),
 		})
 	}
-
 	return rows
+}
+
+func (p *TableDetailProvider) GetRowNums() []string {
+	return nil
 }
 
 func (p *TableDetailProvider) GetOverview() string {
@@ -273,6 +284,10 @@ func (p *AccountListProvider) GetRows() [][]string {
 		}
 	}
 	return rows
+}
+
+func (p *AccountListProvider) GetRowNums() []string {
+	return nil
 }
 
 func (p *AccountListProvider) GetOverview() string {

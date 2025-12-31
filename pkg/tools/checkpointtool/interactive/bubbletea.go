@@ -15,6 +15,8 @@
 package interactive
 
 import (
+	"context"
+
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/matrixorigin/matrixone/pkg/tools/checkpointtool"
 	objectinteractive "github.com/matrixorigin/matrixone/pkg/tools/objecttool/interactive"
@@ -53,17 +55,12 @@ func Run(reader *checkpointtool.CheckpointReader) error {
 					6: ckputil.TableObjectsAttr_DeleteTS,
 					7: ckputil.TableObjectsAttr_Cluster,
 				},
-				ColumnFormats: map[uint16]string{
-					4: "objectstats",
-					5: "ts",
-					6: "ts",
-				},
 			}
-			if err := objectinteractive.RunBubbleteaWithOptions(um.GetObjectToOpen(), opts); err != nil {
+			if err := objectinteractive.RunUnified(context.Background(), um.GetObjectToOpen(), opts); err != nil {
 				return err
 			}
-			// Reset and continue
-			m = NewUnifiedModel(reader)
+			// Clear the object to open flag and continue with current state
+			um.ClearObjectToOpen()
 			continue
 		}
 

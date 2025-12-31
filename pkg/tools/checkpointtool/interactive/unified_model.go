@@ -180,3 +180,9 @@ func (m *UnifiedModel) GetObjectToOpen() string {
 func (m *UnifiedModel) GetRangeToOpen() *ckputil.TableRange {
 	return m.rangeToOpen
 }
+
+// ClearObjectToOpen clears the object to open flag
+func (m *UnifiedModel) ClearObjectToOpen() {
+	m.objectToOpen = ""
+	m.rangeToOpen = nil
+}

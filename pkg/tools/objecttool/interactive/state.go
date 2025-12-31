@@ -134,6 +134,28 @@ func (s *State) GetBlockStartRow(blockIdx uint32) int64 {
 func (s *State) SetRowRange(start, end int64) {
 	s.rowRangeStart = start
 	s.rowRangeEnd = end
+
+	// Navigate to the start of the range
+	if start >= 0 {
+		// Find which block contains this row
+		blockCount := s.reader.BlockCount()
+		for i := uint32(0); i < blockCount; i++ {
+			blockStart := s.GetBlockStartRow(i)
+			var blockEnd int64
+			if i+1 < blockCount {
+				blockEnd = s.GetBlockStartRow(i + 1)
+			} else {
+				blockEnd = int64(s.reader.Info().RowCount)
+			}
+
+			if start >= blockStart && start < blockEnd {
+				s.currentBlock = i
+				s.rowOffset = int(start - blockStart)
+				s.ensureBlockLoaded()
+				break
+			}
+		}
+	}
 }
 
 // FilteredRowCount returns the number of rows after filtering

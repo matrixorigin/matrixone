@@ -33,10 +33,23 @@ func (p *ObjectDataProvider) GetRows() [][]string {
 	return rows
 }
 
+func (p *ObjectDataProvider) GetRowNums() []string {
+	_, rowNums, _ := p.state.CurrentRows()
+	return rowNums
+}
+
 func (p *ObjectDataProvider) GetOverview() string {
 	info := p.state.reader.Info()
 	var parts []string
-	parts = append(parts, fmt.Sprintf("Rows: %d", info.RowCount))
+
+	// Show filtered row count if range is set
+	if p.state.rowRangeStart >= 0 || p.state.rowRangeEnd >= 0 {
+		filteredCount := p.state.FilteredRowCount()
+		parts = append(parts, fmt.Sprintf("Rows: %d (filtered from %d)", filteredCount, info.RowCount))
+	} else {
+		parts = append(parts, fmt.Sprintf("Rows: %d", info.RowCount))
+	}
+
 	parts = append(parts, fmt.Sprintf("Blocks: %d", info.BlockCount))
 	parts = append(parts, fmt.Sprintf("Cols: %d", len(p.state.reader.Columns())))
 
@@ -105,6 +118,7 @@ func NewObjectDataPage(state *State) *interactive.GenericPage {
 		Title:         "═══ Object Viewer ═══",
 		Headers:       headers,
 		ShowRowNumber: true,
+		RowNumLabel:   "RowNum", // Use "RowNum" instead of "#"
 		EnableCursor:  true,
 		EnableSearch:  true,
 		EnableHScroll: true,
@@ -126,6 +140,11 @@ func (p *BlockMetaProvider) GetRows() [][]string {
 	return rows
 }
 
+func (p *BlockMetaProvider) GetRowNums() []string {
+	_, rowNums, _ := p.state.CurrentRows()
+	return rowNums
+}
+
 func (p *BlockMetaProvider) GetOverview() string {
 	info := p.state.reader.Info()
 	return fmt.Sprintf("Block Metadata │ Blocks: %d", info.BlockCount)
@@ -140,6 +159,10 @@ type ObjectMetaProvider struct {
 func (p *ObjectMetaProvider) GetRows() [][]string {
 	rows, _, _ := p.state.CurrentRows()
 	return rows
+}
+
+func (p *ObjectMetaProvider) GetRowNums() []string {
+	return nil // Object meta doesn't use row numbers
 }
 
 func (p *ObjectMetaProvider) GetOverview() string {

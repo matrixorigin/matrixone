@@ -42,12 +42,15 @@ type GenericList struct {
 
 	// Data
 	rows         [][]string
+	rowNums      []string   // Custom row numbers (optional)
+	rowNumLabel  string     // Row number column label
 	filteredRows [][]string // nil means no filter
 
 	// State
 	cursor       int
 	scrollOffset int
 	screenHeight int
+	screenWidth  int
 
 	// Horizontal scroll
 	hScrollOffset int
@@ -69,6 +72,7 @@ func NewGenericList(opts ListOptions) *GenericList {
 	}
 	return &GenericList{
 		opts:          opts,
+		rowNumLabel:   "#", // Default label
 		searchMatches: make(map[int]bool),
 	}
 }
@@ -76,6 +80,16 @@ func NewGenericList(opts ListOptions) *GenericList {
 // SetData sets the data rows
 func (v *GenericList) SetData(rows [][]string) {
 	v.rows = rows
+	v.rowNums = nil
+	v.filteredRows = nil
+	v.cursor = 0
+	v.scrollOffset = 0
+}
+
+// SetDataWithRowNums sets data with custom row numbers
+func (v *GenericList) SetDataWithRowNums(rows [][]string, rowNums []string) {
+	v.rows = rows
+	v.rowNums = rowNums
 	v.filteredRows = nil
 	v.cursor = 0
 	v.scrollOffset = 0
@@ -91,6 +105,11 @@ func (v *GenericList) SetScreenHeight(h int) {
 			v.opts.PageSize = 5
 		}
 	}
+}
+
+// SetScreenWidth sets available screen width
+func (v *GenericList) SetScreenWidth(w int) {
+	v.screenWidth = w
 }
 
 // === Cursor ===
@@ -273,11 +292,20 @@ func (v *GenericList) Render() string {
 	r := NewBaseRenderer()
 	r.Headers = v.opts.Headers
 	r.Rows = rows
+	r.RowNums = v.rowNums
+	r.RowNumLabel = v.rowNumLabel
 	r.ShowBorder = true
 	r.ShowRowNumber = v.opts.ShowRowNumber
 	r.MaxColWidth = v.opts.MaxColWidth
 	r.HScrollOffset = v.hScrollOffset
-	r.MaxVisibleCols = 15 // Show at most 15 columns at once
+
+	// Calculate max visible columns based on screen width
+	// Don't limit if screenWidth is not set
+	if v.screenWidth > 0 {
+		r.MaxVisibleCols = 15 // Default max
+	} else {
+		r.MaxVisibleCols = 0 // Show all
+	}
 
 	// Pagination
 	r.StartRow = v.scrollOffset

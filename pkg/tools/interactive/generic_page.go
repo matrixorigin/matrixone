@@ -28,6 +28,7 @@ type PageConfig struct {
 
 	// Features (enable/disable)
 	ShowRowNumber bool
+	RowNumLabel   string // Row number column label (default: "#")
 	EnableCursor  bool
 	EnableSearch  bool
 	EnableFilter  bool
@@ -44,15 +45,16 @@ type PageConfig struct {
 // DataProvider provides data for a page
 type DataProvider interface {
 	GetRows() [][]string
-	GetOverview() string // Dynamic overview (can change based on data)
+	GetRowNums() []string // Optional custom row numbers
+	GetOverview() string  // Dynamic overview (can change based on data)
 }
 
 // ActionHandler handles page actions
 type ActionHandler interface {
-	OnSelect(rowIdx int) tea.Cmd           // Enter key
-	OnBack() tea.Cmd                       // ESC/b key
-	OnCustomKey(key string) tea.Cmd        // Other keys
-	MatchRow(row []string, query string) bool // For search
+	OnSelect(rowIdx int) tea.Cmd                // Enter key
+	OnBack() tea.Cmd                            // ESC/b key
+	OnCustomKey(key string) tea.Cmd             // Other keys
+	MatchRow(row []string, query string) bool   // For search
 	FilterRow(row []string, filter string) bool // For filter
 }
 
@@ -97,6 +99,11 @@ func NewGenericPage(config PageConfig, provider DataProvider, handler ActionHand
 		historyIndex: -1,
 	}
 
+	// Set row number label if provided
+	if config.RowNumLabel != "" {
+		p.list.rowNumLabel = config.RowNumLabel
+	}
+
 	// Load initial data
 	p.Refresh()
 	return p
@@ -105,7 +112,13 @@ func NewGenericPage(config PageConfig, provider DataProvider, handler ActionHand
 // Refresh reloads data from provider
 func (p *GenericPage) Refresh() {
 	if p.provider != nil {
-		p.list.SetData(p.provider.GetRows())
+		rows := p.provider.GetRows()
+		rowNums := p.provider.GetRowNums()
+		if rowNums != nil {
+			p.list.SetDataWithRowNums(rows, rowNums)
+		} else {
+			p.list.SetData(rows)
+		}
 	}
 }
 
@@ -115,6 +128,7 @@ func (p *GenericPage) SetSize(w, h int) {
 	p.height = h
 	// Reserve: title(1) + overview(1) + separator(1) + hints(2) + status(1) = 6
 	p.list.SetScreenHeight(h - 6)
+	p.list.SetScreenWidth(w)
 }
 
 // === Bubbletea Interface ===
@@ -277,11 +291,27 @@ func (p *GenericPage) handleInputMode(key string) (*GenericPage, tea.Cmd) {
 			}
 		}
 	default:
-		// Support paste - filter out control sequences
-		if key != "[" && key != "]" && key != "shift+tab" && key != "tab" {
+		// Support paste - handle bracketed paste and filter control chars
+		input := key
+
+		// Handle bracketed paste: remove [...]  wrapping
+		if strings.HasPrefix(input, "[") && strings.HasSuffix(input, "]") && len(input) > 2 {
+			input = input[1 : len(input)-1]
+		}
+
+		// Filter out control characters, keep only printable ASCII
+		var filtered strings.Builder
+		for _, r := range input {
+			if r >= 32 && r <= 126 { // Printable ASCII including space
+				filtered.WriteRune(r)
+			}
+		}
+
+		if filtered.Len() > 0 {
+			text := filtered.String()
 			// Insert at cursor position
-			p.inputBuffer = p.inputBuffer[:p.inputCursor] + key + p.inputBuffer[p.inputCursor:]
-			p.inputCursor += len(key)
+			p.inputBuffer = p.inputBuffer[:p.inputCursor] + text + p.inputBuffer[p.inputCursor:]
+			p.inputCursor += len(text)
 		}
 	}
 	return p, nil
