@@ -118,16 +118,16 @@ func infoCommand() *cobra.Command {
 			defer reader.Close()
 
 			info := reader.Info()
-			fmt.Printf("Checkpoint Directory: %s\n", info.Dir)
-			fmt.Printf("Total Entries: %d\n", info.TotalEntries)
-			fmt.Printf("  Global:      %d\n", info.GlobalCount)
-			fmt.Printf("  Incremental: %d\n", info.IncrCount)
-			fmt.Printf("  Compacted:   %d\n", info.CompactCount)
+			cmd.Printf("Checkpoint Directory: %s\n", info.Dir)
+			cmd.Printf("Total Entries: %d\n", info.TotalEntries)
+			cmd.Printf("  Global:      %d\n", info.GlobalCount)
+			cmd.Printf("  Incremental: %d\n", info.IncrCount)
+			cmd.Printf("  Compacted:   %d\n", info.CompactCount)
 			if !info.EarliestTS.IsEmpty() {
-				fmt.Printf("Earliest TS:   %s\n", info.EarliestTS.ToString())
+				cmd.Printf("Earliest TS:   %s\n", info.EarliestTS.ToString())
 			}
 			if !info.LatestTS.IsEmpty() {
-				fmt.Printf("Latest TS:     %s\n", info.LatestTS.ToString())
+				cmd.Printf("Latest TS:     %s\n", info.LatestTS.ToString())
 			}
 			return nil
 		},
