@@ -97,6 +97,14 @@ func NewState(reader *checkpointtool.CheckpointReader) *State {
 // Mode returns current view mode
 func (s *State) Mode() ViewMode { return s.mode }
 
+// SetPageSize updates the page size for pagination
+func (s *State) SetPageSize(size int) {
+	if size < 5 {
+		size = 5
+	}
+	s.pageSize = size
+}
+
 // Info returns checkpoint info
 func (s *State) Info() *checkpointtool.CheckpointInfo { return s.info }
 

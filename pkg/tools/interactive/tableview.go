@@ -80,6 +80,11 @@ func (tv *TableView) calculateColumnWidths() {
 	tv.autoWidths = widths
 }
 
+// SetScreenHeight updates the screen height for pagination
+func (tv *TableView) SetScreenHeight(height int) {
+	tv.screenHeight = height
+}
+
 // SetCursor sets the cursor position
 func (tv *TableView) SetCursor(pos int) {
 	items := tv.dataSource.GetFilteredItems()

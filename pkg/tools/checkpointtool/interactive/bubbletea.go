@@ -704,6 +704,14 @@ func (m model) renderAccounts() string {
 	b.WriteString("  # │ AccountID │ Tables │ Data │ Tomb\n")
 	b.WriteString("────┼───────────┼────────┼──────┼──────\n")
 
+	// Update screen height dynamically
+	// Reserve space for: breadcrumb(3) + title(1) + overview(1) + separator(1) + header(2) + hints(2) = 10 lines
+	screenHeight := m.height - 10
+	if screenHeight < 5 {
+		screenHeight = 5
+	}
+	m.state.SetPageSize(screenHeight)
+
 	searchResults := make(map[int]bool)
 	// Always show search results if they exist (even in search mode)
 	for _, idx := range m.state.SearchResult() {
@@ -775,6 +783,14 @@ func (m model) renderTables() string {
 		len(tables), totalData, totalTomb))
 	b.WriteString(strings.Repeat("─", 80))
 	b.WriteString("\n")
+
+	// Update screen height dynamically
+	// Reserve space for: breadcrumb(3) + title(1) + overview(2) + separator(1) + hints(2) = 9 lines
+	screenHeight := m.height - 9
+	if screenHeight < 5 {
+		screenHeight = 5
+	}
+	m.tableView.SetScreenHeight(screenHeight)
 
 	// Use shared TableView component to render table
 	b.WriteString(m.tableView.Render())
