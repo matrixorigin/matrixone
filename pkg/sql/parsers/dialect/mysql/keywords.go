@@ -630,6 +630,7 @@ func init() {
 		"subscriptions":              SUBSCRIPTIONS,
 		"publications":               PUBLICATIONS,
 		"sync_interval":              SYNC_INTERVAL,
+		"coverage":                   COVERAGE,
 		"roles":                      ROLES,
 		"backend":                    BACKEND,
 		"servers":                    SERVERS,

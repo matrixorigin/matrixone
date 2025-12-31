@@ -340,7 +340,7 @@ func createPublication(ctx context.Context, bh BackgroundExec, cp *tree.CreatePu
 		ctx, bh,
 		int32(accountId), accountName,
 		pubName, dbName, tablesStr, comment,
-		insertSubAccounts, accIdInfoMap,
+		insertSubAccounts, subAccounts,
 	); err != nil {
 		return
 	}
@@ -550,7 +550,7 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 		ctx, bh,
 		int32(accountId), accountName,
 		pubName, dbName, tablesStr, comment,
-		insertSubAccounts, accIdInfoMap,
+		insertSubAccounts, newSubAccounts,
 	); err != nil {
 		return
 	}
@@ -1618,10 +1618,6 @@ func getSetAccounts(
 	for _, acc := range setAccounts {
 		accName := string(acc)
 
-		if accName == curAccName {
-			return nil, moerr.NewInternalError(ctx, "can't publish to self")
-		}
-
 		accInfo, ok := accNameInfoMap[accName]
 		if !ok {
 			return nil, moerr.NewInternalErrorf(ctx, "not existed account name '%s'", accName)
@@ -1645,10 +1641,6 @@ func getAddAccounts(
 
 	for _, acc := range addAccounts {
 		accName := string(acc)
-
-		if accName == curAccName {
-			return nil, moerr.NewInternalError(ctx, "can't publish to self")
-		}
 
 		accInfo, ok := accNameInfoMap[accName]
 		if !ok {
