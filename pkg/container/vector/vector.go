@@ -85,6 +85,12 @@ func (t *typedSlice) setFromVector(v *Vector) {
 	if cap(v.data) >= sz {
 		t.Ptr = (unsafe.Pointer)(unsafe.SliceData(v.data))
 		t.Cap = cap(v.data) / sz
+	} else {
+		// Reset to safe values when buffer is too small for the new type.
+		// This fixes issue #23295: without this, Ptr/Cap retain stale values
+		// from the previous type, causing ToSlice to create an invalid slice.
+		t.Ptr = nil
+		t.Cap = 0
 	}
 }
 
