@@ -1023,7 +1023,7 @@ func TestConn_ReadLoadLocalPacketErr(t *testing.T) {
 		{
 			resetFunc()
 			tConn.mod = testConnModSetReadDeadlineReturnErr
-			conn.timeout = time.Second * 2
+			conn.readTimeout = time.Second * 2
 			_, _ = tConn.Write(makePacket(payload1, 1))
 			read, err = conn.ReadLoadLocalPacket()
 			assert.NotNil(t, err)
@@ -1803,4 +1803,101 @@ func Test_BeginPacket(t *testing.T) {
 
 	_ = conn.Close()
 	assert.True(t, leakAlloc.CheckBalance())
+}
+
+// timeoutConn is a test connection that simulates read timeout
+type timeoutConn struct {
+	testConn
+	readTimeout time.Duration
+	closed      bool
+}
+
+func (tc *timeoutConn) Read(b []byte) (n int, err error) {
+	if tc.readTimeout > 0 {
+		// Simulate timeout by returning a timeout error
+		return 0, &timeoutError{msg: "read timeout"}
+	}
+	return tc.testConn.Read(b)
+}
+
+func (tc *timeoutConn) Close() error {
+	tc.closed = true
+	return nil
+}
+
+func (tc *timeoutConn) SetReadDeadline(t time.Time) error {
+	return nil
+}
+
+// timeoutError implements net.Error interface for timeout
+type timeoutError struct {
+	msg string
+}
+
+func (e *timeoutError) Error() string   { return e.msg }
+func (e *timeoutError) Timeout() bool   { return true }
+func (e *timeoutError) Temporary() bool { return true }
+
+func TestConn_ReadFromConn_Timeout(t *testing.T) {
+	leakAlloc := NewLeakCheckAllocator()
+	setSessionAlloc("", leakAlloc)
+
+	// Create a timeout connection
+	tConn := &timeoutConn{
+		readTimeout: 1 * time.Second,
+	}
+
+	sv, err := getSystemVariables("test/system_vars_config.toml")
+	assert.Nil(t, err)
+	sv.NetReadTimeout.Duration = 1 * time.Second
+	pu := config.NewParameterUnit(sv, nil, nil, nil)
+
+	conn, err := NewIOSession(tConn, pu, "")
+	assert.Nil(t, err)
+	assert.NotNil(t, conn)
+
+	// Test ReadFromConn with timeout
+	buf := make([]byte, 100)
+	n, err := conn.ReadFromConn(buf)
+
+	// Should return timeout error
+	assert.NotNil(t, err)
+	assert.Equal(t, 0, n)
+
+	// Check if it's a timeout error
+	netErr, ok := err.(net.Error)
+	assert.True(t, ok)
+	assert.True(t, netErr.Timeout())
+
+	_ = conn.Close()
+}
+
+func TestConn_ReadFromConn_NoTimeout(t *testing.T) {
+	leakAlloc := NewLeakCheckAllocator()
+	setSessionAlloc("", leakAlloc)
+
+	// Create a normal connection with data
+	tConn := &testConn{}
+	testData := []byte("hello world")
+	tConn.data = testData
+
+	sv, err := getSystemVariables("test/system_vars_config.toml")
+	assert.Nil(t, err)
+	sv.NetReadTimeout.Duration = 0 // No timeout
+	pu := config.NewParameterUnit(sv, nil, nil, nil)
+
+	conn, err := NewIOSession(tConn, pu, "")
+	assert.Nil(t, err)
+	assert.NotNil(t, conn)
+
+	// Test ReadFromConn without timeout
+	buf := make([]byte, 100)
+	n, err := conn.ReadFromConn(buf)
+
+	// Should succeed
+	assert.Nil(t, err)
+	assert.Equal(t, len(testData), n)
+	assert.Equal(t, testData, buf[:n])
+
+	_ = conn.Close()
 }

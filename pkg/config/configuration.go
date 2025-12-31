@@ -127,6 +127,12 @@ var (
 	// defaultSessionTimeout default: 24 hour
 	defaultSessionTimeout = 24 * time.Hour
 
+	// defaultNetReadTimeout default: 60 seconds
+	defaultNetReadTimeout = 60 * time.Second
+
+	// defaultNetWriteTimeout default: 60 seconds
+	defaultNetWriteTimeout = 60 * time.Second
+
 	// defaultOBShowStatsInterval default: 1min
 	defaultOBShowStatsInterval = time.Minute
 
@@ -266,6 +272,12 @@ type FrontendParameters struct {
 	//timeout of the session. the default is 10minutes
 	SessionTimeout toml.Duration `toml:"sessionTimeout"`
 
+	// NetReadTimeout is the timeout for reading from the network connection. Default is 60 seconds.
+	NetReadTimeout toml.Duration `toml:"netReadTimeout"`
+
+	// NetWriteTimeout is the timeout for writing to the network connection. Default is 60 seconds.
+	NetWriteTimeout toml.Duration `toml:"netWriteTimeout"`
+
 	// MaxMessageSize max size for read messages from dn. Default is 10M
 	MaxMessageSize uint64 `toml:"max-message-size"`
 
@@ -404,6 +416,14 @@ func (fp *FrontendParameters) SetDefaultValues() {
 
 	if fp.SessionTimeout.Duration == 0 {
 		fp.SessionTimeout.Duration = defaultSessionTimeout
+	}
+
+	if fp.NetReadTimeout.Duration == 0 {
+		fp.NetReadTimeout.Duration = defaultNetReadTimeout
+	}
+
+	if fp.NetWriteTimeout.Duration == 0 {
+		fp.NetWriteTimeout.Duration = defaultNetWriteTimeout
 	}
 
 	if fp.SaveQueryResult == "" {
