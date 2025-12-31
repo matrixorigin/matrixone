@@ -1461,7 +1461,7 @@ func Decimal128FromInt64(x int64) Decimal128 {
 	if x >= 0 {
 		return Decimal128{uint64(x), 0}
 	} else {
-		return Decimal128{^uint64(x), ^uint64(0)}
+		return Decimal128{uint64(x), ^uint64(0)}
 	}
 }
 
@@ -1477,7 +1477,7 @@ func Decimal256FromInt64(x int64) Decimal256 {
 	if x >= 0 {
 		return Decimal256{uint64(x), 0, 0, 0}
 	} else {
-		return Decimal256{^uint64(x), ^uint64(0), ^uint64(0), ^uint64(0)}
+		return Decimal256{uint64(x), ^uint64(0), ^uint64(0), ^uint64(0)}
 	}
 }
 

@@ -1,4 +1,4 @@
-// Copyright 2024 Matrix Origin
+// Copyright 2021 - 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,17 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package agg
+package aggexec
 
 import (
+	"unsafe"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"golang.org/x/exp/constraints"
 )
 
-type numeric interface {
-	types.Ints | types.UInts | types.Floats
+func countSumSize[T float64 | int64 | uint64, A types.Ints | types.UInts | types.Floats]() int {
+	return int(unsafe.Sizeof(countSum[T, A]{}))
 }
 
-type canCompare interface {
-	constraints.Integer | constraints.Float | types.Date | types.Datetime | types.Timestamp
+func countSumDecSize() int {
+	return int(unsafe.Sizeof(countSumDec{}))
 }
