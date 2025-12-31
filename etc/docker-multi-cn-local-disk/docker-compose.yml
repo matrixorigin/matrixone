@@ -92,9 +92,16 @@ services:
       - matrixone
     user: "${DOCKER_UID:-501}:${DOCKER_GID:-20}" # Run as current user (macOS default: 501:20, Linux: use 1000:1000)
     entrypoint: [ "/mo-service" ]
-    command: [ "-cfg", "/etc/docker-multi-cn-local-disk/tn.toml" ]
+    command:
+      - "-cfg"
+      - "/etc/docker-multi-cn-local-disk/tn.toml"
+      - "-block-profile-rate=${BLOCK_PROFILE_RATE:-100}"
+      - "-mutex-profile-fraction=${MUTEX_PROFILE_FRACTION:-100}"
+      - "-debug-http=:6063"
     cap_add:
       - NET_ADMIN # Required for network chaos testing with tc (traffic control)
+    ports:
+      - "6063:6063" # HTTP profiling endpoint
     volumes:
       - ../../mo-data:/mo-data
       - ../../logs:/logs
@@ -118,11 +125,17 @@ services:
       - matrixone
     user: "${DOCKER_UID:-501}:${DOCKER_GID:-20}" # Run as current user (macOS default: 501:20, Linux: use 1000:1000)
     entrypoint: [ "/mo-service" ]
-    command: [ "-cfg", "/etc/docker-multi-cn-local-disk/cn1.toml" ]
+    command:
+      - "-cfg"
+      - "/etc/docker-multi-cn-local-disk/cn1.toml"
+      - "-block-profile-rate=${BLOCK_PROFILE_RATE:-100}"
+      - "-mutex-profile-fraction=${MUTEX_PROFILE_FRACTION:-100}"
+      - "-debug-http=:6061"
     cap_add:
       - NET_ADMIN # Required for network chaos testing with tc (traffic control)
     ports:
       - "16001:16001" # SQL port
+      - "6061:6061" # HTTP profiling endpoint
     volumes:
       - ../../mo-data:/mo-data
       - ../../logs:/logs
@@ -146,11 +159,17 @@ services:
       - matrixone
     user: "${DOCKER_UID:-501}:${DOCKER_GID:-20}" # Run as current user (macOS default: 501:20, Linux: use 1000:1000)
     entrypoint: [ "/mo-service" ]
-    command: [ "-cfg", "/etc/docker-multi-cn-local-disk/cn2.toml" ]
+    command:
+      - "-cfg"
+      - "/etc/docker-multi-cn-local-disk/cn2.toml"
+      - "-block-profile-rate=${BLOCK_PROFILE_RATE:-100}"
+      - "-mutex-profile-fraction=${MUTEX_PROFILE_FRACTION:-100}"
+      - "-debug-http=:6062"
     cap_add:
       - NET_ADMIN # Required for network chaos testing with tc (traffic control)
     ports:
       - "16002:16002" # SQL port
+      - "6062:6062" # HTTP profiling endpoint
     volumes:
       - ../../mo-data:/mo-data
       - ../../logs:/logs
