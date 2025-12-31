@@ -79,7 +79,7 @@ show variables where variable_name like 'system%' and variable_name != 'system_t
 Variable_name    Value
 select @@system_time_zone != '';
 @@system_time_zone != 
-true
+1
 show variables like 'trans%';
 Variable_name    Value
 transaction_alloc_block_size    8192

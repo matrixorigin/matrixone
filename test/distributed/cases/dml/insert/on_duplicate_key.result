@@ -229,11 +229,11 @@ create table users (id int primary key auto_increment, counter int, create_at da
 insert into users (id, counter) values ('112',1);
 select id, counter, create_at = update_at from users;
 id    counter    create_at = update_at
-112    1    true
+112    1    1
 select sleep(1);
 sleep(1)
 0
 insert into users (id, counter) values ('112',2) on duplicate key update counter=counter+values(counter), create_at=current_timestamp();
 select id, counter, create_at = update_at from users;
 id    counter    create_at = update_at
-112    3    true
+112    3    1

@@ -21,7 +21,7 @@ d
 DROP TABLE t1;
 SELECT UTC_DATE() IS NOT NULL AS not_null_check;
 not_null_check
-true
+1
 SELECT UTC_DATE() + INTERVAL 1 DAY AS tomorrow;
 tomorrow
 2025-11-22

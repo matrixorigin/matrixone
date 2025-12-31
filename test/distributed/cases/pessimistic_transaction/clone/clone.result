@@ -451,8 +451,8 @@ set time_zone = 'SYSTEM';
 load data infile '$resources/load_data/time_date_1.csv' into table t1 fields terminated by ',';
 select * from t1;
 col1    col2    col3    col4
-1000-01-01    0001-01-01 00:00:00    1970-01-01 00:00:01    false
-9999-12-31    9999-12-31 00:00:00    2038-01-19 00:00:00    true
+1000-01-01    0001-01-01 00:00:00    1970-01-01 00:00:01    0
+9999-12-31    9999-12-31 00:00:00    2038-01-19 00:00:00    1
 drop database if exists test08;
 create database test08;
 use test08;
@@ -515,8 +515,8 @@ col1
 use test07;
 select * from t1;
 col1    col2    col3    col4
-1000-01-01    0001-01-01 00:00:00    1970-01-01 00:00:01    false
-9999-12-31    9999-12-31 00:00:00    2038-01-19 00:00:00    true
+1000-01-01    0001-01-01 00:00:00    1970-01-01 00:00:01    0
+9999-12-31    9999-12-31 00:00:00    2038-01-19 00:00:00    1
 use test08;
 select * from vtab32;
 id    vecf32_3    vecf32_5
@@ -649,8 +649,8 @@ use test06_new;
 use test07_new;
 select * from t1;
 col1    col2    col3    col4
-1000-01-01    0001-01-01 00:00:00    1970-01-01 00:00:01    false
-9999-12-31    9999-12-31 00:00:00    2038-01-19 00:00:00    true
+1000-01-01    0001-01-01 00:00:00    1970-01-01 00:00:01    0
+9999-12-31    9999-12-31 00:00:00    2038-01-19 00:00:00    1
 use test08_new;
 select * from vtab32;
 id    vecf32_3    vecf32_5

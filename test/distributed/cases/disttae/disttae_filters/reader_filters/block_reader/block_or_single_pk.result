@@ -3,11 +3,11 @@ create database block_or_spk;
 use block_or_spk;
 select enable_fault_injection();
 enable_fault_injection()
-true
+1
 create table spk_int(a int primary key, b int);
 select add_fault_point('fj/cn/flush_small_objs',':::','echo',40,'block_or_spk.spk_int');
 add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, block_or_spk.spk_int)
-true
+1
 insert into spk_int select result, result * 10 from generate_series(1, 8192) g;
 select a from spk_int where a = 10 or a in (20, 30, 40) order by a;
 a
@@ -59,7 +59,7 @@ drop table spk_int;
 create table spk_uint(a bigint unsigned primary key, b bigint);
 select add_fault_point('fj/cn/flush_small_objs',':::','echo',40,'block_or_spk.spk_uint');
 add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, block_or_spk.spk_uint)
-true
+1
 insert into spk_uint select result, result * 10 from generate_series(1, 8192) g;
 select a from spk_uint where a in (1, 2, 3) or a = 10 order by a;
 a
@@ -97,7 +97,7 @@ drop table spk_uint;
 create table spk_double(a double primary key, b double);
 select add_fault_point('fj/cn/flush_small_objs',':::','echo',40,'block_or_spk.spk_double');
 add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, block_or_spk.spk_double)
-true
+1
 insert into spk_double select result + 0.5, result * 1.0 from generate_series(1, 8192) g;
 select a from spk_double where a = 10.5 or a in (20.5, 30.5, 40.5) order by a;
 a
@@ -149,7 +149,7 @@ drop table spk_double;
 create table spk_decimal(a decimal(20, 0) primary key, b decimal(20, 0));
 select add_fault_point('fj/cn/flush_small_objs',':::','echo',40,'block_or_spk.spk_decimal');
 add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, block_or_spk.spk_decimal)
-true
+1
 insert into spk_decimal select result, result * 10 from generate_series(1, 8192) g;
 select a from spk_decimal where a = 10 or a in (20, 30, 40) order by a;
 a
@@ -200,7 +200,7 @@ drop table spk_decimal;
 create table spk_date(a date primary key, b int);
 select add_fault_point('fj/cn/flush_small_objs',':::','echo',40,'block_or_spk.spk_date');
 add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, block_or_spk.spk_date)
-true
+1
 insert into spk_date select date '2024-01-01' + interval result day, result from generate_series(1, 8192) g;
 select a from spk_date where a = date '2024-01-10' or a in (date '2024-01-20', date '2024-01-30') order by a;
 a
@@ -256,7 +256,7 @@ drop table spk_date;
 create table spk_ts(a timestamp primary key, b int);
 select add_fault_point('fj/cn/flush_small_objs',':::','echo',40,'block_or_spk.spk_ts');
 add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, block_or_spk.spk_ts)
-true
+1
 insert into spk_ts select timestamp '2024-01-01 00:00:00' + interval result minute, result from generate_series(1, 8192) g;
 select a from spk_ts where a = timestamp '2024-01-01 00:10:00' or a in (timestamp '2024-01-01 00:20:00', timestamp '2024-01-01 00:30:00') order by a;
 a
@@ -310,7 +310,7 @@ drop table spk_ts;
 create table spk_uuid(a uuid primary key, b int);
 select add_fault_point('fj/cn/flush_small_objs',':::','echo',40,'block_or_spk.spk_uuid');
 add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, block_or_spk.spk_uuid)
-true
+1
 insert into spk_uuid
 select cast(concat('00000000-0000-0000-0000-', lpad(lower(hex(result)), 12, '0')) as uuid), result
 from generate_series(1, 8192) g;
@@ -366,7 +366,7 @@ drop table spk_uuid;
 create table spk_varchar(a varchar(64) primary key, b int);
 select add_fault_point('fj/cn/flush_small_objs',':::','echo',40,'block_or_spk.spk_varchar');
 add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, block_or_spk.spk_varchar)
-true
+1
 insert into spk_varchar select cast(result as varchar), result from generate_series(1, 8192) g;
 select a from spk_varchar where a = '10' or a in ('20', '30', '40') order by cast(a as int);
 a
@@ -409,4 +409,4 @@ drop table spk_varchar;
 drop database block_or_spk;
 select disable_fault_injection();
 disable_fault_injection()
-true
+1

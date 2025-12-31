@@ -9,7 +9,7 @@ current_utc_time_no_parens
 23:15:20
 select utc_time() = utc_time as should_be_true;
 should_be_true
-true
+1
 SELECT UTC_TIME(0) AS utc_time_scale0;
 utc_time_scale0
 23:15:20
@@ -28,7 +28,7 @@ SQL parser error: You have an error in your SQL syntax; check the manual that co
 DROP TABLE t1;
 SELECT UTC_TIME() IS NOT NULL AS not_null_check;
 not_null_check
-true
+1
 SELECT UTC_TIME() + INTERVAL 1 HOUR AS one_hour_later;
 invalid argument operator +, bad value [TIME INTERVAL]
 SELECT UTC_TIME() - INTERVAL 30 MINUTE AS thirty_minutes_ago;

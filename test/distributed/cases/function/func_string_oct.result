@@ -85,4 +85,4 @@ drop table t1;
 drop table t2;
 SELECT OCT(NULL) IS UNKNOWN;
 OCT(null) is unknown
-true
+1

@@ -26,16 +26,16 @@ insert into time_window02 values ('2023-10-26 10:20:00.000', null);
 insert into time_window02 values ('2023-10-26 10:30:00.000', true);
 select * from time_window02;
 ts    col2
-2023-10-26 10:00:00    false
-2023-10-26 10:10:00    true
+2023-10-26 10:00:00    0
+2023-10-26 10:10:00    1
 2023-10-26 10:20:00    null
-2023-10-26 10:30:00    true
+2023-10-26 10:30:00    1
 select _wstart, _wend, max(col2), min(col2) from time_window02 where ts > '2020-01-11 12:00:12.000' and ts < '2024-01-13 00:00:00.000' interval(ts, 10, second) fill(prev);
 _wstart    _wend    max(col2)    min(col2)
-2023-10-26 10:00:00    2023-10-26 10:00:10    false    false
-2023-10-26 10:10:00    2023-10-26 10:10:10    true    true
-2023-10-26 10:20:00    2023-10-26 10:20:10    true    true
-2023-10-26 10:30:00    2023-10-26 10:30:10    true    true
+2023-10-26 10:00:00    2023-10-26 10:00:10    0    0
+2023-10-26 10:10:00    2023-10-26 10:10:10    1    1
+2023-10-26 10:20:00    2023-10-26 10:20:10    1    1
+2023-10-26 10:30:00    2023-10-26 10:30:10    1    1
 drop table time_window02;
 drop table if exists time_window03;
 create table time_window03 (ts datetime primary key , col2 int);

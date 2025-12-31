@@ -326,10 +326,10 @@ use test;
 create table t1(a int primary key, b int);
 select enable_fault_injection();
 enable_fault_injection()
-true
+1
 select add_fault_point('fj/cn/flush_small_objs',':::','echo',40,'test.t1');
 add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, test.t1)
-true
+1
 insert into t1 select *, 1 from generate_series(1, 1000*1000*10)g;
 select sum(b) from t1;
 sum(b)
@@ -340,5 +340,5 @@ sum(b)
 10100000
 select disable_fault_injection();
 disable_fault_injection()
-true
+1
 drop database if exists test;

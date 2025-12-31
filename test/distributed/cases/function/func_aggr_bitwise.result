@@ -243,7 +243,7 @@ Fld1    BIT_AND(Fld2)    BIT_OR(Fld2)    BIT_XOR(Fld2)
 drop table t1;
 SELECT BIT_AND(1)<BIT_AND(2), BIT_AND(1)>BIT_OR(3), BIT_AND(3)>BIT_XOR(5);
 BIT_AND(1) < BIT_AND(2)    BIT_AND(1) > BIT_OR(3)    BIT_AND(3) > BIT_XOR(5)
-true    false    false
+1    0    0
 SELECT BIT_AND(1 - 1), BIT_OR(1 - (-1)), BIT_XOR(1 / 0);
 Data truncation: division by zero
 drop table if exists t1;

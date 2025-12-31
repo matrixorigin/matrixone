@@ -294,9 +294,9 @@ public    2    2
 accountadmin    2    2
 select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name='test_role';
 role_name    privilege_id    with_grant_option
-test_role    14    false
-test_role    29    false
-test_role    38    false
+test_role    14    0
+test_role    29    0
+test_role    38    0
 drop snapshot if exists prvis_sp01;
 create snapshot prvis_sp01 for cluster;
 drop role test_role;
@@ -314,9 +314,9 @@ accountadmin    2    2
 test_role    2    2
 select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name='test_role';
 role_name    privilege_id    with_grant_option
-test_role    14    false
-test_role    29    false
-test_role    38    false
+test_role    14    0
+test_role    29    0
+test_role    38    0
 drop database testdb;
 Can't drop database 'testdb'; database doesn't exist
 drop role test_role;
@@ -339,17 +339,17 @@ public    2    2
 accountadmin    2    2
 select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name='role_account_priv_1';
 role_name    privilege_id    with_grant_option
-role_account_priv_1    3    true
-role_account_priv_1    4    true
-role_account_priv_1    5    true
-role_account_priv_1    6    true
-role_account_priv_1    7    true
-role_account_priv_1    9    true
-role_account_priv_1    10    true
-role_account_priv_1    11    true
-role_account_priv_1    12    true
-role_account_priv_1    13    true
-role_account_priv_1    30    false
+role_account_priv_1    3    1
+role_account_priv_1    4    1
+role_account_priv_1    5    1
+role_account_priv_1    6    1
+role_account_priv_1    7    1
+role_account_priv_1    9    1
+role_account_priv_1    10    1
+role_account_priv_1    11    1
+role_account_priv_1    12    1
+role_account_priv_1    13    1
+role_account_priv_1    30    0
 drop snapshot if exists grant_sp01;
 create snapshot grant_sp01 for cluster;
 drop user user_grant_2;
@@ -366,17 +366,17 @@ accountadmin    2    2
 role_account_priv_1    2    2
 select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name='role_account_priv_1';
 role_name    privilege_id    with_grant_option
-role_account_priv_1    3    true
-role_account_priv_1    4    true
-role_account_priv_1    5    true
-role_account_priv_1    6    true
-role_account_priv_1    7    true
-role_account_priv_1    9    true
-role_account_priv_1    10    true
-role_account_priv_1    11    true
-role_account_priv_1    12    true
-role_account_priv_1    13    true
-role_account_priv_1    30    false
+role_account_priv_1    3    1
+role_account_priv_1    4    1
+role_account_priv_1    5    1
+role_account_priv_1    6    1
+role_account_priv_1    7    1
+role_account_priv_1    9    1
+role_account_priv_1    10    1
+role_account_priv_1    11    1
+role_account_priv_1    12    1
+role_account_priv_1    13    1
+role_account_priv_1    30    0
 drop user user_grant_2;
 drop role role_account_priv_1;
 drop snapshot grant_sp01;
@@ -411,17 +411,17 @@ public    2    2
 accountadmin    2    2
 select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name='role_account_priv_3';
 role_name    privilege_id    with_grant_option
-role_account_priv_3    3    true
-role_account_priv_3    4    true
-role_account_priv_3    5    true
-role_account_priv_3    6    true
-role_account_priv_3    7    true
-role_account_priv_3    9    true
-role_account_priv_3    10    true
-role_account_priv_3    11    true
-role_account_priv_3    12    true
-role_account_priv_3    13    true
-role_account_priv_3    30    false
+role_account_priv_3    3    1
+role_account_priv_3    4    1
+role_account_priv_3    5    1
+role_account_priv_3    6    1
+role_account_priv_3    7    1
+role_account_priv_3    9    1
+role_account_priv_3    10    1
+role_account_priv_3    11    1
+role_account_priv_3    12    1
+role_account_priv_3    13    1
+role_account_priv_3    30    0
 restore account acc01{snapshot="grant_sp02"};
 select user_name, authentication_string, status, login_type, creator, owner, default_role from mo_catalog.mo_user;
 user_name    authentication_string    status    login_type    creator    owner    default_role
@@ -456,21 +456,21 @@ public    2    2
 accountadmin    2    2
 select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name in ('r1','r2','r3','r4','r5');
 role_name    privilege_id    with_grant_option
-r1    30    false
-r2    30    false
-r3    30    false
-r4    30    false
-r5    30    false
-r1    31    false
-r2    31    false
-r3    31    false
-r4    31    false
-r5    31    false
-r1    32    false
-r2    32    false
-r3    32    false
-r4    32    false
-r5    32    false
+r1    30    0
+r2    30    0
+r3    30    0
+r4    30    0
+r5    30    0
+r1    31    0
+r2    31    0
+r3    31    0
+r4    31    0
+r5    31    0
+r1    32    0
+r2    32    0
+r3    32    0
+r4    32    0
+r5    32    0
 drop snapshot if exists sp01;
 create snapshot sp01 for cluster;
 drop role r1,r2,r3,r4,r5;
@@ -502,21 +502,21 @@ r9    2    2
 r10    2    2
 select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name in ('r1','r2','r3','r4','r5');
 role_name    privilege_id    with_grant_option
-r1    30    false
-r1    31    false
-r1    32    false
-r2    30    false
-r2    31    false
-r2    32    false
-r3    30    false
-r3    31    false
-r3    32    false
-r4    30    false
-r4    31    false
-r4    32    false
-r5    30    false
-r5    31    false
-r5    32    false
+r1    30    0
+r1    31    0
+r1    32    0
+r2    30    0
+r2    31    0
+r2    32    0
+r3    30    0
+r3    31    0
+r3    32    0
+r4    30    0
+r4    31    0
+r4    32    0
+r5    30    0
+r5    31    0
+r5    32    0
 drop role r1,r2,r3,r4,r5,r6,r7,r8,r9,r10;
 drop snapshot sp01;
 drop role if exists r1, r2, r6, r7;
@@ -547,12 +547,12 @@ public    2    2
 accountadmin    2    2
 select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name in ('r1', 'r2');
 role_name    privilege_id    with_grant_option
-r1    30    true
-r2    30    true
-r1    31    true
-r2    31    true
-r1    32    true
-r2    32    true
+r1    30    1
+r2    30    1
+r1    31    1
+r2    31    1
+r1    32    1
+r2    32    1
 drop snapshot if exists sp02;
 create snapshot sp02 for cluster;
 drop role r1, r2;
@@ -575,12 +575,12 @@ r6    2    2
 r7    2    2
 select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name in ('r1', 'r2');
 role_name    privilege_id    with_grant_option
-r1    30    true
-r1    31    true
-r1    32    true
-r2    30    true
-r2    31    true
-r2    32    true
+r1    30    1
+r1    31    1
+r1    32    1
+r2    30    1
+r2    31    1
+r2    32    1
 drop role r1, r2;
 drop snapshot sp02;
 drop role if exists r5;
@@ -617,7 +617,7 @@ r6    2    2
 r7    2    2
 select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name in ('r5');
 role_name    privilege_id    with_grant_option
-r5    6    false
+r5    6    0
 drop snapshot if exists sp03;
 create snapshot sp03 for cluster;
 drop role r5;
@@ -655,7 +655,7 @@ r7    2    2
 r5    2    2
 select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name in ('r5');
 role_name    privilege_id    with_grant_option
-r5    6    false
+r5    6    0
 drop user user01, user02, user03, user04, user05;
 drop role r5;
 drop snapshot sp03;

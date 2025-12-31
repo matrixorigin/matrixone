@@ -11,10 +11,10 @@ role_id    role_name    owner
 1    public    0
 select enable_fault_injection();
 enable_fault_injection()
-true
+1
 select add_fault_point('fj/trace/partitionstate', ':::', 'echo', 20, 'mo_tables');
 add_fault_point(fj/trace/partitionstate, :::, echo, 20, mo_tables)
-true
+1
 create account account1 ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 select role_id,role_name,owner from mo_catalog.mo_role;
 role_id    role_name    owner
@@ -275,7 +275,7 @@ created_time    TIMESTAMP(0)    YES        null
 comment    TEXT(0)    YES        null
 select disable_fault_injection();
 disable_fault_injection()
-true
+1
 create account ac_1 ADMIN_NAME 'admin' IDENTIFIED BY '111';
 create database sys_db1;
 create table sys_db1.sys_t1(c1 char);
@@ -539,14 +539,14 @@ UNIQUE KEY `idx_mocadmin_users_username` (`username`)
 );
 SELECT column_name, column_default, is_nullable = 'YES', data_type, character_maximum_length, column_type, column_key, extra, column_comment, numeric_precision, numeric_scale , datetime_precision FROM information_schema.columns WHERE table_schema = 'etao' AND table_name = 'users' ORDER BY ORDINAL_POSITION;
 column_name    column_default    is_nullable = YES    data_type    character_maximum_length    column_type    column_key    extra    column_comment    numeric_precision    numeric_scale    datetime_precision
-id    null    false    VARCHAR    128    VARCHAR(128)    PRI            null    null    null
-username    null    true    VARCHAR    255    VARCHAR(255)    UNI            null    null    null
-password    null    true    VARCHAR    512    VARCHAR(512)                null    null    null
-user_status    null    true    TINYINT    null    TINYINT(8)                null    null    null
-user_role    null    true    TINYINT    null    TINYINT(8)                null    null    null
-created_at    null    true    DATETIME    null    DATETIME(0)                null    null    0
-updated_at    null    true    DATETIME    null    DATETIME(0)                null    null    0
-user_source    null    true    TINYINT    null    TINYINT(8)                null    null    null
+id    null    0    VARCHAR    128    VARCHAR(128)    PRI            null    null    null
+username    null    1    VARCHAR    255    VARCHAR(255)    UNI            null    null    null
+password    null    1    VARCHAR    512    VARCHAR(512)                null    null    null
+user_status    null    1    TINYINT    null    TINYINT(8)                null    null    null
+user_role    null    1    TINYINT    null    TINYINT(8)                null    null    null
+created_at    null    1    DATETIME    null    DATETIME(0)                null    null    0
+updated_at    null    1    DATETIME    null    DATETIME(0)                null    null    0
+user_source    null    1    TINYINT    null    TINYINT(8)                null    null    null
 drop database etao;
 drop account if exists acc1;
 create account acc1 admin_name 'root' identified by '111';
@@ -567,13 +567,13 @@ UNIQUE KEY `idx_mocadmin_users_username` (`username`)
 );
 SELECT column_name, column_default, is_nullable = 'YES', data_type, character_maximum_length, column_type, column_key, extra, column_comment, numeric_precision, numeric_scale , datetime_precision FROM information_schema.columns WHERE table_schema = 'etao' AND table_name = 'users' ORDER BY ORDINAL_POSITION;
 column_name    column_default    is_nullable = YES    data_type    character_maximum_length    column_type    column_key    extra    column_comment    numeric_precision    numeric_scale    datetime_precision
-id    null    false    VARCHAR    128    VARCHAR(128)    PRI            null    null    null
-username    null    true    VARCHAR    255    VARCHAR(255)    UNI            null    null    null
-password    null    true    VARCHAR    512    VARCHAR(512)                null    null    null
-user_status    null    true    TINYINT    null    TINYINT(8)                null    null    null
-user_role    null    true    TINYINT    null    TINYINT(8)                null    null    null
-created_at    null    true    DATETIME    null    DATETIME(0)                null    null    0
-updated_at    null    true    DATETIME    null    DATETIME(0)                null    null    0
-user_source    null    true    TINYINT    null    TINYINT(8)                null    null    null
+id    null    0    VARCHAR    128    VARCHAR(128)    PRI            null    null    null
+username    null    1    VARCHAR    255    VARCHAR(255)    UNI            null    null    null
+password    null    1    VARCHAR    512    VARCHAR(512)                null    null    null
+user_status    null    1    TINYINT    null    TINYINT(8)                null    null    null
+user_role    null    1    TINYINT    null    TINYINT(8)                null    null    null
+created_at    null    1    DATETIME    null    DATETIME(0)                null    null    0
+updated_at    null    1    DATETIME    null    DATETIME(0)                null    null    0
+user_source    null    1    TINYINT    null    TINYINT(8)                null    null    null
 drop database etao;
 drop account acc1;

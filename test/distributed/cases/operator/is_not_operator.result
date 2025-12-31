@@ -1,15 +1,15 @@
 SELECT 1 IS TRUE, 0 IS FALSE;
 1 is true    0 is false
-true    true
+1    1
 SELECT NULL IS TRUE;
 null is true
-false
+0
 SELECT 1 IS NULL, 0 IS NULL, NULL IS NULL;
 1 is null    0 is null    null is null
-false    false    true
+0    0    1
 SELECT '' IS NULL, ' ' IS NULL;
  is null      is null
-false    false
+0    0
 DROP TABLE IF EXISTS is_test;
 CREATE TABLE is_test(
 str1 CHAR(20),
@@ -65,22 +65,22 @@ INSERT INTO is_test(float_32, float_64) VALUES(1.0, 0.4999999999999);
 INSERT INTO is_test(float_32, float_64) VALUES(0.51, -0.00000000000000000000001);
 SELECT -1 IS TRUE;
 -1 is true
-true
+1
 SELECT 0 IS TRUE;
 0 is true
-false
+0
 SELECT -1 IS TRUE;
 -1 is true
-true
+1
 SELECT 1 IS TRUE;
 1 is true
-true
+1
 SELECT 2 IS TRUE;
 2 is true
-true
+1
 SELECT -2 IS TRUE;
 -2 is true
-true
+1
 SELECT * FROM is_test WHERE big IS TRUE;
 tiny    small    int_test    big    tiny_un    small_un    int_test_un    big_un    float_32    float_64
 SELECT small_un FROM is_test WHERE small_un IS TRUE;
@@ -109,25 +109,25 @@ INSERT INTO is_test VALUES(1, NULL);
 INSERT INTO is_test VALUES(NULL, 0);
 SELECT * FROM is_test WHERE b1 IS TRUE;
 b1    b2
-true    false
-true    false
-true    null
+1    0
+1    0
+1    null
 SELECT * FROM is_test WHERE b1 IS NOT FALSE;
 b1    b2
-true    false
-true    false
-true    null
-null    false
+1    0
+1    0
+1    null
+null    0
 SELECT * FROM is_test WHERE b2 IS FALSE;
 b1    b2
-true    false
-true    false
-null    false
+1    0
+1    0
+null    0
 SELECT * FROM is_test WHERE b2 IS NOT FALSE;
 b1    b2
-false    true
-false    true
-true    null
+0    1
+0    1
+1    null
 DELETE FROM is_test;
 DROP TABLE IF EXISTS is_test;
 DROP TABLE IF EXISTS t1;
@@ -228,15 +228,15 @@ user_id    user_name
 7324     
 SELECT * FROM (SELECT * FROM t1 WHERE pay_status IS FALSE) AS t WHERE LENGTH(user_name) IS TRUE;
 user_id    user_name    order_time    pay_status
-7324         2022-12-06 09:22:19    false
+7324         2022-12-06 09:22:19    0
 SELECT
 t1.user_id, user_name, pay_status
 FROM t1
 INNER JOIN t2 ON t1.user_id = t2.user_id
 WHERE pay_status IS TRUE AND number IS NOT FALSE;
 user_id    user_name    pay_status
-7321    小明    true
-7323    小刘    true
+7321    小明    1
+7323    小刘    1
 SELECT
 t1.user_name, order_time, product_id
 FROM
@@ -268,16 +268,16 @@ INSERT INTO temp VALUES(-1, '0', TRUE, 0);
 INSERT INTO temp VALUES(-1, '1', 0, 0);
 SELECT * FROM temp WHERE int_test IS FALSE;
 tiny    str    b    int_test
--1    0    true    0
--1    1    false    0
+-1    0    1    0
+-1    1    0    0
 SELECT * FROM temp WHERE str IS FALSE AND int_test IS FALSE;
 tiny    str    b    int_test
--1    0    true    0
+-1    0    1    0
 SELECT * FROM (SELECT * FROM temp WHERE str IS TRUE) AS t WHERE int_test IS TRUE;
 tiny    str    b    int_test
-null    1    false    1
+null    1    0    1
 SELECT * FROM (SELECT * FROM temp WHERE tiny IS FALSE) AS t WHERE b IS NOT TRUE;
 tiny    str    b    int_test
 SELECT * FROM (SELECT * FROM temp WHERE tiny IS TRUE) AS t WHERE str IS TRUE;
 tiny    str    b    int_test
--1    1    false    0
+-1    1    0    0
