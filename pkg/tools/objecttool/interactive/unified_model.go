@@ -44,6 +44,9 @@ func NewObjectUnifiedModel(ctx context.Context, reader *objecttool.ObjectReader,
 		if opts.ColumnNames != nil {
 			state.colNames = opts.ColumnNames
 		}
+		if opts.ColumnExpander != nil {
+			state.colExpander = opts.ColumnExpander
+		}
 		// Note: ColumnFormats are handled by the existing bubbletea.go
 	}
 

@@ -18,6 +18,8 @@ import (
 	"context"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/tools/checkpointtool"
 	objectinteractive "github.com/matrixorigin/matrixone/pkg/tools/objecttool/interactive"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
@@ -46,14 +48,28 @@ func Run(reader *checkpointtool.CheckpointReader) error {
 				StartRow: int64(rng.Start.GetRowOffset()),
 				EndRow:   int64(rng.End.GetRowOffset()),
 				ColumnNames: map[uint16]string{
-					0: ckputil.TableObjectsAttr_Accout,
-					1: ckputil.TableObjectsAttr_DB,
-					2: ckputil.TableObjectsAttr_Table,
-					3: ckputil.TableObjectsAttr_ObjectType,
-					4: ckputil.TableObjectsAttr_ID,
-					5: ckputil.TableObjectsAttr_CreateTS,
-					6: ckputil.TableObjectsAttr_DeleteTS,
-					7: ckputil.TableObjectsAttr_Cluster,
+					0:  ckputil.TableObjectsAttr_Accout,
+					1:  ckputil.TableObjectsAttr_DB,
+					2:  ckputil.TableObjectsAttr_Table,
+					3:  ckputil.TableObjectsAttr_ObjectType,
+					4:  "object_name",
+					5:  "flags",
+					6:  "osize",
+					7:  "csize",
+					8:  ckputil.TableObjectsAttr_CreateTS,
+					9:  ckputil.TableObjectsAttr_DeleteTS,
+					10: ckputil.TableObjectsAttr_Cluster,
+				},
+				ColumnExpander: &objectinteractive.ColumnExpander{
+					SourceCol: 4, // id column
+					NewCols:   []string{"object_name", "flags", "osize", "csize"},
+					NewTypes: []types.Type{
+						types.T_varchar.ToType(),
+						types.T_varchar.ToType(),
+						types.T_varchar.ToType(),
+						types.T_varchar.ToType(),
+					},
+					ExpandFunc: expandObjectStats,
 				},
 			}
 			if err := objectinteractive.RunUnified(context.Background(), um.GetObjectToOpen(), opts); err != nil {
@@ -65,5 +81,38 @@ func Run(reader *checkpointtool.CheckpointReader) error {
 		}
 
 		return nil
+	}
+}
+
+// expandObjectStats expands ObjectStats bytes into multiple values
+func expandObjectStats(value any) []any {
+	data, ok := value.([]byte)
+	if !ok || len(data) != objectio.ObjectStatsLen {
+		return []any{"", "", "", ""}
+	}
+
+	var stats objectio.ObjectStats
+	stats.UnMarshal(data)
+
+	// Format flags: A=Appendable, S=Sorted, C=CNCreated
+	flags := ""
+	if stats.GetAppendable() {
+		flags += "A"
+	}
+	if stats.GetSorted() {
+		flags += "S"
+	}
+	if stats.GetCNCreated() {
+		flags += "C"
+	}
+	if flags == "" {
+		flags = "-"
+	}
+
+	return []any{
+		stats.ObjectName().String(),
+		flags,
+		formatSize(stats.OriginSize()),
+		formatSize(stats.Size()),
 	}
 }

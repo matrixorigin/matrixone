@@ -57,6 +57,9 @@ type State struct {
 	rowRangeStart int64 // Start row (0-based, -1 means no filter)
 	rowRangeEnd   int64 // End row (inclusive, -1 means no filter)
 
+	// Column expander (for splitting columns)
+	colExpander *ColumnExpander
+
 	// View mode
 	viewMode   ViewMode              // Current view mode
 	metaRows   [][]string            // Metadata rows (for BlkMeta/ObjMeta mode)
@@ -245,6 +248,7 @@ func (s *State) CurrentRows() ([][]string, []string, error) {
 		rowNumbers[i-start] = fmt.Sprintf("(%d-%d)", s.currentBlock, i)
 
 		row := make([]string, len(cols))
+		var expandedValues []any // For column expander
 		for colIdx := range cols {
 			col := cols[colIdx]
 			vec := s.currentBatch.Vecs[colIdx]
@@ -292,6 +296,13 @@ func (s *State) CurrentRows() ([][]string, []string, error) {
 				value = vec.GetRawBytesAt(i)
 			}
 
+			// Check if this column needs expansion
+			if s.colExpander != nil && uint16(colIdx) == s.colExpander.SourceCol {
+				expandedValues = s.colExpander.ExpandFunc(value)
+				row[colIdx] = "" // Placeholder, will be replaced
+				continue
+			}
+
 			// Get formatter
 			formatter := s.formatter.GetFormatter(col.Idx, col.Type, value)
 			formatted := formatter.Format(value)
@@ -304,10 +315,33 @@ func (s *State) CurrentRows() ([][]string, []string, error) {
 				row[colIdx] = formatted
 			}
 		}
+
+		// Apply column expander
+		if s.colExpander != nil && expandedValues != nil {
+			row = s.expandRow(row, expandedValues)
+		}
 		rows[i-start] = row
 	}
 
 	return rows, rowNumbers, nil
+}
+
+// expandRow applies column expander to a row
+func (s *State) expandRow(row []string, expandedValues []any) []string {
+	exp := s.colExpander
+	result := make([]string, 0, len(row)+len(exp.NewCols)-1)
+	for i, cell := range row {
+		if uint16(i) == exp.SourceCol {
+			// Replace source column with expanded values
+			for j, val := range expandedValues {
+				formatter := s.formatter.GetFormatter(uint16(len(result)), exp.NewTypes[j], val)
+				result = append(result, formatter.Format(val))
+			}
+		} else {
+			result = append(result, cell)
+		}
+	}
+	return result
 }
 
 func (s *State) ensureBlockLoaded() error {
@@ -961,7 +995,11 @@ func (s *State) currentMetaRows() ([][]string, []string, error) {
 // Columns returns column information based on current mode
 func (s *State) Columns() []objecttool.ColInfo {
 	if s.viewMode == ViewModeData {
-		return s.reader.Columns()
+		cols := s.reader.Columns()
+		if s.colExpander != nil {
+			return s.expandColumns(cols)
+		}
+		return cols
 	}
 
 	// Convert internal ColInfo to objecttool.ColInfo
@@ -973,4 +1011,25 @@ func (s *State) Columns() []objecttool.ColInfo {
 		}
 	}
 	return cols
+}
+
+// expandColumns applies column expander to column list
+func (s *State) expandColumns(cols []objecttool.ColInfo) []objecttool.ColInfo {
+	exp := s.colExpander
+	result := make([]objecttool.ColInfo, 0, len(cols)+len(exp.NewCols)-1)
+	for i, col := range cols {
+		if uint16(i) == exp.SourceCol {
+			// Replace source column with expanded columns
+			for j := range exp.NewCols {
+				result = append(result, objecttool.ColInfo{
+					Idx:  uint16(len(result)),
+					Type: exp.NewTypes[j],
+				})
+			}
+		} else {
+			col.Idx = uint16(len(result))
+			result = append(result, col)
+		}
+	}
+	return result
 }
