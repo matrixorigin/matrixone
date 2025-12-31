@@ -42,20 +42,67 @@ type PageConfig struct {
 	CustomHints string
 }
 
-// DataProvider provides data for a page
+// DataProvider provides data for a page (数据源接口)
+// 实现这个接口就可以接入任何数据源
 type DataProvider interface {
 	GetRows() [][]string
-	GetRowNums() []string // Optional custom row numbers
-	GetOverview() string  // Dynamic overview (can change based on data)
+	GetRowNums() []string // Optional custom row numbers (nil = auto)
+	GetOverview() string  // Dynamic overview line
 }
 
-// ActionHandler handles page actions
+// ActionHandler handles page actions (行为接口)
+// 实现这个接口就可以定制页面行为
 type ActionHandler interface {
 	OnSelect(rowIdx int) tea.Cmd                // Enter key
 	OnBack() tea.Cmd                            // ESC/b key
 	OnCustomKey(key string) tea.Cmd             // Other keys
 	MatchRow(row []string, query string) bool   // For search
 	FilterRow(row []string, filter string) bool // For filter
+}
+
+// DefaultHandler provides default implementations for common behaviors
+// 大多数页面可以嵌入这个，只覆盖需要定制的方法
+type DefaultHandler struct {
+	OnSelectFunc    func(rowIdx int) tea.Cmd
+	OnBackFunc      func() tea.Cmd
+	OnCustomKeyFunc func(key string) tea.Cmd
+}
+
+func (h *DefaultHandler) OnSelect(rowIdx int) tea.Cmd {
+	if h.OnSelectFunc != nil {
+		return h.OnSelectFunc(rowIdx)
+	}
+	return nil
+}
+
+func (h *DefaultHandler) OnBack() tea.Cmd {
+	if h.OnBackFunc != nil {
+		return h.OnBackFunc()
+	}
+	return nil
+}
+
+func (h *DefaultHandler) OnCustomKey(key string) tea.Cmd {
+	if h.OnCustomKeyFunc != nil {
+		return h.OnCustomKeyFunc(key)
+	}
+	return nil
+}
+
+// MatchRow default: case-insensitive substring match on all columns
+func (h *DefaultHandler) MatchRow(row []string, query string) bool {
+	query = strings.ToLower(query)
+	for _, cell := range row {
+		if strings.Contains(strings.ToLower(cell), query) {
+			return true
+		}
+	}
+	return false
+}
+
+// FilterRow default: same as MatchRow
+func (h *DefaultHandler) FilterRow(row []string, filter string) bool {
+	return h.MatchRow(row, filter)
 }
 
 // GenericPage is the highest level component

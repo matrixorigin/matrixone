@@ -20,6 +20,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/matrixorigin/matrixone/pkg/tools/checkpointtool"
+	"github.com/matrixorigin/matrixone/pkg/tools/interactive"
 )
 
 // === Checkpoint List Provider ===
@@ -60,27 +61,16 @@ func (p *CheckpointListProvider) GetOverview() string {
 
 // === Checkpoint List Handler ===
 
-type checkpointListHandler struct{}
-
-func (h *checkpointListHandler) OnSelect(rowIdx int) tea.Cmd {
-	return func() tea.Msg { return selectCheckpointMsg{idx: rowIdx} }
+type checkpointListHandler struct {
+	interactive.DefaultHandler
 }
 
-func (h *checkpointListHandler) OnBack() tea.Cmd { return nil }
-
-func (h *checkpointListHandler) OnCustomKey(key string) tea.Cmd { return nil }
-
-func (h *checkpointListHandler) MatchRow(row []string, query string) bool {
-	for _, cell := range row {
-		if strings.Contains(strings.ToLower(cell), strings.ToLower(query)) {
-			return true
-		}
+func newCheckpointListHandler() *checkpointListHandler {
+	h := &checkpointListHandler{}
+	h.OnSelectFunc = func(rowIdx int) tea.Cmd {
+		return func() tea.Msg { return selectCheckpointMsg{idx: rowIdx} }
 	}
-	return false
-}
-
-func (h *checkpointListHandler) FilterRow(row []string, filter string) bool {
-	return h.MatchRow(row, filter)
+	return h
 }
 
 // === Tables List Provider ===
@@ -125,6 +115,7 @@ func (p *TablesListProvider) GetOverview() string {
 // === Tables List Handler ===
 
 type tablesListHandler struct {
+	interactive.DefaultHandler
 	state *State
 }
 
@@ -142,15 +133,7 @@ func (h *tablesListHandler) OnBack() tea.Cmd {
 
 func (h *tablesListHandler) OnCustomKey(key string) tea.Cmd { return nil }
 
-func (h *tablesListHandler) MatchRow(row []string, query string) bool {
-	for _, cell := range row {
-		if strings.Contains(cell, query) {
-			return true
-		}
-	}
-	return false
-}
-
+// FilterRow filters by account ID (first column)
 func (h *tablesListHandler) FilterRow(row []string, filter string) bool {
 	if len(row) > 0 {
 		return row[0] == filter
@@ -224,6 +207,7 @@ func (p *TableDetailProvider) GetOverview() string {
 // === Table Detail Handler ===
 
 type tableDetailHandler struct {
+	interactive.DefaultHandler
 	state *State
 }
 
@@ -248,17 +232,7 @@ func (h *tableDetailHandler) OnBack() tea.Cmd {
 	return func() tea.Msg { return goBackMsg{} }
 }
 
-func (h *tableDetailHandler) OnCustomKey(key string) tea.Cmd { return nil }
-
-func (h *tableDetailHandler) MatchRow(row []string, query string) bool {
-	for _, cell := range row {
-		if strings.Contains(strings.ToLower(cell), strings.ToLower(query)) {
-			return true
-		}
-	}
-	return false
-}
-
+// FilterRow filters by type (Data/Tomb)
 func (h *tableDetailHandler) FilterRow(row []string, filter string) bool {
 	if len(row) > 0 {
 		return strings.EqualFold(row[0], filter)

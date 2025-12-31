@@ -65,7 +65,7 @@ func (m *UnifiedModel) createCheckpointListPage() *interactive.GenericPage {
 		EnableBack:    false,
 	}
 	provider := &CheckpointListProvider{state: m.state}
-	handler := &checkpointListHandler{}
+	handler := newCheckpointListHandler()
 	return interactive.NewGenericPage(config, provider, handler)
 }
 
