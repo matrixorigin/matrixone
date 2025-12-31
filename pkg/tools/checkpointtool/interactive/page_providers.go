@@ -15,6 +15,7 @@
 package interactive
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -22,6 +23,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/matrixorigin/matrixone/pkg/tools/interactive"
+	"github.com/matrixorigin/matrixone/pkg/tools/objecttool"
 )
 
 // AccountsDataProvider provides data for accounts view
@@ -310,5 +312,175 @@ func (h *TablesActionHandler) Search(query string) []int {
 		}
 	}
 
+	return matches
+}
+// ObjectListDataProvider provides data for object list view
+type ObjectListDataProvider struct {
+	objectPath string
+	reader     *objecttool.ObjectReader
+	rows       [][]string
+	headers    []string
+}
+
+func NewObjectListDataProvider(objectPath string, startRow, endRow int64) (*ObjectListDataProvider, error) {
+	ctx := context.Background()
+	reader, err := objecttool.Open(ctx, objectPath)
+	if err != nil {
+		return nil, err
+	}
+
+	provider := &ObjectListDataProvider{
+		objectPath: objectPath,
+		reader:     reader,
+		headers:    []string{"Row", "Data"},
+	}
+
+	// Load data with range
+	if err := provider.loadData(startRow, endRow); err != nil {
+		reader.Close()
+		return nil, err
+	}
+
+	return provider, nil
+}
+
+func (p *ObjectListDataProvider) loadData(startRow, endRow int64) error {
+	ctx := context.Background()
+	info := p.reader.Info()
+	if startRow < 0 {
+		startRow = 0
+	}
+	if endRow < 0 || endRow >= int64(info.RowCount) {
+		endRow = int64(info.RowCount) - 1
+	}
+
+	// Read data by blocks
+	p.rows = make([][]string, 0, endRow-startRow+1)
+	currentRow := int64(0)
+	
+	for blockIdx := uint32(0); blockIdx < info.BlockCount; blockIdx++ {
+		batch, release, err := p.reader.ReadBlock(ctx, blockIdx)
+		if err != nil {
+			continue
+		}
+		
+		blockRowCount := int64(batch.RowCount())
+		
+		// Check if this block contains rows we need
+		if currentRow+blockRowCount <= startRow {
+			currentRow += blockRowCount
+			release()
+			continue
+		}
+		
+		if currentRow > endRow {
+			release()
+			break
+		}
+		
+		// Process rows in this block
+		for i := int64(0); i < blockRowCount; i++ {
+			rowIdx := currentRow + i
+			if rowIdx < startRow {
+				continue
+			}
+			if rowIdx > endRow {
+				break
+			}
+			
+			// Convert row data to string representation
+			rowData := make([]string, len(batch.Vecs))
+			for j, vec := range batch.Vecs {
+				if vec.Length() > int(i) {
+					// Use vector's String method for display
+					rowData[j] = vec.String()
+				} else {
+					rowData[j] = "NULL"
+				}
+			}
+			
+			p.rows = append(p.rows, []string{
+				fmt.Sprintf("%d", rowIdx),
+				strings.Join(rowData, " | "),
+			})
+		}
+		
+		currentRow += blockRowCount
+		release()
+	}
+
+	return nil
+}
+
+func (p *ObjectListDataProvider) GetRows() [][]string {
+	return p.rows
+}
+
+func (p *ObjectListDataProvider) GetHeaders() []string {
+	return p.headers
+}
+
+func (p *ObjectListDataProvider) GetTitle() string {
+	return fmt.Sprintf("Object Data: %s", p.objectPath)
+}
+
+func (p *ObjectListDataProvider) GetOverview() string {
+	if p.reader == nil {
+		return "No data"
+	}
+	info := p.reader.Info()
+	return fmt.Sprintf("Total rows: %d, Blocks: %d", info.RowCount, info.BlockCount)
+}
+
+func (p *ObjectListDataProvider) GetHints() string {
+	return "Press ESC to go back, q to quit"
+}
+
+func (p *ObjectListDataProvider) Close() {
+	if p.reader != nil {
+		p.reader.Close()
+	}
+}
+
+// ObjectListActionHandler handles actions for object list view
+type ObjectListActionHandler struct {
+	provider *ObjectListDataProvider
+}
+
+func NewObjectListActionHandler(provider *ObjectListDataProvider) *ObjectListActionHandler {
+	return &ObjectListActionHandler{provider: provider}
+}
+
+func (h *ObjectListActionHandler) HandleSelect(rowIndex int) tea.Cmd {
+	// Could implement row detail view here
+	return nil
+}
+
+func (h *ObjectListActionHandler) HandleCustomKey(key string) tea.Cmd {
+	return nil
+}
+
+func (h *ObjectListActionHandler) CanFilter() bool {
+	return false
+}
+
+func (h *ObjectListActionHandler) ApplyFilter(filter string) interactive.PageDataProvider {
+	return h.provider
+}
+
+func (h *ObjectListActionHandler) CanSearch() bool {
+	return true
+}
+
+func (h *ObjectListActionHandler) Search(query string) []int {
+	var matches []int
+	for i, row := range h.provider.GetRows() {
+		for _, cell := range row {
+			if strings.Contains(strings.ToLower(cell), strings.ToLower(query)) {
+				matches = append(matches, i)
+				break
+			}
+		}
+	}
 	return matches
 }

@@ -113,7 +113,7 @@ func NewPage(config PageConfig, provider PageDataProvider, handler PageActionHan
 }
 
 // Update handles all page updates
-func (p *Page) Update(msg tea.Msg) tea.Cmd {
+func (p *Page) Update(msg tea.Msg) (*Page, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		p.width = msg.Width
@@ -122,10 +122,84 @@ func (p *Page) Update(msg tea.Msg) tea.Cmd {
 		p.updateRenderer()
 
 	case tea.KeyMsg:
-		return p.handleKeyMsg(msg)
+		return p, p.handleKeyMsg(msg)
 	}
 
+	return p, nil
+}
+
+// Init initializes the page
+func (p *Page) Init() tea.Cmd {
 	return nil
+}
+
+// View renders the page
+func (p *Page) View() string {
+	if p.provider == nil {
+		return "No data provider"
+	}
+
+	var b strings.Builder
+	
+	// Title
+	b.WriteString(p.provider.GetTitle())
+	b.WriteString("\n")
+	
+	// Overview
+	b.WriteString(p.provider.GetOverview())
+	b.WriteString("\n")
+	b.WriteString(strings.Repeat("─", 80))
+	b.WriteString("\n")
+	
+	// Table content
+	rows := p.provider.GetRows()
+	headers := p.provider.GetHeaders()
+	
+	// Headers
+	for i, header := range headers {
+		if i > 0 {
+			b.WriteString(" │ ")
+		}
+		b.WriteString(header)
+	}
+	b.WriteString("\n")
+	b.WriteString(strings.Repeat("─", 80))
+	b.WriteString("\n")
+	
+	// Rows with pagination
+	start := p.scrollOffset
+	end := start + p.pageSize
+	if end > len(rows) {
+		end = len(rows)
+	}
+	
+	for i := start; i < end; i++ {
+		row := rows[i]
+		cursor := " "
+		if i == p.cursor {
+			cursor = ">"
+		}
+		
+		b.WriteString(cursor)
+		for j, cell := range row {
+			if j > 0 {
+				b.WriteString(" │ ")
+			}
+			// Truncate long cells
+			if len(cell) > 30 {
+				b.WriteString(cell[:27] + "...")
+			} else {
+				b.WriteString(cell)
+			}
+		}
+		b.WriteString("\n")
+	}
+	
+	// Hints
+	b.WriteString("\n")
+	b.WriteString(p.provider.GetHints())
+	
+	return b.String()
 }
 
 // handleKeyMsg handles all key messages

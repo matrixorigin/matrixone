@@ -1009,7 +1009,7 @@ func Run(reader *checkpointtool.CheckpointReader) error {
 
 		// Check if we need to open an object file
 		if m.objectToOpen != "" && m.rangeToOpen != nil {
-			// Build options with range filtering, column names and formats
+			// Use the full-featured object tool for better user experience
 			opts := &objectinteractive.ViewOptions{
 				StartRow: int64(m.rangeToOpen.Start.GetRowOffset()),
 				EndRow:   int64(m.rangeToOpen.End.GetRowOffset()),
@@ -1032,6 +1032,9 @@ func Run(reader *checkpointtool.CheckpointReader) error {
 			if err := objectinteractive.RunBubbleteaWithOptions(m.objectToOpen, opts); err != nil {
 				return err
 			}
+			// Reset object opening state
+			m.objectToOpen = ""
+			m.rangeToOpen = nil
 			continue
 		}
 

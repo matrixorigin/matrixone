@@ -409,6 +409,9 @@ func (m model) View() string {
 			b.WriteString(m.cmdInput)
 			b.WriteString("█")
 		}
+	} else {
+		// Show navigation hints when not in command mode
+		b.WriteString("Press: [j/k] Scroll  [g/G] Top/Bottom  [Enter] Next Page  [:] Command  [q] Quit  [?] Help")
 	}
 
 	return b.String()
