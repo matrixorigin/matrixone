@@ -309,6 +309,11 @@ func (m model) View() string {
 		globalStart := m.state.GlobalRowOffset() + 1
 		globalEnd := globalStart + int64(len(rows)) - 1
 
+		// Handle edge case when no rows are visible
+		if len(rows) == 0 {
+			globalEnd = globalStart - 1
+		}
+
 		var start, end, totalRows int64
 		rangeInfo := ""
 
@@ -324,11 +329,34 @@ func (m model) View() string {
 			}
 			start = globalStart - rangeStart
 			end = globalEnd - rangeStart
+
+			// Ensure valid range within filtered data
+			if start < 1 {
+				start = 1
+			}
+			if end < start {
+				end = start
+			}
+			if end > totalRows {
+				end = totalRows
+			}
+			if start > totalRows {
+				start = totalRows
+			}
 		} else {
 			// Without filter: show global position
 			start = globalStart
 			end = globalEnd
 			totalRows = int64(info.RowCount)
+
+			// Ensure end doesn't exceed total
+			if end > totalRows {
+				end = totalRows
+			}
+			// Ensure start is valid
+			if start > totalRows {
+				start = totalRows
+			}
 		}
 
 		mode := "Table"

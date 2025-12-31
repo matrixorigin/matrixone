@@ -314,7 +314,17 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cursor = 0
 		m.state.scrollOffset = 0
 	case "G":
-		m.cursor = m.maxItems() - 1
+		maxItems := m.maxItems()
+		if maxItems > 0 {
+			m.cursor = maxItems - 1
+			// Update scroll offset to show the last item
+			if m.cursor >= m.state.scrollOffset+m.state.pageSize {
+				m.state.scrollOffset = m.cursor - m.state.pageSize + 1
+				if m.state.scrollOffset < 0 {
+					m.state.scrollOffset = 0
+				}
+			}
+		}
 	case "pgdown", "ctrl+f":
 		m.state.PageDown(m.maxItems())
 		m.cursor = m.state.scrollOffset
@@ -913,7 +923,7 @@ func (m model) renderTableDetail() string {
 		}
 	}
 
-	b.WriteString("\nPress: [b] Back  [/] Search")
+	b.WriteString("\nPress: [b] Back  [/] Search  [Enter] Open object")
 	return b.String()
 }
 

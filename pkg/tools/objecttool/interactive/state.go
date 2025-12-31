@@ -499,8 +499,19 @@ func (s *State) ScrollUp() error {
 func (s *State) GotoRow(globalRow int64) error {
 	if globalRow < 0 {
 		// -1 means last row
-		info := s.reader.Info()
-		globalRow = int64(info.RowCount) - 1
+		if s.rowRangeStart >= 0 || s.rowRangeEnd >= 0 {
+			// With range filter: go to last row in range
+			if s.rowRangeEnd >= 0 {
+				globalRow = s.rowRangeEnd
+			} else {
+				info := s.reader.Info()
+				globalRow = int64(info.RowCount) - 1
+			}
+		} else {
+			// Without filter: go to global last row
+			info := s.reader.Info()
+			globalRow = int64(info.RowCount) - 1
+		}
 	}
 
 	// Find corresponding block
