@@ -14,7 +14,9 @@
 
 package interactive
 
+import "context"
+
 // Run runs the interactive interface
 func Run(path string) error {
-	return RunBubbletea(path)
+	return RunUnified(context.Background(), path, nil)
 }
