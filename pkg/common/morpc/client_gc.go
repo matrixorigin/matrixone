@@ -1,0 +1,395 @@
+// Copyright 2021 - 2022 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package morpc
+
+import (
+	"os"
+	"strconv"
+	"sync"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/prometheus/client_golang/prometheus"
+	"go.uber.org/zap"
+)
+
+const (
+	// DefaultGCIdleCheckInterval is the default interval for checking idle backends.
+	// This value is shared between client_gc.go and cfg.go.
+	DefaultGCIdleCheckInterval = time.Second
+
+	// DefaultGCChannelBufferSize is the default buffer size for GC task channels.
+	// Increased from 1024 to 4096 to reduce request drops in high-load scenarios.
+	DefaultGCChannelBufferSize = 4096
+)
+
+var (
+	// globalGCIdleCheckInterval controls how often the global GC manager
+	// checks for idle backends. Default is 1 second for timely cleanup.
+	// This can be overridden via:
+	// 1. MORPC_GC_IDLE_INTERVAL environment variable
+	// 2. Config.GCIdleCheckInterval (takes precedence)
+	// Note: The actual GC decision still uses each client's maxIdleDuration,
+	// this only controls the check frequency.
+	globalGCIdleCheckInterval = getGCIdleCheckInterval()
+
+	// globalGCChannelBufferSize controls the buffer size for GC task channels.
+	// Default is 4096. Can be overridden via Config.GCChannelBufferSize.
+	globalGCChannelBufferSize = getGCChannelBufferSize()
+
+	// globalClientGCMu protects initialization of globalClientGC
+	globalClientGCMu sync.RWMutex
+	globalClientGC   = newClientGCManager()
+)
+
+// getGCIdleCheckInterval reads GC idle check interval from environment variable.
+// Default is DefaultGCIdleCheckInterval (1 second). This allows fine-tuning for different environments.
+// Config values take precedence and should be set via InitGlobalGCManager.
+func getGCIdleCheckInterval() time.Duration {
+	if v := os.Getenv("MORPC_GC_IDLE_INTERVAL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return DefaultGCIdleCheckInterval
+}
+
+// getGCChannelBufferSize reads GC channel buffer size from environment variable.
+// Default is DefaultGCChannelBufferSize (4096).
+// Config values take precedence and should be set via InitGlobalGCManager.
+func getGCChannelBufferSize() int {
+	if v := os.Getenv("MORPC_GC_CHANNEL_BUFFER_SIZE"); v != "" {
+		if size, err := strconv.Atoi(v); err == nil && size > 0 {
+			return size
+		}
+	}
+	return DefaultGCChannelBufferSize
+}
+
+// InitGlobalGCManager initializes the global GC manager with config values.
+// This should be called before creating any clients if you want to use config values.
+// If not called, environment variables or defaults will be used.
+//
+// Note: This function should be called before any clients are created. If called
+// after the GC manager has started, it will only update the interval (if manager
+// hasn't started yet), but channel buffer size cannot be changed after initialization.
+//
+// Thread-safety: This function is safe to call concurrently. It uses a separate mutex
+// to protect the global manager initialization to avoid lock issues when replacing
+// the manager instance.
+func InitGlobalGCManager(checkInterval time.Duration, channelBufferSize int) {
+	// Use global mutex to protect manager replacement
+	globalClientGCMu.Lock()
+	defer globalClientGCMu.Unlock()
+
+	// Check if manager has started (need to lock manager's mutex for this check)
+	globalClientGC.mu.RLock()
+	started := globalClientGC.started
+	globalClientGC.mu.RUnlock()
+
+	if !started {
+		// Manager not started yet, safe to reconfigure
+		if checkInterval > 0 {
+			globalGCIdleCheckInterval = checkInterval
+		}
+		if channelBufferSize > 0 {
+			globalGCChannelBufferSize = channelBufferSize
+			// Recreate manager with new channel buffer size
+			// Safe because manager is not started (no goroutines running)
+			globalClientGC = newClientGCManager()
+		}
+	} else {
+		// Manager already started, can only update interval (channels already created)
+		if checkInterval > 0 {
+			globalGCIdleCheckInterval = checkInterval
+			globalClientGC.logger.Info("GC idle check interval updated",
+				zap.Duration("new-interval", checkInterval))
+		}
+		if channelBufferSize > 0 {
+			globalClientGC.logger.Warn("InitGlobalGCManager: channel buffer size cannot be changed after GC manager started",
+				zap.Int("requested-size", channelBufferSize),
+				zap.Int("current-size", cap(globalClientGC.gcInactiveC)))
+		}
+	}
+}
+
+// clientGCManager manages GC tasks for all morpc clients globally.
+// Instead of each client creating 3 goroutines (gcIdleTask, gcInactiveTask, createTask),
+// all clients share a single global GC manager that handles these tasks.
+//
+// This design is similar to mainstream RPC frameworks (gRPC, Thrift, etc.) which use
+// global connection pools and resource managers rather than per-client goroutines.
+//
+// Thread-safety: All operations are thread-safe and support concurrent client registration/
+// unregistration. This works correctly even in single-process multi-service scenarios
+// (e.g., multiple CN/TN/Proxy nodes in integration tests).
+type clientGCManager struct {
+	mu      sync.RWMutex
+	clients map[*client]struct{}
+	started bool
+	stopC   chan struct{}
+	wg      sync.WaitGroup
+	logger  *zap.Logger
+
+	// Config values captured at creation time to avoid race conditions
+	gcIdleCheckInterval time.Duration
+	channelBufferSize   int
+
+	// Channels for coordinating GC tasks
+	gcInactiveC chan gcInactiveRequest
+	createC     chan createRequest
+
+	// Metrics for monitoring channel drops
+	gcInactiveDropCounter prometheus.Counter
+	createDropCounter     prometheus.Counter
+}
+
+type gcInactiveRequest struct {
+	c      *client
+	remote string
+}
+
+type createRequest struct {
+	c       *client
+	backend string
+}
+
+func newClientGCManager() *clientGCManager {
+	// Capture config values at creation time to avoid race conditions
+	// These values are read from global variables which are protected by globalClientGCMu
+	interval := globalGCIdleCheckInterval
+	bufferSize := globalGCChannelBufferSize
+	return &clientGCManager{
+		clients:               make(map[*client]struct{}),
+		stopC:                 make(chan struct{}),
+		gcIdleCheckInterval:   interval,
+		channelBufferSize:     bufferSize,
+		gcInactiveC:           make(chan gcInactiveRequest, bufferSize),
+		createC:               make(chan createRequest, bufferSize),
+		logger:                logutil.GetPanicLoggerWithLevel(zap.ErrorLevel).Named("morpc-gc"),
+		gcInactiveDropCounter: v2.NewRPCGCChannelDropCounter("gc_inactive"),
+		createDropCounter:     v2.NewRPCGCChannelDropCounter("create"),
+	}
+}
+
+// register registers a client with the global GC manager and starts the GC loop if needed.
+func (m *clientGCManager) register(c *client) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.clients[c] = struct{}{}
+	if !m.started {
+		m.started = true
+		m.wg.Add(3)
+		go m.runGCIdleLoop()
+		go m.runGCInactiveLoop()
+		go m.runCreateLoop()
+	}
+}
+
+// unregister removes a client from the global GC manager.
+func (m *clientGCManager) unregister(c *client) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	delete(m.clients, c)
+}
+
+// triggerGCInactive triggers GC inactive task for a specific client and backend.
+// If channel is full, the request is dropped to avoid blocking. This is acceptable
+// because:
+// 1. GC idle loop will periodically check and clean up inactive backends (max 1s delay)
+// 2. This is not a critical path - delayed cleanup is acceptable
+// 3. In high-load scenarios, dropping some GC requests prevents blocking the caller
+func (m *clientGCManager) triggerGCInactive(c *client, remote string) {
+	select {
+	case m.gcInactiveC <- gcInactiveRequest{c: c, remote: remote}:
+	default:
+		// Channel is full, skip to avoid blocking
+		// This is acceptable because GC idle loop will catch inactive backends
+		m.gcInactiveDropCounter.Inc()
+		m.logger.Debug("gc inactive channel full, skipping",
+			zap.String("remote", remote),
+			zap.Int("channel-capacity", cap(m.gcInactiveC)))
+	}
+}
+
+// triggerCreate triggers create task for a specific client and backend.
+// Returns true if the request was successfully queued, false if channel was full.
+// If channel is full, the request is dropped to avoid blocking. This is acceptable
+// because:
+// 1. The create request will be retried when needed (via maybeCreateLocked)
+// 2. This is a best-effort optimization (auto-create), not critical
+// 3. In high-load scenarios, dropping some create requests prevents blocking
+func (m *clientGCManager) triggerCreate(c *client, backend string) bool {
+	select {
+	case m.createC <- createRequest{c: c, backend: backend}:
+		return true
+	default:
+		// Channel is full, skip to avoid blocking
+		// This is acceptable because create will be retried when needed
+		m.createDropCounter.Inc()
+		m.logger.Debug("create channel full, skipping",
+			zap.String("backend", backend),
+			zap.Int("channel-capacity", cap(m.createC)))
+		return false
+	}
+}
+
+// runGCIdleLoop periodically closes idle backends for all registered clients.
+// It checks at the configured interval (default 1 second) to ensure timely cleanup
+// while avoiding excessive CPU usage.
+//
+// Note: The check frequency is global, but each client's maxIdleDuration is still
+// used to determine if a backend should be GC'd. This means:
+// - Backends are checked more frequently (every 1s by default vs every maxIdleDuration)
+// - But GC decision still respects each client's maxIdleDuration setting
+// - This provides more timely cleanup without changing the GC semantics
+func (m *clientGCManager) runGCIdleLoop() {
+	defer m.wg.Done()
+	m.logger.Debug("global GC idle loop started",
+		zap.Duration("check-interval", m.gcIdleCheckInterval))
+	defer m.logger.Debug("global GC idle loop stopped")
+
+	ticker := time.NewTicker(m.gcIdleCheckInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-m.stopC:
+			return
+		case <-ticker.C:
+			m.doGCIdle()
+		}
+	}
+}
+
+// runGCInactiveLoop handles inactive backend cleanup requests.
+func (m *clientGCManager) runGCInactiveLoop() {
+	defer m.wg.Done()
+	m.logger.Debug("global GC inactive loop started")
+	defer m.logger.Debug("global GC inactive loop stopped")
+
+	for {
+		select {
+		case <-m.stopC:
+			return
+		case req, ok := <-m.gcInactiveC:
+			if !ok {
+				// Channel closed, exit
+				return
+			}
+			// Check if client is still registered
+			m.mu.RLock()
+			_, registered := m.clients[req.c]
+			m.mu.RUnlock()
+			if registered {
+				req.c.doRemoveInactive(req.remote)
+			}
+		}
+	}
+}
+
+// runCreateLoop handles backend creation requests.
+func (m *clientGCManager) runCreateLoop() {
+	defer m.wg.Done()
+	m.logger.Debug("global create loop started")
+	defer m.logger.Debug("global create loop stopped")
+
+	for {
+		select {
+		case <-m.stopC:
+			return
+		case req, ok := <-m.createC:
+			if !ok {
+				// Channel closed, exit
+				return
+			}
+			// Check if client is still registered
+			m.mu.RLock()
+			_, registered := m.clients[req.c]
+			m.mu.RUnlock()
+			if registered {
+				req.c.mu.Lock()
+				if _, err := req.c.createBackendLocked(req.backend); err != nil {
+					req.c.logger.Error("create backend failed",
+						zap.String("backend", req.backend),
+						zap.Error(err))
+				}
+				req.c.mu.Unlock()
+			}
+		}
+	}
+}
+
+// doGCIdle performs idle backend cleanup for all registered clients.
+// This uses Copy-on-Write pattern to minimize lock contention:
+// 1. Acquire read lock and copy client list (fast, allows concurrent register/unregister)
+// 2. Release lock before iterating
+// 3. Call closeIdleBackends() without holding global lock (each client has its own lock)
+//
+// This design ensures:
+// - Minimal lock contention: global lock only held during copy
+// - No blocking: register/unregister can proceed while GC is running
+// - Thread-safe: each client's closeIdleBackends() uses its own lock
+func (m *clientGCManager) doGCIdle() {
+	// Copy-on-Write: acquire read lock, copy client list, release lock
+	m.mu.RLock()
+	clients := make([]*client, 0, len(m.clients))
+	for c := range m.clients {
+		clients = append(clients, c)
+	}
+	m.mu.RUnlock()
+
+	// Iterate without holding global lock - each client manages its own lock
+	for _, c := range clients {
+		// Only GC idle backends if maxIdleDuration is set
+		if c.options.maxIdleDuration > 0 {
+			c.closeIdleBackends()
+		}
+	}
+}
+
+// stop stops the global GC manager. This is mainly for testing purposes.
+func (m *clientGCManager) stop() {
+	m.mu.Lock()
+	if !m.started {
+		m.mu.Unlock()
+		return
+	}
+
+	// Close stopC to signal goroutines to exit
+	close(m.stopC)
+	m.mu.Unlock()
+
+	// Wait for all goroutines to exit
+	m.wg.Wait()
+
+	// Close channels to ensure goroutines can exit if they're blocked on channel receive
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Close channels (goroutines check channel closed status via ok flag)
+	close(m.gcInactiveC)
+	close(m.createC)
+
+	m.started = false
+	m.clients = make(map[*client]struct{})
+	m.stopC = make(chan struct{})
+	// Recreate channels for potential reuse using stored buffer size
+	m.gcInactiveC = make(chan gcInactiveRequest, m.channelBufferSize)
+	m.createC = make(chan createRequest, m.channelBufferSize)
+}

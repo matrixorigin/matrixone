@@ -138,10 +138,31 @@ func WithClientCreateTaskChanSize(size int) ClientOption {
 // WithClientMaxBackendMaxIdleDuration set the maximum idle duration of the backend connection.
 // Backend connection that exceed this time will be automatically closed. 0 means no idle time
 // limit.
+//
+// Note: To avoid "thundering herd" effect where many connections expire simultaneously,
+// a small random jitter (±10%) is automatically applied to the duration. This spreads
+// connection expiration times across a time window, reducing the impact of simultaneous
+// connection closures.
 func WithClientMaxBackendMaxIdleDuration(value time.Duration) ClientOption {
 	return func(c *client) {
-		c.options.maxIdleDuration = value
+		c.options.maxIdleDuration = applyJitter(value)
 	}
+}
+
+// applyJitter applies a small random jitter (±10%) to the duration to avoid thundering herd effect.
+// This spreads connection expiration times across a time window, reducing simultaneous closures.
+func applyJitter(duration time.Duration) time.Duration {
+	if duration <= 0 {
+		return duration
+	}
+	// Apply ±10% jitter
+	jitterPercent := 0.1
+	jitter := time.Duration(float64(duration) * jitterPercent * (2*rand.Float64() - 1))
+	result := duration + jitter
+	if result < 0 {
+		return duration // Fallback to original if jitter makes it negative
+	}
+	return result
 }
 
 // WithClientEnableAutoCreateBackend enable client to automatically create a backend
@@ -224,17 +245,9 @@ func NewClient(
 		return nil, err
 	}
 
-	if err := c.stopper.RunTask(c.createTask); err != nil {
-		return nil, err
-	}
-	if c.options.maxIdleDuration > 0 {
-		if err := c.stopper.RunTask(c.gcIdleTask); err != nil {
-			return nil, err
-		}
-	}
-	if err := c.stopper.RunTask(c.gcInactiveTask); err != nil {
-		return nil, err
-	}
+	// Register with global GC manager instead of creating per-client goroutines
+	globalClientGC.register(c)
+
 	return c, nil
 }
 
@@ -254,7 +267,8 @@ func (c *client) adjust() {
 		}
 	}
 	if c.options.maxIdleDuration == 0 {
-		c.options.maxIdleDuration = defaultMaxIdleDuration
+		// Apply jitter to default duration to avoid thundering herd
+		c.options.maxIdleDuration = applyJitter(defaultMaxIdleDuration)
 	}
 	// Set default retry policy if not configured
 	if c.options.retryPolicy.MaxRetries == 0 && c.options.retryPolicy.InitialBackoff == 0 {
@@ -523,6 +537,9 @@ func (c *client) Close() error {
 	}
 	c.mu.Unlock()
 
+	// Unregister from global GC manager
+	globalClientGC.unregister(c)
+
 	c.stopper.Stop()
 	close(c.createC)
 	return nil
@@ -628,14 +645,11 @@ func (c *client) tryCreate(backend string) bool {
 		return false
 	}
 
-	select {
-	case c.createC <- backend:
-		return true
-	default:
-		return false
-	}
+	return globalClientGC.triggerCreate(c, backend)
 }
 
+// gcIdleTask is no longer used - GC idle is handled by globalClientGC
+// This method is kept for backward compatibility but should not be called.
 func (c *client) gcIdleTask(ctx context.Context) {
 	c.logger.Debug("gc idle backends task started")
 	defer c.logger.Debug("gc idle backends task stopped")
@@ -654,14 +668,13 @@ func (c *client) gcIdleTask(ctx context.Context) {
 }
 
 func (c *client) triggerGCInactive(remote string) {
-	select {
-	case c.gcInactiveC <- remote:
-		c.logger.Debug("try to remove all inactived backends",
-			zap.String("remote", remote))
-	default:
-	}
+	globalClientGC.triggerGCInactive(c, remote)
+	c.logger.Debug("try to remove all inactived backends",
+		zap.String("remote", remote))
 }
 
+// gcInactiveTask is no longer used - GC inactive is handled by globalClientGC
+// This method is kept for backward compatibility but should not be called.
 func (c *client) gcInactiveTask(ctx context.Context) {
 	c.logger.Debug("gc inactive backends task started")
 	defer c.logger.Debug("gc inactive backends task stopped")
@@ -720,6 +733,8 @@ func (c *client) closeIdleBackends() {
 	}
 }
 
+// createTask is no longer used - create task is handled by globalClientGC
+// This method is kept for backward compatibility but should not be called.
 func (c *client) createTask(ctx context.Context) {
 	for {
 		select {

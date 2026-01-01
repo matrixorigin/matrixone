@@ -35,6 +35,7 @@ func (c *DashboardCreator) initRPCDashboard() error {
 			c.initRPCConnectDurationRow(),
 			c.initRPCWriteDurationRow(),
 			c.initRPCRequestDoneDurationRow(),
+			c.initRPCGCRow(),
 		)...)
 	if err != nil {
 		return err
@@ -188,6 +189,35 @@ func (c *DashboardCreator) initRPCRequestDoneDurationRow() dashboard.Option {
 			12,
 			"name",
 			axis.Unit("s"),
+			axis.Min(0)),
+	)
+}
+
+func (c *DashboardCreator) initRPCGCRow() dashboard.Option {
+	return dashboard.Row(
+		"GC Manager",
+		c.withGraph(
+			"GC Channel Drop Rate",
+			6,
+			`sum(rate(`+c.getMetricWithFilter("mo_rpc_gc_channel_drop_total", "")+`[$interval])) by (type)`,
+			"{{ type }}",
+			axis.Unit("ops"),
+			axis.Min(0)),
+
+		c.withGraph(
+			"GC Inactive Channel Drop Rate",
+			3,
+			`sum(rate(`+c.getMetricWithFilter("mo_rpc_gc_channel_drop_total", `type="gc_inactive"`)+`[$interval]))`,
+			"GC Inactive Drops",
+			axis.Unit("ops"),
+			axis.Min(0)),
+
+		c.withGraph(
+			"Create Channel Drop Rate",
+			3,
+			`sum(rate(`+c.getMetricWithFilter("mo_rpc_gc_channel_drop_total", `type="create"`)+`[$interval]))`,
+			"Create Drops",
+			axis.Unit("ops"),
 			axis.Min(0)),
 	)
 }

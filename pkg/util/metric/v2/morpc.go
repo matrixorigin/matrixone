@@ -66,6 +66,14 @@ var (
 			Name:      "network_bytes_total",
 			Help:      "Total bytes of rpc network transfer.",
 		}, []string{"type"})
+
+	rpcGCChannelDropCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "rpc",
+			Name:      "gc_channel_drop_total",
+			Help:      "Total number of GC task requests dropped due to channel full.",
+		}, []string{"type"})
 )
 
 var (
@@ -218,4 +226,8 @@ func NewRPCInputCounter() prometheus.Counter {
 
 func NewRPCOutputCounter() prometheus.Counter {
 	return rpcNetworkBytesCounter.WithLabelValues("output")
+}
+
+func NewRPCGCChannelDropCounter(channelType string) prometheus.Counter {
+	return rpcGCChannelDropCounter.WithLabelValues(channelType)
 }
