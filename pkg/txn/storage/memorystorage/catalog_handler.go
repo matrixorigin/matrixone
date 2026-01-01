@@ -308,18 +308,6 @@ func (c *CatalogHandler) HandleDeleteRelation(ctx context.Context, meta txn.TxnM
 	return c.upstream.HandleDeleteRelation(ctx, meta, req, resp)
 }
 
-func (c *CatalogHandler) HandleTruncateRelation(ctx context.Context, meta txn.TxnMeta, req *memoryengine.TruncateRelationReq, resp *memoryengine.TruncateRelationResp) (err error) {
-	if _, ok := c.sysRelationIDs[req.OldTableID]; ok {
-		defer logReq("catalog", req, meta, resp, &err)
-		return moerr.NewInternalErrorf(ctx,
-			"read only, db %v, table %v",
-			req.DatabaseName,
-			req.Name,
-		)
-	}
-	return c.upstream.HandleTruncateRelation(ctx, meta, req, resp)
-}
-
 func (c *CatalogHandler) HandleDestroy(ctx context.Context) error {
 	return c.upstream.HandleDestroy(ctx)
 }
