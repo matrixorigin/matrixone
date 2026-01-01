@@ -24,6 +24,57 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
+// XXX:
+//
+// This returned type thing definitely belongs to plan, function.
+// However, exec cannot import plan, function due to circular dependency.
+// Also this is the reason for all those RegisterAgg crap.   This is the
+// weirdest thing I've ever seen.  We need to untangle all this mess.
+//
+// See list_agg.go, we need to remove dependency of plan on exec.
+//
+
+func AvgReturnType(typs []types.Type) types.Type {
+	switch typs[0].Oid {
+	case types.T_decimal64:
+		s := int32(12)
+		if s < typs[0].Scale {
+			s = typs[0].Scale
+		}
+		if s > typs[0].Scale+6 {
+			s = typs[0].Scale + 6
+		}
+		return types.New(types.T_decimal128, 18, s)
+	case types.T_decimal128:
+		s := int32(12)
+		if s < typs[0].Scale {
+			s = typs[0].Scale
+		}
+		if s > typs[0].Scale+6 {
+			s = typs[0].Scale + 6
+		}
+		return types.New(types.T_decimal128, 18, s)
+	default:
+		return types.T_float64.ToType()
+	}
+}
+
+func SumReturnType(typs []types.Type) types.Type {
+	switch typs[0].Oid {
+	case types.T_float32, types.T_float64:
+		return types.T_float64.ToType()
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
+		return types.T_int64.ToType()
+	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+		return types.T_uint64.ToType()
+	case types.T_decimal64:
+		return types.New(types.T_decimal128, 38, typs[0].Scale)
+	case types.T_decimal128:
+		return types.New(types.T_decimal128, 38, typs[0].Scale)
+	}
+	panic(moerr.NewInternalErrorNoCtxf("unsupported type '%v' for sum", typs[0]))
+}
+
 func int64OfCheck(v1, v2, sum int64) error {
 	if (v1 > 0 && v2 > 0 && sum <= 0) || (v1 < 0 && v2 < 0 && sum >= 0) {
 		return moerr.NewOutOfRangeNoCtxf("int64", "(%d + %d)", v1, v2)
@@ -137,13 +188,14 @@ func (cs *countSumDec) merge(other *countSumDec) error {
 	return err
 }
 
-func (cs *countSumDec) avg(scale int32) (types.Decimal128, bool) {
+// avg = sum / count, and scale from argScale to resultScale.
+func (cs *countSumDec) avg(argScale, resultScale int32) (types.Decimal128, bool) {
 	if cs.count == 0 {
 		return types.Decimal128{}, false
 	}
 	cnt128 := types.Decimal128FromInt64(cs.count)
-	a, s, _ := cs.sum.Div(cnt128, scale, 0)
-	a, _ = a.Scale(scale - s)
+	a, s, _ := cs.sum.Div(cnt128, argScale, 0)
+	a, _ = a.Scale(resultScale - s)
 	return a, true
 }
 
@@ -156,34 +208,6 @@ type sumAvgExec[T float64 | int64 | uint64, A types.Ints | types.UInts | types.F
 type sumAvgDecExec struct {
 	isSum bool
 	aggExec[countSumDec]
-}
-
-func sumResultType(oid types.T, scale int32) types.Type {
-	switch oid {
-	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
-		return types.T_int64.ToType()
-	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
-		return types.T_uint64.ToType()
-	case types.T_float32, types.T_float64:
-		return types.T_float64.ToType()
-	case types.T_decimal64, types.T_decimal128:
-		return types.New(types.T_decimal128, 38, scale)
-	}
-	panic(moerr.NewInternalErrorNoCtxf("unsupported type '%v' for sum", oid))
-}
-
-func avgResultType(oid types.T, scale int32) types.Type {
-	switch oid {
-	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
-		return types.T_float64.ToType()
-	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
-		return types.T_float64.ToType()
-	case types.T_float32, types.T_float64:
-		return types.T_float64.ToType()
-	case types.T_decimal64, types.T_decimal128:
-		return types.New(types.T_decimal128, 38, scale)
-	}
-	panic(moerr.NewInternalErrorNoCtxf("unsupported type '%v' for avg", oid))
 }
 
 func (exec *sumAvgExec[T, A]) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
@@ -388,7 +412,7 @@ func (exec *sumAvgDecExec) Flush() ([]*vector.Vector, error) {
 				if exec.isSum {
 					vector.AppendFixed(vecs[i], st.sum, false, exec.mp)
 				} else {
-					avgVal, _ := st.avg(resultType.Scale)
+					avgVal, _ := st.avg(exec.aggInfo.argTypes[0].Scale, resultType.Scale)
 					vector.AppendFixed(vecs[i], avgVal, false, exec.mp)
 				}
 			}
@@ -405,7 +429,7 @@ func (exec *sumAvgDecExec) Flush() ([]*vector.Vector, error) {
 				if exec.isSum {
 					vector.AppendFixed(vecs[i], ss[j].sum, false, exec.mp)
 				} else {
-					avgVal, _ := ss[j].avg(resultType.Scale)
+					avgVal, _ := ss[j].avg(exec.aggInfo.argTypes[0].Scale, resultType.Scale)
 					vector.AppendFixed(vecs[i], avgVal, false, exec.mp)
 				}
 			}
@@ -456,9 +480,9 @@ func newSumAvgExec[T float64 | int64 | uint64, A types.Ints | types.UInts | type
 	exec.ofCheck = ofCheck
 	var rt types.Type
 	if isSum {
-		rt = sumResultType(param.Oid, param.Scale)
+		rt = SumReturnType([]types.Type{param})
 	} else {
-		rt = avgResultType(param.Oid, param.Scale)
+		rt = AvgReturnType([]types.Type{param})
 	}
 	exec.aggInfo = aggInfo{
 		aggId:      aggID,
@@ -478,9 +502,9 @@ func newSumAvgDecExec(mp *mpool.MPool, isSum bool, aggID int64, isDistinct bool,
 	exec.isSum = isSum
 	var rt types.Type
 	if isSum {
-		rt = sumResultType(param.Oid, param.Scale)
+		rt = SumReturnType([]types.Type{param})
 	} else {
-		rt = avgResultType(param.Oid, param.Scale)
+		rt = AvgReturnType([]types.Type{param})
 	}
 	exec.aggInfo = aggInfo{
 		aggId:      aggID,
