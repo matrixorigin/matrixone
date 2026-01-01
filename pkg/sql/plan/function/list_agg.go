@@ -127,14 +127,14 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, agg.SumSupportedTypes)
+			return fixedUnaryAggTypeCheck(inputs, SumSupportedTypes)
 		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    agg.SumReturnType,
+				retType:    aggexec.SumReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "sum",
 					aggRegister: agg.RegisterSum,
@@ -148,14 +148,14 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, agg.AvgSupportedTypes)
+			return fixedUnaryAggTypeCheck(inputs, AvgSupportedTypes)
 		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    agg.AvgReturnType,
+				retType:    aggexec.AvgReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "avg",
 					aggRegister: agg.RegisterAvg,
@@ -611,4 +611,18 @@ var supportedAggInNewFramework = []FuncNew{
 			},
 		},
 	},
+}
+
+var SumSupportedTypes = []types.T{
+	types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+	types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+	types.T_float32, types.T_float64,
+	types.T_decimal64, types.T_decimal128,
+}
+
+var AvgSupportedTypes = []types.T{
+	types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+	types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+	types.T_float32, types.T_float64,
+	types.T_decimal64, types.T_decimal128,
 }
