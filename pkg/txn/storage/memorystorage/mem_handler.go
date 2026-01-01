@@ -757,15 +757,6 @@ func (m *MemHandler) HandleDeleteRelation(ctx context.Context, meta txn.TxnMeta,
 	return nil
 }
 
-func (m *MemHandler) HandleTruncateRelation(ctx context.Context, meta txn.TxnMeta, req *memoryengine.TruncateRelationReq, resp *memoryengine.TruncateRelationResp) error {
-	tx := m.getTx(meta)
-	_, err := m.relations.Get(tx, req.OldTableID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return moerr.NewNoSuchTableNoCtx(req.DatabaseName, req.Name)
-	}
-	return m.deleteRelationData(tx, req.OldTableID)
-}
-
 func (m *MemHandler) HandleGetDatabases(ctx context.Context, meta txn.TxnMeta, req *memoryengine.GetDatabasesReq, resp *memoryengine.GetDatabasesResp) error {
 	tx := m.getTx(meta)
 
