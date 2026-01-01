@@ -4633,24 +4633,24 @@ func compareSingleValInVector(
 			vector.GetFixedAtNoTypeCheck[types.Time](vec2, rowIdx2),
 		), nil
 	case types.T_timestamp:
-      return types.CompareValue(
-          vector.GetFixedAtNoTypeCheck[types.Timestamp](vec1, rowIdx1),
-          vector.GetFixedAtNoTypeCheck[types.Timestamp](vec2, rowIdx2),
-      ), nil
-  case types.T_year:
-      return types.CompareValue(
-          vector.GetFixedAtNoTypeCheck[types.MoYear](vec1, rowIdx1),
-          vector.GetFixedAtNoTypeCheck[types.MoYear](vec2, rowIdx2),
-      ), nil
+		return types.CompareValue(
+			vector.GetFixedAtNoTypeCheck[types.Timestamp](vec1, rowIdx1),
+			vector.GetFixedAtNoTypeCheck[types.Timestamp](vec2, rowIdx2),
+		), nil
+	case types.T_year:
+		return types.CompareValue(
+			vector.GetFixedAtNoTypeCheck[types.MoYear](vec1, rowIdx1),
+			vector.GetFixedAtNoTypeCheck[types.MoYear](vec2, rowIdx2),
+		), nil
 	case types.T_decimal64:
-		  return types.CompareValue(
-			    vector.GetFixedAtNoTypeCheck[types.Decimal64](vec1, rowIdx1),
-			    vector.GetFixedAtNoTypeCheck[types.Decimal64](vec2, rowIdx2),
-		  ), nil
+		return types.CompareValue(
+			vector.GetFixedAtNoTypeCheck[types.Decimal64](vec1, rowIdx1),
+			vector.GetFixedAtNoTypeCheck[types.Decimal64](vec2, rowIdx2),
+		), nil
 	case types.T_decimal128:
-		  return types.CompareValue(
-			    vector.GetFixedAtNoTypeCheck[types.Decimal128](vec1, rowIdx1),
-			    vector.GetFixedAtNoTypeCheck[types.Decimal128](vec2, rowIdx2),
+		return types.CompareValue(
+			vector.GetFixedAtNoTypeCheck[types.Decimal128](vec1, rowIdx1),
+			vector.GetFixedAtNoTypeCheck[types.Decimal128](vec2, rowIdx2),
 		), nil
 	case types.T_uuid:
 		return types.CompareValue(
