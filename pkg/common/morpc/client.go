@@ -660,6 +660,12 @@ func (c *client) triggerGCInactive(remote string) {
 func (c *client) doRemoveInactive(remote string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	// Check if client is closed
+	if c.mu.closed {
+		return
+	}
+
 	backends, ok := c.mu.backends[remote]
 	if !ok {
 		return
@@ -679,8 +685,14 @@ func (c *client) doRemoveInactive(remote string) {
 }
 
 func (c *client) closeIdleBackends() {
-	var idleBackends []Backend
+	// Check if client is closed before processing
 	c.mu.Lock()
+	if c.mu.closed {
+		c.mu.Unlock()
+		return
+	}
+
+	var idleBackends []Backend
 	for k, backends := range c.mu.backends {
 		var newBackends []Backend
 		for _, b := range backends {

@@ -681,3 +681,205 @@ func TestWithClientMaxBackendMaxIdleDuration_ExplicitZero(t *testing.T) {
 	assert.Less(t, cli3.options.maxIdleDuration, time.Second*70,
 		"maxIdleDuration should be around 1 minute")
 }
+
+
+// TestGlobalClientGC_ConcurrentCloseAndGC tests that GC operations are safe
+// when clients are being closed concurrently. This is a critical test for
+// the race condition fix.
+func TestGlobalClientGC_ConcurrentCloseAndGC(t *testing.T) {
+	const numClients = 20
+	const numIterations = 50
+
+	for iter := 0; iter < numIterations; iter++ {
+		mgr := newClientGCManager()
+		clients := make([]*client, numClients)
+
+		// Create and register clients
+		for i := 0; i < numClients; i++ {
+			c, err := NewClient("test-client",
+				newTestBackendFactory(),
+				WithClientMaxBackendMaxIdleDuration(time.Millisecond*10))
+			require.NoError(t, err)
+			clients[i] = c.(*client)
+			mgr.register(clients[i])
+
+			// Create a backend for each client
+			_, _ = clients[i].getBackend("b1", false)
+		}
+
+		var wg sync.WaitGroup
+
+		// Goroutine 1: Continuously trigger GC
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 100; i++ {
+				mgr.doGCIdle()
+				time.Sleep(time.Microsecond * 100)
+			}
+		}()
+
+		// Goroutine 2: Continuously trigger GC inactive
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 100; i++ {
+				for _, c := range clients {
+					mgr.triggerGCInactive(c, "b1")
+				}
+				time.Sleep(time.Microsecond * 50)
+			}
+		}()
+
+		// Goroutine 3: Close clients concurrently
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			time.Sleep(time.Millisecond * 5) // Let GC run a bit first
+			for _, c := range clients {
+				mgr.unregister(c)
+				c.Close()
+			}
+		}()
+
+		wg.Wait()
+		mgr.stop()
+	}
+	// Test passes if no panic, deadlock, or race condition
+}
+
+// TestGlobalClientGC_CloseIdleBackendsOnClosedClient tests that closeIdleBackends
+// safely handles a closed client.
+func TestGlobalClientGC_CloseIdleBackendsOnClosedClient(t *testing.T) {
+	c, err := NewClient("test-client",
+		newTestBackendFactory(),
+		WithClientMaxBackendMaxIdleDuration(time.Millisecond*10))
+	require.NoError(t, err)
+
+	client := c.(*client)
+
+	// Create a backend
+	_, err = client.getBackend("b1", false)
+	require.NoError(t, err)
+
+	// Close the client
+	c.Close()
+
+	// Now call closeIdleBackends on closed client - should not panic
+	client.closeIdleBackends()
+
+	// Verify client is closed
+	client.mu.Lock()
+	closed := client.mu.closed
+	client.mu.Unlock()
+	assert.True(t, closed)
+}
+
+// TestGlobalClientGC_DoRemoveInactiveOnClosedClient tests that doRemoveInactive
+// safely handles a closed client.
+func TestGlobalClientGC_DoRemoveInactiveOnClosedClient(t *testing.T) {
+	c, err := NewClient("test-client", newTestBackendFactory())
+	require.NoError(t, err)
+
+	client := c.(*client)
+
+	// Create a backend
+	_, err = client.getBackend("b1", false)
+	require.NoError(t, err)
+
+	// Close the client
+	c.Close()
+
+	// Now call doRemoveInactive on closed client - should not panic
+	client.doRemoveInactive("b1")
+
+	// Verify client is closed
+	client.mu.Lock()
+	closed := client.mu.closed
+	client.mu.Unlock()
+	assert.True(t, closed)
+}
+
+// TestGlobalClientGC_CreateOnClosedClient tests that create requests
+// are safely ignored for closed clients.
+func TestGlobalClientGC_CreateOnClosedClient(t *testing.T) {
+	mgr := newClientGCManager()
+
+	c, err := NewClient("test-client",
+		newTestBackendFactory(),
+		WithClientEnableAutoCreateBackend())
+	require.NoError(t, err)
+
+	client := c.(*client)
+	mgr.register(client)
+
+	// Close the client but keep it registered (simulates race condition)
+	client.mu.Lock()
+	client.mu.closed = true
+	client.mu.Unlock()
+
+	// Trigger create - should be safely ignored
+	mgr.triggerCreate(client, "b1")
+
+	// Give time for the create loop to process
+	time.Sleep(time.Millisecond * 50)
+
+	// Verify no backends were created (client was closed)
+	client.mu.Lock()
+	backends := client.mu.backends["b1"]
+	client.mu.Unlock()
+	assert.Equal(t, 0, len(backends), "no backends should be created for closed client")
+
+	mgr.unregister(client)
+	mgr.stop()
+
+	// Properly close the client
+	client.mu.Lock()
+	client.mu.closed = false // Reset for proper Close()
+	client.mu.Unlock()
+	c.Close()
+}
+
+// TestGlobalClientGC_RaceConditionSimulation simulates the exact race condition
+// that was fixed: GC goroutine accessing client while it's being closed.
+func TestGlobalClientGC_RaceConditionSimulation(t *testing.T) {
+	const numIterations = 100
+
+	for iter := 0; iter < numIterations; iter++ {
+		mgr := newClientGCManager()
+
+		c, err := NewClient("test-client",
+			newTestBackendFactory(),
+			WithClientMaxBackendMaxIdleDuration(time.Nanosecond)) // Very short to trigger GC
+		require.NoError(t, err)
+
+		client := c.(*client)
+		mgr.register(client)
+
+		// Create backends
+		for i := 0; i < 5; i++ {
+			_, _ = client.getBackend("b1", false)
+		}
+
+		// Start GC in background
+		done := make(chan struct{})
+		go func() {
+			for {
+				select {
+				case <-done:
+					return
+				default:
+					mgr.doGCIdle()
+				}
+			}
+		}()
+
+		// Immediately close client (race with GC)
+		mgr.unregister(client)
+		c.Close()
+
+		close(done)
+		mgr.stop()
+	}
+	// Test passes if no panic or deadlock
+}

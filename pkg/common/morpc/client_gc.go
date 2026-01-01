@@ -191,6 +191,12 @@ func (m *clientGCManager) register(c *client) {
 	defer m.mu.Unlock()
 
 	m.clients[c] = struct{}{}
+	m.ensureStartedLocked()
+}
+
+// ensureStartedLocked starts the GC goroutines if not already started.
+// Must be called with m.mu held.
+func (m *clientGCManager) ensureStartedLocked() {
 	if !m.started {
 		m.started = true
 		m.wg.Add(3)
@@ -204,22 +210,40 @@ func (m *clientGCManager) register(c *client) {
 func (m *clientGCManager) unregister(c *client) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
 	delete(m.clients, c)
 }
 
+func init() {
+	// Pre-start the GC manager so leaktest.AfterTest() snapshot includes it.
+	// This prevents false positive goroutine leak reports in tests.
+	globalClientGC.mu.Lock()
+	globalClientGC.ensureStartedLocked()
+	globalClientGC.mu.Unlock()
+}
+
+// ResetGlobalClientGCManagerForTest resets the global GC manager for testing purposes.
+// This stops the current manager and creates a new one.
+// WARNING: Only use this in tests!
+func ResetGlobalClientGCManagerForTest() {
+	globalClientGCMu.Lock()
+	mgr := globalClientGC
+	globalClientGCMu.Unlock()
+
+	// Stop outside of lock to avoid deadlock
+	mgr.stop()
+
+	globalClientGCMu.Lock()
+	defer globalClientGCMu.Unlock()
+	globalClientGC = newClientGCManager()
+}
+
 // triggerGCInactive triggers GC inactive task for a specific client and backend.
-// If channel is full, the request is dropped to avoid blocking. This is acceptable
-// because:
-// 1. GC idle loop will periodically check and clean up inactive backends (max 1s delay)
-// 2. This is not a critical path - delayed cleanup is acceptable
-// 3. In high-load scenarios, dropping some GC requests prevents blocking the caller
+// If channel is full, the request is dropped to avoid blocking.
 func (m *clientGCManager) triggerGCInactive(c *client, remote string) {
 	select {
 	case m.gcInactiveC <- gcInactiveRequest{c: c, remote: remote}:
 	default:
 		// Channel is full, skip to avoid blocking
-		// This is acceptable because GC idle loop will catch inactive backends
 		m.gcInactiveDropCounter.Inc()
 		m.logger.Debug("gc inactive channel full, skipping",
 			zap.String("remote", remote),
@@ -229,11 +253,6 @@ func (m *clientGCManager) triggerGCInactive(c *client, remote string) {
 
 // triggerCreate triggers create task for a specific client and backend.
 // Returns true if the request was successfully queued, false if channel was full.
-// If channel is full, the request is dropped to avoid blocking. This is acceptable
-// because:
-// 1. The create request will be retried when needed (via maybeCreateLocked)
-// 2. This is a best-effort optimization (auto-create), not critical
-// 3. In high-load scenarios, dropping some create requests prevents blocking
 func (m *clientGCManager) triggerCreate(c *client, backend string) bool {
 	select {
 	case m.createC <- createRequest{c: c, backend: backend}:
@@ -297,6 +316,7 @@ func (m *clientGCManager) runGCInactiveLoop() {
 			_, registered := m.clients[req.c]
 			m.mu.RUnlock()
 			if registered {
+				// doRemoveInactive safely handles closed clients
 				req.c.doRemoveInactive(req.remote)
 			}
 		}
@@ -323,11 +343,14 @@ func (m *clientGCManager) runCreateLoop() {
 			_, registered := m.clients[req.c]
 			m.mu.RUnlock()
 			if registered {
+				// createBackendLocked is called under lock, check closed there
 				req.c.mu.Lock()
-				if _, err := req.c.createBackendLocked(req.backend); err != nil {
-					req.c.logger.Error("create backend failed",
-						zap.String("backend", req.backend),
-						zap.Error(err))
+				if !req.c.mu.closed {
+					if _, err := req.c.createBackendLocked(req.backend); err != nil {
+						req.c.logger.Error("create backend failed",
+							zap.String("backend", req.backend),
+							zap.Error(err))
+					}
 				}
 				req.c.mu.Unlock()
 			}
@@ -341,10 +364,8 @@ func (m *clientGCManager) runCreateLoop() {
 // 2. Release lock before iterating
 // 3. Call closeIdleBackends() without holding global lock (each client has its own lock)
 //
-// This design ensures:
-// - Minimal lock contention: global lock only held during copy
-// - No blocking: register/unregister can proceed while GC is running
-// - Thread-safe: each client's closeIdleBackends() uses its own lock
+// Thread-safety: closeIdleBackends() checks c.mu.closed under lock, so it's safe
+// even if client is closed after we copy the list.
 func (m *clientGCManager) doGCIdle() {
 	// Copy-on-Write: acquire read lock, copy client list, release lock
 	m.mu.RLock()
@@ -354,9 +375,9 @@ func (m *clientGCManager) doGCIdle() {
 	}
 	m.mu.RUnlock()
 
-	// Iterate without holding global lock - each client manages its own lock
+	// Iterate without holding global lock
+	// closeIdleBackends() safely handles closed clients by checking c.mu.closed under lock
 	for _, c := range clients {
-		// Only GC idle backends if maxIdleDuration is set
 		if c.options.maxIdleDuration > 0 {
 			c.closeIdleBackends()
 		}
@@ -370,26 +391,20 @@ func (m *clientGCManager) stop() {
 		m.mu.Unlock()
 		return
 	}
-
-	// Close stopC to signal goroutines to exit
 	close(m.stopC)
 	m.mu.Unlock()
 
-	// Wait for all goroutines to exit
 	m.wg.Wait()
 
-	// Close channels to ensure goroutines can exit if they're blocked on channel receive
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Close channels (goroutines check channel closed status via ok flag)
 	close(m.gcInactiveC)
 	close(m.createC)
 
 	m.started = false
 	m.clients = make(map[*client]struct{})
 	m.stopC = make(chan struct{})
-	// Recreate channels for potential reuse using stored buffer size
 	m.gcInactiveC = make(chan gcInactiveRequest, m.channelBufferSize)
 	m.createC = make(chan createRequest, m.channelBufferSize)
 }
