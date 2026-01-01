@@ -52,6 +52,18 @@ func ParseMoYear(s string) (MoYear, error) {
 
 	// Handle 4-digit year
 	if length == 4 {
+		// If starts with '0' (value 0-999), treat as 2-digit year rule
+		// e.g., '0000'->2000, '0024'->2024, '0070'->1970, '0100'->invalid
+		if s[0] == '0' {
+			if v >= 0 && v <= 69 {
+				return MoYear(2000 + v), nil
+			}
+			if v >= 70 && v <= 99 {
+				return MoYear(1900 + v), nil
+			}
+			// 0100-0999 is invalid
+			return 0, moerr.NewInvalidInputNoCtxf("year value out of range: %s", s)
+		}
 		return ParseMoYearFromInt(v)
 	}
 
