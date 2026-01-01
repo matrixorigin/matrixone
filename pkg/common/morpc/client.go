@@ -701,7 +701,6 @@ func (c *client) closeIdleBackends() {
 	}
 }
 
-
 func (c *client) createBackend(backend string, lock bool) (Backend, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
