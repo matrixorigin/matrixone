@@ -24,6 +24,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -32,7 +33,6 @@ import (
 )
 
 // Mo's extremely simple memory pool.
-
 // Stats
 type MPoolStats struct {
 	NumAlloc         atomic.Int64 // number of allocations
@@ -145,12 +145,15 @@ func (s *MPoolStats) RecordManyFrees(tag string, nfree, sz int64) int64 {
 
 const (
 	kMemHdrSz = 16
-	B         = 1
-	KB        = 1024
-	MB        = 1024 * KB
-	GB        = 1024 * MB
-	TB        = 1024 * GB
-	PB        = 1024 * TB
+)
+
+const (
+	B  = 1
+	KB = 1024
+	MB = 1024 * KB
+	GB = 1024 * MB
+	TB = 1024 * GB
+	PB = 1024 * TB
 )
 
 // Memory header, kMemHdrSz bytes.
@@ -175,12 +178,6 @@ func (pHdr *memHdr) SetGuard() {
 
 func (pHdr *memHdr) CheckGuard() bool {
 	return pHdr.guard[0] == 0xDE && pHdr.guard[1] == 0xAD && pHdr.guard[2] == 0xBF
-}
-
-func (pHdr *memHdr) ToSlice(sz, cap int) []byte {
-	ptr := unsafe.Add(unsafe.Pointer(pHdr), kMemHdrSz)
-	bs := unsafe.Slice((*byte)(ptr), cap)
-	return bs[:sz]
 }
 
 type detailInfo struct {
@@ -256,31 +253,40 @@ type MPool struct {
 	stats   MPoolStats // stats
 	details *mpoolDetails
 
-	mu   sync.Mutex
-	ptrs map[unsafe.Pointer]struct{}
+	noLock bool
+	ptrs   map[unsafe.Pointer]memHdr
 }
 
 const (
 	NoFixed = 1 << iota
+	NoLock
 )
 
-func (mp *MPool) recordPtr(ptr unsafe.Pointer) {
-	mp.mu.Lock()
-	defer mp.mu.Unlock()
-	mp.ptrs[ptr] = struct{}{}
+func (mp *MPool) recordPtrHdr(ptr unsafe.Pointer, pHdr memHdr) error {
+	if !mp.noLock {
+		return gRecordPtr(ptr, pHdr)
+	} else {
+		_, ok := mp.ptrs[ptr]
+		if ok {
+			return moerr.NewInternalErrorNoCtx("ptr already recorded")
+		}
+		mp.ptrs[ptr] = pHdr
+		return nil
+	}
 }
-func (mp *MPool) removePtr(ptr unsafe.Pointer) {
-	mp.mu.Lock()
-	defer mp.mu.Unlock()
-	delete(mp.ptrs, ptr)
+func (mp *MPool) removePtrHdr(ptr unsafe.Pointer) (memHdr, bool) {
+	if !mp.noLock {
+		return gRemovePtr(ptr)
+	} else {
+		hdr, ok := mp.ptrs[ptr]
+		delete(mp.ptrs, ptr)
+		return hdr, ok
+	}
 }
 
 func (mp *MPool) deallocateAllPtrs() {
-	mp.mu.Lock()
-	defer mp.mu.Unlock()
-	for ptr := range mp.ptrs {
-		pHdr := (*memHdr)(ptr)
-		allocateSize := int(pHdr.allocSz) + kMemHdrSz
+	for ptr, hdr := range mp.ptrs {
+		allocateSize := int(hdr.allocSz) + kMemHdrSz
 		simpleCAllocator().Deallocate(unsafe.Slice((*byte)(ptr), allocateSize), uint64(allocateSize))
 	}
 	mp.ptrs = nil
@@ -311,7 +317,7 @@ func (mp *MPool) Stats() *MPoolStats {
 
 func (mp *MPool) Cap() int64 {
 	if mp.cap == 0 {
-		return PB
+		return common.PiB
 	}
 	return mp.cap
 }
@@ -362,14 +368,17 @@ func NewMPool(tag string, cap int64, flag int) (*MPool, error) {
 		}
 	}
 
+	noLock := flag&NoLock != 0
+
 	id := atomic.AddInt64(&nextPool, 1)
 	var mp MPool
 	mp.id = id
 	mp.tag = tag
 	mp.cap = cap
+	mp.noLock = noLock
 
 	mp.stats.Init()
-	mp.ptrs = make(map[unsafe.Pointer]struct{})
+	mp.ptrs = make(map[unsafe.Pointer]memHdr)
 	globalPools.Store(id, &mp)
 	return &mp, nil
 }
@@ -382,12 +391,20 @@ func MustNew(tag string) *MPool {
 	return mp
 }
 
+func MustNewNoLock(tag string) *MPool {
+	mp, err := NewMPool(tag, 0, NoLock)
+	if err != nil {
+		panic(err)
+	}
+	return mp
+}
+
 func MustNewZero() *MPool {
 	return MustNew("must_new_zero")
 }
 
-func MustNewNoFixed(tag string) *MPool {
-	return MustNew(tag)
+func MustNewNoFixed() *MPool {
+	return MustNew("must_new_no_fixed")
 }
 
 func MustNewZeroNoFixed() *MPool {
@@ -431,6 +448,8 @@ var nextPool int64
 var globalCap atomic.Int64
 var globalStats MPoolStats
 var globalPools sync.Map
+var globalPtrs map[unsafe.Pointer]memHdr
+var globalPtrsMu sync.Mutex
 
 func InitCap(cap int64) {
 	if cap < GB {
@@ -456,60 +475,60 @@ var CapLimit = math.MaxInt32 // 2GB - 1
 
 func (mp *MPool) Alloc(sz int, offHeap bool) ([]byte, error) {
 	detailk := mp.getDetailK()
-	return mp.allocWithDetailK(detailk, sz, offHeap)
+	return mp.allocWithDetailK(detailk, int64(sz), offHeap)
 }
 
-func (mp *MPool) allocWithDetailK(detailk string, sz int, offHeap bool) ([]byte, error) {
+func (mp *MPool) allocWithDetailK(detailk string, sz int64, offHeap bool) ([]byte, error) {
 	// reject unexpected alloc size.
-	if sz < 0 || sz+kMemHdrSz > CapLimit {
+	if sz < 0 || sz+kMemHdrSz > int64(CapLimit) {
 		logutil.Errorf("mpool memory allocation exceed limit with requested size %d: %s", sz, string(debug.Stack()))
 		return nil, moerr.NewInternalErrorNoCtxf("mpool memory allocation exceed limit with requested size %d", sz)
 	}
 	if sz == 0 {
 		return nil, nil
 	}
-	requiredSpaceWithoutHeader := sz
-	return mp.alloc(detailk, sz, requiredSpaceWithoutHeader, offHeap)
+	return mp.alloc(detailk, sz, offHeap)
 }
 
-func (mp *MPool) alloc(detailk string, sz int, requiredSpaceWithoutHeader int, offHeap bool) ([]byte, error) {
-	allocateSize := requiredSpaceWithoutHeader + kMemHdrSz
+func (mp *MPool) alloc(detailk string, sz int64, offHeap bool) ([]byte, error) {
 	var bs []byte
 	var err error
 
+	hdr := memHdr{
+		poolId:  mp.id,
+		allocSz: int32(sz),
+		offHeap: offHeap,
+	}
+	hdr.SetGuard()
+
 	if offHeap {
-		gcurr := globalStats.RecordAlloc("global", int64(allocateSize))
+		gcurr := globalStats.RecordAlloc("global", sz)
 		if gcurr > GlobalCap() {
 			// compensate global
-			globalStats.RecordFree("global", int64(allocateSize))
+			globalStats.RecordFree("global", sz)
 			return nil, moerr.NewOOMNoCtx()
 		}
-		mycurr := mp.stats.RecordAlloc(mp.tag, int64(allocateSize))
+		mycurr := mp.stats.RecordAlloc(mp.tag, sz)
 		if mycurr > mp.Cap() {
 			// compensate both global and my
-			mp.stats.RecordFree(mp.tag, int64(allocateSize))
-			globalStats.RecordFree("global", int64(allocateSize))
+			mp.stats.RecordFree(mp.tag, sz)
+			globalStats.RecordFree("global", sz)
 			return nil, moerr.NewInternalErrorNoCtxf("mpool out of space, alloc %d bytes, cap %d", sz, mp.cap)
 		}
-		bs, err = simpleCAllocator().Allocate(uint64(allocateSize))
+		bs, err = simpleCAllocator().Allocate(uint64(sz))
 		if err != nil {
 			panic(err)
 		}
-		mp.recordPtr(unsafe.Pointer(&bs[0]))
 		if mp.details != nil {
-			mp.details.recordAlloc(detailk, int64(allocateSize))
+			mp.details.recordAlloc(detailk, sz)
 		}
 	} else {
-		bs = make([]byte, allocateSize)
+		bs = make([]byte, sz)
 	}
 
-	hdr := unsafe.Pointer(&bs[0])
-	pHdr := (*memHdr)(hdr)
-	pHdr.poolId = mp.id
-	pHdr.allocSz = int32(sz)
-	pHdr.SetGuard()
-	pHdr.offHeap = offHeap
-	return pHdr.ToSlice(sz, requiredSpaceWithoutHeader), nil
+	// always record the ptr, offHeap or not.
+	mp.recordPtrHdr(unsafe.Pointer(&bs[0]), hdr)
+	return bs, nil
 }
 
 func (mp *MPool) Free(bs []byte) {
@@ -527,142 +546,54 @@ func (mp *MPool) freeWithDetailK(detailk string, bs []byte) {
 }
 
 func (mp *MPool) freePtr(detailk string, ptr unsafe.Pointer) {
-	hdr := unsafe.Add(ptr, -kMemHdrSz)
-	pHdr := (*memHdr)(hdr)
-
-	if !pHdr.CheckGuard() {
-		panic(moerr.NewInternalErrorNoCtx("invalid free, mp header corruption"))
+	hdr, ok := mp.removePtrHdr(ptr)
+	if !ok {
+		// this is a double free.
+		panic(moerr.NewInternalErrorNoCtx("invalid ptr, double free"))
 	}
 
-	// if cross pool free.
-	if pHdr.poolId != mp.id {
-		mp.stats.RecordXPoolFree(detailk, int64(pHdr.allocSz))
-		globalStats.RecordXPoolFree(detailk, int64(pHdr.allocSz))
-		otherPool, ok := globalPools.Load(pHdr.poolId)
-		if !ok {
-			// panic(moerr.NewInternalErrorNoCtxf("invalid mpool id %d", pHdr.poolId))
-			logutil.Errorf("invalid mpool id %d", pHdr.poolId)
-		} else {
-			(otherPool.(*MPool)).freePtr(detailk, ptr)
-		}
+	if hdr.poolId != mp.id {
+		sz := int64(hdr.allocSz)
+		mp.stats.RecordXPoolFree(detailk, sz)
+		globalStats.RecordXPoolFree(detailk, sz)
 		return
 	}
 
-	// double free check
-	if atomic.LoadInt32(&pHdr.allocSz) == -1 {
-		panic(moerr.NewInternalErrorNoCtx("free size -1, possible double free"))
-	}
-
-	// Save the original size before marking as freed (needed for offHeap deallocation)
-	originalAllocSz := pHdr.allocSz
-	allocateSize := int64(originalAllocSz) + kMemHdrSz
-
-	if !atomic.CompareAndSwapInt32(&pHdr.allocSz, pHdr.allocSz, -1) {
-		panic(moerr.NewInternalErrorNoCtx("free size -1, possible double free"))
-	}
-
-	// if not offHeap, just clean it up and return.
-	offHeap := pHdr.offHeap
-	if !offHeap {
+	if !hdr.offHeap {
 		return
 	}
-
-	mp.stats.RecordFree(mp.tag, allocateSize)
-	globalStats.RecordFree("global", allocateSize)
+	sz := int64(hdr.allocSz)
+	mp.stats.RecordFree(mp.tag, sz)
+	globalStats.RecordFree("global", sz)
 	if mp.details != nil {
-		mp.details.recordFree(detailk, allocateSize)
+		mp.details.recordFree(detailk, sz)
 	}
 
-	mp.removePtr(hdr)
-	simpleCAllocator().Deallocate(unsafe.Slice((*byte)(hdr), allocateSize), uint64(allocateSize))
+	simpleCAllocator().Deallocate(unsafe.Slice((*byte)(ptr), sz), uint64(sz))
 }
 
-func (mp *MPool) reAllocWithDetailK(detailk string, old []byte, sz int, offHeap bool) ([]byte, error) {
-	if sz <= cap(old) {
+func (mp *MPool) reAllocWithDetailK(detailk string, old []byte, sz int64, offHeap bool, bufferMore bool) ([]byte, error) {
+	if sz <= int64(cap(old)) {
 		return old[:sz], nil
 	}
-	ret, err := mp.allocWithDetailK(detailk, sz, offHeap)
+
+	newSz := sz
+	if bufferMore {
+		newSz = calculateNewCap(int64(cap(old)), sz)
+	}
+
+	ret, err := mp.allocWithDetailK(detailk, int64(newSz), offHeap)
 	if err != nil {
 		return nil, err
 	}
 	copy(ret, old)
 	mp.freeWithDetailK(detailk, old)
-	return ret, nil
-}
-
-// alignUp rounds n up to a multiple of a. a must be a power of 2.
-func alignUp(n, a int) int {
-	return (n + a - 1) &^ (a - 1)
-}
-
-// divRoundUp returns ceil(n / a).
-func divRoundUp(n, a int) int {
-	// a is generally a power of two. This will get inlined and
-	// the compiler will optimize the division.
-	return (n + a - 1) / a
-}
-
-// Returns size of the memory block that mallocgc will allocate if you ask for the size.
-func roundupsize(size int) int {
-	if size < _MaxSmallSize {
-		if size <= smallSizeMax-8 {
-			return int(class_to_size[size_to_class8[divRoundUp(size, smallSizeDiv)]])
-		} else {
-			return int(class_to_size[size_to_class128[divRoundUp(size-smallSizeMax, largeSizeDiv)]])
-		}
-	}
-	if size+_PageSize < size {
-		return size
-	}
-	return alignUp(size, _PageSize)
-}
-
-// Grow is like reAlloc, but we try to be a little bit more aggressive on growing
-// the slice.
-func (mp *MPool) growWithDetailK(detailk string, old []byte, sz int, offHeap bool) ([]byte, error) {
-	if sz <= cap(old) {
-		// no need to grow, actually can be shrink.  eitherway, the old buffer is good enough.
-		return old[:sz], nil
-	}
-	newCap := calculateNewCap(cap(old), sz)
-
-	ret, err := mp.reAllocWithDetailK(detailk, old, newCap, offHeap)
-	if err != nil {
-		return old, err
-	}
 	return ret[:sz], nil
 }
 
 func (mp *MPool) Grow(old []byte, sz int, offHeap bool) ([]byte, error) {
 	detailk := mp.getDetailK()
-	return mp.growWithDetailK(detailk, old, sz, offHeap)
-}
-
-// copy-paste from go slice grow strategy.
-func calculateNewCap(oldCap int, requiredSize int) int {
-	newcap := oldCap
-	doublecap := newcap + newcap
-	if requiredSize > doublecap {
-		newcap = requiredSize
-	} else {
-		// performance: use a larger threshold (256 -> 4096)
-		const threshold = 4096
-		if newcap < threshold {
-			newcap = doublecap
-		} else {
-			for 0 < newcap && newcap < requiredSize {
-				newcap += (newcap + 3*threshold) / 4
-			}
-			if newcap <= 0 {
-				newcap = requiredSize
-			}
-		}
-	}
-	newcap = roundupsize(newcap)
-	if newcap > CapLimit && requiredSize <= CapLimit {
-		newcap = CapLimit
-	}
-	return newcap
+	return mp.reAllocWithDetailK(detailk, old, int64(sz), offHeap, true)
 }
 
 func (mp *MPool) Grow2(old []byte, old2 []byte, sz int, offHeap bool) ([]byte, error) {
@@ -672,7 +603,7 @@ func (mp *MPool) Grow2(old []byte, old2 []byte, sz int, offHeap bool) ([]byte, e
 		return nil, moerr.NewInternalErrorNoCtxf("mpool grow2 actually shrinks, %d+%d, %d", len1, len2, sz)
 	}
 	detailk := mp.getDetailK()
-	ret, err := mp.growWithDetailK(detailk, old, sz, offHeap)
+	ret, err := mp.reAllocWithDetailK(detailk, old, int64(sz), offHeap, true)
 	if err != nil {
 		return nil, err
 	}
@@ -681,10 +612,50 @@ func (mp *MPool) Grow2(old []byte, old2 []byte, sz int, offHeap bool) ([]byte, e
 	return ret, nil
 }
 
+// ReallocZero is like Realloc, but it clears the memory.
+func (mp *MPool) ReallocZero(old []byte, sz int, offHeap bool) ([]byte, error) {
+	detailk := mp.getDetailK()
+	if cap(old) == 0 {
+		return mp.allocWithDetailK(detailk, int64(sz), offHeap)
+	}
+
+	if !offHeap {
+		return mp.reAllocWithDetailK(detailk, old, int64(sz), offHeap, false)
+	}
+
+	oldsz := len(old)
+	oldcap := cap(old)
+	if sz <= oldsz {
+		return old[:sz], nil
+	} else if sz <= oldcap {
+		old = old[:sz]
+		clear(old[oldsz:])
+		return old, nil
+	}
+
+	oldptr := unsafe.Pointer(&old[0])
+	newbs, err := simpleCAllocator().ReallocZero(old, uint64(sz))
+	if err != nil {
+		return nil, err
+	}
+	newptr := unsafe.Pointer(&newbs[0])
+	mp.removePtrHdr(oldptr)
+	mp.recordPtrHdr(newptr, memHdr{
+		poolId:  mp.id,
+		allocSz: int32(sz),
+		offHeap: offHeap,
+	})
+	globalStats.RecordFree("global", int64(oldcap))
+	mp.stats.RecordFree(mp.tag, int64(oldcap))
+	globalStats.RecordAlloc("global", int64(sz))
+	mp.stats.RecordAlloc(mp.tag, int64(sz))
+	return newbs, nil
+}
+
 func makeSliceWithCapWithDetailK[T any](detailk string, n, cap int, mp *MPool, offHeap bool) ([]T, error) {
 	var t T
 	tsz := unsafe.Sizeof(t)
-	bs, err := mp.allocWithDetailK(detailk, int(tsz)*cap, offHeap)
+	bs, err := mp.allocWithDetailK(detailk, int64(tsz)*int64(cap), offHeap)
 	if err != nil {
 		return nil, err
 	}
@@ -775,4 +746,78 @@ var simpleCAllocator = sync.OnceValue(func() *malloc.SimpleCAllocator {
 
 func init() {
 	globalStats.Init()
+	globalPtrs = make(map[unsafe.Pointer]memHdr)
+}
+
+func gRecordPtr(ptr unsafe.Pointer, hdr memHdr) error {
+	globalPtrsMu.Lock()
+	defer globalPtrsMu.Unlock()
+	_, ok := globalPtrs[ptr]
+	if ok {
+		return moerr.NewInternalErrorNoCtx("ptr already recorded")
+	}
+	globalPtrs[ptr] = hdr
+	return nil
+}
+
+func gRemovePtr(ptr unsafe.Pointer) (memHdr, bool) {
+	globalPtrsMu.Lock()
+	defer globalPtrsMu.Unlock()
+	hdr, ok := globalPtrs[ptr]
+	delete(globalPtrs, ptr)
+	return hdr, ok
+}
+
+// alignUp rounds n up to a multiple of a. a must be a power of 2.
+func alignUp(n, a int64) int64 {
+	return (n + a - 1) &^ (a - 1)
+}
+
+// divRoundUp returns ceil(n / a).
+func divRoundUp(n, a int64) int64 {
+	// a is generally a power of two. This will get inlined and
+	// the compiler will optimize the division.
+	return (n + a - 1) / a
+}
+
+// Returns size of the memory block that mallocgc will allocate if you ask for the size.
+func roundupsize(size int64) int64 {
+	if size < _MaxSmallSize {
+		if size <= smallSizeMax-8 {
+			return int64(class_to_size[size_to_class8[divRoundUp(size, smallSizeDiv)]])
+		} else {
+			return int64(class_to_size[size_to_class128[divRoundUp(size-smallSizeMax, largeSizeDiv)]])
+		}
+	}
+	if size+_PageSize < size {
+		return size
+	}
+	return alignUp(size, _PageSize)
+}
+
+// copy-paste from go slice grow strategy.
+func calculateNewCap(oldCap int64, requiredSize int64) int64 {
+	newcap := oldCap
+	doublecap := newcap + newcap
+	if requiredSize > doublecap {
+		newcap = requiredSize
+	} else {
+		// performance: use a larger threshold (256 -> 4096)
+		const threshold = 4096
+		if newcap < threshold {
+			newcap = doublecap
+		} else {
+			for 0 < newcap && newcap < requiredSize {
+				newcap += (newcap + 3*threshold) / 4
+			}
+			if newcap <= 0 {
+				newcap = requiredSize
+			}
+		}
+	}
+	newcap = roundupsize(newcap)
+	if newcap > int64(CapLimit) && requiredSize <= int64(CapLimit) {
+		newcap = int64(CapLimit)
+	}
+	return newcap
 }

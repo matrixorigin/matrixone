@@ -20,6 +20,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/tools/interactive"
 	"github.com/matrixorigin/matrixone/pkg/tools/objecttool"
 	"github.com/stretchr/testify/assert"
 )
@@ -72,8 +73,9 @@ func TestModel_BrowseMode(t *testing.T) {
 	}
 
 	m := model{
-		cmdMode: false,
-		state:   mockState,
+		cmdMode:    false,
+		state:      mockState,
+		cmdHistory: interactive.NewHistoryManager(100),
 	}
 
 	tests := []struct {
@@ -115,12 +117,15 @@ func TestModel_BrowseMode(t *testing.T) {
 }
 
 func TestModel_CommandMode(t *testing.T) {
+	histMgr := interactive.NewHistoryManager(100)
+	histMgr.Add("prev1")
+	histMgr.Add("prev2")
+
 	m := model{
-		cmdMode:      true,
-		cmdInput:     "test",
-		cmdCursor:    4,
-		cmdHistory:   []string{"prev1", "prev2"},
-		historyIndex: 2,
+		cmdMode:    true,
+		cmdInput:   "test",
+		cmdCursor:  4,
+		cmdHistory: histMgr,
 	}
 
 	tests := []struct {
@@ -197,10 +202,14 @@ func TestModel_CommandMode(t *testing.T) {
 }
 
 func TestModel_CommandHistory(t *testing.T) {
+	histMgr := interactive.NewHistoryManager(100)
+	histMgr.Add("cmd1")
+	histMgr.Add("cmd2")
+	histMgr.Add("cmd3")
+
 	m := model{
-		cmdMode:      true,
-		cmdHistory:   []string{"cmd1", "cmd2", "cmd3"},
-		historyIndex: 3,
+		cmdMode:    true,
+		cmdHistory: histMgr,
 	}
 
 	// Test up arrow (previous command)
@@ -208,7 +217,6 @@ func TestModel_CommandHistory(t *testing.T) {
 	newModel, _ := m.handleCommandInput(msg)
 	result := newModel.(model)
 
-	assert.Equal(t, 2, result.historyIndex)
 	assert.Equal(t, "cmd3", result.cmdInput)
 	assert.Equal(t, 4, result.cmdCursor) // cursor at end
 
@@ -216,7 +224,6 @@ func TestModel_CommandHistory(t *testing.T) {
 	newModel, _ = result.handleCommandInput(msg)
 	result = newModel.(model)
 
-	assert.Equal(t, 1, result.historyIndex)
 	assert.Equal(t, "cmd2", result.cmdInput)
 
 	// Test down arrow (next command)
@@ -224,7 +231,6 @@ func TestModel_CommandHistory(t *testing.T) {
 	newModel, _ = result.handleCommandInput(msg)
 	result = newModel.(model)
 
-	assert.Equal(t, 2, result.historyIndex)
 	assert.Equal(t, "cmd3", result.cmdInput)
 }
 

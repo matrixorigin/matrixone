@@ -17,8 +17,6 @@ package interactive
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -26,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/tools/interactive"
 	"github.com/matrixorigin/matrixone/pkg/tools/objecttool"
 )
 
@@ -35,8 +34,7 @@ type model struct {
 	cmdMode       bool
 	cmdInput      string
 	cmdCursor     int // Command line cursor position
-	cmdHistory    []string
-	historyIndex  int
+	cmdHistory    *interactive.HistoryManager
 	hScrollOffset int // Horizontal scroll offset
 
 	// Search related
@@ -74,6 +72,7 @@ func (m model) handleBrowseMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.message = ""
 	switch msg.String() {
 	case "q", "ctrl+c":
+		m.cmdHistory.SaveToFile("object_cmd_history.txt")
 		return m, tea.Quit
 	case "j", "down":
 		m.state.ScrollDown()
@@ -102,12 +101,12 @@ func (m model) handleBrowseMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cmdMode = true
 		m.cmdInput = ""
 		m.cmdCursor = 0
-		m.historyIndex = len(m.cmdHistory)
+		m.cmdHistory.Reset()
 	case "/":
 		m.cmdMode = true
 		m.cmdInput = "search "
 		m.cmdCursor = len(m.cmdInput)
-		m.historyIndex = len(m.cmdHistory)
+		m.cmdHistory.Reset()
 	case "n":
 		// Next search result
 		if m.searchTerm != "" {
@@ -148,8 +147,7 @@ func (m model) handleCommandInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 		// Add to history
-		m.cmdHistory = append(m.cmdHistory, m.cmdInput)
-		m.historyIndex = len(m.cmdHistory)
+		m.cmdHistory.Add(m.cmdInput)
 
 		// Special handling for search command
 		if searchCmd, ok := cmd.(*SearchCommand); ok {
@@ -166,6 +164,7 @@ func (m model) handleCommandInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if quit {
+			m.cmdHistory.SaveToFile("object_cmd_history.txt")
 			return m, tea.Quit
 		}
 
@@ -180,23 +179,16 @@ func (m model) handleCommandInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "up":
 		// History up
-		if len(m.cmdHistory) > 0 && m.historyIndex > 0 {
-			m.historyIndex--
-			m.cmdInput = m.cmdHistory[m.historyIndex]
+		if cmd := m.cmdHistory.Up(); cmd != "" {
+			m.cmdInput = cmd
 			m.cmdCursor = len(m.cmdInput)
 		}
 		return m, nil
 	case "down":
 		// History down
-		if len(m.cmdHistory) > 0 && m.historyIndex < len(m.cmdHistory)-1 {
-			m.historyIndex++
-			m.cmdInput = m.cmdHistory[m.historyIndex]
-			m.cmdCursor = len(m.cmdInput)
-		} else if m.historyIndex == len(m.cmdHistory)-1 {
-			m.historyIndex = len(m.cmdHistory)
-			m.cmdInput = ""
-			m.cmdCursor = 0
-		}
+		cmd := m.cmdHistory.Down()
+		m.cmdInput = cmd
+		m.cmdCursor = len(m.cmdInput)
 		return m, nil
 	case "left":
 		// Move cursor left
@@ -214,7 +206,7 @@ func (m model) handleCommandInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cmdMode = false
 		m.cmdInput = ""
 		m.cmdCursor = 0
-		m.historyIndex = len(m.cmdHistory)
+		m.cmdHistory.Reset()
 	case "ctrl+a":
 		// Move cursor to beginning of line
 		m.cmdCursor = 0
@@ -312,8 +304,61 @@ func (m model) View() string {
 	if m.state != nil && m.state.reader != nil {
 		info := m.state.reader.Info()
 		rows, _, _ := m.state.CurrentRows()
-		start := m.state.GlobalRowOffset() + 1
-		end := start + int64(len(rows)) - 1
+
+		// Calculate row numbers
+		globalStart := m.state.GlobalRowOffset() + 1
+		globalEnd := globalStart + int64(len(rows)) - 1
+
+		// Handle edge case when no rows are visible
+		if len(rows) == 0 {
+			globalEnd = globalStart - 1
+		}
+
+		var start, end, totalRows int64
+		rangeInfo := ""
+
+		if m.state.rowRangeStart >= 0 || m.state.rowRangeEnd >= 0 {
+			// With range filter: show relative position within range
+			totalRows = m.state.FilteredRowCount()
+			rangeInfo = fmt.Sprintf(" [Range: %d-%d]", m.state.rowRangeStart, m.state.rowRangeEnd)
+
+			// Calculate relative position (1-based within range)
+			rangeStart := m.state.rowRangeStart
+			if rangeStart < 0 {
+				rangeStart = 0
+			}
+			start = globalStart - rangeStart
+			end = globalEnd - rangeStart
+
+			// Ensure valid range within filtered data
+			if start < 1 {
+				start = 1
+			}
+			if end < start {
+				end = start
+			}
+			if end > totalRows {
+				end = totalRows
+			}
+			if start > totalRows {
+				start = totalRows
+			}
+		} else {
+			// Without filter: show global position
+			start = globalStart
+			end = globalEnd
+			totalRows = int64(info.RowCount)
+
+			// Ensure end doesn't exceed total
+			if end > totalRows {
+				end = totalRows
+			}
+			// Ensure start is valid
+			if start > totalRows {
+				start = totalRows
+			}
+		}
+
 		mode := "Table"
 		if m.state.verticalMode {
 			mode = "Vertical"
@@ -328,9 +373,8 @@ func (m model) View() string {
 		textColor := "\033[97m" // Bright white text
 		reset := "\033[0m"      // Reset color
 
-		// Status information
-		statusText := fmt.Sprintf(" %s │ Rows %d-%d/%d │ Block %d/%d │ Cols %d-%d/%d ",
-			mode, start, end, info.RowCount, m.state.currentBlock+1, info.BlockCount,
+		statusText := fmt.Sprintf(" %s │ Rows %d-%d/%d%s │ Block %d/%d │ Cols %d-%d/%d ",
+			mode, start, end, totalRows, rangeInfo, m.state.currentBlock+1, info.BlockCount,
 			m.hScrollOffset+1, m.hScrollOffset+len(visibleCols), len(cols))
 
 		// Calculate number of spaces to fill
@@ -365,6 +409,9 @@ func (m model) View() string {
 			b.WriteString(m.cmdInput)
 			b.WriteString("█")
 		}
+	} else {
+		// Show navigation hints when not in command mode
+		b.WriteString("Press: [j/k] Scroll  [g/G] Top/Bottom  [Enter] Next Page  [:] Command  [q] Quit  [?] Help")
 	}
 
 	return b.String()
@@ -413,8 +460,84 @@ func (m *model) startSearch(pattern string) {
 		}
 	}
 
-	// Find first match from current position
-	m.findNextMatch()
+	// Find first match from beginning of file (not current position)
+	m.findFirstMatch()
+}
+
+// findFirstMatch finds first match from beginning of file
+func (m *model) findFirstMatch() {
+	if m.searchTerm == "" {
+		return
+	}
+
+	blockCount := m.state.reader.BlockCount()
+
+	// Search from beginning of file
+	for blockIdx := uint32(0); blockIdx < blockCount; blockIdx++ {
+		batch, release, err := m.state.reader.ReadBlock(m.state.ctx, blockIdx)
+		if err != nil {
+			continue
+		}
+
+		rowCount := batch.RowCount()
+		cols := m.state.reader.Columns()
+
+		// Get block start row from cache
+		blockStartRow := m.state.GetBlockStartRow(blockIdx)
+
+		// Apply row range filter
+		startRowInBlock := 0
+		if m.state.rowRangeStart >= 0 && blockStartRow+int64(startRowInBlock) < m.state.rowRangeStart {
+			startRowInBlock = int(m.state.rowRangeStart - blockStartRow)
+			if startRowInBlock < 0 {
+				startRowInBlock = 0
+			}
+		}
+		endRowInBlock := rowCount
+		if m.state.rowRangeEnd >= 0 && blockStartRow+int64(endRowInBlock) > m.state.rowRangeEnd+1 {
+			endRowInBlock = int(m.state.rowRangeEnd - blockStartRow + 1)
+		}
+
+		// Search this block
+		for rowIdx := startRowInBlock; rowIdx < endRowInBlock; rowIdx++ {
+			for colIdx := 0; colIdx < batch.VectorCount(); colIdx++ {
+				if colIdx >= len(cols) {
+					continue
+				}
+
+				vec := batch.GetVector(int32(colIdx))
+				if vec.IsNull(uint64(rowIdx)) {
+					continue
+				}
+
+				cell := m.formatCell(vec, rowIdx, cols[colIdx])
+
+				if m.matchPattern(cell) {
+					rowNum := fmt.Sprintf("(%d-%d)", blockIdx, rowIdx)
+					colName := fmt.Sprintf("Col%d", colIdx)
+					if colIdx < len(cols) {
+						colName = fmt.Sprintf("Col%d", cols[colIdx].Idx)
+					}
+
+					m.currentMatch = SearchMatch{
+						Row:        blockStartRow + int64(rowIdx),
+						Col:        colIdx,
+						Value:      cell,
+						RowNum:     rowNum,
+						ColumnName: colName,
+					}
+					m.hasMatch = true
+					release()
+					m.gotoSearchMatch()
+					return
+				}
+			}
+		}
+
+		release()
+	}
+
+	m.message = "No matches found"
 }
 
 // findNextMatch finds next match (from current position backward)
@@ -440,15 +563,8 @@ func (m *model) findNextMatch() {
 		rowCount := batch.RowCount()
 		cols := m.state.reader.Columns()
 
-		// Calculate starting row number of this block
-		blockStartRow := int64(0)
-		for i := uint32(0); i < blockIdx; i++ {
-			b, r, e := m.state.reader.ReadBlock(m.state.ctx, i)
-			if e == nil {
-				blockStartRow += int64(b.RowCount())
-				r()
-			}
-		}
+		// Get block start row from cache
+		blockStartRow := m.state.GetBlockStartRow(blockIdx)
 
 		// Determine search start row
 		startRowInBlock := 0
@@ -459,8 +575,17 @@ func (m *model) findNextMatch() {
 			}
 		}
 
+		// Apply row range filter
+		if m.state.rowRangeStart >= 0 && startRowInBlock < int(m.state.rowRangeStart) {
+			startRowInBlock = int(m.state.rowRangeStart)
+		}
+		endRowInBlock := rowCount
+		if m.state.rowRangeEnd >= 0 && endRowInBlock > int(m.state.rowRangeEnd)+1 {
+			endRowInBlock = int(m.state.rowRangeEnd) + 1
+		}
+
 		// Search this block
-		for rowIdx := startRowInBlock; rowIdx < rowCount; rowIdx++ {
+		for rowIdx := startRowInBlock; rowIdx < endRowInBlock; rowIdx++ {
 			for colIdx := 0; colIdx < batch.VectorCount(); colIdx++ {
 				if colIdx >= len(cols) {
 					continue
@@ -527,15 +652,8 @@ func (m *model) findPrevMatch() {
 		rowCount := batch.RowCount()
 		cols := m.state.reader.Columns()
 
-		// Calculate starting row number of this block
-		blockStartRow := int64(0)
-		for i := uint32(0); i < uint32(blockIdx); i++ {
-			b, r, e := m.state.reader.ReadBlock(m.state.ctx, i)
-			if e == nil {
-				blockStartRow += int64(b.RowCount())
-				r()
-			}
-		}
+		// Get block start row from cache
+		blockStartRow := m.state.GetBlockStartRow(uint32(blockIdx))
 
 		// Determine search end row
 		endRowInBlock := rowCount - 1
@@ -546,8 +664,17 @@ func (m *model) findPrevMatch() {
 			}
 		}
 
+		// Apply row range filter
+		startRowInBlock := 0
+		if m.state.rowRangeStart >= 0 {
+			startRowInBlock = int(m.state.rowRangeStart)
+		}
+		if m.state.rowRangeEnd >= 0 && endRowInBlock > int(m.state.rowRangeEnd) {
+			endRowInBlock = int(m.state.rowRangeEnd)
+		}
+
 		// Search this block from back to front
-		for rowIdx := endRowInBlock; rowIdx >= 0; rowIdx-- {
+		for rowIdx := endRowInBlock; rowIdx >= startRowInBlock; rowIdx-- {
 			for colIdx := batch.VectorCount() - 1; colIdx >= 0; colIdx-- {
 				if colIdx >= len(cols) {
 					continue
@@ -699,6 +826,36 @@ func (m model) highlightSearchMatch(text string, row int64, col int) string {
 	return text
 }
 
+// visibleLen returns the visible length of a string (excluding ANSI codes)
+func visibleLen(s string) int {
+	// Remove ANSI escape sequences
+	inEscape := false
+	visLen := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\033' {
+			inEscape = true
+			continue
+		}
+		if inEscape {
+			if s[i] == 'm' {
+				inEscape = false
+			}
+			continue
+		}
+		visLen++
+	}
+	return visLen
+}
+
+// padRight pads string to width, considering ANSI codes
+func padRight(s string, width int) string {
+	visLen := visibleLen(s)
+	if visLen >= width {
+		return s
+	}
+	return s + strings.Repeat(" ", width-visLen)
+}
+
 func (m model) renderTable(b *strings.Builder) {
 	rows, rowNumbers, _ := m.state.CurrentRows()
 	if len(rows) == 0 {
@@ -752,6 +909,13 @@ func (m model) renderTable(b *strings.Builder) {
 			// For blkmeta mode, use metaCols Name as initial width
 			if m.state.viewMode == ViewModeBlkMeta && int(colIdx) < len(m.state.metaCols) {
 				widths[i] = len(m.state.metaCols[colIdx].Name)
+			} else if m.state.colNames != nil {
+				// Use custom column name if set
+				if customName, exists := m.state.colNames[colIdx]; exists {
+					widths[i] = len(customName)
+				} else {
+					widths[i] = len(fmt.Sprintf("Col%d", colIdx))
+				}
 			} else {
 				widths[i] = len(fmt.Sprintf("Col%d", colIdx))
 			}
@@ -865,7 +1029,8 @@ func (m model) renderTable(b *strings.Builder) {
 				// Highlight search match
 				cell = m.highlightSearchMatch(cell, int64(i)+m.state.GlobalRowOffset(), int(colIdx))
 
-				fmt.Fprintf(b, " %-*s │", widths[j], cell)
+				// Use padRight to handle ANSI codes properly
+				fmt.Fprintf(b, " %s │", padRight(cell, widths[j]))
 			}
 		}
 		b.WriteString("\n")
@@ -977,6 +1142,31 @@ func (m model) renderVertical(b *strings.Builder) {
 
 // RunBubbletea runs interactive interface using Bubbletea
 func RunBubbletea(path string) error {
+	return RunBubbleteaWithOptions(path, nil)
+}
+
+// ViewOptions contains options for viewing object data
+type ViewOptions struct {
+	StartRow       int64                        // Start row (0-based)
+	EndRow         int64                        // End row (inclusive, -1 means all)
+	ColumnNames    map[uint16]string            // Custom column names
+	ColumnFormats  map[uint16]string            // Custom column formats (e.g., "ts", "objectstats", "hex")
+	ColumnExpander *ColumnExpander              // Column expander for splitting columns
+	ObjectNameCol  int                          // Column index containing object name for drill-down (-1 to disable)
+	BaseDir        string                       // Base directory for opening nested objects
+	CustomOverview func(rows [][]string) string // Custom overview function
+}
+
+// ColumnExpander defines how to expand a column into multiple columns
+type ColumnExpander struct {
+	SourceCol  uint16          // Source column index to expand
+	NewCols    []string        // New column names
+	NewTypes   []types.Type    // New column types
+	ExpandFunc func(any) []any // Function to expand value into multiple values
+}
+
+// RunBubbleteaWithOptions runs interactive interface with options
+func RunBubbleteaWithOptions(path string, opts *ViewOptions) error {
 	ctx := context.Background()
 
 	reader, err := objecttool.Open(ctx, path)
@@ -988,19 +1178,38 @@ func RunBubbletea(path string) error {
 	state := NewState(ctx, reader)
 	defer state.Close()
 
+	// Apply options
+	if opts != nil {
+		if opts.ColumnNames != nil {
+			state.colNames = opts.ColumnNames
+		}
+		if opts.ColumnFormats != nil {
+			for colIdx, fmtName := range opts.ColumnFormats {
+				state.SetFormat(colIdx, fmtName)
+			}
+		}
+		if opts.StartRow >= 0 || opts.EndRow >= 0 {
+			state.SetRowRange(opts.StartRow, opts.EndRow)
+		}
+		if opts.StartRow > 0 {
+			state.GotoRow(opts.StartRow)
+		}
+	}
+
 	m := model{
-		state: state,
+		state:      state,
+		cmdHistory: interactive.NewHistoryManager(100),
 	}
 
 	// Load history
-	m.loadHistory()
+	m.cmdHistory.LoadFromFile("object_cmd_history.txt")
 
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	result, err := p.Run()
 
 	// Save history
 	if finalModel, ok := result.(model); ok {
-		finalModel.saveHistory()
+		finalModel.cmdHistory.SaveToFile("object_cmd_history.txt")
 	}
 
 	return err
@@ -1147,57 +1356,6 @@ func (m model) getVisibleColumns(cols []objecttool.ColInfo) []uint16 {
 }
 
 // loadHistory loads command history
-func (m *model) loadHistory() {
-	historyFile := getHistoryFile()
-	if historyFile == "" {
-		return
-	}
-
-	data, err := os.ReadFile(historyFile)
-	if err != nil {
-		return
-	}
-
-	lines := strings.Split(string(data), "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line != "" {
-			m.cmdHistory = append(m.cmdHistory, line)
-		}
-	}
-	m.historyIndex = len(m.cmdHistory)
-}
-
-// saveHistory saves command history
-func (m *model) saveHistory() {
-	historyFile := getHistoryFile()
-	if historyFile == "" {
-		return
-	}
-
-	// Ensure directory exists
-	dir := filepath.Dir(historyFile)
-	os.MkdirAll(dir, 0755)
-
-	// Only save last 100 records
-	start := 0
-	if len(m.cmdHistory) > 100 {
-		start = len(m.cmdHistory) - 100
-	}
-
-	content := strings.Join(m.cmdHistory[start:], "\n")
-	os.WriteFile(historyFile, []byte(content), 0644)
-}
-
-// getHistoryFile gets history file path
-func getHistoryFile() string {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(homeDir, ".mo_object_history")
-}
-
 // SearchCommand is the search command
 type SearchCommand struct {
 	Pattern string

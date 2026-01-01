@@ -62,20 +62,57 @@ func NewSimpleCAllocator(
 	return sca
 }
 
-func (sca *SimpleCAllocator) Allocate(size uint64) ([]byte, error) {
+// Malloc does not clear the memory.
+func (sca *SimpleCAllocator) Malloc(size uint64) ([]byte, error) {
 	ptr := C.malloc(C.ulong(size))
 	if ptr == nil {
 		return nil, moerr.NewOOMNoCtx()
 	}
 
 	slice := unsafe.Slice((*byte)(ptr), size)
-	clear(slice)
-
 	sca.allocateBytes.Add(size)
 	sca.inuseBytes.Add(int64(size))
 	sca.allocateObjects.Add(1)
 	sca.inuseObjects.Add(1)
 	sca.triggerUpdate()
+	return slice, nil
+}
+
+// Allocate clears the memory, calloc(size, 1)
+func (sca *SimpleCAllocator) Allocate(size uint64) ([]byte, error) {
+	ptr := C.calloc(C.ulong(size), C.ulong(1))
+	if ptr == nil {
+		return nil, moerr.NewOOMNoCtx()
+	}
+
+	slice := unsafe.Slice((*byte)(ptr), size)
+	sca.allocateBytes.Add(size)
+	sca.inuseBytes.Add(int64(size))
+	sca.allocateObjects.Add(1)
+	sca.inuseObjects.Add(1)
+	sca.triggerUpdate()
+	return slice, nil
+}
+
+// RreallocZero realloc(ptr, size) and zeros the memory
+func (sca *SimpleCAllocator) ReallocZero(old []byte, size uint64) ([]byte, error) {
+	oldptr := unsafe.Pointer(unsafe.SliceData(old))
+	oldsize := uint64(len(old))
+	ptr := C.realloc(oldptr, C.ulong(size))
+	if ptr == nil {
+		return old, moerr.NewOOMNoCtx()
+	}
+
+	slice := unsafe.Slice((*byte)(ptr), size)
+	// we zero the memory here.
+	if size > oldsize {
+		clear(slice[oldsize:])
+		sca.allocateBytes.Add(size - oldsize)
+		sca.inuseBytes.Add(int64(size - oldsize))
+	} else if size < oldsize {
+		sca.inuseBytes.Add(-int64(oldsize - size))
+	}
+
 	return slice, nil
 }
 
@@ -89,10 +126,12 @@ func (sca *SimpleCAllocator) Deallocate(slice []byte, size uint64) {
 		panic(moerr.NewInternalErrorNoCtxf("deallocate size mismatch, expected %d, got %d", size, cap(slice)))
 	}
 
+	ptr := unsafe.Pointer(unsafe.SliceData(slice))
+	C.free(ptr)
+
 	sca.inuseBytes.Add(-int64(size))
 	sca.inuseObjects.Add(-1)
 	sca.triggerUpdate()
-	C.free(unsafe.Pointer(unsafe.SliceData(slice)))
 }
 
 func (sca *SimpleCAllocator) triggerUpdate() {

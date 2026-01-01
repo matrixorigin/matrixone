@@ -875,7 +875,7 @@ func cloneSelectedVecsFromCompactBatches(
 		}
 
 		if selectColsCheckNullColIdx > -1 && tmpBat.Vecs[selectColsCheckNullColIdx].HasNull() {
-			sortKeyNulls := tmpBat.Vecs[selectColsCheckNullColIdx].GetNulls().GetBitmap()
+			sortKeyNulls := tmpBat.Vecs[selectColsCheckNullColIdx].GetNulls().GetBitmap().Clone()
 			tmpBat.ShrinkByMask(sortKeyNulls, true, 0)
 		}
 		if tmpBat.RowCount() == 0 {
@@ -883,6 +883,7 @@ func cloneSelectedVecsFromCompactBatches(
 			tmpBat = nil
 			continue
 		}
+
 		cloned = append(cloned, tmpBat)
 	}
 

@@ -1,0 +1,150 @@
+// Copyright 2021 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package ckp
+
+import (
+	"context"
+	"fmt"
+	"os"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/tools/checkpointtool"
+	"github.com/matrixorigin/matrixone/pkg/tools/checkpointtool/interactive"
+	"github.com/spf13/cobra"
+)
+
+func PrepareCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "ckp [directory]",
+		Short: "Checkpoint viewer tool",
+		Long:  "Tools for analyzing and browsing MatrixOne checkpoint files",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			dir := "."
+			if len(args) == 1 {
+				dir = args[0]
+			}
+			return runViewer(dir)
+		},
+	}
+
+	cmd.AddCommand(infoCommand())
+	cmd.AddCommand(viewCommand())
+
+	return cmd
+}
+
+func setupLogFile() (*os.File, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return nil, err
+	}
+
+	logDir := homeDir + "/.mo-tool"
+	if err := os.MkdirAll(logDir, 0755); err != nil {
+		return nil, err
+	}
+
+	logPath := logDir + "/ckp.log"
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return nil, err
+	}
+
+	// Redirect logs to file
+	logCfg := &logutil.LogConfig{
+		Level:    "info",
+		Format:   "console",
+		Filename: logPath,
+		MaxSize:  100,
+		MaxDays:  7,
+	}
+	logutil.SetupMOLogger(logCfg)
+
+	return logFile, nil
+}
+
+func runViewer(dir string) error {
+	logFile, err := setupLogFile()
+	if err != nil {
+		return fmt.Errorf("setup log file: %w", err)
+	}
+	defer logFile.Close()
+
+	ctx := context.Background()
+	reader, err := checkpointtool.Open(ctx, dir)
+	if err != nil {
+		return fmt.Errorf("open checkpoint dir: %w", err)
+	}
+	defer reader.Close()
+
+	return interactive.Run(reader)
+}
+
+func infoCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "info [directory]",
+		Short: "Show checkpoint summary",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			dir := "."
+			if len(args) == 1 {
+				dir = args[0]
+			}
+
+			logFile, err := setupLogFile()
+			if err != nil {
+				return fmt.Errorf("setup log file: %w", err)
+			}
+			defer logFile.Close()
+
+			ctx := context.Background()
+			reader, err := checkpointtool.Open(ctx, dir)
+			if err != nil {
+				return fmt.Errorf("open checkpoint dir: %w", err)
+			}
+			defer reader.Close()
+
+			info := reader.Info()
+			cmd.Printf("Checkpoint Directory: %s\n", info.Dir)
+			cmd.Printf("Total Entries: %d\n", info.TotalEntries)
+			cmd.Printf("  Global:      %d\n", info.GlobalCount)
+			cmd.Printf("  Incremental: %d\n", info.IncrCount)
+			cmd.Printf("  Compacted:   %d\n", info.CompactCount)
+			if !info.EarliestTS.IsEmpty() {
+				cmd.Printf("Earliest TS:   %s\n", info.EarliestTS.ToString())
+			}
+			if !info.LatestTS.IsEmpty() {
+				cmd.Printf("Latest TS:     %s\n", info.LatestTS.ToString())
+			}
+			return nil
+		},
+	}
+}
+
+func viewCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "view [directory]",
+		Short: "Interactive checkpoint viewer",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			dir := "."
+			if len(args) == 1 {
+				dir = args[0]
+			}
+			return runViewer(dir)
+		},
+	}
+}
