@@ -425,11 +425,8 @@ func TestGlobalClientGC_Integration(t *testing.T) {
 	// Wait for idle GC
 	time.Sleep(time.Millisecond * 300)
 
-	// Backend should still exist if it was recently used
-	client.mu.Lock()
-	backends = client.mu.backends["b1"]
-	client.mu.Unlock()
 	// Backend might be GC'd if idle, but that's OK
+	// No need to check as the test just verifies the integration works
 }
 
 func TestGlobalClientGC_StressTest(t *testing.T) {
@@ -644,4 +641,43 @@ func TestGlobalClientGC_TryCreateReturnsCorrectValue(t *testing.T) {
 	// tryCreate should return false when auto-create is disabled
 	ok = cli2.tryCreate("b1")
 	assert.False(t, ok, "tryCreate should return false when auto-create is disabled")
+}
+
+func TestWithClientMaxBackendMaxIdleDuration_ExplicitZero(t *testing.T) {
+	// Test that explicitly setting maxIdleDuration to 0 disables idle timeout
+	// (not overridden by default in adjust())
+
+	// Case 1: Not set - should use default
+	c1, err := NewClient("test-client-1", newTestBackendFactory())
+	require.NoError(t, err)
+	defer c1.Close()
+
+	cli1 := c1.(*client)
+	assert.Greater(t, cli1.options.maxIdleDuration, time.Duration(0),
+		"default maxIdleDuration should be positive")
+
+	// Case 2: Explicitly set to 0 - should stay 0 (disabled)
+	c2, err := NewClient("test-client-2",
+		newTestBackendFactory(),
+		WithClientMaxBackendMaxIdleDuration(0))
+	require.NoError(t, err)
+	defer c2.Close()
+
+	cli2 := c2.(*client)
+	assert.Equal(t, time.Duration(0), cli2.options.maxIdleDuration,
+		"maxIdleDuration should be 0 when explicitly set to 0 (disabled)")
+
+	// Case 3: Explicitly set to positive value - should use that value (with jitter)
+	c3, err := NewClient("test-client-3",
+		newTestBackendFactory(),
+		WithClientMaxBackendMaxIdleDuration(time.Minute))
+	require.NoError(t, err)
+	defer c3.Close()
+
+	cli3 := c3.(*client)
+	// With ±10% jitter, value should be between 54s and 66s
+	assert.Greater(t, cli3.options.maxIdleDuration, time.Second*50,
+		"maxIdleDuration should be around 1 minute")
+	assert.Less(t, cli3.options.maxIdleDuration, time.Second*70,
+		"maxIdleDuration should be around 1 minute")
 }

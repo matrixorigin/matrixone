@@ -140,12 +140,13 @@ func WithClientCreateTaskChanSize(size int) ClientOption {
 // limit.
 //
 // Note: To avoid "thundering herd" effect where many connections expire simultaneously,
-// a small random jitter (±10%) is automatically applied to the duration. This spreads
+// a small random jitter (±10%) is automatically applied to positive durations. This spreads
 // connection expiration times across a time window, reducing the impact of simultaneous
-// connection closures.
+// connection closures. When value is 0 (disabled), no jitter is applied.
 func WithClientMaxBackendMaxIdleDuration(value time.Duration) ClientOption {
 	return func(c *client) {
 		c.options.maxIdleDuration = applyJitter(value)
+		c.options.maxIdleDurationSet = true // Mark as explicitly set (even if 0)
 	}
 }
 
@@ -211,6 +212,7 @@ type client struct {
 	options struct {
 		maxBackendsPerHost   int
 		maxIdleDuration      time.Duration
+		maxIdleDurationSet   bool // true if user explicitly set maxIdleDuration (even to 0)
 		initBackends         []string
 		initBackendCounts    []int
 		enableAutoCreate     bool
@@ -266,8 +268,9 @@ func (c *client) adjust() {
 			}
 		}
 	}
-	if c.options.maxIdleDuration == 0 {
-		// Apply jitter to default duration to avoid thundering herd
+	if !c.options.maxIdleDurationSet && c.options.maxIdleDuration == 0 {
+		// Only apply default if user didn't explicitly set it
+		// If user set it to 0, it means "no idle time limit" per documentation
 		c.options.maxIdleDuration = applyJitter(defaultMaxIdleDuration)
 	}
 	// Set default retry policy if not configured
@@ -648,45 +651,10 @@ func (c *client) tryCreate(backend string) bool {
 	return globalClientGC.triggerCreate(c, backend)
 }
 
-// gcIdleTask is no longer used - GC idle is handled by globalClientGC
-// This method is kept for backward compatibility but should not be called.
-func (c *client) gcIdleTask(ctx context.Context) {
-	c.logger.Debug("gc idle backends task started")
-	defer c.logger.Debug("gc idle backends task stopped")
-
-	ticker := time.NewTicker(c.options.maxIdleDuration)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			c.closeIdleBackends()
-		}
-	}
-}
-
 func (c *client) triggerGCInactive(remote string) {
 	globalClientGC.triggerGCInactive(c, remote)
 	c.logger.Debug("try to remove all inactived backends",
 		zap.String("remote", remote))
-}
-
-// gcInactiveTask is no longer used - GC inactive is handled by globalClientGC
-// This method is kept for backward compatibility but should not be called.
-func (c *client) gcInactiveTask(ctx context.Context) {
-	c.logger.Debug("gc inactive backends task started")
-	defer c.logger.Debug("gc inactive backends task stopped")
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case remote := <-c.gcInactiveC:
-			c.doRemoveInactive(remote)
-		}
-	}
 }
 
 func (c *client) doRemoveInactive(remote string) {
@@ -733,26 +701,6 @@ func (c *client) closeIdleBackends() {
 	}
 }
 
-// createTask is no longer used - create task is handled by globalClientGC
-// This method is kept for backward compatibility but should not be called.
-func (c *client) createTask(ctx context.Context) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case backend, ok := <-c.createC:
-			if ok {
-				c.mu.Lock()
-				if _, err := c.createBackendLocked(backend); err != nil {
-					c.logger.Error("create backend failed",
-						zap.String("backend", backend),
-						zap.Error(err))
-				}
-				c.mu.Unlock()
-			}
-		}
-	}
-}
 
 func (c *client) createBackend(backend string, lock bool) (Backend, error) {
 	c.mu.Lock()
