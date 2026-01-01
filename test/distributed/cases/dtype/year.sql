@@ -506,8 +506,6 @@ drop table t_year_dup;
 select year('2024-06-15');
 select year('1999-12-31');
 select year('2000-01-01');
-select year(now());
-select year(curdate());
 
 -- YEAR() from datetime
 select year('2024-06-15 10:30:00');
@@ -521,8 +519,6 @@ select year(null);
 -- =====================================================
 select extract(year from '2024-06-15');
 select extract(year from '1999-12-31');
-select extract(year from now());
-select extract(year from curdate());
 
 -- =====================================================
 -- Test cases for DATE/DATETIME to YEAR conversion

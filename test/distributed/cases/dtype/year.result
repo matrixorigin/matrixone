@@ -664,12 +664,6 @@ select year('1999-12-31');
 select year('2000-01-01');
 ➤ year(2000-01-01)[-5,64,0]  𝄀
 2000
-select year(now());
-➤ year(now())[-5,64,0]  𝄀
-2025
-select year(curdate());
-➤ year(curdate())[-5,64,0]  𝄀
-2025
 select year('2024-06-15 10:30:00');
 ➤ year(2024-06-15 10:30:00)[-5,64,0]  𝄀
 2024
@@ -685,12 +679,6 @@ select extract(year from '2024-06-15');
 select extract(year from '1999-12-31');
 ➤ extract(year, 1999-12-31)[12,-1,0]  𝄀
 1999
-select extract(year from now());
-➤ extract(year, now())[12,-1,0]  𝄀
-2025
-select extract(year from curdate());
-➤ extract(year, curdate())[4,32,0]  𝄀
-2025
 drop table if exists t_year_date;
 create table t_year_date (id int, d date, y year);
 insert into t_year_date values (1, '2024-06-15', 2024);
