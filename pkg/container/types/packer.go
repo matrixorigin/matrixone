@@ -264,7 +264,7 @@ func (p *Packer) EncodeEnum(e Enum) {
 
 func (p *Packer) EncodeMoYear(e MoYear) {
 	p.putByte(yearCode)
-	p.EncodeInt16(int16(e))
+	p.encodeInt(int64(e))
 }
 
 func (p *Packer) EncodeDecimal64(e Decimal64) {
