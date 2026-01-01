@@ -252,7 +252,7 @@ func TestZMOp(t *testing.T) {
 }
 
 func TestVectorZM(t *testing.T) {
-	m := mpool.MustNewNoFixed(t.Name())
+	m := mpool.MustNew(t.Name())
 	zm := NewZM(types.T_uint32, 0)
 	zm.Update(uint32(12))
 	zm.Update(uint32(22))

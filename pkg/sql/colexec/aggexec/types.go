@@ -82,19 +82,20 @@ type AggFuncExec interface {
 
 	// GroupGrow increases the number of groups in the aggregation.
 	GroupGrow(more int) error
+
 	// PreAllocateGroups pre-allocates more additional groups to reduce garbage collection overhead.
 	PreAllocateGroups(more int) error
 
-	// Fill BulkFill and BatchFill add the value to the aggregation.
-	// Fill : add one row to the aggregation for a specific group.
-	// BulkFill : add values to the aggregation for a group in bulk.
-	// BatchFill : add values to the aggregation for multiple groups at once.
+	// XXX: WTF.
 	Fill(groupIndex int, row int, vectors []*vector.Vector) error
 	BulkFill(groupIndex int, vectors []*vector.Vector) error
+
+	// BatchFill : add values to the aggregation for multiple groups at once.
 	BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error
 
-	// Merge combines the result of a self group and a group from another aggregation.
+	// XXX: WTF.
 	Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error
+
 	// BatchMerge combines the aggregation result of multiple couples.
 	// next: offset + i
 	// self: groups[i] - 1
@@ -159,19 +160,6 @@ func MakeAgg(
 	}
 	errmsg := fmt.Sprintf("unexpected aggID %d and param types %v.", aggID, param)
 	return nil, moerr.NewInternalErrorNoCtx(errmsg)
-}
-
-func MakeInitialAggListFromList(mg *mpool.MPool, list []AggFuncExec) ([]AggFuncExec, error) {
-	result := make([]AggFuncExec, 0, len(list))
-	for _, v := range list {
-		param, _ := v.TypesInfo()
-		exec, err := MakeAgg(mg, v.AggID(), v.IsDistinct(), param...)
-		if err != nil {
-			return nil, err
-		}
-		result = append(result, exec)
-	}
-	return result, nil
 }
 
 // makeSingleAgg supports to create an aggregation function executor for single column.
@@ -288,24 +276,6 @@ func makeJsonObjectAgg(
 		emptyNull: true,
 	}
 	return newJsonObjectAggExec(mp, info), nil
-}
-
-func makeCount(
-	mp *mpool.MPool, isStar bool,
-	aggID int64, isDistinct bool,
-	param types.Type) AggFuncExec {
-	info := singleAggInfo{
-		aggID:     aggID,
-		distinct:  isDistinct,
-		argType:   param,
-		retType:   types.T_int64.ToType(),
-		emptyNull: false,
-	}
-
-	if isStar {
-		return newCountStarExec(mp, info)
-	}
-	return newCountColumnExecExec(mp, info)
 }
 
 func makeMedian(

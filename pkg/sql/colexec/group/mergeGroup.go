@@ -29,7 +29,7 @@ import (
 
 func (mergeGroup *MergeGroup) Prepare(proc *process.Process) error {
 	mergeGroup.ctr.state = vm.Build
-	mergeGroup.ctr.mp = mpool.MustNewNoFixed("merge_group_mpool")
+	mergeGroup.ctr.mp = mpool.MustNew("merge_group_mpool")
 
 	if mergeGroup.OpAnalyzer != nil {
 		mergeGroup.OpAnalyzer.Reset()
@@ -125,6 +125,8 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 		// This info really should be set during query planning and prepare.
 		// We screwed up, so deal with it.
 		reader := bytes.NewReader(bat.ExtraBuf1)
+
+		// XXX: Here, the mtyp is critical.  It will affect how later we unmarshal and merge.
 		if mergeGroup.ctr.mtyp, err = types.ReadInt32(reader); err != nil {
 			return false, err
 		}
@@ -158,12 +160,17 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 				return false, err
 			}
 		}
-		if len(mergeGroup.ctr.spillAggList) != len(mergeGroup.Aggs) {
-			mergeGroup.ctr.spillAggList, err = mergeGroup.ctr.makeAggList(mergeGroup.Aggs)
-			if err != nil {
-				return false, err
-			}
+	}
+
+	defer func() {
+		if err != nil {
+			mergeGroup.ctr.freeSpillAggList()
 		}
+	}()
+
+	mergeGroup.ctr.spillAggList, err = mergeGroup.ctr.makeAggList(mergeGroup.Aggs)
+	if err != nil {
+		return false, err
 	}
 
 	// deserialize extra buf2.
@@ -181,7 +188,7 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 
 		for i := int32(0); i < nAggs; i++ {
 			ag := mergeGroup.ctr.spillAggList[i]
-			if err := ag.UnmarshalFromReader(r, proc.Mp()); err != nil {
+			if err := ag.UnmarshalFromReader(r, mergeGroup.ctr.mp); err != nil {
 				return false, err
 			}
 		}
@@ -197,7 +204,7 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 		}
 	} else {
 		if mergeGroup.ctr.hr.IsEmpty() {
-			if err := mergeGroup.ctr.buildHashTable(proc); err != nil {
+			if err := mergeGroup.ctr.buildHashTable(proc.Ctx); err != nil {
 				return false, err
 			}
 		}

@@ -459,6 +459,10 @@ func decodeTuple(b []byte) (Tuple, int, []T, error) {
 	var t Tuple
 	schema := make([]T, 0)
 
+	return decodeTupleTo(b, t, schema)
+}
+
+func decodeTupleTo(b []byte, t Tuple, schema []T) (Tuple, int, []T, error) {
 	// Helper function to check if we have enough bytes remaining
 	checkBytes := func(pos, need int) error {
 		if pos+need > len(b) {
@@ -619,6 +623,11 @@ func decodeTuple(b []byte) (Tuple, int, []T, error) {
 func Unpack(b []byte) (Tuple, error) {
 	t, _, _, err := decodeTuple(b)
 	return t, err
+}
+
+func UnpackTo(b []byte, t Tuple, schema []T) (Tuple, []T, error) {
+	t, _, schema, err := decodeTupleTo(b, t, schema)
+	return t, schema, err
 }
 
 func UnpackWithSchema(b []byte) (Tuple, []T, error) {

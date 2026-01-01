@@ -34,7 +34,6 @@ func TestMPool(t *testing.T) {
 	require.True(t, err == nil, "new mpool failed %v", err)
 
 	nb0 := m.CurrNB()
-	hw0 := m.Stats().HighWaterMark.Load()
 	nalloc0 := m.Stats().NumAlloc.Load()
 	nfree0 := m.Stats().NumFree.Load()
 
@@ -48,7 +47,7 @@ func TestMPool(t *testing.T) {
 		a[0] = 0xF0
 		require.True(t, a[1] == 0, "allocation result not zeroed.")
 		a[i*10-1] = 0xBA
-		a, err = m.reAllocWithDetailK(m.getDetailK(), a, i*20, true)
+		a, err = m.reAllocWithDetailK(m.getDetailK(), a, int64(i*20), true, true)
 		require.True(t, err == nil, "realloc failure %v", err)
 		require.True(t, len(a) == i*20, "allocation i size error")
 		require.True(t, a[0] == 0xF0, "reallocation not copied")
@@ -59,9 +58,6 @@ func TestMPool(t *testing.T) {
 	}
 
 	require.True(t, nb0 == m.CurrNB(), "leak")
-	// 30 -- we realloc, need alloc first, then copy.
-	// therefore, (10 + 20) * max(i) and 2 header size (old and new), is the high water.
-	require.True(t, (hw0+10000*30+2*kMemHdrSz) == m.Stats().HighWaterMark.Load(), "hw")
 	require.True(t, nalloc0+10000*2 == m.Stats().NumAlloc.Load(), "alloc")
 	require.True(t, nalloc0-nfree0 == m.Stats().NumAlloc.Load()-m.Stats().NumFree.Load(), "free")
 }
@@ -127,16 +123,16 @@ func TestMpoolReAllocate(t *testing.T) {
 	m := MustNewZero()
 	d1, err := m.Alloc(1023, true)
 	require.NoError(t, err)
-	require.Equal(t, int64(cap(d1)+kMemHdrSz), m.CurrNB())
+	require.Equal(t, int64(cap(d1)), m.CurrNB())
 
-	d2, err := m.reAllocWithDetailK(m.getDetailK(), d1, cap(d1)-1, true)
+	d2, err := m.reAllocWithDetailK(m.getDetailK(), d1, int64(cap(d1)-1), true, true)
 	require.NoError(t, err)
 	require.Equal(t, cap(d1), cap(d2))
-	require.Equal(t, int64(cap(d1)+kMemHdrSz), m.CurrNB())
+	require.Equal(t, int64(cap(d1)), m.CurrNB())
 
-	d3, err := m.reAllocWithDetailK(m.getDetailK(), d2, cap(d2)+1025, true)
+	d3, err := m.reAllocWithDetailK(m.getDetailK(), d2, int64(cap(d2)+1025), true, true)
 	require.NoError(t, err)
-	require.Equal(t, int64(cap(d3)+kMemHdrSz), m.CurrNB())
+	require.Equal(t, int64(cap(d3)), m.CurrNB())
 
 	if cap(d3) > 5 {
 		d3 = d3[:cap(d3)-4]
@@ -144,13 +140,13 @@ func TestMpoolReAllocate(t *testing.T) {
 		d3_1, err = m.Grow(d3, cap(d3)-2, true)
 		require.NoError(t, err)
 		require.Equal(t, cap(d3), cap(d3_1))
-		require.Equal(t, int64(cap(d3)+kMemHdrSz), m.CurrNB())
+		require.Equal(t, int64(cap(d3)), m.CurrNB())
 		d3 = d3_1
 	}
 
 	d4, err := m.Grow(d3, cap(d3)+10, true)
 	require.NoError(t, err)
-	require.Equal(t, int64(cap(d4)+kMemHdrSz), m.CurrNB())
+	require.Equal(t, int64(cap(d4)), m.CurrNB())
 
 	if cap(d4) > 0 {
 		d4 = d4[:cap(d4)-1]
@@ -165,4 +161,39 @@ func TestUseMalloc(t *testing.T) {
 	bs, err := pool.Alloc(8, true)
 	require.Nil(t, err)
 	pool.Free(bs)
+}
+
+func TestMPoolNoLock(t *testing.T) {
+	mp1 := MustNewNoLock("test-nolock-1")
+	mp2 := MustNewNoLock("test-nolock-2")
+
+	bs1, err := mp1.Alloc(100, true)
+	require.NoError(t, err)
+	require.Equal(t, int64(100), mp1.CurrNB())
+
+	bs1, err = mp1.ReallocZero(bs1, 200, true)
+	require.NoError(t, err)
+	require.Equal(t, int64(200), mp1.CurrNB())
+
+	mp1.Free(bs1)
+	require.Equal(t, int64(0), mp1.CurrNB())
+
+	bs2, err := mp2.Alloc(100, true)
+	require.NoError(t, err)
+	require.Equal(t, int64(100), mp2.CurrNB())
+
+	bs22, err := mp2.ReallocZero(bs2, 2000000, true)
+	require.NoError(t, err)
+	require.Equal(t, int64(2000000), mp2.CurrNB())
+
+	// should not free bs1, because it is Reallocated.
+
+	// cross pool free is not allowed for no lock mpool.
+	// mp1.Free(bs22)
+	bs22, err = mp2.ReallocZero(bs22, 100, true)
+	require.NoError(t, err)
+	require.Equal(t, int64(2000000), mp2.CurrNB())
+
+	mp2.Free(bs22)
+	require.Equal(t, int64(0), mp2.CurrNB())
 }

@@ -25,10 +25,10 @@ import (
 )
 
 func ToFixedColNoTypeCheck[T any](v *Vector, ret *[]T) {
-	ToSliceNoTypeCheck(v, ret)
 	if v.class == CONSTANT {
-		*ret = (*ret)[:1]
+		*ret = toSliceOfLengthNoTypeCheck[T](v, 1)
 	} else {
+		ToSliceNoTypeCheck(v, ret)
 		*ret = (*ret)[:v.length]
 	}
 }
@@ -39,10 +39,10 @@ func ToFixedCol[T any](v *Vector, ret *[]T) {
 	if v.GetType().Oid == types.T_any || len(v.data) == 0 {
 		return
 	}
-	ToSlice(v, ret)
 	if v.class == CONSTANT {
-		*ret = (*ret)[:1]
+		*ret = toSliceOfLengthNoTypeCheck[T](v, 1)
 	} else {
+		ToSlice(v, ret)
 		*ret = (*ret)[:v.length]
 	}
 }
@@ -193,15 +193,22 @@ func MustVarlenaRawData(v *Vector) (data []types.Varlena, area []byte) {
 
 // XXX extend will extend the vector's Data to accommodate rows more entry.
 func extend(v *Vector, rows int, m *mpool.MPool) error {
-	if tgtCap := v.length + rows; tgtCap > v.capacity {
-		sz := v.typ.TypeSize()
-		ndata, err := m.Grow(v.data, tgtCap*sz, v.offHeap)
+	if rows <= 0 {
+		// we will at least extent by 1.
+		// This is a pure hack to
+		rows = 1
+	}
+
+	tgtLen := v.length + rows
+	tgtDataCap := tgtLen * v.typ.TypeSize()
+	if tgtDataCap > cap(v.data) {
+		ndata, err := m.Grow(v.data, tgtDataCap, v.offHeap)
 		if err != nil {
 			return err
 		}
-		v.data = ndata[:cap(ndata)]
-		v.setupFromData()
+		v.data = ndata
 	}
+	v.data = v.data[:tgtDataCap]
 	return nil
 }
 
@@ -308,7 +315,6 @@ func ProtoVectorToVector(vec api.Vector) (*Vector, error) {
 		return rvec, nil
 	}
 	rvec.data = vec.Data
-	rvec.setupFromData()
 	return rvec, nil
 }
 
