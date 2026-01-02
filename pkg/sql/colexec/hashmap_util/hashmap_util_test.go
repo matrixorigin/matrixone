@@ -19,7 +19,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -357,7 +356,7 @@ func TestCachedStrIteratorOwnerClearedBeforeReuse(t *testing.T) {
 	rv := reflect.ValueOf(hb.cachedStrIterator).Elem()
 	mpField := rv.FieldByName("mp")
 	require.False(t, mpField.IsNil())
-	require.NotEqual(t, uintptr(unsafe.Pointer(staleMap)), uintptr(mpField.UnsafePointer()))
+	require.NotEqual(t, reflect.ValueOf(staleMap).Pointer(), mpField.Pointer())
 }
 
 func TestSwitchKeyTypeCreatesCorrectIterator(t *testing.T) {
@@ -419,7 +418,7 @@ func TestCachedIteratorOwnerClearedBeforeReuse(t *testing.T) {
 	rv := reflect.ValueOf(hb.cachedIntIterator).Elem()
 	mpField := rv.FieldByName("mp")
 	require.False(t, mpField.IsNil())
-	require.NotEqual(t, uintptr(unsafe.Pointer(staleMap)), uintptr(mpField.UnsafePointer()))
+	require.NotEqual(t, reflect.ValueOf(staleMap).Pointer(), mpField.Pointer())
 }
 
 func TestFreeThenBuildRepopulatesCache(t *testing.T) {
