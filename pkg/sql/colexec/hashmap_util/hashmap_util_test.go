@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -277,6 +278,148 @@ func TestBuildHashmapErrorDoesNotLeakIterators(t *testing.T) {
 	require.NoError(t, hb.Batches.CopyIntoBatches(intBat, proc))
 	require.NoError(t, hb.BuildHashmap(false, false, false, proc))
 	require.NotNil(t, hb.cachedIntIterator)
+}
+
+func TestBuildHashmapReuseUniqueSelsBuffer(t *testing.T) {
+	var hb HashmapBuilder
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	require.NoError(t, hb.Prepare([]*plan.Expr{newExpr(0, types.T_int32.ToType())}, -1, proc))
+
+	bat := makeIntBatch(t, 4, proc)
+	defer bat.Clean(proc.Mp())
+
+	// First build: should allocate uniqueSels
+	hb.InputBatchRowCount = bat.RowCount()
+	require.NoError(t, hb.Batches.CopyIntoBatches(bat, proc))
+	require.NoError(t, hb.BuildHashmap(false, false, true, proc))
+	require.NotNil(t, hb.uniqueSels)
+	require.Greater(t, cap(hb.uniqueSels), 0)
+	require.Greater(t, len(hb.uniqueSels), 0)
+	firstPtr := &hb.uniqueSels[0]
+
+	hb.Reset(proc, true)
+	hb.executors = nil
+
+	// Second build: reuse same buffer
+	require.NoError(t, hb.Prepare([]*plan.Expr{newExpr(0, types.T_int32.ToType())}, -1, proc))
+	hb.InputBatchRowCount = bat.RowCount()
+	hb.Batches.Reset()
+	hb.Batches.Buf = nil
+	require.NoError(t, hb.Batches.CopyIntoBatches(bat, proc))
+	require.NoError(t, hb.BuildHashmap(false, false, true, proc))
+	require.NotNil(t, hb.uniqueSels)
+	require.Greater(t, len(hb.uniqueSels), 0)
+	require.Equal(t, firstPtr, &hb.uniqueSels[0])
+}
+
+func TestBuildHashmapDoesNotCreateUniqueSelsWhenNotNeeded(t *testing.T) {
+	var hb HashmapBuilder
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	require.NoError(t, hb.Prepare([]*plan.Expr{newExpr(0, types.T_int32.ToType())}, -1, proc))
+
+	bat := makeIntBatch(t, 2, proc)
+	defer bat.Clean(proc.Mp())
+
+	hb.InputBatchRowCount = bat.RowCount()
+	require.NoError(t, hb.Batches.CopyIntoBatches(bat, proc))
+	require.NoError(t, hb.BuildHashmap(false, false, false, proc))
+	require.Nil(t, hb.uniqueSels, "should not allocate uniqueSels when needUniqueVec is false")
+}
+
+func TestCachedStrIteratorOwnerClearedBeforeReuse(t *testing.T) {
+	var hb HashmapBuilder
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+
+	// Build once to create cached str iterator.
+	require.NoError(t, hb.Prepare([]*plan.Expr{newExpr(0, types.T_varchar.ToType())}, -1, proc))
+	bat := makeStrBatch(t, 4, proc)
+	defer bat.Clean(proc.Mp())
+	hb.InputBatchRowCount = bat.RowCount()
+	require.NoError(t, hb.Batches.CopyIntoBatches(bat, proc))
+	require.NoError(t, hb.BuildHashmap(false, false, false, proc))
+	require.NotNil(t, hb.cachedStrIterator)
+
+	// Bind to a stale map.
+	staleMap, err := hashmap.NewStrHashMap(false, proc.Mp())
+	require.NoError(t, err)
+	hashmap.IteratorChangeOwner(hb.cachedStrIterator, staleMap)
+
+	// Next build should clear stale owner.
+	hb.Reset(proc, true)
+	hb.executors = nil
+	require.NoError(t, hb.Prepare([]*plan.Expr{newExpr(0, types.T_varchar.ToType())}, -1, proc))
+	hb.InputBatchRowCount = bat.RowCount()
+	hb.Batches.Reset()
+	hb.Batches.Buf = nil
+	require.NoError(t, hb.Batches.CopyIntoBatches(bat, proc))
+	require.NoError(t, hb.BuildHashmap(false, false, false, proc))
+
+	rv := reflect.ValueOf(hb.cachedStrIterator).Elem()
+	mpField := rv.FieldByName("mp")
+	require.False(t, mpField.IsNil())
+	require.NotEqual(t, uintptr(unsafe.Pointer(staleMap)), uintptr(mpField.UnsafePointer()))
+}
+
+func TestSwitchKeyTypeCreatesCorrectIterator(t *testing.T) {
+	var hb HashmapBuilder
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+
+	// Build int first.
+	require.NoError(t, hb.Prepare([]*plan.Expr{newExpr(0, types.T_int32.ToType())}, -1, proc))
+	intBat := makeIntBatch(t, 2, proc)
+	defer intBat.Clean(proc.Mp())
+	hb.InputBatchRowCount = intBat.RowCount()
+	require.NoError(t, hb.Batches.CopyIntoBatches(intBat, proc))
+	require.NoError(t, hb.BuildHashmap(false, false, false, proc))
+	require.NotNil(t, hb.cachedIntIterator)
+
+	// Switch to varchar keys; cached str should be created and usable.
+	hb.Reset(proc, true)
+	hb.executors = nil
+	require.NoError(t, hb.Prepare([]*plan.Expr{newExpr(0, types.T_varchar.ToType())}, -1, proc))
+	strBat := makeStrBatch(t, 2, proc)
+	defer strBat.Clean(proc.Mp())
+	hb.InputBatchRowCount = strBat.RowCount()
+	hb.Batches.Reset()
+	hb.Batches.Buf = nil
+	require.NoError(t, hb.Batches.CopyIntoBatches(strBat, proc))
+	require.NoError(t, hb.BuildHashmap(false, false, false, proc))
+	require.NotNil(t, hb.cachedStrIterator)
+}
+
+func TestCachedIteratorOwnerClearedBeforeReuse(t *testing.T) {
+	var hb HashmapBuilder
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+
+	// Build once to create cached int iterator and bind to map A.
+	require.NoError(t, hb.Prepare([]*plan.Expr{newExpr(0, types.T_int32.ToType())}, -1, proc))
+	bat := makeIntBatch(t, 4, proc)
+	defer bat.Clean(proc.Mp())
+	hb.InputBatchRowCount = bat.RowCount()
+	require.NoError(t, hb.Batches.CopyIntoBatches(bat, proc))
+	require.NoError(t, hb.BuildHashmap(false, false, false, proc))
+	require.NotNil(t, hb.cachedIntIterator)
+
+	// Manually bind iterator to a different map to simulate stale owner.
+	staleMap, err := hashmap.NewIntHashMap(false, proc.Mp())
+	require.NoError(t, err)
+	hashmap.IteratorChangeOwner(hb.cachedIntIterator, staleMap)
+
+	// Next build should clear stale owner and rebind to fresh map, not panic.
+	hb.Reset(proc, true)
+	hb.executors = nil
+	require.NoError(t, hb.Prepare([]*plan.Expr{newExpr(0, types.T_int32.ToType())}, -1, proc))
+	hb.InputBatchRowCount = bat.RowCount()
+	hb.Batches.Reset()
+	hb.Batches.Buf = nil
+	require.NoError(t, hb.Batches.CopyIntoBatches(bat, proc))
+	require.NoError(t, hb.BuildHashmap(false, false, false, proc))
+
+	// Owner should now be non-nil and point to the new map (i.e., not staleMap).
+	rv := reflect.ValueOf(hb.cachedIntIterator).Elem()
+	mpField := rv.FieldByName("mp")
+	require.False(t, mpField.IsNil())
+	require.NotEqual(t, uintptr(unsafe.Pointer(staleMap)), uintptr(mpField.UnsafePointer()))
 }
 
 func TestFreeThenBuildRepopulatesCache(t *testing.T) {

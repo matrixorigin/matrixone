@@ -42,6 +42,7 @@ type HashmapBuilder struct {
 	Batches            colexec.Batches
 	executors          []colexec.ExpressionExecutor
 	UniqueJoinKeys     []*vector.Vector
+	uniqueSels         []int64
 	cachedIntIterator  hashmap.Iterator
 	cachedStrIterator  hashmap.Iterator
 
@@ -302,7 +303,6 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 	var (
 		vOld        uint64
 		cardinality uint64
-		newSels     []int64
 	)
 
 	for i := 0; i < hb.InputBatchRowCount; i += hashmap.UnitLimit {
@@ -409,17 +409,17 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 					}
 				}
 			} else {
-				if newSels == nil {
-					newSels = make([]int64, hashmap.UnitLimit)
+				if hb.uniqueSels == nil {
+					hb.uniqueSels = make([]int64, 0, hashmap.UnitLimit)
 				}
-
-				newSels = newSels[:0]
+				newSels := hb.uniqueSels[:0]
 				for j, v := range vals[:n] {
 					if v > vOld {
 						newSels = append(newSels, int64(vecIdx2+j))
 						vOld = v
 					}
 				}
+				hb.uniqueSels = newSels
 
 				for j, vec := range hb.vecs[vecIdx1] {
 					err = hb.UniqueJoinKeys[j].Union(vec, newSels, proc.Mp())
