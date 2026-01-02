@@ -189,19 +189,38 @@ func NewGlobalStats(
 	if s.statsUpdater == nil {
 		s.statsUpdater = s.doUpdate
 	}
-	parallism := runtime.GOMAXPROCS(0)
+	// Optimize goroutine concurrency:
+	// 1. concurrentExecutor handles IO-intensive tasks (reading S3 objects), needs high concurrency
+	//    - Set limits [32, 108] to avoid extreme cases
+	// 2. updateWorker handles table-level update requests (coordinator role), needs lower concurrency
+	//    - Set to executorConcurrency / 4, but minimum 16
+	// This optimization reduces goroutine count significantly (e.g., 192 -> 120 in typical environments)
+	// while maintaining performance since updateWorker's actual concurrency is much lower.
+	executorConcurrency := runtime.GOMAXPROCS(0)
 	if s.updateWorkerFactor > 0 {
-		parallism = parallism * s.updateWorkerFactor
+		executorConcurrency = executorConcurrency * s.updateWorkerFactor
 	}
-	s.concurrentExecutor = newConcurrentExecutor(parallism)
+	// Apply limits: min 32, max 108
+	if executorConcurrency < 32 {
+		executorConcurrency = 32
+	}
+	if executorConcurrency > 108 {
+		executorConcurrency = 108
+	}
+	// Calculate updateWorker concurrency: executorConcurrency / 4, but minimum 16
+	updateWorkerConcurrency := executorConcurrency / 4
+	if updateWorkerConcurrency < 16 {
+		updateWorkerConcurrency = 16
+	}
+	s.concurrentExecutor = newConcurrentExecutor(executorConcurrency)
 	s.concurrentExecutor.Run(ctx)
 	go s.consumeWorker(ctx)
-	go s.updateWorker(ctx, parallism)
+	go s.updateWorker(ctx, updateWorkerConcurrency)
 	go s.queueWatcher.run(ctx)
 	logutil.Info(
 		"GlobalStats-Started",
-		zap.Int("exector-num", parallism),
-		zap.Int("worker-num", parallism),
+		zap.Int("exector-num", executorConcurrency),
+		zap.Int("worker-num", updateWorkerConcurrency),
 		zap.Int("worker-factor", s.updateWorkerFactor),
 	)
 	return s
