@@ -682,7 +682,6 @@ func TestWithClientMaxBackendMaxIdleDuration_ExplicitZero(t *testing.T) {
 		"maxIdleDuration should be around 1 minute")
 }
 
-
 // TestGlobalClientGC_ConcurrentCloseAndGC tests that GC operations are safe
 // when clients are being closed concurrently. This is a critical test for
 // the race condition fix.
