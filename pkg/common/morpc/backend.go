@@ -369,7 +369,18 @@ func (rb *remoteBackend) doSend(f *Future) error {
 		// process writeC for a long time, causing the writeC buffer to reach its limit.
 		select {
 		case rb.writeC <- f:
-			rb.metrics.sendingQueueSizeGauge.Set(float64(len(rb.writeC)))
+			queueLen := float64(len(rb.writeC))
+			rb.metrics.sendingQueueSizeGauge.Set(queueLen)
+			if rb.metrics.writeQueueLengthGauge != nil {
+				rb.metrics.writeQueueLengthGauge.Set(queueLen)
+			}
+			if rb.metrics.busyGauge != nil {
+				if len(rb.writeC) >= rb.options.busySize {
+					rb.metrics.busyGauge.Set(1)
+				} else {
+					rb.metrics.busyGauge.Set(0)
+				}
+			}
 			rb.stateMu.RUnlock()
 			return nil
 		case <-f.send.Ctx.Done():
@@ -477,8 +488,43 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 	rb.pingTimer = time.NewTimer(rb.getPingTimeout())
 	messages := make([]*Future, 0, rb.options.batchSendSize)
 	stopped := false
+	metricsUpdateTicker := time.NewTicker(time.Second)
+	defer metricsUpdateTicker.Stop()
+
+	updateMetrics := func() {
+		if rb.metrics != nil {
+			rb.mu.RLock()
+			if rb.metrics.activeRequestsGauge != nil {
+				rb.metrics.activeRequestsGauge.Set(float64(len(rb.mu.futures)))
+			}
+			rb.mu.RUnlock()
+			if rb.metrics.writeQueueLengthGauge != nil {
+				rb.metrics.writeQueueLengthGauge.Set(float64(len(rb.writeC)))
+			}
+			if rb.metrics.busyGauge != nil {
+				if len(rb.writeC) >= rb.options.busySize {
+					rb.metrics.busyGauge.Set(1)
+				} else {
+					rb.metrics.busyGauge.Set(0)
+				}
+			}
+		}
+	}
+
+	go func() {
+		for {
+			select {
+			case <-metricsUpdateTicker.C:
+				updateMetrics()
+			case <-rb.stopWriteC:
+				return
+			}
+		}
+	}()
+
 	for {
 		messages, stopped = rb.fetch(messages, rb.options.batchSendSize)
+		updateMetrics()
 		if len(messages) > 0 {
 			rb.metrics.sendingBatchSizeGauge.Set(float64(len(messages)))
 			start := time.Now()
@@ -638,7 +684,20 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 
 func (rb *remoteBackend) fetch(messages []*Future, maxFetchCount int) ([]*Future, bool) {
 	defer func() {
-		rb.metrics.sendingQueueSizeGauge.Set(float64(len(rb.writeC)))
+		queueLen := float64(len(rb.writeC))
+		if rb.metrics != nil {
+			rb.metrics.sendingQueueSizeGauge.Set(queueLen)
+			if rb.metrics.writeQueueLengthGauge != nil {
+				rb.metrics.writeQueueLengthGauge.Set(queueLen)
+			}
+			if rb.metrics.busyGauge != nil {
+				if len(rb.writeC) >= rb.options.busySize {
+					rb.metrics.busyGauge.Set(1)
+				} else {
+					rb.metrics.busyGauge.Set(0)
+				}
+			}
+		}
 	}()
 
 	n := len(messages)
@@ -854,6 +913,9 @@ func (rb *remoteBackend) addFuture(f *Future) {
 
 	f.ref()
 	rb.mu.futures[f.getSendMessageID()] = f
+	if rb.metrics != nil {
+		rb.metrics.activeRequestsGauge.Set(float64(len(rb.mu.futures)))
+	}
 }
 
 func (rb *remoteBackend) releaseFuture(f *Future) {
@@ -861,6 +923,9 @@ func (rb *remoteBackend) releaseFuture(f *Future) {
 	defer rb.mu.Unlock()
 
 	delete(rb.mu.futures, f.getSendMessageID())
+	if rb.metrics != nil {
+		rb.metrics.activeRequestsGauge.Set(float64(len(rb.mu.futures)))
+	}
 	f.reset()
 	rb.pool.futures.Put(f)
 }

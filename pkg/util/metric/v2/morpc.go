@@ -66,6 +66,38 @@ var (
 			Name:      "network_bytes_total",
 			Help:      "Total bytes of rpc network transfer.",
 		}, []string{"type"})
+
+	rpcGCChannelDropCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "rpc",
+			Name:      "gc_channel_drop_total",
+			Help:      "Total number of GC task requests dropped due to channel full.",
+		}, []string{"type"})
+
+	rpcGCIdleBackendsCleanedCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "rpc",
+			Name:      "gc_idle_backends_cleaned_total",
+			Help:      "Total number of idle backends cleaned by GC idle loop.",
+		})
+
+	rpcGCInactiveProcessedCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "rpc",
+			Name:      "gc_inactive_processed_total",
+			Help:      "Total number of inactive backend cleanup requests processed.",
+		})
+
+	rpcGCCreateProcessedCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "rpc",
+			Name:      "gc_create_processed_total",
+			Help:      "Total number of backend creation requests processed.",
+		})
 )
 
 var (
@@ -99,6 +131,54 @@ var (
 			Subsystem: "rpc",
 			Name:      "server_session_size",
 			Help:      "Size of server sessions size.",
+		}, []string{"name"})
+
+	rpcGCRegisteredClientsGauge = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "rpc",
+			Name:      "gc_registered_clients_total",
+			Help:      "Number of clients registered with the global GC manager.",
+		})
+
+	rpcGCChannelQueueLengthGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "rpc",
+			Name:      "gc_channel_queue_length",
+			Help:      "Current queue length of GC task channels.",
+		}, []string{"type"})
+
+	rpcBackendActiveRequestsGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "rpc",
+			Name:      "backend_active_requests",
+			Help:      "Current number of active requests (futures) per backend.",
+		}, []string{"name"})
+
+	rpcBackendWriteQueueLengthGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "rpc",
+			Name:      "backend_write_queue_length",
+			Help:      "Current length of write queue (writeC channel) per backend.",
+		}, []string{"name"})
+
+	rpcBackendBusyGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "rpc",
+			Name:      "backend_busy",
+			Help:      "Whether backend is busy (1) or not (0).",
+		}, []string{"name"})
+
+	rpcClientActiveGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "rpc",
+			Name:      "client_active",
+			Help:      "Current number of active RPC clients.",
 		}, []string{"name"})
 )
 
@@ -218,4 +298,44 @@ func NewRPCInputCounter() prometheus.Counter {
 
 func NewRPCOutputCounter() prometheus.Counter {
 	return rpcNetworkBytesCounter.WithLabelValues("output")
+}
+
+func NewRPCGCChannelDropCounter(channelType string) prometheus.Counter {
+	return rpcGCChannelDropCounter.WithLabelValues(channelType)
+}
+
+func GetRPCGCIdleBackendsCleanedCounter() prometheus.Counter {
+	return rpcGCIdleBackendsCleanedCounter
+}
+
+func GetRPCGCInactiveProcessedCounter() prometheus.Counter {
+	return rpcGCInactiveProcessedCounter
+}
+
+func GetRPCGCCreateProcessedCounter() prometheus.Counter {
+	return rpcGCCreateProcessedCounter
+}
+
+func GetRPCGCRegisteredClientsGauge() prometheus.Gauge {
+	return rpcGCRegisteredClientsGauge
+}
+
+func NewRPCGCChannelQueueLengthGauge(channelType string) prometheus.Gauge {
+	return rpcGCChannelQueueLengthGauge.WithLabelValues(channelType)
+}
+
+func NewRPCBackendActiveRequestsGaugeByName(name string) prometheus.Gauge {
+	return rpcBackendActiveRequestsGauge.WithLabelValues(name)
+}
+
+func NewRPCBackendWriteQueueLengthGaugeByName(name string) prometheus.Gauge {
+	return rpcBackendWriteQueueLengthGauge.WithLabelValues(name)
+}
+
+func NewRPCBackendBusyGaugeByName(name string) prometheus.Gauge {
+	return rpcBackendBusyGauge.WithLabelValues(name)
+}
+
+func NewRPCClientActiveGaugeByName(name string) prometheus.Gauge {
+	return rpcClientActiveGauge.WithLabelValues(name)
 }
