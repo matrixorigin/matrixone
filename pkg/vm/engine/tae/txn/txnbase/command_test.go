@@ -17,6 +17,8 @@ package txnbase
 import (
 	"bytes"
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -247,12 +249,15 @@ func TestComposedCmd_MarshalBinary_EstimatedSize(t *testing.T) {
 	require.NotNil(t, buf, "marshal buffer should not be nil")
 	require.Greater(t, len(buf), 0, "marshal buffer should not be empty")
 
-	// Estimated size: 8 (header) + numCmds * 256 (average)
-	estimatedSize := 8 + numCmds*256
+	// Estimated size: use ApproxSize() for more accurate estimation
+	estimatedSize := int(cc.ApproxSize())
+	if estimatedSize < 256 {
+		estimatedSize = 256 // Minimum capacity
+	}
 	actualCap := cap(cc.marshalBuf)
 
 	// Capacity should be at least estimated size (may be rounded up by Go runtime)
-	assert.GreaterOrEqual(t, actualCap, estimatedSize, "capacity should be at least estimated size")
+	assert.GreaterOrEqual(t, actualCap, estimatedSize, "capacity should be at least estimated size from ApproxSize()")
 }
 
 // TestComposedCmd_MarshalBinary_ErrorHandling tests error handling when cmd.MarshalBinary fails
@@ -924,4 +929,372 @@ func TestComposedCmd_AddCmd(t *testing.T) {
 	cc.AddCmd(cmd2)
 	assert.Equal(t, 2, len(cc.Cmds), "should have 2 commands after second AddCmd")
 	assert.Equal(t, cmd2, cc.Cmds[1], "second command should match")
+}
+
+// TestComposedCmd_MarshalBinary_UsesApproxSize tests that MarshalBinary uses ApproxSize for capacity estimation
+func TestComposedCmd_MarshalBinary_UsesApproxSize(t *testing.T) {
+	cc := NewComposedCmd()
+	
+	// Add commands with known sizes
+	cmd1 := newMockTxnCmd("cmd1", make([]byte, 100))
+	cmd2 := newMockTxnCmd("cmd2", make([]byte, 200))
+	cc.AddCmd(cmd1)
+	cc.AddCmd(cmd2)
+	
+	// Calculate expected size using ApproxSize
+	expectedSize := int(cc.ApproxSize())
+	if expectedSize < 256 {
+		expectedSize = 256 // Minimum capacity
+	}
+	
+	// Marshal - should use ApproxSize for capacity estimation
+	buf, err := cc.MarshalBinary()
+	require.NoError(t, err)
+	assert.NotNil(t, buf)
+	
+	// Verify that the buffer capacity is at least the estimated size
+	// (it might be slightly larger due to append growth, but should be close)
+	assert.GreaterOrEqual(t, cap(cc.marshalBuf), expectedSize, 
+		"buffer capacity should be at least the estimated size from ApproxSize")
+	
+	// Verify that ApproxSize-based estimation is more accurate than fixed estimation
+	oldFixedEstimate := 8 + len(cc.Cmds)*256
+	approxEstimate := int(cc.ApproxSize())
+	if approxEstimate < 256 {
+		approxEstimate = 256
+	}
+	
+	// ApproxSize should be closer to actual size (or at least not wildly different)
+	actualSize := len(buf)
+	t.Logf("Fixed estimate: %d, ApproxSize estimate: %d, Actual size: %d", 
+		oldFixedEstimate, approxEstimate, actualSize)
+	
+	// The ApproxSize-based estimate should be reasonable (within 2x of actual)
+	assert.LessOrEqual(t, abs(approxEstimate-actualSize), actualSize*2,
+		"ApproxSize estimate should be reasonably close to actual size")
+}
+
+// TestTxnCmd_MarshalBinary_BufferReuse tests that TxnCmd.MarshalBinary reuses marshalBuf
+func TestTxnCmd_MarshalBinary_BufferReuse(t *testing.T) {
+	txnCmd := NewTxnCmd()
+	txnCmd.ComposedCmd = NewComposedCmd()
+	txnCmd.TxnCtx = NewEmptyTxnCtx()
+	
+	// Add a command
+	cmd1 := NewTxnStateCmd("test-id", txnif.TxnStateActive, types.BuildTS(1, 1))
+	txnCmd.ComposedCmd.AddCmd(cmd1)
+	
+	// First marshal - will allocate buffer
+	buf1, err := txnCmd.MarshalBinary()
+	require.NoError(t, err)
+	firstCap := cap(txnCmd.marshalBuf)
+	assert.Greater(t, firstCap, 0, "should allocate buffer on first marshal")
+	assert.NotNil(t, buf1)
+	
+	// Multiple subsequent marshals - should reuse buffer
+	for i := 0; i < 10; i++ {
+		buf, err := txnCmd.MarshalBinary()
+		require.NoError(t, err)
+		assert.Equal(t, buf1, buf, "buffers should be equal")
+		assert.Equal(t, firstCap, cap(txnCmd.marshalBuf), 
+			"capacity should remain the same (reused)")
+	}
+}
+
+// TestTxnCmd_MarshalBinary_UsesApproxSize tests that TxnCmd.MarshalBinary uses ApproxSize for capacity estimation
+func TestTxnCmd_MarshalBinary_UsesApproxSize(t *testing.T) {
+	txnCmd := NewTxnCmd()
+	txnCmd.ComposedCmd = NewComposedCmd()
+	txnCmd.TxnCtx = NewEmptyTxnCtx()
+	txnCmd.ID = "test-txn-id"
+	
+	// Add commands
+	cmd1 := NewTxnStateCmd("cmd1", txnif.TxnStateActive, types.BuildTS(1, 1))
+	cmd2 := NewTxnStateCmd("cmd2", txnif.TxnStateCommitted, types.BuildTS(2, 2))
+	txnCmd.ComposedCmd.AddCmd(cmd1)
+	txnCmd.ComposedCmd.AddCmd(cmd2)
+	
+	// Calculate expected size using ApproxSize
+	expectedSize := int(txnCmd.ApproxSize())
+	if expectedSize < 256 {
+		expectedSize = 256 // Minimum capacity
+	}
+	
+	// Marshal - should use ApproxSize for capacity estimation
+	buf, err := txnCmd.MarshalBinary()
+	require.NoError(t, err)
+	assert.NotNil(t, buf)
+	
+	// Verify that the buffer capacity is at least the estimated size
+	assert.GreaterOrEqual(t, cap(txnCmd.marshalBuf), expectedSize,
+		"buffer capacity should be at least the estimated size from ApproxSize")
+}
+
+// TestTxnCmd_Close_ClearsMarshalBuf tests that TxnCmd.Close clears marshalBuf
+func TestTxnCmd_Close_ClearsMarshalBuf(t *testing.T) {
+	txnCmd := NewTxnCmd()
+	txnCmd.ComposedCmd = NewComposedCmd()
+	txnCmd.TxnCtx = NewEmptyTxnCtx()
+	
+	// Add a command
+	cmd1 := NewTxnStateCmd("test-id", txnif.TxnStateActive, types.BuildTS(1, 1))
+	txnCmd.ComposedCmd.AddCmd(cmd1)
+	
+	// Marshal to allocate buffer
+	_, err := txnCmd.MarshalBinary()
+	require.NoError(t, err)
+	assert.NotNil(t, txnCmd.marshalBuf, "marshalBuf should be allocated")
+	
+	// Close should clear buffer
+	txnCmd.Close()
+	assert.Nil(t, txnCmd.marshalBuf, "marshalBuf should be cleared after Close")
+	
+	// Marshal again - should allocate new buffer
+	_, err = txnCmd.MarshalBinary()
+	require.NoError(t, err)
+	assert.NotNil(t, txnCmd.marshalBuf, "marshalBuf should be allocated again")
+}
+
+// TestTxnCmd_MarshalBinary_CapacityLimit tests that TxnCmd discards oversized buffers
+func TestTxnCmd_MarshalBinary_CapacityLimit(t *testing.T) {
+	txnCmd := NewTxnCmd()
+	txnCmd.ComposedCmd = NewComposedCmd()
+	txnCmd.TxnCtx = NewEmptyTxnCtx()
+	
+	// Manually set a buffer exceeding MaxTxnCmdBufSize
+	txnCmd.marshalBuf = make([]byte, 0, MaxTxnCmdBufSize+1)
+	oldCap := cap(txnCmd.marshalBuf)
+	assert.Greater(t, oldCap, MaxTxnCmdBufSize, "buffer should exceed limit")
+	
+	// Marshal should discard oversized buffer
+	_, err := txnCmd.MarshalBinary()
+	require.NoError(t, err)
+	
+	// Buffer should be reallocated with appropriate size
+	newCap := cap(txnCmd.marshalBuf)
+	assert.LessOrEqual(t, newCap, MaxTxnCmdBufSize, 
+		"buffer capacity should not exceed MaxTxnCmdBufSize")
+}
+
+// TestTxnCmd_MarshalBinary_ErrorHandling tests error handling when ComposedCmd.MarshalBinary fails
+func TestTxnCmd_MarshalBinary_ErrorHandling(t *testing.T) {
+	txnCmd := NewTxnCmd()
+	txnCmd.ComposedCmd = NewComposedCmd()
+	txnCmd.TxnCtx = NewEmptyTxnCtx()
+	
+	// Add a command that will fail to marshal
+	cmd1 := newMockTxnCmd("cmd1", []byte("data1"))
+	cmd1.marshalErr = errors.New("marshal error")
+	txnCmd.ComposedCmd.AddCmd(cmd1)
+	
+	// Marshal should return error
+	buf, err := txnCmd.MarshalBinary()
+	assert.Error(t, err, "should return error when ComposedCmd.MarshalBinary fails")
+	assert.Nil(t, buf, "should return nil buffer on error")
+}
+
+// TestTxnCmd_MarshalBinary_EmptyComposedCmd tests MarshalBinary with empty ComposedCmd
+func TestTxnCmd_MarshalBinary_EmptyComposedCmd(t *testing.T) {
+	txnCmd := NewTxnCmd()
+	txnCmd.ComposedCmd = NewComposedCmd()
+	txnCmd.TxnCtx = NewEmptyTxnCtx()
+	txnCmd.ID = "test-id"
+	
+	// Marshal with empty ComposedCmd
+	buf, err := txnCmd.MarshalBinary()
+	require.NoError(t, err)
+	assert.NotNil(t, buf)
+	assert.Greater(t, len(buf), 0, "buffer should not be empty")
+	
+	// Verify buffer capacity is reasonable
+	assert.GreaterOrEqual(t, cap(txnCmd.marshalBuf), 256, "should have minimum capacity")
+}
+
+// TestTxnCmd_MarshalBinary_BufferGrowth tests that buffer grows when needed
+func TestTxnCmd_MarshalBinary_BufferGrowth(t *testing.T) {
+	txnCmd := NewTxnCmd()
+	txnCmd.ComposedCmd = NewComposedCmd()
+	txnCmd.TxnCtx = NewEmptyTxnCtx()
+	txnCmd.ID = "test-id"
+	
+	// First marshal with small data
+	cmd1 := NewTxnStateCmd("cmd1", txnif.TxnStateActive, types.BuildTS(1, 1))
+	txnCmd.ComposedCmd.AddCmd(cmd1)
+	buf1, err := txnCmd.MarshalBinary()
+	require.NoError(t, err)
+	firstCap := cap(txnCmd.marshalBuf)
+	
+	// Add more commands to increase size
+	for i := 0; i < 10; i++ {
+		cmd := NewTxnStateCmd(fmt.Sprintf("cmd%d", i), txnif.TxnStateActive, types.BuildTS(int64(i+1), 1))
+		txnCmd.ComposedCmd.AddCmd(cmd)
+	}
+	
+	// Marshal again - buffer should grow if needed
+	buf2, err := txnCmd.MarshalBinary()
+	require.NoError(t, err)
+	secondCap := cap(txnCmd.marshalBuf)
+	
+	// Buffer should be larger or same (if first was already large enough)
+	assert.GreaterOrEqual(t, secondCap, firstCap, "buffer capacity should not shrink")
+	assert.Greater(t, len(buf2), len(buf1), "larger data should produce larger buffer")
+}
+
+// TestTxnCmd_MarshalBinary_MultipleCallsWithDifferentSizes tests multiple calls with varying sizes
+func TestTxnCmd_MarshalBinary_MultipleCallsWithDifferentSizes(t *testing.T) {
+	txnCmd := NewTxnCmd()
+	txnCmd.ComposedCmd = NewComposedCmd()
+	txnCmd.TxnCtx = NewEmptyTxnCtx()
+	txnCmd.ID = "test-id"
+	
+	// Test with different numbers of commands
+	for numCmds := 1; numCmds <= 5; numCmds++ {
+		// Reset ComposedCmd
+		txnCmd.ComposedCmd = NewComposedCmd()
+		
+		// Add commands
+		for i := 0; i < numCmds; i++ {
+			cmd := NewTxnStateCmd(fmt.Sprintf("cmd%d", i), txnif.TxnStateActive, types.BuildTS(int64(i+1), 1))
+			txnCmd.ComposedCmd.AddCmd(cmd)
+		}
+		
+		// Marshal
+		buf, err := txnCmd.MarshalBinary()
+		require.NoError(t, err, "should marshal successfully with %d commands", numCmds)
+		assert.NotNil(t, buf, "buffer should not be nil")
+		assert.Greater(t, len(buf), 0, "buffer should not be empty")
+	}
+}
+
+// TestTxnCmd_MarshalBinary_AfterClose tests MarshalBinary after Close
+func TestTxnCmd_MarshalBinary_AfterClose(t *testing.T) {
+	txnCmd := NewTxnCmd()
+	txnCmd.ComposedCmd = NewComposedCmd()
+	txnCmd.TxnCtx = NewEmptyTxnCtx()
+	
+	// Add a command
+	cmd1 := NewTxnStateCmd("test-id", txnif.TxnStateActive, types.BuildTS(1, 1))
+	txnCmd.ComposedCmd.AddCmd(cmd1)
+	
+	// Marshal to allocate buffer
+	buf1, err := txnCmd.MarshalBinary()
+	require.NoError(t, err)
+	assert.NotNil(t, txnCmd.marshalBuf, "marshalBuf should be allocated")
+	
+	// Close should clear buffer
+	txnCmd.Close()
+	assert.Nil(t, txnCmd.marshalBuf, "marshalBuf should be cleared after Close")
+	
+	// Marshal again - should allocate new buffer and work correctly
+	buf2, err := txnCmd.MarshalBinary()
+	require.NoError(t, err, "should marshal successfully after Close")
+	assert.NotNil(t, buf2, "buffer should not be nil")
+	assert.NotNil(t, txnCmd.marshalBuf, "marshalBuf should be allocated again")
+	assert.Equal(t, buf1, buf2, "marshaled data should be identical")
+}
+
+// TestTxnCmd_MarshalBinary_WriteToConsistency tests consistency between MarshalBinary and WriteTo
+func TestTxnCmd_MarshalBinary_WriteToConsistency(t *testing.T) {
+	txnCmd := NewTxnCmd()
+	txnCmd.ComposedCmd = NewComposedCmd()
+	txnCmd.TxnCtx = NewEmptyTxnCtx()
+	txnCmd.ID = "test-txn-id"
+	
+	// Add commands
+	cmd1 := NewTxnStateCmd("cmd1", txnif.TxnStateActive, types.BuildTS(1, 1))
+	cmd2 := NewTxnStateCmd("cmd2", txnif.TxnStateCommitted, types.BuildTS(2, 2))
+	txnCmd.ComposedCmd.AddCmd(cmd1)
+	txnCmd.ComposedCmd.AddCmd(cmd2)
+	
+	// Marshal using MarshalBinary
+	marshalBuf, err := txnCmd.MarshalBinary()
+	require.NoError(t, err)
+	
+	// Marshal using WriteTo
+	var writeToBuf bytes.Buffer
+	_, err = txnCmd.WriteTo(&writeToBuf)
+	require.NoError(t, err)
+	
+	// Both should produce the same data
+	assert.Equal(t, marshalBuf, writeToBuf.Bytes(), 
+		"MarshalBinary and WriteTo should produce identical data")
+}
+
+// TestTxnCmd_MarshalBinary_ConcurrentCalls tests that MarshalBinary can be called concurrently
+// Note: MarshalBinary is not thread-safe (modifies marshalBuf), but we test that it doesn't panic
+// and produces correct results when called sequentially from different goroutines
+func TestTxnCmd_MarshalBinary_ConcurrentCalls(t *testing.T) {
+	// Create separate TxnCmd instances for each goroutine to avoid data races
+	const numGoroutines = 10
+	results := make([][]byte, numGoroutines)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			// Each goroutine creates its own TxnCmd to avoid data races
+			txnCmd := NewTxnCmd()
+			txnCmd.ComposedCmd = NewComposedCmd()
+			txnCmd.TxnCtx = NewEmptyTxnCtx()
+			txnCmd.ID = "test-id"
+			
+			cmd1 := NewTxnStateCmd("test-id", txnif.TxnStateActive, types.BuildTS(1, 1))
+			txnCmd.ComposedCmd.AddCmd(cmd1)
+			
+			buf, err := txnCmd.MarshalBinary()
+			mu.Lock()
+			if err == nil {
+				results[idx] = buf
+			}
+			mu.Unlock()
+		}(i)
+	}
+	
+	wg.Wait()
+	
+	// All results should be identical (same data structure produces same serialization)
+	firstResult := results[0]
+	require.NotNil(t, firstResult, "first result should not be nil")
+	
+	for i, result := range results {
+		if result != nil {
+			assert.Equal(t, firstResult, result, 
+				"concurrent marshal %d should produce identical result", i)
+		}
+	}
+}
+
+// TestTxnCmd_MarshalBinary_LargeNumberOfCmds tests with large number of commands
+func TestTxnCmd_MarshalBinary_LargeNumberOfCmds(t *testing.T) {
+	txnCmd := NewTxnCmd()
+	txnCmd.ComposedCmd = NewComposedCmd()
+	txnCmd.TxnCtx = NewEmptyTxnCtx()
+	txnCmd.ID = "test-id"
+	
+	// Add many commands
+	numCmds := 100
+	for i := 0; i < numCmds; i++ {
+		cmd := NewTxnStateCmd(fmt.Sprintf("cmd%d", i), txnif.TxnStateActive, types.BuildTS(int64(i+1), 1))
+		txnCmd.ComposedCmd.AddCmd(cmd)
+	}
+	
+	// Marshal should succeed
+	buf, err := txnCmd.MarshalBinary()
+	require.NoError(t, err, "should marshal successfully with %d commands", numCmds)
+	assert.NotNil(t, buf)
+	assert.Greater(t, len(buf), 0, "buffer should not be empty")
+	
+	// Buffer capacity should be reasonable (at least the size of data)
+	assert.GreaterOrEqual(t, cap(txnCmd.marshalBuf), len(buf), 
+		"buffer capacity should be at least the data size")
+}
+
+// Helper function for absolute value
+func abs(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
 }

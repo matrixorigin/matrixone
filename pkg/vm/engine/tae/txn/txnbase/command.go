@@ -52,6 +52,10 @@ const (
 	// MaxComposedCmdBufSize is the maximum capacity of marshalBuf in ComposedCmd.
 	// Buffers exceeding this size will be discarded to prevent large objects from staying in memory.
 	MaxComposedCmdBufSize = 1 << 20 // 1MB
+
+	// MaxTxnCmdBufSize is the maximum capacity of marshalBuf in TxnCmd.
+	// Buffers exceeding this size will be discarded to prevent large objects from staying in memory.
+	MaxTxnCmdBufSize = 1 << 20 // 1MB
 )
 
 func init() {
@@ -117,6 +121,10 @@ type TxnCmd struct {
 	// for replay
 	isEnd bool
 	Lsn   uint64
+
+	// marshalBuf is a reusable buffer for MarshalBinary to avoid repeated allocations.
+	// It will be discarded if capacity exceeds MaxTxnCmdBufSize to prevent memory leaks.
+	marshalBuf []byte
 }
 
 type TxnStateCmd struct {
@@ -126,8 +134,14 @@ type TxnStateCmd struct {
 }
 
 func (c *TxnStateCmd) ApproxSize() int64 {
-	//TODO implement me
-	panic("implement me")
+	var size int64
+	size += 2 // type
+	size += 2 // version
+	size += 4 // ID length prefix
+	size += int64(len(c.ID)) // ID string
+	size += 4 // state (int32)
+	size += types.TxnTsSize // CommitTs
+	return size
 }
 
 type ComposedCmd struct {
@@ -404,12 +418,65 @@ func (c *TxnCmd) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err erro
 }
 
 func (c *TxnCmd) MarshalBinary() (buf []byte, err error) {
-	var bbuf bytes.Buffer
-	if _, err = c.WriteTo(&bbuf); err != nil {
-		return
+	// Capacity limit: discard buffer if it exceeds MaxTxnCmdBufSize to prevent memory leaks.
+	if cap(c.marshalBuf) > MaxTxnCmdBufSize {
+		c.marshalBuf = nil
 	}
-	buf = bbuf.Bytes()
-	return
+
+	// Estimate size: use ApproxSize() for more accurate estimation
+	estimatedSize := int(c.ApproxSize())
+	if estimatedSize < 256 {
+		estimatedSize = 256 // Minimum capacity
+	}
+
+	// Reuse or allocate buffer
+	if cap(c.marshalBuf) < estimatedSize {
+		c.marshalBuf = make([]byte, 0, estimatedSize)
+	} else {
+		c.marshalBuf = c.marshalBuf[:0] // Reset length, keep capacity
+	}
+
+	// Write header (type 2 + version 2)
+	t := c.GetType()
+	c.marshalBuf = append(c.marshalBuf, types.EncodeUint16(&t)...)
+	v := IOET_WALTxnEntry_CurrVer
+	c.marshalBuf = append(c.marshalBuf, types.EncodeUint16(&v)...)
+
+	// Write ComposedCmd (prefixed with length)
+	var composedBuf []byte
+	if composedBuf, err = c.ComposedCmd.MarshalBinary(); err != nil {
+		return nil, err
+	}
+	composedLen := uint32(len(composedBuf))
+	c.marshalBuf = append(c.marshalBuf, types.EncodeUint32(&composedLen)...)
+	c.marshalBuf = append(c.marshalBuf, composedBuf...)
+
+	// Write ID (prefixed with length)
+	idLen := uint32(len(c.ID))
+	c.marshalBuf = append(c.marshalBuf, types.EncodeUint32(&idLen)...)
+	c.marshalBuf = append(c.marshalBuf, c.ID...)
+
+	// Write StartTS
+	c.marshalBuf = append(c.marshalBuf, c.StartTS[:]...)
+
+	// Write PrepareTS
+	c.marshalBuf = append(c.marshalBuf, c.PrepareTS[:]...)
+
+	// Write Participants (length + data)
+	participantsLen := uint32(len(c.Participants))
+	c.marshalBuf = append(c.marshalBuf, types.EncodeUint32(&participantsLen)...)
+	for _, p := range c.Participants {
+		c.marshalBuf = append(c.marshalBuf, types.EncodeUint64(&p)...)
+	}
+
+	// Write Memo
+	var memoBuf bytes.Buffer
+	if _, err = c.Memo.WriteTo(&memoBuf); err != nil {
+		return nil, err
+	}
+	c.marshalBuf = append(c.marshalBuf, memoBuf.Bytes()...)
+
+	return c.marshalBuf, nil
 }
 func (c *TxnCmd) UnmarshalBinaryWithVersion(buf []byte, ver uint16) (err error) {
 	c.ComposedCmd = NewComposedCmd()
@@ -437,6 +504,8 @@ func (c *TxnCmd) VerboseString() string {
 }
 func (c *TxnCmd) Close() {
 	c.ComposedCmd.Close()
+	// Clear marshalBuf to release memory when the object is closed
+	c.marshalBuf = nil
 }
 
 func (cc *ComposedCmd) ApplyCommit() {
@@ -471,9 +540,12 @@ func (cc *ComposedCmd) MarshalBinary() (buf []byte, err error) {
 		cc.marshalBuf = nil
 	}
 
-	// Estimate size: header(8 bytes) + average 256 bytes per cmd
+	// Estimate size: use ApproxSize() for more accurate estimation
 	// This reduces the number of reallocations.
-	estimatedSize := 8 + len(cc.Cmds)*256
+	estimatedSize := int(cc.ApproxSize())
+	if estimatedSize < 256 {
+		estimatedSize = 256 // Minimum capacity
+	}
 
 	// Reuse or allocate buffer
 	if cap(cc.marshalBuf) < estimatedSize {
