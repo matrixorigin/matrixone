@@ -155,6 +155,14 @@ type clientGCManager struct {
 	// Metrics for monitoring channel drops
 	gcInactiveDropCounter prometheus.Counter
 	createDropCounter     prometheus.Counter
+
+	// Metrics for monitoring GC operations
+	registeredClientsGauge     prometheus.Gauge
+	gcInactiveQueueLengthGauge prometheus.Gauge
+	createQueueLengthGauge     prometheus.Gauge
+	gcInactiveProcessedCounter prometheus.Counter
+	createProcessedCounter     prometheus.Counter
+	idleBackendsCleanedCounter prometheus.Counter
 }
 
 type gcInactiveRequest struct {
@@ -172,16 +180,45 @@ func newClientGCManager() *clientGCManager {
 	// These values are read from global variables which are protected by globalClientGCMu
 	interval := globalGCIdleCheckInterval
 	bufferSize := globalGCChannelBufferSize
+
+	// Initialize counters to ensure they appear in Prometheus even when value is 0
+	gcInactiveDropCounter := v2.NewRPCGCChannelDropCounter("gc_inactive")
+	createDropCounter := v2.NewRPCGCChannelDropCounter("create")
+	gcInactiveDropCounter.Add(0)
+	createDropCounter.Add(0)
+
+	// Initialize gauges
+	registeredClientsGauge := v2.GetRPCGCRegisteredClientsGauge()
+	registeredClientsGauge.Set(0)
+	gcInactiveQueueLengthGauge := v2.NewRPCGCChannelQueueLengthGauge("gc_inactive")
+	gcInactiveQueueLengthGauge.Set(0)
+	createQueueLengthGauge := v2.NewRPCGCChannelQueueLengthGauge("create")
+	createQueueLengthGauge.Set(0)
+
+	// Initialize counters
+	gcInactiveProcessedCounter := v2.GetRPCGCInactiveProcessedCounter()
+	gcInactiveProcessedCounter.Add(0)
+	createProcessedCounter := v2.GetRPCGCCreateProcessedCounter()
+	createProcessedCounter.Add(0)
+	idleBackendsCleanedCounter := v2.GetRPCGCIdleBackendsCleanedCounter()
+	idleBackendsCleanedCounter.Add(0)
+
 	return &clientGCManager{
-		clients:               make(map[*client]struct{}),
-		stopC:                 make(chan struct{}),
-		gcIdleCheckInterval:   interval,
-		channelBufferSize:     bufferSize,
-		gcInactiveC:           make(chan gcInactiveRequest, bufferSize),
-		createC:               make(chan createRequest, bufferSize),
-		logger:                logutil.GetPanicLoggerWithLevel(zap.ErrorLevel).Named("morpc-gc"),
-		gcInactiveDropCounter: v2.NewRPCGCChannelDropCounter("gc_inactive"),
-		createDropCounter:     v2.NewRPCGCChannelDropCounter("create"),
+		clients:                    make(map[*client]struct{}),
+		stopC:                      make(chan struct{}),
+		gcIdleCheckInterval:        interval,
+		channelBufferSize:          bufferSize,
+		gcInactiveC:                make(chan gcInactiveRequest, bufferSize),
+		createC:                    make(chan createRequest, bufferSize),
+		logger:                     logutil.GetPanicLoggerWithLevel(zap.ErrorLevel).Named("morpc-gc"),
+		gcInactiveDropCounter:      gcInactiveDropCounter,
+		createDropCounter:          createDropCounter,
+		registeredClientsGauge:     registeredClientsGauge,
+		gcInactiveQueueLengthGauge: gcInactiveQueueLengthGauge,
+		createQueueLengthGauge:     createQueueLengthGauge,
+		gcInactiveProcessedCounter: gcInactiveProcessedCounter,
+		createProcessedCounter:     createProcessedCounter,
+		idleBackendsCleanedCounter: idleBackendsCleanedCounter,
 	}
 }
 
@@ -191,6 +228,7 @@ func (m *clientGCManager) register(c *client) {
 	defer m.mu.Unlock()
 
 	m.clients[c] = struct{}{}
+	m.registeredClientsGauge.Set(float64(len(m.clients)))
 	m.ensureStartedLocked()
 }
 
@@ -211,6 +249,7 @@ func (m *clientGCManager) unregister(c *client) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.clients, c)
+	m.registeredClientsGauge.Set(float64(len(m.clients)))
 }
 
 func init() {
@@ -302,15 +341,24 @@ func (m *clientGCManager) runGCInactiveLoop() {
 	m.logger.Debug("global GC inactive loop started")
 	defer m.logger.Debug("global GC inactive loop stopped")
 
+	// Update queue length periodically
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+
 	for {
 		select {
 		case <-m.stopC:
 			return
+		case <-ticker.C:
+			// Update queue length gauge
+			m.gcInactiveQueueLengthGauge.Set(float64(len(m.gcInactiveC)))
 		case req, ok := <-m.gcInactiveC:
 			if !ok {
 				// Channel closed, exit
 				return
 			}
+			// Update queue length after receiving
+			m.gcInactiveQueueLengthGauge.Set(float64(len(m.gcInactiveC)))
 			// Check if client is still registered
 			m.mu.RLock()
 			_, registered := m.clients[req.c]
@@ -318,6 +366,7 @@ func (m *clientGCManager) runGCInactiveLoop() {
 			if registered {
 				// doRemoveInactive safely handles closed clients
 				req.c.doRemoveInactive(req.remote)
+				m.gcInactiveProcessedCounter.Inc()
 			}
 		}
 	}
@@ -329,15 +378,24 @@ func (m *clientGCManager) runCreateLoop() {
 	m.logger.Debug("global create loop started")
 	defer m.logger.Debug("global create loop stopped")
 
+	// Update queue length periodically
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+
 	for {
 		select {
 		case <-m.stopC:
 			return
+		case <-ticker.C:
+			// Update queue length gauge
+			m.createQueueLengthGauge.Set(float64(len(m.createC)))
 		case req, ok := <-m.createC:
 			if !ok {
 				// Channel closed, exit
 				return
 			}
+			// Update queue length after receiving
+			m.createQueueLengthGauge.Set(float64(len(m.createC)))
 			// Check if client is still registered
 			m.mu.RLock()
 			_, registered := m.clients[req.c]
@@ -350,6 +408,8 @@ func (m *clientGCManager) runCreateLoop() {
 						req.c.logger.Error("create backend failed",
 							zap.String("backend", req.backend),
 							zap.Error(err))
+					} else {
+						m.createProcessedCounter.Inc()
 					}
 				}
 				req.c.mu.Unlock()
@@ -377,10 +437,15 @@ func (m *clientGCManager) doGCIdle() {
 
 	// Iterate without holding global lock
 	// closeIdleBackends() safely handles closed clients by checking c.mu.closed under lock
+	totalCleaned := 0
 	for _, c := range clients {
 		if c.options.maxIdleDuration > 0 {
-			c.closeIdleBackends()
+			cleaned := c.closeIdleBackends()
+			totalCleaned += cleaned
 		}
+	}
+	if totalCleaned > 0 {
+		m.idleBackendsCleanedCounter.Add(float64(totalCleaned))
 	}
 }
 

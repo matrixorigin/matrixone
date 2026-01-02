@@ -250,6 +250,10 @@ func NewClient(
 	// Register with global GC manager instead of creating per-client goroutines
 	globalClientGC.register(c)
 
+	// Update active client count (only after successful creation)
+	activeGauge := v2.NewRPCClientActiveGaugeByName(name)
+	activeGauge.Inc()
+
 	return c, nil
 }
 
@@ -527,7 +531,8 @@ func (c *client) Ping(ctx context.Context, backend string) error {
 
 func (c *client) Close() error {
 	c.mu.Lock()
-	if c.mu.closed {
+	wasClosed := c.mu.closed
+	if wasClosed {
 		c.mu.Unlock()
 		return nil
 	}
@@ -542,6 +547,12 @@ func (c *client) Close() error {
 
 	// Unregister from global GC manager
 	globalClientGC.unregister(c)
+
+	// Update active client count (only if client was successfully created)
+	if !wasClosed {
+		activeGauge := v2.NewRPCClientActiveGaugeByName(c.name)
+		activeGauge.Dec()
+	}
 
 	c.stopper.Stop()
 	close(c.createC)
@@ -684,12 +695,12 @@ func (c *client) doRemoveInactive(remote string) {
 	c.updatePoolSizeMetricsLocked()
 }
 
-func (c *client) closeIdleBackends() {
+func (c *client) closeIdleBackends() int {
 	// Check if client is closed before processing
 	c.mu.Lock()
 	if c.mu.closed {
 		c.mu.Unlock()
-		return
+		return 0
 	}
 
 	var idleBackends []Backend
@@ -711,6 +722,7 @@ func (c *client) closeIdleBackends() {
 	for _, b := range idleBackends {
 		b.Close()
 	}
+	return len(idleBackends)
 }
 
 func (c *client) createBackend(backend string, lock bool) (Backend, error) {
