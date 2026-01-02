@@ -42,6 +42,8 @@ type HashmapBuilder struct {
 	Batches            colexec.Batches
 	executors          []colexec.ExpressionExecutor
 	UniqueJoinKeys     []*vector.Vector
+	cachedIntIterator  hashmap.Iterator
+	cachedStrIterator  hashmap.Iterator
 
 	IsDedup           bool
 	OnDuplicateAction plan.Node_OnDuplicateAction
@@ -109,6 +111,7 @@ func (hb *HashmapBuilder) Prepare(keyCols []*plan.Expr, delColIdx int32, proc *p
 }
 
 func (hb *HashmapBuilder) Reset(proc *process.Process, hashTableHasNotSent bool) {
+	hb.detachAndPruneCachedIterators()
 	if hashTableHasNotSent || hb.InputBatchRowCount == 0 {
 		hb.FreeHashMapAndBatches(proc)
 	}
@@ -144,6 +147,9 @@ func (hb *HashmapBuilder) Reset(proc *process.Process, hashTableHasNotSent bool)
 }
 
 func (hb *HashmapBuilder) Free(proc *process.Process) {
+	hb.detachAndPruneCachedIterators()
+	hb.cachedIntIterator = nil
+	hb.cachedStrIterator = nil
 	hb.needDupVec = false
 	hb.Batches.Reset()
 	hb.IntHashMap = nil
@@ -231,6 +237,14 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 		return nil
 	}
 
+	// Defensive: cached iterators must not hold owners before reuse to avoid pinning old hashmaps.
+	if hb.cachedIntIterator != nil {
+		hashmap.IteratorClearOwner(hb.cachedIntIterator)
+	}
+	if hb.cachedStrIterator != nil {
+		hashmap.IteratorClearOwner(hb.cachedStrIterator)
+	}
+
 	var err error
 	if err = hb.evalJoinCondition(proc); err != nil {
 		return err
@@ -241,12 +255,24 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 		if hb.IntHashMap, err = hashmap.NewIntHashMap(false, proc.Mp()); err != nil {
 			return err
 		}
-		itr = hb.IntHashMap.NewIterator()
+		if hb.cachedIntIterator != nil {
+			hashmap.IteratorChangeOwner(hb.cachedIntIterator, hb.IntHashMap)
+			itr = hb.cachedIntIterator
+		} else {
+			itr = hb.IntHashMap.NewIterator()
+			hb.cachedIntIterator = itr
+		}
 	} else {
 		if hb.StrHashMap, err = hashmap.NewStrHashMap(false, proc.Mp()); err != nil {
 			return err
 		}
-		itr = hb.StrHashMap.NewIterator()
+		if hb.cachedStrIterator != nil {
+			hashmap.IteratorChangeOwner(hb.cachedStrIterator, hb.StrHashMap)
+			itr = hb.cachedStrIterator
+		} else {
+			itr = hb.StrHashMap.NewIterator()
+			hb.cachedStrIterator = itr
+		}
 	}
 
 	if hashOnPK || hb.IsDedup {
@@ -456,4 +482,39 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 	}
 
 	return nil
+}
+
+// ExtractCachedIteratorsForReuse detaches and returns cached iterators so they
+// can be preserved across object pool resets without retaining old hashmaps.
+// After extraction the builder no longer holds references to the iterators.
+func (hb *HashmapBuilder) ExtractCachedIteratorsForReuse() (hashmap.Iterator, hashmap.Iterator) {
+	hb.detachAndPruneCachedIterators()
+	intItr := hb.cachedIntIterator
+	strItr := hb.cachedStrIterator
+	hb.cachedIntIterator = nil
+	hb.cachedStrIterator = nil
+	return intItr, strItr
+}
+
+// RestoreCachedIterators reattaches cached iterators (if any) after a pool
+// reset so they can be reused by future builds.
+func (hb *HashmapBuilder) RestoreCachedIterators(intItr, strItr hashmap.Iterator) {
+	hb.cachedIntIterator = intItr
+	hb.cachedStrIterator = strItr
+}
+
+// detachAndPruneCachedIterators clears iterator owners to avoid retaining old
+// hashmaps and drops oversized string iterators to prevent unbounded growth
+// when they handled very large strings.
+func (hb *HashmapBuilder) detachAndPruneCachedIterators() {
+	if hb.cachedIntIterator != nil {
+		hashmap.IteratorClearOwner(hb.cachedIntIterator)
+	}
+	if hb.cachedStrIterator != nil {
+		if hashmap.StrIteratorCapacity(hb.cachedStrIterator) > hashmap.MaxStrIteratorCapacity {
+			hb.cachedStrIterator = nil
+			return
+		}
+		hashmap.IteratorClearOwner(hb.cachedStrIterator)
+	}
 }
