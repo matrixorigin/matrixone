@@ -48,6 +48,10 @@ const (
 	// TODO(volgariver6): this buf size is about the max size of TxnCt.Memo, we need to calculate
 	// the exact size of it.
 	CmdBufReserved = 1024 * 1024 * 10
+
+	// MaxComposedCmdBufSize is the maximum capacity of marshalBuf in ComposedCmd.
+	// Buffers exceeding this size will be discarded to prevent large objects from staying in memory.
+	MaxComposedCmdBufSize = 1 << 20 // 1MB
 )
 
 func init() {
@@ -128,6 +132,10 @@ func (c *TxnStateCmd) ApproxSize() int64 {
 
 type ComposedCmd struct {
 	Cmds []txnif.TxnCmd
+
+	// marshalBuf is a reusable buffer for MarshalBinary to avoid repeated allocations.
+	// It will be discarded if capacity exceeds MaxComposedCmdBufSize to prevent memory leaks.
+	marshalBuf []byte
 
 	// CmdBufLimit indicates max cmd buffer size. We can only send out
 	// the cmd buffer whose size is less than it.
@@ -450,37 +458,51 @@ func (cc *ComposedCmd) Close() {
 	for _, cmd := range cc.Cmds {
 		cmd.Close()
 	}
+	// Clear marshalBuf to release memory when the object is closed
+	cc.marshalBuf = nil
 }
 func (cc *ComposedCmd) GetType() uint16 {
 	return IOET_WALTxnCommand_Composed
 }
 
 func (cc *ComposedCmd) MarshalBinary() (buf []byte, err error) {
-	// cmdBuf only buffers the cmds.
-	var cmdBuf bytes.Buffer
-
-	if _, err = cc.WriteTo(&cmdBuf); err != nil {
-		return
+	// Capacity limit: discard buffer if it exceeds MaxComposedCmdBufSize to prevent memory leaks.
+	if cap(cc.marshalBuf) > MaxComposedCmdBufSize {
+		cc.marshalBuf = nil
 	}
 
-	// headBuf buffers the header data.
-	var headerBuf bytes.Buffer
+	// Estimate size: header(8 bytes) + average 256 bytes per cmd
+	// This reduces the number of reallocations.
+	estimatedSize := 8 + len(cc.Cmds)*256
+
+	// Reuse or allocate buffer
+	if cap(cc.marshalBuf) < estimatedSize {
+		cc.marshalBuf = make([]byte, 0, estimatedSize)
+	} else {
+		cc.marshalBuf = cc.marshalBuf[:0] // Reset length, keep capacity
+	}
+
+	// Write header (8 bytes: type 2 + version 2 + length 4)
 	t := cc.GetType()
-	if _, err = headerBuf.Write(types.EncodeUint16(&t)); err != nil {
-		return
-	}
+	cc.marshalBuf = append(cc.marshalBuf, types.EncodeUint16(&t)...)
 	ver := IOET_WALTxnCommand_Composed_CurrVer
-	if _, err = headerBuf.Write(types.EncodeUint16(&ver)); err != nil {
-		return
-	}
-
+	cc.marshalBuf = append(cc.marshalBuf, types.EncodeUint16(&ver)...)
 	length := uint32(len(cc.Cmds))
-	if _, err = headerBuf.Write(types.EncodeUint32(&length)); err != nil {
-		return
+	cc.marshalBuf = append(cc.marshalBuf, types.EncodeUint32(&length)...)
+
+	// Write cmds (each cmd is prefixed with its length, same as WriteTo does)
+	for _, cmd := range cc.Cmds {
+		var cmdBuf []byte
+		if cmdBuf, err = cmd.MarshalBinary(); err != nil {
+			return nil, err
+		}
+		// Write length prefix (4 bytes) followed by cmd data, matching WriteTo behavior
+		cmdLen := uint32(len(cmdBuf))
+		cc.marshalBuf = append(cc.marshalBuf, types.EncodeUint32(&cmdLen)...)
+		cc.marshalBuf = append(cc.marshalBuf, cmdBuf...)
 	}
 
-	buf = append(headerBuf.Bytes(), cmdBuf.Bytes()...)
-	return
+	return cc.marshalBuf, nil
 }
 
 func (cc *ComposedCmd) UnmarshalBinary(buf []byte) (err error) {
