@@ -286,8 +286,10 @@ func (mp *MPool) removePtrHdr(ptr unsafe.Pointer) (memHdr, bool) {
 
 func (mp *MPool) deallocateAllPtrs() {
 	for ptr, hdr := range mp.ptrs {
-		allocateSize := int(hdr.allocSz) + kMemHdrSz
-		simpleCAllocator().Deallocate(unsafe.Slice((*byte)(ptr), allocateSize), uint64(allocateSize))
+		if hdr.offHeap {
+			sz := int(hdr.allocSz)
+			simpleCAllocator().Deallocate(unsafe.Slice((*byte)(ptr), sz), uint64(sz))
+		}
 	}
 	mp.ptrs = nil
 }
@@ -448,8 +450,27 @@ var nextPool int64
 var globalCap atomic.Int64
 var globalStats MPoolStats
 var globalPools sync.Map
-var globalPtrs map[unsafe.Pointer]memHdr
-var globalPtrsMu sync.Mutex
+
+// Sharded pointer map to reduce lock contention
+const numPtrShards = 128
+
+type ptrShard struct {
+	mu sync.Mutex
+	m  map[unsafe.Pointer]memHdr
+}
+
+var globalPtrShards [numPtrShards]ptrShard
+
+func getPtrShard(ptr unsafe.Pointer) *ptrShard {
+	hash := uintptr(ptr) >> 4
+	// Better hash mixing to distribute load evenly
+	hash ^= hash >> 17
+	hash *= 0x85ebca6b
+	hash ^= hash >> 13
+	hash *= 0xc2b2ae35
+	hash ^= hash >> 16
+	return &globalPtrShards[hash%numPtrShards]
+}
 
 func InitCap(cap int64) {
 	if cap < GB {
@@ -553,12 +574,28 @@ func (mp *MPool) freePtr(detailk string, ptr unsafe.Pointer) {
 	}
 
 	if hdr.poolId != mp.id {
-		sz := int64(hdr.allocSz)
-		mp.stats.RecordXPoolFree(detailk, sz)
-		globalStats.RecordXPoolFree(detailk, sz)
+		// Cross-pool free: delegate to the original pool
+		mp.stats.RecordXPoolFree(detailk, int64(hdr.allocSz))
+		globalStats.RecordXPoolFree(detailk, int64(hdr.allocSz))
+		otherPool, ok := globalPools.Load(hdr.poolId)
+		if !ok {
+			logutil.Errorf("invalid mpool id %d", hdr.poolId)
+			// Pool already deleted, we still need to free the memory
+			if hdr.offHeap {
+				sz := int64(hdr.allocSz)
+				globalStats.NumCurrBytes.Add(-sz)
+				simpleCAllocator().Deallocate(unsafe.Slice((*byte)(ptr), sz), uint64(sz))
+			}
+		} else {
+			(otherPool.(*MPool)).freePtrInternal(detailk, ptr, hdr)
+		}
 		return
 	}
 
+	mp.freePtrInternal(detailk, ptr, hdr)
+}
+
+func (mp *MPool) freePtrInternal(detailk string, ptr unsafe.Pointer, hdr memHdr) {
 	if !hdr.offHeap {
 		return
 	}
@@ -746,25 +783,29 @@ var simpleCAllocator = sync.OnceValue(func() *malloc.SimpleCAllocator {
 
 func init() {
 	globalStats.Init()
-	globalPtrs = make(map[unsafe.Pointer]memHdr)
+	for i := 0; i < numPtrShards; i++ {
+		globalPtrShards[i].m = make(map[unsafe.Pointer]memHdr)
+	}
 }
 
 func gRecordPtr(ptr unsafe.Pointer, hdr memHdr) error {
-	globalPtrsMu.Lock()
-	defer globalPtrsMu.Unlock()
-	_, ok := globalPtrs[ptr]
+	shard := getPtrShard(ptr)
+	shard.mu.Lock()
+	defer shard.mu.Unlock()
+	_, ok := shard.m[ptr]
 	if ok {
 		return moerr.NewInternalErrorNoCtx("ptr already recorded")
 	}
-	globalPtrs[ptr] = hdr
+	shard.m[ptr] = hdr
 	return nil
 }
 
 func gRemovePtr(ptr unsafe.Pointer) (memHdr, bool) {
-	globalPtrsMu.Lock()
-	defer globalPtrsMu.Unlock()
-	hdr, ok := globalPtrs[ptr]
-	delete(globalPtrs, ptr)
+	shard := getPtrShard(ptr)
+	shard.mu.Lock()
+	defer shard.mu.Unlock()
+	hdr, ok := shard.m[ptr]
+	delete(shard.m, ptr)
 	return hdr, ok
 }
 
