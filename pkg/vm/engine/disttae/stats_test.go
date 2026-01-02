@@ -918,7 +918,7 @@ func TestGlobalStatsConcurrency_ConcurrentCreation(t *testing.T) {
 	close(errors)
 
 	// Check for errors
-	var errList []error
+	errList := make([]error, 0, numGoroutines)
 	for err := range errors {
 		errList = append(errList, err)
 	}
