@@ -215,7 +215,7 @@ func NewGlobalStats(
 	s.concurrentExecutor = newConcurrentExecutor(executorConcurrency)
 	s.concurrentExecutor.Run(ctx)
 	go s.consumeWorker(ctx)
-	go s.updateWorker(ctx, updateWorkerConcurrency)
+	s.updateWorker(ctx, updateWorkerConcurrency) // updateWorker内部已启动goroutines，不需要再用go
 	go s.queueWatcher.run(ctx)
 	logutil.Info(
 		"GlobalStats-Started",
