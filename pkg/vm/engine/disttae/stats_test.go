@@ -397,17 +397,17 @@ func calculateConcurrency(gomaxprocs, updateWorkerFactor int) (executorConcurren
 	if updateWorkerFactor > 0 {
 		executorConcurrency = executorConcurrency * updateWorkerFactor
 	}
-	// Apply limits: min 32, max 108
-	if executorConcurrency < 32 {
-		executorConcurrency = 32
+	// Apply limits: min MinExecutorConcurrency, max MaxExecutorConcurrency
+	if executorConcurrency < MinExecutorConcurrency {
+		executorConcurrency = MinExecutorConcurrency
 	}
-	if executorConcurrency > 108 {
-		executorConcurrency = 108
+	if executorConcurrency > MaxExecutorConcurrency {
+		executorConcurrency = MaxExecutorConcurrency
 	}
-	// Calculate updateWorker concurrency: executorConcurrency / 4, but minimum 16
-	updateWorkerConcurrency = executorConcurrency / 4
-	if updateWorkerConcurrency < 16 {
-		updateWorkerConcurrency = 16
+	// Calculate updateWorker concurrency: executorConcurrency / WorkerConcurrencyRatio, but minimum MinWorkerConcurrency
+	updateWorkerConcurrency = executorConcurrency / WorkerConcurrencyRatio
+	if updateWorkerConcurrency < MinWorkerConcurrency {
+		updateWorkerConcurrency = MinWorkerConcurrency
 	}
 	return executorConcurrency, updateWorkerConcurrency
 }
@@ -581,10 +581,10 @@ func TestCalculateConcurrency(t *testing.T) {
 				"total goroutines mismatch for %s: expected %d, got %d", tt.description, tt.expectedTotal, executor+worker)
 
 			// Validate constraints
-			assert.GreaterOrEqual(t, executor, 32, "executor should be >= 32")
-			assert.LessOrEqual(t, executor, 108, "executor should be <= 108")
-			assert.GreaterOrEqual(t, worker, 16, "worker should be >= 16")
-			assert.Equal(t, worker, max(16, executor/4), "worker should be max(16, executor/4)")
+			assert.GreaterOrEqual(t, executor, MinExecutorConcurrency, "executor should be >= MinExecutorConcurrency")
+			assert.LessOrEqual(t, executor, MaxExecutorConcurrency, "executor should be <= MaxExecutorConcurrency")
+			assert.GreaterOrEqual(t, worker, MinWorkerConcurrency, "worker should be >= MinWorkerConcurrency")
+			assert.Equal(t, worker, max(MinWorkerConcurrency, executor/WorkerConcurrencyRatio), "worker should be max(MinWorkerConcurrency, executor/WorkerConcurrencyRatio)")
 		})
 	}
 }
@@ -659,10 +659,10 @@ func TestGlobalStatsConcurrency_ActualCreation(t *testing.T) {
 				tc.expectedExecutor, actualExecutorConcurrency)
 
 			// Verify constraints
-			assert.GreaterOrEqual(t, actualExecutorConcurrency, 32,
-				"executor concurrency should be >= 32")
-			assert.LessOrEqual(t, actualExecutorConcurrency, 108,
-				"executor concurrency should be <= 108")
+			assert.GreaterOrEqual(t, actualExecutorConcurrency, MinExecutorConcurrency,
+				"executor concurrency should be >= MinExecutorConcurrency")
+			assert.LessOrEqual(t, actualExecutorConcurrency, MaxExecutorConcurrency,
+				"executor concurrency should be <= MaxExecutorConcurrency")
 
 			// Verify worker concurrency matches expected calculation
 			_, expectedWorker := calculateConcurrency(tc.setGOMAXPROCS, tc.updateWorkerFactor)
@@ -677,7 +677,7 @@ func TestGlobalStatsConcurrency_ActualCreation(t *testing.T) {
 }
 
 // TestGlobalStatsConcurrency_WorkerRatio tests that updateWorker concurrency
-// is always executorConcurrency / 4 (with minimum 16)
+// is always executorConcurrency / WorkerConcurrencyRatio (with minimum MinWorkerConcurrency)
 func TestGlobalStatsConcurrency_WorkerRatio(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
@@ -733,9 +733,9 @@ func TestGlobalStatsConcurrency_WorkerRatio(t *testing.T) {
 			executorConcurrency := gs.concurrentExecutor.GetConcurrency()
 
 			// Calculate expected worker concurrency
-			expectedWorkerConcurrency := executorConcurrency / 4
-			if expectedWorkerConcurrency < 16 {
-				expectedWorkerConcurrency = 16
+			expectedWorkerConcurrency := executorConcurrency / WorkerConcurrencyRatio
+			if expectedWorkerConcurrency < MinWorkerConcurrency {
+				expectedWorkerConcurrency = MinWorkerConcurrency
 			}
 
 			// Verify the ratio
@@ -744,9 +744,9 @@ func TestGlobalStatsConcurrency_WorkerRatio(t *testing.T) {
 				"worker/executor ratio mismatch: expected ~%.2f, got %.2f",
 				tc.expectedRatio, actualRatio)
 
-			// Verify worker is at least 16
-			assert.GreaterOrEqual(t, expectedWorkerConcurrency, 16,
-				"worker concurrency should be >= 16")
+			// Verify worker is at least MinWorkerConcurrency
+			assert.GreaterOrEqual(t, expectedWorkerConcurrency, MinWorkerConcurrency,
+				"worker concurrency should be >= MinWorkerConcurrency")
 
 			cancel()
 			time.Sleep(100 * time.Millisecond)
@@ -852,10 +852,10 @@ func TestGlobalStatsConcurrency_EdgeCases(t *testing.T) {
 			executorConcurrency := gs.concurrentExecutor.GetConcurrency()
 
 			// Verify constraints are always satisfied
-			assert.GreaterOrEqual(t, executorConcurrency, 32,
-				"%s: executor should be >= 32, got %d", tt.description, executorConcurrency)
-			assert.LessOrEqual(t, executorConcurrency, 108,
-				"%s: executor should be <= 108, got %d", tt.description, executorConcurrency)
+			assert.GreaterOrEqual(t, executorConcurrency, MinExecutorConcurrency,
+				"%s: executor should be >= MinExecutorConcurrency, got %d", tt.description, executorConcurrency)
+			assert.LessOrEqual(t, executorConcurrency, MaxExecutorConcurrency,
+				"%s: executor should be <= MaxExecutorConcurrency, got %d", tt.description, executorConcurrency)
 
 			// Verify it matches expected calculation
 			expectedExecutor, expectedWorker := calculateConcurrency(tt.setGOMAXPROCS, tt.updateWorkerFactor)
@@ -907,7 +907,7 @@ func TestGlobalStatsConcurrency_ConcurrentCreation(t *testing.T) {
 				return
 			}
 			executorConcurrency := gs.concurrentExecutor.GetConcurrency()
-			if executorConcurrency < 32 || executorConcurrency > 108 {
+			if executorConcurrency < MinExecutorConcurrency || executorConcurrency > MaxExecutorConcurrency {
 				errors <- fmt.Errorf("goroutine %d: invalid executor concurrency %d", id, executorConcurrency)
 				return
 			}

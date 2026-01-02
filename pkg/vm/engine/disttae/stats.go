@@ -40,6 +40,24 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	// MinExecutorConcurrency is the minimum concurrency for concurrentExecutor
+	// which handles IO-intensive tasks (reading S3 objects).
+	MinExecutorConcurrency = 32
+
+	// MaxExecutorConcurrency is the maximum concurrency for concurrentExecutor
+	// to avoid extreme cases in high-core systems.
+	MaxExecutorConcurrency = 108
+
+	// MinWorkerConcurrency is the minimum concurrency for updateWorker
+	// which handles table-level update requests (coordinator role).
+	MinWorkerConcurrency = 16
+
+	// WorkerConcurrencyRatio is the ratio of updateWorker concurrency to executor concurrency.
+	// updateWorker concurrency = executorConcurrency / WorkerConcurrencyRatio
+	WorkerConcurrencyRatio = 4
+)
+
 var (
 	// MinUpdateInterval is the minimal interval to update stats info as it
 	// is necessary to update stats every time.
@@ -191,26 +209,26 @@ func NewGlobalStats(
 	}
 	// Optimize goroutine concurrency:
 	// 1. concurrentExecutor handles IO-intensive tasks (reading S3 objects), needs high concurrency
-	//    - Set limits [32, 108] to avoid extreme cases
+	//    - Set limits [MinExecutorConcurrency, MaxExecutorConcurrency] to avoid extreme cases
 	// 2. updateWorker handles table-level update requests (coordinator role), needs lower concurrency
-	//    - Set to executorConcurrency / 4, but minimum 16
+	//    - Set to executorConcurrency / WorkerConcurrencyRatio, but minimum MinWorkerConcurrency
 	// This optimization reduces goroutine count significantly (e.g., 192 -> 120 in typical environments)
 	// while maintaining performance since updateWorker's actual concurrency is much lower.
 	executorConcurrency := runtime.GOMAXPROCS(0)
 	if s.updateWorkerFactor > 0 {
 		executorConcurrency = executorConcurrency * s.updateWorkerFactor
 	}
-	// Apply limits: min 32, max 108
-	if executorConcurrency < 32 {
-		executorConcurrency = 32
+	// Apply limits: min MinExecutorConcurrency, max MaxExecutorConcurrency
+	if executorConcurrency < MinExecutorConcurrency {
+		executorConcurrency = MinExecutorConcurrency
 	}
-	if executorConcurrency > 108 {
-		executorConcurrency = 108
+	if executorConcurrency > MaxExecutorConcurrency {
+		executorConcurrency = MaxExecutorConcurrency
 	}
-	// Calculate updateWorker concurrency: executorConcurrency / 4, but minimum 16
-	updateWorkerConcurrency := executorConcurrency / 4
-	if updateWorkerConcurrency < 16 {
-		updateWorkerConcurrency = 16
+	// Calculate updateWorker concurrency: executorConcurrency / WorkerConcurrencyRatio, but minimum MinWorkerConcurrency
+	updateWorkerConcurrency := executorConcurrency / WorkerConcurrencyRatio
+	if updateWorkerConcurrency < MinWorkerConcurrency {
+		updateWorkerConcurrency = MinWorkerConcurrency
 	}
 	s.concurrentExecutor = newConcurrentExecutor(executorConcurrency)
 	s.concurrentExecutor.Run(ctx)
