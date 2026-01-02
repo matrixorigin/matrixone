@@ -135,12 +135,12 @@ type TxnStateCmd struct {
 
 func (c *TxnStateCmd) ApproxSize() int64 {
 	var size int64
-	size += 2 // type
-	size += 2 // version
-	size += 4 // ID length prefix
+	size += 2                // type
+	size += 2                // version
+	size += 4                // ID length prefix
 	size += int64(len(c.ID)) // ID string
-	size += 4 // state (int32)
-	size += types.TxnTsSize // CommitTs
+	size += 4                // state (int32)
+	size += types.TxnTsSize  // CommitTs
 	return size
 }
 
@@ -442,6 +442,29 @@ func (c *TxnCmd) MarshalBinary() (buf []byte, err error) {
 	v := IOET_WALTxnEntry_CurrVer
 	c.marshalBuf = append(c.marshalBuf, types.EncodeUint16(&v)...)
 
+	// Pre-expand marshalBuf before writing ComposedCmd to avoid growSlice allocations
+	// Estimate ComposedCmd size and ensure capacity is sufficient
+	composedSize := int(c.ComposedCmd.ApproxSize())
+	if composedSize < 0 {
+		composedSize = 0
+	}
+	// Need space for: length prefix (4 bytes) + composedBuf
+	requiredCap := len(c.marshalBuf) + 4 + composedSize
+	if cap(c.marshalBuf) < requiredCap {
+		// Grow with some headroom to reduce future reallocations
+		newCap := requiredCap
+		if newCap < cap(c.marshalBuf)*2 {
+			newCap = cap(c.marshalBuf) * 2
+		}
+		// Ensure newCap doesn't exceed MaxTxnCmdBufSize
+		if newCap > MaxTxnCmdBufSize {
+			newCap = MaxTxnCmdBufSize
+		}
+		newBuf := make([]byte, len(c.marshalBuf), newCap)
+		copy(newBuf, c.marshalBuf)
+		c.marshalBuf = newBuf
+	}
+
 	// Write ComposedCmd (prefixed with length)
 	var composedBuf []byte
 	if composedBuf, err = c.ComposedCmd.MarshalBinary(); err != nil {
@@ -567,6 +590,35 @@ func (cc *ComposedCmd) MarshalBinary() (buf []byte, err error) {
 	cc.marshalBuf = append(cc.marshalBuf, types.EncodeUint16(&ver)...)
 	length := uint32(len(cc.Cmds))
 	cc.marshalBuf = append(cc.marshalBuf, types.EncodeUint32(&length)...)
+
+	// Pre-expand marshalBuf before the loop to avoid growSlice allocations
+	// Calculate total size needed for all commands (length prefix + cmd data)
+	totalCmdsSize := 0
+	for _, cmd := range cc.Cmds {
+		cmdSize := int(cmd.ApproxSize())
+		if cmdSize < 0 {
+			cmdSize = 0
+		}
+		totalCmdsSize += 4 + cmdSize // length prefix (4 bytes) + cmd size
+	}
+
+	// Ensure capacity is sufficient for all commands
+	currentLen := len(cc.marshalBuf)
+	requiredCap := currentLen + totalCmdsSize
+	if cap(cc.marshalBuf) < requiredCap {
+		// Grow with some headroom to reduce future reallocations
+		newCap := requiredCap
+		if newCap < cap(cc.marshalBuf)*2 {
+			newCap = cap(cc.marshalBuf) * 2
+		}
+		// Ensure newCap doesn't exceed MaxComposedCmdBufSize
+		if newCap > MaxComposedCmdBufSize {
+			newCap = MaxComposedCmdBufSize
+		}
+		newBuf := make([]byte, len(cc.marshalBuf), newCap)
+		copy(newBuf, cc.marshalBuf)
+		cc.marshalBuf = newBuf
+	}
 
 	// Write cmds (each cmd is prefixed with its length, same as WriteTo does)
 	for _, cmd := range cc.Cmds {

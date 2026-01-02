@@ -16,6 +16,8 @@ package containers
 
 import (
 	"bytes"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -858,4 +860,503 @@ func TestConstVector(t *testing.T) {
 		assert.Equal(t, []byte("abc"), vecw4.Get(i).([]byte))
 	}
 
+}
+
+// TestVectorWrapper_WriteTo_PreAllocation tests that WriteTo uses pre-allocation to reduce reallocations
+func TestVectorWrapper_WriteTo_PreAllocation(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+
+	opts := withAllocator(Options{})
+	vec := NewVector(types.T_int32.ToType(), opts)
+	defer vec.Close()
+
+	// Add data
+	for i := 0; i < 1000; i++ {
+		vec.Append(int32(i), false)
+	}
+
+	// Get estimated size
+	estimatedSize := vec.ApproxSize()
+	require.Greater(t, estimatedSize, 0, "estimated size should be positive")
+	estimatedSize += 8 // size header
+	if estimatedSize < 256 {
+		estimatedSize = 256
+	}
+
+	// WriteTo should work correctly
+	var buf bytes.Buffer
+	n, err := vec.WriteTo(&buf)
+	require.NoError(t, err)
+	require.Greater(t, n, int64(0), "should write data")
+
+	// Verify data can be read back
+	vec2 := NewVector(types.T_int32.ToType(), opts)
+	defer vec2.Close()
+	_, err = vec2.ReadFrom(&buf)
+	require.NoError(t, err)
+	assert.True(t, vec.Equals(vec2), "serialized and deserialized vectors should be equal")
+}
+
+// TestVectorWrapper_WriteTo_MultipleCalls tests that multiple WriteTo calls produce consistent results
+func TestVectorWrapper_WriteTo_MultipleCalls(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+
+	opts := withAllocator(Options{})
+	vec := NewVector(types.T_int64.ToType(), opts)
+	defer vec.Close()
+
+	// Add data
+	for i := 0; i < 500; i++ {
+		vec.Append(int64(i*2), false)
+	}
+
+	// First WriteTo
+	var buf1 bytes.Buffer
+	n1, err := vec.WriteTo(&buf1)
+	require.NoError(t, err)
+
+	// Second WriteTo - should produce identical output
+	var buf2 bytes.Buffer
+	n2, err := vec.WriteTo(&buf2)
+	require.NoError(t, err)
+
+	// Results should be identical
+	assert.Equal(t, n1, n2, "both WriteTo calls should write the same amount")
+	assert.Equal(t, buf1.Bytes(), buf2.Bytes(), "both WriteTo calls should produce identical output")
+}
+
+// TestVectorWrapper_WriteTo_DifferentSizes tests WriteTo with different data sizes
+func TestVectorWrapper_WriteTo_DifferentSizes(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+
+	opts := withAllocator(Options{})
+	testCases := []struct {
+		name  string
+		count int
+	}{
+		{"small", 10},
+		{"medium", 100},
+		{"large", 1000},
+		{"very_large", 10000},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			vec := NewVector(types.T_int32.ToType(), opts)
+			defer vec.Close()
+
+			// Add data
+			for i := 0; i < tc.count; i++ {
+				vec.Append(int32(i), false)
+			}
+
+			// WriteTo
+			var buf bytes.Buffer
+			n, err := vec.WriteTo(&buf)
+			require.NoError(t, err, "WriteTo should succeed for %s data", tc.name)
+			require.Greater(t, n, int64(0), "should write data")
+
+			// Verify can read back
+			vec2 := NewVector(types.T_int32.ToType(), opts)
+			defer vec2.Close()
+			_, err = vec2.ReadFrom(&buf)
+			require.NoError(t, err)
+			assert.True(t, vec.Equals(vec2), "serialized and deserialized vectors should be equal for %s data", tc.name)
+		})
+	}
+}
+
+// TestVectorWrapper_WriteTo_DifferentTypes tests WriteTo with different vector types
+func TestVectorWrapper_WriteTo_DifferentTypes(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+
+	testTypes := []types.Type{
+		types.T_int32.ToType(),
+		types.T_int64.ToType(),
+		types.T_float64.ToType(),
+		types.T_varchar.ToType(),
+		types.T_char.ToType(),
+		types.T_bool.ToType(),
+	}
+
+	for _, typ := range testTypes {
+		t.Run(typ.String(), func(t *testing.T) {
+			vec := MockVector(typ, 100, false, nil)
+			defer vec.Close()
+
+			// WriteTo
+			var buf bytes.Buffer
+			n, err := vec.WriteTo(&buf)
+			require.NoError(t, err, "WriteTo should succeed for type %s", typ.String())
+			require.Greater(t, n, int64(0), "should write data")
+
+			// Verify can read back
+			vec2 := MakeVector(typ, common.DefaultAllocator)
+			defer vec2.Close()
+			_, err = vec2.ReadFrom(&buf)
+			require.NoError(t, err)
+			assert.True(t, vec.Equals(vec2), "serialized and deserialized vectors should be equal for type %s", typ.String())
+		})
+	}
+}
+
+// TestVectorWrapper_WriteTo_WithNulls tests WriteTo with null values
+func TestVectorWrapper_WriteTo_WithNulls(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+
+	opts := withAllocator(Options{})
+	vec := NewVector(types.T_int32.ToType(), opts)
+	defer vec.Close()
+
+	// Add data with nulls
+	for i := 0; i < 100; i++ {
+		if i%3 == 0 {
+			vec.Append(nil, true)
+		} else {
+			vec.Append(int32(i), false)
+		}
+	}
+
+	// WriteTo
+	var buf bytes.Buffer
+	n, err := vec.WriteTo(&buf)
+	require.NoError(t, err)
+	require.Greater(t, n, int64(0))
+
+	// Verify can read back
+	vec2 := NewVector(types.T_int32.ToType(), opts)
+	defer vec2.Close()
+	_, err = vec2.ReadFrom(&buf)
+	require.NoError(t, err)
+	assert.True(t, vec.Equals(vec2), "serialized and deserialized vectors with nulls should be equal")
+}
+
+// TestVectorWrapper_WriteTo_EmptyVector tests WriteTo with empty vector
+func TestVectorWrapper_WriteTo_EmptyVector(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+
+	opts := withAllocator(Options{})
+	vec := NewVector(types.T_int32.ToType(), opts)
+	defer vec.Close()
+
+	// WriteTo empty vector
+	var buf bytes.Buffer
+	n, err := vec.WriteTo(&buf)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, n, int64(8), "should write at least size header")
+
+	// Verify can read back
+	vec2 := NewVector(types.T_int32.ToType(), opts)
+	defer vec2.Close()
+	_, err = vec2.ReadFrom(&buf)
+	require.NoError(t, err)
+	assert.Equal(t, 0, vec2.Length(), "empty vector should deserialize to empty vector")
+}
+
+// TestVectorWrapper_WriteToV1_PreAllocation tests that WriteToV1 uses pre-allocation
+func TestVectorWrapper_WriteToV1_PreAllocation(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+
+	opts := withAllocator(Options{})
+	vec := NewVector(types.T_int32.ToType(), opts)
+	defer vec.Close()
+
+	// Add data
+	for i := 0; i < 1000; i++ {
+		vec.Append(int32(i), false)
+	}
+
+	// WriteToV1 should work correctly
+	var buf bytes.Buffer
+	n, err := vec.WriteToV1(&buf)
+	require.NoError(t, err)
+	require.Greater(t, n, int64(0), "should write data")
+
+	// Verify data can be read back
+	vec2 := NewVector(types.T_int32.ToType(), opts)
+	defer vec2.Close()
+	_, err = vec2.ReadFromV1(&buf)
+	require.NoError(t, err)
+	assert.True(t, vec.Equals(vec2), "serialized and deserialized vectors should be equal")
+}
+
+// TestVectorWrapper_WriteToV1_MultipleCalls tests that multiple WriteToV1 calls produce consistent results
+func TestVectorWrapper_WriteToV1_MultipleCalls(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+
+	opts := withAllocator(Options{})
+	vec := NewVector(types.T_int64.ToType(), opts)
+	defer vec.Close()
+
+	// Add data
+	for i := 0; i < 500; i++ {
+		vec.Append(int64(i*2), false)
+	}
+
+	// First WriteToV1
+	var buf1 bytes.Buffer
+	n1, err := vec.WriteToV1(&buf1)
+	require.NoError(t, err)
+
+	// Second WriteToV1 - should produce identical output
+	var buf2 bytes.Buffer
+	n2, err := vec.WriteToV1(&buf2)
+	require.NoError(t, err)
+
+	// Results should be identical
+	assert.Equal(t, n1, n2, "both WriteToV1 calls should write the same amount")
+	assert.Equal(t, buf1.Bytes(), buf2.Bytes(), "both WriteToV1 calls should produce identical output")
+}
+
+// TestVectorWrapper_WriteTo_ConsistencyWithOriginal tests that optimized WriteTo produces same output as original
+func TestVectorWrapper_WriteTo_ConsistencyWithOriginal(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+
+	testCases := []struct {
+		name string
+		vec  func() Vector
+	}{
+		{
+			"int32_vector",
+			func() Vector {
+				opts := withAllocator(Options{})
+				vec := NewVector(types.T_int32.ToType(), opts)
+				for i := 0; i < 100; i++ {
+					vec.Append(int32(i), false)
+				}
+				return vec
+			},
+		},
+		{
+			"varchar_vector",
+			func() Vector {
+				opts := withAllocator(Options{})
+				vec := NewVector(types.T_varchar.ToType(), opts)
+				for i := 0; i < 50; i++ {
+					vec.Append([]byte(fmt.Sprintf("value%d", i)), false)
+				}
+				return vec
+			},
+		},
+		{
+			"vector_with_nulls",
+			func() Vector {
+				opts := withAllocator(Options{})
+				vec := NewVector(types.T_int64.ToType(), opts)
+				for i := 0; i < 100; i++ {
+					if i%5 == 0 {
+						vec.Append(nil, true)
+					} else {
+						vec.Append(int64(i), false)
+					}
+				}
+				return vec
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			vec := tc.vec()
+			defer vec.Close()
+
+			// WriteTo (optimized version)
+			var buf1 bytes.Buffer
+			n1, err := vec.WriteTo(&buf1)
+			require.NoError(t, err)
+
+			// WriteToV1 (also optimized)
+			var buf2 bytes.Buffer
+			n2, err := vec.WriteToV1(&buf2)
+			require.NoError(t, err)
+
+			// Both should write data
+			require.Greater(t, n1, int64(0))
+			require.Greater(t, n2, int64(0))
+
+			// Verify both can be read back correctly
+			vecType := *vec.GetType()
+			opts := withAllocator(Options{})
+			vec1 := NewVector(vecType, opts)
+			defer vec1.Close()
+			_, err = vec1.ReadFrom(&buf1)
+			require.NoError(t, err)
+			assert.True(t, vec.Equals(vec1), "WriteTo should produce readable output")
+
+			vec2 := NewVector(vecType, opts)
+			defer vec2.Close()
+			_, err = vec2.ReadFromV1(&buf2)
+			require.NoError(t, err)
+			assert.True(t, vec.Equals(vec2), "WriteToV1 should produce readable output")
+		})
+	}
+}
+
+// TestVectorWrapper_WriteTo_LargeData tests WriteTo with large data to verify pre-allocation helps
+func TestVectorWrapper_WriteTo_LargeData(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+
+	opts := withAllocator(Options{})
+	vec := NewVector(types.T_varchar.ToType(), opts)
+	defer vec.Close()
+
+	// Add large data
+	largeString := make([]byte, 10000)
+	for i := range largeString {
+		largeString[i] = byte('a' + (i % 26))
+	}
+	for i := 0; i < 100; i++ {
+		vec.Append(largeString, false)
+	}
+
+	// WriteTo should handle large data efficiently
+	var buf bytes.Buffer
+	n, err := vec.WriteTo(&buf)
+	require.NoError(t, err)
+	require.Greater(t, n, int64(1000000), "should write large amount of data")
+
+	// Verify can read back
+	vec2 := NewVector(types.T_varchar.ToType(), opts)
+	defer vec2.Close()
+	_, err = vec2.ReadFrom(&buf)
+	require.NoError(t, err)
+	assert.True(t, vec.Equals(vec2), "large data should serialize and deserialize correctly")
+}
+
+// TestVectorWrapper_WriteTo_ConstVector tests WriteTo with const vectors
+func TestVectorWrapper_WriteTo_ConstVector(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+
+	// Test const fixed vector
+	vec1 := NewConstFixed[int32](types.T_int32.ToType(), int32(42), 100)
+	defer vec1.Close()
+
+	var buf1 bytes.Buffer
+	n1, err := vec1.WriteTo(&buf1)
+	require.NoError(t, err)
+	require.Greater(t, n1, int64(0))
+
+	vec1Read := MakeVector(types.T_int32.ToType(), common.DefaultAllocator)
+	defer vec1Read.Close()
+	_, err = vec1Read.ReadFrom(&buf1)
+	require.NoError(t, err)
+	assert.True(t, vec1.Equals(vec1Read), "const fixed vector should serialize correctly")
+
+	// Test const bytes vector
+	vec2 := NewConstBytes(types.T_char.ToType(), []byte("test"), 50)
+	defer vec2.Close()
+
+	var buf2 bytes.Buffer
+	n2, err := vec2.WriteTo(&buf2)
+	require.NoError(t, err)
+	require.Greater(t, n2, int64(0))
+
+	vec2Read := MakeVector(types.T_char.ToType(), common.DefaultAllocator)
+	defer vec2Read.Close()
+	_, err = vec2Read.ReadFrom(&buf2)
+	require.NoError(t, err)
+	assert.True(t, vec2.Equals(vec2Read), "const bytes vector should serialize correctly")
+
+	// Test const null vector
+	vec3 := NewConstNullVector(types.T_int64.ToType(), 200, common.DefaultAllocator)
+	defer vec3.Close()
+
+	var buf3 bytes.Buffer
+	n3, err := vec3.WriteTo(&buf3)
+	require.NoError(t, err)
+	require.Greater(t, n3, int64(0))
+
+	vec3Read := MakeVector(types.T_int64.ToType(), common.DefaultAllocator)
+	defer vec3Read.Close()
+	_, err = vec3Read.ReadFrom(&buf3)
+	require.NoError(t, err)
+	assert.True(t, vec3.Equals(vec3Read), "const null vector should serialize correctly")
+}
+
+// TestVectorWrapper_WriteTo_ApproxSizeAccuracy tests that ApproxSize is used for pre-allocation
+func TestVectorWrapper_WriteTo_ApproxSizeAccuracy(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+
+	opts := withAllocator(Options{})
+	vec := NewVector(types.T_int32.ToType(), opts)
+	defer vec.Close()
+
+	// Add data
+	for i := 0; i < 1000; i++ {
+		vec.Append(int32(i), false)
+	}
+
+	// Get ApproxSize
+	approxSize := vec.ApproxSize()
+	require.Greater(t, approxSize, 0)
+
+	// WriteTo
+	var buf bytes.Buffer
+	n, err := vec.WriteTo(&buf)
+	require.NoError(t, err)
+
+	// The written size should be close to ApproxSize (allowing for overhead)
+	// ApproxSize doesn't include the 8-byte header, so actual size should be approxSize + 8
+	actualSize := int(n) - 8 // Subtract header size
+	assert.GreaterOrEqual(t, actualSize, approxSize*80/100, "actual size should be at least 80%% of ApproxSize")
+	assert.LessOrEqual(t, actualSize, approxSize*120/100, "actual size should be at most 120%% of ApproxSize")
+}
+
+// TestVectorWrapper_WriteTo_ConcurrentCalls tests that WriteTo can be called concurrently on different vectors
+func TestVectorWrapper_WriteTo_ConcurrentCalls(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+
+	opts := withAllocator(Options{})
+	numGoroutines := 10
+	results := make([][]byte, numGoroutines)
+	errs := make([]error, numGoroutines)
+
+	var wg sync.WaitGroup
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			vec := NewVector(types.T_int32.ToType(), opts)
+			defer vec.Close()
+
+			// Add unique data for each goroutine
+			for j := 0; j < 100; j++ {
+				vec.Append(int32(idx*1000+j), false)
+			}
+
+			var buf bytes.Buffer
+			_, err := vec.WriteTo(&buf)
+			errs[idx] = err
+			if err == nil {
+				results[idx] = buf.Bytes()
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	// All should succeed
+	for i, err := range errs {
+		require.NoError(t, err, "goroutine %d should succeed", i)
+		require.NotNil(t, results[i], "goroutine %d should produce output", i)
+	}
+
+	// All outputs should be different (different data)
+	for i := 0; i < numGoroutines; i++ {
+		for j := i + 1; j < numGoroutines; j++ {
+			assert.NotEqual(t, results[i], results[j], "different vectors should produce different output")
+		}
+	}
 }

@@ -217,7 +217,20 @@ func (vec *vectorWrapper) Update(i int, v any, isNull bool) {
 }
 
 func (vec *vectorWrapper) WriteTo(w io.Writer) (n int64, err error) {
+	// Estimate size: use ApproxSize() for more accurate estimation
+	estimatedSize := vec.ApproxSize()
+	if estimatedSize < 0 {
+		estimatedSize = 0 // NeedDup case
+	}
+	estimatedSize += 8 // size header
+	if estimatedSize < 256 {
+		estimatedSize = 256 // Minimum capacity
+	}
+
+	// Use bytes.Buffer with pre-allocation to reduce reallocations
+	// Note: MarshalBinaryWithBuffer requires *bytes.Buffer, not io.Writer
 	var bs bytes.Buffer
+	bs.Grow(estimatedSize) // Pre-grow to reduce reallocations
 
 	var size int64
 	_, _ = bs.Write(types.EncodeInt64(&size))
@@ -241,7 +254,20 @@ func (vec *vectorWrapper) WriteTo(w io.Writer) (n int64, err error) {
 
 // WriteToV1 in version 1, vector.nulls.bitmap is v1
 func (vec *vectorWrapper) WriteToV1(w io.Writer) (n int64, err error) {
+	// Estimate size: use ApproxSize() for more accurate estimation
+	estimatedSize := vec.ApproxSize()
+	if estimatedSize < 0 {
+		estimatedSize = 0 // NeedDup case
+	}
+	estimatedSize += 8 // size header
+	if estimatedSize < 256 {
+		estimatedSize = 256 // Minimum capacity
+	}
+
+	// Use bytes.Buffer with pre-allocation to reduce reallocations
+	// Note: MarshalBinaryWithBufferV1 requires *bytes.Buffer, not io.Writer
 	var bs bytes.Buffer
+	bs.Grow(estimatedSize) // Pre-grow to reduce reallocations
 
 	var size int64
 	_, _ = bs.Write(types.EncodeInt64(&size))
