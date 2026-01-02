@@ -33,6 +33,10 @@ const (
 	ioet_WALTxnCommand_Append_V3 uint16 = 3
 
 	IOET_WALTxnCommand_Append_CurrVer = ioet_WALTxnCommand_Append_V3
+
+	// MaxAppendCmdBufSize is the maximum capacity of marshalBuf in AppendCmd.
+	// Buffers exceeding this size will be discarded to prevent large objects from staying in memory.
+	MaxAppendCmdBufSize = 1 << 20 // 1MB
 )
 
 func init() {
@@ -54,6 +58,10 @@ type AppendCmd struct {
 	Ts          types.TS
 	Node        *anode
 	IsTombstone bool
+
+	// marshalBuf is a reusable buffer for MarshalBinary to avoid repeated allocations.
+	// It will be discarded if capacity exceeds MaxAppendCmdBufSize to prevent memory leaks.
+	marshalBuf []byte
 }
 
 func NewEmptyAppendCmd() *AppendCmd {
@@ -108,6 +116,8 @@ func (c *AppendCmd) VerboseString() string {
 func (c *AppendCmd) Close() {
 	c.Data.Close()
 	c.Data = nil
+	// Clear marshalBuf to release memory when the object is closed
+	c.marshalBuf = nil
 }
 func (c *AppendCmd) GetType() uint16 { return IOET_WALTxnCommand_Append }
 
@@ -147,7 +157,12 @@ func (c *AppendCmd) WriteTo(w io.Writer) (n int64, err error) {
 	if err != nil {
 		return n, err
 	}
-	ts := c.Node.GetTxn().GetPrepareTS()
+	var ts types.TS
+	if c.Node != nil {
+		ts = c.Node.GetTxn().GetPrepareTS()
+	} else {
+		ts = c.Ts // Fallback to c.Ts if Node is nil (e.g., in tests)
+	}
 	if _, err = w.Write(ts[:]); err != nil {
 		return
 	}
@@ -196,13 +211,43 @@ func (c *AppendCmd) ReadFrom(r io.Reader) (n int64, err error) {
 	return
 }
 
+// bytesWriter is a simple writer that appends to a byte slice.
+type bytesWriter struct {
+	buf []byte
+}
+
+func (w *bytesWriter) Write(p []byte) (n int, err error) {
+	w.buf = append(w.buf, p...)
+	return len(p), nil
+}
+
 func (c *AppendCmd) MarshalBinary() (buf []byte, err error) {
-	var bbuf bytes.Buffer
-	if _, err = c.WriteTo(&bbuf); err != nil {
-		return
+	// Capacity limit: discard buffer if it exceeds MaxAppendCmdBufSize to prevent memory leaks.
+	if cap(c.marshalBuf) > MaxAppendCmdBufSize {
+		c.marshalBuf = nil
 	}
-	buf = bbuf.Bytes()
-	return
+
+	// Estimate size: use ApproxSize() for more accurate estimation
+	estimatedSize := int(c.ApproxSize())
+	if estimatedSize < 256 {
+		estimatedSize = 256 // Minimum capacity
+	}
+
+	// Reuse or allocate buffer
+	if cap(c.marshalBuf) < estimatedSize {
+		c.marshalBuf = make([]byte, 0, estimatedSize)
+	} else {
+		c.marshalBuf = c.marshalBuf[:0] // Reset length, keep capacity
+	}
+
+	// Write directly to marshalBuf using a simple writer
+	writer := &bytesWriter{buf: c.marshalBuf}
+	if _, err = c.WriteTo(writer); err != nil {
+		return nil, err
+	}
+	c.marshalBuf = writer.buf
+
+	return c.marshalBuf, nil
 }
 
 func (c *AppendCmd) UnmarshalBinary(buf []byte) error {

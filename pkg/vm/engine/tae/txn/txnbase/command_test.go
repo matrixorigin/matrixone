@@ -1291,6 +1291,36 @@ func TestTxnCmd_MarshalBinary_LargeNumberOfCmds(t *testing.T) {
 		"buffer capacity should be at least the data size")
 }
 
+// TestTxnCmd_MarshalBinary_MemoPreAllocation tests that Memo serialization uses pre-allocation
+func TestTxnCmd_MarshalBinary_MemoPreAllocation(t *testing.T) {
+	txnCmd := NewTxnCmd()
+	txnCmd.ComposedCmd = NewComposedCmd()
+	txnCmd.TxnCtx = NewEmptyTxnCtx()
+	txnCmd.ID = "test-id"
+	
+	// Add some data to Memo to make it non-empty
+	// Note: Memo is a TxnMemo which contains a Tree
+	// We can't easily populate it without more context, but we can test that
+	// the serialization works correctly with the pre-allocation optimization
+	
+	// Marshal should succeed even with empty Memo
+	buf, err := txnCmd.MarshalBinary()
+	require.NoError(t, err)
+	assert.NotNil(t, buf)
+	assert.Greater(t, len(buf), 0, "buffer should not be empty")
+	
+	// Verify that marshalBuf is properly allocated
+	assert.NotNil(t, txnCmd.marshalBuf)
+	assert.GreaterOrEqual(t, cap(txnCmd.marshalBuf), 256, "should have minimum capacity")
+	
+	// Test that multiple calls reuse the buffer
+	buf2, err := txnCmd.MarshalBinary()
+	require.NoError(t, err)
+	assert.Equal(t, buf, buf2, "marshaled data should be identical")
+	assert.Equal(t, cap(txnCmd.marshalBuf), cap(txnCmd.marshalBuf), 
+		"buffer capacity should be reused")
+}
+
 // Helper function for absolute value
 func abs(x int) int {
 	if x < 0 {

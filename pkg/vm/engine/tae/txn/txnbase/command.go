@@ -470,7 +470,13 @@ func (c *TxnCmd) MarshalBinary() (buf []byte, err error) {
 	}
 
 	// Write Memo
+	// Pre-allocate buffer capacity using ApproxSize to reduce reallocations
+	memoSize := int(c.Memo.ApproxSize())
+	if memoSize < 256 {
+		memoSize = 256 // Minimum capacity
+	}
 	var memoBuf bytes.Buffer
+	memoBuf.Grow(memoSize) // Pre-grow to reduce reallocations
 	if _, err = c.Memo.WriteTo(&memoBuf); err != nil {
 		return nil, err
 	}
