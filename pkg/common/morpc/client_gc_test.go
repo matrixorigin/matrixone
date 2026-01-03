@@ -648,10 +648,11 @@ func TestGlobalClientGC_TryCreateReturnsCorrectValue(t *testing.T) {
 	ok := cli1.tryCreate("b1")
 	assert.True(t, ok, "tryCreate should return true when successful")
 
-	// Create a client without auto-create
+	// Create a client with auto-create explicitly disabled
 	c2, err := NewClient("test-client-2",
 		newTestBackendFactory(),
-		WithClientMaxBackendPerHost(2))
+		WithClientMaxBackendPerHost(2),
+		WithClientDisableAutoCreateBackend())
 	require.NoError(t, err)
 	defer c2.Close()
 

@@ -23,17 +23,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestAutoCreateDisabled verifies that when auto-create is disabled,
+// TestAutoCreateDisabled verifies that when auto-create is explicitly disabled,
 // no backends are created and proper error is returned
 func TestAutoCreateDisabled(t *testing.T) {
-	// Create client with auto-create disabled (default)
-	rpcClient, err := NewClient("test", &testBackendFactory{})
+	// Create client with auto-create explicitly disabled
+	rpcClient, err := NewClient("test", &testBackendFactory{}, WithClientDisableAutoCreateBackend())
 	require.NoError(t, err)
 	defer rpcClient.Close()
 
 	c := rpcClient.(*client)
 
-	// Verify auto-create is disabled by default
+	// Verify auto-create is disabled
 	assert.False(t, c.options.enableAutoCreate)
 
 	// getBackend should return ErrNoAvailableBackend without creating anything
@@ -46,6 +46,19 @@ func TestAutoCreateDisabled(t *testing.T) {
 	backends := c.mu.backends["test-addr"]
 	c.mu.Unlock()
 	assert.Empty(t, backends)
+}
+
+// TestAutoCreateEnabledByDefault verifies that auto-create is enabled by default
+func TestAutoCreateEnabledByDefault(t *testing.T) {
+	// Create client without any auto-create option
+	rpcClient, err := NewClient("test", &testBackendFactory{})
+	require.NoError(t, err)
+	defer rpcClient.Close()
+
+	c := rpcClient.(*client)
+
+	// Verify auto-create is enabled by default
+	assert.True(t, c.options.enableAutoCreate)
 }
 
 // TestAutoCreateEnabled verifies that when auto-create is enabled,

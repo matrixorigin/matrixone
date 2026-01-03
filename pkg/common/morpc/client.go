@@ -174,6 +174,16 @@ func applyJitter(duration time.Duration) time.Duration {
 func WithClientEnableAutoCreateBackend() ClientOption {
 	return func(c *client) {
 		c.options.enableAutoCreate = true
+		c.options.enableAutoCreateSet = true
+	}
+}
+
+// WithClientDisableAutoCreateBackend disable client from automatically creating backends.
+// By default, auto-create is enabled. Use this option to disable it.
+func WithClientDisableAutoCreateBackend() ClientOption {
+	return func(c *client) {
+		c.options.enableAutoCreate = false
+		c.options.enableAutoCreateSet = true
 	}
 }
 
@@ -217,6 +227,7 @@ type client struct {
 		initBackends         []string
 		initBackendCounts    []int
 		enableAutoCreate     bool
+		enableAutoCreateSet  bool // true if user explicitly set enableAutoCreate
 		retryPolicy          RetryPolicy
 		circuitBreakerConfig CircuitBreakerConfig
 	}
@@ -277,6 +288,10 @@ func (c *client) adjust() {
 		// Only apply default if user didn't explicitly set it
 		// If user set it to 0, it means "no idle time limit" per documentation
 		c.options.maxIdleDuration = applyJitter(defaultMaxIdleDuration)
+	}
+	// Default enableAutoCreate to true for backward compatibility
+	if !c.options.enableAutoCreateSet {
+		c.options.enableAutoCreate = true
 	}
 	// Set default retry policy if not configured
 	if c.options.retryPolicy.MaxRetries == 0 && c.options.retryPolicy.InitialBackoff == 0 {
