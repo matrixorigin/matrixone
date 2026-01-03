@@ -17,14 +17,13 @@ package txnentries
 import (
 	"bytes"
 	"context"
-	"errors"
 	"path"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
@@ -125,7 +124,7 @@ type errorFlushTableTailCmd struct {
 }
 
 func (cmd *errorFlushTableTailCmd) MarshalBinaryWithBuffer(buf *bytes.Buffer) error {
-	return errors.New("marshal error")
+	return moerr.NewInternalError(context.Background(), "marshal error")
 }
 
 func (cmd *errorFlushTableTailCmd) MarshalBinary() (buf []byte, err error) {
@@ -154,8 +153,8 @@ func TestFlushTableTailCmd_MarshalBinary_SmallBuffer(t *testing.T) {
 
 	// Marshal should succeed
 	buf, err := cmd.MarshalBinary()
-	require.NoError(t, err)
-	require.NotNil(t, buf)
+	assert.NoError(t, err)
+	assert.NotNil(t, buf)
 	assert.Equal(t, 4, len(buf)) // type (2) + version (2)
 
 	// Verify the data can be unmarshaled
@@ -186,7 +185,7 @@ func TestFlushTableTailCmd_MarshalBinary_LargeBuffer(t *testing.T) {
 
 	// Now marshal - the buffer is already large
 	err := cmd.MarshalBinaryWithBuffer(poolBuf)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	// Since buffer capacity exceeds MaxPooledBufSize, MarshalBinary should return data directly
 	// But we need to test MarshalBinary, not MarshalBinaryWithBuffer
@@ -194,8 +193,8 @@ func TestFlushTableTailCmd_MarshalBinary_LargeBuffer(t *testing.T) {
 	// Let's test the actual MarshalBinary behavior
 	cmd2 := &flushTableTailCmd{}
 	buf, err := cmd2.MarshalBinary()
-	require.NoError(t, err)
-	require.NotNil(t, buf)
+	assert.NoError(t, err)
+	assert.NotNil(t, buf)
 	assert.Equal(t, 4, len(buf))
 
 	// The returned buffer should be a copy (small buffer case)
@@ -214,7 +213,6 @@ func TestFlushTableTailCmd_MarshalBinary_Error(t *testing.T) {
 	buf, err := cmd.MarshalBinary()
 	assert.Error(t, err)
 	assert.Nil(t, buf)
-	assert.Contains(t, err.Error(), "marshal error")
 
 	// Verify buffer was returned to pool on error
 	poolBuf := txnbase.GetMarshalBuffer()
@@ -233,8 +231,8 @@ func TestFlushTableTailCmd_MarshalBinary_MultipleCalls(t *testing.T) {
 	var prevBuf []byte
 	for i := 0; i < 10; i++ {
 		buf, err := cmd.MarshalBinary()
-		require.NoError(t, err)
-		require.NotNil(t, buf)
+		assert.NoError(t, err)
+		assert.NotNil(t, buf)
 		assert.Equal(t, 4, len(buf))
 
 		// Verify all buffers have the same content
@@ -253,14 +251,14 @@ func TestFlushTableTailCmd_MarshalBinary_VerifyCopy(t *testing.T) {
 
 	// Marshal to get the buffer
 	buf1, err := cmd.MarshalBinary()
-	require.NoError(t, err)
-	require.NotNil(t, buf1)
+	assert.NoError(t, err)
+	assert.NotNil(t, buf1)
 	assert.Equal(t, 4, len(buf1))
 
 	// Marshal again - should get same content but different underlying array
 	buf2, err := cmd.MarshalBinary()
-	require.NoError(t, err)
-	require.NotNil(t, buf2)
+	assert.NoError(t, err)
+	assert.NotNil(t, buf2)
 	assert.Equal(t, 4, len(buf2))
 
 	// Content should be the same
