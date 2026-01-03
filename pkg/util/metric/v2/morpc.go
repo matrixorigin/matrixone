@@ -114,6 +114,22 @@ var (
 			Name:      "backend_unavailable_total",
 			Help:      "Total number of backend unavailable errors (pool has backends but all down).",
 		}, []string{"name"})
+
+	rpcCircuitBreakerStateGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "rpc",
+			Name:      "circuit_breaker_state",
+			Help:      "Circuit breaker state (0=closed, 1=half-open, 2=open).",
+		}, []string{"name", "backend"})
+
+	rpcCircuitBreakerTripsCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "rpc",
+			Name:      "circuit_breaker_trips_total",
+			Help:      "Total number of circuit breaker trips (closed -> open).",
+		}, []string{"name", "backend"})
 )
 
 var (
@@ -334,6 +350,14 @@ func NewRPCBackendAutoCreateTimeoutCounterByName(name string) prometheus.Counter
 
 func NewRPCBackendUnavailableCounterByName(name string) prometheus.Counter {
 	return rpcBackendUnavailableCounter.WithLabelValues(name)
+}
+
+func NewRPCCircuitBreakerStateGauge(name, backend string) prometheus.Gauge {
+	return rpcCircuitBreakerStateGauge.WithLabelValues(name, backend)
+}
+
+func NewRPCCircuitBreakerTripsCounter(name, backend string) prometheus.Counter {
+	return rpcCircuitBreakerTripsCounter.WithLabelValues(name, backend)
 }
 
 func GetRPCGCCreateProcessedCounter() prometheus.Counter {

@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -835,12 +836,19 @@ func canRetryLock(table uint64, txn client.TxnOperator, err error) bool {
 		time.Sleep(defaultWaitTimeOnRetryLock)
 		return true
 	}
-	if moerr.IsMoErrCode(err, moerr.ErrBackendClosed) ||
-		moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) ||
-		moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend) {
+
+	// Use morpc.GetStatusCategory for unified RPC error classification
+	// StatusUnknown (non-RPC errors) will fall through to return false
+	status := morpc.GetStatusCategory(err)
+	if status == morpc.StatusTransient || status == morpc.StatusUnavailable {
 		time.Sleep(defaultWaitTimeOnRetryLock)
 		return true
 	}
+	if status == morpc.StatusCancelled {
+		return false // Client closing/closed should not retry
+	}
+
+	// Unknown errors (non-RPC, non-lock errors) should not retry
 	return false
 }
 

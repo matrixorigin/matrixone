@@ -28,6 +28,8 @@
 //	│ Pool has backends but down   │ ErrBackendUnavailable      │ No (permanent)  │
 //	│ Create timeout exceeded      │ ErrBackendCreateTimeout    │ No (permanent)  │
 //	│ Circuit breaker open         │ ErrCircuitOpen             │ No (permanent)  │
+//	│ Circuit breaker half-open    │ ErrCircuitHalfOpen         │ Maybe (probe)   │
+//	│ Client closing               │ ErrClientClosing           │ No (permanent)  │
 //	│ Client closed                │ ErrClientClosed            │ No (permanent)  │
 //	└──────────────────────────────────────────────────────────────────────────────┘
 //
@@ -123,6 +125,11 @@ var (
 	// This is a boundary condition error (NoCtx + Counter for monitoring).
 	// Uses ErrBackendClosed code for compatibility with existing error handling.
 	ErrBackendCreateTimeout = moerr.NewBackendClosedNoCtx()
+
+	// ErrClientClosing indicates that the client is in the process of closing.
+	// New requests should fail fast rather than waiting for backend creation.
+	// This is a high-frequency expected error during shutdown (NoCtx to avoid log spam).
+	ErrClientClosing = moerr.NewClientClosedNoCtx()
 )
 
 const defaultAutoCreateWaitTimeout = 0 // 0 means wait until context deadline (legacy behavior)
@@ -298,7 +305,8 @@ type client struct {
 
 	mu struct {
 		sync.Mutex
-		closed   bool
+		closing  bool // true when Close() is called but not yet completed
+		closed   bool // true when Close() is completed
 		backends map[string][]Backend
 		ops      map[string]*op
 	}
@@ -392,7 +400,7 @@ func (c *client) adjust() {
 	if !c.options.autoCreateWaitTimeoutSet && c.options.autoCreateWaitTimeout == 0 {
 		c.options.autoCreateWaitTimeout = defaultAutoCreateWaitTimeout
 	}
-	c.circuitBreakers = NewCircuitBreakerManager(c.options.circuitBreakerConfig, c.logger)
+	c.circuitBreakers = NewCircuitBreakerManager(c.name, c.options.circuitBreakerConfig, c.logger)
 }
 
 func (c *client) maybeInitBackends() error {
@@ -422,7 +430,7 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 
 	// Check circuit breaker before attempting
 	if !c.circuitBreakers.Allow(backend) {
-		return nil, ErrCircuitOpen
+		return nil, c.circuitBreakers.GetError(backend)
 	}
 
 	policy := c.options.retryPolicy
@@ -434,7 +442,7 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 		// Check circuit breaker before each retry attempt
 		if !c.circuitBreakers.Allow(backend) {
 			// Don't record failure - circuit is already open
-			return nil, ErrCircuitOpen
+			return nil, c.circuitBreakers.GetError(backend)
 		}
 
 		b, err := c.getBackend(backend, false)
@@ -498,7 +506,7 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 
 			// Check circuit breaker after failure
 			if !c.circuitBreakers.Allow(backend) {
-				return nil, ErrCircuitOpen
+				return nil, c.circuitBreakers.GetError(backend)
 			}
 
 			// Calculate next backoff with jitter
@@ -535,7 +543,7 @@ func (c *client) NewStream(ctx context.Context, backend string, lock bool) (Stre
 
 	// Check circuit breaker before attempting
 	if !c.circuitBreakers.Allow(backend) {
-		return nil, ErrCircuitOpen
+		return nil, c.circuitBreakers.GetError(backend)
 	}
 
 	policy := c.options.retryPolicy
@@ -547,7 +555,7 @@ func (c *client) NewStream(ctx context.Context, backend string, lock bool) (Stre
 		// Check circuit breaker before each retry attempt
 		if !c.circuitBreakers.Allow(backend) {
 			// Don't record failure - circuit is already open
-			return nil, ErrCircuitOpen
+			return nil, c.circuitBreakers.GetError(backend)
 		}
 
 		// Check context before attempting
@@ -617,7 +625,7 @@ func (c *client) NewStream(ctx context.Context, backend string, lock bool) (Stre
 
 			// Check circuit breaker after failure
 			if !c.circuitBreakers.Allow(backend) {
-				return nil, ErrCircuitOpen
+				return nil, c.circuitBreakers.GetError(backend)
 			}
 
 			// Calculate next backoff with jitter
@@ -654,7 +662,7 @@ func (c *client) Ping(ctx context.Context, backend string) error {
 
 	// Check circuit breaker before attempting
 	if !c.circuitBreakers.Allow(backend) {
-		return ErrCircuitOpen
+		return c.circuitBreakers.GetError(backend)
 	}
 
 	policy := c.options.retryPolicy
@@ -719,7 +727,7 @@ func (c *client) Ping(ctx context.Context, backend string) error {
 
 				// Check circuit breaker after failure
 				if !c.circuitBreakers.Allow(backend) {
-					return ErrCircuitOpen
+					return c.circuitBreakers.GetError(backend)
 				}
 
 				// Calculate next backoff with jitter
@@ -761,13 +769,19 @@ func (c *client) Close() error {
 		c.mu.Unlock()
 		return nil
 	}
-	c.mu.closed = true
+	// Set closing state first
+	c.mu.closing = true
+	c.mu.Unlock()
 
+	// Close all backends
+	c.mu.Lock()
 	for _, backends := range c.mu.backends {
 		for _, b := range backends {
 			b.Close()
 		}
 	}
+	// Mark as fully closed
+	c.mu.closed = true
 	c.mu.Unlock()
 
 	// Unregister from global GC manager
@@ -799,7 +813,7 @@ func (c *client) getBackend(backend string, lock bool) (Backend, error) {
 	// Fast-fail: check circuit breaker before acquiring lock
 	// This prevents blocking on lock acquisition for known-bad backends
 	if !c.circuitBreakers.Allow(backend) {
-		return nil, ErrCircuitOpen
+		return nil, c.circuitBreakers.GetError(backend)
 	}
 
 	c.mu.Lock()
@@ -850,6 +864,9 @@ func (c *client) getBackend(backend string, lock bool) (Backend, error) {
 }
 
 func (c *client) getBackendLocked(backend string, lock bool) (Backend, error) {
+	if c.mu.closing {
+		return nil, ErrClientClosing
+	}
 	if c.mu.closed {
 		return nil, moerr.NewClientClosedNoCtx()
 	}
