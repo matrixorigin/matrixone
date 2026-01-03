@@ -879,10 +879,7 @@ func TestVectorWrapper_WriteTo_PreAllocation(t *testing.T) {
 	// Get estimated size
 	estimatedSize := vec.ApproxSize()
 	require.Greater(t, estimatedSize, 0, "estimated size should be positive")
-	estimatedSize += 8 // size header
-	if estimatedSize < 256 {
-		estimatedSize = 256
-	}
+	_ = estimatedSize // estimatedSize is used for validation only
 
 	// WriteTo should work correctly
 	var buf bytes.Buffer

@@ -205,16 +205,6 @@ func (c *AppendCmd) ReadFrom(r io.Reader) (n int64, err error) {
 	return
 }
 
-// bytesWriter is a simple writer that appends to a byte slice.
-type bytesWriter struct {
-	buf []byte
-}
-
-func (w *bytesWriter) Write(p []byte) (n int, err error) {
-	w.buf = append(w.buf, p...)
-	return len(p), nil
-}
-
 // MarshalBinaryWithBuffer serializes AppendCmd directly to the provided bytes.Buffer,
 // avoiding buffer copying and allocations.
 func (c *AppendCmd) MarshalBinaryWithBuffer(buf *bytes.Buffer) error {
