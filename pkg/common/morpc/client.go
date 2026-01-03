@@ -16,6 +16,7 @@ package morpc
 
 import (
 	"context"
+	"errors"
 	"math/rand"
 	"sync"
 	"sync/atomic"
@@ -323,8 +324,19 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 	retryCount := 0
 
 	for {
+		// Check circuit breaker before each retry attempt
+		if !c.circuitBreakers.Allow(backend) {
+			// Don't record failure - circuit is already open
+			return nil, ErrCircuitOpen
+		}
+
 		b, err := c.getBackend(backend, false)
 		if err != nil {
+			// Handle circuit open error without recording additional failure
+			if errors.Is(err, ErrCircuitOpen) {
+				return nil, err
+			}
+
 			// Handle NoAvailableBackend error - backend is being created asynchronously
 			if moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend) {
 				// Check context first before retrying
@@ -431,6 +443,12 @@ func (c *client) NewStream(ctx context.Context, backend string, lock bool) (Stre
 	retryCount := 0
 
 	for {
+		// Check circuit breaker before each retry attempt
+		if !c.circuitBreakers.Allow(backend) {
+			// Don't record failure - circuit is already open
+			return nil, ErrCircuitOpen
+		}
+
 		// Check context before attempting
 		select {
 		case <-ctx.Done():
@@ -440,6 +458,11 @@ func (c *client) NewStream(ctx context.Context, backend string, lock bool) (Stre
 
 		b, err := c.getBackend(backend, lock)
 		if err != nil {
+			// Handle circuit open error without recording additional failure
+			if errors.Is(err, ErrCircuitOpen) {
+				return nil, err
+			}
+
 			// Handle NoAvailableBackend error - backend is being created asynchronously
 			if moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend) {
 				retryCount++
@@ -696,19 +719,24 @@ func (c *client) getBackend(backend string, lock bool) (Backend, error) {
 	}
 
 	// No backend available in pool
-	// Check if we can create more backends
 	canCreate := c.canCreateLocked(backend)
+	enableAutoCreate := c.options.enableAutoCreate
 	c.mu.Unlock() // Release lock before any potentially blocking operation
 
+	// Strictly gate creation on enableAutoCreate flag
+	if !enableAutoCreate {
+		return nil, moerr.NewNoAvailableBackendNoCtx()
+	}
+
 	if canCreate {
-		// Trigger async backend creation via global GC manager
-		// This avoids holding the lock during network I/O
-		// The backend will be available for subsequent requests
-		globalClientGC.triggerCreate(c, backend)
+		// Try to enqueue creation task with backpressure handling
+		if !globalClientGC.triggerCreate(c, backend) {
+			// Queue is full - fallback to existing creation path with proper bookkeeping
+			return c.createBackendWithBookkeeping(backend, lock)
+		}
 	}
 
 	// Return error to trigger retry in caller
-	// The retry mechanism in Send() will handle this gracefully
 	return nil, moerr.NewNoAvailableBackendNoCtx()
 }
 
@@ -786,6 +814,60 @@ func (c *client) tryCreate(backend string) bool {
 	}
 
 	return globalClientGC.triggerCreate(c, backend)
+}
+
+func (c *client) createBackendWithBookkeeping(backend string, lock bool) (Backend, error) {
+	// Use existing creation path with proper bookkeeping, but avoid holding the lock
+	// during network I/O. We double-check limits after creation to avoid overfilling
+	// if another goroutine created a backend in the meantime.
+	c.mu.Lock()
+	if c.mu.closed {
+		c.mu.Unlock()
+		return nil, moerr.NewClientClosedNoCtx()
+	}
+	if !c.canCreateLocked(backend) {
+		c.mu.Unlock()
+		return nil, moerr.NewNoAvailableBackendNoCtx()
+	}
+	c.mu.Unlock()
+
+	// Create backend using factory with metrics (same as doCreate) without holding the lock.
+	b, err := c.doCreate(backend)
+	if err != nil {
+		return nil, err
+	}
+
+	// Re-acquire lock to add to pool, validating limits again.
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.mu.closed {
+		b.Close()
+		return nil, moerr.NewClientClosedNoCtx()
+	}
+	if !c.canCreateLocked(backend) {
+		// Another goroutine may have filled the pool while we were creating.
+		b.Close()
+		return nil, moerr.NewNoAvailableBackendNoCtx()
+	}
+
+	// Apply lock if requested (only after we know the backend will be kept)
+	if lock {
+		b.Lock()
+	}
+
+	// Add to pool with proper bookkeeping (same as existing creation path)
+	c.mu.backends[backend] = append(c.mu.backends[backend], b)
+
+	// Initialize ops if needed (same as existing creation path)
+	if c.mu.ops[backend] == nil {
+		c.mu.ops[backend] = &op{}
+	}
+
+	// Update metrics (same as existing creation path)
+	c.updatePoolSizeMetricsLocked()
+
+	return b, nil
 }
 
 func (c *client) triggerGCInactive(remote string) {

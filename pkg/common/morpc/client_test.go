@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -122,14 +123,23 @@ func TestCanGetBackendIfALLLockedAndNotReachMaxPerHost(t *testing.T) {
 		&testBackend{id: 2, locked: true, busy: false, activeTime: time.Now()})
 	c.mu.ops["b1"] = &op{}
 
-	// With async creation, may need to wait
+	// With async creation, wait for backend to be available
 	var b Backend
-	for i := 0; i < 10; i++ {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	for {
 		b, err = c.getBackend("b1", false)
 		if err == nil && b != nil {
 			break
 		}
-		time.Sleep(10 * time.Millisecond)
+
+		select {
+		case <-ctx.Done():
+			t.Fatal("Backend creation timed out")
+		case <-time.After(10 * time.Millisecond):
+			// Small delay for retry
+		}
 	}
 	assert.NoError(t, err)
 	assert.NotNil(t, b)
@@ -194,6 +204,61 @@ func TestMaybeCreateLockedWithFullBackends(t *testing.T) {
 		&testBackend{busy: false},
 	}
 	assert.False(t, c.maybeCreateLocked("b1"))
+}
+
+func TestGetBackendAutoCreateDisabled(t *testing.T) {
+	rc, err := NewClient("",
+		newTestBackendFactory(),
+		WithClientMaxBackendPerHost(1))
+	assert.NoError(t, err)
+	c := rc.(*client)
+	defer func() {
+		assert.NoError(t, c.Close())
+	}()
+
+	b, err := c.getBackend("b1", false)
+	assert.Nil(t, b)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend))
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	assert.Equal(t, 0, len(c.mu.backends["b1"]))
+}
+
+func TestCreateBackendWithBookkeeping(t *testing.T) {
+	rc, err := NewClient("",
+		newTestBackendFactory(),
+		WithClientMaxBackendPerHost(1))
+	assert.NoError(t, err)
+	c := rc.(*client)
+	defer func() {
+		assert.NoError(t, c.Close())
+	}()
+
+	// First creation succeeds and initializes ops/bookkeeping.
+	b, err := c.createBackendWithBookkeeping("b1", true)
+	assert.NoError(t, err)
+	assert.NotNil(t, b)
+
+	c.mu.Lock()
+	opsInitialized := c.mu.ops["b1"] != nil
+	backendCount := len(c.mu.backends["b1"])
+	var lockedState bool
+	if tb, ok := b.(*testBackend); ok {
+		tb.RLock()
+		lockedState = tb.locked
+		tb.RUnlock()
+	}
+	c.mu.Unlock()
+
+	assert.True(t, opsInitialized, "ops should be initialized")
+	assert.Equal(t, 1, backendCount)
+	assert.True(t, lockedState, "backend should be locked when requested")
+
+	// Second creation should respect maxBackendsPerHost and fail.
+	b2, err := c.createBackendWithBookkeeping("b1", false)
+	assert.Nil(t, b2)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend))
 }
 
 func TestInitBackendsAndMaxBackendsPerHostNotMatch(t *testing.T) {

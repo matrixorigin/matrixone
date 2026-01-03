@@ -145,7 +145,7 @@ func TestGlobalClientGC_GCIdleLoop(t *testing.T) {
 func TestGlobalClientGC_GCInactiveLoop(t *testing.T) {
 	mgr := newClientGCManager()
 
-	c, err := NewClient("test-client", newTestBackendFactory())
+	c, err := NewClient("test-client", newTestBackendFactory(), WithClientEnableAutoCreateBackend())
 	require.NoError(t, err)
 	defer c.Close()
 
@@ -344,7 +344,7 @@ func TestGlobalClientGC_GCIdleRespectsMaxIdleDuration(t *testing.T) {
 	mgr := newClientGCManager()
 
 	// Create client without maxIdleDuration (should not GC)
-	c1, err := NewClient("test-client-1", newTestBackendFactory())
+	c1, err := NewClient("test-client-1", newTestBackendFactory(), WithClientEnableAutoCreateBackend())
 	require.NoError(t, err)
 	defer c1.Close()
 
@@ -359,7 +359,8 @@ func TestGlobalClientGC_GCIdleRespectsMaxIdleDuration(t *testing.T) {
 	// Create client with maxIdleDuration
 	c2, err := NewClient("test-client-2",
 		newTestBackendFactory(),
-		WithClientMaxBackendMaxIdleDuration(time.Millisecond*100))
+		WithClientMaxBackendMaxIdleDuration(time.Millisecond*100),
+		WithClientEnableAutoCreateBackend())
 	require.NoError(t, err)
 	defer c2.Close()
 
