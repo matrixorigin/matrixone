@@ -411,21 +411,21 @@ func (cmd *flushTableTailCmd) WriteTo(w io.Writer) (n int64, err error) {
 	return
 }
 
-func (cmd *flushTableTailCmd) MarshalBinaryWithBuffer(buf *bytes.Buffer) ([]byte, error) {
-	if _, err := cmd.WriteTo(buf); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
+func (cmd *flushTableTailCmd) MarshalBinaryWithBuffer(buf *bytes.Buffer) error {
+	_, err := cmd.WriteTo(buf)
+	return err
 }
 
 func (cmd *flushTableTailCmd) MarshalBinary() (buf []byte, err error) {
 	poolBuf := txnbase.GetMarshalBuffer()
 
-	data, err := cmd.MarshalBinaryWithBuffer(poolBuf)
+	err = cmd.MarshalBinaryWithBuffer(poolBuf)
 	if err != nil {
 		txnbase.PutMarshalBuffer(poolBuf) // Return buffer on error
 		return nil, err
 	}
+
+	data := poolBuf.Bytes()
 
 	// Optimization: if buffer capacity exceeds MaxPooledBufSize, it won't be returned to pool.
 	// In this case, we can directly return the underlying array without copy.

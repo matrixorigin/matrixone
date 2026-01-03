@@ -290,12 +290,13 @@ func (c *TxnStateCmd) MarshalBinary() (buf []byte, err error) {
 	// Reset buffer to ensure it's empty (pool buffers are reset when returned, but be safe)
 	poolBuf.Reset()
 
-	data, err := c.MarshalBinaryWithBuffer(poolBuf)
+	err = c.MarshalBinaryWithBuffer(poolBuf)
 	if err != nil {
 		putMarshalBuffer(poolBuf) // Return buffer on error
 		return nil, err
 	}
 
+	data := poolBuf.Bytes()
 	// Optimization: if buffer capacity exceeds MaxPooledBufSize, it won't be returned to pool.
 	// In this case, we can directly return the underlying array without copy.
 	if poolBuf.Cap() > MaxPooledBufSize {
@@ -403,7 +404,7 @@ func (c *TxnCmd) WriteTo(w io.Writer) (n int64, err error) {
 		if c.ComposedCmd == nil {
 			c.ComposedCmd = NewComposedCmd()
 		}
-		if _, err = c.ComposedCmd.MarshalBinaryWithBuffer(sharedBuf); err != nil {
+		if err = c.ComposedCmd.MarshalBinaryWithBuffer(sharedBuf); err != nil {
 			return
 		}
 		composedDataSize := sharedBuf.Len() - composedDataStart
@@ -507,7 +508,7 @@ func (c *TxnCmd) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err erro
 // avoiding buffer copying and allocations in the serialization chain.
 // This method manually implements the serialization logic to use WriteToFull for ComposedCmd,
 // avoiding the buffer allocation in ComposedCmd.MarshalBinary().
-func (c *TxnCmd) MarshalBinaryWithBuffer(buf *bytes.Buffer) ([]byte, error) {
+func (c *TxnCmd) MarshalBinaryWithBuffer(buf *bytes.Buffer) error {
 	// Estimate total size and pre-grow buffer to reduce reallocations
 	estimatedSize := int(c.ApproxSize())
 	if estimatedSize < 256 {
@@ -520,18 +521,18 @@ func (c *TxnCmd) MarshalBinaryWithBuffer(buf *bytes.Buffer) ([]byte, error) {
 	// Write header (type 2 + version 2)
 	t := c.GetType()
 	if _, err := buf.Write(types.EncodeUint16(&t)); err != nil {
-		return nil, err
+		return err
 	}
 	v := IOET_WALTxnEntry_CurrVer
 	if _, err := buf.Write(types.EncodeUint16(&v)); err != nil {
-		return nil, err
+		return err
 	}
 
 	// Write ComposedCmd length prefix (we'll update this after writing ComposedCmd)
 	lengthPrefixPos := buf.Len()
 	composedLenPlaceholder := uint32(0)
 	if _, err := buf.Write(types.EncodeUint32(&composedLenPlaceholder)); err != nil {
-		return nil, err
+		return err
 	}
 
 	// Write ComposedCmd using MarshalBinaryWithBuffer (avoids MarshalBinary allocation)
@@ -539,8 +540,8 @@ func (c *TxnCmd) MarshalBinaryWithBuffer(buf *bytes.Buffer) ([]byte, error) {
 		c.ComposedCmd = NewComposedCmd()
 	}
 	composedDataStart := buf.Len()
-	if _, err := c.ComposedCmd.MarshalBinaryWithBuffer(buf); err != nil {
-		return nil, err
+	if err := c.ComposedCmd.MarshalBinaryWithBuffer(buf); err != nil {
+		return err
 	}
 	composedDataSize := buf.Len() - composedDataStart
 
@@ -552,36 +553,36 @@ func (c *TxnCmd) MarshalBinaryWithBuffer(buf *bytes.Buffer) ([]byte, error) {
 
 	// Write ID (prefixed with length)
 	if _, err := objectio.WriteString(c.ID, buf); err != nil {
-		return nil, err
+		return err
 	}
 
 	// Write StartTS
 	if _, err := buf.Write(c.StartTS[:]); err != nil {
-		return nil, err
+		return err
 	}
 
 	// Write PrepareTS
 	if _, err := buf.Write(c.PrepareTS[:]); err != nil {
-		return nil, err
+		return err
 	}
 
 	// Write Participants (length + data)
 	participantsLen := uint32(len(c.Participants))
 	if _, err := buf.Write(types.EncodeUint32(&participantsLen)); err != nil {
-		return nil, err
+		return err
 	}
 	for _, p := range c.Participants {
 		if _, err := buf.Write(types.EncodeUint64(&p)); err != nil {
-			return nil, err
+			return err
 		}
 	}
 
 	// Write Memo directly to buffer
 	if _, err := c.Memo.WriteTo(buf); err != nil {
-		return nil, err
+		return err
 	}
 
-	return buf.Bytes(), nil
+	return nil
 }
 
 func (c *TxnCmd) MarshalBinary() (buf []byte, err error) {
@@ -591,11 +592,13 @@ func (c *TxnCmd) MarshalBinary() (buf []byte, err error) {
 	poolBuf.Reset()
 
 	// Use MarshalBinaryWithBuffer to serialize directly to pooled buffer
-	data, err := c.MarshalBinaryWithBuffer(poolBuf)
+	err = c.MarshalBinaryWithBuffer(poolBuf)
 	if err != nil {
 		putMarshalBuffer(poolBuf) // Return buffer on error
 		return nil, err
 	}
+
+	data := poolBuf.Bytes()
 
 	// Optimization: if buffer capacity exceeds MaxPooledBufSize, it won't be returned to pool.
 	// In this case, we can directly return the underlying array without copy because:
@@ -679,7 +682,7 @@ func (cc *ComposedCmd) GetType() uint16 {
 // MarshalBinaryWithBuffer serializes ComposedCmd directly to the provided bytes.Buffer,
 // avoiding buffer copying and allocations. Sub-commands also use MarshalBinaryWithBuffer
 // if available, ensuring zero allocations in the entire serialization chain.
-func (cc *ComposedCmd) MarshalBinaryWithBuffer(buf *bytes.Buffer) ([]byte, error) {
+func (cc *ComposedCmd) MarshalBinaryWithBuffer(buf *bytes.Buffer) error {
 	// Estimate total size and pre-grow buffer to reduce reallocations
 	estimatedSize := int(cc.ApproxSize())
 	if estimatedSize < 256 {
@@ -692,15 +695,15 @@ func (cc *ComposedCmd) MarshalBinaryWithBuffer(buf *bytes.Buffer) ([]byte, error
 	// Write header (8 bytes: type 2 + version 2 + length 4)
 	t := cc.GetType()
 	if _, err := buf.Write(types.EncodeUint16(&t)); err != nil {
-		return nil, err
+		return err
 	}
 	ver := IOET_WALTxnCommand_Composed_CurrVer
 	if _, err := buf.Write(types.EncodeUint16(&ver)); err != nil {
-		return nil, err
+		return err
 	}
 	length := uint32(len(cc.Cmds))
 	if _, err := buf.Write(types.EncodeUint32(&length)); err != nil {
-		return nil, err
+		return err
 	}
 
 	// Pre-expand buffer before the loop to avoid growSlice allocations
@@ -726,24 +729,24 @@ func (cc *ComposedCmd) MarshalBinaryWithBuffer(buf *bytes.Buffer) ([]byte, error
 	for _, cmd := range cc.Cmds {
 		// Check if cmd implements MarshalBinaryWithBuffer interface
 		type marshalBinaryWithBuffer interface {
-			MarshalBinaryWithBuffer(buf *bytes.Buffer) ([]byte, error)
+			MarshalBinaryWithBuffer(buf *bytes.Buffer) error
 		}
 		cmdWithBuf, ok := cmd.(marshalBinaryWithBuffer)
 		if !ok {
 			// All commands must implement MarshalBinaryWithBuffer
-			return nil, fmt.Errorf("cmd %T does not implement MarshalBinaryWithBuffer", cmd)
+			panic(fmt.Sprintf("cmd %T does not implement MarshalBinaryWithBuffer", cmd))
 		}
 		// Use MarshalBinaryWithBuffer to write directly to shared buffer
 		// Write placeholder for length prefix
 		lengthPrefixPos := buf.Len()
 		cmdLenPlaceholder := uint32(0)
 		if _, err := buf.Write(types.EncodeUint32(&cmdLenPlaceholder)); err != nil {
-			return nil, err
+			return err
 		}
 		// Write command data
 		cmdDataStart := buf.Len()
-		if _, err := cmdWithBuf.MarshalBinaryWithBuffer(buf); err != nil {
-			return nil, err
+		if err := cmdWithBuf.MarshalBinaryWithBuffer(buf); err != nil {
+			return err
 		}
 		cmdDataSize := buf.Len() - cmdDataStart
 		// Update length prefix
@@ -753,7 +756,7 @@ func (cc *ComposedCmd) MarshalBinaryWithBuffer(buf *bytes.Buffer) ([]byte, error
 		copy(bufBytes[lengthPrefixPos:lengthPrefixPos+4], cmdLenBytes)
 	}
 
-	return buf.Bytes(), nil
+	return nil
 }
 
 func (cc *ComposedCmd) MarshalBinary() (buf []byte, err error) {
@@ -763,11 +766,13 @@ func (cc *ComposedCmd) MarshalBinary() (buf []byte, err error) {
 	poolBuf.Reset()
 
 	// Use MarshalBinaryWithBuffer to serialize directly to pooled buffer
-	data, err := cc.MarshalBinaryWithBuffer(poolBuf)
+	err = cc.MarshalBinaryWithBuffer(poolBuf)
 	if err != nil {
 		putMarshalBuffer(poolBuf) // Return buffer on error
 		return nil, err
 	}
+
+	data := poolBuf.Bytes()
 
 	// Optimization: if buffer capacity exceeds MaxPooledBufSize, it won't be returned to pool.
 	// In this case, we can directly return the underlying array without copy because
@@ -822,7 +827,7 @@ func (cc *ComposedCmd) ApproxSize() int64 {
 func (cc *ComposedCmd) WriteTo(w io.Writer) (n int64, err error) {
 	// Define interface for MarshalBinaryWithBuffer to avoid allocations
 	type marshalBinaryWithBuffer interface {
-		MarshalBinaryWithBuffer(buf *bytes.Buffer) ([]byte, error)
+		MarshalBinaryWithBuffer(buf *bytes.Buffer) error
 	}
 
 	for _, cmd := range cc.Cmds {
@@ -842,9 +847,9 @@ func (cc *ComposedCmd) WriteTo(w io.Writer) (n int64, err error) {
 			// All commands must implement MarshalBinaryWithBuffer
 			cmdWithBuf, ok := cmd.(marshalBinaryWithBuffer)
 			if !ok {
-				return 0, fmt.Errorf("cmd %T does not implement MarshalBinaryWithBuffer", cmd)
+				panic(fmt.Sprintf("cmd %T does not implement MarshalBinaryWithBuffer", cmd))
 			}
-			if _, err = cmdWithBuf.MarshalBinaryWithBuffer(sharedBuf); err != nil {
+			if err = cmdWithBuf.MarshalBinaryWithBuffer(sharedBuf); err != nil {
 				return
 			}
 			sn = int64(sharedBuf.Len() - cmdDataStart)

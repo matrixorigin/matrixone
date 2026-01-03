@@ -217,7 +217,7 @@ func (w *bytesWriter) Write(p []byte) (n int, err error) {
 
 // MarshalBinaryWithBuffer serializes AppendCmd directly to the provided bytes.Buffer,
 // avoiding buffer copying and allocations.
-func (c *AppendCmd) MarshalBinaryWithBuffer(buf *bytes.Buffer) ([]byte, error) {
+func (c *AppendCmd) MarshalBinaryWithBuffer(buf *bytes.Buffer) error {
 	// Estimate total size and pre-grow buffer to reduce reallocations
 	estimatedSize := int(c.ApproxSize())
 	if estimatedSize < 256 {
@@ -228,11 +228,8 @@ func (c *AppendCmd) MarshalBinaryWithBuffer(buf *bytes.Buffer) ([]byte, error) {
 	}
 
 	// Use WriteTo to write directly to the shared buffer
-	if _, err := c.WriteTo(buf); err != nil {
-		return nil, err
-	}
-
-	return buf.Bytes(), nil
+	_, err := c.WriteTo(buf)
+	return err
 }
 
 func (c *AppendCmd) MarshalBinary() (buf []byte, err error) {
@@ -240,11 +237,13 @@ func (c *AppendCmd) MarshalBinary() (buf []byte, err error) {
 	poolBuf := txnbase.GetMarshalBuffer()
 
 	// Use MarshalBinaryWithBuffer to serialize directly to pooled buffer
-	data, err := c.MarshalBinaryWithBuffer(poolBuf)
+	err = c.MarshalBinaryWithBuffer(poolBuf)
 	if err != nil {
 		txnbase.PutMarshalBuffer(poolBuf) // Return buffer on error
 		return nil, err
 	}
+
+	data := poolBuf.Bytes()
 
 	// Optimization: if buffer capacity exceeds MaxPooledBufSize, it won't be returned to pool.
 	// In this case, we can directly return the underlying array without copy because
