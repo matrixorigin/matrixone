@@ -20,6 +20,7 @@ import (
 	"io"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
@@ -545,13 +546,13 @@ func (c *TxnCmd) UnmarshalBinaryWithVersion(buf []byte, ver uint16) (err error) 
 	c.ComposedCmd = NewComposedCmd()
 	// Read ComposedCmd length (4 bytes)
 	if len(buf) < 4 {
-		return fmt.Errorf("buffer too short for ComposedCmd length")
+		return moerr.NewInternalErrorNoCtxf("buffer too short for ComposedCmd length")
 	}
 	composeedCmdBufLength := types.DecodeUint32(buf[0:4])
 	n := 4
 	// Read ComposedCmd data
 	if len(buf) < n+int(composeedCmdBufLength) {
-		return fmt.Errorf("buffer too short for ComposedCmd data: need %d, have %d", n+int(composeedCmdBufLength), len(buf))
+		return moerr.NewInternalErrorNoCtxf("buffer too short for ComposedCmd data: need %d, have %d", n+int(composeedCmdBufLength), len(buf))
 	}
 	cmd, err := BuildCommandFrom(buf[n : n+int(composeedCmdBufLength)])
 	if err != nil {
