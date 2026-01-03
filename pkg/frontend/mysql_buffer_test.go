@@ -1023,7 +1023,7 @@ func TestConn_ReadLoadLocalPacketErr(t *testing.T) {
 		{
 			resetFunc()
 			tConn.mod = testConnModSetReadDeadlineReturnErr
-			conn.readTimeout = time.Second * 2
+			conn.loadLocalReadTimeout = time.Second * 2
 			_, _ = tConn.Write(makePacket(payload1, 1))
 			read, err = conn.ReadLoadLocalPacket()
 			assert.NotNil(t, err)
