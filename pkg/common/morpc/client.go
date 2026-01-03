@@ -458,6 +458,8 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 			if waitingForCreate {
 				shouldContinue, waitErr := c.handleAutoCreateWait(ctx, backend, &creationStart, retryCount)
 				if !shouldContinue {
+					// Record circuit breaker failure on timeout
+					c.circuitBreakers.RecordFailure(backend)
 					return nil, waitErr
 				}
 
@@ -468,6 +470,8 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 						zap.String("backend", backend),
 						zap.Int("retries", retryCount),
 						zap.Error(err))
+					// Record circuit breaker failure on max retries
+					c.circuitBreakers.RecordFailure(backend)
 					return nil, err
 				}
 
@@ -578,6 +582,8 @@ func (c *client) NewStream(ctx context.Context, backend string, lock bool) (Stre
 			if waitingForCreate {
 				shouldContinue, waitErr := c.handleAutoCreateWait(ctx, backend, &creationStart, retryCount)
 				if !shouldContinue {
+					// Record circuit breaker failure on timeout
+					c.circuitBreakers.RecordFailure(backend)
 					return nil, waitErr
 				}
 
@@ -588,6 +594,8 @@ func (c *client) NewStream(ctx context.Context, backend string, lock bool) (Stre
 						zap.String("backend", backend),
 						zap.Int("retries", retryCount),
 						zap.Error(err))
+					// Record circuit breaker failure on max retries
+					c.circuitBreakers.RecordFailure(backend)
 					return nil, err
 				}
 
@@ -679,6 +687,8 @@ func (c *client) Ping(ctx context.Context, backend string) error {
 			if waitingForCreate {
 				shouldContinue, waitErr := c.handleAutoCreateWait(ctx, backend, &creationStart, retryCount)
 				if !shouldContinue {
+					// Record circuit breaker failure on timeout
+					c.circuitBreakers.RecordFailure(backend)
 					return waitErr
 				}
 
@@ -689,6 +699,8 @@ func (c *client) Ping(ctx context.Context, backend string) error {
 						zap.String("backend", backend),
 						zap.Int("retries", retryCount),
 						zap.Error(err))
+					// Record circuit breaker failure on max retries
+					c.circuitBreakers.RecordFailure(backend)
 					return err
 				}
 
@@ -854,9 +866,10 @@ func (c *client) getBackend(backend string, lock bool) (Backend, error) {
 	}
 
 	if hasBackends {
-		// Pool had entries but none usable; surface as unavailable to differentiate from "creating"
+		// Pool had entries but none usable (all busy/inactive)
+		// Return ErrBackendCreating to trigger wait/retry logic instead of failing immediately
 		c.metrics.backendUnavailableCounter.Inc()
-		return nil, ErrBackendUnavailable
+		return nil, ErrBackendCreating
 	}
 
 	// Pool is empty and cannot create - return ErrNoAvailableBackend to trigger wait logic
