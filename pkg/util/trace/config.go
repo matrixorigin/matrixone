@@ -388,6 +388,14 @@ func (f spanOptionFunc) ApplySpanStart(cfg *SpanConfig) {
 	f(cfg)
 }
 
+// KindOption is a zero-allocation SpanStartOption that wraps a SpanKind.
+// It allows IsEnable to extract the Kind directly via type assertion without allocating a SpanConfig.
+type KindOption SpanKind
+
+func (k KindOption) ApplySpanStart(cfg *SpanConfig) {
+	cfg.Kind = SpanKind(k)
+}
+
 func WithNewRoot(newRoot bool) SpanStartOption {
 	return spanOptionFunc(func(cfg *SpanConfig) {
 		cfg.NewRoot = newRoot
@@ -395,9 +403,7 @@ func WithNewRoot(newRoot bool) SpanStartOption {
 }
 
 func WithKind(kind SpanKind) SpanStartOption {
-	return spanOptionFunc(func(cfg *SpanConfig) {
-		cfg.Kind = kind
-	})
+	return KindOption(kind)
 }
 
 // WithLongTimeThreshold set timeout threshold. Span.End will check the Span duration value.
