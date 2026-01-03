@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
@@ -778,4 +779,63 @@ func TestDedup1(t *testing.T) {
 		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict))
 	}
 	t.Log(c.SimplePPString(common.PPL1))
+}
+
+func TestLogTxnState(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+	testutils.EnsureNoLeak(t)
+	dir := testutils.InitTestEnv(ModuleName, t)
+	c, mgr, driver := initTestContext(ctx, t, dir)
+	defer driver.Close()
+	defer c.Close()
+	defer mgr.Stop()
+
+	// Test with sync=false
+	{
+		txn, _ := mgr.StartTxn(nil)
+		store := txn.GetStore().(*txnStore)
+		logEntry, err := store.LogTxnState(false)
+		assert.NoError(t, err)
+		assert.NotNil(t, logEntry)
+		assert.Equal(t, IOET_WALEntry_TxnRecord, logEntry.GetType())
+		info := logEntry.GetInfo()
+		assert.NotNil(t, info)
+		entryInfo, ok := info.(*entry.Info)
+		assert.True(t, ok)
+		assert.Equal(t, wal.GroupC, entryInfo.Group)
+	}
+
+	// Test with sync=true
+	{
+		txn, _ := mgr.StartTxn(nil)
+		store := txn.GetStore().(*txnStore)
+		logEntry, err := store.LogTxnState(true)
+		assert.NoError(t, err)
+		assert.NotNil(t, logEntry)
+		assert.Equal(t, IOET_WALEntry_TxnRecord, logEntry.GetType())
+		info := logEntry.GetInfo()
+		assert.NotNil(t, info)
+		entryInfo, ok := info.(*entry.Info)
+		assert.True(t, ok)
+		assert.Equal(t, wal.GroupC, entryInfo.Group)
+		// When sync=true, WaitDone() should be called, so the entry should be done
+		// We can verify this by checking if the entry is ready
+	}
+
+	// Test with a transaction that has some operations
+	{
+		txn, _ := mgr.StartTxn(nil)
+		_, err := txn.CreateDatabase("testdb", "", "")
+		assert.NoError(t, err)
+		store := txn.GetStore().(*txnStore)
+		logEntry, err := store.LogTxnState(false)
+		assert.NoError(t, err)
+		assert.NotNil(t, logEntry)
+		assert.Equal(t, IOET_WALEntry_TxnRecord, logEntry.GetType())
+		// Verify the payload is set
+		payload := logEntry.GetPayload()
+		assert.NotNil(t, payload)
+		assert.Greater(t, len(payload), 0)
+	}
 }

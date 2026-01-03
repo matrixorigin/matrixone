@@ -269,13 +269,34 @@ func (cmd *EntryCommand[T, N]) WriteTo(w io.Writer) (n int64, err error) {
 	n += sn
 	return
 }
+
+func (cmd *EntryCommand[T, N]) MarshalBinaryWithBuffer(buf *bytes.Buffer) error {
+	_, err := cmd.WriteTo(buf)
+	return err
+}
+
 func (cmd *EntryCommand[T, N]) MarshalBinary() (buf []byte, err error) {
-	var bbuf bytes.Buffer
-	if _, err = cmd.WriteTo(&bbuf); err != nil {
-		return
+	poolBuf := txnbase.GetMarshalBuffer()
+
+	err = cmd.MarshalBinaryWithBuffer(poolBuf)
+	if err != nil {
+		txnbase.PutMarshalBuffer(poolBuf) // Return buffer on error
+		return nil, err
 	}
-	buf = bbuf.Bytes()
-	return
+
+	data := poolBuf.Bytes()
+	// Optimization: if buffer capacity exceeds MaxPooledBufSize, it won't be returned to pool.
+	// In this case, we can directly return the underlying array without copy.
+	if poolBuf.Cap() > txnbase.MaxPooledBufSize {
+		txnbase.PutMarshalBuffer(poolBuf) // Will discard, but safe to call
+		return data, nil
+	}
+
+	// Small buffer will be returned to pool and Reset, so we must copy
+	result := make([]byte, len(data))
+	copy(result, data)
+	txnbase.PutMarshalBuffer(poolBuf)
+	return result, nil
 }
 func (cmd *EntryCommand[T, N]) ReadFrom(r io.Reader) (n int64, err error) {
 	var sn2 int
