@@ -12,6 +12,62 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Package morpc provides a high-performance RPC client with automatic backend management,
+// circuit breaker, retry policies, and bounded wait for backend creation.
+//
+// # Backend State Machine & Error Semantics
+//
+// The client maintains a pool of backends for each remote address. Backend states and
+// corresponding errors guide retry behavior:
+//
+//	┌──────────────────────────────────────────────────────────────────────────────┐
+//	│ Backend State                │ Error                      │ Should Retry?   │
+//	├──────────────────────────────┼────────────────────────────┼─────────────────┤
+//	│ Creating (async)             │ ErrBackendCreating         │ Yes (transient) │
+//	│ Pool empty, cannot create    │ ErrNoAvailableBackend      │ Yes (transient) │
+//	│ Pool has backends but down   │ ErrBackendUnavailable      │ No (permanent)  │
+//	│ Create timeout exceeded      │ ErrBackendCreateTimeout    │ No (permanent)  │
+//	│ Circuit breaker open         │ ErrCircuitOpen             │ No (permanent)  │
+//	│ Client closed                │ ErrClientClosed            │ No (permanent)  │
+//	└──────────────────────────────────────────────────────────────────────────────┘
+//
+// # Bounded Wait for Auto-Create
+//
+// When auto-create is enabled and a backend is being created asynchronously, callers
+// can configure a bounded wait timeout:
+//
+//   - autoCreateWaitTimeout = 0 (default): Wait until context deadline (legacy behavior)
+//   - autoCreateWaitTimeout > 0: Wait up to specified duration, then return ErrBackendClosed
+//
+// Example: lockservice sets 500ms timeout for fast failure detection in orphan transaction cleanup.
+//
+// # Retry Policy
+//
+// DefaultRetryPolicy retries indefinitely (MaxRetries=0) with exponential backoff.
+// The retry loop exits when:
+//   - Context is cancelled/timeout
+//   - Non-retryable error (ErrBackendClosed, ErrCircuitOpen, ErrClientClosed)
+//   - Bounded wait timeout exceeded (if configured)
+//
+// # Usage Example
+//
+//	// Default behavior (wait until context timeout)
+//	client, _ := NewClient("my-service", cfg, factory)
+//
+//	// With bounded wait (fast failure detection)
+//	client, _ := NewClient("my-service", cfg, factory,
+//	    WithClientAutoCreateWaitTimeout(500*time.Millisecond))
+//
+// # Observability
+//
+// Metrics:
+//   - mo_rpc_backend_auto_create_timeout_total: Auto-create wait timeouts
+//   - mo_rpc_backend_create_total: Backend creation attempts
+//   - mo_rpc_backend_connect_total: Connection attempts (total/failed)
+//
+// Logs:
+//   - "waiting for backend creation": Sparse logging (1st, then every 10th retry)
+//   - "auto-create backend timed out": When bounded wait timeout exceeded
 package morpc
 
 import (
@@ -53,7 +109,20 @@ var (
 
 	// ErrBackendCreating indicates that the backend is being created asynchronously.
 	// Callers can distinguish "creation in progress" from "backend closed/unavailable".
-	ErrBackendCreating = errors.New("morpc backend is being created")
+	// This is a high-frequency expected error (NoCtx to avoid log spam).
+	ErrBackendCreating = moerr.NewInternalErrorNoCtx("morpc backend is being created")
+
+	// ErrBackendUnavailable indicates that the pool has backends but all are unavailable.
+	// This typically means network partition, service crash, or all backends inactive.
+	// This is a high-frequency expected error (NoCtx to avoid log spam).
+	// Uses ErrBackendClosed code for compatibility with existing error handling.
+	ErrBackendUnavailable = moerr.NewBackendClosedNoCtx()
+
+	// ErrBackendCreateTimeout indicates that auto-create wait timeout exceeded.
+	// This typically means backend creation is too slow or queue congestion.
+	// This is a boundary condition error (NoCtx + Counter for monitoring).
+	// Uses ErrBackendClosed code for compatibility with existing error handling.
+	ErrBackendCreateTimeout = moerr.NewBackendClosedNoCtx()
 )
 
 const defaultAutoCreateWaitTimeout = 0 // 0 means wait until context deadline (legacy behavior)
@@ -379,21 +448,9 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 
 			// Handle backend creation-in-progress with bounded wait
 			if waitingForCreate {
-				// Check context first before retrying
-				select {
-				case <-ctx.Done():
-					return nil, ctx.Err()
-				default:
-				}
-
-				if creationStart.IsZero() {
-					creationStart = time.Now()
-				}
-				if timeout := c.options.autoCreateWaitTimeout; timeout > 0 && time.Since(creationStart) >= timeout {
-					c.logger.Warn("auto-create backend timed out",
-						zap.String("backend", backend),
-						zap.Duration("waited", time.Since(creationStart)))
-					return nil, moerr.NewBackendClosedNoCtx()
+				shouldContinue, waitErr := c.handleAutoCreateWait(ctx, backend, &creationStart, retryCount)
+				if !shouldContinue {
+					return nil, waitErr
 				}
 
 				retryCount++
@@ -414,13 +471,6 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 						return nil, ctx.Err()
 					case <-time.After(backoff):
 					}
-				}
-
-				if retryCount <= 3 || retryCount%10 == 0 {
-					c.logger.Debug("retrying Send after no available backend",
-						zap.String("backend", backend),
-						zap.Int("retry", retryCount),
-						zap.Duration("backoff", backoff))
 				}
 				continue
 			}
@@ -518,14 +568,9 @@ func (c *client) NewStream(ctx context.Context, backend string, lock bool) (Stre
 
 			// Handle backend creation-in-progress with bounded wait
 			if waitingForCreate {
-				if creationStart.IsZero() {
-					creationStart = time.Now()
-				}
-				if timeout := c.options.autoCreateWaitTimeout; timeout > 0 && time.Since(creationStart) >= timeout {
-					c.logger.Warn("auto-create backend timed out",
-						zap.String("backend", backend),
-						zap.Duration("waited", time.Since(creationStart)))
-					return nil, moerr.NewBackendClosedNoCtx()
+				shouldContinue, waitErr := c.handleAutoCreateWait(ctx, backend, &creationStart, retryCount)
+				if !shouldContinue {
+					return nil, waitErr
 				}
 
 				retryCount++
@@ -546,13 +591,6 @@ func (c *client) NewStream(ctx context.Context, backend string, lock bool) (Stre
 						return nil, ctx.Err()
 					case <-time.After(backoff):
 					}
-				}
-
-				if retryCount <= 3 || retryCount%10 == 0 {
-					c.logger.Debug("retrying NewStream after no available backend",
-						zap.String("backend", backend),
-						zap.Int("retry", retryCount),
-						zap.Duration("backoff", backoff))
 				}
 				continue
 			}
@@ -631,21 +669,9 @@ func (c *client) Ping(ctx context.Context, backend string) error {
 
 			// Handle backend creation-in-progress with bounded wait
 			if waitingForCreate {
-				// Check context first before retrying
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				default:
-				}
-
-				if creationStart.IsZero() {
-					creationStart = time.Now()
-				}
-				if timeout := c.options.autoCreateWaitTimeout; timeout > 0 && time.Since(creationStart) >= timeout {
-					c.logger.Warn("auto-create backend timed out",
-						zap.String("backend", backend),
-						zap.Duration("waited", time.Since(creationStart)))
-					return moerr.NewBackendClosedNoCtx()
+				shouldContinue, waitErr := c.handleAutoCreateWait(ctx, backend, &creationStart, retryCount)
+				if !shouldContinue {
+					return waitErr
 				}
 
 				retryCount++
@@ -666,13 +692,6 @@ func (c *client) Ping(ctx context.Context, backend string) error {
 						return ctx.Err()
 					case <-time.After(backoff):
 					}
-				}
-
-				if retryCount <= 3 || retryCount%10 == 0 {
-					c.logger.Debug("retrying Ping after no available backend",
-						zap.String("backend", backend),
-						zap.Int("retry", retryCount),
-						zap.Duration("backoff", backoff))
 				}
 				continue
 			}
@@ -821,8 +840,9 @@ func (c *client) getBackend(backend string, lock bool) (Backend, error) {
 	}
 
 	if hasBackends {
-		// Pool had entries but none usable; surface as closed to differentiate from "creating"
-		return nil, moerr.NewBackendClosedNoCtx()
+		// Pool had entries but none usable; surface as unavailable to differentiate from "creating"
+		c.metrics.backendUnavailableCounter.Inc()
+		return nil, ErrBackendUnavailable
 	}
 
 	// Pool is empty and cannot create - return ErrNoAvailableBackend to trigger wait logic
@@ -1061,9 +1081,64 @@ func (c *client) updatePoolSizeMetricsLocked() {
 	c.metrics.poolSizeGauge.Set(float64(n))
 }
 
+func isErrBackendCreating(err error) bool {
+	if err == nil {
+		return false
+	}
+	// Compare directly since ErrBackendCreating is now a moerr error
+	return err == ErrBackendCreating || errors.Is(err, ErrBackendCreating)
+}
+
+// isAutoCreateWaitError checks if the error indicates we should wait for backend creation.
+// State mapping:
+//   - ErrBackendCreating: Backend is being created asynchronously, should wait
+//   - ErrNoAvailableBackend: Pool is empty and cannot create (at capacity), should wait
+//   - ErrBackendClosed: Backend unavailable or wait timeout exceeded, should NOT wait
 func isAutoCreateWaitError(err error) bool {
-	return errors.Is(err, ErrBackendCreating) ||
+	return isErrBackendCreating(err) ||
 		moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend)
+}
+
+// handleAutoCreateWait implements bounded wait logic for backend creation.
+// Returns:
+//   - true: should continue waiting/retrying
+//   - false: should stop (timeout exceeded or context cancelled)
+//   - error: ErrBackendCreateTimeout if timeout exceeded, ctx.Err() if context cancelled
+func (c *client) handleAutoCreateWait(ctx context.Context, backend string, creationStart *time.Time, retryCount int) (bool, error) {
+	// Check context first
+	select {
+	case <-ctx.Done():
+		return false, ctx.Err()
+	default:
+	}
+
+	// Initialize creation start time
+	if creationStart.IsZero() {
+		*creationStart = time.Now()
+	}
+
+	// Check bounded wait timeout
+	if timeout := c.options.autoCreateWaitTimeout; timeout > 0 {
+		elapsed := time.Since(*creationStart)
+		if elapsed >= timeout {
+			c.logger.Warn("auto-create backend timed out",
+				zap.String("backend", backend),
+				zap.Duration("waited", elapsed),
+				zap.Duration("timeout", timeout))
+			c.metrics.autoCreateTimeoutCounter.Inc()
+			return false, ErrBackendCreateTimeout
+		}
+	}
+
+	// Log creation wait progress (sparse logging)
+	if retryCount == 1 || retryCount%10 == 0 {
+		c.logger.Debug("waiting for backend creation",
+			zap.String("backend", backend),
+			zap.Int("retry", retryCount),
+			zap.Duration("waited", time.Since(*creationStart)))
+	}
+
+	return true, nil
 }
 
 type op struct {

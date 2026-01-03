@@ -93,8 +93,14 @@ func GetStatusCategory(err error) StatusCategory {
 	}
 
 	// Backend is being created asynchronously - treat as transient wait
-	if errors.Is(err, ErrBackendCreating) {
+	if err == ErrBackendCreating || errors.Is(err, ErrBackendCreating) {
 		return StatusTransient
+	}
+
+	// Backend unavailable or create timeout - treat as unavailable (permanent for this request)
+	if err == ErrBackendUnavailable || errors.Is(err, ErrBackendUnavailable) ||
+		err == ErrBackendCreateTimeout || errors.Is(err, ErrBackendCreateTimeout) {
+		return StatusUnavailable
 	}
 
 	// Connection-level unavailability

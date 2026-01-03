@@ -191,6 +191,8 @@ func initRPCMetrics() {
 	registry.MustRegister(rpcGCIdleBackendsCleanedCounter)
 	registry.MustRegister(rpcGCInactiveProcessedCounter)
 	registry.MustRegister(rpcGCCreateProcessedCounter)
+	registry.MustRegister(rpcBackendAutoCreateTimeoutCounter)
+	registry.MustRegister(rpcBackendUnavailableCounter)
 
 	registry.MustRegister(rpcBackendPoolSizeGauge)
 	registry.MustRegister(rpcSendingQueueSizeGauge)
