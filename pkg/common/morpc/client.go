@@ -447,8 +447,8 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 
 		b, err := c.getBackend(backend, false)
 		if err != nil {
-			// Handle circuit open error without recording additional failure
-			if errors.Is(err, ErrCircuitOpen) {
+			// Handle circuit breaker errors - both open and half-open (exhausted probes) reject immediately
+			if errors.Is(err, ErrCircuitOpen) || errors.Is(err, ErrCircuitHalfOpen) {
 				return nil, err
 			}
 
@@ -575,8 +575,8 @@ func (c *client) NewStream(ctx context.Context, backend string, lock bool) (Stre
 
 		b, err := c.getBackend(backend, lock)
 		if err != nil {
-			// Handle circuit open error without recording additional failure
-			if errors.Is(err, ErrCircuitOpen) {
+			// Handle circuit breaker errors - both open and half-open (exhausted probes) reject immediately
+			if errors.Is(err, ErrCircuitOpen) || errors.Is(err, ErrCircuitHalfOpen) {
 				return nil, err
 			}
 
@@ -689,6 +689,11 @@ func (c *client) Ping(ctx context.Context, backend string) error {
 	for {
 		b, err := c.getBackend(backend, false)
 		if err != nil {
+			// Handle circuit breaker errors - both open and half-open (exhausted probes) reject immediately
+			if errors.Is(err, ErrCircuitOpen) || errors.Is(err, ErrCircuitHalfOpen) {
+				return err
+			}
+
 			// Wait for backend if:
 			// 1. Auto-create enabled and waiting for creation, OR
 			// 2. ErrBackendCreating (pool has backends but all busy - wait regardless of auto-create)
