@@ -58,10 +58,6 @@ type AppendCmd struct {
 	Ts          types.TS
 	Node        *anode
 	IsTombstone bool
-
-	// marshalBuf is a reusable buffer for MarshalBinary to avoid repeated allocations.
-	// It will be discarded if capacity exceeds MaxAppendCmdBufSize to prevent memory leaks.
-	marshalBuf []byte
 }
 
 func NewEmptyAppendCmd() *AppendCmd {
@@ -116,8 +112,6 @@ func (c *AppendCmd) VerboseString() string {
 func (c *AppendCmd) Close() {
 	c.Data.Close()
 	c.Data = nil
-	// Clear marshalBuf to release memory when the object is closed
-	c.marshalBuf = nil
 }
 func (c *AppendCmd) GetType() uint16 { return IOET_WALTxnCommand_Append }
 
@@ -221,33 +215,50 @@ func (w *bytesWriter) Write(p []byte) (n int, err error) {
 	return len(p), nil
 }
 
-func (c *AppendCmd) MarshalBinary() (buf []byte, err error) {
-	// Capacity limit: discard buffer if it exceeds MaxAppendCmdBufSize to prevent memory leaks.
-	if cap(c.marshalBuf) > MaxAppendCmdBufSize {
-		c.marshalBuf = nil
-	}
-
-	// Estimate size: use ApproxSize() for more accurate estimation
+// MarshalBinaryWithBuffer serializes AppendCmd directly to the provided bytes.Buffer,
+// avoiding buffer copying and allocations.
+func (c *AppendCmd) MarshalBinaryWithBuffer(buf *bytes.Buffer) ([]byte, error) {
+	// Estimate total size and pre-grow buffer to reduce reallocations
 	estimatedSize := int(c.ApproxSize())
 	if estimatedSize < 256 {
 		estimatedSize = 256 // Minimum capacity
 	}
-
-	// Reuse or allocate buffer
-	if cap(c.marshalBuf) < estimatedSize {
-		c.marshalBuf = make([]byte, 0, estimatedSize)
-	} else {
-		c.marshalBuf = c.marshalBuf[:0] // Reset length, keep capacity
+	if buf.Cap() < estimatedSize {
+		buf.Grow(estimatedSize - buf.Len())
 	}
 
-	// Write directly to marshalBuf using a simple writer
-	writer := &bytesWriter{buf: c.marshalBuf}
-	if _, err = c.WriteTo(writer); err != nil {
+	// Use WriteTo to write directly to the shared buffer
+	if _, err := c.WriteTo(buf); err != nil {
 		return nil, err
 	}
-	c.marshalBuf = writer.buf
 
-	return c.marshalBuf, nil
+	return buf.Bytes(), nil
+}
+
+func (c *AppendCmd) MarshalBinary() (buf []byte, err error) {
+	// Get buffer from pool (reused across transactions)
+	poolBuf := txnbase.GetMarshalBuffer()
+
+	// Use MarshalBinaryWithBuffer to serialize directly to pooled buffer
+	data, err := c.MarshalBinaryWithBuffer(poolBuf)
+	if err != nil {
+		txnbase.PutMarshalBuffer(poolBuf) // Return buffer on error
+		return nil, err
+	}
+
+	// Optimization: if buffer capacity exceeds MaxPooledBufSize, it won't be returned to pool.
+	// In this case, we can directly return the underlying array without copy because
+	// the returned slice will keep the underlying array alive (prevent GC).
+	if poolBuf.Cap() > txnbase.MaxPooledBufSize {
+		txnbase.PutMarshalBuffer(poolBuf) // Will discard, but safe to call
+		return data, nil
+	}
+
+	// Small buffer will be returned to pool and Reset, so we must copy
+	result := make([]byte, len(data))
+	copy(result, data)
+	txnbase.PutMarshalBuffer(poolBuf)
+	return result, nil
 }
 
 func (c *AppendCmd) UnmarshalBinary(buf []byte) error {

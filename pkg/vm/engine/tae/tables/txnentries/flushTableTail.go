@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
 type flushTableTailEntry struct {
@@ -409,13 +410,35 @@ func (cmd *flushTableTailCmd) WriteTo(w io.Writer) (n int64, err error) {
 	n = 2
 	return
 }
-func (cmd *flushTableTailCmd) MarshalBinary() (buf []byte, err error) {
-	var bbuf bytes.Buffer
-	if _, err = cmd.WriteTo(&bbuf); err != nil {
-		return
+
+func (cmd *flushTableTailCmd) MarshalBinaryWithBuffer(buf *bytes.Buffer) ([]byte, error) {
+	if _, err := cmd.WriteTo(buf); err != nil {
+		return nil, err
 	}
-	buf = bbuf.Bytes()
-	return
+	return buf.Bytes(), nil
+}
+
+func (cmd *flushTableTailCmd) MarshalBinary() (buf []byte, err error) {
+	poolBuf := txnbase.GetMarshalBuffer()
+
+	data, err := cmd.MarshalBinaryWithBuffer(poolBuf)
+	if err != nil {
+		txnbase.PutMarshalBuffer(poolBuf) // Return buffer on error
+		return nil, err
+	}
+
+	// Optimization: if buffer capacity exceeds MaxPooledBufSize, it won't be returned to pool.
+	// In this case, we can directly return the underlying array without copy.
+	if poolBuf.Cap() > txnbase.MaxPooledBufSize {
+		txnbase.PutMarshalBuffer(poolBuf) // Will discard, but safe to call
+		return data, nil
+	}
+
+	// Small buffer will be returned to pool and Reset, so we must copy
+	result := make([]byte, len(data))
+	copy(result, data)
+	txnbase.PutMarshalBuffer(poolBuf)
+	return result, nil
 }
 func (cmd *flushTableTailCmd) ReadFrom(r io.Reader) (n int64, err error) { return }
 func (cmd *flushTableTailCmd) UnmarshalBinary(buf []byte) (err error)    { return }
