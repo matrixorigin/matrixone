@@ -7655,6 +7655,26 @@ role_name:
 	{
     	$$ = tree.NewCStr($1, 1)
     }
+|   LAG
+        {
+        $$ = tree.NewCStr("lag", 1)
+    }
+|   LEAD
+        {
+        $$ = tree.NewCStr("lead", 1)
+    }
+|   FIRST_VALUE
+        {
+        $$ = tree.NewCStr("first_value", 1)
+    }
+|   LAST_VALUE
+        {
+        $$ = tree.NewCStr("last_value", 1)
+    }
+|   NTH_VALUE
+        {
+        $$ = tree.NewCStr("nth_value", 1)
+    }
 
 index_prefix:
     {
@@ -13390,6 +13410,11 @@ non_reserved_keyword:
 |   CUBE
 |   RETRY
 |	INTERNAL
+|   LAG
+|   LEAD
+|   FIRST_VALUE
+|   LAST_VALUE
+|   NTH_VALUE
 
 func_not_keyword:
     DATE_ADD
