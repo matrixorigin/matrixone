@@ -38,7 +38,7 @@
 # make vendor
 #
 # To compile mo-service with GPU support,
-# 1. install CUDA toolkit (version 1.30 or above)
+# 1. install CUDA toolkit (version 12.0, 13.0, or above)
 # 2. install cuVS Go bindings with conda
 #  % git clone git@github.com:rapidsai/cuvs.git
 #  % cd cuvs
