@@ -16,9 +16,11 @@ package morpc
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -77,7 +79,7 @@ func TestAutoCreateEnabled(t *testing.T) {
 	// First call should trigger async creation
 	_, err = c.getBackend("test-addr", false)
 	assert.Error(t, err) // No backend available yet
-	assert.Contains(t, err.Error(), "no available backend")
+	assert.True(t, errors.Is(err, ErrBackendCreating))
 
 	// Wait for async creation
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -123,6 +125,8 @@ func TestCreateQueueFullFallback(t *testing.T) {
 	// Both should return "no available backend" but trigger different paths
 	assert.Error(t, err1)
 	assert.Error(t, err2)
+	assert.True(t, errors.Is(err1, ErrBackendCreating) || moerr.IsMoErrCode(err1, moerr.ErrNoAvailableBackend))
+	assert.True(t, errors.Is(err2, ErrBackendCreating) || moerr.IsMoErrCode(err2, moerr.ErrNoAvailableBackend))
 
 	// Wait a bit for async creation
 	time.Sleep(50 * time.Millisecond)
@@ -166,7 +170,7 @@ func TestSyncFallbackRespectsLimits(t *testing.T) {
 	b, err := c.createBackendWithBookkeeping("test-addr", false)
 	assert.Error(t, err)
 	assert.Nil(t, b)
-	assert.Contains(t, err.Error(), "no available backend")
+	assert.Contains(t, err.Error(), "backend connection closed")
 
 	// Verify no additional backend was created
 	c.mu.Lock()

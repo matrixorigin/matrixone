@@ -16,6 +16,7 @@ package morpc
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -270,7 +271,7 @@ func TestCrashedNodeRecovery(t *testing.T) {
 				if b != nil {
 					b.Close()
 				}
-			} else if moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend) {
+			} else if moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend) || errors.Is(err, ErrBackendCreating) {
 				noBackendCount.Add(1)
 			}
 		}(i)
@@ -292,7 +293,7 @@ func TestCrashedNodeRecovery(t *testing.T) {
 	// Verify: Most goroutines should see ErrNoAvailableBackend (async creation)
 	// This proves they didn't block waiting for backend creation
 	assert.Greater(t, int(noBackendCount.Load()), numGoroutines/2,
-		"Most requests should return immediately with ErrNoAvailableBackend")
+		"Most requests should return immediately with ErrNoAvailableBackend/ErrBackendCreating")
 
 	// Verify: No successful connections (node is crashed)
 	assert.Equal(t, int32(0), successCount.Load(),

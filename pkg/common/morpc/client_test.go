@@ -209,6 +209,7 @@ func TestMaybeCreateLockedWithFullBackends(t *testing.T) {
 func TestGetBackendAutoCreateDisabled(t *testing.T) {
 	rc, err := NewClient("",
 		newTestBackendFactory(),
+		WithClientDisableAutoCreateBackend(),
 		WithClientMaxBackendPerHost(1))
 	assert.NoError(t, err)
 	c := rc.(*client)
@@ -218,6 +219,9 @@ func TestGetBackendAutoCreateDisabled(t *testing.T) {
 
 	b, err := c.getBackend("b1", false)
 	assert.Nil(t, b)
+	if err != nil {
+		t.Logf("Error: %v, Type: %T", err, err)
+	}
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend))
 
 	c.mu.Lock()
@@ -258,7 +262,7 @@ func TestCreateBackendWithBookkeeping(t *testing.T) {
 	// Second creation should respect maxBackendsPerHost and fail.
 	b2, err := c.createBackendWithBookkeeping("b1", false)
 	assert.Nil(t, b2)
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend))
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBackendClosed))
 }
 
 func TestInitBackendsAndMaxBackendsPerHostNotMatch(t *testing.T) {

@@ -50,7 +50,13 @@ var (
 		Multiplier:     1.0,
 		JitterFraction: 0,
 	}
+
+	// ErrBackendCreating indicates that the backend is being created asynchronously.
+	// Callers can distinguish "creation in progress" from "backend closed/unavailable".
+	ErrBackendCreating = errors.New("morpc backend is being created")
 )
+
+const defaultAutoCreateWaitTimeout = 0 // 0 means wait until context deadline (legacy behavior)
 
 // RetryPolicy defines retry behavior for morpc client operations.
 type RetryPolicy struct {
@@ -133,6 +139,16 @@ func WithClientInitBackends(backends []string, counts []int) ClientOption {
 func WithClientCreateTaskChanSize(size int) ClientOption {
 	return func(c *client) {
 		c.createC = make(chan string, size)
+	}
+}
+
+// WithClientAutoCreateWaitTimeout sets how long Send/NewStream/Ping will wait
+// for an auto-created backend before giving up. Zero keeps legacy behavior
+// (wait until context deadline).
+func WithClientAutoCreateWaitTimeout(timeout time.Duration) ClientOption {
+	return func(c *client) {
+		c.options.autoCreateWaitTimeout = timeout
+		c.options.autoCreateWaitTimeoutSet = true
 	}
 }
 
@@ -221,15 +237,17 @@ type client struct {
 	circuitBreakers *CircuitBreakerManager
 
 	options struct {
-		maxBackendsPerHost   int
-		maxIdleDuration      time.Duration
-		maxIdleDurationSet   bool // true if user explicitly set maxIdleDuration (even to 0)
-		initBackends         []string
-		initBackendCounts    []int
-		enableAutoCreate     bool
-		enableAutoCreateSet  bool // true if user explicitly set enableAutoCreate
-		retryPolicy          RetryPolicy
-		circuitBreakerConfig CircuitBreakerConfig
+		maxBackendsPerHost       int
+		maxIdleDuration          time.Duration
+		maxIdleDurationSet       bool // true if user explicitly set maxIdleDuration (even to 0)
+		initBackends             []string
+		initBackendCounts        []int
+		enableAutoCreate         bool
+		enableAutoCreateSet      bool // true if user explicitly set enableAutoCreate
+		retryPolicy              RetryPolicy
+		circuitBreakerConfig     CircuitBreakerConfig
+		autoCreateWaitTimeout    time.Duration
+		autoCreateWaitTimeoutSet bool
 	}
 }
 
@@ -301,6 +319,10 @@ func (c *client) adjust() {
 	if !c.options.circuitBreakerConfig.Enabled && c.options.circuitBreakerConfig.FailureThreshold == 0 {
 		c.options.circuitBreakerConfig = DefaultCircuitBreakerConfig
 	}
+	// Default bounded wait for auto-create unless user overrides (0 means legacy infinite wait)
+	if !c.options.autoCreateWaitTimeoutSet && c.options.autoCreateWaitTimeout == 0 {
+		c.options.autoCreateWaitTimeout = defaultAutoCreateWaitTimeout
+	}
 	c.circuitBreakers = NewCircuitBreakerManager(c.options.circuitBreakerConfig, c.logger)
 }
 
@@ -337,6 +359,7 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 	policy := c.options.retryPolicy
 	var backoff time.Duration
 	retryCount := 0
+	var creationStart time.Time
 
 	for {
 		// Check circuit breaker before each retry attempt
@@ -352,13 +375,25 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 				return nil, err
 			}
 
-			// Handle NoAvailableBackend error - backend is being created asynchronously
-			if moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend) {
+			waitingForCreate := c.options.enableAutoCreate && isAutoCreateWaitError(err)
+
+			// Handle backend creation-in-progress with bounded wait
+			if waitingForCreate {
 				// Check context first before retrying
 				select {
 				case <-ctx.Done():
 					return nil, ctx.Err()
 				default:
+				}
+
+				if creationStart.IsZero() {
+					creationStart = time.Now()
+				}
+				if timeout := c.options.autoCreateWaitTimeout; timeout > 0 && time.Since(creationStart) >= timeout {
+					c.logger.Warn("auto-create backend timed out",
+						zap.String("backend", backend),
+						zap.Duration("waited", time.Since(creationStart)))
+					return nil, moerr.NewBackendClosedNoCtx()
 				}
 
 				retryCount++
@@ -456,6 +491,7 @@ func (c *client) NewStream(ctx context.Context, backend string, lock bool) (Stre
 	policy := c.options.retryPolicy
 	var backoff time.Duration
 	retryCount := 0
+	var creationStart time.Time
 
 	for {
 		// Check circuit breaker before each retry attempt
@@ -478,8 +514,20 @@ func (c *client) NewStream(ctx context.Context, backend string, lock bool) (Stre
 				return nil, err
 			}
 
-			// Handle NoAvailableBackend error - backend is being created asynchronously
-			if moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend) {
+			waitingForCreate := c.options.enableAutoCreate && isAutoCreateWaitError(err)
+
+			// Handle backend creation-in-progress with bounded wait
+			if waitingForCreate {
+				if creationStart.IsZero() {
+					creationStart = time.Now()
+				}
+				if timeout := c.options.autoCreateWaitTimeout; timeout > 0 && time.Since(creationStart) >= timeout {
+					c.logger.Warn("auto-create backend timed out",
+						zap.String("backend", backend),
+						zap.Duration("waited", time.Since(creationStart)))
+					return nil, moerr.NewBackendClosedNoCtx()
+				}
+
 				retryCount++
 				// Check if max retries exceeded
 				if policy.MaxRetries > 0 && retryCount >= policy.MaxRetries {
@@ -574,17 +622,30 @@ func (c *client) Ping(ctx context.Context, backend string) error {
 	policy := c.options.retryPolicy
 	var backoff time.Duration
 	retryCount := 0
+	var creationStart time.Time
 
 	for {
 		b, err := c.getBackend(backend, false)
 		if err != nil {
-			// Handle NoAvailableBackend error - backend is being created asynchronously
-			if moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend) {
+			waitingForCreate := c.options.enableAutoCreate && isAutoCreateWaitError(err)
+
+			// Handle backend creation-in-progress with bounded wait
+			if waitingForCreate {
 				// Check context first before retrying
 				select {
 				case <-ctx.Done():
 					return ctx.Err()
 				default:
+				}
+
+				if creationStart.IsZero() {
+					creationStart = time.Now()
+				}
+				if timeout := c.options.autoCreateWaitTimeout; timeout > 0 && time.Since(creationStart) >= timeout {
+					c.logger.Warn("auto-create backend timed out",
+						zap.String("backend", backend),
+						zap.Duration("waited", time.Since(creationStart)))
+					return moerr.NewBackendClosedNoCtx()
 				}
 
 				retryCount++
@@ -724,6 +785,7 @@ func (c *client) getBackend(backend string, lock bool) (Backend, error) {
 
 	c.mu.Lock()
 	b, err := c.getBackendLocked(backend, lock)
+	poolSize := len(c.mu.backends[backend])
 	if err != nil {
 		c.mu.Unlock()
 		return nil, err
@@ -736,6 +798,7 @@ func (c *client) getBackend(backend string, lock bool) (Backend, error) {
 	// No backend available in pool
 	canCreate := c.canCreateLocked(backend)
 	enableAutoCreate := c.options.enableAutoCreate
+	hasBackends := poolSize > 0
 	c.mu.Unlock() // Release lock before any potentially blocking operation
 
 	// Strictly gate creation on enableAutoCreate flag
@@ -743,15 +806,26 @@ func (c *client) getBackend(backend string, lock bool) (Backend, error) {
 		return nil, moerr.NewNoAvailableBackendNoCtx()
 	}
 
+	creationQueued := false
 	if canCreate {
 		// Try to enqueue creation task with backpressure handling
 		if !globalClientGC.triggerCreate(c, backend) {
 			// Queue is full - fallback to existing creation path with proper bookkeeping
 			return c.createBackendWithBookkeeping(backend, lock)
 		}
+		creationQueued = true
 	}
 
-	// Return error to trigger retry in caller
+	if creationQueued {
+		return nil, ErrBackendCreating
+	}
+
+	if hasBackends {
+		// Pool had entries but none usable; surface as closed to differentiate from "creating"
+		return nil, moerr.NewBackendClosedNoCtx()
+	}
+
+	// Pool is empty and cannot create - return ErrNoAvailableBackend to trigger wait logic
 	return nil, moerr.NewNoAvailableBackendNoCtx()
 }
 
@@ -793,7 +867,7 @@ func (c *client) getBackendLocked(backend string, lock bool) (Backend, error) {
 				zap.Int("inactive", inactiveCnt),
 				zap.Int("max", c.options.maxBackendsPerHost))
 			if !c.canCreateLocked(backend) {
-				return nil, moerr.NewNoAvailableBackendNoCtx()
+				return nil, moerr.NewBackendClosedNoCtx()
 			}
 		}
 
@@ -842,7 +916,7 @@ func (c *client) createBackendWithBookkeeping(backend string, lock bool) (Backen
 	}
 	if !c.canCreateLocked(backend) {
 		c.mu.Unlock()
-		return nil, moerr.NewNoAvailableBackendNoCtx()
+		return nil, moerr.NewBackendClosedNoCtx()
 	}
 	c.mu.Unlock()
 
@@ -863,7 +937,7 @@ func (c *client) createBackendWithBookkeeping(backend string, lock bool) (Backen
 	if !c.canCreateLocked(backend) {
 		// Another goroutine may have filled the pool while we were creating.
 		b.Close()
-		return nil, moerr.NewNoAvailableBackendNoCtx()
+		return nil, moerr.NewBackendClosedNoCtx()
 	}
 
 	// Apply lock if requested (only after we know the backend will be kept)
@@ -950,7 +1024,7 @@ func (c *client) closeIdleBackends() int {
 
 func (c *client) createBackendLocked(backend string) (Backend, error) {
 	if !c.canCreateLocked(backend) {
-		return nil, moerr.NewNoAvailableBackendNoCtx()
+		return nil, moerr.NewBackendClosedNoCtx()
 	}
 
 	b, err := c.doCreate(backend)
@@ -985,6 +1059,11 @@ func (c *client) updatePoolSizeMetricsLocked() {
 		n += len(backends)
 	}
 	c.metrics.poolSizeGauge.Set(float64(n))
+}
+
+func isAutoCreateWaitError(err error) bool {
+	return errors.Is(err, ErrBackendCreating) ||
+		moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend)
 }
 
 type op struct {

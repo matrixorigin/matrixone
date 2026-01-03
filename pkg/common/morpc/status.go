@@ -92,6 +92,11 @@ func GetStatusCategory(err error) StatusCategory {
 		return StatusTransient
 	}
 
+	// Backend is being created asynchronously - treat as transient wait
+	if errors.Is(err, ErrBackendCreating) {
+		return StatusTransient
+	}
+
 	// Connection-level unavailability
 	if moerr.IsMoErrCode(err, moerr.ErrBackendClosed) ||
 		moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend) ||

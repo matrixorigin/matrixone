@@ -59,6 +59,7 @@ func TestGetStatusCategory(t *testing.T) {
 		{"ErrRPCTimeout", moerr.NewRPCTimeoutNoCtx(), StatusTransient},
 		{"ErrServiceUnavailable", moerr.NewServiceUnavailableNoCtx("test"), StatusTransient},
 		{"ErrConnectionReset", moerr.NewConnectionReset(context.Background()), StatusTransient},
+		{"ErrBackendCreating", ErrBackendCreating, StatusTransient},
 
 		// Unavailable errors (moerr)
 		{"ErrBackendClosed", moerr.NewBackendClosedNoCtx(), StatusUnavailable},
