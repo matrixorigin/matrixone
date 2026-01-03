@@ -78,6 +78,7 @@ func (mgr *commandManager) ApplyTxnRecord(store *txnStore) (logEntry entry.Entry
 			t1   = time.Now()
 		)
 
+		// MarshalBinary already uses sync.Pool internally and handles copy
 		if buf, err2 = mgr.cmd.MarshalBinary(); err2 != nil {
 			return err2
 		}

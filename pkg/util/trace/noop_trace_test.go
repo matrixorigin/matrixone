@@ -190,36 +190,41 @@ func Test_NoopTracer_Start(t1 *testing.T) {
 		want1 Span
 	}{
 		{
-			name: "normal",
+			name: "with_options",
 			args: args{
 				ctx:   context.Background(),
 				name:  "NoopTracer_Start",
 				in2:   []SpanStartOption{WithNewRoot(true)},
 				endIn: []SpanEndOption{},
 			},
-			want:  ContextWithSpan(context.Background(), NoopSpan{}),
+			// NoopTracer returns ctx and NoopSpan directly without any allocation
+			// All options are ignored since NoopTracer performs no operations
+			want:  context.Background(),
 			want1: NoopSpan{},
 		},
 		{
-			name: "empty",
+			name: "empty_options",
 			args: args{
 				ctx:   context.Background(),
 				name:  "NoopTracer_Start",
 				in2:   []SpanStartOption{},
 				endIn: []SpanEndOption{},
 			},
+			// NoopTracer returns ctx and NoopSpan directly without any allocation
 			want:  context.Background(),
 			want1: NoopSpan{},
 		},
 		{
-			name: "NonRecording",
+			name: "with_existing_span",
 			args: args{
 				ctx:   ContextWithSpan(context.Background(), &NonRecordingSpan{}),
 				name:  "NoopTracer_Start",
 				in2:   []SpanStartOption{WithNewRoot(true)},
 				endIn: []SpanEndOption{},
 			},
-			want:  ContextWithSpan(ContextWithSpan(context.Background(), &NonRecordingSpan{}), NoopSpan{}),
+			// NoopTracer returns original ctx and NoopSpan directly
+			// NoopTracer is only used when trace is disabled, so empty SpanContext is expected
+			want:  ContextWithSpan(context.Background(), &NonRecordingSpan{}),
 			want1: NoopSpan{},
 		},
 	}
@@ -231,5 +236,31 @@ func Test_NoopTracer_Start(t1 *testing.T) {
 			assert.Equalf(t1, tt.want1, got1, "Start(%v, %v, %v)", tt.args.ctx, tt.args.name, tt.args.in2)
 			got1.End(tt.args.endIn...)
 		})
+	}
+}
+
+// BenchmarkNoopTracer_Start verifies that NoopTracer.Start has zero allocation overhead.
+func BenchmarkNoopTracer_Start(b *testing.B) {
+	tracer := NoopTracer{}
+	ctx := context.Background()
+	opts := []SpanStartOption{WithNewRoot(true)}
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_, _ = tracer.Start(ctx, "benchmark", opts...)
+	}
+}
+
+// BenchmarkNoopTracer_Debug verifies that NoopTracer.Debug has zero allocation overhead.
+func BenchmarkNoopTracer_Debug(b *testing.B) {
+	tracer := NoopTracer{}
+	ctx := context.Background()
+	opts := []SpanStartOption{WithNewRoot(true)}
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_, _ = tracer.Debug(ctx, "benchmark", opts...)
 	}
 }

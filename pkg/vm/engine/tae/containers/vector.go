@@ -217,7 +217,54 @@ func (vec *vectorWrapper) Update(i int, v any, isNull bool) {
 }
 
 func (vec *vectorWrapper) WriteTo(w io.Writer) (n int64, err error) {
+	// Optimization: if w is *bytes.Buffer, write directly without intermediate buffer
+	if buf, ok := w.(*bytes.Buffer); ok {
+		// Pre-grow buffer to reduce reallocations
+		estimatedSize := vec.ApproxSize()
+		if estimatedSize < 0 {
+			estimatedSize = 0
+		}
+		estimatedSize += 8 // size header
+		if estimatedSize < 256 {
+			estimatedSize = 256
+		}
+		if buf.Cap()-buf.Len() < estimatedSize {
+			buf.Grow(estimatedSize)
+		}
+
+		// Record offset for size header
+		sizeOffset := buf.Len()
+
+		// Write placeholder for size (8 bytes)
+		var sizePlaceholder int64
+		if _, err = buf.Write(types.EncodeInt64(&sizePlaceholder)); err != nil {
+			return
+		}
+
+		// Write vector data directly to buffer
+		if err = vec.wrapped.MarshalBinaryWithBuffer(buf); err != nil {
+			return
+		}
+
+		// Calculate actual size and backfill
+		size := int64(buf.Len() - sizeOffset - 8)
+		copy(buf.Bytes()[sizeOffset:sizeOffset+8], types.EncodeInt64(&size))
+
+		n = int64(buf.Len() - sizeOffset)
+		return
+	}
+
+	// Fallback: if w is not *bytes.Buffer, use intermediate buffer
 	var bs bytes.Buffer
+	estimatedSize := vec.ApproxSize()
+	if estimatedSize < 0 {
+		estimatedSize = 0
+	}
+	estimatedSize += 8
+	if estimatedSize < 256 {
+		estimatedSize = 256
+	}
+	bs.Grow(estimatedSize)
 
 	var size int64
 	_, _ = bs.Write(types.EncodeInt64(&size))
@@ -227,7 +274,6 @@ func (vec *vectorWrapper) WriteTo(w io.Writer) (n int64, err error) {
 	}
 
 	size = int64(bs.Len() - 8)
-
 	buf := bs.Bytes()
 	copy(buf[:8], types.EncodeInt64(&size))
 
@@ -241,7 +287,54 @@ func (vec *vectorWrapper) WriteTo(w io.Writer) (n int64, err error) {
 
 // WriteToV1 in version 1, vector.nulls.bitmap is v1
 func (vec *vectorWrapper) WriteToV1(w io.Writer) (n int64, err error) {
+	// Optimization: if w is *bytes.Buffer, write directly without intermediate buffer
+	if buf, ok := w.(*bytes.Buffer); ok {
+		// Pre-grow buffer to reduce reallocations
+		estimatedSize := vec.ApproxSize()
+		if estimatedSize < 0 {
+			estimatedSize = 0
+		}
+		estimatedSize += 8 // size header
+		if estimatedSize < 256 {
+			estimatedSize = 256
+		}
+		if buf.Cap()-buf.Len() < estimatedSize {
+			buf.Grow(estimatedSize)
+		}
+
+		// Record offset for size header
+		sizeOffset := buf.Len()
+
+		// Write placeholder for size (8 bytes)
+		var sizePlaceholder int64
+		if _, err = buf.Write(types.EncodeInt64(&sizePlaceholder)); err != nil {
+			return
+		}
+
+		// Write vector data directly to buffer
+		if err = vec.wrapped.MarshalBinaryWithBufferV1(buf); err != nil {
+			return
+		}
+
+		// Calculate actual size and backfill
+		size := int64(buf.Len() - sizeOffset - 8)
+		copy(buf.Bytes()[sizeOffset:sizeOffset+8], types.EncodeInt64(&size))
+
+		n = int64(buf.Len() - sizeOffset)
+		return
+	}
+
+	// Fallback: if w is not *bytes.Buffer, use intermediate buffer
 	var bs bytes.Buffer
+	estimatedSize := vec.ApproxSize()
+	if estimatedSize < 0 {
+		estimatedSize = 0
+	}
+	estimatedSize += 8 // size header
+	if estimatedSize < 256 {
+		estimatedSize = 256
+	}
+	bs.Grow(estimatedSize)
 
 	var size int64
 	_, _ = bs.Write(types.EncodeInt64(&size))
