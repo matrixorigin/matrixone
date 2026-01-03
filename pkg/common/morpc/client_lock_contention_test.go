@@ -33,7 +33,7 @@ func TestGetBackendWithSlowConnection(t *testing.T) {
 	slowFactory := &testBackendFactoryWithDelay{
 		delay: 100 * time.Millisecond,
 	}
-	
+
 	rc, err := NewClient(
 		"test-client",
 		slowFactory,
@@ -42,22 +42,22 @@ func TestGetBackendWithSlowConnection(t *testing.T) {
 	)
 	require.NoError(t, err)
 	defer rc.Close()
-	
+
 	c := rc.(*client)
-	
+
 	// First call should trigger async creation and return error quickly
 	start := time.Now()
 	b, err := c.getBackend("slow-backend", false)
 	elapsed := time.Since(start)
-	
+
 	// Should return error immediately without blocking
 	assert.Error(t, err)
 	assert.Nil(t, b)
 	assert.Less(t, elapsed, 50*time.Millisecond, "getBackend should not block")
-	
+
 	// Wait for async creation to complete
 	time.Sleep(150 * time.Millisecond)
-	
+
 	// Second call should succeed with the created backend
 	b, err = c.getBackend("slow-backend", false)
 	assert.NoError(t, err)
@@ -70,7 +70,7 @@ func TestGetBackendConcurrentWithSlowConnection(t *testing.T) {
 	slowFactory := &testBackendFactoryWithDelay{
 		delay: 100 * time.Millisecond,
 	}
-	
+
 	rc, err := NewClient(
 		"test-client",
 		slowFactory,
@@ -79,14 +79,14 @@ func TestGetBackendConcurrentWithSlowConnection(t *testing.T) {
 	)
 	require.NoError(t, err)
 	defer rc.Close()
-	
+
 	c := rc.(*client)
-	
+
 	// Launch 10 concurrent getBackend calls
 	const numGoroutines = 10
 	var wg sync.WaitGroup
 	start := time.Now()
-	
+
 	for i := 0; i < numGoroutines; i++ {
 		wg.Add(1)
 		go func() {
@@ -99,10 +99,10 @@ func TestGetBackendConcurrentWithSlowConnection(t *testing.T) {
 			_ = err
 		}()
 	}
-	
+
 	wg.Wait()
 	elapsed := time.Since(start)
-	
+
 	// All goroutines should complete quickly without serializing
 	// If they serialized, it would take 10 * 100ms = 1000ms
 	// With async creation, should complete in ~100-200ms
@@ -117,7 +117,7 @@ func TestGetBackendWithCircuitBreaker(t *testing.T) {
 		delay:      10 * time.Millisecond,
 		shouldFail: true,
 	}
-	
+
 	rc, err := NewClient(
 		"test-client",
 		factory,
@@ -126,19 +126,19 @@ func TestGetBackendWithCircuitBreaker(t *testing.T) {
 	)
 	require.NoError(t, err)
 	defer rc.Close()
-	
+
 	c := rc.(*client)
-	
+
 	// Trigger circuit breaker by recording failures
 	for i := 0; i < 10; i++ {
 		c.circuitBreakers.RecordFailure("bad-backend")
 	}
-	
+
 	// getBackend should fail fast
 	start := time.Now()
 	b, err := c.getBackend("bad-backend", false)
 	elapsed := time.Since(start)
-	
+
 	assert.Error(t, err)
 	assert.Nil(t, b)
 	// Should fail fast (either circuit breaker or no backend available)
@@ -155,13 +155,13 @@ func TestGetBackendWithClientClosed(t *testing.T) {
 		WithClientMaxBackendPerHost(2),
 	)
 	require.NoError(t, err)
-	
+
 	c := rc.(*client)
-	
+
 	// Close client
 	err = c.Close()
 	require.NoError(t, err)
-	
+
 	// getBackend should return error immediately
 	b, err := c.getBackend("any-backend", false)
 	assert.Error(t, err)
@@ -174,7 +174,7 @@ func TestGetBackendAsyncCreationEventualSuccess(t *testing.T) {
 	factory := &testBackendFactoryWithDelay{
 		delay: 50 * time.Millisecond,
 	}
-	
+
 	rc, err := NewClient(
 		"test-client",
 		factory,
@@ -183,14 +183,14 @@ func TestGetBackendAsyncCreationEventualSuccess(t *testing.T) {
 	)
 	require.NoError(t, err)
 	defer rc.Close()
-	
+
 	c := rc.(*client)
-	
+
 	// First call triggers async creation
 	b, err := c.getBackend("test-backend", false)
 	assert.Error(t, err)
 	assert.Nil(t, b)
-	
+
 	// Poll until backend is created (with timeout)
 	var createdBackend Backend
 	for i := 0; i < 20; i++ {
@@ -201,9 +201,9 @@ func TestGetBackendAsyncCreationEventualSuccess(t *testing.T) {
 			break
 		}
 	}
-	
+
 	require.NotNil(t, createdBackend, "Backend should be created within 200ms")
-	
+
 	// Subsequent calls should succeed immediately
 	for i := 0; i < 5; i++ {
 		b, err := c.getBackend("test-backend", false)
@@ -231,7 +231,7 @@ func (bf *testBackendFactoryForCrash) Create(backend string, opts ...BackendOpti
 func TestCrashedNodeRecovery(t *testing.T) {
 	// Create a factory that always fails (simulating crashed node)
 	crashedFactory := &testBackendFactoryForCrash{}
-	
+
 	rc, err := NewClient(
 		"test-client",
 		crashedFactory,
@@ -240,31 +240,31 @@ func TestCrashedNodeRecovery(t *testing.T) {
 	)
 	require.NoError(t, err)
 	defer rc.Close()
-	
+
 	c := rc.(*client)
-	
+
 	// Simulate 27 goroutines (like in production) requesting crashed node
 	const numGoroutines = 27
 	var wg sync.WaitGroup
 	var totalBlockTime atomic.Int64
 	var successCount atomic.Int32
 	var noBackendCount atomic.Int32
-	
+
 	start := time.Now()
-	
+
 	for i := 0; i < numGoroutines; i++ {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
-			
+
 			goroutineStart := time.Now()
-			
+
 			// Try to get backend (should fail quickly)
 			b, err := c.getBackend("crashed-node", false)
-			
+
 			elapsed := time.Since(goroutineStart)
 			totalBlockTime.Add(int64(elapsed))
-			
+
 			if err == nil {
 				successCount.Add(1)
 				if b != nil {
@@ -275,29 +275,29 @@ func TestCrashedNodeRecovery(t *testing.T) {
 			}
 		}(i)
 	}
-	
+
 	wg.Wait()
 	totalElapsed := time.Since(start)
-	
+
 	// Verify: Total time should be much less than serial execution (27 * 100ms = 2.7s)
 	// With async creation, should complete in < 1 second
 	assert.Less(t, totalElapsed, 1500*time.Millisecond,
 		"Total time should be < 1.5s (not serialized)")
-	
+
 	// Verify: Average blocking time per goroutine should be small
 	avgBlockTime := time.Duration(totalBlockTime.Load() / int64(numGoroutines))
 	assert.Less(t, avgBlockTime, 500*time.Millisecond,
 		"Average blocking time should be < 500ms per goroutine")
-	
+
 	// Verify: Most goroutines should see ErrNoAvailableBackend (async creation)
 	// This proves they didn't block waiting for backend creation
 	assert.Greater(t, int(noBackendCount.Load()), numGoroutines/2,
 		"Most requests should return immediately with ErrNoAvailableBackend")
-	
+
 	// Verify: No successful connections (node is crashed)
 	assert.Equal(t, int32(0), successCount.Load(),
 		"Should have no successful connections to crashed node")
-	
+
 	t.Logf("Recovery test completed:")
 	t.Logf("  Total time: %v (vs 2.7s if serialized)", totalElapsed)
 	t.Logf("  Avg block time: %v per goroutine", avgBlockTime)
@@ -313,10 +313,10 @@ type testBackendFactoryForRetry struct {
 
 func (bf *testBackendFactoryForRetry) Create(backend string, opts ...BackendOption) (Backend, error) {
 	bf.creationCount.Add(1)
-	
+
 	// Simulate backend creation delay
 	time.Sleep(bf.delay)
-	
+
 	// Create a simple test backend
 	return &testBackend{
 		id:         int(bf.creationCount.Load()),
@@ -330,7 +330,7 @@ func TestSendRetryMechanism(t *testing.T) {
 	delayedFactory := &testBackendFactoryForRetry{
 		delay: 200 * time.Millisecond,
 	}
-	
+
 	rc, err := NewClient(
 		"test-client",
 		delayedFactory,
@@ -339,52 +339,52 @@ func TestSendRetryMechanism(t *testing.T) {
 	)
 	require.NoError(t, err)
 	defer rc.Close()
-	
+
 	c := rc.(*client)
-	
+
 	// First Send should trigger async creation and retry
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	
+
 	req := &testMessage{id: 1}
 	future, err := c.Send(ctx, "backend-1", req)
-	
+
 	elapsed := time.Since(start)
-	
+
 	// Should succeed after retry
 	require.NoError(t, err, "Send should succeed after retry")
 	require.NotNil(t, future, "Future should not be nil")
-	
+
 	// Should take at least one retry cycle (200ms creation + backoff)
 	assert.GreaterOrEqual(t, elapsed, 200*time.Millisecond,
 		"Should wait for async creation")
-	
+
 	// Should not take too long (max 2-3 retries)
 	assert.Less(t, elapsed, 2*time.Second,
 		"Should succeed within reasonable time")
-	
+
 	// Verify backend was created exactly once (not multiple times)
 	assert.Equal(t, int32(1), delayedFactory.creationCount.Load(),
 		"Backend should be created exactly once")
-	
+
 	// Second Send should use existing backend (no retry)
 	start = time.Now()
 	req2 := &testMessage{id: 2}
 	future2, err := c.Send(ctx, "backend-1", req2)
 	elapsed2 := time.Since(start)
-	
+
 	require.NoError(t, err)
 	require.NotNil(t, future2)
-	
+
 	// Should be very fast (no creation, no retry)
 	assert.Less(t, elapsed2, 50*time.Millisecond,
 		"Second Send should be fast (backend already exists)")
-	
+
 	// Verify no additional backend creation
 	assert.Equal(t, int32(1), delayedFactory.creationCount.Load(),
 		"Should still have only one backend")
-	
+
 	t.Logf("First Send: %v (with retry)", elapsed)
 	t.Logf("Second Send: %v (no retry)", elapsed2)
 	t.Logf("Backend created: %d times", delayedFactory.creationCount.Load())
@@ -394,7 +394,7 @@ func TestGetBackendRespectMaxBackends(t *testing.T) {
 	factory := &testBackendFactoryWithDelay{
 		delay: 20 * time.Millisecond,
 	}
-	
+
 	const maxBackends = 2
 	rc, err := NewClient(
 		"test-client",
@@ -404,22 +404,22 @@ func TestGetBackendRespectMaxBackends(t *testing.T) {
 	)
 	require.NoError(t, err)
 	defer rc.Close()
-	
+
 	c := rc.(*client)
-	
+
 	// Trigger multiple async creations
 	for i := 0; i < 10; i++ {
 		c.getBackend("test-backend", false)
 	}
-	
+
 	// Wait for creations to complete
 	time.Sleep(100 * time.Millisecond)
-	
+
 	// Check that we don't exceed max backends
 	c.mu.Lock()
 	backendCount := len(c.mu.backends["test-backend"])
 	c.mu.Unlock()
-	
+
 	assert.LessOrEqual(t, backendCount, maxBackends,
 		"Should not exceed maxBackendsPerHost")
 }
@@ -427,23 +427,23 @@ func TestGetBackendRespectMaxBackends(t *testing.T) {
 // Helper types for testing
 
 type testBackendFactoryWithDelay struct {
-	delay      time.Duration
-	shouldFail bool
+	delay       time.Duration
+	shouldFail  bool
 	createCount atomic.Int32
 }
 
 func (f *testBackendFactoryWithDelay) Create(address string, opts ...BackendOption) (Backend, error) {
 	f.createCount.Add(1)
-	
+
 	if f.shouldFail {
 		return nil, moerr.NewBackendCannotConnectNoCtx()
 	}
-	
+
 	// Simulate slow connection
 	if f.delay > 0 {
 		time.Sleep(f.delay)
 	}
-	
+
 	return &testBackend{
 		id:         int(f.createCount.Load()),
 		activeTime: time.Now(),
@@ -460,9 +460,9 @@ func BenchmarkGetBackendWithAvailableBackend(b *testing.B) {
 	)
 	require.NoError(b, err)
 	defer rc.Close()
-	
+
 	c := rc.(*client)
-	
+
 	// Pre-create backends
 	for i := 0; i < 5; i++ {
 		c.mu.Lock()
@@ -473,7 +473,7 @@ func BenchmarkGetBackendWithAvailableBackend(b *testing.B) {
 	c.mu.Lock()
 	c.mu.ops["bench-backend"] = &op{}
 	c.mu.Unlock()
-	
+
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
@@ -496,14 +496,14 @@ func BenchmarkGetBackendWithCircuitBreaker(b *testing.B) {
 	)
 	require.NoError(b, err)
 	defer rc.Close()
-	
+
 	c := rc.(*client)
-	
+
 	// Trip circuit breaker
 	for i := 0; i < 10; i++ {
 		c.circuitBreakers.RecordFailure("bad-backend")
 	}
-	
+
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {

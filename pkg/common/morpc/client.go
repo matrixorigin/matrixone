@@ -694,19 +694,19 @@ func (c *client) getBackend(backend string, lock bool) (Backend, error) {
 		c.mu.Unlock()
 		return b, nil
 	}
-	
+
 	// No backend available in pool
 	// Check if we can create more backends
 	canCreate := c.canCreateLocked(backend)
-	c.mu.Unlock()  // Release lock before any potentially blocking operation
-	
+	c.mu.Unlock() // Release lock before any potentially blocking operation
+
 	if canCreate {
 		// Trigger async backend creation via global GC manager
 		// This avoids holding the lock during network I/O
 		// The backend will be available for subsequent requests
 		globalClientGC.triggerCreate(c, backend)
 	}
-	
+
 	// Return error to trigger retry in caller
 	// The retry mechanism in Send() will handle this gracefully
 	return nil, moerr.NewNoAvailableBackendNoCtx()

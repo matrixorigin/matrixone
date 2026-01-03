@@ -382,7 +382,7 @@ func TestGetBackendsWithAllInactiveAndWillCreateNew(t *testing.T) {
 	assert.NotNil(t, b)
 
 	b.(*testBackend).activeTime = time.Time{}
-	
+
 	// Backend is now inactive, next call triggers async recreation
 	b, err = c.getBackend("b1", false)
 	// May return error initially
