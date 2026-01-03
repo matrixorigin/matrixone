@@ -1,12 +1,23 @@
 drop database if exists qetest;
 create database qetest;
 use qetest;
-create table t (a int, b int, c varchar(100), d decimal(10, 2), f real);
+create table t (a int, b boolean, b2 tinyint, b3 smallint, b4 int, b5 bigint,
+c varchar(100), d decimal(10, 2),
+f real, g float,
+ts timestamp, dt datetime, dd date,
+u uuid,
+j json, bin varbinary);
 insert into t select
-result, result % 1000,
+result,
+result % 2 = 0, result % 10, result % 100, result % 1000, result,
 case when result % 10 = 0 then null else 'foobar' || result || 'zoo' end,
 case when result % 10 = 0 then null else result end,
-case when result % 10 = 0 then null else result end
+case when result % 10 = 0 then null else result end,
+case when result % 10 = 0 then null else result end,
+'2021-02-01 11:11:11', '2021-02-01 11:11:11', '2021-02-01',
+'11111111-1111-1111-1111-111111111111',
+'{"foo": "bar", "zoo": [1, 2, ' || result || ']}',
+cast(result as varbinary)
 from generate_series(1, 1000000) gt;
 select count(*) from t;
 count(*)
@@ -15,12 +26,92 @@ insert into t select * from t;
 select count(*) from t;
 count(*)
 2000000
-select count(*), count(a), count(b), count(c),
-avg(a), avg(b), avg(d), avg(f),
-max(a), max(b), max(c), max(d), max(f)
+select count(*), count(a),
+count(b), count(b2), count(b3), count(b4), count(b5),
+count(c), count(d), count(f), count(g),
+count(ts), count(dt), count(dd),
+count(u), count(j), count(bin),
+avg(a),
+avg(b2), avg(b3), avg(b4), avg(b5),
+avg(d), avg(f), avg(g),
+max(a), max(b), max(b2), max(b3), max(b4), max(b5),
+max(c), max(d), max(f), max(g),
+max(ts), max(dt), max(dd),
+max(u), max(bin)
 from t;
-count(*)    count(a)    count(b)    count(c)    avg(a)    avg(b)    avg(d)    avg(f)    max(a)    max(b)    max(c)    max(d)    max(f)
-2000000    2000000    2000000    1800000    500000.5    499.5    500000.00000000    500000.0    1000000    999    foobar9zoo    999999.00    999999.0
+count(*)    count(a)    count(b)    count(b2)    count(b3)    count(b4)    count(b5)    count(c)    count(d)    count(f)    count(g)    count(ts)    count(dt)    count(dd)    count(u)    count(j)    count(bin)    avg(a)    avg(b2)    avg(b3)    avg(b4)    avg(b5)    avg(d)    avg(f)    avg(g)    max(a)    max(b)    max(b2)    max(b3)    max(b4)    max(b5)    max(c)    max(d)    max(f)    max(g)    max(ts)    max(dt)    max(dd)    max(u)    max(bin)
+2000000    2000000    2000000    2000000    2000000    2000000    2000000    1800000    1800000    1800000    1800000    2000000    2000000    2000000    2000000    2000000    2000000    500000.5    4.5    49.5    499.5    500000.5    500000.00000000    500000.0    500000.0    1000000    true    9    99    999    1000000    foobar9zoo    999999.00    999999.0    999999.0    2021-02-01 11:11:11    2021-02-01 11:11:11    2021-02-01    11111111-1111-1111-1111-111111111111    999999
+select count(*), count(distinct a),
+count(distinct b), count(distinct b2), count(distinct b3), count(distinct b4), count(distinct b5),
+count(distinct c), count(distinct d), count(distinct f), count(distinct g),
+count(distinct ts), count(distinct dt), count(distinct dd),
+count(distinct u), count(distinct j), count(distinct bin),
+avg(distinct a),
+avg(distinct b2), avg(distinct b3), avg(distinct b4), avg(distinct b5),
+avg(distinct d), avg(distinct f), avg(distinct g),
+max(distinct a), max(distinct b), max(distinct b2), max(distinct b3), max(distinct b4), max(distinct b5),
+max(distinct c), max(distinct d), max(distinct f), max(distinct g),
+max(distinct ts), max(distinct dt), max(distinct dd),
+max(distinct u), max(distinct bin)
+from t
+where a < 1000;
+count(*)    count(distinct a)    count(distinct b)    count(distinct b2)    count(distinct b3)    count(distinct b4)    count(distinct b5)    count(distinct c)    count(distinct d)    count(distinct f)    count(distinct g)    count(distinct ts)    count(distinct dt)    count(distinct dd)    count(distinct u)    count(distinct j)    count(distinct bin)    avg(distinct a)    avg(distinct b2)    avg(distinct b3)    avg(distinct b4)    avg(distinct b5)    avg(distinct d)    avg(distinct f)    avg(distinct g)    max(distinct a)    max(distinct b)    max(distinct b2)    max(distinct b3)    max(distinct b4)    max(distinct b5)    max(distinct c)    max(distinct d)    max(distinct f)    max(distinct g)    max(distinct ts)    max(distinct dt)    max(distinct dd)    max(distinct u)    max(distinct bin)
+1998    999    2    10    100    999    999    900    900    900    900    1    1    1    1    999    999    500.0    4.5    49.5    500.0    500.0    500.00000000    500.0    500.0    999    true    9    99    999    999    foobar9zoo    999.00    999.0    999.0    2021-02-01 11:11:11    2021-02-01 11:11:11    2021-02-01    11111111-1111-1111-1111-111111111111    999
+select count(*), count(a),
+count(b), count(b2), count(b3), count(b4), count(b5),
+count(c), count(d), count(f), count(g),
+count(ts), count(dt), count(dd),
+count(u), count(j), count(bin),
+avg(a),
+avg(b2), avg(b3), avg(b4), avg(b5),
+avg(d), avg(f), avg(g),
+max(a), max(b), max(b2), max(b3), max(b4), max(b5),
+max(c), max(d), max(f), max(g),
+max(ts), max(dt), max(dd),
+max(u), max(bin)
+from t
+group by b2
+order by b2
+;
+count(*)    count(a)    count(b)    count(b2)    count(b3)    count(b4)    count(b5)    count(c)    count(d)    count(f)    count(g)    count(ts)    count(dt)    count(dd)    count(u)    count(j)    count(bin)    avg(a)    avg(b2)    avg(b3)    avg(b4)    avg(b5)    avg(d)    avg(f)    avg(g)    max(a)    max(b)    max(b2)    max(b3)    max(b4)    max(b5)    max(c)    max(d)    max(f)    max(g)    max(ts)    max(dt)    max(dd)    max(u)    max(bin)
+200000    200000    200000    200000    200000    200000    200000    0    0    0    0    200000    200000    200000    200000    200000    200000    500005.0    0.0    45.0    495.0    500005.0    null    null    null    1000000    true    0    90    990    1000000    null    null    null    null    2021-02-01 11:11:11    2021-02-01 11:11:11    2021-02-01    11111111-1111-1111-1111-111111111111    999990
+200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    499996.0    1.0    46.0    496.0    499996.0    499996.00000000    499996.0    499996.0    999991    false    1    91    991    999991    foobar999991zoo    999991.00    999991.0    999991.0    2021-02-01 11:11:11    2021-02-01 11:11:11    2021-02-01    11111111-1111-1111-1111-111111111111    999991
+200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    499997.0    2.0    47.0    497.0    499997.0    499997.00000000    499997.0    499997.0    999992    true    2    92    992    999992    foobar999992zoo    999992.00    999992.0    999992.0    2021-02-01 11:11:11    2021-02-01 11:11:11    2021-02-01    11111111-1111-1111-1111-111111111111    999992
+200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    499998.0    3.0    48.0    498.0    499998.0    499998.00000000    499998.0    499998.0    999993    false    3    93    993    999993    foobar999993zoo    999993.00    999993.0    999993.0    2021-02-01 11:11:11    2021-02-01 11:11:11    2021-02-01    11111111-1111-1111-1111-111111111111    999993
+200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    499999.0    4.0    49.0    499.0    499999.0    499999.00000000    499999.0    499999.0    999994    true    4    94    994    999994    foobar999994zoo    999994.00    999994.0    999994.0    2021-02-01 11:11:11    2021-02-01 11:11:11    2021-02-01    11111111-1111-1111-1111-111111111111    999994
+200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    500000.0    5.0    50.0    500.0    500000.0    500000.00000000    500000.0    500000.0    999995    false    5    95    995    999995    foobar999995zoo    999995.00    999995.0    999995.0    2021-02-01 11:11:11    2021-02-01 11:11:11    2021-02-01    11111111-1111-1111-1111-111111111111    999995
+200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    500001.0    6.0    51.0    501.0    500001.0    500001.00000000    500001.0    500001.0    999996    true    6    96    996    999996    foobar999996zoo    999996.00    999996.0    999996.0    2021-02-01 11:11:11    2021-02-01 11:11:11    2021-02-01    11111111-1111-1111-1111-111111111111    999996
+200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    500002.0    7.0    52.0    502.0    500002.0    500002.00000000    500002.0    500002.0    999997    false    7    97    997    999997    foobar999997zoo    999997.00    999997.0    999997.0    2021-02-01 11:11:11    2021-02-01 11:11:11    2021-02-01    11111111-1111-1111-1111-111111111111    999997
+200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    500003.0    8.0    53.0    503.0    500003.0    500003.00000000    500003.0    500003.0    999998    true    8    98    998    999998    foobar999998zoo    999998.00    999998.0    999998.0    2021-02-01 11:11:11    2021-02-01 11:11:11    2021-02-01    11111111-1111-1111-1111-111111111111    999998
+200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    200000    500004.0    9.0    54.0    504.0    500004.0    500004.00000000    500004.0    500004.0    999999    false    9    99    999    999999    foobar9zoo    999999.00    999999.0    999999.0    2021-02-01 11:11:11    2021-02-01 11:11:11    2021-02-01    11111111-1111-1111-1111-111111111111    999999
+select count(*), count(distinct a),
+count(distinct b), count(distinct b2), count(distinct b3), count(distinct b4), count(distinct b5),
+count(distinct c), count(distinct d), count(distinct f), count(distinct g),
+count(distinct ts), count(distinct dt), count(distinct dd),
+count(distinct u), count(distinct j), count(distinct bin),
+avg(distinct a),
+avg(distinct b2), avg(distinct b3), avg(distinct b4), avg(distinct b5),
+avg(distinct d), avg(distinct f), avg(distinct g),
+max(distinct a), max(distinct b), max(distinct b2), max(distinct b3), max(distinct b4), max(distinct b5),
+max(distinct c), max(distinct d), max(distinct f), max(distinct g),
+max(distinct ts), max(distinct dt), max(distinct dd),
+max(distinct u), max(distinct bin)
+from t
+where a < 1000
+group by b2
+order by b2
+;
+count(*)    count(distinct a)    count(distinct b)    count(distinct b2)    count(distinct b3)    count(distinct b4)    count(distinct b5)    count(distinct c)    count(distinct d)    count(distinct f)    count(distinct g)    count(distinct ts)    count(distinct dt)    count(distinct dd)    count(distinct u)    count(distinct j)    count(distinct bin)    avg(distinct a)    avg(distinct b2)    avg(distinct b3)    avg(distinct b4)    avg(distinct b5)    avg(distinct d)    avg(distinct f)    avg(distinct g)    max(distinct a)    max(distinct b)    max(distinct b2)    max(distinct b3)    max(distinct b4)    max(distinct b5)    max(distinct c)    max(distinct d)    max(distinct f)    max(distinct g)    max(distinct ts)    max(distinct dt)    max(distinct dd)    max(distinct u)    max(distinct bin)
+198    99    1    1    10    99    99    0    0    0    0    1    1    1    1    99    99    500.0    0.0    45.0    500.0    500.0    null    null    null    990    true    0    90    990    990    null    null    null    null    2021-02-01 11:11:11    2021-02-01 11:11:11    2021-02-01    11111111-1111-1111-1111-111111111111    990
+200    100    1    1    10    100    100    100    100    100    100    1    1    1    1    100    100    496.0    1.0    46.0    496.0    496.0    496.00000000    496.0    496.0    991    false    1    91    991    991    foobar991zoo    991.00    991.0    991.0    2021-02-01 11:11:11    2021-02-01 11:11:11    2021-02-01    11111111-1111-1111-1111-111111111111    991
+200    100    1    1    10    100    100    100    100    100    100    1    1    1    1    100    100    497.0    2.0    47.0    497.0    497.0    497.00000000    497.0    497.0    992    true    2    92    992    992    foobar992zoo    992.00    992.0    992.0    2021-02-01 11:11:11    2021-02-01 11:11:11    2021-02-01    11111111-1111-1111-1111-111111111111    992
+200    100    1    1    10    100    100    100    100    100    100    1    1    1    1    100    100    498.0    3.0    48.0    498.0    498.0    498.00000000    498.0    498.0    993    false    3    93    993    993    foobar993zoo    993.00    993.0    993.0    2021-02-01 11:11:11    2021-02-01 11:11:11    2021-02-01    11111111-1111-1111-1111-111111111111    993
+200    100    1    1    10    100    100    100    100    100    100    1    1    1    1    100    100    499.0    4.0    49.0    499.0    499.0    499.00000000    499.0    499.0    994    true    4    94    994    994    foobar994zoo    994.00    994.0    994.0    2021-02-01 11:11:11    2021-02-01 11:11:11    2021-02-01    11111111-1111-1111-1111-111111111111    994
+200    100    1    1    10    100    100    100    100    100    100    1    1    1    1    100    100    500.0    5.0    50.0    500.0    500.0    500.00000000    500.0    500.0    995    false    5    95    995    995    foobar995zoo    995.00    995.0    995.0    2021-02-01 11:11:11    2021-02-01 11:11:11    2021-02-01    11111111-1111-1111-1111-111111111111    995
+200    100    1    1    10    100    100    100    100    100    100    1    1    1    1    100    100    501.0    6.0    51.0    501.0    501.0    501.00000000    501.0    501.0    996    true    6    96    996    996    foobar996zoo    996.00    996.0    996.0    2021-02-01 11:11:11    2021-02-01 11:11:11    2021-02-01    11111111-1111-1111-1111-111111111111    996
+200    100    1    1    10    100    100    100    100    100    100    1    1    1    1    100    100    502.0    7.0    52.0    502.0    502.0    502.00000000    502.0    502.0    997    false    7    97    997    997    foobar997zoo    997.00    997.0    997.0    2021-02-01 11:11:11    2021-02-01 11:11:11    2021-02-01    11111111-1111-1111-1111-111111111111    997
+200    100    1    1    10    100    100    100    100    100    100    1    1    1    1    100    100    503.0    8.0    53.0    503.0    503.0    503.00000000    503.0    503.0    998    true    8    98    998    998    foobar998zoo    998.00    998.0    998.0    2021-02-01 11:11:11    2021-02-01 11:11:11    2021-02-01    11111111-1111-1111-1111-111111111111    998
+200    100    1    1    10    100    100    100    100    100    100    1    1    1    1    100    100    504.0    9.0    54.0    504.0    504.0    504.00000000    504.0    504.0    999    false    9    99    999    999    foobar9zoo    999.00    999.0    999.0    2021-02-01 11:11:11    2021-02-01 11:11:11    2021-02-01    11111111-1111-1111-1111-111111111111    999
 select count(a), sum(d), sum(f) from (
 select count(*), a, sum(d) as d, sum(f) as f from t group by a
 ) tmp;
@@ -65,32 +156,32 @@ count(a)    sum(d)    sum(f)
 explain analyze select a, b, c from t group by a, b, c;
 ap query plan on one cn(24 core)
 Project
-  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1000000 outputRows=1000000 (min=1000000, max=1000000) InputSize=30.52 MiB OutputSize=30.52 MiB MemorySize=256.00 KiB (min=256.00 KiB, max=256.00 KiB)
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1000000 outputRows=1000000 (min=1000000, max=1000000) InputSize=27.66 MiB OutputSize=27.66 MiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=232.00 KiB (min=232.00 KiB, max=232.00 KiB)
   ->  Aggregate
-        Analyze: timeConsumed=1430ms waitTime=0ms inputRows=0 outputRows=1000000 (min=1000000, max=1000000) InputSize=0 bytes OutputSize=30.52 MiB MemorySize=57.50 MiB (min=57.50 MiB, max=57.50 MiB) SpillSize=115.00 MiB (min=115.00 MiB, max=115.00 MiB)
+        Analyze: timeConsumed=2058ms waitTime=0ms inputRows=0 outputRows=1000000 (min=1000000, max=1000000) InputSize=0 bytes OutputSize=27.66 MiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=78.73 MiB (min=78.73 MiB, max=78.73 MiB) SpillSize=236.18 MiB (min=236.18 MiB, max=236.18 MiB)
         Group Key: t.a, t.b, t.c shuffle: range(t.a)
         ->  Table Scan on qetest.t
-              Analyze: timeConsumed=9ms waitTime=0ms inputBlocks=246 inputRows=2000000 outputRows=2000000 (min=2000000, max=2000000) InputSize=61.04 MiB OutputSize=61.04 MiB MemorySize=512.00 KiB (min=512.00 KiB, max=512.00 KiB)
+              Analyze: timeConsumed=13ms waitTime=0ms inputBlocks=261 inputRows=2000000 outputRows=2000000 (min=2000000, max=2000000) InputSize=55.31 MiB OutputSize=55.31 MiB ReadSize=16.53 MiB|0 bytes|0 bytes MemorySize=464.00 KiB (min=464.00 KiB, max=464.00 KiB)
 explain analyze select a, c, avg(d) d, avg(f) f from t group by a, c;
 ap query plan on one cn(24 core)
 Project
-  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1000000 outputRows=1000000 (min=1000000, max=1000000) InputSize=49.59 MiB OutputSize=49.59 MiB MemorySize=416.00 KiB (min=416.00 KiB, max=416.00 KiB)
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1000000 outputRows=1000000 (min=1000000, max=1000000) InputSize=49.59 MiB OutputSize=49.59 MiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=416.00 KiB (min=416.00 KiB, max=416.00 KiB)
   ->  Aggregate
-        Analyze: timeConsumed=7013ms waitTime=0ms inputRows=0 outputRows=1000000 (min=1000000, max=1000000) InputSize=0 bytes OutputSize=49.59 MiB MemorySize=60.76 MiB (min=60.76 MiB, max=60.76 MiB) SpillSize=242.90 MiB (min=242.90 MiB, max=242.90 MiB)
+        Analyze: timeConsumed=4716ms waitTime=0ms inputRows=0 outputRows=1000000 (min=1000000, max=1000000) InputSize=0 bytes OutputSize=49.59 MiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=57.51 MiB (min=57.51 MiB, max=57.51 MiB) SpillSize=229.55 MiB (min=229.55 MiB, max=229.55 MiB)
         Group Key: t.a, t.c shuffle: range(t.a)
         Aggregate Functions: avg(t.d), avg(t.f)
         ->  Table Scan on qetest.t
-              Analyze: timeConsumed=20ms waitTime=0ms inputBlocks=246 inputRows=2000000 outputRows=2000000 (min=2000000, max=2000000) InputSize=83.92 MiB OutputSize=83.92 MiB MemorySize=704.00 KiB (min=704.00 KiB, max=704.00 KiB)
+              Analyze: timeConsumed=29ms waitTime=0ms inputBlocks=261 inputRows=2000000 outputRows=2000000 (min=2000000, max=2000000) InputSize=83.92 MiB OutputSize=83.92 MiB ReadSize=32.20 MiB|0 bytes|0 bytes MemorySize=704.00 KiB (min=704.00 KiB, max=704.00 KiB)
 explain analyze select count(*), a, sum(distinct d) d, sum(distinct f) f from t where a < 10000 group by a;
 tp query plan
 Project
-  Analyze: timeConsumed=0ms waitTime=0ms inputRows=9999 outputRows=9999 (min=9999, max=9999) InputSize=351.53 KiB OutputSize=351.53 KiB MemorySize=288.00 KiB (min=288.00 KiB, max=288.00 KiB)
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=9999 outputRows=9999 (min=9999, max=9999) InputSize=351.53 KiB OutputSize=351.53 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=288.00 KiB (min=288.00 KiB, max=288.00 KiB)
   ->  Aggregate
-        Analyze: timeConsumed=442ms waitTime=0ms inputRows=19998 outputRows=9999 (min=9999, max=9999) InputSize=390.59 KiB OutputSize=351.53 KiB MemorySize=2.57 GiB (min=2.57 GiB, max=2.57 GiB)
+        Analyze: timeConsumed=780ms waitTime=0ms inputRows=19998 outputRows=9999 (min=9999, max=9999) InputSize=390.59 KiB OutputSize=351.53 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=1.28 GiB (min=1.28 GiB, max=1.28 GiB)
         Group Key: t.a
         Aggregate Functions: starcount(1), sum(t.d), sum(t.f)
         ->  Table Scan on qetest.t
-              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=4 inputRows=32768 outputRows=19998 (min=19998, max=19998) InputSize=640.00 KiB OutputSize=390.59 KiB MemorySize=318.74 KiB (min=126.74 KiB, max=160.00 KiB)
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=4 inputRows=32768 outputRows=19998 (min=19998, max=19998) InputSize=640.00 KiB OutputSize=390.59 KiB ReadSize=394.71 KiB|0 bytes|0 bytes MemorySize=352.00 KiB (min=160.00 KiB, max=160.00 KiB)
               Filter Cond: (t.a < 10000)
               Block Filter Cond: (t.a < 10000)
 drop database qetest;

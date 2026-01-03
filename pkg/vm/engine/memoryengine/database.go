@@ -72,38 +72,6 @@ func (d *Database) Create(ctx context.Context, relName string, defs []engine.Tab
 	return nil
 }
 
-func (d *Database) Truncate(ctx context.Context, relName string) (uint64, error) {
-	newId, err := d.engine.idGenerator.NewID(ctx)
-	if err != nil {
-		return 0, err
-	}
-	rel, err := d.Relation(ctx, relName, nil)
-	if err != nil {
-		return 0, err
-	}
-	oldId := rel.GetTableID(ctx)
-
-	_, err = DoTxnRequest[TruncateRelationResp](
-		ctx,
-		d.txnOperator,
-		false,
-		d.engine.allShards,
-		OpTruncateRelation,
-		&TruncateRelationReq{
-			NewTableID:   newId,
-			OldTableID:   ID(oldId),
-			DatabaseID:   d.id,
-			DatabaseName: d.name,
-			Name:         strings.ToLower(relName),
-		},
-	)
-	if err != nil {
-		return 0, err
-	}
-
-	return 0, nil
-}
-
 func (d *Database) Delete(ctx context.Context, relName string) error {
 
 	_, err := DoTxnRequest[DeleteRelationResp](

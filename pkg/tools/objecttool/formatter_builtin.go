@@ -17,6 +17,7 @@ package objecttool
 import (
 	"encoding/hex"
 	"fmt"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -95,8 +96,12 @@ func (f *TSFormatter) CanFormat(value any, typ types.Type) bool {
 
 func (f *TSFormatter) Format(value any) string {
 	if v, ok := value.(types.TS); ok {
-		ts := v.ToTimestamp()
-		return ts.String()
+		physical := v.Physical()
+		if physical == 0 {
+			return fmt.Sprintf("%d-%d", physical, v.Logical())
+		}
+		t := time.Unix(0, physical)
+		return fmt.Sprintf("%d-%d(%s)", physical, v.Logical(), t.Format("2006/01/02 15:04:05.000000"))
 	}
 	return fmt.Sprintf("%v", value)
 }

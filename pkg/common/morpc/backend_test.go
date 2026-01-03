@@ -953,6 +953,12 @@ func (b *testBackend) Send(ctx context.Context, request Message) (*Future, error
 	b.active()
 	f := newFuture(nil)
 	f.init(RPCMessage{Ctx: ctx, Message: request})
+	f.ref() // Ref before using
+	// Complete the future synchronously to avoid goroutine leak in tests
+	f.messageSent(nil)
+	// Create a response message with same ID
+	resp := newTestMessage(request.GetID())
+	f.done(resp, nil)
 	return f, nil
 }
 
@@ -960,6 +966,12 @@ func (b *testBackend) SendInternal(ctx context.Context, request Message) (*Futur
 	b.active()
 	f := newFuture(nil)
 	f.init(RPCMessage{Ctx: ctx, Message: request})
+	f.ref() // Ref before using
+	// Complete the future synchronously to avoid goroutine leak in tests
+	f.messageSent(nil)
+	// Create a response message with same ID
+	resp := newTestMessage(request.GetID())
+	f.done(resp, nil)
 	return f, nil
 }
 
