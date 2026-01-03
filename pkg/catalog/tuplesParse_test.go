@@ -40,7 +40,7 @@ func mustToPBBatch(bat *batch.Batch) *api.Batch {
 
 // improve test coverage
 func TestParseError(t *testing.T) {
-	m := mpool.MustNewNoFixed("test")
+	m := mpool.MustNew("test")
 	packer := types.NewPacker()
 	defer packer.Close()
 

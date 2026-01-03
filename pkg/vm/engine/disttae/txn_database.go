@@ -360,11 +360,6 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 	return defs, nil
 }
 
-func (db *txnDatabase) Truncate(ctx context.Context, name string) (uint64, error) {
-	return 0, moerr.NewNYINoCtx("truncate table is not implemented")
-
-}
-
 func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.TableDef) error {
 	if db.op.IsSnapOp() {
 		return moerr.NewInternalErrorNoCtx("create table in snapshot transaction")

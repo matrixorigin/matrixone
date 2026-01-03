@@ -138,10 +138,32 @@ func WithClientCreateTaskChanSize(size int) ClientOption {
 // WithClientMaxBackendMaxIdleDuration set the maximum idle duration of the backend connection.
 // Backend connection that exceed this time will be automatically closed. 0 means no idle time
 // limit.
+//
+// Note: To avoid "thundering herd" effect where many connections expire simultaneously,
+// a small random jitter (±10%) is automatically applied to positive durations. This spreads
+// connection expiration times across a time window, reducing the impact of simultaneous
+// connection closures. When value is 0 (disabled), no jitter is applied.
 func WithClientMaxBackendMaxIdleDuration(value time.Duration) ClientOption {
 	return func(c *client) {
-		c.options.maxIdleDuration = value
+		c.options.maxIdleDuration = applyJitter(value)
+		c.options.maxIdleDurationSet = true // Mark as explicitly set (even if 0)
 	}
+}
+
+// applyJitter applies a small random jitter (±10%) to the duration to avoid thundering herd effect.
+// This spreads connection expiration times across a time window, reducing simultaneous closures.
+func applyJitter(duration time.Duration) time.Duration {
+	if duration <= 0 {
+		return duration
+	}
+	// Apply ±10% jitter
+	jitterPercent := 0.1
+	jitter := time.Duration(float64(duration) * jitterPercent * (2*rand.Float64() - 1))
+	result := duration + jitter
+	if result < 0 {
+		return duration // Fallback to original if jitter makes it negative
+	}
+	return result
 }
 
 // WithClientEnableAutoCreateBackend enable client to automatically create a backend
@@ -190,6 +212,7 @@ type client struct {
 	options struct {
 		maxBackendsPerHost   int
 		maxIdleDuration      time.Duration
+		maxIdleDurationSet   bool // true if user explicitly set maxIdleDuration (even to 0)
 		initBackends         []string
 		initBackendCounts    []int
 		enableAutoCreate     bool
@@ -224,17 +247,13 @@ func NewClient(
 		return nil, err
 	}
 
-	if err := c.stopper.RunTask(c.createTask); err != nil {
-		return nil, err
-	}
-	if c.options.maxIdleDuration > 0 {
-		if err := c.stopper.RunTask(c.gcIdleTask); err != nil {
-			return nil, err
-		}
-	}
-	if err := c.stopper.RunTask(c.gcInactiveTask); err != nil {
-		return nil, err
-	}
+	// Register with global GC manager instead of creating per-client goroutines
+	globalClientGC.register(c)
+
+	// Update active client count (only after successful creation)
+	activeGauge := v2.NewRPCClientActiveGaugeByName(name)
+	activeGauge.Inc()
+
 	return c, nil
 }
 
@@ -253,8 +272,10 @@ func (c *client) adjust() {
 			}
 		}
 	}
-	if c.options.maxIdleDuration == 0 {
-		c.options.maxIdleDuration = defaultMaxIdleDuration
+	if !c.options.maxIdleDurationSet && c.options.maxIdleDuration == 0 {
+		// Only apply default if user didn't explicitly set it
+		// If user set it to 0, it means "no idle time limit" per documentation
+		c.options.maxIdleDuration = applyJitter(defaultMaxIdleDuration)
 	}
 	// Set default retry policy if not configured
 	if c.options.retryPolicy.MaxRetries == 0 && c.options.retryPolicy.InitialBackoff == 0 {
@@ -510,7 +531,8 @@ func (c *client) Ping(ctx context.Context, backend string) error {
 
 func (c *client) Close() error {
 	c.mu.Lock()
-	if c.mu.closed {
+	wasClosed := c.mu.closed
+	if wasClosed {
 		c.mu.Unlock()
 		return nil
 	}
@@ -522,6 +544,15 @@ func (c *client) Close() error {
 		}
 	}
 	c.mu.Unlock()
+
+	// Unregister from global GC manager
+	globalClientGC.unregister(c)
+
+	// Update active client count (only if client was successfully created)
+	if !wasClosed {
+		activeGauge := v2.NewRPCClientActiveGaugeByName(c.name)
+		activeGauge.Dec()
+	}
 
 	c.stopper.Stop()
 	close(c.createC)
@@ -628,57 +659,24 @@ func (c *client) tryCreate(backend string) bool {
 		return false
 	}
 
-	select {
-	case c.createC <- backend:
-		return true
-	default:
-		return false
-	}
-}
-
-func (c *client) gcIdleTask(ctx context.Context) {
-	c.logger.Debug("gc idle backends task started")
-	defer c.logger.Debug("gc idle backends task stopped")
-
-	ticker := time.NewTicker(c.options.maxIdleDuration)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			c.closeIdleBackends()
-		}
-	}
+	return globalClientGC.triggerCreate(c, backend)
 }
 
 func (c *client) triggerGCInactive(remote string) {
-	select {
-	case c.gcInactiveC <- remote:
-		c.logger.Debug("try to remove all inactived backends",
-			zap.String("remote", remote))
-	default:
-	}
-}
-
-func (c *client) gcInactiveTask(ctx context.Context) {
-	c.logger.Debug("gc inactive backends task started")
-	defer c.logger.Debug("gc inactive backends task stopped")
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case remote := <-c.gcInactiveC:
-			c.doRemoveInactive(remote)
-		}
-	}
+	globalClientGC.triggerGCInactive(c, remote)
+	c.logger.Debug("try to remove all inactived backends",
+		zap.String("remote", remote))
 }
 
 func (c *client) doRemoveInactive(remote string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	// Check if client is closed
+	if c.mu.closed {
+		return
+	}
+
 	backends, ok := c.mu.backends[remote]
 	if !ok {
 		return
@@ -697,9 +695,15 @@ func (c *client) doRemoveInactive(remote string) {
 	c.updatePoolSizeMetricsLocked()
 }
 
-func (c *client) closeIdleBackends() {
-	var idleBackends []Backend
+func (c *client) closeIdleBackends() int {
+	// Check if client is closed before processing
 	c.mu.Lock()
+	if c.mu.closed {
+		c.mu.Unlock()
+		return 0
+	}
+
+	var idleBackends []Backend
 	for k, backends := range c.mu.backends {
 		var newBackends []Backend
 		for _, b := range backends {
@@ -718,25 +722,7 @@ func (c *client) closeIdleBackends() {
 	for _, b := range idleBackends {
 		b.Close()
 	}
-}
-
-func (c *client) createTask(ctx context.Context) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case backend, ok := <-c.createC:
-			if ok {
-				c.mu.Lock()
-				if _, err := c.createBackendLocked(backend); err != nil {
-					c.logger.Error("create backend failed",
-						zap.String("backend", backend),
-						zap.Error(err))
-				}
-				c.mu.Unlock()
-			}
-		}
-	}
+	return len(idleBackends)
 }
 
 func (c *client) createBackend(backend string, lock bool) (Backend, error) {

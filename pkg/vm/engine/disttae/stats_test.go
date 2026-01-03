@@ -16,6 +16,8 @@ package disttae
 
 import (
 	"context"
+	"fmt"
+	goruntime "runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -23,6 +25,7 @@ import (
 
 	"github.com/lni/goutils/leaktest"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -385,4 +388,619 @@ func TestGetMinMaxValueByFloat64_Decimal(t *testing.T) {
 		assert.InDelta(t, -999.99, minResult, 0.01)
 		assert.InDelta(t, 999.99, maxResult, 0.01)
 	})
+}
+
+// calculateConcurrency is a helper function that mirrors the concurrency calculation logic
+// in NewGlobalStats. This allows us to test the logic independently.
+func calculateConcurrency(gomaxprocs, updateWorkerFactor int) (executorConcurrency, updateWorkerConcurrency int) {
+	executorConcurrency = gomaxprocs
+	if updateWorkerFactor > 0 {
+		executorConcurrency = executorConcurrency * updateWorkerFactor
+	}
+	// Apply limits: min MinExecutorConcurrency, max MaxExecutorConcurrency
+	if executorConcurrency < MinExecutorConcurrency {
+		executorConcurrency = MinExecutorConcurrency
+	}
+	if executorConcurrency > MaxExecutorConcurrency {
+		executorConcurrency = MaxExecutorConcurrency
+	}
+	// Calculate updateWorker concurrency: executorConcurrency / WorkerConcurrencyRatio, but minimum MinWorkerConcurrency
+	updateWorkerConcurrency = executorConcurrency / WorkerConcurrencyRatio
+	if updateWorkerConcurrency < MinWorkerConcurrency {
+		updateWorkerConcurrency = MinWorkerConcurrency
+	}
+	return executorConcurrency, updateWorkerConcurrency
+}
+
+// TestCalculateConcurrency tests the concurrency calculation logic with various scenarios
+func TestCalculateConcurrency(t *testing.T) {
+	tests := []struct {
+		name               string
+		gomaxprocs         int
+		updateWorkerFactor int
+		expectedExecutor   int
+		expectedWorker     int
+		expectedTotal      int
+		description        string
+	}{
+		{
+			name:               "small_cpu_lower_bound",
+			gomaxprocs:         2,
+			updateWorkerFactor: 4,
+			expectedExecutor:   32, // clamped to minimum 32
+			expectedWorker:     16, // 32/4 = 8, but minimum 16
+			expectedTotal:      48,
+			description:        "Small CPU (2 cores) should use minimum executor=32, worker=16",
+		},
+		{
+			name:               "small_cpu_boundary",
+			gomaxprocs:         4,
+			updateWorkerFactor: 4,
+			expectedExecutor:   32, // clamped to minimum 32
+			expectedWorker:     16, // 32/4 = 8, but minimum 16
+			expectedTotal:      48,
+			description:        "Small CPU (4 cores) should use minimum executor=32, worker=16",
+		},
+		{
+			name:               "medium_cpu_lower",
+			gomaxprocs:         8,
+			updateWorkerFactor: 4,
+			expectedExecutor:   32, // 8*4=32, exactly at minimum
+			expectedWorker:     16, // 32/4 = 8, but minimum 16
+			expectedTotal:      48,
+			description:        "Medium CPU (8 cores) should use executor=32, worker=16",
+		},
+		{
+			name:               "medium_cpu_mid",
+			gomaxprocs:         12,
+			updateWorkerFactor: 4,
+			expectedExecutor:   48, // 12*4=48
+			expectedWorker:     16, // 48/4 = 12, but minimum 16
+			expectedTotal:      64,
+			description:        "Medium CPU (12 cores) should use executor=48, worker=16",
+		},
+		{
+			name:               "medium_cpu_upper",
+			gomaxprocs:         16,
+			updateWorkerFactor: 4,
+			expectedExecutor:   64, // 16*4=64
+			expectedWorker:     16, // 64/4 = 16
+			expectedTotal:      80,
+			description:        "Medium CPU (16 cores) should use executor=64, worker=16",
+		},
+		{
+			name:               "large_cpu_typical",
+			gomaxprocs:         24,
+			updateWorkerFactor: 4,
+			expectedExecutor:   96, // 24*4=96
+			expectedWorker:     24, // 96/4 = 24
+			expectedTotal:      120,
+			description:        "Large CPU (24 cores, typical production) should use executor=96, worker=24",
+		},
+		{
+			name:               "large_cpu_upper_bound",
+			gomaxprocs:         27,
+			updateWorkerFactor: 4,
+			expectedExecutor:   108, // 27*4=108, exactly at maximum
+			expectedWorker:     27,  // 108/4 = 27
+			expectedTotal:      135,
+			description:        "Large CPU (27 cores) should use executor=108, worker=27",
+		},
+		{
+			name:               "very_large_cpu_clamped",
+			gomaxprocs:         32,
+			updateWorkerFactor: 4,
+			expectedExecutor:   108, // 32*4=128, clamped to maximum 108
+			expectedWorker:     27,  // 108/4 = 27
+			expectedTotal:      135,
+			description:        "Very large CPU (32 cores) should clamp executor to 108, worker=27",
+		},
+		{
+			name:               "very_large_cpu_extreme",
+			gomaxprocs:         64,
+			updateWorkerFactor: 4,
+			expectedExecutor:   108, // 64*4=256, clamped to maximum 108
+			expectedWorker:     27,  // 108/4 = 27
+			expectedTotal:      135,
+			description:        "Extreme CPU (64 cores) should clamp executor to 108, worker=27",
+		},
+		{
+			name:               "factor_1",
+			gomaxprocs:         24,
+			updateWorkerFactor: 1,
+			expectedExecutor:   32, // 24*1=24, clamped to minimum 32
+			expectedWorker:     16, // 32/4 = 8, but minimum 16
+			expectedTotal:      48,
+			description:        "Factor=1 should still respect minimum limits",
+		},
+		{
+			name:               "factor_8",
+			gomaxprocs:         12,
+			updateWorkerFactor: 8,
+			expectedExecutor:   96, // 12*8=96
+			expectedWorker:     24, // 96/4 = 24
+			expectedTotal:      120,
+			description:        "Factor=8 should work correctly",
+		},
+		{
+			name:               "factor_8_large_cpu",
+			gomaxprocs:         16,
+			updateWorkerFactor: 8,
+			expectedExecutor:   108, // 16*8=128, clamped to maximum 108
+			expectedWorker:     27,  // 108/4 = 27
+			expectedTotal:      135,
+			description:        "Factor=8 with large CPU should clamp to maximum",
+		},
+		{
+			name:               "zero_factor",
+			gomaxprocs:         24,
+			updateWorkerFactor: 0,
+			expectedExecutor:   32, // 24*0=0, clamped to minimum 32
+			expectedWorker:     16, // 32/4 = 8, but minimum 16
+			expectedTotal:      48,
+			description:        "Zero factor should use GOMAXPROCS only, then apply limits",
+		},
+		{
+			name:               "exact_worker_minimum",
+			gomaxprocs:         16,
+			updateWorkerFactor: 4,
+			expectedExecutor:   64, // 16*4=64
+			expectedWorker:     16, // 64/4 = 16, exactly at minimum
+			expectedTotal:      80,
+			description:        "Worker concurrency exactly at minimum (16)",
+		},
+		{
+			name:               "exact_executor_minimum",
+			gomaxprocs:         8,
+			updateWorkerFactor: 4,
+			expectedExecutor:   32, // 8*4=32, exactly at minimum
+			expectedWorker:     16, // 32/4 = 8, but minimum 16
+			expectedTotal:      48,
+			description:        "Executor concurrency exactly at minimum (32)",
+		},
+		{
+			name:               "exact_executor_maximum",
+			gomaxprocs:         27,
+			updateWorkerFactor: 4,
+			expectedExecutor:   108, // 27*4=108, exactly at maximum
+			expectedWorker:     27,  // 108/4 = 27
+			expectedTotal:      135,
+			description:        "Executor concurrency exactly at maximum (108)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			executor, worker := calculateConcurrency(tt.gomaxprocs, tt.updateWorkerFactor)
+
+			assert.Equal(t, tt.expectedExecutor, executor,
+				"executor concurrency mismatch for %s: expected %d, got %d", tt.description, tt.expectedExecutor, executor)
+			assert.Equal(t, tt.expectedWorker, worker,
+				"worker concurrency mismatch for %s: expected %d, got %d", tt.description, tt.expectedWorker, worker)
+			assert.Equal(t, tt.expectedTotal, executor+worker,
+				"total goroutines mismatch for %s: expected %d, got %d", tt.description, tt.expectedTotal, executor+worker)
+
+			// Validate constraints
+			assert.GreaterOrEqual(t, executor, MinExecutorConcurrency, "executor should be >= MinExecutorConcurrency")
+			assert.LessOrEqual(t, executor, MaxExecutorConcurrency, "executor should be <= MaxExecutorConcurrency")
+			assert.GreaterOrEqual(t, worker, MinWorkerConcurrency, "worker should be >= MinWorkerConcurrency")
+			assert.Equal(t, worker, max(MinWorkerConcurrency, executor/WorkerConcurrencyRatio), "worker should be max(MinWorkerConcurrency, executor/WorkerConcurrencyRatio)")
+		})
+	}
+}
+
+// TestGlobalStatsConcurrency_ActualCreation tests that GlobalStats actually creates
+// the correct number of goroutines by checking the concurrentExecutor's concurrency
+func TestGlobalStatsConcurrency_ActualCreation(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	// Save original GOMAXPROCS
+	originalGOMAXPROCS := goruntime.GOMAXPROCS(0)
+	defer goruntime.GOMAXPROCS(originalGOMAXPROCS)
+
+	testCases := []struct {
+		name               string
+		setGOMAXPROCS      int
+		updateWorkerFactor int
+		expectedExecutor   int
+		expectedWorker     int
+	}{
+		{
+			name:               "small_cpu",
+			setGOMAXPROCS:      4,
+			updateWorkerFactor: 4,
+			expectedExecutor:   32, // clamped to minimum
+			expectedWorker:     16, // minimum
+		},
+		{
+			name:               "medium_cpu",
+			setGOMAXPROCS:      12,
+			updateWorkerFactor: 4,
+			expectedExecutor:   48,
+			expectedWorker:     16, // 48/4=12, but minimum 16
+		},
+		{
+			name:               "large_cpu",
+			setGOMAXPROCS:      24,
+			updateWorkerFactor: 4,
+			expectedExecutor:   96,
+			expectedWorker:     24, // 96/4=24
+		},
+		{
+			name:               "very_large_cpu",
+			setGOMAXPROCS:      32,
+			updateWorkerFactor: 4,
+			expectedExecutor:   108, // clamped to maximum
+			expectedWorker:     27,  // 108/4=27
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Set GOMAXPROCS for this test
+			goruntime.GOMAXPROCS(tc.setGOMAXPROCS)
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			// Setup minimal runtime (required for GlobalStats initialization)
+			sid := "test-s1"
+			rt := runtime.DefaultRuntime()
+			runtime.SetupServiceBasedRuntime(sid, rt)
+
+			// Create GlobalStats with the specified factor
+			gs := NewGlobalStats(ctx, nil, nil, WithUpdateWorkerFactor(tc.updateWorkerFactor))
+			require.NotNil(t, gs)
+
+			// Verify concurrentExecutor concurrency
+			actualExecutorConcurrency := gs.concurrentExecutor.GetConcurrency()
+			assert.Equal(t, tc.expectedExecutor, actualExecutorConcurrency,
+				"concurrentExecutor concurrency mismatch: expected %d, got %d",
+				tc.expectedExecutor, actualExecutorConcurrency)
+
+			// Verify constraints
+			assert.GreaterOrEqual(t, actualExecutorConcurrency, MinExecutorConcurrency,
+				"executor concurrency should be >= MinExecutorConcurrency")
+			assert.LessOrEqual(t, actualExecutorConcurrency, MaxExecutorConcurrency,
+				"executor concurrency should be <= MaxExecutorConcurrency")
+
+			// Verify worker concurrency matches expected calculation
+			_, expectedWorker := calculateConcurrency(tc.setGOMAXPROCS, tc.updateWorkerFactor)
+			assert.Equal(t, tc.expectedWorker, expectedWorker,
+				"worker concurrency calculation should match")
+
+			cancel()
+			// Give goroutines time to exit
+			time.Sleep(100 * time.Millisecond)
+		})
+	}
+}
+
+// TestGlobalStatsConcurrency_WorkerRatio tests that updateWorker concurrency
+// is always executorConcurrency / WorkerConcurrencyRatio (with minimum MinWorkerConcurrency)
+func TestGlobalStatsConcurrency_WorkerRatio(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	originalGOMAXPROCS := goruntime.GOMAXPROCS(0)
+	defer goruntime.GOMAXPROCS(originalGOMAXPROCS)
+
+	testCases := []struct {
+		name               string
+		setGOMAXPROCS      int
+		updateWorkerFactor int
+		expectedRatio      float64 // expected worker/executor ratio
+	}{
+		{
+			name:               "minimum_worker",
+			setGOMAXPROCS:      8,
+			updateWorkerFactor: 4,
+			expectedRatio:      0.5, // 16/32 = 0.5 (minimum worker)
+		},
+		{
+			name:               "exact_quarter",
+			setGOMAXPROCS:      24,
+			updateWorkerFactor: 4,
+			expectedRatio:      0.25, // 24/96 = 0.25 (exact 1/4)
+		},
+		{
+			name:               "above_minimum",
+			setGOMAXPROCS:      20,
+			updateWorkerFactor: 4,
+			expectedRatio:      0.25, // 20/80 = 0.25 (exact 1/4)
+		},
+		{
+			name:               "clamped_maximum",
+			setGOMAXPROCS:      32,
+			updateWorkerFactor: 4,
+			expectedRatio:      0.25, // 27/108 = 0.25 (exact 1/4)
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			goruntime.GOMAXPROCS(tc.setGOMAXPROCS)
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			sid := "test-s2"
+			rt := runtime.DefaultRuntime()
+			runtime.SetupServiceBasedRuntime(sid, rt)
+
+			gs := NewGlobalStats(ctx, nil, nil, WithUpdateWorkerFactor(tc.updateWorkerFactor))
+			require.NotNil(t, gs)
+
+			executorConcurrency := gs.concurrentExecutor.GetConcurrency()
+
+			// Calculate expected worker concurrency
+			expectedWorkerConcurrency := executorConcurrency / WorkerConcurrencyRatio
+			if expectedWorkerConcurrency < MinWorkerConcurrency {
+				expectedWorkerConcurrency = MinWorkerConcurrency
+			}
+
+			// Verify the ratio
+			actualRatio := float64(expectedWorkerConcurrency) / float64(executorConcurrency)
+			assert.InDelta(t, tc.expectedRatio, actualRatio, 0.01,
+				"worker/executor ratio mismatch: expected ~%.2f, got %.2f",
+				tc.expectedRatio, actualRatio)
+
+			// Verify worker is at least MinWorkerConcurrency
+			assert.GreaterOrEqual(t, expectedWorkerConcurrency, MinWorkerConcurrency,
+				"worker concurrency should be >= MinWorkerConcurrency")
+
+			cancel()
+			time.Sleep(100 * time.Millisecond)
+		})
+	}
+}
+
+// TestGlobalStatsConcurrency_EdgeCases tests edge cases and boundary conditions
+func TestGlobalStatsConcurrency_EdgeCases(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	originalGOMAXPROCS := goruntime.GOMAXPROCS(0)
+	defer goruntime.GOMAXPROCS(originalGOMAXPROCS)
+
+	tests := []struct {
+		name               string
+		setGOMAXPROCS      int
+		updateWorkerFactor int
+		description        string
+	}{
+		{
+			name:               "minimum_gomaxprocs",
+			setGOMAXPROCS:      1,
+			updateWorkerFactor: 4,
+			description:        "Minimum GOMAXPROCS=1 should still use minimum limits",
+		},
+		{
+			name:               "boundary_below_minimum",
+			setGOMAXPROCS:      7,
+			updateWorkerFactor: 4,
+			description:        "GOMAXPROCS*4=28 < 32 should clamp to 32",
+		},
+		{
+			name:               "boundary_at_minimum",
+			setGOMAXPROCS:      8,
+			updateWorkerFactor: 4,
+			description:        "GOMAXPROCS*4=32 exactly at minimum",
+		},
+		{
+			name:               "boundary_above_minimum",
+			setGOMAXPROCS:      9,
+			updateWorkerFactor: 4,
+			description:        "GOMAXPROCS*4=36 > 32 should use 36",
+		},
+		{
+			name:               "boundary_below_maximum",
+			setGOMAXPROCS:      26,
+			updateWorkerFactor: 4,
+			description:        "GOMAXPROCS*4=104 < 108 should use 104",
+		},
+		{
+			name:               "boundary_at_maximum",
+			setGOMAXPROCS:      27,
+			updateWorkerFactor: 4,
+			description:        "GOMAXPROCS*4=108 exactly at maximum",
+		},
+		{
+			name:               "boundary_above_maximum",
+			setGOMAXPROCS:      28,
+			updateWorkerFactor: 4,
+			description:        "GOMAXPROCS*4=112 > 108 should clamp to 108",
+		},
+		{
+			name:               "very_large_gomaxprocs",
+			setGOMAXPROCS:      128,
+			updateWorkerFactor: 4,
+			description:        "Very large GOMAXPROCS should clamp to maximum",
+		},
+		{
+			name:               "factor_zero",
+			setGOMAXPROCS:      24,
+			updateWorkerFactor: 0,
+			description:        "Factor=0 should use GOMAXPROCS only",
+		},
+		{
+			name:               "factor_one",
+			setGOMAXPROCS:      24,
+			updateWorkerFactor: 1,
+			description:        "Factor=1 should multiply by 1",
+		},
+		{
+			name:               "factor_large",
+			setGOMAXPROCS:      8,
+			updateWorkerFactor: 16,
+			description:        "Large factor should still respect maximum",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			goruntime.GOMAXPROCS(tt.setGOMAXPROCS)
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			sid := "test-edge"
+			rt := runtime.DefaultRuntime()
+			runtime.SetupServiceBasedRuntime(sid, rt)
+
+			gs := NewGlobalStats(ctx, nil, nil, WithUpdateWorkerFactor(tt.updateWorkerFactor))
+			require.NotNil(t, gs)
+
+			executorConcurrency := gs.concurrentExecutor.GetConcurrency()
+
+			// Verify constraints are always satisfied
+			assert.GreaterOrEqual(t, executorConcurrency, MinExecutorConcurrency,
+				"%s: executor should be >= MinExecutorConcurrency, got %d", tt.description, executorConcurrency)
+			assert.LessOrEqual(t, executorConcurrency, MaxExecutorConcurrency,
+				"%s: executor should be <= MaxExecutorConcurrency, got %d", tt.description, executorConcurrency)
+
+			// Verify it matches expected calculation
+			expectedExecutor, expectedWorker := calculateConcurrency(tt.setGOMAXPROCS, tt.updateWorkerFactor)
+			assert.Equal(t, expectedExecutor, executorConcurrency,
+				"%s: executor concurrency mismatch", tt.description)
+
+			// Verify worker calculation
+			expectedWorkerFromExecutor := expectedExecutor / 4
+			if expectedWorkerFromExecutor < 16 {
+				expectedWorkerFromExecutor = 16
+			}
+			assert.Equal(t, expectedWorker, expectedWorkerFromExecutor,
+				"%s: worker concurrency calculation mismatch", tt.description)
+
+			cancel()
+			time.Sleep(100 * time.Millisecond)
+		})
+	}
+}
+
+// TestGlobalStatsConcurrency_ConcurrentCreation tests that multiple GlobalStats
+// instances can be created concurrently without issues
+func TestGlobalStatsConcurrency_ConcurrentCreation(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	originalGOMAXPROCS := goruntime.GOMAXPROCS(0)
+	defer goruntime.GOMAXPROCS(originalGOMAXPROCS)
+
+	goruntime.GOMAXPROCS(24) // Use a typical value
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sid := "test-concurrent"
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime(sid, rt)
+
+	const numGoroutines = 10
+	var wg sync.WaitGroup
+	errors := make(chan error, numGoroutines)
+
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			gs := NewGlobalStats(ctx, nil, nil, WithUpdateWorkerFactor(4))
+			if gs == nil {
+				errors <- fmt.Errorf("goroutine %d: GlobalStats creation failed", id)
+				return
+			}
+			executorConcurrency := gs.concurrentExecutor.GetConcurrency()
+			if executorConcurrency < MinExecutorConcurrency || executorConcurrency > MaxExecutorConcurrency {
+				errors <- fmt.Errorf("goroutine %d: invalid executor concurrency %d", id, executorConcurrency)
+				return
+			}
+		}(i)
+	}
+
+	wg.Wait()
+	close(errors)
+
+	// Check for errors
+	errList := make([]error, 0, numGoroutines)
+	for err := range errors {
+		errList = append(errList, err)
+	}
+	assert.Empty(t, errList, "concurrent creation should not produce errors: %v", errList)
+}
+
+// TestGlobalStatsConcurrency_ReductionVerification verifies that the optimization
+// actually reduces goroutine count compared to the old implementation
+func TestGlobalStatsConcurrency_ReductionVerification(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	originalGOMAXPROCS := goruntime.GOMAXPROCS(0)
+	defer goruntime.GOMAXPROCS(originalGOMAXPROCS)
+
+	testCases := []struct {
+		name               string
+		setGOMAXPROCS      int
+		updateWorkerFactor int
+		oldTotal           int // old implementation total goroutines
+		newTotal           int // new implementation total goroutines
+		reduction          int // expected reduction
+	}{
+		{
+			name:               "typical_production",
+			setGOMAXPROCS:      24,
+			updateWorkerFactor: 4,
+			oldTotal:           192, // 24*4*2 = 192
+			newTotal:           120, // 96+24 = 120
+			reduction:          72,  // 37.5% reduction
+		},
+		{
+			name:               "large_cpu",
+			setGOMAXPROCS:      32,
+			updateWorkerFactor: 4,
+			oldTotal:           256, // 32*4*2 = 256
+			newTotal:           135, // 108+27 = 135
+			reduction:          121, // 47.3% reduction
+		},
+		{
+			name:               "medium_cpu",
+			setGOMAXPROCS:      16,
+			updateWorkerFactor: 4,
+			oldTotal:           128, // 16*4*2 = 128
+			newTotal:           80,  // 64+16 = 80
+			reduction:          48,  // 37.5% reduction
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			goruntime.GOMAXPROCS(tc.setGOMAXPROCS)
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			sid := "test-reduction"
+			rt := runtime.DefaultRuntime()
+			runtime.SetupServiceBasedRuntime(sid, rt)
+
+			gs := NewGlobalStats(ctx, nil, nil, WithUpdateWorkerFactor(tc.updateWorkerFactor))
+			require.NotNil(t, gs)
+
+			executorConcurrency := gs.concurrentExecutor.GetConcurrency()
+			_, workerConcurrency := calculateConcurrency(tc.setGOMAXPROCS, tc.updateWorkerFactor)
+			actualTotal := executorConcurrency + workerConcurrency
+
+			assert.Equal(t, tc.newTotal, actualTotal,
+				"new implementation total goroutines mismatch")
+			assert.Less(t, actualTotal, tc.oldTotal,
+				"new implementation should have fewer goroutines than old")
+
+			actualReduction := tc.oldTotal - actualTotal
+			assert.Equal(t, tc.reduction, actualReduction,
+				"goroutine reduction mismatch: expected %d, got %d",
+				tc.reduction, actualReduction)
+
+			reductionPercent := float64(actualReduction) / float64(tc.oldTotal) * 100
+			assert.Greater(t, reductionPercent, 30.0,
+				"reduction should be at least 30%%, got %.1f%%", reductionPercent)
+
+			cancel()
+			time.Sleep(100 * time.Millisecond)
+		})
+	}
 }

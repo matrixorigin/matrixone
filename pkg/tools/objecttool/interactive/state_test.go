@@ -170,6 +170,7 @@ func TestState_GlobalRowOffset(t *testing.T) {
 		ctx:          ctx,
 		currentBlock: 0,
 		rowOffset:    0,
+		blockOffsets: []int64{0, 8192, 16384}, // Mock block offsets
 	}
 
 	// Test initial offset
@@ -181,12 +182,12 @@ func TestState_GlobalRowOffset(t *testing.T) {
 	offset = state.GlobalRowOffset()
 	assert.Equal(t, int64(100), offset)
 
-	// Test with different block (approximate calculation)
+	// Test with different block
 	state.currentBlock = 1
 	state.rowOffset = 50
 	offset = state.GlobalRowOffset()
-	// Should be approximately 8192 (assumed block size) + 50
-	assert.Greater(t, offset, int64(50))
+	// Should be 8192 (block 1 start) + 50
+	assert.Equal(t, int64(8242), offset)
 }
 
 func TestNewState(t *testing.T) {

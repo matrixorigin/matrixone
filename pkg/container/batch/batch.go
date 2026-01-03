@@ -97,13 +97,13 @@ func SetLength(bat *Batch, n int) {
 	bat.rowCount = n
 }
 
-func (bat *Batch) Slice(from, to int) *Batch {
-	return &Batch{
-		Attrs:    bat.Attrs[from:to],
-		Vecs:     bat.Vecs[from:to],
-		rowCount: bat.rowCount,
+func (bat *Batch) CheckLength() error {
+	for _, vec := range bat.Vecs {
+		if vec.Length() != bat.rowCount {
+			return moerr.NewInternalErrorNoCtx("vec.Length() != bat.rowCount")
+		}
 	}
-
+	return nil
 }
 
 func (bat *Batch) MarshalBinary() ([]byte, error) {
@@ -349,15 +349,17 @@ func (bat *Batch) UnmarshalFromReader(r io.Reader, mp *mpool.MPool) (err error) 
 	return nil
 }
 
-func (bat *Batch) ShrinkByMask(sels bitmap.Mask, negate bool, offset uint64) {
+func (bat *Batch) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64) {
 	if !negate {
 		if sels.Count() == bat.rowCount {
 			return
 		}
 	}
+
 	for _, vec := range bat.Vecs {
 		vec.ShrinkByMask(sels, negate, offset)
 	}
+
 	if negate {
 		bat.rowCount -= sels.Count()
 		return
@@ -481,6 +483,10 @@ func (bat *Batch) CloneSelectedColumnsTo(
 			return
 		}
 		toVec.SetSorted(bat.Vecs[sourceIdx].GetSorted())
+
+		if toVec.Length() != bat.rowCount {
+			return moerr.NewInternalErrorNoCtx("toVec.Length() != bat.rowCount")
+		}
 	}
 	toBat.rowCount = bat.rowCount
 	return nil
