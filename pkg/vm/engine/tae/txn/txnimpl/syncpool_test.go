@@ -62,8 +62,9 @@ func TestAppendCmd_MarshalBinaryWithBuffer(t *testing.T) {
 	defer txnbase.PutMarshalBuffer(buf)
 
 	// Marshal using buffer
-	data, err := cmd.MarshalBinaryWithBuffer(buf)
+	err := cmd.MarshalBinaryWithBuffer(buf)
 	require.NoError(t, err)
+	data := buf.Bytes()
 	require.NotNil(t, data)
 	assert.Greater(t, len(data), 0)
 }
