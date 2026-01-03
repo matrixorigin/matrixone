@@ -429,8 +429,6 @@ func (c *TxnCmd) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err erro
 
 // MarshalBinaryWithBuffer serializes TxnCmd directly to the provided bytes.Buffer,
 // avoiding buffer copying and allocations in the serialization chain.
-// This method manually implements the serialization logic to use WriteToFull for ComposedCmd,
-// avoiding the buffer allocation in ComposedCmd.MarshalBinary().
 func (c *TxnCmd) MarshalBinaryWithBuffer(buf *bytes.Buffer) error {
 	// Estimate total size and pre-grow buffer to reduce reallocations
 	estimatedSize := int(c.ApproxSize())
@@ -745,88 +743,6 @@ func (cc *ComposedCmd) ApproxSize() int64 {
 
 	return size
 
-}
-
-func (cc *ComposedCmd) WriteTo(w io.Writer) (n int64, err error) {
-	// Define interface for MarshalBinaryWithBuffer to avoid allocations
-	type marshalBinaryWithBuffer interface {
-		MarshalBinaryWithBuffer(buf *bytes.Buffer) error
-	}
-
-	for _, cmd := range cc.Cmds {
-		var sn int64
-		// Optimization: if writer is *bytes.Buffer, we can write placeholder length first,
-		// then write command data, then update the length prefix to avoid temporary buffer
-		if sharedBuf, ok := w.(*bytes.Buffer); ok {
-			// Write placeholder length (will be updated later)
-			lengthPrefixPos := sharedBuf.Len()
-			cmdLenPlaceholder := uint32(0)
-			if _, err = sharedBuf.Write(types.EncodeUint32(&cmdLenPlaceholder)); err != nil {
-				return
-			}
-			// Write command data
-			cmdDataStart := sharedBuf.Len()
-
-			// All commands must implement MarshalBinaryWithBuffer
-			cmdWithBuf, ok := cmd.(marshalBinaryWithBuffer)
-			if !ok {
-				panic(fmt.Sprintf("cmd %T does not implement MarshalBinaryWithBuffer", cmd))
-			}
-			if err = cmdWithBuf.MarshalBinaryWithBuffer(sharedBuf); err != nil {
-				return
-			}
-			sn = int64(sharedBuf.Len() - cmdDataStart)
-
-			cmdDataSize := sharedBuf.Len() - cmdDataStart
-			// Update length prefix
-			cmdLen := uint32(cmdDataSize)
-			cmdLenBytes := types.EncodeUint32(&cmdLen)
-			bufBytes := sharedBuf.Bytes()
-			copy(bufBytes[lengthPrefixPos:lengthPrefixPos+4], cmdLenBytes)
-			n += sn + 4 // +4 for length prefix
-		} else {
-			// For non-buffer writers, use MarshalBinary (will use sync.Pool internally)
-			var buf []byte
-			if buf, err = cmd.MarshalBinary(); err != nil {
-				return
-			}
-			if sn, err = objectio.WriteBytes(buf, w); err != nil {
-				return
-			}
-			n += sn
-		}
-	}
-	return
-}
-
-// WriteToFull writes the complete ComposedCmd serialization (including header) to the writer.
-// This avoids the need to call MarshalBinary() which would allocate its own buffer.
-// Header format: type (2) + version (2) + command count (4) + commands data.
-func (cc *ComposedCmd) WriteToFull(w io.Writer) (n int64, err error) {
-	// Write header: type (2) + version (2) + command count (4)
-	t := cc.GetType()
-	if _, err = w.Write(types.EncodeUint16(&t)); err != nil {
-		return
-	}
-	n += 2
-	ver := IOET_WALTxnCommand_Composed_CurrVer
-	if _, err = w.Write(types.EncodeUint16(&ver)); err != nil {
-		return
-	}
-	n += 2
-	cmdCount := uint32(len(cc.Cmds))
-	if _, err = w.Write(types.EncodeUint32(&cmdCount)); err != nil {
-		return
-	}
-	n += 4
-
-	// Write commands using WriteTo (which writes length prefix + data for each command)
-	var sn int64
-	if sn, err = cc.WriteTo(w); err != nil {
-		return
-	}
-	n += sn
-	return
 }
 
 func (cc *ComposedCmd) AddCmd(cmd txnif.TxnCmd) {

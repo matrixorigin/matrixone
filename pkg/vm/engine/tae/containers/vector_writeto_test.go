@@ -16,6 +16,7 @@ package containers
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -132,4 +133,333 @@ func TestVectorWrapper_WriteToV1_DirectWrite(t *testing.T) {
 	// Verify size header
 	size := types.DecodeInt64(data[:8])
 	assert.Equal(t, int64(len(data)-8), size)
+}
+
+// errorWriter is a writer that always returns an error
+type errorWriter struct{}
+
+func (e *errorWriter) Write(p []byte) (n int, err error) {
+	return 0, errors.New("write error")
+}
+
+// TestVectorWrapper_WriteTo_Fallback tests WriteTo with non-bytes.Buffer writer (fallback path)
+func TestVectorWrapper_WriteTo_Fallback(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	vec := vector.NewVec(types.T_int32.ToType())
+	defer vec.Free(mp)
+
+	for i := 0; i < 10; i++ {
+		err := vector.AppendFixed(vec, int32(i), false, mp)
+		require.NoError(t, err)
+	}
+
+	wrapper := &vectorWrapper{wrapped: vec}
+
+	// Test with a custom writer (not bytes.Buffer)
+	var buf bytes.Buffer
+	n, err := wrapper.WriteTo(&buf)
+	require.NoError(t, err)
+	assert.Greater(t, n, int64(0))
+
+	data := buf.Bytes()
+	require.GreaterOrEqual(t, len(data), 8, "should have size header")
+
+	// Verify size header
+	size := types.DecodeInt64(data[:8])
+	assert.Equal(t, int64(len(data)-8), size)
+	assert.Equal(t, int64(len(data)), n)
+}
+
+// TestVectorWrapper_WriteTo_Error tests WriteTo when writer returns error
+func TestVectorWrapper_WriteTo_Error(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	vec := vector.NewVec(types.T_int32.ToType())
+	defer vec.Free(mp)
+
+	err := vector.AppendFixed(vec, int32(1), false, mp)
+	require.NoError(t, err)
+
+	wrapper := &vectorWrapper{wrapped: vec}
+
+	// Test with error writer (fallback path)
+	errorW := &errorWriter{}
+	n, err := wrapper.WriteTo(errorW)
+	assert.Error(t, err)
+	assert.Equal(t, int64(0), n)
+	assert.Contains(t, err.Error(), "write error")
+}
+
+// TestVectorWrapper_WriteTo_BufferGrow tests WriteTo with buffer that needs to grow
+func TestVectorWrapper_WriteTo_BufferGrow(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	vec := vector.NewVec(types.T_int32.ToType())
+	defer vec.Free(mp)
+
+	// Create a large vector to trigger buffer growth
+	for i := 0; i < 1000; i++ {
+		err := vector.AppendFixed(vec, int32(i), false, mp)
+		require.NoError(t, err)
+	}
+
+	wrapper := &vectorWrapper{wrapped: vec}
+
+	// Create buffer with small initial capacity
+	buf := bytes.NewBuffer(make([]byte, 0, 10))
+	n, err := wrapper.WriteTo(buf)
+	require.NoError(t, err)
+	assert.Greater(t, n, int64(0))
+
+	data := buf.Bytes()
+	require.GreaterOrEqual(t, len(data), 8, "should have size header")
+
+	// Verify size header
+	size := types.DecodeInt64(data[:8])
+	assert.Equal(t, int64(len(data)-8), size)
+}
+
+// TestVectorWrapper_WriteTo_SmallEstimatedSize tests WriteTo with small estimated size (< 256)
+func TestVectorWrapper_WriteTo_SmallEstimatedSize(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	vec := vector.NewVec(types.T_int32.ToType())
+	defer vec.Free(mp)
+
+	// Create a small vector (estimated size will be < 256)
+	err := vector.AppendFixed(vec, int32(1), false, mp)
+	require.NoError(t, err)
+
+	wrapper := &vectorWrapper{wrapped: vec}
+
+	var buf bytes.Buffer
+	n, err := wrapper.WriteTo(&buf)
+	require.NoError(t, err)
+	assert.Greater(t, n, int64(0))
+
+	data := buf.Bytes()
+	require.GreaterOrEqual(t, len(data), 8, "should have size header")
+}
+
+// TestVectorWrapper_WriteToV1_Fallback tests WriteToV1 with non-bytes.Buffer writer (fallback path)
+func TestVectorWrapper_WriteToV1_Fallback(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	vec := vector.NewVec(types.T_int32.ToType())
+	defer vec.Free(mp)
+
+	for i := 0; i < 10; i++ {
+		err := vector.AppendFixed(vec, int32(i), false, mp)
+		require.NoError(t, err)
+	}
+
+	wrapper := &vectorWrapper{wrapped: vec}
+
+	// Test with a custom writer (not bytes.Buffer)
+	var buf bytes.Buffer
+	n, err := wrapper.WriteToV1(&buf)
+	require.NoError(t, err)
+	assert.Greater(t, n, int64(0))
+
+	data := buf.Bytes()
+	require.GreaterOrEqual(t, len(data), 8, "should have size header")
+
+	// Verify size header
+	size := types.DecodeInt64(data[:8])
+	assert.Equal(t, int64(len(data)-8), size)
+	assert.Equal(t, int64(len(data)), n)
+}
+
+// TestVectorWrapper_WriteToV1_Error tests WriteToV1 when writer returns error
+func TestVectorWrapper_WriteToV1_Error(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	vec := vector.NewVec(types.T_int32.ToType())
+	defer vec.Free(mp)
+
+	err := vector.AppendFixed(vec, int32(1), false, mp)
+	require.NoError(t, err)
+
+	wrapper := &vectorWrapper{wrapped: vec}
+
+	// Test with error writer (fallback path)
+	errorW := &errorWriter{}
+	n, err := wrapper.WriteToV1(errorW)
+	assert.Error(t, err)
+	assert.Equal(t, int64(0), n)
+	assert.Contains(t, err.Error(), "write error")
+}
+
+// TestVectorWrapper_WriteToV1_BufferGrow tests WriteToV1 with buffer that needs to grow
+func TestVectorWrapper_WriteToV1_BufferGrow(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	vec := vector.NewVec(types.T_int32.ToType())
+	defer vec.Free(mp)
+
+	// Create a large vector to trigger buffer growth
+	for i := 0; i < 1000; i++ {
+		err := vector.AppendFixed(vec, int32(i), false, mp)
+		require.NoError(t, err)
+	}
+
+	wrapper := &vectorWrapper{wrapped: vec}
+
+	// Create buffer with small initial capacity
+	buf := bytes.NewBuffer(make([]byte, 0, 10))
+	n, err := wrapper.WriteToV1(buf)
+	require.NoError(t, err)
+	assert.Greater(t, n, int64(0))
+
+	data := buf.Bytes()
+	require.GreaterOrEqual(t, len(data), 8, "should have size header")
+
+	// Verify size header
+	size := types.DecodeInt64(data[:8])
+	assert.Equal(t, int64(len(data)-8), size)
+}
+
+// TestVectorWrapper_WriteToV1_SmallEstimatedSize tests WriteToV1 with small estimated size (< 256)
+func TestVectorWrapper_WriteToV1_SmallEstimatedSize(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	vec := vector.NewVec(types.T_int32.ToType())
+	defer vec.Free(mp)
+
+	// Create a small vector (estimated size will be < 256)
+	err := vector.AppendFixed(vec, int32(1), false, mp)
+	require.NoError(t, err)
+
+	wrapper := &vectorWrapper{wrapped: vec}
+
+	var buf bytes.Buffer
+	n, err := wrapper.WriteToV1(&buf)
+	require.NoError(t, err)
+	assert.Greater(t, n, int64(0))
+
+	data := buf.Bytes()
+	require.GreaterOrEqual(t, len(data), 8, "should have size header")
+}
+
+// TestVectorWrapper_WriteTo_NoGrowNeeded tests WriteTo when buffer has enough capacity
+func TestVectorWrapper_WriteTo_NoGrowNeeded(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	vec := vector.NewVec(types.T_int32.ToType())
+	defer vec.Free(mp)
+
+	for i := 0; i < 10; i++ {
+		err := vector.AppendFixed(vec, int32(i), false, mp)
+		require.NoError(t, err)
+	}
+
+	wrapper := &vectorWrapper{wrapped: vec}
+
+	// Create buffer with large initial capacity (no grow needed)
+	buf := bytes.NewBuffer(make([]byte, 0, 10000))
+	n, err := wrapper.WriteTo(buf)
+	require.NoError(t, err)
+	assert.Greater(t, n, int64(0))
+
+	data := buf.Bytes()
+	require.GreaterOrEqual(t, len(data), 8, "should have size header")
+}
+
+// TestVectorWrapper_WriteToV1_NoGrowNeeded tests WriteToV1 when buffer has enough capacity
+func TestVectorWrapper_WriteToV1_NoGrowNeeded(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	vec := vector.NewVec(types.T_int32.ToType())
+	defer vec.Free(mp)
+
+	for i := 0; i < 10; i++ {
+		err := vector.AppendFixed(vec, int32(i), false, mp)
+		require.NoError(t, err)
+	}
+
+	wrapper := &vectorWrapper{wrapped: vec}
+
+	// Create buffer with large initial capacity (no grow needed)
+	buf := bytes.NewBuffer(make([]byte, 0, 10000))
+	n, err := wrapper.WriteToV1(buf)
+	require.NoError(t, err)
+	assert.Greater(t, n, int64(0))
+
+	data := buf.Bytes()
+	require.GreaterOrEqual(t, len(data), 8, "should have size header")
+}
+
+// TestVectorWrapper_WriteToV1_WithNulls tests WriteToV1 with vector containing nulls
+func TestVectorWrapper_WriteToV1_WithNulls(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	vec := vector.NewVec(types.T_int32.ToType())
+	defer vec.Free(mp)
+
+	// Add some values with nulls
+	for i := 0; i < 10; i++ {
+		isNull := i%2 == 0
+		err := vector.AppendFixed(vec, int32(i), isNull, mp)
+		require.NoError(t, err)
+	}
+
+	wrapper := &vectorWrapper{wrapped: vec}
+
+	var buf bytes.Buffer
+	n, err := wrapper.WriteToV1(&buf)
+	require.NoError(t, err)
+	assert.Greater(t, n, int64(0))
+
+	data := buf.Bytes()
+	require.GreaterOrEqual(t, len(data), 8, "should have size header")
+
+	// Verify size header
+	size := types.DecodeInt64(data[:8])
+	assert.Equal(t, int64(len(data)-8), size)
+}
+
+// TestVectorWrapper_WriteToV1_DifferentTypes tests WriteToV1 with different vector types
+func TestVectorWrapper_WriteToV1_DifferentTypes(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	testTypes := []types.Type{
+		types.T_int32.ToType(),
+		types.T_int64.ToType(),
+		types.T_float32.ToType(),
+		types.T_float64.ToType(),
+	}
+
+	for _, typ := range testTypes {
+		vec := vector.NewVec(typ)
+		defer vec.Free(mp)
+
+		// Add some data
+		for i := 0; i < 5; i++ {
+			switch typ.Oid {
+			case types.T_int32:
+				err := vector.AppendFixed(vec, int32(i), false, mp)
+				require.NoError(t, err)
+			case types.T_int64:
+				err := vector.AppendFixed(vec, int64(i), false, mp)
+				require.NoError(t, err)
+			case types.T_float32:
+				err := vector.AppendFixed(vec, float32(i), false, mp)
+				require.NoError(t, err)
+			case types.T_float64:
+				err := vector.AppendFixed(vec, float64(i), false, mp)
+				require.NoError(t, err)
+			}
+		}
+
+		wrapper := &vectorWrapper{wrapped: vec}
+
+		var buf bytes.Buffer
+		n, err := wrapper.WriteToV1(&buf)
+		require.NoError(t, err, "WriteToV1 should succeed for type %s", typ.String())
+		assert.Greater(t, n, int64(0))
+
+		data := buf.Bytes()
+		require.GreaterOrEqual(t, len(data), 8, "should have size header")
+	}
 }
