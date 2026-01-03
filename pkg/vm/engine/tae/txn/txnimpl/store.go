@@ -253,6 +253,7 @@ func (store *txnStore) LogTxnState(sync bool) (logEntry entry.Entry, err error) 
 		store.txn.GetTxnState(false),
 		store.txn.GetCommitTS(),
 	)
+	// MarshalBinary already uses sync.Pool internally and handles copy
 	var buf []byte
 	if buf, err = cmd.MarshalBinary(); err != nil {
 		return
