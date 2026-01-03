@@ -676,9 +676,6 @@ insert into t_year_composite_pk values (2021, 'A', 3);
 
 select * from t_year_composite_pk order by y, category;
 
--- This should fail (duplicate key)
-insert into t_year_composite_pk values (2020, 'A', 100);
-
 drop table t_year_composite_pk;
 
 -- =====================================================

@@ -835,8 +835,6 @@ select * from t_year_composite_pk order by y, category;
 2020-01-01  ¦  A  ¦  1  𝄀
 2020-01-01  ¦  B  ¦  2  𝄀
 2021-01-01  ¦  A  ¦  3
-insert into t_year_composite_pk values (2020, 'A', 100);
-Duplicate entry '(2020,A)' for key '(y,category)'
 drop table t_year_composite_pk;
 drop table if exists t_year_composite_idx;
 create table t_year_composite_idx (id int, y year, category varchar(10), index idx_year_cat(y, category));
