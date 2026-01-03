@@ -198,7 +198,6 @@ func TestMPoolNoLock(t *testing.T) {
 	require.Equal(t, int64(0), mp2.CurrNB())
 }
 
-<<<<<<< HEAD
 // TestCrossPoolFreeOffHeap tests that cross-pool free correctly deallocates offHeap memory.
 // This catches the bug where cross-pool free only recorded stats but didn't actually free memory.
 func TestCrossPoolFreeOffHeap(t *testing.T) {
