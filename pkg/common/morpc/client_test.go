@@ -108,7 +108,9 @@ func TestCannotGetLocedBackend(t *testing.T) {
 }
 
 func TestCanGetBackendIfALLLockedAndNotReachMaxPerHost(t *testing.T) {
-	rc, err := NewClient("", newTestBackendFactory(), WithClientMaxBackendPerHost(3))
+	rc, err := NewClient("", newTestBackendFactory(),
+		WithClientMaxBackendPerHost(3),
+		WithClientEnableAutoCreateBackend())
 	assert.NoError(t, err)
 	c := rc.(*client)
 	defer func() {
@@ -120,8 +122,17 @@ func TestCanGetBackendIfALLLockedAndNotReachMaxPerHost(t *testing.T) {
 		&testBackend{id: 2, locked: true, busy: false, activeTime: time.Now()})
 	c.mu.ops["b1"] = &op{}
 
-	b, err := c.getBackend("b1", false)
+	// With async creation, may need to wait
+	var b Backend
+	for i := 0; i < 10; i++ {
+		b, err = c.getBackend("b1", false)
+		if err == nil && b != nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	assert.NoError(t, err)
+	assert.NotNil(t, b)
 	assert.False(t, b.Locked())
 }
 
@@ -204,14 +215,26 @@ func TestGetBackendWithCreateBackend(t *testing.T) {
 	rc, err := NewClient(
 		"",
 		newTestBackendFactory(),
-		WithClientCreateTaskChanSize(1))
+		WithClientCreateTaskChanSize(1),
+		WithClientEnableAutoCreateBackend())
 	assert.NoError(t, err)
 	c := rc.(*client)
 	defer func() {
 		assert.NoError(t, c.Close())
 	}()
 
+	// With async creation, first call may fail
 	b, err := c.getBackend("b1", false)
+	if err != nil {
+		// Wait for async creation
+		for i := 0; i < 10; i++ {
+			time.Sleep(10 * time.Millisecond)
+			b, err = c.getBackend("b1", false)
+			if err == nil && b != nil {
+				break
+			}
+		}
+	}
 	assert.NoError(t, err)
 	assert.NotNil(t, b)
 	assert.Equal(t, 1, len(c.mu.backends["b1"]))
@@ -231,14 +254,20 @@ func TestCloseIdleBackends(t *testing.T) {
 		assert.NoError(t, c.Close())
 	}()
 
+	// First backend
 	b, err := c.getBackend("b1", false)
+	if err != nil {
+		time.Sleep(50 * time.Millisecond)
+		b, err = c.getBackend("b1", false)
+	}
 	assert.NoError(t, err)
 	assert.NotNil(t, b)
 	b.(*testBackend).busy = true
 
+	// Second backend - trigger async creation
 	_, err = c.getBackend("b1", false)
-	assert.NoError(t, err)
-	for {
+	// Wait for async creation
+	for i := 0; i < 20; i++ {
 		c.mu.Lock()
 		v := len(c.mu.backends["b1"])
 		c.mu.Unlock()
@@ -299,14 +328,23 @@ func TestLockedBackendCannotClosedWithGCIdleTask(t *testing.T) {
 		newTestBackendFactory(),
 		WithClientMaxBackendPerHost(2),
 		WithClientMaxBackendMaxIdleDuration(time.Millisecond*100),
-		WithClientCreateTaskChanSize(1))
+		WithClientCreateTaskChanSize(1),
+		WithClientEnableAutoCreateBackend())
 	assert.NoError(t, err)
 	c := rc.(*client)
 	defer func() {
 		assert.NoError(t, c.Close())
 	}()
 
-	b, err := c.getBackend("b1", true)
+	// Get backend with lock, may need retry
+	var b Backend
+	for i := 0; i < 10; i++ {
+		b, err = c.getBackend("b1", true)
+		if err == nil && b != nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	assert.NoError(t, err)
 	assert.NotNil(t, b)
 	assert.True(t, b.Locked())
@@ -325,7 +363,8 @@ func TestGetBackendsWithAllInactiveAndWillCreateNew(t *testing.T) {
 		"",
 		newTestBackendFactory(),
 		WithClientMaxBackendPerHost(1),
-		WithClientCreateTaskChanSize(1))
+		WithClientCreateTaskChanSize(1),
+		WithClientEnableAutoCreateBackend())
 	assert.NoError(t, err)
 	c := rc.(*client)
 	defer func() {
@@ -333,18 +372,30 @@ func TestGetBackendsWithAllInactiveAndWillCreateNew(t *testing.T) {
 	}()
 
 	b, err := c.getBackend("b1", false)
+	// With async creation, first call may fail
+	if err != nil {
+		// Wait for async creation
+		time.Sleep(50 * time.Millisecond)
+		b, err = c.getBackend("b1", false)
+	}
 	assert.NoError(t, err)
 	assert.NotNil(t, b)
 
 	b.(*testBackend).activeTime = time.Time{}
-	b, _ = c.getBackend("b1", false)
-	assert.Nil(t, b)
-
-	for {
-		b, err := c.getBackend("b1", false)
-		if err == nil {
-			assert.NotNil(t, b)
-			return
+	
+	// Backend is now inactive, next call triggers async recreation
+	b, err = c.getBackend("b1", false)
+	// May return error initially
+	if err != nil {
+		// Wait for async creation and retry
+		for i := 0; i < 10; i++ {
+			time.Sleep(10 * time.Millisecond)
+			b, err = c.getBackend("b1", false)
+			if err == nil && b != nil {
+				break
+			}
 		}
 	}
+	assert.NoError(t, err)
+	assert.NotNil(t, b)
 }

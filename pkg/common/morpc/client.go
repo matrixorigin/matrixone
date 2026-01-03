@@ -325,6 +325,44 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 	for {
 		b, err := c.getBackend(backend, false)
 		if err != nil {
+			// Handle NoAvailableBackend error - backend is being created asynchronously
+			if moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend) {
+				// Check context first before retrying
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				default:
+				}
+
+				retryCount++
+				// Check if max retries exceeded (0 means unlimited)
+				if policy.MaxRetries > 0 && retryCount >= policy.MaxRetries {
+					c.logger.Warn("max retries exceeded for Send",
+						zap.String("backend", backend),
+						zap.Int("retries", retryCount),
+						zap.Error(err))
+					return nil, err
+				}
+
+				// Calculate next backoff with jitter
+				backoff = policy.nextBackoff(backoff)
+				if backoff > 0 {
+					select {
+					case <-ctx.Done():
+						return nil, ctx.Err()
+					case <-time.After(backoff):
+					}
+				}
+
+				if retryCount <= 3 || retryCount%10 == 0 {
+					c.logger.Debug("retrying Send after no available backend",
+						zap.String("backend", backend),
+						zap.Int("retry", retryCount),
+						zap.Duration("backoff", backoff))
+				}
+				continue
+			}
+
 			// Don't count client-level errors (like ErrClientClosed) as circuit breaker failures
 			// Only count backend-related errors
 			if !moerr.IsMoErrCode(err, moerr.ErrClientClosed) {
@@ -402,6 +440,37 @@ func (c *client) NewStream(ctx context.Context, backend string, lock bool) (Stre
 
 		b, err := c.getBackend(backend, lock)
 		if err != nil {
+			// Handle NoAvailableBackend error - backend is being created asynchronously
+			if moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend) {
+				retryCount++
+				// Check if max retries exceeded
+				if policy.MaxRetries > 0 && retryCount >= policy.MaxRetries {
+					c.logger.Warn("max retries exceeded for NewStream",
+						zap.String("backend", backend),
+						zap.Int("retries", retryCount),
+						zap.Error(err))
+					return nil, err
+				}
+
+				// Calculate next backoff with jitter
+				backoff = policy.nextBackoff(backoff)
+				if backoff > 0 {
+					select {
+					case <-ctx.Done():
+						return nil, ctx.Err()
+					case <-time.After(backoff):
+					}
+				}
+
+				if retryCount <= 3 || retryCount%10 == 0 {
+					c.logger.Debug("retrying NewStream after no available backend",
+						zap.String("backend", backend),
+						zap.Int("retry", retryCount),
+						zap.Duration("backoff", backoff))
+				}
+				continue
+			}
+
 			// Don't count client-level errors (like ErrClientClosed) as circuit breaker failures
 			if !moerr.IsMoErrCode(err, moerr.ErrClientClosed) {
 				c.circuitBreakers.RecordFailure(backend)
@@ -471,6 +540,44 @@ func (c *client) Ping(ctx context.Context, backend string) error {
 	for {
 		b, err := c.getBackend(backend, false)
 		if err != nil {
+			// Handle NoAvailableBackend error - backend is being created asynchronously
+			if moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend) {
+				// Check context first before retrying
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				default:
+				}
+
+				retryCount++
+				// Check if max retries exceeded
+				if policy.MaxRetries > 0 && retryCount >= policy.MaxRetries {
+					c.logger.Warn("max retries exceeded for Ping",
+						zap.String("backend", backend),
+						zap.Int("retries", retryCount),
+						zap.Error(err))
+					return err
+				}
+
+				// Calculate next backoff with jitter
+				backoff = policy.nextBackoff(backoff)
+				if backoff > 0 {
+					select {
+					case <-ctx.Done():
+						return ctx.Err()
+					case <-time.After(backoff):
+					}
+				}
+
+				if retryCount <= 3 || retryCount%10 == 0 {
+					c.logger.Debug("retrying Ping after no available backend",
+						zap.String("backend", backend),
+						zap.Int("retry", retryCount),
+						zap.Duration("backoff", backoff))
+				}
+				continue
+			}
+
 			// Don't count client-level errors (like ErrClientClosed) as circuit breaker failures
 			if !moerr.IsMoErrCode(err, moerr.ErrClientClosed) {
 				c.circuitBreakers.RecordFailure(backend)
@@ -571,6 +678,12 @@ func (c *client) CloseBackend() error {
 }
 
 func (c *client) getBackend(backend string, lock bool) (Backend, error) {
+	// Fast-fail: check circuit breaker before acquiring lock
+	// This prevents blocking on lock acquisition for known-bad backends
+	if !c.circuitBreakers.Allow(backend) {
+		return nil, ErrCircuitOpen
+	}
+
 	c.mu.Lock()
 	b, err := c.getBackendLocked(backend, lock)
 	if err != nil {
@@ -581,9 +694,22 @@ func (c *client) getBackend(backend string, lock bool) (Backend, error) {
 		c.mu.Unlock()
 		return b, nil
 	}
-	c.mu.Unlock()
-
-	return c.createBackend(backend, lock)
+	
+	// No backend available in pool
+	// Check if we can create more backends
+	canCreate := c.canCreateLocked(backend)
+	c.mu.Unlock()  // Release lock before any potentially blocking operation
+	
+	if canCreate {
+		// Trigger async backend creation via global GC manager
+		// This avoids holding the lock during network I/O
+		// The backend will be available for subsequent requests
+		globalClientGC.triggerCreate(c, backend)
+	}
+	
+	// Return error to trigger retry in caller
+	// The retry mechanism in Send() will handle this gracefully
+	return nil, moerr.NewNoAvailableBackendNoCtx()
 }
 
 func (c *client) getBackendLocked(backend string, lock bool) (Backend, error) {

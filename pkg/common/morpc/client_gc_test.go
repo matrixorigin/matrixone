@@ -25,6 +25,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Helper function to get backend with retry for async creation
+func getBackendWithRetry(t *testing.T, client *client, backend string, lock bool) Backend {
+	var b Backend
+	var err error
+	for i := 0; i < 10; i++ {
+		b, err = client.getBackend(backend, lock)
+		if err == nil && b != nil {
+			return b
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	require.NoError(t, err)
+	require.NotNil(t, b)
+	return b
+}
+
 func TestGlobalClientGC_RegisterUnregister(t *testing.T) {
 	// Create a new manager for testing
 	mgr := newClientGCManager()
@@ -82,17 +98,16 @@ func TestGlobalClientGC_GCIdleLoop(t *testing.T) {
 	// Create a client with idle duration
 	c, err := NewClient("test-client",
 		newTestBackendFactory(),
-		WithClientMaxBackendMaxIdleDuration(time.Millisecond*100))
+		WithClientMaxBackendMaxIdleDuration(time.Millisecond*100),
+		WithClientEnableAutoCreateBackend())
 	require.NoError(t, err)
 	defer c.Close()
 
 	client := c.(*client)
 	mgr.register(client)
 
-	// Create a backend
-	b, err := client.getBackend("b1", false)
-	require.NoError(t, err)
-	require.NotNil(t, b)
+	// Create a backend - use helper for async creation
+	b := getBackendWithRetry(t, client, "b1", false)
 
 	// Mark backend as idle by setting activeTime to old time
 	tb := b.(*testBackend)
@@ -138,7 +153,7 @@ func TestGlobalClientGC_GCInactiveLoop(t *testing.T) {
 	mgr.register(client)
 
 	// Create a backend and mark it as inactive
-	b, err := client.getBackend("b1", false)
+	b := getBackendWithRetry(t, client, "b1", false)
 	require.NoError(t, err)
 	require.NotNil(t, b)
 
@@ -337,7 +352,7 @@ func TestGlobalClientGC_GCIdleRespectsMaxIdleDuration(t *testing.T) {
 	mgr.register(client1)
 
 	// Create backend
-	b1, err := client1.getBackend("b1", false)
+	b1 := getBackendWithRetry(t, client1, "b1", false)
 	require.NoError(t, err)
 	require.NotNil(t, b1)
 
@@ -352,7 +367,7 @@ func TestGlobalClientGC_GCIdleRespectsMaxIdleDuration(t *testing.T) {
 	mgr.register(client2)
 
 	// Create backend
-	b2, err := client2.getBackend("b2", false)
+	b2 := getBackendWithRetry(t, client2, "b2", false)
 	require.NoError(t, err)
 	require.NotNil(t, b2)
 
@@ -401,6 +416,10 @@ func TestGlobalClientGC_Integration(t *testing.T) {
 	require.NoError(t, err)
 	defer c.Close()
 
+	// Pre-create backend to avoid async creation delay
+	client := c.(*client)
+	_ = getBackendWithRetry(t, client, "b1", false)
+
 	// Send a request to create a backend
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancel()
@@ -416,7 +435,6 @@ func TestGlobalClientGC_Integration(t *testing.T) {
 	f.Close()
 
 	// Verify backend was created
-	client := c.(*client)
 	client.mu.Lock()
 	backends := client.mu.backends["b1"]
 	client.mu.Unlock()
@@ -752,14 +770,14 @@ func TestGlobalClientGC_ConcurrentCloseAndGC(t *testing.T) {
 func TestGlobalClientGC_CloseIdleBackendsOnClosedClient(t *testing.T) {
 	c, err := NewClient("test-client",
 		newTestBackendFactory(),
-		WithClientMaxBackendMaxIdleDuration(time.Millisecond*10))
+		WithClientMaxBackendMaxIdleDuration(time.Millisecond*10),
+		WithClientEnableAutoCreateBackend())
 	require.NoError(t, err)
 
 	client := c.(*client)
 
 	// Create a backend
-	_, err = client.getBackend("b1", false)
-	require.NoError(t, err)
+	_ = getBackendWithRetry(t, client, "b1", false)
 
 	// Close the client
 	c.Close()
@@ -777,14 +795,14 @@ func TestGlobalClientGC_CloseIdleBackendsOnClosedClient(t *testing.T) {
 // TestGlobalClientGC_DoRemoveInactiveOnClosedClient tests that doRemoveInactive
 // safely handles a closed client.
 func TestGlobalClientGC_DoRemoveInactiveOnClosedClient(t *testing.T) {
-	c, err := NewClient("test-client", newTestBackendFactory())
+	c, err := NewClient("test-client", newTestBackendFactory(),
+		WithClientEnableAutoCreateBackend())
 	require.NoError(t, err)
 
 	client := c.(*client)
 
 	// Create a backend
-	_, err = client.getBackend("b1", false)
-	require.NoError(t, err)
+	_ = getBackendWithRetry(t, client, "b1", false)
 
 	// Close the client
 	c.Close()
