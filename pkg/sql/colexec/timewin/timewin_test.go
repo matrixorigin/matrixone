@@ -230,18 +230,11 @@ func TestAvgTwCache(t *testing.T) {
 	{
 		require.NoError(t, executor.GroupGrow(1))
 		// data Fill.
-		require.NoError(t, executor.Fill(0, 0, []*vector.Vector{inputs[0]}))
-		require.NoError(t, executor.Fill(0, 1, []*vector.Vector{inputs[1]}))
-		require.NoError(t, executor.BulkFill(0, []*vector.Vector{inputs[2]}))
-		require.NoError(t, executor.BulkFill(0, []*vector.Vector{inputs[3]}))
-		require.NoError(t, executor.BulkFill(0, []*vector.Vector{inputs[4]}))
-	}
-	{
-		bs, err := aggexec.MarshalAggFuncExec(executor)
-		require.NoError(t, err)
-		ag, err := aggexec.UnmarshalAggFuncExec(mg, bs)
-		require.NoError(t, err)
-		ag.Free()
+		require.NoError(t, executor.BatchFill(0, []uint64{1}, []*vector.Vector{inputs[0]}))
+		require.NoError(t, executor.BatchFill(1, []uint64{1}, []*vector.Vector{inputs[1]}))
+		require.NoError(t, executor.BatchFill(0, []uint64{1}, []*vector.Vector{inputs[2]}))
+		require.NoError(t, executor.BatchFill(0, []uint64{1}, []*vector.Vector{inputs[3]}))
+		require.NoError(t, executor.BatchFill(0, []uint64{1}, []*vector.Vector{inputs[4]}))
 	}
 	{
 		// result check.
@@ -290,16 +283,9 @@ func TestAvgTwCacheDecimal64(t *testing.T) {
 	{
 		require.NoError(t, executor.GroupGrow(1))
 		// data Fill.
-		require.NoError(t, executor.Fill(0, 0, []*vector.Vector{inputs[0]}))
-		require.NoError(t, executor.Fill(0, 1, []*vector.Vector{inputs[1]}))
-		require.NoError(t, executor.BulkFill(0, []*vector.Vector{inputs[2]}))
-	}
-	{
-		bs, err := aggexec.MarshalAggFuncExec(executor)
-		require.NoError(t, err)
-		ag, err := aggexec.UnmarshalAggFuncExec(mg, bs)
-		require.NoError(t, err)
-		ag.Free()
+		require.NoError(t, executor.BatchFill(0, []uint64{1}, []*vector.Vector{inputs[0]}))
+		require.NoError(t, executor.BatchFill(1, []uint64{1}, []*vector.Vector{inputs[1]}))
+		require.NoError(t, executor.BatchFill(0, []uint64{1}, []*vector.Vector{inputs[2]}))
 	}
 	{
 		// result check.
@@ -348,16 +334,9 @@ func TestAvgTwCacheDecimal128(t *testing.T) {
 	{
 		require.NoError(t, executor.GroupGrow(1))
 		// data Fill.
-		require.NoError(t, executor.Fill(0, 0, []*vector.Vector{inputs[0]}))
-		require.NoError(t, executor.Fill(0, 1, []*vector.Vector{inputs[1]}))
-		require.NoError(t, executor.BulkFill(0, []*vector.Vector{inputs[2]}))
-	}
-	{
-		bs, err := aggexec.MarshalAggFuncExec(executor)
-		require.NoError(t, err)
-		ag, err := aggexec.UnmarshalAggFuncExec(mg, bs)
-		require.NoError(t, err)
-		ag.Free()
+		require.NoError(t, executor.BatchFill(0, []uint64{1}, []*vector.Vector{inputs[0]}))
+		require.NoError(t, executor.BatchFill(1, []uint64{1}, []*vector.Vector{inputs[1]}))
+		require.NoError(t, executor.BatchFill(0, []uint64{1}, []*vector.Vector{inputs[2]}))
 	}
 	{
 		// result check.
@@ -413,87 +392,11 @@ func TestAvgTwResult(t *testing.T) {
 	{
 		require.NoError(t, executor.GroupGrow(1))
 		// data Fill.
-		require.NoError(t, executor.Fill(0, 0, []*vector.Vector{inputs[0]}))
-		require.NoError(t, executor.Fill(0, 1, []*vector.Vector{inputs[1]}))
-		require.NoError(t, executor.BulkFill(0, []*vector.Vector{inputs[2]}))
-		require.NoError(t, executor.BulkFill(0, []*vector.Vector{inputs[3]}))
-		require.NoError(t, executor.BulkFill(0, []*vector.Vector{inputs[4]}))
-	}
-	{
-		bs, err := aggexec.MarshalAggFuncExec(executor)
-		require.NoError(t, err)
-		ag, err := aggexec.UnmarshalAggFuncExec(mg, bs)
-		require.NoError(t, err)
-		ag.Free()
-	}
-	{
-		// result check.
-		v, err := executor.Flush()
-		require.NoError(t, err)
-		{
-			require.NotNil(t, v)
-		}
-		v[0].Free(mg)
-	}
-	{
-		executor.Free()
-		// memory check.
-		for i := 1; i < len(inputs); i++ {
-			inputs[i].Free(mg)
-		}
-		require.Equal(t, int64(0), mg.CurrNB())
-	}
-}
-
-func TestAvgTwResultDecimal(t *testing.T) {
-	mg := mpool.MustNewZeroNoFixed()
-
-	info := singleAggInfo{
-		aggID:     function.AggAvgTwResultOverloadID,
-		distinct:  false,
-		argType:   types.T_varchar.ToType(),
-		retType:   types.T_decimal128.ToType(),
-		emptyNull: false,
-	}
-	//registerTheTestingCount(info.aggID, info.emptyNull)
-	executor, err := aggexec.MakeAgg(
-		mg,
-		info.aggID, info.distinct, info.argType)
-	require.Nil(t, err)
-
-	inputType := info.argType
-	inputs := make([]*vector.Vector, 5)
-	{
-		// prepare the input data.
-		var err error
-
-		str := "agg test str: AppendStringList NewConstBytes AppendStringList"
-
-		vec := vector.NewVec(inputType)
-		require.NoError(t, vector.AppendStringList(vec, []string{str, str, str, str}, []bool{false, true, false, false}, mg))
-		inputs[0] = vec
-		inputs[1] = vec
-		inputs[2] = vector.NewConstNull(inputType, 2, mg)
-		inputs[3], err = vector.NewConstBytes(inputType, []byte(str), 3, mg)
-		require.NoError(t, err)
-		inputs[4] = vector.NewVec(inputType)
-		require.NoError(t, vector.AppendStringList(inputs[4], []string{str, str, str, str}, nil, mg))
-	}
-	{
-		require.NoError(t, executor.GroupGrow(1))
-		// data Fill.
-		require.NoError(t, executor.Fill(0, 0, []*vector.Vector{inputs[0]}))
-		require.NoError(t, executor.Fill(0, 1, []*vector.Vector{inputs[1]}))
-		require.NoError(t, executor.BulkFill(0, []*vector.Vector{inputs[2]}))
-		require.Error(t, executor.BulkFill(0, []*vector.Vector{inputs[3]}))
-		require.Error(t, executor.BulkFill(0, []*vector.Vector{inputs[4]}))
-	}
-	{
-		bs, err := aggexec.MarshalAggFuncExec(executor)
-		require.NoError(t, err)
-		ag, err := aggexec.UnmarshalAggFuncExec(mg, bs)
-		require.NoError(t, err)
-		ag.Free()
+		require.NoError(t, executor.BatchFill(0, []uint64{1}, []*vector.Vector{inputs[0]}))
+		require.NoError(t, executor.BatchFill(1, []uint64{1}, []*vector.Vector{inputs[1]}))
+		require.NoError(t, executor.BatchFill(0, []uint64{1}, []*vector.Vector{inputs[2]}))
+		require.NoError(t, executor.BatchFill(0, []uint64{1}, []*vector.Vector{inputs[3]}))
+		require.NoError(t, executor.BatchFill(0, []uint64{1}, []*vector.Vector{inputs[4]}))
 	}
 	{
 		// result check.

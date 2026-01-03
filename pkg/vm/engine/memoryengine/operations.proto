@@ -225,20 +225,6 @@ message GetTableColumnsResp {
              "github.com/matrixorigin/matrixone/pkg/vm/engine.Attribute"];
 }
 
-message TruncateRelationReq {
-    option (gogoproto.typedecl) = false;
-    uint64 NewTableID           = 1 [(gogoproto.casttype) = "ID"];
-    uint64 OldTableID           = 2 [(gogoproto.casttype) = "ID"];
-    uint64 DatabaseID           = 3 [(gogoproto.casttype) = "ID"];
-    string DatabaseName         = 4;
-    string Name                 = 5;
-}
-
-message TruncateRelationResp {
-    option (gogoproto.typedecl) = false;
-    uint64 ID                   = 1 [(gogoproto.casttype) = "ID"];
-}
-
 message AddTableDefReq {
     option (gogoproto.typedecl) = false;
     uint64 TableID              = 1 [(gogoproto.casttype) = "ID"];
