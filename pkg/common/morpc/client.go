@@ -452,7 +452,11 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 				return nil, err
 			}
 
-			waitingForCreate := c.options.enableAutoCreate && isAutoCreateWaitError(err)
+			// Wait for backend if:
+			// 1. Auto-create enabled and waiting for creation, OR
+			// 2. ErrBackendCreating (pool has backends but all busy - wait regardless of auto-create)
+			waitingForCreate := (c.options.enableAutoCreate && isAutoCreateWaitError(err)) ||
+				isErrBackendCreating(err)
 
 			// Handle backend creation-in-progress with bounded wait
 			if waitingForCreate {
@@ -576,7 +580,11 @@ func (c *client) NewStream(ctx context.Context, backend string, lock bool) (Stre
 				return nil, err
 			}
 
-			waitingForCreate := c.options.enableAutoCreate && isAutoCreateWaitError(err)
+			// Wait for backend if:
+			// 1. Auto-create enabled and waiting for creation, OR
+			// 2. ErrBackendCreating (pool has backends but all busy - wait regardless of auto-create)
+			waitingForCreate := (c.options.enableAutoCreate && isAutoCreateWaitError(err)) ||
+				isErrBackendCreating(err)
 
 			// Handle backend creation-in-progress with bounded wait
 			if waitingForCreate {
@@ -681,7 +689,11 @@ func (c *client) Ping(ctx context.Context, backend string) error {
 	for {
 		b, err := c.getBackend(backend, false)
 		if err != nil {
-			waitingForCreate := c.options.enableAutoCreate && isAutoCreateWaitError(err)
+			// Wait for backend if:
+			// 1. Auto-create enabled and waiting for creation, OR
+			// 2. ErrBackendCreating (pool has backends but all busy - wait regardless of auto-create)
+			waitingForCreate := (c.options.enableAutoCreate && isAutoCreateWaitError(err)) ||
+				isErrBackendCreating(err)
 
 			// Handle backend creation-in-progress with bounded wait
 			if waitingForCreate {
@@ -846,8 +858,16 @@ func (c *client) getBackend(backend string, lock bool) (Backend, error) {
 	hasBackends := poolSize > 0
 	c.mu.Unlock() // Release lock before any potentially blocking operation
 
+	// If pool has backends but all are busy, wait for one to become available
+	// This applies regardless of enableAutoCreate setting
+	if hasBackends && !canCreate {
+		c.metrics.backendUnavailableCounter.Inc()
+		return nil, ErrBackendCreating // Triggers wait/retry logic
+	}
+
 	// Strictly gate creation on enableAutoCreate flag
 	if !enableAutoCreate {
+		// No backends exist and auto-create is disabled - fail fast
 		return nil, moerr.NewNoAvailableBackendNoCtx()
 	}
 
@@ -862,13 +882,6 @@ func (c *client) getBackend(backend string, lock bool) (Backend, error) {
 	}
 
 	if creationQueued {
-		return nil, ErrBackendCreating
-	}
-
-	if hasBackends {
-		// Pool had entries but none usable (all busy/inactive)
-		// Return ErrBackendCreating to trigger wait/retry logic instead of failing immediately
-		c.metrics.backendUnavailableCounter.Inc()
 		return nil, ErrBackendCreating
 	}
 

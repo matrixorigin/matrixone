@@ -437,26 +437,42 @@ func TestCircuitBreakerRecordFailureOnTimeout(t *testing.T) {
 // ErrNoAvailableBackend does NOT trigger retry loop
 func TestAutoCreateDisabledFailsFast(t *testing.T) {
 	// Regression test for: "Auto-create disabled still triggers infinite retries"
-	// When enableAutoCreate=false, ErrNoAvailableBackend should fail fast, not retry
-
-	// The key logic in Send is:
-	// waitingForCreate := c.options.enableAutoCreate && isAutoCreateWaitError(err)
-	//
-	// When enableAutoCreate=false:
-	// - waitingForCreate = false && ... = false
-	// - Does NOT enter retry loop
-	// - Returns error immediately
+	// When enableAutoCreate=false and pool is EMPTY, should fail fast
 
 	// Verify ErrNoAvailableBackend is in the wait error list
 	assert.True(t, isAutoCreateWaitError(moerr.NewNoAvailableBackendNoCtx()),
 		"ErrNoAvailableBackend should be in wait error list")
 
 	// But the retry only happens when enableAutoCreate=true
-	// This is enforced by: waitingForCreate := c.options.enableAutoCreate && isAutoCreateWaitError(err)
-	// So when enableAutoCreate=false, even if isAutoCreateWaitError returns true,
-	// waitingForCreate will be false, and no retry will happen.
+	// This is enforced by: waitingForCreate := (enableAutoCreate && isAutoCreateWaitError(err)) || isErrBackendCreating(err)
+	// So when enableAutoCreate=false and pool is empty:
+	// - getBackend returns ErrNoAvailableBackend (not ErrBackendCreating)
+	// - waitingForCreate = (false && true) || false = false
+	// - No retry, fail fast
 
 	// This test documents the expected behavior:
 	// - enableAutoCreate=true + ErrNoAvailableBackend → retry
-	// - enableAutoCreate=false + ErrNoAvailableBackend → fail fast
+	// - enableAutoCreate=false + pool empty → fail fast (ErrNoAvailableBackend)
+	// - enableAutoCreate=false + pool busy → wait (ErrBackendCreating)
+}
+
+// TestAutoCreateDisabledPoolBusyWaits tests that when enableAutoCreate=false
+// but pool has busy backends, it should wait instead of failing immediately
+func TestAutoCreateDisabledPoolBusyWaits(t *testing.T) {
+	// Regression test for: "enableAutoCreate=false + pool busy should wait"
+	// When pool has backends but all are busy, should wait regardless of enableAutoCreate
+
+	// ErrBackendCreating always triggers wait (regardless of enableAutoCreate)
+	assert.True(t, isErrBackendCreating(ErrBackendCreating),
+		"ErrBackendCreating should be recognized")
+
+	// The wait logic is:
+	// waitingForCreate := (enableAutoCreate && isAutoCreateWaitError(err)) || isErrBackendCreating(err)
+	//
+	// When enableAutoCreate=false and pool is busy:
+	// - getBackend returns ErrBackendCreating (pool has backends but all busy)
+	// - waitingForCreate = (false && ...) || true = true
+	// - Will wait for backend to become available
+
+	// This ensures pre-created/manual connection pools work correctly under load
 }
