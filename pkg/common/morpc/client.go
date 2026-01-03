@@ -851,28 +851,6 @@ func (c *client) closeIdleBackends() int {
 	return len(idleBackends)
 }
 
-func (c *client) createBackend(backend string, lock bool) (Backend, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	b, err := c.getBackendLocked(backend, lock)
-	if err != nil {
-		return nil, err
-	}
-	if b != nil {
-		return b, nil
-	}
-
-	b, err = c.createBackendLocked(backend)
-	if err != nil {
-		return nil, err
-	}
-	if lock {
-		b.Lock()
-	}
-	return b, nil
-}
-
 func (c *client) createBackendLocked(backend string) (Backend, error) {
 	if !c.canCreateLocked(backend) {
 		return nil, moerr.NewNoAvailableBackendNoCtx()

@@ -265,7 +265,7 @@ func TestCloseIdleBackends(t *testing.T) {
 	b.(*testBackend).busy = true
 
 	// Second backend - trigger async creation
-	_, err = c.getBackend("b1", false)
+	_, _ = c.getBackend("b1", false)
 	// Wait for async creation
 	for i := 0; i < 20; i++ {
 		c.mu.Lock()
