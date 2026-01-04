@@ -68,22 +68,23 @@ func (c *DashboardCreator) initMemDashboard() error {
 //   - global_stats_allocated: Global statistics for allocated memory
 //
 // For each allocator, two metrics are displayed:
-//   1. mo_mem_mpool_allocated_size: Current allocated memory size in bytes (gauge)
-//      - Represents the real-time memory consumption by the allocator
-//      - Only tracks off-heap memory allocations (allocations with offHeap=true)
-//      - Metric name: mo_mem_mpool_allocated_size{type="<allocator_name>"}
 //
-//   2. mo_mem_mpool_high_water_mark_size: Peak memory usage ever reached (gauge)
-//      - Tracks the maximum memory usage since the system started
-//      - Useful for understanding peak memory requirements and capacity planning
-//      - Metric name: mo_mem_mpool_high_water_mark_size{type="<allocator_name>_high_water_mark"}
+//  1. mo_mem_mpool_allocated_size: Current allocated memory size in bytes (gauge)
+//     - Represents the real-time memory consumption by the allocator
+//     - Only tracks off-heap memory allocations (allocations with offHeap=true)
+//     - Metric name: mo_mem_mpool_allocated_size{type="<allocator_name>"}
+//
+//  2. mo_mem_mpool_high_water_mark_size: Peak memory usage ever reached (gauge)
+//     - Tracks the maximum memory usage since the system started
+//     - Useful for understanding peak memory requirements and capacity planning
+//     - Metric name: mo_mem_mpool_high_water_mark_size{type="<allocator_name>_high_water_mark"}
 //
 // Additionally, this row includes:
 //   - mo_mem_cross_pool_free_total: Counter for cross-pool memory free operations
-//     - Increments when memory allocated from one pool is freed in a different pool
-//     - Indicates potential memory management issues or cross-pool memory leaks
-//     - Metric name: mo_mem_cross_pool_free_total
-//     - Displayed as rate of increase over the dashboard interval
+//   - Increments when memory allocated from one pool is freed in a different pool
+//   - Indicates potential memory management issues or cross-pool memory leaks
+//   - Metric name: mo_mem_cross_pool_free_total
+//   - Displayed as rate of increase over the dashboard interval
 func (c *DashboardCreator) initMpoolAllocatorRow() dashboard.Option {
 	options := make([]row.Option, 0)
 	// List of allocator names to monitor. Each allocator serves a specific purpose:
@@ -161,10 +162,10 @@ func (c *DashboardCreator) initMpoolAllocatorRow() dashboard.Option {
 //   - mpool: Memory pool allocator allocations
 //
 // For each component, four metrics are displayed:
-//   1. allocate bytes: Total bytes allocated (counter)
-//   2. inuse bytes: Currently in-use bytes (gauge)
-//   3. allocate objects: Total number of objects allocated (counter)
-//   4. inuse objects: Currently in-use objects (gauge)
+//  1. allocate bytes: Total bytes allocated (counter)
+//  2. inuse bytes: Currently in-use bytes (gauge)
+//  3. allocate objects: Total number of objects allocated (counter)
+//  4. inuse objects: Currently in-use objects (gauge)
 //
 // Additionally, the row includes an off-heap inuse graph showing current off-heap memory
 // consumption broken down by component type.
