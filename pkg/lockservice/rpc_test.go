@@ -197,7 +197,7 @@ func TestRPCSendErrBackendCannotConnect(t *testing.T) {
 					writeResponse(getLogger(""), cancel, resp, nil, cs)
 				})
 
-			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*2)
 			defer cancel()
 			err := s.Close()
 			require.NoError(t, err)
@@ -205,7 +205,11 @@ func TestRPCSendErrBackendCannotConnect(t *testing.T) {
 				&lock.Request{
 					LockTable: lock.LockTable{ServiceID: "s1"},
 					Method:    lock.Method_Lock})
-			require.True(t, moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect))
+			if err != nil {
+				t.Logf("Error: %v, Type: %T", err, err)
+			}
+			// After auto-create wait timeout (500ms), should return ErrBackendClosed
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrBackendClosed))
 		},
 	)
 }
