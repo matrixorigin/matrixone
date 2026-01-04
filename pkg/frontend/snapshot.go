@@ -112,6 +112,7 @@ var (
 		"mo_stages":                   0,
 		catalog.MO_PUBS:               1,
 		catalog.MO_SUBS:               1,
+		catalog.MO_ISCP_LOG:           1,
 
 		"mo_sessions":       1,
 		"mo_configurations": 1,
