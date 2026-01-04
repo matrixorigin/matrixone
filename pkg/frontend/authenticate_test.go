@@ -7327,6 +7327,158 @@ func Test_doDropAccount(t *testing.T) {
 	})
 }
 
+func Test_doDropAccount_InTransaction(t *testing.T) {
+	convey.Convey("doDropAccount with inTransaction parameter", t, func() {
+		// Test case 1: inTransaction=false (default behavior - creates new transaction)
+		convey.Convey("inTransaction=false should create new transaction", func() {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			bh := &backgroundExecTestWithHistory{}
+			bh.init()
+
+			stmt := &tree.DropAccount{
+				Name: boxExprStr("test_acc"),
+			}
+			priv := determinePrivilegeSetOfStatement(stmt)
+			ses := newSes(priv, ctrl)
+
+			pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+			pu.SV.SetDefaultValues()
+			pu.SV.KillRountinesInterval = 0
+			ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+			ctx = defines.AttachAccountId(ctx, 0)
+
+			rm, _ := NewRoutineManager(ctx, "")
+			ses.rm = rm
+
+			// Setup SQL results
+			bh.sql2result["begin;"] = nil
+			bh.sql2result["commit;"] = nil
+			bh.sql2result["rollback;"] = nil
+
+			sql, _ := getSqlForCheckTenant(ctx, "test_acc")
+			mrs := newMrsForGetAllAccounts([][]interface{}{
+				{uint64(1), "test_acc", "open", uint64(1), nil},
+			})
+			bh.sql2result[sql] = mrs
+
+			sql, _ = getSqlForDeleteAccountFromMoAccount(context.TODO(), "test_acc")
+			bh.sql2result[sql] = nil
+
+			for _, sql = range getSqlForDropAccount() {
+				bh.sql2result[sql] = nil
+			}
+
+			bh.sql2result["show tables from mo_catalog;"] = newMrsForShowTables([][]interface{}{})
+
+			sql = fmt.Sprintf(getPubInfoSql, 1) + " order by update_time desc, created_time desc"
+			bh.sql2result[sql] = newMrsForSqlForGetPubs([][]interface{}{})
+
+			sql = "select 1 from mo_catalog.mo_columns where att_database = 'mo_catalog' and att_relname = 'mo_subs' and attname = 'sub_account_name'"
+			bh.sql2result[sql] = newMrsForSqlForGetSubs([][]interface{}{{1}})
+
+			sql = getSubsSql
+			bh.sql2result[sql] = newMrsForSqlForGetSubs([][]interface{}{})
+
+			err := doDropAccount(ses.GetTxnHandler().GetTxnCtx(), bh, ses, &dropAccount{
+				IfExists: stmt.IfExists,
+				Name:     mustUnboxExprStr(stmt.Name),
+			}, false) // inTransaction=false
+
+			convey.So(err, convey.ShouldBeNil)
+			// Verify that "begin;" was executed
+			convey.So(bh.hasExecuted("begin;"), convey.ShouldBeTrue)
+		})
+
+		// Test case 2: inTransaction=true (restore scenario - uses existing transaction)
+		convey.Convey("inTransaction=true should not create new transaction", func() {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			bh := &backgroundExecTestWithHistory{}
+			bh.init()
+
+			stmt := &tree.DropAccount{
+				Name: boxExprStr("test_acc"),
+			}
+			priv := determinePrivilegeSetOfStatement(stmt)
+			ses := newSes(priv, ctrl)
+
+			pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+			pu.SV.SetDefaultValues()
+			pu.SV.KillRountinesInterval = 0
+			ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+			ctx = defines.AttachAccountId(ctx, 0)
+
+			rm, _ := NewRoutineManager(ctx, "")
+			ses.rm = rm
+
+			// Setup SQL results (no begin; needed)
+			bh.sql2result["commit;"] = nil
+			bh.sql2result["rollback;"] = nil
+
+			sql, _ := getSqlForCheckTenant(ctx, "test_acc")
+			mrs := newMrsForGetAllAccounts([][]interface{}{
+				{uint64(1), "test_acc", "open", uint64(1), nil},
+			})
+			bh.sql2result[sql] = mrs
+
+			sql, _ = getSqlForDeleteAccountFromMoAccount(context.TODO(), "test_acc")
+			bh.sql2result[sql] = nil
+
+			for _, sql = range getSqlForDropAccount() {
+				bh.sql2result[sql] = nil
+			}
+
+			bh.sql2result["show tables from mo_catalog;"] = newMrsForShowTables([][]interface{}{})
+
+			sql = fmt.Sprintf(getPubInfoSql, 1) + " order by update_time desc, created_time desc"
+			bh.sql2result[sql] = newMrsForSqlForGetPubs([][]interface{}{})
+
+			sql = "select 1 from mo_catalog.mo_columns where att_database = 'mo_catalog' and att_relname = 'mo_subs' and attname = 'sub_account_name'"
+			bh.sql2result[sql] = newMrsForSqlForGetSubs([][]interface{}{{1}})
+
+			sql = getSubsSql
+			bh.sql2result[sql] = newMrsForSqlForGetSubs([][]interface{}{})
+
+			err := doDropAccount(ses.GetTxnHandler().GetTxnCtx(), bh, ses, &dropAccount{
+				IfExists: stmt.IfExists,
+				Name:     mustUnboxExprStr(stmt.Name),
+			}, true) // inTransaction=true
+
+			convey.So(err, convey.ShouldBeNil)
+			// Verify that "begin;" was NOT executed
+			convey.So(bh.hasExecuted("begin;"), convey.ShouldBeFalse)
+		})
+	})
+}
+
+// backgroundExecTestWithHistory extends backgroundExecTest to track SQL execution history
+type backgroundExecTestWithHistory struct {
+	backgroundExecTest
+	executedSqls []string
+}
+
+func (bt *backgroundExecTestWithHistory) init() {
+	bt.backgroundExecTest.init()
+	bt.executedSqls = make([]string, 0)
+}
+
+func (bt *backgroundExecTestWithHistory) Exec(ctx context.Context, s string) error {
+	bt.executedSqls = append(bt.executedSqls, s)
+	return bt.backgroundExecTest.Exec(ctx, s)
+}
+
+func (bt *backgroundExecTestWithHistory) hasExecuted(sql string) bool {
+	for _, executed := range bt.executedSqls {
+		if executed == sql {
+			return true
+		}
+	}
+	return false
+}
+
 func generateGrantPrivilege(grant, to string, exists bool, roleNames []string, withGrantOption bool) {
 	names := ""
 	for i, name := range roleNames {
