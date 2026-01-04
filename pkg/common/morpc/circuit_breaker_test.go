@@ -253,7 +253,7 @@ func TestCircuitBreakerManager(t *testing.T) {
 		ResetTimeout:        100 * time.Millisecond,
 		HalfOpenMaxRequests: 1,
 	}
-	manager := NewCircuitBreakerManager(config, logger)
+	manager := NewCircuitBreakerManager("test-client", config, logger)
 
 	// Different backends have independent circuit breakers
 	assert.True(t, manager.Allow("backend1"))
@@ -281,7 +281,7 @@ func TestCircuitBreakerManagerRemoveBreaker(t *testing.T) {
 		ResetTimeout:        100 * time.Millisecond,
 		HalfOpenMaxRequests: 1,
 	}
-	manager := NewCircuitBreakerManager(config, logger)
+	manager := NewCircuitBreakerManager("test-client", config, logger)
 
 	// Open circuit for backend1
 	manager.RecordFailure("backend1")
@@ -297,7 +297,7 @@ func TestCircuitBreakerManagerRemoveBreaker(t *testing.T) {
 
 func TestCircuitBreakerManagerDisabled(t *testing.T) {
 	logger := zap.NewNop()
-	manager := NewCircuitBreakerManager(DisabledCircuitBreakerConfig, logger)
+	manager := NewCircuitBreakerManager("test-client", DisabledCircuitBreakerConfig, logger)
 
 	// Always allows when disabled
 	for i := 0; i < 100; i++ {

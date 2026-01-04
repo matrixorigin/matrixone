@@ -1015,9 +1015,9 @@ fmtErrs := $(shell grep -onr 'fmt.Errorf' pkg/ --exclude-dir=.git --exclude-dir=
 				--exclude=*.pb.go --exclude=*_test.go --exclude=system_vars.go --exclude=Makefile)
 errNews := $(shell grep -onr 'errors.New' pkg/ --exclude-dir=.git --exclude-dir=vendor \
 				--exclude=*.pb.go --exclude=*_test.go --exclude=system_vars.go --exclude=Makefile)
-withTimeout := $(shell grep -onr 'context.WithTimeout' pkg/ --exclude-dir=.git --exclude-dir=vendor \
+withTimeout := $(shell grep -onr 'context\.WithTimeout[^C]' pkg/ --exclude-dir=.git --exclude-dir=vendor \
 				--exclude=*.pb.go --exclude=*_test.go --exclude=system_vars.go --exclude=Makefile)
-withDeadline := $(shell grep -onr 'context.WithDeadline' pkg/ --exclude-dir=.git --exclude-dir=vendor \
+withDeadline := $(shell grep -onr 'context\.WithDeadline[^C]' pkg/ --exclude-dir=.git --exclude-dir=vendor \
 				--exclude=*.pb.go --exclude=*_test.go --exclude=system_vars.go --exclude=Makefile)
 
 

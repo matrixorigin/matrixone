@@ -88,7 +88,8 @@ func NewSender(
 	}
 
 	s.cfg.BackendOptions = append(s.cfg.BackendOptions,
-		morpc.WithBackendStreamBufferSize(10000))
+		morpc.WithBackendStreamBufferSize(10000),
+		morpc.WithBackendReadTimeout(time.Second*30))
 	client, err := s.cfg.NewClient(
 		s.rt.ServiceUUID(),
 		"txn-client",

@@ -136,7 +136,9 @@ func runRPCTests(
 			}()
 			require.NoError(t, s.Start())
 
-			cfg := Config{}
+			cfg := Config{
+				ClientOptions: []ClientOption{WithClientEnableAutoCreateBackend()},
+			}
 			c, err := cfg.NewClient(
 				sid,
 				"ctl-service",

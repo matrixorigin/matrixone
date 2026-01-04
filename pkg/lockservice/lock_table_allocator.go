@@ -992,8 +992,10 @@ func validateService(
 	client Client,
 	logger *log.MOLogger,
 ) (bool, error) {
-	if timeout < defaultRPCTimeout {
-		timeout = defaultRPCTimeout
+	// Enforce minimum timeout to avoid immediate failures from misconfiguration
+	const minTimeout = 100 * time.Millisecond
+	if timeout < minTimeout {
+		timeout = minTimeout
 	}
 	ctx, cancel := context.WithTimeoutCause(context.Background(), timeout, moerr.CauseValidateService)
 	defer cancel()

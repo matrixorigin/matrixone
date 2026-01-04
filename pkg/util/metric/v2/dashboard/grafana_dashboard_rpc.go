@@ -33,6 +33,8 @@ func (c *DashboardCreator) initRPCDashboard() error {
 			c.initRPCKeyMetricsRow(),
 			c.initRPCRequestMetricsRow(),
 			c.initRPCConnectionMetricsRow(),
+			c.initRPCBackendHealthRow(),
+			c.initRPCCircuitBreakerRow(),
 			c.initRPCNetworkMetricsRow(),
 			c.initRPCPerformanceMetricsRow(),
 			c.initRPCGCRow(),
@@ -177,6 +179,66 @@ func (c *DashboardCreator) initRPCConnectionMetricsRow() dashboard.Option {
 			"{{ name }}",
 			axis.Min(0),
 			axis.Max(1)),
+	)
+}
+
+// initRPCBackendHealthRow shows backend health and failure metrics
+func (c *DashboardCreator) initRPCBackendHealthRow() dashboard.Option {
+	return dashboard.Row(
+		"Backend Health & Failures",
+		c.withGraph(
+			"Auto-Create Timeout Rate",
+			4,
+			`sum(rate(`+c.getMetricWithFilter("mo_rpc_backend_auto_create_timeout_total", "")+`[$interval])) by (name)`,
+			"{{ name }}",
+			axis.Unit("timeouts/s"),
+			axis.Min(0)),
+
+		c.withGraph(
+			"Backend Unavailable Rate",
+			4,
+			`sum(rate(`+c.getMetricWithFilter("mo_rpc_backend_unavailable_total", "")+`[$interval])) by (name)`,
+			"{{ name }}",
+			axis.Unit("errors/s"),
+			axis.Min(0)),
+
+		c.withMultiGraph(
+			"Backend Creation vs Failures",
+			4,
+			[]string{
+				`sum(rate(` + c.getMetricWithFilter("mo_rpc_backend_create_total", "") + `[$interval])) by (name)`,
+				`sum(rate(` + c.getMetricWithFilter("mo_rpc_backend_connect_total", `type="failed"`) + `[$interval])) by (name)`,
+			},
+			[]string{"{{ name }} - create", "{{ name }} - failed"}),
+	)
+}
+
+// initRPCCircuitBreakerRow shows circuit breaker metrics
+func (c *DashboardCreator) initRPCCircuitBreakerRow() dashboard.Option {
+	return dashboard.Row(
+		"Circuit Breaker",
+		c.withGraph(
+			"Circuit Breaker State",
+			4,
+			`sum(`+c.getMetricWithFilter("mo_rpc_circuit_breaker_state", "")+`) by (name, backend)`,
+			"{{ name }}/{{ backend }}",
+			axis.Min(0),
+			axis.Max(2)),
+
+		c.withGraph(
+			"Circuit Breaker Trip Rate",
+			4,
+			`sum(rate(`+c.getMetricWithFilter("mo_rpc_circuit_breaker_trips_total", "")+`[$interval])) by (name, backend)`,
+			"{{ name }}/{{ backend }}",
+			axis.Unit("trips/s"),
+			axis.Min(0)),
+
+		c.withGraph(
+			"Open Circuit Breakers Count",
+			4,
+			`count(`+c.getMetricWithFilter("mo_rpc_circuit_breaker_state", "")+` == 2) by (name)`,
+			"{{ name }}",
+			axis.Min(0)),
 	)
 }
 

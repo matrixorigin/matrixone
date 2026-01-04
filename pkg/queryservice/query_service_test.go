@@ -197,7 +197,26 @@ func runTestWithQueryService(t *testing.T, cn metadata.CNService, fs fileservice
 			qs, err := NewQueryService(cn.ServiceID, address, morpc.Config{})
 			assert.NoError(t, err)
 
-			qt, err := client.NewQueryClient(cn.ServiceID, morpc.Config{})
+			// Use adaptive retry policy and circuit breaker for tests
+			// Fast retries initially for normal case, but circuit breaker
+			// will open after 3 failures to prevent wasting time on dead nodes
+			cfg := morpc.Config{}
+			cfg.ClientOptions = []morpc.ClientOption{
+				morpc.WithClientRetryPolicy(morpc.RetryPolicy{
+					MaxRetries:     10,
+					InitialBackoff: 10 * time.Millisecond,
+					MaxBackoff:     1 * time.Second,
+					Multiplier:     2.0,
+					JitterFraction: 0.0,
+				}),
+				morpc.WithClientCircuitBreaker(morpc.CircuitBreakerConfig{
+					Enabled:             true,
+					FailureThreshold:    3,
+					ResetTimeout:        5 * time.Second,
+					HalfOpenMaxRequests: 1,
+				}),
+			}
+			qt, err := client.NewQueryClient(cn.ServiceID, cfg)
 			assert.NoError(t, err)
 
 			qs.AddHandleFunc(pb.CmdMethod_ShowProcessList, func(ctx context.Context, req *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {

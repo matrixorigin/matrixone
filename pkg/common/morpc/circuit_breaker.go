@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/zap"
 )
 
@@ -293,14 +294,16 @@ type CircuitBreakerStats struct {
 type CircuitBreakerManager struct {
 	config CircuitBreakerConfig
 	logger *zap.Logger
+	name   string // client name for metrics
 
 	mu       sync.RWMutex
 	breakers map[string]*CircuitBreaker
 }
 
 // NewCircuitBreakerManager creates a new CircuitBreakerManager.
-func NewCircuitBreakerManager(config CircuitBreakerConfig, logger *zap.Logger) *CircuitBreakerManager {
+func NewCircuitBreakerManager(name string, config CircuitBreakerConfig, logger *zap.Logger) *CircuitBreakerManager {
 	return &CircuitBreakerManager{
+		name:     name,
 		config:   config,
 		logger:   logger,
 		breakers: make(map[string]*CircuitBreaker),
@@ -337,18 +340,76 @@ func (m *CircuitBreakerManager) GetBreaker(backend string) *CircuitBreaker {
 }
 
 // Allow checks if a request to the given backend should be allowed.
+// Returns an error if the request should be rejected.
 func (m *CircuitBreakerManager) Allow(backend string) bool {
 	return m.GetBreaker(backend).Allow()
 }
 
+// GetError returns the appropriate error based on circuit breaker state.
+// Returns nil if circuit is closed, ErrCircuitOpen if open, ErrCircuitHalfOpen if half-open.
+func (m *CircuitBreakerManager) GetError(backend string) error {
+	cb := m.GetBreaker(backend)
+	if !cb.config.Enabled {
+		return nil
+	}
+
+	state := cb.State()
+	switch state {
+	case CircuitOpen:
+		return ErrCircuitOpen
+	case CircuitHalfOpen:
+		return ErrCircuitHalfOpen
+	case CircuitClosed:
+		return nil
+	default:
+		return nil
+	}
+}
+
 // RecordSuccess records a successful request to the given backend.
 func (m *CircuitBreakerManager) RecordSuccess(backend string) {
-	m.GetBreaker(backend).RecordSuccess()
+	cb := m.GetBreaker(backend)
+	oldState := cb.State()
+	cb.RecordSuccess()
+	newState := cb.State()
+
+	// Report state change metrics
+	if oldState != newState {
+		m.reportStateChange(backend, newState)
+	}
 }
 
 // RecordFailure records a failed request to the given backend.
 func (m *CircuitBreakerManager) RecordFailure(backend string) {
-	m.GetBreaker(backend).RecordFailure()
+	cb := m.GetBreaker(backend)
+	oldState := cb.State()
+	cb.RecordFailure()
+	newState := cb.State()
+
+	// Report state change metrics
+	if oldState != newState {
+		m.reportStateChange(backend, newState)
+		// Count trips (closed -> open)
+		if oldState == CircuitClosed && newState == CircuitOpen {
+			m.reportTrip(backend)
+		}
+	}
+}
+
+// reportStateChange reports circuit breaker state change to metrics
+func (m *CircuitBreakerManager) reportStateChange(backend string, state CircuitState) {
+	if m.name == "" {
+		return
+	}
+	v2.NewRPCCircuitBreakerStateGauge(m.name, backend).Set(float64(state))
+}
+
+// reportTrip reports circuit breaker trip (closed -> open) to metrics
+func (m *CircuitBreakerManager) reportTrip(backend string) {
+	if m.name == "" {
+		return
+	}
+	v2.NewRPCCircuitBreakerTripsCounter(m.name, backend).Inc()
 }
 
 // RemoveBreaker removes the circuit breaker for the given backend.
@@ -371,7 +432,12 @@ func (m *CircuitBreakerManager) Stats() map[string]CircuitBreakerStats {
 }
 
 // ErrCircuitOpen is returned when the circuit breaker is open and rejecting requests.
+// ErrCircuitOpen indicates that the circuit breaker is open and rejecting all requests.
 var ErrCircuitOpen = moerr.NewServiceUnavailableNoCtx("circuit breaker is open")
+
+// ErrCircuitHalfOpen indicates that the circuit breaker is in half-open state.
+// Only limited probe requests are allowed in this state.
+var ErrCircuitHalfOpen = moerr.NewServiceUnavailableNoCtx("circuit breaker is half-open")
 
 // IsCircuitOpen checks if the error indicates a circuit breaker rejection.
 // It checks both identity comparison and error code for wrapped errors.
