@@ -718,6 +718,16 @@ var supportedOperators = []FuncNew{
 					return newOpOperatorStrIn().operatorIn
 				},
 			},
+			{
+				overloadId: 24,
+				args:       []types.T{types.T_year, types.T_year},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[types.MoYear]().operatorIn
+				},
+			},
 			// {
 			// 	overloadId: 24,
 			// 	args:       []types.T{types.T_uint8, types.T_tuple},
@@ -1247,6 +1257,16 @@ var supportedOperators = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return newOpOperatorStrIn().operatorNotIn
+				},
+			},
+			{
+				overloadId: 24,
+				args:       []types.T{types.T_year, types.T_year},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[types.MoYear]().operatorNotIn
 				},
 			},
 
