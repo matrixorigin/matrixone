@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -921,22 +922,15 @@ func (s *TableChangeStream) determineRetryable(err error) bool {
 	}
 
 	// Check for MatrixOne system/network errors first (before string matching)
-	// These errors indicate temporary system unavailability and should be retryable
-	if moerr.IsMoErrCode(err, moerr.ErrRPCTimeout) ||
-		moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend) ||
-		moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) ||
-		moerr.IsMoErrCode(err, moerr.ErrTNShardNotFound) ||
-		moerr.IsMoErrCode(err, moerr.ErrRpcError) ||
-		moerr.IsMoErrCode(err, moerr.ErrClientClosed) ||
-		moerr.IsMoErrCode(err, moerr.ErrBackendClosed) ||
-		moerr.IsMoErrCode(err, moerr.ErrServiceUnavailable) {
+	// Use morpc.GetStatusCategory for unified error classification
+	status := morpc.GetStatusCategory(err)
+	if status == morpc.StatusTransient || status == morpc.StatusUnavailable {
 		return true
 	}
-
-	// Check for context timeout errors (system/network issues)
-	if errors.Is(err, context.DeadlineExceeded) {
-		return true
+	if status == morpc.StatusCancelled {
+		return false // Client closing/closed should not retry
 	}
+	// StatusUnknown: continue to check other error types below
 
 	// StaleRead errors are retryable if recovery is possible
 	if moerr.IsMoErrCode(err, moerr.ErrStaleRead) {

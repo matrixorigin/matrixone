@@ -98,6 +98,38 @@ var (
 			Name:      "gc_create_processed_total",
 			Help:      "Total number of backend creation requests processed.",
 		})
+
+	rpcBackendAutoCreateTimeoutCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "rpc",
+			Name:      "backend_auto_create_timeout_total",
+			Help:      "Total number of auto-create backend wait timeouts.",
+		}, []string{"name"})
+
+	rpcBackendUnavailableCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "rpc",
+			Name:      "backend_unavailable_total",
+			Help:      "Total number of backend unavailable errors (pool has backends but all down).",
+		}, []string{"name"})
+
+	rpcCircuitBreakerStateGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "rpc",
+			Name:      "circuit_breaker_state",
+			Help:      "Circuit breaker state (0=closed, 1=half-open, 2=open).",
+		}, []string{"name", "backend"})
+
+	rpcCircuitBreakerTripsCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "rpc",
+			Name:      "circuit_breaker_trips_total",
+			Help:      "Total number of circuit breaker trips (closed -> open).",
+		}, []string{"name", "backend"})
 )
 
 var (
@@ -310,6 +342,22 @@ func GetRPCGCIdleBackendsCleanedCounter() prometheus.Counter {
 
 func GetRPCGCInactiveProcessedCounter() prometheus.Counter {
 	return rpcGCInactiveProcessedCounter
+}
+
+func NewRPCBackendAutoCreateTimeoutCounterByName(name string) prometheus.Counter {
+	return rpcBackendAutoCreateTimeoutCounter.WithLabelValues(name)
+}
+
+func NewRPCBackendUnavailableCounterByName(name string) prometheus.Counter {
+	return rpcBackendUnavailableCounter.WithLabelValues(name)
+}
+
+func NewRPCCircuitBreakerStateGauge(name, backend string) prometheus.Gauge {
+	return rpcCircuitBreakerStateGauge.WithLabelValues(name, backend)
+}
+
+func NewRPCCircuitBreakerTripsCounter(name, backend string) prometheus.Counter {
+	return rpcCircuitBreakerTripsCounter.WithLabelValues(name, backend)
 }
 
 func GetRPCGCCreateProcessedCounter() prometheus.Counter {

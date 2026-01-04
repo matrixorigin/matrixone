@@ -81,7 +81,7 @@ const (
 	consumerBufferLength   = 8192
 	consumerWarningPercent = 0.9
 
-	defaultRPCReadTimeout = time.Minute * 2
+	defaultRPCReadTimeout = time.Second * 30
 
 	logTag = "[logtail-consumer]"
 )
