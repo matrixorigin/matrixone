@@ -71,7 +71,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shufflebuild"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/source"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
@@ -205,9 +204,6 @@ func Test_convertToPipelineInstruction(t *testing.T) {
 		&semi.SemiJoin{
 			Conditions: [][]*plan.Expr{nil, nil},
 		},
-		&single.SingleJoin{
-			Conditions: [][]*plan.Expr{nil, nil},
-		},
 		&top.Top{},
 		&intersect.Intersect{},
 		&minus.Minus{},
@@ -290,7 +286,6 @@ func Test_convertToVmInstruction(t *testing.T) {
 		{Op: int32(vm.Projection), ProjectList: []*plan.Expr{}},
 		{Op: int32(vm.Filter), Filters: []*plan.Expr{}, RuntimeFilters: []*plan.Expr{}},
 		{Op: int32(vm.Semi), SemiJoin: &pipeline.SemiJoin{}},
-		{Op: int32(vm.Single), SingleJoin: &pipeline.SingleJoin{}},
 		{Op: int32(vm.Top), Limit: plan.MakePlan2Int64ConstExprWithType(1)},
 		{Op: int32(vm.Intersect), Anti: &pipeline.AntiJoin{}},
 		{Op: int32(vm.IntersectAll), Anti: &pipeline.AntiJoin{}},

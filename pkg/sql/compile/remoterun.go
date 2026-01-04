@@ -71,7 +71,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shufflebuild"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/source"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
@@ -637,19 +636,6 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			Result:                 t.Result,
 			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
 		}
-	case *single.SingleJoin:
-		relList, colList := getRelColList(t.Result)
-		in.SingleJoin = &pipeline.SingleJoin{
-			RelList:                relList,
-			ColList:                colList,
-			Expr:                   t.Cond,
-			Types:                  convertToPlanTypes(t.Typs),
-			LeftCond:               t.Conditions[0],
-			RightCond:              t.Conditions[1],
-			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
-			HashOnPk:               t.HashOnPK,
-			JoinMapTag:             t.JoinMapTag,
-		}
 	case *top.Top:
 		in.Limit = t.Limit
 		in.OrderBy = t.Fs
@@ -1145,17 +1131,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.CanSkipProbe = t.CanSkipProbe
 		arg.IsShuffle = t.IsShuffle
 		arg.ShuffleIdx = t.ShuffleIdx
-		arg.JoinMapTag = t.JoinMapTag
-		op = arg
-	case vm.Single:
-		t := opr.GetSingleJoin()
-		arg := single.NewArgument()
-		arg.Result = convertToResultPos(t.RelList, t.ColList)
-		arg.Cond = t.Expr
-		arg.Typs = convertToTypes(t.Types)
-		arg.Conditions = [][]*plan.Expr{t.LeftCond, t.RightCond}
-		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
-		arg.HashOnPK = t.HashOnPk
 		arg.JoinMapTag = t.JoinMapTag
 		op = arg
 	case vm.Top:

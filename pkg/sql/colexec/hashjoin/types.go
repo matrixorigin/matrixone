@@ -61,7 +61,7 @@ type container struct {
 	vs    []uint64
 	sels  []int32
 
-	leftRowMatched bool
+	leftMatched bool
 
 	probeState probeState
 
@@ -76,8 +76,8 @@ type container struct {
 
 	mp *message.JoinMap
 
-	matched     *bitmap.Bitmap
-	handledLast bool
+	rightMatched *bitmap.Bitmap
+	handledLast  bool
 
 	maxAllocSize int64
 }
@@ -151,7 +151,7 @@ func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	ctr.cleanHashMap()
 	ctr.resetNonEqCondExecutor()
 	ctr.resetEqCondExecutors()
-	ctr.matched = nil
+	ctr.rightMatched = nil
 	ctr.handledLast = false
 	ctr.state = Build
 	ctr.lastRow = 0

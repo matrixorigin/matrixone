@@ -43,7 +43,6 @@ const (
 
 	HashJoin
 	LoopJoin
-	Single
 	Semi
 	RightSemi
 	Anti
@@ -138,7 +137,6 @@ func init() {
 		Projection:              "Projection",
 		HashJoin:                "HashJoin",
 		LoopJoin:                "LoopJoin",
-		Single:                  "Single",
 		Semi:                    "Semi",
 		RightSemi:               "RightSemi",
 		Anti:                    "Anti",
@@ -210,7 +208,6 @@ func init() {
 		OperatorToStrMap[Group]:     true,
 		OperatorToStrMap[HashJoin]:  true,
 		OperatorToStrMap[LoopJoin]:  true,
-		OperatorToStrMap[Single]:    true,
 		OperatorToStrMap[Semi]:      true,
 		OperatorToStrMap[RightSemi]: true,
 		OperatorToStrMap[Anti]:      true,

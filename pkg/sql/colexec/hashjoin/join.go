@@ -76,11 +76,9 @@ func (hashJoin *HashJoin) Prepare(proc *process.Process) (err error) {
 	if len(hashJoin.ctr.eqCondVecs) == 0 {
 		hashJoin.ctr.eqCondVecs = make([]*vector.Vector, len(hashJoin.EqConds[0]))
 		hashJoin.ctr.eqCondExecs = make([]colexec.ExpressionExecutor, len(hashJoin.EqConds[0]))
-		for i := range hashJoin.EqConds[0] {
-			hashJoin.ctr.eqCondExecs[i], err = colexec.NewExpressionExecutor(proc, hashJoin.EqConds[0][i])
-			if err != nil {
-				return err
-			}
+		hashJoin.ctr.eqCondExecs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, hashJoin.EqConds[0])
+		if err != nil {
+			return err
 		}
 
 		if hashJoin.NonEqCond != nil {
@@ -214,8 +212,8 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 
 	if hashJoin.IsRightJoin {
 		if ctr.batchRowCount > 0 {
-			ctr.matched = &bitmap.Bitmap{}
-			ctr.matched.InitWithSize(ctr.batchRowCount)
+			ctr.rightMatched = &bitmap.Bitmap{}
+			ctr.rightMatched.InitWithSize(ctr.batchRowCount)
 		}
 	}
 
@@ -225,21 +223,21 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 func (ctr *container) finalize(ap *HashJoin, proc *process.Process, result *vm.CallResult) error {
 	ctr.handledLast = true
 
-	if ctr.matched == nil {
+	if ctr.rightMatched == nil {
 		result.Batch = nil
 		return nil
 	}
 
 	if ap.NumCPU > 1 {
 		if !ap.IsMerger {
-			ap.Channel <- ctr.matched
+			ap.Channel <- ctr.rightMatched
 			result.Batch = nil
 			return nil
 		} else {
 			for cnt := 1; cnt < int(ap.NumCPU); cnt++ {
 				v := colexec.ReceiveBitmapFromChannel(proc.Ctx, ap.Channel)
 				if v != nil {
-					ctr.matched.Or(v)
+					ctr.rightMatched.Or(v)
 				} else {
 					result.Batch = nil
 					return nil
@@ -249,10 +247,10 @@ func (ctr *container) finalize(ap *HashJoin, proc *process.Process, result *vm.C
 		}
 	}
 
-	count := ctr.batchRowCount - int64(ctr.matched.Count())
-	ctr.matched.Negate()
+	count := ctr.batchRowCount - int64(ctr.rightMatched.Count())
+	ctr.rightMatched.Negate()
 	sels := make([]int32, 0, count)
-	itr := ctr.matched.Iterator()
+	itr := ctr.rightMatched.Iterator()
 	for itr.HasNext() {
 		r := itr.Next()
 		sels = append(sels, int32(r))
@@ -343,7 +341,7 @@ func (ctr *container) probe(ap *HashJoin, proc *process.Process, result *vm.Call
 
 				if ap.IsRightJoin {
 					for _, sel := range sels {
-						ctr.matched.Add(uint64(sel))
+						ctr.rightMatched.Add(uint64(sel))
 					}
 				}
 
@@ -358,10 +356,14 @@ func (ctr *container) probe(ap *HashJoin, proc *process.Process, result *vm.Call
 					}
 
 					if ok {
-						ctr.leftRowMatched = true
+						if ap.JoinType == plan.Node_SINGLE && ctr.leftMatched {
+							return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
+						}
+
+						ctr.leftMatched = true
 						ctr.appendOneMatch(ap, proc, int64(row), idx1, idx2)
 						if ap.IsRightJoin {
-							ctr.matched.Add(uint64(sel))
+							ctr.rightMatched.Add(uint64(sel))
 						}
 						rowCount++
 					}
@@ -369,7 +371,7 @@ func (ctr *container) probe(ap *HashJoin, proc *process.Process, result *vm.Call
 			}
 
 			if ap.NonEqCond != nil && len(ctr.sels) == 0 &&
-				!ctr.leftRowMatched && ap.JoinType == plan.Node_LEFT {
+				!ctr.leftMatched && ap.JoinType == plan.Node_LEFT {
 				ctr.appendOneNotMatch(ap, proc, int64(row))
 				rowCount++
 			}
@@ -421,7 +423,7 @@ func (ctr *container) probe(ap *HashJoin, proc *process.Process, result *vm.Call
 						return err
 					}
 					if ap.IsRightJoin {
-						ctr.matched.Add(uint64(idx))
+						ctr.rightMatched.Add(uint64(idx))
 					}
 					rowCount++
 				} else {
@@ -436,7 +438,7 @@ func (ctr *container) probe(ap *HashJoin, proc *process.Process, result *vm.Call
 							return err
 						}
 						if ap.IsRightJoin {
-							ctr.matched.Add(uint64(idx))
+							ctr.rightMatched.Add(uint64(idx))
 						}
 						rowCount++
 					} else if ap.JoinType == plan.Node_LEFT {
@@ -448,7 +450,11 @@ func (ctr *container) probe(ap *HashJoin, proc *process.Process, result *vm.Call
 				}
 			} else {
 				ctr.sels = ctr.mp.GetSels(uint64(idx))
-				ctr.leftRowMatched = false
+				ctr.leftMatched = false
+
+				if ap.JoinType == plan.Node_SINGLE && ap.NonEqCond == nil && len(ctr.sels) > 1 {
+					return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
+				}
 			}
 
 			if len(ctr.sels) > 0 {

@@ -45,7 +45,6 @@ var debugInstructionNames = map[vm.OpType]string{
 	vm.Connector:               "connect",
 	vm.Projection:              "projection",
 	vm.Anti:                    "anti",
-	vm.Single:                  "single",
 	vm.Mark:                    "mark",
 	vm.HashJoin:                "hash join",
 	vm.IndexJoin:               "index join",

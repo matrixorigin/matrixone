@@ -2438,7 +2438,7 @@ func constructShuffleJoinOP(c *Compile, shuffleJoins []*Scope, node, left, right
 
 	currentFirstFlag := c.anal.isFirst
 	switch node.JoinType {
-	case plan.Node_INNER:
+	case plan.Node_INNER, plan.Node_LEFT, plan.Node_RIGHT:
 		for i := range shuffleJoins {
 			op := constructHashJoin(node, leftTypes, rightTypes, c.proc)
 			op.ShuffleIdx = int32(i)
@@ -2495,26 +2495,6 @@ func constructShuffleJoinOP(c *Compile, shuffleJoins []*Scope, node, left, right
 			}
 		}
 
-	case plan.Node_LEFT:
-		for i := range shuffleJoins {
-			op := constructHashJoin(node, leftTypes, rightTypes, c.proc)
-			op.ShuffleIdx = int32(i)
-			if shuffleV2 {
-				op.ShuffleIdx = -1
-			}
-			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-			shuffleJoins[i].setRootOperator(op)
-		}
-	case plan.Node_RIGHT:
-		for i := range shuffleJoins {
-			op := constructHashJoin(node, leftTypes, rightTypes, c.proc)
-			op.ShuffleIdx = int32(i)
-			if shuffleV2 {
-				op.ShuffleIdx = -1
-			}
-			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-			shuffleJoins[i].setRootOperator(op)
-		}
 	case plan.Node_DEDUP:
 		if node.IsRightJoin {
 			for i := range shuffleJoins {
@@ -2702,7 +2682,7 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 		currentFirstFlag := c.anal.isFirst
 		for i := range rs {
 			if isEq {
-				op := constructSingle(node, rightTypes, c.proc)
+				op := constructHashJoin(node, leftTypes, rightTypes, c.proc)
 				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 				rs[i].setRootOperator(op)
 			} else {
