@@ -2321,7 +2321,8 @@ func dropExistsAccount(
 		return b.err
 	}
 
-	err = doDropAccount(ctx, bh, ses, drop)
+	// 传入 inTransaction=true，因为已经在 doRestoreSnapshot 的事务中
+	err = doDropAccount(ctx, bh, ses, drop, true)
 	if err != nil {
 		return
 	}

@@ -3768,7 +3768,13 @@ type dropAccount struct {
 }
 
 // doDropAccount accomplishes the DropAccount statement
-func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dropAccount) (err error) {
+func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dropAccount, inTransaction ...bool) (err error) {
+	// 检查是否已经在事务中（用于 restore 场景，避免破坏外层事务）
+	inTxn := false
+	if len(inTransaction) > 0 {
+		inTxn = inTransaction[0]
+	}
+
 	//set backgroundHandler's default schema
 	if handler, ok := bh.(*backExec); ok {
 		handler.backSes.txnCompileCtx.dbName = catalog.MO_CATALOG
@@ -3823,12 +3829,15 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 	}
 
 	dropAccountFunc := func() (rtnErr error) {
-		rtnErr = bh.Exec(ctx, "begin;")
-		defer func() {
-			rtnErr = finishTxn(ctx, bh, rtnErr)
-		}()
-		if rtnErr != nil {
-			return rtnErr
+		// 如果已经在事务中（如 restore 场景），则不创建新事务
+		if !inTxn {
+			rtnErr = bh.Exec(ctx, "begin;")
+			if rtnErr != nil {
+				return rtnErr
+			}
+			defer func() {
+				rtnErr = finishTxn(ctx, bh, rtnErr)
+			}()
 		}
 
 		//step 0: lock account name first
