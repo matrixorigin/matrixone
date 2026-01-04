@@ -387,4 +387,7 @@ SELECT CAST(18446744073709551614 AS BIGINT UNSIGNED) DIV CAST(2 AS BIGINT UNSIGN
 -- Bug 9: Decimal DIV overflow detection
 -- Test that very large decimal results throw overflow error instead of wrapping
 -- DECIMAL(38,0) can represent up to 10^38, which exceeds int64 range
-SELECT CAST(99999999999999999999 AS DECIMAL(38,0)) DIV CAST(1 AS DECIMAL(38,0));  -- Should error: exceeds BIGINT range
+SELECT CAST(99999999999999999999 AS DECIMAL(38,0)) DIV CAST(1 AS DECIMAL(38,0));  -- Should error: exceeds BIGINT range (positive overflow)
+
+-- Test negative overflow: result < MIN_INT64
+SELECT CAST(-99999999999999999999 AS DECIMAL(38,0)) DIV CAST(1 AS DECIMAL(38,0));  -- Should error: exceeds BIGINT range (negative overflow)
