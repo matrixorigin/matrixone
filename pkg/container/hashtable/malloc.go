@@ -49,6 +49,7 @@ func newAllocator() malloc.Allocator {
 			metric.MallocGauge.WithLabelValues("hashmap-inuse"),
 			metric.MallocCounter.WithLabelValues("hashmap-allocate-objects"),
 			metric.MallocGauge.WithLabelValues("hashmap-inuse-objects"),
+			metric.OffHeapInuseGauge.WithLabelValues("hashmap"),
 		),
 
 		func(inUse uint64) error {

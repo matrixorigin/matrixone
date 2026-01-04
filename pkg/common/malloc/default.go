@@ -89,6 +89,7 @@ func newDefault(delta *Config) (allocator Allocator) {
 				metric.MallocGauge.WithLabelValues("inuse"),
 				metric.MallocCounter.WithLabelValues("allocate-objects"),
 				metric.MallocGauge.WithLabelValues("inuse-objects"),
+				metric.OffHeapInuseGauge.WithLabelValues("default"),
 			)
 		}
 		return allocator
@@ -107,6 +108,7 @@ func newDefault(delta *Config) (allocator Allocator) {
 						metric.MallocGauge.WithLabelValues("inuse"),
 						metric.MallocCounter.WithLabelValues("allocate-objects"),
 						metric.MallocGauge.WithLabelValues("inuse-objects"),
+						metric.OffHeapInuseGauge.WithLabelValues("default"),
 					)
 				}
 				return ret
@@ -127,6 +129,7 @@ func newDefault(delta *Config) (allocator Allocator) {
 						metric.MallocGauge.WithLabelValues("inuse"),
 						metric.MallocCounter.WithLabelValues("allocate-objects"),
 						metric.MallocGauge.WithLabelValues("inuse-objects"),
+						metric.OffHeapInuseGauge.WithLabelValues("default"),
 					)
 				}
 				return ret
@@ -147,6 +150,7 @@ func newDefault(delta *Config) (allocator Allocator) {
 						metric.MallocGauge.WithLabelValues("inuse"),
 						metric.MallocCounter.WithLabelValues("allocate-objects"),
 						metric.MallocGauge.WithLabelValues("inuse-objects"),
+						metric.OffHeapInuseGauge.WithLabelValues("default"),
 					)
 				}
 				return ret

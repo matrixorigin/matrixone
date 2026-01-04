@@ -30,6 +30,8 @@ type MetricsAllocator[U Allocator] struct {
 	inuseBytesGauge        prometheus.Gauge
 	allocateObjectsCounter prometheus.Counter
 	inuseObjectsGauge      prometheus.Gauge
+	// absoluteInuseGauge publishes instantaneous in-use bytes (not deltas). Nil disables reporting.
+	absoluteInuseGauge prometheus.Gauge
 
 	allocateBytes   ShardedCounter[uint64, atomic.Uint64, *atomic.Uint64]
 	inuseBytes      ShardedCounter[int64, atomic.Int64, *atomic.Int64]
@@ -37,6 +39,8 @@ type MetricsAllocator[U Allocator] struct {
 	inuseObjects    ShardedCounter[int64, atomic.Int64, *atomic.Int64]
 
 	updating atomic.Bool
+	// currentInuse mirrors allocator in-use bytes and feeds absoluteInuseGauge.
+	currentInuse atomic.Int64
 }
 
 type metricsDeallocatorArgs struct {
@@ -53,6 +57,7 @@ func NewMetricsAllocator[U Allocator](
 	inuseBytesGauge prometheus.Gauge,
 	allocateObjectsCounter prometheus.Counter,
 	inuseObjectsGauge prometheus.Gauge,
+	absoluteInuseGauge prometheus.Gauge,
 ) *MetricsAllocator[U] {
 
 	var ret *MetricsAllocator[U]
@@ -63,10 +68,12 @@ func NewMetricsAllocator[U Allocator](
 		inuseBytesGauge:        inuseBytesGauge,
 		allocateObjectsCounter: allocateObjectsCounter,
 		inuseObjectsGauge:      inuseObjectsGauge,
+		absoluteInuseGauge:     absoluteInuseGauge,
 
 		deallocatorPool: NewClosureDeallocatorPool(
 			func(hints Hints, args *metricsDeallocatorArgs) {
 				ret.inuseBytes.Add(-int64(args.size))
+				ret.currentInuse.Add(-int64(args.size))
 				ret.inuseObjects.Add(-1)
 				ret.triggerUpdate()
 			},
@@ -95,6 +102,7 @@ func (m *MetricsAllocator[U]) Allocate(size uint64, hints Hints) ([]byte, Deallo
 	}
 	m.allocateBytes.Add(size)
 	m.inuseBytes.Add(int64(size))
+	m.currentInuse.Add(int64(size))
 	m.allocateObjects.Add(1)
 	m.inuseObjects.Add(1)
 	m.triggerUpdate()
@@ -143,6 +151,10 @@ func (m *MetricsAllocator[U]) triggerUpdate() {
 					n += v.Swap(0)
 				})
 				m.inuseObjectsGauge.Add(float64(n))
+			}
+
+			if m.absoluteInuseGauge != nil {
+				m.absoluteInuseGauge.Set(float64(m.currentInuse.Load()))
 			}
 
 			m.updating.Store(false)

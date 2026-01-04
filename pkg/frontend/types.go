@@ -436,6 +436,7 @@ var baseSessionAllocator = sync.OnceValue(func() malloc.Allocator {
 		metric.MallocGauge.WithLabelValues("session-inuse"),
 		metric.MallocCounter.WithLabelValues("session-allocate-objects"),
 		metric.MallocGauge.WithLabelValues("session-inuse-objects"),
+		metric.OffHeapInuseGauge.WithLabelValues("session"),
 	)
 	return allocator
 })
