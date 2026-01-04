@@ -647,6 +647,8 @@ func getMinMaxValueByFloat64(typ types.Type, buf []byte) float64 {
 		return float64(types.DecodeTimestamp(buf))
 	case types.T_datetime:
 		return float64(types.DecodeDatetime(buf))
+	case types.T_year:
+		return float64(types.DecodeMoYear(buf))
 	case types.T_decimal64:
 		// Fix: Use Decimal64ToFloat64 to handle negative values correctly
 		dec := types.DecodeDecimal64(buf)
@@ -711,7 +713,7 @@ func collectTableStats(
 				info.ColumnSize[idx] = int64(columnMeta.Location().OriginSize())
 				if info.ColumnNDVs[idx] > 100 || info.ColumnNDVs[idx] > 0.1*float64(meta.BlockHeader().Rows()) {
 					switch info.DataTypes[idx].Oid {
-					case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_time, types.T_timestamp, types.T_date, types.T_datetime, types.T_decimal64, types.T_decimal128:
+					case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_time, types.T_timestamp, types.T_date, types.T_datetime, types.T_year, types.T_decimal64, types.T_decimal128:
 						info.ShuffleRanges[idx] = plan2.NewShuffleRange(false)
 						if info.ColumnZMs[idx].IsInited() {
 							minValue := getMinMaxValueByFloat64(info.DataTypes[idx], info.ColumnZMs[idx].GetMinBuf())
@@ -776,7 +778,7 @@ func collectTableStats(
 					// Use accumulated NDV and total row count to decide if ShuffleRanges should be created
 					if info.ColumnNDVs[idx] > 100 || info.ColumnNDVs[idx] > 0.1*float64(info.TableRowCount) {
 						switch info.DataTypes[idx].Oid {
-						case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_time, types.T_timestamp, types.T_date, types.T_datetime, types.T_decimal64, types.T_decimal128:
+						case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_time, types.T_timestamp, types.T_date, types.T_datetime, types.T_year, types.T_decimal64, types.T_decimal128:
 							info.ShuffleRanges[idx] = plan2.NewShuffleRange(false)
 							// Initialize with accumulated ZoneMap if available
 							if info.ColumnZMs[idx].IsInited() {
@@ -804,7 +806,7 @@ func collectTableStats(
 				// Update existing ShuffleRanges with current object's data
 				if info.ShuffleRanges[idx] != nil {
 					switch info.DataTypes[idx].Oid {
-					case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_time, types.T_timestamp, types.T_date, types.T_datetime, types.T_decimal64, types.T_decimal128:
+					case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_time, types.T_timestamp, types.T_date, types.T_datetime, types.T_year, types.T_decimal64, types.T_decimal128:
 						minValue := getMinMaxValueByFloat64(info.DataTypes[idx], zoneMap.GetMinBuf())
 						maxValue := getMinMaxValueByFloat64(info.DataTypes[idx], zoneMap.GetMaxBuf())
 						info.ShuffleRanges[idx].Update(minValue, maxValue, int64(meta.BlockHeader().Rows()), int64(columnMeta.NullCnt()))

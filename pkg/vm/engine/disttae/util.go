@@ -146,6 +146,11 @@ func LinearSearchOffsetByValFactory(pk *vector.Vector) func(*vector.Vector) []in
 		for _, v := range vs {
 			mp[v] = true
 		}
+	case types.T_year:
+		vs := vector.MustFixedColNoTypeCheck[types.MoYear](pk)
+		for _, v := range vs {
+			mp[v] = true
+		}
 	case types.T_TS:
 		vs := vector.MustFixedColNoTypeCheck[types.TS](pk)
 		for _, v := range vs {
@@ -328,6 +333,13 @@ func LinearSearchOffsetByValFactory(pk *vector.Vector) func(*vector.Vector) []in
 			}
 		case types.T_enum:
 			vs := vector.MustFixedColNoTypeCheck[types.Enum](vec)
+			for i, v := range vs {
+				if mp[v] {
+					sels = append(sels, int64(i))
+				}
+			}
+		case types.T_year:
+			vs := vector.MustFixedColNoTypeCheck[types.MoYear](vec)
 			for i, v := range vs {
 				if mp[v] {
 					sels = append(sels, int64(i))
