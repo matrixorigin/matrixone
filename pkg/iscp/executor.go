@@ -337,6 +337,9 @@ func (exec *ISCPTaskExecutor) initState() (err error) {
 	if txnOp != nil {
 		defer txnOp.Commit(ctxWithTimeout)
 	}
+	if err != nil {
+		return
+	}
 	err = exec.txnEngine.New(ctxWithTimeout, txnOp)
 	if err != nil {
 		return
@@ -567,6 +570,9 @@ func (exec *ISCPTaskExecutor) applyISCPLog(ctx context.Context, from, to types.T
 		return
 	}
 	rel, err := db.Relation(ctx, MOISCPLogTableName, nil)
+	if err != nil {
+		return
+	}
 
 	tid := rel.GetTableID(ctx)
 	// injection is for ut - simulate table id change
