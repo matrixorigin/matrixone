@@ -34,7 +34,8 @@ type SimpleCAllocator struct {
 	inuseBytesGauge        prometheus.Gauge
 	allocateObjectsCounter prometheus.Counter
 	inuseObjectsGauge      prometheus.Gauge
-	absoluteInuseGauge     prometheus.Gauge
+	// absoluteInuseGauge publishes instantaneous in-use bytes (not deltas). Nil disables reporting.
+	absoluteInuseGauge prometheus.Gauge
 
 	// it is not clear if these shared counters are overengineering.
 	allocateBytes   *ShardedCounter[uint64, atomic.Uint64, *atomic.Uint64]
@@ -42,7 +43,8 @@ type SimpleCAllocator struct {
 	allocateObjects *ShardedCounter[uint64, atomic.Uint64, *atomic.Uint64]
 	inuseObjects    *ShardedCounter[int64, atomic.Int64, *atomic.Int64]
 	updating        atomic.Bool
-	currentInuse    atomic.Int64
+	// currentInuse mirrors allocator in-use bytes and feeds absoluteInuseGauge.
+	currentInuse atomic.Int64
 }
 
 func NewSimpleCAllocator(

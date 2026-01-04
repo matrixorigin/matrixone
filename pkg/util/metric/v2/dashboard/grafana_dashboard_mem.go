@@ -135,5 +135,24 @@ func (c *DashboardCreator) initMallocRow() dashboard.Option {
 		makeGraph("session-"),
 		makeGraph("hashmap-"),
 		makeGraph("mpool-"),
+		c.withMultiGraph(
+			"offheap inuse (absolute, by component)",
+			6,
+			[]string{
+				`sum(` + c.getMetricWithFilter("mo_mem_offheap_inuse_bytes", `type="mpool"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_mem_offheap_inuse_bytes", `type="memory-cache"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_mem_offheap_inuse_bytes", `type="io"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_mem_offheap_inuse_bytes", `type="session"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_mem_offheap_inuse_bytes", `type="hashmap"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_mem_offheap_inuse_bytes", ``) + `)`,
+			},
+			[]string{
+				"mpool",
+				"memory-cache",
+				"io",
+				"session",
+				"hashmap",
+				"total",
+			}),
 	)
 }

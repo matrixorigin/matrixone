@@ -89,12 +89,13 @@ var (
 		[]string{"type"},
 	)
 
-	OffHeapInuseGauge = prometheus.NewGauge(
+	OffHeapInuseGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "mo",
 			Subsystem: "mem",
 			Name:      "offheap_inuse_bytes",
-			Help:      "Current off-heap bytes allocated via C malloc/calloc/realloc (SimpleCAllocator)",
+			Help:      "Current off-heap bytes allocated via C malloc/calloc/realloc; labeled by component (mpool, memory-cache, io, session, hashmap, default, etc.)",
 		},
+		[]string{"type"},
 	)
 )
