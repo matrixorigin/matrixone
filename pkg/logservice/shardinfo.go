@@ -56,7 +56,7 @@ func GetShardInfo(
 		respPool,
 		defaultMaxMessageSize,
 		false,
-		0,
+		time.Second*10,
 		"GetShardInfo",
 	)
 	if err != nil {
