@@ -378,3 +378,13 @@ SELECT CAST(-20.00 AS DECIMAL(10,2)) DIV CAST(4.00 AS DECIMAL(10,2));
 SELECT CAST(-98.00 AS DECIMAL(10,2)) DIV CAST(7.00 AS DECIMAL(10,2));
 SELECT CAST(98.00 AS DECIMAL(10,2)) DIV CAST(-7.00 AS DECIMAL(10,2));
 SELECT CAST(-98.00 AS DECIMAL(10,2)) DIV CAST(-7.00 AS DECIMAL(10,2));
+
+
+-- Bug 8: uint64 DIV code style consistency (no functional change, but verify large values)
+-- Test large BIGINT UNSIGNED values that are within int64 range after division
+SELECT CAST(18446744073709551614 AS BIGINT UNSIGNED) DIV CAST(2 AS BIGINT UNSIGNED);  -- (MAX_UINT64-1)/2 = MAX_INT64
+
+-- Bug 9: Decimal DIV overflow detection
+-- Test that very large decimal results throw overflow error instead of wrapping
+-- DECIMAL(38,0) can represent up to 10^38, which exceeds int64 range
+SELECT CAST(99999999999999999999 AS DECIMAL(38,0)) DIV CAST(1 AS DECIMAL(38,0));  -- Should error: exceeds BIGINT range

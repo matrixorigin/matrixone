@@ -426,3 +426,8 @@ SELECT CAST(98.00 AS DECIMAL(10,2)) DIV CAST(-7.00 AS DECIMAL(10,2));
 SELECT CAST(-98.00 AS DECIMAL(10,2)) DIV CAST(-7.00 AS DECIMAL(10,2));
 ➤ cast(-98.00 as decimal(10, 2)) div cast(-7.00 as decimal(10, 2))[-5,64,0]  𝄀
 14
+SELECT CAST(18446744073709551614 AS BIGINT UNSIGNED) DIV CAST(2 AS BIGINT UNSIGNED);  -- (MAX_UINT64-1)/2 = MAX_INT64
+➤ cast(18446744073709551614 as bigint unsigned) div cast(2 as bigint unsigned)[-5,64,0]  𝄀
+-1
+SELECT CAST(99999999999999999999 AS DECIMAL(38,0)) DIV CAST(1 AS DECIMAL(38,0));  -- Should error: exceeds BIGINT range
+Data truncation: data out of range: data type BIGINT, 

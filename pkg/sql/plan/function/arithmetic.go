@@ -651,7 +651,7 @@ func integerDivUnsigned(parameters []*vector.Vector, result vector.FunctionResul
 				}
 				rsNull.Add(i)
 			} else {
-				rss[i] = int64(v1 / v2)
+				rss[i] = int64(v1) / int64(v2)
 			}
 		}
 	}
@@ -1503,6 +1503,36 @@ func decimalIntegerDiv[T templateDec](parameters []*vector.Vector, result vector
 			divResult, err = divResult.Scale(-resultScale)
 			if err != nil {
 				return err
+			}
+		}
+
+		// Check if result fits in int64 range before extraction
+		// int64 range: -9223372036854775808 to 9223372036854775807
+		// For positive: B64_127 must be 0, B0_63 must be <= MAX_INT64
+		// For negative: B64_127 must be all 1s (sign extension), and value must be >= MIN_INT64
+		if divResult.Sign() {
+			// Negative number in two's complement
+			// Upper 64 bits must be all 1s for proper sign extension
+			if divResult.B64_127 != ^uint64(0) {
+				return moerr.NewOutOfRangeNoCtx("BIGINT", "")
+			}
+			// For negative numbers, we need to check if it's less than MIN_INT64
+			// MIN_INT64 in two's complement is 0x8000000000000000 (as positive) or -9223372036854775808
+			// Any negative number with B0_63 < 0x8000000000000000 is valid (closer to zero)
+			// Any negative number with B0_63 > 0x8000000000000000 is also valid (more negative but still in range)
+			// Only B0_63 < (^0x8000000000000000 + 1) would be out of range, but that's impossible with B64_127 = all 1s
+			// So actually, if B64_127 is all 1s, any B0_63 value represents a valid int64
+			// No additional check needed for negative numbers
+		} else {
+			// Positive number: upper bits should all be 0
+			// and lower 64 bits should not exceed MAX_INT64
+			if divResult.B64_127 != 0 {
+				return moerr.NewOutOfRangeNoCtx("BIGINT", "")
+			}
+			// Check if value exceeds MAX_INT64
+			// MAX_INT64 = 9223372036854775807 = 0x7FFFFFFFFFFFFFFF
+			if divResult.B0_63 > 0x7FFFFFFFFFFFFFFF {
+				return moerr.NewOutOfRangeNoCtx("BIGINT", "")
 			}
 		}
 

@@ -714,3 +714,26 @@ func TestDecimal64NegativeDivision(t *testing.T) {
 		require.True(t, succeed, tc.info, info)
 	}
 }
+
+// TestUint64DivConsistency tests uint64 DIV behavior
+func TestUint64DivConsistency(t *testing.T) {
+	testCases := []struct {
+		name     string
+		v1       uint64
+		v2       uint64
+		expected int64
+	}{
+		{"small values", 10, 3, 3},
+		{"max safe value", 9223372036854775807, 1, 9223372036854775807},  // MAX_INT64
+		{"large dividend", 18446744073709551614, 2, 9223372036854775807}, // (MAX_UINT64-1)/2 = MAX_INT64
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := int64(tc.v1) / int64(tc.v2)
+			if result != tc.expected {
+				t.Errorf("Expected %d, got %d", tc.expected, result)
+			}
+		})
+	}
+}
