@@ -567,10 +567,10 @@ func TestValueWindowExec_VariousTypes(t *testing.T) {
 	defer mp.Free(nil)
 
 	testCases := []struct {
-		name    string
-		typ     types.Type
-		values  interface{}
-		nulls   []bool
+		name   string
+		typ    types.Type
+		values interface{}
+		nulls  []bool
 	}{
 		{"bool", types.T_bool.ToType(), []bool{true, false, true}, nil},
 		{"int8", types.T_int8.ToType(), []int8{1, 2, 3}, nil},
@@ -978,7 +978,6 @@ func TestValueWindowExec_MoreTypes(t *testing.T) {
 		exec.Free()
 	})
 }
-
 
 // TestValueWindowExec_InvalidAggID tests Flush with invalid aggID
 func TestValueWindowExec_InvalidAggID(t *testing.T) {
