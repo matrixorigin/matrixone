@@ -447,6 +447,8 @@ func getNonNullValue(col *vector.Vector, row uint32) any {
 		return vector.GetFixedAtNoTypeCheck[types.Timestamp](col, int(row))
 	case types.T_enum:
 		return vector.GetFixedAtNoTypeCheck[types.Enum](col, int(row))
+	case types.T_year:
+		return vector.GetFixedAtNoTypeCheck[types.MoYear](col, int(row))
 	case types.T_TS:
 		return vector.GetFixedAtNoTypeCheck[types.TS](col, int(row))
 	case types.T_Rowid:

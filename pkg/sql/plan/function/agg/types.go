@@ -28,5 +28,5 @@ type numericWithMaxScale interface {
 }
 
 type canCompare interface {
-	constraints.Integer | constraints.Float | types.Date | types.Datetime | types.Timestamp
+	constraints.Integer | constraints.Float | types.Date | types.Datetime | types.Timestamp | types.Time | types.MoYear
 }

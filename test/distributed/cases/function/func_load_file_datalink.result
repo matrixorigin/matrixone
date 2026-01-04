@@ -105,7 +105,7 @@ invalid argument operator cast, bad value [TIMESTAMP DATALINK]
 select cast(cast('file://xxx' as time) as datalink);
 invalid argument operator cast, bad value [TIME DATALINK]
 select cast(cast('file://xxx' as year) as datalink);
-data type: 'year' is not yet implemented
+invalid argument operator cast, bad value [YEAR DATALINK]
 select cast(cast('file://xxx' as tinyint) as datalink);
 invalid argument operator cast, bad value [TINYINT DATALINK]
 select cast(cast('file://xxx' as smallint) as datalink);

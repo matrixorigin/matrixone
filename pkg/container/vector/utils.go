@@ -390,6 +390,8 @@ func typeCompatible[T any](typ types.Type) bool {
 		return typ.Oid == types.T_Blockid
 	case types.Enum:
 		return typ.Oid == types.T_enum
+	case types.MoYear:
+		return typ.Oid == types.T_year
 	}
 	return false
 }
