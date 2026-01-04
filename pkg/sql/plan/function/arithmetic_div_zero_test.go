@@ -24,6 +24,130 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestIntegerDivSmallTypes tests DIV operator with INT8/INT16/INT32/UINT8/UINT16/UINT32
+func TestIntegerDivSmallTypes(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	testCases := []tcTemp{
+		// INT8
+		{
+			info: "INT8: 10 DIV 3 = 3",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int8.ToType(), []int8{10}, []bool{false}),
+				NewFunctionTestInput(types.T_int8.ToType(), []int8{3}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{3}, []bool{false}),
+		},
+		{
+			info: "INT8: 10 DIV 0 = NULL",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int8.ToType(), []int8{10}, []bool{false}),
+				NewFunctionTestInput(types.T_int8.ToType(), []int8{0}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}),
+		},
+		{
+			info: "INT8: NULL DIV 3 = NULL",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int8.ToType(), []int8{0}, []bool{true}),
+				NewFunctionTestInput(types.T_int8.ToType(), []int8{3}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}),
+		},
+		// INT16
+		{
+			info: "INT16: 100 DIV 7 = 14",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int16.ToType(), []int16{100}, []bool{false}),
+				NewFunctionTestInput(types.T_int16.ToType(), []int16{7}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{14}, []bool{false}),
+		},
+		{
+			info: "INT16: 100 DIV 0 = NULL",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int16.ToType(), []int16{100}, []bool{false}),
+				NewFunctionTestInput(types.T_int16.ToType(), []int16{0}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}),
+		},
+		// INT32
+		{
+			info: "INT32: 1000 DIV 13 = 76",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int32.ToType(), []int32{1000}, []bool{false}),
+				NewFunctionTestInput(types.T_int32.ToType(), []int32{13}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{76}, []bool{false}),
+		},
+		{
+			info: "INT32: 1000 DIV 0 = NULL",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int32.ToType(), []int32{1000}, []bool{false}),
+				NewFunctionTestInput(types.T_int32.ToType(), []int32{0}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}),
+		},
+		// UINT8
+		{
+			info: "UINT8: 20 DIV 3 = 6",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_uint8.ToType(), []uint8{20}, []bool{false}),
+				NewFunctionTestInput(types.T_uint8.ToType(), []uint8{3}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{6}, []bool{false}),
+		},
+		{
+			info: "UINT8: 20 DIV 0 = NULL",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_uint8.ToType(), []uint8{20}, []bool{false}),
+				NewFunctionTestInput(types.T_uint8.ToType(), []uint8{0}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}),
+		},
+		// UINT16
+		{
+			info: "UINT16: 200 DIV 9 = 22",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_uint16.ToType(), []uint16{200}, []bool{false}),
+				NewFunctionTestInput(types.T_uint16.ToType(), []uint16{9}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{22}, []bool{false}),
+		},
+		{
+			info: "UINT16: 200 DIV 0 = NULL",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_uint16.ToType(), []uint16{200}, []bool{false}),
+				NewFunctionTestInput(types.T_uint16.ToType(), []uint16{0}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}),
+		},
+		// UINT32
+		{
+			info: "UINT32: 2000 DIV 17 = 117",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_uint32.ToType(), []uint32{2000}, []bool{false}),
+				NewFunctionTestInput(types.T_uint32.ToType(), []uint32{17}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{117}, []bool{false}),
+		},
+		{
+			info: "UINT32: 2000 DIV 0 = NULL",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_uint32.ToType(), []uint32{2000}, []bool{false}),
+				NewFunctionTestInput(types.T_uint32.ToType(), []uint32{0}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}),
+		},
+	}
+
+	for _, tc := range testCases {
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, integerDivFn)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+}
+
 // Test division by zero returns NULL
 func TestDivisionByZeroReturnsNull(t *testing.T) {
 	proc := testutil.NewProcess(t)
@@ -105,7 +229,7 @@ func TestIntegerDivOperator(t *testing.T) {
 		require.True(t, succeed, tc.info, info)
 	}
 
-	// Unsigned integer DIV
+	// Unsigned integer DIV (returns int64, not uint64)
 	{
 		tc := tcTemp{
 			info: "10 DIV 3 = 3 (unsigned)",
@@ -115,8 +239,8 @@ func TestIntegerDivOperator(t *testing.T) {
 				NewFunctionTestInput(types.T_uint64.ToType(),
 					[]uint64{3, 7, 9}, []bool{false, false, false}),
 			},
-			expect: NewFunctionTestResult(types.T_uint64.ToType(), false,
-				[]uint64{3, 2, 11}, []bool{false, false, false}),
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{3, 2, 11}, []bool{false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, integerDivFn)
 		succeed, info := tcc.Run()
@@ -238,7 +362,7 @@ func TestIntegerDivBoundary(t *testing.T) {
 		require.True(t, succeed, tc.info, info)
 	}
 
-	// UINT64 max
+	// UINT64 max (returns int64, not uint64)
 	{
 		tc := tcTemp{
 			info: "UINT64 boundary: MAX_UINT64 DIV 1",
@@ -248,8 +372,8 @@ func TestIntegerDivBoundary(t *testing.T) {
 				NewFunctionTestInput(types.T_uint64.ToType(),
 					[]uint64{1}, []bool{false}),
 			},
-			expect: NewFunctionTestResult(types.T_uint64.ToType(), false,
-				[]uint64{18446744073709551615}, []bool{false}),
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{-1}, []bool{false}), // Overflow to int64
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, integerDivFn)
 		succeed, info := tcc.Run()
@@ -355,7 +479,6 @@ func TestIntegerDivNullHandling(t *testing.T) {
 		require.True(t, succeed, tc.info, info)
 	}
 }
-
 
 // TestDivisionByZeroStrictMode tests that the cache is properly initialized and reset
 func TestDivisionByZeroStrictMode(t *testing.T) {

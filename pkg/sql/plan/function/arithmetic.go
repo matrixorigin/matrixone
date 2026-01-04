@@ -132,7 +132,6 @@ func integerDivOperatorSupports(typ1, typ2 types.Type) bool {
 	}
 }
 
-
 func modOperatorSupports(typ1, typ2 types.Type) bool {
 	if typ1.Oid != typ2.Oid {
 		return false
@@ -505,8 +504,69 @@ func integerDivFn(parameters []*vector.Vector, result vector.FunctionResultWrapp
 
 // integerDivSigned handles DIV for signed integer types
 func integerDivSigned(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	p1 := vector.GenerateFunctionFixedTypeParameter[int64](parameters[0])
-	p2 := vector.GenerateFunctionFixedTypeParameter[int64](parameters[1])
+	if length == 0 {
+		return nil
+	}
+
+	paramType := parameters[0].GetType()
+
+	// Convert to int64 for processing
+	var p1Values, p2Values []int64
+	var p1Nulls, p2Nulls *nulls.Nulls
+
+	switch paramType.Oid {
+	case types.T_int8:
+		v1 := vector.MustFixedColWithTypeCheck[int8](parameters[0])
+		v2 := vector.MustFixedColWithTypeCheck[int8](parameters[1])
+		if len(v1) == 0 || len(v2) == 0 {
+			return nil
+		}
+		p1Values = make([]int64, length)
+		p2Values = make([]int64, length)
+		for i := 0; i < length; i++ {
+			p1Values[i] = int64(v1[i])
+			p2Values[i] = int64(v2[i])
+		}
+		p1Nulls = parameters[0].GetNulls()
+		p2Nulls = parameters[1].GetNulls()
+	case types.T_int16:
+		v1 := vector.MustFixedColWithTypeCheck[int16](parameters[0])
+		v2 := vector.MustFixedColWithTypeCheck[int16](parameters[1])
+		if len(v1) == 0 || len(v2) == 0 {
+			return nil
+		}
+		p1Values = make([]int64, length)
+		p2Values = make([]int64, length)
+		for i := 0; i < length; i++ {
+			p1Values[i] = int64(v1[i])
+			p2Values[i] = int64(v2[i])
+		}
+		p1Nulls = parameters[0].GetNulls()
+		p2Nulls = parameters[1].GetNulls()
+	case types.T_int32:
+		v1 := vector.MustFixedColWithTypeCheck[int32](parameters[0])
+		v2 := vector.MustFixedColWithTypeCheck[int32](parameters[1])
+		if len(v1) == 0 || len(v2) == 0 {
+			return nil
+		}
+		p1Values = make([]int64, length)
+		p2Values = make([]int64, length)
+		for i := 0; i < length; i++ {
+			p1Values[i] = int64(v1[i])
+			p2Values[i] = int64(v2[i])
+		}
+		p1Nulls = parameters[0].GetNulls()
+		p2Nulls = parameters[1].GetNulls()
+	case types.T_int64:
+		p1Values = vector.MustFixedColWithTypeCheck[int64](parameters[0])
+		p2Values = vector.MustFixedColWithTypeCheck[int64](parameters[1])
+		if len(p1Values) == 0 || len(p2Values) == 0 {
+			return nil
+		}
+		p1Nulls = parameters[0].GetNulls()
+		p2Nulls = parameters[1].GetNulls()
+	}
+
 	rs := vector.MustFunctionResult[int64](result)
 	rsVec := rs.GetResultVector()
 	rss := vector.MustFixedColNoTypeCheck[int64](rsVec)
@@ -514,8 +574,11 @@ func integerDivSigned(parameters []*vector.Vector, result vector.FunctionResultW
 
 	shouldError := checkDivisionByZeroBehavior(proc, selectList)
 	for i := uint64(0); i < uint64(length); i++ {
-		v1, null1 := p1.GetValue(i)
-		v2, null2 := p2.GetValue(i)
+		null1 := p1Nulls != nil && p1Nulls.Contains(i)
+		null2 := p2Nulls != nil && p2Nulls.Contains(i)
+		v1 := p1Values[i]
+		v2 := p2Values[i]
+
 		if null1 || null2 || v2 == 0 {
 			if v2 == 0 && !null2 {
 				if shouldError {
@@ -532,17 +595,82 @@ func integerDivSigned(parameters []*vector.Vector, result vector.FunctionResultW
 
 // integerDivUnsigned handles DIV for unsigned integer types
 func integerDivUnsigned(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	p1 := vector.GenerateFunctionFixedTypeParameter[uint64](parameters[0])
-	p2 := vector.GenerateFunctionFixedTypeParameter[uint64](parameters[1])
-	rs := vector.MustFunctionResult[uint64](result)
+	if length == 0 {
+		return nil
+	}
+
+	paramType := parameters[0].GetType()
+
+	// Convert to uint64 for processing, but result is int64
+	var p1Values, p2Values []uint64
+	var p1Nulls, p2Nulls *nulls.Nulls
+
+	switch paramType.Oid {
+	case types.T_uint8:
+		v1 := vector.MustFixedColWithTypeCheck[uint8](parameters[0])
+		v2 := vector.MustFixedColWithTypeCheck[uint8](parameters[1])
+		if len(v1) == 0 || len(v2) == 0 {
+			return nil
+		}
+		p1Values = make([]uint64, length)
+		p2Values = make([]uint64, length)
+		for i := 0; i < length; i++ {
+			p1Values[i] = uint64(v1[i])
+			p2Values[i] = uint64(v2[i])
+		}
+		p1Nulls = parameters[0].GetNulls()
+		p2Nulls = parameters[1].GetNulls()
+	case types.T_uint16:
+		v1 := vector.MustFixedColWithTypeCheck[uint16](parameters[0])
+		v2 := vector.MustFixedColWithTypeCheck[uint16](parameters[1])
+		if len(v1) == 0 || len(v2) == 0 {
+			return nil
+		}
+		p1Values = make([]uint64, length)
+		p2Values = make([]uint64, length)
+		for i := 0; i < length; i++ {
+			p1Values[i] = uint64(v1[i])
+			p2Values[i] = uint64(v2[i])
+		}
+		p1Nulls = parameters[0].GetNulls()
+		p2Nulls = parameters[1].GetNulls()
+	case types.T_uint32:
+		v1 := vector.MustFixedColWithTypeCheck[uint32](parameters[0])
+		v2 := vector.MustFixedColWithTypeCheck[uint32](parameters[1])
+		if len(v1) == 0 || len(v2) == 0 {
+			return nil
+		}
+		p1Values = make([]uint64, length)
+		p2Values = make([]uint64, length)
+		for i := 0; i < length; i++ {
+			p1Values[i] = uint64(v1[i])
+			p2Values[i] = uint64(v2[i])
+		}
+		p1Nulls = parameters[0].GetNulls()
+		p2Nulls = parameters[1].GetNulls()
+	case types.T_uint64:
+		p1Values = vector.MustFixedColWithTypeCheck[uint64](parameters[0])
+		p2Values = vector.MustFixedColWithTypeCheck[uint64](parameters[1])
+		if len(p1Values) == 0 || len(p2Values) == 0 {
+			return nil
+		}
+		p1Nulls = parameters[0].GetNulls()
+		p2Nulls = parameters[1].GetNulls()
+	}
+
+	// DIV always returns int64, even for unsigned inputs
+	rs := vector.MustFunctionResult[int64](result)
 	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedColNoTypeCheck[uint64](rsVec)
+	rss := vector.MustFixedColNoTypeCheck[int64](rsVec)
 	rsNull := rsVec.GetNulls()
 
 	shouldError := checkDivisionByZeroBehavior(proc, selectList)
 	for i := uint64(0); i < uint64(length); i++ {
-		v1, null1 := p1.GetValue(i)
-		v2, null2 := p2.GetValue(i)
+		null1 := p1Nulls != nil && p1Nulls.Contains(i)
+		null2 := p2Nulls != nil && p2Nulls.Contains(i)
+		v1 := p1Values[i]
+		v2 := p2Values[i]
+
 		if null1 || null2 || v2 == 0 {
 			if v2 == 0 && !null2 {
 				if shouldError {
@@ -551,7 +679,7 @@ func integerDivUnsigned(parameters []*vector.Vector, result vector.FunctionResul
 			}
 			rsNull.Add(i)
 		} else {
-			rss[i] = v1 / v2
+			rss[i] = int64(v1 / v2)
 		}
 	}
 	return nil
@@ -1402,7 +1530,7 @@ func decimalIntegerDiv[T templateDec](parameters []*vector.Vector, result vector
 				return err
 			}
 		}
-		
+
 		// Extract integer value
 		// Decimal128 stores value as 128-bit two's complement
 		// For positive: B64_127=0, value in B0_63

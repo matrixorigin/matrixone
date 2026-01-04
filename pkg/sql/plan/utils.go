@@ -1335,6 +1335,68 @@ func ConstantTranspose(expr *plan.Expr, proc *process.Process) (*plan.Expr, erro
 	return newExpr, nil
 }
 
+// isDivisionByZeroConstant checks if the expression is a division/modulo operation
+// where the divisor is a constant zero or either operand is NULL.
+// We skip constant folding for such cases to allow runtime to properly handle them.
+func isDivisionByZeroConstant(fn *plan.Function) bool {
+	fid, _ := function.DecodeOverloadID(fn.Func.GetObj())
+	// Check if it's division (/) or integer division (DIV) or modulo (%)
+	if fid != function.DIV && fid != function.INTEGER_DIV && fid != function.MOD {
+		return false
+	}
+	// Need at least 2 arguments (dividend and divisor)
+	if len(fn.Args) < 2 {
+		return false
+	}
+
+	// Check if either operand is NULL
+	for _, arg := range fn.Args {
+		lit := arg.GetLit()
+		if lit != nil && lit.GetIsnull() {
+			return true
+		}
+	}
+
+	// Check if divisor (second argument) is a constant zero
+	divisor := fn.Args[1]
+	lit := divisor.GetLit()
+	if lit == nil {
+		return false
+	}
+	return isZeroLiteral(lit)
+}
+
+// isZeroLiteral checks if a literal value is zero
+func isZeroLiteral(lit *plan.Literal) bool {
+	switch v := lit.Value.(type) {
+	case *plan.Literal_I8Val:
+		return v.I8Val == 0
+	case *plan.Literal_I16Val:
+		return v.I16Val == 0
+	case *plan.Literal_I32Val:
+		return v.I32Val == 0
+	case *plan.Literal_I64Val:
+		return v.I64Val == 0
+	case *plan.Literal_U8Val:
+		return v.U8Val == 0
+	case *plan.Literal_U16Val:
+		return v.U16Val == 0
+	case *plan.Literal_U32Val:
+		return v.U32Val == 0
+	case *plan.Literal_U64Val:
+		return v.U64Val == 0
+	case *plan.Literal_Fval:
+		return v.Fval == 0
+	case *plan.Literal_Dval:
+		return v.Dval == 0
+	case *plan.Literal_Decimal64Val:
+		return v.Decimal64Val.A == 0
+	case *plan.Literal_Decimal128Val:
+		return v.Decimal128Val.A == 0 && v.Decimal128Val.B == 0
+	}
+	return false
+}
+
 func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varAndParamIsConst bool, foldInExpr bool) (*plan.Expr, error) {
 	if expr.Typ.Id == int32(types.T_interval) {
 		panic(moerr.NewInternalError(proc.Ctx, "not supported type INTERVAL"))
@@ -1411,6 +1473,12 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 		return expr, nil
 	}
 	if !rule.IsConstant(expr, varAndParamIsConst) {
+		return expr, nil
+	}
+
+	// Skip constant folding for division/modulo by zero.
+	// This allows runtime to check sql_mode and statement type for proper error handling.
+	if isDivisionByZeroConstant(fn) {
 		return expr, nil
 	}
 

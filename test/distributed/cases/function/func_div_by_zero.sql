@@ -58,13 +58,9 @@ SET sql_mode = 'ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,N
 SELECT @@sql_mode;
 
 -- These should fail with division by zero error
--- @bvt:issue
 INSERT INTO t_div_test (id, a, b) VALUES (1, 10, 0), (2, 10/0, 5);
--- @bvt:issue
 
--- @bvt:issue
 INSERT INTO t_div_test (id, a, b) VALUES (3, 10 % 0, 5);
--- @bvt:issue
 
 -- Verify no rows were inserted
 SELECT COUNT(*) FROM t_div_test;
@@ -130,13 +126,9 @@ DELETE FROM t_div_test;
 INSERT INTO t_div_test (id, a, b) VALUES (1, 10, 5), (2, 20, 10);
 
 -- Should fail with division by zero error
--- @bvt:issue
 UPDATE t_div_test SET a = 10/0 WHERE id = 1;
--- @bvt:issue
 
--- @bvt:issue
 UPDATE t_div_test SET a = 10 % 0 WHERE id = 1;
--- @bvt:issue
 
 -- Verify no updates occurred
 SELECT id, a, b FROM t_div_test ORDER BY id;
@@ -170,9 +162,7 @@ SELECT CAST(10.5 AS DECIMAL(10,2)) / CAST(0 AS DECIMAL(10,2));
 SELECT CAST(10.5 AS DECIMAL(10,2)) % CAST(0 AS DECIMAL(10,2));
 
 -- INSERT should fail in strict mode
--- @bvt:issue
 INSERT INTO t_div_test (id, c, d) VALUES (1, CAST(10.5 AS DECIMAL(10,2)) / CAST(0 AS DECIMAL(10,2)), 5.0);
--- @bvt:issue
 
 -- INSERT should succeed without strict mode
 SET sql_mode = '';
@@ -193,9 +183,7 @@ SELECT 10.5 / 0.0;
 SELECT 10.5 % 0.0;
 
 -- INSERT should fail in strict mode
--- @bvt:issue
 INSERT INTO t_div_test (id, e, f) VALUES (1, 10.5 / 0.0, 5.0);
--- @bvt:issue
 
 -- INSERT should succeed without strict mode
 SET sql_mode = '';

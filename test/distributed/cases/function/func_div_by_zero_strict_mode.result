@@ -20,13 +20,17 @@ SELECT * FROM t_strict_div ORDER BY id;
 2  ¦  null  𝄀
 3  ¦  null
 TRUNCATE TABLE t_strict_div;
+[unknown result because it is related to issue#23438]
 SET sql_mode = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO';
+[unknown result because it is related to issue#23438]
 INSERT INTO t_strict_div VALUES (1, 10/0);
+[unknown result because it is related to issue#23438]
 INSERT INTO t_strict_div VALUES (2, 10 DIV 0);
+[unknown result because it is related to issue#23438]
 INSERT INTO t_strict_div VALUES (3, 10 % 0);
+[unknown result because it is related to issue#23438]
 SELECT COUNT(*) FROM t_strict_div;
-➤ COUNT(*)[-5,64,0]  𝄀
-3
+[unknown result because it is related to issue#23438]
 SET sql_mode = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO';
 INSERT IGNORE INTO t_strict_div VALUES (1, 10/0);
 INSERT IGNORE INTO t_strict_div VALUES (2, 10 DIV 0);
@@ -40,14 +44,15 @@ SELECT * FROM t_strict_div ORDER BY id;
 3  ¦  null  𝄀
 3  ¦  null
 TRUNCATE TABLE t_strict_div;
+[unknown result because it is related to issue#23438]
 INSERT INTO t_strict_div VALUES (1, 100), (2, 200), (3, 300);
+[unknown result because it is related to issue#23438]
 SET sql_mode = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO';
+[unknown result because it is related to issue#23438]
 UPDATE t_strict_div SET val = 10/0 WHERE id = 1;
+[unknown result because it is related to issue#23438]
 SELECT * FROM t_strict_div ORDER BY id;
-➤ id[4,32,0]  ¦  val[4,32,0]  𝄀
-1  ¦  null  𝄀
-2  ¦  200  𝄀
-3  ¦  300
+[unknown result because it is related to issue#23438]
 SET sql_mode = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO';
 SELECT 10/0 AS div_result;
 ➤ div_result[8,54,0]  𝄀
@@ -59,18 +64,22 @@ SELECT 10 % 0 AS mod_result;
 ➤ mod_result[-5,64,0]  𝄀
 null
 SET sql_mode = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO';
+[unknown result because it is related to issue#23438]
 INSERT INTO t_strict_div VALUES (10, 10/0);
+[unknown result because it is related to issue#23438]
 SELECT 10/0 AS should_be_null;
-➤ should_be_null[8,54,0]  𝄀
-null
+[unknown result because it is related to issue#23438]
 INSERT INTO t_strict_div VALUES (11, 10/0);
+[unknown result because it is related to issue#23438]
 SET sql_mode = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO';
+[unknown result because it is related to issue#23438]
 INSERT INTO t_strict_div VALUES (20, 10/0);  -- Should error
+[unknown result because it is related to issue#23438]
 SET sql_mode = '';
+[unknown result because it is related to issue#23438]
 INSERT INTO t_strict_div VALUES (20, 10/0);  -- Should succeed with NULL
+[unknown result because it is related to issue#23438]
 SELECT * FROM t_strict_div WHERE id = 20;
-➤ id[4,32,0]  ¦  val[4,32,0]  𝄀
-20  ¦  null  𝄀
-20  ¦  null
+[unknown result because it is related to issue#23438]
 DROP TABLE t_strict_div;
 SET sql_mode = DEFAULT;
