@@ -43,14 +43,13 @@ var ConnIDAllocKey = "____server_conn_id"
 
 // MOServer MatrixOne Server
 type MOServer struct {
-	addr        string
-	uaddr       string
-	rm          *RoutineManager
-	readTimeout time.Duration
-	handler     func(*Conn, []byte) error
-	mu          sync.RWMutex
-	wg          sync.WaitGroup
-	running     bool
+	addr    string
+	uaddr   string
+	rm      *RoutineManager
+	handler func(*Conn, []byte) error
+	mu      sync.RWMutex
+	wg      sync.WaitGroup
+	running bool
 
 	pu        *config.ParameterUnit
 	listeners []net.Listener
@@ -455,13 +454,12 @@ func NewMOServer(
 	// TODO asyncFlushBatch
 	unixAddr := pu.SV.GetUnixSocketAddress()
 	mo := &MOServer{
-		addr:        addr,
-		uaddr:       pu.SV.UnixSocketAddress,
-		rm:          rm,
-		readTimeout: pu.SV.SessionTimeout.Duration,
-		pu:          pu,
-		handler:     rm.Handler,
-		service:     service,
+		addr:    addr,
+		uaddr:   pu.SV.UnixSocketAddress,
+		rm:      rm,
+		pu:      pu,
+		handler: rm.Handler,
+		service: service,
 	}
 	listenerTcp, err := net.Listen("tcp", addr)
 	if err != nil {
