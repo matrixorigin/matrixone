@@ -252,6 +252,8 @@ func Test_dropExistsAccount_InRestoreTransaction(t *testing.T) {
 			bh.sql2result[sql] = nil
 		}
 
+		bh.sql2result["show databases;"] = newMrsForSqlForShowDatabases([][]interface{}{})
+
 		bh.sql2result["show tables from mo_catalog;"] = newMrsForShowTables([][]interface{}{})
 
 		sql = fmt.Sprintf(getPubInfoSql, 1) + " order by update_time desc, created_time desc"
@@ -260,7 +262,7 @@ func Test_dropExistsAccount_InRestoreTransaction(t *testing.T) {
 		sql = "select 1 from mo_catalog.mo_columns where att_database = 'mo_catalog' and att_relname = 'mo_subs' and attname = 'sub_account_name'"
 		bh.sql2result[sql] = newMrsForSqlForGetSubs([][]interface{}{{1}})
 
-		sql = getSubsSql
+		sql = getSubsSql + " and sub_account_id = 1"
 		bh.sql2result[sql] = newMrsForSqlForGetSubs([][]interface{}{})
 
 		// Call dropExistsAccount (used in restoreToCluster)
@@ -272,6 +274,7 @@ func Test_dropExistsAccount_InRestoreTransaction(t *testing.T) {
 
 		convey.So(err, convey.ShouldBeNil)
 		// Verify that "begin;" was NOT executed (restore scenario)
-		convey.So(bh.hasExecuted("begin;"), convey.ShouldBeFalse, "dropExistsAccount should not create new transaction during restore")
+		// dropExistsAccount should not create new transaction during restore
+		convey.So(bh.hasExecuted("begin;"), convey.ShouldBeFalse)
 	})
 }

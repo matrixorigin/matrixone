@@ -7168,6 +7168,21 @@ func newMrsForShowTables(rows [][]interface{}) *MysqlResultSet {
 	return mrs
 }
 
+func newMrsForShowDatabases(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col := &MysqlColumn{}
+	col.SetName("Database")
+	col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	mrs.AddColumn(col)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
+
 func Test_doDropAccount(t *testing.T) {
 	convey.Convey("drop account", t, func() {
 		ctrl := gomock.NewController(t)
@@ -7357,7 +7372,10 @@ func Test_doDropAccount_InTransaction(t *testing.T) {
 			bh.sql2result["commit;"] = nil
 			bh.sql2result["rollback;"] = nil
 
-			sql, _ := getSqlForCheckTenant(ctx, "test_acc")
+			sql, _ := getSqlForLockMoAccountNameFormat(ctx, "test_acc")
+			bh.sql2result[sql] = nil
+
+			sql, _ = getSqlForCheckTenant(ctx, "test_acc")
 			mrs := newMrsForGetAllAccounts([][]interface{}{
 				{uint64(1), "test_acc", "open", uint64(1), nil},
 			})
@@ -7380,6 +7398,11 @@ func Test_doDropAccount_InTransaction(t *testing.T) {
 
 			sql = getSubsSql
 			bh.sql2result[sql] = newMrsForSqlForGetSubs([][]interface{}{})
+
+			sql = getSubsSql + " and sub_account_id = 1"
+			bh.sql2result[sql] = newMrsForSqlForGetSubs([][]interface{}{})
+
+			bh.sql2result["show databases;"] = newMrsForShowDatabases([][]interface{}{})
 
 			err := doDropAccount(ses.GetTxnHandler().GetTxnCtx(), bh, ses, &dropAccount{
 				IfExists: stmt.IfExists,
@@ -7418,7 +7441,10 @@ func Test_doDropAccount_InTransaction(t *testing.T) {
 			bh.sql2result["commit;"] = nil
 			bh.sql2result["rollback;"] = nil
 
-			sql, _ := getSqlForCheckTenant(ctx, "test_acc")
+			sql, _ := getSqlForLockMoAccountNameFormat(ctx, "test_acc")
+			bh.sql2result[sql] = nil
+
+			sql, _ = getSqlForCheckTenant(ctx, "test_acc")
 			mrs := newMrsForGetAllAccounts([][]interface{}{
 				{uint64(1), "test_acc", "open", uint64(1), nil},
 			})
@@ -7441,6 +7467,11 @@ func Test_doDropAccount_InTransaction(t *testing.T) {
 
 			sql = getSubsSql
 			bh.sql2result[sql] = newMrsForSqlForGetSubs([][]interface{}{})
+
+			sql = getSubsSql + " and sub_account_id = 1"
+			bh.sql2result[sql] = newMrsForSqlForGetSubs([][]interface{}{})
+
+			bh.sql2result["show databases;"] = newMrsForShowDatabases([][]interface{}{})
 
 			err := doDropAccount(ses.GetTxnHandler().GetTxnCtx(), bh, ses, &dropAccount{
 				IfExists: stmt.IfExists,
