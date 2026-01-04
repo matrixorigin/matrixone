@@ -15,6 +15,9 @@
 package function
 
 import (
+	"strings"
+	"sync/atomic"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -418,7 +421,7 @@ func decimal128ArithArray(parameters []*vector.Vector, result vector.FunctionRes
 	return nil
 }
 
-func decimalArith[T templateDec](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+func decimalArith[T templateDec](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int,
 	arithFn func(v1, v2 T, scale1, scale2 int32) (T, error), selectList *FunctionSelectList) error {
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[T](result)
@@ -455,6 +458,22 @@ func decimalArith[T templateDec](parameters []*vector.Vector, result vector.Func
 		if ifNull {
 			nulls.AddRange(rsNull, 0, uint64(length))
 		} else {
+			// Check for division by zero
+			var isZero bool
+			switch any(v2).(type) {
+			case types.Decimal128:
+				isZero = (any(v2).(types.Decimal128).B0_63 == 0 && any(v2).(types.Decimal128).B64_127 == 0)
+			case types.Decimal64:
+				isZero = (any(v2).(types.Decimal64) == 0)
+			}
+			if isZero {
+				if checkDivisionByZeroBehavior(proc, selectList) {
+					return moerr.NewDivByZeroNoCtx()
+				}
+				// Return NULL (MySQL 8.0 behavior)
+				nulls.AddRange(rsNull, 0, uint64(length))
+				return nil
+			}
 			r, err := arithFn(v1, v2, scale1, scale2)
 			if err != nil {
 				return err
@@ -472,6 +491,7 @@ func decimalArith[T templateDec](parameters []*vector.Vector, result vector.Func
 		if null1 {
 			nulls.AddRange(rsNull, 0, uint64(length))
 		} else {
+			shouldError := checkDivisionByZeroBehavior(proc, selectList)
 			if p2.WithAnyNullValue() || rsAnyNull {
 				nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
 				rowCount := uint64(length)
@@ -480,6 +500,22 @@ func decimalArith[T templateDec](parameters []*vector.Vector, result vector.Func
 						continue
 					}
 					v2, _ := p2.GetValue(i)
+					// Check for division by zero
+					var isZero bool
+					switch any(v2).(type) {
+					case types.Decimal128:
+						isZero = (any(v2).(types.Decimal128).B0_63 == 0 && any(v2).(types.Decimal128).B64_127 == 0)
+					case types.Decimal64:
+						isZero = (any(v2).(types.Decimal64) == 0)
+					}
+					if isZero {
+						if shouldError {
+							return moerr.NewDivByZeroNoCtx()
+						}
+						// Return NULL (MySQL 8.0 behavior)
+						rsNull.Add(i)
+						continue
+					}
 					r, err := arithFn(v1, v2, scale1, scale2)
 					if err != nil {
 						return err
@@ -490,6 +526,22 @@ func decimalArith[T templateDec](parameters []*vector.Vector, result vector.Func
 				rowCount := uint64(length)
 				for i := uint64(0); i < rowCount; i++ {
 					v2, _ := p2.GetValue(i)
+					// Check for division by zero
+					var isZero bool
+					switch any(v2).(type) {
+					case types.Decimal128:
+						isZero = (any(v2).(types.Decimal128).B0_63 == 0 && any(v2).(types.Decimal128).B64_127 == 0)
+					case types.Decimal64:
+						isZero = (any(v2).(types.Decimal64) == 0)
+					}
+					if isZero {
+						if shouldError {
+							return moerr.NewDivByZeroNoCtx()
+						}
+						// Return NULL (MySQL 8.0 behavior)
+						rsNull.Add(i)
+						continue
+					}
 					r, err := arithFn(v1, v2, scale1, scale2)
 					if err != nil {
 						return err
@@ -506,6 +558,22 @@ func decimalArith[T templateDec](parameters []*vector.Vector, result vector.Func
 		if null2 {
 			nulls.AddRange(rsNull, 0, uint64(length))
 		} else {
+			// Check for division by zero
+			var isZero bool
+			switch any(v2).(type) {
+			case types.Decimal128:
+				isZero = (any(v2).(types.Decimal128).B0_63 == 0 && any(v2).(types.Decimal128).B64_127 == 0)
+			case types.Decimal64:
+				isZero = (any(v2).(types.Decimal64) == 0)
+			}
+			if isZero {
+				if checkDivisionByZeroBehavior(proc, selectList) {
+					return moerr.NewDivByZeroNoCtx()
+				}
+				// Return NULL (MySQL 8.0 behavior)
+				nulls.AddRange(rsNull, 0, uint64(length))
+				return nil
+			}
 			if p1.WithAnyNullValue() || rsAnyNull {
 				nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
 				rowCount := uint64(length)
@@ -536,6 +604,7 @@ func decimalArith[T templateDec](parameters []*vector.Vector, result vector.Func
 	}
 
 	// basic case.
+	shouldError := checkDivisionByZeroBehavior(proc, selectList)
 	if p1.WithAnyNullValue() || p2.WithAnyNullValue() || rsAnyNull {
 		nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
 		nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
@@ -547,6 +616,22 @@ func decimalArith[T templateDec](parameters []*vector.Vector, result vector.Func
 			}
 			v1, _ := p1.GetValue(i)
 			v2, _ := p2.GetValue(i)
+			// Check for division by zero
+			var isZero bool
+			switch any(v2).(type) {
+			case types.Decimal128:
+				isZero = (any(v2).(types.Decimal128).B0_63 == 0 && any(v2).(types.Decimal128).B64_127 == 0)
+			case types.Decimal64:
+				isZero = (any(v2).(types.Decimal64) == 0)
+			}
+			if isZero {
+				if shouldError {
+					return moerr.NewDivByZeroNoCtx()
+				}
+				// Return NULL (MySQL 8.0 behavior)
+				rsNull.Add(i)
+				continue
+			}
 			r, err := arithFn(v1, v2, scale1, scale2)
 			if err != nil {
 				return err
@@ -560,6 +645,22 @@ func decimalArith[T templateDec](parameters []*vector.Vector, result vector.Func
 	for i := uint64(0); i < rowCount; i++ {
 		v1, _ := p1.GetValue(i)
 		v2, _ := p2.GetValue(i)
+		// Check for division by zero
+		var isZero bool
+		switch any(v2).(type) {
+		case types.Decimal128:
+			isZero = (any(v2).(types.Decimal128).B0_63 == 0 && any(v2).(types.Decimal128).B64_127 == 0)
+		case types.Decimal64:
+			isZero = (any(v2).(types.Decimal64) == 0)
+		}
+		if isZero {
+			if shouldError {
+				return moerr.NewDivByZeroNoCtx()
+			}
+			// Return NULL (MySQL 8.0 behavior)
+			rsNull.Add(i)
+			continue
+		}
 		r, err := arithFn(v1, v2, scale1, scale2)
 		if err != nil {
 			return err
@@ -570,7 +671,7 @@ func decimalArith[T templateDec](parameters []*vector.Vector, result vector.Func
 }
 
 // XXX For decimal64 / decimal64, decimal64 * decimal64
-func decimalArith2(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+func decimalArith2(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int,
 	arithFn func(v1, v2 types.Decimal128, scale1, scale2 int32) (types.Decimal128, error), selectList *FunctionSelectList) error {
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[types.Decimal128](result)
@@ -606,6 +707,15 @@ func decimalArith2(parameters []*vector.Vector, result vector.FunctionResultWrap
 		if null1 || null2 {
 			nulls.AddRange(rsNull, 0, uint64(length))
 		} else {
+			// Check for division by zero
+			if v2 == 0 {
+				if checkDivisionByZeroBehavior(proc, selectList) {
+					return moerr.NewDivByZeroNoCtx()
+				}
+				// Return NULL (MySQL 8.0 behavior)
+				nulls.AddRange(rsNull, 0, uint64(length))
+				return nil
+			}
 			x, y := functionUtil.ConvertD64ToD128(v1), functionUtil.ConvertD64ToD128(v2)
 			r, err := arithFn(x, y, scale1, scale2)
 			if err != nil {
@@ -624,6 +734,7 @@ func decimalArith2(parameters []*vector.Vector, result vector.FunctionResultWrap
 		if null1 {
 			nulls.AddRange(rsNull, 0, uint64(length))
 		} else {
+			shouldError := checkDivisionByZeroBehavior(proc, selectList)
 			if p2.WithAnyNullValue() || rsAnyNull {
 				nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
 				x := functionUtil.ConvertD64ToD128(v1)
@@ -633,6 +744,14 @@ func decimalArith2(parameters []*vector.Vector, result vector.FunctionResultWrap
 						continue
 					}
 					v2, _ := p2.GetValue(i)
+					if v2 == 0 {
+						if shouldError {
+							return moerr.NewDivByZeroNoCtx()
+						}
+						// Return NULL (MySQL 8.0 behavior)
+						rsNull.Add(i)
+						continue
+					}
 					y := functionUtil.ConvertD64ToD128(v2)
 					r, err := arithFn(x, y, scale1, scale2)
 					if err != nil {
@@ -645,6 +764,14 @@ func decimalArith2(parameters []*vector.Vector, result vector.FunctionResultWrap
 				rowCount := uint64(length)
 				for i := uint64(0); i < rowCount; i++ {
 					v2, _ := p2.GetValue(i)
+					if v2 == 0 {
+						if shouldError {
+							return moerr.NewDivByZeroNoCtx()
+						}
+						// Return NULL (MySQL 8.0 behavior)
+						rsNull.Add(i)
+						continue
+					}
 					y := functionUtil.ConvertD64ToD128(v2)
 					r, err := arithFn(x, y, scale1, scale2)
 					if err != nil {
@@ -662,6 +789,15 @@ func decimalArith2(parameters []*vector.Vector, result vector.FunctionResultWrap
 		if null2 {
 			nulls.AddRange(rsNull, 0, uint64(length))
 		} else {
+			// Check for division by zero
+			if v2 == 0 {
+				if checkDivisionByZeroBehavior(proc, selectList) {
+					return moerr.NewDivByZeroNoCtx()
+				}
+				// Return NULL (MySQL 8.0 behavior)
+				nulls.AddRange(rsNull, 0, uint64(length))
+				return nil
+			}
 			if p1.WithAnyNullValue() {
 				nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
 				y := functionUtil.ConvertD64ToD128(v2)
@@ -696,6 +832,7 @@ func decimalArith2(parameters []*vector.Vector, result vector.FunctionResultWrap
 	}
 
 	// basic case.
+	shouldError := checkDivisionByZeroBehavior(proc, selectList)
 	if p1.WithAnyNullValue() || p2.WithAnyNullValue() || rsAnyNull {
 		nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
 		nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
@@ -707,6 +844,14 @@ func decimalArith2(parameters []*vector.Vector, result vector.FunctionResultWrap
 			}
 			v1, _ := p1.GetValue(i)
 			v2, _ := p2.GetValue(i)
+			if v2 == 0 {
+				if shouldError {
+					return moerr.NewDivByZeroNoCtx()
+				}
+				// Return NULL (MySQL 8.0 behavior)
+				rsNull.Add(i)
+				continue
+			}
 			x, y := functionUtil.ConvertD64ToD128(v1), functionUtil.ConvertD64ToD128(v2)
 			r, err := arithFn(x, y, scale1, scale2)
 			if err != nil {
@@ -721,6 +866,14 @@ func decimalArith2(parameters []*vector.Vector, result vector.FunctionResultWrap
 	for i := uint64(0); i < rowCount; i++ {
 		v1, _ := p1.GetValue(i)
 		v2, _ := p2.GetValue(i)
+		if v2 == 0 {
+			if shouldError {
+				return moerr.NewDivByZeroNoCtx()
+			}
+			// Return NULL (MySQL 8.0 behavior)
+			rsNull.Add(i)
+			continue
+		}
 		x, y := functionUtil.ConvertD64ToD128(v1), functionUtil.ConvertD64ToD128(v2)
 		r, err := arithFn(x, y, scale1, scale2)
 		if err != nil {
@@ -1472,7 +1625,7 @@ func opBinaryFixedStrToFixedWithErrorCheck[
 }
 
 func specialTemplateForModFunction[
-	T constraints.Integer | constraints.Float](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	T constraints.Integer | constraints.Float](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int,
 	modFn func(v1, v2 T) T, selectList *FunctionSelectList) error {
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[T](result)
@@ -1503,7 +1656,12 @@ func specialTemplateForModFunction[
 		v1, null1 := p1.GetValue(0)
 		v2, null2 := p2.GetValue(0)
 		ifNull := null1 || null2
-		if ifNull || v2 == 0 {
+		if ifNull {
+			nulls.AddRange(rsNull, 0, uint64(length))
+		} else if v2 == 0 {
+			if checkDivisionByZeroBehavior(proc, selectList) {
+				return moerr.NewDivByZeroNoCtx()
+			}
 			nulls.AddRange(rsNull, 0, uint64(length))
 		} else {
 			r := modFn(v1, v2)
@@ -1520,6 +1678,7 @@ func specialTemplateForModFunction[
 		if null1 {
 			nulls.AddRange(rsNull, 0, uint64(length))
 		} else {
+			shouldError := checkDivisionByZeroBehavior(proc, selectList)
 			if p2.WithAnyNullValue() || rsAnyNull {
 				nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
 				rowCount := uint64(length)
@@ -1529,6 +1688,9 @@ func specialTemplateForModFunction[
 					}
 					v2, _ := p2.GetValue(i)
 					if v2 == 0 {
+						if shouldError {
+							return moerr.NewDivByZeroNoCtx()
+						}
 						rsVec.GetNulls().Add(i)
 					} else {
 						rss[i] = modFn(v1, v2)
@@ -1542,6 +1704,9 @@ func specialTemplateForModFunction[
 				for i := uint64(0); i < rowCount; i++ {
 					v2, _ := p2.GetValue(i)
 					if v2 == 0 {
+						if shouldError {
+							return moerr.NewDivByZeroNoCtx()
+						}
 						rsVec.GetNulls().Add(i)
 					} else {
 						rss[i] = modFn(v1, v2)
@@ -1554,7 +1719,12 @@ func specialTemplateForModFunction[
 
 	if c2 {
 		v2, null2 := p2.GetValue(0)
-		if null2 || v2 == 0 {
+		if null2 {
+			nulls.AddRange(rsNull, 0, uint64(length))
+		} else if v2 == 0 {
+			if checkDivisionByZeroBehavior(proc, selectList) {
+				return moerr.NewDivByZeroNoCtx()
+			}
 			nulls.AddRange(rsNull, 0, uint64(length))
 		} else {
 			if p1.WithAnyNullValue() || rsAnyNull {
@@ -1579,6 +1749,7 @@ func specialTemplateForModFunction[
 	}
 
 	// basic case.
+	shouldError := checkDivisionByZeroBehavior(proc, selectList)
 	if p1.WithAnyNullValue() || p2.WithAnyNullValue() || rsAnyNull {
 		nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
 		nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
@@ -1590,6 +1761,9 @@ func specialTemplateForModFunction[
 			v1, _ := p1.GetValue(i)
 			v2, _ := p2.GetValue(i)
 			if v2 == 0 {
+				if shouldError {
+					return moerr.NewDivByZeroNoCtx()
+				}
 				rsVec.GetNulls().Add(i)
 			} else {
 				rss[i] = modFn(v1, v2)
@@ -1606,6 +1780,9 @@ func specialTemplateForModFunction[
 		v1, _ := p1.GetValue(i)
 		v2, _ := p2.GetValue(i)
 		if v2 == 0 {
+			if shouldError {
+				return moerr.NewDivByZeroNoCtx()
+			}
 			rsVec.GetNulls().Add(i)
 		} else {
 			rss[i] = modFn(v1, v2)
@@ -1614,8 +1791,83 @@ func specialTemplateForModFunction[
 	return nil
 }
 
+// checkDivisionByZeroBehavior checks if division by zero should raise an error.
+// Returns true if should raise error, false if should return NULL.
+// According to MySQL 8.0:
+// - In SELECT: always return NULL (never raise error)
+// - In INSERT/UPDATE: raise error if strict mode + ERROR_FOR_DIVISION_BY_ZERO are enabled
+// - In INSERT IGNORE: always return NULL (never raise error, even in strict mode)
+// checkDivisionByZeroBehavior checks if division by zero should raise an error.
+// Returns true if should raise error, false if should return NULL.
+func checkDivisionByZeroBehavior(proc *process.Process, selectList *FunctionSelectList) (shouldError bool) {
+	if proc == nil {
+		return false
+	}
+
+	// Check cached value first (atomic read for thread safety)
+	cached := atomic.LoadInt32(&proc.Base.DivByZeroErrorMode)
+	if cached == 0 {
+		return false
+	}
+	if cached == 1 {
+		return true
+	}
+
+	// Not cached (-1), need to compute
+	stmtProfile := proc.GetStmtProfile()
+	if stmtProfile == nil {
+		atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 0)
+		return false
+	}
+
+	stmtType := stmtProfile.GetStmtType()
+	queryType := stmtProfile.GetQueryType()
+	stmtTypeUpper := strings.ToUpper(strings.TrimSpace(stmtType))
+	queryTypeUpper := strings.ToUpper(strings.TrimSpace(queryType))
+
+	// In SELECT: always return NULL (MySQL 8.0 behavior)
+	isInsertOrUpdate := stmtTypeUpper == "INSERT" || stmtTypeUpper == "UPDATE" || queryTypeUpper == "DML"
+	if !isInsertOrUpdate {
+		atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 0)
+		return false
+	}
+
+	// In INSERT/UPDATE: check sql_mode
+	resolveFunc := proc.GetResolveVariableFunc()
+	if resolveFunc == nil {
+		atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 0)
+		return false
+	}
+
+	mode, err := resolveFunc("sql_mode", true, false)
+	if err != nil || mode == nil {
+		atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 0)
+		return false
+	}
+
+	modeStr, ok := mode.(string)
+	if !ok {
+		atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 0)
+		return false
+	}
+
+	modeStr = strings.ToUpper(modeStr)
+	hasStrictMode := strings.Contains(modeStr, "STRICT_TRANS_TABLES") || strings.Contains(modeStr, "STRICT_ALL_TABLES")
+	hasErrorForDivByZero := strings.Contains(modeStr, "ERROR_FOR_DIVISION_BY_ZERO")
+
+	// Error only if both strict mode AND ERROR_FOR_DIVISION_BY_ZERO are enabled
+	// Note: INSERT IGNORE is handled at a higher level and won't reach here with errors
+	if hasStrictMode && hasErrorForDivByZero {
+		atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 1)
+		return true
+	}
+
+	atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 0)
+	return false
+}
+
 func specialTemplateForDivFunction[
-	T constraints.Float, T2 constraints.Float | int64](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	T constraints.Float, T2 constraints.Float | int64](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int,
 	divFn func(v1, v2 T) T2, selectList *FunctionSelectList) error {
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[T2](result)
@@ -1650,7 +1902,12 @@ func specialTemplateForDivFunction[
 			nulls.AddRange(rsNull, 0, uint64(length))
 		} else {
 			if v2 == 0 {
-				return moerr.NewDivByZeroNoCtx()
+				if checkDivisionByZeroBehavior(proc, selectList) {
+					return moerr.NewDivByZeroNoCtx()
+				}
+				// Return NULL (MySQL 8.0 behavior: SELECT always returns NULL, INSERT/UPDATE returns NULL if not strict+ERROR_FOR_DIVISION_BY_ZERO)
+				nulls.AddRange(rsNull, 0, uint64(length))
+				return nil
 			}
 			r := divFn(v1, v2)
 			rowCount := uint64(length)
@@ -1675,7 +1932,11 @@ func specialTemplateForDivFunction[
 					}
 					v2, _ := p2.GetValue(i)
 					if v2 == 0 {
-						return moerr.NewDivByZeroNoCtx()
+						if checkDivisionByZeroBehavior(proc, selectList) {
+							return moerr.NewDivByZeroNoCtx()
+						}
+						// Return NULL (MySQL 8.0 behavior)
+						rsNull.Add(i)
 					} else {
 						rss[i] = divFn(v1, v2)
 					}
@@ -1685,7 +1946,11 @@ func specialTemplateForDivFunction[
 				for i := uint64(0); i < rowCount; i++ {
 					v2, _ := p2.GetValue(i)
 					if v2 == 0 {
-						return moerr.NewDivByZeroNoCtx()
+						if checkDivisionByZeroBehavior(proc, selectList) {
+							return moerr.NewDivByZeroNoCtx()
+						}
+						// Return NULL (MySQL 8.0 behavior)
+						rsNull.Add(i)
 					} else {
 						rss[i] = divFn(v1, v2)
 					}
@@ -1701,7 +1966,12 @@ func specialTemplateForDivFunction[
 			nulls.AddRange(rsNull, 0, uint64(length))
 		} else {
 			if v2 == 0 {
-				return moerr.NewDivByZeroNoCtx()
+				if checkDivisionByZeroBehavior(proc, selectList) {
+					return moerr.NewDivByZeroNoCtx()
+				}
+				// Return NULL (MySQL 8.0 behavior)
+				nulls.AddRange(rsNull, 0, uint64(length))
+				return nil
 			}
 			if p1.WithAnyNullValue() {
 				nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
@@ -1736,7 +2006,11 @@ func specialTemplateForDivFunction[
 			v1, _ := p1.GetValue(i)
 			v2, _ := p2.GetValue(i)
 			if v2 == 0 {
-				return moerr.NewDivByZeroNoCtx()
+				if checkDivisionByZeroBehavior(proc, selectList) {
+					return moerr.NewDivByZeroNoCtx()
+				}
+				// Return NULL (MySQL 8.0 behavior)
+				rsNull.Add(i)
 			} else {
 				rss[i] = divFn(v1, v2)
 			}
@@ -1745,11 +2019,15 @@ func specialTemplateForDivFunction[
 	}
 
 	rowCount := uint64(length)
+	shouldError := checkDivisionByZeroBehavior(proc, selectList)
 	for i := uint64(0); i < rowCount; i++ {
 		v1, _ := p1.GetValue(i)
 		v2, _ := p2.GetValue(i)
 		if v2 == 0 {
-			return moerr.NewDivByZeroNoCtx()
+			if shouldError {
+				return moerr.NewDivByZeroNoCtx()
+			}
+			rsNull.Add(i)
 		} else {
 			rss[i] = divFn(v1, v2)
 		}

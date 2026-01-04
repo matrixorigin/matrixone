@@ -301,6 +301,10 @@ type BaseProcess struct {
 
 	// stage cache to avoid to run same stage SQL repeatedly
 	StageCache *threadsafe.Map[string, stage.StageDef]
+
+	// DivByZeroErrorMode caches whether division by zero should error (true) or return NULL (false)
+	// -1: not initialized, 0: return NULL, 1: return error
+	DivByZeroErrorMode int32
 }
 
 // Process contains context used in query execution

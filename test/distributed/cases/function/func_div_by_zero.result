@@ -1,0 +1,164 @@
+DROP TABLE IF EXISTS t_div_test;
+CREATE TABLE t_div_test (
+id INT PRIMARY KEY,
+a INT,
+b INT,
+c DECIMAL(10,2),
+d DECIMAL(10,2),
+e FLOAT,
+f FLOAT
+);
+SELECT @@sql_mode;
+➤ @@sql_mode[12,0,0]  𝄀
+ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
+SELECT 10 / 0;
+➤ 10 / 0[8,54,0]  𝄀
+null
+SELECT 10 DIV 0;
+➤ 10 div 0[-5,64,0]  𝄀
+null
+SELECT 10 % 0;
+➤ 10 % 0[-5,64,0]  𝄀
+null
+SELECT 10 DIV 3;
+➤ 10 div 3[-5,64,0]  𝄀
+3
+SELECT CAST(10 AS DECIMAL(10,2)) DIV CAST(3 AS DECIMAL(10,2));
+➤ cast(10 as decimal(10, 2)) div cast(3 as decimal(10, 2))[-5,64,0]  𝄀
+3
+SELECT CAST(10.5 AS DECIMAL(10,2)) / CAST(0 AS DECIMAL(10,2));
+➤ cast(10.5 as decimal(10, 2)) / cast(0 as decimal(10, 2))[3,38,8]  𝄀
+null
+SELECT CAST(10.5 AS DECIMAL(10,2)) % CAST(0 AS DECIMAL(10,2));
+➤ cast(10.5 as decimal(10, 2)) % cast(0 as decimal(10, 2))[3,10,2]  𝄀
+null
+SELECT CAST(10.5 AS DECIMAL(10,2)) DIV CAST(0 AS DECIMAL(10,2));
+➤ cast(10.5 as decimal(10, 2)) div cast(0 as decimal(10, 2))[-5,64,0]  𝄀
+null
+SELECT 10.5 / 0.0;
+➤ 10.5 / 0.0[3,38,7]  𝄀
+null
+SELECT 10.5 % 0.0;
+➤ 10.5 % 0.0[3,18,1]  𝄀
+null
+SET sql_mode = '';
+SELECT @@sql_mode;
+➤ @@sql_mode[12,0,0]  𝄀
+
+SELECT 10 / 0;
+➤ 10 / 0[8,54,0]  𝄀
+null
+SELECT 10 DIV 0;
+➤ 10 div 0[-5,64,0]  𝄀
+null
+SELECT 10 % 0;
+➤ 10 % 0[-5,64,0]  𝄀
+null
+SET sql_mode = 'ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES';
+SELECT @@sql_mode;
+➤ @@sql_mode[12,0,0]  𝄀
+ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
+INSERT INTO t_div_test (id, a, b) VALUES (1, 10, 0), (2, 10/0, 5);
+INSERT INTO t_div_test (id, a, b) VALUES (3, 10 % 0, 5);
+SELECT COUNT(*) FROM t_div_test;
+➤ COUNT(*)[-5,64,0]  𝄀
+3
+SET sql_mode = 'ERROR_FOR_DIVISION_BY_ZERO';
+SELECT @@sql_mode;
+➤ @@sql_mode[12,0,0]  𝄀
+ERROR_FOR_DIVISION_BY_ZERO
+INSERT INTO t_div_test (id, a, b) VALUES (1, 10/0, 5);
+Duplicate entry '1' for key 'id'
+INSERT INTO t_div_test (id, a, b) VALUES (2, 10 % 0, 5);
+Duplicate entry '2' for key 'id'
+SELECT id, a, b FROM t_div_test ORDER BY id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  10  ¦  0  𝄀
+2  ¦  null  ¦  5  𝄀
+3  ¦  null  ¦  5
+DELETE FROM t_div_test;
+SET sql_mode = '';
+SELECT @@sql_mode;
+➤ @@sql_mode[12,0,0]  𝄀
+
+INSERT INTO t_div_test (id, a, b) VALUES (1, 10/0, 5);
+INSERT INTO t_div_test (id, a, b) VALUES (2, 10 % 0, 5);
+SELECT id, a, b FROM t_div_test ORDER BY id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  null  ¦  5  𝄀
+2  ¦  null  ¦  5
+DELETE FROM t_div_test;
+SET sql_mode = 'ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES';
+SELECT @@sql_mode;
+➤ @@sql_mode[12,0,0]  𝄀
+ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
+INSERT IGNORE INTO t_div_test (id, a, b) VALUES (1, 10/0, 5);
+INSERT IGNORE INTO t_div_test (id, a, b) VALUES (2, 10 % 0, 5);
+SELECT id, a, b FROM t_div_test ORDER BY id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  null  ¦  5  𝄀
+2  ¦  null  ¦  5
+DELETE FROM t_div_test;
+INSERT INTO t_div_test (id, a, b) VALUES (1, 10, 5), (2, 20, 10);
+UPDATE t_div_test SET a = 10/0 WHERE id = 1;
+UPDATE t_div_test SET a = 10 % 0 WHERE id = 1;
+SELECT id, a, b FROM t_div_test ORDER BY id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  null  ¦  5  𝄀
+2  ¦  20  ¦  10
+SET sql_mode = '';
+SELECT @@sql_mode;
+➤ @@sql_mode[12,0,0]  𝄀
+
+UPDATE t_div_test SET a = 10/0 WHERE id = 1;
+SELECT id, a, b FROM t_div_test WHERE id = 1;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  null  ¦  5
+UPDATE t_div_test SET a = 10 % 0 WHERE id = 2;
+SELECT id, a, b FROM t_div_test WHERE id = 2;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+2  ¦  null  ¦  10
+DELETE FROM t_div_test;
+SET sql_mode = 'ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES';
+SELECT CAST(10.5 AS DECIMAL(10,2)) / CAST(0 AS DECIMAL(10,2));
+➤ cast(10.5 as decimal(10, 2)) / cast(0 as decimal(10, 2))[3,38,8]  𝄀
+null
+SELECT CAST(10.5 AS DECIMAL(10,2)) % CAST(0 AS DECIMAL(10,2));
+➤ cast(10.5 as decimal(10, 2)) % cast(0 as decimal(10, 2))[3,10,2]  𝄀
+null
+INSERT INTO t_div_test (id, c, d) VALUES (1, CAST(10.5 AS DECIMAL(10,2)) / CAST(0 AS DECIMAL(10,2)), 5.0);
+SET sql_mode = '';
+INSERT INTO t_div_test (id, c, d) VALUES (1, CAST(10.5 AS DECIMAL(10,2)) / CAST(0 AS DECIMAL(10,2)), 5.0);
+Duplicate entry '1' for key 'id'
+SELECT id, c, d FROM t_div_test WHERE id = 1;
+➤ id[4,32,0]  ¦  c[3,10,2]  ¦  d[3,10,2]  𝄀
+1  ¦  null  ¦  5.00
+DELETE FROM t_div_test;
+SET sql_mode = 'ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES';
+SELECT 10.5 / 0.0;
+➤ 10.5 / 0.0[3,38,7]  𝄀
+null
+SELECT 10.5 % 0.0;
+➤ 10.5 % 0.0[3,18,1]  𝄀
+null
+INSERT INTO t_div_test (id, e, f) VALUES (1, 10.5 / 0.0, 5.0);
+SET sql_mode = '';
+INSERT INTO t_div_test (id, e, f) VALUES (1, 10.5 / 0.0, 5.0);
+Duplicate entry '1' for key 'id'
+SELECT id, e, f FROM t_div_test WHERE id = 1;
+➤ id[4,32,0]  ¦  e[7,24,0]  ¦  f[7,24,0]  𝄀
+1  ¦  null  ¦  5.0
+DELETE FROM t_div_test;
+SET sql_mode = 'ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES';
+SELECT (10 + 20) / (5 - 5);
+➤ (10 + 20) / (5 - 5)[8,54,0]  𝄀
+null
+SELECT CASE WHEN 1=1 THEN 10/0 ELSE 5 END;
+➤ case when 1 = 1 then 10 / 0 else 5 end[8,54,0]  𝄀
+null
+INSERT INTO t_div_test (id, a, b) VALUES (1, 10, 0), (2, 20, 5);
+SELECT id, a, b FROM t_div_test WHERE a / b > 0;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+2  ¦  20  ¦  5
+DROP TABLE t_div_test;
+SET sql_mode = 'ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES';
