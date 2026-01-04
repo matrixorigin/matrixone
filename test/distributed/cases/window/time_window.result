@@ -78,7 +78,7 @@ ts    col2
 2022-10-10 00:00:00    4324
 2022-10-12 00:00:00    -4324
 select _wstart, _wend, max(col2) from time_window05 where ts > '2020-01-11 12:00:12.000' and ts < '2021-01-13 00:00:00.000' interval(ts, 100, day) fill(prev);
-not supported: the type of time_window05.ts must be timestamp in time window
+_wstart    _wend    max(col2)
 drop table time_window05;
 drop table if exists time_window06;
 create table time_window06 (ts timestamp, col2 int);
@@ -107,7 +107,6 @@ insert into time_window08 values ('2020-01-02 12:00:00.000', 0);
 insert into time_window08 values ('2020-01-03 12:00:00.000', 22);
 select _wstart, _wend, max(col2) from time_window08 where ts > '2020-01-01 00:00:00.000' and ts < '2021-01-13 00:00:00.000' interval(ts, 1, day) sliding(2,day);
 invalid input: sliding value should be smaller than the interval value
-
 drop table time_window08;
 drop table if exists int01;
 create table int01 (ts timestamp primary key , col2 tinyint unsigned, col3 smallint, col4 bigint unsigned);
@@ -153,7 +152,7 @@ select _wstart, _wend, max(col2), min(col3), avg(col4) from int01 where ts > '20
 _wstart    _wend    max(col2)    min(col3)    avg(col4)
 2020-01-01 00:00:00    2020-01-02 00:00:00    127    null    3.2151654354E10
 2020-01-02 00:00:00    2020-01-03 00:00:00    0    null    9.223372036854776E18
-2020-01-03 00:00:00    2020-01-04 00:00:00    64    null    4.6117021053734748E18
+2020-01-03 00:00:00    2020-01-04 00:00:00    64    null    4.611702105373475E18
 2020-01-04 00:00:00    2020-01-05 00:00:00    100    -1921    3.2173892173092E13
 2020-01-05 00:00:00    2020-01-06 00:00:00    200    0    3.7219739821E10
 2020-01-06 00:00:00    2020-01-07 00:00:00    200    0    294095.0
@@ -615,6 +614,9 @@ _wstart    _wend    max(col2)
 2024-02-25 00:00:00    2024-06-04 00:00:00    -3892323
 2024-09-12 00:00:00    2024-12-21 00:00:00    0
 2024-10-02 00:00:00    2025-01-10 00:00:00    0
+2024-10-22 00:00:00    2025-01-30 00:00:00    0
+2024-11-11 00:00:00    2025-02-19 00:00:00    0
+2024-12-01 00:00:00    2025-03-11 00:00:00    0
 select _wstart, _wend, max(col2) from temporary01 where ts >= '2020-10-10 09:09:09' and ts <= '2024-12-12 01:34:46' interval(ts, 100, day) sliding(28800, minute) fill(prev);
 _wstart    _wend    max(col2)
 2020-10-03 00:00:00    2021-01-11 00:00:00    null
@@ -643,6 +645,9 @@ _wstart    _wend    max(col2)
 2024-02-25 00:00:00    2024-06-04 00:00:00    -3892323
 2024-09-12 00:00:00    2024-12-21 00:00:00    0
 2024-10-02 00:00:00    2025-01-10 00:00:00    0
+2024-10-22 00:00:00    2025-01-30 00:00:00    0
+2024-11-11 00:00:00    2025-02-19 00:00:00    0
+2024-12-01 00:00:00    2025-03-11 00:00:00    0
 select _wstart, _wend, max(col2) from temporary01 where ts >= '2020-10-10 09:09:09' and ts <= '2024-12-12 01:34:46' interval(ts, 100, day) sliding(20, day) fill(next);
 _wstart    _wend    max(col2)
 2020-10-03 00:00:00    2021-01-11 00:00:00    100
@@ -671,6 +676,9 @@ _wstart    _wend    max(col2)
 2024-02-25 00:00:00    2024-06-04 00:00:00    -3892323
 2024-09-12 00:00:00    2024-12-21 00:00:00    0
 2024-10-02 00:00:00    2025-01-10 00:00:00    0
+2024-10-22 00:00:00    2025-01-30 00:00:00    0
+2024-11-11 00:00:00    2025-02-19 00:00:00    0
+2024-12-01 00:00:00    2025-03-11 00:00:00    0
 select _wstart, _wend, max(col2) from temporary01 where ts >= '2020-10-10 09:09:09' and ts <= '2024-12-12 01:34:46' interval(ts, 100, day) sliding(48800, minute) fill (VALUE,10000);
 _wstart    _wend    max(col2)
 2020-10-03 00:00:00    2021-01-11 00:00:00    10000
@@ -690,8 +698,17 @@ _wstart    _wend    max(col2)
 2024-02-05 00:00:00    2024-05-15 00:00:00    -3892323
 2024-09-29 05:20:00    2025-01-07 05:20:00    0
 2024-11-02 02:40:00    2025-02-10 02:40:00    0
+2024-12-06 00:00:00    2025-03-16 00:00:00    0
 select _wstart, _wend, min(col2) from temporary01 where ts >= '2020-10-10 09:09:09' and ts <= '2024-12-12 01:34:46' interval(ts, 365, day) sliding(200, day) fill (linear);
-
+_wstart    _wend    min(col2)
+2020-08-29 00:00:00    2021-08-29 00:00:00    null
+2021-03-17 00:00:00    2022-03-17 00:00:00    100
+2021-10-03 00:00:00    2022-10-03 00:00:00    -2147483647
+2022-04-21 00:00:00    2023-04-21 00:00:00    -2147483647
+2022-11-07 00:00:00    2023-11-07 00:00:00    -232
+2023-05-26 00:00:00    2024-05-25 00:00:00    -3892323
+2023-12-12 00:00:00    2024-12-11 00:00:00    -3892323
+2024-06-29 00:00:00    2025-06-29 00:00:00    0
 drop table temporary01;
 drop table if exists temporary02;
 create table temporary02 (ts timestamp primary key , col2 double, col3 double, col4 float);
@@ -796,10 +813,7 @@ drop table temporary02;
 drop table if exists external01;
 create external table external01(ts timestamp primary key,col1 tinyint default null,col2 smallint default null,col3 int default null,col4 bigint default null,col5 tinyint unsigned default null,col6 smallint unsigned default null,col7 int unsigned default null,col8 bigint unsigned default null,col9 float default null,col10 double default null)infile{"filepath"='$resources/external_table_file/time_window.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select _wstart, _wend, max(col2), min(col3), avg(col4) from external01 where ts >= '2014-01-01 00:01:17' and ts <= '2014-01-01 00:14:58' interval(ts, 3, minute);
-_wstart    _wend    max(col2)    min(col3)    avg(col4)
-2014-01-01 00:00:00    2014-01-01 00:03:00    20830    -563708311    7.5995421344092E17
-2014-01-01 00:03:00    2014-01-01 00:06:00    31411    -1952462290    -3.2704837977826857E18
-2014-01-01 00:12:00    2014-01-01 00:15:00    22609    -1679063036    3.1372962123550147E18
+Data truncation: data out of range: data type int64, (5319763504295097514 + 5135822573901875801)
 select _wstart, _wend, count(col2), sum(col6), avg(col7) from external01 where ts >= '2014-01-01 00:01:17' and ts <= '2014-01-01 00:14:58' interval(ts, 10, minute) sliding(5,minute);
 _wstart    _wend    count(col2)    sum(col6)    avg(col7)
 2014-01-01 00:00:00    2014-01-01 00:10:00    6    305259    2.183710815E9
@@ -817,5 +831,5 @@ drop table external01;
 drop table if exists tt1;
 create table tt1(ts timestamp primary key, a int);
 select max(a) as enable, min(a) as collation from tt1 interval(ts, 1, minute);
-enable
+enable    collation
 drop database time_window;

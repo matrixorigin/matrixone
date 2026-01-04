@@ -20,16 +20,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestAggAvgContext_Size(t *testing.T) {
-	ctx := aggAvgContext(0)
-	require.Equal(t, int64(8), ctx.Size())
-}
-
-func TestAggAvgDecimalCommonCtx_Size(t *testing.T) {
-	ctx := aggAvgDecimalCommonCtx(0)
-	require.Equal(t, int64(4), ctx.Size())
-}
-
 func TestAvgTwCacheContext_Size(t *testing.T) {
 	ctx := AvgTwCacheContext{}
 	require.Equal(t, int64(16), ctx.Size())
@@ -63,9 +53,4 @@ func TestAggVarPopOfDecimalGroupContext_Size(t *testing.T) {
 func TestAggVarPopOfDecimalCommonContext_Size(t *testing.T) {
 	ctx := aggVarPopOfDecimalCommonContext{}
 	require.Equal(t, int64(8), ctx.Size())
-}
-
-func TestAggSumDecimal_Size(t *testing.T) {
-	ctx := aggSumDecimal{}
-	require.Equal(t, int64(4), ctx.Size())
 }

@@ -202,6 +202,10 @@ func makeSpecialAggExec(
 ) (AggFuncExec, bool, error) {
 	if _, ok := specialAgg[id]; ok {
 		switch id {
+		case AggIdOfSum:
+			return makeSumAvgExec(mp, true, id, isDistinct, params[0]), true, nil
+		case AggIdOfAvg:
+			return makeSumAvgExec(mp, false, id, isDistinct, params[0]), true, nil
 		case AggIdOfCountColumn:
 			return makeCount(mp, false, id, isDistinct, params[0]), true, nil
 		case AggIdOfCountStar:

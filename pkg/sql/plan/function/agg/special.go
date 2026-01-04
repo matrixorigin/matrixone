@@ -43,3 +43,11 @@ func RegisterJsonArrayAgg(id int64) {
 func RegisterJsonObjectAgg(id int64) {
 	aggexec.RegisterJsonObjectAgg(id)
 }
+
+func RegisterSum(id int64) {
+	aggexec.RegisterSum(id)
+}
+
+func RegisterAvg(id int64) {
+	aggexec.RegisterAvg(id)
+}

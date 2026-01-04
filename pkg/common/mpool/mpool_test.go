@@ -373,3 +373,29 @@ func TestShardDistribution(t *testing.T) {
 	require.Equal(t, int64(0), mp.CurrNB())
 	DeleteMPool(mp)
 }
+
+func TestPtrLenReplace(t *testing.T) {
+	mp := MustNewZero()
+	p := &PtrLen{}
+
+	require.NoError(t, p.Replace(mp, []byte{1, 2}))
+	require.Equal(t, int32(2), p.len)
+	require.Equal(t, []byte{1, 2}, p.ToByteSlice())
+
+	require.NoError(t, p.Replace(mp, []byte{3, 4}))
+	require.Equal(t, int32(2), p.len)
+	require.Equal(t, []byte{3, 4}, p.ToByteSlice())
+
+	require.NoError(t, p.Replace(mp, []byte{5, 6, 7, 8, 9, 10}))
+	require.Equal(t, int32(6), p.len)
+	require.Equal(t, []byte{5, 6, 7, 8, 9, 10}, p.ToByteSlice())
+
+	require.NoError(t, p.Replace(mp, []byte{1, 2, 3}))
+	require.Equal(t, int32(3), p.len)
+	require.Equal(t, []byte{1, 2, 3}, p.ToByteSlice())
+
+	require.NoError(t, p.Replace(mp, nil))
+	require.Equal(t, int32(0), p.len)
+
+	require.Equal(t, int64(0), mp.CurrNB())
+}

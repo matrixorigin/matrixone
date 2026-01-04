@@ -3076,6 +3076,10 @@ func AppendAny(vec *Vector, val any, isNull bool, mp *mpool.MPool) error {
 	return nil
 }
 
+func AppendNull(vec *Vector, mp *mpool.MPool) error {
+	return appendOneFixed(vec, 0, true, mp)
+}
+
 func AppendFixed[T any](vec *Vector, val T, isNull bool, mp *mpool.MPool) error {
 	if vec.IsConst() {
 		panic(moerr.NewInternalErrorNoCtx("append to const vector"))
