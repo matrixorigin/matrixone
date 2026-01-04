@@ -3769,7 +3769,7 @@ type dropAccount struct {
 
 // doDropAccount accomplishes the DropAccount statement
 func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dropAccount, inTransaction ...bool) (err error) {
-	// 检查是否已经在事务中（用于 restore 场景，避免破坏外层事务）
+	// Check if already in a transaction (for restore scenarios to avoid breaking outer transaction)
 	inTxn := false
 	if len(inTransaction) > 0 {
 		inTxn = inTransaction[0]
@@ -3829,7 +3829,7 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 	}
 
 	dropAccountFunc := func() (rtnErr error) {
-		// 如果已经在事务中（如 restore 场景），则不创建新事务
+		// If already in a transaction (e.g., restore scenario), don't create a new one
 		if !inTxn {
 			rtnErr = bh.Exec(ctx, "begin;")
 			if rtnErr != nil {
