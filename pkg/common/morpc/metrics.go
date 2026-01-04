@@ -38,6 +38,8 @@ type metrics struct {
 	writeDurationHistogram        prometheus.Observer
 	connectDurationHistogram      prometheus.Observer
 	doneDurationHistogram         prometheus.Observer
+	autoCreateTimeoutCounter      prometheus.Counter // tracks auto-create wait timeouts
+	backendUnavailableCounter     prometheus.Counter // tracks backend unavailable (pool has backends but all down)
 }
 
 func newMetrics(name string) *metrics {
@@ -60,6 +62,8 @@ func newMetrics(name string) *metrics {
 		writeLatencyDurationHistogram: v2.NewRPCBackendWriteLatencyDurationHistogramByName(name),
 		inputBytesCounter:             v2.NewRPCInputCounter(),
 		outputBytesCounter:            v2.NewRPCOutputCounter(),
+		autoCreateTimeoutCounter:      v2.NewRPCBackendAutoCreateTimeoutCounterByName(name),
+		backendUnavailableCounter:     v2.NewRPCBackendUnavailableCounterByName(name),
 	}
 }
 

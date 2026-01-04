@@ -517,7 +517,7 @@ func connectToLogService(
 			c.respPool,
 			c.cfg.MaxMessageSize,
 			cfg.EnableCompress,
-			0,
+			time.Second*10,
 			cfg.Tag,
 		)
 		if err != nil {
