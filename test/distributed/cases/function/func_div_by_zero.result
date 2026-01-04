@@ -310,10 +310,10 @@ SELECT CAST(123456789.123456789 AS DECIMAL(38,10)) DIV CAST(0.0 AS DECIMAL(38,10
 null
 SELECT NULL DIV 3;
 ➤ null div 3[-5,64,0]  𝄀
-0
+null
 SELECT 10 DIV NULL;
 ➤ 10 div null[-5,64,0]  𝄀
-0
+null
 SELECT NULL DIV NULL;
 ➤ null div null[-5,64,0]  𝄀
 null
@@ -375,3 +375,39 @@ SELECT -1 DIV -1;
 ➤ -1 div -1[-5,64,0]  𝄀
 1
 SET sql_mode = 'ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES';
+CREATE TABLE t_const_div (id INT, val INT);
+INSERT INTO t_const_div VALUES (1, 10), (2, 20), (3, 30), (4, 40);
+SELECT id, val, val DIV 3 AS result FROM t_const_div ORDER BY id;
+➤ id[4,32,0]  ¦  val[4,32,0]  ¦  result[-5,64,0]  𝄀
+1  ¦  10  ¦  3  𝄀
+2  ¦  20  ¦  6  𝄀
+3  ¦  30  ¦  10  𝄀
+4  ¦  40  ¦  13
+SELECT id, val, 100 DIV val AS result FROM t_const_div ORDER BY id;
+➤ id[4,32,0]  ¦  val[4,32,0]  ¦  result[-5,64,0]  𝄀
+1  ¦  10  ¦  10  𝄀
+2  ¦  20  ¦  5  𝄀
+3  ¦  30  ¦  3  𝄀
+4  ¦  40  ¦  2
+SELECT id, val, val DIV 0 AS result FROM t_const_div ORDER BY id;
+➤ id[4,32,0]  ¦  val[4,32,0]  ¦  result[-5,64,0]  𝄀
+1  ¦  10  ¦  null  𝄀
+2  ¦  20  ¦  null  𝄀
+3  ¦  30  ¦  null  𝄀
+4  ¦  40  ¦  null
+INSERT INTO t_const_div VALUES (0, 0);
+SELECT id, val, 100 DIV val AS result FROM t_const_div WHERE id IN (0, 1, 2) ORDER BY id;
+➤ id[4,32,0]  ¦  val[4,32,0]  ¦  result[-5,64,0]  𝄀
+0  ¦  0  ¦  null  𝄀
+1  ¦  10  ¦  10  𝄀
+2  ¦  20  ¦  5
+SELECT CAST(10 AS TINYINT) DIV 3;
+➤ cast(10 as tinyint) div 3[-5,64,0]  𝄀
+3
+SELECT CAST(100 AS SMALLINT) DIV 7;
+➤ cast(100 as smallint) div 7[-5,64,0]  𝄀
+14
+SELECT CAST(1000 AS INT) DIV 13;
+➤ cast(1000 as int) div 13[-5,64,0]  𝄀
+76
+DROP TABLE t_const_div;

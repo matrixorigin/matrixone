@@ -513,3 +513,71 @@ func TestDivisionByZeroStrictMode(t *testing.T) {
 	// We can't easily test this without mocking, but the atomic load in checkDivisionByZeroBehavior
 	// will return early if cache is set, which we've verified above
 }
+
+// TestIntegerDivConstantVector tests DIV with constant vectors (column DIV constant, constant DIV column)
+func TestIntegerDivConstantVector(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	testCases := []tcTemp{
+		// Column DIV Constant (INT8)
+		{
+			info: "INT8 column DIV constant: [10,20,30] DIV 3",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int8.ToType(), []int8{10, 20, 30}, []bool{false, false, false}),
+				NewFunctionTestConstInput(types.T_int8.ToType(), []int8{3}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{3, 6, 10}, []bool{false, false, false}),
+		},
+		// Constant DIV Column (INT16)
+		{
+			info: "INT16 constant DIV column: 100 DIV [2,4,5]",
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_int16.ToType(), []int16{100}, []bool{false}),
+				NewFunctionTestInput(types.T_int16.ToType(), []int16{2, 4, 5}, []bool{false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{50, 25, 20}, []bool{false, false, false}),
+		},
+		// Column DIV Constant 0 (INT32)
+		{
+			info: "INT32 column DIV 0: [10,20,30] DIV 0",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int32.ToType(), []int32{10, 20, 30}, []bool{false, false, false}),
+				NewFunctionTestConstInput(types.T_int32.ToType(), []int32{0}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0, 0, 0}, []bool{true, true, true}),
+		},
+		// Constant DIV Column with 0 (UINT8)
+		{
+			info: "UINT8 constant DIV column with 0: 100 DIV [2,0,5]",
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_uint8.ToType(), []uint8{100}, []bool{false}),
+				NewFunctionTestInput(types.T_uint8.ToType(), []uint8{2, 0, 5}, []bool{false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{50, 0, 20}, []bool{false, true, false}),
+		},
+		// Constant DIV Constant (UINT16)
+		{
+			info: "UINT16 constant DIV constant: 200 DIV 7",
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_uint16.ToType(), []uint16{200}, []bool{false}),
+				NewFunctionTestConstInput(types.T_uint16.ToType(), []uint16{7}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{28}, []bool{false}),
+		},
+		// Large batch with constant (UINT32)
+		{
+			info: "UINT32 large batch DIV constant: [1000,2000,3000,4000] DIV 100",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_uint32.ToType(), []uint32{1000, 2000, 3000, 4000}, []bool{false, false, false, false}),
+				NewFunctionTestConstInput(types.T_uint32.ToType(), []uint32{100}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{10, 20, 30, 40}, []bool{false, false, false, false}),
+		},
+	}
+
+	for _, tc := range testCases {
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, integerDivFn)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+}

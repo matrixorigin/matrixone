@@ -344,3 +344,29 @@ SELECT -1 DIV -1;
 
 -- Restore default sql_mode
 SET sql_mode = 'ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES';
+
+
+-- Test constant vector handling (column DIV constant, constant DIV column)
+-- This tests the fix for constant vector index out of bounds bug
+CREATE TABLE t_const_div (id INT, val INT);
+INSERT INTO t_const_div VALUES (1, 10), (2, 20), (3, 30), (4, 40);
+
+-- Column DIV constant
+SELECT id, val, val DIV 3 AS result FROM t_const_div ORDER BY id;
+
+-- Constant DIV column
+SELECT id, val, 100 DIV val AS result FROM t_const_div ORDER BY id;
+
+-- Column DIV constant 0 (should return NULL)
+SELECT id, val, val DIV 0 AS result FROM t_const_div ORDER BY id;
+
+-- Constant DIV column with 0 (should return NULL for id=0 if exists)
+INSERT INTO t_const_div VALUES (0, 0);
+SELECT id, val, 100 DIV val AS result FROM t_const_div WHERE id IN (0, 1, 2) ORDER BY id;
+
+-- Small integer types with constants
+SELECT CAST(10 AS TINYINT) DIV 3;
+SELECT CAST(100 AS SMALLINT) DIV 7;
+SELECT CAST(1000 AS INT) DIV 13;
+
+DROP TABLE t_const_div;
