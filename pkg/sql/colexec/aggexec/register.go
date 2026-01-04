@@ -68,6 +68,31 @@ func RegisterDenseRankWin(id int64) {
 	WinIdOfDenseRank = id
 }
 
+func RegisterLagWin(id int64) {
+	specialAgg[id] = true
+	WinIdOfLag = id
+}
+
+func RegisterLeadWin(id int64) {
+	specialAgg[id] = true
+	WinIdOfLead = id
+}
+
+func RegisterFirstValueWin(id int64) {
+	specialAgg[id] = true
+	WinIdOfFirstValue = id
+}
+
+func RegisterLastValueWin(id int64) {
+	specialAgg[id] = true
+	WinIdOfLastValue = id
+}
+
+func RegisterNthValueWin(id int64) {
+	specialAgg[id] = true
+	WinIdOfNthValue = id
+}
+
 type registeredAggInfo struct {
 	isSingleAgg          bool
 	acceptNull           bool
@@ -99,6 +124,11 @@ var (
 	WinIdOfRowNumber     = int64(-8)
 	WinIdOfRank          = int64(-9)
 	WinIdOfDenseRank     = int64(-10)
+	WinIdOfLag           = int64(-11)
+	WinIdOfLead          = int64(-12)
+	WinIdOfFirstValue    = int64(-13)
+	WinIdOfLastValue     = int64(-14)
+	WinIdOfNthValue      = int64(-15)
 	groupConcatSep       = ","
 	getCroupConcatRet    = func(args ...types.Type) types.Type {
 		for _, p := range args {
