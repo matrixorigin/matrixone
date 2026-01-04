@@ -777,6 +777,7 @@ var simpleCAllocator = sync.OnceValue(func() *malloc.SimpleCAllocator {
 		v2.MallocGauge.WithLabelValues("mpool-inuse"),
 		v2.MallocCounter.WithLabelValues("mpool-allocate-objects"),
 		v2.MallocGauge.WithLabelValues("mpool-inuse-objects"),
+		v2.OffHeapInuseGauge.WithLabelValues("mpool"),
 	)
 	return sca
 })
