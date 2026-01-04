@@ -89,10 +89,11 @@ func NewTopProcess(
 		LastInsertID: new(uint64),
 
 		// 3. other fields.
-		logger:         util.GetLogger(sid),
-		UnixTime:       time.Now().UnixNano(),
-		PostDmlSqlList: threadsafe.NewSlice[string](),
-		StageCache:     threadsafe.NewMap[string, stage.StageDef](),
+		logger:              util.GetLogger(sid),
+		UnixTime:            time.Now().UnixNano(),
+		PostDmlSqlList:      threadsafe.NewSlice[string](),
+		StageCache:          threadsafe.NewMap[string, stage.StageDef](),
+		DivByZeroErrorMode:  -1, // -1 = not initialized, must compute on first use
 	}
 
 	proc := &Process{

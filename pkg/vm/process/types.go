@@ -353,6 +353,9 @@ func (proc *Process) SetMessageBoard(mb *message.MessageBoard) {
 
 func (proc *Process) SetStmtProfile(sp *StmtProfile) {
 	proc.Base.StmtProfile = sp
+	// Reset division by zero cache for new statement
+	// Each statement must recompute based on its own type and sql_mode
+	atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, -1)
 }
 
 func (proc *Process) GetStmtProfile() *StmtProfile {
