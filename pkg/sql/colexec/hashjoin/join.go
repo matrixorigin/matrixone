@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -147,6 +148,13 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 
 				ctr.inbat = bat
 				ctr.lastRow = 0
+			}
+
+			if len(hashJoin.LeftTypes) == 0 {
+				hashJoin.LeftTypes = make([]types.Type, ctr.inbat.VectorCount())
+				for i := range hashJoin.LeftTypes {
+					hashJoin.LeftTypes[i] = *ctr.inbat.Vecs[i].GetType()
+				}
 			}
 
 			hashJoin.resetRBat()

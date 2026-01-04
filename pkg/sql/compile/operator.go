@@ -186,8 +186,8 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.IsRightJoin = t.IsRightJoin
 		op.NonEqCond = t.NonEqCond
 		op.ResultCols = t.ResultCols
-		op.RightTypes = t.RightTypes
 		op.LeftTypes = t.LeftTypes
+		op.RightTypes = t.RightTypes
 		op.EqConds = t.EqConds
 		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
 		op.JoinMapTag = t.JoinMapTag
