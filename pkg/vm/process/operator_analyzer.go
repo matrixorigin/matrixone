@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -401,31 +402,33 @@ func (ps *OperatorStats) String() string {
 	// Use strings.Builder for efficient string concatenation
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf(" CallNum:%d "+
-		"TimeCost:%dns "+
-		"WaitTime:%dns "+
+		"TimeCost:%s "+
+		"WaitTime:%s "+
 		"InRows:%d "+
 		"OutRows:%d "+
-		"InSize:%dbytes "+
-		"InBlock:%d "+
-		"OutSize:%dbytes "+
-		"MemSize:%dbytes "+
-		"SpillSize:%dbytes "+
-		"ScanBytes:%dbytes "+
-		"NetworkIO:%dbytes "+
-		"DiskIO:%dbytes ",
+		"InSize:%s "+
+		"InBlock:%d ",
 		ps.CallNum,
-		ps.TimeConsumed,
-		ps.WaitTimeConsumed,
+		common.FormatDuration(ps.TimeConsumed),
+		common.FormatDuration(ps.WaitTimeConsumed),
 		ps.InputRows,
 		ps.OutputRows,
-		ps.InputSize,
-		ps.InputBlocks,
-		ps.OutputSize,
-		ps.MemorySize,
-		ps.SpillSize,
-		ps.ScanBytes,
-		ps.NetworkIO,
-		ps.DiskIO))
+		common.FormatBytes(ps.InputSize),
+		ps.InputBlocks))
+
+	// Only include non-zero values for OutSize, MemSize, SpillSize, ScanBytes
+	if ps.OutputSize > 0 {
+		sb.WriteString(fmt.Sprintf("OutSize:%s ", common.FormatBytes(ps.OutputSize)))
+	}
+	if ps.MemorySize > 0 {
+		sb.WriteString(fmt.Sprintf("MemSize:%s ", common.FormatBytes(ps.MemorySize)))
+	}
+	if ps.SpillSize > 0 {
+		sb.WriteString(fmt.Sprintf("SpillSize:%s ", common.FormatBytes(ps.SpillSize)))
+	}
+	if ps.ScanBytes > 0 {
+		sb.WriteString(fmt.Sprintf("ScanBytes:%s ", common.FormatBytes(ps.ScanBytes)))
+	}
 
 	// Collect S3 stats in a slice for efficient concatenation
 	dynamicAttrs := []string{}
@@ -454,38 +457,14 @@ func (ps *OperatorStats) String() string {
 		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("S3DeleteMul:%d ", ps.S3DeleteMul))
 	}
 	//---------------------------------------------------------------------------------------------
-	if ps.ReadSize > 0 {
-		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("ReadSize:%dbytes ", ps.ReadSize))
-	}
-	if ps.S3ReadSize > 0 {
-		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("S3ReadSize:%dbytes ", ps.S3ReadSize))
-	}
-	if ps.DiskReadSize > 0 {
-		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("DiskReadSize:%dbytes ", ps.DiskReadSize))
-	}
-	if ps.CacheRead > 0 {
-		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("CacheRead:%d ", ps.CacheRead))
-	}
-	if ps.CacheHit > 0 {
-		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("CacheHit:%d ", ps.CacheHit))
-	}
-	if ps.CacheMemoryRead > 0 {
-		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("CacheMemoryRead:%d ", ps.CacheMemoryRead))
-	}
-	if ps.CacheMemoryHit > 0 {
-		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("CacheMemoryHit:%d ", ps.CacheMemoryHit))
-	}
-	if ps.CacheDiskRead > 0 {
-		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("CacheDiskRead:%d ", ps.CacheDiskRead))
-	}
-	if ps.CacheDiskHit > 0 {
-		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("CacheDiskHit:%d ", ps.CacheDiskHit))
-	}
-	if ps.CacheRemoteRead > 0 {
-		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("CacheRemoteRead:%d ", ps.CacheRemoteRead))
-	}
-	if ps.CacheRemoteHit > 0 {
-		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("CacheRemoteHit:%d ", ps.CacheRemoteHit))
+	// ReadSize format: ReadSize=total|s3|disk (same as explain analyze)
+	// Only show ReadSize if at least one value is non-zero
+	// Use FormatBytes instead of ConvertBytesToHumanReadable to get "B" instead of "bytes"
+	if ps.ReadSize > 0 || ps.S3ReadSize > 0 || ps.DiskReadSize > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("ReadSize=%s|%s|%s ",
+			common.FormatBytes(ps.ReadSize),
+			common.FormatBytes(ps.S3ReadSize),
+			common.FormatBytes(ps.DiskReadSize)))
 	}
 
 	// Join and append S3 stats if any
@@ -508,7 +487,7 @@ func (ps *OperatorStats) String() string {
 			case OpWaitLockTime:
 				metricName = "WaitLockTime"
 			}
-			metricsStr += fmt.Sprintf("%s:%dns ", metricName, v)
+			metricsStr += fmt.Sprintf("%s:%s ", metricName, common.FormatDuration(v))
 		}
 	}
 

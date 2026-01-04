@@ -221,8 +221,7 @@ func TestOperatorStats_String(t *testing.T) {
 		want   string
 	}{
 		{
-			// CallNum:154 TimeCost:54449492ns WaitTime:0ns InRows:1248064 OutRows:0 InSize:19969024bytes InBlock:153 OutSize:0bytes MemSize:131072bytes SpillSize:131072bytes ScanBytes:19969024bytes NetworkIO:0bytes DiskIO:7888601bytes CacheRead:428 CacheMemoryRead:428
-			name: "test01",
+			name: "test01 - with ReadSize, S3ReadSize, DiskReadSize, no Cache stats",
 			fields: fields{
 				OperatorName:     "testOp",
 				CallNum:          154,
@@ -238,9 +237,9 @@ func TestOperatorStats_String(t *testing.T) {
 				DiskIO:           7888601,
 				InputBlocks:      153,
 				ScanBytes:        19969024,
-				ReadSize:         16000000,
-				S3ReadSize:       15000000,
-				DiskReadSize:     1000000,
+				ReadSize:         16000000, // 15.26 MiB
+				S3ReadSize:       15000000, // 14.31 MiB
+				DiskReadSize:     1000000,  // 976.56 KiB
 				WrittenRows:      12,
 				DeletedRows:      12,
 				S3List:           2,
@@ -249,22 +248,30 @@ func TestOperatorStats_String(t *testing.T) {
 				S3Get:            2,
 				S3Delete:         2,
 				S3DeleteMul:      2,
-				CacheRead:        428,
-				CacheHit:         428,
-				CacheMemoryRead:  428,
-				CacheMemoryHit:   428,
-				CacheDiskRead:    428,
-				CacheDiskHit:     428,
-				CacheRemoteRead:  428,
-				CacheRemoteHit:   428,
+				CacheRead:        428, // Should not appear in output
+				CacheHit:         428, // Should not appear in output
+				CacheMemoryRead:  428, // Should not appear in output
+				CacheMemoryHit:   428, // Should not appear in output
+				CacheDiskRead:    428, // Should not appear in output
+				CacheDiskHit:     428, // Should not appear in output
+				CacheRemoteRead:  428, // Should not appear in output
+				CacheRemoteHit:   428, // Should not appear in output
 				OperatorMetrics: map[MetricType]int64{
 					OpScanTime: 452,
 				},
 			},
-			want: " CallNum:154 TimeCost:54449492ns WaitTime:0ns InRows:1248064 OutRows:0 InSize:19969024bytes InBlock:153 OutSize:0bytes MemSize:131072bytes SpillSize:131072bytes ScanBytes:19969024bytes NetworkIO:0bytes DiskIO:7888601bytes WrittenRows:12 DeletedRows:12 S3List:2 S3Head:2 S3Put:2 S3Get:2 S3Delete:2 S3DeleteMul:2 ReadSize:16000000bytes S3ReadSize:15000000bytes DiskReadSize:1000000bytes CacheRead:428 CacheHit:428 CacheMemoryRead:428 CacheMemoryHit:428 CacheDiskRead:428 CacheDiskHit:428 CacheRemoteRead:428 CacheRemoteHit:428 ScanTime:452ns ",
+			// Format: ReadSize=total|s3|disk (same as explain analyze)
+			// Cache stats should NOT appear
+			// OutSize is 0, so it should not appear
+			// NetworkIO and DiskIO are removed to avoid duplication with ReadSize
+			// Bytes and time are formatted: 0bytes -> 0B, 1386624bytes -> 1.39MB, 21625539ns -> 21.63ms
+			// Note: ScanTime 452ns = 0.000452ms, rounded to 0.00ms
+			// ReadSize uses FormatBytes (decimal units: MB, KB) instead of ConvertBytesToHumanReadable (binary units: MiB, KiB)
+			// 16000000 bytes = 16.00MB (decimal), 15000000 bytes = 15.00MB (decimal), 1000000 bytes = 1.00MB (decimal)
+			want: " CallNum:154 TimeCost:54.45ms WaitTime:0ns InRows:1248064 OutRows:0 InSize:19.97MB InBlock:153 MemSize:131.07KB SpillSize:131.07KB ScanBytes:19.97MB WrittenRows:12 DeletedRows:12 S3List:2 S3Head:2 S3Put:2 S3Get:2 S3Delete:2 S3DeleteMul:2 ReadSize=16.00MB|15.00MB|1.00MB ScanTime:0.00ms ",
 		},
 		{
-			name: "test02 - ReadSize, S3ReadSize, DiskReadSize are zero, should not appear in output",
+			name: "test02 - SpillSize and ReadSize are zero, so they should not appear",
 			fields: fields{
 				OperatorName:     "testOp",
 				CallNum:          10,
@@ -301,7 +308,238 @@ func TestOperatorStats_String(t *testing.T) {
 				CacheRemoteHit:   0,
 				OperatorMetrics:  nil,
 			},
-			want: " CallNum:10 TimeCost:1000000ns WaitTime:0ns InRows:100 OutRows:50 InSize:1024bytes InBlock:1 OutSize:512bytes MemSize:1024bytes SpillSize:0bytes ScanBytes:1024bytes NetworkIO:0bytes DiskIO:0bytes ",
+			// SpillSize is 0, so it should not appear
+			// ReadSize all values are 0, so it should not appear
+			// NetworkIO and DiskIO are removed to avoid duplication with ReadSize
+			// Bytes and time are formatted: 0bytes -> 0B, 1386624bytes -> 1.39MB, 21625539ns -> 21.63ms
+			want: " CallNum:10 TimeCost:1.00ms WaitTime:0ns InRows:100 OutRows:50 InSize:1.02KB InBlock:1 OutSize:512B MemSize:1.02KB ScanBytes:1.02KB ",
+		},
+		{
+			name: "test03 - ReadSize with KiB format (real-world example)",
+			fields: fields{
+				OperatorName:     "TableScan",
+				CallNum:          77,
+				TimeConsumed:     1353592,
+				WaitTimeConsumed: 0,
+				MemorySize:       196608,
+				SpillSize:        0,
+				InputRows:        622592,
+				InputSize:        7471104,
+				OutputRows:       622592,
+				OutputSize:       7471104,
+				NetworkIO:        0,
+				DiskIO:           0,
+				InputBlocks:      76,
+				ScanBytes:        7471104,
+				ReadSize:         343050, // 335.01 KiB
+				S3ReadSize:       0,
+				DiskReadSize:     0,
+				WrittenRows:      0,
+				DeletedRows:      0,
+				S3List:           0,
+				S3Head:           0,
+				S3Put:            0,
+				S3Get:            0,
+				S3Delete:         0,
+				S3DeleteMul:      0,
+				CacheRead:        228, // Should not appear
+				CacheHit:         228, // Should not appear
+				CacheMemoryRead:  228, // Should not appear
+				CacheMemoryHit:   228, // Should not appear
+				CacheDiskRead:    0,
+				CacheDiskHit:     0,
+				CacheRemoteRead:  0,
+				CacheRemoteHit:   0,
+				OperatorMetrics:  nil,
+			},
+			// Real-world example: ReadSize=343.05KB|0B|0B
+			// SpillSize is 0, so it should not appear
+			// NetworkIO and DiskIO are removed to avoid duplication with ReadSize
+			// Bytes and time are formatted: 0bytes -> 0B, 1386624bytes -> 1.39MB, 21625539ns -> 21.63ms
+			// ReadSize uses FormatBytes (0B) instead of ConvertBytesToHumanReadable (0 bytes)
+			// 343050 bytes = 343.05KB (decimal), not 335.01 KiB (binary)
+			want: " CallNum:77 TimeCost:1.35ms WaitTime:0ns InRows:622592 OutRows:622592 InSize:7.47MB InBlock:76 OutSize:7.47MB MemSize:196.61KB ScanBytes:7.47MB ReadSize=343.05KB|0B|0B ",
+		},
+		{
+			name: "test04 - ReadSize with MiB format",
+			fields: fields{
+				OperatorName:     "TableScan",
+				CallNum:          1,
+				TimeConsumed:     1000000,
+				WaitTimeConsumed: 0,
+				MemorySize:       1024 * 1024,
+				SpillSize:        0,
+				InputRows:        1000000,
+				InputSize:        100 * 1024 * 1024,
+				OutputRows:       1000000,
+				OutputSize:       100 * 1024 * 1024,
+				NetworkIO:        0,
+				DiskIO:           0,
+				InputBlocks:      100,
+				ScanBytes:        100 * 1024 * 1024,
+				ReadSize:         50 * 1024 * 1024, // 50 MiB
+				S3ReadSize:       30 * 1024 * 1024, // 30 MiB
+				DiskReadSize:     20 * 1024 * 1024, // 20 MiB
+				WrittenRows:      0,
+				DeletedRows:      0,
+				S3List:           0,
+				S3Head:           0,
+				S3Put:            0,
+				S3Get:            0,
+				S3Delete:         0,
+				S3DeleteMul:      0,
+				CacheRead:        1000, // Should not appear
+				CacheHit:         1000, // Should not appear
+				CacheMemoryRead:  500,  // Should not appear
+				CacheMemoryHit:   500,  // Should not appear
+				CacheDiskRead:    300,  // Should not appear
+				CacheDiskHit:     300,  // Should not appear
+				CacheRemoteRead:  200,  // Should not appear
+				CacheRemoteHit:   200,  // Should not appear
+				OperatorMetrics:  nil,
+			},
+			// SpillSize is 0, so it should not appear
+			// NetworkIO and DiskIO are removed to avoid duplication with ReadSize
+			// Bytes and time are formatted: 0bytes -> 0B, 1386624bytes -> 1.39MB, 21625539ns -> 21.63ms
+			// ReadSize uses FormatBytes (decimal units: MB) instead of ConvertBytesToHumanReadable (binary units: MiB)
+			// 50*1024*1024 bytes = 52.43MB (decimal), 30*1024*1024 = 31.46MB, 20*1024*1024 = 20.97MB
+			want: " CallNum:1 TimeCost:1.00ms WaitTime:0ns InRows:1000000 OutRows:1000000 InSize:104.86MB InBlock:100 OutSize:104.86MB MemSize:1.05MB ScanBytes:104.86MB ReadSize=52.43MB|31.46MB|20.97MB ",
+		},
+		{
+			name: "test05 - ReadSize with GiB format",
+			fields: fields{
+				OperatorName:     "TableScan",
+				CallNum:          1,
+				TimeConsumed:     1000000,
+				WaitTimeConsumed: 0,
+				MemorySize:       1024 * 1024 * 1024,
+				SpillSize:        0,
+				InputRows:        10000000,
+				InputSize:        10 * 1024 * 1024 * 1024,
+				OutputRows:       10000000,
+				OutputSize:       10 * 1024 * 1024 * 1024,
+				NetworkIO:        0,
+				DiskIO:           0,
+				InputBlocks:      1000,
+				ScanBytes:        10 * 1024 * 1024 * 1024,
+				ReadSize:         5 * 1024 * 1024 * 1024, // 5 GiB
+				S3ReadSize:       3 * 1024 * 1024 * 1024, // 3 GiB
+				DiskReadSize:     2 * 1024 * 1024 * 1024, // 2 GiB
+				WrittenRows:      0,
+				DeletedRows:      0,
+				S3List:           0,
+				S3Head:           0,
+				S3Put:            0,
+				S3Get:            0,
+				S3Delete:         0,
+				S3DeleteMul:      0,
+				CacheRead:        0,
+				CacheHit:         0,
+				CacheMemoryRead:  0,
+				CacheMemoryHit:   0,
+				CacheDiskRead:    0,
+				CacheDiskHit:     0,
+				CacheRemoteRead:  0,
+				CacheRemoteHit:   0,
+				OperatorMetrics:  nil,
+			},
+			// SpillSize is 0, so it should not appear
+			// NetworkIO and DiskIO are removed to avoid duplication with ReadSize
+			// Bytes and time are formatted: 0bytes -> 0B, 1386624bytes -> 1.39MB, 21625539ns -> 21.63ms
+			// ReadSize uses FormatBytes (decimal units: GB) instead of ConvertBytesToHumanReadable (binary units: GiB)
+			// 5*1024*1024*1024 bytes = 5.37GB (decimal), 3*1024*1024*1024 = 3.22GB, 2*1024*1024*1024 = 2.15GB
+			want: " CallNum:1 TimeCost:1.00ms WaitTime:0ns InRows:10000000 OutRows:10000000 InSize:10.74GB InBlock:1000 OutSize:10.74GB MemSize:1.07GB ScanBytes:10.74GB ReadSize=5.37GB|3.22GB|2.15GB ",
+		},
+		{
+			name: "test06 - ReadSize with mixed formats (bytes, KiB, MiB)",
+			fields: fields{
+				OperatorName:     "TableScan",
+				CallNum:          1,
+				TimeConsumed:     1000000,
+				WaitTimeConsumed: 0,
+				MemorySize:       1024,
+				SpillSize:        0,
+				InputRows:        1000,
+				InputSize:        1024 * 1024,
+				OutputRows:       1000,
+				OutputSize:       1024 * 1024,
+				NetworkIO:        0,
+				DiskIO:           0,
+				InputBlocks:      1,
+				ScanBytes:        1024 * 1024,
+				ReadSize:         512,         // 512 bytes
+				S3ReadSize:       10 * 1024,   // 10 KiB
+				DiskReadSize:     1024 * 1024, // 1 MiB
+				WrittenRows:      0,
+				DeletedRows:      0,
+				S3List:           0,
+				S3Head:           0,
+				S3Put:            0,
+				S3Get:            0,
+				S3Delete:         0,
+				S3DeleteMul:      0,
+				CacheRead:        0,
+				CacheHit:         0,
+				CacheMemoryRead:  0,
+				CacheMemoryHit:   0,
+				CacheDiskRead:    0,
+				CacheDiskHit:     0,
+				CacheRemoteRead:  0,
+				CacheRemoteHit:   0,
+				OperatorMetrics:  nil,
+			},
+			// SpillSize is 0, so it should not appear
+			// NetworkIO and DiskIO are removed to avoid duplication with ReadSize
+			// Bytes and time are formatted: 0bytes -> 0B, 1386624bytes -> 1.39MB, 21625539ns -> 21.63ms
+			// ReadSize uses FormatBytes (decimal units: B, KB, MB) instead of ConvertBytesToHumanReadable (binary units: bytes, KiB, MiB)
+			// 512 bytes = 512B, 10*1024 = 10.24KB, 1024*1024 = 1.05MB
+			want: " CallNum:1 TimeCost:1.00ms WaitTime:0ns InRows:1000 OutRows:1000 InSize:1.05MB InBlock:1 OutSize:1.05MB MemSize:1.02KB ScanBytes:1.05MB ReadSize=512B|10.24KB|1.05MB ",
+		},
+		{
+			name: "test07 - Cache stats should NOT appear even with non-zero values",
+			fields: fields{
+				OperatorName:     "TableScan",
+				CallNum:          1,
+				TimeConsumed:     1000000,
+				WaitTimeConsumed: 0,
+				MemorySize:       1024,
+				SpillSize:        0,
+				InputRows:        100,
+				InputSize:        1024,
+				OutputRows:       100,
+				OutputSize:       1024,
+				NetworkIO:        0,
+				DiskIO:           0,
+				InputBlocks:      1,
+				ScanBytes:        1024,
+				ReadSize:         1024,
+				S3ReadSize:       512,
+				DiskReadSize:     256,
+				WrittenRows:      0,
+				DeletedRows:      0,
+				S3List:           0,
+				S3Head:           0,
+				S3Put:            0,
+				S3Get:            0,
+				S3Delete:         0,
+				S3DeleteMul:      0,
+				CacheRead:        1000, // Non-zero, but should NOT appear
+				CacheHit:         800,  // Non-zero, but should NOT appear
+				CacheMemoryRead:  500,  // Non-zero, but should NOT appear
+				CacheMemoryHit:   400,  // Non-zero, but should NOT appear
+				CacheDiskRead:    300,  // Non-zero, but should NOT appear
+				CacheDiskHit:     200,  // Non-zero, but should NOT appear
+				CacheRemoteRead:  100,  // Non-zero, but should NOT appear
+				CacheRemoteHit:   50,   // Non-zero, but should NOT appear
+				OperatorMetrics:  nil,
+			},
+			// Verify that no Cache* fields appear in output
+			// SpillSize is 0, so it should not appear
+			// NetworkIO and DiskIO are removed to avoid duplication with ReadSize
+			// Bytes and time are formatted: 0bytes -> 0B, 1386624bytes -> 1.39MB, 21625539ns -> 21.63ms
+			// ReadSize uses FormatBytes (decimal units: B, KB) instead of ConvertBytesToHumanReadable (binary units: bytes, KiB)
+			// 1024 bytes = 1.02KB (decimal), 512 bytes = 512B, 256 bytes = 256B
+			want: " CallNum:1 TimeCost:1.00ms WaitTime:0ns InRows:100 OutRows:100 InSize:1.02KB InBlock:1 OutSize:1.02KB MemSize:1.02KB ScanBytes:1.02KB ReadSize=1.02KB|512B|256B ",
 		},
 	}
 	for _, tt := range tests {

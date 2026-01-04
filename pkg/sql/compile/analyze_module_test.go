@@ -54,31 +54,31 @@ func Test_processPhyScope(t *testing.T) {
 		Version: 1.0, S3IOInputCount: 0, S3IOOutputCount: 0
 		LOCAL SCOPES:
 		Scope 1 (Magic: Merge, mcpu: 1, Receiver: [4])
-		  Pipeline: └── Output (idx:-1, isFirst:false, isLast:false)
-		                └── Projection (idx:2, isFirst:true, isLast:true)
-		                    └── Projection (idx:1, isFirst:false, isLast:true)
-		                        └── MergeGroup (idx:1, isFirst:false, isLast:false)
-		                            └── Merge (idx:1, isFirst:false, isLast:false)
+		  Pipeline: └── Output (-1,false,false)
+		                └── Projection (2,true,true)
+		                    └── Projection (1,false,true)
+		                        └── MergeGroup (1,false,false)
+		                            └── Merge (1,false,false)
 		  PreScopes: {
 		    Scope 2 (Magic: Normal, mcpu: 4, Receiver: [0, 1, 2, 3])
-		      Pipeline: └── Connector (idx:1, isFirst:false, isLast:false) to MergeReceiver 4
-		                    └── MergeGroup (idx:1, isFirst:false, isLast:false)
-		                        └── Merge (idx:1, isFirst:false, isLast:false)
+		      Pipeline: └── Connector (1,false,false) to MergeReceiver 4
+		                    └── MergeGroup (1,false,false)
+		                        └── Merge (1,false,false)
 		      PreScopes: {
-		        Scope 3 (Magic: Normal, mcpu: 1, Receiver: [])
+		        Scope 3 (Magic: Normal, mcpu: 1)
 		          DataSource: cloud_device.real_time_position[time_stamp distance]
-		          Pipeline: └── Connector (idx:0, isFirst:false, isLast:false) to MergeReceiver 0
-		                        └── Group (idx:1, isFirst:true, isLast:false)
-		                            └── Projection (idx:0, isFirst:false, isLast:true)
-		                                └── Filter (idx:0, isFirst:false, isLast:false)
-		                                    └── TableScan (idx:0, isFirst:true, isLast:false)
-		        Scope 4 (Magic: Normal, mcpu: 1, Receiver: [])
+		          Pipeline: └── Connector (0,false,false) to MergeReceiver 0
+		                        └── Group (1,true,false)
+		                            └── Projection (0,false,true)
+		                                └── Filter (0,false,false)
+		                                    └── TableScan (0,true,false)
+		        Scope 4 (Magic: Normal, mcpu: 1)
 		          DataSource: cloud_device.real_time_position[time_stamp distance]
-		          Pipeline: └── Connector (idx:0, isFirst:false, isLast:false) to MergeReceiver 1
-		                        └── Group (idx:1, isFirst:true, isLast:false)
-		                            └── Projection (idx:0, isFirst:false, isLast:true)
-		                                └── Filter (idx:0, isFirst:false, isLast:false)
-		                                    └── TableScan (idx:0, isFirst:true, isLast:false)
+		          Pipeline: └── Connector (0,false,false) to MergeReceiver 1
+		                        └── Group (1,true,false)
+		                            └── Projection (0,false,true)
+		                                └── Filter (0,false,false)
+		                                    └── TableScan (0,true,false)
 		      }
 		  }
 	*/

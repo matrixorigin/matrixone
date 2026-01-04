@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -68,13 +69,27 @@ func explainResourceOverview(phy *PhyPlan, statsInfo *statistic.StatsInfo, optio
 	if option == VerboseOption || option == AnalyzeOption {
 		gblStats := ExtractPhyPlanGlbStats(phy)
 		buffer.WriteString("Overview:\n")
-		buffer.WriteString(fmt.Sprintf("\tMemoryUsage:%dB,  SpillSize:%dB,  DiskI/O:%dB,  NewWorkI/O:%dB,  RetryTime: %v",
-			gblStats.MemorySize,
-			gblStats.SpillSize,
-			gblStats.DiskIOSize,
-			gblStats.NetWorkSize,
-			phy.RetryTime,
-		))
+		// Format MemoryUsage, SpillSize, DiskI/O, NewWorkI/O, only include non-zero values
+		overviewParts := []string{}
+		if gblStats.MemorySize > 0 {
+			overviewParts = append(overviewParts, fmt.Sprintf("MemoryUsage:%s", common.FormatBytes(gblStats.MemorySize)))
+		}
+		if gblStats.SpillSize > 0 {
+			overviewParts = append(overviewParts, fmt.Sprintf("SpillSize:%s", common.FormatBytes(gblStats.SpillSize)))
+		}
+		if gblStats.DiskIOSize > 0 {
+			overviewParts = append(overviewParts, fmt.Sprintf("DiskI/O:%s", common.FormatBytes(gblStats.DiskIOSize)))
+		}
+		if gblStats.NetWorkSize > 0 {
+			overviewParts = append(overviewParts, fmt.Sprintf("NewWorkI/O:%s", common.FormatBytes(gblStats.NetWorkSize)))
+		}
+		// Always include RetryTime
+		overviewStr := strings.Join(overviewParts, ",  ")
+		if len(overviewStr) > 0 {
+			buffer.WriteString(fmt.Sprintf("\t%s,  RetryTime: %v", overviewStr, phy.RetryTime))
+		} else {
+			buffer.WriteString(fmt.Sprintf("\tRetryTime: %v", phy.RetryTime))
+		}
 
 		if statsInfo != nil {
 			buffer.WriteString("\n")
@@ -82,9 +97,33 @@ func explainResourceOverview(phy *PhyPlan, statsInfo *statistic.StatsInfo, optio
 			list, head, put, get, delete, deleteMul, writtenRows, deletedRows := CalcTotalS3Requests(gblStats, statsInfo)
 
 			s3InputEstByRows := objectio.EstimateS3Input(writtenRows)
-			buffer.WriteString(fmt.Sprintf("\tS3List:%d, S3Head:%d, S3Put:%d, S3Get:%d, S3Delete:%d, S3DeleteMul:%d, S3InputEstByRows((%d+%d)/8192):%.4f \n",
-				list, head, put, get, delete, deleteMul, writtenRows, deletedRows, s3InputEstByRows,
-			))
+			// Format S3 stats, only include non-zero values
+			s3OverviewParts := []string{}
+			if list > 0 {
+				s3OverviewParts = append(s3OverviewParts, fmt.Sprintf("S3List:%d", list))
+			}
+			if head > 0 {
+				s3OverviewParts = append(s3OverviewParts, fmt.Sprintf("S3Head:%d", head))
+			}
+			if put > 0 {
+				s3OverviewParts = append(s3OverviewParts, fmt.Sprintf("S3Put:%d", put))
+			}
+			if get > 0 {
+				s3OverviewParts = append(s3OverviewParts, fmt.Sprintf("S3Get:%d", get))
+			}
+			if delete > 0 {
+				s3OverviewParts = append(s3OverviewParts, fmt.Sprintf("S3Delete:%d", delete))
+			}
+			if deleteMul > 0 {
+				s3OverviewParts = append(s3OverviewParts, fmt.Sprintf("S3DeleteMul:%d", deleteMul))
+			}
+			// Always include S3InputEstByRows if writtenRows or deletedRows > 0, or if there are S3 requests
+			if len(s3OverviewParts) > 0 || writtenRows > 0 || deletedRows > 0 {
+				if len(s3OverviewParts) > 0 {
+					buffer.WriteString(fmt.Sprintf("\t%s, ", strings.Join(s3OverviewParts, ", ")))
+				}
+				buffer.WriteString(fmt.Sprintf("S3InputEstByRows((%d+%d)/8192):%.4f \n", writtenRows, deletedRows, s3InputEstByRows))
+			}
 
 			cpuTimeVal := gblStats.OperatorTimeConsumed +
 				int64(statsInfo.ParseStage.ParseDuration+statsInfo.PlanStage.PlanDuration+statsInfo.CompileStage.CompileDuration) +
@@ -93,91 +132,189 @@ func explainResourceOverview(phy *PhyPlan, statsInfo *statistic.StatsInfo, optio
 				(statsInfo.IOAccessTimeConsumption + statsInfo.S3FSPrefetchFileIOMergerTimeConsumption)
 
 			buffer.WriteString("\tCPU Usage: \n")
-			buffer.WriteString(fmt.Sprintf("\t\t- Total CPU Time: %dns \n", cpuTimeVal))
-			buffer.WriteString(fmt.Sprintf("\t\t- CPU Time Detail: Parse(%d)+BuildPlan(%d)+Compile(%d)+PhyExec(%d)+PrepareRun(%d)-PreRunWaitLock(%d)-PlanStatsIO(%d)-IOAccess(%d)-IOMerge(%d)\n",
-				statsInfo.ParseStage.ParseDuration,
-				statsInfo.PlanStage.PlanDuration,
-				statsInfo.CompileStage.CompileDuration,
-				gblStats.OperatorTimeConsumed,
-				gblStats.ScopePrepareTimeConsumed+statsInfo.PrepareRunStage.CompilePreRunOnceDuration,
-				statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock,
-				statsInfo.PlanStage.BuildPlanStatsIOConsumption,
-				statsInfo.IOAccessTimeConsumption,
-				statsInfo.S3FSPrefetchFileIOMergerTimeConsumption))
+			buffer.WriteString(fmt.Sprintf("\t\t- Total CPU Time: %s \n", common.FormatDuration(cpuTimeVal)))
+			buffer.WriteString(fmt.Sprintf("\t\t- CPU Time Detail: Parse(%s)+BuildPlan(%s)+Compile(%s)+PhyExec(%s)+PrepareRun(%s)-PreRunWaitLock(%s)-PlanStatsIO(%s)-IOAccess(%s)-IOMerge(%s)\n",
+				common.FormatDuration(int64(statsInfo.ParseStage.ParseDuration)),
+				common.FormatDuration(int64(statsInfo.PlanStage.PlanDuration)),
+				common.FormatDuration(int64(statsInfo.CompileStage.CompileDuration)),
+				common.FormatDuration(gblStats.OperatorTimeConsumed),
+				common.FormatDuration(gblStats.ScopePrepareTimeConsumed+statsInfo.PrepareRunStage.CompilePreRunOnceDuration),
+				common.FormatDuration(int64(statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock)),
+				common.FormatDuration(int64(statsInfo.PlanStage.BuildPlanStatsIOConsumption)),
+				common.FormatDuration(int64(statsInfo.IOAccessTimeConsumption)),
+				common.FormatDuration(int64(statsInfo.S3FSPrefetchFileIOMergerTimeConsumption))))
 			buffer.WriteString(fmt.Sprintf("\t\t- Permission Authentication Stats Array: %v \n", statsInfo.PermissionAuth))
 
 			//-------------------------------------------------------------------------------------------------------
 			if option == AnalyzeOption {
 				buffer.WriteString("\tQuery Build Plan Stage:\n")
-				buffer.WriteString(fmt.Sprintf("\t\t- CPU Time: %dns \n", int64(statsInfo.PlanStage.PlanDuration)-statsInfo.PlanStage.BuildPlanStatsIOConsumption))
-				buffer.WriteString(fmt.Sprintf("\t\t- S3List:%d, S3Head:%d, S3Put:%d, S3Get:%d, S3Delete:%d, S3DeleteMul:%d\n",
-					statsInfo.PlanStage.BuildPlanS3Request.List,
-					statsInfo.PlanStage.BuildPlanS3Request.Head,
-					statsInfo.PlanStage.BuildPlanS3Request.Put,
-					statsInfo.PlanStage.BuildPlanS3Request.Get,
-					statsInfo.PlanStage.BuildPlanS3Request.Delete,
-					statsInfo.PlanStage.BuildPlanS3Request.DeleteMul,
-				))
-				buffer.WriteString(fmt.Sprintf("\t\t- Build Plan Duration: %dns \n", int64(statsInfo.PlanStage.PlanDuration)))
-				buffer.WriteString(fmt.Sprintf("\t\t- Call Stats Duration: %dns \n", statsInfo.PlanStage.BuildPlanStatsDuration))
-				buffer.WriteString(fmt.Sprintf("\t\t- Call StatsInCache Duration: %dns \n", statsInfo.PlanStage.BuildPlanStatsInCacheDuration))
-				buffer.WriteString(fmt.Sprintf("\t\t- Call Stats IO Consumption: %dns \n", statsInfo.PlanStage.BuildPlanStatsIOConsumption))
-				buffer.WriteString(fmt.Sprintf("\t\t- Call Stats S3List:%d, S3Head:%d, S3Put:%d, S3Get:%d, S3Delete:%d, S3DeleteMul:%d\n",
-					statsInfo.PlanStage.BuildPlanStatsS3.List,
-					statsInfo.PlanStage.BuildPlanStatsS3.Head,
-					statsInfo.PlanStage.BuildPlanStatsS3.Put,
-					statsInfo.PlanStage.BuildPlanStatsS3.Get,
-					statsInfo.PlanStage.BuildPlanStatsS3.Delete,
-					statsInfo.PlanStage.BuildPlanStatsS3.DeleteMul,
-				))
+				buffer.WriteString(fmt.Sprintf("\t\t- CPU Time: %s \n", common.FormatDuration(int64(statsInfo.PlanStage.PlanDuration)-statsInfo.PlanStage.BuildPlanStatsIOConsumption)))
+
+				// Format S3 request stats, only include non-zero values
+				s3ReqParts := []string{}
+				if statsInfo.PlanStage.BuildPlanS3Request.List > 0 {
+					s3ReqParts = append(s3ReqParts, fmt.Sprintf("S3List:%d", statsInfo.PlanStage.BuildPlanS3Request.List))
+				}
+				if statsInfo.PlanStage.BuildPlanS3Request.Head > 0 {
+					s3ReqParts = append(s3ReqParts, fmt.Sprintf("S3Head:%d", statsInfo.PlanStage.BuildPlanS3Request.Head))
+				}
+				if statsInfo.PlanStage.BuildPlanS3Request.Put > 0 {
+					s3ReqParts = append(s3ReqParts, fmt.Sprintf("S3Put:%d", statsInfo.PlanStage.BuildPlanS3Request.Put))
+				}
+				if statsInfo.PlanStage.BuildPlanS3Request.Get > 0 {
+					s3ReqParts = append(s3ReqParts, fmt.Sprintf("S3Get:%d", statsInfo.PlanStage.BuildPlanS3Request.Get))
+				}
+				if statsInfo.PlanStage.BuildPlanS3Request.Delete > 0 {
+					s3ReqParts = append(s3ReqParts, fmt.Sprintf("S3Delete:%d", statsInfo.PlanStage.BuildPlanS3Request.Delete))
+				}
+				if statsInfo.PlanStage.BuildPlanS3Request.DeleteMul > 0 {
+					s3ReqParts = append(s3ReqParts, fmt.Sprintf("S3DeleteMul:%d", statsInfo.PlanStage.BuildPlanS3Request.DeleteMul))
+				}
+				// Only print S3 request line if at least one value is non-zero
+				if len(s3ReqParts) > 0 {
+					buffer.WriteString(fmt.Sprintf("\t\t- %s\n", strings.Join(s3ReqParts, ", ")))
+				}
+
+				buffer.WriteString(fmt.Sprintf("\t\t- Build Plan Duration: %s \n", common.FormatDuration(int64(statsInfo.PlanStage.PlanDuration))))
+				buffer.WriteString(fmt.Sprintf("\t\t- Call Stats Duration: %s \n", common.FormatDuration(int64(statsInfo.PlanStage.BuildPlanStatsDuration))))
+				buffer.WriteString(fmt.Sprintf("\t\t- Call StatsInCache Duration: %s \n", common.FormatDuration(int64(statsInfo.PlanStage.BuildPlanStatsInCacheDuration))))
+				buffer.WriteString(fmt.Sprintf("\t\t- Call Stats IO Consumption: %s \n", common.FormatDuration(int64(statsInfo.PlanStage.BuildPlanStatsIOConsumption))))
+
+				// Format Call Stats S3, only include non-zero values
+				s3StatsParts := []string{}
+				if statsInfo.PlanStage.BuildPlanStatsS3.List > 0 {
+					s3StatsParts = append(s3StatsParts, fmt.Sprintf("S3List:%d", statsInfo.PlanStage.BuildPlanStatsS3.List))
+				}
+				if statsInfo.PlanStage.BuildPlanStatsS3.Head > 0 {
+					s3StatsParts = append(s3StatsParts, fmt.Sprintf("S3Head:%d", statsInfo.PlanStage.BuildPlanStatsS3.Head))
+				}
+				if statsInfo.PlanStage.BuildPlanStatsS3.Put > 0 {
+					s3StatsParts = append(s3StatsParts, fmt.Sprintf("S3Put:%d", statsInfo.PlanStage.BuildPlanStatsS3.Put))
+				}
+				if statsInfo.PlanStage.BuildPlanStatsS3.Get > 0 {
+					s3StatsParts = append(s3StatsParts, fmt.Sprintf("S3Get:%d", statsInfo.PlanStage.BuildPlanStatsS3.Get))
+				}
+				if statsInfo.PlanStage.BuildPlanStatsS3.Delete > 0 {
+					s3StatsParts = append(s3StatsParts, fmt.Sprintf("S3Delete:%d", statsInfo.PlanStage.BuildPlanStatsS3.Delete))
+				}
+				if statsInfo.PlanStage.BuildPlanStatsS3.DeleteMul > 0 {
+					s3StatsParts = append(s3StatsParts, fmt.Sprintf("S3DeleteMul:%d", statsInfo.PlanStage.BuildPlanStatsS3.DeleteMul))
+				}
+				// Only print Call Stats S3 line if at least one value is non-zero
+				if len(s3StatsParts) > 0 {
+					buffer.WriteString(fmt.Sprintf("\t\t- Call Stats %s\n", strings.Join(s3StatsParts, ", ")))
+				}
 
 				//-------------------------------------------------------------------------------------------------------
 				buffer.WriteString("\tQuery Compile Stage:\n")
-				buffer.WriteString(fmt.Sprintf("\t\t- CPU Time: %dns \n", statsInfo.CompileStage.CompileDuration))
-				buffer.WriteString(fmt.Sprintf("\t\t- S3List:%d, S3Head:%d, S3Put:%d, S3Get:%d, S3Delete:%d, S3DeleteMul:%d\n",
-					statsInfo.CompileStage.CompileS3Request.List,
-					statsInfo.CompileStage.CompileS3Request.Head,
-					statsInfo.CompileStage.CompileS3Request.Put,
-					statsInfo.CompileStage.CompileS3Request.Get,
-					statsInfo.CompileStage.CompileS3Request.Delete,
-					statsInfo.CompileStage.CompileS3Request.DeleteMul,
-				))
-				buffer.WriteString(fmt.Sprintf("\t\t- Compile TableScan Duration: %dns \n", statsInfo.CompileStage.CompileTableScanDuration))
+				buffer.WriteString(fmt.Sprintf("\t\t- CPU Time: %s \n", common.FormatDuration(int64(statsInfo.CompileStage.CompileDuration))))
+
+				// Format S3 request stats, only include non-zero values
+				s3CompileParts := []string{}
+				if statsInfo.CompileStage.CompileS3Request.List > 0 {
+					s3CompileParts = append(s3CompileParts, fmt.Sprintf("S3List:%d", statsInfo.CompileStage.CompileS3Request.List))
+				}
+				if statsInfo.CompileStage.CompileS3Request.Head > 0 {
+					s3CompileParts = append(s3CompileParts, fmt.Sprintf("S3Head:%d", statsInfo.CompileStage.CompileS3Request.Head))
+				}
+				if statsInfo.CompileStage.CompileS3Request.Put > 0 {
+					s3CompileParts = append(s3CompileParts, fmt.Sprintf("S3Put:%d", statsInfo.CompileStage.CompileS3Request.Put))
+				}
+				if statsInfo.CompileStage.CompileS3Request.Get > 0 {
+					s3CompileParts = append(s3CompileParts, fmt.Sprintf("S3Get:%d", statsInfo.CompileStage.CompileS3Request.Get))
+				}
+				if statsInfo.CompileStage.CompileS3Request.Delete > 0 {
+					s3CompileParts = append(s3CompileParts, fmt.Sprintf("S3Delete:%d", statsInfo.CompileStage.CompileS3Request.Delete))
+				}
+				if statsInfo.CompileStage.CompileS3Request.DeleteMul > 0 {
+					s3CompileParts = append(s3CompileParts, fmt.Sprintf("S3DeleteMul:%d", statsInfo.CompileStage.CompileS3Request.DeleteMul))
+				}
+				// Only print S3 request line if at least one value is non-zero
+				if len(s3CompileParts) > 0 {
+					buffer.WriteString(fmt.Sprintf("\t\t- %s\n", strings.Join(s3CompileParts, ", ")))
+				}
+				buffer.WriteString(fmt.Sprintf("\t\t- Compile TableScan Duration: %s \n", common.FormatDuration(int64(statsInfo.CompileStage.CompileTableScanDuration))))
 
 				//-------------------------------------------------------------------------------------------------------
 				buffer.WriteString("\tQuery Prepare Exec Stage:\n")
-				buffer.WriteString(fmt.Sprintf("\t\t- CPU Time: %dns \n", gblStats.ScopePrepareTimeConsumed+statsInfo.PrepareRunStage.CompilePreRunOnceDuration-statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock))
-				buffer.WriteString(fmt.Sprintf("\t\t- CompilePreRunOnce Duration: %dns \n", statsInfo.PrepareRunStage.CompilePreRunOnceDuration))
-				buffer.WriteString(fmt.Sprintf("\t\t- PreRunOnce WaitLock: %dns \n", statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock))
-				buffer.WriteString(fmt.Sprintf("\t\t- ScopePrepareTimeConsumed: %dns \n", gblStats.ScopePrepareTimeConsumed))
-				buffer.WriteString(fmt.Sprintf("\t\t- BuildReader Duration: %dns \n", statsInfo.PrepareRunStage.BuildReaderDuration))
-				buffer.WriteString(fmt.Sprintf("\t\t- S3List:%d, S3Head:%d, S3Put:%d, S3Get:%d, S3Delete:%d, S3DeleteMul:%d\n",
-					statsInfo.PrepareRunStage.ScopePrepareS3Request.List,
-					statsInfo.PrepareRunStage.ScopePrepareS3Request.Head,
-					statsInfo.PrepareRunStage.ScopePrepareS3Request.Put,
-					statsInfo.PrepareRunStage.ScopePrepareS3Request.Get,
-					statsInfo.PrepareRunStage.ScopePrepareS3Request.Delete,
-					statsInfo.PrepareRunStage.ScopePrepareS3Request.DeleteMul,
-				))
+				buffer.WriteString(fmt.Sprintf("\t\t- CPU Time: %s \n", common.FormatDuration(gblStats.ScopePrepareTimeConsumed+statsInfo.PrepareRunStage.CompilePreRunOnceDuration-statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock)))
+				buffer.WriteString(fmt.Sprintf("\t\t- CompilePreRunOnce Duration: %s \n", common.FormatDuration(int64(statsInfo.PrepareRunStage.CompilePreRunOnceDuration))))
+				buffer.WriteString(fmt.Sprintf("\t\t- PreRunOnce WaitLock: %s \n", common.FormatDuration(int64(statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock))))
+				buffer.WriteString(fmt.Sprintf("\t\t- ScopePrepareTimeConsumed: %s \n", common.FormatDuration(gblStats.ScopePrepareTimeConsumed)))
+				buffer.WriteString(fmt.Sprintf("\t\t- BuildReader Duration: %s \n", common.FormatDuration(int64(statsInfo.PrepareRunStage.BuildReaderDuration))))
+
+				// Format S3 request stats, only include non-zero values
+				s3PrepareParts := []string{}
+				if statsInfo.PrepareRunStage.ScopePrepareS3Request.List > 0 {
+					s3PrepareParts = append(s3PrepareParts, fmt.Sprintf("S3List:%d", statsInfo.PrepareRunStage.ScopePrepareS3Request.List))
+				}
+				if statsInfo.PrepareRunStage.ScopePrepareS3Request.Head > 0 {
+					s3PrepareParts = append(s3PrepareParts, fmt.Sprintf("S3Head:%d", statsInfo.PrepareRunStage.ScopePrepareS3Request.Head))
+				}
+				if statsInfo.PrepareRunStage.ScopePrepareS3Request.Put > 0 {
+					s3PrepareParts = append(s3PrepareParts, fmt.Sprintf("S3Put:%d", statsInfo.PrepareRunStage.ScopePrepareS3Request.Put))
+				}
+				if statsInfo.PrepareRunStage.ScopePrepareS3Request.Get > 0 {
+					s3PrepareParts = append(s3PrepareParts, fmt.Sprintf("S3Get:%d", statsInfo.PrepareRunStage.ScopePrepareS3Request.Get))
+				}
+				if statsInfo.PrepareRunStage.ScopePrepareS3Request.Delete > 0 {
+					s3PrepareParts = append(s3PrepareParts, fmt.Sprintf("S3Delete:%d", statsInfo.PrepareRunStage.ScopePrepareS3Request.Delete))
+				}
+				if statsInfo.PrepareRunStage.ScopePrepareS3Request.DeleteMul > 0 {
+					s3PrepareParts = append(s3PrepareParts, fmt.Sprintf("S3DeleteMul:%d", statsInfo.PrepareRunStage.ScopePrepareS3Request.DeleteMul))
+				}
+				// Only print S3 request line if at least one value is non-zero
+				if len(s3PrepareParts) > 0 {
+					buffer.WriteString(fmt.Sprintf("\t\t- %s\n", strings.Join(s3PrepareParts, ", ")))
+				}
 
 				//-------------------------------------------------------------------------------------------------------
 				buffer.WriteString("\tQuery Execution Stage:\n")
-				buffer.WriteString(fmt.Sprintf("\t\t- CPU Time: %dns \n", gblStats.OperatorTimeConsumed))
-				buffer.WriteString(fmt.Sprintf("\t\t- S3List:%d, S3Head:%d, S3Put:%d, S3Get:%d, S3Delete:%d, S3DeleteMul:%d\n",
-					gblStats.S3ListRequest,
-					gblStats.S3HeadRequest,
-					gblStats.S3PutRequest,
-					gblStats.S3GetRequest,
-					gblStats.S3DeleteRequest,
-					gblStats.S3DeleteMultiRequest,
-				))
+				buffer.WriteString(fmt.Sprintf("\t\t- CPU Time: %s \n", common.FormatDuration(gblStats.OperatorTimeConsumed)))
 
-				buffer.WriteString(fmt.Sprintf("\t\t- MemoryUsage: %dB,  SpillSize: %dB,  DiskI/O: %dB,  NewWorkI/O:%dB\n",
-					gblStats.MemorySize,
-					gblStats.SpillSize,
-					gblStats.DiskIOSize,
-					gblStats.NetWorkSize,
-				))
+				// Format S3 request stats, only include non-zero values
+				s3ExecParts := []string{}
+				if gblStats.S3ListRequest > 0 {
+					s3ExecParts = append(s3ExecParts, fmt.Sprintf("S3List:%d", gblStats.S3ListRequest))
+				}
+				if gblStats.S3HeadRequest > 0 {
+					s3ExecParts = append(s3ExecParts, fmt.Sprintf("S3Head:%d", gblStats.S3HeadRequest))
+				}
+				if gblStats.S3PutRequest > 0 {
+					s3ExecParts = append(s3ExecParts, fmt.Sprintf("S3Put:%d", gblStats.S3PutRequest))
+				}
+				if gblStats.S3GetRequest > 0 {
+					s3ExecParts = append(s3ExecParts, fmt.Sprintf("S3Get:%d", gblStats.S3GetRequest))
+				}
+				if gblStats.S3DeleteRequest > 0 {
+					s3ExecParts = append(s3ExecParts, fmt.Sprintf("S3Delete:%d", gblStats.S3DeleteRequest))
+				}
+				if gblStats.S3DeleteMultiRequest > 0 {
+					s3ExecParts = append(s3ExecParts, fmt.Sprintf("S3DeleteMul:%d", gblStats.S3DeleteMultiRequest))
+				}
+				// Only print S3 request line if at least one value is non-zero
+				if len(s3ExecParts) > 0 {
+					buffer.WriteString(fmt.Sprintf("\t\t- %s\n", strings.Join(s3ExecParts, ", ")))
+				}
+
+				// Format MemoryUsage, SpillSize, DiskI/O, NewWorkI/O, only include non-zero values
+				resourceParts := []string{}
+				if gblStats.MemorySize > 0 {
+					resourceParts = append(resourceParts, fmt.Sprintf("MemoryUsage: %s", common.FormatBytes(gblStats.MemorySize)))
+				}
+				if gblStats.SpillSize > 0 {
+					resourceParts = append(resourceParts, fmt.Sprintf("SpillSize: %s", common.FormatBytes(gblStats.SpillSize)))
+				}
+				if gblStats.DiskIOSize > 0 {
+					resourceParts = append(resourceParts, fmt.Sprintf("DiskI/O: %s", common.FormatBytes(gblStats.DiskIOSize)))
+				}
+				if gblStats.NetWorkSize > 0 {
+					resourceParts = append(resourceParts, fmt.Sprintf("NewWorkI/O: %s", common.FormatBytes(gblStats.NetWorkSize)))
+				}
+				// Only print resource line if at least one value is non-zero
+				if len(resourceParts) > 0 {
+					buffer.WriteString(fmt.Sprintf("\t\t- %s\n", strings.Join(resourceParts, ",  ")))
+				}
 			}
 			//-------------------------------------------------------------------------------------------------------
 			buffer.WriteString("Physical Plan Deployment:")
@@ -191,8 +328,12 @@ func explainPhyScope(scope PhyScope, index int, gap int, option ExplainOption, b
 	gapNextLine(gap, buffer)
 
 	// Scope Header
-	receiverStr := getReceiverStr(scope.Receiver)
-	buffer.WriteString(fmt.Sprintf("Scope %d (Magic: %s, mcpu: %v, Receiver: %s)", index+1, scope.Magic, scope.Mcpu, receiverStr))
+	if len(scope.Receiver) > 0 {
+		receiverStr := getReceiverStr(scope.Receiver)
+		buffer.WriteString(fmt.Sprintf("Scope %d (Magic: %s, mcpu: %v, Receiver: %s)", index+1, scope.Magic, scope.Mcpu, receiverStr))
+	} else {
+		buffer.WriteString(fmt.Sprintf("Scope %d (Magic: %s, mcpu: %v)", index+1, scope.Magic, scope.Mcpu))
+	}
 
 	// Scope DataSource
 	if scope.DataSource != nil {
@@ -212,6 +353,7 @@ func explainPhyScope(scope PhyScope, index int, gap int, option ExplainOption, b
 		for i := range scope.PreScopes {
 			explainPhyScope(scope.PreScopes[i], i, gap+4, option, buffer)
 		}
+		// Always output the closing brace on a new line with proper indentation
 		gapNextLine(gap, buffer)
 		buffer.WriteString("  }")
 	}
@@ -229,7 +371,7 @@ func PrintPipelineTree(node *PhyOperator, prefix string, isRoot, isTail bool, op
 		// Extract the original bool values
 		isFirst := (node.Status & IsFirstMask) != 0
 		isLast := (node.Status & IsLastMask) != 0
-		analyzeStr = fmt.Sprintf(" (idx:%v, isFirst:%v, isLast:%v)", node.NodeIdx, isFirst, isLast)
+		analyzeStr = fmt.Sprintf(" (%v,%v,%v)", node.NodeIdx, isFirst, isLast)
 	}
 	if option == AnalyzeOption && node.OpStats != nil {
 		analyzeStr += node.OpStats.String()
@@ -431,4 +573,124 @@ func ExtractPhyPlanGlbStats(plan *PhyPlan) GblStats {
 	handlePhyPlanScopes(plan.RemoteScope, &stats)
 
 	return stats
+}
+
+// ExplainPhyPlanOverview generates only the Overview section of the physical plan
+func ExplainPhyPlanOverview(phy *PhyPlan, statsInfo *statistic.StatsInfo, option ExplainOption) string {
+	buffer := bytes.NewBuffer(make([]byte, 0, 300))
+	if len(phy.LocalScope) > 0 || len(phy.RemoteScope) > 0 {
+		explainResourceOverview(phy, statsInfo, option, buffer)
+	}
+	return buffer.String()
+}
+
+// ExplainPhyPlanCompressed generates a compressed version with key information but reduced verbosity
+func ExplainPhyPlanCompressed(phy *PhyPlan, statsInfo *statistic.StatsInfo, option ExplainOption) string {
+	buffer := bytes.NewBuffer(make([]byte, 0, 1000))
+
+	// Always include Overview
+	if len(phy.LocalScope) > 0 || len(phy.RemoteScope) > 0 {
+		explainResourceOverview(phy, statsInfo, option, buffer)
+	}
+
+	buffer.WriteString("\nPhysical Plan Deployment (Compressed):\n")
+
+	if len(phy.LocalScope) > 0 {
+		buffer.WriteString("LOCAL SCOPES:\n")
+		for i, scope := range phy.LocalScope {
+			explainPhyScopeCompressed(scope, i, 0, buffer)
+		}
+	}
+
+	if len(phy.RemoteScope) > 0 {
+		buffer.WriteString("REMOTE SCOPES:\n")
+		for i, scope := range phy.RemoteScope {
+			explainPhyScopeCompressed(scope, i, 0, buffer)
+		}
+	}
+
+	return buffer.String()
+}
+
+// explainPhyScopeCompressed generates compressed scope information with key metrics only
+func explainPhyScopeCompressed(scope PhyScope, scopeIdx int, depth int, buffer *bytes.Buffer) {
+	indent := strings.Repeat("  ", depth)
+
+	// Scope header with key info
+	buffer.WriteString(fmt.Sprintf("%sScope %d (%s, mcpu: %d", indent, scopeIdx+1, scope.Magic, scope.Mcpu))
+	if len(scope.Receiver) > 0 {
+		buffer.WriteString(fmt.Sprintf(", Receiver: %v", scope.Receiver))
+	}
+	buffer.WriteString(")\n")
+
+	// DataSource if present
+	if scope.DataSource != nil && scope.DataSource.SchemaName != "" {
+		buffer.WriteString(fmt.Sprintf("%s  DataSource: %s.%s%s\n",
+			indent, scope.DataSource.SchemaName, scope.DataSource.RelationName,
+			formatColumns(scope.DataSource.Attributes)))
+	}
+
+	// Pipeline - only show operators with significant metrics
+	if scope.RootOperator != nil {
+		buffer.WriteString(fmt.Sprintf("%s  Pipeline: ", indent))
+		explainOperatorChainCompressed(scope.RootOperator, buffer)
+		buffer.WriteString("\n")
+	}
+
+	// PreScopes - recursively but more compact
+	if len(scope.PreScopes) > 0 {
+		buffer.WriteString(fmt.Sprintf("%s  PreScopes: %d scope(s)\n", indent, len(scope.PreScopes)))
+		for i, preScope := range scope.PreScopes {
+			explainPhyScopeCompressed(preScope, i, depth+2, buffer)
+		}
+	}
+}
+
+// explainOperatorChainCompressed shows operator chain with only key metrics
+func explainOperatorChainCompressed(op *PhyOperator, buffer *bytes.Buffer) {
+	if op == nil {
+		return
+	}
+
+	// Show operator with key metrics only
+	metrics := ""
+	if op.OpStats != nil {
+		stats := op.OpStats
+		// Only show non-zero significant metrics
+		parts := []string{}
+		if stats.CallNum > 0 {
+			parts = append(parts, fmt.Sprintf("Calls:%d", stats.CallNum))
+		}
+		if stats.TimeConsumed > 1000000 { // > 1ms
+			parts = append(parts, fmt.Sprintf("Time:%s", common.FormatDuration(stats.TimeConsumed)))
+		}
+		if stats.InputRows > 0 {
+			parts = append(parts, fmt.Sprintf("Rows:%d→%d", stats.InputRows, stats.OutputRows))
+		}
+		if stats.InputSize > 1024 { // > 1KB
+			parts = append(parts, fmt.Sprintf("Size:%s", common.FormatBytes(stats.InputSize)))
+		}
+		if len(parts) > 0 {
+			metrics = " [" + strings.Join(parts, " ") + "]"
+		}
+	}
+
+	buffer.WriteString(fmt.Sprintf("%s%s", op.OpName, metrics))
+
+	// Show child operators in chain
+	if len(op.Children) > 0 {
+		buffer.WriteString(" → ")
+		explainOperatorChainCompressed(op.Children[0], buffer)
+	}
+}
+
+// formatColumns formats column list compactly
+func formatColumns(columns []string) string {
+	if len(columns) == 0 {
+		return ""
+	}
+	if len(columns) <= 3 {
+		return "[" + strings.Join(columns, " ") + "]"
+	}
+	return fmt.Sprintf("[%s...+%d]", strings.Join(columns[:2], " "), len(columns)-2)
 }

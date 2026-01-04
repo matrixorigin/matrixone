@@ -63,7 +63,7 @@ Scope 1 (Magic: Remote, mcpu: 1, Receiver: [])  𝄀
                             └── tablescan
 explain phyplan verbose select a.ename,b.dname from emp a left join dept b on a.deptno = b.deptno;
 -- @regex("(?s)MemoryUsage.*CPU", true)
--- @regex("(?s)left\(idx:(\d+).*hash build\(idx:\1", true)
+-- @regex("(?s)left\\((\\d+),true,true\\).*hash build\\(\\1,true,false\\)", true)
 tp query phyplan  𝄀
 Overview:  𝄀
 	MemoryUsage:34674B,  SpillSize:0B,  DiskI/O:0B,  NewWorkI/O:0B, AffectedRows: 0  𝄀
@@ -75,15 +75,15 @@ Overview:  𝄀
 Physical Plan Deployment:  𝄀
 Scope 1 (Magic: Remote, addr:127.0.0.1:18000, mcpu: 1, Receiver: []) PrepareTimeConsumed: 57246ns  𝄀
   DataSource: db1.emp[ename deptno]  𝄀
-  Pipeline: └── output(idx:-1, isFirst:false, isLast:false)  𝄀
-                └── projection(idx:3, isFirst:true, isLast:true)  𝄀
-                    └── left(idx:2, isFirst:true, isLast:true)  𝄀
-                        └── tablescan(idx:0, isFirst:true, isLast:true)  𝄀
+  Pipeline: └── output(-1,false,false)  𝄀
+                └── projection(3,true,true)  𝄀
+                    └── left(2,true,true)  𝄀
+                        └── tablescan(0,true,true)  𝄀
   PreScopes: {  𝄀
     Scope 1 (Magic: Remote, addr:127.0.0.1:18000, mcpu: 1, Receiver: []) PrepareTimeConsumed: 5572ns  𝄀
       DataSource: db1.dept[deptno dname]  𝄀
-      Pipeline: └── hash build(idx:2, isFirst:true, isLast:false)  𝄀
-                    └── tablescan(idx:1, isFirst:true, isLast:true)  𝄀
+      Pipeline: └── hash build(2,true,false)  𝄀
+                    └── tablescan(1,true,true)  𝄀
   }
 drop table emp;
 drop table dept;
