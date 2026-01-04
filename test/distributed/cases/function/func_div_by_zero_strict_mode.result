@@ -1,0 +1,76 @@
+DROP TABLE IF EXISTS t_strict_div;
+CREATE TABLE t_strict_div (id INT, val INT);
+SET sql_mode = '';
+INSERT INTO t_strict_div VALUES (1, 10/0);
+INSERT INTO t_strict_div VALUES (2, 10 DIV 0);
+INSERT INTO t_strict_div VALUES (3, 10 % 0);
+SELECT * FROM t_strict_div ORDER BY id;
+➤ id[4,32,0]  ¦  val[4,32,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  null  𝄀
+3  ¦  null
+TRUNCATE TABLE t_strict_div;
+SET sql_mode = 'STRICT_TRANS_TABLES';
+INSERT INTO t_strict_div VALUES (1, 10/0);
+INSERT INTO t_strict_div VALUES (2, 10 DIV 0);
+INSERT INTO t_strict_div VALUES (3, 10 % 0);
+SELECT * FROM t_strict_div ORDER BY id;
+➤ id[4,32,0]  ¦  val[4,32,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  null  𝄀
+3  ¦  null
+TRUNCATE TABLE t_strict_div;
+SET sql_mode = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO';
+INSERT INTO t_strict_div VALUES (1, 10/0);
+INSERT INTO t_strict_div VALUES (2, 10 DIV 0);
+INSERT INTO t_strict_div VALUES (3, 10 % 0);
+SELECT COUNT(*) FROM t_strict_div;
+➤ COUNT(*)[-5,64,0]  𝄀
+3
+SET sql_mode = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO';
+INSERT IGNORE INTO t_strict_div VALUES (1, 10/0);
+INSERT IGNORE INTO t_strict_div VALUES (2, 10 DIV 0);
+INSERT IGNORE INTO t_strict_div VALUES (3, 10 % 0);
+SELECT * FROM t_strict_div ORDER BY id;
+➤ id[4,32,0]  ¦  val[4,32,0]  𝄀
+1  ¦  null  𝄀
+1  ¦  null  𝄀
+2  ¦  null  𝄀
+2  ¦  null  𝄀
+3  ¦  null  𝄀
+3  ¦  null
+TRUNCATE TABLE t_strict_div;
+INSERT INTO t_strict_div VALUES (1, 100), (2, 200), (3, 300);
+SET sql_mode = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO';
+UPDATE t_strict_div SET val = 10/0 WHERE id = 1;
+SELECT * FROM t_strict_div ORDER BY id;
+➤ id[4,32,0]  ¦  val[4,32,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  200  𝄀
+3  ¦  300
+SET sql_mode = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO';
+SELECT 10/0 AS div_result;
+➤ div_result[8,54,0]  𝄀
+null
+SELECT 10 DIV 0 AS intdiv_result;
+➤ intdiv_result[-5,64,0]  𝄀
+null
+SELECT 10 % 0 AS mod_result;
+➤ mod_result[-5,64,0]  𝄀
+null
+SET sql_mode = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO';
+INSERT INTO t_strict_div VALUES (10, 10/0);
+SELECT 10/0 AS should_be_null;
+➤ should_be_null[8,54,0]  𝄀
+null
+INSERT INTO t_strict_div VALUES (11, 10/0);
+SET sql_mode = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO';
+INSERT INTO t_strict_div VALUES (20, 10/0);  -- Should error
+SET sql_mode = '';
+INSERT INTO t_strict_div VALUES (20, 10/0);  -- Should succeed with NULL
+SELECT * FROM t_strict_div WHERE id = 20;
+➤ id[4,32,0]  ¦  val[4,32,0]  𝄀
+20  ¦  null  𝄀
+20  ¦  null
+DROP TABLE t_strict_div;
+SET sql_mode = DEFAULT;
