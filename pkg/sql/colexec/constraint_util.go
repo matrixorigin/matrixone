@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -120,22 +119,27 @@ func BatchDataNotNullCheck(vecs []*vector.Vector, attrs []string, tableDef *plan
 }
 
 func getRelationByObjRef(ctx context.Context, proc *process.Process, eg engine.Engine, ref *plan.ObjectRef) (engine.Relation, error) {
+	objName := ref.ObjName
+	if ses := proc.GetSession(); ses != nil {
+		if real, ok := ses.GetTempTable(ref.SchemaName, objName); ok {
+			objName = real
+		}
+	}
+
 	dbSource, err := eg.Database(ctx, ref.SchemaName, proc.GetTxnOperator())
 	if err != nil {
 		return nil, err
 	}
-	relation, err := dbSource.Relation(ctx, ref.ObjName, proc)
-	if err == nil {
-		return relation, nil
+	relation, err := dbSource.Relation(ctx, objName, proc)
+	if err != nil {
+		return nil, err
 	}
 
-	// try to get temporary table
-	dbSource, err = eg.Database(ctx, defines.TEMPORARY_DBNAME, proc.GetTxnOperator())
-	if err != nil {
-		return nil, moerr.NewNoSuchTable(ctx, ref.SchemaName, ref.ObjName)
+	if relation == nil {
+		return nil, moerr.NewNoSuchTable(ctx, ref.SchemaName, objName)
 	}
-	newObjeName := engine.GetTempTableName(ref.SchemaName, ref.ObjName)
-	return dbSource.Relation(ctx, newObjeName, proc)
+
+	return relation, nil
 }
 
 func GetRelAndPartitionRelsByObjRef(

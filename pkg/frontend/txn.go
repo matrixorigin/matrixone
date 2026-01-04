@@ -22,21 +22,15 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
-	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	txnclient "github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/txn/clock"
-	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 )
 
 var (
@@ -165,12 +159,10 @@ const (
 type TxnHandler struct {
 	mu sync.Mutex
 
-	service       string
-	storage       engine.Engine
-	tempStorage   *memorystorage.Storage
-	tempTnService *metadata.TNService
-	tempEngine    *memoryengine.Engine
-	txnOp         TxnOperator
+	service string
+	storage engine.Engine
+
+	txnOp TxnOperator
 
 	//connCtx is the ancestor of the txnCtx.
 	//it is initialized at the TxnHandler object created and
@@ -215,9 +207,7 @@ func (th *TxnHandler) Close() {
 	th.mu.Lock()
 	defer th.mu.Unlock()
 	th.storage = nil
-	th.tempStorage = nil
-	th.tempTnService = nil
-	th.tempEngine = nil
+
 	th.txnOp = nil
 	th.connCtx = nil
 	if th.txnCtxCancel != nil {
@@ -504,11 +494,7 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 	if th.txnCtx == nil {
 		panic("context should not be nil")
 	}
-	if th.hasTempEngineUnsafe() && th.tempStorage != nil {
-		if th.txnCtx.Value(defines.TemporaryTN{}) == nil {
-			th.txnCtx = context.WithValue(th.txnCtx, defines.TemporaryTN{}, th.tempStorage)
-		}
-	}
+
 	storage := th.storage
 	ctx2, cancel := context.WithTimeoutCause(
 		th.txnCtx,
@@ -646,11 +632,7 @@ func (th *TxnHandler) rollbackUnsafe(execCtx *ExecCtx) error {
 	if th.txnCtx == nil {
 		panic("context should not be nil")
 	}
-	if th.hasTempEngineUnsafe() && th.tempStorage != nil {
-		if th.txnCtx.Value(defines.TemporaryTN{}) == nil {
-			th.txnCtx = context.WithValue(th.txnCtx, defines.TemporaryTN{}, th.tempStorage)
-		}
-	}
+
 	ctx2, cancel := context.WithTimeoutCause(
 		th.txnCtx,
 		th.storage.Hints().CommitOrRollbackTimeout,
@@ -789,106 +771,8 @@ func (th *TxnHandler) GetStorage() engine.Engine {
 	return th.storage
 }
 
-func (th *TxnHandler) HasTempEngine() bool {
-	th.mu.Lock()
-	defer th.mu.Unlock()
-	return th.hasTempEngineUnsafe()
-}
-
-func (th *TxnHandler) hasTempEngineUnsafe() bool {
-	if entireEng, ok := th.storage.(*engine.EntireEngine); ok {
-		return entireEng.TempEngine != nil
-	}
-	return false
-}
-
 func (th *TxnHandler) OptionBitsIsSet(bit uint32) bool {
 	th.mu.Lock()
 	defer th.mu.Unlock()
 	return bitsIsSet(th.optionBits, bit)
-}
-
-func (th *TxnHandler) CreateTempStorage(ck clock.Clock) error {
-	th.mu.Lock()
-	defer th.mu.Unlock()
-	return th.createTempStorageUnsafe(ck)
-}
-
-func (th *TxnHandler) GetTempStorage() *memorystorage.Storage {
-	th.mu.Lock()
-	defer th.mu.Unlock()
-	if th.tempStorage == nil {
-		panic("temp table storage is not initialized")
-	}
-	return th.tempStorage
-}
-
-func (th *TxnHandler) GetTempTNService() *metadata.TNService {
-	th.mu.Lock()
-	defer th.mu.Unlock()
-	return th.tempTnService
-}
-
-func (th *TxnHandler) createTempStorageUnsafe(ck clock.Clock) error {
-	// Without concurrency, there is no potential for data competition
-	// Arbitrary value is OK since it's single sharded. Let's use 0xbeef
-	// suggested by @reusee
-	shards := []metadata.TNShard{
-		{
-			ReplicaID:     0xbeef,
-			TNShardRecord: metadata.TNShardRecord{ShardID: 0xbeef},
-		},
-	}
-	// Arbitrary value is OK, for more information about TEMPORARY_TABLE_DN_ADDR, please refer to the comment in defines/const.go
-	tnAddr := defines.TEMPORARY_TABLE_TN_ADDR
-	uid, err := uuid.NewV7()
-	if err != nil {
-		return err
-	}
-	th.tempTnService = &metadata.TNService{
-		ServiceID:         uid.String(),
-		TxnServiceAddress: tnAddr,
-		Shards:            shards,
-	}
-
-	ms, err := memorystorage.NewMemoryStorage(
-		th.service,
-		mpool.MustNewZeroNoFixed(),
-		ck,
-		memoryengine.RandomIDGenerator,
-	)
-	if err != nil {
-		return err
-	}
-	th.tempStorage = ms
-	return nil
-}
-
-func (th *TxnHandler) CreateTempEngine() {
-	th.mu.Lock()
-	defer th.mu.Unlock()
-
-	th.tempEngine = memoryengine.New(
-		context.TODO(), //!!!NOTE: memoryengine.New will neglect this context.
-		th.service,
-		memoryengine.NewDefaultShardPolicy(
-			mpool.MustNewZeroNoFixed(),
-		),
-		memoryengine.RandomIDGenerator,
-		clusterservice.NewMOCluster(
-			th.service,
-			nil,
-			0,
-			clusterservice.WithDisableRefresh(),
-			clusterservice.WithServices(nil, []metadata.TNService{
-				*th.tempTnService,
-			})),
-	)
-	updateTempEngine(th.storage, th.tempEngine)
-}
-
-func (th *TxnHandler) GetTempEngine() *memoryengine.Engine {
-	th.mu.Lock()
-	defer th.mu.Unlock()
-	return th.tempEngine
 }

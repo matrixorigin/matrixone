@@ -34,6 +34,7 @@ const (
 	SpillFileServiceName = "__spill"
 )
 
+// Temporary table legacy constants (used by tests / temp-engine paths)
 const (
 	// TEMPORARY_DBNAME used to store all temporary table created by session.
 	// when a user tries to create a database with this name, will be rejected at the plan stage.

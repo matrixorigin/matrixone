@@ -2024,20 +2024,6 @@ func (mr *MockEngineMockRecorder) GetService() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetService", reflect.TypeOf((*MockEngine)(nil).GetService))
 }
 
-// HasTempEngine mocks base method.
-func (m *MockEngine) HasTempEngine() bool {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "HasTempEngine")
-	ret0, _ := ret[0].(bool)
-	return ret0
-}
-
-// HasTempEngine indicates an expected call of HasTempEngine.
-func (mr *MockEngineMockRecorder) HasTempEngine() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HasTempEngine", reflect.TypeOf((*MockEngine)(nil).HasTempEngine))
-}
-
 // Hints mocks base method.
 func (m *MockEngine) Hints() engine.Hints {
 	m.ctrl.T.Helper()

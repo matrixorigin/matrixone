@@ -285,7 +285,7 @@ col1    col2
 2012-01-13 23:23:59    63298ufh3jcweuiv4h32jhf432ouy4hu3enjwfnwje4n3bj24f34573
 show create table temp01;
 Table    Create Table
-temp01    CREATE TABLE `temp01` (\n  `col1` datetime DEFAULT NULL,\n  `col2` blob DEFAULT NULL\n)
+temp01    CREATE TEMPORARY TABLE `temp01` (\n  `col1` datetime DEFAULT NULL,\n  `col2` blob DEFAULT NULL\n)
 show columns from temp01;
 Field    Type    Null    Key    Default    Extra    Comment
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'temp01' and COLUMN_NAME not like '__mo%';

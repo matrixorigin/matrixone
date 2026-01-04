@@ -405,6 +405,10 @@ const (
 	// Query format for getting rowid from logical_id index table
 	// Parameters: database_name, table_name, index_column_name, logical_id
 	LogicalIdIndexRowidQueryFormat = "SELECT __mo_rowid FROM `%s`.`%s` WHERE `%s` = %d"
+
+	/************ 5. Temporary table *************/
+
+	SystemTemporaryTable = "temporary_table"
 )
 
 const (
