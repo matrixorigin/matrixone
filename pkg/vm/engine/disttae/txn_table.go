@@ -475,6 +475,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string, 
 					ZoneMap:      objectio.EmptyZm[:],
 					CompressSize: int64(obj.ObjectStats.Size()),
 					OriginSize:   int64(obj.ObjectStats.OriginSize()),
+					Level:        int32(obj.ObjectStats.GetLevel()),
 				})
 			}
 			return nil
@@ -503,6 +504,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string, 
 				CompressSize: int64(colMeta.Location().Length()),
 				OriginSize:   int64(colMeta.Location().OriginSize()),
 				ZoneMap:      colMeta.ZoneMap(),
+				Level:        int32(obj.ObjectStats.GetLevel()),
 			})
 		}
 		return nil
@@ -1260,6 +1262,7 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 			Version:       tbl.version,
 			DbId:          tbl.GetDBID(ctx),
 			Partition:     partition,
+			LogicalId:     tbl.logicalId,
 		}
 		if tbl.extraInfo != nil {
 			tbl.tableDef.FeatureFlag = tbl.extraInfo.FeatureFlag
@@ -1448,6 +1451,8 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	// update table defs after deleting old table metadata
 	tbl.defs = append(baseDefs, appendDef...)
 	tbl.RefeshTableDef(ctx)
+
+	ctx = context.WithValue(ctx, defines.LogicalIdKey{}, tbl.logicalId)
 
 	//------------------------------------------------------------------------------------------------------------------
 	// 2. insert new table metadata

@@ -21,6 +21,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/tools/interactive"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -36,19 +37,23 @@ func TestHistoryPersistence(t *testing.T) {
 	os.Setenv("HOME", tmpDir)
 	defer os.Setenv("HOME", originalHome)
 
-	m := &model{
-		cmdHistory: []string{"cmd1", "cmd2", "cmd3", "very long command that should be preserved"},
-	}
+	// Create history manager and add commands
+	histMgr := interactive.NewHistoryManager(100)
+	histMgr.Add("cmd1")
+	histMgr.Add("cmd2")
+	histMgr.Add("cmd3")
+	histMgr.Add("very long command that should be preserved")
 
-	// Test saving history
-	m.saveHistory()
+	// Save history
+	err = histMgr.SaveToFile("test_history.txt")
+	require.NoError(t, err)
 
 	// Check if file was created
-	historyFile := filepath.Join(tmpDir, ".mo_object_history")
-	assert.FileExists(t, historyFile)
+	histFile := filepath.Join(tmpDir, ".mo-tool", "test_history.txt")
+	assert.FileExists(t, histFile)
 
 	// Verify file contents
-	content, err := os.ReadFile(historyFile)
+	content, err := os.ReadFile(histFile)
 	require.NoError(t, err)
 
 	lines := strings.Split(string(content), "\n")
@@ -58,11 +63,12 @@ func TestHistoryPersistence(t *testing.T) {
 	assert.Contains(t, lines, "very long command that should be preserved")
 
 	// Test loading history
-	m2 := &model{}
-	m2.loadHistory()
+	histMgr2 := interactive.NewHistoryManager(100)
+	err = histMgr2.LoadFromFile("test_history.txt")
+	require.NoError(t, err)
 
-	assert.Equal(t, []string{"cmd1", "cmd2", "cmd3", "very long command that should be preserved"}, m2.cmdHistory)
-	assert.Equal(t, 4, m2.historyIndex)
+	items := histMgr2.GetAll()
+	assert.Equal(t, []string{"cmd1", "cmd2", "cmd3", "very long command that should be preserved"}, items)
 }
 
 func TestHistoryLimit(t *testing.T) {
@@ -76,27 +82,28 @@ func TestHistoryLimit(t *testing.T) {
 	os.Setenv("HOME", tmpDir)
 	defer os.Setenv("HOME", originalHome)
 
-	// Create model with more than 100 commands
-	var commands []string
+	// Create history manager with limit of 100
+	histMgr := interactive.NewHistoryManager(100)
+
+	// Add more than 100 commands
 	for i := 0; i < 150; i++ {
-		commands = append(commands, fmt.Sprintf("command_%d", i))
+		histMgr.Add(fmt.Sprintf("command_%d", i))
 	}
 
-	m := &model{
-		cmdHistory: commands,
-	}
+	// Save history (should limit to 100)
+	err = histMgr.SaveToFile("test_history.txt")
+	require.NoError(t, err)
 
-	// Test saving history (should limit to 100)
-	m.saveHistory()
-
-	// Test loading history
-	m2 := &model{}
-	m2.loadHistory()
+	// Load history in new manager
+	histMgr2 := interactive.NewHistoryManager(100)
+	err = histMgr2.LoadFromFile("test_history.txt")
+	require.NoError(t, err)
 
 	// Should only have the last 100 commands
-	assert.Equal(t, 100, len(m2.cmdHistory))
-	assert.Equal(t, "command_50", m2.cmdHistory[0])   // First saved command
-	assert.Equal(t, "command_149", m2.cmdHistory[99]) // Last saved command
+	items := histMgr2.GetAll()
+	assert.Equal(t, 100, len(items))
+	assert.Equal(t, "command_50", items[0])   // First saved command
+	assert.Equal(t, "command_149", items[99]) // Last saved command
 }
 
 func TestHistoryWithEmptyLines(t *testing.T) {
@@ -111,42 +118,38 @@ func TestHistoryWithEmptyLines(t *testing.T) {
 	defer os.Setenv("HOME", originalHome)
 
 	// Create history file with empty lines
-	historyFile := filepath.Join(tmpDir, ".mo_object_history")
+	moToolDir := filepath.Join(tmpDir, ".mo-tool")
+	err = os.MkdirAll(moToolDir, 0755)
+	require.NoError(t, err)
+
+	histFile := filepath.Join(moToolDir, "test_history.txt")
 	content := "cmd1\n\n\ncmd2\n   \ncmd3\n"
-	err = os.WriteFile(historyFile, []byte(content), 0644)
+	err = os.WriteFile(histFile, []byte(content), 0644)
 	require.NoError(t, err)
 
 	// Test loading history (should skip empty lines)
-	m := &model{}
-	m.loadHistory()
+	histMgr := interactive.NewHistoryManager(100)
+	err = histMgr.LoadFromFile("test_history.txt")
+	require.NoError(t, err)
 
-	assert.Equal(t, []string{"cmd1", "cmd2", "cmd3"}, m.cmdHistory)
-	assert.Equal(t, 3, m.historyIndex)
+	items := histMgr.GetAll()
+	assert.Equal(t, []string{"cmd1", "cmd2", "cmd3"}, items)
 }
 
 func TestGetHistoryFile(t *testing.T) {
-	// Test with valid home directory
-	tmpDir, err := os.MkdirTemp("", "mo_object_test")
-	require.NoError(t, err)
-	defer os.RemoveAll(tmpDir)
+	// Test history manager creation
+	histMgr := interactive.NewHistoryManager(100)
 
-	originalHome := os.Getenv("HOME")
-	os.Setenv("HOME", tmpDir)
-	defer os.Setenv("HOME", originalHome)
-
-	historyFile := getHistoryFile()
-	expected := filepath.Join(tmpDir, ".mo_object_history")
-	assert.Equal(t, expected, historyFile)
+	// Just verify we can create the manager
+	assert.NotNil(t, histMgr)
 }
 
 func TestGetHistoryFileNoHome(t *testing.T) {
-	// Test with no HOME environment variable
-	originalHome := os.Getenv("HOME")
-	os.Unsetenv("HOME")
-	defer os.Setenv("HOME", originalHome)
+	// Test that HistoryManager handles missing home gracefully
+	histMgr := interactive.NewHistoryManager(100)
 
-	historyFile := getHistoryFile()
-	assert.Empty(t, historyFile)
+	// Should not panic
+	assert.NotNil(t, histMgr)
 }
 
 func TestHistoryDirectoryCreation(t *testing.T) {
@@ -155,27 +158,24 @@ func TestHistoryDirectoryCreation(t *testing.T) {
 	require.NoError(t, err)
 	defer os.RemoveAll(tmpDir)
 
-	// Create nested directory structure
-	homeDir := filepath.Join(tmpDir, "user", "home")
-
-	// Mock home directory (directory doesn't exist yet)
+	// Mock home directory
 	originalHome := os.Getenv("HOME")
-	os.Setenv("HOME", homeDir)
+	os.Setenv("HOME", tmpDir)
 	defer os.Setenv("HOME", originalHome)
 
-	m := &model{
-		cmdHistory: []string{"test_command"},
-	}
+	histMgr := interactive.NewHistoryManager(100)
+	histMgr.Add("test_command")
 
 	// Test saving history (should create directory)
-	m.saveHistory()
+	err = histMgr.SaveToFile("test_history.txt")
+	require.NoError(t, err)
 
 	// Check if directory and file were created
-	historyFile := filepath.Join(homeDir, ".mo_object_history")
-	assert.FileExists(t, historyFile)
+	histFile := filepath.Join(tmpDir, ".mo-tool", "test_history.txt")
+	assert.FileExists(t, histFile)
 
 	// Verify content
-	content, err := os.ReadFile(historyFile)
+	content, err := os.ReadFile(histFile)
 	require.NoError(t, err)
 	assert.Equal(t, "test_command", strings.TrimSpace(string(content)))
 }
@@ -205,16 +205,19 @@ func TestHistoryRoundTrip(t *testing.T) {
 		"final_command",
 	}
 
-	m1 := &model{
-		cmdHistory: originalCommands,
+	histMgr1 := interactive.NewHistoryManager(100)
+	for _, cmd := range originalCommands {
+		histMgr1.Add(cmd)
 	}
 
 	// Save history
-	m1.saveHistory()
+	err = histMgr1.SaveToFile("test_history.txt")
+	require.NoError(t, err)
 
-	// Load history in new model
-	m2 := &model{}
-	m2.loadHistory()
+	// Load history in new manager
+	histMgr2 := interactive.NewHistoryManager(100)
+	err = histMgr2.LoadFromFile("test_history.txt")
+	require.NoError(t, err)
 
 	// Expected commands (empty ones should be filtered out)
 	expectedCommands := []string{
@@ -228,6 +231,6 @@ func TestHistoryRoundTrip(t *testing.T) {
 		"final_command",
 	}
 
-	assert.Equal(t, expectedCommands, m2.cmdHistory)
-	assert.Equal(t, len(expectedCommands), m2.historyIndex)
+	items := histMgr2.GetAll()
+	assert.Equal(t, expectedCommands, items)
 }

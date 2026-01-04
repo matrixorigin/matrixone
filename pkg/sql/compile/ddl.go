@@ -2570,8 +2570,14 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	}
 
 	// delete from tables => truncate, need keep increment value
+	// Get logicalId from tableDef and pass it when creating the new table
+	tableDef := rel.GetTableDef(c.proc.Ctx)
+	oldLogicalId := tableDef.GetLogicalId()
 	dropOpts := executor.StatementOption{}.WithIgnoreForeignKey().WithIgnorePublish().WithIgnoreCheckExperimental()
 	createOpts := executor.StatementOption{}.WithIgnoreForeignKey().WithIgnorePublish().WithIgnoreCheckExperimental()
+	if oldLogicalId != 0 {
+		createOpts = createOpts.WithKeepLogicalId(oldLogicalId)
+	}
 	if truncate.IsDelete {
 		rows, err := rel.Rows(c.proc.Ctx)
 		if err != nil {

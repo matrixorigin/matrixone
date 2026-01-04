@@ -37,7 +37,6 @@ const (
 	OpDeleteDatabase
 	OpCreateRelation
 	OpDeleteRelation
-	OpTruncateRelation
 	OpOpenRelation
 	OpGetRelations
 	OpAddTableDef
@@ -78,7 +77,6 @@ type WriteReqeust interface {
 		DeleteDatabaseReq |
 		CreateRelationReq |
 		DeleteRelationReq |
-		TruncateRelationReq |
 		AddTableDefReq |
 		DelTableDefReq |
 		DeleteReq |
@@ -97,7 +95,6 @@ type Response interface {
 		DeleteDatabaseResp |
 		CreateRelationResp |
 		DeleteRelationResp |
-		TruncateRelationResp |
 		OpenRelationResp |
 		GetRelationsResp |
 		AddTableDefResp |
@@ -264,22 +261,6 @@ func (m *DeleteRelationReq) UnmarshalBinary(data []byte) error {
 	return m.Unmarshal(data)
 }
 
-type TruncateRelationReq struct {
-	NewTableID   ID
-	OldTableID   ID
-	DatabaseID   ID
-	DatabaseName string
-	Name         string
-}
-
-func (m *TruncateRelationReq) MarshalBinary() ([]byte, error) {
-	return m.Marshal()
-}
-
-func (m *TruncateRelationReq) UnmarshalBinary(data []byte) error {
-	return m.Unmarshal(data)
-}
-
 type DeleteRelationResp struct {
 	ID ID
 }
@@ -289,18 +270,6 @@ func (m *DeleteRelationResp) MarshalBinary() ([]byte, error) {
 }
 
 func (m *DeleteRelationResp) UnmarshalBinary(data []byte) error {
-	return m.Unmarshal(data)
-}
-
-type TruncateRelationResp struct {
-	ID ID
-}
-
-func (m *TruncateRelationResp) MarshalBinary() ([]byte, error) {
-	return m.Marshal()
-}
-
-func (m *TruncateRelationResp) UnmarshalBinary(data []byte) error {
 	return m.Unmarshal(data)
 }
 

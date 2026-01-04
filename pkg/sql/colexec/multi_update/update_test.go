@@ -118,9 +118,9 @@ func prepareUpdateTestBatchs(mp *mpool.MPool, size int, hasUniqueKey bool, hasSe
 
 		rows := makeTestPkArray(int64(affectRows), rowCount)
 		columnA := testutil.MakeInt64Vector(rows, nil, mp)
-		columnB := testutil.NewStringVector(rowCount, types.T_varchar.ToType(), mp, false, nil)
-		columnC := testutil.NewInt32Vector(rowCount, types.T_int32.ToType(), mp, false, nil)
-		columnD := testutil.NewInt32Vector(rowCount, types.T_int32.ToType(), mp, false, nil)
+		columnB := testutil.NewStringVector(rowCount, types.T_varchar.ToType(), mp, false, nil, nil)
+		columnC := testutil.NewInt32Vector(rowCount, types.T_int32.ToType(), mp, false, nil, nil)
+		columnD := testutil.NewInt32Vector(rowCount, types.T_int32.ToType(), mp, false, nil, nil)
 		columnRowID := makeTestRowIDVector(mp, &mainObjectID, uint16(i), rowCount)
 
 		attrs := []string{"a", "b", "c", "d", catalog.Row_ID}
@@ -131,8 +131,8 @@ func prepareUpdateTestBatchs(mp *mpool.MPool, size int, hasUniqueKey bool, hasSe
 
 		if hasUniqueKey {
 			columnRowID := makeTestRowIDVector(mp, &uniqueObjectID, uint16(i), rowCount)
-			columnOldPk := testutil.NewStringVector(rowCount, types.T_varchar.ToType(), mp, true, nil)
-			columnNewPk := testutil.NewStringVector(rowCount, types.T_varchar.ToType(), mp, true, nil)
+			columnOldPk := testutil.NewStringVector(rowCount, types.T_varchar.ToType(), mp, true, nil, nil)
+			columnNewPk := testutil.NewStringVector(rowCount, types.T_varchar.ToType(), mp, true, nil, nil)
 			bat.Vecs = append(bat.Vecs, columnRowID)
 			bat.Vecs = append(bat.Vecs, columnOldPk)
 			bat.Vecs = append(bat.Vecs, columnNewPk)
@@ -141,8 +141,8 @@ func prepareUpdateTestBatchs(mp *mpool.MPool, size int, hasUniqueKey bool, hasSe
 
 		if hasSecondaryKey {
 			columnRowID := makeTestRowIDVector(mp, &secondaryObjectID, uint16(i), rowCount)
-			columnOldPk := testutil.NewStringVector(rowCount, types.T_varchar.ToType(), mp, true, nil)
-			columnNewPk := testutil.NewStringVector(rowCount, types.T_varchar.ToType(), mp, true, nil)
+			columnOldPk := testutil.NewStringVector(rowCount, types.T_varchar.ToType(), mp, true, nil, nil)
+			columnNewPk := testutil.NewStringVector(rowCount, types.T_varchar.ToType(), mp, true, nil, nil)
 			bat.Vecs = append(bat.Vecs, columnRowID)
 			bat.Vecs = append(bat.Vecs, columnOldPk)
 			bat.Vecs = append(bat.Vecs, columnNewPk)

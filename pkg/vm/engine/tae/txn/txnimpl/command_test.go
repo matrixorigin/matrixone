@@ -15,65 +15,30 @@
 package txnimpl
 
 import (
-	"testing"
-
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"testing"
 )
 
-func TestComposedCmd(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
-	composed := txnbase.NewComposedCmd()
-	defer composed.Close()
+func TestAppendCmd_MarshalUnmarshal_RoundTrip(t *testing.T) {
+	bat := containers.NewBatch()
+	defer bat.Close()
 
-	schema := catalog.MockSchema(1, 0)
-	c := catalog.MockCatalog(nil)
-	defer c.Close()
+	cmd := NewEmptyAppendCmd()
+	cmd.Data = bat
+	cmd.Ts = types.BuildTS(1, 1)
 
-	db, _ := c.CreateDBEntry("db", "", "", nil)
-	dbCmd, err := db.MakeCommand(1)
-	assert.Nil(t, err)
-	composed.AddCmd(dbCmd)
+	buf, err := cmd.MarshalBinary()
+	require.NoError(t, err)
+	require.NotNil(t, buf)
 
-	table, _ := db.CreateTableEntry(schema, nil, nil)
-	tblCmd, err := table.MakeCommand(1)
-	assert.Nil(t, err)
-	composed.AddCmd(tblCmd)
-
-	noid := objectio.NewObjectid()
-	stats := objectio.NewObjectStatsWithObjectID(&noid, true, false, false)
-	obj, _ := table.CreateObject(nil, &objectio.CreateObjOpt{Stats: stats}, nil)
-	objCmd, err := obj.MakeCommand(1)
-	assert.Nil(t, err)
-	composed.AddCmd(objCmd)
-
-	// TODO
-
-	// objMvcc := updates.NewObjectMVCCHandle(obj)
-
-	// controller := updates.NewMVCCHandle(objMvcc, 0)
-	// ts := types.NextGlobalTsForTest()
-
-	// appenderMvcc := updates.NewAppendMVCCHandle(obj)
-
-	// node := updates.MockAppendNode(ts, 0, 2515, appenderMvcc)
-	// cmd := updates.NewAppendCmd(1, node)
-
-	// composed.AddCmd(cmd)
-
-	// del := updates.NewDeleteNode(nil, handle.DT_Normal,
-	// 	updates.IOET_WALTxnCommand_DeleteNode_V2)
-	// del.AttachTo(controller.GetDeleteChain())
-	// cmd2, err := del.MakeCommand(1)
-	// assert.Nil(t, err)
-	// composed.AddCmd(cmd2)
-
-	// buf, err := composed.MarshalBinary()
-	// assert.Nil(t, err)
-	// _, err = txnbase.BuildCommandFrom(buf)
-	// assert.Nil(t, err)
+	// Use BuildCommandFrom which handles the header
+	cmdInterface, err := txnbase.BuildCommandFrom(buf)
+	require.NoError(t, err)
+	cmd2, ok := cmdInterface.(*AppendCmd)
+	require.True(t, ok)
+	assert.Equal(t, cmd.Ts, cmd2.Ts)
 }

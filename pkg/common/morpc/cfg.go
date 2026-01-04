@@ -66,6 +66,14 @@ type Config struct {
 	// ServerBufferQueueSize queue size for server buffer requetsts
 	ServerBufferQueueSize int `toml:"server-buffer-queue-size"`
 
+	// GCIdleCheckInterval interval for global GC manager to check idle backends.
+	// Default is 1 second. This controls how often the GC manager checks for
+	// idle backends, not the idle timeout (which is controlled by MaxIdleDuration).
+	GCIdleCheckInterval toml.Duration `toml:"gc-idle-check-interval"`
+	// GCChannelBufferSize buffer size for GC task channels (gcInactiveC and createC).
+	// Default is 1024. When channel is full, requests are dropped to avoid blocking.
+	GCChannelBufferSize int `toml:"gc-channel-buffer-size"`
+
 	// BackendOptions extra backend options
 	BackendOptions []BackendOption `toml:"-"`
 	// ClientOptions extra client options
@@ -109,6 +117,12 @@ func (c *Config) Adjust() {
 	if c.MaxMessageSize == 0 {
 		c.MaxMessageSize = toml.ByteSize(defaultMaxMessageSize)
 	}
+	if c.GCIdleCheckInterval.Duration == 0 {
+		c.GCIdleCheckInterval.Duration = DefaultGCIdleCheckInterval
+	}
+	if c.GCChannelBufferSize == 0 {
+		c.GCChannelBufferSize = DefaultGCChannelBufferSize
+	}
 }
 
 // NewClient create client from config
@@ -116,6 +130,8 @@ func (c Config) NewClient(
 	sid string,
 	name string,
 	responseFactory func() Message) (RPCClient, error) {
+	// Initialize global GC manager with config values before creating clients
+	InitGlobalGCManager(c.GCIdleCheckInterval.Duration, c.GCChannelBufferSize)
 	var codecOpts []CodecOption
 	codecOpts = append(codecOpts,
 		WithCodecEnableChecksum(),

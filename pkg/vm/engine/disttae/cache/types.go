@@ -140,6 +140,8 @@ type TableItem struct {
 	PrimarySeqnum int
 	// clusterBy key
 	ClusterByIdx int
+
+	LogicalId uint64
 }
 
 func (item *TableItem) IsDeleted() bool {
@@ -317,6 +319,7 @@ func copyTableItem(dst, src *TableItem) {
 	dst.PrimarySeqnum = src.PrimarySeqnum
 	dst.Version = src.Version
 	dst.ExtraInfo = api.MustUnmarshalTblExtra(api.MustMarshalTblExtra(src.ExtraInfo))
+	dst.LogicalId = src.LogicalId
 }
 
 func copyDatabaseItem(dest, src *DatabaseItem) {

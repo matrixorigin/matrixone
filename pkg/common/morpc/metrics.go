@@ -31,10 +31,15 @@ type metrics struct {
 	sendingQueueSizeGauge         prometheus.Gauge
 	sendingBatchSizeGauge         prometheus.Gauge
 	poolSizeGauge                 prometheus.Gauge
+	activeRequestsGauge           prometheus.Gauge
+	writeQueueLengthGauge         prometheus.Gauge
+	busyGauge                     prometheus.Gauge
 	writeLatencyDurationHistogram prometheus.Observer
 	writeDurationHistogram        prometheus.Observer
 	connectDurationHistogram      prometheus.Observer
 	doneDurationHistogram         prometheus.Observer
+	autoCreateTimeoutCounter      prometheus.Counter // tracks auto-create wait timeouts
+	backendUnavailableCounter     prometheus.Counter // tracks backend unavailable (pool has backends but all down)
 }
 
 func newMetrics(name string) *metrics {
@@ -48,12 +53,17 @@ func newMetrics(name string) *metrics {
 		poolSizeGauge:                 v2.NewRPCBackendPoolSizeGaugeByName(name),
 		sendingQueueSizeGauge:         v2.NewRPCBackendSendingQueueSizeGaugeByName(name),
 		sendingBatchSizeGauge:         v2.NewRPCBackendSendingBatchSizeGaugeByName(name),
+		activeRequestsGauge:           v2.NewRPCBackendActiveRequestsGaugeByName(name),
+		writeQueueLengthGauge:         v2.NewRPCBackendWriteQueueLengthGaugeByName(name),
+		busyGauge:                     v2.NewRPCBackendBusyGaugeByName(name),
 		writeDurationHistogram:        v2.NewRPCBackendWriteDurationHistogramByName(name),
 		connectDurationHistogram:      v2.NewRPCBackendConnectDurationHistogramByName(name),
 		doneDurationHistogram:         v2.NewRPCBackendDoneDurationHistogramByName(name),
 		writeLatencyDurationHistogram: v2.NewRPCBackendWriteLatencyDurationHistogramByName(name),
 		inputBytesCounter:             v2.NewRPCInputCounter(),
 		outputBytesCounter:            v2.NewRPCOutputCounter(),
+		autoCreateTimeoutCounter:      v2.NewRPCBackendAutoCreateTimeoutCounterByName(name),
+		backendUnavailableCounter:     v2.NewRPCBackendUnavailableCounterByName(name),
 	}
 }
 

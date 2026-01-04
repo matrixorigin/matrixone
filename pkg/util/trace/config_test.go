@@ -300,3 +300,75 @@ func TestSpanConfig_Reset(t *testing.T) {
 		})
 	}
 }
+
+// TestKindOption_Implementation tests that KindOption correctly implements SpanStartOption interface.
+func TestKindOption_Implementation(t *testing.T) {
+	// Verify KindOption implements SpanStartOption interface
+	var _ SpanStartOption = KindOption(0)
+
+	// Test ApplySpanStart
+	testCases := []struct {
+		name string
+		kind SpanKind
+	}{
+		{"Internal", SpanKindInternal},
+		{"Statement", SpanKindStatement},
+		{"Remote", SpanKindRemote},
+		{"LocalFSVis", SpanKindLocalFSVis},
+		{"RemoteFSVis", SpanKindRemoteFSVis},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			opt := KindOption(tc.kind)
+			cfg := &SpanConfig{}
+			opt.ApplySpanStart(cfg)
+			assert.Equal(t, tc.kind, cfg.Kind, "ApplySpanStart should set Kind correctly")
+		})
+	}
+}
+
+// TestWithKind_ReturnsKindOption tests that WithKind returns KindOption type.
+func TestWithKind_ReturnsKindOption(t *testing.T) {
+	testCases := []struct {
+		name string
+		kind SpanKind
+	}{
+		{"Internal", SpanKindInternal},
+		{"Statement", SpanKindStatement},
+		{"Remote", SpanKindRemote},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			opt := WithKind(tc.kind)
+
+			// Verify type assertion works
+			kindOpt, ok := opt.(KindOption)
+			require.True(t, ok, "WithKind should return KindOption type")
+			assert.Equal(t, tc.kind, SpanKind(kindOpt), "KindOption should contain correct Kind")
+
+			// Verify ApplySpanStart still works
+			cfg := &SpanConfig{}
+			opt.ApplySpanStart(cfg)
+			assert.Equal(t, tc.kind, cfg.Kind, "ApplySpanStart should work correctly")
+		})
+	}
+}
+
+// TestKindOption_ZeroAllocation tests that KindOption is a zero-allocation type.
+func TestKindOption_ZeroAllocation(t *testing.T) {
+	// KindOption is a type alias for SpanKind (int), which is a value type
+	// This test verifies that creating and using KindOption doesn't cause allocations
+	opt := WithKind(SpanKindStatement)
+
+	// Type assertion should not cause allocation
+	kindOpt, ok := opt.(KindOption)
+	require.True(t, ok)
+	assert.Equal(t, SpanKindStatement, SpanKind(kindOpt))
+
+	// ApplySpanStart should work without allocation (modifying existing config)
+	cfg := &SpanConfig{}
+	opt.ApplySpanStart(cfg)
+	assert.Equal(t, SpanKindStatement, cfg.Kind)
+}

@@ -40,6 +40,24 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	// MinExecutorConcurrency is the minimum concurrency for concurrentExecutor
+	// which handles IO-intensive tasks (reading S3 objects).
+	MinExecutorConcurrency = 32
+
+	// MaxExecutorConcurrency is the maximum concurrency for concurrentExecutor
+	// to avoid extreme cases in high-core systems.
+	MaxExecutorConcurrency = 108
+
+	// MinWorkerConcurrency is the minimum concurrency for updateWorker
+	// which handles table-level update requests (coordinator role).
+	MinWorkerConcurrency = 16
+
+	// WorkerConcurrencyRatio is the ratio of updateWorker concurrency to executor concurrency.
+	// updateWorker concurrency = executorConcurrency / WorkerConcurrencyRatio
+	WorkerConcurrencyRatio = 4
+)
+
 var (
 	// MinUpdateInterval is the minimal interval to update stats info as it
 	// is necessary to update stats every time.
@@ -189,19 +207,38 @@ func NewGlobalStats(
 	if s.statsUpdater == nil {
 		s.statsUpdater = s.doUpdate
 	}
-	parallism := runtime.GOMAXPROCS(0)
+	// Optimize goroutine concurrency:
+	// 1. concurrentExecutor handles IO-intensive tasks (reading S3 objects), needs high concurrency
+	//    - Set limits [MinExecutorConcurrency, MaxExecutorConcurrency] to avoid extreme cases
+	// 2. updateWorker handles table-level update requests (coordinator role), needs lower concurrency
+	//    - Set to executorConcurrency / WorkerConcurrencyRatio, but minimum MinWorkerConcurrency
+	// This optimization reduces goroutine count significantly (e.g., 192 -> 120 in typical environments)
+	// while maintaining performance since updateWorker's actual concurrency is much lower.
+	executorConcurrency := runtime.GOMAXPROCS(0)
 	if s.updateWorkerFactor > 0 {
-		parallism = parallism * s.updateWorkerFactor
+		executorConcurrency = executorConcurrency * s.updateWorkerFactor
 	}
-	s.concurrentExecutor = newConcurrentExecutor(parallism)
+	// Apply limits: min MinExecutorConcurrency, max MaxExecutorConcurrency
+	if executorConcurrency < MinExecutorConcurrency {
+		executorConcurrency = MinExecutorConcurrency
+	}
+	if executorConcurrency > MaxExecutorConcurrency {
+		executorConcurrency = MaxExecutorConcurrency
+	}
+	// Calculate updateWorker concurrency: executorConcurrency / WorkerConcurrencyRatio, but minimum MinWorkerConcurrency
+	updateWorkerConcurrency := executorConcurrency / WorkerConcurrencyRatio
+	if updateWorkerConcurrency < MinWorkerConcurrency {
+		updateWorkerConcurrency = MinWorkerConcurrency
+	}
+	s.concurrentExecutor = newConcurrentExecutor(executorConcurrency)
 	s.concurrentExecutor.Run(ctx)
 	go s.consumeWorker(ctx)
-	go s.updateWorker(ctx, parallism)
+	s.updateWorker(ctx, updateWorkerConcurrency) // updateWorker内部已启动goroutines，不需要再用go
 	go s.queueWatcher.run(ctx)
 	logutil.Info(
 		"GlobalStats-Started",
-		zap.Int("exector-num", parallism),
-		zap.Int("worker-num", parallism),
+		zap.Int("exector-num", executorConcurrency),
+		zap.Int("worker-num", updateWorkerConcurrency),
 		zap.Int("worker-factor", s.updateWorkerFactor),
 	)
 	return s

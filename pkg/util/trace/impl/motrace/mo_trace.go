@@ -71,15 +71,23 @@ type MOTracer struct {
 // but also trigger profile dump specify by `WithProfileGoroutine()`, `WithProfileHeap()`, `WithProfileThreadCreate()`,
 // `WithProfileAllocs()`, `WithProfileBlock()`, `WithProfileMutex()`, `WithProfileCpuSecs()`, `WithProfileTraceSecs()` SpanOption.
 func (t *MOTracer) Start(ctx context.Context, name string, opts ...trace.SpanStartOption) (context.Context, trace.Span) {
-	if !t.IsEnable(opts...) {
+	// First check if trace is enabled at provider level (fast path, no allocation)
+	if !t.provider.IsEnable() {
 		return ctx, trace.NoopSpan{}
 	}
 
+	// Create span and parse opts only once
 	span := newMOSpan()
-
 	span.tracer = t
 	span.ctx = ctx
 	span.init(name, opts...)
+
+	// Check if this span kind is controlled by mo_ctl (using already parsed span.Kind)
+	if has, state, _ := trace.IsMOCtledSpan(span.Kind); has && !state {
+		// Span is disabled by mo_ctl, free it back to pool
+		freeMOSpan(span)
+		return ctx, trace.NoopSpan{}
+	}
 
 	parent := trace.SpanFromContext(ctx)
 	psc := parent.SpanContext()
@@ -108,19 +116,29 @@ func (t *MOTracer) Debug(ctx context.Context, name string, opts ...trace.SpanSta
 	return t.Start(ctx, name, opts...)
 }
 
+// IsEnable checks if tracing is enabled for the given options.
+// This method uses zero-allocation type assertion to extract Kind from opts,
+// avoiding the need to allocate a SpanConfig (144 bytes).
 func (t *MOTracer) IsEnable(opts ...trace.SpanStartOption) bool {
-	var cfg trace.SpanConfig
-	for idx := range opts {
-		opts[idx].ApplySpanStart(&cfg)
-	}
-
 	enable := t.provider.IsEnable()
-
-	// check if is this span kind controlled by mo_ctl.
-	if has, state, _ := trace.IsMOCtledSpan(cfg.Kind); has {
-		return enable && state
+	if len(opts) == 0 {
+		return enable
 	}
 
+	// Extract Kind directly from opts using type assertion, zero allocation
+	for _, opt := range opts {
+		if kind, ok := opt.(trace.KindOption); ok {
+			// Check if this span kind is controlled by mo_ctl
+			if has, state, _ := trace.IsMOCtledSpan(trace.SpanKind(kind)); has {
+				// Return enable && state (same as original behavior)
+				return enable && state
+			}
+			// Found KindOption but not controlled by mo_ctl, return enable
+			return enable
+		}
+	}
+
+	// No KindOption found, return enable (same as original behavior)
 	return enable
 }
 

@@ -53,12 +53,30 @@ type State struct {
 	verticalMode bool              // Vertical display mode
 	colNames     map[uint16]string // Column rename mapping
 
+	// Row range filter (for checkpoint range viewing)
+	rowRangeStart int64 // Start row (0-based, -1 means no filter)
+	rowRangeEnd   int64 // End row (inclusive, -1 means no filter)
+
+	// Column expander (for splitting columns)
+	colExpander *ColumnExpander
+
+	// Drill-down support
+	objectNameCol int    // Column index containing object name (-1 to disable)
+	baseDir       string // Base directory for opening nested objects
+	objectToOpen  string // Object path to open (set by OnSelect)
+
+	// Custom overview
+	customOverview func(rows [][]string) string
+
 	// View mode
 	viewMode   ViewMode              // Current view mode
 	metaRows   [][]string            // Metadata rows (for BlkMeta/ObjMeta mode)
 	metaCols   []ColInfo             // Metadata columns schema
 	metaOffset int                   // Offset for metadata rows
 	blkSummary map[uint32]BlkSummary // Block summary info (for BlkMeta mode)
+
+	// Block offsets cache (for fast search)
+	blockOffsets []int64 // Starting row number for each block
 }
 
 // ColInfo contains column information
@@ -86,13 +104,229 @@ type ObjSummary struct {
 }
 
 func NewState(ctx context.Context, reader *objecttool.ObjectReader) *State {
-	return &State{
-		reader:      reader,
-		formatter:   objecttool.NewFormatterRegistry(),
-		ctx:         ctx,
-		pageSize:    20,
-		maxColWidth: 64, // Default 64 characters
+	s := &State{
+		reader:        reader,
+		formatter:     objecttool.NewFormatterRegistry(),
+		ctx:           ctx,
+		pageSize:      20,
+		maxColWidth:   64, // Default 64 characters
+		rowRangeStart: -1,
+		rowRangeEnd:   -1,
+		objectNameCol: -1, // Disabled by default
 	}
+	s.initBlockOffsets()
+	return s
+}
+
+// initBlockOffsets initializes the block offsets cache
+func (s *State) initBlockOffsets() {
+	blockCount := s.reader.BlockCount()
+	s.blockOffsets = make([]int64, blockCount)
+
+	offset := int64(0)
+	for i := uint32(0); i < blockCount; i++ {
+		s.blockOffsets[i] = offset
+		batch, release, err := s.reader.ReadBlock(s.ctx, i)
+		if err == nil {
+			offset += int64(batch.RowCount())
+			release()
+		}
+	}
+}
+
+// GetBlockStartRow returns the starting row number for a block
+func (s *State) GetBlockStartRow(blockIdx uint32) int64 {
+	if blockIdx >= uint32(len(s.blockOffsets)) {
+		return 0
+	}
+	return s.blockOffsets[blockIdx]
+}
+
+// SetRowRange sets the row range filter
+func (s *State) SetRowRange(start, end int64) {
+	s.rowRangeStart = start
+	s.rowRangeEnd = end
+
+	// Navigate to the start of the range
+	if start >= 0 {
+		// Find which block contains this row
+		blockCount := s.reader.BlockCount()
+		for i := uint32(0); i < blockCount; i++ {
+			blockStart := s.GetBlockStartRow(i)
+			var blockEnd int64
+			if i+1 < blockCount {
+				blockEnd = s.GetBlockStartRow(i + 1)
+			} else {
+				blockEnd = int64(s.reader.Info().RowCount)
+			}
+
+			if start >= blockStart && start < blockEnd {
+				s.currentBlock = i
+				s.rowOffset = int(start - blockStart)
+				s.ensureBlockLoaded()
+				break
+			}
+		}
+	}
+}
+
+// FilteredRowCount returns the number of rows after filtering
+func (s *State) FilteredRowCount() int64 {
+	total := int64(s.reader.Info().RowCount)
+	if s.rowRangeStart < 0 && s.rowRangeEnd < 0 {
+		return total
+	}
+	start := s.rowRangeStart
+	if start < 0 {
+		start = 0
+	}
+	end := s.rowRangeEnd
+	if end < 0 || end >= total {
+		end = total - 1
+	}
+	if end < start {
+		return 0
+	}
+	return end - start + 1
+}
+
+// AllRows returns all rows (loading all blocks)
+func (s *State) AllRows() ([][]string, []string, error) {
+	// Handle metadata modes
+	if s.viewMode == ViewModeBlkMeta || s.viewMode == ViewModeObjMeta {
+		return s.currentMetaRows()
+	}
+
+	blockCount := s.reader.BlockCount()
+	var allRows [][]string
+	var allRowNums []string
+
+	// Save original state
+	origBlock := s.currentBlock
+	origOffset := s.rowOffset
+
+	for blockIdx := uint32(0); blockIdx < blockCount; blockIdx++ {
+		s.currentBlock = blockIdx
+		s.releaseCurrentBatch()
+		if err := s.ensureBlockLoaded(); err != nil {
+			return nil, nil, err
+		}
+		if s.currentBatch == nil {
+			continue
+		}
+
+		totalRows := s.currentBatch.RowCount()
+		start := 0
+		end := totalRows
+
+		// Apply row range filter
+		if s.rowRangeStart >= 0 || s.rowRangeEnd >= 0 {
+			blockStartRow := s.GetBlockStartRow(blockIdx)
+			if s.rowRangeStart >= 0 {
+				localStart := int(s.rowRangeStart - blockStartRow)
+				if localStart > start {
+					start = localStart
+				}
+			}
+			if s.rowRangeEnd >= 0 {
+				localEnd := int(s.rowRangeEnd-blockStartRow) + 1
+				if localEnd < end {
+					end = localEnd
+				}
+			}
+		}
+
+		if start >= end || start >= totalRows {
+			continue
+		}
+
+		// Format rows for this block
+		rows, rowNums := s.formatRows(start, end)
+		allRows = append(allRows, rows...)
+		allRowNums = append(allRowNums, rowNums...)
+	}
+
+	// Restore original state
+	s.currentBlock = origBlock
+	s.rowOffset = origOffset
+	s.releaseCurrentBatch()
+
+	return allRows, allRowNums, nil
+}
+
+// formatRows formats rows in range [start, end) from current batch
+func (s *State) formatRows(start, end int) ([][]string, []string) {
+	cols := s.reader.Columns()
+	rows := make([][]string, end-start)
+	rowNumbers := make([]string, end-start)
+
+	for i := start; i < end; i++ {
+		rowNumbers[i-start] = fmt.Sprintf("(%d-%d)", s.currentBlock, i)
+
+		row := make([]string, len(cols))
+		var expandedValues []any
+		for colIdx := range cols {
+			col := cols[colIdx]
+			vec := s.currentBatch.Vecs[colIdx]
+
+			if vec.IsNull(uint64(i)) {
+				row[colIdx] = "NULL"
+				continue
+			}
+
+			var value any
+			switch col.Type.Oid {
+			case types.T_bool:
+				value = vector.GetFixedAtNoTypeCheck[bool](vec, i)
+			case types.T_int8:
+				value = vector.GetFixedAtNoTypeCheck[int8](vec, i)
+			case types.T_int16:
+				value = vector.GetFixedAtNoTypeCheck[int16](vec, i)
+			case types.T_int32:
+				value = vector.GetFixedAtNoTypeCheck[int32](vec, i)
+			case types.T_int64:
+				value = vector.GetFixedAtNoTypeCheck[int64](vec, i)
+			case types.T_uint8:
+				value = vector.GetFixedAtNoTypeCheck[uint8](vec, i)
+			case types.T_uint16:
+				value = vector.GetFixedAtNoTypeCheck[uint16](vec, i)
+			case types.T_uint32:
+				value = vector.GetFixedAtNoTypeCheck[uint32](vec, i)
+			case types.T_uint64:
+				value = vector.GetFixedAtNoTypeCheck[uint64](vec, i)
+			case types.T_float32:
+				value = vector.GetFixedAtNoTypeCheck[float32](vec, i)
+			case types.T_float64:
+				value = vector.GetFixedAtNoTypeCheck[float64](vec, i)
+			case types.T_char, types.T_varchar, types.T_text, types.T_blob, types.T_binary, types.T_varbinary:
+				value = vec.GetBytesAt(i)
+			case types.T_TS:
+				value = vector.GetFixedAtNoTypeCheck[types.TS](vec, i)
+			case types.T_Rowid:
+				value = vector.GetFixedAtNoTypeCheck[types.Rowid](vec, i)
+			case types.T_uuid:
+				value = vector.GetFixedAtNoTypeCheck[types.Uuid](vec, i)
+			default:
+				value = vec.GetRawBytesAt(i)
+			}
+
+			if s.colExpander != nil && uint16(colIdx) == s.colExpander.SourceCol {
+				expandedValues = s.colExpander.ExpandFunc(value)
+				row[colIdx] = ""
+				continue
+			}
+
+			formatter := s.formatter.GetFormatter(col.Idx, col.Type, value)
+			row[colIdx] = formatter.Format(value)
+		}
+
+		if s.colExpander != nil && expandedValues != nil {
+			row = s.expandRow(row, expandedValues)
+		}
+		rows[i-start] = row
+	}
+
+	return rows, rowNumbers
 }
 
 // CurrentRows returns the current page data (formatted strings)
@@ -121,7 +355,27 @@ func (s *State) CurrentRows() ([][]string, []string, error) {
 		end = totalRows
 	}
 
-	if start >= totalRows {
+	// Apply row range filter if set (convert global row numbers to block offsets)
+	if s.rowRangeStart >= 0 || s.rowRangeEnd >= 0 {
+		blockStartRow := s.GetBlockStartRow(s.currentBlock)
+
+		// Convert global range to block-relative offsets
+		if s.rowRangeStart >= 0 {
+			localStart := int(s.rowRangeStart - blockStartRow)
+			if localStart > start {
+				start = localStart
+			}
+		}
+
+		if s.rowRangeEnd >= 0 {
+			localEnd := int(s.rowRangeEnd-blockStartRow) + 1
+			if localEnd < end {
+				end = localEnd
+			}
+		}
+	}
+
+	if start >= end || start >= totalRows {
 		return nil, nil, nil
 	}
 
@@ -142,6 +396,7 @@ func (s *State) CurrentRows() ([][]string, []string, error) {
 		rowNumbers[i-start] = fmt.Sprintf("(%d-%d)", s.currentBlock, i)
 
 		row := make([]string, len(cols))
+		var expandedValues []any // For column expander
 		for colIdx := range cols {
 			col := cols[colIdx]
 			vec := s.currentBatch.Vecs[colIdx]
@@ -189,6 +444,13 @@ func (s *State) CurrentRows() ([][]string, []string, error) {
 				value = vec.GetRawBytesAt(i)
 			}
 
+			// Check if this column needs expansion
+			if s.colExpander != nil && uint16(colIdx) == s.colExpander.SourceCol {
+				expandedValues = s.colExpander.ExpandFunc(value)
+				row[colIdx] = "" // Placeholder, will be replaced
+				continue
+			}
+
 			// Get formatter
 			formatter := s.formatter.GetFormatter(col.Idx, col.Type, value)
 			formatted := formatter.Format(value)
@@ -201,10 +463,33 @@ func (s *State) CurrentRows() ([][]string, []string, error) {
 				row[colIdx] = formatted
 			}
 		}
+
+		// Apply column expander
+		if s.colExpander != nil && expandedValues != nil {
+			row = s.expandRow(row, expandedValues)
+		}
 		rows[i-start] = row
 	}
 
 	return rows, rowNumbers, nil
+}
+
+// expandRow applies column expander to a row
+func (s *State) expandRow(row []string, expandedValues []any) []string {
+	exp := s.colExpander
+	result := make([]string, 0, len(row)+len(exp.NewCols)-1)
+	for i, cell := range row {
+		if uint16(i) == exp.SourceCol {
+			// Replace source column with expanded values
+			for j, val := range expandedValues {
+				formatter := s.formatter.GetFormatter(uint16(len(result)), exp.NewTypes[j], val)
+				result = append(result, formatter.Format(val))
+			}
+		} else {
+			result = append(result, cell)
+		}
+	}
+	return result
 }
 
 func (s *State) ensureBlockLoaded() error {
@@ -240,12 +525,24 @@ func (s *State) NextPage() error {
 	}
 
 	totalRows := s.currentBatch.RowCount()
+
+	// Apply row range filter
+	maxRow := totalRows
+	if s.rowRangeEnd >= 0 && int(s.rowRangeEnd)+1 < maxRow {
+		maxRow = int(s.rowRangeEnd) + 1
+	}
+
 	newOffset := s.rowOffset + s.pageSize
 
-	if newOffset < totalRows {
-		// Within the same block
+	if newOffset < maxRow {
+		// Within the same block and range
 		s.rowOffset = newOffset
 		return nil
+	}
+
+	// If row range is set, don't switch blocks
+	if s.rowRangeStart >= 0 || s.rowRangeEnd >= 0 {
+		return moerr.NewInternalErrorf(s.ctx, "already at last page")
 	}
 
 	// Need to switch to next block
@@ -317,10 +614,25 @@ func (s *State) ScrollDown() error {
 	}
 
 	totalRows := s.currentBatch.RowCount()
-	// If current row is not the last row of current page and not the last row of block, scroll down one line
+	blockStartRow := s.GetBlockStartRow(s.currentBlock)
+
+	// Check if we can scroll down within range filter
+	if s.rowRangeEnd >= 0 {
+		currentGlobalRow := blockStartRow + int64(s.rowOffset)
+		if currentGlobalRow >= s.rowRangeEnd {
+			return moerr.NewInternalErrorf(s.ctx, "already at last row of range")
+		}
+	}
+
+	// If current row is not the last row, scroll down one line
 	if s.rowOffset+1 < totalRows {
 		s.rowOffset++
 		return nil
+	}
+
+	// If row range is set, don't switch blocks
+	if s.rowRangeStart >= 0 || s.rowRangeEnd >= 0 {
+		return moerr.NewInternalErrorf(s.ctx, "already at last row of range")
 	}
 
 	// Already at the last row of current block, try to switch to next block
@@ -346,9 +658,24 @@ func (s *State) ScrollUp() error {
 	}
 
 	// Data mode
+	blockStartRow := s.GetBlockStartRow(s.currentBlock)
+
+	// Check if we can scroll up within range filter
+	if s.rowRangeStart >= 0 {
+		currentGlobalRow := blockStartRow + int64(s.rowOffset)
+		if currentGlobalRow <= s.rowRangeStart {
+			return moerr.NewInternalErrorf(s.ctx, "already at first row of range")
+		}
+	}
+
 	if s.rowOffset > 0 {
 		s.rowOffset--
 		return nil
+	}
+
+	// If row range is set, don't switch blocks
+	if s.rowRangeStart >= 0 || s.rowRangeEnd >= 0 {
+		return moerr.NewInternalErrorf(s.ctx, "already at first row of range")
 	}
 
 	// Already at the first row of current block, try to switch to previous block
@@ -376,8 +703,19 @@ func (s *State) ScrollUp() error {
 func (s *State) GotoRow(globalRow int64) error {
 	if globalRow < 0 {
 		// -1 means last row
-		info := s.reader.Info()
-		globalRow = int64(info.RowCount) - 1
+		if s.rowRangeStart >= 0 || s.rowRangeEnd >= 0 {
+			// With range filter: go to last row in range
+			if s.rowRangeEnd >= 0 {
+				globalRow = s.rowRangeEnd
+			} else {
+				info := s.reader.Info()
+				globalRow = int64(info.RowCount) - 1
+			}
+		} else {
+			// Without filter: go to global last row
+			info := s.reader.Info()
+			globalRow = int64(info.RowCount) - 1
+		}
 	}
 
 	// Find corresponding block
@@ -435,13 +773,7 @@ func (s *State) SetFormat(colIdx uint16, formatterName string) error {
 
 // GlobalRowOffset returns current global row offset
 func (s *State) GlobalRowOffset() int64 {
-	var offset int64
-	for i := uint32(0); i < s.currentBlock; i++ {
-		// Simplified handling here, should actually cache row count for each block
-		// Temporarily return approximate value
-		offset += 8192 // Assume 8192 rows per block
-	}
-	return offset + int64(s.rowOffset)
+	return s.GetBlockStartRow(s.currentBlock) + int64(s.rowOffset)
 }
 
 func (s *State) releaseCurrentBatch() {
@@ -811,7 +1143,11 @@ func (s *State) currentMetaRows() ([][]string, []string, error) {
 // Columns returns column information based on current mode
 func (s *State) Columns() []objecttool.ColInfo {
 	if s.viewMode == ViewModeData {
-		return s.reader.Columns()
+		cols := s.reader.Columns()
+		if s.colExpander != nil {
+			return s.expandColumns(cols)
+		}
+		return cols
 	}
 
 	// Convert internal ColInfo to objecttool.ColInfo
@@ -823,4 +1159,38 @@ func (s *State) Columns() []objecttool.ColInfo {
 		}
 	}
 	return cols
+}
+
+// expandColumns applies column expander to column list
+func (s *State) expandColumns(cols []objecttool.ColInfo) []objecttool.ColInfo {
+	exp := s.colExpander
+	result := make([]objecttool.ColInfo, 0, len(cols)+len(exp.NewCols)-1)
+	for i, col := range cols {
+		if uint16(i) == exp.SourceCol {
+			// Replace source column with expanded columns
+			for j := range exp.NewCols {
+				result = append(result, objecttool.ColInfo{
+					Idx:  uint16(len(result)),
+					Type: exp.NewTypes[j],
+				})
+			}
+		} else {
+			col.Idx = uint16(len(result))
+			result = append(result, col)
+		}
+	}
+	return result
+}
+
+// GetObjectToOpen returns the object path to open (if any)
+func (s *State) GetObjectToOpen() string {
+	if s.objectToOpen != "" && s.baseDir != "" {
+		return s.baseDir + "/" + s.objectToOpen
+	}
+	return s.objectToOpen
+}
+
+// ClearObjectToOpen clears the object to open
+func (s *State) ClearObjectToOpen() {
+	s.objectToOpen = ""
 }

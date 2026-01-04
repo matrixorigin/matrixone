@@ -912,3 +912,162 @@ func TestConstBackOff_Count(t *testing.T) {
 	})
 
 }
+
+// TestKindOption_TypeAssertion tests that WithKind returns KindOption type
+// and it can be extracted via type assertion for zero-allocation IsEnable.
+func TestKindOption_TypeAssertion(t *testing.T) {
+	opt := trace.WithKind(trace.SpanKindStatement)
+
+	// Verify that WithKind returns KindOption type
+	kindOpt, ok := opt.(trace.KindOption)
+	require.True(t, ok, "WithKind should return KindOption type")
+	require.Equal(t, trace.SpanKind(kindOpt), trace.SpanKindStatement)
+
+	// Verify that KindOption implements SpanStartOption interface
+	var _ trace.SpanStartOption = trace.KindOption(0)
+
+	// Verify ApplySpanStart works correctly
+	cfg := &trace.SpanConfig{}
+	kindOpt.ApplySpanStart(cfg)
+	require.Equal(t, cfg.Kind, trace.SpanKindStatement)
+}
+
+// TestMOTracer_IsEnable_ZeroAllocation tests that IsEnable uses zero-allocation
+// type assertion to extract Kind from KindOption.
+func TestMOTracer_IsEnable_ZeroAllocation(t *testing.T) {
+	tracer := &MOTracer{
+		TracerConfig: trace.TracerConfig{Name: "motrace_test"},
+		provider:     defaultMOTracerProvider(),
+	}
+	tracer.provider.enable = true
+	trace.InitMOCtledSpan()
+
+	testCases := []struct {
+		name      string
+		opts      []trace.SpanStartOption
+		kindState bool // state for mo_ctl controlled kind
+		want      bool
+	}{
+		{
+			name:      "no options",
+			opts:      nil,
+			kindState: false,
+			want:      true, // provider enabled
+		},
+		{
+			name:      "empty options",
+			opts:      []trace.SpanStartOption{},
+			kindState: false,
+			want:      true, // provider enabled
+		},
+		{
+			name:      "KindOption with non-controlled kind",
+			opts:      []trace.SpanStartOption{trace.WithKind(trace.SpanKindInternal)},
+			kindState: false,
+			want:      true, // provider enabled, kind not controlled
+		},
+		{
+			name:      "KindOption with controlled kind enabled",
+			opts:      []trace.SpanStartOption{trace.WithKind(trace.SpanKindLocalFSVis)},
+			kindState: true,
+			want:      true, // provider enabled && kind state enabled
+		},
+		{
+			name:      "KindOption with controlled kind disabled",
+			opts:      []trace.SpanStartOption{trace.WithKind(trace.SpanKindLocalFSVis)},
+			kindState: false,
+			want:      false, // provider enabled && kind state disabled
+		},
+		{
+			name:      "KindOption with other options",
+			opts:      []trace.SpanStartOption{trace.WithNewRoot(true), trace.WithKind(trace.SpanKindInternal)},
+			kindState: false,
+			want:      true, // provider enabled, kind not controlled (Internal is not controlled by mo_ctl)
+		},
+		{
+			name:      "non-KindOption options",
+			opts:      []trace.SpanStartOption{trace.WithNewRoot(true)},
+			kindState: false,
+			want:      true, // provider enabled, no KindOption found
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Find KindOption in opts
+			var foundKind trace.SpanKind
+			for _, opt := range tc.opts {
+				if kindOpt, ok := opt.(trace.KindOption); ok {
+					foundKind = trace.SpanKind(kindOpt)
+					break
+				}
+			}
+
+			// Set mo_ctl state based on test case expectations
+			if foundKind == trace.SpanKindLocalFSVis && (tc.name == "KindOption with controlled kind enabled" || tc.name == "KindOption with controlled kind disabled") {
+				// For LocalFSVis controlled test cases, set the state as specified
+				trace.SetMoCtledSpanState("local", tc.kindState, 0)
+			}
+			// For other kinds (Internal, Remote, etc.), they are not controlled by mo_ctl
+			// after InitMOCtledSpan(), so IsMOCtledSpan returns has=false
+
+			got := tracer.IsEnable(tc.opts...)
+			assert.Equal(t, tc.want, got, "IsEnable(%v) = %v, want %v", tc.opts, got, tc.want)
+		})
+	}
+}
+
+// TestMOTracer_IsEnable_ProviderDisabled tests IsEnable when provider is disabled.
+func TestMOTracer_IsEnable_ProviderDisabled(t *testing.T) {
+	tracer := &MOTracer{
+		TracerConfig: trace.TracerConfig{Name: "motrace_test"},
+		provider:     defaultMOTracerProvider(),
+	}
+	tracer.provider.enable = false
+	trace.InitMOCtledSpan()
+	trace.SetMoCtledSpanState("local", true, 0)
+
+	// Even if mo_ctl enables the kind, provider disabled should return false
+	got := tracer.IsEnable(trace.WithKind(trace.SpanKindLocalFSVis))
+	assert.False(t, got, "IsEnable should return false when provider is disabled")
+}
+
+// BenchmarkMOTracer_IsEnable_ZeroAllocation benchmarks IsEnable to verify zero allocation.
+func BenchmarkMOTracer_IsEnable_ZeroAllocation(b *testing.B) {
+	tracer := &MOTracer{
+		TracerConfig: trace.TracerConfig{Name: "motrace_test"},
+		provider:     defaultMOTracerProvider(),
+	}
+	tracer.provider.enable = true
+	trace.InitMOCtledSpan()
+
+	opts := []trace.SpanStartOption{trace.WithKind(trace.SpanKindStatement)}
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = tracer.IsEnable(opts...)
+	}
+}
+
+// BenchmarkMOTracer_IsEnable_WithMultipleOptions benchmarks IsEnable with multiple options.
+func BenchmarkMOTracer_IsEnable_WithMultipleOptions(b *testing.B) {
+	tracer := &MOTracer{
+		TracerConfig: trace.TracerConfig{Name: "motrace_test"},
+		provider:     defaultMOTracerProvider(),
+	}
+	tracer.provider.enable = true
+	trace.InitMOCtledSpan()
+
+	opts := []trace.SpanStartOption{
+		trace.WithNewRoot(true),
+		trace.WithKind(trace.SpanKindStatement),
+		trace.WithLongTimeThreshold(time.Second),
+	}
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = tracer.IsEnable(opts...)
+	}
+}
