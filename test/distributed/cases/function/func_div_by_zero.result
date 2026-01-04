@@ -289,10 +289,10 @@ SELECT CAST(10.50 AS DECIMAL(10,2)) DIV CAST(3.00 AS DECIMAL(10,2));
 4
 SELECT CAST(-10.50 AS DECIMAL(10,2)) DIV CAST(3.00 AS DECIMAL(10,2));
 ➤ cast(-10.50 as decimal(10, 2)) div cast(3.00 as decimal(10, 2))[-5,64,0]  𝄀
-61489146912365169
+-4
 SELECT CAST(10.50 AS DECIMAL(10,2)) DIV CAST(-3.00 AS DECIMAL(10,2));
 ➤ cast(10.50 as decimal(10, 2)) div cast(-3.00 as decimal(10, 2))[-5,64,0]  𝄀
-0
+-4
 SELECT CAST(10.50 AS DECIMAL(10,2)) DIV CAST(0.00 AS DECIMAL(10,2));
 ➤ cast(10.50 as decimal(10, 2)) div cast(0.00 as decimal(10, 2))[-5,64,0]  𝄀
 null
@@ -411,3 +411,18 @@ SELECT CAST(1000 AS INT) DIV 13;
 ➤ cast(1000 as int) div 13[-5,64,0]  𝄀
 76
 DROP TABLE t_const_div;
+SELECT CAST(-12.00 AS DECIMAL(10,2)) DIV CAST(3.00 AS DECIMAL(10,2));
+➤ cast(-12.00 as decimal(10, 2)) div cast(3.00 as decimal(10, 2))[-5,64,0]  𝄀
+-4
+SELECT CAST(-20.00 AS DECIMAL(10,2)) DIV CAST(4.00 AS DECIMAL(10,2));
+➤ cast(-20.00 as decimal(10, 2)) div cast(4.00 as decimal(10, 2))[-5,64,0]  𝄀
+-5
+SELECT CAST(-98.00 AS DECIMAL(10,2)) DIV CAST(7.00 AS DECIMAL(10,2));
+➤ cast(-98.00 as decimal(10, 2)) div cast(7.00 as decimal(10, 2))[-5,64,0]  𝄀
+-14
+SELECT CAST(98.00 AS DECIMAL(10,2)) DIV CAST(-7.00 AS DECIMAL(10,2));
+➤ cast(98.00 as decimal(10, 2)) div cast(-7.00 as decimal(10, 2))[-5,64,0]  𝄀
+-14
+SELECT CAST(-98.00 AS DECIMAL(10,2)) DIV CAST(-7.00 AS DECIMAL(10,2));
+➤ cast(-98.00 as decimal(10, 2)) div cast(-7.00 as decimal(10, 2))[-5,64,0]  𝄀
+14

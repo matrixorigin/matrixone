@@ -1482,11 +1482,13 @@ func decimalIntegerDiv[T templateDec](parameters []*vector.Vector, result vector
 			d1Val := any(v1).(types.Decimal64)
 			d2Val := any(v2).(types.Decimal64)
 			d1 := types.Decimal128{B0_63: uint64(d1Val), B64_127: 0}
-			if d1Val < 0 {
+			// Check sign bit of Decimal64
+			if d1Val.Sign() {
 				d1.B64_127 = ^uint64(0)
 			}
 			d2 := types.Decimal128{B0_63: uint64(d2Val), B64_127: 0}
-			if d2Val < 0 {
+			// Check sign bit of Decimal64
+			if d2Val.Sign() {
 				d2.B64_127 = ^uint64(0)
 			}
 			divResult, resultScale, err = d1.Div(d2, scale1, scale2)
@@ -1506,16 +1508,15 @@ func decimalIntegerDiv[T templateDec](parameters []*vector.Vector, result vector
 
 		// Extract integer value
 		// Decimal128 stores value as 128-bit two's complement
-		// For positive: B64_127=0, value in B0_63
-		// For negative: B64_127=0xFFFFFFFFFFFFFFFF, value is two's complement
-		if divResult.B64_127 == 0 {
+		// Check sign bit (bit 127)
+		if divResult.Sign() {
+			// Negative - convert from two's complement
+			// Negate the 128-bit value first, then extract lower 64 bits
+			negated := divResult.Minus()
+			rss[i] = -int64(negated.B0_63)
+		} else {
 			// Positive or zero
 			rss[i] = int64(divResult.B0_63)
-		} else {
-			// Negative - convert from two's complement
-			// The actual value is -(2^128 - raw_value)
-			// For small negative numbers, we can just negate B0_63
-			rss[i] = -int64(divResult.B0_63)
 		}
 	}
 	return nil

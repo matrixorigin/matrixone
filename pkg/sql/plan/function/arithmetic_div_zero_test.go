@@ -581,3 +581,136 @@ func TestIntegerDivConstantVector(t *testing.T) {
 		require.True(t, succeed, tc.info, info)
 	}
 }
+
+// TestDecimal128NegativeDivision tests negative Decimal128 DIV operations
+func TestDecimal128NegativeDivision(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	typ := types.T_decimal128.ToType()
+	typ.Scale = 2
+
+	d1, _ := types.ParseDecimal128("-12.00", 38, 2) // -12 / 3 = -4 exactly
+	d2, _ := types.ParseDecimal128("3.00", 38, 2)
+	d3, _ := types.ParseDecimal128("-20.00", 38, 2) // -20 / 4 = -5 exactly
+	d4, _ := types.ParseDecimal128("4.00", 38, 2)
+	d5, _ := types.ParseDecimal128("-98.00", 38, 2) // -98 / 7 = -14 exactly
+	d6, _ := types.ParseDecimal128("7.00", 38, 2)
+	d7, _ := types.ParseDecimal128("98.00", 38, 2) // 98 / -7 = -14 exactly
+	d8, _ := types.ParseDecimal128("-7.00", 38, 2)
+	d9, _ := types.ParseDecimal128("-98.00", 38, 2) // -98 / -7 = 14 exactly
+
+	testCases := []tcTemp{
+		{
+			info: "Negative DECIMAL128: -12.00 DIV 3.00 = -4",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(typ, []types.Decimal128{d1}, []bool{false}),
+				NewFunctionTestInput(typ, []types.Decimal128{d2}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{-4}, []bool{false}),
+		},
+		{
+			info: "Negative DECIMAL128: -20.00 DIV 4.00 = -5",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(typ, []types.Decimal128{d3}, []bool{false}),
+				NewFunctionTestInput(typ, []types.Decimal128{d4}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{-5}, []bool{false}),
+		},
+		{
+			info: "Negative DECIMAL128: -98.00 DIV 7.00 = -14",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(typ, []types.Decimal128{d5}, []bool{false}),
+				NewFunctionTestInput(typ, []types.Decimal128{d6}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{-14}, []bool{false}),
+		},
+		{
+			info: "Positive DIV Negative DECIMAL128: 98.00 DIV -7.00 = -14",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(typ, []types.Decimal128{d7}, []bool{false}),
+				NewFunctionTestInput(typ, []types.Decimal128{d8}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{-14}, []bool{false}),
+		},
+		{
+			info: "Negative DIV Negative DECIMAL128: -98.00 DIV -7.00 = 14",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(typ, []types.Decimal128{d9}, []bool{false}),
+				NewFunctionTestInput(typ, []types.Decimal128{d8}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{14}, []bool{false}),
+		},
+	}
+
+	for _, tc := range testCases {
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, integerDivFn)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+}
+
+// TestDecimal64NegativeDivision tests negative Decimal64 DIV operations
+func TestDecimal64NegativeDivision(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	typ := types.T_decimal64.ToType()
+	typ.Scale = 2
+
+	d1, _ := types.ParseDecimal64("-12.00", 10, 2)
+	d2, _ := types.ParseDecimal64("3.00", 10, 2)
+	d3, _ := types.ParseDecimal64("-20.00", 10, 2)
+	d4, _ := types.ParseDecimal64("4.00", 10, 2)
+	d5, _ := types.ParseDecimal64("-98.00", 10, 2)
+	d6, _ := types.ParseDecimal64("7.00", 10, 2)
+	d7, _ := types.ParseDecimal64("98.00", 10, 2)
+	d8, _ := types.ParseDecimal64("-7.00", 10, 2)
+
+	testCases := []tcTemp{
+		{
+			info: "Negative DECIMAL64: -12.00 DIV 3.00 = -4",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(typ, []types.Decimal64{d1}, []bool{false}),
+				NewFunctionTestInput(typ, []types.Decimal64{d2}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{-4}, []bool{false}),
+		},
+		{
+			info: "Negative DECIMAL64: -20.00 DIV 4.00 = -5",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(typ, []types.Decimal64{d3}, []bool{false}),
+				NewFunctionTestInput(typ, []types.Decimal64{d4}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{-5}, []bool{false}),
+		},
+		{
+			info: "Negative DECIMAL64: -98.00 DIV 7.00 = -14",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(typ, []types.Decimal64{d5}, []bool{false}),
+				NewFunctionTestInput(typ, []types.Decimal64{d6}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{-14}, []bool{false}),
+		},
+		{
+			info: "Positive DIV Negative DECIMAL64: 98.00 DIV -7.00 = -14",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(typ, []types.Decimal64{d7}, []bool{false}),
+				NewFunctionTestInput(typ, []types.Decimal64{d8}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{-14}, []bool{false}),
+		},
+		{
+			info: "Negative DIV Negative DECIMAL64: -98.00 DIV -7.00 = 14",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(typ, []types.Decimal64{d5}, []bool{false}),
+				NewFunctionTestInput(typ, []types.Decimal64{d8}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{14}, []bool{false}),
+		},
+	}
+
+	for _, tc := range testCases {
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, integerDivFn)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+}
