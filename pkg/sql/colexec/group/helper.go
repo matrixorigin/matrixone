@@ -334,6 +334,9 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 	// we reset ctr state, and create a new group by batch.
 	ctr.resetForSpill()
 	gbBatch := ctr.createNewGroupByBatch(nil, aggBatchSize)
+	defer func() {
+		gbBatch.Clean(ctr.mp)
+	}()
 	totalCnt := int64(0)
 
 	bufferedFile := bufio.NewReaderSize(bkt.file, 1024*1024)
