@@ -335,9 +335,10 @@ func makeValueWindowExec(
 
 func makeValueWindowExecInternal(mp *mpool.MPool, info singleAggInfo) AggFuncExec {
 	return &valueWindowExec{
-		singleAggInfo: info,
-		mp:            mp,
-		frameValues:   make([][]*valueEntry, 0),
+		singleAggInfo:      info,
+		mp:                 mp,
+		frameValues:        make([][]*valueEntry, 0),
+		currentRowPosition: make([]int, 0),
 	}
 }
 

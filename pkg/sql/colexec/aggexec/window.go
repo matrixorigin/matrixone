@@ -277,8 +277,16 @@ func (exec *singleWindowExec) flushRowNumber() ([]*vector.Vector, error) {
 // - row is the index of a value within the window frame (k)
 // - vectors contains the expression values
 //
-// For LAG/LEAD: we need to track the current row and access values at specific offsets
-// For FIRST_VALUE/LAST_VALUE/NTH_VALUE: we need to track the first/last/nth value in the frame
+// The key insight is that for LAG/LEAD, we need to know the position of the current row
+// within the partition, not just within the frame. Since the frame is UNBOUNDED PRECEDING
+// to UNBOUNDED FOLLOWING, the frame contains all rows in the partition.
+//
+// For row j in a partition starting at position 'start':
+// - LAG(1) should return the value at position j-1 (if j > start)
+// - LEAD(1) should return the value at position j+1 (if j+1 < end)
+//
+// Since Fill is called with (j, k, vec) where k iterates through the frame,
+// we need to track which k corresponds to the current row j.
 type valueWindowExec struct {
 	singleAggInfo
 	mp *mpool.MPool
@@ -286,6 +294,10 @@ type valueWindowExec struct {
 	// For each output row (groupIndex), store the values from its window frame
 	// frameValues[groupIndex] contains all values in the window frame for that row
 	frameValues [][]*valueEntry
+
+	// For each output row, store its position within the frame
+	// This is the index where the current row's value appears in frameValues[groupIndex]
+	currentRowPosition []int
 
 	// Result vector
 	resultVec *vector.Vector
@@ -301,6 +313,7 @@ func (exec *valueWindowExec) GroupGrow(more int) error {
 	// Grow the frameValues slice to accommodate more groups
 	for i := 0; i < more; i++ {
 		exec.frameValues = append(exec.frameValues, nil)
+		exec.currentRowPosition = append(exec.currentRowPosition, -1)
 	}
 	return nil
 }
@@ -318,6 +331,7 @@ func (exec *valueWindowExec) Fill(groupIndex int, row int, vectors []*vector.Vec
 	// Ensure we have enough space
 	for len(exec.frameValues) <= groupIndex {
 		exec.frameValues = append(exec.frameValues, nil)
+		exec.currentRowPosition = append(exec.currentRowPosition, -1)
 	}
 
 	vec := vectors[0]
@@ -335,6 +349,12 @@ func (exec *valueWindowExec) Fill(groupIndex int, row int, vectors []*vector.Vec
 			// For fixed-size types, get the raw bytes
 			entry.data = vec.GetRawBytesAt(row)
 		}
+	}
+
+	// Track the position of the current row within the frame
+	// When row == groupIndex, this is the current row's value
+	if row == groupIndex {
+		exec.currentRowPosition[groupIndex] = len(exec.frameValues[groupIndex])
 	}
 
 	exec.frameValues[groupIndex] = append(exec.frameValues[groupIndex], entry)
@@ -420,13 +440,11 @@ func (exec *valueWindowExec) Size() int64 {
 }
 
 func (exec *valueWindowExec) flushLag() ([]*vector.Vector, error) {
-	// LAG returns the value from the previous row in the window frame
-	// Since the window frame for LAG typically includes all preceding rows,
-	// we return the second-to-last value in the frame (the one before current row)
-	// If there's no previous row, return NULL
+	// LAG returns the value from the previous row in the partition
+	// For LAG with default offset=1, we want the value at position (currentRowPosition - 1)
 
 	result := vector.NewVec(exec.retType)
-	for _, frame := range exec.frameValues {
+	for i, frame := range exec.frameValues {
 		if len(frame) == 0 {
 			// No values in frame, append NULL
 			if err := vector.AppendAny(result, nil, true, exec.mp); err != nil {
@@ -435,17 +453,25 @@ func (exec *valueWindowExec) flushLag() ([]*vector.Vector, error) {
 			continue
 		}
 
-		// For LAG with default offset=1, we want the second-to-last value
-		// The frame contains values from left to right in the window
-		// The last value is the current row, so we want the one before it
-		if len(frame) < 2 {
-			// Only current row in frame, no previous row
+		// Get the position of the current row within the frame
+		currentPos := exec.currentRowPosition[i]
+		if currentPos < 0 {
+			// Current row position not found, this shouldn't happen
+			if err := vector.AppendAny(result, nil, true, exec.mp); err != nil {
+				return nil, err
+			}
+			continue
+		}
+
+		// LAG(1) returns the value at currentPos - 1
+		lagPos := currentPos - 1
+		if lagPos < 0 {
+			// No previous row, return NULL
 			if err := vector.AppendAny(result, nil, true, exec.mp); err != nil {
 				return nil, err
 			}
 		} else {
-			// Get the second-to-last value (the row before current)
-			entry := frame[len(frame)-2]
+			entry := frame[lagPos]
 			if entry.isNull {
 				if err := vector.AppendAny(result, nil, true, exec.mp); err != nil {
 					return nil, err
@@ -462,13 +488,11 @@ func (exec *valueWindowExec) flushLag() ([]*vector.Vector, error) {
 }
 
 func (exec *valueWindowExec) flushLead() ([]*vector.Vector, error) {
-	// LEAD returns the value from the next row in the window frame
-	// Since the window frame for LEAD typically includes all following rows,
-	// we return the second value in the frame (the one after current row)
-	// If there's no next row, return NULL
+	// LEAD returns the value from the next row in the partition
+	// For LEAD with default offset=1, we want the value at position (currentRowPosition + 1)
 
 	result := vector.NewVec(exec.retType)
-	for _, frame := range exec.frameValues {
+	for i, frame := range exec.frameValues {
 		if len(frame) == 0 {
 			// No values in frame, append NULL
 			if err := vector.AppendAny(result, nil, true, exec.mp); err != nil {
@@ -477,17 +501,25 @@ func (exec *valueWindowExec) flushLead() ([]*vector.Vector, error) {
 			continue
 		}
 
-		// For LEAD with default offset=1, we want the second value
-		// The frame contains values from left to right in the window
-		// The first value is the current row, so we want the one after it
-		if len(frame) < 2 {
-			// Only current row in frame, no next row
+		// Get the position of the current row within the frame
+		currentPos := exec.currentRowPosition[i]
+		if currentPos < 0 {
+			// Current row position not found, this shouldn't happen
+			if err := vector.AppendAny(result, nil, true, exec.mp); err != nil {
+				return nil, err
+			}
+			continue
+		}
+
+		// LEAD(1) returns the value at currentPos + 1
+		leadPos := currentPos + 1
+		if leadPos >= len(frame) {
+			// No next row, return NULL
 			if err := vector.AppendAny(result, nil, true, exec.mp); err != nil {
 				return nil, err
 			}
 		} else {
-			// Get the second value (the row after current)
-			entry := frame[1]
+			entry := frame[leadPos]
 			if entry.isNull {
 				if err := vector.AppendAny(result, nil, true, exec.mp); err != nil {
 					return nil, err

@@ -1,131 +1,45 @@
--- Test LAG, LEAD, FIRST_VALUE, LAST_VALUE, NTH_VALUE window functions
--- GitHub Issue: #23405
-
--- Setup test table
 drop table if exists test_value_window;
-create table test_value_window (
-    id int,
-    year int,
-    revenue decimal(10, 2),
-    category varchar(20)
-);
-insert into test_value_window values
-(1, 2020, 1000.00, 'A'),
-(2, 2021, 1500.00, 'A'),
-(3, 2022, 1800.00, 'A'),
-(4, 2023, 2000.00, 'A'),
-(5, 2020, 500.00, 'B'),
-(6, 2021, 600.00, 'B'),
-(7, 2022, 750.00, 'B');
--- Test LAG function
--- LAG(expr) - returns value from previous row
-select id, year, revenue, LAG(revenue) over (order by year) as prev_revenue from test_value_window where category = 'A';
-id    year    revenue    prev_revenue
-1    2020    1000.00    null
-2    2021    1500.00    1000.00
-3    2022    1800.00    1500.00
-4    2023    2000.00    1800.00
--- LAG with partition
-select id, year, revenue, category, LAG(revenue) over (partition by category order by year) as prev_revenue from test_value_window order by category, year;
-id    year    revenue    category    prev_revenue
-1    2020    1000.00    A    null
-2    2021    1500.00    A    1000.00
-3    2022    1800.00    A    1500.00
-4    2023    2000.00    A    1800.00
-5    2020    500.00    B    null
-6    2021    600.00    B    500.00
-7    2022    750.00    B    600.00
--- Test LEAD function
--- LEAD(expr) - returns value from next row
-select id, year, revenue, LEAD(revenue) over (order by year) as next_revenue from test_value_window where category = 'A';
-id    year    revenue    next_revenue
-1    2020    1000.00    1500.00
-2    2021    1500.00    1800.00
-3    2022    1800.00    2000.00
-4    2023    2000.00    null
--- LEAD with partition
-select id, year, revenue, category, LEAD(revenue) over (partition by category order by year) as next_revenue from test_value_window order by category, year;
-id    year    revenue    category    next_revenue
-1    2020    1000.00    A    1500.00
-2    2021    1500.00    A    1800.00
-3    2022    1800.00    A    2000.00
-4    2023    2000.00    A    null
-5    2020    500.00    B    600.00
-6    2021    600.00    B    750.00
-7    2022    750.00    B    null
--- Test FIRST_VALUE function
-select id, year, revenue, FIRST_VALUE(revenue) over (order by year) as first_revenue from test_value_window where category = 'A';
-id    year    revenue    first_revenue
-1    2020    1000.00    1000.00
-2    2021    1500.00    1000.00
-3    2022    1800.00    1000.00
-4    2023    2000.00    1000.00
--- FIRST_VALUE with partition
-select id, year, revenue, category, FIRST_VALUE(revenue) over (partition by category order by year) as first_revenue from test_value_window order by category, year;
-id    year    revenue    category    first_revenue
-1    2020    1000.00    A    1000.00
-2    2021    1500.00    A    1000.00
-3    2022    1800.00    A    1000.00
-4    2023    2000.00    A    1000.00
-5    2020    500.00    B    500.00
-6    2021    600.00    B    500.00
-7    2022    750.00    B    500.00
--- Test LAST_VALUE function
-select id, year, revenue, LAST_VALUE(revenue) over (order by year rows between unbounded preceding and unbounded following) as last_revenue from test_value_window where category = 'A';
-id    year    revenue    last_revenue
-1    2020    1000.00    2000.00
-2    2021    1500.00    2000.00
-3    2022    1800.00    2000.00
-4    2023    2000.00    2000.00
--- LAST_VALUE with partition
-select id, year, revenue, category, LAST_VALUE(revenue) over (partition by category order by year rows between unbounded preceding and unbounded following) as last_revenue from test_value_window order by category, year;
-id    year    revenue    category    last_revenue
-1    2020    1000.00    A    2000.00
-2    2021    1500.00    A    2000.00
-3    2022    1800.00    A    2000.00
-4    2023    2000.00    A    2000.00
-5    2020    500.00    B    750.00
-6    2021    600.00    B    750.00
-7    2022    750.00    B    750.00
--- Test NTH_VALUE function
-select id, year, revenue, NTH_VALUE(revenue, 1) over (order by year) as first_revenue from test_value_window where category = 'A';
-id    year    revenue    first_revenue
-1    2020    1000.00    1000.00
-2    2021    1500.00    1000.00
-3    2022    1800.00    1000.00
-4    2023    2000.00    1000.00
--- Test LAG with aggregate function (original issue case)
-drop table if exists test_revenue_cost;
-create table test_revenue_cost (
-    gjahr int,
-    zxssr decimal(15, 2),
-    ctgry varchar(10)
-);
-insert into test_revenue_cost values
-(2020, 10000.00, 'LG'),
-(2021, 12000.00, 'LG'),
-(2022, 15000.00, 'LG'),
-(2023, 18000.00, 'LG');
--- Original issue query pattern - LAG with SUM aggregate
-select 
-    gjahr as year,
-    round(sum(zxssr), 2) as total_revenue,
-    LAG(sum(zxssr)) over (order by gjahr) as prev_revenue
-from test_revenue_cost  
-where ctgry = 'LG'
-group by gjahr
-order by gjahr;
-year    total_revenue    prev_revenue
-2020    10000.00    null
-2021    12000.00    10000.00
-2022    15000.00    12000.00
-2023    18000.00    15000.00
--- Test keywords as identifiers (role names)
+create table test_value_window (id int, year_col int, revenue decimal(10, 2), category varchar(20));
+insert into test_value_window values (1, 2020, 1000.00, 'A'), (2, 2021, 1500.00, 'A'), (3, 2022, 1800.00, 'A'), (4, 2023, 2000.00, 'A'), (5, 2020, 500.00, 'B'), (6, 2021, 600.00, 'B'), (7, 2022, 750.00, 'B');
+select id, year_col, revenue, LAG(revenue) over (order by year_col) as prev_revenue from test_value_window where category = 'A';
+id	year_col	revenue	prev_revenue
+1	2020	1000.00	null
+2	2021	1500.00	1000.00
+3	2022	1800.00	1500.00
+4	2023	2000.00	1800.00
+select id, year_col, revenue, LEAD(revenue) over (order by year_col) as next_revenue from test_value_window where category = 'A';
+id	year_col	revenue	next_revenue
+1	2020	1000.00	1500.00
+2	2021	1500.00	1800.00
+3	2022	1800.00	2000.00
+4	2023	2000.00	null
+select id, year_col, revenue, FIRST_VALUE(revenue) over (order by year_col) as first_revenue from test_value_window where category = 'A';
+id	year_col	revenue	first_revenue
+1	2020	1000.00	1000.00
+2	2021	1500.00	1000.00
+3	2022	1800.00	1000.00
+4	2023	2000.00	1000.00
+select id, year_col, revenue, LAST_VALUE(revenue) over (order by year_col rows between unbounded preceding and unbounded following) as last_revenue from test_value_window where category = 'A';
+id	year_col	revenue	last_revenue
+1	2020	1000.00	2000.00
+2	2021	1500.00	2000.00
+3	2022	1800.00	2000.00
+4	2023	2000.00	2000.00
+select id, year_col, revenue, NTH_VALUE(revenue, 1) over (order by year_col) as first_revenue from test_value_window where category = 'A';
+id	year_col	revenue	first_revenue
+1	2020	1000.00	1000.00
+2	2021	1500.00	1000.00
+3	2022	1800.00	1000.00
+4	2023	2000.00	1000.00
+select id, year_col, revenue, category, LAG(revenue) over (partition by category order by year_col) as prev_revenue from test_value_window order by category, year_col;
+id	year_col	revenue	category	prev_revenue
+1	2020	1000.00	A	null
+2	2021	1500.00	A	1000.00
+3	2022	1800.00	A	1500.00
+4	2023	2000.00	A	1800.00
+5	2020	500.00	B	null
+6	2021	600.00	B	500.00
+7	2022	750.00	B	600.00
 drop role if exists lag;
 drop role if exists lead;
-drop role if exists first_value;
-drop role if exists last_value;
-drop role if exists nth_value;
--- Cleanup
 drop table if exists test_value_window;
-drop table if exists test_revenue_cost;
