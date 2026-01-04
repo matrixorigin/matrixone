@@ -83,7 +83,32 @@ func GetStatusCategory(err error) StatusCategory {
 		return StatusOK
 	}
 
-	// Check moerr codes first (most specific)
+	// Check specific error variables first (before moerr codes)
+	// Backend is being created asynchronously - treat as transient wait
+	if err == ErrBackendCreating || errors.Is(err, ErrBackendCreating) {
+		return StatusTransient
+	}
+
+	// Backend unavailable or create timeout - treat as unavailable (permanent for this request)
+	if err == ErrBackendUnavailable || errors.Is(err, ErrBackendUnavailable) ||
+		err == ErrBackendCreateTimeout || errors.Is(err, ErrBackendCreateTimeout) {
+		return StatusUnavailable
+	}
+
+	// Circuit breaker errors
+	if err == ErrCircuitOpen || errors.Is(err, ErrCircuitOpen) {
+		return StatusUnavailable
+	}
+	if err == ErrCircuitHalfOpen || errors.Is(err, ErrCircuitHalfOpen) {
+		return StatusTransient // Half-open allows probe requests
+	}
+
+	// Client closing/closed
+	if err == ErrClientClosing || errors.Is(err, ErrClientClosing) {
+		return StatusCancelled
+	}
+
+	// Check moerr codes (after specific error variables)
 	if moerr.IsMoErrCode(err, moerr.ErrRPCTimeout) {
 		return StatusTransient
 	}
