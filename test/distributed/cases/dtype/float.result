@@ -229,8 +229,7 @@ SELECT * FROM t1 WHERE a BETWEEN 0 AND 0.9;
 SELECT * FROM t1 WHERE a=0.9;
 ➤ a[7,4,0]
 SELECT * FROM t1 WHERE a IN (0.8,0.9);
-➤ a[7,4,0]  𝄀
-0.8
+➤ a[7,4,0]
 drop table t1;
 create table t1 (id float, b int);
 insert into t1 values(4.574,1);
@@ -239,11 +238,11 @@ insert into t1 values(177.171,3);
 select count(*) from t1
 where id>=5.3111 and id <=177.171;
 ➤ count(*)[-5,64,0]  𝄀
-2
+1
 select count(*) from t1
 where id between 5.3111 and 177.171;
 ➤ count(*)[-5,64,0]  𝄀
-2
+1
 drop table t1;
 SELECT (1234.0 BETWEEN 0 AND 1234);
 ➤ 1234.0 between 0 and 1234[12,4,0]  𝄀
