@@ -1,92 +1,92 @@
 select cast('0000-01-01' as date),cast('0000-01-01' as date)-1;
-cast(0000-01-01 as date)    cast(0000-01-01 as date) - 1
-null    null
+➤ cast(0000-01-01 as date)[91,64,0]  ¦  cast(0000-01-01 as date) - 1[-5,64,0]  𝄀
+null  ¦  null
 select cast('2000-01-01' as date);
-cast(2000-01-01 as date)
+➤ cast(2000-01-01 as date)[91,64,0]  𝄀
 2000-01-01
 select cast('200-01-1' as date);
-cast(200-01-1 as date)
+➤ cast(200-01-1 as date)[91,64,0]  𝄀
 0200-01-01
 select cast('2021-02-29' as date);
-cast(2021-02-29 as date)
+➤ cast(2021-02-29 as date)[91,64,0]  𝄀
 null
 select cast('2022-02-01' as date)-cast('2022-01-01' as date);
-cast(2022-02-01 as date) - cast(2022-01-01 as date)
+➤ cast(2022-02-01 as date) - cast(2022-01-01 as date)[-5,64,0]  𝄀
 31
 select cast('2020-02-01' as date)+NULL;
-cast(2020-02-01 as date) + null
+➤ cast(2020-02-01 as date) + null[0,2147483647,0]  𝄀
 null
 select cast('0000-00-00' as date);
-cast(0000-00-00 as date)
+➤ cast(0000-00-00 as date)[91,64,0]  𝄀
 null
 select cast(cast(0x13488c5 as signed) as date);
 invalid argument operator cast, bad value [BIGINT DATE]
 SELECT DATE_ADD('2017-06-15', INTERVAL 10 DAY);
-DATE_ADD(2017-06-15, INTERVAL(10, day))
+➤ DATE_ADD(2017-06-15, INTERVAL(10, day))[12,-1,0]  𝄀
 2017-06-25
 SELECT DATE_ADD('2017-06-15', INTERVAL 10 MONTH);
-DATE_ADD(2017-06-15, INTERVAL(10, month))
+➤ DATE_ADD(2017-06-15, INTERVAL(10, month))[12,-1,0]  𝄀
 2018-04-15
 SELECT DATE_ADD('2017-06-15', INTERVAL 1 YEAR);
-DATE_ADD(2017-06-15, INTERVAL(1, year))
+➤ DATE_ADD(2017-06-15, INTERVAL(1, year))[12,-1,0]  𝄀
 2018-06-15
 SELECT DATE_ADD('20200215', INTERVAL 14 DAY);
-DATE_ADD(20200215, INTERVAL(14, day))
+➤ DATE_ADD(20200215, INTERVAL(14, day))[12,-1,0]  𝄀
 2020-02-29
 drop table if exists t1;
 create table t1 (a date not null, primary key(a));
 insert into t1 values ('2022-01-01'), ('20220102'),('2022-01-03'),('20220104');
 select * from t1 order by a asc;
-a
-2022-01-01
-2022-01-02
-2022-01-03
+➤ a[91,64,0]  𝄀
+2022-01-01  𝄀
+2022-01-02  𝄀
+2022-01-03  𝄀
 2022-01-04
 select * from t1 where a='2022-01-01' order by 1 desc;
-a
+➤ a[91,64,0]  𝄀
 2022-01-01
 delete from t1 where a=20220102;
 select * from t1 where a<>'20220104' order by 1 asc;
-a
-2022-01-01
-2022-01-02
+➤ a[91,64,0]  𝄀
+2022-01-01  𝄀
+2022-01-02  𝄀
 2022-01-03
 update t1 set a='2022-02-02' where a='2022-01-03';
 select * from t1;
-a
-2022-01-01
-2022-01-02
-2022-01-04
+➤ a[91,64,0]  𝄀
+2022-01-01  𝄀
+2022-01-02  𝄀
+2022-01-04  𝄀
 2022-02-02
 drop table t1;
 create table t1 ( a int not null default 1, big date primary key);
 insert into t1 (big) values ('2000-01-01'),('2001-01-01'),('2002-01-01');
 select * from t1 order by a desc, big asc;
-a    big
-1    2000-01-01
-1    2001-01-01
-1    2002-01-01
+➤ a[4,32,0]  ¦  big[91,64,0]  𝄀
+1  ¦  2000-01-01  𝄀
+1  ¦  2001-01-01  𝄀
+1  ¦  2002-01-01
 select * from t1 order by big limit 1,2;
-a    big
-1    2001-01-01
-1    2002-01-01
+➤ a[4,32,0]  ¦  big[91,64,0]  𝄀
+1  ¦  2001-01-01  𝄀
+1  ¦  2002-01-01
 select * from t1 order by big limit 2 offset 1;
-a    big
-1    2001-01-01
-1    2002-01-01
+➤ a[4,32,0]  ¦  big[91,64,0]  𝄀
+1  ¦  2001-01-01  𝄀
+1  ¦  2002-01-01
 select distinct big from t1 where big=20000101 order by big desc;
-big
+➤ big[91,64,0]
 select min(big),max(big),max(big)-1 from t1;
-min(big)    max(big)    max(big) - 1
-2000-01-01    2002-01-01    11687
+➤ min(big)[91,64,0]  ¦  max(big)[91,64,0]  ¦  max(big) - 1[-5,64,0]  𝄀
+2000-01-01  ¦  2002-01-01  ¦  11687
 select min(big),avg(big),count(big)+1 from t1 group by big order by 1 asc, 2 asc;
 invalid argument aggregate function avg, bad value [DATE]
 drop table t1;
 create table t1 (id date not null default '2022-01-31', a int, primary key (a));
 insert into t1(a) values (1);
 select * from t1;
-id    a
-2022-01-31    1
+➤ id[91,64,0]  ¦  a[4,32,0]  𝄀
+2022-01-31  ¦  1
 drop table if exists t1;
 drop table if exists t2;
 create table t1 (
@@ -105,18 +105,18 @@ insert into t2 values('2022-01-03', 3);
 insert into t2 values('2022-01-02', 4);
 insert into t2 values('2022-01-01', 5);
 select * from t1;
-dvalue    value32
-2022-01-01    1
-2022-01-02    2
+➤ dvalue[91,64,0]  ¦  value32[4,32,0]  𝄀
+2022-01-01  ¦  1  𝄀
+2022-01-02  ¦  2
 select * from t2 order by 2 desc;
-dvalue    value32
-2022-01-01    5
-2022-01-02    4
-2022-01-03    3
+➤ dvalue[91,64,0]  ¦  value32[4,32,0]  𝄀
+2022-01-01  ¦  5  𝄀
+2022-01-02  ¦  4  𝄀
+2022-01-03  ¦  3
 select * from t1 join t2 on t1.dvalue=t2.dvalue order by 1 desc,t2.value32 asc;
-dvalue    value32    dvalue    value32
-2022-01-02    2    2022-01-02    4
-2022-01-01    1    2022-01-01    5
+➤ dvalue[91,64,0]  ¦  value32[4,32,0]  ¦  dvalue[91,64,0]  ¦  value32[4,32,0]  𝄀
+2022-01-02  ¦  2  ¦  2022-01-02  ¦  4  𝄀
+2022-01-01  ¦  1  ¦  2022-01-01  ¦  5
 select * from t1 join t2 on t1.dvalue=t2.dvalue where t1.dvalue>='2022-01-01' group by t1.dvalue order by t2.dvalue;
 SQL syntax error: column "t1.value32" must appear in the GROUP BY clause or be used in an aggregate function
 drop table if exists t1;
@@ -124,54 +124,56 @@ drop table if exists t2;
 CREATE TABLE t_date(id date);
 insert INTO t_date VALUES ('2020-01-01'), ('2022-01-02');
 SELECT id, id >= 20200102 FROM t_date;
-id    id >= 20200102
-2020-01-01    false
-2022-01-02    false
+➤ id[91,64,0]  ¦  id >= 20200102[12,4,0]  𝄀
+2020-01-01  ¦  false  𝄀
+2022-01-02  ¦  false
 SELECT id, 1.1 <= '2020-01-01' FROM t_date;
-strconv.ParseFloat: parsing "2020-01-01": invalid syntax
+➤ id[91,64,0]  ¦  1.1 <= 2020-01-01[12,4,0]  𝄀
+2020-01-01  ¦  false  𝄀
+2022-01-02  ¦  false
 SELECT id, id = 202020101 FROM t_date;
-id    id = 202020101
-2020-01-01    false
-2022-01-02    false
+➤ id[91,64,0]  ¦  id = 202020101[12,4,0]  𝄀
+2020-01-01  ¦  false  𝄀
+2022-01-02  ¦  false
 SELECT id, '20200101' = id FROM t_date;
-id    20200101 = id
-2020-01-01    true
-2022-01-02    false
+➤ id[91,64,0]  ¦  20200101 = id[12,4,0]  𝄀
+2020-01-01  ¦  true  𝄀
+2022-01-02  ¦  false
 SELECT * from t_date WHERE id = 20200101;
-id
+➤ id[91,64,0]
 SELECT * from t_date WHERE id = 2.0200101e7;
 invalid argument operator =, bad value [DATE DOUBLE]
 SELECT * from t_date WHERE id = '20200101';
-id
+➤ id[91,64,0]  𝄀
 2020-01-01
 SELECT * from t_date WHERE id IN ('2020-01-01','2022-01-03');
-id
+➤ id[91,64,0]  𝄀
 2020-01-01
 SELECT * from t_date WHERE id IN (2.0200101e7,2.0200103e7 );
 invalid argument operator =, bad value [DATE DOUBLE]
 SELECT * from t_date WHERE id IN (20220101, 20220103);
-id
+➤ id[91,64,0]
 SELECT * from t_date WHERE id IN ('2.0200101e7','2.0200103e7');
-id
+➤ id[91,64,0]
 SELECT * from t_date WHERE id BETWEEN 20191231 AND 20200101;
-id
+➤ id[91,64,0]
 SELECT * from t_date WHERE id BETWEEN 2.0200101e7 and 2.0200103e7;
 invalid argument operator >=, bad value [DATE DOUBLE]
 SELECT * from t_date WHERE id BETWEEN '2020-01-02' AND '2020-01-03';
-id
+➤ id[91,64,0]
 SELECT * from t_date WHERE id BETWEEN '2.0200101e7' and '2.0200103e7';
-id
+➤ id[91,64,0]
 drop table if exists t1;
 CREATE TABLE t1 (a date);
 insert INTO t1 VALUES ('2022-03-01');
 SELECT * FROM t1 WHERE coalesce(a) BETWEEN '2022-02-28' and '2022-03-01';
-a
+➤ a[91,64,0]  𝄀
 2022-03-01
 SELECT * FROM t1 WHERE coalesce(a)='20220301';
-a
+➤ a[91,64,0]  𝄀
 2022-03-01
 SELECT * FROM t1 WHERE coalesce(a) in ('2022-02-28','2022-03-01');
-a
+➤ a[91,64,0]  𝄀
 2022-03-01
 drop table t1;
 SELECT CAST(20220101 AS date) BETWEEN 20220101 AND -1;
@@ -191,16 +193,16 @@ CREATE TABLE t1 (a date, b int primary key);
 insert INTO t1 VALUES ('2022-01-01',1),('2022-01-01',2);
 update t1 set a='2022-01-02' where a='2022-01-01' limit 1;
 select * from t1;
-a    b
-2022-01-01    2
-2022-01-02    1
+➤ a[91,64,0]  ¦  b[4,32,0]  𝄀
+2022-01-01  ¦  2  𝄀
+2022-01-02  ¦  1
 insert INTO t1 VALUES ('2022-01-01',3);
 update t1 set a='2022-01-02' where a='2022-01-01';
 select * from t1;
-a    b
-2022-01-02    1
-2022-01-02    2
-2022-01-02    3
+➤ a[91,64,0]  ¦  b[4,32,0]  𝄀
+2022-01-02  ¦  1  𝄀
+2022-01-02  ¦  2  𝄀
+2022-01-02  ¦  3
 drop table t1;
 create table t1 (
 a date not null,
@@ -210,49 +212,49 @@ insert into t1 (a) values ('2022-01-02'),('2022-01-04'),('2022-01-06'),('2022-01
 update t1 set a=a+101;
 invalid argument operator cast, bad value [BIGINT DATE]
 select a,b from t1;
-a    b
-2022-01-02    2000-01-01
-2022-01-04    2000-01-01
-2022-01-06    2000-01-01
-2022-01-08    2000-01-01
-2022-01-10    2000-01-01
-2022-01-12    2000-01-01
+➤ a[91,64,0]  ¦  b[91,64,0]  𝄀
+2022-01-02  ¦  2000-01-01  𝄀
+2022-01-04  ¦  2000-01-01  𝄀
+2022-01-06  ¦  2000-01-01  𝄀
+2022-01-08  ¦  2000-01-01  𝄀
+2022-01-10  ¦  2000-01-01  𝄀
+2022-01-12  ¦  2000-01-01
 update t1 set a='2022-01-27' where a='2022-02-05';
 select a,b from t1;
-a    b
-2022-01-02    2000-01-01
-2022-01-04    2000-01-01
-2022-01-06    2000-01-01
-2022-01-08    2000-01-01
-2022-01-10    2000-01-01
-2022-01-12    2000-01-01
+➤ a[91,64,0]  ¦  b[91,64,0]  𝄀
+2022-01-02  ¦  2000-01-01  𝄀
+2022-01-04  ¦  2000-01-01  𝄀
+2022-01-06  ¦  2000-01-01  𝄀
+2022-01-08  ¦  2000-01-01  𝄀
+2022-01-10  ¦  2000-01-01  𝄀
+2022-01-12  ¦  2000-01-01
 update t1 set a=a-1 where 1 > 2;
 invalid argument operator cast, bad value [BIGINT DATE]
 select a,b from t1;
-a    b
-2022-01-02    2000-01-01
-2022-01-04    2000-01-01
-2022-01-06    2000-01-01
-2022-01-08    2000-01-01
-2022-01-10    2000-01-01
-2022-01-12    2000-01-01
+➤ a[91,64,0]  ¦  b[91,64,0]  𝄀
+2022-01-02  ¦  2000-01-01  𝄀
+2022-01-04  ¦  2000-01-01  𝄀
+2022-01-06  ¦  2000-01-01  𝄀
+2022-01-08  ¦  2000-01-01  𝄀
+2022-01-10  ¦  2000-01-01  𝄀
+2022-01-12  ¦  2000-01-01
 update t1 set a=a-1 where 3 > 2;
 invalid argument operator cast, bad value [BIGINT DATE]
 select a,b from t1;
-a    b
-2022-01-02    2000-01-01
-2022-01-04    2000-01-01
-2022-01-06    2000-01-01
-2022-01-08    2000-01-01
-2022-01-10    2000-01-01
-2022-01-12    2000-01-01
+➤ a[91,64,0]  ¦  b[91,64,0]  𝄀
+2022-01-02  ¦  2000-01-01  𝄀
+2022-01-04  ¦  2000-01-01  𝄀
+2022-01-06  ¦  2000-01-01  𝄀
+2022-01-08  ¦  2000-01-01  𝄀
+2022-01-10  ¦  2000-01-01  𝄀
+2022-01-12  ¦  2000-01-01
 drop table t1;
 create table t1 (a date primary key, b char(32));
 insert into t1 values ('20220101','apple'),('2022-01-02','apple');
 select * from t1;
-a    b
-2022-01-01    apple
-2022-01-02    apple
+➤ a[91,64,0]  ¦  b[1,32,0]  𝄀
+2022-01-01  ¦  apple  𝄀
+2022-01-02  ¦  apple
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;
@@ -262,12 +264,12 @@ CREATE TABLE t1 (a date, b int primary key);
 insert INTO t1 VALUES ('2022-01-01',1),('2022-01-01',2);
 delete from t1 where a='2022-01-01' limit 1;
 select * from t1;
-a    b
-2022-01-01    2
+➤ a[91,64,0]  ¦  b[4,32,0]  𝄀
+2022-01-01  ¦  2
 insert INTO t1 VALUES ('2022-01-01',3);
 delete from t1 where a='2022-01-01';
 select * from t1;
-a    b
+➤ a[91,64,0]  ¦  b[4,32,0]
 drop table t1;
 create table t1 (
 a date not null,
@@ -275,29 +277,29 @@ b date not null default '2000-01-01');
 insert into t1 (a) values ('2022-01-02'),('2022-01-04'),('2022-01-06'),('2022-01-08'),('2022-01-10'),('2022-01-12');
 delete from t1 where a=20220101+3;
 select a,b from t1;
-a    b
-2022-01-02    2000-01-01
-2022-01-04    2000-01-01
-2022-01-06    2000-01-01
-2022-01-08    2000-01-01
-2022-01-10    2000-01-01
-2022-01-12    2000-01-01
+➤ a[91,64,0]  ¦  b[91,64,0]  𝄀
+2022-01-02  ¦  2000-01-01  𝄀
+2022-01-04  ¦  2000-01-01  𝄀
+2022-01-06  ¦  2000-01-01  𝄀
+2022-01-08  ¦  2000-01-01  𝄀
+2022-01-10  ¦  2000-01-01  𝄀
+2022-01-12  ¦  2000-01-01
 delete from t1 where  3 < 2;
 select a,b from t1;
-a    b
-2022-01-02    2000-01-01
-2022-01-04    2000-01-01
-2022-01-06    2000-01-01
-2022-01-08    2000-01-01
-2022-01-10    2000-01-01
-2022-01-12    2000-01-01
+➤ a[91,64,0]  ¦  b[91,64,0]  𝄀
+2022-01-02  ¦  2000-01-01  𝄀
+2022-01-04  ¦  2000-01-01  𝄀
+2022-01-06  ¦  2000-01-01  𝄀
+2022-01-08  ¦  2000-01-01  𝄀
+2022-01-10  ¦  2000-01-01  𝄀
+2022-01-12  ¦  2000-01-01
 delete from t1 where  1 < 2;
 select a,b from t1;
-a    b
+➤ a[91,64,0]  ¦  b[91,64,0]
 drop table t1;
 create table t1 (a date primary key, b char(32));
 insert into t1 values ('20220101','apple'),('2022-01-02','apple');
 select * from t1;
-a    b
-2022-01-01    apple
-2022-01-02    apple
+➤ a[91,64,0]  ¦  b[1,32,0]  𝄀
+2022-01-01  ¦  apple  𝄀
+2022-01-02  ¦  apple
