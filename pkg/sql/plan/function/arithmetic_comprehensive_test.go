@@ -92,6 +92,17 @@ func Test_MinusFn_DecimalZero(t *testing.T) {
 	}
 }
 
+// Regression: scaling large decimal128 values beyond precision should error, not silently succeed.
+func Test_Decimal128ScaleOverflow(t *testing.T) {
+	// 1e20 is representable with width 38/scale 0; scaling up by 19 digits would overflow 38-digit precision.
+	d128, err := types.Decimal128FromFloat64(1e20, 38, 0)
+	require.NoError(t, err)
+
+	rs := make([]types.Decimal128, 1)
+	err = decimal128ScaleArray([]types.Decimal128{d128}, rs, 1, 19)
+	require.Error(t, err)
+}
+
 // Test_DivFn_DecimalZero tests that division by zero still returns NULL
 func Test_DivFn_DecimalZero(t *testing.T) {
 	proc := testutil.NewProcess(t)

@@ -24,8 +24,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -695,4 +696,25 @@ func Test_extractColRefInFilter(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Regression: DIV with constant zero divisor must NOT be folded so that runtime
+// can honor sql_mode/statement type behavior.
+func TestIsDivisionByZeroConstant(t *testing.T) {
+	divOverload := function.EncodeOverloadID(function.DIV, 0)
+	fn := &plan.Function{
+		Func: &plan.ObjectRef{Obj: divOverload},
+		Args: []*plan.Expr{
+			{
+				Typ:  plan.Type{Id: int32(types.T_int64)},
+				Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 1}}},
+			},
+			{
+				Typ:  plan.Type{Id: int32(types.T_int64)},
+				Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 0}}},
+			},
+		},
+	}
+
+	require.True(t, rule.IsDivisionByZeroConstant(fn))
 }
