@@ -128,7 +128,7 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				bat := result.Batch
 
 				if bat == nil {
-					if hashJoin.IsRightJoin && (hashJoin.JoinType == plan.Node_RIGHT || hashJoin.JoinType == plan.Node_SEMI || hashJoin.JoinType == plan.Node_ANTI) {
+					if hashJoin.IsRightJoin {
 						ctr.state = Finalize
 					} else {
 						ctr.state = End
@@ -415,12 +415,6 @@ func (ctr *container) probe(ap *HashJoin, proc *process.Process, result *vm.Call
 				case plan.Node_LEFT, plan.Node_SINGLE:
 					ctr.appendOneNotMatch(ap, proc, row)
 					resRowCnt++
-
-				case plan.Node_ANTI:
-					if !ap.IsRightJoin {
-						ctr.appendOneMatch(ap, proc, row, idx1, idx2)
-						resRowCnt++
-					}
 				}
 
 				if ctr.vsidx >= len(ctr.vs) {
