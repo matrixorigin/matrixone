@@ -363,23 +363,9 @@ func TestIntegerDivBoundary(t *testing.T) {
 		require.True(t, succeed, tc.info, info)
 	}
 
-	// UINT64 max (returns int64, not uint64)
-	{
-		tc := tcTemp{
-			info: "UINT64 boundary: MAX_UINT64 DIV 1",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_uint64.ToType(),
-					[]uint64{18446744073709551615}, []bool{false}), // MAX_UINT64
-				NewFunctionTestInput(types.T_uint64.ToType(),
-					[]uint64{1}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
-				[]int64{-1}, []bool{false}), // Overflow to int64
-		}
-		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, integerDivFn)
-		succeed, info := tcc.Run()
-		require.True(t, succeed, tc.info, info)
-	}
+	// UINT64 overflow (should error per MySQL 8.0 behavior)
+	// Test via SQL instead of unit test due to framework limitations
+	// See: test/distributed/cases/expression/uint64_div_overflow.sql
 
 	// Decimal128 with large scale
 	{
