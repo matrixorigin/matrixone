@@ -89,7 +89,7 @@ func TestBloomFilterSourceDirectPropagation(t *testing.T) {
 	txnOperator.EXPECT().Snapshot().Return(txn.CNTxnSnapshot{}, nil).AnyTimes()
 	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{ID: []byte("test-txn")}).AnyTimes()
 
-	proc := process.NewTopProcess(ctx, nil, nil, txnOperator, nil, nil, nil, nil, nil, nil, nil)
+	proc := process.NewTopProcess(ctx, nil, nil, txnOperator, nil, nil, nil, nil, nil, nil)
 
 	s := &Scope{
 		Proc: proc,
@@ -115,7 +115,7 @@ func TestBloomFilterSourceDirectPropagation(t *testing.T) {
 	require.Equal(t, expectedBF, p.DataSource.BloomFilter, "Serialized Source should carry the Bloom Filter (from DataSource)")
 
 	// 3. Decode Scope: generateScope should populate compile.Source.BloomFilter
-	remoteProc := process.NewTopProcess(context.Background(), nil, nil, txnOperator, nil, nil, nil, nil, nil, nil, nil)
+	remoteProc := process.NewTopProcess(context.Background(), nil, nil, txnOperator, nil, nil, nil, nil, nil, nil)
 	decodedScope, err := generateScope(remoteProc, &p, &scopeContext{}, true)
 	require.NoError(t, err)
 	require.NotNil(t, decodedScope.DataSource)
