@@ -138,6 +138,10 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 					continue
 				}
 
+				if bat.Last() {
+					return result, nil
+				}
+
 				if bat.IsEmpty() {
 					continue
 				}
