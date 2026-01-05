@@ -1385,8 +1385,8 @@ func initFixed2() {
 		{types.T_decimal128, types.T_uint16, types.T_decimal128, types.T_decimal128},
 		{types.T_decimal128, types.T_uint32, types.T_decimal128, types.T_decimal128},
 		{types.T_decimal128, types.T_uint64, types.T_decimal128, types.T_decimal128},
-		// Symmetric rule: decimal128 vs float32 → convert to float32 (see comment above for rationale)
-		{types.T_decimal128, types.T_float64, types.T_float64, types.T_float64},
+		// Symmetric rule: decimal128 vs float32 → convert to float64 (see comment above for rationale)
+		{types.T_decimal128, types.T_float32, types.T_float64, types.T_float64},
 		{types.T_decimal128, types.T_float64, types.T_float64, types.T_float64},
 		{types.T_decimal128, types.T_decimal64, types.T_decimal128, types.T_decimal128},
 		{types.T_decimal128, types.T_date, types.T_decimal128, types.T_decimal128},
