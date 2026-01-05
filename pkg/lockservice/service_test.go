@@ -2038,14 +2038,14 @@ func TestIssue3288(t *testing.T) {
 
 			l1.Close()
 
-			// should lock failed
+			// should lock failed - after auto-create wait timeout, returns ErrBackendClosed
 			_, err = l2.Lock(
 				ctx,
 				0,
 				[][]byte{{1}},
 				[]byte("txn2"),
 				option)
-			require.True(t, moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect))
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrBackendClosed))
 
 			time.Sleep(time.Second * 3)
 

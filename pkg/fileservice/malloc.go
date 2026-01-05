@@ -46,6 +46,7 @@ var memoryCacheAllocator = sync.OnceValue(func() malloc.Allocator {
 		metric.MallocGauge.WithLabelValues("memory-cache-inuse"),
 		metric.MallocCounter.WithLabelValues("memory-cache-allocate-objects"),
 		metric.MallocGauge.WithLabelValues("memory-cache-inuse-objects"),
+		metric.OffHeapInuseGauge.WithLabelValues("memory-cache"),
 	)
 	// decorate
 	allocator = decorateAllocator(allocator)
@@ -61,6 +62,7 @@ var ioAllocator = sync.OnceValue(func() malloc.Allocator {
 		metric.MallocGauge.WithLabelValues("io-inuse"),
 		metric.MallocCounter.WithLabelValues("io-allocate-objects"),
 		metric.MallocGauge.WithLabelValues("io-inuse-objects"),
+		metric.OffHeapInuseGauge.WithLabelValues("io"),
 	)
 	// decorate
 	allocator = decorateAllocator(allocator)

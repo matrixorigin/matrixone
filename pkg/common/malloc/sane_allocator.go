@@ -34,6 +34,8 @@ type SimpleCAllocator struct {
 	inuseBytesGauge        prometheus.Gauge
 	allocateObjectsCounter prometheus.Counter
 	inuseObjectsGauge      prometheus.Gauge
+	// absoluteInuseGauge publishes instantaneous in-use bytes (not deltas). Nil disables reporting.
+	absoluteInuseGauge prometheus.Gauge
 
 	// it is not clear if these shared counters are overengineering.
 	allocateBytes   *ShardedCounter[uint64, atomic.Uint64, *atomic.Uint64]
@@ -41,6 +43,8 @@ type SimpleCAllocator struct {
 	allocateObjects *ShardedCounter[uint64, atomic.Uint64, *atomic.Uint64]
 	inuseObjects    *ShardedCounter[int64, atomic.Int64, *atomic.Int64]
 	updating        atomic.Bool
+	// currentInuse mirrors allocator in-use bytes and feeds absoluteInuseGauge.
+	currentInuse atomic.Int64
 }
 
 func NewSimpleCAllocator(
@@ -48,12 +52,14 @@ func NewSimpleCAllocator(
 	inuseBytesGauge prometheus.Gauge,
 	allocateObjectsCounter prometheus.Counter,
 	inuseObjectsGauge prometheus.Gauge,
+	absoluteInuseGauge prometheus.Gauge,
 ) *SimpleCAllocator {
 	sca := &SimpleCAllocator{
 		allocateBytesCounter:   allocateBytesCounter,
 		inuseBytesGauge:        inuseBytesGauge,
 		allocateObjectsCounter: allocateObjectsCounter,
 		inuseObjectsGauge:      inuseObjectsGauge,
+		absoluteInuseGauge:     absoluteInuseGauge,
 		allocateBytes:          NewShardedCounter[uint64, atomic.Uint64](runtime.GOMAXPROCS(0)),
 		inuseBytes:             NewShardedCounter[int64, atomic.Int64](runtime.GOMAXPROCS(0)),
 		allocateObjects:        NewShardedCounter[uint64, atomic.Uint64](runtime.GOMAXPROCS(0)),
@@ -72,6 +78,7 @@ func (sca *SimpleCAllocator) Malloc(size uint64) ([]byte, error) {
 	slice := unsafe.Slice((*byte)(ptr), size)
 	sca.allocateBytes.Add(size)
 	sca.inuseBytes.Add(int64(size))
+	sca.currentInuse.Add(int64(size))
 	sca.allocateObjects.Add(1)
 	sca.inuseObjects.Add(1)
 	sca.triggerUpdate()
@@ -88,6 +95,7 @@ func (sca *SimpleCAllocator) Allocate(size uint64) ([]byte, error) {
 	slice := unsafe.Slice((*byte)(ptr), size)
 	sca.allocateBytes.Add(size)
 	sca.inuseBytes.Add(int64(size))
+	sca.currentInuse.Add(int64(size))
 	sca.allocateObjects.Add(1)
 	sca.inuseObjects.Add(1)
 	sca.triggerUpdate()
@@ -109,8 +117,10 @@ func (sca *SimpleCAllocator) ReallocZero(old []byte, size uint64) ([]byte, error
 		clear(slice[oldsize:])
 		sca.allocateBytes.Add(size - oldsize)
 		sca.inuseBytes.Add(int64(size - oldsize))
+		sca.currentInuse.Add(int64(size - oldsize))
 	} else if size < oldsize {
 		sca.inuseBytes.Add(-int64(oldsize - size))
+		sca.currentInuse.Add(-int64(oldsize - size))
 	}
 
 	return slice, nil
@@ -130,6 +140,7 @@ func (sca *SimpleCAllocator) Deallocate(slice []byte, size uint64) {
 	C.free(ptr)
 
 	sca.inuseBytes.Add(-int64(size))
+	sca.currentInuse.Add(-int64(size))
 	sca.inuseObjects.Add(-1)
 	sca.triggerUpdate()
 }
@@ -169,6 +180,11 @@ func (sca *SimpleCAllocator) triggerUpdate() {
 					n += v.Swap(0)
 				})
 				sca.inuseObjectsGauge.Add(float64(n))
+			}
+
+			// absolute off-heap in-use across all mpools sharing this allocator
+			if sca.absoluteInuseGauge != nil {
+				sca.absoluteInuseGauge.Set(float64(sca.currentInuse.Load()))
 			}
 
 			sca.updating.Store(false)

@@ -37,31 +37,23 @@ func (n noopTracerProvider) Tracer(string, ...TracerOption) Tracer {
 }
 
 // NoopTracer is an implementation of Tracer that preforms no operations.
+// It should have ZERO allocation overhead.
+// NoopTracer is only used when trace is disabled (disableSpan=true).
+// When trace is enabled, MOTracer is used instead.
 type NoopTracer struct{}
 
-// Start carries forward a non-recording Span, if one is present in the context, otherwise it
-// creates a no-op Span.
-func (t NoopTracer) Start(ctx context.Context, name string, opts ...SpanStartOption) (context.Context, Span) {
-	span := SpanFromContext(ctx)
-	if _, ok := span.(NoopSpan); !ok {
-		// span is likely already a NoopSpan, but let's be sure
-		span = NoopSpan{}
-		return ContextWithSpan(ctx, span), span
-	} else if len(opts) > 0 {
-		var sc = SpanConfig{}
-		for _, opt := range opts {
-			opt.ApplySpanStart(&sc)
-		}
-		if sc.NewRoot {
-			span = NoopSpan{}
-			return ContextWithSpan(ctx, span), span
-		}
-	}
-	return ctx, span
+// Start returns ctx and NoopSpan directly without any allocation.
+// All parameters are ignored since NoopTracer performs no operations.
+// This is safe because:
+// 1. NoopTracer is only used when trace is disabled
+// 2. When trace is disabled, empty SpanContext is expected behavior
+// 3. When trace is enabled, MOTracer.Start is called instead
+func (t NoopTracer) Start(ctx context.Context, _ string, _ ...SpanStartOption) (context.Context, Span) {
+	return ctx, NoopSpan{}
 }
 
-func (t NoopTracer) Debug(ctx context.Context, name string, opts ...SpanStartOption) (context.Context, Span) {
-	return t.Start(ctx, name, opts...)
+func (t NoopTracer) Debug(ctx context.Context, _ string, _ ...SpanStartOption) (context.Context, Span) {
+	return ctx, NoopSpan{}
 }
 
 func (t NoopTracer) IsEnable(opts ...SpanStartOption) bool { return false }
