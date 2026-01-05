@@ -1279,6 +1279,8 @@ type MysqlReader interface {
 	Authenticate(ctx context.Context) error
 	ParseSendLongData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error
 	ParseExecuteData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error
+	// Disconnect closes the underlying network connection to forcefully disconnect the client.
+	Disconnect() error
 }
 
 // MysqlWriter write batch & control packets using mysql protocol format

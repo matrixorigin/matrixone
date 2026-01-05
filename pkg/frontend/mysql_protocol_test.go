@@ -71,12 +71,11 @@ func createInnerServer() *MOServer {
 	rm := getRtMgr("")
 	pu := getPu("")
 	mo := &MOServer{
-		addr:        "",
-		uaddr:       pu.SV.UnixSocketAddress,
-		rm:          rm,
-		readTimeout: pu.SV.SessionTimeout.Duration,
-		pu:          pu,
-		handler:     rm.Handler,
+		addr:    "",
+		uaddr:   pu.SV.UnixSocketAddress,
+		rm:      rm,
+		pu:      pu,
+		handler: rm.Handler,
 	}
 	mo.running = true
 	return mo
@@ -2967,6 +2966,31 @@ func TestMysqlProtocolImpl_Close(t *testing.T) {
 	assert.Nil(t, proto.binaryNullBuffer)
 }
 
+func TestMysqlProtocolImpl_Disconnect(t *testing.T) {
+	sv, err := getSystemVariables("test/system_vars_config.toml")
+	if err != nil {
+		t.Error(err)
+	}
+	pu := config.NewParameterUnit(sv, nil, nil, nil)
+	pu.SV.SkipCheckUser = true
+	pu.SV.KillRountinesInterval = 0
+	setPu("", pu)
+	setSessionAlloc("", NewLeakCheckAllocator())
+
+	// Test with valid connection
+	tConn := &testConn{}
+	ioses, err := NewIOSession(tConn, pu, "")
+	assert.Nil(t, err)
+	proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
+	err = proto.Disconnect()
+	assert.Nil(t, err)
+
+	// Test with nil tcpConn
+	proto2 := &MysqlProtocolImpl{tcpConn: nil}
+	err = proto2.Disconnect()
+	assert.Nil(t, err)
+}
+
 var _ MysqlRrWr = &testMysqlWriter{}
 
 // testMysqlWriter works for the background transaction that does not use the network protocol.
@@ -3185,6 +3209,10 @@ func (fp *testMysqlWriter) SetUserName(s string) {
 }
 
 func (fp *testMysqlWriter) Close() {}
+
+func (fp *testMysqlWriter) Disconnect() error {
+	return nil
+}
 
 func (fp *testMysqlWriter) WriteLocalInfileRequest(filename string) error {
 	return nil

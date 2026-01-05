@@ -484,6 +484,11 @@ func (ip *internalProtocol) SetUserName(username string) {
 
 func (ip *internalProtocol) Close() {}
 
+// Disconnect for internal protocol does nothing since there's no real network connection
+func (ip *internalProtocol) Disconnect() error {
+	return nil
+}
+
 // sendRows
 // case 1: used in WriteResponse and WriteResultSetRow, which are 'copy' op
 // case 2: used in Write, which is 'append' op. (deprecated)
