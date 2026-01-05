@@ -757,7 +757,7 @@ a    a - b - b
 3    7459
 4    -24691357819753086424691357819753086482
 SELECT a, b DIV a FROM numeric07;
-invalid argument operator div, bad value [DECIMAL128 INT]
+invalid input: Decimal128 Div overflow: 12345678909876543212345678909876543243(Scale:0)/4(Scale:0)
 SELECT a, ABS(b) FROM numeric07;
 a    ABS(b)
 1    3728193

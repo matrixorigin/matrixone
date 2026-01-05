@@ -671,8 +671,9 @@ func decimalArith[T templateDec](parameters []*vector.Vector, result vector.Func
 }
 
 // XXX For decimal64 / decimal64, decimal64 * decimal64
+// isDivision: true for division (check for divide by zero), false for multiplication
 func decimalArith2(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int,
-	arithFn func(v1, v2 types.Decimal128, scale1, scale2 int32) (types.Decimal128, error), selectList *FunctionSelectList) error {
+	arithFn func(v1, v2 types.Decimal128, scale1, scale2 int32) (types.Decimal128, error), selectList *FunctionSelectList, isDivision bool) error {
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[types.Decimal128](result)
 	p1 := vector.OptGetParamFromWrapper[types.Decimal64](rs, 0, parameters[0])
@@ -707,8 +708,8 @@ func decimalArith2(parameters []*vector.Vector, result vector.FunctionResultWrap
 		if null1 || null2 {
 			nulls.AddRange(rsNull, 0, uint64(length))
 		} else {
-			// Check for division by zero
-			if v2 == 0 {
+			// Check for division by zero (only for division, not multiplication)
+			if isDivision && v2 == 0 {
 				if checkDivisionByZeroBehavior(proc, selectList) {
 					return moerr.NewDivByZeroNoCtx()
 				}
@@ -744,7 +745,7 @@ func decimalArith2(parameters []*vector.Vector, result vector.FunctionResultWrap
 						continue
 					}
 					v2, _ := p2.GetValue(i)
-					if v2 == 0 {
+					if isDivision && v2 == 0 {
 						if shouldError {
 							return moerr.NewDivByZeroNoCtx()
 						}
@@ -764,7 +765,7 @@ func decimalArith2(parameters []*vector.Vector, result vector.FunctionResultWrap
 				rowCount := uint64(length)
 				for i := uint64(0); i < rowCount; i++ {
 					v2, _ := p2.GetValue(i)
-					if v2 == 0 {
+					if isDivision && v2 == 0 {
 						if shouldError {
 							return moerr.NewDivByZeroNoCtx()
 						}
@@ -789,8 +790,8 @@ func decimalArith2(parameters []*vector.Vector, result vector.FunctionResultWrap
 		if null2 {
 			nulls.AddRange(rsNull, 0, uint64(length))
 		} else {
-			// Check for division by zero
-			if v2 == 0 {
+			// Check for division by zero (only for division, not multiplication)
+			if isDivision && v2 == 0 {
 				if checkDivisionByZeroBehavior(proc, selectList) {
 					return moerr.NewDivByZeroNoCtx()
 				}
@@ -844,7 +845,7 @@ func decimalArith2(parameters []*vector.Vector, result vector.FunctionResultWrap
 			}
 			v1, _ := p1.GetValue(i)
 			v2, _ := p2.GetValue(i)
-			if v2 == 0 {
+			if isDivision && v2 == 0 {
 				if shouldError {
 					return moerr.NewDivByZeroNoCtx()
 				}
@@ -866,7 +867,7 @@ func decimalArith2(parameters []*vector.Vector, result vector.FunctionResultWrap
 	for i := uint64(0); i < rowCount; i++ {
 		v1, _ := p1.GetValue(i)
 		v2, _ := p2.GetValue(i)
-		if v2 == 0 {
+		if isDivision && v2 == 0 {
 			if shouldError {
 				return moerr.NewDivByZeroNoCtx()
 			}

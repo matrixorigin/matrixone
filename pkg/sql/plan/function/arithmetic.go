@@ -426,7 +426,7 @@ func multiFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		return decimalArith2(parameters, result, proc, length, func(x, y types.Decimal128, scale1, scale2 int32) (types.Decimal128, error) {
 			rt, _, err := x.Mul(y, scale1, scale2)
 			return rt, err
-		}, selectList)
+		}, selectList, false)
 	case types.T_decimal128:
 		return decimal128ArithArray(parameters, result, proc, length, decimal128MultiArray, selectList)
 
@@ -463,7 +463,7 @@ func divFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 		return decimalArith2(parameters, result, proc, length, func(x, y types.Decimal128, scale1, scale2 int32) (types.Decimal128, error) {
 			rt, _, err := x.Div(y, scale1, scale2)
 			return rt, err
-		}, selectList)
+		}, selectList, true)
 	case types.T_decimal128:
 		return decimalArith[types.Decimal128](parameters, result, proc, length, func(v1, v2 types.Decimal128, scale1, scale2 int32) (types.Decimal128, error) {
 			r, _, err := v1.Div(v2, scale1, scale2)
