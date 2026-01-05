@@ -1194,6 +1194,16 @@ func float32ToOthers(ctx context.Context,
 		return rs.DupFromParameter(source, length)
 	case types.T_float64:
 		rs := vector.MustFunctionResult[float64](result)
+		// Preserve scale from source float32(M,D) when casting to float64
+		sourceScale := source.GetType().Scale
+		if sourceScale > 0 && source.GetType().Width > 0 {
+			// Apply source scale to the result type for proper comparison
+			resultType := rs.GetType()
+			resultType.Scale = sourceScale
+			resultType.Width = source.GetType().Width
+			rs.GetResultVector().SetType(resultType)
+			return floatToFixFloat(ctx, source, rs, length, selectList)
+		}
 		if rs.GetType().Scale >= 0 && rs.GetType().Width > 0 {
 			return floatToFixFloat(ctx, source, rs, length, selectList)
 		}

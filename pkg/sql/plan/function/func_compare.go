@@ -16,6 +16,8 @@ package function
 
 import (
 	"bytes"
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -23,6 +25,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+// roundFloat32ToScale rounds a float32 value to the specified scale.
+// This is used for float(M,D) comparisons to handle precision issues.
+// When float32 stores a value like 90.01, it may become 90.01000213... due to
+// IEEE 754 representation. This function rounds both operands to the same
+// precision before comparison to match MySQL behavior.
+func roundFloat32ToScale(v float32, scale int32) float32 {
+	if scale <= 0 {
+		return v
+	}
+	pow := math.Pow10(int(scale))
+	return float32(math.Round(float64(v)*pow) / pow)
+}
 
 func otherCompareOperatorSupports(typ1, typ2 types.Type) bool {
 	if typ1.Oid != typ2.Oid {
@@ -127,7 +142,11 @@ func equalFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 			return a == b
 		}, selectList)
 	case types.T_float32:
+		scale := paramType.Scale
 		return opBinaryFixedFixedToFixed[float32, float32, bool](parameters, rs, proc, length, func(a, b float32) bool {
+			if scale > 0 {
+				a, b = roundFloat32ToScale(a, scale), roundFloat32ToScale(b, scale)
+			}
 			return a == b
 		}, selectList)
 	case types.T_float64:
@@ -624,7 +643,11 @@ func greatThanFn(parameters []*vector.Vector, result vector.FunctionResultWrappe
 			return types.CompareUuid(v1, v2) > 0
 		}, selectList)
 	case types.T_float32:
+		scale := paramType.Scale
 		return opBinaryFixedFixedToFixed[float32, float32, bool](parameters, rs, proc, length, func(a, b float32) bool {
+			if scale > 0 {
+				a, b = roundFloat32ToScale(a, scale), roundFloat32ToScale(b, scale)
+			}
 			return a > b
 		}, selectList)
 	case types.T_float64:
@@ -734,7 +757,11 @@ func greatEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapp
 			return types.CompareUuid(v1, v2) >= 0
 		}, selectList)
 	case types.T_float32:
+		scale := paramType.Scale
 		return opBinaryFixedFixedToFixed[float32, float32, bool](parameters, rs, proc, length, func(a, b float32) bool {
+			if scale > 0 {
+				a, b = roundFloat32ToScale(a, scale), roundFloat32ToScale(b, scale)
+			}
 			return a >= b
 		}, selectList)
 	case types.T_float64:
@@ -844,7 +871,11 @@ func notEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 			return a != b
 		}, selectList)
 	case types.T_float32:
+		scale := paramType.Scale
 		return opBinaryFixedFixedToFixed[float32, float32, bool](parameters, rs, proc, length, func(a, b float32) bool {
+			if scale > 0 {
+				a, b = roundFloat32ToScale(a, scale), roundFloat32ToScale(b, scale)
+			}
 			return a != b
 		}, selectList)
 	case types.T_float64:
@@ -954,7 +985,11 @@ func lessThanFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 			return types.CompareUuid(v1, v2) < 0
 		}, selectList)
 	case types.T_float32:
+		scale := paramType.Scale
 		return opBinaryFixedFixedToFixed[float32, float32, bool](parameters, rs, proc, length, func(a, b float32) bool {
+			if scale > 0 {
+				a, b = roundFloat32ToScale(a, scale), roundFloat32ToScale(b, scale)
+			}
 			return a < b
 		}, selectList)
 	case types.T_float64:
@@ -1064,7 +1099,11 @@ func lessEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrappe
 			return types.CompareUuid(v1, v2) <= 0
 		}, selectList)
 	case types.T_float32:
+		scale := paramType.Scale
 		return opBinaryFixedFixedToFixed[float32, float32, bool](parameters, rs, proc, length, func(a, b float32) bool {
+			if scale > 0 {
+				a, b = roundFloat32ToScale(a, scale), roundFloat32ToScale(b, scale)
+			}
 			return a <= b
 		}, selectList)
 	case types.T_float64:

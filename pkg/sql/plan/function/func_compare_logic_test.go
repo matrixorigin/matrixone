@@ -430,3 +430,148 @@ func Test_CompareEdgeCases(t *testing.T) {
 		require.True(t, succeed, tc.info, info)
 	}
 }
+
+
+// Test_Float32WithScaleComparison tests float(M,D) comparison with scale handling.
+// This test verifies the fix for the precision issue where float32 values like 90.01
+// are stored as 90.01000213... due to IEEE 754 representation, causing incorrect
+// comparison results.
+func Test_Float32WithScaleComparison(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// Create float(5,2) type - 5 total digits, 2 decimal places
+	float32WithScale := types.T_float32.ToType()
+	float32WithScale.Width = 5
+	float32WithScale.Scale = 2
+
+	// Test case: values that round to 90.01 should equal 90.01
+	// In float32, 90.01 is stored as ~90.01000213, but with scale=2,
+	// comparison should round both operands to 2 decimal places.
+	{
+		tc := tcTemp{
+			info: "float(5,2) greater than comparison: 90.01 > 90.01 should be false",
+			inputs: []FunctionTestInput{
+				// These values, when stored as float32, become slightly > 90.01
+				// but should be treated as 90.01 when scale=2
+				NewFunctionTestInput(float32WithScale,
+					[]float32{90.01, 90.01, 90.02}, []bool{false, false, false}),
+				NewFunctionTestInput(float32WithScale,
+					[]float32{90.01, 90.02, 90.01}, []bool{false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{false, false, true}, []bool{false, false, false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, greatThanFn)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	// Test equality with scale
+	{
+		tc := tcTemp{
+			info: "float(5,2) equality: 90.01 == 90.01 should be true",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(float32WithScale,
+					[]float32{90.01, 90.01, 90.02}, []bool{false, false, false}),
+				NewFunctionTestInput(float32WithScale,
+					[]float32{90.01, 90.02, 90.02}, []bool{false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{true, false, true}, []bool{false, false, false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, equalFn)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	// Test less than with scale
+	{
+		tc := tcTemp{
+			info: "float(5,2) less than: 90.01 < 90.01 should be false",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(float32WithScale,
+					[]float32{90.01, 90.01, 90.02}, []bool{false, false, false}),
+				NewFunctionTestInput(float32WithScale,
+					[]float32{90.01, 90.02, 90.01}, []bool{false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{false, true, false}, []bool{false, false, false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, lessThanFn)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	// Test not equal with scale
+	{
+		tc := tcTemp{
+			info: "float(5,2) not equal: 90.01 != 90.01 should be false",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(float32WithScale,
+					[]float32{90.01, 90.01, 90.02}, []bool{false, false, false}),
+				NewFunctionTestInput(float32WithScale,
+					[]float32{90.01, 90.02, 90.02}, []bool{false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{false, true, false}, []bool{false, false, false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, notEqualFn)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	// Test greater equal with scale
+	{
+		tc := tcTemp{
+			info: "float(5,2) greater equal: 90.01 >= 90.01 should be true",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(float32WithScale,
+					[]float32{90.01, 90.01, 90.00}, []bool{false, false, false}),
+				NewFunctionTestInput(float32WithScale,
+					[]float32{90.01, 90.02, 90.01}, []bool{false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{true, false, false}, []bool{false, false, false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, greatEqualFn)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	// Test less equal with scale
+	{
+		tc := tcTemp{
+			info: "float(5,2) less equal: 90.01 <= 90.01 should be true",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(float32WithScale,
+					[]float32{90.01, 90.02, 90.00}, []bool{false, false, false}),
+				NewFunctionTestInput(float32WithScale,
+					[]float32{90.01, 90.01, 90.01}, []bool{false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{true, false, true}, []bool{false, false, false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, lessEqualFn)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	// Test without scale (scale=0) - should use direct comparison
+	float32NoScale := types.T_float32.ToType()
+	{
+		tc := tcTemp{
+			info: "float32 without scale: direct comparison",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(float32NoScale,
+					[]float32{1.0, 2.0, 3.0}, []bool{false, false, false}),
+				NewFunctionTestInput(float32NoScale,
+					[]float32{1.0, 3.0, 2.0}, []bool{false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{false, false, true}, []bool{false, false, false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, greatThanFn)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+}
