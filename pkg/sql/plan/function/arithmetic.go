@@ -674,12 +674,11 @@ func integerDivUnsigned(parameters []*vector.Vector, result vector.FunctionResul
 				}
 				rsNull.Add(i)
 			} else {
-				// For uint64 DIV, perform division first, then convert to int64
-				// This matches MySQL 8.0 behavior: unsigned DIV returns int64
-				// MySQL 8.0: if result exceeds int64 range, it wraps around (like direct int64 cast)
 				quotient := v1 / v2
-				// Direct conversion: if quotient > MAX_INT64, it wraps to negative
-				// This matches MySQL 8.0 behavior for unsigned integer DIV
+				// MySQL 8.0: if DIV result exceeds BIGINT range, error occurs
+				if quotient > math.MaxInt64 {
+					return moerr.NewOutOfRangeNoCtx("BIGINT", "")
+				}
 				rss[i] = int64(quotient)
 			}
 		}
