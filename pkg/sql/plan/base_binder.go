@@ -1751,6 +1751,50 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	returnType = fGet.GetReturnType()
 	argsCastType, _ = fGet.ShouldDoImplicitTypeCast()
 
+	// Optimization: avoid casting columns in comparisons to preserve index usage
+	switch name {
+	case "=", "<", "<=", ">", ">=", "<>":
+		if len(args) == 2 && len(argsType) == 2 {
+			if len(argsCastType) == 0 {
+				argsCastType = []types.Type{argsType[0], argsType[1]}
+			}
+			if len(argsCastType) == 2 {
+				leftIsCol := args[0].GetCol() != nil
+				rightIsCol := args[1].GetCol() != nil
+
+				// Check if we can use column type to avoid casting it
+				canUse := func(colOid, otherOid types.T) bool {
+					if colOid.IsInteger() && otherOid.IsInteger() {
+						return true
+					}
+					if (colOid == types.T_float32 || colOid == types.T_float64) &&
+						(otherOid == types.T_float32 || otherOid == types.T_float64 || otherOid.IsDecimal() || otherOid.IsInteger()) {
+						return true
+					}
+					if colOid.IsDecimal() && otherOid.IsDecimal() {
+						return true
+					}
+					return colOid == types.T_float64
+				}
+
+				// Try column type if column would be cast
+				if leftIsCol && !rightIsCol && !argsType[0].Eq(argsCastType[0]) && canUse(argsType[0].Oid, argsType[1].Oid) {
+					if fGet2, err := function.GetFunctionByName(ctx, name, []types.Type{argsType[0], argsType[0]}); err == nil {
+						argsCastType = []types.Type{argsType[0], argsType[0]}
+						funcID = fGet2.GetEncodedOverloadID()
+						returnType = fGet2.GetReturnType()
+					}
+				} else if !leftIsCol && rightIsCol && !argsType[1].Eq(argsCastType[1]) && canUse(argsType[1].Oid, argsType[0].Oid) {
+					if fGet2, err := function.GetFunctionByName(ctx, name, []types.Type{argsType[1], argsType[1]}); err == nil {
+						argsCastType = []types.Type{argsType[1], argsType[1]}
+						funcID = fGet2.GetEncodedOverloadID()
+						returnType = fGet2.GetReturnType()
+					}
+				}
+			}
+		}
+	}
+
 	if name == "round" || name == "ceil" || name == "ceiling" || name == "floor" && argsType[0].IsDecimal() {
 		if len(argsType) == 1 {
 			returnType.Scale = 0

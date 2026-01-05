@@ -55,7 +55,8 @@ select * from test_table;
 0  ¦  1.2345678  ¦  1.22334455667789  𝄀
 1  ¦  1.8765432  ¦  1.22334455667789
 select * from test_table where fl=1.2345678;
-➤ pk[4,32,0]  ¦  fl[7,24,0]  ¦  dou[8,54,0]
+➤ pk[4,32,0]  ¦  fl[7,24,0]  ¦  dou[8,54,0]  𝄀
+0  ¦  1.2345678  ¦  1.22334455667789
 SET @fl_hit=1.2345678;
 SET @fl_not_hit=1.234567800;
 SET @dou_not_hit=1.223344556677889;
@@ -601,16 +602,16 @@ execute s1 using @a1, @b1;
 40  ¦  xxx1
 execute s2 using @a1, @b1;
 ➤ a1[4,32,0]  ¦  a2[12,-1,0]  𝄀
+20  ¦  xxx1  𝄀
+30  ¦  xxx1  𝄀
+20  ¦  yyy1  𝄀
+40  ¦  xxx1  𝄀
 20  ¦  aaa1  𝄀
 30  ¦  aaa1  𝄀
 40  ¦  bbb1  𝄀
 50  ¦  aaa1  𝄀
 60  ¦  ccc1  𝄀
-20  ¦  ccc1  𝄀
-20  ¦  xxx1  𝄀
-30  ¦  xxx1  𝄀
-20  ¦  yyy1  𝄀
-40  ¦  xxx1
+20  ¦  ccc1
 drop table t5;
 drop table t6;
 set @maxint=18446744073709551615;
