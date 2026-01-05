@@ -154,15 +154,6 @@ func (expr *FunctionExpressionExecutor) doFold(proc *process.Process, atRuntime 
 		return nil
 	}
 
-	// Avoid folding decimal + float (or vice versa); this combination has known
-	// issues when pre-evaluated and should be computed at runtime instead.
-	if expr.fid == function.PLUS && len(expr.parameterResults) == 2 {
-		// If the result type is decimal, be conservative and skip folding entirely.
-		if rv := expr.resultVector.GetResultVector(); rv == nil || rv.GetType().Oid.IsDecimal() {
-			return nil
-		}
-	}
-
 	// todo: I cannot understand these following codes, but I keep them here.
 	//  it seems to deal with some IN filter and very dangerous.
 	//  See the pull request: https://github.com/matrixorigin/matrixone/pull/13403.

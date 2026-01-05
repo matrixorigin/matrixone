@@ -177,33 +177,6 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 	overloadID := fn.Func.GetObj()
 	f, exists := function.GetFunctionByIdWithoutError(overloadID)
 
-	// Skip constant folding for CASE expressions to avoid folding regressions
-	// where the expression is incorrectly reduced to NULL.
-	if fid, _ := function.DecodeOverloadID(overloadID); fid == function.CASE {
-		return expr
-	}
-
-	// Decimal + Float (or vice versa) folding is unreliable; skip when PLUS mixes them.
-	if fid, _ := function.DecodeOverloadID(overloadID); fid == function.PLUS {
-		hasDecimal, hasFloat := false, false
-		for _, a := range fn.Args {
-			switch types.T(a.Typ.Id) {
-			case types.T_decimal64, types.T_decimal128:
-				hasDecimal = true
-			case types.T_float32, types.T_float64:
-				hasFloat = true
-			}
-		}
-		if hasDecimal && hasFloat {
-			return expr
-		}
-		// Also skip folding PLUS when the result type itself is decimal to avoid
-		// post-cast decimal additions being pre-evaluated incorrectly.
-		if types.T(expr.Typ.Id).IsDecimal() {
-			return expr
-		}
-	}
-
 	if !exists {
 		return expr
 	}

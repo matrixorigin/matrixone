@@ -4077,10 +4077,8 @@ func strToFloat[T constraints.Float](
 				s := hex.EncodeToString(v)
 				r1, tErr = strconv.ParseUint(s, 16, 64)
 				if tErr != nil {
-					if strings.Contains(tErr.Error(), "value out of range") {
-						return moerr.NewOutOfRangef(ctx, "float", "value '%s'", s)
-					}
-					return moerr.NewInvalidArg(ctx, "cast to float", s)
+					// MySQL non-strict mode: invalid binary converts to 0
+					r1 = 0
 				}
 				if to.GetType().Scale < 0 || to.GetType().Width == 0 {
 					result = T(r1)
@@ -4095,7 +4093,8 @@ func strToFloat[T constraints.Float](
 				s := convertByteSliceToString(v)
 				r2, tErr = strconv.ParseFloat(s, bitSize)
 				if tErr != nil {
-					// MySQL behavior: invalid string converts to 0 with warning
+					// MySQL non-strict mode: invalid string converts to 0 (no error)
+					// This matches MySQL's default behavior for implicit conversions
 					r2 = 0
 				} else if bitSize == 32 {
 					r2, _ = strconv.ParseFloat(s, 64)

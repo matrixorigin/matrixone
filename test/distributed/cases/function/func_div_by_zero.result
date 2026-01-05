@@ -240,8 +240,7 @@ SELECT CAST(10000000000 AS BIGINT UNSIGNED) DIV CAST(3 AS BIGINT UNSIGNED);
 ➤ cast(10000000000 as bigint unsigned) div cast(3 as bigint unsigned)[-5,64,0]  𝄀
 3333333333
 SELECT CAST(18446744073709551615 AS BIGINT UNSIGNED) DIV CAST(1 AS BIGINT UNSIGNED);
-➤ cast(18446744073709551615 as bigint unsigned) div cast(1 as bigint unsigned)[-5,64,0]  𝄀
--1
+Data truncation: data out of range: data type BIGINT, 
 SELECT CAST(100 AS BIGINT UNSIGNED) DIV CAST(0 AS BIGINT UNSIGNED);
 ➤ cast(100 as bigint unsigned) div cast(0 as bigint unsigned)[-5,64,0]  𝄀
 null

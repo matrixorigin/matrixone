@@ -1387,35 +1387,6 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 		return expr, nil
 	}
 
-	// Do not constant-fold CASE expressions. The runtime evaluation is cheap for
-	// this query shape and avoiding fold sidesteps the regression where
-	// `(CASE "two" WHEN "two" THEN 2.00 END) + 0.0` was reduced to NULL.
-	if fid, _ := function.DecodeOverloadID(fn.Func.GetObj()); fid == function.CASE {
-		return expr, nil
-	}
-
-	// Decimal + Float (or vice versa) constant folding is currently unreliable and
-	// may yield NULL. Skip folding when the PLUS operator mixes decimal and float.
-	if fid, _ := function.DecodeOverloadID(fn.Func.GetObj()); fid == function.PLUS {
-		hasDecimal, hasFloat := false, false
-		for _, a := range fn.Args {
-			switch types.T(a.Typ.Id) {
-			case types.T_decimal64, types.T_decimal128:
-				hasDecimal = true
-			case types.T_float32, types.T_float64:
-				hasFloat = true
-			}
-		}
-		if hasDecimal && hasFloat {
-			return expr, nil
-		}
-		// Also skip folding PLUS when the result type itself is decimal to avoid
-		// post-cast decimal additions being pre-evaluated incorrectly.
-		if types.T(expr.Typ.Id).IsDecimal() {
-			return expr, nil
-		}
-	}
-
 	overloadID := fn.Func.GetObj()
 	f, err := function.GetFunctionById(proc.Ctx, overloadID)
 	if err != nil {

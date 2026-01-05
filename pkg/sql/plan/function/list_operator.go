@@ -2197,8 +2197,6 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return parameters[1]
 				},
-				// Mark CASE as volatile to prevent any constant folding shortcuts.
-				volatile: true,
 				newOp: func() executeLogicOfOverload {
 					return caseFn
 				},
