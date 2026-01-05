@@ -221,7 +221,9 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 		}
 		if n := s.DataSource.node; n != nil && n.TableDef != nil &&
 			n.TableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries {
-			if bfVal := s.Proc.Ctx.Value(defines.IvfBloomFilter{}); bfVal != nil {
+			if len(s.DataSource.BloomFilter) > 0 {
+				p.DataSource.BloomFilter = s.DataSource.BloomFilter
+			} else if bfVal := s.Proc.Ctx.Value(defines.IvfBloomFilter{}); bfVal != nil {
 				if bf, ok := bfVal.([]byte); ok && len(bf) > 0 {
 					p.DataSource.BloomFilter = bf
 				}
