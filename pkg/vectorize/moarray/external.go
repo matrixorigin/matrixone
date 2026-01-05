@@ -318,20 +318,20 @@ func L1Norm[T types.RealNumbers](v []T) (float64, error) {
 		return x
 	}
 
-	norm := T(0)
+	norm := float64(0)
 	for _, val := range v {
-		norm += abs(val)
+		norm += float64(abs(val))
 	}
 	return float64(norm), nil
 }
 
 // L2Norm returns l2 distance to origin.
 func L2Norm[T types.RealNumbers](v []T) (float64, error) {
-	norm := T(0)
+	norm := float64(0)
 	for _, val := range v {
-		norm += val * val
+		norm += float64(val * val)
 	}
-	return math.Sqrt(float64(norm)), nil
+	return math.Sqrt(norm), nil
 }
 
 func ScalarOp[T types.RealNumbers](v []T, operation string, scalar float64) ([]T, error) {
