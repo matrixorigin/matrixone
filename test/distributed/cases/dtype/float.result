@@ -1,79 +1,79 @@
 select -3.402823466E+38,-3.402823467E+38,-1.175494351E-38,-1.175494352E-38;
--3.402823466E+38	-3.402823467E+38	-1.175494351E-38	-1.175494352E-38
--3.402823466e38	-3.402823467e38	-1.175494351e-38	-1.175494352e-38
+➤ -3.402823466e+38[8,54,0]  ¦  -3.402823467e+38[8,54,0]  ¦  -1.175494351e-38[8,54,0]  ¦  -1.175494352e-38[8,54,0]  𝄀
+-3.402823466E38  ¦  -3.402823467E38  ¦  -1.175494351E-38  ¦  -1.175494352E-38
 select 1.175494351E-38,1.175494352E-38,3.402823467E+38,3.402823467E+38;
-1.175494351E-38	1.175494352E-38	3.402823467E+38	3.402823467E+38
-1.175494351e-38	1.175494352e-38	3.402823467e38	3.402823467e38
+➤ 1.175494351e-38[8,54,0]  ¦  1.175494352e-38[8,54,0]  ¦  3.402823467e+38[8,54,0]  ¦  3.402823467e+38[8,54,0]  𝄀
+1.175494351E-38  ¦  1.175494352E-38  ¦  3.402823467E38  ¦  3.402823467E38
 select -3.402823466E+38*1,-1.175494351E-38-0.1E-38;
--3.402823466E+38*1	-1.175494351E-38-0.1E-38
--3.402823466e38	-1.275494351e-38
+➤ -3.402823466e+38 * 1[8,54,0]  ¦  -1.175494351e-38 - 0.1e-38[8,54,0]  𝄀
+-3.402823466E38  ¦  -1.275494351E-38
 drop table if exists t1;
 create table t1 (a float not null, primary key(a));
 insert into t1 values(-3.402823466E+38),(-1.175494351E-38),(0),(1.175494351E-38),(3.402823466E+38);
 select * from t1 order by 1;
-a
--3.40282e38
--1.17549e-38
-0
-1.17549e-38
-3.40282e38
+➤ a[7,24,0]  𝄀
+-3.4028235E38  𝄀
+-1.1754944E-38  𝄀
+0.0  𝄀
+1.1754944E-38  𝄀
+3.4028235E38
 delete from t1 where a>0;
 drop table if exists t1;
 create table t1(a float(23,22));
 insert into t1 values(-3.402823466),(-1.175494351),(0),(1.175494351),(3.402823466);
 select * from t1 order by 1 asc;
-a
--3.4028234481811523000000
--1.1754943132400513000000
-0.0000000000000000000000
-1.1754943132400513000000
-3.4028234481811523000000
+➤ a[7,23,22]  𝄀
+-3.4028234  𝄀
+-1.1754943  𝄀
+0.0  𝄀
+1.1754943  𝄀
+3.4028234
 drop table if exists t1;
 create table t1(a float(23));
 insert into t1 values(-3.402823466),(-1.175494351),(0),(1.175494351),(3.402823466);
 select * from t1 order by a asc;
-a
--3.40282
--1.17549
-0
-1.17549
-3.40282
+➤ a[7,24,0]  𝄀
+-3.4028234  𝄀
+-1.1754943  𝄀
+0.0  𝄀
+1.1754943  𝄀
+3.4028234
 drop table t1;
 create table t1 ( a float not null default 1, big float(20,5) primary key);
 insert into t1 (big) values (-1),(12345678.901234567),(92233720368547.75807);
 select * from t1 order by a desc, big asc;
-a	big
-1	-1.00000
-1	12345679.00000
-1	92233718038528.00000
+➤ a[7,24,0]  ¦  big[7,20,5]  𝄀
+1.0  ¦  -1.0  𝄀
+1.0  ¦  1.2345679E7  𝄀
+1.0  ¦  9.223372E13
 select min(big),max(big),max(big)-1 from t1;
-min(big)	max(big)	max(big)-1
--1.00000	92233718038528.00000	92233718038527.00000
+➤ min(big)[7,20,5]  ¦  max(big)[7,20,5]  ¦  max(big) - 1[8,53,5]  𝄀
+-1.0  ¦  9.223372E13  ¦  9.2233718038527E13
 select min(big),max(big),max(big)-1 from t1 group by a order by 3;
-min(big)	max(big)	max(big)-1
--1.00000	92233718038528.00000	92233718038527.00000
+➤ min(big)[7,20,5]  ¦  max(big)[7,20,5]  ¦  max(big) - 1[8,53,5]  𝄀
+-1.0  ¦  9.223372E13  ¦  9.2233718038527E13
 drop table t1;
 create table t1 ( a float not null default 1, big float);
 insert into t1 (big) values (-1),(12345678.901234567),(92233720368547.75807);
 select * from t1 order by a asc, big asc;
-a	big
-1.0	-1.0
-1.0	1.2345679E7
-1.0	9.223372E13
+➤ a[7,24,0]  ¦  big[7,24,0]  𝄀
+1.0  ¦  -1.0  𝄀
+1.0  ¦  1.2345679E7  𝄀
+1.0  ¦  9.223372E13
 select * from t1 order by big limit 1,2;
-a	big
-1.0	1.2345679E7
-1.0	9.223372E13
+➤ a[7,24,0]  ¦  big[7,24,0]  𝄀
+1.0  ¦  1.2345679E7  𝄀
+1.0  ¦  9.223372E13
 select * from t1 order by big limit 2 offset 1;
-a	big
-1.0	1.2345679E7
-1.0	9.223372E13
+➤ a[7,24,0]  ¦  big[7,24,0]  𝄀
+1.0  ¦  1.2345679E7  𝄀
+1.0  ¦  9.223372E13
 select min(big),max(big),max(big)-1 from t1;
-min(big)	max(big)	max(big)-1
--1	92233700000000	92233718038527
+➤ min(big)[7,24,0]  ¦  max(big)[7,24,0]  ¦  max(big) - 1[8,54,0]  𝄀
+-1.0  ¦  9.223372E13  ¦  9.2233718038527E13
 select min(big),max(big),max(big)-1 from t1 group by a order by 1+2;
-min(big)	max(big)	max(big)-1
--1	92233700000000	92233718038527
+➤ min(big)[7,24,0]  ¦  max(big)[7,24,0]  ¦  max(big) - 1[8,54,0]  𝄀
+-1.0  ¦  9.223372E13  ¦  9.2233718038527E13
 drop table t1;
 create table t1 (id float primary key, a int);
 insert into t1 values (1.1,1);
@@ -81,11 +81,11 @@ insert into t1 values (2.22,2);
 insert into t1 values (3.333,3);
 insert into t1 values (4.4444,4);
 select * from t1 order by id desc;
-id	a
-4.4444	4
-3.333	3
-2.22	2
-1.1	1
+➤ id[7,24,0]  ¦  a[4,32,0]  𝄀
+4.4444  ¦  4  𝄀
+3.333  ¦  3  𝄀
+2.22  ¦  2  𝄀
+1.1  ¦  1
 drop table if exists t1;
 drop table if exists t2;
 create table t1 (
@@ -104,44 +104,44 @@ insert into t2 values(1.23456e-1, 3);
 insert into t2 values(1.23456e1, 4);
 insert into t1 values(3,5);
 select * from t1;
-a	b
-0.123456	1
-1.23456	2
-3	5
+➤ a[7,24,0]  ¦  b[7,24,0]  𝄀
+0.123456  ¦  1.0  𝄀
+1.23456  ¦  2.0  𝄀
+3.0  ¦  5.0
 select * from t2;
-a	b
-0.123456	3
-12.3456	4
+➤ a[7,24,0]  ¦  b[4,32,0]  𝄀
+0.123456  ¦  3  𝄀
+12.3456  ¦  4
 select * from t1 join t2 on t1.a=t2.a order by t1.a asc, t2.b desc;
-a	b	a	b
-0.123456	1	0.123456	3
+➤ a[7,24,0]  ¦  b[7,24,0]  ¦  a[7,24,0]  ¦  b[4,32,0]  𝄀
+0.123456  ¦  1.0  ¦  0.123456  ¦  3
 select * from t1 join t2 on t1.a=t2.a where t1.a>=0.123456 order by abs(3);
-a	b	a	b
-0.123456	1	0.123456	3
+➤ a[7,24,0]  ¦  b[7,24,0]  ¦  a[7,24,0]  ¦  b[4,32,0]  𝄀
+0.123456  ¦  1.0  ¦  0.123456  ¦  3
 select * from t1 join t2 on t2.b=t1.a order by 1,2 desc;
-a	b	a	b
-3	5	0.123456	3
+➤ a[7,24,0]  ¦  b[7,24,0]  ¦  a[7,24,0]  ¦  b[4,32,0]  𝄀
+3.0  ¦  5.0  ¦  0.123456  ¦  3
 drop table if exists t1;
 drop table if exists t2;
 create table t1 (a float);
 insert into t1 values (17.666);
 select * from t1 where a>=17.6660;
-a
+➤ a[7,24,0]  𝄀
 17.666
 select * from t1 where a>='17.6660';
-a
+➤ a[7,24,0]  𝄀
 17.666
 select a  mod 50 as result from t1;
-result
+➤ result[8,54,0]  𝄀
 17.666000366210938
 select cast(a as unsigned) mod 50 as result from t1;
-result
+➤ result[3,39,0]  𝄀
 18
 select cast(a+a as signed) from t1;
-cast(a+a as signed)
+➤ cast(a + a as signed)[-5,64,0]  𝄀
 35
 select cast(0-a as signed) from t1;
-cast(0-a as signed)
+➤ cast(0 - a as signed)[-5,64,0]  𝄀
 -18
 drop table t1;
 CREATE TABLE t1 (id INT PRIMARY KEY,
@@ -153,90 +153,83 @@ INSERT INTO t1 (id,a) VALUES
 (3,CAST(0x8000000000000000 AS UNSIGNED)),
 (4,CAST(0xFFFFFFFFFFFFFFFF AS UNSIGNED));
 select * from t1;
-id	a	b
-1	0	NULL
-2	9.22337e18	NULL
-3	9.22337e18	NULL
-4	1.84467e19	NULL
+➤ id[4,32,0]  ¦  a[7,21,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  0.0  ¦  null  𝄀
+2  ¦  9.223372E18  ¦  null  𝄀
+3  ¦  9.223372E18  ¦  null  𝄀
+4  ¦  1.8446744E19  ¦  null
 UPDATE t1 SET b = a;
 select a,count(a) from t1 where ((a = 9.223372036854776e18) and (b = '9.223372036854776e18')) group by a having count(a)>2 order by count(a);
-a	count(a)
+➤ a[7,21,0]  ¦  count(a)[-5,64,0]
 select distinct a,b from t1 where ((a != 9.223372036854776e18) and (b != '9.223372036854776e18')) order by 2;
-a	b
-0	0
-1.84467e19	1.844674407370955e19
+➤ a[7,21,0]  ¦  b[12,-1,0]  𝄀
+0.0  ¦  0  𝄀
+1.8446744E19  ¦  1.8446744E+19
 CREATE TABLE t_float(id float(2,1));
 INSERT INTO t_float VALUES (1),(1.1), (2);
 SELECT id, id >= 1.1 FROM t_float;
-id	id >= 1.1
-1.0	false	
-1.1	true	
-2.0	true	
+➤ id[7,2,1]  ¦  id >= 1.1[12,4,0]  𝄀
+1.0  ¦  false  𝄀
+1.1  ¦  true  𝄀
+2.0  ¦  true
 SELECT id, 1.1 <= id FROM t_float;
-id	1.1 <= id
-1.0	false	
-1.1	true	
-2.0	true	
+➤ id[7,2,1]  ¦  1.1 <= id[12,4,0]  𝄀
+1.0  ¦  false  𝄀
+1.1  ¦  true  𝄀
+2.0  ¦  true
 SELECT id, id = 1.1 FROM t_float;
-id	id = 1.1
-1.0	false	
-1.1	true	
-2.0	false	
+[unknown result because it is related to issue#3366]
 SELECT * from t_float WHERE id = 1.1;
-id
-1.1
+[unknown result because it is related to issue#3366]
 SELECT * from t_float WHERE id = 1.1e0;
-id
-1.1
+[unknown result because it is related to issue#3366]
 SELECT * from t_float WHERE id = '1.1';
-id
+➤ id[7,2,1]  𝄀
 1.1
 SELECT * from t_float WHERE id = '1.1e0';
-id
+➤ id[7,2,1]  𝄀
 1.1
 SELECT * from t_float WHERE id IN (1.1, 2.2);
-id
+➤ id[7,2,1]  𝄀
 1.1
 SELECT * from t_float WHERE id IN (1.1e0, 2.2e0);
-id
+➤ id[7,2,1]  𝄀
+1.1
 SELECT * from t_float WHERE id IN ('1.1', '2.2');
-id
+➤ id[7,2,1]  𝄀
 1.1
 SELECT * from t_float WHERE id IN ('1.1e0', '2.2e0');
-id
+➤ id[7,2,1]  𝄀
 1.1
 SELECT * from t_float WHERE id BETWEEN 1.1 AND 1.9;
-id
+➤ id[7,2,1]  𝄀
 1.1
 SELECT * from t_float WHERE id BETWEEN 1.1e0 AND 1.9e0;
-id
+➤ id[7,2,1]  𝄀
 1.1
 SELECT * from t_float WHERE id BETWEEN '1.1' AND '1.9';
-id
+➤ id[7,2,1]  𝄀
 1.1
 SELECT * from t_float WHERE id BETWEEN '1.1e0' AND '1.9e0';
-id
+➤ id[7,2,1]  𝄀
 1.1
 drop table t1;
 CREATE TABLE t1 (a float(3));
 INSERT INTO t1 VALUES (1),(0.00),(0.8);
 SELECT * FROM t1 WHERE coalesce(a) BETWEEN 0 and 0.9;
-a
-0
-0.8
+[unknown result because it is related to issue#3185]
 SELECT * FROM t1 WHERE coalesce(a)=0.9;
-a
+[unknown result because it is related to issue#3185]
 SELECT * FROM t1 WHERE coalesce(a) in (0.8,0.9);
-a
+[unknown result because it is related to issue#3185]
 SELECT * FROM t1 WHERE a BETWEEN 0 AND 0.9;
-a
-0
+➤ a[7,4,0]  𝄀
+0.0  𝄀
 0.8
 SELECT * FROM t1 WHERE a=0.9;
-a
+➤ a[7,4,0]
 SELECT * FROM t1 WHERE a IN (0.8,0.9);
-a
-0.8
+➤ a[7,4,0]
 drop table t1;
 create table t1 (id float, b int);
 insert into t1 values(4.574,1);
@@ -244,42 +237,42 @@ insert into t1 values(5.3111,2);
 insert into t1 values(177.171,3);
 select count(*) from t1
 where id>=5.3111 and id <=177.171;
-count(*)
-2
+➤ count(*)[-5,64,0]  𝄀
+1
 select count(*) from t1
 where id between 5.3111 and 177.171;
-count(*)
-2
+➤ count(*)[-5,64,0]  𝄀
+1
 drop table t1;
 SELECT (1234.0 BETWEEN 0 AND 1234);
-(1234.0 BETWEEN 0 AND 1234)
+➤ 1234.0 between 0 and 1234[12,4,0]  𝄀
 true
 SELECT 0.000 >= 0;
-0.000 >= 0
+➤ 0.000 >= 0[12,4,0]  𝄀
 true
 SELECT 00.000 <= 0.00001;
-00.000 <= 0.00001
+➤ 00.000 <= 0.00001[12,4,0]  𝄀
 true
 SELECT CAST(1.00 AS UNSIGNED) BETWEEN 1 AND -1;
-CAST(1.00 AS UNSIGNED) BETWEEN 1 AND -1
+➤ cast(1.00 as unsigned) between 1 and -1[12,4,0]  𝄀
 false
 SELECT CAST(1.00 AS UNSIGNED) NOT BETWEEN 1 AND -1;
-CAST(1.00 AS UNSIGNED) NOT BETWEEN 1 AND -1
+➤ cast(1.00 as unsigned) not between 1 and -1[12,4,0]  𝄀
 true
 SELECT CAST(0.00 AS UNSIGNED) BETWEEN 0 AND -1;
-CAST(0.00 AS UNSIGNED) BETWEEN 0 AND -1
+➤ cast(0.00 as unsigned) between 0 and -1[12,4,0]  𝄀
 false
 SELECT CAST(0.00 AS UNSIGNED) NOT BETWEEN 0 AND -1;
-CAST(0.00 AS UNSIGNED) NOT BETWEEN 0 AND -1
+➤ cast(0.00 as unsigned) not between 0 and -1[12,4,0]  𝄀
 true
 SELECT ( -1 BETWEEN 0 AND 1 );
-( -1 BETWEEN 0 AND 1 )
+➤ -1 between 0 and 1[12,4,0]  𝄀
 false
 SELECT ( 0 BETWEEN  0.000000001 AND 1 );
-( 0 BETWEEN  0.000000001 AND 1 )
+➤ 0 between 0.000000001 and 1[12,4,0]  𝄀
 false
 SELECT ( 1 BETWEEN 1.0000001 and 0);
-( 1 BETWEEN 1.0000001 and 0)
+➤ 1 between 1.0000001 and 0[12,4,0]  𝄀
 false
 drop table if exists t1;
 drop table if exists t2;
@@ -290,16 +283,16 @@ CREATE TABLE t1 (a float(3), b float(5) primary key);
 INSERT INTO t1 VALUES (1.00,1.0000),(1.00,2.0000);
 update t1 set a=2.00 where a=1 limit 1;
 select * from t1;
-a	b
-2.0	1.0
-1.0	2.0
+➤ a[7,4,0]  ¦  b[7,6,0]  𝄀
+1.0  ¦  2.0  𝄀
+2.0  ¦  1.0
 INSERT INTO t1 VALUES (1,3);
 update t1 set a=2 where a=1.00;
 select * from t1;
-a	b
-2.0	1.0
-2.0	2.0
-2.0	3.0
+➤ a[7,4,0]  ¦  b[7,6,0]  𝄀
+2.0  ¦  1.0  𝄀
+2.0  ¦  2.0  𝄀
+2.0  ¦  3.0
 drop table t1;
 create table t1 (
 a float(10,5) not null,
@@ -316,79 +309,79 @@ primary key (a));
 insert into t1 (a) values (2),(4),(6),(8),(10),(12),(14),(16),(18),(20),(22),(24),(26),(23);
 update t1 set a=a+101;
 select a,b from t1;
-a	b
-103.0	12346
-105.0	12346
-107.0	12346
-109.0	12346
-111.0	12346
-113.0	12346
-115.0	12346
-117.0	12346
-119.0	12346
-121.0	12346
-123.0	12346
-124.0	12346
-125.0	12346
-127.0	12346
+➤ a[7,10,5]  ¦  b[4,32,0]  𝄀
+103.0  ¦  12346  𝄀
+105.0  ¦  12346  𝄀
+107.0  ¦  12346  𝄀
+109.0  ¦  12346  𝄀
+111.0  ¦  12346  𝄀
+113.0  ¦  12346  𝄀
+115.0  ¦  12346  𝄀
+117.0  ¦  12346  𝄀
+119.0  ¦  12346  𝄀
+121.0  ¦  12346  𝄀
+123.0  ¦  12346  𝄀
+125.0  ¦  12346  𝄀
+127.0  ¦  12346  𝄀
+124.0  ¦  12346
 update t1 set a=27 where a=125;
 select a,b from t1;
-a	b
-27.0	12346
-103.0	12346
-105.0	12346
-107.0	12346
-109.0	12346
-111.0	12346
-113.0	12346
-115.0	12346
-117.0	12346
-119.0	12346
-121.0	12346
-123.0	12346
-124.0	12346
-127.0	12346
+➤ a[7,10,5]  ¦  b[4,32,0]  𝄀
+103.0  ¦  12346  𝄀
+105.0  ¦  12346  𝄀
+107.0  ¦  12346  𝄀
+109.0  ¦  12346  𝄀
+111.0  ¦  12346  𝄀
+113.0  ¦  12346  𝄀
+115.0  ¦  12346  𝄀
+117.0  ¦  12346  𝄀
+119.0  ¦  12346  𝄀
+121.0  ¦  12346  𝄀
+123.0  ¦  12346  𝄀
+127.0  ¦  12346  𝄀
+124.0  ¦  12346  𝄀
+27.0  ¦  12346
 update t1 set a=a-1 where 1 > 2;
 select a,b from t1;
-a	b
-27.0	12346
-103.0	12346
-105.0	12346
-107.0	12346
-109.0	12346
-111.0	12346
-113.0	12346
-115.0	12346
-117.0	12346
-119.0	12346
-121.0	12346
-123.0	12346
-124.0	12346
-127.0	12346
+➤ a[7,10,5]  ¦  b[4,32,0]  𝄀
+103.0  ¦  12346  𝄀
+105.0  ¦  12346  𝄀
+107.0  ¦  12346  𝄀
+109.0  ¦  12346  𝄀
+111.0  ¦  12346  𝄀
+113.0  ¦  12346  𝄀
+115.0  ¦  12346  𝄀
+117.0  ¦  12346  𝄀
+119.0  ¦  12346  𝄀
+121.0  ¦  12346  𝄀
+123.0  ¦  12346  𝄀
+127.0  ¦  12346  𝄀
+124.0  ¦  12346  𝄀
+27.0  ¦  12346
 update t1 set a=a-1 where 3 > 2;
 select a,b from t1;
-a	b
-26.0	12346
-102.0	12346
-104.0	12346
-106.0	12346
-108.0	12346
-110.0	12346
-112.0	12346
-114.0	12346
-116.0	12346
-118.0	12346
-120.0	12346
-122.0	12346
-123.0	12346
-126.0	12346
+➤ a[7,10,5]  ¦  b[4,32,0]  𝄀
+102.0  ¦  12346  𝄀
+104.0  ¦  12346  𝄀
+106.0  ¦  12346  𝄀
+108.0  ¦  12346  𝄀
+110.0  ¦  12346  𝄀
+112.0  ¦  12346  𝄀
+114.0  ¦  12346  𝄀
+116.0  ¦  12346  𝄀
+118.0  ¦  12346  𝄀
+120.0  ¦  12346  𝄀
+122.0  ¦  12346  𝄀
+126.0  ¦  12346  𝄀
+123.0  ¦  12346  𝄀
+26.0  ¦  12346
 drop table t1;
 create table t1 (a float(10,5) primary key, b char(32));
 insert into t1 values (1,'apple'), (2,'apple');
 select * from t1;
-a	b
-1.0	apple
-2.0	apple
+➤ a[7,10,5]  ¦  b[1,32,0]  𝄀
+1.0  ¦  apple  𝄀
+2.0  ¦  apple
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;
@@ -398,12 +391,12 @@ CREATE TABLE t1 (a float(3), b float(5) primary key);
 INSERT INTO t1 VALUES (1,1),(1,2);
 delete from t1 where a=1 limit 1;
 select * from t1;
-a	b
-1	2
+➤ a[7,4,0]  ¦  b[7,6,0]  𝄀
+1.0  ¦  2.0
 INSERT INTO t1 VALUES (1,3);
 delete from t1 where a=1;
 select * from t1;
-a	b
+➤ a[7,4,0]  ¦  b[7,6,0]
 drop table t1;
 create table t1 (
 a float(10,5) not null,
@@ -420,35 +413,35 @@ primary key (a));
 insert into t1 (a) values (2.1111),(4),(00006.12311),(8.41231),(24.0000);
 delete from t1 where a=2+2.0000;
 select a,b from t1;
-a	b
-2.11110	12346
-6.12311	12346
-8.41231	12346
-24.00000	12346
+➤ a[7,10,5]  ¦  b[4,32,0]  𝄀
+2.1111  ¦  12346  𝄀
+6.12311  ¦  12346  𝄀
+8.41231  ¦  12346  𝄀
+24.0  ¦  12346
 delete from t1 where  a=24.0000;
 select a,b from t1;
-a	b
-2.11110	12346
-6.12311	12346
-8.41231	12346
+➤ a[7,10,5]  ¦  b[4,32,0]  𝄀
+2.1111  ¦  12346  𝄀
+6.12311  ¦  12346  𝄀
+8.41231  ¦  12346
 delete from t1 where  3 < 2;
 select a,b from t1;
-a	b
-2.11110	12346
-6.12311	12346
-8.41231	12346
+➤ a[7,10,5]  ¦  b[4,32,0]  𝄀
+2.1111  ¦  12346  𝄀
+6.12311  ¦  12346  𝄀
+8.41231  ¦  12346
 delete from t1 where  1 < 2;
 select a,b from t1;
-a	b
+➤ a[7,10,5]  ¦  b[4,32,0]
 drop table t1;
 create table t1 (a float(10,5) primary key, b char(32));
 insert into t1 values (1,'apple'), (2,'apple');
 select * from t1;
-a	b
-1.00000	apple
-2.00000	apple
+➤ a[7,10,5]  ¦  b[1,32,0]  𝄀
+1.0  ¦  apple  𝄀
+2.0  ¦  apple
 select cast(1.1 as float(255, 3));
-cast(1.1 as float(255, 3))
+➤ cast(1.1 as float(255, 3))[8,255,3]  𝄀
 1.1
 drop table if exists t1;
 create table t1(a float(5, 2));
@@ -463,26 +456,26 @@ Data truncation: data out of range: data type float, value '-1000'
 insert into t1 values("999.994"), ("-999.994"),(null);
 insert into t1 values("90.004"), ("90.005"), ("-90.004"), ("-90.005"), ("90.006"), ("90.007");
 select * from t1;
-a
-999.99
--999.99
-null
-90.00
-90.00
--90.00
--90.00
-90.01
+➤ a[7,5,2]  𝄀
+999.99  𝄀
+-999.99  𝄀
+null  𝄀
+90.0  𝄀
+90.0  𝄀
+-90.0  𝄀
+-90.0  𝄀
+90.01  𝄀
 90.01
 delete from t1;
 insert into t1 values(90.012), (90.013), (90.014), (90.015);
 select * from t1;
-a
-90.01
-90.01
-90.01
+➤ a[7,5,2]  𝄀
+90.01  𝄀
+90.01  𝄀
+90.01  𝄀
 90.02
 select * from t1 where a > 90.01;
-a
+➤ a[7,5,2]  𝄀
 90.02
 drop table if exists t1;
 drop table if exists t2;
@@ -499,8 +492,8 @@ delete from t2;
 insert into t2 values(99), (-99);
 insert into t1 select * from t2;
 select * from t1;
-a
-99.0
+➤ a[7,3,1]  𝄀
+99.0  𝄀
 -99.0
 drop table if exists t2;
 create table t2(a tinyint unsigned);
@@ -511,10 +504,10 @@ delete from t2;
 insert into t2 values(99), (0);
 insert into t1 select * from t2;
 select * from t1;
-a
-99.0
--99.0
-99.0
+➤ a[7,3,1]  𝄀
+99.0  𝄀
+-99.0  𝄀
+99.0  𝄀
 0.0
 drop table if exists t1;
 drop table if exists t2;
@@ -531,12 +524,12 @@ delete from t2;
 insert into t2 values(999), (-999), (0), (1), (-1);
 insert into t1 select * from t2;
 select * from t1;
-a
-999.00
--999.00
-0.00
-1.00
--1.00
+➤ a[7,5,2]  𝄀
+999.0  𝄀
+-999.0  𝄀
+0.0  𝄀
+1.0  𝄀
+-1.0
 delete from t1;
 drop table if exists t2;
 create table t2(a int);
@@ -551,12 +544,12 @@ delete from t2;
 insert into t2 values(999), (-999), (0), (1), (-1);
 insert into t1 select * from t2;
 select * from t1;
-a
-999.00
--999.00
-0.00
-1.00
--1.00
+➤ a[7,5,2]  𝄀
+999.0  𝄀
+-999.0  𝄀
+0.0  𝄀
+1.0  𝄀
+-1.0
 delete from t1;
 drop table if exists t2;
 create table t2(a bigint);
@@ -571,12 +564,12 @@ delete from t2;
 insert into t2 values(999), (-999), (0), (1), (-1);
 insert into t1 select * from t2;
 select * from t1;
-a
-999.00
--999.00
-0.00
-1.00
--1.00
+➤ a[7,5,2]  𝄀
+999.0  𝄀
+-999.0  𝄀
+0.0  𝄀
+1.0  𝄀
+-1.0
 drop table if exists t2;
 create table t2(a decimal(10, 3));
 insert into t2 values(999.995);
@@ -591,11 +584,11 @@ insert into t2 values(999.994), (-999.994), (99.005), (99);
 delete from t1;
 insert into t1 select * from t2;
 select * from t1;
-a
-999.99
--999.99
-99.00
-99.00
+➤ a[7,5,2]  𝄀
+999.99  𝄀
+-999.99  𝄀
+99.0  𝄀
+99.0
 drop table if exists t2;
 create table t2(a decimal(30, 3));
 insert into t2 values(999.995);
@@ -610,21 +603,21 @@ insert into t2 values(999.994), (-999.994), (99.005), (99);
 delete from t1;
 insert into t1 select * from t2;
 select * from t1;
-a
-999.99
--999.99
-99.00
-99.00
+➤ a[7,5,2]  𝄀
+999.99  𝄀
+-999.99  𝄀
+99.0  𝄀
+99.0
 drop table if exists t1;
 create table t1(a float);
 insert into t1 values(3214321.213);
 select cast(a as varchar) from t1;
-cast(a as varchar)
+➤ cast(a as varchar)[12,-1,0]  𝄀
 3214321.2
 insert into t1 values(1234567891234567.1234);
 insert into t1 values(0.00000000000001);
 select cast(a as varchar) from t1;
-cast(a as varchar)
-3214321.2
-1.234568E+15
+➤ cast(a as varchar)[12,-1,0]  𝄀
+3214321.2  𝄀
+1.234568E+15  𝄀
 1E-14
