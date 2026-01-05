@@ -63,7 +63,7 @@ Scope 1 (Magic: Remote, mcpu: 1, Receiver: [])  𝄀
                             └── tablescan
 explain phyplan verbose select a.ename,b.dname from emp a left join dept b on a.deptno = b.deptno;
 -- @regex("(?s)MemoryUsage.*CPU", true)
--- @regex("(?s)left\(idx:(\d+).*hash build\(idx:\1", true)
+-- @regex("(?s)hash join\(idx:(\d+).*hash build\(idx:\1", true)
 tp query phyplan  𝄀
 Overview:  𝄀
 	MemoryUsage:34674B,  SpillSize:0B,  DiskI/O:0B,  NewWorkI/O:0B, AffectedRows: 0  𝄀

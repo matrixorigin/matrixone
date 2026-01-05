@@ -46,14 +46,15 @@ const (
 )
 
 type container struct {
-	state         int
-	itr           hashmap.Iterator
-	batches       []*batch.Batch
-	batchRowCount int64
-	inbat         *batch.Batch
-	rbat          *batch.Batch
+	state       int
+	itr         hashmap.Iterator
+	rightBats   []*batch.Batch
+	rightRowCnt int64
 
-	lastRow int
+	leftBat *batch.Batch
+	resBat  *batch.Batch
+
+	lastIdx int
 	// process idx for zvs and vs, which returned by hashmap.Iterator.Find()
 	// guarantee: vs[ctr.vsidx] is the result of inbat[ctr.lastRow]
 	vsidx int
@@ -61,7 +62,7 @@ type container struct {
 	vs    []uint64
 	sels  []int32
 
-	leftMatched bool
+	leftRowMatched bool
 
 	probeState probeState
 
@@ -76,8 +77,8 @@ type container struct {
 
 	mp *message.JoinMap
 
-	rightMatched *bitmap.Bitmap
-	handledLast  bool
+	rightRowsMatched   *bitmap.Bitmap
+	rightJoinFinalized bool
 
 	maxAllocSize int64
 }
@@ -145,21 +146,21 @@ func (hashJoin *HashJoin) ExecProjection(proc *process.Process, input *batch.Bat
 func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &hashJoin.ctr
 	ctr.itr = nil
-	if !ctr.handledLast && hashJoin.NumCPU > 1 && !hashJoin.IsMerger {
+	if !ctr.rightJoinFinalized && hashJoin.NumCPU > 1 && !hashJoin.IsMerger {
 		hashJoin.Channel <- nil
 	}
 	ctr.cleanHashMap()
 	ctr.resetNonEqCondExecutor()
 	ctr.resetEqCondExecutors()
-	ctr.rightMatched = nil
-	ctr.handledLast = false
+	ctr.rightRowsMatched = nil
+	ctr.rightJoinFinalized = false
 	ctr.state = Build
-	ctr.lastRow = 0
+	ctr.lastIdx = 0
 
 	if hashJoin.OpAnalyzer != nil {
 		hashJoin.OpAnalyzer.Alloc(ctr.maxAllocSize)
 	}
-	hashJoin.ctr.inbat = nil
+	hashJoin.ctr.leftBat = nil
 	ctr.maxAllocSize = 0
 }
 
@@ -185,10 +186,10 @@ func (ctr *container) cleanNonEqCondExecutor() {
 }
 
 func (ctr *container) cleanBatch(proc *process.Process) {
-	ctr.batches = nil
-	if ctr.rbat != nil {
-		ctr.rbat.Clean(proc.GetMPool())
-		ctr.rbat = nil
+	ctr.rightBats = nil
+	if ctr.resBat != nil {
+		ctr.resBat.Clean(proc.GetMPool())
+		ctr.resBat = nil
 	}
 	for i := range ctr.joinBats {
 		if ctr.joinBats[i] != nil {
