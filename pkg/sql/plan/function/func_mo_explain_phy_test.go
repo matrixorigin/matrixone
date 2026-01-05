@@ -875,7 +875,7 @@ Scope 1 (Magic: Merge, mcpu: 1, Receiver: [0])
                         └── MergeGroup
                             └── Merge
   PreScopes: {
-    Scope 1 (Magic: Remote, mcpu: 4, Receiver: [])
+    Scope 1 (Magic: Remote, mcpu: 4)
       DataSource: cloud_device.real_time_position[time_stamp distance]
       Pipeline: └── Connector to MergeReceiver 0
                     └── Group
@@ -883,30 +883,30 @@ Scope 1 (Magic: Merge, mcpu: 1, Receiver: [0])
                             └── Filter
                                 └── TableScan
       PreScopes: {
-        Scope 1 (Magic: Normal, mcpu: 0, Receiver: [])
+        Scope 1 (Magic: Normal, mcpu: 0)
           PreScopes: {
-            Scope 1 (Magic: Normal, mcpu: 1, Receiver: [])
+            Scope 1 (Magic: Normal, mcpu: 1)
               DataSource: cloud_device.real_time_position[time_stamp distance]
               Pipeline: └── Connector to MergeReceiver 0
                             └── Group
                                 └── Projection
                                     └── Filter
                                         └── TableScan
-            Scope 2 (Magic: Normal, mcpu: 1, Receiver: [])
+            Scope 2 (Magic: Normal, mcpu: 1)
               DataSource: cloud_device.real_time_position[time_stamp distance]
               Pipeline: └── Connector to MergeReceiver 0
                             └── Group
                                 └── Projection
                                     └── Filter
                                         └── TableScan
-            Scope 3 (Magic: Normal, mcpu: 1, Receiver: [])
+            Scope 3 (Magic: Normal, mcpu: 1)
               DataSource: cloud_device.real_time_position[time_stamp distance]
               Pipeline: └── Connector to MergeReceiver 0
                             └── Group
                                 └── Projection
                                     └── Filter
                                         └── TableScan
-            Scope 4 (Magic: Normal, mcpu: 1, Receiver: [])
+            Scope 4 (Magic: Normal, mcpu: 1)
               DataSource: cloud_device.real_time_position[time_stamp distance]
               Pipeline: └── Connector to MergeReceiver 0
                             └── Group
@@ -917,140 +917,133 @@ Scope 1 (Magic: Merge, mcpu: 1, Receiver: [0])
       }
   }`
 	explain_verbose_res := `Overview:
-	MemoryUsage:5623960B,  SpillSize:0B,  DiskI/O:66715122B,  NewWorkI/O:0B,  RetryTime: 0
-	S3List:0, S3Head:0, S3Put:0, S3Get:0, S3Delete:0, S3DeleteMul:0, S3InputEstByRows((0+0)/8192):0.0000 
+	MemoryUsage:5.62MB,  DiskI/O:66.72MB,  RetryTime: 0
 	CPU Usage: 
-		- Total CPU Time: 91033157ns 
-		- CPU Time Detail: Parse(162026)+BuildPlan(649910)+Compile(299370)+PhyExec(304651393)+PrepareRun(178265)-PreRunWaitLock(0)-PlanStatsIO(0)-IOAccess(214917833)-IOMerge(0)
+		- Total CPU Time: 91.03ms 
+		- CPU Time Detail: Parse(0.16ms)+BuildPlan(0.65ms)+Compile(0.30ms)+PhyExec(304.65ms)+PrepareRun(0.18ms)-PreRunWaitLock(0ns)-PlanStatsIO(0ns)-IOAccess(214.92ms)-IOMerge(0ns)
 		- Permission Authentication Stats Array: [0 0 0 0 0 0 0 0 0 0 0] 
 Physical Plan Deployment:
 LOCAL SCOPES:
 Scope 1 (Magic: Merge, mcpu: 1, Receiver: [0])
-  Pipeline: └── Output (idx:-1, isFirst:false, isLast:false)
-                └── Projection (idx:2, isFirst:true, isLast:true)
-                    └── Projection (idx:1, isFirst:false, isLast:true)
-                        └── MergeGroup (idx:1, isFirst:false, isLast:false)
-                            └── Merge (idx:1, isFirst:false, isLast:false)
+  Pipeline: └── Output (-1,false,false)
+                └── Projection (2,true,true)
+                    └── Projection (1,false,true)
+                        └── MergeGroup (1,false,false)
+                            └── Merge (1,false,false)
   PreScopes: {
-    Scope 1 (Magic: Remote, mcpu: 4, Receiver: [])
+    Scope 1 (Magic: Remote, mcpu: 4)
       DataSource: cloud_device.real_time_position[time_stamp distance]
-      Pipeline: └── Connector (idx:1, isFirst:false, isLast:false) to MergeReceiver 0
-                    └── Group (idx:1, isFirst:true, isLast:false)
-                        └── Projection (idx:0, isFirst:false, isLast:true)
-                            └── Filter (idx:0, isFirst:false, isLast:false)
-                                └── TableScan (idx:0, isFirst:true, isLast:false)
+      Pipeline: └── Connector (1,false,false) to MergeReceiver 0
+                    └── Group (1,true,false)
+                        └── Projection (0,false,true)
+                            └── Filter (0,false,false)
+                                └── TableScan (0,true,false)
       PreScopes: {
-        Scope 1 (Magic: Normal, mcpu: 0, Receiver: [])
+        Scope 1 (Magic: Normal, mcpu: 0)
           PreScopes: {
-            Scope 1 (Magic: Normal, mcpu: 1, Receiver: [])
+            Scope 1 (Magic: Normal, mcpu: 1)
               DataSource: cloud_device.real_time_position[time_stamp distance]
-              Pipeline: └── Connector (idx:1, isFirst:false, isLast:false) to MergeReceiver 0
-                            └── Group (idx:1, isFirst:true, isLast:false)
-                                └── Projection (idx:0, isFirst:false, isLast:true)
-                                    └── Filter (idx:0, isFirst:false, isLast:false)
-                                        └── TableScan (idx:0, isFirst:true, isLast:false)
-            Scope 2 (Magic: Normal, mcpu: 1, Receiver: [])
+              Pipeline: └── Connector (1,false,false) to MergeReceiver 0
+                            └── Group (1,true,false)
+                                └── Projection (0,false,true)
+                                    └── Filter (0,false,false)
+                                        └── TableScan (0,true,false)
+            Scope 2 (Magic: Normal, mcpu: 1)
               DataSource: cloud_device.real_time_position[time_stamp distance]
-              Pipeline: └── Connector (idx:1, isFirst:false, isLast:false) to MergeReceiver 0
-                            └── Group (idx:1, isFirst:true, isLast:false)
-                                └── Projection (idx:0, isFirst:false, isLast:true)
-                                    └── Filter (idx:0, isFirst:false, isLast:false)
-                                        └── TableScan (idx:0, isFirst:true, isLast:false)
-            Scope 3 (Magic: Normal, mcpu: 1, Receiver: [])
+              Pipeline: └── Connector (1,false,false) to MergeReceiver 0
+                            └── Group (1,true,false)
+                                └── Projection (0,false,true)
+                                    └── Filter (0,false,false)
+                                        └── TableScan (0,true,false)
+            Scope 3 (Magic: Normal, mcpu: 1)
               DataSource: cloud_device.real_time_position[time_stamp distance]
-              Pipeline: └── Connector (idx:1, isFirst:false, isLast:false) to MergeReceiver 0
-                            └── Group (idx:1, isFirst:true, isLast:false)
-                                └── Projection (idx:0, isFirst:false, isLast:true)
-                                    └── Filter (idx:0, isFirst:false, isLast:false)
-                                        └── TableScan (idx:0, isFirst:true, isLast:false)
-            Scope 4 (Magic: Normal, mcpu: 1, Receiver: [])
+              Pipeline: └── Connector (1,false,false) to MergeReceiver 0
+                            └── Group (1,true,false)
+                                └── Projection (0,false,true)
+                                    └── Filter (0,false,false)
+                                        └── TableScan (0,true,false)
+            Scope 4 (Magic: Normal, mcpu: 1)
               DataSource: cloud_device.real_time_position[time_stamp distance]
-              Pipeline: └── Connector (idx:1, isFirst:false, isLast:false) to MergeReceiver 0
-                            └── Group (idx:1, isFirst:true, isLast:false)
-                                └── Projection (idx:0, isFirst:false, isLast:true)
-                                    └── Filter (idx:0, isFirst:false, isLast:false)
-                                        └── TableScan (idx:0, isFirst:true, isLast:false)
+              Pipeline: └── Connector (1,false,false) to MergeReceiver 0
+                            └── Group (1,true,false)
+                                └── Projection (0,false,true)
+                                    └── Filter (0,false,false)
+                                        └── TableScan (0,true,false)
           }
       }
   }`
 
 	explain_analyze_res := `Overview:
-	MemoryUsage:5623960B,  SpillSize:0B,  DiskI/O:66715122B,  NewWorkI/O:0B,  RetryTime: 0
-	S3List:0, S3Head:0, S3Put:0, S3Get:0, S3Delete:0, S3DeleteMul:0, S3InputEstByRows((0+0)/8192):0.0000 
+	MemoryUsage:5.62MB,  DiskI/O:66.72MB,  RetryTime: 0
 	CPU Usage: 
-		- Total CPU Time: 91033157ns 
-		- CPU Time Detail: Parse(162026)+BuildPlan(649910)+Compile(299370)+PhyExec(304651393)+PrepareRun(178265)-PreRunWaitLock(0)-PlanStatsIO(0)-IOAccess(214917833)-IOMerge(0)
+		- Total CPU Time: 91.03ms 
+		- CPU Time Detail: Parse(0.16ms)+BuildPlan(0.65ms)+Compile(0.30ms)+PhyExec(304.65ms)+PrepareRun(0.18ms)-PreRunWaitLock(0ns)-PlanStatsIO(0ns)-IOAccess(214.92ms)-IOMerge(0ns)
 		- Permission Authentication Stats Array: [0 0 0 0 0 0 0 0 0 0 0] 
 	Query Build Plan Stage:
-		- CPU Time: 649910ns 
-		- S3List:0, S3Head:0, S3Put:0, S3Get:0, S3Delete:0, S3DeleteMul:0
-		- Build Plan Duration: 649910ns 
-		- Call Stats Duration: 3457758ns 
+		- CPU Time: 0.65ms 
+		- Build Plan Duration: 0.65ms 
+		- Call Stats Duration: 3.46ms 
 		- Call StatsInCache Duration: 0ns 
 		- Call Stats IO Consumption: 0ns 
-		- Call Stats S3List:0, S3Head:0, S3Put:0, S3Get:0, S3Delete:0, S3DeleteMul:0
 	Query Compile Stage:
-		- CPU Time: 299370ns 
-		- S3List:0, S3Head:0, S3Put:0, S3Get:0, S3Delete:0, S3DeleteMul:0
-		- Compile TableScan Duration: 33791ns 
+		- CPU Time: 0.30ms 
+		- Compile TableScan Duration: 0.03ms 
 	Query Prepare Exec Stage:
-		- CPU Time: 178265ns 
-		- CompilePreRunOnce Duration: 12456ns 
+		- CPU Time: 0.18ms 
+		- CompilePreRunOnce Duration: 0.01ms 
 		- PreRunOnce WaitLock: 0ns 
-		- ScopePrepareTimeConsumed: 165809ns 
-		- BuildReader Duration: 144702ns 
-		- S3List:0, S3Head:0, S3Put:0, S3Get:0, S3Delete:0, S3DeleteMul:0
+		- ScopePrepareTimeConsumed: 0.17ms 
+		- BuildReader Duration: 0.14ms 
 	Query Execution Stage:
-		- CPU Time: 304651393ns 
-		- S3List:0, S3Head:0, S3Put:0, S3Get:0, S3Delete:0, S3DeleteMul:0
-		- MemoryUsage: 5623960B,  SpillSize: 0B,  DiskI/O: 66715122B,  NewWorkI/O:0B
+		- CPU Time: 304.65ms 
+		- MemoryUsage: 5.62MB,  DiskI/O: 66.72MB
 Physical Plan Deployment:
 LOCAL SCOPES:
 Scope 1 (Magic: Merge, mcpu: 1, Receiver: [0])
-  Pipeline: └── Output (idx:-1, isFirst:false, isLast:false) CallNum:2 TimeCost:21883ns WaitTime:0ns InRows:0 OutRows:0 InSize:0bytes InBlock:0 OutSize:0bytes MemSize:0bytes SpillSize:0bytes ScanBytes:0bytes NetworkIO:0bytes DiskIO:0bytes 
-                └── Projection (idx:2, isFirst:true, isLast:true) CallNum:2 TimeCost:15439ns WaitTime:0ns InRows:1 OutRows:1 InSize:8bytes InBlock:0 OutSize:8bytes MemSize:8bytes SpillSize:0bytes ScanBytes:0bytes NetworkIO:0bytes DiskIO:0bytes 
-                    └── Projection (idx:1, isFirst:false, isLast:true) CallNum:2 TimeCost:1094ns WaitTime:0ns InRows:0 OutRows:1 InSize:0bytes InBlock:0 OutSize:8bytes MemSize:8bytes SpillSize:0bytes ScanBytes:0bytes NetworkIO:0bytes DiskIO:0bytes 
-                        └── MergeGroup (idx:1, isFirst:false, isLast:false) CallNum:2 TimeCost:15712ns WaitTime:0ns InRows:0 OutRows:0 InSize:0bytes InBlock:0 OutSize:0bytes MemSize:8bytes SpillSize:0bytes ScanBytes:0bytes NetworkIO:0bytes DiskIO:0bytes 
-                            └── Merge (idx:1, isFirst:false, isLast:false) CallNum:5 TimeCost:29182ns WaitTime:81917495ns InRows:0 OutRows:0 InSize:0bytes InBlock:0 OutSize:0bytes MemSize:0bytes SpillSize:0bytes ScanBytes:0bytes NetworkIO:0bytes DiskIO:0bytes 
+  Pipeline: └── Output (-1,false,false) CallNum:2 TimeCost:0.02ms WaitTime:0ns InRows:0 OutRows:0 InSize:0B InBlock:0 
+                └── Projection (2,true,true) CallNum:2 TimeCost:0.02ms WaitTime:0ns InRows:1 OutRows:1 InSize:8B InBlock:0 OutSize:8B MemSize:8B 
+                    └── Projection (1,false,true) CallNum:2 TimeCost:0.00ms WaitTime:0ns InRows:0 OutRows:1 InSize:0B InBlock:0 OutSize:8B MemSize:8B 
+                        └── MergeGroup (1,false,false) CallNum:2 TimeCost:0.02ms WaitTime:0ns InRows:0 OutRows:0 InSize:0B InBlock:0 MemSize:8B 
+                            └── Merge (1,false,false) CallNum:5 TimeCost:0.03ms WaitTime:81.92ms InRows:0 OutRows:0 InSize:0B InBlock:0 
   PreScopes: {
-    Scope 1 (Magic: Remote, mcpu: 4, Receiver: [])
+    Scope 1 (Magic: Remote, mcpu: 4)
       DataSource: cloud_device.real_time_position[time_stamp distance]
-      Pipeline: └── Connector (idx:1, isFirst:false, isLast:false) to MergeReceiver 0
-                    └── Group (idx:1, isFirst:true, isLast:false)
-                        └── Projection (idx:0, isFirst:false, isLast:true)
-                            └── Filter (idx:0, isFirst:false, isLast:false)
-                                └── TableScan (idx:0, isFirst:true, isLast:false)
+      Pipeline: └── Connector (1,false,false) to MergeReceiver 0
+                    └── Group (1,true,false)
+                        └── Projection (0,false,true)
+                            └── Filter (0,false,false)
+                                └── TableScan (0,true,false)
       PreScopes: {
-        Scope 1 (Magic: Normal, mcpu: 0, Receiver: [])
+        Scope 1 (Magic: Normal, mcpu: 0)
           PreScopes: {
-            Scope 1 (Magic: Normal, mcpu: 1, Receiver: [])
+            Scope 1 (Magic: Normal, mcpu: 1)
               DataSource: cloud_device.real_time_position[time_stamp distance]
-              Pipeline: └── Connector (idx:1, isFirst:false, isLast:false) CallNum:2 TimeCost:22677ns WaitTime:0ns InRows:0 OutRows:0 InSize:0bytes InBlock:0 OutSize:0bytes MemSize:0bytes SpillSize:0bytes ScanBytes:0bytes NetworkIO:0bytes DiskIO:0bytes  to MergeReceiver 0
-                            └── Group (idx:1, isFirst:true, isLast:false) CallNum:2 TimeCost:338784ns WaitTime:0ns InRows:15593 OutRows:0 InSize:124744bytes InBlock:0 OutSize:0bytes MemSize:0bytes SpillSize:0bytes ScanBytes:0bytes NetworkIO:0bytes DiskIO:0bytes 
-                                └── Projection (idx:0, isFirst:false, isLast:true) CallNum:153 TimeCost:61454ns WaitTime:0ns InRows:0 OutRows:15593 InSize:0bytes InBlock:0 OutSize:124744bytes MemSize:29800bytes SpillSize:0bytes ScanBytes:0bytes NetworkIO:0bytes DiskIO:0bytes 
-                                    └── Filter (idx:0, isFirst:false, isLast:false) CallNum:153 TimeCost:16747009ns WaitTime:0ns InRows:0 OutRows:0 InSize:0bytes InBlock:0 OutSize:0bytes MemSize:1245184bytes SpillSize:0bytes ScanBytes:0bytes NetworkIO:0bytes DiskIO:0bytes 
-                                        └── TableScan (idx:0, isFirst:true, isLast:false) CallNum:153 TimeCost:58472333ns WaitTime:0ns InRows:1245184 OutRows:0 InSize:19922944bytes InBlock:0 OutSize:0bytes MemSize:131072bytes SpillSize:0bytes ScanBytes:0bytes NetworkIO:0bytes DiskIO:16491709bytes 
-            Scope 2 (Magic: Normal, mcpu: 1, Receiver: [])
+              Pipeline: └── Connector (1,false,false) CallNum:2 TimeCost:0.02ms WaitTime:0ns InRows:0 OutRows:0 InSize:0B InBlock:0  to MergeReceiver 0
+                            └── Group (1,true,false) CallNum:2 TimeCost:0.34ms WaitTime:0ns InRows:15593 OutRows:0 InSize:124.74KB InBlock:0 
+                                └── Projection (0,false,true) CallNum:153 TimeCost:0.06ms WaitTime:0ns InRows:0 OutRows:15593 InSize:0B InBlock:0 OutSize:124.74KB MemSize:29.80KB 
+                                    └── Filter (0,false,false) CallNum:153 TimeCost:16.75ms WaitTime:0ns InRows:0 OutRows:0 InSize:0B InBlock:0 MemSize:1.25MB 
+                                        └── TableScan (0,true,false) CallNum:153 TimeCost:58.47ms WaitTime:0ns InRows:1245184 OutRows:0 InSize:19.92MB InBlock:0 MemSize:131.07KB 
+            Scope 2 (Magic: Normal, mcpu: 1)
               DataSource: cloud_device.real_time_position[time_stamp distance]
-              Pipeline: └── Connector (idx:1, isFirst:false, isLast:false) CallNum:2 TimeCost:9887ns WaitTime:0ns InRows:0 OutRows:0 InSize:0bytes InBlock:0 OutSize:0bytes MemSize:0bytes SpillSize:0bytes ScanBytes:0bytes NetworkIO:0bytes DiskIO:0bytes  to MergeReceiver 0
-                            └── Group (idx:1, isFirst:true, isLast:false) CallNum:2 TimeCost:319777ns WaitTime:0ns InRows:15405 OutRows:0 InSize:123240bytes InBlock:0 OutSize:0bytes MemSize:0bytes SpillSize:0bytes ScanBytes:0bytes NetworkIO:0bytes DiskIO:0bytes 
-                                └── Projection (idx:0, isFirst:false, isLast:true) CallNum:154 TimeCost:66538ns WaitTime:0ns InRows:0 OutRows:15405 InSize:0bytes InBlock:0 OutSize:123240bytes MemSize:18864bytes SpillSize:0bytes ScanBytes:0bytes NetworkIO:0bytes DiskIO:0bytes 
-                                    └── Filter (idx:0, isFirst:false, isLast:false) CallNum:154 TimeCost:18563940ns WaitTime:0ns InRows:0 OutRows:0 InSize:0bytes InBlock:0 OutSize:0bytes MemSize:1253376bytes SpillSize:0bytes ScanBytes:0bytes NetworkIO:0bytes DiskIO:0bytes 
-                                        └── TableScan (idx:0, isFirst:true, isLast:false) CallNum:154 TimeCost:61209774ns WaitTime:0ns InRows:1253376 OutRows:0 InSize:20054016bytes InBlock:0 OutSize:0bytes MemSize:131072bytes SpillSize:0bytes ScanBytes:0bytes NetworkIO:0bytes DiskIO:16797879bytes 
-            Scope 3 (Magic: Normal, mcpu: 1, Receiver: [])
+              Pipeline: └── Connector (1,false,false) CallNum:2 TimeCost:0.01ms WaitTime:0ns InRows:0 OutRows:0 InSize:0B InBlock:0  to MergeReceiver 0
+                            └── Group (1,true,false) CallNum:2 TimeCost:0.32ms WaitTime:0ns InRows:15405 OutRows:0 InSize:123.24KB InBlock:0 
+                                └── Projection (0,false,true) CallNum:154 TimeCost:0.07ms WaitTime:0ns InRows:0 OutRows:15405 InSize:0B InBlock:0 OutSize:123.24KB MemSize:18.86KB 
+                                    └── Filter (0,false,false) CallNum:154 TimeCost:18.56ms WaitTime:0ns InRows:0 OutRows:0 InSize:0B InBlock:0 MemSize:1.25MB 
+                                        └── TableScan (0,true,false) CallNum:154 TimeCost:61.21ms WaitTime:0ns InRows:1253376 OutRows:0 InSize:20.05MB InBlock:0 MemSize:131.07KB 
+            Scope 3 (Magic: Normal, mcpu: 1)
               DataSource: cloud_device.real_time_position[time_stamp distance]
-              Pipeline: └── Connector (idx:1, isFirst:false, isLast:false) CallNum:2 TimeCost:2950ns WaitTime:0ns InRows:0 OutRows:0 InSize:0bytes InBlock:0 OutSize:0bytes MemSize:0bytes SpillSize:0bytes ScanBytes:0bytes NetworkIO:0bytes DiskIO:0bytes  to MergeReceiver 0
-                            └── Group (idx:1, isFirst:true, isLast:false) CallNum:2 TimeCost:396141ns WaitTime:0ns InRows:19167 OutRows:0 InSize:153336bytes InBlock:0 OutSize:0bytes MemSize:0bytes SpillSize:0bytes ScanBytes:0bytes NetworkIO:0bytes DiskIO:0bytes 
-                                └── Projection (idx:0, isFirst:false, isLast:true) CallNum:154 TimeCost:82273ns WaitTime:0ns InRows:0 OutRows:19167 InSize:0bytes InBlock:0 OutSize:153336bytes MemSize:24624bytes SpillSize:0bytes ScanBytes:0bytes NetworkIO:0bytes DiskIO:0bytes 
-                                    └── Filter (idx:0, isFirst:false, isLast:false) CallNum:154 TimeCost:17764543ns WaitTime:0ns InRows:0 OutRows:0 InSize:0bytes InBlock:0 OutSize:0bytes MemSize:1253376bytes SpillSize:0bytes ScanBytes:0bytes NetworkIO:0bytes DiskIO:0bytes 
-                                        └── TableScan (idx:0, isFirst:true, isLast:false) CallNum:154 TimeCost:58087865ns WaitTime:0ns InRows:1253376 OutRows:0 InSize:20054016bytes InBlock:0 OutSize:0bytes MemSize:131072bytes SpillSize:0bytes ScanBytes:0bytes NetworkIO:0bytes DiskIO:16717018bytes 
-            Scope 4 (Magic: Normal, mcpu: 1, Receiver: [])
+              Pipeline: └── Connector (1,false,false) CallNum:2 TimeCost:0.00ms WaitTime:0ns InRows:0 OutRows:0 InSize:0B InBlock:0  to MergeReceiver 0
+                            └── Group (1,true,false) CallNum:2 TimeCost:0.40ms WaitTime:0ns InRows:19167 OutRows:0 InSize:153.34KB InBlock:0 
+                                └── Projection (0,false,true) CallNum:154 TimeCost:0.08ms WaitTime:0ns InRows:0 OutRows:19167 InSize:0B InBlock:0 OutSize:153.34KB MemSize:24.62KB 
+                                    └── Filter (0,false,false) CallNum:154 TimeCost:17.76ms WaitTime:0ns InRows:0 OutRows:0 InSize:0B InBlock:0 MemSize:1.25MB 
+                                        └── TableScan (0,true,false) CallNum:154 TimeCost:58.09ms WaitTime:0ns InRows:1253376 OutRows:0 InSize:20.05MB InBlock:0 MemSize:131.07KB 
+            Scope 4 (Magic: Normal, mcpu: 1)
               DataSource: cloud_device.real_time_position[time_stamp distance]
-              Pipeline: └── Connector (idx:1, isFirst:false, isLast:false) CallNum:2 TimeCost:6821ns WaitTime:0ns InRows:0 OutRows:0 InSize:0bytes InBlock:0 OutSize:0bytes MemSize:0bytes SpillSize:0bytes ScanBytes:0bytes NetworkIO:0bytes DiskIO:0bytes  to MergeReceiver 0
-                            └── Group (idx:1, isFirst:true, isLast:false) CallNum:2 TimeCost:374224ns WaitTime:0ns InRows:19366 OutRows:0 InSize:154928bytes InBlock:0 OutSize:0bytes MemSize:0bytes SpillSize:0bytes ScanBytes:0bytes NetworkIO:0bytes DiskIO:0bytes 
-                                └── Projection (idx:0, isFirst:false, isLast:true) CallNum:154 TimeCost:59683ns WaitTime:0ns InRows:0 OutRows:19366 InSize:0bytes InBlock:0 OutSize:154928bytes MemSize:26360bytes SpillSize:0bytes ScanBytes:0bytes NetworkIO:0bytes DiskIO:0bytes 
-                                    └── Filter (idx:0, isFirst:false, isLast:false) CallNum:154 TimeCost:17421140ns WaitTime:0ns InRows:0 OutRows:0 InSize:0bytes InBlock:0 OutSize:0bytes MemSize:1248064bytes SpillSize:0bytes ScanBytes:0bytes NetworkIO:0bytes DiskIO:0bytes 
-                                        └── TableScan (idx:0, isFirst:true, isLast:false) CallNum:154 TimeCost:54582153ns WaitTime:0ns InRows:1248064 OutRows:0 InSize:19969024bytes InBlock:0 OutSize:0bytes MemSize:131072bytes SpillSize:0bytes ScanBytes:0bytes NetworkIO:0bytes DiskIO:16708516bytes 
+              Pipeline: └── Connector (1,false,false) CallNum:2 TimeCost:0.01ms WaitTime:0ns InRows:0 OutRows:0 InSize:0B InBlock:0  to MergeReceiver 0
+                            └── Group (1,true,false) CallNum:2 TimeCost:0.37ms WaitTime:0ns InRows:19366 OutRows:0 InSize:154.93KB InBlock:0 
+                                └── Projection (0,false,true) CallNum:154 TimeCost:0.06ms WaitTime:0ns InRows:0 OutRows:19366 InSize:0B InBlock:0 OutSize:154.93KB MemSize:26.36KB 
+                                    └── Filter (0,false,false) CallNum:154 TimeCost:17.42ms WaitTime:0ns InRows:0 OutRows:0 InSize:0B InBlock:0 MemSize:1.25MB 
+                                        └── TableScan (0,true,false) CallNum:154 TimeCost:54.58ms WaitTime:0ns InRows:1248064 OutRows:0 InSize:19.97MB InBlock:0 MemSize:131.07KB 
           }
       }
   }`

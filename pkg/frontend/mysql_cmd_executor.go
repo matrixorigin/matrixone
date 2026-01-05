@@ -3637,10 +3637,11 @@ func buildErrorJsonPlan(buffer *bytes.Buffer, uuid uuid.UUID, errcode uint16, ms
 }
 
 type jsonPlanHandler struct {
-	jsonBytes  []byte
-	statsBytes statistic.StatsArray
-	stats      motrace.Statistic
-	buffer     *bytes.Buffer
+	jsonBytes   []byte
+	statsBytes  statistic.StatsArray
+	stats       motrace.Statistic
+	buffer      *bytes.Buffer
+	marshalPlan *models.ExplainData // Store ExplainData reference to generate text output
 }
 
 func NewJsonPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, ses FeSession, plan *plan2.Plan, phyPlan *models.PhyPlan, opts ...marshalPlanOptions) *jsonPlanHandler {
@@ -3648,10 +3649,11 @@ func NewJsonPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, ses Fe
 	jsonBytes := h.Marshal(ctx)
 	statsBytes, stats := h.Stats(ctx, ses)
 	return &jsonPlanHandler{
-		jsonBytes:  jsonBytes,
-		statsBytes: statsBytes,
-		stats:      stats,
-		buffer:     h.handoverBuffer(),
+		jsonBytes:   jsonBytes,
+		statsBytes:  statsBytes,
+		stats:       stats,
+		buffer:      h.handoverBuffer(),
+		marshalPlan: h.marshalPlan, // Store ExplainData reference
 	}
 }
 
@@ -3660,6 +3662,28 @@ func (h *jsonPlanHandler) Stats(ctx context.Context) (statistic.StatsArray, motr
 }
 
 func (h *jsonPlanHandler) Marshal(ctx context.Context) []byte {
+	// If marshalPlan is available and has physical plan, generate analyze mode text output
+	// Otherwise, return original JSON (for error cases or when plan is not available)
+	if h.marshalPlan != nil && (len(h.marshalPlan.PhyPlan.LocalScope) > 0 || len(h.marshalPlan.PhyPlan.RemoteScope) > 0) {
+		// Check execution time to determine output level
+		// Get total execution time from ExecutionDuration
+		totalExecTime := h.marshalPlan.NewPlanStats.ExecuteStage.ExecutionDuration
+		longQueryThreshold := motrace.GetLongQueryTime()
+
+		// If execution time > (5s + longQueryThreshold) or > 3x longQueryThreshold, include Physical Plan
+		includePhysicalPlan := totalExecTime > (5*time.Second+longQueryThreshold) || totalExecTime > 3*longQueryThreshold
+
+		var phyplanText string
+		if includePhysicalPlan {
+			// Generate full analyze mode text output including Physical Plan
+			phyplanText = models.ExplainPhyPlan(&h.marshalPlan.PhyPlan, &h.marshalPlan.NewPlanStats, models.AnalyzeOption)
+		} else {
+			// Generate only Overview section (without Physical Plan)
+			phyplanText = models.ExplainPhyPlanOverview(&h.marshalPlan.PhyPlan, &h.marshalPlan.NewPlanStats, models.AnalyzeOption)
+		}
+		return []byte(phyplanText)
+	}
+	// Fall back to original JSON for error cases or when physical plan is not available
 	return h.jsonBytes
 }
 
