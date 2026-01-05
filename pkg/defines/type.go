@@ -228,7 +228,7 @@ type TableIDKey struct{}
 type LogicalIdKey struct{}
 
 // CarryOnCtxKeys defines keys needed to be serialized when pass context through net
-var CarryOnCtxKeys = []any{TenantIDKey{}, UserIDKey{}, RoleIDKey{}}
+var CarryOnCtxKeys = []any{TenantIDKey{}, UserIDKey{}, RoleIDKey{}, IvfBloomFilter{}}
 
 // TemporaryTN use TemporaryTN to get temporary storage from Context
 type TemporaryTN struct{}

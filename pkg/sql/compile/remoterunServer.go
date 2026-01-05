@@ -275,6 +275,7 @@ type processHelper struct {
 	//analysisNodeList []int32
 	StmtId        uuid.UUID
 	prepareParams *vector.Vector
+	bloomFilter   []byte
 }
 
 // messageReceiverOnServer supported a series methods to write back results.
@@ -391,6 +392,9 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 		cnInfo.udfService,
 		cnInfo.aicm,
 		nil)
+	if len(pHelper.bloomFilter) > 0 {
+		proc.Ctx = context.WithValue(proc.Ctx, defines.IvfBloomFilter{}, pHelper.bloomFilter)
+	}
 	proc.Base.UnixTime = pHelper.unixTime
 	proc.Base.Id = pHelper.id
 	proc.Base.Lim = pHelper.lim
@@ -506,11 +510,12 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 	}
 
 	result := processHelper{
-		id:        procInfo.Id,
-		lim:       process.ConvertToProcessLimitation(procInfo.Lim),
-		unixTime:  procInfo.UnixTime,
-		accountId: procInfo.AccountId,
-		txnClient: cli,
+		id:          procInfo.Id,
+		lim:         process.ConvertToProcessLimitation(procInfo.Lim),
+		unixTime:    procInfo.UnixTime,
+		accountId:   procInfo.AccountId,
+		txnClient:   cli,
+		bloomFilter: procInfo.IvfBloomFilter,
 	}
 	if procInfo.PrepareParams.Length > 0 {
 		result.prepareParams = vector.NewVecWithData(

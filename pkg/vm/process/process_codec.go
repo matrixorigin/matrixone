@@ -109,6 +109,13 @@ func (proc *Process) BuildProcessInfo(
 			LogLevel: zapLogLevel2EnumLogLevel(proc.Base.SessionInfo.LogLevel),
 		}
 	}
+	{ // bloom filter
+		if bfVal := proc.Ctx.Value(defines.IvfBloomFilter{}); bfVal != nil {
+			if bf, ok := bfVal.([]byte); ok && len(bf) > 0 {
+				procInfo.IvfBloomFilter = bf
+			}
+		}
+	}
 	return procInfo, nil
 }
 
@@ -196,8 +203,13 @@ func (c *codecService) Decode(
 		return nil, err
 	}
 
+	runningCtx := ctx
+	if len(value.IvfBloomFilter) > 0 {
+		runningCtx = context.WithValue(runningCtx, defines.IvfBloomFilter{}, value.IvfBloomFilter)
+	}
+
 	proc := NewTopProcess(
-		ctx,
+		runningCtx,
 		c.mp,
 		c.txnClient,
 		txnOp,
