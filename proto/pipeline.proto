@@ -560,6 +560,7 @@ message Source {
   repeated plan.RuntimeFilterSpec runtime_filter_probe_list = 11;
   bool is_const = 12;
   repeated plan.msgHeader recv_msg_list = 13 [(gogoproto.nullable) = false];
+  bytes bloom_filter = 14;
 }
 
 message NodeInfo {
@@ -596,7 +597,6 @@ message ProcessInfo {
   SessionInfo session_info = 7 [(gogoproto.nullable) = false];
   SessionLoggerInfo session_logger = 8 [(gogoproto.nullable) = false];
   PrepareParamInfo prepare_params = 9 [(gogoproto.nullable) = false];
-  bytes ivf_bloom_filter = 10;
 }
 
 message SessionInfo {
