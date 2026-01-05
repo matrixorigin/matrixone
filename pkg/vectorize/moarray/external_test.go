@@ -677,7 +677,7 @@ func TestL2Norm(t *testing.T) {
 		{
 			name: "Test1 - float32",
 			args: args{argF32: []float32{1, 2, 3}},
-			want: 3.741657257080078,
+			want: 3.7416573867739413,
 		},
 		{
 			name: "Test2 - float64",

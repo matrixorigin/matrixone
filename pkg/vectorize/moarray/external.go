@@ -21,8 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/momath"
-	"gonum.org/v1/gonum/blas/blas32"
-	"gonum.org/v1/gonum/blas/blas64"
 )
 
 // These functions are exposed externally via SQL API.
@@ -311,30 +309,29 @@ func NormalizeL2[T types.RealNumbers](v1 []T, normalized []T) error {
 
 // L1Norm returns l1 distance to origin.
 func L1Norm[T types.RealNumbers](v []T) (float64, error) {
-	switch any(v).(type) {
-	case []float32:
-		_v := blas32.Vector{N: len(v), Inc: 1, Data: any(v).([]float32)}
-		return float64(blas32.Asum(_v)), nil
-	case []float64:
-		_v := blas64.Vector{N: len(v), Inc: 1, Data: any(v).([]float64)}
-		return blas64.Asum(_v), nil
-	default:
-		return 0, moerr.NewInternalErrorNoCtx("L1Norm type not supported")
+	// Helper function for inline absolute value.
+	// A good compiler might inline this automatically.
+	abs := func(x T) T {
+		if x < 0 {
+			return -x
+		}
+		return x
 	}
+
+	norm := T(0)
+	for _, val := range v {
+		norm += abs(val)
+	}
+	return float64(norm), nil
 }
 
 // L2Norm returns l2 distance to origin.
 func L2Norm[T types.RealNumbers](v []T) (float64, error) {
-	switch any(v).(type) {
-	case []float32:
-		_v := blas32.Vector{N: len(v), Inc: 1, Data: any(v).([]float32)}
-		return float64(blas32.Nrm2(_v)), nil
-	case []float64:
-		_v := blas64.Vector{N: len(v), Inc: 1, Data: any(v).([]float64)}
-		return blas64.Nrm2(_v), nil
-	default:
-		return 0, moerr.NewInternalErrorNoCtx("L2Norm type not supported")
+	norm := T(0)
+	for _, val := range v {
+		norm += val * val
 	}
+	return math.Sqrt(float64(norm)), nil
 }
 
 func ScalarOp[T types.RealNumbers](v []T, operation string, scalar float64) ([]T, error) {
