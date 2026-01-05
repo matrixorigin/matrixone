@@ -1326,11 +1326,12 @@ func initFixed2() {
 		{types.T_float32, types.T_uint16, types.T_float64, types.T_float64},
 		{types.T_float32, types.T_uint32, types.T_float64, types.T_float64},
 		{types.T_float32, types.T_uint64, types.T_float64, types.T_float64},
-		// Performance optimization: Keep float32 for arithmetic with decimal types
-		// Same rationale as comparison operators - prioritize performance over precision
-		// Note: Not fully MySQL-compatible, but significantly faster for vector/ML workloads
-		{types.T_float32, types.T_decimal64, types.T_float32, types.T_float32},
-		{types.T_float32, types.T_decimal128, types.T_float32, types.T_float32},
+		// Balanced approach: float32 + decimal → float64 for arithmetic operations
+		// Rationale: float32 has only 7 decimal digits precision, insufficient for large decimal values
+		// float64 provides 15-16 digits precision, balancing performance and accuracy
+		// Note: Comparison operators still use float32 for performance (see comparison type rules)
+		{types.T_float32, types.T_decimal64, types.T_float64, types.T_float64},
+		{types.T_float32, types.T_decimal128, types.T_float64, types.T_float64},
 		{types.T_float32, types.T_char, types.T_float64, types.T_float64},
 		{types.T_float32, types.T_varchar, types.T_float64, types.T_float64},
 		{types.T_float32, types.T_binary, types.T_float64, types.T_float64},
@@ -1363,9 +1364,9 @@ func initFixed2() {
 		{types.T_decimal64, types.T_uint16, types.T_decimal128, types.T_decimal128},
 		{types.T_decimal64, types.T_uint32, types.T_decimal128, types.T_decimal128},
 		{types.T_decimal64, types.T_uint64, types.T_decimal128, types.T_decimal128},
-		// Symmetric rule: decimal64 vs float32 → convert to float32 (see comment above for rationale)
-		{types.T_decimal64, types.T_float32, types.T_float32, types.T_float32},
-		{types.T_decimal64, types.T_float64, types.T_decimal128, types.T_decimal128},
+		// Symmetric rule: decimal64 vs float32 → convert to float64 (see comment above for rationale)
+		{types.T_decimal64, types.T_float32, types.T_float64, types.T_float64},
+		{types.T_decimal64, types.T_float64, types.T_float64, types.T_float64},
 		{types.T_decimal64, types.T_decimal128, types.T_decimal128, types.T_decimal128},
 		{types.T_decimal64, types.T_date, types.T_decimal64, types.T_decimal64},
 		{types.T_decimal64, types.T_time, types.T_decimal64, types.T_decimal64},
@@ -1387,7 +1388,7 @@ func initFixed2() {
 		{types.T_decimal128, types.T_uint32, types.T_decimal128, types.T_decimal128},
 		{types.T_decimal128, types.T_uint64, types.T_decimal128, types.T_decimal128},
 		// Symmetric rule: decimal128 vs float32 → convert to float32 (see comment above for rationale)
-		{types.T_decimal128, types.T_float32, types.T_float32, types.T_float32},
+		{types.T_decimal128, types.T_float64, types.T_float64, types.T_float64},
 		{types.T_decimal128, types.T_float64, types.T_float64, types.T_float64},
 		{types.T_decimal128, types.T_decimal64, types.T_decimal128, types.T_decimal128},
 		{types.T_decimal128, types.T_date, types.T_decimal128, types.T_decimal128},
