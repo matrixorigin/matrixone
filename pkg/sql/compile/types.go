@@ -142,6 +142,7 @@ type Source struct {
 	BlockLimit   uint64
 
 	RecvMsgList []plan.MsgHeader
+	BloomFilter []byte
 }
 
 // Col is the information of attribute
