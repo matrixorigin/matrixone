@@ -70,6 +70,7 @@ func initMemMetrics() {
 	registry.MustRegister(memMPoolHighWaterMarkGauge)
 	registry.MustRegister(MallocCounter)
 	registry.MustRegister(MallocGauge)
+	registry.MustRegister(OffHeapInuseGauge)
 }
 
 func initTaskMetrics() {
