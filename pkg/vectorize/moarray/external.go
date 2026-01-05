@@ -329,7 +329,7 @@ func L1Norm[T types.RealNumbers](v []T) (float64, error) {
 func L2Norm[T types.RealNumbers](v []T) (float64, error) {
 	norm := float64(0)
 	for _, val := range v {
-		norm += float64(val * val)
+		norm += float64(val) * float64(val)
 	}
 	return math.Sqrt(norm), nil
 }
