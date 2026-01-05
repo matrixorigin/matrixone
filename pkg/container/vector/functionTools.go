@@ -97,7 +97,8 @@ func GenerateFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vect
 			if v.IsConst() {
 				d128, err := types.Decimal128FromFloat64(f64Cols[0], 38, 16)
 				if err != nil {
-					panic(fmt.Sprintf("failed to convert float64 to decimal128: %v", err))
+					// Conversion failed, use zero value (similar to MySQL behavior for invalid conversions)
+					d128 = types.Decimal128{B0_63: 0, B64_127: 0}
 				}
 				return &FunctionParameterScalar[T]{
 					typ:          convertedType,
@@ -109,7 +110,8 @@ func GenerateFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vect
 			for i, f64 := range f64Cols {
 				d128, err := types.Decimal128FromFloat64(f64, 38, 16)
 				if err != nil {
-					panic(fmt.Sprintf("failed to convert float64 to decimal128: %v", err))
+					// Conversion failed, use zero value
+					d128 = types.Decimal128{B0_63: 0, B64_127: 0}
 				}
 				cols[i] = any(d128).(T)
 			}
@@ -120,7 +122,8 @@ func GenerateFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vect
 			if v.IsConst() {
 				d128, err := types.Decimal128FromFloat64(float64(f32Cols[0]), 38, 7)
 				if err != nil {
-					panic(fmt.Sprintf("failed to convert float32 to decimal128: %v", err))
+					// Conversion failed, use zero value
+					d128 = types.Decimal128{B0_63: 0, B64_127: 0}
 				}
 				return &FunctionParameterScalar[T]{
 					typ:          convertedType,
@@ -132,7 +135,8 @@ func GenerateFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vect
 			for i, f32 := range f32Cols {
 				d128, err := types.Decimal128FromFloat64(float64(f32), 38, 7)
 				if err != nil {
-					panic(fmt.Sprintf("failed to convert float32 to decimal128: %v", err))
+					// Conversion failed, use zero value
+					d128 = types.Decimal128{B0_63: 0, B64_127: 0}
 				}
 				cols[i] = any(d128).(T)
 			}
