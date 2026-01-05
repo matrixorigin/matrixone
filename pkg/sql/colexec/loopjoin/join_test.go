@@ -211,9 +211,9 @@ func newTestCase(t *testing.T, flgs []bool, ts []types.Type, rp []colexec.Result
 		proc:   proc,
 		cancel: cancel,
 		arg: &LoopJoin{
-			Cond:   cond,
-			Result: rp,
-			Typs:   []types.Type{types.T_int32.ToType()},
+			NonEqCond:  cond,
+			Result:     rp,
+			RightTypes: []types.Type{types.T_int32.ToType()},
 			OperatorBase: vm.OperatorBase{
 				OperatorInfo: vm.OperatorInfo{
 					Idx:     1,
