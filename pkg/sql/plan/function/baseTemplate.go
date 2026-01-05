@@ -413,23 +413,17 @@ func decimal128ArithArray(parameters []*vector.Vector, result vector.FunctionRes
 	}
 
 	// Get values from wrappers, which handle type conversion (e.g., decimal64/float64 -> decimal128)
-	// For constant vectors, we need to expand them to the full length
+	// For constant vectors, pass single-element slice - arithFn handles len1==1 or len2==1 cases
 	var v1, v2 []types.Decimal128
 	if c1 {
 		val, _ := p1.GetValue(0)
-		v1 = make([]types.Decimal128, length)
-		for i := range v1 {
-			v1[i] = val
-		}
+		v1 = []types.Decimal128{val}
 	} else {
 		v1 = p1.UnSafeGetAllValue()
 	}
 	if c2 {
 		val, _ := p2.GetValue(0)
-		v2 = make([]types.Decimal128, length)
-		for i := range v2 {
-			v2[i] = val
-		}
+		v2 = []types.Decimal128{val}
 	} else {
 		v2 = p2.UnSafeGetAllValue()
 	}
