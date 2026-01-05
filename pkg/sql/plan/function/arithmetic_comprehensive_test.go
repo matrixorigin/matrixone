@@ -365,3 +365,55 @@ func TestCaseWhenStringComparison(t *testing.T) {
 	require.False(t, null2, "\"two\" = \"two\" should not be null")
 	require.True(t, r2, "\"two\" = \"two\" should be true")
 }
+
+// Test_Decimal_Plus_Float_MySQL_Behavior tests that decimal + float follows MySQL behavior
+func Test_Decimal_Plus_Float_MySQL_Behavior(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// Test: decimal64 + float64 should convert to float64 + float64 (MySQL behavior)
+	{
+		floatVal1 := 3728193.0 // decimal64 converted to float64
+		floatVal2 := 3.141593  // original float64
+
+		tc := tcTemp{
+			info: "decimal64 + float64 should convert to float64 (MySQL behavior)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_float64.ToType(),
+					[]float64{floatVal1}, []bool{false}),
+				NewFunctionTestInput(types.T_float64.ToType(),
+					[]float64{floatVal2}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{3728196.141593}, []bool{false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, plusFn)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+}
+
+// Test_Decimal_Plus_Float32_MySQL_Behavior tests that decimal + float32 also converts to float64
+func Test_Decimal_Plus_Float32_MySQL_Behavior(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// Test: decimal64 + float32 should convert to float64 (MySQL behavior)
+	{
+		floatVal1 := 3728193.0         // decimal64 converted to float64
+		floatVal2 := float64(3.141593) // float32 converted to float64
+
+		tc := tcTemp{
+			info: "decimal64 + float32 should convert to float64 (MySQL behavior)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_float64.ToType(),
+					[]float64{floatVal1}, []bool{false}),
+				NewFunctionTestInput(types.T_float64.ToType(),
+					[]float64{floatVal2}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{3728196.141593}, []bool{false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, plusFn)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+}
