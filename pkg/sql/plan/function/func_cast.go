@@ -4085,7 +4085,12 @@ func strToFloat[T constraints.Float](
 				s := convertByteSliceToString(v)
 				r2, tErr = strconv.ParseFloat(s, bitSize)
 				if tErr != nil {
-					return tErr
+					// In MySQL, invalid string to number conversion returns NULL, not error
+					// This is especially important for CASE WHEN expressions
+					if err := to.Append(T(0), true); err != nil {
+						return err
+					}
+					continue
 				}
 				if bitSize == 32 {
 					r2, _ = strconv.ParseFloat(s, 64)
