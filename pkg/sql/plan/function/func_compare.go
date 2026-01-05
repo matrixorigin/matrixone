@@ -20,10 +20,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"strconv"
 )
 
 func otherCompareOperatorSupports(typ1, typ2 types.Type) bool {
@@ -82,44 +80,6 @@ func equalAndNotEqualOperatorSupports(typ1, typ2 types.Type) bool {
 func equalFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
-
-	// Handle type mismatch cases that should return NULL instead of error
-	// This is especially important for CASE WHEN expressions where type conversion might fail
-	param1Type := parameters[0].GetType()
-	param2Type := parameters[1].GetType()
-
-	// If types are incompatible (e.g., decimal and non-numeric string), return NULL
-	if (param1Type.Oid.IsDecimal() && param2Type.Oid.IsMySQLString()) ||
-		(param2Type.Oid.IsDecimal() && param1Type.Oid.IsMySQLString()) {
-		// Determine which parameter is the string
-		var strParamIdx int
-		if param1Type.Oid.IsMySQLString() {
-			strParamIdx = 0
-		} else {
-			strParamIdx = 1
-		}
-
-		// Check if the string parameter can be converted to a number
-		if !parameters[strParamIdx].IsConst() || parameters[strParamIdx].IsConstNull() {
-			// Non-constant or NULL string, proceed with normal comparison
-		} else {
-			// Check if constant string can be parsed as number
-			strParam := vector.GenerateFunctionStrParameter(parameters[strParamIdx])
-			strVal, strNull := strParam.GetStrValue(0)
-			if !strNull {
-				strStr := functionUtil.QuickBytesToStr(strVal)
-				if _, err := strconv.ParseFloat(strStr, 64); err != nil {
-					// String cannot be converted to number, return NULL for all rows
-					for i := uint64(0); i < uint64(length); i++ {
-						if err := rs.Append(false, true); err != nil {
-							return err
-						}
-					}
-					return nil
-				}
-			}
-		}
-	}
 
 	switch paramType.Oid {
 	case types.T_bool:

@@ -227,7 +227,7 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 
 	// Skip constant folding for division/modulo by zero.
 	// This allows runtime to check sql_mode and statement type for proper error handling.
-	if isDivisionByZeroConstant(fn) {
+	if IsDivisionByZeroConstant(fn) {
 		return expr
 	}
 
@@ -725,10 +725,10 @@ func IsConstant(e *plan.Expr, varAndParamIsConst bool) bool {
 	}
 }
 
-// isDivisionByZeroConstant checks if the expression is a division/modulo operation
+// IsDivisionByZeroConstant checks if the expression is a division/modulo operation
 // where the divisor is a constant zero or either operand is NULL.
 // We skip constant folding for such cases to allow runtime to properly handle them.
-func isDivisionByZeroConstant(fn *plan.Function) bool {
+func IsDivisionByZeroConstant(fn *plan.Function) bool {
 	fid, _ := function.DecodeOverloadID(fn.Func.GetObj())
 	if fid != function.DIV && fid != function.INTEGER_DIV && fid != function.MOD {
 		return false
