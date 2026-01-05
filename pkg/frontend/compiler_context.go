@@ -851,6 +851,14 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, snapshot *plan2.Snaps
 		statser.AddBuildPlanStatsConsumption(time.Since(start))
 	}()
 
+	tableID := uint64(obj.Obj)
+
+	// 1. Try cache first (zero I/O cost)
+	if cached := tcc.tryGetStatsFromCache(tableID); cached != nil {
+		return cached, nil
+	}
+
+	// 2. Cache miss or expired, get metadata and Relation
 	dbName := obj.GetSchemaName()
 	tableName := obj.GetObjName()
 	checkSub := true
@@ -877,59 +885,62 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, snapshot *plan2.Snaps
 	if table == nil {
 		return nil, moerr.NewNoSuchTable(ctx, dbName, tableName)
 	}
-	cached, needUpdate := tcc.statsInCache(ctx, dbName, table, snapshot)
-	if cached == nil {
-		return nil, nil
-	}
-	if !needUpdate {
-		return cached, nil
+
+	// 3. Check if update is needed (may call ApproxObjectsNum)
+	w := tcc.GetStatsCache().GetStatsInfo(tableID, true)
+	if w != nil {
+		approxNumObjects := table.ApproxObjectsNum(ctx)
+		if approxNumObjects > 0 && !w.Stats.NeedUpdate(int64(approxNumObjects)) {
+			return w.Stats, nil
+		}
 	}
 
+	// 4. Fetch new stats from storage engine
 	newCtx := perfcounter.AttachCalcTableStatsKey(ctx)
 	statsInfo, err := table.Stats(newCtx, true)
 	if err != nil {
-		return cached, err
+		if w != nil {
+			return w.Stats, err
+		}
+		return nil, err
 	}
 
 	if statsInfo != nil {
-		tcc.UpdateStatsInCache(table.GetTableID(ctx), statsInfo)
+		tcc.UpdateStatsInCache(tableID, statsInfo)
 		return statsInfo, nil
 	}
-	return cached, nil
+
+	if w != nil {
+		return w.Stats, nil
+	}
+	return nil, nil
 }
 
 func (tcc *TxnCompilerContext) UpdateStatsInCache(tid uint64, s *pb.StatsInfo) {
 	tcc.GetStatsCache().SetStatsInfo(tid, s)
 }
 
-// statsInCache get the *pb.StatsInfo from session cache. If the info is nil, just return nil and false,
-// else, check if the info needs to be updated.
-func (tcc *TxnCompilerContext) statsInCache(ctx context.Context, dbName string, table engine.Relation, snapshot *plan2.Snapshot) (*pb.StatsInfo, bool) {
+// tryGetStatsFromCache attempts to get valid stats from cache without any I/O operations.
+// Returns nil if cache miss or cache expired (needs revalidation).
+func (tcc *TxnCompilerContext) tryGetStatsFromCache(tableID uint64) *pb.StatsInfo {
 	statser := statistic.StatsInfoFromContext(tcc.execCtx.reqCtx)
 	start := time.Now()
 	defer func() {
 		statser.AddStatsStatsInCacheDuration(time.Since(start))
 	}()
 
-	w := tcc.GetStatsCache().GetStatsInfo(table.GetTableID(ctx), true)
+	w := tcc.GetStatsCache().GetStatsInfo(tableID, true)
 	if w == nil {
-		return nil, false
+		return nil
 	}
 
+	// Check if cache is within validity period (3 seconds)
 	var limit int64 = 3
 	if w.Stats.AccurateObjectNumber > 0 && w.IsRecentlyVisitIn(limit) {
-		// do not call ApproxObjectsNum within a short time limit
-		return w.Stats, true
+		return w.Stats
 	}
 
-	approxNumObjects := table.ApproxObjectsNum(ctx)
-	if approxNumObjects == 0 {
-		return nil, false
-	}
-	if w.Stats.NeedUpdate(int64(approxNumObjects)) {
-		return w.Stats, true
-	}
-	return w.Stats, false
+	return nil // Cache expired, needs revalidation
 }
 
 func (tcc *TxnCompilerContext) GetProcess() *process.Process {
