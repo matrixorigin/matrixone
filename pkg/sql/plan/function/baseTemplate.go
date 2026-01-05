@@ -437,11 +437,16 @@ func decimal128ArithArray(parameters []*vector.Vector, result vector.FunctionRes
 	if err != nil {
 		return err
 	}
+	// Safety: if both inputs have no nulls, ensure result nulls are cleared.
+	if (parameters[0].GetNulls() == nil || parameters[0].GetNulls().IsEmpty()) &&
+		(parameters[1].GetNulls() == nil || parameters[1].GetNulls().IsEmpty()) {
+		rsNull.Reset()
+	}
 	return nil
 }
 
 func decimalArith[T templateDec](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int,
-	arithFn func(v1, v2 T, scale1, scale2 int32) (T, error), selectList *FunctionSelectList) error {
+	arithFn func(v1, v2 T, scale1, scale2 int32) (T, error), selectList *FunctionSelectList, isDivision bool) error {
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[T](result)
 	p1 := vector.OptGetParamFromWrapper[T](rs, 0, parameters[0])
@@ -477,21 +482,23 @@ func decimalArith[T templateDec](parameters []*vector.Vector, result vector.Func
 		if ifNull {
 			nulls.AddRange(rsNull, 0, uint64(length))
 		} else {
-			// Check for division by zero
-			var isZero bool
-			switch any(v2).(type) {
-			case types.Decimal128:
-				isZero = (any(v2).(types.Decimal128).B0_63 == 0 && any(v2).(types.Decimal128).B64_127 == 0)
-			case types.Decimal64:
-				isZero = (any(v2).(types.Decimal64) == 0)
-			}
-			if isZero {
-				if checkDivisionByZeroBehavior(proc, selectList) {
-					return moerr.NewDivByZeroNoCtx()
+			// Check for division by zero only if this is a division operation
+			if isDivision {
+				var isZero bool
+				switch any(v2).(type) {
+				case types.Decimal128:
+					isZero = (any(v2).(types.Decimal128).B0_63 == 0 && any(v2).(types.Decimal128).B64_127 == 0)
+				case types.Decimal64:
+					isZero = (any(v2).(types.Decimal64) == 0)
 				}
-				// Return NULL (MySQL 8.0 behavior)
-				nulls.AddRange(rsNull, 0, uint64(length))
-				return nil
+				if isZero {
+					if checkDivisionByZeroBehavior(proc, selectList) {
+						return moerr.NewDivByZeroNoCtx()
+					}
+					// Return NULL (MySQL 8.0 behavior)
+					nulls.AddRange(rsNull, 0, uint64(length))
+					return nil
+				}
 			}
 			r, err := arithFn(v1, v2, scale1, scale2)
 			if err != nil {
@@ -510,7 +517,7 @@ func decimalArith[T templateDec](parameters []*vector.Vector, result vector.Func
 		if null1 {
 			nulls.AddRange(rsNull, 0, uint64(length))
 		} else {
-			shouldError := checkDivisionByZeroBehavior(proc, selectList)
+			shouldError := isDivision && checkDivisionByZeroBehavior(proc, selectList)
 			if p2.WithAnyNullValue() || rsAnyNull {
 				nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
 				rowCount := uint64(length)
@@ -519,21 +526,23 @@ func decimalArith[T templateDec](parameters []*vector.Vector, result vector.Func
 						continue
 					}
 					v2, _ := p2.GetValue(i)
-					// Check for division by zero
-					var isZero bool
-					switch any(v2).(type) {
-					case types.Decimal128:
-						isZero = (any(v2).(types.Decimal128).B0_63 == 0 && any(v2).(types.Decimal128).B64_127 == 0)
-					case types.Decimal64:
-						isZero = (any(v2).(types.Decimal64) == 0)
-					}
-					if isZero {
-						if shouldError {
-							return moerr.NewDivByZeroNoCtx()
+					// Check for division by zero only if this is a division operation
+					if isDivision {
+						var isZero bool
+						switch any(v2).(type) {
+						case types.Decimal128:
+							isZero = (any(v2).(types.Decimal128).B0_63 == 0 && any(v2).(types.Decimal128).B64_127 == 0)
+						case types.Decimal64:
+							isZero = (any(v2).(types.Decimal64) == 0)
 						}
-						// Return NULL (MySQL 8.0 behavior)
-						rsNull.Add(i)
-						continue
+						if isZero {
+							if shouldError {
+								return moerr.NewDivByZeroNoCtx()
+							}
+							// Return NULL (MySQL 8.0 behavior)
+							rsNull.Add(i)
+							continue
+						}
 					}
 					r, err := arithFn(v1, v2, scale1, scale2)
 					if err != nil {
@@ -545,21 +554,23 @@ func decimalArith[T templateDec](parameters []*vector.Vector, result vector.Func
 				rowCount := uint64(length)
 				for i := uint64(0); i < rowCount; i++ {
 					v2, _ := p2.GetValue(i)
-					// Check for division by zero
-					var isZero bool
-					switch any(v2).(type) {
-					case types.Decimal128:
-						isZero = (any(v2).(types.Decimal128).B0_63 == 0 && any(v2).(types.Decimal128).B64_127 == 0)
-					case types.Decimal64:
-						isZero = (any(v2).(types.Decimal64) == 0)
-					}
-					if isZero {
-						if shouldError {
-							return moerr.NewDivByZeroNoCtx()
+					// Check for division by zero only if this is a division operation
+					if isDivision {
+						var isZero bool
+						switch any(v2).(type) {
+						case types.Decimal128:
+							isZero = (any(v2).(types.Decimal128).B0_63 == 0 && any(v2).(types.Decimal128).B64_127 == 0)
+						case types.Decimal64:
+							isZero = (any(v2).(types.Decimal64) == 0)
 						}
-						// Return NULL (MySQL 8.0 behavior)
-						rsNull.Add(i)
-						continue
+						if isZero {
+							if shouldError {
+								return moerr.NewDivByZeroNoCtx()
+							}
+							// Return NULL (MySQL 8.0 behavior)
+							rsNull.Add(i)
+							continue
+						}
 					}
 					r, err := arithFn(v1, v2, scale1, scale2)
 					if err != nil {
@@ -577,21 +588,23 @@ func decimalArith[T templateDec](parameters []*vector.Vector, result vector.Func
 		if null2 {
 			nulls.AddRange(rsNull, 0, uint64(length))
 		} else {
-			// Check for division by zero
-			var isZero bool
-			switch any(v2).(type) {
-			case types.Decimal128:
-				isZero = (any(v2).(types.Decimal128).B0_63 == 0 && any(v2).(types.Decimal128).B64_127 == 0)
-			case types.Decimal64:
-				isZero = (any(v2).(types.Decimal64) == 0)
-			}
-			if isZero {
-				if checkDivisionByZeroBehavior(proc, selectList) {
-					return moerr.NewDivByZeroNoCtx()
+			// Check for division by zero only if this is a division operation
+			if isDivision {
+				var isZero bool
+				switch any(v2).(type) {
+				case types.Decimal128:
+					isZero = (any(v2).(types.Decimal128).B0_63 == 0 && any(v2).(types.Decimal128).B64_127 == 0)
+				case types.Decimal64:
+					isZero = (any(v2).(types.Decimal64) == 0)
 				}
-				// Return NULL (MySQL 8.0 behavior)
-				nulls.AddRange(rsNull, 0, uint64(length))
-				return nil
+				if isZero {
+					if checkDivisionByZeroBehavior(proc, selectList) {
+						return moerr.NewDivByZeroNoCtx()
+					}
+					// Return NULL (MySQL 8.0 behavior)
+					nulls.AddRange(rsNull, 0, uint64(length))
+					return nil
+				}
 			}
 			if p1.WithAnyNullValue() || rsAnyNull {
 				nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
@@ -635,7 +648,39 @@ func decimalArith[T templateDec](parameters []*vector.Vector, result vector.Func
 			}
 			v1, _ := p1.GetValue(i)
 			v2, _ := p2.GetValue(i)
-			// Check for division by zero
+			// Check for division by zero only if this is a division operation
+			if isDivision {
+				var isZero bool
+				switch any(v2).(type) {
+				case types.Decimal128:
+					isZero = (any(v2).(types.Decimal128).B0_63 == 0 && any(v2).(types.Decimal128).B64_127 == 0)
+				case types.Decimal64:
+					isZero = (any(v2).(types.Decimal64) == 0)
+				}
+				if isZero {
+					if shouldError {
+						return moerr.NewDivByZeroNoCtx()
+					}
+					// Return NULL (MySQL 8.0 behavior)
+					rsNull.Add(i)
+					continue
+				}
+			}
+			r, err := arithFn(v1, v2, scale1, scale2)
+			if err != nil {
+				return err
+			}
+			rss[i] = r
+		}
+		return nil
+	}
+
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
+		v1, _ := p1.GetValue(i)
+		v2, _ := p2.GetValue(i)
+		// Check for division by zero only if this is a division operation
+		if isDivision {
 			var isZero bool
 			switch any(v2).(type) {
 			case types.Decimal128:
@@ -651,40 +696,18 @@ func decimalArith[T templateDec](parameters []*vector.Vector, result vector.Func
 				rsNull.Add(i)
 				continue
 			}
-			r, err := arithFn(v1, v2, scale1, scale2)
-			if err != nil {
-				return err
-			}
-			rss[i] = r
-		}
-		return nil
-	}
-
-	rowCount := uint64(length)
-	for i := uint64(0); i < rowCount; i++ {
-		v1, _ := p1.GetValue(i)
-		v2, _ := p2.GetValue(i)
-		// Check for division by zero
-		var isZero bool
-		switch any(v2).(type) {
-		case types.Decimal128:
-			isZero = (any(v2).(types.Decimal128).B0_63 == 0 && any(v2).(types.Decimal128).B64_127 == 0)
-		case types.Decimal64:
-			isZero = (any(v2).(types.Decimal64) == 0)
-		}
-		if isZero {
-			if shouldError {
-				return moerr.NewDivByZeroNoCtx()
-			}
-			// Return NULL (MySQL 8.0 behavior)
-			rsNull.Add(i)
-			continue
 		}
 		r, err := arithFn(v1, v2, scale1, scale2)
 		if err != nil {
 			return err
 		}
 		rss[i] = r
+	}
+
+	// Safety: if both inputs have no nulls, ensure result nulls are cleared.
+	if (parameters[0].GetNulls() == nil || parameters[0].GetNulls().IsEmpty()) &&
+		(parameters[1].GetNulls() == nil || parameters[1].GetNulls().IsEmpty()) {
+		rsNull.Reset()
 	}
 	return nil
 }

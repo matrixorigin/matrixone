@@ -65,7 +65,7 @@ func GenerateFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vect
 			sourceVector: v,
 		}
 	}
-	
+
 	// Special handling for type conversions to decimal128
 	var cols []T
 	var convertedType types.Type
@@ -116,7 +116,7 @@ func GenerateFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vect
 		convertedType = *t
 		cols = MustFixedColWithTypeCheck[T](v)
 	}
-	
+
 	if v.IsConst() {
 		return &FunctionParameterScalar[T]{
 			typ:          convertedType,

@@ -220,15 +220,28 @@ func plusFnVectorScalar(parameters []*vector.Vector, result vector.FunctionResul
 func plusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	// Check result type first, as it may differ from parameter types after type conversion
 	resultType := result.GetResultVector().GetType()
-	
+
 	// If result type is decimal128, use decimal128 handler
 	// This handles cases like decimal64 + float64 where both are converted to decimal128
 	if resultType.Oid == types.T_decimal128 {
-		return decimal128ArithArray(parameters, result, proc, length, decimal128AddArray, selectList)
+		// If inputs have no nulls, ensure result nulls are cleared after computation.
+		inputHasNull := func(vec *vector.Vector) bool {
+			ns := vec.GetNulls()
+			return ns != nil && !ns.IsEmpty()
+		}
+		noNullInput := !inputHasNull(parameters[0]) && !inputHasNull(parameters[1])
+
+		if err := decimal128ArithArray(parameters, result, proc, length, decimal128AddArray, selectList); err != nil {
+			return err
+		}
+		if noNullInput {
+			result.GetResultVector().GetNulls().Reset()
+		}
+		return nil
 	}
-	
+
 	paramType := parameters[0].GetType()
-	
+
 	switch paramType.Oid {
 	case types.T_bit:
 		return opBinaryFixedFixedToFixedWithErrorCheck[uint64, uint64, uint64](parameters, result, proc, length, func(v1, v2 uint64) (uint64, error) {
@@ -278,7 +291,7 @@ func plusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 		return decimalArith[types.Decimal64](parameters, result, proc, length, func(v1, v2 types.Decimal64, scale1, scale2 int32) (types.Decimal64, error) {
 			r, _, err := v1.Add(v2, scale1, scale2)
 			return r, err
-		}, selectList)
+		}, selectList, false)
 	case types.T_decimal128:
 		return decimal128ArithArray(parameters, result, proc, length, decimal128AddArray, selectList)
 
@@ -351,7 +364,7 @@ func minusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		return decimalArith[types.Decimal64](parameters, result, proc, length, func(v1, v2 types.Decimal64, scale1, scale2 int32) (types.Decimal64, error) {
 			r, _, err := v1.Sub(v2, scale1, scale2)
 			return r, err
-		}, selectList)
+		}, selectList, false)
 	case types.T_decimal128:
 		return decimal128ArithArray(parameters, result, proc, length, decimal128SubArray, selectList)
 
@@ -478,7 +491,7 @@ func divFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 		return decimalArith[types.Decimal128](parameters, result, proc, length, func(v1, v2 types.Decimal128, scale1, scale2 int32) (types.Decimal128, error) {
 			r, _, err := v1.Div(v2, scale1, scale2)
 			return r, err
-		}, selectList)
+		}, selectList, true)
 	case types.T_array_float32:
 		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, divFnArray[float32], selectList)
 	case types.T_array_float64:
@@ -726,12 +739,12 @@ func modFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 		return decimalArith[types.Decimal64](parameters, result, proc, length, func(v1, v2 types.Decimal64, scale1, scale2 int32) (types.Decimal64, error) {
 			r, _, err := v1.Mod(v2, scale1, scale2)
 			return r, err
-		}, selectList)
+		}, selectList, true)
 	case types.T_decimal128:
 		return decimalArith[types.Decimal128](parameters, result, proc, length, func(v1, v2 types.Decimal128, scale1, scale2 int32) (types.Decimal128, error) {
 			r, _, err := v1.Mod(v2, scale1, scale2)
 			return r, err
-		}, selectList)
+		}, selectList, true)
 	}
 	panic("unreached code")
 }
@@ -801,10 +814,10 @@ func decimal128ScaleArray(v, rs []types.Decimal128, len int, n int32) error {
 
 func decimal128ScaleArrayWithNulls(v, rs []types.Decimal128, len int, n int32, rsnull *nulls.Nulls) error {
 	for i := 0; i < len; i++ {
+		rs[i] = v[i]
 		if rsnull.Contains(uint64(i)) {
 			continue
 		}
-		rs[i] = v[i]
 		err := rs[i].ScaleInplace(n)
 		if err != nil {
 			return err
