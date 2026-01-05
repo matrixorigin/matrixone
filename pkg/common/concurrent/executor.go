@@ -38,27 +38,32 @@ func (e ThreadPoolExecutor) Execute(
 	fn func(ctx context.Context, thread_id int, start, end int) error) (err error) {
 
 	g, ctx := errgroup.WithContext(ctx)
-	chunksz := (nitems + e.nthreads - 1) / e.nthreads
-	for i := 0; i < e.nthreads; i++ {
 
-		start := i * chunksz
-		if start >= nitems {
+	q := nitems / e.nthreads
+	r := nitems % e.nthreads
+
+	start := 0
+	for i := 0; i < e.nthreads; i++ {
+		size := q
+		if i < r {
+			size++
+		}
+		if size == 0 {
 			break
 		}
 
-		end := start + chunksz
-		if end > nitems {
-			end = nitems
-		}
-
+		end := start + size
 		thread_id := i
+		curStart := start
+		curEnd := end
 		g.Go(func() error {
-			if err2 := fn(ctx, thread_id, start, end); err2 != nil {
+			if err2 := fn(ctx, thread_id, curStart, curEnd); err2 != nil {
 				return err2
 			}
 
 			return nil
 		})
+		start = end
 	}
 
 	return g.Wait()
