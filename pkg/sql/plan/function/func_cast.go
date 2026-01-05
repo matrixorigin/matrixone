@@ -4095,9 +4095,9 @@ func strToFloat[T constraints.Float](
 				s := convertByteSliceToString(v)
 				r2, tErr = strconv.ParseFloat(s, bitSize)
 				if tErr != nil {
-					return tErr
-				}
-				if bitSize == 32 {
+					// MySQL behavior: invalid string converts to 0 with warning
+					r2 = 0
+				} else if bitSize == 32 {
 					r2, _ = strconv.ParseFloat(s, 64)
 				}
 				if to.GetType().Scale < 0 || to.GetType().Width == 0 {

@@ -431,7 +431,6 @@ func Test_CompareEdgeCases(t *testing.T) {
 	}
 }
 
-
 // Test_Float32WithScaleComparison tests float(M,D) comparison with scale handling.
 // This test verifies the fix for the precision issue where float32 values like 90.01
 // are stored as 90.01000213... due to IEEE 754 representation, causing incorrect

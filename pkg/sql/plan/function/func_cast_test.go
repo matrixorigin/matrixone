@@ -30,6 +30,53 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func Test_StringToFloatInvalidConversion(t *testing.T) {
+	// Test invalid string to float conversion (should return 0, not error)
+	// This matches MySQL behavior where invalid strings convert to 0
+	proc := testutil.NewProcess(t)
+
+	testCases := []tcTemp{
+		{
+			info: "cast invalid string 'a' to float64 should return 0",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"a"}, []bool{false}),
+				NewFunctionTestInput(types.T_float64.ToType(), []float64{}, []bool{}),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0}, []bool{false}),
+		},
+		{
+			info: "cast invalid string 'abc123' to float64 should return 0",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"abc123"}, []bool{false}),
+				NewFunctionTestInput(types.T_float64.ToType(), []float64{}, []bool{}),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0}, []bool{false}),
+		},
+		{
+			info: "cast empty string to float64 should return 0",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{""}, []bool{false}),
+				NewFunctionTestInput(types.T_float64.ToType(), []float64{}, []bool{}),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0}, []bool{false}),
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.info, func(t *testing.T) {
+			tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, NewCast)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, tc.info, info)
+		})
+	}
+}
+
 func initCastTestCase() []tcTemp {
 	var testCases []tcTemp
 
