@@ -218,7 +218,17 @@ func plusFnVectorScalar(parameters []*vector.Vector, result vector.FunctionResul
 }
 
 func plusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	// Check result type first, as it may differ from parameter types after type conversion
+	resultType := result.GetResultVector().GetType()
+	
+	// If result type is decimal128, use decimal128 handler
+	// This handles cases like decimal64 + float64 where both are converted to decimal128
+	if resultType.Oid == types.T_decimal128 {
+		return decimal128ArithArray(parameters, result, proc, length, decimal128AddArray, selectList)
+	}
+	
 	paramType := parameters[0].GetType()
+	
 	switch paramType.Oid {
 	case types.T_bit:
 		return opBinaryFixedFixedToFixedWithErrorCheck[uint64, uint64, uint64](parameters, result, proc, length, func(v1, v2 uint64) (uint64, error) {
@@ -651,7 +661,13 @@ func integerDivUnsigned(parameters []*vector.Vector, result vector.FunctionResul
 				}
 				rsNull.Add(i)
 			} else {
-				rss[i] = int64(v1) / int64(v2)
+				// For uint64 DIV, perform division first, then convert to int64
+				// This matches MySQL 8.0 behavior: unsigned DIV returns int64
+				// MySQL 8.0: if result exceeds int64 range, it wraps around (like direct int64 cast)
+				quotient := v1 / v2
+				// Direct conversion: if quotient > MAX_INT64, it wraps to negative
+				// This matches MySQL 8.0 behavior for unsigned integer DIV
+				rss[i] = int64(quotient)
 			}
 		}
 	}

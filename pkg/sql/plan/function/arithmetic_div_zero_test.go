@@ -15,6 +15,7 @@
 package function
 
 import (
+	"fmt"
 	"sync/atomic"
 	"testing"
 
@@ -716,7 +717,9 @@ func TestDecimal64NegativeDivision(t *testing.T) {
 }
 
 // TestUint64DivConsistency tests uint64 DIV behavior
+// This tests the actual function implementation, not Go's native division
 func TestUint64DivConsistency(t *testing.T) {
+	proc := testutil.NewProcess(t)
 	testCases := []struct {
 		name     string
 		v1       uint64
@@ -730,10 +733,21 @@ func TestUint64DivConsistency(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			result := int64(tc.v1) / int64(tc.v2)
-			if result != tc.expected {
-				t.Errorf("Expected %d, got %d", tc.expected, result)
+			tc := tcTemp{
+				info: fmt.Sprintf("uint64 DIV: %d DIV %d = %d", tc.v1, tc.v2, tc.expected),
+				inputs: []FunctionTestInput{
+					NewFunctionTestInput(types.T_uint64.ToType(),
+						[]uint64{tc.v1}, []bool{false}),
+					NewFunctionTestInput(types.T_uint64.ToType(),
+						[]uint64{tc.v2}, []bool{false}),
+				},
+				expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+					[]int64{tc.expected},
+					[]bool{false}),
 			}
+			tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, integerDivFn)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, tc.info, info)
 		})
 	}
 }

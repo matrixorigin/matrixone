@@ -412,8 +412,27 @@ func decimal128ArithArray(parameters []*vector.Vector, result vector.FunctionRes
 		}
 	}
 
-	v1 := vector.MustFixedColNoTypeCheck[types.Decimal128](p1.GetSourceVector())
-	v2 := vector.MustFixedColNoTypeCheck[types.Decimal128](p2.GetSourceVector())
+	// Get values from wrappers, which handle type conversion (e.g., decimal64/float64 -> decimal128)
+	// For constant vectors, we need to expand them to the full length
+	var v1, v2 []types.Decimal128
+	if c1 {
+		val, _ := p1.GetValue(0)
+		v1 = make([]types.Decimal128, length)
+		for i := range v1 {
+			v1[i] = val
+		}
+	} else {
+		v1 = p1.UnSafeGetAllValue()
+	}
+	if c2 {
+		val, _ := p2.GetValue(0)
+		v2 = make([]types.Decimal128, length)
+		for i := range v2 {
+			v2[i] = val
+		}
+	} else {
+		v2 = p2.UnSafeGetAllValue()
+	}
 	err := arithFn(v1, v2, rss, scale1, scale2, rsNull)
 	if err != nil {
 		return err

@@ -100,7 +100,12 @@ func Test_fixedTypeCastRule2(t *testing.T) {
 				{Oid: types.T_decimal64, Width: 38, Size: 16, Scale: 6},
 				types.T_float64.ToType(),
 			},
-			want: [2]types.Type{types.T_float64.ToTypeWithScale(6), types.T_float64.ToType()},
+			// After fix: decimal64 + float64 converts to decimal128 (not float64)
+			// This aligns with MySQL 8.0 behavior for decimal operations
+			want: [2]types.Type{
+				{Oid: types.T_decimal128, Width: 38, Size: 16, Scale: 6},
+				{Oid: types.T_decimal128, Width: 38, Size: 16, Scale: 16},
+			},
 		},
 
 		{

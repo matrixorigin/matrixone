@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	functionUtil "github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 )
 
 // FunctionParameterWrapper is generated from a vector.
@@ -64,24 +65,75 @@ func GenerateFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vect
 			sourceVector: v,
 		}
 	}
-	cols := MustFixedColWithTypeCheck[T](v)
+	
+	// Special handling for type conversions to decimal128
+	var cols []T
+	var convertedType types.Type
+	var anyT T
+	switch (any)(anyT).(type) {
+	case types.Decimal128:
+		convertedType = types.T_decimal128.ToType()
+		convertedType.Width = 38
+		if t.Oid == types.T_decimal64 {
+			// Convert decimal64 to decimal128, preserve scale
+			convertedType.Scale = t.Scale
+			d64Cols := MustFixedColWithTypeCheck[types.Decimal64](v)
+			cols = make([]T, len(d64Cols))
+			for i, d64 := range d64Cols {
+				cols[i] = any(functionUtil.ConvertD64ToD128(d64)).(T)
+			}
+		} else if t.Oid == types.T_float64 {
+			// Convert float64 to decimal128
+			// Use scale 16 for float64 (as per SetTargetScaleFromSource logic)
+			convertedType.Scale = 16
+			f64Cols := MustFixedColWithTypeCheck[float64](v)
+			cols = make([]T, len(f64Cols))
+			for i, f64 := range f64Cols {
+				d128, err := types.Decimal128FromFloat64(f64, 38, 16)
+				if err != nil {
+					panic(fmt.Sprintf("failed to convert float64 to decimal128: %v", err))
+				}
+				cols[i] = any(d128).(T)
+			}
+		} else if t.Oid == types.T_float32 {
+			// Convert float32 to decimal128
+			// Use scale 7 for float32 (as per SetTargetScaleFromSource logic)
+			convertedType.Scale = 7
+			f32Cols := MustFixedColWithTypeCheck[float32](v)
+			cols = make([]T, len(f32Cols))
+			for i, f32 := range f32Cols {
+				d128, err := types.Decimal128FromFloat64(float64(f32), 38, 7)
+				if err != nil {
+					panic(fmt.Sprintf("failed to convert float32 to decimal128: %v", err))
+				}
+				cols[i] = any(d128).(T)
+			}
+		} else {
+			convertedType = *t
+			cols = MustFixedColWithTypeCheck[T](v)
+		}
+	default:
+		convertedType = *t
+		cols = MustFixedColWithTypeCheck[T](v)
+	}
+	
 	if v.IsConst() {
 		return &FunctionParameterScalar[T]{
-			typ:          *t,
+			typ:          convertedType,
 			sourceVector: v,
 			scalarValue:  cols[0],
 		}
 	}
 	if !v.nsp.IsEmpty() {
 		return &FunctionParameterNormal[T]{
-			typ:          *t,
+			typ:          convertedType,
 			sourceVector: v,
 			values:       cols,
 			nullMap:      v.GetNulls().GetBitmap(),
 		}
 	}
 	return &FunctionParameterWithoutNull[T]{
-		typ:          *t,
+		typ:          convertedType,
 		sourceVector: v,
 		values:       cols,
 	}
