@@ -148,7 +148,7 @@ func TestMultiply(t *testing.T) {
 			wantF64: []float64{0.4437765133601809},
 		},
 		{
-			name:    "Test3 - float64",
+			name:    "Test4 - float64",
 			args:    args{leftArgF64: []float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, rightArgF64: []float64{2, 3, 4, 5, 6, 7, 8, 9, 10, 11}},
 			wantF64: []float64{2, 6, 12, 20, 30, 42, 56, 72, 90, 110},
 		},
@@ -292,7 +292,7 @@ func TestCompare(t *testing.T) {
 			want: -1,
 		},
 		{
-			name: "Test7 - float64 difference dims",
+			name: "Test8 - float64 difference dims",
 			args: args{leftArgF64: []float64{3, 2, 3}, rightArgF64: []float64{3, 2}},
 			want: 1,
 		},
