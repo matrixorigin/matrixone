@@ -586,8 +586,8 @@ func (c *Conn) ReadIntoReadBuf() error {
 // The maximum read length is len(buf)
 func (c *Conn) ReadFromConn(buf []byte) (int, error) {
 	var err error
-	if c.readTimeout > 0 {
-		err = c.conn.SetReadDeadline(time.Now().Add(c.readTimeout))
+	if c.timeout > 0 {
+		err = c.conn.SetReadDeadline(time.Now().Add(c.timeout))
 		if err != nil {
 			return 0, err
 		}
@@ -822,11 +822,6 @@ func (c *Conn) Write(payload []byte) error {
 
 // WriteToConn is the base method for write data to network, calling net.Conn.Write().
 func (c *Conn) WriteToConn(buf []byte) error {
-	if c.writeTimeout > 0 {
-		if err := c.conn.SetWriteDeadline(time.Now().Add(c.writeTimeout)); err != nil {
-			return err
-		}
-	}
 	sendLength := 0
 	for sendLength < len(buf) {
 		n, err := c.conn.Write(buf[sendLength:])
