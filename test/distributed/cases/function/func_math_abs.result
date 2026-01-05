@@ -1,23 +1,24 @@
 select abs(-10);
-abs(-10)
+➤ abs(-10)[-5,64,0]  𝄀
 10
 select abs(-2) * -2;
-abs(-2) * -2
+➤ abs(-2) * -2[-5,64,0]  𝄀
 -4
 select abs(1e10);
-abs(1e10)
+➤ abs(1e10)[8,54,0]  𝄀
 1.0E10
 select abs(NULL);
-abs(NULL)
+➤ abs(null)[-5,64,0]  𝄀
 null
 select abs(9999999999999999999999);
-abs(9999999999999999999999)
+➤ abs(9999999999999999999999)[3,39,0]  𝄀
 9999999999999999999999
 select abs(-9999999999999999999999);
-abs(-9999999999999999999999)
+➤ abs(-9999999999999999999999)[3,39,0]  𝄀
 9999999999999999999999
 select abs(10/0);
-Data truncation: division by zero
+➤ abs(10 / 0)[8,54,0]  𝄀
+null
 select abs(cast(-2 as unsigned)), abs(18446744073709551614), abs(-2);
 Data truncation: data out of range: data type uint64, value '-2'
 CREATE TABLE t(u TINYINT UNSIGNED NOT NULL);
@@ -32,59 +33,54 @@ SQL syntax error: for SELECT DISTINCT, ORDER BY expressions must appear in selec
 select distinct b as z from t1 order by abs(z);
 SQL syntax error: for SELECT DISTINCT, ORDER BY expressions must appear in select list
 select distinct abs(b) as z from t1 order by z;
-z
-1
+➤ z[-5,64,0]  𝄀
+1  𝄀
 2
 select distinct abs(b) as z from t1 order by abs(b);
-z
-1
+➤ z[-5,64,0]  𝄀
+1  𝄀
 2
 select distinct abs(b) from t1 order by abs(b);
-abs(b)
-1
+➤ abs(b)[-5,64,0]  𝄀
+1  𝄀
 2
 drop table t1;
 CREATE TABLE t1(c0 INTEGER, c1 INTEGER, c2 INTEGER);
 INSERT INTO t1 VALUES(1, 1, 1), (1, 1, 1);
 SELECT CASE any_value(c1) WHEN any_value(c1) + 1 THEN 1 END, ABS(AVG(c0)) FROM t1;
-CASE any_value(c1) WHEN any_value(c1) + 1 THEN 1 END	ABS(AVG(c0))
-null	1.0000
+➤ case any_value(c1) when any_value(c1) + 1 then 1 end[-5,64,0]  ¦  ABS(AVG(c0))[8,54,0]  𝄀
+null  ¦  1.0
 DROP TABLE t1;
 CREATE TABLE t(i INT);
 INSERT INTO t VALUES (-1),(2),(1);
 SELECT ABS(i) AS a FROM t GROUP BY abs(i) ORDER BY a + 1;
-a
-1
-2
-set keep_user_target_list_in_result = 1;
+[unknown result because it is related to issue#3265]
 SELECT ABS(i) AS a FROM t GROUP BY a ORDER BY a + 1;
-a
-1
-2
+[unknown result because it is related to issue#3265]
 DROP TABLE t;
 CREATE TABLE t1(c0 INTEGER, c1 INTEGER, c2 INTEGER);
 CREATE TABLE t2(c0 INTEGER, c1 INTEGER, c2 INTEGER);
 INSERT INTO t1 select abs(-341.741), abs(-234141113), abs(-141241);
 INSERT INTO t2 select abs(-341.5612), abs(-23413), abs(-14141);
 select * from t1;
-c0    c1    c2
-342    234141113    141241
+➤ c0[4,32,0]  ¦  c1[4,32,0]  ¦  c2[4,32,0]  𝄀
+342  ¦  234141113  ¦  141241
 select * from t2;
-c0    c1    c2
-342    23413    14141
+➤ c0[4,32,0]  ¦  c1[4,32,0]  ¦  c2[4,32,0]  𝄀
+342  ¦  23413  ¦  14141
 SELECT t1.c0, t2.c0 from t1 join t2 on abs(t1.c0) = abs(t2.c0) having abs(t1.c0)>100;
 SQL syntax error: column "t1.c0" must appear in the GROUP BY clause or be used in an aggregate function
 drop table t1;
 drop table t2;
 SELECT abs(10)-abs(-34);
-abs(10) - abs(-34)
+➤ abs(10) - abs(-34)[-5,64,0]  𝄀
 -24
 SELECT abs(1241)*abs(-0.4141);
-abs(1241) * abs(-0.4141)
+➤ abs(1241) * abs(-0.4141)[3,38,4]  𝄀
 513.8981
 SELECT abs(-100)>abs(-102);
-abs(-100) > abs(-102)
+➤ abs(-100) > abs(-102)[12,4,0]  𝄀
 false
 SELECT abs(-100)<>abs(100);
-abs(-100)<>abs(100)
+➤ abs(-100) != abs(100)[12,4,0]  𝄀
 false
