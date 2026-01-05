@@ -110,7 +110,7 @@ func Test_DivFn_DecimalZero(t *testing.T) {
 					[]types.Decimal64{d2}, []bool{false}),
 			},
 			expect: NewFunctionTestResult(types.T_decimal128.ToType(), false,
-				[]types.Decimal128{{0, 0}}, []bool{true}), // NULL result
+				[]types.Decimal128{{B0_63: 0, B64_127: 0}}, []bool{true}), // NULL result
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, divFn)
 		succeed, info := tcc.Run()
