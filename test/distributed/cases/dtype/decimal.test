@@ -752,30 +752,25 @@ INSERT INTO decimal_opt_test VALUES
 
 -- Test 1: Trailing zeros - should use index (constant can be truncated)
 -- 99.990000000 has trailing zeros, can be truncated to 99.99
--- @pattern
-EXPLAIN ANALYZE SELECT * FROM decimal_opt_test WHERE price = 99.990000000;
+EXPLAIN SELECT * FROM decimal_opt_test WHERE price = 99.990000000;
 SELECT * FROM decimal_opt_test WHERE price = 99.990000000;
 
 -- Test 2: No trailing zeros - should NOT use index (requires table scan)
 -- 99.991234567 has non-zero trailing digits, cannot match any row
--- @pattern
-EXPLAIN ANALYZE SELECT * FROM decimal_opt_test WHERE price = 99.991234567;
+EXPLAIN SELECT * FROM decimal_opt_test WHERE price = 99.991234567;
 SELECT * FROM decimal_opt_test WHERE price = 99.991234567;
 
 -- Test 3: Exact scale match - should use index
--- @pattern
-EXPLAIN ANALYZE SELECT * FROM decimal_opt_test WHERE price = 99.99;
+EXPLAIN SELECT * FROM decimal_opt_test WHERE price = 99.99;
 SELECT * FROM decimal_opt_test WHERE price = 99.99;
 
 -- Test 4: Integer with trailing zeros - should use index
 -- 100.000000000 can be truncated to 100
--- @pattern
-EXPLAIN ANALYZE SELECT * FROM decimal_opt_test WHERE quantity = 100.000000000;
+EXPLAIN SELECT * FROM decimal_opt_test WHERE quantity = 100.000000000;
 SELECT * FROM decimal_opt_test WHERE quantity = 100.000000000;
 
 -- Test 5: BETWEEN with trailing zeros - should use index
--- @pattern
-EXPLAIN ANALYZE SELECT * FROM decimal_opt_test WHERE price BETWEEN 99.990000 AND 299.990000;
+EXPLAIN SELECT * FROM decimal_opt_test WHERE price BETWEEN 99.990000 AND 299.990000;
 SELECT * FROM decimal_opt_test WHERE price BETWEEN 99.990000 AND 299.990000 ORDER BY id;
 
 -- Test 6: IN list with trailing zeros - should use index
