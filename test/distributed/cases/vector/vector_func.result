@@ -207,18 +207,18 @@ null
 null
 0.4932042277813813
 0.7817683693215783
-select inner_product(vecf32_3,vecf32_3) - inner_product(vecf32_5,vecf32_5) from vtab32;
-inner_product(vecf32_3, vecf32_3) - inner_product(vecf32_5, vecf32_5)
+select inner_product(normalize_l2(vecf32_3),normalize_l2(vecf32_3)), inner_product(normalize_l2(vecf32_5),normalize_l2(vecf32_5)),  inner_product(normalize_l2(vecf32_3),normalize_l2(vecf32_3)) - inner_product(normalize_l2(vecf32_5),normalize_l2(vecf32_5)) from vtab32;
+inner_product(normalize_l2(vecf32_3), normalize_l2(vecf32_3))    inner_product(normalize_l2(vecf32_5), normalize_l2(vecf32_5))    inner_product(normalize_l2(vecf32_3), normalize_l2(vecf32_3)) - inner_product(normalize_l2(vecf32_5), normalize_l2(vecf32_5))
+null    null    null
+-1.0    null    null
+-1.0    -1.0    0.0
+-1.0    -1.0    0.0
+select inner_product(normalize_l2(vecf32_3),normalize_l2(vecf32_3)) * inner_product(normalize_l2(vecf32_5),normalize_l2(vecf32_5)) from vtab32;
+inner_product(normalize_l2(vecf32_3), normalize_l2(vecf32_3)) * inner_product(normalize_l2(vecf32_5), normalize_l2(vecf32_5))
 null
 null
-2.1505920967041016E7
-7.5910497125E7
-select inner_product(vecf32_3,vecf32_3) * inner_product(vecf32_5,vecf32_5) from vtab32;
-inner_product(vecf32_3, vecf32_3) * inner_product(vecf32_5, vecf32_5)
-null
-null
-2.0152634790196777E10
-5.1754460291205E13
+1.0
+1.0
 select inner_product(vecf64_3,vecf64_3) + inner_product(vecf64_5,vecf64_5) from vtab64;
 inner_product(vecf64_3, vecf64_3) + inner_product(vecf64_5, vecf64_5)
 null
