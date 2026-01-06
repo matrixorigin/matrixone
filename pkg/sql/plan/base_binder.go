@@ -1375,6 +1375,18 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		if err := convertValueIntoBool(name, args, false); err != nil {
 			return nil, err
 		}
+
+		// Early detection for decimal comparisons
+		if len(args) == 2 {
+			if name == "=" && isDecimalComparisonAlwaysFalse(ctx, args[0], args[1]) {
+				// Equality with incompatible precision is always false
+				return makePlan2BoolConstExprWithType(false), nil
+			}
+			if name == "<>" && isDecimalComparisonAlwaysFalse(ctx, args[0], args[1]) {
+				// Inequality with incompatible precision is always true
+				return makePlan2BoolConstExprWithType(true), nil
+			}
+		}
 	case "date_add", "date_sub":
 		// rewrite date_add/date_sub function
 		// date_add(col_name, "1 day"), will rewrite to date_add(col_name, number, unit)
@@ -1765,13 +1777,28 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 				// Check if we can use column type to avoid casting it
 				canUse := func(colType, otherType types.Type, colExpr, otherExpr *plan.Expr) bool {
 					colOid, otherOid := colType.Oid, otherType.Oid
+
+					// For integers, check if constant value is within column type range
 					if colOid.IsInteger() && otherOid.IsInteger() {
+						// Use checkNoNeedCast to verify value range
+						if otherExpr != nil && otherExpr.GetLit() != nil {
+							return checkNoNeedCast(otherType, colType, otherExpr)
+						}
+						// If not a literal, conservatively allow (e.g., column vs column)
 						return true
 					}
+
+					// For float types, check if conversion is safe
 					if (colOid == types.T_float32 || colOid == types.T_float64) &&
 						(otherOid == types.T_float32 || otherOid == types.T_float64 || otherOid.IsDecimal() || otherOid.IsInteger()) {
+						// For literals, use checkNoNeedCast to verify range
+						if otherExpr != nil && otherExpr.GetLit() != nil {
+							return checkNoNeedCast(otherType, colType, otherExpr)
+						}
 						return true
 					}
+
+					// For decimal types, check scale compatibility
 					if colOid.IsDecimal() && otherOid.IsDecimal() {
 						// Only use column type if it has enough precision (scale)
 						// to represent the other value without truncation
@@ -1784,7 +1811,8 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 						}
 						return false
 					}
-					return colOid == types.T_float64
+
+					return false
 				}
 
 				// Try column type if column would be cast

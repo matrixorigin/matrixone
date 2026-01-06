@@ -1518,45 +1518,66 @@ func hasTrailingZeros(constExpr *plan.Expr, constT types.Type, columnScale int32
 		return false
 	}
 
-	// Get the decimal value
-	// Try DECIMAL64, DECIMAL128, and string literals
-	var value int64
-	var found bool
-
-	if val, ok := lit.Value.(*plan.Literal_Decimal64Val); ok {
-		value = int64(val.Decimal64Val.A)
-		found = true
-	} else if val, ok := lit.Value.(*plan.Literal_Decimal128Val); ok {
-		value = int64(val.Decimal128Val.A)
-		found = true
-	} else if sval, ok := lit.Value.(*plan.Literal_Sval); ok {
-		// The literal is a string, parse it as decimal
-		dec, _, err := types.Parse128(sval.Sval)
-		if err != nil {
-			return false
-		}
-		value = int64(dec.B0_63)
-		found = true
-	}
-
-	if !found {
-		return false
-	}
-
 	// Calculate how many trailing digits we need to check
 	trailingDigits := constT.Scale - columnScale
 	if trailingDigits <= 0 || trailingDigits > 18 {
 		return false
 	}
 
-	// Check if the trailing digits are all zeros
+	// Get the decimal value and check trailing zeros
+	// Try DECIMAL64, DECIMAL128, and string literals
 	divisor := int64(types.Pow10[trailingDigits])
-	return value%divisor == 0
+
+	if val, ok := lit.Value.(*plan.Literal_Decimal64Val); ok {
+		return val.Decimal64Val.A%divisor == 0
+	} else if val, ok := lit.Value.(*plan.Literal_Decimal128Val); ok {
+		// For Decimal128, we need to check if the trailing digits are all zeros
+		// using 128-bit arithmetic
+		return decimal128HasTrailingZeros(val.Decimal128Val.A, val.Decimal128Val.B, trailingDigits)
+	} else if sval, ok := lit.Value.(*plan.Literal_Sval); ok {
+		// The literal is a string, parse it as decimal
+		dec, _, err := types.Parse128(sval.Sval)
+		if err != nil {
+			return false
+		}
+		return decimal128HasTrailingZeros(int64(dec.B0_63), int64(dec.B64_127), trailingDigits)
+	}
+
+	return false
 }
 
-// isDecimalComparisonAlwaysFalse checks if a decimal comparison is always false
+// decimal128HasTrailingZeros checks if a 128-bit decimal value has trailing zeros
+// that can be safely truncated. The value is represented as two int64 parts:
+// low (bits 0-63) and high (bits 64-127).
+func decimal128HasTrailingZeros(low, high int64, trailingDigits int32) bool {
+	if trailingDigits <= 0 || trailingDigits > 18 {
+		return false
+	}
+
+	divisor := int64(types.Pow10[trailingDigits])
+
+	// If high part is zero, we can just check the low part
+	if high == 0 {
+		return low%divisor == 0
+	}
+
+	// For values with non-zero high part, we need 128-bit modulo
+	// Use types.Decimal128 for proper 128-bit arithmetic
+	d128 := types.Decimal128{B0_63: uint64(low), B64_127: uint64(high)}
+	divisorDec := types.Decimal128{B0_63: uint64(divisor), B64_127: 0}
+
+	// Compute d128 % divisorDec
+	remainder, err := d128.Mod128(divisorDec)
+	if err != nil {
+		return false
+	}
+
+	return remainder.B0_63 == 0 && remainder.B64_127 == 0
+}
+
+// isDecimalComparisonAlwaysFalseCore checks if a decimal comparison is always false
 // This happens when the constant has non-zero digits beyond the column's scale
-func isDecimalComparisonAlwaysFalse(constExpr *plan.Expr, constT types.Type, columnScale int32) bool {
+func isDecimalComparisonAlwaysFalseCore(constExpr *plan.Expr, constT types.Type, columnScale int32) bool {
 	if constT.Scale <= columnScale {
 		return false
 	}
@@ -1568,6 +1589,55 @@ func isDecimalComparisonAlwaysFalse(constExpr *plan.Expr, constT types.Type, col
 
 	// Has non-zero trailing digits, comparison is always false
 	return true
+}
+
+// isDecimalComparisonAlwaysFalse checks if a decimal equality comparison between two expressions is always false
+// Wrapper function that identifies column and constant, then calls the core logic
+func isDecimalComparisonAlwaysFalse(ctx context.Context, expr1, expr2 *plan.Expr) bool {
+	// Unwrap Cast expressions to get the underlying column/literal
+	unwrap1 := unwrapCast(expr1)
+	unwrap2 := unwrapCast(expr2)
+
+	// Identify which is column and which is constant
+	var colExpr, constExpr *plan.Expr
+	var origConstExpr *plan.Expr
+
+	if unwrap1.GetCol() != nil && unwrap2.GetLit() != nil {
+		colExpr, constExpr = unwrap1, unwrap2
+		origConstExpr = expr2
+	} else if unwrap2.GetCol() != nil && unwrap1.GetLit() != nil {
+		colExpr, constExpr = unwrap2, unwrap1
+		origConstExpr = expr1
+	} else {
+		return false // Not a column-constant comparison
+	}
+
+	// Use unwrapped column for its original type, and original constant for its type
+	colType := makeTypeByPlan2Expr(colExpr)
+	constType := makeTypeByPlan2Expr(origConstExpr)
+
+	if !colType.Oid.IsDecimal() || !constType.Oid.IsDecimal() {
+		return false
+	}
+
+	// Call the core logic
+	return isDecimalComparisonAlwaysFalseCore(constExpr, constType, colType.Scale)
+}
+
+// unwrapCast extracts the underlying expression from a Cast function
+// Returns the original expression if it's not a Cast
+func unwrapCast(expr *plan.Expr) *plan.Expr {
+	if expr == nil {
+		return nil
+	}
+
+	if funcExpr := expr.GetF(); funcExpr != nil {
+		if funcExpr.Func.ObjName == "cast" && len(funcExpr.Args) > 0 {
+			return funcExpr.Args[0]
+		}
+	}
+
+	return expr
 }
 
 func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr) bool {
@@ -1635,10 +1705,14 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr) bool {
 		case types.T_uint64:
 			return constVal >= 0
 		case types.T_float32:
-			//float32 has 6 significant digits.
-			return constVal <= 100000 && constVal >= -100000
+			// float32 has ~7 decimal digits of precision (IEEE 754 single precision: 24 bits mantissa)
+			// Safe range: -16777216 to 16777216 (2^24, exact integer representation)
+			// For general values, use conservative limit to avoid precision loss
+			return constVal <= 16777216 && constVal >= -16777216
 		case types.T_float64:
-			//float64 has 15 significant digits.
+			// float64 has ~15-16 decimal digits of precision (IEEE 754 double precision: 53 bits mantissa)
+			// Safe range: -9007199254740992 to 9007199254740992 (2^53, exact integer representation)
+			// Use MaxInt32 as conservative limit for practical purposes
 			return constVal <= int64(math.MaxInt32) && constVal >= int64(math.MinInt32)
 		case types.T_decimal64:
 			return constVal <= int64(math.MaxInt32) && constVal >= int64(math.MinInt32)
@@ -1672,10 +1746,11 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr) bool {
 		case types.T_uint64:
 			return true
 		case types.T_float32:
-			//float32 has 6 significant digits.
-			return constVal <= 100000
+			// float32 safe range for exact integer representation: 0 to 2^24 (16777216)
+			return constVal <= 16777216
 		case types.T_float64:
-			//float64 has 15 significant digits.
+			// float64 safe range for exact integer representation: 0 to 2^53
+			// Use MaxUint32 as conservative limit
 			return constVal <= math.MaxUint32
 		case types.T_decimal64:
 			return constVal <= math.MaxInt32

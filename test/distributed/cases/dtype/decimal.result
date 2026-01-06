@@ -1138,6 +1138,7 @@ SELECT * FROM decimal15;
 -28.32320  ¦  387213.0  ¦  3.2132313E7  𝄀
 null  ¦  327.32892  ¦  -38922.2123
 INSERT INTO decimal15 VALUES(271.212121,387213.0,3289);
+-- @regex("Duplicate entry", true)
 Duplicate entry '271.21212' for key 'a'
 DROP TABLE decimal15;
 DROP TABLE IF EXISTS decimal16;
@@ -1397,8 +1398,7 @@ EXPLAIN SELECT * FROM decimal_opt_test WHERE price = 99.991234567;
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Table Scan on decimal.decimal_opt_test  𝄀
-        Filter Cond: (cast(decimal_opt_test.price AS DECIMAL64(10, 9)) = 99.991234567)
-              -- HINT: Cast expression may prevent index usage
+        Filter Cond: false
 SELECT * FROM decimal_opt_test WHERE price = 99.991234567;
 ➤ id[4,32,0]  ¦  price[3,10,2]  ¦  amount[3,20,5]  ¦  quantity[3,19,0]
 EXPLAIN SELECT * FROM decimal_opt_test WHERE price = 99.99;
@@ -1496,26 +1496,120 @@ EXPLAIN SELECT * FROM decimal_opt_test WHERE price = 99.991234567;
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Table Scan on decimal.decimal_opt_test  𝄀
-        Filter Cond: (cast(decimal_opt_test.price AS DECIMAL64(10, 9)) = 99.991234567)
-              -- HINT: Cast expression may prevent index usage
+        Filter Cond: false
+SELECT COUNT(*) FROM decimal_opt_test WHERE price = 99.991234567;
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+SELECT COUNT(*) FROM decimal_opt_test WHERE amount = 12.3456789012;
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+SELECT COUNT(*) FROM decimal_opt_test WHERE price = 99.990000000;
+➤ COUNT(*)[-5,64,0]  𝄀
+0
 INSERT INTO decimal_opt_test VALUES (4, -50.50, -10.12345, -100);
-EXPLAIN ANALYZE SELECT * FROM decimal_opt_test WHERE price = -50.500000;
-➤ tp query plan[12,-1,0]  𝄀
+EXPLAIN SELECT * FROM decimal_opt_test WHERE price = -50.500000;
+-- @regex("Index Table Scan.*idx_price", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
-  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=44 bytes OutputSize=44 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=44 bytes (min=44 bytes, max=44 bytes)  𝄀
   ->  Join  𝄀
-        Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=1 (min=1, max=1) InputSize=48 bytes OutputSize=44 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=4 bytes (min=0 bytes, max=4 bytes)  𝄀
         Join Type: INDEX  𝄀
         Join Cond: (decimal_opt_test.id = __mo_index_pri_col)  𝄀
         Runtime Filter Build: #[-1,0]  𝄀
         ->  Table Scan on decimal.decimal_opt_test [ForceOneCN]  𝄀
-              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=1 outputRows=1 (min=1, max=1) InputSize=44 bytes OutputSize=44 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=89 bytes (min=44 bytes, max=44 bytes)  𝄀
               Filter Cond: (decimal_opt_test.price = -50.50)  𝄀
               Runtime Filter Probe: decimal_opt_test.id  𝄀
         ->  Index Table Scan on decimal_opt_test.idx_price [ForceOneCN]  𝄀
-              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=1 outputRows=1 (min=1, max=1) InputSize=28 bytes OutputSize=4 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=33 bytes (min=4 bytes, max=28 bytes)  𝄀
               Filter Cond: prefix_eq(__mo_index_idx_col)
 SELECT * FROM decimal_opt_test WHERE price = -50.500000;
 ➤ id[4,32,0]  ¦  price[3,10,2]  ¦  amount[3,20,5]  ¦  quantity[3,19,0]  𝄀
 4  ¦  -50.50  ¦  -10.12345  ¦  -100
 DROP TABLE decimal_opt_test;
+DROP TABLE IF EXISTS decimal128_large_test;
+CREATE TABLE decimal128_large_test (
+id INT PRIMARY KEY,
+large_val DECIMAL(38, 0),
+large_val_scale DECIMAL(38, 6)
+);
+CREATE INDEX idx_large_val ON decimal128_large_test(large_val);
+CREATE INDEX idx_large_val_scale ON decimal128_large_test(large_val_scale);
+INSERT INTO decimal128_large_test VALUES
+(1, 12345678901234567890, 12345678901234567890.123456),
+(2, 99999999999999999999, 99999999999999999999.000000),
+(3, 12345678901234567891, 12345678901234567890.123000);
+SELECT * FROM decimal128_large_test WHERE large_val = 12345678901234567890.000000;
+➤ id[4,32,0]  ¦  large_val[3,39,0]  ¦  large_val_scale[3,38,6]  𝄀
+1  ¦  12345678901234567890  ¦  12345678901234567890.123456
+SELECT * FROM decimal128_large_test WHERE large_val = 12345678901234567890.123456;
+➤ id[4,32,0]  ¦  large_val[3,39,0]  ¦  large_val_scale[3,38,6]
+SELECT * FROM decimal128_large_test WHERE large_val_scale = 12345678901234567890.123456;
+➤ id[4,32,0]  ¦  large_val[3,39,0]  ¦  large_val_scale[3,38,6]  𝄀
+1  ¦  12345678901234567890  ¦  12345678901234567890.123456
+SELECT * FROM decimal128_large_test WHERE large_val_scale = 12345678901234567890.123000;
+➤ id[4,32,0]  ¦  large_val[3,39,0]  ¦  large_val_scale[3,38,6]  𝄀
+3  ¦  12345678901234567891  ¦  12345678901234567890.123000
+SELECT COUNT(*) FROM decimal128_large_test WHERE large_val_scale = 12345678901234567890.123456789;
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+SELECT * FROM decimal128_large_test WHERE large_val = 99999999999999999999.00000;
+➤ id[4,32,0]  ¦  large_val[3,39,0]  ¦  large_val_scale[3,38,6]  𝄀
+2  ¦  99999999999999999999  ¦  99999999999999999999.000000
+DELETE FROM decimal128_large_test WHERE large_val = 12345678901234567890.000000;
+SELECT * FROM decimal128_large_test ORDER BY id;
+➤ id[4,32,0]  ¦  large_val[3,39,0]  ¦  large_val_scale[3,38,6]  𝄀
+2  ¦  99999999999999999999  ¦  99999999999999999999.000000  𝄀
+3  ¦  12345678901234567891  ¦  12345678901234567890.123000
+DROP TABLE decimal128_large_test;
+DROP TABLE IF EXISTS decimal_neq_test;
+CREATE TABLE decimal_neq_test (
+id INT PRIMARY KEY,
+price DECIMAL(10, 2)
+);
+INSERT INTO decimal_neq_test VALUES (1, 99.99), (2, 199.99), (3, 299.99);
+EXPLAIN SELECT * FROM decimal_neq_test WHERE price <> 99.991234567;
+-- @regex("Filter Cond: true", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Table Scan on decimal.decimal_neq_test  𝄀
+        Filter Cond: true
+SELECT COUNT(*) FROM decimal_neq_test WHERE price <> 99.991234567;
+➤ COUNT(*)[-5,64,0]  𝄀
+3
+EXPLAIN SELECT * FROM decimal_neq_test WHERE price <> 99.990000000;
+-- @regex("price.*<>.*99.99", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Table Scan on decimal.decimal_neq_test  𝄀
+        Filter Cond: (decimal_neq_test.price <> 99.990000000)
+SELECT COUNT(*) FROM decimal_neq_test WHERE price <> 99.990000000;
+➤ COUNT(*)[-5,64,0]  𝄀
+2
+SELECT COUNT(*) FROM decimal_neq_test WHERE price <> 99.99;
+➤ COUNT(*)[-5,64,0]  𝄀
+2
+SELECT * FROM decimal_neq_test WHERE price <> 99.991234567 AND id > 1 ORDER BY id;
+➤ id[4,32,0]  ¦  price[3,10,2]  𝄀
+2  ¦  199.99  𝄀
+3  ¦  299.99
+DROP TABLE decimal_neq_test;
+DROP TABLE IF EXISTS float_precision_test;
+CREATE TABLE float_precision_test (
+id INT PRIMARY KEY,
+f32_col FLOAT,
+f64_col DOUBLE
+);
+INSERT INTO float_precision_test VALUES
+(1, 1000000.0, 1000000.0),
+(2, 16777216.0, 16777216.0);
+SELECT * FROM float_precision_test WHERE f32_col = 1000000;
+➤ id[4,32,0]  ¦  f32_col[7,24,0]  ¦  f64_col[8,54,0]  𝄀
+1  ¦  1000000.0  ¦  1000000.0
+SELECT * FROM float_precision_test WHERE f32_col = 16777216;
+➤ id[4,32,0]  ¦  f32_col[7,24,0]  ¦  f64_col[8,54,0]  𝄀
+2  ¦  1.6777216E7  ¦  1.6777216E7
+SELECT COUNT(*) FROM float_precision_test WHERE f32_col = 16777217;
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+SELECT * FROM float_precision_test WHERE f64_col = 1000000;
+➤ id[4,32,0]  ¦  f32_col[7,24,0]  ¦  f64_col[8,54,0]  𝄀
+1  ¦  1000000.0  ¦  1000000.0
+DROP TABLE float_precision_test;

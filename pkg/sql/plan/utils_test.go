@@ -232,14 +232,8 @@ func TestBindFuncExprWithTrailingZeros(t *testing.T) {
 			shouldUseColType: true,
 			description:      "99.990000000 has trailing zeros, should use column scale 2",
 		},
-		{
-			name:             "no trailing zeros - should NOT use col type",
-			colScale:         2,
-			constValue:       "99.991234567",
-			constScale:       9,
-			shouldUseColType: false,
-			description:      "99.991234567 has non-zero trailing digits, should use higher scale 9",
-		},
+		// Note: Removed "no trailing zeros - should NOT use col type" test case
+		// because it triggers early false detection optimization which returns FALSE directly.
 	}
 
 	for _, tt := range tests {
@@ -320,6 +314,123 @@ func TestBindFuncExprWithTrailingZeros(t *testing.T) {
 				require.Equal(t, expectedScale, rightScale, "Right arg should have higher scale")
 				t.Logf("✓ No optimization: using higher scale %d", expectedScale)
 			}
+		})
+	}
+}
+
+// TestDecimal128HasTrailingZeros tests the decimal128HasTrailingZeros function
+// specifically for large values that use the high 64 bits
+func TestDecimal128HasTrailingZeros(t *testing.T) {
+	tests := []struct {
+		name           string
+		value          string
+		constScale     int32
+		columnScale    int32
+		expectTrailing bool
+		description    string
+	}{
+		{
+			name:           "Large value with trailing zeros",
+			value:          "12345678901234567890.000000",
+			constScale:     6,
+			columnScale:    0,
+			expectTrailing: true,
+			description:    "20-digit integer with 6 trailing zeros",
+		},
+		{
+			name:           "Large value without trailing zeros",
+			value:          "12345678901234567890.123456",
+			constScale:     6,
+			columnScale:    0,
+			expectTrailing: false,
+			description:    "20-digit value with non-zero fractional part",
+		},
+		{
+			name:           "Large value partial trailing zeros",
+			value:          "12345678901234567890.123000",
+			constScale:     6,
+			columnScale:    3,
+			expectTrailing: true,
+			description:    "20-digit value with 3 trailing zeros (scale 6 to 3)",
+		},
+		{
+			name:           "Large value partial no trailing zeros",
+			value:          "12345678901234567890.123456",
+			constScale:     6,
+			columnScale:    3,
+			expectTrailing: false,
+			description:    "20-digit value without trailing zeros (scale 6 to 3)",
+		},
+		{
+			name:           "Max Decimal128 range with trailing zeros",
+			value:          "99999999999999999999999999999999.00000",
+			constScale:     5,
+			columnScale:    0,
+			expectTrailing: true,
+			description:    "Near max value with trailing zeros",
+		},
+		{
+			name:           "Small value high bits zero",
+			value:          "123.000000",
+			constScale:     6,
+			columnScale:    0,
+			expectTrailing: true,
+			description:    "Small value (high bits = 0) with trailing zeros",
+		},
+		{
+			name:           "Small value high bits zero no trailing",
+			value:          "123.456789",
+			constScale:     6,
+			columnScale:    0,
+			expectTrailing: false,
+			description:    "Small value (high bits = 0) without trailing zeros",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dec, _, err := types.Parse128(tt.value)
+			require.NoError(t, err)
+
+			t.Logf("Value: %s", tt.value)
+			t.Logf("Decimal128: low=%d, high=%d", dec.B0_63, dec.B64_127)
+			t.Logf("ConstScale: %d, ColumnScale: %d", tt.constScale, tt.columnScale)
+
+			// Test decimal128HasTrailingZeros directly
+			trailingDigits := tt.constScale - tt.columnScale
+			result := decimal128HasTrailingZeros(int64(dec.B0_63), int64(dec.B64_127), trailingDigits)
+
+			t.Logf("TrailingDigits: %d, Expected: %v, Got: %v", trailingDigits, tt.expectTrailing, result)
+			require.Equal(t, tt.expectTrailing, result, tt.description)
+
+			// Also test through hasTrailingZeros wrapper
+			constExpr := &plan.Expr{
+				Typ: plan.Type{
+					Id:    int32(types.T_decimal128),
+					Width: 38,
+					Scale: tt.constScale,
+				},
+				Expr: &plan.Expr_Lit{
+					Lit: &plan.Literal{
+						Isnull: false,
+						Value: &plan.Literal_Decimal128Val{
+							Decimal128Val: &plan.Decimal128{
+								A: int64(dec.B0_63),
+								B: int64(dec.B64_127),
+							},
+						},
+					},
+				},
+			}
+
+			constType := types.Type{
+				Oid:   types.T_decimal128,
+				Width: 38,
+				Scale: tt.constScale,
+			}
+
+			wrapperResult := hasTrailingZeros(constExpr, constType, tt.columnScale)
+			require.Equal(t, tt.expectTrailing, wrapperResult, "hasTrailingZeros wrapper result mismatch")
 		})
 	}
 }
