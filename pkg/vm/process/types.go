@@ -21,9 +21,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/taskservice"
-
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/google/uuid"
 	"github.com/hayageek/threadsafe"
@@ -40,11 +37,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/stage"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -126,6 +125,13 @@ type SessionInfo struct {
 	SourceInMemScanBatch []*kafka.Message
 	LogLevel             zapcore.Level
 	SessionId            uuid.UUID
+}
+
+type Session interface {
+	GetTempTable(dbName, alias string) (string, bool)
+	AddTempTable(dbName, alias, realName string)
+	RemoveTempTable(dbName, alias string)
+	RemoveTempTableByRealName(realName string)
 }
 
 type ExecStatus int
@@ -317,8 +323,9 @@ type Process struct {
 
 	// Ctx and Cancel are pipeline's context and cancel function.
 	// Every pipeline has its own context, and the lifecycle of the pipeline is controlled by the context.
-	Ctx    context.Context
-	Cancel context.CancelCauseFunc
+	Ctx     context.Context
+	Cancel  context.CancelCauseFunc
+	Session Session
 }
 
 type sqlHelper interface {
@@ -342,6 +349,10 @@ type WrapCs struct {
 //
 // remote run Server will use this channel to send information to dispatch operator.
 type RemotePipelineInformationChannel chan *WrapCs
+
+func (proc *Process) GetSession() Session {
+	return proc.Session
+}
 
 func (proc *Process) GetMessageBoard() *message.MessageBoard {
 	return proc.Base.messageBoard

@@ -72,11 +72,11 @@ invalid argument cast to int, bad value 1a
 select cast('' as signed);
 invalid argument cast to int, bad value 
 select cast("2001-1-1" as date) = "2001-01-01";
-➤ cast(2001-1-1 as date) = 2001-01-01[12,4,0]  𝄀
-true
+➤ cast(2001-1-1 as date) = 2001-01-01[-7,1,0]  𝄀
+1
 select cast("2001-1-1" as datetime) = "2001-01-01 00:00:00";
-➤ cast(2001-1-1 as datetime) = 2001-01-01 00:00:00[12,4,0]  𝄀
-true
+➤ cast(2001-1-1 as datetime) = 2001-01-01 00:00:00[-7,1,0]  𝄀
+1
 select cast(NULL as DATE);
 ➤ cast(null as date)[91,64,0]  𝄀
 null
@@ -176,7 +176,7 @@ SELECT CAST(col_char AS DATE) FROM t;
 null  𝄀
 null
 SELECT col_char <> col_date FROM t;
-➤ col_char != col_date[12,4,0]  𝄀
+➤ col_char != col_date[-7,1,0]  𝄀
 null  𝄀
 null
 DROP TABLE t;
@@ -237,14 +237,14 @@ select a-b  from t1 order by 1;
 1  𝄀
 4294967294
 select a-b , (a-b < 0)  from t1 order by 1;
-➤ a - b[4,32,0]  ¦  a - b < 0[12,4,0]  𝄀
-0  ¦  false  𝄀
-1  ¦  false  𝄀
-4294967294  ¦  false
+➤ a - b[4,32,0]  ¦  a - b < 0[-7,1,0]  𝄀
+0  ¦  0  𝄀
+1  ¦  0  𝄀
+4294967294  ¦  0
 select any_value(a)-b as d, (any_value(a)-b >= 0), b from t1 group by b having d >= 0;
-➤ d[4,32,0]  ¦  any_value(a) - b >= 0[12,4,0]  ¦  b[4,32,0]  𝄀
-1  ¦  true  ¦  0  𝄀
-0  ¦  true  ¦  1
+➤ d[4,32,0]  ¦  any_value(a) - b >= 0[-7,1,0]  ¦  b[4,32,0]  𝄀
+1  ¦  1  ¦  0  𝄀
+0  ¦  1  ¦  1
 select cast((a - b) as unsigned) from t1 order by 1;
 ➤ cast((a - b) as b unsigned)[-5,64,0]  𝄀
 0  𝄀

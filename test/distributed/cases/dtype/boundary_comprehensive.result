@@ -106,9 +106,9 @@ val2 FLOAT
 INSERT INTO t_float_cmp VALUES (1, 0.1, 0.1);
 INSERT INTO t_float_cmp VALUES (2, 0.1 + 0.1 + 0.1, 0.3);
 SELECT id, val1, val2, val1 = val2 FROM t_float_cmp ORDER BY id;
-➤ id[4,32,0]  ¦  val1[7,24,0]  ¦  val2[7,24,0]  ¦  val1 = val2[12,4,0]  𝄀
-1  ¦  0.1  ¦  0.1  ¦  true  𝄀
-2  ¦  0.3  ¦  0.3  ¦  true
+➤ id[4,32,0]  ¦  val1[7,24,0]  ¦  val2[7,24,0]  ¦  val1 = val2[-7,1,0]  𝄀
+1  ¦  0.1  ¦  0.1  ¦  1  𝄀
+2  ¦  0.3  ¦  0.3  ¦  1
 DROP TABLE t_float_cmp;
 DROP TABLE IF EXISTS t_varchar;
 CREATE TABLE t_varchar (
@@ -124,11 +124,11 @@ INSERT INTO t_varchar (short_str) VALUES ('');
 INSERT INTO t_varchar (short_str) VALUES (NULL);
 SELECT id, short_str, LENGTH(short_str) AS len, short_str IS NULL AS is_null
 FROM t_varchar ORDER BY id;
-➤ id[4,32,0]  ¦  short_str[12,-1,0]  ¦  len[-5,64,0]  ¦  is_null[12,4,0]  𝄀
-1  ¦  1234567890  ¦  10  ¦  false  𝄀
-2  ¦  12345  ¦  5  ¦  false  𝄀
-3  ¦    ¦  0  ¦  false  𝄀
-4  ¦  null  ¦  null  ¦  true
+➤ id[4,32,0]  ¦  short_str[12,-1,0]  ¦  len[-5,64,0]  ¦  is_null[-7,1,0]  𝄀
+1  ¦  1234567890  ¦  10  ¦  0  𝄀
+2  ¦  12345  ¦  5  ¦  0  𝄀
+3  ¦    ¦  0  ¦  0  𝄀
+4  ¦  null  ¦  null  ¦  1
 INSERT INTO t_varchar (short_str) VALUES ('中文测试');
 INSERT INTO t_varchar (short_str) VALUES ('🎉🎊');
 SELECT id, short_str, LENGTH(short_str) AS bytes, CHAR_LENGTH(short_str) AS chars
@@ -243,10 +243,10 @@ str_col,
 str_col IS NULL AS is_null,
 str_col = '' AS is_empty
 FROM t_null_test ORDER BY id;
-➤ id[4,32,0]  ¦  str_col[12,-1,0]  ¦  is_null[12,4,0]  ¦  is_empty[12,4,0]  𝄀
-1  ¦  null  ¦  true  ¦  null  𝄀
-2  ¦    ¦  false  ¦  true  𝄀
-3  ¦  0  ¦  false  ¦  false
+➤ id[4,32,0]  ¦  str_col[12,-1,0]  ¦  is_null[-7,1,0]  ¦  is_empty[-7,1,0]  𝄀
+1  ¦  null  ¦  1  ¦  null  𝄀
+2  ¦    ¦  0  ¦  1  𝄀
+3  ¦  0  ¦  0  ¦  0
 SELECT * FROM t_null_test WHERE int_col IS NULL;
 ➤ id[4,32,0]  ¦  str_col[12,-1,0]  ¦  int_col[4,32,0]  𝄀
 1  ¦  null  ¦  null
@@ -386,10 +386,10 @@ str IS NULL AS is_null,
 str = '' AS is_empty,
 LENGTH(str) AS len
 FROM t_str_empty ORDER BY id;
-➤ id[4,32,0]  ¦  str[12,-1,0]  ¦  is_null[12,4,0]  ¦  is_empty[12,4,0]  ¦  len[-5,64,0]  𝄀
-1  ¦  null  ¦  true  ¦  null  ¦  null  𝄀
-2  ¦    ¦  false  ¦  true  ¦  0  𝄀
-3  ¦     ¦  false  ¦  false  ¦  1
+➤ id[4,32,0]  ¦  str[12,-1,0]  ¦  is_null[-7,1,0]  ¦  is_empty[-7,1,0]  ¦  len[-5,64,0]  𝄀
+1  ¦  null  ¦  1  ¦  null  ¦  null  𝄀
+2  ¦    ¦  0  ¦  1  ¦  0  𝄀
+3  ¦     ¦  0  ¦  0  ¦  1
 SELECT id, CONCAT('prefix-', str, '-suffix') FROM t_str_empty ORDER BY id;
 ➤ id[4,32,0]  ¦  CONCAT(prefix-, str, -suffix)[12,-1,0]  𝄀
 1  ¦  null  𝄀

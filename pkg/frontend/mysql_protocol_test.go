@@ -4628,7 +4628,7 @@ func Test_appendResultSetTextRow_DateTimeCoverage(t *testing.T) {
 			mysqlCol.SetColumnType(defines.MYSQL_TYPE_BOOL)
 			rs.AddColumn(mysqlCol)
 
-			rs.AddRow([]interface{}{"true"})
+			rs.AddRow([]interface{}{true})
 
 			err := proto.appendResultSetTextRow(rs, 0)
 			convey.So(err, convey.ShouldBeNil)

@@ -236,8 +236,8 @@ select Fld1, BIT_AND(Fld2),BIT_OR(Fld2), BIT_XOR(Fld2) from t1 group by Fld1 hav
 3  ¦  50  ¦  50  ¦  50
 drop table t1;
 SELECT BIT_AND(1)<BIT_AND(2), BIT_AND(1)>BIT_OR(3), BIT_AND(3)>BIT_XOR(5);
-➤ BIT_AND(1) < BIT_AND(2)[12,4,0]  ¦  BIT_AND(1) > BIT_OR(3)[12,4,0]  ¦  BIT_AND(3) > BIT_XOR(5)[12,4,0]  𝄀
-true  ¦  false  ¦  false
+➤ BIT_AND(1) < BIT_AND(2)[-7,1,0]  ¦  BIT_AND(1) > BIT_OR(3)[-7,1,0]  ¦  BIT_AND(3) > BIT_XOR(5)[-7,1,0]  𝄀
+1  ¦  0  ¦  0
 SELECT BIT_AND(1 - 1), BIT_OR(1 - (-1)), BIT_XOR(1 / 0);
 ➤ BIT_AND(1 - 1)[-5,64,0]  ¦  BIT_OR(1 - (-1))[-5,64,0]  ¦  BIT_XOR(1 / 0)[-5,64,0]  𝄀
 0  ¦  2  ¦  null

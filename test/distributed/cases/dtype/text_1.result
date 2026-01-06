@@ -301,28 +301,28 @@ insert into t8(col12) values ('0');
 insert into t8(col12) values (1);
 insert into t8(col12) values (0);
 select cast(col12 as bool) from t8;
-➤ cast(col12 as bool)[12,4,0]  𝄀
-true  𝄀
-false  𝄀
-true  𝄀
-false
+➤ cast(col12 as bool)[-7,1,0]  𝄀
+1  𝄀
+0  𝄀
+1  𝄀
+0
 delete from t8 where col12 is not NULL;
 insert into t8(col12) values ('true');
 insert into t8(col12) values ('trUe');
 insert into t8(col12) values ('falSe');
 select cast(col12 as bool) from t8;
-➤ cast(col12 as bool)[12,4,0]  𝄀
-true  𝄀
-true  𝄀
-false
+➤ cast(col12 as bool)[-7,1,0]  𝄀
+1  𝄀
+1  𝄀
+0
 insert into t8(col12) values ('hello');
 select cast(col12 as bool) from t8;
 invalid input: 'hello' is not a valid bool expression
 delete from t8 where col12 is not NULL;
 insert into t8(col12) values ('2');
 select cast(col12 as bool) from t8;
-➤ cast(col12 as bool)[12,4,0]  𝄀
-true
+➤ cast(col12 as bool)[-7,1,0]  𝄀
+1
 delete from t8 where col12 is not NULL;
 insert into t8(col13) values ('12345.123456789');
 insert into t8(col13) values (12345.123456789);
@@ -383,8 +383,8 @@ insert into t9 values ('', 'abcd');
 insert into t1 values ('1111', '');
 no such table text_1.t1
 select empty(a),empty(b) from t9;
-➤ empty(a)[12,4,0]  ¦  empty(b)[12,4,0]  𝄀
-true  ¦  false
+➤ empty(a)[-7,1,0]  ¦  empty(b)[-7,1,0]  𝄀
+1  ¦  0
 insert into t9 values ('a', 'b');
 insert into t9 values ('aa', 'bb');
 select a, length(a), b, length(b) from t9;
@@ -434,15 +434,15 @@ select RPAD(b, 8, '!') from t9;
 delete from t9 where a is not NULL;
 insert into t9 values ('Ananya Majumdar', 'IX'),('Anushka Samanta', 'X'),('Sharma', 'XI');
 select startswith(a,'An') from t9;
-➤ startswith(a, An)[12,4,0]  𝄀
-true  𝄀
-true  𝄀
-false
+➤ startswith(a, An)[-7,1,0]  𝄀
+1  𝄀
+1  𝄀
+0
 select endswith(b,'X') from t9;
-➤ endswith(b, X)[12,4,0]  𝄀
-true  𝄀
-true  𝄀
-false
+➤ endswith(b, X)[-7,1,0]  𝄀
+1  𝄀
+1  𝄀
+0
 delete from t9 where a is not NULL;
 insert into t9 values('  sdfad  ','2022-02-02 22:22:22');
 insert into t9 values('sdfad  ','2022-02-02 22:22:22');

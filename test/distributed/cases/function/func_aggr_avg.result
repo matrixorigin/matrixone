@@ -95,8 +95,8 @@ select any_value(value),any_value(description),avg(bug_id) from t2 left join t1 
 TestComponent  ¦    ¦  1.0  𝄀
 TestComponent2  ¦    ¦  3.5
 SELECT avg(t1.bug_id) >= avg(t2.id) from t1 join t2 on t1.bug_file_loc = t2.value;
-➤ avg(t1.bug_id) >= avg(t2.id)[12,4,0]  𝄀
-true
+➤ avg(t1.bug_id) >= avg(t2.id)[-7,1,0]  𝄀
+1
 drop table t1;
 drop table t2;
 create table t1 (a int);

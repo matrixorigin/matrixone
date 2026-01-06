@@ -175,22 +175,22 @@ locate(null, null)
 null
 select locate('foo', null) is null;
 locate(foo, null) is null
-true
+1
 select locate(null, 'o') is null;
 locate(null, o) is null
-true
+1
 select locate(null, null) is null;
 locate(null, null) is null
-true
+1
 select isnull(locate('foo', null));
 isnull(locate(foo, null))
-true
+1
 select isnull(locate(null, 'o'));
 isnull(locate(null, o))
-true
+1
 select isnull(locate(null, null));
 isnull(locate(null, null))
-true
+1
 select locate('lo','hello',3) as result;
 result
 4
@@ -238,9 +238,9 @@ null
 prepare s2 from 'select isnull(locate(col1, col2)) from locate01';
 execute s2;
 isnull(locate(col1, col2))
-false
-true
-false
+0
+1
+0
 drop table locate01;
 drop table if exists locate02;
 create table locate02 (col1 tinytext, col2 text);
@@ -290,10 +290,10 @@ null
 prepare s2 from 'select isnull(locate(col1, col2)) from locate03';
 execute s2;
 isnull(locate(col1, col2))
-false
-true
-false
-false
-false
+0
+1
+0
+0
+0
 drop table locate03;
 drop database testx;
