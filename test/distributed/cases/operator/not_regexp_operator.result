@@ -1,192 +1,192 @@
 SELECT 'Corn' NOT REGEXP 'Corn' AS 'Corn';
 Corn
-false
+0
 SELECT 'Acorn' NOT REGEXP 'Corn' AS 'Acorn';
 Acorn
-true
+1
 SELECT 'Corner' NOT REGEXP 'Corn' AS 'Corner';
 Corner
-false
+0
 SELECT 'Cheese' NOT REGEXP 'Corn' AS 'Cheese';
 Cheese
-true
+1
 SELECT 'Corn' NOT REGEXP '^Co' AS 'Corn';
 Corn
-false
+0
 SELECT 'Acorn' NOT REGEXP '^Co' AS 'Acorn';
 Acorn
-true
+1
 SELECT 'Cheese' NOT REGEXP '^Co' AS 'Cheese';
 Cheese
-true
+1
 SELECT 'Corn' NOT REGEXP 'rn$' AS 'Corn';
 Corn
-false
+0
 SELECT 'Acorn' NOT REGEXP 'rn$' AS 'Acorn';
 Acorn
-false
+0
 SELECT 'Cheese' NOT REGEXP 'rn$' AS 'Cheese';
 Cheese
-true
+1
 SELECT 'Corn' NOT REGEXP '.' AS 'Corn';
 Corn
-false
+0
 SELECT 'Cheese' NOT REGEXP '.' AS 'Cheese';
 Cheese
-false
+0
 SELECT 'Corn' NOT REGEXP '^C.rn$' AS 'Corn';
 Corn
-false
+0
 SELECT 'Crn' NOT REGEXP '^C.rn$' AS 'Crn';
 Crn
-true
+1
 SELECT 'Tweet' NOT REGEXP '^Tw..t$' AS 'Tweet';
 Tweet
-false
+0
 SELECT 'Tweat' NOT REGEXP '^Tw..t$' AS 'Tweat';
 Tweat
-false
+0
 SELECT 'Tweet' NOT REGEXP '^Tw.t$' AS 'Tweet';
 Tweet
-true
+1
 SELECT 'Twit' NOT REGEXP '^Tw..t$' AS 'Twit';
 Twit
-true
+1
 SELECT 'Tweet' NOT REGEXP '^Tw.{2}t$' AS 'Tweet';
 Tweet
-false
+0
 SELECT 'Tweat' NOT REGEXP '^Tw.{2}t$' AS 'Tweat';
 Tweat
-false
+0
 SELECT 'Tweet' NOT REGEXP '^Tw.{1}t$' AS 'Tweet';
 Tweet
-true
+1
 SELECT 'Twit' NOT REGEXP '^Tw.{2}t$' AS 'Twit';
 Twit
-true
+1
 SELECT 'Twet' NOT REGEXP '^Twe*t$' AS 'Twet';
 Twet
-false
+0
 SELECT 'Tweet' NOT REGEXP '^Twe*t$' AS 'Tweet';
 Tweet
-false
+0
 SELECT 'Tweeet' NOT REGEXP '^Twe*t$' AS 'Tweeet';
 Tweet
-false
+0
 SELECT 'Twt' NOT REGEXP '^Twe*t$' AS 'Twt';
 Twt
-false
+0
 SELECT 'Twit' NOT REGEXP '^Twe*t$' AS 'Twit';
 Twit
-true
+1
 SELECT 'Twiet' NOT REGEXP '^Twe*t$' AS 'Twiet';
 Twiet
-true
+1
 SELECT 'Tweit' NOT REGEXP '^Twe*t$' AS 'Tweit';
 Tweit
-true
+1
 SELECT 'Twet' NOT REGEXP '^Twe+t$' AS 'Twet';
 Twet
-false
+0
 SELECT 'Tweet' NOT REGEXP '^Twe+t$' AS 'Tweet';
 Tweet
-false
+0
 SELECT 'Tweeet' NOT REGEXP '^Twe+t$' AS 'Tweeet';
 Tweeet
-false
+0
 SELECT 'Twt' NOT REGEXP '^Twe+t$' AS 'Twt';
 Twt
-true
+1
 SELECT 'Twit' NOT REGEXP '^Twe+t$' AS 'Twit';
 Twit
-true
+1
 SELECT 'Twiet' NOT REGEXP '^Twe+t$' AS 'Twiet';
 Twiet
-true
+1
 SELECT 'Tweit' NOT REGEXP '^Twe+t$' AS 'Tweit';
 Tweit
-true
+1
 SELECT 'Tweet' NOT REGEXP 'Tw|et' AS 'Tweet';
 Tweet
-false
+0
 SELECT 'For Let' NOT REGEXP 'Tw|et' AS 'For Let';
 For Let
-false
+0
 SELECT 'Banana' NOT REGEXP 'Tw|et' AS 'Banana';
 Banana
-true
+1
 SELECT 'Cat' NOT REGEXP 'Cat|Dog' AS 'Cat';
 Cat
-false
+0
 SELECT 'Dog' NOT REGEXP 'Cat|Dog' AS 'Dog';
 Dog
-false
+0
 SELECT 'Doggone' NOT REGEXP 'Cat|Dog' AS 'Doggone';
 Doggone
-false
+0
 SELECT 'Banana' NOT REGEXP 'Cat|Dog' AS 'Banana';
 Banana
-true
+1
 SELECT 'Banana' NOT REGEXP '(an)*' AS 'Banana';
 Banana
-false
+0
 SELECT 'Land' NOT REGEXP '(an)*' AS 'Land';
 Land
-false
+0
 SELECT 'Cheese' NOT REGEXP '(an)*' AS 'Cheese';
 Cheese
-false
+0
 SELECT 'Banana' NOT REGEXP '^B(an)*d$' AS 'Banana';
 Banana
-true
+1
 SELECT 'Band' NOT REGEXP '^B(an)*d$' AS 'Band';
 Band
-false
+0
 SELECT 'Bald' NOT REGEXP '^B(an)*d$' AS 'Bald';
 Bald
-true
+1
 SELECT 'Bad' NOT REGEXP '^B(an)*d$' AS 'Bad';
 Bad
-true
+1
 SELECT 'Tweeet' NOT REGEXP 'e{3}' AS 'Tweeet';
 Tweeet
-false
+0
 SELECT 'Tweet' NOT REGEXP 'e{3}' AS 'Tweet';
 Tweet
-true
+1
 SELECT 'Tweet 123' NOT REGEXP '[0-9]' AS 'Tweet123';
 Tweet123
-false
+0
 SELECT 'Tweet ABC' NOT REGEXP '[0-9]' AS 'TweetABC';
 TweetABC
-true
+1
 SELECT 'Tweet 123' NOT REGEXP '[A-Z]' AS 'Tweet123';
 Tweet123
-false
+0
 SELECT 'ABC' NOT REGEXP '[A-Z]' AS 'ABC';
 ABC
-false
+0
 SELECT '123' NOT REGEXP '[A-Z]' AS '123';
 123
-true
+1
 SELECT '123' NOT REGEXP '[1-3]' AS '123';
 123
-false
+0
 SELECT '012' NOT REGEXP '[1-3]' AS '012';
 012
-false
+0
 SELECT '045' NOT REGEXP '[1-3]' AS '045';
 045
-true
+1
 SELECT '123' NOT REGEXP '[^1-3]' AS '123';
 123
-true
+1
 SELECT '012' NOT REGEXP '[^1-3]' AS '012';
 012
-false
+0
 SELECT '045' NOT REGEXP '[^1-3]' AS '045';
 045
-false
+0
 create table t1(a int, b varchar(100));
 insert into t1 values(1 , "PowerSlave");
 insert into t1 values(2 , "Powerage");

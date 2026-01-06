@@ -107,8 +107,8 @@ INSERT INTO t_float_cmp VALUES (1, 0.1, 0.1);
 INSERT INTO t_float_cmp VALUES (2, 0.1 + 0.1 + 0.1, 0.3);
 SELECT id, val1, val2, val1 = val2 FROM t_float_cmp ORDER BY id;
 id    val1    val2    val1 = val2
-1    0.1    0.1    true
-2    0.3    0.3    true
+1    0.1    0.1    1
+2    0.3    0.3    1
 DROP TABLE t_float_cmp;
 DROP TABLE IF EXISTS t_varchar;
 CREATE TABLE t_varchar (
@@ -125,10 +125,10 @@ INSERT INTO t_varchar (short_str) VALUES (NULL);
 SELECT id, short_str, LENGTH(short_str) AS len, short_str IS NULL AS is_null
 FROM t_varchar ORDER BY id;
 id    short_str    len    is_null
-1    1234567890    10    false
-2    12345    5    false
-3        0    false
-4    null    null    true
+1    1234567890    10    0
+2    12345    5    0
+3        0    0
+4    null    null    1
 INSERT INTO t_varchar (short_str) VALUES ('中文测试');
 INSERT INTO t_varchar (short_str) VALUES ('🎉🎊');
 SELECT id, short_str, LENGTH(short_str) AS bytes, CHAR_LENGTH(short_str) AS chars
@@ -244,9 +244,9 @@ str_col IS NULL AS is_null,
 str_col = '' AS is_empty
 FROM t_null_test ORDER BY id;
 id    str_col    is_null    is_empty
-1    null    true    null
-2        false    true
-3    0    false    false
+1    null    1    null
+2        0    1
+3    0    0    0
 SELECT * FROM t_null_test WHERE int_col IS NULL;
 id    str_col    int_col
 1    null    null
@@ -386,9 +386,9 @@ str = '' AS is_empty,
 LENGTH(str) AS len
 FROM t_str_empty ORDER BY id;
 id    str    is_null    is_empty    len
-1    null    true    null    null
-2        false    true    0
-3         false    false    1
+1    null    1    null    null
+2        0    1    0
+3         0    0    1
 SELECT id, CONCAT('prefix-', str, '-suffix') FROM t_str_empty ORDER BY id;
 id    CONCAT(prefix-, str, -suffix)
 1    null

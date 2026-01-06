@@ -96,8 +96,8 @@ Andrea    F    45
 Kelly    F    54
 select cast(Age as char) and Age as cAge from Demovarchar where Age>=50 order by cAge desc;
 cAge
-true
-true
+1
+1
 CREATE TABLE employees (
 employeeNumber int(11) NOT NULL,
 lastName varchar(50) NOT NULL,
