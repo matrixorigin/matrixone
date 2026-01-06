@@ -4893,6 +4893,8 @@ func convertAstObjectTypeToObjectType(ctx context.Context, ot tree.ObjectType) (
 	switch ot {
 	case tree.OBJECT_TYPE_TABLE:
 		objType = objectTypeTable
+	case tree.OBJECT_TYPE_VIEW:
+		objType = objectTypeTable
 	case tree.OBJECT_TYPE_DATABASE:
 		objType = objectTypeDatabase
 	case tree.OBJECT_TYPE_ACCOUNT:
@@ -4913,7 +4915,7 @@ func checkPrivilegeObjectTypeAndPrivilegeLevel(ctx context.Context, ses FeSessio
 	var dbName string
 
 	switch ot {
-	case tree.OBJECT_TYPE_TABLE:
+	case tree.OBJECT_TYPE_TABLE, tree.OBJECT_TYPE_VIEW:
 		switch pl.Level {
 		case tree.PRIVILEGE_LEVEL_TYPE_STAR:
 			privLevel = privilegeLevelStar
