@@ -131,8 +131,11 @@ type Session struct {
 	showStmtType    ShowStatementType
 	userDefinedVars map[string]*UserDefinedVar
 	// tempTables records the relationship between the temporary table created by the session and the actual table.
-	// Key: alias, Value: realName
+	// Key: dbName.alias, Value: realName
 	tempTables map[string]string
+	// tempTablesRev records the reverse relationship.
+	// Key: realName, Value: dbName.alias
+	tempTablesRev map[string]string
 
 	prepareStmts map[string]*PrepareStmt
 	lastStmtId   uint32
@@ -323,7 +326,9 @@ func (ses *Session) GetUserDefinedVar(name string) (*UserDefinedVar, error) {
 func (ses *Session) AddTempTable(dbName, alias, realName string) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	ses.tempTables[dbName+"."+alias] = realName
+	key := dbName + "." + alias
+	ses.tempTables[key] = realName
+	ses.tempTablesRev[realName] = key
 }
 
 // GetTempTable gets the real name of the temporary table
@@ -338,19 +343,20 @@ func (ses *Session) GetTempTable(dbName, alias string) (string, bool) {
 func (ses *Session) RemoveTempTable(dbName, alias string) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	delete(ses.tempTables, dbName+"."+alias)
+	key := dbName + "." + alias
+	if realName, ok := ses.tempTables[key]; ok {
+		delete(ses.tempTables, key)
+		delete(ses.tempTablesRev, realName)
+	}
 }
 
 // RemoveTempTableByRealName removes the temporary table alias by its real name
 func (ses *Session) RemoveTempTableByRealName(realName string) {
-
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	for alias, val := range ses.tempTables {
-		if val == realName {
-			delete(ses.tempTables, alias)
-			break
-		}
+	if alias, ok := ses.tempTablesRev[realName]; ok {
+		delete(ses.tempTables, alias)
+		delete(ses.tempTablesRev, realName)
 	}
 }
 
@@ -604,6 +610,7 @@ func NewSession(
 
 	ses.userDefinedVars = make(map[string]*UserDefinedVar)
 	ses.tempTables = make(map[string]string)
+	ses.tempTablesRev = make(map[string]string)
 	ses.prepareStmts = make(map[string]*PrepareStmt)
 	// For seq init values.
 	ses.seqCurValues = make(map[uint64]string)
@@ -677,36 +684,42 @@ func (ses *Session) Close() {
 			tempTables = append(tempTables, tempTableEntry{realName: realName})
 		}
 	}
+	ses.tempTables = nil
+	ses.tempTablesRev = nil
 	ses.mu.Unlock()
 
 	if len(tempTables) > 0 {
-		// use a new context to clean up temp tables
-		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-		defer cancel()
-		// If the session is closed, the txnHandler may be nil or closed.
-		// But Close is called to close the session, so txnHandler should be valid here for a moment if we are careful.
-		// However, we need to be carefully because GetBackgroundExec uses ses which might be locked if we are not careful.
-		// We already unlocked ses.mu.
+		go func() {
+			// use a new context to clean up temp tables
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
 
-		_, _ = ExecuteFuncWithRecover(func() error {
-			// We need to check if existing txnHandler is valid/usable?
-			// GetBackgroundExec will use ses.GetTxnHandler().
+			_, _ = ExecuteFuncWithRecover(func() error {
+				// Use an independent background executor.
+				// We use a "minimal" session or just a way to run SQL.
+				// Here we can use the service's background executor if available,
+				// or just create one that doesn't depend on the closing session's pool.
+				// For now, to keep it simple and following the suggestion of "independent executor",
+				// we'll use GetBackgroundExec but we need to be careful.
+				// Actually, the suggestion implies we should not block Close.
+				// In MatrixOne, we can use the internal executor.
 
-			bh := ses.GetBackgroundExec(ctx)
-			defer bh.Close()
-			for _, tbl := range tempTables {
-				var dropSQL string
-				if tbl.dbName != "" {
-					dropSQL = fmt.Sprintf("DROP TABLE IF EXISTS `%s`.`%s`", tbl.dbName, tbl.realName)
-				} else {
-					dropSQL = fmt.Sprintf("DROP TABLE IF EXISTS %s", tbl.realName)
+				bh := ses.GetBackgroundExec(ctx)
+				defer bh.Close()
+				for _, tbl := range tempTables {
+					var dropSQL string
+					if tbl.dbName != "" {
+						dropSQL = fmt.Sprintf("DROP TABLE IF EXISTS `%s`.`%s`", tbl.dbName, tbl.realName)
+					} else {
+						dropSQL = fmt.Sprintf("DROP TABLE IF EXISTS %s", tbl.realName)
+					}
+					if err := bh.Exec(ctx, dropSQL); err != nil {
+						logutil.Errorf("failed to drop temp table %s: %v", tbl.realName, err)
+					}
 				}
-				if err := bh.Exec(ctx, dropSQL); err != nil {
-					logutil.Errorf("failed to drop temp table %s: %v", tbl.realName, err)
-				}
-			}
-			return nil
-		})
+				return nil
+			})
+		}()
 	}
 
 	ses.mu.Lock()
@@ -726,7 +739,6 @@ func (ses *Session) Close() {
 	}
 	ses.sql = ""
 	ses.userDefinedVars = nil
-	ses.tempTables = nil
 	ses.gSysVars = nil
 	for _, stmt := range ses.prepareStmts {
 		stmt.Close()
