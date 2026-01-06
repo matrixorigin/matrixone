@@ -324,7 +324,7 @@ CREATE SEQUENCE seq increment 100 start 30;
 table seq already exists
 SELECT * FROM SEQ;
 last_seq_num    min_value    max_value    start_value    increment_value    cycle    is_called
-30    1    9223372036854775807    30    100    false    false
+30    1    9223372036854775807    30    100    0    0
 SELECT laSt_seq_nuM,min_value,start_value FROM Seq;
 laSt_seq_nuM    min_value    start_value
 30    1    30
@@ -491,7 +491,7 @@ CREATE SEQUENCE `seq` increment 100 start 30;
 table seq already exists
 SELECT * FROM `SEQ`;
 last_seq_num    min_value    max_value    start_value    increment_value    cycle    is_called
-30    1    9223372036854775807    30    100    false    false
+30    1    9223372036854775807    30    100    0    0
 SELECT `laSt_seq_nuM`,`min_value`,`start_value` FROM Seq;
 laSt_seq_nuM    min_value    start_value
 30    1    30

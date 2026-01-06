@@ -3,11 +3,11 @@ create database testdb;
 use testdb;
 select enable_fault_injection();
 enable_fault_injection()
-true
+1
 create table t1(a int, b int, index(b));
 select add_fault_point('fj/cn/flush_small_objs',':::','echo',40,'testdb.t1');
 add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, testdb.t1)
-true
+1
 insert into t1 select *, * from generate_series(1, 40960)g;
 select a from t1 where b = 1;
 a
@@ -26,7 +26,7 @@ drop table t1;
 create table t2(a varchar, b varchar, index(b));
 select add_fault_point('fj/cn/flush_small_objs',':::','echo',40,'testdb.t2');
 add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, testdb.t2)
-true
+1
 insert into t2 values('1','2'),('3','4'),('5','6'),('7','8'),('a','b'),('c','d'),('e','f'),('g','h');
 insert into t2 select * from t2;
 insert into t2 select * from t2;
@@ -61,7 +61,7 @@ drop table t2;
 create table t3 (a float, b float, index(b));
 select add_fault_point('fj/cn/flush_small_objs',':::','echo',40,'testdb.t3');
 add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, testdb.t3)
-true
+1
 insert into t3 select *, * from generate_series(1, 40960)g;
 select a from t3 where b = 1;
 a
@@ -80,7 +80,7 @@ drop table t3;
 create table t4(a int primary key, b int);
 select add_fault_point('fj/cn/flush_small_objs',':::','echo',40,'testdb.t4');
 add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, testdb.t4)
-true
+1
 insert into t4 select *, * from generate_series(1, 40960)g;
 select b from t4 where a < 3;
 b
@@ -142,4 +142,4 @@ drop table t5;
 drop database testdb;
 select disable_fault_injection();
 disable_fault_injection()
-true
+1

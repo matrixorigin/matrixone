@@ -88,4 +88,149 @@ var supportedWindowInNewFramework = []FuncNew{
 			},
 		},
 	},
+	// LAG window function
+	{
+		functionId: LAG,
+		class:      plan.Function_WIN_VALUE,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			// LAG(expr) or LAG(expr, offset) or LAG(expr, offset, default)
+			if len(inputs) >= 1 && len(inputs) <= 3 {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isWin:      true,
+				retType: func(parameters []types.Type) types.Type {
+					// Return type is the same as the first parameter
+					if len(parameters) > 0 {
+						return parameters[0]
+					}
+					return types.T_any.ToType()
+				},
+				aggFramework: aggregationLogicOfOverload{
+					str:         "lag",
+					aggRegister: agg.RegisterLag,
+				},
+			},
+		},
+	},
+	// LEAD window function
+	{
+		functionId: LEAD,
+		class:      plan.Function_WIN_VALUE,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			// LEAD(expr) or LEAD(expr, offset) or LEAD(expr, offset, default)
+			if len(inputs) >= 1 && len(inputs) <= 3 {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isWin:      true,
+				retType: func(parameters []types.Type) types.Type {
+					// Return type is the same as the first parameter
+					if len(parameters) > 0 {
+						return parameters[0]
+					}
+					return types.T_any.ToType()
+				},
+				aggFramework: aggregationLogicOfOverload{
+					str:         "lead",
+					aggRegister: agg.RegisterLead,
+				},
+			},
+		},
+	},
+	// FIRST_VALUE window function
+	{
+		functionId: FIRST_VALUE,
+		class:      plan.Function_WIN_VALUE,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 1 {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isWin:      true,
+				retType: func(parameters []types.Type) types.Type {
+					if len(parameters) > 0 {
+						return parameters[0]
+					}
+					return types.T_any.ToType()
+				},
+				aggFramework: aggregationLogicOfOverload{
+					str:         "first_value",
+					aggRegister: agg.RegisterFirstValue,
+				},
+			},
+		},
+	},
+	// LAST_VALUE window function
+	{
+		functionId: LAST_VALUE,
+		class:      plan.Function_WIN_VALUE,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 1 {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isWin:      true,
+				retType: func(parameters []types.Type) types.Type {
+					if len(parameters) > 0 {
+						return parameters[0]
+					}
+					return types.T_any.ToType()
+				},
+				aggFramework: aggregationLogicOfOverload{
+					str:         "last_value",
+					aggRegister: agg.RegisterLastValue,
+				},
+			},
+		},
+	},
+	// NTH_VALUE window function
+	{
+		functionId: NTH_VALUE,
+		class:      plan.Function_WIN_VALUE,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			// NTH_VALUE(expr, n)
+			if len(inputs) == 2 {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isWin:      true,
+				retType: func(parameters []types.Type) types.Type {
+					if len(parameters) > 0 {
+						return parameters[0]
+					}
+					return types.T_any.ToType()
+				},
+				aggFramework: aggregationLogicOfOverload{
+					str:         "nth_value",
+					aggRegister: agg.RegisterNthValue,
+				},
+			},
+		},
+	},
 }

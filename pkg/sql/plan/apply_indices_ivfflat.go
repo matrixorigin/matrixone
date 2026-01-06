@@ -327,7 +327,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 	//   mode == "pre": JOIN( scanNode, JOIN(ivf_search, secondScan) )
 	var joinRootID int32
 
-	pushdownEnabled := ivfCtx.pushdownEnabled
+	pushdownEnabled := ivfCtx.pushdownEnabled && len(scanNode.FilterList) > 0
 
 	if pushdownEnabled {
 		// secondScanNode: copy original scanNode for JOIN(ivf, table)

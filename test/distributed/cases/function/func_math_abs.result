@@ -84,7 +84,7 @@ abs(1241) * abs(-0.4141)
 513.8981
 SELECT abs(-100)>abs(-102);
 abs(-100) > abs(-102)
-false
+0
 SELECT abs(-100)<>abs(100);
 abs(-100)<>abs(100)
-false
+0

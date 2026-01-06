@@ -268,3 +268,394 @@ func (exec *singleWindowExec) flushRowNumber() ([]*vector.Vector, error) {
 	}
 	return exec.ret.flushAll(), nil
 }
+
+// valueWindowExec is a window function executor for LAG, LEAD, FIRST_VALUE, LAST_VALUE, NTH_VALUE
+// These functions need to access values from other rows in the window
+//
+// For these window functions, Fill is called for each row j with all values k in the window frame.
+// - groupIndex is the current row index (j)
+// - row is the index of a value within the window frame (k)
+// - vectors contains the expression values
+//
+// The key insight is that for LAG/LEAD, we need to know the position of the current row
+// within the partition, not just within the frame. Since the frame is UNBOUNDED PRECEDING
+// to UNBOUNDED FOLLOWING, the frame contains all rows in the partition.
+//
+// For row j in a partition starting at position 'start':
+// - LAG(1) should return the value at position j-1 (if j > start)
+// - LEAD(1) should return the value at position j+1 (if j+1 < end)
+//
+// Since Fill is called with (j, k, vec) where k iterates through the frame,
+// we need to track which k corresponds to the current row j.
+type valueWindowExec struct {
+	singleAggInfo
+	mp *mpool.MPool
+
+	// For each output row (groupIndex), store the values from its window frame
+	// frameValues[groupIndex] contains all values in the window frame for that row
+	frameValues [][]*valueEntry
+
+	// For each output row, store its position within the frame
+	// This is the index where the current row's value appears in frameValues[groupIndex]
+	currentRowPosition []int
+
+	// Result vector
+	resultVec *vector.Vector
+}
+
+// valueEntry stores a single value from the window frame
+type valueEntry struct {
+	isNull bool
+	data   []byte
+}
+
+func (exec *valueWindowExec) GroupGrow(more int) error {
+	// Grow the frameValues slice to accommodate more groups
+	for i := 0; i < more; i++ {
+		exec.frameValues = append(exec.frameValues, nil)
+		exec.currentRowPosition = append(exec.currentRowPosition, -1)
+	}
+	return nil
+}
+
+func (exec *valueWindowExec) PreAllocateGroups(more int) error {
+	return nil
+}
+
+func (exec *valueWindowExec) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
+	// Store the value for this row in the window frame
+	if len(vectors) == 0 {
+		return nil
+	}
+
+	// Ensure we have enough space
+	for len(exec.frameValues) <= groupIndex {
+		exec.frameValues = append(exec.frameValues, nil)
+		exec.currentRowPosition = append(exec.currentRowPosition, -1)
+	}
+
+	vec := vectors[0]
+	entry := &valueEntry{
+		isNull: vec.IsNull(uint64(row)),
+	}
+
+	if !entry.isNull {
+		// Copy the value data
+		if vec.GetType().IsVarlen() {
+			bs := vec.GetBytesAt(row)
+			entry.data = make([]byte, len(bs))
+			copy(entry.data, bs)
+		} else {
+			// For fixed-size types, get the raw bytes
+			entry.data = vec.GetRawBytesAt(row)
+		}
+	}
+
+	// Track the position of the current row within the frame
+	// When row == groupIndex, this is the current row's value
+	if row == groupIndex {
+		exec.currentRowPosition[groupIndex] = len(exec.frameValues[groupIndex])
+	}
+
+	exec.frameValues[groupIndex] = append(exec.frameValues[groupIndex], entry)
+	return nil
+}
+
+func (exec *valueWindowExec) GetOptResult() SplitResult {
+	return nil
+}
+
+func (exec *valueWindowExec) marshal() ([]byte, error) {
+	return nil, moerr.NewInternalErrorNoCtx("value window function does not support marshal")
+}
+
+func (exec *valueWindowExec) unmarshal(mp *mpool.MPool, result, empties, groups [][]byte) error {
+	return moerr.NewInternalErrorNoCtx("value window function does not support unmarshal")
+}
+
+func (exec *valueWindowExec) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
+	return moerr.NewInternalErrorNoCtx("value window function does not support SaveIntermediateResult")
+}
+
+func (exec *valueWindowExec) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
+	return moerr.NewInternalErrorNoCtx("value window function does not support SaveIntermediateResultOfChunk")
+}
+
+func (exec *valueWindowExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
+	return moerr.NewInternalErrorNoCtx("value window function does not support UnmarshalFromReader")
+}
+
+func (exec *valueWindowExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {
+	return moerr.NewInternalErrorNoCtx("value window function does not support BulkFill")
+}
+
+func (exec *valueWindowExec) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
+	return moerr.NewInternalErrorNoCtx("value window function does not support BatchFill")
+}
+
+func (exec *valueWindowExec) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
+	return moerr.NewInternalErrorNoCtx("value window function does not support Merge")
+}
+
+func (exec *valueWindowExec) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
+	return moerr.NewInternalErrorNoCtx("value window function does not support BatchMerge")
+}
+
+func (exec *valueWindowExec) SetExtraInformation(partialResult any, groupIndex int) error {
+	return nil
+}
+
+func (exec *valueWindowExec) Flush() ([]*vector.Vector, error) {
+	switch exec.singleAggInfo.aggID {
+	case WinIdOfLag:
+		return exec.flushLag()
+	case WinIdOfLead:
+		return exec.flushLead()
+	case WinIdOfFirstValue:
+		return exec.flushFirstValue()
+	case WinIdOfLastValue:
+		return exec.flushLastValue()
+	case WinIdOfNthValue:
+		return exec.flushNthValue()
+	}
+	return nil, moerr.NewInternalErrorNoCtx("invalid value window function")
+}
+
+func (exec *valueWindowExec) Free() {
+	if exec.resultVec != nil {
+		exec.resultVec.Free(exec.mp)
+	}
+}
+
+func (exec *valueWindowExec) Size() int64 {
+	var size int64
+	for _, frame := range exec.frameValues {
+		for _, entry := range frame {
+			if entry != nil {
+				size += int64(len(entry.data)) + 8 // data + isNull flag overhead
+			}
+		}
+	}
+	return size
+}
+
+func (exec *valueWindowExec) flushLag() ([]*vector.Vector, error) {
+	// LAG returns the value from the previous row in the partition
+	// For LAG with default offset=1, we want the value at position (currentRowPosition - 1)
+
+	result := vector.NewVec(exec.retType)
+	for i, frame := range exec.frameValues {
+		if len(frame) == 0 {
+			// No values in frame, append NULL
+			if err := vector.AppendAny(result, nil, true, exec.mp); err != nil {
+				return nil, err
+			}
+			continue
+		}
+
+		// Get the position of the current row within the frame
+		currentPos := exec.currentRowPosition[i]
+		if currentPos < 0 {
+			// Current row position not found, this shouldn't happen
+			if err := vector.AppendAny(result, nil, true, exec.mp); err != nil {
+				return nil, err
+			}
+			continue
+		}
+
+		// LAG(1) returns the value at currentPos - 1
+		lagPos := currentPos - 1
+		if lagPos < 0 {
+			// No previous row, return NULL
+			if err := vector.AppendAny(result, nil, true, exec.mp); err != nil {
+				return nil, err
+			}
+		} else {
+			entry := frame[lagPos]
+			if entry.isNull {
+				if err := vector.AppendAny(result, nil, true, exec.mp); err != nil {
+					return nil, err
+				}
+			} else {
+				if err := appendValueToVector(result, entry.data, exec.retType, exec.mp); err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
+
+	return []*vector.Vector{result}, nil
+}
+
+func (exec *valueWindowExec) flushLead() ([]*vector.Vector, error) {
+	// LEAD returns the value from the next row in the partition
+	// For LEAD with default offset=1, we want the value at position (currentRowPosition + 1)
+
+	result := vector.NewVec(exec.retType)
+	for i, frame := range exec.frameValues {
+		if len(frame) == 0 {
+			// No values in frame, append NULL
+			if err := vector.AppendAny(result, nil, true, exec.mp); err != nil {
+				return nil, err
+			}
+			continue
+		}
+
+		// Get the position of the current row within the frame
+		currentPos := exec.currentRowPosition[i]
+		if currentPos < 0 {
+			// Current row position not found, this shouldn't happen
+			if err := vector.AppendAny(result, nil, true, exec.mp); err != nil {
+				return nil, err
+			}
+			continue
+		}
+
+		// LEAD(1) returns the value at currentPos + 1
+		leadPos := currentPos + 1
+		if leadPos >= len(frame) {
+			// No next row, return NULL
+			if err := vector.AppendAny(result, nil, true, exec.mp); err != nil {
+				return nil, err
+			}
+		} else {
+			entry := frame[leadPos]
+			if entry.isNull {
+				if err := vector.AppendAny(result, nil, true, exec.mp); err != nil {
+					return nil, err
+				}
+			} else {
+				if err := appendValueToVector(result, entry.data, exec.retType, exec.mp); err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
+
+	return []*vector.Vector{result}, nil
+}
+
+func (exec *valueWindowExec) flushFirstValue() ([]*vector.Vector, error) {
+	// FIRST_VALUE returns the first value in the window frame
+
+	result := vector.NewVec(exec.retType)
+	for _, frame := range exec.frameValues {
+		if len(frame) == 0 {
+			// No values in frame, append NULL
+			if err := vector.AppendAny(result, nil, true, exec.mp); err != nil {
+				return nil, err
+			}
+			continue
+		}
+
+		// Get the first value in the frame
+		entry := frame[0]
+		if entry.isNull {
+			if err := vector.AppendAny(result, nil, true, exec.mp); err != nil {
+				return nil, err
+			}
+		} else {
+			if err := appendValueToVector(result, entry.data, exec.retType, exec.mp); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	return []*vector.Vector{result}, nil
+}
+
+func (exec *valueWindowExec) flushLastValue() ([]*vector.Vector, error) {
+	// LAST_VALUE returns the last value in the window frame
+
+	result := vector.NewVec(exec.retType)
+	for _, frame := range exec.frameValues {
+		if len(frame) == 0 {
+			// No values in frame, append NULL
+			if err := vector.AppendAny(result, nil, true, exec.mp); err != nil {
+				return nil, err
+			}
+			continue
+		}
+
+		// Get the last value in the frame
+		entry := frame[len(frame)-1]
+		if entry.isNull {
+			if err := vector.AppendAny(result, nil, true, exec.mp); err != nil {
+				return nil, err
+			}
+		} else {
+			if err := appendValueToVector(result, entry.data, exec.retType, exec.mp); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	return []*vector.Vector{result}, nil
+}
+
+func (exec *valueWindowExec) flushNthValue() ([]*vector.Vector, error) {
+	// NTH_VALUE returns the nth value in the window frame
+	// For now, we default to n=1 (same as FIRST_VALUE)
+	// TODO: properly handle the n parameter from the function arguments
+	return exec.flushFirstValue()
+}
+
+// appendValueToVector appends a value to the result vector based on the type
+func appendValueToVector(result *vector.Vector, data []byte, typ types.Type, mp *mpool.MPool) error {
+	if typ.IsVarlen() {
+		return vector.AppendBytes(result, data, false, mp)
+	}
+
+	// For fixed-size types, we need to append based on the type
+	switch typ.Oid {
+	case types.T_bool:
+		return vector.AppendFixed(result, types.DecodeFixed[bool](data), false, mp)
+	case types.T_bit:
+		return vector.AppendFixed(result, types.DecodeFixed[uint64](data), false, mp)
+	case types.T_int8:
+		return vector.AppendFixed(result, types.DecodeFixed[int8](data), false, mp)
+	case types.T_int16:
+		return vector.AppendFixed(result, types.DecodeFixed[int16](data), false, mp)
+	case types.T_int32:
+		return vector.AppendFixed(result, types.DecodeFixed[int32](data), false, mp)
+	case types.T_int64:
+		return vector.AppendFixed(result, types.DecodeFixed[int64](data), false, mp)
+	case types.T_uint8:
+		return vector.AppendFixed(result, types.DecodeFixed[uint8](data), false, mp)
+	case types.T_uint16:
+		return vector.AppendFixed(result, types.DecodeFixed[uint16](data), false, mp)
+	case types.T_uint32:
+		return vector.AppendFixed(result, types.DecodeFixed[uint32](data), false, mp)
+	case types.T_uint64:
+		return vector.AppendFixed(result, types.DecodeFixed[uint64](data), false, mp)
+	case types.T_float32:
+		return vector.AppendFixed(result, types.DecodeFixed[float32](data), false, mp)
+	case types.T_float64:
+		return vector.AppendFixed(result, types.DecodeFixed[float64](data), false, mp)
+	case types.T_decimal64:
+		return vector.AppendFixed(result, types.DecodeFixed[types.Decimal64](data), false, mp)
+	case types.T_decimal128:
+		return vector.AppendFixed(result, types.DecodeFixed[types.Decimal128](data), false, mp)
+	case types.T_date:
+		return vector.AppendFixed(result, types.DecodeFixed[types.Date](data), false, mp)
+	case types.T_datetime:
+		return vector.AppendFixed(result, types.DecodeFixed[types.Datetime](data), false, mp)
+	case types.T_time:
+		return vector.AppendFixed(result, types.DecodeFixed[types.Time](data), false, mp)
+	case types.T_timestamp:
+		return vector.AppendFixed(result, types.DecodeFixed[types.Timestamp](data), false, mp)
+	case types.T_uuid:
+		return vector.AppendFixed(result, types.DecodeFixed[types.Uuid](data), false, mp)
+	case types.T_TS:
+		return vector.AppendFixed(result, types.DecodeFixed[types.TS](data), false, mp)
+	case types.T_Rowid:
+		return vector.AppendFixed(result, types.DecodeFixed[types.Rowid](data), false, mp)
+	case types.T_Blockid:
+		return vector.AppendFixed(result, types.DecodeFixed[types.Blockid](data), false, mp)
+	case types.T_enum:
+		return vector.AppendFixed(result, types.DecodeFixed[types.Enum](data), false, mp)
+	default:
+		// For other types, try to append as bytes
+		return vector.AppendBytes(result, data, false, mp)
+	}
+}
