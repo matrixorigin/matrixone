@@ -855,7 +855,8 @@ func TestReserveConnAndClose(t *testing.T) {
 
 func TestSessionTempTableMap(t *testing.T) {
 	ses := &Session{
-		tempTables: make(map[string]string),
+		tempTables:    make(map[string]string),
+		tempTablesRev: make(map[string]string),
 	}
 
 	ses.AddTempTable("db1", "alias", "real")
