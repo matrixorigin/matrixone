@@ -65,7 +65,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertunique"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shufflebuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/source"
@@ -189,9 +188,6 @@ func Test_convertToPipelineInstruction(t *testing.T) {
 		&product.Product{},
 		&projection.Projection{},
 		&filter.Filter{},
-		&semi.SemiJoin{
-			Conditions: [][]*plan.Expr{nil, nil},
-		},
 		&top.Top{},
 		&intersect.Intersect{},
 		&minus.Minus{},

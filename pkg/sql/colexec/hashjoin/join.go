@@ -167,6 +167,7 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			if err != nil {
 				return result, err
 			}
+
 			if hashJoin.ctr.lastIdx == startRow && ctr.leftBat != nil &&
 				(result.Batch == nil || result.Batch.IsEmpty()) {
 				return result, moerr.NewInternalErrorNoCtx("hash join hanging")
@@ -386,7 +387,7 @@ func (ctr *container) probe(ap *HashJoin, proc *process.Process, result *vm.Call
 					}
 				}
 
-				if !ap.IsRightSemi() && !ap.IsRightAnti() {
+				if !ap.IsRightSemi() && !ap.IsAnti() {
 					for j, rp := range ap.ResultCols {
 						if rp.Rel == 0 {
 							err = ctr.resBat.Vecs[j].UnionMulti(ap.ctr.leftBat.Vecs[rp.Pos], row, processCount, proc.Mp())
@@ -429,9 +430,12 @@ func (ctr *container) probe(ap *HashJoin, proc *process.Process, result *vm.Call
 							}
 						}
 
-						ctr.appendOneMatch(ap, proc, int64(row), idx1, idx2)
 						ctr.leftRowMatched = true
-						resRowCnt++
+
+						if !ap.IsRightSemi() && !ap.IsAnti() {
+							ctr.appendOneMatch(ap, proc, int64(row), idx1, idx2)
+							resRowCnt++
+						}
 
 						if ap.IsLeftSemi() {
 							ctr.sels = nil
