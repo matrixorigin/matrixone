@@ -1493,6 +1493,83 @@ func unwindTupleComparison(ctx context.Context, nonEqOp, op string, leftExprs, r
 // checkNoNeedCast
 // if constant's type higher than column's type
 // and constant's value in range of column's type, then no cast was needed
+// hasTrailingZeros checks if a decimal constant has trailing zeros that can be safely truncated
+// to match the column's scale, allowing index usage
+func hasTrailingZeros(constExpr *plan.Expr, constT types.Type, columnScale int32) bool {
+	if constT.Scale <= columnScale {
+		return false
+	}
+
+	// Try to get the literal value
+	// If constExpr is a Cast function, try to extract the inner literal
+	var lit *plan.Literal
+	if constExpr.GetLit() != nil {
+		lit = constExpr.GetLit()
+	} else if funcExpr := constExpr.GetF(); funcExpr != nil {
+		// Check if it's a cast function with a literal argument
+		if len(funcExpr.Args) > 0 {
+			if innerLit := funcExpr.Args[0].GetLit(); innerLit != nil {
+				lit = innerLit
+			}
+		}
+	}
+
+	if lit == nil || lit.Isnull {
+		return false
+	}
+
+	// Get the decimal value
+	// Try DECIMAL64, DECIMAL128, and string literals
+	var value int64
+	var found bool
+
+	if val, ok := lit.Value.(*plan.Literal_Decimal64Val); ok {
+		value = int64(val.Decimal64Val.A)
+		found = true
+	} else if val, ok := lit.Value.(*plan.Literal_Decimal128Val); ok {
+		value = int64(val.Decimal128Val.A)
+		found = true
+	} else if sval, ok := lit.Value.(*plan.Literal_Sval); ok {
+		// The literal is a string, parse it as decimal
+		dec, _, err := types.Parse128(sval.Sval)
+		if err != nil {
+			return false
+		}
+		value = int64(dec.B0_63)
+		found = true
+	}
+
+	if !found {
+		return false
+	}
+
+	// Calculate how many trailing digits we need to check
+	trailingDigits := constT.Scale - columnScale
+	if trailingDigits <= 0 || trailingDigits > 18 {
+		return false
+	}
+
+	// Check if the trailing digits are all zeros
+	divisor := int64(types.Pow10[trailingDigits])
+	return value%divisor == 0
+}
+
+// isDecimalComparisonAlwaysFalse checks if a decimal comparison is always false
+// This happens when the constant has non-zero digits beyond the column's scale
+func isDecimalComparisonAlwaysFalse(constExpr *plan.Expr, constT types.Type, columnScale int32) bool {
+	if constT.Scale <= columnScale {
+		return false
+	}
+
+	// If it has trailing zeros, it's not always false (can be optimized instead)
+	if hasTrailingZeros(constExpr, constT, columnScale) {
+		return false
+	}
+
+	// Has non-zero trailing digits, comparison is always false
+	return true
+}
+
 func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr) bool {
 	if constExpr.GetP() != nil && columnT.IsNumeric() {
 		return true
@@ -1609,8 +1686,17 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr) bool {
 	case types.T_decimal64, types.T_decimal128:
 		// Allow casting decimal constants to decimal columns only if no precision loss
 		if columnT.Oid == types.T_decimal64 || columnT.Oid == types.T_decimal128 {
-			// Only allow if column has enough scale to represent the constant without truncation
-			return columnT.Scale >= constT.Scale
+			// Optimization 1: Check if column scale >= constant scale (already handled)
+			if columnT.Scale >= constT.Scale {
+				return true
+			}
+
+			// Optimization 2: Check if constant has trailing zeros that can be truncated
+			if hasTrailingZeros(constExpr, constT, columnT.Scale) {
+				return true
+			}
+
+			return false
 		}
 		// Allow casting decimal constants to float columns only if precision is acceptable
 		// For FLOAT32: only allow if value has <= 7 significant digits

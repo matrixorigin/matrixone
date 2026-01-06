@@ -731,3 +731,92 @@ SELECT * FROM decimal_compare_test WHERE col1 = 11.9;
 DELETE FROM decimal_compare_test WHERE col1 = 12.213231000021312;
 SELECT * FROM decimal_compare_test ORDER BY col1;
 DROP TABLE decimal_compare_test;
+
+-- Test cases for decimal comparison optimizations
+-- Optimization 1: Trailing zeros optimization
+DROP TABLE IF EXISTS decimal_opt_test;
+CREATE TABLE decimal_opt_test (
+    id INT PRIMARY KEY,
+    price DECIMAL(10, 2),
+    amount DECIMAL(20, 5),
+    quantity DECIMAL(18, 0)
+);
+CREATE INDEX idx_price ON decimal_opt_test(price);
+CREATE INDEX idx_amount ON decimal_opt_test(amount);
+CREATE INDEX idx_quantity ON decimal_opt_test(quantity);
+
+INSERT INTO decimal_opt_test VALUES 
+(1, 99.99, 12.34567, 100),
+(2, 199.99, 23.45678, 200),
+(3, 299.99, 34.56789, 300);
+
+-- Test 1: Trailing zeros - should use index (constant can be truncated)
+-- 99.990000000 has trailing zeros, can be truncated to 99.99
+-- @pattern
+EXPLAIN ANALYZE SELECT * FROM decimal_opt_test WHERE price = 99.990000000;
+SELECT * FROM decimal_opt_test WHERE price = 99.990000000;
+
+-- Test 2: No trailing zeros - should NOT use index (requires table scan)
+-- 99.991234567 has non-zero trailing digits, cannot match any row
+-- @pattern
+EXPLAIN ANALYZE SELECT * FROM decimal_opt_test WHERE price = 99.991234567;
+SELECT * FROM decimal_opt_test WHERE price = 99.991234567;
+
+-- Test 3: Exact scale match - should use index
+-- @pattern
+EXPLAIN ANALYZE SELECT * FROM decimal_opt_test WHERE price = 99.99;
+SELECT * FROM decimal_opt_test WHERE price = 99.99;
+
+-- Test 4: Integer with trailing zeros - should use index
+-- 100.000000000 can be truncated to 100
+-- @pattern
+EXPLAIN ANALYZE SELECT * FROM decimal_opt_test WHERE quantity = 100.000000000;
+SELECT * FROM decimal_opt_test WHERE quantity = 100.000000000;
+
+-- Test 5: BETWEEN with trailing zeros - should use index
+-- @pattern
+EXPLAIN ANALYZE SELECT * FROM decimal_opt_test WHERE price BETWEEN 99.990000 AND 299.990000;
+SELECT * FROM decimal_opt_test WHERE price BETWEEN 99.990000 AND 299.990000 ORDER BY id;
+
+-- Test 6: IN list with trailing zeros - should use index
+-- @pattern
+EXPLAIN ANALYZE SELECT * FROM decimal_opt_test WHERE price IN (99.990000, 199.990000, 299.990000);
+SELECT * FROM decimal_opt_test WHERE price IN (99.990000, 199.990000, 299.990000) ORDER BY id;
+
+-- Test 7: Higher precision column with lower precision constant - should use index
+-- @pattern
+EXPLAIN ANALYZE SELECT * FROM decimal_opt_test WHERE amount = 12.34;
+SELECT * FROM decimal_opt_test WHERE amount = 12.34;
+
+-- Test 8: Verify DELETE with trailing zeros works correctly
+DELETE FROM decimal_opt_test WHERE price = 99.990000000;
+SELECT * FROM decimal_opt_test ORDER BY id;
+
+-- Restore data
+INSERT INTO decimal_opt_test VALUES (1, 99.99, 12.34567, 100);
+
+-- Test 9: UPDATE with trailing zeros
+UPDATE decimal_opt_test SET price = 999.99 WHERE price = 99.990000000;
+SELECT * FROM decimal_opt_test WHERE id = 1;
+
+-- Test 10: Complex query with multiple decimal comparisons
+SELECT * FROM decimal_opt_test 
+WHERE price = 999.990000 AND amount = 12.345670000 
+ORDER BY id;
+
+-- Test 11: Verify non-zero trailing digits don't match
+-- This should return 0 rows (predicate is always false)
+SELECT COUNT(*) FROM decimal_opt_test WHERE price = 99.991;
+
+-- Test 12: Scale 0 column with high precision constant
+-- quantity is DECIMAL(18,0), constant has scale 5
+-- Should not match any rows
+SELECT * FROM decimal_opt_test WHERE quantity = 100.12345;
+
+-- Test 13: Negative values with trailing zeros
+INSERT INTO decimal_opt_test VALUES (4, -50.50, -10.12345, -100);
+-- @pattern
+EXPLAIN ANALYZE SELECT * FROM decimal_opt_test WHERE price = -50.500000;
+SELECT * FROM decimal_opt_test WHERE price = -50.500000;
+
+DROP TABLE decimal_opt_test;

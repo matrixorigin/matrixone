@@ -1763,7 +1763,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 				rightIsCol := args[1].GetCol() != nil
 
 				// Check if we can use column type to avoid casting it
-				canUse := func(colType, otherType types.Type) bool {
+				canUse := func(colType, otherType types.Type, colExpr, otherExpr *plan.Expr) bool {
 					colOid, otherOid := colType.Oid, otherType.Oid
 					if colOid.IsInteger() && otherOid.IsInteger() {
 						return true
@@ -1775,19 +1775,26 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 					if colOid.IsDecimal() && otherOid.IsDecimal() {
 						// Only use column type if it has enough precision (scale)
 						// to represent the other value without truncation
-						return colType.Scale >= otherType.Scale
+						if colType.Scale >= otherType.Scale {
+							return true
+						}
+						// Check if the other value (constant) has trailing zeros that can be truncated
+						if otherExpr != nil && hasTrailingZeros(otherExpr, otherType, colType.Scale) {
+							return true
+						}
+						return false
 					}
 					return colOid == types.T_float64
 				}
 
 				// Try column type if column would be cast
-				if leftIsCol && !rightIsCol && !argsType[0].Eq(argsCastType[0]) && canUse(argsType[0], argsType[1]) {
+				if leftIsCol && !rightIsCol && !argsType[0].Eq(argsCastType[0]) && canUse(argsType[0], argsType[1], args[0], args[1]) {
 					if fGet2, err := function.GetFunctionByName(ctx, name, []types.Type{argsType[0], argsType[0]}); err == nil {
 						argsCastType = []types.Type{argsType[0], argsType[0]}
 						funcID = fGet2.GetEncodedOverloadID()
 						returnType = fGet2.GetReturnType()
 					}
-				} else if !leftIsCol && rightIsCol && !argsType[1].Eq(argsCastType[1]) && canUse(argsType[1], argsType[0]) {
+				} else if !leftIsCol && rightIsCol && !argsType[1].Eq(argsCastType[1]) && canUse(argsType[1], argsType[0], args[1], args[0]) {
 					if fGet2, err := function.GetFunctionByName(ctx, name, []types.Type{argsType[1], argsType[1]}); err == nil {
 						argsCastType = []types.Type{argsType[1], argsType[1]}
 						funcID = fGet2.GetEncodedOverloadID()

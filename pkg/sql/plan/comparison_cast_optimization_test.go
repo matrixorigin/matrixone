@@ -276,3 +276,258 @@ func TestDecimalScaleCompatibilityInComparison(t *testing.T) {
 		})
 	}
 }
+
+// TestDecimalTrailingZerosOptimization tests that decimal constants with trailing zeros
+// can be safely truncated to match column scale, allowing index usage
+func TestDecimalTrailingZerosOptimization(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name             string
+		colScale         int32
+		constValue       string
+		constScale       int32
+		shouldUseColType bool
+		description      string
+	}{
+		{
+			name:             "trailing zeros - can optimize",
+			colScale:         5,
+			constValue:       "12.340000000", // 9 decimal places, but last 4 are zeros
+			constScale:       9,
+			shouldUseColType: true,
+			description:      "Constant 12.340000000 has trailing zeros, can truncate to 12.34000",
+		},
+		{
+			name:             "no trailing zeros - cannot optimize",
+			colScale:         5,
+			constValue:       "12.340000001", // 9 decimal places, last digit is 1
+			constScale:       9,
+			shouldUseColType: false,
+			description:      "Constant 12.340000001 has non-zero trailing digits, cannot truncate",
+		},
+		{
+			name:             "all zeros after column scale",
+			colScale:         2,
+			constValue:       "99.990000000",
+			constScale:       9,
+			shouldUseColType: true,
+			description:      "Constant 99.990000000 can be truncated to 99.99",
+		},
+		{
+			name:             "exact match - no optimization needed",
+			colScale:         5,
+			constValue:       "12.34567",
+			constScale:       5,
+			shouldUseColType: true,
+			description:      "Scales match exactly, no optimization needed",
+		},
+		{
+			name:             "integer with trailing zeros",
+			colScale:         0,
+			constValue:       "12.000000000",
+			constScale:       9,
+			shouldUseColType: true,
+			description:      "Constant 12.000000000 can be truncated to 12",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Logf("Test: %s", tt.description)
+
+			// Create column expression
+			colExpr := &plan.Expr{
+				Typ: plan.Type{
+					Id:    int32(types.T_decimal128),
+					Width: 38,
+					Scale: tt.colScale,
+				},
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: 0,
+						ColPos: 0,
+					},
+				},
+			}
+
+			// Parse the constant value
+			dec, _, err := types.Parse128(tt.constValue)
+			require.NoError(t, err)
+
+			// Create constant expression
+			constExpr := &plan.Expr{
+				Typ: plan.Type{
+					Id:    int32(types.T_decimal128),
+					Width: 38,
+					Scale: tt.constScale,
+				},
+				Expr: &plan.Expr_Lit{
+					Lit: &plan.Literal{
+						Isnull: false,
+						Value: &plan.Literal_Decimal128Val{
+							Decimal128Val: &plan.Decimal128{
+								A: int64(dec.B0_63),
+								B: int64(dec.B64_127),
+							},
+						},
+					},
+				},
+			}
+
+			// Call BindFuncExprImplByPlanExpr
+			result, err := BindFuncExprImplByPlanExpr(ctx, "=", []*plan.Expr{colExpr, constExpr})
+			require.NoError(t, err)
+			require.NotNil(t, result)
+
+			funcExpr := result.GetF()
+			require.NotNil(t, funcExpr)
+
+			// Check the scale of the arguments
+			leftScale := funcExpr.Args[0].Typ.Scale
+			rightScale := funcExpr.Args[1].Typ.Scale
+
+			t.Logf("Result: leftScale=%d, rightScale=%d", leftScale, rightScale)
+
+			if tt.shouldUseColType {
+				// Both should have column's scale (optimization applied)
+				require.Equal(t, tt.colScale, leftScale, "Left arg should have col scale")
+				require.Equal(t, tt.colScale, rightScale, "Right arg should have col scale")
+				t.Logf("✓ Optimization applied: using column scale %d", tt.colScale)
+			} else {
+				// Should use higher scale (no optimization)
+				expectedScale := tt.constScale
+				if tt.colScale > tt.constScale {
+					expectedScale = tt.colScale
+				}
+				require.Equal(t, expectedScale, leftScale, "Left arg should have higher scale")
+				require.Equal(t, expectedScale, rightScale, "Right arg should have higher scale")
+				t.Logf("✓ No optimization: using higher scale %d", expectedScale)
+			}
+		})
+	}
+}
+
+// TestDecimalCastWrappedLiteralOptimization tests that decimal constants wrapped in Cast functions
+// (as they appear in real SQL queries) can still be optimized when they have trailing zeros
+func TestDecimalCastWrappedLiteralOptimization(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name             string
+		colScale         int32
+		constValue       string // String literal as it appears in SQL
+		constScale       int32  // Target scale of the Cast
+		shouldUseColType bool
+		description      string
+	}{
+		{
+			name:             "cast string with trailing zeros",
+			colScale:         2,
+			constValue:       "99.990000000",
+			constScale:       9,
+			shouldUseColType: true,
+			description:      "Cast('99.990000000' as DECIMAL(10,9)) can be optimized to DECIMAL(10,2)",
+		},
+		{
+			name:             "cast string without trailing zeros",
+			colScale:         2,
+			constValue:       "99.991234567",
+			constScale:       9,
+			shouldUseColType: false,
+			description:      "Cast('99.991234567' as DECIMAL(10,9)) cannot be optimized",
+		},
+		{
+			name:             "cast decimal literal with trailing zeros",
+			colScale:         2,
+			constValue:       "100.000000000",
+			constScale:       9,
+			shouldUseColType: true,
+			description:      "Cast(100.000000000 as DECIMAL(10,9)) can be optimized",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Logf("Test: %s", tt.description)
+
+			// Create column expression
+			colExpr := &plan.Expr{
+				Typ: plan.Type{
+					Id:    int32(types.T_decimal128),
+					Width: 38,
+					Scale: tt.colScale,
+				},
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: 0,
+						ColPos: 0,
+					},
+				},
+			}
+
+			// Create a Cast function wrapping a string literal (simulating real SQL parsing)
+			// This is how "price = 99.990000000" appears after parsing
+			innerLit := &plan.Expr{
+				Typ: plan.Type{
+					Id: int32(types.T_varchar),
+				},
+				Expr: &plan.Expr_Lit{
+					Lit: &plan.Literal{
+						Isnull: false,
+						Value: &plan.Literal_Sval{
+							Sval: tt.constValue,
+						},
+					},
+				},
+			}
+
+			// Wrap in Cast function
+			constExpr := &plan.Expr{
+				Typ: plan.Type{
+					Id:    int32(types.T_decimal128),
+					Width: 38,
+					Scale: tt.constScale,
+				},
+				Expr: &plan.Expr_F{
+					F: &plan.Function{
+						Func: &plan.ObjectRef{
+							ObjName: "cast",
+						},
+						Args: []*plan.Expr{innerLit},
+					},
+				},
+			}
+
+			// Call BindFuncExprImplByPlanExpr
+			result, err := BindFuncExprImplByPlanExpr(ctx, "=", []*plan.Expr{colExpr, constExpr})
+			require.NoError(t, err)
+			require.NotNil(t, result)
+
+			funcExpr := result.GetF()
+			require.NotNil(t, funcExpr)
+
+			// Check the scale of the arguments
+			leftScale := funcExpr.Args[0].Typ.Scale
+			rightScale := funcExpr.Args[1].Typ.Scale
+
+			t.Logf("Result: leftScale=%d, rightScale=%d", leftScale, rightScale)
+
+			if tt.shouldUseColType {
+				// Both should have column's scale (optimization applied)
+				require.Equal(t, tt.colScale, leftScale, "Left arg should have col scale")
+				require.Equal(t, tt.colScale, rightScale, "Right arg should have col scale")
+				t.Logf("✓ Optimization applied: using column scale %d", tt.colScale)
+			} else {
+				// Should use higher scale (no optimization)
+				expectedScale := tt.constScale
+				if tt.colScale > tt.constScale {
+					expectedScale = tt.colScale
+				}
+				require.Equal(t, expectedScale, leftScale, "Left arg should have higher scale")
+				require.Equal(t, expectedScale, rightScale, "Right arg should have higher scale")
+				t.Logf("✓ No optimization: using higher scale %d", expectedScale)
+			}
+		})
+	}
+}
