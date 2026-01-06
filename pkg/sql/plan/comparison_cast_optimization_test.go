@@ -1229,59 +1229,58 @@ func TestIntegerRangeCheckInComparison(t *testing.T) {
 	}
 }
 
-
 // TestFloatPrecisionCheck tests that float precision limits are correctly enforced
 func TestFloatPrecisionCheck(t *testing.T) {
 	ctx := context.Background()
 
 	tests := []struct {
-		name         string
-		colType      types.T
-		constValue   int64
-		shouldCast   bool
-		description  string
+		name        string
+		colType     types.T
+		constValue  int64
+		shouldCast  bool
+		description string
 	}{
 		{
-			name:         "float32 with safe integer (within 2^24)",
-			colType:      types.T_float32,
-			constValue:   1000000,
-			shouldCast:   false,
-			description:  "1000000 < 2^24 (16777216), safe for float32",
+			name:        "float32 with safe integer (within 2^24)",
+			colType:     types.T_float32,
+			constValue:  1000000,
+			shouldCast:  false,
+			description: "1000000 < 2^24 (16777216), safe for float32",
 		},
 		{
-			name:         "float32 at boundary (2^24)",
-			colType:      types.T_float32,
-			constValue:   16777216,
-			shouldCast:   false,
-			description:  "16777216 = 2^24, exactly representable in float32",
+			name:        "float32 at boundary (2^24)",
+			colType:     types.T_float32,
+			constValue:  16777216,
+			shouldCast:  false,
+			description: "16777216 = 2^24, exactly representable in float32",
 		},
 		{
-			name:         "float32 beyond safe range",
-			colType:      types.T_float32,
-			constValue:   16777217,
-			shouldCast:   true,
-			description:  "16777217 > 2^24, may lose precision in float32",
+			name:        "float32 beyond safe range",
+			colType:     types.T_float32,
+			constValue:  16777217,
+			shouldCast:  true,
+			description: "16777217 > 2^24, may lose precision in float32",
 		},
 		{
-			name:         "float32 with large value",
-			colType:      types.T_float32,
-			constValue:   100000000,
-			shouldCast:   true,
-			description:  "100000000 >> 2^24, will lose precision in float32",
+			name:        "float32 with large value",
+			colType:     types.T_float32,
+			constValue:  100000000,
+			shouldCast:  true,
+			description: "100000000 >> 2^24, will lose precision in float32",
 		},
 		{
-			name:         "float32 negative at boundary",
-			colType:      types.T_float32,
-			constValue:   -16777216,
-			shouldCast:   false,
-			description:  "-16777216 = -2^24, exactly representable in float32",
+			name:        "float32 negative at boundary",
+			colType:     types.T_float32,
+			constValue:  -16777216,
+			shouldCast:  false,
+			description: "-16777216 = -2^24, exactly representable in float32",
 		},
 		{
-			name:         "float32 negative beyond safe range",
-			colType:      types.T_float32,
-			constValue:   -16777217,
-			shouldCast:   true,
-			description:  "-16777217 < -2^24, may lose precision in float32",
+			name:        "float32 negative beyond safe range",
+			colType:     types.T_float32,
+			constValue:  -16777217,
+			shouldCast:  true,
+			description: "-16777217 < -2^24, may lose precision in float32",
 		},
 	}
 
