@@ -11,9 +11,7 @@ CREATE TABLE `ca_specify_answer_dataset` (
   PRIMARY KEY (`id`),
   KEY `ca_specify_answer_dataset_vec_index` USING ivfflat (`question_vector`) lists = 256  op_type 'vector_l2_ops'
 );
-
 load data infile '$resources/vector/ca_specify_answer_dataset.csv' into table ca_specify_answer_dataset FIELDS TERMINATED BY ',' ignore 1 lines;
-
 -- l2_distance filter
 SELECT
   id,
