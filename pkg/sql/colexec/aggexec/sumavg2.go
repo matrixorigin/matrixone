@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
@@ -96,118 +97,10 @@ func float64OfCheck(v1, v2, sum float64) error {
 	return nil
 }
 
-type countSum[T float64 | int64 | uint64, A types.Ints | types.UInts | types.Floats] struct {
-	sum   T
-	count int64
-}
-
-func (cs *countSum[T, A]) add(val A, ofCheck func(T, T, T) error) error {
-	sumT := cs.sum + T(val)
-	if err := ofCheck(cs.sum, T(val), sumT); err != nil {
-		return err
-	}
-	cs.sum = sumT
-	cs.count += 1
-	return nil
-}
-
-func (cs *countSum[T, A]) addMany(val []A, ofCheck func(T, T, T) error) error {
-	for _, v := range val {
-		if err := cs.add(v, ofCheck); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (cs *countSum[T, A]) avg() (float64, bool) {
-	if cs.count == 0 {
-		return 0, false
-	}
-	return float64(cs.sum) / float64(cs.count), true
-}
-
-func (cs *countSum[T, A]) merge(other *countSum[T, A], ofCheck func(T, T, T) error) error {
-	sumT := cs.sum + other.sum
-	if err := ofCheck(cs.sum, other.sum, sumT); err != nil {
-		return err
-	}
-	cs.sum = sumT
-	cs.count += other.count
-	return nil
-}
-
-type countSumDec struct {
-	sum   types.Decimal128
-	count int64
-}
-
-func (cs *countSumDec) add64(val types.Decimal64, scale int32) error {
-	var err error
-	dv := types.Decimal128FromDecimal64(val, scale)
-	cs.sum, err = cs.sum.Add128(dv)
-	cs.count += 1
-	return err
-}
-
-func (cs *countSumDec) add128(val types.Decimal128) error {
-	var err error
-	cs.sum, err = cs.sum.Add128(val)
-	cs.count += 1
-	return err
-}
-
-func (cs *countSumDec) addMany64(val []types.Decimal64, scale int32) error {
-	var err error
-	for _, v := range val {
-		cs.sum, err = cs.sum.Add128(types.Decimal128FromDecimal64(v, scale))
-		if err != nil {
-			return err
-		}
-		cs.count += 1
-	}
-	return nil
-}
-
-func (cs *countSumDec) addMany128(val []types.Decimal128, scale int32) error {
-	var err error
-	for _, v := range val {
-		cs.sum, err = cs.sum.Add128(v)
-		if err != nil {
-			return err
-		}
-		cs.count += 1
-	}
-	return nil
-}
-
-func (cs *countSumDec) merge(other *countSumDec) error {
-	var err error
-	cs.sum, err = cs.sum.Add128(other.sum)
-	cs.count += other.count
-	return err
-}
-
-// avg = sum / count, and scale from argScale to resultScale.
-func (cs *countSumDec) avg(argScale, resultScale int32) (types.Decimal128, bool) {
-	if cs.count == 0 {
-		return types.Decimal128{}, false
-	}
-	cnt128 := types.Decimal128FromInt64(cs.count)
-	a, s, _ := cs.sum.Div(cnt128, argScale, 0)
-	a, _ = a.Scale(resultScale - s)
-	return a, true
-}
-
 type sumAvgExec[T float64 | int64 | uint64, A types.Ints | types.UInts | types.Floats] struct {
+	aggExec
 	isSum   bool
 	ofCheck func(T, T, T) error
-	aggExec[countSum[T, A]]
-}
-
-type sumAvgDecExec struct {
-	isSum bool
-	aggExec[countSumDec]
 }
 
 func (exec *sumAvgExec[T, A]) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
@@ -232,12 +125,16 @@ func (exec *sumAvgExec[T, A]) BatchFill(offset int, groups []uint64, vectors []*
 		if vectors[0].IsNull(idx) {
 			continue
 		} else {
-			pt := exec.GetState(grp - 1)
+			x, y := exec.getXY(grp - 1)
+			cnts := vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[0])
+			sums := vector.MustFixedColNoTypeCheck[T](exec.state[x].vecs[1])
 			val := vector.GetFixedAtNoTypeCheck[A](vectors[0], int(idx))
-			err := pt.add(val, exec.ofCheck)
-			if err != nil {
+			result := sums[y] + T(val)
+			if err := exec.ofCheck(sums[y], T(val), result); err != nil {
 				return err
 			}
+			sums[y] = result
+			cnts[y] += 1
 		}
 	}
 	return nil
@@ -257,9 +154,19 @@ func (exec *sumAvgExec[T, A]) BatchMerge(next AggFuncExec, offset int, groups []
 		if grp == GroupNotMatched {
 			continue
 		}
-		pt1 := exec.GetState(grp - 1)
-		pt2 := other.GetState(uint64(offset + i))
-		pt1.merge(pt2, exec.ofCheck)
+
+		x1, y1 := exec.getXY(grp - 1)
+		x2, y2 := other.getXY(uint64(offset + i))
+		cnts1 := vector.MustFixedColNoTypeCheck[int64](exec.state[x1].vecs[0])
+		cnts2 := vector.MustFixedColNoTypeCheck[int64](other.state[x2].vecs[0])
+		sums1 := vector.MustFixedColNoTypeCheck[T](exec.state[x1].vecs[1])
+		sums2 := vector.MustFixedColNoTypeCheck[T](other.state[x2].vecs[1])
+		result := sums1[y1] + sums2[y2]
+		if err := exec.ofCheck(sums1[y1], sums2[y2], result); err != nil {
+			return err
+		}
+		sums1[y1] = result
+		cnts1[y1] += cnts2[y2]
 	}
 	return nil
 }
@@ -278,38 +185,53 @@ func (exec *sumAvgExec[T, A]) Flush() ([]*vector.Vector, error) {
 
 	if exec.IsDistinct() {
 		for i := range vecs {
-			ptrs := exec.state[i].getPtrLenSlice()
-			for j := range ptrs {
-				args := mpool.PtrLenToSlice[A](&ptrs[j])
-				if len(args) == 0 {
+			for j := 0; j < int(exec.state[i].length); j++ {
+				if exec.state[i].argCnt[j] == 0 {
 					vector.AppendNull(vecs[i], exec.mp)
 					continue
-				}
-
-				var st countSum[T, A]
-				st.addMany(args, exec.ofCheck)
-				if exec.isSum {
-					vector.AppendFixed(vecs[i], st.sum, false, exec.mp)
 				} else {
-					f64, _ := st.avg()
-					vector.AppendFixed(vecs[i], f64, false, exec.mp)
+					sum := T(0)
+					xcnt := 0
+					err := exec.state[i].iter(uint16(j), func(k []byte) error {
+						ptr := util.UnsafeFromBytes[A](k[kAggArgPrefixSz:])
+						tmp := sum + T(*ptr)
+						if err := exec.ofCheck(sum, T(*ptr), tmp); err != nil {
+							return err
+						}
+						sum = tmp
+						xcnt++
+						return nil
+					})
+
+					if err != nil {
+						return nil, err
+					}
+					if int(exec.state[i].argCnt[j]) != xcnt {
+						panic(moerr.NewInternalErrorNoCtxf("invalid count: %d for y: %d, expected: %d", xcnt, j, exec.state[i].argCnt[j]))
+					}
+
+					if exec.isSum {
+						vector.AppendFixed(vecs[i], sum, false, exec.mp)
+					} else {
+						vector.AppendFixed(vecs[i], float64(sum)/float64(exec.state[i].argCnt[j]), false, exec.mp)
+					}
 				}
 			}
 		}
 	} else {
 		for i := range vecs {
-			ss := exec.state[i].getStateSlice()
-			for j := range ss {
-				if ss[j].count == 0 {
+			cnts := vector.MustFixedColNoTypeCheck[int64](exec.state[i].vecs[0])
+			sums := vector.MustFixedColNoTypeCheck[T](exec.state[i].vecs[1])
+			for j, cnt := range cnts {
+				if cnt == 0 {
 					vector.AppendNull(vecs[i], exec.mp)
 					continue
 				}
 
 				if exec.isSum {
-					vector.AppendFixed(vecs[i], ss[j].sum, false, exec.mp)
+					vector.AppendFixed(vecs[i], sums[j], false, exec.mp)
 				} else {
-					f64, _ := ss[j].avg()
-					vector.AppendFixed(vecs[i], f64, false, exec.mp)
+					vector.AppendFixed(vecs[i], float64(sums[j])/float64(cnt), false, exec.mp)
 				}
 			}
 		}
@@ -317,15 +239,21 @@ func (exec *sumAvgExec[T, A]) Flush() ([]*vector.Vector, error) {
 	return vecs, nil
 }
 
-func (exec *sumAvgDecExec) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
+type sumAvgDecExec[A types.Decimal64 | types.Decimal128] struct {
+	aggExec
+	isSum bool
+}
+
+func (exec *sumAvgDecExec[A]) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
 	return exec.BatchFill(row, []uint64{uint64(groupIndex + 1)}, vectors)
 }
 
-func (exec *sumAvgDecExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {
+func (exec *sumAvgDecExec[A]) BulkFill(groupIndex int, vectors []*vector.Vector) error {
 	return exec.BatchFill(0, slices.Repeat([]uint64{uint64(groupIndex + 1)}, vectors[0].Length()), vectors)
 }
 
-func (exec *sumAvgDecExec) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
+func (exec *sumAvgDecExec[A]) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
+	var err error
 	if exec.IsDistinct() {
 		return exec.batchFillArgs(offset, groups, vectors, true)
 	}
@@ -339,31 +267,38 @@ func (exec *sumAvgDecExec) BatchFill(offset int, groups []uint64, vectors []*vec
 		if vectors[0].IsNull(idx) {
 			continue
 		} else {
-			pt := exec.GetState(grp - 1)
+			x, y := exec.getXY(grp - 1)
+			cnts := vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[0])
+			sums := vector.MustFixedColNoTypeCheck[types.Decimal128](exec.state[x].vecs[1])
+			var val types.Decimal128
 			if exec.aggInfo.argTypes[0].Oid == types.T_decimal64 {
-				val := vector.GetFixedAtNoTypeCheck[types.Decimal64](vectors[0], int(idx))
-				err := pt.add64(val, exec.aggInfo.argTypes[0].Scale)
-				if err != nil {
-					return err
-				}
+				val64 := vector.GetFixedAtNoTypeCheck[types.Decimal64](vectors[0], int(idx))
+				val = types.Decimal128FromDecimal64(val64, exec.aggInfo.argTypes[0].Scale)
 			} else {
-				val := vector.GetFixedAtNoTypeCheck[types.Decimal128](vectors[0], int(idx))
-				err := pt.add128(val)
-				if err != nil {
-					return err
-				}
+				val = vector.GetFixedAtNoTypeCheck[types.Decimal128](vectors[0], int(idx))
 			}
+
+			if sums[y], err = sums[y].Add128(val); err != nil {
+				return err
+			}
+
+			sums[y], err = sums[y].Add128(val)
+			if err != nil {
+				return err
+			}
+			cnts[y] += 1
 		}
 	}
 	return nil
 }
 
-func (exec *sumAvgDecExec) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
+func (exec *sumAvgDecExec[A]) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
 	return exec.BatchMerge(next, groupIdx2, []uint64{uint64(groupIdx1 + 1)})
 }
 
-func (exec *sumAvgDecExec) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
-	other := next.(*sumAvgDecExec)
+func (exec *sumAvgDecExec[A]) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
+	var err error
+	other := next.(*sumAvgDecExec[A])
 	if exec.IsDistinct() {
 		return exec.batchMergeArgs(&other.aggExec, offset, groups, true)
 	}
@@ -372,18 +307,34 @@ func (exec *sumAvgDecExec) BatchMerge(next AggFuncExec, offset int, groups []uin
 		if grp == GroupNotMatched {
 			continue
 		}
-		pt1 := exec.GetState(grp - 1)
-		pt2 := other.GetState(uint64(offset + i))
-		pt1.merge(pt2)
+
+		x1, y1 := exec.getXY(grp - 1)
+		x2, y2 := other.getXY(uint64(offset + i))
+		cnts1 := vector.MustFixedColNoTypeCheck[int64](exec.state[x1].vecs[0])
+		cnts2 := vector.MustFixedColNoTypeCheck[int64](other.state[x2].vecs[0])
+		sums1 := vector.MustFixedColNoTypeCheck[types.Decimal128](exec.state[x1].vecs[1])
+		sums2 := vector.MustFixedColNoTypeCheck[types.Decimal128](other.state[x2].vecs[1])
+		if sums1[y1], err = sums1[y1].Add128(sums2[y2]); err != nil {
+			return err
+		}
+		cnts1[y1] += cnts2[y2]
 	}
 	return nil
 }
 
-func (exec *sumAvgDecExec) SetExtraInformation(partialResult any, _ int) error {
+func (exec *sumAvgDecExec[A]) SetExtraInformation(partialResult any, _ int) error {
 	return nil
 }
 
-func (exec *sumAvgDecExec) Flush() ([]*vector.Vector, error) {
+func decAvg(sum types.Decimal128, count int64, argScale, resultScale int32) types.Decimal128 {
+	cnt128 := types.Decimal128FromInt64(count)
+	a, s, _ := sum.Div(cnt128, argScale, 0)
+	a, _ = a.Scale(resultScale - s)
+	return a
+}
+
+func (exec *sumAvgDecExec[A]) Flush() ([]*vector.Vector, error) {
+	var err error
 	resultType := exec.aggInfo.retType
 	vecs := make([]*vector.Vector, len(exec.state))
 	for i := range vecs {
@@ -393,44 +344,62 @@ func (exec *sumAvgDecExec) Flush() ([]*vector.Vector, error) {
 
 	if exec.IsDistinct() {
 		for i := range vecs {
-			ptrs := exec.state[i].getPtrLenSlice()
-			for j := range ptrs {
-				if ptrs[j].Len() == 0 {
+			for j := 0; j < int(exec.state[i].length); j++ {
+				if exec.state[i].argCnt[j] == 0 {
 					vector.AppendNull(vecs[i], exec.mp)
 					continue
-				}
-
-				var st countSumDec
-				if exec.aggInfo.argTypes[0].Oid == types.T_decimal64 {
-					args := mpool.PtrLenToSlice[types.Decimal64](&ptrs[j])
-					st.addMany64(args, exec.aggInfo.argTypes[0].Scale)
 				} else {
-					args := mpool.PtrLenToSlice[types.Decimal128](&ptrs[j])
-					st.addMany128(args, exec.aggInfo.argTypes[0].Scale)
-				}
+					var sum types.Decimal128
+					xcnt := 0
 
-				if exec.isSum {
-					vector.AppendFixed(vecs[i], st.sum, false, exec.mp)
-				} else {
-					avgVal, _ := st.avg(exec.aggInfo.argTypes[0].Scale, resultType.Scale)
-					vector.AppendFixed(vecs[i], avgVal, false, exec.mp)
+					err = exec.state[i].iter(uint16(j), func(k []byte) error {
+						var val types.Decimal128
+						var fnerr error
+						if exec.aggInfo.argTypes[0].Oid == types.T_decimal64 {
+							ptr := util.UnsafeFromBytes[types.Decimal64](k[kAggArgPrefixSz:])
+							val = types.Decimal128FromDecimal64(*ptr, exec.aggInfo.argTypes[0].Scale)
+						} else {
+							ptr := util.UnsafeFromBytes[types.Decimal128](k[kAggArgPrefixSz:])
+							val = *ptr
+						}
+						if sum, fnerr = sum.Add128(val); fnerr != nil {
+							return fnerr
+						}
+						xcnt++
+						return nil
+					})
+
+					if err != nil {
+						return nil, err
+					}
+					if int(exec.state[i].argCnt[j]) != xcnt {
+						panic(moerr.NewInternalErrorNoCtxf("invalid count: %d for y: %d, expected: %d", xcnt, j, exec.state[i].argCnt[j]))
+					}
+
+					if exec.isSum {
+						vector.AppendFixed(vecs[i], sum, false, exec.mp)
+					} else {
+						avg := decAvg(sum, int64(exec.state[i].argCnt[j]), exec.aggInfo.argTypes[0].Scale, resultType.Scale)
+						vector.AppendFixed(vecs[i], avg, false, exec.mp)
+					}
 				}
 			}
 		}
 	} else {
 		for i := range vecs {
-			ss := exec.state[i].getStateSlice()
-			for j := range ss {
-				if ss[j].count == 0 {
+			cnts := vector.MustFixedColNoTypeCheck[int64](exec.state[i].vecs[0])
+			sums := vector.MustFixedColNoTypeCheck[types.Decimal128](exec.state[i].vecs[1])
+			for j, cnt := range cnts {
+				if cnt == 0 {
 					vector.AppendNull(vecs[i], exec.mp)
 					continue
 				}
 
 				if exec.isSum {
-					vector.AppendFixed(vecs[i], ss[j].sum, false, exec.mp)
+					vector.AppendFixed(vecs[i], sums[j], false, exec.mp)
 				} else {
-					avgVal, _ := ss[j].avg(exec.aggInfo.argTypes[0].Scale, resultType.Scale)
-					vector.AppendFixed(vecs[i], avgVal, false, exec.mp)
+					avg := decAvg(sums[j], cnt, exec.aggInfo.argTypes[0].Scale, resultType.Scale)
+					vector.AppendFixed(vecs[i], avg, false, exec.mp)
 				}
 			}
 		}
@@ -465,9 +434,9 @@ func makeSumAvgExec(
 	case types.T_float64:
 		return newSumAvgExec[float64, float64](mp, float64OfCheck, isSum, aggID, isDistinct, param)
 	case types.T_decimal64:
-		return newSumAvgDecExec(mp, isSum, aggID, isDistinct, param)
+		return newSumAvgDecExec[types.Decimal64](mp, isSum, aggID, isDistinct, param)
 	case types.T_decimal128:
-		return newSumAvgDecExec(mp, isSum, aggID, isDistinct, param)
+		return newSumAvgDecExec[types.Decimal128](mp, isSum, aggID, isDistinct, param)
 	default:
 		panic(moerr.NewInternalErrorNoCtxf("unsupported type '%v' for sum/avg", param.Oid))
 	}
@@ -479,41 +448,46 @@ func newSumAvgExec[T float64 | int64 | uint64, A types.Ints | types.UInts | type
 	exec.isSum = isSum
 	exec.ofCheck = ofCheck
 	var rt types.Type
+	sumTyp := SumReturnType([]types.Type{param})
+	avgTyp := AvgReturnType([]types.Type{param})
 	if isSum {
-		rt = SumReturnType([]types.Type{param})
+		rt = sumTyp
 	} else {
-		rt = AvgReturnType([]types.Type{param})
+		rt = avgTyp
 	}
 	exec.aggInfo = aggInfo{
 		aggId:      aggID,
 		isDistinct: isDistinct,
 		argTypes:   []types.Type{param},
 		retType:    rt,
+		stateTypes: []types.Type{types.T_int64.ToType(), sumTyp},
 		emptyNull:  false,
-		usePtrLen:  isDistinct, // sum/avg (distinct X) needs to store varlen value
-		entrySize:  countSumSize[T, A](),
+		saveArg:    isDistinct,
 	}
 	return &exec
 }
 
-func newSumAvgDecExec(mp *mpool.MPool, isSum bool, aggID int64, isDistinct bool, param types.Type) AggFuncExec {
-	var exec sumAvgDecExec
+func newSumAvgDecExec[A types.Decimal64 | types.Decimal128](mp *mpool.MPool, isSum bool, aggID int64, isDistinct bool, param types.Type) AggFuncExec {
+	var exec sumAvgDecExec[A]
 	exec.mp = mp
 	exec.isSum = isSum
 	var rt types.Type
+	sumTyp := SumReturnType([]types.Type{param})
+	avgTyp := AvgReturnType([]types.Type{param})
 	if isSum {
-		rt = SumReturnType([]types.Type{param})
+		rt = sumTyp
 	} else {
-		rt = AvgReturnType([]types.Type{param})
+		rt = avgTyp
 	}
+
 	exec.aggInfo = aggInfo{
 		aggId:      aggID,
 		isDistinct: isDistinct,
 		argTypes:   []types.Type{param},
 		retType:    rt,
+		stateTypes: []types.Type{types.T_int64.ToType(), sumTyp},
 		emptyNull:  false,
-		usePtrLen:  isDistinct, // sum/avg (distinct X) needs to store varlen value
-		entrySize:  countSumDecSize(),
+		saveArg:    isDistinct,
 	}
 	return &exec
 }
