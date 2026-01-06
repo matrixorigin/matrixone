@@ -9,14 +9,13 @@ use db_v1;
 create table t1 (a int);
 insert into t1 values (1);
 create view v1 as select * from t1;
+grant all on database db_v1 to role_v1;
 grant select on view db_v1.v1 to role_v1;
-show grants;
-➤ Grants for user_v1@localhost[12,-1,0]  𝄀
-GRANT connect ON account  `user_v1`@`localhost`  𝄀
-GRANT select ON table d.t `user_v1`@`localhost`
-revoke select on view db_v1.v1 from role_v1;
-show grants;
-➤ Grants for user_v1@localhost[12,-1,0]  𝄀
-GRANT connect ON account  `user_v1`@`localhost`
+set role role_v1;
+use db_v1;
+internal error: do not have privilege to execute the statement
+select * from v1;
+No database selected
+drop database db_v1;
 drop account acc_view_test;
 set global enable_privilege_cache = on;

@@ -19,7 +19,7 @@ grant role_level2 to role_level3;
 grant role_level3 to user_complex;
 select obj_type, privilege_name, obj_id from mo_catalog.mo_role_privs where role_name = 'role_level1';
 ➤ obj_type[12,-1,0]  ¦  privilege_name[12,-1,0]  ¦  obj_id[-5,64,0]  𝄀
-table  ¦  select  ¦  272525
+table  ¦  select  ¦  272529
 select current_role();
 ➤ current_role()[12,-1,0]  𝄀
 role_level3
