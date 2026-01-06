@@ -3499,7 +3499,7 @@ func Test_determineDML(t *testing.T) {
 
 			sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant, nil, nil, nil, nil, nil, nil, nil)
 
-			arr := extractPrivilegeTipsFromPlan(a.p)
+			arr := extractPrivilegeTipsFromPlan(nil, a.p)
 			convertPrivilegeTipsToPrivilege(priv, arr)
 
 			roleIds := []int{
@@ -3584,7 +3584,7 @@ func Test_determineDML(t *testing.T) {
 
 			sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant, nil, nil, nil, roleIdsInMoRoleGrant, rowsOfMoRoleGrant, nil, nil)
 
-			arr := extractPrivilegeTipsFromPlan(a.p)
+			arr := extractPrivilegeTipsFromPlan(nil, a.p)
 			convertPrivilegeTipsToPrivilege(priv, arr)
 
 			//role 0 does not have the select
@@ -3682,7 +3682,7 @@ func Test_determineDML(t *testing.T) {
 
 			sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant, nil, nil, nil, roleIdsInMoRoleGrant, rowsOfMoRoleGrant, nil, nil)
 
-			arr := extractPrivilegeTipsFromPlan(a.p)
+			arr := extractPrivilegeTipsFromPlan(nil, a.p)
 			convertPrivilegeTipsToPrivilege(priv, arr)
 
 			//role 0,1 does not have the select

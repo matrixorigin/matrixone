@@ -2200,6 +2200,8 @@ const (
 // privilegeItem is the item for in the compound entry
 type privilegeItem struct {
 	privilegeTyp          PrivilegeType
+	objType               objectType
+	isView                bool
 	role                  *tree.Role
 	users                 []*tree.User
 	dbName                string
@@ -4764,7 +4766,6 @@ func doDropProcedure(ctx context.Context, ses *Session, dp *tree.DropProcedure) 
 func doRevokePrivilege(ctx context.Context, ses FeSession, rp *tree.RevokePrivilege, bh BackgroundExec) (err error) {
 	var vr *verifiedRole
 	var objType objectType
-	var privLevel privilegeLevelType
 	var objId int64
 	var privType PrivilegeType
 	var sql string
@@ -4822,7 +4823,7 @@ func doRevokePrivilege(ctx context.Context, ses FeSession, rp *tree.RevokePrivil
 	}
 
 	//step 2: decide the object type , the object id and the privilege_level
-	privLevel, objId, err = checkPrivilegeObjectTypeAndPrivilegeLevel(ctx, ses, bh, rp.ObjType, *rp.Level)
+	privLevel, objId, err := checkPrivilegeObjectTypeAndPrivilegeLevel(ctx, ses, bh, rp.ObjType, *rp.Level)
 	if err != nil {
 		return err
 	}
@@ -5022,7 +5023,6 @@ func doGrantPrivilege(ctx context.Context, ses FeSession, gp *tree.GrantPrivileg
 	var roleId int64
 	var privType PrivilegeType
 	var objType objectType
-	var privLevel privilegeLevelType
 	var objId int64
 	var sql string
 	var userId uint32
@@ -5106,7 +5106,7 @@ func doGrantPrivilege(ctx context.Context, ses FeSession, gp *tree.GrantPrivileg
 
 	//step 2: get obj_type, privilege_level
 	//step 3: get obj_id
-	privLevel, objId, err = checkPrivilegeObjectTypeAndPrivilegeLevel(ctx, ses, bh, gp.ObjType, *gp.Level)
+	privLevel, objId, err := checkPrivilegeObjectTypeAndPrivilegeLevel(ctx, ses, bh, gp.ObjType, *gp.Level)
 	if err != nil {
 		return err
 	}
@@ -5994,6 +5994,8 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 // privilege will be done on the table
 type privilegeTips struct {
 	typ                   PrivilegeType
+	objType               objectType
+	isView                bool
 	databaseName          string
 	tableName             string
 	isClusterTable        bool
@@ -6016,12 +6018,34 @@ func (pota privilegeTipsArray) String() string {
 }
 
 // extractPrivilegeTipsFromPlan extracts the privilege tips from the plan
-func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
+func extractPrivilegeTipsFromPlan(ses *Session, p *plan2.Plan) privilegeTipsArray {
 	//NOTE: the pts may be nil when the plan does operate any table.
 	var pts privilegeTipsArray
 	appendPt := func(pt privilegeTips) {
 		pts = append(pts, pt)
 	}
+
+	// 提取视图权限点
+	if ses != nil && ses.GetTxnCompileCtx() != nil {
+		views := ses.GetTxnCompileCtx().GetViews()
+		for _, v := range views {
+			db := ses.GetDatabaseName()
+			name := v
+			dotIdx := strings.LastIndex(v, ".")
+			if dotIdx != -1 {
+				db = v[:dotIdx]
+				name = v[dotIdx+1:]
+			}
+			appendPt(privilegeTips{
+				typ:          PrivilegeTypeSelect,
+				objType:      objectTypeTable,
+				isView:       true,
+				databaseName: db,
+				tableName:    name,
+			})
+		}
+	}
+
 	if p.GetQuery() != nil { //select,insert select, update, delete
 		q := p.GetQuery()
 
@@ -6192,6 +6216,8 @@ func convertPrivilegeTipsToPrivilege(priv *privilege, arr privilegeTipsArray) {
 	for _, tips := range arr {
 		multiPrivs = append(multiPrivs, privilegeItem{
 			privilegeTyp:          tips.typ,
+			objType:               tips.objType,
+			isView:                tips.isView,
 			dbName:                tips.databaseName,
 			tableName:             tips.tableName,
 			isClusterTable:        tips.isClusterTable,
@@ -6408,11 +6434,35 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 			} else if entry.privilegeEntryTyp == privilegeEntryTypeCompound {
 				if entry.compound != nil {
 					allTrue := true
-					//multi privileges take effect together
+
+					// 1. Pre-scan for any view privileges
+					hasAnyViewPrivilege := false
+					for _, mi := range entry.compound.items {
+						if mi.isView {
+							tempEntry := privilegeEntriesMap[mi.privilegeTyp]
+							tempEntry.databaseName = mi.dbName
+							tempEntry.tableName = mi.tableName
+							tempEntry.privilegeEntryTyp = privilegeEntryTypeGeneral
+							tempEntry.compound = nil
+							pls, err = getPrivilegeLevelsOfObjectType(ctx, tempEntry.objType)
+							if err != nil {
+								return false, err
+							}
+							yes, err = verifyPrivilegeEntryInMultiPrivilegeLevels(ctx, bh, ses, cache, roleId, tempEntry, pls, enableCache)
+							if err != nil {
+								return false, err
+							}
+							if yes {
+								hasAnyViewPrivilege = true
+								break
+							}
+						}
+					}
+
+					// 2. Normal validation with short-circuit
 					for _, mi := range entry.compound.items {
 						if mi.privilegeTyp == PrivilegeTypeCanGrantRoleToOthersInCreateUser {
-							//TODO: normalize the name
-							//TODO: simplify the logic
+							// ... 保持原有逻辑 ...
 							yes, err = determineUserCanGrantRolesToOthersInternal(ctx, bh, ses, []*tree.Role{mi.role})
 							if err != nil {
 								return false, err
@@ -6434,27 +6484,31 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 								}
 							}
 						} else {
-							tempEntry := privilegeEntriesMap[mi.privilegeTyp]
-							tempEntry.databaseName = mi.dbName
-							tempEntry.tableName = mi.tableName
-							tempEntry.privilegeEntryTyp = privilegeEntryTypeGeneral
-							tempEntry.compound = nil
-							pls, err = getPrivilegeLevelsOfObjectType(ctx, tempEntry.objType)
-							if err != nil {
-								return false, err
-							}
-
-							yes2 = verifyLightPrivilege(ses,
-								tempEntry.databaseName,
-								priv.writeDatabaseAndTableDirectly,
-								mi.isClusterTable,
-								mi.clusterTableOperation)
-
-							if yes2 {
-								//At least there is one success
-								yes, err = verifyPrivilegeEntryInMultiPrivilegeLevels(ctx, bh, ses, cache, roleId, tempEntry, pls, enableCache)
+							// Short-circuit if any view is authorized
+							if hasAnyViewPrivilege {
+								yes = true
+							} else {
+								tempEntry := privilegeEntriesMap[mi.privilegeTyp]
+								tempEntry.databaseName = mi.dbName
+								tempEntry.tableName = mi.tableName
+								tempEntry.privilegeEntryTyp = privilegeEntryTypeGeneral
+								tempEntry.compound = nil
+								pls, err = getPrivilegeLevelsOfObjectType(ctx, tempEntry.objType)
 								if err != nil {
 									return false, err
+								}
+
+								yes2 = verifyLightPrivilege(ses,
+									tempEntry.databaseName,
+									priv.writeDatabaseAndTableDirectly,
+									mi.isClusterTable,
+									mi.clusterTableOperation)
+
+								if yes2 {
+									yes, err = verifyPrivilegeEntryInMultiPrivilegeLevels(ctx, bh, ses, cache, roleId, tempEntry, pls, enableCache)
+									if err != nil {
+										return false, err
+									}
 								}
 							}
 						}
@@ -7155,7 +7209,7 @@ func authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx conte
 		if isTargetSysWhiteList(p) && verifyAccountCanExecMoCtrl(ses.GetTenantInfo()) {
 			return true, stats, nil
 		}
-		arr := extractPrivilegeTipsFromPlan(p)
+		arr := extractPrivilegeTipsFromPlan(ses, p)
 		if len(arr) == 0 {
 			return true, stats, nil
 		}
