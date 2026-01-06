@@ -1703,6 +1703,7 @@ func appendPrimaryConstraintPlan(
 					NodeType:               plan.Node_JOIN,
 					Children:               []int32{rightId, lastNodeId},
 					JoinType:               plan.Node_RIGHT,
+					IsRightJoin:            true,
 					OnList:                 []*Expr{condExpr},
 					ProjectList:            []*Expr{rowIdExpr, rightRowIdExpr, pkColExpr},
 					RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, GetInFilterCardLimitOnPK(sid, scanNode.Stats.TableCnt), buildExpr, false)},
