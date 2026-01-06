@@ -76,7 +76,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -293,31 +292,6 @@ func (c *Compile) clear() {
 	}
 }
 
-// helper function to judge if init temporary engine is needed
-func (c *Compile) NeedInitTempEngine() bool {
-	for _, s := range c.scopes {
-		ddl := s.Plan.GetDdl()
-		if ddl == nil {
-			continue
-		}
-		if qry := ddl.GetCreateTable(); qry != nil && qry.Temporary {
-			if c.e.(*engine.EntireEngine).TempEngine == nil {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func (c *Compile) SetTempEngine(tempEngine engine.Engine, tempStorage *memorystorage.Storage) {
-	e := c.e.(*engine.EntireEngine)
-	e.TempEngine = tempEngine
-
-	if topContext := c.proc.GetTopContext(); topContext.Value(defines.TemporaryTN{}) == nil {
-		c.proc.SaveToTopContext(defines.TemporaryTN{}, tempStorage)
-	}
-}
-
 func (c *Compile) addAllAffectedRows(s *Scope) {
 	for _, ps := range s.PreScopes {
 		c.addAllAffectedRows(ps)
@@ -395,12 +369,7 @@ func (c *Compile) run(s *Scope) error {
 		c.setAffectedRows(1)
 		return nil
 	case CreateTable:
-		qry := s.Plan.GetDdl().GetCreateTable()
-		if qry.Temporary {
-			return s.CreateTempTable(c)
-		} else {
-			return s.CreateTable(c)
-		}
+		return s.CreateTable(c)
 	case CreatePitr:
 		return s.CreatePitr(c)
 	case CreateCDC:
@@ -2115,15 +2084,7 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 			if txnOp.IsSnapOp() {
 				return err
 			}
-			var e error // avoid contamination of error messages
-			db, e = c.e.Database(c.proc.Ctx, defines.TEMPORARY_DBNAME, txnOp)
-			if e != nil {
-				panic(e)
-			}
-			rel, e = db.Relation(c.proc.Ctx, engine.GetTempTableName(node.ObjRef.SchemaName, node.TableDef.Name), c.proc)
-			if e != nil {
-				panic(e)
-			}
+			return err
 		}
 		tblDef = rel.GetTableDef(ctx)
 		s.DataSource.Rel = rel
@@ -4108,26 +4069,7 @@ func (c *Compile) handleDbRelContext(node *plan.Node, onRemoteCN bool) (engine.R
 	}
 	rel, err = db.Relation(ctx, node.TableDef.Name, c.proc)
 	if err != nil {
-		if txnOp.IsSnapOp() {
-			return nil, nil, nil, err
-		}
-		var e error // avoid contamination of error messages
-		db, e = c.e.Database(ctx, defines.TEMPORARY_DBNAME, txnOp)
-		if e != nil {
-			return nil, nil, nil, err
-		}
-
-		// if temporary table, just scan at local cn.
-		rel, e = db.Relation(ctx, engine.GetTempTableName(node.ObjRef.SchemaName, node.TableDef.Name), c.proc)
-		if e != nil {
-			return nil, nil, nil, err
-		}
-		c.cnList = engine.Nodes{
-			engine.Node{
-				Addr: c.addr,
-				Mcpu: 1,
-			},
-		}
+		return nil, nil, nil, err
 	}
 
 	return rel, db, ctx, nil

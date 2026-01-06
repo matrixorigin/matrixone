@@ -145,20 +145,20 @@ CREATE TABLE t_tinyint(id TINYINT);
 INSERT INTO t_tinyint VALUES (1), (2);
 SELECT id, id >= 1.1 FROM t_tinyint;
 id	id >= 1.1
-1	false	
-2	true	
+1	0	
+2	1	
 SELECT id, 1.1 <= id FROM t_tinyint;
 id	1.1 <= id
-1	false	
-2	true	
+1	0	
+2	1	
 SELECT id, id = 1.1 FROM t_tinyint;
 id	id = 1.1
-1	false	
-2	false	
+1	0	
+2	0	
 SELECT id, 1.1 = id FROM t_tinyint;
 id	1.1 = id
-1	false	
-2	false	
+1	0	
+2	0	
 SELECT * from t_tinyint WHERE id = 1.1;
 id
 SELECT * from t_tinyint WHERE id = 1.1e0;
@@ -213,40 +213,40 @@ count(*)
 drop table t;
 SELECT (254 BETWEEN 0 AND 255);
 (254 BETWEEN 0 AND 255)
-true
+1
 SELECT  -32000 <= 0;
 -32000 <= 0
-true
+1
 SELECT 0 <= 127;
 0 <= 127
-true
+1
 SELECT CAST(100 AS UNSIGNED) BETWEEN 1 AND -1;
 CAST(100 AS UNSIGNED) BETWEEN 1 AND -1
-false
+0
 SELECT CAST(100 AS UNSIGNED) NOT BETWEEN 1 AND -1;
 CAST(100 AS UNSIGNED) NOT BETWEEN 1 AND -1
-true
+1
 SELECT CAST(0 AS UNSIGNED) BETWEEN 0 AND -1;
 CAST(0 AS UNSIGNED) BETWEEN 0 AND -1
-false
+0
 SELECT CAST(0 AS UNSIGNED) NOT BETWEEN 0 AND -1;
 CAST(0 AS UNSIGNED) NOT BETWEEN 0 AND -1
-true
+1
 SELECT ( 255 BETWEEN 255 AND 255 );
 ( 255 BETWEEN 255 AND 255 )
-true
+1
 SELECT ( 127 BETWEEN 255 AND 1 );
 ( 127 BETWEEN 255 AND 1 )
-false
+0
 SELECT ( -1 BETWEEN 255 AND 1 );
 ( -1 BETWEEN 255 AND 1 )
-false
+0
 SELECT ( 0 BETWEEN 255 AND 1 );
 ( 0 BETWEEN 255 AND 1 )
-false
+0
 SELECT ( 1 BETWEEN 255 AND 1 );
 ( 1 BETWEEN 255 AND 1 )
-false
+0
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;

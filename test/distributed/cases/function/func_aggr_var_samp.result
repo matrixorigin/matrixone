@@ -122,7 +122,7 @@ Fld1    VAR_SAMP(Fld2)
 drop table t1;
 SELECT VAR_SAMP(1)<VAR_SAMP(2);
 VAR_SAMP(1) < VAR_SAMP(2)
-false
+0
 CREATE TABLE t1(i INT);
 INSERT INTO t1 VALUES (NULL),(1);
 SELECT VAR_SAMP(i)+0 as splus0, i+0 as plain FROM t1 GROUP BY i ;

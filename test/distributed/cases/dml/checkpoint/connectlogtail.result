@@ -1,30 +1,30 @@
 select enable_fault_injection();
 enable_fault_injection()
-true
+1
 select add_fault_point('fj/cn/recv/err', ':::', 'echo', 20, '');
 add_fault_point(fj/cn/recv/err, :::, echo, 20, )
-true
+1
 select add_fault_point('fj/cn/recv/subsyserr', ':::', 'echo', 300, '');
 add_fault_point(fj/cn/recv/subsyserr, :::, echo, 300, )
-true
+1
 select sleep(1);
 sleep(1)
 0
 select remove_fault_point('fj/cn/recv/subsyserr');
 remove_fault_point(fj/cn/recv/subsyserr)
-true
+1
 select add_fault_point('fj/cn/recv/rcacheerr', ':::', 'echo', 700, '');
 add_fault_point(fj/cn/recv/rcacheerr, :::, echo, 700, )
-true
+1
 select sleep(1);
 sleep(1)
 0
 select remove_fault_point('fj/cn/recv/rcacheerr');
 remove_fault_point(fj/cn/recv/rcacheerr)
-true
+1
 select disable_fault_injection();
 disable_fault_injection()
-true
+1
 select sleep(1);
 sleep(1)
 0

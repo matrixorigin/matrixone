@@ -445,6 +445,7 @@ message TableDef {
 
   uint64 FeatureFlag = 35;
   uint64 logical_id = 36;
+  string original_name = 37;
 }
 
 message TableFunction {
