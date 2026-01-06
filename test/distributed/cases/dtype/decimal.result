@@ -1440,42 +1440,34 @@ SELECT * FROM decimal_opt_test WHERE price BETWEEN 99.990000 AND 299.990000 ORDE
 1  ¦  99.99  ¦  12.34567  ¦  100  𝄀
 2  ¦  199.99  ¦  23.45678  ¦  200  𝄀
 3  ¦  299.99  ¦  34.56789  ¦  300
-EXPLAIN ANALYZE SELECT * FROM decimal_opt_test WHERE price IN (99.990000, 199.990000, 299.990000);
-➤ tp query plan[12,-1,0]  𝄀
+EXPLAIN SELECT * FROM decimal_opt_test WHERE price IN (99.990000, 199.990000, 299.990000);
+➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
-  Analyze: timeConsumed=0ms waitTime=0ms inputRows=3 outputRows=3 (min=3, max=3) InputSize=132 bytes OutputSize=132 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=132 bytes (min=132 bytes, max=132 bytes)  𝄀
   ->  Join  𝄀
-        Analyze: timeConsumed=0ms waitTime=0ms inputRows=6 outputRows=3 (min=3, max=3) InputSize=144 bytes OutputSize=132 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=12 bytes (min=0 bytes, max=12 bytes)  𝄀
         Join Type: INDEX  𝄀
         Join Cond: (decimal_opt_test.id = __mo_index_pri_col)  𝄀
         Runtime Filter Build: #[-1,0]  𝄀
         ->  Table Scan on decimal.decimal_opt_test [ForceOneCN]  𝄀
-              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=3 outputRows=3 (min=3, max=3) InputSize=132 bytes OutputSize=132 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=267 bytes (min=132 bytes, max=132 bytes)  𝄀
               Filter Cond: decimal_opt_test.price in ([9999 19999 29999])  𝄀
               Runtime Filter Probe: decimal_opt_test.id  𝄀
         ->  Index Table Scan on decimal_opt_test.idx_price [ForceOneCN]  𝄀
-              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=3 outputRows=3 (min=3, max=3) InputSize=84 bytes OutputSize=12 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=99 bytes (min=12 bytes, max=84 bytes)  𝄀
               Filter Cond: prefix_in(__mo_index_idx_col)
 SELECT * FROM decimal_opt_test WHERE price IN (99.990000, 199.990000, 299.990000) ORDER BY id;
 ➤ id[4,32,0]  ¦  price[3,10,2]  ¦  amount[3,20,5]  ¦  quantity[3,19,0]  𝄀
 1  ¦  99.99  ¦  12.34567  ¦  100  𝄀
 2  ¦  199.99  ¦  23.45678  ¦  200  𝄀
 3  ¦  299.99  ¦  34.56789  ¦  300
-EXPLAIN ANALYZE SELECT * FROM decimal_opt_test WHERE amount = 12.34;
-➤ tp query plan[12,-1,0]  𝄀
+EXPLAIN SELECT * FROM decimal_opt_test WHERE amount = 12.34;
+➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
-  Analyze: timeConsumed=0ms waitTime=0ms inputRows=0 outputRows=0 (min=0, max=0) InputSize=0 bytes OutputSize=0 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
   ->  Join  𝄀
-        Analyze: timeConsumed=0ms waitTime=0ms inputRows=0 outputRows=0 (min=0, max=0) InputSize=0 bytes OutputSize=0 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
         Join Type: INDEX  𝄀
         Join Cond: (decimal_opt_test.id = __mo_index_pri_col)  𝄀
         Runtime Filter Build: #[-1,0]  𝄀
         ->  Table Scan on decimal.decimal_opt_test [ForceOneCN]  𝄀
-              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=3 outputRows=0 (min=0, max=0) InputSize=132 bytes OutputSize=0 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=135 bytes (min=0 bytes, max=132 bytes)  𝄀
               Filter Cond: (decimal_opt_test.amount = 12.34000)  𝄀
               Runtime Filter Probe: decimal_opt_test.id  𝄀
         ->  Index Table Scan on decimal_opt_test.idx_amount [ForceOneCN]  𝄀
-              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=0 inputRows=0 outputRows=0 (min=0, max=0) InputSize=0 bytes OutputSize=0 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)  𝄀
               Filter Cond: prefix_eq(__mo_index_idx_col)
 SELECT * FROM decimal_opt_test WHERE amount = 12.34;
 ➤ id[4,32,0]  ¦  price[3,10,2]  ¦  amount[3,20,5]  ¦  quantity[3,19,0]

@@ -774,13 +774,11 @@ EXPLAIN SELECT * FROM decimal_opt_test WHERE price BETWEEN 99.990000 AND 299.990
 SELECT * FROM decimal_opt_test WHERE price BETWEEN 99.990000 AND 299.990000 ORDER BY id;
 
 -- Test 6: IN list with trailing zeros - should use index
--- @pattern
-EXPLAIN ANALYZE SELECT * FROM decimal_opt_test WHERE price IN (99.990000, 199.990000, 299.990000);
+EXPLAIN SELECT * FROM decimal_opt_test WHERE price IN (99.990000, 199.990000, 299.990000);
 SELECT * FROM decimal_opt_test WHERE price IN (99.990000, 199.990000, 299.990000) ORDER BY id;
 
 -- Test 7: Higher precision column with lower precision constant - should use index
--- @pattern
-EXPLAIN ANALYZE SELECT * FROM decimal_opt_test WHERE amount = 12.34;
+EXPLAIN SELECT * FROM decimal_opt_test WHERE amount = 12.34;
 SELECT * FROM decimal_opt_test WHERE amount = 12.34;
 
 -- Test 8: Verify DELETE with trailing zeros works correctly

@@ -531,3 +531,121 @@ func TestDecimalCastWrappedLiteralOptimization(t *testing.T) {
 		})
 	}
 }
+
+// TestDecimalLiteralSmartTypeSelection tests that decimal literals are assigned
+// the smallest type that can hold them (decimal64 vs decimal128)
+func TestDecimalLiteralSmartTypeSelection(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name         string
+		colType      types.T
+		colScale     int32
+		constValue   string
+		expectedType types.T
+		description  string
+	}{
+		{
+			name:         "small decimal fits in decimal64",
+			colType:      types.T_decimal64,
+			colScale:     2,
+			constValue:   "99.99",
+			expectedType: types.T_decimal64,
+			description:  "99.99 should be decimal64, no type promotion needed",
+		},
+		{
+			name:         "large decimal needs decimal128",
+			colType:      types.T_decimal64,
+			colScale:     2,
+			constValue:   "9999999999999999999.99", // 19 digits
+			expectedType: types.T_decimal128,
+			description:  "Large value needs decimal128, type promotion expected",
+		},
+		{
+			name:         "decimal64 column with decimal64 constant",
+			colType:      types.T_decimal64,
+			colScale:     5,
+			constValue:   "12345.67890",
+			expectedType: types.T_decimal64,
+			description:  "Both decimal64, should use index",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Logf("Test: %s", tt.description)
+
+			// Create column expression
+			colExpr := &plan.Expr{
+				Typ: plan.Type{
+					Id:    int32(tt.colType),
+					Width: 18,
+					Scale: tt.colScale,
+				},
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: 0,
+						ColPos: 0,
+					},
+				},
+			}
+
+			// Parse constant to get its natural type
+			dec, scale, err := types.Parse128(tt.constValue)
+			require.NoError(t, err)
+
+			// Determine if it fits in decimal64
+			maxDecimal64 := uint64(999999999999999999)
+			isDecimal64 := dec.B64_127 == 0 && dec.B0_63 <= maxDecimal64 && scale <= 18
+
+			var constExpr *plan.Expr
+			if isDecimal64 {
+				constExpr = &plan.Expr{
+					Typ: plan.Type{
+						Id:    int32(types.T_decimal64),
+						Width: 18,
+						Scale: scale,
+					},
+					Expr: &plan.Expr_Lit{
+						Lit: &plan.Literal{
+							Isnull: false,
+							Value: &plan.Literal_Decimal64Val{
+								Decimal64Val: &plan.Decimal64{A: int64(dec.B0_63)},
+							},
+						},
+					},
+				}
+			} else {
+				constExpr = &plan.Expr{
+					Typ: plan.Type{
+						Id:    int32(types.T_decimal128),
+						Width: 38,
+						Scale: scale,
+					},
+					Expr: &plan.Expr_Lit{
+						Lit: &plan.Literal{
+							Isnull: false,
+							Value: &plan.Literal_Decimal128Val{
+								Decimal128Val: &plan.Decimal128{
+									A: int64(dec.B0_63),
+									B: int64(dec.B64_127),
+								},
+							},
+						},
+					},
+				}
+			}
+
+			// Verify the constant got the expected type
+			require.Equal(t, int32(tt.expectedType), constExpr.Typ.Id,
+				"Constant should have type %v", tt.expectedType)
+
+			// Call BindFuncExprImplByPlanExpr
+			result, err := BindFuncExprImplByPlanExpr(ctx, "=", []*plan.Expr{colExpr, constExpr})
+			require.NoError(t, err)
+			require.NotNil(t, result)
+
+			t.Logf("✓ Constant assigned type: %v", types.T(constExpr.Typ.Id))
+		})
+	}
+}

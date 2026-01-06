@@ -2048,10 +2048,39 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 			}
 			return appendCastBeforeExpr(b.GetContext(), makePlan2StringConstExprWithType(astExpr.String()), typ)
 		}
+		// Smart type selection for untyped decimal literals
+		// Choose decimal64 if value fits, otherwise decimal128
 		d128, scale, err := types.Parse128(astExpr.String())
 		if err != nil {
 			return nil, err
 		}
+
+		// Check if value fits in decimal64 (18 digits precision)
+		// decimal64 max: 999999999999999999 (18 nines)
+		maxDecimal64 := uint64(999999999999999999)
+		useDecimal64 := d128.B64_127 == 0 && d128.B0_63 <= maxDecimal64 && scale <= 18
+
+		if useDecimal64 {
+			d64 := types.Decimal64(d128.B0_63)
+			return &Expr{
+				Expr: &plan.Expr_Lit{
+					Lit: &Const{
+						Isnull: false,
+						Value: &plan.Literal_Decimal64Val{
+							Decimal64Val: &plan.Decimal64{A: int64(d64)},
+						},
+					},
+				},
+				Typ: plan.Type{
+					Id:          int32(types.T_decimal64),
+					Width:       18,
+					Scale:       scale,
+					NotNullable: true,
+				},
+			}, nil
+		}
+
+		// Use decimal128 for higher precision
 		a := int64(d128.B0_63)
 		b := int64(d128.B64_127)
 		return &Expr{
