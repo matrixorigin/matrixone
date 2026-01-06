@@ -1398,6 +1398,7 @@ EXPLAIN SELECT * FROM decimal_opt_test WHERE price = 99.991234567;
 Project  𝄀
   ->  Table Scan on decimal.decimal_opt_test  𝄀
         Filter Cond: (cast(decimal_opt_test.price AS DECIMAL64(10, 9)) = 99.991234567)
+              -- HINT: Cast expression may prevent index usage
 SELECT * FROM decimal_opt_test WHERE price = 99.991234567;
 ➤ id[4,32,0]  ¦  price[3,10,2]  ¦  amount[3,20,5]  ¦  quantity[3,19,0]
 EXPLAIN SELECT * FROM decimal_opt_test WHERE price = 99.99;
@@ -1491,6 +1492,12 @@ SELECT COUNT(*) FROM decimal_opt_test WHERE price = 99.991;
 0
 SELECT * FROM decimal_opt_test WHERE quantity = 100.12345;
 ➤ id[4,32,0]  ¦  price[3,10,2]  ¦  amount[3,20,5]  ¦  quantity[3,19,0]
+EXPLAIN SELECT * FROM decimal_opt_test WHERE price = 99.991234567;
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Table Scan on decimal.decimal_opt_test  𝄀
+        Filter Cond: (cast(decimal_opt_test.price AS DECIMAL64(10, 9)) = 99.991234567)
+              -- HINT: Cast expression may prevent index usage
 INSERT INTO decimal_opt_test VALUES (4, -50.50, -10.12345, -100);
 EXPLAIN ANALYZE SELECT * FROM decimal_opt_test WHERE price = -50.500000;
 ➤ tp query plan[12,-1,0]  𝄀

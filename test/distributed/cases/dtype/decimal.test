@@ -806,7 +806,10 @@ SELECT COUNT(*) FROM decimal_opt_test WHERE price = 99.991;
 -- Should not match any rows
 SELECT * FROM decimal_opt_test WHERE quantity = 100.12345;
 
--- Test 13: Negative values with trailing zeros
+-- Test 13: Optimizer hint test - precision mismatch should show hint
+EXPLAIN SELECT * FROM decimal_opt_test WHERE price = 99.991234567;
+
+-- Test 14: Negative values with trailing zeros
 INSERT INTO decimal_opt_test VALUES (4, -50.50, -10.12345, -100);
 -- @pattern
 EXPLAIN ANALYZE SELECT * FROM decimal_opt_test WHERE price = -50.500000;
