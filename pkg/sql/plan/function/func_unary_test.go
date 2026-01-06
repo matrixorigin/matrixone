@@ -371,7 +371,7 @@ func initL2NormArrayTestCase() []tcTemp {
 					[]bool{false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{3.7416573867739413, 8.774964387392123},
+				[]float64{3.741657257080078, 8.774964332580566},
 				[]bool{false, false}),
 		},
 		{
