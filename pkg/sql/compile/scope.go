@@ -1078,7 +1078,9 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		// Pass runtime BloomFilter to reader via FilterHint (only for ivf entries table).
 		if n := s.DataSource.node; n != nil && n.TableDef != nil &&
 			n.TableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries {
-			if bfVal := c.proc.Ctx.Value(defines.IvfBloomFilter{}); bfVal != nil {
+			if len(s.DataSource.BloomFilter) > 0 {
+				hint.BloomFilter = s.DataSource.BloomFilter
+			} else if bfVal := c.proc.Ctx.Value(defines.IvfBloomFilter{}); bfVal != nil {
 				if bf, ok := bfVal.([]byte); ok && len(bf) > 0 {
 					hint.BloomFilter = bf
 				}
@@ -1151,7 +1153,9 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		hint := engine.FilterHint{}
 		if n := s.DataSource.node; n != nil && n.TableDef != nil &&
 			n.TableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries {
-			if bfVal := c.proc.Ctx.Value(defines.IvfBloomFilter{}); bfVal != nil {
+			if len(s.DataSource.BloomFilter) > 0 {
+				hint.BloomFilter = s.DataSource.BloomFilter
+			} else if bfVal := c.proc.Ctx.Value(defines.IvfBloomFilter{}); bfVal != nil {
 				if bf, ok := bfVal.([]byte); ok && len(bf) > 0 {
 					hint.BloomFilter = bf
 				}
