@@ -1,6 +1,27 @@
 select power(exp(10), log(100)),exp(power(2,2)),power(-1,1),power(NULL,0),power(1,1),power(3,9),power(-1,2),power(NULL,2);
-power(exp(10), log(100))	exp(power(2,2))	power(-1,1)	power(NULL,0)	power(1,1)	power(3,9)	power(-1,2)	power(NULL,2)
-1.0000000000000046E20	54.598150033144236	-1.0	null	1.0	19683.0	1.0	null
+power(exp(10), log(100))    exp(power(2, 2))    power(-1, 1)    power(null, 0)    power(1, 1)    power(3, 9)    power(-1, 2)    power(null, 2)
+1.0000000000000046E20    54.598150033144236    -1.0    null    1.0    19683.0    1.0    null
+SELECT POW(2, 3) AS result1;
+result1
+8.0
+SELECT POW(2, 0) AS result2;
+result2
+1.0
+SELECT POW(4, 0.5) AS result3;
+result3
+2.0
+SELECT POWER(2, 3) AS result4;
+result4
+8.0
+SELECT POWER(2, 0) AS result5;
+result5
+1.0
+SELECT POWER(4, 0.5) AS result6;
+result6
+2.0
+SELECT POW(2, 3) = POWER(2, 3) AS same_result;
+same_result
+1
 SELECT power(2,13);
 power(2,13)
 8192.0

@@ -1,15 +1,15 @@
 SELECT 2 BETWEEN 1 AND 3, 2 BETWEEN 3 and 1;
 2 between 1 and 3    2 between 3 and 1
-true    false
+1    0
 SELECT 1 BETWEEN 2 AND 3;
 1 between 2 and 3
-false
+0
 SELECT 'b' BETWEEN 'a' AND 'c';
 b between a and c
-true
+1
 SELECT 2 BETWEEN 2 AND '3';
 2 between 2 and 3
-true
+1
 DROP TABLE IF EXISTS between_and_test;
 CREATE TABLE between_and_test(
 int_test_max INT,
@@ -241,11 +241,11 @@ INSERT INTO t1(b) VALUES(TRUE), (FALSE), (NULL);
 SELECT * FROM t1 WHERE SUBSTRING(str1,LENGTH(str1)) BETWEEN 'A' AND 'z';
 str1    b
 &^%$#@ has some error    null
-many years age, joe smith always    true
+many years age, joe smith always    1
 SELECT * FROM t1 WHERE SUBSTRING(str1,LENGTH(str1) - (LENGTH(str1)-1)) BETWEEN 'A' AND 'z';
 str1    b
 This product is merged some high tech.    null
-many years age, joe smith always    true
+many years age, joe smith always    1
 SELECT * FROM t1 WHERE SUBSTRING(str1,LENGTH(str1) - (LENGTH(str1)-1)) NOT BETWEEN 'A' AND 'z';
 str1    b
 &^%$#@ has some error    null
@@ -253,22 +253,22 @@ SELECT * FROM t1 WHERE str1 NOT BETWEEN 'm' AND 'T';
 str1    b
 This product is merged some high tech.    null
 &^%$#@ has some error    null
-many years age, joe smith always    true
+many years age, joe smith always    1
 SELECT * FROM t1 WHERE b BETWEEN TRUE AND FALSE;
 str1    b
 SELECT * FROM t1 WHERE b NOT BETWEEN TRUE AND FALSE;
 str1    b
-many years age, joe smith always    true
-null    true
-null    false
+many years age, joe smith always    1
+null    1
+null    0
 SELECT * FROM t1 WHERE LENGTH(str1) BETWEEN 25 AND 50;
 str1    b
 This product is merged some high tech.    null
-many years age, joe smith always    true
+many years age, joe smith always    1
 SELECT * FROM t1 WHERE LENGTH(str1) BETWEEN '25'+5 AND 50;
 str1    b
 This product is merged some high tech.    null
-many years age, joe smith always    true
+many years age, joe smith always    1
 SELECT * FROM t1 WHERE LENGTH(str1) NOT BETWEEN 25 AND 50;
 str1    b
 &^%$#@ has some error    null
