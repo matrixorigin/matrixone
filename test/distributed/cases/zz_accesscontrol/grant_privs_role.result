@@ -19,26 +19,26 @@ create user testuser IDENTIFIED BY '123456';
 grant select,insert,update on table testdb.* to test_role with grant option;
 select privilege_name,obj_type,privilege_level,with_grant_option from mo_catalog.mo_role_privs where role_name='test_role';
 privilege_name    obj_type    privilege_level    with_grant_option
-select    table    d.*    true
-insert    table    d.*    true
-update    table    d.*    true
+select    table    d.*    1
+insert    table    d.*    1
+update    table    d.*    1
 grant all on account * to test_role;
 select privilege_name,obj_type,privilege_level,with_grant_option from mo_catalog.mo_role_privs where role_name='test_role';
 privilege_name    obj_type    privilege_level    with_grant_option
-select    table    d.*    true
-insert    table    d.*    true
-update    table    d.*    true
-account all    account    *    false
+select    table    d.*    1
+insert    table    d.*    1
+update    table    d.*    1
+account all    account    *    0
 grant OWNERSHIP on database *.* to test_role;
 grant OWNERSHIP on table *.* to test_role;
 select privilege_name,obj_type,privilege_level,with_grant_option from mo_catalog.mo_role_privs where role_name='test_role';
 privilege_name    obj_type    privilege_level    with_grant_option
-select    table    d.*    true
-insert    table    d.*    true
-update    table    d.*    true
-account all    account    *    false
-database ownership    database    *.*    false
-table ownership    table    *.*    false
+select    table    d.*    1
+insert    table    d.*    1
+update    table    d.*    1
+account all    account    *    0
+database ownership    database    *.*    0
+table ownership    table    *.*    0
 grant select,insert,update on testdb.* to test_role;
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 36 near " testdb.* to test_role;";
 grant select,insert,update on account * to 'test_role';
@@ -402,15 +402,15 @@ grant select ,insert ,update on table *.* to r1,r2 with grant option;
 grant select ,insert ,update on table *.* to r1,r2 with grant option;
 select role_name,obj_type,privilege_name,privilege_level,with_grant_option from mo_catalog.mo_role_privs where role_name in ('r1','r2');
 role_name    obj_type    privilege_name    privilege_level    with_grant_option
-r1    database    create table    *.*    false
-r2    database    create table    *.*    false
-r1    table    table ownership    d.t    false
-r1    table    select    *.*    true
-r2    table    select    *.*    true
-r1    table    insert    *.*    true
-r2    table    insert    *.*    true
-r1    table    update    *.*    true
-r2    table    update    *.*    true
+r1    database    create table    *.*    0
+r2    database    create table    *.*    0
+r1    table    table ownership    d.t    0
+r1    table    select    *.*    1
+r2    table    select    *.*    1
+r1    table    insert    *.*    1
+r2    table    insert    *.*    1
+r1    table    update    *.*    1
+r2    table    update    *.*    1
 grant r1,r2 to user1,user2;
 grant r1,r2 to user1,user2;
 select user_name,role_name,obj_type,privilege_name,privilege_level from mo_catalog.mo_user_grant,mo_catalog.mo_user,mo_catalog.mo_role_privs where mo_user_grant.user_id=mo_user.user_id and mo_role_privs.role_id=mo_user_grant.role_id and user_name in ('user1','user2') and role_name in ('r1','r2');

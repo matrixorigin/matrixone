@@ -1,10 +1,10 @@
 SELECT 1 IN (SELECT 1);
 1 in (select 1)
-true
+1
 create view v1 as SELECT 1 IN (SELECT 1);
 select * from v1;
 1 in (select 1)
-true
+1
 drop view v1;
 SELECT 1 FROM (SELECT 1 as a) b WHERE 1 IN (SELECT (SELECT a));
 1
@@ -46,11 +46,11 @@ drop view v3;
 invalid view 'view-subquery-with-in.v3'
 SELECT ((0,1) NOT IN (SELECT NULL,1)) IS NULL;
 ((0, 1) not in (select null, 1)) is null
-true
+1
 create view v1 as SELECT ((0,1) NOT IN (SELECT NULL,1)) IS NULL;
 select * from v1;
 ((0, 1) not in (select null, 1)) is null
-true
+1
 drop view v1;
 drop table if exists t1;
 drop table if exists t2;
@@ -83,11 +83,11 @@ drop view v2;
 drop view v3;
 SELECT 0 IN (SELECT 1 FROM t1 a);
 0 in (select 1 from t1 as a)
-false
+0
 create view v1 as SELECT 0 IN (SELECT 1 FROM t1 a);
 select * from v1;
 0 in (select 1 from t1 as a)
-false
+0
 drop view v1;
 select * from t3 where a in (select a,b from t2);
 invalid input: subquery returns more than 1 column
@@ -114,26 +114,26 @@ insert into t1 values ('a1'),('a2'),('a3');
 insert into t2 values ('a1'),('a2');
 select s1, s1 NOT IN (SELECT s1 FROM t2) from t1;
 s1    s1 not in (select s1 from t2)
-a1    false
-a2    false
-a3    true
+a1    0
+a2    0
+a3    1
 select s1, s1 NOT IN (SELECT s1 FROM t2 WHERE s1 < 'a2') from t1;
 s1    s1 not in (select s1 from t2 where s1 < a2)
-a1    false
-a2    true
-a3    true
+a1    0
+a2    1
+a3    1
 create view v1 as select s1, s1 NOT IN (SELECT s1 FROM t2) from t1;
 create view v2 as select s1, s1 NOT IN (SELECT s1 FROM t2 WHERE s1 < 'a2') from t1;
 select * from v1;
 s1    s1 not in (select s1 from t2)
-a1    false
-a2    false
-a3    true
+a1    0
+a2    0
+a3    1
 select * from v2;
 s1    s1 not in (select s1 from t2 where s1 < a2)
-a1    false
-a2    true
-a3    true
+a1    0
+a2    1
+a3    1
 drop view v1;
 drop view v2;
 drop table if exists t1;
@@ -221,15 +221,15 @@ CREATE TABLE t2(a int);
 INSERT INTO t2 VALUES (1),(2),(3);
 SELECT a, a IN (SELECT a FROM t1) FROM t2;
 a    a in (select a from t1)
-1    true
+1    1
 2    null
-3    true
+3    1
 create view v1 as SELECT a, a IN (SELECT a FROM t1) FROM t2;
 select * from v1;
 a    a in (select a from t1)
-1    true
+1    1
 2    null
-3    true
+3    1
 drop view v1;
 drop table if exists t1;
 drop table if exists t2;
@@ -422,10 +422,10 @@ create table t3 (a int);
 insert into t3 values (NULL), (NULL);
 select a, oref, a in (select max(ie) from t1 where oref=t2.oref group by grp) Z from t2;
 a    oref    z
-1    1    true
-2    2    false
+1    1    1
+2    2    0
 3    3    null
-null    4    false
+null    4    0
 null    2    null
 select a, oref from t2 where a in (select max(ie) from t1 where oref=t2.oref group by grp);
 a    oref
@@ -435,15 +435,15 @@ select max(ie) from t1 where oref=t2.oref group by grp union
 select max(ie) from t1 where oref=t2.oref group by grp
 ) Z from t2;
 a    oref    z
-1    1    true
-2    2    false
+1    1    1
+2    2    0
 3    3    null
-null    4    false
+null    4    0
 null    2    null
 select a in (select max(ie) from t1 where oref=4 group by grp) from t3;
 a in (select max(ie) from t1 where oref = 4 group by grp)
-false
-false
+0
+0
 create view v1 as select a, oref, a in (select max(ie) from t1 where oref=t2.oref group by grp) Z from t2;
 create view v2 as select a, oref from t2 where a in (select max(ie) from t1 where oref=t2.oref group by grp);
 create view v3 as select a, oref, a in (
@@ -453,25 +453,25 @@ select max(ie) from t1 where oref=t2.oref group by grp
 create view v4 as select a in (select max(ie) from t1 where oref=4 group by grp) from t3;
 select * from v1;
 a    oref    z
-1    1    true
-2    2    false
+1    1    1
+2    2    0
 3    3    null
-null    4    false
+null    4    0
 null    2    null
 select * from v2;
 a    oref
 1    1
 select * from v3;
 a    oref    z
-1    1    true
-2    2    false
+1    1    1
+2    2    0
 3    3    null
-null    4    false
+null    4    0
 null    2    null
 select * from v4;
 a in (select max(ie) from t1 where oref = 4 group by grp)
-false
-false
+0
+0
 drop view v1;
 drop view v2;
 drop view v3;
@@ -535,20 +535,20 @@ create table t1 (a int);
 insert into t1 values (1),(2),(3);
 select 1 IN (SELECT * from t1);
 1 in (select * from t1)
-true
+1
 select 10 IN (SELECT * from t1);
 10 in (select * from t1)
-false
+0
 select NULL IN (SELECT * from t1);
 null in (select * from t1)
 null
 update t1 set a=NULL where a=2;
 select 1 IN (SELECT * from t1);
 1 in (select * from t1)
-true
+1
 select 3 IN (SELECT * from t1);
 3 in (select * from t1)
-true
+1
 select 10 IN (SELECT * from t1);
 10 in (select * from t1)
 null
@@ -560,7 +560,7 @@ create view v6 as select 3 IN (SELECT * from t1);
 create view v7 as select 10 IN (SELECT * from t1);
 select * from v1;
 1 in (select * from t1)
-true
+1
 select * from v2;
 10 in (select * from t1)
 null
@@ -569,10 +569,10 @@ null in (select * from t1)
 null
 select * from v5;
 1 in (select * from t1)
-true
+1
 select * from v6;
 3 in (select * from t1)
-true
+1
 select * from v7;
 10 in (select * from t1)
 null
@@ -587,10 +587,10 @@ create table t1 (a varchar(20));
 insert into t1 values ('A'),('BC'),('DEF');
 select 'A' IN (SELECT * from t1);
 A in (select * from t1)
-true
+1
 select 'XYZS' IN (SELECT * from t1);
 XYZS in (select * from t1)
-false
+0
 select NULL IN (SELECT * from t1);
 null in (select * from t1)
 null
@@ -599,10 +599,10 @@ create view v2 as select 'XYZS' IN (SELECT * from t1);
 create view v3 as select NULL IN (SELECT * from t1);
 select * from v1;
 A in (select * from t1)
-true
+1
 select * from v2;
 XYZS in (select * from t1)
-false
+0
 select * from v3;
 null in (select * from t1)
 null
@@ -612,10 +612,10 @@ drop view v3;
 update t1 set a=NULL where a='BC';
 select 'A' IN (SELECT * from t1);
 A in (select * from t1)
-true
+1
 select 'DEF' IN (SELECT * from t1);
 DEF in (select * from t1)
-true
+1
 select 'XYZS' IN (SELECT * from t1);
 XYZS in (select * from t1)
 null
@@ -624,10 +624,10 @@ create view v2 as select 'DEF' IN (SELECT * from t1);
 create view v3 as select 'XYZS' IN (SELECT * from t1);
 select * from v1;
 A in (select * from t1)
-true
+1
 select * from v2;
 DEF in (select * from t1)
-true
+1
 select * from v3;
 XYZS in (select * from t1)
 null
@@ -639,10 +639,10 @@ create table t1 (a float);
 insert into t1 values (1.5),(2.5),(3.5);
 select 1.5 IN (SELECT * from t1);
 1.5 in (select * from t1)
-true
+1
 select 10.5 IN (SELECT * from t1);
 10.5 in (select * from t1)
-false
+0
 select NULL IN (SELECT * from t1);
 null in (select * from t1)
 null
@@ -651,10 +651,10 @@ create view v2 as select 10.5 IN (SELECT * from t1);
 create view v3 as select NULL IN (SELECT * from t1);
 select * from v1;
 1.5 in (select * from t1)
-true
+1
 select * from v2;
 10.5 in (select * from t1)
-false
+0
 select * from v3;
 null in (select * from t1)
 null
@@ -664,10 +664,10 @@ drop view v3;
 update t1 set a=NULL where a=2.5;
 select 1.5 IN (SELECT * from t1);
 1.5 in (select * from t1)
-true
+1
 select 3.5 IN (SELECT * from t1);
 3.5 in (select * from t1)
-true
+1
 select 10.5 IN (SELECT * from t1);
 10.5 in (select * from t1)
 null
@@ -676,10 +676,10 @@ create view v2 as select 3.5 IN (SELECT * from t1);
 create view v3 as select 10.5 IN (SELECT * from t1);
 select * from v1;
 1.5 in (select * from t1)
-true
+1
 select * from v2;
 3.5 in (select * from t1)
-true
+1
 select * from v3;
 10.5 in (select * from t1)
 null
@@ -697,30 +697,30 @@ INSERT INTO t1 VALUES (1),(2),(3),(4);
 INSERT INTO t2 VALUES (1),(2),(3);
 SELECT t1.a, t1.a in (select t2.a from t2) FROM t1;
 a    t1.a in (select t2.a from t2)
-1    true
-2    true
-3    true
-4    false
+1    1
+2    1
+3    1
+4    0
 SELECT t1.a, t1.a in (select t2.a from t2,t3 where t3.a=t2.a) FROM t1;
 a    t1.a in (select t2.a from t2 cross join t3 where t3.a = t2.a)
-1    true
-2    true
-3    true
-4    false
+1    1
+2    1
+3    1
+4    0
 create view v1 as SELECT t1.a, t1.a in (select t2.a from t2) FROM t1;
 create view v2 as SELECT t1.a, t1.a in (select t2.a from t2,t3 where t3.a=t2.a) FROM t1;
 select * from v1;
 a    t1.a in (select t2.a from t2)
-1    true
-2    true
-3    true
-4    false
+1    1
+2    1
+3    1
+4    0
 select * from v2;
 a    t1.a in (select t2.a from t2 cross join t3 where t3.a = t2.a)
-1    true
-2    true
-3    true
-4    false
+1    1
+2    1
+3    1
+4    0
 drop view v1;
 drop view v2;
 drop table if exists t1;
@@ -740,23 +740,23 @@ DROP TABLE IF EXISTS t1;
 create table t1 (a float);
 select 10.5 IN (SELECT * from t1 LIMIT 1);
 10.5 in (select * from t1 limit 1)
-false
+0
 select 10.5 IN (SELECT * from t1 LIMIT 1 UNION SELECT 1.5);
 [unknown result because it is related to issue#4354]
 select 10.5 IN (SELECT * from t1 UNION SELECT 1.5 LIMIT 1);
 10.5 in (select * from t1 union select 1.5 limit 1)
-false
+0
 create view v1 as select 10.5 IN (SELECT * from t1 LIMIT 1);
 create view v2 as select 10.5 IN (SELECT * from t1 LIMIT 1 UNION SELECT 1.5);
 create view v3 as select 10.5 IN (SELECT * from t1 UNION SELECT 1.5 LIMIT 1);
 select * from v1;
 10.5 in (select * from t1 limit 1)
-false
+0
 select * from v2;
 [unknown result because it is related to issue#4354]
 select * from v3;
 10.5 in (select * from t1 union select 1.5 limit 1)
-false
+0
 drop view v1;
 drop view v2;
 drop view v3;
@@ -765,34 +765,34 @@ create table t1 (a int, b real, c varchar(10));
 insert into t1 values (1, 1, 'a'), (2,2,'b'), (NULL, 2, 'b');
 select (1, 1, 'a') IN (select a,b,c from t1);
 (1, 1, a) in (select a, b, c from t1)
-true
+1
 select (1, 2, 'a') IN (select a,b,c from t1);
 (1, 2, a) in (select a, b, c from t1)
-false
+0
 select (1, 1, 'a') IN (select b,a,c from t1);
 (1, 1, a) in (select b, a, c from t1)
-true
+1
 select (1, 1, 'a') IN (select a,b,c from t1 where a is not null);
 (1, 1, a) in (select a, b, c from t1 where a is not null)
-true
+1
 select (1, 2, 'a') IN (select a,b,c from t1 where a is not null);
 (1, 2, a) in (select a, b, c from t1 where a is not null)
-false
+0
 select (1, 1, 'a') IN (select b,a,c from t1 where a is not null);
 (1, 1, a) in (select b, a, c from t1 where a is not null)
-true
+1
 select (1, 1, 'a') IN (select a,b,c from t1 where c='b' or c='a');
 (1, 1, a) in (select a, b, c from t1 where c = b or c = a)
-true
+1
 select (1, 2, 'a') IN (select a,b,c from t1 where c='b' or c='a');
 (1, 2, a) in (select a, b, c from t1 where c = b or c = a)
-false
+0
 select (1, 1, 'a') IN (select b,a,c from t1 where c='b' or c='a');
 (1, 1, a) in (select b, a, c from t1 where c = b or c = a)
-true
+1
 select (1, 1, 'a') IN (select b,a,c from t1 limit 2);
 (1, 1, a) in (select b, a, c from t1 limit 2)
-true
+1
 create view v1 as select (1, 1, 'a') IN (select a,b,c from t1);
 create view v2 as select (1, 2, 'a') IN (select a,b,c from t1);
 create view v3 as select (1, 1, 'a') IN (select b,a,c from t1);
@@ -805,34 +805,34 @@ create view v9 as select (1, 1, 'a') IN (select b,a,c from t1 where c='b' or c='
 create view v10 as select (1, 1, 'a') IN (select b,a,c from t1 limit 2);
 select * from v1;
 (1, 1, a) in (select a, b, c from t1)
-true
+1
 select * from v2;
 (1, 2, a) in (select a, b, c from t1)
-false
+0
 select * from v3;
 (1, 1, a) in (select b, a, c from t1)
-true
+1
 select * from v4;
 (1, 1, a) in (select a, b, c from t1 where a is not null)
-true
+1
 select * from v5;
 (1, 2, a) in (select a, b, c from t1 where a is not null)
-false
+0
 select * from v6;
 (1, 1, a) in (select b, a, c from t1 where a is not null)
-true
+1
 select * from v7;
 (1, 1, a) in (select a, b, c from t1 where c = b or c = a)
-true
+1
 select * from v8;
 (1, 2, a) in (select a, b, c from t1 where c = b or c = a)
-false
+0
 select * from v9;
 (1, 1, a) in (select b, a, c from t1 where c = b or c = a)
-true
+1
 select * from v10;
 (1, 1, a) in (select b, a, c from t1 limit 2)
-true
+1
 drop view v1;
 drop view v2;
 drop view v3;
@@ -879,13 +879,13 @@ INSERT INTO t2 VALUES (101, 201);
 INSERT INTO t2 VALUES (103, 203);
 SELECT ((a1,a2) IN (SELECT * FROM t2 WHERE b2 > 0)) IS NULL FROM t1;
 ((a1, a2) in (select * from t2 where b2 > 0)) is null
-false
-false
+0
+0
 create view v1 as SELECT ((a1,a2) IN (SELECT * FROM t2 WHERE b2 > 0)) IS NULL FROM t1;
 select * from v1;
 ((a1, a2) in (select * from t2 where b2 > 0)) is null
-false
-false
+0
+0
 drop view v1;
 DROP TABLE IF EXISTS t1;
 drop table if exists t2;
@@ -895,28 +895,28 @@ create table t2 (a int, b int);
 insert into t2 values (1,1), (3,3);
 select a, b, (a,b) in (select a, min(b) from t2 group by a) Z from t1;
 a    b    z
-0    0    false
-2    2    false
-3    3    true
+0    0    0
+2    2    0
+3    3    1
 create view v1 as select a, b, (a,b) in (select a, min(b) from t2 group by a) Z from t1;
 select * from v1;
 a    b    z
-0    0    false
-2    2    false
-3    3    true
+0    0    0
+2    2    0
+3    3    1
 drop view v1;
 insert into t2 values (NULL,4);
 select a, b, (a,b) in (select a, min(b) from t2 group by a) Z from t1;
 a    b    z
-0    0    false
-2    2    false
-3    3    true
+0    0    0
+2    2    0
+3    3    1
 create view v1 as select a, b, (a,b) in (select a, min(b) from t2 group by a) Z from t1;
 select * from v1;
 a    b    z
-0    0    false
-2    2    false
-3    3    true
+0    0    0
+2    2    0
+3    3    1
 drop view v1;
 DROP TABLE IF EXISTS t1;
 drop table if exists t2;
