@@ -242,16 +242,17 @@ message HashJoin {
   bool is_right_join = 2;
   bool hash_on_pk = 3;
   bool is_shuffle = 4;
-  int32 shuffle_idx = 5;
-  repeated int32 rel_list = 6;
-  repeated int32 col_list = 7;
-  repeated plan.Expr left_conds = 8;
-  repeated plan.Expr right_conds = 9;
-  plan.Expr non_eq_cond = 10;
-  repeated plan.Type left_types = 11 [(gogoproto.nullable) = false];
-  repeated plan.Type right_types = 12 [(gogoproto.nullable) = false];
-  int32 join_map_tag = 13;
-  repeated plan.RuntimeFilterSpec runtime_filter_build_list = 14;
+  bool can_skip_probe = 5;
+  int32 shuffle_idx = 6;
+  repeated int32 rel_list = 7;
+  repeated int32 col_list = 8;
+  repeated plan.Expr left_conds = 9;
+  repeated plan.Expr right_conds = 10;
+  plan.Expr non_eq_cond = 11;
+  repeated plan.Type left_types = 12 [(gogoproto.nullable) = false];
+  repeated plan.Type right_types = 13 [(gogoproto.nullable) = false];
+  int32 join_map_tag = 14;
+  repeated plan.RuntimeFilterSpec runtime_filter_build_list = 15;
 }
 
 message LoopJoin {
@@ -263,68 +264,7 @@ message LoopJoin {
   int32 join_map_tag = 6;
 }
 
-message AntiJoin {
-  repeated int32 result = 1;
-  plan.Expr expr = 2;
-  repeated plan.Expr left_cond = 3;
-  repeated plan.Expr right_cond = 4;
-  bool hash_on_pk = 5;
-  bool is_shuffle = 6;
-  repeated plan.RuntimeFilterSpec runtime_filter_build_list = 7;
-  int32 join_map_tag = 8;
-  int32 shuffle_idx = 9;
-}
-
-message RightSemiJoin {
-  repeated int32 result = 1;
-  plan.Expr expr = 2;
-  repeated plan.Type right_types = 3 [(gogoproto.nullable) = false];
-  repeated plan.Expr left_cond = 4;
-  repeated plan.Expr right_cond = 5;
-  repeated plan.RuntimeFilterSpec runtime_filter_build_list = 6;
-  bool hash_on_pk = 7;
-  bool is_shuffle = 8;
-  int32 join_map_tag = 9;
-  int32 shuffle_idx = 11;
-}
-
-message RightAntiJoin {
-  repeated int32 result = 1;
-  plan.Expr expr = 2;
-  repeated plan.Type right_types = 3 [(gogoproto.nullable) = false];
-  repeated plan.Expr left_cond = 4;
-  repeated plan.Expr right_cond = 5;
-  repeated plan.RuntimeFilterSpec runtime_filter_build_list = 6;
-  bool hash_on_pk = 7;
-  bool is_shuffle = 8;
-  int32 join_map_tag = 9;
-  int32 shuffle_idx = 10;
-}
-
-message SemiJoin {
-  repeated int32 result = 1;
-  plan.Expr expr = 2;
-  repeated plan.Expr left_cond = 3;
-  repeated plan.Expr right_cond = 4;
-  repeated plan.RuntimeFilterSpec runtime_filter_build_list = 5;
-  bool hash_on_pk = 6;
-  bool can_skip_probe = 7;
-  bool is_shuffle = 8;
-  int32 join_map_tag = 9;
-  int32 shuffle_idx = 10;
-}
-
-message MarkJoin {
-  repeated int32 result = 1;
-  plan.Expr expr = 2;
-  repeated plan.Expr left_cond = 3;
-  repeated plan.Expr right_cond = 4;
-  repeated plan.Expr on_list = 5;
-  bool hash_on_pk = 6;
-  bool is_shuffle = 7;
-  int32 join_map_tag = 8;
-  int32 shuffle_idx = 9;
-}
+message SetOp {}
 
 message DedupJoin {
   repeated int32 rel_list = 1;
@@ -490,10 +430,9 @@ message Instruction {
   HashJoin hash_join = 6;
   LoopJoin loop_join = 7;
 
-  SemiJoin semi_join = 8;
-  AntiJoin anti = 10;
-  MarkJoin mark_join = 11;
-  DedupJoin dedup_join = 12;
+  SetOp set_op = 8;
+  DedupJoin dedup_join = 9;
+  RightDedupJoin right_dedup_join = 10;
   Product product = 13;
   TableFunction table_function = 14;
   ExternalScan external_scan = 15;
@@ -511,10 +450,6 @@ message Instruction {
   bool isFirst = 26;
   // isLast identifies whether it is the last instruction of analyzeInfo corresponding to idx
   bool isLast = 27;
-
-  RightSemiJoin right_semi_join = 29;
-  RightAntiJoin right_anti_join = 30;
-  RightDedupJoin right_dedup_join = 31;
 
   Deletion delete = 32;
   LockOp lock_op = 33;

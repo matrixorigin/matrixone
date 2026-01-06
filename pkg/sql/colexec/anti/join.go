@@ -36,7 +36,7 @@ func (antiJoin *AntiJoin) String(buf *bytes.Buffer) {
 }
 
 func (antiJoin *AntiJoin) OpType() vm.OpType {
-	return vm.Anti
+	return vm.HashJoin
 }
 
 func (antiJoin *AntiJoin) Prepare(proc *process.Process) (err error) {

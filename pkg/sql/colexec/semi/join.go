@@ -36,7 +36,7 @@ func (semiJoin *SemiJoin) String(buf *bytes.Buffer) {
 }
 
 func (semiJoin *SemiJoin) OpType() vm.OpType {
-	return vm.Semi
+	return vm.HashJoin
 }
 
 func (semiJoin *SemiJoin) Prepare(proc *process.Process) (err error) {

@@ -45,6 +45,13 @@ const (
 	psBatchRow
 )
 
+type finalizeState int
+
+const (
+	fsSyncMatched finalizeState = iota
+	fsSendBatches
+)
+
 type container struct {
 	state       int
 	itr         hashmap.Iterator
@@ -99,6 +106,7 @@ type HashJoin struct {
 	NumCPU  uint64
 
 	HashOnPK           bool
+	CanSkipProbe       bool
 	IsShuffle          bool
 	ShuffleIdx         int32
 	IsMerger           bool
@@ -221,4 +229,56 @@ func (ctr *container) resetEqCondExecutors() {
 			ctr.eqCondExecs[i].ResetForNextQuery()
 		}
 	}
+}
+
+func (hashJoin *HashJoin) IsInner() bool {
+	return hashJoin.JoinType == plan.Node_INNER
+}
+
+func (hashJoin *HashJoin) IsLeftOuter() bool {
+	return hashJoin.JoinType == plan.Node_LEFT
+}
+
+func (hashJoin *HashJoin) IsRightOuter() bool {
+	return hashJoin.JoinType == plan.Node_RIGHT
+}
+
+func (hashJoin *HashJoin) IsFullOuter() bool {
+	return hashJoin.JoinType == plan.Node_OUTER
+}
+
+func (hashJoin *HashJoin) IsSemi() bool {
+	return hashJoin.JoinType == plan.Node_SEMI
+}
+
+func (hashJoin *HashJoin) IsLeftSemi() bool {
+	return !hashJoin.IsRightJoin && hashJoin.JoinType == plan.Node_SEMI
+}
+
+func (hashJoin *HashJoin) IsRightSemi() bool {
+	return hashJoin.IsRightJoin && hashJoin.JoinType == plan.Node_SEMI
+}
+
+func (hashJoin *HashJoin) IsAnti() bool {
+	return hashJoin.JoinType == plan.Node_ANTI
+}
+
+func (hashJoin *HashJoin) IsLeftAnti() bool {
+	return !hashJoin.IsRightJoin && hashJoin.JoinType == plan.Node_ANTI
+}
+
+func (hashJoin *HashJoin) IsRightAnti() bool {
+	return hashJoin.IsRightJoin && hashJoin.JoinType == plan.Node_ANTI
+}
+
+func (hashJoin *HashJoin) IsSingle() bool {
+	return hashJoin.JoinType == plan.Node_SINGLE
+}
+
+func (hashJoin *HashJoin) IsLeftSingle() bool {
+	return !hashJoin.IsRightJoin && hashJoin.JoinType == plan.Node_SINGLE
+}
+
+func (hashJoin *HashJoin) IsRightSingle() bool {
+	return hashJoin.IsRightJoin && hashJoin.JoinType == plan.Node_SINGLE
 }

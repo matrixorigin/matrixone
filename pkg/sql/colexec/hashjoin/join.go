@@ -109,9 +109,7 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 			if ctr.mp == nil && !hashJoin.IsShuffle {
-				// for inner ,right and semi join, if hashmap is empty, we can finish this pipeline
-				// shuffle join can't stop early for this moment
-				if hashJoin.JoinType == plan.Node_INNER || hashJoin.JoinType == plan.Node_RIGHT || hashJoin.JoinType == plan.Node_SEMI {
+				if hashJoin.IsInner() || hashJoin.IsRightOuter() || hashJoin.IsRightSingle() || hashJoin.IsSemi() || hashJoin.IsRightAnti() {
 					ctr.state = End
 					continue
 				}
@@ -145,7 +143,7 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 					continue
 				}
 
-				if ctr.mp == nil && hashJoin.JoinType != plan.Node_LEFT && hashJoin.JoinType != plan.Node_SINGLE {
+				if ctr.mp == nil && !hashJoin.IsLeftOuter() && !hashJoin.IsLeftSingle() && !hashJoin.IsLeftAnti() {
 					continue
 				}
 
@@ -224,70 +222,6 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 	return nil
 }
 
-func (ctr *container) finalize(ap *HashJoin, proc *process.Process, result *vm.CallResult) error {
-	ctr.rightJoinFinalized = true
-
-	if ctr.rightRowsMatched == nil {
-		result.Batch = nil
-		return nil
-	}
-
-	if ap.NumCPU > 1 {
-		if !ap.IsMerger {
-			ap.Channel <- ctr.rightRowsMatched
-			result.Batch = nil
-			return nil
-		} else {
-			for cnt := 1; cnt < int(ap.NumCPU); cnt++ {
-				v := colexec.ReceiveBitmapFromChannel(proc.Ctx, ap.Channel)
-				if v != nil {
-					ctr.rightRowsMatched.Or(v)
-				} else {
-					result.Batch = nil
-					return nil
-				}
-			}
-			close(ap.Channel)
-		}
-	}
-
-	count := ctr.rightRowCnt - int64(ctr.rightRowsMatched.Count())
-	ctr.rightRowsMatched.Negate()
-	sels := make([]int32, 0, count)
-	itr := ctr.rightRowsMatched.Iterator()
-	for itr.HasNext() {
-		r := itr.Next()
-		sels = append(sels, int32(r))
-	}
-
-	ap.resetResultBat()
-	err := ctr.resBat.PreExtend(proc.Mp(), len(sels))
-	if err != nil {
-		return err
-	}
-
-	for i, rp := range ap.ResultCols {
-		if rp.Rel == 0 {
-			err = vector.AppendMultiFixed(ctr.resBat.Vecs[i], 0, true, int(count), proc.Mp())
-			if err != nil {
-				return err
-			}
-		} else {
-			for _, sel := range sels {
-				idx1, idx2 := sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
-				err = ctr.resBat.Vecs[i].UnionOne(ctr.rightBats[idx1].Vecs[rp.Pos], int64(idx2), proc.Mp())
-				if err != nil {
-					return err
-				}
-			}
-		}
-	}
-
-	ctr.resBat.AddRowCount(len(sels))
-	result.Batch = ctr.resBat
-	return nil
-}
-
 func (ctr *container) probe(ap *HashJoin, proc *process.Process, result *vm.CallResult) error {
 	err := ctr.evalJoinCondition(ap.ctr.leftBat, proc)
 	if err != nil {
@@ -324,82 +258,6 @@ func (ctr *container) probe(ap *HashJoin, proc *process.Process, result *vm.Call
 				return nil
 			}
 
-		case psSelsForOneRow:
-			row := int64(ctr.lastIdx - 1)
-			processCount := min(len(ctr.sels), colexec.DefaultBatchSize-resRowCnt)
-			sels := ctr.sels[:processCount]
-			// remove processed sels
-			ctr.sels = ctr.sels[processCount:]
-			if ap.NonEqCond == nil {
-				for j, rp := range ap.ResultCols {
-					if rp.Rel == 0 {
-						err = ctr.resBat.Vecs[j].UnionMulti(ap.ctr.leftBat.Vecs[rp.Pos], row, processCount, proc.Mp())
-						if err != nil {
-							return err
-						}
-					} else {
-						for _, sel := range sels {
-							idx1 := sel / colexec.DefaultBatchSize
-							idx2 := sel % colexec.DefaultBatchSize
-							err = ctr.resBat.Vecs[j].UnionOne(ctr.rightBats[idx1].Vecs[rp.Pos], int64(idx2), proc.Mp())
-							if err != nil {
-								return err
-							}
-						}
-					}
-				}
-
-				if ap.IsRightJoin {
-					for _, sel := range sels {
-						ctr.rightRowsMatched.Add(uint64(sel))
-					}
-				}
-
-				resRowCnt += processCount
-			} else {
-				for _, sel := range sels {
-					idx1 := int64(sel / colexec.DefaultBatchSize)
-					idx2 := int64(sel % colexec.DefaultBatchSize)
-					ok, err := ctr.evalNonEqCondition(ap.ctr.leftBat, int64(row), proc, idx1, idx2)
-					if err != nil {
-						return err
-					}
-
-					if ok {
-						if ap.JoinType == plan.Node_SINGLE && ctr.leftRowMatched {
-							return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
-						}
-
-						ctr.leftRowMatched = true
-						ctr.appendOneMatch(ap, proc, int64(row), idx1, idx2)
-						if ap.IsRightJoin {
-							ctr.rightRowsMatched.Add(uint64(sel))
-						}
-						resRowCnt++
-					}
-				}
-			}
-
-			if ap.NonEqCond != nil && len(ctr.sels) == 0 &&
-				!ctr.leftRowMatched && (ap.JoinType == plan.Node_LEFT || ap.JoinType == plan.Node_SINGLE) {
-				ctr.appendOneNotMatch(ap, proc, int64(row))
-				resRowCnt++
-			}
-
-			if len(ctr.sels) > 0 {
-				ctr.probeState = psSelsForOneRow
-			} else if ctr.vsidx < len(ctr.vs) {
-				ctr.probeState = psBatchRow
-			} else {
-				ctr.probeState = psNextBatch
-			}
-
-			if resRowCnt >= colexec.DefaultBatchSize {
-				ctr.resBat.AddRowCount(resRowCnt)
-				result.Batch = ctr.resBat
-				return nil
-			}
-
 		case psBatchRow:
 			z, v := ctr.zvs[ctr.vsidx], ctr.vs[ctr.vsidx]
 			row := int64(ctr.lastIdx)
@@ -411,8 +269,7 @@ func (ctr *container) probe(ap *HashJoin, proc *process.Process, result *vm.Call
 			ctr.vsidx++
 
 			if z == 0 || v == 0 {
-				switch ap.JoinType {
-				case plan.Node_LEFT, plan.Node_SINGLE:
+				if ap.IsLeftOuter() || ap.IsLeftSingle() || ap.IsLeftAnti() {
 					ctr.appendOneNotMatch(ap, proc, row)
 					resRowCnt++
 				}
@@ -432,14 +289,20 @@ func (ctr *container) probe(ap *HashJoin, proc *process.Process, result *vm.Call
 
 			if ap.HashOnPK || ctr.mp.HashOnUnique() {
 				if ap.NonEqCond == nil {
-					err = ctr.appendOneMatch(ap, proc, row, idx1, idx2)
-					if err != nil {
-						return err
+					if !ap.IsRightSemi() && !ap.IsAnti() {
+						err = ctr.appendOneMatch(ap, proc, row, idx1, idx2)
+						if err != nil {
+							return err
+						}
+
+						resRowCnt++
 					}
 
-					resRowCnt++
-
 					if ap.IsRightJoin {
+						if ap.IsSingle() && ctr.rightRowsMatched.Contains(uint64(idx)) {
+							return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
+						}
+
 						ctr.rightRowsMatched.Add(uint64(idx))
 					}
 				} else {
@@ -447,16 +310,25 @@ func (ctr *container) probe(ap *HashJoin, proc *process.Process, result *vm.Call
 					if err != nil {
 						return err
 					}
+
 					if ok {
-						err = ctr.appendOneMatch(ap, proc, row, idx1, idx2)
-						if err != nil {
-							return err
+						if !ap.IsRightSemi() && !ap.IsAnti() {
+							err = ctr.appendOneMatch(ap, proc, row, idx1, idx2)
+							if err != nil {
+								return err
+							}
+
+							resRowCnt++
 						}
+
 						if ap.IsRightJoin {
+							if ap.IsSingle() && ctr.rightRowsMatched.Contains(uint64(idx)) {
+								return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
+							}
+
 							ctr.rightRowsMatched.Add(uint64(idx))
 						}
-						resRowCnt++
-					} else if ap.JoinType == plan.Node_LEFT || ap.JoinType == plan.Node_SINGLE {
+					} else if ap.IsLeftOuter() || ap.IsLeftSingle() || ap.IsLeftAnti() {
 						err = ctr.appendOneNotMatch(ap, proc, row)
 						if err != nil {
 							return err
@@ -469,9 +341,109 @@ func (ctr *container) probe(ap *HashJoin, proc *process.Process, result *vm.Call
 				ctr.leftRowMatched = false
 
 				if ap.NonEqCond == nil {
-					if ap.JoinType == plan.Node_SINGLE && len(ctr.sels) > 1 {
-						return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
+					if ap.IsLeftSingle() {
+						if len(ctr.sels) > 1 {
+							return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
+						}
+					} else if ap.IsLeftSemi() {
+						ctr.appendOneNotMatch(ap, proc, row)
+						resRowCnt++
+						ctr.sels = nil
+					} else if ap.IsLeftAnti() {
+						ctr.sels = nil
 					}
+				}
+			}
+
+			if len(ctr.sels) > 0 {
+				ctr.probeState = psSelsForOneRow
+			} else if ctr.vsidx < len(ctr.vs) {
+				ctr.probeState = psBatchRow
+			} else {
+				ctr.probeState = psNextBatch
+			}
+
+			if resRowCnt >= colexec.DefaultBatchSize {
+				ctr.resBat.AddRowCount(resRowCnt)
+				result.Batch = ctr.resBat
+				return nil
+			}
+
+		case psSelsForOneRow:
+			row := int64(ctr.lastIdx - 1)
+			processCount := min(len(ctr.sels), colexec.DefaultBatchSize-resRowCnt)
+			sels := ctr.sels[:processCount]
+			// remove processed sels
+			ctr.sels = ctr.sels[processCount:]
+			if ap.NonEqCond == nil {
+				if ap.IsRightJoin {
+					for _, sel := range sels {
+						if ap.IsSingle() && ctr.rightRowsMatched.Contains(uint64(sel)) {
+							return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
+						}
+
+						ctr.rightRowsMatched.Add(uint64(sel))
+					}
+				}
+
+				if !ap.IsRightSemi() && !ap.IsRightAnti() {
+					for j, rp := range ap.ResultCols {
+						if rp.Rel == 0 {
+							err = ctr.resBat.Vecs[j].UnionMulti(ap.ctr.leftBat.Vecs[rp.Pos], row, processCount, proc.Mp())
+							if err != nil {
+								return err
+							}
+						} else {
+							for _, sel := range sels {
+								idx1 := sel / colexec.DefaultBatchSize
+								idx2 := sel % colexec.DefaultBatchSize
+								err = ctr.resBat.Vecs[j].UnionOne(ctr.rightBats[idx1].Vecs[rp.Pos], int64(idx2), proc.Mp())
+								if err != nil {
+									return err
+								}
+							}
+						}
+					}
+				}
+
+				resRowCnt += processCount
+			} else {
+				for _, sel := range sels {
+					idx1 := int64(sel / colexec.DefaultBatchSize)
+					idx2 := int64(sel % colexec.DefaultBatchSize)
+					ok, err := ctr.evalNonEqCondition(ap.ctr.leftBat, int64(row), proc, idx1, idx2)
+					if err != nil {
+						return err
+					}
+
+					if ok {
+						if ap.IsRightJoin {
+							if ap.IsSingle() && ctr.rightRowsMatched.Contains(uint64(sel)) {
+								return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
+							}
+
+							ctr.rightRowsMatched.Add(uint64(sel))
+						} else {
+							if ap.IsSingle() && ctr.leftRowMatched {
+								return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
+							}
+						}
+
+						ctr.appendOneMatch(ap, proc, int64(row), idx1, idx2)
+						ctr.leftRowMatched = true
+						resRowCnt++
+
+						if ap.IsLeftSemi() {
+							ctr.sels = nil
+							break
+						}
+					}
+				}
+
+				if len(ctr.sels) == 0 &&
+					!ctr.leftRowMatched && (ap.IsLeftOuter() || ap.IsLeftSingle() || ap.IsLeftAnti()) {
+					ctr.appendOneNotMatch(ap, proc, int64(row))
+					resRowCnt++
 				}
 			}
 
@@ -509,6 +481,82 @@ func (ctr *container) emptyProbe(ap *HashJoin, proc *process.Process, result *vm
 	result.Batch = ctr.resBat
 	ap.ctr.lastIdx = 0
 	ap.ctr.leftBat = nil
+	return nil
+}
+
+func (ctr *container) finalize(ap *HashJoin, proc *process.Process, result *vm.CallResult) error {
+	ctr.rightJoinFinalized = true
+
+	if ctr.rightRowsMatched == nil {
+		result.Batch = nil
+		return nil
+	}
+
+	if ap.NumCPU > 1 {
+		if !ap.IsMerger {
+			ap.Channel <- ctr.rightRowsMatched
+			result.Batch = nil
+			return nil
+		} else {
+			matchedCnt := ctr.rightRowsMatched.Count()
+
+			for cnt := 1; cnt < int(ap.NumCPU); cnt++ {
+				v := colexec.ReceiveBitmapFromChannel(proc.Ctx, ap.Channel)
+				if v != nil {
+					matchedCnt += v.Count()
+					ctr.rightRowsMatched.Or(v)
+				} else {
+					result.Batch = nil
+					return nil
+				}
+			}
+
+			if ap.IsSingle() && matchedCnt != ctr.rightRowsMatched.Count() {
+				return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
+			}
+
+			close(ap.Channel)
+		}
+	}
+
+	count := int64(ctr.rightRowsMatched.Count())
+	if !ap.IsSemi() {
+		count = ctr.rightRowCnt - count
+		ctr.rightRowsMatched.Negate()
+	}
+
+	sels := make([]int32, 0, count)
+	itr := ctr.rightRowsMatched.Iterator()
+	for itr.HasNext() {
+		r := itr.Next()
+		sels = append(sels, int32(r))
+	}
+
+	ap.resetResultBat()
+	err := ctr.resBat.PreExtend(proc.Mp(), len(sels))
+	if err != nil {
+		return err
+	}
+
+	for i, rp := range ap.ResultCols {
+		if rp.Rel == 0 {
+			err = vector.AppendMultiFixed(ctr.resBat.Vecs[i], 0, true, int(count), proc.Mp())
+			if err != nil {
+				return err
+			}
+		} else {
+			for _, sel := range sels {
+				idx1, idx2 := sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
+				err = ctr.resBat.Vecs[i].UnionOne(ctr.rightBats[idx1].Vecs[rp.Pos], int64(idx2), proc.Mp())
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	ctr.resBat.AddRowCount(len(sels))
+	result.Batch = ctr.resBat
 	return nil
 }
 
