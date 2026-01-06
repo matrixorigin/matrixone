@@ -1607,9 +1607,10 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr) bool {
 		}
 
 	case types.T_decimal64, types.T_decimal128:
-		// Allow casting decimal constants to decimal columns
+		// Allow casting decimal constants to decimal columns only if no precision loss
 		if columnT.Oid == types.T_decimal64 || columnT.Oid == types.T_decimal128 {
-			return true
+			// Only allow if column has enough scale to represent the constant without truncation
+			return columnT.Scale >= constT.Scale
 		}
 		// Allow casting decimal constants to float columns only if precision is acceptable
 		// For FLOAT32: only allow if value has <= 7 significant digits

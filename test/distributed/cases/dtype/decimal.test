@@ -712,3 +712,22 @@ INSERT INTO decimal23 VALUES('0xffffffffff',0.0000000000001);
 SELECT col1%col2 from decimal23;
 SELECT cast(col2 as double) from decimal23;
 DROP TABLE decimal23;
+
+#Test cases for decimal comparison precision (MySQL compatibility)
+#Issue: float constant should not be truncated when comparing with decimal column
+DROP TABLE IF EXISTS decimal_compare_test;
+CREATE TABLE decimal_compare_test (col1 DECIMAL(38,0) NOT NULL PRIMARY KEY, col2 DOUBLE);
+INSERT INTO decimal_compare_test VALUES (12, -32734928490.328403), (1000000, 3289323423);
+SELECT * FROM decimal_compare_test ORDER BY col1;
+-- float constant 12.213231000021312 should NOT match decimal value 12
+-- MySQL behavior: 0 rows returned (12.213231000021312 != 12)
+SELECT * FROM decimal_compare_test WHERE col1 = 12.213231000021312;
+-- exact match should still work
+SELECT * FROM decimal_compare_test WHERE col1 = 12;
+-- float that would truncate to different value should not match
+SELECT * FROM decimal_compare_test WHERE col1 = 12.9;
+SELECT * FROM decimal_compare_test WHERE col1 = 11.9;
+-- delete should not affect any rows
+DELETE FROM decimal_compare_test WHERE col1 = 12.213231000021312;
+SELECT * FROM decimal_compare_test ORDER BY col1;
+DROP TABLE decimal_compare_test;

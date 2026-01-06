@@ -321,7 +321,9 @@ func SetTargetScaleFromSource(source, target *types.Type) {
 	}
 
 	if target.Oid == types.T_decimal64 {
-		if source.Oid.IsInteger() {
+		if source.Oid == types.T_decimal64 {
+			target.Scale = source.Scale
+		} else if source.Oid.IsInteger() {
 			target.Scale = 0
 		} else if source.Oid.IsFloat() {
 			// When converting float to decimal64, use a reasonable scale
@@ -338,7 +340,7 @@ func SetTargetScaleFromSource(source, target *types.Type) {
 	}
 
 	if target.Oid == types.T_decimal128 {
-		if source.Oid == types.T_decimal64 {
+		if source.Oid == types.T_decimal64 || source.Oid == types.T_decimal128 {
 			target.Scale = source.Scale
 		} else if source.Oid.IsInteger() {
 			target.Scale = 0

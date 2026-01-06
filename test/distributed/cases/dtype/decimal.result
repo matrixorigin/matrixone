@@ -1342,3 +1342,25 @@ SELECT cast(col2 as double) from decimal23;
 ➤ cast(col2 as double)[8,54,0]  𝄀
 1.0E-13
 DROP TABLE decimal23;
+DROP TABLE IF EXISTS decimal_compare_test;
+CREATE TABLE decimal_compare_test (col1 DECIMAL(38,0) NOT NULL PRIMARY KEY, col2 DOUBLE);
+INSERT INTO decimal_compare_test VALUES (12, -32734928490.328403), (1000000, 3289323423);
+SELECT * FROM decimal_compare_test ORDER BY col1;
+➤ col1[3,39,0]  ¦  col2[8,54,0]  𝄀
+12  ¦  -3.2734928490328403E10  𝄀
+1000000  ¦  3.289323423E9
+SELECT * FROM decimal_compare_test WHERE col1 = 12.213231000021312;
+➤ col1[3,39,0]  ¦  col2[8,54,0]
+SELECT * FROM decimal_compare_test WHERE col1 = 12;
+➤ col1[3,39,0]  ¦  col2[8,54,0]  𝄀
+12  ¦  -3.2734928490328403E10
+SELECT * FROM decimal_compare_test WHERE col1 = 12.9;
+➤ col1[3,39,0]  ¦  col2[8,54,0]
+SELECT * FROM decimal_compare_test WHERE col1 = 11.9;
+➤ col1[3,39,0]  ¦  col2[8,54,0]
+DELETE FROM decimal_compare_test WHERE col1 = 12.213231000021312;
+SELECT * FROM decimal_compare_test ORDER BY col1;
+➤ col1[3,39,0]  ¦  col2[8,54,0]  𝄀
+12  ¦  -3.2734928490328403E10  𝄀
+1000000  ¦  3.289323423E9
+DROP TABLE decimal_compare_test;
