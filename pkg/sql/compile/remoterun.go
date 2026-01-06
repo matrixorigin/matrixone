@@ -19,10 +19,12 @@ import (
 	"unsafe"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -217,6 +219,16 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 			IsConst:                s.DataSource.isConst,
 			RecvMsgList:            s.DataSource.RecvMsgList,
 		}
+		if n := s.DataSource.node; n != nil && n.TableDef != nil &&
+			n.TableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries {
+			if len(s.DataSource.BloomFilter) > 0 {
+				p.DataSource.BloomFilter = s.DataSource.BloomFilter
+			} else if bfVal := s.Proc.Ctx.Value(defines.IvfBloomFilter{}); bfVal != nil {
+				if bf, ok := bfVal.([]byte); ok && len(bf) > 0 {
+					p.DataSource.BloomFilter = bf
+				}
+			}
+		}
 	}
 	// PreScope
 	p.Children = make([]*pipeline.Pipeline, len(s.PreScopes))
@@ -329,6 +341,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 			RuntimeFilterSpecs: dsc.RuntimeFilterProbeList,
 			isConst:            dsc.IsConst,
 			RecvMsgList:        dsc.RecvMsgList,
+			BloomFilter:        dsc.BloomFilter,
 		}
 		// Extract IndexReaderParam from node for remote CN execution
 		if dsc.Node != nil {
