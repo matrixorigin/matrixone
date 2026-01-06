@@ -772,13 +772,11 @@ func constructPreInsert(ns []*plan.Node, n *plan.Node, eg engine.Engine, proc *p
 	}
 
 	if preCtx.Ref.SchemaName != "" {
-		dbSource, err := eg.Database(ctx, preCtx.Ref.SchemaName, txnOp)
+		_, err := eg.Database(ctx, preCtx.Ref.SchemaName, txnOp)
 		if err != nil {
 			return nil, err
 		}
-		if _, err = dbSource.Relation(ctx, preCtx.Ref.ObjName, proc); err != nil {
-			schemaName = defines.TEMPORARY_DBNAME
-		}
+
 	}
 
 	op := preinsert.NewArgument()

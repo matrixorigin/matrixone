@@ -148,28 +148,28 @@ id
 2.20000
 SELECT id, id >= 1.1 FROM t_numeric;
 id    id >= 1.1
-1.00000    false
-2.00000    true
-1.10000    true
-2.20000    true
+1.00000    0
+2.00000    1
+1.10000    1
+2.20000    1
 SELECT id, 1.1 <= id FROM t_numeric;
 id    1.1 <= id
-1.00000    false
-2.00000    true
-1.10000    true
-2.20000    true
+1.00000    0
+2.00000    1
+1.10000    1
+2.20000    1
 SELECT id, id = 1.1 FROM t_numeric;
 id    id = 1.1
-1.00000    false
-2.00000    false
-1.10000    true
-2.20000    false
+1.00000    0
+2.00000    0
+1.10000    1
+2.20000    0
 SELECT id, 1.1 = id FROM t_numeric;
 id    1.1 = id
-1.00000    false
-2.00000    false
-1.10000    true
-2.20000    false
+1.00000    0
+2.00000    0
+1.10000    1
+2.20000    0
 SELECT * from t_numeric WHERE id = 1.1;
 id
 1.10000
@@ -253,16 +253,16 @@ count(*)
 drop table t;
 SELECT CAST(1.00 AS numeric) BETWEEN 1 AND -1;
 cast(1.00 as numeric(38)) between 1 and -1
-false
+0
 SELECT CAST(1.00 AS numeric) NOT BETWEEN 1 AND -1;
 cast(1.00 as numeric(38)) not between 1 and -1
-true
+1
 SELECT CAST(-0 AS numeric) BETWEEN 0 AND -1;
 cast(-0 as numeric(38)) between 0 and -1
-false
+0
 SELECT CAST(0 AS numeric) NOT BETWEEN 0 AND -1;
 cast(0 as numeric(38)) not between 0 and -1
-true
+1
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;

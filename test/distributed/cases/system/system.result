@@ -1,9 +1,9 @@
 select mo_cpu("total") >= mo_cpu("available");
 mo_cpu(total) >= mo_cpu(available)
-true
+1
 select mo_memory("total") >= mo_memory("available");
 mo_memory(total) >= mo_memory(available)
-true
+1
 select * from information_schema.files limit 1;
 file_id    file_name    file_type    tablespace_name    table_catalog    table_schema    table_name    logfile_group_name    logfile_group_number    engine    fulltext_keys    deleted_rows    update_count    free_extents    total_extents    extent_size    initial_size    maximum_size    autoextend_size    creation_time    last_update_time    last_access_time    recover_time    transaction_counter    version    row_format    table_rows    avg_row_length    data_length    max_data_length    index_length    data_free    create_time    update_time    check_time    checksum    status    extra
 use system;

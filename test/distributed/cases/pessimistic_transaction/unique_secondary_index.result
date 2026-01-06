@@ -142,8 +142,8 @@ Duplicate entry 'true' for key 'col2'
 insert into index_15 values (1,TRUE),(2,FALSE),(3,NULL);
 select * from index_15;
 col1    col2
-1    true
-2    false
+1    1
+2    0
 3    null
 create table index_16 (col1 bigint primary key,col2 blob,col3 blob,unique key d1(col2),key d2(col3));
 not supported: BLOB column 'col2' cannot be in index
@@ -492,8 +492,8 @@ Duplicate entry 'true' for key 'col2'
 insert into create_index_15 values (1,TRUE),(2,FALSE),(3,NULL);
 select * from create_index_15;
 col1    col2
-1    true
-2    false
+1    1
+2    0
 3    null
 create table create_index_16 (col1 bigint primary key,col2 blob,col3 blob);
 create unique index blob_index on create_index_16(col2);
@@ -780,9 +780,9 @@ create index bool_index on create_secondary_15(col2);
 insert into create_secondary_15 values (1,TRUE),(2,FALSE),(3,TRUE);
 select * from create_secondary_15;
 col1    col2
-1    true
-2    false
-3    true
+1    1
+2    0
+3    1
 create table create_secondary_16 (col1 bigint primary key,col2 blob,col3 blob);
 create index blob_index on create_secondary_16(col2);
 not supported: BLOB column 'col2' cannot be in index

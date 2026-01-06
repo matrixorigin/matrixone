@@ -72,7 +72,7 @@ DATE_ADD(coalesce(last_recharge, first_usage), INTERVAL life_time DAY ) as dt,
 DATE_ADD(coalesce(last_recharge, first_usage), INTERVAL life_time DAY ) <
 DATE('2011-04-28') as exp FROM t1;
 dt	exp
-2013-10-13 00:00:00	false
+2013-10-13 00:00:00	0
 DROP TABLE t1;
 SELECT DATE(20110512154559.616), DATE(FLOOR(20110512154559.616));
 date(20110512154559.616)    date(floor(20110512154559.616))
@@ -290,7 +290,7 @@ YEAR(c1)
 DROP TABLE t3;
 SELECT date("2022-12-22 02:34:23") = date("2022-12-22 03:34:23");
 date("2022-12-22 02:34:23") = date("2022-12-22 03:34:23")
-true
+1
 drop table if exists t1;
 create table t1(a date);
 insert into t1 SELECT DATE("2017-06-15 09:34:21");
