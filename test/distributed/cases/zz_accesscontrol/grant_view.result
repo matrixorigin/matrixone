@@ -1,25 +1,18 @@
 set global enable_privilege_cache = off;
 drop user if exists user_v1;
-drop role if exists role_v1;
 drop database if exists db_v1;
-create role role_v1;
-create user user_v1 identified by '111' default role role_v1;
-grant role_v1 to user_v1;
+create user user_v1 identified by '111';
 create database db_v1;
 use db_v1;
 create table t1 (a int);
 insert into t1 values (1);
 create view v1 as select * from t1;
-grant select on view db_v1.v1 to role_v1;
-show grants;
-➤ Grants for user_v1@localhost[12,-1,0]  𝄀
-GRANT connect ON account  `user_v1`@`localhost`  𝄀
-GRANT select ON table d.t `user_v1`@`localhost`
-revoke select on view db_v1.v1 from role_v1;
-show grants;
-➤ Grants for user_v1@localhost[12,-1,0]  𝄀
-GRANT connect ON account  `user_v1`@`localhost`
+grant select on view db_v1.v1 to public;
+grant select on table db_v1.t1 to public;
+use db_v1;
+select * from v1;
+➤ a[4,32,0]  𝄀
+1
 drop user user_v1;
-drop role role_v1;
 drop database db_v1;
 set global enable_privilege_cache = on;

@@ -7182,7 +7182,7 @@ func formSqlFromGrantPrivilege(ctx context.Context, ses *Session, gp *tree.Grant
 		return "", err
 	}
 	switch gp.ObjType {
-	case tree.OBJECT_TYPE_TABLE:
+	case tree.OBJECT_TYPE_TABLE, tree.OBJECT_TYPE_VIEW:
 		switch gp.Level.Level {
 		case tree.PRIVILEGE_LEVEL_TYPE_STAR:
 			sql, err = getSqlForCheckWithGrantOptionForTableDatabaseStar(ctx, int64(tenant.GetDefaultRoleID()), privType, ses.GetDatabaseName())
@@ -7500,7 +7500,7 @@ func convertAstPrivilegeTypeToPrivilegeType(ctx context.Context, priv tree.Privi
 			privType = PrivilegeTypeAccountAll
 		case tree.OBJECT_TYPE_DATABASE:
 			privType = PrivilegeTypeDatabaseAll
-		case tree.OBJECT_TYPE_TABLE:
+		case tree.OBJECT_TYPE_TABLE, tree.OBJECT_TYPE_VIEW:
 			privType = PrivilegeTypeTableAll
 		default:
 			return 0, moerr.NewInternalErrorf(ctx, `the object type "%s" do not support the privilege "%s"`, ot.String(), priv.ToString())
@@ -7509,7 +7509,7 @@ func convertAstPrivilegeTypeToPrivilegeType(ctx context.Context, priv tree.Privi
 		switch ot {
 		case tree.OBJECT_TYPE_DATABASE:
 			privType = PrivilegeTypeDatabaseOwnership
-		case tree.OBJECT_TYPE_TABLE:
+		case tree.OBJECT_TYPE_TABLE, tree.OBJECT_TYPE_VIEW:
 			privType = PrivilegeTypeTableOwnership
 		default:
 			return 0, moerr.NewInternalErrorf(ctx, `the object type "%s" do not support the privilege "%s"`, ot.String(), priv.ToString())

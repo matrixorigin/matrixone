@@ -1,0 +1,49 @@
+set global enable_privilege_cache = off;
+drop user if exists user_complex;
+drop role if exists role_level1, role_level2, role_level3;
+drop database if exists db_complex;
+create role role_level1;
+create role role_level2;
+create role role_level3;
+create user user_complex identified by '111' default role role_level3;
+create database db_complex;
+use db_complex;
+create table t1 (a int, b varchar(20));
+insert into t1 values (1, 'base');
+create view v1 as select * from t1;
+create view v2 as select a from t1 where a > 0;
+create view v3 as select * from v1; -- view on view
+grant select on view db_complex.v1 to role_level1;
+grant role_level1 to role_level2;
+grant role_level2 to role_level3;
+grant role_level3 to user_complex;
+select obj_type, privilege_name, obj_id from mo_catalog.mo_role_privs where role_name = 'role_level1';
+➤ obj_type[12,-1,0]  ¦  privilege_name[12,-1,0]  ¦  obj_id[-5,64,0]  𝄀
+table  ¦  select  ¦  272525
+select current_role();
+➤ current_role()[12,-1,0]  𝄀
+role_level3
+show grants;
+➤ Grants for user_complex@localhost[12,-1,0]  𝄀
+GRANT connect ON account  `user_complex`@`localhost`
+grant select on view db_complex.* to role_level1;
+show grants;
+➤ Grants for user_complex@localhost[12,-1,0]  𝄀
+GRANT connect ON account  `user_complex`@`localhost`
+grant select, update, insert on view db_complex.v2 to role_level2;
+show grants;
+➤ Grants for user_complex@localhost[12,-1,0]  𝄀
+GRANT connect ON account  `user_complex`@`localhost`
+revoke update on view db_complex.v2 from role_level2;
+show grants;
+➤ Grants for user_complex@localhost[12,-1,0]  𝄀
+GRANT connect ON account  `user_complex`@`localhost`
+grant all on view db_complex.v3 to role_level1;
+grant ownership on view db_complex.v3 to role_level2;
+show grants;
+➤ Grants for user_complex@localhost[12,-1,0]  𝄀
+GRANT connect ON account  `user_complex`@`localhost`
+drop user user_complex;
+drop role role_level1, role_level2, role_level3;
+drop database db_complex;
+set global enable_privilege_cache = on;
