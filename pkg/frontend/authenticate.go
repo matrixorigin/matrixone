@@ -6443,6 +6443,7 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 							tempEntry.databaseName = mi.dbName
 							tempEntry.tableName = mi.tableName
 							tempEntry.privilegeEntryTyp = privilegeEntryTypeGeneral
+							tempEntry.privilegeLevel = privilegeLevelDatabaseTable
 							tempEntry.compound = nil
 							pls, err = getPrivilegeLevelsOfObjectType(ctx, tempEntry.objType)
 							if err != nil {

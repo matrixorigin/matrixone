@@ -17,6 +17,18 @@ use db_v1;
 internal error: do not have privilege to execute the statement
 select * from v1;
 No database selected
+drop user if exists user_no_db;
+create user user_no_db identified by '111';
+create role role_no_db;
+grant role_no_db to user_no_db;
+alter user user_no_db default role role_no_db;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 29 near " default role role_no_db;";
+grant select on view db_v1.v1 to role_no_db;
+use db_v1;
+select * from db_v1.v1;
+internal error: do not have privilege to execute the statement
+drop user user_no_db;
+drop role role_no_db;
 drop user user_v1;
 drop role role_v1;
 drop database db_v1;
