@@ -451,6 +451,7 @@ INSERT INTO t_unique (code) VALUES (NULL);
 INSERT INTO t_unique (code) VALUES (NULL);
 INSERT INTO t_unique (code) VALUES ('A');
 INSERT INTO t_unique (code) VALUES ('A');
+-- @regex("Duplicate entry 'A' for key '(code|__mo_index_idx_col)'", true)
 Duplicate entry 'A' for key 'code'
 SELECT * FROM t_unique ORDER BY id;
 ➤ id[4,32,0]  ¦  code[12,-1,0]  𝄀

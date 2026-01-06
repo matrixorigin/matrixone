@@ -619,7 +619,7 @@ INSERT INTO t_unique (code) VALUES (NULL);
 INSERT INTO t_unique (code) VALUES (NULL);
 INSERT INTO t_unique (code) VALUES ('A');
 
--- @pattern
+-- @regex("Duplicate entry 'A' for key '(code|__mo_index_idx_col)'",true)
 INSERT INTO t_unique (code) VALUES ('A');
 
 SELECT * FROM t_unique ORDER BY id;
