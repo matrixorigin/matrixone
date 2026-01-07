@@ -266,8 +266,8 @@ func (l *remoteLockTable) getBind() pb.LockTable {
 	return l.bind
 }
 
-func (l *remoteLockTable) close() {
-	logLockTableClosed(l.logger, l.bind, true)
+func (l *remoteLockTable) close(reason closeReason) {
+	logLockTableClosed(l.logger, l.bind, true, reason)
 }
 
 func (l *remoteLockTable) handleError(
