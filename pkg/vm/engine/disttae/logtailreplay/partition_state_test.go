@@ -1177,6 +1177,110 @@ func TestCountTombstoneRowsReadError(t *testing.T) {
 	}
 }
 
+func TestCountTombstoneRowsEdgeCases(t *testing.T) {
+	// Test various edge cases for CountTombstoneRows
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	fs := testutil.NewSharedFS()
+	
+	state := NewPartitionState("", false, 42, false)
+
+	// Create data object
+	dataObjID := objectio.NewObjectid()
+	dataStats := objectio.NewObjectStatsWithObjectID(&dataObjID, false, false, false)
+	require.NoError(t, objectio.SetObjectStatsRowCnt(dataStats, 100))
+	state.dataObjectsNameIndex.Set(objectio.ObjectEntry{
+		ObjectStats: *dataStats,
+		CreateTime:  types.BuildTS(5, 0),
+		DeleteTime:  types.TS{},
+	})
+
+	// Create tombstone
+	writer := ioutil.ConstructTombstoneWriter(objectio.HiddenColumnSelection_None, fs)
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+
+	for i := 0; i < 10; i++ {
+		blkID := objectio.NewBlockidWithObjectID(&dataObjID, 0)
+		rowid := types.NewRowid(&blkID, uint32(i))
+		require.NoError(t, vector.AppendFixed[types.Rowid](bat.Vecs[0], rowid, false, mp))
+		require.NoError(t, vector.AppendFixed[int32](bat.Vecs[1], int32(i), false, mp))
+	}
+
+	_, err := writer.WriteBatch(bat)
+	require.NoError(t, err)
+	_, _, err = writer.Sync(ctx)
+	require.NoError(t, err)
+
+	ss := writer.GetObjectStats()
+	
+	// Test 1: Tombstone created after snapshot - should not be visible
+	state.tombstoneObjectsNameIndex.Set(objectio.ObjectEntry{
+		ObjectStats: ss,
+		CreateTime:  types.BuildTS(20, 0), // After snapshot
+		DeleteTime:  types.TS{},
+	})
+	
+	count, err := state.CountTombstoneRows(ctx, types.BuildTS(10, 0), fs, false)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(0), count, "Tombstone created after snapshot should not be counted")
+	
+	// Test 2: Tombstone deleted before snapshot - should not be visible
+	state.tombstoneObjectsNameIndex.Delete(objectio.ObjectEntry{
+		ObjectStats: ss,
+		CreateTime:  types.BuildTS(20, 0),
+		DeleteTime:  types.TS{},
+	})
+	
+	state.tombstoneObjectsNameIndex.Set(objectio.ObjectEntry{
+		ObjectStats: ss,
+		CreateTime:  types.BuildTS(2, 0),
+		DeleteTime:  types.BuildTS(5, 0), // Deleted before snapshot
+	})
+	
+	count, err = state.CountTombstoneRows(ctx, types.BuildTS(10, 0), fs, false)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(0), count, "Tombstone deleted before snapshot should not be counted")
+	
+	// Test 3: Appendable tombstone - should be skipped
+	state.tombstoneObjectsNameIndex.Delete(objectio.ObjectEntry{
+		ObjectStats: ss,
+		CreateTime:  types.BuildTS(2, 0),
+		DeleteTime:  types.BuildTS(5, 0),
+	})
+	
+	appendableStats := objectio.NewObjectStatsWithObjectID(&dataObjID, true, false, false)
+	require.NoError(t, objectio.SetObjectStatsRowCnt(appendableStats, 10))
+	
+	state.tombstoneObjectsNameIndex.Set(objectio.ObjectEntry{
+		ObjectStats: *appendableStats,
+		CreateTime:  types.BuildTS(2, 0),
+		DeleteTime:  types.TS{},
+	})
+	
+	count, err = state.CountTombstoneRows(ctx, types.BuildTS(10, 0), fs, false)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(0), count, "Appendable tombstone should be skipped")
+	
+	// Test 4: fs == nil - should use Rows() approximation
+	state.tombstoneObjectsNameIndex.Delete(objectio.ObjectEntry{
+		ObjectStats: *appendableStats,
+		CreateTime:  types.BuildTS(2, 0),
+		DeleteTime:  types.TS{},
+	})
+	
+	state.tombstoneObjectsNameIndex.Set(objectio.ObjectEntry{
+		ObjectStats: ss,
+		CreateTime:  types.BuildTS(2, 0),
+		DeleteTime:  types.TS{},
+	})
+	
+	count, err = state.CountTombstoneRows(ctx, types.BuildTS(10, 0), nil, false)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(10), count, "Should use Rows() approximation when fs is nil")
+}
+
 // TestCountTombstoneRowsIntegration demonstrates the full flow with real tombstone files
 // This is a more complete integration test showing how tombstone counting would work
 // with actual file I/O. Currently commented out as it requires more setup.
