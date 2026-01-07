@@ -1561,6 +1561,16 @@ var supportedOperators = []FuncNew{
 			{
 				overloadId: 0,
 				retType: func(parameters []types.Type) types.Type {
+					// After type conversion, both parameters may be decimal128
+					// Check both parameters to determine result type
+					if parameters[0].Oid == types.T_decimal128 || parameters[1].Oid == types.T_decimal128 {
+						scale1 := parameters[0].Scale
+						scale2 := parameters[1].Scale
+						if scale1 < scale2 {
+							scale1 = scale2
+						}
+						return types.New(types.T_decimal128, 38, scale1)
+					}
 					if parameters[0].Oid == types.T_decimal64 {
 						scale1 := parameters[0].Scale
 						scale2 := parameters[1].Scale
@@ -1568,14 +1578,6 @@ var supportedOperators = []FuncNew{
 							scale1 = scale2
 						}
 						return types.New(types.T_decimal64, 18, scale1)
-					}
-					if parameters[0].Oid == types.T_decimal128 {
-						scale1 := parameters[0].Scale
-						scale2 := parameters[1].Scale
-						if scale1 < scale2 {
-							scale1 = scale2
-						}
-						return types.New(types.T_decimal128, 38, scale1)
 					}
 					return parameters[0]
 				},
@@ -1801,15 +1803,14 @@ var supportedOperators = []FuncNew{
 		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
+				// First check if types directly support DIV
+				if integerDivOperatorSupports(inputs[0], inputs[1]) {
+					return newCheckResultWithSuccess(0)
+				}
+				// Then check with type casting
 				has, t1, t2 := fixedTypeCastRule2(inputs[0], inputs[1])
-				if has {
-					if integerDivOperatorSupports(t1, t2) {
-						return newCheckResultWithCast(0, []types.Type{t1, t2})
-					}
-				} else {
-					if integerDivOperatorSupports(inputs[0], inputs[1]) {
-						return newCheckResultWithSuccess(0)
-					}
+				if has && integerDivOperatorSupports(t1, t2) {
+					return newCheckResultWithCast(0, []types.Type{t1, t2})
 				}
 			}
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
