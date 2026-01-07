@@ -1278,40 +1278,6 @@ func (p *PartitionState) CountRows(
 	return dataStats.Rows - tombstoneStats.Rows, nil
 }
 
-// CountDataRows returns the number of data rows visible at the given snapshot.
-func (p *PartitionState) CountDataRows(snapshot types.TS) uint64 {
-	var count uint64
-
-	// Count non-appendable data objects
-	iter := p.dataObjectsNameIndex.Iter()
-	defer iter.Release()
-	for ok := iter.First(); ok; ok = iter.Next() {
-		obj := iter.Item()
-		if obj.CreateTime.GT(&snapshot) {
-			continue
-		}
-		if !obj.DeleteTime.IsEmpty() && obj.DeleteTime.LE(&snapshot) {
-			continue
-		}
-		if !obj.GetAppendable() {
-			count += uint64(obj.Rows())
-		}
-	}
-
-	// Count appendable data objects and in-memory inserts
-	p.rows.Scan(func(entry *RowEntry) bool {
-		if entry.Time.GT(&snapshot) {
-			return true
-		}
-		if !entry.Deleted {
-			count++
-		}
-		return true
-	})
-
-	return count
-}
-
 // DataStats contains statistics for data objects and rows.
 type DataStats struct {
 	Rows      uint64  // Number of visible data rows
@@ -1351,159 +1317,23 @@ func (p *PartitionState) CountDataStats(snapshot types.TS) DataStats {
 		estimatedOneRowSize = stats.Size / float64(nonAppendableRows)
 	}
 
-	// Count appendable rows (use NewRowsIter to get only non-deleted rows)
-	rowIter := p.NewRowsIter(snapshot, nil, false)
-	defer rowIter.Close()
-	for rowIter.Next() {
-		entry := rowIter.Entry()
-		stats.Rows++
-		if estimatedOneRowSize > 0 {
-			stats.Size += estimatedOneRowSize
-		} else if entry.Batch != nil {
-			stats.Size += float64(entry.Batch.Size()) / float64(entry.Batch.RowCount())
+	// Count appendable rows (scan all non-deleted entries)
+	p.rows.Scan(func(entry *RowEntry) bool {
+		if entry.Time.GT(&snapshot) {
+			return true
 		}
-	}
+		if !entry.Deleted {
+			stats.Rows++
+			if estimatedOneRowSize > 0 {
+				stats.Size += estimatedOneRowSize
+			} else if entry.Batch != nil {
+				stats.Size += float64(entry.Batch.Size()) / float64(entry.Batch.RowCount())
+			}
+		}
+		return true
+	})
 
 	return stats
-}
-
-// CountTombstoneRows returns the number of deleted rows visible at the given snapshot.
-// If checkObjectVisibility is true, only counts deletions pointing to visible data objects.
-func (p *PartitionState) CountTombstoneRows(
-	ctx context.Context,
-	snapshot types.TS,
-	fs fileservice.FileService,
-	checkObjectVisibility bool,
-) (uint64, error) {
-	var count uint64
-
-	// Count non-appendable tombstone objects
-	iter := p.tombstoneObjectsNameIndex.Iter()
-	defer iter.Release()
-
-	for ok := iter.First(); ok; ok = iter.Next() {
-		obj := iter.Item()
-		if obj.CreateTime.GT(&snapshot) {
-			continue
-		}
-		if !obj.DeleteTime.IsEmpty() && obj.DeleteTime.LE(&snapshot) {
-			continue
-		}
-		if obj.GetAppendable() {
-			continue
-		}
-
-		// Read tombstone file and count visible deletions
-		hidden := objectio.HiddenColumnSelection_None
-		attrs := objectio.GetTombstoneAttrs(hidden)
-		persistedDeletes := containers.NewVectors(len(attrs))
-
-		var readErr error
-		seenRowIds := make(map[types.Rowid]bool, 128) // Always deduplicate across blocks
-
-		objectio.ForeachBlkInObjStatsList(true, nil,
-			func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
-				var release func()
-				if _, release, readErr = ioutil.ReadDeletes(
-					ctx, blk.MetaLoc[:], fs, obj.GetCNCreated(), persistedDeletes, nil,
-				); readErr != nil {
-					return false
-				}
-				defer release()
-
-				rowIds := vector.MustFixedColNoTypeCheck[types.Rowid](&persistedDeletes[0])
-
-				// Count deletions with optional object visibility filtering
-				// Note: We don't check CommitTs here because:
-				// 1. Tombstone object visibility is already controlled by object's CreateTime/DeleteTime
-				// 2. If tombstone.CreateTime > snapshot, the entire tombstone is not visible
-				// 3. Individual delete CommitTs is redundant with tombstone object's CreateTime
-				if checkObjectVisibility {
-					// Cache last checked object to avoid repeated lookups
-					var lastObjId types.Objectid
-					var lastVisible bool
-					var lastObjIdSet bool
-
-					for j := 0; j < len(rowIds); j++ {
-						// Skip duplicates
-						if seenRowIds[rowIds[j]] {
-							continue
-						}
-
-						objId := rowIds[j].BorrowObjectID()
-
-						// Only query index when encountering a new object
-						if !lastObjIdSet || !objId.EQ(&lastObjId) {
-							lastObjId = *objId
-							lastObjIdSet = true
-							lastVisible = p.isDataObjectVisible(objId, snapshot)
-						}
-
-						if lastVisible {
-							count++
-							seenRowIds[rowIds[j]] = true
-						}
-					}
-				} else {
-					for j := 0; j < len(rowIds); j++ {
-						if !seenRowIds[rowIds[j]] {
-							count++
-							seenRowIds[rowIds[j]] = true
-						}
-					}
-				}
-
-				return true
-			}, obj.ObjectStats)
-
-		if readErr != nil {
-			return 0, readErr
-		}
-	}
-
-	// Count in-memory tombstones
-	// Use inMemTombstoneRowIdIndex for efficient iteration (only tombstones, not all rows)
-	if checkObjectVisibility {
-		var lastObjId types.Objectid
-		var lastVisible bool
-		var lastObjIdSet bool
-
-		iter := p.inMemTombstoneRowIdIndex.Iter()
-		defer iter.Release()
-
-		for ok := iter.First(); ok; ok = iter.Next() {
-			entry := iter.Item()
-
-			if entry.Time.GT(&snapshot) {
-				continue
-			}
-
-			objId := entry.RowID.BorrowObjectID()
-
-			// Cache last checked object to avoid repeated lookups
-			if !lastObjIdSet || !objId.EQ(&lastObjId) {
-				lastObjId = *objId
-				lastObjIdSet = true
-				lastVisible = p.isDataObjectVisible(objId, snapshot)
-			}
-
-			if lastVisible {
-				count++
-			}
-		}
-	} else {
-		iter := p.inMemTombstoneRowIdIndex.Iter()
-		defer iter.Release()
-
-		for ok := iter.First(); ok; ok = iter.Next() {
-			entry := iter.Item()
-			if entry.Time.LE(&snapshot) {
-				count++
-			}
-		}
-	}
-
-	return count, nil
 }
 
 // TombstoneStats contains statistics for tombstone objects and deleted rows.

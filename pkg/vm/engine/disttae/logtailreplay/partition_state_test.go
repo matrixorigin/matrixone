@@ -256,7 +256,7 @@ func TestCountDataRows(t *testing.T) {
 	state := NewPartitionState("", false, 42, false)
 
 	// Test empty state
-	count := state.CountDataRows(types.BuildTS(10, 0))
+	count := state.CountDataStats(types.BuildTS(10, 0)).Rows
 	assert.Equal(t, uint64(0), count)
 
 	// Add non-appendable data object with 100 rows
@@ -269,7 +269,7 @@ func TestCountDataRows(t *testing.T) {
 		DeleteTime:  types.TS{},
 	})
 
-	count = state.CountDataRows(types.BuildTS(10, 0))
+	count = state.CountDataStats(types.BuildTS(10, 0)).Rows
 	assert.Equal(t, uint64(100), count)
 
 	// Add another non-appendable data object with 50 rows
@@ -282,7 +282,7 @@ func TestCountDataRows(t *testing.T) {
 		DeleteTime:  types.TS{},
 	})
 
-	count = state.CountDataRows(types.BuildTS(10, 0))
+	count = state.CountDataStats(types.BuildTS(10, 0)).Rows
 	assert.Equal(t, uint64(150), count)
 
 	// Add in-memory inserts
@@ -297,15 +297,15 @@ func TestCountDataRows(t *testing.T) {
 		})
 	}
 
-	count = state.CountDataRows(types.BuildTS(10, 0))
+	count = state.CountDataStats(types.BuildTS(10, 0)).Rows
 	assert.Equal(t, uint64(160), count)
 
 	// Test snapshot visibility: count at TS=1
-	count = state.CountDataRows(types.BuildTS(1, 0))
+	count = state.CountDataStats(types.BuildTS(1, 0)).Rows
 	assert.Equal(t, uint64(100), count)
 
 	// Test snapshot visibility: count at TS=2
-	count = state.CountDataRows(types.BuildTS(2, 0))
+	count = state.CountDataStats(types.BuildTS(2, 0)).Rows
 	assert.Equal(t, uint64(150), count)
 
 	// Test deleted object visibility
@@ -319,11 +319,11 @@ func TestCountDataRows(t *testing.T) {
 	})
 
 	// At TS=4, object is visible (100 + 50 + 10 in-mem + 30 new obj = 190)
-	count = state.CountDataRows(types.BuildTS(4, 0))
+	count = state.CountDataStats(types.BuildTS(4, 0)).Rows
 	assert.Equal(t, uint64(190), count)
 
 	// At TS=5, object is deleted (100 + 50 + 10 in-mem = 160)
-	count = state.CountDataRows(types.BuildTS(5, 0))
+	count = state.CountDataStats(types.BuildTS(5, 0)).Rows
 	assert.Equal(t, uint64(160), count)
 }
 
@@ -334,14 +334,24 @@ func TestCountTombstoneRows(t *testing.T) {
 
 	state := NewPartitionState("", false, 42, false)
 
-	// Create real tombstone object 1 with 20 deletions
+	// Create a data object first so tombstones can reference it
+	dataObjID := objectio.NewObjectid()
+	dataStats := objectio.NewObjectStatsWithObjectID(&dataObjID, false, false, false)
+	require.NoError(t, objectio.SetObjectStatsRowCnt(dataStats, 100))
+	state.dataObjectsNameIndex.Set(objectio.ObjectEntry{
+		ObjectStats: *dataStats,
+		CreateTime:  types.BuildTS(1, 0),
+		DeleteTime:  types.TS{},
+	})
+
+	// Create real tombstone object 1 with 20 deletions pointing to the data object
 	writer1 := ioutil.ConstructTombstoneWriter(objectio.HiddenColumnSelection_None, fs)
 	bat1 := batch.NewWithSize(2)
 	bat1.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
 	bat1.Vecs[1] = vector.NewVec(types.T_int32.ToType())
 
 	for i := 0; i < 20; i++ {
-		row := types.RandomRowid()
+		row := types.NewRowIDWithObjectIDBlkNumAndRowID(dataObjID, 0, uint32(i))
 		pk := rand.Int()
 		require.NoError(t, vector.AppendFixed[types.Rowid](bat1.Vecs[0], row, false, mp))
 		require.NoError(t, vector.AppendFixed[int32](bat1.Vecs[1], int32(pk), false, mp))
@@ -359,7 +369,9 @@ func TestCountTombstoneRows(t *testing.T) {
 		DeleteTime:  types.TS{},
 	})
 
-	count, err := state.CountTombstoneRows(ctx, types.BuildTS(10, 0), fs, false)
+	tombStats, err := state.CountTombstoneStats(ctx, types.BuildTS(10, 0), fs)
+	require.NoError(t, err)
+	count := tombStats.Rows
 	require.NoError(t, err)
 	assert.Equal(t, uint64(20), count)
 
@@ -370,7 +382,7 @@ func TestCountTombstoneRows(t *testing.T) {
 	bat2.Vecs[1] = vector.NewVec(types.T_int32.ToType())
 
 	for i := 0; i < 15; i++ {
-		row := types.RandomRowid()
+		row := types.NewRowIDWithObjectIDBlkNumAndRowID(dataObjID, 0, uint32(20+i))
 		pk := rand.Int()
 		require.NoError(t, vector.AppendFixed[types.Rowid](bat2.Vecs[0], row, false, mp))
 		require.NoError(t, vector.AppendFixed[int32](bat2.Vecs[1], int32(pk), false, mp))
@@ -388,13 +400,16 @@ func TestCountTombstoneRows(t *testing.T) {
 		DeleteTime:  types.TS{},
 	})
 
-	count, err = state.CountTombstoneRows(ctx, types.BuildTS(10, 0), fs, false)
+	tombStats, err = state.CountTombstoneStats(ctx, types.BuildTS(10, 0), fs)
+	require.NoError(t, err)
+	count = tombStats.Rows
 	require.NoError(t, err)
 	assert.Equal(t, uint64(35), count)
 
 	// Add in-memory deletes
+	// Add in-memory deletes pointing to the data object
 	for i := 0; i < 5; i++ {
-		rid := types.BuildTestRowid(int64(i), int64(i))
+		rid := types.NewRowIDWithObjectIDBlkNumAndRowID(dataObjID, 0, uint32(35+i))
 		entry := &RowEntry{
 			BlockID: rid.CloneBlockID(),
 			RowID:   rid,
@@ -415,17 +430,23 @@ func TestCountTombstoneRows(t *testing.T) {
 		})
 	}
 
-	count, err = state.CountTombstoneRows(ctx, types.BuildTS(10, 0), fs, false)
+	tombStats, err = state.CountTombstoneStats(ctx, types.BuildTS(10, 0), fs)
+	require.NoError(t, err)
+	count = tombStats.Rows
 	require.NoError(t, err)
 	assert.Equal(t, uint64(40), count)
 
 	// Test snapshot visibility: count at TS=1
-	count, err = state.CountTombstoneRows(ctx, types.BuildTS(1, 0), fs, false)
+	tombStats, err = state.CountTombstoneStats(ctx, types.BuildTS(1, 0), fs)
+	require.NoError(t, err)
+	count = tombStats.Rows
 	require.NoError(t, err)
 	assert.Equal(t, uint64(20), count)
 
 	// Test snapshot visibility: count at TS=2
-	count, err = state.CountTombstoneRows(ctx, types.BuildTS(2, 0), fs, false)
+	tombStats, err = state.CountTombstoneStats(ctx, types.BuildTS(2, 0), fs)
+	require.NoError(t, err)
+	count = tombStats.Rows
 	require.NoError(t, err)
 	assert.Equal(t, uint64(35), count)
 
@@ -436,7 +457,7 @@ func TestCountTombstoneRows(t *testing.T) {
 	bat3.Vecs[1] = vector.NewVec(types.T_int32.ToType())
 
 	for i := 0; i < 10; i++ {
-		row := types.RandomRowid()
+		row := types.NewRowIDWithObjectIDBlkNumAndRowID(dataObjID, 0, uint32(40+i))
 		pk := rand.Int()
 		require.NoError(t, vector.AppendFixed[types.Rowid](bat3.Vecs[0], row, false, mp))
 		require.NoError(t, vector.AppendFixed[int32](bat3.Vecs[1], int32(pk), false, mp))
@@ -455,12 +476,16 @@ func TestCountTombstoneRows(t *testing.T) {
 	})
 
 	// At TS=4, tombstone object is visible (20 + 15 + 5 in-mem + 10 new = 50)
-	count, err = state.CountTombstoneRows(ctx, types.BuildTS(4, 0), fs, false)
+	tombStats, err = state.CountTombstoneStats(ctx, types.BuildTS(4, 0), fs)
+	require.NoError(t, err)
+	count = tombStats.Rows
 	require.NoError(t, err)
 	assert.Equal(t, uint64(50), count)
 
 	// At TS=5, tombstone object is deleted (20 + 15 + 5 in-mem = 40)
-	count, err = state.CountTombstoneRows(ctx, types.BuildTS(5, 0), fs, false)
+	tombStats, err = state.CountTombstoneStats(ctx, types.BuildTS(5, 0), fs)
+	require.NoError(t, err)
+	count = tombStats.Rows
 	require.NoError(t, err)
 	assert.Equal(t, uint64(40), count)
 }
@@ -480,7 +505,7 @@ func TestCountRowsAppendableObjects(t *testing.T) {
 	})
 
 	// Should be 0 since appendable objects are not counted
-	count := state.CountDataRows(types.BuildTS(10, 0))
+	count := state.CountDataStats(types.BuildTS(10, 0)).Rows
 	assert.Equal(t, uint64(0), count)
 
 	// Add appendable tombstone object (should not be counted)
@@ -494,7 +519,9 @@ func TestCountRowsAppendableObjects(t *testing.T) {
 	})
 
 	fs := testutil.NewSharedFS()
-	tombCount, err := state.CountTombstoneRows(ctx, types.BuildTS(10, 0), fs, false)
+	tombStats, err := state.CountTombstoneStats(ctx, types.BuildTS(10, 0), fs)
+	require.NoError(t, err)
+	tombCount := tombStats.Rows
 	require.NoError(t, err)
 	assert.Equal(t, uint64(0), tombCount)
 }
@@ -528,7 +555,7 @@ func TestCountRowsSnapshotIsolation(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		count := state.CountDataRows(tt.ts)
+		count := state.CountDataStats(tt.ts).Rows
 		assert.Equal(t, tt.expected, count, "Failed at TS=%v", tt.ts)
 	}
 }
@@ -580,12 +607,14 @@ func TestCountRowsInMemoryMixedOperations(t *testing.T) {
 	assert.Equal(t, uint64(113), count)
 
 	// Verify individual counts
-	dataCount := state.CountDataRows(types.BuildTS(10, 0))
+	dataCount := state.CountDataStats(types.BuildTS(10, 0)).Rows
 	assert.Equal(t, uint64(113), dataCount) // 100 + 13
 
-	tombCount, err := state.CountTombstoneRows(ctx, types.BuildTS(10, 0), fs, false)
+	tombStats, err := state.CountTombstoneStats(ctx, types.BuildTS(10, 0), fs)
 	require.NoError(t, err)
-	assert.Equal(t, uint64(7), tombCount)
+	tombCount := tombStats.Rows
+	require.NoError(t, err)
+	assert.Equal(t, uint64(0), tombCount) // Deletes filtered out due to no matching objects
 }
 
 func TestCountRowsMultipleObjectDeletions(t *testing.T) {
@@ -632,7 +661,7 @@ func TestCountRowsMultipleObjectDeletions(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		count := state.CountDataRows(tt.ts)
+		count := state.CountDataStats(tt.ts).Rows
 		assert.Equal(t, tt.expected, count, "Failed at TS=%v", tt.ts)
 	}
 }
@@ -651,7 +680,7 @@ func TestCountRowsZeroRowObjects(t *testing.T) {
 		DeleteTime:  types.TS{},
 	})
 
-	count := state.CountDataRows(types.BuildTS(10, 0))
+	count := state.CountDataStats(types.BuildTS(10, 0)).Rows
 	assert.Equal(t, uint64(0), count)
 
 	totalCount, err := state.CountRows(ctx, types.BuildTS(10, 0), nil)
@@ -678,7 +707,7 @@ func TestCountRowsLargeNumbers(t *testing.T) {
 		})
 	}
 
-	count := state.CountDataRows(types.BuildTS(1000, 0))
+	count := state.CountDataStats(types.BuildTS(1000, 0)).Rows
 	assert.Equal(t, uint64(numObjects*rowsPerObject), count)
 
 	totalCount, err := state.CountRows(ctx, types.BuildTS(1000, 0), nil)
@@ -714,7 +743,7 @@ func TestCountRowsTimestampBoundaries(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		count := state.CountDataRows(tt.ts)
+		count := state.CountDataStats(tt.ts).Rows
 		assert.Equal(t, tt.expected, count, "Failed: %s at TS=%v", tt.desc, tt.ts)
 	}
 }
@@ -816,14 +845,18 @@ func TestCountTombstoneRowsWithDuplicates(t *testing.T) {
 
 	// Count with object visibility check
 	// Even if writer deduplicates, our logic should handle it correctly
-	count, err := state.CountTombstoneRows(ctx, types.BuildTS(10, 0), fs, true)
+	tombStats, err := state.CountTombstoneStats(ctx, types.BuildTS(10, 0), fs)
+	require.NoError(t, err)
+	count := tombStats.Rows
 	require.NoError(t, err)
 
 	// Should count 10 unique deletions (duplicates filtered by writer or our logic)
 	assert.Equal(t, uint64(10), count)
 
 	// Test without object visibility check to verify file content
-	countNoCheck, err := state.CountTombstoneRows(ctx, types.BuildTS(10, 0), fs, false)
+	tombStats, err = state.CountTombstoneStats(ctx, types.BuildTS(10, 0), fs)
+	require.NoError(t, err)
+	countNoCheck := tombStats.Rows
 	require.NoError(t, err)
 	// This tells us how many rows are actually in the file
 	t.Logf("Rows in tombstone file: %d", countNoCheck)
@@ -893,12 +926,16 @@ func TestCountTombstoneRowsObjectVisibility(t *testing.T) {
 	})
 
 	// At TS=4, both objects visible, should count all 15 deletions
-	count, err := state.CountTombstoneRows(ctx, types.BuildTS(4, 0), fs, true)
+	tombStats, err := state.CountTombstoneStats(ctx, types.BuildTS(4, 0), fs)
+	require.NoError(t, err)
+	count := tombStats.Rows
 	require.NoError(t, err)
 	assert.Equal(t, uint64(15), count)
 
 	// At TS=6, object 2 deleted, should count only 10 deletions (for object 1)
-	count, err = state.CountTombstoneRows(ctx, types.BuildTS(6, 0), fs, true)
+	tombStats, err = state.CountTombstoneStats(ctx, types.BuildTS(6, 0), fs)
+	require.NoError(t, err)
+	count = tombStats.Rows
 	require.NoError(t, err)
 	assert.Equal(t, uint64(10), count)
 }
@@ -1005,21 +1042,27 @@ func TestCountTombstoneRowsComprehensive(t *testing.T) {
 
 	// At TS=4: obj1 visible (5), obj2 visible (3), obj3 not visible (0)
 	// Total: 5 + 3 = 8 (duplicates filtered, obj3 filtered)
-	count, err := state.CountTombstoneRows(ctx, types.BuildTS(4, 0), fs, true)
+	tombStats, err := state.CountTombstoneStats(ctx, types.BuildTS(4, 0), fs)
+	require.NoError(t, err)
+	count := tombStats.Rows
 	require.NoError(t, err)
 	assert.Equal(t, uint64(8), count)
 
 	// At TS=6: obj1 visible (5), obj2 deleted (0), obj3 not visible (0)
 	// Total: 5
-	count, err = state.CountTombstoneRows(ctx, types.BuildTS(6, 0), fs, true)
+	tombStats, err = state.CountTombstoneStats(ctx, types.BuildTS(6, 0), fs)
+	require.NoError(t, err)
+	count = tombStats.Rows
 	require.NoError(t, err)
 	assert.Equal(t, uint64(5), count)
 
-	// Without object visibility check: should count all unique rows (with deduplication)
-	// Batch1: 5+3+4=12, Batch2: 2+1=3 duplicates, Total unique: 12
-	countNoCheck, err := state.CountTombstoneRows(ctx, types.BuildTS(10, 0), fs, false)
+	// At TS=10: obj1 visible (5), obj2 deleted at TS=5 (0), obj3 not visible (0)
+	// Total: 5 (with object visibility check, only obj1's deletions are counted)
+	tombStats, err = state.CountTombstoneStats(ctx, types.BuildTS(10, 0), fs)
 	require.NoError(t, err)
-	assert.Equal(t, uint64(12), countNoCheck, "Should deduplicate but not filter by object visibility")
+	countNoCheck := tombStats.Rows
+	require.NoError(t, err)
+	assert.Equal(t, uint64(5), countNoCheck, "Only deletions for visible objects are counted")
 	t.Logf("Total unique rows in file: %d", countNoCheck)
 }
 
@@ -1084,12 +1127,16 @@ func TestCountTombstoneRowsCNCreatedWithAppendable(t *testing.T) {
 	})
 
 	// With object visibility check: should count 5 (appendable object is visible)
-	count, err := state.CountTombstoneRows(ctx, types.BuildTS(10, 0), fs, true)
+	tombStats, err := state.CountTombstoneStats(ctx, types.BuildTS(10, 0), fs)
+	require.NoError(t, err)
+	count := tombStats.Rows
 	require.NoError(t, err)
 	assert.Equal(t, uint64(5), count)
 
 	// Without object visibility check: should count 5
-	countNoCheck, err := state.CountTombstoneRows(ctx, types.BuildTS(10, 0), fs, false)
+	tombStats, err = state.CountTombstoneStats(ctx, types.BuildTS(10, 0), fs)
+	require.NoError(t, err)
+	countNoCheck := tombStats.Rows
 	require.NoError(t, err)
 	assert.Equal(t, uint64(5), countNoCheck)
 }
@@ -1113,7 +1160,9 @@ func TestCountTombstoneRowsReadError(t *testing.T) {
 
 	// Try to count - should return error or handle gracefully
 	// With empty stats, the object will be skipped or cause an error
-	count, err := state.CountTombstoneRows(ctx, types.BuildTS(10, 0), fs, false)
+	tombStats, err := state.CountTombstoneStats(ctx, types.BuildTS(10, 0), fs)
+	require.NoError(t, err)
+	count := tombStats.Rows
 
 	// Either error or zero count is acceptable for invalid stats
 	if err != nil {
@@ -1168,7 +1217,9 @@ func TestCountTombstoneRowsEdgeCases(t *testing.T) {
 		DeleteTime:  types.TS{},
 	})
 
-	count, err := state.CountTombstoneRows(ctx, types.BuildTS(10, 0), fs, false)
+	tombStats, err := state.CountTombstoneStats(ctx, types.BuildTS(10, 0), fs)
+	require.NoError(t, err)
+	count := tombStats.Rows
 	require.NoError(t, err)
 	assert.Equal(t, uint64(0), count, "Tombstone created after snapshot should not be counted")
 
@@ -1185,7 +1236,9 @@ func TestCountTombstoneRowsEdgeCases(t *testing.T) {
 		DeleteTime:  types.BuildTS(5, 0), // Deleted before snapshot
 	})
 
-	count, err = state.CountTombstoneRows(ctx, types.BuildTS(10, 0), fs, false)
+	tombStats, err = state.CountTombstoneStats(ctx, types.BuildTS(10, 0), fs)
+	require.NoError(t, err)
+	count = tombStats.Rows
 	require.NoError(t, err)
 	assert.Equal(t, uint64(0), count, "Tombstone deleted before snapshot should not be counted")
 
@@ -1205,7 +1258,9 @@ func TestCountTombstoneRowsEdgeCases(t *testing.T) {
 		DeleteTime:  types.TS{},
 	})
 
-	count, err = state.CountTombstoneRows(ctx, types.BuildTS(10, 0), fs, false)
+	tombStats, err = state.CountTombstoneStats(ctx, types.BuildTS(10, 0), fs)
+	require.NoError(t, err)
+	count = tombStats.Rows
 	require.NoError(t, err)
 	assert.Equal(t, uint64(0), count, "Appendable tombstone should be skipped")
 }
@@ -1258,7 +1313,9 @@ func TestCountTombstoneRowsIntegration(t *testing.T) {
 	// Step 3: Count tombstone rows
 	// Note: Current implementation uses Rows() approximation
 	// Full implementation would read the file and filter by snapshot
-	count, err := state.CountTombstoneRows(ctx, types.BuildTS(10, 0), fs, false)
+	tombStats, err := state.CountTombstoneStats(ctx, types.BuildTS(10, 0), fs)
+	require.NoError(t, err)
+	count := tombStats.Rows
 	require.NoError(t, err)
 	assert.Equal(t, uint64(100), count)
 }
