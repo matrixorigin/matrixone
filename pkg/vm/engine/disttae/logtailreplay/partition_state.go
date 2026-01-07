@@ -1388,7 +1388,9 @@ func (p *PartitionState) CountTombstoneStats(
 		persistedDeletes := containers.NewVectors(len(attrs))
 
 		var readErr error
-		seenRowIds := make(map[types.Rowid]bool, 128)
+		// Use linear deduplication instead of map since tombstone blocks are sorted by RowID
+		var lastRowId types.Rowid
+		var lastRowIdSet bool
 
 		objectio.ForeachBlkInObjStatsList(true, nil,
 			func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
@@ -1415,7 +1417,8 @@ func (p *PartitionState) CountTombstoneStats(
 				var lastObjIdSet bool
 
 				for j := 0; j < len(rowIds); j++ {
-					if seenRowIds[rowIds[j]] {
+					// Skip duplicate RowIDs (linear deduplication)
+					if lastRowIdSet && rowIds[j].EQ(&lastRowId) {
 						continue
 					}
 
@@ -1434,7 +1437,8 @@ func (p *PartitionState) CountTombstoneStats(
 
 					if lastVisible {
 						stats.Rows++
-						seenRowIds[rowIds[j]] = true
+						lastRowId = rowIds[j]
+						lastRowIdSet = true
 					}
 				}
 

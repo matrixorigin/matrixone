@@ -17,6 +17,7 @@ package logtailreplay
 import (
 	"context"
 	"math/rand"
+	"sort"
 	"testing"
 	"time"
 
@@ -801,34 +802,60 @@ func TestCountTombstoneRowsWithDuplicates(t *testing.T) {
 		DeleteTime:  types.TS{},
 	})
 
-	// Create tombstone with duplicates by writing multiple batches
-	// This simulates the scenario where duplicates come from flush/merge transfer
+	// Create tombstone with duplicates by writing sorted data
+	// In real scenarios (flush/merge), data is sorted before writing
 	writer := ioutil.ConstructTombstoneWriter(objectio.HiddenColumnSelection_None, fs)
 
-	// First batch: 10 deletions
-	bat1 := batch.NewWithSize(2)
-	bat1.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	bat1.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	// Collect all deletions (including duplicates)
+	allRowIds := make([]types.Rowid, 0, 15)
+	allPKs := make([]int32, 0, 15)
+
+	// 10 unique deletions
 	for i := 0; i < 10; i++ {
 		blkID := objectio.NewBlockidWithObjectID(&dataObjID, 0)
 		rowid := types.NewRowid(&blkID, uint32(i))
-		pk := int32(i)
-		require.NoError(t, vector.AppendFixed[types.Rowid](bat1.Vecs[0], rowid, false, mp))
-		require.NoError(t, vector.AppendFixed[int32](bat1.Vecs[1], pk, false, mp))
+		allRowIds = append(allRowIds, rowid)
+		allPKs = append(allPKs, int32(i))
+	}
+
+	// 5 duplicates (same rowids as first 5)
+	for i := 0; i < 5; i++ {
+		blkID := objectio.NewBlockidWithObjectID(&dataObjID, 0)
+		rowid := types.NewRowid(&blkID, uint32(i))
+		allRowIds = append(allRowIds, rowid)
+		allPKs = append(allPKs, int32(i))
+	}
+
+	// Sort by RowID (simulating flush/merge behavior)
+	indices := make([]int, len(allRowIds))
+	for i := range indices {
+		indices[i] = i
+	}
+	sort.Slice(indices, func(i, j int) bool {
+		return allRowIds[indices[i]].LT(&allRowIds[indices[j]])
+	})
+
+	// Write sorted data in two batches (simulating block boundaries)
+	// Batch 1: first 8 rows
+	bat1 := batch.NewWithSize(2)
+	bat1.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	bat1.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	for i := 0; i < 8; i++ {
+		idx := indices[i]
+		require.NoError(t, vector.AppendFixed[types.Rowid](bat1.Vecs[0], allRowIds[idx], false, mp))
+		require.NoError(t, vector.AppendFixed[int32](bat1.Vecs[1], allPKs[idx], false, mp))
 	}
 	_, err := writer.WriteBatch(bat1)
 	require.NoError(t, err)
 
-	// Second batch: 5 duplicates (same rowids)
+	// Batch 2: remaining 7 rows
 	bat2 := batch.NewWithSize(2)
 	bat2.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
 	bat2.Vecs[1] = vector.NewVec(types.T_int32.ToType())
-	for i := 0; i < 5; i++ {
-		blkID := objectio.NewBlockidWithObjectID(&dataObjID, 0)
-		rowid := types.NewRowid(&blkID, uint32(i))
-		pk := int32(i)
-		require.NoError(t, vector.AppendFixed[types.Rowid](bat2.Vecs[0], rowid, false, mp))
-		require.NoError(t, vector.AppendFixed[int32](bat2.Vecs[1], pk, false, mp))
+	for i := 8; i < len(indices); i++ {
+		idx := indices[i]
+		require.NoError(t, vector.AppendFixed[types.Rowid](bat2.Vecs[0], allRowIds[idx], false, mp))
+		require.NoError(t, vector.AppendFixed[int32](bat2.Vecs[1], allPKs[idx], false, mp))
 	}
 	_, err = writer.WriteBatch(bat2)
 	require.NoError(t, err)
@@ -844,13 +871,13 @@ func TestCountTombstoneRowsWithDuplicates(t *testing.T) {
 	})
 
 	// Count with object visibility check
-	// Even if writer deduplicates, our logic should handle it correctly
+	// Should count 10 unique deletions (duplicates filtered by linear deduplication)
 	tombStats, err := state.CountTombstoneStats(ctx, types.BuildTS(10, 0), fs)
 	require.NoError(t, err)
 	count := tombStats.Rows
 	require.NoError(t, err)
 
-	// Should count 10 unique deletions (duplicates filtered by writer or our logic)
+	// Should count 10 unique deletions (duplicates filtered)
 	assert.Equal(t, uint64(10), count)
 
 	// Test without object visibility check to verify file content
@@ -972,61 +999,85 @@ func TestCountTombstoneRowsComprehensive(t *testing.T) {
 	dataObjID3 := objectio.NewObjectid()
 
 	// Create tombstone with duplicates and deletions for all three objects
+	// In real scenarios (flush/merge), data is sorted before writing
 	writer := ioutil.ConstructTombstoneWriter(objectio.HiddenColumnSelection_None, fs)
 
-	// Batch 1: deletions for all objects
-	bat1 := batch.NewWithSize(2)
-	bat1.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	bat1.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	// Collect all deletions first (simulating in-memory data before flush)
+	allRowIds := make([]types.Rowid, 0, 15)
+	allPKs := make([]int32, 0, 15)
 
 	// 5 deletions for object 1
 	for i := 0; i < 5; i++ {
 		blkID := objectio.NewBlockidWithObjectID(&dataObjID1, 0)
 		rowid := types.NewRowid(&blkID, uint32(i))
-		require.NoError(t, vector.AppendFixed[types.Rowid](bat1.Vecs[0], rowid, false, mp))
-		require.NoError(t, vector.AppendFixed[int32](bat1.Vecs[1], int32(i), false, mp))
+		allRowIds = append(allRowIds, rowid)
+		allPKs = append(allPKs, int32(i))
+	}
+
+	// 2 duplicates for object 1 (will be deduplicated)
+	for i := 0; i < 2; i++ {
+		blkID := objectio.NewBlockidWithObjectID(&dataObjID1, 0)
+		rowid := types.NewRowid(&blkID, uint32(i))
+		allRowIds = append(allRowIds, rowid)
+		allPKs = append(allPKs, int32(i))
 	}
 
 	// 3 deletions for object 2
 	for i := 0; i < 3; i++ {
 		blkID := objectio.NewBlockidWithObjectID(&dataObjID2, 0)
 		rowid := types.NewRowid(&blkID, uint32(i))
-		require.NoError(t, vector.AppendFixed[types.Rowid](bat1.Vecs[0], rowid, false, mp))
-		require.NoError(t, vector.AppendFixed[int32](bat1.Vecs[1], int32(i+100), false, mp))
-	}
-
-	// 4 deletions for object 3 (not visible)
-	for i := 0; i < 4; i++ {
-		blkID := objectio.NewBlockidWithObjectID(&dataObjID3, 0)
-		rowid := types.NewRowid(&blkID, uint32(i))
-		require.NoError(t, vector.AppendFixed[types.Rowid](bat1.Vecs[0], rowid, false, mp))
-		require.NoError(t, vector.AppendFixed[int32](bat1.Vecs[1], int32(i+200), false, mp))
-	}
-
-	_, err := writer.WriteBatch(bat1)
-	require.NoError(t, err)
-
-	// Batch 2: duplicates for object 1 and 2
-	bat2 := batch.NewWithSize(2)
-	bat2.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	bat2.Vecs[1] = vector.NewVec(types.T_int32.ToType())
-
-	// 2 duplicates for object 1
-	for i := 0; i < 2; i++ {
-		blkID := objectio.NewBlockidWithObjectID(&dataObjID1, 0)
-		rowid := types.NewRowid(&blkID, uint32(i))
-		require.NoError(t, vector.AppendFixed[types.Rowid](bat2.Vecs[0], rowid, false, mp))
-		require.NoError(t, vector.AppendFixed[int32](bat2.Vecs[1], int32(i), false, mp))
+		allRowIds = append(allRowIds, rowid)
+		allPKs = append(allPKs, int32(i+100))
 	}
 
 	// 1 duplicate for object 2
 	for i := 0; i < 1; i++ {
 		blkID := objectio.NewBlockidWithObjectID(&dataObjID2, 0)
 		rowid := types.NewRowid(&blkID, uint32(i))
-		require.NoError(t, vector.AppendFixed[types.Rowid](bat2.Vecs[0], rowid, false, mp))
-		require.NoError(t, vector.AppendFixed[int32](bat2.Vecs[1], int32(i+100), false, mp))
+		allRowIds = append(allRowIds, rowid)
+		allPKs = append(allPKs, int32(i+100))
 	}
 
+	// 4 deletions for object 3 (not visible)
+	for i := 0; i < 4; i++ {
+		blkID := objectio.NewBlockidWithObjectID(&dataObjID3, 0)
+		rowid := types.NewRowid(&blkID, uint32(i))
+		allRowIds = append(allRowIds, rowid)
+		allPKs = append(allPKs, int32(i+200))
+	}
+
+	// Sort by RowID (simulating flush/merge behavior)
+	// Create index array for sorting
+	indices := make([]int, len(allRowIds))
+	for i := range indices {
+		indices[i] = i
+	}
+	sort.Slice(indices, func(i, j int) bool {
+		return allRowIds[indices[i]].LT(&allRowIds[indices[j]])
+	})
+
+	// Write sorted data in batches (simulating block boundaries)
+	// Batch 1: first 8 rows
+	bat1 := batch.NewWithSize(2)
+	bat1.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	bat1.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	for i := 0; i < 8 && i < len(indices); i++ {
+		idx := indices[i]
+		require.NoError(t, vector.AppendFixed[types.Rowid](bat1.Vecs[0], allRowIds[idx], false, mp))
+		require.NoError(t, vector.AppendFixed[int32](bat1.Vecs[1], allPKs[idx], false, mp))
+	}
+	_, err := writer.WriteBatch(bat1)
+	require.NoError(t, err)
+
+	// Batch 2: remaining rows
+	bat2 := batch.NewWithSize(2)
+	bat2.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	bat2.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	for i := 8; i < len(indices); i++ {
+		idx := indices[i]
+		require.NoError(t, vector.AppendFixed[types.Rowid](bat2.Vecs[0], allRowIds[idx], false, mp))
+		require.NoError(t, vector.AppendFixed[int32](bat2.Vecs[1], allPKs[idx], false, mp))
+	}
 	_, err = writer.WriteBatch(bat2)
 	require.NoError(t, err)
 
