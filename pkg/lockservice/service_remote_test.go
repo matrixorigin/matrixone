@@ -496,7 +496,7 @@ func TestIssue12554(t *testing.T) {
 			oldBind := alloc.Get(l1.serviceID, 0, table, 0, pb.Sharding_None)
 			// mock l1 restart, changed serviceID
 			l1.serviceID = getServiceIdentifier("s1", time.Now().UnixNano())
-			l1.tableGroups.removeWithFilter(func(u uint64, lt lockTable) bool { return u == table })
+			l1.tableGroups.removeWithFilter(func(u uint64, lt lockTable) bool { return u == table }, closeReasonBindChanged)
 			newLockTable := l1.createLockTableByBind(oldBind)
 			l1.tableGroups.set(0, table, newLockTable)
 
