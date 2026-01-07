@@ -741,7 +741,7 @@ func TestExecBackupWithProtectionUpdate(t *testing.T) {
 				t.Logf("Expected panic in execBackup: %v", r)
 			}
 		}()
-		err = execBackup(ctx, "", srcFs, dstFs, names, 1, ts, "full", nil, nil)
+		err = execBackup(ctx, "", srcFs, dstFs, names, 1, ts, "full", nil, nil, nil)
 		_ = err
 	}()
 }
@@ -825,7 +825,7 @@ func TestExecBackupWithProtectionMgr(t *testing.T) {
 				t.Logf("Expected panic in execBackup: %v", r)
 			}
 		}()
-		err = execBackup(ctx, "", srcFs, dstFs, names, 1, ts, "full", nil, protectionMgr)
+		err = execBackup(ctx, "", srcFs, dstFs, names, 1, ts, "full", nil, protectionMgr, nil)
 		_ = err
 	}()
 }
@@ -870,7 +870,7 @@ func TestExecBackupWithBaseTS(t *testing.T) {
 				t.Logf("Expected panic in execBackup: %v", r)
 			}
 		}()
-		err = execBackup(ctx, "", srcFs, dstFs, names, 1, ts, "full", nil, nil)
+		err = execBackup(ctx, "", srcFs, dstFs, names, 1, ts, "full", nil, nil, nil)
 		_ = err
 	}()
 }
@@ -916,7 +916,7 @@ func TestExecBackupWithEmptyBaseTS(t *testing.T) {
 				t.Logf("Expected panic in execBackup: %v", r)
 			}
 		}()
-		err = execBackup(ctx, "", srcFs, dstFs, names, 1, emptyTS, "full", nil, nil)
+		err = execBackup(ctx, "", srcFs, dstFs, names, 1, emptyTS, "full", nil, nil, nil)
 		_ = err
 	}()
 }
