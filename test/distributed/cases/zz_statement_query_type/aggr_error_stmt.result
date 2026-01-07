@@ -1,5 +1,5 @@
 select error, count(1) < sum(IF(aggr_count=0, 1, aggr_count)) check_result, count(1) cnt, sum(IF(aggr_count=0, 1, aggr_count)) sum from system.statement_info where account="bvt_aggr_error_stmt" and sql_source_type="cloud_nonuser_sql" group by error;
 error    check_result    cnt    sum
-SQL parser error: table "statement_not_exist_3" does not exist    true    1    3
-SQL parser error: table "statement_not_exist_2" does not exist    true    1    3
-SQL parser error: table "statement_not_exist" does not exist    true    1    9
+SQL parser error: table "statement_not_exist_3" does not exist    1    1    3
+SQL parser error: table "statement_not_exist_2" does not exist    1    1    3
+SQL parser error: table "statement_not_exist" does not exist    1    1    9

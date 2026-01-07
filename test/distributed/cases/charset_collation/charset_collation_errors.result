@@ -54,9 +54,9 @@ INSERT INTO t_null_handling VALUES (2, '');
 INSERT INTO t_null_handling VALUES (3, 'NULL');
 SELECT id, data, data IS NULL as is_null, (data = '') as is_empty, LENGTH(data) as len FROM t_null_handling ORDER BY id;
 id    data    is_null    is_empty    len
-1    null    true    null    null
-2        false    true    0
-3    NULL    false    false    4
+1    null    1    null    null
+2        0    1    0
+3    NULL    0    0    4
 SELECT CONCAT('Hello', NULL, 'World');
 CONCAT(Hello, null, World)
 null
@@ -269,10 +269,10 @@ INSERT INTO t_only_spaces VALUES (3, '   ');
 INSERT INTO t_only_spaces VALUES (4, '    ');
 SELECT id, LENGTH(data), CHAR_LENGTH(data), data = '' FROM t_only_spaces ORDER BY id;
 id    LENGTH(data)    CHAR_LENGTH(data)    data =
-1    1    1    false
-2    2    2    false
-3    3    3    false
-4    4    4    false
+1    1    1    0
+2    2    2    0
+3    3    3    0
+4    4    4    0
 SELECT id, LENGTH(TRIM(data)) FROM t_only_spaces ORDER BY id;
 id    LENGTH(TRIM(data))
 1    0

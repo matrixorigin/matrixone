@@ -16,7 +16,7 @@ publication    database    tables    sub_account    subscribed_accounts    creat
 publication01    republication01    *    acc01        2025-07-18 22:52:28    null    publish before creating snapshot
 select * from mo_catalog.mo_pubs;
 account_id    account_name    pub_name    database_name    database_id    all_table    table_list    account_list    created_time    update_time    owner    creator    comment
-0    sys    publication01    republication01    319060    true    *    acc01    2025-07-18 22:52:28    null    0    1    publish before creating snapshot
+0    sys    publication01    republication01    319060    1    *    acc01    2025-07-18 22:52:28    null    0    1    publish before creating snapshot
 drop publication publication01;
 drop database republication01;
 restore account sys{snapshot="sp01"};
@@ -84,7 +84,7 @@ publication    database    tables    sub_account    subscribed_accounts    creat
 pub02    repub02    *    acc01        2025-07-18 22:52:28    null    publish before creating snapshot
 select * from mo_catalog.mo_pubs;
 account_id    account_name    pub_name    database_name    database_id    all_table    table_list    account_list    created_time    update_time    owner    creator    comment
-0    sys    pub02    repub02    319088    true    *    acc01    2025-07-18 22:52:28    null    0    1    publish before creating snapshot
+0    sys    pub02    repub02    319088    1    *    acc01    2025-07-18 22:52:28    null    0    1    publish before creating snapshot
 drop database if exists sub01;
 create database sub01 from sys publication pub02;
 show databases;
@@ -231,7 +231,7 @@ system_metrics
 drop snapshot sp01;
 select * from mo_catalog.mo_pubs;
 account_id    account_name    pub_name    database_name    database_id    all_table    table_list    account_list    created_time    update_time    owner    creator    comment
-0    sys    pub03    repub03    319118    true    *    acc01    2025-07-18 22:52:28    null    0    1    create repub03
+0    sys    pub03    repub03    319118    1    *    acc01    2025-07-18 22:52:28    null    0    1    create repub03
 show databases;
 Database
 information_schema
@@ -264,7 +264,7 @@ drop publication if exists pub03;
 create publication pub04 database db01 account acc01 comment 'create pub04';
 select * from mo_catalog.mo_pubs;
 account_id    account_name    pub_name    database_name    database_id    all_table    table_list    account_list    created_time    update_time    owner    creator    comment
-0    sys    pub04    db01    319136    true    *    acc01    2025-07-18 22:52:29    null    0    1    create pub04
+0    sys    pub04    db01    319136    1    *    acc01    2025-07-18 22:52:29    null    0    1    create pub04
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
 pub04    db01    *    acc01        2025-07-18 22:52:29    null    create pub04
@@ -476,7 +476,7 @@ drop publication if exists pub07;
 create publication pub07 database test01 account acc01 comment 'publish test01';
 select * from mo_catalog.mo_pubs;
 account_id    account_name    pub_name    database_name    database_id    all_table    table_list    account_list    created_time    update_time    owner    creator    comment
-0    sys    pub07    test01    319282    true    *    acc01    2025-07-18 22:52:30    null    0    1    publish test01
+0    sys    pub07    test01    319282    1    *    acc01    2025-07-18 22:52:30    null    0    1    publish test01
 drop snapshot if exists sp101;
 create snapshot sp101 for account;
 drop database if exists sub07;
@@ -700,7 +700,7 @@ a    b
 restore account acc02{snapshot="sp105"} to account acc03;
 select * from mo_catalog.mo_pubs;
 account_id    account_name    pub_name    database_name    database_id    all_table    table_list    account_list    created_time    update_time    owner    creator    comment
-346    acc01    pub10    test04    319544    true    *    acc02    2025-07-18 22:52:32    null    2    2    publish test03
+346    acc01    pub10    test04    319544    1    *    acc02    2025-07-18 22:52:32    null    2    2    publish test03
 show databases;
 Database
 information_schema

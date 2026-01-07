@@ -66,10 +66,10 @@ ip1    ip2    ip3
 1    1    1
 SELECT IS_IPV4_COMPAT(INET6_ATON('::10.0.5.9')) = 1 AS is_compat;
 is_compat
-true
+1
 SELECT IS_IPV4_COMPAT(INET6_ATON('::1')) = 0 AS is_not_compat;
 is_not_compat
-false
+0
 SELECT IS_IPV4_COMPAT(INET6_ATON('::0.0.0.1')) AS min_compat;
 min_compat
 1
@@ -81,10 +81,10 @@ loopback_compat
 1
 SELECT IS_IPV4_COMPAT(INET6_ATON('::10.0.5.9')) AND IS_IPV4_COMPAT(INET6_ATON('::192.168.1.1')) AS both_compat;
 both_compat
-true
+1
 SELECT IS_IPV4_COMPAT(INET6_ATON('::10.0.5.9')) OR IS_IPV4_COMPAT(INET6_ATON('::1')) AS one_compat;
 one_compat
-true
+1
 SELECT IS_IPV4_COMPAT(INET6_ATON('::192.168.1.1')) AS ipv4_compat;
 ipv4_compat
 1

@@ -4685,6 +4685,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 	case *tree.TableName:
 		schema := string(tbl.SchemaName)
 		table := string(tbl.ObjectName)
+		originTableName := table
 		if len(table) == 0 || len(schema) == 0 && table == "dual" { //special table name
 			//special dual cases.
 			//CORNER CASE 1:
@@ -4880,6 +4881,11 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 			ScanSnapshot: snapshot,
 		}, ctx)
 
+		node := builder.qry.Nodes[nodeID]
+		if node.TableDef != nil {
+			node.TableDef.OriginalName = originTableName
+		}
+
 	case *tree.JoinTableExpr:
 		if tbl.Right == nil {
 			return builder.buildTable(tbl.Left, ctx, preNodeId, leftCtx)
@@ -5044,8 +5050,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		plan.Node_RECURSIVE_SCAN,
 		plan.Node_SOURCE_SCAN,
 	}
-	//lower := builder.compCtx.GetLowerCaseTableNames()
-
+	lower := builder.compCtx.GetLowerCaseTableNames()
 	if slices.Contains(scanNodes, node.NodeType) {
 		if (node.NodeType == plan.Node_VALUE_SCAN || node.NodeType == plan.Node_SINK_SCAN || node.NodeType == plan.Node_RECURSIVE_SCAN) && node.TableDef == nil {
 			return nil
@@ -5054,6 +5059,10 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 			return moerr.NewSyntaxErrorf(builder.GetContext(), "table %q has %d columns available but %d columns specified", alias.Alias, len(node.TableDef.Cols), len(alias.Cols))
 		}
 
+		table = node.TableDef.Name
+		if node.TableDef.OriginalName != "" {
+			table = node.TableDef.OriginalName
+		}
 		if alias.Alias != "" {
 			table = string(alias.Alias)
 		} else {
@@ -5063,8 +5072,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 			if node.NodeType == plan.Node_RECURSIVE_SCAN || node.NodeType == plan.Node_SINK_SCAN {
 				return nil
 			}
-
-			table = node.TableDef.Name
+			table = tree.NewCStr(table, lower).Compare()
 		}
 
 		if _, ok := ctx.bindingByTable[table]; ok {
