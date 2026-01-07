@@ -224,12 +224,23 @@ func TestCountRows(t *testing.T) {
 	// so they won't be counted with object visibility check
 	for i := 5; i < 8; i++ {
 		rid := types.BuildTestRowid(int64(i), int64(i))
-		state.rows.Set(&RowEntry{
+		entry := &RowEntry{
 			BlockID: rid.CloneBlockID(),
 			RowID:   rid,
 			Time:    types.BuildTS(4, uint32(i)),
 			ID:      int64(i),
 			Deleted: true,
+		}
+		state.rows.Set(entry)
+		
+		// Add to inMemTombstoneRowIdIndex
+		state.inMemTombstoneRowIdIndex.Set(&PrimaryIndexEntry{
+			Bytes:      rid.BorrowObjectID()[:],
+			BlockID:    entry.BlockID,
+			RowID:      entry.RowID,
+			Time:       entry.Time,
+			RowEntryID: entry.ID,
+			Deleted:    true,
 		})
 	}
 
@@ -1058,12 +1069,12 @@ func TestCountTombstoneRowsComprehensive(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, uint64(5), count)
 	
-	// Without object visibility check: should count all rows including duplicates
-	// Batch1: 5+3+4=12, Batch2: 2+1=3, Total: 15
+	// Without object visibility check: should count all unique rows (with deduplication)
+	// Batch1: 5+3+4=12, Batch2: 2+1=3 duplicates, Total unique: 12
 	countNoCheck, err := state.CountTombstoneRows(ctx, types.BuildTS(10, 0), fs, false)
 	require.NoError(t, err)
-	assert.Equal(t, uint64(15), countNoCheck)
-	t.Logf("Total rows in file (with duplicates): %d", countNoCheck)
+	assert.Equal(t, uint64(12), countNoCheck, "Should deduplicate but not filter by object visibility")
+	t.Logf("Total unique rows in file: %d", countNoCheck)
 }
 
 func TestCountTombstoneRowsWithRealObject(t *testing.T) {
@@ -1071,34 +1082,99 @@ func TestCountTombstoneRowsWithRealObject(t *testing.T) {
 	// Currently skipped as it requires actual tombstone files
 	t.Skip("Requires real tombstone object files")
 
-	ctx := context.Background()
-	state := NewPartitionState("", false, 42, false)
-
 	// Mock fileservice would be needed here
 	// fs := testutil.NewSharedFS()
 
 	// Add a real tombstone object
-	objID := objectio.NewObjectid()
-	stats := objectio.NewObjectStatsWithObjectID(&objID, false, true, false)
-	require.NoError(t, objectio.SetObjectStatsRowCnt(stats, 100))
+}
 
-	tombstoneEntry := objectio.ObjectEntry{
-		ObjectStats: *stats,
+func TestCountTombstoneRowsCNCreatedWithAppendable(t *testing.T) {
+	// Test CN-created tombstone referencing appendable data objects
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	fs := testutil.NewSharedFS()
+	
+	state := NewPartitionState("", false, 42, false)
+
+	// Create appendable data object by adding in-memory rows
+	dataObjID := objectio.NewObjectid()
+	for i := 0; i < 10; i++ {
+		blkID := objectio.NewBlockidWithObjectID(&dataObjID, 0)
+		rowid := types.NewRowid(&blkID, uint32(i))
+		entry := &RowEntry{
+			BlockID: blkID,
+			RowID:   rowid,
+			Time:    types.BuildTS(1, uint32(i)),
+			ID:      int64(i),
+			Deleted: false,
+		}
+		state.rows.Set(entry)
+	}
+
+	// Create CN-created tombstone (non-appendable) that references the appendable object
+	writer := ioutil.ConstructTombstoneWriter(objectio.HiddenColumnSelection_None, fs)
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+
+	// 5 deletions for the appendable object
+	for i := 0; i < 5; i++ {
+		blkID := objectio.NewBlockidWithObjectID(&dataObjID, 0)
+		rowid := types.NewRowid(&blkID, uint32(i))
+		require.NoError(t, vector.AppendFixed[types.Rowid](bat.Vecs[0], rowid, false, mp))
+		require.NoError(t, vector.AppendFixed[int32](bat.Vecs[1], int32(i), false, mp))
+	}
+
+	_, err := writer.WriteBatch(bat)
+	require.NoError(t, err)
+	_, _, err = writer.Sync(ctx)
+	require.NoError(t, err)
+
+	ss := writer.GetObjectStats()
+	state.tombstoneObjectsNameIndex.Set(objectio.ObjectEntry{
+		ObjectStats: ss,
+		CreateTime:  types.BuildTS(2, 0),
+		DeleteTime:  types.TS{},
+	})
+
+	// With object visibility check: should count 5 (appendable object is visible)
+	count, err := state.CountTombstoneRows(ctx, types.BuildTS(10, 0), fs, true)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(5), count)
+
+	// Without object visibility check: should count 5
+	countNoCheck, err := state.CountTombstoneRows(ctx, types.BuildTS(10, 0), fs, false)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(5), countNoCheck)
+}
+
+func TestCountTombstoneRowsReadError(t *testing.T) {
+	// Test error handling when reading tombstone file fails
+	ctx := context.Background()
+	fs := testutil.NewSharedFS()
+	
+	state := NewPartitionState("", false, 42, false)
+
+	// Create a tombstone object with invalid/empty stats
+	// This will cause ReadDeletes to fail when trying to read the file
+	var stats objectio.ObjectStats
+	
+	state.tombstoneObjectsNameIndex.Set(objectio.ObjectEntry{
+		ObjectStats: stats,
 		CreateTime:  types.BuildTS(1, 0),
 		DeleteTime:  types.TS{},
+	})
+
+	// Try to count - should return error or handle gracefully
+	// With empty stats, the object will be skipped or cause an error
+	count, err := state.CountTombstoneRows(ctx, types.BuildTS(10, 0), fs, false)
+	
+	// Either error or zero count is acceptable for invalid stats
+	if err != nil {
+		t.Logf("Got expected error: %v", err)
+	} else {
+		assert.Equal(t, uint64(0), count, "Should return 0 for invalid tombstone object")
 	}
-	state.tombstoneObjectsNameIndex.Set(tombstoneEntry)
-
-	// To properly test with real files, we would need to:
-	// 1. Create a test tombstone object file using objectio writer
-	// 2. Read it back using ioutil.ReadDeletes
-	// 3. Count visible deletions based on snapshot timestamp
-	// 4. Verify the count matches expected value
-
-	// For now, verify the basic counting works
-	count, err := state.CountTombstoneRows(ctx, types.BuildTS(10, 0), nil, false)
-	require.NoError(t, err)
-	assert.Equal(t, uint64(100), count)
 }
 
 // TestCountTombstoneRowsIntegration demonstrates the full flow with real tombstone files

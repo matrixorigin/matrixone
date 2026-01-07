@@ -1351,9 +1351,7 @@ func (p *PartitionState) CountTombstoneRows(
 
 		var readErr error
 		var seenRowIds map[types.Rowid]bool
-		if checkObjectVisibility {
-			seenRowIds = make(map[types.Rowid]bool, 128) // Deduplication only when checking visibility
-		}
+		seenRowIds = make(map[types.Rowid]bool, 128) // Always deduplicate across blocks
 		
 		objectio.ForeachBlkInObjStatsList(true, nil,
 			func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
@@ -1367,76 +1365,43 @@ func (p *PartitionState) CountTombstoneRows(
 
 				rowIds := vector.MustFixedColNoTypeCheck[types.Rowid](&persistedDeletes[0])
 
-				// Count deletions with timestamp and optional object visibility filtering
-				if len(attrs) > 2 {
-					// Has CommitTs column
-					commitTSVec := vector.MustFixedColNoTypeCheck[types.TS](&persistedDeletes[2])
+				// Count deletions with optional object visibility filtering
+				// Note: We don't check CommitTs here because:
+				// 1. Tombstone object visibility is already controlled by object's CreateTime/DeleteTime
+				// 2. If tombstone.CreateTime > snapshot, the entire tombstone is not visible
+				// 3. Individual delete CommitTs is redundant with tombstone object's CreateTime
+				if checkObjectVisibility {
+					// Cache last checked object to avoid repeated lookups
+					var lastObjId types.Objectid
+					var lastVisible bool
+					var lastObjIdSet bool
 					
-					if checkObjectVisibility {
-						// Cache last checked object to avoid repeated lookups
-						var lastObjId types.Objectid
-						var lastVisible bool
-						var lastObjIdSet bool
-						
-						for j := 0; j < len(rowIds); j++ {
-							// Skip duplicates
-							if seenRowIds[rowIds[j]] {
-								continue
-							}
-							
-							// Check timestamp
-							if commitTSVec[j].GT(&snapshot) {
-								continue
-							}
-							
-							objId := rowIds[j].BorrowObjectID()
-							
-							// Only query index when encountering a new object
-							if !lastObjIdSet || !objId.EQ(&lastObjId) {
-								lastObjId = *objId
-								lastObjIdSet = true
-								lastVisible = p.isDataObjectVisible(objId, snapshot)
-							}
-							
-							if lastVisible {
-								count++
-								seenRowIds[rowIds[j]] = true
-							}
+					for j := 0; j < len(rowIds); j++ {
+						// Skip duplicates
+						if seenRowIds[rowIds[j]] {
+							continue
 						}
-					} else {
-						for _, ts := range commitTSVec {
-							if ts.LE(&snapshot) {
-								count++
-							}
+						
+						objId := rowIds[j].BorrowObjectID()
+						
+						// Only query index when encountering a new object
+						if !lastObjIdSet || !objId.EQ(&lastObjId) {
+							lastObjId = *objId
+							lastObjIdSet = true
+							lastVisible = p.isDataObjectVisible(objId, snapshot)
+						}
+						
+						if lastVisible {
+							count++
+							seenRowIds[rowIds[j]] = true
 						}
 					}
 				} else {
-					// No CommitTs
-					if checkObjectVisibility {
-						var lastObjId types.Objectid
-						var lastVisible bool
-						var lastObjIdSet bool
-						
-						for j := 0; j < len(rowIds); j++ {
-							if seenRowIds[rowIds[j]] {
-								continue
-							}
-							
-							objId := rowIds[j].BorrowObjectID()
-							
-							if !lastObjIdSet || !objId.EQ(&lastObjId) {
-								lastObjId = *objId
-								lastObjIdSet = true
-								lastVisible = p.isDataObjectVisible(objId, snapshot)
-							}
-							
-							if lastVisible {
-								count++
-								seenRowIds[rowIds[j]] = true
-							}
+					for j := 0; j < len(rowIds); j++ {
+						if !seenRowIds[rowIds[j]] {
+							count++
+							seenRowIds[rowIds[j]] = true
 						}
-					} else {
-						count += uint64(len(rowIds))
 					}
 				}
 				
