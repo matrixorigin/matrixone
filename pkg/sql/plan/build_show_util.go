@@ -54,6 +54,8 @@ func ConstructCreateTableSQL(
 		createStr = fmt.Sprintf("CREATE EXTERNAL TABLE %s (", dbTblName)
 	} else if tableDef.TableType == catalog.SystemClusterRel {
 		createStr = fmt.Sprintf("CREATE CLUSTER TABLE %s (", dbTblName)
+	} else if tableDef.IsTemporary {
+		createStr = fmt.Sprintf("CREATE TEMPORARY TABLE %s (", dbTblName)
 	} else {
 		createStr = fmt.Sprintf("CREATE TABLE %s (", dbTblName)
 	}

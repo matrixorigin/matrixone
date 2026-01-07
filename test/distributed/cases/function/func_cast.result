@@ -72,10 +72,10 @@ select cast('' as signed);
 invalid argument cast to int, bad value 
 select cast("2001-1-1" as date) = "2001-01-01";
 cast(2001-1-1 as date) = 2001-01-01
-true
+1
 select cast("2001-1-1" as datetime) = "2001-01-01 00:00:00";
 cast(2001-1-1 as datetime) = 2001-01-01 00:00:00
-true
+1
 select cast(NULL as DATE);
 cast(null as date)
 null
@@ -237,13 +237,13 @@ a - b
 4294967294
 select a-b , (a-b < 0)  from t1 order by 1;
 a - b    a - b < 0
-0    false
-1    false
-4294967294    false
+0    0
+1    0
+4294967294    0
 select any_value(a)-b as d, (any_value(a)-b >= 0), b from t1 group by b having d >= 0;
 d    any_value(a) - b >= 0    b
-1    true    0
-0    true    1
+1    1    0
+0    1    1
 select cast((a - b) as unsigned) from t1 order by 1;
 cast((a - b) as b unsigned)
 0

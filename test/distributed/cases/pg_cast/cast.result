@@ -54,16 +54,16 @@ cast(12:00:00 as time)
 12:00:00
 select 1::bool;
 cast(1 as bool)
-true
+1
 select 0::bool;
 cast(0 as bool)
-false
+0
 select 'true'::bool;
 cast(true as bool)
-true
+1
 select 'false'::bool;
 cast(false as bool)
-false
+0
 select 123::unsigned;
 cast(123 as unsigned)
 123
@@ -107,7 +107,7 @@ date_val
 2023-01-01
 select 1::bool as bool_val;
 bool_val
-true
+1
 select 1.2::int + 3.4::int;
 cast(1.2 as int) + cast(3.4 as int)
 4
@@ -237,22 +237,22 @@ a	b
 drop table t1;
 select 1.5::int = 1;
 cast(1.5 as int) = 1
-false
+0
 select 1.5::int != 2;
 cast(1.5 as int) != 2
-false
+0
 select 1.5::int < 2;
 cast(1.5 as int) < 2
-false
+0
 select 1.5::int > 0;
 cast(1.5 as int) > 0
-true
+1
 select 1.5::int <= 2;
 cast(1.5 as int) <= 2
-true
+1
 select 1.5::int >= 1;
 cast(1.5 as int) >= 1
-true
+1
 select 1.2::int union select 3.4::int;
 cast(1.2 as int)
 3
