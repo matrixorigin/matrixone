@@ -352,7 +352,7 @@ func runRemoteLockTableTests(
 			changed,
 			getLogger(""),
 		)
-		defer l.close()
+		defer l.close(closeReasonServiceClose)
 		fn(l, s)
 	})
 }

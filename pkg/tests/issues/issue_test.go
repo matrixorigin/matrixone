@@ -820,6 +820,13 @@ func TestSpeedupAbortAllTxn(t *testing.T) {
 
 				<-waitC
 
+				// Wait for push client to be fully ready before returning.
+				// reconnectHandler is called before push client is fully recovered,
+				// so we need to wait here to avoid committing when push client is not ready.
+				for !eng.PushClient().IsSubscriberReady() {
+					time.Sleep(time.Millisecond * 10)
+				}
+
 				return nil
 			},
 			executor.Options{}.WithDatabase("mo_catalog").WithUserTxn(),

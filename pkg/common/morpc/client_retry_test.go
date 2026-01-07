@@ -239,24 +239,28 @@ func TestClientSendWithContextCancellation(t *testing.T) {
 			assert.NoError(t, c.Close())
 		}()
 
+		requestReceived := make(chan struct{})
 		rs.RegisterRequestHandler(func(_ context.Context, request RPCMessage, _ uint64, cs ClientSession) error {
+			close(requestReceived)
 			time.Sleep(100 * time.Millisecond) // Simulate slow processing
 			return cs.Write(context.Background(), request.Message)
 		})
 
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
 		req := newTestMessage(1)
 		f, err := c.Send(ctx, testAddr, req)
 
 		if err == nil {
+			<-requestReceived // Wait until request is being processed
+			cancel()          // Cancel after request started
 			_, err = f.Get()
 			f.Close()
 		}
 
 		assert.Error(t, err)
-		assert.True(t, errors.Is(err, context.DeadlineExceeded) || err == context.DeadlineExceeded)
+		assert.True(t, errors.Is(err, context.Canceled))
 	})
 }
 

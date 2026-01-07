@@ -378,7 +378,7 @@ func TestCalculateAggrMemoryBytes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 
-			val1 := mustDecimal128(convertFloat64ToDecimal128(tt.fields.dividend))
+			val1 := safeDecimal128(convertFloat64ToDecimal128(tt.fields.dividend))
 			gotVal := calculateAggrMemoryBytes(val1, tt.fields.divisor)
 			require.Equal(t, tt.want, gotVal)
 		})
