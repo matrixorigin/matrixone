@@ -1262,3 +1262,31 @@ func (sh *SqlHelper) ExecSql(sql string) (ret [][]interface{}, err error) {
 func (sh *SqlHelper) ExecSqlWithCtx(ctx context.Context, sql string) ([][]interface{}, error) {
 	return sh.execSql(ctx, sql)
 }
+
+func (backSes *backSession) GetTempTable(dbName, alias string) (string, bool) {
+	if backSes == nil || backSes.upstream == nil {
+		return "", false
+	}
+	return backSes.upstream.GetTempTable(dbName, alias)
+}
+
+func (backSes *backSession) AddTempTable(dbName, alias, realName string) {
+	if backSes == nil || backSes.upstream == nil {
+		return
+	}
+	backSes.upstream.AddTempTable(dbName, alias, realName)
+}
+
+func (backSes *backSession) RemoveTempTableByRealName(realName string) {
+	if backSes == nil || backSes.upstream == nil {
+		return
+	}
+	backSes.upstream.RemoveTempTableByRealName(realName)
+}
+
+func (backSes *backSession) RemoveTempTable(dbName, alias string) {
+	if backSes == nil || backSes.upstream == nil {
+		return
+	}
+	backSes.upstream.RemoveTempTable(dbName, alias)
+}

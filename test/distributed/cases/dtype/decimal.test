@@ -589,7 +589,7 @@ INSERT INTO decimal15 VALUES(NULL,327.328932,-38922.2123);
 SELECT * FROM decimal15;
 
 -- unique index cannot have duplicate value insertion
--- @pattern
+-- @regex("Duplicate entry",true)
 INSERT INTO decimal15 VALUES(271.212121,387213.0,3289);
 DROP TABLE decimal15;
 
@@ -712,3 +712,217 @@ INSERT INTO decimal23 VALUES('0xffffffffff',0.0000000000001);
 SELECT col1%col2 from decimal23;
 SELECT cast(col2 as double) from decimal23;
 DROP TABLE decimal23;
+
+#Test cases for decimal comparison precision (MySQL compatibility)
+#Issue: float constant should not be truncated when comparing with decimal column
+DROP TABLE IF EXISTS decimal_compare_test;
+CREATE TABLE decimal_compare_test (col1 DECIMAL(38,0) NOT NULL PRIMARY KEY, col2 DOUBLE);
+INSERT INTO decimal_compare_test VALUES (12, -32734928490.328403), (1000000, 3289323423);
+SELECT * FROM decimal_compare_test ORDER BY col1;
+-- float constant 12.213231000021312 should NOT match decimal value 12
+-- MySQL behavior: 0 rows returned (12.213231000021312 != 12)
+SELECT * FROM decimal_compare_test WHERE col1 = 12.213231000021312;
+-- exact match should still work
+SELECT * FROM decimal_compare_test WHERE col1 = 12;
+-- float that would truncate to different value should not match
+SELECT * FROM decimal_compare_test WHERE col1 = 12.9;
+SELECT * FROM decimal_compare_test WHERE col1 = 11.9;
+-- delete should not affect any rows
+DELETE FROM decimal_compare_test WHERE col1 = 12.213231000021312;
+SELECT * FROM decimal_compare_test ORDER BY col1;
+DROP TABLE decimal_compare_test;
+
+-- Test cases for decimal comparison optimizations
+-- Optimization 1: Trailing zeros optimization
+DROP TABLE IF EXISTS decimal_opt_test;
+CREATE TABLE decimal_opt_test (
+    id INT PRIMARY KEY,
+    price DECIMAL(10, 2),
+    amount DECIMAL(20, 5),
+    quantity DECIMAL(18, 0)
+);
+CREATE INDEX idx_price ON decimal_opt_test(price);
+CREATE INDEX idx_amount ON decimal_opt_test(amount);
+CREATE INDEX idx_quantity ON decimal_opt_test(quantity);
+
+INSERT INTO decimal_opt_test VALUES 
+(1, 99.99, 12.34567, 100),
+(2, 199.99, 23.45678, 200),
+(3, 299.99, 34.56789, 300);
+
+-- Test 1: Trailing zeros - should use index (constant can be truncated)
+-- 99.990000000 has trailing zeros, can be truncated to 99.99
+EXPLAIN SELECT * FROM decimal_opt_test WHERE price = 99.990000000;
+SELECT * FROM decimal_opt_test WHERE price = 99.990000000;
+
+-- Test 2: No trailing zeros - should NOT use index (requires table scan)
+-- 99.991234567 has non-zero trailing digits, cannot match any row
+EXPLAIN SELECT * FROM decimal_opt_test WHERE price = 99.991234567;
+SELECT * FROM decimal_opt_test WHERE price = 99.991234567;
+
+-- Test 3: Exact scale match - should use index
+EXPLAIN SELECT * FROM decimal_opt_test WHERE price = 99.99;
+SELECT * FROM decimal_opt_test WHERE price = 99.99;
+
+-- Test 4: Integer with trailing zeros - should use index
+-- 100.000000000 can be truncated to 100
+EXPLAIN SELECT * FROM decimal_opt_test WHERE quantity = 100.000000000;
+SELECT * FROM decimal_opt_test WHERE quantity = 100.000000000;
+
+-- Test 5: BETWEEN with trailing zeros - should use index
+EXPLAIN SELECT * FROM decimal_opt_test WHERE price BETWEEN 99.990000 AND 299.990000;
+SELECT * FROM decimal_opt_test WHERE price BETWEEN 99.990000 AND 299.990000 ORDER BY id;
+
+-- Test 6: IN list with trailing zeros - should use index
+EXPLAIN SELECT * FROM decimal_opt_test WHERE price IN (99.990000, 199.990000, 299.990000);
+SELECT * FROM decimal_opt_test WHERE price IN (99.990000, 199.990000, 299.990000) ORDER BY id;
+
+-- Test 7: Higher precision column with lower precision constant - should use index
+EXPLAIN SELECT * FROM decimal_opt_test WHERE amount = 12.34;
+SELECT * FROM decimal_opt_test WHERE amount = 12.34;
+
+-- Test 8: Verify DELETE with trailing zeros works correctly
+DELETE FROM decimal_opt_test WHERE price = 99.990000000;
+SELECT * FROM decimal_opt_test ORDER BY id;
+
+-- Restore data
+INSERT INTO decimal_opt_test VALUES (1, 99.99, 12.34567, 100);
+
+-- Test 9: UPDATE with trailing zeros
+UPDATE decimal_opt_test SET price = 999.99 WHERE price = 99.990000000;
+SELECT * FROM decimal_opt_test WHERE id = 1;
+
+-- Test 10: Complex query with multiple decimal comparisons
+SELECT * FROM decimal_opt_test 
+WHERE price = 999.990000 AND amount = 12.345670000 
+ORDER BY id;
+
+-- Test 11: Verify non-zero trailing digits don't match
+-- This should return 0 rows (predicate is always false)
+SELECT COUNT(*) FROM decimal_opt_test WHERE price = 99.991;
+
+-- Test 12: Scale 0 column with high precision constant
+-- quantity is DECIMAL(18,0), constant has scale 5
+-- Should not match any rows
+SELECT * FROM decimal_opt_test WHERE quantity = 100.12345;
+
+-- Test 13: Optimizer hint test - precision mismatch should show hint
+EXPLAIN SELECT * FROM decimal_opt_test WHERE price = 99.991234567;
+
+-- Test 14: Early false detection - should return empty result immediately
+-- price is DECIMAL(10,2), constant 99.991234567 has scale=9 with non-zero trailing digits
+-- This comparison is always false, should not scan table
+SELECT COUNT(*) FROM decimal_opt_test WHERE price = 99.991234567;
+
+-- Test 15: Early false detection with different column
+-- amount is DECIMAL(20,5), constant has scale=10 with non-zero trailing digits
+SELECT COUNT(*) FROM decimal_opt_test WHERE amount = 12.3456789012;
+
+-- Test 16: Not early false - has trailing zeros (should use optimization)
+SELECT COUNT(*) FROM decimal_opt_test WHERE price = 99.990000000;
+
+-- Test 17: Negative values with trailing zeros
+INSERT INTO decimal_opt_test VALUES (4, -50.50, -10.12345, -100);
+-- @regex("Index Table Scan.*idx_price",true)
+EXPLAIN SELECT * FROM decimal_opt_test WHERE price = -50.500000;
+SELECT * FROM decimal_opt_test WHERE price = -50.500000;
+
+DROP TABLE decimal_opt_test;
+
+-- Test 18-24: Large Decimal128 values (high bits non-zero)
+-- These tests verify correct handling of decimal values that exceed 64-bit range
+DROP TABLE IF EXISTS decimal128_large_test;
+CREATE TABLE decimal128_large_test (
+    id INT PRIMARY KEY,
+    large_val DECIMAL(38, 0),
+    large_val_scale DECIMAL(38, 6)
+);
+CREATE INDEX idx_large_val ON decimal128_large_test(large_val);
+CREATE INDEX idx_large_val_scale ON decimal128_large_test(large_val_scale);
+
+-- Insert large values that use high 64 bits of Decimal128
+INSERT INTO decimal128_large_test VALUES 
+(1, 12345678901234567890, 12345678901234567890.123456),
+(2, 99999999999999999999, 99999999999999999999.000000),
+(3, 12345678901234567891, 12345678901234567890.123000);
+
+-- Test 18: Large value with trailing zeros - should use index
+-- 12345678901234567890.000000 has trailing zeros, can be truncated
+SELECT * FROM decimal128_large_test WHERE large_val = 12345678901234567890.000000;
+
+-- Test 19: Large value without trailing zeros - early false detection
+-- 12345678901234567890.123456 cannot match integer column
+SELECT * FROM decimal128_large_test WHERE large_val = 12345678901234567890.123456;
+
+-- Test 20: Large value exact match
+SELECT * FROM decimal128_large_test WHERE large_val_scale = 12345678901234567890.123456;
+
+-- Test 21: Large value with partial trailing zeros (scale 6 to 3)
+-- 12345678901234567890.123000 has 3 trailing zeros
+SELECT * FROM decimal128_large_test WHERE large_val_scale = 12345678901234567890.123000;
+
+-- Test 22: Large value early false - non-zero trailing digits
+SELECT COUNT(*) FROM decimal128_large_test WHERE large_val_scale = 12345678901234567890.123456789;
+
+-- Test 23: Near max Decimal128 value with trailing zeros
+SELECT * FROM decimal128_large_test WHERE large_val = 99999999999999999999.00000;
+
+-- Test 24: Verify DELETE with large values works correctly
+DELETE FROM decimal128_large_test WHERE large_val = 12345678901234567890.000000;
+SELECT * FROM decimal128_large_test ORDER BY id;
+
+DROP TABLE decimal128_large_test;
+
+-- Test 25-28: Not-equal (<>) operator early true detection
+DROP TABLE IF EXISTS decimal_neq_test;
+CREATE TABLE decimal_neq_test (
+    id INT PRIMARY KEY,
+    price DECIMAL(10, 2)
+);
+INSERT INTO decimal_neq_test VALUES (1, 99.99), (2, 199.99), (3, 299.99);
+
+-- Test 25: <> with incompatible precision - should return all rows (always true)
+-- price is DECIMAL(10,2), constant 99.991234567 has non-zero trailing digits
+-- Any DECIMAL(10,2) value can never equal 99.991234567, so <> is always true
+-- @regex("Filter Cond: true",true)
+EXPLAIN SELECT * FROM decimal_neq_test WHERE price <> 99.991234567;
+SELECT COUNT(*) FROM decimal_neq_test WHERE price <> 99.991234567;
+
+-- Test 26: <> with trailing zeros - normal comparison (not always true)
+-- @regex("price.*<>.*99.99",true)
+EXPLAIN SELECT * FROM decimal_neq_test WHERE price <> 99.990000000;
+SELECT COUNT(*) FROM decimal_neq_test WHERE price <> 99.990000000;
+
+-- Test 27: <> with exact scale match - normal comparison
+SELECT COUNT(*) FROM decimal_neq_test WHERE price <> 99.99;
+
+-- Test 28: <> combined with other conditions - always true simplifies to just id > 1
+SELECT * FROM decimal_neq_test WHERE price <> 99.991234567 AND id > 1 ORDER BY id;
+
+DROP TABLE decimal_neq_test;
+
+-- Test 29-32: Float precision range checks
+DROP TABLE IF EXISTS float_precision_test;
+CREATE TABLE float_precision_test (
+    id INT PRIMARY KEY,
+    f32_col FLOAT,
+    f64_col DOUBLE
+);
+INSERT INTO float_precision_test VALUES 
+(1, 1000000.0, 1000000.0),
+(2, 16777216.0, 16777216.0);
+
+-- Test 29: float32 with safe integer (within 2^24) - should use column type
+SELECT * FROM float_precision_test WHERE f32_col = 1000000;
+
+-- Test 30: float32 at boundary (2^24) - should use column type
+SELECT * FROM float_precision_test WHERE f32_col = 16777216;
+
+-- Test 31: float32 beyond safe range (2^24 + 1) - should cast to larger type
+-- This won't match any rows due to precision loss
+SELECT COUNT(*) FROM float_precision_test WHERE f32_col = 16777217;
+
+-- Test 32: float64 with int32 range - should use column type
+SELECT * FROM float_precision_test WHERE f64_col = 1000000;
+
+DROP TABLE float_precision_test;

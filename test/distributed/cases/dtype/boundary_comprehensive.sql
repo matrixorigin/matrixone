@@ -189,7 +189,7 @@ FROM t_varchar ORDER BY id;
 INSERT INTO t_varchar (short_str) VALUES ('中文测试');
 INSERT INTO t_varchar (short_str) VALUES ('🎉🎊');
 
-SELECT id, short_str, LENGTH(short_str) AS bytes, CHAR_LENGTH(short_str) AS chars 
+SELECT id, short_str, LENGTH(short_str) AS bytes, CHAR_LENGTH(short_str) AS chars
 FROM t_varchar WHERE id > 5 ORDER BY id;
 
 DROP TABLE t_varchar;
@@ -206,7 +206,7 @@ CREATE TABLE t_char_varchar (
 INSERT INTO t_char_varchar (char_col, varchar_col) VALUES ('test', 'test');
 INSERT INTO t_char_varchar (char_col, varchar_col) VALUES ('test   ', 'test   ');
 
-SELECT id, 
+SELECT id,
        CONCAT('[', char_col, ']') AS char_brackets,
        CONCAT('[', varchar_col, ']') AS varchar_brackets,
        LENGTH(char_col) AS char_len,
@@ -275,9 +275,9 @@ CREATE TABLE t_datetime (
     dt6 DATETIME(6)
 );
 
-INSERT INTO t_datetime (dt0, dt6) VALUES 
+INSERT INTO t_datetime (dt0, dt6) VALUES
     ('2024-01-01 12:34:56', '2024-01-01 12:34:56.789012');
-INSERT INTO t_datetime (dt0, dt6) VALUES 
+INSERT INTO t_datetime (dt0, dt6) VALUES
     ('2024-01-01 23:59:59.999', '2024-01-01 23:59:59.999999');
 
 SELECT * FROM t_datetime ORDER BY id;
@@ -345,7 +345,7 @@ INSERT INTO t_null_test VALUES (2, '', 0);
 INSERT INTO t_null_test VALUES (3, '0', 0);
 
 -- Test IS NULL vs equality
-SELECT id, 
+SELECT id,
        str_col,
        str_col IS NULL AS is_null,
        str_col = '' AS is_empty
@@ -445,10 +445,8 @@ CREATE TABLE t_div (
 INSERT INTO t_div VALUES (1, 100, 0);
 INSERT INTO t_div VALUES (2, 10, 3);
 
--- Division by zero (should error)
--- @bvt:issue
+-- Division by zero
 SELECT numerator / denominator FROM t_div WHERE id = 1;
--- @bvt:issue
 
 -- Normal division (integer division in SQL)
 SELECT numerator / denominator FROM t_div WHERE id = 2;
@@ -540,7 +538,7 @@ INSERT INTO t_str_empty VALUES (1, NULL);
 INSERT INTO t_str_empty VALUES (2, '');
 INSERT INTO t_str_empty VALUES (3, ' ');
 
-SELECT id, str, 
+SELECT id, str,
        str IS NULL AS is_null,
        str = '' AS is_empty,
        LENGTH(str) AS len
@@ -621,7 +619,7 @@ INSERT INTO t_unique (code) VALUES (NULL);
 INSERT INTO t_unique (code) VALUES (NULL);
 INSERT INTO t_unique (code) VALUES ('A');
 
--- @pattern
+-- @regex("Duplicate entry 'A' for key '(code|__mo_index_idx_col)'",true)
 INSERT INTO t_unique (code) VALUES ('A');
 
 SELECT * FROM t_unique ORDER BY id;
@@ -659,7 +657,7 @@ DROP TABLE t_not_null;
 --     id TINYINT AUTO_INCREMENT PRIMARY KEY,
 --     val INT
 -- );
--- 
+--
 -- INSERT INTO t_auto (val) VALUES (1);
 -- ALTER TABLE t_auto AUTO_INCREMENT = 127;
 -- INSERT INTO t_auto (val) VALUES (2);
@@ -705,8 +703,8 @@ CREATE TABLE t_money (
 INSERT INTO t_money VALUES (1, 0.01, 0.01, 100);
 INSERT INTO t_money VALUES (2, 9.99, 9.99, 1000);
 
-SELECT id, 
-       amount_dec * quantity AS total_dec, 
+SELECT id,
+       amount_dec * quantity AS total_dec,
        amount_float * quantity AS total_float
 FROM t_money ORDER BY id;
 
@@ -731,11 +729,10 @@ CREATE TABLE t_round (
 INSERT INTO t_round VALUES (1, 123.45678);
 INSERT INTO t_round VALUES (2, -123.45678);
 
-SELECT id, val, 
+SELECT id, val,
        ROUND(val, 2) AS round_2,
        FLOOR(val) AS floor_val,
        CEIL(val) AS ceil_val
 FROM t_round ORDER BY id;
 
 DROP TABLE t_round;
-
