@@ -189,9 +189,10 @@ func TestCountRows(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, uint64(100), count)
 
-	// Add in-memory inserts (5 rows)
+	// Add in-memory inserts (5 rows) with explicit objectid
+	insertObjID := objectio.NewObjectid()
 	for i := 0; i < 5; i++ {
-		rid := types.BuildTestRowid(int64(i), int64(i))
+		rid := types.NewRowIDWithObjectIDBlkNumAndRowID(insertObjID, 0, uint32(i))
 		state.rows.Set(&RowEntry{
 			BlockID: rid.CloneBlockID(),
 			RowID:   rid,
@@ -206,10 +207,10 @@ func TestCountRows(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, uint64(105), count)
 
-	// Add in-memory deletes (3 rows) - these point to non-existent objects
-	// so they won't be counted with object visibility check
+	// Add in-memory deletes (3 rows) - use different objectid to ensure no match
+	deleteObjID := objectio.NewObjectid()
 	for i := 5; i < 8; i++ {
-		rid := types.BuildTestRowid(int64(i), int64(i))
+		rid := types.NewRowIDWithObjectIDBlkNumAndRowID(deleteObjID, 0, uint32(i))
 		entry := &RowEntry{
 			BlockID: rid.CloneBlockID(),
 			RowID:   rid,
@@ -218,7 +219,7 @@ func TestCountRows(t *testing.T) {
 			Deleted: true,
 		}
 		state.rows.Set(entry)
-		
+
 		// Add to inMemTombstoneRowIdIndex
 		state.inMemTombstoneRowIdIndex.Set(&PrimaryIndexEntry{
 			Bytes:      rid.BorrowObjectID()[:],
@@ -402,7 +403,7 @@ func TestCountTombstoneRows(t *testing.T) {
 			Deleted: true,
 		}
 		state.rows.Set(entry)
-		
+
 		// Also add to inMemTombstoneRowIdIndex
 		state.inMemTombstoneRowIdIndex.Set(&PrimaryIndexEntry{
 			Bytes:      rid.BorrowObjectID()[:],
@@ -558,7 +559,7 @@ func TestCountRowsInMemoryMixedOperations(t *testing.T) {
 			Deleted: isDeleted,
 		}
 		state.rows.Set(entry)
-		
+
 		// Add deletes to inMemTombstoneRowIdIndex
 		if isDeleted {
 			state.inMemTombstoneRowIdIndex.Set(&PrimaryIndexEntry{
@@ -754,12 +755,11 @@ func TestCountRowsConcurrentRead(t *testing.T) {
 	}
 }
 
-
 func TestCountTombstoneRowsWithDuplicates(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
 	fs := testutil.NewSharedFS()
-	
+
 	state := NewPartitionState("", false, 42, false)
 
 	// Create data object first
@@ -775,7 +775,7 @@ func TestCountTombstoneRowsWithDuplicates(t *testing.T) {
 	// Create tombstone with duplicates by writing multiple batches
 	// This simulates the scenario where duplicates come from flush/merge transfer
 	writer := ioutil.ConstructTombstoneWriter(objectio.HiddenColumnSelection_None, fs)
-	
+
 	// First batch: 10 deletions
 	bat1 := batch.NewWithSize(2)
 	bat1.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
@@ -789,7 +789,7 @@ func TestCountTombstoneRowsWithDuplicates(t *testing.T) {
 	}
 	_, err := writer.WriteBatch(bat1)
 	require.NoError(t, err)
-	
+
 	// Second batch: 5 duplicates (same rowids)
 	bat2 := batch.NewWithSize(2)
 	bat2.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
@@ -818,10 +818,10 @@ func TestCountTombstoneRowsWithDuplicates(t *testing.T) {
 	// Even if writer deduplicates, our logic should handle it correctly
 	count, err := state.CountTombstoneRows(ctx, types.BuildTS(10, 0), fs, true)
 	require.NoError(t, err)
-	
+
 	// Should count 10 unique deletions (duplicates filtered by writer or our logic)
 	assert.Equal(t, uint64(10), count)
-	
+
 	// Test without object visibility check to verify file content
 	countNoCheck, err := state.CountTombstoneRows(ctx, types.BuildTS(10, 0), fs, false)
 	require.NoError(t, err)
@@ -833,7 +833,7 @@ func TestCountTombstoneRowsObjectVisibility(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
 	fs := testutil.NewSharedFS()
-	
+
 	state := NewPartitionState("", false, 42, false)
 
 	// Create data object 1
@@ -870,7 +870,7 @@ func TestCountTombstoneRowsObjectVisibility(t *testing.T) {
 		require.NoError(t, vector.AppendFixed[types.Rowid](bat.Vecs[0], rowid, false, mp))
 		require.NoError(t, vector.AppendFixed[int32](bat.Vecs[1], pk, false, mp))
 	}
-	
+
 	// 5 deletions for object 2
 	for i := 0; i < 5; i++ {
 		blkID := objectio.NewBlockidWithObjectID(&dataObjID2, 0)
@@ -908,7 +908,7 @@ func TestCountTombstoneRowsComprehensive(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
 	fs := testutil.NewSharedFS()
-	
+
 	state := NewPartitionState("", false, 42, false)
 
 	// Create data object 1 (visible)
@@ -936,12 +936,12 @@ func TestCountTombstoneRowsComprehensive(t *testing.T) {
 
 	// Create tombstone with duplicates and deletions for all three objects
 	writer := ioutil.ConstructTombstoneWriter(objectio.HiddenColumnSelection_None, fs)
-	
+
 	// Batch 1: deletions for all objects
 	bat1 := batch.NewWithSize(2)
 	bat1.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
 	bat1.Vecs[1] = vector.NewVec(types.T_int32.ToType())
-	
+
 	// 5 deletions for object 1
 	for i := 0; i < 5; i++ {
 		blkID := objectio.NewBlockidWithObjectID(&dataObjID1, 0)
@@ -949,7 +949,7 @@ func TestCountTombstoneRowsComprehensive(t *testing.T) {
 		require.NoError(t, vector.AppendFixed[types.Rowid](bat1.Vecs[0], rowid, false, mp))
 		require.NoError(t, vector.AppendFixed[int32](bat1.Vecs[1], int32(i), false, mp))
 	}
-	
+
 	// 3 deletions for object 2
 	for i := 0; i < 3; i++ {
 		blkID := objectio.NewBlockidWithObjectID(&dataObjID2, 0)
@@ -957,7 +957,7 @@ func TestCountTombstoneRowsComprehensive(t *testing.T) {
 		require.NoError(t, vector.AppendFixed[types.Rowid](bat1.Vecs[0], rowid, false, mp))
 		require.NoError(t, vector.AppendFixed[int32](bat1.Vecs[1], int32(i+100), false, mp))
 	}
-	
+
 	// 4 deletions for object 3 (not visible)
 	for i := 0; i < 4; i++ {
 		blkID := objectio.NewBlockidWithObjectID(&dataObjID3, 0)
@@ -965,15 +965,15 @@ func TestCountTombstoneRowsComprehensive(t *testing.T) {
 		require.NoError(t, vector.AppendFixed[types.Rowid](bat1.Vecs[0], rowid, false, mp))
 		require.NoError(t, vector.AppendFixed[int32](bat1.Vecs[1], int32(i+200), false, mp))
 	}
-	
+
 	_, err := writer.WriteBatch(bat1)
 	require.NoError(t, err)
-	
+
 	// Batch 2: duplicates for object 1 and 2
 	bat2 := batch.NewWithSize(2)
 	bat2.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
 	bat2.Vecs[1] = vector.NewVec(types.T_int32.ToType())
-	
+
 	// 2 duplicates for object 1
 	for i := 0; i < 2; i++ {
 		blkID := objectio.NewBlockidWithObjectID(&dataObjID1, 0)
@@ -981,7 +981,7 @@ func TestCountTombstoneRowsComprehensive(t *testing.T) {
 		require.NoError(t, vector.AppendFixed[types.Rowid](bat2.Vecs[0], rowid, false, mp))
 		require.NoError(t, vector.AppendFixed[int32](bat2.Vecs[1], int32(i), false, mp))
 	}
-	
+
 	// 1 duplicate for object 2
 	for i := 0; i < 1; i++ {
 		blkID := objectio.NewBlockidWithObjectID(&dataObjID2, 0)
@@ -989,7 +989,7 @@ func TestCountTombstoneRowsComprehensive(t *testing.T) {
 		require.NoError(t, vector.AppendFixed[types.Rowid](bat2.Vecs[0], rowid, false, mp))
 		require.NoError(t, vector.AppendFixed[int32](bat2.Vecs[1], int32(i+100), false, mp))
 	}
-	
+
 	_, err = writer.WriteBatch(bat2)
 	require.NoError(t, err)
 
@@ -1014,7 +1014,7 @@ func TestCountTombstoneRowsComprehensive(t *testing.T) {
 	count, err = state.CountTombstoneRows(ctx, types.BuildTS(6, 0), fs, true)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(5), count)
-	
+
 	// Without object visibility check: should count all unique rows (with deduplication)
 	// Batch1: 5+3+4=12, Batch2: 2+1=3 duplicates, Total unique: 12
 	countNoCheck, err := state.CountTombstoneRows(ctx, types.BuildTS(10, 0), fs, false)
@@ -1039,7 +1039,7 @@ func TestCountTombstoneRowsCNCreatedWithAppendable(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
 	fs := testutil.NewSharedFS()
-	
+
 	state := NewPartitionState("", false, 42, false)
 
 	// Create appendable data object by adding in-memory rows
@@ -1098,13 +1098,13 @@ func TestCountTombstoneRowsReadError(t *testing.T) {
 	// Test error handling when reading tombstone file fails
 	ctx := context.Background()
 	fs := testutil.NewSharedFS()
-	
+
 	state := NewPartitionState("", false, 42, false)
 
 	// Create a tombstone object with invalid/empty stats
 	// This will cause ReadDeletes to fail when trying to read the file
 	var stats objectio.ObjectStats
-	
+
 	state.tombstoneObjectsNameIndex.Set(objectio.ObjectEntry{
 		ObjectStats: stats,
 		CreateTime:  types.BuildTS(1, 0),
@@ -1114,7 +1114,7 @@ func TestCountTombstoneRowsReadError(t *testing.T) {
 	// Try to count - should return error or handle gracefully
 	// With empty stats, the object will be skipped or cause an error
 	count, err := state.CountTombstoneRows(ctx, types.BuildTS(10, 0), fs, false)
-	
+
 	// Either error or zero count is acceptable for invalid stats
 	if err != nil {
 		t.Logf("Got expected error: %v", err)
@@ -1128,7 +1128,7 @@ func TestCountTombstoneRowsEdgeCases(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
 	fs := testutil.NewSharedFS()
-	
+
 	state := NewPartitionState("", false, 42, false)
 
 	// Create data object
@@ -1160,51 +1160,51 @@ func TestCountTombstoneRowsEdgeCases(t *testing.T) {
 	require.NoError(t, err)
 
 	ss := writer.GetObjectStats()
-	
+
 	// Test 1: Tombstone created after snapshot - should not be visible
 	state.tombstoneObjectsNameIndex.Set(objectio.ObjectEntry{
 		ObjectStats: ss,
 		CreateTime:  types.BuildTS(20, 0), // After snapshot
 		DeleteTime:  types.TS{},
 	})
-	
+
 	count, err := state.CountTombstoneRows(ctx, types.BuildTS(10, 0), fs, false)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(0), count, "Tombstone created after snapshot should not be counted")
-	
+
 	// Test 2: Tombstone deleted before snapshot - should not be visible
 	state.tombstoneObjectsNameIndex.Delete(objectio.ObjectEntry{
 		ObjectStats: ss,
 		CreateTime:  types.BuildTS(20, 0),
 		DeleteTime:  types.TS{},
 	})
-	
+
 	state.tombstoneObjectsNameIndex.Set(objectio.ObjectEntry{
 		ObjectStats: ss,
 		CreateTime:  types.BuildTS(2, 0),
 		DeleteTime:  types.BuildTS(5, 0), // Deleted before snapshot
 	})
-	
+
 	count, err = state.CountTombstoneRows(ctx, types.BuildTS(10, 0), fs, false)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(0), count, "Tombstone deleted before snapshot should not be counted")
-	
+
 	// Test 3: Appendable tombstone - should be skipped
 	state.tombstoneObjectsNameIndex.Delete(objectio.ObjectEntry{
 		ObjectStats: ss,
 		CreateTime:  types.BuildTS(2, 0),
 		DeleteTime:  types.BuildTS(5, 0),
 	})
-	
+
 	appendableStats := objectio.NewObjectStatsWithObjectID(&dataObjID, true, false, false)
 	require.NoError(t, objectio.SetObjectStatsRowCnt(appendableStats, 10))
-	
+
 	state.tombstoneObjectsNameIndex.Set(objectio.ObjectEntry{
 		ObjectStats: *appendableStats,
 		CreateTime:  types.BuildTS(2, 0),
 		DeleteTime:  types.TS{},
 	})
-	
+
 	count, err = state.CountTombstoneRows(ctx, types.BuildTS(10, 0), fs, false)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(0), count, "Appendable tombstone should be skipped")
@@ -1263,3 +1263,359 @@ func TestCountTombstoneRowsIntegration(t *testing.T) {
 	assert.Equal(t, uint64(100), count)
 }
 */
+
+// TestCalculateTableStatsEmpty tests empty partition
+func TestCalculateTableStatsEmpty(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewSharedFS()
+	state := NewPartitionState("test", false, 0, false)
+	snapshot := types.BuildTS(100, 0)
+
+	stats, err := state.CalculateTableStats(ctx, snapshot, fs)
+	require.NoError(t, err)
+
+	assert.Equal(t, float64(0), stats.TotalRows)
+	assert.Equal(t, float64(0), stats.DeletedRows)
+	assert.Equal(t, float64(0), stats.TotalSize)
+	assert.Equal(t, 0, stats.DataObjectCnt)
+	assert.Equal(t, 0, stats.TombstoneObjectCnt)
+}
+
+// TestCalculateTableStatsNonAppendableOnly tests only non-appendable objects
+func TestCalculateTableStatsNonAppendableOnly(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewSharedFS()
+	state := NewPartitionState("test", false, 0, false)
+	snapshot := types.BuildTS(100, 0)
+
+	// Add 2 non-appendable objects
+	objID1 := objectio.NewObjectid()
+	stats1 := objectio.NewObjectStatsWithObjectID(&objID1, false, false, false)
+	require.NoError(t, objectio.SetObjectStatsRowCnt(stats1, 100))
+	require.NoError(t, objectio.SetObjectStatsSize(stats1, 1000))
+	state.dataObjectsNameIndex.Set(objectio.ObjectEntry{
+		ObjectStats: *stats1,
+		CreateTime:  types.BuildTS(1, 0),
+		DeleteTime:  types.TS{},
+	})
+
+	objID2 := objectio.NewObjectid()
+	stats2 := objectio.NewObjectStatsWithObjectID(&objID2, false, false, false)
+	require.NoError(t, objectio.SetObjectStatsRowCnt(stats2, 200))
+	require.NoError(t, objectio.SetObjectStatsSize(stats2, 3000))
+	state.dataObjectsNameIndex.Set(objectio.ObjectEntry{
+		ObjectStats: *stats2,
+		CreateTime:  types.BuildTS(2, 0),
+		DeleteTime:  types.TS{},
+	})
+
+	stats, err := state.CalculateTableStats(ctx, snapshot, fs)
+	require.NoError(t, err)
+
+	assert.Equal(t, float64(300), stats.TotalRows)
+	assert.Equal(t, float64(0), stats.DeletedRows)
+	assert.Equal(t, float64(4000), stats.TotalSize)
+	assert.Equal(t, 2, stats.DataObjectCnt)
+	assert.Equal(t, 0, stats.TombstoneObjectCnt)
+}
+
+// TestCalculateTableStatsWithAppendableRows tests appendable rows with size estimation
+func TestCalculateTableStatsWithAppendableRows(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewSharedFS()
+	state := NewPartitionState("test", false, 0, false)
+	snapshot := types.BuildTS(100, 0)
+
+	// Add non-appendable object for size estimation
+	objID1 := objectio.NewObjectid()
+	stats1 := objectio.NewObjectStatsWithObjectID(&objID1, false, false, false)
+	require.NoError(t, objectio.SetObjectStatsRowCnt(stats1, 100))
+	require.NoError(t, objectio.SetObjectStatsSize(stats1, 1000))
+	state.dataObjectsNameIndex.Set(objectio.ObjectEntry{
+		ObjectStats: *stats1,
+		CreateTime:  types.BuildTS(1, 0),
+		DeleteTime:  types.TS{},
+	})
+
+	// Add appendable rows
+	mp := mpool.MustNewZero()
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	for i := 0; i < 50; i++ {
+		vector.AppendFixed(bat.Vecs[0], int32(i), false, mp)
+	}
+	bat.SetRowCount(50)
+
+	appendableObjID := objectio.NewObjectid()
+	for i := 0; i < 50; i++ {
+		rid := types.NewRowIDWithObjectIDBlkNumAndRowID(appendableObjID, 0, uint32(i))
+		state.rows.Set(&RowEntry{
+			BlockID: rid.CloneBlockID(),
+			RowID:   rid,
+			Time:    types.BuildTS(5, uint32(i)),
+			Batch:   bat,
+			Offset:  int64(i),
+			ID:      int64(i),
+			Deleted: false,
+		})
+	}
+
+	stats, err := state.CalculateTableStats(ctx, snapshot, fs)
+	require.NoError(t, err)
+
+	// Total rows = 100 (object) + 50 (appendable)
+	assert.Equal(t, float64(150), stats.TotalRows)
+
+	// estimatedOneRowSize = 1000 / 100 = 10
+	// Total size = 1000 + 50 * 10 = 1500
+	assert.Equal(t, float64(1500), stats.TotalSize)
+
+	assert.Equal(t, 1, stats.DataObjectCnt)
+	assert.Equal(t, 0, stats.TombstoneObjectCnt)
+}
+
+// TestCalculateTableStatsWithInMemoryDeletes tests in-memory deletes on non-appendable object rows
+func TestCalculateTableStatsWithInMemoryDeletes(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewSharedFS()
+	state := NewPartitionState("test", false, 0, false)
+	snapshot := types.BuildTS(100, 0)
+
+	// Add data object with 100 rows
+	objID1 := objectio.NewObjectid()
+	stats1 := objectio.NewObjectStatsWithObjectID(&objID1, false, false, false)
+	require.NoError(t, objectio.SetObjectStatsRowCnt(stats1, 100))
+	require.NoError(t, objectio.SetObjectStatsSize(stats1, 1000))
+	state.dataObjectsNameIndex.Set(objectio.ObjectEntry{
+		ObjectStats: *stats1,
+		CreateTime:  types.BuildTS(1, 0),
+		DeleteTime:  types.TS{},
+	})
+
+	// Add in-memory deletes on non-appendable object rows (rowid 0-19)
+	// These are NOT paired with inserts, so they should be counted
+	for i := 0; i < 20; i++ {
+		rid := types.NewRowIDWithObjectIDBlkNumAndRowID(objID1, 0, uint32(i))
+		entry := &RowEntry{
+			BlockID: rid.CloneBlockID(),
+			RowID:   rid,
+			Time:    types.BuildTS(10, uint32(i)),
+			ID:      int64(i),
+			Deleted: true,
+		}
+		state.rows.Set(entry)
+
+		// Add to inMemTombstoneRowIdIndex (required by CountTombstoneRows)
+		state.inMemTombstoneRowIdIndex.Set(&PrimaryIndexEntry{
+			Bytes:      rid.BorrowObjectID()[:],
+			BlockID:    entry.BlockID,
+			RowID:      entry.RowID,
+			Time:       entry.Time,
+			RowEntryID: entry.ID,
+			Deleted:    true,
+		})
+	}
+
+	stats, err := state.CalculateTableStats(ctx, snapshot, fs)
+	require.NoError(t, err)
+
+	// Total rows = 100 (from object, in-memory deletes don't affect NewRowsIter)
+	// Deleted rows = 20 (unpaired deletes on object rows)
+	assert.Equal(t, float64(100), stats.TotalRows)
+	assert.Equal(t, float64(20), stats.DeletedRows)
+}
+
+// TestCalculateTableStatsPairedInsertDelete tests paired insert-delete should be skipped
+func TestCalculateTableStatsPairedInsertDelete(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewSharedFS()
+	state := NewPartitionState("test", false, 0, false)
+	snapshot := types.BuildTS(100, 0)
+
+	// Add data object
+	objID1 := objectio.NewObjectid()
+	stats1 := objectio.NewObjectStatsWithObjectID(&objID1, false, false, false)
+	require.NoError(t, objectio.SetObjectStatsRowCnt(stats1, 100))
+	require.NoError(t, objectio.SetObjectStatsSize(stats1, 1000))
+	state.dataObjectsNameIndex.Set(objectio.ObjectEntry{
+		ObjectStats: *stats1,
+		CreateTime:  types.BuildTS(1, 0),
+		DeleteTime:  types.TS{},
+	})
+
+	// Add in-memory insert and delete for same rowid (should be paired and skipped)
+	mp := mpool.MustNewZero()
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	vector.AppendFixed(bat.Vecs[0], int32(0), false, mp)
+	bat.SetRowCount(1)
+
+	rid := types.NewRowIDWithObjectIDBlkNumAndRowID(objID1, 0, 100)
+
+	// Insert
+	state.rows.Set(&RowEntry{
+		BlockID: rid.CloneBlockID(),
+		RowID:   rid,
+		Time:    types.BuildTS(5, 0),
+		Batch:   bat,
+		Offset:  0,
+		ID:      0,
+		Deleted: false,
+	})
+
+	// Delete same row
+	state.rows.Set(&RowEntry{
+		BlockID: rid.CloneBlockID(),
+		RowID:   rid,
+		Time:    types.BuildTS(10, 0),
+		ID:      1,
+		Deleted: true,
+	})
+
+	stats, err := state.CalculateTableStats(ctx, snapshot, fs)
+	require.NoError(t, err)
+
+	// Total rows = 100 (the appendable insert is deleted, so not counted)
+	// Deleted rows = 0 (paired insert-delete skipped)
+	assert.Equal(t, float64(100), stats.TotalRows)
+	assert.Equal(t, float64(0), stats.DeletedRows)
+}
+
+// TestCalculateTableStatsFilterByObjectVisibility tests deletion filtering
+func TestCalculateTableStatsFilterByObjectVisibility(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewSharedFS()
+	state := NewPartitionState("test", false, 0, false)
+	snapshot := types.BuildTS(100, 0)
+
+	// Add only objID1 as visible
+	objID1 := objectio.NewObjectid()
+	stats1 := objectio.NewObjectStatsWithObjectID(&objID1, false, false, false)
+	require.NoError(t, objectio.SetObjectStatsRowCnt(stats1, 100))
+	require.NoError(t, objectio.SetObjectStatsSize(stats1, 1000))
+	state.dataObjectsNameIndex.Set(objectio.ObjectEntry{
+		ObjectStats: *stats1,
+		CreateTime:  types.BuildTS(1, 0),
+		DeleteTime:  types.TS{},
+	})
+
+	// Add appendable inserts on objID1
+	mp := mpool.MustNewZero()
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	for i := 0; i < 20; i++ {
+		vector.AppendFixed(bat.Vecs[0], int32(i), false, mp)
+	}
+	bat.SetRowCount(20)
+
+	for i := 0; i < 20; i++ {
+		rid1 := types.NewRowIDWithObjectIDBlkNumAndRowID(objID1, 0, uint32(100+i))
+		state.rows.Set(&RowEntry{
+			BlockID: rid1.CloneBlockID(),
+			RowID:   rid1,
+			Time:    types.BuildTS(5, uint32(i)),
+			Batch:   bat,
+			Offset:  int64(i),
+			ID:      int64(i),
+			Deleted: false,
+		})
+	}
+
+	// Add in-memory deletes on both objID1 and objID2
+	objID2 := objectio.NewObjectid()
+
+	for i := 0; i < 10; i++ {
+		rid1 := types.NewRowIDWithObjectIDBlkNumAndRowID(objID1, 0, uint32(100+i))
+		state.rows.Set(&RowEntry{
+			BlockID: rid1.CloneBlockID(),
+			RowID:   rid1,
+			Time:    types.BuildTS(10, uint32(i)),
+			ID:      int64(20 + i),
+			Deleted: true,
+		})
+
+		rid2 := types.NewRowIDWithObjectIDBlkNumAndRowID(objID2, 0, uint32(i))
+		state.rows.Set(&RowEntry{
+			BlockID: rid2.CloneBlockID(),
+			RowID:   rid2,
+			Time:    types.BuildTS(10, uint32(i)),
+			ID:      int64(30 + i),
+			Deleted: true,
+		})
+	}
+
+	stats, err := state.CalculateTableStats(ctx, snapshot, fs)
+	require.NoError(t, err)
+
+	// Should only count deletes on objID1 (0), not objID2 (also 0)
+	// All deletes on objID1 are paired with inserts, so DeletedRows = 0
+	assert.Equal(t, float64(0), stats.DeletedRows)
+}
+
+// TestCalculateTableStatsIntegration tests full integration scenario
+func TestCalculateTableStatsIntegration(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewSharedFS()
+	state := NewPartitionState("test", false, 0, false)
+	snapshot := types.BuildTS(100, 0)
+
+	// Add non-appendable object
+	objID1 := objectio.NewObjectid()
+	stats1 := objectio.NewObjectStatsWithObjectID(&objID1, false, false, false)
+	require.NoError(t, objectio.SetObjectStatsRowCnt(stats1, 100))
+	require.NoError(t, objectio.SetObjectStatsSize(stats1, 1000))
+	state.dataObjectsNameIndex.Set(objectio.ObjectEntry{
+		ObjectStats: *stats1,
+		CreateTime:  types.BuildTS(1, 0),
+		DeleteTime:  types.TS{},
+	})
+
+	// Add appendable rows
+	mp := mpool.MustNewZero()
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	for i := 0; i < 50; i++ {
+		vector.AppendFixed(bat.Vecs[0], int32(i), false, mp)
+	}
+	bat.SetRowCount(50)
+
+	for i := 0; i < 50; i++ {
+		rid := types.NewRowIDWithObjectIDBlkNumAndRowID(objID1, 0, uint32(100+i))
+		state.rows.Set(&RowEntry{
+			BlockID: rid.CloneBlockID(),
+			RowID:   rid,
+			Time:    types.BuildTS(5, uint32(i)),
+			Batch:   bat,
+			Offset:  int64(i),
+			ID:      int64(i),
+			Deleted: false,
+		})
+	}
+
+	// Add deletes
+	for i := 0; i < 20; i++ {
+		rid := types.NewRowIDWithObjectIDBlkNumAndRowID(objID1, 0, uint32(100+i))
+		state.rows.Set(&RowEntry{
+			BlockID: rid.CloneBlockID(),
+			RowID:   rid,
+			Time:    types.BuildTS(10, uint32(i)),
+			ID:      int64(50 + i),
+			Deleted: true,
+		})
+	}
+
+	stats, err := state.CalculateTableStats(ctx, snapshot, fs)
+	require.NoError(t, err)
+
+	// Total rows = 100 + 30 (only rowid 120-149 are not deleted)
+	assert.Equal(t, float64(130), stats.TotalRows)
+
+	// Deleted rows = 0 (all deletes are paired with inserts)
+	assert.Equal(t, float64(0), stats.DeletedRows)
+
+	// Total size = 1000 + 30 * 10 = 1300
+	assert.Equal(t, float64(1300), stats.TotalSize)
+
+	assert.Equal(t, 1, stats.DataObjectCnt)
+	assert.Equal(t, 0, stats.TombstoneObjectCnt)
+}

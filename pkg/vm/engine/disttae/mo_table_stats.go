@@ -2600,28 +2600,38 @@ func (d *dynamicCtx) statsCalculateOp(
 		return
 	}
 
-	bcs := betaCycleStash{
-		born:       time.Now(),
-		snapshot:   snapshot,
-		dataObjIds: d.objIdsPool.Get().(*[]types.Objectid),
+	born := time.Now()
+
+	// Use the new CalculateTableStats function in partition state
+	stats, err := pState.CalculateTableStats(ctx, snapshot, fs)
+	if err != nil {
+		return sl, err
 	}
 
-	defer func() {
-		*bcs.dataObjIds = (*bcs.dataObjIds)[:0]
-		d.objIdsPool.Put(bcs.dataObjIds)
-	}()
+	// Convert to statsList format
+	sl.stats = make(map[string]any)
 
-	if err = collectVisibleData(&bcs, pState); err != nil {
-		return
+	// table rows (total - deleted)
+	leftRows := stats.TotalRows - stats.DeletedRows
+	sl.stats[TableStatsName[TableStatsTableRows]] = leftRows
+
+	// table size (total - estimated deleted size)
+	deletedSize := float64(0)
+	if stats.TotalRows > 0 && stats.DeletedRows > 0 {
+		deletedSize = stats.TotalSize / stats.TotalRows * stats.DeletedRows
 	}
+	leftSize := math.Round((stats.TotalSize-deletedSize)*1000) / 1000
+	sl.stats[TableStatsName[TableStatsTableSize]] = leftSize
 
-	if err = applyTombstones(ctx, &bcs, fs, pState); err != nil {
-		return
-	}
+	// object and block counts
+	sl.stats[TableStatsName[TableStatsTObjectCnt]] = stats.TombstoneObjectCnt
+	sl.stats[TableStatsName[TableStatsTBlockCnt]] = stats.TombstoneBlockCnt
+	sl.stats[TableStatsName[TableStatsDObjectCnt]] = stats.DataObjectCnt
+	sl.stats[TableStatsName[TableStatsDBlockCnt]] = stats.DataBlockCnt
 
-	sl = stashToStats(bcs)
+	sl.took = time.Since(born)
 
-	v2.CalculateStatsDurationHistogram.Observe(time.Since(bcs.born).Seconds())
+	v2.CalculateStatsDurationHistogram.Observe(time.Since(born).Seconds())
 
 	return sl, nil
 }
