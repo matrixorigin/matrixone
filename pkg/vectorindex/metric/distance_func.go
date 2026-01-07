@@ -57,13 +57,13 @@ func L2DistanceSq[T types.RealNumbers](v1, v2 []T) (T, error) {
 // This optimization can improve performance for large vectors by reducing loop
 // overhead and allowing for better instruction-level parallelism.
 func L2DistanceSq[T types.RealNumbers](p, q []T) (T, error) {
-	var sum T
-	n := len(p)
-	i := 0
-
 	if len(p) != len(q) {
 		return T(0), moerr.NewInternalErrorNoCtx("vector dimension not matched")
 	}
+
+	var sum T
+	n := len(p)
+	i := 0
 
 	// Process the bulk of the data in chunks of 8.
 	for i <= n-8 {
@@ -110,17 +110,13 @@ func L1Distance[T types.RealNumbers](v1, v2 []T) (T, error) {
 // It processes 8 elements per iteration to reduce loop overhead and improve performance
 // on large vectors. It also uses an inline 'abs' for potential speed gains.
 func L1Distance[T types.RealNumbers](p, q []T) (T, error) {
-	var sum T
-	n := len(p)
-	i := 0
-
 	if len(p) != len(q) {
 		return T(0), moerr.NewInternalErrorNoCtx("vector dimension not matched")
 	}
 
-	// BCE Hint
-	p = p[:n]
-	q = q[:n]
+	var sum T
+	n := len(p)
+	i := 0
 
 	// Helper function for inline absolute value.
 	// A good compiler might inline this automatically.
@@ -174,16 +170,13 @@ func InnerProduct[T types.RealNumbers](p, q []T) (T, error) {
 // This can significantly improve performance for large vectors by reducing
 // loop overhead and enabling better CPU instruction scheduling.
 func InnerProduct[T types.RealNumbers](p, q []T) (T, error) {
-	var sum T
-	n := len(p)
-	i := 0
-
 	if len(p) != len(q) {
 		return T(0), moerr.NewInternalErrorNoCtx("vector dimension not matched")
 	}
-	// BCE Hint
-	p = p[:n]
-	q = q[:n]
+
+	var sum T
+	n := len(p)
+	i := 0
 
 	// Process the bulk of the data in chunks of 8.
 	for i <= n-8 {
@@ -226,6 +219,10 @@ func CosineDistance[T types.RealNumbers](p, q []T) (T, error) {
 		return 0, nil
 	}
 
+	if len(p) != len(q) {
+		return T(0), moerr.NewInternalErrorNoCtx("vector dimension not matched")
+	}
+
 	var (
 		dotProduct T
 		normV1Sq   T
@@ -234,14 +231,6 @@ func CosineDistance[T types.RealNumbers](p, q []T) (T, error) {
 
 	n := len(p)
 	i := 0
-
-	if len(p) != len(q) {
-		return T(0), moerr.NewInternalErrorNoCtx("vector dimension not matched")
-	}
-
-	// BCE Hint
-	p = p[:n]
-	q = q[:n]
 
 	// Process the bulk of the data in chunks of 4.
 	// Unrolling by 4 provides a good balance between performance gain and code readability.
@@ -309,6 +298,10 @@ func CosineSimilarity[T types.RealNumbers](p, q []T) (T, error) {
 		return 0, nil
 	}
 
+	if len(p) != len(q) {
+		return T(0), moerr.NewInternalErrorNoCtx("vector dimension not matched")
+	}
+
 	var (
 		dotProduct T
 		normV1Sq   T
@@ -317,14 +310,6 @@ func CosineSimilarity[T types.RealNumbers](p, q []T) (T, error) {
 
 	n := len(p)
 	i := 0
-
-	if len(p) != len(q) {
-		return T(0), moerr.NewInternalErrorNoCtx("vector dimension not matched")
-	}
-
-	// BCE Hint
-	p = p[:n]
-	q = q[:n]
 
 	// Process the bulk of the data in chunks of 4.
 	// Unrolling by 4 provides a good balance between performance gain and code readability.
@@ -376,6 +361,9 @@ func CosineSimilarity[T types.RealNumbers](p, q []T) (T, error) {
 // Refs:
 // https://en.wikipedia.org/wiki/Great-circle_distance#Vector_version
 func SphericalDistance[T types.RealNumbers](p, q []T) (T, error) {
+	if len(p) != len(q) {
+		return T(0), moerr.NewInternalErrorNoCtx("vector dimension not matched")
+	}
 	// Compute the dot product of the two vectors.
 	// The dot product of two vectors is a measure of their similarity,
 	// and it can be used to calculate the angle between them.
@@ -383,14 +371,6 @@ func SphericalDistance[T types.RealNumbers](p, q []T) (T, error) {
 
 	n := len(p)
 	i := 0
-
-	if len(p) != len(q) {
-		return T(0), moerr.NewInternalErrorNoCtx("vector dimension not matched")
-	}
-
-	// BCE Hint
-	p = p[:n]
-	q = q[:n]
 
 	// Process the bulk of the data in chunks of 8.
 	for i <= n-8 {
