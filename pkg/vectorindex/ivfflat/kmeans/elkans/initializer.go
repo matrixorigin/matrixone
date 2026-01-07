@@ -121,8 +121,8 @@ func (kpp *KMeansPlusPlus[T]) InitCentroids(ctx context.Context, _vectors any, k
 			ctx,
 			len(vectors),
 			func(ctx context.Context, thread_id int, start, end int) (err2 error) {
-				subvec := vectors[start:end]
-				subdist := distances[start:end]
+				subvec := vectors[start:end:end]
+				subdist := distances[start:end:end]
 
 				for i := range subvec {
 
