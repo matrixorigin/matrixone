@@ -1476,9 +1476,9 @@ func TestCalculateTableStatsWithInMemoryDeletes(t *testing.T) {
 	stats, err := state.CalculateTableStats(ctx, snapshot, fs)
 	require.NoError(t, err)
 
-	// Total rows = 100 (from object, in-memory deletes don't affect NewRowsIter)
+	// Total rows = 100 - 20 = 80 (visible rows after deletions)
 	// Deleted rows = 20 (unpaired deletes on object rows)
-	assert.Equal(t, float64(100), stats.TotalRows)
+	assert.Equal(t, float64(80), stats.TotalRows)
 	assert.Equal(t, float64(20), stats.DeletedRows)
 }
 
@@ -1521,21 +1521,33 @@ func TestCalculateTableStatsPairedInsertDelete(t *testing.T) {
 	})
 
 	// Delete same row
-	state.rows.Set(&RowEntry{
+	deleteEntry := &RowEntry{
 		BlockID: rid.CloneBlockID(),
 		RowID:   rid,
 		Time:    types.BuildTS(10, 0),
 		ID:      1,
 		Deleted: true,
+	}
+	state.rows.Set(deleteEntry)
+
+	// Add to inMemTombstoneRowIdIndex
+	state.inMemTombstoneRowIdIndex.Set(&PrimaryIndexEntry{
+		Bytes:      rid.BorrowObjectID()[:],
+		BlockID:    deleteEntry.BlockID,
+		RowID:      deleteEntry.RowID,
+		Time:       deleteEntry.Time,
+		RowEntryID: deleteEntry.ID,
+		Deleted:    true,
 	})
 
 	stats, err := state.CalculateTableStats(ctx, snapshot, fs)
 	require.NoError(t, err)
 
-	// Total rows = 100 (the appendable insert is deleted, so not counted)
-	// Deleted rows = 0 (paired insert-delete skipped)
+	// Total rows = 100 + 1 - 1 = 100 (visible rows after deletion)
 	assert.Equal(t, float64(100), stats.TotalRows)
-	assert.Equal(t, float64(0), stats.DeletedRows)
+
+	// Deleted rows = 1 (the paired delete is counted)
+	assert.Equal(t, float64(1), stats.DeletedRows)
 }
 
 // TestCalculateTableStatsFilterByObjectVisibility tests deletion filtering
@@ -1652,27 +1664,108 @@ func TestCalculateTableStatsIntegration(t *testing.T) {
 	// Add deletes
 	for i := 0; i < 20; i++ {
 		rid := types.NewRowIDWithObjectIDBlkNumAndRowID(objID1, 0, uint32(100+i))
-		state.rows.Set(&RowEntry{
+		deleteEntry := &RowEntry{
 			BlockID: rid.CloneBlockID(),
 			RowID:   rid,
 			Time:    types.BuildTS(10, uint32(i)),
 			ID:      int64(50 + i),
 			Deleted: true,
+		}
+		state.rows.Set(deleteEntry)
+
+		// Add to inMemTombstoneRowIdIndex
+		state.inMemTombstoneRowIdIndex.Set(&PrimaryIndexEntry{
+			Bytes:      rid.BorrowObjectID()[:],
+			BlockID:    deleteEntry.BlockID,
+			RowID:      deleteEntry.RowID,
+			Time:       deleteEntry.Time,
+			RowEntryID: deleteEntry.ID,
+			Deleted:    true,
 		})
 	}
 
 	stats, err := state.CalculateTableStats(ctx, snapshot, fs)
 	require.NoError(t, err)
 
-	// Total rows = 100 + 30 (only rowid 120-149 are not deleted)
+	// Total rows = 100 + 50 - 20 = 130 (visible rows after deletions)
 	assert.Equal(t, float64(130), stats.TotalRows)
 
-	// Deleted rows = 0 (all deletes are paired with inserts)
-	assert.Equal(t, float64(0), stats.DeletedRows)
+	// Deleted rows = 20 (deletions for rows 100-119)
+	assert.Equal(t, float64(20), stats.DeletedRows)
 
-	// Total size = 1000 + 30 * 10 = 1300
-	assert.Equal(t, float64(1300), stats.TotalSize)
+	// Total size = 1000 + 50 * 10 = 1500 (all data size, including deleted)
+	assert.Equal(t, float64(1500), stats.TotalSize)
 
 	assert.Equal(t, 1, stats.DataObjectCnt)
 	assert.Equal(t, 0, stats.TombstoneObjectCnt)
+}
+
+// TestCountTombstoneStats_DNCreatedWithCommitTs tests DN created tombstone with CommitTs check
+func TestCountTombstoneStats_DNCreatedWithCommitTs(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	fs := testutil.NewSharedFS()
+	state := NewPartitionState("", false, 42, false)
+
+	// Create a data object
+	dataObjID := objectio.NewObjectid()
+	dataStats := objectio.NewObjectStatsWithObjectID(&dataObjID, false, false, false)
+	require.NoError(t, objectio.SetObjectStatsRowCnt(dataStats, 100))
+	state.dataObjectsNameIndex.Set(objectio.ObjectEntry{
+		ObjectStats: *dataStats,
+		CreateTime:  types.BuildTS(1, 0),
+		DeleteTime:  types.TS{},
+	})
+
+	// Create DN tombstone (with CommitTs) at TS=10
+	// Contains deletions from different commit times
+	writer := ioutil.ConstructTombstoneWriter(objectio.HiddenColumnSelection_CommitTS, fs)
+	bat := batch.NewWithSize(3)
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	bat.Vecs[2] = vector.NewVec(types.T_TS.ToType())
+
+	// 5 deletions committed at TS=3
+	for i := 0; i < 5; i++ {
+		row := types.NewRowIDWithObjectIDBlkNumAndRowID(dataObjID, 0, uint32(i))
+		require.NoError(t, vector.AppendFixed[types.Rowid](bat.Vecs[0], row, false, mp))
+		require.NoError(t, vector.AppendFixed[int32](bat.Vecs[1], int32(i), false, mp))
+		require.NoError(t, vector.AppendFixed[types.TS](bat.Vecs[2], types.BuildTS(3, 0), false, mp))
+	}
+
+	// 5 deletions committed at TS=7
+	for i := 5; i < 10; i++ {
+		row := types.NewRowIDWithObjectIDBlkNumAndRowID(dataObjID, 0, uint32(i))
+		require.NoError(t, vector.AppendFixed[types.Rowid](bat.Vecs[0], row, false, mp))
+		require.NoError(t, vector.AppendFixed[int32](bat.Vecs[1], int32(i), false, mp))
+		require.NoError(t, vector.AppendFixed[types.TS](bat.Vecs[2], types.BuildTS(7, 0), false, mp))
+	}
+
+	_, err := writer.WriteBatch(bat)
+	require.NoError(t, err)
+	_, _, err = writer.Sync(ctx)
+	require.NoError(t, err)
+
+	ss := writer.GetObjectStats()
+	// DN created tombstone (no CNCreated flag)
+	state.tombstoneObjectsNameIndex.Set(objectio.ObjectEntry{
+		ObjectStats: ss,
+		CreateTime:  types.BuildTS(10, 0),
+		DeleteTime:  types.TS{},
+	})
+
+	// At TS=9: tombstone not visible yet
+	stats, err := state.CountTombstoneStats(ctx, types.BuildTS(9, 0), fs)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(0), stats.Rows, "Tombstone not visible before CreateTime")
+
+	// At TS=10: tombstone visible, all 10 deletions visible (CommitTs <= 10)
+	stats, err = state.CountTombstoneStats(ctx, types.BuildTS(10, 0), fs)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(10), stats.Rows, "All deletions visible at CreateTime")
+
+	// At TS=15: all 10 deletions still visible
+	stats, err = state.CountTombstoneStats(ctx, types.BuildTS(15, 0), fs)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(10), stats.Rows, "All deletions visible after CreateTime")
 }

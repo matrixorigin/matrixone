@@ -1372,8 +1372,19 @@ func (p *PartitionState) CountTombstoneStats(
 		stats.ObjectCnt++
 		stats.BlockCnt += int(obj.BlkCnt())
 
-		// Read tombstone file and count visible deletions
-		hidden := objectio.HiddenColumnSelection_None
+		// Determine if we need to check CommitTs based on object type
+		// - CN created: no need to check CommitTs (all deletes committed before CreateTime)
+		// - DN created: need to check CommitTs (may contain deletes from different times)
+		cnCreated := obj.GetCNCreated()
+		needCheckCommitTs := !cnCreated
+
+		// Read tombstone file with appropriate hidden columns
+		var hidden objectio.HiddenColumnSelection
+		if needCheckCommitTs {
+			hidden = objectio.HiddenColumnSelection_CommitTS
+		} else {
+			hidden = objectio.HiddenColumnSelection_None
+		}
 		attrs := objectio.GetTombstoneAttrs(hidden)
 		persistedDeletes := containers.NewVectors(len(attrs))
 
@@ -1384,13 +1395,20 @@ func (p *PartitionState) CountTombstoneStats(
 			func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
 				var release func()
 				if _, release, readErr = ioutil.ReadDeletes(
-					ctx, blk.MetaLoc[:], fs, obj.GetCNCreated(), persistedDeletes, nil,
+					ctx, blk.MetaLoc[:], fs, cnCreated, persistedDeletes, nil,
 				); readErr != nil {
 					return false
 				}
 				defer release()
 
 				rowIds := vector.MustFixedColNoTypeCheck[types.Rowid](&persistedDeletes[0])
+
+				// Get CommitTs column if needed
+				var commitTSs []types.TS
+				if needCheckCommitTs && len(persistedDeletes) > 2 {
+					// CommitTs is the last column (after rowid and pk)
+					commitTSs = vector.MustFixedColNoTypeCheck[types.TS](&persistedDeletes[len(persistedDeletes)-1])
+				}
 
 				// Count deletions with object visibility filtering
 				var lastObjId types.Objectid
@@ -1399,6 +1417,11 @@ func (p *PartitionState) CountTombstoneStats(
 
 				for j := 0; j < len(rowIds); j++ {
 					if seenRowIds[rowIds[j]] {
+						continue
+					}
+
+					// Check CommitTs if needed (for DN created tombstones)
+					if needCheckCommitTs && len(commitTSs) > 0 && commitTSs[j].GT(&snapshot) {
 						continue
 					}
 
@@ -1548,8 +1571,16 @@ func (p *PartitionState) CalculateTableStats(
 		return TableStats{}, err
 	}
 
+	// Calculate visible rows (data rows - deleted rows)
+	visibleRows := dataStats.Rows
+	if tombstoneStats.Rows < dataStats.Rows {
+		visibleRows = dataStats.Rows - tombstoneStats.Rows
+	} else {
+		visibleRows = 0
+	}
+
 	return TableStats{
-		TotalRows:          float64(dataStats.Rows),
+		TotalRows:          float64(visibleRows),
 		DeletedRows:        float64(tombstoneStats.Rows),
 		TotalSize:          dataStats.Size,
 		DataObjectCnt:      dataStats.ObjectCnt,
