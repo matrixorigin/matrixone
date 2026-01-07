@@ -397,12 +397,23 @@ func TestCountTombstoneRows(t *testing.T) {
 	// Add in-memory deletes
 	for i := 0; i < 5; i++ {
 		rid := types.BuildTestRowid(int64(i), int64(i))
-		state.rows.Set(&RowEntry{
+		entry := &RowEntry{
 			BlockID: rid.CloneBlockID(),
 			RowID:   rid,
 			Time:    types.BuildTS(3, uint32(i)),
 			ID:      int64(i),
 			Deleted: true,
+		}
+		state.rows.Set(entry)
+		
+		// Also add to inMemTombstoneRowIdIndex
+		state.inMemTombstoneRowIdIndex.Set(&PrimaryIndexEntry{
+			Bytes:      rid.BorrowObjectID()[:],
+			BlockID:    entry.BlockID,
+			RowID:      entry.RowID,
+			Time:       entry.Time,
+			RowEntryID: entry.ID,
+			Deleted:    true,
 		})
 	}
 
@@ -583,13 +594,26 @@ func TestCountRowsInMemoryMixedOperations(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		rid := types.BuildTestRowid(int64(i), int64(i))
 		isDeleted := i%3 == 0 // Every 3rd row is a delete (0,3,6,9,12,15,18 = 7 deletes)
-		state.rows.Set(&RowEntry{
+		entry := &RowEntry{
 			BlockID: rid.CloneBlockID(),
 			RowID:   rid,
 			Time:    types.BuildTS(2, uint32(i)),
 			ID:      int64(i),
 			Deleted: isDeleted,
-		})
+		}
+		state.rows.Set(entry)
+		
+		// Add deletes to inMemTombstoneRowIdIndex
+		if isDeleted {
+			state.inMemTombstoneRowIdIndex.Set(&PrimaryIndexEntry{
+				Bytes:      rid.BorrowObjectID()[:],
+				BlockID:    entry.BlockID,
+				RowID:      entry.RowID,
+				Time:       entry.Time,
+				RowEntryID: entry.ID,
+				Deleted:    true,
+			})
+		}
 	}
 
 	// Count: 100 (base) + 13 inserts - 0 deletes = 113 (deletes filtered out due to no matching objects)

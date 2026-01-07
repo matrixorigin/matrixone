@@ -1449,47 +1449,60 @@ func (p *PartitionState) CountTombstoneRows(
 	}
 
 	// Count in-memory tombstones
+	// Use inMemTombstoneRowIdIndex for efficient iteration (only tombstones, not all rows)
 	if checkObjectVisibility {
 		var lastObjId types.Objectid
 		var lastVisible bool
 		var lastObjIdSet bool
 		
-		p.rows.Scan(func(entry *RowEntry) bool {
+		iter := p.inMemTombstoneRowIdIndex.Iter()
+		defer iter.Release()
+		
+		for ok := iter.First(); ok; ok = iter.Next() {
+			entry := iter.Item()
+			
 			if entry.Time.GT(&snapshot) {
-				return true
+				continue
 			}
-			if entry.Deleted {
-				objId := entry.BlockID.Object()
-				
-				if !lastObjIdSet || !objId.EQ(&lastObjId) {
-					lastObjId = *objId
-					lastObjIdSet = true
-					lastVisible = p.isDataObjectVisible(objId, snapshot)
-				}
-				
-				if lastVisible {
-					count++
-				}
+			
+			objId := entry.RowID.BorrowObjectID()
+			
+			// Cache last checked object to avoid repeated lookups
+			if !lastObjIdSet || !objId.EQ(&lastObjId) {
+				lastObjId = *objId
+				lastObjIdSet = true
+				lastVisible = p.isDataObjectVisible(objId, snapshot)
 			}
-			return true
-		})
-	} else {
-		p.rows.Scan(func(entry *RowEntry) bool {
-			if entry.Time.GT(&snapshot) {
-				return true
-			}
-			if entry.Deleted {
+			
+			if lastVisible {
 				count++
 			}
-			return true
-		})
+		}
+	} else {
+		iter := p.inMemTombstoneRowIdIndex.Iter()
+		defer iter.Release()
+		
+		for ok := iter.First(); ok; ok = iter.Next() {
+			entry := iter.Item()
+			if entry.Time.LE(&snapshot) {
+				count++
+			}
+		}
 	}
 
 	return count, nil
 }
 
 // isDataObjectVisible checks if a data object is visible at the given snapshot.
-// It queries both non-appendable objects index and in-memory rows.
+// 
+// Background:
+// - CN can delete rows on both appendable and non-appendable data objects
+// - CN can flush tombstones to S3 independently (before data object is flushed)
+// - Therefore, tombstone files may reference both appendable and non-appendable objects
+// 
+// This function checks:
+// 1. Non-appendable objects in dataObjectsNameIndex (O(log n) lookup)
+// 2. Appendable objects in rows btree (O(n) scan, but cached by caller)
 func (p *PartitionState) isDataObjectVisible(objId *types.Objectid, snapshot types.TS) bool {
 	// Build a dummy ObjectEntry with the target objectid for lookup
 	var stats objectio.ObjectStats
@@ -1497,7 +1510,7 @@ func (p *PartitionState) isDataObjectVisible(objId *types.Objectid, snapshot typ
 	
 	entry := objectio.ObjectEntry{ObjectStats: stats}
 	
-	// Check non-appendable objects index
+	// Check non-appendable objects index (fast O(log n) lookup)
 	if obj, exists := p.dataObjectsNameIndex.Get(entry); exists {
 		// Check visibility at snapshot
 		if obj.CreateTime.GT(&snapshot) {
@@ -1509,7 +1522,9 @@ func (p *PartitionState) isDataObjectVisible(objId *types.Objectid, snapshot typ
 		return true
 	}
 	
-	// Check appendable objects in in-memory rows
+	// Check appendable objects in in-memory rows (O(n) scan)
+	// This is expensive but necessary for CN-flushed tombstones that reference appendable objects
+	// The caller caches results per objectid to minimize repeated scans
 	found := false
 	p.rows.Scan(func(entry *RowEntry) bool {
 		if entry.BlockID.Object().EQ(objId) {
