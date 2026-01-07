@@ -21,6 +21,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tidwall/btree"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -1115,6 +1117,180 @@ func TestCountTombstoneRowsComprehensive(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, uint64(5), countNoCheck, "Only deletions for visible objects are counted")
 	t.Logf("Total unique rows in file: %d", countNoCheck)
+}
+
+// TestCountTombstoneStats_CrossObjectDuplicates tests the scenario where
+// the same RowID appears in multiple tombstone objects due to:
+// 1. CN transfer: tombstone transferred from old object to new object
+// 2. Tombstone merge: multiple tombstone objects merged without deduplication
+// 3. Concurrent deletes: same row deleted multiple times
+func TestCountTombstoneStats_CrossObjectDuplicates(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	fs := testutil.NewSharedFS()
+
+	state := NewPartitionState("", false, 42, false)
+
+	// Create data object
+	dataObjID := objectio.NewObjectid()
+	dataStats := objectio.NewObjectStatsWithObjectID(&dataObjID, false, false, false)
+	require.NoError(t, objectio.SetObjectStatsRowCnt(dataStats, 1000))
+	state.dataObjectsNameIndex.Set(objectio.ObjectEntry{
+		ObjectStats: *dataStats,
+		CreateTime:  types.BuildTS(1, 0),
+		DeleteTime:  types.TS{},
+	})
+
+	// Scenario: Same RowIDs appear in multiple tombstone objects
+	// This simulates CN transfer or tombstone merge without deduplication
+	
+	// Object 1: Delete rows 0-9
+	writer1 := ioutil.ConstructTombstoneWriter(objectio.HiddenColumnSelection_None, fs)
+	bat1 := batch.NewWithSize(2)
+	bat1.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	bat1.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	for i := 0; i < 10; i++ {
+		blkID := objectio.NewBlockidWithObjectID(&dataObjID, 0)
+		rowid := types.NewRowid(&blkID, uint32(i))
+		require.NoError(t, vector.AppendFixed[types.Rowid](bat1.Vecs[0], rowid, false, mp))
+		require.NoError(t, vector.AppendFixed[int32](bat1.Vecs[1], int32(i), false, mp))
+	}
+	_, err := writer1.WriteBatch(bat1)
+	require.NoError(t, err)
+	_, _, err = writer1.Sync(ctx)
+	require.NoError(t, err)
+	ss1 := writer1.GetObjectStats()
+	state.tombstoneObjectsNameIndex.Set(objectio.ObjectEntry{
+		ObjectStats: ss1,
+		CreateTime:  types.BuildTS(2, 0),
+		DeleteTime:  types.TS{},
+	})
+
+	// Object 2: Delete rows 5-14 (rows 5-9 are duplicates with Object 1)
+	writer2 := ioutil.ConstructTombstoneWriter(objectio.HiddenColumnSelection_None, fs)
+	bat2 := batch.NewWithSize(2)
+	bat2.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	bat2.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	for i := 5; i < 15; i++ {
+		blkID := objectio.NewBlockidWithObjectID(&dataObjID, 0)
+		rowid := types.NewRowid(&blkID, uint32(i))
+		require.NoError(t, vector.AppendFixed[types.Rowid](bat2.Vecs[0], rowid, false, mp))
+		require.NoError(t, vector.AppendFixed[int32](bat2.Vecs[1], int32(i), false, mp))
+	}
+	_, err = writer2.WriteBatch(bat2)
+	require.NoError(t, err)
+	_, _, err = writer2.Sync(ctx)
+	require.NoError(t, err)
+	ss2 := writer2.GetObjectStats()
+	state.tombstoneObjectsNameIndex.Set(objectio.ObjectEntry{
+		ObjectStats: ss2,
+		CreateTime:  types.BuildTS(3, 0),
+		DeleteTime:  types.TS{},
+	})
+
+	// Object 3: Delete rows 10-19 (rows 10-14 are duplicates with Object 2)
+	writer3 := ioutil.ConstructTombstoneWriter(objectio.HiddenColumnSelection_None, fs)
+	bat3 := batch.NewWithSize(2)
+	bat3.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	bat3.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	for i := 10; i < 20; i++ {
+		blkID := objectio.NewBlockidWithObjectID(&dataObjID, 0)
+		rowid := types.NewRowid(&blkID, uint32(i))
+		require.NoError(t, vector.AppendFixed[types.Rowid](bat3.Vecs[0], rowid, false, mp))
+		require.NoError(t, vector.AppendFixed[int32](bat3.Vecs[1], int32(i), false, mp))
+	}
+	_, err = writer3.WriteBatch(bat3)
+	require.NoError(t, err)
+	_, _, err = writer3.Sync(ctx)
+	require.NoError(t, err)
+	ss3 := writer3.GetObjectStats()
+	state.tombstoneObjectsNameIndex.Set(objectio.ObjectEntry{
+		ObjectStats: ss3,
+		CreateTime:  types.BuildTS(4, 0),
+		DeleteTime:  types.TS{},
+	})
+
+	// Count tombstones
+	// Total rows in files: 10 + 10 + 10 = 30
+	// Unique rows: 0-19 = 20
+	// Duplicates: rows 5-9 (in obj1 and obj2) + rows 10-14 (in obj2 and obj3) = 10
+	tombStats, err := state.CountTombstoneStats(ctx, types.BuildTS(10, 0), fs)
+	require.NoError(t, err)
+	count := tombStats.Rows
+	
+	// Should count 20 unique deletions (duplicates filtered by global map)
+	assert.Equal(t, uint64(20), count, "Cross-object duplicates should be filtered")
+	t.Logf("Total rows in files: 30, Unique rows: %d", count)
+}
+
+// TestCountTombstoneStats_CrossObjectAndInMemoryDuplicates tests duplicates
+// between persisted tombstone objects and in-memory tombstones
+func TestCountTombstoneStats_CrossObjectAndInMemoryDuplicates(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	fs := testutil.NewSharedFS()
+
+	state := NewPartitionState("", false, 42, false)
+	state.inMemTombstoneRowIdIndex = btree.NewBTreeG[*PrimaryIndexEntry]((*PrimaryIndexEntry).Less)
+
+	// Create data object
+	dataObjID := objectio.NewObjectid()
+	dataStats := objectio.NewObjectStatsWithObjectID(&dataObjID, false, false, false)
+	require.NoError(t, objectio.SetObjectStatsRowCnt(dataStats, 1000))
+	state.dataObjectsNameIndex.Set(objectio.ObjectEntry{
+		ObjectStats: *dataStats,
+		CreateTime:  types.BuildTS(1, 0),
+		DeleteTime:  types.TS{},
+	})
+
+	// Persisted tombstone: Delete rows 0-9
+	writer := ioutil.ConstructTombstoneWriter(objectio.HiddenColumnSelection_None, fs)
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	for i := 0; i < 10; i++ {
+		blkID := objectio.NewBlockidWithObjectID(&dataObjID, 0)
+		rowid := types.NewRowid(&blkID, uint32(i))
+		require.NoError(t, vector.AppendFixed[types.Rowid](bat.Vecs[0], rowid, false, mp))
+		require.NoError(t, vector.AppendFixed[int32](bat.Vecs[1], int32(i), false, mp))
+	}
+	_, err := writer.WriteBatch(bat)
+	require.NoError(t, err)
+	_, _, err = writer.Sync(ctx)
+	require.NoError(t, err)
+	ss := writer.GetObjectStats()
+	state.tombstoneObjectsNameIndex.Set(objectio.ObjectEntry{
+		ObjectStats: ss,
+		CreateTime:  types.BuildTS(2, 0),
+		DeleteTime:  types.TS{},
+	})
+
+	// In-memory tombstones: Delete rows 5-14 (rows 5-9 are duplicates with persisted)
+	for i := 5; i < 15; i++ {
+		blkID := objectio.NewBlockidWithObjectID(&dataObjID, 0)
+		rowid := types.NewRowid(&blkID, uint32(i))
+		entry := &PrimaryIndexEntry{
+			Bytes:      dataObjID[:],
+			BlockID:    blkID,
+			RowID:      rowid,
+			Time:       types.BuildTS(3, 0),
+			RowEntryID: int64(i),
+		}
+		state.inMemTombstoneRowIdIndex.Set(entry)
+	}
+
+	// Count tombstones
+	// Persisted: 10 rows (0-9)
+	// In-memory: 10 rows (5-14)
+	// Unique: 15 rows (0-14)
+	// Duplicates: 5 rows (5-9)
+	tombStats, err := state.CountTombstoneStats(ctx, types.BuildTS(10, 0), fs)
+	require.NoError(t, err)
+	count := tombStats.Rows
+	
+	// Should count 15 unique deletions (duplicates between persisted and in-memory filtered)
+	assert.Equal(t, uint64(15), count, "Duplicates between persisted and in-memory should be filtered")
+	t.Logf("Persisted: 10, In-memory: 10, Unique: %d", count)
 }
 
 func TestCountTombstoneRowsWithRealObject(t *testing.T) {

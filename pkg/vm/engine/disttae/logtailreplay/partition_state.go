@@ -1356,6 +1356,40 @@ func (p *PartitionState) CountTombstoneStats(
 	iter := p.tombstoneObjectsNameIndex.Iter()
 	defer iter.Release()
 
+	// Pre-estimate map size to reduce allocations
+	// Estimate: sum of all tombstone object rows (may overestimate due to duplicates)
+	estimatedSize := 0
+	for ok := iter.First(); ok; ok = iter.Next() {
+		obj := iter.Item()
+		if obj.CreateTime.GT(&snapshot) {
+			continue
+		}
+		if !obj.DeleteTime.IsEmpty() && obj.DeleteTime.LE(&snapshot) {
+			continue
+		}
+		estimatedSize += int(obj.Rows())
+	}
+	// Add in-memory tombstones estimate
+	estimatedSize += p.inMemTombstoneRowIdIndex.Len()
+	
+	// Use estimated size, but cap at reasonable limit to avoid over-allocation
+	if estimatedSize > 1000000 {
+		estimatedSize = 1000000
+	} else if estimatedSize < 128 {
+		estimatedSize = 128
+	}
+
+	// Global deduplication map across all tombstone objects and in-memory tombstones
+	// This is necessary because:
+	// 1. CN transfer may create duplicate RowIDs across objects
+	// 2. Tombstone merge doesn't deduplicate
+	// 3. Concurrent deletes may create duplicates
+	seenRowIds := make(map[types.Rowid]struct{}, estimatedSize)
+
+	// Reset iterator for actual counting
+	iter = p.tombstoneObjectsNameIndex.Iter()
+	defer iter.Release()
+
 	for ok := iter.First(); ok; ok = iter.Next() {
 		obj := iter.Item()
 		if obj.CreateTime.GT(&snapshot) {
@@ -1388,7 +1422,7 @@ func (p *PartitionState) CountTombstoneStats(
 		persistedDeletes := containers.NewVectors(len(attrs))
 
 		var readErr error
-		// Use linear deduplication instead of map since tombstone blocks are sorted by RowID
+		// Use linear deduplication within a single object (blocks are sorted by RowID)
 		var lastRowId types.Rowid
 		var lastRowIdSet bool
 
@@ -1417,7 +1451,7 @@ func (p *PartitionState) CountTombstoneStats(
 				var lastObjIdSet bool
 
 				for j := 0; j < len(rowIds); j++ {
-					// Skip duplicate RowIDs (linear deduplication)
+					// Skip duplicate RowIDs within this object (linear deduplication)
 					if lastRowIdSet && rowIds[j].EQ(&lastRowId) {
 						continue
 					}
@@ -1436,7 +1470,11 @@ func (p *PartitionState) CountTombstoneStats(
 					}
 
 					if lastVisible {
-						stats.Rows++
+						// Global deduplication across all objects
+						if _, seen := seenRowIds[rowIds[j]]; !seen {
+							stats.Rows++
+							seenRowIds[rowIds[j]] = struct{}{}
+						}
 						lastRowId = rowIds[j]
 						lastRowIdSet = true
 					}
@@ -1474,7 +1512,11 @@ func (p *PartitionState) CountTombstoneStats(
 		}
 
 		if lastVisible {
-			stats.Rows++
+			// Global deduplication with persisted tombstones
+			if _, seen := seenRowIds[entry.RowID]; !seen {
+				stats.Rows++
+				seenRowIds[entry.RowID] = struct{}{}
+			}
 		}
 	}
 
