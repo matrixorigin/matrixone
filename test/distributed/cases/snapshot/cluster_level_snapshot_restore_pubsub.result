@@ -16,7 +16,7 @@ publication    database    tables    sub_account    subscribed_accounts    creat
 publication01    republication01    *    acc01        2025-07-18 22:49:36    null    publish before creating snapshot
 select * from mo_catalog.mo_pubs;
 account_id    account_name    pub_name    database_name    database_id    all_table    table_list    account_list    created_time    update_time    owner    creator    comment
-0    sys    publication01    republication01    304833    true    *    acc01    2025-07-18 22:49:36    null    0    1    publish before creating snapshot
+0    sys    publication01    republication01    304833    1    *    acc01    2025-07-18 22:49:36    null    0    1    publish before creating snapshot
 drop publication publication01;
 drop database republication01;
 restore account sys{snapshot="sp01"};
@@ -73,7 +73,7 @@ publication    database    tables    sub_account    subscribed_accounts    creat
 pub02    repub02    *    acc01        2025-07-18 22:49:38    null    publish before creating snapshot
 select * from mo_catalog.mo_pubs;
 account_id    account_name    pub_name    database_name    database_id    all_table    table_list    account_list    created_time    update_time    owner    creator    comment
-0    sys    pub02    repub02    304860    true    *    acc01    2025-07-18 22:49:38    null    0    1    publish before creating snapshot
+0    sys    pub02    repub02    304860    1    *    acc01    2025-07-18 22:49:38    null    0    1    publish before creating snapshot
 drop database if exists sub01;
 create database sub01 from sys publication pub02;
 show databases;
@@ -209,7 +209,7 @@ system_metrics
 drop snapshot sp01;
 select * from mo_catalog.mo_pubs;
 account_id    account_name    pub_name    database_name    database_id    all_table    table_list    account_list    created_time    update_time    owner    creator    comment
-0    sys    pub03    repub03    304891    true    *    acc01    2025-07-18 22:49:39    null    0    1    create repub03
+0    sys    pub03    repub03    304891    1    *    acc01    2025-07-18 22:49:39    null    0    1    create repub03
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
 pub03    repub03    *    acc01        2025-07-18 22:49:39    null    create repub03
@@ -231,7 +231,7 @@ drop publication if exists pub04;
 create publication pub04 database db01 account acc01 comment 'create pub04';
 select * from mo_catalog.mo_pubs;
 account_id    account_name    pub_name    database_name    database_id    all_table    table_list    account_list    created_time    update_time    owner    creator    comment
-0    sys    pub04    db01    304909    true    *    acc01    2025-07-18 22:49:39    null    0    1    create pub04
+0    sys    pub04    db01    304909    1    *    acc01    2025-07-18 22:49:39    null    0    1    create pub04
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
 pub04    db01    *    acc01        2025-07-18 22:49:39    null    create pub04
@@ -465,7 +465,7 @@ drop publication if exists pub07;
 create publication pub07 database test01 account acc01 comment 'publish test01';
 select * from mo_catalog.mo_pubs;
 account_id    account_name    pub_name    database_name    database_id    all_table    table_list    account_list    created_time    update_time    owner    creator    comment
-0    sys    pub07    test01    305050    true    *    acc01    2025-07-18 22:49:40    null    0    1    publish test01
+0    sys    pub07    test01    305050    1    *    acc01    2025-07-18 22:49:40    null    0    1    publish test01
 drop snapshot if exists sp101;
 create snapshot sp101 for cluster;
 drop database if exists sub07;

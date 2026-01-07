@@ -110,32 +110,32 @@ insert into t3 values (TRUE, NULL);
 insert into t3 values (NULL, NULL);
 select * from t3;
 a    b
-false    a
-true    b
+0    a
+1    b
 null    c
-true    null
+1    null
 null    null
 select coalesce(a, 1) from t3;
 coalesce(a, 1)
-false
-true
-true
-true
-true
+0
+1
+1
+1
+1
 select coalesce(a, 0) from t3;
 coalesce(a, 0)
-false
-true
-false
-true
-false
+0
+1
+0
+1
+0
 select coalesce(a, 200) from t3;
 coalesce(a, 200)
-false
-true
-true
-true
-true
+0
+1
+1
+1
+1
 select coalesce(b, '1') from t3;
 coalesce(b, 1)
 a

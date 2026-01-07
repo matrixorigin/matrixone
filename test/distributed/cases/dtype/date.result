@@ -125,18 +125,18 @@ CREATE TABLE t_date(id date);
 insert INTO t_date VALUES ('2020-01-01'), ('2022-01-02');
 SELECT id, id >= 20200102 FROM t_date;
 id    id >= 20200102
-2020-01-01    false
-2022-01-02    false
+2020-01-01    0
+2022-01-02    0
 SELECT id, 1.1 <= '2020-01-01' FROM t_date;
 strconv.ParseFloat: parsing "2020-01-01": invalid syntax
 SELECT id, id = 202020101 FROM t_date;
 id    id = 202020101
-2020-01-01    false
-2022-01-02    false
+2020-01-01    0
+2022-01-02    0
 SELECT id, '20200101' = id FROM t_date;
 id    20200101 = id
-2020-01-01    true
-2022-01-02    false
+2020-01-01    1
+2022-01-02    0
 SELECT * from t_date WHERE id = 20200101;
 id
 SELECT * from t_date WHERE id = 2.0200101e7;
