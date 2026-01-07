@@ -137,9 +137,9 @@ func (t *Type) MarshalToSizedBuffer(data []byte) (int, error) {
 	binary.BigEndian.PutUint16(data[2:], uint16(t.Charset))
 	binary.BigEndian.PutUint16(data[4:], uint16(t.notNull))
 	binary.BigEndian.PutUint16(data[6:], uint16(t.dummy2))
-	binary.BigEndian.PutUint32(data[8:], uint32(t.Size))
-	binary.BigEndian.PutUint32(data[12:], uint32(t.Width))
-	binary.BigEndian.PutUint32(data[16:], uint32(t.Scale))
+	binary.BigEndian.PutUint32(data[8:], Int32ToUint32(t.Size))
+	binary.BigEndian.PutUint32(data[12:], Int32ToUint32(t.Width))
+	binary.BigEndian.PutUint32(data[16:], Int32ToUint32(t.Scale))
 	return 20, nil
 }
 
@@ -168,9 +168,9 @@ func (t *Type) Unmarshal(data []byte) error {
 	t.Charset = uint8(binary.BigEndian.Uint16(data[2:]))
 	t.notNull = uint8(binary.BigEndian.Uint16(data[4:]))
 	t.dummy2 = uint8(binary.BigEndian.Uint16(data[6:]))
-	t.Size = int32(binary.BigEndian.Uint32(data[8:]))
-	t.Width = int32(binary.BigEndian.Uint32(data[12:]))
-	t.Scale = int32(binary.BigEndian.Uint32(data[16:]))
+	t.Size = Uint32ToInt32(binary.BigEndian.Uint32(data[8:]))
+	t.Width = Uint32ToInt32(binary.BigEndian.Uint32(data[12:]))
+	t.Scale = Uint32ToInt32(binary.BigEndian.Uint32(data[16:]))
 	return nil
 }
 
