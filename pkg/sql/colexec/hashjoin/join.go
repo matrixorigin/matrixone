@@ -90,8 +90,6 @@ func (hashJoin *HashJoin) Prepare(proc *process.Process) (err error) {
 		}
 	}
 
-	ctr.bitmapSynced = false
-
 	return err
 }
 
@@ -159,10 +157,6 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 			hashJoin.resetResultBat()
-			if err := ctr.resBat.PreExtend(proc.Mp(), colexec.DefaultBatchSize); err != nil {
-				return result, err
-			}
-
 			for i, rp := range hashJoin.ResultCols {
 				if rp.Rel == 0 {
 					ctr.resBat.Vecs[i].SetSorted(ctr.leftBat.Vecs[rp.Pos].GetSorted())
@@ -598,6 +592,7 @@ func (ctr *container) finalize(hashJoin *HashJoin, proc *process.Process, result
 	}
 
 	if rowCnt == 0 {
+		result.Batch = nil
 		return nil
 	}
 
