@@ -161,6 +161,7 @@ type BaseOptimizer struct {
 type ViewData struct {
 	Stmt            string
 	DefaultDatabase string
+	SecurityType    string `json:"security_type,omitempty"`
 }
 
 type QueryBuilder struct {
@@ -335,6 +336,10 @@ type BindContext struct {
 	views []string
 	//view in binding or already bound
 	boundViews map[[2]string]*tree.CreateView
+	// viewChain tracks view lineage for the current bind context.
+	viewChain []string
+	// directView tracks the outermost view referenced by the user.
+	directView string
 
 	// lower is sys var lower_case_table_names
 	lower int64

@@ -26,14 +26,16 @@ grant select on view db_complex.v1 to role_level1;
 grant role_level1 to role_level2;
 grant role_level2 to role_level3;
 grant role_level3 to user_complex;
+grant connect on account * to role_level1;
 
 -- verify storage
-select obj_type, privilege_name, obj_id from mo_catalog.mo_role_privs where role_name = 'role_level1';
+select obj_type, privilege_name from mo_catalog.mo_role_privs where role_name = 'role_level1';
 
 -- @session:id=1&user=user_complex&password=111
 -- check current role
 select current_role();
-show grants;
+-- Should succeed due to inheritance
+select * from db_complex.v1;
 -- @session
 
 -- ==========================================================
@@ -42,7 +44,9 @@ show grants;
 grant select on view db_complex.* to role_level1;
 
 -- @session:id=1&user=user_complex&password=111
-show grants;
+-- Should succeed for all views in db_complex
+select * from db_complex.v2;
+select * from db_complex.v3;
 -- @session
 
 -- ==========================================================
@@ -51,14 +55,16 @@ show grants;
 grant select, update, insert on view db_complex.v2 to role_level2;
 
 -- @session:id=1&user=user_complex&password=111
-show grants;
+-- show grants;
+select * from db_complex.v2;
 -- @session
 
 -- Revoke only one privilege
 revoke update on view db_complex.v2 from role_level2;
 
 -- @session:id=1&user=user_complex&password=111
-show grants;
+-- select should still succeed
+select * from db_complex.v2;
 -- @session
 
 -- ==========================================================
@@ -68,7 +74,7 @@ grant all on view db_complex.v3 to role_level1;
 grant ownership on view db_complex.v3 to role_level2;
 
 -- @session:id=1&user=user_complex&password=111
-show grants;
+select * from db_complex.v3;
 -- @session
 
 -- cleanup

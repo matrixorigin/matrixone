@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -59,6 +60,7 @@ func verifyLightPrivilege(ses *Session,
 		if len(dbName) == 0 {
 			dbName = ses.GetDatabaseName()
 		}
+		dbName = strings.ToLower(dbName)
 		if ok2 := isBannedDatabase(dbName); ok2 {
 			if isClusterTable {
 				ok = verifyAccountCanOperateClusterTable(ses.GetTenantInfo(), dbName, clusterTableOperation)
@@ -180,9 +182,13 @@ var checkPrivilegeInCache = func(ctx context.Context, ses *Session, priv *privil
 								return false, err
 							}
 
+							writeDirectly := priv.writeDatabaseAndTableDirectly
+							if (tempEntry.objType == objectTypeTable || tempEntry.objType == objectTypeView) && mi.privilegeTyp == PrivilegeTypeSelect {
+								writeDirectly = false
+							}
 							yes2 = verifyLightPrivilege(ses,
 								tempEntry.databaseName,
-								priv.writeDatabaseAndTableDirectly,
+								writeDirectly,
 								mi.isClusterTable,
 								mi.clusterTableOperation)
 

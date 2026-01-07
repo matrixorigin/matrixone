@@ -238,6 +238,8 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		UpdateCtxList:    DeepCopyUpdateCtxList(node.UpdateCtxList),
 		DedupJoinCtx:     DeepCopyDedupJoinCtx(node.DedupJoinCtx),
 		IndexReaderParam: DeepCopyIndexReaderParam(node.IndexReaderParam),
+		OriginViews:      slices.Clone(node.OriginViews),
+		DirectView:       node.DirectView,
 	}
 	newNode.Uuid = append(newNode.Uuid, node.Uuid...)
 

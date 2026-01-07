@@ -56,6 +56,10 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 		}
 		bc.snapshot = parent.snapshot
 		bc.remapOption = parent.remapOption
+		if len(parent.viewChain) > 0 {
+			bc.viewChain = append([]string{}, parent.viewChain...)
+		}
+		bc.directView = parent.directView
 	}
 
 	return bc

@@ -3499,7 +3499,7 @@ func Test_determineDML(t *testing.T) {
 
 			sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant, nil, nil, nil, nil, nil, nil, nil)
 
-			arr := extractPrivilegeTipsFromPlan(nil, a.p)
+			arr := extractPrivilegeTipsFromPlan(a.p)
 			convertPrivilegeTipsToPrivilege(priv, arr)
 
 			roleIds := []int{
@@ -3584,7 +3584,7 @@ func Test_determineDML(t *testing.T) {
 
 			sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant, nil, nil, nil, roleIdsInMoRoleGrant, rowsOfMoRoleGrant, nil, nil)
 
-			arr := extractPrivilegeTipsFromPlan(nil, a.p)
+			arr := extractPrivilegeTipsFromPlan(a.p)
 			convertPrivilegeTipsToPrivilege(priv, arr)
 
 			//role 0 does not have the select
@@ -3682,7 +3682,7 @@ func Test_determineDML(t *testing.T) {
 
 			sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant, nil, nil, nil, roleIdsInMoRoleGrant, rowsOfMoRoleGrant, nil, nil)
 
-			arr := extractPrivilegeTipsFromPlan(nil, a.p)
+			arr := extractPrivilegeTipsFromPlan(a.p)
 			convertPrivilegeTipsToPrivilege(priv, arr)
 
 			//role 0,1 does not have the select
@@ -5168,11 +5168,19 @@ func Test_doGrantPrivilege(t *testing.T) {
 				bh.sql2result[sql] = mrs
 			} else if stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE ||
 				stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE {
-				sql, _ := getSqlForCheckDatabaseTable(ctx, dbName, tableName)
-				mrs := newMrsForCheckDatabaseTable([][]interface{}{
-					{0},
-				})
-				bh.sql2result[sql] = mrs
+				if stmt.ObjType == tree.OBJECT_TYPE_VIEW {
+					sql, _ := getSqlForCheckDatabaseView(ctx, dbName, tableName)
+					mrs := newMrsForCheckDatabaseTable([][]interface{}{
+						{0},
+					})
+					bh.sql2result[sql] = mrs
+				} else {
+					sql, _ := getSqlForCheckDatabaseTable(ctx, dbName, tableName)
+					mrs := newMrsForCheckDatabaseTable([][]interface{}{
+						{0},
+					})
+					bh.sql2result[sql] = mrs
+				}
 			}
 
 			_, objId, err := checkPrivilegeObjectTypeAndPrivilegeLevel(ctx, ses, bh, stmt.ObjType, *stmt.Level)
@@ -5304,11 +5312,19 @@ func Test_doGrantPrivilege(t *testing.T) {
 				bh.sql2result[sql] = mrs
 			} else if stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE ||
 				stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE {
-				sql, _ := getSqlForCheckDatabaseTable(ctx, dbName, tableName)
-				mrs := newMrsForCheckDatabaseTable([][]interface{}{
-					{0},
-				})
-				bh.sql2result[sql] = mrs
+				if stmt.ObjType == tree.OBJECT_TYPE_VIEW {
+					sql, _ := getSqlForCheckDatabaseView(ctx, dbName, tableName)
+					mrs := newMrsForCheckDatabaseTable([][]interface{}{
+						{0},
+					})
+					bh.sql2result[sql] = mrs
+				} else {
+					sql, _ := getSqlForCheckDatabaseTable(ctx, dbName, tableName)
+					mrs := newMrsForCheckDatabaseTable([][]interface{}{
+						{0},
+					})
+					bh.sql2result[sql] = mrs
+				}
 			}
 
 			_, objId, err := checkPrivilegeObjectTypeAndPrivilegeLevel(ctx, ses, bh, stmt.ObjType, *stmt.Level)
@@ -5608,11 +5624,19 @@ func Test_doRevokePrivilege(t *testing.T) {
 				bh.sql2result[sql] = mrs
 			} else if stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE ||
 				stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE {
-				sql, _ := getSqlForCheckDatabaseTable(ctx, dbName, tableName)
-				mrs := newMrsForCheckDatabaseTable([][]interface{}{
-					{0},
-				})
-				bh.sql2result[sql] = mrs
+				if stmt.ObjType == tree.OBJECT_TYPE_VIEW {
+					sql, _ := getSqlForCheckDatabaseView(ctx, dbName, tableName)
+					mrs := newMrsForCheckDatabaseTable([][]interface{}{
+						{0},
+					})
+					bh.sql2result[sql] = mrs
+				} else {
+					sql, _ := getSqlForCheckDatabaseTable(ctx, dbName, tableName)
+					mrs := newMrsForCheckDatabaseTable([][]interface{}{
+						{0},
+					})
+					bh.sql2result[sql] = mrs
+				}
 			}
 
 			_, objId, err := checkPrivilegeObjectTypeAndPrivilegeLevel(ctx, ses, bh, stmt.ObjType, *stmt.Level)
@@ -5744,11 +5768,19 @@ func Test_doRevokePrivilege(t *testing.T) {
 				bh.sql2result[sql] = mrs
 			} else if stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE ||
 				stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE {
-				sql, _ := getSqlForCheckDatabaseTable(ctx, dbName, tableName)
-				mrs := newMrsForCheckDatabaseTable([][]interface{}{
-					{0},
-				})
-				bh.sql2result[sql] = mrs
+				if stmt.ObjType == tree.OBJECT_TYPE_VIEW {
+					sql, _ := getSqlForCheckDatabaseView(ctx, dbName, tableName)
+					mrs := newMrsForCheckDatabaseTable([][]interface{}{
+						{0},
+					})
+					bh.sql2result[sql] = mrs
+				} else {
+					sql, _ := getSqlForCheckDatabaseTable(ctx, dbName, tableName)
+					mrs := newMrsForCheckDatabaseTable([][]interface{}{
+						{0},
+					})
+					bh.sql2result[sql] = mrs
+				}
 			}
 
 			_, objId, err := checkPrivilegeObjectTypeAndPrivilegeLevel(ctx, ses, bh, stmt.ObjType, *stmt.Level)

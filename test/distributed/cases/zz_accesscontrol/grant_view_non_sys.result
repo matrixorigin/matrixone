@@ -1,6 +1,6 @@
 set global enable_privilege_cache = off;
-drop account if exists acc_view_test;
-create account acc_view_test admin_name = 'admin' identified by '111';
+drop account if exists acc_v1;
+create account acc_v1 admin_name = 'admin' identified by '111';
 create role role_v1;
 create user user_v1 identified by '111' default role role_v1;
 grant role_v1 to user_v1;
@@ -9,13 +9,16 @@ use db_v1;
 create table t1 (a int);
 insert into t1 values (1);
 create view v1 as select * from t1;
-grant all on database db_v1 to role_v1;
+grant connect on account * to role_v1;
 grant select on view db_v1.v1 to role_v1;
-set role role_v1;
 use db_v1;
-internal error: do not have privilege to execute the statement
 select * from v1;
-No database selected
+➤ a[4,32,0]  𝄀
+1
+revoke select on view db_v1.v1 from role_v1;
+use db_v1;
+select * from v1;
+internal error: do not have privilege to execute the statement
 drop database db_v1;
-drop account acc_view_test;
+drop account acc_v1;
 set global enable_privilege_cache = on;

@@ -57,8 +57,9 @@ func TestBuildTable_AlterView(t *testing.T) {
 		}}
 
 	vData, err := json.Marshal(ViewData{
-		"create view v as select a from a",
-		"db",
+		Stmt:            "create view v as select a from a",
+		DefaultDatabase: "db",
+		SecurityType:    "DEFINER",
 	})
 	assert.NoError(t, err)
 

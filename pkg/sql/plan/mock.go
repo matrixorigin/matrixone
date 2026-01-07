@@ -1129,6 +1129,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 				viewData, _ := json.Marshal(ViewData{
 					Stmt:            table.viewCfg.sql,
 					DefaultDatabase: table.viewCfg.db,
+					SecurityType:    "DEFINER",
 				})
 				tableDef.ViewSql = &plan.ViewDef{
 					View: string(viewData),
