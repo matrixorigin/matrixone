@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"math"
 	"runtime/trace"
-	"slices"
 	"strings"
 	"sync/atomic"
 
@@ -1322,50 +1321,6 @@ func (p *PartitionState) CountTombstoneRows(
 	checkObjectVisibility bool,
 ) (uint64, error) {
 	var count uint64
-	var visibleObjIds []types.Objectid
-
-	// Build visible data object IDs if needed
-	if checkObjectVisibility {
-		visibleObjIds = make([]types.Objectid, 0, 128)
-		
-		// Collect non-appendable data objects
-		dObjIter, err := p.NewObjectsIter(snapshot, true, false)
-		if err != nil {
-			return 0, err
-		}
-		defer dObjIter.Close()
-		
-		for dObjIter.Next() {
-			obj := dObjIter.Entry()
-			visibleObjIds = append(visibleObjIds, *obj.ObjectStats.ObjectName().ObjectId())
-		}
-		
-		// Collect appendable data objects from in-memory rows
-		dRowIter := p.NewRowsIter(snapshot, nil, false)
-		defer dRowIter.Close()
-		
-		for dRowIter.Next() {
-			entry := dRowIter.Entry()
-			objId := entry.BlockID.Object()
-			
-			// Check if already in list
-			found := false
-			for i := range visibleObjIds {
-				if visibleObjIds[i].EQ(objId) {
-					found = true
-					break
-				}
-			}
-			if !found {
-				visibleObjIds = append(visibleObjIds, *objId)
-			}
-		}
-		
-		// Sort for binary search
-		slices.SortFunc(visibleObjIds, func(a, b types.Objectid) int {
-			return a.Compare(&b)
-		})
-	}
 
 	// Count non-appendable tombstone objects
 	iter := p.tombstoneObjectsNameIndex.Iter()
@@ -1395,9 +1350,9 @@ func (p *PartitionState) CountTombstoneRows(
 		persistedDeletes := containers.NewVectors(len(attrs))
 
 		var readErr error
-		var seenRowIds map[types.Rowid]bool // Track seen rowIds for deduplication across blocks
+		var seenRowIds map[types.Rowid]bool
 		if checkObjectVisibility {
-			seenRowIds = make(map[types.Rowid]bool, 128)
+			seenRowIds = make(map[types.Rowid]bool, 128) // Deduplication only when checking visibility
 		}
 		
 		objectio.ForeachBlkInObjStatsList(true, nil,
@@ -1418,31 +1373,34 @@ func (p *PartitionState) CountTombstoneRows(
 					commitTSVec := vector.MustFixedColNoTypeCheck[types.TS](&persistedDeletes[2])
 					
 					if checkObjectVisibility {
-						// Use two-pointer algorithm to count visible deletions
-						// Both visibleObjIds and rowIds are sorted
-						var i, j int
-						for i < len(visibleObjIds) && j < len(rowIds) {
-							// Skip duplicates using map
+						// Cache last checked object to avoid repeated lookups
+						var lastObjId types.Objectid
+						var lastVisible bool
+						var lastObjIdSet bool
+						
+						for j := 0; j < len(rowIds); j++ {
+							// Skip duplicates
 							if seenRowIds[rowIds[j]] {
-								j++
 								continue
 							}
 							
 							// Check timestamp
 							if commitTSVec[j].GT(&snapshot) {
-								j++
 								continue
 							}
 							
-							cmp := rowIds[j].BorrowObjectID().Compare(&visibleObjIds[i])
-							if cmp == 0 {
+							objId := rowIds[j].BorrowObjectID()
+							
+							// Only query index when encountering a new object
+							if !lastObjIdSet || !objId.EQ(&lastObjId) {
+								lastObjId = *objId
+								lastObjIdSet = true
+								lastVisible = p.isDataObjectVisible(objId, snapshot)
+							}
+							
+							if lastVisible {
 								count++
 								seenRowIds[rowIds[j]] = true
-								j++
-							} else if cmp > 0 {
-								i++
-							} else {
-								j++
 							}
 						}
 					} else {
@@ -1455,24 +1413,26 @@ func (p *PartitionState) CountTombstoneRows(
 				} else {
 					// No CommitTs
 					if checkObjectVisibility {
-						// Use two-pointer algorithm
-						var i, j int
-						for i < len(visibleObjIds) && j < len(rowIds) {
-							// Skip duplicates using map
+						var lastObjId types.Objectid
+						var lastVisible bool
+						var lastObjIdSet bool
+						
+						for j := 0; j < len(rowIds); j++ {
 							if seenRowIds[rowIds[j]] {
-								j++
 								continue
 							}
 							
-							cmp := rowIds[j].BorrowObjectID().Compare(&visibleObjIds[i])
-							if cmp == 0 {
+							objId := rowIds[j].BorrowObjectID()
+							
+							if !lastObjIdSet || !objId.EQ(&lastObjId) {
+								lastObjId = *objId
+								lastObjIdSet = true
+								lastVisible = p.isDataObjectVisible(objId, snapshot)
+							}
+							
+							if lastVisible {
 								count++
 								seenRowIds[rowIds[j]] = true
-								j++
-							} else if cmp > 0 {
-								i++
-							} else {
-								j++
 							}
 						}
 					} else {
@@ -1489,23 +1449,77 @@ func (p *PartitionState) CountTombstoneRows(
 	}
 
 	// Count in-memory tombstones
-	p.rows.Scan(func(entry *RowEntry) bool {
-		if entry.Time.GT(&snapshot) {
-			return true
-		}
-		if entry.Deleted {
-			if checkObjectVisibility {
+	if checkObjectVisibility {
+		var lastObjId types.Objectid
+		var lastVisible bool
+		var lastObjIdSet bool
+		
+		p.rows.Scan(func(entry *RowEntry) bool {
+			if entry.Time.GT(&snapshot) {
+				return true
+			}
+			if entry.Deleted {
 				objId := entry.BlockID.Object()
-				if _, found := slices.BinarySearchFunc(visibleObjIds, *objId,
-					func(a, b types.Objectid) int { return a.Compare(&b) }); found {
+				
+				if !lastObjIdSet || !objId.EQ(&lastObjId) {
+					lastObjId = *objId
+					lastObjIdSet = true
+					lastVisible = p.isDataObjectVisible(objId, snapshot)
+				}
+				
+				if lastVisible {
 					count++
 				}
-			} else {
+			}
+			return true
+		})
+	} else {
+		p.rows.Scan(func(entry *RowEntry) bool {
+			if entry.Time.GT(&snapshot) {
+				return true
+			}
+			if entry.Deleted {
 				count++
+			}
+			return true
+		})
+	}
+
+	return count, nil
+}
+
+// isDataObjectVisible checks if a data object is visible at the given snapshot.
+// It queries both non-appendable objects index and in-memory rows.
+func (p *PartitionState) isDataObjectVisible(objId *types.Objectid, snapshot types.TS) bool {
+	// Build a dummy ObjectEntry with the target objectid for lookup
+	var stats objectio.ObjectStats
+	objectio.SetObjectStatsObjectName(&stats, objectio.BuildObjectNameWithObjectID(objId))
+	
+	entry := objectio.ObjectEntry{ObjectStats: stats}
+	
+	// Check non-appendable objects index
+	if obj, exists := p.dataObjectsNameIndex.Get(entry); exists {
+		// Check visibility at snapshot
+		if obj.CreateTime.GT(&snapshot) {
+			return false
+		}
+		if !obj.DeleteTime.IsEmpty() && obj.DeleteTime.LE(&snapshot) {
+			return false
+		}
+		return true
+	}
+	
+	// Check appendable objects in in-memory rows
+	found := false
+	p.rows.Scan(func(entry *RowEntry) bool {
+		if entry.BlockID.Object().EQ(objId) {
+			if entry.Time.LE(&snapshot) && !entry.Deleted {
+				found = true
+				return false // Stop scanning
 			}
 		}
 		return true
 	})
-
-	return count, nil
+	
+	return found
 }
