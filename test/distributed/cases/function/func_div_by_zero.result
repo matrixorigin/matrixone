@@ -1,0 +1,434 @@
+DROP TABLE IF EXISTS t_div_test;
+CREATE TABLE t_div_test (
+id INT PRIMARY KEY,
+a INT,
+b INT,
+c DECIMAL(10,2),
+d DECIMAL(10,2),
+e FLOAT,
+f FLOAT
+);
+SELECT @@sql_mode;
+➤ @@sql_mode[12,0,0]  𝄀
+ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
+SELECT 10 / 0;
+➤ 10 / 0[8,54,0]  𝄀
+null
+SELECT 10 DIV 0;
+➤ 10 div 0[-5,64,0]  𝄀
+null
+SELECT 10 % 0;
+➤ 10 % 0[-5,64,0]  𝄀
+null
+SELECT 10 DIV 3;
+➤ 10 div 3[-5,64,0]  𝄀
+3
+SELECT CAST(10 AS DECIMAL(10,2)) DIV CAST(3 AS DECIMAL(10,2));
+➤ cast(10 as decimal(10, 2)) div cast(3 as decimal(10, 2))[-5,64,0]  𝄀
+3
+SELECT CAST(10.5 AS DECIMAL(10,2)) / CAST(0 AS DECIMAL(10,2));
+➤ cast(10.5 as decimal(10, 2)) / cast(0 as decimal(10, 2))[3,38,8]  𝄀
+null
+SELECT CAST(10.5 AS DECIMAL(10,2)) % CAST(0 AS DECIMAL(10,2));
+➤ cast(10.5 as decimal(10, 2)) % cast(0 as decimal(10, 2))[3,10,2]  𝄀
+null
+SELECT CAST(10.5 AS DECIMAL(10,2)) DIV CAST(0 AS DECIMAL(10,2));
+➤ cast(10.5 as decimal(10, 2)) div cast(0 as decimal(10, 2))[-5,64,0]  𝄀
+null
+SELECT 10.5 / 0.0;
+➤ 10.5 / 0.0[3,38,7]  𝄀
+null
+SELECT 10.5 % 0.0;
+➤ 10.5 % 0.0[3,18,1]  𝄀
+null
+SET sql_mode = '';
+SELECT @@sql_mode;
+➤ @@sql_mode[12,0,0]  𝄀
+
+SELECT 10 / 0;
+➤ 10 / 0[8,54,0]  𝄀
+null
+SELECT 10 DIV 0;
+➤ 10 div 0[-5,64,0]  𝄀
+null
+SELECT 10 % 0;
+➤ 10 % 0[-5,64,0]  𝄀
+null
+SET sql_mode = 'ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES';
+SELECT @@sql_mode;
+➤ @@sql_mode[12,0,0]  𝄀
+ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
+INSERT INTO t_div_test (id, a, b) VALUES (1, 10, 0), (2, 10/0, 5);
+INSERT INTO t_div_test (id, a, b) VALUES (3, 10 % 0, 5);
+SELECT COUNT(*) FROM t_div_test;
+➤ COUNT(*)[-5,64,0]  𝄀
+3
+SET sql_mode = 'ERROR_FOR_DIVISION_BY_ZERO';
+SELECT @@sql_mode;
+➤ @@sql_mode[12,0,0]  𝄀
+ERROR_FOR_DIVISION_BY_ZERO
+INSERT INTO t_div_test (id, a, b) VALUES (1, 10/0, 5);
+Duplicate entry '1' for key 'id'
+INSERT INTO t_div_test (id, a, b) VALUES (2, 10 % 0, 5);
+Duplicate entry '2' for key 'id'
+SELECT id, a, b FROM t_div_test ORDER BY id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  10  ¦  0  𝄀
+2  ¦  null  ¦  5  𝄀
+3  ¦  null  ¦  5
+DELETE FROM t_div_test;
+SET sql_mode = '';
+SELECT @@sql_mode;
+➤ @@sql_mode[12,0,0]  𝄀
+
+INSERT INTO t_div_test (id, a, b) VALUES (1, 10/0, 5);
+INSERT INTO t_div_test (id, a, b) VALUES (2, 10 % 0, 5);
+SELECT id, a, b FROM t_div_test ORDER BY id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  null  ¦  5  𝄀
+2  ¦  null  ¦  5
+DELETE FROM t_div_test;
+SET sql_mode = 'ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES';
+SELECT @@sql_mode;
+➤ @@sql_mode[12,0,0]  𝄀
+ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
+INSERT IGNORE INTO t_div_test (id, a, b) VALUES (1, 10/0, 5);
+INSERT IGNORE INTO t_div_test (id, a, b) VALUES (2, 10 % 0, 5);
+SELECT id, a, b FROM t_div_test ORDER BY id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  null  ¦  5  𝄀
+2  ¦  null  ¦  5
+DELETE FROM t_div_test;
+INSERT INTO t_div_test (id, a, b) VALUES (1, 10, 5), (2, 20, 10);
+UPDATE t_div_test SET a = 10/0 WHERE id = 1;
+UPDATE t_div_test SET a = 10 % 0 WHERE id = 1;
+SELECT id, a, b FROM t_div_test ORDER BY id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  null  ¦  5  𝄀
+2  ¦  20  ¦  10
+SET sql_mode = '';
+SELECT @@sql_mode;
+➤ @@sql_mode[12,0,0]  𝄀
+
+UPDATE t_div_test SET a = 10/0 WHERE id = 1;
+SELECT id, a, b FROM t_div_test WHERE id = 1;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  null  ¦  5
+UPDATE t_div_test SET a = 10 % 0 WHERE id = 2;
+SELECT id, a, b FROM t_div_test WHERE id = 2;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+2  ¦  null  ¦  10
+DELETE FROM t_div_test;
+SET sql_mode = 'ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES';
+SELECT CAST(10.5 AS DECIMAL(10,2)) / CAST(0 AS DECIMAL(10,2));
+➤ cast(10.5 as decimal(10, 2)) / cast(0 as decimal(10, 2))[3,38,8]  𝄀
+null
+SELECT CAST(10.5 AS DECIMAL(10,2)) % CAST(0 AS DECIMAL(10,2));
+➤ cast(10.5 as decimal(10, 2)) % cast(0 as decimal(10, 2))[3,10,2]  𝄀
+null
+INSERT INTO t_div_test (id, c, d) VALUES (1, CAST(10.5 AS DECIMAL(10,2)) / CAST(0 AS DECIMAL(10,2)), 5.0);
+SET sql_mode = '';
+INSERT INTO t_div_test (id, c, d) VALUES (1, CAST(10.5 AS DECIMAL(10,2)) / CAST(0 AS DECIMAL(10,2)), 5.0);
+Duplicate entry '1' for key 'id'
+SELECT id, c, d FROM t_div_test WHERE id = 1;
+➤ id[4,32,0]  ¦  c[3,10,2]  ¦  d[3,10,2]  𝄀
+1  ¦  null  ¦  5.00
+DELETE FROM t_div_test;
+SET sql_mode = 'ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES';
+SELECT 10.5 / 0.0;
+➤ 10.5 / 0.0[3,38,7]  𝄀
+null
+SELECT 10.5 % 0.0;
+➤ 10.5 % 0.0[3,18,1]  𝄀
+null
+INSERT INTO t_div_test (id, e, f) VALUES (1, 10.5 / 0.0, 5.0);
+SET sql_mode = '';
+INSERT INTO t_div_test (id, e, f) VALUES (1, 10.5 / 0.0, 5.0);
+Duplicate entry '1' for key 'id'
+SELECT id, e, f FROM t_div_test WHERE id = 1;
+➤ id[4,32,0]  ¦  e[7,24,0]  ¦  f[7,24,0]  𝄀
+1  ¦  null  ¦  5.0
+DELETE FROM t_div_test;
+SET sql_mode = 'ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES';
+SELECT (10 + 20) / (5 - 5);
+➤ (10 + 20) / (5 - 5)[8,54,0]  𝄀
+null
+SELECT CASE WHEN 1=1 THEN 10/0 ELSE 5 END;
+➤ case when 1 = 1 then 10 / 0 else 5 end[8,54,0]  𝄀
+null
+INSERT INTO t_div_test (id, a, b) VALUES (1, 10, 0), (2, 20, 5);
+SELECT id, a, b FROM t_div_test WHERE a / b > 0;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+2  ¦  20  ¦  5
+DROP TABLE t_div_test;
+SELECT CAST(10 AS TINYINT) DIV CAST(3 AS TINYINT);
+➤ cast(10 as tinyint) div cast(3 as tinyint)[-5,64,0]  𝄀
+3
+SELECT CAST(127 AS TINYINT) DIV CAST(1 AS TINYINT);
+➤ cast(127 as tinyint) div cast(1 as tinyint)[-5,64,0]  𝄀
+127
+SELECT CAST(-128 AS TINYINT) DIV CAST(1 AS TINYINT);
+➤ cast(-128 as tinyint) div cast(1 as tinyint)[-5,64,0]  𝄀
+-128
+SELECT CAST(10 AS TINYINT) DIV CAST(0 AS TINYINT);
+➤ cast(10 as tinyint) div cast(0 as tinyint)[-5,64,0]  𝄀
+null
+SELECT CAST(1000 AS SMALLINT) DIV CAST(3 AS SMALLINT);
+➤ cast(1000 as smallint) div cast(3 as smallint)[-5,64,0]  𝄀
+333
+SELECT CAST(32767 AS SMALLINT) DIV CAST(1 AS SMALLINT);
+➤ cast(32767 as smallint) div cast(1 as smallint)[-5,64,0]  𝄀
+32767
+SELECT CAST(-32768 AS SMALLINT) DIV CAST(1 AS SMALLINT);
+➤ cast(-32768 as smallint) div cast(1 as smallint)[-5,64,0]  𝄀
+-32768
+SELECT CAST(100 AS SMALLINT) DIV CAST(0 AS SMALLINT);
+➤ cast(100 as smallint) div cast(0 as smallint)[-5,64,0]  𝄀
+null
+SELECT CAST(100000 AS INT) DIV CAST(3 AS INT);
+➤ cast(100000 as int) div cast(3 as int)[-5,64,0]  𝄀
+33333
+SELECT CAST(2147483647 AS INT) DIV CAST(1 AS INT);
+➤ cast(2147483647 as int) div cast(1 as int)[-5,64,0]  𝄀
+2147483647
+SELECT CAST(-2147483648 AS INT) DIV CAST(1 AS INT);
+➤ cast(-2147483648 as int) div cast(1 as int)[-5,64,0]  𝄀
+-2147483648
+SELECT CAST(100 AS INT) DIV CAST(0 AS INT);
+➤ cast(100 as int) div cast(0 as int)[-5,64,0]  𝄀
+null
+SELECT CAST(10000000000 AS BIGINT) DIV CAST(3 AS BIGINT);
+➤ cast(10000000000 as bigint) div cast(3 as bigint)[-5,64,0]  𝄀
+3333333333
+SELECT CAST(9223372036854775807 AS BIGINT) DIV CAST(1 AS BIGINT);
+➤ cast(9223372036854775807 as bigint) div cast(1 as bigint)[-5,64,0]  𝄀
+9223372036854775807
+SELECT CAST(-9223372036854775808 AS BIGINT) DIV CAST(1 AS BIGINT);
+➤ cast(-9223372036854775808 as bigint) div cast(1 as bigint)[-5,64,0]  𝄀
+-9223372036854775808
+SELECT CAST(100 AS BIGINT) DIV CAST(0 AS BIGINT);
+➤ cast(100 as bigint) div cast(0 as bigint)[-5,64,0]  𝄀
+null
+SELECT CAST(10 AS TINYINT UNSIGNED) DIV CAST(3 AS TINYINT UNSIGNED);
+➤ cast(10 as tinyint unsigned) div cast(3 as tinyint unsigned)[-5,64,0]  𝄀
+3
+SELECT CAST(255 AS TINYINT UNSIGNED) DIV CAST(1 AS TINYINT UNSIGNED);
+➤ cast(255 as tinyint unsigned) div cast(1 as tinyint unsigned)[-5,64,0]  𝄀
+255
+SELECT CAST(10 AS TINYINT UNSIGNED) DIV CAST(0 AS TINYINT UNSIGNED);
+➤ cast(10 as tinyint unsigned) div cast(0 as tinyint unsigned)[-5,64,0]  𝄀
+null
+SELECT CAST(1000 AS SMALLINT UNSIGNED) DIV CAST(3 AS SMALLINT UNSIGNED);
+➤ cast(1000 as smallint unsigned) div cast(3 as smallint unsigned)[-5,64,0]  𝄀
+333
+SELECT CAST(65535 AS SMALLINT UNSIGNED) DIV CAST(1 AS SMALLINT UNSIGNED);
+➤ cast(65535 as smallint unsigned) div cast(1 as smallint unsigned)[-5,64,0]  𝄀
+65535
+SELECT CAST(100 AS SMALLINT UNSIGNED) DIV CAST(0 AS SMALLINT UNSIGNED);
+➤ cast(100 as smallint unsigned) div cast(0 as smallint unsigned)[-5,64,0]  𝄀
+null
+SELECT CAST(100000 AS INT UNSIGNED) DIV CAST(3 AS INT UNSIGNED);
+➤ cast(100000 as int unsigned) div cast(3 as int unsigned)[-5,64,0]  𝄀
+33333
+SELECT CAST(4294967295 AS INT UNSIGNED) DIV CAST(1 AS INT UNSIGNED);
+➤ cast(4294967295 as int unsigned) div cast(1 as int unsigned)[-5,64,0]  𝄀
+4294967295
+SELECT CAST(100 AS INT UNSIGNED) DIV CAST(0 AS INT UNSIGNED);
+➤ cast(100 as int unsigned) div cast(0 as int unsigned)[-5,64,0]  𝄀
+null
+SELECT CAST(10000000000 AS BIGINT UNSIGNED) DIV CAST(3 AS BIGINT UNSIGNED);
+➤ cast(10000000000 as bigint unsigned) div cast(3 as bigint unsigned)[-5,64,0]  𝄀
+3333333333
+SELECT CAST(18446744073709551615 AS BIGINT UNSIGNED) DIV CAST(1 AS BIGINT UNSIGNED);
+Data truncation: data out of range: data type BIGINT, 
+SELECT CAST(100 AS BIGINT UNSIGNED) DIV CAST(0 AS BIGINT UNSIGNED);
+➤ cast(100 as bigint unsigned) div cast(0 as bigint unsigned)[-5,64,0]  𝄀
+null
+SELECT CAST(10.5 AS FLOAT) DIV CAST(3.2 AS FLOAT);
+➤ cast(10.5 as float) div cast(3.2 as float)[-5,64,0]  𝄀
+3
+SELECT CAST(-10.5 AS FLOAT) DIV CAST(3.2 AS FLOAT);
+➤ cast(-10.5 as float) div cast(3.2 as float)[-5,64,0]  𝄀
+-3
+SELECT CAST(10.5 AS FLOAT) DIV CAST(-3.2 AS FLOAT);
+➤ cast(10.5 as float) div cast(-3.2 as float)[-5,64,0]  𝄀
+-3
+SELECT CAST(-10.5 AS FLOAT) DIV CAST(-3.2 AS FLOAT);
+➤ cast(-10.5 as float) div cast(-3.2 as float)[-5,64,0]  𝄀
+3
+SELECT CAST(10.5 AS FLOAT) DIV CAST(0.0 AS FLOAT);
+➤ cast(10.5 as float) div cast(0.0 as float)[-5,64,0]  𝄀
+null
+SELECT CAST(10.5 AS DOUBLE) DIV CAST(3.2 AS DOUBLE);
+➤ cast(10.5 as double) div cast(3.2 as double)[-5,64,0]  𝄀
+3
+SELECT CAST(-10.5 AS DOUBLE) DIV CAST(3.2 AS DOUBLE);
+➤ cast(-10.5 as double) div cast(3.2 as double)[-5,64,0]  𝄀
+-3
+SELECT CAST(10.5 AS DOUBLE) DIV CAST(-3.2 AS DOUBLE);
+➤ cast(10.5 as double) div cast(-3.2 as double)[-5,64,0]  𝄀
+-3
+SELECT CAST(-10.5 AS DOUBLE) DIV CAST(-3.2 AS DOUBLE);
+➤ cast(-10.5 as double) div cast(-3.2 as double)[-5,64,0]  𝄀
+3
+SELECT CAST(10.5 AS DOUBLE) DIV CAST(0.0 AS DOUBLE);
+➤ cast(10.5 as double) div cast(0.0 as double)[-5,64,0]  𝄀
+null
+SELECT CAST(10 AS DECIMAL(5,0)) DIV CAST(3 AS DECIMAL(5,0));
+➤ cast(10 as decimal(5)) div cast(3 as decimal(5))[-5,64,0]  𝄀
+3
+SELECT CAST(99999 AS DECIMAL(5,0)) DIV CAST(1 AS DECIMAL(5,0));
+➤ cast(99999 as decimal(5)) div cast(1 as decimal(5))[-5,64,0]  𝄀
+99999
+SELECT CAST(10 AS DECIMAL(5,0)) DIV CAST(0 AS DECIMAL(5,0));
+➤ cast(10 as decimal(5)) div cast(0 as decimal(5))[-5,64,0]  𝄀
+null
+SELECT CAST(10.50 AS DECIMAL(10,2)) DIV CAST(3.00 AS DECIMAL(10,2));
+➤ cast(10.50 as decimal(10, 2)) div cast(3.00 as decimal(10, 2))[-5,64,0]  𝄀
+4
+SELECT CAST(-10.50 AS DECIMAL(10,2)) DIV CAST(3.00 AS DECIMAL(10,2));
+➤ cast(-10.50 as decimal(10, 2)) div cast(3.00 as decimal(10, 2))[-5,64,0]  𝄀
+-4
+SELECT CAST(10.50 AS DECIMAL(10,2)) DIV CAST(-3.00 AS DECIMAL(10,2));
+➤ cast(10.50 as decimal(10, 2)) div cast(-3.00 as decimal(10, 2))[-5,64,0]  𝄀
+-4
+SELECT CAST(10.50 AS DECIMAL(10,2)) DIV CAST(0.00 AS DECIMAL(10,2));
+➤ cast(10.50 as decimal(10, 2)) div cast(0.00 as decimal(10, 2))[-5,64,0]  𝄀
+null
+SELECT CAST(12345.67890 AS DECIMAL(20,5)) DIV CAST(3.00000 AS DECIMAL(20,5));
+➤ cast(12345.67890 as decimal(20, 5)) div cast(3.00000 as decimal(20, 5))[-5,64,0]  𝄀
+4115
+SELECT CAST(12345.67890 AS DECIMAL(20,5)) DIV CAST(0.00000 AS DECIMAL(20,5));
+➤ cast(12345.67890 as decimal(20, 5)) div cast(0.00000 as decimal(20, 5))[-5,64,0]  𝄀
+null
+SELECT CAST(123456789.123456789 AS DECIMAL(38,10)) DIV CAST(3.0 AS DECIMAL(38,10));
+➤ cast(123456789.123456789 as decimal(38, 10)) div cast(3.0 as decimal(38, 10))[-5,64,0]  𝄀
+41152263
+SELECT CAST(123456789.123456789 AS DECIMAL(38,10)) DIV CAST(0.0 AS DECIMAL(38,10));
+➤ cast(123456789.123456789 as decimal(38, 10)) div cast(0.0 as decimal(38, 10))[-5,64,0]  𝄀
+null
+SELECT NULL DIV 3;
+➤ null div 3[-5,64,0]  𝄀
+null
+SELECT 10 DIV NULL;
+➤ 10 div null[-5,64,0]  𝄀
+null
+SELECT NULL DIV NULL;
+➤ null div null[-5,64,0]  𝄀
+null
+SELECT NULL / 3;
+➤ null / 3[0,2147483647,0]  𝄀
+null
+SELECT 10 / NULL;
+➤ 10 / null[0,2147483647,0]  𝄀
+null
+SELECT NULL % 3;
+➤ null % 3[0,2147483647,0]  𝄀
+null
+SELECT 10 % NULL;
+➤ 10 % null[0,2147483647,0]  𝄀
+null
+SELECT -10 DIV 3;
+➤ -10 div 3[-5,64,0]  𝄀
+-3
+SELECT 10 DIV -3;
+➤ 10 div -3[-5,64,0]  𝄀
+-3
+SELECT -10 DIV -3;
+➤ -10 div -3[-5,64,0]  𝄀
+3
+SELECT -10 / 3;
+➤ -10 / 3[8,54,0]  𝄀
+-3.3333333333333335
+SELECT 10 / -3;
+➤ 10 / -3[8,54,0]  𝄀
+-3.3333333333333335
+SELECT -10 / -3;
+➤ -10 / -3[8,54,0]  𝄀
+3.3333333333333335
+SELECT -10 % 3;
+➤ -10 % 3[-5,64,0]  𝄀
+-1
+SELECT 10 % -3;
+➤ 10 % -3[-5,64,0]  𝄀
+1
+SELECT -10 % -3;
+➤ -10 % -3[-5,64,0]  𝄀
+-1
+SELECT 100 DIV 1;
+➤ 100 div 1[-5,64,0]  𝄀
+100
+SELECT 100 DIV -1;
+➤ 100 div -1[-5,64,0]  𝄀
+-100
+SELECT -100 DIV 1;
+➤ -100 div 1[-5,64,0]  𝄀
+-100
+SELECT -100 DIV -1;
+➤ -100 div -1[-5,64,0]  𝄀
+100
+SELECT 1 DIV 1;
+➤ 1 div 1[-5,64,0]  𝄀
+1
+SELECT -1 DIV -1;
+➤ -1 div -1[-5,64,0]  𝄀
+1
+SET sql_mode = 'ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES';
+CREATE TABLE t_const_div (id INT, val INT);
+INSERT INTO t_const_div VALUES (1, 10), (2, 20), (3, 30), (4, 40);
+SELECT id, val, val DIV 3 AS result FROM t_const_div ORDER BY id;
+➤ id[4,32,0]  ¦  val[4,32,0]  ¦  result[-5,64,0]  𝄀
+1  ¦  10  ¦  3  𝄀
+2  ¦  20  ¦  6  𝄀
+3  ¦  30  ¦  10  𝄀
+4  ¦  40  ¦  13
+SELECT id, val, 100 DIV val AS result FROM t_const_div ORDER BY id;
+➤ id[4,32,0]  ¦  val[4,32,0]  ¦  result[-5,64,0]  𝄀
+1  ¦  10  ¦  10  𝄀
+2  ¦  20  ¦  5  𝄀
+3  ¦  30  ¦  3  𝄀
+4  ¦  40  ¦  2
+SELECT id, val, val DIV 0 AS result FROM t_const_div ORDER BY id;
+➤ id[4,32,0]  ¦  val[4,32,0]  ¦  result[-5,64,0]  𝄀
+1  ¦  10  ¦  null  𝄀
+2  ¦  20  ¦  null  𝄀
+3  ¦  30  ¦  null  𝄀
+4  ¦  40  ¦  null
+INSERT INTO t_const_div VALUES (0, 0);
+SELECT id, val, 100 DIV val AS result FROM t_const_div WHERE id IN (0, 1, 2) ORDER BY id;
+➤ id[4,32,0]  ¦  val[4,32,0]  ¦  result[-5,64,0]  𝄀
+0  ¦  0  ¦  null  𝄀
+1  ¦  10  ¦  10  𝄀
+2  ¦  20  ¦  5
+SELECT CAST(10 AS TINYINT) DIV 3;
+➤ cast(10 as tinyint) div 3[-5,64,0]  𝄀
+3
+SELECT CAST(100 AS SMALLINT) DIV 7;
+➤ cast(100 as smallint) div 7[-5,64,0]  𝄀
+14
+SELECT CAST(1000 AS INT) DIV 13;
+➤ cast(1000 as int) div 13[-5,64,0]  𝄀
+76
+DROP TABLE t_const_div;
+SELECT CAST(-12.00 AS DECIMAL(10,2)) DIV CAST(3.00 AS DECIMAL(10,2));
+➤ cast(-12.00 as decimal(10, 2)) div cast(3.00 as decimal(10, 2))[-5,64,0]  𝄀
+-4
+SELECT CAST(-20.00 AS DECIMAL(10,2)) DIV CAST(4.00 AS DECIMAL(10,2));
+➤ cast(-20.00 as decimal(10, 2)) div cast(4.00 as decimal(10, 2))[-5,64,0]  𝄀
+-5
+SELECT CAST(-98.00 AS DECIMAL(10,2)) DIV CAST(7.00 AS DECIMAL(10,2));
+➤ cast(-98.00 as decimal(10, 2)) div cast(7.00 as decimal(10, 2))[-5,64,0]  𝄀
+-14
+SELECT CAST(98.00 AS DECIMAL(10,2)) DIV CAST(-7.00 AS DECIMAL(10,2));
+➤ cast(98.00 as decimal(10, 2)) div cast(-7.00 as decimal(10, 2))[-5,64,0]  𝄀
+-14
+SELECT CAST(-98.00 AS DECIMAL(10,2)) DIV CAST(-7.00 AS DECIMAL(10,2));
+➤ cast(-98.00 as decimal(10, 2)) div cast(-7.00 as decimal(10, 2))[-5,64,0]  𝄀
+14
+SELECT CAST(18446744073709551614 AS BIGINT UNSIGNED) DIV CAST(2 AS BIGINT UNSIGNED);  -- (MAX_UINT64-1)/2 = MAX_INT64
+➤ cast(18446744073709551614 as bigint unsigned) div cast(2 as bigint unsigned)[-5,64,0]  𝄀
+9223372036854775807
+SELECT CAST(99999999999999999999 AS DECIMAL(38,0)) DIV CAST(1 AS DECIMAL(38,0));  -- Should error: exceeds BIGINT range (positive overflow)
+Data truncation: data out of range: data type BIGINT, 
+SELECT CAST(-99999999999999999999 AS DECIMAL(38,0)) DIV CAST(1 AS DECIMAL(38,0));  -- Should error: exceeds BIGINT range (negative overflow)
+Data truncation: data out of range: data type BIGINT, 

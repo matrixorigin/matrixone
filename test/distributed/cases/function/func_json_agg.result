@@ -62,3 +62,200 @@ g    obj_map
 1    {"alpha": 30, "beta": 20, "gamma": 40}
 2    {"east": 400, "north": 300, "south": 200, "west": 500}
 DROP TABLE t_obj_ext;
+create database test_json;
+use test_json;
+drop table if exists products;
+CREATE TABLE products (
+id INT,
+name VARCHAR(50),
+price DECIMAL(10,2),
+category VARCHAR(30)
+);
+INSERT INTO products VALUES
+(1, 'iPhone', 999.99, 'Electronics'),
+(2, 'MacBook', 1299.99, 'Electronics'),
+(3, 'Coffee Mug', 15.99, 'Home'),
+(4, 'Desk Chair', 199.99, 'Furniture');
+SELECT JSON_OBJECTAGG(name, price) as products_prices
+FROM products;
+➤ products_prices[-1,2147483647,0]  𝄀
+{"Coffee Mug": 15.99, "Desk Chair": 199.99, "MacBook": 1299.99, "iPhone": 999.99}
+SELECT
+category,
+JSON_OBJECTAGG(name, price) as category_products
+FROM products
+GROUP BY category;
+➤ category[12,-1,0]  ¦  category_products[-1,2147483647,0]  𝄀
+Electronics  ¦  {"MacBook": 1299.99, "iPhone": 999.99}  𝄀
+Home  ¦  {"Coffee Mug": 15.99}  𝄀
+Furniture  ¦  {"Desk Chair": 199.99}
+SELECT JSON_OBJECTAGG(
+name,
+JSON_OBJECT('price', price, 'category', category, 'id', id)
+) as detailed_products
+FROM products;
+➤ detailed_products[-1,2147483647,0]  𝄀
+{"Coffee Mug": {"category": "Home", "id": 3, "price": 15.99}, "Desk Chair": {"category": "Furniture", "id": 4, "price": 199.99}, "MacBook": {"category": "Electronics", "id": 2, "price": 1299.99}, "iPhone": {"category": "Electronics", "id": 1, "price": 999.99}}
+SELECT
+category,
+COUNT(*) as product_count,
+AVG(price) as avg_price,
+JSON_OBJECTAGG(name, price) as products
+FROM products
+GROUP BY category;
+➤ category[12,-1,0]  ¦  product_count[-5,64,0]  ¦  avg_price[3,18,8]  ¦  products[-1,2147483647,0]  𝄀
+Electronics  ¦  2  ¦  1149.99000000  ¦  {"MacBook": 1299.99, "iPhone": 999.99}  𝄀
+Home  ¦  1  ¦  15.99000000  ¦  {"Coffee Mug": 15.99}  𝄀
+Furniture  ¦  1  ¦  199.99000000  ¦  {"Desk Chair": 199.99}
+drop table products;
+drop table if exists app_configs;
+create table app_configs (
+app_name VARCHAR(50),
+config_key VARCHAR(50),
+config_value TEXT
+);
+INSERT INTO app_configs VALUES
+('web_app', 'database_host', '192.168.1.100'),
+('web_app', 'database_port', '3306'),
+('web_app', 'redis_host', '192.168.1.101'),
+('web_app', 'redis_port', '6379'),
+('web_app', 'log_level', 'INFO'),
+('web_app', 'max_connections', '100'),
+('api_service', 'port', '8080'),
+('api_service', 'timeout', '30'),
+('api_service', 'rate_limit', '1000'),
+('api_service', 'auth_enabled', 'true'),
+('api_service', 'cors_origins', '*'),
+('message_queue', 'broker_url', 'amqp://localhost:5672'),
+('message_queue', 'queue_name', 'task_queue'),
+('message_queue', 'prefetch_count', '10'),
+('message_queue', 'retry_attempts', '3'),
+('cache_service', 'redis_cluster', '192.168.1.101:6379,192.168.1.102:6379'),
+('cache_service', 'ttl_seconds', '3600'),
+('cache_service', 'max_memory', '2GB');
+SELECT
+app_name,
+JSON_OBJECTAGG(config_key, config_value) as app_config
+FROM app_configs
+GROUP BY app_name;
+➤ app_name[12,-1,0]  ¦  app_config[-1,2147483647,0]  𝄀
+web_app  ¦  {"database_host": "192.168.1.100", "database_port": "3306", "log_level": "INFO", "max_connections": "100", "redis_host": "192.168.1.101", "redis_port": "6379"}  𝄀
+api_service  ¦  {"auth_enabled": "true", "cors_origins": "*", "port": "8080", "rate_limit": "1000", "timeout": "30"}  𝄀
+message_queue  ¦  {"broker_url": "amqp://localhost:5672", "prefetch_count": "10", "queue_name": "task_queue", "retry_attempts": "3"}  𝄀
+cache_service  ¦  {"max_memory": "2GB", "redis_cluster": "192.168.1.101:6379,192.168.1.102:6379", "ttl_seconds": "3600"}
+SELECT
+app_name,
+JSON_OBJECTAGG(config_key, config_value) as app_config
+FROM app_configs
+WHERE app_name = 'web_app'
+GROUP BY app_name;
+➤ app_name[12,-1,0]  ¦  app_config[-1,2147483647,0]  𝄀
+web_app  ¦  {"database_host": "192.168.1.100", "database_port": "3306", "log_level": "INFO", "max_connections": "100", "redis_host": "192.168.1.101", "redis_port": "6379"}
+SELECT
+app_name,
+CASE
+WHEN config_key LIKE 'database_%' THEN 'database'
+WHEN config_key LIKE 'redis_%' THEN 'redis'
+ELSE 'general'
+END as config_type,
+JSON_OBJECTAGG(config_key, config_value) as configs
+FROM app_configs
+WHERE app_name = 'web_app'
+GROUP BY app_name, config_type;
+➤ app_name[12,-1,0]  ¦  config_type[12,-1,0]  ¦  configs[-1,2147483647,0]  𝄀
+web_app  ¦  database  ¦  {"database_host": "192.168.1.100", "database_port": "3306"}  𝄀
+web_app  ¦  redis  ¦  {"redis_host": "192.168.1.101", "redis_port": "6379"}  𝄀
+web_app  ¦  general  ¦  {"log_level": "INFO", "max_connections": "100"}
+SELECT
+app_name,
+COUNT(*) as config_count,
+JSON_OBJECTAGG(config_key, config_value) as all_configs
+FROM app_configs
+GROUP BY app_name
+ORDER BY config_count DESC;
+➤ app_name[12,-1,0]  ¦  config_count[-5,64,0]  ¦  all_configs[-1,2147483647,0]  𝄀
+web_app  ¦  6  ¦  {"database_host": "192.168.1.100", "database_port": "3306", "log_level": "INFO", "max_connections": "100", "redis_host": "192.168.1.101", "redis_port": "6379"}  𝄀
+api_service  ¦  5  ¦  {"auth_enabled": "true", "cors_origins": "*", "port": "8080", "rate_limit": "1000", "timeout": "30"}  𝄀
+message_queue  ¦  4  ¦  {"broker_url": "amqp://localhost:5672", "prefetch_count": "10", "queue_name": "task_queue", "retry_attempts": "3"}  𝄀
+cache_service  ¦  3  ¦  {"max_memory": "2GB", "redis_cluster": "192.168.1.101:6379,192.168.1.102:6379", "ttl_seconds": "3600"}
+drop table app_configs;
+drop table if exists user_attributes;
+CREATE TABLE user_attributes (
+user_id INT,
+attribute_name VARCHAR(50),
+attribute_value VARCHAR(255)
+);
+INSERT INTO user_attributes VALUES
+(1, 'name', 'Alice Johnson'),
+(1, 'email', 'alice@example.com'),
+(1, 'age', '28'),
+(1, 'city', 'New York'),
+(1, 'department', 'Engineering'),
+(1, 'role', 'Senior Developer'),
+(1, 'join_date', '2020-03-15'),
+(2, 'name', 'Bob Smith'),
+(2, 'email', 'bob@example.com'),
+(2, 'age', '35'),
+(2, 'city', 'San Francisco'),
+(2, 'department', 'Marketing'),
+(2, 'role', 'Marketing Manager'),
+(2, 'join_date', '2019-07-22'),
+(3, 'name', 'Carol Davis'),
+(3, 'email', 'carol@example.com'),
+(3, 'age', '31'),
+(3, 'city', 'Chicago'),
+(3, 'department', 'Engineering'),
+(3, 'role', 'Tech Lead'),
+(3, 'join_date', '2018-11-08');
+SELECT
+user_id,
+JSON_OBJECTAGG(attribute_name, attribute_value) as user_profile
+FROM user_attributes
+GROUP BY user_id;
+➤ user_id[4,32,0]  ¦  user_profile[-1,2147483647,0]  𝄀
+1  ¦  {"age": "28", "city": "New York", "department": "Engineering", "email": "alice@example.com", "join_date": "2020-03-15", "name": "Alice Johnson", "role": "Senior Developer"}  𝄀
+2  ¦  {"age": "35", "city": "San Francisco", "department": "Marketing", "email": "bob@example.com", "join_date": "2019-07-22", "name": "Bob Smith", "role": "Marketing Manager"}  𝄀
+3  ¦  {"age": "31", "city": "Chicago", "department": "Engineering", "email": "carol@example.com", "join_date": "2018-11-08", "name": "Carol Davis", "role": "Tech Lead"}
+drop table user_attributes;
+drop table if exists form_fields;
+CREATE TABLE form_fields (
+form_name VARCHAR(50),
+field_name VARCHAR(50),
+field_config TEXT
+);
+INSERT INTO form_fields VALUES
+('user_registration', 'username', '{"type": "text", "required": true, "minLength": 3}'),
+('user_registration', 'email', '{"type": "email", "required": true}'),
+('user_registration', 'password', '{"type": "password", "required": true, "minLength": 8}'),
+('user_registration', 'age', '{"type": "number", "min": 18, "max": 120}');
+SELECT
+form_name,
+JSON_OBJECTAGG(field_name, JSON_EXTRACT(field_config, '$')) as form_schema
+FROM form_fields
+GROUP BY form_name;
+➤ form_name[12,-1,0]  ¦  form_schema[-1,2147483647,0]  𝄀
+user_registration  ¦  {"age": {"max": 120, "min": 18, "type": "number"}, "email": {"required": true, "type": "email"}, "password": {"minLength": 8, "required": true, "type": "password"}, "username": {"minLength": 3, "required": true, "type": "text"}}
+drop table form_fields;
+drop table if exists i18n_texts;
+CREATE TABLE i18n_texts (
+text_key VARCHAR(100),
+language VARCHAR(10),
+text_value TEXT
+);
+INSERT INTO i18n_texts VALUES
+('welcome_message', 'en', 'Welcome to our application'),
+('welcome_message', 'zh', '欢迎使用我们的应用'),
+('welcome_message', 'es', 'Bienvenido a nuestra aplicación'),
+('login_button', 'en', 'Login'),
+('login_button', 'zh', '登录'),
+('login_button', 'es', 'Iniciar sesión');
+SELECT
+text_key,
+JSON_OBJECTAGG(language, text_value) as translations
+FROM i18n_texts
+GROUP BY text_key;
+➤ text_key[12,-1,0]  ¦  translations[-1,2147483647,0]  𝄀
+welcome_message  ¦  {"en": "Welcome to our application", "es": "Bienvenido a nuestra aplicación", "zh": "欢迎使用我们的应用"}  𝄀
+login_button  ¦  {"en": "Login", "es": "Iniciar sesión", "zh": "登录"}
+drop table i18n_texts;
+drop database test_json;
