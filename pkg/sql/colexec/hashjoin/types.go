@@ -33,6 +33,7 @@ var _ vm.Operator = new(HashJoin)
 const (
 	Build = iota
 	Probe
+	SyncBitmap
 	Finalize
 	End
 )
@@ -43,13 +44,6 @@ const (
 	psNextBatch probeState = iota
 	psSelsForOneRow
 	psBatchRow
-)
-
-type finalizeState int
-
-const (
-	fsSyncMatched finalizeState = iota
-	fsSendBatches
 )
 
 type container struct {
@@ -63,8 +57,8 @@ type container struct {
 
 	lastIdx int
 	// process idx for zvs and vs, which returned by hashmap.Iterator.Find()
-	// guarantee: vs[ctr.vsidx] is the result of inbat[ctr.lastRow]
-	vsidx int
+	// guarantee: vs[ctr.vsIdx] is the result of inbat[ctr.lastRow]
+	vsIdx int
 	zvs   []int64
 	vs    []uint64
 	sels  []int32
@@ -82,10 +76,13 @@ type container struct {
 	eqCondExecs []colexec.ExpressionExecutor
 	eqCondVecs  []*vector.Vector
 
+	skipProbe bool
+
 	mp *message.JoinMap
 
-	rightRowsMatched   *bitmap.Bitmap
-	rightJoinFinalized bool
+	rightRowsMatched *bitmap.Bitmap
+	rightMatchedIter bitmap.Iterator
+	bitmapSynced     bool
 
 	maxAllocSize int64
 }
@@ -105,10 +102,12 @@ type HashJoin struct {
 	Channel chan *bitmap.Bitmap
 	NumCPU  uint64
 
-	HashOnPK           bool
-	CanSkipProbe       bool
-	IsShuffle          bool
-	ShuffleIdx         int32
+	HashOnPK     bool
+	CanSkipProbe bool
+
+	IsShuffle  bool
+	ShuffleIdx int32
+
 	IsMerger           bool
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 	JoinMapTag         int32
@@ -154,21 +153,24 @@ func (hashJoin *HashJoin) ExecProjection(proc *process.Process, input *batch.Bat
 func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &hashJoin.ctr
 	ctr.itr = nil
-	if !ctr.rightJoinFinalized && hashJoin.NumCPU > 1 && !hashJoin.IsMerger {
+	if !ctr.bitmapSynced && hashJoin.NumCPU > 1 && !hashJoin.IsMerger {
 		hashJoin.Channel <- nil
 	}
 	ctr.cleanHashMap()
 	ctr.resetNonEqCondExecutor()
 	ctr.resetEqCondExecutors()
 	ctr.rightRowsMatched = nil
-	ctr.rightJoinFinalized = false
+	ctr.rightMatchedIter = nil
+	ctr.skipProbe = false
+	ctr.bitmapSynced = false
 	ctr.state = Build
+	ctr.probeState = psNextBatch
 	ctr.lastIdx = 0
 
 	if hashJoin.OpAnalyzer != nil {
 		hashJoin.OpAnalyzer.Alloc(ctr.maxAllocSize)
 	}
-	hashJoin.ctr.leftBat = nil
+	ctr.leftBat = nil
 	ctr.maxAllocSize = 0
 }
 
