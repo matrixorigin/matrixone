@@ -55,9 +55,12 @@ const Decimal128Scale = 0
 func convertFloat64ToDecimal128(val float64) (types.Decimal128, error) {
 	return types.Decimal128FromFloat64(val, Decimal128Width, Decimal128Scale)
 }
-func mustDecimal128(v types.Decimal128, err error) types.Decimal128 {
+
+// safeDecimal128 converts to Decimal128, returns zero value on error instead of panicking
+func safeDecimal128(v types.Decimal128, err error) types.Decimal128 {
 	if err != nil {
-		logutil.Panic("mustDecimal128", zap.Error(err))
+		logutil.Error("safeDecimal128 conversion failed", zap.Error(err))
+		return types.Decimal128{B0_63: 0, B64_127: 0}
 	}
 	return v
 }
@@ -104,7 +107,7 @@ func StatementInfoUpdate(ctx context.Context, existing, new table.Item) {
 		//e.Error = nil /* keep the Error msg */
 		e.Database = ""
 		duration := e.Duration
-		e.AggrMemoryTime = mustDecimal128(convertFloat64ToDecimal128(e.statsArray.GetMemorySize() * float64(duration)))
+		e.AggrMemoryTime = safeDecimal128(convertFloat64ToDecimal128(e.statsArray.GetMemorySize() * float64(duration)))
 		e.RequestAt = e.ResponseAt.Truncate(windowSize)
 		e.ResponseAt = e.RequestAt.Add(windowSize)
 		e.AggrCount = 1
@@ -523,9 +526,9 @@ func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
 // calculateAggrMemoryBytes return scale = statistic.Decimal128ToFloat64Scale float64 val
 func calculateAggrMemoryBytes(dividend types.Decimal128, divisor float64) float64 {
 	scale := int32(statistic.Decimal128ToFloat64Scale)
-	divisorD := mustDecimal128(types.Decimal128FromFloat64(divisor, Decimal128Width, scale))
+	divisorD := safeDecimal128(types.Decimal128FromFloat64(divisor, Decimal128Width, scale))
 	val, valScale, err := dividend.Div(divisorD, 0, scale)
-	val = mustDecimal128(val, err)
+	val = safeDecimal128(val, err)
 	return types.Decimal128ToFloat64(val, valScale)
 }
 
@@ -537,11 +540,11 @@ func calculateAggrMemoryBytes(dividend types.Decimal128, divisor float64) float6
 func mergeStats(e, n *StatementInfo) error {
 	e.statsArray.Add(&n.statsArray)
 	val, _, err := e.AggrMemoryTime.Add(
-		mustDecimal128(convertFloat64ToDecimal128(n.statsArray.GetMemorySize()*float64(n.Duration))),
+		safeDecimal128(convertFloat64ToDecimal128(n.statsArray.GetMemorySize()*float64(n.Duration))),
 		Decimal128Scale,
 		Decimal128Scale,
 	)
-	e.AggrMemoryTime = mustDecimal128(val, err)
+	e.AggrMemoryTime = safeDecimal128(val, err)
 	e.RowsRead += n.RowsRead
 	e.BytesScan += n.BytesScan
 	return nil

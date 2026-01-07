@@ -3,7 +3,7 @@ Data truncation: data out of range: data type uint64, value '-1'
 select CAST(CAST(1-2 AS UNSIGNED) AS SIGNED INTEGER);
 Data truncation: data out of range: data type uint64, value '-1'
 select CAST('10 ' as unsigned integer);
-cast(10  as integer unsigned)
+➤ cast(10  as integer unsigned)[-5,64,0]  𝄀
 10
 select CAST('10x' as unsigned integer);
 invalid argument cast to uint64, bad value 10x
@@ -12,28 +12,28 @@ Data truncation: data out of range: data type uint64, value '-5'
 select cast(-5 as unsigned) -1, cast(-5 as unsigned) + 1;
 Data truncation: data out of range: data type uint64, value '-5'
 select cast(5 as unsigned) -6.0;
-cast(5 as unsigned) - 6.0
+➤ cast(5 as unsigned) - 6.0[3,38,1]  𝄀
 -1.0
 select cast(NULL as signed);
-cast(null as signed)
+➤ cast(null as signed)[-5,64,0]  𝄀
 null
 select cast(1/2 as signed);
-cast(1 / 2 as signed)
+➤ cast(1 / 2 as signed)[-5,64,0]  𝄀
 1
 select cast("2001-1-1" as DATE), cast("2001-1-1" as DATETIME);
-cast(2001-1-1 as date)    cast(2001-1-1 as datetime)
-2001-01-01    2001-01-01 00:00:00
+➤ cast(2001-1-1 as date)[91,64,0]  ¦  cast(2001-1-1 as datetime)[93,64,0]  𝄀
+2001-01-01  ¦  2001-01-01 00:00:00
 select 10+'10';
-10 + 10
+➤ 10 + 10[-5,64,0]  𝄀
 20
 select 10.0+'10';
-10.0 + 10
+➤ 10.0 + 10[8,53,1]  𝄀
 20.0
 select 10E+0+'10';
-10e+0 + 10
+➤ 10e+0 + 10[8,54,0]  𝄀
 20.0
 select CAST(0xb3 as signed);
-cast(0xb3 as signed)
+➤ cast(0xb3 as signed)[-5,64,0]  𝄀
 179
 SELECT CAST(X'' AS SIGNED);
 invalid argument cast to int, bad value []
@@ -42,7 +42,7 @@ Data truncation: data out of range: data type int,
 select CAST(0x8fffffffffffffff as signed);
 Data truncation: data out of range: data type int, 
 select CAST(0xffffffffffffffff as unsigned);
-cast(0xffffffffffffffff as unsigned)
+➤ cast(0xffffffffffffffff as unsigned)[-5,64,0]  𝄀
 18446744073709551615
 select CAST(0xfffffffffffffffe as signed);
 Data truncation: data out of range: data type int, 
@@ -55,7 +55,8 @@ invalid argument cast to int, bad value a
 select 10.0+cast('a' as decimal);
 invalid input: a beyond the range, can't be converted to Decimal128(38,0).
 select 10E+0+'a';
-strconv.ParseFloat: parsing "a": invalid syntax
+➤ 10e+0 + a[8,54,0]  𝄀
+10.0
 select cast('18446744073709551616' as unsigned);
 Data truncation: data out of range: data type uint64, value '18446744073709551616'
 select cast('18446744073709551616' as signed);
@@ -71,35 +72,35 @@ invalid argument cast to int, bad value 1a
 select cast('' as signed);
 invalid argument cast to int, bad value 
 select cast("2001-1-1" as date) = "2001-01-01";
-cast(2001-1-1 as date) = 2001-01-01
+➤ cast(2001-1-1 as date) = 2001-01-01[-7,1,0]  𝄀
 1
 select cast("2001-1-1" as datetime) = "2001-01-01 00:00:00";
-cast(2001-1-1 as datetime) = 2001-01-01 00:00:00
+➤ cast(2001-1-1 as datetime) = 2001-01-01 00:00:00[-7,1,0]  𝄀
 1
 select cast(NULL as DATE);
-cast(null as date)
+➤ cast(null as date)[91,64,0]  𝄀
 null
 select date_add(cast('2004-12-30 12:00:00' as date), interval 0 hour);
-date_add(cast(2004-12-30 12:00:00 as date), interval(0, hour))
+➤ date_add(cast(2004-12-30 12:00:00 as date), interval(0, hour))[93,64,0]  𝄀
 2004-12-30 00:00:00
 select cast(18446744073709551615 as unsigned);
-cast(18446744073709551615 as unsigned)
+➤ cast(18446744073709551615 as unsigned)[-5,64,0]  𝄀
 18446744073709551615
 select cast(18446744073709551615 as signed);
 Data truncation: data out of range: data type int64, value '18446744073709551615'
 select cast('18446744073709551615' as unsigned);
-cast(18446744073709551615 as unsigned)
+➤ cast(18446744073709551615 as unsigned)[-5,64,0]  𝄀
 18446744073709551615
 select cast('18446744073709551615' as signed);
 Data truncation: data out of range: data type int64, value '18446744073709551615'
 select cast('9223372036854775807' as signed);
-cast(9223372036854775807 as signed)
+➤ cast(9223372036854775807 as signed)[-5,64,0]  𝄀
 9223372036854775807
 select cast(concat_ws('184467440','73709551615') as unsigned);
-cast(concat_ws(184467440, 73709551615) as unsigned)
+➤ cast(concat_ws(184467440, 73709551615) as unsigned)[-5,64,0]  𝄀
 73709551615
 select cast(concat_ws('184467440','73709551615') as signed);
-cast(concat_ws(184467440, 73709551615) as signed)
+➤ cast(concat_ws(184467440, 73709551615) as signed)[-5,64,0]  𝄀
 73709551615
 select cast(1.0e+300 as signed int);
 Data truncation: data out of range: data type int64, value '1e+300'
@@ -112,49 +113,49 @@ DROP TABLE t1;
 SELECT CAST(cast('01-01-01' as date) AS UNSIGNED);
 invalid argument operator cast, bad value [DATE BIGINT UNSIGNED]
 SELECT CAST(cast('01-01-01' as date) AS SIGNED);
-cast(cast(01-01-01 as date) as as)
+➤ cast(cast(01-01-01 as date) as as)[-5,64,0]  𝄀
 -719162
 select cast('1.2' as decimal(3,2));
-cast(1.2 as decimal(3, 2))
+➤ cast(1.2 as decimal(3, 2))[3,3,2]  𝄀
 1.20
 select 1e18 * cast('1.2' as decimal(3,2));
-1e18 * cast(1.2 as decimal(3, 2))
+➤ 1e18 * cast(1.2 as decimal(3, 2))[8,54,0]  𝄀
 1.2E18
 select cast(cast('1.2' as decimal(3,2)) as signed);
-cast(cast(1.2 as decimal(3, 2)) as as)
+➤ cast(cast(1.2 as decimal(3, 2)) as as)[-5,64,0]  𝄀
 1
 select cast(-1e18 as decimal(22,2));
-cast(-1e18 as decimal(22, 2))
+➤ cast(-1e18 as decimal(22, 2))[3,22,2]  𝄀
 -1000000000000000000.00
 set time_zone="+00:00";
 create table t1(s1 timestamp);
 insert into t1 values ('2020-12-03 11:11:11');
 select cast(s1 as decimal(7,2)) from t1;
-cast(s1 as decimal(7, 2))
+➤ cast(s1 as decimal(7, 2))[3,7,2]  𝄀
 1606993871.00
 drop table t1;
 CREATE TABLE t1 (v varchar(10), tt char(255), t char(255),mt char(255), lt char(255));
 INSERT INTO t1 VALUES ('1.01', '2.02', '3.03', '4.04', '5.05');
 SELECT CAST(v AS DECIMAL), CAST(tt AS DECIMAL), CAST(t AS DECIMAL), CAST(mt AS DECIMAL), CAST(lt AS DECIMAL) from t1;
-cast(v as decimal(38))    cast(tt as decimal(38))    cast(t as decimal(38))    cast(mt as decimal(38))    cast(lt as decimal(38))
-1    2    3    4    5
+➤ cast(v as decimal(38))[3,39,0]  ¦  cast(tt as decimal(38))[3,39,0]  ¦  cast(t as decimal(38))[3,39,0]  ¦  cast(mt as decimal(38))[3,39,0]  ¦  cast(lt as decimal(38))[3,39,0]  𝄀
+1  ¦  2  ¦  3  ¦  4  ¦  5
 DROP TABLE t1;
 select cast(NULL as decimal(6)) as t1;
-t1
+➤ t1[3,7,0]  𝄀
 null
 CREATE TABLE t1 (d1 datetime);
 INSERT INTO t1(d1) VALUES ('2007-07-19 08:30:00'), (NULL), ('2007-07-19 08:34:00'), (NULL), ('2007-07-19 08:36:00');
 SELECT cast(date(d1) as signed) FROM t1;
-cast(date(d1) as signed)
-13713
-null
-13713
-null
+➤ cast(date(d1) as signed)[-5,64,0]  𝄀
+13713  𝄀
+null  𝄀
+13713  𝄀
+null  𝄀
 13713
 drop table t1;
 SELECT CAST(1/3 AS FLOAT) as float_col,CAST(1/3 AS DOUBLE) as double_col, CAST(1/3 AS REAL) as real_col;
-float_col    double_col    real_col
-0.33333334    0.3333333333333333    0.3333333333333333
+➤ float_col[7,24,0]  ¦  double_col[8,54,0]  ¦  real_col[8,54,0]  𝄀
+0.33333334  ¦  0.3333333333333333  ¦  0.3333333333333333
 SELECT CAST(DATE'2000-01-01' AS FLOAT), CAST(DATE'2000-01-01' AS DOUBLE);
 invalid argument operator cast, bad value [DATE FLOAT]
 SELECT CAST(TIMESTAMP'2000-01-01 23:59:59' AS FLOAT), CAST(TIMESTAMP'2000-01-01 23:59:59' AS DOUBLE);
@@ -162,8 +163,8 @@ invalid argument operator cast, bad value [TIMESTAMP FLOAT]
 SELECT CAST(TIMESTAMP'2000-01-01 23:59:59.123456' AS FLOAT), CAST(TIMESTAMP'2000-01-01 23:59:59.123456' AS DOUBLE);
 invalid argument operator cast, bad value [TIMESTAMP FLOAT]
 SELECT CAST(NULL AS REAL), CAST(NULL AS FLOAT), CAST(NULL AS DOUBLE);
-cast(null as real)    cast(null as float)    cast(null as double)
-null    null    null
+➤ cast(null as real)[8,54,0]  ¦  cast(null as float)[7,24,0]  ¦  cast(null as double)[8,54,0]  𝄀
+null  ¦  null  ¦  null
 CREATE TABLE t (col_datetime datetime, col_date date, col_char char);
 insert into t values ('2013-03-15 18:35:20', '2013-03-15','L'),('2003-01-10 00:00:23', '2003-01-10', NULL);
 SELECT CAST(col_char AS DATETIME) FROM t;
@@ -171,12 +172,12 @@ invalid input: invalid datetime value L
 SELECT col_char <> col_datetime FROM t;
 invalid input: invalid datetime value L
 SELECT CAST(col_char AS DATE) FROM t;
-cast(col_char as date)
-null
+➤ cast(col_char as date)[91,64,0]  𝄀
+null  𝄀
 null
 SELECT col_char <> col_date FROM t;
-col_char != col_date
-null
+➤ col_char != col_date[-7,1,0]  𝄀
+null  𝄀
 null
 DROP TABLE t;
 CREATE TABLE `BB` (`col_char_key` char(1));
@@ -194,65 +195,65 @@ insert into t1 values ("2006-01-02", "2006-01-02 12:01:02", "2006-01-02 12:01:02
 select f1 from t1 where f1 between CAST("2006-1-1" as date) and CAST(20060101 as date);
 invalid argument operator cast, bad value [BIGINT DATE]
 select f1 from t1 where f1 between cast("2006-1-1" as date) and cast("2006.1.1" as date);
-f1
+➤ f1[91,64,0]
 select f1 from t1 where date(f1) between cast("2006-1-1" as date) and cast("2006.1.1" as date);
-f1
+➤ f1[91,64,0]
 select f3 from t1 where f3 between cast("2006-1-1 12:1:1" as datetime) and cast("2006-1-1 12:1:2" as datetime);
-f3
+➤ f3[93,64,0]  𝄀
 2006-01-01 12:01:01
 select f3 from t1 where timestamp(f3) between cast("2006-1-1 12:1:1" as datetime) and cast("2006-1-1 12:1:2" as datetime);
-f3
+➤ f3[93,64,0]  𝄀
 2006-01-01 12:01:01
 select f1 from t1 where cast("2006-1-1" as date) between f1 and f3;
-f1
+➤ f1[91,64,0]  𝄀
 2006-01-01
 select f1 from t1 where cast("2006-1-1" as date) between date(f1) and date(f3);
-f1
+➤ f1[91,64,0]  𝄀
 2006-01-01
 select f1 from t1 where cast("2006-1-1" as date) between f1 and cast('zzz' as date);
-f1
+➤ f1[91,64,0]
 drop table t1;
 create table t1 (field DATE);
 insert into t1 values ('2006-11-06');
 select * from t1 where field < '2006-11-06 04:08:36.0';
-field
+➤ field[91,64,0]
 select * from t1 where field = '2006-11-06 04:08:36.0';
-field
+➤ field[91,64,0]  𝄀
 2006-11-06
 select * from t1 where field = '2006-11-06';
-field
+➤ field[91,64,0]  𝄀
 2006-11-06
 select * from t1 where CAST(field as DATETIME) < '2006-11-06 04:08:36.0';
-field
+➤ field[91,64,0]  𝄀
 2006-11-06
 select * from t1 where CAST(field as DATE) < '2006-11-06 04:08:36.0';
-field
+➤ field[91,64,0]
 drop table t1;
 create table t1 (a int(11) unsigned, b int(11) unsigned);
 insert into t1 values (1,0), (1,1), (4294967295,1);
 select a-b  from t1 order by 1;
-a - b
-0
-1
+➤ a - b[4,32,0]  𝄀
+0  𝄀
+1  𝄀
 4294967294
 select a-b , (a-b < 0)  from t1 order by 1;
-a - b    a - b < 0
-0    0
-1    0
-4294967294    0
+➤ a - b[4,32,0]  ¦  a - b < 0[-7,1,0]  𝄀
+0  ¦  0  𝄀
+1  ¦  0  𝄀
+4294967294  ¦  0
 select any_value(a)-b as d, (any_value(a)-b >= 0), b from t1 group by b having d >= 0;
-d    any_value(a) - b >= 0    b
-1    1    0
-0    1    1
+➤ d[4,32,0]  ¦  any_value(a) - b >= 0[-7,1,0]  ¦  b[4,32,0]  𝄀
+1  ¦  1  ¦  0  𝄀
+0  ¦  1  ¦  1
 select cast((a - b) as unsigned) from t1 order by 1;
-cast((a - b) as b unsigned)
-0
-1
+➤ cast((a - b) as b unsigned)[-5,64,0]  𝄀
+0  𝄀
+1  𝄀
 4294967294
 drop table t1;
 select if(1, cast(1111111111111111111 as unsigned), 1) i, case when 1 then cast(1111111111111111111 as unsigned) else 1 end c, coalesce(cast(1111111111111111111 as unsigned), 1) co;
-i    c    co
-1111111111111111111    1111111111111111111    1111111111111111111
+➤ i[-5,64,0]  ¦  c[-5,64,0]  ¦  co[-5,64,0]  𝄀
+1111111111111111111  ¦  1111111111111111111  ¦  1111111111111111111
 create database if not exists test;
 use test;
 drop table if exists `alarm`;
@@ -271,35 +272,35 @@ PRIMARY KEY (`alarm_id`)
 );
 INSERT INTO `alarm` VALUES (2,'测试','M100.0','Bool','True','True',0,'管理员',_binary '2023-03-01 14:20:29','报警测试'),(3,'测试','M100.0','Bool','True','True',0,'管理员',_binary '2023-03-01 14:20:41','报警测试'),(4,'测试','M100.0','Bool','True','True',0,'管理员',_binary '2023-03-01 14:20:46','报警测试'),(5,'Emergency','M1000.4','bool','False','False',1,'Admin',_binary '2023-03-03 14:29:26.327337','设备急停中'),(6,'Emergency','M1000.4','bool','False','False',1,'Admin',_binary '2023-03-05 11:38:10.6059081','设备急停中'),(7,'Emergency','M1000.4','bool','False','False',1,'Admin',_binary '2023-03-15 07:55:37.1308852','设备急停中'),(8,'Emergency','M1000.4','bool','False','False',1,'Admin',_binary '2023-03-15 08:02:48.7571227','设备急停中'),(9,'Emergency','M1000.4','bool','False','False',1,'Admin',_binary '2023-03-19 03:27:49.5087995','设备急停中'),(10,'Emergency','M1000.4','bool','False','False',1,'Admin',_binary '2023-03-22 00:05:23.1781761','设备急停中'),(11,'Emergency','M1000.4','bool','False','False',1,'Admin',_binary '2023-03-22 16:05:08.6198487','设备急停中'),(12,'Emergency','M1000.4','bool','False','False',1,'Admin',_binary '2023-03-22 16:12:10.8425965','设备急停中'),(13,'Emergency','M1000.4','bool','False','False',1,'Admin',_binary '2023-03-22 16:24:30.269232','设备急停中'),(14,'Emergency','M1000.4','bool','False','False',1,'Admin',_binary '2023-03-22 16:25:16.3121285','设备急停中'),(15,'Emergency','M1000.4','bool','False','False',1,'Admin',_binary '2023-03-22 16:25:23.5447725','设备急停中'),(16,'Emergency','M1000.4','bool','False','False',1,'Admin',_binary '2023-03-22 20:34:57.8534506','设备急停中'),(17,'Emergency','M1000.4','bool','False','False',1,'Admin',_binary '2023-03-22 20:35:20.1639042','设备急停中'),(18,'Emergency','M1000.4','bool','False','False',1,'Admin',_binary '2023-03-22 20:45:27.0464144','设备急停中'),(19,'Emergency','M1000.4','bool','False','False',1,'Admin',_binary '2023-03-22 20:49:59.5979518','设备急停中'),(20,'Emergency','M1000.4','bool','False','False',1,'Admin',_binary '2023-03-23 01:26:46.1155487','设备急停中'),(21,'Emergency','M1000.4','bool','False','False',1,'Admin',_binary '2023-03-30 06:33:50.6666203','设备急停中'),(22,'Emergency','M1000.4','bool','False','False',1,'Admin',_binary '2023-04-03 05:44:03.5318075','设备急停中'),(23,'Emergency','M1000.4','bool','False','False',1,'Admin',_binary '2023-04-03 05:45:01.64952','设备急停中'),(24,'Emergency','M1000.4','bool','False','False',1,'Admin',_binary '2023-04-03 05:46:37.8612795','设备急停中'),(25,'Emergency','M1000.4','bool','False','False',1,'Admin',_binary '2023-04-03 06:05:06.5081611','设备急停中'),(26,'Emergency','M1000.4','bool','False','False',1,'Admin',_binary '2023-04-03 12:21:23.1368163','设备急停中'),(27,'Emergency','M1000.4','bool','False','False',1,'Admin',_binary '2023-04-03 12:25:45.5234186','设备急停中'),(28,'Emergency','M1000.4','bool','False','False',1,'Admin',_binary '2023-04-03 18:22:29.7438075','设备急停中'),(29,'Emergency','M1000.4','bool','False','False',1,'Admin',_binary '2023-04-04 06:52:07.473582','设备急停中'),(30,'Emergency','M1000.4','bool','False','False',1,'Admin',_binary '2023-04-04 08:32:50.2166836','设备急停中'),(31,'测试报警','M100','bool','true','true',1,'Admin',_binary '2023-04-06 21:00:09.7964362','note测试报警');
 SELECT * FROM  `alarm`;
-alarm_id    var_name    address    var_type    alarm_value    current_value    priority    operator    insert_time    note
-2    测试    M100.0    Bool    True    True    0    管理员    2023-03-01 14:20:29    报警测试
-3    测试    M100.0    Bool    True    True    0    管理员    2023-03-01 14:20:41    报警测试
-4    测试    M100.0    Bool    True    True    0    管理员    2023-03-01 14:20:46    报警测试
-5    Emergency    M1000.4    bool    False    False    1    Admin    2023-03-03 14:29:26.327337    设备急停中
-6    Emergency    M1000.4    bool    False    False    1    Admin    2023-03-05 11:38:10.6059081    设备急停中
-7    Emergency    M1000.4    bool    False    False    1    Admin    2023-03-15 07:55:37.1308852    设备急停中
-8    Emergency    M1000.4    bool    False    False    1    Admin    2023-03-15 08:02:48.7571227    设备急停中
-9    Emergency    M1000.4    bool    False    False    1    Admin    2023-03-19 03:27:49.5087995    设备急停中
-10    Emergency    M1000.4    bool    False    False    1    Admin    2023-03-22 00:05:23.1781761    设备急停中
-11    Emergency    M1000.4    bool    False    False    1    Admin    2023-03-22 16:05:08.6198487    设备急停中
-12    Emergency    M1000.4    bool    False    False    1    Admin    2023-03-22 16:12:10.8425965    设备急停中
-13    Emergency    M1000.4    bool    False    False    1    Admin    2023-03-22 16:24:30.269232    设备急停中
-14    Emergency    M1000.4    bool    False    False    1    Admin    2023-03-22 16:25:16.3121285    设备急停中
-15    Emergency    M1000.4    bool    False    False    1    Admin    2023-03-22 16:25:23.5447725    设备急停中
-16    Emergency    M1000.4    bool    False    False    1    Admin    2023-03-22 20:34:57.8534506    设备急停中
-17    Emergency    M1000.4    bool    False    False    1    Admin    2023-03-22 20:35:20.1639042    设备急停中
-18    Emergency    M1000.4    bool    False    False    1    Admin    2023-03-22 20:45:27.0464144    设备急停中
-19    Emergency    M1000.4    bool    False    False    1    Admin    2023-03-22 20:49:59.5979518    设备急停中
-20    Emergency    M1000.4    bool    False    False    1    Admin    2023-03-23 01:26:46.1155487    设备急停中
-21    Emergency    M1000.4    bool    False    False    1    Admin    2023-03-30 06:33:50.6666203    设备急停中
-22    Emergency    M1000.4    bool    False    False    1    Admin    2023-04-03 05:44:03.5318075    设备急停中
-23    Emergency    M1000.4    bool    False    False    1    Admin    2023-04-03 05:45:01.64952    设备急停中
-24    Emergency    M1000.4    bool    False    False    1    Admin    2023-04-03 05:46:37.8612795    设备急停中
-25    Emergency    M1000.4    bool    False    False    1    Admin    2023-04-03 06:05:06.5081611    设备急停中
-26    Emergency    M1000.4    bool    False    False    1    Admin    2023-04-03 12:21:23.1368163    设备急停中
-27    Emergency    M1000.4    bool    False    False    1    Admin    2023-04-03 12:25:45.5234186    设备急停中
-28    Emergency    M1000.4    bool    False    False    1    Admin    2023-04-03 18:22:29.7438075    设备急停中
-29    Emergency    M1000.4    bool    False    False    1    Admin    2023-04-04 06:52:07.473582    设备急停中
-30    Emergency    M1000.4    bool    False    False    1    Admin    2023-04-04 08:32:50.2166836    设备急停中
-31    测试报警    M100    bool    true    true    1    Admin    2023-04-06 21:00:09.7964362    note测试报警
+➤ alarm_id[4,32,0]  ¦  var_name[12,0,0]  ¦  address[12,0,0]  ¦  var_type[12,0,0]  ¦  alarm_value[12,0,0]  ¦  current_value[12,0,0]  ¦  priority[4,32,0]  ¦  operator[12,0,0]  ¦  insert_time[12,0,0]  ¦  note[12,0,0]  𝄀
+2  ¦  测试  ¦  M100.0  ¦  Bool  ¦  True  ¦  True  ¦  0  ¦  管理员  ¦  2023-03-01 14:20:29  ¦  报警测试  𝄀
+3  ¦  测试  ¦  M100.0  ¦  Bool  ¦  True  ¦  True  ¦  0  ¦  管理员  ¦  2023-03-01 14:20:41  ¦  报警测试  𝄀
+4  ¦  测试  ¦  M100.0  ¦  Bool  ¦  True  ¦  True  ¦  0  ¦  管理员  ¦  2023-03-01 14:20:46  ¦  报警测试  𝄀
+5  ¦  Emergency  ¦  M1000.4  ¦  bool  ¦  False  ¦  False  ¦  1  ¦  Admin  ¦  2023-03-03 14:29:26.327337  ¦  设备急停中  𝄀
+6  ¦  Emergency  ¦  M1000.4  ¦  bool  ¦  False  ¦  False  ¦  1  ¦  Admin  ¦  2023-03-05 11:38:10.6059081  ¦  设备急停中  𝄀
+7  ¦  Emergency  ¦  M1000.4  ¦  bool  ¦  False  ¦  False  ¦  1  ¦  Admin  ¦  2023-03-15 07:55:37.1308852  ¦  设备急停中  𝄀
+8  ¦  Emergency  ¦  M1000.4  ¦  bool  ¦  False  ¦  False  ¦  1  ¦  Admin  ¦  2023-03-15 08:02:48.7571227  ¦  设备急停中  𝄀
+9  ¦  Emergency  ¦  M1000.4  ¦  bool  ¦  False  ¦  False  ¦  1  ¦  Admin  ¦  2023-03-19 03:27:49.5087995  ¦  设备急停中  𝄀
+10  ¦  Emergency  ¦  M1000.4  ¦  bool  ¦  False  ¦  False  ¦  1  ¦  Admin  ¦  2023-03-22 00:05:23.1781761  ¦  设备急停中  𝄀
+11  ¦  Emergency  ¦  M1000.4  ¦  bool  ¦  False  ¦  False  ¦  1  ¦  Admin  ¦  2023-03-22 16:05:08.6198487  ¦  设备急停中  𝄀
+12  ¦  Emergency  ¦  M1000.4  ¦  bool  ¦  False  ¦  False  ¦  1  ¦  Admin  ¦  2023-03-22 16:12:10.8425965  ¦  设备急停中  𝄀
+13  ¦  Emergency  ¦  M1000.4  ¦  bool  ¦  False  ¦  False  ¦  1  ¦  Admin  ¦  2023-03-22 16:24:30.269232  ¦  设备急停中  𝄀
+14  ¦  Emergency  ¦  M1000.4  ¦  bool  ¦  False  ¦  False  ¦  1  ¦  Admin  ¦  2023-03-22 16:25:16.3121285  ¦  设备急停中  𝄀
+15  ¦  Emergency  ¦  M1000.4  ¦  bool  ¦  False  ¦  False  ¦  1  ¦  Admin  ¦  2023-03-22 16:25:23.5447725  ¦  设备急停中  𝄀
+16  ¦  Emergency  ¦  M1000.4  ¦  bool  ¦  False  ¦  False  ¦  1  ¦  Admin  ¦  2023-03-22 20:34:57.8534506  ¦  设备急停中  𝄀
+17  ¦  Emergency  ¦  M1000.4  ¦  bool  ¦  False  ¦  False  ¦  1  ¦  Admin  ¦  2023-03-22 20:35:20.1639042  ¦  设备急停中  𝄀
+18  ¦  Emergency  ¦  M1000.4  ¦  bool  ¦  False  ¦  False  ¦  1  ¦  Admin  ¦  2023-03-22 20:45:27.0464144  ¦  设备急停中  𝄀
+19  ¦  Emergency  ¦  M1000.4  ¦  bool  ¦  False  ¦  False  ¦  1  ¦  Admin  ¦  2023-03-22 20:49:59.5979518  ¦  设备急停中  𝄀
+20  ¦  Emergency  ¦  M1000.4  ¦  bool  ¦  False  ¦  False  ¦  1  ¦  Admin  ¦  2023-03-23 01:26:46.1155487  ¦  设备急停中  𝄀
+21  ¦  Emergency  ¦  M1000.4  ¦  bool  ¦  False  ¦  False  ¦  1  ¦  Admin  ¦  2023-03-30 06:33:50.6666203  ¦  设备急停中  𝄀
+22  ¦  Emergency  ¦  M1000.4  ¦  bool  ¦  False  ¦  False  ¦  1  ¦  Admin  ¦  2023-04-03 05:44:03.5318075  ¦  设备急停中  𝄀
+23  ¦  Emergency  ¦  M1000.4  ¦  bool  ¦  False  ¦  False  ¦  1  ¦  Admin  ¦  2023-04-03 05:45:01.64952  ¦  设备急停中  𝄀
+24  ¦  Emergency  ¦  M1000.4  ¦  bool  ¦  False  ¦  False  ¦  1  ¦  Admin  ¦  2023-04-03 05:46:37.8612795  ¦  设备急停中  𝄀
+25  ¦  Emergency  ¦  M1000.4  ¦  bool  ¦  False  ¦  False  ¦  1  ¦  Admin  ¦  2023-04-03 06:05:06.5081611  ¦  设备急停中  𝄀
+26  ¦  Emergency  ¦  M1000.4  ¦  bool  ¦  False  ¦  False  ¦  1  ¦  Admin  ¦  2023-04-03 12:21:23.1368163  ¦  设备急停中  𝄀
+27  ¦  Emergency  ¦  M1000.4  ¦  bool  ¦  False  ¦  False  ¦  1  ¦  Admin  ¦  2023-04-03 12:25:45.5234186  ¦  设备急停中  𝄀
+28  ¦  Emergency  ¦  M1000.4  ¦  bool  ¦  False  ¦  False  ¦  1  ¦  Admin  ¦  2023-04-03 18:22:29.7438075  ¦  设备急停中  𝄀
+29  ¦  Emergency  ¦  M1000.4  ¦  bool  ¦  False  ¦  False  ¦  1  ¦  Admin  ¦  2023-04-04 06:52:07.473582  ¦  设备急停中  𝄀
+30  ¦  Emergency  ¦  M1000.4  ¦  bool  ¦  False  ¦  False  ¦  1  ¦  Admin  ¦  2023-04-04 08:32:50.2166836  ¦  设备急停中  𝄀
+31  ¦  测试报警  ¦  M100  ¦  bool  ¦  true  ¦  true  ¦  1  ¦  Admin  ¦  2023-04-06 21:00:09.7964362  ¦  note测试报警
 drop database test;
