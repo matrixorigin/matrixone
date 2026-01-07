@@ -106,8 +106,8 @@ func convertFloat64ToDecimal128Price(val float64) (types.Decimal128, error) {
 }
 
 func CalculateCUMemDecimal(memByte, durationNS int64, memPrice, cuUnit float64) (float64, error) {
-	price := mustDecimal128(convertFloat64ToDecimal128Price(memPrice))
-	unit := mustDecimal128(convertFloat64ToDecimal128Price(cuUnit))
+	price := safeDecimal128(convertFloat64ToDecimal128Price(memPrice))
+	unit := safeDecimal128(convertFloat64ToDecimal128Price(cuUnit))
 
 	val1 := types.Decimal256FromInt64(memByte)
 	val2 := types.Decimal256FromInt64(durationNS)
