@@ -109,8 +109,9 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 
-			if ctr.mp == nil && !hashJoin.IsShuffle {
-				if hashJoin.IsInner() || hashJoin.IsRightOuter() || hashJoin.IsRightSingle() || hashJoin.IsSemi() || hashJoin.IsRightAnti() {
+			if ctr.mp == nil && !hashJoin.IsLeftOuter() && !hashJoin.IsLeftSingle() && !hashJoin.IsLeftAnti() {
+				// TODO: early terminate the probe side for shuffle join
+				if !hashJoin.IsShuffle {
 					ctr.state = End
 					continue
 				}
