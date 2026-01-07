@@ -1522,19 +1522,31 @@ func (p *PartitionState) isDataObjectVisible(objId *types.Objectid, snapshot typ
 		return true
 	}
 	
-	// Check appendable objects in in-memory rows (O(n) scan)
-	// This is expensive but necessary for CN-flushed tombstones that reference appendable objects
-	// The caller caches results per objectid to minimize repeated scans
-	found := false
-	p.rows.Scan(func(entry *RowEntry) bool {
-		if entry.BlockID.Object().EQ(objId) {
-			if entry.Time.LE(&snapshot) && !entry.Deleted {
-				found = true
-				return false // Stop scanning
-			}
-		}
-		return true
-	})
+	// Check appendable objects in in-memory rows
+	// Use Seek to quickly locate rows for this object (rows are sorted by BlockID)
+	// This is O(log n + k) where k is the number of rows in this object
+	iter := p.rows.Iter()
+	defer iter.Release()
 	
-	return found
+	// Create a pivot entry with the target objectid
+	// BlockID is sorted by objectid first, so we can seek to the first block of this object
+	pivotBlockID := objectio.NewBlockidWithObjectID(objId, 0)
+	pivot := &RowEntry{BlockID: pivotBlockID}
+	
+	// Seek to the first row of this object
+	for ok := iter.Seek(pivot); ok; ok = iter.Next() {
+		row := iter.Item()
+		
+		// Check if we've moved past this object
+		if !row.BlockID.Object().EQ(objId) {
+			break
+		}
+		
+		// Found a visible data row for this object
+		if row.Time.LE(&snapshot) && !row.Deleted {
+			return true
+		}
+	}
+	
+	return false
 }
