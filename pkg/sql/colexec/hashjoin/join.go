@@ -141,6 +141,7 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 
 				if bat.Last() {
+					result.Batch = input.Batch
 					return result, nil
 				}
 
@@ -212,7 +213,7 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 
-			if hashJoin.NumCPU > 1 && !hashJoin.IsMerger {
+			if ctr.rightRowsMatched == nil || (hashJoin.NumCPU > 1 && !hashJoin.IsMerger) {
 				ctr.state = End
 			} else {
 				ctr.state = Finalize
