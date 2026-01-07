@@ -1338,12 +1338,6 @@ func (p *PartitionState) CountTombstoneRows(
 			continue
 		}
 
-		// If fs is nil, use Rows() approximation
-		if fs == nil {
-			count += uint64(obj.Rows())
-			continue
-		}
-
 		// Read tombstone file and count visible deletions
 		hidden := objectio.HiddenColumnSelection_None
 		attrs := objectio.GetTombstoneAttrs(hidden)

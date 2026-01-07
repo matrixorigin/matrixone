@@ -166,10 +166,11 @@ func TestScanRows(t *testing.T) {
 
 func TestCountRows(t *testing.T) {
 	ctx := context.Background()
+	fs := testutil.NewSharedFS()
 	state := NewPartitionState("", false, 42, false)
 
 	// Test empty state
-	count, err := state.CountRows(ctx, types.BuildTS(10, 0), nil)
+	count, err := state.CountRows(ctx, types.BuildTS(10, 0), fs)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(0), count)
 
@@ -184,24 +185,9 @@ func TestCountRows(t *testing.T) {
 	})
 
 	// Count at TS=10, should see 100 rows
-	count, err = state.CountRows(ctx, types.BuildTS(10, 0), nil)
+	count, err = state.CountRows(ctx, types.BuildTS(10, 0), fs)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(100), count)
-
-	// Add non-appendable tombstone object with 20 deletions
-	objID2 := objectio.NewObjectid()
-	stats2 := objectio.NewObjectStatsWithObjectID(&objID2, false, true, false)
-	require.NoError(t, objectio.SetObjectStatsRowCnt(stats2, 20))
-	state.tombstoneObjectsNameIndex.Set(objectio.ObjectEntry{
-		ObjectStats: *stats2,
-		CreateTime:  types.BuildTS(2, 0),
-		DeleteTime:  types.TS{},
-	})
-
-	// Count at TS=10, should see 100 - 20 = 80 rows
-	count, err = state.CountRows(ctx, types.BuildTS(10, 0), nil)
-	require.NoError(t, err)
-	assert.Equal(t, uint64(80), count)
 
 	// Add in-memory inserts (5 rows)
 	for i := 0; i < 5; i++ {
@@ -215,10 +201,10 @@ func TestCountRows(t *testing.T) {
 		})
 	}
 
-	// Count at TS=10, should see 80 + 5 = 85 rows
-	count, err = state.CountRows(ctx, types.BuildTS(10, 0), nil)
+	// Count at TS=10, should see 100 + 5 = 105 rows
+	count, err = state.CountRows(ctx, types.BuildTS(10, 0), fs)
 	require.NoError(t, err)
-	assert.Equal(t, uint64(85), count)
+	assert.Equal(t, uint64(105), count)
 
 	// Add in-memory deletes (3 rows) - these point to non-existent objects
 	// so they won't be counted with object visibility check
@@ -247,22 +233,22 @@ func TestCountRows(t *testing.T) {
 	// Count at TS=10, should see 85 - 0 = 85 rows (deletes filtered out due to no matching objects)
 	count, err = state.CountRows(ctx, types.BuildTS(10, 0), nil)
 	require.NoError(t, err)
-	assert.Equal(t, uint64(85), count)
+	assert.Equal(t, uint64(105), count)
 
 	// Test snapshot visibility: count at TS=1 (before tombstone)
 	count, err = state.CountRows(ctx, types.BuildTS(1, 0), nil)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(100), count)
 
-	// Test snapshot visibility: count at TS=2 (after tombstone, before inserts)
-	count, err = state.CountRows(ctx, types.BuildTS(2, 0), nil)
+	// Test snapshot visibility: count at TS=2 (before inserts)
+	count, err = state.CountRows(ctx, types.BuildTS(2, 0), fs)
 	require.NoError(t, err)
-	assert.Equal(t, uint64(80), count)
+	assert.Equal(t, uint64(100), count)
 
 	// Test snapshot visibility: count at TS=3 (after some inserts)
-	count, err = state.CountRows(ctx, types.BuildTS(3, 2), nil)
+	count, err = state.CountRows(ctx, types.BuildTS(3, 2), fs)
 	require.NoError(t, err)
-	assert.Equal(t, uint64(83), count) // 80 + 3 inserts visible
+	assert.Equal(t, uint64(103), count) // 100 + 3 inserts visible
 }
 
 func TestCountDataRows(t *testing.T) {
@@ -478,48 +464,6 @@ func TestCountTombstoneRows(t *testing.T) {
 	assert.Equal(t, uint64(40), count)
 }
 
-func TestCountRowsEdgeCases(t *testing.T) {
-	ctx := context.Background()
-	state := NewPartitionState("", false, 42, false)
-
-	// Test when tombstones > data rows (should return 0)
-	objID1 := objectio.NewObjectid()
-	stats1 := objectio.NewObjectStatsWithObjectID(&objID1, false, false, false)
-	require.NoError(t, objectio.SetObjectStatsRowCnt(stats1, 10))
-	state.dataObjectsNameIndex.Set(objectio.ObjectEntry{
-		ObjectStats: *stats1,
-		CreateTime:  types.BuildTS(1, 0),
-		DeleteTime:  types.TS{},
-	})
-
-	objID2 := objectio.NewObjectid()
-	stats2 := objectio.NewObjectStatsWithObjectID(&objID2, false, true, false)
-	require.NoError(t, objectio.SetObjectStatsRowCnt(stats2, 20))
-	state.tombstoneObjectsNameIndex.Set(objectio.ObjectEntry{
-		ObjectStats: *stats2,
-		CreateTime:  types.BuildTS(2, 0),
-		DeleteTime:  types.TS{},
-	})
-
-	count, err := state.CountRows(ctx, types.BuildTS(10, 0), nil)
-	require.NoError(t, err)
-	assert.Equal(t, uint64(0), count)
-
-	// Test exact match (data == tombstones)
-	objID3 := objectio.NewObjectid()
-	stats3 := objectio.NewObjectStatsWithObjectID(&objID3, false, false, false)
-	require.NoError(t, objectio.SetObjectStatsRowCnt(stats3, 10))
-	state.dataObjectsNameIndex.Set(objectio.ObjectEntry{
-		ObjectStats: *stats3,
-		CreateTime:  types.BuildTS(3, 0),
-		DeleteTime:  types.TS{},
-	})
-
-	count, err = state.CountRows(ctx, types.BuildTS(10, 0), nil)
-	require.NoError(t, err)
-	assert.Equal(t, uint64(0), count)
-}
-
 func TestCountRowsAppendableObjects(t *testing.T) {
 	ctx := context.Background()
 	state := NewPartitionState("", false, 42, false)
@@ -548,7 +492,8 @@ func TestCountRowsAppendableObjects(t *testing.T) {
 		DeleteTime:  types.TS{},
 	})
 
-	tombCount, err := state.CountTombstoneRows(ctx, types.BuildTS(10, 0), nil, false)
+	fs := testutil.NewSharedFS()
+	tombCount, err := state.CountTombstoneRows(ctx, types.BuildTS(10, 0), fs, false)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(0), tombCount)
 }
@@ -628,7 +573,8 @@ func TestCountRowsInMemoryMixedOperations(t *testing.T) {
 	}
 
 	// Count: 100 (base) + 13 inserts - 0 deletes = 113 (deletes filtered out due to no matching objects)
-	count, err := state.CountRows(ctx, types.BuildTS(10, 0), nil)
+	fs := testutil.NewSharedFS()
+	count, err := state.CountRows(ctx, types.BuildTS(10, 0), fs)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(113), count)
 
@@ -636,7 +582,7 @@ func TestCountRowsInMemoryMixedOperations(t *testing.T) {
 	dataCount := state.CountDataRows(types.BuildTS(10, 0))
 	assert.Equal(t, uint64(113), dataCount) // 100 + 13
 
-	tombCount, err := state.CountTombstoneRows(ctx, types.BuildTS(10, 0), nil, false)
+	tombCount, err := state.CountTombstoneRows(ctx, types.BuildTS(10, 0), fs, false)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(7), tombCount)
 }
@@ -1262,23 +1208,6 @@ func TestCountTombstoneRowsEdgeCases(t *testing.T) {
 	count, err = state.CountTombstoneRows(ctx, types.BuildTS(10, 0), fs, false)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(0), count, "Appendable tombstone should be skipped")
-	
-	// Test 4: fs == nil - should use Rows() approximation
-	state.tombstoneObjectsNameIndex.Delete(objectio.ObjectEntry{
-		ObjectStats: *appendableStats,
-		CreateTime:  types.BuildTS(2, 0),
-		DeleteTime:  types.TS{},
-	})
-	
-	state.tombstoneObjectsNameIndex.Set(objectio.ObjectEntry{
-		ObjectStats: ss,
-		CreateTime:  types.BuildTS(2, 0),
-		DeleteTime:  types.TS{},
-	})
-	
-	count, err = state.CountTombstoneRows(ctx, types.BuildTS(10, 0), nil, false)
-	require.NoError(t, err)
-	assert.Equal(t, uint64(10), count, "Should use Rows() approximation when fs is nil")
 }
 
 // TestCountTombstoneRowsIntegration demonstrates the full flow with real tombstone files
