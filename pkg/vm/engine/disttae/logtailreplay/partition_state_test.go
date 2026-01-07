@@ -1769,3 +1769,73 @@ func TestCountTombstoneStats_DNCreatedWithCommitTs(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, uint64(10), stats.Rows, "All deletions visible after CreateTime")
 }
+
+// TestCountTombstoneStats_AppendableTombstone tests appendable tombstone objects
+func TestCountTombstoneStats_AppendableTombstone(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	fs := testutil.NewSharedFS()
+	state := NewPartitionState("", false, 42, false)
+
+	// Create a data object
+	dataObjID := objectio.NewObjectid()
+	dataStats := objectio.NewObjectStatsWithObjectID(&dataObjID, false, false, false)
+	require.NoError(t, objectio.SetObjectStatsRowCnt(dataStats, 100))
+	state.dataObjectsNameIndex.Set(objectio.ObjectEntry{
+		ObjectStats: *dataStats,
+		CreateTime:  types.BuildTS(1, 0),
+		DeleteTime:  types.TS{},
+	})
+
+	// Create appendable tombstone (CN created, appendable) at TS=10
+	// Contains deletions from different commit times
+	writer := ioutil.ConstructTombstoneWriter(objectio.HiddenColumnSelection_CommitTS, fs)
+	bat := batch.NewWithSize(3)
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	bat.Vecs[2] = vector.NewVec(types.T_TS.ToType())
+
+	// 5 deletions committed at TS=3
+	for i := 0; i < 5; i++ {
+		row := types.NewRowIDWithObjectIDBlkNumAndRowID(dataObjID, 0, uint32(i))
+		require.NoError(t, vector.AppendFixed[types.Rowid](bat.Vecs[0], row, false, mp))
+		require.NoError(t, vector.AppendFixed[int32](bat.Vecs[1], int32(i), false, mp))
+		require.NoError(t, vector.AppendFixed[types.TS](bat.Vecs[2], types.BuildTS(3, 0), false, mp))
+	}
+
+	// 5 deletions committed at TS=7
+	for i := 5; i < 10; i++ {
+		row := types.NewRowIDWithObjectIDBlkNumAndRowID(dataObjID, 0, uint32(i))
+		require.NoError(t, vector.AppendFixed[types.Rowid](bat.Vecs[0], row, false, mp))
+		require.NoError(t, vector.AppendFixed[int32](bat.Vecs[1], int32(i), false, mp))
+		require.NoError(t, vector.AppendFixed[types.TS](bat.Vecs[2], types.BuildTS(7, 0), false, mp))
+	}
+
+	_, err := writer.WriteBatch(bat)
+	require.NoError(t, err)
+	_, _, err = writer.Sync(ctx)
+	require.NoError(t, err)
+
+	ss := writer.GetObjectStats()
+	// Mark as appendable and CN created
+	state.tombstoneObjectsNameIndex.Set(objectio.ObjectEntry{
+		ObjectStats: ss,
+		CreateTime:  types.BuildTS(10, 0),
+		DeleteTime:  types.TS{},
+	})
+
+	// At TS=9: tombstone not visible yet
+	stats, err := state.CountTombstoneStats(ctx, types.BuildTS(9, 0), fs)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(0), stats.Rows, "Tombstone not visible before CreateTime")
+
+	// At TS=10: tombstone visible, all 10 deletions visible (CommitTs <= 10)
+	stats, err = state.CountTombstoneStats(ctx, types.BuildTS(10, 0), fs)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(10), stats.Rows, "All deletions visible at CreateTime")
+
+	// At TS=15: all 10 deletions still visible
+	stats, err = state.CountTombstoneStats(ctx, types.BuildTS(15, 0), fs)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(10), stats.Rows, "All deletions visible after CreateTime")
+}

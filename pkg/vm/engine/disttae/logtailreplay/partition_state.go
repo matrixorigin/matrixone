@@ -1364,19 +1364,18 @@ func (p *PartitionState) CountTombstoneStats(
 		if !obj.DeleteTime.IsEmpty() && obj.DeleteTime.LE(&snapshot) {
 			continue
 		}
-		if obj.GetAppendable() {
-			continue
-		}
 
-		// Count this object
+		// Count this object (both appendable and non-appendable)
 		stats.ObjectCnt++
 		stats.BlockCnt += int(obj.BlkCnt())
 
 		// Determine if we need to check CommitTs based on object type
-		// - CN created: no need to check CommitTs (all deletes committed before CreateTime)
-		// - DN created: need to check CommitTs (may contain deletes from different times)
+		// - CN created non-appendable: no need to check CommitTs (all deletes committed before CreateTime)
+		// - DN created non-appendable: need to check CommitTs (may contain deletes from different times)
+		// - Appendable (CN created): need to check CommitTs (deletes may be committed at different times)
 		cnCreated := obj.GetCNCreated()
-		needCheckCommitTs := !cnCreated
+		isAppendable := obj.GetAppendable()
+		needCheckCommitTs := !cnCreated || isAppendable
 
 		// Read tombstone file with appropriate hidden columns
 		var hidden objectio.HiddenColumnSelection
