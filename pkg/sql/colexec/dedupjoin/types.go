@@ -172,13 +172,10 @@ func (ctr *container) cleanExprExecutor() {
 }
 
 func (ctr *container) cleanBuf(proc *process.Process) {
-	if ctr.matched != nil && ctr.matched.Count() == 0 {
-		// hash map will free these batches
-		ctr.buf = nil
-		return
-	}
 	for _, bat := range ctr.buf {
-		bat.Clean(proc.GetMPool())
+		if bat != nil && bat != ctr.rbat {
+			bat.Clean(proc.GetMPool())
+		}
 	}
 	ctr.buf = nil
 }
