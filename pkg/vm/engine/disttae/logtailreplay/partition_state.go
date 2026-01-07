@@ -1571,7 +1571,7 @@ func (p *PartitionState) CalculateTableStats(
 	}
 
 	// Calculate visible rows (data rows - deleted rows)
-	visibleRows := dataStats.Rows
+	var visibleRows uint64
 	if tombstoneStats.Rows < dataStats.Rows {
 		visibleRows = dataStats.Rows - tombstoneStats.Rows
 	} else {
