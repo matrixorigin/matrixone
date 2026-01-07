@@ -113,6 +113,7 @@ func getViewSecurityTypeFromContext(ctx CompilerContext) string {
 	if securityType == "INVOKER" {
 		return "INVOKER"
 	}
+	// Default to DEFINER to match SQL SECURITY behavior.
 	return "DEFINER"
 }
 

@@ -6361,6 +6361,7 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 						})
 					}
 				}
+				// Pre-insert nodes are the stable place to find INSERT targets after plan rewrite.
 			} else if node.NodeType == plan.Node_PRE_INSERT ||
 				node.NodeType == plan.Node_PRE_INSERT_UK ||
 				node.NodeType == plan.Node_PRE_INSERT_SK {
@@ -6887,6 +6888,7 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 								}
 
 								viewAllowed := false
+								// System view databases are read-only, skip view privilege checks.
 								if isSystemViewDatabase(viewDb) {
 									viewAllowed = true
 								} else {
