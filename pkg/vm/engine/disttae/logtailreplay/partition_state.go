@@ -1399,8 +1399,7 @@ func (p *PartitionState) CountTombstoneRows(
 		persistedDeletes := containers.NewVectors(len(attrs))
 
 		var readErr error
-		var seenRowIds map[types.Rowid]bool
-		seenRowIds = make(map[types.Rowid]bool, 128) // Always deduplicate across blocks
+		seenRowIds := make(map[types.Rowid]bool, 128) // Always deduplicate across blocks
 
 		objectio.ForeachBlkInObjStatsList(true, nil,
 			func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
@@ -1728,33 +1727,4 @@ func (p *PartitionState) CalculateTableStats(
 		TombstoneObjectCnt: tombstoneStats.ObjectCnt,
 		TombstoneBlockCnt:  tombstoneStats.BlockCnt,
 	}, nil
-}
-
-// countDeletedRows counts how many rowids belong to the given object IDs.
-// Both objIds and rowIds should be sorted for efficient dual-pointer algorithm.
-// Duplicates in rowIds are automatically skipped.
-func countDeletedRows(objIds []types.Objectid, rowIds []types.Rowid) int {
-	var deletedCnt int
-	var i, j int
-
-	for i < len(objIds) && j < len(rowIds) {
-		// Skip duplicates
-		if j > 0 && rowIds[j-1].EQ(&rowIds[j]) {
-			j++
-			continue
-		}
-
-		cmp := rowIds[j].BorrowObjectID().Compare(&objIds[i])
-
-		if cmp == 0 {
-			deletedCnt++
-			j++
-		} else if cmp > 0 {
-			i++
-		} else {
-			j++
-		}
-	}
-
-	return deletedCnt
 }
