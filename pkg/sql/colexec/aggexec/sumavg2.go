@@ -281,11 +281,6 @@ func (exec *sumAvgDecExec[A]) BatchFill(offset int, groups []uint64, vectors []*
 			if sums[y], err = sums[y].Add128(val); err != nil {
 				return err
 			}
-
-			sums[y], err = sums[y].Add128(val)
-			if err != nil {
-				return err
-			}
 			cnts[y] += 1
 		}
 	}
