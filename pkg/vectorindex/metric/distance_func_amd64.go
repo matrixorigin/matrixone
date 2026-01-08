@@ -575,7 +575,7 @@ func CosineDistanceF32(a, b []float32) (float32, error) {
 	}
 
 	similarity := float64(dot) / denominator
-	return 1.0 - similarity, nil
+	return float32(1.0 - similarity), nil
 }
 
 func CosineDistanceF64(a, b []float64) (float64, error) {
