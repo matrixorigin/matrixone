@@ -16,11 +16,11 @@ package fileservice
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	"iter"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/require"
 )
 
@@ -61,7 +61,7 @@ func TestTmpFileServiceGCHandlesNilEntry(t *testing.T) {
 	fs := &TmpFileService{
 		FileService: &errorListFileService{
 			name:    "tmp",
-			listErr: errors.New("list failed"),
+			listErr: moerr.NewInternalErrorNoCtx("list failed"),
 		},
 		apps: make(map[string]*AppFS),
 	}
