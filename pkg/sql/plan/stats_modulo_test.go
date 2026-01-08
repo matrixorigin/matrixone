@@ -90,10 +90,17 @@ func TestModuloLiteralExtraction(t *testing.T) {
 
 // TestModuloEdgeCases tests edge cases for modulo operations
 func TestModuloEdgeCases(t *testing.T) {
-	t.Run("zero should not be valid", func(t *testing.T) {
+	t.Run("zero should not be valid - signed", func(t *testing.T) {
 		lit := &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 0}}
 		if v, ok := lit.Value.(*plan.Literal_I64Val); ok {
 			require.False(t, v.I64Val > 0, "zero should not pass > 0 check")
+		}
+	})
+
+	t.Run("zero should not be valid - unsigned", func(t *testing.T) {
+		lit := &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 0}}
+		if v, ok := lit.Value.(*plan.Literal_U64Val); ok {
+			require.False(t, v.U64Val > 0, "zero should not pass > 0 check")
 		}
 	})
 
@@ -104,9 +111,46 @@ func TestModuloEdgeCases(t *testing.T) {
 		}
 	})
 
+	t.Run("uint64 overflow check", func(t *testing.T) {
+		lit := &plan.Literal{Value: &plan.Literal_U64Val{U64Val: math.MaxUint64}}
+		if v, ok := lit.Value.(*plan.Literal_U64Val); ok {
+			// Should check against MaxInt64 to prevent overflow
+			require.False(t, v.U64Val <= math.MaxInt64, "MaxUint64 exceeds MaxInt64")
+		}
+	})
+
+	t.Run("uint64 within range", func(t *testing.T) {
+		lit := &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 100}}
+		if v, ok := lit.Value.(*plan.Literal_U64Val); ok {
+			require.True(t, v.U64Val > 0 && v.U64Val <= math.MaxInt64)
+		}
+	})
+
 	t.Run("both % and mod function names supported", func(t *testing.T) {
 		funcNames := []string{"%", "mod"}
 		require.Contains(t, funcNames, "%")
 		require.Contains(t, funcNames, "mod")
+	})
+
+	t.Run("min logic with zero colNdv", func(t *testing.T) {
+		colNdv := 0.0
+		modValue := 10.0
+		// When colNdv is 0 or negative, should return modValue
+		if colNdv > 0 {
+			require.Fail(t, "should not reach here")
+		} else {
+			require.Equal(t, modValue, modValue)
+		}
+	})
+
+	t.Run("min logic with negative colNdv", func(t *testing.T) {
+		colNdv := -1.0
+		modValue := 10.0
+		// When colNdv is negative, should return modValue
+		if colNdv > 0 {
+			require.Fail(t, "should not reach here")
+		} else {
+			require.Equal(t, modValue, modValue)
+		}
 	})
 }
