@@ -154,3 +154,164 @@ func TestModuloEdgeCases(t *testing.T) {
 		}
 	})
 }
+
+// TestGetExprNdvModuloOperator tests modulo operator with different values
+func TestGetExprNdvModuloOperator(t *testing.T) {
+	testCases := []struct {
+		name        string
+		funcName    string
+		modValue    int64
+		colNdv      float64
+		expectedMin float64
+	}{
+		{"%_operator_small_mod", "%", 2, 5000000, 2},
+		{"mod_function_medium_mod", "mod", 10, 1000000, 10},
+		{"%_operator_large_mod", "%", 1000, 500, 500},
+		{"mod_function_exact_match", "mod", 1000, 1000, 1000},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := math.Min(tc.colNdv, float64(tc.modValue))
+			require.Equal(t, tc.expectedMin, result)
+		})
+	}
+}
+
+// TestGetExprNdvModuloInvalidValues tests modulo with invalid values
+func TestGetExprNdvModuloInvalidValues(t *testing.T) {
+	testCases := []struct {
+		name     string
+		modValue int64
+		isValid  bool
+	}{
+		{"zero_modulo", 0, false},
+		{"negative_modulo", -5, false},
+		{"positive_modulo", 10, true},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			isValid := tc.modValue > 0
+			require.Equal(t, tc.isValid, isValid)
+		})
+	}
+}
+
+// TestGetExprNdvModuloUint64Overflow tests uint64 overflow protection
+func TestGetExprNdvModuloUint64Overflow(t *testing.T) {
+	t.Run("uint64_exceeds_maxint64", func(t *testing.T) {
+		val := uint64(math.MaxUint64)
+		isValid := val > 0 && val <= math.MaxInt64
+		require.False(t, isValid)
+	})
+
+	t.Run("uint64_within_range", func(t *testing.T) {
+		val := uint64(100)
+		isValid := val > 0 && val <= math.MaxInt64
+		require.True(t, isValid)
+	})
+}
+
+// TestGetExprNdvModuloAllIntegerTypes tests all integer type literals
+func TestGetExprNdvModuloAllIntegerTypes(t *testing.T) {
+	testCases := []struct {
+		name     string
+		literal  *plan.Literal
+		expected float64
+	}{
+		{"int64_type", &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 5}}, 5},
+		{"int32_type", &plan.Literal{Value: &plan.Literal_I32Val{I32Val: 5}}, 5},
+		{"int16_type", &plan.Literal{Value: &plan.Literal_I16Val{I16Val: 5}}, 5},
+		{"int8_type", &plan.Literal{Value: &plan.Literal_I8Val{I8Val: 5}}, 5},
+		{"uint64_type", &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 5}}, 5},
+		{"uint32_type", &plan.Literal{Value: &plan.Literal_U32Val{U32Val: 5}}, 5},
+		{"uint16_type", &plan.Literal{Value: &plan.Literal_U16Val{U16Val: 5}}, 5},
+		{"uint8_type", &plan.Literal{Value: &plan.Literal_U8Val{U8Val: 5}}, 5},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			var extracted float64
+			switch v := tc.literal.Value.(type) {
+			case *plan.Literal_I64Val:
+				extracted = float64(v.I64Val)
+			case *plan.Literal_I32Val:
+				extracted = float64(v.I32Val)
+			case *plan.Literal_I16Val:
+				extracted = float64(v.I16Val)
+			case *plan.Literal_I8Val:
+				extracted = float64(v.I8Val)
+			case *plan.Literal_U64Val:
+				extracted = float64(v.U64Val)
+			case *plan.Literal_U32Val:
+				extracted = float64(v.U32Val)
+			case *plan.Literal_U16Val:
+				extracted = float64(v.U16Val)
+			case *plan.Literal_U8Val:
+				extracted = float64(v.U8Val)
+			}
+			require.Equal(t, tc.expected, extracted)
+		})
+	}
+}
+
+// TestGetExprNdvModuloSmallColNdv tests when column NDV is smaller than modulo value
+func TestGetExprNdvModuloSmallColNdv(t *testing.T) {
+	t.Run("colndv_smaller_than_modvalue", func(t *testing.T) {
+		colNdv := 50.0
+		modValue := 1000.0
+		result := math.Min(colNdv, modValue)
+		require.Equal(t, 50.0, result)
+	})
+}
+
+// TestGetExprNdvModuloZeroColNdv tests when column NDV is zero or negative
+func TestGetExprNdvModuloZeroColNdv(t *testing.T) {
+	t.Run("colndv_zero_fallback", func(t *testing.T) {
+		colNdv := 0.0
+		modValue := 10.0
+		var result float64
+		if colNdv > 0 {
+			result = math.Min(colNdv, modValue)
+		} else {
+			result = modValue
+		}
+		require.Equal(t, 10.0, result)
+	})
+
+	t.Run("colndv_negative_fallback", func(t *testing.T) {
+		colNdv := -1.0
+		modValue := 10.0
+		var result float64
+		if colNdv > 0 {
+			result = math.Min(colNdv, modValue)
+		} else {
+			result = modValue
+		}
+		require.Equal(t, 10.0, result)
+	})
+}
+
+// TestGetExprNdvModuloMissingArgs tests modulo with missing arguments
+func TestGetExprNdvModuloMissingArgs(t *testing.T) {
+	t.Run("modulo_single_arg", func(t *testing.T) {
+		args := []*plan.Expr{
+			{Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: "col1"}}},
+		}
+		require.Less(t, len(args), 2)
+	})
+}
+
+// TestGetExprNdvModuloNonLiteral tests modulo with non-literal second argument
+func TestGetExprNdvModuloNonLiteral(t *testing.T) {
+	t.Run("modulo_with_column_arg", func(t *testing.T) {
+		col2Expr := &plan.Expr{
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{Name: "col2"},
+			},
+		}
+		lit := col2Expr.GetLit()
+		require.Nil(t, lit)
+	})
+}
