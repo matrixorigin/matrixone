@@ -16,17 +16,19 @@ package fileservice
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	"iter"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/require"
 )
 
 type errorListFileService struct {
-	name    string
-	listErr error
+	name      string
+	listErr   error
+	entryName string
+	withEntry bool
 }
 
 func (e *errorListFileService) Name() string { return e.name }
@@ -41,7 +43,11 @@ func (e *errorListFileService) ReadCache(ctx context.Context, vector *IOVector) 
 }
 func (e *errorListFileService) List(ctx context.Context, dirPath string) iter.Seq2[*DirEntry, error] {
 	return func(yield func(*DirEntry, error) bool) {
-		yield(nil, e.listErr)
+		var entry *DirEntry
+		if e.withEntry {
+			entry = &DirEntry{Name: e.entryName}
+		}
+		yield(entry, e.listErr)
 	}
 }
 func (e *errorListFileService) Delete(ctx context.Context, filePaths ...string) error {
@@ -61,7 +67,34 @@ func TestTmpFileServiceGCHandlesNilEntry(t *testing.T) {
 	fs := &TmpFileService{
 		FileService: &errorListFileService{
 			name:    "tmp",
-			listErr: errors.New("list failed"),
+			listErr: moerr.NewInternalErrorNoCtx("list failed"),
+		},
+		apps: make(map[string]*AppFS),
+	}
+	appConfig := &AppConfig{
+		Name: "app",
+		GCFn: func(filePath string, fs FileService) (bool, error) {
+			return false, nil
+		},
+	}
+	app := &AppFS{
+		tmpFS:     fs,
+		appConfig: appConfig,
+	}
+	fs.apps[appConfig.Name] = app
+
+	require.NotPanics(t, func() {
+		fs.gc(context.Background())
+	})
+}
+
+func TestTmpFileServiceGCHandlesErrorWithEntry(t *testing.T) {
+	fs := &TmpFileService{
+		FileService: &errorListFileService{
+			name:      "tmp",
+			listErr:   moerr.NewInternalErrorNoCtx("list failed"),
+			entryName: "file",
+			withEntry: true,
 		},
 		apps: make(map[string]*AppFS),
 	}
