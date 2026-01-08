@@ -139,7 +139,7 @@ func L2DistanceSqFloat32(a, b []float32) (float32, error) {
 	}
 
 	// 2. AVX2 Path (256-bit vectors, 8 elements)
-	if archsimd.X86.AVX2() || archsim.X86.AVX() {
+	if archsimd.X86.AVX2() || archsimd.X86.AVX() {
 		sumVec := archsimd.Float32x8{}
 		for i <= n-8 {
 			va := archsimd.LoadFloat32x8Slice(a[i : i+8])
