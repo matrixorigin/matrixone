@@ -56,6 +56,36 @@ func L2DistanceSq[T types.RealNumbers](v1, v2 []T) (T, error) {
 }
 */
 
+func SumFloat32x16(v archsimd.Float32x16) float32 {
+	var arr [16]float32
+	v.Store(&arr[0])
+	var total float32
+	for _, x := range arr {
+		total += x
+	}
+	return total
+}
+
+func SumFloat32x8(v archsimd.Float32x8) float32 {
+	var arr [8]float32
+	v.Store(&arr[0])
+	var total float32
+	for _, x := range arr {
+		total += x
+	}
+	return total
+}
+
+func SumFloat32x4(v archsimd.Float32x4) float32 {
+	var arr [4]float32
+	v.Store(&arr[0])
+	var total float32
+	for _, x := range arr {
+		total += x
+	}
+	return total
+}
+
 func L2DistanceSqFloat32(a, b []float32) (float32, error) {
 	if len(a) != len(b) {
 		return float32(0), moerr.NewInternalErrorNoCtx("vector dimension not matched")
@@ -75,7 +105,7 @@ func L2DistanceSqFloat32(a, b []float32) (float32, error) {
 			sumVec = diff.MulAdd(diff, sumVec)
 			i += 16
 		}
-		sumSq += sumVec.ReduceAdd()
+		sumSq += SumFloat32x16(sumVec)
 	}
 
 	// 2. AVX2 Path (256-bit vectors, 8 elements)
@@ -88,7 +118,7 @@ func L2DistanceSqFloat32(a, b []float32) (float32, error) {
 			sumVec = diff.MulAdd(diff, sumVec)
 			i += 8
 		}
-		sumSq += sumVec.ReduceAdd()
+		sumSq += SumFloat32x8(sumVec)
 	}
 
 	// 3. AVX Path (128-bit vectors, 4 elements)
@@ -104,7 +134,7 @@ func L2DistanceSqFloat32(a, b []float32) (float32, error) {
 			sumVec = diff.MulAdd(diff, sumVec)
 			i += 4
 		}
-		sumSq += sumVec.ReduceAdd()
+		sumSq += SumFloat32x4(sumVec)
 	}
 
 	// 4. Scalar Tail Path
