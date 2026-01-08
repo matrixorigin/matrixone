@@ -284,8 +284,10 @@ func L1DistanceFloat32(a, b []float32) (float32, error) {
 			va := archsimd.LoadFloat32x16Slice(a[i : i+16])
 			vb := archsimd.LoadFloat32x16Slice(b[i : i+16])
 			// Calculate |va - vb| and add to accumulator
-			diff := va.Sub(vb).Abs()
-			acc = acc.Add(diff)
+			d1 := va.Sub(vb)
+			d2 := vb.Sub(va)
+			absDiff := d1.Max(d2)
+			acc = acc.Add(absDiff)
 			i += 16
 		}
 		sum += SumFloat32x16(acc) // Horizontal sum of the vector
@@ -298,8 +300,10 @@ func L1DistanceFloat32(a, b []float32) (float32, error) {
 		for i <= n-8 {
 			va := archsimd.LoadFloat32x8Slice(a[i : i+8])
 			vb := archsimd.LoadFloat32x8Slice(b[i : i+8])
-			diff := va.Sub(vb).Abs()
-			acc = acc.Add(diff)
+			d1 := va.Sub(vb)
+			d2 := vb.Sub(va)
+			absDiff := d1.Max(d2)
+			acc = acc.Add(absDiff)
 			i += 8
 		}
 		sum += SumFloat32x8(acc)
@@ -327,10 +331,6 @@ func L1DistanceFloat64(a, b []float64) (float64, error) {
 	var total float64
 	i := 0
 
-	// Sign bit mask for float64: 0x7FFFFFFFFFFFFFFF
-	// We use this to clear the sign bit (the MSB)
-	mask64 := math.Float64frombits(0x7FFFFFFFFFFFFFFF)
-
 	// 1. AVX-512 Path: 512-bit registers (8 float64 elements)
 	if archsimd.X86.AVX512() {
 		acc := archsimd.Float64x8{}
@@ -339,8 +339,9 @@ func L1DistanceFloat64(a, b []float64) (float64, error) {
 			va := archsimd.LoadFloat64x8Slice(a[i : i+8])
 			vb := archsimd.LoadFloat64x8Slice(b[i : i+8])
 			// Calculate |va - vb| and accumulate
-			diff := va.Sub(vb)
-			absDiff := diff.And(vMask) // Bitwise AND to clear sign bit
+			d1 := va.Sub(vb)
+			d2 := vb.Sub(va)
+			absDiff := d1.Max(d2)
 			acc = acc.Add(absDiff)
 			i += 8
 		}
@@ -354,8 +355,9 @@ func L1DistanceFloat64(a, b []float64) (float64, error) {
 		for i <= n-4 {
 			va := archsimd.LoadFloat64x4Slice(a[i : i+4])
 			vb := archsimd.LoadFloat64x4Slice(b[i : i+4])
-			diff := va.Sub(vb)
-			absDiff := diff.And(vMask)
+			d1 := va.Sub(vb)
+			d2 := vb.Sub(va)
+			absDiff := d1.Max(d2)
 			acc = acc.Add(absDiff)
 			i += 4
 		}
