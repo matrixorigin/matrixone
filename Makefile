@@ -78,6 +78,7 @@ ifneq ($(GOARCH)$(TARGET_ARCH)$(GOOS)$(TARGET_OS),)
 $(error cross compilation has been disabled)
 endif
 
+
 ###############################################################################
 # default target
 ###############################################################################
@@ -182,6 +183,13 @@ RACE_OPT :=
 DEBUG_OPT :=
 CGO_DEBUG_OPT :=
 TAGS :=
+GOTAGS :=
+GOEXPERIMENT_OPT :=
+
+ifeq ("$(UNAME_M)", "x86_64")
+	GOEXPERIMENT_OPT=GOEXPERIMENT=simd
+	TAGS += amd64
+endif
 
 ifeq ($(MO_CL_CUDA),1)
   ifeq ($(CONDA_PREFIX),)
@@ -191,11 +199,11 @@ ifeq ($(MO_CL_CUDA),1)
 	CUVS_LDFLAGS := -L$(CONDA_PREFIX)/envs/go/lib -lcuvs -lcuvs_c
 	CUDA_CFLAGS := -I/usr/local/cuda/include $(CUVS_CFLAGS)
 	CUDA_LDFLAGS := -L/usr/local/cuda/lib64/stubs -lcuda -L/usr/local/cuda/lib64 -lcudart $(CUVS_LDFLAGS) -lstdc++
-	TAGS += -tags "gpu"
+	TAGS += gpu
 endif
 
 ifeq ($(TYPECHECK),1)
-	TAGS += -tags "typecheck"
+	TAGS += typecheck
 endif
 
 CGO_OPTS :=CGO_CFLAGS="-I$(THIRDPARTIES_INSTALL_DIR)/include $(CUDA_CFLAGS)"
@@ -207,6 +215,10 @@ endif
 
 ifeq ($(GOBUILD_OPT),)
 	GOBUILD_OPT :=
+endif
+
+ifneq ($(TAGS),)
+	GOTAGS := -tags "$(TAGS)"
 endif
 
 .PHONY: cgo
@@ -222,7 +234,7 @@ thirdparties:
 .PHONY: build
 build: config cgo thirdparties
 	$(info [Build binary])
-	$(CGO_OPTS) go build $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) $(GOBUILD_OPT) -o $(BIN_NAME) ./cmd/mo-service
+	$(GOEXPERIMENT_OPT) $(CGO_OPTS) go build $(GOTAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) $(GOBUILD_OPT) -o $(BIN_NAME) ./cmd/mo-service
 
 # https://wiki.musl-libc.org/getting-started.html
 # https://musl.cc/
@@ -248,11 +260,11 @@ musl-thirdparties: musl-install
 .PHONY: musl
 musl: override CGO_OPTS += CC=$(MUSL_CC)
 musl: override GOLDFLAGS:=-ldflags="--linkmode 'external' --extldflags '-static -L$(THIRDPARTIES_INSTALL_DIR)/lib -lstdc++ -Wl,-rpath,\$${ORIGIN}/lib' $(VERSION_INFO)"
-musl: override TAGS := -tags musl
+musl: override GOTAGS := -tags musl
 musl: musl-install musl-cgo config musl-thirdparties
 musl:
 	$(info [Build binary(musl)])
-	$(CGO_OPTS) go build $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) $(GOBUILD_OPT) -o $(BIN_NAME) ./cmd/mo-service
+	$(CGO_OPTS) go build $(GOTAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) $(GOBUILD_OPT) -o $(BIN_NAME) ./cmd/mo-service
 
 # build mo-tool
 .PHONY: mo-tool
