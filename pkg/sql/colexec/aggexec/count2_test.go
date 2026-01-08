@@ -132,7 +132,6 @@ func TestCountColumnDistinctExec(t *testing.T) {
 	testAggExec(t, makeCountColumnDistinctExec, expectedCount{count: 11, count20k: 36000})
 }
 
-// TestCountStarExec tests the countStarExec implementation
 func testAggExec(t *testing.T,
 	makeAgg func(t *testing.T, mp *mpool.MPool, typ types.Type) AggFuncExec,
 	expected expectedCount) {
@@ -424,6 +423,10 @@ func testAggExec(t *testing.T,
 				require.NoError(t, execa.BatchFill(5, groups[5:], vecs[i:i+1]))
 				require.NoError(t, execa.BatchFill(0, groups[:5], nvecs[i:i+1]))
 				require.NoError(t, execa.BatchFill(5, groups[5:], nvecs[i:i+1]))
+			}
+
+			if v, ok := execa.(*countColumnExec); ok {
+				v.aggExec.checkArgsSkl()
 			}
 
 			// save intermediate result of chunk 1, and 2

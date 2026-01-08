@@ -32,6 +32,10 @@ func UnsafeToBytes[P *T, T any](p P) []byte {
 	return unsafe.Slice((*byte)(unsafe.Pointer(p)), unsafe.Sizeof(zero))
 }
 
+func UnsafeFromBytes[T any](bs []byte) *T {
+	return (*T)(unsafe.Pointer(&bs[0]))
+}
+
 // Wrapper of unsafe.Slice
 func UnsafeToBytesWithLength[P *T, T any](p P, length int) []byte {
 	return unsafe.Slice((*byte)(unsafe.Pointer(p)), length)
