@@ -51,7 +51,7 @@ type LoopJoin struct {
 	ctr        container
 	RightTypes []types.Type
 	NonEqCond  *plan.Expr
-	Result     []colexec.ResultPos
+	ResultCols []colexec.ResultPos
 	JoinMapTag int32
 	JoinType   plan.Node_JoinType
 	MarkPos    int

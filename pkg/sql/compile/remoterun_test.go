@@ -35,7 +35,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/apply"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dedupjoin"
@@ -66,9 +65,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertunique"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shufflebuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/source"
@@ -179,20 +175,11 @@ func Test_convertToPipelineInstruction(t *testing.T) {
 		&preinsert.PreInsert{},
 		&lockop.LockOp{},
 		&preinsertunique.PreInsertUnique{},
-		&anti.AntiJoin{
-			Conditions: [][]*plan.Expr{nil, nil},
-		},
 		&shuffle.Shuffle{},
 		&dispatch.Dispatch{},
 		&group.Group{},
 		&hashjoin.HashJoin{
 			EqConds: [][]*plan.Expr{nil, nil},
-		},
-		&rightsemi.RightSemi{
-			Conditions: [][]*plan.Expr{nil, nil},
-		},
-		&rightanti.RightAnti{
-			Conditions: [][]*plan.Expr{nil, nil},
 		},
 		&limit.Limit{},
 		&loopjoin.LoopJoin{},
@@ -201,9 +188,6 @@ func Test_convertToPipelineInstruction(t *testing.T) {
 		&product.Product{},
 		&projection.Projection{},
 		&filter.Filter{},
-		&semi.SemiJoin{
-			Conditions: [][]*plan.Expr{nil, nil},
-		},
 		&top.Top{},
 		&intersect.Intersect{},
 		&minus.Minus{},
@@ -270,13 +254,10 @@ func Test_convertToVmInstruction(t *testing.T) {
 		{Op: int32(vm.LockOp), LockOp: &pipeline.LockOp{}},
 		{Op: int32(vm.PreInsertUnique), PreInsertUnique: &pipeline.PreInsertUnique{}},
 		{Op: int32(vm.OnDuplicateKey), OnDuplicateKey: &pipeline.OnDuplicateKey{}},
-		{Op: int32(vm.Anti), Anti: &pipeline.AntiJoin{}},
 		{Op: int32(vm.Shuffle), Shuffle: &pipeline.Shuffle{}},
 		{Op: int32(vm.Dispatch), Dispatch: &pipeline.Dispatch{}},
 		{Op: int32(vm.Group), Agg: &pipeline.Group{}},
 		{Op: int32(vm.HashJoin), HashJoin: &pipeline.HashJoin{}},
-		{Op: int32(vm.RightSemi), RightSemiJoin: &pipeline.RightSemiJoin{}},
-		{Op: int32(vm.RightAnti), RightAntiJoin: &pipeline.RightAntiJoin{}},
 		{Op: int32(vm.Limit), Limit: plan.MakePlan2Int64ConstExprWithType(1)},
 		{Op: int32(vm.LoopJoin), LoopJoin: &pipeline.LoopJoin{}},
 		{Op: int32(vm.Offset), Offset: plan.MakePlan2Int64ConstExprWithType(0)},
@@ -285,11 +266,10 @@ func Test_convertToVmInstruction(t *testing.T) {
 		{Op: int32(vm.ProductL2), ProductL2: &pipeline.ProductL2{}},
 		{Op: int32(vm.Projection), ProjectList: []*plan.Expr{}},
 		{Op: int32(vm.Filter), Filters: []*plan.Expr{}, RuntimeFilters: []*plan.Expr{}},
-		{Op: int32(vm.Semi), SemiJoin: &pipeline.SemiJoin{}},
 		{Op: int32(vm.Top), Limit: plan.MakePlan2Int64ConstExprWithType(1)},
-		{Op: int32(vm.Intersect), Anti: &pipeline.AntiJoin{}},
-		{Op: int32(vm.IntersectAll), Anti: &pipeline.AntiJoin{}},
-		{Op: int32(vm.Minus), Anti: &pipeline.AntiJoin{}},
+		{Op: int32(vm.Intersect), SetOp: &pipeline.SetOp{}},
+		{Op: int32(vm.IntersectAll), SetOp: &pipeline.SetOp{}},
+		{Op: int32(vm.Minus), SetOp: &pipeline.SetOp{}},
 		{Op: int32(vm.Connector), Connect: &pipeline.Connector{}},
 		{Op: int32(vm.Merge), Merge: &pipeline.Merge{}},
 		{Op: int32(vm.MergeRecursive)},
