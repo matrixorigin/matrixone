@@ -189,9 +189,16 @@ CGO_DEBUG_OPT :=
 TAGS :=
 GOTAGS :=
 GOEXPERIMENT_OPT :=
+AVX512 := 
+ifeq ($(UNAME_S),linux)
+	AVX512 := $(shell lscpu | grep avx512)
+endif
 
 ifeq ("$(UNAME_M)", "x86_64")
 	GOEXPERIMENT_OPT=GOEXPERIMENT=simd
+  ifneq ($(AVX512),)
+	GOEXPERIMENT_OPT += GOAMD64=v4
+  endif
 endif
 
 ifeq ($(MO_CL_CUDA),1)
