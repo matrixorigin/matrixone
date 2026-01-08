@@ -1894,6 +1894,7 @@ func (p *PartitionState) countTombstoneStatsWithMerge(
 
 	// Add in-memory tombstones as an iterator
 	inMemIter := p.inMemTombstoneRowIdIndex.Iter()
+	defer inMemIter.Release()
 	inMemIt := &tombstoneBlockIterator{
 		isInMemory: true,
 		inMemIter:  inMemIter,
