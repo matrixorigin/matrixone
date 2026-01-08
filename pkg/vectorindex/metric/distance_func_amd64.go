@@ -295,7 +295,7 @@ func L1DistanceFloat32(a, b []float32) (float32, error) {
 
 	// 2. AVX2/AVX Path (8 elements per iteration)
 	// Most modern archsimd implementations handle AVX2/AVX via Float32x8
-	if i <= n-8 && archsimd.X86.AVX2() {
+	if i <= n-8 && archsimd.X86.AVX2() || archsimd.X86.AVX() {
 		acc := archsimd.LoadFloat32x8Slice(make([]float32, 8))
 		for i <= n-8 {
 			va := archsimd.LoadFloat32x8Slice(a[i : i+8])
