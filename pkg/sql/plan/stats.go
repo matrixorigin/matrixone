@@ -572,7 +572,8 @@ func getExprNdv(expr *plan.Expr, builder *QueryBuilder) float64 {
 				if colNdv > 0 {
 					return math.Min(colNdv, modValue)
 				}
-				return modValue
+				// Unknown NDV should remain unknown, not become a small certain value
+				return colNdv
 			}
 			// Invalid modValue (zero, negative, or overflow), fallback to column NDV
 			return getExprNdv(exprImpl.F.Args[0], builder)

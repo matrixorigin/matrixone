@@ -582,7 +582,8 @@ func TestGetExprNdv(t *testing.T) {
 			},
 		}
 		ndv := getExprNdv(expr, builder)
-		require.Equal(t, 10.0, ndv)
+		// Unknown NDV should remain unknown
+		require.Equal(t, -1.0, ndv)
 	})
 
 	t.Run("mod with i32 literal", func(t *testing.T) {
@@ -598,7 +599,7 @@ func TestGetExprNdv(t *testing.T) {
 			},
 		}
 		ndv := getExprNdv(expr, builder)
-		require.Equal(t, 5.0, ndv)
+		require.Equal(t, -1.0, ndv)
 	})
 
 	t.Run("mod with i16 literal", func(t *testing.T) {
@@ -614,7 +615,7 @@ func TestGetExprNdv(t *testing.T) {
 			},
 		}
 		ndv := getExprNdv(expr, builder)
-		require.Equal(t, 3.0, ndv)
+		require.Equal(t, -1.0, ndv)
 	})
 
 	t.Run("mod with i8 literal", func(t *testing.T) {
@@ -630,7 +631,7 @@ func TestGetExprNdv(t *testing.T) {
 			},
 		}
 		ndv := getExprNdv(expr, builder)
-		require.Equal(t, 2.0, ndv)
+		require.Equal(t, -1.0, ndv)
 	})
 
 	t.Run("mod with u64 literal", func(t *testing.T) {
@@ -646,7 +647,7 @@ func TestGetExprNdv(t *testing.T) {
 			},
 		}
 		ndv := getExprNdv(expr, builder)
-		require.Equal(t, 100.0, ndv)
+		require.Equal(t, -1.0, ndv)
 	})
 
 	t.Run("mod with u32 literal", func(t *testing.T) {
@@ -662,7 +663,7 @@ func TestGetExprNdv(t *testing.T) {
 			},
 		}
 		ndv := getExprNdv(expr, builder)
-		require.Equal(t, 50.0, ndv)
+		require.Equal(t, -1.0, ndv)
 	})
 
 	t.Run("mod with u16 literal", func(t *testing.T) {
@@ -678,7 +679,7 @@ func TestGetExprNdv(t *testing.T) {
 			},
 		}
 		ndv := getExprNdv(expr, builder)
-		require.Equal(t, 20.0, ndv)
+		require.Equal(t, -1.0, ndv)
 	})
 
 	t.Run("mod with u8 literal", func(t *testing.T) {
@@ -694,7 +695,7 @@ func TestGetExprNdv(t *testing.T) {
 			},
 		}
 		ndv := getExprNdv(expr, builder)
-		require.Equal(t, 7.0, ndv)
+		require.Equal(t, -1.0, ndv)
 	})
 
 	t.Run("mod with negative literal", func(t *testing.T) {
