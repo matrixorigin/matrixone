@@ -1390,12 +1390,12 @@ func (p *PartitionState) CountTombstoneStats(
 	// - 3 objects, 100M rows: use merge (1 GB map would be risky)
 	// - 100 objects, 1M rows: use merge (many objects, likely concurrent queries)
 	// - 2 objects, 1M rows: use map (20 MB, fast and safe)
-	
+
 	// Single object without in-memory tombstones: use linear deduplication
 	if len(visibleObjects) == 1 && p.inMemTombstoneRowIdIndex.Len() == 0 {
 		return p.countTombstoneStatsLinear(ctx, snapshot, fs, visibleObjects[0], stats)
 	}
-	
+
 	useMerge := len(visibleObjects) >= 4 && estimatedRows > 5000000 || estimatedRows > 50000000
 
 	if useMerge {
