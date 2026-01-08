@@ -511,18 +511,18 @@ func TestCalcNodeDOP_DistinctAggregationWithNilStats(t *testing.T) {
 func TestGetExprNdv(t *testing.T) {
 	ctx := context.Background()
 	mockCtx := &MockCompilerContext{ctx: ctx}
-	builder := NewQueryBuilder(plan.Query_SELECT, mockCtx, false, false)
+	builder := NewQueryBuilder(planpb.Query_SELECT, mockCtx, false, false)
 
 	// Setup test table with stats
-	builder.qry.Nodes = append(builder.qry.Nodes, &plan.Node{
-		NodeType: plan.Node_TABLE_SCAN,
-		Stats: &plan.Stats{
+	builder.qry.Nodes = append(builder.qry.Nodes, &planpb.Node{
+		NodeType: planpb.Node_TABLE_SCAN,
+		Stats: &planpb.Stats{
 			TableCnt: 1000,
 		},
 	})
 
 	// Mock column stats
-	colRef := &plan.ColRef{
+	colRef := &planpb.ColRef{
 		RelPos: 0,
 		ColPos: 0,
 		Name:   "test_col",
@@ -533,18 +533,18 @@ func TestGetExprNdv(t *testing.T) {
 		Cols: []*ColDef{
 			{
 				Name: "test_col",
-				Typ:  plan.Type{Id: int32(types.T_int64)},
+				Typ:  planpb.Type{Id: int32(types.T_int64)},
 			},
 		},
 	}
 
 	t.Run("year function", func(t *testing.T) {
-		expr := &plan.Expr{
-			Expr: &plan.Expr_F{
-				F: &plan.Function{
-					Func: &plan.ObjectRef{ObjName: "year"},
-					Args: []*plan.Expr{
-						{Expr: &plan.Expr_Col{Col: colRef}},
+		expr := &planpb.Expr{
+			Expr: &planpb.Expr_F{
+				F: &planpb.Function{
+					Func: &planpb.ObjectRef{ObjName: "year"},
+					Args: []*planpb.Expr{
+						{Expr: &planpb.Expr_Col{Col: colRef}},
 					},
 				},
 			},
@@ -555,12 +555,12 @@ func TestGetExprNdv(t *testing.T) {
 	})
 
 	t.Run("substring function", func(t *testing.T) {
-		expr := &plan.Expr{
-			Expr: &plan.Expr_F{
-				F: &plan.Function{
-					Func: &plan.ObjectRef{ObjName: "substring"},
-					Args: []*plan.Expr{
-						{Expr: &plan.Expr_Col{Col: colRef}},
+		expr := &planpb.Expr{
+			Expr: &planpb.Expr_F{
+				F: &planpb.Function{
+					Func: &planpb.ObjectRef{ObjName: "substring"},
+					Args: []*planpb.Expr{
+						{Expr: &planpb.Expr_Col{Col: colRef}},
 					},
 				},
 			},
@@ -570,13 +570,13 @@ func TestGetExprNdv(t *testing.T) {
 	})
 
 	t.Run("mod with i64 literal", func(t *testing.T) {
-		expr := &plan.Expr{
-			Expr: &plan.Expr_F{
-				F: &plan.Function{
-					Func: &plan.ObjectRef{ObjName: "%"},
-					Args: []*plan.Expr{
-						{Expr: &plan.Expr_Col{Col: colRef}},
-						{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 10}}}},
+		expr := &planpb.Expr{
+			Expr: &planpb.Expr_F{
+				F: &planpb.Function{
+					Func: &planpb.ObjectRef{ObjName: "%"},
+					Args: []*planpb.Expr{
+						{Expr: &planpb.Expr_Col{Col: colRef}},
+						{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: 10}}}},
 					},
 				},
 			},
@@ -586,13 +586,13 @@ func TestGetExprNdv(t *testing.T) {
 	})
 
 	t.Run("mod with i32 literal", func(t *testing.T) {
-		expr := &plan.Expr{
-			Expr: &plan.Expr_F{
-				F: &plan.Function{
-					Func: &plan.ObjectRef{ObjName: "mod"},
-					Args: []*plan.Expr{
-						{Expr: &plan.Expr_Col{Col: colRef}},
-						{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I32Val{I32Val: 5}}}},
+		expr := &planpb.Expr{
+			Expr: &planpb.Expr_F{
+				F: &planpb.Function{
+					Func: &planpb.ObjectRef{ObjName: "mod"},
+					Args: []*planpb.Expr{
+						{Expr: &planpb.Expr_Col{Col: colRef}},
+						{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I32Val{I32Val: 5}}}},
 					},
 				},
 			},
@@ -602,13 +602,13 @@ func TestGetExprNdv(t *testing.T) {
 	})
 
 	t.Run("mod with i16 literal", func(t *testing.T) {
-		expr := &plan.Expr{
-			Expr: &plan.Expr_F{
-				F: &plan.Function{
-					Func: &plan.ObjectRef{ObjName: "%"},
-					Args: []*plan.Expr{
-						{Expr: &plan.Expr_Col{Col: colRef}},
-						{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I16Val{I16Val: 3}}}},
+		expr := &planpb.Expr{
+			Expr: &planpb.Expr_F{
+				F: &planpb.Function{
+					Func: &planpb.ObjectRef{ObjName: "%"},
+					Args: []*planpb.Expr{
+						{Expr: &planpb.Expr_Col{Col: colRef}},
+						{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I16Val{I16Val: 3}}}},
 					},
 				},
 			},
@@ -618,13 +618,13 @@ func TestGetExprNdv(t *testing.T) {
 	})
 
 	t.Run("mod with i8 literal", func(t *testing.T) {
-		expr := &plan.Expr{
-			Expr: &plan.Expr_F{
-				F: &plan.Function{
-					Func: &plan.ObjectRef{ObjName: "%"},
-					Args: []*plan.Expr{
-						{Expr: &plan.Expr_Col{Col: colRef}},
-						{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I8Val{I8Val: 2}}}},
+		expr := &planpb.Expr{
+			Expr: &planpb.Expr_F{
+				F: &planpb.Function{
+					Func: &planpb.ObjectRef{ObjName: "%"},
+					Args: []*planpb.Expr{
+						{Expr: &planpb.Expr_Col{Col: colRef}},
+						{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I8Val{I8Val: 2}}}},
 					},
 				},
 			},
@@ -634,13 +634,13 @@ func TestGetExprNdv(t *testing.T) {
 	})
 
 	t.Run("mod with u64 literal", func(t *testing.T) {
-		expr := &plan.Expr{
-			Expr: &plan.Expr_F{
-				F: &plan.Function{
-					Func: &plan.ObjectRef{ObjName: "%"},
-					Args: []*plan.Expr{
-						{Expr: &plan.Expr_Col{Col: colRef}},
-						{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 100}}}},
+		expr := &planpb.Expr{
+			Expr: &planpb.Expr_F{
+				F: &planpb.Function{
+					Func: &planpb.ObjectRef{ObjName: "%"},
+					Args: []*planpb.Expr{
+						{Expr: &planpb.Expr_Col{Col: colRef}},
+						{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_U64Val{U64Val: 100}}}},
 					},
 				},
 			},
@@ -650,13 +650,13 @@ func TestGetExprNdv(t *testing.T) {
 	})
 
 	t.Run("mod with u32 literal", func(t *testing.T) {
-		expr := &plan.Expr{
-			Expr: &plan.Expr_F{
-				F: &plan.Function{
-					Func: &plan.ObjectRef{ObjName: "%"},
-					Args: []*plan.Expr{
-						{Expr: &plan.Expr_Col{Col: colRef}},
-						{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U32Val{U32Val: 50}}}},
+		expr := &planpb.Expr{
+			Expr: &planpb.Expr_F{
+				F: &planpb.Function{
+					Func: &planpb.ObjectRef{ObjName: "%"},
+					Args: []*planpb.Expr{
+						{Expr: &planpb.Expr_Col{Col: colRef}},
+						{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_U32Val{U32Val: 50}}}},
 					},
 				},
 			},
@@ -666,13 +666,13 @@ func TestGetExprNdv(t *testing.T) {
 	})
 
 	t.Run("mod with u16 literal", func(t *testing.T) {
-		expr := &plan.Expr{
-			Expr: &plan.Expr_F{
-				F: &plan.Function{
-					Func: &plan.ObjectRef{ObjName: "%"},
-					Args: []*plan.Expr{
-						{Expr: &plan.Expr_Col{Col: colRef}},
-						{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U16Val{U16Val: 20}}}},
+		expr := &planpb.Expr{
+			Expr: &planpb.Expr_F{
+				F: &planpb.Function{
+					Func: &planpb.ObjectRef{ObjName: "%"},
+					Args: []*planpb.Expr{
+						{Expr: &planpb.Expr_Col{Col: colRef}},
+						{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_U16Val{U16Val: 20}}}},
 					},
 				},
 			},
@@ -682,13 +682,13 @@ func TestGetExprNdv(t *testing.T) {
 	})
 
 	t.Run("mod with u8 literal", func(t *testing.T) {
-		expr := &plan.Expr{
-			Expr: &plan.Expr_F{
-				F: &plan.Function{
-					Func: &plan.ObjectRef{ObjName: "%"},
-					Args: []*plan.Expr{
-						{Expr: &plan.Expr_Col{Col: colRef}},
-						{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U8Val{U8Val: 7}}}},
+		expr := &planpb.Expr{
+			Expr: &planpb.Expr_F{
+				F: &planpb.Function{
+					Func: &planpb.ObjectRef{ObjName: "%"},
+					Args: []*planpb.Expr{
+						{Expr: &planpb.Expr_Col{Col: colRef}},
+						{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_U8Val{U8Val: 7}}}},
 					},
 				},
 			},
@@ -698,13 +698,13 @@ func TestGetExprNdv(t *testing.T) {
 	})
 
 	t.Run("mod with negative literal", func(t *testing.T) {
-		expr := &plan.Expr{
-			Expr: &plan.Expr_F{
-				F: &plan.Function{
-					Func: &plan.ObjectRef{ObjName: "%"},
-					Args: []*plan.Expr{
-						{Expr: &plan.Expr_Col{Col: colRef}},
-						{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: -5}}}},
+		expr := &planpb.Expr{
+			Expr: &planpb.Expr_F{
+				F: &planpb.Function{
+					Func: &planpb.ObjectRef{ObjName: "%"},
+					Args: []*planpb.Expr{
+						{Expr: &planpb.Expr_Col{Col: colRef}},
+						{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: -5}}}},
 					},
 				},
 			},
@@ -715,13 +715,13 @@ func TestGetExprNdv(t *testing.T) {
 	})
 
 	t.Run("mod with non-literal", func(t *testing.T) {
-		expr := &plan.Expr{
-			Expr: &plan.Expr_F{
-				F: &plan.Function{
-					Func: &plan.ObjectRef{ObjName: "%"},
-					Args: []*plan.Expr{
-						{Expr: &plan.Expr_Col{Col: colRef}},
-						{Expr: &plan.Expr_Col{Col: colRef}},
+		expr := &planpb.Expr{
+			Expr: &planpb.Expr_F{
+				F: &planpb.Function{
+					Func: &planpb.ObjectRef{ObjName: "%"},
+					Args: []*planpb.Expr{
+						{Expr: &planpb.Expr_Col{Col: colRef}},
+						{Expr: &planpb.Expr_Col{Col: colRef}},
 					},
 				},
 			},
@@ -732,12 +732,12 @@ func TestGetExprNdv(t *testing.T) {
 	})
 
 	t.Run("mod with single arg", func(t *testing.T) {
-		expr := &plan.Expr{
-			Expr: &plan.Expr_F{
-				F: &plan.Function{
-					Func: &plan.ObjectRef{ObjName: "%"},
-					Args: []*plan.Expr{
-						{Expr: &plan.Expr_Col{Col: colRef}},
+		expr := &planpb.Expr{
+			Expr: &planpb.Expr_F{
+				F: &planpb.Function{
+					Func: &planpb.ObjectRef{ObjName: "%"},
+					Args: []*planpb.Expr{
+						{Expr: &planpb.Expr_Col{Col: colRef}},
 					},
 				},
 			},
@@ -748,12 +748,12 @@ func TestGetExprNdv(t *testing.T) {
 	})
 
 	t.Run("default function", func(t *testing.T) {
-		expr := &plan.Expr{
-			Expr: &plan.Expr_F{
-				F: &plan.Function{
-					Func: &plan.ObjectRef{ObjName: "abs"},
-					Args: []*plan.Expr{
-						{Expr: &plan.Expr_Col{Col: colRef}},
+		expr := &planpb.Expr{
+			Expr: &planpb.Expr_F{
+				F: &planpb.Function{
+					Func: &planpb.ObjectRef{ObjName: "abs"},
+					Args: []*planpb.Expr{
+						{Expr: &planpb.Expr_Col{Col: colRef}},
 					},
 				},
 			},
@@ -764,17 +764,17 @@ func TestGetExprNdv(t *testing.T) {
 	})
 
 	t.Run("column reference", func(t *testing.T) {
-		expr := &plan.Expr{
-			Expr: &plan.Expr_Col{Col: colRef},
+		expr := &planpb.Expr{
+			Expr: &planpb.Expr_Col{Col: colRef},
 		}
 		ndv := getExprNdv(expr, builder)
 		require.True(t, ndv > 0 || ndv == -1)
 	})
 
 	t.Run("unsupported expr type", func(t *testing.T) {
-		expr := &plan.Expr{
-			Expr: &plan.Expr_Lit{
-				Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 42}},
+		expr := &planpb.Expr{
+			Expr: &planpb.Expr_Lit{
+				Lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: 42}},
 			},
 		}
 		ndv := getExprNdv(expr, builder)
