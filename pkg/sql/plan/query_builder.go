@@ -2533,38 +2533,6 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 const NameGroupConcat = "group_concat"
 const NameClusterCenters = "cluster_centers"
 
-func (bc *BindContext) generateForceWinSpecList() ([]*plan.Expr, error) {
-	windowsSpecList := make([]*plan.Expr, 0, len(bc.aggregates))
-	j := 0
-
-	if len(bc.windows) < 1 {
-		panic("no winspeclist to be used to force")
-	}
-
-	for i := range bc.aggregates {
-		windowExpr := DeepCopyExpr(bc.windows[j])
-		windowSpec := windowExpr.GetW()
-		if windowSpec == nil {
-			panic("no winspeclist to be used to force")
-		}
-		windowSpec.WindowFunc = DeepCopyExpr(bc.aggregates[i])
-		windowExpr.Typ = bc.aggregates[i].Typ
-		windowSpec.Name = bc.aggregates[i].GetF().Func.ObjName
-
-		if windowSpec.Name == NameGroupConcat {
-			if j < len(bc.windows)-1 {
-				j++
-			}
-			// NOTE: no need to include NameClusterCenters
-		} else {
-			windowSpec.OrderBy = nil
-		}
-		windowsSpecList = append(windowsSpecList, windowExpr)
-	}
-
-	return windowsSpecList, nil
-}
-
 func (builder *QueryBuilder) bindNoRecursiveCte(
 	ctx *BindContext,
 	s *tree.Select,
@@ -3128,29 +3096,35 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		}
 	}
 
-	if ctx.forceWindows {
-		ctx.tmpGroups = ctx.groups
-		ctx.windows, _ = ctx.generateForceWinSpecList()
-		ctx.aggregates = nil
-		ctx.groups = nil
-
-		for i := range ctx.projects {
-			ctx.projects[i] = DeepProcessExprForGroupConcat(ctx.projects[i], ctx)
-		}
-
-		for i := range boundHavingList {
-			boundHavingList[i] = DeepProcessExprForGroupConcat(boundHavingList[i], ctx)
-		}
-
-		for i := range boundOrderBys {
-			boundOrderBys[i].Expr = DeepProcessExprForGroupConcat(boundOrderBys[i].Expr, ctx)
-		}
-
-	}
-
 	// FIXME: delete this when SINGLE join is ready
 	if len(ctx.groups) == 0 && len(ctx.aggregates) > 0 {
 		ctx.hasSingleRow = true
+	}
+
+	// For group_concat with ORDER BY, we need to sort the data before aggregation.
+	// The sort key should be: GROUP BY columns (if any) + ORDER BY columns.
+	// This ensures that within each group, the data arrives in the correct order.
+	if len(ctx.groupConcatOrderBys) > 0 && (len(ctx.groups) > 0 || len(ctx.aggregates) > 0) {
+		var sortSpecs []*plan.OrderBySpec
+
+		// First, add GROUP BY columns to sort key (ASC by default)
+		// This ensures data is grouped together before applying group_concat order
+		for _, groupExpr := range ctx.groups {
+			sortSpecs = append(sortSpecs, &plan.OrderBySpec{
+				Expr: DeepCopyExpr(groupExpr),
+				Flag: plan.OrderBySpec_ASC,
+			})
+		}
+
+		// Then, add group_concat ORDER BY columns
+		sortSpecs = append(sortSpecs, ctx.groupConcatOrderBys...)
+
+		// Insert Sort node before Agg
+		nodeID = builder.appendNode(&plan.Node{
+			NodeType: plan.Node_SORT,
+			Children: []int32{nodeID},
+			OrderBy:  sortSpecs,
+		}, ctx)
 	}
 
 	// append AGG node or SAMPLE node
@@ -3966,17 +3940,15 @@ func (builder *QueryBuilder) appendAggNode(
 		return
 	}
 
-	if !ctx.forceWindows {
-		nodeID = builder.appendNode(&plan.Node{
-			NodeType:     plan.Node_AGG,
-			Children:     []int32{nodeID},
-			GroupBy:      ctx.groups,
-			GroupingFlag: ctx.groupingFlag,
-			AggList:      ctx.aggregates,
-			BindingTags:  []int32{ctx.groupTag, ctx.aggregateTag},
-			SpillMem:     builder.aggSpillMem,
-		}, ctx)
-	}
+	nodeID = builder.appendNode(&plan.Node{
+		NodeType:     plan.Node_AGG,
+		Children:     []int32{nodeID},
+		GroupBy:      ctx.groups,
+		GroupingFlag: ctx.groupingFlag,
+		AggList:      ctx.aggregates,
+		BindingTags:  []int32{ctx.groupTag, ctx.aggregateTag},
+		SpillMem:     builder.aggSpillMem,
+	}, ctx)
 
 	if len(boundHavingList) > 0 {
 		var newFilterList []*plan.Expr
@@ -4095,27 +4067,6 @@ func (builder *QueryBuilder) appendWindowNode(
 
 	for name, id := range ctx.windowByAst {
 		builder.nameByColRef[[2]int32{ctx.windowTag, id}] = name
-	}
-
-	if ctx.forceWindows {
-		if len(boundHavingList) > 0 {
-			var newFilterList []*plan.Expr
-			var expr *plan.Expr
-
-			for _, cond := range boundHavingList {
-				if nodeID, expr, err = builder.flattenSubqueries(nodeID, cond, ctx); err != nil {
-					return
-				}
-
-				newFilterList = append(newFilterList, expr)
-			}
-
-			nodeID = builder.appendNode(&plan.Node{
-				NodeType:   plan.Node_FILTER,
-				Children:   []int32{nodeID},
-				FilterList: newFilterList,
-			}, ctx)
-		}
 	}
 
 	newNodeID = nodeID
@@ -4238,50 +4189,6 @@ func makeHelpFuncForTimeWindow(astTimeWindow *tree.TimeWindow) (*helpFunc, error
 		}
 	}
 	return h, nil
-}
-
-func DeepProcessExprForGroupConcat(expr *Expr, ctx *BindContext) *Expr {
-	if expr == nil {
-		return nil
-	}
-	switch item := expr.Expr.(type) {
-	case *plan.Expr_Col:
-		if item.Col.RelPos == ctx.groupTag {
-			expr = DeepCopyExpr(ctx.tmpGroups[item.Col.ColPos])
-		}
-		if item.Col.RelPos == ctx.aggregateTag {
-			item.Col.RelPos = ctx.windowTag
-		}
-
-	case *plan.Expr_F:
-		for i, arg := range item.F.Args {
-			item.F.Args[i] = DeepProcessExprForGroupConcat(arg, ctx)
-		}
-	case *plan.Expr_W:
-		for i, p := range item.W.PartitionBy {
-			item.W.PartitionBy[i] = DeepProcessExprForGroupConcat(p, ctx)
-		}
-		for i, o := range item.W.OrderBy {
-			item.W.OrderBy[i].Expr = DeepProcessExprForGroupConcat(o.Expr, ctx)
-		}
-
-	case *plan.Expr_Sub:
-		DeepProcessExprForGroupConcat(item.Sub.Child, ctx)
-
-	case *plan.Expr_Corr:
-		if item.Corr.RelPos == ctx.groupTag {
-			expr = DeepCopyExpr(ctx.tmpGroups[item.Corr.ColPos])
-		}
-		if item.Corr.RelPos == ctx.aggregateTag {
-			item.Corr.RelPos = ctx.windowTag
-		}
-	case *plan.Expr_List:
-		for i, ie := range item.List.List {
-			item.List.List[i] = DeepProcessExprForGroupConcat(ie, ctx)
-		}
-	}
-	return expr
-
 }
 
 func appendSelectList(
