@@ -16,6 +16,7 @@ package incrservice
 
 import (
 	"context"
+	"go.uber.org/zap"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
@@ -99,7 +100,15 @@ func (c *tableCache) getLastAllocateTS(colName string) (timestamp.Timestamp, err
 	if cc == nil {
 		panic("column cache should not be nil, " + colName)
 	}
-	return cc.lastAllocateAt, nil
+	ts := cc.lastAllocateAt
+	// Log warning if lastAllocateAt is empty, which may cause PrimaryKeysMayBeUpserted
+	// to scan a very large time range and impact performance.
+	if ts.IsEmpty() && c.logger.Enabled(zap.DebugLevel) {
+		c.logger.Debug("auto-increment getLastAllocateTS: returning empty timestamp",
+			zap.Uint64("table-id", c.tableID),
+			zap.String("col-name", colName))
+	}
+	return ts, nil
 }
 
 func (c *tableCache) insertAutoValues(
