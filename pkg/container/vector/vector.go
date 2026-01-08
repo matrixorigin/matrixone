@@ -30,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/shuffle"
 )
 
@@ -568,6 +567,14 @@ func (v *Vector) IsNull(i uint64) bool {
 		return false
 	}
 	return v.nsp.Contains(i)
+}
+
+func (v *Vector) SetNull(i uint64) {
+	v.nsp.Add(i)
+}
+
+func (v *Vector) UnsetNull(i uint64) {
+	v.nsp.Del(i)
 }
 
 // call this function if type already checked
@@ -4309,13 +4316,13 @@ func (v *Vector) InplaceSortAndCompact() {
 	case types.T_array_float32:
 		col, area := MustVarlenaRawData(v)
 		sort.Slice(col, func(i, j int) bool {
-			return moarray.Compare(
+			return types.ArrayCompare[float32](
 				types.GetArray[float32](&col[i], area),
 				types.GetArray[float32](&col[j], area),
 			) < 0
 		})
 		newCol := slices.CompactFunc(col, func(a, b types.Varlena) bool {
-			return moarray.Compare(
+			return types.ArrayCompare[float32](
 				types.GetArray[float32](&a, area),
 				types.GetArray[float32](&b, area),
 			) == 0
@@ -4328,13 +4335,13 @@ func (v *Vector) InplaceSortAndCompact() {
 	case types.T_array_float64:
 		col, area := MustVarlenaRawData(v)
 		sort.Slice(col, func(i, j int) bool {
-			return moarray.Compare(
+			return types.ArrayCompare[float64](
 				types.GetArray[float64](&col[i], area),
 				types.GetArray[float64](&col[j], area),
 			) < 0
 		})
 		newCol := slices.CompactFunc(col, func(a, b types.Varlena) bool {
-			return moarray.Compare(
+			return types.ArrayCompare[float64](
 				types.GetArray[float64](&a, area),
 				types.GetArray[float64](&b, area),
 			) == 0
@@ -4489,7 +4496,7 @@ func (v *Vector) InplaceSort() {
 	case types.T_array_float32:
 		col, area := MustVarlenaRawData(v)
 		sort.Slice(col, func(i, j int) bool {
-			return moarray.Compare[float32](
+			return types.ArrayCompare[float32](
 				types.GetArray[float32](&col[i], area),
 				types.GetArray[float32](&col[j], area),
 			) < 0
@@ -4497,7 +4504,7 @@ func (v *Vector) InplaceSort() {
 	case types.T_array_float64:
 		col, area := MustVarlenaRawData(v)
 		sort.Slice(col, func(i, j int) bool {
-			return moarray.Compare[float64](
+			return types.ArrayCompare[float64](
 				types.GetArray[float64](&col[i], area),
 				types.GetArray[float64](&col[j], area),
 			) < 0
