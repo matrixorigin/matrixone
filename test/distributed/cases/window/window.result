@@ -4156,4 +4156,5 @@ select * from (select i_manufact_id, sum(ss_sales_price) sum_sales, avg(sum(ss_s
 i_manufact_id    sum_sales    avg_quarterly_sales
 select group_concat(c.column_name order by ordinal_position) key_columns  from information_schema.key_column_usage c where c.table_schema='test1' and c.table_name='region' and constraint_name='PRIMARY';
 key_columns
+null
 drop database test;
