@@ -451,13 +451,13 @@ func InnerProductFloat32(a, b []float32) (float32, error) {
 		total += a[i] * b[i]
 	}
 
-	return total, nil
+	return -total, nil
 }
 
 // InnerProduct computes the dot product of two float64 slices using SIMD.
 func InnerProductFloat64(a, b []float64) (float64, error) {
 	if len(a) != len(b) {
-		return float32(0), moerr.NewInternalErrorNoCtx("vector dimension not matched")
+		return float64(0), moerr.NewInternalErrorNoCtx("vector dimension not matched")
 	}
 
 	n := len(a)
@@ -498,7 +498,7 @@ func InnerProductFloat64(a, b []float64) (float64, error) {
 		total += a[i] * b[i]
 	}
 
-	return total, nil
+	return -total, nil
 }
 
 // InnerProductUnrolled calculates the inner product using loop unrolling.
