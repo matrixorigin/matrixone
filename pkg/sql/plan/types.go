@@ -272,7 +272,6 @@ type BindContext struct {
 	isDistinct    bool
 	isCorrelated  bool
 	hasSingleRow  bool
-	forceWindows  bool
 	isGroupingSet bool
 
 	//cteName denotes the alias of this BindContext.
@@ -327,7 +326,9 @@ type BindContext struct {
 	// sample function related.
 	sampleFunc SampleFuncCtx
 
-	tmpGroups []*plan.Expr
+	// groupConcatOrderBys stores ORDER BY specs from group_concat functions.
+	// Used to generate a Sort node before the Agg node instead of using window function.
+	groupConcatOrderBys []*plan.OrderBySpec
 
 	snapshot *Snapshot
 	// all view keys(dbName#viewName)
