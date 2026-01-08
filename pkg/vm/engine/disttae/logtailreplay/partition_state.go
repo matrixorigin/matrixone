@@ -1262,14 +1262,14 @@ func (p *PartitionState) CheckRowIdDeletedInMem(ts types.TS, rowId types.Rowid) 
 }
 
 // CountRows returns the total number of visible rows at the given snapshot.
-// CountRows = CountDataStats.Rows - CountTombstoneStats.Rows
+// CountRows = CollectDataStats.Rows - CollectTombstoneStats.Rows
 func (p *PartitionState) CountRows(
 	ctx context.Context,
 	snapshot types.TS,
 	fs fileservice.FileService,
 ) (uint64, error) {
-	dataStats := p.CountDataStats(snapshot)
-	tombstoneStats, err := p.CountTombstoneStats(ctx, snapshot, fs)
+	dataStats := p.CollectDataStats(snapshot)
+	tombstoneStats, err := p.CollectTombstoneStats(ctx, snapshot, fs)
 	if err != nil {
 		return 0, err
 	}
@@ -1296,8 +1296,8 @@ type DataStats struct {
 	BlockCnt  int // Exact count of visible data blocks
 }
 
-// CountDataStats returns comprehensive statistics for data objects and rows at the given snapshot.
-func (p *PartitionState) CountDataStats(snapshot types.TS) DataStats {
+// CollectDataStats returns comprehensive statistics for data objects and rows at the given snapshot.
+func (p *PartitionState) CollectDataStats(snapshot types.TS) DataStats {
 	var stats DataStats
 	var estimatedOneRowSize float64
 	var nonAppendableRows uint64
@@ -1363,9 +1363,9 @@ type TombstoneStats struct {
 	BlockCnt  int // Exact count of visible tombstone blocks
 }
 
-// CountTombstoneStats returns comprehensive statistics for tombstone objects and deleted rows at the given snapshot.
+// CollectTombstoneStats returns comprehensive statistics for tombstone objects and deleted rows at the given snapshot.
 // This combines object counting with row counting in a single pass for better performance.
-func (p *PartitionState) CountTombstoneStats(
+func (p *PartitionState) CollectTombstoneStats(
 	ctx context.Context,
 	snapshot types.TS,
 	fs fileservice.FileService,
@@ -1968,8 +1968,8 @@ func (p *PartitionState) CalculateTableStats(
 	snapshot types.TS,
 	fs fileservice.FileService,
 ) (TableStats, error) {
-	dataStats := p.CountDataStats(snapshot)
-	tombstoneStats, err := p.CountTombstoneStats(ctx, snapshot, fs)
+	dataStats := p.CollectDataStats(snapshot)
+	tombstoneStats, err := p.CollectTombstoneStats(ctx, snapshot, fs)
 	if err != nil {
 		return TableStats{}, err
 	}
