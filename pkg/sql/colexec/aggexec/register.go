@@ -27,6 +27,21 @@ import (
 	after registered, the function `MakeAgg` can make the aggregation function executor.
 */
 
+func RegisterBitXorAgg(id int64) {
+	specialAgg[id] = true
+	AggIdOfBitXor = id
+}
+
+func RegisterBitAndAgg(id int64) {
+	specialAgg[id] = true
+	AggIdOfBitAnd = id
+}
+
+func RegisterBitOrAgg(id int64) {
+	specialAgg[id] = true
+	AggIdOfBitOr = id
+}
+
 func RegisterVarPop(id int64) {
 	specialAgg[id] = true
 	AggIdOfVarPop = id
@@ -183,6 +198,9 @@ var (
 	AggIdOfStdDevPop     = int64(-22)
 	AggIdOfVarSample     = int64(-23)
 	AggIdOfStdDevSample  = int64(-24)
+	AggIdOfBitXor        = int64(-25)
+	AggIdOfBitAnd        = int64(-26)
+	AggIdOfBitOr         = int64(-27)
 	groupConcatSep       = ","
 	getCroupConcatRet    = func(args ...types.Type) types.Type {
 		for _, p := range args {

@@ -401,17 +401,17 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, agg.BitAndSupportedParameters)
+			return fixedUnaryAggTypeCheck(inputs, BitOpsSupportedTypes)
 		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    agg.BitAndReturnType,
+				retType:    BitOpsReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "bit_and",
-					aggRegister: agg.RegisterBitAnd2,
+					aggRegister: agg.RegisterBitAnd,
 				},
 			},
 		},
@@ -422,17 +422,17 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, agg.BitAndSupportedParameters)
+			return fixedUnaryAggTypeCheck(inputs, BitOpsSupportedTypes)
 		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    agg.BitAndReturnType,
+				retType:    BitOpsReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "bit_or",
-					aggRegister: agg.RegisterBitOr2,
+					aggRegister: agg.RegisterBitOr,
 				},
 			},
 		},
@@ -443,17 +443,17 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, agg.BitAndSupportedParameters)
+			return fixedUnaryAggTypeCheck(inputs, BitOpsSupportedTypes)
 		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    agg.BitAndReturnType,
+				retType:    BitOpsReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "bit_xor",
-					aggRegister: agg.RegisterBitXor2,
+					aggRegister: agg.RegisterBitXor,
 				},
 			},
 		},
@@ -651,4 +651,19 @@ var AnyValueSupportedTypes = []types.T{
 
 func ReturnFirstArgType(typs []types.Type) types.Type {
 	return typs[0]
+}
+
+var BitOpsSupportedTypes = []types.T{
+	types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+	types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+	types.T_float32, types.T_float64,
+	types.T_binary, types.T_varbinary,
+	types.T_bit,
+}
+
+var BitOpsReturnType = func(typs []types.Type) types.Type {
+	if typs[0].Oid == types.T_binary || typs[0].Oid == types.T_varbinary {
+		return typs[0]
+	}
+	return types.T_uint64.ToType()
 }

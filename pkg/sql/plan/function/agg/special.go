@@ -79,3 +79,15 @@ func RegisterVarSample(id int64) {
 func RegisterStdDevSample(id int64) {
 	aggexec.RegisterStdDevSample(id)
 }
+
+func RegisterBitXor(id int64) {
+	aggexec.RegisterBitXorAgg(id)
+}
+
+func RegisterBitAnd(id int64) {
+	aggexec.RegisterBitAndAgg(id)
+}
+
+func RegisterBitOr(id int64) {
+	aggexec.RegisterBitOrAgg(id)
+}
