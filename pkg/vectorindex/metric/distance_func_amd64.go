@@ -318,7 +318,7 @@ func L1DistanceFloat32(a, b []float32) (float32, error) {
 		sum += val
 	}
 
-	return sum
+	return sum, nil
 }
 
 // L1Distance computes Manhattan distance for float64 vectors.
@@ -334,7 +334,6 @@ func L1DistanceFloat64(a, b []float64) (float64, error) {
 	// 1. AVX-512 Path: 512-bit registers (8 float64 elements)
 	if archsimd.X86.AVX512() {
 		acc := archsimd.Float64x8{}
-		vMask := archsimd.BroadcastFloat64x8(mask64)
 		for i <= n-8 {
 			va := archsimd.LoadFloat64x8Slice(a[i : i+8])
 			vb := archsimd.LoadFloat64x8Slice(b[i : i+8])
@@ -351,7 +350,6 @@ func L1DistanceFloat64(a, b []float64) (float64, error) {
 	// 2. AVX2/AVX Path: 256-bit registers (4 float64 elements)
 	if i <= n-4 && (archsimd.X86.AVX2() || archsimd.X86.AVX()) {
 		acc := archsimd.Float64x4{}
-		vMask := archsimd.BroadcastFloat64x4(mask64)
 		for i <= n-4 {
 			va := archsimd.LoadFloat64x4Slice(a[i : i+4])
 			vb := archsimd.LoadFloat64x4Slice(b[i : i+4])
@@ -373,7 +371,7 @@ func L1DistanceFloat64(a, b []float64) (float64, error) {
 		total += val
 	}
 
-	return total
+	return total, nil
 }
 
 // L1DistanceUnrolled calculates the L1 distance using loop unrolling for optimization.
