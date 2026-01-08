@@ -624,6 +624,15 @@ func SetStringAt(v *Vector, idx int, bs string, mp *mpool.MPool) error {
 	return SetBytesAt(v, idx, []byte(bs), mp)
 }
 
+func (v *Vector) SetRawBytesAt(i int, bs []byte, mp *mpool.MPool) error {
+	if v.typ.IsVarlen() {
+		return SetBytesAt(v, i, bs, mp)
+	} else {
+		copy(v.data[i*v.typ.TypeSize():i*v.typ.TypeSize()+v.typ.TypeSize()], bs)
+		return nil
+	}
+}
+
 // IsConstNull return true if the vector means a scalar Null.
 // e.g.
 //

@@ -59,3 +59,7 @@ func RegisterMin(id int64) {
 func RegisterMax(id int64) {
 	aggexec.RegisterMax(id)
 }
+
+func RegisterAny(id int64) {
+	aggexec.RegisterAny(id)
+}

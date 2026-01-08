@@ -92,7 +92,7 @@ var supportedAggInNewFramework = []FuncNew{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    MinMaxReturnType,
+				retType:    ReturnFirstArgType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "min",
 					aggRegister: agg.RegisterMin,
@@ -113,7 +113,7 @@ var supportedAggInNewFramework = []FuncNew{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    MinMaxReturnType,
+				retType:    ReturnFirstArgType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "max",
 					aggRegister: agg.RegisterMax,
@@ -380,17 +380,17 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, agg.AnyValueSupportedTypes)
+			return fixedUnaryAggTypeCheck(inputs, AnyValueSupportedTypes)
 		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    agg.AnyValueReturnType,
+				retType:    ReturnFirstArgType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "any_value",
-					aggRegister: agg.RegisterAnyValue2,
+					aggRegister: agg.RegisterAny,
 				},
 			},
 		},
@@ -641,6 +641,21 @@ var MinMaxSupportedTypes = []types.T{
 	types.T_binary, types.T_varbinary,
 }
 
-func MinMaxReturnType(typs []types.Type) types.Type {
+var AnyValueSupportedTypes = []types.T{
+	types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+	types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+	types.T_float32, types.T_float64,
+	types.T_date, types.T_datetime,
+	types.T_timestamp, types.T_time,
+	types.T_decimal64, types.T_decimal128,
+	types.T_bool,
+	types.T_bit,
+	types.T_varchar, types.T_char, types.T_blob, types.T_text, types.T_datalink,
+	types.T_uuid,
+	types.T_binary, types.T_varbinary, types.T_json,
+	types.T_Rowid,
+}
+
+func ReturnFirstArgType(typs []types.Type) types.Type {
 	return typs[0]
 }

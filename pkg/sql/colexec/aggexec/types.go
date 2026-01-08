@@ -202,6 +202,8 @@ func makeSpecialAggExec(
 ) (AggFuncExec, bool, error) {
 	if _, ok := specialAgg[id]; ok {
 		switch id {
+		case AggIdOfAny:
+			return makeAnyValueExec(mp, id, params[0]), true, nil
 		case AggIdOfMin:
 			return makeMinMaxExec(mp, id, true, params[0]), true, nil
 		case AggIdOfMax:
