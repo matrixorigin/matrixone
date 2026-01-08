@@ -589,7 +589,7 @@ INSERT INTO numeric15 VALUES(NULL,327.328932,-38922.2123);
 SELECT * FROM numeric15;
 
 -- unique index cannot have duplicate value insertion
- -- @pattern
+-- @regex("Duplicate entry '271.21212' for key",true)
 INSERT INTO numeric15 VALUES(271.212121,387213.0,3289);
 DROP TABLE numeric15;
 

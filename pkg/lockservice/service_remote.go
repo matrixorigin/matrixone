@@ -450,7 +450,7 @@ func (s *service) getLocalLockTable(
 			s.tableGroups.removeWithFilter(
 				func(table uint64, lt lockTable) bool {
 					return lt.getBind().Equal(bind)
-				})
+				}, closeReasonBindChanged)
 			return nil, ErrLockTableBindChanged
 		}
 

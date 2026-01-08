@@ -135,6 +135,7 @@ func (hr *ResHashRelated) Free0() {
 		hr.Hash.Free()
 		hr.Hash = nil
 	}
+	hr.mp = nil
 }
 
 // countNonZeroAndFindKth is a helper function to count the number of non-zero values

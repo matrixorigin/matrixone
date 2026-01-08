@@ -1,0 +1,35 @@
+drop database if exists tmp_alias_binding;
+create database tmp_alias_binding;
+use tmp_alias_binding;
+create temporary table t1(a int, b int);
+insert into t1 values (1, 2), (3, 4);
+select t1.a from t1 where t1.b > 2;
+a
+3
+select x.a from (select * from t1) as x where x.b > 2;
+a
+3
+create table t2(a int, b int);
+insert into t2 values (3, 5);
+select t1.a, t2.b from t1 join t2 on t1.a = t2.a where t1.b > 2;
+a    b
+3    5
+select count(*), sum(b) from t1;
+count(*)    sum(b)
+2    6
+select a, b from t1 where b > 1 order by b desc;
+a    b
+3    4
+1    2
+select a from t1 where a in (select a from t1 where b > 2);
+a
+3
+select l.a, r.b from t1 as l join t1 as r on l.a = r.a order by l.a;
+a    b
+1    2
+3    4
+with c as (select * from t1 where b > 2)
+select a from c;
+a
+3
+drop database if exists tmp_alias_binding;

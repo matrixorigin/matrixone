@@ -669,19 +669,6 @@ func (slices *ColumnSlices) GetTimestamp(r uint64, i uint64, timeZone *time.Loca
 	}
 }
 
-var (
-	trueSlice  = []byte("true")
-	falseSlice = []byte("false")
-)
-
-func getBoolSlice(v bool) []byte {
-	if v {
-		return trueSlice
-	} else {
-		return falseSlice
-	}
-}
-
 func convertBatchToSlices(ctx context.Context, ses FeSession, dataSet *batch.Batch, colSlices *ColumnSlices) error {
 	for i, vec := range dataSet.Vecs { //col index
 		if vec.IsConstNull() {

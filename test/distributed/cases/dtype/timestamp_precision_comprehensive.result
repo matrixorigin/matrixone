@@ -117,10 +117,10 @@ match_count
 DROP TABLE t_timestamp_distinct;
 SELECT CAST('2024-01-15 12:34:56' AS TIMESTAMP(0)) = CAST('2024-01-15 12:34:56.000000' AS TIMESTAMP(6)) AS ts_0_eq_6_same;
 ts_0_eq_6_same
-true
+1
 SELECT CAST('2024-01-15 12:34:56' AS TIMESTAMP(0)) = CAST('2024-01-15 12:34:56.123456' AS TIMESTAMP(6)) AS ts_0_eq_6_diff;
 ts_0_eq_6_diff
-false
+0
 DROP TABLE IF EXISTS t_timestamp_half;
 CREATE TABLE t_timestamp_half (
 id INT,
