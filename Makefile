@@ -49,17 +49,21 @@
 #  % MO_CL_CUDA=1 make
 
 # where am I
+ifeq ($(GO),)
+	GO=go
+endif
+
 ROOT_DIR = $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 BIN_NAME := mo-service
 UNAME_S := $(shell uname -s | tr A-Z a-z)
 UNAME_M := $(shell uname -m)
-GOPATH := $(shell go env GOPATH)
-GO_VERSION=$(shell go version)
+GOPATH := $(shell $(GO) env GOPATH)
+GO_VERSION=$(shell $(GO) version)
 BRANCH_NAME=$(shell git rev-parse --abbrev-ref HEAD)
 LAST_COMMIT_ID=$(shell git rev-parse --short HEAD)
 BUILD_TIME=$(shell date +%s)
 MO_VERSION=$(shell git symbolic-ref -q --short HEAD || git describe --tags --exact-match)
-GO_MODULE=$(shell go list -m)
+GO_MODULE=$(shell $(GO) list -m)
 
 # check the MUSL_TARGET from https://musl.cc
 # make MUSL_TARGET=aarch64-linux musl to cross make the aarch64 linux executable
@@ -152,8 +156,8 @@ help:
 
 .PHONY: vendor-build
 vendor-build:
-	$(info [go mod vendor])
-	@go mod vendor
+	$(info [$(GO) mod vendor])
+	@$(GO) mod vendor
 
 ###############################################################################
 # code generation
@@ -162,7 +166,7 @@ vendor-build:
 .PHONY: config
 config:
 	$(info [Create build config])
-	@go mod tidy
+	@$(GO) mod tidy
 
 .PHONY: generate-pb
 generate-pb:
@@ -188,7 +192,6 @@ GOEXPERIMENT_OPT :=
 
 ifeq ("$(UNAME_M)", "x86_64")
 	GOEXPERIMENT_OPT=GOEXPERIMENT=simd
-	TAGS += amd64
 endif
 
 ifeq ($(MO_CL_CUDA),1)
@@ -234,7 +237,7 @@ thirdparties:
 .PHONY: build
 build: config cgo thirdparties
 	$(info [Build binary])
-	$(GOEXPERIMENT_OPT) $(CGO_OPTS) go1.26rc1 build $(GOTAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) $(GOBUILD_OPT) -o $(BIN_NAME) ./cmd/mo-service
+	$(GOEXPERIMENT_OPT) $(CGO_OPTS) $(GO) build $(GOTAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) $(GOBUILD_OPT) -o $(BIN_NAME) ./cmd/mo-service
 
 # https://wiki.musl-libc.org/getting-started.html
 # https://musl.cc/
@@ -264,7 +267,7 @@ musl: override GOTAGS := -tags musl
 musl: musl-install musl-cgo config musl-thirdparties
 musl:
 	$(info [Build binary(musl)])
-	$(CGO_OPTS) go build $(GOTAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) $(GOBUILD_OPT) -o $(BIN_NAME) ./cmd/mo-service
+	$(CGO_OPTS) $(GO) build $(GOTAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) $(GOBUILD_OPT) -o $(BIN_NAME) ./cmd/mo-service
 
 # build mo-tool
 .PHONY: mo-tool
