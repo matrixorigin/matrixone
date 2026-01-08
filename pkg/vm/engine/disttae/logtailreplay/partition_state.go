@@ -1373,7 +1373,30 @@ func (p *PartitionState) CountTombstoneStats(
 		estimatedRows += int(obj.Rows())
 	}
 
-	useMerge := len(visibleObjects) >= 4 && estimatedRows > 5000000
+	// Decision: use merge-based deduplication for large datasets
+	// Threshold considerations:
+	// - Single object: use linear if no in-memory tombstones (O(N) time, O(1) memory)
+	// - Map: ~20.6 bytes/row, fast O(N), but memory grows with row count
+	// - Merge: ~3 KB fixed, slower O(N log K), but memory-safe for concurrent queries
+	//
+	// Thresholds:
+	// 1. Single object + no in-memory: use linear (no duplicates possible)
+	// 2. Multiple objects + large dataset (>5M rows ≈ 103 MB map): use merge for safety
+	// 3. Huge dataset (>50M rows ≈ 1 GB map): always use merge regardless of object count
+	//
+	// Examples:
+	// - 1 object, 1B rows, no in-mem: use linear (no duplicates, fast)
+	// - 1 object, 1B rows, with in-mem: use merge (need dedup with in-mem)
+	// - 3 objects, 100M rows: use merge (1 GB map would be risky)
+	// - 100 objects, 1M rows: use merge (many objects, likely concurrent queries)
+	// - 2 objects, 1M rows: use map (20 MB, fast and safe)
+	
+	// Single object without in-memory tombstones: use linear deduplication
+	if len(visibleObjects) == 1 && p.inMemTombstoneRowIdIndex.Len() == 0 {
+		return p.countTombstoneStatsLinear(ctx, snapshot, fs, visibleObjects[0], stats)
+	}
+	
+	useMerge := len(visibleObjects) >= 4 && estimatedRows > 5000000 || estimatedRows > 50000000
 
 	if useMerge {
 		return p.countTombstoneStatsWithMerge(ctx, snapshot, fs, visibleObjects, stats)
@@ -1437,6 +1460,89 @@ func (p *PartitionState) isDataObjectVisible(objId *types.Objectid, snapshot typ
 	}
 
 	return false
+}
+
+// countTombstoneStatsLinear uses linear deduplication for single object
+// Single object is already sorted, no cross-object duplicates possible
+func (p *PartitionState) countTombstoneStatsLinear(
+	ctx context.Context,
+	snapshot types.TS,
+	fs fileservice.FileService,
+	obj objectio.ObjectEntry,
+	stats TombstoneStats,
+) (TombstoneStats, error) {
+	cnCreated := obj.GetCNCreated()
+	isAppendable := obj.GetAppendable()
+	needCheckCommitTs := !cnCreated || isAppendable
+
+	var hidden objectio.HiddenColumnSelection
+	if needCheckCommitTs {
+		hidden = objectio.HiddenColumnSelection_CommitTS
+	} else {
+		hidden = objectio.HiddenColumnSelection_None
+	}
+	attrs := objectio.GetTombstoneAttrs(hidden)
+	persistedDeletes := containers.NewVectors(len(attrs))
+
+	var readErr error
+	var lastRowId types.Rowid
+	var lastRowIdSet bool
+
+	objectio.ForeachBlkInObjStatsList(true, nil,
+		func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
+			var release func()
+			if _, release, readErr = ioutil.ReadDeletes(
+				ctx, blk.MetaLoc[:], fs, cnCreated, persistedDeletes, nil,
+			); readErr != nil {
+				return false
+			}
+			defer release()
+
+			rowIds := vector.MustFixedColNoTypeCheck[types.Rowid](&persistedDeletes[0])
+
+			var commitTSs []types.TS
+			if needCheckCommitTs && len(persistedDeletes) > 2 {
+				commitTSs = vector.MustFixedColNoTypeCheck[types.TS](&persistedDeletes[len(persistedDeletes)-1])
+			}
+
+			var lastObjId types.Objectid
+			var lastVisible bool
+			var lastObjIdSet bool
+
+			for j := 0; j < len(rowIds); j++ {
+				// Linear deduplication: check if same as last rowid
+				if lastRowIdSet && rowIds[j].EQ(&lastRowId) {
+					continue
+				}
+
+				if needCheckCommitTs && len(commitTSs) > 0 && commitTSs[j].GT(&snapshot) {
+					continue
+				}
+
+				objId := rowIds[j].BorrowObjectID()
+
+				if !lastObjIdSet || !objId.EQ(&lastObjId) {
+					lastObjId = *objId
+					lastObjIdSet = true
+					lastVisible = p.isDataObjectVisible(objId, snapshot)
+				}
+
+				if lastVisible {
+					stats.Rows++
+					lastRowId = rowIds[j]
+					lastRowIdSet = true
+				}
+			}
+
+			return true
+		}, obj.ObjectStats)
+
+	if readErr != nil {
+		return stats, readErr
+	}
+
+	// No in-memory tombstones in this path (checked by caller)
+	return stats, nil
 }
 
 // countTombstoneStatsWithMap uses map-based deduplication for small datasets
