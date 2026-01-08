@@ -74,6 +74,12 @@ func (back *backExec) Close() {
 	back.backSes = nil
 }
 
+// UpdateTxn updates the transaction operator without recreating the entire backExec.
+// This allows reusing the backExec across transaction boundaries in autocommit mode.
+func (back *backExec) UpdateTxn(txnOp TxnOperator) {
+	back.backSes.GetTxnHandler().SetShareTxn(txnOp)
+}
+
 func (back *backExec) GetExecStatsArray() statistic.StatsArray {
 	if back.statsArray != nil {
 		return *back.statsArray
