@@ -493,6 +493,7 @@ func (p *PartitionState) HandleDataObjectList(
 
 		// for appendable object, gc rows when delete object
 		iter := p.rows.Copy().Iter()
+		defer iter.Release()
 		objID := objEntry.ObjectStats.ObjectName().ObjectId()
 		trunctPoint := startTSCol[idx]
 		blkCnt := objEntry.ObjectStats.BlkCnt()
@@ -549,7 +550,6 @@ func (p *PartitionState) HandleDataObjectList(
 				//	break
 				//}
 			}
-			iter.Release()
 
 			// if there are no rows for the block, delete the block from the dirty
 			//if objEntry.EntryState && scanCnt == blockDeleted && p.dirtyBlocks.Len() > 0 {
@@ -1014,6 +1014,7 @@ func (p *PartitionState) truncate(ids [2]uint64, ts types.TS) (updated bool) {
 			gced = true
 		}
 	}
+	iter.Release()
 	objectsToDelete := objectsToDeleteBuilder.String()
 
 	iter = p.dataObjectTSIndex.Copy().Iter()
@@ -1030,6 +1031,7 @@ func (p *PartitionState) truncate(ids [2]uint64, ts types.TS) (updated bool) {
 			p.dataObjectTSIndex.Delete(entry)
 		}
 	}
+	iter.Release()
 	if gced {
 		logutil.Info(
 			"partition.state.gc.data.object",
@@ -1042,6 +1044,7 @@ func (p *PartitionState) truncate(ids [2]uint64, ts types.TS) (updated bool) {
 
 	objectsToDeleteBuilder.Reset()
 	objIter := p.dataObjectsNameIndex.Copy().Iter()
+	defer objIter.Release()
 	objGced := false
 	firstCalled := false
 	for {
