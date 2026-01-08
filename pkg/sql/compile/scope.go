@@ -597,7 +597,6 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 	}
 
 	//need to shuffle blocks when cncnt>1
-	var commited engine.RelData
 	rsp := &engine.RangesShuffleParam{
 		Node:  s.DataSource.node,
 		CNCNT: s.NodeInfo.CNCNT,
@@ -608,34 +607,10 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 		rsp.IsLocalCN = true
 	}
 
-	commited, err = c.expandRanges(
-		s.DataSource.node,
-		rel,
-		db,
-		ctx,
-		blockExprList,
-		engine.Policy_CollectCommittedPersistedData,
-		rsp)
-	if err != nil {
-		return err
-	}
+	policyForLocal := engine.DataCollectPolicy(engine.Policy_CollectAllData)
+	policyForRemote := engine.DataCollectPolicy(engine.Policy_CollectCommittedPersistedData)
 
-	// TODO: the below warning is not useful, we should replace it with a more useful warning.
-	//       temporarily disable it.
-	// average := float64(s.DataSource.node.Stats.BlockNum / s.NodeInfo.CNCNT)
-	// if commited.DataCnt() < int(average*0.8) ||
-	// 	commited.DataCnt() > int(average*1.2) {
-	// 	logutil.Warnf(
-	// 		"workload table %v maybe not balanced! stats blocks %v, cncnt %v cnidx %v average %v , get %v blocks",
-	// 		s.DataSource.TableDef.Name,
-	// 		s.DataSource.node.Stats.BlockNum,
-	// 		s.NodeInfo.CNCNT,
-	// 		s.NodeInfo.CNIDX,
-	// 		average,
-	// 		commited.DataCnt())
-	// }
-
-	//collect uncommited data if it's local cn
+	// local
 	if !s.IsRemote {
 		s.NodeInfo.Data, err = c.expandRanges(
 			s.DataSource.node,
@@ -643,21 +618,31 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 			db,
 			ctx,
 			blockExprList,
-			engine.Policy_CollectUncommittedData|
-				engine.Policy_CollectCommittedInmemData,
-			nil)
-		if err != nil {
-			return err
-		}
+			policyForLocal,
+			rsp,
+		)
+		return err
+	}
 
-		s.NodeInfo.Data.AppendBlockInfoSlice(commited.GetBlockInfoSlice())
-	} else {
+	// remote
+	var commited engine.RelData
+	commited, err = c.expandRanges(
+		s.DataSource.node,
+		rel,
+		db,
+		ctx,
+		blockExprList,
+		policyForRemote,
+		rsp,
+	)
+
+	if err == nil {
 		tombstones := s.NodeInfo.Data.GetTombstones()
 		commited.AttachTombstones(tombstones)
 		s.NodeInfo.Data = commited
-
 	}
-	return nil
+
+	return err
 }
 
 func (s *Scope) waitForRuntimeFilters(c *Compile) ([]*plan.Expr, bool, error) {
