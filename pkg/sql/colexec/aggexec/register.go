@@ -27,6 +27,41 @@ import (
 	after registered, the function `MakeAgg` can make the aggregation function executor.
 */
 
+func RegisterVarPop(id int64) {
+	specialAgg[id] = true
+	AggIdOfVarPop = id
+}
+
+func RegisterStdDevPop(id int64) {
+	specialAgg[id] = true
+	AggIdOfStdDevPop = id
+}
+
+func RegisterVarSample(id int64) {
+	specialAgg[id] = true
+	AggIdOfVarSample = id
+}
+
+func RegisterStdDevSample(id int64) {
+	specialAgg[id] = true
+	AggIdOfStdDevSample = id
+}
+
+func RegisterAny(id int64) {
+	specialAgg[id] = true
+	AggIdOfAny = id
+}
+
+func RegisterMin(id int64) {
+	specialAgg[id] = true
+	AggIdOfMin = id
+}
+
+func RegisterMax(id int64) {
+	specialAgg[id] = true
+	AggIdOfMax = id
+}
+
 func RegisterSum(id int64) {
 	specialAgg[id] = true
 	AggIdOfSum = id
@@ -141,6 +176,13 @@ var (
 	WinIdOfNthValue      = int64(-15)
 	AggIdOfSum           = int64(-16)
 	AggIdOfAvg           = int64(-17)
+	AggIdOfMin           = int64(-18)
+	AggIdOfMax           = int64(-19)
+	AggIdOfAny           = int64(-20)
+	AggIdOfVarPop        = int64(-21)
+	AggIdOfStdDevPop     = int64(-22)
+	AggIdOfVarSample     = int64(-23)
+	AggIdOfStdDevSample  = int64(-24)
 	groupConcatSep       = ","
 	getCroupConcatRet    = func(args ...types.Type) types.Type {
 		for _, p := range args {
