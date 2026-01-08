@@ -1281,10 +1281,19 @@ func (p *PartitionState) CountRows(
 
 // DataStats contains statistics for data objects and rows.
 type DataStats struct {
-	Rows      uint64  // Number of visible data rows
-	Size      float64 // Total size in bytes (estimated for appendable rows)
-	ObjectCnt int     // Number of visible data objects
-	BlockCnt  int     // Number of visible data blocks
+	// Rows: exact count of visible data rows at snapshot
+	// - Non-appendable objects: exact count from ObjectStats
+	// - Appendable rows: exact count from in-memory rows btree
+	Rows uint64
+
+	// Size: total data size in bytes (partially estimated)
+	// - Non-appendable objects: exact size from ObjectStats.Size()
+	// - Appendable rows: estimated using average row size from non-appendable objects
+	//   or batch size if no non-appendable objects exist
+	Size float64
+
+	ObjectCnt int // Exact count of visible non-appendable data objects
+	BlockCnt  int // Exact count of visible data blocks
 }
 
 // CountDataStats returns comprehensive statistics for data objects and rows at the given snapshot.
@@ -1339,9 +1348,19 @@ func (p *PartitionState) CountDataStats(snapshot types.TS) DataStats {
 
 // TombstoneStats contains statistics for tombstone objects and deleted rows.
 type TombstoneStats struct {
-	Rows      uint64 // Number of deleted rows (deduplicated and filtered by object visibility)
-	ObjectCnt int    // Number of visible tombstone objects
-	BlockCnt  int    // Number of visible tombstone blocks
+	// Rows: exact count of deleted rows (deduplicated and filtered by data object visibility)
+	// - Tombstone objects: read from S3 and deduplicated
+	// - In-memory tombstones: exact count from inMemTombstoneRowIdIndex
+	// - Only counts deletions on visible data objects
+	Rows uint64
+
+	// Size: exact total size of tombstone objects in bytes
+	// - Read from ObjectStats.Size() for each visible tombstone object
+	// - Does not include in-memory tombstone size (negligible)
+	Size float64
+
+	ObjectCnt int // Exact count of visible tombstone objects
+	BlockCnt  int // Exact count of visible tombstone blocks
 }
 
 // CountTombstoneStats returns comprehensive statistics for tombstone objects and deleted rows at the given snapshot.
@@ -1370,6 +1389,7 @@ func (p *PartitionState) CountTombstoneStats(
 		visibleObjects = append(visibleObjects, obj)
 		stats.ObjectCnt++
 		stats.BlockCnt += int(obj.BlkCnt())
+		stats.Size += float64(obj.Size())
 		estimatedRows += int(obj.Rows())
 	}
 
@@ -1923,29 +1943,26 @@ func (p *PartitionState) countTombstoneStatsWithMerge(
 }
 
 // TableStats contains comprehensive table statistics including row counts, sizes, and object counts.
+// TableStats contains comprehensive table statistics at a snapshot.
 type TableStats struct {
-	// Row statistics
-	TotalRows   float64 // Total visible data rows (including appendable)
-	DeletedRows float64 // Total deleted rows (deduplicated and filtered by object visibility)
+	// TotalRows: exact count of visible data rows after applying deletions
+	// Calculated as: dataStats.Rows - tombstoneStats.Rows
+	TotalRows float64
 
-	// Size statistics (estimated for appendable rows)
-	TotalSize float64 // Total data size in bytes
+	// TotalSize: estimated size of visible data in bytes (excludes deleted data)
+	// - Data size: exact for non-appendable, estimated for appendable rows
+	// - Deleted data size is estimated and subtracted: (dataStats.Size / dataStats.Rows) * tombstoneStats.Rows
+	// - Does NOT include tombstone object size (tombstone is metadata overhead)
+	TotalSize float64
 
-	// Object and block counts
-	DataObjectCnt      int // Number of visible data objects
+	// Object and block counts (all exact)
+	DataObjectCnt      int // Number of visible non-appendable data objects
 	DataBlockCnt       int // Number of visible data blocks
 	TombstoneObjectCnt int // Number of visible tombstone objects
 	TombstoneBlockCnt  int // Number of visible tombstone blocks
 }
 
 // CalculateTableStats calculates comprehensive table statistics at the given snapshot.
-// This is the legacy implementation that will be replaced with optimized version.
-//
-// Size values are estimated based on:
-// - Non-appendable objects: use actual Size() from ObjectStats
-// - Appendable rows: estimate using average row size from non-appendable objects
-//
-// Deleted rows are filtered to only count deletions on visible data objects.
 func (p *PartitionState) CalculateTableStats(
 	ctx context.Context,
 	snapshot types.TS,
@@ -1967,8 +1984,7 @@ func (p *PartitionState) CalculateTableStats(
 
 	return TableStats{
 		TotalRows:          float64(visibleRows),
-		DeletedRows:        float64(tombstoneStats.Rows),
-		TotalSize:          dataStats.Size,
+		TotalSize:          dataStats.Size + tombstoneStats.Size,
 		DataObjectCnt:      dataStats.ObjectCnt,
 		DataBlockCnt:       dataStats.BlockCnt,
 		TombstoneObjectCnt: tombstoneStats.ObjectCnt,

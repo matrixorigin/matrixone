@@ -2554,17 +2554,9 @@ func (d *dynamicCtx) statsCalculateOp(
 	// Convert to statsList format
 	sl.stats = make(map[string]any)
 
-	// table rows (total - deleted)
-	leftRows := stats.TotalRows - stats.DeletedRows
-	sl.stats[TableStatsName[TableStatsTableRows]] = leftRows
-
-	// table size (total - estimated deleted size)
-	deletedSize := float64(0)
-	if stats.TotalRows > 0 && stats.DeletedRows > 0 {
-		deletedSize = stats.TotalSize / stats.TotalRows * stats.DeletedRows
-	}
-	leftSize := math.Round((stats.TotalSize-deletedSize)*1000) / 1000
-	sl.stats[TableStatsName[TableStatsTableSize]] = leftSize
+	// table rows and size (already calculated in CalculateTableStats)
+	sl.stats[TableStatsName[TableStatsTableRows]] = stats.TotalRows
+	sl.stats[TableStatsName[TableStatsTableSize]] = math.Round(stats.TotalSize*1000) / 1000
 
 	// object and block counts
 	sl.stats[TableStatsName[TableStatsTObjectCnt]] = stats.TombstoneObjectCnt

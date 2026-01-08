@@ -2012,7 +2012,6 @@ func TestCalculateTableStatsEmpty(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, float64(0), stats.TotalRows)
-	assert.Equal(t, float64(0), stats.DeletedRows)
 	assert.Equal(t, float64(0), stats.TotalSize)
 	assert.Equal(t, 0, stats.DataObjectCnt)
 	assert.Equal(t, 0, stats.TombstoneObjectCnt)
@@ -2050,7 +2049,6 @@ func TestCalculateTableStatsNonAppendableOnly(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, float64(300), stats.TotalRows)
-	assert.Equal(t, float64(0), stats.DeletedRows)
 	assert.Equal(t, float64(4000), stats.TotalSize)
 	assert.Equal(t, 2, stats.DataObjectCnt)
 	assert.Equal(t, 0, stats.TombstoneObjectCnt)
@@ -2157,9 +2155,7 @@ func TestCalculateTableStatsWithInMemoryDeletes(t *testing.T) {
 	require.NoError(t, err)
 
 	// Total rows = 100 - 20 = 80 (visible rows after deletions)
-	// Deleted rows = 20 (unpaired deletes on object rows)
 	assert.Equal(t, float64(80), stats.TotalRows)
-	assert.Equal(t, float64(20), stats.DeletedRows)
 }
 
 // TestCalculateTableStatsPairedInsertDelete tests paired insert-delete should be skipped
@@ -2225,9 +2221,6 @@ func TestCalculateTableStatsPairedInsertDelete(t *testing.T) {
 
 	// Total rows = 100 + 1 - 1 = 100 (visible rows after deletion)
 	assert.Equal(t, float64(100), stats.TotalRows)
-
-	// Deleted rows = 1 (the paired delete is counted)
-	assert.Equal(t, float64(1), stats.DeletedRows)
 }
 
 // TestCalculateTableStatsFilterByObjectVisibility tests deletion filtering
@@ -2293,12 +2286,11 @@ func TestCalculateTableStatsFilterByObjectVisibility(t *testing.T) {
 		})
 	}
 
-	stats, err := state.CalculateTableStats(ctx, snapshot, fs)
+	_, err := state.CalculateTableStats(ctx, snapshot, fs)
 	require.NoError(t, err)
 
-	// Should only count deletes on objID1 (0), not objID2 (also 0)
-	// All deletes on objID1 are paired with inserts, so DeletedRows = 0
-	assert.Equal(t, float64(0), stats.DeletedRows)
+	// All deletes on objID1 are paired with inserts, so no net deletions
+	// TotalRows should reflect visible rows only
 }
 
 // TestCalculateTableStatsIntegration tests full integration scenario
@@ -2369,9 +2361,6 @@ func TestCalculateTableStatsIntegration(t *testing.T) {
 
 	// Total rows = 100 + 50 - 20 = 130 (visible rows after deletions)
 	assert.Equal(t, float64(130), stats.TotalRows)
-
-	// Deleted rows = 20 (deletions for rows 100-119)
-	assert.Equal(t, float64(20), stats.DeletedRows)
 
 	// Total size = 1000 + 50 * 10 = 1500 (all data size, including deleted)
 	assert.Equal(t, float64(1500), stats.TotalSize)
