@@ -17,16 +17,17 @@ Provide `GRANT/REVOKE ... ON VIEW` with correct authorization semantics so users
 
 ### 4. Plan-Time View Lineage
 Compiler records view lineage into plan nodes:
-- `origin_views`: the view chain in `db#view` format.
-- `direct_view`: the immediate view expanded by the table scan (optional but used for diagnostics).
+- `origin_views`: the view chain in `db#view` format, ordered from the outermost view to the innermost view.
+- `direct_view`: the outermost view referenced by the user (optional, mostly for diagnostics).
 
 ### 5. Runtime Authorization Flow
 For each plan node:
-1. Check view privileges using `direct_view` if present, otherwise `origin_views[0]`.
-2. Apply `SQL SECURITY` to decide whether base table privileges are required:
-   - `DEFINER`: require view privilege and definer base-table privileges.
-   - `INVOKER`: require view privilege and invoker base-table privileges.
-3. If `origin_views` is empty, fall back to standard table privilege checks.
+1. If `origin_views` is present, verify view privileges in chain order (outermost to innermost).
+2. For each view in the chain, apply its `SQL SECURITY` to decide the effective role for the next hop:
+   - `DEFINER`: switch to the view definer role for the next hop.
+   - `INVOKER`: keep the current role for the next hop.
+3. After the chain, check base-table privileges using the effective role.
+4. If `origin_views` is empty, fall back to standard table privilege checks.
 
 ### 6. SQL SECURITY Semantics
 - Session variable `view_security_type` controls `DEFINER` or `INVOKER` (default `DEFINER`).
@@ -55,7 +56,9 @@ For each plan node:
 
 ### 3. Authorization Logic
 - Extract view privilege tips from plan nodes and check them before table privileges.
-- Enforce `SQL SECURITY` to determine whether base-table checks are required.
+- Enforce `SQL SECURITY` per view in the lineage to determine the effective role for base-table checks.
+- For view chains, cache-only privilege evaluation is skipped to avoid missing view metadata checks.
+- Snapshot reads resolve view metadata using the snapshot tenant and `MO_TS` to ensure view chains are validated against the correct historical catalog.
 - Fix privilege extraction for `INSERT/UPDATE/DELETE` paths to avoid missed checks.
 - Preserve existing system view and cluster table guardrails.
 
@@ -64,6 +67,7 @@ Updated or added BVT cases:
 - `test/distributed/cases/zz_accesscontrol/grant_view.sql`
 - `test/distributed/cases/zz_accesscontrol/grant_view_non_sys.sql`
 - `test/distributed/cases/zz_accesscontrol/grant_view_complex.sql`
+- `test/distributed/cases/zz_accesscontrol/grant_view_nested_security.sql`
 - Updated related `.result` files and error messages (e.g., `grant_privs_role.result`, `revoke_privs_role.result`).
 
 ## MySQL Compatibility
@@ -71,6 +75,7 @@ Updated or added BVT cases:
 ### Compatible
 - Syntax: `GRANT/REVOKE ... ON VIEW`, `SHOW GRANTS` shows `ON VIEW`.
 - Semantics: `SQL SECURITY DEFINER/INVOKER` aligns with MySQL (view privilege plus definer/invoker base-table privilege).
+- Nested views: privilege checks follow the view chain with per-view `DEFINER/INVOKER` semantics.
 - Isolation: granting view privilege does not grant base-table privilege.
 
 ### Differences

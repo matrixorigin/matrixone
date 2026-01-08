@@ -172,6 +172,10 @@ var checkPrivilegeInCache = func(ctx context.Context, ses *Session, priv *privil
 							// }
 							yes = false
 						} else {
+							if len(mi.originViews) > 0 || mi.directView != "" {
+								// View chains require metadata checks; skip cache-only evaluation.
+								return false, nil
+							}
 							tempEntry := privilegeEntriesMap[mi.privilegeTyp]
 							tempEntry.databaseName = mi.dbName
 							tempEntry.tableName = mi.tableName

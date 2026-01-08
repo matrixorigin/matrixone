@@ -1325,7 +1325,8 @@ const (
 
 	checkDatabaseViewFormat = `select rel_logical_id from mo_catalog.mo_tables where relname = "%s" and reldatabase = "%s" and relkind = "v" and account_id = %d;`
 
-	getViewMetaFormat = `select viewdef, owner from mo_catalog.mo_tables where relname = "%s" and reldatabase = "%s" and relkind = "v" and account_id = %d;`
+	getViewMetaFormat             = `select viewdef, owner from mo_catalog.mo_tables where relname = "%s" and reldatabase = "%s" and relkind = "v" and account_id = %d;`
+	getViewMetaWithSnapshotFormat = `select viewdef, owner from mo_catalog.mo_tables {MO_TS = %d} where relname = "%s" and reldatabase = "%s" and relkind = "v" and account_id = %d;`
 
 	//TODO:fix privilege_level string and obj_type string
 	//For object_type : table, privilege_level : *.*
@@ -2085,6 +2086,30 @@ func getSqlForCheckViewMeta(
 	return fmt.Sprintf(getViewMetaFormat, viewName, dbName, account), nil
 }
 
+func getSqlForCheckViewMetaWithSnapshot(
+	ctx context.Context,
+	dbName string,
+	viewName string,
+	snapshotTs int64,
+) (string, error) {
+	err := inputNameIsInvalid(ctx, dbName, viewName)
+	if err != nil {
+		return "", err
+	}
+
+	var (
+		account uint32
+	)
+
+	if v := ctx.Value(defines.TenantIDKey{}); v != nil {
+		account = v.(uint32)
+	} else {
+		return "", moerr.NewInternalErrorNoCtx("no account id found in the ctx")
+	}
+
+	return fmt.Sprintf(getViewMetaWithSnapshotFormat, snapshotTs, viewName, dbName, account), nil
+}
+
 func getSqlForDeleteRole(roleId int64) []string {
 	return []string{
 		fmt.Sprintf(deleteRoleFromMoRoleFormat, roleId),
@@ -2301,6 +2326,7 @@ type privilegeItem struct {
 	objType               objectType
 	originViews           []string
 	directView            string
+	scanSnapshot          *plan.Snapshot
 	role                  *tree.Role
 	users                 []*tree.User
 	dbName                string
@@ -2414,7 +2440,6 @@ var (
 		PrivilegeTypeTableOwnership,
 		PrivilegeTypeValues,
 	}
-
 	//the initial entries of mo_role_privs for the role 'accountadmin'
 	entriesOfAccountAdminForMoRolePrivsFor = []PrivilegeType{
 		PrivilegeTypeCreateUser,
@@ -5077,38 +5102,55 @@ func parseViewKey(key string) (string, string) {
 }
 
 func getViewSecurityInfo(ctx context.Context, bh BackgroundExec, dbName, viewName string) (viewSecurityInfo, error) {
-	sql, err := getSqlForCheckViewMeta(ctx, dbName, viewName)
+	info, _, err := getViewSecurityInfoWithSnapshot(ctx, bh, dbName, viewName, nil)
+	return info, err
+}
+
+func getViewSecurityInfoWithSnapshot(ctx context.Context, bh BackgroundExec, dbName, viewName string, snapshot *plan.Snapshot) (viewSecurityInfo, bool, error) {
+	var (
+		sql string
+		err error
+	)
+	ctxForSql := ctx
+	if snapshot != nil && snapshot.Tenant != nil {
+		ctxForSql = defines.AttachAccountId(ctxForSql, snapshot.Tenant.TenantID)
+	}
+	if snapshot != nil && snapshot.TS != nil {
+		sql, err = getSqlForCheckViewMetaWithSnapshot(ctxForSql, dbName, viewName, snapshot.TS.PhysicalTime)
+	} else {
+		sql, err = getSqlForCheckViewMeta(ctxForSql, dbName, viewName)
+	}
 	if err != nil {
-		return viewSecurityInfo{}, err
+		return viewSecurityInfo{}, false, err
 	}
 	bh.ClearExecResultSet()
-	err = bh.Exec(ctx, sql)
+	err = bh.Exec(ctxForSql, sql)
 	if err != nil {
-		return viewSecurityInfo{}, err
+		return viewSecurityInfo{}, false, err
 	}
 
-	erArray, err := getResultSet(ctx, bh)
+	erArray, err := getResultSet(ctxForSql, bh)
 	if err != nil {
-		return viewSecurityInfo{}, err
+		return viewSecurityInfo{}, false, err
 	}
 	if !execResultArrayHasData(erArray) {
-		return viewSecurityInfo{}, moerr.NewInternalErrorf(ctx, `there is no view "%s" in database "%s"`, viewName, dbName)
+		return viewSecurityInfo{}, false, nil
 	}
 
 	viewDef, err := erArray[0].GetString(ctx, 0, 0)
 	if err != nil {
-		return viewSecurityInfo{}, err
+		return viewSecurityInfo{}, false, err
 	}
 	definerRoleId, err := erArray[0].GetInt64(ctx, 0, 1)
 	if err != nil {
-		return viewSecurityInfo{}, err
+		return viewSecurityInfo{}, false, err
 	}
 
 	securityType := viewSecurityDefiner
 	if viewDef != "" {
 		var viewData plan2.ViewData
 		if err := json.Unmarshal([]byte(viewDef), &viewData); err != nil {
-			return viewSecurityInfo{}, err
+			return viewSecurityInfo{}, false, err
 		}
 		securityType = normalizeViewSecurityType(viewData.SecurityType)
 	}
@@ -5116,7 +5158,88 @@ func getViewSecurityInfo(ctx context.Context, bh BackgroundExec, dbName, viewNam
 	return viewSecurityInfo{
 		securityType:  securityType,
 		definerRoleId: definerRoleId,
-	}, nil
+	}, true, nil
+}
+
+// resolveViewChainPrivilegeContext verifies view privileges in order and returns
+// the effective role to use for underlying object checks.
+func resolveViewChainPrivilegeContext(
+	ctx context.Context,
+	bh BackgroundExec,
+	ses *Session,
+	cache *privilegeCache,
+	roleId int64,
+	privType PrivilegeType,
+	viewChain []string,
+	fallbackDb string,
+	snapshot *plan.Snapshot,
+	enableCache bool,
+) (int64, bool, bool, error) {
+	if len(viewChain) == 0 {
+		return roleId, true, false, nil
+	}
+	rootDb, rootView := parseViewKey(viewChain[0])
+	if rootView == "" {
+		return 0, false, false, moerr.NewInternalErrorf(ctx, "invalid view key %q", viewChain[0])
+	}
+	if rootDb == "" {
+		rootDb = fallbackDb
+		if rootDb == "" {
+			rootDb = ses.GetDatabaseName()
+		}
+	}
+	if isSystemViewDatabase(rootDb) {
+		return roleId, true, true, nil
+	}
+
+	currentRoleId := roleId
+	for _, viewKey := range viewChain {
+		viewDb, viewName := parseViewKey(viewKey)
+		if viewName == "" {
+			return 0, false, false, moerr.NewInternalErrorf(ctx, "invalid view key %q", viewKey)
+		}
+		if viewDb == "" {
+			viewDb = fallbackDb
+			if viewDb == "" {
+				viewDb = ses.GetDatabaseName()
+			}
+		}
+
+		useCache := enableCache && cache != nil && currentRoleId == roleId
+		cacheToUse := cache
+		if !useCache {
+			cacheToUse = nil
+		}
+		viewAllowed, err := verifyViewPrivilegeForRole(ctx, bh, ses, cacheToUse, currentRoleId, privType, viewDb, viewName, useCache)
+		if err != nil {
+			return 0, false, false, err
+		}
+		if !viewAllowed {
+			return 0, false, false, nil
+		}
+
+		viewInfo, found, err := getViewSecurityInfoWithSnapshot(ctx, bh, viewDb, viewName, snapshot)
+		if err != nil {
+			return 0, false, false, err
+		}
+		if !found {
+			if snapshot != nil && snapshot.TS != nil {
+				return 0, false, false, moerr.NewInternalErrorf(ctx, `there is no view "%s" in database "%s"`, viewName, viewDb)
+			}
+			if !ses.GetTxnHandler().InActiveTxn() {
+				return 0, false, false, moerr.NewInternalErrorf(ctx, `there is no view "%s" in database "%s"`, viewName, viewDb)
+			}
+			viewInfo = viewSecurityInfo{
+				securityType:  viewSecurityDefiner,
+				definerRoleId: currentRoleId,
+			}
+		}
+		if viewInfo.securityType == viewSecurityDefiner {
+			currentRoleId = viewInfo.definerRoleId
+		}
+	}
+
+	return currentRoleId, true, false, nil
 }
 
 // convertAstObjectTypeToObjectType gets the object type from the ast
@@ -6237,6 +6360,7 @@ type privilegeTips struct {
 	objType               objectType
 	originViews           []string
 	directView            string
+	scanSnapshot          *plan.Snapshot
 	databaseName          string
 	tableName             string
 	isClusterTable        bool
@@ -6337,6 +6461,7 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 					//do not check the privilege of the index table
 					originViews := node.GetOriginViews()
 					directView := node.GetDirectView()
+					scanSnapshot := node.GetScanSnapshot()
 					if !isIndexTable(node.ObjRef.GetObjName()) {
 						appendPt(privilegeTips{
 							typ:                   scanTyp,
@@ -6347,6 +6472,7 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 							clusterTableOperation: scanOperation,
 							originViews:           originViews,
 							directView:            directView,
+							scanSnapshot:          scanSnapshot,
 						})
 					} else if node.ParentObjRef != nil {
 						appendPt(privilegeTips{
@@ -6358,6 +6484,7 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 							clusterTableOperation: scanOperation,
 							originViews:           originViews,
 							directView:            directView,
+							scanSnapshot:          scanSnapshot,
 						})
 					}
 				}
@@ -6386,6 +6513,7 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 					//do not check the privilege of the index table
 					originViews := node.GetOriginViews()
 					directView := node.GetDirectView()
+					scanSnapshot := node.GetScanSnapshot()
 					if !isIndexTable(tableName) {
 						insertClusterTable := false
 						if tableDef != nil && tableDef.TableType == catalog.SystemClusterRel {
@@ -6402,6 +6530,7 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 							clusterTableOperation: clusterTableModify,
 							originViews:           originViews,
 							directView:            directView,
+							scanSnapshot:          scanSnapshot,
 						})
 					} else if node.ParentObjRef != nil {
 						parentDb := node.ParentObjRef.GetSchemaName()
@@ -6421,6 +6550,7 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 							clusterTableOperation: clusterTableModify,
 							originViews:           originViews,
 							directView:            directView,
+							scanSnapshot:          scanSnapshot,
 						})
 					}
 				}
@@ -6443,6 +6573,7 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 					//do not check the privilege of the index table
 					originViews := node.GetOriginViews()
 					directView := node.GetDirectView()
+					scanSnapshot := node.GetScanSnapshot()
 					if !isIndexTable(tableName) {
 						insertClusterTable := isClusterTable(dbName, tableName)
 						appendPt(privilegeTips{
@@ -6454,6 +6585,7 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 							clusterTableOperation: clusterTableModify,
 							originViews:           originViews,
 							directView:            directView,
+							scanSnapshot:          scanSnapshot,
 						})
 					}
 				}
@@ -6463,6 +6595,7 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 					//do not check the privilege of the index table
 					originViews := node.GetOriginViews()
 					directView := node.GetDirectView()
+					scanSnapshot := node.GetScanSnapshot()
 					if !isIndexTable(node.ObjRef.GetObjName()) {
 						appendPt(privilegeTips{
 							typ:                   t,
@@ -6473,6 +6606,7 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 							clusterTableOperation: clusterTableModify,
 							originViews:           originViews,
 							directView:            directView,
+							scanSnapshot:          scanSnapshot,
 						})
 					}
 				}
@@ -6480,6 +6614,7 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 				for _, updateCtx := range node.UpdateCtxList {
 					originViews := node.GetOriginViews()
 					directView := node.GetDirectView()
+					scanSnapshot := node.GetScanSnapshot()
 					if !isIndexTable(updateCtx.ObjRef.GetObjName()) {
 						isClusterTable := updateCtx.TableDef.TableType == catalog.SystemClusterRel
 						appendPt(privilegeTips{
@@ -6491,6 +6626,7 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 							clusterTableOperation: clusterTableModify,
 							originViews:           originViews,
 							directView:            directView,
+							scanSnapshot:          scanSnapshot,
 						})
 					}
 				}
@@ -6566,6 +6702,7 @@ func convertPrivilegeTipsToPrivilege(priv *privilege, arr privilegeTipsArray) {
 			objType:               tips.objType,
 			originViews:           tips.originViews,
 			directView:            tips.directView,
+			scanSnapshot:          tips.scanSnapshot,
 			dbName:                tips.databaseName,
 			tableName:             tips.tableName,
 			isClusterTable:        tips.isClusterTable,
@@ -6751,6 +6888,10 @@ func verifyViewPrivilegeForRole(
 	viewName string,
 	enableCache bool,
 ) (bool, error) {
+	// Admin roles bypass view privilege checks to keep grants output stable.
+	if roleId == moAdminRoleID || roleId == accountAdminRoleID {
+		return true, nil
+	}
 	privTypes := []PrivilegeType{privType, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership}
 	seen := make(map[PrivilegeType]struct{}, len(privTypes))
 	for _, p := range privTypes {
@@ -6865,58 +7006,45 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 								mi.isClusterTable,
 								mi.clusterTableOperation)
 							if yes2 {
-								yes, err = verifyPrivilegeEntryInMultiPrivilegeLevels(ctx, bh, ses, cache, roleId, tempEntry, pls, enableCache)
-								if err != nil {
-									return false, err
-								}
-							}
-
-							if len(mi.originViews) > 0 {
-								viewKey := mi.directView
-								if viewKey == "" {
-									viewKey = mi.originViews[0]
-								}
-								viewDb, viewName := parseViewKey(viewKey)
-								if viewName == "" {
-									return false, moerr.NewInternalErrorf(ctx, "invalid view key %q", viewKey)
-								}
-								if viewDb == "" {
-									viewDb = tempEntry.databaseName
-									if viewDb == "" {
-										viewDb = ses.GetDatabaseName()
-									}
+								viewChain := mi.originViews
+								if len(viewChain) == 0 && mi.directView != "" {
+									viewChain = []string{mi.directView}
 								}
 
-								viewAllowed := false
-								// System view databases are read-only, skip view privilege checks.
-								if isSystemViewDatabase(viewDb) {
-									viewAllowed = true
-								} else {
-									viewAllowed, err = verifyViewPrivilegeForRole(ctx, bh, ses, cache, roleId, mi.privilegeTyp, viewDb, viewName, enableCache)
+								checkRoleId := roleId
+								viewAllowed := true
+								skipBaseCheck := false
+								if len(viewChain) > 0 {
+									checkRoleId, viewAllowed, skipBaseCheck, err = resolveViewChainPrivilegeContext(
+										ctx,
+										bh,
+										ses,
+										cache,
+										roleId,
+										mi.privilegeTyp,
+										viewChain,
+										tempEntry.databaseName,
+										mi.scanSnapshot,
+										enableCache,
+									)
 									if err != nil {
 										return false, err
 									}
 								}
-								if !viewAllowed {
-									yes = false
-								} else if isSystemViewDatabase(viewDb) {
-									yes = true
-								} else {
-									viewInfo, err := getViewSecurityInfo(ctx, bh, viewDb, viewName)
-									if err != nil {
-										return false, err
-									}
-									if viewInfo.securityType == viewSecurityInvoker {
-										yes = yes && viewAllowed
+
+								if viewAllowed {
+									if skipBaseCheck {
+										yes = true
 									} else {
-										definerAllowed := false
-										if yes2 {
-											definerAllowed, err = verifyPrivilegeEntryInMultiPrivilegeLevels(ctx, bh, ses, nil, viewInfo.definerRoleId, tempEntry, pls, false)
-											if err != nil {
-												return false, err
-											}
+										useCache := enableCache && cache != nil && checkRoleId == roleId
+										cacheToUse := cache
+										if !useCache {
+											cacheToUse = nil
 										}
-										yes = definerAllowed
+										yes, err = verifyPrivilegeEntryInMultiPrivilegeLevels(ctx, bh, ses, cacheToUse, checkRoleId, tempEntry, pls, useCache)
+										if err != nil {
+											return false, err
+										}
 									}
 								}
 							}
