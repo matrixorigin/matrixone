@@ -202,6 +202,14 @@ func makeSpecialAggExec(
 ) (AggFuncExec, bool, error) {
 	if _, ok := specialAgg[id]; ok {
 		switch id {
+		case AggIdOfVarPop:
+			return makeVarPopExec(mp, id, isDistinct, params[0]), true, nil
+		case AggIdOfStdDevPop:
+			return makeStdDevPopExec(mp, id, isDistinct, params[0]), true, nil
+		case AggIdOfVarSample:
+			return makeVarSampleExec(mp, id, isDistinct, params[0]), true, nil
+		case AggIdOfStdDevSample:
+			return makeStdDevSampleExec(mp, id, isDistinct, params[0]), true, nil
 		case AggIdOfAny:
 			return makeAnyValueExec(mp, id, params[0]), true, nil
 		case AggIdOfMin:

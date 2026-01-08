@@ -148,7 +148,7 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, AvgSupportedTypes)
+			return fixedUnaryAggTypeCheck(inputs, SumSupportedTypes)
 		},
 
 		Overloads: []overload{
@@ -464,17 +464,17 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, agg.VarPopSupportedParameters)
+			return fixedUnaryAggTypeCheck(inputs, SumSupportedTypes)
 		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    agg.VarPopReturnType,
+				retType:    aggexec.AvgReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "var_pop",
-					aggRegister: agg.RegisterVarPop2,
+					aggRegister: agg.RegisterVarPop,
 				},
 			},
 		},
@@ -485,17 +485,17 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, agg.VarPopSupportedParameters)
+			return fixedUnaryAggTypeCheck(inputs, SumSupportedTypes)
 		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    agg.VarPopReturnType,
+				retType:    aggexec.AvgReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "stddev_pop",
-					aggRegister: agg.RegisterStdDevPop2,
+					aggRegister: agg.RegisterStdDevPop,
 				},
 			},
 		},
@@ -506,17 +506,17 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, agg.VarSampleSupportedParameters)
+			return fixedUnaryAggTypeCheck(inputs, SumSupportedTypes)
 		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    agg.VarSampleReturnType,
+				retType:    aggexec.AvgReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "var_sample",
-					aggRegister: agg.RegisterVarSample2,
+					aggRegister: agg.RegisterVarSample,
 				},
 			},
 		},
@@ -527,17 +527,17 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, agg.VarSampleSupportedParameters)
+			return fixedUnaryAggTypeCheck(inputs, SumSupportedTypes)
 		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    agg.VarSampleReturnType,
+				retType:    aggexec.AvgReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "stddev_sample",
-					aggRegister: agg.RegisterStdDevSample2,
+					aggRegister: agg.RegisterStdDevSample,
 				},
 			},
 		},
@@ -614,13 +614,6 @@ var supportedAggInNewFramework = []FuncNew{
 }
 
 var SumSupportedTypes = []types.T{
-	types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
-	types.T_int8, types.T_int16, types.T_int32, types.T_int64,
-	types.T_float32, types.T_float64,
-	types.T_decimal64, types.T_decimal128,
-}
-
-var AvgSupportedTypes = []types.T{
 	types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 	types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 	types.T_float32, types.T_float64,
