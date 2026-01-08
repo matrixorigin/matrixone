@@ -58,7 +58,7 @@ func L2DistanceSq[T types.RealNumbers](v1, v2 []T) (T, error) {
 
 func SumFloat32x16(v archsimd.Float32x16) float32 {
 	var arr [16]float32
-	v.Store(&arr[0])
+	v.Store(&arr)
 	var total float32
 	for _, x := range arr {
 		total += x
@@ -68,7 +68,7 @@ func SumFloat32x16(v archsimd.Float32x16) float32 {
 
 func SumFloat32x8(v archsimd.Float32x8) float32 {
 	var arr [8]float32
-	v.Store(&arr[0])
+	v.Store(&arr)
 	var total float32
 	for _, x := range arr {
 		total += x
@@ -78,7 +78,7 @@ func SumFloat32x8(v archsimd.Float32x8) float32 {
 
 func SumFloat32x4(v archsimd.Float32x4) float32 {
 	var arr [4]float32
-	v.Store(&arr[0])
+	v.Store(&arr)
 	var total float32
 	for _, x := range arr {
 		total += x
