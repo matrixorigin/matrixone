@@ -86,6 +86,36 @@ func SumFloat32x4(v archsimd.Float32x4) float32 {
 	return total
 }
 
+func SumFloat64x8(v archsimd.Float64x8) float64 {
+	var arr [8]float64
+	v.Store(&arr)
+	var total float64
+	for _, x := range arr {
+		total += x
+	}
+	return total
+}
+
+func SumFloat64x4(v archsimd.Float64x4) float64 {
+	var arr [4]float64
+	v.Store(&arr)
+	var total float64
+	for _, x := range arr {
+		total += x
+	}
+	return total
+}
+
+func SumFloat64x2(v archsimd.Float64x2) float64 {
+	var arr [2]float64
+	v.Store(&arr)
+	var total float64
+	for _, x := range arr {
+		total += x
+	}
+	return total
+}
+
 func L2DistanceSqFloat32(a, b []float32) (float32, error) {
 	if len(a) != len(b) {
 		return float32(0), moerr.NewInternalErrorNoCtx("vector dimension not matched")
@@ -145,6 +175,65 @@ func L2DistanceSqFloat32(a, b []float32) (float32, error) {
 	return sumSq, nil
 }
 
+func L2DistanceSqFloat64(a, b []float64) (float64, error) {
+	if len(a) != len(b) {
+		return float64(0), moerr.NewInternalErrorNoCtx("vector dimension not matched")
+	}
+
+	var sumSq float64
+	i := 0
+	n := len(a)
+
+	// 1. AVX-512 Path (512-bit vectors, 16 elements)
+	if archsimd.X86.AVX512() {
+		sumVec := archsimd.Float64x8{}
+		for i <= n-16 {
+			va := archsimd.LoadFloat64x8Slice(a[i : i+16])
+			vb := archsimd.LoadFloat64x8Slice(b[i : i+16])
+			diff := va.Sub(vb)
+			sumVec = diff.MulAdd(diff, sumVec)
+			i += 16
+		}
+		sumSq += SumFloat64x8(sumVec)
+	}
+
+	// 2. AVX2 Path (256-bit vectors, 8 elements)
+	if archsimd.X86.AVX2() {
+		sumVec := archsimd.Float64x4{}
+		for i <= n-8 {
+			va := archsimd.LoadFloat64x4Slice(a[i : i+8])
+			vb := archsimd.LoadFloat64x4Slice(b[i : i+8])
+			diff := va.Sub(vb)
+			sumVec = diff.MulAdd(diff, sumVec)
+			i += 8
+		}
+		sumSq += SumFloat64x4(sumVec)
+	}
+
+	// 3. AVX Path (128-bit vectors, 4 elements)
+	// Handles hardware that supports AVX but not AVX2, or leftover elements
+	if archsimd.X86.AVX() {
+		sumVec := archsimd.Float64x2{}
+		for i <= n-4 {
+			va := archsimd.LoadFloat64x2Slice(a[i : i+4])
+			vb := archsimd.LoadFloat64x2Slice(b[i : i+4])
+			diff := va.Sub(vb)
+			// Older AVX hardware might fallback from FMA (MulAdd)
+			// but archsimd abstracts this for compatibility.
+			sumVec = diff.MulAdd(diff, sumVec)
+			i += 4
+		}
+		sumSq += SumFloat64x2(sumVec)
+	}
+
+	// 4. Scalar Tail Path
+	for ; i < n; i++ {
+		diff := a[i] - b[i]
+		sumSq += diff * diff
+	}
+	return sumSq, nil
+}
+
 // L2SquareDistanceUnrolled calculates the L2 square distance using loop unrolling.
 // This optimization can improve performance for large vectors by reducing loop
 // overhead and allowing for better instruction-level parallelism.
@@ -155,6 +244,11 @@ func L2DistanceSq[T types.RealNumbers](p, q []T) (T, error) {
 		_p := any(p).([]float32)
 		_q := any(q).([]float32)
 		ret, err := L2DistanceSqFloat32(_p, _q)
+		return T(ret), err
+	case []float64:
+		_p := any(p).([]float64)
+		_q := any(q).([]float64)
+		ret, err := L2DistanceSqFloat64(_p, _q)
 		return T(ret), err
 	default:
 		return 0, moerr.NewInternalErrorNoCtx("vector type not supported")
