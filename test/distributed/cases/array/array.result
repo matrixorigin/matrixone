@@ -307,7 +307,7 @@ select cosine_similarity(b,b), cosine_similarity(c,c) from t8;
 cosine_similarity(b, b)    cosine_similarity(c, c)
 null    null
 1.0    null
-0.9999998589068639    0.9999999473078075
+1.0    1.0
 1.0    1.0
 create table t9(a int, b vecf64(3), c vecf64(5));
 INSERT INTO `t9` VALUES (1,NULL,NULL);
@@ -553,5 +553,5 @@ prepare s1 from 'SELECT id, cosine_similarity(vector, ?) FROM vector_test';
 set @a="[1,2,3]";
 execute s1 using @a;
 id    cosine_similarity(vector, ?)
-1    0.9914601460482495
+1    0.9914601445198059
 drop database vecdb;
