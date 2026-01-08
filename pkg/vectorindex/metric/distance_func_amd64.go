@@ -288,7 +288,7 @@ func L1DistanceFloat32(a, b []float32) (float32, error) {
 			acc = acc.Add(diff)
 			i += 16
 		}
-		sum += acc.Sum() // Horizontal sum of the vector
+		sum += SumFloat32x16(acc) // Horizontal sum of the vector
 	}
 
 	// 2. AVX2/AVX Path (8 elements per iteration)
@@ -302,7 +302,7 @@ func L1DistanceFloat32(a, b []float32) (float32, error) {
 			acc = acc.Add(diff)
 			i += 8
 		}
-		sum += acc.Sum()
+		sum += SumFloat32x8(acc)
 	}
 
 	// 3. Scalar Tail (Process remaining elements)
@@ -327,31 +327,39 @@ func L1DistanceFloat64(a, b []float64) (float64, error) {
 	var total float64
 	i := 0
 
+	// Sign bit mask for float64: 0x7FFFFFFFFFFFFFFF
+	// We use this to clear the sign bit (the MSB)
+	mask64 := math.Float64frombits(0x7FFFFFFFFFFFFFFF)
+
 	// 1. AVX-512 Path: 512-bit registers (8 float64 elements)
 	if archsimd.X86.AVX512() {
 		acc := archsimd.Float64x8{}
+		vMask := archsimd.BroadcastFloat64x8(mask64)
 		for i <= n-8 {
 			va := archsimd.LoadFloat64x8Slice(a[i : i+8])
 			vb := archsimd.LoadFloat64x8Slice(b[i : i+8])
 			// Calculate |va - vb| and accumulate
-			diff := va.Sub(vb).Abs()
-			acc = acc.Add(diff)
+			diff := va.Sub(vb)
+			absDiff := diff.And(vMask) // Bitwise AND to clear sign bit
+			acc = acc.Add(absDiff)
 			i += 8
 		}
-		total += acc.Sum() // Horizontal reduction
+		total += SumFloat64x8(acc) // Horizontal reduction
 	}
 
 	// 2. AVX2/AVX Path: 256-bit registers (4 float64 elements)
 	if i <= n-4 && (archsimd.X86.AVX2() || archsimd.X86.AVX()) {
 		acc := archsimd.Float64x4{}
+		vMask := archsimd.BroadcastFloat64x4(mask64)
 		for i <= n-4 {
 			va := archsimd.LoadFloat64x4Slice(a[i : i+4])
 			vb := archsimd.LoadFloat64x4Slice(b[i : i+4])
-			diff := va.Sub(vb).Abs()
-			acc = acc.Add(diff)
+			diff := va.Sub(vb)
+			absDiff := diff.And(vMask)
+			acc = acc.Add(absDiff)
 			i += 4
 		}
-		total += acc.Sum()
+		total += SumFloat64x4(acc)
 	}
 
 	// 3. Scalar Tail: Handle remaining 0-3 elements
