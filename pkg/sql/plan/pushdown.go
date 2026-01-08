@@ -346,13 +346,32 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		//when onlist is empty, it will be a cross join, performance will be very poor
 		//in this situation, we put the non equal conds in the onlist and go loop join
 		//todo: when equal conds and non equal conds both exists, put them in the on list and go hash equal join
-		if node.JoinType == plan.Node_INNER && len(node.OnList) == 0 {
-			// for tpch q22, do not change the plan for now. will fix in the future
-			leftStats := builder.qry.Nodes[node.Children[0]].Stats
-			rightStats := builder.qry.Nodes[node.Children[1]].Stats
-			if leftStats.Outcnt != 1 && rightStats.Outcnt != 1 {
-				node.OnList = append(node.OnList, cantPushdown...)
-				cantPushdown = nil
+		switch node.JoinType {
+		case plan.Node_INNER:
+			if len(node.OnList) == 0 {
+				// for tpch q22, do not change the plan for now. will fix in the future
+				leftStats := builder.qry.Nodes[node.Children[0]].Stats
+				rightStats := builder.qry.Nodes[node.Children[1]].Stats
+				if leftStats.Outcnt != 1 && rightStats.Outcnt != 1 {
+					node.OnList = cantPushdown
+					cantPushdown = nil
+				}
+			}
+
+		case plan.Node_LEFT, plan.Node_SEMI, plan.Node_ANTI, plan.Node_SINGLE:
+			if len(node.OnList) > 0 {
+				var newOnList []*plan.Expr
+
+				for _, cond := range node.OnList {
+					joinSide := getJoinSide(cond, leftTags, rightTags, markTag)
+					if joinSide == JoinSideRight {
+						rightPushdown = append(rightPushdown, cond)
+					} else {
+						newOnList = append(newOnList, cond)
+					}
+				}
+
+				node.OnList = newOnList
 			}
 		}
 
@@ -361,10 +380,10 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 			//inner and semi join can deduce new predicate from both side
 			builder.pushdownFilters(node.Children[0], deduceNewFilterList(rightPushdown, node.OnList), separateNonEquiConds)
 			builder.pushdownFilters(node.Children[1], deduceNewFilterList(leftPushdown, node.OnList), separateNonEquiConds)
-		case plan.Node_RIGHT:
+		case plan.Node_RIGHT, plan.Node_ANTI:
 			//right join can deduce new predicate only from right side to left
 			builder.pushdownFilters(node.Children[0], deduceNewFilterList(rightPushdown, node.OnList), separateNonEquiConds)
-		case plan.Node_LEFT:
+		case plan.Node_LEFT, plan.Node_SINGLE:
 			//left join can deduce new predicate only from left side to right
 			builder.pushdownFilters(node.Children[1], deduceNewFilterList(leftPushdown, node.OnList), separateNonEquiConds)
 		}

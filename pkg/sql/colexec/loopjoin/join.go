@@ -202,12 +202,15 @@ func (ctr *container) probe(ap *LoopJoin, proc *process.Process, result *vm.Call
 				ctr.batIdx = idx
 				return nil
 			}
+
 			bat := mpbat[idx]
+
 			if ctr.expr != nil {
 				if err := colexec.SetJoinBatchValues(ctr.joinBat, inbat, int64(i),
 					bat.RowCount(), ctr.cfs); err != nil {
 					return err
 				}
+
 				vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat, bat}, nil)
 				if err != nil {
 					return err
@@ -222,10 +225,13 @@ func (ctr *container) probe(ap *LoopJoin, proc *process.Process, result *vm.Call
 							if ap.JoinType == plan.Node_SINGLE && matched {
 								return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
 							}
+
 							matched = true
+
 							if ap.JoinType == plan.Node_ANTI {
 								continue
 							}
+
 							for k, rp := range ap.ResultCols {
 								if rp.Rel == 0 {
 									if err = ctr.rbat.Vecs[k].UnionOne(inbat.Vecs[rp.Pos], int64(i), proc.Mp()); err != nil {
@@ -238,6 +244,7 @@ func (ctr *container) probe(ap *LoopJoin, proc *process.Process, result *vm.Call
 								}
 							}
 							rowCountIncrease++
+
 							if ap.JoinType == plan.Node_SEMI {
 								break
 							}
@@ -246,6 +253,7 @@ func (ctr *container) probe(ap *LoopJoin, proc *process.Process, result *vm.Call
 				} else {
 					hasTrue := false
 					hasNull := false
+
 					if vec.IsConst() {
 						v, null := rs.GetValue(0)
 						if null {
@@ -263,6 +271,7 @@ func (ctr *container) probe(ap *LoopJoin, proc *process.Process, result *vm.Call
 							}
 						}
 					}
+
 					for j := range ap.ResultCols {
 						if ap.ResultCols[j].Rel == 0 {
 							if err = ctr.rbat.Vecs[j].UnionOne(inbat.Vecs[ap.ResultCols[j].Pos], int64(i), proc.Mp()); err != nil {
@@ -285,7 +294,8 @@ func (ctr *container) probe(ap *LoopJoin, proc *process.Process, result *vm.Call
 				}
 			} else {
 				matched = true
-				if ap.JoinType == plan.Node_LEFT {
+				switch ap.JoinType {
+				case plan.Node_LEFT:
 					for k, rp := range ap.ResultCols {
 						if rp.Rel == 0 {
 							if err := ctr.rbat.Vecs[k].UnionMulti(ctr.inbat.Vecs[rp.Pos], int64(i), bat.RowCount(), proc.Mp()); err != nil {
@@ -298,7 +308,8 @@ func (ctr *container) probe(ap *LoopJoin, proc *process.Process, result *vm.Call
 						}
 					}
 					rowCountIncrease += bat.RowCount()
-				} else if ap.JoinType == plan.Node_SINGLE {
+
+				case plan.Node_SINGLE:
 					if bat.RowCount() == 1 {
 						for k, rp := range ap.ResultCols {
 							if rp.Rel == 0 {
@@ -317,13 +328,35 @@ func (ctr *container) probe(ap *LoopJoin, proc *process.Process, result *vm.Call
 					} else {
 						return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
 					}
+
+				case plan.Node_SEMI:
+					if bat.RowCount() > 0 {
+						for k, rp := range ap.ResultCols {
+							if err := ctr.rbat.Vecs[k].UnionOne(inbat.Vecs[rp.Pos], int64(i), proc.Mp()); err != nil {
+								return err
+							}
+						}
+						rowCountIncrease++
+					}
+
+				case plan.Node_ANTI:
+					if bat.RowCount() == 0 {
+						for k, rp := range ap.ResultCols {
+							if err := ctr.rbat.Vecs[k].UnionOne(inbat.Vecs[rp.Pos], int64(i), proc.Mp()); err != nil {
+								return err
+							}
+						}
+						rowCountIncrease++
+					}
 				}
 			}
+
 			if ap.JoinType == plan.Node_SEMI && matched {
 				break
 			}
 		}
-		if (ap.JoinType == plan.Node_ANTI || ap.JoinType == plan.Node_LEFT || ap.JoinType == plan.Node_SINGLE) && !matched {
+
+		if !matched && (ap.JoinType == plan.Node_ANTI || ap.JoinType == plan.Node_LEFT || ap.JoinType == plan.Node_SINGLE) {
 			for k, rp := range ap.ResultCols {
 				if rp.Rel == 0 {
 					if err := ctr.rbat.Vecs[k].UnionOne(inbat.Vecs[rp.Pos], int64(i), proc.Mp()); err != nil {
