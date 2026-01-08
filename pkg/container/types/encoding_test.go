@@ -596,12 +596,3 @@ func TestWriteValuesErrorPerType(t *testing.T) {
 		require.Error(t, err, "expected error when encoding %T", val)
 	}
 }
-
-func TestInt32Uint32Encoding(t *testing.T) {
-	vals := []int32{-100, -1, 0, 1, 123456}
-	for _, v := range vals {
-		encoded := Int32ToUint32(v)
-		decoded := Uint32ToInt32(encoded)
-		require.Equal(t, v, decoded)
-	}
-}

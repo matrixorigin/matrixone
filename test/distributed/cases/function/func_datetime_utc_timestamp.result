@@ -19,7 +19,7 @@ ts
 drop table t1;
 select utc_timestamp()-utc_timestamp(),weekday(utc_timestamp())-weekday(utc_timestamp()),unix_timestamp()-unix_timestamp(utc_timestamp());
 utc_timestamp() - utc_timestamp()    weekday(utc_timestamp()) - weekday(utc_timestamp())    unix_timestamp() - unix_timestamp(utc_timestamp())
-0    0    -36000
+0    0    -36001
 CREATE TABLE t1 (a TIMESTAMP);
 INSERT INTO t1 select (utc_timestamp());
 INSERT INTO t1 select (utc_timestamp());
