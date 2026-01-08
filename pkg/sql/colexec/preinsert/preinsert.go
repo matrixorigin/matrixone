@@ -303,7 +303,6 @@ func genAutoIncrCol(bat *batch.Batch, proc *proc, preInsert *PreInsert) error {
 			toTs := types.TimestampToTS(proc.Base.TxnOperator.SnapshotTS())
 			if mayChanged, err := rel.PrimaryKeysMayBeUpserted(proc.Ctx, fromTs, toTs, bat, preInsert.ColOffset+int32(idx)); err == nil {
 				if mayChanged {
-					logutil.Debugf("user may have manually specified the value to be inserted into the auto pk col before this transaction.")
 					return moerr.NewTxnNeedRetry(proc.Ctx)
 				}
 			} else {
