@@ -234,7 +234,7 @@ thirdparties:
 .PHONY: build
 build: config cgo thirdparties
 	$(info [Build binary])
-	$(GOEXPERIMENT_OPT) $(CGO_OPTS) go build $(GOTAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) $(GOBUILD_OPT) -o $(BIN_NAME) ./cmd/mo-service
+	$(GOEXPERIMENT_OPT) $(CGO_OPTS) go1.26rc1 build $(GOTAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) $(GOBUILD_OPT) -o $(BIN_NAME) ./cmd/mo-service
 
 # https://wiki.musl-libc.org/getting-started.html
 # https://musl.cc/

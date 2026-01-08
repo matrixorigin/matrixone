@@ -18,6 +18,7 @@ package metric
 
 import (
 	"math"
+	"simd/archsimd"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -55,9 +56,9 @@ func L2DistanceSq[T types.RealNumbers](v1, v2 []T) (T, error) {
 }
 */
 
-func L2DistanceSqFloat32(p, q []float32) (float32, error) {
+func L2DistanceSqFloat32(a, b []float32) (float32, error) {
 	if len(a) != len(b) {
-		return T(0), moerr.NewInternalErrorNoCtx("vector dimension not matched")
+		return float32(0), moerr.NewInternalErrorNoCtx("vector dimension not matched")
 	}
 
 	var sumSq float32
@@ -111,7 +112,7 @@ func L2DistanceSqFloat32(p, q []float32) (float32, error) {
 		diff := a[i] - b[i]
 		sumSq += diff * diff
 	}
-	return sumSq
+	return sumSq, nil
 }
 
 // L2SquareDistanceUnrolled calculates the L2 square distance using loop unrolling.
@@ -121,9 +122,10 @@ func L2DistanceSq[T types.RealNumbers](p, q []T) (T, error) {
 
 	switch any(p).(type) {
 	case []float32:
-		_p := p.([]float32)
-		_q := q.([]float32)
-		return L2DistanceSqFloat32(_p, _q)
+		_p := any(p).([]float32)
+		_q := any(q).([]float32)
+		ret, err := L2DistanceSqFloat32(_p, _q)
+		return T(ret), err
 	default:
 		return 0, moerr.NewInternalErrorNoCtx("vector type not supported")
 	}
