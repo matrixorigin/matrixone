@@ -108,8 +108,8 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 			if ctr.rbat == nil {
-				ctr.rbat = batch.NewWithSize(len(loopJoin.Result))
-				for i, rp := range loopJoin.Result {
+				ctr.rbat = batch.NewWithSize(len(loopJoin.ResultCols))
+				for i, rp := range loopJoin.ResultCols {
 					if rp.Rel == 0 {
 						ctr.rbat.Vecs[i] = vector.NewVec(*ctr.inbat.Vecs[rp.Pos].GetType())
 						ctr.rbat.Vecs[i].SetSorted(ctr.inbat.Vecs[rp.Pos].GetSorted())
@@ -123,7 +123,7 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 			} else {
 				ctr.rbat.CleanOnlyData()
-				for i, rp := range loopJoin.Result {
+				for i, rp := range loopJoin.ResultCols {
 					if rp.Rel == 0 {
 						ctr.rbat.Vecs[i].SetSorted(ctr.inbat.Vecs[rp.Pos].GetSorted())
 					}
@@ -157,7 +157,7 @@ func (loopJoin *LoopJoin) build(proc *process.Process, analyzer process.Analyzer
 }
 
 func (ctr *container) emptyProbe(ap *LoopJoin, proc *process.Process, result *vm.CallResult) error {
-	for i, rp := range ap.Result {
+	for i, rp := range ap.ResultCols {
 		if rp.Rel == 0 {
 			if err := vector.GetUnionAllFunction(*ctr.rbat.Vecs[i].GetType(), proc.Mp())(ctr.rbat.Vecs[i], ctr.inbat.Vecs[rp.Pos]); err != nil {
 				return err
@@ -226,7 +226,7 @@ func (ctr *container) probe(ap *LoopJoin, proc *process.Process, result *vm.Call
 							if ap.JoinType == plan.Node_ANTI {
 								continue
 							}
-							for k, rp := range ap.Result {
+							for k, rp := range ap.ResultCols {
 								if rp.Rel == 0 {
 									if err = ctr.rbat.Vecs[k].UnionOne(inbat.Vecs[rp.Pos], int64(i), proc.Mp()); err != nil {
 										return err
@@ -263,9 +263,9 @@ func (ctr *container) probe(ap *LoopJoin, proc *process.Process, result *vm.Call
 							}
 						}
 					}
-					for j := range ap.Result {
-						if ap.Result[j].Rel == 0 {
-							if err = ctr.rbat.Vecs[j].UnionOne(inbat.Vecs[ap.Result[j].Pos], int64(i), proc.Mp()); err != nil {
+					for j := range ap.ResultCols {
+						if ap.ResultCols[j].Rel == 0 {
+							if err = ctr.rbat.Vecs[j].UnionOne(inbat.Vecs[ap.ResultCols[j].Pos], int64(i), proc.Mp()); err != nil {
 								return err
 							}
 						} else {
@@ -286,7 +286,7 @@ func (ctr *container) probe(ap *LoopJoin, proc *process.Process, result *vm.Call
 			} else {
 				matched = true
 				if ap.JoinType == plan.Node_LEFT {
-					for k, rp := range ap.Result {
+					for k, rp := range ap.ResultCols {
 						if rp.Rel == 0 {
 							if err := ctr.rbat.Vecs[k].UnionMulti(ctr.inbat.Vecs[rp.Pos], int64(i), bat.RowCount(), proc.Mp()); err != nil {
 								return err
@@ -300,7 +300,7 @@ func (ctr *container) probe(ap *LoopJoin, proc *process.Process, result *vm.Call
 					rowCountIncrease += bat.RowCount()
 				} else if ap.JoinType == plan.Node_SINGLE {
 					if bat.RowCount() == 1 {
-						for k, rp := range ap.Result {
+						for k, rp := range ap.ResultCols {
 							if rp.Rel == 0 {
 								err := ctr.rbat.Vecs[k].UnionOne(ctr.inbat.Vecs[rp.Pos], int64(i), proc.Mp())
 								if err != nil {
@@ -324,7 +324,7 @@ func (ctr *container) probe(ap *LoopJoin, proc *process.Process, result *vm.Call
 			}
 		}
 		if (ap.JoinType == plan.Node_ANTI || ap.JoinType == plan.Node_LEFT || ap.JoinType == plan.Node_SINGLE) && !matched {
-			for k, rp := range ap.Result {
+			for k, rp := range ap.ResultCols {
 				if rp.Rel == 0 {
 					if err := ctr.rbat.Vecs[k].UnionOne(inbat.Vecs[rp.Pos], int64(i), proc.Mp()); err != nil {
 						return err
