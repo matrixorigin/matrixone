@@ -522,6 +522,117 @@ func InnerProduct[T types.RealNumbers](p, q []T) (T, error) {
 	}
 }
 
+func CosineDistanceF32(a, b []float32) (float32, error) {
+	if len(a) != len(b) {
+		return float32(0), moerr.NewInternalErrorNoCtx("vector dimension mismatch")
+	}
+
+	var dot, normA, normB float32
+	i, n := 0, len(a)
+
+	// 1. AVX-512 (512-bit, 16 elements)
+	if archsimd.X86.AVX512() {
+		accDot, accA, accB := archsimd.Float32x16{}, archsimd.Float32x16{}, archsimd.Float32x16{}
+		for i <= n-16 {
+			va := archsimd.LoadFloat32x16Slice(a[i : i+16])
+			vb := archsimd.LoadFloat32x16Slice(b[i : i+16])
+			accDot = accDot.Add(va.Mul(vb))
+			accA = accA.Add(va.Mul(va))
+			accB = accB.Add(vb.Mul(vb))
+			i += 16
+		}
+		dot += SumFloat32x16(accDot)
+		normA += SumFloat32x16(accA)
+		normB += SumFloat32x16(accB)
+	}
+
+	// 2. AVX2/AVX (256-bit, 8 elements)
+	if i <= n-8 && (archsimd.X86.AVX2() || archsimd.X86.AVX()) {
+		accDot, accA, accB := archsimd.Float32x8{}, archsimd.Float32x8{}, archsimd.Float32x8{}
+		for i <= n-8 {
+			va := archsimd.LoadFloat32x8Slice(a[i : i+8])
+			vb := archsimd.LoadFloat32x8Slice(b[i : i+8])
+			accDot = accDot.Add(va.Mul(vb))
+			accA = accA.Add(va.Mul(va))
+			accB = accB.Add(vb.Mul(vb))
+			i += 8
+		}
+		dot += SumFloat32x8(accDot)
+		normA += SumFloat32x8(accA)
+		normB += SumFloat32x8(accB)
+	}
+
+	// 3. Scalar Tail
+	for ; i < n; i++ {
+		dot += a[i] * b[i]
+		normA += a[i] * a[i]
+		normB += b[i] * b[i]
+	}
+
+	denominator := math.Sqrt(float64(normA)) * math.Sqrt(float64(normB))
+	if denominator == 0 {
+		return 1.0, nil
+	}
+
+	similarity := float64(dot) / denominator
+	return 1.0 - similarity, nil
+}
+
+func CosineDistanceF64(a, b []float64) (float64, error) {
+	if len(a) != len(b) {
+		return float64(0), moerr.NewInternalErrorNoCtx("vector dimension mismatch")
+	}
+
+	var dot, normA, normB float64
+	i, n := 0, len(a)
+
+	// 1. AVX-512 (512-bit, 8 elements)
+	if archsimd.X86.AVX512() {
+		accDot, accA, accB := archsimd.Float64x8{}, archsimd.Float64x8{}, archsimd.Float64x8{}
+		for i <= n-8 {
+			va := archsimd.LoadFloat64x8Slice(a[i : i+8])
+			vb := archsimd.LoadFloat64x8Slice(b[i : i+8])
+			accDot = accDot.Add(va.Mul(vb))
+			accA = accA.Add(va.Mul(va))
+			accB = accB.Add(vb.Mul(vb))
+			i += 8
+		}
+		dot += SumFloat64x8(accDot)
+		normA += SumFloat64x8(accA)
+		normB += SumFloat64x8(accB)
+	}
+
+	// 2. AVX2/AVX (256-bit, 4 elements)
+	if i <= n-4 && (archsimd.X86.AVX2() || archsimd.X86.AVX()) {
+		accDot, accA, accB := archsimd.Float64x4{}, archsimd.Float64x4{}, archsimd.Float64x4{}
+		for i <= n-4 {
+			va := archsimd.LoadFloat64x4Slice(a[i : i+4])
+			vb := archsimd.LoadFloat64x4Slice(b[i : i+4])
+			accDot = accDot.Add(va.Mul(vb))
+			accA = accA.Add(va.Mul(va))
+			accB = accB.Add(vb.Mul(vb))
+			i += 4
+		}
+		dot += SumFloat64x4(accDot)
+		normA += SumFloat64x4(accA)
+		normB += SumFloat64x4(accB)
+	}
+
+	// 3. Scalar Tail
+	for ; i < n; i++ {
+		dot += a[i] * b[i]
+		normA += a[i] * a[i]
+		normB += b[i] * b[i]
+	}
+
+	denominator := math.Sqrt(normA) * math.Sqrt(normB)
+	if denominator == 0 {
+		return 1.0, nil
+	}
+	similarity := dot / denominator
+	return 1.0 - similarity, nil
+}
+
 // CosineDistance calculates the cosine distance between two vectors using generics.
 //
 // Formula:
@@ -532,73 +643,21 @@ func InnerProduct[T types.RealNumbers](p, q []T) (T, error) {
 // dot product (v1 · v2) and the squared L2 norms (||v1||², ||v2||²) in a single pass.
 // This improves performance by reducing loop overhead and maximizing CPU cache efficiency.
 func CosineDistance[T types.RealNumbers](p, q []T) (T, error) {
-	if len(p) == 0 {
-		// The distance is undefined for empty vectors. Returning 0 and no error is a common convention.
-		return 0, nil
+
+	switch any(p).(type) {
+	case []float32:
+		_p := any(p).([]float32)
+		_q := any(q).([]float32)
+		ret, err := CosineDistanceF32(_p, _q)
+		return T(ret), err
+	case []float64:
+		_p := any(p).([]float64)
+		_q := any(q).([]float64)
+		ret, err := CosineDistanceF64(_p, _q)
+		return T(ret), err
+	default:
+		return 0, moerr.NewInternalErrorNoCtx("vector type not supported")
 	}
-
-	if len(p) != len(q) {
-		return T(0), moerr.NewInternalErrorNoCtx("vector dimension not matched")
-	}
-
-	var (
-		dotProduct T
-		normV1Sq   T
-		normV2Sq   T
-	)
-
-	n := len(p)
-	i := 0
-
-	// Process the bulk of the data in chunks of 4.
-	// Unrolling by 4 provides a good balance between performance gain and code readability.
-	// We calculate all three components in one loop to improve data locality.
-	for i <= n-4 {
-		// BCE Hint
-		pp := p[i : i+4 : i+4]
-		qq := q[i : i+4 : i+4]
-
-		dotProduct += pp[0]*qq[0] + pp[1]*qq[1] + pp[2]*qq[2] + pp[3]*qq[3]
-		normV1Sq += pp[0]*pp[0] + pp[1]*pp[1] + pp[2]*pp[2] + pp[3]*pp[3]
-		normV2Sq += qq[0]*qq[0] + qq[1]*qq[1] + qq[2]*qq[2] + qq[3]*qq[3]
-		i += 4
-	}
-
-	// Handle the remaining 0 to 3 elements.
-	for i < n {
-		dotProduct += p[i] * q[i]
-		normV1Sq += p[i] * p[i]
-		normV2Sq += q[i] * q[i]
-		i++
-	}
-
-	// The denominator is the product of the L2 norms (Euclidean lengths).
-	// We must cast to float64 to use the standard library's math.Sqrt.
-	denominator := math.Sqrt(float64(normV1Sq)) * math.Sqrt(float64(normV2Sq))
-
-	// Handle the edge case of a zero-magnitude vector. If the denominator is zero,
-	// the cosine similarity is undefined. A distance of 1.0 is a common convention,
-	// implying the vectors are maximally dissimilar (orthogonal).
-	if denominator == 0 {
-		// This can happen if one or both vectors are all zeros.
-		return 1.0, nil
-	}
-
-	// Calculate cosine similarity.
-	similarity := float64(dotProduct) / denominator
-
-	// handle precision issues. Clamp the cosine simliarity to the range [-1, 1].
-	if similarity > 1.0 {
-		similarity = 1.0
-	} else if similarity < -1.0 {
-		similarity = -1.0
-	}
-
-	// Cosine distance is 1 minus the similarity.
-	// The result is cast back to the original type T.
-	distance := 1.0 - similarity
-
-	return T(distance), nil
 }
 
 // CosineSimilarity calculates the cosine similarity between two vectors using generics.
