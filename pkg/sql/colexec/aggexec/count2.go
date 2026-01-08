@@ -17,25 +17,28 @@ package aggexec
 import (
 	"slices"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
 type countStarExec struct {
-	aggExec[int64]
+	aggExec
 	extra int64
 }
 
 func (exec *countStarExec) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
-	pt := exec.GetState(uint64(groupIndex))
-	*pt += 1
+	x, y := exec.getXY(uint64(groupIndex))
+	vals := vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[0])
+	vals[y] += 1
 	return nil
 }
 
 func (exec *countStarExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {
-	pt := exec.GetState(uint64(groupIndex))
-	*pt += int64(vectors[0].Length())
+	x, y := exec.getXY(uint64(groupIndex))
+	vals := vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[0])
+	vals[y] += int64(vectors[0].Length())
 	return nil
 }
 
@@ -51,9 +54,11 @@ func (exec *countStarExec) BatchFill(offset int, groups []uint64, vectors []*vec
 
 func (exec *countStarExec) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
 	other := next.(*countStarExec)
-	pt1 := exec.GetState(uint64(groupIdx1))
-	pt2 := other.GetState(uint64(groupIdx2))
-	*pt1 += *pt2
+	x1, y1 := exec.getXY(uint64(groupIdx1))
+	x2, y2 := other.getXY(uint64(groupIdx2))
+	vals1 := vector.MustFixedColNoTypeCheck[int64](exec.state[x1].vecs[0])
+	vals2 := vector.MustFixedColNoTypeCheck[int64](other.state[x2].vecs[0])
+	vals1[y1] += vals2[y2]
 	return nil
 }
 
@@ -73,14 +78,11 @@ func (exec *countStarExec) SetExtraInformation(partialResult any, _ int) error {
 }
 
 func (exec *countStarExec) Flush() ([]*vector.Vector, error) {
+	// transfer vector to result
 	vecs := make([]*vector.Vector, len(exec.state))
 	for i := range vecs {
-		vecs[i] = vector.NewOffHeapVecWithTypeAndData(
-			types.T_int64.ToType(),
-			exec.state[i].states,
-			int(exec.state[i].length),
-			int(exec.state[i].capacity))
-		exec.state[i].states = nil
+		vecs[i] = exec.state[i].vecs[0]
+		exec.state[i].vecs[0] = nil
 		exec.state[i].length = 0
 		exec.state[i].capacity = 0
 
@@ -95,7 +97,7 @@ func (exec *countStarExec) Flush() ([]*vector.Vector, error) {
 }
 
 type countColumnExec struct {
-	aggExec[int64]
+	aggExec
 	extra int64
 }
 
@@ -121,8 +123,9 @@ func (exec *countColumnExec) BatchFill(offset int, groups []uint64, vectors []*v
 		if vectors[0].IsNull(idx) {
 			continue
 		} else {
-			pt := exec.GetState(grp - 1)
-			*pt += 1
+			x, y := exec.getXY(grp - 1)
+			vals := vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[0])
+			vals[y] += 1
 		}
 	}
 	return nil
@@ -143,9 +146,11 @@ func (exec *countColumnExec) BatchMerge(next AggFuncExec, offset int, groups []u
 		if grp == GroupNotMatched {
 			continue
 		}
-		pt1 := exec.GetState(grp - 1)
-		pt2 := other.GetState(uint64(offset + i))
-		*pt1 += *pt2
+		x1, y1 := exec.getXY(grp - 1)
+		x2, y2 := other.getXY(uint64(offset + i))
+		vals1 := vector.MustFixedColNoTypeCheck[int64](exec.state[x1].vecs[0])
+		vals2 := vector.MustFixedColNoTypeCheck[int64](other.state[x2].vecs[0])
+		vals1[y1] += vals2[y2]
 	}
 	return nil
 }
@@ -158,43 +163,29 @@ func (exec *countColumnExec) SetExtraInformation(partialResult any, _ int) error
 func (exec *countColumnExec) Flush() ([]*vector.Vector, error) {
 	vecs := make([]*vector.Vector, len(exec.state))
 	if exec.IsDistinct() {
-		argtsz := exec.aggInfo.argTypes[0].Oid.FixedLength()
+		if exec.extra != 0 {
+			panic(moerr.NewInternalErrorNoCtx("extra is not supported for distinct count"))
+		}
 
 		for i := range vecs {
 			vecs[i] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
 			vecs[i].PreExtend(int(exec.state[i].length), exec.mp)
 			vecs[i].SetLength(int(exec.state[i].length))
-
-			ptrs := exec.state[i].getPtrLenSlice()
 			vals := vector.MustFixedColNoTypeCheck[int64](vecs[i])
-			for j := range ptrs {
-				if argtsz > 0 {
-					vals[j] = int64(ptrs[j].Len() / argtsz)
-				} else {
-					vals[j] = int64(ptrs[j].NumberOfVarlenElements())
-				}
-			}
-			if exec.extra != 0 {
-				for j := range vals {
-					vals[j] += exec.extra
-				}
+			for j := range vals {
+				vals[j] += int64(exec.state[i].argCnt[j])
 			}
 		}
 	} else {
 		for i := range vecs {
-			vecs[i] = vector.NewOffHeapVecWithTypeAndData(
-				types.T_int64.ToType(),
-				exec.state[i].states,
-				int(exec.state[i].length),
-				int(exec.state[i].capacity))
-			exec.state[i].states = nil
+			vecs[i] = exec.state[i].vecs[0]
+			exec.state[i].vecs[0] = nil
 			exec.state[i].length = 0
 			exec.state[i].capacity = 0
-
 			if exec.extra != 0 {
 				vals := vector.MustFixedColNoTypeCheck[int64](vecs[i])
 				for j := range vals {
-					vals[j] += exec.extra
+					vals[j] += int64(exec.extra)
 				}
 			}
 		}
@@ -220,9 +211,9 @@ func newCountStarExec(mp *mpool.MPool, aggID int64, isDistinct bool, param types
 		isDistinct: false, // count(*) is does not need to know anything of distinct
 		argTypes:   []types.Type{param},
 		retType:    types.T_int64.ToType(),
+		stateTypes: []types.Type{types.T_int64.ToType()},
 		emptyNull:  false,
-		usePtrLen:  false,
-		entrySize:  8, // int64
+		saveArg:    false,
 	}
 	return &exec
 }
@@ -235,9 +226,9 @@ func newCountColumnExec(mp *mpool.MPool, aggID int64, isDistinct bool, param typ
 		isDistinct: isDistinct,
 		argTypes:   []types.Type{param},
 		retType:    types.T_int64.ToType(),
+		stateTypes: []types.Type{types.T_int64.ToType()},
 		emptyNull:  false,
-		usePtrLen:  isDistinct, // count (distinct X) needs to store varlen value
-		entrySize:  8,          // int64
+		saveArg:    isDistinct,
 	}
 	return &exec
 }
