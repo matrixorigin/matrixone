@@ -139,32 +139,17 @@ func L2DistanceSqFloat32(a, b []float32) (float32, error) {
 	}
 
 	// 2. AVX2 Path (256-bit vectors, 8 elements)
-	if archsimd.X86.AVX2() {
+	if archsimd.X86.AVX2() || archsim.X86.AVX() {
 		sumVec := archsimd.Float32x8{}
 		for i <= n-8 {
 			va := archsimd.LoadFloat32x8Slice(a[i : i+8])
 			vb := archsimd.LoadFloat32x8Slice(b[i : i+8])
 			diff := va.Sub(vb)
-			sumVec = diff.MulAdd(diff, sumVec)
+			sq := diff.Mul(diff)
+			sumVec = sumVec.Add(sq)
 			i += 8
 		}
 		sumSq += SumFloat32x8(sumVec)
-	}
-
-	// 3. AVX Path (128-bit vectors, 4 elements)
-	// Handles hardware that supports AVX but not AVX2, or leftover elements
-	if archsimd.X86.AVX() {
-		sumVec := archsimd.Float32x4{}
-		for i <= n-4 {
-			va := archsimd.LoadFloat32x4Slice(a[i : i+4])
-			vb := archsimd.LoadFloat32x4Slice(b[i : i+4])
-			diff := va.Sub(vb)
-			// Older AVX hardware might fallback from FMA (MulAdd)
-			// but archsimd abstracts this for compatibility.
-			sumVec = diff.MulAdd(diff, sumVec)
-			i += 4
-		}
-		sumSq += SumFloat32x4(sumVec)
 	}
 
 	// 4. Scalar Tail Path
@@ -198,32 +183,17 @@ func L2DistanceSqFloat64(a, b []float64) (float64, error) {
 	}
 
 	// 2. AVX2 Path (256-bit vectors, 4 elements)
-	if archsimd.X86.AVX2() {
+	if archsimd.X86.AVX2() || archsimd.X86.AVX() {
 		sumVec := archsimd.Float64x4{}
 		for i <= n-4 {
 			va := archsimd.LoadFloat64x4Slice(a[i : i+4])
 			vb := archsimd.LoadFloat64x4Slice(b[i : i+4])
 			diff := va.Sub(vb)
-			sumVec = diff.MulAdd(diff, sumVec)
+			sq := diff.Mul(diff)
+			sumVec = sumVec.Add(sq)
 			i += 4
 		}
 		sumSq += SumFloat64x4(sumVec)
-	}
-
-	// 3. AVX Path (128-bit vectors, 2 elements)
-	// Handles hardware that supports AVX but not AVX2, or leftover elements
-	if archsimd.X86.AVX() {
-		sumVec := archsimd.Float64x2{}
-		for i <= n-2 {
-			va := archsimd.LoadFloat64x2Slice(a[i : i+2])
-			vb := archsimd.LoadFloat64x2Slice(b[i : i+2])
-			diff := va.Sub(vb)
-			// Older AVX hardware might fallback from FMA (MulAdd)
-			// but archsimd abstracts this for compatibility.
-			sumVec = diff.MulAdd(diff, sumVec)
-			i += 2
-		}
-		sumSq += SumFloat64x2(sumVec)
 	}
 
 	// 4. Scalar Tail Path
