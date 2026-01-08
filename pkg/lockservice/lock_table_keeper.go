@@ -155,7 +155,7 @@ func (k *lockTableKeeper) doKeepRemoteLock(
 		if !isRetryError(err) {
 			k.groupTables.removeWithFilter(func(_ uint64, v lockTable) bool {
 				return !v.getBind().Changed(bind)
-			})
+			}, closeReasonKeeperFailed)
 		}
 	}
 
@@ -236,7 +236,7 @@ func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
 			return true
 		}
 		return false
-	})
+	}, closeReasonKeepBindFailed)
 
 	if n > 0 {
 		// Keep bind receiving an explicit failure means that all the binds of the local

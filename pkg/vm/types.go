@@ -43,11 +43,6 @@ const (
 
 	HashJoin
 	LoopJoin
-	Semi
-	RightSemi
-	Anti
-	RightAnti
-	Mark
 	IndexJoin
 	IndexBuild
 	DedupJoin
@@ -137,11 +132,6 @@ func init() {
 		Projection:              "Projection",
 		HashJoin:                "HashJoin",
 		LoopJoin:                "LoopJoin",
-		Semi:                    "Semi",
-		RightSemi:               "RightSemi",
-		Anti:                    "Anti",
-		RightAnti:               "RightAnti",
-		Mark:                    "Mark",
 		IndexJoin:               "IndexJoin",
 		IndexBuild:              "IndexBuild",
 		Merge:                   "Merge",
@@ -208,11 +198,6 @@ func init() {
 		OperatorToStrMap[Group]:     true,
 		OperatorToStrMap[HashJoin]:  true,
 		OperatorToStrMap[LoopJoin]:  true,
-		OperatorToStrMap[Semi]:      true,
-		OperatorToStrMap[RightSemi]: true,
-		OperatorToStrMap[Anti]:      true,
-		OperatorToStrMap[RightAnti]: true,
-		OperatorToStrMap[Mark]:      true,
 		OperatorToStrMap[Product]:   true,
 		OperatorToStrMap[ProductL2]: true,
 	}
