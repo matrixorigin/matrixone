@@ -519,6 +519,48 @@ func getExprNdv(expr *plan.Expr, builder *QueryBuilder) float64 {
 		case "substring":
 			// no good way to calc ndv for substring
 			return math.Min(getExprNdv(exprImpl.F.Args[0], builder), 25)
+		case "%", "mod":
+			// For modulo operations like b%N, the NDV is at most N
+			if len(exprImpl.F.Args) >= 2 {
+				if lit := exprImpl.F.Args[1].GetLit(); lit != nil {
+					var modValue float64
+					switch v := lit.Value.(type) {
+					case *plan.Literal_I64Val:
+						if v.I64Val > 0 {
+							modValue = float64(v.I64Val)
+						}
+					case *plan.Literal_I32Val:
+						if v.I32Val > 0 {
+							modValue = float64(v.I32Val)
+						}
+					case *plan.Literal_I16Val:
+						if v.I16Val > 0 {
+							modValue = float64(v.I16Val)
+						}
+					case *plan.Literal_I8Val:
+						if v.I8Val > 0 {
+							modValue = float64(v.I8Val)
+						}
+					case *plan.Literal_U64Val:
+						modValue = float64(v.U64Val)
+					case *plan.Literal_U32Val:
+						modValue = float64(v.U32Val)
+					case *plan.Literal_U16Val:
+						modValue = float64(v.U16Val)
+					case *plan.Literal_U8Val:
+						modValue = float64(v.U8Val)
+					}
+					if modValue > 0 {
+						// Take min of column NDV and modulo value for conservative estimate
+						colNdv := getExprNdv(exprImpl.F.Args[0], builder)
+						if colNdv > 0 {
+							return math.Min(colNdv, modValue)
+						}
+						return modValue
+					}
+				}
+			}
+			return getExprNdv(exprImpl.F.Args[0], builder)
 		default:
 			return getExprNdv(exprImpl.F.Args[0], builder)
 		}
