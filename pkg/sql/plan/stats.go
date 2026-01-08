@@ -1719,7 +1719,7 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 			node.Children[0], node.Children[1] = node.Children[1], node.Children[0]
 		}
 
-	case plan.Node_LEFT, plan.Node_SEMI, plan.Node_ANTI:
+	case plan.Node_LEFT, plan.Node_SEMI, plan.Node_ANTI, plan.Node_SINGLE:
 		//right joins does not support non equal join for now
 		if builder.optimizerHints != nil && builder.optimizerHints.disableRightJoin != 0 {
 			node.IsRightJoin = false
