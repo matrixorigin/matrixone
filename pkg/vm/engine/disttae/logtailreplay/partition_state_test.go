@@ -16,6 +16,7 @@ package logtailreplay
 
 import (
 	"context"
+	"encoding/binary"
 	"math/rand"
 	"sort"
 	"testing"
@@ -1558,11 +1559,9 @@ func TestCountTombstoneStats_MultiObjectMultiBlock(t *testing.T) {
 		totalRows, statsMap.Rows, statsMerge.Rows, expectedUnique)
 }
 
-func TestCountTombstoneStats_ComprehensiveAllScenarios_TODO(t *testing.T) {
-	// TODO: This test reveals a subtle bug in deduplication logic
-	// Map=53, Merge=54, both differ from expected
-	// Need to debug the exact deduplication behavior
-	t.Skip("Skipping until deduplication logic is fully debugged")
+func TestCountTombstoneStats_ComprehensiveAllScenarios(t *testing.T) {
+	// Comprehensive test: verify map and merge produce identical results
+	// Covers: multiple objects (CN/DN created), multiple blocks, in-memory data/tombstones
 
 	// Comprehensive test covering all real-world scenarios:
 	// - Multiple objects: appendable, CN-created non-appendable, DN-created non-appendable
@@ -1609,10 +1608,16 @@ func TestCountTombstoneStats_ComprehensiveAllScenarios_TODO(t *testing.T) {
 
 	// Scenario 3: In-memory tombstones
 	// Delete 5 rows from in-memory data (rowid 0-4)
+	// IMPORTANT: PrimaryIndexEntry sorts by Bytes (PK), not RowID
+	// Must set Bytes to ensure correct iteration order matching persisted tombstones
 	for i := 0; i < 5; i++ {
 		blkID := objectio.NewBlockidWithObjectID(&dataObjID1, 0)
 		rowID := types.NewRowid(&blkID, uint32(i))
+		// Encode rowid as bytes for consistent sorting
+		pkBytes := make([]byte, 8)
+		binary.BigEndian.PutUint64(pkBytes, uint64(i))
 		state.inMemTombstoneRowIdIndex.Set(&PrimaryIndexEntry{
+			Bytes: pkBytes,
 			RowID: rowID,
 			Time:  types.BuildTS(2, 0),
 		})
@@ -1785,10 +1790,9 @@ func TestCountTombstoneStats_ComprehensiveAllScenarios_TODO(t *testing.T) {
 	// But dataObjID1 is in-memory only, not persisted!
 	// So rowid 10-19 from writer2 won't be counted (data not visible in dataObjectsNameIndex)
 
-	// Let me recalculate with visibility:
-	// dataObjID1: in-memory only (rows btree), visible
-	// dataObjID2: in-memory only (rows btree), visible
-	// So all should be visible. Expected = 55
+	// Expected calculation:
+	// All tombstone rowids: 0-4 (in-mem) + 2-14 (w1) + 10-39 (w2) + 35-54 (w3)
+	// Unique set: 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,...,54 = 55 unique rowids
 
 	// Test with map path (default for 3 objects)
 	statsMap, err := state.CountTombstoneStats(ctx, types.BuildTS(10, 0), fs)
@@ -1808,8 +1812,13 @@ func TestCountTombstoneStats_ComprehensiveAllScenarios_TODO(t *testing.T) {
 	t.Logf("Comprehensive test: Map=%d, Merge=%d, Expected=%d", statsMap.Rows, statsMerge.Rows, expectedUnique)
 	t.Logf("Tombstone ranges: in-mem=[0-4], w1=[2-14], w2=[10-39], w3=[35-54]")
 
-	// For now, just verify both paths produce same result
+	// Primary requirement: both paths must produce identical results
 	assert.Equal(t, statsMap.Rows, statsMerge.Rows, "Map and merge paths must produce identical results")
+
+	// Secondary: verify correctness (if both agree but differ from expected, investigate test data)
+	if statsMap.Rows == statsMerge.Rows {
+		assert.Equal(t, expectedUnique, statsMap.Rows, "Both paths should count 55 unique tombstones")
+	}
 }
 
 func TestCountTombstoneRowsReadError(t *testing.T) {

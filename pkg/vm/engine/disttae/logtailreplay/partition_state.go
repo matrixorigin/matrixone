@@ -1593,6 +1593,9 @@ type tombstoneBlockIterator struct {
 	err          error
 	p            *PartitionState
 	release      func() // Release function for current block
+	isInMemory   bool   // True if this is an in-memory tombstone iterator
+	inMemIter    btree.IterG[*PrimaryIndexEntry]
+	inMemEntry   *PrimaryIndexEntry
 }
 
 func (it *tombstoneBlockIterator) loadNextBlock() bool {
@@ -1629,6 +1632,28 @@ func (it *tombstoneBlockIterator) loadNextBlock() bool {
 }
 
 func (it *tombstoneBlockIterator) next() bool {
+	if it.isInMemory {
+		// In-memory tombstone iterator
+		for {
+			if !it.inMemIter.Next() {
+				return false
+			}
+			it.inMemEntry = it.inMemIter.Item()
+
+			if it.inMemEntry.Time.GT(&it.snapshot) {
+				continue
+			}
+
+			objId := it.inMemEntry.RowID.BorrowObjectID()
+			if !it.p.isDataObjectVisible(objId, it.snapshot) {
+				continue
+			}
+
+			return true
+		}
+	}
+
+	// Persisted tombstone iterator
 	for {
 		for it.rowIdx < len(it.rowIds) {
 			if it.needCheckTS && len(it.commitTSs) > 0 && it.commitTSs[it.rowIdx].GT(&it.snapshot) {
@@ -1652,11 +1677,17 @@ func (it *tombstoneBlockIterator) next() bool {
 }
 
 func (it *tombstoneBlockIterator) current() types.Rowid {
+	if it.isInMemory {
+		return it.inMemEntry.RowID
+	}
 	return it.rowIds[it.rowIdx]
 }
 
 func (it *tombstoneBlockIterator) advance() {
-	it.rowIdx++
+	if !it.isInMemory {
+		it.rowIdx++
+	}
+	// For in-memory, advance happens in next()
 }
 
 // heapItem represents an item in the min-heap for merge-based deduplication
@@ -1735,6 +1766,18 @@ func (p *PartitionState) countTombstoneStatsWithMerge(
 		}
 	}
 
+	// Add in-memory tombstones as an iterator
+	inMemIter := p.inMemTombstoneRowIdIndex.Iter()
+	inMemIt := &tombstoneBlockIterator{
+		isInMemory: true,
+		inMemIter:  inMemIter,
+		snapshot:   snapshot,
+		p:          p,
+	}
+	if inMemIt.next() {
+		iterators = append(iterators, inMemIt)
+	}
+
 	h := make(minHeap, 0, len(iterators))
 	for _, it := range iterators {
 		h = append(h, heapItem{rowId: it.current(), iter: it})
@@ -1769,40 +1812,7 @@ func (p *PartitionState) countTombstoneStatsWithMerge(
 		}
 	}
 
-	// Count in-memory tombstones with linear deduplication
-	var lastObjId types.Objectid
-	var lastVisible bool
-	var lastObjIdSet bool
-
-	tombIter := p.inMemTombstoneRowIdIndex.Iter()
-	defer tombIter.Release()
-
-	for ok := tombIter.First(); ok; ok = tombIter.Next() {
-		entry := tombIter.Item()
-
-		if entry.Time.GT(&snapshot) {
-			continue
-		}
-
-		if lastRowIdSet && entry.RowID.EQ(&lastRowId) {
-			continue
-		}
-
-		objId := entry.RowID.BorrowObjectID()
-
-		if !lastObjIdSet || !objId.EQ(&lastObjId) {
-			lastObjId = *objId
-			lastObjIdSet = true
-			lastVisible = p.isDataObjectVisible(objId, snapshot)
-		}
-
-		if lastVisible {
-			stats.Rows++
-			lastRowId = entry.RowID
-			lastRowIdSet = true
-		}
-	}
-
+	// In-memory tombstones are already included in the heap merge above
 	return stats, nil
 }
 
