@@ -184,44 +184,44 @@ func L2DistanceSqFloat64(a, b []float64) (float64, error) {
 	i := 0
 	n := len(a)
 
-	// 1. AVX-512 Path (512-bit vectors, 16 elements)
+	// 1. AVX-512 Path (512-bit vectors, 8 elements)
 	if archsimd.X86.AVX512() {
 		sumVec := archsimd.Float64x8{}
-		for i <= n-16 {
-			va := archsimd.LoadFloat64x8Slice(a[i : i+16])
-			vb := archsimd.LoadFloat64x8Slice(b[i : i+16])
+		for i <= n-8 {
+			va := archsimd.LoadFloat64x8Slice(a[i : i+8])
+			vb := archsimd.LoadFloat64x8Slice(b[i : i+8])
 			diff := va.Sub(vb)
 			sumVec = diff.MulAdd(diff, sumVec)
-			i += 16
+			i += 8 
 		}
 		sumSq += SumFloat64x8(sumVec)
 	}
 
-	// 2. AVX2 Path (256-bit vectors, 8 elements)
+	// 2. AVX2 Path (256-bit vectors, 4 elements)
 	if archsimd.X86.AVX2() {
 		sumVec := archsimd.Float64x4{}
-		for i <= n-8 {
-			va := archsimd.LoadFloat64x4Slice(a[i : i+8])
-			vb := archsimd.LoadFloat64x4Slice(b[i : i+8])
+		for i <= n-4 {
+			va := archsimd.LoadFloat64x4Slice(a[i : i+4])
+			vb := archsimd.LoadFloat64x4Slice(b[i : i+4])
 			diff := va.Sub(vb)
 			sumVec = diff.MulAdd(diff, sumVec)
-			i += 8
+			i += 4
 		}
 		sumSq += SumFloat64x4(sumVec)
 	}
 
-	// 3. AVX Path (128-bit vectors, 4 elements)
+	// 3. AVX Path (128-bit vectors, 2 elements)
 	// Handles hardware that supports AVX but not AVX2, or leftover elements
 	if archsimd.X86.AVX() {
 		sumVec := archsimd.Float64x2{}
-		for i <= n-4 {
-			va := archsimd.LoadFloat64x2Slice(a[i : i+4])
-			vb := archsimd.LoadFloat64x2Slice(b[i : i+4])
+		for i <= n-2 {
+			va := archsimd.LoadFloat64x2Slice(a[i : i+2])
+			vb := archsimd.LoadFloat64x2Slice(b[i : i+2])
 			diff := va.Sub(vb)
 			// Older AVX hardware might fallback from FMA (MulAdd)
 			// but archsimd abstracts this for compatibility.
 			sumVec = diff.MulAdd(diff, sumVec)
-			i += 4
+			i += 2
 		}
 		sumSq += SumFloat64x2(sumVec)
 	}

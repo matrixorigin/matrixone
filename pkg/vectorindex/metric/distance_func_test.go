@@ -495,6 +495,75 @@ func Test_L2DistanceSq(t *testing.T) {
 	}
 }
 
+func Test_L2DistanceSqFp32(t *testing.T) {
+        type args struct {
+                v1 []float32
+                v2 []float32
+        }
+        tests := []struct {
+                name string
+                args args
+                want float32
+        }{
+                {
+                        name: "Test 1",
+                        args: args{
+                                v1: []float32{1, 2, 3, 4},
+                                v2: []float32{1, 2, 4, 5},
+                        },
+                        want: 2,
+                },
+                {
+                        name: "Test 2",
+                        args: args{
+                                v1: []float32{10, 20, 30, 40},
+                                v2: []float32{10.5, 21.5, 31.5, 43.5},
+                        },
+                        want: 17,
+                },
+                {
+                        name: "Test 3.a",
+                        args: args{
+                                v1: []float32{1, 1},
+                                v2: []float32{4, 1},
+                        },
+                        want: 9,
+                },
+                {
+                        name: "Test 3.b",
+                        args: args{
+                                v1: []float32{4, 1},
+                                v2: []float32{1, 4},
+                        },
+                        want: 18,
+                },
+                {
+                        name: "Test 3.c",
+                        args: args{
+                                v1: []float32{1, 4},
+                                v2: []float32{1, 1},
+                        },
+                        want: 9,
+                },
+                {
+                        name: "Test 4",
+                        args: args{
+                                v1: []float32{1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
+                                v2: []float32{2, 3, 4, 5, 6, 7, 8, 9, 10, 11},
+                        },
+                        want: 10,
+                },
+        }
+        for _, tt := range tests {
+                t.Run(tt.name, func(t *testing.T) {
+                        if got, err := L2DistanceSq[float32](tt.args.v1, tt.args.v2); err != nil || got != tt.want {
+                                t.Errorf("L2DistanceSq() = %v, want %v", got, tt.want)
+                        }
+                })
+        }
+}
+
+
 func Test_AngularDistance(t *testing.T) {
 	type args struct {
 		v1 []float64
