@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build !amd64
+//go:build amd64
 
 package metric
 
@@ -55,45 +55,78 @@ func L2DistanceSq[T types.RealNumbers](v1, v2 []T) (T, error) {
 }
 */
 
+func L2DistanceSqFloat32(p, q []float32) (float32, error) {
+	if len(a) != len(b) {
+		return T(0), moerr.NewInternalErrorNoCtx("vector dimension not matched")
+	}
+
+	var sumSq float32
+	i := 0
+	n := len(a)
+
+	// 1. AVX-512 Path (512-bit vectors, 16 elements)
+	if archsimd.X86.AVX512() {
+		sumVec := archsimd.Float32x16{}
+		for i <= n-16 {
+			va := archsimd.LoadFloat32x16Slice(a[i : i+16])
+			vb := archsimd.LoadFloat32x16Slice(b[i : i+16])
+			diff := va.Sub(vb)
+			sumVec = diff.MulAdd(diff, sumVec)
+			i += 16
+		}
+		sumSq += sumVec.ReduceAdd()
+	}
+
+	// 2. AVX2 Path (256-bit vectors, 8 elements)
+	if archsimd.X86.AVX2() {
+		sumVec := archsimd.Float32x8{}
+		for i <= n-8 {
+			va := archsimd.LoadFloat32x8Slice(a[i : i+8])
+			vb := archsimd.LoadFloat32x8Slice(b[i : i+8])
+			diff := va.Sub(vb)
+			sumVec = diff.MulAdd(diff, sumVec)
+			i += 8
+		}
+		sumSq += sumVec.ReduceAdd()
+	}
+
+	// 3. AVX Path (128-bit vectors, 4 elements)
+	// Handles hardware that supports AVX but not AVX2, or leftover elements
+	if archsimd.X86.AVX() {
+		sumVec := archsimd.Float32x4{}
+		for i <= n-4 {
+			va := archsimd.LoadFloat32x4Slice(a[i : i+4])
+			vb := archsimd.LoadFloat32x4Slice(b[i : i+4])
+			diff := va.Sub(vb)
+			// Older AVX hardware might fallback from FMA (MulAdd)
+			// but archsimd abstracts this for compatibility.
+			sumVec = diff.MulAdd(diff, sumVec)
+			i += 4
+		}
+		sumSq += sumVec.ReduceAdd()
+	}
+
+	// 4. Scalar Tail Path
+	for ; i < n; i++ {
+		diff := a[i] - b[i]
+		sumSq += diff * diff
+	}
+	return sumSq
+}
+
 // L2SquareDistanceUnrolled calculates the L2 square distance using loop unrolling.
 // This optimization can improve performance for large vectors by reducing loop
 // overhead and allowing for better instruction-level parallelism.
 func L2DistanceSq[T types.RealNumbers](p, q []T) (T, error) {
-	if len(p) != len(q) {
-		return T(0), moerr.NewInternalErrorNoCtx("vector dimension not matched")
+
+	switch any(p).(type) {
+	case []float32:
+		_p := p.([]float32)
+		_q := q.([]float32)
+		return L2DistanceSqFloat32(_p, _q)
+	default:
+		return 0, moerr.NewInternalErrorNoCtx("vector type not supported")
 	}
-
-	var sum T
-	n := len(p)
-	i := 0
-
-	// Process the bulk of the data in chunks of 8.
-	for i <= n-8 {
-		// BCE Hint
-		pp := p[i : i+8 : i+8]
-		qq := q[i : i+8 : i+8]
-
-		d0 := pp[0] - qq[0]
-		d1 := pp[1] - qq[1]
-		d2 := pp[2] - qq[2]
-		d3 := pp[3] - qq[3]
-		d4 := pp[4] - qq[4]
-		d5 := pp[5] - qq[5]
-		d6 := pp[6] - qq[6]
-		d7 := pp[7] - qq[7]
-
-		sum += (d0*d0 + d1*d1) + (d2*d2 + d3*d3) + (d4*d4 + d5*d5) + (d6*d6 + d7*d7)
-		i += 8
-	}
-
-	// Handle the remaining elements if the vector size is not a multiple of 8.
-	for i < n {
-		diff := p[i] - q[i]
-		sum += diff * diff
-		i++
-	}
-
-	return sum, nil
 }
 
 // L1Distance calculates the L1 (Manhattan) distance between two vectors.
