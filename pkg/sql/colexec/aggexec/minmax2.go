@@ -24,14 +24,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-type minMaxExecFixed[T any] struct {
+type minMaxExecFixed[T types.FixedSizeT] struct {
 	aggExec
-	comp func(T, T) int
+	comp     func(T, T) int
+	hasExtra bool
+	extra    T
 }
 
 type minMaxExecBytes struct {
 	aggExec
-	comp func([]byte, []byte) int
+	comp     func([]byte, []byte) int
+	hasExtra bool
+	extra    []byte
 }
 
 func (exec *minMaxExecFixed[T]) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
@@ -99,6 +103,12 @@ func (exec *minMaxExecFixed[T]) BatchMerge(next AggFuncExec, offset int, groups 
 }
 
 func (exec *minMaxExecFixed[T]) SetExtraInformation(partialResult any, _ int) error {
+	var ok bool
+	exec.extra, ok = partialResult.(T)
+	if !ok {
+		return moerr.NewInternalErrorNoCtxf("invalid extra information type %T", partialResult)
+	}
+	exec.hasExtra = true
 	return nil
 }
 
@@ -110,6 +120,22 @@ func (exec *minMaxExecFixed[T]) Flush() ([]*vector.Vector, error) {
 		exec.state[i].vecs[0] = nil
 		exec.state[i].length = 0
 		exec.state[i].capacity = 0
+	}
+
+	if exec.hasExtra {
+		for _, vec := range vecs {
+			for i := range vec.Length() {
+				if vec.IsNull(uint64(i)) {
+					vec.UnsetNull(uint64(i))
+					vector.SetFixedAtNoTypeCheck(vec, int(i), exec.extra)
+				} else {
+					oldValue := vector.GetFixedAtNoTypeCheck[T](vec, int(i))
+					if exec.comp(exec.extra, oldValue) < 0 {
+						vector.SetFixedAtNoTypeCheck(vec, int(i), exec.extra)
+					}
+				}
+			}
+		}
 	}
 	return vecs, nil
 }
@@ -181,6 +207,12 @@ func (exec *minMaxExecBytes) BatchMerge(next AggFuncExec, offset int, groups []u
 }
 
 func (exec *minMaxExecBytes) SetExtraInformation(partialResult any, _ int) error {
+	var ok bool
+	exec.extra, ok = partialResult.([]byte)
+	if !ok {
+		return moerr.NewInternalErrorNoCtxf("invalid extra information type %T", partialResult)
+	}
+	exec.hasExtra = true
 	return nil
 }
 
@@ -192,6 +224,22 @@ func (exec *minMaxExecBytes) Flush() ([]*vector.Vector, error) {
 		exec.state[i].vecs[0] = nil
 		exec.state[i].length = 0
 		exec.state[i].capacity = 0
+	}
+
+	if exec.hasExtra {
+		for _, vec := range vecs {
+			for i := range vec.Length() {
+				if vec.IsNull(uint64(i)) {
+					vec.UnsetNull(uint64(i))
+					vector.SetBytesAt(vec, int(i), exec.extra, exec.mp)
+				} else {
+					oldValue := vec.GetBytesAt(int(i))
+					if exec.comp(exec.extra, oldValue) < 0 {
+						vector.SetBytesAt(vec, int(i), exec.extra, exec.mp)
+					}
+				}
+			}
+		}
 	}
 	return vecs, nil
 }
