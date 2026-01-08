@@ -660,7 +660,7 @@ func CosineDistance[T types.RealNumbers](p, q []T) (T, error) {
 	}
 }
 
-func CosineSimliarityF32(a, b []float32) (float32, error) {
+func CosineSimilarityF32(a, b []float32) (float32, error) {
 	if len(a) == 0 {
 		// The distance is undefined for empty vectors. Returning 0 and no error is a common convention.
 		return 0, nil
@@ -721,7 +721,7 @@ func CosineSimliarityF32(a, b []float32) (float32, error) {
 	return float32(similarity), nil
 }
 
-func CosineDistanceF64(a, b []float64) (float64, error) {
+func CosineSimilarityF64(a, b []float64) (float64, error) {
 	if len(a) == 0 {
 		// The distance is undefined for empty vectors. Returning 0 and no error is a common convention.
 		return 0, nil
