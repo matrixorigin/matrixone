@@ -808,57 +808,136 @@ func CosineSimilarity[T types.RealNumbers](p, q []T) (T, error) {
 	}
 }
 
+// InnerProduct computes the dot product of two float32 slices using SIMD.
+func SphericalDistanceFloat32(a, b []float32) (float32, error) {
+	if len(a) != len(b) {
+		return float32(0), moerr.NewInternalErrorNoCtx("vector dimension not matched")
+	}
+
+	n := len(a)
+	var total float32
+	i := 0
+
+	// 1. AVX-512 Path: 16 float32 elements (512-bit) per iteration
+	if archsimd.X86.AVX512() {
+		acc := archsimd.Float32x16{} // Zero-initialized accumulator
+		for i <= n-16 {
+			va := archsimd.LoadFloat32x16Slice(a[i : i+16])
+			vb := archsimd.LoadFloat32x16Slice(b[i : i+16])
+
+			// Compute element-wise multiplication and add to accumulator
+			prod := va.Mul(vb)
+			acc = acc.Add(prod)
+			i += 16
+		}
+		total += SumFloat32x16(acc) // Final horizontal sum of the 16 elements
+	}
+
+	// 2. AVX2/AVX Path: 8 float32 elements (256-bit) per iteration
+	if i <= n-8 && (archsimd.X86.AVX2() || archsimd.X86.AVX()) {
+		acc := archsimd.Float32x8{}
+		for i <= n-8 {
+			va := archsimd.LoadFloat32x8Slice(a[i : i+8])
+			vb := archsimd.LoadFloat32x8Slice(b[i : i+8])
+
+			prod := va.Mul(vb)
+			acc = acc.Add(prod)
+			i += 8
+		}
+		total += SumFloat32x8(acc)
+	}
+
+	// 3. Scalar Tail: Process remaining 0-7 elements
+	for ; i < n; i++ {
+		total += a[i] * b[i]
+	}
+
+	if total > 1.0 {
+		total = 1.0
+	} else if total < -1.0 {
+		total = -1.0
+	}
+
+	theta := math.Acos(float64(total))
+	//To scale the result to the range [0, 1], we divide by Pi.
+	return float32(theta / math.Pi), nil
+}
+
+func SphericalDistanceFloat64(a, b []float64) (float64, error) {
+	if len(a) != len(b) {
+		return float64(0), moerr.NewInternalErrorNoCtx("vector dimension not matched")
+	}
+
+	n := len(a)
+	var total float64
+	i := 0
+
+	// 1. AVX-512 Path: 8 float64 elements (512-bit) per iteration
+	if archsimd.X86.AVX512() {
+		acc := archsimd.Float64x8{} // Initialized to zero
+		for i <= n-8 {
+			va := archsimd.LoadFloat64x8Slice(a[i : i+8])
+			vb := archsimd.LoadFloat64x8Slice(b[i : i+8])
+
+			// Element-wise multiplication and accumulation
+			prod := va.Mul(vb)
+			acc = acc.Add(prod)
+			i += 8
+		}
+		total += SumFloat64x8(acc) // Final horizontal reduction
+	}
+
+	// 2. AVX2/AVX Path: 4 float64 elements (256-bit) per iteration
+	if i <= n-4 && (archsimd.X86.AVX2() || archsimd.X86.AVX()) {
+		acc := archsimd.Float64x4{}
+		for i <= n-4 {
+			va := archsimd.LoadFloat64x4Slice(a[i : i+4])
+			vb := archsimd.LoadFloat64x4Slice(b[i : i+4])
+
+			prod := va.Mul(vb)
+			acc = acc.Add(prod)
+			i += 4
+		}
+		total += SumFloat64x4(acc)
+	}
+
+	// 3. Scalar Tail: Process remaining elements
+	for ; i < n; i++ {
+		total += a[i] * b[i]
+	}
+
+	if total > 1.0 {
+		total = 1.0
+	} else if total < -1.0 {
+		total = -1.0
+	}
+
+	theta := math.Acos(total)
+	//To scale the result to the range [0, 1], we divide by Pi.
+	return theta / math.Pi, nil
+}
+
 // SphericalDistance is used for InnerProduct and CosineDistance in Spherical Kmeans.
 // NOTE: spherical distance between two points on a sphere is equal to the
 // angular distance between the two points, scaled by pi.
 // Refs:
 // https://en.wikipedia.org/wiki/Great-circle_distance#Vector_version
 func SphericalDistance[T types.RealNumbers](p, q []T) (T, error) {
-	if len(p) != len(q) {
-		return T(0), moerr.NewInternalErrorNoCtx("vector dimension not matched")
+
+	switch any(p).(type) {
+	case []float32:
+		_p := any(p).([]float32)
+		_q := any(q).([]float32)
+		ret, err := SphericalDistanceFloat32(_p, _q)
+		return T(ret), err
+	case []float64:
+		_p := any(p).([]float64)
+		_q := any(q).([]float64)
+		ret, err := SphericalDistanceFloat64(_p, _q)
+		return T(ret), err
+	default:
+		return 0, moerr.NewInternalErrorNoCtx("vector type not supported")
 	}
-	// Compute the dot product of the two vectors.
-	// The dot product of two vectors is a measure of their similarity,
-	// and it can be used to calculate the angle between them.
-	dp := T(0)
-
-	n := len(p)
-	i := 0
-
-	// Process the bulk of the data in chunks of 8.
-	for i <= n-8 {
-		// BCE Hint
-		pp := p[i : i+8 : i+8]
-		qq := q[i : i+8 : i+8]
-
-		dp += pp[0]*qq[0] +
-			pp[1]*qq[1] +
-			pp[2]*qq[2] +
-			pp[3]*qq[3] +
-			pp[4]*qq[4] +
-			pp[5]*qq[5] +
-			pp[6]*qq[6] +
-			pp[7]*qq[7]
-		i += 8
-	}
-
-	// Handle the remaining 0 to 7 elements.
-	for i < n {
-		dp += p[i] * q[i]
-		i++
-	}
-
-	// Prevent NaN with acos with loss of precision.
-	if dp > 1.0 {
-		dp = 1.0
-	} else if dp < -1.0 {
-		dp = -1.0
-	}
-
-	theta := math.Acos(float64(dp))
-
-	//To scale the result to the range [0, 1], we divide by Pi.
-	return T(theta / math.Pi), nil
 }
 
 func NormalizeL2[T types.RealNumbers](v1 []T, normalized []T) error {
