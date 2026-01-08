@@ -51,3 +51,11 @@ func RegisterSum(id int64) {
 func RegisterAvg(id int64) {
 	aggexec.RegisterAvg(id)
 }
+
+func RegisterMin(id int64) {
+	aggexec.RegisterMin(id)
+}
+
+func RegisterMax(id int64) {
+	aggexec.RegisterMax(id)
+}

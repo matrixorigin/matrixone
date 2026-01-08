@@ -85,17 +85,17 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, agg.MinSupportedTypes)
+			return fixedUnaryAggTypeCheck(inputs, MinMaxSupportedTypes)
 		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    agg.MinReturnType,
+				retType:    MinMaxReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "min",
-					aggRegister: agg.RegisterMin2,
+					aggRegister: agg.RegisterMin,
 				},
 			},
 		},
@@ -106,17 +106,17 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, agg.MaxSupportedTypes)
+			return fixedUnaryAggTypeCheck(inputs, MinMaxSupportedTypes)
 		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    agg.MaxReturnType,
+				retType:    MinMaxReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "max",
-					aggRegister: agg.RegisterMax2,
+					aggRegister: agg.RegisterMax,
 				},
 			},
 		},
@@ -625,4 +625,22 @@ var AvgSupportedTypes = []types.T{
 	types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 	types.T_float32, types.T_float64,
 	types.T_decimal64, types.T_decimal128,
+}
+
+var MinMaxSupportedTypes = []types.T{
+	types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+	types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+	types.T_float32, types.T_float64,
+	types.T_date, types.T_datetime,
+	types.T_timestamp, types.T_time,
+	types.T_decimal64, types.T_decimal128,
+	types.T_bool,
+	types.T_bit,
+	types.T_varchar, types.T_char, types.T_blob, types.T_text, types.T_datalink,
+	types.T_uuid,
+	types.T_binary, types.T_varbinary,
+}
+
+func MinMaxReturnType(typs []types.Type) types.Type {
+	return typs[0]
 }

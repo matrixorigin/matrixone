@@ -247,6 +247,11 @@ func (v *Vector) SetNulls(nsp *nulls.Nulls) {
 	v.nsp.Or(nsp)
 }
 
+func (v *Vector) SetAllNulls(length int) {
+	v.nsp.InitWithSize(int(length))
+	v.nsp.AddRange(0, uint64(length))
+}
+
 func (v *Vector) SetGrouping(gsp *nulls.Nulls) {
 	v.gsp.Clear()
 	if gsp == nil {

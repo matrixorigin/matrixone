@@ -202,6 +202,10 @@ func makeSpecialAggExec(
 ) (AggFuncExec, bool, error) {
 	if _, ok := specialAgg[id]; ok {
 		switch id {
+		case AggIdOfMin:
+			return makeMinMaxExec(mp, id, true, params[0]), true, nil
+		case AggIdOfMax:
+			return makeMinMaxExec(mp, id, false, params[0]), true, nil
 		case AggIdOfSum:
 			return makeSumAvgExec(mp, true, id, isDistinct, params[0]), true, nil
 		case AggIdOfAvg:

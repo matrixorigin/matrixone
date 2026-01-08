@@ -254,7 +254,7 @@ func setupAggInfo(a *aggInfo, aggId int64, param types.Type) {
 		argTypes:   []types.Type{param},
 		retType:    param,
 		stateTypes: []types.Type{param},
-		emptyNull:  false,
+		emptyNull:  true,
 		saveArg:    false,
 	}
 }

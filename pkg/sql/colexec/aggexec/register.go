@@ -27,6 +27,16 @@ import (
 	after registered, the function `MakeAgg` can make the aggregation function executor.
 */
 
+func RegisterMin(id int64) {
+	specialAgg[id] = true
+	AggIdOfMin = id
+}
+
+func RegisterMax(id int64) {
+	specialAgg[id] = true
+	AggIdOfMax = id
+}
+
 func RegisterSum(id int64) {
 	specialAgg[id] = true
 	AggIdOfSum = id
@@ -141,6 +151,8 @@ var (
 	WinIdOfNthValue      = int64(-15)
 	AggIdOfSum           = int64(-16)
 	AggIdOfAvg           = int64(-17)
+	AggIdOfMin           = int64(-18)
+	AggIdOfMax           = int64(-19)
 	groupConcatSep       = ","
 	getCroupConcatRet    = func(args ...types.Type) types.Type {
 		for _, p := range args {
