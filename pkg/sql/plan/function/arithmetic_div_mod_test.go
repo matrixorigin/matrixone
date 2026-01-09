@@ -44,7 +44,7 @@ func Test_DivFn_Float32(t *testing.T) {
 		require.True(t, succeed, tc.info, info)
 	}
 
-	// Test division by zero (should return error)
+	// Test division by zero (should return NULL per MySQL 8.0 behavior)
 	{
 		tc := tcTemp{
 			info: "select float32_col / 0",
@@ -54,8 +54,8 @@ func Test_DivFn_Float32(t *testing.T) {
 				NewFunctionTestInput(types.T_float32.ToType(),
 					[]float32{0.0}, []bool{false}),
 			},
-			expect: NewFunctionTestResult(types.T_float32.ToType(), true,
-				[]float32{0.0}, []bool{false}),
+			expect: NewFunctionTestResult(types.T_float32.ToType(), false,
+				[]float32{0.0}, []bool{true}), // NULL
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, divFn)
 		succeed, info := tcc.Run()
@@ -102,7 +102,7 @@ func Test_DivFn_Float64(t *testing.T) {
 		require.True(t, succeed, tc.info, info)
 	}
 
-	// Test division by zero (should return error)
+	// Test division by zero (should return NULL per MySQL 8.0 behavior)
 	{
 		tc := tcTemp{
 			info: "select float64_col / 0",
@@ -112,8 +112,8 @@ func Test_DivFn_Float64(t *testing.T) {
 				NewFunctionTestInput(types.T_float64.ToType(),
 					[]float64{0.0}, []bool{false}),
 			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), true,
-				[]float64{0.0}, []bool{false}),
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0.0}, []bool{true}), // NULL
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, divFn)
 		succeed, info := tcc.Run()

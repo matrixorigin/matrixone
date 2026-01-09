@@ -22,8 +22,8 @@ import "lock.proto";
 import "timestamp.proto";
 
 option go_package = "github.com/matrixorigin/matrixone/pkg/pb/plan";
-option (gogoproto.sizer_all) = false;
 option (gogoproto.protosizer_all) = true;
+option (gogoproto.sizer_all) = false;
 
 message Type {
   int32 id = 1;
@@ -33,23 +33,23 @@ message Type {
   int32 scale = 5;
   string table = 6;
   string enumvalues = 7;
-};
+}
 
 message msgHeader {
   int32 msg_tag = 1;
   int32 msg_type = 2;
-};
+}
 
 // Literal: if a literal value can be reprensented by int64 or
 // double, use that, otherwise store a string representation.
 message Literal {
   bool isnull = 1;
   oneof value {
-    int32 i8val = 2;  // pb have no int8
+    int32 i8val = 2; // pb have no int8
     int32 i16val = 3; // pb have no int16
     int32 i32val = 4;
     int64 i64val = 5;
-    uint32 u8val = 6;  // pb have no uint8
+    uint32 u8val = 6; // pb have no uint8
     uint32 u16val = 7; // pb have no uint16
     uint32 u32val = 8;
     uint64 u64val = 9;
@@ -74,7 +74,9 @@ message Literal {
 }
 
 // Bounded param for prepared statement.  User fill on execution.
-message ParamRef { int32 pos = 1; }
+message ParamRef {
+  int32 pos = 1;
+}
 
 // Session variable ref, compiler should fold.
 message VarRef {
@@ -106,9 +108,13 @@ message CorrColRef {
 }
 
 // ExprList is a type of Expr
-message ExprList { repeated Expr list = 1; }
+message ExprList {
+  repeated Expr list = 1;
+}
 
-message MaxValue { string value = 1; }
+message MaxValue {
+  string value = 1;
+}
 
 // TargetType used in cast function as target type
 message TargetType {}
@@ -147,15 +153,17 @@ message ObjectRef {
   bool not_lock_meta = 11;
 }
 
-message PubInfo { int32 tenant_id = 1; }
+message PubInfo {
+  int32 tenant_id = 1;
+}
 
 message SubscriptionMeta {
-  string name = 1;         // pubName
-  int32 account_id = 2;    // pubAccountID
-  string db_name = 3;      // pubDbName
+  string name = 1; // pubName
+  int32 account_id = 2; // pubAccountID
+  string db_name = 3; // pubDbName
   string account_name = 4; // pubAccountName
-  string sub_name = 5;     // subName(subscription side db name)
-  string tables = 6;       // pubTables (separated by ',')
+  string sub_name = 5; // subName(subscription side db name)
+  string tables = 6; // pubTables (separated by ',')
 }
 
 message IndexScanInfo {
@@ -201,7 +209,7 @@ message Function {
 }
 
 message Expr {
-  Type typ = 1 [ (gogoproto.nullable) = false ];
+  Type typ = 1 [(gogoproto.nullable) = false];
   oneof expr {
     Literal lit = 2;
     ParamRef p = 3;
@@ -240,14 +248,18 @@ enum CompressType {
   Lz4 = 1;
 }
 
-message decimal64 { int64 a = 1; }
+message decimal64 {
+  int64 a = 1;
+}
 
 message decimal128 {
   int64 a = 1;
   int64 b = 2;
 }
 
-message ResultColDef { repeated ColDef ResultCols = 1; }
+message ResultColDef {
+  repeated ColDef ResultCols = 1;
+}
 
 message ColDef {
   uint64 col_id = 1;
@@ -255,7 +267,7 @@ message ColDef {
   string name = 2;
   bool hidden = 3;
   CompressType alg = 4;
-  Type typ = 5 [ (gogoproto.nullable) = false ];
+  Type typ = 5 [(gogoproto.nullable) = false];
   bool not_null = 6;
   Default default = 7;
   string comment = 8;
@@ -355,9 +367,13 @@ message CheckDef {
   Expr check = 2;
 }
 
-message Partition { repeated PartitionDef PartitionDefs = 1; }
+message Partition {
+  repeated PartitionDef PartitionDefs = 1;
+}
 
-message PartitionDef { Expr def = 1; }
+message PartitionDef {
+  Expr def = 1;
+}
 
 message ClusterByDef {
   // XXX: Deprecated and to be removed soon. letter case: lower ?
@@ -376,14 +392,20 @@ message Property {
   string value = 2;
 }
 
-message PropertiesDef { repeated Property properties = 1; }
+message PropertiesDef {
+  repeated Property properties = 1;
+}
 
-message ViewDef { string view = 1; }
+message ViewDef {
+  string view = 1;
+}
 
 message TableDef {
   // XXX: Deprecated and to be removed soon.
   message DefType {
-    oneof def { PropertiesDef properties = 1; }
+    oneof def {
+      PropertiesDef properties = 1;
+    }
   }
 
   uint64 tbl_id = 1;
@@ -423,6 +445,7 @@ message TableDef {
 
   uint64 FeatureFlag = 35;
   uint64 logical_id = 36;
+  string original_name = 37;
 }
 
 message TableFunction {
@@ -491,7 +514,9 @@ message RowsetExpr {
   Expr expr = 2;
 }
 
-message ColData { repeated RowsetExpr data = 1; }
+message ColData {
+  repeated RowsetExpr data = 1;
+}
 
 message RowsetData {
   repeated ColData cols = 1;
@@ -563,7 +588,7 @@ message OnDuplicateKeyCtx {
 }
 
 message DedupJoinCtx {
-  repeated ColRef old_col_list = 1 [ (gogoproto.nullable) = false ];
+  repeated ColRef old_col_list = 1 [(gogoproto.nullable) = false];
   repeated int32 update_col_idx_list = 2;
   repeated Expr update_col_expr_list = 3;
 }
@@ -572,9 +597,9 @@ message UpdateCtx {
   ObjectRef obj_ref = 1;
   TableDef table_def = 2;
 
-  repeated ColRef insert_cols = 7 [ (gogoproto.nullable) = false ];
-  repeated ColRef delete_cols = 8 [ (gogoproto.nullable) = false ];
-  repeated ColRef partition_cols = 9 [ (gogoproto.nullable) = false ];
+  repeated ColRef insert_cols = 7 [(gogoproto.nullable) = false];
+  repeated ColRef delete_cols = 8 [(gogoproto.nullable) = false];
+  repeated ColRef partition_cols = 9 [(gogoproto.nullable) = false];
 }
 
 message InsertCtx {
@@ -816,7 +841,7 @@ message Node {
   ObjectRef parent_obj_ref = 19;
   RowsetData rowset_data = 20;
 
-  IndexScanInfo index_scan_info = 21 [ (gogoproto.nullable) = false ];
+  IndexScanInfo index_scan_info = 21 [(gogoproto.nullable) = false];
 
   string extra_options = 22;
   DeleteCtx delete_ctx = 23;
@@ -873,8 +898,8 @@ message Node {
   bool ifInsertFromUnique = 57;
 
   // for message
-  repeated msgHeader send_msg_list = 58 [ (gogoproto.nullable) = false ];
-  repeated msgHeader recv_msg_list = 59 [ (gogoproto.nullable) = false ];
+  repeated msgHeader send_msg_list = 58 [(gogoproto.nullable) = false];
+  repeated msgHeader recv_msg_list = 59 [(gogoproto.nullable) = false];
 
   DedupJoinCtx dedup_join_ctx = 60;
 
@@ -886,7 +911,7 @@ message Node {
 
   OnDuplicateAction on_duplicate_action = 66;
   string dedup_col_name = 67;
-  repeated Type dedup_col_types = 68 [ (gogoproto.nullable) = false ];
+  repeated Type dedup_col_types = 68 [(gogoproto.nullable) = false];
   bool rollup_filter = 69;
 
   // compile time performance setting
@@ -943,7 +968,7 @@ message ExternAttr {
 message LockTarget {
   uint64 table_id = 1;
   int32 primary_col_idx_in_bat = 2;
-  Type primary_col_typ = 3 [ (gogoproto.nullable) = false ];
+  Type primary_col_typ = 3 [(gogoproto.nullable) = false];
   int32 refresh_ts_idx_in_bat = 4;
   int32 filter_col_idx_in_bat = 5;
   bool lock_table = 6;
@@ -962,8 +987,8 @@ message PreInsertUkCtx {
   // index of columns(parts of unique key) in pre batch
   repeated int32 columns = 1;
   int32 pk_column = 2;
-  Type pk_type = 3 [ (gogoproto.nullable) = false ];
-  Type uk_type = 4 [ (gogoproto.nullable) = false ];
+  Type pk_type = 3 [(gogoproto.nullable) = false];
+  Type uk_type = 4 [(gogoproto.nullable) = false];
 }
 
 message PreInsertCtx {
@@ -986,9 +1011,13 @@ message RuntimeFilterSpec {
   bool use_bloom_filter = 6;
 }
 
-message IdList { repeated int64 list = 1; }
+message IdList {
+  repeated int64 list = 1;
+}
 
-message ColPosMap { map<string, int32> map = 1; }
+message ColPosMap {
+  map<string, int32> map = 1;
+}
 
 message DeleteCtx {
   bool can_truncate = 1;
@@ -1096,8 +1125,12 @@ enum TransationCompletionType {
   NO_CHAIN = 1;
   RELEASE = 2;
 }
-message TransationCommit { TransationCompletionType completion_type = 1; }
-message TransationRollback { TransationCompletionType completion_type = 1; }
+message TransationCommit {
+  TransationCompletionType completion_type = 1;
+}
+message TransationRollback {
+  TransationCompletionType completion_type = 1;
+}
 
 message Plan {
   oneof plan {
@@ -1110,7 +1143,9 @@ message Plan {
   bool is_prepare = 6;
 }
 
-message column { repeated Expr column = 1; }
+message column {
+  repeated Expr column = 1;
+}
 
 message DataControl {
   enum DclType {
@@ -1270,13 +1305,13 @@ message FkColName {
    in handling fk forward reference. ForeignKeyDef does not have database name,
    table name and column names, ForeignKeyInfo also has the ForeignKeyDef
    internally that holds the child table fk definition.
- */
+*/
 message ForeignKeyInfo {
-  string db = 1;              // database name of child table
-  string table = 2;           // child table name
-  FkColName cols = 3;         // fk names in child table
+  string db = 1; // database name of child table
+  string table = 2; // child table name
+  FkColName cols = 3; // fk names in child table
   FkColName colsReferred = 4; // referred names in parent table
-  ForeignKeyDef def = 5;      // child table fk def
+  ForeignKeyDef def = 5; // child table fk def
 }
 
 message CreateTable {
@@ -1363,7 +1398,9 @@ message AlterTableAlterAutoUpdate {
   int64 hour = 6;
 }
 
-message AlterTableComment { string new_comment = 1; }
+message AlterTableComment {
+  string new_comment = 1;
+}
 
 message AlterTableName {
   string old_name = 1;
@@ -1373,7 +1410,7 @@ message AlterTableName {
 message AlterAddColumn {
   string name = 1;
   string pre_name = 2;
-  Type type = 3 [ (gogoproto.nullable) = false ];
+  Type type = 3 [(gogoproto.nullable) = false];
   int32 pos = 4;
 }
 
@@ -1382,7 +1419,9 @@ message AlterDropColumn {
   uint32 seq = 2;
 }
 
-message RenameTable { repeated AlterTable alter_tables = 1; }
+message RenameTable {
+  repeated AlterTable alter_tables = 1;
+}
 
 message AlterVarcharLength {
   string column_name = 1;
@@ -1510,7 +1549,9 @@ message CreateIndex {
   bool table_exist = 6;
 }
 
-message AlterIndex { string index = 1; }
+message AlterIndex {
+  string index = 1;
+}
 
 message DropIndex {
   string database = 1;
@@ -1530,10 +1571,8 @@ message TruncateTable {
 
 message ClusterTable {
   bool is_cluster_table = 1; // insert into a cluster table
-  repeated uint32 accountIDs =
-      2; // insert data into the cluster table for every account
-  int32 column_index_of_accountId =
-      3; // the column index of the account id in the cluster table
+  repeated uint32 accountIDs = 2; // insert data into the cluster table for every account
+  int32 column_index_of_accountId = 3; // the column index of the account id in the cluster table
 }
 
 message ShowVariables {
@@ -1541,7 +1580,9 @@ message ShowVariables {
   repeated Expr where = 2;
 }
 
-message SetVariables { repeated SetVariablesItem items = 1; }
+message SetVariables {
+  repeated SetVariablesItem items = 1;
+}
 
 message SetVariablesItem {
   bool system = 1;
@@ -1563,9 +1604,13 @@ message Execute {
   repeated Expr args = 2;
 }
 
-message Deallocate { string name = 1; }
+message Deallocate {
+  string name = 1;
+}
 
-message OtherDCL { repeated int32 paramTypes = 1; }
+message OtherDCL {
+  repeated int32 paramTypes = 1;
+}
 
 enum TableLockType {
   TableLockNone = 0;
@@ -1580,11 +1625,15 @@ message TableLockInfo {
   TableDef tableDef = 2;
 }
 
-message LockTables { repeated TableLockInfo tableLocks = 1; }
+message LockTables {
+  repeated TableLockInfo tableLocks = 1;
+}
 
 message UnLockTables {}
 
-message MetadataScanInfos { repeated MetadataScanInfo infos = 1; }
+message MetadataScanInfos {
+  repeated MetadataScanInfo infos = 1;
+}
 
 message MetadataScanInfo {
   enum MetadataScanInfoType {

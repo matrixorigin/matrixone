@@ -16,6 +16,8 @@ package function
 
 import (
 	"bytes"
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -82,6 +84,7 @@ func equalAndNotEqualOperatorSupports(typ1, typ2 types.Type) bool {
 func equalFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
+
 	switch paramType.Oid {
 	case types.T_bool:
 		return opBinaryFixedFixedToFixed[bool, bool, bool](parameters, rs, proc, length, func(a, b bool) bool {
@@ -128,6 +131,15 @@ func equalFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 			return a == b
 		}, selectList)
 	case types.T_float32:
+		scale := paramType.Scale
+		if scale > 0 {
+			pow := math.Pow10(int(scale))
+			return opBinaryFixedFixedToFixed[float32, float32, bool](parameters, rs, proc, length, func(a, b float32) bool {
+				a = float32(math.Round(float64(a)*pow) / pow)
+				b = float32(math.Round(float64(b)*pow) / pow)
+				return a == b
+			}, selectList)
+		}
 		return opBinaryFixedFixedToFixed[float32, float32, bool](parameters, rs, proc, length, func(a, b float32) bool {
 			return a == b
 		}, selectList)
@@ -629,6 +641,15 @@ func greatThanFn(parameters []*vector.Vector, result vector.FunctionResultWrappe
 			return types.CompareUuid(v1, v2) > 0
 		}, selectList)
 	case types.T_float32:
+		scale := paramType.Scale
+		if scale > 0 {
+			pow := math.Pow10(int(scale))
+			return opBinaryFixedFixedToFixed[float32, float32, bool](parameters, rs, proc, length, func(a, b float32) bool {
+				a = float32(math.Round(float64(a)*pow) / pow)
+				b = float32(math.Round(float64(b)*pow) / pow)
+				return a > b
+			}, selectList)
+		}
 		return opBinaryFixedFixedToFixed[float32, float32, bool](parameters, rs, proc, length, func(a, b float32) bool {
 			return a > b
 		}, selectList)
@@ -743,6 +764,15 @@ func greatEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapp
 			return types.CompareUuid(v1, v2) >= 0
 		}, selectList)
 	case types.T_float32:
+		scale := paramType.Scale
+		if scale > 0 {
+			pow := math.Pow10(int(scale))
+			return opBinaryFixedFixedToFixed[float32, float32, bool](parameters, rs, proc, length, func(a, b float32) bool {
+				a = float32(math.Round(float64(a)*pow) / pow)
+				b = float32(math.Round(float64(b)*pow) / pow)
+				return a >= b
+			}, selectList)
+		}
 		return opBinaryFixedFixedToFixed[float32, float32, bool](parameters, rs, proc, length, func(a, b float32) bool {
 			return a >= b
 		}, selectList)
@@ -857,6 +887,15 @@ func notEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 			return a != b
 		}, selectList)
 	case types.T_float32:
+		scale := paramType.Scale
+		if scale > 0 {
+			pow := math.Pow10(int(scale))
+			return opBinaryFixedFixedToFixed[float32, float32, bool](parameters, rs, proc, length, func(a, b float32) bool {
+				a = float32(math.Round(float64(a)*pow) / pow)
+				b = float32(math.Round(float64(b)*pow) / pow)
+				return a != b
+			}, selectList)
+		}
 		return opBinaryFixedFixedToFixed[float32, float32, bool](parameters, rs, proc, length, func(a, b float32) bool {
 			return a != b
 		}, selectList)
@@ -971,6 +1010,15 @@ func lessThanFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 			return types.CompareUuid(v1, v2) < 0
 		}, selectList)
 	case types.T_float32:
+		scale := paramType.Scale
+		if scale > 0 {
+			pow := math.Pow10(int(scale))
+			return opBinaryFixedFixedToFixed[float32, float32, bool](parameters, rs, proc, length, func(a, b float32) bool {
+				a = float32(math.Round(float64(a)*pow) / pow)
+				b = float32(math.Round(float64(b)*pow) / pow)
+				return a < b
+			}, selectList)
+		}
 		return opBinaryFixedFixedToFixed[float32, float32, bool](parameters, rs, proc, length, func(a, b float32) bool {
 			return a < b
 		}, selectList)
@@ -1085,6 +1133,15 @@ func lessEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrappe
 			return types.CompareUuid(v1, v2) <= 0
 		}, selectList)
 	case types.T_float32:
+		scale := paramType.Scale
+		if scale > 0 {
+			pow := math.Pow10(int(scale))
+			return opBinaryFixedFixedToFixed[float32, float32, bool](parameters, rs, proc, length, func(a, b float32) bool {
+				a = float32(math.Round(float64(a)*pow) / pow)
+				b = float32(math.Round(float64(b)*pow) / pow)
+				return a <= b
+			}, selectList)
+		}
 		return opBinaryFixedFixedToFixed[float32, float32, bool](parameters, rs, proc, length, func(a, b float32) bool {
 			return a <= b
 		}, selectList)

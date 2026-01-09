@@ -205,6 +205,14 @@ func Test_L2Distance(t *testing.T) {
 			},
 			want: 3,
 		},
+		{
+			name: "Test 4",
+			args: args{
+				v1: []float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
+				v2: []float64{2, 3, 4, 5, 6, 7, 8, 9, 10, 11},
+			},
+			want: 3.1622776601683795,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -264,6 +272,14 @@ func Test_L1Distance(t *testing.T) {
 				v2: []float64{1, 1},
 			},
 			want: 3,
+		},
+		{
+			name: "Test 4",
+			args: args{
+				v1: []float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
+				v2: []float64{2, 3, 4, 5, 6, 7, 8, 9, 10, 11},
+			},
+			want: 10,
 		},
 	}
 	for _, tt := range tests {
@@ -325,6 +341,14 @@ func Test_CosineDistance(t *testing.T) {
 			},
 			want: 0.1425070742874559,
 		},
+		{
+			name: "Test 4",
+			args: args{
+				v1: []float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
+				v2: []float64{2, 3, 4, 5, 6, 7, 8, 9, 10, 11},
+			},
+			want: 0.0021238962030426523,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -385,6 +409,14 @@ func Test_InnerProduct(t *testing.T) {
 			},
 			want: -5,
 		},
+		{
+			name: "Test 4",
+			args: args{
+				v1: []float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
+				v2: []float64{2, 3, 4, 5, 6, 7, 8, 9, 10, 11},
+			},
+			want: -440,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -444,6 +476,14 @@ func Test_L2DistanceSq(t *testing.T) {
 				v2: []float64{1, 1},
 			},
 			want: 9,
+		},
+		{
+			name: "Test 4",
+			args: args{
+				v1: []float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
+				v2: []float64{2, 3, 4, 5, 6, 7, 8, 9, 10, 11},
+			},
+			want: 10,
 		},
 	}
 	for _, tt := range tests {
@@ -507,6 +547,15 @@ func Test_AngularDistance(t *testing.T) {
 			},
 			want: 0.5,
 		},
+		{
+			name: "Test 4",
+			args: args{
+				v1: []float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
+				v2: []float64{2, 3, 4, 5, 6, 7, 8, 9, 10, 11},
+			},
+			want: 0,
+		},
+
 		// Test 4: Triangle Inequality check on **normalized** vector
 		// A(1,0),B(2,2), C(0,1) => AB + AC >= BC => 0.25 + 0.25 >= 0.5
 		//{

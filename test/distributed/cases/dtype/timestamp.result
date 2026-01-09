@@ -87,12 +87,12 @@ CREATE TABLE t_timestamp(id timestamp(6));
 INSERT INTO t_timestamp VALUES ('2020-01-01 23:59:59.999999'), ('2022-01-02 00:00:00');
 SELECT id, id = 202020101 FROM t_timestamp;
 id    id = 202020101
-2020-01-01 23:59:59.999999000    false
-2022-01-02 00:00:00    false
+2020-01-01 23:59:59.999999000    0
+2022-01-02 00:00:00    0
 SELECT id, 20200101 = id FROM t_timestamp;
 id    20200101 = id
-2020-01-01 23:59:59.999999000    false
-2022-01-02 00:00:00    false
+2020-01-01 23:59:59.999999000    0
+2022-01-02 00:00:00    0
 SELECT * from t_timestamp WHERE id = 20200102;
 id
 SELECT * from t_timestamp WHERE id = 2.0200102e7;

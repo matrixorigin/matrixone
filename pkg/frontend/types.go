@@ -546,6 +546,10 @@ type FeSession interface {
 	GetShareTxnBackgroundExec(ctx context.Context, newRawBatch bool) BackgroundExec
 	GetMySQLParser() *mysql.MySQLParser
 	InitBackExec(txnOp TxnOperator, db string, callBack outputCallBackFunc, opts ...*BackgroundExecOption) BackgroundExec
+	GetTempTable(dbName, alias string) (string, bool)
+	AddTempTable(dbName, alias, realName string)
+	RemoveTempTable(dbName, alias string)
+	RemoveTempTableByRealName(realName string)
 	SessionLogger
 }
 

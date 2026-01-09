@@ -1,0 +1,108 @@
+drop database if exists test_temp_idx;
+create database test_temp_idx;
+use test_temp_idx;
+create temporary table t1 (
+id int,
+name varchar(20),
+index idx_name (name)
+);
+show index from t1;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+t1    1    idx_name    1    name    A    0    NULL    NULL    YES                    YES    name
+show create table t1;
+Table    Create Table
+t1    CREATE TEMPORARY TABLE `t1` (\n  `id` int DEFAULT NULL,\n  `name` varchar(20) DEFAULT NULL,\n  KEY `idx_name` (`name`)\n)
+insert into t1 values (1, 'apple'), (2, 'banana'), (3, 'cherry');
+select * from t1 where name = 'banana';
+id    name
+2    banana
+drop table t1;
+create temporary table t2 (
+id int,
+age int
+);
+insert into t2 values (1, 20), (2, 30), (3, 25);
+create index idx_age on t2(age);
+show index from t2;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+t2    1    idx_age    1    age    A    0    NULL    NULL    YES                    YES    age
+show create table t2;
+Table    Create Table
+t2    CREATE TEMPORARY TABLE `t2` (\n  `id` int DEFAULT NULL,\n  `age` int DEFAULT NULL,\n  KEY `idx_age` (`age`)\n)
+select * from t2 where age > 20;
+id    age
+2    30
+3    25
+create temporary table t3 (
+c1 int,
+c2 int,
+c3 varchar(10),
+primary key(c1)
+);
+create index idx_c2_c3 on t3(c2, c3);
+insert into t3 values (1, 10, 'A'), (2, 20, 'B'), (3, 10, 'C');
+show index from t3;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+t3    0    PRIMARY    1    c1    A    0    NULL    NULL                        YES    c1
+t3    1    idx_c2_c3    1    c2    A    0    NULL    NULL    YES                    YES    c2
+t3    1    idx_c2_c3    2    c3    A    0    NULL    NULL    YES                    YES    c3
+select * from t3 where c2 = 10;
+c1    c2    c3
+1    10    A
+3    10    C
+create unique index idx_unique_c3 on t3(c3);
+insert into t3 values (4, 30, 'D');
+select * from t3;
+c1    c2    c3
+1    10    A
+2    20    B
+3    10    C
+4    30    D
+drop index idx_c2_c3 on t3;
+show index from t3;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+t3    0    PRIMARY    1    c1    A    0    NULL    NULL                        YES    c1
+t3    0    idx_unique_c3    1    c3    A    0    NULL    NULL    YES                    YES    c3
+alter table t3 add index idx_new (c2);
+show index from t3;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+t3    0    PRIMARY    1    c1    A    0    NULL    NULL                        YES    c1
+t3    0    idx_unique_c3    1    c3    A    0    NULL    NULL    YES                    YES    c3
+t3    1    idx_new    1    c2    A    0    NULL    NULL    YES                    YES    c2
+create temporary table t4 (
+id int primary key,
+title varchar(50),
+body varchar(100)
+);
+insert into t4 values
+(1, 'apple news', 'red apple and fruit'),
+(2, 'banana news', 'yellow banana'),
+(3, 'cherry note', 'sweet cherry note');
+create fulltext index idx_ft on t4(title, body);
+show create table t4;
+Table    Create Table
+t4    CREATE TEMPORARY TABLE `t4` (\n  `id` int NOT NULL,\n  `title` varchar(50) DEFAULT NULL,\n  `body` varchar(100) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT `idx_ft`(`title`,`body`)\n)
+select id, title from t4 where match(title, body) against ('apple');
+id    title
+1    apple news
+drop table t4;
+set experimental_ivf_index = 1;
+create temporary table t5 (
+id int primary key,
+v vecf32(3)
+);
+insert into t5 values
+(1, '[1,2,3]'),
+(2, '[2,2,3]'),
+(3, '[5,5,5]');
+create index idx_ivf using ivfflat on t5(v) lists=1 op_type "vector_l2_ops";
+show create table t5;
+Table    Create Table
+t5    CREATE TEMPORARY TABLE `t5` (\n  `id` int NOT NULL,\n  `v` vecf32(3) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx_ivf` USING ivfflat (`v`) lists = 1  op_type 'vector_l2_ops' \n)
+select id, v from t5 order by L2_DISTANCE(v, "[2,2,3]") limit 2;
+id    v
+2    [2, 2, 3]
+1    [1, 2, 3]
+drop table t5;
+set experimental_ivf_index = 0;
+drop database test_temp_idx;

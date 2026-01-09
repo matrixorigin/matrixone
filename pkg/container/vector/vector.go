@@ -647,6 +647,10 @@ func GetPtrAt[T any](v *Vector, idx int64) *T {
 }
 
 func (v *Vector) Free(mp *mpool.MPool) {
+	if v == nil {
+		return
+	}
+
 	if !v.cantFreeData {
 		mp.Free(v.data)
 	}
@@ -900,7 +904,8 @@ func (v *Vector) ToConst() {
 	v.class = CONSTANT
 }
 
-// PreExtend use to expand the capacity of the vector
+// PreExtend use to expand the capacity of the vector.
+// PreExtend does not change the length of the vector.
 func (v *Vector) PreExtend(rows int, mp *mpool.MPool) error {
 	if v.class == CONSTANT {
 		return nil
@@ -3128,6 +3133,10 @@ func AppendAny(vec *Vector, val any, isNull bool, mp *mpool.MPool) error {
 		return appendOneBytes(vec, val.([]byte), false, mp)
 	}
 	return nil
+}
+
+func AppendNull(vec *Vector, mp *mpool.MPool) error {
+	return appendOneFixed(vec, 0, true, mp)
 }
 
 func AppendFixed[T any](vec *Vector, val T, isNull bool, mp *mpool.MPool) error {

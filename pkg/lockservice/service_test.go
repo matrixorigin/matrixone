@@ -2340,7 +2340,7 @@ func TestCheckTxnTimeout(t *testing.T) {
 			require.NoError(t, err)
 			l1.tableGroups.removeWithFilter(func(_ uint64, v lockTable) bool {
 				return true
-			})
+			}, closeReasonBindChanged)
 			require.NoError(t, l1.Unlock(ctx, []byte("txn2"), timestamp.Timestamp{}))
 
 			require.False(t, l2.activeTxnHolder.empty())
@@ -2452,7 +2452,7 @@ func TestReLockSuccWithKeepBindTimeout(t *testing.T) {
 
 			l1.tableGroups.removeWithFilter(func(key uint64, value lockTable) bool {
 				return true
-			})
+			}, closeReasonBindChanged)
 
 			// should lock succ
 			_, err = l2.Lock(
@@ -3640,7 +3640,7 @@ func TestIssue5543(t *testing.T) {
 						return true
 					}
 					return false
-				})
+				}, closeReasonBindChanged)
 			}
 
 			var wg sync.WaitGroup
@@ -3977,7 +3977,7 @@ func TestTxnUnlockWithBindChanged(t *testing.T) {
 					bind.Version = bind.Version + 1
 					new := newLocalLockTable(bind, s.fsp, s.events, s.clock, s.activeTxnHolder, getLogger(s.GetConfig().ServiceID))
 					s.tableGroups.set(0, table, new)
-					lt.close()
+					lt.close(closeReasonBindChanged)
 
 					// txn2 get lock, shared
 					_, err = s.Lock(ctx, table, rows, txn2, option)

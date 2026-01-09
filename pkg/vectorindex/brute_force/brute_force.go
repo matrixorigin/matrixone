@@ -220,8 +220,8 @@ func (idx *GoBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, 
 		proc.GetContext(),
 		nqueries,
 		func(ctx context.Context, thread_id int, start, end int) (err2 error) {
-			subqueries := queries[start:end]
-			subresults := results[start:end]
+			subqueries := queries[start:end:end]
+			subresults := results[start:end:end]
 			for k, q := range subqueries {
 				if k%100 == 0 && ctx.Err() != nil {
 					return ctx.Err()
@@ -259,7 +259,7 @@ func (idx *GoBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any, 
 		proc.GetContext(),
 		nqueries,
 		func(ctx context.Context, thread_id int, start, end int) (err2 error) {
-			subresults := results[start:end]
+			subresults := results[start:end:end]
 			for j := range subresults {
 				if j%100 == 0 && ctx.Err() != nil {
 					return ctx.Err()

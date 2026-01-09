@@ -334,6 +334,9 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 	if alias == "" {
 		alias = tblName
 	}
+	// For temporary tables or aliased tables, we need to preserve the original name used in the query
+	// so that binding logic can find it later.
+	tableDef.OriginalName = alias
 	tblInfo.alias[alias] = nowIdx
 
 	return nil
@@ -1703,6 +1706,7 @@ func appendPrimaryConstraintPlan(
 					NodeType:               plan.Node_JOIN,
 					Children:               []int32{rightId, lastNodeId},
 					JoinType:               plan.Node_RIGHT,
+					IsRightJoin:            true,
 					OnList:                 []*Expr{condExpr},
 					ProjectList:            []*Expr{rowIdExpr, rightRowIdExpr, pkColExpr},
 					RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, GetInFilterCardLimitOnPK(sid, scanNode.Stats.TableCnt), buildExpr, false)},

@@ -729,6 +729,32 @@ func ReadBool(r io.Reader) (bool, error) {
 	return DecodeBool(buf), nil
 }
 
+func ReadInt16(r io.Reader) (int16, error) {
+	buf := make([]byte, 2)
+	if _, err := io.ReadFull(r, buf); err != nil {
+		return 0, err
+	}
+	return DecodeInt16(buf), nil
+}
+
+func WriteInt16(w io.Writer, v int16) error {
+	w.Write(EncodeInt16(&v))
+	return nil
+}
+
+func ReadUint16(r io.Reader) (uint16, error) {
+	buf := make([]byte, 2)
+	if _, err := io.ReadFull(r, buf); err != nil {
+		return 0, err
+	}
+	return DecodeUint16(buf), nil
+}
+
+func WriteUint16(w io.Writer, v uint16) error {
+	w.Write(EncodeUint16(&v))
+	return nil
+}
+
 func ReadInt32(r io.Reader) (int32, error) {
 	buf := make([]byte, 4)
 	if _, err := io.ReadFull(r, buf); err != nil {
@@ -739,6 +765,19 @@ func ReadInt32(r io.Reader) (int32, error) {
 
 func WriteInt32(w io.Writer, v int32) error {
 	w.Write(EncodeInt32(&v))
+	return nil
+}
+
+func ReadUint32(r io.Reader) (uint32, error) {
+	buf := make([]byte, 4)
+	if _, err := io.ReadFull(r, buf); err != nil {
+		return 0, err
+	}
+	return DecodeUint32(buf), nil
+}
+
+func WriteUint32(w io.Writer, v uint32) error {
+	w.Write(EncodeUint32(&v))
 	return nil
 }
 
@@ -787,6 +826,28 @@ func ReadSizeBytes(r io.Reader) (int32, []byte, error) {
 		return sz, bs, nil
 	}
 	return sz, nil, nil
+}
+
+func ReadSizeBytesToBuf(r io.Reader, buf []byte, offset int32) (int32, []byte, error) {
+	sz, err := ReadInt32(r)
+	if err != nil || sz == 0 {
+		return 0, buf, err
+	}
+
+	if sz+offset <= int32(cap(buf)) {
+		buf = buf[:offset+sz]
+		if _, err := io.ReadFull(r, buf[offset:offset+sz]); err != nil {
+			return 0, buf, err
+		}
+		return sz, buf, nil
+	} else {
+		newbuf := make([]byte, sz+offset)
+		copy(newbuf, buf[:offset])
+		if _, err := io.ReadFull(r, newbuf[offset:offset+sz]); err != nil {
+			return 0, newbuf, err
+		}
+		return sz, newbuf, nil
+	}
 }
 
 func ReadSizeBytesMp(r io.Reader, bs []byte, mp *mpool.MPool, offHeap bool) (int32, []byte, error) {

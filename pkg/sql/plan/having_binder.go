@@ -216,26 +216,16 @@ func (b *HavingBinder) remapAggToTimeWindowResultAgg(expr *Expr) (*Expr, error) 
 	return expr, nil
 }
 
+// processGroupConcatOrderBy processes the ORDER BY clause in group_concat.
+// Instead of converting to window function, it records the order by specs
+// so that a Sort node can be inserted before the Agg node.
+// This allows batch processing instead of requiring all data in memory.
 func (b *HavingBinder) processForceWindows(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) error {
-
 	if len(astExpr.OrderBy) < 1 {
 		return nil
 	}
-	b.ctx.forceWindows = true
-	b.ctx.isDistinct = true
 
-	w := &plan.WindowSpec{}
-	ws := &tree.WindowSpec{}
-
-	// window function
-	w.Name = funcName
-
-	// partition by
-	w.PartitionBy = DeepCopyExprList(b.ctx.groups)
-
-	//order by
-	w.OrderBy = make([]*plan.OrderBySpec, 0, len(astExpr.OrderBy))
-
+	// Parse ORDER BY expressions and add to groupConcatOrderBys
 	for _, order := range astExpr.OrderBy {
 		orderExpr := order.Expr
 		if numVal, ok := order.Expr.(*tree.NumVal); ok {
@@ -243,7 +233,7 @@ func (b *HavingBinder) processForceWindows(funcName string, astExpr *tree.FuncEx
 			case tree.Int:
 				colPos, _ := numVal.Int64()
 				if numVal.Negative() {
-					moerr.NewSyntaxErrorf(b.GetContext(), "ORDER BY position %v is negative", colPos)
+					return moerr.NewSyntaxErrorf(b.GetContext(), "ORDER BY position %v is negative", colPos)
 				}
 				if colPos < 1 || int(colPos) > len(astExpr.Exprs)-1 {
 					return moerr.NewSyntaxErrorf(b.GetContext(), "ORDER BY position %v is not in group_concat arguments", colPos)
@@ -252,7 +242,6 @@ func (b *HavingBinder) processForceWindows(funcName string, astExpr *tree.FuncEx
 			default:
 				return moerr.NewSyntaxError(b.GetContext(), "non-integer constant in ORDER BY")
 			}
-
 		}
 
 		if _, ok := order.Expr.(*tree.Subquery); ok {
@@ -286,45 +275,11 @@ func (b *HavingBinder) processForceWindows(funcName string, astExpr *tree.FuncEx
 			orderBy.Flag |= plan.OrderBySpec_NULLS_LAST
 		}
 
-		w.OrderBy = append(w.OrderBy, orderBy)
+		// Add to groupConcatOrderBys for Sort node generation
+		b.ctx.groupConcatOrderBys = append(b.ctx.groupConcatOrderBys, orderBy)
 	}
-
-	w.Frame = getFrame(ws)
-
-	// append
-	b.ctx.windows = append(b.ctx.windows, &plan.Expr{
-		Expr: &plan.Expr_W{W: w},
-	})
 
 	return nil
-}
-
-func getFrame(ws *tree.WindowSpec) *plan.FrameClause {
-
-	f := &tree.FrameClause{Type: tree.Range}
-
-	if ws.OrderBy == nil {
-		f.Start = &tree.FrameBound{Type: tree.Preceding, UnBounded: true}
-		f.End = &tree.FrameBound{Type: tree.Following, UnBounded: true}
-	} else {
-		f.Start = &tree.FrameBound{Type: tree.Preceding, UnBounded: true}
-		f.End = &tree.FrameBound{Type: tree.CurrentRow}
-	}
-
-	ws.HasFrame = false
-	ws.Frame = f
-
-	return &plan.FrameClause{
-		Type: plan.FrameClause_FrameType(ws.Frame.Type),
-		Start: &plan.FrameBound{
-			Type:      plan.FrameBound_BoundType(ws.Frame.Start.Type),
-			UnBounded: ws.Frame.Start.UnBounded,
-		},
-		End: &plan.FrameBound{
-			Type:      plan.FrameBound_BoundType(ws.Frame.End.Type),
-			UnBounded: ws.Frame.End.UnBounded,
-		},
-	}
 }
 
 func (b *HavingBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {

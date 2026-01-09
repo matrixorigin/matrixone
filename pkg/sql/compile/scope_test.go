@@ -21,46 +21,35 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/buffer"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/join"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
-
-	"github.com/golang/mock/gomock"
-
-	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/defines"
-
-	"github.com/stretchr/testify/require"
-
-	"github.com/matrixorigin/matrixone/pkg/common/buffer"
-	"github.com/matrixorigin/matrixone/pkg/common/morpc"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil/testengine"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/stretchr/testify/require"
 )
 
 func checkSrcOpsWithDst(srcRoot vm.Operator, dstRoot vm.Operator) bool {
@@ -136,12 +125,12 @@ func TestScopeSerialization2(t *testing.T) {
 	// join->Shuffle->Dispatch
 	s := generateScopeWithRootOperator(
 		testCompile.proc,
-		[]vm.OpType{vm.Join, vm.Shuffle, vm.Dispatch})
+		[]vm.OpType{vm.HashJoin, vm.Shuffle, vm.Dispatch})
 	s.IsEnd = true
 	//join->connector
 	s1 := generateScopeWithRootOperator(
 		testCompile.proc,
-		[]vm.OpType{vm.Join, vm.Connector})
+		[]vm.OpType{vm.HashJoin, vm.Connector})
 	s.PreScopes = []*Scope{s1}
 
 	// tablescan-> projection -> connector.)
@@ -271,43 +260,43 @@ func TestNewParallelScope(t *testing.T) {
 	{
 		scopeToParallel := generateScopeWithRootOperator(
 			testCompile.proc,
-			[]vm.OpType{vm.RightSemi, vm.Projection, vm.Limit, vm.Connector})
+			[]vm.OpType{vm.HashJoin, vm.Projection, vm.Limit, vm.Connector})
 
 		scopeToParallel.NodeInfo.Mcpu = 4
 		_, ss := newParallelScope(scopeToParallel)
-		require.NoError(t, checkScopeWithExpectedList(ss[0], []vm.OpType{vm.RightSemi, vm.Projection, vm.Limit, vm.Connector}))
-		require.NoError(t, checkScopeWithExpectedList(ss[1], []vm.OpType{vm.RightSemi, vm.Projection, vm.Limit, vm.Connector}))
-		require.NoError(t, checkScopeWithExpectedList(ss[2], []vm.OpType{vm.RightSemi, vm.Projection, vm.Limit, vm.Connector}))
-		require.NoError(t, checkScopeWithExpectedList(ss[3], []vm.OpType{vm.RightSemi, vm.Projection, vm.Limit, vm.Connector}))
+		require.NoError(t, checkScopeWithExpectedList(ss[0], []vm.OpType{vm.HashJoin, vm.Projection, vm.Limit, vm.Connector}))
+		require.NoError(t, checkScopeWithExpectedList(ss[1], []vm.OpType{vm.HashJoin, vm.Projection, vm.Limit, vm.Connector}))
+		require.NoError(t, checkScopeWithExpectedList(ss[2], []vm.OpType{vm.HashJoin, vm.Projection, vm.Limit, vm.Connector}))
+		require.NoError(t, checkScopeWithExpectedList(ss[3], []vm.OpType{vm.HashJoin, vm.Projection, vm.Limit, vm.Connector}))
 	}
 
 	// 2. test (right -> filter -> projection -> connector.)
 	{
 		scopeToParallel := generateScopeWithRootOperator(
 			testCompile.proc,
-			[]vm.OpType{vm.Right, vm.Filter, vm.Projection, vm.Connector})
+			[]vm.OpType{vm.HashJoin, vm.Filter, vm.Projection, vm.Connector})
 
 		scopeToParallel.NodeInfo.Mcpu = 4
 
 		_, ss := newParallelScope(scopeToParallel)
-		require.NoError(t, checkScopeWithExpectedList(ss[0], []vm.OpType{vm.Right, vm.Filter, vm.Projection, vm.Connector}))
-		require.NoError(t, checkScopeWithExpectedList(ss[1], []vm.OpType{vm.Right, vm.Filter, vm.Projection, vm.Connector}))
-		require.NoError(t, checkScopeWithExpectedList(ss[2], []vm.OpType{vm.Right, vm.Filter, vm.Projection, vm.Connector}))
-		require.NoError(t, checkScopeWithExpectedList(ss[3], []vm.OpType{vm.Right, vm.Filter, vm.Projection, vm.Connector}))
+		require.NoError(t, checkScopeWithExpectedList(ss[0], []vm.OpType{vm.HashJoin, vm.Filter, vm.Projection, vm.Connector}))
+		require.NoError(t, checkScopeWithExpectedList(ss[1], []vm.OpType{vm.HashJoin, vm.Filter, vm.Projection, vm.Connector}))
+		require.NoError(t, checkScopeWithExpectedList(ss[2], []vm.OpType{vm.HashJoin, vm.Filter, vm.Projection, vm.Connector}))
+		require.NoError(t, checkScopeWithExpectedList(ss[3], []vm.OpType{vm.HashJoin, vm.Filter, vm.Projection, vm.Connector}))
 	}
 
 	// 3. test (rightanti -> shuffle  -> dispatch.)
 	{
 		scopeToParallel := generateScopeWithRootOperator(
 			testCompile.proc,
-			[]vm.OpType{vm.RightAnti, vm.Shuffle, vm.Dispatch})
+			[]vm.OpType{vm.HashJoin, vm.Shuffle, vm.Dispatch})
 
 		scopeToParallel.NodeInfo.Mcpu = 3
 
 		_, ss := newParallelScope(scopeToParallel)
-		require.NoError(t, checkScopeWithExpectedList(ss[0], []vm.OpType{vm.RightAnti, vm.Shuffle, vm.Dispatch}))
-		require.NoError(t, checkScopeWithExpectedList(ss[1], []vm.OpType{vm.RightAnti, vm.Shuffle, vm.Dispatch}))
-		require.NoError(t, checkScopeWithExpectedList(ss[2], []vm.OpType{vm.RightAnti, vm.Shuffle, vm.Dispatch}))
+		require.NoError(t, checkScopeWithExpectedList(ss[0], []vm.OpType{vm.HashJoin, vm.Shuffle, vm.Dispatch}))
+		require.NoError(t, checkScopeWithExpectedList(ss[1], []vm.OpType{vm.HashJoin, vm.Shuffle, vm.Dispatch}))
+		require.NoError(t, checkScopeWithExpectedList(ss[2], []vm.OpType{vm.HashJoin, vm.Shuffle, vm.Dispatch}))
 	}
 }
 
@@ -399,20 +388,14 @@ func generateScopeWithRootOperator(proc *process.Process, operatorList []vm.OpTy
 			return filter.NewArgument()
 		case vm.Dispatch:
 			return dispatch.NewArgument()
-		case vm.Join:
-			arg := join.NewArgument()
-			arg.Conditions = [][]*plan.Expr{nil, nil}
-			return arg
 		case vm.Shuffle:
 			return shuffle.NewArgument()
 		case vm.TableScan:
 			return table_scan.NewArgument()
-		case vm.RightSemi:
-			return rightsemi.NewArgument()
-		case vm.RightAnti:
-			return rightanti.NewArgument()
-		case vm.Right:
-			return right.NewArgument()
+		case vm.HashJoin:
+			arg := hashjoin.NewArgument()
+			arg.EqConds = [][]*plan.Expr{nil, nil}
+			return arg
 		case vm.Merge:
 			return merge.NewArgument()
 		default:
