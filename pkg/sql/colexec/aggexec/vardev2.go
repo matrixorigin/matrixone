@@ -148,9 +148,9 @@ func (exec *varStdDevExec[T, A]) getResult(s float64, s2 float64, cnt int64) (T,
 	var result float64
 	avg := s / float64(cnt)
 	if exec.isPop {
-		result = (s2 - avg*avg) / float64(cnt)
+		result = s2/float64(cnt) - avg*avg
 	} else {
-		result = (s2 - avg*avg) / float64(cnt-1)
+		result = s2/float64(cnt-1) - avg*avg*float64(cnt)/(float64(cnt-1))
 	}
 
 	if !exec.isVar {
