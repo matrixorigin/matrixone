@@ -298,7 +298,9 @@ insert into t_year_uniq values (2020, 'first');
 insert into t_year_uniq values (2021, 'second');
 
 -- This should fail due to unique constraint
+-- @bvt:issue#23408
 insert into t_year_uniq values (2020, 'duplicate');
+-- @bvt:issue#23408
 
 select * from t_year_uniq order by y;
 drop table t_year_uniq;
