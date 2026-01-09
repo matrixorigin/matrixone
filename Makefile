@@ -64,6 +64,8 @@ LAST_COMMIT_ID=$(shell git rev-parse --short HEAD)
 BUILD_TIME=$(shell date +%s)
 MO_VERSION=$(shell git symbolic-ref -q --short HEAD || git describe --tags --exact-match)
 GO_MODULE=$(shell $(GO) list -m)
+GO_MAJOR_VERSION = $(shell $(GO) version | cut -c 14- | cut -d' ' -f1 | cut -d'.' -f1)
+GO_MINOR_VERSION = $(shell $(GO) version | cut -c 14- | cut -d' ' -f1 | cut -d'.' -f2)
 
 # check the MUSL_TARGET from https://musl.cc
 # make MUSL_TARGET=aarch64-linux musl to cross make the aarch64 linux executable
@@ -191,7 +193,11 @@ GOTAGS :=
 GOEXPERIMENT_OPT :=
 
 ifeq ("$(UNAME_M)", "x86_64")
+  ifeq ($(shell expr $(GO_MAJOR_VERSION) \>= 1), 1)
+    ifeq ($(shell expr $(GO_MINOR_VERSION) \>= 26), 1)
 	GOEXPERIMENT_OPT=GOEXPERIMENT=simd
+    endif
+  endif
   ifneq ($(GOAMD64),)
 	GOEXPERIMENT_OPT+=GOAMD64=$(GOAMD64)
   endif
@@ -276,7 +282,7 @@ musl:
 .PHONY: mo-tool
 mo-tool: config cgo thirdparties
 	$(info [Build mo-tool tool])
-	$(CGO_OPTS) go build $(GOLDFLAGS) -o mo-tool ./cmd/mo-tool
+	$(CGO_OPTS) $(GO) build $(GOLDFLAGS) -o mo-tool ./cmd/mo-tool
 
 # build mo-service binary for debugging with go's race detector enabled
 # produced executable is 10x slower and consumes much more memory
@@ -999,7 +1005,7 @@ launch-minio-debug: debug dev-up-minio-local
 clean:
 	$(info [Clean up])
 	$(info Clean go test cache)
-	@go clean -testcache
+	@$(GO) clean -testcache
 	rm -f $(BIN_NAME)
 	rm -rf $(ROOT_DIR)/vendor
 	rm -rf $(MUSL_DIR)
@@ -1019,12 +1025,12 @@ fmt:
 .PHONY: install-static-check-tools
 install-static-check-tools:
 	@curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | bash -s -- -b $(GOPATH)/bin v2.6.2
-	@go install github.com/matrixorigin/linter/cmd/molint@latest
-	@go install github.com/apache/skywalking-eyes/cmd/license-eye@v0.4.0
+	@$(GO) install github.com/matrixorigin/linter/cmd/molint@latest
+	@$(GO) install github.com/apache/skywalking-eyes/cmd/license-eye@v0.4.0
 
 .PHONY: static-check
 static-check: config err-check
-	$(CGO_OPTS) go vet -vettool=`which molint` ./...
+	$(CGO_OPTS) $(GO) vet -vettool=`which molint` ./...
 	$(CGO_OPTS) license-eye -c .licenserc.yml header check
 	$(CGO_OPTS) license-eye -c .licenserc.yml dep check
 	$(CGO_OPTS) golangci-lint run -v -c .golangci.yml ./...
