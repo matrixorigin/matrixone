@@ -37,7 +37,32 @@ func TestAdjustClient(t *testing.T) {
 	c := &txnClient{}
 	c.adjust()
 	assert.NotNil(t, c.generator)
-	assert.NotNil(t, c.generator)
+	assert.NotNil(t, c.limiter)
+	// Verify sharded activeTxns are initialized
+	for i := range c.activeTxns {
+		assert.NotNil(t, c.activeTxns[i].txns)
+	}
+}
+
+func TestZeroValueClientShardedMaps(t *testing.T) {
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	c := &txnClient{}
+	c.adjust()
+
+	// Create a mock txnOperator
+	op := &txnOperator{}
+	op.reset.txnID = []byte("test1")
+
+	// Should not panic when accessing sharded maps
+	c.addActiveTxn(op)
+	assert.Equal(t, int64(1), c.atomic.activeTxnCount.Load())
+
+	gotOp, ok := c.getActiveTxn("test1")
+	assert.True(t, ok)
+	assert.NotNil(t, gotOp)
+
+	c.removeActiveTxn("test1")
+	assert.Equal(t, int64(0), c.atomic.activeTxnCount.Load())
 }
 
 func TestNewTxnAndReset(t *testing.T) {

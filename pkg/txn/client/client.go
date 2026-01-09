@@ -307,6 +307,11 @@ func (client *txnClient) collectActiveTxns() []*txnOperator {
 }
 
 func (client *txnClient) GetState() TxnState {
+	// Note: ActiveTxns is collected from sharded maps without holding mu,
+	// so it may not be exactly consistent with state/users which are read
+	// under mu lock. This is acceptable for monitoring/debugging purposes.
+	// If exact consistency is needed, all reads should be under a single lock.
+
 	// Collect active txn IDs from sharded map
 	at := make([]string, 0, client.atomic.activeTxnCount.Load())
 	client.forEachActiveTxn(func(op *txnOperator) bool {
@@ -375,6 +380,12 @@ func (client *txnClient) adjust() {
 	}
 	if client.maxActiveTxn == 0 {
 		client.maxActiveTxn = math.MaxInt
+	}
+	// Initialize sharded activeTxns if not already initialized
+	for i := range client.activeTxns {
+		if client.activeTxns[i].txns == nil {
+			client.activeTxns[i].txns = make(map[string]*txnOperator)
+		}
 	}
 }
 
