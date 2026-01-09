@@ -123,10 +123,16 @@ func L1Distance[T types.RealNumbers](p, q []T) (T, error) {
 	// Helper function for inline absolute value.
 	// A good compiler might inline this automatically.
 	abs := func(x T) T {
-		if x < 0 {
-			return -x
+		switch xx := any(x).(type) {
+		case float32:
+			// math.Float32bits gets the uint32 representation
+			// &^ (AND NOT) with 1 << 31 clears the sign bit
+			return T(math.Float32frombits(math.Float32bits(xx) &^ (1 << 31)))
+		case float64:
+			return T(math.Abs(xx))
+		default:
+			return 0
 		}
-		return x
 	}
 
 	// Process the bulk of the data in chunks of 8.
