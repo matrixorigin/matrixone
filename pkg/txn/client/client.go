@@ -618,12 +618,20 @@ func (client *txnClient) openTxn(op *txnOperator) error {
 	if !op.opts.skipWaitPushClient {
 		for client.mu.state == paused {
 			if client.normalStateNoWait {
+				activeCount := client.atomic.activeTxnCount.Load()
+				waitQueueSize := len(client.mu.waitActiveTxns)
 				client.mu.Unlock()
+				v2.TxnActiveQueueSizeGauge.Set(float64(activeCount))
+				v2.TxnWaitActiveQueueSizeGauge.Set(float64(waitQueueSize))
 				return moerr.NewInternalErrorNoCtx("cn service is not ready, retry later")
 			}
 
 			if op.opts.options.WaitPausedDisabled() {
+				activeCount := client.atomic.activeTxnCount.Load()
+				waitQueueSize := len(client.mu.waitActiveTxns)
 				client.mu.Unlock()
+				v2.TxnActiveQueueSizeGauge.Set(float64(activeCount))
+				v2.TxnWaitActiveQueueSizeGauge.Set(float64(waitQueueSize))
 				return moerr.NewInvalidStateNoCtx("txn client is in pause state")
 			}
 
