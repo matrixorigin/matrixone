@@ -202,6 +202,12 @@ func makeSpecialAggExec(
 ) (AggFuncExec, bool, error) {
 	if _, ok := specialAgg[id]; ok {
 		switch id {
+		case AggIdOfBitXor:
+			return makeBitXorExec(mp, id, isDistinct, params[0]), true, nil
+		case AggIdOfBitAnd:
+			return makeBitAndExec(mp, id, isDistinct, params[0]), true, nil
+		case AggIdOfBitOr:
+			return makeBitOrExec(mp, id, isDistinct, params[0]), true, nil
 		case AggIdOfVarPop:
 			return makeVarPopExec(mp, id, isDistinct, params[0]), true, nil
 		case AggIdOfStdDevPop:
