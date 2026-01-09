@@ -218,6 +218,39 @@ func TestMaxActiveTxnWithWaitPrevClosed(t *testing.T) {
 		WithMaxActiveTxn(1))
 }
 
+func TestConcurrentOpenCloseTxn(t *testing.T) {
+	RunTxnTests(
+		func(tc TxnClient, ts rpc.TxnSender) {
+			ctx := context.Background()
+			const goroutines = 50
+			const iterations = 100
+
+			var wg sync.WaitGroup
+			wg.Add(goroutines)
+
+			for i := 0; i < goroutines; i++ {
+				go func() {
+					defer wg.Done()
+					for j := 0; j < iterations; j++ {
+						op, err := tc.New(ctx, newTestTimestamp(0))
+						require.NoError(t, err)
+						require.NoError(t, op.Rollback(ctx))
+					}
+				}()
+			}
+
+			wg.Wait()
+
+			// Verify final state is consistent
+			v := tc.(*txnClient)
+			assert.Equal(t, int64(0), v.atomic.activeTxnCount.Load())
+			v.mu.RLock()
+			assert.Equal(t, 0, v.mu.users)
+			assert.Equal(t, 0, len(v.mu.waitActiveTxns))
+			v.mu.RUnlock()
+		})
+}
+
 func TestMaxActiveTxnWithWaitTimeout(t *testing.T) {
 	RunTxnTests(
 		func(tc TxnClient, ts rpc.TxnSender) {
@@ -281,7 +314,10 @@ func TestWaitAbortMarked(t *testing.T) {
 	tc := &txnClient{}
 	tc.mu.waitMarkAllActiveAbortedC = c
 	tc.mu.state = normal
-	tc.mu.activeTxns = map[string]*txnOperator{}
+	// Initialize sharded activeTxns
+	for i := range tc.activeTxns {
+		tc.activeTxns[i].txns = make(map[string]*txnOperator)
+	}
 	go func() {
 		close(c)
 	}()
