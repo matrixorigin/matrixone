@@ -1169,6 +1169,79 @@ func TestIsSubscribed_Concurrent(t *testing.T) {
 	wg.Wait()
 }
 
+// TestIsSubscribed_StateChangeAfterPartitionCreate tests that isSubscribed returns failure
+// if state changes to Unsubscribing during partition creation
+func TestIsSubscribed_StateChangeAfterPartitionCreate(t *testing.T) {
+	ctx := context.Background()
+	var c PushClient
+	c.subscribed.m = make(map[uint64]*subEntry)
+	c.eng = &Engine{
+		partitions:  make(map[[2]uint64]*logtailreplay.Partition),
+		globalStats: &GlobalStats{},
+	}
+
+	ent := &subEntry{dbID: 1, state: Subscribed}
+	ent.lastTs.Store(time.Now().UnixNano())
+	c.subscribed.m[100] = ent
+
+	// Simulate concurrent state change during partition creation
+	var wg sync.WaitGroup
+	results := make(chan struct {
+		ok    bool
+		state SubscribeState
+	}, 100)
+
+	// Reader goroutines
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 20; j++ {
+				_, ok, state := c.isSubscribed(ctx, 0, 1, 100)
+				results <- struct {
+					ok    bool
+					state SubscribeState
+				}{ok, state}
+			}
+		}()
+	}
+
+	// State changer - toggle between Subscribed and Unsubscribing
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for j := 0; j < 20; j++ {
+			c.subscribed.rw.Lock()
+			if c.subscribed.m[100].state == Subscribed {
+				c.subscribed.m[100].state = Unsubscribing
+			} else {
+				c.subscribed.m[100].state = Subscribed
+			}
+			c.subscribed.rw.Unlock()
+			time.Sleep(10 * time.Microsecond)
+		}
+	}()
+
+	wg.Wait()
+	close(results)
+
+	// Verify results: when ok=true, state must be Subscribed
+	// when ok=false, state should be Unsubscribing (or Unsubscribed)
+	okCount, failCount := 0, 0
+	for r := range results {
+		if r.ok {
+			assert.Equal(t, Subscribed, r.state)
+			okCount++
+		} else {
+			assert.Contains(t, []SubscribeState{Unsubscribing, Unsubscribed}, r.state)
+			failCount++
+		}
+	}
+	t.Logf("Results: ok=%d, fail=%d", okCount, failCount)
+	// Both should occur in concurrent scenario
+	assert.True(t, okCount > 0, "should have some successful reads")
+}
+
 // TestIsSubscribed_TimestampSampling tests that timestamp is only updated when > 1 minute old
 func TestIsSubscribed_TimestampSampling(t *testing.T) {
 	ctx := context.Background()
