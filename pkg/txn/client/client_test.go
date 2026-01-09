@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/lni/goutils/leaktest"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -301,13 +302,44 @@ func TestMaxActiveTxnWithWaitTimeout(t *testing.T) {
 }
 
 func TestOpenTxnWithWaitPausedDisabled(t *testing.T) {
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
 	c := &txnClient{}
+	c.adjust()
 	c.mu.state = paused
 
 	op := &txnOperator{}
 	op.opts.options = op.opts.options.WithDisableWaitPaused()
 
 	require.Error(t, c.openTxn(op))
+}
+
+func TestCloseTxnWithAbortAllCheck(t *testing.T) {
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	c := &txnClient{}
+	c.adjust()
+	c.mu.state = normal
+
+	// Create and add a txn
+	op := &txnOperator{}
+	op.reset.txnID = []byte("test-txn")
+	op.reset.createAt = time.Now()
+	c.addActiveTxn(op)
+
+	// Verify txn is in active map
+	_, ok := c.getActiveTxn("test-txn")
+	require.True(t, ok)
+
+	// Close with ErrCannotCommitOnInvalidCN should mark all active txns aborted
+	// The txn should still be in map when markAllActiveTxnAborted is called
+	event := TxnEvent{
+		Txn: txn.TxnMeta{ID: []byte("test-txn")},
+		Err: moerr.NewCannotCommitOnInvalidCNNoCtx(),
+	}
+	_ = c.closeTxn(context.Background(), op, event, nil)
+
+	// Verify txn is removed after close
+	_, ok = c.getActiveTxn("test-txn")
+	require.False(t, ok)
 }
 
 func TestNewWithUpdateSnapshotTimeout(t *testing.T) {

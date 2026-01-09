@@ -673,14 +673,20 @@ func (client *txnClient) closeTxn(ctx context.Context, txnOp TxnOperator, event 
 	txn := event.Txn
 	key := string(txn.ID)
 
-	// Remove from sharded map first
-	op, ok := client.removeActiveTxn(key)
-
 	client.mu.Lock()
 
+	// Check abort-all condition before removing from map
+	// to ensure this txn is also marked if needed
 	if moerr.IsMoErrCode(event.Err, moerr.ErrCannotCommitOnInvalidCN) {
 		client.markAllActiveTxnAborted()
 	}
+
+	client.mu.Unlock()
+
+	// Remove from sharded map after abort check
+	op, ok := client.removeActiveTxn(key)
+
+	client.mu.Lock()
 
 	if ok {
 		v2.TxnLifeCycleDurationHistogram.Observe(time.Since(op.reset.createAt).Seconds())
