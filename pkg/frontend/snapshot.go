@@ -202,6 +202,12 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 	currentAccount := tenantInfo.GetTenant()
 	snapshotLevel = stmt.Object.SLevel.Level
 
+	if snapshotLevel != tree.SNAPSHOTLEVELCLUSTER {
+		if err = checkSnapshotQuota(ctx, ses, bh, 1, snapshotLevel.String()); err != nil {
+			return err
+		}
+	}
+
 	// 1.check create snapshot priv
 	err = doCheckCreateSnapshotPriv(ctx, ses, stmt)
 	if err != nil {
