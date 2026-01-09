@@ -742,15 +742,6 @@ func (client *txnClient) closeTxn(ctx context.Context, txnOp TxnOperator, event 
 	return
 }
 
-// addActiveTxnLocked is kept for compatibility but should not be used directly.
-// Use addActiveTxn instead.
-func (client *txnClient) addActiveTxnLocked(op *txnOperator) {
-	if op.opts.options.UserTxn() {
-		client.mu.users++
-	}
-	client.addActiveTxn(op)
-}
-
 func (client *txnClient) fetchWaitActiveOpLocked() *txnOperator {
 	if len(client.mu.waitActiveTxns) == 0 {
 		return nil
