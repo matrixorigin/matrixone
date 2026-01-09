@@ -540,8 +540,6 @@ type FeSession interface {
 	getCachedPlan(sql string) *cachedPlan
 	EnterFPrint(idx int)
 	ExitFPrint(idx int)
-	EnterRunSql()
-	ExitRunSql()
 	SetStaticTxnInfo(string)
 	GetStaticTxnInfo() string
 	GetShareTxnBackgroundExec(ctx context.Context, newRawBatch bool) BackgroundExec
@@ -684,6 +682,7 @@ type feSessionImpl struct {
 	debugStr     string
 	disableTrace bool
 	respr        Responser
+	runSQLTokens []uint64
 	//refreshed once
 	staticTxnInfo string
 	// mysql parser
@@ -729,19 +728,29 @@ func (ses *feSessionImpl) ExitFPrint(idx int) {
 	}
 }
 
-func (ses *feSessionImpl) EnterRunSql() {
-	if ses != nil {
-		if ses.txnHandler != nil && ses.txnHandler.txnOp != nil {
-			ses.txnHandler.txnOp.EnterRunSql()
-		}
+func (ses *feSessionImpl) pushRunSQLToken(token uint64) {
+	if token == 0 {
+		return
 	}
+	ses.runSQLTokens = append(ses.runSQLTokens, token)
 }
-func (ses *feSessionImpl) ExitRunSql() {
-	if ses != nil {
-		if ses.txnHandler != nil && ses.txnHandler.txnOp != nil {
-			ses.txnHandler.txnOp.ExitRunSql()
-		}
+
+func (ses *feSessionImpl) popRunSQLToken() uint64 {
+	n := len(ses.runSQLTokens)
+	if n == 0 {
+		return 0
 	}
+	token := ses.runSQLTokens[n-1]
+	ses.runSQLTokens = ses.runSQLTokens[:n-1]
+	return token
+}
+
+func (ses *feSessionImpl) currentRunSQLToken() uint64 {
+	n := len(ses.runSQLTokens)
+	if n == 0 {
+		return 0
+	}
+	return ses.runSQLTokens[n-1]
 }
 
 // Close releases all reference.
@@ -773,6 +782,7 @@ func (ses *feSessionImpl) Reset() {
 		ses.txnCompileCtx = nil
 	}
 	ses.sql = ""
+	ses.runSQLTokens = nil
 	ses.gSysVars = nil
 	ses.sesSysVars = nil
 	ses.allResultSet = nil
