@@ -1070,13 +1070,16 @@ func (c *PushClient) doGCUnusedTable(ctx context.Context) {
 		}
 	}
 
-	// Phase 4: revert failed jobs to Subscribed state for retry
+	// Phase 4: revert failed jobs to Subscribed state for retry with backoff
+	// Refresh timestamp to delay next GC attempt by unsubscribeTimer (1 hour)
 	if len(failedJobs) > 0 {
+		now := time.Now().UnixNano()
 		c.subscribed.rw.Lock()
 		for _, job := range failedJobs {
 			if ent, ok := c.subscribed.m[job.tId]; ok && ent.state == Unsubscribing {
 				ent.state = Subscribed
-				logutil.Infof("%s reverted tbl[db: %d, tbl: %d] to Subscribed for retry",
+				ent.lastTs.Store(now) // backoff: skip this table for next GC cycle
+				logutil.Infof("%s reverted tbl[db: %d, tbl: %d] to Subscribed for retry (backoff until next cycle)",
 					logTag,
 					job.dbID,
 					job.tId)
@@ -1220,10 +1223,8 @@ func (c *PushClient) isSubscribed(
 	}
 	s.rw.RUnlock()
 
-	// Get partition outside subscribed lock (Engine has its own lock)
-	ps := c.eng.GetOrCreateLatestPart(ctx, accId, dbId, tId).Snapshot()
-
-	// Re-check: state may have changed while we were getting partition
+	// Re-check before creating partition to avoid unnecessary allocation
+	// if state changed to Unsubscribing during the unlock window
 	s.rw.RLock()
 	ent, exist = s.m[tId]
 	if !exist {
@@ -1231,18 +1232,21 @@ func (c *PushClient) isSubscribed(
 		return nil, false, Unsubscribed
 	}
 	st := ent.state
-	if st == Subscribed {
-		// Update timestamp (with sampling)
-		now := time.Now().UnixNano()
-		if now-ent.lastTs.Load() > int64(time.Minute) {
-			ent.lastTs.Store(now)
-		}
+	if st != Subscribed {
+		s.rw.RUnlock()
+		return nil, false, st
+	}
+	// Update timestamp (with sampling)
+	now := time.Now().UnixNano()
+	if now-ent.lastTs.Load() > int64(time.Minute) {
+		ent.lastTs.Store(now)
 	}
 	s.rw.RUnlock()
 
-	if st != Subscribed {
-		return nil, false, st
-	}
+	// Get partition outside subscribed lock (Engine has its own lock)
+	// State was Subscribed at re-check; even if it changes now, partition is still valid
+	ps := c.eng.GetOrCreateLatestPart(ctx, accId, dbId, tId).Snapshot()
+
 	return ps, true, Subscribed
 }
 

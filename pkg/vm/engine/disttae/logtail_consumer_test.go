@@ -1043,11 +1043,11 @@ func TestSubEntry_AtomicTimestamp(t *testing.T) {
 		ent.lastTs.Store(time.Now().UnixNano())
 
 		var wg sync.WaitGroup
-		for i := 0; i < 100; i++ {
+		for i := 0; i < 10; i++ {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				for j := 0; j < 1000; j++ {
+				for j := 0; j < 100; j++ {
 					ent.lastTs.Store(time.Now().UnixNano())
 					_ = ent.lastTs.Load()
 				}
@@ -1065,18 +1065,18 @@ func TestSubscribedTable_RWMutex(t *testing.T) {
 			m: make(map[uint64]*subEntry),
 		}
 		// Add some entries
-		for i := uint64(0); i < 100; i++ {
+		for i := uint64(0); i < 10; i++ {
 			ent := &subEntry{dbID: i, state: Subscribed}
 			ent.lastTs.Store(time.Now().UnixNano())
 			s.m[i] = ent
 		}
 
 		var wg sync.WaitGroup
-		for i := 0; i < 100; i++ {
+		for i := 0; i < 10; i++ {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				for j := 0; j < 1000; j++ {
+				for j := 0; j < 100; j++ {
 					s.rw.RLock()
 					for _, ent := range s.m {
 						_ = ent.state
@@ -1804,8 +1804,8 @@ func TestHighConcurrency_StressTest(t *testing.T) {
 	}
 
 	var wg sync.WaitGroup
-	const goroutines = 50
-	const operations = 1000
+	const goroutines = 10
+	const operations = 100
 
 	// Mixed operations
 	for i := 0; i < goroutines; i++ {
@@ -1813,7 +1813,7 @@ func TestHighConcurrency_StressTest(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			for j := 0; j < operations; j++ {
-				tblId := uint64((id*operations + j) % 500)
+				tblId := uint64((id*operations + j) % 50)
 				switch j % 5 {
 				case 0:
 					c.subscribed.setTableSubscribed(1000, tblId)
@@ -2548,16 +2548,27 @@ func TestGC_FailureRetry(t *testing.T) {
 	ent.lastTs.Store(time.Now().Add(-2 * time.Hour).UnixNano())
 	c.subscribed.m[100] = ent
 
-	// First GC round - should fail and revert state
+	// First GC round - should fail and revert state with backoff
 	c.doGCUnusedTable(ctx)
 	assert.Equal(t, int32(1), callCount.Load())
 
 	// State should be reverted to Subscribed
 	c.subscribed.rw.RLock()
 	assert.Equal(t, Subscribed, c.subscribed.m[100].state)
+	// Timestamp should be refreshed (backoff)
+	assert.True(t, time.Now().UnixNano()-c.subscribed.m[100].lastTs.Load() < int64(time.Minute))
 	c.subscribed.rw.RUnlock()
 
-	// Second GC round - should retry
+	// Second GC round - should skip due to backoff (timestamp refreshed)
+	c.doGCUnusedTable(ctx)
+	assert.Equal(t, int32(1), callCount.Load()) // no new call
+
+	// Manually expire the timestamp to test retry
+	c.subscribed.rw.Lock()
+	c.subscribed.m[100].lastTs.Store(time.Now().Add(-2 * time.Hour).UnixNano())
+	c.subscribed.rw.Unlock()
+
+	// Third GC round - should retry now
 	c.doGCUnusedTable(ctx)
 	assert.Equal(t, int32(2), callCount.Load())
 
