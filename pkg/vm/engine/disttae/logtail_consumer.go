@@ -1035,7 +1035,7 @@ func (c *PushClient) doGCUnusedTable(ctx context.Context) {
 	}
 
 	// Phase 2: write phase, re-check and mark
-	var jobs []unsubJob
+	jobs := make([]unsubJob, 0, len(toClean))
 	c.subscribed.rw.Lock()
 	for _, job := range toClean {
 		ent, ok := c.subscribed.m[job.tId]
