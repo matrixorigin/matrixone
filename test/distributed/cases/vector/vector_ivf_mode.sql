@@ -292,6 +292,7 @@ UNION
  FROM mini_embed_data 
  ORDER BY cosine_distance(embedding, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]') 
  LIMIT 2 by rank with option 'mode=pre')
+ORDER BY id
 LIMIT 3;
 
 -- Test Case: UNION with mode=pre and complex WHERE conditions
@@ -360,6 +361,7 @@ UNION ALL
  WHERE file_id = 'file02'
  ORDER BY cosine_distance(embedding, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]') 
  LIMIT 2 by rank with option 'mode=pre')
+ORDER BY id
 LIMIT 3;
 
 -- Test Case: UNION with mode=pre and DESC ordering
