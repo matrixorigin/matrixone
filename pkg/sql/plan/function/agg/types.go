@@ -23,6 +23,10 @@ type numeric interface {
 	types.Ints | types.UInts | types.Floats
 }
 
+type numericWithMaxScale interface {
+	int64 | uint64 | float64
+}
+
 type canCompare interface {
 	constraints.Integer | constraints.Float | types.Date | types.Datetime | types.Timestamp | types.Time | types.MoYear
 }
