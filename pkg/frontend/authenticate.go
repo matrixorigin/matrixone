@@ -48,6 +48,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -1891,10 +1892,6 @@ func getSqlForCheckWithGrantOptionForTableStarStarWithObjType(objType objectType
 	return fmt.Sprintf(checkWithGrantOptionForTableStarStar, objType, roleId, privId, privilegeLevelStarStar)
 }
 
-func getSqlForCheckWithGrantOptionForTableStarStar(roleId int64, privId PrivilegeType) string {
-	return getSqlForCheckWithGrantOptionForTableStarStarWithObjType(objectTypeTable, roleId, privId)
-}
-
 func getSqlForCheckWithGrantOptionForTableDatabaseStarWithObjType(ctx context.Context, objType objectType, roleId int64, privId PrivilegeType, dbName string) (string, error) {
 	err := inputNameIsInvalid(ctx, dbName)
 	if err != nil {
@@ -1903,20 +1900,12 @@ func getSqlForCheckWithGrantOptionForTableDatabaseStarWithObjType(ctx context.Co
 	return fmt.Sprintf(checkWithGrantOptionForTableDatabaseStar, objType, roleId, privId, privilegeLevelDatabaseStar, dbName), nil
 }
 
-func getSqlForCheckWithGrantOptionForTableDatabaseStar(ctx context.Context, roleId int64, privId PrivilegeType, dbName string) (string, error) {
-	return getSqlForCheckWithGrantOptionForTableDatabaseStarWithObjType(ctx, objectTypeTable, roleId, privId, dbName)
-}
-
 func getSqlForCheckWithGrantOptionForTableDatabaseTableWithObjType(ctx context.Context, objType objectType, roleId int64, privId PrivilegeType, dbName string, tableName string) (string, error) {
 	err := inputNameIsInvalid(ctx, dbName, tableName)
 	if err != nil {
 		return "", err
 	}
 	return fmt.Sprintf(checkWithGrantOptionForTableDatabaseTable, objType, roleId, privId, privilegeLevelDatabaseTable, dbName, tableName), nil
-}
-
-func getSqlForCheckWithGrantOptionForTableDatabaseTable(ctx context.Context, roleId int64, privId PrivilegeType, dbName string, tableName string) (string, error) {
-	return getSqlForCheckWithGrantOptionForTableDatabaseTableWithObjType(ctx, objectTypeTable, roleId, privId, dbName, tableName)
 }
 
 func getSqlForCheckWithGrantOptionForDatabaseStar(roleId int64, privId PrivilegeType) string {
@@ -1959,16 +1948,8 @@ func getSqlForCheckRoleHasTableLevelForDatabaseStarWithObjType(ctx context.Conte
 	return fmt.Sprintf(checkRoleHasTableLevelForDatabaseStarFormat, objType, roleId, privId, privilegeLevelDatabaseStar, privilegeLevelStar, dbName), nil
 }
 
-func getSqlForCheckRoleHasTableLevelForDatabaseStar(ctx context.Context, roleId int64, privId PrivilegeType, dbName string) (string, error) {
-	return getSqlForCheckRoleHasTableLevelForDatabaseStarWithObjType(ctx, objectTypeTable, roleId, privId, dbName)
-}
-
 func getSqlForCheckRoleHasTableLevelForStarStarWithObjType(objType objectType, roleId int64, privId PrivilegeType) string {
 	return fmt.Sprintf(checkRoleHasTableLevelForStarStarFormat, objType, roleId, privId, privilegeLevelStarStar)
-}
-
-func getSqlForCheckRoleHasTableLevelForStarStar(roleId int64, privId PrivilegeType) string {
-	return getSqlForCheckRoleHasTableLevelForStarStarWithObjType(objectTypeTable, roleId, privId)
 }
 
 func getSqlForCheckRoleHasDatabaseLevelForStarStar(roleId int64, privId PrivilegeType, level privilegeLevelType) string {
@@ -5092,6 +5073,9 @@ func parseViewKey(key string) (string, string) {
 	if key == "" {
 		return "", ""
 	}
+	if baseKey, _, ok := splitViewSnapshotSuffix(key); ok {
+		key = baseKey
+	}
 	if strings.Contains(key, KeySep) {
 		return splitKey(key)
 	}
@@ -5101,9 +5085,20 @@ func parseViewKey(key string) (string, string) {
 	return "", key
 }
 
-func getViewSecurityInfo(ctx context.Context, bh BackgroundExec, dbName, viewName string) (viewSecurityInfo, error) {
-	info, _, err := getViewSecurityInfoWithSnapshot(ctx, bh, dbName, viewName, nil)
-	return info, err
+func splitViewSnapshotSuffix(key string) (string, int64, bool) {
+	if key == "" {
+		return key, 0, false
+	}
+	idx := strings.LastIndex(key, plan2.ViewSnapshotKeySuffix)
+	if idx == -1 {
+		return key, 0, false
+	}
+	tsStr := key[idx+len(plan2.ViewSnapshotKeySuffix):]
+	ts, err := strconv.ParseInt(tsStr, 10, 64)
+	if err != nil {
+		return key, 0, false
+	}
+	return key[:idx], ts, true
 }
 
 func getViewSecurityInfoWithSnapshot(ctx context.Context, bh BackgroundExec, dbName, viewName string, snapshot *plan.Snapshot) (viewSecurityInfo, bool, error) {
@@ -7007,8 +7002,20 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 								mi.clusterTableOperation)
 							if yes2 {
 								viewChain := mi.originViews
-								if len(viewChain) == 0 && mi.directView != "" {
-									viewChain = []string{mi.directView}
+								directView := mi.directView
+								var viewSnapshot *plan.Snapshot
+								if directView != "" {
+									baseKey, ts, ok := splitViewSnapshotSuffix(directView)
+									if ok {
+										viewSnapshot = &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: ts}}
+										if mi.scanSnapshot != nil && mi.scanSnapshot.Tenant != nil {
+											viewSnapshot.Tenant = mi.scanSnapshot.Tenant
+										}
+										directView = baseKey
+									}
+								}
+								if len(viewChain) == 0 && directView != "" {
+									viewChain = []string{directView}
 								}
 
 								checkRoleId := roleId
@@ -7024,7 +7031,7 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 										mi.privilegeTyp,
 										viewChain,
 										tempEntry.databaseName,
-										mi.scanSnapshot,
+										viewSnapshot,
 										enableCache,
 									)
 									if err != nil {

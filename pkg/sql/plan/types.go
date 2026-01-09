@@ -75,6 +75,16 @@ type Snapshot = plan.Snapshot
 type SnapshotTenant = plan.SnapshotTenant
 type ExternAttr = plan.ExternAttr
 
+const ViewSnapshotKeySuffix = "@ts="
+
+// FormatViewKeyWithSnapshot appends snapshot information to a view key for privilege checks.
+func FormatViewKeyWithSnapshot(viewKey string, snapshot *Snapshot) string {
+	if !IsSnapshotValid(snapshot) || snapshot.TS == nil {
+		return viewKey
+	}
+	return fmt.Sprintf("%s%s%d", viewKey, ViewSnapshotKeySuffix, snapshot.TS.PhysicalTime)
+}
+
 type CompilerContext interface {
 	// Default database/schema in context
 	DefaultDatabase() string

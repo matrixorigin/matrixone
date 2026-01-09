@@ -4567,10 +4567,14 @@ func (builder *QueryBuilder) bindView(
 	}
 	viewCtx.defaultDatabase = defaultDatabase
 	viewKey := schema + "#" + table
+	viewKeyWithSnapshot := viewKey
+	if IsSnapshotValid(snapshot) {
+		viewKeyWithSnapshot = FormatViewKeyWithSnapshot(viewKey, snapshot)
+	}
 	if ctx != nil && ctx.directView != "" {
 		viewCtx.directView = ctx.directView
 	} else {
-		viewCtx.directView = viewKey
+		viewCtx.directView = viewKeyWithSnapshot
 	}
 	if ctx != nil && len(ctx.viewChain) > 0 {
 		viewCtx.viewChain = append(append([]string{}, ctx.viewChain...), viewKey)

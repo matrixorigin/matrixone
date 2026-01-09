@@ -59,6 +59,7 @@ For each plan node:
 - Enforce `SQL SECURITY` per view in the lineage to determine the effective role for base-table checks.
 - For view chains, cache-only privilege evaluation is skipped to avoid missing view metadata checks.
 - Snapshot reads resolve view metadata using the snapshot tenant and `MO_TS` to ensure view chains are validated against the correct historical catalog.
+- View privilege checks use the view-level snapshot (when the view is referenced with a snapshot) rather than the underlying table scan snapshot to avoid false "view not found" errors.
 - Fix privilege extraction for `INSERT/UPDATE/DELETE` paths to avoid missed checks.
 - Preserve existing system view and cluster table guardrails.
 
