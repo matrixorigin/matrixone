@@ -368,11 +368,12 @@ UNION
 FROM mini_embed_data
 ORDER BY cosine_distance(embedding, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]')
 LIMIT 2 by rank with option 'mode=pre')
+ORDER BY id
 LIMIT 3;
 id    content
-id1    hello world
-id10    additional entry
 id01    ai is artificial intelligence
+id03    it stores high dimensional vectors
+id1    hello world
 (SELECT id, category, l2_distance(vec, '[0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9]') AS dist
 FROM vec_with_multi_idx
 WHERE category = 'A' AND status = 1
@@ -445,11 +446,12 @@ FROM mini_embed_data
 WHERE file_id = 'file02'
 ORDER BY cosine_distance(embedding, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]')
 LIMIT 2 by rank with option 'mode=pre')
+ORDER BY id
 LIMIT 3;
 id    content
+id01    ai is artificial intelligence
 id03    it stores high dimensional vectors
 id04    mysql is a relational database
-id01    ai is artificial intelligence
 (SELECT id, text, l2_distance(vec, '[0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5]') AS dist
 FROM mini_vector_data
 WHERE id LIKE 'id1%'
