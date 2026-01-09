@@ -1212,7 +1212,8 @@ func (c *PushClient) isSubscribed(
 
 	s := &c.subscribed
 
-	// First check: verify state under RLock
+	// Single critical section under RLock to avoid creating partitions
+	// for tables that are being unsubscribed concurrently.
 	s.rw.RLock()
 	ent, exist := s.m[tId]
 	if !exist {
@@ -1224,30 +1225,13 @@ func (c *PushClient) isSubscribed(
 		s.rw.RUnlock()
 		return nil, false, st
 	}
-	s.rw.RUnlock()
-
-	// Get partition outside subscribed lock (Engine has its own lock)
-	ps := c.eng.GetOrCreateLatestPart(ctx, accId, dbId, tId).Snapshot()
-
-	// Second check: verify state hasn't changed during partition creation
-	// If state changed to Unsubscribing/Unsubscribed, return failure to avoid
-	// returning partition for a table that's being unsubscribed
-	s.rw.RLock()
-	ent, exist = s.m[tId]
-	if !exist {
-		s.rw.RUnlock()
-		return nil, false, Unsubscribed
-	}
-	st := ent.state
-	if st != Subscribed {
-		s.rw.RUnlock()
-		return nil, false, st
-	}
-	// Update timestamp (with sampling)
+	// Update timestamp (with sampling) while holding the read lock to keep
+	// state consistent with the partition creation below.
 	now := time.Now().UnixNano()
 	if now-ent.lastTs.Load() > int64(time.Minute) {
 		ent.lastTs.Store(now)
 	}
+	ps := c.eng.GetOrCreateLatestPart(ctx, accId, dbId, tId).Snapshot()
 	s.rw.RUnlock()
 
 	return ps, true, Subscribed
