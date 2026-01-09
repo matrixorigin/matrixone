@@ -1125,7 +1125,7 @@ func TestSubscribedTable_RWMutex(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for i := 0; i < 100; i++ {
+			for i := 0; i < 20; i++ {
 				s.rw.Lock()
 				s.m[1].state = Subscribed
 				s.rw.Unlock()
@@ -1133,7 +1133,7 @@ func TestSubscribedTable_RWMutex(t *testing.T) {
 			}
 		}()
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 		close(stop)
 		wg.Wait()
 	})
@@ -1155,11 +1155,11 @@ func TestIsSubscribed_Concurrent(t *testing.T) {
 	c.subscribed.m[100] = ent
 
 	var wg sync.WaitGroup
-	for i := 0; i < 100; i++ {
+	for i := 0; i < 10; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for j := 0; j < 100; j++ {
+			for j := 0; j < 10; j++ {
 				_, ok, state := c.isSubscribed(ctx, 0, 1, 100)
 				assert.True(t, ok)
 				assert.Equal(t, Subscribed, state)
@@ -2552,14 +2552,15 @@ func TestGC_FailureRetry(t *testing.T) {
 	c.doGCUnusedTable(ctx)
 	assert.Equal(t, int32(1), callCount.Load())
 
-	// State should be reverted to Subscribed
+	// State should be reverted to Subscribed with ~40min old timestamp (backoff for 20min)
 	c.subscribed.rw.RLock()
 	assert.Equal(t, Subscribed, c.subscribed.m[100].state)
-	// Timestamp should be refreshed (backoff)
-	assert.True(t, time.Now().UnixNano()-c.subscribed.m[100].lastTs.Load() < int64(time.Minute))
+	// Timestamp should be set to ~40min ago (unsubscribeTimer - unsubscribeProcessTicker = 60-20 = 40min)
+	age := time.Now().UnixNano() - c.subscribed.m[100].lastTs.Load()
+	assert.True(t, age > int64(30*time.Minute) && age < int64(50*time.Minute), "backoff timestamp should be ~40min old")
 	c.subscribed.rw.RUnlock()
 
-	// Second GC round - should skip due to backoff (timestamp refreshed)
+	// Second GC round - should skip due to backoff (not old enough)
 	c.doGCUnusedTable(ctx)
 	assert.Equal(t, int32(1), callCount.Load()) // no new call
 

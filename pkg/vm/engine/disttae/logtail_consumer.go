@@ -239,6 +239,8 @@ func (c *PushClient) GetState() State {
 
 // Only used for ut
 func (c *PushClient) SetSubscribeState(dbId, tblId uint64, state SubscribeState) {
+	c.subscribed.rw.Lock()
+	defer c.subscribed.rw.Unlock()
 	ent := &subEntry{
 		dbID:  dbId,
 		state: state,
@@ -1071,15 +1073,16 @@ func (c *PushClient) doGCUnusedTable(ctx context.Context) {
 	}
 
 	// Phase 4: revert failed jobs to Subscribed state for retry with backoff
-	// Refresh timestamp to delay next GC attempt by unsubscribeTimer (1 hour)
+	// Set timestamp to (now - unsubscribeTimer + unsubscribeProcessTicker) so it will be
+	// retried after one GC cycle (20 min) instead of waiting full unsubscribeTimer (1 hour)
 	if len(failedJobs) > 0 {
-		now := time.Now().UnixNano()
+		backoffTs := time.Now().Add(-unsubscribeTimer + unsubscribeProcessTicker).UnixNano()
 		c.subscribed.rw.Lock()
 		for _, job := range failedJobs {
 			if ent, ok := c.subscribed.m[job.tId]; ok && ent.state == Unsubscribing {
 				ent.state = Subscribed
-				ent.lastTs.Store(now) // backoff: skip this table for next GC cycle
-				logutil.Infof("%s reverted tbl[db: %d, tbl: %d] to Subscribed for retry (backoff until next cycle)",
+				ent.lastTs.Store(backoffTs)
+				logutil.Infof("%s reverted tbl[db: %d, tbl: %d] to Subscribed for retry (backoff ~20min)",
 					logTag,
 					job.dbID,
 					job.tId)
@@ -1209,7 +1212,7 @@ func (c *PushClient) isSubscribed(
 
 	s := &c.subscribed
 
-	// First check: verify state under RLock
+	// Check state under RLock and update timestamp before creating partition
 	s.rw.RLock()
 	ent, exist := s.m[tId]
 	if !exist {
@@ -1221,21 +1224,6 @@ func (c *PushClient) isSubscribed(
 		s.rw.RUnlock()
 		return nil, false, st
 	}
-	s.rw.RUnlock()
-
-	// Re-check before creating partition to avoid unnecessary allocation
-	// if state changed to Unsubscribing during the unlock window
-	s.rw.RLock()
-	ent, exist = s.m[tId]
-	if !exist {
-		s.rw.RUnlock()
-		return nil, false, Unsubscribed
-	}
-	st := ent.state
-	if st != Subscribed {
-		s.rw.RUnlock()
-		return nil, false, st
-	}
 	// Update timestamp (with sampling)
 	now := time.Now().UnixNano()
 	if now-ent.lastTs.Load() > int64(time.Minute) {
@@ -1244,7 +1232,7 @@ func (c *PushClient) isSubscribed(
 	s.rw.RUnlock()
 
 	// Get partition outside subscribed lock (Engine has its own lock)
-	// State was Subscribed at re-check; even if it changes now, partition is still valid
+	// State was Subscribed at check; even if it changes now, partition is still valid
 	ps := c.eng.GetOrCreateLatestPart(ctx, accId, dbId, tId).Snapshot()
 
 	return ps, true, Subscribed
