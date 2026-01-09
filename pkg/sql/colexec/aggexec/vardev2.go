@@ -157,7 +157,7 @@ func (exec *varStdDevExec[T, A]) getResult(s float64, s2 float64, cnt int64) (T,
 		result = math.Sqrt(result)
 	}
 
-	z, err := exec.f2t(result, exec.aggInfo.argTypes[0].Scale)
+	z, err := exec.f2t(result, exec.aggInfo.retType.Scale)
 	return z, err
 }
 
@@ -176,7 +176,7 @@ func (exec *varStdDevExec[T, A]) Flush() ([]*vector.Vector, error) {
 					vector.AppendNull(vecs[i], exec.mp)
 					continue
 				} else if exec.state[i].argCnt[j] == 1 {
-					z, _ := exec.f2t(0, exec.aggInfo.argTypes[0].Scale)
+					z, _ := exec.f2t(0, exec.aggInfo.retType.Scale)
 					vector.AppendFixed(vecs[i], z, false, exec.mp)
 				} else {
 					cnt := int64(exec.state[i].argCnt[j])
@@ -217,7 +217,7 @@ func (exec *varStdDevExec[T, A]) Flush() ([]*vector.Vector, error) {
 					vector.AppendNull(vecs[i], exec.mp)
 					continue
 				} else if cnt == 1 {
-					z, _ := exec.f2t(0, exec.aggInfo.argTypes[0].Scale)
+					z, _ := exec.f2t(0, exec.aggInfo.retType.Scale)
 					vector.AppendFixed(vecs[i], z, false, exec.mp)
 				} else {
 					result, err := exec.getResult(sums[j], sumsqs[j], cnt)

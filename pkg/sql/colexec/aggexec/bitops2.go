@@ -55,19 +55,18 @@ func (op bitOp) compute(a, b uint64) uint64 {
 }
 
 func (op bitOp) computeBytes(a, b []byte) ([]byte, error) {
+	var err error
 	switch op {
 	case bitXor:
-		types.BitXor(a, a, b)
-		return a, nil
+		err = types.BitXor(a, a, b)
 	case bitAnd:
-		types.BitAnd(a, a, b)
-		return a, nil
+		err = types.BitAnd(a, a, b)
 	case bitOr:
-		types.BitOr(a, a, b)
-		return a, nil
+		err = types.BitOr(a, a, b)
 	default:
 		panic(moerr.NewInternalErrorNoCtxf("unsupported bit operation %d", op))
 	}
+	return a, err
 }
 
 func (exec *bitOpExecFixed[T]) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
