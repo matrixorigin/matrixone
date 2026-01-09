@@ -36,31 +36,31 @@ id3    vector search test    1.1828778982162476
 CREATE TABLE mini_embed_data (id VARCHAR(64) NOT NULL, embedding VECF32(8) DEFAULT NULL, content TEXT DEFAULT NULL, description VARCHAR(255) DEFAULT NULL, file_id VARCHAR(64) DEFAULT NULL, score FLOAT DEFAULT NULL, disabled TINYINT DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (id), KEY idx_file_id (file_id));
 CREATE INDEX idx_vec_embedding USING ivfflat ON mini_embed_data (embedding) LISTS = 16 OP_TYPE 'vector_cosine_ops';
 INSERT INTO mini_embed_data (id, embedding, content, description, file_id, score, disabled) VALUES('id01','[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]','ai is artificial intelligence','what is ai?','file01',0.0,0);
-INSERT INTO mini_embed_data (id, embedding, content, description, file_id, score, disabled) VALUES('id02','[0.01,0.03,0.05,0.07,0.09,0.11,0.13,0.15]','sql is structured query language','what is sql?','file01',0.0,0);
+INSERT INTO mini_embed_data (id, embedding, content, description, file_id, score, disabled) VALUES('id02','[0.8,0.1,0.1,0.1,0.1,0.1,0.1,0.1]','sql is structured query language','what is sql?','file01',0.0,0);
 INSERT INTO mini_embed_data (id, embedding, content, description, file_id, score, disabled) VALUES('id03','[0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2]','it stores high dimensional vectors','what is vector db?','file02',0.0,0);
-INSERT INTO mini_embed_data (id, embedding, content, description, file_id, score, disabled) VALUES('id04','[0.11,0.22,0.33,0.44,0.55,0.66,0.77,0.88]','mysql is a relational database','what is mysql?','file02',0.0,0);
-INSERT INTO mini_embed_data (id, embedding, content, description, file_id, score, disabled) VALUES('id05','[0.12,0.32,0.52,0.72,0.11,0.31,0.51,0.71]','an ai assistant by openai','what is chatgpt?','file01',0.0,0);
+INSERT INTO mini_embed_data (id, embedding, content, description, file_id, score, disabled) VALUES('id04','[-0.5,0.3,-0.4,0.6,-0.2,0.1,-0.3,0.7]','mysql is a relational database','what is mysql?','file02',0.0,0);
+INSERT INTO mini_embed_data (id, embedding, content, description, file_id, score, disabled) VALUES('id05','[0.1,-0.8,0.2,-0.5,0.3,-0.4,0.6,-0.1]','an ai assistant by openai','what is chatgpt?','file01',0.0,0);
 SELECT mini_embed_data.id, mini_embed_data.content, mini_embed_data.description, mini_embed_data.embedding, mini_embed_data.file_id, mini_embed_data.disabled FROM mini_embed_data WHERE mini_embed_data.file_id IN ('file01','file02') AND mini_embed_data.embedding IS NOT NULL AND (mini_embed_data.disabled IS NULL OR mini_embed_data.disabled = false) ORDER BY cosine_distance(mini_embed_data.embedding,"[0.12,0.55,0.33,0.88,0.22,0.44,0.66,0.11]") DESC LIMIT 10 by rank with option 'mode=pre';
 id    content    description    embedding    file_id    disabled
-id02    sql is structured query language    what is sql?    [0.01, 0.03, 0.05, 0.07, 0.09, 0.11, 0.13, 0.15]    file01    0
+id05    an ai assistant by openai    what is chatgpt?    [0.1, -0.8, 0.2, -0.5, 0.3, -0.4, 0.6, -0.1]    file01    0
+id04    mysql is a relational database    what is mysql?    [-0.5, 0.3, -0.4, 0.6, -0.2, 0.1, -0.3, 0.7]    file02    0
+id02    sql is structured query language    what is sql?    [0.8, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]    file01    0
 id01    ai is artificial intelligence    what is ai?    [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]    file01    0
-id04    mysql is a relational database    what is mysql?    [0.11, 0.22, 0.33, 0.44, 0.55, 0.66, 0.77, 0.88]    file02    0
 id03    it stores high dimensional vectors    what is vector db?    [0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2]    file02    0
-id05    an ai assistant by openai    what is chatgpt?    [0.12, 0.32, 0.52, 0.72, 0.11, 0.31, 0.51, 0.71]    file01    0
 SELECT mini_embed_data.id, mini_embed_data.content, mini_embed_data.description, mini_embed_data.embedding, mini_embed_data.file_id, mini_embed_data.disabled FROM mini_embed_data WHERE mini_embed_data.file_id IN ('file01','file02') AND mini_embed_data.embedding IS NOT NULL AND (mini_embed_data.disabled IS NULL OR mini_embed_data.disabled = false) ORDER BY cosine_distance(mini_embed_data.embedding,"[0.12,0.55,0.33,0.88,0.22,0.44,0.66,0.11]") DESC LIMIT 10 by rank with option 'mode=post';
 id    content    description    embedding    file_id    disabled
-id02    sql is structured query language    what is sql?    [0.01, 0.03, 0.05, 0.07, 0.09, 0.11, 0.13, 0.15]    file01    0
+id05    an ai assistant by openai    what is chatgpt?    [0.1, -0.8, 0.2, -0.5, 0.3, -0.4, 0.6, -0.1]    file01    0
+id04    mysql is a relational database    what is mysql?    [-0.5, 0.3, -0.4, 0.6, -0.2, 0.1, -0.3, 0.7]    file02    0
+id02    sql is structured query language    what is sql?    [0.8, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]    file01    0
 id01    ai is artificial intelligence    what is ai?    [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]    file01    0
-id04    mysql is a relational database    what is mysql?    [0.11, 0.22, 0.33, 0.44, 0.55, 0.66, 0.77, 0.88]    file02    0
 id03    it stores high dimensional vectors    what is vector db?    [0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2]    file02    0
-id05    an ai assistant by openai    what is chatgpt?    [0.12, 0.32, 0.52, 0.72, 0.11, 0.31, 0.51, 0.71]    file01    0
 SELECT mini_embed_data.id, mini_embed_data.content, mini_embed_data.description, mini_embed_data.embedding, mini_embed_data.file_id, mini_embed_data.disabled FROM mini_embed_data WHERE mini_embed_data.file_id IN ('file01','file02') AND mini_embed_data.embedding IS NOT NULL AND (mini_embed_data.disabled IS NULL OR mini_embed_data.disabled = false) ORDER BY cosine_distance(mini_embed_data.embedding,"[0.12,0.55,0.33,0.88,0.22,0.44,0.66,0.11]") DESC LIMIT 10 by rank with option 'mode=force';
 id    content    description    embedding    file_id    disabled
-id02    sql is structured query language    what is sql?    [0.01, 0.03, 0.05, 0.07, 0.09, 0.11, 0.13, 0.15]    file01    0
-id04    mysql is a relational database    what is mysql?    [0.11, 0.22, 0.33, 0.44, 0.55, 0.66, 0.77, 0.88]    file02    0
+id05    an ai assistant by openai    what is chatgpt?    [0.1, -0.8, 0.2, -0.5, 0.3, -0.4, 0.6, -0.1]    file01    0
+id04    mysql is a relational database    what is mysql?    [-0.5, 0.3, -0.4, 0.6, -0.2, 0.1, -0.3, 0.7]    file02    0
+id02    sql is structured query language    what is sql?    [0.8, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]    file01    0
 id01    ai is artificial intelligence    what is ai?    [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]    file01    0
 id03    it stores high dimensional vectors    what is vector db?    [0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2]    file02    0
-id05    an ai assistant by openai    what is chatgpt?    [0.12, 0.32, 0.52, 0.72, 0.11, 0.31, 0.51, 0.71]    file01    0
 WITH q AS (SELECT id, text, l2_distance(vec, '[0.1,-0.2,0.3,0.4,-0.1,0.2,0.0,0.5]') AS dist FROM mini_vector_data WHERE id LIKE 'id%') SELECT * FROM q ORDER BY dist LIMIT 3 by rank with option 'mode=pre';
 id    text    dist
 id8    semantic item    0.7760798852372132
@@ -88,14 +88,14 @@ id1    hello world    1.0551303625106812
 id10    additional entry    1.071820855140686
 SELECT mini_embed_data.id, mini_embed_data.content FROM mini_embed_data WHERE mini_embed_data.file_id IN ('file01','file02') AND mini_embed_data.embedding IS NOT NULL AND mini_embed_data.disabled = 0 AND mini_embed_data.score = 0.0 ORDER BY cosine_distance(mini_embed_data.embedding,"[0.12,0.55,0.33,0.88,0.22,0.44,0.66,0.11]") DESC LIMIT 3 by rank with option 'mode=pre';
 id    content
-id02    sql is structured query language
-id01    ai is artificial intelligence
+id05    an ai assistant by openai
 id04    mysql is a relational database
+id02    sql is structured query language
 SELECT mini_embed_data.id, mini_embed_data.content FROM mini_embed_data WHERE mini_embed_data.file_id IN ('file01','file02') AND mini_embed_data.embedding IS NOT NULL AND mini_embed_data.disabled = 0 AND mini_embed_data.score = 0.0 ORDER BY cosine_distance(mini_embed_data.embedding,"[0.12,0.55,0.33,0.88,0.22,0.44,0.66,0.11]") DESC LIMIT 3 by rank with option 'mode=post';
 id    content
-id02    sql is structured query language
-id01    ai is artificial intelligence
+id05    an ai assistant by openai
 id04    mysql is a relational database
+id02    sql is structured query language
 SELECT id, text FROM mini_vector_data ORDER BY l2_distance(vec, '[0.1,-0.2,0.3,0.4,-0.1,0.2,0.0,0.5]') LIMIT 3 by rank with option 'mode=pre';
 id    text
 id8    semantic item
@@ -121,11 +121,11 @@ id    text    dist
 id8    semantic item    0.7760798852372132
 SELECT mini_embed_data.id FROM mini_embed_data WHERE mini_embed_data.file_id IN ('file01','file02') ORDER BY cosine_distance(mini_embed_data.embedding,"[0.12,0.55,0.33,0.88,0.22,0.44,0.66,0.11]") DESC LIMIT 5 by rank with option 'mode=pre';
 id
+id05
+id04
 id02
 id01
-id04
 id03
-id05
 SELECT id, content FROM mini_embed_data WHERE embedding IS NOT NULL AND file_id = 'file01' ORDER BY cosine_distance(embedding,"[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]") LIMIT 2 by rank with option 'mode=pre';
 id    content
 id01    ai is artificial intelligence
@@ -156,13 +156,13 @@ CREATE INDEX idx_category ON vec_with_regular_idx(category);
 CREATE INDEX idx_vec_regular USING ivfflat ON vec_with_regular_idx(vec) lists=8 op_type 'vector_l2_ops';
 INSERT INTO vec_with_regular_idx VALUES
 (1, 'A', 1, 5.0, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]'),
-(2, 'A', 1, 4.5, '[0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9]'),
-(3, 'B', 1, 4.0, '[0.3,0.4,0.5,0.6,0.7,0.8,0.9,0.1]'),
-(4, 'B', 2, 3.5, '[0.4,0.5,0.6,0.7,0.8,0.9,0.1,0.2]'),
-(5, 'C', 1, 3.0, '[0.5,0.6,0.7,0.8,0.9,0.1,0.2,0.3]'),
-(6, 'C', 2, 2.5, '[0.6,0.7,0.8,0.9,0.1,0.2,0.3,0.4]'),
-(7, 'A', 2, 2.0, '[0.7,0.8,0.9,0.1,0.2,0.3,0.4,0.5]'),
-(8, 'B', 1, 1.5, '[0.8,0.9,0.1,0.2,0.3,0.4,0.5,0.6]');
+(2, 'A', 1, 4.5, '[0.5,0.1,0.8,0.2,0.3,0.9,0.4,0.6]'),
+(3, 'B', 1, 4.0, '[0.9,0.7,0.1,0.3,0.8,0.2,0.5,0.4]'),
+(4, 'B', 2, 3.5, '[-0.3,0.6,0.2,-0.5,0.8,0.1,0.4,-0.2]'),
+(5, 'C', 1, 3.0, '[0.2,-0.4,0.7,0.3,-0.1,0.6,0.5,0.8]'),
+(6, 'C', 2, 2.5, '[-0.6,0.3,0.1,0.9,-0.2,0.5,0.7,0.4]'),
+(7, 'A', 2, 2.0, '[0.8,-0.3,0.5,0.1,-0.6,0.4,0.2,0.9]'),
+(8, 'B', 1, 1.5, '[0.4,0.8,-0.2,0.6,0.1,-0.5,0.3,0.7]');
 SELECT id, category, score FROM vec_with_regular_idx
 WHERE category = 'A'
 ORDER BY l2_distance(vec, '[0.15,0.25,0.35,0.45,0.55,0.65,0.75,0.85]')
@@ -201,15 +201,15 @@ CREATE INDEX idx_priority ON vec_with_multi_idx(priority);
 CREATE INDEX idx_vec_multi USING ivfflat ON vec_with_multi_idx(vec) lists=8 op_type 'vector_l2_ops';
 INSERT INTO vec_with_multi_idx VALUES
 (1, 'A', 1, 1, 5.0, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]'),
-(2, 'A', 1, 2, 4.5, '[0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9]'),
-(3, 'B', 1, 1, 4.0, '[0.3,0.4,0.5,0.6,0.7,0.8,0.9,0.1]'),
-(4, 'B', 2, 1, 3.5, '[0.4,0.5,0.6,0.7,0.8,0.9,0.1,0.2]'),
-(5, 'C', 1, 2, 3.0, '[0.5,0.6,0.7,0.8,0.9,0.1,0.2,0.3]'),
-(6, 'C', 2, 1, 2.5, '[0.6,0.7,0.8,0.9,0.1,0.2,0.3,0.4]'),
-(7, 'A', 2, 2, 2.0, '[0.7,0.8,0.9,0.1,0.2,0.3,0.4,0.5]'),
-(8, 'B', 1, 1, 1.5, '[0.8,0.9,0.1,0.2,0.3,0.4,0.5,0.6]'),
-(9, 'A', 1, 1, 1.0, '[0.9,0.1,0.2,0.3,0.4,0.5,0.6,0.7]'),
-(10, 'B', 2, 2, 0.5, '[0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1]');
+(2, 'A', 1, 2, 4.5, '[0.5,0.1,0.8,0.2,0.3,0.9,0.4,0.6]'),
+(3, 'B', 1, 1, 4.0, '[0.9,0.7,0.1,0.3,0.8,0.2,0.5,0.4]'),
+(4, 'B', 2, 1, 3.5, '[-0.3,0.6,0.2,-0.5,0.8,0.1,0.4,-0.2]'),
+(5, 'C', 1, 2, 3.0, '[0.2,-0.4,0.7,0.3,-0.1,0.6,0.5,0.8]'),
+(6, 'C', 2, 1, 2.5, '[-0.6,0.3,0.1,0.9,-0.2,0.5,0.7,0.4]'),
+(7, 'A', 2, 2, 2.0, '[0.8,-0.3,0.5,0.1,-0.6,0.4,0.2,0.9]'),
+(8, 'B', 1, 1, 1.5, '[0.4,0.8,-0.2,0.6,0.1,-0.5,0.3,0.7]'),
+(9, 'A', 1, 1, 1.0, '[-0.7,0.4,0.6,-0.1,0.3,0.8,-0.4,0.5]'),
+(10, 'B', 2, 2, 0.5, '[0.3,-0.5,0.4,0.7,-0.3,0.2,0.6,-0.1]');
 SELECT id, category, status FROM vec_with_multi_idx
 WHERE category = 'A' AND status = 1
 ORDER BY l2_distance(vec, '[0.15,0.25,0.35,0.45,0.55,0.65,0.75,0.85]')
@@ -245,19 +245,19 @@ WHERE category IN ('A', 'B') AND status = 1
 ORDER BY l2_distance(vec, '[0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9]')
 LIMIT 4 by rank with option 'mode=pre';
 id    category    status
-2    A    1
 1    A    1
+2    A    1
 3    B    1
-9    A    1
+8    B    1
 SELECT id, category, status FROM vec_with_multi_idx
 WHERE category IN ('A', 'B') AND status = 1
 ORDER BY l2_distance(vec, '[0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9]')
 LIMIT 4 by rank with option 'mode=post';
 id    category    status
-2    A    1
 1    A    1
+2    A    1
 3    B    1
-9    A    1
+8    B    1
 SELECT id, category, score FROM vec_with_multi_idx
 WHERE category = 'A' AND score > 2.0
 ORDER BY l2_distance(vec, '[0.15,0.25,0.35,0.45,0.55,0.65,0.75,0.85]')
@@ -282,10 +282,10 @@ INDEX idx_composite(category, status)
 CREATE INDEX idx_vec_composite USING ivfflat ON vec_with_composite_idx(vec) lists=8 op_type 'vector_l2_ops';
 INSERT INTO vec_with_composite_idx VALUES
 (1, 'A', 1, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]'),
-(2, 'A', 1, '[0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9]'),
-(3, 'A', 2, '[0.3,0.4,0.5,0.6,0.7,0.8,0.9,0.1]'),
-(4, 'B', 1, '[0.4,0.5,0.6,0.7,0.8,0.9,0.1,0.2]'),
-(5, 'B', 2, '[0.5,0.6,0.7,0.8,0.9,0.1,0.2,0.3]');
+(2, 'A', 1, '[0.6,0.1,0.9,0.3,0.2,0.8,0.5,0.4]'),
+(3, 'A', 2, '[0.9,-0.2,0.4,0.7,-0.1,0.5,0.3,0.6]'),
+(4, 'B', 1, '[-0.4,0.5,0.3,0.8,-0.2,0.6,0.1,0.7]'),
+(5, 'B', 2, '[0.3,0.7,-0.3,0.5,0.8,-0.1,0.4,0.2]');
 SELECT id, category, status FROM vec_with_composite_idx
 WHERE category = 'A' AND status = 1
 ORDER BY l2_distance(vec, '[0.15,0.25,0.35,0.45,0.55,0.65,0.75,0.85]')
@@ -368,11 +368,12 @@ UNION
 FROM mini_embed_data
 ORDER BY cosine_distance(embedding, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]')
 LIMIT 2 by rank with option 'mode=pre')
+ORDER BY id
 LIMIT 3;
 id    content
+id01    ai is artificial intelligence
+id03    it stores high dimensional vectors
 id1    hello world
-id10    additional entry
-id04    mysql is a relational database
 (SELECT id, category, l2_distance(vec, '[0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9]') AS dist
 FROM vec_with_multi_idx
 WHERE category = 'A' AND status = 1
@@ -386,9 +387,9 @@ ORDER BY l2_distance(vec, '[0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9]')
 LIMIT 2 by rank with option 'mode=pre')
 ORDER BY dist LIMIT 3;
 id    category    dist
-2    A    0.0
 1    A    0.28284269614271473
-3    B    0.842614929215999
+2    A    0.8717798174240452
+3    B    1.1874342448450308
 (SELECT id, category, l2_distance(vec, '[0.15,0.25,0.35,0.45,0.55,0.65,0.75,0.85]') AS dist
 FROM vec_with_regular_idx
 WHERE category = 'A'
@@ -409,9 +410,9 @@ LIMIT 1 by rank with option 'mode=pre')
 ORDER BY dist LIMIT 4;
 id    category    dist
 1    A    0.14142133490046585
-2    A    0.14142136782769238
-3    B    0.8485281542825963
-8    B    1.1045360607064578
+2    A    0.8485281542825963
+5    C    1.029563044203137
+3    B    1.1747340104175192
 WITH q1 AS (
 SELECT id, text, l2_distance(vec, '[0.1,-0.2,0.3,0.4,-0.1,0.2,0.0,0.5]') AS dist
 FROM mini_vector_data
@@ -445,11 +446,12 @@ FROM mini_embed_data
 WHERE file_id = 'file02'
 ORDER BY cosine_distance(embedding, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]')
 LIMIT 2 by rank with option 'mode=pre')
+ORDER BY id
 LIMIT 3;
 id    content
-id04    mysql is a relational database
-id03    it stores high dimensional vectors
 id01    ai is artificial intelligence
+id03    it stores high dimensional vectors
+id04    mysql is a relational database
 (SELECT id, text, l2_distance(vec, '[0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5]') AS dist
 FROM mini_vector_data
 WHERE id LIKE 'id1%'
@@ -480,10 +482,10 @@ ORDER BY l2_distance(vec, '[0.3,0.4,0.5,0.6,0.7,0.8,0.9,0.1]')
 LIMIT 2 by rank with option 'mode=pre')
 ORDER BY dist LIMIT 4;
 id    category    status    dist
-4    B    2    0.842614929215999
-2    A    1    0.842614929215999
-1    A    1    0.8774964278710846
-5    C    1    1.1045360607064578
+2    A    1    1.0246950533286887
+3    B    1    1.1489125521344465
+6    C    2    1.4491376417140533
+5    C    1    1.4525838685238883
 (SELECT id, text, l2_distance(vec, '[0.2,0.2,0.2,0.2,0.2,0.2,0.2,0.2]') AS dist
 FROM mini_vector_data
 WHERE id IN ('id1', 'id2')
@@ -520,8 +522,8 @@ LIMIT 2 by rank with option 'mode=pre')
 ORDER BY dist LIMIT 3;
 id    category    status    dist
 1    A    1    0.0
-4    B    1    1.1224972009658813
-5    B    2    1.2449899911880493
+4    B    1    1.166190266609192
+5    B    2    1.3000000715255737
 drop table if exists vec_with_regular_idx;
 drop table if exists vec_with_multi_idx;
 drop table if exists vec_with_composite_idx;
