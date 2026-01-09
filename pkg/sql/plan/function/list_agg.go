@@ -618,6 +618,7 @@ var SumSupportedTypes = []types.T{
 	types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 	types.T_float32, types.T_float64,
 	types.T_decimal64, types.T_decimal128,
+	types.T_bit, types.T_year,
 }
 
 var AvgSupportedTypes = []types.T{
@@ -625,4 +626,5 @@ var AvgSupportedTypes = []types.T{
 	types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 	types.T_float32, types.T_float64,
 	types.T_decimal64, types.T_decimal128,
+	types.T_bit, types.T_year,
 }
