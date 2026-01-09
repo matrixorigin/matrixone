@@ -633,7 +633,7 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 }
 
 func IsConstant(e *plan.Expr, varAndParamIsConst bool) bool {
-	switch ef := e.Expr.(type) {
+	switch ef := e.GetExpr().(type) {
 	case *plan.Expr_Lit, *plan.Expr_T, *plan.Expr_Vec:
 		return true
 	case *plan.Expr_F:
@@ -661,9 +661,7 @@ func IsConstant(e *plan.Expr, varAndParamIsConst bool) bool {
 			}
 		}
 		return true
-	case *plan.Expr_P:
-		return varAndParamIsConst
-	case *plan.Expr_V:
+	case *plan.Expr_P, *plan.Expr_V:
 		return varAndParamIsConst
 	default:
 		return false
