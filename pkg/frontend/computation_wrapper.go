@@ -70,7 +70,8 @@ func InitTxnComputationWrapper(
 	stmt tree.Statement,
 	proc *process.Process,
 ) *TxnComputationWrapper {
-	uuid, _ := uuid.NewV7()
+	u, _ := util2.FastUuid()
+	uuid := uuid.UUID(u)
 	return &TxnComputationWrapper{
 		stmt: stmt,
 		proc: proc,
