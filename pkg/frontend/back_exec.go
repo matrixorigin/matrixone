@@ -857,6 +857,15 @@ func (backSes *backSession) getCachedPlan(sql string) *cachedPlan {
 	return nil
 }
 
+func (backSes *backSession) getCleanupContext() context.Context {
+	if txnHandler := backSes.GetTxnHandler(); txnHandler != nil {
+		if ctx := txnHandler.GetTxnCtx(); ctx != nil {
+			return ctx
+		}
+	}
+	return context.Background()
+}
+
 func (backSes *backSession) Close() {
 	if backSes == nil {
 		return
@@ -864,6 +873,7 @@ func (backSes *backSession) Close() {
 	txnHandler := backSes.GetTxnHandler()
 	if txnHandler != nil {
 		tempExecCtx := ExecCtx{
+			reqCtx: backSes.getCleanupContext(),
 			ses:    backSes,
 			txnOpt: FeTxnOption{byRollback: true},
 		}

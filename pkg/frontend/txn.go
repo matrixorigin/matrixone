@@ -479,7 +479,7 @@ func (th *TxnHandler) Commit(execCtx *ExecCtx) error {
 func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 	execCtx.ses.EnterFPrint(FPCommitUnsafe)
 	defer execCtx.ses.ExitFPrint(FPCommitUnsafe)
-	_, span := trace.Start(execCtx.reqCtx, "TxnHandler.CommitTxn",
+	_, span := trace.Start(th.txnCtx, "TxnHandler.CommitTxn",
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End(trace.WithStatementExtra(execCtx.ses.GetTxnId(), execCtx.ses.GetStmtId(), execCtx.ses.GetSqlOfStmt()))
 	var err, err2 error
@@ -616,7 +616,7 @@ func (th *TxnHandler) Rollback(execCtx *ExecCtx) error {
 func (th *TxnHandler) rollbackUnsafe(execCtx *ExecCtx) error {
 	execCtx.ses.EnterFPrint(FPRollbackUnsafe)
 	defer execCtx.ses.ExitFPrint(FPRollbackUnsafe)
-	_, span := trace.Start(execCtx.reqCtx, "TxnHandler.RollbackTxn",
+	_, span := trace.Start(th.txnCtx, "TxnHandler.RollbackTxn",
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End(trace.WithStatementExtra(execCtx.ses.GetTxnId(), execCtx.ses.GetStmtId(), execCtx.ses.GetSqlOfStmt()))
 	var err error
