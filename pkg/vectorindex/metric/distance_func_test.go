@@ -210,6 +210,14 @@ func Test_L2Distance(t *testing.T) {
 			},
 			want: 3.1622776601683795,
 		},
+		{
+			name: "Test 5",
+			args: args{
+				v1: []float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2, 3, 4, 5, 6, 7},
+				v2: []float64{2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 2, 3, 4, 5, 6, 7, 8},
+			},
+			want: 5.196152422706632,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -277,6 +285,14 @@ func Test_L1Distance(t *testing.T) {
 				v2: []float64{2, 3, 4, 5, 6, 7, 8, 9, 10, 11},
 			},
 			want: 10,
+		},
+		{
+			name: "Test 5",
+			args: args{
+				v1: []float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2, 3, 4, 5, 6, 7},
+				v2: []float64{2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 2, 3, 4, 5, 6, 7, 8},
+			},
+			want: 27,
 		},
 	}
 	for _, tt := range tests {
@@ -346,11 +362,95 @@ func Test_CosineDistance(t *testing.T) {
 			},
 			want: 0.0021238962030426523,
 		},
+		{
+			name: "Test 5",
+			args: args{
+				v1: []float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2, 3, 4, 5, 6, 7},
+				v2: []float64{2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 2, 3, 4, 5, 6, 7, 8},
+			},
+			want: 0.0025062434610066964,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got, err := CosineDistance[float64](tt.args.v1, tt.args.v2); err != nil || got != tt.want {
 				t.Errorf("CosineDistance() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func Test_CosineSimilarity(t *testing.T) {
+	type args struct {
+		v1 []float64
+		v2 []float64
+	}
+	tests := []struct {
+		name string
+		args args
+		want float64
+	}{
+		{
+			name: "Test 1",
+			args: args{
+				v1: []float64{1, 2, 3, 4},
+				v2: []float64{1, 2, 4, 5},
+			},
+			want: 0.9960065188076063,
+		},
+		{
+			name: "Test 2",
+			args: args{
+				v1: []float64{10, 20, 30, 40},
+				v2: []float64{10.5, 21.5, 31.5, 43.5},
+			},
+			want: 0.9998746426104126,
+		},
+		{
+			name: "Test 3.a",
+			args: args{
+				v1: []float64{1, 1},
+				v2: []float64{4, 1},
+			},
+			want: 0.8574929257125441,
+		},
+		{
+			name: "Test 3.b",
+			args: args{
+				v1: []float64{4, 1},
+				v2: []float64{1, 4},
+			},
+			want: 0.47058823529411764,
+		},
+		{
+			name: "Test 3.c",
+			args: args{
+				v1: []float64{1, 4},
+				v2: []float64{1, 1},
+			},
+			want: 0.8574929257125441,
+		},
+		{
+			name: "Test 4",
+			args: args{
+				v1: []float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
+				v2: []float64{2, 3, 4, 5, 6, 7, 8, 9, 10, 11},
+			},
+			want: 0.9978761037969573,
+		},
+		{
+			name: "Test 5",
+			args: args{
+				v1: []float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2, 3, 4, 5, 6, 7},
+				v2: []float64{2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 2, 3, 4, 5, 6, 7, 8},
+			},
+			want: 0.9974937565389933,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got, err := CosineSimilarity[float64](tt.args.v1, tt.args.v2); err != nil || got != tt.want {
+				t.Errorf("CosineSimilarity() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -413,6 +513,14 @@ func Test_InnerProduct(t *testing.T) {
 				v2: []float64{2, 3, 4, 5, 6, 7, 8, 9, 10, 11},
 			},
 			want: -440,
+		},
+		{
+			name: "Test 5",
+			args: args{
+				v1: []float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2, 3, 4, 5, 6, 7},
+				v2: []float64{2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 2, 3, 4, 5, 6, 7, 8},
+			},
+			want: -1048,
 		},
 	}
 	for _, tt := range tests {
@@ -482,6 +590,14 @@ func Test_L2DistanceSq(t *testing.T) {
 			},
 			want: 10,
 		},
+		{
+			name: "Test 5",
+			args: args{
+				v1: []float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2, 3, 4, 5, 6, 7},
+				v2: []float64{2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 2, 3, 4, 5, 6, 7, 8},
+			},
+			want: 27,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -550,6 +666,14 @@ func Test_L2DistanceSqFp32(t *testing.T) {
 			},
 			want: 10,
 		},
+		{
+			name: "Test 5",
+			args: args{
+				v1: []float32{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2, 3, 4, 5, 6, 7},
+				v2: []float32{2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 2, 3, 4, 5, 6, 7, 8},
+			},
+			want: 27,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -617,6 +741,14 @@ func Test_AngularDistance(t *testing.T) {
 			args: args{
 				v1: []float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
 				v2: []float64{2, 3, 4, 5, 6, 7, 8, 9, 10, 11},
+			},
+			want: 0,
+		},
+		{
+			name: "Test 5",
+			args: args{
+				v1: []float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2, 3, 4, 5, 6, 7},
+				v2: []float64{2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 2, 3, 4, 5, 6, 7, 8},
 			},
 			want: 0,
 		},
