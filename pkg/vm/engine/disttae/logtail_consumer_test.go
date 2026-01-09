@@ -1522,7 +1522,6 @@ func TestDoGCUnusedTable_NonSubscribedState(t *testing.T) {
 	assert.False(t, unsubCalled.Load(), "non-Subscribed entry should not be unsubscribed")
 }
 
-
 // =============================================================================
 // Additional tests for edge cases and complex concurrent scenarios
 // =============================================================================
@@ -2041,7 +2040,6 @@ func TestIsSubscribed_PartitionCreation(t *testing.T) {
 	assert.True(t, exists)
 }
 
-
 // =============================================================================
 // Tests for complex write operations that require Lock (not RLock)
 // These are the reasons why original implementation used Mutex instead of RWMutex
@@ -2492,7 +2490,6 @@ func TestAllWriteOperations_Concurrent(t *testing.T) {
 	wg.Wait()
 	// No race condition or deadlock should occur
 }
-
 
 // TestIsSubscribed_ShortCriticalSection tests that isSubscribed maintains atomicity
 func TestIsSubscribed_Atomicity(t *testing.T) {
