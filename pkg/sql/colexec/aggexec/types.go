@@ -202,6 +202,10 @@ func makeSpecialAggExec(
 ) (AggFuncExec, bool, error) {
 	if _, ok := specialAgg[id]; ok {
 		switch id {
+		case AggIdOfBitmapConstruct:
+			return makeBmpConstructExec(mp, id, params[0]), true, nil
+		case AggIdOfBitmapOr:
+			return makeBmpOrExec(mp, id, params[0]), true, nil
 		case AggIdOfBitXor:
 			return makeBitXorExec(mp, id, isDistinct, params[0]), true, nil
 		case AggIdOfBitAnd:

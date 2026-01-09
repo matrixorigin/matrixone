@@ -35,14 +35,20 @@ const (
 	magicNumber      = uint64(0xdeadbeefbeefdead)
 )
 
+type MarshalerUnmarshaler interface {
+	MarshalBinary() ([]byte, error)
+	UnmarshalBinary([]byte) error
+}
+
 type aggInfo struct {
-	aggId      int64
-	isDistinct bool
-	argTypes   []types.Type
-	retType    types.Type
-	stateTypes []types.Type
-	emptyNull  bool
-	saveArg    bool
+	aggId                    int64
+	isDistinct               bool
+	argTypes                 []types.Type
+	retType                  types.Type
+	stateTypes               []types.Type
+	emptyNull                bool
+	saveArg                  bool
+	makeMarshalerUnmarshaler func(mp *mpool.MPool) (MarshalerUnmarshaler, error)
 }
 
 func (a *aggInfo) String() string {
@@ -66,6 +72,11 @@ type aggState struct {
 	capacity int32
 	// vecs are for agg state.
 	vecs []*vector.Vector
+	// MarshalerUnmarshaler, for state entries.
+	// Note that using this, means we pretty much give up memory management
+	// for the state entries.
+	mobs []MarshalerUnmarshaler
+
 	// argbuf is buffer to the arena for skiplist
 	argCnt []uint32
 	argbuf []byte
@@ -93,6 +104,9 @@ func (ag *aggState) init(mp *mpool.MPool, l, c int32, info *aggInfo) error {
 			if info.emptyNull {
 				ag.vecs[i].SetAllNulls(int(c))
 			}
+		}
+		if info.makeMarshalerUnmarshaler != nil {
+			ag.mobs = make([]MarshalerUnmarshaler, int(c))
 		}
 	} else {
 		if ag.argCnt, err = mpool.MakeSlice[uint32](int(c), mp, true); err != nil {
@@ -263,6 +277,18 @@ func (ag *aggState) writeStateToBuf(mp *mpool.MPool, info *aggInfo, flags []uint
 				return err
 			}
 		}
+
+		if info.makeMarshalerUnmarshaler != nil {
+			for i := range flags {
+				if flags[i] != 0 {
+					if bs, err := ag.mobs[i].MarshalBinary(); err != nil {
+						return err
+					} else {
+						types.WriteSizeBytes(bs, buf)
+					}
+				}
+			}
+		}
 	} else {
 		if ag.argSkl == nil {
 			return moerr.NewInternalErrorNoCtx("argSkl is not initialized")
@@ -293,6 +319,15 @@ func (ag *aggState) writeAllStatesToBuf(buf *bytes.Buffer, info *aggInfo) error 
 		for _, vec := range ag.vecs {
 			if err := vec.MarshalBinaryWithBuffer(buf); err != nil {
 				return err
+			}
+		}
+		if info.makeMarshalerUnmarshaler != nil {
+			for _, entry := range ag.mobs {
+				if bs, err := entry.MarshalBinary(); err != nil {
+					return err
+				} else {
+					types.WriteSizeBytes(bs, buf)
+				}
 			}
 		}
 	} else {
@@ -333,6 +368,27 @@ func (ag *aggState) readState(mp *mpool.MPool, reader io.Reader, info *aggInfo) 
 				return 0, err
 			}
 		}
+		if info.makeMarshalerUnmarshaler != nil {
+			for i := range cnt {
+				if ag.mobs[i], err = info.makeMarshalerUnmarshaler(mp); err != nil {
+					return 0, err
+				} else {
+					if sz, bs, err := types.ReadSizeBytes(reader); err != nil {
+						return 0, err
+					} else {
+						if sz > 0 {
+							if ag.mobs[i], err = info.makeMarshalerUnmarshaler(mp); err != nil {
+								return 0, err
+							} else {
+								if err := ag.mobs[i].UnmarshalBinary(bs); err != nil {
+									return 0, err
+								}
+							}
+						}
+					}
+				}
+			}
+		}
 	} else {
 		for i := range cnt {
 			if err := ag.readStateArg(mp, int32(i), reader, info); err != nil {
@@ -363,6 +419,12 @@ func (ag *aggState) appendFromStateArg(mp *mpool.MPool, otherOffset int32, other
 		for i := range ag.vecs {
 			if err := ag.vecs[i].UnionBatch(other.vecs[i], int64(otherOffset), int(end-start), nil, mp); err != nil {
 				return 0, err
+			}
+		}
+		if info.makeMarshalerUnmarshaler != nil {
+			for i := int32(0); i < end-start; i++ {
+				ag.mobs[ag.length+i] = other.mobs[otherOffset+i]
+				other.mobs[otherOffset+i] = nil
 			}
 		}
 		ag.length += end - start
@@ -435,8 +497,7 @@ func (ag *aggState) fillArg(mp *mpool.MPool, y uint16, val []byte, distinct bool
 		k := make([]byte, len(val)+kAggArgPrefixSz)
 		binary.BigEndian.PutUint16(k[:kAggArgPrefixSz], y)
 		copy(k[kAggArgPrefixSz:], val)
-		err := ag.insertArg(mp, k)
-		if err == nil {
+		if err := ag.insertArg(mp, k); err == nil {
 			ag.argCnt[y] += 1
 			if ag.argCnt[y] == 0 {
 				return moerr.NewInternalErrorNoCtx("agg fillArg: too many distinct arguments")
@@ -456,8 +517,7 @@ func (ag *aggState) fillArg(mp *mpool.MPool, y uint16, val []byte, distinct bool
 			return moerr.NewInternalErrorNoCtx("agg fillArg: too many arguments")
 		}
 		copy(k[kAggArgPrefixSz+kAggArgOrdinalSz:], val)
-		err := ag.insertArg(mp, k)
-		if err == nil {
+		if err := ag.insertArg(mp, k); err == nil {
 			ag.argCnt[ag.length] += 1
 			if ag.argCnt[ag.length] == 0 {
 				return moerr.NewInternalErrorNoCtx("agg fillArg: too many arguments")
