@@ -15,7 +15,6 @@
 package metric
 
 import (
-	"fmt"
 	"math"
 	"testing"
 
@@ -47,10 +46,8 @@ func Test_Blas32(t *testing.T) {
 	distfn, _, err := ResolveKmeansDistanceFn[float32](Metric_L2Distance, false)
 	require.Nil(t, err)
 
-	v, err := distfn(v1.Data, v2.Data)
+	_, err = distfn(v1.Data, v2.Data)
 	require.Nil(t, err)
-
-	fmt.Printf("blas32 v = %v\n", v)
 }
 
 func Test_ResolveFun(t *testing.T) {

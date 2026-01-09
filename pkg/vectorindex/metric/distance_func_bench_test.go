@@ -25,7 +25,7 @@ Benchmark_L2Distance/Normalize_L2-10        	                    1277733	      1
 Benchmark_L2Distance/L2_Distance(v1,_NormalizeL2)-10         	     589376	      1883 ns/op
 */
 func Benchmark_L2Distance(b *testing.B) {
-	dim := 128
+	dim := 1024
 
 	b.Run("L2 Distance float64", func(b *testing.B) {
 		v1, v2 := randomVectors[float64](b.N, dim), randomVectors[float64](b.N, dim)
@@ -45,6 +45,7 @@ func Benchmark_L2Distance(b *testing.B) {
 		}
 	})
 
+	/*
 	b.Run("Normalize L2 float64", func(b *testing.B) {
 		v1 := randomVectors[float64](b.N, dim)
 		b.ResetTimer()
@@ -75,10 +76,11 @@ func Benchmark_L2Distance(b *testing.B) {
 			_, _ = L2Distance[float64](v1[i], res)
 		}
 	})
+	*/
 }
 
 func Benchmark_L2DistanceSq(b *testing.B) {
-	dim := 128
+	dim := 1024
 
 	b.Run("L2 DistanceSq float64", func(b *testing.B) {
 		v1, v2 := randomVectors[float64](b.N, dim), randomVectors[float64](b.N, dim)
@@ -100,7 +102,7 @@ func Benchmark_L2DistanceSq(b *testing.B) {
 }
 
 func Benchmark_L1Distance(b *testing.B) {
-	dim := 128
+	dim := 1024
 
 	b.Run("L1 Distance float64", func(b *testing.B) {
 		v1, v2 := randomVectors[float64](b.N, dim), randomVectors[float64](b.N, dim)
@@ -122,7 +124,7 @@ func Benchmark_L1Distance(b *testing.B) {
 }
 
 func Benchmark_InnerProduct(b *testing.B) {
-	dim := 128
+	dim := 1024
 
 	b.Run("Inner Product float64", func(b *testing.B) {
 		v1, v2 := randomVectors[float64](b.N, dim), randomVectors[float64](b.N, dim)
@@ -144,7 +146,7 @@ func Benchmark_InnerProduct(b *testing.B) {
 }
 
 func Benchmark_CosineDistance(b *testing.B) {
-	dim := 128
+	dim := 1024
 
 	b.Run("Cosine Distance float64", func(b *testing.B) {
 		v1, v2 := randomVectors[float64](b.N, dim), randomVectors[float64](b.N, dim)
@@ -166,7 +168,7 @@ func Benchmark_CosineDistance(b *testing.B) {
 }
 
 func Benchmark_CosineSimilarity(b *testing.B) {
-	dim := 128
+	dim := 1024
 
 	b.Run("Cosine Similarity float64", func(b *testing.B) {
 		v1, v2 := randomVectors[float64](b.N, dim), randomVectors[float64](b.N, dim)
@@ -188,7 +190,7 @@ func Benchmark_CosineSimilarity(b *testing.B) {
 }
 
 func Benchmark_SphericalDistance(b *testing.B) {
-	dim := 128
+	dim := 1024
 
 	b.Run("Spherical Distance float64", func(b *testing.B) {
 		v1, v2 := randomVectors[float64](b.N, dim), randomVectors[float64](b.N, dim)
@@ -209,8 +211,9 @@ func Benchmark_SphericalDistance(b *testing.B) {
 	})
 }
 
+/*
 func Benchmark_ScaleInPlace(b *testing.B) {
-	dim := 128
+	dim := 1024
 
 	b.Run("ScaleInPlace float64", func(b *testing.B) {
 		v1 := randomVectors[float64](b.N, dim)
@@ -230,6 +233,7 @@ func Benchmark_ScaleInPlace(b *testing.B) {
 		}
 	})
 }
+*/
 
 func randomVectors[T float32 | float64](size, dim int) [][]T {
 	vectors := make([][]T, size)
