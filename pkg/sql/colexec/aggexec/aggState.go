@@ -90,6 +90,9 @@ func (ag *aggState) init(mp *mpool.MPool, l, c int32, info *aggInfo) error {
 			if err = ag.vecs[i].PreExtend(int(c), mp); err != nil {
 				return err
 			}
+			if info.emptyNull {
+				ag.vecs[i].SetAllNulls(int(c))
+			}
 		}
 	} else {
 		if ag.argCnt, err = mpool.MakeSlice[uint32](int(c), mp, true); err != nil {
