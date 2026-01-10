@@ -104,7 +104,11 @@ const (
 )
 
 func getPrepareStmtName(stmtID uint32) string {
-	return fmt.Sprintf("%s_%d", prefixPrepareStmtName, stmtID)
+	var buf [32]byte
+	b := append(buf[:0], prefixPrepareStmtName...)
+	b = append(b, '_')
+	b = strconv.AppendUint(b, uint64(stmtID), 10)
+	return string(b)
 }
 
 func parsePrepareStmtID(s string) uint32 {
@@ -2596,7 +2600,12 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 
 func makeCompactTxnInfo(op TxnOperator) string {
 	txn := op.Txn()
-	return fmt.Sprintf("%s:%s", hex.EncodeToString(txn.ID), txn.SnapshotTS.DebugString())
+	var buf [128]byte
+	b := buf[:0]
+	b = append(b, hex.EncodeToString(txn.ID)...)
+	b = append(b, ':')
+	b = append(b, txn.SnapshotTS.DebugString()...)
+	return string(b)
 }
 
 func executeStmtWithResponse(ses *Session,
@@ -3483,18 +3492,24 @@ func parseStmtExecute(reqCtx context.Context, ses *Session, data []byte) (string
 	stmtID := binary.LittleEndian.Uint32(data[0:4])
 	pos += 4
 
-	stmtName := fmt.Sprintf("%s_%d", prefixPrepareStmtName, stmtID)
+	stmtName := getPrepareStmtName(stmtID)
 	preStmt, err := ses.GetPrepareStmt(reqCtx, stmtName)
 	if err != nil {
 		return "", nil, err
 	}
 
 	var sql string
-	prefix := ""
 	if preStmt.IsCloudNonuser {
-		prefix = "/* cloud_nonuser */"
+		var buf [128]byte
+		b := append(buf[:0], "/* cloud_nonuser */execute "...)
+		b = append(b, stmtName...)
+		sql = string(b)
+	} else {
+		var buf [64]byte
+		b := append(buf[:0], "execute "...)
+		b = append(b, stmtName...)
+		sql = string(b)
 	}
-	sql = fmt.Sprintf("%sexecute %s", prefix, stmtName)
 
 	ses.Debug(reqCtx, "query trace", logutil.QueryField(sql))
 	err = ses.GetResponser().MysqlRrWr().ParseExecuteData(reqCtx, ses.GetProc(), preStmt, data, pos)
@@ -3513,18 +3528,24 @@ func parseStmtSendLongData(reqCtx context.Context, ses *Session, data []byte) er
 	stmtID := binary.LittleEndian.Uint32(data[0:4])
 	pos += 4
 
-	stmtName := fmt.Sprintf("%s_%d", prefixPrepareStmtName, stmtID)
+	stmtName := getPrepareStmtName(stmtID)
 	preStmt, err := ses.GetPrepareStmt(reqCtx, stmtName)
 	if err != nil {
 		return err
 	}
 
 	var sql string
-	prefix := ""
 	if preStmt.IsCloudNonuser {
-		prefix = "/* cloud_nonuser */"
+		var buf [128]byte
+		b := append(buf[:0], "/* cloud_nonuser */send long data for stmt "...)
+		b = append(b, stmtName...)
+		sql = string(b)
+	} else {
+		var buf [64]byte
+		b := append(buf[:0], "send long data for stmt "...)
+		b = append(b, stmtName...)
+		sql = string(b)
 	}
-	sql = fmt.Sprintf("%ssend long data for stmt %s", prefix, stmtName)
 
 	ses.Debug(reqCtx, "query trace", logutil.QueryField(sql))
 
