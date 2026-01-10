@@ -145,12 +145,16 @@ func (count *counter) nonZero() bool {
 	return count.enter.Load() != 0 || count.exit.Load() != 0
 }
 
-type footPrints struct {
+type footPrints = FootPrints
+
+// FootPrints tracks function entry/exit for debugging.
+// It's safe for concurrent use via atomic operations.
+type FootPrints struct {
 	prints [256]counter
 }
 
-func (fprints *footPrints) add(id int, enter bool) {
-	if id < 0 || id >= len(fprints.prints) {
+func (fprints *FootPrints) add(id int, enter bool) {
+	if fprints == nil || id < 0 || id >= len(fprints.prints) {
 		return
 	}
 	if enter {
@@ -160,7 +164,10 @@ func (fprints *footPrints) add(id int, enter bool) {
 	}
 }
 
-func (fprints *footPrints) String() string {
+func (fprints *FootPrints) String() string {
+	if fprints == nil {
+		return ""
+	}
 	strBuf := strings.Builder{}
 	for i := 0; i < len(fprints.prints); i++ {
 		if !fprints.prints[i].nonZero() {
