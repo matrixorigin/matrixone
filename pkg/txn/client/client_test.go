@@ -87,7 +87,8 @@ func TestNewTxnAndReset(t *testing.T) {
 
 	require.NoError(t, tx.Rollback(ctx))
 
-	tx, err = c.RestartTxn(ctx, tx, newTestTimestamp(0))
+	// Create a new transaction (object pool will reuse the freed operator)
+	tx, err = c.New(ctx, newTestTimestamp(0))
 	assert.Nil(t, err)
 	txnMeta = tx.(*txnOperator).mu.txn
 	assert.Equal(t, timestamp.Timestamp{PhysicalTime: 0}, txnMeta.SnapshotTS)
