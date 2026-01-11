@@ -15,16 +15,11 @@
 package perfcounter
 
 import (
-	"fmt"
-	"reflect"
-
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 )
 
 type CounterSet struct {
 	FileService FileServiceCounterSet
-	DistTAE     DistTAECounterSet
-	TAE         TAECounterSet
 }
 
 type FileServiceCounterSet struct {
@@ -45,25 +40,13 @@ type FileServiceCounterSet struct {
 			Hit  stats.Counter // CacheMemoryHit
 		}
 		Disk struct {
-			Read            stats.Counter // CacheDiskRead
-			Hit             stats.Counter // CacheDiskHit
-			OpenIOEntryFile stats.Counter
-			OpenFullFile    stats.Counter
-			CreateFile      stats.Counter
-			StatFile        stats.Counter
-			WriteFile       stats.Counter
-			Error           stats.Counter
-			Evict           stats.Counter
+			Read stats.Counter // CacheDiskRead
+			Hit  stats.Counter // CacheDiskHit
 		}
 		Remote struct {
 			Read stats.Counter // CacheRemoteRead
 			Hit  stats.Counter // CacheRemoteHit
 		}
-	}
-
-	FileWithChecksum struct {
-		Read  stats.Counter // logical read, unit：bytes
-		Write stats.Counter // logical write, unit：bytes
 	}
 
 	// ReadSize: actual bytes read from storage layer (excluding rowid tombstone)
@@ -74,102 +57,27 @@ type FileServiceCounterSet struct {
 	DiskReadSize stats.Counter
 }
 
-type DistTAECounterSet struct {
-	Logtail struct {
-		Entries               stats.Counter
-		InsertEntries         stats.Counter
-		MetadataInsertEntries stats.Counter
-		DeleteEntries         stats.Counter
-		MetadataDeleteEntries stats.Counter
-
-		InsertRows   stats.Counter
-		DeleteRows   stats.Counter
-		ActiveRows   stats.Counter
-		InsertBlocks stats.Counter
-	}
-}
-
-type TAECounterSet struct {
-	LogTail struct {
-		Entries       stats.Counter
-		InsertEntries stats.Counter
-		DeleteEntries stats.Counter
-	}
-
-	CheckPoint struct {
-		DoGlobalCheckPoint      stats.Counter
-		DoIncrementalCheckpoint stats.Counter
-		DeleteGlobalEntry       stats.Counter
-		DeleteIncrementalEntry  stats.Counter
-	}
-
-	Object struct {
-		Create              stats.Counter
-		CreateNonAppendable stats.Counter
-		SoftDelete          stats.Counter
-		MergeBlocks         stats.Counter
-		CompactBlock        stats.Counter
-	}
-
-	Block struct {
-		Create              stats.Counter
-		CreateNonAppendable stats.Counter
-		SoftDelete          stats.Counter
-		Flush               stats.Counter
-	}
-}
-
-var statsCounterType = reflect.TypeOf((*stats.Counter)(nil)).Elem()
-
-type IterFieldsFunc func(path []string, counter *stats.Counter) error
-
-func (c *CounterSet) IterFields(fn IterFieldsFunc) error {
-	return iterFields(
-		reflect.ValueOf(c),
-		[]string{},
-		fn,
-	)
-}
-
 func (c *CounterSet) Reset() {
-	*c = CounterSet{}
-}
+	// FileService.S3
+	c.FileService.S3.List.Reset()
+	c.FileService.S3.Head.Reset()
+	c.FileService.S3.Put.Reset()
+	c.FileService.S3.Get.Reset()
+	c.FileService.S3.Delete.Reset()
+	c.FileService.S3.DeleteMulti.Reset()
 
-func iterFields(v reflect.Value, path []string, fn IterFieldsFunc) error {
+	// FileService.Cache
+	c.FileService.Cache.Read.Reset()
+	c.FileService.Cache.Hit.Reset()
+	c.FileService.Cache.Memory.Read.Reset()
+	c.FileService.Cache.Memory.Hit.Reset()
+	c.FileService.Cache.Disk.Read.Reset()
+	c.FileService.Cache.Disk.Hit.Reset()
+	c.FileService.Cache.Remote.Read.Reset()
+	c.FileService.Cache.Remote.Hit.Reset()
 
-	if v.Type() == statsCounterType {
-		return fn(path, v.Addr().Interface().(*stats.Counter))
-	}
-
-	t := v.Type()
-
-	switch t.Kind() {
-
-	case reflect.Pointer:
-		iterFields(v.Elem(), path, fn)
-
-	case reflect.Struct:
-		for i := 0; i < t.NumField(); i++ {
-			field := t.Field(i)
-			if err := iterFields(v.Field(i), append(path, field.Name), fn); err != nil {
-				return err
-			}
-		}
-
-	case reflect.Map:
-		if t.Key().Kind() != reflect.String {
-			panic(fmt.Sprintf("unknown type: %v", v.Type()))
-		}
-		iter := v.MapRange()
-		for iter.Next() {
-			if err := iterFields(iter.Value(), append(path, iter.Key().String()), fn); err != nil {
-				return err
-			}
-		}
-
-	default:
-		panic(fmt.Sprintf("unknown type: %v", v.Type()))
-	}
-
-	return nil
+	// FileService top-level
+	c.FileService.ReadSize.Reset()
+	c.FileService.S3ReadSize.Reset()
+	c.FileService.DiskReadSize.Reset()
 }
