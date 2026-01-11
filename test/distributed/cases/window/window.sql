@@ -992,7 +992,9 @@ select avg(d) over (order by d range between 2 preceding and 2 following) from t
 -- @bvt:issue#23427
 select sum(d) over (order by d rows between 10 preceding and 10 following) from td limit 10;
 -- @bvt:issue
+-- @bvt:issue#23427
 select d,min(d) over (partition by d%7 order by d rows  between 2 preceding and 1 following) from td limit 10;
+-- @bvt:issue
 drop table td;
 
 drop table if exists `c`;

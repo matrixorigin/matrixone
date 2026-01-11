@@ -202,6 +202,30 @@ func makeSpecialAggExec(
 ) (AggFuncExec, bool, error) {
 	if _, ok := specialAgg[id]; ok {
 		switch id {
+		case AggIdOfBitmapConstruct:
+			return makeBmpConstructExec(mp, id, params[0]), true, nil
+		case AggIdOfBitmapOr:
+			return makeBmpOrExec(mp, id, params[0]), true, nil
+		case AggIdOfBitXor:
+			return makeBitXorExec(mp, id, isDistinct, params[0]), true, nil
+		case AggIdOfBitAnd:
+			return makeBitAndExec(mp, id, isDistinct, params[0]), true, nil
+		case AggIdOfBitOr:
+			return makeBitOrExec(mp, id, isDistinct, params[0]), true, nil
+		case AggIdOfVarPop:
+			return makeVarPopExec(mp, id, isDistinct, params[0]), true, nil
+		case AggIdOfStdDevPop:
+			return makeStdDevPopExec(mp, id, isDistinct, params[0]), true, nil
+		case AggIdOfVarSample:
+			return makeVarSampleExec(mp, id, isDistinct, params[0]), true, nil
+		case AggIdOfStdDevSample:
+			return makeStdDevSampleExec(mp, id, isDistinct, params[0]), true, nil
+		case AggIdOfAny:
+			return makeAnyValueExec(mp, id, params[0]), true, nil
+		case AggIdOfMin:
+			return makeMinMaxExec(mp, id, true, params[0]), true, nil
+		case AggIdOfMax:
+			return makeMinMaxExec(mp, id, false, params[0]), true, nil
 		case AggIdOfSum:
 			return makeSumAvgExec(mp, true, id, isDistinct, params[0]), true, nil
 		case AggIdOfAvg:

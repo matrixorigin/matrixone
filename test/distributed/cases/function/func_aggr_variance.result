@@ -8,7 +8,7 @@ insert into t1 values(1, 1, 21, 4, 54, 53.5, 431.13, 14.394, "2011-03-12", "2015
 insert into t1 values(1, 71, 2, 34, 5, 5.5, 31.313, 124.314, "2012-01-12", "2019-03-12 10:03:12", "2013-03-12 13:03:12", "3abd1c", "dcvf");
 select variance(a) from t1;
 variance(a)
-918.7500000000001
+918.75
 select variance(b) from t1;
 variance(b)
 918.75
@@ -20,16 +20,16 @@ variance(d)
 217.6875
 select variance(e) from t1;
 variance(e)
-450.18750000000006
+450.1875
 select variance(f) from t1;
 variance(f)
 420.75
 select variance(g) from t1;
 variance(g)
-32502.24871225
+32502.248712250002
 select variance(h) from t1;
 variance(h)
-2254.078699999999
+2254.078700000000
 select variance(i) from t1;
 invalid argument aggregate function variance, bad value [DATE]
 select variance(k) from t1;
@@ -43,22 +43,22 @@ invalid argument aggregate function variance, bad value [VARCHAR]
 drop table t1;
 select variance(99999999999999999.99999);
 variance(99999999999999999.99999)
-0.0
+0E-11
 select variance(999999999999999933193939.99999);
 variance(999999999999999933193939.99999)
-0.0
+0E-11
 select variance(9999999999999999999999999999999999.9999999999999);
 variance(9999999999999999999999999999999999.9999999999999)
-0.0
+0E-9
 select variance(-99999999999999999.99999);
 variance(-99999999999999999.99999)
-0.0
+0E-11
 select variance(-999999999999999933193939.99999);
 variance(-999999999999999933193939.99999)
-0.0
+0E-11
 select variance(-9999999999999999999999999999999999.9999999999999);
 variance(-9999999999999999999999999999999999.9999999999999)
-0.0
+0E-9
 create table t1(a bigint);
 select variance(a) from t1;
 variance(a)
@@ -70,65 +70,65 @@ null
 insert into t1 values(12417249128419),(124124125124151),(5124125151415),(124125152651515);
 select variance(a) from t1;
 variance(a)
-3.333282253265104E27
+3.3332822532651034E27
 drop table t1;
 create table t1 ( a int not null default 1, big bigint );
 insert into t1 (big) values (-1),(1234567890167),(92233720368547),(18446744073709515);
 select * from t1;
-a	big
-1	-1
-1	1234567890167
-1	92233720368547
-1	18446744073709515
+a    big
+1    -1
+1    1234567890167
+1    92233720368547
+1    18446744073709515
 select distinct variance(big),max(big),variance(big)-1 from t1;
-variance(big)	max(big)	variance(big)-1
-6.3589001724387045E31	18446744073709515	6.3589001724387045E31
+variance(big)    max(big)    variance(big) - 1
+6.358900172438704E31    18446744073709515    6.358900172438704E31
 select variance(big),max(big),variance(big)-1 from t1 group by a;
-variance(big)	max(big)	variance(big)-1
-6.3589001724387045E31	18446744073709515	6.3589001724387045E31
+variance(big)    max(big)    variance(big) - 1
+6.358900172438704E31    18446744073709515    6.358900172438704E31
 insert into t1 (big) values (184467440737615);
 select * from t1;
-a	big
-1	-1
-1	1234567890167
-1	92233720368547
-1	18446744073709515
-1	184467440737615
+a    big
+1    -1
+1    1234567890167
+1    92233720368547
+1    18446744073709515
+1    184467440737615
 select variance(big),max(big),variance(big)-1 from t1;
-variance(big)	max(big)	variance(big)-1
-5.404043539963767E31	18446744073709515	5.404043539963767E31
+variance(big)    max(big)    variance(big) - 1
+5.404043539963766E31    18446744073709515    5.404043539963766E31
 select variance(big),max(big),variance(big)-1 from t1 group by a;
-variance(big)	max(big)	variance(big)-1
-5.404043539963767E31	18446744073709515	5.404043539963767E31
+variance(big)    max(big)    variance(big) - 1
+5.404043539963766E31    18446744073709515    5.404043539963766E31
 drop table t1;
 CREATE TABLE t1 (Fld1 int(11) default NULL,Fld2 int(11) default NULL);
 INSERT INTO t1 VALUES (1,10),(1,20),(2,NULL),(2,NULL),(3,50);
 select Fld1, variance(Fld2) as q from t1 group by Fld1 having q is not null;
-fld1    q
+Fld1    q
 1    25.0
 3    0.0
 select Fld1, variance(Fld2) from t1 group by Fld1 having variance(Fld2) is not null;
-Fld1	variance(Fld2)
-1	25.0
-3	0.0
+Fld1    variance(Fld2)
+1    25.0
+3    0.0
 select Fld1, variance(Fld2) from t1 group by Fld1 having avg(Fld2) is not null;
-Fld1	variance(Fld2)
-1	25.0
-3	0.0
+Fld1    variance(Fld2)
+1    25.0
+3    0.0
 select Fld1, variance(Fld2) from t1 group by Fld1 having variance(Fld2) is not null;
-Fld1	variance(Fld2)
-1	25.0
-3	0.0
+Fld1    variance(Fld2)
+1    25.0
+3    0.0
 drop table t1;
 SELECT variance(1)<variance(2);
-variance(1)<variance(2)
+variance(1) < variance(2)
 0
 CREATE TABLE t1(i INT);
 INSERT INTO t1 VALUES (NULL),(1);
 SELECT variance(i)+0 as splus0, i+0 as plain FROM t1 GROUP BY i ;
-splus0	plain
-null	null
-0.0	1
+splus0    plain
+null    null
+0.0    1
 DROP TABLE t1;
 drop database if exists test;
 create database test;
@@ -154,7 +154,7 @@ a
 -34243214324324342321313321321342342343
 0
 select variance(a) from test01;
-internal error: Decimal128 overflowed
+invalid input: Can't convert Float64 To Decimal128: 1307331842107520914203234638402604582479234829999989805811275714970637041664.000000(38,6)
 drop table test01;
 drop table if exists test02;
 create table test02(a decimal(37));
@@ -171,7 +171,7 @@ a
 -123
 9932129321093029302930290439029432424
 select variance(a) from test02;
-internal error: Decimal128 overflowed
+invalid input: Can't convert Float64 To Decimal128: 26542815629556120840229121106979169823672362913300482745332587433134391296.000000(38,6)
 drop table test02;
 drop table if exists test03;
 create table test03(a decimal(38,2));
@@ -179,7 +179,7 @@ insert into test03 values(9999999999999999999999999999999.1);
 insert into test03 values(-0.00001);
 insert into test03 values(NULL);
 select variance(a) from test03;
-internal error: Decimal128 overflowed
+invalid input: Can't convert Float64 To Decimal128: 24999999999999998021054536073870531144948140550587683635724288.000000(38,8)
 drop table test03;
 drop table if exists test04;
 create table test04(a decimal(38,20));
@@ -196,7 +196,7 @@ a
 -999999999999999999.90000000000000000000
 -1E-20
 select variance(a) from test04;
-internal error: Decimal128 overflowed
+invalid input: Can't convert Float64 To Decimal128: 403040507311854275288688084220116992.000000(38,20)
 drop table test04;
 drop table if exists test05;
 create table test05(a decimal(20,10));
@@ -212,7 +212,7 @@ a
 0.3029302394
 select variance(a) from test05;
 variance(a)
-60218122690068093824.133657202503
+60218122690068090880.000000000000
 drop table test05;
 drop table if exists test06;
 create table test06(a decimal(20,10));
@@ -228,6 +228,6 @@ null
 0.3029302394
 select variance(a) from test06;
 variance(a)
-66666666660682038752.801677950945
+66666666660682035200.000000000000
 drop table test06;
 drop database test;

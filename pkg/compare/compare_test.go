@@ -151,12 +151,12 @@ func TestBlockRowIdsCompare(t *testing.T) {
 			blks1[x], blks1[y] = blks1[y], blks1[x]
 		}
 
-		slices.SortFunc(blks1, blockidAscCompare)
+		slices.SortFunc(blks1, types.BlockidAscCompare)
 		require.Equal(t, blks1, blks2)
 
 		{
 			slices.Reverse(blks2)
-			slices.SortFunc(blks1, blockidDescCompare)
+			slices.SortFunc(blks1, types.BlockidDescCompare)
 			require.Equal(t, blks1, blks2)
 		}
 	})
@@ -180,12 +180,12 @@ func TestBlockRowIdsCompare(t *testing.T) {
 			rowIds1[x], rowIds1[y] = rowIds1[y], rowIds1[x]
 		}
 
-		slices.SortFunc(rowIds1, rowidAscCompare)
+		slices.SortFunc(rowIds1, types.RowidAscCompare)
 		require.Equal(t, rowIds1, rowIds2)
 
 		{
 			slices.Reverse(rowIds2)
-			slices.SortFunc(rowIds1, rowidDescCompare)
+			slices.SortFunc(rowIds1, types.RowidDescCompare)
 			require.Equal(t, rowIds1, rowIds2)
 		}
 

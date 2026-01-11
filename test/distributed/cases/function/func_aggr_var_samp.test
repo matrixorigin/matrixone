@@ -98,12 +98,12 @@ use test;
 
 -- decimal 128
 drop table if exists decimal01;
-create table decimal01(col1 decimal(10,1));
-insert into decimal01 values(1234124.2134324321);
-insert into decimal01 values(23413432.32423);
-insert into decimal01 values(0);
-insert into decimal01 values(-13421.34234);
-select VAR_SAMP(col1) from decimal01;
+create table decimal01(fcol real, col1 decimal(10,1));
+insert into decimal01 values(1234124.2134324321, 1234124.2134324321);
+insert into decimal01 values(23413432.32423, 23413432.32423);
+insert into decimal01 values(0, 0);
+insert into decimal01 values(-13421.34234, -13421.34234);
+select VAR_SAMP(fcol), VAR_SAMP(col1) from decimal01;
 drop table decimal01;
 
 drop table if exists decimal02;

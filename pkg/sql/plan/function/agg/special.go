@@ -51,3 +51,51 @@ func RegisterSum(id int64) {
 func RegisterAvg(id int64) {
 	aggexec.RegisterAvg(id)
 }
+
+func RegisterMin(id int64) {
+	aggexec.RegisterMin(id)
+}
+
+func RegisterMax(id int64) {
+	aggexec.RegisterMax(id)
+}
+
+func RegisterAny(id int64) {
+	aggexec.RegisterAny(id)
+}
+
+func RegisterVarPop(id int64) {
+	aggexec.RegisterVarPop(id)
+}
+
+func RegisterStdDevPop(id int64) {
+	aggexec.RegisterStdDevPop(id)
+}
+
+func RegisterVarSample(id int64) {
+	aggexec.RegisterVarSample(id)
+}
+
+func RegisterStdDevSample(id int64) {
+	aggexec.RegisterStdDevSample(id)
+}
+
+func RegisterBitXor(id int64) {
+	aggexec.RegisterBitXorAgg(id)
+}
+
+func RegisterBitAnd(id int64) {
+	aggexec.RegisterBitAndAgg(id)
+}
+
+func RegisterBitOr(id int64) {
+	aggexec.RegisterBitOrAgg(id)
+}
+
+func RegisterBitmapConstruct(id int64) {
+	aggexec.RegisterBitmapConstruct(id)
+}
+
+func RegisterBitmapOr(id int64) {
+	aggexec.RegisterBitmapOr(id)
+}

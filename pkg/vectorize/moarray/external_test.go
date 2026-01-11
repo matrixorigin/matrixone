@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/assertx"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 func TestAdd(t *testing.T) {
@@ -301,12 +302,12 @@ func TestCompare(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 
 			if tt.args.rightArgF32 != nil {
-				if gotRes := Compare[float32](tt.args.leftArgF32, tt.args.rightArgF32); !reflect.DeepEqual(gotRes, tt.want) {
+				if gotRes := types.ArrayCompare[float32](tt.args.leftArgF32, tt.args.rightArgF32); !reflect.DeepEqual(gotRes, tt.want) {
 					t.Errorf("CompareArray() = %v, want %v", gotRes, tt.want)
 				}
 			}
 			if tt.args.rightArgF64 != nil {
-				if gotRes := Compare[float64](tt.args.leftArgF64, tt.args.rightArgF64); !reflect.DeepEqual(gotRes, tt.want) {
+				if gotRes := types.ArrayCompare[float64](tt.args.leftArgF64, tt.args.rightArgF64); !reflect.DeepEqual(gotRes, tt.want) {
 					t.Errorf("CompareArray() = %v, want %v", gotRes, tt.want)
 				}
 			}

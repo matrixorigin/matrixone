@@ -23,10 +23,10 @@ VAR_SAMP(e)
 600.25
 select VAR_SAMP(f) from t1;
 VAR_SAMP(f)
-561.0
+560.9999999999999
 select VAR_SAMP(g) from t1;
 VAR_SAMP(g)
-43336.33161633334
+43336.331616333344
 select VAR_SAMP(h) from t1;
 VAR_SAMP(h)
 3005.438266666667
@@ -43,22 +43,22 @@ invalid argument aggregate function var_samp, bad value [VARCHAR]
 drop table t1;
 select VAR_SAMP(99999999999999999.99999);
 VAR_SAMP(99999999999999999.99999)
-0E-12
+0E-11
 select VAR_SAMP(999999999999999933193939.99999);
 VAR_SAMP(999999999999999933193939.99999)
-0E-12
+0E-11
 select VAR_SAMP(9999999999999999999999999999999999.9999999999999);
 VAR_SAMP(9999999999999999999999999999999999.9999999999999)
-0E-12
+0E-9
 select VAR_SAMP(-99999999999999999.99999);
 VAR_SAMP(-99999999999999999.99999)
-0E-12
+0E-11
 select VAR_SAMP(-999999999999999933193939.99999);
 VAR_SAMP(-999999999999999933193939.99999)
-0E-12
+0E-11
 select VAR_SAMP(-9999999999999999999999999999999999.9999999999999);
 VAR_SAMP(-9999999999999999999999999999999999.9999999999999)
-0E-12
+0E-9
 create table t1(a bigint);
 select VAR_SAMP(a) from t1;
 VAR_SAMP(a)
@@ -70,7 +70,7 @@ null
 insert into t1 values(12417249128419),(124124125124151),(5124125151415),(124125152651515);
 select VAR_SAMP(a) from t1;
 VAR_SAMP(a)
-4.444376337686805E27
+4.444376337686804E27
 drop table t1;
 create table t1 ( a int not null default 1, big bigint );
 insert into t1 (big) values (-1),(1234567890167),(92233720368547),(18446744073709515);
@@ -82,10 +82,10 @@ a    big
 1    18446744073709515
 select distinct VAR_SAMP(big),max(big),VAR_SAMP(big)-1 from t1;
 VAR_SAMP(big)    max(big)    VAR_SAMP(big) - 1
-8.478533563251604E31    18446744073709515    8.478533563251604E31
+8.478533563251606E31    18446744073709515    8.478533563251606E31
 select VAR_SAMP(big),max(big),VAR_SAMP(big)-1 from t1 group by a;
 VAR_SAMP(big)    max(big)    VAR_SAMP(big) - 1
-8.478533563251604E31    18446744073709515    8.478533563251604E31
+8.478533563251606E31    18446744073709515    8.478533563251606E31
 insert into t1 (big) values (184467440737615);
 select * from t1;
 a    big
@@ -96,10 +96,10 @@ a    big
 1    184467440737615
 select VAR_SAMP(big),max(big),VAR_SAMP(big)-1 from t1;
 VAR_SAMP(big)    max(big)    VAR_SAMP(big) - 1
-6.755054424954707E31    18446744073709515    6.755054424954707E31
+6.755054424954708E31    18446744073709515    6.755054424954708E31
 select VAR_SAMP(big),max(big),VAR_SAMP(big)-1 from t1 group by a;
 VAR_SAMP(big)    max(big)    VAR_SAMP(big) - 1
-6.755054424954707E31    18446744073709515    6.755054424954707E31
+6.755054424954708E31    18446744073709515    6.755054424954708E31
 drop table t1;
 CREATE TABLE t1 (Fld1 int(11) default NULL,Fld2 int(11) default NULL);
 INSERT INTO t1 VALUES (1,10),(1,20),(2,NULL),(2,NULL),(3,50);
@@ -132,13 +132,13 @@ null    null
 DROP TABLE t1;
 SELECT VAR_SAMP(col) AS result FROM (SELECT 1 AS col UNION SELECT 2 UNION SELECT 3) AS t;
 result
-1.0000000000000004
+1.0
 CREATE TABLE t1 (id int(11),value1 float(10,2));
 INSERT INTO t1 VALUES (1,0.00),(1,1.00), (1,2.00), (2,10.00), (2,11.00), (2,12.00), (2,13.00);
 select id, VAR_SAMP(value1) from t1 group by id;
 id    VAR_SAMP(value1)
 1    1.0
-2    1.6666666666666667
+2    1.6666666666666572
 drop table t1;
 CREATE TABLE t1 (value float);
 INSERT INTO t1 VALUES (1),(2),(3),(4),(5);
@@ -161,14 +161,14 @@ drop database if exists test;
 create database test;
 use test;
 drop table if exists decimal01;
-create table decimal01(col1 decimal(10,1));
-insert into decimal01 values(1234124.2134324321);
-insert into decimal01 values(23413432.32423);
-insert into decimal01 values(0);
-insert into decimal01 values(-13421.34234);
-select VAR_SAMP(col1) from decimal01;
-VAR_SAMP(col1)
-1326673001586776200.000000000000
+create table decimal01(fcol real, col1 decimal(10,1));
+insert into decimal01 values(1234124.2134324321, 1234124.2134324321);
+insert into decimal01 values(23413432.32423, 23413432.32423);
+insert into decimal01 values(0, 0);
+insert into decimal01 values(-13421.34234, -13421.34234);
+select VAR_SAMP(fcol), VAR_SAMP(col1) from decimal01;
+VAR_SAMP(fcol)    VAR_SAMP(col1)
+1.3266730056751762E14    132667300158677.6268800
 drop table decimal01;
 drop table if exists decimal02;
 create table decimal02(col1 decimal(38,0));
@@ -191,7 +191,7 @@ col1
 -34243214324324342321313321321342342343
 0
 select VAR_SAMP(col1) from decimal02;
-internal error: Decimal128 overflowed
+invalid input: Can't convert Float64 To Decimal128: 1494093533837166931261344328780506188043635413695981476877493008122817544192.000000(38,6)
 drop table decimal02;
 drop table if exists test02;
 create table test02(col1 decimal(37));
@@ -208,7 +208,7 @@ col1
 -123
 9932129321093029302930290439029432424
 select VAR_SAMP(col1) from test02;
-internal error: Decimal128 overflowed
+invalid input: Can't convert Float64 To Decimal128: 33178519536945147127097816767048484882222064136834093367693581501396418560.000000(38,6)
 drop table test02;
 drop table if exists test03;
 create table test03(a decimal(38,2));
@@ -216,7 +216,7 @@ insert into test03 values(9999999999999999999999999999999.1);
 insert into test03 values(-0.00001);
 insert into test03 values(NULL);
 select VAR_SAMP(a) from test03;
-internal error: Decimal128 overflowed
+invalid input: Can't convert Float64 To Decimal128: 49999999999999996042109072147741062289896281101175367271448576.000000(38,8)
 drop table test03;
 drop table if exists test04;
 create table test04(a decimal(38,20));
@@ -233,7 +233,7 @@ a
 -999999999999999999.90000000000000000000
 -1E-20
 select VAR_SAMP(a) from test04;
-internal error: Decimal128 overflowed
+invalid input: Can't convert Float64 To Decimal128: 503800634139817825664116031565594624.000000(38,20)
 drop table test04;
 drop table if exists test05;
 create table test05(a decimal(20,10));
@@ -249,7 +249,7 @@ a
 0.3029302394
 select VAR_SAMP(a) from test05;
 VAR_SAMP(a)
-80290830253424125098.844876270004
+80290830253424128000.000000000000
 drop table test05;
 drop table if exists test06;
 create table test06(a decimal(20,10));
@@ -265,6 +265,6 @@ null
 0.3029302394
 select VAR_SAMP(a) from test06;
 VAR_SAMP(a)
-99999999991023058129.202516926418
+99999999991023042560.000000000000
 drop table test06;
 drop database test;
