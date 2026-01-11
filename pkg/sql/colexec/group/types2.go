@@ -54,7 +54,6 @@ type Group struct {
 
 	ctr      container
 	NeedEval bool
-	SpillMem int64
 
 	// group-by column.
 	Exprs        []*plan.Expr
@@ -126,11 +125,7 @@ func (ctr *container) setSpillMem(m int64, aggs []aggexec.AggFuncExecExpression)
 			return
 		}
 	}
-	if m == 0 {
-		ctr.spillMem = common.GiB
-	} else {
-		ctr.spillMem = m
-	}
+	ctr.spillMem = m
 }
 
 func (ctr *container) freeAggList() {
@@ -342,8 +337,7 @@ type MergeGroup struct {
 	vm.OperatorBase
 	colexec.Projection
 
-	ctr      container
-	SpillMem int64
+	ctr container
 
 	Aggs []aggexec.AggFuncExecExpression
 

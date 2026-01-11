@@ -1292,3 +1292,7 @@ func (backSes *backSession) RemoveTempTable(dbName, alias string) {
 	}
 	backSes.upstream.RemoveTempTable(dbName, alias)
 }
+
+func (backSes *backSession) GetRuntimeInfoOfFeSession() process.RuntimeInfo {
+	return backSes.upstream.GetRuntimeInfoOfFeSession()
+}

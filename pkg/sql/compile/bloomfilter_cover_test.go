@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
 
@@ -45,10 +44,8 @@ func TestBuildReadersBloomFilterFullCoverage(t *testing.T) {
 					},
 				},
 			},
-			NodeInfo: engine.Node{
-				Mcpu: 1,
-			},
 		}
+		s.SetMaxDop(1)
 
 		c := NewMockCompile(t)
 		c.proc = proc
@@ -79,10 +76,8 @@ func TestBuildReadersBloomFilterFullCoverage(t *testing.T) {
 					},
 				},
 			},
-			NodeInfo: engine.Node{
-				Mcpu: 1,
-			},
 		}
+		s.SetMaxDop(1)
 
 		c := NewMockCompile(t)
 		c.proc = proc
@@ -111,10 +106,8 @@ func TestBuildReadersBloomFilterFullCoverage(t *testing.T) {
 					},
 				},
 			},
-			NodeInfo: engine.Node{
-				Mcpu: 1,
-			},
 		}
+		s.SetMaxDop(1)
 
 		c := NewMockCompile(t)
 		c.proc = proc
@@ -147,10 +140,8 @@ func TestBuildReadersBloomFilterFullCoverage(t *testing.T) {
 					},
 				},
 			},
-			NodeInfo: engine.Node{
-				Mcpu: 1,
-			},
 		}
+		s.SetMaxDop(1)
 
 		c := NewMockCompile(t)
 		c.proc = proc

@@ -547,6 +547,10 @@ func createCompile(
 			retCompile = nil
 		}
 	}()
+
+	runtimeInfo := ses.GetRuntimeInfoOfFeSession()
+	proc.UpdateRuntimeInfo(&runtimeInfo)
+
 	retCompile = compile.NewCompile(
 		addr,
 		ses.GetDatabaseName(),

@@ -530,7 +530,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 		return nil, err
 	}
 	// only one scan reader, it can just run without any merge.
-	if s.NodeInfo.Mcpu == 1 {
+	if s.GetMaxDop() == 1 {
 		s.DataSource.R = readers[0]
 		s.DataSource.R.SetOrderBy(s.DataSource.OrderBy)
 		s.DataSource.R.SetIndexParam(s.DataSource.IndexReaderParam)
@@ -738,7 +738,7 @@ func (s *Scope) isTableScan() bool {
 }
 
 func newParallelScope(s *Scope) (*Scope, []*Scope) {
-	if s.NodeInfo.Mcpu == 1 {
+	if s.GetMaxDop() == 1 {
 		return s, nil
 	}
 
@@ -752,14 +752,14 @@ func newParallelScope(s *Scope) (*Scope, []*Scope) {
 	rs := newScope(Normal)
 	rs.Proc = s.Proc.NewContextChildProc(0)
 
-	parallelScopes := make([]*Scope, s.NodeInfo.Mcpu)
-	for i := 0; i < s.NodeInfo.Mcpu; i++ {
+	parallelScopes := make([]*Scope, s.GetMaxDop())
+	for i := 0; i < int(s.GetMaxDop()); i++ {
 		parallelScopes[i] = newScope(Normal)
 		parallelScopes[i].NodeInfo = s.NodeInfo
-		parallelScopes[i].NodeInfo.Mcpu = 1
 		parallelScopes[i].Proc = rs.Proc.NewContextChildProc(0)
+		parallelScopes[i].SetMaxDop(1)
 		parallelScopes[i].TxnOffset = s.TxnOffset
-		parallelScopes[i].setRootOperator(dupOperatorRecursively(s.RootOp, i, s.NodeInfo.Mcpu))
+		parallelScopes[i].setRootOperator(dupOperatorRecursively(s.RootOp, i, int(s.GetMaxDop())))
 	}
 
 	rs.PreScopes = parallelScopes
@@ -1047,7 +1047,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 			s.DataSource.FilterExpr,
 			s.DataSource.TableDef,
 			s.NodeInfo.Data,
-			s.NodeInfo.Mcpu)
+			int(s.GetMaxDop()))
 		if err != nil {
 			return
 		}
@@ -1076,7 +1076,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 			c.proc,
 			s.DataSource.FilterExpr,
 			s.NodeInfo.Data,
-			s.NodeInfo.Mcpu,
+			int(s.GetMaxDop()),
 			s.TxnOffset,
 			len(s.DataSource.OrderBy) > 0,
 			engine.Policy_CheckAll,
@@ -1151,7 +1151,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 			c.proc,
 			s.DataSource.FilterExpr,
 			s.NodeInfo.Data,
-			s.NodeInfo.Mcpu,
+			int(s.GetMaxDop()),
 			s.TxnOffset,
 			len(s.DataSource.OrderBy) > 0,
 			engine.Policy_CheckAll,
@@ -1176,9 +1176,10 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	s.NodeInfo.Data = nil
 
 	//for partition table.
-	if len(readers) != s.NodeInfo.Mcpu {
-		newReaders := make([]engine.Reader, 0, s.NodeInfo.Mcpu)
-		step := len(readers) / s.NodeInfo.Mcpu
+	dop := int(s.GetMaxDop())
+	if len(readers) != dop {
+		newReaders := make([]engine.Reader, 0, dop)
+		step := len(readers) / dop
 		for i := 0; i < len(readers); i += step {
 			newReaders = append(newReaders, readutil.NewMergeReader(readers[i:i+step]))
 		}
@@ -1187,6 +1188,21 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	return
 }
 
-func (s Scope) TypeName() string {
+func (s *Scope) TypeName() string {
 	return "compile.Scope"
+}
+
+func (s *Scope) GetMaxDop() int64 {
+	return s.Proc.GetMaxDop()
+}
+
+func (s *Scope) SetMaxDop(dop int64) {
+	if s.Proc != nil {
+		s.Proc.SetMaxDop(dop)
+	}
+	s.NodeInfo.SetMcpu(int32(dop))
+}
+
+func (s *Scope) GetSpillMem() int64 {
+	return s.Proc.GetSpillMem()
 }

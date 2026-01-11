@@ -120,7 +120,7 @@ func TestSetGoMaxProcs(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := SetGoMaxProcs(tt.args.n)
+			got := SetGoMaxProcs(int32(tt.args.n))
 			require.Equal(t, tt.wantRet, got)
 			gotQuery := GoMaxProcs()
 			require.Equal(t, tt.wantGet, gotQuery)

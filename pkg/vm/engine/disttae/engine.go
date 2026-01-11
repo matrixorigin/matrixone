@@ -689,13 +689,14 @@ func (e *Engine) Nodes(
 	if len(cnLabel) == 0 {
 		cluster.GetCNService(selector, func(c metadata.CNService) bool {
 			if c.CommitID == version.CommitID {
-				nodes = append(nodes, engine.Node{
-					// should use c.CPUTotal to set Mcpu for the compile and pipeline.
-					// ref: https://github.com/matrixorigin/matrixone/issues/17935
-					Mcpu: ncpu,
+				node := engine.Node{
 					Id:   c.ServiceID,
 					Addr: c.PipelineServiceAddress,
-				})
+				}
+				// should use c.CPUTotal to set Mcpu for the compile and pipeline.
+				// ref: https://github.com/matrixorigin/matrixone/issues/17935
+				node.SetMcpu(int32(ncpu))
+				nodes = append(nodes, node)
 			}
 			return true
 		})
@@ -711,11 +712,12 @@ func (e *Engine) Nodes(
 			nil,
 			func(s *metadata.CNService) {
 				if s.CommitID == version.CommitID {
-					nodes = append(nodes, engine.Node{
-						Mcpu: ncpu,
+					node := engine.Node{
 						Id:   s.ServiceID,
 						Addr: s.PipelineServiceAddress,
-					})
+					}
+					node.SetMcpu(int32(ncpu))
+					nodes = append(nodes, node)
 				}
 			},
 		)
@@ -726,11 +728,12 @@ func (e *Engine) Nodes(
 			nil,
 			func(s *metadata.CNService) {
 				if s.CommitID == version.CommitID {
-					nodes = append(nodes, engine.Node{
-						Mcpu: ncpu,
+					node := engine.Node{
 						Id:   s.ServiceID,
 						Addr: s.PipelineServiceAddress,
-					})
+					}
+					node.SetMcpu(int32(ncpu))
+					nodes = append(nodes, node)
 				}
 			},
 		)

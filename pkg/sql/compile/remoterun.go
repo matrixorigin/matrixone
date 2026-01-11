@@ -184,7 +184,7 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 	p.Node = &pipeline.NodeInfo{
 		Id:      s.NodeInfo.Id,
 		Addr:    s.NodeInfo.Addr,
-		Mcpu:    int32(s.NodeInfo.Mcpu),
+		Mcpu:    int32(s.GetMaxDop()),
 		Payload: string(data),
 		CnCnt:   s.NodeInfo.CNCNT,
 		CnIdx:   s.NodeInfo.CNIDX,
@@ -348,9 +348,9 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 	if p.Node != nil {
 		s.NodeInfo.Id = p.Node.Id
 		s.NodeInfo.Addr = p.Node.Addr
-		s.NodeInfo.Mcpu = int(p.Node.Mcpu)
 		s.NodeInfo.CNCNT = p.Node.CnCnt
 		s.NodeInfo.CNIDX = p.Node.CnIdx
+		s.NodeInfo.SetMcpu(int32(p.Node.Mcpu))
 
 		bs := []byte(p.Node.Payload)
 		var relData engine.RelData
@@ -525,7 +525,6 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	case *group.Group:
 		in.Agg = &pipeline.Group{
 			NeedEval:     t.NeedEval,
-			SpillMem:     t.SpillMem,
 			GroupingFlag: t.GroupingFlag,
 			Exprs:        t.Exprs,
 			Aggs:         convertToPipelineAggregates(t.Aggs),
@@ -611,9 +610,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 	case *mergerecursive.MergeRecursive:
 	case *group.MergeGroup:
-		in.Agg = &pipeline.Group{
-			SpillMem: t.SpillMem,
-		}
+		in.Agg = &pipeline.Group{}
 		in.ProjectList = t.ProjectList
 		EncodeMergeGroup(t, in.Agg)
 	case *mergetop.MergeTop:
@@ -965,7 +962,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		t := opr.GetAgg()
 		arg := group.NewArgument()
 		arg.NeedEval = t.NeedEval
-		arg.SpillMem = t.SpillMem
 		arg.GroupingFlag = t.GroupingFlag
 		arg.Exprs = t.Exprs
 		arg.Aggs = convertToAggregates(t.Aggs)
@@ -1066,8 +1062,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg := group.NewArgumentMergeGroup()
 		// here the opr is a MergeGroup node, merge group is "generated" by the
 		// group node and then merge them
-		t := opr.GetAgg()
-		arg.SpillMem = t.SpillMem
 		arg.ProjectList = opr.ProjectList
 		op = arg
 		DecodeMergeGroup(op.(*group.MergeGroup), opr.Agg)

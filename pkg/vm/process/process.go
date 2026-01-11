@@ -20,7 +20,9 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
@@ -85,6 +87,39 @@ func (proc *Process) GetService() string {
 
 func (proc *Process) GetLim() Limitation {
 	return proc.Base.Lim
+}
+
+func (proc *Process) GetRuntimeInfo() *RuntimeInfo {
+	return &proc.RuntimeInfo
+}
+
+func (proc *Process) GetMaxDop() int64 {
+	dop := proc.RuntimeInfo.MaxDop
+	if dop == 0 {
+		dop = int64(system.GoMaxProcs())
+		proc.RuntimeInfo.MaxDop = dop
+	}
+	return dop
+}
+
+func (proc *Process) GetSpillMem() int64 {
+	spillMem := proc.RuntimeInfo.SpillMem
+	if spillMem == 0 {
+		spillMem = int64(system.MemoryTotal() / uint64(proc.GetMaxDop()) / 4)
+		// 32MB is the minimum auto configured spill mem
+		if spillMem < 32*common.MiB {
+			spillMem = 32 * common.MiB
+		}
+		proc.RuntimeInfo.SpillMem = spillMem
+	}
+	return spillMem
+}
+
+func (proc *Process) SetMaxDop(dop int64) {
+	if dop == 0 {
+		dop = int64(system.GoMaxProcs())
+	}
+	proc.RuntimeInfo.MaxDop = dop
 }
 
 func (proc *Process) GetQueryClient() qclient.QueryClient {

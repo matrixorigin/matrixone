@@ -53,6 +53,7 @@ func (proc *Process) BuildProcessInfo(
 		procInfo.Id = proc.QueryId()
 		procInfo.Sql = sql
 		procInfo.Lim = convertToPipelineLimitation(proc.GetLim())
+		procInfo.RuntimeInfo = convertToPipelineRuntimeInfo(*proc.GetRuntimeInfo())
 		procInfo.UnixTime = proc.Base.UnixTime
 		accountId, err := defines.GetAccountId(proc.Ctx)
 		if err != nil {
@@ -216,6 +217,8 @@ func (c *codecService) Decode(
 	proc.Base.Lim = ConvertToProcessLimitation(value.Lim)
 	proc.Base.SessionInfo = sessionInfo
 	proc.Base.SessionInfo.StorageEngine = c.engine
+
+	proc.RuntimeInfo = ConvertToRuntimeInfo(value.RuntimeInfo)
 	if value.PrepareParams.Length > 0 {
 		proc.Base.prepareParams = vector.NewVecWithData(
 			types.T_text.ToType(),
@@ -240,6 +243,13 @@ func convertToPipelineLimitation(lim Limitation) pipeline.ProcessLimitation {
 		BatchSize:     lim.BatchSize,
 		PartitionRows: lim.PartitionRows,
 		ReaderSize:    lim.ReaderSize,
+	}
+}
+
+func convertToPipelineRuntimeInfo(ri RuntimeInfo) pipeline.RuntimeInfo {
+	return pipeline.RuntimeInfo{
+		MaxDop:   ri.MaxDop,
+		SpillMem: ri.SpillMem,
 	}
 }
 
@@ -286,6 +296,15 @@ func ConvertToProcessLimitation(
 		BatchSize:     lim.BatchSize,
 		PartitionRows: lim.PartitionRows,
 		ReaderSize:    lim.ReaderSize,
+	}
+}
+
+func ConvertToRuntimeInfo(
+	ri pipeline.RuntimeInfo,
+) RuntimeInfo {
+	return RuntimeInfo{
+		MaxDop:   ri.MaxDop,
+		SpillMem: ri.SpillMem,
 	}
 }
 

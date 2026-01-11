@@ -267,6 +267,7 @@ type cnInformation struct {
 type processHelper struct {
 	id          string
 	lim         process.Limitation
+	runtimeInfo process.RuntimeInfo
 	unixTime    int64
 	accountId   uint32
 	txnOperator client.TxnOperator
@@ -402,6 +403,7 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 		txnId := txn.GetID()
 		proc.Base.StmtProfile = process.NewStmtProfile(uuid.UUID(txnId), pHelper.StmtId)
 	}
+	proc.RuntimeInfo = pHelper.runtimeInfo
 
 	c := allocateNewCompile(proc)
 	c.execType = plan2.ExecTypeAP_MULTICN
@@ -506,11 +508,12 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 	}
 
 	result := processHelper{
-		id:        procInfo.Id,
-		lim:       process.ConvertToProcessLimitation(procInfo.Lim),
-		unixTime:  procInfo.UnixTime,
-		accountId: procInfo.AccountId,
-		txnClient: cli,
+		id:          procInfo.Id,
+		lim:         process.ConvertToProcessLimitation(procInfo.Lim),
+		runtimeInfo: process.ConvertToRuntimeInfo(procInfo.RuntimeInfo),
+		unixTime:    procInfo.UnixTime,
+		accountId:   procInfo.AccountId,
+		txnClient:   cli,
 	}
 	if procInfo.PrepareParams.Length > 0 {
 		result.prepareParams = vector.NewVecWithData(

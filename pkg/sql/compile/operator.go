@@ -149,7 +149,6 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		t := sourceOp.(*group.Group)
 		op := group.NewArgument()
 		op.NeedEval = t.NeedEval
-		op.SpillMem = t.SpillMem
 		op.GroupingFlag = t.GroupingFlag
 		op.Exprs = t.Exprs
 		op.Aggs = t.Aggs
@@ -1225,7 +1224,6 @@ func constructGroup(_ context.Context, n, cn *plan.Node, needEval bool, shuffleD
 	arg := group.NewArgument()
 	arg.Aggs = aggregationExpressions
 	arg.NeedEval = needEval
-	arg.SpillMem = n.SpillMem
 	arg.GroupingFlag = n.GroupingFlag
 	arg.Exprs = n.GroupBy
 	return arg
@@ -1262,7 +1260,7 @@ func constructDispatchLocalAndRemote(idx int, target []*Scope, source *Scope) (b
 			break
 		}
 	}
-	if hasRemote && source.NodeInfo.Mcpu > 1 {
+	if hasRemote && source.GetMaxDop() > 1 {
 		panic("pipeline end with dispatch should have been merged in multi CN!")
 	}
 
@@ -1270,7 +1268,7 @@ func constructDispatchLocalAndRemote(idx int, target []*Scope, source *Scope) (b
 		if isSameCN(s.NodeInfo.Addr, source.NodeInfo.Addr) {
 			// Local reg.
 			// Put them into arg.LocalRegs
-			s.Proc.Reg.MergeReceivers[idx].NilBatchCnt = source.NodeInfo.Mcpu
+			s.Proc.Reg.MergeReceivers[idx].NilBatchCnt = int(source.GetMaxDop())
 			arg.LocalRegs = append(arg.LocalRegs, s.Proc.Reg.MergeReceivers[idx])
 			arg.ShuffleRegIdxLocal = append(arg.ShuffleRegIdxLocal, i)
 		} else {
@@ -1418,7 +1416,6 @@ func constructMergeGroup(n *plan.Node) *group.MergeGroup {
 	// XXX: merge group groupby and agg should also be set here.
 	// but right now we use batch.ExtraBuf1.   This is just wrong.
 	// should be here.
-	arg.SpillMem = n.SpillMem
 	return arg
 }
 

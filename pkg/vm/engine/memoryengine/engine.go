@@ -209,11 +209,12 @@ func (e *Engine) Nodes(isInternal bool, tenant string, _ string, cnLabel map[str
 	}
 	cluster.GetCNService(selector,
 		func(c metadata.CNService) bool {
-			nodes = append(nodes, engine.Node{
-				Mcpu: 1,
+			node := engine.Node{
 				Id:   c.ServiceID,
 				Addr: c.PipelineServiceAddress,
-			})
+			}
+			node.SetMcpu(1)
+			nodes = append(nodes, node)
 			return true
 		})
 	return nodes, nil

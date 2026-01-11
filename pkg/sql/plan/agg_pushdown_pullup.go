@@ -127,7 +127,6 @@ func applyAggPushdown(agg, join, leftChild *plan.Node, builder *QueryBuilder) {
 			GroupBy:     newGroupBy,
 			AggList:     newAggList,
 			BindingTags: []int32{newGroupTag, newAggTag},
-			SpillMem:    builder.aggSpillMem,
 		},
 		builder.ctxByNode[join.NodeId])
 

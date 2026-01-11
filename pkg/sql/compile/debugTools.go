@@ -155,7 +155,7 @@ func showSingleScope(scope *Scope, index int, gap int, rmp map[*process.WaitRegi
 	if scope.Proc != nil {
 		receiverStr = getReceiverStr(scope, scope.Proc.Reg.MergeReceivers, rmp)
 	}
-	fmt.Fprintf(buffer, "Scope %d (Magic: %s, addr:%v, mcpu: %v, Receiver: %s)", index+1, magicShow(scope.Magic), scope.NodeInfo.Addr, scope.NodeInfo.Mcpu, receiverStr)
+	fmt.Fprintf(buffer, "Scope %d (Magic: %s, addr:%v, maxdop: %v, Receiver: %s)", index+1, magicShow(scope.Magic), scope.NodeInfo.Addr, scope.GetMaxDop(), receiverStr)
 
 	// Scope DataSource
 	if scope.DataSource != nil {

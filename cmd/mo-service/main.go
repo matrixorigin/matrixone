@@ -78,7 +78,7 @@ func init() {
 
 func main() {
 	if *maxProcessor > 0 {
-		system.SetGoMaxProcs(*maxProcessor)
+		system.SetGoMaxProcs(int32(*maxProcessor))
 	}
 
 	flag.Parse()

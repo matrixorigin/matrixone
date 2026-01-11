@@ -60,6 +60,12 @@ func WithQueryClient(queryClient client.QueryClient) ProcOptions {
 	}
 }
 
+func WithMaxDop(maxDop int64) ProcOptions {
+	return func(proc *process.Process) {
+		proc.SetMaxDop(maxDop)
+	}
+}
+
 func NewProcess(t testing.TB, opts ...ProcOptions) *process.Process {
 	mp := mpool.MustNewZeroNoFixed()
 	proc := NewProcessWithMPool(t, "", mp)
@@ -105,6 +111,8 @@ func NewProcessWithMPool(t testing.TB, sid string, mp *mpool.MPool) *process.Pro
 	proc.Base.Lim.ReaderSize = 1 << 20
 	proc.Base.SessionInfo.TimeZone = time.Local
 
+	proc.RuntimeInfo.MaxDop = 2
+	proc.RuntimeInfo.SpillMem = 1 << 25
 	return proc
 }
 

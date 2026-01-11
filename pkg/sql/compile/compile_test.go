@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
-	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -129,7 +128,6 @@ func (w *Ws) PPString() string {
 func NewMockCompile(t *testing.T) *Compile {
 	return &Compile{
 		proc: testutil.NewProcess(t),
-		ncpu: system.GoMaxProcs(),
 	}
 }
 

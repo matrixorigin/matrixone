@@ -359,11 +359,9 @@ func (exec *txnExecutor) Exec(
 		nil,
 		exec.s.taskservice,
 	)
-	proc.SetResolveVariableFunc(exec.opts.ResolveVariableFunc())
 
-	if exec.opts.ResolveVariableFunc() != nil {
-		proc.SetResolveVariableFunc(exec.opts.ResolveVariableFunc())
-	}
+	// SetResolveVariableFunc will update the RuntimeInfo of the process.
+	proc.SetResolveVariableFunc(exec.opts.ResolveVariableFunc())
 
 	prepared := false
 	if statementOption.HasParams() {
@@ -419,7 +417,6 @@ func (exec *txnExecutor) Exec(
 			return executor.Result{}, err
 		}
 	}
-
 	c := NewCompile(
 		exec.s.addr,
 		exec.getDatabase(),

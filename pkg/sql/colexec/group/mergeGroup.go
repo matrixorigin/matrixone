@@ -39,7 +39,7 @@ func (mergeGroup *MergeGroup) Prepare(proc *process.Process) error {
 	if err := mergeGroup.PrepareProjection(proc); err != nil {
 		return err
 	}
-	mergeGroup.ctr.setSpillMem(mergeGroup.SpillMem, mergeGroup.Aggs)
+	mergeGroup.ctr.setSpillMem(proc.GetSpillMem(), mergeGroup.Aggs)
 	return nil
 }
 
@@ -151,7 +151,7 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 				}
 				mergeGroup.Aggs = append(mergeGroup.Aggs, agExpr)
 			}
-			mergeGroup.ctr.setSpillMem(mergeGroup.SpillMem, mergeGroup.Aggs)
+			mergeGroup.ctr.setSpillMem(proc.GetSpillMem(), mergeGroup.Aggs)
 		}
 
 		if len(mergeGroup.ctr.aggList) != len(mergeGroup.Aggs) {

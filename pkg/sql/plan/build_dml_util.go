@@ -846,7 +846,6 @@ func appendAggNodeForFkJoin(builder *QueryBuilder, bindCtx *BindContext, lastNod
 		GroupBy:     groupByList,
 		Children:    []int32{lastNodeId},
 		ProjectList: aggProject,
-		SpillMem:    builder.aggSpillMem,
 	}, bindCtx)
 	lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
 
@@ -1446,7 +1445,6 @@ func appendAggCountGroupByColExpr(builder *QueryBuilder, bindCtx *BindContext, l
 					},
 				},
 			}},
-		SpillMem: builder.aggSpillMem,
 	}
 	lastNodeId = builder.appendNode(groupByNode, bindCtx)
 	return lastNodeId, nil
@@ -2892,7 +2890,6 @@ func makePreUpdateDeletePlan(
 			GroupBy:     groupByExprs,
 			AggList:     aggList,
 			ProjectList: aggNodeProjection,
-			SpillMem:    builder.aggSpillMem,
 		}
 		lastNodeId = builder.appendNode(aggNode, bindCtx)
 

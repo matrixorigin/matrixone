@@ -548,7 +548,7 @@ func (s *service) handleResetSession(
 func (s *service) handleGoMaxProcs(
 	ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer,
 ) error {
-	resp.GoMaxProcsResponse.MaxProcs = int32(system.SetGoMaxProcs(int(req.GoMaxProcsRequest.MaxProcs)))
+	resp.GoMaxProcsResponse.MaxProcs = system.SetGoMaxProcs(req.GoMaxProcsRequest.MaxProcs)
 	logutil.Info("QueryService::GoMaxProcs",
 		zap.String("op", "set"),
 		zap.Int32("in", req.GoMaxProcsRequest.MaxProcs),

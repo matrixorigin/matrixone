@@ -550,6 +550,7 @@ type FeSession interface {
 	AddTempTable(dbName, alias, realName string)
 	RemoveTempTable(dbName, alias string)
 	RemoveTempTableByRealName(realName string)
+	GetRuntimeInfoOfFeSession() process.RuntimeInfo
 	SessionLogger
 }
 
@@ -1024,11 +1025,13 @@ func (ses *feSessionImpl) GetGlobalSysVars() *SystemVariables {
 func (ses *feSessionImpl) GetGlobalSysVar(name string) (interface{}, error) {
 	name = strings.ToLower(name)
 	if sv, ok := gSysVarsDefs[name]; !ok {
-		return nil, moerr.NewInternalErrorNoCtx(errorSystemVariableDoesNotExist())
+		return nil, moerr.NewInternalErrorNoCtxf("System variable %s does not exist", name)
 	} else if sv.Scope == ScopeSession {
-		return nil, moerr.NewInternalErrorNoCtx(errorSystemVariableIsSession())
+		return nil, moerr.NewInternalErrorNoCtxf("System variable %s is session scoped", name)
 	}
-
+	if ses.sesSysVars == nil {
+		return gSysVarsDefs[name].Default, nil
+	}
 	return ses.gSysVars.Get(name), nil
 }
 
@@ -1037,15 +1040,15 @@ func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interf
 
 	def, ok := gSysVarsDefs[name]
 	if !ok {
-		return moerr.NewInternalErrorNoCtx(errorSystemVariableDoesNotExist())
+		return moerr.NewInternalErrorNoCtxf("System variable %s does not exist", name)
 	}
 
 	if def.Scope == ScopeSession {
-		return moerr.NewInternalErrorNoCtx(errorSystemVariableIsSession())
+		return moerr.NewInternalErrorNoCtxf("System variable %s is session scoped", name)
 	}
 
 	if !def.GetDynamic() {
-		return moerr.NewInternalErrorNoCtx(errorSystemVariableIsReadOnly())
+		return moerr.NewInternalErrorNoCtxf("System variable %s is read only", name)
 	}
 
 	// special handle for validate_password.policy
@@ -1086,7 +1089,7 @@ func (ses *feSessionImpl) GetSessionSysVars() *SystemVariables {
 func (ses *Session) GetSessionSysVar(name string) (interface{}, error) {
 	name = strings.ToLower(name)
 	if _, ok := gSysVarsDefs[name]; !ok {
-		return nil, moerr.NewInternalErrorNoCtx(errorSystemVariableDoesNotExist())
+		return nil, moerr.NewInternalErrorNoCtxf("System variable %s does not exist", name)
 	}
 
 	// init SystemVariables GlobalSysVarsMgr need to read table, read table need to use SessionSysVar
@@ -1103,15 +1106,15 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 
 	def, ok := gSysVarsDefs[name]
 	if !ok {
-		return moerr.NewInternalErrorNoCtx(errorSystemVariableDoesNotExist())
+		return moerr.NewInternalErrorNoCtxf("System variable %s does not exist", name)
 	}
 
 	if def.Scope == ScopeGlobal {
-		return moerr.NewInternalErrorNoCtx(errorSystemVariableIsGlobal())
+		return moerr.NewInternalErrorNoCtxf("System variable %s is global scoped", name)
 	}
 
 	if !def.GetDynamic() {
-		return moerr.NewInternalErrorNoCtx(errorSystemVariableIsReadOnly())
+		return moerr.NewInternalErrorNoCtxf("System variable %s is read only", name)
 	}
 
 	if val, err = def.GetType().Convert(val); err != nil {
@@ -1220,6 +1223,21 @@ func (ses *Session) IsRestoreFail() bool {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return ses.isRestoreFail
+}
+
+func (ses *Session) GetRuntimeInfoOfFeSession() process.RuntimeInfo {
+	var ret process.RuntimeInfo
+	if i64v, err := ses.GetSessionSysVar("max_dop"); err == nil {
+		if i64, ok := i64v.(int64); ok {
+			ret.MaxDop = i64
+		}
+	}
+	if i64v, err := ses.GetSessionSysVar("spill_mem"); err == nil {
+		if i64, ok := i64v.(int64); ok {
+			ret.SpillMem = i64
+		}
+	}
+	return ret
 }
 
 type PropertyID int

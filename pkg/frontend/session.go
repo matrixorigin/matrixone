@@ -318,7 +318,7 @@ func (ses *Session) GetUserDefinedVar(name string) (*UserDefinedVar, error) {
 	defer ses.mu.Unlock()
 	val, ok := ses.userDefinedVars[strings.ToLower(name)]
 	if !ok {
-		return nil, moerr.NewInternalErrorNoCtxf(errorUserVariableDoesNotExist(), name)
+		return nil, moerr.NewInternalErrorNoCtxf("User variable %s does not exist", name)
 	}
 	return val, nil
 }
@@ -1126,7 +1126,7 @@ func (ses *Session) GetConfig(ctx context.Context, varName, dbName, tblName stri
 	// 	ses.configs[dbName+"-"+varName] = ret
 	// 	return ret, nil
 	// }
-	return nil, moerr.NewInternalError(ctx, errorConfigDoesNotExist())
+	return nil, moerr.NewInternalErrorf(ctx, "Config variable %s.%s.%s does not exist", dbName, tblName, varName)
 }
 
 func (ses *Session) SetCreateVersion(version string) {

@@ -504,6 +504,7 @@ message Stats {
   // for scan, selectivity means outcnt divide total count
   double selectivity = 6;
   bool forceOneCN = 7;
+  // dop, for stats purpose only.
   int32 dop = 8;
   HashMapStats hashmapStats = 9;
   string sql = 10;
@@ -913,9 +914,6 @@ message Node {
   string dedup_col_name = 67;
   repeated Type dedup_col_types = 68 [(gogoproto.nullable) = false];
   bool rollup_filter = 69;
-
-  // compile time performance setting
-  int64 spill_mem = 70;
 }
 
 message SnapshotExtraInfo {
@@ -1091,9 +1089,6 @@ message Query {
   repeated string detectSqls = 8;
 
   repeated Query background_queries = 9;
-
-  // run time config that can change query behaviors
-  int64 maxDop = 10;
 }
 
 message TransationControl {

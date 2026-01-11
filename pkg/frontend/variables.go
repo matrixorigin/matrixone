@@ -78,18 +78,6 @@ func getErrorConvertFromStringToNullFailed(str string) error {
 	return moerr.NewInternalErrorf(context.Background(), errorConvertFromStringToNullFailedFormat, str)
 }
 
-func errorConfigDoesNotExist() string { return "the config variable does not exist" }
-
-func errorSystemVariableDoesNotExist() string { return "the system variable does not exist" }
-
-func errorSystemVariableIsSession() string { return "the system variable is session" }
-
-func errorSystemVariableIsGlobal() string { return "the system variable is global" }
-
-func errorSystemVariableIsReadOnly() string { return "the system variable is read only" }
-
-func errorUserVariableDoesNotExist() string { return "the user variable %s does not exist" }
-
 type Scope int
 
 const (
@@ -3818,13 +3806,13 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableStringType("mo_table_stats.reset_update_time"),
 		Default:           "",
 	},
-	"agg_spill_mem": {
-		Name:              "agg_spill_mem",
+	"spill_mem": {
+		Name:              "spill_mem",
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              InitSystemVariableIntType("agg_spill_mem", 0, common.TiB, false),
-		Default:           int64(common.GiB),
+		Type:              InitSystemVariableIntType("spill_mem", 0, common.TiB, false),
+		Default:           int64(0), // brave: auto set spill mem, see process.GetSpillMem().
 	},
 	"max_dop": {
 		Name:              "max_dop",
@@ -3832,7 +3820,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("max_dop", 0, math.MaxInt32, false),
-		Default:           int64(0),
+		Default:           int64(0), // default to go maxproc. see process.GetMaxDop().
 	},
 }
 

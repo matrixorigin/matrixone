@@ -2023,7 +2023,7 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 }
 
 func GetPlanTitle(qry *plan.Query, txnHaveDDL bool) string {
-	ncpu := system.GoMaxProcs()
+	ncpu := int(system.GoMaxProcs())
 	switch GetExecType(qry, txnHaveDDL, false) {
 	case ExecTypeTP:
 		return "TP QUERY PLAN"
@@ -2036,7 +2036,7 @@ func GetPlanTitle(qry *plan.Query, txnHaveDDL bool) string {
 }
 
 func GetPhyPlanTitle(qry *plan.Query, txnHaveDDL bool) string {
-	ncpu := system.GoMaxProcs()
+	ncpu := int(system.GoMaxProcs())
 	switch GetExecType(qry, txnHaveDDL, false) {
 	case ExecTypeTP:
 		return "TP QUERY PHYPLAN"

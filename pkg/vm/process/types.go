@@ -102,6 +102,13 @@ type Limitation struct {
 	MaxMsgSize uint64
 }
 
+type RuntimeInfo struct {
+	// MaxDop, max dop for the query
+	MaxDop int64
+	// SpillSize spill size for the query
+	SpillMem int64
+}
+
 // SessionInfo session information
 type SessionInfo struct {
 	Account              string
@@ -277,7 +284,8 @@ type BaseProcess struct {
 	// Id, query id.
 	Id  string
 	Lim Limitation
-	mp  *mpool.MPool
+
+	mp *mpool.MPool
 	// unix timestamp
 	UnixTime         int64
 	TxnClient        client.TxnClient
@@ -318,8 +326,9 @@ type BaseProcess struct {
 // and one pipeline has one process instance.
 type Process struct {
 	// BaseProcess is the common part of one process, and it's shared by all its children processes.
-	Base *BaseProcess
-	Reg  Register
+	Base        *BaseProcess
+	RuntimeInfo RuntimeInfo
+	Reg         Register
 
 	// Ctx and Cancel are pipeline's context and cancel function.
 	// Every pipeline has its own context, and the lifecycle of the pipeline is controlled by the context.
@@ -404,8 +413,14 @@ func (proc *Process) GetPrepareParamsAt(i int) ([]byte, error) {
 	}
 }
 
+// SetResolveVariableFunc will set the resolve variable function
+// update the RuntimeInfo of the process.
 func (proc *Process) SetResolveVariableFunc(f func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)) {
 	proc.Base.resolveVariableFunc = f
+}
+
+func (proc *Process) UpdateRuntimeInfo(rt *RuntimeInfo) {
+	proc.RuntimeInfo = *rt
 }
 
 func (proc *Process) GetResolveVariableFunc() func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {

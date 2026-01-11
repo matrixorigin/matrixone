@@ -113,20 +113,20 @@ func GoRoutines() int {
 
 // GoMaxProcs returns the maximum number of CPUs that can be executing goroutine.
 // co-operate with SetGoMaxProcs
-func GoMaxProcs() int {
-	return int(goMaxProcs.Load())
+func GoMaxProcs() int32 {
+	return int32(goMaxProcs.Load())
 }
 
 // SetGoMaxProcs
 // co-operate with pkg/cnservice/service.handleGoMaxProcs
-func SetGoMaxProcs(n int) (ret int) {
-	ret = runtime.GOMAXPROCS(n)
+func SetGoMaxProcs(n int32) (ret int32) {
+	ret = int32(runtime.GOMAXPROCS(int(n)))
 	if n < 1 {
 		// fix https://github.com/matrixorigin/MO-Cloud/issues/4486
-		goMaxProcs.Store(int32(ret))
+		goMaxProcs.Store(ret)
 		logutil.Infof("call runtime.GOMAXPROCS(%d): %d, keep: %d", n, ret, ret)
 	} else {
-		goMaxProcs.Store(int32(n))
+		goMaxProcs.Store(n)
 		logutil.Infof("call runtime.GOMAXPROCS(%d): %d, keep: %d", n, ret, n)
 	}
 	return ret
@@ -265,5 +265,5 @@ func refreshQuotaConfig() {
 func init() {
 	pid = os.Getpid()
 	refreshQuotaConfig()
-	SetGoMaxProcs(int(cpuNum.Load()))
+	SetGoMaxProcs(cpuNum.Load())
 }

@@ -43,9 +43,9 @@ import (
 type Nodes []Node
 
 type Node struct {
-	Mcpu int
-	Id   string `json:"id"`
-	Addr string `json:"address"`
+	xMcpu int32
+	Id    string `json:"id"`
+	Addr  string `json:"address"`
 	//TODO::change RelData to Tombstoner, since only Tombstones ned to be serialized.
 	Data  RelData
 	CNCNT int32 // number of all cns
@@ -1317,4 +1317,12 @@ func GetPrefetchOnSubscribed() (bool, []*regexp.Regexp) {
 type FilterHint struct {
 	Must        bool
 	BloomFilter []byte
+}
+
+func (n *Node) GetMcpu() int32 {
+	return n.xMcpu
+}
+
+func (n *Node) SetMcpu(mcpu int32) {
+	n.xMcpu = mcpu
 }

@@ -116,7 +116,6 @@ message Group {
   bytes PartialResults = 8;
   repeated uint32 PartialResultTypes = 9;
   repeated bool grouping_flag = 10;
-  int64 spill_mem = 11;
 }
 
 message Insert {
@@ -522,6 +521,11 @@ message PrepareParamInfo {
   repeated bool nulls = 4;
 }
 
+message RuntimeInfo {
+  int64 max_dop = 1;
+  int64 spill_mem = 2;
+}
+
 message ProcessInfo {
   string id = 1;
   string sql = 2;
@@ -532,6 +536,7 @@ message ProcessInfo {
   SessionInfo session_info = 7 [(gogoproto.nullable) = false];
   SessionLoggerInfo session_logger = 8 [(gogoproto.nullable) = false];
   PrepareParamInfo prepare_params = 9 [(gogoproto.nullable) = false];
+  RuntimeInfo runtime_info = 10 [(gogoproto.nullable) = false];
 }
 
 message SessionInfo {

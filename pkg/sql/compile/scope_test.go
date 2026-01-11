@@ -262,7 +262,7 @@ func TestNewParallelScope(t *testing.T) {
 			testCompile.proc,
 			[]vm.OpType{vm.HashJoin, vm.Projection, vm.Limit, vm.Connector})
 
-		scopeToParallel.NodeInfo.Mcpu = 4
+		scopeToParallel.SetMaxDop(4)
 		_, ss := newParallelScope(scopeToParallel)
 		require.NoError(t, checkScopeWithExpectedList(ss[0], []vm.OpType{vm.HashJoin, vm.Projection, vm.Limit, vm.Connector}))
 		require.NoError(t, checkScopeWithExpectedList(ss[1], []vm.OpType{vm.HashJoin, vm.Projection, vm.Limit, vm.Connector}))
@@ -276,7 +276,7 @@ func TestNewParallelScope(t *testing.T) {
 			testCompile.proc,
 			[]vm.OpType{vm.HashJoin, vm.Filter, vm.Projection, vm.Connector})
 
-		scopeToParallel.NodeInfo.Mcpu = 4
+		scopeToParallel.SetMaxDop(4)
 
 		_, ss := newParallelScope(scopeToParallel)
 		require.NoError(t, checkScopeWithExpectedList(ss[0], []vm.OpType{vm.HashJoin, vm.Filter, vm.Projection, vm.Connector}))
@@ -291,7 +291,7 @@ func TestNewParallelScope(t *testing.T) {
 			testCompile.proc,
 			[]vm.OpType{vm.HashJoin, vm.Shuffle, vm.Dispatch})
 
-		scopeToParallel.NodeInfo.Mcpu = 3
+		scopeToParallel.SetMaxDop(3)
 
 		_, ss := newParallelScope(scopeToParallel)
 		require.NoError(t, checkScopeWithExpectedList(ss[0], []vm.OpType{vm.HashJoin, vm.Shuffle, vm.Dispatch}))
@@ -322,7 +322,9 @@ func TestCompileExternValueScan(t *testing.T) {
 
 func TestCompileExternScanParallelWrite(t *testing.T) {
 	testCompile := NewMockCompile(t)
-	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001", Mcpu: 4}, engine.Node{Addr: "cn2:6001", Mcpu: 4}}
+	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001"}, engine.Node{Addr: "cn2:6001"}}
+	testCompile.cnList[0].SetMcpu(4)
+	testCompile.cnList[1].SetMcpu(4)
 	testCompile.addr = "cn1:6001"
 	testCompile.execType = plan2.ExecTypeAP_MULTICN
 	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
@@ -343,7 +345,9 @@ func TestCompileExternScanParallelWrite(t *testing.T) {
 
 func TestCompileExternScanParallelReadWrite(t *testing.T) {
 	testCompile := NewMockCompile(t)
-	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001", Mcpu: 4}, engine.Node{Addr: "cn2:6001", Mcpu: 4}}
+	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001"}, engine.Node{Addr: "cn2:6001"}}
+	testCompile.cnList[0].SetMcpu(4)
+	testCompile.cnList[1].SetMcpu(4)
 	testCompile.addr = "cn1:6001"
 	testCompile.execType = plan2.ExecTypeAP_MULTICN
 	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
@@ -549,9 +553,7 @@ func TestScopeGetRelDataError(t *testing.T) {
 	// Create a new scope
 	s := newScope(Normal)
 	s.Proc = testutil.NewProcess(t)
-	s.NodeInfo = engine.Node{
-		Mcpu: 1,
-	}
+	s.SetMaxDop(1)
 	s.DataSource = &Source{
 		node: &plan.Node{
 			Stats: &plan.Stats{},
@@ -615,11 +617,9 @@ func TestBuildReadersBloomFilterHint(t *testing.T) {
 				},
 				FilterExpr: nil,
 			},
-			NodeInfo: engine.Node{
-				Mcpu: 1,
-			},
 			TxnOffset: 0,
 		}
+		s.SetMaxDop(1)
 
 		c := NewMockCompile(t)
 		c.proc = proc
@@ -649,11 +649,9 @@ func TestBuildReadersBloomFilterHint(t *testing.T) {
 				FilterList:         []*plan.Expr{},
 				RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
 			},
-			NodeInfo: engine.Node{
-				Mcpu: 1,
-			},
 			TxnOffset: 0,
 		}
+		s.SetMaxDop(1)
 
 		c := NewMockCompile(t)
 		c.proc = proc
@@ -683,11 +681,9 @@ func TestBuildReadersBloomFilterHint(t *testing.T) {
 				FilterList:         []*plan.Expr{},
 				RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
 			},
-			NodeInfo: engine.Node{
-				Mcpu: 1,
-			},
 			TxnOffset: 0,
 		}
+		s.SetMaxDop(1)
 
 		c := NewMockCompile(t)
 		c.proc = proc
@@ -719,12 +715,9 @@ func TestBuildReadersBloomFilterHint(t *testing.T) {
 				FilterList:         []*plan.Expr{},
 				RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
 			},
-			NodeInfo: engine.Node{
-				Mcpu: 1,
-			},
 			TxnOffset: 0,
 		}
-
+		s.SetMaxDop(1)
 		c := NewMockCompile(t)
 		c.proc = proc
 		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
@@ -753,12 +746,9 @@ func TestBuildReadersBloomFilterHint(t *testing.T) {
 				FilterList:         []*plan.Expr{},
 				RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
 			},
-			NodeInfo: engine.Node{
-				Mcpu: 1,
-			},
 			TxnOffset: 0,
 		}
-
+		s.SetMaxDop(1)
 		c := NewMockCompile(t)
 		c.proc = proc
 		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
@@ -788,12 +778,9 @@ func TestBuildReadersBloomFilterHint(t *testing.T) {
 				FilterList:         []*plan.Expr{},
 				RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
 			},
-			NodeInfo: engine.Node{
-				Mcpu: 1,
-			},
 			TxnOffset: 0,
 		}
-
+		s.SetMaxDop(1)
 		c := NewMockCompile(t)
 		c.proc = proc
 		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
@@ -823,12 +810,9 @@ func TestBuildReadersBloomFilterHint(t *testing.T) {
 				FilterList:         []*plan.Expr{},
 				RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
 			},
-			NodeInfo: engine.Node{
-				Mcpu: 1,
-			},
 			TxnOffset: 0,
 		}
-
+		s.SetMaxDop(1)
 		c := NewMockCompile(t)
 		c.proc = proc
 		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}

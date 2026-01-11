@@ -296,7 +296,7 @@ func (c *Compile) fillPlanNodeAnalyzeInfo(stats *statistic.StatsInfo) {
 func ConvertScopeToPhyScope(scope *Scope, receiverMap map[*process.WaitRegister]int) models.PhyScope {
 	phyScope := models.PhyScope{
 		Magic:        scope.Magic.String(),
-		Mcpu:         int8(scope.NodeInfo.Mcpu),
+		Mcpu:         int32(scope.GetMaxDop()),
 		DataSource:   ConvertSourceToPhySource(scope.DataSource),
 		PreScopes:    []models.PhyScope{},
 		RootOperator: ConvertOperatorToPhyOperator(scope.RootOp, receiverMap),
@@ -722,14 +722,14 @@ func explainSingleScope(scope *Scope, index int, gap int, rmp map[*process.WaitR
 	}
 
 	if option.Verbose || option.Analyze {
-		fmt.Fprintf(buffer, "Scope %d (Magic: %s, addr:%v, mcpu: %v, Receiver: %s)", index+1, magicShow(scope.Magic), scope.NodeInfo.Addr, scope.NodeInfo.Mcpu, receiverStr)
+		fmt.Fprintf(buffer, "Scope %d (Magic: %s, addr:%v, maxdop: %v, Receiver: %s)", index+1, magicShow(scope.Magic), scope.NodeInfo.Addr, scope.GetMaxDop(), receiverStr)
 		if scope.ScopeAnalyzer != nil {
 			fmt.Fprintf(buffer, " PrepareTimeConsumed: %dns", scope.ScopeAnalyzer.TimeConsumed)
 		} else {
 			buffer.WriteString(" PrepareTimeConsumed: 0ns")
 		}
 	} else {
-		fmt.Fprintf(buffer, "Scope %d (Magic: %s, mcpu: %v, Receiver: %s)", index+1, magicShow(scope.Magic), scope.NodeInfo.Mcpu, receiverStr)
+		fmt.Fprintf(buffer, "Scope %d (Magic: %s, maxdop: %v, Receiver: %s)", index+1, magicShow(scope.Magic), scope.GetMaxDop(), receiverStr)
 	}
 
 	// Scope DataSource

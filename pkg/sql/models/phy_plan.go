@@ -29,7 +29,7 @@ type PhyPlan struct {
 
 type PhyScope struct {
 	Magic               string        `json:"Magic"`
-	Mcpu                int8          `json:"Mcpu,omitempty"`
+	Mcpu                int32         `json:"Mcpu,omitempty"`
 	Receiver            []PhyReceiver `json:"Receiver,omitempty"`
 	DataSource          *PhySource    `json:"DataSource,omitempty"`
 	PreScopes           []PhyScope    `json:"PreScopes,omitempty"`

@@ -113,9 +113,9 @@ select count(*), a, sum(distinct d) d, sum(distinct f) f from t where a < 10000 
 -- force dop to 1, so it is easier to trigger spill
 select 'set max_dop to 1 ... ';
 set @@max_dop = 1;
--- this will set agg_spill_mem to min allowed (1MB)
-select 'set agg_spill_mem to 50MB ... ';
-set @@agg_spill_mem = 60000000; 
+-- this will set spill_mem to min allowed (1MB)
+select 'set spill_mem to 50MB ... ';
+set @@spill_mem = 60000000; 
 -- rerun queries
 
 select count(*) from (select a, b, c from t group by a, b, c) tmptt;

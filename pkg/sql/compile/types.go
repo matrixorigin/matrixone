@@ -306,9 +306,6 @@ type Compile struct {
 	isInternal   bool
 	hasMergeOp   bool
 
-	// ncpu set as system.GoRoutines() while NewCompile, instead of global static value.
-	ncpu int
-
 	adjustTableExtraFunc     func(*api.SchemaExtra) error
 	disableDropAutoIncrement bool
 	keepAutoIncrement        uint64
