@@ -15,7 +15,7 @@
 package perfcounter
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
+	"sync/atomic"
 )
 
 type CounterSet struct {
@@ -24,60 +24,60 @@ type CounterSet struct {
 
 type FileServiceCounterSet struct {
 	S3 struct {
-		List        stats.Counter // listObjects:List all Objects  [Put type request]
-		Head        stats.Counter // statObject:View all meta information contained in the object [Get type request]
-		Put         stats.Counter // putObject:Upload an Object   [Put type request]
-		Get         stats.Counter // getObject:Download an Object   [Get type request]
-		Delete      stats.Counter // deleteObject:Delete a single Object [Put type request]
-		DeleteMulti stats.Counter // deleteObjects:Delete multiple Objects [Put type request]
+		List        atomic.Int64 // listObjects:List all Objects  [Put type request]
+		Head        atomic.Int64 // statObject:View all meta information contained in the object [Get type request]
+		Put         atomic.Int64 // putObject:Upload an Object   [Put type request]
+		Get         atomic.Int64 // getObject:Download an Object   [Get type request]
+		Delete      atomic.Int64 // deleteObject:Delete a single Object [Put type request]
+		DeleteMulti atomic.Int64 // deleteObjects:Delete multiple Objects [Put type request]
 	}
 
 	Cache struct {
-		Read   stats.Counter // CacheRead
-		Hit    stats.Counter // CacheHit
+		Read   atomic.Int64 // CacheRead
+		Hit    atomic.Int64 // CacheHit
 		Memory struct {
-			Read stats.Counter // CacheMemoryRead
-			Hit  stats.Counter // CacheMemoryHit
+			Read atomic.Int64 // CacheMemoryRead
+			Hit  atomic.Int64 // CacheMemoryHit
 		}
 		Disk struct {
-			Read stats.Counter // CacheDiskRead
-			Hit  stats.Counter // CacheDiskHit
+			Read atomic.Int64 // CacheDiskRead
+			Hit  atomic.Int64 // CacheDiskHit
 		}
 		Remote struct {
-			Read stats.Counter // CacheRemoteRead
-			Hit  stats.Counter // CacheRemoteHit
+			Read atomic.Int64 // CacheRemoteRead
+			Hit  atomic.Int64 // CacheRemoteHit
 		}
 	}
 
 	// ReadSize: actual bytes read from storage layer (excluding rowid tombstone)
-	ReadSize stats.Counter
+	ReadSize atomic.Int64
 	// S3ReadSize: actual bytes read from S3 (excluding rowid tombstone)
-	S3ReadSize stats.Counter
+	S3ReadSize atomic.Int64
 	// DiskReadSize: actual bytes read from disk cache (excluding rowid tombstone)
-	DiskReadSize stats.Counter
+	DiskReadSize atomic.Int64
 }
 
 func (c *CounterSet) Reset() {
 	// FileService.S3
-	c.FileService.S3.List.Reset()
-	c.FileService.S3.Head.Reset()
-	c.FileService.S3.Put.Reset()
-	c.FileService.S3.Get.Reset()
-	c.FileService.S3.Delete.Reset()
-	c.FileService.S3.DeleteMulti.Reset()
+	c.FileService.S3.List.Store(0)
+	c.FileService.S3.Head.Store(0)
+	c.FileService.S3.Put.Store(0)
+	c.FileService.S3.Get.Store(0)
+	c.FileService.S3.Delete.Store(0)
+	c.FileService.S3.DeleteMulti.Store(0)
 
 	// FileService.Cache
-	c.FileService.Cache.Read.Reset()
-	c.FileService.Cache.Hit.Reset()
-	c.FileService.Cache.Memory.Read.Reset()
-	c.FileService.Cache.Memory.Hit.Reset()
-	c.FileService.Cache.Disk.Read.Reset()
-	c.FileService.Cache.Disk.Hit.Reset()
-	c.FileService.Cache.Remote.Read.Reset()
-	c.FileService.Cache.Remote.Hit.Reset()
+	c.FileService.Cache.Read.Store(0)
+	c.FileService.Cache.Hit.Store(0)
+	c.FileService.Cache.Memory.Read.Store(0)
+	c.FileService.Cache.Memory.Hit.Store(0)
+	c.FileService.Cache.Disk.Read.Store(0)
+	c.FileService.Cache.Disk.Hit.Store(0)
+	c.FileService.Cache.Remote.Read.Store(0)
+	c.FileService.Cache.Remote.Hit.Store(0)
 
 	// FileService top-level
-	c.FileService.ReadSize.Reset()
-	c.FileService.S3ReadSize.Reset()
-	c.FileService.DiskReadSize.Reset()
+	c.FileService.ReadSize.Store(0)
+	c.FileService.S3ReadSize.Store(0)
+	c.FileService.DiskReadSize.Store(0)
 }
