@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
@@ -983,10 +982,10 @@ func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 		col := vector.MustArrayCol[float32](vec)
 		minVal, maxVal := types.BytesToArray[float32](zm.GetMinBuf()), types.BytesToArray[float32](zm.GetMaxBuf())
 		lowerBound := sort.Search(len(col), func(i int) bool {
-			return moarray.Compare[float32](minVal, col[i]) <= 0
+			return types.ArrayCompare[float32](minVal, col[i]) <= 0
 		})
 		upperBound := sort.Search(len(col), func(i int) bool {
-			return moarray.Compare[float32](maxVal, col[i]) < 0
+			return types.ArrayCompare[float32](maxVal, col[i]) < 0
 		})
 		return lowerBound, upperBound
 
@@ -994,10 +993,10 @@ func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 		col := vector.MustArrayCol[float64](vec)
 		minVal, maxVal := types.BytesToArray[float64](zm.GetMinBuf()), types.BytesToArray[float64](zm.GetMaxBuf())
 		lowerBound := sort.Search(len(col), func(i int) bool {
-			return moarray.Compare[float64](minVal, col[i]) <= 0
+			return types.ArrayCompare[float64](minVal, col[i]) <= 0
 		})
 		upperBound := sort.Search(len(col), func(i int) bool {
-			return moarray.Compare[float64](maxVal, col[i]) < 0
+			return types.ArrayCompare[float64](maxVal, col[i]) < 0
 		})
 		return lowerBound, upperBound
 
@@ -1228,19 +1227,19 @@ func (zm ZM) AnyIn(vec *vector.Vector) bool {
 		col := vector.MustArrayCol[float32](vec)
 		minVal, maxVal := types.BytesToArray[float32](zm.GetMinBuf()), types.BytesToArray[float32](zm.GetMaxBuf())
 		lowerBound := sort.Search(len(col), func(i int) bool {
-			return moarray.Compare[float32](minVal, col[i]) <= 0
+			return types.ArrayCompare[float32](minVal, col[i]) <= 0
 		})
 
-		return lowerBound < len(col) && moarray.Compare[float32](maxVal, col[lowerBound]) >= 0
+		return lowerBound < len(col) && types.ArrayCompare[float32](maxVal, col[lowerBound]) >= 0
 
 	case types.T_array_float64:
 		col := vector.MustArrayCol[float64](vec)
 		minVal, maxVal := types.BytesToArray[float64](zm.GetMinBuf()), types.BytesToArray[float64](zm.GetMaxBuf())
 		lowerBound := sort.Search(len(col), func(i int) bool {
-			return moarray.Compare[float64](minVal, col[i]) <= 0
+			return types.ArrayCompare[float64](minVal, col[i]) <= 0
 		})
 
-		return lowerBound < len(col) && moarray.Compare[float64](maxVal, col[lowerBound]) >= 0
+		return lowerBound < len(col) && types.ArrayCompare[float64](maxVal, col[lowerBound]) >= 0
 
 	default:
 		return true

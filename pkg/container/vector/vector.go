@@ -30,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/shuffle"
 )
 
@@ -246,6 +245,11 @@ func (v *Vector) SetNulls(nsp *nulls.Nulls) {
 		return
 	}
 	v.nsp.Or(nsp)
+}
+
+func (v *Vector) SetAllNulls(length int) {
+	v.nsp.InitWithSize(int(length))
+	v.nsp.AddRange(0, uint64(length))
 }
 
 func (v *Vector) SetGrouping(gsp *nulls.Nulls) {
@@ -572,6 +576,14 @@ func (v *Vector) IsNull(i uint64) bool {
 	return v.nsp.Contains(i)
 }
 
+func (v *Vector) SetNull(i uint64) {
+	v.nsp.Add(i)
+}
+
+func (v *Vector) UnsetNull(i uint64) {
+	v.nsp.Del(i)
+}
+
 // call this function if type already checked
 func SetFixedAtNoTypeCheck[T types.FixedSizeT](v *Vector, idx int, t T) error {
 	vacol := MustFixedColNoTypeCheck[T](v)
@@ -612,6 +624,15 @@ func SetBytesAt(v *Vector, idx int, bs []byte, mp *mpool.MPool) error {
 
 func SetStringAt(v *Vector, idx int, bs string, mp *mpool.MPool) error {
 	return SetBytesAt(v, idx, []byte(bs), mp)
+}
+
+func (v *Vector) SetRawBytesAt(i int, bs []byte, mp *mpool.MPool) error {
+	if v.typ.IsVarlen() {
+		return SetBytesAt(v, i, bs, mp)
+	} else {
+		copy(v.data[i*v.typ.TypeSize():i*v.typ.TypeSize()+v.typ.TypeSize()], bs)
+		return nil
+	}
 }
 
 // IsConstNull return true if the vector means a scalar Null.
@@ -4380,13 +4401,13 @@ func (v *Vector) InplaceSortAndCompact() {
 	case types.T_array_float32:
 		col, area := MustVarlenaRawData(v)
 		sort.Slice(col, func(i, j int) bool {
-			return moarray.Compare(
+			return types.ArrayCompare[float32](
 				types.GetArray[float32](&col[i], area),
 				types.GetArray[float32](&col[j], area),
 			) < 0
 		})
 		newCol := slices.CompactFunc(col, func(a, b types.Varlena) bool {
-			return moarray.Compare(
+			return types.ArrayCompare[float32](
 				types.GetArray[float32](&a, area),
 				types.GetArray[float32](&b, area),
 			) == 0
@@ -4399,13 +4420,13 @@ func (v *Vector) InplaceSortAndCompact() {
 	case types.T_array_float64:
 		col, area := MustVarlenaRawData(v)
 		sort.Slice(col, func(i, j int) bool {
-			return moarray.Compare(
+			return types.ArrayCompare[float64](
 				types.GetArray[float64](&col[i], area),
 				types.GetArray[float64](&col[j], area),
 			) < 0
 		})
 		newCol := slices.CompactFunc(col, func(a, b types.Varlena) bool {
-			return moarray.Compare(
+			return types.ArrayCompare[float64](
 				types.GetArray[float64](&a, area),
 				types.GetArray[float64](&b, area),
 			) == 0
@@ -4566,7 +4587,7 @@ func (v *Vector) InplaceSort() {
 	case types.T_array_float32:
 		col, area := MustVarlenaRawData(v)
 		sort.Slice(col, func(i, j int) bool {
-			return moarray.Compare[float32](
+			return types.ArrayCompare[float32](
 				types.GetArray[float32](&col[i], area),
 				types.GetArray[float32](&col[j], area),
 			) < 0
@@ -4574,7 +4595,7 @@ func (v *Vector) InplaceSort() {
 	case types.T_array_float64:
 		col, area := MustVarlenaRawData(v)
 		sort.Slice(col, func(i, j int) bool {
-			return moarray.Compare[float64](
+			return types.ArrayCompare[float64](
 				types.GetArray[float64](&col[i], area),
 				types.GetArray[float64](&col[j], area),
 			) < 0

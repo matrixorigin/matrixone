@@ -20,7 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -334,7 +333,7 @@ func leastFn(parameters []*vector.Vector,
 				_v1 := types.BytesToArray[float32](v1)
 				_v2 := types.BytesToArray[float32](v2)
 
-				return moarray.Compare(_v1, _v2) < 0
+				return types.ArrayCompare[float32](_v1, _v2) < 0
 			})
 
 	case types.T_array_float64:
@@ -347,7 +346,7 @@ func leastFn(parameters []*vector.Vector,
 			func(v1, v2 []byte) bool {
 				_v1 := types.BytesToArray[float64](v1)
 				_v2 := types.BytesToArray[float64](v2)
-				return moarray.Compare(_v1, _v2) < 0
+				return types.ArrayCompare[float64](_v1, _v2) < 0
 			})
 
 	case types.T_date:
@@ -616,7 +615,7 @@ func greatestFn(parameters []*vector.Vector,
 			func(v1, v2 []byte) bool {
 				_v1 := types.BytesToArray[float32](v1)
 				_v2 := types.BytesToArray[float32](v2)
-				return moarray.Compare(_v1, _v2) > 0
+				return types.ArrayCompare[float32](_v1, _v2) > 0
 			})
 
 	case types.T_array_float64:
@@ -629,7 +628,7 @@ func greatestFn(parameters []*vector.Vector,
 			func(v1, v2 []byte) bool {
 				_v1 := types.BytesToArray[float64](v1)
 				_v2 := types.BytesToArray[float64](v2)
-				return moarray.Compare(_v1, _v2) > 0
+				return types.ArrayCompare[float64](_v1, _v2) > 0
 			})
 
 	case types.T_date:
