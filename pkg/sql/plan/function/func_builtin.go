@@ -1688,6 +1688,11 @@ func getPackFun(v *vector.Vector) (func(v *vector.Vector, idx int, ps *types.Pac
 			val := vector.GetFixedAtNoTypeCheck[types.Enum](v, idx)
 			ps.EncodeEnum(val)
 		}, nil
+	case types.T_year:
+		return func(v *vector.Vector, idx int, ps *types.Packer) {
+			val := vector.GetFixedAtNoTypeCheck[types.MoYear](v, idx)
+			ps.EncodeMoYear(val)
+		}, nil
 	case types.T_decimal64:
 		return func(v *vector.Vector, idx int, ps *types.Packer) {
 			val := vector.GetFixedAtNoTypeCheck[types.Decimal64](v, idx)
@@ -2040,6 +2045,25 @@ func SerialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 		} else {
 			for i, b := range s {
 				ps[i].EncodeEnum(b)
+			}
+		}
+	case types.T_year:
+		s := vector.MustFixedColWithTypeCheck[types.MoYear](v)
+		if hasNull {
+			for i, b := range s {
+				if nulls.Contains(v.GetNulls(), uint64(i)) {
+					if isFull {
+						ps[i].EncodeNull()
+					} else {
+						nulls.Add(bitMap, uint64(i))
+					}
+				} else {
+					ps[i].EncodeMoYear(b)
+				}
+			}
+		} else {
+			for i, b := range s {
+				ps[i].EncodeMoYear(b)
 			}
 		}
 	case types.T_decimal64:

@@ -464,6 +464,21 @@ func serialWithCompacted(
 					ps[i].EncodeEnum(b)
 				}
 			}
+		case types.T_year:
+			s := vector.MustFixedColNoTypeCheck[types.MoYear](v)
+			if hasNull {
+				for i, b := range s {
+					if nulls.Contains(vNull, uint64(i)) {
+						nulls.Add(bitMap, uint64(i))
+					} else {
+						ps[i].EncodeMoYear(b)
+					}
+				}
+			} else {
+				for i, b := range s {
+					ps[i].EncodeMoYear(b)
+				}
+			}
 		case types.T_decimal64:
 			s := vector.MustFixedColNoTypeCheck[types.Decimal64](v)
 			if hasNull {
@@ -748,6 +763,15 @@ func compactSingleIndexCol(
 			}
 		}
 		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
+	case types.T_year:
+		s := vector.MustFixedColNoTypeCheck[types.MoYear](v)
+		ns := make([]types.MoYear, 0, len(s))
+		for i, b := range s {
+			if !nulls.Contains(v.GetNulls(), uint64(i)) {
+				ns = append(ns, b)
+			}
+		}
+		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_decimal64:
 		s := vector.MustFixedColNoTypeCheck[types.Decimal64](v)
 		ns := make([]types.Decimal64, 0, len(s))
@@ -941,6 +965,15 @@ func compactPrimaryCol(
 	case types.T_enum:
 		s := vector.MustFixedColNoTypeCheck[types.Enum](v)
 		ns := make([]types.Enum, 0)
+		for i, b := range s {
+			if !nulls.Contains(bitMap, uint64(i)) {
+				ns = append(ns, b)
+			}
+		}
+		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
+	case types.T_year:
+		s := vector.MustFixedColNoTypeCheck[types.MoYear](v)
+		ns := make([]types.MoYear, 0)
 		for i, b := range s {
 			if !nulls.Contains(bitMap, uint64(i)) {
 				ns = append(ns, b)

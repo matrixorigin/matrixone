@@ -456,6 +456,12 @@ func mergeObjs(ctx context.Context, mergeHost MergeTaskHost, sortKeyPos int) err
 				cols:        make([][]types.Enum, size),
 			}
 			merger = newMerger(mergeHost, sort.GenericLess[types.Enum], sortKeyPos, df)
+		case types.T_year:
+			df := &fixedDataFetcher[types.MoYear]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[types.MoYear],
+				cols:        make([][]types.MoYear, size),
+			}
+			merger = newMerger(mergeHost, sort.GenericLess[types.MoYear], sortKeyPos, df)
 		case types.T_decimal64:
 			df := &fixedDataFetcher[types.Decimal64]{
 				mustColFunc: vector.MustFixedColNoTypeCheck[types.Decimal64],

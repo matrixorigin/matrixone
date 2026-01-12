@@ -278,6 +278,8 @@ func makeMinMaxExec(mp *mpool.MPool, aggID int64, isMin bool, param types.Type) 
 		return newGenericMinMaxExec[types.Time](mp, aggID, isMin, param)
 	case types.T_timestamp:
 		return newGenericMinMaxExec[types.Timestamp](mp, aggID, isMin, param)
+	case types.T_year:
+		return newGenericMinMaxExec[types.MoYear](mp, aggID, isMin, param)
 	case types.T_decimal64:
 		return newDecimal64MinMaxExec(mp, aggID, isMin, param)
 	case types.T_decimal128:
