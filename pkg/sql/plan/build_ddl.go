@@ -750,6 +750,7 @@ func buildCreateTable(
 		if len(tableDef.DbName) == 0 {
 			tableDef.DbName = ctx.DefaultDatabase()
 		}
+		tableDef.IsTemporary = stmt.Temporary
 
 		_, newStmt, err := ConstructCreateTableSQL(ctx, tableDef, snapshot, true, cloneStmt)
 		if err != nil {
@@ -986,6 +987,10 @@ func buildCreateTable(
 		}
 	}
 
+	if stmt.Temporary {
+		createTable.TableDef.TableType = catalog.SystemTemporaryTable
+	}
+
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
 			Ddl: &plan.DataDefinition{
@@ -1213,7 +1218,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			}
 		case *tree.ForeignKey:
 			if createTable.Temporary {
-				return moerr.NewNYI(ctx.GetContext(), "add foreign key for temporary table")
+				return moerr.NewNotSupported(ctx.GetContext(), "add foreign key for temporary table")
 			}
 			if len(asSelectCols) != 0 {
 				return moerr.NewNYI(ctx.GetContext(), "add foreign key in create table ... as select statement")
@@ -3207,9 +3212,7 @@ func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {
 }
 
 func buildCreateDatabase(stmt *tree.CreateDatabase, ctx CompilerContext) (*Plan, error) {
-	if string(stmt.Name) == defines.TEMPORARY_DBNAME {
-		return nil, moerr.NewInternalError(ctx.GetContext(), "this database name is used by mo temporary engine")
-	}
+
 	createDB := &plan.CreateDatabase{
 		IfNotExists: stmt.IfNotExists,
 		Database:    string(stmt.Name),
@@ -3999,13 +4002,14 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 
 			switch opt.KeyType {
 			case tree.INDEX_TYPE_IVFFLAT:
-				if opt.AlgoParamList <= 0 {
+				if opt.AlgoParamList < 0 {
 					return nil, moerr.NewInternalErrorf(
 						ctx.GetContext(),
-						"lists should be > 0.",
+						"lists should be >= 0. lists = 0 will keep the original configuration.",
 					)
 				}
 				alterTableReIndex.IndexAlgoParamList = opt.AlgoParamList
+				alterTableReIndex.ForceSync = opt.ForceSync
 			case tree.INDEX_TYPE_HNSW:
 				// PASS: keep options on change for incremental update
 			default:
@@ -4034,6 +4038,57 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			alterTable.Actions[i] = &plan.AlterTable_Action{
 				Action: &plan.AlterTable_Action_AlterReindex{
 					AlterReindex: alterTableReIndex,
+				},
+			}
+
+		case *tree.AlterOptionAlterAutoUpdate:
+			alterTableAutoUpdate := new(plan.AlterTableAlterAutoUpdate)
+			constraintName := string(opt.Name)
+			alterTableAutoUpdate.IndexName = constraintName
+
+			switch opt.KeyType {
+			case tree.INDEX_TYPE_IVFFLAT:
+				if opt.Day < 0 {
+					return nil, moerr.NewInternalErrorf(
+						ctx.GetContext(),
+						"day should be >= 0.",
+					)
+				}
+				if opt.Hour < 0 || opt.Hour > 23 {
+					return nil, moerr.NewInternalErrorf(
+						ctx.GetContext(),
+						"hour should be between 0 and 23.",
+					)
+				}
+				alterTableAutoUpdate.AutoUpdate = opt.AutoUpdate
+				alterTableAutoUpdate.Day = opt.Day
+				alterTableAutoUpdate.Hour = opt.Hour
+			default:
+				return nil, moerr.NewInternalErrorf(
+					ctx.GetContext(),
+					unsupportedErrFmt,
+					opt.KeyType.ToString(),
+				)
+			}
+
+			name_not_found := true
+			// check index
+			for _, indexdef := range tableDef.Indexes {
+				if constraintName == indexdef.IndexName {
+					name_not_found = false
+					break
+				}
+			}
+			if name_not_found {
+				return nil, moerr.NewInternalErrorf(
+					ctx.GetContext(),
+					"Can't REINDEX '%s'; check that column/key exists",
+					constraintName,
+				)
+			}
+			alterTable.Actions[i] = &plan.AlterTable_Action{
+				Action: &plan.AlterTable_Action_AlterAutoUpdate{
+					AlterAutoUpdate: alterTableAutoUpdate,
 				},
 			}
 
@@ -4437,7 +4492,7 @@ func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, d
 	}
 
 	if parentTableDef.IsTemporary {
-		return nil, moerr.NewNYI(ctx.GetContext(), "add foreign key for temporary table")
+		return nil, moerr.NewNotSupported(ctx.GetContext(), "add foreign key for temporary table")
 	}
 
 	fkData.Def.ForeignTbl = parentTableDef.TblId

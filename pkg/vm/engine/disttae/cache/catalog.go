@@ -18,7 +18,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"time"
 
 	"go.uber.org/zap"
 
@@ -62,9 +61,11 @@ func (cc *CatalogCache) UpdateDuration(start types.TS, end types.TS) {
 	defer cc.mu.Unlock()
 	cc.mu.start = start
 	cc.mu.end = end
-	logutil.Info("FIND_TABLE CACHE update serve range",
+	logutil.Info(
+		"catalog.cache.update.start.end",
 		zap.String("start", cc.mu.start.ToString()),
-		zap.String("end", cc.mu.end.ToString()))
+		zap.String("end", cc.mu.end.ToString()),
+	)
 }
 
 func (cc *CatalogCache) UpdateStart(ts types.TS) {
@@ -72,9 +73,11 @@ func (cc *CatalogCache) UpdateStart(ts types.TS) {
 	defer cc.mu.Unlock()
 	if cc.mu.start != types.MaxTs() && ts.GT(&cc.mu.start) {
 		cc.mu.start = ts
-		logutil.Info("FIND_TABLE CACHE update serve range (by start)",
+		logutil.Info(
+			"catalog.cache.update.start",
 			zap.String("start", cc.mu.start.ToString()),
-			zap.String("end", cc.mu.end.ToString()))
+			zap.String("end", cc.mu.end.ToString()),
+		)
 	}
 }
 
@@ -113,7 +116,6 @@ func (cc *CatalogCache) GC(ts timestamp.Timestamp) GCReport {
 
 	*/
 
-	inst := time.Now()
 	r := GCReport{}
 	{ // table cache gc
 		var prevName string
@@ -195,8 +197,6 @@ func (cc *CatalogCache) GC(ts timestamp.Timestamp) GCReport {
 		}
 	}
 	cc.UpdateStart(types.TimestampToTS(ts))
-	duration := time.Since(inst)
-	logutil.Info("FIND_TABLE CACHE gc", zap.Any("report", r), zap.Duration("cost", duration))
 	return r
 }
 
@@ -485,6 +485,7 @@ func ParseTablesBatchAnd(bat *batch.Batch, f func(*TableItem)) {
 	catalogVersions := vector.MustFixedColWithTypeCheck[uint32](bat.GetVector(catalog.MO_TABLES_CATALOG_VERSION_IDX + MO_OFF))
 	extraInfos := bat.GetVector(catalog.MO_TABLES_EXTRA_INFO_IDX + MO_OFF)
 	pks := bat.GetVector(catalog.MO_TABLES_CPKEY_IDX + MO_OFF)
+	logicalIds := vector.MustFixedColWithTypeCheck[uint64](bat.GetVector(catalog.MO_TABLES_LOGICAL_ID_IDX + MO_OFF))
 	for i, account := range accounts {
 		item := new(TableItem)
 		item.Id = ids[i]
@@ -507,6 +508,7 @@ func ParseTablesBatchAnd(bat *batch.Batch, f func(*TableItem)) {
 		item.ClusterByIdx = -1
 		item.CPKey = append(item.CPKey, pks.GetBytesAt(i)...)
 		item.ExtraInfo = api.MustUnmarshalTblExtra(extraInfos.GetBytesAt(i))
+		item.LogicalId = logicalIds[i]
 		f(item)
 	}
 }
@@ -850,5 +852,6 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 		DbId:          tblItem.DatabaseId,
 		Partition:     partition,
 		FeatureFlag:   tblItem.ExtraInfo.GetFeatureFlag(),
+		LogicalId:     tblItem.LogicalId,
 	}, tableDef
 }

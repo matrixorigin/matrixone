@@ -127,6 +127,7 @@ func (a *AvgTwCacheContext) Marshal() []byte {
 	copy(res[8:], c)
 	return res
 }
+func (a *AvgTwCacheContext) MarshalBinary() ([]byte, error) { return a.Marshal(), nil }
 func (a *AvgTwCacheContext) Unmarshal(bs []byte) {
 	a.Sum = types.DecodeFloat64(bs[0:])
 	a.Count = types.DecodeInt64(bs[8:])
@@ -199,6 +200,8 @@ func (a *AvgTwCacheDecimalContext) Marshal() []byte {
 	copy(res[24:], s)
 	return res
 }
+
+func (a *AvgTwCacheDecimalContext) MarshalBinary() ([]byte, error) { return a.Marshal(), nil }
 
 func (a *AvgTwCacheDecimalContext) Unmarshal(bs []byte) {
 	d1 := types.DecodeUint64(bs[0:])

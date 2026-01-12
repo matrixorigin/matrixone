@@ -152,10 +152,8 @@ func NewMergeObjectsTask(
 		task.idxs = append(task.idxs, def.Idx)
 		task.attrs = append(task.attrs, def.Name)
 	}
-	if isTombstone {
-		task.idxs = append(task.idxs, objectio.SEQNUM_COMMITTS)
-		task.attrs = append(task.attrs, objectio.TombstoneAttr_CommitTs_Attr)
-	}
+	task.idxs = append(task.idxs, objectio.SEQNUM_COMMITTS)
+	task.attrs = append(task.attrs, objectio.TombstoneAttr_CommitTs_Attr)
 	task.BaseTask = tasks.NewBaseTask(task, tasks.DataCompactionTask, ctx)
 
 	if task.GetTotalSize() > 300*common.Const1MBytes {
@@ -323,6 +321,18 @@ func (task *mergeObjectsTask) LoadNextBatch(
 			retBatch.Vecs[idx] = data.Vecs[i].GetDownstreamVector()
 		}
 	}
+
+	// // RelLogicalID COMPAT
+	if task.tid == 2 && !task.isTombstone {
+		// reuse the rel_id column
+		logical_idx := slices.Index(task.attrs, pkgcatalog.SystemRelAttr_LogicalID)
+		if data.Vecs[logical_idx].GetDownstreamVector().IsConstNull() {
+			tid_idx := slices.Index(task.attrs, pkgcatalog.SystemRelAttr_ID)
+			retBatch.Vecs[logical_idx] = data.Vecs[tid_idx].GetDownstreamVector()
+			logutil.Info("LIDX-DEBUG vector sub", zap.Int("logical_id", data.Length()))
+		}
+	}
+
 	retBatch.SetRowCount(data.Length())
 	return retBatch, data.Deletes, releaseF, nil
 }
@@ -369,9 +379,7 @@ func (task *mergeObjectsTask) PrepareNewWriter() *ioutil.BlockWriter {
 		}
 		seqnums = append(seqnums, def.SeqNum)
 	}
-	if task.isTombstone {
-		seqnums = append(seqnums, objectio.SEQNUM_COMMITTS)
-	}
+	seqnums = append(seqnums, objectio.SEQNUM_COMMITTS)
 	sortkeyIsPK := false
 	sortkeyPos := -1
 

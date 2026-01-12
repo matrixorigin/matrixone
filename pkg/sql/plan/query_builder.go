@@ -77,21 +77,33 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 		}
 	}
 
+	var maxDop int64
+	maxDopInt, err := ctx.ResolveVariable("max_dop", true, false)
+	if err == nil {
+		if maxDopVal, ok := maxDopInt.(int64); ok {
+			maxDop = maxDopVal
+		}
+	}
+
 	return &QueryBuilder{
 		qry: &Query{
 			StmtType: queryType,
+			MaxDop:   int64(maxDop),
 		},
-		compCtx:            ctx,
-		ctxByNode:          []*BindContext{},
-		nameByColRef:       make(map[[2]int32]string),
-		nextBindTag:        0,
-		mysqlCompatible:    mysqlCompatible,
-		aggSpillMem:        aggSpillMem,
-		tag2Table:          make(map[int32]*TableDef),
-		tag2NodeID:         make(map[int32]int32),
-		isPrepareStatement: isPrepareStatement,
-		deleteNode:         make(map[uint64]int32),
-		skipStats:          skipStats,
+		compCtx:              ctx,
+		ctxByNode:            []*BindContext{},
+		nameByColRef:         make(map[[2]int32]string),
+		protectedScans:       make(map[int32]int),
+		projectSpecialGuards: make(map[int32]*specialIndexGuard),
+		nextBindTag:          0,
+		mysqlCompatible:      mysqlCompatible,
+		aggSpillMem:          aggSpillMem,
+		tag2Table:            make(map[int32]*TableDef),
+		tag2NodeID:           make(map[int32]int32),
+		isPrepareStatement:   isPrepareStatement,
+		deleteNode:           make(map[uint64]int32),
+		skipStats:            skipStats,
+		optimizationHistory:  make([]string, 0),
 	}
 }
 
@@ -189,6 +201,17 @@ func (builder *QueryBuilder) buildRemapErrorMessage(
 			sb.WriteString(fmt.Sprintf("   %s\n", exprStr))
 			sb.WriteString("\n")
 		}
+	}
+
+	// Optimization history
+	if len(builder.optimizationHistory) > 0 {
+		sb.WriteString("🔧 Optimization History:\n")
+		for _, hist := range builder.optimizationHistory {
+			sb.WriteString(fmt.Sprintf("   - %s\n", hist))
+		}
+		sb.WriteString("\n")
+	} else {
+		sb.WriteString("🔧 Optimization History: (no associatelaw applied)\n\n")
 	}
 
 	// Available columns
@@ -450,8 +473,10 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			increaseRefCnt(orderBy.Expr, 1, colRefCnt)
 		}
 
-		for _, blockOrderBy := range node.BlockOrderBy {
-			increaseRefCnt(blockOrderBy.Expr, 1, colRefCnt)
+		if node.IndexReaderParam != nil {
+			for _, orderBy := range node.IndexReaderParam.OrderBy {
+				increaseRefCnt(orderBy.Expr, 1, colRefCnt)
+			}
 		}
 
 		internalRemapping := &ColRefRemapping{
@@ -537,13 +562,15 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			}
 		}
 
-		remapInfo.tip = "BlockOrderBy"
-		for idx, blockOrderBy := range node.BlockOrderBy {
-			increaseRefCnt(blockOrderBy.Expr, -1, colRefCnt)
-			remapInfo.srcExprIdx = idx
-			err := builder.remapColRefForExpr(blockOrderBy.Expr, colMap, &remapInfo)
-			if err != nil {
-				return nil, err
+		remapInfo.tip = "IndexOrderBy"
+		if node.IndexReaderParam != nil {
+			for idx, orderBy := range node.IndexReaderParam.OrderBy {
+				increaseRefCnt(orderBy.Expr, -1, colRefCnt)
+				remapInfo.srcExprIdx = idx
+				err := builder.remapColRefForExpr(orderBy.Expr, colMap, &remapInfo)
+				if err != nil {
+					return nil, err
+				}
 			}
 		}
 
@@ -573,7 +600,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				remapping.addColRef([2]int32{orderFuncTag, 0})
 
 				node.ProjectList = append(node.ProjectList, &plan.Expr{
-					Typ: node.BlockOrderBy[0].Expr.Typ,
+					Typ: node.IndexReaderParam.OrderBy[0].Expr.Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: 0,
@@ -2074,7 +2101,9 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		}
 		// after determine shuffle, be careful when calling ReCalcNodeStats again.
 		// needResetHashMapStats should always be false from here
+		builder.prepareSpecialIndexGuards(rootID)
 		rootID, err = builder.applyIndices(rootID, colRefCnt, make(map[[2]int32]*plan.Expr))
+		builder.resetSpecialIndexGuards()
 		if err != nil {
 			return nil, err
 		}
@@ -2142,7 +2171,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 	return builder.qry, nil
 }
 
-func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.OrderBy, astLimit *tree.Limit, ctx *BindContext, isRoot bool) (int32, error) {
+func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.OrderBy, astLimit *tree.Limit, astRankOption *tree.RankOption, ctx *BindContext, isRoot bool) (int32, error) {
 	if builder.isForUpdate {
 		return 0, moerr.NewInternalError(builder.GetContext(), "not support select union for update")
 	}
@@ -2429,7 +2458,14 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 		}, ctx)
 	}
 
-	// append limit
+	// append limit / rank option
+	var unionRankOption *plan.RankOption
+	if astRankOption != nil {
+		if unionRankOption, err = parseRankOption(astRankOption.Option, builder.GetContext()); err != nil {
+			return 0, err
+		}
+	}
+
 	if astLimit != nil {
 		node := builder.qry.Nodes[lastNodeID]
 
@@ -2453,16 +2489,12 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 			}
 		}
 
-		// Parse RankOption if ByRank is true
-		if astLimit.ByRank && astLimit.Option != nil && len(astLimit.Option) > 0 {
-			rankOption, err := parseRankOption(astLimit.Option, builder.GetContext())
-			if err != nil {
-				return 0, err
-			}
-			if rankOption != nil && rankOption.Mode != "" {
-				node.RankOption = rankOption
-			}
+		if unionRankOption != nil && unionRankOption.Mode != "" {
+			node.RankOption = unionRankOption
 		}
+	} else if unionRankOption != nil && unionRankOption.Mode != "" {
+		node := builder.qry.Nodes[lastNodeID]
+		node.RankOption = unionRankOption
 	}
 
 	// append result PROJECT node
@@ -2500,38 +2532,6 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 
 const NameGroupConcat = "group_concat"
 const NameClusterCenters = "cluster_centers"
-
-func (bc *BindContext) generateForceWinSpecList() ([]*plan.Expr, error) {
-	windowsSpecList := make([]*plan.Expr, 0, len(bc.aggregates))
-	j := 0
-
-	if len(bc.windows) < 1 {
-		panic("no winspeclist to be used to force")
-	}
-
-	for i := range bc.aggregates {
-		windowExpr := DeepCopyExpr(bc.windows[j])
-		windowSpec := windowExpr.GetW()
-		if windowSpec == nil {
-			panic("no winspeclist to be used to force")
-		}
-		windowSpec.WindowFunc = DeepCopyExpr(bc.aggregates[i])
-		windowExpr.Typ = bc.aggregates[i].Typ
-		windowSpec.Name = bc.aggregates[i].GetF().Func.ObjName
-
-		if windowSpec.Name == NameGroupConcat {
-			if j < len(bc.windows)-1 {
-				j++
-			}
-			// NOTE: no need to include NameClusterCenters
-		} else {
-			windowSpec.OrderBy = nil
-		}
-		windowsSpecList = append(windowsSpecList, windowExpr)
-	}
-
-	return windowsSpecList, nil
-}
 
 func (builder *QueryBuilder) bindNoRecursiveCte(
 	ctx *BindContext,
@@ -2880,6 +2880,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 
 	astOrderBy := stmt.OrderBy
 	astLimit := stmt.Limit
+	astRankOption := stmt.RankOption
 	astTimeWindow := stmt.TimeWindow
 
 	ctx.groupTag = builder.genNewBindTag()
@@ -2921,6 +2922,12 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 					return 0, moerr.NewSyntaxError(builder.GetContext(), "multiple LIMIT clauses not allowed")
 				}
 				astLimit = selectClause.Select.Limit
+			}
+			if selectClause.Select.RankOption != nil {
+				if astRankOption != nil {
+					return 0, moerr.NewSyntaxError(builder.GetContext(), "multiple BY RANK clauses not allowed")
+				}
+				astRankOption = selectClause.Select.RankOption
 			}
 			stmt = selectClause.Select
 
@@ -2997,7 +3004,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 					}
 					leftClause = &tree.UnionClause{Type: tree.UNION, Left: leftClause, Right: stmt, All: true}
 				}
-				return builder.buildUnion(leftClause, astOrderBy, astLimit, ctx, isRoot)
+				return builder.buildUnion(leftClause, astOrderBy, astLimit, astRankOption, ctx, isRoot)
 			}
 		}
 
@@ -3015,7 +3022,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			rollupFilter = selectClause.Having.RollupHaving
 		}
 	case *tree.UnionClause:
-		return builder.buildUnion(selectClause, astOrderBy, astLimit, ctx, isRoot)
+		return builder.buildUnion(selectClause, astOrderBy, astLimit, astRankOption, ctx, isRoot)
 	case *tree.ValuesClause:
 		if nodeID, selectList, err = builder.bindValues(ctx, selectClause); err != nil {
 			return
@@ -3059,12 +3066,12 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	var boundOffsetExpr *Expr
 	var boundCountExpr *Expr
 	var rankOption *plan.RankOption
-	if astLimit != nil {
-		if boundOffsetExpr, boundCountExpr, rankOption, err = builder.bindLimit(ctx, astLimit); err != nil {
+	if astLimit != nil || astRankOption != nil {
+		if boundOffsetExpr, boundCountExpr, rankOption, err = builder.bindLimit(ctx, astLimit, astRankOption); err != nil {
 			return
 		}
 
-		if builder.isForUpdate {
+		if astLimit != nil && builder.isForUpdate {
 			lockNode.Children[0] = nodeID
 			nodeID = builder.appendNode(lockNode, ctx)
 		}
@@ -3089,29 +3096,35 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		}
 	}
 
-	if ctx.forceWindows {
-		ctx.tmpGroups = ctx.groups
-		ctx.windows, _ = ctx.generateForceWinSpecList()
-		ctx.aggregates = nil
-		ctx.groups = nil
-
-		for i := range ctx.projects {
-			ctx.projects[i] = DeepProcessExprForGroupConcat(ctx.projects[i], ctx)
-		}
-
-		for i := range boundHavingList {
-			boundHavingList[i] = DeepProcessExprForGroupConcat(boundHavingList[i], ctx)
-		}
-
-		for i := range boundOrderBys {
-			boundOrderBys[i].Expr = DeepProcessExprForGroupConcat(boundOrderBys[i].Expr, ctx)
-		}
-
-	}
-
 	// FIXME: delete this when SINGLE join is ready
 	if len(ctx.groups) == 0 && len(ctx.aggregates) > 0 {
 		ctx.hasSingleRow = true
+	}
+
+	// For group_concat with ORDER BY, we need to sort the data before aggregation.
+	// The sort key should be: GROUP BY columns (if any) + ORDER BY columns.
+	// This ensures that within each group, the data arrives in the correct order.
+	if len(ctx.groupConcatOrderBys) > 0 && (len(ctx.groups) > 0 || len(ctx.aggregates) > 0) {
+		var sortSpecs []*plan.OrderBySpec
+
+		// First, add GROUP BY columns to sort key (ASC by default)
+		// This ensures data is grouped together before applying group_concat order
+		for _, groupExpr := range ctx.groups {
+			sortSpecs = append(sortSpecs, &plan.OrderBySpec{
+				Expr: DeepCopyExpr(groupExpr),
+				Flag: plan.OrderBySpec_ASC,
+			})
+		}
+
+		// Then, add group_concat ORDER BY columns
+		sortSpecs = append(sortSpecs, ctx.groupConcatOrderBys...)
+
+		// Insert Sort node before Agg
+		nodeID = builder.appendNode(&plan.Node{
+			NodeType: plan.Node_SORT,
+			Children: []int32{nodeID},
+			OrderBy:  sortSpecs,
+		}, ctx)
 	}
 
 	// append AGG node or SAMPLE node
@@ -3761,46 +3774,31 @@ func (builder *QueryBuilder) bindOrderBy(
 func (builder *QueryBuilder) bindLimit(
 	ctx *BindContext,
 	astLimit *tree.Limit,
+	astRankOption *tree.RankOption,
 ) (boundOffsetExpr, boundCountExpr *Expr, rankOption *plan.RankOption, err error) {
-	limitBinder := NewLimitBinder(builder, ctx)
-	if astLimit.Offset != nil {
-		if boundOffsetExpr, err = limitBinder.BindExpr(astLimit.Offset, 0, true); err != nil {
-			return
-		}
-	}
-	if astLimit.Count != nil {
-		if boundCountExpr, err = limitBinder.BindExpr(astLimit.Count, 0, true); err != nil {
-			return
-		}
-
-		if cExpr, ok := boundCountExpr.Expr.(*plan.Expr_Lit); ok {
-			if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
-				ctx.hasSingleRow = c.U64Val == 1
+	if astLimit != nil {
+		limitBinder := NewLimitBinder(builder, ctx)
+		if astLimit.Offset != nil {
+			if boundOffsetExpr, err = limitBinder.BindExpr(astLimit.Offset, 0, true); err != nil {
+				return
 			}
 		}
-	}
+		if astLimit.Count != nil {
+			if boundCountExpr, err = limitBinder.BindExpr(astLimit.Count, 0, true); err != nil {
+				return
+			}
 
-	// Parse RankOption if ByRank is true
-	if astLimit.ByRank && astLimit.Option != nil && len(astLimit.Option) > 0 {
-		rankOption = &plan.RankOption{}
-
-		// Helper function to get value from map case-insensitively
-		getOptionValue := func(key string) (string, bool) {
-			keyLower := strings.ToLower(key)
-			for k, v := range astLimit.Option {
-				if strings.ToLower(k) == keyLower {
-					return v, true
+			if cExpr, ok := boundCountExpr.Expr.(*plan.Expr_Lit); ok {
+				if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
+					ctx.hasSingleRow = c.U64Val == 1
 				}
 			}
-			return "", false
 		}
+	}
 
-		if mode, ok := getOptionValue("mode"); ok {
-			modeLower := strings.ToLower(strings.TrimSpace(mode))
-			if modeLower != "pre" && modeLower != "post" {
-				return nil, nil, nil, moerr.NewInvalidInputf(builder.GetContext(), "mode must be 'pre' or 'post', got '%s'", mode)
-			}
-			rankOption.Mode = modeLower
+	if astRankOption != nil && astRankOption.Option != nil {
+		if rankOption, err = parseRankOption(astRankOption.Option, builder.GetContext()); err != nil {
+			return nil, nil, nil, err
 		}
 	}
 
@@ -3942,17 +3940,15 @@ func (builder *QueryBuilder) appendAggNode(
 		return
 	}
 
-	if !ctx.forceWindows {
-		nodeID = builder.appendNode(&plan.Node{
-			NodeType:     plan.Node_AGG,
-			Children:     []int32{nodeID},
-			GroupBy:      ctx.groups,
-			GroupingFlag: ctx.groupingFlag,
-			AggList:      ctx.aggregates,
-			BindingTags:  []int32{ctx.groupTag, ctx.aggregateTag},
-			SpillMem:     builder.aggSpillMem,
-		}, ctx)
-	}
+	nodeID = builder.appendNode(&plan.Node{
+		NodeType:     plan.Node_AGG,
+		Children:     []int32{nodeID},
+		GroupBy:      ctx.groups,
+		GroupingFlag: ctx.groupingFlag,
+		AggList:      ctx.aggregates,
+		BindingTags:  []int32{ctx.groupTag, ctx.aggregateTag},
+		SpillMem:     builder.aggSpillMem,
+	}, ctx)
 
 	if len(boundHavingList) > 0 {
 		var newFilterList []*plan.Expr
@@ -4071,27 +4067,6 @@ func (builder *QueryBuilder) appendWindowNode(
 
 	for name, id := range ctx.windowByAst {
 		builder.nameByColRef[[2]int32{ctx.windowTag, id}] = name
-	}
-
-	if ctx.forceWindows {
-		if len(boundHavingList) > 0 {
-			var newFilterList []*plan.Expr
-			var expr *plan.Expr
-
-			for _, cond := range boundHavingList {
-				if nodeID, expr, err = builder.flattenSubqueries(nodeID, cond, ctx); err != nil {
-					return
-				}
-
-				newFilterList = append(newFilterList, expr)
-			}
-
-			nodeID = builder.appendNode(&plan.Node{
-				NodeType:   plan.Node_FILTER,
-				Children:   []int32{nodeID},
-				FilterList: newFilterList,
-			}, ctx)
-		}
 	}
 
 	newNodeID = nodeID
@@ -4214,50 +4189,6 @@ func makeHelpFuncForTimeWindow(astTimeWindow *tree.TimeWindow) (*helpFunc, error
 		}
 	}
 	return h, nil
-}
-
-func DeepProcessExprForGroupConcat(expr *Expr, ctx *BindContext) *Expr {
-	if expr == nil {
-		return nil
-	}
-	switch item := expr.Expr.(type) {
-	case *plan.Expr_Col:
-		if item.Col.RelPos == ctx.groupTag {
-			expr = DeepCopyExpr(ctx.tmpGroups[item.Col.ColPos])
-		}
-		if item.Col.RelPos == ctx.aggregateTag {
-			item.Col.RelPos = ctx.windowTag
-		}
-
-	case *plan.Expr_F:
-		for i, arg := range item.F.Args {
-			item.F.Args[i] = DeepProcessExprForGroupConcat(arg, ctx)
-		}
-	case *plan.Expr_W:
-		for i, p := range item.W.PartitionBy {
-			item.W.PartitionBy[i] = DeepProcessExprForGroupConcat(p, ctx)
-		}
-		for i, o := range item.W.OrderBy {
-			item.W.OrderBy[i].Expr = DeepProcessExprForGroupConcat(o.Expr, ctx)
-		}
-
-	case *plan.Expr_Sub:
-		DeepProcessExprForGroupConcat(item.Sub.Child, ctx)
-
-	case *plan.Expr_Corr:
-		if item.Corr.RelPos == ctx.groupTag {
-			expr = DeepCopyExpr(ctx.tmpGroups[item.Corr.ColPos])
-		}
-		if item.Corr.RelPos == ctx.aggregateTag {
-			item.Corr.RelPos = ctx.windowTag
-		}
-	case *plan.Expr_List:
-		for i, ie := range item.List.List {
-			item.List.List[i] = DeepProcessExprForGroupConcat(ie, ctx)
-		}
-	}
-	return expr
-
 }
 
 func appendSelectList(
@@ -4661,6 +4592,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 	case *tree.TableName:
 		schema := string(tbl.SchemaName)
 		table := string(tbl.ObjectName)
+		originTableName := table
 		if len(table) == 0 || len(schema) == 0 && table == "dual" { //special table name
 			//special dual cases.
 			//CORNER CASE 1:
@@ -4856,6 +4788,11 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 			ScanSnapshot: snapshot,
 		}, ctx)
 
+		node := builder.qry.Nodes[nodeID]
+		if node.TableDef != nil {
+			node.TableDef.OriginalName = originTableName
+		}
+
 	case *tree.JoinTableExpr:
 		if tbl.Right == nil {
 			return builder.buildTable(tbl.Left, ctx, preNodeId, leftCtx)
@@ -5020,8 +4957,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		plan.Node_RECURSIVE_SCAN,
 		plan.Node_SOURCE_SCAN,
 	}
-	//lower := builder.compCtx.GetLowerCaseTableNames()
-
+	lower := builder.compCtx.GetLowerCaseTableNames()
 	if slices.Contains(scanNodes, node.NodeType) {
 		if (node.NodeType == plan.Node_VALUE_SCAN || node.NodeType == plan.Node_SINK_SCAN || node.NodeType == plan.Node_RECURSIVE_SCAN) && node.TableDef == nil {
 			return nil
@@ -5030,6 +4966,10 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 			return moerr.NewSyntaxErrorf(builder.GetContext(), "table %q has %d columns available but %d columns specified", alias.Alias, len(node.TableDef.Cols), len(alias.Cols))
 		}
 
+		table = node.TableDef.Name
+		if node.TableDef.OriginalName != "" {
+			table = node.TableDef.OriginalName
+		}
 		if alias.Alias != "" {
 			table = string(alias.Alias)
 		} else {
@@ -5039,8 +4979,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 			if node.NodeType == plan.Node_RECURSIVE_SCAN || node.NodeType == plan.Node_SINK_SCAN {
 				return nil
 			}
-
-			table = node.TableDef.Name
+			table = tree.NewCStr(table, lower).Compare()
 		}
 
 		if _, ok := ctx.bindingByTable[table]; ok {
@@ -5187,13 +5126,13 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 		return 0, err
 	}
 
-	nodeID := builder.appendNode(&plan.Node{
+	node := &plan.Node{
 		NodeType:     plan.Node_JOIN,
 		Children:     []int32{leftChildID, rightChildID},
 		JoinType:     joinType,
 		ExtraOptions: tbl.Option,
-	}, ctx)
-	node := builder.qry.Nodes[nodeID]
+	}
+	nodeID := builder.appendNode(node, ctx)
 
 	ctx.binder = NewTableBinder(builder, ctx)
 
@@ -5380,7 +5319,7 @@ func (builder *QueryBuilder) GetContext() context.Context {
 // parseRankOption parses rank options from a map of option key-value pairs.
 // It extracts the "mode" option case-insensitively and validates it.
 // Returns a RankOption with the parsed mode if valid, or nil if no mode is specified.
-// Returns an error if the mode value is invalid (must be "pre" or "post").
+// Returns an error if the mode value is invalid (must be "pre", "post", or "force").
 func parseRankOption(options map[string]string, ctx context.Context) (*plan.RankOption, error) {
 	if len(options) == 0 {
 		return nil, nil
@@ -5401,8 +5340,12 @@ func parseRankOption(options map[string]string, ctx context.Context) (*plan.Rank
 
 	if mode, ok := getOptionValue("mode"); ok {
 		modeLower := strings.ToLower(strings.TrimSpace(mode))
-		if modeLower != "pre" && modeLower != "post" {
-			return nil, moerr.NewInvalidInputf(ctx, "mode must be 'pre' or 'post', got '%s'", mode)
+		// Mode options:
+		// - "pre": Enable vector index with BloomFilter pushdown
+		// - "post": Enable vector index with standard behavior (post-filtering)
+		// - "force": Force disable vector index, use full table scan
+		if modeLower != "pre" && modeLower != "post" && modeLower != "force" {
+			return nil, moerr.NewInvalidInputf(ctx, "mode must be 'pre', 'post', or 'force', got '%s'", mode)
 		}
 		rankOption.Mode = modeLower
 	}

@@ -117,6 +117,7 @@ const (
 	FPCreateUser
 	FPDropUser
 	FPAlterUser
+	FPAlterRole
 	FPCreateRole
 	FPDropRole
 	FPCreateFunction
@@ -440,6 +441,7 @@ var baseSessionAllocator = sync.OnceValue(func() malloc.Allocator {
 		metric.MallocGauge.WithLabelValues("session-inuse"),
 		metric.MallocCounter.WithLabelValues("session-allocate-objects"),
 		metric.MallocGauge.WithLabelValues("session-inuse-objects"),
+		metric.OffHeapInuseGauge.WithLabelValues("session"),
 	)
 	return allocator
 })
@@ -465,7 +467,7 @@ func (s *SessionAllocator) Alloc(capacity int) ([]byte, error) {
 }
 
 func (s SessionAllocator) Free(bs []byte) {
-	s.allocator.Deallocate(bs, malloc.NoClear)
+	s.allocator.Deallocate(bs)
 }
 
 var _ FeSession = &Session{}
@@ -544,13 +546,15 @@ type FeSession interface {
 	getCachedPlan(sql string) *cachedPlan
 	EnterFPrint(idx int)
 	ExitFPrint(idx int)
-	EnterRunSql()
-	ExitRunSql()
 	SetStaticTxnInfo(string)
 	GetStaticTxnInfo() string
 	GetShareTxnBackgroundExec(ctx context.Context, newRawBatch bool) BackgroundExec
 	GetMySQLParser() *mysql.MySQLParser
 	InitBackExec(txnOp TxnOperator, db string, callBack outputCallBackFunc, opts ...*BackgroundExecOption) BackgroundExec
+	GetTempTable(dbName, alias string) (string, bool)
+	AddTempTable(dbName, alias, realName string)
+	RemoveTempTable(dbName, alias string)
+	RemoveTempTableByRealName(realName string)
 	SessionLogger
 }
 
@@ -688,6 +692,7 @@ type feSessionImpl struct {
 	debugStr     string
 	disableTrace bool
 	respr        Responser
+	runSQLTokens []uint64
 	//refreshed once
 	staticTxnInfo string
 	// mysql parser
@@ -733,19 +738,29 @@ func (ses *feSessionImpl) ExitFPrint(idx int) {
 	}
 }
 
-func (ses *feSessionImpl) EnterRunSql() {
-	if ses != nil {
-		if ses.txnHandler != nil && ses.txnHandler.txnOp != nil {
-			ses.txnHandler.txnOp.EnterRunSql()
-		}
+func (ses *feSessionImpl) pushRunSQLToken(token uint64) {
+	if token == 0 {
+		return
 	}
+	ses.runSQLTokens = append(ses.runSQLTokens, token)
 }
-func (ses *feSessionImpl) ExitRunSql() {
-	if ses != nil {
-		if ses.txnHandler != nil && ses.txnHandler.txnOp != nil {
-			ses.txnHandler.txnOp.ExitRunSql()
-		}
+
+func (ses *feSessionImpl) popRunSQLToken() uint64 {
+	n := len(ses.runSQLTokens)
+	if n == 0 {
+		return 0
 	}
+	token := ses.runSQLTokens[n-1]
+	ses.runSQLTokens = ses.runSQLTokens[:n-1]
+	return token
+}
+
+func (ses *feSessionImpl) currentRunSQLToken() uint64 {
+	n := len(ses.runSQLTokens)
+	if n == 0 {
+		return 0
+	}
+	return ses.runSQLTokens[n-1]
 }
 
 // Close releases all reference.
@@ -777,6 +792,7 @@ func (ses *feSessionImpl) Reset() {
 		ses.txnCompileCtx = nil
 	}
 	ses.sql = ""
+	ses.runSQLTokens = nil
 	ses.gSysVars = nil
 	ses.sesSysVars = nil
 	ses.allResultSet = nil
@@ -1272,6 +1288,8 @@ type MysqlReader interface {
 	Authenticate(ctx context.Context) error
 	ParseSendLongData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error
 	ParseExecuteData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error
+	// Disconnect closes the underlying network connection to forcefully disconnect the client.
+	Disconnect() error
 }
 
 // MysqlWriter write batch & control packets using mysql protocol format

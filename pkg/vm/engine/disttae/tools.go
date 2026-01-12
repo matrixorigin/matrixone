@@ -79,6 +79,7 @@ func genWriteReqs(
 			// To tell TN, this is an update due to alter, do not touch catalog
 			pe.TableName = "alter"
 		}
+
 		entries = append(entries, pe)
 	}
 

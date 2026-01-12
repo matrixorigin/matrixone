@@ -37,7 +37,7 @@ func benchmarkAllocator(
 			if err != nil {
 				b.Fatal(err)
 			}
-			dec.Deallocate(NoHints)
+			dec.Deallocate()
 		}
 	})
 
@@ -50,7 +50,7 @@ func benchmarkAllocator(
 				if err != nil {
 					b.Fatal(err)
 				}
-				dec.Deallocate(NoHints)
+				dec.Deallocate()
 			}
 		})
 	})

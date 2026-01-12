@@ -51,9 +51,6 @@ func (r *ConstantFold) Apply(node *plan.Node, _ *plan.Query, proc *process.Proce
 	if node.Limit != nil {
 		node.Limit = r.constantFold(node.Limit, proc)
 	}
-	if node.BlockLimit != nil {
-		node.BlockLimit = r.constantFold(node.BlockLimit, proc)
-	}
 	if node.Offset != nil {
 		node.Offset = r.constantFold(node.Offset, proc)
 	}
@@ -100,8 +97,17 @@ func (r *ConstantFold) Apply(node *plan.Node, _ *plan.Query, proc *process.Proce
 		orderBy.Expr = r.constantFold(orderBy.Expr, proc)
 	}
 
-	for _, orderBy := range node.BlockOrderBy {
-		orderBy.Expr = r.constantFold(orderBy.Expr, proc)
+	if node.IndexReaderParam != nil {
+		for _, orderBy := range node.IndexReaderParam.OrderBy {
+			orderBy.Expr = r.constantFold(orderBy.Expr, proc)
+		}
+
+		node.IndexReaderParam.Limit = r.constantFold(node.IndexReaderParam.Limit, proc)
+
+		if distRange := node.IndexReaderParam.DistRange; distRange != nil {
+			distRange.LowerBound = r.constantFold(distRange.LowerBound, proc)
+			distRange.UpperBound = r.constantFold(distRange.UpperBound, proc)
+		}
 	}
 
 	// for i := range n.TblFuncExprList {
@@ -118,6 +124,10 @@ func (r *ConstantFold) Apply(node *plan.Node, _ *plan.Query, proc *process.Proce
 }
 
 func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *plan.Expr {
+	if expr == nil {
+		return expr
+	}
+
 	if expr.Typ.Id == int32(types.T_interval) {
 		panic(moerr.NewInternalError(proc.Ctx, "not supported type INTERVAL"))
 	}
@@ -166,6 +176,7 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 	}
 	overloadID := fn.Func.GetObj()
 	f, exists := function.GetFunctionByIdWithoutError(overloadID)
+
 	if !exists {
 		return expr
 	}
@@ -184,6 +195,12 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 		return expr
 	}
 	if !IsConstant(expr, false) {
+		return expr
+	}
+
+	// Skip constant folding for division/modulo by zero.
+	// This allows runtime to check sql_mode and statement type for proper error handling.
+	if IsDivisionByZeroConstant(fn) {
 		return expr
 	}
 
@@ -639,10 +656,15 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 }
 
 func IsConstant(e *plan.Expr, varAndParamIsConst bool) bool {
-	switch ef := e.Expr.(type) {
+	switch ef := e.GetExpr().(type) {
 	case *plan.Expr_Lit, *plan.Expr_T, *plan.Expr_Vec:
 		return true
 	case *plan.Expr_F:
+		// CASE expressions should always be evaluated at runtime to preserve
+		// branch semantics; treat them as non-constant.
+		if fid, _ := function.DecodeOverloadID(ef.F.Func.GetObj()); fid == function.CASE {
+			return false
+		}
 		overloadID := ef.F.Func.GetObj()
 		f, exists := function.GetFunctionByIdWithoutError(overloadID)
 		if !exists {
@@ -667,11 +689,68 @@ func IsConstant(e *plan.Expr, varAndParamIsConst bool) bool {
 			}
 		}
 		return true
-	case *plan.Expr_P:
-		return varAndParamIsConst
-	case *plan.Expr_V:
+	case *plan.Expr_P, *plan.Expr_V:
 		return varAndParamIsConst
 	default:
 		return false
 	}
+}
+
+// IsDivisionByZeroConstant checks if the expression is a division/modulo operation
+// where the divisor is a constant zero or either operand is NULL.
+// We skip constant folding for such cases to allow runtime to properly handle them.
+func IsDivisionByZeroConstant(fn *plan.Function) bool {
+	fid, _ := function.DecodeOverloadID(fn.Func.GetObj())
+	if fid != function.DIV && fid != function.INTEGER_DIV && fid != function.MOD {
+		return false
+	}
+	if len(fn.Args) < 2 {
+		return false
+	}
+
+	// Check if either operand is NULL
+	for _, arg := range fn.Args {
+		lit := arg.GetLit()
+		if lit != nil && lit.GetIsnull() {
+			return true
+		}
+	}
+
+	divisor := fn.Args[1]
+	lit := divisor.GetLit()
+	if lit == nil {
+		return false
+	}
+	return isZeroLiteral(lit)
+}
+
+// isZeroLiteral checks if a literal value is zero
+func isZeroLiteral(lit *plan.Literal) bool {
+	switch v := lit.Value.(type) {
+	case *plan.Literal_I8Val:
+		return v.I8Val == 0
+	case *plan.Literal_I16Val:
+		return v.I16Val == 0
+	case *plan.Literal_I32Val:
+		return v.I32Val == 0
+	case *plan.Literal_I64Val:
+		return v.I64Val == 0
+	case *plan.Literal_U8Val:
+		return v.U8Val == 0
+	case *plan.Literal_U16Val:
+		return v.U16Val == 0
+	case *plan.Literal_U32Val:
+		return v.U32Val == 0
+	case *plan.Literal_U64Val:
+		return v.U64Val == 0
+	case *plan.Literal_Fval:
+		return v.Fval == 0
+	case *plan.Literal_Dval:
+		return v.Dval == 0
+	case *plan.Literal_Decimal64Val:
+		return v.Decimal64Val.A == 0
+	case *plan.Literal_Decimal128Val:
+		return v.Decimal128Val.A == 0 && v.Decimal128Val.B == 0
+	}
+	return false
 }

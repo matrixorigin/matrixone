@@ -15,6 +15,8 @@
 package v4_0_0
 
 import (
+	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
@@ -26,11 +28,16 @@ var clusterUpgEntries = []versions.UpgradeEntry{
 	upg_mo_iscp_log_new,
 	upg_mo_iscp_task,
 	upg_mo_publication_task,
+	upg_mo_index_update_new,
 	upg_create_mo_branch_metadata,
 	upg_rename_system_stmt_info_4000,
 	upg_create_system_stmt_info_4000,
 	upg_rename_system_metrics_metric_4000,
 	upg_create_system_metrics_metric_4000,
+	upg_create_mo_feature_limit,
+	upg_alter_mo_pitr,
+	upg_create_mo_feature_registry,
+	upg_init_mo_feature_registry,
 }
 
 var upg_mo_iscp_log_new = versions.UpgradeEntry{
@@ -65,6 +72,16 @@ var upg_mo_publication_task = versions.UpgradeEntry{
 	},
 }
 
+var upg_mo_index_update_new = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MO_INDEX_UPDATE,
+	UpgType:   versions.CREATE_NEW_TABLE,
+	UpgSql:    frontend.MoCatalogMoIndexUpdateDDL,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		return versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, catalog.MO_INDEX_UPDATE)
+	},
+}
+
 var upg_create_mo_branch_metadata = versions.UpgradeEntry{
 	Schema:    catalog.MO_CATALOG,
 	TableName: catalog.MO_BRANCH_METADATA,
@@ -73,6 +90,61 @@ var upg_create_mo_branch_metadata = versions.UpgradeEntry{
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		exist, err := versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA)
 		return exist, err
+	},
+}
+
+var upg_create_mo_feature_limit = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MO_FEATURE_LIMIT,
+	UpgType:   versions.CREATE_NEW_TABLE,
+	UpgSql:    frontend.MoCatalogFeatureLimitDDL,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		exist, err := versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, catalog.MO_FEATURE_LIMIT)
+		return exist, err
+	},
+}
+
+var upg_create_mo_feature_registry = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MO_FEATURE_REGISTRY,
+	UpgType:   versions.CREATE_NEW_TABLE,
+	UpgSql:    frontend.MoCatalogFeatureRegistryDDL,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		exist, err := versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, catalog.MO_FEATURE_REGISTRY)
+		return exist, err
+	},
+}
+
+var upg_init_mo_feature_registry = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MO_FEATURE_REGISTRY,
+	UpgType:   versions.CREATE_NEW_TABLE,
+	UpgSql:    frontend.MoCatalogFeatureRegistryInitData,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		exist, err := versions.CheckTableDataExist(txn, accountId, fmt.Sprintf(
+			"select * from %s.%s where feature_code in ('SNAPSHOT', 'BRANCH')",
+			catalog.MO_CATALOG,
+			catalog.MO_FEATURE_REGISTRY,
+		))
+		return exist, err
+	},
+}
+
+var upg_alter_mo_pitr = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MO_PITR,
+	UpgType:   versions.ADD_COLUMN,
+	UpgSql: fmt.Sprintf(
+		"alter table %s.%s add column %s varchar(32) not null default 'user'",
+		catalog.MO_CATALOG, catalog.MO_PITR, kind,
+	),
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		info, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, catalog.MO_PITR, "kind")
+		if err != nil {
+			return false, err
+		}
+
+		return info.IsExits, nil
 	},
 }
 

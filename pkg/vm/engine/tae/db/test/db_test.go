@@ -8061,7 +8061,8 @@ func TestMergeGC(t *testing.T) {
 	rel, err := db1.GetRelationByName(schema2.Name)
 	assert.NoError(t, err)
 	for i := 0; i < 10; i++ {
-		filter := handle.NewEQFilter(bats[0].Vecs[2].Get(i))
+		// Fixed #23368: bats is 99 bats each with length 1, so we need bats[i].Get(0)
+		filter := handle.NewEQFilter(bats[i].Vecs[2].Get(0))
 		id, offset, err := rel.GetByFilter(context.Background(), filter)
 		assert.NoError(t, err)
 		_, _, err = rel.GetValue(id, offset, 2, false)

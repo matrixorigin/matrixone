@@ -586,10 +586,8 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context, isTombstone bool
 		}
 		seqnums = append(seqnums, def.SeqNum)
 	}
-	if isTombstone {
-		readColIdxs = append(readColIdxs, objectio.SEQNUM_COMMITTS)
-		seqnums = append(seqnums, objectio.SEQNUM_COMMITTS)
-	}
+	readColIdxs = append(readColIdxs, objectio.SEQNUM_COMMITTS)
+	seqnums = append(seqnums, objectio.SEQNUM_COMMITTS)
 
 	// read from aobjects
 	readedBats := make([]*containers.Batch, 0, len(objHandles))

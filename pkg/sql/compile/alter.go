@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/idxcron"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"go.uber.org/zap"
 )
@@ -135,7 +136,14 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 	}
 
 	// 3. create temporary replica table which doesn't have foreign key constraints
-	err = c.runSql(qry.CreateTmpTableSql)
+	// Get logicalId from tableDef and pass it when creating the temporary table
+	oldLogicalId := qry.GetTableDef().GetLogicalId()
+	createTmpOpts := executor.StatementOption{}
+
+	if oldLogicalId != 0 {
+		createTmpOpts = createTmpOpts.WithKeepLogicalId(oldLogicalId)
+	}
+	err = c.runSqlWithOptions(qry.CreateTmpTableSql, createTmpOpts)
 	if err != nil {
 		c.proc.Error(c.proc.Ctx, "Create copy table for alter table",
 			zap.String("databaseName", dbName),
@@ -165,6 +173,12 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 	// and we don't want iscp to run with temp table so drop pitr and iscp job with the temp table here
 	newTmpTableDef := newRel.CopyTableDef(c.proc.Ctx)
 	err = DropAllIndexCdcTasks(c, newTmpTableDef, dbName, qry.CopyTableDef.Name)
+	if err != nil {
+		return err
+	}
+
+	// Idxcron: remove index update tasks with temp table id
+	err = DropAllIndexUpdateTasks(c, newTmpTableDef, dbName, qry.CopyTableDef.Name)
 	if err != nil {
 		return err
 	}
@@ -267,22 +281,50 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 						continue
 					}
 
-					valid, err := checkValidIndexCdc(newTableDef, indexDef.IndexName)
-					if err != nil {
-						return err
-					}
-
-					if valid {
-						// index table may not be fully sync'd with source table via ISCP during alter table
-						// clone index table (with ISCP) may not be a complete clone
-						// so register ISCP job with startFromNow = false
-						sinker_type := getSinkerTypeFromAlgo(indexDef.IndexAlgo)
-						err = CreateIndexCdcTask(c, dbName, newTableDef.Name, indexDef.IndexName, sinker_type, false, "")
+					{
+						// ISCP
+						valid, err := checkValidIndexCdc(newTableDef, indexDef.IndexName)
 						if err != nil {
 							return err
 						}
 
-						logutil.Infof("ISCP register unaffected index db=%s, table=%s, index=%s", dbName, newTableDef.Name, indexDef.IndexName)
+						if valid {
+							// index table may not be fully sync'd with source table via ISCP during alter table
+							// clone index table (with ISCP) may not be a complete clone
+							// so register ISCP job with startFromNow = false
+							sinker_type := getSinkerTypeFromAlgo(indexDef.IndexAlgo)
+							err = CreateIndexCdcTask(c, dbName, newTableDef.Name, indexDef.IndexName, sinker_type, false, "")
+							if err != nil {
+								return err
+							}
+
+							logutil.Infof("ISCP register unaffected index db=%s, table=%s, index=%s", dbName, newTableDef.Name, indexDef.IndexName)
+						}
+					}
+
+					{
+						// idxcron
+						metadata, _, err := getIvfflatMetadata(c)
+						if err != nil {
+							return err
+						}
+
+						if catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) {
+
+							err = idxcron.RegisterUpdate(c.proc.Ctx,
+								c.proc.GetService(),
+								c.proc.GetTxnOperator(),
+								id,
+								dbName,
+								newTableDef.Name,
+								indexDef.IndexName,
+								idxcron.Action_Ivfflat_Reindex,
+								string(metadata))
+
+							if err != nil {
+								return err
+							}
+						}
 					}
 
 					unaffectedIndexProcessed[indexDef.IndexName] = true
@@ -326,7 +368,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 			case catalog.MoIndexIvfFlatAlgo.ToString():
 				err = s.handleVectorIvfFlatIndex(
 					c, id, extra, dbSource, multiTableIndex.IndexDefs,
-					qry.Database, newTableDef, nil,
+					qry.Database, newTableDef, nil, false,
 				)
 			case catalog.MoIndexHnswAlgo.ToString():
 				err = s.handleVectorHnswIndex(

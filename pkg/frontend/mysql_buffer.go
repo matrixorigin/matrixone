@@ -25,8 +25,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -187,25 +185,35 @@ type Conn struct {
 	packetInBuf       int
 	allowedPacketSize int
 	timeout           time.Duration
-	allocator         *BufferAllocator
-	ses               atomic.Pointer[holder[*Session]]
-	closeFunc         sync.Once
-	service           string
+	readTimeout       time.Duration
+	writeTimeout      time.Duration
+	// loadLocalReadTimeout is the timeout for reading data from client during LOAD DATA LOCAL operations
+	loadLocalReadTimeout time.Duration
+	// loadLocalWriteTimeout is the timeout for writing data to client during LOAD DATA LOCAL operations
+	loadLocalWriteTimeout time.Duration
+	allocator             *BufferAllocator
+	ses                   atomic.Pointer[holder[*Session]]
+	closeFunc             sync.Once
+	service               string
 }
 
 // NewIOSession create a new io session
 func NewIOSession(conn net.Conn, pu *config.ParameterUnit, service string) (_ *Conn, err error) {
 	c := &Conn{
-		conn:              conn,
-		localAddr:         conn.LocalAddr().String(),
-		remoteAddr:        conn.RemoteAddr().String(),
-		fixBuf:            MemBlock{},
-		dynamicWrBuf:      list.New(),
-		allocator:         &BufferAllocator{allocator: getSessionAlloc(service)},
-		timeout:           pu.SV.SessionTimeout.Duration,
-		maxBytesToFlush:   int(pu.SV.MaxBytesInOutbufToFlush * 1024),
-		allowedPacketSize: int(MaxPayloadSize),
-		service:           service,
+		conn:                  conn,
+		localAddr:             conn.LocalAddr().String(),
+		remoteAddr:            conn.RemoteAddr().String(),
+		fixBuf:                MemBlock{},
+		dynamicWrBuf:          list.New(),
+		allocator:             &BufferAllocator{allocator: getSessionAlloc(service)},
+		timeout:               pu.SV.SessionTimeout.Duration,
+		readTimeout:           pu.SV.NetReadTimeout.Duration,
+		writeTimeout:          pu.SV.NetWriteTimeout.Duration,
+		loadLocalReadTimeout:  pu.SV.LoadLocalReadTimeout.Duration,
+		loadLocalWriteTimeout: pu.SV.LoadLocalWriteTimeout.Duration,
+		maxBytesToFlush:       int(pu.SV.MaxBytesInOutbufToFlush * 1024),
+		allowedPacketSize:     int(MaxPayloadSize),
+		service:               service,
 	}
 
 	defer func() {
@@ -274,7 +282,7 @@ func (c *Conn) Close() error {
 
 		err = c.closeConn()
 		if err != nil {
-			logutil.Error("close conn error", zap.Error(err))
+			logutil.LogConnectionCloseError("close conn error", err)
 		}
 		c.ses.Store(&holder[*Session]{})
 		rm := getRtMgr(c.service)
@@ -314,7 +322,7 @@ func (c *Conn) ReadLoadLocalPacket() (_ []byte, err error) {
 			c.FreeLoadLocal()
 		}
 	}()
-	err = c.ReadNBytesIntoBuf(c.header[:], HeaderLengthOfTheProtocol)
+	err = c.ReadNBytesIntoBufWithTimeout(c.header[:], HeaderLengthOfTheProtocol, c.loadLocalReadTimeout)
 	if err != nil {
 		return
 	}
@@ -335,11 +343,27 @@ func (c *Conn) ReadLoadLocalPacket() (_ []byte, err error) {
 		}
 	}
 
-	err = c.ReadNBytesIntoBuf(c.loadLocalBuf.data, packetLength)
+	err = c.ReadNBytesIntoBufWithTimeout(c.loadLocalBuf.data, packetLength, c.loadLocalReadTimeout)
 	if err != nil {
 		return
 	}
 	return c.loadLocalBuf.data[:packetLength], err
+}
+
+// ReadNBytesIntoBufWithTimeout reads specified bytes from the network with a timeout.
+// This is used for LOAD DATA LOCAL operations.
+func (c *Conn) ReadNBytesIntoBufWithTimeout(buf []byte, n int, timeout time.Duration) error {
+	var err error
+	var read int
+	var readLength int
+	for readLength < n {
+		read, err = c.ReadFromConnWithTimeout(buf[readLength:n], timeout)
+		if err != nil {
+			return err
+		}
+		readLength += read
+	}
+	return err
 }
 
 func (c *Conn) FreeLoadLocal() {
@@ -571,6 +595,23 @@ func (c *Conn) ReadFromConn(buf []byte) (int, error) {
 	return c.conn.Read(buf)
 }
 
+// ReadFromConnWithTimeout reads from the network with a specific timeout.
+// This is used for LOAD DATA LOCAL operations where we need timeout detection.
+func (c *Conn) ReadFromConnWithTimeout(buf []byte, timeout time.Duration) (int, error) {
+	var err error
+	if timeout > 0 {
+		err = c.conn.SetReadDeadline(time.Now().Add(timeout))
+		if err != nil {
+			return 0, err
+		}
+		// Clear the deadline after reading
+		defer func() {
+			_ = c.conn.SetReadDeadline(time.Time{})
+		}()
+	}
+	return c.conn.Read(buf)
+}
+
 // Append Add bytes to buffer
 func (c *Conn) Append(elems ...byte) (err error) {
 	defer func() {
@@ -582,7 +623,7 @@ func (c *Conn) Append(elems ...byte) (err error) {
 	for cutIndex < len(elems) {
 		// if bufferLength > 16MB, split packet
 		remainPacketSpace := int(MaxPayloadSize) - c.packetLength
-		writeLength := Min(remainPacketSpace, len(elems[cutIndex:]))
+		writeLength := min(remainPacketSpace, len(elems[cutIndex:]))
 		err = AppendPart(c, elems[cutIndex:cutIndex+writeLength])
 		if err != nil {
 			return err
@@ -805,6 +846,15 @@ func (c *Conn) closeConn() error {
 		}
 	}
 	return err
+}
+
+// Disconnect closes the underlying network connection without full cleanup.
+// This is used to forcefully disconnect the client (e.g., on timeout during LOAD DATA).
+func (c *Conn) Disconnect() error {
+	if c.conn != nil {
+		return c.conn.Close()
+	}
+	return nil
 }
 
 // Reset does not release fix buffer but release dynamical buffer

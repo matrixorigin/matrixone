@@ -88,7 +88,8 @@ func NewSender(
 	}
 
 	s.cfg.BackendOptions = append(s.cfg.BackendOptions,
-		morpc.WithBackendStreamBufferSize(10000))
+		morpc.WithBackendStreamBufferSize(10000),
+		morpc.WithBackendReadTimeout(time.Second*30))
 	client, err := s.cfg.NewClient(
 		s.rt.ServiceUUID(),
 		"txn-client",
@@ -229,7 +230,7 @@ func (s *sender) createStream(ctx context.Context, tn metadata.TNShard, size int
 			return ls, nil
 		}
 	}
-	return s.client.NewStream(tn.Address, false)
+	return s.client.NewStream(ctx, tn.Address, false)
 }
 
 func (s *sender) acquireLocalStream() *localStream {

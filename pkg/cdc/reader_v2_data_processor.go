@@ -216,6 +216,8 @@ func (dp *DataProcessor) processSnapshot(ctx context.Context, data *ChangeData) 
 		zap.String("db", dp.dbName),
 		zap.String("table", dp.tableName),
 		zap.Int("rows", rows),
+		zap.String("from-ts", dp.fromTs.ToString()),
+		zap.String("to-ts", dp.toTs.ToString()),
 	)
 
 	return nil
@@ -294,7 +296,7 @@ func (dp *DataProcessor) processTailDone(ctx context.Context, data *ChangeData) 
 
 	// Begin transaction if not already begun
 	tracker := dp.txnManager.GetTracker()
-	if tracker == nil || !tracker.hasBegin {
+	if tracker == nil || !tracker.hasBegin || tracker.IsCompleted() {
 		if err := dp.txnManager.BeginTransaction(ctx, dp.fromTs, dp.toTs); err != nil {
 			return err
 		}
@@ -305,6 +307,17 @@ func (dp *DataProcessor) processTailDone(ctx context.Context, data *ChangeData) 
 	}
 
 	// Send accumulated data to sinker
+	// Get row counts before Sink() since Sink() is asynchronous and batches
+	// may be closed by the sinker goroutine after being queued
+	insertRows := 0
+	deleteRows := 0
+	if dp.insertAtmBatch != nil {
+		insertRows = dp.insertAtmBatch.RowCount()
+	}
+	if dp.deleteAtmBatch != nil {
+		deleteRows = dp.deleteAtmBatch.RowCount()
+	}
+
 	dp.sinker.Sink(ctx, &DecoderOutput{
 		outputTyp:      OutputTypeTail,
 		insertAtmBatch: dp.insertAtmBatch,
@@ -319,8 +332,10 @@ func (dp *DataProcessor) processTailDone(ctx context.Context, data *ChangeData) 
 		zap.Uint64("account-id", dp.accountId),
 		zap.String("db", dp.dbName),
 		zap.String("table", dp.tableName),
-		zap.Int("insert-rows", dp.insertAtmBatch.RowCount()),
-		zap.Int("delete-rows", dp.deleteAtmBatch.RowCount()),
+		zap.Int("insert-rows", insertRows),
+		zap.Int("delete-rows", deleteRows),
+		zap.String("from-ts", dp.fromTs.ToString()),
+		zap.String("to-ts", dp.toTs.ToString()),
 	)
 
 	// Note: Sink() takes ownership of the atomic batches
@@ -362,6 +377,14 @@ func (dp *DataProcessor) processNoMoreData(ctx context.Context) error {
 	tracker := dp.txnManager.GetTracker()
 	if tracker != nil && tracker.hasBegin {
 		tracker.UpdateToTs(dp.toTs)
+		logutil.Debug(
+			"cdc.data_processor.no_more_data_committing",
+			zap.String("task-id", dp.taskId),
+			zap.String("db", dp.dbName),
+			zap.String("table", dp.tableName),
+			zap.String("from-ts", dp.fromTs.ToString()),
+			zap.String("to-ts", dp.toTs.ToString()),
+		)
 		if err := dp.txnManager.CommitTransaction(ctx); err != nil {
 			logutil.Error(
 				"cdc.data_processor.no_more_data_commit_failed",
@@ -373,6 +396,14 @@ func (dp *DataProcessor) processNoMoreData(ctx context.Context) error {
 			)
 			return err
 		}
+		logutil.Debug(
+			"cdc.data_processor.no_more_data_commit_success",
+			zap.String("task-id", dp.taskId),
+			zap.String("db", dp.dbName),
+			zap.String("table", dp.tableName),
+			zap.String("from-ts", dp.fromTs.ToString()),
+			zap.String("to-ts", dp.toTs.ToString()),
+		)
 	} else {
 		// Even if no transaction is active (e.g., initSnapshotSplitTxn=true),
 		// we still need to update watermark as a heartbeat to indicate progress.

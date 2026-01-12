@@ -34,7 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -97,9 +96,6 @@ func initCommand(_ context.Context, inspectCtx *inspectContext) *cobra.Command {
 
 	storage := &storageUsageHistoryArg{}
 	rootCmd.AddCommand(storage.PrepareCommand())
-
-	renamecol := &RenameColArg{}
-	rootCmd.AddCommand(renamecol.PrepareCommand())
 
 	pstatus := &PolicyStatus{}
 	rootCmd.AddCommand(pstatus.PrepareCommand())
@@ -760,61 +756,6 @@ func (c *infoArg) Run() error {
 	}
 	c.ctx.resp.Payload = b.Bytes()
 	return nil
-}
-
-type RenameColArg struct {
-	ctx              *inspectContext
-	tbl              *catalog.TableEntry
-	oldName, newName string
-	seq              int
-}
-
-func (c *RenameColArg) FromCommand(cmd *cobra.Command) (err error) {
-	c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
-	c.tbl, _ = parseTableTarget(cmd.Flag("target").Value.String(), c.ctx.acinfo, c.ctx.db)
-	c.oldName, _ = cmd.Flags().GetString("old")
-	c.newName, _ = cmd.Flags().GetString("new")
-	c.seq, _ = cmd.Flags().GetInt("seq")
-	return nil
-}
-
-func (c *RenameColArg) PrepareCommand() *cobra.Command {
-	renameColCmd := &cobra.Command{
-		Use:   "rename_col",
-		Short: "rename column",
-		Run:   RunFactory(c),
-	}
-	renameColCmd.Flags().StringP("target", "t", "*", "format: db.table")
-	renameColCmd.Flags().StringP("old", "o", "", "old column name")
-	renameColCmd.Flags().StringP("new", "n", "", "new column name")
-	renameColCmd.Flags().IntP("seq", "s", 0, "column seq")
-	return renameColCmd
-}
-
-func (c *RenameColArg) String() string {
-	return fmt.Sprintf("rename col: %v, %v,%v,%v", c.tbl.GetLastestSchemaLocked(false).Name, c.oldName, c.newName, c.seq)
-}
-
-func (c *RenameColArg) Run() (err error) {
-	txn, _ := c.ctx.db.StartTxn(nil)
-	defer func() {
-		if err != nil {
-			txn.Rollback(context.Background())
-		}
-	}()
-	dbHdl, err := txn.GetDatabase(c.tbl.GetDB().GetName())
-	if err != nil {
-		return err
-	}
-	tblHdl, err := dbHdl.GetRelationByName(c.tbl.GetLastestSchemaLocked(false).Name)
-	if err != nil {
-		return err
-	}
-	err = tblHdl.AlterTable(context.Background(), api.NewRenameColumnReq(0, 0, c.oldName, c.newName, uint32(c.seq)))
-	if err != nil {
-		return err
-	}
-	return txn.Commit(context.Background())
 }
 
 type PolicyStatus struct {

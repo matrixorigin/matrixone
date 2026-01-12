@@ -129,13 +129,6 @@ type OperationHandler interface {
 		resp *DeleteRelationResp,
 	) error
 
-	HandleTruncateRelation(
-		ctx context.Context,
-		meta txn.TxnMeta,
-		req *TruncateRelationReq,
-		resp *TruncateRelationResp,
-	) error
-
 	HandleAddTableDef(
 		ctx context.Context,
 		meta txn.TxnMeta,
@@ -226,11 +219,6 @@ func handle(
 		response := resp.(*DeleteRelationResp)
 		request := req.(*DeleteRelationReq)
 		err = handler.HandleDeleteRelation(ctx, meta, request, response)
-
-	case OpTruncateRelation:
-		response := resp.(*TruncateRelationResp)
-		request := req.(*TruncateRelationReq)
-		handler.HandleTruncateRelation(ctx, meta, request, response)
 
 	case OpOpenRelation:
 		response := resp.(*OpenRelationResp)

@@ -87,6 +87,7 @@ import (
     orderBy tree.OrderBy
     order *tree.Order
     limit *tree.Limit
+    rankOption *tree.RankOption
     unionTypeRecord *tree.UnionTypeRecord
     parenTableExpr *tree.ParenTableExpr
     identifierList tree.IdentifierList
@@ -183,6 +184,7 @@ import (
     fullOpt bool
     boolVal bool
     int64Val int64
+    uint64Val uint64
     strs []string
 
     duplicateKey tree.DuplicateKey
@@ -377,7 +379,7 @@ import (
 
 // Secondary Index
 %token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT MASTER HNSW
-%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_SEARCH EF_CONSTRUCTION M ASYNC
+%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_SEARCH EF_CONSTRUCTION M ASYNC FORCE_SYNC AUTO_UPDATE
 
 // Alter
 %token <str> EXPIRE ACCOUNT ACCOUNTS UNLOCK DAY NEVER PUMP MYSQL_COMPATIBILITY_MODE UNIQUE_CHECK_ON_AUTOINCR
@@ -455,7 +457,7 @@ import (
 %token <str> CLUSTER_CENTERS KMEANS
 %token <str> STDDEV_POP STDDEV_SAMP SUBDATE SUBSTR SUBSTRING SUM SYSDATE
 %token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG RANK ROW_NUMBER
-%token <str> DENSE_RANK BIT_CAST
+%token <str> DENSE_RANK BIT_CAST LAG LEAD FIRST_VALUE LAST_VALUE NTH_VALUE
 %token <str> BITMAP_BIT_POSITION BITMAP_BUCKET_NUMBER BITMAP_COUNT BITMAP_CONSTRUCT_AGG BITMAP_OR_AGG
 
 // Sequence function
@@ -465,7 +467,7 @@ import (
 %token <str> ARROW
 
 // Insert
-%token <str> ROW OUTFILE HEADER MAX_FILE_SIZE FORCE_QUOTE PARALLEL STRICT
+%token <str> ROW OUTFILE HEADER MAX_FILE_SIZE FORCE_QUOTE PARALLEL STRICT SPLITSIZE
 
 // Snapshot
 %token <str> CHECKSNAPSHOTFLUSHED
@@ -528,7 +530,7 @@ import (
 %type <statement> show_table_num_stmt show_column_num_stmt show_table_values_stmt show_table_size_stmt
 %type <statement> show_variables_stmt show_status_stmt show_index_stmt
 %type <statement> show_servers_stmt show_connectors_stmt show_logservice_replicas_stmt show_logservice_stores_stmt show_logservice_settings_stmt
-%type <statement> alter_account_stmt alter_user_stmt alter_view_stmt update_stmt use_stmt update_no_with_stmt alter_database_config_stmt alter_table_stmt rename_stmt
+%type <statement> alter_account_stmt alter_user_stmt alter_view_stmt update_stmt use_stmt update_no_with_stmt alter_database_config_stmt alter_table_stmt alter_role_stmt rename_stmt
 %type <statement> transaction_stmt begin_stmt commit_stmt rollback_stmt savepoint_stmt release_savepoint_stmt rollback_to_savepoint_stmt
 %type <statement> explain_stmt explainable_stmt
 %type <statement> set_stmt set_variable_stmt set_password_stmt set_role_stmt set_default_role_stmt set_transaction_stmt set_connection_id_stmt set_logservice_non_voting_replica_num
@@ -599,7 +601,7 @@ import (
 %type <order> order
 %type <orderBy> order_list order_by_clause order_by_opt
 %type <limit> limit_opt limit_clause
-%type <limit> limit_rank_suffix
+%type <rankOption> rank_opt
 %type <str> insert_column optype_opt
 %type <str> optype
 %type <identifierList> column_list column_list_opt partition_clause_opt partition_id_list insert_column_list accounts_list restore_db_scope restore_table_scope
@@ -651,6 +653,7 @@ import (
 %type <alterColumnOrder> alter_column_order
 %type <alterColumnOrderBy> alter_column_order_list
 %type <indexVisibility> visibility
+%type <boolVal> auto_update
 %type <PartitionNames> AllOrPartitionNameList PartitionNameList
 
 %type <tableOption> table_option source_option
@@ -786,6 +789,8 @@ import (
 %type <fieldsList> field_item_list
 %type <str> field_terminator starting_opt lines_terminated_opt starting lines_terminated
 %type <lines> load_lines export_lines_opt
+%type <str> export_format_opt
+%type <uint64Val> export_splitsize_opt
 %type <int64Val> ignore_lines
 %type <varExpr> user_variable variable system_variable
 %type <varExprs> variable_list
@@ -3405,6 +3410,7 @@ alter_stmt:
 |   alter_stage_stmt
 |   alter_sequence_stmt
 |   alter_pitr_stmt
+|   alter_role_stmt
 |   rename_stmt
 // |    alter_ddl_stmt
 
@@ -3531,6 +3537,15 @@ alter_pitr_stmt:
        var pitrValue = $6
        var pitrUnit = $7
        $$ = tree.NewAlterPitr(ifExists, name, pitrValue, pitrUnit)
+    }
+
+alter_role_stmt:
+    ALTER ROLE exists_opt role_name RENAME TO role_name
+    {
+        var ifExists = $3
+        var oldName = $4.Compare()
+        var newName = $7.Compare()
+        $$ = tree.NewAlterRole(ifExists, oldName, newName)
     }
 
 partition_option:
@@ -3866,23 +3881,42 @@ alter_table_alter:
         var visibility = $3
         $$ = tree.NewAlterOptionAlterIndex(indexName, visibility)
     }
-| REINDEX ident IVFFLAT LISTS equal_opt INTEGRAL
+| INDEX ident IVFFLAT auto_update index_option_list
     {
-    	val := int64($6.(int64))
-    	if val <= 0 {
-		yylex.Error("LISTS should be greater than 0")
-		return 1
-    	}
-        var keyType = tree.INDEX_TYPE_IVFFLAT
-        var algoParamList = val
+        var io *tree.IndexOption = nil
+        if $5 == nil {
+            io = tree.NewIndexOption()
+            io.IType = tree.INDEX_TYPE_IVFFLAT
+        } else {
+            io = $5
+            io.IType = tree.INDEX_TYPE_IVFFLAT
+        }
         var name = tree.Identifier($2.Compare())
-        $$ = tree.NewAlterOptionAlterReIndex(name, keyType, algoParamList)
+	var auto_update = $4
+	io.AutoUpdate = auto_update
+        $$ = tree.NewAlterOptionAlterAutoUpdate(name, io)
+    }
+| REINDEX ident IVFFLAT index_option_list
+    {
+        var io *tree.IndexOption = nil
+        if $4 == nil {
+            io = tree.NewIndexOption()
+            io.IType = tree.INDEX_TYPE_IVFFLAT
+        } else {
+            io = $4
+            io.IType = tree.INDEX_TYPE_IVFFLAT
+        }
+        var name = tree.Identifier($2.Compare())
+        $$ = tree.NewAlterOptionAlterReIndex(name, io)
     }
 | REINDEX ident HNSW
     {
-        var keyType = tree.INDEX_TYPE_HNSW
+	
+        var io *tree.IndexOption = nil
+        io = tree.NewIndexOption()
+        io.IType = tree.INDEX_TYPE_HNSW
         var name = tree.Identifier($2.Compare())
-        $$ = tree.NewAlterOptionAlterReIndex(name, keyType, 0)
+        $$ = tree.NewAlterOptionAlterReIndex(name, io)
     }
 |   CHECK ident enforce
     {
@@ -3905,6 +3939,16 @@ visibility:
 |   INVISIBLE
     {
    	    $$ = tree.VISIBLE_TYPE_INVISIBLE
+    }
+
+auto_update:
+    AUTO_UPDATE '=' TRUE
+    {
+	$$ = true
+    }
+|   AUTO_UPDATE '=' FALSE
+    {
+	$$ = false
     }
 
 alter_account_stmt:
@@ -5298,17 +5342,47 @@ export_data_param_opt:
     {
         $$ = nil
     }
-|   INTO OUTFILE STRING export_fields export_lines_opt header_opt max_file_size_opt force_quote_opt
+|   INTO OUTFILE STRING export_format_opt export_splitsize_opt export_fields export_lines_opt header_opt max_file_size_opt force_quote_opt
     {
         $$ = &tree.ExportParam{
-            Outfile:    true,
-            FilePath :  $3,
-            Fields:     $4,
-            Lines:      $5,
-            Header:     $6,
-            MaxFileSize:uint64($7)*1024,
-            ForceQuote: $8,
+            Outfile:      true,
+            FilePath:     $3,
+            ExportFormat: $4,
+            SplitSize:    $5,
+            Fields:       $6,
+            Lines:        $7,
+            Header:       $8,
+            MaxFileSize:  uint64($9)*1024,
+            ForceQuote:   $10,
         }
+    }
+
+export_format_opt:
+    {
+        $$ = ""
+    }
+|   FORMAT STRING
+    {
+        str := strings.ToLower($2)
+        if str != "csv" && str != "jsonline" && str != "parquet" {
+            yylex.Error("invalid format, must be csv, jsonline or parquet")
+            goto ret1
+        }
+        $$ = str
+    }
+
+export_splitsize_opt:
+    {
+        $$ = uint64(0)
+    }
+|   SPLITSIZE STRING
+    {
+        size, err := util.ParseDataSize($2)
+        if err != nil {
+            yylex.Error("invalid splitsize format: " + err.Error())
+            goto ret1
+        }
+        $$ = size
     }
 
 export_fields:
@@ -5449,29 +5523,29 @@ select_stmt:
     }
 
 select_no_parens:
-    simple_select time_window_opt order_by_opt limit_opt export_data_param_opt select_lock_opt
+    simple_select time_window_opt order_by_opt limit_opt rank_opt export_data_param_opt select_lock_opt
     {
-        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Limit: $4, Ep: $5, SelectLockInfo: $6}
+        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: $6, SelectLockInfo: $7}
     }
 |   select_with_parens time_window_opt order_by_clause export_data_param_opt
     {
         $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Ep: $4}
     }
-|   select_with_parens time_window_opt order_by_opt limit_clause export_data_param_opt
+|   select_with_parens time_window_opt order_by_opt limit_clause rank_opt export_data_param_opt
     {
-        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Limit: $4, Ep: $5}
+        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: $6}
     }
-|   with_clause simple_select time_window_opt order_by_opt limit_opt export_data_param_opt select_lock_opt
+|   with_clause simple_select time_window_opt order_by_opt limit_opt rank_opt export_data_param_opt select_lock_opt
     {
-        $$ = &tree.Select{Select: $2, TimeWindow: $3, OrderBy: $4, Limit: $5, Ep: $6, SelectLockInfo:$7, With: $1}
+        $$ = &tree.Select{Select: $2, TimeWindow: $3, OrderBy: $4, Limit: $5, RankOption: $6, Ep: $7, SelectLockInfo:$8, With: $1}
     }
 |   with_clause select_with_parens order_by_clause export_data_param_opt
     {
         $$ = &tree.Select{Select: $2, OrderBy: $3, Ep: $4, With: $1}
     }
-|   with_clause select_with_parens order_by_opt limit_clause export_data_param_opt
+|   with_clause select_with_parens order_by_opt limit_clause rank_opt export_data_param_opt
     {
-        $$ = &tree.Select{Select: $2, OrderBy: $3, Limit: $4, Ep: $5, With: $1}
+        $$ = &tree.Select{Select: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: $6, With: $1}
     }
 
 time_window_opt:
@@ -5621,35 +5695,20 @@ limit_opt:
     }
 
 limit_clause:
-    LIMIT expression limit_rank_suffix
+    LIMIT expression
     {
-        l := &tree.Limit{Count: $2}
-        if $3 != nil {
-            l.ByRank = $3.ByRank
-            l.Option = $3.Option
-        }
-        $$ = l
+        $$ = &tree.Limit{Count: $2}
     }
-|   LIMIT expression ',' expression limit_rank_suffix
+|   LIMIT expression ',' expression
     {
-        l := &tree.Limit{Offset: $2, Count: $4}
-        if $5 != nil {
-            l.ByRank = $5.ByRank
-            l.Option = $5.Option
-        }
-        $$ = l
+        $$ = &tree.Limit{Offset: $2, Count: $4}
     }
-|   LIMIT expression OFFSET expression limit_rank_suffix
+|   LIMIT expression OFFSET expression
     {
-        l := &tree.Limit{Offset: $4, Count: $2}
-        if $5 != nil {
-            l.ByRank = $5.ByRank
-            l.Option = $5.Option
-        }
-        $$ = l
+        $$ = &tree.Limit{Offset: $4, Count: $2}
     }
 
-limit_rank_suffix:
+rank_opt:
     {
         $$ = nil
     }
@@ -5683,8 +5742,7 @@ limit_rank_suffix:
             }
         }
         
-        $$ = &tree.Limit{
-            ByRank: true,
+        $$ = &tree.RankOption{
             Option: optionMap,
         }
     }
@@ -7693,6 +7751,26 @@ role_name:
 	{
     	$$ = tree.NewCStr($1, 1)
     }
+|   LAG
+        {
+        $$ = tree.NewCStr("lag", 1)
+    }
+|   LEAD
+        {
+        $$ = tree.NewCStr("lead", 1)
+    }
+|   FIRST_VALUE
+        {
+        $$ = tree.NewCStr("first_value", 1)
+    }
+|   LAST_VALUE
+        {
+        $$ = tree.NewCStr("last_value", 1)
+    }
+|   NTH_VALUE
+        {
+        $$ = tree.NewCStr("nth_value", 1)
+    }
 
 index_prefix:
     {
@@ -7775,7 +7853,15 @@ index_option_list:
 	      opt1.HnswEfSearch = opt2.HnswEfSearch
  	    } else if opt2.Async {
 	      opt1.Async = opt2.Async
- 	    }
+ 	    } else if opt2.ForceSync {
+	      opt1.ForceSync = opt2.ForceSync
+ 	    } else if opt2.AutoUpdate {
+	      opt1.AutoUpdate = opt2.AutoUpdate
+ 	    } else if opt2.Day > 0 {
+	      opt1.Day = opt2.Day
+ 	    } else if opt2.Hour > 0 {
+	      opt1.Hour = opt2.Hour
+	    }
             $$ = opt1
         }
     }
@@ -7868,7 +7954,47 @@ index_option:
 	io.Async = true
 	$$ = io
      }
-	
+|    FORCE_SYNC
+     {
+	io := tree.NewIndexOption()
+	io.ForceSync = true	
+	$$ = io
+     }
+|    AUTO_UPDATE '=' TRUE
+     {
+	io := tree.NewIndexOption()
+	io.AutoUpdate = true
+	$$ = io
+     }
+|    AUTO_UPDATE '=' FALSE
+     {
+	io := tree.NewIndexOption()
+	io.AutoUpdate = false
+	$$ = io
+     }
+|    DAY equal_opt INTEGRAL
+     {
+        val := int64($3.(int64))
+	if val < 0 {
+		yylex.Error("DAY should be greater than or equal to 0")
+		return 1
+	}
+	io := tree.NewIndexOption()
+	io.Day = val
+	$$ = io
+     }
+|    HOUR equal_opt INTEGRAL
+     {
+        val := int64($3.(int64))
+	if val < 0 || val > 23 {
+		yylex.Error("HOUR should be between 0 and 23")
+		return 1
+	}
+	io := tree.NewIndexOption()
+	io.Hour = val
+	$$ = io
+     }
+
 
 index_column_list:
     index_column
@@ -8179,8 +8305,8 @@ branch_stmt:
 |   DATA BRANCH CREATE DATABASE db_name FROM db_name table_snapshot_opt to_account_opt
     {
     	t := tree.NewDataBranchCreateDatabase()
-        t.DstDatabase = tree.Identifier($4)
-        t.SrcDatabase = tree.Identifier($6)
+        t.DstDatabase = tree.Identifier($5)
+        t.SrcDatabase = tree.Identifier($7)
         t.AtTsExpr = $8
         t.ToAccountOpt = $9
         $$ = t
@@ -10464,6 +10590,96 @@ function_call_window:
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
             WindowSpec: $4,
+        }
+    }
+|	LAG '(' expression ')' window_spec
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{$3},
+            WindowSpec: $5,
+        }
+    }
+|	LAG '(' expression ',' expression ')' window_spec
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{$3, $5},
+            WindowSpec: $7,
+        }
+    }
+|	LAG '(' expression ',' expression ',' expression ')' window_spec
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{$3, $5, $7},
+            WindowSpec: $9,
+        }
+    }
+|	LEAD '(' expression ')' window_spec
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{$3},
+            WindowSpec: $5,
+        }
+    }
+|	LEAD '(' expression ',' expression ')' window_spec
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{$3, $5},
+            WindowSpec: $7,
+        }
+    }
+|	LEAD '(' expression ',' expression ',' expression ')' window_spec
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{$3, $5, $7},
+            WindowSpec: $9,
+        }
+    }
+|	FIRST_VALUE '(' expression ')' window_spec
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{$3},
+            WindowSpec: $5,
+        }
+    }
+|	LAST_VALUE '(' expression ')' window_spec
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{$3},
+            WindowSpec: $5,
+        }
+    }
+|	NTH_VALUE '(' expression ',' expression ')' window_spec
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{$3, $5},
+            WindowSpec: $7,
         }
     }
 
@@ -13285,6 +13501,7 @@ non_reserved_keyword:
 |   HEADER
 |   MAX_FILE_SIZE
 |   FORCE_QUOTE
+|   SPLITSIZE
 |   QUARTER
 |   UNKNOWN
 |   ANY
@@ -13453,6 +13670,11 @@ non_reserved_keyword:
 |   CUBE
 |   RETRY
 |	INTERNAL
+|   LAG
+|   LEAD
+|   FIRST_VALUE
+|   LAST_VALUE
+|   NTH_VALUE
 
 func_not_keyword:
     DATE_ADD

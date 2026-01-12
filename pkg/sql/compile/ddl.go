@@ -36,6 +36,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -58,6 +59,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/idxcron"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
@@ -190,8 +192,9 @@ func (s *Scope) DropDatabase(c *Compile) error {
 
 	for _, t := range deleteTables {
 		dropSql := fmt.Sprintf(dropTableBeforeDropDatabase, dbName, t)
-		err = c.runSql(dropSql)
-		if err != nil {
+		if err = c.runSqlWithOptions(
+			dropSql, executor.StatementOption{}.WithDisableLog(),
+		); err != nil {
 			return err
 		}
 	}
@@ -210,21 +213,23 @@ func (s *Scope) DropDatabase(c *Compile) error {
 
 	// 1.delete all index object record under the database from mo_catalog.mo_indexes
 	deleteSql := fmt.Sprintf(deleteMoIndexesWithDatabaseIdFormat, s.Plan.GetDdl().GetDropDatabase().GetDatabaseId())
-	err = c.runSql(deleteSql)
-	if err != nil {
+	if err = c.runSqlWithOptions(
+		deleteSql, executor.StatementOption{}.WithDisableLog(),
+	); err != nil {
 		return err
 	}
 
 	// 3. delete fks
-	err = c.runSql(s.Plan.GetDdl().GetDropDatabase().GetUpdateFkSql())
-	if err != nil {
+	if err = c.runSqlWithOptions(
+		s.Plan.GetDdl().GetDropDatabase().GetUpdateFkSql(), executor.StatementOption{}.WithDisableLog(),
+	); err != nil {
 		return err
 	}
 
 	// 4.update mo_pitr table
 	if !needSkipDbs[dbName] {
 		now := c.proc.GetTxnOperator().SnapshotTS().ToStdTime().UTC().UnixNano()
-		updatePitrSql := fmt.Sprintf("update `%s`.`%s` set `%s` = %d, `%s` = %d where `%s` = %d and `%s` = '%s' and `%s` = %d and `%s` = %s",
+		updatePitrSql := fmt.Sprintf("UPDATE `%s`.`%s` SET `%s` = %d, `%s` = %d WHERE `%s` = %d AND `%s` = '%s' AND `%s` = %d AND `%s` = %s",
 			catalog.MO_CATALOG, catalog.MO_PITR,
 			catalog.MO_PITR_STATUS, 0,
 			catalog.MO_PITR_CHANGED_TIME, now,
@@ -243,6 +248,12 @@ func (s *Scope) DropDatabase(c *Compile) error {
 
 	// 5.unregister iscp jobs
 	err = iscp.UnregisterJobsByDBName(c.proc.Ctx, c.proc.GetService(), c.proc.GetTxnOperator(), dbName)
+	if err != nil {
+		return err
+	}
+
+	// 6.unregister index update
+	err = idxcron.UnregisterUpdateByDbName(c.proc.Ctx, c.proc.GetService(), c.proc.GetTxnOperator(), dbName)
 	if err != nil {
 		return err
 	}
@@ -379,6 +390,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 	}
 
 	tblName := qry.GetTableDef().GetName()
+	isTemp := qry.GetTableDef().GetIsTemporary()
 	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		return convertDBEOB(c.proc.Ctx, err, dbName)
@@ -461,11 +473,13 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 						if !moerr.IsMoErrCode(err, moerr.ErrParseError) &&
 							!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
 							!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
-							c.proc.Error(c.proc.Ctx, "lock index table for alter table",
-								zap.String("databaseName", c.db),
-								zap.String("origin tableName", qry.GetTableDef().Name),
-								zap.String("index name", indexdef.IndexName),
-								zap.String("index tableName", indexdef.IndexTableName),
+							c.proc.Error(
+								c.proc.Ctx,
+								"alter.table.lock.index.table",
+								zap.String("db", c.db),
+								zap.String("main-table", qry.GetTableDef().Name),
+								zap.String("index-name", indexdef.IndexName),
+								zap.String("index-table-name", indexdef.IndexTableName),
 								zap.Error(err))
 							return err
 						}
@@ -582,14 +596,16 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 
 						//1. drop index table
 						if indexdef.TableExist {
-							if err := c.runSql("drop table `" + indexdef.IndexTableName + "`"); err != nil {
+							if err := c.runSqlWithOptions(
+								"DROP TABLE `"+indexdef.IndexTableName+"`", executor.StatementOption{}.WithDisableLog(),
+							); err != nil {
 								return err
 							}
 						}
-						//2. delete index object from mo_catalog.mo_indexes
 						deleteSql := fmt.Sprintf(deleteMoIndexesWithTableIdAndIndexNameFormat, oTableDef.TblId, indexdef.IndexName)
-						err = c.runSql(deleteSql)
-						if err != nil {
+						if err = c.runSqlWithOptions(
+							deleteSql, executor.StatementOption{}.WithDisableLog(),
+						); err != nil {
 							return err
 						}
 					} else {
@@ -600,6 +616,17 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 
 				// drop index cdc task
 				err = DropIndexCdcTask(c, oTableDef, dbName, tblName, constraintName)
+				if err != nil {
+					return err
+				}
+
+				// unregister index update
+				err = idxcron.UnregisterUpdate(c.proc.Ctx,
+					c.proc.GetService(),
+					c.proc.GetTxnOperator(),
+					oTableDef.TblId,
+					constraintName,
+					idxcron.Action_Wildcard)
 				if err != nil {
 					return err
 				}
@@ -630,6 +657,32 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 
 			indexInfo := act.AddIndex.IndexInfo // IndexInfo is named same as planner's IndexInfo
 			indexTableDef := act.AddIndex.IndexInfo.TableDef
+
+			if isTemp {
+				session := c.proc.GetSession()
+				if session == nil {
+					return moerr.NewInternalError(c.proc.Ctx, "session not found for temporary table")
+				}
+				tmpDb := act.AddIndex.DbName
+				if tmpDb == "" {
+					tmpDb = dbName
+				}
+				indexNameMap := make(map[string]string, len(indexInfo.IndexTables))
+				for _, def := range indexInfo.IndexTables {
+					orig := def.Name
+					if !defines.IsTempTableName(orig) {
+						def.Name = defines.GenTempTableName(c.proc.Base.SessionInfo.SessionId, tmpDb, orig)
+					}
+					def.TableType = catalog.SystemTemporaryTable
+					def.IsTemporary = true
+					indexNameMap[orig] = def.Name
+				}
+				for _, idx := range indexTableDef.Indexes {
+					if renamed, ok := indexNameMap[idx.IndexTableName]; ok {
+						idx.IndexTableName = renamed
+					}
+				}
+			}
 
 			// indexName -> meta      -> indexDef
 			//     		 -> centroids -> indexDef
@@ -675,7 +728,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			for _, multiTableIndex := range multiTableIndexes {
 				switch multiTableIndex.IndexAlgo { // no need for catalog.ToLower() here
 				case catalog.MoIndexIvfFlatAlgo.ToString():
-					err = s.handleVectorIvfFlatIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, indexInfo)
+					err = s.handleVectorIvfFlatIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, indexInfo, false)
 				case catalog.MoIndexHnswAlgo.ToString():
 					err = s.handleVectorHnswIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, indexInfo)
 				}
@@ -691,8 +744,9 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				if err != nil {
 					return err
 				}
-				err = c.runSql(insertSql)
-				if err != nil {
+				if err = c.runSqlWithOptions(
+					insertSql, executor.StatementOption{}.WithDisableLog(),
+				); err != nil {
 					return err
 				}
 			}
@@ -712,14 +766,68 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					} else {
 						updateSql = fmt.Sprintf(updateMoIndexesVisibleFormat, 0, oTableDef.TblId, indexdef.IndexName)
 					}
-					err = c.runSql(updateSql)
-					if err != nil {
+					if err = c.runSqlWithOptions(
+						updateSql, executor.StatementOption{}.WithDisableLog(),
+					); err != nil {
 						return err
 					}
 
 					break
 				}
 			}
+		case *plan.AlterTable_Action_AlterAutoUpdate:
+			hasUpdateConstraints = true
+			tableAlterIndex := act.AlterAutoUpdate
+			constraintName := tableAlterIndex.IndexName
+
+			// simply update the index configuration
+			for i, indexDef := range oTableDef.Indexes {
+				if indexDef.IndexName == constraintName {
+					alterIndex = indexDef
+
+					indexAlgo := catalog.ToLower(alterIndex.IndexAlgo)
+					switch catalog.ToLower(indexAlgo) {
+					case catalog.MoIndexIvfFlatAlgo.ToString():
+						// 1. Get old AlgoParams
+						newAlgoParamsMap, err := catalog.IndexParamsStringToMap(alterIndex.IndexAlgoParams)
+						if err != nil {
+							return err
+						}
+						// 2.a update AlgoParams for the index to be re-indexed
+						// NOTE: this will throw error if the algo type is not supported for reindex.
+						// So Step 4. will not be executed if error is thrown here.
+						newAlgoParamsMap[catalog.AutoUpdate] = fmt.Sprintf("%v", tableAlterIndex.AutoUpdate)
+						newAlgoParamsMap[catalog.Day] = fmt.Sprintf("%d", tableAlterIndex.Day)
+						newAlgoParamsMap[catalog.Hour] = fmt.Sprintf("%d", tableAlterIndex.Hour)
+						// 2.b generate new AlgoParams string
+						newAlgoParams, err := catalog.IndexParamsMapToJsonString(newAlgoParamsMap)
+						if err != nil {
+							return err
+						}
+
+						// 3.a Update IndexDef and TableDef
+						alterIndex.IndexAlgoParams = newAlgoParams
+						oTableDef.Indexes[i].IndexAlgoParams = newAlgoParams
+
+						// 3.b Update mo_catalog.mo_indexes
+						updateSql := fmt.Sprintf(updateMoIndexesAlgoParams, newAlgoParams, oTableDef.TblId, alterIndex.IndexName)
+						if err = c.runSqlWithOptions(
+							updateSql, executor.StatementOption{}.WithDisableLog(),
+						); err != nil {
+							return err
+						}
+
+						// 4. register auto update again
+						err = s.handleIvfIndexRegisterUpdate(c, indexDef, qry.Database, oTableDef)
+						if err != nil {
+							return err
+						}
+					default:
+						return moerr.NewInternalError(c.proc.Ctx, "invalid index algo type for alter reindex")
+					}
+				}
+			}
+
 		case *plan.AlterTable_Action_AlterReindex:
 			// NOTE: We hold lock (with retry) during alter reindex, as "alter table" takes an exclusive lock
 			//in the beginning for pessimistic mode. We need to see how to reduce the critical section.
@@ -743,23 +851,25 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 						// 2.a update AlgoParams for the index to be re-indexed
 						// NOTE: this will throw error if the algo type is not supported for reindex.
 						// So Step 4. will not be executed if error is thrown here.
-						newAlgoParamsMap[catalog.IndexAlgoParamLists] = fmt.Sprintf("%d", tableAlterIndex.IndexAlgoParamList)
+						if tableAlterIndex.IndexAlgoParamList > 0 {
+							newAlgoParamsMap[catalog.IndexAlgoParamLists] = fmt.Sprintf("%d", tableAlterIndex.IndexAlgoParamList)
+							// 2.b generate new AlgoParams string
+							newAlgoParams, err := catalog.IndexParamsMapToJsonString(newAlgoParamsMap)
+							if err != nil {
+								return err
+							}
 
-						// 2.b generate new AlgoParams string
-						newAlgoParams, err := catalog.IndexParamsMapToJsonString(newAlgoParamsMap)
-						if err != nil {
-							return err
-						}
+							// 3.a Update IndexDef and TableDef
+							alterIndex.IndexAlgoParams = newAlgoParams
+							oTableDef.Indexes[i].IndexAlgoParams = newAlgoParams
 
-						// 3.a Update IndexDef and TableDef
-						alterIndex.IndexAlgoParams = newAlgoParams
-						oTableDef.Indexes[i].IndexAlgoParams = newAlgoParams
-
-						// 3.b Update mo_catalog.mo_indexes
-						updateSql := fmt.Sprintf(updateMoIndexesAlgoParams, newAlgoParams, oTableDef.TblId, alterIndex.IndexName)
-						err = c.runSql(updateSql)
-						if err != nil {
-							return err
+							// 3.b Update mo_catalog.mo_indexes
+							updateSql := fmt.Sprintf(updateMoIndexesAlgoParams, newAlgoParams, oTableDef.TblId, alterIndex.IndexName)
+							if err = c.runSqlWithOptions(
+								updateSql, executor.StatementOption{}.WithDisableLog(),
+							); err != nil {
+								return err
+							}
 						}
 					case catalog.MoIndexHnswAlgo.ToString():
 						// PASS
@@ -782,7 +892,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			for _, multiTableIndex := range multiTableIndexes {
 				switch multiTableIndex.IndexAlgo {
 				case catalog.MoIndexIvfFlatAlgo.ToString():
-					err = s.handleVectorIvfFlatIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, nil)
+					err = s.handleVectorIvfFlatIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, nil, tableAlterIndex.ForceSync)
 				case catalog.MoIndexHnswAlgo.ToString():
 					// TODO: we should call refresh Hnsw Index function instead of CreateHnswIndex function
 					err = s.handleVectorHnswIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, nil)
@@ -909,7 +1019,20 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 		if req.Kind == api.AlterKind_RenameTable {
 			op, ok := req.Operation.(*api.AlterTableReq_RenameTable)
 			if ok {
+				// iscp
 				err = iscp.RenameSrcTable(c.proc.Ctx,
+					c.proc.GetService(),
+					c.proc.GetTxnOperator(),
+					req.DbId,
+					req.TableId,
+					op.RenameTable.OldName,
+					op.RenameTable.NewName)
+				if err != nil {
+					return err
+				}
+
+				// idxcron
+				err = idxcron.RenameSrcTable(c.proc.Ctx,
 					c.proc.GetService(),
 					c.proc.GetTxnOperator(),
 					req.DbId,
@@ -974,6 +1097,44 @@ func (s *Scope) CreateTable(c *Compile) error {
 	defer s.ScopeAnalyzer.Stop()
 
 	qry := s.Plan.GetDdl().GetCreateTable()
+	dbName := c.db
+	if qry.GetDatabase() != "" {
+		dbName = qry.GetDatabase()
+	}
+	aliasName := qry.GetTableDef().GetName()
+	session := c.proc.GetSession()
+	isTemp := qry.GetTemporary()
+	if isTemp {
+		if session == nil {
+			return moerr.NewInternalError(c.proc.Ctx, "session not found for temporary table")
+		}
+		if _, exists := session.GetTempTable(dbName, aliasName); exists {
+			if qry.GetIfNotExists() {
+				return nil
+			}
+			return moerr.NewTableAlreadyExists(c.proc.Ctx, aliasName)
+		}
+
+		realName := defines.GenTempTableName(c.proc.Base.SessionInfo.SessionId, dbName, aliasName)
+		qry.TableDef.Name = realName
+		indexNameMap := make(map[string]string, len(qry.IndexTables))
+		for _, def := range qry.IndexTables {
+			orig := def.Name
+			newName := defines.GenTempTableName(c.proc.Base.SessionInfo.SessionId, dbName, orig)
+			def.Name = newName
+			def.TableType = catalog.SystemTemporaryTable
+			def.IsTemporary = true
+			indexNameMap[orig] = newName
+		}
+		for _, idx := range qry.TableDef.Indexes {
+			if renamed, ok := indexNameMap[idx.IndexTableName]; ok {
+				idx.IndexTableName = renamed
+			}
+		}
+		if len(qry.GetTableDef().Fkeys) > 0 {
+			return moerr.NewNotSupported(c.proc.Ctx, "add foreign key for temporary table")
+		}
+	}
 	// convert the plan's cols to the execution's cols
 	planCols := qry.GetTableDef().GetCols()
 	exeCols := engine.PlanColsToExeCols(planCols)
@@ -995,10 +1156,6 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 	}
 
-	dbName := c.db
-	if qry.GetDatabase() != "" {
-		dbName = qry.GetDatabase()
-	}
 	tblName := qry.GetTableDef().GetName()
 
 	if !c.disableLock {
@@ -1029,34 +1186,6 @@ func (s *Scope) CreateTable(c *Compile) error {
 			return nil
 		}
 		return moerr.NewTableAlreadyExists(c.proc.Ctx, tblName)
-	}
-
-	// check in EntireEngine.TempEngine, notice that TempEngine may not init
-	if c.e.HasTempEngine() {
-		var tmpDBSource engine.Database
-		if tmpDBSource, err = c.e.Database(
-			c.proc.Ctx,
-			defines.TEMPORARY_DBNAME,
-			c.proc.GetTxnOperator(),
-		); err == nil {
-			exists, err := tmpDBSource.RelationExists(c.proc.Ctx, engine.GetTempTableName(dbName, tblName), nil)
-			if err != nil {
-				c.proc.Error(
-					c.proc.Ctx,
-					"temp-table-exists-check-failed",
-					zap.String("db-name", dbName),
-					zap.String("table-name", tblName),
-					zap.Error(err),
-				)
-				return err
-			}
-			if exists {
-				if qry.GetIfNotExists() {
-					return nil
-				}
-				return moerr.NewTableAlreadyExists(c.proc.Ctx, fmt.Sprintf("temporary '%s'", tblName))
-			}
-		}
 	}
 
 	if !c.disableLock {
@@ -1094,10 +1223,15 @@ func (s *Scope) CreateTable(c *Compile) error {
 		return err
 	}
 
+	if isTemp && session != nil {
+		session.AddTempTable(dbName, aliasName, tblName)
+	}
+
 	//update mo_foreign_keys
 	for _, sql := range qry.UpdateFkSqls {
-		err = c.runSql(sql)
-		if err != nil {
+		if err = c.runSqlWithOptions(
+			sql, executor.StatementOption{}.WithDisableLog(),
+		); err != nil {
 			return err
 		}
 	}
@@ -1205,6 +1339,11 @@ func (s *Scope) CreateTable(c *Compile) error {
 		//2. need to append TableId to parent's TableDef.RefChildTbls
 		for i, fkTableName := range fkTables {
 			fkDbName := fkDbs[i]
+			if session != nil {
+				if _, ok := session.GetTempTable(fkDbName, fkTableName); ok {
+					return moerr.NewNotSupported(c.proc.Ctx, "foreign key references temporary table")
+				}
+			}
 			fkey := qry.GetTableDef().Fkeys[i]
 			if fkey.ForeignTbl == 0 {
 				//fk self refer
@@ -1431,7 +1570,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		var initSQL string
 		switch def.TableType {
 		case catalog.SystemSI_IVFFLAT_TblType_Metadata:
-			initSQL = fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`) VALUES('version', '0');",
+			initSQL = fmt.Sprintf("INSERT INTO `%s`.`%s` (`%s`, `%s`) VALUES('version', '0');",
 				qry.Database,
 				def.Name,
 				catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
@@ -1439,7 +1578,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 			)
 
 		case catalog.SystemSI_IVFFLAT_TblType_Centroids:
-			initSQL = fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`, `%s`) VALUES(0,1,NULL);",
+			initSQL = fmt.Sprintf("INSERT INTO `%s`.`%s` (`%s`, `%s`, `%s`) VALUES(0,1,NULL);",
 				qry.Database,
 				def.Name,
 				catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
@@ -1447,7 +1586,9 @@ func (s *Scope) CreateTable(c *Compile) error {
 				catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
 			)
 		}
-		err = c.runSql(initSQL)
+		err = c.runSqlWithOptions(
+			initSQL, executor.StatementOption{}.WithDisableLog(),
+		)
 		if err != nil {
 			c.proc.Error(c.proc.Ctx, "create index table for execute initSQL",
 				zap.String("databaseName", c.db),
@@ -1489,7 +1630,9 @@ func (s *Scope) CreateTable(c *Compile) error {
 			)
 			return err
 		}
-		err = c.runSql(insertSQL)
+		err = c.runSqlWithOptions(
+			insertSQL, executor.StatementOption{}.WithDisableLog(),
+		)
 		if err != nil {
 			c.proc.Error(c.proc.Ctx, "createTable",
 				zap.String("insertSQL", insertSQL),
@@ -1510,6 +1653,12 @@ func (s *Scope) CreateTable(c *Compile) error {
 		for _, constraint := range ct.Cts {
 			if idxdef, ok := constraint.(*engine.IndexDef); ok && len(idxdef.Indexes) > 0 {
 				err = CreateAllIndexCdcTasks(c, idxdef.Indexes, dbName, tblName, false)
+				if err != nil {
+					return err
+				}
+
+				// register index update for IVFFLAT
+				err = CreateAllIndexUpdateTasks(c, idxdef.Indexes, dbName, tblName, newRelation.GetTableID(c.proc.Ctx))
 				if err != nil {
 					return err
 				}
@@ -1585,7 +1734,9 @@ func (c *Compile) runSqlWithSystemTenant(sql string) error {
 	defer func() {
 		c.proc.Ctx = oldCtx
 	}()
-	return c.runSql(sql)
+	return c.runSqlWithOptions(
+		sql, executor.StatementOption{}.WithDisableLog(),
+	)
 }
 
 func (s *Scope) CreateView(c *Compile) error {
@@ -1644,8 +1795,9 @@ func (s *Scope) CreateView(c *Compile) error {
 		}
 
 		if qry.GetReplace() {
-			err = c.runSql(fmt.Sprintf("drop view if exists %s", viewName))
-			if err != nil {
+			if err = c.runSqlWithOptions(
+				fmt.Sprintf("DROP VIEW IF EXISTS %s", viewName), executor.StatementOption{}.WithDisableLog(),
+			); err != nil {
 				getLogger(s.Proc.GetService()).Error("drop existing view failed",
 					zap.String("databaseName", c.db),
 					zap.String("viewName", qry.GetTableDef().GetName()),
@@ -1655,38 +1807,6 @@ func (s *Scope) CreateView(c *Compile) error {
 			}
 		} else {
 			return moerr.NewTableAlreadyExists(c.proc.Ctx, viewName)
-		}
-	}
-
-	// check in EntireEngine.TempEngine, notice that TempEngine may not init
-	if c.e.HasTempEngine() {
-		var tmpDBSource engine.Database
-		if tmpDBSource, err = c.e.Database(
-			c.proc.Ctx,
-			defines.TEMPORARY_DBNAME,
-			c.proc.GetTxnOperator(),
-		); err == nil {
-			exists, err := tmpDBSource.RelationExists(
-				c.proc.Ctx,
-				engine.GetTempTableName(dbName, viewName),
-				nil,
-			)
-			if err != nil {
-				c.proc.Error(
-					c.proc.Ctx,
-					"temp-table-exists-check-failed",
-					zap.String("db-name", dbName),
-					zap.String("table-name", viewName),
-					zap.Error(err),
-				)
-				return err
-			}
-			if exists {
-				if qry.GetIfNotExists() {
-					return nil
-				}
-				return moerr.NewTableAlreadyExists(c.proc.Ctx, fmt.Sprintf("temporary '%s'", viewName))
-			}
 		}
 	}
 
@@ -1726,96 +1846,6 @@ var checkIndexInitializable = func(dbName string, tblName string) bool {
 	return true
 }
 
-func (s *Scope) CreateTempTable(c *Compile) error {
-	qry := s.Plan.GetDdl().GetCreateTable()
-	// convert the plan's cols to the execution's cols
-	planCols := qry.GetTableDef().GetCols()
-	exeCols := engine.PlanColsToExeCols(planCols)
-
-	// convert the plan's defs to the execution's defs
-	exeDefs, _, err := engine.PlanDefsToExeDefs(qry.GetTableDef())
-	if err != nil {
-		return err
-	}
-
-	// Temporary table names and persistent table names are not allowed to be duplicated
-	// So before create temporary table, need to check if it exists a table has same name
-	dbName := c.db
-	if qry.GetDatabase() != "" {
-		dbName = qry.GetDatabase()
-	}
-
-	// check in EntireEngine.TempEngine
-	tmpDBSource, err := c.e.Database(c.proc.Ctx, defines.TEMPORARY_DBNAME, c.proc.GetTxnOperator())
-	if err != nil {
-		return err
-	}
-	tblName := qry.GetTableDef().GetName()
-	if _, err := tmpDBSource.Relation(c.proc.Ctx, engine.GetTempTableName(dbName, tblName), nil); err == nil {
-		if qry.GetIfNotExists() {
-			return nil
-		}
-		return moerr.NewTableAlreadyExists(c.proc.Ctx, fmt.Sprintf("temporary '%s'", tblName))
-	}
-
-	// check in EntireEngine.Engine
-	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
-	if err != nil {
-		return err
-	}
-	if _, err := dbSource.Relation(c.proc.Ctx, tblName, nil); err == nil {
-		if qry.GetIfNotExists() {
-			return nil
-		}
-		return moerr.NewTableAlreadyExists(c.proc.Ctx, tblName)
-	}
-
-	// create temporary table
-	if err := tmpDBSource.Create(c.proc.Ctx, engine.GetTempTableName(dbName, tblName), append(exeCols, exeDefs...)); err != nil {
-		return err
-	}
-
-	// build index table
-	for _, def := range qry.IndexTables {
-		planCols = def.GetCols()
-		exeCols = engine.PlanColsToExeCols(planCols)
-		exeDefs, _, err = engine.PlanDefsToExeDefs(def)
-		if err != nil {
-			return err
-		}
-		if _, err := tmpDBSource.Relation(c.proc.Ctx, engine.GetTempTableName(dbName, def.Name), nil); err == nil {
-			return moerr.NewTableAlreadyExists(c.proc.Ctx, def.Name)
-		}
-
-		if err := tmpDBSource.Create(c.proc.Ctx, engine.GetTempTableName(dbName, def.Name), append(exeCols, exeDefs...)); err != nil {
-			return err
-		}
-
-		err = maybeCreateAutoIncrement(
-			c.proc.Ctx,
-			c.proc.GetService(),
-			tmpDBSource,
-			def,
-			c.proc.GetTxnOperator(),
-			func() string {
-				return engine.GetTempTableName(dbName, def.Name)
-			})
-		if err != nil {
-			return err
-		}
-	}
-
-	return maybeCreateAutoIncrement(
-		c.proc.Ctx,
-		c.proc.GetService(),
-		tmpDBSource,
-		qry.GetTableDef(),
-		c.proc.GetTxnOperator(),
-		func() string {
-			return engine.GetTempTableName(dbName, tblName)
-		})
-}
-
 func (s *Scope) CreateIndex(c *Compile) error {
 	if s.ScopeAnalyzer == nil {
 		s.ScopeAnalyzer = NewScopeAnalyzer()
@@ -1824,6 +1854,32 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	defer s.ScopeAnalyzer.Stop()
 
 	qry := s.Plan.GetDdl().GetCreateIndex()
+
+	if qry.GetTableDef().GetIsTemporary() {
+		session := c.proc.GetSession()
+		if session == nil {
+			return moerr.NewInternalError(c.proc.Ctx, "session not found for temporary table")
+		}
+		if realName, ok := session.GetTempTable(qry.Database, qry.Table); ok {
+			qry.Table = realName
+			qry.TableDef.Name = realName
+		}
+		indexNameMap := make(map[string]string, len(qry.Index.IndexTables))
+		for _, def := range qry.Index.IndexTables {
+			orig := def.Name
+			if !defines.IsTempTableName(orig) {
+				def.Name = defines.GenTempTableName(c.proc.Base.SessionInfo.SessionId, qry.Database, orig)
+			}
+			def.TableType = catalog.SystemTemporaryTable
+			def.IsTemporary = true
+			indexNameMap[orig] = def.Name
+		}
+		for _, idx := range qry.Index.TableDef.Indexes {
+			if renamed, ok := indexNameMap[idx.IndexTableName]; ok {
+				idx.IndexTableName = renamed
+			}
+		}
+	}
 	{
 		// lockMoTable will lock Table  mo_catalog.mo_tables
 		// for the row with db_name=dbName & table_name = tblName。
@@ -1942,7 +1998,7 @@ func (s *Scope) doCreateIndex(
 	for _, multiTableIndex := range multiTableIndexes {
 		switch multiTableIndex.IndexAlgo {
 		case catalog.MoIndexIvfFlatAlgo.ToString():
-			err = s.handleVectorIvfFlatIndex(c, tableId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, originalTableDef, indexInfo)
+			err = s.handleVectorIvfFlatIndex(c, tableId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, originalTableDef, indexInfo, false)
 		case catalog.MoIndexHnswAlgo.ToString():
 			err = s.handleVectorHnswIndex(c, tableId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, originalTableDef, indexInfo)
 		}
@@ -1986,7 +2042,9 @@ func (s *Scope) doCreateIndex(
 		if err != nil {
 			return err
 		}
-		err = c.runSql(sql)
+		err = c.runSqlWithOptions(
+			sql, executor.StatementOption{}.WithDisableLog(),
+		)
 		if err != nil {
 			return err
 		}
@@ -2061,6 +2119,7 @@ func (s *Scope) handleVectorIvfFlatIndex(
 	qryDatabase string,
 	originalTableDef *plan.TableDef,
 	indexInfo *plan.CreateTable,
+	forceSync bool,
 ) error {
 	// 1. static check
 	if len(indexDefs) != 3 {
@@ -2102,12 +2161,13 @@ func (s *Scope) handleVectorIvfFlatIndex(
 	// 4.b populate centroids table
 	err = s.handleIvfIndexCentroidsTable(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids], qryDatabase, originalTableDef,
 		totalCnt,
-		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName)
+		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName,
+		forceSync)
 	if err != nil {
 		return err
 	}
 
-	if !async {
+	if !async || forceSync {
 		// 4.c populate entries table
 		err = s.handleIvfIndexEntriesTable(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries], qryDatabase, originalTableDef,
 			indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName,
@@ -2127,24 +2187,12 @@ func (s *Scope) handleVectorIvfFlatIndex(
 		return err
 	}
 
-	/*
-		// create ISCP job when Async is true
-		if async {
-			// unregister ISCP job so that it can restart index update from ts=0
-			err = DropIndexCdcTask(c, originalTableDef, qryDatabase, originalTableDef.Name, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexName)
-			if err != nil {
-				return err
-			}
+	// 4.e register auto index update (reindex)
+	err = s.handleIvfIndexRegisterUpdate(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata], qryDatabase, originalTableDef)
+	if err != nil {
+		return err
+	}
 
-			logutil.Infof("Ivfflat index Async is true")
-			sinker_type := getSinkerTypeFromAlgo(catalog.MoIndexIvfFlatAlgo.ToString())
-			err = CreateIndexCdcTask(c, qryDatabase, originalTableDef.Name,
-				indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexName, sinker_type, false)
-			if err != nil {
-				return err
-			}
-		}
-	*/
 	return nil
 
 }
@@ -2157,6 +2205,14 @@ func (s *Scope) DropIndex(c *Compile) error {
 	defer s.ScopeAnalyzer.Stop()
 
 	qry := s.Plan.GetDdl().GetDropIndex()
+
+	// resolve temporary table real name if needed
+	if session := c.proc.GetSession(); session != nil {
+		if realName, ok := session.GetTempTable(qry.Database, qry.Table); ok {
+			qry.Table = realName
+		}
+	}
+
 	if err := lockMoDatabase(c, qry.Database, lock.LockMode_Shared); err != nil {
 		return err
 	}
@@ -2207,9 +2263,22 @@ func (s *Scope) DropIndex(c *Compile) error {
 		return err
 	}
 
-	//4. delete index object from mo_catalog.mo_indexes
+	// 4. unregister index update
+	err = idxcron.UnregisterUpdate(c.proc.Ctx,
+		c.proc.GetService(),
+		c.proc.GetTxnOperator(),
+		oldTableDef.TblId,
+		qry.IndexName,
+		idxcron.Action_Wildcard)
+	if err != nil {
+		return err
+	}
+
+	//5. delete index object from mo_catalog.mo_indexes
 	deleteSql := fmt.Sprintf(deleteMoIndexesWithTableIdAndIndexNameFormat, r.GetTableID(c.proc.Ctx), qry.IndexName)
-	err = c.runSql(deleteSql)
+	err = c.runSqlWithOptions(
+		deleteSql, executor.StatementOption{}.WithDisableLog(),
+	)
 	if err != nil {
 		return err
 	}
@@ -2455,8 +2524,14 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	}
 
 	// delete from tables => truncate, need keep increment value
+	// Get logicalId from tableDef and pass it when creating the new table
+	tableDef := rel.GetTableDef(c.proc.Ctx)
+	oldLogicalId := tableDef.GetLogicalId()
 	dropOpts := executor.StatementOption{}.WithIgnoreForeignKey().WithIgnorePublish().WithIgnoreCheckExperimental()
 	createOpts := executor.StatementOption{}.WithIgnoreForeignKey().WithIgnorePublish().WithIgnoreCheckExperimental()
+	if oldLogicalId != 0 {
+		createOpts = createOpts.WithKeepLogicalId(oldLogicalId)
+	}
 	if truncate.IsDelete {
 		rows, err := rel.Rows(c.proc.Ctx)
 		if err != nil {
@@ -2468,9 +2543,10 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		createOpts = createOpts.WithKeepAutoIncrement(oldID)
 	}
 
-	r, err := c.runSqlWithResult(
-		fmt.Sprintf("show create table `%s`.`%s`", db, table),
+	r, err := c.runSqlWithResultAndOptions(
+		fmt.Sprintf("SHOW CREATE TABLE `%s`.`%s`", db, table),
 		int32(accountID),
+		executor.StatementOption{}.WithDisableLog(),
 	)
 	if err != nil {
 		return err
@@ -2588,11 +2664,6 @@ func (s *Scope) DropTable(c *Compile) error {
 	dbName := qry.GetDatabase()
 	tblName := qry.GetTable()
 	isView := qry.GetIsView()
-	if !isView && qry.TableDef == nil {
-		if qry.IfExists {
-			return nil
-		}
-	}
 	var isSource = false
 	if qry.TableDef != nil {
 		isSource = qry.TableDef.TableType == catalog.SystemSourceRel
@@ -2601,6 +2672,22 @@ func (s *Scope) DropTable(c *Compile) error {
 	var rel engine.Relation
 	var err error
 	var isTemp bool
+	var originTableName string
+
+	if session := c.proc.GetSession(); session != nil {
+		if real, ok := session.GetTempTable(dbName, tblName); ok {
+			originTableName = tblName
+			tblName = real
+			qry.Table = real
+			isTemp = true
+		}
+	}
+
+	if !isView && qry.TableDef == nil && !isTemp {
+		if qry.IfExists {
+			return nil
+		}
+	}
 
 	if !c.disableLock {
 		if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
@@ -2618,22 +2705,10 @@ func (s *Scope) DropTable(c *Compile) error {
 	}
 
 	if rel, err = dbSource.Relation(c.proc.Ctx, tblName, nil); err != nil {
-		var e error // avoid contamination of error messages
-		dbSource, e = c.e.Database(c.proc.Ctx, defines.TEMPORARY_DBNAME, c.proc.GetTxnOperator())
-		if dbSource == nil && qry.GetIfExists() {
+		if qry.GetIfExists() {
 			return nil
-		} else if e != nil {
-			return err
 		}
-		rel, e = dbSource.Relation(c.proc.Ctx, engine.GetTempTableName(dbName, tblName), nil)
-		if e != nil {
-			if qry.GetIfExists() {
-				return nil
-			} else {
-				return err
-			}
-		}
-		isTemp = true
+		return err
 	}
 
 	if !c.disableLock &&
@@ -2671,7 +2746,9 @@ func (s *Scope) DropTable(c *Compile) error {
 
 	if len(qry.UpdateFkSqls) > 0 {
 		for _, sql := range qry.UpdateFkSqls {
-			if err = c.runSql(sql); err != nil {
+			if err = c.runSqlWithOptions(
+				sql, executor.StatementOption{}.WithDisableLog(),
+			); err != nil {
 				return err
 			}
 		}
@@ -2737,102 +2814,75 @@ func (s *Scope) DropTable(c *Compile) error {
 		return err
 	}
 
+	// unregister index update by Table Id
+	err = DropAllIndexUpdateTasks(c, rel.GetTableDef(c.proc.Ctx), qry.Database, qry.Table)
+	if err != nil {
+		return err
+	}
+
 	// delete all index objects record of the table in mo_catalog.mo_indexes
 	if !qry.IsView && qry.Database != catalog.MO_CATALOG && qry.Table != catalog.MO_INDEXES {
 		if qry.GetTableDef().Pkey != nil || len(qry.GetTableDef().Indexes) > 0 {
 			deleteSql := fmt.Sprintf(deleteMoIndexesWithTableIdFormat, qry.GetTableDef().TblId)
-			err = c.runSql(deleteSql)
-			if err != nil {
+			if err = c.runSqlWithOptions(
+				deleteSql, executor.StatementOption{}.WithDisableLog(),
+			); err != nil {
 				return err
 			}
 		}
 	}
 
-	if isTemp {
-		if err := dbSource.Delete(c.proc.Ctx, engine.GetTempTableName(dbName, tblName)); err != nil {
+	if err := dbSource.Delete(c.proc.Ctx, tblName); err != nil {
+		return err
+	}
+	// Try to remove temp table alias from session if it exists.
+	// tblName is the real name here (because Binder resolved it using the temp name from session if it was an alias).
+	// If tblName is not a temp table (e.g. regular table), this call will just do nothing (scan map and find no match).
+	if sess := c.proc.GetSession(); sess != nil {
+		if isTemp {
+			sess.RemoveTempTable(dbName, originTableName)
+		} else {
+			sess.RemoveTempTableByRealName(tblName)
+		}
+	}
+
+	for _, name := range qry.IndexTableNames {
+		if err = maybeDeleteAutoIncrement(c.proc.Ctx, c.proc.GetService(), dbSource, name, c.proc.GetTxnOperator()); err != nil {
 			return err
 		}
-		for _, name := range qry.IndexTableNames {
-			if err = maybeDeleteAutoIncrement(c.proc.Ctx, c.proc.GetService(), dbSource,
-				engine.GetTempTableName(dbName, name), c.proc.GetTxnOperator()); err != nil {
-				return err
-			}
 
-			if err := dbSource.Delete(c.proc.Ctx, engine.GetTempTableName(dbName, name)); err != nil {
-				return err
-			}
-		}
-
-		if dbName != catalog.MO_CATALOG && tblName != catalog.MO_INDEXES {
-			tblDef := rel.GetTableDef(c.proc.Ctx)
-			var containAuto bool
-			for _, col := range tblDef.Cols {
-				if col.Typ.AutoIncr {
-					containAuto = true
-					break
-				}
-			}
-			if containAuto {
-				err := incrservice.GetAutoIncrementService(c.proc.GetService()).Delete(
-					c.proc.Ctx,
-					rel.GetTableID(c.proc.Ctx),
-					c.proc.GetTxnOperator())
-				if err != nil {
-					return err
-				}
-			}
-
-			if err := shardservice.GetService(c.proc.GetService()).Delete(
-				c.proc.Ctx,
-				rel.GetTableID(c.proc.Ctx),
-				c.proc.GetTxnOperator(),
-			); err != nil {
-				return err
-			}
-		}
-
-	} else {
-		if err := dbSource.Delete(c.proc.Ctx, tblName); err != nil {
+		if err := dbSource.Delete(c.proc.Ctx, name); err != nil {
 			return err
 		}
-		for _, name := range qry.IndexTableNames {
-			if err = maybeDeleteAutoIncrement(c.proc.Ctx, c.proc.GetService(), dbSource, name, c.proc.GetTxnOperator()); err != nil {
-				return err
-			}
 
-			if err := dbSource.Delete(c.proc.Ctx, name); err != nil {
-				return err
-			}
+	}
 
+	if dbName != catalog.MO_CATALOG && tblName != catalog.MO_INDEXES {
+		tblDef := rel.GetTableDef(c.proc.Ctx)
+		var containAuto bool
+		for _, col := range tblDef.Cols {
+			if col.Typ.AutoIncr {
+				containAuto = true
+				break
+			}
 		}
-
-		if dbName != catalog.MO_CATALOG && tblName != catalog.MO_INDEXES {
-			tblDef := rel.GetTableDef(c.proc.Ctx)
-			var containAuto bool
-			for _, col := range tblDef.Cols {
-				if col.Typ.AutoIncr {
-					containAuto = true
-					break
-				}
-			}
-			if containAuto && !c.disableDropAutoIncrement {
-				// When drop table 'mo_catalog.mo_indexes', there is no need to delete the auto increment data
-				err := incrservice.GetAutoIncrementService(c.proc.GetService()).Delete(
-					c.proc.Ctx,
-					rel.GetTableID(c.proc.Ctx),
-					c.proc.GetTxnOperator())
-				if err != nil {
-					return err
-				}
-			}
-
-			if err := shardservice.GetService(c.proc.GetService()).Delete(
+		if containAuto && !c.disableDropAutoIncrement {
+			// When drop table 'mo_catalog.mo_indexes', there is no need to delete the auto increment data
+			err := incrservice.GetAutoIncrementService(c.proc.GetService()).Delete(
 				c.proc.Ctx,
 				rel.GetTableID(c.proc.Ctx),
-				c.proc.GetTxnOperator(),
-			); err != nil {
+				c.proc.GetTxnOperator())
+			if err != nil {
 				return err
 			}
+		}
+
+		if err := shardservice.GetService(c.proc.GetService()).Delete(
+			c.proc.Ctx,
+			rel.GetTableID(c.proc.Ctx),
+			c.proc.GetTxnOperator(),
+		); err != nil {
+			return err
 		}
 	}
 
@@ -2881,7 +2931,7 @@ func (s *Scope) DropTable(c *Compile) error {
 	for _, ss := range sqls {
 		if err = c.runSqlWithSystemTenant(ss); err != nil {
 			logutil.Error("run extra sql failed when drop table",
-				zap.String("sql", ss),
+				zap.String("sql", commonutil.Abbreviate(ss, 500)),
 				zap.Error(err),
 			)
 			return err
@@ -3021,8 +3071,9 @@ func (s *Scope) AlterSequence(c *Compile) error {
 
 		curval = c.proc.GetSessionInfo().SeqCurValues[rel.GetTableID(c.proc.Ctx)]
 		// dorp the pre sequence
-		err = c.runSql(fmt.Sprintf("drop sequence %s", tblName))
-		if err != nil {
+		if err = c.runSqlWithOptions(
+			fmt.Sprintf("DROP SEQUENCE %s", tblName), executor.StatementOption{}.WithDisableLog(),
+		); err != nil {
 			return err
 		}
 	} else {
@@ -3921,7 +3972,7 @@ func (s *Scope) CreatePitr(c *Compile) error {
 
 	// check pitr if exists（pitr_name + create_account）
 	checkExistSql := getSqlForCheckPitrExists(pitrName, accountId)
-	existRes, err := c.runSqlWithResult(checkExistSql, int32(sysAccountId))
+	existRes, err := c.runSqlWithResultAndOptions(checkExistSql, int32(sysAccountId), executor.StatementOption{}.WithDisableLog())
 	if err != nil {
 		return err
 	}
@@ -3936,7 +3987,7 @@ func (s *Scope) CreatePitr(c *Compile) error {
 
 	// Check if pitr dup
 	checkSql := getSqlForCheckPitrDup(createPitr)
-	res, err := c.runSqlWithResult(checkSql, int32(sysAccountId))
+	res, err := c.runSqlWithResultAndOptions(checkSql, int32(sysAccountId), executor.StatementOption{}.WithDisableLog())
 	if err != nil {
 		return err
 	}
@@ -3985,7 +4036,7 @@ func (s *Scope) CreatePitr(c *Compile) error {
 	)
 
 	// Execute create pitr sql
-	err = c.runSqlWithAccountId(sql, int32(sysAccountId))
+	err = c.runSqlWithAccountIdAndOptions(sql, int32(sysAccountId), executor.StatementOption{}.WithDisableLog())
 	if err != nil {
 		return err
 	}
@@ -3995,8 +4046,8 @@ func (s *Scope) CreatePitr(c *Compile) error {
 	const sysAccountId = 0
 
 	// Query for sys_mo_catalog_pitr
-	sysPitrSql := "select pitr_length, pitr_unit from mo_catalog.mo_pitr where pitr_name = '" + sysMoCatalogPitr + "'"
-	sysRes, err := c.runSqlWithResult(sysPitrSql, sysAccountId)
+	sysPitrSql := "SELECT pitr_length, pitr_unit FROM mo_catalog.mo_pitr WHERE pitr_name = '" + sysMoCatalogPitr + "'"
+	sysRes, err := c.runSqlWithResultAndOptions(sysPitrSql, sysAccountId, executor.StatementOption{}.WithDisableLog())
 	if err != nil {
 		return err
 	}
@@ -4013,8 +4064,8 @@ func (s *Scope) CreatePitr(c *Compile) error {
 	}
 
 	if needUpdateSysPitr {
-		updateSql := fmt.Sprintf("update mo_catalog.mo_pitr set pitr_length = %d, pitr_unit = '%s' where pitr_name = '%s'", createPitr.GetPitrValue(), createPitr.GetPitrUnit(), sysMoCatalogPitr)
-		err = c.runSqlWithAccountId(updateSql, sysAccountId)
+		updateSql := fmt.Sprintf("UPDATE mo_catalog.mo_pitr SET pitr_length = %d, pitr_unit = '%s' WHERE pitr_name = '%s'", createPitr.GetPitrValue(), createPitr.GetPitrUnit(), sysMoCatalogPitr)
+		err = c.runSqlWithAccountIdAndOptions(updateSql, sysAccountId, executor.StatementOption{}.WithDisableLog())
 		if err != nil {
 			return err
 		}
@@ -4065,7 +4116,7 @@ func (s *Scope) CreatePitr(c *Compile) error {
 			createPitr.GetPitrUnit(),
 			now,
 		)
-		err = c.runSqlWithAccountId(insertSql, sysAccountId)
+		err = c.runSqlWithAccountIdAndOptions(insertSql, sysAccountId, executor.StatementOption{}.WithDisableLog())
 		if err != nil {
 			return err
 		}
@@ -4114,8 +4165,8 @@ func (s *Scope) DropPitr(c *Compile) error {
 	}
 
 	// 1. Check if PITR exists
-	checkSql := fmt.Sprintf("select pitr_id from mo_catalog.mo_pitr where pitr_name = '%s' and create_account = %d", pitrName, accountId)
-	res, err := c.runSqlWithResult(checkSql, int32(sysAccountId))
+	checkSql := fmt.Sprintf("SELECT pitr_id FROM mo_catalog.mo_pitr WHERE pitr_name = '%s' AND create_account = %d", pitrName, accountId)
+	res, err := c.runSqlWithResultAndOptions(checkSql, int32(sysAccountId), executor.StatementOption{}.WithDisableLog())
 	if err != nil {
 		return err
 	}
@@ -4128,23 +4179,23 @@ func (s *Scope) DropPitr(c *Compile) error {
 	}
 
 	// 2. Delete PITR record
-	deleteSql := fmt.Sprintf("delete from mo_catalog.mo_pitr where pitr_name = '%s' and create_account = %d", pitrName, accountId)
-	err = c.runSqlWithAccountId(deleteSql, int32(sysAccountId))
+	deleteSql := fmt.Sprintf("DELETE FROM mo_catalog.mo_pitr WHERE pitr_name = '%s' AND create_account = %d", pitrName, accountId)
+	err = c.runSqlWithAccountIdAndOptions(deleteSql, int32(sysAccountId), executor.StatementOption{}.WithDisableLog())
 	if err != nil {
 		return err
 	}
 
 	// 3. Check if there are other PITR records besides sys_mo_catalog_pitr
-	checkOtherSql := fmt.Sprintf("select pitr_id from mo_catalog.mo_pitr where pitr_name != '%s'", sysMoCatalogPitr)
-	otherRes, err := c.runSqlWithResult(checkOtherSql, sysAccountId)
+	checkOtherSql := fmt.Sprintf("SELECT pitr_id FROM mo_catalog.mo_pitr WHERE pitr_name != '%s'", sysMoCatalogPitr)
+	otherRes, err := c.runSqlWithResultAndOptions(checkOtherSql, sysAccountId, executor.StatementOption{}.WithDisableLog())
 	if err != nil {
 		return err
 	}
 	defer otherRes.Close()
 	if len(otherRes.Batches) == 0 || otherRes.Batches[0].RowCount() == 0 {
 		// 4. No other PITR records, delete sys_mo_catalog_pitr
-		deleteSysSql := fmt.Sprintf("delete from mo_catalog.mo_pitr where pitr_name = '%s' and create_account = %d", sysMoCatalogPitr, sysAccountId)
-		err = c.runSqlWithAccountId(deleteSysSql, sysAccountId)
+		deleteSysSql := fmt.Sprintf("DELETE FROM mo_catalog.mo_pitr WHERE pitr_name = '%s' AND create_account = %d", sysMoCatalogPitr, sysAccountId)
+		err = c.runSqlWithAccountIdAndOptions(deleteSysSql, sysAccountId, executor.StatementOption{}.WithDisableLog())
 		if err != nil {
 			return err
 		}
@@ -4170,26 +4221,26 @@ func pitrDupError(c *Compile, createPitr *plan.CreatePitr) error {
 func getSqlForCheckPitrDup(
 	createPitr *plan.CreatePitr,
 ) string {
-	sql := "select pitr_id from mo_catalog.mo_pitr where create_account = %d"
+	sql := "SELECT pitr_id FROM mo_catalog.mo_pitr WHERE create_account = %d"
 	switch tree.PitrLevel(createPitr.GetLevel()) {
 	case tree.PITRLEVELCLUSTER:
 		return getSqlForCheckDupPitrFormat(createPitr.CurrentAccountId, math.MaxUint64)
 	case tree.PITRLEVELACCOUNT:
 		if createPitr.OriginAccountName {
-			return fmt.Sprintf(sql, createPitr.CurrentAccountId) + fmt.Sprintf(" and account_name = '%s' and level = 'account' and pitr_status = 1;", createPitr.AccountName)
+			return fmt.Sprintf(sql, createPitr.CurrentAccountId) + fmt.Sprintf(" AND account_name = '%s' AND level = 'account' AND pitr_status = 1;", createPitr.AccountName)
 		} else {
-			return fmt.Sprintf(sql, createPitr.CurrentAccountId) + fmt.Sprintf(" and account_name = '%s' and level = 'account' and pitr_status = 1;", createPitr.CurrentAccount)
+			return fmt.Sprintf(sql, createPitr.CurrentAccountId) + fmt.Sprintf(" AND account_name = '%s' AND level = 'account' AND pitr_status = 1;", createPitr.CurrentAccount)
 		}
 	case tree.PITRLEVELDATABASE:
-		return fmt.Sprintf(sql, createPitr.CurrentAccountId) + fmt.Sprintf(" and database_name = '%s' and level = 'database' and pitr_status = 1;", createPitr.DatabaseName)
+		return fmt.Sprintf(sql, createPitr.CurrentAccountId) + fmt.Sprintf(" AND database_name = '%s' AND level = 'database' AND pitr_status = 1;", createPitr.DatabaseName)
 	case tree.PITRLEVELTABLE:
-		return fmt.Sprintf(sql, createPitr.CurrentAccountId) + fmt.Sprintf(" and database_name = '%s' and table_name = '%s' and level = 'table' and pitr_status = 1;", createPitr.DatabaseName, createPitr.TableName)
+		return fmt.Sprintf(sql, createPitr.CurrentAccountId) + fmt.Sprintf(" AND database_name = '%s' AND table_name = '%s' AND level = 'table' AND pitr_status = 1;", createPitr.DatabaseName, createPitr.TableName)
 	}
 	return sql
 }
 
 func getSqlForCheckDupPitrFormat(accountId uint32, objId uint64) string {
-	return fmt.Sprintf(`select pitr_id from mo_catalog.mo_pitr where create_account = %d and obj_id = %d;`, accountId, objId)
+	return fmt.Sprintf(`SELECT pitr_id FROM mo_catalog.mo_pitr WHERE create_account = %d AND obj_id = %d;`, accountId, objId)
 }
 
 func getPitrObjectId(createPitr *plan.CreatePitr) uint64 {
@@ -4257,7 +4308,7 @@ func CheckSysMoCatalogPitrResult(ctx context.Context, vecs []*vector.Vector, new
 }
 
 func getSqlForCheckPitrExists(pitrName string, accountId uint32) string {
-	return fmt.Sprintf("select pitr_id from mo_catalog.mo_pitr where pitr_name = '%s' and create_account = %d order by pitr_id", pitrName, accountId)
+	return fmt.Sprintf("SELECT pitr_id FROM mo_catalog.mo_pitr WHERE pitr_name = '%s' AND create_account = %d ORDER BY pitr_id", pitrName, accountId)
 }
 
 func (s *Scope) CreateCDC(c *Compile) error {
@@ -4273,7 +4324,7 @@ func (s *Scope) CreateCDC(c *Compile) error {
 	// 1.5 IF NOT EXISTS pre-check to avoid inconsistent rows between mo_cdc_task and daemon task
 	if planCDC.GetIfNotExists() {
 		preCheckSQL := cdc.CDCSQLBuilder.GetTaskIdSQL(uint64(opts.UserInfo.AccountId), opts.TaskName)
-		if res, err := c.runSqlWithResult(preCheckSQL, int32(catalog.System_Account)); err == nil {
+		if res, err := c.runSqlWithResultAndOptions(preCheckSQL, int32(catalog.System_Account), executor.StatementOption{}.WithDisableLog()); err == nil {
 			exists := false
 			if len(res.Batches) > 0 && res.Batches[0].Vecs[0].Length() > 0 {
 				exists = true
@@ -5014,9 +5065,9 @@ func (c *Compile) checkPitrGranularity(
 		return err
 	}
 
-	sqlCluster := fmt.Sprintf(`select pitr_length,pitr_unit from %s.%s where level='cluster' and account_id = %d`,
+	sqlCluster := fmt.Sprintf(`SELECT pitr_length,pitr_unit FROM %s.%s WHERE level='cluster' AND account_id = %d`,
 		catalog.MO_CATALOG, catalog.MO_PITR, accountId)
-	if res, err := c.runSqlWithResult(sqlCluster, int32(catalog.System_Account)); err == nil {
+	if res, err := c.runSqlWithResultAndOptions(sqlCluster, int32(catalog.System_Account), executor.StatementOption{}.WithDisableLog()); err == nil {
 		if len(res.Batches) > 0 && res.Batches[0].Vecs[0].Length() > 0 {
 			val := int64(vector.MustFixedColNoTypeCheck[uint8](res.Batches[0].Vecs[0])[0])
 			unit := strings.ToLower(res.Batches[0].Vecs[1].GetStringAt(0))
@@ -5035,7 +5086,7 @@ func (c *Compile) checkPitrGranularity(
 		isAccountPattern := pt.Source.Database == cdc.CDCPitrGranularity_All && pt.Source.Table == cdc.CDCPitrGranularity_All
 		// helper to run query and evaluate requirement
 		checkQuery := func(q string) (bool, error) {
-			res, err := c.runSqlWithResult(q, int32(catalog.System_Account))
+			res, err := c.runSqlWithResultAndOptions(q, int32(catalog.System_Account), executor.StatementOption{}.WithDisableLog())
 			if err != nil {
 				return false, err
 			}

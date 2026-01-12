@@ -4203,8 +4203,9 @@ func initDateToWeekTestCase() []tcTemp {
 					[]types.Date{d11, d12, d13, d14},
 					[]bool{false, false, false, false}),
 			},
+			// Mode 0 (default): Week starts on Sunday, range 0-53
 			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{1, 1, 53, 53},
+				[]uint8{52, 0, 52, 0},
 				[]bool{false, false, false, false}),
 		},
 		{
@@ -4214,8 +4215,9 @@ func initDateToWeekTestCase() []tcTemp {
 					[]types.Date{d21, d22, d23, d24},
 					[]bool{false, false, false, false}),
 			},
+			// Mode 0 (default): Week starts on Sunday, range 0-53
 			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{7, 25, 39, 49},
+				[]uint8{6, 25, 38, 49},
 				[]bool{false, false, false, false}),
 		},
 		{
@@ -4389,8 +4391,9 @@ func initDateTimeToWeekTestCase() []tcTemp {
 					[]types.Datetime{d11, d12, d13, d14},
 					[]bool{false, false, false, false}),
 			},
+			// Mode 0 (default): Week starts on Sunday, range 0-53
 			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{1, 1, 53, 53},
+				[]uint8{52, 0, 52, 0},
 				[]bool{false, false, false, false}),
 		},
 		{
@@ -4400,8 +4403,9 @@ func initDateTimeToWeekTestCase() []tcTemp {
 					[]types.Datetime{d21, d22, d23, d24},
 					[]bool{false, false, false, false}),
 			},
+			// Mode 0 (default): Week starts on Sunday, range 0-53
 			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{7, 25, 39, 49},
+				[]uint8{6, 25, 38, 49},
 				[]bool{false, false, false, false}),
 		},
 		{
@@ -4411,8 +4415,9 @@ func initDateTimeToWeekTestCase() []tcTemp {
 					[]types.Datetime{d11},
 					[]bool{true}),
 			},
+			// null input returns null, value doesn't matter but should match mode 0
 			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{1},
+				[]uint8{52},
 				[]bool{true}),
 		},
 	}

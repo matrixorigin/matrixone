@@ -1099,7 +1099,7 @@ type Reader interface {
 	BaseReader
 	SetOrderBy([]*plan.OrderBySpec)
 	GetOrderBy() []*plan.OrderBySpec
-	SetBlockTop([]*plan.OrderBySpec, uint64)
+	SetIndexParam(*plan.IndexReaderParam)
 	SetFilterZM(objectio.ZoneMap)
 	//SetScanType()
 }
@@ -1111,7 +1111,6 @@ type Database interface {
 
 	Delete(context.Context, string) error
 	Create(context.Context, string, []TableDef) error // Create Table - (name, table define)
-	Truncate(context.Context, string) (uint64, error)
 	GetDatabaseId(context.Context) string
 	IsSubscription(context.Context) bool
 	GetCreateSql(context.Context) string
@@ -1183,8 +1182,6 @@ type Engine interface {
 	GetService() string
 
 	LatestLogtailAppliedTime() timestamp.Timestamp
-
-	HasTempEngine() bool
 }
 
 type VectorPool interface {
@@ -1198,8 +1195,7 @@ type Hints struct {
 
 // EntireEngine is a wrapper for Engine to support temporary table
 type EntireEngine struct {
-	Engine     Engine // original engine
-	TempEngine Engine // new engine for temporarily table
+	Engine Engine // original engine
 }
 
 type forceBuildRemoteDSConfig struct {

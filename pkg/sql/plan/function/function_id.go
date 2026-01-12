@@ -570,9 +570,21 @@ const (
 	// function `is_ipv4_mapped`
 	IS_IPV4_MAPPED = 399
 
+	// function `json_arrayagg`
+	JSON_ARRAYAGG = 400
+
+	// function `json_objectagg`
+	JSON_OBJECTAGG = 401
+
+	// function `mo_feature_registry_upsert`
+	MO_FEATURE_REGISTRY_UPSERT = 402
+
+	// function `mo_feature_limit_upsert`
+	MO_FEATURE_LIMIT_UPSERT = 403
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 400
+	FUNCTION_END_NUMBER = 404
 )
 
 // functionIdRegister is what function we have registered already.
@@ -660,7 +672,15 @@ var functionIdRegister = map[string]int32{
 	"any_value":             ANY_VALUE,
 	"median":                MEDIAN,
 	// count window
-	"rank": RANK,
+	"rank":       RANK,
+	"row_number": ROW_NUMBER,
+	"dense_rank": DENSE_RANK,
+	// value window functions
+	"lag":         LAG,
+	"lead":        LEAD,
+	"first_value": FIRST_VALUE,
+	"last_value":  LAST_VALUE,
+	"nth_value":   NTH_VALUE,
 	// builtin
 	// whoever edit this, please follow the lexical order, or come up with a better ordering method
 	// binary functions
@@ -815,7 +835,6 @@ var functionIdRegister = map[string]int32{
 	"least":                          LEAST,
 	"roles_graphml":                  ROLES_GRAPHML,
 	"row_count":                      ROW_COUNT,
-	"row_number":                     ROW_NUMBER,
 	"version":                        VERSION,
 	"collation":                      COLLATION,
 	"json_array":                     JSON_ARRAY,
@@ -823,6 +842,8 @@ var functionIdRegister = map[string]int32{
 	"json_extract_string":            JSON_EXTRACT_STRING,
 	"json_extract_float64":           JSON_EXTRACT_FLOAT64,
 	"json_object":                    JSON_OBJECT,
+	"json_arrayagg":                  JSON_ARRAYAGG,
+	"json_objectagg":                 JSON_OBJECTAGG,
 	"json_quote":                     JSON_QUOTE,
 	"json_unquote":                   JSON_UNQUOTE,
 	"json_row":                       JSON_ROW,
@@ -835,7 +856,6 @@ var functionIdRegister = map[string]int32{
 	"try_moplugin":                   TRY_WASM,
 	"enable_fault_injection":         ENABLE_FAULT_INJECTION,
 	"disable_fault_injection":        DISABLE_FAULT_INJECTION,
-	"dense_rank":                     DENSE_RANK,
 	"mo_win_divisor":                 MO_WIN_DIVISOR,
 	"add_fault_point":                ADD_FAULT_POINT,
 	"remove_fault_point":             REMOVE_FAULT_POINT,
@@ -957,6 +977,9 @@ var functionIdRegister = map[string]int32{
 	"cosine_distance":   COSINE_DISTANCE,
 
 	"python_user_defined_function": PYTHON_UDF,
+
+	"mo_feature_registry_upsert": MO_FEATURE_REGISTRY_UPSERT,
+	"mo_feature_limit_upsert":    MO_FEATURE_LIMIT_UPSERT,
 
 	"mo_cpu":      MO_CPU,
 	"mo_memory":   MO_MEMORY,

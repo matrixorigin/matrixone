@@ -1,0 +1,47 @@
+services:
+  minio:
+    image: minio/minio:RELEASE.2023-11-01T18-37-25Z
+    container_name: mo-minio-local
+    platform: ${DOCKER_PLATFORM:-linux/amd64}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      # 挂载本地目录，使用用户权限
+      - ./mo-data/minio-data:/data
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: minio123
+    command: server --console-address ":9001" /data
+    healthcheck:
+      test: timeout 5s bash -c ':> /dev/tcp/127.0.0.1/9001' || exit 1
+      interval: 1s
+      timeout: 5s
+      retries: 10
+    user: "${DOCKER_UID:-1000}:${DOCKER_GID:-1000}"
+    restart: unless-stopped
+    networks:
+      - mo-minio-network
+
+  # Create default buckets via mc client
+  createbuckets:
+    image: minio/mc:RELEASE.2023-10-30T18-43-32Z
+    container_name: mo-minio-createbuckets
+    platform: ${DOCKER_PLATFORM:-linux/amd64}
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      /usr/bin/mc alias set myminio http://minio:9000 minio minio123;
+      /usr/bin/mc mb myminio/mo-test || true;
+      /usr/bin/mc anonymous set public myminio/mo-test;
+      exit 0;
+      "
+    networks:
+      - mo-minio-network
+    restart: "no"
+
+networks:
+  mo-minio-network:
+    driver: bridge

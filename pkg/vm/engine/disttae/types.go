@@ -17,7 +17,6 @@ package disttae
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
@@ -54,6 +53,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -289,11 +289,15 @@ type Engine struct {
 	//for message on multiCN, use uuid to get the messageBoard
 	messageCenter *message.MessageCenter
 
-	timeFixed             bool
-	moCatalogCreatedTime  *vector.Vector
-	moDatabaseCreatedTime *vector.Vector
-	moTablesCreatedTime   *vector.Vector
-	moColumnsCreatedTime  *vector.Vector
+	timeFixed bool
+	// sysTablesCreatedTime stores the created_time vectors for system tables.
+	// Index mapping:
+	//   0 - mo_catalog (database)
+	//   1 - mo_database (table in mo_tables)
+	//   2 - mo_tables (table in mo_tables)
+	//   3 - mo_columns (table in mo_tables)
+	//   4 - __mo_index_unique_mo_tables_logical_id (index table in mo_tables)
+	sysTablesCreatedTime []*vector.Vector
 
 	dynamicCtx
 	// for test only.
@@ -884,17 +888,20 @@ func (txn *Transaction) GCObjsByIdxRange(start, end int) (err error) {
 func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 	txn.op.EnterRollbackStmt()
 	defer txn.op.ExitRollbackStmt()
+	v2.TxnRollbackLastStatementCounter.Inc()
 	var (
 		beforeEntries int
 		afterEntries  int
 	)
 	defer func() {
-		logutil.Info(
-			"RollbackLastStatement",
-			zap.String("txn", hex.EncodeToString(txn.op.Txn().ID)),
-			zap.Int("before", beforeEntries),
-			zap.Int("after", afterEntries),
-		)
+		common.DoIfDebugEnabled(func() {
+			logutil.Debug(
+				"RollbackLastStatement",
+				zap.String("txn", txn.op.Txn().DebugString()),
+				zap.Int("before", beforeEntries),
+				zap.Int("after", afterEntries),
+			)
+		})
 	}()
 	txn.Lock()
 	defer txn.Unlock()
@@ -1122,6 +1129,7 @@ type txnTable struct {
 	createSql     string
 	constraint    []byte
 	extraInfo     *api.SchemaExtra
+	logicalId     uint64
 
 	// timestamp of the last operation on this table
 	lastTS timestamp.Timestamp

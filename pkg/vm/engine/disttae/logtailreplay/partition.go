@@ -18,16 +18,15 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
-	"go.uber.org/zap"
 )
 
 // a partition corresponds to a dn
@@ -47,6 +46,48 @@ type TableInfo struct {
 	ID            uint64
 	Name          string
 	PrimarySeqnum int
+}
+
+// TruncateInfo contains information about a truncate operation
+type TruncateInfo struct {
+	ID        uint64
+	Name      string
+	PrevState string
+	NewState  string
+	Duration  time.Duration
+	NewStart  string
+}
+
+func (t *TruncateInfo) String() string {
+	return fmt.Sprintf("[id=%d,name=%s,prev-state=%s,new-state=%s,duration=%v,new-start=%s]",
+		t.ID, t.Name, t.PrevState, t.NewState, t.Duration, t.NewStart)
+}
+
+// TruncateCollector collects truncate information for batch logging
+type TruncateCollector struct {
+	infos []TruncateInfo
+	mu    sync.Mutex
+}
+
+// NewTruncateCollector creates a new TruncateCollector
+func NewTruncateCollector() *TruncateCollector {
+	return &TruncateCollector{
+		infos: make([]TruncateInfo, 0),
+	}
+}
+
+// Add adds a truncate info to the collector
+func (c *TruncateCollector) Add(info TruncateInfo) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.infos = append(c.infos, info)
+}
+
+// GetAll returns all collected truncate infos
+func (c *TruncateCollector) GetAll() []TruncateInfo {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.infos
 }
 
 func NewPartition(
@@ -208,10 +249,14 @@ func (p *Partition) ConsumeCheckpoints(
 	return
 }
 
-func (p *Partition) Truncate(ctx context.Context, ids [2]uint64, ts types.TS) error {
-	err := p.Lock(ctx)
-	if err != nil {
-		return err
+func (p *Partition) Truncate(
+	ctx context.Context,
+	ids [2]uint64,
+	ts types.TS,
+	collector *TruncateCollector,
+) (err error) {
+	if err = p.Lock(ctx); err != nil {
+		return
 	}
 	defer p.Unlock()
 	curState := p.state.Load()
@@ -220,22 +265,32 @@ func (p *Partition) Truncate(ctx context.Context, ids [2]uint64, ts types.TS) er
 
 	inst := time.Now()
 	if updated := state.truncate(ids, ts); !updated {
-		return nil
+		return
 	}
 
 	if !p.state.CompareAndSwap(curState, state) {
 		panic("concurrent mutation")
 	}
 
-	logutil.Info(
-		"PS-Truncate",
-		zap.String("name", p.TableInfo.Name),
-		zap.Uint64("id", p.TableInfo.ID),
-		zap.String("prev-state", fmt.Sprintf("%p", curState)),
-		zap.String("new-state", fmt.Sprintf("%p", state)),
-		zap.Duration("duration", time.Since(inst)),
-		zap.String("new-start", state.start.ToString()),
-	)
+	if collector != nil {
+		collector.Add(TruncateInfo{
+			ID:        p.TableInfo.ID,
+			Name:      p.TableInfo.Name,
+			PrevState: fmt.Sprintf("%p", curState),
+			NewState:  fmt.Sprintf("%p", state),
+			Duration:  time.Since(inst),
+			NewStart:  state.start.ToString(),
+		})
+		// logutil.Info(
+		// 	"partition.state.truncate",
+		// 	zap.String("name", info.Name),
+		// 	zap.Uint64("id", info.ID),
+		// 	zap.String("prev-state", info.PrevState),
+		// 	zap.String("new-state", info.NewState),
+		// 	zap.Duration("duration", info.Duration),
+		// 	zap.String("new-start", info.NewStart),
+		// )
+	}
 
-	return nil
+	return
 }

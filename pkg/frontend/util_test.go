@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -49,7 +50,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
@@ -82,12 +82,7 @@ func Test_PathExists(t *testing.T) {
 	}
 }
 
-func Test_MinMax(t *testing.T) {
-	cvey.Convey("min", t, func() {
-		cvey.So(Min(10, 9), cvey.ShouldEqual, 9)
-		cvey.So(Min(9, 10), cvey.ShouldEqual, 9)
-	})
-
+func Test_Max(t *testing.T) {
 	cvey.Convey("max", t, func() {
 		cvey.So(Max(10, 9), cvey.ShouldEqual, 10)
 		cvey.So(Max(9, 10), cvey.ShouldEqual, 10)
@@ -101,17 +96,9 @@ func Test_routineid(t *testing.T) {
 	})
 }
 
-func Test_timeout(t *testing.T) {
-	cvey.Convey("timeout", t, func() {
-		to := NewTimeout(5*time.Second, true)
-		to.UpdateTime(time.Now())
-		cvey.So(to.isTimeout(), cvey.ShouldBeFalse)
-	})
-}
-
 func Test_substringFromBegin(t *testing.T) {
 	cvey.Convey("ssfb", t, func() {
-		cvey.So(SubStringFromBegin("abcdef", 3), cvey.ShouldEqual, "abc...")
+		cvey.So(commonutil.Abbreviate("abcdef", 3), cvey.ShouldEqual, "abc...")
 	})
 }
 
@@ -636,8 +623,8 @@ func TestGetExprValue(t *testing.T) {
 		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 		txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
 		txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
-		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
-		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
+		txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
+		txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 		txnOperator.EXPECT().GetWaitActiveCost().Return(time.Duration(0)).AnyTimes()
 		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
@@ -651,9 +638,6 @@ func TestGetExprValue(t *testing.T) {
 		setPu("", pu)
 		ses := NewSession(ctx, "", &testMysqlWriter{}, testutil.NewProc(t).Mp())
 		ses.SetDatabaseName("db")
-		var c clock.Clock
-		err := ses.GetTxnHandler().CreateTempStorage(c)
-		assert.Nil(t, err)
 		ec := newTestExecCtx(ctx, ctrl)
 		ec.proc = testutil.NewProc(t)
 		ec.ses = ses
@@ -746,8 +730,8 @@ func TestGetExprValue(t *testing.T) {
 		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 		txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
 		txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
-		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
-		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
+		txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
+		txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 		txnOperator.EXPECT().GetWaitActiveCost().Return(time.Duration(0)).AnyTimes()
 		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
@@ -760,9 +744,6 @@ func TestGetExprValue(t *testing.T) {
 		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
 		setPu("", pu)
 		ses := NewSession(ctx, "", &testMysqlWriter{}, testutil.NewProc(t).Mp())
-		var c clock.Clock
-		err := ses.GetTxnHandler().CreateTempStorage(c)
-		assert.Nil(t, err)
 		ec := newTestExecCtx(ctx, ctrl)
 		ec.reqCtx = ctx
 		ses.txnCompileCtx.execCtx = ec

@@ -655,7 +655,12 @@ func stringifyMap(req any, f func(any, any) string) string {
 	return buf.String()
 }
 
-func execReadSql(ctx context.Context, op client.TxnOperator, sql string, disableLog bool) (executor.Result, error) {
+func execReadSql(
+	ctx context.Context,
+	op client.TxnOperator,
+	sql string,
+	disableLog bool,
+) (executor.Result, error) {
 	// copy from compile.go runSqlWithResult
 	service := op.GetWorkspace().(*Transaction).proc.GetService()
 	v, ok := moruntime.ServiceRuntime(service).GetGlobalVariables(moruntime.InternalSQLExecutor)

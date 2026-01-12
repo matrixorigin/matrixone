@@ -1,24 +1,24 @@
 SELECT 'a' LIKE 'ae';
 a like ae
-false
+0
 SELECT 'ae' LIKE 'a';
 ae like a
-false
+0
 SELECT 'MYSQL' LIKE 'mysql';
 MYSQL like mysql
-false
+0
 SELECT 'David!' LIKE 'David_';
 David! like David_
-true
+1
 SELECT 'David!' LIKE '%D%v%';
 David! like %D%v%
-true
+1
 SELECT 'David!' LIKE 'David\_';
 David! like David\_
-false
+0
 SELECT 'David_' LIKE 'David\_';
 David_ like David\_
-false
+0
 DROP TABLE IF EXISTS like_test;
 CREATE TABLE like_test(
 str1 VARCHAR(50)
@@ -152,14 +152,14 @@ count(*)
 8
 SELECT str1, str1 LIKE '%\\' FROM like_test;
 str1    str1 like %\\
-D:    false
-D:\    true
-D:\System_files    false
-D:\System_files\    true
+D:    0
+D:\    1
+D:\System_files    0
+D:\System_files\    1
 null    null
-NULL    false
-  A    false
-s _    false
+NULL    0
+  A    0
+s _    0
 SELECT str1, str1 LIKE '%\\\\' FROM like_test;
 [unknown result because it is related to issue#5078]
 DELETE FROM like_test;
@@ -406,6 +406,6 @@ a
 abc
 ABC
 abC
-show variables where value ilike "%system%" and variable_name = "time_zone";
+show variables where value ilike "%matrixone%" and variable_name = "version_comment";
 Variable_name    Value
-time_zone    SYSTEM
+version_comment    MatrixOne

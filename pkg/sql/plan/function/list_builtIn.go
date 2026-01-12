@@ -6148,6 +6148,50 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `mo_feature_registry_upsert`
+	{
+		functionId: MO_FEATURE_REGISTRY_UPSERT,
+		class:      plan.Function_INTERNAL | plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				volatile:   true,
+				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar, types.T_bool},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return MoFeatureRegistryUpsert
+				},
+			},
+		},
+	},
+
+	// function `mo_feature_limit_upsert`
+	{
+		functionId: MO_FEATURE_LIMIT_UPSERT,
+		class:      plan.Function_INTERNAL | plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				volatile:   true,
+				args:       []types.T{types.T_int64, types.T_varchar, types.T_varchar, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return MoFeatureLimitUpsert
+				},
+			},
+		},
+	},
+
 	// function `mo_cu`
 	{
 		functionId: MO_CU,
@@ -7254,6 +7298,26 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 			{
 				overloadId: 1,
 				args:       []types.T{types.T_datetime},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint8.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return DatetimeToWeek
+				},
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_date, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint8.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return DateToWeek
+				},
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_datetime, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint8.ToType()
 				},

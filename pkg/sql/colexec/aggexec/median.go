@@ -15,6 +15,9 @@
 package aggexec
 
 import (
+	"bytes"
+	io "io"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -56,9 +59,12 @@ func (exec *medianColumnExecSelf[T, R]) GetOptResult() SplitResult {
 
 func (exec *medianColumnExecSelf[T, R]) marshal() ([]byte, error) {
 	d := exec.singleAggInfo.getEncoded()
-	r, em, err := exec.ret.marshalToBytes()
+	r, em, dist, err := exec.ret.marshalToBytes()
 	if err != nil {
 		return nil, err
+	}
+	if dist != nil {
+		return nil, moerr.NewInternalErrorNoCtx("dist should have been nil")
 	}
 
 	encoded := &EncodedAgg{
@@ -78,6 +84,45 @@ func (exec *medianColumnExecSelf[T, R]) marshal() ([]byte, error) {
 	return encoded.Marshal()
 }
 
+func (exec *medianColumnExecSelf[T, R]) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
+	return marshalRetAndGroupsToBuffer(
+		cnt, flags, buf,
+		&exec.ret.optSplitResult, exec.groups, nil)
+}
+
+func (exec *medianColumnExecSelf[T, R]) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
+	return marshalChunkToBuffer(
+		chunk, buf,
+		&exec.ret.optSplitResult, exec.groups, nil)
+}
+
+func (exec *medianColumnExecSelf[T, R]) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
+	err := unmarshalFromReaderNoGroup(reader, &exec.ret.optSplitResult)
+	if err != nil {
+		return err
+	}
+	exec.ret.setupT()
+
+	ngrp, err := types.ReadInt64(reader)
+	if err != nil {
+		return err
+	}
+	if ngrp != 0 {
+		exec.groups = make([]*Vectors[T], ngrp)
+		for i := range exec.groups {
+			exec.groups[i] = NewEmptyVectors[T]()
+			_, bs, err := types.ReadSizeBytes(reader)
+			if err != nil {
+				return err
+			}
+			if err = exec.groups[i].Unmarshal(bs, exec.singleAggInfo.argType, mp); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func (exec *medianColumnExecSelf[T, R]) unmarshal(mp *mpool.MPool, result, empties, groups [][]byte) error {
 	if len(groups) > 0 {
 		exec.groups = make([]*Vectors[T], len(groups))
@@ -89,17 +134,23 @@ func (exec *medianColumnExecSelf[T, R]) unmarshal(mp *mpool.MPool, result, empti
 			}
 		}
 	}
-	return exec.ret.unmarshalFromBytes(result, empties)
+	// XXX: unless we do not support median(distinct X), this is a bug.
+	// group, so distinct is not used.
+	return exec.ret.unmarshalFromBytes(result, empties, nil)
 }
 
-func newMedianColumnExecSelf[T numeric | types.Decimal64 | types.Decimal128, R float64 | types.Decimal128](mg AggMemoryManager, info singleAggInfo) medianColumnExecSelf[T, R] {
+func newMedianColumnExecSelf[T numeric | types.Decimal64 | types.Decimal128, R float64 | types.Decimal128](mg *mpool.MPool, info singleAggInfo) medianColumnExecSelf[T, R] {
 	var r R
+	// XXX: this distinct impl. is totall screwed.
 	s := medianColumnExecSelf[T, R]{
 		singleAggInfo: info,
-		ret:           initAggResultWithFixedTypeResult[R](mg, info.retType, info.emptyNull, r),
+		ret:           initAggResultWithFixedTypeResult[R](mg, info.retType, info.emptyNull, r, info.IsDistinct()),
 	}
+
+	// set mpool for distinct hash, this is so messed up and we have to
+	// completely rewrite it later.
 	if info.IsDistinct() {
-		s.distinctHash = newDistinctHash()
+		s.distinctHash.mp = mg
 	}
 	return s
 }
@@ -369,7 +420,7 @@ type medianColumnNumericExec[T numeric] struct {
 	medianColumnExecSelf[T, float64]
 }
 
-func newMedianColumnNumericExec[T numeric](mg AggMemoryManager, info singleAggInfo) AggFuncExec {
+func newMedianColumnNumericExec[T numeric](mg *mpool.MPool, info singleAggInfo) AggFuncExec {
 	return &medianColumnNumericExec[T]{
 		medianColumnExecSelf: newMedianColumnExecSelf[T, float64](mg, info),
 	}
@@ -379,13 +430,13 @@ type medianColumnDecimalExec[T types.Decimal64 | types.Decimal128] struct {
 	medianColumnExecSelf[T, types.Decimal128]
 }
 
-func newMedianColumnDecimalExec[T types.Decimal64 | types.Decimal128](mg AggMemoryManager, info singleAggInfo) AggFuncExec {
+func newMedianColumnDecimalExec[T types.Decimal64 | types.Decimal128](mg *mpool.MPool, info singleAggInfo) AggFuncExec {
 	return &medianColumnDecimalExec[T]{
 		medianColumnExecSelf: newMedianColumnExecSelf[T, types.Decimal128](mg, info),
 	}
 }
 
-func newMedianExecutor(mg AggMemoryManager, info singleAggInfo) (AggFuncExec, error) {
+func newMedianExecutor(mg *mpool.MPool, info singleAggInfo) (AggFuncExec, error) {
 	if info.distinct {
 		return nil, moerr.NewNotSupportedNoCtx("median in distinct mode")
 	}

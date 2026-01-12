@@ -933,8 +933,11 @@ var (
 		catalog.MO_TABLE_STATS:        0,
 		catalog.MO_MERGE_SETTINGS:     0,
 		catalog.MO_ISCP_LOG:           0,
+		catalog.MO_INDEX_UPDATE:       0,
 		catalog.MO_BRANCH_METADATA:    0,
 		catalog.MO_CCPR_LOG:           0,
+		catalog.MO_FEATURE_LIMIT:      0,
+		catalog.MO_FEATURE_REGISTRY:   0,
 	}
 	sysAccountTables = map[string]struct{}{
 		catalog.MOVersionTable:       {},
@@ -980,8 +983,14 @@ var (
 		catalog.MO_ACCOUNT_LOCK:       0,
 		catalog.MO_MERGE_SETTINGS:     0,
 		catalog.MO_ISCP_LOG:           0,
+		catalog.MO_INDEX_UPDATE:       0,
 		catalog.MO_BRANCH_METADATA:    0,
+<<<<<<< HEAD
 		catalog.MO_CCPR_LOG:           0,
+=======
+		catalog.MO_FEATURE_LIMIT:      0,
+		catalog.MO_FEATURE_REGISTRY:   0,
+>>>>>>> main
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
 	createAutoTableSql           = MoCatalogMoAutoIncrTableDDL
@@ -1023,8 +1032,15 @@ var (
 		MoCatalogMergeSettingsDDL,
 		MoCatalogMergeSettingsInitData,
 		MoCatalogMoISCPLogDDL,
+		MoCatalogMoIndexUpdateDDL,
 		MoCatalogBranchMetadataDDL,
+<<<<<<< HEAD
 		MoCatalogMoCcprLogDDL,
+=======
+		MoCatalogFeatureLimitDDL,
+		MoCatalogFeatureRegistryDDL,
+		MoCatalogFeatureRegistryInitData,
+>>>>>>> main
 	}
 
 	//drop tables for the tenant
@@ -1254,6 +1270,8 @@ const (
 
 	roleIdOfRoleFormat = `select role_id from mo_catalog.mo_role where role_name = "%s" order by role_id;`
 
+	updateRoleNameFormat = `update mo_catalog.mo_role set role_name = "%s" where role_name = "%s" order by role_id;`
+
 	//operations on the mo_user_grant
 	getRoleOfUserFormat = `select r.role_id from  mo_catalog.mo_role r, mo_catalog.mo_user_grant ug where ug.role_id = r.role_id and ug.user_id = %d and r.role_name = "%s";`
 
@@ -1311,7 +1329,7 @@ const (
 
 	checkDatabaseWithOwnerFormat = `select dat_id, owner from mo_catalog.mo_database where datname = "%s" and account_id = %d;`
 
-	checkDatabaseTableFormat = `select rel_id from mo_catalog.mo_tables where relname = "%s" and reldatabase = "%s" and account_id = %d;`
+	checkDatabaseTableFormat = `select rel_logical_id from mo_catalog.mo_tables where relname = "%s" and reldatabase = "%s" and account_id = %d;`
 
 	//TODO:fix privilege_level string and obj_type string
 	//For object_type : table, privilege_level : *.*
@@ -1341,7 +1359,7 @@ const (
 	checkWithGrantOptionForTableDatabaseTable = `select rp.privilege_id,rp.with_grant_option
 				from mo_catalog.mo_database d, mo_catalog.mo_tables t, mo_catalog.mo_role_privs rp
 				where d.dat_id = t.reldatabase_id
-					and rp.obj_id = t.rel_id
+					and rp.obj_id = t.rel_logical_id
 					and rp.obj_type = "%s"
 					and rp.role_id = %d
 					and rp.privilege_id = %d
@@ -1400,7 +1418,7 @@ const (
 	checkRoleHasTableLevelPrivilegeFormat = `select rp.privilege_id,rp.with_grant_option
 				from mo_catalog.mo_database d, mo_catalog.mo_tables t, mo_catalog.mo_role_privs rp
 				where d.dat_id = t.reldatabase_id
-					and rp.obj_id = t.rel_id
+					and rp.obj_id = t.rel_logical_id
 					and rp.obj_type = "%s"
 					and rp.role_id = %d
 					and rp.privilege_id = %d
@@ -1578,6 +1596,11 @@ var (
 		PrivilegeTypeAlterAccount:   0,
 		PrivilegeTypeDropAccount:    0,
 		PrivilegeTypeUpgradeAccount: 0,
+	}
+
+	sysWhiteListTables = map[string]int8{
+		catalog.MO_MERGE_SETTINGS:                     1,
+		catalog.MO_TABLES_LOGICAL_ID_INDEX_TABLE_NAME: 1,
 	}
 )
 
@@ -1758,6 +1781,18 @@ func getSqlForRoleIdOfRole(ctx context.Context, roleName string) (string, error)
 		return "", err
 	}
 	return fmt.Sprintf(roleIdOfRoleFormat, roleName), nil
+}
+
+func getSqlForUpdateRoleName(ctx context.Context, oldName, newName string) (string, error) {
+	err := inputNameIsInvalid(ctx, oldName)
+	if err != nil {
+		return "", err
+	}
+	err = inputNameIsInvalid(ctx, newName)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(updateRoleNameFormat, newName, oldName), nil
 }
 
 func getSqlForRoleOfUser(ctx context.Context, userID int64, roleName string) (string, error) {
@@ -3549,9 +3584,43 @@ func tryDecodeStagePath(
 	return
 }
 
+// tryDecodeStagePathForExport is similar to tryDecodeStagePath but preserves printf-style
+// format specifiers like %d, %05d in the path. This is used for SELECT INTO OUTFILE with
+// SPLITSIZE where the filename template contains format specifiers for file numbering.
+func tryDecodeStagePathForExport(
+	ses *Session,
+	filePath string,
+) (retPath string, ok bool, err error) {
+
+	var (
+		s stage.StageDef
+	)
+
+	if strings.HasPrefix(filePath, stage.STAGE_PROTOCOL+"://") {
+		// stage:// URL - use export-specific function that preserves % format specifiers
+		if s, err = stageutil.UrlToStageDefForExport(filePath, ses.proc); err != nil {
+			return
+		}
+
+		// s.ToPath() returns the fileservice filepath, i.e. s3,...:/path for S3 or /path for local file
+		if retPath, _, err = s.ToPath(); err != nil {
+			return
+		}
+
+		ok = true
+	}
+
+	return
+}
+
 func doCheckFilePath(ctx context.Context, ses *Session, ep *tree.ExportParam) (err error) {
 	if ep == nil {
 		return err
+	}
+
+	// Validate and infer export format based on file suffix
+	if err = validateExportFormat(ctx, ep); err != nil {
+		return
 	}
 
 	// detect filepath contain stage or not
@@ -3561,7 +3630,7 @@ func doCheckFilePath(ctx context.Context, ses *Session, ep *tree.ExportParam) (e
 		filePath string
 	)
 
-	if filePath, ok, err = tryDecodeStagePath(ses, ep.FilePath); err != nil {
+	if filePath, ok, err = tryDecodeStagePathForExport(ses, ep.FilePath); err != nil {
 		return
 	}
 
@@ -3720,7 +3789,13 @@ type dropAccount struct {
 }
 
 // doDropAccount accomplishes the DropAccount statement
-func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dropAccount) (err error) {
+func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dropAccount, inTransaction ...bool) (err error) {
+	// Check if already in a transaction (for restore scenarios to avoid breaking outer transaction)
+	inTxn := false
+	if len(inTransaction) > 0 {
+		inTxn = inTransaction[0]
+	}
+
 	//set backgroundHandler's default schema
 	if handler, ok := bh.(*backExec); ok {
 		handler.backSes.txnCompileCtx.dbName = catalog.MO_CATALOG
@@ -3775,12 +3850,15 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 	}
 
 	dropAccountFunc := func() (rtnErr error) {
-		rtnErr = bh.Exec(ctx, "begin;")
-		defer func() {
-			rtnErr = finishTxn(ctx, bh, rtnErr)
-		}()
-		if rtnErr != nil {
-			return rtnErr
+		// If already in a transaction (e.g., restore scenario), don't create a new one
+		if !inTxn {
+			rtnErr = bh.Exec(ctx, "begin;")
+			if rtnErr != nil {
+				return rtnErr
+			}
+			defer func() {
+				rtnErr = finishTxn(ctx, bh, rtnErr)
+			}()
 		}
 
 		//step 0: lock account name first
@@ -4285,6 +4363,135 @@ func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) (err error
 				return err
 			}
 		}
+	}
+
+	return err
+}
+
+// doAlterRole accomplishes the AlterRole statement
+func doAlterRole(ctx context.Context, ses *Session, ar *tree.AlterRole) (err error) {
+	var vr *verifiedRole
+	var sql string
+	var erArray []ExecResult
+	var exists int
+	account := ses.GetTenantInfo()
+
+	// Normalize old and new role names
+	oldName, err := normalizeName(ctx, ar.OldName)
+	if err != nil {
+		return err
+	}
+	newName, err := normalizeName(ctx, ar.NewName)
+	if err != nil {
+		return err
+	}
+
+	// Check if old name and new name are the same
+	if oldName == newName {
+		return moerr.NewInternalErrorf(ctx, "the new role name is the same as the old role name")
+	}
+
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	//put it into the single transaction
+	err = bh.Exec(ctx, "begin;")
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+	if err != nil {
+		return err
+	}
+
+	//step1: check old role exists or not.
+	sql, err = getSqlForRoleIdOfRole(ctx, oldName)
+	if err != nil {
+		return err
+	}
+	vr, err = verifyRoleFunc(ctx, bh, sql, oldName, roleType)
+	if err != nil {
+		return err
+	}
+
+	if vr == nil {
+		if !ar.IfExists {
+			return moerr.NewInternalErrorf(ctx, "there is no role %s", oldName)
+		}
+		// If IF EXISTS is set and role doesn't exist, just return success
+		return nil
+	}
+
+	//step2: check if the role is the admin role (moadmin,accountadmin) or public,
+	//the role can not be renamed.
+	if account.IsNameOfAdminRoles(vr.name) || isPublicRole(vr.name) {
+		return moerr.NewInternalErrorf(ctx, "can not rename the role %s", vr.name)
+	}
+
+	//step3: check if new role name already exists (as role or user)
+	exists = 0
+	if isPredefinedRole(newName) {
+		exists = 3
+	} else {
+		// Check if new name exists as a role
+		sql, err = getSqlForRoleIdOfRole(ctx, newName)
+		if err != nil {
+			return err
+		}
+		bh.ClearExecResultSet()
+		err = bh.Exec(ctx, sql)
+		if err != nil {
+			return err
+		}
+
+		erArray, err = getResultSet(ctx, bh)
+		if err != nil {
+			return err
+		}
+		if execResultArrayHasData(erArray) {
+			exists = 1
+		}
+
+		// Check if new name exists as a user
+		if exists == 0 {
+			sql, err = getSqlForPasswordOfUser(ctx, newName)
+			if err != nil {
+				return err
+			}
+			bh.ClearExecResultSet()
+			err = bh.Exec(ctx, sql)
+			if err != nil {
+				return err
+			}
+
+			erArray, err = getResultSet(ctx, bh)
+			if err != nil {
+				return err
+			}
+			if execResultArrayHasData(erArray) {
+				exists = 2
+			}
+		}
+	}
+
+	if exists != 0 {
+		if exists == 1 {
+			return moerr.NewInternalErrorf(ctx, "the role %s already exists", newName)
+		} else if exists == 2 {
+			return moerr.NewInternalErrorf(ctx, "there is a user with the same name as the role %s", newName)
+		} else if exists == 3 {
+			return moerr.NewInternalErrorf(ctx, "can not use the name %s. it is the name of the predefined role", newName)
+		}
+	}
+
+	//step4: update the role name
+	sql, err = getSqlForUpdateRoleName(ctx, oldName, newName)
+	if err != nil {
+		return err
+	}
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		return err
 	}
 
 	return err
@@ -5438,6 +5645,8 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		typs = append(typs, PrivilegeTypeCreateRole, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
 	case *tree.DropRole:
 		typs = append(typs, PrivilegeTypeDropRole, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership, PrivilegeTypeRoleOwnership*/)
+	case *tree.AlterRole:
+		typs = append(typs, PrivilegeTypeAlterRole, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership, PrivilegeTypeRoleOwnership*/)
 	case *tree.Grant:
 		if st.Typ == tree.GrantTypeRole {
 			kind = privilegeKindInherit
@@ -6786,7 +6995,10 @@ func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx con
 			}
 			tbName := string(st.Names[0].ObjectName)
 			return checkRoleWhetherTableOwner(ctx, ses, dbName, tbName, ok)
-		case *tree.CloneTable, *tree.CloneDatabase:
+		case *tree.CloneTable, *tree.CloneDatabase,
+			*tree.DataBranchDiff, *tree.DataBranchMerge,
+			*tree.DataBranchCreateTable, *tree.DataBranchCreateDatabase,
+			*tree.DataBranchDeleteTable, *tree.DataBranchDeleteDatabase:
 			return true, stats, nil
 		}
 	}
@@ -6972,7 +7184,7 @@ func authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx conte
 				return false, stats, moerr.NewInternalError(ctx, "do not have privilege to execute the statement")
 			}
 		}
-		if isTargetMergeSettings(p) && verifyAccountCanExecMoCtrl(ses.GetTenantInfo()) {
+		if isTargetSysWhiteList(p) && verifyAccountCanExecMoCtrl(ses.GetTenantInfo()) {
 			return true, stats, nil
 		}
 		arr := extractPrivilegeTipsFromPlan(p)
@@ -7841,8 +8053,18 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccoun
 		if strings.HasPrefix(sql, fmt.Sprintf("CREATE TABLE mo_catalog.%s", catalog.MO_ISCP_LOG)) {
 			return true
 		}
-
+		if strings.HasPrefix(sql, fmt.Sprintf("CREATE TABLE mo_catalog.%s", catalog.MO_INDEX_UPDATE)) {
+			return true
+		}
 		if strings.HasPrefix(sql, fmt.Sprintf("create table mo_catalog.%s", catalog.MO_BRANCH_METADATA)) {
+			return true
+		}
+
+		if strings.HasPrefix(sql, fmt.Sprintf("create table mo_catalog.%s", catalog.MO_FEATURE_LIMIT)) {
+			return true
+		}
+
+		if strings.Contains(sql, fmt.Sprintf("mo_catalog.%s", catalog.MO_FEATURE_REGISTRY)) {
 			return true
 		}
 

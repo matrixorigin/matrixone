@@ -81,9 +81,18 @@ type cluster struct {
 	forceRefreshC   chan struct{}
 	readyOnce       sync.Once
 	readyC          chan struct{}
-	services        atomic.Pointer[services]
-	regexpCache     *regexpCache
-	options         struct {
+	// ready is a fast-path flag for waitReady() to avoid channel operations.
+	// Reading from a closed channel still requires runtime mutex acquisition,
+	// which causes significant contention under high concurrency (observed 241s/5.79%
+	// mutex contention in production). Using atomic.Bool eliminates this overhead.
+	//
+	// Correctness: readyOnce.Do guarantees that close(readyC) happens before
+	// ready.Store(true), so if ready.Load() returns true, readyC is guaranteed
+	// to be closed. If ready.Load() returns false, we fall back to channel wait.
+	ready       atomic.Bool
+	services    atomic.Pointer[services]
+	regexpCache *regexpCache
+	options     struct {
 		disableRefresh bool
 	}
 }
@@ -121,6 +130,7 @@ func NewMOCluster(
 	} else {
 		c.readyOnce.Do(func() {
 			close(c.readyC)
+			c.ready.Store(true)
 		})
 	}
 	if err := c.stopper.RunTask(c.regexpCacheGC); err != nil {
@@ -288,7 +298,24 @@ func (c *cluster) UpdateCN(s metadata.CNService) {
 	c.services.Store(new)
 }
 
+// waitReady blocks until the cluster has completed its first refresh from HAKeeper.
+// This ensures that service discovery calls don't return empty results during startup.
+//
+// Performance optimization: We use atomic.Bool as a fast-path to avoid the overhead
+// of channel receive operations. Even reading from a closed channel requires acquiring
+// a runtime mutex, which becomes a bottleneck under high concurrency.
+//
+// The fast-path is safe because:
+//   - If ready.Load() returns true, readyC is guaranteed to be closed (set in same sync.Once)
+//   - If ready.Load() returns false, we fall back to blocking on readyC
+//   - There's no race: ready is only set to true after readyC is closed
 func (c *cluster) waitReady() {
+	// Fast path: avoid channel operation overhead after cluster is ready.
+	// This eliminates ~5.79% mutex contention observed in production workloads.
+	if c.ready.Load() {
+		return
+	}
+	// Slow path: block until first refresh completes. Only happens during startup.
 	<-c.readyC
 }
 
@@ -363,6 +390,7 @@ func (c *cluster) refresh() {
 	c.services.Store(new)
 	c.readyOnce.Do(func() {
 		close(c.readyC)
+		c.ready.Store(true)
 	})
 }
 

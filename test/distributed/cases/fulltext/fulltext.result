@@ -17,8 +17,6 @@ select * from src where match(body) against('red');
 not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
 select * from src where match(body,title) against('+]]]');
 internal error: Invalid input search string.  search string onverted to empty pattern
-select * from src where match(body,title) against('+I'm');
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 55 near "m');";
 select match(body) against('red') from src;
 not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
 alter table src add fulltext index ftidx2 (body);

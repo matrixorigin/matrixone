@@ -34,11 +34,13 @@ func init() {
 	sysTableNames[pkgcatalog.MO_COLUMNS] = true
 	sysTableNames[pkgcatalog.MO_TABLES] = true
 	sysTableNames[pkgcatalog.MO_DATABASE] = true
+	sysTableNames[pkgcatalog.MO_TABLES_LOGICAL_ID_INDEX_TABLE_NAME] = true // Add index table
 
 	sysTableIds = make(map[uint64]bool)
 	sysTableIds[pkgcatalog.MO_TABLES_ID] = true
 	sysTableIds[pkgcatalog.MO_DATABASE_ID] = true
 	sysTableIds[pkgcatalog.MO_COLUMNS_ID] = true
+	sysTableIds[pkgcatalog.MO_TABLES_LOGICAL_ID_INDEX_ID] = true // Add index table
 
 	sysSharedDBNames = make(map[string]bool)
 	sysSharedDBNames[pkgcatalog.MO_CATALOG] = true

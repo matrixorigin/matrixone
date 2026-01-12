@@ -15,13 +15,15 @@
 package frontend
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 )
 
 func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray, err error) {
-	ses.EnterRunSql()
-	defer ses.ExitRunSql()
+	finishRunSQL := enterFrontendRunSQL(ses, execCtx)
+	defer finishRunSQL()
 	ses.EnterFPrint(FPExecInFrontEnd)
 	defer ses.ExitFPrint(FPExecInFrontEnd)
 	//check transaction states
@@ -316,6 +318,13 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		if err = handleDropRole(ses, execCtx, st); err != nil {
 			return
 		}
+	case *tree.AlterRole:
+		ses.EnterFPrint(FPAlterRole)
+		defer ses.ExitFPrint(FPAlterRole)
+		ses.InvalidatePrivilegeCache()
+		if err = handleAlterRole(ses, execCtx, st); err != nil {
+			return
+		}
 	case *tree.CreateFunction:
 		ses.EnterFPrint(FPCreateFunction)
 		defer ses.ExitFPrint(FPCreateFunction)
@@ -550,14 +559,14 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 	case *tree.CloneDatabase:
 		ses.EnterFPrint(FPCloneDatabase)
 		defer ses.ExitFPrint(FPCloneDatabase)
-		if err = handleCloneDatabase(execCtx, ses, st); err != nil {
+		if _, err = handleCloneDatabase(execCtx, ses, nil, st); err != nil {
 			return
 		}
 
 	case *tree.CloneTable:
 		ses.EnterFPrint(FPCloneTable)
 		defer ses.ExitFPrint(FPCloneTable)
-		if err = handleCloneTable(execCtx, ses, st, nil); err != nil {
+		if _, err = handleCloneTable(execCtx, ses, st, nil); err != nil {
 			return
 		}
 
@@ -596,4 +605,38 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		}
 	}
 	return
+}
+
+func enterFrontendRunSQL(ses *Session, execCtx *ExecCtx) func() {
+	if ses == nil || execCtx == nil {
+		return func() {}
+	}
+	txnHandler := ses.GetTxnHandler()
+	if txnHandler == nil {
+		return func() {}
+	}
+	txnOp := txnHandler.GetTxn()
+	if txnOp == nil {
+		return func() {}
+	}
+	sqlText := execCtx.sqlOfStmt
+	if sqlText == "" {
+		sqlText = ses.GetSql()
+	}
+	ctx := execCtx.reqCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	_, cancel := context.WithCancel(ctx)
+	token := txnOp.EnterRunSqlWithTokenAndSQL(cancel, sqlText)
+	if token != 0 {
+		ses.pushRunSQLToken(token)
+	}
+	return func() {
+		txnOp.ExitRunSqlWithToken(token)
+		if token != 0 {
+			ses.popRunSQLToken()
+		}
+		cancel()
+	}
 }

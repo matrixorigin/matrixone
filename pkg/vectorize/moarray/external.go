@@ -27,144 +27,155 @@ import (
 
 // These functions are exposed externally via SQL API.
 
-func Add[T types.RealNumbers](v1, v2 []T) ([]T, error) {
-	if len(v1) != len(v2) {
-		return nil, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
+func Add[T types.RealNumbers](p, q []T) ([]T, error) {
+	if len(p) != len(q) {
+		return nil, moerr.NewArrayInvalidOpNoCtx(len(p), len(q))
 	}
 
-	switch any(v1).(type) {
-	case []float32:
-		_v1 := blas32.Vector{N: len(v1), Inc: 1, Data: any(v1).([]float32)}
-		_v2 := blas32.Vector{N: len(v2), Inc: 1, Data: any(v2).([]float32)}
-		data := make([]T, len(v1))
-		f32 := any(data).([]float32)
-		ret := blas32.Vector{N: len(v1), Inc: 1, Data: f32}
-		blas32.Copy(_v1, ret)
-		blas32.Axpy(1, _v2, ret)
-		return data, nil
-	case []float64:
-		_v1 := blas64.Vector{N: len(v1), Inc: 1, Data: any(v1).([]float64)}
-		_v2 := blas64.Vector{N: len(v2), Inc: 1, Data: any(v2).([]float64)}
-		data := make([]T, len(v1))
-		f64 := any(data).([]float64)
-		ret := blas64.Vector{N: len(v1), Inc: 1, Data: f64}
-		blas64.Copy(_v1, ret)
-		blas64.Axpy(1, _v2, ret)
-		return data, nil
-	default:
-		panic("Add type not supported")
+	i := 0
+	n := len(p)
+	x := make([]T, n)
+	for i <= n-8 {
 
+		// BCE hint
+		pp := p[i : i+8 : i+8]
+		qq := q[i : i+8 : i+8]
+		xx := x[i : i+8 : i+8]
+
+		xx[0] = pp[0] + qq[0]
+		xx[1] = pp[1] + qq[1]
+		xx[2] = pp[2] + qq[2]
+		xx[3] = pp[3] + qq[3]
+		xx[4] = pp[4] + qq[4]
+		xx[5] = pp[5] + qq[5]
+		xx[6] = pp[6] + qq[6]
+		xx[7] = pp[7] + qq[7]
+		i += 8
 	}
+
+	for i < n {
+		x[i] = p[i] + q[i]
+		i++
+	}
+	return x, nil
 }
 
-func Subtract[T types.RealNumbers](v1, v2 []T) ([]T, error) {
-	if len(v1) != len(v2) {
-		return nil, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
+func Subtract[T types.RealNumbers](p, q []T) ([]T, error) {
+	if len(p) != len(q) {
+		return nil, moerr.NewArrayInvalidOpNoCtx(len(p), len(q))
 	}
 
-	switch any(v1).(type) {
-	case []float32:
-		_v1 := blas32.Vector{N: len(v1), Inc: 1, Data: any(v1).([]float32)}
-		_v2 := blas32.Vector{N: len(v2), Inc: 1, Data: any(v2).([]float32)}
-		data := make([]T, len(v1))
-		f32 := any(data).([]float32)
-		ret := blas32.Vector{N: len(v1), Inc: 1, Data: f32}
-		blas32.Copy(_v1, ret)
-		blas32.Axpy(-1, _v2, ret)
-		return data, nil
-	case []float64:
-		_v1 := blas64.Vector{N: len(v1), Inc: 1, Data: any(v1).([]float64)}
-		_v2 := blas64.Vector{N: len(v2), Inc: 1, Data: any(v2).([]float64)}
-		data := make([]T, len(v1))
-		f64 := any(data).([]float64)
-		ret := blas64.Vector{N: len(v1), Inc: 1, Data: f64}
-		blas64.Copy(_v1, ret)
-		blas64.Axpy(-1, _v2, ret)
-		return data, nil
-	default:
-		panic("Subtract type not supported")
+	i := 0
+	n := len(p)
+	x := make([]T, n)
+	for i <= n-8 {
 
+		// BCE hint
+		pp := p[i : i+8 : i+8]
+		qq := q[i : i+8 : i+8]
+		xx := x[i : i+8 : i+8]
+
+		xx[0] = pp[0] - qq[0]
+		xx[1] = pp[1] - qq[1]
+		xx[2] = pp[2] - qq[2]
+		xx[3] = pp[3] - qq[3]
+		xx[4] = pp[4] - qq[4]
+		xx[5] = pp[5] - qq[5]
+		xx[6] = pp[6] - qq[6]
+		xx[7] = pp[7] - qq[7]
+		i += 8
 	}
+
+	for i < n {
+		x[i] = p[i] - q[i]
+		i++
+	}
+	return x, nil
 }
 
-func Multiply[T types.RealNumbers](v1, v2 []T) ([]T, error) {
-	if len(v1) != len(v2) {
-		return nil, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
+func Multiply[T types.RealNumbers](p, q []T) ([]T, error) {
+	if len(p) != len(q) {
+		return nil, moerr.NewArrayInvalidOpNoCtx(len(p), len(q))
 	}
 
-	ret := make([]T, len(v1))
+	i := 0
+	n := len(p)
+	x := make([]T, n)
+	for i <= n-8 {
 
-	for i := range v1 {
-		ret[i] = v1[i] * v2[i]
+		// BCE hint
+		pp := p[i : i+8 : i+8]
+		qq := q[i : i+8 : i+8]
+		xx := x[i : i+8 : i+8]
+
+		xx[0] = pp[0] * qq[0]
+		xx[1] = pp[1] * qq[1]
+		xx[2] = pp[2] * qq[2]
+		xx[3] = pp[3] * qq[3]
+		xx[4] = pp[4] * qq[4]
+		xx[5] = pp[5] * qq[5]
+		xx[6] = pp[6] * qq[6]
+		xx[7] = pp[7] * qq[7]
+		i += 8
 	}
-	return ret, nil
+
+	for i < n {
+		x[i] = p[i] * q[i]
+		i++
+	}
+	return x, nil
 }
 
-func Divide[T types.RealNumbers](v1, v2 []T) ([]T, error) {
-	if len(v1) != len(v2) {
-		return nil, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
+func Divide[T types.RealNumbers](p, q []T) ([]T, error) {
+	if len(p) != len(q) {
+		return nil, moerr.NewArrayInvalidOpNoCtx(len(p), len(q))
 	}
 
 	// pre-check for division by zero
-	for i := 0; i < len(v2); i++ {
-		if v2[i] == 0 {
+	for i := 0; i < len(q); i++ {
+		if q[i] == 0 {
 			return nil, moerr.NewDivByZeroNoCtx()
 		}
 	}
 
-	ret := make([]T, len(v1))
-	for i := range v1 {
-		ret[i] = v1[i] / v2[i]
-	}
-	return ret, nil
-}
+	i := 0
+	n := len(p)
+	x := make([]T, n)
+	for i <= n-8 {
 
-// Compare returns an integer comparing two arrays/vectors lexicographically.
-// TODO: this function might not be correct. we need to compare using tolerance for float values.
-// TODO: need to check if we need len(v1)==len(v2) check.
-func Compare[T types.RealNumbers](v1, v2 []T) int {
-	minLen := len(v1)
-	if len(v2) < minLen {
-		minLen = len(v2)
-	}
+		// BCE hint
+		pp := p[i : i+8 : i+8]
+		qq := q[i : i+8 : i+8]
+		xx := x[i : i+8 : i+8]
 
-	for i := 0; i < minLen; i++ {
-		if v1[i] < v2[i] {
-			return -1
-		} else if v1[i] > v2[i] {
-			return 1
-		}
+		xx[0] = pp[0] / qq[0]
+		xx[1] = pp[1] / qq[1]
+		xx[2] = pp[2] / qq[2]
+		xx[3] = pp[3] / qq[3]
+		xx[4] = pp[4] / qq[4]
+		xx[5] = pp[5] / qq[5]
+		xx[6] = pp[6] / qq[6]
+		xx[7] = pp[7] / qq[7]
+		i += 8
 	}
 
-	if len(v1) < len(v2) {
-		return -1
-	} else if len(v1) > len(v2) {
-		return 1
+	for i < n {
+		x[i] = p[i] / q[i]
+		i++
 	}
-	return 0
+	return x, nil
 }
 
 /* ------------ [START] Performance critical functions. ------- */
 
 func InnerProduct[T types.RealNumbers](v1, v2 []T) (float64, error) {
 
-	if len(v1) != len(v2) {
-		return 0, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
+	ret, err := metric.InnerProduct(v1, v2)
+	if err != nil {
+		return 0, err
 	}
 
-	switch any(v1).(type) {
-	case []float32:
-		_v1 := blas32.Vector{N: len(v1), Inc: 1, Data: any(v1).([]float32)}
-		_v2 := blas32.Vector{N: len(v2), Inc: 1, Data: any(v2).([]float32)}
-		return -blas32.DDot(_v1, _v2), nil
-	case []float64:
-		_v1 := blas64.Vector{N: len(v1), Inc: 1, Data: any(v1).([]float64)}
-		_v2 := blas64.Vector{N: len(v2), Inc: 1, Data: any(v2).([]float64)}
-		return -blas64.Dot(_v1, _v2), nil
-	default:
-		panic("InnerProduct type not supported")
-
-	}
+	return float64(ret), err
 }
 
 func L2Distance[T types.RealNumbers](v1, v2 []T) (float64, error) {
@@ -192,12 +203,8 @@ func CosineDistance[T types.RealNumbers](v1, v2 []T) (float64, error) {
 		return 0, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
 	}
 
-	cosine, err := CosineSimilarity[T](v1, v2)
-	if err != nil {
-		return 0, err
-	}
-
-	return float64(1 - cosine), nil
+	ret, err := metric.CosineDistance[T](v1, v2)
+	return float64(ret), err
 }
 
 func CosineSimilarity[T types.RealNumbers](v1, v2 []T) (float64, error) {
@@ -205,40 +212,11 @@ func CosineSimilarity[T types.RealNumbers](v1, v2 []T) (float64, error) {
 		return 0, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
 	}
 
-	var dot, normV1, normV2 float64
-
-	switch any(v1).(type) {
-	case []float32:
-		_v1 := blas32.Vector{N: len(v1), Inc: 1, Data: any(v1).([]float32)}
-		_v2 := blas32.Vector{N: len(v2), Inc: 1, Data: any(v2).([]float32)}
-
-		dot = float64(blas32.Dot(_v1, _v2))
-
-		normV1 = float64(blas32.Nrm2(_v1))
-		normV2 = float64(blas32.Nrm2(_v2))
-
-	case []float64:
-		_v1 := blas64.Vector{N: len(v1), Inc: 1, Data: any(v1).([]float64)}
-		_v2 := blas64.Vector{N: len(v2), Inc: 1, Data: any(v2).([]float64)}
-
-		dot = blas64.Dot(_v1, _v2)
-
-		normV1 = blas64.Nrm2(_v1)
-		normV2 = blas64.Nrm2(_v2)
+	ret, err := metric.CosineSimilarity[T](v1, v2)
+	if err != nil {
+		return 0, err
 	}
-
-	if normV1 == 0 || normV2 == 0 {
-		return 0, moerr.NewInternalErrorNoCtx("cosine similarity: one of the vector is zero")
-	}
-
-	cosine := dot / (normV1 * normV2)
-
-	// handle precision issues. Clamp the cosine simliarity to the range [-1, 1].
-	if cosine > 1.0 {
-		cosine = 1.0
-	} else if cosine < -1.0 {
-		cosine = -1.0
-	}
+	cosine := float64(ret)
 
 	// NOTE: Downcast the float64 cosine_similarity to float32 and check if it is
 	// 1.0 or -1.0 to avoid precision issue.

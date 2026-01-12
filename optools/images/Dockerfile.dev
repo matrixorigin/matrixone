@@ -1,0 +1,95 @@
+# Development Dockerfile for MatrixOne
+# This Dockerfile creates a development environment where:
+# - Source code is mounted as volume (no need to rebuild image when code changes)
+# - Binary is built inside container using local make build
+# - Much faster iteration cycle for development
+
+FROM matrixorigin/golang:1.25-ubuntu22.04
+
+# Install build dependencies and runtime libraries
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    gcc \
+    g++ \
+    make \
+    git \
+    iproute2 \
+    libomp5 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /matrixone
+
+# Pre-download dependencies and generate vendor (this layer is cached)
+# Copy only go.mod and go.sum first for better caching
+# If go.mod/go.sum don't change, this layer (including vendor) will be cached
+# and won't re-download dependencies, significantly reducing build time
+COPY go.mod go.sum ./
+RUN go env -w GOPROXY=https://goproxy.cn,https://mirrors.aliyun.com/goproxy/,https://goproxy.io,direct && \
+    go mod download && \
+    go mod vendor
+
+# Copy build infrastructure (Makefile, cgo, thirdparties)
+# These change less frequently than source code
+COPY Makefile ./
+COPY cgo ./cgo
+COPY thirdparties ./thirdparties
+COPY optools ./optools
+
+# Pre-build thirdparties and cgo (these are expensive and change infrequently)
+# This allows us to cache these builds
+RUN cd thirdparties && make && \
+    cd ../cgo && make && \
+    cp -r /matrixone/thirdparties/install/lib /matrixone/lib || true
+
+# Copy etc directory (needed for runtime)
+COPY etc ./etc
+
+# Copy source code and build the binary
+# This creates /mo-service in the image for production use
+# If source code is mounted as volume at runtime, it will override this
+COPY pkg ./pkg
+COPY cmd ./cmd
+COPY proto ./proto
+COPY clients ./clients
+# Note: test/ is excluded by .dockerignore and not needed for building mo-service
+# Build argument: TYPECHECK (default: 1, set to 0 to disable)
+ARG TYPECHECK=1
+RUN if [ "$TYPECHECK" = "1" ]; then \
+        make clean && make build TYPECHECK=1 && \
+        cp /matrixone/mo-service /mo-service && \
+        chmod +x /mo-service; \
+    else \
+        make clean && make build && \
+        cp /matrixone/mo-service /mo-service && \
+        chmod +x /mo-service; \
+    fi
+
+# Copy shared libraries
+RUN mkdir -p /usr/local/lib && \
+    cp -r /matrixone/thirdparties/install/lib/*.so /usr/local/lib/ 2>/dev/null || true
+
+# Run ldconfig to ensure shared libraries are found
+RUN ldconfig
+
+# Create a build script that will be used to build the binary from mounted source
+# The script uses TYPECHECK environment variable (default: 1)
+RUN echo '#!/bin/bash\n\
+    set -e\n\
+    echo "Building MatrixOne from mounted source code..."\n\
+    cd /matrixone\n\
+    if [ "${TYPECHECK:-1}" = "1" ]; then\n\
+        echo "Building with typecheck enabled..."\n\
+        make build TYPECHECK=1\n\
+    else\n\
+        echo "Building without typecheck..."\n\
+        make build\n\
+    fi\n\
+    cp /matrixone/mo-service /mo-service\n\
+    echo "Build completed! Binary: /mo-service"\n\
+    ' > /usr/local/bin/build-mo.sh && \
+    chmod +x /usr/local/bin/build-mo.sh
+
+# Default: keep container running
+# The actual build will be triggered by the entrypoint or command
+CMD ["/bin/bash"]

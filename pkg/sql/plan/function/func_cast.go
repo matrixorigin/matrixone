@@ -1194,6 +1194,16 @@ func float32ToOthers(ctx context.Context,
 		return rs.DupFromParameter(source, length)
 	case types.T_float64:
 		rs := vector.MustFunctionResult[float64](result)
+		// Preserve scale from source float32(M,D) when casting to float64
+		sourceScale := source.GetType().Scale
+		if sourceScale > 0 && source.GetType().Width > 0 {
+			// Apply source scale to the result type for proper comparison
+			resultType := rs.GetType()
+			resultType.Scale = sourceScale
+			resultType.Width = source.GetType().Width
+			rs.GetResultVector().SetType(resultType)
+			return floatToFixFloat(ctx, source, rs, length, selectList)
+		}
 		if rs.GetType().Scale >= 0 && rs.GetType().Width > 0 {
 			return floatToFixFloat(ctx, source, rs, length, selectList)
 		}
@@ -4067,10 +4077,8 @@ func strToFloat[T constraints.Float](
 				s := hex.EncodeToString(v)
 				r1, tErr = strconv.ParseUint(s, 16, 64)
 				if tErr != nil {
-					if strings.Contains(tErr.Error(), "value out of range") {
-						return moerr.NewOutOfRangef(ctx, "float", "value '%s'", s)
-					}
-					return moerr.NewInvalidArg(ctx, "cast to float", s)
+					// MySQL non-strict mode: invalid binary converts to 0
+					r1 = 0
 				}
 				if to.GetType().Scale < 0 || to.GetType().Width == 0 {
 					result = T(r1)
@@ -4085,9 +4093,10 @@ func strToFloat[T constraints.Float](
 				s := convertByteSliceToString(v)
 				r2, tErr = strconv.ParseFloat(s, bitSize)
 				if tErr != nil {
-					return tErr
-				}
-				if bitSize == 32 {
+					// MySQL non-strict mode: invalid string converts to 0 (no error)
+					// This matches MySQL's default behavior for implicit conversions
+					r2 = 0
+				} else if bitSize == 32 {
 					r2, _ = strconv.ParseFloat(s, 64)
 				}
 				if to.GetType().Scale < 0 || to.GetType().Width == 0 {
@@ -4286,10 +4295,14 @@ func strToDate(
 			s := convertByteSliceToString(v)
 			val, err := types.ParseDateCast(s)
 			if err != nil {
-				return err
-			}
-			if err = to.Append(val, false); err != nil {
-				return err
+				// Invalid date string returns NULL (MySQL behavior)
+				if err := to.Append(dft, true); err != nil {
+					return err
+				}
+			} else {
+				if err = to.Append(val, false); err != nil {
+					return err
+				}
 			}
 		}
 	}

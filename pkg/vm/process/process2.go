@@ -16,9 +16,10 @@ package process
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 
 	"github.com/hayageek/threadsafe"
 
@@ -88,10 +89,11 @@ func NewTopProcess(
 		LastInsertID: new(uint64),
 
 		// 3. other fields.
-		logger:         util.GetLogger(sid),
-		UnixTime:       time.Now().UnixNano(),
-		PostDmlSqlList: threadsafe.NewSlice[string](),
-		StageCache:     threadsafe.NewMap[string, stage.StageDef](),
+		logger:             util.GetLogger(sid),
+		UnixTime:           time.Now().UnixNano(),
+		PostDmlSqlList:     threadsafe.NewSlice[string](),
+		StageCache:         threadsafe.NewMap[string, stage.StageDef](),
+		DivByZeroErrorMode: -1, // -1 = not initialized, must compute on first use
 	}
 
 	proc := &Process{
@@ -233,6 +235,12 @@ func (proc *Process) ResetCloneTxnOperator() {
 func (proc *Process) Free() {
 	if proc == nil {
 		return
+	}
+
+	// reset message board to avoid memory leak
+	if proc.Base.messageBoard != nil {
+		proc.Base.messageBoard.Reset()
+		proc.Base.messageBoard = nil
 	}
 }
 

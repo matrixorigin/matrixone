@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
@@ -810,7 +811,8 @@ func newBackSession(ses FeSession, txnOp TxnOperator, db string, callBack output
 	txnHandler := InitTxnHandler(ses.GetService(), getPu(service).StorageEngine, ses.GetTxnHandler().GetConnCtx(), txnOp)
 	backSes := &backSession{}
 	backSes.initFeSes(ses, txnHandler, db, callBack)
-	backSes.uuid, _ = uuid.NewV7()
+	u, _ := util.FastUuid()
+	backSes.uuid = uuid.UUID(u)
 	return backSes
 }
 
@@ -1261,4 +1263,32 @@ func (sh *SqlHelper) ExecSql(sql string) (ret [][]interface{}, err error) {
 
 func (sh *SqlHelper) ExecSqlWithCtx(ctx context.Context, sql string) ([][]interface{}, error) {
 	return sh.execSql(ctx, sql)
+}
+
+func (backSes *backSession) GetTempTable(dbName, alias string) (string, bool) {
+	if backSes == nil || backSes.upstream == nil {
+		return "", false
+	}
+	return backSes.upstream.GetTempTable(dbName, alias)
+}
+
+func (backSes *backSession) AddTempTable(dbName, alias, realName string) {
+	if backSes == nil || backSes.upstream == nil {
+		return
+	}
+	backSes.upstream.AddTempTable(dbName, alias, realName)
+}
+
+func (backSes *backSession) RemoveTempTableByRealName(realName string) {
+	if backSes == nil || backSes.upstream == nil {
+		return
+	}
+	backSes.upstream.RemoveTempTableByRealName(realName)
+}
+
+func (backSes *backSession) RemoveTempTable(dbName, alias string) {
+	if backSes == nil || backSes.upstream == nil {
+		return
+	}
+	backSes.upstream.RemoveTempTable(dbName, alias)
 }

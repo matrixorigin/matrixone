@@ -425,6 +425,18 @@ func (b *MMsgTaskTrigger) WithAssignedTasks(tasks []mergeTask) *MMsgTaskTrigger 
 	return b
 }
 
+// NewMergeTaskFromSpecObjects creates a merge task from a list of object stats
+// This is a helper function for external packages to create merge tasks
+func NewMergeTaskFromSpecObjects(objs []*objectio.ObjectStats, lv int8) []mergeTask {
+	task := mergeTask{
+		objs:        objs,
+		isTombstone: false,
+		level:       lv,
+		note:        "user specified objects",
+	}
+	return []mergeTask{task}
+}
+
 func (b *MMsgTaskTrigger) Merge(o *MMsgTaskTrigger) *MMsgTaskTrigger {
 	if !o.expire.IsZero() {
 		b.expire = o.expire
@@ -1002,10 +1014,6 @@ func (a *MergeScheduler) doSched(todo *todoItem) {
 	if todo.table.HasDropCommitted() {
 		delete(a.supps, todo.table.ID())
 		heap.Pop(&a.pq)
-		logutil.Info(
-			"MergeExecutorEvent-RemoveTable",
-			zap.String("table", todo.table.GetNameDesc()),
-		)
 		return
 	}
 
@@ -1214,13 +1222,7 @@ func (p *launchPad) gatherLnTasks(ctx context.Context,
 			continue
 		}
 		overlapTasks, err := GatherOverlapMergeTasks(ctx, p.leveledObjects[i], lnOpts, int8(i))
-		if err != nil {
-			logutil.Warn(
-				"MergeExecutorEvent-GatherOverlapMergeTasksFailed",
-				zap.String("table", p.table.GetNameDesc()),
-				zap.Error(err),
-			)
-		} else {
+		if err == nil {
 			p.revisedResults = append(p.revisedResults,
 				controlTaskMemInPlace(overlapTasks, rc, 2)...)
 		}

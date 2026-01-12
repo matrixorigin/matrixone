@@ -17,6 +17,7 @@ package tables
 import (
 	"context"
 
+	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -102,6 +103,13 @@ func (node *persistedNode) Scan(
 	vecs, deletes, err := LoadPersistedColumnDatas(
 		ctx, readSchema, node.object.rt, id, colIdxes, location, mp, tsForAppendable,
 	)
+	replaceCommitts := func(vecs []containers.Vector, i int) {
+		createTS := node.object.meta.Load().GetCreatedAt()
+		length := vecs[0].Length()
+		vecs[i].Close()
+		vecs[i] = node.object.rt.VectorPool.Transient.GetVector(&objectio.TSType)
+		vector.AppendMultiFixed(vecs[i].GetDownstreamVector(), createTS, false, length, mp)
+	}
 	if err != nil {
 		return err
 	}
@@ -113,14 +121,22 @@ func (node *persistedNode) Scan(
 			var attr string
 			if idx == objectio.SEQNUM_COMMITTS {
 				attr = objectio.TombstoneAttr_CommitTs_Attr
-				if vecs[i].GetType().Oid != types.T_TS {
-					vecs[i].Close()
-					vecs[i] = node.object.rt.VectorPool.Transient.GetVector(&objectio.TSType)
-					createTS := node.object.meta.Load().GetCreatedAt()
-					vector.AppendMultiFixed(vecs[i].GetDownstreamVector(), createTS, false, vecs[0].Length(), mp)
+				if vecs[i].IsConstNull() {
+					replaceCommitts(vecs, i)
 				}
+				/// TODO: Read old version of nonappendable block?
 			} else {
 				attr = readSchema.ColDefs[idx].Name
+			}
+
+			// RelLogicalID COMPAT
+			if attr == pkgcatalog.SystemRelAttr_LogicalID && vecs[i].IsConstNull() {
+				dup, err := (*bat).GetVectorByName(pkgcatalog.SystemRelAttr_ID).GetDownstreamVector().Dup(mp)
+				if err != nil {
+					return err
+				}
+				vecs[i].Close()
+				vecs[i] = containers.ToTNVector(dup, mp)
 			}
 			(*bat).AddVector(attr, vecs[i])
 		}
@@ -133,21 +149,37 @@ func (node *persistedNode) Scan(
 			(*bat).Deletes.Add(i + uint64(len))
 			return true
 		})
+
+		// RelLogicalID COMPAT
+		var tidvec containers.Vector
 		for i, idx := range colIdxes {
 			var attr string
 			if idx == objectio.SEQNUM_COMMITTS {
 				attr = objectio.TombstoneAttr_CommitTs_Attr
-				if vecs[i].GetType().Oid != types.T_TS {
-					vecs[i].Close()
-					vecs[i] = node.object.rt.VectorPool.Transient.GetVector(&objectio.TSType)
-					createTS := node.object.meta.Load().GetCreatedAt()
-					vector.AppendMultiFixed(vecs[i].GetDownstreamVector(), createTS, false, vecs[0].Length(), mp)
+				if vecs[i].IsConstNull() {
+					replaceCommitts(vecs, i)
 				}
 			} else {
 				attr = readSchema.ColDefs[idx].Name
 			}
+			// RelLogicalID COMPAT
+			if attr == pkgcatalog.SystemRelAttr_LogicalID && vecs[i].IsConstNull() {
+				vecs[i].Close()
+				vecs[i] = tidvec
+			}
+
 			(*bat).GetVectorByName(attr).Extend(vecs[i])
+
+			// RelLogicalID COMPAT
+			if attr == pkgcatalog.SystemRelAttr_ID {
+				tidvec = vecs[i]
+				continue
+			}
 			vecs[i].Close()
+		}
+		// RelLogicalID COMPAT
+		if tidvec != nil {
+			tidvec.Close()
 		}
 	}
 	return

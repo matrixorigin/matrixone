@@ -17,6 +17,7 @@ package vector
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"slices"
 	"sort"
 	"time"
@@ -25,10 +26,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/shuffle"
 )
 
@@ -46,14 +47,12 @@ type Vector struct {
 	typ types.Type
 
 	// data of fixed length element, in case of varlen, the Varlena
-	col  typedSlice
 	data []byte
 
 	// area for holding large strings.
 	area []byte
 
-	capacity int
-	length   int
+	length int
 
 	nsp nulls.Nulls // nulls list
 	gsp nulls.Nulls // grouping list
@@ -69,37 +68,37 @@ type Vector struct {
 	offHeap bool
 }
 
-type typedSlice struct {
-	Ptr unsafe.Pointer
-	Cap int
-}
-
-func (t *typedSlice) reset() {
-	t.Ptr = nil
-	t.Cap = 0
-}
-
-func (t *typedSlice) setFromVector(v *Vector) {
-	sz := v.typ.TypeSize()
-	if cap(v.data) >= sz {
-		t.Ptr = (unsafe.Pointer)(unsafe.SliceData(v.data))
-		t.Cap = cap(v.data) / sz
+func toSliceOfLengthNoTypeCheck[T any](vec *Vector, length int) []T {
+	if length == 0 {
+		return nil
 	}
+	checkTypeIfRaceDetectorEnabled[T](vec)
+	return util.UnsafeSliceCastToLength[T](vec.data, length)
 }
 
 func ToSliceNoTypeCheck[T any](vec *Vector, ret *[]T) {
-	checkTypeIfRaceDetectorEnabled[T](vec)
-	*ret = unsafe.Slice((*T)(vec.col.Ptr), vec.col.Cap)
+	if vec.IsConst() {
+		*ret = toSliceOfLengthNoTypeCheck[T](vec, 1)
+	} else {
+		*ret = toSliceOfLengthNoTypeCheck[T](vec, vec.length)
+	}
 }
 
 func ToSliceNoTypeCheck2[T any](vec *Vector) []T {
-	checkTypeIfRaceDetectorEnabled[T](vec)
-	return unsafe.Slice((*T)(vec.col.Ptr), vec.col.Cap)
+	if vec.IsConst() {
+		return toSliceOfLengthNoTypeCheck[T](vec, 1)
+	} else {
+		return toSliceOfLengthNoTypeCheck[T](vec, vec.length)
+	}
 }
 
 func ToSlice[T any](vec *Vector, ret *[]T) {
 	checkType[T](vec)
-	*ret = unsafe.Slice((*T)(vec.col.Ptr), vec.col.Cap)
+	if vec.IsConst() {
+		*ret = util.UnsafeSliceCastToLength[T](vec.data, 1)
+	} else {
+		*ret = util.UnsafeSliceCastToLength[T](vec.data, vec.length)
+	}
 }
 
 func checkType[T any](vec *Vector) {
@@ -130,8 +129,6 @@ func (v *Vector) Reset(typ types.Type) {
 	v.nsp.Clear()
 	v.gsp.Clear()
 	v.sorted = false
-	v.col.reset()
-	v.setupFromData()
 }
 
 func (v *Vector) ResetWithSameType() {
@@ -150,7 +147,6 @@ func (v *Vector) ResetArea() {
 
 // TODO: It is semantically same as Reset, need to merge them later.
 func (v *Vector) ResetWithNewType(t *types.Type) {
-	oldTyp := v.typ
 	v.typ = *t
 	v.class = FLAT
 	if v.area != nil {
@@ -159,11 +155,7 @@ func (v *Vector) ResetWithNewType(t *types.Type) {
 	v.nsp.Clear()
 	v.gsp.Clear()
 	v.length = 0
-	v.capacity = cap(v.data) / v.typ.TypeSize()
 	v.sorted = false
-	if oldTyp.Oid != t.Oid {
-		v.setupFromData()
-	}
 }
 
 func (v *Vector) UnsafeGetRawData() []byte {
@@ -179,7 +171,7 @@ func (v *Vector) Length() int {
 }
 
 func (v *Vector) Capacity() int {
-	return v.capacity
+	return cap(v.data) / v.typ.TypeSize()
 }
 
 // Allocated returns the total allocated memory size of the vector.
@@ -202,8 +194,33 @@ func (v *Vector) GetType() *types.Type {
 	return &v.typ
 }
 
+// Bug #23240
+// This is very dangerous.   We changed vector type
+// but did not change the underlying data.   So the length
+// and capacity are all messed up.
 func (v *Vector) SetType(typ types.Type) {
 	v.typ = typ
+}
+
+// Bug #23240
+// Neither this function, nor the SetType function are good
+// Maybe we should just disallow.
+func (v *Vector) SetTypeAndFixData(typ types.Type, mp *mpool.MPool) {
+	if v.typ.IsVarlen() && typ.IsVarlen() {
+		v.typ = typ
+		return
+	}
+
+	if v.typ.IsVarlen() || typ.IsVarlen() {
+		// this is a weird thing to do, we should not allow it.
+		panic("SetTypeAndFixData is not allowed to change from/to varlen type")
+	}
+
+	v.typ = typ
+	oldLength := v.length
+	v.length = 0
+	extend(v, oldLength, mp)
+	v.length = oldLength
 }
 
 func (v *Vector) SetOffHeap(offHeap bool) {
@@ -228,6 +245,11 @@ func (v *Vector) SetNulls(nsp *nulls.Nulls) {
 		return
 	}
 	v.nsp.Or(nsp)
+}
+
+func (v *Vector) SetAllNulls(length int) {
+	v.nsp.InitWithSize(int(length))
+	v.nsp.AddRange(0, uint64(length))
 }
 
 func (v *Vector) SetGrouping(gsp *nulls.Nulls) {
@@ -449,6 +471,14 @@ func NewOffHeapVecWithType(typ types.Type) *Vector {
 	return vec
 }
 
+func NewOffHeapVecWithTypeAndData(typ types.Type, data []byte, length, cap int) *Vector {
+	vec := NewVec(typ)
+	vec.offHeap = true
+	vec.data = data
+	vec.length = length
+	return vec
+}
+
 func NewOffHeapVec() *Vector {
 	vec := NewVecFromReuse()
 	vec.offHeap = true
@@ -465,7 +495,6 @@ func NewVecWithData(
 	vec.length = length
 	vec.data = data
 	vec.area = area
-	vec.setupFromData()
 	return vec
 }
 
@@ -474,7 +503,6 @@ func NewConstNull(typ types.Type, length int, mp *mpool.MPool) *Vector {
 	vec.typ = typ
 	vec.class = CONSTANT
 	vec.length = length
-
 	return vec
 }
 
@@ -484,7 +512,6 @@ func NewRollupConst(typ types.Type, length int, mp *mpool.MPool) *Vector {
 	vec.typ = typ
 	vec.class = CONSTANT
 	vec.length = length
-
 	return vec
 }
 
@@ -547,6 +574,14 @@ func (v *Vector) IsNull(i uint64) bool {
 	return v.nsp.Contains(i)
 }
 
+func (v *Vector) SetNull(i uint64) {
+	v.nsp.Add(i)
+}
+
+func (v *Vector) UnsetNull(i uint64) {
+	v.nsp.Del(i)
+}
+
 // call this function if type already checked
 func SetFixedAtNoTypeCheck[T types.FixedSizeT](v *Vector, idx int, t T) error {
 	vacol := MustFixedColNoTypeCheck[T](v)
@@ -589,6 +624,15 @@ func SetStringAt(v *Vector, idx int, bs string, mp *mpool.MPool) error {
 	return SetBytesAt(v, idx, []byte(bs), mp)
 }
 
+func (v *Vector) SetRawBytesAt(i int, bs []byte, mp *mpool.MPool) error {
+	if v.typ.IsVarlen() {
+		return SetBytesAt(v, i, bs, mp)
+	} else {
+		copy(v.data[i*v.typ.TypeSize():i*v.typ.TypeSize()+v.typ.TypeSize()], bs)
+		return nil
+	}
+}
+
 // IsConstNull return true if the vector means a scalar Null.
 // e.g.
 //
@@ -622,6 +666,10 @@ func GetPtrAt[T any](v *Vector, idx int64) *T {
 }
 
 func (v *Vector) Free(mp *mpool.MPool) {
+	if v == nil {
+		return
+	}
+
 	if !v.cantFreeData {
 		mp.Free(v.data)
 	}
@@ -629,10 +677,8 @@ func (v *Vector) Free(mp *mpool.MPool) {
 		mp.Free(v.area)
 	}
 	v.class = FLAT
-	v.col.reset()
 	v.data = nil
 	v.area = nil
-	v.capacity = 0
 	v.length = 0
 	v.cantFreeData = false
 	v.cantFreeArea = false
@@ -730,7 +776,6 @@ func (v *Vector) UnmarshalBinary(data []byte) error {
 	data = data[4:]
 	if dataLen > 0 {
 		v.data = data[:dataLen]
-		v.setupFromData()
 		data = data[dataLen:]
 	}
 
@@ -787,7 +832,6 @@ func (v *Vector) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
 			return err
 		}
 		copy(v.data, data[:dataLen])
-		v.setupFromData()
 		data = data[dataLen:]
 	}
 
@@ -821,11 +865,66 @@ func (v *Vector) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
 	return nil
 }
 
+func (v *Vector) UnmarshalWithReader(r io.Reader, mp *mpool.MPool) error {
+	var err error
+
+	if v.class, err = types.ReadByteAsInt(r); err != nil {
+		return err
+	}
+
+	if v.typ, err = types.ReadType(r); err != nil {
+		return err
+	}
+
+	if v.length, err = types.ReadInt32AsInt(r); err != nil {
+		return err
+	}
+
+	// read data
+	dataLen, dataBuf, err := types.ReadSizeBytesMp(r, v.data, mp, v.offHeap)
+	if err != nil {
+		return err
+	}
+	if dataLen > 0 {
+		v.data = dataBuf
+	}
+
+	// read area
+	areaLen, areaBuf, err := types.ReadSizeBytesMp(r, v.area, mp, v.offHeap)
+	if err != nil {
+		return err
+	}
+	if areaLen > 0 {
+		v.area = areaBuf
+	}
+
+	// read nsp, do not use mpool.  nspBuf is different because
+	// it is not managed by vector.  In the following, it will
+	// be unmarshalled into v.nsp
+	nspLen, nspBuf, err := types.ReadSizeBytes(r)
+	if err != nil {
+		return err
+	}
+	if nspLen > 0 {
+		v.nsp.Read(nspBuf)
+	} else {
+		v.nsp.Reset()
+	}
+
+	v.sorted, err = types.ReadBool(r)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func (v *Vector) ToConst() {
 	v.class = CONSTANT
 }
 
-// PreExtend use to expand the capacity of the vector
+// PreExtend use to expand the capacity of the vector.
+// PreExtend does not change the length of the vector.
 func (v *Vector) PreExtend(rows int, mp *mpool.MPool) error {
 	if v.class == CONSTANT {
 		return nil
@@ -978,7 +1077,7 @@ func (v *Vector) Shrink(sels []int64, negate bool) {
 	}
 }
 
-func (v *Vector) ShrinkByMask(sels bitmap.Mask, negate bool, offset uint64) {
+func (v *Vector) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64) {
 	if v.IsConst() {
 		if negate {
 			v.length -= sels.Count()
@@ -1834,9 +1933,9 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				}
 				v.area = area[:len(v.area)]
 			}
-			var vs []types.Varlena
-			ToSliceNoTypeCheck(v, &vs)
+
 			var err error
+			vs := toSliceOfLengthNoTypeCheck[types.Varlena](v, v.length+w.length)
 
 			bm := w.nsp.GetBitmap()
 			if bm != nil && !bm.EmptyByFlag() {
@@ -2477,8 +2576,10 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 	if v.GetType().IsVarlen() {
 		var err error
 		var vCol, wCol []types.Varlena
-		ToSliceNoTypeCheck(v, &vCol)
+
+		vCol = toSliceOfLengthNoTypeCheck[types.Varlena](v, v.length+addCnt)
 		ToSliceNoTypeCheck(w, &wCol)
+
 		if !w.nsp.EmptyByFlag() {
 			if flags == nil {
 				for i := 0; i < cnt; i++ {
@@ -2878,54 +2979,39 @@ func SetConstNull(vec *Vector, length int, mp *mpool.MPool) error {
 }
 
 func SetConstFixed[T any](vec *Vector, val T, length int, mp *mpool.MPool) error {
-	if vec.capacity == 0 {
-		if err := extend(vec, 1, mp); err != nil {
-			return err
-		}
+	if err := extend(vec, 1, mp); err != nil {
+		return err
 	}
 	vec.class = CONSTANT
-	var col []T
-	ToSlice(vec, &col)
-	col[0] = val
-	vec.data = vec.data[:cap(vec.data)]
 	vec.length = length
+
+	col := toSliceOfLengthNoTypeCheck[T](vec, 1)
+	col[0] = val
 	return nil
 }
 
 func SetConstBytes(vec *Vector, val []byte, length int, mp *mpool.MPool) error {
-	var err error
-	if vec.capacity == 0 {
-		if err := extend(vec, 1, mp); err != nil {
-			return err
-		}
-	}
-	vec.class = CONSTANT
-	var col []types.Varlena
-	ToSliceNoTypeCheck(vec, &col)
-	err = BuildVarlenaFromByteSlice(vec, &col[0], &val, mp)
-	if err != nil {
+	if err := extend(vec, 1, mp); err != nil {
 		return err
 	}
-	vec.data = vec.data[:cap(vec.data)]
+	vec.class = CONSTANT
+	col := toSliceOfLengthNoTypeCheck[types.Varlena](vec, 1)
+	if err := BuildVarlenaFromByteSlice(vec, &col[0], &val, mp); err != nil {
+		return err
+	}
 	vec.length = length
 	return nil
 }
 
 func SetConstByteJson(vec *Vector, bj bytejson.ByteJson, length int, mp *mpool.MPool) error {
-	var err error
-	if vec.capacity == 0 {
-		if err := extend(vec, 1, mp); err != nil {
-			return err
-		}
-	}
-	vec.class = CONSTANT
-	var col []types.Varlena
-	ToSliceNoTypeCheck(vec, &col)
-	err = BuildVarlenaFromByteJson(vec, &col[0], bj, mp)
-	if err != nil {
+	if err := extend(vec, 1, mp); err != nil {
 		return err
 	}
-	vec.data = vec.data[:cap(vec.data)]
+	vec.class = CONSTANT
+	col := toSliceOfLengthNoTypeCheck[types.Varlena](vec, 1)
+	if err := BuildVarlenaFromByteJson(vec, &col[0], bj, mp); err != nil {
+		return err
+	}
 	vec.length = length
 	return nil
 }
@@ -2934,19 +3020,15 @@ func SetConstByteJson(vec *Vector, bj bytejson.ByteJson, length int, mp *mpool.M
 func SetConstArray[T types.RealNumbers](vec *Vector, val []T, length int, mp *mpool.MPool) error {
 	var err error
 
-	if vec.capacity == 0 {
-		if err := extend(vec, 1, mp); err != nil {
-			return err
-		}
+	if err := extend(vec, 1, mp); err != nil {
+		return err
 	}
 	vec.class = CONSTANT
-	var col []types.Varlena
-	ToSliceNoTypeCheck(vec, &col)
-	err = BuildVarlenaFromArray[T](vec, &col[0], &val, mp)
+	col := toSliceOfLengthNoTypeCheck[types.Varlena](vec, 1)
+	err = BuildVarlenaFromArray(vec, &col[0], &val, mp)
 	if err != nil {
 		return err
 	}
-	vec.data = vec.data[:cap(vec.data)]
 	vec.length = length
 	return nil
 }
@@ -3018,6 +3100,10 @@ func AppendAny(vec *Vector, val any, isNull bool, mp *mpool.MPool) error {
 		return appendOneBytes(vec, val.([]byte), false, mp)
 	}
 	return nil
+}
+
+func AppendNull(vec *Vector, mp *mpool.MPool) error {
+	return appendOneFixed(vec, 0, true, mp)
 }
 
 func AppendFixed[T any](vec *Vector, val T, isNull bool, mp *mpool.MPool) error {
@@ -3131,10 +3217,14 @@ func AppendArrayList[T types.RealNumbers](vec *Vector, ws [][]T, isNulls []bool,
 	if len(ws) == 0 {
 		return nil
 	}
-	return appendArrayList[T](vec, ws, isNulls, mp)
+	return appendArrayList(vec, ws, isNulls, mp)
 }
 
 func appendOneFixed[T any](vec *Vector, val T, isNull bool, mp *mpool.MPool) error {
+	if vec.IsConst() {
+		return moerr.NewInternalErrorNoCtx("append to const vector")
+	}
+
 	if err := extend(vec, 1, mp); err != nil {
 		return err
 	}
@@ -3204,7 +3294,8 @@ func appendMultiFixed[T any](vec *Vector, val T, isNull bool, cnt int, mp *mpool
 	vec.length += cnt
 	if isNull {
 		nulls.AddRange(&vec.nsp, uint64(length), uint64(length+cnt))
-	} else {
+	} else if cnt > 0 {
+		// XXX check cnt > 0 to avoid issue #23295
 		var col []T
 		ToSlice(vec, &col)
 		for i := 0; i < cnt; i++ {
@@ -3355,7 +3446,7 @@ func shrinkFixed[T types.FixedSizeT](v *Vector, sels []int64, negate bool) {
 	}
 }
 
-func shrinkFixedByMask[T types.FixedSizeT](v *Vector, sels bitmap.Mask, negate bool, offset uint64) {
+func shrinkFixedByMask[T types.FixedSizeT](v *Vector, sels *bitmap.Bitmap, negate bool, offset uint64) {
 	vs := MustFixedColNoTypeCheck[T](v)
 	length := sels.Count()
 	itr := sels.Iterator()
@@ -3403,10 +3494,8 @@ func shuffleFixedNoTypeCheck[T types.FixedSizeT](v *Vector, sels []int64, mp *mp
 		return err
 	}
 	v.data = data
-	v.setupFromData()
-	var ws []T
-	ToSliceNoTypeCheck(v, &ws)
-	ws = ws[:ns]
+	ws := toSliceOfLengthNoTypeCheck[T](v, ns)
+
 	shuffle.FixedLengthShuffle(vs, ws, sels)
 	nulls.Filter(&v.gsp, sels, false)
 	nulls.Filter(&v.nsp, sels, false)
@@ -3446,10 +3535,8 @@ func (v *Vector) Window(start, end int) (*Vector, error) {
 	} else if v.IsConst() {
 		vec := NewVec(v.typ)
 		vec.class = v.class
-		vec.col = v.col
 		vec.data = v.data
 		vec.area = v.area
-		vec.capacity = v.capacity
 		vec.length = end - start
 		vec.cantFreeArea = true
 		vec.cantFreeData = true
@@ -3463,7 +3550,6 @@ func (v *Vector) Window(start, end int) (*Vector, error) {
 	nulls.Range(&v.nsp, uint64(start), uint64(end), uint64(start), &w.nsp)
 	w.data = v.data[start*v.typ.TypeSize() : end*v.typ.TypeSize()]
 	w.length = end - start
-	w.setupFromData()
 	if v.typ.IsVarlen() {
 		w.area = v.area
 	}
@@ -3488,10 +3574,8 @@ func (v *Vector) CloneWindow(start, end int, mp *mpool.MPool) (*Vector, error) {
 		} else {
 			vec := NewVec(v.typ)
 			vec.class = v.class
-			vec.col = v.col
 			vec.data = make([]byte, len(v.data))
 			copy(vec.data, v.data)
-			vec.capacity = v.capacity
 			vec.length = end - start
 			vec.cantFreeArea = true
 			vec.cantFreeData = true
@@ -3522,10 +3606,8 @@ func (v *Vector) CloneWindowTo(w *Vector, start, end int, mp *mpool.MPool) error
 			return nil
 		} else {
 			w.class = v.class
-			w.col = v.col
 			w.data = make([]byte, len(v.data))
 			copy(w.data, v.data)
-			w.capacity = v.capacity
 			w.length = end - start
 			w.cantFreeArea = true
 			w.cantFreeData = true
@@ -3539,7 +3621,6 @@ func (v *Vector) CloneWindowTo(w *Vector, start, end int, mp *mpool.MPool) error
 		w.data = make([]byte, length)
 		copy(w.data, v.data[start*v.typ.TypeSize():end*v.typ.TypeSize()])
 		w.length = end - start
-		w.setupFromData()
 		if v.typ.IsVarlen() {
 			w.area = make([]byte, len(v.area))
 			copy(w.area, v.area)
@@ -4249,13 +4330,13 @@ func (v *Vector) InplaceSortAndCompact() {
 	case types.T_array_float32:
 		col, area := MustVarlenaRawData(v)
 		sort.Slice(col, func(i, j int) bool {
-			return moarray.Compare(
+			return types.ArrayCompare[float32](
 				types.GetArray[float32](&col[i], area),
 				types.GetArray[float32](&col[j], area),
 			) < 0
 		})
 		newCol := slices.CompactFunc(col, func(a, b types.Varlena) bool {
-			return moarray.Compare(
+			return types.ArrayCompare[float32](
 				types.GetArray[float32](&a, area),
 				types.GetArray[float32](&b, area),
 			) == 0
@@ -4268,13 +4349,13 @@ func (v *Vector) InplaceSortAndCompact() {
 	case types.T_array_float64:
 		col, area := MustVarlenaRawData(v)
 		sort.Slice(col, func(i, j int) bool {
-			return moarray.Compare(
+			return types.ArrayCompare[float64](
 				types.GetArray[float64](&col[i], area),
 				types.GetArray[float64](&col[j], area),
 			) < 0
 		})
 		newCol := slices.CompactFunc(col, func(a, b types.Varlena) bool {
-			return moarray.Compare(
+			return types.ArrayCompare[float64](
 				types.GetArray[float64](&a, area),
 				types.GetArray[float64](&b, area),
 			) == 0
@@ -4429,7 +4510,7 @@ func (v *Vector) InplaceSort() {
 	case types.T_array_float32:
 		col, area := MustVarlenaRawData(v)
 		sort.Slice(col, func(i, j int) bool {
-			return moarray.Compare[float32](
+			return types.ArrayCompare[float32](
 				types.GetArray[float32](&col[i], area),
 				types.GetArray[float32](&col[j], area),
 			) < 0
@@ -4437,7 +4518,7 @@ func (v *Vector) InplaceSort() {
 	case types.T_array_float64:
 		col, area := MustVarlenaRawData(v)
 		sort.Slice(col, func(i, j int) bool {
-			return moarray.Compare[float64](
+			return types.ArrayCompare[float64](
 				types.GetArray[float64](&col[i], area),
 				types.GetArray[float64](&col[j], area),
 			) < 0
@@ -4569,7 +4650,9 @@ func Intersection2VectorOrdered[T types.OrderedT | types.Decimal128](
 	var preVal T
 	var idxA, idxB int
 
-	if err = ret.PreExtend(len(a)+len(b), mp); err != nil {
+	minAB := min(len(a), len(b))
+
+	if err = ret.PreExtend(minAB, mp); err != nil {
 		return err
 	}
 
@@ -4668,7 +4751,8 @@ func Intersection2VectorVarlen(
 	cola, areaa := MustVarlenaRawData(va)
 	colb, areab := MustVarlenaRawData(vb)
 
-	if err = ret.PreExtend(len(cola)+len(colb), mp); err != nil {
+	minAB := min(len(cola), len(colb))
+	if err = ret.PreExtend(minAB, mp); err != nil {
 		return err
 	}
 

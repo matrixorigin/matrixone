@@ -108,7 +108,7 @@ func TestPrepare(t *testing.T) {
 
 func TestLimit(t *testing.T) {
 	for _, tc := range makeTestCases(t) {
-		resetChildren(tc.arg)
+		resetChildren(tc.arg, tc.proc.Mp())
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		res, _ := vm.Exec(tc.arg, tc.proc)
@@ -119,7 +119,7 @@ func TestLimit(t *testing.T) {
 		}
 		tc.arg.Reset(tc.proc, false, nil)
 
-		resetChildren(tc.arg)
+		resetChildren(tc.arg, tc.proc.Mp())
 		err = tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		res, _ = vm.Exec(tc.arg, tc.proc)
@@ -150,15 +150,15 @@ func BenchmarkLimit(b *testing.B) {
 		for _, tc := range tcs {
 			err := tc.arg.Prepare(tc.proc)
 			require.NoError(t, err)
-			resetChildren(tc.arg)
+			resetChildren(tc.arg, tc.proc.Mp())
 			_, _ = vm.Exec(tc.arg, tc.proc)
 			tc.arg.Free(tc.proc, false, nil)
 		}
 	}
 }
 
-func resetChildren(arg *Limit) {
-	bat := colexec.MakeMockBatchs()
+func resetChildren(arg *Limit, m *mpool.MPool) {
+	bat := colexec.MakeMockBatchs(m)
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 	arg.Children = nil
 	arg.AppendChild(op)

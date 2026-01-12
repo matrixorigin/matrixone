@@ -110,6 +110,7 @@ func NewDiskCache(
 				capacityBytes.Set(float64(capacityFunc()))
 				err := os.Remove(path)
 				if err == nil {
+					metric.FSDiskCacheEvictCounter.Add(1)
 					perfcounter.Update(ctx, func(set *perfcounter.CounterSet) {
 						set.FileService.Cache.Disk.Evict.Add(1)
 					}, perfCounterSets...)
@@ -250,6 +251,9 @@ func (d *DiskCache) Read(
 
 		metric.FSReadHitDiskCounter.Add(float64(numHit))
 		metric.FSReadReadDiskCounter.Add(float64(numRead))
+		if numError > 0 {
+			metric.FSDiskCacheErrorCounter.Add(float64(numError))
+		}
 		perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
 			c.FileService.Cache.Read.Add(numRead)
 			c.FileService.Cache.Hit.Add(numHit)
@@ -459,6 +463,9 @@ func (d *DiskCache) writeFile(
 
 	var numCreate, numStat, numError, numWrite int64
 	defer func() {
+		if numError > 0 {
+			metric.FSDiskCacheErrorCounter.Add(float64(numError))
+		}
 		perfcounter.Update(ctx, func(set *perfcounter.CounterSet) {
 			set.FileService.Cache.Disk.CreateFile.Add(numCreate)
 			set.FileService.Cache.Disk.StatFile.Add(numStat)

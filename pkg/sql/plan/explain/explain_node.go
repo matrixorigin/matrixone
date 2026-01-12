@@ -305,8 +305,8 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 	}
 
 	// Get Sort list info
-	if len(ndesc.Node.BlockOrderBy) > 0 {
-		orderByInfo, err := ndesc.GetBlockOrderByInfo(ctx, options)
+	if ndesc.Node.IndexReaderParam != nil {
+		orderByInfo, err := ndesc.GetIndexReaderParamInfo(ctx, options)
 		if err != nil {
 			return nil, err
 		}
@@ -429,16 +429,6 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 			if err != nil {
 				return nil, err
 			}
-		}
-		lines = append(lines, buf.String())
-	}
-
-	if ndesc.Node.BlockLimit != nil {
-		buf := bytes.NewBuffer(make([]byte, 0, 160))
-		buf.WriteString("Block Limit: ")
-		err := describeExpr(ctx, ndesc.Node.BlockLimit, options, buf)
-		if err != nil {
-			return nil, err
 		}
 		lines = append(lines, buf.String())
 	}
@@ -673,6 +663,13 @@ func (ndesc *NodeDescribeImpl) GetFilterConditionInfo(ctx context.Context, optio
 			if err != nil {
 				return "", err
 			}
+		}
+
+		// Add optimization hints for cast expressions
+		hint := getDecimalCastOptimizationHint(ndesc.Node.FilterList)
+		if hint != "" {
+			buf.WriteString("\n              ")
+			buf.WriteString(hint)
 		}
 	} else if options.Format == EXPLAIN_FORMAT_JSON {
 		return "", moerr.NewNYI(ctx, "explain format json")
@@ -998,8 +995,8 @@ func (ndesc *NodeDescribeImpl) GetOrderByInfo(ctx context.Context, options *Expl
 	buf := bytes.NewBuffer(make([]byte, 0, 300))
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		buf.WriteString("Sort Key: ")
-		blockOrderByDescImpl := NewOrderByDescribeImpl(ndesc.Node.OrderBy)
-		err := blockOrderByDescImpl.GetDescription(ctx, options, buf)
+		orderByDescImpl := NewOrderByDescribeImpl(ndesc.Node.OrderBy)
+		err := orderByDescImpl.GetDescription(ctx, options, buf)
 		if err != nil {
 			return "", err
 		}
@@ -1011,14 +1008,63 @@ func (ndesc *NodeDescribeImpl) GetOrderByInfo(ctx context.Context, options *Expl
 	return buf.String(), nil
 }
 
-func (ndesc *NodeDescribeImpl) GetBlockOrderByInfo(ctx context.Context, options *ExplainOptions) (string, error) {
+func (ndesc *NodeDescribeImpl) GetIndexReaderParamInfo(ctx context.Context, options *ExplainOptions) (string, error) {
 	buf := bytes.NewBuffer(make([]byte, 0, 300))
+	param := ndesc.Node.IndexReaderParam
 	if options.Format == EXPLAIN_FORMAT_TEXT {
-		buf.WriteString("Block Sort Key: ")
-		orderByDescImpl := NewOrderByDescribeImpl(ndesc.Node.BlockOrderBy)
-		err := orderByDescImpl.GetDescription(ctx, options, buf)
-		if err != nil {
-			return "", err
+		buf.WriteString("Index Reader Param:")
+		if len(param.OrderBy) > 0 {
+			buf.WriteString("  Sort Key: ")
+			orderByDescImpl := NewOrderByDescribeImpl(param.OrderBy)
+			err := orderByDescImpl.GetDescription(ctx, options, buf)
+			if err != nil {
+				return "", err
+			}
+		}
+
+		if param.Limit != nil {
+			buf.WriteString("  Limit: ")
+			err := describeExpr(ctx, param.Limit, options, buf)
+			if err != nil {
+				return "", err
+			}
+		}
+
+		if param.DistRange != nil {
+			if param.DistRange.LowerBoundType != plan.BoundType_UNBOUNDED || param.DistRange.UpperBoundType != plan.BoundType_UNBOUNDED {
+				buf.WriteString("  DistRange: ")
+				if param.DistRange.LowerBoundType == plan.BoundType_UNBOUNDED {
+					buf.WriteString("(-Inf")
+				} else {
+					if param.DistRange.LowerBoundType == plan.BoundType_INCLUSIVE {
+						buf.WriteString("[")
+					} else {
+						buf.WriteString("(")
+					}
+
+					err := describeExpr(ctx, param.DistRange.LowerBound, options, buf)
+					if err != nil {
+						return "", err
+					}
+				}
+
+				buf.WriteString(",")
+
+				if param.DistRange.UpperBoundType == plan.BoundType_UNBOUNDED {
+					buf.WriteString("Inf)")
+				} else {
+					err := describeExpr(ctx, param.DistRange.UpperBound, options, buf)
+					if err != nil {
+						return "", err
+					}
+
+					if param.DistRange.UpperBoundType == plan.BoundType_INCLUSIVE {
+						buf.WriteString("]")
+					} else {
+						buf.WriteString(")")
+					}
+				}
+			}
 		}
 	} else if options.Format == EXPLAIN_FORMAT_JSON {
 		return "", moerr.NewNYI(ctx, "explain format json")
@@ -1156,6 +1202,13 @@ func (a AnalyzeInfoDescribeImpl) GetDescription(ctx context.Context, options *Ex
 		common.ConvertBytesToHumanReadable(a.AnalyzeInfo.MemoryMin),
 		common.ConvertBytesToHumanReadable(a.AnalyzeInfo.MemoryMax))
 
+	if a.AnalyzeInfo.SpillSize > 0 {
+		fmt.Fprintf(buf, " SpillSize=%s (min=%s, max=%s)",
+			common.ConvertBytesToHumanReadable(a.AnalyzeInfo.SpillSize),
+			common.ConvertBytesToHumanReadable(a.AnalyzeInfo.SpillMin),
+			common.ConvertBytesToHumanReadable(a.AnalyzeInfo.SpillMax))
+	}
+
 	return nil
 }
 
@@ -1284,4 +1337,102 @@ func (r *RowsetDataDescribeImpl) GetDescription(ctx context.Context, options *Ex
 		buf.WriteString("\"*VALUES*\"." + col.Name)
 	}
 	return nil
+}
+
+// getDecimalCastOptimizationHint analyzes filter expressions and returns optimization hints
+func getDecimalCastOptimizationHint(filterList []*plan.Expr) string {
+	for _, expr := range filterList {
+		hint := analyzeExprForCastHint(expr)
+		if hint != "" {
+			return hint
+		}
+	}
+	return ""
+}
+
+// analyzeExprForCastHint recursively analyzes an expression for cast optimization hints
+func analyzeExprForCastHint(expr *plan.Expr) string {
+	if expr == nil {
+		return ""
+	}
+
+	// Check if this is a function expression
+	if funcExpr, ok := expr.Expr.(*plan.Expr_F); ok {
+		funcName := funcExpr.F.Func.ObjName
+
+		// Check for comparison functions with cast
+		if funcName == "=" || funcName == ">" || funcName == "<" ||
+			funcName == ">=" || funcName == "<=" || funcName == "!=" {
+			if len(funcExpr.F.Args) == 2 {
+				// Check if either side has a cast
+				leftHint := checkCastInComparison(funcExpr.F.Args[0], funcExpr.F.Args[1])
+				if leftHint != "" {
+					return leftHint
+				}
+				rightHint := checkCastInComparison(funcExpr.F.Args[1], funcExpr.F.Args[0])
+				if rightHint != "" {
+					return rightHint
+				}
+			}
+		}
+
+		// Recursively check arguments
+		for _, arg := range funcExpr.F.Args {
+			hint := analyzeExprForCastHint(arg)
+			if hint != "" {
+				return hint
+			}
+		}
+	}
+
+	return ""
+}
+
+// checkCastInComparison checks if an expression contains a cast and generates a hint
+func checkCastInComparison(expr *plan.Expr, otherExpr *plan.Expr) string {
+	if funcExpr, ok := expr.Expr.(*plan.Expr_F); ok {
+		if funcExpr.F.Func.ObjName == "cast" && len(funcExpr.F.Args) > 0 {
+			// This is a cast expression
+			castArg := funcExpr.F.Args[0]
+
+			// Check if casting a column reference
+			if colRef, ok := castArg.Expr.(*plan.Expr_Col); ok {
+				// Get column type
+				colType := castArg.Typ
+				castToType := expr.Typ
+
+				// Check if it's a decimal cast
+				if isDecimalType(colType.Id) && isDecimalType(castToType.Id) {
+					// Check if the other side is a literal
+					if isLiteral(otherExpr) {
+						constType := otherExpr.Typ
+						if isDecimalType(constType.Id) {
+							// Generate hint about precision mismatch
+							return fmt.Sprintf("-- HINT: Cast cannot be removed due to precision mismatch (column: %d,%d vs constant: %d,%d)",
+								colType.Width, colType.Scale, constType.Width, constType.Scale)
+						}
+					}
+				}
+
+				// Generic cast hint
+				_ = colRef // Use the variable
+				return "-- HINT: Cast expression may prevent index usage"
+			}
+		}
+	}
+	return ""
+}
+
+// isDecimalType checks if a type ID represents a decimal type
+func isDecimalType(typeId int32) bool {
+	return typeId == 19 || typeId == 20 // T_decimal64 = 19, T_decimal128 = 20
+}
+
+// isLiteral checks if an expression is a literal constant
+func isLiteral(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	_, ok := expr.Expr.(*plan.Expr_Lit)
+	return ok
 }

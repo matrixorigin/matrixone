@@ -96,6 +96,65 @@ func TestBuildTable_AlterView(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestTempTableAliasBindingUsesOriginName(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ctx := NewMockCompilerContext2(ctrl)
+	ctx.EXPECT().ResolveVariable(gomock.Any(), gomock.Any(), gomock.Any()).Return("", nil).AnyTimes()
+	ctx.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+		func(schemaName string, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
+			if schemaName == "" {
+				schemaName = "db"
+			}
+			obj := &plan.ObjectRef{
+				SchemaName: schemaName,
+				ObjName:    "__mo_tmp_real",
+			}
+			tbl := &plan.TableDef{
+				DbName: schemaName,
+				Name:   "__mo_tmp_real",
+				Cols: []*plan.ColDef{
+					{
+						Name: "a",
+						Typ:  plan.Type{Id: int32(types.T_int64)},
+					},
+					{
+						Name: "b",
+						Typ:  plan.Type{Id: int32(types.T_int64)},
+					},
+				},
+			}
+			return obj, tbl, nil
+		}).AnyTimes()
+	ctx.EXPECT().GetContext().Return(context.Background()).AnyTimes()
+	ctx.EXPECT().GetProcess().Return(nil).AnyTimes()
+	ctx.EXPECT().Stats(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+	ctx.EXPECT().GetBuildingAlterView().Return(false, "", "").AnyTimes()
+	ctx.EXPECT().DatabaseExists(gomock.Any(), gomock.Any()).Return(true).AnyTimes()
+	ctx.EXPECT().GetLowerCaseTableNames().Return(int64(1)).AnyTimes()
+	ctx.EXPECT().GetSubscriptionMeta(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+	ctx.EXPECT().DefaultDatabase().Return("db").AnyTimes()
+	ctx.EXPECT().GetAccountId().Return(uint32(0), nil).AnyTimes()
+	ctx.EXPECT().GetQueryingSubscription().Return(nil).AnyTimes()
+
+	qb := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+	bc := NewBindContext(qb, nil)
+	tb := &tree.TableName{}
+	tb.SchemaName = "db"
+	tb.ObjectName = "t1"
+	nodeID, err := qb.buildTable(&tree.AliasedTableExpr{Expr: tb}, bc, -1, nil)
+	require.NoError(t, err)
+
+	_, ok := bc.bindingByTable["t1"]
+	require.True(t, ok)
+	_, ok = bc.bindingByTable["__mo_tmp_real"]
+	require.False(t, ok)
+
+	require.Equal(t, "t1", qb.qry.Nodes[nodeID].TableDef.OriginalName)
+	require.Equal(t, "__mo_tmp_real", qb.qry.Nodes[nodeID].TableDef.Name)
+}
+
 func Test_cte(t *testing.T) {
 	sqls := []string{
 		"select table_catalog, table_schema, table_name, table_type, engine\nfrom information_schema.tables\nwhere table_schema = 'mo_catalog' and table_type = 'BASE TABLE'\norder by table_name;",
@@ -732,7 +791,7 @@ func TestQueryBuilder_bindLimit(t *testing.T) {
 	stmts, _ := parsers.Parse(context.TODO(), dialect.MYSQL, "select a from select_test.bind_select limit 1, 5", 1)
 	astLimit := stmts[0].(*tree.Select).Limit
 
-	boundOffsetExpr, boundCountExpr, _, err := builder.bindLimit(bindCtx, astLimit)
+	boundOffsetExpr, boundCountExpr, _, err := builder.bindLimit(bindCtx, astLimit, nil)
 	require.NoError(t, err)
 	require.Equal(t, int32(types.T_uint64), boundOffsetExpr.Typ.Id)
 	offsetExpr, ok := boundOffsetExpr.Expr.(*plan.Expr_Lit)
@@ -1210,8 +1269,18 @@ func TestParseRankOption(t *testing.T) {
 		rankOption, err := parseRankOption(options, ctx)
 		require.Error(t, err)
 		require.Nil(t, rankOption)
-		require.Contains(t, err.Error(), "mode must be 'pre' or 'post'")
+		require.Contains(t, err.Error(), "mode must be 'pre', 'post', or 'force'")
 		require.Contains(t, err.Error(), "invalid")
+	})
+
+	t.Run("valid mode force", func(t *testing.T) {
+		options := map[string]string{
+			"mode": "force",
+		}
+		rankOption, err := parseRankOption(options, ctx)
+		require.NoError(t, err)
+		require.NotNil(t, rankOption)
+		require.Equal(t, "force", rankOption.Mode)
 	})
 
 	t.Run("empty options map", func(t *testing.T) {

@@ -167,8 +167,10 @@ type QueryBuilder struct {
 	qry     *plan.Query
 	compCtx CompilerContext
 
-	ctxByNode    []*BindContext
-	nameByColRef map[[2]int32]string
+	ctxByNode            []*BindContext
+	nameByColRef         map[[2]int32]string
+	protectedScans       map[int32]int
+	projectSpecialGuards map[int32]*specialIndexGuard
 
 	tag2Table  map[int32]*TableDef
 	tag2NodeID map[int32]int32
@@ -191,6 +193,10 @@ type QueryBuilder struct {
 	aggSpillMem int64
 
 	optimizerHints *OptimizerHints
+
+	// optimizationHistory records key optimization steps for debugging remap errors
+	// Only records when optimizations actually change the plan structure
+	optimizationHistory []string
 }
 
 type OptimizerHints struct {
@@ -266,7 +272,6 @@ type BindContext struct {
 	isDistinct    bool
 	isCorrelated  bool
 	hasSingleRow  bool
-	forceWindows  bool
 	isGroupingSet bool
 
 	//cteName denotes the alias of this BindContext.
@@ -321,7 +326,9 @@ type BindContext struct {
 	// sample function related.
 	sampleFunc SampleFuncCtx
 
-	tmpGroups []*plan.Expr
+	// groupConcatOrderBys stores ORDER BY specs from group_concat functions.
+	// Used to generate a Sort node before the Agg node instead of using window function.
+	groupConcatOrderBys []*plan.OrderBySpec
 
 	snapshot *Snapshot
 	// all view keys(dbName#viewName)

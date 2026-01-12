@@ -166,19 +166,34 @@ const (
 	ErrCantCompileForPrepare                    uint16 = 20473
 	ErrTableMustHaveAVisibleColumn              uint16 = 20474
 
-	// Group 5: rpc timeout
+	// Group 5: rpc errors
+	//
 	// ErrRPCTimeout rpc timeout
+	// Indicates the operation timed out before completion.
 	ErrRPCTimeout uint16 = 20500
 	// ErrClientClosed rpc client closed
+	// Indicates the rpc client has been closed. The caller should check
+	// their shutdown logic to determine if retry is appropriate.
 	ErrClientClosed uint16 = 20501
-	// ErrBackendClosed backend closed
+	// ErrBackendClosed backend connection closed
+	// Indicates the backend connection was closed. This may be due to
+	// network issues or server-side closure.
 	ErrBackendClosed uint16 = 20502
 	// ErrStreamClosed rpc stream closed
+	// Indicates the rpc stream has ended.
 	ErrStreamClosed uint16 = 20503
 	// ErrNoAvailableBackend no available backend
+	// Indicates no healthy backend is currently available.
 	ErrNoAvailableBackend uint16 = 20504
-	// ErrBackendCannotConnect can not connect to remote backend
+	// ErrBackendCannotConnect cannot establish connection
+	// Indicates the connection attempt to backend failed.
 	ErrBackendCannotConnect uint16 = 20505
+	// ErrServiceUnavailable service temporarily unavailable
+	// Indicates the service is temporarily overloaded or down.
+	ErrServiceUnavailable uint16 = 20506
+	// ErrConnectionReset connection was reset by peer
+	// Indicates the connection was forcibly closed by remote.
+	ErrConnectionReset uint16 = 20507
 
 	// Group 6: txn
 	// ErrTxnAborted read and write a transaction that has been rolled back.
@@ -430,14 +445,16 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrBlobCantHaveDefault:                      {ER_BLOB_CANT_HAVE_DEFAULT, []string{MySQLDefaultSqlState}, "BLOB, TEXT, GEOMETRY or JSON column '%-.192s' can't have a default value"},
 	ErrTableMustHaveAVisibleColumn:              {ER_TABLE_MUST_HAVE_A_VISIBLE_COLUMN, []string{MySQLDefaultSqlState}, "A table must have at least one visible column."},
 
-	// Group 5: rpc timeout
+	// Group 5: rpc errors
 	ErrRPCTimeout:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc timeout"},
-	ErrClientClosed: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "client closed"},
+	ErrClientClosed: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc client closed"},
 	ErrBackendClosed: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState},
-		"the connection has been disconnected"},
-	ErrStreamClosed:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "stream closed"},
+		"backend connection closed"},
+	ErrStreamClosed:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc stream closed"},
 	ErrNoAvailableBackend:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "no available backend"},
-	ErrBackendCannotConnect: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "can not connect to remote backend, %v"},
+	ErrBackendCannotConnect: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "cannot connect to backend: %v"},
+	ErrServiceUnavailable:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "service unavailable: %s"},
+	ErrConnectionReset:      {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "connection reset by peer"},
 
 	// Group 6: txn
 	ErrTxnClosed:                  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "the transaction %s has been committed or aborted"},
@@ -816,7 +833,8 @@ func NewBadS3Config(ctx context.Context, msg string) *Error {
 }
 
 func NewInternalErrorf(ctx context.Context, format string, args ...any) *Error {
-	return NewInternalError(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrInternal, msg)
 }
 
 func NewInternalError(ctx context.Context, msg string) *Error {
@@ -836,7 +854,8 @@ func NewNYI(ctx context.Context, msg string) *Error {
 }
 
 func NewNotSupportedf(ctx context.Context, format string, args ...any) *Error {
-	return NewNotSupported(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrNotSupported, msg)
 }
 
 func NewNotSupported(ctx context.Context, msg string) *Error {
@@ -856,7 +875,8 @@ func NewDivByZero(ctx context.Context) *Error {
 }
 
 func NewOutOfRangef(ctx context.Context, typ string, format string, args ...any) *Error {
-	return NewOutOfRange(ctx, typ, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrOutOfRange, typ, msg)
 }
 
 func NewOutOfRange(ctx context.Context, typ string, msg string) *Error {
@@ -864,15 +884,13 @@ func NewOutOfRange(ctx context.Context, typ string, msg string) *Error {
 }
 
 func NewDataTruncatedf(ctx context.Context, typ string, format string, args ...any) *Error {
-	return NewDataTruncated(ctx, typ, fmt.Sprintf(format, args...))
-}
-
-func NewDataTruncated(ctx context.Context, typ string, msg string) *Error {
+	msg := fmt.Sprintf(format, args...)
 	return newError(ctx, ErrDataTruncated, typ, msg)
 }
 
 func NewInvalidArg(ctx context.Context, arg string, val any) *Error {
-	return newError(ctx, ErrInvalidArg, arg, fmt.Sprintf("%v", val))
+	msg := fmt.Sprintf("%v", val)
+	return newError(ctx, ErrInvalidArg, arg, msg)
 }
 
 func NewTruncatedValueForField(ctx context.Context, t, v, c string, idx int) *Error {
@@ -880,7 +898,8 @@ func NewTruncatedValueForField(ctx context.Context, t, v, c string, idx int) *Er
 }
 
 func NewBadConfigf(ctx context.Context, format string, args ...any) *Error {
-	return NewBadConfig(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrBadConfig, msg)
 }
 
 func NewBadConfig(ctx context.Context, msg string) *Error {
@@ -888,7 +907,8 @@ func NewBadConfig(ctx context.Context, msg string) *Error {
 }
 
 func NewInvalidInputf(ctx context.Context, format string, args ...any) *Error {
-	return NewInvalidInput(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrInvalidInput, msg)
 }
 
 func NewInvalidInput(ctx context.Context, msg string) *Error {
@@ -896,7 +916,8 @@ func NewInvalidInput(ctx context.Context, msg string) *Error {
 }
 
 func NewSyntaxErrorf(ctx context.Context, format string, args ...any) *Error {
-	return NewSyntaxError(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrSyntaxError, msg)
 }
 
 func NewSyntaxError(ctx context.Context, msg string) *Error {
@@ -904,23 +925,26 @@ func NewSyntaxError(ctx context.Context, msg string) *Error {
 }
 
 func NewParseErrorf(ctx context.Context, format string, args ...any) *Error {
-	return NewParseError(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrParseError, msg)
 }
 func NewParseError(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrParseError, msg)
 }
 
 func NewConstraintViolationf(ctx context.Context, format string, args ...any) *Error {
-	return NewConstraintViolation(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrConstraintViolation, msg)
 }
 
 func NewConstraintViolation(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrConstraintViolation, msg)
 }
 
-func NewUnsupportedDML(ctx context.Context, msg string, args ...any) *Error {
-	xmsg := fmt.Sprintf(msg, args...)
-	return newError(ctx, ErrUnsupportedDML, xmsg)
+func NewUnsupportedDML(ctx context.Context, format string, args ...any) *Error {
+	msg := fmt.Sprintf(format, args...)
+	noReportCtx := errutil.ContextWithNoReport(ctx, true)
+	return newError(noReportCtx, ErrUnsupportedDML, msg)
 }
 
 func NewEmptyVector(ctx context.Context) *Error {
@@ -972,7 +996,8 @@ func NewInvalidPath(ctx context.Context, f string) *Error {
 }
 
 func NewInvalidStatef(ctx context.Context, format string, args ...any) *Error {
-	return NewInvalidState(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrInvalidState, msg)
 }
 
 func NewInvalidState(ctx context.Context, msg string) *Error {
@@ -1063,6 +1088,38 @@ func NewBackendCannotConnect(ctx context.Context) *Error {
 	return newError(ctx, ErrBackendCannotConnect)
 }
 
+func NewServiceUnavailable(ctx context.Context, reason string) *Error {
+	return newError(ctx, ErrServiceUnavailable, reason)
+}
+
+func NewConnectionReset(ctx context.Context) *Error {
+	return newError(ctx, ErrConnectionReset)
+}
+
+// IsConnectionRelatedRPCError returns true if the error is related to network/connection
+// issues. This includes backend closed, connection failures, and service unavailability.
+// Note: Whether to retry on these errors depends on the caller's specific requirements.
+// Some callers (e.g., CDC) may retry on ErrClientClosed, while others may not.
+func IsConnectionRelatedRPCError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return IsMoErrCode(err, ErrBackendClosed) ||
+		IsMoErrCode(err, ErrNoAvailableBackend) ||
+		IsMoErrCode(err, ErrBackendCannotConnect) ||
+		IsMoErrCode(err, ErrServiceUnavailable) ||
+		IsMoErrCode(err, ErrConnectionReset)
+}
+
+// IsRPCClientClosed returns true if the error indicates the RPC client
+// has been closed. Whether to retry depends on the caller's shutdown logic.
+func IsRPCClientClosed(err error) bool {
+	if err == nil {
+		return false
+	}
+	return IsMoErrCode(err, ErrClientClosed)
+}
+
 func NewTxnClosed(ctx context.Context, txnID []byte) *Error {
 	id := "unknown"
 	if len(txnID) > 0 {
@@ -1072,7 +1129,8 @@ func NewTxnClosed(ctx context.Context, txnID []byte) *Error {
 }
 
 func NewTxnWriteConflictf(ctx context.Context, format string, args ...any) *Error {
-	return NewTxnWriteConflict(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrTxnWriteConflict, msg)
 }
 
 func NewTxnWriteConflict(ctx context.Context, msg string) *Error {
@@ -1088,7 +1146,8 @@ func NewUnresolvedConflict(ctx context.Context) *Error {
 }
 
 func NewTxnErrorf(ctx context.Context, format string, args ...any) *Error {
-	return NewTxnError(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrTxnError, msg)
 }
 
 func NewTxnError(ctx context.Context, msg string) *Error {
@@ -1096,7 +1155,8 @@ func NewTxnError(ctx context.Context, msg string) *Error {
 }
 
 func NewTAEErrorf(ctx context.Context, format string, args ...any) *Error {
-	return NewTAEError(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrTAEError, msg)
 }
 
 func NewTAEError(ctx context.Context, msg string) *Error {
@@ -1112,7 +1172,8 @@ func NewShardNotReported(ctx context.Context, uuid string, id uint64) *Error {
 }
 
 func NewDragonboatTimeoutf(ctx context.Context, format string, args ...any) *Error {
-	return NewDragonboatTimeout(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrDragonboatTimeout, msg)
 }
 
 func NewDragonboatTimeout(ctx context.Context, msg string) *Error {
@@ -1120,7 +1181,8 @@ func NewDragonboatTimeout(ctx context.Context, msg string) *Error {
 }
 
 func NewDragonboatTimeoutTooSmallf(ctx context.Context, format string, args ...any) *Error {
-	return NewDragonboatTimeoutTooSmall(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrDragonboatTimeoutTooSmall, msg)
 }
 
 func NewDragonboatTimeoutTooSmall(ctx context.Context, msg string) *Error {
@@ -1128,7 +1190,8 @@ func NewDragonboatTimeoutTooSmall(ctx context.Context, msg string) *Error {
 }
 
 func NewDragonboatInvalidDeadlinef(ctx context.Context, format string, args ...any) *Error {
-	return NewDragonboatInvalidDeadline(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrDragonboatInvalidDeadline, msg)
 }
 
 func NewDragonboatInvalidDeadline(ctx context.Context, msg string) *Error {
@@ -1136,7 +1199,8 @@ func NewDragonboatInvalidDeadline(ctx context.Context, msg string) *Error {
 }
 
 func NewDragonboatRejectedf(ctx context.Context, format string, args ...any) *Error {
-	return NewDragonboatRejected(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrDragonboatRejected, msg)
 }
 
 func NewDragonboatRejected(ctx context.Context, msg string, args ...any) *Error {
@@ -1144,7 +1208,8 @@ func NewDragonboatRejected(ctx context.Context, msg string, args ...any) *Error 
 }
 
 func NewDragonboatInvalidPayloadSizef(ctx context.Context, format string, args ...any) *Error {
-	return NewDragonboatInvalidPayloadSize(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrDragonboatInvalidPayloadSize, msg)
 }
 
 func NewDragonboatInvalidPayloadSize(ctx context.Context, msg string) *Error {
@@ -1152,7 +1217,8 @@ func NewDragonboatInvalidPayloadSize(ctx context.Context, msg string) *Error {
 }
 
 func NewDragonboatShardNotReadyf(ctx context.Context, format string, args ...any) *Error {
-	return NewDragonboatShardNotReady(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrDragonboatShardNotReady, msg)
 }
 
 func NewDragonboatShardNotReady(ctx context.Context, msg string) *Error {
@@ -1160,21 +1226,24 @@ func NewDragonboatShardNotReady(ctx context.Context, msg string) *Error {
 }
 
 func NewDragonboatSystemClosedf(ctx context.Context, format string, args ...any) *Error {
-	return NewDragonboatSystemClosed(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrDragonboatSystemClosed, msg)
 }
 func NewDragonboatSystemClosed(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrDragonboatSystemClosed, msg)
 }
 
 func NewDragonboatInvalidRangef(ctx context.Context, format string, args ...any) *Error {
-	return NewDragonboatInvalidRange(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrDragonboatInvalidRange, msg)
 }
 func NewDragonboatInvalidRange(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrDragonboatInvalidRange, msg)
 }
 
 func NewDragonboatShardNotFoundf(ctx context.Context, format string, args ...any) *Error {
-	return NewDragonboatShardNotFound(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrDragonboatShardNotFound, msg)
 }
 
 func NewDragonboatShardNotFound(ctx context.Context, msg string) *Error {
@@ -1182,7 +1251,8 @@ func NewDragonboatShardNotFound(ctx context.Context, msg string) *Error {
 }
 
 func NewDragonboatOtherSystemErrorf(ctx context.Context, format string, args ...any) *Error {
-	return NewDragonboatOtherSystemError(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrDragonboatOtherSystemError, msg)
 }
 
 func NewDragonboatOtherSystemError(ctx context.Context, msg string) *Error {
@@ -1218,7 +1288,8 @@ func NewTAEWrite(ctx context.Context) *Error {
 }
 
 func NewTAECommitf(ctx context.Context, format string, args ...any) *Error {
-	return NewTAECommit(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrTAECommit, msg)
 }
 
 func NewTAECommit(ctx context.Context, msg string) *Error {
@@ -1226,7 +1297,8 @@ func NewTAECommit(ctx context.Context, msg string) *Error {
 }
 
 func NewTAERollbackf(ctx context.Context, format string, args ...any) *Error {
-	return NewTAERollback(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrTAERollback, msg)
 }
 
 func NewTAERollback(ctx context.Context, msg string) *Error {
@@ -1234,7 +1306,8 @@ func NewTAERollback(ctx context.Context, msg string) *Error {
 }
 
 func NewTAEPreparef(ctx context.Context, format string, args ...any) *Error {
-	return NewTAEPrepare(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrTAEPrepare, msg)
 }
 
 func NewTAEPrepare(ctx context.Context, msg string) *Error {
@@ -1598,6 +1671,10 @@ func NewErrTooBigPrecision(ctx context.Context, precision int32, funcName string
 
 var contextFunc atomic.Value
 
+// noReportCtx is a cached context that suppresses error reporting.
+// Used by NoCtx functions for high-frequency errors that should not log.
+var noReportCtx context.Context
+
 func SetContextFunc(f func() context.Context) {
 	contextFunc.Store(f)
 }
@@ -1607,6 +1684,16 @@ func Context() context.Context {
 	return contextFunc.Load().(func() context.Context)()
 }
 
+// NoReportContext returns a context that suppresses error logging.
+// Use this for errors that are expected in retry loops or high-frequency paths.
+// When this context is passed to NewXXX functions, no log will be emitted,
+// but the error will still contain proper stack information.
+func NoReportContext() context.Context {
+	return noReportCtx
+}
+
 func init() {
 	SetContextFunc(func() context.Context { return context.Background() })
+	// Initialize the no-report context for high-frequency errors
+	noReportCtx = errutil.ContextWithNoReport(context.Background(), true)
 }

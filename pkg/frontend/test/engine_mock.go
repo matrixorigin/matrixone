@@ -1612,18 +1612,6 @@ func (mr *MockReaderMockRecorder) Read(arg0, arg1, arg2, arg3, arg4 interface{})
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Read", reflect.TypeOf((*MockReader)(nil).Read), arg0, arg1, arg2, arg3, arg4)
 }
 
-// SetBlockTop mocks base method.
-func (m *MockReader) SetBlockTop(arg0 []*plan.OrderBySpec, arg1 uint64) {
-	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "SetBlockTop", arg0, arg1)
-}
-
-// SetBlockTop indicates an expected call of SetBlockTop.
-func (mr *MockReaderMockRecorder) SetBlockTop(arg0, arg1 interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetBlockTop", reflect.TypeOf((*MockReader)(nil).SetBlockTop), arg0, arg1)
-}
-
 // SetFilterZM mocks base method.
 func (m *MockReader) SetFilterZM(arg0 objectio.ZoneMap) {
 	m.ctrl.T.Helper()
@@ -1634,6 +1622,18 @@ func (m *MockReader) SetFilterZM(arg0 objectio.ZoneMap) {
 func (mr *MockReaderMockRecorder) SetFilterZM(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetFilterZM", reflect.TypeOf((*MockReader)(nil).SetFilterZM), arg0)
+}
+
+// SetIndexParam mocks base method.
+func (m *MockReader) SetIndexParam(arg0 *plan.IndexReaderParam) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetIndexParam", arg0)
+}
+
+// SetIndexParam indicates an expected call of SetIndexParam.
+func (mr *MockReaderMockRecorder) SetIndexParam(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetIndexParam", reflect.TypeOf((*MockReader)(nil).SetIndexParam), arg0)
 }
 
 // SetOrderBy mocks base method.
@@ -2022,20 +2022,6 @@ func (m *MockEngine) GetService() string {
 func (mr *MockEngineMockRecorder) GetService() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetService", reflect.TypeOf((*MockEngine)(nil).GetService))
-}
-
-// HasTempEngine mocks base method.
-func (m *MockEngine) HasTempEngine() bool {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "HasTempEngine")
-	ret0, _ := ret[0].(bool)
-	return ret0
-}
-
-// HasTempEngine indicates an expected call of HasTempEngine.
-func (mr *MockEngineMockRecorder) HasTempEngine() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HasTempEngine", reflect.TypeOf((*MockEngine)(nil).HasTempEngine))
 }
 
 // Hints mocks base method.

@@ -7,9 +7,7 @@ SELECT FROM_DAYS(730669) AS date_2000_01_01;
 SELECT FROM_DAYS(366) AS date_0000_12_31;
 SELECT FROM_DAYS(367) AS date_0001_01_01;
 
--- @bvt:issue#22969
 SELECT FROM_DAYS(1) AS date_0000_01_01;
--- @bvt:issue
 
 # Round-trip test: FROM_DAYS(TO_DAYS(date)) should equal date
 SELECT FROM_DAYS(TO_DAYS('2000-01-01')) AS roundtrip_2000;

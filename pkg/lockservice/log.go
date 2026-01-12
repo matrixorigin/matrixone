@@ -388,20 +388,60 @@ func logLockTableCreated(
 	)
 }
 
+// closeReason represents the reason why a lock table is closed
+type closeReason int
+
+const (
+	// closeReasonBindChanged lock table closed due to bind changed
+	closeReasonBindChanged closeReason = iota
+	// closeReasonServiceClose lock table closed due to service shutdown
+	closeReasonServiceClose
+	// closeReasonKeeperFailed lock table closed due to keeper heartbeat failed
+	closeReasonKeeperFailed
+	// closeReasonKeepBindFailed lock table closed due to keep bind failed
+	closeReasonKeepBindFailed
+)
+
+func (r closeReason) String() string {
+	switch r {
+	case closeReasonBindChanged:
+		return "bind-changed"
+	case closeReasonServiceClose:
+		return "service-close"
+	case closeReasonKeeperFailed:
+		return "keeper-failed"
+	case closeReasonKeepBindFailed:
+		return "keep-bind-failed"
+	default:
+		return "unknown"
+	}
+}
+
 func logLockTableClosed(
 	logger *log.MOLogger,
 	bind pb.LockTable,
 	remote bool,
+	reason closeReason,
 ) {
 	if logger == nil {
 		return
 	}
 
+	// Service close is a normal expected behavior, use Debug level to avoid log flood
+	logLevel := zap.InfoLevel
+	if reason == closeReasonServiceClose {
+		logLevel = zap.DebugLevel
+		if !logger.Enabled(logLevel) {
+			return
+		}
+	}
+
 	logger.Log(
 		"bind closed",
-		getLogOptions(zap.InfoLevel),
+		getLogOptions(logLevel),
 		zap.Bool("remote", remote),
 		zap.String("bind", bind.DebugString()),
+		zap.String("reason", reason.String()),
 	)
 }
 
@@ -698,11 +738,12 @@ func logUnlockTableOnRemote(
 	}
 }
 
-func logUnlockTableOnRemoteFailed(
+func logUnlockTableOnRemoteFailedWithCount(
 	logger *log.MOLogger,
 	txn *activeTxn,
 	bind pb.LockTable,
 	err error,
+	retryCount int,
 ) {
 	if logger == nil {
 		return
@@ -713,6 +754,7 @@ func logUnlockTableOnRemoteFailed(
 		getLogOptions(zap.ErrorLevel),
 		txnField(txn),
 		zap.String("bind", bind.DebugString()),
+		zap.Int("retry-count", retryCount),
 		zap.Error(err),
 	)
 }

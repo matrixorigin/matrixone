@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -113,7 +114,7 @@ func (ctr *container) cleanHashMap() {
 
 func (ctr *container) putCnts(proc *process.Process) {
 	for i := range ctr.cnts {
-		proc.Mp().PutSels(ctr.cnts[i])
+		vector.PutSels(ctr.cnts[i])
 	}
 	ctr.cnts = nil
 }

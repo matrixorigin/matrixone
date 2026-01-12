@@ -15,7 +15,6 @@
 package ivfflat
 
 import (
-	"container/heap"
 	"fmt"
 	"strconv"
 
@@ -25,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/brute_force"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
@@ -32,15 +32,10 @@ import (
 
 var runSql = sqlexec.RunSql
 
-type Centroid[T types.RealNumbers] struct {
-	Id  int64
-	Vec []T
-}
-
 // Ivf search index struct to hold the usearch index
 type IvfflatSearchIndex[T types.RealNumbers] struct {
 	Version   int64
-	Centroids []Centroid[T]
+	Centroids cache.VectorIndexSearchIf
 }
 
 // This is the Ivf search implementation that implement VectorIndexSearchIf interface
@@ -74,65 +69,62 @@ func (idx *IvfflatSearchIndex[T]) LoadIndex(proc *sqlexec.SqlProcess, idxcfg vec
 		return nil
 	}
 
-	idx.Centroids = make([]Centroid[T], 0, idxcfg.Ivfflat.Lists)
+	ncenters := 0
+	centroids := make([][]T, idxcfg.Ivfflat.Lists)
+	elemsz := res.Batches[0].Vecs[1].GetType().GetArrayElementSize()
 	for _, bat := range res.Batches {
-		idVec := bat.Vecs[0]
 		faVec := bat.Vecs[1]
+		idVec := bat.Vecs[0]
 		ids := vector.MustFixedColNoTypeCheck[int64](idVec)
 		hasNull := faVec.HasNull()
 		for i, id := range ids {
 			if hasNull && faVec.IsNull(uint64(i)) {
-				//os.Stderr.WriteString("Centroid is NULL\n")
 				continue
 			}
 			val := faVec.GetStringAt(i)
 			vec := types.BytesToArray[T](util.UnsafeStringToBytes(val))
-			idx.Centroids = append(idx.Centroids, Centroid[T]{Id: id, Vec: vec})
+			centroids[id] = vec
+			ncenters += 1
 		}
 	}
 
+	if ncenters == 0 {
+		return nil
+	}
+
+	if uint(ncenters) != idxcfg.Ivfflat.Lists {
+		return moerr.NewInternalErrorNoCtx("number of centroids in db != Nlist")
+	}
+
+	bfidx, err := brute_force.NewBruteForceIndex[T](centroids, idxcfg.Ivfflat.Dimensions, metric.MetricType(idxcfg.Ivfflat.Metric), uint(elemsz))
+	if err != nil {
+		return err
+	}
+	err = bfidx.Load(proc)
+	if err != nil {
+		return err
+	}
+
+	idx.Centroids = bfidx
 	//os.Stderr.WriteString(fmt.Sprintf("%d centroids loaded... lists = %d, centroid %v\n", len(idx.Centroids), idxcfg.Ivfflat.Lists, idx.Centroids))
 	return nil
 }
 
 func (idx *IvfflatSearchIndex[T]) findCentroids(sqlproc *sqlexec.SqlProcess, query []T, distfn metric.DistanceFunction[T], _ vectorindex.IndexConfig, probe uint, _ int64) ([]int64, error) {
 
-	if len(idx.Centroids) == 0 {
+	if idx.Centroids == nil {
 		// empty index has id = 1
 		return []int64{1}, nil
 	}
 
-	hp := make(vectorindex.SearchResultMaxHeap, 0, int(probe))
-	for _, c := range idx.Centroids {
-		dist, err := distfn(query, c.Vec)
-		if err != nil {
-			return nil, err
-		}
-		dist64 := float64(dist)
-
-		if len(hp) >= int(probe) {
-			if hp[0].GetDistance() > dist64 {
-				hp[0] = &vectorindex.SearchResult{Id: c.Id, Distance: dist64}
-				heap.Fix(&hp, 0)
-			}
-		} else {
-			heap.Push(&hp, &vectorindex.SearchResult{Id: c.Id, Distance: dist64})
-		}
+	queries := [][]T{query}
+	rt := vectorindex.RuntimeConfig{Limit: probe, NThreads: 1}
+	keys, _, err := idx.Centroids.Search(sqlproc, queries, rt)
+	if err != nil {
+		return nil, err
 	}
 
-	n := hp.Len()
-	res := make([]int64, 0, n)
-	for range n {
-		srif := heap.Pop(&hp)
-		sr, ok := srif.(*vectorindex.SearchResult)
-		if !ok {
-			return nil, moerr.NewInternalError(sqlproc.GetContext(), "findCentroids: heap return key is not int64")
-		}
-		res = append(res, sr.Id)
-	}
-
-	//os.Stderr.WriteString(fmt.Sprintf("probe %d... return centroid ids %v\n", probe, res))
-	return res, nil
+	return keys.([]int64), nil
 }
 
 // Call usearch.Search
@@ -200,15 +192,18 @@ func (idx *IvfflatSearchIndex[T]) Search(
 	var rowCount int64
 	for _, bat := range res.Batches {
 		rowCount += int64(bat.RowCount())
+		distVec := bat.Vecs[1]
+		pkVec := bat.Vecs[0]
+
 		for i := 0; i < bat.RowCount(); i++ {
-			if bat.Vecs[1].IsNull(uint64(i)) {
+			if distVec.IsNull(uint64(i)) {
 				continue
 			}
 
-			pk := vector.GetAny(bat.Vecs[0], i, true)
+			pk := vector.GetAny(pkVec, i, true)
 			resid = append(resid, pk)
 
-			dist := vector.GetFixedAtNoTypeCheck[float64](bat.Vecs[1], i)
+			dist := vector.GetFixedAtNoTypeCheck[float64](distVec, i)
 			dist = metric.DistanceTransformIvfflat(dist, metric.DistFuncNameToMetricType[rt.OrigFuncName], metric.MetricType(idxcfg.Ivfflat.Metric))
 			distances = append(distances, dist)
 		}
@@ -220,7 +215,10 @@ func (idx *IvfflatSearchIndex[T]) Search(
 }
 
 func (idx *IvfflatSearchIndex[T]) Destroy() {
-	idx.Centroids = nil
+	if idx.Centroids != nil {
+		idx.Centroids.Destroy()
+		idx.Centroids = nil
+	}
 }
 
 func NewIvfflatSearch[T types.RealNumbers](

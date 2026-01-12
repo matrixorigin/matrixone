@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	gotrace "runtime/trace"
 	"slices"
 	"sort"
@@ -42,7 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
+	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -64,6 +65,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -155,7 +157,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 			bb.WriteString(envStmt)
 			bb.WriteString(" // ")
 			bb.WriteString(execSql)
-			text = SubStringFromBegin(bb.String(), int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
+			text = commonutil.Abbreviate(bb.String(), int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
 		} else {
 			// ignore envStmt == ""
 			// case: exec `set @t = 2;` will trigger an internal query with the same session.
@@ -163,11 +165,12 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 			//	+ fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
 			//	+ cw.GetAst().Format(fmtCtx)
 			//  + envStmt = fmtCtx.String()
-			text = SubStringFromBegin(envStmt, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
+			text = commonutil.Abbreviate(envStmt, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
 		}
 	} else {
-		stmID, _ = uuid.NewV7()
-		text = SubStringFromBegin(envStmt, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
+		u, _ := util.FastUuid()
+		stmID = uuid.UUID(u)
+		text = commonutil.Abbreviate(envStmt, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
 	}
 	ses.SetStmtId(stmID)
 	ses.SetStmtType(getStatementType(statement).GetStatementType())
@@ -946,7 +949,7 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 		}
 
 		bs := vector.MustFixedColWithTypeCheck[bool](vec)
-		sels := execCtx.proc.Mp().GetSels()
+		sels := vector.GetSels()
 		for i, b := range bs {
 			if b {
 				sels = append(sels, int64(i))
@@ -955,7 +958,7 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 		executor.Free()
 
 		bat.Shrink(sels, false)
-		execCtx.proc.Mp().PutSels(sels)
+		vector.PutSels(sels)
 
 		v0 := vector.GenerateFunctionStrParameter(bat.Vecs[0])
 		v1 := vector.GenerateFunctionStrParameter(bat.Vecs[1])
@@ -965,13 +968,13 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 			if isNull {
 				rows[i][0] = ""
 			} else {
-				rows[i][0] = s0
+				rows[i][0] = string(s0)
 			}
 			s1, isNull := v1.GetStrValue(uint64(i))
 			if isNull {
 				rows[i][1] = ""
 			} else {
-				rows[i][1] = s1
+				rows[i][1] = string(s1)
 			}
 		}
 	}
@@ -1489,6 +1492,11 @@ func handleDropRole(ses FeSession, execCtx *ExecCtx, dr *tree.DropRole) error {
 	return doDropRole(execCtx.reqCtx, ses.(*Session), dr)
 }
 
+// handleAlterRole renames the role
+func handleAlterRole(ses FeSession, execCtx *ExecCtx, ar *tree.AlterRole) error {
+	return doAlterRole(execCtx.reqCtx, ses.(*Session), ar)
+}
+
 func handleCreateFunction(ses FeSession, execCtx *ExecCtx, cf *tree.CreateFunction) error {
 	tenant := ses.GetTenantInfo()
 	return InitFunction(ses.(*Session), execCtx, tenant, cf)
@@ -1721,7 +1729,7 @@ func doShowCollation(ses *Session, execCtx *ExecCtx, proc *process.Process, sc *
 		}
 
 		bs := vector.MustFixedColWithTypeCheck[bool](vec)
-		sels := proc.Mp().GetSels()
+		sels := vector.GetSels()
 		for i, b := range bs {
 			if b {
 				sels = append(sels, int64(i))
@@ -1730,7 +1738,7 @@ func doShowCollation(ses *Session, execCtx *ExecCtx, proc *process.Process, sc *
 		executor.Free()
 
 		bat.Shrink(sels, false)
-		proc.Mp().PutSels(sels)
+		vector.PutSels(sels)
 		v0, area0 := vector.MustVarlenaRawData(bat.Vecs[0])
 		v1, area1 := vector.MustVarlenaRawData(bat.Vecs[1])
 		v2 := vector.MustFixedColWithTypeCheck[int64](bat.Vecs[2])
@@ -2500,33 +2508,55 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 	if err != nil {
 		return
 	}
+
+	// handleNetworkTimeout checks if the error is a network timeout and disconnects the client
+	handleNetworkTimeout := func(err error) error {
+		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+			ses.Errorf(execCtx.reqCtx, "load local file failed: network read timeout: %v, disconnecting client", err)
+			if disconnectErr := mysqlRwer.Disconnect(); disconnectErr != nil {
+				ses.Errorf(execCtx.reqCtx, "failed to disconnect client: %v", disconnectErr)
+			}
+			return moerr.NewInternalErrorf(execCtx.reqCtx,
+				"load local file failed: network read timeout, client connection closed")
+		}
+		return nil
+	}
+
 	var skipWrite bool
 	skipWrite = false
 	var readTime, writeTime time.Duration
 	var retError error
 	start := time.Now()
-	epoch, printTime, minReadTime, maxReadTime, minWriteTime, maxWriteTime := uint64(0), uint64(1024*60), 24*time.Hour, time.Nanosecond, 24*time.Hour, time.Nanosecond
+	epoch, printTime := uint64(0), uint64(1024*60)
+	minReadTime, maxReadTime, minWriteTime, maxWriteTime := 24*time.Hour, time.Nanosecond, 24*time.Hour, time.Nanosecond
+
+	// updateTimeStats updates min/max time statistics
+	updateTimeStats := func(readTime, writeTime time.Duration) {
+		if readTime > maxReadTime {
+			maxReadTime = readTime
+		}
+		if readTime < minReadTime {
+			minReadTime = readTime
+		}
+		if writeTime > maxWriteTime {
+			maxWriteTime = writeTime
+		}
+		if writeTime < minWriteTime {
+			minWriteTime = writeTime
+		}
+	}
 
 	skipWrite, readTime, writeTime, err = readThenWrite(ses, execCtx, param, writer, mysqlRwer, skipWrite, epoch)
 	if err != nil {
 		if errors.Is(err, errorInvalidLength0) {
 			return nil
 		}
+		if timeoutErr := handleNetworkTimeout(err); timeoutErr != nil {
+			return timeoutErr
+		}
 		retError = err
 	}
-	if readTime > maxReadTime {
-		maxReadTime = readTime
-	}
-	if readTime < minReadTime {
-		minReadTime = readTime
-	}
-
-	if writeTime > maxWriteTime {
-		maxWriteTime = writeTime
-	}
-	if writeTime < minWriteTime {
-		minWriteTime = writeTime
-	}
+	updateTimeStats(readTime, writeTime)
 
 	const maxRetries = 100               // Maximum number of consecutive errors
 	const maxTotalTime = 3 * time.Minute // Maximum total consecutive processing time
@@ -2544,6 +2574,11 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 				err = nil
 				break
 			}
+
+			if timeoutErr := handleNetworkTimeout(err); timeoutErr != nil {
+				return timeoutErr
+			}
+
 			retError = err
 			consecutiveErrors++
 			ses.Errorf(execCtx.reqCtx, "readThenWrite error (attempt %d): %v", consecutiveErrors, err)
@@ -2558,19 +2593,7 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 			consecutiveLoopStartTime = time.Now()
 		}
 
-		if readTime > maxReadTime {
-			maxReadTime = readTime
-		}
-		if readTime < minReadTime {
-			minReadTime = readTime
-		}
-
-		if writeTime > maxWriteTime {
-			maxWriteTime = writeTime
-		}
-		if writeTime < minWriteTime {
-			minWriteTime = writeTime
-		}
+		updateTimeStats(readTime, writeTime)
 
 		if epoch%printTime == 0 {
 			if execCtx.isIssue3482 {
@@ -3327,9 +3350,9 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 	case COM_QUIT:
 		return resp, moerr.GetMysqlClientQuit()
 	case COM_QUERY:
-		var query = util.UnsafeBytesToString(req.GetData().([]byte))
+		var query = commonutil.UnsafeBytesToString(req.GetData().([]byte))
 		ses.addSqlCount(1)
-		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(SubStringFromBegin(query, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))))
+		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(commonutil.Abbreviate(query, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))))
 		input := &UserInput{sql: query}
 		err = doComQuery(ses, execCtx, input)
 		if err != nil {
@@ -3341,7 +3364,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		}
 		return resp, nil
 	case COM_INIT_DB:
-		var dbname = util.UnsafeBytesToString(req.GetData().([]byte))
+		var dbname = commonutil.UnsafeBytesToString(req.GetData().([]byte))
 		ses.addSqlCount(1)
 		query := "use `" + dbname + "`"
 		err = doComQuery(ses, execCtx, &UserInput{sql: query})
@@ -3351,7 +3374,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 
 		return resp, nil
 	case COM_FIELD_LIST:
-		var payload = util.UnsafeBytesToString(req.GetData().([]byte))
+		var payload = commonutil.UnsafeBytesToString(req.GetData().([]byte))
 		ses.addSqlCount(1)
 		query := makeCmdFieldListSql(payload)
 		err = doComQuery(ses, execCtx, &UserInput{sql: query})
@@ -3367,7 +3390,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 
 	case COM_STMT_PREPARE:
 		ses.SetCmd(COM_STMT_PREPARE)
-		sql = util.UnsafeBytesToString(req.GetData().([]byte))
+		sql = commonutil.UnsafeBytesToString(req.GetData().([]byte))
 		ses.addSqlCount(1)
 
 		// rewrite to "Prepare stmt_name from 'xxx'"
@@ -3619,11 +3642,11 @@ func convertMysqlTextTypeToBlobType(col *MysqlColumn) {
 // build plan json when marhal plan error
 func buildErrorJsonPlan(buffer *bytes.Buffer, uuid uuid.UUID, errcode uint16, msg string) []byte {
 	var bytes [36]byte
-	util.EncodeUUIDHex(bytes[:], uuid[:])
+	commonutil.EncodeUUIDHex(bytes[:], uuid[:])
 	explainData := models.ExplainData{
 		Code:    errcode,
 		Message: msg,
-		Uuid:    util.UnsafeBytesToString(bytes[:]),
+		Uuid:    commonutil.UnsafeBytesToString(bytes[:]),
 	}
 	encoder := json.NewEncoder(buffer)
 	encoder.SetEscapeHTML(false)

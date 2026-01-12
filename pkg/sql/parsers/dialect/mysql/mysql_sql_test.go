@@ -179,8 +179,17 @@ var (
 		input:  "select cluster_centers(a kmeans '5,vector_cosine_ops,random,true') from t1;",
 		output: "select cluster_centers(a, 5,vector_cosine_ops,random,true) from t1",
 	}, {
-		input:  "alter table t1 alter reindex idx1 IVFFLAT lists = 5",
-		output: "alter table t1 alter reindex idx1 ivfflat lists = 5",
+		input:  "alter table t1 alter reindex idx1 IVFFLAT lists = 5 force_sync",
+		output: "alter table t1 alter reindex idx1 ivfflat lists = 5 force_sync",
+	}, {
+		input:  "alter table t1 alter reindex idx1 IVFFLAT force_sync",
+		output: "alter table t1 alter reindex idx1 ivfflat force_sync",
+	}, {
+		input:  "alter table t1 alter index idx1 IVFFLAT auto_update = true day = 33 hour = 12",
+		output: "alter table t1 alter index idx1 ivfflat auto_update = true day = 33 hour = 12",
+	}, {
+		input:  "alter table t1 alter index idx1 IVFFLAT auto_update = false",
+		output: "alter table t1 alter index idx1 ivfflat auto_update = false",
 	}, {
 		input:  "create connector for s with (\"type\"='kafka', \"topic\"= 'user', \"partition\" = '1', \"value\"= 'json', \"bootstrap.servers\" = '127.0.0.1:62610');",
 		output: "create connector for s with (type = kafka, topic = user, partition = 1, value = json, bootstrap.servers = 127.0.0.1:62610)",
@@ -1564,6 +1573,15 @@ var (
 			input:  "create role 'admin', 'developer'",
 			output: "create role admin, developer",
 		}, {
+			input:  "alter role old_role rename to new_role",
+			output: "alter role old_role rename to new_role",
+		}, {
+			input:  "alter role if exists old_role rename to new_role",
+			output: "alter role if exists old_role rename to new_role",
+		}, {
+			input:  "alter role 'old_role' rename to 'new_role'",
+			output: "alter role old_role rename to new_role",
+		}, {
 			input:  "create index idx1 on a (a) KEY_BLOCK_SIZE 10 with parser x comment 'x' invisible",
 			output: "create index idx1 on a (a) KEY_BLOCK_SIZE 10 with parser x comment x invisible",
 		}, {
@@ -1571,6 +1589,12 @@ var (
 			output: "create index idx1 using btree on a (a) KEY_BLOCK_SIZE 10 with parser x comment x invisible",
 		}, {
 			input:  "create index idx using ivfflat on A (a) LISTS 10",
+			output: "create index idx using ivfflat on a (a) LISTS 10 ",
+		}, {
+			input:  "create index idx using ivfflat on A (a) LISTS 10 AUTO_UPDATE=TRUE DAY 10 HOUR 23",
+			output: "create index idx using ivfflat on a (a) LISTS 10 AUTO_UPDATE=TRUE DAY 10 HOUR 23 ",
+		}, {
+			input:  "create index idx using ivfflat on A (a) LISTS 10 AUTO_UPDATE=FALSE",
 			output: "create index idx using ivfflat on a (a) LISTS 10 ",
 		}, {
 			input:  "create index idx using ivfflat on A (a) LISTS 10 op_type 'vector_l2_ops'",
@@ -1926,6 +1950,13 @@ var (
 			input: "drop role if exists role1",
 		}, {
 			input: "drop role role1",
+		}, {
+			input: "alter role role1 rename to role2",
+		}, {
+			input: "alter role if exists role1 rename to role2",
+		}, {
+			input:  "alter role 'role1' rename to 'role2'",
+			output: "alter role role1 rename to role2",
 		}, {
 			input: "grant all, all(a, b), create(a, b), select(a, b), super(a, b, c) on table db.a to u1, u2 with grant option",
 		}, {
@@ -3546,10 +3577,10 @@ func TestLimitByRank(t *testing.T) {
 				selectStmt, ok := stmt.(*tree.Select)
 				require.True(t, ok)
 				require.NotNil(t, selectStmt.Limit)
-				require.True(t, selectStmt.Limit.ByRank)
-				require.NotNil(t, selectStmt.Limit.Option)
-				require.Equal(t, "3.0", selectStmt.Limit.Option["fudge_factor"])
-				require.Equal(t, "10", selectStmt.Limit.Option["nprobe"])
+				require.NotNil(t, selectStmt.RankOption)
+				require.NotNil(t, selectStmt.RankOption.Option)
+				require.Equal(t, "3.0", selectStmt.RankOption.Option["fudge_factor"])
+				require.Equal(t, "10", selectStmt.RankOption.Option["nprobe"])
 			},
 		},
 		{
@@ -3559,10 +3590,10 @@ func TestLimitByRank(t *testing.T) {
 				selectStmt, ok := stmt.(*tree.Select)
 				require.True(t, ok)
 				require.NotNil(t, selectStmt.Limit)
-				require.True(t, selectStmt.Limit.ByRank)
-				require.NotNil(t, selectStmt.Limit.Option)
-				require.Equal(t, "2.5", selectStmt.Limit.Option["fudge_factor"])
-				require.Equal(t, "pre", selectStmt.Limit.Option["mode"])
+				require.NotNil(t, selectStmt.RankOption)
+				require.NotNil(t, selectStmt.RankOption.Option)
+				require.Equal(t, "2.5", selectStmt.RankOption.Option["fudge_factor"])
+				require.Equal(t, "pre", selectStmt.RankOption.Option["mode"])
 			},
 		},
 		{
@@ -3572,10 +3603,10 @@ func TestLimitByRank(t *testing.T) {
 				selectStmt, ok := stmt.(*tree.Select)
 				require.True(t, ok)
 				require.NotNil(t, selectStmt.Limit)
-				require.True(t, selectStmt.Limit.ByRank)
-				require.NotNil(t, selectStmt.Limit.Option)
-				require.Equal(t, "1.0", selectStmt.Limit.Option["fudge_factor"])
-				require.Equal(t, "post", selectStmt.Limit.Option["mode"])
+				require.NotNil(t, selectStmt.RankOption)
+				require.NotNil(t, selectStmt.RankOption.Option)
+				require.Equal(t, "1.0", selectStmt.RankOption.Option["fudge_factor"])
+				require.Equal(t, "post", selectStmt.RankOption.Option["mode"])
 			},
 		},
 		{
@@ -3585,9 +3616,9 @@ func TestLimitByRank(t *testing.T) {
 				selectStmt, ok := stmt.(*tree.Select)
 				require.True(t, ok)
 				require.NotNil(t, selectStmt.Limit)
-				require.True(t, selectStmt.Limit.ByRank)
-				require.NotNil(t, selectStmt.Limit.Option)
-				require.Equal(t, "20", selectStmt.Limit.Option["nprobe"])
+				require.NotNil(t, selectStmt.RankOption)
+				require.NotNil(t, selectStmt.RankOption.Option)
+				require.Equal(t, "20", selectStmt.RankOption.Option["nprobe"])
 				require.NotNil(t, selectStmt.Limit.Offset)
 			},
 		},
@@ -3598,9 +3629,9 @@ func TestLimitByRank(t *testing.T) {
 				selectStmt, ok := stmt.(*tree.Select)
 				require.True(t, ok)
 				require.NotNil(t, selectStmt.Limit)
-				require.True(t, selectStmt.Limit.ByRank)
-				require.NotNil(t, selectStmt.Limit.Option)
-				require.Equal(t, "4.0", selectStmt.Limit.Option["fudge_factor"])
+				require.NotNil(t, selectStmt.RankOption)
+				require.NotNil(t, selectStmt.RankOption.Option)
+				require.Equal(t, "4.0", selectStmt.RankOption.Option["fudge_factor"])
 				require.NotNil(t, selectStmt.Limit.Offset)
 			},
 		},

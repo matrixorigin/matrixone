@@ -190,14 +190,19 @@ type Sink interface {
 
 type ActiveRoutine struct {
 	sync.Mutex
-	Pause  chan struct{}
-	Cancel chan struct{}
+	Pause        chan struct{}
+	Cancel       chan struct{}
+	pauseClosed  bool // Track if Pause channel is closed
+	cancelClosed bool // Track if Cancel channel is closed
 }
 
 func (ar *ActiveRoutine) ClosePause() {
 	ar.Lock()
 	defer ar.Unlock()
-	close(ar.Pause)
+	if !ar.pauseClosed {
+		close(ar.Pause)
+		ar.pauseClosed = true
+	}
 	// can't set to nil, because some goroutines may still be running, when it goes next round loop,
 	// it found the channel is nil, not closed, will hang there forever
 }
@@ -205,13 +210,18 @@ func (ar *ActiveRoutine) ClosePause() {
 func (ar *ActiveRoutine) CloseCancel() {
 	ar.Lock()
 	defer ar.Unlock()
-	close(ar.Cancel)
+	if !ar.cancelClosed {
+		close(ar.Cancel)
+		ar.cancelClosed = true
+	}
 }
 
 func NewCdcActiveRoutine() *ActiveRoutine {
 	return &ActiveRoutine{
-		Pause:  make(chan struct{}),
-		Cancel: make(chan struct{}),
+		Pause:        make(chan struct{}),
+		Cancel:       make(chan struct{}),
+		pauseClosed:  false,
+		cancelClosed: false,
 	}
 }
 
@@ -347,6 +357,12 @@ func (row AtomicBatchRow) Less(other AtomicBatchRow) bool {
 }
 
 func (bat *AtomicBatch) RowCount() int {
+	if bat == nil {
+		return 0
+	}
+	if bat.Rows == nil {
+		panic("RowCount() called on closed AtomicBatch (Fail Fast)")
+	}
 	unique := bat.Rows.Len()
 	if bat.duplicateRows > 0 && !bat.duplicateLogged {
 		logutil.Warn("cdc.atomic_batch.dedup",

@@ -1534,3 +1534,1093 @@ func TestCDCWatermarkUpdater_RemoveThenUpdateErrMsg(t *testing.T) {
 	err := updater.UpdateWatermarkErrMsg(ctx, key, "boom", nil)
 	require.NoError(t, err)
 }
+
+// TestCDCWatermarkUpdater_MarkUnmarkTaskPaused tests pause state management
+func TestCDCWatermarkUpdater_MarkUnmarkTaskPaused(t *testing.T) {
+	updater, _ := InitCDCWatermarkUpdaterForTest(t)
+	updater.Start()
+	defer updater.Stop()
+
+	taskId := "test-task-pause"
+
+	_, paused := updater.pausedTasks.Load(taskId)
+	require.False(t, paused)
+
+	updater.MarkTaskPaused(taskId)
+	pauseTime, paused := updater.pausedTasks.Load(taskId)
+	require.True(t, paused)
+	require.NotZero(t, pauseTime)
+
+	updater.UnmarkTaskPaused(taskId)
+	_, paused = updater.pausedTasks.Load(taskId)
+	require.False(t, paused)
+}
+
+// TestCDCWatermarkUpdater_PauseBlocksWatermarkUpdate tests that paused tasks block watermark updates
+func TestCDCWatermarkUpdater_PauseBlocksWatermarkUpdate(t *testing.T) {
+	ctx := context.Background()
+	updater, _ := InitCDCWatermarkUpdaterForTest(t)
+	updater.Start()
+	defer updater.Stop()
+
+	taskId := "test-task-block"
+	key := &WatermarkKey{
+		AccountId: 1,
+		TaskId:    taskId,
+		DBName:    "test_db",
+		TableName: "test_table",
+	}
+
+	wm1 := types.BuildTS(1000, 1)
+	err := updater.UpdateWatermarkOnly(ctx, key, &wm1)
+	require.NoError(t, err)
+
+	err = updater.ForceFlush(ctx)
+	require.NoError(t, err)
+
+	cachedWm, err := updater.GetFromCache(ctx, key)
+	require.NoError(t, err)
+	require.Equal(t, wm1, cachedWm)
+
+	updater.MarkTaskPaused(taskId)
+
+	wm2 := types.BuildTS(2000, 1)
+	err = updater.UpdateWatermarkOnly(ctx, key, &wm2)
+	require.NoError(t, err)
+
+	err = updater.ForceFlush(ctx)
+	require.NoError(t, err)
+
+	cachedWm, err = updater.GetFromCache(ctx, key)
+	require.NoError(t, err)
+	require.Equal(t, wm1, cachedWm)
+
+	updater.UnmarkTaskPaused(taskId)
+
+	wm3 := types.BuildTS(3000, 1)
+	err = updater.UpdateWatermarkOnly(ctx, key, &wm3)
+	require.NoError(t, err)
+
+	err = updater.ForceFlush(ctx)
+	require.NoError(t, err)
+
+	cachedWm, err = updater.GetFromCache(ctx, key)
+	require.NoError(t, err)
+	require.Equal(t, wm3, cachedWm)
+}
+
+// TestCDCWatermarkUpdater_MultipleTasksPauseIndependently tests that pausing one task doesn't affect others
+func TestCDCWatermarkUpdater_MultipleTasksPauseIndependently(t *testing.T) {
+	ctx := context.Background()
+	updater, _ := InitCDCWatermarkUpdaterForTest(t)
+	updater.Start()
+	defer updater.Stop()
+
+	task1 := "task-1"
+	task2 := "task-2"
+
+	key1 := &WatermarkKey{
+		AccountId: 1,
+		TaskId:    task1,
+		DBName:    "db1",
+		TableName: "table1",
+	}
+
+	key2 := &WatermarkKey{
+		AccountId: 1,
+		TaskId:    task2,
+		DBName:    "db2",
+		TableName: "table2",
+	}
+
+	wm1_v1 := types.BuildTS(1000, 1)
+	wm2_v1 := types.BuildTS(2000, 1)
+
+	require.NoError(t, updater.UpdateWatermarkOnly(ctx, key1, &wm1_v1))
+	require.NoError(t, updater.UpdateWatermarkOnly(ctx, key2, &wm2_v1))
+	require.NoError(t, updater.ForceFlush(ctx))
+
+	updater.MarkTaskPaused(task1)
+
+	wm1_v2 := types.BuildTS(1100, 1)
+	wm2_v2 := types.BuildTS(2100, 1)
+
+	require.NoError(t, updater.UpdateWatermarkOnly(ctx, key1, &wm1_v2))
+	require.NoError(t, updater.UpdateWatermarkOnly(ctx, key2, &wm2_v2))
+	require.NoError(t, updater.ForceFlush(ctx))
+
+	cached1, err := updater.GetFromCache(ctx, key1)
+	require.NoError(t, err)
+	require.Equal(t, wm1_v1, cached1)
+
+	cached2, err := updater.GetFromCache(ctx, key2)
+	require.NoError(t, err)
+	require.Equal(t, wm2_v2, cached2)
+}
+
+// TestCDCWatermarkUpdater_PauseRestartCycle tests multiple pause/restart cycles
+func TestCDCWatermarkUpdater_PauseRestartCycle(t *testing.T) {
+	ctx := context.Background()
+	updater, _ := InitCDCWatermarkUpdaterForTest(t)
+	updater.Start()
+	defer updater.Stop()
+
+	taskId := "lifecycle-task"
+	key := &WatermarkKey{
+		AccountId: 1,
+		TaskId:    taskId,
+		DBName:    "db",
+		TableName: "tbl",
+	}
+
+	for cycle := 0; cycle < 3; cycle++ {
+		wmRunning := types.BuildTS(int64(1000*(cycle+1)), 1)
+		require.NoError(t, updater.UpdateWatermarkOnly(ctx, key, &wmRunning))
+		require.NoError(t, updater.ForceFlush(ctx))
+
+		cached, err := updater.GetFromCache(ctx, key)
+		require.NoError(t, err)
+		require.Equal(t, wmRunning, cached)
+
+		updater.MarkTaskPaused(taskId)
+
+		wmPaused := types.BuildTS(int64(1000*(cycle+1)+500), 1)
+		require.NoError(t, updater.UpdateWatermarkOnly(ctx, key, &wmPaused))
+		require.NoError(t, updater.ForceFlush(ctx))
+
+		cached, err = updater.GetFromCache(ctx, key)
+		require.NoError(t, err)
+		require.Equal(t, wmRunning, cached)
+
+		updater.UnmarkTaskPaused(taskId)
+
+		wmRestart := types.BuildTS(int64(1000*(cycle+2)), 1)
+		require.NoError(t, updater.UpdateWatermarkOnly(ctx, key, &wmRestart))
+		require.NoError(t, updater.ForceFlush(ctx))
+
+		cached, err = updater.GetFromCache(ctx, key)
+		require.NoError(t, err)
+		require.Equal(t, wmRestart, cached)
+	}
+}
+
+// mockExecutorForScanErrors is a mock executor specifically for testing scanAndUpdateNonRetryableErrorMetrics
+type mockExecutorForScanErrors struct {
+	queryFunc func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult
+}
+
+func (m *mockExecutorForScanErrors) Exec(ctx context.Context, sql string, opts ie.SessionOverrideOptions) error {
+	return nil
+}
+
+func (m *mockExecutorForScanErrors) Query(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
+	if m.queryFunc != nil {
+		return m.queryFunc(ctx, sql, opts)
+	}
+	return &InternalExecResultForTest{
+		affectedRows: 0,
+		resultSet: &MysqlResultSetForTest{
+			Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
+			Data:    [][]interface{}{},
+		},
+		err: nil,
+	}
+}
+
+func (m *mockExecutorForScanErrors) ApplySessionOverride(opts ie.SessionOverrideOptions) {}
+
+// TestCDCWatermarkUpdater_scanAndUpdateNonRetryableErrorMetrics_QueryFailed tests query failure scenario
+func TestCDCWatermarkUpdater_scanAndUpdateNonRetryableErrorMetrics_QueryFailed(t *testing.T) {
+	mockExec := &mockExecutorForScanErrors{
+		queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
+			return &InternalExecResultForTest{
+				err: moerr.NewInternalErrorNoCtx("query failed"),
+			}
+		},
+	}
+	updater := NewCDCWatermarkUpdater("test-query-failed", mockExec)
+	validWatermarks := make(map[string]bool)
+	validWatermarks["1.task1.db1.t1"] = true
+
+	// Should return early without error
+	updater.scanAndUpdateNonRetryableErrorMetrics(context.Background(), validWatermarks, false)
+}
+
+// TestCDCWatermarkUpdater_scanAndUpdateNonRetryableErrorMetrics_EmptyResult tests empty result set
+func TestCDCWatermarkUpdater_scanAndUpdateNonRetryableErrorMetrics_EmptyResult(t *testing.T) {
+	mockExec := &mockExecutorForScanErrors{
+		queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
+			return &InternalExecResultForTest{
+				affectedRows: 0,
+				resultSet: &MysqlResultSetForTest{
+					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
+					Data:    [][]interface{}{},
+				},
+				err: nil,
+			}
+		},
+	}
+	updater := NewCDCWatermarkUpdater("test-empty-result", mockExec)
+	validWatermarks := make(map[string]bool)
+	updater.previousErrorLabels = map[string]bool{
+		"1.task1.db1.t1": true,
+	}
+
+	// Should clean up previous labels
+	updater.scanAndUpdateNonRetryableErrorMetrics(context.Background(), validWatermarks, false)
+	require.Empty(t, updater.previousErrorLabels)
+}
+
+// TestCDCWatermarkUpdater_scanAndUpdateNonRetryableErrorMetrics_ParseAccountIdFailed tests account_id parsing failure
+func TestCDCWatermarkUpdater_scanAndUpdateNonRetryableErrorMetrics_ParseAccountIdFailed(t *testing.T) {
+	mockExec := &mockExecutorForScanErrors{
+		queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
+			return &InternalExecResultForTest{
+				affectedRows: 1,
+				resultSet: &MysqlResultSetForTest{
+					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
+					Data: [][]interface{}{
+						{"invalid", "task1", "db1", "t1", "N:1234567890:table not found"},
+					},
+				},
+				err: nil,
+			}
+		},
+	}
+	updater := NewCDCWatermarkUpdater("test-parse-failed", mockExec)
+	validWatermarks := make(map[string]bool)
+	validWatermarks["1.task1.db1.t1"] = true
+
+	// Should skip the row and continue
+	updater.scanAndUpdateNonRetryableErrorMetrics(context.Background(), validWatermarks, false)
+}
+
+// TestCDCWatermarkUpdater_scanAndUpdateNonRetryableErrorMetrics_EmptyErrMsg tests empty error message
+func TestCDCWatermarkUpdater_scanAndUpdateNonRetryableErrorMetrics_EmptyErrMsg(t *testing.T) {
+	mockExec := &mockExecutorForScanErrors{
+		queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
+			return &InternalExecResultForTest{
+				affectedRows: 1,
+				resultSet: &MysqlResultSetForTest{
+					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
+					Data: [][]interface{}{
+						{"1", "task1", "db1", "t1", ""},
+					},
+				},
+				err: nil,
+			}
+		},
+	}
+	updater := NewCDCWatermarkUpdater("test-empty-errmsg", mockExec)
+	validWatermarks := make(map[string]bool)
+	validWatermarks["1.task1.db1.t1"] = true
+
+	// Should skip rows with empty error message
+	updater.scanAndUpdateNonRetryableErrorMetrics(context.Background(), validWatermarks, false)
+}
+
+// TestCDCWatermarkUpdater_scanAndUpdateNonRetryableErrorMetrics_OrphanTable tests orphan table filtering
+func TestCDCWatermarkUpdater_scanAndUpdateNonRetryableErrorMetrics_OrphanTable(t *testing.T) {
+	mockExec := &mockExecutorForScanErrors{
+		queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
+			return &InternalExecResultForTest{
+				affectedRows: 1,
+				resultSet: &MysqlResultSetForTest{
+					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
+					Data: [][]interface{}{
+						{"1", "task1", "db1", "t1", "N:1234567890:table not found"},
+					},
+				},
+				err: nil,
+			}
+		},
+	}
+	updater := NewCDCWatermarkUpdater("test-orphan", mockExec)
+	validWatermarks := make(map[string]bool)
+	// Table not in validWatermarks, should be skipped
+
+	// Should skip orphan tables
+	updater.scanAndUpdateNonRetryableErrorMetrics(context.Background(), validWatermarks, false)
+}
+
+// TestCDCWatermarkUpdater_scanAndUpdateNonRetryableErrorMetrics_LegacyFormat tests legacy error format (treated as non-retryable)
+func TestCDCWatermarkUpdater_scanAndUpdateNonRetryableErrorMetrics_LegacyFormat(t *testing.T) {
+	tableLabel := "1.task1.db1.t1"
+	mockExec := &mockExecutorForScanErrors{
+		queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
+			return &InternalExecResultForTest{
+				affectedRows: 1,
+				resultSet: &MysqlResultSetForTest{
+					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
+					Data: [][]interface{}{
+						{"1", "task1", "db1", "t1", "legacy error message"}, // Legacy format - treated as non-retryable
+					},
+				},
+				err: nil,
+			}
+		},
+	}
+	updater := NewCDCWatermarkUpdater("test-legacy-format", mockExec)
+	validWatermarks := make(map[string]bool)
+	validWatermarks[tableLabel] = true
+
+	// Legacy format errors are treated as non-retryable and should be tracked
+	updater.scanAndUpdateNonRetryableErrorMetrics(context.Background(), validWatermarks, false)
+	require.Contains(t, updater.previousErrorLabels, tableLabel)
+}
+
+// TestCDCWatermarkUpdater_scanAndUpdateNonRetryableErrorMetrics_RetryableError tests retryable error (should not set metric)
+func TestCDCWatermarkUpdater_scanAndUpdateNonRetryableErrorMetrics_RetryableError(t *testing.T) {
+	now := time.Now()
+	mockExec := &mockExecutorForScanErrors{
+		queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
+			return &InternalExecResultForTest{
+				affectedRows: 1,
+				resultSet: &MysqlResultSetForTest{
+					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
+					Data: [][]interface{}{
+						{"1", "task1", "db1", "t1", fmt.Sprintf("R:1:%d:%d:connection timeout", now.Unix(), now.Unix())},
+					},
+				},
+				err: nil,
+			}
+		},
+	}
+	updater := NewCDCWatermarkUpdater("test-retryable", mockExec)
+	validWatermarks := make(map[string]bool)
+	validWatermarks["1.task1.db1.t1"] = true
+
+	// Retryable errors should not set metrics
+	updater.scanAndUpdateNonRetryableErrorMetrics(context.Background(), validWatermarks, false)
+	require.Empty(t, updater.previousErrorLabels)
+}
+
+// TestCDCWatermarkUpdater_scanAndUpdateNonRetryableErrorMetrics_NonRetryableError tests non-retryable error (should set metric)
+func TestCDCWatermarkUpdater_scanAndUpdateNonRetryableErrorMetrics_NonRetryableError(t *testing.T) {
+	now := time.Now()
+	tableLabel := "1.task1.db1.t1"
+	mockExec := &mockExecutorForScanErrors{
+		queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
+			return &InternalExecResultForTest{
+				affectedRows: 1,
+				resultSet: &MysqlResultSetForTest{
+					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
+					Data: [][]interface{}{
+						{"1", "task1", "db1", "t1", fmt.Sprintf("N:%d:table not found", now.Unix())},
+					},
+				},
+				err: nil,
+			}
+		},
+	}
+	updater := NewCDCWatermarkUpdater("test-non-retryable", mockExec)
+	validWatermarks := make(map[string]bool)
+	validWatermarks[tableLabel] = true
+
+	// Non-retryable errors should set metrics
+	updater.scanAndUpdateNonRetryableErrorMetrics(context.Background(), validWatermarks, false)
+	require.Contains(t, updater.previousErrorLabels, tableLabel)
+}
+
+// TestCDCWatermarkUpdater_scanAndUpdateNonRetryableErrorMetrics_ErrorTypes tests different error types
+func TestCDCWatermarkUpdater_scanAndUpdateNonRetryableErrorMetrics_ErrorTypes(t *testing.T) {
+	now := time.Now()
+	testCases := []struct {
+		name      string
+		errMsg    string
+		errorType string
+	}{
+		{"network", fmt.Sprintf("N:%d:connection timeout", now.Unix()), "network"},
+		{"commit", fmt.Sprintf("N:%d:commit failed", now.Unix()), "commit"},
+		{"table_relation", fmt.Sprintf("N:%d:table not found", now.Unix()), "table_relation"},
+		{"sinker", fmt.Sprintf("N:%d:sinker error", now.Unix()), "sinker"},
+		{"max_retry_exceeded", fmt.Sprintf("N:%d:max retry exceeded (5): connection failed", now.Unix()), "max_retry_exceeded"},
+		{"unknown", fmt.Sprintf("N:%d:unknown error", now.Unix()), "unknown"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			tableLabel := fmt.Sprintf("1.task1.db1.t1-%s", tc.name)
+			mockExec := &mockExecutorForScanErrors{
+				queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
+					return &InternalExecResultForTest{
+						affectedRows: 1,
+						resultSet: &MysqlResultSetForTest{
+							Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
+							Data: [][]interface{}{
+								{"1", "task1", "db1", fmt.Sprintf("t1-%s", tc.name), tc.errMsg},
+							},
+						},
+						err: nil,
+					}
+				},
+			}
+			updater := NewCDCWatermarkUpdater(fmt.Sprintf("test-error-type-%s", tc.name), mockExec)
+			validWatermarks := make(map[string]bool)
+			validWatermarks[tableLabel] = true
+
+			updater.scanAndUpdateNonRetryableErrorMetrics(context.Background(), validWatermarks, false)
+			require.Contains(t, updater.previousErrorLabels, tableLabel)
+		})
+	}
+}
+
+// TestCDCWatermarkUpdater_scanAndUpdateNonRetryableErrorMetrics_DiffCleanup tests diff-based cleanup
+func TestCDCWatermarkUpdater_scanAndUpdateNonRetryableErrorMetrics_DiffCleanup(t *testing.T) {
+	now := time.Now()
+	tableLabel1 := "1.task1.db1.t1"
+	tableLabel2 := "1.task2.db2.t2"
+	tableLabel3 := "1.task3.db3.t3"
+
+	mockExec := &mockExecutorForScanErrors{
+		queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
+			return &InternalExecResultForTest{
+				affectedRows: 2,
+				resultSet: &MysqlResultSetForTest{
+					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
+					Data: [][]interface{}{
+						{"1", "task1", "db1", "t1", fmt.Sprintf("N:%d:table not found", now.Unix())},
+						{"1", "task2", "db2", "t2", fmt.Sprintf("N:%d:connection failed", now.Unix())},
+					},
+				},
+				err: nil,
+			}
+		},
+	}
+	updater := NewCDCWatermarkUpdater("test-diff-cleanup", mockExec)
+	validWatermarks := make(map[string]bool)
+	validWatermarks[tableLabel1] = true
+	validWatermarks[tableLabel2] = true
+	validWatermarks[tableLabel3] = true
+
+	// Set previous labels (tableLabel3 will be cleaned up)
+	updater.previousErrorLabels = map[string]bool{
+		tableLabel1: true,
+		tableLabel2: true,
+		tableLabel3: true,
+	}
+
+	updater.scanAndUpdateNonRetryableErrorMetrics(context.Background(), validWatermarks, false)
+
+	// tableLabel1 and tableLabel2 should remain, tableLabel3 should be removed
+	require.Contains(t, updater.previousErrorLabels, tableLabel1)
+	require.Contains(t, updater.previousErrorLabels, tableLabel2)
+	require.NotContains(t, updater.previousErrorLabels, tableLabel3)
+}
+
+// TestCDCWatermarkUpdater_scanAndUpdateNonRetryableErrorMetrics_QueryFailedSkipsCleanup tests that queryFailed=true skips cleanup
+func TestCDCWatermarkUpdater_scanAndUpdateNonRetryableErrorMetrics_QueryFailedSkipsCleanup(t *testing.T) {
+	now := time.Now()
+	tableLabel := "1.task1.db1.t1"
+
+	mockExec := &mockExecutorForScanErrors{
+		queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
+			return &InternalExecResultForTest{
+				affectedRows: 1,
+				resultSet: &MysqlResultSetForTest{
+					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
+					Data: [][]interface{}{
+						{"1", "task1", "db1", "t1", fmt.Sprintf("N:%d:table not found", now.Unix())},
+					},
+				},
+				err: nil,
+			}
+		},
+	}
+	updater := NewCDCWatermarkUpdater("test-query-failed-skip", mockExec)
+	validWatermarks := make(map[string]bool)
+	validWatermarks[tableLabel] = true
+
+	// Set previous labels
+	updater.previousErrorLabels = map[string]bool{
+		tableLabel: true,
+	}
+
+	// With queryFailed=true, cleanup should be skipped
+	updater.scanAndUpdateNonRetryableErrorMetrics(context.Background(), validWatermarks, true)
+
+	// previousErrorLabels should remain unchanged
+	require.Contains(t, updater.previousErrorLabels, tableLabel)
+}
+
+// TestCDCWatermarkUpdater_scanAndUpdateNonRetryableErrorMetrics_MultipleTables tests multiple tables scenario
+func TestCDCWatermarkUpdater_scanAndUpdateNonRetryableErrorMetrics_MultipleTables(t *testing.T) {
+	now := time.Now()
+	mockExec := &mockExecutorForScanErrors{
+		queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
+			return &InternalExecResultForTest{
+				affectedRows: 3,
+				resultSet: &MysqlResultSetForTest{
+					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
+					Data: [][]interface{}{
+						{"1", "task1", "db1", "t1", fmt.Sprintf("N:%d:table not found", now.Unix())},
+						{"1", "task2", "db2", "t2", fmt.Sprintf("N:%d:connection timeout", now.Unix())},
+						{"1", "task3", "db3", "t3", fmt.Sprintf("R:1:%d:%d:retryable error", now.Unix(), now.Unix())},
+					},
+				},
+				err: nil,
+			}
+		},
+	}
+	updater := NewCDCWatermarkUpdater("test-multiple-tables", mockExec)
+	validWatermarks := make(map[string]bool)
+	validWatermarks["1.task1.db1.t1"] = true
+	validWatermarks["1.task2.db2.t2"] = true
+	validWatermarks["1.task3.db3.t3"] = true
+
+	updater.scanAndUpdateNonRetryableErrorMetrics(context.Background(), validWatermarks, false)
+
+	// Only non-retryable errors should be in previousErrorLabels
+	require.Contains(t, updater.previousErrorLabels, "1.task1.db1.t1")
+	require.Contains(t, updater.previousErrorLabels, "1.task2.db2.t2")
+	require.NotContains(t, updater.previousErrorLabels, "1.task3.db3.t3")
+}
+
+// TestCDCWatermarkUpdater_scanAndUpdateNonRetryableErrorMetrics_MixedScenarios tests mixed scenarios
+func TestCDCWatermarkUpdater_scanAndUpdateNonRetryableErrorMetrics_MixedScenarios(t *testing.T) {
+	now := time.Now()
+	mockExec := &mockExecutorForScanErrors{
+		queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
+			return &InternalExecResultForTest{
+				affectedRows: 4,
+				resultSet: &MysqlResultSetForTest{
+					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
+					Data: [][]interface{}{
+						{"1", "task1", "db1", "t1", ""},                                                         // Empty error - should skip
+						{"1", "task2", "db2", "t2", fmt.Sprintf("N:%d:table not found", now.Unix())},            // Non-retryable
+						{"1", "task3", "db3", "t3", fmt.Sprintf("R:1:%d:%d:retryable", now.Unix(), now.Unix())}, // Retryable
+						{"1", "task5", "db5", "t5", fmt.Sprintf("N:%d:commit failed", now.Unix())},              // Non-retryable
+					},
+				},
+				err: nil,
+			}
+		},
+	}
+	updater := NewCDCWatermarkUpdater("test-mixed", mockExec)
+	validWatermarks := make(map[string]bool)
+	validWatermarks["1.task1.db1.t1"] = true
+	validWatermarks["1.task2.db2.t2"] = true
+	validWatermarks["1.task3.db3.t3"] = true
+	validWatermarks["1.task5.db5.t5"] = true
+
+	updater.scanAndUpdateNonRetryableErrorMetrics(context.Background(), validWatermarks, false)
+
+	// Only valid non-retryable errors should be tracked
+	require.Contains(t, updater.previousErrorLabels, "1.task2.db2.t2")
+	require.Contains(t, updater.previousErrorLabels, "1.task5.db5.t5")
+	require.NotContains(t, updater.previousErrorLabels, "1.task1.db1.t1")
+	require.NotContains(t, updater.previousErrorLabels, "1.task3.db3.t3")
+}
+
+// mockExecutorForWrapCronJob is a mock executor specifically for testing wrapCronJob
+type mockExecutorForWrapCronJob struct {
+	queryFunc func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult
+}
+
+func (m *mockExecutorForWrapCronJob) Exec(ctx context.Context, sql string, opts ie.SessionOverrideOptions) error {
+	return nil
+}
+
+func (m *mockExecutorForWrapCronJob) Query(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
+	if m.queryFunc != nil {
+		return m.queryFunc(ctx, sql, opts)
+	}
+	return &InternalExecResultForTest{
+		affectedRows: 0,
+		resultSet: &MysqlResultSetForTest{
+			Columns: []string{"account_id", "task_id", "db_name", "table_name"},
+			Data:    [][]interface{}{},
+		},
+		err: nil,
+	}
+}
+
+func (m *mockExecutorForWrapCronJob) ApplySessionOverride(opts ie.SessionOverrideOptions) {}
+
+// TestCDCWatermarkUpdater_wrapCronJob_NotExportTime tests that stats are not exported when interval not reached
+func TestCDCWatermarkUpdater_wrapCronJob_NotExportTime(t *testing.T) {
+	mockExec := &mockExecutorForWrapCronJob{}
+	updater := NewCDCWatermarkUpdater("test-not-export-time", mockExec, WithExportStatsInterval(time.Hour))
+	updater.stats.lastExportTime = time.Now() // Just set, so interval not reached
+
+	jobExecuted := false
+	job := func(ctx context.Context) {
+		jobExecuted = true
+	}
+
+	wrappedJob := updater.wrapCronJob(job)
+	wrappedJob(context.Background())
+
+	require.True(t, jobExecuted)
+	require.Equal(t, uint64(1), updater.stats.runTimes.Load())
+	// Stats should not be exported (lastExportTime should not be updated)
+	require.True(t, time.Since(updater.stats.lastExportTime) < time.Hour)
+}
+
+// TestCDCWatermarkUpdater_wrapCronJob_ExportTimeReached tests that stats are exported when interval reached
+func TestCDCWatermarkUpdater_wrapCronJob_ExportTimeReached(t *testing.T) {
+	mockExec := &mockExecutorForWrapCronJob{
+		queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
+			// Mock the JOIN query for valid watermarks
+			if strings.Contains(sql, "INNER JOIN") {
+				return &InternalExecResultForTest{
+					affectedRows: 1,
+					resultSet: &MysqlResultSetForTest{
+						Columns: []string{"account_id", "task_id", "db_name", "table_name"},
+						Data: [][]interface{}{
+							{"1", "task1", "db1", "t1"},
+						},
+					},
+					err: nil,
+				}
+			}
+			// Mock the error scan query
+			return &InternalExecResultForTest{
+				affectedRows: 0,
+				resultSet: &MysqlResultSetForTest{
+					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
+					Data:    [][]interface{}{},
+				},
+				err: nil,
+			}
+		},
+	}
+	updater := NewCDCWatermarkUpdater("test-export-time", mockExec, WithExportStatsInterval(time.Millisecond))
+	updater.stats.lastExportTime = time.Now().Add(-time.Hour) // Set to past, so interval reached
+
+	key := WatermarkKey{AccountId: 1, TaskId: "task1", DBName: "db1", TableName: "t1"}
+	watermark := types.BuildTS(1000, 1)
+	updater.Lock()
+	updater.cacheCommitted[key] = watermark
+	updater.Unlock()
+
+	jobExecuted := false
+	job := func(ctx context.Context) {
+		jobExecuted = true
+	}
+
+	wrappedJob := updater.wrapCronJob(job)
+	time.Sleep(time.Millisecond * 10) // Ensure interval passed
+	wrappedJob(context.Background())
+
+	require.True(t, jobExecuted)
+	require.Equal(t, uint64(1), updater.stats.runTimes.Load())
+	// Stats should be exported (lastExportTime should be updated)
+	require.True(t, time.Since(updater.stats.lastExportTime) < time.Second)
+}
+
+// TestCDCWatermarkUpdater_wrapCronJob_QueryValidWatermarksFailed tests query failure scenario
+func TestCDCWatermarkUpdater_wrapCronJob_QueryValidWatermarksFailed(t *testing.T) {
+	mockExec := &mockExecutorForWrapCronJob{
+		queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
+			if strings.Contains(sql, "INNER JOIN") {
+				return &InternalExecResultForTest{
+					err: moerr.NewInternalErrorNoCtx("query failed"),
+				}
+			}
+			// Error scan query also fails
+			return &InternalExecResultForTest{
+				err: moerr.NewInternalErrorNoCtx("query failed"),
+			}
+		},
+	}
+	updater := NewCDCWatermarkUpdater("test-query-failed", mockExec, WithExportStatsInterval(time.Millisecond))
+	updater.stats.lastExportTime = time.Now().Add(-time.Hour)
+
+	key := WatermarkKey{AccountId: 1, TaskId: "task1", DBName: "db1", TableName: "t1"}
+	watermark := types.BuildTS(1000, 1)
+	updater.Lock()
+	updater.cacheCommitted[key] = watermark
+	updater.Unlock()
+
+	jobExecuted := false
+	job := func(ctx context.Context) {
+		jobExecuted = true
+	}
+
+	wrappedJob := updater.wrapCronJob(job)
+	time.Sleep(time.Millisecond * 10)
+	wrappedJob(context.Background())
+
+	require.True(t, jobExecuted)
+	// Key should not be removed because queryFailed = true
+	updater.RLock()
+	_, exists := updater.cacheCommitted[key]
+	updater.RUnlock()
+	require.True(t, exists)
+}
+
+// TestCDCWatermarkUpdater_wrapCronJob_OrphanKeysCleanup tests orphan key cleanup
+func TestCDCWatermarkUpdater_wrapCronJob_OrphanKeysCleanup(t *testing.T) {
+	mockExec := &mockExecutorForWrapCronJob{
+		queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
+			if strings.Contains(sql, "INNER JOIN") {
+				// Only task1 is valid, task2 is orphan
+				return &InternalExecResultForTest{
+					affectedRows: 1,
+					resultSet: &MysqlResultSetForTest{
+						Columns: []string{"account_id", "task_id", "db_name", "table_name"},
+						Data: [][]interface{}{
+							{"1", "task1", "db1", "t1"},
+						},
+					},
+					err: nil,
+				}
+			}
+			// Error scan query
+			return &InternalExecResultForTest{
+				affectedRows: 0,
+				resultSet: &MysqlResultSetForTest{
+					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
+					Data:    [][]interface{}{},
+				},
+				err: nil,
+			}
+		},
+	}
+	updater := NewCDCWatermarkUpdater("test-orphan-cleanup", mockExec, WithExportStatsInterval(time.Millisecond))
+	updater.stats.lastExportTime = time.Now().Add(-time.Hour)
+
+	key1 := WatermarkKey{AccountId: 1, TaskId: "task1", DBName: "db1", TableName: "t1"}
+	key2 := WatermarkKey{AccountId: 1, TaskId: "task2", DBName: "db2", TableName: "t2"}
+	watermark1 := types.BuildTS(1000, 1)
+	watermark2 := types.BuildTS(2000, 1)
+
+	updater.Lock()
+	updater.cacheCommitted[key1] = watermark1
+	updater.cacheCommitted[key2] = watermark2
+	updater.cacheUncommitted[key2] = watermark2
+	updater.cacheCommitting[key2] = watermark2
+	updater.errorMetadataCache[key2] = &ErrorMetadata{Message: "test"}
+	updater.commitCircuitOpen[key2] = time.Now()
+	updater.commitFailureCount[key2] = 5
+	updater.Unlock()
+
+	job := func(ctx context.Context) {}
+	wrappedJob := updater.wrapCronJob(job)
+	time.Sleep(time.Millisecond * 10)
+	wrappedJob(context.Background())
+
+	// key1 should remain (valid)
+	updater.RLock()
+	_, exists1 := updater.cacheCommitted[key1]
+	_, exists2 := updater.cacheCommitted[key2]
+	_, existsUncommitted := updater.cacheUncommitted[key2]
+	_, existsCommitting := updater.cacheCommitting[key2]
+	_, existsErrMeta := updater.errorMetadataCache[key2]
+	_, existsCircuit := updater.commitCircuitOpen[key2]
+	_, existsFailureCount := updater.commitFailureCount[key2]
+	updater.RUnlock()
+
+	require.True(t, exists1)
+	require.False(t, exists2)
+	require.False(t, existsUncommitted)
+	require.False(t, existsCommitting)
+	require.False(t, existsErrMeta)
+	require.False(t, existsCircuit)
+	require.False(t, existsFailureCount)
+}
+
+// TestCDCWatermarkUpdater_wrapCronJob_EmptyWatermark tests empty watermark is skipped
+func TestCDCWatermarkUpdater_wrapCronJob_EmptyWatermark(t *testing.T) {
+	mockExec := &mockExecutorForWrapCronJob{
+		queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
+			if strings.Contains(sql, "INNER JOIN") {
+				return &InternalExecResultForTest{
+					affectedRows: 0,
+					resultSet: &MysqlResultSetForTest{
+						Columns: []string{"account_id", "task_id", "db_name", "table_name"},
+						Data:    [][]interface{}{},
+					},
+					err: nil,
+				}
+			}
+			return &InternalExecResultForTest{
+				affectedRows: 0,
+				resultSet: &MysqlResultSetForTest{
+					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
+					Data:    [][]interface{}{},
+				},
+				err: nil,
+			}
+		},
+	}
+	updater := NewCDCWatermarkUpdater("test-empty-watermark", mockExec, WithExportStatsInterval(time.Millisecond))
+	updater.stats.lastExportTime = time.Now().Add(-time.Hour)
+
+	key := WatermarkKey{AccountId: 1, TaskId: "task1", DBName: "db1", TableName: "t1"}
+	var emptyWatermark types.TS // Empty watermark
+	updater.Lock()
+	updater.cacheCommitted[key] = emptyWatermark
+	updater.Unlock()
+
+	job := func(ctx context.Context) {}
+	wrappedJob := updater.wrapCronJob(job)
+	time.Sleep(time.Millisecond * 10)
+	wrappedJob(context.Background())
+
+	// Empty watermark should be skipped (not processed for metrics)
+	updater.RLock()
+	_, exists := updater.cacheCommitted[key]
+	updater.RUnlock()
+	require.True(t, exists) // Still exists because it's empty and not processed
+}
+
+// TestCDCWatermarkUpdater_wrapCronJob_ValidWatermarkMetrics tests valid watermark metrics update
+func TestCDCWatermarkUpdater_wrapCronJob_ValidWatermarkMetrics(t *testing.T) {
+	mockExec := &mockExecutorForWrapCronJob{
+		queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
+			if strings.Contains(sql, "INNER JOIN") {
+				return &InternalExecResultForTest{
+					affectedRows: 1,
+					resultSet: &MysqlResultSetForTest{
+						Columns: []string{"account_id", "task_id", "db_name", "table_name"},
+						Data: [][]interface{}{
+							{"1", "task1", "db1", "t1"},
+						},
+					},
+					err: nil,
+				}
+			}
+			return &InternalExecResultForTest{
+				affectedRows: 0,
+				resultSet: &MysqlResultSetForTest{
+					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
+					Data:    [][]interface{}{},
+				},
+				err: nil,
+			}
+		},
+	}
+	updater := NewCDCWatermarkUpdater("test-valid-metrics", mockExec, WithExportStatsInterval(time.Millisecond))
+	updater.stats.lastExportTime = time.Now().Add(-time.Hour)
+
+	key := WatermarkKey{AccountId: 1, TaskId: "task1", DBName: "db1", TableName: "t1"}
+	// Use a watermark from the past to test lag calculation
+	pastTime := time.Now().Add(-10 * time.Second)
+	watermark := types.BuildTS(pastTime.Unix(), 0)
+	updater.Lock()
+	updater.cacheCommitted[key] = watermark
+	updater.Unlock()
+
+	job := func(ctx context.Context) {}
+	wrappedJob := updater.wrapCronJob(job)
+	time.Sleep(time.Millisecond * 10)
+	wrappedJob(context.Background())
+
+	// Valid watermark should remain
+	updater.RLock()
+	_, exists := updater.cacheCommitted[key]
+	updater.RUnlock()
+	require.True(t, exists)
+}
+
+// TestCDCWatermarkUpdater_wrapCronJob_OrphanDoubleCheck tests TOCTOU race condition handling
+func TestCDCWatermarkUpdater_wrapCronJob_OrphanDoubleCheck(t *testing.T) {
+	mockExec := &mockExecutorForWrapCronJob{
+		queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
+			if strings.Contains(sql, "INNER JOIN") {
+				// No valid watermarks
+				return &InternalExecResultForTest{
+					affectedRows: 0,
+					resultSet: &MysqlResultSetForTest{
+						Columns: []string{"account_id", "task_id", "db_name", "table_name"},
+						Data:    [][]interface{}{},
+					},
+					err: nil,
+				}
+			}
+			return &InternalExecResultForTest{
+				affectedRows: 0,
+				resultSet: &MysqlResultSetForTest{
+					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
+					Data:    [][]interface{}{},
+				},
+				err: nil,
+			}
+		},
+	}
+	updater := NewCDCWatermarkUpdater("test-double-check", mockExec, WithExportStatsInterval(time.Millisecond))
+	updater.stats.lastExportTime = time.Now().Add(-time.Hour)
+
+	key := WatermarkKey{AccountId: 1, TaskId: "task1", DBName: "db1", TableName: "t1"}
+	watermark := types.BuildTS(1000, 1)
+
+	updater.Lock()
+	updater.cacheCommitted[key] = watermark
+	updater.Unlock()
+
+	// Simulate key being removed between collection and cleanup
+	job := func(ctx context.Context) {
+		// Remove key during job execution (simulating race condition)
+		updater.Lock()
+		delete(updater.cacheCommitted, key)
+		updater.Unlock()
+	}
+
+	wrappedJob := updater.wrapCronJob(job)
+	time.Sleep(time.Millisecond * 10)
+	wrappedJob(context.Background())
+
+	// Key should be removed (double-check should handle it)
+	updater.RLock()
+	_, exists := updater.cacheCommitted[key]
+	updater.RUnlock()
+	require.False(t, exists)
+}
+
+// TestCDCWatermarkUpdater_wrapCronJob_MultipleKeysMixed tests multiple keys with mixed valid/orphan
+func TestCDCWatermarkUpdater_wrapCronJob_MultipleKeysMixed(t *testing.T) {
+	mockExec := &mockExecutorForWrapCronJob{
+		queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
+			if strings.Contains(sql, "INNER JOIN") {
+				// task1 and task3 are valid, task2 is orphan
+				return &InternalExecResultForTest{
+					affectedRows: 2,
+					resultSet: &MysqlResultSetForTest{
+						Columns: []string{"account_id", "task_id", "db_name", "table_name"},
+						Data: [][]interface{}{
+							{"1", "task1", "db1", "t1"},
+							{"1", "task3", "db3", "t3"},
+						},
+					},
+					err: nil,
+				}
+			}
+			return &InternalExecResultForTest{
+				affectedRows: 0,
+				resultSet: &MysqlResultSetForTest{
+					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
+					Data:    [][]interface{}{},
+				},
+				err: nil,
+			}
+		},
+	}
+	updater := NewCDCWatermarkUpdater("test-multiple-mixed", mockExec, WithExportStatsInterval(time.Millisecond))
+	updater.stats.lastExportTime = time.Now().Add(-time.Hour)
+
+	key1 := WatermarkKey{AccountId: 1, TaskId: "task1", DBName: "db1", TableName: "t1"}
+	key2 := WatermarkKey{AccountId: 1, TaskId: "task2", DBName: "db2", TableName: "t2"}
+	key3 := WatermarkKey{AccountId: 1, TaskId: "task3", DBName: "db3", TableName: "t3"}
+	watermark := types.BuildTS(1000, 1)
+
+	updater.Lock()
+	updater.cacheCommitted[key1] = watermark
+	updater.cacheCommitted[key2] = watermark
+	updater.cacheCommitted[key3] = watermark
+	updater.Unlock()
+
+	job := func(ctx context.Context) {}
+	wrappedJob := updater.wrapCronJob(job)
+	time.Sleep(time.Millisecond * 10)
+	wrappedJob(context.Background())
+
+	// key1 and key3 should remain, key2 should be removed
+	updater.RLock()
+	_, exists1 := updater.cacheCommitted[key1]
+	_, exists2 := updater.cacheCommitted[key2]
+	_, exists3 := updater.cacheCommitted[key3]
+	updater.RUnlock()
+
+	require.True(t, exists1)
+	require.False(t, exists2)
+	require.True(t, exists3)
+}
+
+// TestCDCWatermarkUpdater_wrapCronJob_StatsExport tests statistics export
+func TestCDCWatermarkUpdater_wrapCronJob_StatsExport(t *testing.T) {
+	mockExec := &mockExecutorForWrapCronJob{
+		queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
+			if strings.Contains(sql, "INNER JOIN") {
+				return &InternalExecResultForTest{
+					affectedRows: 0,
+					resultSet: &MysqlResultSetForTest{
+						Columns: []string{"account_id", "task_id", "db_name", "table_name"},
+						Data:    [][]interface{}{},
+					},
+					err: nil,
+				}
+			}
+			return &InternalExecResultForTest{
+				affectedRows: 0,
+				resultSet: &MysqlResultSetForTest{
+					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
+					Data:    [][]interface{}{},
+				},
+				err: nil,
+			}
+		},
+	}
+	updater := NewCDCWatermarkUpdater("test-stats-export", mockExec, WithExportStatsInterval(time.Millisecond))
+	updater.stats.lastExportTime = time.Now().Add(-time.Hour)
+
+	key1 := WatermarkKey{AccountId: 1, TaskId: "task1", DBName: "db1", TableName: "t1"}
+	key2 := WatermarkKey{AccountId: 1, TaskId: "task2", DBName: "db2", TableName: "t2"}
+	watermark := types.BuildTS(1000, 1)
+
+	updater.Lock()
+	updater.cacheUncommitted[key1] = watermark
+	updater.cacheCommitting[key2] = watermark
+	updater.cacheCommitted[key1] = watermark
+	updater.stats.skipTimes.Store(5)
+	updater.stats.errorTimes.Store(2)
+	updater.Unlock()
+
+	job := func(ctx context.Context) {}
+	wrappedJob := updater.wrapCronJob(job)
+	time.Sleep(time.Millisecond * 10)
+	wrappedJob(context.Background())
+
+	// Verify stats are exported
+	require.Equal(t, uint64(1), updater.stats.runTimes.Load())
+	require.True(t, time.Since(updater.stats.lastExportTime) < time.Second)
+}
+
+// TestCDCWatermarkUpdater_wrapCronJob_NoKeysToRemove tests scenario with no orphan keys
+func TestCDCWatermarkUpdater_wrapCronJob_NoKeysToRemove(t *testing.T) {
+	mockExec := &mockExecutorForWrapCronJob{
+		queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
+			if strings.Contains(sql, "INNER JOIN") {
+				return &InternalExecResultForTest{
+					affectedRows: 1,
+					resultSet: &MysqlResultSetForTest{
+						Columns: []string{"account_id", "task_id", "db_name", "table_name"},
+						Data: [][]interface{}{
+							{"1", "task1", "db1", "t1"},
+						},
+					},
+					err: nil,
+				}
+			}
+			return &InternalExecResultForTest{
+				affectedRows: 0,
+				resultSet: &MysqlResultSetForTest{
+					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
+					Data:    [][]interface{}{},
+				},
+				err: nil,
+			}
+		},
+	}
+	updater := NewCDCWatermarkUpdater("test-no-orphans", mockExec, WithExportStatsInterval(time.Millisecond))
+	updater.stats.lastExportTime = time.Now().Add(-time.Hour)
+
+	key := WatermarkKey{AccountId: 1, TaskId: "task1", DBName: "db1", TableName: "t1"}
+	watermark := types.BuildTS(1000, 1)
+
+	updater.Lock()
+	updater.cacheCommitted[key] = watermark
+	updater.Unlock()
+
+	job := func(ctx context.Context) {}
+	wrappedJob := updater.wrapCronJob(job)
+	time.Sleep(time.Millisecond * 10)
+	wrappedJob(context.Background())
+
+	// Key should remain (no orphans to remove)
+	updater.RLock()
+	_, exists := updater.cacheCommitted[key]
+	updater.RUnlock()
+	require.True(t, exists)
+}

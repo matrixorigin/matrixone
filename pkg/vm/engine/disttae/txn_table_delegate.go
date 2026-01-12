@@ -74,6 +74,7 @@ func newTxnTableWithItem(
 		partitioned:   item.Partitioned,
 		partition:     item.Partition,
 		extraInfo:     item.ExtraInfo,
+		logicalId:     item.LogicalId,
 		lastTS:        db.op.SnapshotTS(),
 		eng:           eng,
 	}
@@ -1396,7 +1397,7 @@ func (r *shardingLocalReader) close() error {
 func (r *shardingLocalReader) SetOrderBy(orderby []*plan.OrderBySpec) {
 }
 
-func (r *shardingLocalReader) SetBlockTop(orderby []*plan.OrderBySpec, limit uint64) {
+func (r *shardingLocalReader) SetIndexParam(param *plan.IndexReaderParam) {
 }
 
 func (r *shardingLocalReader) GetOrderBy() []*plan.OrderBySpec {

@@ -458,7 +458,7 @@ func TestCompareValues(t *testing.T) {
 	require.Equal(t, bytes.Compare([]byte("a"), []byte("b")), CompareValue([]byte("a"), []byte("b")))
 	enumA, enumB := Enum(1), Enum(2)
 	require.Equal(t, int(enumA-enumB), CompareValue(enumA, enumB))
-	require.Equal(t, int(int32a-int32a), CompareValue(int32a, int32a))
+	require.Equal(t, 0, CompareValue(int32a, int32a))
 }
 
 func TestCompareValuesNULL(t *testing.T) {
@@ -594,14 +594,5 @@ func TestWriteValuesErrorPerType(t *testing.T) {
 	for _, val := range cases {
 		_, err := WriteValues(&errWriter{failAt: 0}, val)
 		require.Error(t, err, "expected error when encoding %T", val)
-	}
-}
-
-func TestInt32Uint32Encoding(t *testing.T) {
-	vals := []int32{-100, -1, 0, 1, 123456}
-	for _, v := range vals {
-		encoded := Int32ToUint32(v)
-		decoded := Uint32ToInt32(encoded)
-		require.Equal(t, v, decoded)
 	}
 }

@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -27,10 +28,15 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
@@ -43,14 +49,13 @@ var ConnIDAllocKey = "____server_conn_id"
 
 // MOServer MatrixOne Server
 type MOServer struct {
-	addr        string
-	uaddr       string
-	rm          *RoutineManager
-	readTimeout time.Duration
-	handler     func(*Conn, []byte) error
-	mu          sync.RWMutex
-	wg          sync.WaitGroup
-	running     bool
+	addr    string
+	uaddr   string
+	rm      *RoutineManager
+	handler func(*Conn, []byte) error
+	mu      sync.RWMutex
+	wg      sync.WaitGroup
+	running bool
 
 	pu        *config.ParameterUnit
 	listeners []net.Listener
@@ -88,6 +93,7 @@ func (mo *MOServer) GetRoutineManager() *RoutineManager {
 func (mo *MOServer) Start() error {
 	logutil.Infof("Server Listening on : %s ", mo.addr)
 	mo.running = true
+	mo.startTempTableGC(24 * time.Hour)
 	mo.startListener()
 	setMoServerStarted(mo.service, true)
 	return nil
@@ -113,9 +119,13 @@ func (mo *MOServer) Stop() error {
 	}
 
 	logutil.Debug("application listener closed")
+
+	// Cancel context first to allow goroutines (like startTempTableGC) to exit,
+	// then wait for them to complete. This prevents deadlock where wg.Wait()
+	// blocks while goroutines wait for ctx.Done().
+	mo.rm.cancelCtx()
 	mo.wg.Wait()
 
-	mo.rm.cancelCtx()
 	mo.rm.killNetConns()
 
 	logutil.Debug("application stopped")
@@ -177,15 +187,119 @@ func (mo *MOServer) startAccept(ctx context.Context, listener net.Listener) {
 		go mo.handleConn(ctx, conn)
 	}
 }
+
+func (mo *MOServer) cleanOrphanTempTables() error {
+	if mo.pu == nil || mo.pu.StorageEngine == nil || mo.pu.TxnClient == nil {
+		return nil
+	}
+	if mo.rm == nil || mo.rm.sessionManager == nil {
+		return nil
+	}
+	ctx := mo.rm.ctx
+	if ctx == nil {
+		return nil
+	}
+	if _, ok := moruntime.ServiceRuntime(mo.service).GetGlobalVariables(moruntime.InternalSQLExecutor); !ok {
+		logutil.Warn("temp-table-cleanup: internal sql executor not ready")
+		return nil
+	}
+
+	candidates, err := mo.queryTempTables(ctx, nil)
+	if err != nil {
+		return err
+	}
+
+	activeSessions := mo.rm.sessionManager.GetAllSessions()
+	activeSet := make(map[string]struct{}, len(activeSessions))
+	for _, ss := range activeSessions {
+		// temp table names strip '-' from session UUID; normalize here as well.
+		activeSet[strings.ReplaceAll(ss.GetUUIDString(), "-", "")] = struct{}{}
+	}
+
+	for _, tbl := range candidates {
+		dbName, name := tbl.db, tbl.name
+		parts := strings.SplitN(strings.TrimPrefix(name, defines.TempTableNamePrefix), "_", 2)
+		if len(parts) < 2 {
+			continue
+		}
+		if _, ok := activeSet[parts[0]]; ok {
+			continue
+		}
+		dropSQL := fmt.Sprintf("drop table if exists `%s`.`%s`", dbName, name)
+		res, err := iscp.ExecWithResult(ctx, dropSQL, mo.service, nil)
+		if err != nil {
+			logutil.Warnf("temp-table-cleanup: drop %s.%s failed: %v", dbName, name, err)
+			continue
+		}
+		res.Close()
+	}
+	return nil
+}
+
+type tempTableEntry struct {
+	db   string
+	name string
+}
+
+func (mo *MOServer) queryTempTables(ctx context.Context, txnOp client.TxnOperator) ([]tempTableEntry, error) {
+	sql := "select reldatabase, relname from mo_catalog.mo_tables where relkind = 'temporary_table'"
+	res, err := iscp.ExecWithResult(ctx, sql, mo.service, txnOp)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Close()
+
+	var entries []tempTableEntry
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		dbs := executor.GetStringRows(cols[0])
+		names := executor.GetStringRows(cols[1])
+		for i := range dbs {
+			name := names[i]
+			if !defines.IsTempTableName(name) {
+				continue
+			}
+			entries = append(entries, tempTableEntry{db: dbs[i], name: name})
+		}
+		return true
+	})
+	return entries, nil
+}
+
+func (mo *MOServer) startTempTableGC(interval time.Duration) {
+	if mo == nil || mo.rm == nil || mo.rm.ctx == nil {
+		logutil.Infof("temp table gc not started")
+		return
+	}
+	logutil.Infof("temp table gc started")
+	ctx := mo.rm.ctx
+	ticker := time.NewTicker(interval)
+	mo.wg.Add(1)
+	go func() {
+		defer mo.wg.Done()
+		for {
+			select {
+			case <-ctx.Done():
+				ticker.Stop()
+				return
+			case <-ticker.C:
+				_, _ = ExecuteFuncWithRecover(func() error {
+					if err := mo.cleanOrphanTempTables(); err != nil {
+						logutil.Warnf("temp table gc failed: %v", err)
+					}
+					return nil
+				})
+			}
+		}
+	}()
+}
+
 func (mo *MOServer) handleConn(ctx context.Context, conn net.Conn) {
 	var rs *Conn
 	var err error
 	defer func() {
 		if rs != nil {
-			err = rs.Close()
-			if err != nil {
-				logutil.Error("Handle conn error", zap.Error(err))
-				return
+			if err := rs.Close(); err != nil {
+				logutil.LogConnectionCloseError("Close conn error", err)
 			}
 		}
 	}()
@@ -210,7 +324,7 @@ func (mo *MOServer) handleConn(ctx context.Context, conn net.Conn) {
 
 func (mo *MOServer) handleLoop(ctx context.Context, rs *Conn) {
 	if err := mo.handleMessage(ctx, rs); err != nil {
-		logutil.Error("handle session failed", zap.Error(err))
+		logutil.LogConnectionCloseError("handle session failed", err)
 	}
 }
 
@@ -457,13 +571,12 @@ func NewMOServer(
 	// TODO asyncFlushBatch
 	unixAddr := pu.SV.GetUnixSocketAddress()
 	mo := &MOServer{
-		addr:        addr,
-		uaddr:       pu.SV.UnixSocketAddress,
-		rm:          rm,
-		readTimeout: pu.SV.SessionTimeout.Duration,
-		pu:          pu,
-		handler:     rm.Handler,
-		service:     service,
+		addr:    addr,
+		uaddr:   pu.SV.UnixSocketAddress,
+		rm:      rm,
+		pu:      pu,
+		handler: rm.Handler,
+		service: service,
 	}
 	listenerTcp, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -498,8 +611,7 @@ func (mo *MOServer) handleMessage(ctx context.Context, rs *Conn) error {
 				return nil
 			}
 
-			logutil.Error("session read failed",
-				zap.Error(err))
+			logutil.LogConnectionCloseError("session read failed", err)
 			return err
 		}
 	}
@@ -519,8 +631,7 @@ func (mo *MOServer) handleRequest(rs *Conn) error {
 			return err
 		}
 
-		logutil.Error("session read failed",
-			zap.Error(err))
+		logutil.LogConnectionCloseError("session read failed", err)
 		return err
 	}
 
@@ -529,7 +640,7 @@ func (mo *MOServer) handleRequest(rs *Conn) error {
 		if skipClientQuit(err.Error()) {
 			return nil
 		} else {
-			logutil.Error("session handle failed, close this session", zap.Error(err))
+			logutil.LogConnectionCloseError("session handle failed, close this session", err)
 		}
 		return err
 	}

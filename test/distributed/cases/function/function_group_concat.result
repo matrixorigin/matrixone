@@ -291,4 +291,5 @@ drop table if exists g18;
 create table g18 (a int);
 select group_concat(a order by a) from g18;
 group_concat(a, ,order by a)
+null
 drop table if exists g18;

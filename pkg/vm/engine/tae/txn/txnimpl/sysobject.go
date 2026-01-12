@@ -31,6 +31,11 @@ func bool2i8(v bool) int8 {
 	}
 }
 
+// WARNING: FillColumnRow, FillTableRow, and FillDBRow are ONLY intended for use in
+// testing and dump tools. The generated batch content may have minor discrepancies
+// compared to actual data. For example, rel_logical_id is inaccurate as it is directly
+// populated with rel_id. Users should be aware of these limitations.
+
 func FillColumnRow(table *catalog.TableEntry, schema *catalog.Schema, attr string, colData containers.Vector) {
 	tableID := table.GetID()
 	for i, colDef := range schema.ColDefs {
@@ -153,13 +158,13 @@ func FillTableRow(table *catalog.TableEntry, schema *catalog.Schema, attr string
 		// fill outside of this func
 	case pkgcatalog.SystemRelAttr_ExtraInfo:
 		colData.Append(schema.MustGetExtraBytes(), false)
+	case pkgcatalog.SystemRelAttr_LogicalID:
+		colData.Append(table.GetID(), false)
 	default:
 		panic(fmt.Sprintf("unexpected colname %q. if add new catalog def, fill it in this switch", attr))
 	}
 }
 
-// FillDBRow is used for checkpoint collecting and catalog-tree replaying at the moment.
-// As to Logtail and GetColumnDataById, objects in mo_database are the right place to get data.
 func FillDBRow(db *catalog.DBEntry, attr string, colData containers.Vector) {
 	switch attr {
 	case pkgcatalog.SystemDBAttr_ID:

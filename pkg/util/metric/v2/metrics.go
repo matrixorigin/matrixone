@@ -52,6 +52,7 @@ func init() {
 	initPipelineMetrics()
 	initLogServiceMetrics()
 	initShardingMetrics()
+	initGCMetrics()
 
 	registry.MustRegister(HeartbeatHistogram)
 	registry.MustRegister(HeartbeatFailureCounter)
@@ -69,18 +70,15 @@ func initMemMetrics() {
 	registry.MustRegister(memMPoolHighWaterMarkGauge)
 	registry.MustRegister(MallocCounter)
 	registry.MustRegister(MallocGauge)
+	registry.MustRegister(OffHeapInuseGauge)
 }
 
 func initTaskMetrics() {
 	registry.MustRegister(taskShortDurationHistogram)
 	registry.MustRegister(taskLongDurationHistogram)
-	registry.MustRegister(taskBytesHistogram)
-	registry.MustRegister(taskCountHistogram)
 
 	registry.MustRegister(taskDNMergeStuffCounter)
 	registry.MustRegister(taskDNMergeDurationHistogram)
-
-	registry.MustRegister(taskSelectivityCounter)
 
 	registry.MustRegister(transferPageHitHistogram)
 	registry.MustRegister(TransferPageRowHistogram)
@@ -108,6 +106,10 @@ func initFileServiceMetrics() {
 	registry.MustRegister(FSObjectStorageOperations)
 
 	registry.MustRegister(FSHTTPTraceCounter)
+	registry.MustRegister(S3ConnActiveGauge)
+
+	registry.MustRegister(FSDiskCacheEvictCounter)
+	registry.MustRegister(FSDiskCacheErrorCounter)
 }
 
 func initLogtailMetrics() {
@@ -120,7 +122,6 @@ func initLogtailMetrics() {
 	registry.MustRegister(logTailApplyDurationHistogram)
 	registry.MustRegister(logtailUpdatePartitionDurationHistogram)
 	registry.MustRegister(LogTailAppendDurationHistogram)
-	registry.MustRegister(logTailSendDurationHistogram)
 	registry.MustRegister(LogTailLoadCheckpointDurationHistogram)
 
 	registry.MustRegister(LogTailPushCollectionDurationHistogram)
@@ -135,8 +136,11 @@ func initTxnMetrics() {
 	registry.MustRegister(txnStatementCounter)
 	registry.MustRegister(txnCommitCounter)
 	registry.MustRegister(TxnRollbackCounter)
+	registry.MustRegister(TxnUserRollbackCounter)
+	registry.MustRegister(TxnRollbackLastStatementCounter)
 	registry.MustRegister(txnLockCounter)
 	registry.MustRegister(txnPKChangeCheckCounter)
+	registry.MustRegister(txnPKMayBeChangedCounter)
 
 	registry.MustRegister(txnQueueSizeGauge)
 
@@ -149,6 +153,9 @@ func initTxnMetrics() {
 	registry.MustRegister(txnUnlockDurationHistogram)
 	registry.MustRegister(TxnTableRangeDurationHistogram)
 	registry.MustRegister(TxnCheckPKDupDurationHistogram)
+	registry.MustRegister(TxnPKMayBeChangedDurationHistogram)
+	registry.MustRegister(TxnLazyLoadCkpDurationHistogram)
+	registry.MustRegister(TxnPKExistInMemDurationHistogram)
 	registry.MustRegister(TxnLockWaitersTotalHistogram)
 	registry.MustRegister(txnTableRangeTotalHistogram)
 	registry.MustRegister(txnMpoolDurationHistogram)
@@ -159,13 +166,19 @@ func initTxnMetrics() {
 
 	registry.MustRegister(txnRangesSelectivityHistogram)
 	registry.MustRegister(txnTNDeduplicateDurationHistogram)
+	registry.MustRegister(TxnTNLogServiceAppendDurationHistogram)
 
 	registry.MustRegister(TxnReaderScannedTotalTombstoneHistogram)
 	registry.MustRegister(TxnReaderEachBLKLoadedTombstoneHistogram)
 	registry.MustRegister(txnReaderTombstoneSelectivityHistogram)
 	registry.MustRegister(txnTransferDurationHistogram)
 	registry.MustRegister(TransferTombstonesCountHistogram)
+	registry.MustRegister(txnS3TombstoneCounter)
+	registry.MustRegister(txnS3TombstoneDurationHistogram)
 	registry.MustRegister(TxnExtraWorkspaceQuotaGauge)
+	registry.MustRegister(txnSelectivityHistogram)
+	registry.MustRegister(txnColumnReadHistogram)
+	registry.MustRegister(txnReadSizeHistogram)
 }
 
 func initRPCMetrics() {
@@ -175,11 +188,25 @@ func initRPCMetrics() {
 	registry.MustRegister(rpcBackendConnectCounter)
 	registry.MustRegister(rpcMessageCounter)
 	registry.MustRegister(rpcNetworkBytesCounter)
+	registry.MustRegister(rpcGCChannelDropCounter)
+	registry.MustRegister(rpcGCIdleBackendsCleanedCounter)
+	registry.MustRegister(rpcGCInactiveProcessedCounter)
+	registry.MustRegister(rpcGCCreateProcessedCounter)
+	registry.MustRegister(rpcBackendAutoCreateTimeoutCounter)
+	registry.MustRegister(rpcBackendUnavailableCounter)
+	registry.MustRegister(rpcCircuitBreakerStateGauge)
+	registry.MustRegister(rpcCircuitBreakerTripsCounter)
 
 	registry.MustRegister(rpcBackendPoolSizeGauge)
 	registry.MustRegister(rpcSendingQueueSizeGauge)
 	registry.MustRegister(rpcSendingBatchSizeGauge)
 	registry.MustRegister(rpcServerSessionSizeGauge)
+	registry.MustRegister(rpcGCRegisteredClientsGauge)
+	registry.MustRegister(rpcGCChannelQueueLengthGauge)
+	registry.MustRegister(rpcBackendActiveRequestsGauge)
+	registry.MustRegister(rpcBackendWriteQueueLengthGauge)
+	registry.MustRegister(rpcBackendBusyGauge)
+	registry.MustRegister(rpcClientActiveGauge)
 
 	registry.MustRegister(rpcBackendConnectDurationHistogram)
 	registry.MustRegister(rpcWriteDurationHistogram)

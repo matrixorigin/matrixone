@@ -16,6 +16,7 @@ package fileservice
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"io"
 	"iter"
 	"sync"
@@ -46,6 +47,7 @@ func (o *objectStorageSemaphore) release() {
 }
 
 var _ ObjectStorage = new(objectStorageSemaphore)
+var _ ParallelMultipartWriter = new(objectStorageSemaphore)
 
 func (o *objectStorageSemaphore) Delete(ctx context.Context, keys ...string) (err error) {
 	o.acquire()
@@ -106,4 +108,20 @@ func (o *objectStorageSemaphore) Write(ctx context.Context, key string, r io.Rea
 	o.acquire()
 	defer o.release()
 	return o.upstream.Write(ctx, key, r, sizeHint, expire)
+}
+
+func (o *objectStorageSemaphore) SupportsParallelMultipart() bool {
+	if p, ok := o.upstream.(ParallelMultipartWriter); ok {
+		return p.SupportsParallelMultipart()
+	}
+	return false
+}
+
+func (o *objectStorageSemaphore) WriteMultipartParallel(ctx context.Context, key string, r io.Reader, sizeHint *int64, opt *ParallelMultipartOption) (err error) {
+	o.acquire()
+	defer o.release()
+	if p, ok := o.upstream.(ParallelMultipartWriter); ok {
+		return p.WriteMultipartParallel(ctx, key, r, sizeHint, opt)
+	}
+	return moerr.NewNotSupportedNoCtx("parallel multipart upload")
 }

@@ -15,13 +15,20 @@
 package plan
 
 import (
+	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
 func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr, separateNonEquiConds bool) (int32, []*plan.Expr) {
+	originalNodeID := nodeID
+	// Record before pushdownFilters
+	builder.optimizationHistory = append(builder.optimizationHistory,
+		fmt.Sprintf("pushdownFilters:before (nodeID: %d, nodeType: %s, filters: %d)", nodeID, builder.qry.Nodes[nodeID].NodeType, len(filters)))
 	node := builder.qry.Nodes[nodeID]
 
 	var canPushdown, cantPushdown []*plan.Expr
@@ -150,6 +157,9 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		}
 
 	case plan.Node_JOIN:
+		// Record middle: processing JOIN node
+		builder.optimizationHistory = append(builder.optimizationHistory,
+			fmt.Sprintf("pushdownFilters:middle (nodeID: %d, JOIN, filters: %d, onList: %d)", nodeID, len(filters), len(node.OnList)))
 		leftTags := make(map[int32]bool)
 		for _, tag := range builder.enumerateTags(node.Children[0]) {
 			leftTags[tag] = true
@@ -333,16 +343,34 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 			}
 		}
 
-		//when onlist is empty, it will be a cross join, performance will be very poor
-		//in this situation, we put the non equal conds in the onlist and go loop join
-		//todo: when equal conds and non equal conds both exists, put them in the on list and go hash equal join
-		if node.JoinType == plan.Node_INNER && len(node.OnList) == 0 {
-			// for tpch q22, do not change the plan for now. will fix in the future
-			leftStats := builder.qry.Nodes[node.Children[0]].Stats
-			rightStats := builder.qry.Nodes[node.Children[1]].Stats
-			if leftStats.Outcnt != 1 && rightStats.Outcnt != 1 {
-				node.OnList = append(node.OnList, cantPushdown...)
-				cantPushdown = nil
+		switch node.JoinType {
+		case plan.Node_INNER:
+			//when onlist is empty, it will be a cross join, performance will be very poor
+			//in this situation, we put the non equal conds in the onlist and go loop join
+			if len(node.OnList) == 0 {
+				// for tpch q22, do not change the plan for now. will fix in the future
+				leftStats := builder.qry.Nodes[node.Children[0]].Stats
+				rightStats := builder.qry.Nodes[node.Children[1]].Stats
+				if leftStats.Outcnt != 1 && rightStats.Outcnt != 1 {
+					node.OnList = cantPushdown
+					cantPushdown = nil
+				}
+			}
+
+		case plan.Node_LEFT, plan.Node_SEMI, plan.Node_ANTI, plan.Node_SINGLE:
+			if len(node.OnList) > 0 {
+				var newOnList []*plan.Expr
+
+				for _, cond := range node.OnList {
+					joinSide := getJoinSide(cond, leftTags, rightTags, markTag)
+					if joinSide == JoinSideRight {
+						rightPushdown = append(rightPushdown, cond)
+					} else {
+						newOnList = append(newOnList, cond)
+					}
+				}
+
+				node.OnList = newOnList
 			}
 		}
 
@@ -351,10 +379,10 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 			//inner and semi join can deduce new predicate from both side
 			builder.pushdownFilters(node.Children[0], deduceNewFilterList(rightPushdown, node.OnList), separateNonEquiConds)
 			builder.pushdownFilters(node.Children[1], deduceNewFilterList(leftPushdown, node.OnList), separateNonEquiConds)
-		case plan.Node_RIGHT:
+		case plan.Node_RIGHT, plan.Node_ANTI:
 			//right join can deduce new predicate only from right side to left
 			builder.pushdownFilters(node.Children[0], deduceNewFilterList(rightPushdown, node.OnList), separateNonEquiConds)
-		case plan.Node_LEFT:
+		case plan.Node_LEFT, plan.Node_SINGLE:
 			//left join can deduce new predicate only from left side to right
 			builder.pushdownFilters(node.Children[1], deduceNewFilterList(leftPushdown, node.OnList), separateNonEquiConds)
 		}
@@ -402,6 +430,9 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		node.Children[1] = childID
 
 	case plan.Node_UNION, plan.Node_UNION_ALL, plan.Node_MINUS, plan.Node_MINUS_ALL, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL:
+		// Record middle: processing UNION/MINUS/INTERSECT node
+		builder.optimizationHistory = append(builder.optimizationHistory,
+			fmt.Sprintf("pushdownFilters:middle (nodeID: %d, %s, filters: %d)", nodeID, node.NodeType, len(filters)))
 		leftChild := builder.qry.Nodes[node.Children[0]]
 		rightChild := builder.qry.Nodes[node.Children[1]]
 		var canPushDownRight []*plan.Expr
@@ -457,6 +488,9 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		node.Children[0] = childID
 
 	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN:
+		// Record middle: processing TABLE_SCAN/EXTERNAL_SCAN node
+		builder.optimizationHistory = append(builder.optimizationHistory,
+			fmt.Sprintf("pushdownFilters:middle (nodeID: %d, %s, filters: %d)", nodeID, node.NodeType, len(filters)))
 		for _, filter := range filters {
 			if onlyContainsTag(filter, node.BindingTags[0]) {
 				node.FilterList = append(node.FilterList, filter)
@@ -505,6 +539,14 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		}
 	}
 
+	// Record after pushdownFilters
+	if nodeID != originalNodeID {
+		builder.optimizationHistory = append(builder.optimizationHistory,
+			fmt.Sprintf("pushdownFilters:after (nodeID: %d -> %d, cantPushdown: %d)", originalNodeID, nodeID, len(cantPushdown)))
+	} else {
+		builder.optimizationHistory = append(builder.optimizationHistory,
+			fmt.Sprintf("pushdownFilters:after (nodeID: %d, no change, cantPushdown: %d)", nodeID, len(cantPushdown)))
+	}
 	return nodeID, cantPushdown
 }
 
@@ -606,57 +648,73 @@ func (builder *QueryBuilder) pushdownVectorIndexTopToTableScan(nodeID int32) {
 		builder.pushdownVectorIndexTopToTableScan(childID)
 	}
 
-	if node.NodeType == plan.Node_SORT && node.Limit != nil && node.Offset == nil && len(node.OrderBy) == 1 {
-		orderCol := node.OrderBy[0].Expr.GetCol()
-		if orderCol == nil {
-			return
-		}
-
-		projNode := builder.qry.Nodes[node.Children[0]]
-		if projNode.NodeType != plan.Node_PROJECT || len(projNode.Children) == 0 {
-			return
-		}
-
-		orderFunc := projNode.ProjectList[orderCol.ColPos]
-		if metric.DistFuncOpTypes[orderFunc.GetF().GetFunc().GetObjName()] == "" {
-			return
-		}
-
-		scanNode := builder.qry.Nodes[projNode.Children[0]]
-		if scanNode.NodeType != plan.Node_TABLE_SCAN || scanNode.Offset != nil || scanNode.BlockOrderBy != nil {
-			return
-		}
-		limitVal := node.Limit.GetLit().GetU64Val()
-		if limitVal == 0 {
-			return
-		}
-		if scanNode.TableDef.TableType != catalog.SystemSI_IVFFLAT_TblType_Entries {
-			return
-		}
-
-		scanNode.BlockOrderBy = append(scanNode.BlockOrderBy, &plan.OrderBySpec{
-			Expr:      orderFunc,
-			Collation: node.OrderBy[0].Collation,
-			Flag:      node.OrderBy[0].Flag,
-		})
-		scanNode.BlockLimit = DeepCopyExpr(node.Limit)
-
-		// if there is a limit, outcnt is limit number
-		scanNode.Stats.Outcnt = float64(scanNode.Stats.BlockNum) * float64(limitVal)
-		scanNode.Stats.Cost = float64(scanNode.Stats.BlockNum * objectio.BlockMaxRows)
-
-		orderFuncTag := builder.genNewBindTag()
-		scanNode.BindingTags = append(scanNode.BindingTags, orderFuncTag)
-		projNode.ProjectList[orderCol.ColPos] = &plan.Expr{
-			Typ: orderFunc.Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: orderFuncTag,
-					ColPos: 0,
-				},
-			},
-		}
-
-		builder.nameByColRef[[2]int32{orderFuncTag, 0}] = "__dist_func__"
+	if node.NodeType != plan.Node_SORT || node.Limit == nil || node.Offset != nil {
+		return
 	}
+
+	if len(node.OrderBy) != 1 {
+		return
+	}
+
+	orderCol := node.OrderBy[0].Expr.GetCol()
+	if orderCol == nil {
+		return
+	}
+
+	projNode := builder.qry.Nodes[node.Children[0]]
+	if projNode.NodeType != plan.Node_PROJECT || len(projNode.Children) == 0 {
+		return
+	}
+
+	orderFunc := projNode.ProjectList[orderCol.ColPos]
+	if metric.DistFuncOpTypes[orderFunc.GetF().GetFunc().GetObjName()] == "" {
+		return
+	}
+
+	scanNode := builder.qry.Nodes[projNode.Children[0]]
+	if scanNode.NodeType != plan.Node_TABLE_SCAN || scanNode.Offset != nil || scanNode.OrderBy != nil {
+		return
+	}
+	limitVal := node.Limit.GetLit().GetU64Val()
+	if limitVal == 0 {
+		return
+	}
+	if scanNode.TableDef.TableType != catalog.SystemSI_IVFFLAT_TblType_Entries {
+		return
+	}
+
+	scanNode.IndexReaderParam = &plan.IndexReaderParam{
+		OrderBy: []*plan.OrderBySpec{
+			{
+				Expr:      orderFunc,
+				Collation: node.OrderBy[0].Collation,
+				Flag:      node.OrderBy[0].Flag,
+			},
+		},
+		Limit: DeepCopyExpr(node.Limit),
+	}
+	if ctxVal := builder.compCtx.GetProcess().Ctx.Value(defines.IvfReaderParam{}); ctxVal != nil {
+		if readerParam, ok := ctxVal.(*plan.IndexReaderParam); ok {
+			scanNode.IndexReaderParam.OrigFuncName = readerParam.OrigFuncName
+			scanNode.IndexReaderParam.DistRange = readerParam.DistRange
+		}
+	}
+
+	// if there is a limit, outcnt is limit number
+	scanNode.Stats.Outcnt = float64(scanNode.Stats.BlockNum) * float64(limitVal)
+	scanNode.Stats.Cost = float64(scanNode.Stats.BlockNum * objectio.BlockMaxRows)
+
+	orderFuncTag := builder.genNewBindTag()
+	scanNode.BindingTags = append(scanNode.BindingTags, orderFuncTag)
+	projNode.ProjectList[orderCol.ColPos] = &plan.Expr{
+		Typ: orderFunc.Typ,
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: orderFuncTag,
+				ColPos: 0,
+			},
+		},
+	}
+
+	builder.nameByColRef[[2]int32{orderFuncTag, 0}] = "__dist_func__"
 }

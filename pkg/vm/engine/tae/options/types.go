@@ -51,8 +51,10 @@ const (
 	DefaultGCTTL             = time.Hour
 	DefaultGCInMemoryTTL     = time.Hour
 	DefaultGCMergeCount      = 40
+	DefaultGCScanCount       = 10
 	DefaultGCDeleteBatchSize = 1000
 	DefaultGCDeleteTimeout   = time.Minute * 10
+	DefaultGCDeleteWorkerNum = 4
 
 	DefaultCatalogGCInterval = time.Minute * 3
 

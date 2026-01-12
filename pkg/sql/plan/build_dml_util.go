@@ -159,6 +159,7 @@ func buildInsertPlans(
 	ifNeedCheckPkDup := !builder.qry.LoadTag
 	var indexSourceColTypes []*plan.Type
 	var fuzzymessage *OriginTableMessageForFuzzy
+	var skipIndexesCoyp map[string]bool
 
 	if v := builder.compCtx.GetContext().Value(defines.AlterCopyOpt{}); v != nil {
 		dedupOpt := v.(*plan.AlterCopyOpt)
@@ -179,10 +180,13 @@ func buildInsertPlans(
 				}
 			}
 		}
+		skipIndexesCoyp = dedupOpt.SkipIndexesCopy
 	}
 	return buildInsertPlansWithRelatedHiddenTable(stmt, ctx, builder, insertBindCtx, objRef, tableDef,
 		updateColLength, sourceStep, addAffectedRows, isFkRecursionCall, updatePkCol, pkFilterExpr,
-		newPartitionExpr, ifExistAutoPkCol, ifNeedCheckPkDup, indexSourceColTypes, fuzzymessage, insertWithoutUniqueKeyMap, ifInsertFromUniqueColMap, nil)
+		newPartitionExpr, ifExistAutoPkCol, ifNeedCheckPkDup, indexSourceColTypes, fuzzymessage,
+		insertWithoutUniqueKeyMap, ifInsertFromUniqueColMap, nil, skipIndexesCoyp,
+	)
 }
 
 // buildUpdatePlans  build update plan.
@@ -267,7 +271,7 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	return buildInsertPlansWithRelatedHiddenTable(nil, ctx, builder, insertBindCtx, updatePlanCtx.objRef, updatePlanCtx.tableDef,
 		updatePlanCtx.updateColLength, sourceStep, addAffectedRows, updatePlanCtx.isFkRecursionCall, updatePlanCtx.updatePkCol,
 		updatePlanCtx.pkFilterExprs, partitionExpr, ifExistAutoPkCol, ifNeedCheckPkDup, indexSourceColTypes, fuzzymessage, nil, nil,
-		updatePlanCtx.updateColPosMap)
+		updatePlanCtx.updateColPosMap, nil)
 }
 
 func getStepByNodeId(builder *QueryBuilder, nodeId int32) int {
@@ -609,9 +613,10 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 							}
 						}
 						lastNodeId = builder.appendNode(&plan.Node{
-							NodeType:   plan.Node_FILTER,
-							Children:   []int32{lastNodeId},
-							FilterList: []*Expr{filterExpr},
+							NodeType:    plan.Node_FILTER,
+							Children:    []int32{lastNodeId},
+							FilterList:  []*Expr{filterExpr},
+							ProjectList: getProjectionByLastNode(builder, lastNodeId),
 						}, bindCtx)
 					}
 
@@ -855,7 +860,7 @@ func buildInsertPlansWithRelatedHiddenTable(
 	updatePkCol bool, pkFilterExprs []*Expr, partitionExpr *Expr, ifExistAutoPkCol bool,
 	checkInsertPkDupForHiddenIndexTable bool, indexSourceColTypes []*plan.Type, fuzzymessage *OriginTableMessageForFuzzy,
 	insertWithoutUniqueKeyMap map[string]bool, ifInsertFromUniqueColMap map[string]bool,
-	updateColPosMap map[string]int,
+	updateColPosMap map[string]int, skipIndexesCopy map[string]bool,
 ) error {
 	//var lastNodeId int32
 	var err error
@@ -869,6 +874,11 @@ func buildInsertPlansWithRelatedHiddenTable(
 	for idx, indexdef := range tableDef.Indexes {
 		if updateColLength == 0 {
 			if indexdef.GetUnique() && (insertWithoutUniqueKeyMap != nil && insertWithoutUniqueKeyMap[indexdef.IndexName]) {
+				continue
+			}
+
+			// we will clone this index data to new index table, skip insert.
+			if skipIndexesCopy != nil && skipIndexesCopy[indexdef.IndexName] {
 				continue
 			}
 
@@ -1058,9 +1068,10 @@ func makeOneDeletePlan(
 				return -1, err
 			}
 			filterNode := &Node{
-				NodeType:   plan.Node_FILTER,
-				Children:   []int32{lastNodeId},
-				FilterList: []*plan.Expr{filterExpr},
+				NodeType:    plan.Node_FILTER,
+				Children:    []int32{lastNodeId},
+				FilterList:  []*plan.Expr{filterExpr},
+				ProjectList: getProjectionByLastNode(builder, lastNodeId),
 			}
 			lastNodeId = builder.appendNode(filterNode, bindCtx)
 			// append lock
@@ -1491,12 +1502,6 @@ func appendJoinNodeForParentFkCheck(builder *QueryBuilder, bindCtx *BindContext,
 
 	//for stmt:  update c1 set ref_col = null where col > 0;
 	//we will skip foreign key constraint check when set null
-	projectProjection := getProjectionByLastNode(builder, baseNodeId)
-	baseNodeId = builder.appendNode(&Node{
-		NodeType:    plan.Node_PROJECT,
-		Children:    []int32{baseNodeId},
-		ProjectList: projectProjection,
-	}, bindCtx)
 
 	var filterConds []*Expr
 	for _, fk := range tableDef.Fkeys {
@@ -1522,10 +1527,10 @@ func appendJoinNodeForParentFkCheck(builder *QueryBuilder, bindCtx *BindContext,
 		}
 	}
 	baseNodeId = builder.appendNode(&Node{
-		NodeType:   plan.Node_FILTER,
-		Children:   []int32{baseNodeId},
-		FilterList: filterConds,
-		// ProjectList: projectProjection,
+		NodeType:    plan.Node_FILTER,
+		Children:    []int32{baseNodeId},
+		FilterList:  filterConds,
+		ProjectList: getProjectionByLastNode(builder, baseNodeId),
 	}, bindCtx)
 
 	lastNodeId := baseNodeId
@@ -2450,13 +2455,12 @@ func appendDeleteIndexTablePlan(
 		While secondary indexes don't store NULL values, they DO need RIGHT JOIN to handle
 		new inserts that don't yet exist in the index table.
 	*/
-	joinType := plan.Node_RIGHT
-
 	sid := builder.compCtx.GetProcess().GetService()
 	lastNodeId = builder.appendNode(&plan.Node{
 		NodeType:               plan.Node_JOIN,
 		Children:               []int32{leftId, lastNodeId},
-		JoinType:               joinType,
+		JoinType:               plan.Node_RIGHT,
+		IsRightJoin:            true,
 		OnList:                 joinConds,
 		ProjectList:            projectList,
 		RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, GetInFilterCardLimitOnPK(sid, builder.qry.Nodes[leftId].Stats.TableCnt), buildExpr, false)},
@@ -2909,12 +2913,11 @@ func makePreUpdateDeletePlan(
 		if err != nil {
 			return -1, err
 		}
-		filterProjection := getProjectionByLastNode(builder, lastNodeId)
 		filterNode := &Node{
 			NodeType:    plan.Node_FILTER,
 			Children:    []int32{lastNodeId},
 			FilterList:  []*Expr{nullCheckExpr},
-			ProjectList: filterProjection,
+			ProjectList: getProjectionByLastNode(builder, lastNodeId),
 		}
 		lastNodeId = builder.appendNode(filterNode, bindCtx)
 	}

@@ -3552,7 +3552,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableBoolType("experimental_ivf_index"),
-		Default:           int64(0),
+		Default:           int8(0),
 	},
 	"ivf_threads_build": {
 		Name:              "ivf_threads_build",
@@ -3570,6 +3570,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableIntType("ivf_threads_search", 0, 1024, false),
 		Default:           int64(0),
 	},
+	"enable_vector_prefilter_by_default": {
+		Name:              "enable_vector_prefilter_by_default",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("enable_vector_prefilter_by_default"),
+		Default:           int8(0),
+	},
 	"probe_limit": {
 		Name:              "probe_limit",
 		Scope:             ScopeBoth,
@@ -3583,8 +3591,8 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              InitSystemVariableIntType("kmeans_train_percent", 1, 100, false),
-		Default:           int64(10),
+		Type:              InitSystemVariableDoubleType("kmeans_train_percent", 0, 100),
+		Default:           float64(10),
 	},
 	"kmeans_max_iteration": {
 		Name:              "kmeans_max_iteration",
@@ -3608,7 +3616,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableBoolType("experimental_fulltext_index"),
-		Default:           int64(0),
+		Default:           int8(0),
 	},
 	"ft_relevancy_algorithm": {
 		Name:              fulltext.FulltextRelevancyAlgo,
@@ -3624,7 +3632,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableBoolType("experimental_hnsw_index"),
-		Default:           int64(0),
+		Default:           int8(0),
 	},
 	"hnsw_threads_build": {
 		Name:              "hnsw_threads_build",
@@ -3817,6 +3825,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("agg_spill_mem", 0, common.TiB, false),
 		Default:           int64(common.GiB),
+	},
+	"max_dop": {
+		Name:              "max_dop",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("max_dop", 0, math.MaxInt32, false),
+		Default:           int64(0),
 	},
 }
 

@@ -683,8 +683,8 @@ func TestShrinkByMask(t *testing.T) {
 	var bm bitmap.Bitmap
 	bm.InitWithSize(2)
 	bm.AddMany([]uint64{0, 1})
-	var bmask bitmap.BMask
-	bmask.Init(&bm)
+	var bmask bitmap.Bitmap
+	bmask.InitWith(&bm)
 
 	//{ // Array Float32
 	//	v := NewVec(types.T_array_float32.ToType())
@@ -1401,7 +1401,7 @@ func TestShuffle(t *testing.T) {
 		require.NoError(t, err)
 		v.Shuffle([]int64{1, 2}, mp)
 		require.Equal(t, vs[1:3], MustFixedColWithTypeCheck[types.TS](v))
-		require.Equal(t, "[[0 0 0 0 0 0 0 0 0 0 0 0] [0 0 0 0 0 0 0 0 0 0 0 0]]", v.String())
+		require.Equal(t, "[0-0 0-0]", v.String())
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
@@ -2989,7 +2989,7 @@ func TestRowToString(t *testing.T) {
 		v := NewVec(types.T_TS.ToType())
 		err := AppendFixedList(v, vs, nil, mp)
 		require.NoError(t, err)
-		require.Equal(t, "[0 0 0 0 0 0 0 0 0 0 0 0]", v.RowToString(1))
+		require.Equal(t, "0-0", v.RowToString(1))
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
@@ -3267,4 +3267,34 @@ func TestProtoVector(t *testing.T) {
 	require.NoError(t, err)
 	_, err = ProtoVectorToVector(vec2)
 	require.NoError(t, err)
+}
+
+func TestVectorPoolTypeChangeBug_Issue23295(t *testing.T) {
+	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mpool.DeleteMPool(mp)
+
+	// Step 1: Create vector with int8 type, allocate small buffer (8 bytes)
+	vec := NewVec(types.T_int8.ToType())
+	err = AppendMultiFixed(vec, int8(1), false, 8, mp)
+	require.NoError(t, err)
+	// Now: cap(data)=8, col.Cap=8 (for int8, 8 bytes = 8 elements)
+
+	// Step 2: Reset to TS type (12 bytes per element)
+	// cap(data)=8 < 12, so setFromVector's condition `cap(v.data) >= sz` fails
+	// Without the fix, col.Ptr and col.Cap keep stale values (Cap=8)
+	tsType := types.T_TS.ToType()
+	vec.ResetWithNewType(&tsType)
+
+	// Step 3: ToSlice with stale Cap=8 would create invalid slice
+	// It thinks there are 8 TS elements (96 bytes), but buffer is only 8 bytes!
+	// With -race, checkType will panic on type mismatch if col.Ptr is stale
+	var col []types.TS
+	ToSlice(vec, &col)
+	require.Equal(t, 0, cap(col)) // After fix: cap should be 0, not stale value 8
+
+	// AppendMultiFixed(vec, types.TS{}, false, 0, mp) also triggers this bug,
+	// because it calls ToSlice without extending buffer
+
+	vec.Free(mp)
 }

@@ -159,7 +159,7 @@ func (ctl *CancelableJob) Start() {
 			ticker := time.NewTicker(ctl.interval)
 			if ctl.logLevel > 0 {
 				logutil.Info(
-					"Start-CronJob",
+					"cancelablejob.start.cron.job",
 					zap.String("name", ctl.name),
 					zap.Duration("interval", ctl.interval),
 				)
@@ -172,7 +172,7 @@ func (ctl *CancelableJob) Start() {
 					case <-ctl.ctx.Done():
 						if ctl.logLevel > 0 {
 							logutil.Info(
-								"Stop-CronJob",
+								"cancelablejob.stop.cron.job",
 								zap.String("name", ctl.name),
 								zap.Duration("duration", time.Since(start)),
 							)
@@ -205,7 +205,7 @@ func (ctl *CancelableJob) Start() {
 				start := time.Now()
 				if ctl.logLevel > 0 {
 					logutil.Info(
-						"Start-Job",
+						"cancelablejob.start.job",
 						zap.String("name", ctl.name),
 					)
 				}
@@ -213,7 +213,7 @@ func (ctl *CancelableJob) Start() {
 					ctl.wg.Done()
 					if ctl.logLevel > 0 {
 						logutil.Info(
-							"Stop-Job",
+							"cancelablejob.stop.job",
 							zap.String("name", ctl.name),
 							zap.Duration("duration", time.Since(start)),
 						)

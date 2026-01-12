@@ -467,9 +467,13 @@ func checkNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 			// done query.
 
 			// update new accounts metric
-			logger.Info("new account storage_usage", zap.String("account", account), zap.Uint32("account_id", accountId), zap.Float64("sizeMB", sizeMB),
-				zap.Float64("snapshot", snapshotSizeMB),
-				zap.String("created_time", createdTime))
+			logger.Info(
+				"storage_usage.new_account",
+				zap.String("name", account),
+				zap.Float64("size-mb", sizeMB),
+				zap.Float64("snapshot-mb", snapshotSizeMB),
+				zap.String("created-time", createdTime),
+			)
 
 			metric.StorageUsage(account, accountId).Set(sizeMB)
 			metric.SnapshotUsage(account, accountId).Set(snapshotSizeMB)

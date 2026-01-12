@@ -67,7 +67,7 @@ out_qs = qqs if not err else "error"
 
 call sp_quote('''', @qs);
 select @qs;
-call sp_quote($$foo'bar''zoo$$, @qs2);
+call sp_quote($$foo'bar'zoo$$, @qs2);
 select @qs2;
 
 create or replace procedure sp_jq(in jq varchar, in data varchar, out jqresult varchar, out errstr varchar) language 'starlark'

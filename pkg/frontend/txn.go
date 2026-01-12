@@ -22,20 +22,15 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
-	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/txn/clock"
-	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
+	txnclient "github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 )
 
 var (
@@ -120,6 +115,8 @@ func finishTxnFunc(ses FeSession, execErr error, execCtx *ExecCtx) (err error) {
 			logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
 			return err
 		}
+		// Increment user rollback counter when rollback is successful
+		v2.TxnUserRollbackCounter.Inc()
 	} else {
 		if execErr == nil {
 			err = commitTxnFunc(ses, execCtx)
@@ -162,12 +159,10 @@ const (
 type TxnHandler struct {
 	mu sync.Mutex
 
-	service       string
-	storage       engine.Engine
-	tempStorage   *memorystorage.Storage
-	tempTnService *metadata.TNService
-	tempEngine    *memoryengine.Engine
-	txnOp         TxnOperator
+	service string
+	storage engine.Engine
+
+	txnOp TxnOperator
 
 	//connCtx is the ancestor of the txnCtx.
 	//it is initialized at the TxnHandler object created and
@@ -212,9 +207,7 @@ func (th *TxnHandler) Close() {
 	th.mu.Lock()
 	defer th.mu.Unlock()
 	th.storage = nil
-	th.tempStorage = nil
-	th.tempTnService = nil
-	th.tempEngine = nil
+
 	th.txnOp = nil
 	th.connCtx = nil
 	if th.txnCtxCancel != nil {
@@ -239,10 +232,14 @@ func (th *TxnHandler) GetTxnCtx() context.Context {
 }
 
 // invalidateTxnUnsafe releases the txnOp and clears the server status bit SERVER_STATUS_IN_TRANS
+// It preserves autocommit-related flags (SERVER_STATUS_AUTOCOMMIT, OPTION_AUTOCOMMIT, OPTION_NOT_AUTOCOMMIT)
+// since they are session-level settings that should persist across transactions.
 func (th *TxnHandler) invalidateTxnUnsafe() {
 	th.txnOp = nil
-	resetBits(&th.serverStatus, defaultServerStatus)
-	resetBits(&th.optionBits, defaultOptionBits)
+	// Preserve SERVER_STATUS_AUTOCOMMIT flag, only clear SERVER_STATUS_IN_TRANS
+	clearBits(&th.serverStatus, uint32(SERVER_STATUS_IN_TRANS))
+	// Preserve autocommit option bits (OPTION_AUTOCOMMIT or OPTION_NOT_AUTOCOMMIT), only clear OPTION_BEGIN
+	clearBits(&th.optionBits, OPTION_BEGIN)
 }
 
 func (th *TxnHandler) InActiveTxn() bool {
@@ -370,11 +367,11 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 		return moerr.NewInternalError(execCtx.reqCtx, "NewTxnOperator: the share txn is not allowed to create new txn")
 	}
 
-	var opts []client.TxnOption
+	var opts []txnclient.TxnOption
 	rt := moruntime.ServiceRuntime(execCtx.ses.GetService())
 	if rt != nil {
 		if v, ok := rt.GetGlobalVariables(moruntime.TxnOptions); ok {
-			opts = v.([]client.TxnOption)
+			opts = v.([]txnclient.TxnOption)
 		}
 	}
 	if th.txnCtx == nil {
@@ -393,22 +390,22 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 	}
 	sessionInfo := execCtx.ses.GetDebugString()
 	opts = append(opts,
-		client.WithTxnCreateBy(
+		txnclient.WithTxnCreateBy(
 			accountID,
 			userName,
 			execCtx.ses.GetUUIDString(),
 			connectionID),
-		client.WithSessionInfo(sessionInfo),
-		client.WithBeginAutoCommit(execCtx.txnOpt.byBegin, execCtx.txnOpt.autoCommit))
+		txnclient.WithSessionInfo(sessionInfo),
+		txnclient.WithBeginAutoCommit(execCtx.txnOpt.byBegin, execCtx.txnOpt.autoCommit))
 
 	if execCtx.ses.GetFromRealUser() {
 		opts = append(opts,
-			client.WithUserTxn())
+			txnclient.WithUserTxn())
 	}
 
 	if execCtx.ses.IsBackgroundSession() ||
 		execCtx.ses.DisableTrace() {
-		opts = append(opts, client.WithDisableTrace(true))
+		opts = append(opts, txnclient.WithDisableTrace(true))
 	} else {
 		varVal, err := execCtx.ses.GetSessionSysVar("disable_txn_trace")
 		if err != nil {
@@ -417,7 +414,7 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 		if def, ok := gSysVarsDefs["disable_txn_trace"]; ok {
 			if boolType, ok := def.GetType().(SystemVariableBoolType); ok {
 				if boolType.IsTrue(varVal) {
-					opts = append(opts, client.WithDisableTrace(true))
+					opts = append(opts, txnclient.WithDisableTrace(true))
 				}
 			}
 		}
@@ -497,11 +494,7 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 	if th.txnCtx == nil {
 		panic("context should not be nil")
 	}
-	if th.hasTempEngineUnsafe() && th.tempStorage != nil {
-		if th.txnCtx.Value(defines.TemporaryTN{}) == nil {
-			th.txnCtx = context.WithValue(th.txnCtx, defines.TemporaryTN{}, th.tempStorage)
-		}
-	}
+
 	storage := th.storage
 	ctx2, cancel := context.WithTimeoutCause(
 		th.txnCtx,
@@ -509,6 +502,11 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 		moerr.CauseCommitUnsafe,
 	)
 	defer cancel()
+	if sess, ok := execCtx.ses.(*Session); ok {
+		if token := sess.currentRunSQLToken(); token != 0 {
+			ctx2 = txnclient.WithRunSQLSkipToken(ctx2, token)
+		}
+	}
 	val, e := execCtx.ses.GetSessionSysVar("mo_pk_check_by_dn")
 	if e != nil {
 		return e
@@ -634,17 +632,18 @@ func (th *TxnHandler) rollbackUnsafe(execCtx *ExecCtx) error {
 	if th.txnCtx == nil {
 		panic("context should not be nil")
 	}
-	if th.hasTempEngineUnsafe() && th.tempStorage != nil {
-		if th.txnCtx.Value(defines.TemporaryTN{}) == nil {
-			th.txnCtx = context.WithValue(th.txnCtx, defines.TemporaryTN{}, th.tempStorage)
-		}
-	}
+
 	ctx2, cancel := context.WithTimeoutCause(
 		th.txnCtx,
 		th.storage.Hints().CommitOrRollbackTimeout,
 		moerr.CauseRollbackUnsafe,
 	)
 	defer cancel()
+	if sess, ok := execCtx.ses.(*Session); ok {
+		if token := sess.currentRunSQLToken(); token != 0 {
+			ctx2 = txnclient.WithRunSQLSkipToken(ctx2, token)
+		}
+	}
 	defer func() {
 		// metric count
 		tenant := execCtx.ses.GetTenantName()
@@ -772,106 +771,8 @@ func (th *TxnHandler) GetStorage() engine.Engine {
 	return th.storage
 }
 
-func (th *TxnHandler) HasTempEngine() bool {
-	th.mu.Lock()
-	defer th.mu.Unlock()
-	return th.hasTempEngineUnsafe()
-}
-
-func (th *TxnHandler) hasTempEngineUnsafe() bool {
-	if entireEng, ok := th.storage.(*engine.EntireEngine); ok {
-		return entireEng.TempEngine != nil
-	}
-	return false
-}
-
 func (th *TxnHandler) OptionBitsIsSet(bit uint32) bool {
 	th.mu.Lock()
 	defer th.mu.Unlock()
 	return bitsIsSet(th.optionBits, bit)
-}
-
-func (th *TxnHandler) CreateTempStorage(ck clock.Clock) error {
-	th.mu.Lock()
-	defer th.mu.Unlock()
-	return th.createTempStorageUnsafe(ck)
-}
-
-func (th *TxnHandler) GetTempStorage() *memorystorage.Storage {
-	th.mu.Lock()
-	defer th.mu.Unlock()
-	if th.tempStorage == nil {
-		panic("temp table storage is not initialized")
-	}
-	return th.tempStorage
-}
-
-func (th *TxnHandler) GetTempTNService() *metadata.TNService {
-	th.mu.Lock()
-	defer th.mu.Unlock()
-	return th.tempTnService
-}
-
-func (th *TxnHandler) createTempStorageUnsafe(ck clock.Clock) error {
-	// Without concurrency, there is no potential for data competition
-	// Arbitrary value is OK since it's single sharded. Let's use 0xbeef
-	// suggested by @reusee
-	shards := []metadata.TNShard{
-		{
-			ReplicaID:     0xbeef,
-			TNShardRecord: metadata.TNShardRecord{ShardID: 0xbeef},
-		},
-	}
-	// Arbitrary value is OK, for more information about TEMPORARY_TABLE_DN_ADDR, please refer to the comment in defines/const.go
-	tnAddr := defines.TEMPORARY_TABLE_TN_ADDR
-	uid, err := uuid.NewV7()
-	if err != nil {
-		return err
-	}
-	th.tempTnService = &metadata.TNService{
-		ServiceID:         uid.String(),
-		TxnServiceAddress: tnAddr,
-		Shards:            shards,
-	}
-
-	ms, err := memorystorage.NewMemoryStorage(
-		th.service,
-		mpool.MustNewZeroNoFixed(),
-		ck,
-		memoryengine.RandomIDGenerator,
-	)
-	if err != nil {
-		return err
-	}
-	th.tempStorage = ms
-	return nil
-}
-
-func (th *TxnHandler) CreateTempEngine() {
-	th.mu.Lock()
-	defer th.mu.Unlock()
-
-	th.tempEngine = memoryengine.New(
-		context.TODO(), //!!!NOTE: memoryengine.New will neglect this context.
-		th.service,
-		memoryengine.NewDefaultShardPolicy(
-			mpool.MustNewZeroNoFixed(),
-		),
-		memoryengine.RandomIDGenerator,
-		clusterservice.NewMOCluster(
-			th.service,
-			nil,
-			0,
-			clusterservice.WithDisableRefresh(),
-			clusterservice.WithServices(nil, []metadata.TNService{
-				*th.tempTnService,
-			})),
-	)
-	updateTempEngine(th.storage, th.tempEngine)
-}
-
-func (th *TxnHandler) GetTempEngine() *memoryengine.Engine {
-	th.mu.Lock()
-	defer th.mu.Unlock()
-	return th.tempEngine
 }

@@ -70,6 +70,7 @@ type Table struct {
 	Constraint    []byte
 	Version       uint32
 	ExtraInfo     []byte
+	LogicalId     uint64 // rel_logical_id, if 0, will use TableId
 }
 
 // genColumnsFromDefs generates column struct from TableDef.
@@ -466,6 +467,16 @@ func GenCreateTableTuple(tbl Table, m *mpool.MPool, packer *types.Packer) (*batc
 		if err = vector.AppendBytes(bat.Vecs[idx], tbl.ExtraInfo, false, m); err != nil {
 			return nil, err
 		}
+		idx = MO_TABLES_LOGICAL_ID_IDX
+		bat.Vecs[idx] = vector.NewVec(MoTablesTypes[idx]) // rel_logical_id
+		// Use LogicalId if set, otherwise use TableId (physical_id)
+		logicalId := tbl.LogicalId
+		if logicalId == 0 {
+			logicalId = tbl.TableId
+		}
+		if err = vector.AppendFixed(bat.Vecs[idx], logicalId, false, m); err != nil {
+			return nil, err
+		}
 	}
 	return bat, nil
 }
@@ -688,6 +699,74 @@ func GenDropTableTuple(rowid types.Rowid, accid uint32, id, databaseId uint64, n
 			return nil, err
 		}
 	}
+
+	return bat, nil
+}
+
+// GenLogicalIdIndexInsertBatch generates the batch for inserting into logical_id index table
+func GenLogicalIdIndexInsertBatch(
+	logicalId uint64,
+	compositePk []byte,
+	mp *mpool.MPool,
+) (*batch.Batch, error) {
+	bat := batch.NewWithSize(2)
+	bat.Attrs = []string{IndexTableIndexColName, IndexTablePrimaryColName}
+	bat.SetRowCount(1)
+
+	var err error
+	defer func() {
+		if err != nil {
+			bat.Clean(mp)
+		}
+	}()
+
+	// logical_id column (__mo_index_idx_col)
+	bat.Vecs[0] = vector.NewVec(types.T_uint64.ToType())
+	if err = vector.AppendFixed(bat.Vecs[0], logicalId, false, mp); err != nil {
+		return nil, err
+	}
+
+	// composite_pk column (__mo_index_pri_col)
+	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	if err = vector.AppendBytes(bat.Vecs[1], compositePk, false, mp); err != nil {
+		return nil, err
+	}
+
+	return bat, nil
+}
+
+// GenLogicalIdIndexDeleteBatch generates the batch for deleting from logical_id index table
+// The batch structure follows the standard delete batch pattern: Row_ID + PrimaryKey
+func GenLogicalIdIndexDeleteBatch(
+	rowid types.Rowid,
+	logicalId uint64,
+	mp *mpool.MPool,
+) (*batch.Batch, error) {
+	bat := batch.NewWithSize(2)
+	// Index table's primary key is __mo_index_idx_col (logical_id, uint64)
+	bat.Attrs = []string{Row_ID, IndexTableIndexColName}
+	bat.SetRowCount(1)
+
+	var err error
+	defer func() {
+		if err != nil {
+			bat.Clean(mp)
+		}
+	}()
+
+	// rowid vector
+	rowidVec := vector.NewVec(types.T_Rowid.ToType())
+	if err = vector.AppendFixed(rowidVec, rowid, false, mp); err != nil {
+		return nil, err
+	}
+	bat.Vecs[0] = rowidVec
+
+	// logical_id (primary key of index table)
+	logicalIdVec := vector.NewVec(types.T_uint64.ToType())
+	if err = vector.AppendFixed(logicalIdVec, logicalId, false, mp); err != nil {
+		return nil, err
+	}
+	bat.Vecs[1] = logicalIdVec
 
 	return bat, nil
 }

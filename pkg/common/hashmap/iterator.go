@@ -20,6 +20,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
+// MaxStrIteratorCapacity limits how many bytes of backing storage we keep when
+// reusing a string iterator. Avoids retaining oversized buffers after handling
+// very large strings.
+const MaxStrIteratorCapacity = 64 * 1024
+
 func IteratorChangeOwner(itr Iterator, m HashMap) {
 	if it, ok := itr.(*intHashMapIterator); ok {
 		it.mp = m.(*IntHashMap)
@@ -27,6 +32,31 @@ func IteratorChangeOwner(itr Iterator, m HashMap) {
 	}
 	it := itr.(*strHashmapIterator)
 	it.mp = m.(*StrHashMap)
+}
+
+// IteratorClearOwner detaches the iterator from its hashmap to allow the old
+// hashmap to be garbage collected when the iterator is cached.
+func IteratorClearOwner(itr Iterator) {
+	switch it := itr.(type) {
+	case *intHashMapIterator:
+		it.mp = nil
+	case *strHashmapIterator:
+		it.mp = nil
+	}
+}
+
+// StrIteratorCapacity reports the total capacity of all key buffers maintained
+// by a string iterator. Used to decide if a cached iterator should be kept.
+func StrIteratorCapacity(itr Iterator) int {
+	it, ok := itr.(*strHashmapIterator)
+	if !ok || it == nil {
+		return 0
+	}
+	total := 0
+	for i := range it.keys {
+		total += cap(it.keys[i])
+	}
+	return total
 }
 
 func (itr *strHashmapIterator) Find(start, count int, vecs []*vector.Vector) ([]uint64, []int64) {

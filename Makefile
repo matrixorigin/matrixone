@@ -37,6 +37,16 @@
 # To construct a directory named vendor in the main module’s root directory that contains copies of all packages needed to support builds and tests of packages in the main module.
 # make vendor
 #
+# To compile mo-service with GPU support,
+# 1. install CUDA toolkit (version 12.0, 13.0, or above)
+# 2. install cuVS Go bindings with conda
+#  % git clone git@github.com:rapidsai/cuvs.git
+#  % cd cuvs
+#  % conda env create --name go -f conda/environments/go_cuda-130_arch-$(uname -m).yaml
+#  % conda activate go
+# 3. compile matrixone
+#  % cd matrixone
+#  % MO_CL_CUDA=1 make
 
 # where am I
 ROOT_DIR = $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
@@ -85,6 +95,8 @@ help:
 	@echo ""
 	@echo "Build Commands:"
 	@echo "  make build              - Build mo-service binary"
+	@echo "  make build-typecheck    - Build with typecheck enabled (enables type checking)"
+	@echo "  make build TYPECHECK=1  - Build with typecheck enabled (alternative)"
 	@echo "  make debug              - Build with race detector and debug symbols"
 	@echo "  make musl               - Build static binary with musl"
 	@echo "  make mo-tool            - Build mo-tool utility"
@@ -95,12 +107,24 @@ help:
 	@echo "  make ci                 - Run CI tests (BVT + optional UT)"
 	@echo "  make compose            - Run docker compose BVT tests"
 	@echo ""
+	@echo "Local Development with MinIO:"
+	@echo "  make dev-up-minio-local     - Start MinIO service (local storage)"
+	@echo "  make dev-down-minio-local   - Stop MinIO service"
+	@echo "  make dev-restart-minio-local - Restart MinIO service"
+	@echo "  make dev-status-minio-local - Show MinIO service status"
+	@echo "  make dev-logs-minio-local   - Show MinIO logs"
+	@echo "  make dev-clean-minio-local  - Clean MinIO data"
+	@echo "  make launch-minio           - Build and start MO with MinIO storage"
+	@echo "  make launch-minio-debug     - Build (debug) and start MO with MinIO"
+	@echo ""
 	@echo "Development Environment (Local Multi-CN Cluster):"
 	@echo "  make dev-help           - Show all dev-* commands (full list)"
-	@echo "  make dev-build          - Build docker image"
+	@echo "  make dev-build          - Build docker image (smart cache - rebuilds when code changes)"
+	@echo "  make dev-build-force    - Build docker image (forces complete rebuild, no cache)"
 	@echo "  make dev-up             - Start multi-CN cluster (default: local image)"
 	@echo "  make dev-up-latest      - Start with official latest image"
 	@echo "  make dev-up-test        - Start with test directory mounted"
+	@echo "  make dev-up-grafana-local - Start Grafana dashboard (port 3001)"
 	@echo "  make dev-down           - Stop cluster"
 	@echo "  make dev-restart        - Restart all services"
 	@echo "  make dev-restart-cn1    - Restart CN1 only (also: cn2, proxy, tn, log)"
@@ -157,14 +181,25 @@ THIRDPARTIES_INSTALL_DIR=$(ROOT_DIR)/thirdparties/install
 RACE_OPT :=
 DEBUG_OPT :=
 CGO_DEBUG_OPT :=
+TAGS :=
 
 ifeq ($(MO_CL_CUDA),1)
-	CUDA_LDFLAGS := -L/usr/local/cuda/lib64/stubs -lcuda -L/usr/local/cuda/lib64 -lcudart -lstdc++
+  ifeq ($(CONDA_PREFIX),)
+    $(error CONDA_PREFIX env variable not found.)
+  endif
+	CUVS_CFLAGS := -I$(CONDA_PREFIX)/include
+	CUVS_LDFLAGS := -L$(CONDA_PREFIX)/envs/go/lib -lcuvs -lcuvs_c
+	CUDA_CFLAGS := -I/usr/local/cuda/include $(CUVS_CFLAGS)
+	CUDA_LDFLAGS := -L/usr/local/cuda/lib64/stubs -lcuda -L/usr/local/cuda/lib64 -lcudart $(CUVS_LDFLAGS) -lstdc++
+	TAGS += -tags "gpu"
 endif
 
-CGO_OPTS :=CGO_CFLAGS="-I$(THIRDPARTIES_INSTALL_DIR)/include"
+ifeq ($(TYPECHECK),1)
+	TAGS += -tags "typecheck"
+endif
+
+CGO_OPTS :=CGO_CFLAGS="-I$(THIRDPARTIES_INSTALL_DIR)/include $(CUDA_CFLAGS)"
 GOLDFLAGS=-ldflags="-extldflags '$(CUDA_LDFLAGS) -L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,\$${ORIGIN}/lib -fopenmp' $(VERSION_INFO)"
-TAGS :=
 
 ifeq ("$(UNAME_S)","darwin")
 GOLDFLAGS:=-ldflags="-extldflags '-L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,@executable_path/lib' $(VERSION_INFO)"
@@ -233,6 +268,12 @@ debug: override RACE_OPT := -race
 debug: override DEBUG_OPT := -gcflags=all="-N -l"
 debug: override CGO_DEBUG_OPT := debug
 debug: build
+
+# build mo-service binary with typecheck enabled
+# enables type checking for ToSliceNoTypeCheck and ToSliceNoTypeCheck2
+.PHONY: build-typecheck
+build-typecheck: override TYPECHECK := 1
+build-typecheck: build
 
 ###############################################################################
 # run unit tests
@@ -303,38 +344,105 @@ DEV_MOUNT ?=
 .PHONY: dev-help
 dev-help:
 	@echo "Local Multi-CN Development Environment Commands:"
-	@echo "  make dev-build          - Build MatrixOne docker image (local tag)"
-	@echo "  make dev-up             - Start multi-CN cluster with local image"
+	@echo "  make dev-build          - Build MatrixOne docker image (typecheck enabled by default)"
+	@echo "  make dev-build TYPECHECK=0 - Build without typecheck (for performance testing)"
+	@echo "  make dev-build-force    - Force rebuild (typecheck enabled by default)"
+	@echo "  make dev-build-force TYPECHECK=0 - Force rebuild without typecheck"
+	@echo "  make dev-up             - Start multi-CN cluster with local image (with NET_ADMIN for network chaos)"
 	@echo "  make dev-up-latest      - Start multi-CN cluster with latest official image"
 	@echo "  make dev-up-test        - Start with test directory mounted"
+	@echo "  make dev-up-grafana-local - Start Grafana dashboard (port 3001)"
 	@echo "  make dev-down           - Stop multi-CN cluster"
-	@echo "  make dev-restart        - Restart multi-CN cluster (all services)"
+	@echo "  make dev-restart        - Restart multi-CN cluster (all services, preserves NET_ADMIN)"
 	@echo "  make dev-restart-cn1    - Restart CN1 only"
 	@echo "  make dev-restart-cn2    - Restart CN2 only"
 	@echo "  make dev-restart-proxy  - Restart Proxy only"
 	@echo "  make dev-restart-log    - Restart Log service only"
 	@echo "  make dev-restart-tn     - Restart TN only"
+	@echo "  make dev-up-grafana-local - Start Grafana dashboard (port 3001)"
+	@echo "  make dev-down-grafana-local - Stop Grafana dashboard"
 	@echo "  make dev-ps             - Show service status"
+	@echo "  make dev-check-grafana - Check if Grafana is ready (port 3001)"
 	@echo "  make dev-logs           - Show all logs (tail -f)"
 	@echo "  make dev-logs-cn1       - Show CN1 logs"
 	@echo "  make dev-logs-cn2       - Show CN2 logs"
 	@echo "  make dev-logs-proxy     - Show proxy logs"
+	@echo "  make dev-logs-grafana-local - Show Grafana logs"
 	@echo "  make dev-clean          - Stop and remove all data (WARNING: destructive!)"
-	@echo "  make dev-config         - Generate config from config.env"
+	@echo "  make dev-cleanup        - Interactive cleanup (stops containers, removes data directories)"
+	@echo "  make dev-config         - Generate config from config.env (default: check-fraction=1000)"
 	@echo "  make dev-config-example - Create config.env.example file"
+	@echo "  make dev-setup-docker-mirror - Configure Docker registry mirror (for faster pulls)"
 	@echo "  make dev-edit-cn1       - Edit CN1 configuration interactively"
 	@echo "  make dev-edit-cn2       - Edit CN2 configuration interactively"
 	@echo "  make dev-edit-proxy     - Edit Proxy configuration interactively"
 	@echo "  make dev-edit-log       - Edit Log service configuration interactively"
 	@echo "  make dev-edit-tn        - Edit TN configuration interactively"
 	@echo "  make dev-edit-common    - Edit common configuration (all services)"
+	@echo "  make dev-setup-docker-mirror - Configure Docker registry mirror (for faster pulls)"
+	@echo ""
+	@echo "Dashboard Management (via mo-tool):"
+	@echo "  Dashboard commands (default: local mode, port 3001):"
+	@echo "    make dev-create-dashboard        - Create dashboards"
+	@echo "    make dev-list-dashboard          - List dashboards"
+	@echo "    make dev-delete-dashboard        - Delete all dashboards in folder"
+	@echo ""
+	@echo "  Custom options:"
+	@echo "    DASHBOARD_MODE=cloud DASHBOARD_PORT=3000 make dev-create-dashboard"
+	@echo "    DASHBOARD_MODE=k8s DASHBOARD_PORT=3001 make dev-create-dashboard"
+	@echo "    DASHBOARD_HOST=localhost DASHBOARD_PORT=3001 make dev-create-dashboard"
+	@echo ""
+	@echo "  Or use mo-tool directly:"
+	@echo "    ./mo-tool dashboard create --mode local --port 3001"
+	@echo "    ./mo-tool dashboard list --mode cloud --port 3000"
+	@echo "    ./mo-tool dashboard delete --mode local --port 3001          # Delete all dashboards in folder"
+	@echo "    ./mo-tool dashboard delete-dashboard --uid <uid>             # Delete single dashboard by UID"
+	@echo "    ./mo-tool dashboard delete-folder --mode local --port 3001   # Delete entire folder and all dashboards"
 	@echo ""
 	@echo "Examples:"
 	@echo "  make dev-build && make dev-up              # Build and start"
 	@echo "  make dev-up-test                           # Start with test files"
+	@echo "  make dev-up-grafana-local                  # Start Grafana dashboard (port 3001)"
 	@echo "  make DEV_VERSION=latest dev-up             # Use official latest"
 	@echo "  make DEV_VERSION=nightly dev-up            # Use nightly build"
 	@echo "  make DEV_MOUNT='../../test:/test:ro' dev-up  # Custom mount"
+	@echo ""
+	@echo "Network Chaos Testing:"
+	@echo "  Containers (mo-cn1, mo-cn2, mo-tn) are configured with NET_ADMIN capability"
+	@echo "  This enables network chaos testing using tc (traffic control) tool"
+	@echo ""
+	@echo "  Network-only mode (containers keep running):"
+	@echo "    make dev-chaos-light          - Light network chaos (10-30ms delay, 1-3% loss)"
+	@echo "    make dev-chaos-moderate      - Moderate network chaos (50-150ms delay, 5-10% loss)"
+	@echo "    make dev-chaos-severe        - Severe network chaos (200-400ms delay, 15-25% loss)"
+	@echo "    make dev-chaos-inter-region  - Inter-region network (100-200ms delay, 2-5% loss)"
+	@echo "    make dev-chaos-inter-continent - Inter-continent network (300-500ms delay, 5-10% loss)"
+	@echo "    make dev-chaos-congestion     - Network congestion (50-100ms delay, 10-20% loss)"
+	@echo "    make dev-chaos-bandwidth     - Bandwidth limitation (10Mbps)"
+	@echo "    make dev-chaos-random        - Random delay or loss"
+	@echo ""
+	@echo "  Custom network chaos:"
+	@echo "    make dev-chaos CN=cn1 TYPE=delay DELAY=100    # 100ms delay on cn1 (inject until Ctrl+C)"
+	@echo "    make dev-chaos CN=cn2 TYPE=loss LOSS=20        # 20% loss on cn2 (inject until Ctrl+C)"
+	@echo "    make dev-chaos CN=cn1,cn2 TYPE=delay DELAY=100  # 100ms delay on cn1 and cn2 (inject until Ctrl+C)"
+	@echo "    make dev-chaos CN=cn1,tn TYPE=loss LOSS=20      # 20% loss on cn1 and tn (inject until Ctrl+C)"
+	@echo "    make dev-chaos CN=cn1,cn2,tn TYPE=delay DELAY=150  # 150ms delay on all nodes (inject until Ctrl+C)"
+	@echo ""
+	@echo "  Combined network chaos (delay + loss + bandwidth):"
+	@echo "    make dev-chaos CN=cn1 TYPE=combined DELAY=100 LOSS=20 BANDWIDTH=10  # All three effects"
+	@echo "    make dev-chaos CN=cn1,cn2 TYPE=combined DELAY=150 LOSS=15 BANDWIDTH=5 DURATION=60  # For 60 seconds"
+	@echo ""
+	@echo "  Network chaos with duration (auto-restore after duration):"
+	@echo "    make dev-chaos CN=cn1 TYPE=delay DELAY=100 DURATION=60    # 100ms delay for 60 seconds"
+	@echo "    make dev-chaos CN=cn1,cn2 TYPE=loss LOSS=20 DURATION=120  # 20% loss for 120 seconds"
+	@echo "    make dev-chaos CN=cn1,tn TYPE=delay DELAY=150 DURATION=300  # 150ms delay for 5 minutes"
+	@echo ""
+	@echo "  Use chaos-test.sh script directly for advanced options:"
+	@echo "    cd $(DEV_DIR) && ./chaos-test.sh --network-only -c cn1 --scenario moderate"
+	@echo ""
+	@echo "Grafana Monitoring:"
+	@echo "  Access Grafana UI at http://localhost:3000 (admin/admin)"
+	@echo "  Note: Enable metrics in service configs (disableMetric = false)"
 	@echo ""
 	@echo "Configuration (Choose one method):"
 	@echo "  Method 1 (Interactive - Recommended):"
@@ -344,15 +452,48 @@ dev-help:
 	@echo "    1. Copy: cp $(DEV_DIR)/config.env.example $(DEV_DIR)/config.env"
 	@echo "    2. Edit: vim $(DEV_DIR)/config.env (uncomment and modify)"
 	@echo "    3. Generate: make dev-config (or auto-generated on dev-up)"
+	@echo ""
+	@echo "Memory Allocation Check (check-fraction):"
+	@echo "  Default: 1000 (checks 1 in 1000 deallocations for double free/missing free)"
+	@echo "  Lower values = more checks (better error detection, higher overhead)"
+	@echo "  Higher values = fewer checks (better performance, may miss errors)"
+	@echo "  Set CHECK_FRACTION=0 to disable (maximum performance, no error detection)"
+	@echo "  Configure in config.env: CHECK_FRACTION=1000"
 
 .PHONY: dev-build
 dev-build:
-	@echo "Building MatrixOne docker image..."
-	@cd $(DEV_DIR) && ./start.sh build
+	@echo "Building MatrixOne docker image (using smart cache - only rebuilds when code changes)..."
+	@if [ "$(TYPECHECK)" = "0" ]; then \
+		echo "Building WITHOUT typecheck (TYPECHECK=0)"; \
+		cd $(DEV_DIR) && TYPECHECK=0 ./start.sh build mo-log; \
+	else \
+		echo "Building WITH typecheck (default, use TYPECHECK=0 to disable)"; \
+		cd $(DEV_DIR) && TYPECHECK=1 ./start.sh build mo-log; \
+	fi
+
+.PHONY: dev-build-force
+dev-build-force:
+	@echo "Building MatrixOne docker image (forcing complete rebuild, no cache)..."
+	@if [ "$(TYPECHECK)" = "0" ]; then \
+		echo "Building WITHOUT typecheck (TYPECHECK=0)"; \
+		cd $(DEV_DIR) && TYPECHECK=0 ./start.sh build --no-cache mo-log; \
+	else \
+		echo "Building WITH typecheck (default, use TYPECHECK=0 to disable)"; \
+		cd $(DEV_DIR) && TYPECHECK=1 ./start.sh build --no-cache mo-log; \
+	fi
 
 .PHONY: dev-up
 dev-up:
 	@echo "Starting MatrixOne Multi-CN cluster (version: $(DEV_VERSION))..."
+	@echo "Note: Containers (mo-cn1, mo-cn2, mo-tn) are configured with NET_ADMIN capability"
+	@echo "      for network chaos testing using tc (traffic control) tool"
+	@echo ""
+	@echo "⚠️  IMPORTANT: If you added new profiling flags, you need to rebuild the image:"
+	@echo "   make dev-build  # Rebuild with latest code changes"
+	@echo ""
+	@echo "💡 TIP: Customize profiling settings via environment variables:"
+	@echo "   BLOCK_PROFILE_RATE=0 MUTEX_PROFILE_FRACTION=0 make dev-up  # Disable profiling"
+	@echo "   BLOCK_PROFILE_RATE=1 MUTEX_PROFILE_FRACTION=1 make dev-up  # Max detail (debugging)"
 ifeq ($(DEV_MOUNT),)
 	@cd $(DEV_DIR) && ./start.sh -v $(DEV_VERSION) up -d
 else
@@ -363,6 +504,18 @@ endif
 	@echo "  mysql -h 127.0.0.1 -P 6001 -u root -p111  # Via proxy (recommended)"
 	@echo "  mysql -h 127.0.0.1 -P 16001 -u root -p111  # Direct to CN1"
 	@echo "  mysql -h 127.0.0.1 -P 16002 -u root -p111  # Direct to CN2"
+	@echo ""
+	@echo "Performance Profiling (enabled by default):"
+	@echo "  http://localhost:6061/debug/pprof/  # CN1 profiling endpoint"
+	@echo "  http://localhost:6062/debug/pprof/  # CN2 profiling endpoint"
+	@echo "  http://localhost:6063/debug/pprof/  # TN profiling endpoint"
+	@echo ""
+	@echo "Profiling features enabled:"
+	@echo "  - Block profiling (rate=100)"
+	@echo "  - Mutex profiling (fraction=100)"
+	@echo ""
+	@echo "Network chaos testing:"
+	@echo "  cd $(DEV_DIR) && ./chaos-test.sh -c cn1 -n loss --loss 20"
 
 .PHONY: dev-up-latest
 dev-up-latest:
@@ -380,14 +533,82 @@ dev-up-test:
 	@echo "Test directory mounted at /test in containers"
 	@echo "Run SQL files with: mysql> source /test/distributed/cases/your_test.sql;"
 
+.PHONY: dev-up-grafana-local
+dev-up-grafana-local:
+	@echo "Starting Grafana dashboard for monitoring MatrixOne services..."
+	@if [ -n "$(HOST_PROMETHEUS_PORT)" ]; then \
+		echo "Using host Prometheus at port $(HOST_PROMETHEUS_PORT)"; \
+	fi
+	@echo ""
+	@echo "Pre-creating directories with correct permissions..."
+	@DOCKER_UID=$$(id -u) && \
+		DOCKER_GID=$$(id -g) && \
+		mkdir -p prometheus-local-data grafana-local-data grafana-local-data/dashboards && \
+		chown -R $$DOCKER_UID:$$DOCKER_GID prometheus-local-data grafana-local-data 2>/dev/null || true
+	@echo "Checking and fixing ownership for existing directories..."
+	@DOCKER_UID=$$(id -u) && \
+		DOCKER_GID=$$(id -g) && \
+		if [ -d grafana-local-data ] && find grafana-local-data -user root 2>/dev/null | grep -q .; then \
+			echo "Fixing ownership for grafana-local-data (found root-owned files)..." && \
+			sudo chown -R $$DOCKER_UID:$$DOCKER_GID grafana-local-data 2>/dev/null || \
+			echo "Warning: Could not fix ownership. You may need to run: sudo chown -R $$DOCKER_UID:$$DOCKER_GID grafana-local-data"; \
+		fi && \
+		if [ -d prometheus-local-data ] && find prometheus-local-data -user root 2>/dev/null | grep -q .; then \
+			echo "Fixing ownership for prometheus-local-data (found root-owned files)..." && \
+			sudo chown -R $$DOCKER_UID:$$DOCKER_GID prometheus-local-data 2>/dev/null || \
+			echo "Warning: Could not fix ownership. You may need to run: sudo chown -R $$DOCKER_UID:$$DOCKER_GID prometheus-local-data"; \
+		fi
+	@cd $(DEV_DIR) && \
+		export DOCKER_UID=$$(id -u) && \
+		export DOCKER_GID=$$(id -g) && \
+		export HOST_PROMETHEUS_PORT=$(HOST_PROMETHEUS_PORT) && \
+		./start.sh --profile prometheus-local up -d || \
+		(echo "" && \
+		 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" && \
+		 echo "❌ Docker pull failed! Please configure Docker mirror:" && \
+		 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" && \
+		 echo "" && \
+		 echo "Quick fix (recommended):" && \
+		 echo "  cd $(DEV_DIR)" && \
+		 echo "  sudo ./setup-docker-mirror.sh" && \
+		 echo "" && \
+		 echo "Or use Makefile command:" && \
+		 echo "  sudo make dev-setup-docker-mirror" && \
+		 echo "" && \
+		 echo "Then retry:" && \
+		 echo "  make dev-up-grafana-local" && \
+		 echo "" && \
+		 exit 1)
+	@echo ""
+	@echo "✅ Monitoring dashboard started! Access at:"
+	@echo "  http://localhost:3001  # Grafana UI (admin/admin)"
+	@echo ""
+	@if [ -n "$(HOST_PROMETHEUS_PORT)" ]; then \
+		echo "Grafana is configured to use host Prometheus at port $(HOST_PROMETHEUS_PORT)"; \
+	else \
+		echo "Grafana is using internal Prometheus (prometheus-local)"; \
+		echo "To use host Prometheus, set HOST_PROMETHEUS_PORT:"; \
+		echo "  HOST_PROMETHEUS_PORT=9090 make dev-up-grafana-local"; \
+	fi
+	@echo ""
+	@echo "Make sure your MatrixOne services have metrics enabled:"
+	@echo "  [observability]"
+	@echo "  disableMetric = false"
+	@echo "  enable-metric-to-prom = true"
+	@echo "  status-port = 7001"
+
 .PHONY: dev-down
 dev-down:
 	@echo "Stopping MatrixOne Multi-CN cluster..."
-	@cd $(DEV_DIR) && ./start.sh down
+	@cd $(DEV_DIR) && \
+		export DOCKER_UID=$$(id -u) && \
+		export DOCKER_GID=$$(id -g) && \
+		./start.sh --profile matrixone down
 
 .PHONY: dev-restart
 dev-restart:
 	@echo "Restarting MatrixOne Multi-CN cluster..."
+	@echo "Note: NET_ADMIN capability is preserved for network chaos testing"
 	@cd $(DEV_DIR) && ./start.sh restart
 
 # Restart individual services
@@ -415,6 +636,12 @@ dev-restart-log:
 dev-restart-tn:
 	@echo "Restarting TN..."
 	@cd $(DEV_DIR) && docker compose restart mo-tn
+
+.PHONY: dev-down-grafana-local
+dev-down-grafana-local:
+	@echo "Stopping and removing local monitoring services (Grafana + Prometheus)..."
+	@cd $(DEV_DIR) && docker compose --profile prometheus-local down
+	@echo "✅ Monitoring services stopped and removed"
 
 .PHONY: dev-ps
 dev-ps:
@@ -444,6 +671,68 @@ dev-logs-tn:
 dev-logs-log:
 	@cd $(DEV_DIR) && ./start.sh logs -f mo-log
 
+.PHONY: dev-logs-grafana-local
+dev-logs-grafana-local:
+	@cd $(DEV_DIR) && docker compose --profile prometheus-local logs -f grafana-local
+
+.PHONY: dev-check-grafana
+dev-check-grafana:
+	@cd $(DEV_DIR) && ./start.sh check-grafana
+
+# Network Chaos Testing Commands
+.PHONY: dev-chaos dev-chaos-light dev-chaos-moderate dev-chaos-severe dev-chaos-inter-region dev-chaos-inter-continent dev-chaos-congestion dev-chaos-bandwidth dev-chaos-random
+dev-chaos:
+	@if [ -z "$(CN)" ]; then \
+		echo "Error: CN is required. Use: make dev-chaos CN=cn1 TYPE=delay DELAY=100"; \
+		echo "  For multiple nodes: make dev-chaos CN=cn1,cn2,tn TYPE=delay DELAY=100"; \
+		exit 1; \
+	fi
+	@if [ -z "$(TYPE)" ]; then \
+		echo "Error: TYPE is required. Use: make dev-chaos CN=cn1 TYPE=delay DELAY=100"; \
+		echo "  For multiple nodes: make dev-chaos CN=cn1,cn2,tn TYPE=delay DELAY=100"; \
+		exit 1; \
+	fi
+	@cd $(DEV_DIR) && ./chaos-test.sh --network-only -c $(CN) -n $(TYPE) \
+		$$([ -n "$(DELAY)" ] && echo "--delay $(DELAY)") \
+		$$([ -n "$(LOSS)" ] && echo "--loss $(LOSS)") \
+		$$([ -n "$(BANDWIDTH)" ] && echo "--bandwidth $(BANDWIDTH)") \
+		$$([ -n "$(DURATION)" ] && echo "--duration $(DURATION)")
+
+dev-chaos-light:
+	@cd $(DEV_DIR) && ./chaos-test.sh --network-only -c $(or $(CN),cn1) --scenario light
+
+dev-chaos-moderate:
+	@cd $(DEV_DIR) && ./chaos-test.sh --network-only -c $(or $(CN),cn1) --scenario moderate
+
+dev-chaos-severe:
+	@cd $(DEV_DIR) && ./chaos-test.sh --network-only -c $(or $(CN),cn1) --scenario severe
+
+dev-chaos-inter-region:
+	@cd $(DEV_DIR) && ./chaos-test.sh --network-only -c $(or $(CN),cn1) --scenario inter-region
+
+dev-chaos-inter-continent:
+	@cd $(DEV_DIR) && ./chaos-test.sh --network-only -c $(or $(CN),cn1) --scenario inter-continent
+
+dev-chaos-congestion:
+	@cd $(DEV_DIR) && ./chaos-test.sh --network-only -c $(or $(CN),cn1) --scenario congestion
+
+dev-chaos-bandwidth:
+	@cd $(DEV_DIR) && ./chaos-test.sh --network-only -c $(or $(CN),cn1) --scenario bandwidth
+
+dev-chaos-random:
+	@cd $(DEV_DIR) && ./chaos-test.sh --network-only -c $(or $(CN),cn1) --random
+
+.PHONY: dev-setup-docker-mirror
+dev-setup-docker-mirror:
+	@echo "Setting up Docker registry mirror for faster image pulls..."
+	@echo ""
+	@if [ "$$(id -u)" -ne 0 ]; then \
+		echo "This command needs to be run with sudo:"; \
+		echo "  sudo make dev-setup-docker-mirror"; \
+		exit 1; \
+	fi
+	@bash -c 'cd $(DEV_DIR) && ./setup-docker-mirror.sh'
+
 .PHONY: dev-clean
 dev-clean:
 	@echo "WARNING: This will delete all data in mo-data/ and logs/!"
@@ -458,6 +747,11 @@ dev-clean:
 	else \
 		echo "Cancelled."; \
 	fi
+
+.PHONY: dev-cleanup
+dev-cleanup:
+	@echo "Running interactive cleanup script..."
+	@cd $(DEV_DIR) && ./cleanup.sh
 
 .PHONY: dev-shell-cn1
 dev-shell-cn1:
@@ -533,6 +827,153 @@ dev-edit-common:
 	@cd $(DEV_DIR) && ./edit-config.sh common
 
 ###############################################################################
+# Dashboard Creation
+###############################################################################
+
+DASHBOARD_PORT ?= 3001
+DASHBOARD_HOST ?= 127.0.0.1
+DASHBOARD_MODE ?= local
+DASHBOARD_USERNAME ?= admin
+DASHBOARD_PASSWORD ?= admin
+DASHBOARD_DATASOURCE ?= Prometheus
+
+.PHONY: dev-create-dashboard
+dev-create-dashboard: mo-tool
+	@echo "Creating dashboard..."
+	@echo "  Mode: $(DASHBOARD_MODE)"
+	@echo "  Host: $(DASHBOARD_HOST):$(DASHBOARD_PORT)"
+	@echo "  Username: $(DASHBOARD_USERNAME)"
+	@./mo-tool dashboard \
+		--host $(DASHBOARD_HOST) \
+		--port $(DASHBOARD_PORT) \
+		--mode $(DASHBOARD_MODE) \
+		--username $(DASHBOARD_USERNAME) \
+		--password $(DASHBOARD_PASSWORD) \
+		--datasource $(DASHBOARD_DATASOURCE)
+
+
+# List dashboards
+.PHONY: dev-list-dashboard
+dev-list-dashboard: mo-tool
+	@echo "Listing dashboards..."
+	@echo "  Mode: $(DASHBOARD_MODE)"
+	@echo "  Host: $(DASHBOARD_HOST):$(DASHBOARD_PORT)"
+	@echo "  Username: $(DASHBOARD_USERNAME)"
+	@./mo-tool dashboard list \
+		--host $(DASHBOARD_HOST) \
+		--port $(DASHBOARD_PORT) \
+		--mode $(DASHBOARD_MODE) \
+		--username $(DASHBOARD_USERNAME) \
+		--password $(DASHBOARD_PASSWORD) \
+		--datasource $(DASHBOARD_DATASOURCE)
+
+.PHONY: dev-list-dashboard-local
+dev-list-dashboard-local:
+	@$(MAKE) DASHBOARD_MODE=local DASHBOARD_PORT=3001 dev-list-dashboard
+
+.PHONY: dev-list-dashboard-cluster
+dev-list-dashboard-cluster:
+	@$(MAKE) DASHBOARD_MODE=cloud DASHBOARD_PORT=3000 DASHBOARD_DATASOURCE=Prometheus dev-list-dashboard
+
+.PHONY: dev-list-dashboard-k8s
+dev-list-dashboard-k8s:
+	@$(MAKE) DASHBOARD_MODE=k8s DASHBOARD_PORT=$(DASHBOARD_PORT) dev-list-dashboard
+
+.PHONY: dev-list-dashboard-cloud-ctrl
+dev-list-dashboard-cloud-ctrl:
+	@$(MAKE) DASHBOARD_MODE=cloud-ctrl DASHBOARD_PORT=$(DASHBOARD_PORT) dev-list-dashboard
+
+# Delete dashboards
+.PHONY: dev-delete-dashboard
+dev-delete-dashboard: mo-tool
+	@echo "Deleting dashboards..."
+	@echo "  Mode: $(DASHBOARD_MODE)"
+	@echo "  Host: $(DASHBOARD_HOST):$(DASHBOARD_PORT)"
+	@echo "  Username: $(DASHBOARD_USERNAME)"
+	@./mo-tool dashboard delete \
+		--host $(DASHBOARD_HOST) \
+		--port $(DASHBOARD_PORT) \
+		--mode $(DASHBOARD_MODE) \
+		--username $(DASHBOARD_USERNAME) \
+		--password $(DASHBOARD_PASSWORD) \
+		--datasource $(DASHBOARD_DATASOURCE)
+
+
+###############################################################################
+# Local Development with MinIO Storage
+###############################################################################
+
+MINIO_DIR := etc/launch-minio-local
+MINIO_DATA_DIR := $(MINIO_DIR)/mo-data/minio-data
+
+.PHONY: dev-up-minio-local
+dev-up-minio-local:
+	@echo "Starting MinIO service for local MatrixOne..."
+	@mkdir -p $(MINIO_DATA_DIR)
+	@DOCKER_PLATFORM=$$(uname -m | sed 's/x86_64/linux\/amd64/; s/arm64/linux\/arm64/; s/aarch64/linux\/arm64/') && \
+		echo "Detected platform: $$DOCKER_PLATFORM" && \
+		cd $(MINIO_DIR) && \
+		DOCKER_UID=$$(id -u) DOCKER_GID=$$(id -g) DOCKER_PLATFORM=$$DOCKER_PLATFORM docker compose up -d
+	@echo ""
+	@echo "✅ MinIO started!"
+	@echo "  - API: http://127.0.0.1:9000"
+	@echo "  - Console: http://127.0.0.1:9001"
+	@echo "  - Access Key: minio"
+	@echo "  - Secret Key: minio123"
+	@echo "  - Data directory: $(MINIO_DATA_DIR)"
+
+.PHONY: dev-down-minio-local
+dev-down-minio-local:
+	@echo "Stopping MinIO service..."
+	@cd $(MINIO_DIR) && docker compose down
+	@echo "✅ MinIO stopped"
+
+.PHONY: dev-restart-minio-local
+dev-restart-minio-local:
+	@echo "Restarting MinIO service..."
+	@cd $(MINIO_DIR) && docker compose restart minio
+	@echo "✅ MinIO restarted"
+
+.PHONY: dev-status-minio-local
+dev-status-minio-local:
+	@cd $(MINIO_DIR) && docker compose ps
+
+.PHONY: dev-logs-minio-local
+dev-logs-minio-local:
+	@cd $(MINIO_DIR) && docker compose logs -f minio
+
+.PHONY: dev-clean-minio-local
+dev-clean-minio-local:
+	@echo "WARNING: This will delete all MinIO data!"
+	@read -p "Continue? [y/N] " -n 1 -r; \
+	echo; \
+	if [[ $$REPLY =~ ^[Yy]$$ ]]; then \
+		echo "Stopping MinIO..."; \
+		cd $(MINIO_DIR) && docker compose down; \
+		echo "Removing data..."; \
+		rm -rf $(MINIO_DATA_DIR); \
+		echo "✅ MinIO data cleaned!"; \
+	else \
+		echo "Cancelled."; \
+	fi
+
+.PHONY: launch-minio
+launch-minio: build dev-up-minio-local
+	@echo ""
+	@echo "Starting MatrixOne with MinIO storage..."
+	@echo "  Launch config: $(MINIO_DIR)/launch.toml"
+	@echo ""
+	@./mo-service -launch $(MINIO_DIR)/launch.toml
+
+.PHONY: launch-minio-debug
+launch-minio-debug: debug dev-up-minio-local
+	@echo ""
+	@echo "Starting MatrixOne (debug mode) with MinIO storage..."
+	@echo "  Launch config: $(MINIO_DIR)/launch.toml"
+	@echo ""
+	@./mo-service -launch $(MINIO_DIR)/launch.toml
+
+###############################################################################
 # clean
 ###############################################################################
 
@@ -571,12 +1012,12 @@ static-check: config err-check
 	$(CGO_OPTS) golangci-lint run -v -c .golangci.yml ./...
 
 fmtErrs := $(shell grep -onr 'fmt.Errorf' pkg/ --exclude-dir=.git --exclude-dir=vendor \
-				--exclude=*.pb.go --exclude=system_vars.go --exclude=Makefile)
-errNews := $(shell grep -onr 'errors.New' pkg/ --exclude-dir=.git --exclude-dir=vendor \
-				--exclude=*.pb.go --exclude=system_vars.go --exclude=Makefile)
-withTimeout := $(shell grep -onr 'context.WithTimeout' pkg/ --exclude-dir=.git --exclude-dir=vendor \
 				--exclude=*.pb.go --exclude=*_test.go --exclude=system_vars.go --exclude=Makefile)
-withDeadline := $(shell grep -onr 'context.WithDeadline' pkg/ --exclude-dir=.git --exclude-dir=vendor \
+errNews := $(shell grep -onr 'errors.New' pkg/ --exclude-dir=.git --exclude-dir=vendor \
+				--exclude=*.pb.go --exclude=*_test.go --exclude=system_vars.go --exclude=Makefile)
+withTimeout := $(shell grep -onr 'context\.WithTimeout[^C]' pkg/ --exclude-dir=.git --exclude-dir=vendor \
+				--exclude=*.pb.go --exclude=*_test.go --exclude=system_vars.go --exclude=Makefile)
+withDeadline := $(shell grep -onr 'context\.WithDeadline[^C]' pkg/ --exclude-dir=.git --exclude-dir=vendor \
 				--exclude=*.pb.go --exclude=*_test.go --exclude=system_vars.go --exclude=Makefile)
 
 
@@ -592,12 +1033,12 @@ ifneq ("$(strip $(fmtErrs))$(strip $(errNews))", "")
 		$(warning One of 'errors.New()' is called at: $(shell printf "%s\n" $(errNews) | head -1))
  endif
  ifneq ("$(strip $(withTimeout))", "")
- 		$(warning 'context.WithTimeout' is found.)
- 		$(warning One of 'context.WithTimeout' is called at: $(shell printf "%s\n" $(errNews) | head -1))
+		$(warning 'context.WithTimeout' is found.)
+		$(warning One of 'context.WithTimeout' is called at: $(shell printf "%s\n" $(withTimeout) | head -1))
  endif
  ifneq ("$(strip $(withDeadline))", "")
- 		$(warning 'context.WithDeadline' is found.)
- 		$(warning One of 'context.WithDeadline' is called at: $(shell printf "%s\n" $(errNews) | head -1))
+		$(warning 'context.WithDeadline' is found.)
+		$(warning One of 'context.WithDeadline' is called at: $(shell printf "%s\n" $(withDeadline) | head -1))
  endif
 	$(error Use moerr instead.)
 else

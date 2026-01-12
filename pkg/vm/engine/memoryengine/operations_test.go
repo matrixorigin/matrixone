@@ -426,24 +426,6 @@ func TestOperationsMarshalAndUnmarshal(t *testing.T) {
 			validateFunc: require.Equal,
 		},
 		{
-			in: &TruncateRelationReq{
-				NewTableID:   ID(10),
-				OldTableID:   ID(11),
-				DatabaseID:   ID(12),
-				DatabaseName: "database1",
-				Name:         "table1",
-			},
-			out:          &TruncateRelationReq{},
-			validateFunc: require.Equal,
-		},
-		{
-			in: &TruncateRelationResp{
-				ID: ID(13),
-			},
-			out:          &TruncateRelationResp{},
-			validateFunc: require.Equal,
-		},
-		{
 			in: &AddTableDefReq{
 				TableID:      ID(11),
 				DatabaseName: "database1",

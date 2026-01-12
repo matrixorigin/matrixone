@@ -83,7 +83,7 @@ func (builder *QueryBuilder) handleMessageFromTopToScan(nodeID int32) {
 	msgHeader := plan.MsgHeader{MsgTag: msgTag, MsgType: int32(message.MsgTopValue)}
 	node.SendMsgList = append(node.SendMsgList, msgHeader)
 	scanNode.RecvMsgList = append(scanNode.RecvMsgList, msgHeader)
-	scanNode.OrderBy = append(scanNode.OrderBy, DeepCopyOrderBy(node.OrderBy[0]))
+	scanNode.OrderBy = append(scanNode.OrderBy, DeepCopyOrderBySpec(node.OrderBy[0]))
 }
 
 func (builder *QueryBuilder) handleHashMapMessages(nodeID int32) {

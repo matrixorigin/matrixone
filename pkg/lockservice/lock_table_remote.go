@@ -17,6 +17,7 @@ package lockservice
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"errors"
 	"io"
 	"net"
@@ -114,14 +115,31 @@ func (l *remoteLockTable) lock(
 		return
 	}
 
-	// encounter any error, we also added lock to txn, because we need unlock on remote
-	_ = txn.lockAdded(l.bind.Group, l.bind, rows, l.logger)
+	// Only record the lock on errors when the request could have been observed
+	// by the remote side. For local context timeouts / cancellations, the
+	// request may never be sent, and recording a phantom lock will leak waiters.
+	if !skipTrackLockOnError(ctx, err) {
+		_ = txn.lockAdded(l.bind.Group, l.bind, rows, l.logger)
+	}
 	logRemoteLockFailed(l.logger, txn, rows, opts, l.bind, err)
 	// encounter any error, we need try to check bind is valid.
 	// And use origin error to return, because once handlerError
 	// swallows the error, the transaction will not be abort.
+	originalErr := err
 	if e := l.handleError(err, true); e != nil {
 		err = e
+	} else {
+		// handleError returned nil, meaning bind changed and error was swallowed
+		// This is a critical issue: lock failed but error was swallowed, transaction may continue incorrectly
+		// Return ErrLockTableBindChanged to trigger retry in lockWithRetry
+		l.logger.Error("CRITICAL: lock failed but error swallowed due to bind change",
+			zap.String("txn-id", hex.EncodeToString(txn.txnID)),
+			zap.Uint64("table-id", l.bind.Table),
+			zap.String("original-error", originalErr.Error()),
+			zap.String("bind", l.bind.DebugString()),
+		)
+		// Return ErrLockTableBindChanged to trigger retry, preventing transaction from continuing without lock
+		err = moerr.NewLockTableBindChangedNoCtx()
 	}
 	cb(pb.Result{}, err)
 }
@@ -136,18 +154,24 @@ func (l *remoteLockTable) unlock(
 		txn,
 		l.bind,
 	)
+	retryCount := 0
 	for {
 		err := l.doUnlock(txn, commitTS, mutations...)
 		if err == nil {
 			return
 		}
 
-		logUnlockTableOnRemoteFailed(
-			l.logger,
-			txn,
-			l.bind,
-			err,
-		)
+		retryCount++
+		// Rate limit unlock error logs: log first 3, then every 100th
+		if retryCount <= 3 || retryCount%100 == 0 {
+			logUnlockTableOnRemoteFailedWithCount(
+				l.logger,
+				txn,
+				l.bind,
+				err,
+				retryCount,
+			)
+		}
 		// unlock cannot fail and must ensure that all locks have been
 		// released.
 		//
@@ -246,8 +270,8 @@ func (l *remoteLockTable) getBind() pb.LockTable {
 	return l.bind
 }
 
-func (l *remoteLockTable) close() {
-	logLockTableClosed(l.logger, l.bind, true)
+func (l *remoteLockTable) close(reason closeReason) {
+	logLockTableClosed(l.logger, l.bind, true, reason)
 }
 
 func (l *remoteLockTable) handleError(
@@ -284,6 +308,30 @@ func (l *remoteLockTable) handleError(
 		return nil
 	}
 	return oldError
+}
+
+// skipTrackLockOnError returns true when the error indicates the request
+// definitely did not reach the remote lock service (e.g. local context
+// cancellation/timeout). In such cases, recording the lock would create a
+// phantom holder that can never be cleaned up.
+//
+// If the request actually reached the remote side before timeout, the remote
+// lock will be cleaned up by the keepRemoteLock timeout mechanism (bounded by
+// RemoteLockTimeout, default 10m), so skipping the local bookkeeping is safe
+// though it may introduce a bounded extra wait.
+func skipTrackLockOnError(ctx context.Context, err error) bool {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		if errors.Is(ctxErr, context.DeadlineExceeded) ||
+			errors.Is(ctxErr, context.Canceled) {
+			return true
+		}
+	}
+	if errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, context.Canceled) ||
+		moerr.IsMoErrCode(err, moerr.ErrRPCTimeout) {
+		return true
+	}
+	return false
 }
 
 func retryRemoteLockError(err error) bool {

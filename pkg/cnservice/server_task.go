@@ -39,6 +39,7 @@ import (
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/idxcron"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"go.uber.org/zap"
@@ -349,6 +350,14 @@ func (s *service) registerExecutorsLocked() {
 			common.PublicationAllocator,
 			nil,  // upstreamSQLHelperFactory can be nil for now
 			s.pu, // pass ParameterUnit from service
+		),
+	)
+	s.task.runner.RegisterExecutor(task.TaskCode_IndexUpdateTaskExecutor,
+		idxcron.IndexUpdateTaskExecutorFactory(
+			s.cfg.UUID,
+			s.storeEngine,
+			s._txnClient,
+			common.ISCPAllocator,
 		),
 	)
 }

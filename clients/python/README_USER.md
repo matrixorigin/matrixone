@@ -19,6 +19,9 @@ A comprehensive, high-level Python SDK for MatrixOne that provides SQLAlchemy-li
 - 📋 [Best Practices](https://matrixone.readthedocs.io/en/latest/best_practices.html)
 - 📖 [API Reference](https://matrixone.readthedocs.io/en/latest/api/index.html)
 
+**For Developers:**
+- 🛠️ [MatrixOne Development Guide](../../etc/DEV_README.md) - Complete guide for setting up MatrixOne locally, multi-CN clusters, monitoring, and all `make dev-*` commands
+
 ---
 
 ## ✨ Features
@@ -136,6 +139,13 @@ class User(Base):
 ---
 
 ## Quick Start
+
+> **💡 Need to set up MatrixOne server?**  
+> If you don't have MatrixOne running yet, check out the [MatrixOne Development Guide](../../etc/DEV_README.md) for instructions on:
+> - Starting a standalone MatrixOne instance
+> - Setting up a multi-CN cluster with Docker Compose
+> - Enabling monitoring and metrics
+> - All `make dev-*` commands
 
 ### Basic Usage
 

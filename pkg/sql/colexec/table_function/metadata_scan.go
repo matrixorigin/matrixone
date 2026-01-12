@@ -259,6 +259,9 @@ func fillMetadataInfoBat(opBat *batch.Batch, proc *process.Process, tableFunctio
 		case plan.MetadataScanInfo_SUM: // TODO: find a way to show this info
 			vector.AppendBytes(opBat.Vecs[i], zm.GetSumBuf(), zmNull, mp)
 
+		case plan.MetadataScanInfo_LEVEL:
+			vector.AppendFixed(opBat.Vecs[i], info.Level, false, mp)
+
 		default:
 		}
 	}

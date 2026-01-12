@@ -57,6 +57,7 @@ pitr05    2024-12-25 16:34:55    2024-12-25 16:34:55    cluster    *    *    *  
 pitr10    2024-12-25 16:34:55    2024-12-25 16:34:55    database    sys    db01    *    1    h
 pitr12    2024-12-25 16:34:55    2024-12-25 16:34:55    table    sys    db01    table01    1    h
 drop account if exists acc01;
+drop account if exists acc02;
 create account acc01 admin_name = 'test_account' identified by '111';
 drop pitr if exists pitr14;
 create pitr pitr14 for account acc01 range 1 'h';

@@ -192,3 +192,63 @@ func TestNewErrTooBigPrecision(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, ErrTooBigPrecision, code)
 }
+
+func Test_ForCoverage(t *testing.T) {
+	ctx := context.Background()
+	err := NewDataTruncatedf(ctx, "test", "test")
+	require.True(t, IsMoErrCode(err, ErrDataTruncated))
+
+	err = NewConstraintViolationf(ctx, "test")
+	require.True(t, IsMoErrCode(err, ErrConstraintViolation))
+
+	err = NewTxnWriteConflictf(ctx, "test")
+	require.True(t, IsMoErrCode(err, ErrTxnWriteConflict))
+
+	err = NewTxnErrorf(ctx, "test")
+	require.True(t, IsMoErrCode(err, ErrTxnError))
+
+	err = NewTAEErrorf(ctx, "test")
+	require.True(t, IsMoErrCode(err, ErrTAEError))
+
+	err = NewDragonboatTimeoutf(ctx, "test")
+	require.True(t, IsMoErrCode(err, ErrDragonboatTimeout))
+
+	err = NewDragonboatTimeoutTooSmallf(ctx, "test")
+	require.True(t, IsMoErrCode(err, ErrDragonboatTimeoutTooSmall))
+
+	err = NewDragonboatInvalidDeadlinef(ctx, "test")
+	require.True(t, IsMoErrCode(err, ErrDragonboatInvalidDeadline))
+
+	err = NewDragonboatRejectedf(ctx, "test")
+	require.True(t, IsMoErrCode(err, ErrDragonboatRejected))
+
+	err = NewDragonboatInvalidPayloadSizef(ctx, "test")
+	require.True(t, IsMoErrCode(err, ErrDragonboatInvalidPayloadSize))
+
+	err = NewDragonboatShardNotReadyf(ctx, "test")
+	require.True(t, IsMoErrCode(err, ErrDragonboatShardNotReady))
+
+	err = NewDragonboatSystemClosedf(ctx, "test")
+	require.True(t, IsMoErrCode(err, ErrDragonboatSystemClosed))
+
+	err = NewDragonboatInvalidRangef(ctx, "test")
+	require.True(t, IsMoErrCode(err, ErrDragonboatInvalidRange))
+
+	err = NewDragonboatShardNotFoundf(ctx, "test")
+	require.True(t, IsMoErrCode(err, ErrDragonboatShardNotFound))
+
+	err = NewDragonboatOtherSystemErrorf(ctx, "test")
+	require.True(t, IsMoErrCode(err, ErrDragonboatOtherSystemError))
+
+	err = NewTAECommitf(ctx, "test")
+	require.True(t, IsMoErrCode(err, ErrTAECommit))
+
+	err = NewTAERollbackf(ctx, "test")
+	require.True(t, IsMoErrCode(err, ErrTAERollback))
+
+	err = NewTAEPreparef(ctx, "test")
+	require.True(t, IsMoErrCode(err, ErrTAEPrepare))
+
+	err = NewTxnStaleNoCtxf("test")
+	require.True(t, IsMoErrCode(err, ErrTxnStale))
+}

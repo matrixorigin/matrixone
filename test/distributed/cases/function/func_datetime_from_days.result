@@ -11,67 +11,8 @@ SELECT FROM_DAYS(367) AS date_0001_01_01;
 date_0001_01_01
 0001-01-02
 SELECT FROM_DAYS(1) AS date_0000_01_01;
-internal error: panic runtime error: index out of range [246] with length 13: 
-runtime.goPanicIndex
-	/usr/local/go/src/runtime/panic.go:115
-github.com/matrixorigin/matrixone/pkg/container/types.Date.Calendar
-	/home/fengttt/m/matrixone/pkg/container/types/date.go:582
-github.com/matrixorigin/matrixone/pkg/container/types.Datetime.AddInterval
-	/home/fengttt/m/matrixone/pkg/container/types/datetime.go:397
-github.com/matrixorigin/matrixone/pkg/sql/plan/function.builtInFromDays
-	/home/fengttt/m/matrixone/pkg/sql/plan/function/func_builtin.go:2235
-github.com/matrixorigin/matrixone/pkg/sql/colexec.(*FunctionExpressionExecutor).doFold
-	/home/fengttt/m/matrixone/pkg/sql/colexec/evalExpressionReset.go:171
-github.com/matrixorigin/matrixone/pkg/sql/colexec.(*FunctionExpressionExecutor).Eval
-	/home/fengttt/m/matrixone/pkg/sql/colexec/evalExpression.go:576
-github.com/matrixorigin/matrixone/pkg/sql/colexec.getReadonlyResultFromExpression
-	/home/fengttt/m/matrixone/pkg/sql/colexec/evalExpressionOpt.go:67
-github.com/matrixorigin/matrixone/pkg/sql/colexec.GetReadonlyResultFromExpression
-	/home/fengttt/m/matrixone/pkg/sql/colexec/evalExpressionOpt.go:57
-github.com/matrixorigin/matrixone/pkg/sql/plan/rule.(*ConstantFold).constantFold
-	/home/fengttt/m/matrixone/pkg/sql/plan/rule/constant_fold.go:190
-github.com/matrixorigin/matrixone/pkg/sql/plan/rule.(*ConstantFold).Apply
-	/home/fengttt/m/matrixone/pkg/sql/plan/rule/constant_fold.go:80
-github.com/matrixorigin/matrixone/pkg/sql/plan.(*BaseOptimizer).exploreNode
-	/home/fengttt/m/matrixone/pkg/sql/plan/optimize.go:87
-github.com/matrixorigin/matrixone/pkg/sql/plan.(*BaseOptimizer).optimize
-	/home/fengttt/m/matrixone/pkg/sql/plan/optimize.go:73
-github.com/matrixorigin/matrixone/pkg/sql/plan.(*BaseOptimizer).Optimize
-	/home/fengttt/m/matrixone/pkg/sql/plan/optimize.go:65
-github.com/matrixorigin/matrixone/pkg/frontend.buildPlan
-	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2079
-github.com/matrixorigin/matrixone/pkg/frontend.(*TxnComputationWrapper).Compile
-	/home/fengttt/m/matrixone/pkg/frontend/computation_wrapper.go:210
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmt
-	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2953
-github.com/matrixorigin/matrixone/pkg/frontend.dispatchStmt
-	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2847
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithIncrStmt
-	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2812
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithWorkspace
-	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2756
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithTxn
-	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2631
-github.com/matrixorigin/matrixone/pkg/frontend.executeStmtWithResponse
-	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:2594
-github.com/matrixorigin/matrixone/pkg/frontend.doComQuery
-	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:3237
-github.com/matrixorigin/matrixone/pkg/frontend.ExecRequest
-	/home/fengttt/m/matrixone/pkg/frontend/mysql_cmd_executor.go:3317
-github.com/matrixorigin/matrixone/pkg/frontend.(*Routine).handleRequest
-	/home/fengttt/m/matrixone/pkg/frontend/routine.go:298
-github.com/matrixorigin/matrixone/pkg/frontend.(*RoutineManager).Handler
-	/home/fengttt/m/matrixone/pkg/frontend/routine_manager.go:384
-github.com/matrixorigin/matrixone/pkg/frontend.(*MOServer).handleRequest
-	/home/fengttt/m/matrixone/pkg/frontend/server.go:527
-github.com/matrixorigin/matrixone/pkg/frontend.(*MOServer).handleMessage
-	/home/fengttt/m/matrixone/pkg/frontend/server.go:495
-github.com/matrixorigin/matrixone/pkg/frontend.(*MOServer).handleLoop
-	/home/fengttt/m/matrixone/pkg/frontend/server.go:212
-github.com/matrixorigin/matrixone/pkg/frontend.(*MOServer).handleConn
-	/home/fengttt/m/matrixone/pkg/frontend/server.go:208
-runtime.goexit
-	/usr/local/go/src/runtime/asm_amd64.s:1693
+date_0000_01_01
+null
 SELECT FROM_DAYS(TO_DAYS('2000-01-01')) AS roundtrip_2000;
 roundtrip_2000
 2000-01-01

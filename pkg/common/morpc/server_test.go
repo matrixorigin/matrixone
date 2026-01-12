@@ -162,7 +162,7 @@ func TestStreamServer(t *testing.T) {
 			return nil
 		})
 
-		st, err := c.NewStream(testAddr, false)
+		st, err := c.NewStream(context.Background(), testAddr, false)
 		assert.NoError(t, err)
 		defer func() {
 			assert.NoError(t, st.Close(false))
@@ -219,7 +219,7 @@ func TestStreamServerWithCache(t *testing.T) {
 			return nil
 		})
 
-		st, err := c.NewStream(testAddr, false)
+		st, err := c.NewStream(context.Background(), testAddr, false)
 		assert.NoError(t, err)
 		defer func() {
 			assert.NoError(t, st.Close(false))
@@ -266,7 +266,7 @@ func TestServerTimeoutCacheWillRemoved(t *testing.T) {
 			return cache.Add(request)
 		})
 
-		st, err := c.NewStream(testAddr, false)
+		st, err := c.NewStream(context.Background(), testAddr, false)
 		assert.NoError(t, err)
 		defer func() {
 			assert.NoError(t, st.Close(false))
@@ -303,7 +303,7 @@ func TestStreamServerWithSequenceNotMatch(t *testing.T) {
 			return cs.Write(ctx, request.Message)
 		})
 
-		v, err := c.NewStream(testAddr, false)
+		v, err := c.NewStream(context.Background(), testAddr, false)
 		assert.NoError(t, err)
 		st := v.(*stream)
 		defer func() {
@@ -336,7 +336,7 @@ func TestStreamReadCannotBlockWrite(t *testing.T) {
 			return cs.Write(ctx, request.Message)
 		})
 
-		st, err := c.NewStream(testAddr, false)
+		st, err := c.NewStream(context.Background(), testAddr, false)
 		assert.NoError(t, err)
 		defer func() {
 			assert.NoError(t, st.Close(false))
@@ -380,7 +380,7 @@ func TestCannotGetClosedBackend(t *testing.T) {
 			return cs.Write(ctx, request.Message)
 		})
 
-		st, err := c.NewStream(testAddr, true)
+		st, err := c.NewStream(context.Background(), testAddr, true)
 		require.NoError(t, err)
 		require.NoError(t, st.Close(true))
 
@@ -457,10 +457,13 @@ func testRPCServer(t assert.TestingT, testFunc func(*server), options ...ServerO
 
 func newTestClient(t assert.TestingT, options ...ClientOption) RPCClient {
 	bf := NewGoettyBasedBackendFactory(newTestCodec())
+	// Add auto-create by default for tests
+	defaultOptions := []ClientOption{WithClientEnableAutoCreateBackend()}
+	defaultOptions = append(defaultOptions, options...)
 	c, err := NewClient(
 		"",
 		bf,
-		options...)
+		defaultOptions...)
 	assert.NoError(t, err)
 	return c
 }

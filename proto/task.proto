@@ -74,11 +74,15 @@ option (gogoproto.protosizer_all) = true;
    InitCdc = 7;
    // MO Table Stats Task
    MOTableStats = 8;
+   // ISCP task
+   ISCPExecutor = 9;
+   // Index Update task
+   IndexUpdateTaskExecutor = 10;
   // ISCP task
-  ISCPExecutor = 9;
+  ISCPExecutor = 11;
   // Publication task
-  PublicationExecutor = 10;
-}
+  PublicationExecutor = 12;
+ }
  
  // TaskMetadata is a task metadata abstraction that can be scheduled for execution at any CN node.
  message TaskMetadata {

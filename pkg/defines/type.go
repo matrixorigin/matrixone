@@ -225,6 +225,7 @@ type EngineKey struct{}
 type SqlKey struct{}
 type DatTypKey struct{}
 type TableIDKey struct{}
+type LogicalIdKey struct{}
 
 // CarryOnCtxKeys defines keys needed to be serialized when pass context through net
 var CarryOnCtxKeys = []any{TenantIDKey{}, UserIDKey{}, RoleIDKey{}}
@@ -252,6 +253,10 @@ type InSp struct{}
 // IvfBloomFilter carries BloomFilter bytes for ivf entries scan in internal SQL executor.
 // This key is set on context when invoking internal SQL from ivf_search.
 type IvfBloomFilter struct{}
+
+// IvfReaderParam carries DistRange for ivf entries scan in internal SQL executor.
+// This key is set on context when invoking internal SQL from ivf_search.
+type IvfReaderParam struct{}
 
 // PkCheckByTN whether TN does primary key uniqueness check against transaction's workspace or not.
 type PkCheckByTN struct{}

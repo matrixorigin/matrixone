@@ -1,0 +1,239 @@
+# JSON_ARRAYAGG and JSON_OBJECTAGG examples from MySQL 8.0 docs
+CREATE TABLE t3(o_id INT, attribute VARCHAR(20), value VARCHAR(20));
+INSERT INTO t3 VALUES
+(2,'color','red'),
+(2,'fabric','silk'),
+(3,'color','green'),
+(3,'shape','square');
+SELECT o_id, JSON_ARRAYAGG(attribute) AS attributes FROM t3 GROUP BY o_id ORDER BY o_id;
+SELECT o_id, JSON_OBJECTAGG(attribute, value) AS details FROM t3 GROUP BY o_id ORDER BY o_id;
+
+# Duplicate key handling: last duplicate key wins
+CREATE TABLE t_dup(c VARCHAR(10), i INT);
+INSERT INTO t_dup VALUES ('key',3),('key',4),('key',5);
+SELECT JSON_OBJECTAGG(c,i) AS obj1 FROM t_dup;
+DELETE FROM t_dup;
+INSERT INTO t_dup VALUES ('key',3),('key',5),('key',4);
+SELECT JSON_OBJECTAGG(c,i) AS obj2 FROM t_dup;
+DROP TABLE t_dup;
+
+DROP TABLE t3;
+
+# Larger array and object aggregation coverage
+CREATE TABLE t_arr_ext(g INT, pos INT, v INT);
+INSERT INTO t_arr_ext VALUES
+(1,1,5),
+(1,2,1),
+(1,3,5),
+(1,4,3),
+(1,5,1),
+(1,6,2),
+(2,1,7),
+(2,2,7),
+(2,3,8),
+(2,4,9),
+(2,5,8);
+SELECT g, JSON_ARRAYAGG(v) AS ordered_array FROM (SELECT g, pos, v FROM t_arr_ext ORDER BY g, pos) AS s GROUP BY g ORDER BY g;
+SELECT g, JSON_ARRAYAGG(v) AS distinct_array FROM (SELECT DISTINCT g, v FROM t_arr_ext ORDER BY g, v) AS s GROUP BY g ORDER BY g;
+DROP TABLE t_arr_ext;
+
+CREATE TABLE t_obj_ext(g INT, pos INT, k VARCHAR(20), v INT);
+INSERT INTO t_obj_ext VALUES
+(1,1,'alpha',10),
+(1,2,'beta',20),
+(1,3,'alpha',30),
+(1,4,'gamma',40),
+(2,1,'north',100),
+(2,2,'south',200),
+(2,3,'north',300),
+(2,4,'east',400),
+(2,5,'west',500);
+SELECT g, JSON_OBJECTAGG(k,v) AS obj_map FROM (SELECT g, pos, k, v FROM t_obj_ext ORDER BY g, pos) AS s GROUP BY g ORDER BY g;
+DROP TABLE t_obj_ext;
+
+create database test_json;
+use test_json;
+drop table if exists products;
+CREATE TABLE products (
+    id INT,
+    name VARCHAR(50),
+    price DECIMAL(10,2),
+    category VARCHAR(30)
+);
+
+INSERT INTO products VALUES
+(1, 'iPhone', 999.99, 'Electronics'),
+(2, 'MacBook', 1299.99, 'Electronics'),
+(3, 'Coffee Mug', 15.99, 'Home'),
+(4, 'Desk Chair', 199.99, 'Furniture');
+SELECT JSON_OBJECTAGG(name, price) as products_prices
+FROM products;
+
+SELECT
+    category,
+    JSON_OBJECTAGG(name, price) as category_products
+FROM products
+GROUP BY category;
+
+SELECT JSON_OBJECTAGG(
+    name,
+    JSON_OBJECT('price', price, 'category', category, 'id', id)
+) as detailed_products
+FROM products;
+
+SELECT
+    category,
+    COUNT(*) as product_count,
+    AVG(price) as avg_price,
+    JSON_OBJECTAGG(name, price) as products
+FROM products
+GROUP BY category;
+drop table products;
+
+
+drop table if exists app_configs;
+create table app_configs (
+    app_name VARCHAR(50),
+    config_key VARCHAR(50),
+    config_value TEXT
+);
+
+INSERT INTO app_configs VALUES
+('web_app', 'database_host', '192.168.1.100'),
+('web_app', 'database_port', '3306'),
+('web_app', 'redis_host', '192.168.1.101'),
+('web_app', 'redis_port', '6379'),
+('web_app', 'log_level', 'INFO'),
+('web_app', 'max_connections', '100'),
+
+('api_service', 'port', '8080'),
+('api_service', 'timeout', '30'),
+('api_service', 'rate_limit', '1000'),
+('api_service', 'auth_enabled', 'true'),
+('api_service', 'cors_origins', '*'),
+
+('message_queue', 'broker_url', 'amqp://localhost:5672'),
+('message_queue', 'queue_name', 'task_queue'),
+('message_queue', 'prefetch_count', '10'),
+('message_queue', 'retry_attempts', '3'),
+
+('cache_service', 'redis_cluster', '192.168.1.101:6379,192.168.1.102:6379'),
+('cache_service', 'ttl_seconds', '3600'),
+('cache_service', 'max_memory', '2GB');
+
+SELECT
+    app_name,
+    JSON_OBJECTAGG(config_key, config_value) as app_config
+FROM app_configs
+GROUP BY app_name;
+
+SELECT
+    app_name,
+    JSON_OBJECTAGG(config_key, config_value) as app_config
+FROM app_configs
+WHERE app_name = 'web_app'
+GROUP BY app_name;
+
+SELECT
+    app_name,
+    CASE
+        WHEN config_key LIKE 'database_%' THEN 'database'
+        WHEN config_key LIKE 'redis_%' THEN 'redis'
+        ELSE 'general'
+    END as config_type,
+    JSON_OBJECTAGG(config_key, config_value) as configs
+FROM app_configs
+WHERE app_name = 'web_app'
+GROUP BY app_name, config_type;
+
+
+SELECT
+    app_name,
+    COUNT(*) as config_count,
+    JSON_OBJECTAGG(config_key, config_value) as all_configs
+FROM app_configs
+GROUP BY app_name
+ORDER BY config_count DESC;
+drop table app_configs;
+
+drop table if exists user_attributes;
+CREATE TABLE user_attributes (
+    user_id INT,
+    attribute_name VARCHAR(50),
+    attribute_value VARCHAR(255)
+);
+INSERT INTO user_attributes VALUES
+(1, 'name', 'Alice Johnson'),
+(1, 'email', 'alice@example.com'),
+(1, 'age', '28'),
+(1, 'city', 'New York'),
+(1, 'department', 'Engineering'),
+(1, 'role', 'Senior Developer'),
+(1, 'join_date', '2020-03-15'),
+(2, 'name', 'Bob Smith'),
+(2, 'email', 'bob@example.com'),
+(2, 'age', '35'),
+(2, 'city', 'San Francisco'),
+(2, 'department', 'Marketing'),
+(2, 'role', 'Marketing Manager'),
+(2, 'join_date', '2019-07-22'),
+(3, 'name', 'Carol Davis'),
+(3, 'email', 'carol@example.com'),
+(3, 'age', '31'),
+(3, 'city', 'Chicago'),
+(3, 'department', 'Engineering'),
+(3, 'role', 'Tech Lead'),
+(3, 'join_date', '2018-11-08');
+
+SELECT
+    user_id,
+    JSON_OBJECTAGG(attribute_name, attribute_value) as user_profile
+FROM user_attributes
+GROUP BY user_id;
+drop table user_attributes;
+
+
+
+drop table if exists form_fields;
+CREATE TABLE form_fields (
+    form_name VARCHAR(50),
+    field_name VARCHAR(50),
+    field_config TEXT
+);
+
+INSERT INTO form_fields VALUES
+('user_registration', 'username', '{"type": "text", "required": true, "minLength": 3}'),
+('user_registration', 'email', '{"type": "email", "required": true}'),
+('user_registration', 'password', '{"type": "password", "required": true, "minLength": 8}'),
+('user_registration', 'age', '{"type": "number", "min": 18, "max": 120}');
+
+SELECT
+    form_name,
+    JSON_OBJECTAGG(field_name, JSON_EXTRACT(field_config, '$')) as form_schema
+FROM form_fields
+GROUP BY form_name;
+drop table form_fields;
+
+
+drop table if exists i18n_texts;
+CREATE TABLE i18n_texts (
+    text_key VARCHAR(100),
+    language VARCHAR(10),
+    text_value TEXT
+);
+
+INSERT INTO i18n_texts VALUES
+('welcome_message', 'en', 'Welcome to our application'),
+('welcome_message', 'zh', '欢迎使用我们的应用'),
+('welcome_message', 'es', 'Bienvenido a nuestra aplicación'),
+('login_button', 'en', 'Login'),
+('login_button', 'zh', '登录'),
+('login_button', 'es', 'Iniciar sesión');
+
+SELECT
+    text_key,
+    JSON_OBJECTAGG(language, text_value) as translations
+FROM i18n_texts
+GROUP BY text_key;
+drop table i18n_texts;
+drop database test_json;

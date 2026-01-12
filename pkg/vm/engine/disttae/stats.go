@@ -40,6 +40,24 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	// MinExecutorConcurrency is the minimum concurrency for concurrentExecutor
+	// which handles IO-intensive tasks (reading S3 objects).
+	MinExecutorConcurrency = 32
+
+	// MaxExecutorConcurrency is the maximum concurrency for concurrentExecutor
+	// to avoid extreme cases in high-core systems.
+	MaxExecutorConcurrency = 108
+
+	// MinWorkerConcurrency is the minimum concurrency for updateWorker
+	// which handles table-level update requests (coordinator role).
+	MinWorkerConcurrency = 16
+
+	// WorkerConcurrencyRatio is the ratio of updateWorker concurrency to executor concurrency.
+	// updateWorker concurrency = executorConcurrency / WorkerConcurrencyRatio
+	WorkerConcurrencyRatio = 4
+)
+
 var (
 	// MinUpdateInterval is the minimal interval to update stats info as it
 	// is necessary to update stats every time.
@@ -189,19 +207,38 @@ func NewGlobalStats(
 	if s.statsUpdater == nil {
 		s.statsUpdater = s.doUpdate
 	}
-	parallism := runtime.GOMAXPROCS(0)
+	// Optimize goroutine concurrency:
+	// 1. concurrentExecutor handles IO-intensive tasks (reading S3 objects), needs high concurrency
+	//    - Set limits [MinExecutorConcurrency, MaxExecutorConcurrency] to avoid extreme cases
+	// 2. updateWorker handles table-level update requests (coordinator role), needs lower concurrency
+	//    - Set to executorConcurrency / WorkerConcurrencyRatio, but minimum MinWorkerConcurrency
+	// This optimization reduces goroutine count significantly (e.g., 192 -> 120 in typical environments)
+	// while maintaining performance since updateWorker's actual concurrency is much lower.
+	executorConcurrency := runtime.GOMAXPROCS(0)
 	if s.updateWorkerFactor > 0 {
-		parallism = parallism * s.updateWorkerFactor
+		executorConcurrency = executorConcurrency * s.updateWorkerFactor
 	}
-	s.concurrentExecutor = newConcurrentExecutor(parallism)
+	// Apply limits: min MinExecutorConcurrency, max MaxExecutorConcurrency
+	if executorConcurrency < MinExecutorConcurrency {
+		executorConcurrency = MinExecutorConcurrency
+	}
+	if executorConcurrency > MaxExecutorConcurrency {
+		executorConcurrency = MaxExecutorConcurrency
+	}
+	// Calculate updateWorker concurrency: executorConcurrency / WorkerConcurrencyRatio, but minimum MinWorkerConcurrency
+	updateWorkerConcurrency := executorConcurrency / WorkerConcurrencyRatio
+	if updateWorkerConcurrency < MinWorkerConcurrency {
+		updateWorkerConcurrency = MinWorkerConcurrency
+	}
+	s.concurrentExecutor = newConcurrentExecutor(executorConcurrency)
 	s.concurrentExecutor.Run(ctx)
 	go s.consumeWorker(ctx)
-	go s.updateWorker(ctx, parallism)
+	s.updateWorker(ctx, updateWorkerConcurrency) // updateWorker内部已启动goroutines，不需要再用go
 	go s.queueWatcher.run(ctx)
 	logutil.Info(
 		"GlobalStats-Started",
-		zap.Int("exector-num", parallism),
-		zap.Int("worker-num", parallism),
+		zap.Int("exector-num", executorConcurrency),
+		zap.Int("worker-num", updateWorkerConcurrency),
 		zap.Int("worker-factor", s.updateWorkerFactor),
 	)
 	return s
@@ -626,8 +663,8 @@ func getMinMaxValueByFloat64(typ types.Type, buf []byte) float64 {
 }
 
 // get ndv, minval , maxval, datatype from zonemap. Retrieve all columns except for rowid, return accurate number of objects
-func updateInfoFromZoneMap(
-	ctx context.Context, req *updateStatsRequest, info *plan2.InfoFromZoneMap, executor ConcurrentExecutor,
+func collectTableStats(
+	ctx context.Context, req *updateStatsRequest, info *plan2.TableStatsInfo, executor ConcurrentExecutor,
 ) error {
 	start := time.Now()
 	defer func() {
@@ -652,78 +689,127 @@ func updateInfoFromZoneMap(
 		meta := objMeta.MustDataMeta()
 		info.AccurateObjectNumber++
 		info.BlockNumber += int64(obj.BlkCnt())
-		objSize := meta.BlockHeader().Rows()
-		info.TableCnt += float64(objSize)
+		objectRowCount := meta.BlockHeader().Rows()
+		info.TableRowCount += float64(objectRowCount)
 		if !init {
 			init = true
+			// Initialize table-level MaxObjectRowCount and MinObjectRowCount before column loop
+			info.MaxObjectRowCount = objectRowCount
+			info.MinObjectRowCount = objectRowCount
 			for idx, col := range req.tableDef.Cols[:lenCols] {
-				objColMeta := meta.MustGetColumn(uint16(col.Seqnum))
-				info.NullCnts[idx] = int64(objColMeta.NullCnt())
-				info.ColumnZMs[idx] = objColMeta.ZoneMap().Clone()
+				columnMeta := meta.MustGetColumn(uint16(col.Seqnum))
+				info.NullCnts[idx] = int64(columnMeta.NullCnt())
+				info.ColumnZMs[idx] = columnMeta.ZoneMap().Clone()
 				info.DataTypes[idx] = plan2.ExprType2Type(&col.Typ)
-				ndv := float64(objColMeta.Ndv())
-				info.ColumnNDVs[idx] = ndv
-				info.MaxNDVs[idx] = ndv
-				info.NDVinMinOBJ[idx] = ndv
-				info.NDVinMaxOBJ[idx] = ndv
-				info.MaxOBJSize = objSize
-				info.MinOBJSize = objSize
-				info.ColumnSize[idx] = int64(meta.BlockHeader().ZoneMapArea().Length() +
-					meta.BlockHeader().BFExtent().Length() + objColMeta.Location().Length())
+				columnNDV := float64(columnMeta.Ndv())
+				info.ColumnNDVs[idx] = columnNDV
+				info.MaxNDVs[idx] = columnNDV
+				info.NDVinMinObject[idx] = columnNDV
+				info.NDVinMaxObject[idx] = columnNDV
+				// Use OriginSize() instead of Length() for accurate data size estimation
+				// ZoneMapArea and BFExtent are block-level metadata, not column-level, so they are excluded
+				info.ColumnSize[idx] = int64(columnMeta.Location().OriginSize())
 				if info.ColumnNDVs[idx] > 100 || info.ColumnNDVs[idx] > 0.1*float64(meta.BlockHeader().Rows()) {
 					switch info.DataTypes[idx].Oid {
 					case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_time, types.T_timestamp, types.T_date, types.T_datetime, types.T_decimal64, types.T_decimal128:
 						info.ShuffleRanges[idx] = plan2.NewShuffleRange(false)
 						if info.ColumnZMs[idx].IsInited() {
-							minvalue := getMinMaxValueByFloat64(info.DataTypes[idx], info.ColumnZMs[idx].GetMinBuf())
-							maxvalue := getMinMaxValueByFloat64(info.DataTypes[idx], info.ColumnZMs[idx].GetMaxBuf())
-							info.ShuffleRanges[idx].Update(minvalue, maxvalue, int64(meta.BlockHeader().Rows()), int64(objColMeta.NullCnt()))
+							minValue := getMinMaxValueByFloat64(info.DataTypes[idx], info.ColumnZMs[idx].GetMinBuf())
+							maxValue := getMinMaxValueByFloat64(info.DataTypes[idx], info.ColumnZMs[idx].GetMaxBuf())
+							info.ShuffleRanges[idx].Update(minValue, maxValue, int64(meta.BlockHeader().Rows()), int64(columnMeta.NullCnt()))
 						}
 					case types.T_varchar, types.T_char, types.T_text:
 						info.ShuffleRanges[idx] = plan2.NewShuffleRange(true)
 						if info.ColumnZMs[idx].IsInited() {
-							info.ShuffleRanges[idx].UpdateString(info.ColumnZMs[idx].GetMinBuf(), info.ColumnZMs[idx].GetMaxBuf(), int64(meta.BlockHeader().Rows()), int64(objColMeta.NullCnt()))
+							info.ShuffleRanges[idx].UpdateString(info.ColumnZMs[idx].GetMinBuf(), info.ColumnZMs[idx].GetMaxBuf(), int64(meta.BlockHeader().Rows()), int64(columnMeta.NullCnt()))
 						}
 					}
 				}
 			}
 		} else {
+			// Update table-level MaxObjectRowCount and MinObjectRowCount before column loop
+			isMaxObject := false
+			isMinObject := false
+			if objectRowCount > info.MaxObjectRowCount {
+				info.MaxObjectRowCount = objectRowCount
+				isMaxObject = true
+			}
+			if objectRowCount < info.MinObjectRowCount {
+				info.MinObjectRowCount = objectRowCount
+				isMinObject = true
+			}
 			for idx, col := range req.tableDef.Cols[:lenCols] {
-				objColMeta := meta.MustGetColumn(uint16(col.Seqnum))
-				info.NullCnts[idx] += int64(objColMeta.NullCnt())
-				zm := objColMeta.ZoneMap().Clone()
-				if !zm.IsInited() {
+				columnMeta := meta.MustGetColumn(uint16(col.Seqnum))
+				info.NullCnts[idx] += int64(columnMeta.NullCnt())
+				// CRITICAL FIX: Always accumulate ColumnSize, even if ZoneMap is not initialized
+				// ZoneMap initialization status should not affect size calculation
+				// Use OriginSize() instead of Length() for accurate data size estimation
+				info.ColumnSize[idx] += int64(columnMeta.Location().OriginSize())
+
+				// CRITICAL FIX: Always accumulate NDV, even if ZoneMap is not initialized
+				// NDV is calculated independently using HyperLogLog sketch, not dependent on ZoneMap
+				columnNDV := float64(columnMeta.Ndv())
+				info.ColumnNDVs[idx] += columnNDV
+				if columnNDV > info.MaxNDVs[idx] {
+					info.MaxNDVs[idx] = columnNDV
+				}
+				// Update NDVinMaxObject and NDVinMinObject based on table-level MaxObjectRowCount/MinObjectRowCount
+				if isMaxObject {
+					// This is the new maximum object, update NDVinMaxObject for this column
+					info.NDVinMaxObject[idx] = columnNDV
+				} else if objectRowCount == info.MaxObjectRowCount && columnNDV > info.NDVinMaxObject[idx] {
+					// Same row count as current max, but this column has higher NDV
+					info.NDVinMaxObject[idx] = columnNDV
+				}
+				if isMinObject {
+					// This is the new minimum object, update NDVinMinObject for this column
+					info.NDVinMinObject[idx] = columnNDV
+				} else if objectRowCount == info.MinObjectRowCount && columnNDV < info.NDVinMinObject[idx] {
+					// Same row count as current min, but this column has lower NDV
+					info.NDVinMinObject[idx] = columnNDV
+				}
+
+				// CRITICAL FIX: Check if ShuffleRanges should be created based on accumulated stats
+				// This allows ShuffleRanges to be created even if the first object didn't meet the condition
+				// This check is done before ZoneMap check, so we can create ShuffleRanges even if current object's ZoneMap is not initialized
+				if info.ShuffleRanges[idx] == nil {
+					// Use accumulated NDV and total row count to decide if ShuffleRanges should be created
+					if info.ColumnNDVs[idx] > 100 || info.ColumnNDVs[idx] > 0.1*float64(info.TableRowCount) {
+						switch info.DataTypes[idx].Oid {
+						case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_time, types.T_timestamp, types.T_date, types.T_datetime, types.T_decimal64, types.T_decimal128:
+							info.ShuffleRanges[idx] = plan2.NewShuffleRange(false)
+							// Initialize with accumulated ZoneMap if available
+							if info.ColumnZMs[idx].IsInited() {
+								minValue := getMinMaxValueByFloat64(info.DataTypes[idx], info.ColumnZMs[idx].GetMinBuf())
+								maxValue := getMinMaxValueByFloat64(info.DataTypes[idx], info.ColumnZMs[idx].GetMaxBuf())
+								// Use accumulated row count and null count
+								info.ShuffleRanges[idx].Update(minValue, maxValue, int64(info.TableRowCount), info.NullCnts[idx])
+							}
+						case types.T_varchar, types.T_char, types.T_text:
+							info.ShuffleRanges[idx] = plan2.NewShuffleRange(true)
+							if info.ColumnZMs[idx].IsInited() {
+								info.ShuffleRanges[idx].UpdateString(info.ColumnZMs[idx].GetMinBuf(), info.ColumnZMs[idx].GetMaxBuf(), int64(info.TableRowCount), info.NullCnts[idx])
+							}
+						}
+					}
+				}
+
+				zoneMap := columnMeta.ZoneMap().Clone()
+				if !zoneMap.IsInited() {
 					continue
 				}
-				index.UpdateZM(info.ColumnZMs[idx], zm.GetMaxBuf())
-				index.UpdateZM(info.ColumnZMs[idx], zm.GetMinBuf())
-				ndv := float64(objColMeta.Ndv())
+				index.UpdateZM(info.ColumnZMs[idx], zoneMap.GetMaxBuf())
+				index.UpdateZM(info.ColumnZMs[idx], zoneMap.GetMinBuf())
 
-				info.ColumnNDVs[idx] += ndv
-				if ndv > info.MaxNDVs[idx] {
-					info.MaxNDVs[idx] = ndv
-				}
-				if objSize > info.MaxOBJSize {
-					info.MaxOBJSize = objSize
-					info.NDVinMaxOBJ[idx] = ndv
-				} else if objSize == info.MaxOBJSize && ndv > info.NDVinMaxOBJ[idx] {
-					info.NDVinMaxOBJ[idx] = ndv
-				}
-				if objSize < info.MinOBJSize {
-					info.MinOBJSize = objSize
-					info.NDVinMinOBJ[idx] = ndv
-				} else if objSize == info.MinOBJSize && ndv < info.NDVinMinOBJ[idx] {
-					info.NDVinMinOBJ[idx] = ndv
-				}
-				info.ColumnSize[idx] += int64(objColMeta.Location().Length())
+				// Update existing ShuffleRanges with current object's data
 				if info.ShuffleRanges[idx] != nil {
 					switch info.DataTypes[idx].Oid {
 					case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_time, types.T_timestamp, types.T_date, types.T_datetime, types.T_decimal64, types.T_decimal128:
-						minvalue := getMinMaxValueByFloat64(info.DataTypes[idx], zm.GetMinBuf())
-						maxvalue := getMinMaxValueByFloat64(info.DataTypes[idx], zm.GetMaxBuf())
-						info.ShuffleRanges[idx].Update(minvalue, maxvalue, int64(meta.BlockHeader().Rows()), int64(objColMeta.NullCnt()))
+						minValue := getMinMaxValueByFloat64(info.DataTypes[idx], zoneMap.GetMinBuf())
+						maxValue := getMinMaxValueByFloat64(info.DataTypes[idx], zoneMap.GetMaxBuf())
+						info.ShuffleRanges[idx].Update(minValue, maxValue, int64(meta.BlockHeader().Rows()), int64(columnMeta.NullCnt()))
 					case types.T_varchar, types.T_char, types.T_text:
-						info.ShuffleRanges[idx].UpdateString(zm.GetMinBuf(), zm.GetMaxBuf(), int64(meta.BlockHeader().Rows()), int64(objColMeta.NullCnt()))
+						info.ShuffleRanges[idx].UpdateString(zoneMap.GetMinBuf(), zoneMap.GetMaxBuf(), int64(meta.BlockHeader().Rows()), int64(columnMeta.NullCnt()))
 					}
 				}
 			}
@@ -750,13 +836,13 @@ func UpdateStats(ctx context.Context, req *updateStatsRequest, executor Concurre
 		v2.TxnStatementUpdateStatsDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 	lenCols := len(req.tableDef.Cols) - 1 /* row-id */
-	info := plan2.NewInfoFromZoneMap(lenCols)
+	info := plan2.NewTableStatsInfo(lenCols)
 	if req.approxObjectNum == 0 {
 		return nil
 	}
 	info.ApproxObjectNumber = req.approxObjectNum
 	baseTableDef := req.tableDef
-	if err := updateInfoFromZoneMap(ctx, req, info, executor); err != nil {
+	if err := collectTableStats(ctx, req, info, executor); err != nil {
 		return err
 	}
 	plan2.UpdateStatsInfo(info, baseTableDef, req.statsInfo)
@@ -778,8 +864,8 @@ func UpdateStats(ctx context.Context, req *updateStatsRequest, executor Concurre
 			)
 		}
 		logutil.Debugf("debug: table %v tablecnt %v  col %v max %v min %v ndv %v overlap %v maxndv %v maxobj %v ndvinmaxobj %v minobj %v ndvinminobj %v",
-			baseTableDef.Name, info.TableCnt, colName, req.statsInfo.MaxValMap[colName], req.statsInfo.MinValMap[colName],
-			req.statsInfo.NdvMap[colName], overlap, info.MaxNDVs[i], info.MaxOBJSize, info.NDVinMaxOBJ[i], info.MinOBJSize, info.NDVinMinOBJ[i])
+			baseTableDef.Name, info.TableRowCount, colName, req.statsInfo.MaxValMap[colName], req.statsInfo.MinValMap[colName],
+			req.statsInfo.NdvMap[colName], overlap, info.MaxNDVs[i], info.MaxObjectRowCount, info.NDVinMaxObject[i], info.MinObjectRowCount, info.NDVinMinObject[i])
 	}
 	return nil
 }

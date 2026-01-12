@@ -175,17 +175,21 @@ const (
 	MO_ISCP_LOG         = "mo_iscp_log"
 	MO_STORED_PROCEDURE = "mo_stored_procedure"
 
-	MO_BRANCH_METADATA = "mo_branch_metadata"
-
 	MO_CCPR_LOG = "mo_ccpr_log"
+
+	MO_INDEX_UPDATE = "mo_index_update"
+
+	MO_BRANCH_METADATA  = "mo_branch_metadata"
+	MO_FEATURE_LIMIT    = "mo_feature_limit"
+	MO_FEATURE_REGISTRY = "mo_feature_registry"
 )
 
 func IsSystemTable(id uint64) bool {
-	return id == MO_DATABASE_ID || id == MO_TABLES_ID || id == MO_COLUMNS_ID
+	return id == MO_DATABASE_ID || id == MO_TABLES_ID || id == MO_COLUMNS_ID || id == MO_TABLES_LOGICAL_ID_INDEX_ID
 }
 
 func IsSystemTableByName(name string) bool {
-	return name == MO_DATABASE || name == MO_TABLES || name == MO_COLUMNS
+	return name == MO_DATABASE || name == MO_TABLES || name == MO_COLUMNS || name == MO_TABLES_LOGICAL_ID_INDEX_TABLE_NAME
 }
 
 const (
@@ -205,6 +209,9 @@ const (
 	MO_TABLES   = "mo_tables"
 	MO_COLUMNS  = "mo_columns"
 	MO_USER     = "mo_user"
+
+	// mo_tables logical_id index table name (fixed name, no UUID)
+	MO_TABLES_LOGICAL_ID_INDEX_TABLE_NAME = "__mo_index_unique_mo_tables_logical_id"
 
 	// 'mo_database' table
 	SystemDBAttr_ID          = "dat_id"
@@ -239,6 +246,7 @@ const (
 	SystemRelAttr_CatalogVersion = "catalog_version"
 	SystemRelAttr_ExtraInfo      = "extra_info"
 	SystemRelAttr_CPKey          = CPrimaryKeyColName
+	SystemRelAttr_LogicalID      = "rel_logical_id"
 
 	// 'mo_indexes' table
 	IndexAlgoName      = "algo"
@@ -372,7 +380,7 @@ const (
 	SystemSI_IVFFLAT_TblCol_Entries_pk      = IndexTablePrimaryColName
 	SystemSI_IVFFLAT_TblCol_Entries_entry   = "__mo_index_centroid_fk_entry"
 
-	/************ 3. FULLTEXT Index **************/
+	/************ 3. FULLTEXT Index **************/ /************ 3. FULLTEXT Index **************/
 
 	FullTextIndex_TabCol_Word     = "word"
 	FullTextIndex_TabCol_Id       = "doc_id"
@@ -396,14 +404,25 @@ const (
 	Hnsw_TblCol_Metadata_Timestamp = "timestamp"
 	Hnsw_TblCol_Metadata_Checksum  = "checksum"
 	Hnsw_TblCol_Metadata_Filesize  = "filesize"
+
+	/************ 5. Logical ID Index (mo_tables) ************/
+
+	// Query format for getting rowid from logical_id index table
+	// Parameters: database_name, table_name, index_column_name, logical_id
+	LogicalIdIndexRowidQueryFormat = "SELECT __mo_rowid FROM `%s`.`%s` WHERE `%s` = %d"
+
+	/************ 5. Temporary table *************/
+
+	SystemTemporaryTable = "temporary_table"
 )
 
 const (
 	// default database id for catalog
-	MO_CATALOG_ID  = 1
-	MO_DATABASE_ID = 1
-	MO_TABLES_ID   = 2
-	MO_COLUMNS_ID  = 3
+	MO_CATALOG_ID                 = 1
+	MO_DATABASE_ID                = 1
+	MO_TABLES_ID                  = 2
+	MO_COLUMNS_ID                 = 3
+	MO_TABLES_LOGICAL_ID_INDEX_ID = 4 // ID allocated for mo_tables logical_id index table
 
 	// MO_RESERVED_MAX is the max reserved table ID.
 	MO_RESERVED_MAX = 100
@@ -448,6 +467,7 @@ const (
 	MO_TABLES_CATALOG_VERSION_IDX = 17
 	MO_TABLES_EXTRA_INFO_IDX      = 18
 	MO_TABLES_CPKEY_IDX           = 19
+	MO_TABLES_LOGICAL_ID_IDX      = 20
 
 	MO_COLUMNS_ATT_UNIQ_NAME_IDX         = 0
 	MO_COLUMNS_ACCOUNT_ID_IDX            = 1
@@ -617,6 +637,7 @@ var (
 		SystemRelAttr_CatalogVersion,
 		SystemRelAttr_ExtraInfo,
 		SystemRelAttr_CPKey,
+		SystemRelAttr_LogicalID,
 	}
 	MoTablesAllColsString = strings.Replace(
 		strings.Join(append([]string{Row_ID}, MoTablesSchema...), ","),
@@ -630,8 +651,8 @@ var (
 
 	// exclude mo_database mo_tables mo_columns
 	MoTablesBatchQuery = fmt.Sprintf(
-		"select %s from `%s`.`%s` where %s > 3",
-		MoTablesAllColsString, MO_CATALOG, MO_TABLES, SystemRelAttr_ID)
+		"select %s from `%s`.`%s` where %s > %v",
+		MoTablesAllColsString, MO_CATALOG, MO_TABLES, SystemRelAttr_ID, MO_RESERVED_MAX)
 
 	MoTablesInDBQueryFormat = fmt.Sprintf(
 		"select %s from `%s`.`%s` where %s = %%d and %s = %%q",
@@ -683,8 +704,8 @@ var (
 
 	// exclude mo_database mo_tables mo_columns
 	MoColumnsBatchQuery = fmt.Sprintf(
-		"select %s from `%s`.`%s` where %s > 3 order by %s, %s, %s",
-		MoColumnsAllColsString, MO_CATALOG, MO_COLUMNS, SystemColAttr_RelID,
+		"select %s from `%s`.`%s` where %s > %d order by %s, %s, %s",
+		MoColumnsAllColsString, MO_CATALOG, MO_COLUMNS, SystemColAttr_RelID, MO_RESERVED_MAX,
 		SystemColAttr_AccID, SystemColAttr_DBName, SystemColAttr_RelName)
 
 	MoColumnsRowidsQueryFormat = fmt.Sprintf(
@@ -735,6 +756,7 @@ var (
 		types.New(types.T_uint32, 0, 0),      // schema_catalog_version
 		types.New(types.T_varchar, 0, 0),     // extra_info
 		types.New(types.T_varchar, 65535, 0), // cpkey
+		types.New(types.T_uint64, 0, 0),      // rel_logical_id
 	}
 	MoColumnsTypes = []types.Type{
 		types.New(types.T_varchar, 256, 0),                 // att_uniq_name

@@ -353,7 +353,7 @@ func clone(
 		col, area := vector.MustVarlenaRawData(bat.Vecs[idx])
 		for i := range col {
 			stats := objectio.ObjectStats(col[i].GetByteSlice(area))
-			if stats.GetAppendable() || !stats.GetCNCreated() {
+			if stats.GetAppendable() /*|| !stats.GetCNCreated()*/ {
 				return moerr.NewInternalErrorNoCtxf("object fmt wrong: %s", stats.FlagString())
 			}
 

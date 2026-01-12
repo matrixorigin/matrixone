@@ -69,7 +69,12 @@ func init() {
 			return &HashBuild{}
 		},
 		func(a *HashBuild) {
+			// Preserve cached iterators across pool resets to avoid reallocating
+			// short-lived iterator buffers. Detach owners so old hashmaps can be GC'd.
+			intItr, strItr := a.ctr.hashmapBuilder.ExtractCachedIteratorsForReuse()
+
 			*a = HashBuild{}
+			a.ctr.hashmapBuilder.RestoreCachedIterators(intItr, strItr)
 		},
 		reuse.DefaultOptions[HashBuild]().
 			WithEnableChecker(),

@@ -67,13 +67,13 @@ func Test_joinAccountDatabase(t *testing.T) {
 				wg.Done()
 			}()
 
-			cnt := max(rand.Uint64()%10, 1)
+			cnt := int(max(rand.Uint64()%10, uint64(1)))
 			acc := make([]uint64, cnt)
 			db := make([]uint64, cnt)
 
 			for i := range acc {
-				acc[i] = rand.Uint64() % (cnt * 2)
-				db[i] = rand.Uint64() % (cnt * 2)
+				acc[i] = rand.Uint64() % uint64(cnt*2)
+				db[i] = rand.Uint64() % uint64(cnt*2)
 			}
 
 			ret, release := joinAccountDatabase(acc, db)
@@ -140,15 +140,15 @@ func Test_joinAccountDatabaseTable(t *testing.T) {
 				wg.Done()
 			}()
 
-			cnt := max(rand.Uint64()%10, 1)
+			cnt := int(max(rand.Uint64()%10, uint64(1)))
 			acc := make([]uint64, cnt)
 			db := make([]uint64, cnt)
 			tbl := make([]uint64, cnt)
 
 			for i := range acc {
-				acc[i] = rand.Uint64() % (cnt * 2)
-				db[i] = rand.Uint64() % (cnt * 2)
-				tbl[i] = rand.Uint64() % (cnt * 2)
+				acc[i] = rand.Uint64() % uint64(cnt*2)
+				db[i] = rand.Uint64() % uint64(cnt*2)
+				tbl[i] = rand.Uint64() % uint64(cnt*2)
 			}
 
 			ret, release := joinAccountDatabaseTable(acc, db, tbl)

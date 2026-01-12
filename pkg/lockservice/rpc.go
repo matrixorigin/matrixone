@@ -93,6 +93,17 @@ func NewClient(
 		morpc.WithBackendReadTimeout(defaultRPCTimeout),
 		morpc.WithBackendFreeOrphansResponse(releaseResponse))
 
+	// Set bounded wait for auto-create to enable fast failure detection in lockservice.
+	// This is specifically needed for orphan transaction cleanup, where we need to quickly
+	// detect that a remote service is down (not just slow to start).
+	// 500ms is chosen to balance between:
+	// - Fast failure detection for down services (critical for orphan cleanup)
+	// - Enough time for legitimate backend creation in normal cases
+	// Note: This only affects auto-create wait time. Normal lock operations use their own
+	// timeouts (e.g., RemoteLockTimeout) and are not affected by this setting.
+	c.cfg.ClientOptions = append(c.cfg.ClientOptions,
+		morpc.WithClientAutoCreateWaitTimeout(500*time.Millisecond))
+
 	client, err := c.cfg.NewClient(
 		service,
 		"lock-client",

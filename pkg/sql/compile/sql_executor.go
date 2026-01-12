@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -162,7 +163,7 @@ func (s *sqlExecutor) ExecTxn(
 	if err != nil {
 		logutil.Error("internal sql executor error",
 			zap.Error(err),
-			zap.String("sql", opts.SQL()),
+			zap.String("sql", commonutil.Abbreviate(opts.SQL(), 500)),
 			zap.String("txn", exec.Txn().Txn().DebugString()),
 		)
 		return exec.rollback(err)
@@ -189,13 +190,18 @@ func (s *sqlExecutor) getCompileContext(
 	proc *process.Process,
 	db string,
 	lower int64) *compilerContext {
-	return &compilerContext{
+	cc := &compilerContext{
 		ctx:       ctx,
 		defaultDB: db,
 		engine:    s.eng,
 		proc:      proc,
 		lower:     lower,
 	}
+	// For testing: check if a stats cache is provided in context
+	if statsCache, ok := ctx.Value("test_stats_cache").(*plan.StatsCache); ok {
+		cc.statsCache = statsCache
+	}
+	return cc
 }
 
 func (s *sqlExecutor) adjustOptions(
@@ -299,6 +305,12 @@ func (exec *txnExecutor) Exec(
 	if v := statementOption.AlterCopyDedupOpt(); v != nil {
 		exec.ctx = context.WithValue(exec.ctx,
 			defines.AlterCopyOpt{}, v)
+	}
+
+	if logicalId := statementOption.KeepLogicalId(); logicalId != 0 {
+		exec.ctx = context.WithValue(exec.ctx,
+			defines.LogicalIdKey{},
+			logicalId)
 	}
 
 	exec.ctx = context.WithValue(
@@ -523,12 +535,8 @@ func (exec *txnExecutor) Exec(
 	}
 
 	if !statementOption.DisableLog() {
-		printSql := sql
-		if len(printSql) > 1000 {
-			printSql = printSql[:1000] + "..."
-		}
 		logutil.Info("sql_executor exec",
-			zap.String("sql", printSql),
+			zap.String("sql", commonutil.Abbreviate(sql, 500)),
 			zap.String("txn-id", hex.EncodeToString(exec.opts.Txn().Txn().ID)),
 			zap.Duration("duration", time.Since(receiveAt)),
 			zap.Int("BatchSize", len(batches)),

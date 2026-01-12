@@ -349,6 +349,9 @@ func (exec *CDCTaskExecutor) Resume() error {
 		return moerr.NewInternalErrorf(context.Background(), "cannot resume: %v", err)
 	}
 
+	// Log watermark states before resume
+	exec.logCurrentWatermarks("before_resume")
+
 	logutil.Info(
 		"cdc.frontend.task.resume_start",
 		zap.String("task-id", exec.spec.TaskId),
@@ -380,6 +383,11 @@ func (exec *CDCTaskExecutor) Resume() error {
 		// Don't fail Resume if clearing errors fails - continue anyway
 	}
 
+	// FIX: Unmark task as paused to allow watermark updates
+	if exec.watermarkUpdater != nil {
+		exec.watermarkUpdater.UnmarkTaskPaused(exec.spec.TaskId)
+	}
+
 	go func() {
 		// closed in Pause, need renew
 		exec.activeRoutine = cdc.NewCdcActiveRoutine()
@@ -391,6 +399,9 @@ func (exec *CDCTaskExecutor) Resume() error {
 				zap.String("state", exec.stateMachine.State().String()),
 				zap.Error(err),
 			)
+		} else {
+			// Log watermark states after resume completed
+			exec.logCurrentWatermarks("after_resume")
 		}
 	}()
 	return nil
@@ -401,6 +412,13 @@ func (exec *CDCTaskExecutor) Restart() error {
 	// Transition to Restarting state
 	if err := exec.stateMachine.Transition(TransitionRestart); err != nil {
 		return moerr.NewInternalErrorf(context.Background(), "cannot restart: %v", err)
+	}
+
+	// FIX: Unmark task as paused to allow watermark updates after restart
+	// Without this, if task was paused before restart, it would remain in pausedTasks
+	// and all watermark updates would be blocked, causing CDC to stop working
+	if exec.watermarkUpdater != nil {
+		exec.watermarkUpdater.UnmarkTaskPaused(exec.spec.TaskId)
 	}
 
 	logutil.Info(
@@ -462,6 +480,19 @@ func (exec *CDCTaskExecutor) Pause() error {
 		return moerr.NewInternalErrorf(context.Background(), "cannot pause: %v", err)
 	}
 
+	// FIX: Mark task as paused ASAP to maximize blocking window
+	// This prevents watermark updates from commits that start after pause signal
+	// Trade-off: May block legitimate commits during stopAllReaders (causing data duplication)
+	// but prevents data loss which is more severe
+	// CDC design: duplication is acceptable (handled by downstream), loss is not
+	if exec.watermarkUpdater != nil {
+		exec.watermarkUpdater.MarkTaskPaused(exec.spec.TaskId)
+	}
+
+	// Log watermark states for all running tables before pause
+	exec.logCurrentWatermarks("before_pause")
+
+	pauseStartTime := time.Now()
 	logutil.Info(
 		"cdc.frontend.task.pause_start",
 		zap.String("task-id", exec.spec.TaskId),
@@ -470,6 +501,7 @@ func (exec *CDCTaskExecutor) Pause() error {
 		zap.Bool("was-running", wasRunning),
 	)
 	defer func() {
+		pauseDuration := time.Since(pauseStartTime)
 		// Transition to Paused state
 		if err := exec.stateMachine.Transition(TransitionPauseComplete); err != nil {
 			logutil.Warn(
@@ -490,6 +522,7 @@ func (exec *CDCTaskExecutor) Pause() error {
 			zap.String("task-id", exec.spec.TaskId),
 			zap.String("task-name", exec.spec.TaskName),
 			zap.String("state", exec.stateMachine.State().String()),
+			zap.Duration("pause-duration", pauseDuration),
 		)
 	}()
 
@@ -500,6 +533,42 @@ func (exec *CDCTaskExecutor) Pause() error {
 		// Synchronously wait for all readers to stop before proceeding
 		// This ensures no goroutine leaks and clean pause state
 		exec.stopAllReaders()
+
+		// Note: task was marked as paused earlier (before ClosePause) to maximize blocking window
+		// This may cause some watermark updates during stopAllReaders to be blocked,
+		// leading to minor data duplication on resume, but prevents data loss
+
+		// FIX: Force flush watermarks with timeout
+		// This ensures all legitimate watermarks (from commits completed before pause)
+		// are persisted to database before marking pause as complete
+		// Without this, watermarks in cacheUncommitted would be lost, causing data duplication on resume
+		if exec.watermarkUpdater != nil {
+			flushCtx, cancel := context.WithTimeout(
+				defines.AttachAccountId(context.Background(), uint32(exec.spec.Accounts[0].GetId())),
+				30*time.Second, // 30s timeout to prevent hanging
+			)
+			defer cancel()
+
+			if err := exec.watermarkUpdater.ForceFlush(flushCtx); err != nil {
+				logutil.Error(
+					"cdc.frontend.task.pause_force_flush_failed",
+					zap.String("task-id", exec.spec.TaskId),
+					zap.Error(err),
+				)
+				// Return error to ensure data consistency
+				// Pause failure is acceptable, data inconsistency is not
+				return moerr.NewInternalErrorf(context.Background(),
+					"pause failed: unable to flush watermarks: %v", err)
+			}
+
+			logutil.Info(
+				"cdc.frontend.task.pause_watermark_flushed",
+				zap.String("task-id", exec.spec.TaskId),
+			)
+		}
+
+		// Log watermark states after all readers stopped and watermarks flushed
+		exec.logCurrentWatermarks("after_pause")
 
 		// let Start() go
 		select {
@@ -520,6 +589,12 @@ func (exec *CDCTaskExecutor) Cancel() error {
 	// Transition to Cancelling state
 	if err := exec.stateMachine.Transition(TransitionCancel); err != nil {
 		return moerr.NewInternalErrorf(context.Background(), "cannot cancel: %v", err)
+	}
+
+	// FIX: Unmark task as paused to prevent pausedTasks leakage
+	// If task was paused before cancel, we need to clean up the pause mark
+	if exec.watermarkUpdater != nil {
+		exec.watermarkUpdater.UnmarkTaskPaused(exec.spec.TaskId)
 	}
 
 	logutil.Info(
@@ -569,6 +644,46 @@ func (exec *CDCTaskExecutor) Cancel() error {
 		}
 	}
 	return nil
+}
+
+// logCurrentWatermarks logs current watermarks for all tables in this task
+func (exec *CDCTaskExecutor) logCurrentWatermarks(phase string) {
+	if exec.watermarkUpdater == nil {
+		return
+	}
+
+	accountId := uint64(exec.spec.Accounts[0].GetId())
+	taskId := exec.spec.TaskId
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+
+	// Query current watermarks from database
+	sql := cdc.CDCSQLBuilder.GetTaskWatermarksSQL(accountId, taskId)
+	res := exec.ie.Query(ctx, sql, ie.SessionOverrideOptions{})
+	if res.Error() != nil {
+		logutil.Warn(
+			"cdc.frontend.task.log_watermarks_failed",
+			zap.String("task-id", taskId),
+			zap.String("phase", phase),
+			zap.Error(res.Error()),
+		)
+		return
+	}
+
+	// Log each table's watermark
+	for i := uint64(0); i < res.RowCount(); i++ {
+		dbName, _ := res.GetString(ctx, i, 0)
+		tableName, _ := res.GetString(ctx, i, 1)
+		watermarkStr, _ := res.GetString(ctx, i, 2)
+
+		logutil.Info(
+			"cdc.frontend.task.watermark_snapshot",
+			zap.String("task-id", taskId),
+			zap.String("phase", phase),
+			zap.String("db", dbName),
+			zap.String("table", tableName),
+			zap.String("watermark", watermarkStr),
+		)
+	}
 }
 
 // stopAllReaders stops all running readers and waits for them to exit

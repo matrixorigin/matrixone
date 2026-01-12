@@ -413,7 +413,9 @@ func TestLockWithBindNotFound(t *testing.T) {
 				Mode:        pb.LockMode_Exclusive,
 				Policy:      pb.WaitPolicy_Wait,
 			})
-			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableNotFound))
+			// After bind changed, handleError updates the bind and returns ErrLockTableBindChanged
+			// to signal that the caller should retry with the new bind
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
 
 			checkBind(
 				t,
@@ -494,7 +496,7 @@ func TestIssue12554(t *testing.T) {
 			oldBind := alloc.Get(l1.serviceID, 0, table, 0, pb.Sharding_None)
 			// mock l1 restart, changed serviceID
 			l1.serviceID = getServiceIdentifier("s1", time.Now().UnixNano())
-			l1.tableGroups.removeWithFilter(func(u uint64, lt lockTable) bool { return u == table })
+			l1.tableGroups.removeWithFilter(func(u uint64, lt lockTable) bool { return u == table }, closeReasonBindChanged)
 			newLockTable := l1.createLockTableByBind(oldBind)
 			l1.tableGroups.set(0, table, newLockTable)
 
@@ -539,12 +541,17 @@ func TestIssue14346(t *testing.T) {
 
 			// wait bind remove on s2
 			for {
-				v, err := s2.getLockTable(0, table)
-				require.NoError(t, err)
-				if v == nil {
-					return
+				select {
+				case <-ctx.Done():
+					t.Fatal("timeout waiting for bind removal on s2")
+				default:
+					v, err := s2.getLockTable(0, table)
+					require.NoError(t, err)
+					if v == nil {
+						return
+					}
+					time.Sleep(time.Millisecond * 100)
 				}
-				time.Sleep(time.Second)
 			}
 		},
 	)

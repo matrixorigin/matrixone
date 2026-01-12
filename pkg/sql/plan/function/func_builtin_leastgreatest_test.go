@@ -216,7 +216,7 @@ func TestLeast(t *testing.T) {
 			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, leastFn)
 		}
 		s, info := fcTC.Run()
-		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+		require.True(t, s, fmt.Sprintf("case is '%s', err info '%s'", tc.info, info))
 	}
 }
 
