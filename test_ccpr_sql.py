@@ -581,11 +581,9 @@ def test_create_account_from_publication():
         
         # Test: CREATE ACCOUNT FROM PUBLICATION
         print_info("Test: CREATE ACCOUNT FROM PUBLICATION")
-        test_account_name = 'test_sub_account'
-        cleanup_account(cluster2_sys_client, test_account_name)
         try:
-            # According to design doc, CREATE ACCOUNT FROM PUBLICATION doesn't have account name
             # Syntax: CREATE ACCOUNT FROM connection_string PUBLICATION pub_name
+            # Uses current account (cluster2_sys_client's account), just adds record to mo_ccpr_log
             cluster2_sys_client.execute(
                 f"CREATE ACCOUNT FROM '{conn_str}' PUBLICATION `{PUBLICATION_NAME}`"
             )

@@ -5426,6 +5426,8 @@ type CreateSubscription struct {
 	IsDatabase   bool
 	DbName       Identifier
 	TableName    string
+	AccountName  string  // For account-level subscription
+	IfNotExists  bool    // For account-level subscription
 	FromUri      string
 	PubName      Identifier
 	SyncInterval int64
@@ -5439,11 +5441,24 @@ func NewCreateSubscription(isDb bool, dbName Identifier, tableName string, fromU
 	cs.FromUri = fromUri
 	cs.PubName = pubName
 	cs.SyncInterval = syncInterval
+	cs.AccountName = ""
+	cs.IfNotExists = false
 	return cs
 }
 
+func (node *CreateSubscription) SetAccountName(name string) {
+	node.AccountName = name
+}
+
+func (node *CreateSubscription) SetIfNotExists(ifNotExists bool) {
+	node.IfNotExists = ifNotExists
+}
+
 func (node *CreateSubscription) Format(ctx *FmtCtx) {
-	if node.IsDatabase {
+	if node.IsDatabase && string(node.DbName) == "" {
+		// Account-level subscription
+		ctx.WriteString("create account")
+	} else if node.IsDatabase {
 		ctx.WriteString("create database ")
 		node.DbName.Format(ctx)
 	} else {
@@ -5470,6 +5485,8 @@ func (node CreateSubscription) TypeName() string { return "tree.CreateSubscripti
 
 func (node *CreateSubscription) reset() {
 	*node = CreateSubscription{}
+	node.AccountName = ""
+	node.IfNotExists = false
 }
 
 func (node *CreateSubscription) Free() {

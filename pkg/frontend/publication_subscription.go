@@ -2218,6 +2218,7 @@ func doCreateSubscription(ctx context.Context, ses *Session, cs *tree.CreateSubs
 	if syncLevel == "account" {
 		// For account level, dbName and tableName should be empty
 		// No validation needed as they are already empty
+		// Use current account ID (already set above)
 	} else if syncLevel == "database" {
 		// For database level, check dbName is not empty
 		if string(cs.DbName) == "" {

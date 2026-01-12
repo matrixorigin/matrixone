@@ -6870,6 +6870,21 @@ create_account_stmt:
             Comment,
     	)
     }
+|   CREATE ACCOUNT FROM STRING PUBLICATION ident sync_interval_opt
+    {
+        var FromUri = $4
+        var PubName = tree.Identifier($6.Compare())
+        var SyncInterval = $7
+        var cs = tree.NewCreateSubscription(
+            true,  // isDatabase
+            tree.Identifier(""),  // dbName (empty for account level)
+            "",  // tableName
+            FromUri,
+            PubName,
+            SyncInterval,
+        )
+        $$ = cs
+    }
 
 view_list_opt:
     view_opt
