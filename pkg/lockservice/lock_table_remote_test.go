@@ -16,6 +16,7 @@ package lockservice
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"os"
@@ -94,6 +95,48 @@ func TestIssue20747(t *testing.T) {
 				require.True(t, moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect))
 			})
 			reuse.Free(txn, nil)
+		},
+		func(lt pb.LockTable) {},
+	)
+}
+
+func TestLockRemoteWithContextTimeoutDoesNotTrackLock(t *testing.T) {
+	runRemoteLockTableTests(
+		t,
+		pb.LockTable{ServiceID: "s1"},
+		func(s Server) {
+			s.RegisterMethodHandler(
+				pb.Method_Lock,
+				func(
+					ctx context.Context,
+					cancel context.CancelFunc,
+					req *pb.Request,
+					resp *pb.Response,
+					cs morpc.ClientSession) {
+					// Simulate a slow or dropped response. The server just waits for
+					// the client context to expire.
+					<-ctx.Done()
+				},
+			)
+		},
+		func(l *remoteLockTable, s Server) {
+			txnID := []byte("txn-timeout")
+			txn := newActiveTxn(txnID, string(txnID), newFixedSlicePool(32), "")
+			ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+			defer cancel()
+			txn.Lock()
+			defer func() {
+				require.Len(t, txn.lockHolders, 0)
+				txn.Unlock()
+				reuse.Free(txn, nil)
+			}()
+
+			l.lock(ctx, txn, [][]byte{{1}}, LockOptions{}, func(r pb.Result, err error) {
+				require.Error(t, err)
+				require.True(t,
+					errors.Is(err, context.DeadlineExceeded) ||
+						moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect))
+			})
 		},
 		func(lt pb.LockTable) {},
 	)
