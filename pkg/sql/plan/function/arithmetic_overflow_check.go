@@ -290,3 +290,21 @@ func mulUint8WithOverflowCheck(ctx context.Context, v1, v2 uint8) (uint8, error)
 	}
 	return v1 * v2, nil
 }
+
+// addFloat64WithOverflowCheck checks for overflow in float64 addition
+func addFloat64WithOverflowCheck(ctx context.Context, v1, v2 float64) (float64, error) {
+	result := v1 + v2
+	if math.IsInf(result, 0) {
+		return 0, moerr.NewOutOfRangef(ctx, "float64", "DOUBLE value is out of range in '(%v + %v)'", v1, v2)
+	}
+	return result, nil
+}
+
+// addFloat32WithOverflowCheck checks for overflow in float32 addition
+func addFloat32WithOverflowCheck(ctx context.Context, v1, v2 float32) (float32, error) {
+	result := v1 + v2
+	if math.IsInf(float64(result), 0) {
+		return 0, moerr.NewOutOfRangef(ctx, "float32", "FLOAT value is out of range in '(%v + %v)'", v1, v2)
+	}
+	return result, nil
+}

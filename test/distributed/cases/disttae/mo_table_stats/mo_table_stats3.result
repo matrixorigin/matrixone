@@ -11,6 +11,8 @@ mo_cdc_task    Tae    Dynamic    0    0    0    0    0    NULL    0    2025-11-2
 mo_cdc_watermark    Tae    Dynamic    0    0    0    0    0    NULL    0    2025-11-21 09:44:39    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
 mo_configurations    null    null    null    null    null    null    null    null    null    2025-11-21 09:44:39    null    null    null    null    null    VIEW    0    moadmin
 mo_data_key    Tae    Dynamic    1    0    1218    0    0    NULL    0    2025-11-21 09:44:39    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
+mo_feature_limit    Tae    Dynamic    1    0    1252    0    0    NULL    0    2025-12-18 18:15:37    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
+mo_feature_registry    Tae    Dynamic    0    0    0    0    0    NULL    0    2025-12-18 18:15:37    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
 mo_foreign_keys    Tae    Dynamic    0    0    0    0    0    NULL    0    2025-11-21 09:44:39    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
 mo_indexes    Tae    Dynamic    127    0    9306    0    0    NULL    0    2025-11-21 09:44:39    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
 mo_iscp_log    Tae    Dynamic    0    0    0    0    0    NULL    0    2025-11-21 09:44:39    NULL    NULL    utf8mb4_bin    NULL            0    moadmin

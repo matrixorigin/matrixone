@@ -157,6 +157,18 @@ const (
 	normal status = status(1)
 )
 
+const (
+	// activeTxnShards is the number of shards for activeTxns map.
+	// Using sharded locks to reduce contention on high-concurrency workloads.
+	activeTxnShards = 16
+)
+
+// activeTxnShard is a shard of active transactions with its own lock.
+type activeTxnShard struct {
+	sync.RWMutex
+	txns map[string]*txnOperator
+}
+
 type txnClient struct {
 	sid                        string
 	stopper                    *stopper.Stopper
@@ -190,7 +202,13 @@ type txnClient struct {
 		latestCommitTS atomic.Pointer[timestamp.Timestamp]
 		// just for bvt testing
 		forceSyncCommitTimes atomic.Uint64
+		// activeTxnCount is the total count of active transactions across all shards.
+		activeTxnCount atomic.Int64
 	}
+
+	// activeTxns is sharded to reduce lock contention.
+	// Use getActiveTxnShard() to get the shard for a given txnID.
+	activeTxns [activeTxnShards]activeTxnShard
 
 	mu struct {
 		sync.RWMutex
@@ -201,8 +219,6 @@ type txnClient struct {
 		state status
 		// user active txns
 		users int
-		// all active txns
-		activeTxns map[string]*txnOperator
 		// FIFO queue for ready to active txn
 		waitActiveTxns            []*txnOperator
 		waitMarkAllActiveAbortedC chan struct{}
@@ -211,20 +227,110 @@ type txnClient struct {
 	abortC chan time.Time
 }
 
-func (client *txnClient) GetState() TxnState {
-	client.mu.Lock()
-	defer client.mu.Unlock()
-	at := make([]string, 0, len(client.mu.activeTxns))
-	for k := range client.mu.activeTxns {
-		at = append(at, hex.EncodeToString([]byte(k)))
+// getActiveTxnShard returns the shard for a given txnID.
+func (client *txnClient) getActiveTxnShard(txnID string) *activeTxnShard {
+	// Use FNV-1a hash for better distribution
+	h := uint32(2166136261)
+	for i := 0; i < len(txnID); i++ {
+		h ^= uint32(txnID[i])
+		h *= 16777619
 	}
+	return &client.activeTxns[h%activeTxnShards]
+}
+
+// addActiveTxn adds a transaction to the sharded map.
+func (client *txnClient) addActiveTxn(op *txnOperator) {
+	key := string(op.reset.txnID)
+	shard := client.getActiveTxnShard(key)
+	shard.Lock()
+	shard.txns[key] = op
+	shard.Unlock()
+	client.atomic.activeTxnCount.Add(1)
+	client.addToLeakCheck(op)
+}
+
+// removeActiveTxn removes a transaction from the sharded map.
+// Returns the removed operator and whether it existed.
+func (client *txnClient) removeActiveTxn(txnID string) (*txnOperator, bool) {
+	shard := client.getActiveTxnShard(txnID)
+	shard.Lock()
+	op, ok := shard.txns[txnID]
+	if ok {
+		delete(shard.txns, txnID)
+	}
+	shard.Unlock()
+	if ok {
+		client.atomic.activeTxnCount.Add(-1)
+		client.removeFromLeakCheck([]byte(txnID))
+	}
+	return op, ok
+}
+
+// getActiveTxn gets a transaction from the sharded map.
+func (client *txnClient) getActiveTxn(txnID string) (*txnOperator, bool) {
+	shard := client.getActiveTxnShard(txnID)
+	shard.RLock()
+	op, ok := shard.txns[txnID]
+	shard.RUnlock()
+	return op, ok
+}
+
+// forEachActiveTxn iterates over all active transactions.
+// The callback is called with each shard's lock held (read lock).
+func (client *txnClient) forEachActiveTxn(fn func(op *txnOperator) bool) {
+	for i := range client.activeTxns {
+		shard := &client.activeTxns[i]
+		shard.RLock()
+		for _, op := range shard.txns {
+			if !fn(op) {
+				shard.RUnlock()
+				return
+			}
+		}
+		shard.RUnlock()
+	}
+}
+
+// collectActiveTxns collects all active transactions into a slice.
+func (client *txnClient) collectActiveTxns() []*txnOperator {
+	count := client.atomic.activeTxnCount.Load()
+	ops := make([]*txnOperator, 0, count)
+	for i := range client.activeTxns {
+		shard := &client.activeTxns[i]
+		shard.RLock()
+		for _, op := range shard.txns {
+			ops = append(ops, op)
+		}
+		shard.RUnlock()
+	}
+	return ops
+}
+
+func (client *txnClient) GetState() TxnState {
+	// Note: ActiveTxns is collected from sharded maps without holding mu,
+	// so it may not be exactly consistent with state/users which are read
+	// under mu lock. This is acceptable for monitoring/debugging purposes.
+	// If exact consistency is needed, all reads should be under a single lock.
+
+	// Collect active txn IDs from sharded map
+	at := make([]string, 0, client.atomic.activeTxnCount.Load())
+	client.forEachActiveTxn(func(op *txnOperator) bool {
+		at = append(at, hex.EncodeToString(op.reset.txnID))
+		return true
+	})
+
+	client.mu.RLock()
 	wt := make([]string, 0, len(client.mu.waitActiveTxns))
 	for _, v := range client.mu.waitActiveTxns {
 		wt = append(wt, hex.EncodeToString(v.reset.txnID))
 	}
+	state := client.mu.state
+	users := client.mu.users
+	client.mu.RUnlock()
+
 	return TxnState{
-		State:          int(client.mu.state),
-		Users:          client.mu.users,
+		State:          int(state),
+		Users:          users,
 		ActiveTxns:     at,
 		WaitActiveTxns: wt,
 		LatestTS:       client.timestampWaiter.LatestTS(),
@@ -247,7 +353,10 @@ func NewTxnClient(
 	c.stopper = stopper.NewStopper("txn-client", stopper.WithLogger(c.logger.RawLogger()))
 	c.mu.state = paused
 	c.mu.cond = sync.NewCond(&c.mu)
-	c.mu.activeTxns = make(map[string]*txnOperator, 100000)
+	// Initialize sharded activeTxns
+	for i := range c.activeTxns {
+		c.activeTxns[i].txns = make(map[string]*txnOperator, 100000/activeTxnShards)
+	}
 	for _, opt := range options {
 		opt(c)
 	}
@@ -271,6 +380,12 @@ func (client *txnClient) adjust() {
 	}
 	if client.maxActiveTxn == 0 {
 		client.maxActiveTxn = math.MaxInt
+	}
+	// Initialize sharded activeTxns if not already initialized
+	for i := range client.activeTxns {
+		if client.activeTxns[i].txns == nil {
+			client.activeTxns[i].txns = make(map[string]*txnOperator)
+		}
 	}
 }
 
@@ -385,12 +500,7 @@ func (client *txnClient) Close() error {
 }
 
 func (client *txnClient) MinTimestamp() timestamp.Timestamp {
-	client.mu.RLock()
-	ops := make([]*txnOperator, 0, len(client.mu.activeTxns))
-	for _, op := range client.mu.activeTxns {
-		ops = append(ops, op)
-	}
-	client.mu.RUnlock()
+	ops := client.collectActiveTxns()
 
 	min := timestamp.Timestamp{}
 	for _, op := range ops {
@@ -502,28 +612,31 @@ func (client *txnClient) GetSyncLatestCommitTSTimes() uint64 {
 
 func (client *txnClient) openTxn(op *txnOperator) error {
 	client.mu.Lock()
-	defer func() {
-		v2.TxnActiveQueueSizeGauge.Set(float64(len(client.mu.activeTxns)))
-		v2.TxnWaitActiveQueueSizeGauge.Set(float64(len(client.mu.waitActiveTxns)))
-		client.mu.Unlock()
-	}()
 
 	client.waitMarkAllActiveAbortedLocked()
 
 	if !op.opts.skipWaitPushClient {
 		for client.mu.state == paused {
 			if client.normalStateNoWait {
+				activeCount := client.atomic.activeTxnCount.Load()
+				waitQueueSize := len(client.mu.waitActiveTxns)
+				client.mu.Unlock()
+				v2.TxnActiveQueueSizeGauge.Set(float64(activeCount))
+				v2.TxnWaitActiveQueueSizeGauge.Set(float64(waitQueueSize))
 				return moerr.NewInternalErrorNoCtx("cn service is not ready, retry later")
 			}
 
 			if op.opts.options.WaitPausedDisabled() {
+				activeCount := client.atomic.activeTxnCount.Load()
+				waitQueueSize := len(client.mu.waitActiveTxns)
+				client.mu.Unlock()
+				v2.TxnActiveQueueSizeGauge.Set(float64(activeCount))
+				v2.TxnWaitActiveQueueSizeGauge.Set(float64(waitQueueSize))
 				return moerr.NewInvalidStateNoCtx("txn client is in pause state")
 			}
 
 			client.logger.Warn("txn client is in pause state, wait for it to be ready",
 				zap.String("txn ID", hex.EncodeToString(op.reset.txnID)))
-			// Wait until the txn client's state changed to normal, and it will probably take
-			// no more than 5 seconds in theory.
 			client.mu.cond.Wait()
 			client.logger.Warn("txn client is in ready state",
 				zap.String("txn ID", hex.EncodeToString(op.reset.txnID)))
@@ -532,55 +645,90 @@ func (client *txnClient) openTxn(op *txnOperator) error {
 
 	if !op.opts.options.UserTxn() ||
 		client.mu.users < client.maxActiveTxn {
-		client.addActiveTxnLocked(op)
+		if op.opts.options.UserTxn() {
+			client.mu.users++
+		}
+		waitQueueSize := len(client.mu.waitActiveTxns)
+		client.mu.Unlock()
+		// Add to sharded map outside mu lock
+		client.addActiveTxn(op)
+		// Update metrics after actual operation
+		v2.TxnActiveQueueSizeGauge.Set(float64(client.atomic.activeTxnCount.Load()))
+		v2.TxnWaitActiveQueueSizeGauge.Set(float64(waitQueueSize))
 		return nil
 	}
+
 	op.reset.waiter = newWaiter(timestamp.Timestamp{})
 	op.reset.waiter.ref()
 	client.mu.waitActiveTxns = append(client.mu.waitActiveTxns, op)
+	activeCount := client.atomic.activeTxnCount.Load()
+	waitQueueSize := len(client.mu.waitActiveTxns)
+	client.mu.Unlock()
+	v2.TxnActiveQueueSizeGauge.Set(float64(activeCount))
+	v2.TxnWaitActiveQueueSizeGauge.Set(float64(waitQueueSize))
 	return nil
 }
 
 func (client *txnClient) closeTxn(ctx context.Context, txnOp TxnOperator, event TxnEvent, value any) (err error) {
 	txn := event.Txn
+	key := string(txn.ID)
 
 	client.mu.Lock()
-	defer func() {
-		v2.TxnActiveQueueSizeGauge.Set(float64(len(client.mu.activeTxns)))
-		v2.TxnWaitActiveQueueSizeGauge.Set(float64(len(client.mu.waitActiveTxns)))
-		client.mu.Unlock()
-	}()
 
+	// Check abort-all condition before removing from map
+	// to ensure this txn is also marked if needed
 	if moerr.IsMoErrCode(event.Err, moerr.ErrCannotCommitOnInvalidCN) {
 		client.markAllActiveTxnAborted()
 	}
 
-	key := string(txn.ID)
-	op, ok := client.mu.activeTxns[key]
+	client.mu.Unlock()
+
+	// Remove from sharded map after abort check
+	op, ok := client.removeActiveTxn(key)
+
+	client.mu.Lock()
+
 	if ok {
 		v2.TxnLifeCycleDurationHistogram.Observe(time.Since(op.reset.createAt).Seconds())
 
-		delete(client.mu.activeTxns, key)
-		client.removeFromLeakCheck(txn.ID)
 		if !op.opts.options.UserTxn() {
+			v2.TxnActiveQueueSizeGauge.Set(float64(client.atomic.activeTxnCount.Load()))
+			v2.TxnWaitActiveQueueSizeGauge.Set(float64(len(client.mu.waitActiveTxns)))
+			client.mu.Unlock()
 			return
 		}
 		client.mu.users--
 		if client.mu.users < 0 {
 			panic("BUG: user txns < 0")
 		}
+
+		// Collect waiting ops to activate
+		var toActivate []*txnOperator
 		if len(client.mu.waitActiveTxns) > 0 {
 			newCanAdded := client.maxActiveTxn - client.mu.users
 			for i := 0; i < newCanAdded; i++ {
-				op := client.fetchWaitActiveOpLocked()
-				if op == nil {
-					return
+				waitOp := client.fetchWaitActiveOpLocked()
+				if waitOp == nil {
+					break
 				}
-				client.addActiveTxnLocked(op)
-				op.notifyActive()
+				client.mu.users++
+				toActivate = append(toActivate, waitOp)
 			}
 		}
-	} else if ok = client.removeFromWaitActiveLocked(txn.ID); ok {
+
+		v2.TxnActiveQueueSizeGauge.Set(float64(client.atomic.activeTxnCount.Load() + int64(len(toActivate))))
+		v2.TxnWaitActiveQueueSizeGauge.Set(float64(len(client.mu.waitActiveTxns)))
+		client.mu.Unlock()
+
+		// Add to sharded map and notify outside mu lock
+		for _, waitOp := range toActivate {
+			client.addActiveTxn(waitOp)
+			waitOp.notifyActive()
+		}
+		return
+	}
+
+	if ok = client.removeFromWaitActiveLocked(txn.ID); ok {
 		client.removeFromLeakCheck(txn.ID)
 	} else {
 		client.logger.Warn("txn closed",
@@ -588,15 +736,10 @@ func (client *txnClient) closeTxn(ctx context.Context, txnOp TxnOperator, event 
 			zap.String("stack", string(debug.Stack())))
 	}
 
+	v2.TxnActiveQueueSizeGauge.Set(float64(client.atomic.activeTxnCount.Load()))
+	v2.TxnWaitActiveQueueSizeGauge.Set(float64(len(client.mu.waitActiveTxns)))
+	client.mu.Unlock()
 	return
-}
-
-func (client *txnClient) addActiveTxnLocked(op *txnOperator) {
-	if op.opts.options.UserTxn() {
-		client.mu.users++
-	}
-	client.mu.activeTxns[string(op.reset.txnID)] = op
-	client.addToLeakCheck(op)
 }
 
 func (client *txnClient) fetchWaitActiveOpLocked() *txnOperator {
@@ -658,14 +801,14 @@ func (client *txnClient) IterTxns(fn func(TxnOverview) bool) {
 }
 
 func (client *txnClient) getAllTxnOperators() []*txnOperator {
-	client.mu.RLock()
-	defer client.mu.RUnlock()
+	// Collect from sharded map
+	ops := client.collectActiveTxns()
 
-	ops := make([]*txnOperator, 0, len(client.mu.activeTxns)+len(client.mu.waitActiveTxns))
-	for _, op := range client.mu.activeTxns {
-		ops = append(ops, op)
-	}
+	// Also include waiting txns
+	client.mu.RLock()
 	ops = append(ops, client.mu.waitActiveTxns...)
+	client.mu.RUnlock()
+
 	return ops
 }
 
@@ -712,13 +855,16 @@ func (client *txnClient) handleMarkActiveTxnAborted(
 			fn := func() {
 				client.mu.Lock()
 				client.mu.waitMarkAllActiveAbortedC = make(chan struct{})
-				ops := make([]*txnOperator, 0, len(client.mu.activeTxns))
-				for _, op := range client.mu.activeTxns {
+				client.mu.Unlock()
+
+				// Collect ops from sharded map
+				ops := make([]*txnOperator, 0)
+				client.forEachActiveTxn(func(op *txnOperator) bool {
 					if op.reset.createAt.Before(from) {
 						ops = append(ops, op)
 					}
-				}
-				client.mu.Unlock()
+					return true
+				})
 
 				for _, op := range ops {
 					op.addFlag(AbortedFlag)

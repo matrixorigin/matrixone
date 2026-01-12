@@ -1,0 +1,59 @@
+drop account if exists fl_reg_acc;
+create account fl_reg_acc admin_name = 'admin' identified by '111';
+set @fl_reg_id = (select account_id from mo_catalog.mo_account where account_name = 'fl_reg_acc');
+select mo_feature_registry_upsert(
+'snapshot',
+'Snapshot feature',
+'{"allowed_scope":["account","database","table"]}',
+true
+);
+mo_feature_registry_upsert(snapshot, Snapshot feature, {"allowed_scope":["account","database","table"]}, true)
+{\n  "now": {\n    "feature_code": "SNAPSHOT",\n    "description": "Snapshot feature",\n    "scope_spec": {\n      "allowed_scope": ["account", "database", "table"]\n    },\n    "enabled": true\n  },\n  "old": null\n}\n
+select mo_feature_limit_upsert(@fl_reg_id, 'snapshot', 'table', -1);
+mo_feature_limit_upsert(@fl_reg_id, snapshot, table, -1)
+{\n  "now": {\n    "account_id": 1,\n    "feature_code": "SNAPSHOT",\n    "scope": "table",\n    "quota": -1\n  },\n  "old": null\n}\n
+select mo_feature_registry_upsert(
+'snapshot',
+'Snapshot feature',
+'{"allowed_scope":["account","database","table"]}',
+false
+);
+mo_feature_registry_upsert(snapshot, Snapshot feature, {"allowed_scope":["account","database","table"]}, false)
+{\n  "now": {\n    "feature_code": "SNAPSHOT",\n    "description": "Snapshot feature",\n    "scope_spec": {\n      "allowed_scope": ["account", "database", "table"]\n    },\n    "enabled": false\n  },\n  "old": {\n    "feature_code": "SNAPSHOT",\n    "description": "Snapshot feature",\n    "scope_spec": {\n      "allowed_scope": ["account", "database", "table"]\n    },\n    "enabled": true\n  }\n}\n
+drop database if exists fl_reg_db;
+create database fl_reg_db;
+use fl_reg_db;
+drop table if exists t;
+create table t(a int primary key, b varchar(10));
+insert into t values (1, 'a');
+drop snapshot if exists spt_disabled_by_registry;
+create snapshot spt_disabled_by_registry for table fl_reg_db t;
+internal error: feature SNAPSHOT with scope table has disabled for account fl_reg_acc
+select mo_feature_registry_upsert(
+'snapshot',
+'Snapshot feature',
+'{"allowed_scope":["account","database","table"]}',
+true
+);
+mo_feature_registry_upsert(snapshot, Snapshot feature, {"allowed_scope":["account","database","table"]}, true)
+{\n  "now": {\n    "feature_code": "SNAPSHOT",\n    "description": "Snapshot feature",\n    "scope_spec": {\n      "allowed_scope": ["account", "database", "table"]\n    },\n    "enabled": true\n  },\n  "old": {\n    "feature_code": "SNAPSHOT",\n    "description": "Snapshot feature",\n    "scope_spec": {\n      "allowed_scope": ["account", "database", "table"]\n    },\n    "enabled": false\n  }\n}\n
+drop snapshot if exists spt_ok_after_enable;
+create snapshot spt_ok_after_enable for table fl_reg_db t;
+drop snapshot spt_ok_after_enable;
+select mo_feature_registry_upsert(
+'snapshot',
+'Snapshot feature',
+'{"allowed_scope":["database"]}',
+true
+);
+mo_feature_registry_upsert(snapshot, Snapshot feature, {"allowed_scope":["database"]}, true)
+{\n  "now": {\n    "feature_code": "SNAPSHOT",\n    "description": "Snapshot feature",\n    "scope_spec": {\n      "allowed_scope": ["database"]\n    },\n    "enabled": true\n  },\n  "old": {\n    "feature_code": "SNAPSHOT",\n    "description": "Snapshot feature",\n    "scope_spec": {\n      "allowed_scope": ["account", "database", "table"]\n    },\n    "enabled": true\n  }\n}\n
+drop snapshot if exists spt_scope_rejected;
+create snapshot spt_scope_rejected for table fl_reg_db t;
+internal error: feature SNAPSHOT does not allow scope table
+drop snapshot if exists spd_ok_default;
+create snapshot spd_ok_default for database fl_reg_db;
+drop snapshot spd_ok_default;
+drop table t;
+drop database fl_reg_db;
+drop account fl_reg_acc;

@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/lni/goutils/leaktest"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -37,7 +38,32 @@ func TestAdjustClient(t *testing.T) {
 	c := &txnClient{}
 	c.adjust()
 	assert.NotNil(t, c.generator)
-	assert.NotNil(t, c.generator)
+	assert.NotNil(t, c.limiter)
+	// Verify sharded activeTxns are initialized
+	for i := range c.activeTxns {
+		assert.NotNil(t, c.activeTxns[i].txns)
+	}
+}
+
+func TestZeroValueClientShardedMaps(t *testing.T) {
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	c := &txnClient{}
+	c.adjust()
+
+	// Create a mock txnOperator
+	op := &txnOperator{}
+	op.reset.txnID = []byte("test1")
+
+	// Should not panic when accessing sharded maps
+	c.addActiveTxn(op)
+	assert.Equal(t, int64(1), c.atomic.activeTxnCount.Load())
+
+	gotOp, ok := c.getActiveTxn("test1")
+	assert.True(t, ok)
+	assert.NotNil(t, gotOp)
+
+	c.removeActiveTxn("test1")
+	assert.Equal(t, int64(0), c.atomic.activeTxnCount.Load())
 }
 
 func TestNewTxnAndReset(t *testing.T) {
@@ -218,6 +244,39 @@ func TestMaxActiveTxnWithWaitPrevClosed(t *testing.T) {
 		WithMaxActiveTxn(1))
 }
 
+func TestConcurrentOpenCloseTxn(t *testing.T) {
+	RunTxnTests(
+		func(tc TxnClient, ts rpc.TxnSender) {
+			ctx := context.Background()
+			const goroutines = 50
+			const iterations = 100
+
+			var wg sync.WaitGroup
+			wg.Add(goroutines)
+
+			for i := 0; i < goroutines; i++ {
+				go func() {
+					defer wg.Done()
+					for j := 0; j < iterations; j++ {
+						op, err := tc.New(ctx, newTestTimestamp(0))
+						require.NoError(t, err)
+						require.NoError(t, op.Rollback(ctx))
+					}
+				}()
+			}
+
+			wg.Wait()
+
+			// Verify final state is consistent
+			v := tc.(*txnClient)
+			assert.Equal(t, int64(0), v.atomic.activeTxnCount.Load())
+			v.mu.RLock()
+			assert.Equal(t, 0, v.mu.users)
+			assert.Equal(t, 0, len(v.mu.waitActiveTxns))
+			v.mu.RUnlock()
+		})
+}
+
 func TestMaxActiveTxnWithWaitTimeout(t *testing.T) {
 	RunTxnTests(
 		func(tc TxnClient, ts rpc.TxnSender) {
@@ -243,13 +302,44 @@ func TestMaxActiveTxnWithWaitTimeout(t *testing.T) {
 }
 
 func TestOpenTxnWithWaitPausedDisabled(t *testing.T) {
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
 	c := &txnClient{}
+	c.adjust()
 	c.mu.state = paused
 
 	op := &txnOperator{}
 	op.opts.options = op.opts.options.WithDisableWaitPaused()
 
 	require.Error(t, c.openTxn(op))
+}
+
+func TestCloseTxnWithAbortAllCheck(t *testing.T) {
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	c := &txnClient{}
+	c.adjust()
+	c.mu.state = normal
+
+	// Create and add a txn
+	op := &txnOperator{}
+	op.reset.txnID = []byte("test-txn")
+	op.reset.createAt = time.Now()
+	c.addActiveTxn(op)
+
+	// Verify txn is in active map
+	_, ok := c.getActiveTxn("test-txn")
+	require.True(t, ok)
+
+	// Close with ErrCannotCommitOnInvalidCN should mark all active txns aborted
+	// The txn should still be in map when markAllActiveTxnAborted is called
+	event := TxnEvent{
+		Txn: txn.TxnMeta{ID: []byte("test-txn")},
+		Err: moerr.NewCannotCommitOnInvalidCNNoCtx(),
+	}
+	_ = c.closeTxn(context.Background(), op, event, nil)
+
+	// Verify txn is removed after close
+	_, ok = c.getActiveTxn("test-txn")
+	require.False(t, ok)
 }
 
 func TestNewWithUpdateSnapshotTimeout(t *testing.T) {
@@ -281,7 +371,10 @@ func TestWaitAbortMarked(t *testing.T) {
 	tc := &txnClient{}
 	tc.mu.waitMarkAllActiveAbortedC = c
 	tc.mu.state = normal
-	tc.mu.activeTxns = map[string]*txnOperator{}
+	// Initialize sharded activeTxns
+	for i := range tc.activeTxns {
+		tc.activeTxns[i].txns = make(map[string]*txnOperator)
+	}
 	go func() {
 		close(c)
 	}()
