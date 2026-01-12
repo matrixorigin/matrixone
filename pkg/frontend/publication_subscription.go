@@ -168,6 +168,81 @@ var (
 			},
 		},
 	}
+
+	showCcprSubscriptionsOutputColumns = [12]Column{
+		&MysqlColumn{
+			ColumnImpl: ColumnImpl{
+				name:       "pub_name",
+				columnType: defines.MYSQL_TYPE_VARCHAR,
+			},
+		},
+		&MysqlColumn{
+			ColumnImpl: ColumnImpl{
+				name:       "pub_account",
+				columnType: defines.MYSQL_TYPE_VARCHAR,
+			},
+		},
+		&MysqlColumn{
+			ColumnImpl: ColumnImpl{
+				name:       "pub_database",
+				columnType: defines.MYSQL_TYPE_VARCHAR,
+			},
+		},
+		&MysqlColumn{
+			ColumnImpl: ColumnImpl{
+				name:       "pub_tables",
+				columnType: defines.MYSQL_TYPE_VARCHAR,
+			},
+		},
+		&MysqlColumn{
+			ColumnImpl: ColumnImpl{
+				name:       "create_time",
+				columnType: defines.MYSQL_TYPE_TIMESTAMP,
+			},
+		},
+		&MysqlColumn{
+			ColumnImpl: ColumnImpl{
+				name:       "drop_time",
+				columnType: defines.MYSQL_TYPE_TIMESTAMP,
+			},
+		},
+		&MysqlColumn{
+			ColumnImpl: ColumnImpl{
+				name:       "state",
+				columnType: defines.MYSQL_TYPE_TINY,
+			},
+		},
+		&MysqlColumn{
+			ColumnImpl: ColumnImpl{
+				name:       "sync_level",
+				columnType: defines.MYSQL_TYPE_VARCHAR,
+			},
+		},
+		&MysqlColumn{
+			ColumnImpl: ColumnImpl{
+				name:       "upstream_conn",
+				columnType: defines.MYSQL_TYPE_VARCHAR,
+			},
+		},
+		&MysqlColumn{
+			ColumnImpl: ColumnImpl{
+				name:       "iteration_lsn",
+				columnType: defines.MYSQL_TYPE_LONGLONG,
+			},
+		},
+		&MysqlColumn{
+			ColumnImpl: ColumnImpl{
+				name:       "error_message",
+				columnType: defines.MYSQL_TYPE_VARCHAR,
+			},
+		},
+		&MysqlColumn{
+			ColumnImpl: ColumnImpl{
+				name:       "watermark",
+				columnType: defines.MYSQL_TYPE_TIMESTAMP,
+			},
+		},
+	}
 )
 
 func doCreatePublication(ctx context.Context, ses *Session, cp *tree.CreatePublication) (err error) {
@@ -1393,6 +1468,319 @@ func doShowSubscriptions(ctx context.Context, ses *Session, ss *tree.ShowSubscri
 			int8(subInfo.Status),
 		})
 	}
+	ses.SetMysqlResultSet(rs)
+
+	return trySaveQueryResult(ctx, ses, rs)
+}
+
+// maskPasswordInUri masks the password in a MySQL URI
+// Format: mysql://[account#]user:password@host:port
+// Returns: mysql://[account#]user:***@host:port
+func maskPasswordInUri(uri string) string {
+	const uriPrefix = "mysql://"
+	if !strings.HasPrefix(uri, uriPrefix) {
+		return uri
+	}
+
+	rest := uri[len(uriPrefix):]
+	parts := strings.Split(rest, "@")
+	if len(parts) != 2 {
+		return uri
+	}
+
+	credPart := parts[0]
+	hostPortPart := parts[1]
+
+	// Check if there's a # separator for account
+	var userPassPart string
+	if strings.Contains(credPart, "#") {
+		credParts := strings.SplitN(credPart, "#", 2)
+		accountPart := credParts[0]
+		userPassPart = credParts[1]
+		// Replace password with ***
+		if strings.Contains(userPassPart, ":") {
+			userPassParts := strings.SplitN(userPassPart, ":", 2)
+			user := userPassParts[0]
+			maskedCredPart := accountPart + "#" + user + ":***"
+			return uriPrefix + maskedCredPart + "@" + hostPortPart
+		}
+	} else {
+		// Replace password with ***
+		if strings.Contains(credPart, ":") {
+			userPassParts := strings.SplitN(credPart, ":", 2)
+			user := userPassParts[0]
+			maskedCredPart := user + ":***"
+			return uriPrefix + maskedCredPart + "@" + hostPortPart
+		}
+	}
+
+	return uri
+}
+
+// extractWatermarkFromContext extracts watermark timestamp from context JSON
+func extractWatermarkFromContext(contextJSON string) interface{} {
+	if contextJSON == "" {
+		return nil
+	}
+
+	var contextData map[string]interface{}
+	if err := json.Unmarshal([]byte(contextJSON), &contextData); err != nil {
+		return nil
+	}
+
+	// Try to find watermark in various possible locations
+	if watermark, ok := contextData["watermark"]; ok {
+		if ts, ok := watermark.(float64); ok {
+			// Convert timestamp to time.Time
+			return time.Unix(0, int64(ts))
+		}
+		if tsStr, ok := watermark.(string); ok {
+			// Try parsing as timestamp string
+			if t, err := time.Parse(time.RFC3339, tsStr); err == nil {
+				return t
+			}
+		}
+	}
+
+	// Check for current_snapshot_ts as watermark
+	if snapshotData, ok := contextData["current_snapshot_ts"]; ok {
+		if ts, ok := snapshotData.(float64); ok {
+			return time.Unix(0, int64(ts))
+		}
+	}
+
+	return nil
+}
+
+func doShowCcprSubscriptions(ctx context.Context, ses *Session, scs *tree.ShowCcprSubscriptions) (err error) {
+	start := time.Now()
+	defer func() {
+		v2.ShowSubHistogram.Observe(time.Since(start).Seconds())
+	}()
+
+	accountId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
+	}
+
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	// Switch to system account context to query mo_catalog
+	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+
+	if err = bh.Exec(ctx, "begin;"); err != nil {
+		return err
+	}
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+
+	// Build SQL query
+	sql := "SELECT subscription_name, sync_level, account_id, db_name, table_name, upstream_conn, iteration_state, iteration_lsn, context, error_message, created_at, drop_at FROM mo_catalog.mo_ccpr_log WHERE 1=1"
+
+	// Filter by account_id: sys account sees all, others see only their own
+	if accountId != catalog.System_Account {
+		sql += fmt.Sprintf(" AND account_id = %d", accountId)
+	}
+
+	// Handle pub_name filter if specified (exact match takes priority over LIKE)
+	if scs.Name != "" {
+		// Escape single quotes to prevent SQL injection
+		escapedName := strings.ReplaceAll(scs.Name, "'", "''")
+		sql += fmt.Sprintf(" AND subscription_name = '%s'", escapedName)
+	} else {
+		// Handle LIKE clause only if Name is not specified
+		like := scs.Like
+		if like != nil {
+			right, ok := like.Right.(*tree.NumVal)
+			if !ok || right.Kind() != tree.Str {
+				err = moerr.NewInternalError(ctx, "like clause must be a string")
+				return
+			}
+			// Escape single quotes to prevent SQL injection
+			likePattern := strings.ReplaceAll(right.String(), "'", "''")
+			sql += fmt.Sprintf(" AND subscription_name LIKE '%s'", likePattern)
+		}
+	}
+
+	sql += " ORDER BY created_at DESC;"
+
+	if err = bh.Exec(ctx, sql); err != nil {
+		return
+	}
+
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return
+	}
+
+	// Get account name mapping
+	accIdInfoMap, _, err := getAccounts(ctx, bh, false)
+	if err != nil {
+		return
+	}
+
+	var rs = &MysqlResultSet{}
+	for _, column := range showCcprSubscriptionsOutputColumns {
+		rs.AddColumn(column)
+	}
+
+	for _, result := range erArray {
+		for i := uint64(0); i < result.GetRowCount(); i++ {
+			var (
+				subscriptionName string
+				syncLevel        string
+				accountIdVal     int64
+				dbName           string
+				tableName        string
+				upstreamConn     string
+				iterationState   int64
+				iterationLsn     int64
+				contextJSON      string
+				errorMessage     string
+				createdAt        string
+				dropAt           string
+				isNull           bool
+			)
+
+			// Extract values from result
+			if subscriptionName, err = result.GetString(ctx, i, 0); err != nil {
+				return err
+			}
+			if syncLevel, err = result.GetString(ctx, i, 1); err != nil {
+				return err
+			}
+			if accountIdVal, err = result.GetInt64(ctx, i, 2); err != nil {
+				return err
+			}
+			// Handle nullable db_name
+			if isNull, err = result.ColumnIsNull(ctx, i, 3); err != nil {
+				return err
+			}
+			if !isNull {
+				if dbName, err = result.GetString(ctx, i, 3); err != nil {
+					return err
+				}
+			}
+			// Handle nullable table_name
+			if isNull, err = result.ColumnIsNull(ctx, i, 4); err != nil {
+				return err
+			}
+			if !isNull {
+				if tableName, err = result.GetString(ctx, i, 4); err != nil {
+					return err
+				}
+			}
+			if upstreamConn, err = result.GetString(ctx, i, 5); err != nil {
+				return err
+			}
+			if iterationState, err = result.GetInt64(ctx, i, 6); err != nil {
+				return err
+			}
+			if iterationLsn, err = result.GetInt64(ctx, i, 7); err != nil {
+				return err
+			}
+			// Handle nullable context
+			if isNull, err = result.ColumnIsNull(ctx, i, 8); err != nil {
+				return err
+			}
+			if !isNull {
+				if contextJSON, err = result.GetString(ctx, i, 8); err != nil {
+					return err
+				}
+			}
+			// Handle nullable error_message
+			if isNull, err = result.ColumnIsNull(ctx, i, 9); err != nil {
+				return err
+			}
+			if !isNull {
+				if errorMessage, err = result.GetString(ctx, i, 9); err != nil {
+					return err
+				}
+			}
+			if createdAt, err = result.GetString(ctx, i, 10); err != nil {
+				return err
+			}
+			// Handle nullable drop_at
+			if isNull, err = result.ColumnIsNull(ctx, i, 11); err != nil {
+				return err
+			}
+			if !isNull {
+				if dropAt, err = result.GetString(ctx, i, 11); err != nil {
+					return err
+				}
+			}
+
+			// Get account name
+			accountName := ""
+			if accInfo, ok := accIdInfoMap[int32(accountIdVal)]; ok {
+				accountName = accInfo.Name
+			}
+
+			// Mask password in upstream_conn
+			maskedUpstreamConn := maskPasswordInUri(upstreamConn)
+
+			// Map iteration_state to state (0=pending, 1=running, 2=complete, 3=error, 4=cancel)
+			state := int8(iterationState)
+			if state < 0 {
+				state = 0
+			}
+			if state > 4 {
+				state = 4
+			}
+
+			// Extract watermark from context JSON
+			watermarkVal := extractWatermarkFromContext(contextJSON)
+			// Convert watermark time.Time to string if needed
+			var watermark interface{}
+			if watermarkVal != nil {
+				if t, ok := watermarkVal.(time.Time); ok {
+					watermark = t.Format("2006-01-02 15:04:05")
+				} else {
+					watermark = watermarkVal
+				}
+			}
+
+			// Use timestamps as strings (MySQL result set expects strings for TIMESTAMP columns)
+			var createTime interface{}
+			if createdAt != "" {
+				createTime = createdAt
+			}
+
+			var dropTime interface{}
+			if dropAt != "" {
+				dropTime = dropAt
+			}
+
+			// Handle NULL values for db_name and table_name
+			var dbNameVal interface{}
+			if dbName != "" {
+				dbNameVal = dbName
+			}
+
+			var tableNameVal interface{}
+			if tableName != "" {
+				tableNameVal = tableName
+			}
+
+			rs.AddRow([]interface{}{
+				subscriptionName,   // pub_name
+				accountName,        // pub_account
+				dbNameVal,          // pub_database
+				tableNameVal,       // pub_tables
+				createTime,         // create_time
+				dropTime,           // drop_time
+				state,              // state
+				syncLevel,          // sync_level
+				maskedUpstreamConn, // upstream_conn
+				iterationLsn,       // iteration_lsn
+				errorMessage,       // error_message
+				watermark,          // watermark
+			})
+		}
+	}
+
 	ses.SetMysqlResultSet(rs)
 
 	return trySaveQueryResult(ctx, ses, rs)

@@ -804,6 +804,28 @@ func (node *ShowPublicationCoverage) Format(ctx *FmtCtx) {
 func (node *ShowPublicationCoverage) GetStatementType() string { return "Show Publication Coverage" }
 func (node *ShowPublicationCoverage) GetQueryType() string     { return QueryTypeOth }
 
+type ShowCcprSubscriptions struct {
+	showImpl
+	Name string
+	Like *ComparisonExpr
+}
+
+func (node *ShowCcprSubscriptions) Format(ctx *FmtCtx) {
+	ctx.WriteString("show ccpr subscription")
+	if node.Name != "" {
+		ctx.WriteByte(' ')
+		ctx.WriteString(node.Name)
+	} else {
+		ctx.WriteString("s")
+	}
+	if node.Like != nil {
+		ctx.WriteByte(' ')
+		node.Like.Format(ctx)
+	}
+}
+func (node *ShowCcprSubscriptions) GetStatementType() string { return "Show Ccpr Subscriptions" }
+func (node *ShowCcprSubscriptions) GetQueryType() string     { return QueryTypeOth }
+
 type ShowTableSize struct {
 	showImpl
 	Table  *UnresolvedObjectName

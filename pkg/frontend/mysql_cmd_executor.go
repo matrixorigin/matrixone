@@ -1791,6 +1791,10 @@ func handleShowPublicationCoverage(ses FeSession, execCtx *ExecCtx, spc *tree.Sh
 	return doShowPublicationCoverage(execCtx.reqCtx, ses.(*Session), spc)
 }
 
+func handleShowCcprSubscriptions(ses FeSession, execCtx *ExecCtx, scs *tree.ShowCcprSubscriptions) error {
+	return doShowCcprSubscriptions(execCtx.reqCtx, ses.(*Session), scs)
+}
+
 func doShowBackendServers(ses *Session, execCtx *ExecCtx) error {
 	// Construct the columns.
 	col1 := new(MysqlColumn)

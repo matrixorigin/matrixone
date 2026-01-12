@@ -370,7 +370,7 @@ import (
 // Sequence
 %token <str> INCREMENT CYCLE MINVALUE
 // publication
-%token <str> PUBLICATION SUBSCRIPTIONS PUBLICATIONS SYNC_INTERVAL SYNC COVERAGE
+%token <str> PUBLICATION SUBSCRIPTION SUBSCRIPTIONS PUBLICATIONS SYNC_INTERVAL SYNC COVERAGE CCPR
 
 // MO table option
 %token <str> PROPERTIES
@@ -567,7 +567,7 @@ import (
 
 // iteration
 %type <statement> loop_stmt iterate_stmt leave_stmt repeat_stmt while_stmt
-%type <statement> create_publication_stmt drop_publication_stmt alter_publication_stmt show_publications_stmt show_subscriptions_stmt show_publication_coverage_stmt
+%type <statement> create_publication_stmt drop_publication_stmt alter_publication_stmt show_publications_stmt show_subscriptions_stmt show_publication_coverage_stmt show_ccpr_subscriptions_stmt
 %type <statement> create_stage_stmt drop_stage_stmt alter_stage_stmt
 %type <statement> create_snapshot_stmt drop_snapshot_stmt check_snapshot_flushed_stmt
 %type <statement> create_pitr_stmt drop_pitr_stmt show_pitr_stmt alter_pitr_stmt restore_pitr_stmt show_recovery_window_stmt
@@ -4201,6 +4201,7 @@ show_stmt:
 |   show_publications_stmt
 |   show_subscriptions_stmt
 |   show_publication_coverage_stmt
+|   show_ccpr_subscriptions_stmt
 |   show_servers_stmt
 |   show_stages_stmt
 |   show_connectors_stmt
@@ -4618,6 +4619,20 @@ show_subscriptions_stmt:
 |   SHOW SUBSCRIPTIONS ALL like_opt
     {
 	    $$ = &tree.ShowSubscriptions{All: true, Like: $4}
+    }
+
+show_ccpr_subscriptions_stmt:
+    SHOW CCPR SUBSCRIPTION db_name like_opt
+    {
+	    $$ = &tree.ShowCcprSubscriptions{Name: $4, Like: $5}
+    }
+|   SHOW CCPR SUBSCRIPTION like_opt
+    {
+	    $$ = &tree.ShowCcprSubscriptions{Like: $4}
+    }
+|   SHOW CCPR SUBSCRIPTIONS like_opt
+    {
+	    $$ = &tree.ShowCcprSubscriptions{Like: $4}
     }
 
 like_opt:

@@ -179,6 +179,7 @@ func statementCanBeExecutedInUncommittedTransaction(
 		*tree.ShowAccounts,
 		*tree.ShowPublications,
 		*tree.ShowSubscriptions,
+		*tree.ShowCcprSubscriptions,
 		*tree.ShowCreatePublications,
 		*tree.ShowPublicationCoverage,
 		*tree.ShowBackendServers,
