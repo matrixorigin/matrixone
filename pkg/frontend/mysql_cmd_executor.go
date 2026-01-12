@@ -1254,6 +1254,10 @@ func handleDropPublication(ses FeSession, execCtx *ExecCtx, dp *tree.DropPublica
 	return doDropPublication(execCtx.reqCtx, ses.(*Session), dp)
 }
 
+func handleDropCcprSubscription(ses FeSession, execCtx *ExecCtx, dcs *tree.DropCcprSubscription) error {
+	return doDropCcprSubscription(execCtx.reqCtx, ses.(*Session), dcs)
+}
+
 func handleCreateStage(ses FeSession, execCtx *ExecCtx, cs *tree.CreateStage) error {
 	return doCreateStage(execCtx.reqCtx, ses.(*Session), cs)
 }

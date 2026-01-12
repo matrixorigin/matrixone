@@ -567,7 +567,7 @@ import (
 
 // iteration
 %type <statement> loop_stmt iterate_stmt leave_stmt repeat_stmt while_stmt
-%type <statement> create_publication_stmt drop_publication_stmt alter_publication_stmt show_publications_stmt show_subscriptions_stmt show_publication_coverage_stmt show_ccpr_subscriptions_stmt
+%type <statement> create_publication_stmt drop_publication_stmt alter_publication_stmt show_publications_stmt show_subscriptions_stmt show_publication_coverage_stmt show_ccpr_subscriptions_stmt drop_ccpr_subscription_stmt
 %type <statement> create_stage_stmt drop_stage_stmt alter_stage_stmt
 %type <statement> create_snapshot_stmt drop_snapshot_stmt check_snapshot_flushed_stmt
 %type <statement> create_pitr_stmt drop_pitr_stmt show_pitr_stmt alter_pitr_stmt restore_pitr_stmt show_recovery_window_stmt
@@ -4776,6 +4776,7 @@ drop_ddl_stmt:
 |   drop_function_stmt
 |   drop_sequence_stmt
 |   drop_publication_stmt
+|   drop_ccpr_subscription_stmt
 |   drop_procedure_stmt
 |   drop_stage_stmt
 |   drop_connector_stmt
@@ -7368,6 +7369,14 @@ drop_publication_stmt:
         var ifExists = $3
         var name = tree.Identifier($4.Compare())
         $$ = tree.NewDropPublication(ifExists, name)
+    }
+
+drop_ccpr_subscription_stmt:
+    DROP CCPR SUBSCRIPTION exists_opt ident
+    {
+        var ifExists = $4
+        var name = tree.Identifier($5.Compare())
+        $$ = tree.NewDropCcprSubscription(ifExists, name)
     }
 
 drop_stage_stmt:

@@ -63,6 +63,11 @@ func init() {
 		func() *DropPublication { return &DropPublication{} },
 		func(d *DropPublication) { d.reset() },
 		reuse.DefaultOptions[DropPublication](), //.
+	)
+	reuse.CreatePool[DropCcprSubscription](
+		func() *DropCcprSubscription { return &DropCcprSubscription{} },
+		func(d *DropCcprSubscription) { d.reset() },
+		reuse.DefaultOptions[DropCcprSubscription](), //.
 	) //WithEnableChecker()
 }
 
@@ -383,3 +388,38 @@ func (node *DropPublication) reset() {
 }
 
 func (node DropPublication) TypeName() string { return "tree.DropPublication" }
+
+type DropCcprSubscription struct {
+	statementImpl
+	Name     Identifier
+	IfExists bool
+}
+
+func NewDropCcprSubscription(ife bool, n Identifier) *DropCcprSubscription {
+	dropCcprSubscription := reuse.Alloc[DropCcprSubscription](nil)
+	dropCcprSubscription.IfExists = ife
+	dropCcprSubscription.Name = n
+	return dropCcprSubscription
+}
+
+func (node *DropCcprSubscription) Format(ctx *FmtCtx) {
+	ctx.WriteString("drop ccpr subscription")
+	if node.IfExists {
+		ctx.WriteString(" if exists")
+	}
+	ctx.WriteByte(' ')
+	node.Name.Format(ctx)
+}
+
+func (node *DropCcprSubscription) GetStatementType() string { return "Drop Ccpr Subscription" }
+func (node *DropCcprSubscription) GetQueryType() string     { return QueryTypeDCL }
+
+func (node *DropCcprSubscription) Free() {
+	reuse.Free[DropCcprSubscription](node, nil)
+}
+
+func (node *DropCcprSubscription) reset() {
+	*node = DropCcprSubscription{}
+}
+
+func (node DropCcprSubscription) TypeName() string { return "tree.DropCcprSubscription" }

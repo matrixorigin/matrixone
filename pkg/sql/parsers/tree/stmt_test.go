@@ -78,6 +78,7 @@ func TestQueryType(t *testing.T) {
 					&CreatePublication{}: QueryTypeDCL,
 					&DropPublication{}:   QueryTypeDCL,
 					&AlterPublication{}:  QueryTypeDCL,
+					&DropCcprSubscription{}: QueryTypeDCL,
 
 					// TCL
 					&BeginTransaction{}:    QueryTypeTCL,

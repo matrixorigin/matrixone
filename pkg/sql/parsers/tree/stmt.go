@@ -192,6 +192,10 @@ func (node *DropPublication) StmtKind() StmtKind {
 	return frontendStatusTyp
 }
 
+func (node *DropCcprSubscription) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
 func (node *ShowSubscriptions) StmtKind() StmtKind {
 	return compositeResRowType
 }
