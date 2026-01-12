@@ -2703,18 +2703,46 @@ func TestIsSubscribed_StateChangeAfterCheck(t *testing.T) {
 	ent.lastTs.Store(time.Now().UnixNano())
 	c.subscribed.m[100] = ent
 
-	// Concurrent: one goroutine reads, another changes state
 	var wg sync.WaitGroup
 	results := make(chan bool, 1000)
+
+	// Make sure every reader observes the initial Subscribed state at least once
+	// before we start flapping.
+	var readersStarted sync.WaitGroup
+	readersStarted.Add(10)
+	startFlapping := make(chan struct{})
+	const phases = 6
+	phaseStart := make([]chan struct{}, phases)
+	for i := 0; i < phases; i++ {
+		phaseStart[i] = make(chan struct{})
+	}
+	var phaseDone [phases]sync.WaitGroup
+	for i := 0; i < phases; i++ {
+		phaseDone[i].Add(10)
+	}
 
 	// Reader goroutines
 	for i := 0; i < 10; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for j := 0; j < 100; j++ {
+			// First read happens before flapping
+			ps, ok, state := c.isSubscribed(ctx, 0, 1, 100)
+			if ok {
+				assert.NotNil(t, ps)
+				results <- true
+			} else {
+				assert.Contains(t, []SubscribeState{Unsubscribed, Subscribing, Unsubscribing}, state)
+				results <- false
+			}
+			readersStarted.Done()
+
+			// Wait for state changes to begin
+			<-startFlapping
+
+			for p := 0; p < phases; p++ {
+				<-phaseStart[p]
 				ps, ok, state := c.isSubscribed(ctx, 0, 1, 100)
-				// Either we see Subscribed with valid partition, or we see other state
 				if ok {
 					assert.NotNil(t, ps)
 					results <- true
@@ -2722,23 +2750,28 @@ func TestIsSubscribed_StateChangeAfterCheck(t *testing.T) {
 					assert.Contains(t, []SubscribeState{Unsubscribed, Subscribing, Unsubscribing}, state)
 					results <- false
 				}
+				phaseDone[p].Done()
 			}
 		}()
 	}
 
-	// State changer goroutine - rapidly toggle state
+	// State changer goroutine - rapidly toggle state after all readers took
+	// their initial read.
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		for j := 0; j < 100; j++ {
+		readersStarted.Wait()
+		close(startFlapping)
+		for p := 0; p < phases; p++ {
 			c.subscribed.rw.Lock()
-			if c.subscribed.m[100].state == Subscribed {
+			if p%2 == 0 {
 				c.subscribed.m[100].state = Unsubscribing
 			} else {
 				c.subscribed.m[100].state = Subscribed
 			}
 			c.subscribed.rw.Unlock()
-			time.Sleep(time.Microsecond)
+			close(phaseStart[p])
+			phaseDone[p].Wait()
 		}
 	}()
 
@@ -2755,6 +2788,7 @@ func TestIsSubscribed_StateChangeAfterCheck(t *testing.T) {
 		}
 	}
 	t.Logf("Results: ok=%d, not_ok=%d", trueCount, falseCount)
-	// Both should be non-zero in a proper concurrent test
-	assert.True(t, trueCount > 0, "should have some successful reads")
+	// Both should be non-zero in a proper concurrent test (initial read guarantees >=10)
+	assert.True(t, trueCount >= 10, "should have successful reads")
+	assert.True(t, falseCount > 0, "should observe non-subscribed states as well")
 }
