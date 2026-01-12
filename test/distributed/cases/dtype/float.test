@@ -123,6 +123,9 @@ SELECT * FROM t1 WHERE coalesce(a) in (0.8,0.9);
 -- @bvt:issue
 SELECT * FROM t1 WHERE a BETWEEN 0 AND 0.9;
 SELECT * FROM t1 WHERE a=0.9;
+-- Note: This query now correctly returns 0.8 because float32 vs decimal comparison
+-- is optimized to stay in float32 precision, avoiding float32→float64 conversion
+-- that would cause precision mismatch (float32(0.8) ≠ float64(0.8)).
 SELECT * FROM t1 WHERE a IN (0.8,0.9);
 drop table t1;
 create table t1 (id float, b int);

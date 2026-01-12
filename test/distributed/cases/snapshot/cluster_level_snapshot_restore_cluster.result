@@ -449,6 +449,8 @@ mo_columns
 mo_configurations
 mo_data_key
 mo_database
+mo_feature_limit
+mo_feature_registry
 mo_foreign_keys
 mo_index_update
 mo_indexes
@@ -567,6 +569,8 @@ mo_columns
 mo_configurations
 mo_data_key
 mo_database
+mo_feature_limit
+mo_feature_registry
 mo_foreign_keys
 mo_index_update
 mo_indexes

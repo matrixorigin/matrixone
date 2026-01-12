@@ -519,6 +519,64 @@ func getExprNdv(expr *plan.Expr, builder *QueryBuilder) float64 {
 		case "substring":
 			// no good way to calc ndv for substring
 			return math.Min(getExprNdv(exprImpl.F.Args[0], builder), 25)
+		case "%", "mod":
+			// For modulo operations like b%N, the NDV is at most N
+			if len(exprImpl.F.Args) < 2 {
+				return getExprNdv(exprImpl.F.Args[0], builder)
+			}
+			lit := exprImpl.F.Args[1].GetLit()
+			if lit == nil {
+				// Second argument is not a literal, fallback to column NDV
+				return getExprNdv(exprImpl.F.Args[0], builder)
+			}
+
+			var modValue float64
+			switch v := lit.Value.(type) {
+			case *plan.Literal_I64Val:
+				if v.I64Val > 0 {
+					modValue = float64(v.I64Val)
+				}
+			case *plan.Literal_I32Val:
+				if v.I32Val > 0 {
+					modValue = float64(v.I32Val)
+				}
+			case *plan.Literal_I16Val:
+				if v.I16Val > 0 {
+					modValue = float64(v.I16Val)
+				}
+			case *plan.Literal_I8Val:
+				if v.I8Val > 0 {
+					modValue = float64(v.I8Val)
+				}
+			case *plan.Literal_U64Val:
+				if v.U64Val > 0 && v.U64Val <= math.MaxInt64 {
+					modValue = float64(v.U64Val)
+				}
+			case *plan.Literal_U32Val:
+				if v.U32Val > 0 {
+					modValue = float64(v.U32Val)
+				}
+			case *plan.Literal_U16Val:
+				if v.U16Val > 0 {
+					modValue = float64(v.U16Val)
+				}
+			case *plan.Literal_U8Val:
+				if v.U8Val > 0 {
+					modValue = float64(v.U8Val)
+				}
+			}
+
+			if modValue > 0 {
+				// Take min of column NDV and modulo value for conservative estimate
+				colNdv := getExprNdv(exprImpl.F.Args[0], builder)
+				if colNdv > 0 {
+					return math.Min(colNdv, modValue)
+				}
+				// Unknown NDV should remain unknown, not become a small certain value
+				return colNdv
+			}
+			// Invalid modValue (zero, negative, or overflow), fallback to column NDV
+			return getExprNdv(exprImpl.F.Args[0], builder)
 		default:
 			return getExprNdv(exprImpl.F.Args[0], builder)
 		}
@@ -1719,7 +1777,7 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 			node.Children[0], node.Children[1] = node.Children[1], node.Children[0]
 		}
 
-	case plan.Node_LEFT, plan.Node_SEMI, plan.Node_ANTI:
+	case plan.Node_LEFT, plan.Node_SEMI, plan.Node_ANTI, plan.Node_SINGLE:
 		//right joins does not support non equal join for now
 		if builder.optimizerHints != nil && builder.optimizerHints.disableRightJoin != 0 {
 			node.IsRightJoin = false

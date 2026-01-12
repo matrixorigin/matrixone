@@ -65,7 +65,7 @@ func (s *service) ForceRefreshLockTableBinds(
 		return false
 	}
 
-	s.tableGroups.removeWithFilter(contains)
+	s.tableGroups.removeWithFilter(contains, closeReasonBindChanged)
 }
 
 func (s *service) GetLockTableBind(
@@ -128,6 +128,6 @@ func (s *service) CloseRemoteLockTable(
 			removed = ok
 		}
 		return ok
-	})
+	}, closeReasonBindChanged)
 	return removed, nil
 }

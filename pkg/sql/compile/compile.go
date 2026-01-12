@@ -76,7 +76,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -293,31 +292,6 @@ func (c *Compile) clear() {
 	}
 }
 
-// helper function to judge if init temporary engine is needed
-func (c *Compile) NeedInitTempEngine() bool {
-	for _, s := range c.scopes {
-		ddl := s.Plan.GetDdl()
-		if ddl == nil {
-			continue
-		}
-		if qry := ddl.GetCreateTable(); qry != nil && qry.Temporary {
-			if c.e.(*engine.EntireEngine).TempEngine == nil {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func (c *Compile) SetTempEngine(tempEngine engine.Engine, tempStorage *memorystorage.Storage) {
-	e := c.e.(*engine.EntireEngine)
-	e.TempEngine = tempEngine
-
-	if topContext := c.proc.GetTopContext(); topContext.Value(defines.TemporaryTN{}) == nil {
-		c.proc.SaveToTopContext(defines.TemporaryTN{}, tempStorage)
-	}
-}
-
 func (c *Compile) addAllAffectedRows(s *Scope) {
 	for _, ps := range s.PreScopes {
 		c.addAllAffectedRows(ps)
@@ -395,12 +369,7 @@ func (c *Compile) run(s *Scope) error {
 		c.setAffectedRows(1)
 		return nil
 	case CreateTable:
-		qry := s.Plan.GetDdl().GetCreateTable()
-		if qry.Temporary {
-			return s.CreateTempTable(c)
-		} else {
-			return s.CreateTable(c)
-		}
+		return s.CreateTable(c)
 	case CreatePitr:
 		return s.CreatePitr(c)
 	case CreateCDC:
@@ -2115,15 +2084,7 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 			if txnOp.IsSnapOp() {
 				return err
 			}
-			var e error // avoid contamination of error messages
-			db, e = c.e.Database(c.proc.Ctx, defines.TEMPORARY_DBNAME, txnOp)
-			if e != nil {
-				panic(e)
-			}
-			rel, e = db.Relation(c.proc.Ctx, engine.GetTempTableName(node.ObjRef.SchemaName, node.TableDef.Name), c.proc)
-			if e != nil {
-				panic(e)
-			}
+			return err
 		}
 		tblDef = rel.GetTableDef(ctx)
 		s.DataSource.Rel = rel
@@ -2438,61 +2399,15 @@ func constructShuffleJoinOP(c *Compile, shuffleJoins []*Scope, node, left, right
 
 	currentFirstFlag := c.anal.isFirst
 	switch node.JoinType {
-	case plan.Node_INNER, plan.Node_LEFT, plan.Node_RIGHT:
+	case plan.Node_INNER, plan.Node_LEFT, plan.Node_RIGHT, plan.Node_SEMI, plan.Node_ANTI:
 		for i := range shuffleJoins {
-			op := constructHashJoin(node, leftTypes, rightTypes, c.proc)
+			op := constructHashJoin(node, left, leftTypes, rightTypes, c.proc)
 			op.ShuffleIdx = int32(i)
 			if shuffleV2 {
 				op.ShuffleIdx = -1
 			}
 			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			shuffleJoins[i].setRootOperator(op)
-		}
-
-	case plan.Node_ANTI:
-		if node.IsRightJoin {
-			for i := range shuffleJoins {
-				op := constructRightAnti(node, rightTypes, c.proc)
-				op.ShuffleIdx = int32(i)
-				if shuffleV2 {
-					op.ShuffleIdx = -1
-				}
-				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-				shuffleJoins[i].setRootOperator(op)
-			}
-		} else {
-			for i := range shuffleJoins {
-				op := constructAnti(node, rightTypes, c.proc)
-				op.ShuffleIdx = int32(i)
-				if shuffleV2 {
-					op.ShuffleIdx = -1
-				}
-				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-				shuffleJoins[i].setRootOperator(op)
-			}
-		}
-
-	case plan.Node_SEMI:
-		if node.IsRightJoin {
-			for i := range shuffleJoins {
-				op := constructRightSemi(node, rightTypes, c.proc)
-				op.ShuffleIdx = int32(i)
-				if shuffleV2 {
-					op.ShuffleIdx = -1
-				}
-				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-				shuffleJoins[i].setRootOperator(op)
-			}
-		} else {
-			for i := range shuffleJoins {
-				op := constructSemi(node, left, rightTypes, c.proc)
-				op.ShuffleIdx = int32(i)
-				if shuffleV2 {
-					op.ShuffleIdx = -1
-				}
-				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-				shuffleJoins[i].setRootOperator(op)
-			}
 		}
 
 	case plan.Node_DEDUP:
@@ -2582,7 +2497,7 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 		} else {
 			for i := range rs {
 				if isEq {
-					op := constructHashJoin(node, leftTypes, rightTypes, c.proc)
+					op := constructHashJoin(node, left, leftTypes, rightTypes, c.proc)
 					op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 					rs[i].setRootOperator(op)
 				} else {
@@ -2618,111 +2533,23 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 			rs[i].setRootOperator(op)
 		}
 		c.anal.isFirst = false
-	case plan.Node_SEMI:
+	case plan.Node_LEFT, plan.Node_RIGHT, plan.Node_SEMI, plan.Node_ANTI, plan.Node_SINGLE:
+		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, isEq && node.IsRightJoin)
+		currentFirstFlag := c.anal.isFirst
 		if isEq {
-			if node.IsRightJoin {
-				rs = c.newProbeScopeListForBroadcastJoin(probeScopes, true)
-				currentFirstFlag := c.anal.isFirst
-				for i := range rs {
-					op := constructRightSemi(node, rightTypes, c.proc)
-					op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-					rs[i].setRootOperator(op)
-				}
-				c.anal.isFirst = false
-			} else {
-				rs = c.newProbeScopeListForBroadcastJoin(probeScopes, false)
-				currentFirstFlag := c.anal.isFirst
-				for i := range rs {
-					op := constructSemi(node, left, rightTypes, c.proc)
-					op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-					rs[i].setRootOperator(op)
-				}
-				c.anal.isFirst = false
+			for i := range rs {
+				op := constructHashJoin(node, left, leftTypes, rightTypes, c.proc)
+				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+				rs[i].setRootOperator(op)
 			}
 		} else {
-			rs = c.newProbeScopeListForBroadcastJoin(probeScopes, false)
-			currentFirstFlag := c.anal.isFirst
 			for i := range rs {
-				op := constructLoopJoin(node, rightTypes, c.proc)
-				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-				rs[i].setRootOperator(op)
-			}
-			c.anal.isFirst = false
-		}
-	case plan.Node_LEFT:
-		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, false)
-		currentFirstFlag := c.anal.isFirst
-		for i := range rs {
-			if isEq {
-				op := constructHashJoin(node, leftTypes, rightTypes, c.proc)
-				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-				rs[i].setRootOperator(op)
-			} else {
 				op := constructLoopJoin(node, rightTypes, c.proc)
 				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 				rs[i].setRootOperator(op)
 			}
 		}
 		c.anal.isFirst = false
-	case plan.Node_RIGHT:
-		if isEq {
-			rs = c.newProbeScopeListForBroadcastJoin(probeScopes, true)
-			currentFirstFlag := c.anal.isFirst
-			for i := range rs {
-				op := constructHashJoin(node, leftTypes, rightTypes, c.proc)
-				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-				rs[i].setRootOperator(op)
-			}
-			c.anal.isFirst = false
-		} else {
-			panic("dont pass any no-equal right join plan to this function,it should be changed to left join by the planner")
-		}
-	case plan.Node_SINGLE:
-		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, false)
-		currentFirstFlag := c.anal.isFirst
-		for i := range rs {
-			if isEq {
-				op := constructHashJoin(node, leftTypes, rightTypes, c.proc)
-				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-				rs[i].setRootOperator(op)
-			} else {
-				op := constructLoopJoin(node, rightTypes, c.proc)
-				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-				rs[i].setRootOperator(op)
-			}
-		}
-		c.anal.isFirst = false
-	case plan.Node_ANTI:
-		if isEq {
-			if node.IsRightJoin {
-				rs = c.newProbeScopeListForBroadcastJoin(probeScopes, true)
-				currentFirstFlag := c.anal.isFirst
-				for i := range rs {
-					op := constructRightAnti(node, rightTypes, c.proc)
-					op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-					rs[i].setRootOperator(op)
-				}
-				c.anal.isFirst = false
-			} else {
-				rs = c.newProbeScopeListForBroadcastJoin(probeScopes, false)
-				currentFirstFlag := c.anal.isFirst
-				for i := range rs {
-					op := constructAnti(node, rightTypes, c.proc)
-					op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-					rs[i].setRootOperator(op)
-				}
-				c.anal.isFirst = false
-			}
-		} else {
-			rs = c.newProbeScopeListForBroadcastJoin(probeScopes, false)
-			currentFirstFlag := c.anal.isFirst
-			for i := range rs {
-				op := constructLoopJoin(node, rightTypes, c.proc)
-				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-				rs[i].setRootOperator(op)
-			}
-			c.anal.isFirst = false
-		}
 	case plan.Node_DEDUP:
 		if node.IsRightJoin {
 			rs = c.newProbeScopeListForBroadcastJoin(probeScopes, true)
@@ -2748,17 +2575,9 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, false)
 		currentFirstFlag := c.anal.isFirst
 		for i := range rs {
-			//if isEq {
-			//	rs[i].appendInstruction(vm.Instruction{
-			//		Op:  vm.Mark,
-			//		Idx: c.anal.curNodeIdx,
-			//		Arg: constructMark(n, typs, c.proc),
-			//	})
-			//} else {
 			op := constructLoopJoin(node, rightTypes, c.proc)
 			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			rs[i].setRootOperator(op)
-			//}
 		}
 		c.anal.isFirst = false
 	default:
@@ -4250,26 +4069,7 @@ func (c *Compile) handleDbRelContext(node *plan.Node, onRemoteCN bool) (engine.R
 	}
 	rel, err = db.Relation(ctx, node.TableDef.Name, c.proc)
 	if err != nil {
-		if txnOp.IsSnapOp() {
-			return nil, nil, nil, err
-		}
-		var e error // avoid contamination of error messages
-		db, e = c.e.Database(ctx, defines.TEMPORARY_DBNAME, txnOp)
-		if e != nil {
-			return nil, nil, nil, err
-		}
-
-		// if temporary table, just scan at local cn.
-		rel, e = db.Relation(ctx, engine.GetTempTableName(node.ObjRef.SchemaName, node.TableDef.Name), c.proc)
-		if e != nil {
-			return nil, nil, nil, err
-		}
-		c.cnList = engine.Nodes{
-			engine.Node{
-				Addr: c.addr,
-				Mcpu: 1,
-			},
-		}
+		return nil, nil, nil, err
 	}
 
 	return rel, db, ctx, nil

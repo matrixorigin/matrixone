@@ -35,12 +35,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -53,7 +50,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/panjf2000/ants/v2"
@@ -1559,59 +1555,6 @@ type statsList struct {
 	stats map[string]any
 }
 
-type betaCycleStash struct {
-	snapshot types.TS
-
-	born time.Time
-
-	dataObjIds *[]types.Objectid
-
-	totalSize   float64
-	totalRows   float64
-	deletedRows float64
-
-	tblockCnt, dblockCnt   int
-	tobjectCnt, dobjectCnt int
-}
-
-func stashToStats(bcs betaCycleStash) statsList {
-	var (
-		sl statsList
-	)
-
-	sl.stats = make(map[string]any)
-
-	// table rows
-	{
-		leftRows := bcs.totalRows - bcs.deletedRows
-		sl.stats[TableStatsName[TableStatsTableRows]] = leftRows
-	}
-
-	// table size
-	{
-		deletedSize := float64(0)
-		if bcs.totalRows > 0 && bcs.deletedRows > 0 {
-			deletedSize = bcs.totalSize / bcs.totalRows * bcs.deletedRows
-		}
-
-		leftSize := math.Round((bcs.totalSize-deletedSize)*1000) / 1000
-		sl.stats[TableStatsName[TableStatsTableSize]] = leftSize
-	}
-
-	// data object, block count
-	// tombstone object, block count
-	{
-		sl.stats[TableStatsName[TableStatsTObjectCnt]] = bcs.tobjectCnt
-		sl.stats[TableStatsName[TableStatsTBlockCnt]] = bcs.tblockCnt
-		sl.stats[TableStatsName[TableStatsDObjectCnt]] = bcs.dobjectCnt
-		sl.stats[TableStatsName[TableStatsDBlockCnt]] = bcs.dblockCnt
-	}
-
-	sl.took = time.Since(bcs.born)
-
-	return sl
-}
-
 func GetMOTableStatsExecutor(
 	service string,
 	eng engine.Engine,
@@ -2600,28 +2543,30 @@ func (d *dynamicCtx) statsCalculateOp(
 		return
 	}
 
-	bcs := betaCycleStash{
-		born:       time.Now(),
-		snapshot:   snapshot,
-		dataObjIds: d.objIdsPool.Get().(*[]types.Objectid),
+	born := time.Now()
+
+	// Use the new CalculateTableStats function in partition state
+	stats, err := pState.CalculateTableStats(ctx, snapshot, fs)
+	if err != nil {
+		return sl, err
 	}
 
-	defer func() {
-		*bcs.dataObjIds = (*bcs.dataObjIds)[:0]
-		d.objIdsPool.Put(bcs.dataObjIds)
-	}()
+	// Convert to statsList format
+	sl.stats = make(map[string]any)
 
-	if err = collectVisibleData(&bcs, pState); err != nil {
-		return
-	}
+	// table rows and size (already calculated in CalculateTableStats)
+	sl.stats[TableStatsName[TableStatsTableRows]] = stats.TotalRows
+	sl.stats[TableStatsName[TableStatsTableSize]] = math.Round(stats.TotalSize*1000) / 1000
 
-	if err = applyTombstones(ctx, &bcs, fs, pState); err != nil {
-		return
-	}
+	// object and block counts
+	sl.stats[TableStatsName[TableStatsTObjectCnt]] = stats.TombstoneObjectCnt
+	sl.stats[TableStatsName[TableStatsTBlockCnt]] = stats.TombstoneBlockCnt
+	sl.stats[TableStatsName[TableStatsDObjectCnt]] = stats.DataObjectCnt
+	sl.stats[TableStatsName[TableStatsDBlockCnt]] = stats.DataBlockCnt
 
-	sl = stashToStats(bcs)
+	sl.took = time.Since(born)
 
-	v2.CalculateStatsDurationHistogram.Observe(time.Since(bcs.born).Seconds())
+	v2.CalculateStatsDurationHistogram.Observe(time.Since(born).Seconds())
 
 	return sl, nil
 }
@@ -3085,189 +3030,6 @@ func subscribeTable(
 	}
 
 	return pState, nil
-}
-
-// O(m+n)
-func getDeletedRows(
-	objIds []types.Objectid,
-	rowIds []types.Rowid,
-) (deletedCnt int) {
-
-	var (
-		i int
-		j int
-	)
-
-	for i < len(objIds) && j < len(rowIds) {
-		if j > 0 && rowIds[j-1].EQ(&rowIds[j]) {
-			j++
-			continue
-		}
-
-		cmp := rowIds[j].BorrowObjectID().Compare(&objIds[i])
-
-		if cmp == 0 {
-			deletedCnt++
-			j++
-		} else if cmp > 0 {
-			i++
-		} else {
-			// cmp < 0
-			j++
-		}
-	}
-
-	return deletedCnt
-}
-
-func collectVisibleData(
-	bcs *betaCycleStash,
-	pState *logtailreplay.PartitionState,
-) (err error) {
-
-	var (
-		dRowIter logtailreplay.RowsIter
-		dObjIter objectio.ObjectIter
-
-		estimatedOneRowSize float64
-	)
-
-	defer func() {
-		if dRowIter != nil {
-			err = dRowIter.Close()
-		}
-
-		if dObjIter != nil {
-			err = dObjIter.Close()
-		}
-	}()
-
-	dObjIter, err = pState.NewObjectsIter(bcs.snapshot, true, false)
-	if err != nil {
-		return err
-	}
-
-	dRowIter = pState.NewRowsIter(bcs.snapshot, nil, false)
-
-	// there won't exist visible appendable obj
-	for dObjIter.Next() {
-		obj := dObjIter.Entry()
-
-		bcs.dobjectCnt++
-		bcs.dblockCnt += int(obj.BlkCnt())
-
-		bcs.totalSize += float64(obj.Size())
-		bcs.totalRows += float64(obj.Rows())
-		*bcs.dataObjIds = append(
-			*bcs.dataObjIds, *obj.ObjectStats.ObjectName().ObjectId())
-	}
-
-	if bcs.totalRows != 0 {
-		estimatedOneRowSize = bcs.totalSize / bcs.totalRows
-	}
-
-	// 1. inserts on appendable object
-	for dRowIter.Next() {
-		entry := dRowIter.Entry()
-
-		idx := slices.IndexFunc(*bcs.dataObjIds, func(objId types.Objectid) bool {
-			return objId.EQ(entry.BlockID.Object())
-		})
-
-		if idx == -1 {
-			*bcs.dataObjIds = append(*bcs.dataObjIds, *entry.BlockID.Object())
-		}
-
-		bcs.totalRows += float64(1)
-		if estimatedOneRowSize > 0 {
-			bcs.totalSize += estimatedOneRowSize
-		} else {
-			bcs.totalSize += float64(entry.Batch.Size()) / float64(entry.Batch.RowCount())
-		}
-	}
-
-	return
-}
-
-func applyTombstones(
-	ctx context.Context,
-	bcs *betaCycleStash,
-	fs fileservice.FileService,
-	pState *logtailreplay.PartitionState,
-) (err error) {
-	var (
-		tObjIter objectio.ObjectIter
-
-		hidden  objectio.HiddenColumnSelection
-		release func()
-	)
-
-	tObjIter, err = pState.NewObjectsIter(bcs.snapshot, true, true)
-	if err != nil {
-		return err
-	}
-
-	// 1. non-appendable tombstone obj
-	// 2. appendable tombstone obj
-	for tObjIter.Next() {
-		tombstone := tObjIter.Entry()
-
-		bcs.tobjectCnt++
-		bcs.tblockCnt += int(tombstone.BlkCnt())
-
-		attrs := objectio.GetTombstoneAttrs(hidden)
-		persistedDeletes := containers.NewVectors(len(attrs))
-
-		objectio.ForeachBlkInObjStatsList(true, nil,
-			func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
-
-				if _, release, err = ioutil.ReadDeletes(
-					ctx, blk.MetaLoc[:], fs, tombstone.GetCNCreated(), persistedDeletes, nil,
-				); err != nil {
-					return false
-				}
-				defer release()
-
-				rowIds := vector.MustFixedColNoTypeCheck[types.Rowid](&persistedDeletes[0])
-				cnt := getDeletedRows(*bcs.dataObjIds, rowIds)
-
-				bcs.deletedRows += float64(cnt)
-				//deletedRows += float64(cnt)
-				return true
-			}, tombstone.ObjectStats)
-
-		//loaded += int(tombstone.BlkCnt())
-
-		if err != nil {
-			return
-		}
-	}
-
-	// if appendable tombstone persisted, deletes on it already eliminated
-	// 1. deletes on appendable object
-	// 2. deletes on non-appendable objects
-	//
-	// here, we only collect the deletes that have not paired inserts
-	// according to its LESS function, the deletes come first
-	var lastInsert logtailreplay.RowEntry
-	err = pState.ScanRows(true, func(entry *logtailreplay.RowEntry) (bool, error) {
-		if !entry.Deleted {
-			lastInsert = *entry
-			return true, nil
-		}
-
-		if entry.RowID.EQ(&lastInsert.RowID) {
-			return true, nil
-		}
-
-		bcs.deletedRows += float64(getDeletedRows(*bcs.dataObjIds, []types.Rowid{entry.RowID}))
-		//deletedRows += float64(getDeletedRows(moTableStats.bcs.dataObjIds, []types.Rowid{entry.RowID}))
-
-		return true, nil
-	})
-
-	//return deletedRows, loaded, err
-	return nil
 }
 
 func (d *dynamicCtx) bulkUpdateTableStatsList(

@@ -101,8 +101,7 @@ select count(b) from t1;
 count(b)
 8
 select sum(b) from t1;
-sum(b)
-1044
+invalid argument aggregate function sum, bad value [BIT]
 select min(b) from t1;
 min(b)
 0
@@ -110,17 +109,14 @@ select max(b) from t1;
 max(b)
 1023
 select avg(b) from t1;
-avg(b)
-130.5
+invalid argument aggregate function avg, bad value [BIT]
 select median(b) from t1;
 median(b)
 3.5
 select var_pop(b) from t1;
-var_pop(b)
-113797.25
+invalid argument aggregate function var_pop, bad value [BIT]
 select stddev_pop(b) from t1;
-stddev_pop(b)
-337.33847986851424
+invalid argument aggregate function stddev_pop, bad value [BIT]
 ALTER TABLE t1 ADD c BIT(10) DEFAULT 0x1;
 select * from t1;
 a    b    c

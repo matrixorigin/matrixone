@@ -1247,7 +1247,7 @@ func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name s
 	}
 
 	switch retExpr.GetF().GetFunc().GetObjName() {
-	case "+", "-", "*", "/", "unary_minus", "unary_plus", "unary_tilde", "cast", "serial", "serial_full":
+	case "+", "-", "*", "/", "div", "%", "mod", "unary_minus", "unary_plus", "unary_tilde", "cast", "serial", "serial_full":
 		if proc != nil {
 			tmpexpr, _ := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(retExpr), proc, false, true)
 			if tmpexpr != nil {
@@ -1374,6 +1374,18 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		// why not append cast function?
 		if err := convertValueIntoBool(name, args, false); err != nil {
 			return nil, err
+		}
+
+		// Early detection for decimal comparisons
+		if len(args) == 2 {
+			if name == "=" && isDecimalComparisonAlwaysFalse(ctx, args[0], args[1]) {
+				// Equality with incompatible precision is always false
+				return makePlan2BoolConstExprWithType(false), nil
+			}
+			if name == "<>" && isDecimalComparisonAlwaysFalse(ctx, args[0], args[1]) {
+				// Inequality with incompatible precision is always true
+				return makePlan2BoolConstExprWithType(true), nil
+			}
 		}
 	case "date_add", "date_sub":
 		// rewrite date_add/date_sub function
@@ -1751,6 +1763,76 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	returnType = fGet.GetReturnType()
 	argsCastType, _ = fGet.ShouldDoImplicitTypeCast()
 
+	// Optimization: avoid casting columns in comparisons to preserve index usage
+	switch name {
+	case "=", "<", "<=", ">", ">=", "<>":
+		if len(args) == 2 && len(argsType) == 2 {
+			if len(argsCastType) == 0 {
+				argsCastType = []types.Type{argsType[0], argsType[1]}
+			}
+			if len(argsCastType) == 2 {
+				leftIsCol := args[0].GetCol() != nil
+				rightIsCol := args[1].GetCol() != nil
+
+				// Check if we can use column type to avoid casting it
+				canUse := func(colType, otherType types.Type, colExpr, otherExpr *plan.Expr) bool {
+					colOid, otherOid := colType.Oid, otherType.Oid
+
+					// For integers, check if constant value is within column type range
+					if colOid.IsInteger() && otherOid.IsInteger() {
+						// Use checkNoNeedCast to verify value range
+						if otherExpr != nil && otherExpr.GetLit() != nil {
+							return checkNoNeedCast(otherType, colType, otherExpr)
+						}
+						// If not a literal, conservatively allow (e.g., column vs column)
+						return true
+					}
+
+					// For float types, check if conversion is safe
+					if (colOid == types.T_float32 || colOid == types.T_float64) &&
+						(otherOid == types.T_float32 || otherOid == types.T_float64 || otherOid.IsDecimal() || otherOid.IsInteger()) {
+						// For literals, use checkNoNeedCast to verify range
+						if otherExpr != nil && otherExpr.GetLit() != nil {
+							return checkNoNeedCast(otherType, colType, otherExpr)
+						}
+						return true
+					}
+
+					// For decimal types, check scale compatibility
+					if colOid.IsDecimal() && otherOid.IsDecimal() {
+						// Only use column type if it has enough precision (scale)
+						// to represent the other value without truncation
+						if colType.Scale >= otherType.Scale {
+							return true
+						}
+						// Check if the other value (constant) has trailing zeros that can be truncated
+						if otherExpr != nil && hasTrailingZeros(otherExpr, otherType, colType.Scale) {
+							return true
+						}
+						return false
+					}
+
+					return false
+				}
+
+				// Try column type if column would be cast
+				if leftIsCol && !rightIsCol && !argsType[0].Eq(argsCastType[0]) && canUse(argsType[0], argsType[1], args[0], args[1]) {
+					if fGet2, err := function.GetFunctionByName(ctx, name, []types.Type{argsType[0], argsType[0]}); err == nil {
+						argsCastType = []types.Type{argsType[0], argsType[0]}
+						funcID = fGet2.GetEncodedOverloadID()
+						returnType = fGet2.GetReturnType()
+					}
+				} else if !leftIsCol && rightIsCol && !argsType[1].Eq(argsCastType[1]) && canUse(argsType[1], argsType[0], args[1], args[0]) {
+					if fGet2, err := function.GetFunctionByName(ctx, name, []types.Type{argsType[1], argsType[1]}); err == nil {
+						argsCastType = []types.Type{argsType[1], argsType[1]}
+						funcID = fGet2.GetEncodedOverloadID()
+						returnType = fGet2.GetReturnType()
+					}
+				}
+			}
+		}
+	}
+
 	if name == "round" || name == "ceil" || name == "ceiling" || name == "floor" && argsType[0].IsDecimal() {
 		if len(argsType) == 1 {
 			returnType.Scale = 0
@@ -1994,10 +2076,39 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 			}
 			return appendCastBeforeExpr(b.GetContext(), makePlan2StringConstExprWithType(astExpr.String()), typ)
 		}
+		// Smart type selection for untyped decimal literals
+		// Choose decimal64 if value fits, otherwise decimal128
 		d128, scale, err := types.Parse128(astExpr.String())
 		if err != nil {
 			return nil, err
 		}
+
+		// Check if value fits in decimal64 (18 digits precision)
+		// decimal64 max: 999999999999999999 (18 nines)
+		maxDecimal64 := uint64(999999999999999999)
+		useDecimal64 := d128.B64_127 == 0 && d128.B0_63 <= maxDecimal64 && scale <= 18
+
+		if useDecimal64 {
+			d64 := types.Decimal64(d128.B0_63)
+			return &Expr{
+				Expr: &plan.Expr_Lit{
+					Lit: &Const{
+						Isnull: false,
+						Value: &plan.Literal_Decimal64Val{
+							Decimal64Val: &plan.Decimal64{A: int64(d64)},
+						},
+					},
+				},
+				Typ: plan.Type{
+					Id:          int32(types.T_decimal64),
+					Width:       18,
+					Scale:       scale,
+					NotNullable: true,
+				},
+			}, nil
+		}
+
+		// Use decimal128 for higher precision
 		a := int64(d128.B0_63)
 		b := int64(d128.B64_127)
 		return &Expr{

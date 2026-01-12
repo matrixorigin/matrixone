@@ -57,14 +57,11 @@ select bit_and(e) from t1;
 bit_and(e)
 4
 select bit_and(f) from t1;
-bit_and(f)
-1
+invalid argument aggregate function bit_and, bad value [FLOAT]
 select bit_and(g) from t1;
-bit_and(g)
-5
+invalid argument aggregate function bit_and, bad value [DOUBLE]
 select bit_and(h) from t1;
-bit_and(h)
-12
+invalid argument aggregate function bit_and, bad value [DOUBLE]
 select bit_and(i) from t1;
 invalid argument aggregate function bit_and, bad value [DATE]
 select bit_and(k) from t1;
@@ -72,11 +69,9 @@ invalid argument aggregate function bit_and, bad value [DATETIME]
 select bit_and(l) from t1;
 invalid argument aggregate function bit_and, bad value [TIMESTAMP]
 select bit_and(m) from t1;
-bit_and(m)
-0
+[unknown result because it is related to issue#3373]
 select bit_and(n) from t1;
-bit_and(n)
-0
+[unknown result because it is related to issue#3373]
 drop table t1;
 create table t1(a tinyint, b SMALLINT, c bigint, d INT, e BIGINT, f FLOAT, g DOUBLE, h decimal(38,19), i DATE, k datetime, l TIMESTAMP, m char(255), n varchar(255));
 insert into t1 values(1, 1, 2, 43, 5, 35.5, 31.133, 14.314, "2012-03-10", "2012-03-12 10:03:12", "2022-03-12 13:03:12", "ab23c", "d5cf");
@@ -99,14 +94,11 @@ select bit_or(e) from t1;
 bit_or(e)
 55
 select bit_or(f) from t1;
-bit_or(f)
-55
+invalid argument aggregate function bit_or, bad value [FLOAT]
 select bit_or(g) from t1;
-bit_or(g)
-511
+invalid argument aggregate function bit_or, bad value [DOUBLE]
 select bit_or(h) from t1;
-bit_or(h)
-127
+invalid argument aggregate function bit_or, bad value [DOUBLE]
 select bit_or(i) from t1;
 invalid argument aggregate function bit_or, bad value [DATE]
 select bit_or(k) from t1;
@@ -114,11 +106,9 @@ invalid argument aggregate function bit_or, bad value [DATETIME]
 select bit_or(l) from t1;
 invalid argument aggregate function bit_or, bad value [TIMESTAMP]
 select bit_or(m) from t1;
-bit_or(m)
-3
+[unknown result because it is related to issue#3373]
 select bit_or(n) from t1;
-bit_or(n)
-3
+[unknown result because it is related to issue#3373]
 drop table t1;
 create table t1(a tinyint, b SMALLINT, c bigint, d INT, e BIGINT, f FLOAT, g DOUBLE, h decimal(38,19), i DATE, k datetime, l TIMESTAMP, m char(255), n varchar(255));
 insert into t1 values(1, 1, 2, 43, 5, 35.5, 31.133, 14.314, "2012-03-10", "2012-03-12 10:03:12", "2022-03-12 13:03:12", "ab23c", "d5cf");
@@ -141,14 +131,11 @@ select bit_xor(e) from t1;
 bit_xor(e)
 51
 select bit_xor(f) from t1;
-bit_xor(f)
-22
+invalid argument aggregate function bit_xor, bad value [FLOAT]
 select bit_xor(g) from t1;
-bit_xor(g)
-250
+invalid argument aggregate function bit_xor, bad value [DOUBLE]
 select bit_xor(h) from t1;
-bit_xor(h)
-115
+invalid argument aggregate function bit_xor, bad value [DOUBLE]
 select bit_xor(i) from t1;
 invalid argument aggregate function bit_xor, bad value [DATE]
 select bit_xor(k) from t1;
@@ -156,30 +143,22 @@ invalid argument aggregate function bit_xor, bad value [DATETIME]
 select bit_xor(l) from t1;
 invalid argument aggregate function bit_xor, bad value [TIMESTAMP]
 select bit_xor(m) from t1;
-bit_xor(m)
-3
+[unknown result because it is related to issue#3373]
 select bit_xor(n) from t1;
-bit_xor(n)
-3
+[unknown result because it is related to issue#3373]
 drop table t1;
 select BIT_AND(99999999999999999.99999), BIT_OR(99999999999999999.99999), BIT_XOR(99999999999999999.99999);
-BIT_AND(99999999999999999.99999)    BIT_OR(99999999999999999.99999)    BIT_XOR(99999999999999999.99999)
-100000000000000000    100000000000000000    100000000000000000
+invalid argument aggregate function bit_and, bad value [DOUBLE]
 select BIT_AND(999999999999999933193939.99999),BIT_OR(999999999999999933193939.99999),BIT_XOR(999999999999999933193939.99999);
-BIT_AND(999999999999999933193939.99999)    BIT_OR(999999999999999933193939.99999)    BIT_XOR(999999999999999933193939.99999)
-9223372036854775807    9223372036854775807    9223372036854775807
+invalid argument aggregate function bit_and, bad value [DOUBLE]
 select BIT_AND(9999999999999999999999999999999999.9999999999999),BIT_OR(9999999999999999999999999999999999.9999999999999),BIT_XOR(9999999999999999999999999999999999.9999999999999);
-BIT_AND(9999999999999999999999999999999999.9999999999999)    BIT_OR(9999999999999999999999999999999999.9999999999999)    BIT_XOR(9999999999999999999999999999999999.9999999999999)
-9223372036854775807    9223372036854775807    9223372036854775807
+invalid argument aggregate function bit_and, bad value [DOUBLE]
 select BIT_AND(-99999999999999999.99999),BIT_OR(-99999999999999999.99999),BIT_XOR(-99999999999999999.99999);
-BIT_AND(-99999999999999999.99999)    BIT_OR(-99999999999999999.99999)    BIT_XOR(-99999999999999999.99999)
-18346744073709551616    18346744073709551616    18346744073709551616
+invalid argument aggregate function bit_and, bad value [DOUBLE]
 select BIT_AND(-999999999999999933193939.99999),BIT_OR(-999999999999999933193939.99999),BIT_XOR(-999999999999999933193939.99999);
-BIT_AND(-999999999999999933193939.99999)    BIT_OR(-999999999999999933193939.99999)    BIT_XOR(-999999999999999933193939.99999)
-9223372036854775808    9223372036854775808    9223372036854775808
+invalid argument aggregate function bit_and, bad value [DOUBLE]
 select BIT_AND(-9999999999999999999999999999999999.9999999999999),BIT_OR(-9999999999999999999999999999999999.9999999999999),BIT_XOR(-9999999999999999999999999999999999.9999999999999);
-BIT_AND(-9999999999999999999999999999999999.9999999999999)    BIT_OR(-9999999999999999999999999999999999.9999999999999)    BIT_XOR(-9999999999999999999999999999999999.9999999999999)
-9223372036854775808    9223372036854775808    9223372036854775808
+invalid argument aggregate function bit_and, bad value [DOUBLE]
 create table t1(a bigint);
 select BIT_AND(a),BIT_OR(a), BIT_XOR(a) from t1;
 BIT_AND(a)    BIT_OR(a)    BIT_XOR(a)
@@ -245,7 +224,7 @@ SELECT BIT_AND(1)<BIT_AND(2), BIT_AND(1)>BIT_OR(3), BIT_AND(3)>BIT_XOR(5);
 BIT_AND(1) < BIT_AND(2)    BIT_AND(1) > BIT_OR(3)    BIT_AND(3) > BIT_XOR(5)
 1    0    0
 SELECT BIT_AND(1 - 1), BIT_OR(1 - (-1)), BIT_XOR(1 / 0);
-Data truncation: division by zero
+invalid argument aggregate function bit_xor, bad value [DOUBLE]
 drop table if exists t1;
 create table t1(a varbinary(3));
 insert into t1 values(3), (4), (9), (7), (6);

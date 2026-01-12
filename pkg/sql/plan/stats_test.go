@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -505,4 +506,279 @@ func TestCalcNodeDOP_DistinctAggregationWithNilStats(t *testing.T) {
 	require.NotNil(t, aggNode.Stats, "Stats should be created for distinct aggregation")
 	require.Equal(t, int32(1), aggNode.Stats.Dop, "Distinct aggregation should have Dop=1")
 	require.True(t, aggNode.Stats.ForceOneCN, "Distinct aggregation should have ForceOneCN=true")
+}
+
+func TestGetExprNdv(t *testing.T) {
+	ctx := context.Background()
+	mockCtx := &MockCompilerContext{ctx: ctx}
+	builder := NewQueryBuilder(planpb.Query_SELECT, mockCtx, false, false)
+
+	// Setup test table with stats
+	builder.qry.Nodes = append(builder.qry.Nodes, &planpb.Node{
+		NodeType: planpb.Node_TABLE_SCAN,
+		Stats: &planpb.Stats{
+			TableCnt: 1000,
+		},
+	})
+
+	// Mock column stats
+	colRef := &planpb.ColRef{
+		RelPos: 0,
+		ColPos: 0,
+		Name:   "test_col",
+	}
+	builder.tag2Table = make(map[int32]*TableDef)
+	builder.tag2Table[0] = &TableDef{
+		Name: "test_table",
+		Cols: []*ColDef{
+			{
+				Name: "test_col",
+				Typ:  planpb.Type{Id: int32(types.T_int64)},
+			},
+		},
+	}
+
+	t.Run("year function", func(t *testing.T) {
+		expr := &planpb.Expr{
+			Expr: &planpb.Expr_F{
+				F: &planpb.Function{
+					Func: &planpb.ObjectRef{ObjName: "year"},
+					Args: []*planpb.Expr{
+						{Expr: &planpb.Expr_Col{Col: colRef}},
+					},
+				},
+			},
+		}
+		ndv := getExprNdv(expr, builder)
+		// year divides by 365, so result can be negative if col ndv is -1
+		require.NotEqual(t, 0.0, ndv)
+	})
+
+	t.Run("substring function", func(t *testing.T) {
+		expr := &planpb.Expr{
+			Expr: &planpb.Expr_F{
+				F: &planpb.Function{
+					Func: &planpb.ObjectRef{ObjName: "substring"},
+					Args: []*planpb.Expr{
+						{Expr: &planpb.Expr_Col{Col: colRef}},
+					},
+				},
+			},
+		}
+		ndv := getExprNdv(expr, builder)
+		require.LessOrEqual(t, ndv, 25.0)
+	})
+
+	t.Run("mod with i64 literal", func(t *testing.T) {
+		expr := &planpb.Expr{
+			Expr: &planpb.Expr_F{
+				F: &planpb.Function{
+					Func: &planpb.ObjectRef{ObjName: "%"},
+					Args: []*planpb.Expr{
+						{Expr: &planpb.Expr_Col{Col: colRef}},
+						{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: 10}}}},
+					},
+				},
+			},
+		}
+		ndv := getExprNdv(expr, builder)
+		// Unknown NDV should remain unknown
+		require.Equal(t, -1.0, ndv)
+	})
+
+	t.Run("mod with i32 literal", func(t *testing.T) {
+		expr := &planpb.Expr{
+			Expr: &planpb.Expr_F{
+				F: &planpb.Function{
+					Func: &planpb.ObjectRef{ObjName: "mod"},
+					Args: []*planpb.Expr{
+						{Expr: &planpb.Expr_Col{Col: colRef}},
+						{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I32Val{I32Val: 5}}}},
+					},
+				},
+			},
+		}
+		ndv := getExprNdv(expr, builder)
+		require.Equal(t, -1.0, ndv)
+	})
+
+	t.Run("mod with i16 literal", func(t *testing.T) {
+		expr := &planpb.Expr{
+			Expr: &planpb.Expr_F{
+				F: &planpb.Function{
+					Func: &planpb.ObjectRef{ObjName: "%"},
+					Args: []*planpb.Expr{
+						{Expr: &planpb.Expr_Col{Col: colRef}},
+						{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I16Val{I16Val: 3}}}},
+					},
+				},
+			},
+		}
+		ndv := getExprNdv(expr, builder)
+		require.Equal(t, -1.0, ndv)
+	})
+
+	t.Run("mod with i8 literal", func(t *testing.T) {
+		expr := &planpb.Expr{
+			Expr: &planpb.Expr_F{
+				F: &planpb.Function{
+					Func: &planpb.ObjectRef{ObjName: "%"},
+					Args: []*planpb.Expr{
+						{Expr: &planpb.Expr_Col{Col: colRef}},
+						{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I8Val{I8Val: 2}}}},
+					},
+				},
+			},
+		}
+		ndv := getExprNdv(expr, builder)
+		require.Equal(t, -1.0, ndv)
+	})
+
+	t.Run("mod with u64 literal", func(t *testing.T) {
+		expr := &planpb.Expr{
+			Expr: &planpb.Expr_F{
+				F: &planpb.Function{
+					Func: &planpb.ObjectRef{ObjName: "%"},
+					Args: []*planpb.Expr{
+						{Expr: &planpb.Expr_Col{Col: colRef}},
+						{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_U64Val{U64Val: 100}}}},
+					},
+				},
+			},
+		}
+		ndv := getExprNdv(expr, builder)
+		require.Equal(t, -1.0, ndv)
+	})
+
+	t.Run("mod with u32 literal", func(t *testing.T) {
+		expr := &planpb.Expr{
+			Expr: &planpb.Expr_F{
+				F: &planpb.Function{
+					Func: &planpb.ObjectRef{ObjName: "%"},
+					Args: []*planpb.Expr{
+						{Expr: &planpb.Expr_Col{Col: colRef}},
+						{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_U32Val{U32Val: 50}}}},
+					},
+				},
+			},
+		}
+		ndv := getExprNdv(expr, builder)
+		require.Equal(t, -1.0, ndv)
+	})
+
+	t.Run("mod with u16 literal", func(t *testing.T) {
+		expr := &planpb.Expr{
+			Expr: &planpb.Expr_F{
+				F: &planpb.Function{
+					Func: &planpb.ObjectRef{ObjName: "%"},
+					Args: []*planpb.Expr{
+						{Expr: &planpb.Expr_Col{Col: colRef}},
+						{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_U16Val{U16Val: 20}}}},
+					},
+				},
+			},
+		}
+		ndv := getExprNdv(expr, builder)
+		require.Equal(t, -1.0, ndv)
+	})
+
+	t.Run("mod with u8 literal", func(t *testing.T) {
+		expr := &planpb.Expr{
+			Expr: &planpb.Expr_F{
+				F: &planpb.Function{
+					Func: &planpb.ObjectRef{ObjName: "%"},
+					Args: []*planpb.Expr{
+						{Expr: &planpb.Expr_Col{Col: colRef}},
+						{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_U8Val{U8Val: 7}}}},
+					},
+				},
+			},
+		}
+		ndv := getExprNdv(expr, builder)
+		require.Equal(t, -1.0, ndv)
+	})
+
+	t.Run("mod with negative literal", func(t *testing.T) {
+		expr := &planpb.Expr{
+			Expr: &planpb.Expr_F{
+				F: &planpb.Function{
+					Func: &planpb.ObjectRef{ObjName: "%"},
+					Args: []*planpb.Expr{
+						{Expr: &planpb.Expr_Col{Col: colRef}},
+						{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: -5}}}},
+					},
+				},
+			},
+		}
+		ndv := getExprNdv(expr, builder)
+		// Negative modValue falls back to column NDV
+		require.Equal(t, -1.0, ndv)
+	})
+
+	t.Run("mod with non-literal", func(t *testing.T) {
+		expr := &planpb.Expr{
+			Expr: &planpb.Expr_F{
+				F: &planpb.Function{
+					Func: &planpb.ObjectRef{ObjName: "%"},
+					Args: []*planpb.Expr{
+						{Expr: &planpb.Expr_Col{Col: colRef}},
+						{Expr: &planpb.Expr_Col{Col: colRef}},
+					},
+				},
+			},
+		}
+		ndv := getExprNdv(expr, builder)
+		// Non-literal falls back to column NDV
+		require.Equal(t, -1.0, ndv)
+	})
+
+	t.Run("mod with single arg", func(t *testing.T) {
+		expr := &planpb.Expr{
+			Expr: &planpb.Expr_F{
+				F: &planpb.Function{
+					Func: &planpb.ObjectRef{ObjName: "%"},
+					Args: []*planpb.Expr{
+						{Expr: &planpb.Expr_Col{Col: colRef}},
+					},
+				},
+			},
+		}
+		ndv := getExprNdv(expr, builder)
+		// Single arg falls back to column NDV
+		require.Equal(t, -1.0, ndv)
+	})
+
+	t.Run("default function", func(t *testing.T) {
+		expr := &planpb.Expr{
+			Expr: &planpb.Expr_F{
+				F: &planpb.Function{
+					Func: &planpb.ObjectRef{ObjName: "abs"},
+					Args: []*planpb.Expr{
+						{Expr: &planpb.Expr_Col{Col: colRef}},
+					},
+				},
+			},
+		}
+		ndv := getExprNdv(expr, builder)
+		// Default function returns column NDV
+		require.Equal(t, -1.0, ndv)
+	})
+
+	t.Run("column reference", func(t *testing.T) {
+		expr := &planpb.Expr{
+			Expr: &planpb.Expr_Col{Col: colRef},
+		}
+		ndv := getExprNdv(expr, builder)
+		require.True(t, ndv > 0 || ndv == -1)
+	})
+
+	t.Run("unsupported expr type", func(t *testing.T) {
+		expr := &planpb.Expr{
+			Expr: &planpb.Expr_Lit{
+				Lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: 42}},
+			},
+		}
+		ndv := getExprNdv(expr, builder)
+		require.Equal(t, -1.0, ndv)
+	})
 }

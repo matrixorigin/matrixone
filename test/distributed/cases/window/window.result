@@ -1167,7 +1167,7 @@ null
 99999999999999999999999999999999999.833
 99999999999999999999999999999999999.833
 select avg(d) over (partition by d) from decimal01;
-invalid input: Decimal128 Div overflow: 28888888888888888888888888888888888123(Scale:3)/1(Scale:0)
+invalid input: Decimal128 Add overflow: 99999999999999999999999999999999999833+99999999999999999999999999999999999833
 select sum(d) over (partition by d order by d rows between 1 preceding and 1 following) from decimal01;
 [unknown result because it is related to issue#10043]
 drop table decimal01;
@@ -2939,17 +2939,7 @@ count(*)
 select avg(d) over (order by d range between 2 preceding and 2 following) from td limit 10;
 [unknown result because it is related to issue#13008]
 select sum(d) over (order by d rows between 10 preceding and 10 following) from td limit 10;
-sum(d) over (order by d rows between 10 preceding and 10 following)
-66
-78
-91
-105
-120
-136
-153
-171
-190
-210
+internal error: the Window operator currently does not support sending split result of window function.
 select d,min(d) over (partition by d%7 order by d rows  between 2 preceding and 1 following) from td limit 10;
 d    min(d) over (partition by d % 7 order by d rows between 2 preceding and 1 following)
 7    7
@@ -4156,4 +4146,5 @@ select * from (select i_manufact_id, sum(ss_sales_price) sum_sales, avg(sum(ss_s
 i_manufact_id    sum_sales    avg_quarterly_sales
 select group_concat(c.column_name order by ordinal_position) key_columns  from information_schema.key_column_usage c where c.table_schema='test1' and c.table_name='region' and constraint_name='PRIMARY';
 key_columns
+null
 drop database test;

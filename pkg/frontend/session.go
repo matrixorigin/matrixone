@@ -44,6 +44,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -130,6 +131,12 @@ type Session struct {
 	ep              *ExportConfig
 	showStmtType    ShowStatementType
 	userDefinedVars map[string]*UserDefinedVar
+	// tempTables records the relationship between the temporary table created by the session and the actual table.
+	// Key: dbName.alias, Value: realName
+	tempTables map[string]string
+	// tempTablesRev records the reverse relationship.
+	// Key: realName, Value: dbName.alias
+	tempTablesRev map[string]string
 
 	prepareStmts map[string]*PrepareStmt
 	lastStmtId   uint32
@@ -314,6 +321,44 @@ func (ses *Session) GetUserDefinedVar(name string) (*UserDefinedVar, error) {
 		return nil, moerr.NewInternalErrorNoCtxf(errorUserVariableDoesNotExist(), name)
 	}
 	return val, nil
+}
+
+// AddTempTable adds the temporary table to the session
+func (ses *Session) AddTempTable(dbName, alias, realName string) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	key := dbName + "." + alias
+	ses.tempTables[key] = realName
+	ses.tempTablesRev[realName] = key
+}
+
+// GetTempTable gets the real name of the temporary table
+func (ses *Session) GetTempTable(dbName, alias string) (string, bool) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	val, ok := ses.tempTables[dbName+"."+alias]
+	return val, ok
+}
+
+// RemoveTempTable removes the temporary table alias
+func (ses *Session) RemoveTempTable(dbName, alias string) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	key := dbName + "." + alias
+	if realName, ok := ses.tempTables[key]; ok {
+		delete(ses.tempTables, key)
+		delete(ses.tempTablesRev, realName)
+	}
+}
+
+// RemoveTempTableByRealName removes the temporary table alias by its real name
+func (ses *Session) RemoveTempTableByRealName(realName string) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if alias, ok := ses.tempTablesRev[realName]; ok {
+		delete(ses.tempTables, alias)
+		delete(ses.tempTablesRev, realName)
+	}
 }
 
 func (ses *Session) SetPlan(plan *plan.Plan) {
@@ -565,6 +610,8 @@ func NewSession(
 	}
 
 	ses.userDefinedVars = make(map[string]*UserDefinedVar)
+	ses.tempTables = make(map[string]string)
+	ses.tempTablesRev = make(map[string]string)
 	ses.prepareStmts = make(map[string]*PrepareStmt)
 	// For seq init values.
 	ses.seqCurValues = make(map[uint64]string)
@@ -572,7 +619,8 @@ func NewSession(
 
 	ses.buf = buffer.New()
 	ses.sqlHelper = &SqlHelper{ses: ses}
-	ses.uuid, _ = uuid.NewV7()
+	u, _ := util.FastUuid()
+	ses.uuid = uuid.UUID(u)
 	pu := getPu(service)
 	if ses.pool == nil {
 		// If no mp, we create one for session.  Use GuestMmuLimitation as cap.
@@ -606,6 +654,7 @@ func NewSession(
 	ses.proc.Base.Lim.PartitionRows = pu.SV.ProcessLimitationPartitionRows
 
 	ses.proc.SetStmtProfile(&ses.stmtProfile)
+	ses.proc.Session = ses
 	// ses.proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
 
 	runtime.SetFinalizer(ses, func(ss *Session) {
@@ -623,6 +672,58 @@ func (ses *Session) ReserveConnAndClose() {
 }
 
 func (ses *Session) Close() {
+	// Clean up temporary tables
+	type tempTableEntry struct {
+		dbName   string
+		realName string
+	}
+	var tempTables []tempTableEntry
+	ses.mu.Lock()
+	for key, realName := range ses.tempTables {
+		if db, _, ok := strings.Cut(key, "."); ok {
+			tempTables = append(tempTables, tempTableEntry{dbName: db, realName: realName})
+		} else {
+			tempTables = append(tempTables, tempTableEntry{realName: realName})
+		}
+	}
+	ses.tempTables = nil
+	ses.tempTablesRev = nil
+	ses.mu.Unlock()
+
+	if len(tempTables) > 0 {
+		go func() {
+			// use a new context to clean up temp tables
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+
+			_, _ = ExecuteFuncWithRecover(func() error {
+				// Use an independent background executor.
+				// We use a "minimal" session or just a way to run SQL.
+				// Here we can use the service's background executor if available,
+				// or just create one that doesn't depend on the closing session's pool.
+				// For now, to keep it simple and following the suggestion of "independent executor",
+				// we'll use GetBackgroundExec but we need to be careful.
+				// Actually, the suggestion implies we should not block Close.
+				// In MatrixOne, we can use the internal executor.
+
+				bh := ses.GetBackgroundExec(ctx)
+				defer bh.Close()
+				for _, tbl := range tempTables {
+					var dropSQL string
+					if tbl.dbName != "" {
+						dropSQL = fmt.Sprintf("DROP TABLE IF EXISTS `%s`.`%s`", tbl.dbName, tbl.realName)
+					} else {
+						dropSQL = fmt.Sprintf("DROP TABLE IF EXISTS %s", tbl.realName)
+					}
+					if err := bh.Exec(ctx, dropSQL); err != nil {
+						logutil.Errorf("failed to drop temp table %s: %v", tbl.realName, err)
+					}
+				}
+				return nil
+			})
+		}()
+	}
+
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	ses.feSessionImpl.Close()

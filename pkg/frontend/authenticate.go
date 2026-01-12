@@ -935,6 +935,8 @@ var (
 		catalog.MO_ISCP_LOG:           0,
 		catalog.MO_INDEX_UPDATE:       0,
 		catalog.MO_BRANCH_METADATA:    0,
+		catalog.MO_FEATURE_LIMIT:      0,
+		catalog.MO_FEATURE_REGISTRY:   0,
 	}
 	sysAccountTables = map[string]struct{}{
 		catalog.MOVersionTable:       {},
@@ -982,6 +984,8 @@ var (
 		catalog.MO_ISCP_LOG:           0,
 		catalog.MO_INDEX_UPDATE:       0,
 		catalog.MO_BRANCH_METADATA:    0,
+		catalog.MO_FEATURE_LIMIT:      0,
+		catalog.MO_FEATURE_REGISTRY:   0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
 	createAutoTableSql           = MoCatalogMoAutoIncrTableDDL
@@ -1025,6 +1029,9 @@ var (
 		MoCatalogMoISCPLogDDL,
 		MoCatalogMoIndexUpdateDDL,
 		MoCatalogBranchMetadataDDL,
+		MoCatalogFeatureLimitDDL,
+		MoCatalogFeatureRegistryDDL,
+		MoCatalogFeatureRegistryInitData,
 	}
 
 	//drop tables for the tenant
@@ -8032,6 +8039,14 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccoun
 			return true
 		}
 		if strings.HasPrefix(sql, fmt.Sprintf("create table mo_catalog.%s", catalog.MO_BRANCH_METADATA)) {
+			return true
+		}
+
+		if strings.HasPrefix(sql, fmt.Sprintf("create table mo_catalog.%s", catalog.MO_FEATURE_LIMIT)) {
+			return true
+		}
+
+		if strings.Contains(sql, fmt.Sprintf("mo_catalog.%s", catalog.MO_FEATURE_REGISTRY)) {
 			return true
 		}
 

@@ -31,9 +31,11 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/btree"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -8026,6 +8028,101 @@ func newMrsForPasswordOfUser(rows [][]interface{}) *MysqlResultSet {
 	return mrs
 }
 
+func newMrsForFeatureRegistry(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("enabled")
+	col1.SetColumnType(defines.MYSQL_TYPE_TINY)
+
+	col2 := &MysqlColumn{}
+	col2.SetName("scope_spec")
+	col2.SetColumnType(defines.MYSQL_TYPE_TEXT)
+
+	mrs.AddColumn(col1)
+	mrs.AddColumn(col2)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
+
+func newMrsForFeatureLimit(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("quota")
+	col1.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+
+	mrs.AddColumn(col1)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
+
+func newMrsForSnapshotCount(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("count")
+	col1.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+
+	mrs.AddColumn(col1)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
+
+func mockSnapshotQuotaResult(
+	bh *backgroundExecTest,
+	accountName string,
+	accountId uint32,
+	scope string,
+) error {
+	scopeSpec, err := bytejson.ParseJsonByteFromString(fmt.Sprintf(`{"allowed_scope":["%s"]}`, scope))
+	if err != nil {
+		return err
+	}
+
+	registrySQL := fmt.Sprintf(
+		"select enabled, scope_spec from %s.%s where feature_code = '%s'",
+		catalog.MO_CATALOG, catalog.MO_FEATURE_REGISTRY, featureCodeSnapshot,
+	)
+	bh.sql2result[registrySQL] = newMrsForFeatureRegistry([][]interface{}{
+		{int8(1), string(scopeSpec)},
+	})
+
+	quota := int64(defaultSnapshotLimit)
+	if accountId == sysAccountID {
+		quota = defaultFeatureLimitForSys
+	}
+	limitSQL := fmt.Sprintf(
+		"select quota from %s.%s where account_id = %d and feature_code = '%s' and scope = '%s'",
+		catalog.MO_CATALOG, catalog.MO_FEATURE_LIMIT, accountId, featureCodeSnapshot, scope,
+	)
+	bh.sql2result[limitSQL] = newMrsForFeatureLimit([][]interface{}{
+		{quota},
+	})
+
+	countSQL := fmt.Sprintf(
+		"select count(*) from %s.%s where account_name = '%s' and level = '%s'",
+		catalog.MO_CATALOG, catalog.MO_SNAPSHOTS, accountName, scope,
+	)
+	bh.sql2result[countSQL] = newMrsForSnapshotCount([][]interface{}{
+		{int64(0)},
+	})
+
+	return nil
+}
+
 func newMrsForPitrRecord(rows [][]interface{}) *MysqlResultSet {
 	mrs := &MysqlResultSet{}
 
@@ -10984,6 +11081,9 @@ func TestDoCreateSnapshot(t *testing.T) {
 		mrs2 := newMrsForPasswordOfUser([][]interface{}{{1}})
 		bh.sql2result[sql2] = mrs2
 
+		quotaErr := mockSnapshotQuotaResult(bh, tenant.Tenant, tenant.TenantID, tree.SNAPSHOTLEVELACCOUNT.String())
+		convey.So(quotaErr, convey.ShouldBeNil)
+
 		err := doCreateSnapshot(ctx, ses, cs)
 		convey.So(err, convey.ShouldBeNil)
 	})
@@ -11050,6 +11150,9 @@ func TestDoCreateSnapshot(t *testing.T) {
 		mrs2 := newMrsForPasswordOfUser([][]interface{}{{1}})
 		bh.sql2result[sql2] = mrs2
 
+		quotaErr := mockSnapshotQuotaResult(bh, tenant.Tenant, tenant.TenantID, tree.SNAPSHOTLEVELACCOUNT.String())
+		convey.So(quotaErr, convey.ShouldBeNil)
+
 		err := doCreateSnapshot(ctx, ses, cs)
 		convey.So(err, convey.ShouldNotBeNil)
 	})
@@ -11115,6 +11218,9 @@ func TestDoCreateSnapshot(t *testing.T) {
 		sql2, _ := getSqlForCheckTenant(ctx, "acc1")
 		mrs2 := newMrsForPasswordOfUser([][]interface{}{{1}})
 		bh.sql2result[sql2] = mrs2
+
+		quotaErr := mockSnapshotQuotaResult(bh, tenant.Tenant, tenant.TenantID, tree.SNAPSHOTLEVELACCOUNT.String())
+		convey.So(quotaErr, convey.ShouldBeNil)
 
 		err := doCreateSnapshot(ctx, ses, cs)
 		convey.So(err, convey.ShouldNotBeNil)
@@ -11183,6 +11289,9 @@ func TestDoCreateSnapshot(t *testing.T) {
 		mrs2 := newMrsForPasswordOfUser([][]interface{}{{1}})
 		bh.sql2result[sql2] = mrs2
 
+		quotaErr := mockSnapshotQuotaResult(bh, tenant.Tenant, tenant.TenantID, tree.SNAPSHOTLEVELACCOUNT.String())
+		convey.So(quotaErr, convey.ShouldBeNil)
+
 		err := doCreateSnapshot(ctx, ses, cs)
 		convey.So(err, convey.ShouldNotBeNil)
 	})
@@ -11249,6 +11358,9 @@ func TestDoCreateSnapshot(t *testing.T) {
 		sql2, _ := getSqlForCheckTenant(ctx, "acc1")
 		mrs2 := newMrsForPasswordOfUser([][]interface{}{{1}})
 		bh.sql2result[sql2] = mrs2
+
+		quotaErr := mockSnapshotQuotaResult(bh, tenant.Tenant, tenant.TenantID, tree.SNAPSHOTLEVELACCOUNT.String())
+		convey.So(quotaErr, convey.ShouldBeNil)
 
 		err := doCreateSnapshot(ctx, ses, cs)
 		convey.So(err, convey.ShouldNotBeNil)

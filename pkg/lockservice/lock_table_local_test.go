@@ -49,7 +49,7 @@ func TestCloseLocalLockTable(t *testing.T) {
 				txnID,
 				rows,
 				pb.Granularity_Row)
-			lt.close()
+			lt.close(closeReasonServiceClose)
 			lt.mu.Lock()
 			defer lt.mu.Unlock()
 			assert.True(t, lt.mu.closed)
@@ -121,7 +121,7 @@ func TestCloseLocalLockTableWithBlockedWaiter(t *testing.T) {
 				time.Sleep(time.Millisecond * 10)
 			}
 
-			v.close()
+			v.close(closeReasonServiceClose)
 			wg.Wait()
 		})
 }

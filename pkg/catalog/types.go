@@ -176,7 +176,9 @@ const (
 
 	MO_INDEX_UPDATE = "mo_index_update"
 
-	MO_BRANCH_METADATA = "mo_branch_metadata"
+	MO_BRANCH_METADATA  = "mo_branch_metadata"
+	MO_FEATURE_LIMIT    = "mo_feature_limit"
+	MO_FEATURE_REGISTRY = "mo_feature_registry"
 )
 
 func IsSystemTable(id uint64) bool {
@@ -405,6 +407,10 @@ const (
 	// Query format for getting rowid from logical_id index table
 	// Parameters: database_name, table_name, index_column_name, logical_id
 	LogicalIdIndexRowidQueryFormat = "SELECT __mo_rowid FROM `%s`.`%s` WHERE `%s` = %d"
+
+	/************ 5. Temporary table *************/
+
+	SystemTemporaryTable = "temporary_table"
 )
 
 const (

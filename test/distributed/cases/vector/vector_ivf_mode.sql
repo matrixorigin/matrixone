@@ -18,10 +18,10 @@ WITH q AS (SELECT id, text, l2_distance(vec, '[0.1,-0.2,0.3,0.4,-0.1,0.2,0.0,0.5
 CREATE TABLE mini_embed_data (id VARCHAR(64) NOT NULL, embedding VECF32(8) DEFAULT NULL, content TEXT DEFAULT NULL, description VARCHAR(255) DEFAULT NULL, file_id VARCHAR(64) DEFAULT NULL, score FLOAT DEFAULT NULL, disabled TINYINT DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (id), KEY idx_file_id (file_id));
 CREATE INDEX idx_vec_embedding USING ivfflat ON mini_embed_data (embedding) LISTS = 16 OP_TYPE 'vector_cosine_ops';
 INSERT INTO mini_embed_data (id, embedding, content, description, file_id, score, disabled) VALUES('id01','[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]','ai is artificial intelligence','what is ai?','file01',0.0,0);
-INSERT INTO mini_embed_data (id, embedding, content, description, file_id, score, disabled) VALUES('id02','[0.01,0.03,0.05,0.07,0.09,0.11,0.13,0.15]','sql is structured query language','what is sql?','file01',0.0,0);
+INSERT INTO mini_embed_data (id, embedding, content, description, file_id, score, disabled) VALUES('id02','[0.8,0.1,0.1,0.1,0.1,0.1,0.1,0.1]','sql is structured query language','what is sql?','file01',0.0,0);
 INSERT INTO mini_embed_data (id, embedding, content, description, file_id, score, disabled) VALUES('id03','[0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2]','it stores high dimensional vectors','what is vector db?','file02',0.0,0);
-INSERT INTO mini_embed_data (id, embedding, content, description, file_id, score, disabled) VALUES('id04','[0.11,0.22,0.33,0.44,0.55,0.66,0.77,0.88]','mysql is a relational database','what is mysql?','file02',0.0,0);
-INSERT INTO mini_embed_data (id, embedding, content, description, file_id, score, disabled) VALUES('id05','[0.12,0.32,0.52,0.72,0.11,0.31,0.51,0.71]','an ai assistant by openai','what is chatgpt?','file01',0.0,0);
+INSERT INTO mini_embed_data (id, embedding, content, description, file_id, score, disabled) VALUES('id04','[-0.5,0.3,-0.4,0.6,-0.2,0.1,-0.3,0.7]','mysql is a relational database','what is mysql?','file02',0.0,0);
+INSERT INTO mini_embed_data (id, embedding, content, description, file_id, score, disabled) VALUES('id05','[0.1,-0.8,0.2,-0.5,0.3,-0.4,0.6,-0.1]','an ai assistant by openai','what is chatgpt?','file01',0.0,0);
 SELECT mini_embed_data.id, mini_embed_data.content, mini_embed_data.description, mini_embed_data.embedding, mini_embed_data.file_id, mini_embed_data.disabled FROM mini_embed_data WHERE mini_embed_data.file_id IN ('file01','file02') AND mini_embed_data.embedding IS NOT NULL AND (mini_embed_data.disabled IS NULL OR mini_embed_data.disabled = false) ORDER BY cosine_distance(mini_embed_data.embedding,"[0.12,0.55,0.33,0.88,0.22,0.44,0.66,0.11]") DESC LIMIT 10 by rank with option 'mode=pre';
 SELECT mini_embed_data.id, mini_embed_data.content, mini_embed_data.description, mini_embed_data.embedding, mini_embed_data.file_id, mini_embed_data.disabled FROM mini_embed_data WHERE mini_embed_data.file_id IN ('file01','file02') AND mini_embed_data.embedding IS NOT NULL AND (mini_embed_data.disabled IS NULL OR mini_embed_data.disabled = false) ORDER BY cosine_distance(mini_embed_data.embedding,"[0.12,0.55,0.33,0.88,0.22,0.44,0.66,0.11]") DESC LIMIT 10 by rank with option 'mode=post';
 SELECT mini_embed_data.id, mini_embed_data.content, mini_embed_data.description, mini_embed_data.embedding, mini_embed_data.file_id, mini_embed_data.disabled FROM mini_embed_data WHERE mini_embed_data.file_id IN ('file01','file02') AND mini_embed_data.embedding IS NOT NULL AND (mini_embed_data.disabled IS NULL OR mini_embed_data.disabled = false) ORDER BY cosine_distance(mini_embed_data.embedding,"[0.12,0.55,0.33,0.88,0.22,0.44,0.66,0.11]") DESC LIMIT 10 by rank with option 'mode=force';
@@ -99,13 +99,13 @@ CREATE INDEX idx_vec_regular USING ivfflat ON vec_with_regular_idx(vec) lists=8 
 
 INSERT INTO vec_with_regular_idx VALUES
 (1, 'A', 1, 5.0, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]'),
-(2, 'A', 1, 4.5, '[0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9]'),
-(3, 'B', 1, 4.0, '[0.3,0.4,0.5,0.6,0.7,0.8,0.9,0.1]'),
-(4, 'B', 2, 3.5, '[0.4,0.5,0.6,0.7,0.8,0.9,0.1,0.2]'),
-(5, 'C', 1, 3.0, '[0.5,0.6,0.7,0.8,0.9,0.1,0.2,0.3]'),
-(6, 'C', 2, 2.5, '[0.6,0.7,0.8,0.9,0.1,0.2,0.3,0.4]'),
-(7, 'A', 2, 2.0, '[0.7,0.8,0.9,0.1,0.2,0.3,0.4,0.5]'),
-(8, 'B', 1, 1.5, '[0.8,0.9,0.1,0.2,0.3,0.4,0.5,0.6]');
+(2, 'A', 1, 4.5, '[0.5,0.1,0.8,0.2,0.3,0.9,0.4,0.6]'),
+(3, 'B', 1, 4.0, '[0.9,0.7,0.1,0.3,0.8,0.2,0.5,0.4]'),
+(4, 'B', 2, 3.5, '[-0.3,0.6,0.2,-0.5,0.8,0.1,0.4,-0.2]'),
+(5, 'C', 1, 3.0, '[0.2,-0.4,0.7,0.3,-0.1,0.6,0.5,0.8]'),
+(6, 'C', 2, 2.5, '[-0.6,0.3,0.1,0.9,-0.2,0.5,0.7,0.4]'),
+(7, 'A', 2, 2.0, '[0.8,-0.3,0.5,0.1,-0.6,0.4,0.2,0.9]'),
+(8, 'B', 1, 1.5, '[0.4,0.8,-0.2,0.6,0.1,-0.5,0.3,0.7]');
 
 -- Test Case: mode=pre with regular index filter (category)
 SELECT id, category, score FROM vec_with_regular_idx
@@ -142,15 +142,15 @@ CREATE INDEX idx_vec_multi USING ivfflat ON vec_with_multi_idx(vec) lists=8 op_t
 
 INSERT INTO vec_with_multi_idx VALUES
 (1, 'A', 1, 1, 5.0, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]'),
-(2, 'A', 1, 2, 4.5, '[0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9]'),
-(3, 'B', 1, 1, 4.0, '[0.3,0.4,0.5,0.6,0.7,0.8,0.9,0.1]'),
-(4, 'B', 2, 1, 3.5, '[0.4,0.5,0.6,0.7,0.8,0.9,0.1,0.2]'),
-(5, 'C', 1, 2, 3.0, '[0.5,0.6,0.7,0.8,0.9,0.1,0.2,0.3]'),
-(6, 'C', 2, 1, 2.5, '[0.6,0.7,0.8,0.9,0.1,0.2,0.3,0.4]'),
-(7, 'A', 2, 2, 2.0, '[0.7,0.8,0.9,0.1,0.2,0.3,0.4,0.5]'),
-(8, 'B', 1, 1, 1.5, '[0.8,0.9,0.1,0.2,0.3,0.4,0.5,0.6]'),
-(9, 'A', 1, 1, 1.0, '[0.9,0.1,0.2,0.3,0.4,0.5,0.6,0.7]'),
-(10, 'B', 2, 2, 0.5, '[0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1]');
+(2, 'A', 1, 2, 4.5, '[0.5,0.1,0.8,0.2,0.3,0.9,0.4,0.6]'),
+(3, 'B', 1, 1, 4.0, '[0.9,0.7,0.1,0.3,0.8,0.2,0.5,0.4]'),
+(4, 'B', 2, 1, 3.5, '[-0.3,0.6,0.2,-0.5,0.8,0.1,0.4,-0.2]'),
+(5, 'C', 1, 2, 3.0, '[0.2,-0.4,0.7,0.3,-0.1,0.6,0.5,0.8]'),
+(6, 'C', 2, 1, 2.5, '[-0.6,0.3,0.1,0.9,-0.2,0.5,0.7,0.4]'),
+(7, 'A', 2, 2, 2.0, '[0.8,-0.3,0.5,0.1,-0.6,0.4,0.2,0.9]'),
+(8, 'B', 1, 1, 1.5, '[0.4,0.8,-0.2,0.6,0.1,-0.5,0.3,0.7]'),
+(9, 'A', 1, 1, 1.0, '[-0.7,0.4,0.6,-0.1,0.3,0.8,-0.4,0.5]'),
+(10, 'B', 2, 2, 0.5, '[0.3,-0.5,0.4,0.7,-0.3,0.2,0.6,-0.1]');
 
 -- Test Case: mode=pre with multiple regular index filters (category + status)
 SELECT id, category, status FROM vec_with_multi_idx
@@ -213,10 +213,10 @@ CREATE INDEX idx_vec_composite USING ivfflat ON vec_with_composite_idx(vec) list
 
 INSERT INTO vec_with_composite_idx VALUES
 (1, 'A', 1, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]'),
-(2, 'A', 1, '[0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9]'),
-(3, 'A', 2, '[0.3,0.4,0.5,0.6,0.7,0.8,0.9,0.1]'),
-(4, 'B', 1, '[0.4,0.5,0.6,0.7,0.8,0.9,0.1,0.2]'),
-(5, 'B', 2, '[0.5,0.6,0.7,0.8,0.9,0.1,0.2,0.3]');
+(2, 'A', 1, '[0.6,0.1,0.9,0.3,0.2,0.8,0.5,0.4]'),
+(3, 'A', 2, '[0.9,-0.2,0.4,0.7,-0.1,0.5,0.3,0.6]'),
+(4, 'B', 1, '[-0.4,0.5,0.3,0.8,-0.2,0.6,0.1,0.7]'),
+(5, 'B', 2, '[0.3,0.7,-0.3,0.5,0.8,-0.1,0.4,0.2]');
 
 -- Test Case: mode=pre with composite index (both columns in WHERE)
 SELECT id, category, status FROM vec_with_composite_idx
@@ -292,6 +292,7 @@ UNION
  FROM mini_embed_data 
  ORDER BY cosine_distance(embedding, '[0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2]') 
  LIMIT 2 by rank with option 'mode=pre')
+ORDER BY id
 LIMIT 4;
 
 -- Test Case: UNION with mode=pre and complex WHERE conditions
@@ -360,6 +361,7 @@ UNION ALL
  WHERE file_id = 'file02'
  ORDER BY cosine_distance(embedding, '[0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2]') 
  LIMIT 2 by rank with option 'mode=pre')
+ORDER BY id
 LIMIT 3;
 
 -- Test Case: UNION with mode=pre and DESC ordering
