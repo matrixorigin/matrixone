@@ -166,31 +166,6 @@ func Divide[T types.RealNumbers](p, q []T) ([]T, error) {
 	return x, nil
 }
 
-// Compare returns an integer comparing two arrays/vectors lexicographically.
-// TODO: this function might not be correct. we need to compare using tolerance for float values.
-// TODO: need to check if we need len(v1)==len(v2) check.
-func Compare[T types.RealNumbers](v1, v2 []T) int {
-	minLen := len(v1)
-	if len(v2) < minLen {
-		minLen = len(v2)
-	}
-
-	for i := 0; i < minLen; i++ {
-		if v1[i] < v2[i] {
-			return -1
-		} else if v1[i] > v2[i] {
-			return 1
-		}
-	}
-
-	if len(v1) < len(v2) {
-		return -1
-	} else if len(v1) > len(v2) {
-		return 1
-	}
-	return 0
-}
-
 /* ------------ [START] Performance critical functions. ------- */
 
 func InnerProduct[T types.RealNumbers](v1, v2 []T) (float64, error) {
