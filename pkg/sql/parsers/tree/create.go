@@ -5448,8 +5448,8 @@ type CreateSubscription struct {
 	IsDatabase   bool
 	DbName       Identifier
 	TableName    string
-	AccountName  string  // For account-level subscription
-	IfNotExists  bool    // For account-level subscription
+	AccountName  string // For account-level subscription
+	IfNotExists  bool   // For account-level subscription
 	FromUri      string
 	PubName      Identifier
 	SyncInterval int64

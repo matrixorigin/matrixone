@@ -626,7 +626,7 @@ func (h *UpstreamSQLHelper) handleGetObjectDirectly(
 	// Create a batch with 5 columns: data, total_size, chunk_index, total_chunks, is_complete
 	mp := mpool.MustNewZero()
 	bat := batch.New([]string{"data", "total_size", "chunk_index", "total_chunks", "is_complete"})
-	
+
 	// Column 0: data (BLOB)
 	bat.Vecs[0] = vector.NewVec(types.T_blob.ToType())
 	if data != nil {

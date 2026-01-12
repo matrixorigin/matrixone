@@ -155,7 +155,7 @@ type Schema struct {
 	PhyAddrKey *ColDef
 
 	isSecondaryIndexTable bool
-	FromPublication        bool // mark if table is created by publication, should skip merge
+	FromPublication       bool // mark if table is created by publication, should skip merge
 }
 
 func NewEmptySchema(name string) *Schema {

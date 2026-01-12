@@ -1748,7 +1748,7 @@ func (tbl *txnTable) SoftDeleteObject(ctx context.Context, objID *objectio.Objec
 	// Batch structure: one column with ObjectID bytes (18 bytes as binary)
 	bat := batch.NewWithSize(1)
 	bat.SetAttributes([]string{"object_id"})
-	
+
 	objIDVec := vector.NewVec(types.T_binary.ToType())
 	objIDBytes := objID[:]
 	if err := vector.AppendBytes(objIDVec, objIDBytes, false, tbl.getTxn().proc.Mp()); err != nil {

@@ -985,12 +985,9 @@ var (
 		catalog.MO_ISCP_LOG:           0,
 		catalog.MO_INDEX_UPDATE:       0,
 		catalog.MO_BRANCH_METADATA:    0,
-<<<<<<< HEAD
 		catalog.MO_CCPR_LOG:           0,
-=======
 		catalog.MO_FEATURE_LIMIT:      0,
 		catalog.MO_FEATURE_REGISTRY:   0,
->>>>>>> main
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
 	createAutoTableSql           = MoCatalogMoAutoIncrTableDDL
@@ -1034,13 +1031,10 @@ var (
 		MoCatalogMoISCPLogDDL,
 		MoCatalogMoIndexUpdateDDL,
 		MoCatalogBranchMetadataDDL,
-<<<<<<< HEAD
 		MoCatalogMoCcprLogDDL,
-=======
 		MoCatalogFeatureLimitDDL,
 		MoCatalogFeatureRegistryDDL,
 		MoCatalogFeatureRegistryInitData,
->>>>>>> main
 	}
 
 	//drop tables for the tenant

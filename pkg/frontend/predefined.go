@@ -284,7 +284,6 @@ var (
 				primary key(account_id, table_id, job_name, job_id)
 			)`
 
-<<<<<<< HEAD
 	MoCatalogMoCcprLogDDL = `CREATE TABLE mo_catalog.mo_ccpr_log (
 				task_id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
 				subscription_name VARCHAR(5000) NOT NULL,
@@ -302,7 +301,6 @@ var (
 				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 				drop_at TIMESTAMP
 			)`
-=======
 	MoCatalogMoIndexUpdateDDL = `CREATE TABLE mo_catalog.mo_index_update (
                                 account_id INT UNSIGNED NOT NULL,
                                 table_id BIGINT UNSIGNED NOT NULL,
@@ -316,7 +314,6 @@ var (
                                 last_update_at TIMESTAMP NULL, 
                                 primary key(account_id, table_id, index_name, action)
                         )`
->>>>>>> main
 
 	MoCatalogMoSessionsDDL       = `CREATE VIEW mo_catalog.mo_sessions AS SELECT node_id, conn_id, session_id, account, user, host, db, session_start, command, info, txn_id, statement_id, statement_type, query_type, sql_source_type, query_start, client_host, role, proxy_host FROM mo_sessions() AS mo_sessions_tmp`
 	MoCatalogMoConfigurationsDDL = `CREATE VIEW mo_catalog.mo_configurations AS SELECT node_type, node_id, name, current_value, default_value, internal FROM mo_configurations() AS mo_configurations_tmp`
