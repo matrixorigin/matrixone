@@ -43,22 +43,22 @@ invalid argument aggregate function var_pop, bad value [VARCHAR]
 drop table t1;
 select var_pop(99999999999999999.99999);
 var_pop(99999999999999999.99999)
-0E-12
+0E-11
 select var_pop(999999999999999933193939.99999);
 var_pop(999999999999999933193939.99999)
-0E-12
+0E-11
 select var_pop(9999999999999999999999999999999999.9999999999999);
 var_pop(9999999999999999999999999999999999.9999999999999)
-0E-12
+0E-9
 select var_pop(-99999999999999999.99999);
 var_pop(-99999999999999999.99999)
-0E-12
+0E-11
 select var_pop(-999999999999999933193939.99999);
 var_pop(-999999999999999933193939.99999)
-0E-12
+0E-11
 select var_pop(-9999999999999999999999999999999999.9999999999999);
 var_pop(-9999999999999999999999999999999999.9999999999999)
-0E-12
+0E-9
 create table t1(a bigint);
 select var_pop(a) from t1;
 var_pop(a)
@@ -104,19 +104,19 @@ drop table t1;
 CREATE TABLE t1 (Fld1 int(11) default NULL,Fld2 int(11) default NULL);
 INSERT INTO t1 VALUES (1,10),(1,20),(2,NULL),(2,NULL),(3,50);
 select Fld1, var_pop(Fld2) as q from t1 group by Fld1 having q is not null;
-fld1    q
+Fld1    q
 1    25.0
 3    0.0
 select Fld1, var_pop(Fld2) from t1 group by Fld1 having var_pop(Fld2) is not null;
-fld1    var_pop(fld2)
+Fld1    var_pop(Fld2)
 1    25.0
 3    0.0
 select Fld1, var_pop(Fld2) from t1 group by Fld1 having avg(Fld2) is not null;
-fld1    var_pop(fld2)
+Fld1    var_pop(Fld2)
 1    25.0
 3    0.0
 select Fld1, var_pop(Fld2) from t1 group by Fld1 having var_pop(Fld2) is not null;
-fld1    var_pop(fld2)
+Fld1    var_pop(Fld2)
 1    25.0
 3    0.0
 drop table t1;
@@ -141,7 +141,7 @@ insert into decimal01 values(0);
 insert into decimal01 values(-13421.34234);
 select var_pop(col1) from decimal01;
 var_pop(col1)
-99500475119008.215000000000
+99500475119008.2150400
 drop table decimal01;
 drop table if exists decimal02;
 create table decimal02(col1 decimal(38,0));
@@ -164,7 +164,7 @@ col1
 -34243214324324342321313321321342342343
 0
 select var_pop(col1) from decimal02;
-internal error: Decimal128 overflowed
+invalid input: Can't convert Float64 To Decimal128: 1307331842107520914203234638402604582479234829999989805811275714970637041664.000000(38,6)
 drop table decimal02;
 drop table if exists test02;
 create table test02(col1 decimal(37));
@@ -181,7 +181,7 @@ col1
 -123
 9932129321093029302930290439029432424
 select var_pop(col1) from test02;
-internal error: Decimal128 overflowed
+invalid input: Can't convert Float64 To Decimal128: 26542815629556120840229121106979169823672362913300482745332587433134391296.000000(38,6)
 drop table test02;
 drop table if exists test03;
 create table test03(a decimal(38,2));
@@ -189,7 +189,7 @@ insert into test03 values(9999999999999999999999999999999.1);
 insert into test03 values(-0.00001);
 insert into test03 values(NULL);
 select var_pop(a) from test03;
-internal error: Decimal128 overflowed
+invalid input: Can't convert Float64 To Decimal128: 24999999999999998021054536073870531144948140550587683635724288.000000(38,8)
 drop table test03;
 drop table if exists test04;
 create table test04(a decimal(38,20));
@@ -206,7 +206,7 @@ a
 -999999999999999999.90000000000000000000
 -1E-20
 select var_pop(a) from test04;
-internal error: Decimal128 overflowed
+invalid input: Can't convert Float64 To Decimal128: 403040507311854275288688084220116992.000000(38,20)
 drop table test04;
 drop table if exists test05;
 create table test05(a decimal(20,10));
@@ -222,7 +222,7 @@ a
 0.3029302394
 select var_pop(a) from test05;
 var_pop(a)
-60218122690068093824.133657202503
+60218122690068090880.000000000000
 drop table test05;
 drop table if exists test06;
 create table test06(a decimal(20,10));
@@ -238,6 +238,6 @@ null
 0.3029302394
 select var_pop(a) from test06;
 var_pop(a)
-66666666660682038752.801677950945
+66666666660682035200.000000000000
 drop table test06;
 drop database test;
