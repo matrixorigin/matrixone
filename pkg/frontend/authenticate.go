@@ -3780,7 +3780,13 @@ type dropAccount struct {
 }
 
 // doDropAccount accomplishes the DropAccount statement
-func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dropAccount) (err error) {
+func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dropAccount, inTransaction ...bool) (err error) {
+	// Check if already in a transaction (for restore scenarios to avoid breaking outer transaction)
+	inTxn := false
+	if len(inTransaction) > 0 {
+		inTxn = inTransaction[0]
+	}
+
 	//set backgroundHandler's default schema
 	if handler, ok := bh.(*backExec); ok {
 		handler.backSes.txnCompileCtx.dbName = catalog.MO_CATALOG
@@ -3835,12 +3841,15 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 	}
 
 	dropAccountFunc := func() (rtnErr error) {
-		rtnErr = bh.Exec(ctx, "begin;")
-		defer func() {
-			rtnErr = finishTxn(ctx, bh, rtnErr)
-		}()
-		if rtnErr != nil {
-			return rtnErr
+		// If already in a transaction (e.g., restore scenario), don't create a new one
+		if !inTxn {
+			rtnErr = bh.Exec(ctx, "begin;")
+			if rtnErr != nil {
+				return rtnErr
+			}
+			defer func() {
+				rtnErr = finishTxn(ctx, bh, rtnErr)
+			}()
 		}
 
 		//step 0: lock account name first
