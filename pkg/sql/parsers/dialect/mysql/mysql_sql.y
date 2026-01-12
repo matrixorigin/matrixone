@@ -370,7 +370,7 @@ import (
 // Sequence
 %token <str> INCREMENT CYCLE MINVALUE
 // publication
-%token <str> PUBLICATION SUBSCRIPTIONS PUBLICATIONS SYNC_INTERVAL COVERAGE
+%token <str> PUBLICATION SUBSCRIPTIONS PUBLICATIONS SYNC_INTERVAL SYNC COVERAGE
 
 // MO table option
 %token <str> PROPERTIES
@@ -7186,7 +7186,7 @@ sync_interval_opt:
     {
         $$ = int64(0)
     }
-|   SYNC_INTERVAL '=' INTEGRAL
+|   SYNC INTERVAL INTEGRAL
     {
         switch v := $3.(type) {
         case int64:
