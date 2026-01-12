@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -760,9 +759,6 @@ func (store *txnStore) SoftDeleteObject(isTombstone bool, id *common.ID) (err er
 	if db, err = store.getOrSetDB(id.DbID); err != nil {
 		return
 	}
-	perfcounter.Update(store.ctx, func(counter *perfcounter.CounterSet) {
-		counter.TAE.Object.SoftDelete.Add(1)
-	})
 	return db.SoftDeleteObject(id, isTombstone)
 }
 

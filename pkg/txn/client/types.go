@@ -72,15 +72,6 @@ type TxnClient interface {
 		options ...TxnOption,
 	) (TxnOperator, error)
 
-	// RestartTxn is similar to New, but it is used a closed (committed or aborted) Txn to restart to
-	// to avoid create a new txn.
-	RestartTxn(
-		ctx context.Context,
-		txnOp TxnOperator,
-		commitTS timestamp.Timestamp,
-		options ...TxnOption,
-	) (TxnOperator, error)
-
 	// NewWithSnapshot create a txn operator from a snapshot. The snapshot must
 	// be from a CN coordinator txn operator.
 	NewWithSnapshot(snapshot txn.CNTxnSnapshot) (TxnOperator, error)

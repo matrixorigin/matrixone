@@ -263,9 +263,6 @@ func (p *PartitionState) handleDataObjectEntry(
 		//if objEntry.EntryState && scanCnt == blockDeleted && p.dirtyBlocks.Len() > 0 {
 		//	p.dirtyBlocks.Delete(*blkID)
 		//}
-		perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
-			c.DistTAE.Logtail.ActiveRows.Add(-numDeleted)
-		})
 	}
 
 	p.prefetchObject(fs, objEntry)
@@ -321,7 +318,6 @@ func (p *PartitionState) handleTombstoneObjectEntry(
 	truncatePoint := objEntry.DeleteTime
 
 	var deletedRow *RowEntry
-	var numDeleted int64
 	var tbIter = p.inMemTombstoneRowIdIndex.Copy().Iter()
 	defer tbIter.Release()
 
@@ -360,9 +356,6 @@ func (p *PartitionState) handleTombstoneObjectEntry(
 
 	p.prefetchObject(fs, objEntry)
 
-	perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
-		c.DistTAE.Logtail.ActiveRows.Add(-numDeleted)
-	})
 	return
 }
 func (p *PartitionState) HandleLogtailEntry(
@@ -560,7 +553,6 @@ func (p *PartitionState) HandleDataObjectList(
 		p.prefetchObject(fs, objEntry)
 	}
 	perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
-		c.DistTAE.Logtail.ActiveRows.Add(-numDeleted)
 	})
 }
 
@@ -576,7 +568,6 @@ func (p *PartitionState) HandleTombstoneObjectList(
 	fs fileservice.FileService,
 	pool *mpool.MPool) {
 
-	var numDeleted int64
 	statsVec := mustVectorFromProto(ee.Bat.Vecs[2])
 	defer statsVec.Free(pool)
 
@@ -683,7 +674,6 @@ func (p *PartitionState) HandleTombstoneObjectList(
 	}
 
 	perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
-		c.DistTAE.Logtail.ActiveRows.Add(-numDeleted)
 	})
 }
 
@@ -777,9 +767,6 @@ func (p *PartitionState) HandleRowsDelete(
 	}
 
 	perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
-		c.DistTAE.Logtail.Entries.Add(1)
-		c.DistTAE.Logtail.DeleteEntries.Add(1)
-		c.DistTAE.Logtail.DeleteRows.Add(numDeletes)
 	})
 }
 
@@ -848,10 +835,6 @@ func (p *PartitionState) HandleRowsInsert(
 	}
 
 	perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
-		c.DistTAE.Logtail.Entries.Add(1)
-		c.DistTAE.Logtail.InsertEntries.Add(1)
-		c.DistTAE.Logtail.InsertRows.Add(numInserted)
-		c.DistTAE.Logtail.ActiveRows.Add(numInserted)
 	})
 
 	return

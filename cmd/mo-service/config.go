@@ -47,7 +47,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/tnservice"
 	"github.com/matrixorigin/matrixone/pkg/udf/pythonservice"
 	"github.com/matrixorigin/matrixone/pkg/util/debug/goroutine"
-	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 	tomlutil "github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/version"
 )
@@ -350,11 +349,6 @@ func (c *Config) createFileService(
 				counterSet,
 			)
 		}
-
-		// Create "Log Exporter" for this PerfCounter
-		counterLogExporter := perfcounter.NewCounterLogExporter(counterSet)
-		// Register this PerfCounter's "Log Exporter" to global stats registry.
-		stats.Register(counterSetName, stats.WithLogExporter(counterLogExporter))
 	}
 
 	// create FileServices

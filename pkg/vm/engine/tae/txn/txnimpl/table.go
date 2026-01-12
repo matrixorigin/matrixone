@@ -35,7 +35,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -690,9 +689,6 @@ func (tbl *txnTable) SoftDeleteObject(id *types.Objectid, isTombstone bool) (err
 }
 
 func (tbl *txnTable) CreateObject(isTombstone bool) (obj handle.Object, err error) {
-	perfcounter.Update(tbl.store.ctx, func(counter *perfcounter.CounterSet) {
-		counter.TAE.Object.Create.Add(1)
-	})
 	sorted := isTombstone
 	noid := objectio.NewObjectid()
 	stats := objectio.NewObjectStatsWithObjectID(
@@ -707,11 +703,6 @@ func (tbl *txnTable) CreateObject(isTombstone bool) (obj handle.Object, err erro
 }
 
 func (tbl *txnTable) CreateNonAppendableObject(opts *objectio.CreateObjOpt) (obj handle.Object, err error) {
-	perfcounter.Update(
-		tbl.store.ctx,
-		func(counter *perfcounter.CounterSet) {
-			counter.TAE.Object.CreateNonAppendable.Add(1)
-		})
 	return tbl.createObject(opts)
 }
 
