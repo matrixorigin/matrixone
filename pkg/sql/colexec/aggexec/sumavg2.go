@@ -15,7 +15,6 @@
 package aggexec
 
 import (
-	"math"
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -91,9 +90,8 @@ func uint64OfCheck(v1, v2, sum uint64) error {
 }
 
 func float64OfCheck(v1, v2, sum float64) error {
-	if math.IsInf(sum, 0) {
-		return moerr.NewOutOfRangeNoCtxf("float64", "(%f + %f)", v1, v2)
-	}
+	// MySQL behavior: SUM() aggregation allows overflow to +Infinity without error
+	// This matches MySQL 8.0 where SUM() silently returns +Infinity on overflow
 	return nil
 }
 
