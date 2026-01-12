@@ -252,6 +252,8 @@ func makeVarStdDevExec(mp *mpool.MPool,
 		return newVarStdDevExec[float64, uint32](mp, isVar, isPop, aggID, isDistinct, param, simpleA2F, simpleF2T)
 	case types.T_uint64:
 		return newVarStdDevExec[float64, uint64](mp, isVar, isPop, aggID, isDistinct, param, simpleA2F, simpleF2T)
+	case types.T_bit:
+		return newVarStdDevExec[float64, uint64](mp, isVar, isPop, aggID, isDistinct, param, simpleA2F, simpleF2T)
 	case types.T_float32:
 		return newVarStdDevExec[float64, float32](mp, isVar, isPop, aggID, isDistinct, param, simpleA2F, simpleF2T)
 	case types.T_float64:
