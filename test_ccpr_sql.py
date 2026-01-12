@@ -222,6 +222,19 @@ def test_create_database_from_publication():
     cluster2_account_client = Client()
     success = True
     
+    # Cleanup accounts at the beginning (in case they exist from previous failed runs)
+    try:
+        cluster1_sys_client.connect(host=CLUSTER1_HOST, port=CLUSTER1_PORT, 
+                                    user=SYS_USER, password=SYS_PASSWORD, database='')
+        cluster2_sys_client.connect(host=CLUSTER2_HOST, port=CLUSTER2_PORT,
+                                    user=SYS_USER, password=SYS_PASSWORD, database='')
+        cleanup_account(cluster1_sys_client, CLUSTER1_ACCOUNT)
+        cleanup_account(cluster2_sys_client, CLUSTER2_ACCOUNT)
+        cluster1_sys_client.disconnect()
+        cluster2_sys_client.disconnect()
+    except Exception as e:
+        print_warning(f"Error during initial cleanup: {e}")
+    
     try:
         # Connect to clusters
         cluster1_sys_client.connect(host=CLUSTER1_HOST, port=CLUSTER1_PORT, 
@@ -230,8 +243,6 @@ def test_create_database_from_publication():
                                     user=SYS_USER, password=SYS_PASSWORD, database='')
         
         # Setup accounts
-        cleanup_account(cluster1_sys_client, CLUSTER1_ACCOUNT)
-        cleanup_account(cluster2_sys_client, CLUSTER2_ACCOUNT)
         
         cluster1_sys_client.execute(
             f"CREATE ACCOUNT {CLUSTER1_ACCOUNT} ADMIN_NAME '{ACCOUNT_ADMIN}' IDENTIFIED BY '{ACCOUNT_PASSWORD}'"
@@ -259,11 +270,26 @@ def test_create_database_from_publication():
             f"CREATE TABLE `{TEST_TABLE_NAME}` (id INT PRIMARY KEY, name VARCHAR(100))"
         )
         
+        # Also create TEST_DB_NAME2 for SYNC INTERVAL test
+        cleanup_database(cluster1_account_client, TEST_DB_NAME2)
+        cluster1_account_client.execute(f"CREATE DATABASE `{TEST_DB_NAME2}`")
+        cluster1_account_client.execute(f"USE `{TEST_DB_NAME2}`")
+        cluster1_account_client.execute(
+            f"CREATE TABLE `{TEST_TABLE_NAME}` (id INT PRIMARY KEY, name VARCHAR(100))"
+        )
+        
         cleanup_publication(cluster1_account_client, PUBLICATION_NAME)
+        # Create publication for TEST_DB_NAME
         cluster1_account_client.execute(
             f"CREATE PUBLICATION `{PUBLICATION_NAME}` DATABASE `{TEST_DB_NAME}` ACCOUNT `{CLUSTER1_ACCOUNT}`"
         )
-        print_success("Setup upstream database and publication")
+        
+        # Create a separate publication for TEST_DB_NAME2 (for SYNC INTERVAL test)
+        cleanup_publication(cluster1_account_client, PUBLICATION_NAME2)
+        cluster1_account_client.execute(
+            f"CREATE PUBLICATION `{PUBLICATION_NAME2}` DATABASE `{TEST_DB_NAME2}` ACCOUNT `{CLUSTER1_ACCOUNT}`"
+        )
+        print_success("Setup upstream databases and publications")
         
         # Get connection string
         conn_str = get_connection_string(CLUSTER1_ACCOUNT, ACCOUNT_ADMIN, ACCOUNT_PASSWORD,
@@ -302,12 +328,13 @@ def test_create_database_from_publication():
         print_info("Test 3: CREATE DATABASE with SYNC INTERVAL")
         cleanup_database(cluster2_account_client, TEST_DB_NAME2)
         try:
+            # Use PUBLICATION_NAME2 which covers TEST_DB_NAME2
             cluster2_account_client.execute(
-                f"CREATE DATABASE `{TEST_DB_NAME2}` FROM '{conn_str}' PUBLICATION `{PUBLICATION_NAME}` SYNC INTERVAL 60"
+                f"CREATE DATABASE `{TEST_DB_NAME2}` FROM '{conn_str}' PUBLICATION `{PUBLICATION_NAME2}` SYNC INTERVAL 60"
             )
             print_success("CREATE DATABASE with SYNC INTERVAL executed successfully")
             if not check_ccpr_log_record(cluster2_sys_client, 'database', db_name=TEST_DB_NAME2,
-                                 subscription_name=TEST_DB_NAME2, should_exist=True):
+                                 subscription_name=PUBLICATION_NAME2, should_exist=True):
                 success = False
                 return success
         except Exception as e:
@@ -331,6 +358,7 @@ def test_create_database_from_publication():
         # Cleanup
         cleanup_database(cluster2_account_client, TEST_DB_NAME)
         cleanup_database(cluster2_account_client, TEST_DB_NAME2)
+        cleanup_publication(cluster1_account_client, PUBLICATION_NAME2)
         time.sleep(1)  # Wait for cleanup
         
     except Exception as e:
@@ -342,8 +370,6 @@ def test_create_database_from_publication():
         try:
             cluster1_account_client.disconnect()
             cluster2_account_client.disconnect()
-            cleanup_account(cluster1_sys_client, CLUSTER1_ACCOUNT)
-            cleanup_account(cluster2_sys_client, CLUSTER2_ACCOUNT)
             cluster1_sys_client.disconnect()
             cluster2_sys_client.disconnect()
         except:
@@ -362,6 +388,19 @@ def test_create_table_from_publication():
     cluster2_account_client = Client()
     success = True
     
+    # Cleanup accounts at the beginning (in case they exist from previous failed runs)
+    try:
+        cluster1_sys_client.connect(host=CLUSTER1_HOST, port=CLUSTER1_PORT,
+                                    user=SYS_USER, password=SYS_PASSWORD, database='')
+        cluster2_sys_client.connect(host=CLUSTER2_HOST, port=CLUSTER2_PORT,
+                                    user=SYS_USER, password=SYS_PASSWORD, database='')
+        cleanup_account(cluster1_sys_client, CLUSTER1_ACCOUNT)
+        cleanup_account(cluster2_sys_client, CLUSTER2_ACCOUNT)
+        cluster1_sys_client.disconnect()
+        cluster2_sys_client.disconnect()
+    except Exception as e:
+        print_warning(f"Error during initial cleanup: {e}")
+    
     try:
         # Connect to clusters
         cluster1_sys_client.connect(host=CLUSTER1_HOST, port=CLUSTER1_PORT,
@@ -370,8 +409,6 @@ def test_create_table_from_publication():
                                     user=SYS_USER, password=SYS_PASSWORD, database='')
         
         # Setup accounts
-        cleanup_account(cluster1_sys_client, CLUSTER1_ACCOUNT)
-        cleanup_account(cluster2_sys_client, CLUSTER2_ACCOUNT)
         
         cluster1_sys_client.execute(
             f"CREATE ACCOUNT {CLUSTER1_ACCOUNT} ADMIN_NAME '{ACCOUNT_ADMIN}' IDENTIFIED BY '{ACCOUNT_PASSWORD}'"
@@ -397,10 +434,15 @@ def test_create_table_from_publication():
         cluster1_account_client.execute(
             f"CREATE TABLE `{TEST_TABLE_NAME}` (id INT PRIMARY KEY, name VARCHAR(100))"
         )
+        # Also create TEST_TABLE_NAME2 for SYNC INTERVAL test
+        cluster1_account_client.execute(
+            f"CREATE TABLE `{TEST_TABLE_NAME2}` (id INT PRIMARY KEY, name VARCHAR(100))"
+        )
         
         cleanup_publication(cluster1_account_client, PUBLICATION_NAME)
+        # Include both tables in the publication
         cluster1_account_client.execute(
-            f"CREATE PUBLICATION `{PUBLICATION_NAME}` DATABASE `{TEST_DB_NAME}` TABLE `{TEST_TABLE_NAME}` ACCOUNT `{CLUSTER1_ACCOUNT}`"
+            f"CREATE PUBLICATION `{PUBLICATION_NAME}` DATABASE `{TEST_DB_NAME}` TABLE `{TEST_TABLE_NAME}`, `{TEST_TABLE_NAME2}` ACCOUNT `{CLUSTER1_ACCOUNT}`"
         )
         
         # Setup downstream database
@@ -420,7 +462,7 @@ def test_create_table_from_publication():
             )
             print_success("CREATE TABLE executed successfully")
             if not check_ccpr_log_record(cluster2_sys_client, 'table', db_name=TEST_DB_NAME,
-                                 table_name=TEST_TABLE_NAME, subscription_name=TEST_TABLE_NAME,
+                                 table_name=TEST_TABLE_NAME, subscription_name=PUBLICATION_NAME,
                                  should_exist=True):
                 success = False
                 return success
@@ -450,7 +492,7 @@ def test_create_table_from_publication():
             )
             print_success("CREATE TABLE with SYNC INTERVAL executed successfully")
             if not check_ccpr_log_record(cluster2_sys_client, 'table', db_name=TEST_DB_NAME,
-                                 table_name=TEST_TABLE_NAME2, subscription_name=TEST_TABLE_NAME2,
+                                 table_name=TEST_TABLE_NAME2, subscription_name=PUBLICATION_NAME,
                                  should_exist=True):
                 success = False
                 return success
@@ -485,8 +527,6 @@ def test_create_table_from_publication():
         try:
             cluster1_account_client.disconnect()
             cluster2_account_client.disconnect()
-            cleanup_account(cluster1_sys_client, CLUSTER1_ACCOUNT)
-            cleanup_account(cluster2_sys_client, CLUSTER2_ACCOUNT)
             cluster1_sys_client.disconnect()
             cluster2_sys_client.disconnect()
         except:
@@ -544,12 +584,15 @@ def test_create_account_from_publication():
         test_account_name = 'test_sub_account'
         cleanup_account(cluster2_sys_client, test_account_name)
         try:
+            # According to design doc, CREATE ACCOUNT FROM PUBLICATION doesn't have account name
+            # Syntax: CREATE ACCOUNT FROM connection_string PUBLICATION pub_name
             cluster2_sys_client.execute(
-                f"CREATE ACCOUNT `{test_account_name}` FROM '{conn_str}' PUBLICATION `{PUBLICATION_NAME}`"
+                f"CREATE ACCOUNT FROM '{conn_str}' PUBLICATION `{PUBLICATION_NAME}`"
             )
             print_success("CREATE ACCOUNT FROM PUBLICATION executed successfully")
             # Note: account_id would need to be queried to check mo_ccpr_log
-            if not check_ccpr_log_record(cluster2_sys_client, 'account', subscription_name=test_account_name,
+            # subscription_name should be publication name, not account name
+            if not check_ccpr_log_record(cluster2_sys_client, 'account', subscription_name=PUBLICATION_NAME,
                                  should_exist=True):
                 success = False
                 return success
@@ -589,15 +632,25 @@ def test_drop_operations():
     cluster2_account_client = Client()
     success = True
     
+    # Cleanup accounts at the beginning (in case they exist from previous failed runs)
+    try:
+        cluster1_sys_client.connect(host=CLUSTER1_HOST, port=CLUSTER1_PORT,
+                                    user=SYS_USER, password=SYS_PASSWORD, database='')
+        cluster2_sys_client.connect(host=CLUSTER2_HOST, port=CLUSTER2_PORT,
+                                    user=SYS_USER, password=SYS_PASSWORD, database='')
+        cleanup_account(cluster1_sys_client, CLUSTER1_ACCOUNT)
+        cleanup_account(cluster2_sys_client, CLUSTER2_ACCOUNT)
+        cluster1_sys_client.disconnect()
+        cluster2_sys_client.disconnect()
+    except Exception as e:
+        print_warning(f"Error during initial cleanup: {e}")
+    
     try:
         # Setup similar to create tests
         cluster1_sys_client.connect(host=CLUSTER1_HOST, port=CLUSTER1_PORT,
                                     user=SYS_USER, password=SYS_PASSWORD, database='')
         cluster2_sys_client.connect(host=CLUSTER2_HOST, port=CLUSTER2_PORT,
                                     user=SYS_USER, password=SYS_PASSWORD, database='')
-        
-        cleanup_account(cluster1_sys_client, CLUSTER1_ACCOUNT)
-        cleanup_account(cluster2_sys_client, CLUSTER2_ACCOUNT)
         
         cluster1_sys_client.execute(
             f"CREATE ACCOUNT {CLUSTER1_ACCOUNT} ADMIN_NAME '{ACCOUNT_ADMIN}' IDENTIFIED BY '{ACCOUNT_PASSWORD}'"
@@ -641,7 +694,7 @@ def test_drop_operations():
         # Verify record exists before drop
         print_info("Verifying mo_ccpr_log record exists before DROP")
         if not check_ccpr_log_record(cluster2_sys_client, 'database', db_name=TEST_DB_NAME,
-                             subscription_name=TEST_DB_NAME, should_exist=True, check_drop_at=False):
+                             subscription_name=PUBLICATION_NAME, should_exist=True, check_drop_at=False):
             success = False
             return success
         
@@ -653,7 +706,7 @@ def test_drop_operations():
             time.sleep(2)  # Wait for drop_at update
             # Check that drop_at is set
             if not check_ccpr_log_record(cluster2_sys_client, 'database', db_name=TEST_DB_NAME,
-                                 subscription_name=TEST_DB_NAME, should_exist=True, check_drop_at=True):
+                                 subscription_name=PUBLICATION_NAME, should_exist=True, check_drop_at=True):
                 success = False
                 return success
         except Exception as e:
@@ -682,7 +735,7 @@ def test_drop_operations():
         
         # Verify table record exists
         if not check_ccpr_log_record(cluster2_sys_client, 'table', db_name=TEST_DB_NAME,
-                             table_name=TEST_TABLE_NAME, subscription_name=TEST_TABLE_NAME,
+                             table_name=TEST_TABLE_NAME, subscription_name=PUBLICATION_NAME,
                              should_exist=True, check_drop_at=False):
             success = False
             return success
@@ -693,7 +746,7 @@ def test_drop_operations():
             time.sleep(2)
             # Check that drop_at is set
             if not check_ccpr_log_record(cluster2_sys_client, 'table', db_name=TEST_DB_NAME,
-                                 table_name=TEST_TABLE_NAME, subscription_name=TEST_TABLE_NAME,
+                                 table_name=TEST_TABLE_NAME, subscription_name=PUBLICATION_NAME,
                                  should_exist=True, check_drop_at=True):
                 success = False
                 return success
@@ -715,8 +768,6 @@ def test_drop_operations():
         try:
             cluster1_account_client.disconnect()
             cluster2_account_client.disconnect()
-            cleanup_account(cluster1_sys_client, CLUSTER1_ACCOUNT)
-            cleanup_account(cluster2_sys_client, CLUSTER2_ACCOUNT)
             cluster1_sys_client.disconnect()
             cluster2_sys_client.disconnect()
         except:
@@ -735,15 +786,25 @@ def test_repeated_creation():
     cluster2_account_client = Client()
     success = True
     
+    # Cleanup accounts at the beginning (in case they exist from previous failed runs)
+    try:
+        cluster1_sys_client.connect(host=CLUSTER1_HOST, port=CLUSTER1_PORT,
+                                    user=SYS_USER, password=SYS_PASSWORD, database='')
+        cluster2_sys_client.connect(host=CLUSTER2_HOST, port=CLUSTER2_PORT,
+                                    user=SYS_USER, password=SYS_PASSWORD, database='')
+        cleanup_account(cluster1_sys_client, CLUSTER1_ACCOUNT)
+        cleanup_account(cluster2_sys_client, CLUSTER2_ACCOUNT)
+        cluster1_sys_client.disconnect()
+        cluster2_sys_client.disconnect()
+    except Exception as e:
+        print_warning(f"Error during initial cleanup: {e}")
+    
     try:
         # Setup
         cluster1_sys_client.connect(host=CLUSTER1_HOST, port=CLUSTER1_PORT,
                                     user=SYS_USER, password=SYS_PASSWORD, database='')
         cluster2_sys_client.connect(host=CLUSTER2_HOST, port=CLUSTER2_PORT,
                                     user=SYS_USER, password=SYS_PASSWORD, database='')
-        
-        cleanup_account(cluster1_sys_client, CLUSTER1_ACCOUNT)
-        cleanup_account(cluster2_sys_client, CLUSTER2_ACCOUNT)
         
         cluster1_sys_client.execute(
             f"CREATE ACCOUNT {CLUSTER1_ACCOUNT} ADMIN_NAME '{ACCOUNT_ADMIN}' IDENTIFIED BY '{ACCOUNT_PASSWORD}'"
@@ -801,7 +862,7 @@ def test_repeated_creation():
         
         # Verify new record exists
         if not check_ccpr_log_record(cluster2_sys_client, 'database', db_name=TEST_DB_NAME,
-                             subscription_name=TEST_DB_NAME, should_exist=True, check_drop_at=False):
+                             subscription_name=PUBLICATION_NAME, should_exist=True, check_drop_at=False):
             success = False
             return success
         
@@ -817,8 +878,6 @@ def test_repeated_creation():
         try:
             cluster1_account_client.disconnect()
             cluster2_account_client.disconnect()
-            cleanup_account(cluster1_sys_client, CLUSTER1_ACCOUNT)
-            cleanup_account(cluster2_sys_client, CLUSTER2_ACCOUNT)
             cluster1_sys_client.disconnect()
             cluster2_sys_client.disconnect()
         except:
