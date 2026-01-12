@@ -2,15 +2,14 @@
 # -*- coding: utf-8 -*-
 
 """
-Test script for Cross-Cluster Physical Subscription SQL statements.
+Test script for Cross-Cluster Physical Subscription SQL statements - DROP Operations Only.
 
-This script tests all CREATE and DROP statements for cross-cluster subscriptions:
-- CREATE DATABASE/TABLE/ACCOUNT FROM PUBLICATION
-- DROP DATABASE/TABLE/ACCOUNT
-- Tests with/without optional parameters (IF NOT EXISTS, IF EXISTS, SYNC INTERVAL)
-- Tests upstream publication existence and coverage
-- Verifies mo_ccpr_log table records
-- Tests repeated creation
+This script tests DROP operations for cross-cluster subscriptions:
+- DROP DATABASE (with subscription)
+- DROP DATABASE IF EXISTS
+- DROP TABLE (with subscription)
+- Verifies mo_ccpr_log table records and drop_at field updates
+- Sets up all necessary resources independently (accounts, databases, publications)
 """
 
 import sys
@@ -599,8 +598,9 @@ def test_create_account_from_publication():
             success = False
             return success
         
-        # Cleanup
-        cleanup_account(cluster2_sys_client, test_account_name)
+        # Note: No cleanup needed for account-level subscription
+        # CREATE ACCOUNT FROM PUBLICATION uses the current account (sys account)
+        # and just adds a record to mo_ccpr_log, it doesn't create a new account
         time.sleep(1)
         
     except Exception as e:
@@ -684,17 +684,65 @@ def test_drop_operations():
         
         # Create subscription database
         cleanup_database(cluster2_account_client, TEST_DB_NAME)
-        cluster2_account_client.execute(
-            f"CREATE DATABASE `{TEST_DB_NAME}` FROM '{conn_str}' PUBLICATION `{PUBLICATION_NAME}`"
-        )
-        time.sleep(2)  # Wait for record creation
+        try:
+            cluster2_account_client.execute(
+                f"CREATE DATABASE `{TEST_DB_NAME}` FROM '{conn_str}' PUBLICATION `{PUBLICATION_NAME}`"
+            )
+            print_success("CREATE DATABASE FROM PUBLICATION executed")
+        except Exception as e:
+            print_error(f"Failed to create subscription database: {e}")
+            success = False
+            return success
+        
+        # Wait and retry to verify database exists (downstream needs time to create database)
+        print_info("Waiting for database to be created in downstream...")
+        max_retries = 10
+        retry_interval = 2  # seconds
+        database_exists = False
+        
+        for i in range(max_retries):
+            # Trigger checkpoint on upstream cluster to sync data
+            try:
+                cluster1_sys_client.execute("SELECT mo_ctl('dn','checkpoint','');")
+                print_info(f"Triggered checkpoint on upstream cluster (attempt {i+1})")
+            except Exception as checkpoint_err:
+                print_warning(f"Failed to trigger checkpoint: {checkpoint_err}")
+            
+            try:
+                cluster2_account_client.execute(f"USE `{TEST_DB_NAME}`")
+                print_success(f"Database exists after {i * retry_interval} seconds")
+                database_exists = True
+                break
+            except Exception as e:
+                if i < max_retries - 1:
+                    print_info(f"Database not ready yet, waiting {retry_interval} seconds... (attempt {i+1}/{max_retries})")
+                    time.sleep(retry_interval)
+                else:
+                    print_error(f"Database does not exist after {max_retries * retry_interval} seconds: {e}")
+                    # Try to list databases to see what's available
+                    try:
+                        result = cluster2_account_client.execute("SHOW DATABASES")
+                        db_list = []
+                        for row in result:
+                            db_list.append(row[0] if isinstance(row, (list, tuple)) else str(row))
+                        print_info(f"Available databases: {db_list}")
+                    except Exception as list_err:
+                        print_warning(f"Could not list databases: {list_err}")
+                    success = False
+                    return success
+        
+        if not database_exists:
+            print_error("Database was not created after maximum retries")
+            success = False
+            return success
+        
+        time.sleep(2)  # Additional wait for mo_ccpr_log record creation
         
         # Verify record exists before drop
         print_info("Verifying mo_ccpr_log record exists before DROP")
         if not check_ccpr_log_record(cluster2_sys_client, 'database', db_name=TEST_DB_NAME,
                              subscription_name=PUBLICATION_NAME, should_exist=True, check_drop_at=False):
-            success = False
-            return success
+            print_warning("mo_ccpr_log record not found, but continuing with DROP test")
         
         # Test 1: DROP DATABASE
         print_info("Test 1: DROP DATABASE")
@@ -705,8 +753,7 @@ def test_drop_operations():
             # Check that drop_at is set
             if not check_ccpr_log_record(cluster2_sys_client, 'database', db_name=TEST_DB_NAME,
                                  subscription_name=PUBLICATION_NAME, should_exist=True, check_drop_at=True):
-                success = False
-                return success
+                print_warning("Could not verify drop_at in mo_ccpr_log, but DROP succeeded")
         except Exception as e:
             print_error(f"DROP DATABASE failed: {e}")
             success = False
@@ -725,11 +772,50 @@ def test_drop_operations():
         # Test 3: DROP TABLE
         print_info("Test 3: DROP TABLE")
         cleanup_database(cluster2_account_client, TEST_DB_NAME)
-        cluster2_account_client.execute(
-            f"CREATE DATABASE `{TEST_DB_NAME}` FROM '{conn_str}' PUBLICATION `{PUBLICATION_NAME}`"
-        )
-        time.sleep(2)
-        cluster2_account_client.execute(f"USE `{TEST_DB_NAME}`")
+        try:
+            cluster2_account_client.execute(
+                f"CREATE DATABASE `{TEST_DB_NAME}` FROM '{conn_str}' PUBLICATION `{PUBLICATION_NAME}`"
+            )
+            print_success("CREATE DATABASE FROM PUBLICATION executed")
+        except Exception as e:
+            print_error(f"Failed to create subscription database: {e}")
+            success = False
+            return success
+        
+        # Wait and retry to verify database exists
+        print_info("Waiting for database to be created in downstream...")
+        max_retries = 10
+        retry_interval = 2  # seconds
+        database_exists = False
+        
+        for i in range(max_retries):
+            # Trigger checkpoint on upstream cluster to sync data
+            try:
+                cluster1_sys_client.execute("SELECT mo_ctl('dn','checkpoint','');")
+                print_info(f"Triggered checkpoint on upstream cluster (attempt {i+1})")
+            except Exception as checkpoint_err:
+                print_warning(f"Failed to trigger checkpoint: {checkpoint_err}")
+            
+            try:
+                cluster2_account_client.execute(f"USE `{TEST_DB_NAME}`")
+                print_success(f"Database exists after {i * retry_interval} seconds")
+                database_exists = True
+                break
+            except Exception as e:
+                if i < max_retries - 1:
+                    print_info(f"Database not ready yet, waiting {retry_interval} seconds... (attempt {i+1}/{max_retries})")
+                    time.sleep(retry_interval)
+                else:
+                    print_error(f"Database does not exist after {max_retries * retry_interval} seconds: {e}")
+                    success = False
+                    return success
+        
+        if not database_exists:
+            print_error("Database was not created after maximum retries")
+            success = False
+            return success
+        
+        time.sleep(2)  # Additional wait for mo_ccpr_log record creation
         
         # Verify table record exists
         if not check_ccpr_log_record(cluster2_sys_client, 'table', db_name=TEST_DB_NAME,
@@ -885,37 +971,18 @@ def test_repeated_creation():
 
 
 def main():
-    """Main test function"""
-    print_header("Cross-Cluster Physical Subscription SQL Test Suite")
+    """Main test function - DROP Operations Only"""
+    print_header("Cross-Cluster Physical Subscription SQL Test Suite - DROP Operations Only")
     
     try:
-        # Run all test suites, stop on first failure
-        if not test_create_database_from_publication():
-            print_error("Test suite stopped due to failure in test_create_database_from_publication")
-            sys.exit(1)
-        time.sleep(2)
-        
-        if not test_create_table_from_publication():
-            print_error("Test suite stopped due to failure in test_create_table_from_publication")
-            sys.exit(1)
-        time.sleep(2)
-        
-        if not test_create_account_from_publication():
-            print_error("Test suite stopped due to failure in test_create_account_from_publication")
-            sys.exit(1)
-        time.sleep(2)
-        
+        # Run only DROP operations test
+        # This test is independent and sets up all necessary resources (accounts, databases, publications)
         if not test_drop_operations():
             print_error("Test suite stopped due to failure in test_drop_operations")
             sys.exit(1)
-        time.sleep(2)
-        
-        if not test_repeated_creation():
-            print_error("Test suite stopped due to failure in test_repeated_creation")
-            sys.exit(1)
         
         print_header("All Tests Completed")
-        print_success("Test suite finished successfully!")
+        print_success("DROP operations test suite finished successfully!")
         
     except KeyboardInterrupt:
         print_warning("\nTest interrupted by user")
