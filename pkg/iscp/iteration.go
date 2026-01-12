@@ -716,6 +716,14 @@ func ProcessInitSQL(
 	if txnOp != nil {
 		defer txnOp.Commit(ctx)
 	}
+	// injection is for ut
+
+	if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "processInitSQLNewTxn" {
+		err = moerr.NewInternalErrorNoCtx(msg)
+	}
+	if err != nil {
+		return
+	}
 	err = cnEngine.New(ctx, txnOp)
 	if err != nil {
 		return

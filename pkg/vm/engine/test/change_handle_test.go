@@ -16,6 +16,7 @@ package test
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"sync"
 	"testing"
@@ -5539,4 +5540,43 @@ func TestISCPTableIDChange(t *testing.T) {
 	ts, ok := cdcExecutor.GetWatermark(accountId, tableID, "test_idx")
 	assert.True(t, ok)
 	assert.True(t, ts.GE(&now))
+}
+
+func TestIterationError(t *testing.T) {
+	catalog.SetupDefines("")
+
+	var (
+		accountId = catalog.System_Account
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
+
+	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeHandler.Close(true)
+		rpcAgent.Close()
+	}()
+
+	err := mock_mo_indexes(disttaeEngine, ctxWithTimeout)
+	require.NoError(t, err)
+	err = mock_mo_foreign_keys(disttaeEngine, ctxWithTimeout)
+	require.NoError(t, err)
+	err = mock_mo_intra_system_change_propagation_log(disttaeEngine, ctxWithTimeout)
+	require.NoError(t, err)
+
+	fault.Enable()
+	defer fault.Disable()
+	rmFn, err := objectio.InjectCDCExecutor("processInitSQLNewTxn")
+	assert.NoError(t, err)
+	defer rmFn()
+	ctx, cancel = context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
+	encoded := base64.StdEncoding.EncodeToString([]byte("invalid sql"))
+	err = iscp.ProcessInitSQL(ctx, "", disttaeEngine.Engine, disttaeEngine.GetTxnClient(), encoded)
+	require.Error(t, err)
 }
