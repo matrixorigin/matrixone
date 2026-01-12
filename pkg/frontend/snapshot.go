@@ -112,6 +112,7 @@ var (
 		"mo_stages":                   0,
 		catalog.MO_PUBS:               1,
 		catalog.MO_SUBS:               1,
+		catalog.MO_ISCP_LOG:           1,
 
 		"mo_sessions":       1,
 		"mo_configurations": 1,
@@ -2327,7 +2328,8 @@ func dropExistsAccount(
 		return b.err
 	}
 
-	err = doDropAccount(ctx, bh, ses, drop)
+	// Pass inTransaction=true since we're already in doRestoreSnapshot's transaction
+	err = doDropAccount(ctx, bh, ses, drop, true)
 	if err != nil {
 		return
 	}

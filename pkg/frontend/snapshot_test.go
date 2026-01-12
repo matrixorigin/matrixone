@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -199,5 +200,81 @@ func Test_restoreAccountUsingClusterSnapshotToNew(t *testing.T) {
 
 		err = restoreAccountUsingClusterSnapshotToNew(ctx, ses, bh, "sp01", 0, accountRecord{accountName: "sys", accountId: 0}, 0, nil, false, false)
 		convey.So(err, convey.ShouldNotBeNil)
+	})
+}
+
+func Test_dropExistsAccount_InRestoreTransaction(t *testing.T) {
+	convey.Convey("dropExistsAccount should not create new transaction during restore", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTestWithHistory{}
+		bh.init()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		rm, _ := NewRoutineManager(ctx, "")
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+
+		// Setup SQL results for dropExistsAccount
+		// Note: No "begin;" should be executed since we're in restore transaction
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		// Setup SQL results for doDropAccount (called by dropExistsAccount)
+		sql, _ := getSqlForCheckTenant(ctx, "test_acc")
+		mrs := newMrsForGetAllAccounts([][]interface{}{
+			{uint64(1), "test_acc", "open", uint64(1), nil},
+		})
+		bh.sql2result[sql] = mrs
+
+		sql, _ = getSqlForDeleteAccountFromMoAccount(context.TODO(), "test_acc")
+		bh.sql2result[sql] = nil
+
+		for _, sql = range getSqlForDropAccount() {
+			bh.sql2result[sql] = nil
+		}
+
+		bh.sql2result["show databases;"] = newMrsForSqlForShowDatabases([][]interface{}{})
+
+		bh.sql2result["show tables from mo_catalog;"] = newMrsForShowTables([][]interface{}{})
+
+		sql = fmt.Sprintf(getPubInfoSql, 1) + " order by update_time desc, created_time desc"
+		bh.sql2result[sql] = newMrsForSqlForGetPubs([][]interface{}{})
+
+		sql = "select 1 from mo_catalog.mo_columns where att_database = 'mo_catalog' and att_relname = 'mo_subs' and attname = 'sub_account_name'"
+		bh.sql2result[sql] = newMrsForSqlForGetSubs([][]interface{}{{1}})
+
+		sql = getSubsSql + " and sub_account_id = 1"
+		bh.sql2result[sql] = newMrsForSqlForGetSubs([][]interface{}{})
+
+		// Call dropExistsAccount (used in restoreToCluster)
+		account := accountRecord{
+			accountName: "test_acc",
+			accountId:   1,
+		}
+		err := dropExistsAccount(ctx, ses, bh, "test_snapshot", account)
+
+		convey.So(err, convey.ShouldBeNil)
+		// Verify that "begin;" was NOT executed (restore scenario)
+		// dropExistsAccount should not create new transaction during restore
+		convey.So(bh.hasExecuted("begin;"), convey.ShouldBeFalse)
 	})
 }
