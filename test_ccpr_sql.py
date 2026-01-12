@@ -2,13 +2,20 @@
 # -*- coding: utf-8 -*-
 
 """
-Test script for Cross-Cluster Physical Subscription SQL statements - SHOW CCPR SUBSCRIPTIONS.
+Test script for Cross-Cluster Physical Subscription SQL statements.
 
-This script tests SHOW CCPR SUBSCRIPTIONS commands:
-- SHOW CCPR SUBSCRIPTIONS (show all subscriptions)
-- SHOW CCPR SUBSCRIPTION pub_name (show specific subscription)
-- Tests account visibility (sys account sees all, other accounts see only their own)
-- Sets up all necessary resources independently (accounts, databases, publications)
+This script tests:
+- SHOW CCPR SUBSCRIPTIONS commands:
+  - SHOW CCPR SUBSCRIPTIONS (show all subscriptions)
+  - SHOW CCPR SUBSCRIPTION pub_name (show specific subscription)
+  - Tests account visibility (sys account sees all, other accounts see only their own)
+- DROP CCPR SUBSCRIPTION commands:
+  - DROP CCPR SUBSCRIPTION pub_name (drop subscription)
+  - DROP CCPR SUBSCRIPTION IF EXISTS pub_name (drop with IF EXISTS)
+  - Tests database-level and table-level subscriptions
+  - Verifies drop_at field is set in mo_ccpr_log
+
+Sets up all necessary resources independently (accounts, databases, publications)
 """
 
 import sys
@@ -620,8 +627,8 @@ def test_create_account_from_publication():
 
 
 def test_drop_operations():
-    """Test DROP operations and verify mo_ccpr_log. Returns True on success, False on failure."""
-    print_header("Testing DROP operations")
+    """Test DROP CCPR SUBSCRIPTION operations and verify mo_ccpr_log. Returns True on success, False on failure."""
+    print_header("Testing DROP CCPR SUBSCRIPTION operations")
     
     cluster1_sys_client = Client()
     cluster2_sys_client = Client()
@@ -681,7 +688,8 @@ def test_drop_operations():
         conn_str = get_connection_string(CLUSTER1_ACCOUNT, ACCOUNT_ADMIN, ACCOUNT_PASSWORD,
                                         CLUSTER1_HOST, CLUSTER1_PORT)
         
-        # Create subscription database
+        # Test 1: DROP CCPR SUBSCRIPTION for database-level subscription
+        print_info("Test 1: DROP CCPR SUBSCRIPTION (database-level)")
         cleanup_database(cluster2_account_client, TEST_DB_NAME)
         try:
             cluster2_account_client.execute(
@@ -692,50 +700,6 @@ def test_drop_operations():
             print_error(f"Failed to create subscription database: {e}")
             success = False
             return success
-        
-        # Wait and retry to verify database exists (downstream needs time to create database)
-        print_info("Waiting for database to be created in downstream...")
-        max_retries = 10
-        retry_interval = 2  # seconds
-        database_exists = False
-        
-        for i in range(max_retries):
-            # Trigger checkpoint on upstream cluster to sync data
-            try:
-                cluster1_sys_client.execute("SELECT mo_ctl('dn','checkpoint','');")
-                print_info(f"Triggered checkpoint on upstream cluster (attempt {i+1})")
-            except Exception as checkpoint_err:
-                print_warning(f"Failed to trigger checkpoint: {checkpoint_err}")
-            
-            try:
-                cluster2_account_client.execute(f"USE `{TEST_DB_NAME}`")
-                print_success(f"Database exists after {i * retry_interval} seconds")
-                database_exists = True
-                break
-            except Exception as e:
-                if i < max_retries - 1:
-                    print_info(f"Database not ready yet, waiting {retry_interval} seconds... (attempt {i+1}/{max_retries})")
-                    time.sleep(retry_interval)
-                else:
-                    print_error(f"Database does not exist after {max_retries * retry_interval} seconds: {e}")
-                    # Try to list databases to see what's available
-                    try:
-                        result = cluster2_account_client.execute("SHOW DATABASES")
-                        db_list = []
-                        for row in result:
-                            db_list.append(row[0] if isinstance(row, (list, tuple)) else str(row))
-                        print_info(f"Available databases: {db_list}")
-                    except Exception as list_err:
-                        print_warning(f"Could not list databases: {list_err}")
-                    success = False
-                    return success
-        
-        if not database_exists:
-            print_error("Database was not created after maximum retries")
-            success = False
-            return success
-        
-        time.sleep(2)  # Additional wait for mo_ccpr_log record creation
         
         # Verify record exists before drop
         print_info("Verifying mo_ccpr_log record exists before DROP")
@@ -743,98 +707,81 @@ def test_drop_operations():
                              subscription_name=PUBLICATION_NAME, should_exist=True, check_drop_at=False):
             print_warning("mo_ccpr_log record not found, but continuing with DROP test")
         
-        # Test 1: DROP DATABASE
-        print_info("Test 1: DROP DATABASE")
+        # Execute DROP CCPR SUBSCRIPTION
         try:
-            cluster2_account_client.execute(f"DROP DATABASE `{TEST_DB_NAME}`")
-            print_success("DROP DATABASE executed successfully")
-            time.sleep(2)  # Wait for drop_at update
+            cluster2_account_client.execute(f"DROP CCPR SUBSCRIPTION `{PUBLICATION_NAME}`")
+            print_success("DROP CCPR SUBSCRIPTION executed successfully")
             # Check that drop_at is set
             if not check_ccpr_log_record(cluster2_sys_client, 'database', db_name=TEST_DB_NAME,
                                  subscription_name=PUBLICATION_NAME, should_exist=True, check_drop_at=True):
-                print_warning("Could not verify drop_at in mo_ccpr_log, but DROP succeeded")
+                print_error("drop_at was not set in mo_ccpr_log after DROP CCPR SUBSCRIPTION")
+                success = False
+                return success
+            print_success("Verified drop_at is set in mo_ccpr_log")
         except Exception as e:
-            print_error(f"DROP DATABASE failed: {e}")
+            print_error(f"DROP CCPR SUBSCRIPTION failed: {e}")
             success = False
             return success
         
-        # Test 2: DROP DATABASE IF EXISTS (on non-existent database)
-        print_info("Test 2: DROP DATABASE IF EXISTS (should succeed)")
+        # Test 2: DROP CCPR SUBSCRIPTION IF EXISTS (on non-existent subscription)
+        print_info("Test 2: DROP CCPR SUBSCRIPTION IF EXISTS (should succeed without error)")
         try:
-            cluster2_account_client.execute(f"DROP DATABASE IF EXISTS `nonexistent_db`")
-            print_success("DROP DATABASE IF EXISTS executed successfully (no error)")
+            cluster2_account_client.execute(f"DROP CCPR SUBSCRIPTION IF EXISTS `{PUBLICATION_NAME_NOT_EXIST}`")
+            print_success("DROP CCPR SUBSCRIPTION IF EXISTS executed successfully (no error)")
         except Exception as e:
-            print_error(f"DROP DATABASE IF EXISTS failed: {e}")
+            print_error(f"DROP CCPR SUBSCRIPTION IF EXISTS failed: {e}")
             success = False
             return success
         
-        # Test 3: DROP TABLE
-        print_info("Test 3: DROP TABLE")
+        # Test 3: DROP CCPR SUBSCRIPTION without IF EXISTS (should fail for non-existent)
+        print_info("Test 3: DROP CCPR SUBSCRIPTION without IF EXISTS (should fail for non-existent)")
+        try:
+            cluster2_account_client.execute(f"DROP CCPR SUBSCRIPTION `{PUBLICATION_NAME_NOT_EXIST}`")
+            print_error("DROP CCPR SUBSCRIPTION should have failed for non-existent subscription")
+            success = False
+            return success
+        except Exception as e:
+            print_success(f"DROP CCPR SUBSCRIPTION correctly failed for non-existent subscription: {e}")
+        
+        # Test 4: DROP CCPR SUBSCRIPTION for table-level subscription
+        print_info("Test 4: DROP CCPR SUBSCRIPTION (table-level)")
+        # Create a regular database (not subscription database) for table-level subscription test
         cleanup_database(cluster2_account_client, TEST_DB_NAME)
+        cluster2_account_client.execute(f"CREATE DATABASE `{TEST_DB_NAME}`")
+        cluster2_account_client.execute(f"USE `{TEST_DB_NAME}`")
+        
+        # Create table-level subscription
         try:
             cluster2_account_client.execute(
-                f"CREATE DATABASE `{TEST_DB_NAME}` FROM '{conn_str}' PUBLICATION `{PUBLICATION_NAME}`"
+                f"CREATE TABLE `{TEST_TABLE_NAME}` FROM '{conn_str}' PUBLICATION `{PUBLICATION_NAME}`"
             )
-            print_success("CREATE DATABASE FROM PUBLICATION executed")
+            print_success("CREATE TABLE FROM PUBLICATION executed")
         except Exception as e:
-            print_error(f"Failed to create subscription database: {e}")
+            print_error(f"Failed to create subscription table: {e}")
             success = False
             return success
         
-        # Wait and retry to verify database exists
-        print_info("Waiting for database to be created in downstream...")
-        max_retries = 10
-        retry_interval = 2  # seconds
-        database_exists = False
-        
-        for i in range(max_retries):
-            # Trigger checkpoint on upstream cluster to sync data
-            try:
-                cluster1_sys_client.execute("SELECT mo_ctl('dn','checkpoint','');")
-                print_info(f"Triggered checkpoint on upstream cluster (attempt {i+1})")
-            except Exception as checkpoint_err:
-                print_warning(f"Failed to trigger checkpoint: {checkpoint_err}")
-            
-            try:
-                cluster2_account_client.execute(f"USE `{TEST_DB_NAME}`")
-                print_success(f"Database exists after {i * retry_interval} seconds")
-                database_exists = True
-                break
-            except Exception as e:
-                if i < max_retries - 1:
-                    print_info(f"Database not ready yet, waiting {retry_interval} seconds... (attempt {i+1}/{max_retries})")
-                    time.sleep(retry_interval)
-                else:
-                    print_error(f"Database does not exist after {max_retries * retry_interval} seconds: {e}")
-                    success = False
-                    return success
-        
-        if not database_exists:
-            print_error("Database was not created after maximum retries")
-            success = False
-            return success
-        
-        time.sleep(2)  # Additional wait for mo_ccpr_log record creation
-        
-        # Verify table record exists
+        # Verify table record exists before drop
+        print_info("Verifying mo_ccpr_log record exists for table-level subscription")
         if not check_ccpr_log_record(cluster2_sys_client, 'table', db_name=TEST_DB_NAME,
                              table_name=TEST_TABLE_NAME, subscription_name=PUBLICATION_NAME,
                              should_exist=True, check_drop_at=False):
-            success = False
-            return success
+            print_warning("mo_ccpr_log record not found for table-level subscription, but continuing")
         
+        # Execute DROP CCPR SUBSCRIPTION for table-level subscription
         try:
-            cluster2_account_client.execute(f"DROP TABLE `{TEST_TABLE_NAME}`")
-            print_success("DROP TABLE executed successfully")
-            time.sleep(2)
-            # Check that drop_at is set
+            cluster2_account_client.execute(f"DROP CCPR SUBSCRIPTION `{PUBLICATION_NAME}`")
+            print_success("DROP CCPR SUBSCRIPTION executed successfully for table-level subscription")
+            # Check that drop_at is set for table-level subscription
             if not check_ccpr_log_record(cluster2_sys_client, 'table', db_name=TEST_DB_NAME,
                                  table_name=TEST_TABLE_NAME, subscription_name=PUBLICATION_NAME,
                                  should_exist=True, check_drop_at=True):
+                print_error("drop_at was not set in mo_ccpr_log for table-level subscription")
                 success = False
                 return success
+            print_success("Verified drop_at is set in mo_ccpr_log for table-level subscription")
         except Exception as e:
-            print_error(f"DROP TABLE failed: {e}")
+            print_error(f"DROP CCPR SUBSCRIPTION failed for table-level subscription: {e}")
             success = False
             return success
         
@@ -1230,17 +1177,24 @@ def test_show_ccpr_subscriptions():
 
 
 def main():
-    """Main test function - SHOW CCPR SUBSCRIPTIONS Only"""
-    print_header("Cross-Cluster Physical Subscription SQL Test Suite - SHOW CCPR SUBSCRIPTIONS")
+    """Main test function - SHOW CCPR SUBSCRIPTIONS and DROP CCPR SUBSCRIPTION"""
+    print_header("Cross-Cluster Physical Subscription SQL Test Suite")
     
     try:
-        # Run SHOW CCPR SUBSCRIPTIONS test only
+        # Run SHOW CCPR SUBSCRIPTIONS test
+        print_header("Running SHOW CCPR SUBSCRIPTIONS tests")
         if not test_show_ccpr_subscriptions():
             print_error("Test suite stopped due to failure in test_show_ccpr_subscriptions")
             sys.exit(1)
         
+        # Run DROP CCPR SUBSCRIPTION test
+        print_header("Running DROP CCPR SUBSCRIPTION tests")
+        if not test_drop_operations():
+            print_error("Test suite stopped due to failure in test_drop_operations")
+            sys.exit(1)
+        
         print_header("All Tests Completed")
-        print_success("SHOW CCPR SUBSCRIPTIONS test suite finished successfully!")
+        print_success("Cross-Cluster Physical Subscription SQL test suite finished successfully!")
         
     except KeyboardInterrupt:
         print_warning("\nTest interrupted by user")
