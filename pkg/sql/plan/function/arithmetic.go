@@ -283,12 +283,12 @@ func plusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 			return addInt64WithOverflowCheck(proc.Ctx, v1, v2)
 		}, selectList)
 	case types.T_float32:
-		return opBinaryFixedFixedToFixed[float32, float32, float32](parameters, result, proc, length, func(v1, v2 float32) float32 {
-			return v1 + v2
+		return opBinaryFixedFixedToFixedWithErrorCheck[float32, float32, float32](parameters, result, proc, length, func(v1, v2 float32) (float32, error) {
+			return addFloat32WithOverflowCheck(proc.Ctx, v1, v2)
 		}, selectList)
 	case types.T_float64:
-		return opBinaryFixedFixedToFixed[float64, float64, float64](parameters, result, proc, length, func(v1, v2 float64) float64 {
-			return v1 + v2
+		return opBinaryFixedFixedToFixedWithErrorCheck[float64, float64, float64](parameters, result, proc, length, func(v1, v2 float64) (float64, error) {
+			return addFloat64WithOverflowCheck(proc.Ctx, v1, v2)
 		}, selectList)
 	case types.T_decimal64:
 		return decimalArith[types.Decimal64](parameters, result, proc, length, func(v1, v2 types.Decimal64, scale1, scale2 int32) (types.Decimal64, error) {
