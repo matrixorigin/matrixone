@@ -127,11 +127,8 @@ func (c *Compile) Compile(
 	c.fill = resultWriteBack
 	c.pn = queryPlan
 
-	// replace the original top context with the input one to avoid any value modification.
-	c.proc.ReplaceTopCtx(execTopContext)
-
-	// with values.
-	topContext := c.proc.SaveToTopContext(defines.EngineKey{}, c.e)
+	// combine top context with some values and replace.
+	topContext := context.WithValue(execTopContext, defines.EngineKey{}, c.e)
 	topContext = perfcounter.WithCounterSet(topContext, c.counterSet)
 	c.proc.ReplaceTopCtx(topContext)
 
@@ -196,7 +193,6 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 
 	// update the top context with some trace information and values.
 	execTopContext, span := trace.Start(c.proc.GetTopContext(), "Compile.Run", trace.WithKind(trace.SpanKindStatement))
-	c.proc.ReplaceTopCtx(execTopContext)
 
 	// statistical information record and trace.
 	runStart := time.Now()
@@ -212,6 +208,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 
 	crs := new(perfcounter.CounterSet)
 	execTopContext = perfcounter.AttachExecPipelineKey(execTopContext, crs)
+	c.proc.ReplaceTopCtx(execTopContext)
 	txnTrace.GetService(c.proc.GetService()).TxnStatementStart(txnOperator, executeSQL, sequence)
 	defer func() {
 		task.End()
