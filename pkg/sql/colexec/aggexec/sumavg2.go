@@ -15,7 +15,6 @@
 package aggexec
 
 import (
-	"math"
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -45,7 +44,7 @@ func AvgReturnType(typs []types.Type) types.Type {
 		if s > typs[0].Scale+6 {
 			s = typs[0].Scale + 6
 		}
-		return types.New(types.T_decimal128, 18, s)
+		return types.New(types.T_decimal128, 38, s)
 	case types.T_decimal128:
 		s := int32(12)
 		if s < typs[0].Scale {
@@ -54,7 +53,7 @@ func AvgReturnType(typs []types.Type) types.Type {
 		if s > typs[0].Scale+6 {
 			s = typs[0].Scale + 6
 		}
-		return types.New(types.T_decimal128, 18, s)
+		return types.New(types.T_decimal128, 38, s)
 	default:
 		return types.T_float64.ToType()
 	}
@@ -91,9 +90,8 @@ func uint64OfCheck(v1, v2, sum uint64) error {
 }
 
 func float64OfCheck(v1, v2, sum float64) error {
-	if math.IsInf(sum, 0) {
-		return moerr.NewOutOfRangeNoCtxf("float64", "(%f + %f)", v1, v2)
-	}
+	// MySQL behavior: SUM() aggregation allows overflow to +Infinity without error
+	// This matches MySQL 8.0 where SUM() silently returns +Infinity on overflow
 	return nil
 }
 

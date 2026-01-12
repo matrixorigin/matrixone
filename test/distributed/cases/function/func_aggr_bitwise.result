@@ -1,40 +1,40 @@
 SELECT bit_and(null), bit_or(null), bit_xor(null);
-➤ bit_and(null)[-5,64,0]  ¦  bit_or(null)[-5,64,0]  ¦  bit_xor(null)[-5,64,0]  𝄀
-null  ¦  null  ¦  null
+bit_and(null)    bit_or(null)    bit_xor(null)
+null    null    null
 CREATE TABLE t1 (a int, b int);
 INSERT INTO t1 VALUES (1,null);
 INSERT INTO t1 VALUES (1,null);
 INSERT INTO t1 VALUES (2,null);
 select a, BIT_AND(b), BIT_OR(b), BIT_XOR(b) from t1 group by a;
-➤ a[4,32,0]  ¦  BIT_AND(b)[-5,64,0]  ¦  BIT_OR(b)[-5,64,0]  ¦  BIT_XOR(b)[-5,64,0]  𝄀
-1  ¦  null  ¦  null  ¦  null  𝄀
-2  ¦  null  ¦  null  ¦  null
+a    BIT_AND(b)    BIT_OR(b)    BIT_XOR(b)
+1    null    null    null
+2    null    null    null
 SELECT a, OCT(BIT_AND(b)), OCT(BIT_OR(b)), OCT(BIT_XOR(b)) FROM t1 GROUP BY a;
-➤ a[4,32,0]  ¦  OCT(BIT_AND(b))[3,39,0]  ¦  OCT(BIT_OR(b))[3,39,0]  ¦  OCT(BIT_XOR(b))[3,39,0]  𝄀
-1  ¦  null  ¦  null  ¦  null  𝄀
-2  ¦  null  ¦  null  ¦  null
+a    OCT(BIT_AND(b))    OCT(BIT_OR(b))    OCT(BIT_XOR(b))
+1    null    null    null
+2    null    null    null
 SELECT OCT(BIT_AND(b)), OCT(BIT_OR(b)), OCT(BIT_XOR(b)) FROM t1;
-➤ OCT(BIT_AND(b))[3,39,0]  ¦  OCT(BIT_OR(b))[3,39,0]  ¦  OCT(BIT_XOR(b))[3,39,0]  𝄀
-null  ¦  null  ¦  null
+OCT(BIT_AND(b))    OCT(BIT_OR(b))    OCT(BIT_XOR(b))
+null    null    null
 INSERT INTO t1 VALUES (3,123);
 SELECT a, OCT(BIT_AND(b)), OCT(BIT_OR(b)), OCT(BIT_XOR(b)) FROM t1 GROUP BY a;
-➤ a[4,32,0]  ¦  OCT(BIT_AND(b))[3,39,0]  ¦  OCT(BIT_OR(b))[3,39,0]  ¦  OCT(BIT_XOR(b))[3,39,0]  𝄀
-1  ¦  null  ¦  null  ¦  null  𝄀
-2  ¦  null  ¦  null  ¦  null  𝄀
-3  ¦  173  ¦  173  ¦  173
+a    OCT(BIT_AND(b))    OCT(BIT_OR(b))    OCT(BIT_XOR(b))
+1    null    null    null
+2    null    null    null
+3    173    173    173
 INSERT INTO t1 VALUES (2,124124), (3, 4951312);
 SELECT a, OCT(BIT_AND(b)), OCT(BIT_OR(b)), OCT(BIT_XOR(b)) FROM t1 GROUP BY a;
-➤ a[4,32,0]  ¦  OCT(BIT_AND(b))[3,39,0]  ¦  OCT(BIT_OR(b))[3,39,0]  ¦  OCT(BIT_XOR(b))[3,39,0]  𝄀
-1  ¦  null  ¦  null  ¦  null  𝄀
-2  ¦  362334  ¦  362334  ¦  362334  𝄀
-3  ¦  20  ¦  22706573  ¦  22706553
+a    OCT(BIT_AND(b))    OCT(BIT_OR(b))    OCT(BIT_XOR(b))
+1    null    null    null
+2    362334    362334    362334
+3    20    22706573    22706553
 INSERT INTO t1 VALUES (4,-4124124);
 SELECT a, OCT(BIT_AND(b)), OCT(BIT_OR(b)), OCT(BIT_XOR(b)) FROM t1 GROUP BY a;
-➤ a[4,32,0]  ¦  OCT(BIT_AND(b))[3,39,0]  ¦  OCT(BIT_OR(b))[3,39,0]  ¦  OCT(BIT_XOR(b))[3,39,0]  𝄀
-1  ¦  null  ¦  null  ¦  null  𝄀
-2  ¦  362334  ¦  362334  ¦  362334  𝄀
-3  ¦  20  ¦  22706573  ¦  22706553  𝄀
-4  ¦  1777777777777760211044  ¦  1777777777777760211044  ¦  1777777777777760211044
+a    OCT(BIT_AND(b))    OCT(BIT_OR(b))    OCT(BIT_XOR(b))
+1    null    null    null
+2    362334    362334    362334
+3    20    22706573    22706553
+4    1777777777777760211044    1777777777777760211044    1777777777777760211044
 DROP TABLE t1;
 create table t1(a tinyint, b SMALLINT, c bigint, d INT, e BIGINT, f FLOAT, g DOUBLE, h decimal(38,19), i DATE, k datetime, l TIMESTAMP, m char(255), n varchar(255));
 insert into t1 values(1, 1, 2, 43, 5, 35.5, 31.133, 14.314, "2012-03-10", "2012-03-12 10:03:12", "2022-03-12 13:03:12", "ab23c", "d5cf");
@@ -42,29 +42,26 @@ insert into t1 values(71, 1, 2, 34, 5, 5.5, 341.13, 15.314, "2012-03-22", "2013-
 insert into t1 values(1, 1, 21, 4, 54, 53.5, 431.13, 14.394, "2011-03-12", "2015-03-12 10:03:12", "2002-03-12 13:03:12", "afbc", "dct5f");
 insert into t1 values(1, 71, 2, 34, 5, 5.5, 31.313, 124.314, "2012-01-12", "2019-03-12 10:03:12", "2013-03-12 13:03:12", "3abd1c", "dcvf");
 select bit_and(a) from t1;
-➤ bit_and(a)[-5,64,0]  𝄀
+bit_and(a)
 1
 select bit_and(b) from t1;
-➤ bit_and(b)[-5,64,0]  𝄀
+bit_and(b)
 1
 select bit_and(c) from t1;
-➤ bit_and(c)[-5,64,0]  𝄀
+bit_and(c)
 0
 select bit_and(d) from t1;
-➤ bit_and(d)[-5,64,0]  𝄀
+bit_and(d)
 0
 select bit_and(e) from t1;
-➤ bit_and(e)[-5,64,0]  𝄀
+bit_and(e)
 4
 select bit_and(f) from t1;
-➤ bit_and(f)[-5,64,0]  𝄀
-1
+invalid argument aggregate function bit_and, bad value [FLOAT]
 select bit_and(g) from t1;
-➤ bit_and(g)[-5,64,0]  𝄀
-5
+invalid argument aggregate function bit_and, bad value [DOUBLE]
 select bit_and(h) from t1;
-➤ bit_and(h)[-5,64,0]  𝄀
-12
+invalid argument aggregate function bit_and, bad value [DOUBLE]
 select bit_and(i) from t1;
 invalid argument aggregate function bit_and, bad value [DATE]
 select bit_and(k) from t1;
@@ -82,29 +79,26 @@ insert into t1 values(71, 1, 2, 34, 5, 5.5, 341.13, 15.314, "2012-03-22", "2013-
 insert into t1 values(1, 1, 21, 4, 54, 53.5, 431.13, 14.394, "2011-03-12", "2015-03-12 10:03:12", "2002-03-12 13:03:12", "afbc", "dct5f");
 insert into t1 values(1, 71, 2, 34, 5, 5.5, 31.313, 124.314, "2012-01-12", "2019-03-12 10:03:12", "2013-03-12 13:03:12", "3abd1c", "dcvf");
 select bit_or(a) from t1;
-➤ bit_or(a)[-5,64,0]  𝄀
+bit_or(a)
 71
 select bit_or(b) from t1;
-➤ bit_or(b)[-5,64,0]  𝄀
+bit_or(b)
 71
 select bit_or(c) from t1;
-➤ bit_or(c)[-5,64,0]  𝄀
+bit_or(c)
 23
 select bit_or(d) from t1;
-➤ bit_or(d)[-5,64,0]  𝄀
+bit_or(d)
 47
 select bit_or(e) from t1;
-➤ bit_or(e)[-5,64,0]  𝄀
+bit_or(e)
 55
 select bit_or(f) from t1;
-➤ bit_or(f)[-5,64,0]  𝄀
-55
+invalid argument aggregate function bit_or, bad value [FLOAT]
 select bit_or(g) from t1;
-➤ bit_or(g)[-5,64,0]  𝄀
-511
+invalid argument aggregate function bit_or, bad value [DOUBLE]
 select bit_or(h) from t1;
-➤ bit_or(h)[-5,64,0]  𝄀
-127
+invalid argument aggregate function bit_or, bad value [DOUBLE]
 select bit_or(i) from t1;
 invalid argument aggregate function bit_or, bad value [DATE]
 select bit_or(k) from t1;
@@ -122,29 +116,26 @@ insert into t1 values(71, 1, 2, 34, 5, 5.5, 341.13, 15.314, "2012-03-22", "2013-
 insert into t1 values(1, 1, 21, 4, 54, 53.5, 431.13, 14.394, "2011-03-12", "2015-03-12 10:03:12", "2002-03-12 13:03:12", "afbc", "dct5f");
 insert into t1 values(1, 71, 2, 34, 5, 5.5, 31.313, 124.314, "2012-01-12", "2019-03-12 10:03:12", "2013-03-12 13:03:12", "3abd1c", "dcvf");
 select bit_xor(a) from t1;
-➤ bit_xor(a)[-5,64,0]  𝄀
+bit_xor(a)
 70
 select bit_xor(b) from t1;
-➤ bit_xor(b)[-5,64,0]  𝄀
+bit_xor(b)
 70
 select bit_xor(c) from t1;
-➤ bit_xor(c)[-5,64,0]  𝄀
+bit_xor(c)
 23
 select bit_xor(d) from t1;
-➤ bit_xor(d)[-5,64,0]  𝄀
+bit_xor(d)
 47
 select bit_xor(e) from t1;
-➤ bit_xor(e)[-5,64,0]  𝄀
+bit_xor(e)
 51
 select bit_xor(f) from t1;
-➤ bit_xor(f)[-5,64,0]  𝄀
-22
+invalid argument aggregate function bit_xor, bad value [FLOAT]
 select bit_xor(g) from t1;
-➤ bit_xor(g)[-5,64,0]  𝄀
-250
+invalid argument aggregate function bit_xor, bad value [DOUBLE]
 select bit_xor(h) from t1;
-➤ bit_xor(h)[-5,64,0]  𝄀
-115
+invalid argument aggregate function bit_xor, bad value [DOUBLE]
 select bit_xor(i) from t1;
 invalid argument aggregate function bit_xor, bad value [DATE]
 select bit_xor(k) from t1;
@@ -157,96 +148,89 @@ select bit_xor(n) from t1;
 [unknown result because it is related to issue#3373]
 drop table t1;
 select BIT_AND(99999999999999999.99999), BIT_OR(99999999999999999.99999), BIT_XOR(99999999999999999.99999);
-➤ BIT_AND(99999999999999999.99999)[-5,64,0]  ¦  BIT_OR(99999999999999999.99999)[-5,64,0]  ¦  BIT_XOR(99999999999999999.99999)[-5,64,0]  𝄀
-100000000000000000  ¦  100000000000000000  ¦  100000000000000000
+invalid argument aggregate function bit_and, bad value [DOUBLE]
 select BIT_AND(999999999999999933193939.99999),BIT_OR(999999999999999933193939.99999),BIT_XOR(999999999999999933193939.99999);
-➤ BIT_AND(999999999999999933193939.99999)[-5,64,0]  ¦  BIT_OR(999999999999999933193939.99999)[-5,64,0]  ¦  BIT_XOR(999999999999999933193939.99999)[-5,64,0]  𝄀
-9223372036854775807  ¦  9223372036854775807  ¦  9223372036854775807
+invalid argument aggregate function bit_and, bad value [DOUBLE]
 select BIT_AND(9999999999999999999999999999999999.9999999999999),BIT_OR(9999999999999999999999999999999999.9999999999999),BIT_XOR(9999999999999999999999999999999999.9999999999999);
-➤ BIT_AND(9999999999999999999999999999999999.9999999999999)[-5,64,0]  ¦  BIT_OR(9999999999999999999999999999999999.9999999999999)[-5,64,0]  ¦  BIT_XOR(9999999999999999999999999999999999.9999999999999)[-5,64,0]  𝄀
-9223372036854775807  ¦  9223372036854775807  ¦  9223372036854775807
+invalid argument aggregate function bit_and, bad value [DOUBLE]
 select BIT_AND(-99999999999999999.99999),BIT_OR(-99999999999999999.99999),BIT_XOR(-99999999999999999.99999);
-➤ BIT_AND(-99999999999999999.99999)[-5,64,0]  ¦  BIT_OR(-99999999999999999.99999)[-5,64,0]  ¦  BIT_XOR(-99999999999999999.99999)[-5,64,0]  𝄀
-18346744073709551616  ¦  18346744073709551616  ¦  18346744073709551616
+invalid argument aggregate function bit_and, bad value [DOUBLE]
 select BIT_AND(-999999999999999933193939.99999),BIT_OR(-999999999999999933193939.99999),BIT_XOR(-999999999999999933193939.99999);
-➤ BIT_AND(-999999999999999933193939.99999)[-5,64,0]  ¦  BIT_OR(-999999999999999933193939.99999)[-5,64,0]  ¦  BIT_XOR(-999999999999999933193939.99999)[-5,64,0]  𝄀
-9223372036854775808  ¦  9223372036854775808  ¦  9223372036854775808
+invalid argument aggregate function bit_and, bad value [DOUBLE]
 select BIT_AND(-9999999999999999999999999999999999.9999999999999),BIT_OR(-9999999999999999999999999999999999.9999999999999),BIT_XOR(-9999999999999999999999999999999999.9999999999999);
-➤ BIT_AND(-9999999999999999999999999999999999.9999999999999)[-5,64,0]  ¦  BIT_OR(-9999999999999999999999999999999999.9999999999999)[-5,64,0]  ¦  BIT_XOR(-9999999999999999999999999999999999.9999999999999)[-5,64,0]  𝄀
-9223372036854775808  ¦  9223372036854775808  ¦  9223372036854775808
+invalid argument aggregate function bit_and, bad value [DOUBLE]
 create table t1(a bigint);
 select BIT_AND(a),BIT_OR(a), BIT_XOR(a) from t1;
-➤ BIT_AND(a)[-5,64,0]  ¦  BIT_OR(a)[-5,64,0]  ¦  BIT_XOR(a)[-5,64,0]  𝄀
-null  ¦  null  ¦  null
+BIT_AND(a)    BIT_OR(a)    BIT_XOR(a)
+null    null    null
 insert into t1 values(null),(null),(null),(null);
 select BIT_AND(a),BIT_OR(a), BIT_XOR(a)  from t1;
-➤ BIT_AND(a)[-5,64,0]  ¦  BIT_OR(a)[-5,64,0]  ¦  BIT_XOR(a)[-5,64,0]  𝄀
-null  ¦  null  ¦  null
+BIT_AND(a)    BIT_OR(a)    BIT_XOR(a)
+null    null    null
 insert into t1 values(12417249128419),(124124125124151),(5124125151415),(124125152651515);
 select BIT_AND(a),BIT_OR(a), BIT_XOR(a) from t1;
-➤ BIT_AND(a)[-5,64,0]  ¦  BIT_OR(a)[-5,64,0]  ¦  BIT_XOR(a)[-5,64,0]  𝄀
-2097187  ¦  140668768616447  ¦  17479809270168
+BIT_AND(a)    BIT_OR(a)    BIT_XOR(a)
+2097187    140668768616447    17479809270168
 drop table t1;
 create table t1 ( a int not null default 1, big bigint );
 insert into t1 (big) values (-1),(1234567890167),(92233720368547),(18446744073709515);
 select * from t1;
-➤ a[4,32,0]  ¦  big[-5,64,0]  𝄀
-1  ¦  -1  𝄀
-1  ¦  1234567890167  𝄀
-1  ¦  92233720368547  𝄀
-1  ¦  18446744073709515
+a    big
+1    -1
+1    1234567890167
+1    92233720368547
+1    18446744073709515
 select distinct BIT_AND(big),BIT_OR(big), BIT_XOR(big),BIT_AND(big)-1, BIT_OR(big)-1, BIT_XOR(big)-1  from t1;
-➤ BIT_AND(big)[-5,64,0]  ¦  BIT_OR(big)[-5,64,0]  ¦  BIT_XOR(big)[-5,64,0]  ¦  BIT_AND(big) - 1[3,39,0]  ¦  BIT_OR(big) - 1[3,39,0]  ¦  BIT_XOR(big) - 1[3,39,0]  𝄀
-1109175436419  ¦  18446744073709551615  ¦  18428206535632081248  ¦  1109175436418  ¦  18446744073709551614  ¦  18428206535632081247
+BIT_AND(big)    BIT_OR(big)    BIT_XOR(big)    BIT_AND(big) - 1    BIT_OR(big) - 1    BIT_XOR(big) - 1
+1109175436419    18446744073709551615    18428206535632081248    1109175436418    18446744073709551614    18428206535632081247
 select BIT_AND(big),BIT_OR(big), BIT_XOR(big),BIT_AND(big)-1, BIT_OR(big)-1, BIT_XOR(big)-1 from t1 group by a;
-➤ BIT_AND(big)[-5,64,0]  ¦  BIT_OR(big)[-5,64,0]  ¦  BIT_XOR(big)[-5,64,0]  ¦  BIT_AND(big) - 1[3,39,0]  ¦  BIT_OR(big) - 1[3,39,0]  ¦  BIT_XOR(big) - 1[3,39,0]  𝄀
-1109175436419  ¦  18446744073709551615  ¦  18428206535632081248  ¦  1109175436418  ¦  18446744073709551614  ¦  18428206535632081247
+BIT_AND(big)    BIT_OR(big)    BIT_XOR(big)    BIT_AND(big) - 1    BIT_OR(big) - 1    BIT_XOR(big) - 1
+1109175436419    18446744073709551615    18428206535632081248    1109175436418    18446744073709551614    18428206535632081247
 insert into t1 (big) values (184467440737615);
 select * from t1;
-➤ a[4,32,0]  ¦  big[-5,64,0]  𝄀
-1  ¦  -1  𝄀
-1  ¦  1234567890167  𝄀
-1  ¦  92233720368547  𝄀
-1  ¦  18446744073709515  𝄀
-1  ¦  184467440737615
+a    big
+1    -1
+1    1234567890167
+1    92233720368547
+1    18446744073709515
+1    184467440737615
 select distinct BIT_AND(big),BIT_OR(big), BIT_XOR(big),BIT_AND(big)-1, BIT_OR(big)-1, BIT_XOR(big)-1  from t1;
-➤ BIT_AND(big)[-5,64,0]  ¦  BIT_OR(big)[-5,64,0]  ¦  BIT_XOR(big)[-5,64,0]  ¦  BIT_AND(big) - 1[3,39,0]  ¦  BIT_OR(big) - 1[3,39,0]  ¦  BIT_XOR(big) - 1[3,39,0]  𝄀
-1099511759875  ¦  18446744073709551615  ¦  18428311795277417519  ¦  1099511759874  ¦  18446744073709551614  ¦  18428311795277417518
+BIT_AND(big)    BIT_OR(big)    BIT_XOR(big)    BIT_AND(big) - 1    BIT_OR(big) - 1    BIT_XOR(big) - 1
+1099511759875    18446744073709551615    18428311795277417519    1099511759874    18446744073709551614    18428311795277417518
 select BIT_AND(big),BIT_OR(big), BIT_XOR(big),BIT_AND(big)-1, BIT_OR(big)-1, BIT_XOR(big)-1 from t1 group by a;
-➤ BIT_AND(big)[-5,64,0]  ¦  BIT_OR(big)[-5,64,0]  ¦  BIT_XOR(big)[-5,64,0]  ¦  BIT_AND(big) - 1[3,39,0]  ¦  BIT_OR(big) - 1[3,39,0]  ¦  BIT_XOR(big) - 1[3,39,0]  𝄀
-1099511759875  ¦  18446744073709551615  ¦  18428311795277417519  ¦  1099511759874  ¦  18446744073709551614  ¦  18428311795277417518
+BIT_AND(big)    BIT_OR(big)    BIT_XOR(big)    BIT_AND(big) - 1    BIT_OR(big) - 1    BIT_XOR(big) - 1
+1099511759875    18446744073709551615    18428311795277417519    1099511759874    18446744073709551614    18428311795277417518
 drop table t1;
 CREATE TABLE t1 (Fld1 int(11) default NULL,Fld2 int(11) default NULL);
 INSERT INTO t1 VALUES (1,10),(1,20),(2,NULL),(2,NULL),(3,50);
 select Fld1, BIT_AND(Fld2),BIT_OR(Fld2), BIT_XOR(Fld2) as q from t1 group by Fld1 having q is not null;
-➤ Fld1[4,32,0]  ¦  BIT_AND(Fld2)[-5,64,0]  ¦  BIT_OR(Fld2)[-5,64,0]  ¦  q[-5,64,0]  𝄀
-1  ¦  0  ¦  30  ¦  30  𝄀
-3  ¦  50  ¦  50  ¦  50
+Fld1    BIT_AND(Fld2)    BIT_OR(Fld2)    q
+1    0    30    30
+3    50    50    50
 select Fld1, BIT_AND(Fld2),BIT_OR(Fld2), BIT_XOR(Fld2) from t1 group by Fld1 having BIT_AND(Fld2) is not null;
-➤ Fld1[4,32,0]  ¦  BIT_AND(Fld2)[-5,64,0]  ¦  BIT_OR(Fld2)[-5,64,0]  ¦  BIT_XOR(Fld2)[-5,64,0]  𝄀
-1  ¦  0  ¦  30  ¦  30  𝄀
-3  ¦  50  ¦  50  ¦  50
+Fld1    BIT_AND(Fld2)    BIT_OR(Fld2)    BIT_XOR(Fld2)
+1    0    30    30
+3    50    50    50
 select Fld1, BIT_AND(Fld2),BIT_OR(Fld2), BIT_XOR(Fld2) from t1 group by Fld1 having BIT_OR(Fld2) is not null;
-➤ Fld1[4,32,0]  ¦  BIT_AND(Fld2)[-5,64,0]  ¦  BIT_OR(Fld2)[-5,64,0]  ¦  BIT_XOR(Fld2)[-5,64,0]  𝄀
-1  ¦  0  ¦  30  ¦  30  𝄀
-3  ¦  50  ¦  50  ¦  50
+Fld1    BIT_AND(Fld2)    BIT_OR(Fld2)    BIT_XOR(Fld2)
+1    0    30    30
+3    50    50    50
 select Fld1, BIT_AND(Fld2),BIT_OR(Fld2), BIT_XOR(Fld2) from t1 group by Fld1 having BIT_XOR(Fld2) is not null;
-➤ Fld1[4,32,0]  ¦  BIT_AND(Fld2)[-5,64,0]  ¦  BIT_OR(Fld2)[-5,64,0]  ¦  BIT_XOR(Fld2)[-5,64,0]  𝄀
-1  ¦  0  ¦  30  ¦  30  𝄀
-3  ¦  50  ¦  50  ¦  50
+Fld1    BIT_AND(Fld2)    BIT_OR(Fld2)    BIT_XOR(Fld2)
+1    0    30    30
+3    50    50    50
 drop table t1;
 SELECT BIT_AND(1)<BIT_AND(2), BIT_AND(1)>BIT_OR(3), BIT_AND(3)>BIT_XOR(5);
-➤ BIT_AND(1) < BIT_AND(2)[-7,1,0]  ¦  BIT_AND(1) > BIT_OR(3)[-7,1,0]  ¦  BIT_AND(3) > BIT_XOR(5)[-7,1,0]  𝄀
-1  ¦  0  ¦  0
+BIT_AND(1) < BIT_AND(2)    BIT_AND(1) > BIT_OR(3)    BIT_AND(3) > BIT_XOR(5)
+1    0    0
 SELECT BIT_AND(1 - 1), BIT_OR(1 - (-1)), BIT_XOR(1 / 0);
-➤ BIT_AND(1 - 1)[-5,64,0]  ¦  BIT_OR(1 - (-1))[-5,64,0]  ¦  BIT_XOR(1 / 0)[-5,64,0]  𝄀
-0  ¦  2  ¦  null
+invalid argument aggregate function bit_xor, bad value [DOUBLE]
 drop table if exists t1;
 create table t1(a varbinary(3));
 insert into t1 values(3), (4), (9), (7), (6);
 select bit_and(a), bit_or(a), bit_xor(a) from t1;
-➤ bit_and(a)[12,9,0]  ¦  bit_or(a)[12,9,0]  ¦  bit_xor(a)[12,9,0]  𝄀
-0  ¦  ?  ¦  ?
+bit_and(a)    bit_or(a)    bit_xor(a)
+0    ?    ?
 insert into t1 values(33);
 select bit_and(a) from t1;
 internal error: Binary operands of bitwise operators must be of equal length

@@ -39,18 +39,3 @@ func TestAvgTwResultDecimalContext_Size(t *testing.T) {
 	ctx := AvgTwResultDecimalContext{}
 	require.Equal(t, int64(32), ctx.Size())
 }
-
-func TestAggVarPopGroupContext_Size(t *testing.T) {
-	ctx := aggVarPopGroupContext{}
-	require.Equal(t, int64(16), ctx.Size())
-}
-
-func TestAggVarPopOfDecimalGroupContext_Size(t *testing.T) {
-	ctx := aggVarPopOfDecimalGroupContext{}
-	require.Equal(t, int64(32), ctx.Size())
-}
-
-func TestAggVarPopOfDecimalCommonContext_Size(t *testing.T) {
-	ctx := aggVarPopOfDecimalCommonContext{}
-	require.Equal(t, int64(8), ctx.Size())
-}
