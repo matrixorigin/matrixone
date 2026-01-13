@@ -21,4 +21,12 @@ void xxhash_test() {
     const uint64_t h1 = XXH3_64bits_withSeed(input, inputLen, seed);
     printf("XXH3_64bits_withSeed()   = 0x%08llx\n", h1);
 
+    XXH3_state_t *s = XXH3_createState();
+    XXH3_64bits_reset_withSeed(s,seed);
+    XXH3_64bits_update(s, input, inputLen);
+    uint64_t h2 = XXH3_64bits_digest(s);
+
+    printf("XXH3_64bits_withSeed()   = 0x%08llx\n", h2);
+    XXH3_freeState(s);
+
 }
