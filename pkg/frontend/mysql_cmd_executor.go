@@ -3593,6 +3593,8 @@ func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *
 		col.SetColumnType(defines.MYSQL_TYPE_TIME)
 	case types.T_timestamp:
 		col.SetColumnType(defines.MYSQL_TYPE_TIMESTAMP)
+	case types.T_year:
+		col.SetColumnType(defines.MYSQL_TYPE_YEAR)
 	case types.T_decimal64:
 		col.SetColumnType(defines.MYSQL_TYPE_DECIMAL)
 	case types.T_decimal128:

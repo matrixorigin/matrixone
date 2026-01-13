@@ -122,6 +122,8 @@ func extractRowFromVector(ctx context.Context, ses FeSession, vec *vector.Vector
 		scale := vec.GetType().Scale
 		timeZone := ses.GetTimeZone()
 		row[i] = vector.GetFixedAtNoTypeCheck[types.Timestamp](vec, rowIndex).String2(timeZone, scale)
+	case types.T_year:
+		row[i] = vector.GetFixedAtNoTypeCheck[types.MoYear](vec, rowIndex)
 	case types.T_decimal64:
 		scale := vec.GetType().Scale
 		row[i] = vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, rowIndex).Format(scale)
@@ -192,6 +194,8 @@ func extractRowFromVector2(ctx context.Context, ses FeSession, vec *vector.Vecto
 		row[i] = colSlices.arrUint8[sliceIdx][rowIndex]
 	case types.T_int16:
 		row[i] = colSlices.arrInt16[sliceIdx][rowIndex]
+	case types.T_year:
+		row[i] = types.MoYear(colSlices.arrInt16[sliceIdx][rowIndex])
 	case types.T_uint16:
 		row[i] = colSlices.arrUint16[sliceIdx][rowIndex]
 	case types.T_int32:
@@ -390,7 +394,7 @@ func (slices *ColumnSlices) GetUint64(r uint64, i uint64) (uint64, error) {
 		return uint64(slices.arrInt8[sliceIdx][r]), nil
 	case types.T_uint8:
 		return uint64(slices.arrUint8[sliceIdx][r]), nil
-	case types.T_int16:
+	case types.T_int16, types.T_year:
 		return uint64(slices.arrInt16[sliceIdx][r]), nil
 	case types.T_uint16:
 		return uint64(slices.arrUint16[sliceIdx][r]), nil
@@ -422,7 +426,7 @@ func (slices *ColumnSlices) GetInt64(r uint64, i uint64) (int64, error) {
 		return int64(slices.arrInt8[sliceIdx][r]), nil
 	case types.T_uint8:
 		return int64(slices.arrUint8[sliceIdx][r]), nil
-	case types.T_int16:
+	case types.T_int16, types.T_year:
 		return int64(slices.arrInt16[sliceIdx][r]), nil
 	case types.T_uint16:
 		return int64(slices.arrUint16[sliceIdx][r]), nil
@@ -705,6 +709,9 @@ func convertVectorToSlice(ctx context.Context, ses FeSession, vec *vector.Vector
 		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrUint8)
 		colSlices.arrUint8 = append(colSlices.arrUint8, vector.ToSliceNoTypeCheck2[uint8](vec))
 	case types.T_int16:
+		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrInt16)
+		colSlices.arrInt16 = append(colSlices.arrInt16, vector.ToSliceNoTypeCheck2[int16](vec))
+	case types.T_year:
 		colSlices.colIdx2SliceIdx[i] = len(colSlices.arrInt16)
 		colSlices.arrInt16 = append(colSlices.arrInt16, vector.ToSliceNoTypeCheck2[int16](vec))
 	case types.T_uint16:
