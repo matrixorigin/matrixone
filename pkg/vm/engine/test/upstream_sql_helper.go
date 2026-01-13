@@ -594,7 +594,7 @@ func (h *UpstreamSQLHelper) handleGetObjectDirectly(
 	if chunkIndex < -1 {
 		return nil, moerr.NewInvalidInput(ctx, "invalid chunk_index: must be >= -1")
 	}
-	if chunkIndex >= totalChunks {
+	if chunkIndex > totalChunks {
 		return nil, moerr.NewInvalidInput(ctx, fmt.Sprintf("invalid chunk_index: %d, file has only %d chunks", chunkIndex, totalChunks))
 	}
 
