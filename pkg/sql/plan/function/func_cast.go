@@ -391,6 +391,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_float32, types.T_float64,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_date, types.T_datetime, types.T_timestamp, types.T_time,
 	},
 
 	types.T_array_float32: {
@@ -5469,6 +5470,22 @@ func yearToOthers(ctx context.Context,
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return yearToStr(ctx, source, rs, length, toType)
+	case types.T_date:
+		// MySQL returns NULL for CAST(year AS DATE)
+		rs := vector.MustFunctionResult[types.Date](result)
+		return yearToNull(source, rs, length)
+	case types.T_datetime:
+		// MySQL returns NULL for CAST(year AS DATETIME)
+		rs := vector.MustFunctionResult[types.Datetime](result)
+		return yearToNull(source, rs, length)
+	case types.T_timestamp:
+		// MySQL returns NULL for CAST(year AS TIMESTAMP)
+		rs := vector.MustFunctionResult[types.Timestamp](result)
+		return yearToNull(source, rs, length)
+	case types.T_time:
+		// MySQL returns NULL for CAST(year AS TIME)
+		rs := vector.MustFunctionResult[types.Time](result)
+		return yearToNull(source, rs, length)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from year to %s", toType))
 }
@@ -5545,6 +5562,21 @@ func yearToStr(ctx context.Context,
 			if err := rs.AppendBytes([]byte(result), false); err != nil {
 				return err
 			}
+		}
+	}
+	return nil
+}
+
+// yearToNull returns NULL for all values when casting YEAR to date/time types.
+// This matches MySQL behavior where CAST(year_value AS DATE/DATETIME/TIMESTAMP/TIME) returns NULL.
+func yearToNull[T types.FixedSizeT](
+	source vector.FunctionParameterWrapper[types.MoYear],
+	rs *vector.FunctionResult[T], length int) error {
+	var zero T
+	for i := 0; i < length; i++ {
+		// Always append NULL, regardless of source value
+		if err := rs.Append(zero, true); err != nil {
+			return err
 		}
 	}
 	return nil
