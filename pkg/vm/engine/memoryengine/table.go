@@ -504,3 +504,10 @@ func (t *Table) Reset(op client.TxnOperator) error {
 func (t *Table) GetExtraInfo() *api.SchemaExtra {
 	return nil
 }
+
+func (t *Table) GetFlushTS(
+	ctx context.Context,
+) (types.TS, error) {
+	// Not supported for memory engine
+	return types.TS{}, nil
+}

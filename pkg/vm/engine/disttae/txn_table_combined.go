@@ -462,6 +462,12 @@ func (t *combinedTxnTable) Reset(op client.TxnOperator) error {
 	return t.primary.Reset(op)
 }
 
+func (t *combinedTxnTable) GetFlushTS(
+	ctx context.Context,
+) (types.TS, error) {
+	return t.primary.GetFlushTS(ctx)
+}
+
 func (t *combinedTxnTable) GetExtraInfo() *api.SchemaExtra {
 	return t.primary.extraInfo
 }

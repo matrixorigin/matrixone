@@ -1061,6 +1061,15 @@ func (tbl *txnTableDelegate) GetExtraInfo() *api.SchemaExtra {
 	return tbl.origin.extraInfo
 }
 
+func (tbl *txnTableDelegate) GetFlushTS(
+	ctx context.Context,
+) (types.TS, error) {
+	if tbl.combined.is {
+		return tbl.combined.tbl.GetFlushTS(ctx)
+	}
+	return tbl.origin.GetFlushTS(ctx)
+}
+
 func (tbl *txnTableDelegate) Reset(op client.TxnOperator) error {
 	if tbl.combined.is {
 		return tbl.combined.tbl.Reset(op)

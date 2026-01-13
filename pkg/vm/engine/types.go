@@ -1086,6 +1086,9 @@ type Relation interface {
 	MergeObjects(ctx context.Context, objstats []objectio.ObjectStats, targetObjSize uint32) (*api.MergeCommitEntry, error)
 	GetNonAppendableObjectStats(ctx context.Context) ([]objectio.ObjectStats, error)
 
+	// GetFlushTS returns the flush timestamp of the relation.
+	GetFlushTS(ctx context.Context) (types.TS, error)
+
 	// Reset resets the relation.
 	Reset(op client.TxnOperator) error
 }

@@ -699,27 +699,10 @@ func (h *UpstreamSQLHelper) handleCheckSnapshotFlushedDirectly(
 
 	snapshotName := string(stmt.Name)
 
-	// Query snapshot ts from mo_catalog.mo_snapshots
-	querySQL := fmt.Sprintf(`select ts from mo_catalog.mo_snapshots where sname = "%s" order by snapshot_id;`, snapshotName)
-	opts := executor.Options{}.WithDisableIncrStatement().WithTxn(txnOp)
-	queryResult, err := h.executor.Exec(ctx, querySQL, opts)
+	// Get snapshot record by name (similar to getSnapshotByName in doCheckSnapshotFlushed)
+	record, err := frontend.GetSnapshotRecordByName(ctx, h.executor, txnOp, snapshotName)
 	if err != nil {
-		return nil, err
-	}
-	defer queryResult.Close()
-
-	var snapshotTS int64
-	var found bool
-	queryResult.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		if rows > 0 && cols[0].Length() > 0 {
-			snapshotTS = vector.GetFixedAtWithTypeCheck[int64](cols[0], 0)
-			found = true
-		}
-		return true
-	})
-
-	if !found {
-		// Snapshot not found, return false
+		// If snapshot not found, return false
 		mp := mpool.MustNewZero()
 		bat := batch.New([]string{"result"})
 		bat.Vecs[0] = vector.NewVec(types.T_bool.ToType())
@@ -735,14 +718,39 @@ func (h *UpstreamSQLHelper) handleCheckSnapshotFlushedDirectly(
 		}), nil
 	}
 
-	// Get fileservice from engine
-	fs, err := h.getFileserviceFromEngine()
-	if err != nil {
-		return nil, err
+	if record == nil {
+		return nil, moerr.NewInternalError(ctx, "snapshot not found")
 	}
 
-	// Call frontend.CheckSnapshotFlushed
-	result, err := frontend.CheckSnapshotFlushed(ctx, types.BuildTS(snapshotTS, 0), fs)
+	// Get disttae.Engine from engine (similar to doCheckSnapshotFlushed)
+	var de *disttae.Engine
+	var ok bool
+	if de, ok = h.engine.(*disttae.Engine); !ok {
+		if entireEngine, ok := h.engine.(*engine.EntireEngine); ok {
+			de, ok = entireEngine.Engine.(*disttae.Engine)
+		}
+		if !ok {
+			return nil, moerr.NewInternalError(ctx, "failed to get disttae engine")
+		}
+	}
+
+	// Get fileservice from engine
+	fs := de.FS()
+	if fs == nil {
+		return nil, moerr.NewInternalError(ctx, "fileservice is not available")
+	}
+
+	// Get snapshot ts from record
+	snapshotTS := frontend.GetSnapshotTS(record)
+
+	// Create txn with snapshot timestamp (similar to doCheckSnapshotFlushed)
+	txn := txnOp.CloneSnapshotOp(timestamp.Timestamp{
+		PhysicalTime: snapshotTS,
+		LogicalTime:  0,
+	})
+
+	// Call frontend.CheckSnapshotFlushed with all required parameters
+	result, err := frontend.CheckSnapshotFlushed(ctx, txn, types.BuildTS(snapshotTS, 0), de, record, fs)
 	if err != nil {
 		return nil, err
 	}
