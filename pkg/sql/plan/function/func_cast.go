@@ -58,6 +58,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_bit,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_year,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 		types.T_datalink,
@@ -83,7 +84,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
 		types.T_decimal64, types.T_decimal128,
-		types.T_time, types.T_timestamp,
+		types.T_time, types.T_timestamp, types.T_year,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 		types.T_datalink,
@@ -96,7 +97,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
 		types.T_decimal64, types.T_decimal128,
-		types.T_time, types.T_timestamp,
+		types.T_time, types.T_timestamp, types.T_year,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 		types.T_datalink,
@@ -109,7 +110,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
 		types.T_decimal64, types.T_decimal128,
-		types.T_time, types.T_timestamp,
+		types.T_time, types.T_timestamp, types.T_year,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 		types.T_datalink,
@@ -122,7 +123,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
 		types.T_decimal64, types.T_decimal128,
-		types.T_time, types.T_timestamp,
+		types.T_time, types.T_timestamp, types.T_year,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_enum,
 		types.T_datalink,
@@ -135,7 +136,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
 		types.T_decimal64, types.T_decimal128,
-		types.T_time, types.T_timestamp,
+		types.T_time, types.T_timestamp, types.T_year,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_enum,
 		types.T_datalink,
@@ -148,7 +149,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
 		types.T_decimal64, types.T_decimal128,
-		types.T_time, types.T_timestamp,
+		types.T_time, types.T_timestamp, types.T_year,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_enum,
 		types.T_datalink,
@@ -161,7 +162,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
 		types.T_decimal64, types.T_decimal128,
-		types.T_time, types.T_timestamp,
+		types.T_time, types.T_timestamp, types.T_year,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_enum,
 		types.T_datalink,
@@ -207,7 +208,7 @@ var supportedTypeCast = map[types.T][]types.T{
 	types.T_date: {
 		types.T_int32, types.T_int64,
 		types.T_date, types.T_datetime,
-		types.T_time, types.T_timestamp,
+		types.T_time, types.T_timestamp, types.T_year,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 		types.T_datalink,
@@ -216,7 +217,7 @@ var supportedTypeCast = map[types.T][]types.T{
 	types.T_datetime: {
 		types.T_int32, types.T_int64,
 		types.T_date, types.T_datetime,
-		types.T_time, types.T_timestamp,
+		types.T_time, types.T_timestamp, types.T_year,
 		types.T_decimal64, types.T_decimal128,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
@@ -226,7 +227,7 @@ var supportedTypeCast = map[types.T][]types.T{
 	types.T_timestamp: {
 		types.T_int32, types.T_int64,
 		types.T_date, types.T_datetime,
-		types.T_timestamp,
+		types.T_timestamp, types.T_year,
 		types.T_decimal64, types.T_decimal128,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
@@ -255,6 +256,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_binary, types.T_varbinary,
 		types.T_time, types.T_timestamp,
 		types.T_datalink,
+		types.T_year,
 	},
 
 	types.T_decimal128: {
@@ -266,6 +268,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 		types.T_datalink,
+		types.T_year,
 	},
 
 	types.T_char: {
@@ -278,7 +281,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_json,
 		types.T_uuid,
 		types.T_date, types.T_datetime,
-		types.T_time, types.T_timestamp,
+		types.T_time, types.T_timestamp, types.T_year,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 		types.T_datalink,
@@ -294,7 +297,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_json,
 		types.T_uuid,
 		types.T_date, types.T_datetime,
-		types.T_time, types.T_timestamp,
+		types.T_time, types.T_timestamp, types.T_year,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 		types.T_array_float32, types.T_array_float64,
@@ -360,6 +363,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_uuid,
 		types.T_date, types.T_datetime,
 		types.T_time, types.T_timestamp,
+		types.T_year,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 		types.T_array_float32, types.T_array_float64,
@@ -406,6 +410,16 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_enum, types.T_uint16, types.T_uint8, types.T_uint32, types.T_uint64, types.T_uint128,
 		types.T_char, types.T_varchar, types.T_blob,
 		types.T_binary, types.T_varbinary, types.T_text, types.T_datalink,
+	},
+
+	types.T_year: {
+		types.T_year,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_char, types.T_varchar, types.T_blob, types.T_text,
+		types.T_binary, types.T_varbinary,
+		types.T_date, types.T_datetime, types.T_timestamp, types.T_time,
 	},
 
 	types.T_array_float32: {
@@ -491,6 +505,9 @@ func NewCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	case types.T_timestamp:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](from)
 		err = timestampToOthers(proc, s, *toType, result, length, selectList)
+	case types.T_year:
+		s := vector.GenerateFunctionFixedTypeParameter[types.MoYear](from)
+		err = yearToOthers(proc.Ctx, s, *toType, result, length, selectList)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 		s := vector.GenerateFunctionStrParameter(from)
 		err = strTypeToOthers(proc, s, *toType, result, length, selectList)
@@ -568,6 +585,8 @@ func scalarNullToOthers(ctx context.Context,
 		return appendNulls[types.Time](result, length, selectList)
 	case types.T_timestamp:
 		return appendNulls[types.Timestamp](result, length, selectList)
+	case types.T_year:
+		return appendNulls[types.MoYear](result, length, selectList)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from NULL to %s", totype))
 }
@@ -611,6 +630,9 @@ func boolToOthers(ctx context.Context,
 	case types.T_uint64:
 		rs := vector.MustFunctionResult[uint64](result)
 		return boolToInteger(source, rs, length, selectList)
+	case types.T_year:
+		rs := vector.MustFunctionResult[types.MoYear](result)
+		return boolToYear(source, rs, length, selectList)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from bool to %s", toType))
 }
@@ -738,6 +760,9 @@ func int8ToOthers(ctx context.Context,
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return integerToTimestamp(source, rs, length, selectList)
+	case types.T_year:
+		rs := vector.MustFunctionResult[types.MoYear](result)
+		return integerToYear(ctx, source, rs, length, selectList)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from int8 to %s", toType))
 }
@@ -799,6 +824,9 @@ func int16ToOthers(ctx context.Context,
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return integerToTimestamp(source, rs, length, selectList)
+	case types.T_year:
+		rs := vector.MustFunctionResult[types.MoYear](result)
+		return integerToYear(ctx, source, rs, length, selectList)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from int16 to %s", toType))
 }
@@ -860,6 +888,9 @@ func int32ToOthers(ctx context.Context,
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return integerToTimestamp(source, rs, length, selectList)
+	case types.T_year:
+		rs := vector.MustFunctionResult[types.MoYear](result)
+		return integerToYear(ctx, source, rs, length, selectList)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from int32 to %s", toType))
 }
@@ -924,6 +955,9 @@ func int64ToOthers(ctx context.Context,
 	case types.T_enum:
 		rs := vector.MustFunctionResult[types.Enum](result)
 		return integerToEnum(ctx, source, rs, length, selectList)
+	case types.T_year:
+		rs := vector.MustFunctionResult[types.MoYear](result)
+		return integerToYear(ctx, source, rs, length, selectList)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from int64 to %s", toType))
 }
@@ -987,6 +1021,9 @@ func uint8ToOthers(ctx context.Context,
 	case types.T_enum:
 		rs := vector.MustFunctionResult[types.Enum](result)
 		return integerToEnum(ctx, source, rs, length, selectList)
+	case types.T_year:
+		rs := vector.MustFunctionResult[types.MoYear](result)
+		return integerToYear(ctx, source, rs, length, selectList)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from uint8 to %s", toType))
 }
@@ -1050,6 +1087,9 @@ func uint16ToOthers(ctx context.Context,
 	case types.T_enum:
 		rs := vector.MustFunctionResult[types.Enum](result)
 		return integerToEnum(ctx, source, rs, length, selectList)
+	case types.T_year:
+		rs := vector.MustFunctionResult[types.MoYear](result)
+		return integerToYear(ctx, source, rs, length, selectList)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from uint16 to %s", toType))
 }
@@ -1113,6 +1153,9 @@ func uint32ToOthers(ctx context.Context,
 	case types.T_enum:
 		rs := vector.MustFunctionResult[types.Enum](result)
 		return integerToEnum(ctx, source, rs, length, selectList)
+	case types.T_year:
+		rs := vector.MustFunctionResult[types.MoYear](result)
+		return integerToYear(ctx, source, rs, length, selectList)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from uint32 to %s", toType))
 }
@@ -1326,6 +1369,9 @@ func dateToOthers(proc *process.Process,
 	case types.T_datetime:
 		rs := vector.MustFunctionResult[types.Datetime](result)
 		return dateToDatetime(source, rs, length, selectList)
+	case types.T_year:
+		rs := vector.MustFunctionResult[types.MoYear](result)
+		return dateToYear(source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
 		types.T_binary, types.T_varbinary, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
@@ -1360,6 +1406,9 @@ func datetimeToOthers(proc *process.Process,
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
 		return datetimeToTime(source, rs, length, selectList)
+	case types.T_year:
+		rs := vector.MustFunctionResult[types.MoYear](result)
+		return datetimeToYear(source, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
 		types.T_binary, types.T_varbinary, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
@@ -1398,6 +1447,9 @@ func timestampToOthers(proc *process.Process,
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return timestampToTimestamp(proc.Ctx, source, rs, length, toType.Scale)
+	case types.T_year:
+		rs := vector.MustFunctionResult[types.MoYear](result)
+		return timestampToYear(source, rs, length, zone, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
 		types.T_binary, types.T_varbinary, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
@@ -1527,6 +1579,9 @@ func decimal64ToOthers(ctx context.Context,
 		types.T_binary, types.T_varbinary, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return decimal64ToStr(ctx, source, rs, length, toType)
+	case types.T_year:
+		rs := vector.MustFunctionResult[types.MoYear](result)
+		return decimal64ToYear(ctx, source, rs, length, selectList)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from decimal64 to %s", toType))
 }
@@ -1592,6 +1647,9 @@ func decimal128ToOthers(ctx context.Context,
 		types.T_binary, types.T_varbinary, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return decimal128ToStr(ctx, source, rs, length, toType)
+	case types.T_year:
+		rs := vector.MustFunctionResult[types.MoYear](result)
+		return decimal128ToYear(ctx, source, rs, length, selectList)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from decimal128 to %s", toType))
 }
@@ -1695,6 +1753,9 @@ func strTypeToOthers(proc *process.Process,
 	case types.T_array_float64:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return strToArray[float64](ctx, source, rs, length, toType)
+	case types.T_year:
+		rs := vector.MustFunctionResult[types.MoYear](result)
+		return strToYear(ctx, source, rs, length, selectList)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from %s to %s", source.GetType(), toType))
 }
@@ -2048,6 +2109,36 @@ func boolToInteger[T constraints.Integer](
 				}
 			} else {
 				if err := to.Append(0, false); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// boolToYear converts bool to YEAR type
+// MySQL behavior: true -> 2001, false -> 0
+func boolToYear(
+	from vector.FunctionParameterWrapper[bool],
+	to *vector.FunctionResult[types.MoYear], length int, selectList *FunctionSelectList) error {
+	var i uint64
+	l := uint64(length)
+	for i = 0; i < l; i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			if v {
+				// MySQL: true -> 2001
+				if err := to.Append(types.MoYear(2001), false); err != nil {
+					return err
+				}
+			} else {
+				// MySQL: false -> 0
+				if err := to.Append(types.MoYear(0), false); err != nil {
 					return err
 				}
 			}
@@ -3366,6 +3457,72 @@ func decimal128ToSigned[T constraints.Signed](
 			}
 			err = to.Append(T(result), false)
 			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// decimal64ToYear converts decimal64 to YEAR type
+func decimal64ToYear(
+	ctx context.Context,
+	from vector.FunctionParameterWrapper[types.Decimal64],
+	to *vector.FunctionResult[types.MoYear], length int, selectList *FunctionSelectList) error {
+	var i uint64
+	l := uint64(length)
+	fromTyp := from.GetType()
+	for i = 0; i < l; i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			x, _ := v.Scale(-fromTyp.Scale)
+			xStr := x.Format(0)
+			result, err := strconv.ParseInt(xStr, 10, 16)
+			if err != nil {
+				return moerr.NewOutOfRangef(ctx, "year", "value '%v'", xStr)
+			}
+			year, err := types.ParseMoYearFromInt(result)
+			if err != nil {
+				return err
+			}
+			if err = to.Append(year, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// decimal128ToYear converts decimal128 to YEAR type
+func decimal128ToYear(
+	ctx context.Context,
+	from vector.FunctionParameterWrapper[types.Decimal128],
+	to *vector.FunctionResult[types.MoYear], length int, selectList *FunctionSelectList) error {
+	var i uint64
+	l := uint64(length)
+	fromTyp := from.GetType()
+	for i = 0; i < l; i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			x, _ := v.Scale(-fromTyp.Scale)
+			xStr := x.Format(0)
+			result, err := strconv.ParseInt(xStr, 10, 16)
+			if err != nil {
+				return moerr.NewOutOfRangef(ctx, "year", "value '%v'", xStr)
+			}
+			year, err := types.ParseMoYearFromInt(result)
+			if err != nil {
+				return err
+			}
+			if err = to.Append(year, false); err != nil {
 				return err
 			}
 		}
@@ -5284,4 +5441,278 @@ func floatToBytes(v float64, bitSize int) []byte {
 	} else {
 		return []byte(strconv.FormatFloat(float64(v), 'f', -1, bitSize))
 	}
+}
+
+// yearToOthers converts YEAR type to other types
+func yearToOthers(ctx context.Context,
+	source vector.FunctionParameterWrapper[types.MoYear],
+	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
+	switch toType.Oid {
+	case types.T_year:
+		rs := vector.MustFunctionResult[types.MoYear](result)
+		return yearToYear(ctx, source, rs, length, selectList)
+	case types.T_int8:
+		rs := vector.MustFunctionResult[int8](result)
+		return yearToInteger(ctx, source, rs, length, selectList)
+	case types.T_int16:
+		rs := vector.MustFunctionResult[int16](result)
+		return yearToInteger(ctx, source, rs, length, selectList)
+	case types.T_int32:
+		rs := vector.MustFunctionResult[int32](result)
+		return yearToInteger(ctx, source, rs, length, selectList)
+	case types.T_int64:
+		rs := vector.MustFunctionResult[int64](result)
+		return yearToInteger(ctx, source, rs, length, selectList)
+	case types.T_uint8:
+		rs := vector.MustFunctionResult[uint8](result)
+		return yearToInteger(ctx, source, rs, length, selectList)
+	case types.T_uint16:
+		rs := vector.MustFunctionResult[uint16](result)
+		return yearToInteger(ctx, source, rs, length, selectList)
+	case types.T_uint32:
+		rs := vector.MustFunctionResult[uint32](result)
+		return yearToInteger(ctx, source, rs, length, selectList)
+	case types.T_uint64:
+		rs := vector.MustFunctionResult[uint64](result)
+		return yearToInteger(ctx, source, rs, length, selectList)
+	case types.T_float32:
+		rs := vector.MustFunctionResult[float32](result)
+		return yearToFloat(ctx, source, rs, length, selectList)
+	case types.T_float64:
+		rs := vector.MustFunctionResult[float64](result)
+		return yearToFloat(ctx, source, rs, length, selectList)
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
+		rs := vector.MustFunctionResult[types.Varlena](result)
+		return yearToStr(ctx, source, rs, length, toType)
+	case types.T_date:
+		// MySQL returns NULL for CAST(year AS DATE)
+		rs := vector.MustFunctionResult[types.Date](result)
+		return yearToNull(source, rs, length)
+	case types.T_datetime:
+		// MySQL returns NULL for CAST(year AS DATETIME)
+		rs := vector.MustFunctionResult[types.Datetime](result)
+		return yearToNull(source, rs, length)
+	case types.T_timestamp:
+		// MySQL returns NULL for CAST(year AS TIMESTAMP)
+		rs := vector.MustFunctionResult[types.Timestamp](result)
+		return yearToNull(source, rs, length)
+	case types.T_time:
+		// MySQL returns NULL for CAST(year AS TIME)
+		rs := vector.MustFunctionResult[types.Time](result)
+		return yearToNull(source, rs, length)
+	}
+	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from year to %s", toType))
+}
+
+// yearToYear copies YEAR value as-is
+func yearToYear(ctx context.Context,
+	source vector.FunctionParameterWrapper[types.MoYear],
+	rs *vector.FunctionResult[types.MoYear], length int, selectList *FunctionSelectList) error {
+	for i := 0; i < length; i++ {
+		v, isnull := source.GetValue(uint64(i))
+		if isnull {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			if err := rs.Append(v, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// yearToInteger converts YEAR to integer types
+func yearToInteger[T constraints.Integer](ctx context.Context,
+	source vector.FunctionParameterWrapper[types.MoYear],
+	rs *vector.FunctionResult[T], length int, selectList *FunctionSelectList) error {
+	for i := 0; i < length; i++ {
+		v, isnull := source.GetValue(uint64(i))
+		if isnull {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			if err := rs.Append(T(v), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// yearToFloat converts YEAR to float types
+func yearToFloat[T constraints.Float](ctx context.Context,
+	source vector.FunctionParameterWrapper[types.MoYear],
+	rs *vector.FunctionResult[T], length int, selectList *FunctionSelectList) error {
+	for i := 0; i < length; i++ {
+		v, isnull := source.GetValue(uint64(i))
+		if isnull {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			if err := rs.Append(T(v), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// yearToStr converts YEAR to string types
+func yearToStr(ctx context.Context,
+	source vector.FunctionParameterWrapper[types.MoYear],
+	rs *vector.FunctionResult[types.Varlena], length int, toType types.Type) error {
+	for i := 0; i < length; i++ {
+		v, isnull := source.GetValue(uint64(i))
+		if isnull {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			result := v.String()
+			if err := rs.AppendBytes([]byte(result), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// yearToNull returns NULL for all values when casting YEAR to date/time types.
+// This matches MySQL behavior where CAST(year_value AS DATE/DATETIME/TIMESTAMP/TIME) returns NULL.
+func yearToNull[T types.FixedSizeT](
+	source vector.FunctionParameterWrapper[types.MoYear],
+	rs *vector.FunctionResult[T], length int) error {
+	var zero T
+	for i := 0; i < length; i++ {
+		// Always append NULL, regardless of source value
+		if err := rs.Append(zero, true); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// integerToYear converts integer types to YEAR
+func integerToYear[T constraints.Integer](ctx context.Context,
+	source vector.FunctionParameterWrapper[T],
+	rs *vector.FunctionResult[types.MoYear], length int, selectList *FunctionSelectList) error {
+	for i := 0; i < length; i++ {
+		v, isnull := source.GetValue(uint64(i))
+		if isnull {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			year, err := types.ParseMoYearFromInt(int64(v))
+			if err != nil {
+				// MySQL returns NULL for invalid year values
+				if err := rs.Append(0, true); err != nil {
+					return err
+				}
+			} else {
+				if err := rs.Append(year, false); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// strToYear converts string to YEAR type
+func strToYear(ctx context.Context,
+	source vector.FunctionParameterWrapper[types.Varlena],
+	rs *vector.FunctionResult[types.MoYear], length int, selectList *FunctionSelectList) error {
+	for i := 0; i < length; i++ {
+		v, isnull := source.GetStrValue(uint64(i))
+		if isnull {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			year, err := types.ParseMoYear(string(v))
+			if err != nil {
+				// MySQL returns NULL for invalid year values
+				if err := rs.Append(0, true); err != nil {
+					return err
+				}
+			} else {
+				if err := rs.Append(year, false); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// dateToYear converts Date to Year by extracting the year component
+func dateToYear(
+	from vector.FunctionParameterWrapper[types.Date],
+	to *vector.FunctionResult[types.MoYear], length int, selectList *FunctionSelectList) error {
+	var i uint64
+	l := uint64(length)
+	for i = 0; i < l; i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			year := types.MoYear(v.Year())
+			if err := to.Append(year, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// datetimeToYear converts Datetime to Year by extracting the year component
+func datetimeToYear(
+	from vector.FunctionParameterWrapper[types.Datetime],
+	to *vector.FunctionResult[types.MoYear], length int, selectList *FunctionSelectList) error {
+	var i uint64
+	l := uint64(length)
+	for i = 0; i < l; i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			year := types.MoYear(v.Year())
+			if err := to.Append(year, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// timestampToYear converts Timestamp to Year by extracting the year component
+func timestampToYear(
+	from vector.FunctionParameterWrapper[types.Timestamp],
+	to *vector.FunctionResult[types.MoYear], length int, zone *time.Location, selectList *FunctionSelectList) error {
+	var i uint64
+	l := uint64(length)
+	for i = 0; i < l; i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			dt := v.ToDatetime(zone)
+			year := types.MoYear(dt.Year())
+			if err := to.Append(year, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }

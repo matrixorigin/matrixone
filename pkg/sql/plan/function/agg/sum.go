@@ -116,6 +116,7 @@ func RegisterSum2(id int64) {
 var (
 	SumSupportedTypes = []types.T{
 		types.T_bit,
+		types.T_year,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_float32, types.T_float64,
@@ -125,7 +126,7 @@ var (
 		switch typs[0].Oid {
 		case types.T_float32, types.T_float64:
 			return types.T_float64.ToType()
-		case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
+		case types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_year:
 			return types.T_int64.ToType()
 		case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
 			return types.T_uint64.ToType()

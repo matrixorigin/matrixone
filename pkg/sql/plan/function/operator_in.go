@@ -23,7 +23,7 @@ import (
 
 type TGenericOfIn interface {
 	constraints.Integer | constraints.Float | bool | types.Uuid |
-		types.Time | types.Timestamp | types.Date | types.Datetime | types.Decimal64 | types.Decimal128
+		types.Time | types.Timestamp | types.Date | types.Datetime | types.Decimal64 | types.Decimal128 | types.MoYear
 }
 
 type opOperatorFixedIn[T TGenericOfIn] struct {

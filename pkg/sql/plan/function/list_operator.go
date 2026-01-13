@@ -718,6 +718,16 @@ var supportedOperators = []FuncNew{
 					return newOpOperatorStrIn().operatorIn
 				},
 			},
+			{
+				overloadId: 24,
+				args:       []types.T{types.T_year, types.T_year},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[types.MoYear]().operatorIn
+				},
+			},
 			// {
 			// 	overloadId: 24,
 			// 	args:       []types.T{types.T_uint8, types.T_tuple},
@@ -1249,6 +1259,16 @@ var supportedOperators = []FuncNew{
 					return newOpOperatorStrIn().operatorNotIn
 				},
 			},
+			{
+				overloadId: 24,
+				args:       []types.T{types.T_year, types.T_year},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[types.MoYear]().operatorNotIn
+				},
+			},
 
 			// {
 			// 	overloadId: 24,
@@ -1644,7 +1664,7 @@ var supportedOperators = []FuncNew{
 						}
 						return types.New(types.T_decimal128, 38, scale1)
 					}
-					if parameters[0].Oid == types.T_date || parameters[0].Oid == types.T_datetime {
+					if parameters[0].Oid == types.T_date || parameters[0].Oid == types.T_datetime || parameters[0].Oid == types.T_year {
 						return types.T_int64.ToType()
 					}
 					return parameters[0]
@@ -1710,6 +1730,9 @@ var supportedOperators = []FuncNew{
 						}
 						return types.New(types.T_decimal128, 38, scale)
 					}
+					if parameters[0].Oid == types.T_year {
+						return types.T_int64.ToType()
+					}
 					return parameters[0]
 				},
 				newOp: func() executeLogicOfOverload {
@@ -1771,6 +1794,9 @@ var supportedOperators = []FuncNew{
 							scale = scale1 + 6
 						}
 						return types.New(types.T_decimal128, 38, scale)
+					}
+					if parameters[0].Oid == types.T_year {
+						return types.T_float64.ToType()
 					}
 					return parameters[0]
 				},

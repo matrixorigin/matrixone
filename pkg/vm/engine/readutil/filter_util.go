@@ -236,6 +236,9 @@ func EncodePrimaryKey(v any, packer *types.Packer) []byte {
 	case types.Enum:
 		packer.EncodeEnum(v)
 
+	case types.MoYear:
+		packer.EncodeMoYear(v)
+
 	case string:
 		packer.EncodeStringType([]byte(v))
 
@@ -391,6 +394,14 @@ func EncodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]b
 		s := vector.MustFixedColNoTypeCheck[types.Enum](vec)
 		for _, v := range s {
 			packer.EncodeEnum(v)
+			ret = append(ret, packer.Bytes())
+			packer.Reset()
+		}
+
+	case types.T_year:
+		s := vector.MustFixedColNoTypeCheck[types.MoYear](vec)
+		for _, v := range s {
+			packer.EncodeMoYear(v)
 			ret = append(ret, packer.Bytes())
 			packer.Reset()
 		}

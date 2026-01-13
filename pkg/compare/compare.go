@@ -138,6 +138,11 @@ func New(typ types.Type, desc, nullsLast bool) Compare {
 			return newCompare(genericDescCompare[types.Enum], genericCopy[types.Enum], nullsLast)
 		}
 		return newCompare(genericAscCompare[types.Enum], genericCopy[types.Enum], nullsLast)
+	case types.T_year:
+		if desc {
+			return newCompare(genericDescCompare[types.MoYear], genericCopy[types.MoYear], nullsLast)
+		}
+		return newCompare(genericAscCompare[types.MoYear], genericCopy[types.MoYear], nullsLast)
 	case types.T_char, types.T_varchar, types.T_blob,
 		types.T_binary, types.T_varbinary, types.T_json, types.T_text, types.T_datalink:
 		return &strCompare{

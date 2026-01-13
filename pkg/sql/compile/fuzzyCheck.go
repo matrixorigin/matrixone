@@ -405,7 +405,7 @@ func (f *fuzzyCheck) format(toCheck *vector.Vector) ([]string, error) {
 	// background SQL condition should be b='ab' instead of b=ab, as well as time types
 	switch typ.Oid {
 	// date and time
-	case types.T_date, types.T_time, types.T_datetime, types.T_timestamp:
+	case types.T_date, types.T_time, types.T_datetime, types.T_timestamp, types.T_year:
 		for i, str := range ss {
 			ss[i] = strconv.Quote(str)
 		}
@@ -487,6 +487,9 @@ func vectorToString(vec *vector.Vector, rowIndex int) (string, error) {
 	case types.T_datetime:
 		val := vector.GetFixedAtNoTypeCheck[types.Datetime](vec, rowIndex)
 		return val.String2(vec.GetType().Scale), nil
+	case types.T_year:
+		val := vector.GetFixedAtNoTypeCheck[types.MoYear](vec, rowIndex)
+		return val.String(), nil
 	case types.T_enum:
 		return fmt.Sprintf("%v", vector.GetFixedAtNoTypeCheck[uint16](vec, rowIndex)), nil
 	default:
