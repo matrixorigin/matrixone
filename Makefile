@@ -210,7 +210,7 @@ ifeq ($(GOBUILD_OPT),)
 endif
 
 .PHONY: cgo
-cgo:
+cgo: thirdparties
 	@(cd cgo; ${MAKE} ${CGO_DEBUG_OPT})
 
 .PHONY: thirdparties

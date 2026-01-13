@@ -3,8 +3,8 @@ DEBUG_OPT :=
 # Yeah, fast math.  We want it to be fast, for all xcall, 
 # IEEE compliance should not be an issue.
 OPT_LV := -O3 -ffast-math
-CFLAGS=-std=c99 -g ${OPT_LV} -Wall -Werror
-OBJS=mo.o arith.o compare.o logic.o xcall.o
+CFLAGS=-std=c99 -g ${OPT_LV} -Wall -Werror -I../thirdparties/install/include
+OBJS=mo.o arith.o compare.o logic.o xcall.o distance.o
 CUDA_OBJS=
 
 ifeq ($(MO_CL_CUDA),1)
