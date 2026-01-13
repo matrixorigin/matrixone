@@ -92,7 +92,7 @@ require (
 	github.com/tidwall/btree v1.7.0
 	github.com/tidwall/pretty v1.2.1
 	github.com/tmc/langchaingo v0.1.13
-	github.com/unum-cloud/usearch/golang v0.0.0-20251010193336-541e882da5a9
+	github.com/unum-cloud/usearch/golang v0.0.0-20260106013029-7306bb446be5
 	github.com/viterin/partial v1.1.0
 	go.starlark.net v0.0.0-20250701195324-d457b4515e0e
 	go.uber.org/automaxprocs v1.5.3
@@ -262,7 +262,6 @@ replace (
 	github.com/lni/vfs v0.2.1-0.20220616104132-8852fd867376 => github.com/matrixorigin/vfs v0.2.1-0.20220616104132-8852fd867376
 
 	github.com/rapidsai/cuvs/go v0.0.0-20251126145430-91c51b1cc43d => github.com/cpegeric/cuvs/go v0.0.0-20251215111627-7e6a0b54cda6
-	github.com/unum-cloud/usearch/golang v0.0.0-20251010193336-541e882da5a9 => github.com/cpegeric/usearch/golang v0.0.0-20251212130039-afde3fa5e527
 )
 
 replace github.com/shoenig/go-m1cpu => github.com/shoenig/go-m1cpu v0.1.7
