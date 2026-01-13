@@ -13,12 +13,12 @@ float mo_distance(void const* vector_first, void const* vector_second, size_t di
 void xxhash_test() {
     const char* input = "xxHash - Extremely Fast Hash algorithm";
     const int inputLen = strlen(input);
-    const uint32_t seed = 0;
+    const uint64_t seed = 1;
 
     printf("input     = %s\n"    , input);
     printf("inputLen  = %d\n"    , inputLen);
 
-    const uint32_t h1 = XXH32(input, inputLen, seed);
-    printf("XXH32()   = 0x%08x\n", h1);
+    const uint64_t h1 = XXH3_64bits_withSeed(input, inputLen, seed);
+    printf("XXH3_64bits_withSeed()   = 0x%08llx\n", h1);
 
 }
