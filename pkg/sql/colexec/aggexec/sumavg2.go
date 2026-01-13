@@ -15,7 +15,6 @@
 package aggexec
 
 import (
-	"math"
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -64,9 +63,9 @@ func SumReturnType(typs []types.Type) types.Type {
 	switch typs[0].Oid {
 	case types.T_float32, types.T_float64:
 		return types.T_float64.ToType()
-	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_year:
 		return types.T_int64.ToType()
-	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_bit:
 		return types.T_uint64.ToType()
 	case types.T_decimal64:
 		return types.New(types.T_decimal128, 38, typs[0].Scale)
@@ -91,9 +90,8 @@ func uint64OfCheck(v1, v2, sum uint64) error {
 }
 
 func float64OfCheck(v1, v2, sum float64) error {
-	if math.IsInf(sum, 0) {
-		return moerr.NewOutOfRangeNoCtxf("float64", "(%f + %f)", v1, v2)
-	}
+	// MySQL behavior: SUM() aggregation allows overflow to +Infinity without error
+	// This matches MySQL 8.0 where SUM() silently returns +Infinity on overflow
 	return nil
 }
 
@@ -412,6 +410,8 @@ func makeSumAvgExec(
 		return newSumAvgExec[int64, int8](mp, int64OfCheck, isSum, aggID, isDistinct, param)
 	case types.T_int16:
 		return newSumAvgExec[int64, int16](mp, int64OfCheck, isSum, aggID, isDistinct, param)
+	case types.T_year:
+		return newSumAvgExec[int64, int16](mp, int64OfCheck, isSum, aggID, isDistinct, param)
 	case types.T_int32:
 		return newSumAvgExec[int64, int32](mp, int64OfCheck, isSum, aggID, isDistinct, param)
 	case types.T_int64:
@@ -423,6 +423,8 @@ func makeSumAvgExec(
 	case types.T_uint32:
 		return newSumAvgExec[uint64, uint32](mp, uint64OfCheck, isSum, aggID, isDistinct, param)
 	case types.T_uint64:
+		return newSumAvgExec[uint64, uint64](mp, uint64OfCheck, isSum, aggID, isDistinct, param)
+	case types.T_bit:
 		return newSumAvgExec[uint64, uint64](mp, uint64OfCheck, isSum, aggID, isDistinct, param)
 	case types.T_float32:
 		return newSumAvgExec[float64, float32](mp, float64OfCheck, isSum, aggID, isDistinct, param)

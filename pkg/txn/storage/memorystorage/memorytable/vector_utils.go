@@ -80,6 +80,9 @@ func VectorAt(vec *vector.Vector, i int) (value Nullable) {
 	case types.T_enum:
 		return vectorAtFixed[types.Enum](vec, i)
 
+	case types.T_year:
+		return vectorAtFixed[types.MoYear](vec, i)
+
 	case types.T_timestamp:
 		return vectorAtFixed[types.Timestamp](vec, i)
 
