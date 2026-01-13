@@ -169,7 +169,6 @@ func Open(
 	}
 	db.Controller.Start()
 
-	fmt.Printf(db.Catalog.SimplePPString(3))
 	return
 }
 

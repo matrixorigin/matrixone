@@ -1087,6 +1087,20 @@ func (mr *MockRelationMockRecorder) CollectChanges(ctx, from, to, skipDeletes, m
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CollectChanges", reflect.TypeOf((*MockRelation)(nil).CollectChanges), ctx, from, to, skipDeletes, mp)
 }
 
+// CollectObjectList mocks base method.
+func (m *MockRelation) CollectObjectList(ctx context.Context, from, to types.TS, bat *batch.Batch, mp *mpool.MPool) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CollectObjectList", ctx, from, to, bat, mp)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// CollectObjectList indicates an expected call of CollectObjectList.
+func (mr *MockRelationMockRecorder) CollectObjectList(ctx, from, to, bat, mp interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CollectObjectList", reflect.TypeOf((*MockRelation)(nil).CollectObjectList), ctx, from, to, bat, mp)
+}
+
 // CollectTombstones mocks base method.
 func (m *MockRelation) CollectTombstones(ctx context.Context, txnOffset int, policy engine.TombstoneCollectPolicy) (engine.Tombstoner, error) {
 	m.ctrl.T.Helper()
@@ -1199,6 +1213,21 @@ func (m *MockRelation) GetExtraInfo() *api.SchemaExtra {
 func (mr *MockRelationMockRecorder) GetExtraInfo() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetExtraInfo", reflect.TypeOf((*MockRelation)(nil).GetExtraInfo))
+}
+
+// GetFlushTS mocks base method.
+func (m *MockRelation) GetFlushTS(ctx context.Context) (types.TS, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetFlushTS", ctx)
+	ret0, _ := ret[0].(types.TS)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetFlushTS indicates an expected call of GetFlushTS.
+func (mr *MockRelationMockRecorder) GetFlushTS(ctx interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetFlushTS", reflect.TypeOf((*MockRelation)(nil).GetFlushTS), ctx)
 }
 
 // GetNonAppendableObjectStats mocks base method.

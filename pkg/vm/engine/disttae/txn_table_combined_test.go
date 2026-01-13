@@ -1309,6 +1309,10 @@ func (m *mockRelation) Reset(op client.TxnOperator) error {
 	return nil
 }
 
+func (m *mockRelation) GetFlushTS(ctx context.Context) (types.TS, error) {
+	return types.TS{}, nil
+}
+
 func (m *mockRelation) GetExtraInfo() *api.SchemaExtra {
 	return nil
 }
