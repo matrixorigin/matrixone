@@ -27,6 +27,8 @@ endif
 #	$(CC) -o libmo.a $(OBJS) $(CUDA_OBJS) $(CUDA_LDFLAGS)
 
 
+test: libmo.a
+	make -C test
 
 .PHONY: debug
 debug: override OPT_LV := -O0
