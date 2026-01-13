@@ -21,7 +21,3 @@ import (
 type numeric interface {
 	types.Ints | types.UInts | types.Floats
 }
-
-type numericWithMaxScale interface {
-	int64 | uint64 | float64
-}
