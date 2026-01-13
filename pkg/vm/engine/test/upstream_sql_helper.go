@@ -601,15 +601,15 @@ func (h *UpstreamSQLHelper) handleGetObjectDirectly(
 	var data []byte
 	var isComplete bool
 
-	if chunkIndex == -1 {
+	if chunkIndex == 0 {
 		// Metadata only request
 		data = nil
 		isComplete = false
 	} else {
 		// Data chunk request
-		offset := chunkIndex * chunkSize
+		offset := (chunkIndex - 1) * chunkSize
 		size := int64(chunkSize)
-		if chunkIndex == totalChunks-1 {
+		if chunkIndex == totalChunks {
 			// Last chunk may be smaller
 			size = fileSize - offset
 		}
@@ -620,7 +620,7 @@ func (h *UpstreamSQLHelper) handleGetObjectDirectly(
 			return nil, moerr.NewInternalErrorf(ctx, "failed to read object chunk: %v", err)
 		}
 		data = content
-		isComplete = (chunkIndex == totalChunks-1)
+		isComplete = (chunkIndex == totalChunks)
 	}
 
 	// Create a batch with 5 columns: data, total_size, chunk_index, total_chunks, is_complete
