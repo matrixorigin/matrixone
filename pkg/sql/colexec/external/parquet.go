@@ -872,11 +872,26 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			dict := page.Dictionary()
 			if dict == nil {
 				loader.init(page.Data())
+				// Validate string data count for non-dictionary mode
+				if err := validateStringDataCount(proc.Ctx, &loader, nc.actualNonNulls); err != nil {
+					return err
+				}
 			} else {
 				loader.init(dict.Page().Data())
 				data := page.Data()
 				indices = data.Int32()
-				cache = make([]*types.Varlena, int(dict.Len()))
+				dictLen := int(dict.Len())
+				cache = make([]*types.Varlena, dictLen)
+
+				// Validate dictionary indices count matches expected non-null rows
+				if err := validateDictionaryIndicesCount(proc.Ctx, indices, nc.actualNonNulls); err != nil {
+					return err
+				}
+
+				// Validate dictionary indices are in range
+				if err := ensureDictionaryIndexes(proc.Ctx, dictLen, indices); err != nil {
+					return err
+				}
 			}
 			for i := 0; i < numRows; i++ {
 				if nc.isNull(i) {
@@ -898,6 +913,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 
 				idx := indices[loader.next]
 				loader.next++
+				// idx is already validated by ensureDictionaryIndexes above
 				if cache[idx] != nil {
 					err := vector.AppendFixed(vec, *cache[idx], false, proc.Mp())
 					if err != nil {
