@@ -171,6 +171,8 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 		return genericPartition[types.Timestamp](sels, diffs, partitions, vec)
 	case types.T_enum:
 		return genericPartition[types.Enum](sels, diffs, partitions, vec)
+	case types.T_year:
+		return genericPartition[types.MoYear](sels, diffs, partitions, vec)
 	case types.T_decimal64:
 		return genericPartition[types.Decimal64](sels, diffs, partitions, vec)
 	case types.T_decimal128:

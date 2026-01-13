@@ -223,6 +223,7 @@ const (
 	bitCode        = 0x51
 	uuidCode       = 0x52
 	objectIdCode   = 0x53
+	yearCode       = 0x54
 )
 
 var sizeLimits = []uint64{
@@ -299,6 +300,8 @@ func decodeInt(code byte, b []byte) (interface{}, int) {
 			return Timestamp(0), 1
 		case timeCode:
 			return Time(0), 1
+		case yearCode:
+			return MoYear(0), 1
 		default:
 			return int64(0), 1
 		}
@@ -334,6 +337,8 @@ func decodeInt(code byte, b []byte) (interface{}, int) {
 			return Timestamp(ret - int64(sizeLimits[n])), n + 1
 		case timeCode:
 			return Time(ret - int64(sizeLimits[n])), n + 1
+		case yearCode:
+			return MoYear(ret - int64(sizeLimits[n])), n + 1
 		default:
 			return ret - int64(sizeLimits[n]), n + 1
 		}
@@ -353,6 +358,8 @@ func decodeInt(code byte, b []byte) (interface{}, int) {
 		return Timestamp(ret), n + 1
 	case timeCode:
 		return Time(ret), n + 1
+	case yearCode:
+		return MoYear(ret), n + 1
 	case enumCode:
 		return Enum(ret), n + 1
 	default:
@@ -560,6 +567,10 @@ func decodeTupleTo(b []byte, t Tuple, schema []T) (Tuple, int, []T, error) {
 			schema = append(schema, T_time)
 			el, off, err = decodeWithOffset(i, decodeInt, timeCode)
 
+		case yearCode:
+			schema = append(schema, T_year)
+			el, off, err = decodeWithOffset(i, decodeInt, yearCode)
+
 		case decimal64Code:
 			if err = checkBytes(i, 9); err != nil {
 				return nil, i, nil, err
@@ -694,6 +705,9 @@ func StringifyTuple(b []byte, types []plan.Type) ([]string, error) {
 		case b[offset] == timeCode:
 			item, itemLen = stringifyInt(timeCode, b[offset+1:], types[i].Scale)
 			itemLen += 1
+		case b[offset] == yearCode:
+			item, itemLen = stringifyInt(yearCode, b[offset+1:], types[i].Scale)
+			itemLen += 1
 		case b[offset] == decimal64Code:
 			item, itemLen = stringifyDecimal64(b[offset+1:], types[i].Scale)
 		case b[offset] == decimal128Code:
@@ -739,6 +753,8 @@ func stringifyInt(code byte, b []byte, scale int32) (string, int) {
 			return Datetime(0).String2(scale), 1
 		case timestampCode:
 			return Timestamp(0).String2(loc, scale), 1
+		case yearCode:
+			return MoYear(0).String(), 1
 		default:
 			return "0", 1
 		}
@@ -768,6 +784,8 @@ func stringifyInt(code byte, b []byte, scale int32) (string, int) {
 			return Datetime(ret - int64(sizeLimits[n])).String2(scale), n + 1
 		case timestampCode:
 			return Timestamp(ret-int64(sizeLimits[n])).String2(loc, scale), n + 1
+		case yearCode:
+			return MoYear(ret - int64(sizeLimits[n])).String(), n + 1
 		default:
 			return strconv.FormatInt(ret-int64(sizeLimits[n]), 10), n + 1
 		}
@@ -781,6 +799,8 @@ func stringifyInt(code byte, b []byte, scale int32) (string, int) {
 		return Datetime(ret).String2(scale), n + 1
 	case timestampCode:
 		return Timestamp(ret).String2(loc, scale), n + 1
+	case yearCode:
+		return MoYear(ret).String(), n + 1
 	//case enumCode:
 	//	return Enum(ret), n + 1
 	default:

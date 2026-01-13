@@ -37,7 +37,7 @@ type sortType interface {
 		~[]uint | ~[]uint8 | ~[]uint16 | ~[]uint32 | ~[]uint64 | ~[]uintptr |
 		~[]float32 | ~[]float64 |
 		~[]types.Date | ~[]types.Datetime | ~[]types.Timestamp |
-		~[]types.Time | ~[]types.Enum | ~[]types.TS |
+		~[]types.Time | ~[]types.Enum | ~[]types.MoYear | ~[]types.TS |
 		~[]types.Decimal64 | ~[]types.Decimal128 |
 		~[]types.Rowid | ~[]types.Blockid | ~[]types.Uuid |
 		~[][]float32 | ~[][]float64
@@ -224,6 +224,13 @@ func Sort(desc, nullsLast, hasNull bool, os []int64, vec *vector.Vector) {
 			genericSort(col, os, genericLess[types.Enum])
 		} else {
 			genericSort(col, os, genericGreater[types.Enum])
+		}
+	case types.T_year:
+		col := vector.MustFixedColNoTypeCheck[types.MoYear](vec)
+		if !desc {
+			genericSort(col, os, genericLess[types.MoYear])
+		} else {
+			genericSort(col, os, genericGreater[types.MoYear])
 		}
 	case types.T_decimal64:
 		col := vector.MustFixedColNoTypeCheck[types.Decimal64](vec)
