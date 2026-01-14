@@ -187,8 +187,7 @@ ORDER BY r1.`年份`;
 2021    100.00    null
 2022    200.00    100.00
 2023    300.00    50.00
-drop database jst_flat_table;
-Can't drop database 'jst_flat_table'; database doesn't exist
+drop database jst_flat_table1;
 use hint_cte_test;
 drop database hint_cte_test;
 set enable_remap_hint = 0;
