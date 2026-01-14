@@ -28,7 +28,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cdc"
-	"github.com/matrixorigin/matrixone/pkg/cdc/retry"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -177,91 +176,8 @@ type UpstreamExecutor struct {
 	retryTimes    int           // -1 for infinite retry
 	retryDuration time.Duration // Max total retry duration
 
-	retryPolicy     retry.Policy
-	retryClassifier retry.ErrorClassifier
-
-	sinkLabel      string
-	circuitBreaker *circuitBreaker
-}
-
-// circuitBreaker implements circuit breaker pattern for upstream connections
-type circuitBreaker struct {
-	sinkLabel    string
-	maxFailures  int
-	coolDown     time.Duration
-	failureCount int
-	open         bool
-	openedAt     time.Time
-	mu           sync.Mutex
-}
-
-const (
-	defaultCircuitBreakerFailures = 5
-	defaultCircuitBreakerCooldown = 30 * time.Second
-)
-
-func newCircuitBreaker(sink string, maxFailures int, coolDown time.Duration) *circuitBreaker {
-	if maxFailures <= 0 {
-		maxFailures = defaultCircuitBreakerFailures
-	}
-	if coolDown <= 0 {
-		coolDown = defaultCircuitBreakerCooldown
-	}
-	cb := &circuitBreaker{
-		sinkLabel:   sink,
-		maxFailures: maxFailures,
-		coolDown:    coolDown,
-	}
-	return cb
-}
-
-func (cb *circuitBreaker) IsOpen() bool {
-	cb.mu.Lock()
-	defer cb.mu.Unlock()
-
-	if !cb.open {
-		return false
-	}
-
-	if time.Since(cb.openedAt) >= cb.coolDown {
-		cb.open = false
-		cb.failureCount = 0
-		cb.openedAt = time.Time{}
-		logutil.Info("publication.executor.retry_circuit_half_open",
-			zap.String("sink", cb.sinkLabel))
-		return false
-	}
-	return true
-}
-
-func (cb *circuitBreaker) OnFailure() (opened bool, justOpened bool) {
-	cb.mu.Lock()
-	defer cb.mu.Unlock()
-
-	cb.failureCount++
-	if cb.failureCount >= cb.maxFailures {
-		if !cb.open {
-			cb.open = true
-			cb.openedAt = time.Now()
-			return true, true
-		}
-		cb.openedAt = time.Now()
-		return true, false
-	}
-	return cb.open, false
-}
-
-func (cb *circuitBreaker) OnSuccess() {
-	cb.mu.Lock()
-	defer cb.mu.Unlock()
-
-	cb.failureCount = 0
-	if cb.open {
-		cb.open = false
-		cb.openedAt = time.Time{}
-		logutil.Info("publication.executor.retry_circuit_closed",
-			zap.String("sink", cb.sinkLabel))
-	}
+	retryPolicy     Policy
+	retryClassifier ErrorClassifier
 }
 
 // NewUpstreamExecutor creates a new UpstreamExecutor with database connection
@@ -292,7 +208,6 @@ func NewUpstreamExecutor(
 		retryTimes:    retryTimes,
 		retryDuration: retryDuration,
 		timeout:       timeout,
-		sinkLabel:     "upstream",
 	}
 
 	if err := e.Connect(); err != nil {
@@ -683,18 +598,6 @@ func (e *UpstreamExecutor) execWithRetry(
 	ar *ActiveRoutine,
 	fn func() (*Result, error),
 ) (*Result, error) {
-	sinkLabel := e.sinkLabel
-	if sinkLabel == "" {
-		sinkLabel = "upstream"
-	}
-
-	if e.circuitBreaker != nil && e.circuitBreaker.IsOpen() {
-		logutil.Warn(
-			"publication.executor.retry_circuit_blocked",
-			zap.String("sink", sinkLabel),
-		)
-		return nil, moerr.NewInternalError(ctx, "upstream circuit breaker open")
-	}
 
 	policy := e.retryPolicy
 	policy.MaxAttempts = e.calculateMaxAttempts()
@@ -728,16 +631,13 @@ func (e *UpstreamExecutor) execWithRetry(
 		}
 
 		if e.retryDuration > 0 && attempt > 1 && time.Since(start) >= e.retryDuration {
-			return retry.ErrNonRetryable
+			return ErrNonRetryable
 		}
 
 		begin := time.Now()
 		result, err := fn()
 		_ = begin // TODO: add metrics if needed
 		if err == nil {
-			if e.circuitBreaker != nil {
-				e.circuitBreaker.OnSuccess()
-			}
 			lastErr = nil
 			lastResult = result
 			return nil
@@ -750,18 +650,6 @@ func (e *UpstreamExecutor) execWithRetry(
 			zap.Int("attempt", attempt),
 			zap.Error(err),
 		)
-
-		if e.circuitBreaker != nil {
-			if opened, justOpened := e.circuitBreaker.OnFailure(); opened {
-				if justOpened {
-					logutil.Warn("publication.executor.retry_circuit_opened",
-						zap.String("sink", sinkLabel),
-						zap.Int("attempt", attempt),
-					)
-				}
-				return retry.ErrCircuitOpen
-			}
-		}
 
 		return err
 	})
@@ -778,11 +666,7 @@ func (e *UpstreamExecutor) execWithRetry(
 		return lastResult, nil
 	}
 
-	if errors.Is(err, retry.ErrCircuitOpen) {
-		return nil, moerr.NewInternalError(ctx, "upstream circuit breaker open")
-	}
-
-	if errors.Is(err, retry.ErrNonRetryable) {
+	if errors.Is(err, ErrNonRetryable) {
 		logutil.Error(
 			"publication.executor.retry_exhausted",
 			zap.Int("attempts", attempt),
@@ -800,15 +684,15 @@ func (e *UpstreamExecutor) execWithRetry(
 }
 
 func (e *UpstreamExecutor) initRetryPolicy() {
-	classifier := retry.MultiClassifier{
-		retry.DefaultClassifier{},
-		retry.MySQLErrorClassifier{},
+	classifier := MultiClassifier{
+		DefaultClassifier{},
+		MySQLErrorClassifier{},
 	}
 
 	e.retryClassifier = classifier
-	e.retryPolicy = retry.Policy{
+	e.retryPolicy = Policy{
 		MaxAttempts: e.calculateMaxAttempts(),
-		Backoff: retry.ExponentialBackoff{
+		Backoff: ExponentialBackoff{
 			Base:   200 * time.Millisecond,
 			Factor: 2,
 			Max:    30 * time.Second,
@@ -816,10 +700,6 @@ func (e *UpstreamExecutor) initRetryPolicy() {
 		},
 		Classifier: classifier,
 	}
-	if e.sinkLabel == "" {
-		e.sinkLabel = "upstream"
-	}
-	e.circuitBreaker = newCircuitBreaker(e.sinkLabel, defaultCircuitBreakerFailures, defaultCircuitBreakerCooldown)
 }
 
 func (e *UpstreamExecutor) calculateMaxAttempts() int {

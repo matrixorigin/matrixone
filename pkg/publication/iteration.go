@@ -386,14 +386,15 @@ func (iterCtx *IterationContext) Close(commit bool) error {
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, iterCtx.SrcInfo.AccountID)
 	ctx = context.WithValue(ctx, defines.PkCheckByTN{}, int8(cmd_util.SkipAllDedup))
 
+	var err error
 	if iterCtx.LocalExecutor != nil {
-		iterCtx.LocalExecutor.EndTxn(ctx, commit)
+		err = iterCtx.LocalExecutor.EndTxn(ctx, commit)
 		iterCtx.LocalExecutor.Close()
 	}
 	if iterCtx.UpstreamExecutor != nil {
-		iterCtx.UpstreamExecutor.Close()
+		err = iterCtx.UpstreamExecutor.Close()
 	}
-	return nil
+	return err
 }
 
 // UpdateIterationState updates iteration state, iteration LSN, iteration context, and error message in mo_ccpr_log table

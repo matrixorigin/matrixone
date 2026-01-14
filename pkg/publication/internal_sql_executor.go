@@ -267,8 +267,11 @@ func (e *InternalSQLExecutor) ExecSQLWithOptions(
 			return convertExecutorResult(execResult), nil
 		}
 
-		// Check if error is retryable
-		if !e.isRetryableError(err) {
+		// Check if error is retryable using CommitErrorClassifier
+		// Note: RC mode check is done by checking error codes directly,
+		// as CommitErrorClassifier already handles ErrTxnNeedRetry errors
+		commitClassifier := CommitErrorClassifier{}
+		if !commitClassifier.IsRetryable(err) {
 			// Not retryable, return error immediately
 			return nil, err
 		}
@@ -345,19 +348,6 @@ func (e *InternalSQLExecutor) SetRetryInterval(interval time.Duration) {
 	e.retryInterval = interval
 }
 
-// isRetryableError checks if an error is retryable in RC mode
-func (e *InternalSQLExecutor) isRetryableError(err error) bool {
-	if err == nil {
-		return false
-	}
-	// Check if transaction is in RC mode
-	if e.txnOp != nil && e.txnOp.Txn().IsRCIsolation() {
-		// Check for retry errors
-		return moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
-			moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)
-	}
-	return false
-}
 
 // truncateSQL truncates SQL string for logging
 func truncateSQL(sql string) string {
