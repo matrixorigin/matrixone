@@ -620,9 +620,24 @@ func RequestUpstreamSnapshot(
 	// Execute SQL through upstream executor (account ID is handled internally)
 	result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, createSnapshotSQL)
 	if err != nil {
-		return moerr.NewInternalErrorf(ctx, "failed to create snapshot: %v", err)
+		// Check if error is due to snapshot already existing
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "already exists") && strings.Contains(errMsg, "snapshot") {
+			// Snapshot already exists, this is acceptable, continue execution
+			logutil.Info("ccpr-iteration snapshot already exists, continuing",
+				zap.String("snapshot_name", snapshotName),
+				zap.Error(err),
+			)
+			if result != nil {
+				result.Close()
+			}
+		} else {
+			// Other errors, return as before
+			return moerr.NewInternalErrorf(ctx, "failed to create snapshot: %v", err)
+		}
+	} else {
+		result.Close()
 	}
-	result.Close()
 
 	// Before setting new current snapshot, save old current snapshot as prev snapshot
 	if iterationCtx.CurrentSnapshotName != "" {
