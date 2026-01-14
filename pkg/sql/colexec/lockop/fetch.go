@@ -75,6 +75,8 @@ func GetFetchRowsFunc(t types.Type) FetchLockRowsFunc {
 		return fetchFloat64Rows
 	case types.T_date:
 		return fetchDateRows
+	case types.T_year:
+		return fetchYearRows
 	case types.T_time:
 		return fetchTimeRows
 	case types.T_datetime:
@@ -400,6 +402,33 @@ func fetchDateRows(
 	if lockTable {
 		min := fn(math.MinInt32)
 		max := fn(math.MaxInt32)
+		return true, [][]byte{min, max},
+			lock.Granularity_Range
+	}
+	return fetchFixedRows(
+		vec,
+		max,
+		fn,
+		filter,
+		filterCols)
+}
+
+func fetchYearRows(
+	vec *vector.Vector,
+	parker *types.Packer,
+	tp types.Type,
+	max int,
+	lockTable bool,
+	filter RowsFilter,
+	filterCols []int32) (bool, [][]byte, lock.Granularity) {
+	fn := func(v types.MoYear) []byte {
+		parker.Reset()
+		parker.EncodeMoYear(v)
+		return parker.Bytes()
+	}
+	if lockTable {
+		min := fn(math.MinInt16)
+		max := fn(math.MaxInt16)
 		return true, [][]byte{min, max},
 			lock.Granularity_Range
 	}

@@ -1102,7 +1102,7 @@ func ExprIsZonemappable(ctx context.Context, expr *plan.Expr) bool {
 
 		if exprImpl.F.Func.ObjName == "cast" {
 			switch exprImpl.F.Args[0].Typ.Id {
-			case int32(types.T_date), int32(types.T_time), int32(types.T_datetime), int32(types.T_timestamp):
+			case int32(types.T_date), int32(types.T_time), int32(types.T_datetime), int32(types.T_timestamp), int32(types.T_year):
 				if exprImpl.F.Args[1].Typ.Id == int32(types.T_timestamp) {
 					//this cast is monotonic, can safely pushdown to block filters
 					return true

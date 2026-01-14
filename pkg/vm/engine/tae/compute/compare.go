@@ -86,6 +86,8 @@ func Compare(a, b []byte, t types.T, scale1, scale2 int32) int {
 		return CompareOrdered(types.DecodeDatetime(a), types.DecodeDatetime(b))
 	case types.T_enum:
 		return CompareOrdered(types.DecodeEnum(a), types.DecodeEnum(b))
+	case types.T_year:
+		return CompareOrdered(types.DecodeMoYear(a), types.DecodeMoYear(b))
 	case types.T_TS:
 		aa := (*types.TS)(unsafe.Pointer(&a[0]))
 		bb := (*types.TS)(unsafe.Pointer(&b[0]))
@@ -169,6 +171,8 @@ func CompareGeneric(a, b any, t types.T) int {
 		return CompareOrdered(a.(types.Datetime), b.(types.Datetime))
 	case types.T_enum:
 		return CompareOrdered(a.(types.Enum), b.(types.Enum))
+	case types.T_year:
+		return CompareOrdered(a.(types.MoYear), b.(types.MoYear))
 	case types.T_TS:
 		ts1 := a.(types.TS)
 		ts2 := b.(types.TS)
