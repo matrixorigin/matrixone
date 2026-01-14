@@ -1285,7 +1285,14 @@ func ExecuteIteration(
 	)
 
 	defer func() {
+		injectCommitFailed := false
+		if msg, injected := objectio.PublicationSnapshotFinishedInjected(); injected && msg == "ut injection: commit failed" {
+			injectCommitFailed = true
+		}
 		commitErr := iterationCtx.Close(err == nil)
+		if injectCommitFailed {
+			commitErr = moerr.NewInternalErrorNoCtx("ut injection: commit failed")
+		}
 		if commitErr != nil {
 			if err != nil {
 				err = moerr.NewInternalErrorf(ctx, "failed to close iteration context: %v; previous error: %v", commitErr, err)
