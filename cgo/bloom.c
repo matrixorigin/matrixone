@@ -57,7 +57,7 @@ bloomfilter_t* bloomfilter_init(uint64_t nbits, uint32_t k) {
     uint64_t nbytes = bitmap_nbyte(nbits);
     bloomfilter_t *bf = (bloomfilter_t *)malloc(sizeof(bloomfilter_t) + nbytes);
     if (!bf) return NULL;
-    
+
     memset(bf->bitmap, 0, nbytes);
     bloomfilter_setup(bf, nbits, k);
     return bf;
@@ -92,10 +92,10 @@ void bloomfilter_add(const bloomfilter_t *bf, const void *key, size_t len) {
 }
 
 void bloomfilter_add_multi(const bloomfilter_t *bf, const void *key, size_t len, size_t elemsz, size_t nitem) {
-	char * k = (char *) key;
-	for (int i = 0, j = 0  ; i < nitem && j < len; i++, j += elemsz , k += elemsz) {
-		bloomfilter_add(bf, k, elemsz);
-	}
+    char *k = (char *) key;
+    for (int i = 0, j = 0; i < nitem && j < len; i++, j += elemsz, k += elemsz) {
+        bloomfilter_add(bf, k, elemsz);
+    }
 }
 
 bool bloomfilter_test(const bloomfilter_t *bf, const void *key, size_t len) {
@@ -126,12 +126,12 @@ bool bloomfilter_test(const bloomfilter_t *bf, const void *key, size_t len) {
 }
 
 void bloomfilter_test_multi(const bloomfilter_t *bf, const void *key, size_t len, size_t elemsz, size_t nitem, void *result) {
-        char * k = (char *) key;
-	bool *br = (bool *) result;
-	
-        for (int i = 0, j = 0 ; i < nitem && j < len ; i++, j += elemsz, k += elemsz) {
-                br[i] = bloomfilter_test(bf, k, elemsz);
-        }
+    char *k = (char *) key;
+    bool *br = (bool *) result;
+
+    for (int i = 0, j = 0; i < nitem && j < len; i++, j += elemsz, k += elemsz) {
+        br[i] = bloomfilter_test(bf, k, elemsz);
+    }
 }
 
 bool bloomfilter_test_and_add(const bloomfilter_t *bf, const void *key, size_t len) {
@@ -161,6 +161,14 @@ bool bloomfilter_test_and_add(const bloomfilter_t *bf, const void *key, size_t l
     return all_set;
 }
 
+void bloomfilter_test_and_add_multi(const bloomfilter_t *bf, const void *key, size_t len, size_t elemsz, size_t nitem, void *result) {
+    char *k = (char *) key;
+    bool *br = (bool *) result;
+    for (int i = 0, j = 0; i < nitem && j < len; i++, j += elemsz, k += elemsz) {
+        br[i] = bloomfilter_test_and_add(bf, k, elemsz);
+    }
+}
+
 uint8_t* bloomfilter_marshal(const bloomfilter_t *bf, size_t *len) {
     if (memcmp(bf->magic, BLOOM_MAGIC, 4) != 0) {
         *len = 0;
@@ -172,7 +180,7 @@ uint8_t* bloomfilter_marshal(const bloomfilter_t *bf, size_t *len) {
 
 bloomfilter_t* bloomfilter_unmarshal(const uint8_t *buf, size_t len) {
     if (len < sizeof(bloomfilter_t)) {
-	    return NULL;
+        return NULL;
     }
     bloomfilter_t *bf = (bloomfilter_t*) buf;
     if (memcmp(bf->magic, BLOOM_MAGIC, 4) != 0) {

@@ -134,17 +134,19 @@ func (bf *CBloomFilter) TestAndAddVector(v *vector.Vector, callBack func(bool, i
 
 	length := v.Length()
 	const chunkSize = 256
-	buf := make([]byte, 0, 64)
 	nulls := v.GetNulls()
 
-	for i := 0; i < length; i += chunkSize {
-		end := i + chunkSize
-		if end > length {
-			end = length
-		}
-		for j := i; j < end; j++ {
+	if isFixed {
+		buf := make([]byte, 0, (typeSize+1)*chunkSize)
+		results := make([]uint8, chunkSize)
+		for i := 0; i < length; i += chunkSize {
+			end := i + chunkSize
+			if end > length {
+				end = length
+			}
+			nitem := end - i
 			buf = buf[:0]
-			if isFixed {
+			for j := i; j < end; j++ {
 				if nulls.Contains(uint64(j)) {
 					buf = append(buf, 1)
 					for k := 0; k < typeSize; k++ {
@@ -155,21 +157,38 @@ func (bf *CBloomFilter) TestAndAddVector(v *vector.Vector, callBack func(bool, i
 					idx := j * typeSize
 					buf = append(buf, fixedData[idx:idx+typeSize]...)
 				}
-			} else {
+			}
+			C.bloomfilter_test_and_add_multi(bf.ptr, unsafe.Pointer(&buf[0]), C.size_t(len(buf)), C.size_t(typeSize+1), C.size_t(nitem), unsafe.Pointer(&results[0]))
+			if callBack != nil {
+				for j := 0; j < nitem; j++ {
+					callBack(results[j] != 0, i+j)
+				}
+			}
+		}
+		runtime.KeepAlive(buf)
+	} else {
+		buf := make([]byte, 0, 64)
+		for i := 0; i < length; i += chunkSize {
+			end := i + chunkSize
+			if end > length {
+				end = length
+			}
+			for j := i; j < end; j++ {
+				buf = buf[:0]
 				if nulls.Contains(uint64(j)) {
 					buf = append(buf, 1)
 				} else {
 					buf = append(buf, 0)
 					buf = append(buf, varlenData[j].GetByteSlice(area)...)
 				}
-			}
-			found := C.bloomfilter_test_and_add(bf.ptr, unsafe.Pointer(&buf[0]), C.size_t(len(buf)))
-			if callBack != nil {
-				callBack(bool(found), j)
+				found := C.bloomfilter_test_and_add(bf.ptr, unsafe.Pointer(&buf[0]), C.size_t(len(buf)))
+				if callBack != nil {
+					callBack(bool(found), j)
+				}
 			}
 		}
+		runtime.KeepAlive(buf)
 	}
-	runtime.KeepAlive(buf)
 }
 
 // test all element in the vector.Vector to the bloom filter

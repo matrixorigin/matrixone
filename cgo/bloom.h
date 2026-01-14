@@ -46,6 +46,7 @@ void bloomfilter_add_multi(const bloomfilter_t *bf, const void *key, size_t len,
 bool bloomfilter_test(const bloomfilter_t *bf, const void *key, size_t len);
 void bloomfilter_test_multi(const bloomfilter_t *bf, const void *key, size_t len, size_t elemsz, size_t nitem, void *result);
 bool bloomfilter_test_and_add(const bloomfilter_t *bf, const void *key, size_t len);
+void bloomfilter_test_and_add_multi(const bloomfilter_t *bf, const void *key, size_t len, size_t elemsz, size_t nitem, void *result);
 uint8_t* bloomfilter_marshal(const bloomfilter_t *bf, size_t *len);
 bloomfilter_t* bloomfilter_unmarshal(const uint8_t *buf, size_t len);
 
