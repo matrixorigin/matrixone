@@ -36,6 +36,11 @@ type CBloomFilter struct {
 	ptr *C.bloomfilter_t
 }
 
+func NewCBloomFilterWithProbaility(rowcnt int64, probability float64) *CBloomFilter {
+	nbit, k := computeMemAndHashCount(rowcnt, probability)
+	return NewCBloomFilter(uint64(nbit), uint32(k))
+}
+
 func NewCBloomFilter(nbits uint64, k uint32) *CBloomFilter {
 	ptr := C.bloomfilter_init(C.uint64_t(nbits), C.uint32_t(k))
 	if ptr == nil {
@@ -139,7 +144,7 @@ func (bf *CBloomFilter) TestAndAddVector(v *vector.Vector, callBack func(bool, i
 					buf = buf[:0]
 					buf = append(buf, 0)
 					idx := i * typeSize
-					buf = append(buf, fixedData[idx : idx+typeSize]...)
+					buf = append(buf, fixedData[idx:idx+typeSize]...)
 					found := C.bloomfilter_test_and_add(bf.ptr, unsafe.Pointer(&buf[0]), C.size_t(len(buf)))
 					if callBack != nil {
 						callBack(bool(found), i)
@@ -154,7 +159,7 @@ func (bf *CBloomFilter) TestAndAddVector(v *vector.Vector, callBack func(bool, i
 					} else {
 						buf = append(buf, 0)
 						idx := i * typeSize
-						buf = append(buf, fixedData[idx : idx+typeSize]...)
+						buf = append(buf, fixedData[idx:idx+typeSize]...)
 					}
 					found := C.bloomfilter_test_and_add(bf.ptr, unsafe.Pointer(&buf[0]), C.size_t(len(buf)))
 					if callBack != nil {
@@ -225,7 +230,7 @@ func (bf *CBloomFilter) TestVector(v *vector.Vector, callBack func(bool, int)) {
 					buf = buf[:0]
 					buf = append(buf, 0)
 					idx := i * typeSize
-					buf = append(buf, fixedData[idx : idx+typeSize]...)
+					buf = append(buf, fixedData[idx:idx+typeSize]...)
 					found := C.bloomfilter_test(bf.ptr, unsafe.Pointer(&buf[0]), C.size_t(len(buf)))
 					if callBack != nil {
 						callBack(bool(found), i)
@@ -240,7 +245,7 @@ func (bf *CBloomFilter) TestVector(v *vector.Vector, callBack func(bool, int)) {
 					} else {
 						buf = append(buf, 0)
 						idx := i * typeSize
-						buf = append(buf, fixedData[idx : idx+typeSize]...)
+						buf = append(buf, fixedData[idx:idx+typeSize]...)
 					}
 					found := C.bloomfilter_test(bf.ptr, unsafe.Pointer(&buf[0]), C.size_t(len(buf)))
 					if callBack != nil {
@@ -310,7 +315,7 @@ func (bf *CBloomFilter) AddVector(v *vector.Vector) {
 					buf = buf[:0]
 					buf = append(buf, 0)
 					idx := i * typeSize
-					buf = append(buf, fixedData[idx : idx+typeSize]...)
+					buf = append(buf, fixedData[idx:idx+typeSize]...)
 					C.bloomfilter_add(bf.ptr, unsafe.Pointer(&buf[0]), C.size_t(len(buf)))
 				}
 			} else {
@@ -322,7 +327,7 @@ func (bf *CBloomFilter) AddVector(v *vector.Vector) {
 					} else {
 						buf = append(buf, 0)
 						idx := i * typeSize
-						buf = append(buf, fixedData[idx : idx+typeSize]...)
+						buf = append(buf, fixedData[idx:idx+typeSize]...)
 					}
 					C.bloomfilter_add(bf.ptr, unsafe.Pointer(&buf[0]), C.size_t(len(buf)))
 				}
