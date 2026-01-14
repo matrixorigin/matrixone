@@ -51,4 +51,10 @@ func TestCBloomFilter(t *testing.T) {
 	assert.True(t, bf2.Test(key1))
 	assert.True(t, bf2.Test(key2))
 	assert.False(t, bf2.Test(key3))
+
+	// Test TestAndAdd
+	key4 := []byte("new_key")
+	assert.False(t, bf2.TestAndAdd(key4))
+	assert.True(t, bf2.Test(key4))
+	assert.True(t, bf2.TestAndAdd(key4))
 }

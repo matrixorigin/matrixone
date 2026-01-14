@@ -21,6 +21,24 @@
 #define XXH_INLINE_ALL
 #include "xxhash.h"
 
+typedef struct {
+    uint64_t h1;
+    uint64_t h2;
+    uint64_t h3;
+} bloom_hash_t;
+
+static inline bloom_hash_t bloom_calculate_hash(const void *key, size_t len, uint64_t seed) {
+    bloom_hash_t h;
+    h.h1 = XXH3_64bits_withSeed(key, len, seed);
+    h.h2 = XXH3_64bits_withSeed(key, len, seed << 32);
+    h.h3 = XXH3_64bits_withSeed(key, len, seed >> 32);
+    return h;
+}
+
+static inline uint64_t bloom_calculate_pos(bloom_hash_t h, int i, uint64_t nbits) {
+    return (h.h1 + (uint64_t)i * h.h2 + (uint64_t)i * i * h.h3) % nbits;
+}
+
 static void bloomfilter_setup(bloomfilter_t *bf, uint64_t nbits, uint32_t k) {
     memcpy(bf->magic, BLOOM_MAGIC, 4);
     bf->nbits = nbits;
@@ -51,11 +69,8 @@ void bloomfilter_add(const bloomfilter_t *bf, const void *key, size_t len) {
     if (bf->nbits == 0) return;
 
     for (int i = 0; i < bf->k; i++) {
-    	uint64_t h1 = XXH3_64bits_withSeed(key, len, bf->seeds[i]);
-    	uint64_t h2 = XXH3_64bits_withSeed(key, len, (bf->seeds[i]<<32));
-    	uint64_t h3 = XXH3_64bits_withSeed(key, len, (bf->seeds[i]>>32));
-
-        uint64_t pos = (h1 + (uint64_t)i * h2 + (uint64_t)i * i * h3) % bf->nbits;
+        bloom_hash_t h = bloom_calculate_hash(key, len, bf->seeds[i]);
+        uint64_t pos = bloom_calculate_pos(h, i, bf->nbits);
         bitmap_set((uint64_t *) bf->bitmap, pos);
     }
 }
@@ -64,16 +79,28 @@ bool bloomfilter_test(const bloomfilter_t *bf, const void *key, size_t len) {
     if (bf->nbits == 0) return false;
 
     for (int i = 0; i < bf->k; i++) {
-    	uint64_t h1 = XXH3_64bits_withSeed(key, len, bf->seeds[i]);
-   	uint64_t h2 = XXH3_64bits_withSeed(key, len, bf->seeds[i]<<32);
-    	uint64_t h3 = XXH3_64bits_withSeed(key, len, bf->seeds[i]>>32);
-
-        uint64_t pos = (h1 + (uint64_t)i * h2 + (uint64_t)i * i * h3) % bf->nbits;
+        bloom_hash_t h = bloom_calculate_hash(key, len, bf->seeds[i]);
+        uint64_t pos = bloom_calculate_pos(h, i, bf->nbits);
         if (!bitmap_test((uint64_t*)bf->bitmap, pos)) {
             return false;
         }
     }
     return true;
+}
+
+bool bloomfilter_test_and_add(const bloomfilter_t *bf, const void *key, size_t len) {
+    if (bf->nbits == 0) return false;
+
+    bool all_set = true;
+    for (int i = 0; i < bf->k; i++) {
+        bloom_hash_t h = bloom_calculate_hash(key, len, bf->seeds[i]);
+        uint64_t pos = bloom_calculate_pos(h, i, bf->nbits);
+        if (!bitmap_test((uint64_t*)bf->bitmap, pos)) {
+            all_set = false;
+            bitmap_set((uint64_t*)bf->bitmap, pos);
+        }
+    }
+    return all_set;
 }
 
 uint8_t* bloomfilter_marshal(const bloomfilter_t *bf, size_t *len) {

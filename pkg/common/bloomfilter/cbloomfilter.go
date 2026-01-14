@@ -62,6 +62,13 @@ func (bf *CBloomFilter) Test(data []byte) bool {
 	return bool(C.bloomfilter_test(bf.ptr, unsafe.Pointer(&data[0]), C.size_t(len(data))))
 }
 
+func (bf *CBloomFilter) TestAndAdd(data []byte) bool {
+	if bf == nil || bf.ptr == nil || len(data) == 0 {
+		return false
+	}
+	return bool(C.bloomfilter_test_and_add(bf.ptr, unsafe.Pointer(&data[0]), C.size_t(len(data))))
+}
+
 func (bf *CBloomFilter) Marshal() ([]byte, error) {
 	if bf == nil || bf.ptr == nil {
 		return nil, nil

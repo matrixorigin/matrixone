@@ -43,6 +43,7 @@ bloomfilter_t* bloomfilter_init(uint64_t nbits, uint32_t k);
 void bloomfilter_free(bloomfilter_t *bf);
 void bloomfilter_add(const bloomfilter_t *bf, const void *key, size_t len);
 bool bloomfilter_test(const bloomfilter_t *bf, const void *key, size_t len);
+bool bloomfilter_test_and_add(const bloomfilter_t *bf, const void *key, size_t len);
 uint8_t* bloomfilter_marshal(const bloomfilter_t *bf, size_t *len);
 bloomfilter_t* bloomfilter_unmarshal(const uint8_t *buf, size_t len);
 

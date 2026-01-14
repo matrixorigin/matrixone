@@ -68,6 +68,22 @@ int main() {
         printf("key3 is correctly identified as not present in restored bitmap\n");
     }
 
+    // Test test_and_add
+    const char *key4 = "new_key";
+    if (bloomfilter_test_and_add(bf2, key4, strlen(key4))) {
+        printf("Error: key4 should NOT be present initially\n");
+        return 1;
+    }
+    if (!bloomfilter_test(bf2, key4, strlen(key4))) {
+        printf("Error: key4 should BE present after test_and_add\n");
+        return 1;
+    }
+    if (!bloomfilter_test_and_add(bf2, key4, strlen(key4))) {
+        printf("Error: key4 should BE present when calling test_and_add again\n");
+        return 1;
+    }
+    printf("test_and_add passed\n");
+
     bloomfilter_free(bf2); // This will free(buf_copy)
     bloomfilter_free(bf);
     
