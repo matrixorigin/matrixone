@@ -338,10 +338,6 @@ var writeDataToCSVFile = func(ep *ExportConfig, output []byte) error {
 	return nil
 }
 
-func formatJsonString(str string) string {
-        return strings.ReplaceAll(str, "\"", "\"\"")
-}
-
 func escapeJSONControlChars(s string) string {
 	var builder strings.Builder
 	builder.Grow(len(s))
@@ -424,9 +420,9 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 			}
 			switch vec.GetType().Oid { //get col
 			case types.T_json:
-                                val := types.DecodeJson(vec.GetBytesAt(i))
-                                value := addEscapeToString([]byte(val.String()), closeby)
-                                formatOutputString(ep, value, symbol[j], closeby, true, buffer)
+				val := types.DecodeJson(vec.GetBytesAt(i))
+				value := addEscapeToString([]byte(val.String()), closeby)
+				formatOutputString(ep, value, symbol[j], closeby, true, buffer)
 			case types.T_bool:
 				val := vector.GetFixedAtNoTypeCheck[bool](vec, i)
 				if val {
@@ -579,11 +575,11 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 }
 
 func addEscapeToString(s []byte, escape byte) []byte {
-        s = bytes.ReplaceAll(s, []byte("\\"[:1]), []byte("\\\\"[:2]))
-        if escape != 0 && escape != "\\"[0] {
-                s = bytes.ReplaceAll(s, []byte{escape}, []byte{escape, escape})
-        }
-        return s
+	s = bytes.ReplaceAll(s, []byte("\\"[:1]), []byte("\\\\"[:2]))
+	if escape != 0 && escape != "\\"[0] {
+		s = bytes.ReplaceAll(s, []byte{escape}, []byte{escape, escape})
+	}
+	return s
 }
 
 func exportDataFromResultSetToCSVFile(oq *ExportConfig) error {
