@@ -15,6 +15,7 @@
 package bloomfilter
 
 import (
+	"sync/atomic"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -90,20 +91,21 @@ func TestCBloomFilterWithVector(t *testing.T) {
 	testVec := testutil.NewVector(cTestCount/cVecCount, types.New(types.T_int64, 0, 0), mp, false, nil)
 	defer testVec.Free(mp)
 
-	allAdd := true
+	var allAdd atomic.Bool
+	allAdd.Store(true)
 	boom.TestVector(testVec, func(exits bool, _ int) {
-		allAdd = allAdd && exits
+		allAdd.Store(allAdd.Load() && exits)
 	})
-	require.Equal(t, allAdd, true)
+	require.Equal(t, allAdd.Load(), true)
 
 	testVec2 := testutil.NewVector(int(cTestCount*1.2), types.New(types.T_int64, 0, 0), mp, false, nil)
 	defer testVec2.Free(mp)
 
-	allAdd = true
+	allAdd.Store(true)
 	boom.TestVector(testVec2, func(exits bool, _ int) {
-		allAdd = allAdd && exits
+		allAdd.Store(allAdd.Load() && exits)
 	})
-	require.Equal(t, allAdd, false)
+	require.Equal(t, allAdd.Load(), false)
 }
 
 func TestCBloomFilter_Free(t *testing.T) {
@@ -114,11 +116,12 @@ func TestCBloomFilter_Free(t *testing.T) {
 	boom := NewCBloomFilterWithProbaility(cTestCount, cTestRate)
 	boom.TestAndAddVector(vec, func(_ bool, _ int) {})
 
-	allAdd := true
+	var allAdd atomic.Bool
+	allAdd.Store(true)
 	boom.TestVector(vec, func(exits bool, _ int) {
-		allAdd = allAdd && exits
+		allAdd.Store(allAdd.Load() && exits)
 	})
-	require.Equal(t, allAdd, true)
+	require.Equal(t, allAdd.Load(), true)
 
 	boom.Free()
 	// after free, ptr is nil, it should not panic
@@ -130,11 +133,12 @@ func TestCBloomFilter_Free(t *testing.T) {
 	boom = NewCBloomFilterWithProbaility(cTestCount, cTestRate)
 	defer boom.Free()
 
-	findOne := false
+	var findOne atomic.Bool
+	findOne.Store(false)
 	boom.TestVector(vec, func(exits bool, _ int) {
-		findOne = findOne || exits
+		findOne.Store(findOne.Load() || exits)
 	})
-	require.Equal(t, findOne, false)
+	require.Equal(t, findOne.Load(), false)
 }
 
 func BenchmarkCBloomFiltrerAddVector(b *testing.B) {
@@ -216,34 +220,38 @@ func TestCBloomFilter_MarshalUnmarshalWithVector(t *testing.T) {
 	defer testVec.Free(mp)
 
 	// Test original filter
-	allFound1 := true
+	var allFound1 atomic.Bool
+	allFound1.Store(true)
 	bf1.TestVector(testVec, func(exists bool, _ int) {
-		allFound1 = allFound1 && exists
+		allFound1.Store(allFound1.Load() && exists)
 	})
 
 	// Test unmarshaled filter
-	allFound2 := true
+	var allFound2 atomic.Bool
+	allFound2.Store(true)
 	bf2.TestVector(testVec, func(exists bool, _ int) {
-		allFound2 = allFound2 && exists
+		allFound2.Store(allFound2.Load() && exists)
 	})
 
-	require.Equal(t, allFound1, allFound2, "original and unmarshaled filters should behave the same")
+	require.Equal(t, allFound1.Load(), allFound2.Load(), "original and unmarshaled filters should behave the same")
 
 	// Test with new data that wasn't added
 	newVec := testutil.NewVector(cTestCount*2, types.New(types.T_int64, 0, 0), mp, false, nil)
 	defer newVec.Free(mp)
 
-	allFoundNew1 := true
+	var allFoundNew1 atomic.Bool
+	allFoundNew1.Store(true)
 	bf1.TestVector(newVec, func(exists bool, _ int) {
-		allFoundNew1 = allFoundNew1 && exists
+		allFoundNew1.Store(allFoundNew1.Load() && exists)
 	})
 
-	allFoundNew2 := true
+	var allFoundNew2 atomic.Bool
+	allFoundNew2.Store(true)
 	bf2.TestVector(newVec, func(exists bool, _ int) {
-		allFoundNew2 = allFoundNew2 && exists
+		allFoundNew2.Store(allFoundNew2.Load() && exists)
 	})
 
-	require.Equal(t, allFoundNew1, allFoundNew2, "original and unmarshaled filters should behave the same for new data")
+	require.Equal(t, allFoundNew1.Load(), allFoundNew2.Load(), "original and unmarshaled filters should behave the same for new data")
 }
 
 func TestCBloomFilter_UnmarshalError(t *testing.T) {
