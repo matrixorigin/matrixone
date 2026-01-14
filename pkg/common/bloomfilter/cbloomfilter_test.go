@@ -38,10 +38,13 @@ func TestCBloomFilter(t *testing.T) {
 	assert.False(t, bf.Test(key3))
 
 	// Test Marshal/Unmarshal
-	data := bf.Marshal()
+	data, err := bf.Marshal()
+	assert.NoError(t, err)
 	assert.NotNil(t, data)
 
-	bf2 := UnmarshalCBloomFilter(data)
+	bf2 := &CBloomFilter{}
+	err = bf2.Unmarshal(data)
+	assert.NoError(t, err)
 	assert.NotNil(t, bf2)
 	defer bf2.Free()
 

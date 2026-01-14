@@ -25,6 +25,7 @@ import (
 	"unsafe"
 
 	_ "github.com/matrixorigin/matrixone/cgo"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 type CBloomFilter struct {
@@ -61,19 +62,19 @@ func (bf *CBloomFilter) Test(data []byte) bool {
 	return bool(C.bloomfilter_test(bf.ptr, unsafe.Pointer(&data[0]), C.size_t(len(data))))
 }
 
-func (bf *CBloomFilter) Marshal() []byte {
+func (bf *CBloomFilter) Marshal() ([]byte, error) {
 	if bf == nil || bf.ptr == nil {
-		return nil
+		return nil, nil
 	}
 	var clen C.size_t
 	dataPtr := C.bloomfilter_marshal(bf.ptr, &clen)
 	if dataPtr == nil {
-		return nil
+		return nil, moerr.NewInternalErrorNoCtx("failed to marhsal CBloomFilter")
 	}
-	return C.GoBytes(unsafe.Pointer(dataPtr), C.int(clen))
+	return C.GoBytes(unsafe.Pointer(dataPtr), C.int(clen)), nil
 }
 
-func UnmarshalCBloomFilter(data []byte) *CBloomFilter {
+func (bf *CBloomFilter) Unmarshal(data []byte) error {
 	if len(data) == 0 {
 		return nil
 	}
@@ -86,7 +87,8 @@ func UnmarshalCBloomFilter(data []byte) *CBloomFilter {
 	ptr := C.bloomfilter_unmarshal((*C.uint8_t)(cData), C.size_t(len(data)))
 	if ptr == nil {
 		C.free(cData)
-		return nil
+		panic("failed to alloc memory for CBloomFilter")
 	}
-	return &CBloomFilter{ptr: ptr}
+	bf.ptr = ptr
+	return nil
 }
