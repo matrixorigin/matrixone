@@ -195,6 +195,7 @@ func (bf *CBloomFilter) TestAndAddVector(v *vector.Vector, callBack func(bool, i
 				}
 			}
 		}
+		runtime.KeepAlive(buf)
 		return nil
 	})
 }
@@ -281,6 +282,7 @@ func (bf *CBloomFilter) TestVector(v *vector.Vector, callBack func(bool, int)) {
 				}
 			}
 		}
+		runtime.KeepAlive(buf)
 		return nil
 	})
 }
@@ -354,6 +356,7 @@ func (bf *CBloomFilter) AddVector(v *vector.Vector) {
 				}
 			}
 		}
+		runtime.KeepAlive(buf)
 		return nil
 	})
 }
