@@ -103,7 +103,7 @@ const (
 		`FROM mo_catalog.mo_ccpr_log ` +
 		`WHERE task_id = %d`
 
-	// Query mo_ccpr_log full SQL template (includes subscription_name, sync_level, account_id, db_name, table_name, upstream_conn, context)
+	// Query mo_ccpr_log full SQL template (includes subscription_name, sync_level, account_id, db_name, table_name, upstream_conn, context, error_message)
 	PublicationQueryMoCcprLogFullSqlTemplate = `SELECT ` +
 		`subscription_name, ` +
 		`sync_level, ` +
@@ -111,7 +111,8 @@ const (
 		`db_name, ` +
 		`table_name, ` +
 		`upstream_conn, ` +
-		`context ` +
+		`context, ` +
+		`error_message ` +
 		`FROM mo_catalog.mo_ccpr_log ` +
 		`WHERE task_id = %d`
 
@@ -267,6 +268,7 @@ var PublicationSQLTemplates = [PublicationSqlTemplateCount]struct {
 			"table_name",
 			"upstream_conn",
 			"context",
+			"error_message",
 		},
 	},
 	PublicationQuerySnapshotTsSqlTemplate_Idx: {

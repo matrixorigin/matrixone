@@ -94,6 +94,10 @@ type IterationContextJSON struct {
 	IndexTableMappings  map[string]string          `json:"index_table_mappings"` // IndexTableMappings as serializable map (key is upstream_index_table_name, value is downstream_index_table_name)
 }
 
+func (iterCtx *IterationContext) String() string {
+	return fmt.Sprintf("%d-%d", iterCtx.TaskID, iterCtx.IterationLSN)
+}
+
 // InitializeIterationContext initializes IterationContext from mo_ccpr_log table
 // It reads subscription_name, srcinfo, upstream_conn, and context from the table,
 // creates local executor and upstream executor, creates a local transaction,
@@ -160,6 +164,7 @@ func InitializeIterationContext(
 	var tableName sql.NullString
 	var upstreamConn sql.NullString
 	var contextJSON sql.NullString
+	var errorMessage sql.NullString
 
 	if !result.Next() {
 		if err := result.Err(); err != nil {
@@ -168,7 +173,7 @@ func InitializeIterationContext(
 		return nil, moerr.NewInternalErrorf(ctx, "no rows returned for task_id %d", taskID)
 	}
 
-	if err := result.Scan(&subscriptionName, &syncLevel, &accountID, &dbName, &tableName, &upstreamConn, &contextJSON); err != nil {
+	if err := result.Scan(&subscriptionName, &syncLevel, &accountID, &dbName, &tableName, &upstreamConn, &contextJSON, &errorMessage); err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "failed to scan query result: %v", err)
 	}
 
@@ -270,6 +275,12 @@ func InitializeIterationContext(
 		}
 
 	}
+	// Parse error message if available
+	var errorMetadata *ErrorMetadata
+	if errorMessage.Valid && errorMessage.String != "" {
+		errorMetadata = Parse(errorMessage.String)
+	}
+
 	// Initialize IterationContext
 	iterationCtx := &IterationContext{
 		TaskID:             taskID,
@@ -282,6 +293,7 @@ func InitializeIterationContext(
 		ActiveAObj:         make(map[objectio.ObjectId]AObjMapping),
 		TableIDs:           make(map[TableKey]uint64),
 		IndexTableMappings: make(map[string]string),
+		ErrorMetadata:      errorMetadata,
 	}
 
 	// Parse context JSON if available
@@ -1276,6 +1288,18 @@ func ExecuteIteration(
 				err = moerr.NewInternalErrorf(ctx, "failed to close iteration context: %v; previous error: %v", commitErr, err)
 			} else {
 				err = moerr.NewInternalErrorf(ctx, "failed to close iteration context: %v", commitErr)
+			}
+			retryable := IsRetryableError(err)
+			errorMetadata := BuildErrorMetadata(iterationCtx.ErrorMetadata, err, retryable)
+			errorMsg := errorMetadata.Format()
+			if err = UpdateIterationState(ctx, iterationCtx.LocalExecutor, taskID, IterationStateError, iterationLSN, iterationCtx, errorMsg); err != nil {
+				// Log error but don't override the original error
+				err = moerr.NewInternalErrorf(ctx, "failed to update iteration state: %v", err)
+				logutil.Error(
+					"ccpr-iteration failed to update iteration state",
+					zap.Error(err),
+					zap.String("task", iterationCtx.String()),
+				)
 			}
 		}
 	}()

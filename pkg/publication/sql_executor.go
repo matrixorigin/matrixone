@@ -17,16 +17,13 @@ package publication
 import (
 	"context"
 	sql "database/sql"
-	"database/sql/driver"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
-	"net"
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -37,7 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/mysql"
 	"go.uber.org/zap"
 )
 
@@ -747,14 +743,12 @@ func (e *UpstreamExecutor) execWithRetry(
 			return nil
 		}
 
-		reason := classifyRetryReason(err)
 		lastErr = err
 
 		logutil.Error(
 			"publication.executor.retry_failed",
 			zap.Int("attempt", attempt),
 			zap.Error(err),
-			zap.String("reason", reason),
 		)
 
 		if e.circuitBreaker != nil {
@@ -763,7 +757,6 @@ func (e *UpstreamExecutor) execWithRetry(
 					logutil.Warn("publication.executor.retry_circuit_opened",
 						zap.String("sink", sinkLabel),
 						zap.Int("attempt", attempt),
-						zap.String("reason", reason),
 					)
 				}
 				return retry.ErrCircuitOpen
@@ -775,12 +768,11 @@ func (e *UpstreamExecutor) execWithRetry(
 
 	if err == nil {
 		if attempt > 1 && lastErr != nil {
-			reason := classifyRetryReason(lastErr)
 			logutil.Info(
 				"publication.executor.retry_success",
 				zap.Int("attempts", attempt),
 				zap.Duration("total-duration", time.Since(start)),
-				zap.String("reason", reason),
+				zap.Error(lastErr),
 			)
 		}
 		return lastResult, nil
@@ -791,15 +783,10 @@ func (e *UpstreamExecutor) execWithRetry(
 	}
 
 	if errors.Is(err, retry.ErrNonRetryable) {
-		reason := "duration_limit"
-		if lastErr != nil {
-			reason = classifyRetryReason(lastErr)
-		}
 		logutil.Error(
 			"publication.executor.retry_exhausted",
 			zap.Int("attempts", attempt),
 			zap.Duration("total-duration", time.Since(start)),
-			zap.String("reason", reason),
 			zap.Error(lastErr),
 		)
 		return nil, moerr.NewInternalError(ctx, "retry limit exceeded")
@@ -844,46 +831,6 @@ func (e *UpstreamExecutor) calculateMaxAttempts() int {
 		attempts = 1
 	}
 	return attempts
-}
-
-func classifyRetryReason(err error) string {
-	if err == nil {
-		return "unknown"
-	}
-
-	if errors.Is(err, context.DeadlineExceeded) {
-		return "context_deadline"
-	}
-	if errors.Is(err, driver.ErrBadConn) {
-		return "bad_conn"
-	}
-	if errors.Is(err, syscall.ECONNRESET) {
-		return "conn_reset"
-	}
-	if errors.Is(err, syscall.EPIPE) {
-		return "broken_pipe"
-	}
-
-	var netErr net.Error
-	if errors.As(err, &netErr) {
-		if netErr.Timeout() {
-			return "net_timeout"
-		}
-		type temporary interface {
-			Temporary() bool
-		}
-		if tmp, ok := netErr.(temporary); ok && tmp.Temporary() {
-			return "net_temporary"
-		}
-		return "net_error"
-	}
-
-	var mysqlErr *mysql.MySQLError
-	if errors.As(err, &mysqlErr) {
-		return "mysql_" + strconv.FormatUint(uint64(mysqlErr.Number), 10)
-	}
-
-	return "unknown"
 }
 
 // HasActiveTx returns true if there's an active transaction
