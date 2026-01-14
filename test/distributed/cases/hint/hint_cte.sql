@@ -184,7 +184,7 @@ FROM yearly_revenue r1
 LEFT JOIN yearly_revenue r2 ON r1.`年份` = r2.`年份` + 1
 ORDER BY r1.`年份`;
 
-drop database jst_flat_table;
+drop database jst_flat_table1;
 use hint_cte_test;
 drop database hint_cte_test;
 set enable_remap_hint = 0;
