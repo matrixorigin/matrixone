@@ -74,59 +74,10 @@ union all
 select n + 1 from cte where n < 3
 )
 select * from cte order by n;
-SQL parser error: Column remapping failed: cannot find column reference
-❌ Missing Column:
-   Position: [RelPos=0, ColPos=0]
-   Name: hint_cte_test.t1.id
-
-📍 Context:
-   Step: 0
-   Node ID: 12
-   Node Type: PROJECT
-   Tip: neededProj
-   Expression Index: 0
-
-🔍 Related Expression:
-   
-Expr_Col(id.0)
-
-🔧 Optimization History:
-   - pushdownFilters:before (nodeID: 13, nodeType: SINK, filters: 0)
-   - pushdownFilters:before (nodeID: 12, nodeType: PROJECT, filters: 0)
-   - pushdownFilters:before (nodeID: 11, nodeType: PROJECT, filters: 0)
-   - pushdownFilters:before (nodeID: 10, nodeType: FILTER, filters: 0)
-   - pushdownFilters:before (nodeID: 9, nodeType: TABLE_SCAN, filters: 1)
-   - pushdownFilters:middle (nodeID: 9, TABLE_SCAN, filters: 1)
-   - pushdownFilters:after (nodeID: 9, no change, cantPushdown: 0)
-   - pushdownFilters:after (nodeID: 10 -> 9, cantPushdown: 0)
-   - pushdownFilters:after (nodeID: 11, no change, cantPushdown: 0)
-   - pushdownFilters:after (nodeID: 12, no change, cantPushdown: 0)
-   - pushdownFilters:after (nodeID: 13, no change, cantPushdown: 0)
-   - pushdownFilters:before (nodeID: 17, nodeType: SINK, filters: 0)
-   - pushdownFilters:before (nodeID: 16, nodeType: PROJECT, filters: 0)
-   - pushdownFilters:before (nodeID: 15, nodeType: FILTER, filters: 0)
-   - pushdownFilters:before (nodeID: 14, nodeType: RECURSIVE_SCAN, filters: 1)
-   - pushdownFilters:after (nodeID: 14, no change, cantPushdown: 1)
-   - pushdownFilters:after (nodeID: 15, no change, cantPushdown: 0)
-   - pushdownFilters:after (nodeID: 16, no change, cantPushdown: 0)
-   - pushdownFilters:after (nodeID: 17, no change, cantPushdown: 0)
-   - pushdownFilters:before (nodeID: 19, nodeType: SINK, filters: 0)
-   - pushdownFilters:before (nodeID: 18, nodeType: RECURSIVE_CTE, filters: 0)
-   - pushdownFilters:after (nodeID: 18, no change, cantPushdown: 0)
-   - pushdownFilters:after (nodeID: 19, no change, cantPushdown: 0)
-   - pushdownFilters:before (nodeID: 23, nodeType: PROJECT, filters: 0)
-   - pushdownFilters:before (nodeID: 22, nodeType: SORT, filters: 0)
-   - pushdownFilters:before (nodeID: 21, nodeType: PROJECT, filters: 0)
-   - pushdownFilters:before (nodeID: 20, nodeType: SINK_SCAN, filters: 0)
-   - pushdownFilters:after (nodeID: 20, no change, cantPushdown: 0)
-   - pushdownFilters:after (nodeID: 21, no change, cantPushdown: 0)
-   - pushdownFilters:after (nodeID: 22, no change, cantPushdown: 0)
-   - pushdownFilters:after (nodeID: 23, no change, cantPushdown: 0)
-
-✅ Available Columns in Context:
-   [RelPos=34, ColPos=0] -> t1.id
-
-
+n
+1
+2
+3
 /*+ {
 "rewrites": {
 "hint_cte_test.t1": "SELECT * FROM t1 WHERE age > 25"
