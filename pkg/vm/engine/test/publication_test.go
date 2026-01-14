@@ -29,9 +29,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/publication"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -1460,4 +1462,307 @@ func TestGetObjectChunk(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(partialSize), int64(len(partialChunk)))
 	require.Equal(t, largeContent[0:partialSize], partialChunk)
+}
+
+func TestExecuteIterationWithSnapshotFinishedInjection(t *testing.T) {
+	catalog.SetupDefines("")
+
+	var (
+		srcAccountID  = catalog.System_Account
+		destAccountID = uint32(2)
+		cnUUID        = ""
+	)
+
+	// Setup source account context
+	srcCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	srcCtx = context.WithValue(srcCtx, defines.TenantIDKey{}, srcAccountID)
+	srcCtxWithTimeout, cancelSrc := context.WithTimeout(srcCtx, time.Minute*5)
+	defer cancelSrc()
+
+	// Setup destination account context
+	destCtx, cancelDest := context.WithCancel(context.Background())
+	defer cancelDest()
+	destCtx = context.WithValue(destCtx, defines.TenantIDKey{}, destAccountID)
+	destCtxWithTimeout, cancelDestTimeout := context.WithTimeout(destCtx, time.Minute*5)
+	defer cancelDestTimeout()
+
+	// Create engines with source account context
+	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(srcCtx, testutil.TestOptions{}, t)
+	defer func() {
+		disttaeEngine.Close(srcCtx)
+		taeHandler.Close(true)
+		rpcAgent.Close()
+	}()
+
+	// Register mock auto increment service
+	mockIncrService := NewMockAutoIncrementService(cnUUID)
+	incrservice.SetAutoIncrementServiceByID("", mockIncrService)
+	defer mockIncrService.Close()
+
+	// Create mo_indexes table for source account
+	err := exec_sql(disttaeEngine, srcCtxWithTimeout, frontend.MoCatalogMoIndexesDDL)
+	require.NoError(t, err)
+
+	// Create mo_ccpr_log table using system account context
+	systemCtx := context.WithValue(srcCtxWithTimeout, defines.TenantIDKey{}, catalog.System_Account)
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprLogDDL)
+	require.NoError(t, err)
+
+	// Create mo_snapshots table for source account
+	moSnapshotsDDL := frontend.MoCatalogMoSnapshotsDDL
+	err = exec_sql(disttaeEngine, srcCtxWithTimeout, moSnapshotsDDL)
+	require.NoError(t, err)
+
+	// Create system tables for destination account
+	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoIndexesDDL)
+	require.NoError(t, err)
+
+	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoTablePartitionsDDL)
+	require.NoError(t, err)
+
+	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoAutoIncrTableDDL)
+	require.NoError(t, err)
+
+	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoForeignKeysDDL)
+	require.NoError(t, err)
+
+	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoSnapshotsDDL)
+	require.NoError(t, err)
+
+	// Step 1: Create source database and table in source account
+	srcDBName := "src_db"
+	srcTableName := "src_table"
+	schema := catalog2.MockSchemaAll(4, 3)
+	schema.Name = srcTableName
+
+	// Create database and table in source account
+	txn, err := disttaeEngine.NewTxnOperator(srcCtxWithTimeout, disttaeEngine.Now())
+	require.NoError(t, err)
+
+	err = disttaeEngine.Engine.Create(srcCtxWithTimeout, srcDBName, txn)
+	require.NoError(t, err)
+
+	db, err := disttaeEngine.Engine.Database(srcCtxWithTimeout, srcDBName, txn)
+	require.NoError(t, err)
+
+	defs, err := testutil.EngineTableDefBySchema(schema)
+	require.NoError(t, err)
+
+	err = db.Create(srcCtxWithTimeout, srcTableName, defs)
+	require.NoError(t, err)
+
+	rel, err := db.Relation(srcCtxWithTimeout, srcTableName, nil)
+	require.NoError(t, err)
+
+	// Insert data into source table
+	bat := catalog2.MockBatch(schema, 10)
+	defer bat.Close()
+	err = rel.Write(srcCtxWithTimeout, containers.ToCNBatch(bat))
+	require.NoError(t, err)
+
+	err = txn.Commit(srcCtxWithTimeout)
+	require.NoError(t, err)
+
+	// Step 2: Write mo_ccpr_log table in destination account context
+	taskID := uint64(1)
+	iterationLSN := uint64(1)
+	subscriptionName := "test_subscription_injection"
+	insertSQL := fmt.Sprintf(
+		`INSERT INTO mo_catalog.mo_ccpr_log (
+			task_id, 
+			subscription_name, 
+			sync_level, 
+			account_id,
+			db_name, 
+			table_name, 
+			upstream_conn, 
+			sync_config, 
+			iteration_state, 
+			iteration_lsn, 
+			cn_uuid
+		) VALUES (
+			%d, 
+			'%s', 
+			'table', 
+			%d,
+			'%s', 
+			'%s', 
+			'%s', 
+			'{}', 
+			%d, 
+			%d, 
+			'%s'
+		)`,
+		taskID,
+		subscriptionName,
+		destAccountID,
+		srcDBName,
+		srcTableName,
+		fmt.Sprintf("%s:%d", publication.InternalSQLExecutorType, srcAccountID),
+		publication.IterationStatePending,
+		iterationLSN,
+		cnUUID,
+	)
+
+	// Write mo_ccpr_log using system account context
+	err = exec_sql(disttaeEngine, systemCtx, insertSQL)
+	require.NoError(t, err)
+
+	// Step 3: Create upstream SQL helper factory
+	upstreamSQLHelperFactory := func(
+		txnOp client.TxnOperator,
+		engine engine.Engine,
+		accountID uint32,
+		exec executor.SQLExecutor,
+		txnClient client.TxnClient,
+	) publication.UpstreamSQLHelper {
+		return NewUpstreamSQLHelper(txnOp, engine, accountID, exec, txnClient)
+	}
+
+	// Create mpool for ExecuteIteration
+	mp, err := mpool.NewMPool("test_execute_iteration_injection", 0, mpool.NoFixed)
+	require.NoError(t, err)
+
+	// Step 4: Create UTHelper for checkpointing
+	checkpointDone := make(chan struct{}, 1)
+	utHelper := &checkpointUTHelper{
+		taeHandler:    taeHandler,
+		disttaeEngine: disttaeEngine,
+		checkpointC:   checkpointDone,
+	}
+
+	// Enable fault injection
+	fault.Enable()
+	defer fault.Disable()
+
+	// First iteration: Inject error to trigger failure
+	rmFn, err := objectio.InjectPublicationSnapshotFinished("publicationSnapshotFinished")
+	require.NoError(t, err)
+	defer rmFn()
+
+	// Execute first ExecuteIteration - should fail due to injection
+	err = publication.ExecuteIteration(
+		srcCtxWithTimeout,
+		cnUUID,
+		disttaeEngine.Engine,
+		disttaeEngine.GetTxnClient(),
+		taskID,
+		iterationLSN,
+		upstreamSQLHelperFactory,
+		mp,
+		utHelper,
+		100*time.Millisecond, // snapshotFlushInterval for test
+	)
+
+	// Signal checkpoint goroutine to stop
+	close(checkpointDone)
+
+	// First iteration should fail with injection error
+	require.Error(t, err, "First ExecuteIteration should fail due to injection")
+	require.Contains(t, err.Error(), "publicationSnapshotFinished", "Error should contain injection message")
+
+	// Remove the injection for second iteration
+	rmFn()
+
+	// Step 5: Update iteration state for second iteration
+	iterationLSN2 := uint64(2)
+	updateSQL := fmt.Sprintf(
+		`UPDATE mo_catalog.mo_ccpr_log 
+		SET iteration_state = %d, iteration_lsn = %d 
+		WHERE task_id = %d`,
+		publication.IterationStatePending,
+		iterationLSN2,
+		taskID,
+	)
+
+	// Update mo_ccpr_log using system account context
+	err = exec_sql(disttaeEngine, systemCtx, updateSQL)
+	require.NoError(t, err)
+
+	// Create new checkpoint channel for second iteration
+	checkpointDone2 := make(chan struct{}, 1)
+	utHelper2 := &checkpointUTHelper{
+		taeHandler:    taeHandler,
+		disttaeEngine: disttaeEngine,
+		checkpointC:   checkpointDone2,
+	}
+
+	// Second iteration: No injection, should succeed
+	err = publication.ExecuteIteration(
+		srcCtxWithTimeout,
+		cnUUID,
+		disttaeEngine.Engine,
+		disttaeEngine.GetTxnClient(),
+		taskID,
+		iterationLSN2,
+		upstreamSQLHelperFactory,
+		mp,
+		utHelper2,
+		100*time.Millisecond, // snapshotFlushInterval for test
+	)
+
+	// Signal checkpoint goroutine to stop
+	close(checkpointDone2)
+
+	// Second iteration should succeed
+	require.NoError(t, err, "Second ExecuteIteration should complete successfully")
+
+	// Step 6: Verify that the iteration state was updated
+	querySQL := fmt.Sprintf(
+		`SELECT iteration_state, iteration_lsn FROM mo_catalog.mo_ccpr_log WHERE task_id = %d`,
+		taskID,
+	)
+
+	v, ok := runtime.ServiceRuntime("").GetGlobalVariables(runtime.InternalSQLExecutor)
+	require.True(t, ok)
+	exec := v.(executor.SQLExecutor)
+
+	querySystemCtx := context.WithValue(destCtxWithTimeout, defines.TenantIDKey{}, catalog.System_Account)
+	txn, err = disttaeEngine.NewTxnOperator(querySystemCtx, disttaeEngine.Now())
+	require.NoError(t, err)
+
+	res, err := exec.Exec(querySystemCtx, querySQL, executor.Options{}.WithTxn(txn))
+	require.NoError(t, err)
+	defer res.Close()
+
+	// Check that iteration_state is completed
+	var found bool
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		require.Equal(t, 1, rows)
+		require.Equal(t, 2, len(cols))
+
+		state := vector.GetFixedAtWithTypeCheck[int8](cols[0], 0)
+		lsn := vector.GetFixedAtWithTypeCheck[int64](cols[1], 0)
+
+		require.Equal(t, publication.IterationStateCompleted, state)
+		require.Equal(t, int64(iterationLSN2), lsn)
+		found = true
+		return true
+	})
+	require.True(t, found, "should find the updated iteration record")
+
+	err = txn.Commit(querySystemCtx)
+	require.NoError(t, err)
+
+	// Step 7: Check destination table row count - verify second iteration succeeded
+	checkRowCountSQL := fmt.Sprintf(`SELECT COUNT(*) FROM %s.%s`, srcDBName, srcTableName)
+	queryDestCtx := context.WithValue(destCtxWithTimeout, defines.TenantIDKey{}, destAccountID)
+	txn, err = disttaeEngine.NewTxnOperator(queryDestCtx, disttaeEngine.Now())
+	require.NoError(t, err)
+
+	rowCountRes, err := exec.Exec(queryDestCtx, checkRowCountSQL, executor.Options{}.WithTxn(txn))
+	require.NoError(t, err)
+	defer rowCountRes.Close()
+
+	var rowCount int64
+	rowCountRes.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		require.Equal(t, 1, rows)
+		require.Equal(t, 1, len(cols))
+		rowCount = vector.GetFixedAtWithTypeCheck[int64](cols[0], 0)
+		return true
+	})
+	require.Equal(t, int64(10), rowCount, "destination table should have 10 rows after second iteration")
+	err = txn.Commit(queryDestCtx)
+	require.NoError(t, err)
 }

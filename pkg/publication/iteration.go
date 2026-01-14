@@ -1349,6 +1349,12 @@ func ExecuteIteration(
 		return
 	}
 
+	// Injection point: on snapshot finished
+	if msg, injected := objectio.PublicationSnapshotFinishedInjected(); injected && msg == "publicationSnapshotFinished" {
+		err = moerr.NewInternalErrorNoCtx(msg)
+		return
+	}
+
 	// Defer to drop snapshot if error occurs
 	defer func() {
 		if err != nil && iterationCtx.CurrentSnapshotName != "" {
