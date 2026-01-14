@@ -21,11 +21,15 @@ package bloomfilter
 */
 import "C"
 import (
+	"context"
 	"runtime"
 	"unsafe"
 
 	_ "github.com/matrixorigin/matrixone/cgo"
+	"github.com/matrixorigin/matrixone/pkg/common/concurrent"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
 type CBloomFilter struct {
@@ -102,4 +106,262 @@ func (bf *CBloomFilter) Unmarshal(data []byte) error {
 	}
 	bf.ptr = ptr
 	return nil
+}
+
+// test and add all element in the vector.Vector to the bloom filter
+// call the callback function for all elements in the vector.Vector
+// use concurrent.ThreadPoolExecutor to process the vector.Vector
+func (bf *CBloomFilter) TestAndAddVector(v *vector.Vector, callBack func(bool, int)) {
+	if bf == nil || bf.ptr == nil {
+		return
+	}
+	executor := concurrent.NewThreadPoolExecutor(0)
+
+	isFixed := v.GetType().IsFixedLen()
+	var fixedData []byte
+	var typeSize int
+	var varlenData []types.Varlena
+	var area []byte
+
+	if isFixed {
+		fixedData = v.GetData()
+		typeSize = v.GetType().TypeSize()
+	} else {
+		varlenData = vector.MustFixedColWithTypeCheck[types.Varlena](v)
+		area = v.GetArea()
+	}
+
+	_ = executor.Execute(context.TODO(), v.Length(), func(ctx context.Context, thread_id int, start, end int) error {
+		buf := make([]byte, 0, 64)
+		if isFixed {
+			if !v.GetNulls().Any() {
+				for i := start; i < end; i++ {
+					buf = buf[:0]
+					buf = append(buf, 0)
+					idx := i * typeSize
+					buf = append(buf, fixedData[idx : idx+typeSize]...)
+					found := C.bloomfilter_test_and_add(bf.ptr, unsafe.Pointer(&buf[0]), C.size_t(len(buf)))
+					if callBack != nil {
+						callBack(bool(found), i)
+					}
+				}
+			} else {
+				nulls := v.GetNulls()
+				for i := start; i < end; i++ {
+					buf = buf[:0]
+					if nulls.Contains(uint64(i)) {
+						buf = append(buf, 1)
+					} else {
+						buf = append(buf, 0)
+						idx := i * typeSize
+						buf = append(buf, fixedData[idx : idx+typeSize]...)
+					}
+					found := C.bloomfilter_test_and_add(bf.ptr, unsafe.Pointer(&buf[0]), C.size_t(len(buf)))
+					if callBack != nil {
+						callBack(bool(found), i)
+					}
+				}
+			}
+		} else {
+			if !v.GetNulls().Any() {
+				for i := start; i < end; i++ {
+					buf = buf[:0]
+					buf = append(buf, 0)
+					buf = append(buf, varlenData[i].GetByteSlice(area)...)
+					found := C.bloomfilter_test_and_add(bf.ptr, unsafe.Pointer(&buf[0]), C.size_t(len(buf)))
+					if callBack != nil {
+						callBack(bool(found), i)
+					}
+				}
+			} else {
+				nulls := v.GetNulls()
+				for i := start; i < end; i++ {
+					buf = buf[:0]
+					if nulls.Contains(uint64(i)) {
+						buf = append(buf, 1)
+					} else {
+						buf = append(buf, 0)
+						buf = append(buf, varlenData[i].GetByteSlice(area)...)
+					}
+					found := C.bloomfilter_test_and_add(bf.ptr, unsafe.Pointer(&buf[0]), C.size_t(len(buf)))
+					if callBack != nil {
+						callBack(bool(found), i)
+					}
+				}
+			}
+		}
+		return nil
+	})
+}
+
+// test all element in the vector.Vector to the bloom filter
+// call the callback function for all elements in the vector.Vector
+// use concurrent.ThreadPoolExecutor to process the vector.Vector
+func (bf *CBloomFilter) TestVector(v *vector.Vector, callBack func(bool, int)) {
+	if bf == nil || bf.ptr == nil {
+		return
+	}
+	executor := concurrent.NewThreadPoolExecutor(0)
+
+	isFixed := v.GetType().IsFixedLen()
+	var fixedData []byte
+	var typeSize int
+	var varlenData []types.Varlena
+	var area []byte
+
+	if isFixed {
+		fixedData = v.GetData()
+		typeSize = v.GetType().TypeSize()
+	} else {
+		varlenData = vector.MustFixedColWithTypeCheck[types.Varlena](v)
+		area = v.GetArea()
+	}
+
+	_ = executor.Execute(context.TODO(), v.Length(), func(ctx context.Context, thread_id int, start, end int) error {
+		buf := make([]byte, 0, 64)
+		if isFixed {
+			if !v.GetNulls().Any() {
+				for i := start; i < end; i++ {
+					buf = buf[:0]
+					buf = append(buf, 0)
+					idx := i * typeSize
+					buf = append(buf, fixedData[idx : idx+typeSize]...)
+					found := C.bloomfilter_test(bf.ptr, unsafe.Pointer(&buf[0]), C.size_t(len(buf)))
+					if callBack != nil {
+						callBack(bool(found), i)
+					}
+				}
+			} else {
+				nulls := v.GetNulls()
+				for i := start; i < end; i++ {
+					buf = buf[:0]
+					if nulls.Contains(uint64(i)) {
+						buf = append(buf, 1)
+					} else {
+						buf = append(buf, 0)
+						idx := i * typeSize
+						buf = append(buf, fixedData[idx : idx+typeSize]...)
+					}
+					found := C.bloomfilter_test(bf.ptr, unsafe.Pointer(&buf[0]), C.size_t(len(buf)))
+					if callBack != nil {
+						callBack(bool(found), i)
+					}
+				}
+			}
+		} else {
+			if !v.GetNulls().Any() {
+				for i := start; i < end; i++ {
+					buf = buf[:0]
+					buf = append(buf, 0)
+					buf = append(buf, varlenData[i].GetByteSlice(area)...)
+					found := C.bloomfilter_test(bf.ptr, unsafe.Pointer(&buf[0]), C.size_t(len(buf)))
+					if callBack != nil {
+						callBack(bool(found), i)
+					}
+				}
+			} else {
+				nulls := v.GetNulls()
+				for i := start; i < end; i++ {
+					buf = buf[:0]
+					if nulls.Contains(uint64(i)) {
+						buf = append(buf, 1)
+					} else {
+						buf = append(buf, 0)
+						buf = append(buf, varlenData[i].GetByteSlice(area)...)
+					}
+					found := C.bloomfilter_test(bf.ptr, unsafe.Pointer(&buf[0]), C.size_t(len(buf)))
+					if callBack != nil {
+						callBack(bool(found), i)
+					}
+				}
+			}
+		}
+		return nil
+	})
+}
+
+// add all element in the vector.Vector to the bloom filter
+// call the callback function for all elements in the vector.Vector
+// use concurrent.ThreadPoolExecutor to process the vector.Vector
+func (bf *CBloomFilter) AddVector(v *vector.Vector, callBack func(bool, int)) {
+	if bf == nil || bf.ptr == nil {
+		return
+	}
+	executor := concurrent.NewThreadPoolExecutor(0)
+
+	isFixed := v.GetType().IsFixedLen()
+	var fixedData []byte
+	var typeSize int
+	var varlenData []types.Varlena
+	var area []byte
+
+	if isFixed {
+		fixedData = v.GetData()
+		typeSize = v.GetType().TypeSize()
+	} else {
+		varlenData = vector.MustFixedColWithTypeCheck[types.Varlena](v)
+		area = v.GetArea()
+	}
+
+	_ = executor.Execute(context.TODO(), v.Length(), func(ctx context.Context, thread_id int, start, end int) error {
+		buf := make([]byte, 0, 64)
+		if isFixed {
+			if !v.GetNulls().Any() {
+				for i := start; i < end; i++ {
+					buf = buf[:0]
+					buf = append(buf, 0)
+					idx := i * typeSize
+					buf = append(buf, fixedData[idx : idx+typeSize]...)
+					C.bloomfilter_add(bf.ptr, unsafe.Pointer(&buf[0]), C.size_t(len(buf)))
+					if callBack != nil {
+						callBack(false, i)
+					}
+				}
+			} else {
+				nulls := v.GetNulls()
+				for i := start; i < end; i++ {
+					buf = buf[:0]
+					if nulls.Contains(uint64(i)) {
+						buf = append(buf, 1)
+					} else {
+						buf = append(buf, 0)
+						idx := i * typeSize
+						buf = append(buf, fixedData[idx : idx+typeSize]...)
+					}
+					C.bloomfilter_add(bf.ptr, unsafe.Pointer(&buf[0]), C.size_t(len(buf)))
+					if callBack != nil {
+						callBack(false, i)
+					}
+				}
+			}
+		} else {
+			if !v.GetNulls().Any() {
+				for i := start; i < end; i++ {
+					buf = buf[:0]
+					buf = append(buf, 0)
+					buf = append(buf, varlenData[i].GetByteSlice(area)...)
+					C.bloomfilter_add(bf.ptr, unsafe.Pointer(&buf[0]), C.size_t(len(buf)))
+					if callBack != nil {
+						callBack(false, i)
+					}
+				}
+			} else {
+				nulls := v.GetNulls()
+				for i := start; i < end; i++ {
+					buf = buf[:0]
+					if nulls.Contains(uint64(i)) {
+						buf = append(buf, 1)
+					} else {
+						buf = append(buf, 0)
+						buf = append(buf, varlenData[i].GetByteSlice(area)...)
+					}
+					C.bloomfilter_add(bf.ptr, unsafe.Pointer(&buf[0]), C.size_t(len(buf)))
+					if callBack != nil {
+						callBack(false, i)
+					}
+				}
+			}
+		}
+		return nil
+	})
 }
