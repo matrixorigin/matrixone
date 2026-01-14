@@ -21,6 +21,8 @@
 #define XXH_INLINE_ALL
 #include "xxhash.h"
 
+#define MAX_STACK_K 64
+
 typedef struct {
     uint64_t h1;
     uint64_t h2;
@@ -58,48 +60,96 @@ bloomfilter_t* bloomfilter_init(uint64_t nbits, uint32_t k) {
     
     memset(bf->bitmap, 0, nbytes);
     bloomfilter_setup(bf, nbits, k);
+    pthread_mutex_init(&bf->mutex, NULL);
     return bf;
 }
 
 void bloomfilter_free(bloomfilter_t *bf) {
-    if (bf) free(bf);
+    if (bf) {
+        pthread_mutex_destroy(&bf->mutex);
+        free(bf);
+    }
 }
 
 void bloomfilter_add(const bloomfilter_t *bf, const void *key, size_t len) {
     if (bf->nbits == 0) return;
 
+    uint64_t stack_pos[MAX_STACK_K];
+    uint64_t *pos = stack_pos;
+    if (bf->k > MAX_STACK_K) {
+        pos = (uint64_t*)malloc(sizeof(uint64_t) * bf->k);
+        if (!pos) return;
+    }
+
     for (int i = 0; i < bf->k; i++) {
         bloom_hash_t h = bloom_calculate_hash(key, len, bf->seeds[i]);
-        uint64_t pos = bloom_calculate_pos(h, i, bf->nbits);
-        bitmap_set((uint64_t *) bf->bitmap, pos);
+        pos[i] = bloom_calculate_pos(h, i, bf->nbits);
     }
+
+    pthread_mutex_lock((pthread_mutex_t*)&bf->mutex);
+    for (int i = 0; i < bf->k; i++) {
+        bitmap_set((uint64_t *) bf->bitmap, pos[i]);
+    }
+    pthread_mutex_unlock((pthread_mutex_t*)&bf->mutex);
+
+    if (pos != stack_pos) free(pos);
 }
 
 bool bloomfilter_test(const bloomfilter_t *bf, const void *key, size_t len) {
     if (bf->nbits == 0) return false;
 
+    uint64_t stack_pos[MAX_STACK_K];
+    uint64_t *pos = stack_pos;
+    if (bf->k > MAX_STACK_K) {
+        pos = (uint64_t*)malloc(sizeof(uint64_t) * bf->k);
+        if (!pos) return false;
+    }
+
     for (int i = 0; i < bf->k; i++) {
         bloom_hash_t h = bloom_calculate_hash(key, len, bf->seeds[i]);
-        uint64_t pos = bloom_calculate_pos(h, i, bf->nbits);
-        if (!bitmap_test((uint64_t*)bf->bitmap, pos)) {
-            return false;
+        pos[i] = bloom_calculate_pos(h, i, bf->nbits);
+    }
+
+    bool result = true;
+    pthread_mutex_lock((pthread_mutex_t*)&bf->mutex);
+    for (int i = 0; i < bf->k; i++) {
+        if (!bitmap_test((uint64_t*)bf->bitmap, pos[i])) {
+            result = false;
+            break;
         }
     }
-    return true;
+    pthread_mutex_unlock((pthread_mutex_t*)&bf->mutex);
+
+    if (pos != stack_pos) free(pos);
+    return result;
 }
 
 bool bloomfilter_test_and_add(const bloomfilter_t *bf, const void *key, size_t len) {
     if (bf->nbits == 0) return false;
 
-    bool all_set = true;
+    uint64_t stack_pos[MAX_STACK_K];
+    uint64_t *pos = stack_pos;
+    if (bf->k > MAX_STACK_K) {
+        pos = (uint64_t*)malloc(sizeof(uint64_t) * bf->k);
+        if (!pos) return false;
+    }
+
     for (int i = 0; i < bf->k; i++) {
         bloom_hash_t h = bloom_calculate_hash(key, len, bf->seeds[i]);
-        uint64_t pos = bloom_calculate_pos(h, i, bf->nbits);
-        if (!bitmap_test((uint64_t*)bf->bitmap, pos)) {
+        pos[i] = bloom_calculate_pos(h, i, bf->nbits);
+    }
+
+    bool all_set = true;
+    pthread_mutex_lock((pthread_mutex_t*)&bf->mutex);
+    for (int i = 0; i < bf->k; i++) {
+        if (!bitmap_test((uint64_t*)bf->bitmap, pos[i])) {
             all_set = false;
-            bitmap_set((uint64_t*)bf->bitmap, pos);
+            bitmap_set((uint64_t*)bf->bitmap, pos[i]);
         }
     }
+    pthread_mutex_unlock((pthread_mutex_t*)&bf->mutex);
+
+    if (pos != stack_pos) free(pos);
     return all_set;
 }
 
@@ -120,5 +170,6 @@ bloomfilter_t* bloomfilter_unmarshal(const uint8_t *buf, size_t len) {
     if (memcmp(bf->magic, BLOOM_MAGIC, 4) != 0) {
         return NULL;
     }
+    pthread_mutex_init(&bf->mutex, NULL);
     return bf;
 }

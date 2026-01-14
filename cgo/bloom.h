@@ -20,6 +20,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
+#include <pthread.h>
 
 #define BLOOM_MAGIC "XXBF"
 
@@ -36,6 +37,7 @@ typedef struct {
     uint32_t k;
     uint64_t nbits;
     uint64_t seeds[3];
+    pthread_mutex_t mutex;
     uint64_t bitmap[1];
 } bloomfilter_t;
 
