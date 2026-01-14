@@ -729,6 +729,145 @@ func doDropCcprSubscription(ctx context.Context, ses *Session, dcs *tree.DropCcp
 	return nil
 }
 
+func doResumeCcprSubscription(ctx context.Context, ses *Session, rcs *tree.ResumeCcprSubscription) (err error) {
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	accountId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
+	}
+
+	// Switch to system account context to update mo_catalog
+	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+
+	if err = bh.Exec(ctx, "begin;"); err != nil {
+		return err
+	}
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+
+	pubName := string(rcs.Name)
+	escapedPubName := strings.ReplaceAll(pubName, "'", "''")
+
+	// Check if subscription exists
+	checkSQL := fmt.Sprintf(
+		"SELECT COUNT(1) FROM mo_catalog.mo_ccpr_log WHERE subscription_name = '%s' AND drop_at IS NULL",
+		escapedPubName,
+	)
+	if accountId != catalog.System_Account {
+		checkSQL += fmt.Sprintf(" AND account_id = %d", accountId)
+	}
+
+	bh.ClearExecResultSet()
+	if err = bh.Exec(ctx, checkSQL); err != nil {
+		return err
+	}
+
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return err
+	}
+
+	var count int64
+	if execResultArrayHasData(erArray) {
+		count, err = erArray[0].GetInt64(ctx, 0, 0)
+		if err != nil {
+			return err
+		}
+	}
+
+	if count == 0 {
+		return moerr.NewInternalErrorf(ctx, "subscription '%s' does not exist", pubName)
+	}
+
+	// Update mo_ccpr_log: set iteration_state to complete (2), error_message to null
+	updateSQL := fmt.Sprintf(
+		"UPDATE mo_catalog.mo_ccpr_log SET iteration_state = 2, error_message = NULL WHERE subscription_name = '%s' AND drop_at IS NULL",
+		escapedPubName,
+	)
+	if accountId != catalog.System_Account {
+		updateSQL += fmt.Sprintf(" AND account_id = %d", accountId)
+	}
+
+	if err = bh.Exec(ctx, updateSQL); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func doPauseCcprSubscription(ctx context.Context, ses *Session, pcs *tree.PauseCcprSubscription) (err error) {
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	accountId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
+	}
+
+	// Switch to system account context to update mo_catalog
+	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+
+	if err = bh.Exec(ctx, "begin;"); err != nil {
+		return err
+	}
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+
+	pubName := string(pcs.Name)
+	escapedPubName := strings.ReplaceAll(pubName, "'", "''")
+
+	// Check if subscription exists
+	checkSQL := fmt.Sprintf(
+		"SELECT COUNT(1) FROM mo_catalog.mo_ccpr_log WHERE subscription_name = '%s' AND drop_at IS NULL",
+		escapedPubName,
+	)
+	if accountId != catalog.System_Account {
+		checkSQL += fmt.Sprintf(" AND account_id = %d", accountId)
+	}
+
+	bh.ClearExecResultSet()
+	if err = bh.Exec(ctx, checkSQL); err != nil {
+		return err
+	}
+
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return err
+	}
+
+	var count int64
+	if execResultArrayHasData(erArray) {
+		count, err = erArray[0].GetInt64(ctx, 0, 0)
+		if err != nil {
+			return err
+		}
+	}
+
+	if count == 0 {
+		return moerr.NewInternalErrorf(ctx, "subscription '%s' does not exist", pubName)
+	}
+
+	// Update mo_ccpr_log: set iteration_state to 5 (pause)
+	// Note: Using iteration_state = 5 to represent pause state
+	updateSQL := fmt.Sprintf(
+		"UPDATE mo_catalog.mo_ccpr_log SET iteration_state = 5 WHERE subscription_name = '%s' AND drop_at IS NULL",
+		escapedPubName,
+	)
+	if accountId != catalog.System_Account {
+		updateSQL += fmt.Sprintf(" AND account_id = %d", accountId)
+	}
+
+	if err = bh.Exec(ctx, updateSQL); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 // dropPublication drops a publication, bh should be in a transaction
 func dropPublication(ctx context.Context, bh BackgroundExec, ifExists bool, accountName string, pubName string) (err error) {
 	var sql string

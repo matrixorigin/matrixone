@@ -211,6 +211,14 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		if err = handleDropCcprSubscription(ses, execCtx, st); err != nil {
 			return
 		}
+	case *tree.ResumeCcprSubscription:
+		if err = handleResumeCcprSubscription(ses, execCtx, st); err != nil {
+			return
+		}
+	case *tree.PauseCcprSubscription:
+		if err = handlePauseCcprSubscription(ses, execCtx, st); err != nil {
+			return
+		}
 	case *tree.ShowPublications:
 		ses.EnterFPrint(FPShowPublications)
 		defer ses.ExitFPrint(FPShowPublications)

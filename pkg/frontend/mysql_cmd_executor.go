@@ -1261,6 +1261,14 @@ func handleDropCcprSubscription(ses FeSession, execCtx *ExecCtx, dcs *tree.DropC
 	return doDropCcprSubscription(execCtx.reqCtx, ses.(*Session), dcs)
 }
 
+func handleResumeCcprSubscription(ses FeSession, execCtx *ExecCtx, rcs *tree.ResumeCcprSubscription) error {
+	return doResumeCcprSubscription(execCtx.reqCtx, ses.(*Session), rcs)
+}
+
+func handlePauseCcprSubscription(ses FeSession, execCtx *ExecCtx, pcs *tree.PauseCcprSubscription) error {
+	return doPauseCcprSubscription(execCtx.reqCtx, ses.(*Session), pcs)
+}
+
 func handleCreateStage(ses FeSession, execCtx *ExecCtx, cs *tree.CreateStage) error {
 	return doCreateStage(execCtx.reqCtx, ses.(*Session), cs)
 }

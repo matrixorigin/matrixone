@@ -69,6 +69,16 @@ func init() {
 		func(d *DropCcprSubscription) { d.reset() },
 		reuse.DefaultOptions[DropCcprSubscription](), //.
 	) //WithEnableChecker()
+	reuse.CreatePool[ResumeCcprSubscription](
+		func() *ResumeCcprSubscription { return &ResumeCcprSubscription{} },
+		func(r *ResumeCcprSubscription) { r.reset() },
+		reuse.DefaultOptions[ResumeCcprSubscription](), //.
+	) //WithEnableChecker()
+	reuse.CreatePool[PauseCcprSubscription](
+		func() *PauseCcprSubscription { return &PauseCcprSubscription{} },
+		func(p *PauseCcprSubscription) { p.reset() },
+		reuse.DefaultOptions[PauseCcprSubscription](), //.
+	) //WithEnableChecker()
 }
 
 // DROP Database statement
@@ -423,3 +433,61 @@ func (node *DropCcprSubscription) reset() {
 }
 
 func (node DropCcprSubscription) TypeName() string { return "tree.DropCcprSubscription" }
+
+type ResumeCcprSubscription struct {
+	statementImpl
+	Name Identifier
+}
+
+func NewResumeCcprSubscription(n Identifier) *ResumeCcprSubscription {
+	resumeCcprSubscription := reuse.Alloc[ResumeCcprSubscription](nil)
+	resumeCcprSubscription.Name = n
+	return resumeCcprSubscription
+}
+
+func (node *ResumeCcprSubscription) Format(ctx *FmtCtx) {
+	ctx.WriteString("resume ccpr subscription ")
+	node.Name.Format(ctx)
+}
+
+func (node *ResumeCcprSubscription) GetStatementType() string { return "Resume Ccpr Subscription" }
+func (node *ResumeCcprSubscription) GetQueryType() string     { return QueryTypeDCL }
+
+func (node *ResumeCcprSubscription) Free() {
+	reuse.Free[ResumeCcprSubscription](node, nil)
+}
+
+func (node *ResumeCcprSubscription) reset() {
+	*node = ResumeCcprSubscription{}
+}
+
+func (node ResumeCcprSubscription) TypeName() string { return "tree.ResumeCcprSubscription" }
+
+type PauseCcprSubscription struct {
+	statementImpl
+	Name Identifier
+}
+
+func NewPauseCcprSubscription(n Identifier) *PauseCcprSubscription {
+	pauseCcprSubscription := reuse.Alloc[PauseCcprSubscription](nil)
+	pauseCcprSubscription.Name = n
+	return pauseCcprSubscription
+}
+
+func (node *PauseCcprSubscription) Format(ctx *FmtCtx) {
+	ctx.WriteString("pause ccpr subscription ")
+	node.Name.Format(ctx)
+}
+
+func (node *PauseCcprSubscription) GetStatementType() string { return "Pause Ccpr Subscription" }
+func (node *PauseCcprSubscription) GetQueryType() string     { return QueryTypeDCL }
+
+func (node *PauseCcprSubscription) Free() {
+	reuse.Free[PauseCcprSubscription](node, nil)
+}
+
+func (node *PauseCcprSubscription) reset() {
+	*node = PauseCcprSubscription{}
+}
+
+func (node PauseCcprSubscription) TypeName() string { return "tree.PauseCcprSubscription" }
