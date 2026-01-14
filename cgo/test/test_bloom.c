@@ -9,9 +9,10 @@
 int main() {
     srand(time(NULL));
     uint64_t nbits = 1000;
+    uint32_t k = 3;
     
     // Test the new Init which allocates everything in one go
-    bloomfilter_t *bf = bloomfilter_init(nbits);
+    bloomfilter_t *bf = bloomfilter_init(nbits, k);
     if (!bf) {
         printf("Failed to allocate BloomFilter\n");
         return 1;

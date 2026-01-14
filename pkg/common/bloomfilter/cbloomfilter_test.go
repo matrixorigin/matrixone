@@ -16,11 +16,12 @@ package bloomfilter
 
 import (
 	"testing"
+
 	"github.com/stretchr/testify/assert"
 )
 
 func TestCBloomFilter(t *testing.T) {
-	bf := NewCBloomFilter(1000)
+	bf := NewCBloomFilter(1000, 3)
 	assert.NotNil(t, bf)
 	defer bf.Free()
 

@@ -31,8 +31,8 @@ type CBloomFilter struct {
 	ptr *C.bloomfilter_t
 }
 
-func NewCBloomFilter(nbits uint64) *CBloomFilter {
-	ptr := C.bloomfilter_init(C.uint64_t(nbits))
+func NewCBloomFilter(nbits uint64, k uint32) *CBloomFilter {
+	ptr := C.bloomfilter_init(C.uint64_t(nbits), C.uint32_t(k))
 	if ptr == nil {
 		return nil
 	}

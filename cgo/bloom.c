@@ -21,10 +21,11 @@
 #define XXH_INLINE_ALL
 #include "xxhash.h"
 
-static void bloomfilter_setup(bloomfilter_t *bf, uint64_t nbits) {
+static void bloomfilter_setup(bloomfilter_t *bf, uint64_t nbits, uint32_t k) {
     memcpy(bf->magic, BLOOM_MAGIC, 4);
     bf->nbits = nbits;
-    for (int i = 0; i < 3; i++) {
+    bf->k = k;
+    for (int i = 0; i < k; i++) {
         bf->seeds[i] = 0;
         for (int j = 0; j < 4; j++) {
             bf->seeds[i] = (bf->seeds[i] << 16) | (rand() & 0xFFFF);
@@ -32,13 +33,13 @@ static void bloomfilter_setup(bloomfilter_t *bf, uint64_t nbits) {
     }
 }
 
-bloomfilter_t* bloomfilter_init(uint64_t nbits) {
+bloomfilter_t* bloomfilter_init(uint64_t nbits, uint32_t k) {
     uint64_t nbytes = bitmap_nbyte(nbits);
     bloomfilter_t *bf = (bloomfilter_t *)malloc(sizeof(bloomfilter_t) + nbytes);
     if (!bf) return NULL;
     
     memset(bf->bitmap, 0, nbytes);
-    bloomfilter_setup(bf, nbits);
+    bloomfilter_setup(bf, nbits, k);
     return bf;
 }
 
@@ -49,11 +50,11 @@ void bloomfilter_free(bloomfilter_t *bf) {
 void bloomfilter_add(const bloomfilter_t *bf, const void *key, size_t len) {
     if (bf->nbits == 0) return;
 
-    uint64_t h1 = XXH3_64bits_withSeed(key, len, bf->seeds[0]);
-    uint64_t h2 = XXH3_64bits_withSeed(key, len, bf->seeds[1]);
-    uint64_t h3 = XXH3_64bits_withSeed(key, len, bf->seeds[2]);
+    for (int i = 0; i < bf->k; i++) {
+    	uint64_t h1 = XXH3_64bits_withSeed(key, len, bf->seeds[i]);
+    	uint64_t h2 = XXH3_64bits_withSeed(key, len, (bf->seeds[i]<<32));
+    	uint64_t h3 = XXH3_64bits_withSeed(key, len, (bf->seeds[i]>>32));
 
-    for (int i = 0; i < 3; i++) {
         uint64_t pos = (h1 + (uint64_t)i * h2 + (uint64_t)i * i * h3) % bf->nbits;
         bitmap_set((uint64_t *) bf->bitmap, pos);
     }
@@ -62,11 +63,11 @@ void bloomfilter_add(const bloomfilter_t *bf, const void *key, size_t len) {
 bool bloomfilter_test(const bloomfilter_t *bf, const void *key, size_t len) {
     if (bf->nbits == 0) return false;
 
-    uint64_t h1 = XXH3_64bits_withSeed(key, len, bf->seeds[0]);
-    uint64_t h2 = XXH3_64bits_withSeed(key, len, bf->seeds[1]);
-    uint64_t h3 = XXH3_64bits_withSeed(key, len, bf->seeds[2]);
+    for (int i = 0; i < bf->k; i++) {
+    	uint64_t h1 = XXH3_64bits_withSeed(key, len, bf->seeds[i]);
+   	uint64_t h2 = XXH3_64bits_withSeed(key, len, bf->seeds[i]<<32);
+    	uint64_t h3 = XXH3_64bits_withSeed(key, len, bf->seeds[i]>>32);
 
-    for (int i = 0; i < 3; i++) {
         uint64_t pos = (h1 + (uint64_t)i * h2 + (uint64_t)i * i * h3) % bf->nbits;
         if (!bitmap_test((uint64_t*)bf->bitmap, pos)) {
             return false;

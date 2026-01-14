@@ -33,12 +33,13 @@
 
 typedef struct {
     uint8_t magic[4];
+    uint32_t k;
     uint64_t nbits;
     uint64_t seeds[3];
     uint64_t bitmap[1];
 } bloomfilter_t;
 
-bloomfilter_t* bloomfilter_init(uint64_t nbits);
+bloomfilter_t* bloomfilter_init(uint64_t nbits, uint32_t k);
 void bloomfilter_free(bloomfilter_t *bf);
 void bloomfilter_add(const bloomfilter_t *bf, const void *key, size_t len);
 bool bloomfilter_test(const bloomfilter_t *bf, const void *key, size_t len);
