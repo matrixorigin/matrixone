@@ -27,7 +27,7 @@ import (
 )
 
 const (
-	cTestCount = 20000
+	cTestCount = 200000
 	cTestRate  = 0.00001
 	cVecCount  = 10
 )

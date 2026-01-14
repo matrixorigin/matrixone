@@ -24,7 +24,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const testCount = 20000
+const testCount = 200000
 const testRate = 0.00001
 const vecCount = 10
 
