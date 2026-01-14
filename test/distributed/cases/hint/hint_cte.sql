@@ -1,0 +1,190 @@
+set enable_remap_hint = 1;
+
+drop database if exists hint_cte_test;
+create database hint_cte_test;
+use hint_cte_test;
+
+drop table if exists t1;
+create table t1 (id int, name varchar(20), age int);
+insert into t1 values (1, 'Alice', 20), (2, 'Bob', 30), (3, 'Charlie', 40);
+
+-- Case 1: Simple CTE, table inside CTE is rewritten
+/*+ {
+    "rewrites": {
+        "hint_cte_test.t1": "SELECT * FROM t1 WHERE age > 25"
+    }
+} */
+with cte1 as (select * from t1)
+select * from cte1 order by id;
+
+-- Case 2: CTE join, both tables rewritten
+drop table if exists t2;
+create table t2 (id int, city varchar(20));
+insert into t2 values (1, 'Beijing'), (2, 'Shanghai'), (3, 'Guangzhou');
+
+/*+ {
+    "rewrites": {
+        "hint_cte_test.t1": "SELECT * FROM t1 WHERE id > 1",
+        "hint_cte_test.t2": "SELECT * FROM t2 WHERE city != 'Shanghai'"
+    }
+} */
+with cte_t1 as (select * from t1),
+     cte_t2 as (select * from t2)
+select cte_t1.name, cte_t2.city
+from cte_t1 join cte_t2 on cte_t1.id = cte_t2.id
+order by cte_t1.name;
+
+-- Case 3: CTE referencing another CTE, base table rewritten
+/*+ {
+    "rewrites": {
+        "hint_cte_test.t1": "SELECT * FROM t1 WHERE age < 35"
+    }
+} */
+with cte1 as (select * from t1),
+     cte2 as (select * from cte1 where id > 1)
+select * from cte2 order by id;
+
+-- Case 4: CTE defined in the hint rewrite itself
+/*+ {
+    "rewrites": {
+        "hint_cte_test.v1": "WITH cte_internal AS (SELECT * FROM t1 WHERE age > 20) SELECT * FROM cte_internal"
+    }
+} */
+select * from v1 order by id;
+
+-- Case 5: CTE in original query, hint target is a name that looks like a CTE but is meant to be a table
+/*+ {
+    "rewrites": {
+        "hint_cte_test.cte1": "SELECT 1 as id, 'Fake' as name, 99 as age"
+    }
+} */
+with cte1 as (select * from t1)
+select * from cte1 order by id;
+
+-- Case 6: Recursive CTE
+set mo_recursive_cte_max_iteration = 10;
+/*+ {
+    "rewrites": {
+        "hint_cte_test.t1": "SELECT * FROM t1 WHERE id = 1"
+    }
+} */
+with recursive cte(n) as (
+    select id from t1
+    union all
+    select n + 1 from cte where n < 3
+)
+select * from cte order by n;
+
+-- Case 7: CTE used multiple times
+/*+ {
+    "rewrites": {
+        "hint_cte_test.t1": "SELECT * FROM t1 WHERE age > 25"
+    }
+} */
+with cte1 as (select * from t1)
+select a.name, b.age
+from cte1 a join cte1 b on a.id = b.id
+order by a.name;
+
+-- Case 8: CTE in subquery
+/*+ {
+    "rewrites": {
+        "hint_cte_test.t1": "SELECT * FROM t1 WHERE age > 25"
+    }
+} */
+select * from (
+    with cte1 as (select * from t1)
+    select * from cte1
+) sub order by id;
+
+-- Case 9: Specialized case for CTE self-join with schema-prefixed rewritten table
+drop table if exists bpc_consolidated_report;
+create table bpc_consolidated_report (
+    b28_s_kgd353d varchar(20),
+    b28_s_sdata decimal(20,2),
+    b28_s_kgd4b76 varchar(20),
+    b28_s_kgd4rtr_kgdxoi5 varchar(20),
+    b28_s_kgdtvnx varchar(20),
+    b28_s_kgdp984 varchar(20),
+    b28_s_kgd4kbn varchar(20),
+    b28_s_kgdc8w9 varchar(20)
+);
+
+insert into bpc_consolidated_report values ('2021.12', -100.0, '4999999021', 'EO_1000', 'ACT_LG', 'F99', 'CNY', 'G123');
+insert into bpc_consolidated_report values ('2022.12', -200.0, '4999999021', 'EO_1000', 'ACT_LG', 'F99', 'CNY', 'G123');
+
+/*+ {
+    "rewrites" : {
+        "hint_cte_test.bpc_consolidated_report" : "SELECT * FROM bpc_consolidated_report"
+    }
+} */
+WITH yearly_revenue AS (
+    SELECT
+        CAST(SUBSTRING(b28_s_kgd353d, 1, 4) AS UNSIGNED) AS year_num,
+        -SUM(b28_s_sdata) AS total_rev
+    FROM hint_cte_test.bpc_consolidated_report
+    WHERE b28_s_kgd4b76 = '4999999021'
+    GROUP BY b28_s_kgd353d
+)
+SELECT
+    r1.year_num,
+    r1.total_rev,
+    r2.total_rev as prev_rev
+FROM yearly_revenue r1
+LEFT JOIN yearly_revenue r2 ON r1.year_num = r2.year_num + 1
+ORDER BY r1.year_num;
+
+-- Case 10: Deep reproduction case with exact user SQL structure and database names
+drop database if exists jst_flat_table1;
+create database jst_flat_table1;
+use jst_flat_table1;
+
+create table bpc_consolidated_report (
+    b28_s_kgd353d varchar(20),
+    b28_s_sdata decimal(20,2),
+    b28_s_kgd4b76 varchar(20),
+    b28_s_kgd4rtr_kgdxoi5 varchar(20),
+    b28_s_kgdtvnx varchar(20),
+    b28_s_kgdp984 varchar(20),
+    b28_s_kgd4kbn varchar(20),
+    b28_s_kgdc8w9 varchar(20)
+);
+
+insert into bpc_consolidated_report values 
+('2021.12', -100.0, '4999999021', 'EO_1000', 'ACT_LG', 'F99', 'CNY', 'G123'),
+('2022.12', -200.0, '4999999021', 'EO_1000', 'ACT_LG', 'F99', 'CNY', 'G123'),
+('2023.12', -300.0, '4999999021', 'EO_1000', 'ACT_LG', 'F99', 'CNY', 'G123');
+
+/*+ {
+    "rewrites" : {
+        "jst_flat_table1.capacity" : "SELECT * FROM jst_flat_table1.capacity",
+        "jst_flat_table1.open_orders_result" : "SELECT * FROM jst_flat_table1.open_orders_result",
+        "jst_flat_table1.bpc_consolidated_report" : "SELECT * FROM jst_flat_table1.bpc_consolidated_report"
+    }
+} */
+WITH yearly_revenue AS (
+    SELECT
+        CAST(SUBSTRING(b28_s_kgd353d, 1, 4) AS UNSIGNED) AS `年份`,
+        -SUM(b28_s_sdata) AS `营业收入总额`
+    FROM jst_flat_table1.bpc_consolidated_report
+    WHERE
+        b28_s_kgd4b76 IN ('4999999021','6001000000')
+        AND b28_s_kgd353d IN ('2021.12', '2022.12', '2023.12', '2024.12')
+    GROUP BY b28_s_kgd353d
+)
+SELECT
+    r1.`年份`,
+    r1.`营业收入总额`,
+    CASE
+        WHEN r2.`营业收入总额` IS NOT NULL AND r2.`营业收入总额` != 0
+        THEN ROUND((r1.`营业收入总额` - r2.`营业收入总额`) / r2.`营业收入总额` * 100, 2)
+        ELSE NULL
+    END AS `同比增长率(%)`
+FROM yearly_revenue r1
+LEFT JOIN yearly_revenue r2 ON r1.`年份` = r2.`年份` + 1
+ORDER BY r1.`年份`;
+
+drop database jst_flat_table1;
+use hint_cte_test;
+drop database hint_cte_test;
+set enable_remap_hint = 0;
