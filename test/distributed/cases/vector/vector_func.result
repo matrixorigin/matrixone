@@ -131,9 +131,9 @@ null    null
 select inner_product(vecf32_3,"[1,1,1]") from vtab32;
 inner_product(vecf32_3, [1,1,1])
 null
--1.9714266657829285
--33.89660960435867
--837.3288311958313
+-1.9714267253875732
+-33.896610260009766
+-837.328857421875
 select inner_product(vecf32_3,"[0,0,-1]") from vtab32;
 inner_product(vecf32_3, [0,0,-1])
 null
@@ -143,9 +143,9 @@ null
 select inner_product(vecf32_3,vecf32_3), inner_product(vecf32_5,vecf32_5) from vtab32;
 inner_product(vecf32_3, vecf32_3)    inner_product(vecf32_5, vecf32_5)
 null    null
--1.3494319015309593    null
--937.0329415976587    -2.1506857792768624E7
--675766.8704508307    -7.658626165813679E7
+-1.3494319915771484    null
+-937.032958984375    -2.1506858E7
+-675766.875    -7.6586264E7
 select inner_product(vecf64_3,vecf64_3), inner_product(vecf64_5,vecf64_5) from vtab64;
 inner_product(vecf64_3, vecf64_3)    inner_product(vecf64_5, vecf64_5)
 null    null
@@ -154,7 +154,7 @@ null    null
 -0.9327473068927187    -115390.02486670813
 select inner_product("[0.45052445,2.19845265,9.579752]","[1,1,1]");
 inner_product([0.45052445,2.19845265,9.579752], [1,1,1])
--12.228729128837585
+-12.228729248046875
 select inner_product(1,1);
 invalid argument function inner_product, bad value [BIGINT BIGINT]
 select inner_product(NULL,NULL);
@@ -177,21 +177,21 @@ id    vecf32_3    vecf32_5
 select distinct(inner_product(vecf32_3,vecf32_3)) from vtab32;
 inner_product(vecf32_3, vecf32_3)
 null
--1.3494319015309593
--937.0329415976587
--675766.8704508307
+-1.3494319915771484
+-937.032958984375
+-675766.875
 select sum(inner_product(vecf32_3,vecf32_3)) from vtab32;
 sum(inner_product(vecf32_3, vecf32_3))
--676705.2528243299
+-676705.257390976
 select min(inner_product(vecf32_5,vecf32_5)) from vtab32;
 min(inner_product(vecf32_5, vecf32_5))
--7.658626165813679E7
+-7.6586264E7
 select max(inner_product(vecf32_3,vecf32_3)) from vtab32;
 max(inner_product(vecf32_3, vecf32_3))
--1.3494319015309593
+-1.3494319915771484
 select avg(inner_product(vecf32_5,vecf32_5)) from vtab32;
 avg(inner_product(vecf32_5, vecf32_5))
--4.9046559725452706E7
+-4.9046561E7
 select count(inner_product(vecf32_5,vecf32_5)) from vtab32;
 count(inner_product(vecf32_5, vecf32_5))
 2
@@ -207,18 +207,18 @@ null
 null
 0.4932042277813813
 0.7817683693215783
-select inner_product(vecf32_3,vecf32_3) - inner_product(vecf32_5,vecf32_5) from vtab32;
-inner_product(vecf32_3, vecf32_3) - inner_product(vecf32_5, vecf32_5)
+select inner_product(normalize_l2(vecf32_3),normalize_l2(vecf32_3)), inner_product(normalize_l2(vecf32_5),normalize_l2(vecf32_5)),  inner_product(normalize_l2(vecf32_3),normalize_l2(vecf32_3)) - inner_product(normalize_l2(vecf32_5),normalize_l2(vecf32_5)) from vtab32;
+inner_product(normalize_l2(vecf32_3), normalize_l2(vecf32_3))    inner_product(normalize_l2(vecf32_5), normalize_l2(vecf32_5))    inner_product(normalize_l2(vecf32_3), normalize_l2(vecf32_3)) - inner_product(normalize_l2(vecf32_5), normalize_l2(vecf32_5))
+null    null    null
+-1.0    null    null
+-1.0    -1.0    0.0
+-1.0    -1.0    0.0
+select inner_product(normalize_l2(vecf32_3),normalize_l2(vecf32_3)) * inner_product(normalize_l2(vecf32_5),normalize_l2(vecf32_5)) from vtab32;
+inner_product(normalize_l2(vecf32_3), normalize_l2(vecf32_3)) * inner_product(normalize_l2(vecf32_5), normalize_l2(vecf32_5))
 null
 null
-2.1505920759827025E7
-7.591049478768596E7
-select inner_product(vecf32_3,vecf32_3) * inner_product(vecf32_5,vecf32_5) from vtab32;
-inner_product(vecf32_3, vecf32_3) * inner_product(vecf32_5, vecf32_5)
-null
-null
-2.0152634222080513E10
-5.175445836024754E13
+1.0
+1.0
 select inner_product(vecf64_3,vecf64_3) + inner_product(vecf64_5,vecf64_5) from vtab64;
 inner_product(vecf64_3, vecf64_3) + inner_product(vecf64_5, vecf64_5)
 null
@@ -234,9 +234,9 @@ null
 select * from (select inner_product(vecf32_3,vecf32_3),inner_product(vecf32_5,vecf32_5) from vtab32);
 inner_product(vecf32_3, vecf32_3)    inner_product(vecf32_5, vecf32_5)
 null    null
--1.3494319015309593    null
--937.0329415976587    -2.1506857792768624E7
--675766.8704508307    -7.658626165813679E7
+-1.3494319915771484    null
+-937.032958984375    -2.1506858E7
+-675766.875    -7.6586264E7
 select inner_product(vecf64_3,vecf64_3), inner_product(vecf64_5,vecf64_5) from (select * from vtab64);
 inner_product(vecf64_3, vecf64_3)    inner_product(vecf64_5, vecf64_5)
 null    null
@@ -246,9 +246,9 @@ null    null
 WITH qn AS (select inner_product(vecf32_3,vecf32_3),inner_product(vecf32_5,vecf32_5) from vtab32) SELECT * FROM qn;
 inner_product(vtab32.vecf32_3, vtab32.vecf32_3)    inner_product(vtab32.vecf32_5, vtab32.vecf32_5)
 null    null
--1.3494319015309593    null
--937.0329415976587    -2.1506857792768624E7
--675766.8704508307    -7.658626165813679E7
+-1.3494319915771484    null
+-937.032958984375    -2.1506858E7
+-675766.875    -7.6586264E7
 select l1_norm(vecf32_3), l1_norm(vecf32_5) from vtab32;
 l1_norm(vecf32_3)    l1_norm(vecf32_5)
 null    null
@@ -614,30 +614,30 @@ update vtab64_1 set `vecf64_5_1` = `vecf64_5` + "[32.89849324,1.98392832,192.095
 select cosine_similarity(vecf32_3,"[1,1,1]") from vtab32;
 cosine_similarity(vecf32_3, [1,1,1])
 null
-0.9798159888454644
-0.639319846110024
-0.5880807807712618
+0.9798159599304199
+0.639319896697998
+0.5880807638168335
 select cosine_similarity(vecf32_3,"[0,0,-1]") from vtab32;
 cosine_similarity(vecf32_3, [0,0,-1])
 null
--0.42062151968607125
--0.9941882903696422
--0.9999116455212372
+-0.42062151432037354
+-0.9941883683204651
+-0.9999116659164429
 select cosine_similarity(a.vecf32_3,b.vecf64_3), cosine_similarity(a.vecf32_5,b.vecf64_5) from vtab32 a , vtab64 b where a.id = b.id;
 cosine_similarity(a.vecf32_3, b.vecf64_3)    cosine_similarity(a.vecf32_5, b.vecf64_5)
 null    null
 1.0    null
-0.9950471762313424    0.9978465027710443
-0.08025370909154163    0.31888868320291014
+0.9950472712516785    0.9978464841842651
+0.0802537128329277    0.31888866424560547
 select cosine_similarity(b.vecf64_3, a.vecf32_3), cosine_similarity(b.vecf64_5, a.vecf32_5) from vtab32 a , vtab64 b where a.id = b.id;
 cosine_similarity(b.vecf64_3, a.vecf32_3)    cosine_similarity(b.vecf64_5, a.vecf32_5)
 null    null
 1.0    null
-0.9950471762313424    0.9978465027710443
-0.08025370909154163    0.31888868320291014
+0.9950472712516785    0.9978464841842651
+0.0802537128329277    0.31888866424560547
 select cosine_similarity("[0.45052445,2.19845265,9.579752]","[1,1,1]");
 cosine_similarity([0.45052445,2.19845265,9.579752], [1,1,1])
-0.7175720411888011
+0.717572033405304
 select cosine_similarity(1,1);
 invalid argument function cosine_similarity, bad value [BIGINT BIGINT]
 select cosine_similarity(NULL,NULL);
@@ -646,30 +646,30 @@ null
 select count(*), cosine_similarity(a.vecf32_3,b.vecf64_3) from vtab32 a , vtab64 b where a.id = b.id group by cosine_similarity(a.vecf32_3,b.vecf64_3) HAVING cosine_similarity(a.vecf32_3,b.vecf64_3) > 0.3 order by cosine_similarity(a.vecf32_3,b.vecf64_3) desc ;
 count(*)    cosine_similarity(a.vecf32_3, b.vecf64_3)
 1    1.0
-1    0.9950471762313424
+1    0.9950472712516785
 select cosine_similarity(vecf32_3,vecf32_3_1) from vtab32_1;
 cosine_similarity(vecf32_3, vecf32_3_1)
 null
-0.8273803183670134
-0.9788137634679015
-0.9998854359976064
+0.8273802995681763
+0.978813886642456
+0.9998854398727417
 select cosine_similarity(vecf32_5,vecf32_5_1) from vtab32_1;
 cosine_similarity(vecf32_5, vecf32_5_1)
 null
 null
-0.9999862309858505
-0.9999975337969429
+0.9999862313270569
+0.9999974966049194
 select cosine_similarity(vecf64_3,vecf64_3_1) from vtab64_1;
 cosine_similarity(vecf64_3, vecf64_3_1)
 null
 0.5432725329691298
-0.9995364949307252
-0.23634690466638808
+0.9995364949307255
+0.23634690466638802
 select cosine_similarity(vecf64_5,vecf64_5_1) from vtab64_1;
 cosine_similarity(vecf64_5, vecf64_5_1)
 null
 null
-0.9997062815646757
+0.9997062815646756
 0.9811136124448218
 select * from vtab32_1 where cosine_similarity(vecf32_3_1,vecf32_3) is null;
 id    vecf32_3    vecf32_3_1    vecf32_5    vecf32_5_1
@@ -682,21 +682,21 @@ id    vecf32_3    vecf32_3_1    vecf32_5    vecf32_5_1
 select distinct(cosine_similarity(vecf32_3,vecf32_3_1)) from vtab32_1;
 cosine_similarity(vecf32_3, vecf32_3_1)
 null
-0.8273803183670134
-0.9788137634679015
-0.9998854359976064
+0.8273802995681763
+0.978813886642456
+0.9998854398727417
 select sum(cosine_similarity(vecf32_3,vecf32_3_1)) from vtab32_1;
 sum(cosine_similarity(vecf32_3, vecf32_3_1))
-2.8060795178325213
+2.806079626083374
 select min(cosine_similarity(vecf32_5,vecf32_5_1)) from vtab32_1;
 min(cosine_similarity(vecf32_5, vecf32_5_1))
-0.9999862309858505
+0.9999862313270569
 select max(cosine_similarity(vecf32_3,vecf32_3_1)) from vtab32_1;
 max(cosine_similarity(vecf32_3, vecf32_3_1))
-0.9998854359976064
+0.9998854398727417
 select avg(cosine_similarity(vecf32_5,vecf32_5_1)) from vtab32_1;
 avg(cosine_similarity(vecf32_5, vecf32_5_1))
-0.9999918823913967
+0.9999918639659882
 select count(cosine_similarity(vecf32_5,vecf32_5_1)) from vtab32_1;
 count(cosine_similarity(vecf32_5, vecf32_5_1))
 2
@@ -705,60 +705,60 @@ sin(cosine_similarity(vecf64_3, vecf64_3_1))
 null
 0.5169401135206989
 0.8412204615696248
-0.23415265801455926
+0.2341526580145592
 select cos(cosine_similarity(vecf64_5,vecf64_5_1)) from vtab64_1;
 cos(cosine_similarity(vecf64_5, vecf64_5_1))
 null
 null
-0.5405494380995346
+0.5405494380995347
 0.5560973493593069
 select cosine_similarity(vecf32_3,vecf32_3_1) - cosine_similarity(vecf32_5,vecf32_5_1) from vtab32_1;
 cosine_similarity(vecf32_3, vecf32_3_1) - cosine_similarity(vecf32_5, vecf32_5_1)
 null
 null
--0.02117246751794899
--1.1209779933651909E-4
+-0.02117234468460083
+-1.1205673217773438E-4
 select cosine_similarity(vecf32_3,vecf32_3_1) * cosine_similarity(vecf32_5,vecf32_5_1) from vtab32_1;
 cosine_similarity(vecf32_3, vecf32_3_1) * cosine_similarity(vecf32_5, vecf32_5_1)
 null
 null
-0.9788002861673426
-0.9998829700770874
+0.9788004096741787
+0.9998829367644504
 select cosine_similarity(vecf64_3,vecf64_3_1) + cosine_similarity(vecf64_5,vecf64_5_1) from vtab64_1;
 cosine_similarity(vecf64_3, vecf64_3_1) + cosine_similarity(vecf64_5, vecf64_5_1)
 null
 null
-1.9992427764954008
+1.999242776495401
 1.2174605171112098
 select cosine_similarity(vecf64_3,vecf64_3_1) / cosine_similarity(vecf64_5,vecf64_5_1) from vtab64_1;
 cosine_similarity(vecf64_3, vecf64_3_1) / cosine_similarity(vecf64_5, vecf64_5_1)
 null
 null
-0.9998301634819331
-0.2408965706605975
+0.9998301634819335
+0.24089657066059744
 select * from (select cosine_similarity(vecf32_3,vecf32_3_1),cosine_similarity(vecf32_5,vecf32_5_1) from vtab32_1);
 cosine_similarity(vecf32_3, vecf32_3_1)    cosine_similarity(vecf32_5, vecf32_5_1)
 null    null
-0.8273803183670134    null
-0.9788137634679015    0.9999862309858505
-0.9998854359976064    0.9999975337969429
+0.8273802995681763    null
+0.978813886642456    0.9999862313270569
+0.9998854398727417    0.9999974966049194
 select cosine_similarity(vecf64_3,vecf64_3_1), cosine_similarity(vecf64_5,vecf64_5_1) from (select * from vtab64_1);
 cosine_similarity(vecf64_3, vecf64_3_1)    cosine_similarity(vecf64_5, vecf64_5_1)
 null    null
 0.5432725329691298    null
-0.9995364949307252    0.9997062815646757
-0.23634690466638808    0.9811136124448218
+0.9995364949307255    0.9997062815646756
+0.23634690466638802    0.9811136124448218
 WITH qn AS (select cosine_similarity(vecf32_3,vecf32_3_1),cosine_similarity(vecf32_5,vecf32_5_1) from vtab32_1) SELECT * FROM qn;
 cosine_similarity(vtab32_1.vecf32_3, vtab32_1.vecf32_3_1)    cosine_similarity(vtab32_1.vecf32_5, vtab32_1.vecf32_5_1)
 null    null
-0.8273803183670134    null
-0.9788137634679015    0.9999862309858505
-0.9998854359976064    0.9999975337969429
+0.8273802995681763    null
+0.978813886642456    0.9999862313270569
+0.9998854398727417    0.9999974966049194
 select cosine_similarity(vecf32_3,vecf32_3), cosine_similarity(vecf32_5,vecf32_5) from vtab32;
 cosine_similarity(vecf32_3, vecf32_3)    cosine_similarity(vecf32_5, vecf32_5)
 null    null
 1.0    null
-0.9999998589068639    0.9999999473078075
+1.0    1.0
 1.0    1.0
 select cosine_similarity(vecf64_3,vecf64_3), cosine_similarity(vecf64_5,vecf64_5) from vtab64;
 cosine_similarity(vecf64_3, vecf64_3)    cosine_similarity(vecf64_5, vecf64_5)

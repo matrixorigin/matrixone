@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
@@ -810,7 +811,8 @@ func newBackSession(ses FeSession, txnOp TxnOperator, db string, callBack output
 	txnHandler := InitTxnHandler(ses.GetService(), getPu(service).StorageEngine, ses.GetTxnHandler().GetConnCtx(), txnOp)
 	backSes := &backSession{}
 	backSes.initFeSes(ses, txnHandler, db, callBack)
-	backSes.uuid, _ = uuid.NewV7()
+	u, _ := util.FastUuid()
+	backSes.uuid = uuid.UUID(u)
 	return backSes
 }
 

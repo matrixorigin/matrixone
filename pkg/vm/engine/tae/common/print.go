@@ -171,6 +171,9 @@ func TypeStringValue(t types.Type, v any, isNull bool, opts ...TypePrintOpt) str
 	case types.T_timestamp:
 		val := v.(types.Timestamp)
 		return val.String2(time.Local, 6)
+	case types.T_year:
+		val := v.(types.MoYear)
+		return val.String()
 	case types.T_decimal64:
 		val := v.(types.Decimal64)
 		return val.Format(t.Scale)
@@ -264,6 +267,8 @@ func MoVectorToString(v *vector.Vector, printN int, opts ...TypePrintOpt) string
 		return vec2Str(vector.MustFixedColWithTypeCheck[types.Timestamp](v)[:printN], v)
 	case types.T_enum:
 		return vec2Str(vector.MustFixedColWithTypeCheck[types.Enum](v)[:printN], v)
+	case types.T_year:
+		return vec2Str(vector.MustFixedColWithTypeCheck[types.MoYear](v)[:printN], v)
 	case types.T_decimal64:
 		return vec2Str(vector.MustFixedColWithTypeCheck[types.Decimal64](v)[:printN], v)
 	case types.T_decimal128:

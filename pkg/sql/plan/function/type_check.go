@@ -321,8 +321,18 @@ func SetTargetScaleFromSource(source, target *types.Type) {
 	}
 
 	if target.Oid == types.T_decimal64 {
-		if source.Oid.IsInteger() {
+		if source.Oid == types.T_decimal64 {
+			target.Scale = source.Scale
+		} else if source.Oid.IsInteger() {
 			target.Scale = 0
+		} else if source.Oid.IsFloat() {
+			// When converting float to decimal64, use a reasonable scale
+			// float32 has ~7 significant digits, float64 has ~16 significant digits
+			if source.Oid == types.T_float32 {
+				target.Scale = 7
+			} else if source.Oid == types.T_float64 {
+				target.Scale = 16
+			}
 		} else if source.Oid.IsDateRelate() {
 			target.Scale = source.Scale
 		}
@@ -330,10 +340,18 @@ func SetTargetScaleFromSource(source, target *types.Type) {
 	}
 
 	if target.Oid == types.T_decimal128 {
-		if source.Oid == types.T_decimal64 {
+		if source.Oid == types.T_decimal64 || source.Oid == types.T_decimal128 {
 			target.Scale = source.Scale
 		} else if source.Oid.IsInteger() {
 			target.Scale = 0
+		} else if source.Oid.IsFloat() {
+			// When converting float to decimal128, use a reasonable scale
+			// float32 has ~7 significant digits, float64 has ~16 significant digits
+			if source.Oid == types.T_float32 {
+				target.Scale = 7
+			} else if source.Oid == types.T_float64 {
+				target.Scale = 16
+			}
 		} else if source.Oid.IsDateRelate() {
 			target.Scale = source.Scale
 		}
@@ -403,6 +421,7 @@ func initFixed1() {
 		{types.T_any, types.T_time, types.T_time, types.T_time},
 		{types.T_any, types.T_datetime, types.T_datetime, types.T_datetime},
 		{types.T_any, types.T_timestamp, types.T_timestamp, types.T_timestamp},
+		{types.T_any, types.T_year, types.T_year, types.T_year},
 		{types.T_any, types.T_char, types.T_char, types.T_char},
 		{types.T_any, types.T_varchar, types.T_varchar, types.T_varchar},
 		{types.T_any, types.T_binary, types.T_binary, types.T_binary},
@@ -508,6 +527,7 @@ func initFixed1() {
 		{types.T_int64, types.T_decimal64, types.T_decimal128, types.T_decimal128},
 		{types.T_int64, types.T_decimal128, types.T_decimal128, types.T_decimal128},
 		{types.T_int64, types.T_date, types.T_int64, types.T_int64},
+		{types.T_int64, types.T_year, types.T_int64, types.T_int64},
 		{types.T_int64, types.T_time, types.T_decimal64, types.T_decimal64},
 		{types.T_int64, types.T_datetime, types.T_decimal64, types.T_decimal64},
 		{types.T_int64, types.T_timestamp, types.T_decimal64, types.T_decimal64},
@@ -619,8 +639,12 @@ func initFixed1() {
 		{types.T_float32, types.T_uint32, types.T_float64, types.T_float64},
 		{types.T_float32, types.T_uint64, types.T_float64, types.T_float64},
 		{types.T_float32, types.T_float64, types.T_float64, types.T_float64},
-		{types.T_float32, types.T_decimal64, types.T_float32, types.T_float32},
-		{types.T_float32, types.T_decimal128, types.T_float32, types.T_float32},
+		// Balanced approach: float32 + decimal → float64 for all operations
+		// Rationale: float32 has only 7 decimal digits precision, insufficient for large decimal values
+		// float64 provides 15-16 digits precision, balancing performance and accuracy
+		// This applies to comparison, arithmetic, and multiplication operations
+		{types.T_float32, types.T_decimal64, types.T_float64, types.T_float64},
+		{types.T_float32, types.T_decimal128, types.T_float64, types.T_float64},
 		{types.T_float32, types.T_char, types.T_float32, types.T_float32},
 		{types.T_float32, types.T_varchar, types.T_float32, types.T_float32},
 		{types.T_float32, types.T_binary, types.T_float32, types.T_float32},
@@ -654,7 +678,8 @@ func initFixed1() {
 		{types.T_decimal64, types.T_uint16, types.T_decimal128, types.T_decimal128},
 		{types.T_decimal64, types.T_uint32, types.T_decimal128, types.T_decimal128},
 		{types.T_decimal64, types.T_uint64, types.T_decimal128, types.T_decimal128},
-		{types.T_decimal64, types.T_float32, types.T_float32, types.T_float32},
+		// Symmetric rule: decimal64 vs float32 → convert to float64 (see comment above for rationale)
+		{types.T_decimal64, types.T_float32, types.T_float64, types.T_float64},
 		{types.T_decimal64, types.T_float64, types.T_float64, types.T_float64},
 		{types.T_decimal64, types.T_decimal64, types.T_decimal64, types.T_decimal64},
 		{types.T_decimal64, types.T_decimal128, types.T_decimal128, types.T_decimal128},
@@ -677,7 +702,8 @@ func initFixed1() {
 		{types.T_decimal128, types.T_uint16, types.T_decimal128, types.T_decimal128},
 		{types.T_decimal128, types.T_uint32, types.T_decimal128, types.T_decimal128},
 		{types.T_decimal128, types.T_uint64, types.T_decimal128, types.T_decimal128},
-		{types.T_decimal128, types.T_float32, types.T_float32, types.T_float32},
+		// Symmetric rule: decimal128 vs float32 → convert to float64 (see comment above for rationale)
+		{types.T_decimal128, types.T_float32, types.T_float64, types.T_float64},
 		{types.T_decimal128, types.T_float64, types.T_float64, types.T_float64},
 		{types.T_decimal128, types.T_decimal64, types.T_decimal128, types.T_decimal128},
 		{types.T_decimal128, types.T_decimal128, types.T_decimal128, types.T_decimal128},
@@ -765,6 +791,26 @@ func initFixed1() {
 		{types.T_timestamp, types.T_varbinary, types.T_timestamp, types.T_timestamp},
 		{types.T_timestamp, types.T_blob, types.T_timestamp, types.T_timestamp},
 		{types.T_timestamp, types.T_text, types.T_timestamp, types.T_timestamp},
+		{types.T_year, types.T_any, types.T_year, types.T_year},
+		{types.T_year, types.T_year, types.T_year, types.T_year},
+		{types.T_year, types.T_int8, types.T_int64, types.T_int64},
+		{types.T_year, types.T_int16, types.T_int64, types.T_int64},
+		{types.T_year, types.T_int32, types.T_int64, types.T_int64},
+		{types.T_year, types.T_int64, types.T_int64, types.T_int64},
+		{types.T_year, types.T_uint8, types.T_int64, types.T_int64},
+		{types.T_year, types.T_uint16, types.T_int64, types.T_int64},
+		{types.T_year, types.T_uint32, types.T_int64, types.T_int64},
+		{types.T_year, types.T_uint64, types.T_int64, types.T_int64},
+		{types.T_year, types.T_float32, types.T_float64, types.T_float64},
+		{types.T_year, types.T_float64, types.T_float64, types.T_float64},
+		{types.T_year, types.T_decimal64, types.T_decimal64, types.T_decimal64},
+		{types.T_year, types.T_decimal128, types.T_decimal128, types.T_decimal128},
+		{types.T_year, types.T_char, types.T_year, types.T_year},
+		{types.T_year, types.T_varchar, types.T_year, types.T_year},
+		{types.T_year, types.T_binary, types.T_year, types.T_year},
+		{types.T_year, types.T_varbinary, types.T_year, types.T_year},
+		{types.T_year, types.T_blob, types.T_year, types.T_year},
+		{types.T_year, types.T_text, types.T_year, types.T_year},
 		{types.T_char, types.T_any, types.T_char, types.T_char},
 		{types.T_char, types.T_bool, types.T_bool, types.T_bool},
 		{types.T_char, types.T_int8, types.T_int8, types.T_int8},
@@ -1188,6 +1234,7 @@ func initFixed2() {
 		{types.T_int64, types.T_decimal64, types.T_decimal128, types.T_decimal128},
 		{types.T_int64, types.T_decimal128, types.T_decimal128, types.T_decimal128},
 		{types.T_int64, types.T_date, types.T_int64, types.T_int64},
+		{types.T_int64, types.T_year, types.T_int64, types.T_int64},
 		{types.T_int64, types.T_time, types.T_decimal64, types.T_decimal64},
 		{types.T_int64, types.T_datetime, types.T_decimal64, types.T_decimal64},
 		{types.T_int64, types.T_timestamp, types.T_decimal64, types.T_decimal64},
@@ -1302,6 +1349,10 @@ func initFixed2() {
 		{types.T_float32, types.T_uint16, types.T_float64, types.T_float64},
 		{types.T_float32, types.T_uint32, types.T_float64, types.T_float64},
 		{types.T_float32, types.T_uint64, types.T_float64, types.T_float64},
+		// Balanced approach: float32 + decimal → float64 for arithmetic operations
+		// Rationale: float32 has only 7 decimal digits precision, insufficient for large decimal values
+		// float64 provides 15-16 digits precision, balancing performance and accuracy
+		// Note: Comparison operators still use float32 for performance (see comparison type rules)
 		{types.T_float32, types.T_decimal64, types.T_float64, types.T_float64},
 		{types.T_float32, types.T_decimal128, types.T_float64, types.T_float64},
 		{types.T_float32, types.T_char, types.T_float64, types.T_float64},
@@ -1336,6 +1387,7 @@ func initFixed2() {
 		{types.T_decimal64, types.T_uint16, types.T_decimal128, types.T_decimal128},
 		{types.T_decimal64, types.T_uint32, types.T_decimal128, types.T_decimal128},
 		{types.T_decimal64, types.T_uint64, types.T_decimal128, types.T_decimal128},
+		// Symmetric rule: decimal64 vs float32 → convert to float64 (see comment above for rationale)
 		{types.T_decimal64, types.T_float32, types.T_float64, types.T_float64},
 		{types.T_decimal64, types.T_float64, types.T_float64, types.T_float64},
 		{types.T_decimal64, types.T_decimal128, types.T_decimal128, types.T_decimal128},
@@ -1358,6 +1410,7 @@ func initFixed2() {
 		{types.T_decimal128, types.T_uint16, types.T_decimal128, types.T_decimal128},
 		{types.T_decimal128, types.T_uint32, types.T_decimal128, types.T_decimal128},
 		{types.T_decimal128, types.T_uint64, types.T_decimal128, types.T_decimal128},
+		// Symmetric rule: decimal128 vs float32 → convert to float64 (see comment above for rationale)
 		{types.T_decimal128, types.T_float32, types.T_float64, types.T_float64},
 		{types.T_decimal128, types.T_float64, types.T_float64, types.T_float64},
 		{types.T_decimal128, types.T_decimal64, types.T_decimal128, types.T_decimal128},
@@ -1415,6 +1468,19 @@ func initFixed2() {
 		{types.T_timestamp, types.T_uint64, types.T_decimal64, types.T_decimal64},
 		{types.T_timestamp, types.T_decimal64, types.T_decimal64, types.T_decimal64},
 		{types.T_timestamp, types.T_decimal128, types.T_decimal128, types.T_decimal128},
+		{types.T_year, types.T_any, types.T_float64, types.T_float64},
+		{types.T_year, types.T_int8, types.T_float64, types.T_float64},
+		{types.T_year, types.T_int16, types.T_float64, types.T_float64},
+		{types.T_year, types.T_int32, types.T_float64, types.T_float64},
+		{types.T_year, types.T_int64, types.T_float64, types.T_float64},
+		{types.T_year, types.T_uint8, types.T_float64, types.T_float64},
+		{types.T_year, types.T_uint16, types.T_float64, types.T_float64},
+		{types.T_year, types.T_uint32, types.T_float64, types.T_float64},
+		{types.T_year, types.T_uint64, types.T_float64, types.T_float64},
+		{types.T_year, types.T_float32, types.T_float64, types.T_float64},
+		{types.T_year, types.T_float64, types.T_float64, types.T_float64},
+		{types.T_year, types.T_decimal64, types.T_decimal64, types.T_decimal64},
+		{types.T_year, types.T_decimal128, types.T_decimal128, types.T_decimal128},
 		{types.T_char, types.T_any, types.T_float64, types.T_float64},
 		{types.T_char, types.T_int8, types.T_float64, types.T_float64},
 		{types.T_char, types.T_int16, types.T_float64, types.T_float64},
@@ -1905,6 +1971,22 @@ func initFixed3() {
 				{toType: types.T_varbinary, preferLevel: 2},
 				{toType: types.T_blob, preferLevel: 2},
 				{toType: types.T_text, preferLevel: 2},
+			},
+		},
+
+		{
+			from: types.T_year,
+			toList: []toRule{
+				{toType: types.T_int64, preferLevel: 1},
+				{toType: types.T_int32, preferLevel: 2},
+				{toType: types.T_int16, preferLevel: 2},
+				{toType: types.T_uint64, preferLevel: 2},
+				{toType: types.T_uint32, preferLevel: 2},
+				{toType: types.T_uint16, preferLevel: 2},
+				{toType: types.T_float64, preferLevel: 2},
+				{toType: types.T_float32, preferLevel: 2},
+				{toType: types.T_char, preferLevel: 2},
+				{toType: types.T_varchar, preferLevel: 2},
 			},
 		},
 

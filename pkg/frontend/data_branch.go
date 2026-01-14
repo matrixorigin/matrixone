@@ -362,38 +362,71 @@ func runSql(
 	streamChan chan executor.Result, errChan chan error,
 ) (sqlRet executor.Result, err error) {
 
-	if streamChan == nil &&
-		strings.Contains(strings.ToLower(snapConditionRegex.FindString(sql)), "snapshot") {
-		// SQLExecutor cannot execute snapshot read(actually cannot resolveSnapshotByName)
-		// bh.(*backExec).backSes.SetMysqlResultSet(&MysqlResultSet{})
+	useBackExec := false
+	trimmedLower := strings.ToLower(strings.TrimSpace(sql))
+	if strings.HasPrefix(trimmedLower, "drop database") {
+		// Internal executor does not support DROP DATABASE (IsPublishing panics).
+		useBackExec = true
+	} else if strings.Contains(strings.ToLower(snapConditionRegex.FindString(sql)), "snapshot") {
+		// SQLExecutor cannot resolve snapshot by name.
+		useBackExec = true
+	}
+
+	var exec executor.SQLExecutor
+	if !useBackExec {
+		rt := moruntime.ServiceRuntime(ses.service)
+		if rt == nil {
+			useBackExec = true
+		} else {
+			val, exist := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
+			if !exist {
+				useBackExec = true
+			} else {
+				exec = val.(executor.SQLExecutor)
+			}
+		}
+	}
+
+	if useBackExec {
 		// export as CSV need this
+		// bh.(*backExec).backSes.SetMysqlResultSet(&MysqlResultSet{})
 		//for range tblStuff.def.visibleIdxes {
 		//	bh.(*backExec).backSes.mrs.AddColumn(&MysqlColumn{})
 		//}
-
 		if err = bh.Exec(ctx, sql); err != nil {
 			return
 		}
-		bh.ClearExecResultSet()
-		sqlRet.Mp = ses.proc.Mp()
-		sqlRet.Batches = bh.GetExecResultBatches()
+		if _, ok := bh.(*backExec); ok {
+			bh.ClearExecResultSet()
+			sqlRet.Mp = ses.proc.Mp()
+			sqlRet.Batches = bh.GetExecResultBatches()
+			return
+		}
 
+		rs := bh.GetExecResultSet()
+		bh.ClearExecResultSet()
+		if len(rs) == 0 || rs[0] == nil {
+			return
+		}
+		mrs, ok := rs[0].(*MysqlResultSet)
+		if !ok {
+			return sqlRet, moerr.NewInternalError(ctx, "unexpected result set type")
+		}
+		if len(mrs.Columns) == 0 {
+			return
+		}
+		var bat *batch.Batch
+		bat, _, err = convertRowsIntoBatch(ses.proc.Mp(), mrs.Columns, mrs.Data)
+		if err != nil {
+			return sqlRet, err
+		}
+		sqlRet.Mp = ses.proc.Mp()
+		sqlRet.Batches = []*batch.Batch{bat}
 		return
 	}
 
-	var (
-		val   any
-		exist bool
-		exec  executor.SQLExecutor
-	)
-
 	// we do not use the bh.Exec here, it's too slow.
 	// use internal sql instead.
-	if val, exist = moruntime.ServiceRuntime(ses.service).GetGlobalVariables(moruntime.InternalSQLExecutor); !exist {
-		return sqlRet, moerr.NewInternalErrorNoCtxf("get internalExecutor failed")
-	}
-
-	exec = val.(executor.SQLExecutor)
 
 	backSes := bh.(*backExec).backSes
 
@@ -426,8 +459,9 @@ func handleDataBranch(
 	case *tree.DataBranchCreateDatabase:
 		return dataBranchCreateDatabase(execCtx, ses, st)
 	case *tree.DataBranchDeleteTable:
-		//return dataBranchDeleteTable(execCtx, ses, st)
+		return dataBranchDeleteTable(execCtx, ses, st)
 	case *tree.DataBranchDeleteDatabase:
+		return dataBranchDeleteDatabase(execCtx, ses, st)
 	case *tree.DataBranchDiff:
 		return handleBranchDiff(execCtx, ses, st)
 	case *tree.DataBranchMerge:
@@ -435,8 +469,6 @@ func handleDataBranch(
 	default:
 		return moerr.NewNotSupportedNoCtxf("data branch not supported: %v", st)
 	}
-
-	return nil
 }
 
 func dataBranchCreateTable(
@@ -461,6 +493,10 @@ func dataBranchCreateTable(
 			err = deferred(err)
 		}
 	}()
+
+	if err = checkBranchQuota(execCtx.reqCtx, ses, bh, 1); err != nil {
+		return err
+	}
 
 	cloneStmt = &tree.CloneTable{
 		SrcTable:     stmt.SrcTable,
@@ -529,6 +565,10 @@ func dataBranchCreateDatabase(
 		return
 	}
 
+	if err = checkBranchQuota(execCtx.reqCtx, ses, bh, int64(len(receipts))); err != nil {
+		return err
+	}
+
 	for _, rcpt := range receipts {
 		if err = updateBranchMetaTable(execCtx.reqCtx, ses, bh, rcpt); err != nil {
 			return
@@ -538,108 +578,197 @@ func dataBranchCreateDatabase(
 	return nil
 }
 
-//func dataBranchDeleteTable(
-//	execCtx *ExecCtx,
-//	ses *Session,
-//	stmt *tree.DataBranchDeleteTable,
-//) (err error) {
-//	var (
-//		bh       BackgroundExec
-//		deferred func(error) error
-//	)
-//
-//	if bh, deferred, err = getBackExecutor(execCtx.reqCtx, ses); err != nil {
-//		return
-//	}
-//
-//	defer func() {
-//		if deferred != nil {
-//			err = deferred(err)
-//		}
-//	}()
-//
-//	var (
-//		dbName  = stmt.TableName.SchemaName
-//		tblName = stmt.TableName.ObjectName
-//		accId   uint32
-//		sqlRet  executor.Result
-//		tblId   uint64
-//	)
-//
-//	if len(dbName) == 0 {
-//		dbName = tree.Identifier(ses.GetTxnCompileCtx().DefaultDatabase())
-//	}
-//
-//	if len(dbName) == 0 {
-//		return moerr.NewInternalErrorNoCtxf("no db selected for the table %s", tblName)
-//	}
-//
-//	if accId, err = defines.GetAccountId(execCtx.reqCtx); err != nil {
-//		return
-//	}
-//
-//	if sqlRet, err = runSql(
-//		execCtx.reqCtx, ses, bh, fmt.Sprintf(
-//			"select rel_id from %s.%s where account_id = %d and reldatabase = '%s' and relname = '%s'",
-//			catalog.MO_CATALOG, catalog.MO_TABLES, accId, dbName, tblName,
-//		), nil, nil,
-//	); err != nil {
-//		return
-//	}
-//
-//	defer func() {
-//		sqlRet.Close()
-//	}()
-//
-//	if len(sqlRet.Batches) != 1 && sqlRet.Batches[0].Vecs[0].Length() != 1 {
-//		return moerr.NewInternalErrorNoCtxf(
-//			"get table id failed for the table %s.%s",
-//			dbName, tblName,
-//		)
-//	}
-//
-//	return nil
-//}
+func markBranchTablesDeleted(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	accId uint32,
+	tableIDs []uint64,
+) error {
+	updateCtx := ctx
+	if accId != sysAccountID {
+		updateCtx = defines.AttachAccountId(updateCtx, sysAccountID)
+	}
 
-//func branchDeleteTableHelper(
-//	ctx context.Context,
-//	ses *Session,
-//	bh BackgroundExec,
-//	dbName string,
-//	tblIdNameBatches []*batch.Batch,
-//) (err error) {
-//
-//	for _, bat := range tblIdNameBatches {
-//		idVec := bat.Vecs[0]
-//		nameVec := bat.Vecs[1]
-//
-//		col, area := vector.MustVarlenaRawData(nameVec)
-//
-//		for rowIdx := range bat.RowCount() {
-//			id := vector.GetFixedAtWithTypeCheck[uint64](idVec, rowIdx)
-//			name := col[rowIdx].GetByteSlice(area)
-//
-//			if _, err = runSql(
-//				ctx, ses, bh,
-//				fmt.Sprintf(
-//					"delete from %s.%s where table_id = %d",
-//					catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA, id,
-//				), nil, nil,
-//			); err != nil {
-//				return
-//			}
-//
-//			if _, err = runSql(
-//				ctx, ses, bh,
-//				fmt.Sprintf(
-//					"drop table %s.%s", dbName, name), nil, nil,
-//			); err != nil {
-//				return
-//			}
-//		}
-//	}
-//
-//}
+	const batchSize = 512
+	for start := 0; start < len(tableIDs); start += batchSize {
+		end := start + batchSize
+		if end > len(tableIDs) {
+			end = len(tableIDs)
+		}
+
+		var sqlBuilder strings.Builder
+		sqlBuilder.Grow(128 + (end-start)*20)
+		sqlBuilder.WriteString("update ")
+		sqlBuilder.WriteString(catalog.MO_CATALOG)
+		sqlBuilder.WriteByte('.')
+		sqlBuilder.WriteString(catalog.MO_BRANCH_METADATA)
+		sqlBuilder.WriteString(" set table_deleted = true where table_id in (")
+
+		for i, id := range tableIDs[start:end] {
+			if i > 0 {
+				sqlBuilder.WriteByte(',')
+			}
+			sqlBuilder.WriteString(strconv.FormatUint(id, 10))
+		}
+		sqlBuilder.WriteString(")")
+
+		updateRet, err := runSql(updateCtx, ses, bh, sqlBuilder.String(), nil, nil)
+		if err != nil {
+			return err
+		}
+		updateRet.Close()
+	}
+
+	return nil
+}
+
+func dataBranchDeleteTable(
+	execCtx *ExecCtx,
+	ses *Session,
+	stmt *tree.DataBranchDeleteTable,
+) (err error) {
+	var (
+		bh       BackgroundExec
+		deferred func(error) error
+	)
+
+	if bh, deferred, err = getBackExecutor(execCtx.reqCtx, ses); err != nil {
+		return
+	}
+
+	defer func() {
+		if deferred != nil {
+			err = deferred(err)
+		}
+	}()
+
+	var (
+		dbName  = stmt.TableName.SchemaName
+		tblName = stmt.TableName.ObjectName
+		accId   uint32
+		sqlRet  executor.Result
+		tblID   uint64
+		found   bool
+	)
+
+	if len(dbName) == 0 {
+		dbName = tree.Identifier(ses.GetTxnCompileCtx().DefaultDatabase())
+	}
+
+	if accId, err = defines.GetAccountId(execCtx.reqCtx); err != nil {
+		return
+	}
+
+	if sqlRet, err = runSql(
+		execCtx.reqCtx, ses, bh, fmt.Sprintf(
+			"select rel_id from %s.%s where account_id = %d and reldatabase = '%s' and relname = '%s'",
+			catalog.MO_CATALOG, catalog.MO_TABLES, accId, dbName, tblName,
+		), nil, nil,
+	); err != nil {
+		return
+	}
+
+	sqlRet.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		if rows == 0 {
+			return false
+		}
+		tblID = vector.GetFixedAtWithTypeCheck[uint64](cols[0], 0)
+		found = true
+		return false
+	})
+	sqlRet.Close()
+
+	{
+		var dropRet executor.Result
+		defer func() {
+			dropRet.Close()
+		}()
+
+		dropSQL := fmt.Sprintf("drop table if exists `%s`.`%s`", dbName, tblName)
+		if dropRet, err = runSql(execCtx.reqCtx, ses, bh, dropSQL, nil, nil); err != nil {
+			return
+		}
+	}
+
+	if !found {
+		return nil
+	}
+
+	if err = markBranchTablesDeleted(execCtx.reqCtx, ses, bh, accId, []uint64{tblID}); err != nil {
+		return
+	}
+
+	return nil
+}
+
+func dataBranchDeleteDatabase(
+	execCtx *ExecCtx,
+	ses *Session,
+	stmt *tree.DataBranchDeleteDatabase,
+) (err error) {
+	var (
+		bh       BackgroundExec
+		deferred func(error) error
+	)
+
+	if bh, deferred, err = getBackExecutor(execCtx.reqCtx, ses); err != nil {
+		return
+	}
+
+	defer func() {
+		if deferred != nil {
+			err = deferred(err)
+		}
+	}()
+
+	var (
+		dbName   = stmt.DatabaseName
+		accId    uint32
+		sqlRet   executor.Result
+		tableIDs []uint64
+	)
+
+	if accId, err = defines.GetAccountId(execCtx.reqCtx); err != nil {
+		return
+	}
+
+	if sqlRet, err = runSql(
+		execCtx.reqCtx, ses, bh, fmt.Sprintf(
+			"select rel_id from %s.%s where account_id = %d and reldatabase = '%s'",
+			catalog.MO_CATALOG, catalog.MO_TABLES, accId, dbName,
+		), nil, nil,
+	); err != nil {
+		return
+	}
+
+	sqlRet.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		if rows == 0 {
+			return true
+		}
+		tableIDs = append(tableIDs, executor.GetFixedRows[uint64](cols[0])...)
+		return true
+	})
+	sqlRet.Close()
+
+	{
+		var dropRet executor.Result
+		defer func() {
+			dropRet.Close()
+		}()
+
+		dropSQL := fmt.Sprintf("drop database if exists `%s`", dbName)
+		if dropRet, err = runSql(execCtx.reqCtx, ses, bh, dropSQL, nil, nil); err != nil {
+			return
+		}
+	}
+
+	if err = markBranchTablesDeleted(execCtx.reqCtx, ses, bh, accId, tableIDs); err != nil {
+		return
+	}
+
+	return nil
+}
 
 func diffMergeAgency(
 	ses *Session,
@@ -3671,6 +3800,8 @@ func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer)
 		buf.WriteString("'")
 		buf.WriteString(val.(types.Date).String())
 		buf.WriteString("'")
+	case types.T_year:
+		buf.WriteString(val.(types.MoYear).String())
 	case types.T_decimal64:
 		buf.WriteString(val.(types.Decimal64).Format(t.Scale))
 	case types.T_decimal128:
@@ -4634,6 +4765,11 @@ func compareSingleValInVector(
 		return types.CompareValue(
 			vector.GetFixedAtNoTypeCheck[types.Timestamp](vec1, rowIdx1),
 			vector.GetFixedAtNoTypeCheck[types.Timestamp](vec2, rowIdx2),
+		), nil
+	case types.T_year:
+		return types.CompareValue(
+			vector.GetFixedAtNoTypeCheck[types.MoYear](vec1, rowIdx1),
+			vector.GetFixedAtNoTypeCheck[types.MoYear](vec2, rowIdx2),
 		), nil
 	case types.T_decimal64:
 		return types.CompareValue(

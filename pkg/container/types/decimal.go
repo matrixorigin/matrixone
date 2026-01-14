@@ -968,7 +968,9 @@ func (x Decimal128) Add(y Decimal128, scale1, scale2 int32) (z Decimal128, scale
 		err = y.ScaleInplace(scale - scale2)
 	} else if scale1 < scale2 {
 		scale = scale2
-		err = x.ScaleInplace(scale - scale1)
+		err = (&x).ScaleInplace(scale - scale1)
+	} else {
+		scale = scale1
 	}
 	if err == nil {
 		z, err = x.Add128(y)
@@ -1002,7 +1004,9 @@ func (x Decimal128) Sub(y Decimal128, scale1, scale2 int32) (z Decimal128, scale
 		err = y.ScaleInplace(scale - scale2)
 	} else if scale1 < scale2 {
 		scale = scale2
-		err = x.ScaleInplace(scale - scale1)
+		err = (&x).ScaleInplace(scale - scale1)
+	} else {
+		scale = scale1
 	}
 	if err == nil {
 		z, err = x.Sub128(y)
@@ -1457,8 +1461,28 @@ func Decimal128FromFloat64(x float64, width, scale int32) (y Decimal128, err err
 	return
 }
 
+func Decimal128FromInt64(x int64) Decimal128 {
+	if x >= 0 {
+		return Decimal128{uint64(x), 0}
+	} else {
+		return Decimal128{uint64(x), ^uint64(0)}
+	}
+}
+
+func Decimal128FromDecimal64(x Decimal64, scale int32) Decimal128 {
+	y := Decimal128{uint64(x), 0}
+	if x.Sign() {
+		y.B64_127 = ^y.B64_127
+	}
+	return y
+}
+
 func Decimal256FromInt64(x int64) Decimal256 {
-	return Decimal256{uint64(x), 0, 0, 0}
+	if x >= 0 {
+		return Decimal256{uint64(x), 0, 0, 0}
+	} else {
+		return Decimal256{uint64(x), ^uint64(0), ^uint64(0), ^uint64(0)}
+	}
 }
 
 func Decimal256FromDecimal128(x Decimal128) Decimal256 {

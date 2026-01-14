@@ -73,8 +73,8 @@ func (idx *IvfflatSearchIndex[T]) LoadIndex(proc *sqlexec.SqlProcess, idxcfg vec
 	centroids := make([][]T, idxcfg.Ivfflat.Lists)
 	elemsz := res.Batches[0].Vecs[1].GetType().GetArrayElementSize()
 	for _, bat := range res.Batches {
-		idVec := bat.Vecs[0]
 		faVec := bat.Vecs[1]
+		idVec := bat.Vecs[0]
 		ids := vector.MustFixedColNoTypeCheck[int64](idVec)
 		hasNull := faVec.HasNull()
 		for i, id := range ids {
@@ -192,15 +192,18 @@ func (idx *IvfflatSearchIndex[T]) Search(
 	var rowCount int64
 	for _, bat := range res.Batches {
 		rowCount += int64(bat.RowCount())
+		distVec := bat.Vecs[1]
+		pkVec := bat.Vecs[0]
+
 		for i := 0; i < bat.RowCount(); i++ {
-			if bat.Vecs[1].IsNull(uint64(i)) {
+			if distVec.IsNull(uint64(i)) {
 				continue
 			}
 
-			pk := vector.GetAny(bat.Vecs[0], i, true)
+			pk := vector.GetAny(pkVec, i, true)
 			resid = append(resid, pk)
 
-			dist := vector.GetFixedAtNoTypeCheck[float64](bat.Vecs[1], i)
+			dist := vector.GetFixedAtNoTypeCheck[float64](distVec, i)
 			dist = metric.DistanceTransformIvfflat(dist, metric.DistFuncNameToMetricType[rt.OrigFuncName], metric.MetricType(idxcfg.Ivfflat.Metric))
 			distances = append(distances, dist)
 		}

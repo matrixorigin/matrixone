@@ -16,19 +16,23 @@ package aggexec
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	io "io"
 
+	"github.com/matrixorigin/matrixone/pkg/common/arenaskl"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
 const (
-	AggBatchSize = 8192
-	magicNumber  = uint64(0xdeadbeefbeefdead)
+	AggBatchSize     = 8192
+	kAggArgArenaSize = 512 * 1024
+	kAggArgPrefixSz  = 2
+	kAggArgOrdinalSz = 4
+	magicNumber      = uint64(0xdeadbeefbeefdead)
 )
 
 type aggInfo struct {
@@ -36,9 +40,9 @@ type aggInfo struct {
 	isDistinct bool
 	argTypes   []types.Type
 	retType    types.Type
+	stateTypes []types.Type
 	emptyNull  bool
-	usePtrLen  bool
-	entrySize  int
+	saveArg    bool
 }
 
 func (a *aggInfo) String() string {
@@ -57,166 +61,511 @@ func (a *aggInfo) TypesInfo() ([]types.Type, types.Type) {
 	return a.argTypes, a.retType
 }
 
-type aggState[S any] struct {
-	length   int64
-	capacity int64
-	states   []byte
+type aggState struct {
+	length   int32
+	capacity int32
+	// vecs are for agg state.
+	vecs []*vector.Vector
+	// argbuf is buffer to the arena for skiplist
+	argCnt []uint32
+	argbuf []byte
+	argSkl *arenaskl.Skiplist
 }
 
-func (ag *aggState[S]) init(mp *mpool.MPool, usePtrLen bool, sz int, n int64) error {
-	var err error
-	if sz > 0 && !usePtrLen {
-		ag.states, err = mp.Alloc(sz*int(n), true)
-	} else {
-		ag.states, err = mp.Alloc(int(n)*mpool.PtrLenSize, true)
+func (ag *aggState) init(mp *mpool.MPool, l, c int32, info *aggInfo) error {
+	if c <= 0 || c > AggBatchSize {
+		return moerr.NewInternalErrorNoCtxf("invalid length or capacity: %d, %d", l, c)
 	}
-	if err != nil {
-		return err
+	if l != 0 && l != c {
+		return moerr.NewInternalErrorNoCtxf("invalid length or capacity: %d, %d", l, c)
 	}
+	ag.length = l
+	ag.capacity = c
 
-	ag.length = 0
-	ag.capacity = int64(n)
+	var err error
+	if !info.saveArg {
+		ag.vecs = make([]*vector.Vector, len(info.stateTypes))
+		for i, typ := range info.stateTypes {
+			ag.vecs[i] = vector.NewVec(typ)
+			if err = ag.vecs[i].PreExtend(int(c), mp); err != nil {
+				return err
+			}
+			if info.emptyNull {
+				ag.vecs[i].SetAllNulls(int(c))
+			}
+		}
+	} else {
+		if ag.argCnt, err = mpool.MakeSlice[uint32](int(c), mp, true); err != nil {
+			return err
+		}
+
+		bufsz := kAggArgArenaSize
+		if c < 1024 {
+			bufsz = 16 * 1024
+		}
+
+		if ag.argbuf, err = mp.Alloc(bufsz, true); err != nil {
+			return err
+		}
+		arena := arenaskl.NewArena(ag.argbuf)
+		ag.argSkl = arenaskl.NewSkiplist(arena, bytes.Compare)
+	}
 	return nil
 }
 
-func (ag *aggState[S]) grow(mp *mpool.MPool, usePtrLen bool, more int64) int64 {
-	canAdd := ag.capacity - ag.length
+func (ag *aggState) grow(mp *mpool.MPool, more int32, expandLen bool) (int32, int32) {
+	canAdd := int32(ag.capacity - ag.length)
+	var toAdd int32
+
 	if more <= canAdd {
-		ag.length += more
-		return 0
+		canAdd = more
+		if expandLen {
+			ag.length += more
+		}
 	} else {
-		ag.length = ag.capacity
-		return more - canAdd
+		if expandLen {
+			ag.length = ag.capacity
+		}
+		toAdd = more - canAdd
+	}
+
+	if expandLen {
+		for _, vec := range ag.vecs {
+			vec.SetLength(int(ag.length))
+		}
+	}
+
+	return canAdd, toAdd
+}
+
+func (ag *aggState) writeStateArg(i int32, buf *bytes.Buffer, info *aggInfo) error {
+	types.WriteUint32(buf, ag.argCnt[i])
+	if ag.argCnt[i] != 0 {
+		// open iterator and write to buf
+		xcnt := 0
+		var lkb, ukb [kAggArgPrefixSz]byte
+		lk := lkb[:]
+		uk := ukb[:]
+		binary.BigEndian.PutUint16(lk, uint16(i))
+		binary.BigEndian.PutUint16(uk, uint16(i+1))
+		it := ag.argSkl.NewIter(lk, uk)
+		if info.argTypes[0].IsFixedLen() {
+			for ok, k, _ := it.SeekGE(lk); ok; ok, k, _ = it.Next() {
+				/*
+					checkI := binary.BigEndian.Uint16(k[:kAggArgPrefixSz])
+					if checkI != uint16(i) {
+						panic(moerr.NewInternalErrorNoCtxf("writeStateArg: mismatch i: %d != %d", checkI, i))
+					}
+				*/
+				if _, err := buf.Write(k[kAggArgPrefixSz:]); err != nil {
+					return err
+				}
+				xcnt++
+			}
+		} else {
+			for ok, k, _ := it.SeekGE(lk); ok; ok, k, _ = it.Next() {
+				/*
+					checkI := binary.BigEndian.Uint16(k[:kAggArgPrefixSz])
+					if checkI != uint16(i) {
+						panic(moerr.NewInternalErrorNoCtxf("writeStateArg: mismatch i: %d != %d", checkI, i))
+					}
+				*/
+				if err := types.WriteSizeBytes(k[kAggArgPrefixSz:], buf); err != nil {
+					return err
+				}
+				xcnt++
+			}
+		}
+
+		if int(ag.argCnt[i]) != xcnt {
+			panic(moerr.NewInternalErrorNoCtxf("writeStateArg: mismatch count: %d != %d", xcnt, ag.argCnt[i]))
+		}
+		it.Close()
+	}
+	return nil
+}
+
+func (ag *aggState) readStateArg(mp *mpool.MPool, i int32, r io.Reader, info *aggInfo) error {
+	var err error
+	if ag.argCnt[i], err = types.ReadUint32(r); err != nil {
+		return err
+	}
+	if ag.argCnt[i] == 0 {
+		return nil
+	}
+	// read the state arguments
+	var kbuf []byte
+	if info.argTypes[0].IsFixedLen() {
+		fixedLen := info.argTypes[0].GetSize()
+		if info.isDistinct {
+			kbuf = make([]byte, kAggArgPrefixSz+fixedLen)
+		} else {
+			kbuf = make([]byte, kAggArgPrefixSz+kAggArgOrdinalSz+fixedLen)
+		}
+	} else {
+		kbuf = make([]byte, kAggArgPrefixSz)
+	}
+
+	for ui := uint32(0); ui < ag.argCnt[i]; ui++ {
+		if info.argTypes[0].IsFixedLen() {
+			binary.BigEndian.PutUint16(kbuf[:kAggArgPrefixSz], uint16(i))
+			if _, err = io.ReadFull(r, kbuf[kAggArgPrefixSz:]); err != nil {
+				return err
+			}
+		} else {
+			binary.BigEndian.PutUint16(kbuf[:kAggArgPrefixSz], uint16(i))
+			_, kbuf, err = types.ReadSizeBytesToBuf(r, kbuf, kAggArgPrefixSz)
+			if err != nil {
+				return err
+			}
+		}
+
+		if err = ag.insertArg(mp, kbuf); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (ag *aggState) writeStateToBuf(mp *mpool.MPool, info *aggInfo, flags []uint8, buf *bytes.Buffer) error {
+	var cnt int32
+	for i := range flags {
+		if flags[i] != 0 {
+			cnt += 1
+		}
+	}
+
+	if err := types.WriteUint64(buf, magicNumber); err != nil {
+		return err
+	}
+	defer types.WriteUint64(buf, magicNumber)
+
+	types.WriteInt32(buf, cnt)
+	if cnt == 0 {
+		return nil
+	}
+
+	if !info.saveArg {
+		for _, vec := range ag.vecs {
+			err := func() error {
+				bufVec := vector.NewOffHeapVecWithType(*vec.GetType())
+				defer bufVec.Free(mp)
+				if err := bufVec.UnionBatch(vec, 0, int(cnt), flags, mp); err != nil {
+					return err
+				}
+				if err := bufVec.MarshalBinaryWithBuffer(buf); err != nil {
+					return err
+				}
+				return nil
+			}()
+			if err != nil {
+				return err
+			}
+		}
+	} else {
+		if ag.argSkl == nil {
+			return moerr.NewInternalErrorNoCtx("argSkl is not initialized")
+		}
+		for i := range flags {
+			if flags[i] != 0 {
+				if err := ag.writeStateArg(int32(i), buf, info); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func (ag *aggState) writeAllStatesToBuf(buf *bytes.Buffer, info *aggInfo) error {
+	if err := types.WriteUint64(buf, magicNumber); err != nil {
+		return err
+	}
+	defer types.WriteUint64(buf, magicNumber)
+
+	types.WriteInt32(buf, ag.length)
+	if ag.length == 0 {
+		return nil
+	}
+
+	if !info.saveArg {
+		for _, vec := range ag.vecs {
+			if err := vec.MarshalBinaryWithBuffer(buf); err != nil {
+				return err
+			}
+		}
+	} else {
+		if ag.argSkl == nil {
+			return moerr.NewInternalErrorNoCtx("argSkl is not initialized")
+		}
+		for i := range ag.length {
+			if err := ag.writeStateArg(int32(i), buf, info); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (ag *aggState) readState(mp *mpool.MPool, reader io.Reader, info *aggInfo) (int32, error) {
+	checkAggStateMagic(reader)
+	defer checkAggStateMagic(reader)
+
+	cnt, err := types.ReadInt32(reader)
+	if err != nil {
+		return 0, err
+	}
+	if cnt == 0 {
+		return 0, nil
+	}
+
+	if cnt > AggBatchSize {
+		return 0, moerr.NewInternalErrorNoCtxf("invalid count: %d", cnt)
+	}
+	if err := ag.init(mp, cnt, cnt, info); err != nil {
+		return 0, err
+	}
+
+	if !info.saveArg {
+		for _, vec := range ag.vecs {
+			if err := vec.UnmarshalWithReader(reader, mp); err != nil {
+				return 0, err
+			}
+		}
+	} else {
+		for i := range cnt {
+			if err := ag.readStateArg(mp, int32(i), reader, info); err != nil {
+				return 0, err
+			}
+		}
+	}
+
+	return cnt, nil
+}
+
+// appendFromStateArg appends the state from other aggState (starting from offset)
+func (ag *aggState) appendFromStateArg(mp *mpool.MPool, otherOffset int32, other *aggState, info *aggInfo) (int32, error) {
+	// first decide how many we can append
+	space := int32(ag.capacity - ag.length)
+	if space == 0 {
+		// no space to append, return the original offset and caller will append to the next group.
+		return otherOffset, nil
+	}
+
+	start := otherOffset
+	end := start + space
+	if end > other.length {
+		end = other.length
+	}
+
+	if !info.saveArg {
+		for i := range ag.vecs {
+			if err := ag.vecs[i].UnionBatch(other.vecs[i], int64(otherOffset), int(end-start), nil, mp); err != nil {
+				return 0, err
+			}
+		}
+		ag.length += end - start
+	} else {
+		for i := start; i < end; i++ {
+			ag.argCnt[ag.length] = other.argCnt[i]
+			var lkb, ukb [kAggArgPrefixSz]byte
+			lk := lkb[:]
+			uk := ukb[:]
+			binary.BigEndian.PutUint16(lk, uint16(i))
+			binary.BigEndian.PutUint16(uk, uint16(i+1))
+			it := other.argSkl.NewIter(lk, uk)
+			for ok, k, _ := it.SeekGE(lk); ok; ok, k, _ = it.Next() {
+				// copy the key to the new bytes buffer
+				kcpy := append([]byte(nil), k...)
+				binary.BigEndian.PutUint16(kcpy[:kAggArgPrefixSz], uint16(ag.length))
+				if err := ag.insertArg(mp, kcpy); err != nil {
+					return 0, err
+				}
+			}
+			ag.length++
+		}
+	}
+	return end, nil
+}
+
+func (ag *aggState) insertArg(mp *mpool.MPool, kbuf []byte) error {
+	if ag.argSkl == nil {
+		return moerr.NewInternalErrorNoCtx("argSkl is not initialized")
+	}
+
+	if err := ag.argSkl.Add(kbuf, nil); err != arenaskl.ErrArenaFull {
+		return err
+	}
+
+	// arena is full, we need to grow the arena.
+	argBuf, err := mp.Alloc(len(ag.argbuf)+kAggArgArenaSize, true)
+	if err != nil {
+		return err
+	}
+	oldArgBuf := ag.argbuf
+	ag.argbuf = argBuf
+	defer mp.Free(oldArgBuf)
+
+	newArena := arenaskl.NewArena(ag.argbuf)
+	newArgSkl := arenaskl.NewSkiplist(newArena, bytes.Compare)
+	// move entries to new arena
+	// I am pretty sure a realloc then fix a few pointers in skl should work, but
+	// let's not do that for now, until the profiling shows this is a bottleneck.
+	it := ag.argSkl.NewIter(nil, nil)
+	for ok, k, _ := it.First(); ok; ok, k, _ = it.Next() {
+		if err := newArgSkl.Add(k, nil); err != nil {
+			// the tree is messed up.
+			ag.argSkl = nil
+			return err
+		}
+	}
+	it.Close()
+	ag.argSkl = newArgSkl
+
+	// Now do it again, this time it should succeed and if it errors again (ErrArenaFull, means
+	// we added an arg that is longer than kAggArgArenaSize, too bad, cannot handle such a long arg
+	// for agg.
+	err = ag.argSkl.Add(kbuf, nil)
+	return err
+}
+
+func (ag *aggState) fillArg(mp *mpool.MPool, y uint16, val []byte, distinct bool) error {
+	if distinct {
+		k := make([]byte, len(val)+kAggArgPrefixSz)
+		binary.BigEndian.PutUint16(k[:kAggArgPrefixSz], y)
+		copy(k[kAggArgPrefixSz:], val)
+		err := ag.insertArg(mp, k)
+		if err == nil {
+			ag.argCnt[y] += 1
+			if ag.argCnt[y] == 0 {
+				return moerr.NewInternalErrorNoCtx("agg fillArg: too many distinct arguments")
+			}
+			return nil
+		} else if err == arenaskl.ErrRecordExists {
+			return nil
+		} else {
+			return err
+		}
+	} else {
+		k := make([]byte, len(val)+kAggArgPrefixSz+kAggArgOrdinalSz)
+		binary.BigEndian.PutUint16(k[:kAggArgPrefixSz], y)
+		binary.BigEndian.PutUint32(k[kAggArgPrefixSz:kAggArgPrefixSz+kAggArgOrdinalSz], ag.argCnt[y])
+		ag.argCnt[y] += 1
+		if ag.argCnt[y] == 0 {
+			return moerr.NewInternalErrorNoCtx("agg fillArg: too many arguments")
+		}
+		copy(k[kAggArgPrefixSz+kAggArgOrdinalSz:], val)
+		err := ag.insertArg(mp, k)
+		if err == nil {
+			ag.argCnt[ag.length] += 1
+			if ag.argCnt[ag.length] == 0 {
+				return moerr.NewInternalErrorNoCtx("agg fillArg: too many arguments")
+			}
+			return nil
+		} else {
+			return err
+		}
 	}
 }
 
-func (ag *aggState[S]) writeStateToBuf(idx, sz int, usePtrLen bool, buf *bytes.Buffer) error {
-	if sz > 0 && !usePtrLen {
-		buf.Write(ag.states[idx*sz : (idx+1)*sz])
-		return nil
-	}
-	ptr := ag.getPtrLen(idx)
-	return types.WriteSizeBytes(ptr.ToByteSlice(), buf)
+func (ag *aggState) mergeArgs(mp *mpool.MPool, y uint16, other *aggState, otherY uint16, info *aggInfo) error {
+	err := other.iter(otherY, func(k []byte) error {
+		kcpy := append([]byte(nil), k...)
+		binary.BigEndian.PutUint16(kcpy[:kAggArgPrefixSz], y)
+		if !info.isDistinct {
+			binary.BigEndian.PutUint32(kcpy[kAggArgPrefixSz:kAggArgPrefixSz+kAggArgOrdinalSz], ag.argCnt[y])
+		}
+		fnerr := ag.insertArg(mp, kcpy)
+		if fnerr == nil {
+			ag.argCnt[y] += 1
+			if ag.argCnt[y] == 0 {
+				return moerr.NewInternalErrorNoCtx("agg mergeArgs: too many arguments")
+			}
+			return nil
+		} else if fnerr == arenaskl.ErrRecordExists {
+			if info.isDistinct {
+				return nil
+			} else {
+				panic(moerr.NewInternalErrorNoCtx("agg mergeArgs: duplicate arguments"))
+			}
+		} else {
+			return fnerr
+		}
+	})
+	return err
 }
 
-func (ag *aggState[S]) writeAllStatesToBuf(sz int, usePtrLen bool, buf *bytes.Buffer) error {
-	if sz > 0 && !usePtrLen {
-		buf.Write(ag.states[:sz*int(ag.length)])
-		return nil
-	}
-
-	ptrs := ag.getPtrLenSlice()
-	for _, ptr := range ptrs {
-		if err := types.WriteSizeBytes(ptr.ToByteSlice(), buf); err != nil {
+func (ag *aggState) iter(idx uint16, fn func(k []byte) error) error {
+	var lkb, ukb [kAggArgPrefixSz]byte
+	lk := lkb[:]
+	uk := ukb[:]
+	binary.BigEndian.PutUint16(lk, idx)
+	binary.BigEndian.PutUint16(uk, idx+1)
+	it := ag.argSkl.NewIter(lk, uk)
+	defer it.Close()
+	for ok, k, _ := it.SeekGE(lk); ok; ok, k, _ = it.Next() {
+		if err := fn(k); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (ag *aggState[S]) readState(mp *mpool.MPool, cnt int64, offset int64,
-	entrySize int, usePtrLen bool, reader io.Reader) (int64, error) {
-	rn := ag.length - offset
-	if rn >= cnt {
-		rn = cnt
+func (ag *aggState) free(mp *mpool.MPool) {
+	if ag.argSkl != nil {
+		mpool.FreeSlice(mp, ag.argCnt)
+		ag.argCnt = nil
+		mp.Free(ag.argbuf)
+		ag.argSkl = nil
 	}
-
-	if !usePtrLen {
-		bs := ag.states[int(offset)*entrySize : int(offset+rn)*entrySize]
-		_, err := io.ReadFull(reader, bs)
-		if err != nil {
-			return 0, err
-		}
-	} else {
-		ptrs := ag.getPtrLenSlice()
-		for i := 0; i < int(rn); i++ {
-			_, bs, err := types.ReadSizeBytes(reader)
-			if err != nil {
-				return 0, err
-			}
-			ptrs[offset+int64(i)].AppendRawBytes(mp, bs)
-		}
+	for _, vec := range ag.vecs {
+		vec.Free(mp)
 	}
-	return rn, nil
+	ag.vecs = nil
 }
 
-func (ag *aggState[S]) getStateSlice() []S {
-	return util.UnsafeSliceCast[S](ag.states)[:ag.length]
-}
-
-func (ag *aggState[S]) getState(idx int) *S {
-	return &ag.getStateSlice()[idx]
-}
-
-func (ag *aggState[S]) getPtrLenSlice() []mpool.PtrLen {
-	return util.UnsafeSliceCast[mpool.PtrLen](ag.states)[:ag.length]
-}
-
-func (ag *aggState[S]) getPtrLen(idx int) *mpool.PtrLen {
-	return &ag.getPtrLenSlice()[idx]
-}
-
-func (ag *aggState[S]) free(mp *mpool.MPool, usePtrLen bool, sz int) {
-	if sz < 0 || usePtrLen {
-		pls := ag.getPtrLenSlice()
-		for _, pl := range pls {
-			mp.Free(pl.ToByteSlice())
-		}
-	}
-	mp.Free(ag.states)
-	ag.states = nil
-	ag.length = 0
-	ag.capacity = 0
-}
-
-type aggExec[S any] struct {
+type aggExec struct {
 	mp *mpool.MPool
 	aggInfo
 	chunkSize int
-	state     []aggState[S]
+	state     []aggState
 }
 
-func (ae *aggExec[S]) marshal() ([]byte, error) {
+func (ae *aggExec) marshal() ([]byte, error) {
 	panic("not implemented")
 }
 
-func (ae *aggExec[S]) unmarshal(mp *mpool.MPool, result, empties, groups [][]byte) error {
+func (ae *aggExec) unmarshal(mp *mpool.MPool, result, empties, groups [][]byte) error {
 	panic("not implemented")
 }
 
-func (ae *aggExec[S]) getChunkSize() int {
+func (ae *aggExec) getChunkSize() int {
 	return ae.chunkSize
 }
 
-func (ae *aggExec[S]) modifyChunkSize(n int) {
+func (ae *aggExec) modifyChunkSize(n int) {
 	if n != 1 && n != AggBatchSize {
 		panic(moerr.NewInternalErrorNoCtxf("invalid chunk size: %d", n))
 	}
 	ae.chunkSize = n
 }
 
-func (ae *aggExec[S]) GetOptResult() SplitResult {
+func (ae *aggExec) GetOptResult() SplitResult {
 	return ae
 }
 
-func (ae *aggExec[S]) GetXY(u uint64) (int, int) {
+func (ae *aggExec) getXY(u uint64) (int, uint16) {
 	x := u / AggBatchSize
 	y := u % AggBatchSize
-	return int(x), int(y)
+	return int(x), uint16(y)
 }
 
-func (ae *aggExec[S]) NextXY(x, y int) (int, int) {
-	if y == int(AggBatchSize)-1 {
-		return x + 1, 0
-	}
-	return x, y + 1
-}
-
-func (ae *aggExec[S]) GetNumChunks() int {
+func (ae *aggExec) GetNumChunks() int {
 	return len(ae.state)
 }
 
-func (ae *aggExec[S]) GetNumGroups() int {
+func (ae *aggExec) GetNumGroups() int {
 	num := 0
 	for _, state := range ae.state {
 		num += int(state.length)
@@ -224,75 +573,67 @@ func (ae *aggExec[S]) GetNumGroups() int {
 	return num
 }
 
-func (ae *aggExec[S]) GetState(idx uint64) *S {
-	x, y := ae.GetXY(idx)
-	return ae.state[x].getState(y)
-}
-
-func (ae *aggExec[S]) GetPtrLen(idx uint64) *mpool.PtrLen {
-	x, y := ae.GetXY(idx)
-	return ae.state[x].getPtrLen(y)
-}
-
-func (ae *aggExec[S]) GroupGrow(more int) error {
+func (ae *aggExec) GroupGrow(more int) error {
 	if ae.chunkSize == 1 {
 		// special grow 1
-		ae.state = make([]aggState[S], 1)
-		if err := ae.state[0].init(ae.mp, ae.aggInfo.usePtrLen, int(ae.aggInfo.entrySize), 1); err != nil {
+		ae.state = make([]aggState, 1)
+		if err := ae.state[0].init(ae.mp, 1, 1, &ae.aggInfo); err != nil {
 			panic(err)
 		}
-		ae.state[0].grow(ae.mp, ae.aggInfo.usePtrLen, 1)
-		// special case for calling first time with more = 1
+
+		ae.state[0].grow(ae.mp, 1, true)
 		return nil
 	}
 
 	// grow the state until the more groups are added
-	for remain := int64(more); remain > 0; {
+	for remain := int32(more); remain > 0; {
 		if len(ae.state) != 0 {
-			remain = ae.state[len(ae.state)-1].grow(ae.mp, ae.aggInfo.usePtrLen, remain)
+			_, remain = ae.state[len(ae.state)-1].grow(ae.mp, remain, true)
 		}
 
 		if remain == 0 {
 			return nil
 		}
-		ae.state = append(ae.state, aggState[S]{})
-		if err := ae.state[len(ae.state)-1].init(
-			ae.mp, ae.aggInfo.usePtrLen, ae.aggInfo.entrySize, AggBatchSize); err != nil {
+		ae.state = append(ae.state, aggState{})
+		if err := ae.state[len(ae.state)-1].init(ae.mp, 0, AggBatchSize, &ae.aggInfo); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (ae *aggExec[S]) PreAllocateGroups(more int) error {
-	// there is no need to preallocate groups for aggExec
+func (ae *aggExec) PreAllocateGroups(more int) error {
+	// grow the state until the more groups are added
+	for remain := int32(more); remain > 0; {
+		if len(ae.state) != 0 {
+			_, remain = ae.state[len(ae.state)-1].grow(ae.mp, remain, false)
+		}
+
+		if remain == 0 {
+			return nil
+		}
+		ae.state = append(ae.state, aggState{})
+		if err := ae.state[len(ae.state)-1].init(ae.mp, 0, AggBatchSize, &ae.aggInfo); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
 // Fill, BulkFill, BatchFill, and Flush are implemented by each agg function.
 // SetExtraInformation also implemented by each agg.
 
-func (ae *aggExec[S]) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
-
+func (ae *aggExec) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
 	magic := magicNumber
 	if err := types.WriteUint64(buf, magic); err != nil {
 		return err
 	}
 
-	// write the number of groups
-	types.WriteInt32(buf, int32(ae.aggInfo.entrySize))
-	types.WriteInt64(buf, cnt)
-
-	if cnt != 0 {
-		for i := range flags {
-			st := &ae.state[i]
-			for j := range flags[i] {
-				if flags[i][j] == 1 {
-					if err := st.writeStateToBuf(j, ae.aggInfo.entrySize, ae.aggInfo.usePtrLen, buf); err != nil {
-						return err
-					}
-				}
-			}
+	// write the number of chunks
+	types.WriteInt32(buf, int32(len(flags)))
+	for i := range flags {
+		if err := ae.state[i].writeStateToBuf(ae.mp, &ae.aggInfo, flags[i], buf); err != nil {
+			return err
 		}
 	}
 
@@ -302,7 +643,7 @@ func (ae *aggExec[S]) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *by
 	return nil
 }
 
-func (ae *aggExec[S]) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
+func (ae *aggExec) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
 	magic := magicNumber
 	if err := types.WriteUint64(buf, magic); err != nil {
 		return err
@@ -311,14 +652,10 @@ func (ae *aggExec[S]) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer
 	if chunk >= len(ae.state) {
 		return moerr.NewInternalErrorNoCtx("chunk index out of range")
 	}
-	st := &ae.state[chunk]
-	types.WriteInt32(buf, int32(ae.aggInfo.entrySize))
-	types.WriteInt64(buf, int64(st.length))
 
-	if st.length != 0 {
-		if err := st.writeAllStatesToBuf(ae.aggInfo.entrySize, ae.aggInfo.usePtrLen, buf); err != nil {
-			return err
-		}
+	types.WriteInt32(buf, int32(1))
+	if err := ae.state[chunk].writeAllStatesToBuf(buf, &ae.aggInfo); err != nil {
+		return err
 	}
 
 	if err := types.WriteUint64(buf, magic); err != nil {
@@ -328,180 +665,90 @@ func (ae *aggExec[S]) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer
 	return nil
 }
 
-func (ae *aggExec[S]) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
-
+func checkAggStateMagic(reader io.Reader) {
 	magic, err := types.ReadUint64(reader)
-	if err != nil {
-		return err
+	if err != nil || magic != magicNumber {
+		panic(moerr.NewInternalErrorNoCtxf("invalid magic number, got %d, %v", magic, err))
 	}
-	if magic != magicNumber {
-		return moerr.NewInternalErrorNoCtx("invalid magic number")
-	}
+}
 
-	sz32, err := types.ReadInt32(reader)
-	if err != nil {
-		return err
-	}
-	if int(sz32) != ae.aggInfo.entrySize {
-		return moerr.NewInternalErrorNoCtxf("entry size mismatch: %d != %d", sz32, ae.aggInfo.entrySize)
-	}
+func (ae *aggExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
+	checkAggStateMagic(reader)
+	defer checkAggStateMagic(reader)
 
-	cnt, err := types.ReadInt64(reader)
+	// Always unmarshal from a clean state.
+	ae.Free()
+
+	// read number of chunks
+	cnt, err := types.ReadInt32(reader)
 	if err != nil {
 		return err
 	}
 
-	if cnt != 0 {
-		if ae.chunkSize == 1 {
-			// this is no group by case, in this case, caller has already called GroupGrow(1)
-			if cnt != 1 {
-				return moerr.NewInternalErrorNoCtxf("invalid count: %d", cnt)
+	// nothing to read
+	if cnt == 0 {
+		return nil
+	} else if cnt == 1 {
+		// easy case, just one chunk and we read it directly.
+		ae.state = make([]aggState, 1)
+		if _, err := ae.state[0].readState(mp, reader, &ae.aggInfo); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	// multi chunks to read, in this case, we will read each chunk and merge them
+	// into fully packed chunks.
+	for range cnt {
+		err = func() error {
+			var st aggState
+			defer st.free(mp)
+			if _, err := st.readState(mp, reader, &ae.aggInfo); err != nil {
+				return err
 			}
-			if len(ae.state) != 1 || ae.state[0].length != 1 {
-				return moerr.NewInternalErrorNoCtx("invalid state, single group case but state is not initialized")
+			if st.length == 0 {
+				return nil
 			}
-			rc, err := ae.state[0].readState(mp, cnt, 0,
-				ae.aggInfo.entrySize, ae.aggInfo.usePtrLen, reader)
+
+			oldX := max(0, len(ae.state)-1)
+			ae.PreAllocateGroups(int(st.length))
+			offset, err := ae.state[oldX].appendFromStateArg(mp, 0, &st, &ae.aggInfo)
 			if err != nil {
 				return err
 			}
-			if rc != 1 {
-				return moerr.NewInternalErrorNoCtxf("invalid read count: %d", rc)
-			}
-
-			magic, err := types.ReadUint64(reader)
-			if err != nil {
-				return err
-			}
-
-			if magic != magicNumber {
-				return moerr.NewInternalErrorNoCtx("invalid magic number")
+			if offset < st.length {
+				oldX += 1
+				offset, err = ae.state[oldX].appendFromStateArg(mp, offset, &st, &ae.aggInfo)
+				// we should not have any remaining
+				if err != nil || offset != st.length {
+					return moerr.NewInternalErrorNoCtxf("invalid read count: %d", offset)
+				}
 			}
 			return nil
-		}
+		}()
 
-		// compute oldX and oldY before GroupGrow
-		oldX := len(ae.state) - 1
-		oldY := int64(0)
-		if oldX < 0 {
-			oldX = 0
-		} else {
-			oldY = ae.state[oldX].length
-		}
-
-		if oldY == AggBatchSize {
-			oldX += 1
-			oldY = 0
-		}
-
-		ae.GroupGrow(int(cnt))
-
-		for cnt > 0 {
-			rc, err := ae.state[oldX].readState(mp, cnt, oldY,
-				ae.aggInfo.entrySize, ae.aggInfo.usePtrLen, reader)
-			if err != nil {
-				return err
-			}
-			cnt -= rc
-			oldX += 1
-			oldY = 0
+		if err != nil {
+			return err
 		}
 	}
-
-	magic, err = types.ReadUint64(reader)
-	if err != nil {
-		return err
-	}
-	if magic != magicNumber {
-		return moerr.NewInternalErrorNoCtx("invalid magic number")
-	}
-
 	return nil
 }
 
-func (ae *aggExec[S]) Size() int64 {
+func (ae *aggExec) Size() int64 {
 	panic("not implemented")
 }
 
-func (ae *aggExec[S]) Free() {
-	for _, state := range ae.state {
-		state.free(ae.mp, ae.aggInfo.usePtrLen, int(ae.aggInfo.entrySize))
+func (ae *aggExec) Free() {
+	for _, st := range ae.state {
+		st.free(ae.mp)
 	}
 }
 
-func (ae *aggExec[S]) batchFillArgs(offset int, groups []uint64, vectors []*vector.Vector, distinct bool) error {
+func (ae *aggExec) batchFillArgs(offset int, groups []uint64, vectors []*vector.Vector, distinct bool) error {
 	if len(vectors) != 1 {
 		return moerr.NewInternalErrorNoCtx("batchFillArgs: only one vector is supported")
 	}
 
-	switch vectors[0].GetType().Oid {
-	case types.T_bool:
-		return batchFillFixed[bool](ae, offset, groups, vectors, distinct)
-	case types.T_bit:
-		return batchFillFixed[uint64](ae, offset, groups, vectors, distinct)
-	case types.T_int8:
-		return batchFillFixed[int8](ae, offset, groups, vectors, distinct)
-	case types.T_int16:
-		return batchFillFixed[int16](ae, offset, groups, vectors, distinct)
-	case types.T_int32:
-		return batchFillFixed[int32](ae, offset, groups, vectors, distinct)
-	case types.T_int64:
-		return batchFillFixed[int64](ae, offset, groups, vectors, distinct)
-	case types.T_uint8:
-		return batchFillFixed[uint8](ae, offset, groups, vectors, distinct)
-	case types.T_uint16:
-		return batchFillFixed[uint16](ae, offset, groups, vectors, distinct)
-	case types.T_uint32:
-		return batchFillFixed[uint32](ae, offset, groups, vectors, distinct)
-	case types.T_uint64:
-		return batchFillFixed[uint64](ae, offset, groups, vectors, distinct)
-	case types.T_float32:
-		return batchFillFixed[float32](ae, offset, groups, vectors, distinct)
-	case types.T_float64:
-		return batchFillFixed[float64](ae, offset, groups, vectors, distinct)
-	case types.T_decimal64:
-		return batchFillFixed[types.Decimal64](ae, offset, groups, vectors, distinct)
-	case types.T_decimal128:
-		return batchFillFixed[types.Decimal128](ae, offset, groups, vectors, distinct)
-	case types.T_decimal256:
-		return batchFillFixed[types.Decimal256](ae, offset, groups, vectors, distinct)
-	case types.T_date:
-		return batchFillFixed[types.Date](ae, offset, groups, vectors, distinct)
-	case types.T_time:
-		return batchFillFixed[types.Time](ae, offset, groups, vectors, distinct)
-	case types.T_datetime:
-		return batchFillFixed[types.Datetime](ae, offset, groups, vectors, distinct)
-	case types.T_timestamp:
-		return batchFillFixed[types.Timestamp](ae, offset, groups, vectors, distinct)
-	case types.T_interval:
-		return batchFillFixed[int64](ae, offset, groups, vectors, distinct)
-	case types.T_uuid:
-		return batchFillFixed[types.Uuid](ae, offset, groups, vectors, distinct)
-	case types.T_TS:
-		return batchFillFixed[types.TS](ae, offset, groups, vectors, distinct)
-	case types.T_Rowid:
-		return batchFillFixed[types.Rowid](ae, offset, groups, vectors, distinct)
-	case types.T_Blockid:
-		return batchFillFixed[types.Blockid](ae, offset, groups, vectors, distinct)
-	case types.T_Objectid:
-		return batchFillFixed[types.Objectid](ae, offset, groups, vectors, distinct)
-	case types.T_enum:
-		return batchFillFixed[types.Enum](ae, offset, groups, vectors, distinct)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text,
-		types.T_binary, types.T_varbinary,
-		types.T_tuple, types.T_array_float32, types.T_array_float64,
-		types.T_datalink:
-		return batchFillVarLen(ae, offset, groups, vectors, distinct)
-	default:
-		return moerr.NewInternalErrorNoCtxf("batchFillArgs: type %d is not supported", vectors[0].GetType().Oid)
-	}
-}
-
-func batchFillFixed[T comparable, S any](ae *aggExec[S], offset int, groups []uint64, vectors []*vector.Vector, distinct bool) error {
-	var ts []T
-	// No type check!  Our T is not necessarily a compatible type for the vector.
-	// We only care T size.
-	vector.ToSliceNoTypeCheck(vectors[0], &ts)
 	for i, group := range groups {
 		if group == GroupNotMatched {
 			continue
@@ -511,133 +758,58 @@ func batchFillFixed[T comparable, S any](ae *aggExec[S], offset int, groups []ui
 		if vectors[0].IsNull(idx) {
 			continue
 		} else {
-			ptr := ae.GetPtrLen(group - 1)
-			if distinct {
-				if mpool.PtrLenFindFixed(ptr, ts[offset+i]) != -1 {
-					continue
-				}
+			x, y := ae.getXY(group - 1)
+			bs := vectors[0].GetRawBytesAt(int(idx))
+			if err := ae.state[x].fillArg(ae.mp, y, bs, distinct); err != nil {
+				return err
 			}
-			mpool.AppendFixed(ae.mp, ptr, ts[offset+i])
 		}
 	}
 	return nil
 }
 
-func batchFillVarLen[S any](ae *aggExec[S], offset int, groups []uint64, vectors []*vector.Vector, distinct bool) error {
+func (ae *aggExec) batchMergeArgs(next *aggExec, offset int, groups []uint64, distinct bool) error {
 	for i, group := range groups {
 		if group == GroupNotMatched {
 			continue
 		}
 
-		idx := uint64(i) + uint64(offset)
-		if vectors[0].IsNull(idx) {
-			continue
-		}
-		ptr := ae.GetPtrLen(group - 1)
-		bs := vectors[0].GetBytesAt(int(offset + i))
-		if distinct {
-			if ptr.FindBytes(bs) != -1 {
-				continue
-			}
-		}
-		ptr.AppendBytes(ae.mp, bs)
-	}
-	return nil
-}
+		x, y := ae.getXY(group - 1)
+		otherX, otherY := next.getXY(uint64(offset + i))
 
-func (ae *aggExec[S]) batchMergeArgs(next *aggExec[S], offset int, groups []uint64, distinct bool) error {
-	// switch on oid
-	switch ae.aggInfo.argTypes[0].Oid {
-	case types.T_bool:
-		return batchMergeFixed[bool](ae, next, offset, groups, distinct)
-	case types.T_bit:
-		return batchMergeFixed[uint64](ae, next, offset, groups, distinct)
-	case types.T_int8:
-		return batchMergeFixed[int8](ae, next, offset, groups, distinct)
-	case types.T_int16:
-		return batchMergeFixed[int16](ae, next, offset, groups, distinct)
-	case types.T_int32:
-		return batchMergeFixed[int32](ae, next, offset, groups, distinct)
-	case types.T_int64:
-		return batchMergeFixed[int64](ae, next, offset, groups, distinct)
-	case types.T_uint8:
-		return batchMergeFixed[uint8](ae, next, offset, groups, distinct)
-	case types.T_uint16:
-		return batchMergeFixed[uint16](ae, next, offset, groups, distinct)
-	case types.T_uint32:
-		return batchMergeFixed[uint32](ae, next, offset, groups, distinct)
-	case types.T_uint64:
-		return batchMergeFixed[uint64](ae, next, offset, groups, distinct)
-	case types.T_float32:
-		return batchMergeFixed[float32](ae, next, offset, groups, distinct)
-	case types.T_float64:
-		return batchMergeFixed[float64](ae, next, offset, groups, distinct)
-	case types.T_decimal64:
-		return batchMergeFixed[types.Decimal64](ae, next, offset, groups, distinct)
-	case types.T_decimal128:
-		return batchMergeFixed[types.Decimal128](ae, next, offset, groups, distinct)
-	case types.T_decimal256:
-		return batchMergeFixed[types.Decimal256](ae, next, offset, groups, distinct)
-	case types.T_date:
-		return batchMergeFixed[types.Date](ae, next, offset, groups, distinct)
-	case types.T_time:
-		return batchMergeFixed[types.Time](ae, next, offset, groups, distinct)
-	case types.T_datetime:
-		return batchMergeFixed[types.Datetime](ae, next, offset, groups, distinct)
-	case types.T_timestamp:
-		return batchMergeFixed[types.Timestamp](ae, next, offset, groups, distinct)
-	case types.T_interval:
-		return batchMergeFixed[int64](ae, next, offset, groups, distinct)
-	case types.T_uuid:
-		return batchMergeFixed[types.Uuid](ae, next, offset, groups, distinct)
-	case types.T_TS:
-		return batchMergeFixed[types.TS](ae, next, offset, groups, distinct)
-	case types.T_Rowid:
-		return batchMergeFixed[types.Rowid](ae, next, offset, groups, distinct)
-	case types.T_Blockid:
-		return batchMergeFixed[types.Blockid](ae, next, offset, groups, distinct)
-	case types.T_Objectid:
-		return batchMergeFixed[types.Objectid](ae, next, offset, groups, distinct)
-	case types.T_enum:
-		return batchMergeFixed[types.Enum](ae, next, offset, groups, distinct)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob, types.T_text,
-		types.T_binary, types.T_varbinary,
-		types.T_tuple, types.T_array_float32, types.T_array_float64,
-		types.T_datalink:
-		return batchMergeVarLen(ae, next, offset, groups, distinct)
-	default:
-		return moerr.NewInternalErrorNoCtxf("batchMergeArgs: type %d is not supported", ae.aggInfo.argTypes[0].Oid)
-	}
-}
-
-func batchMergeFixed[T comparable, S any](ae *aggExec[S], next *aggExec[S], offset int, groups []uint64, distinct bool) error {
-	for i, group := range groups {
-		if group == GroupNotMatched {
-			continue
-		}
-
-		ptr := ae.GetPtrLen(group - 1)
-		otherPtr := next.GetPtrLen(uint64(offset + i))
-		otherTs := mpool.PtrLenToSlice[T](otherPtr)
-
-		if err := mpool.AppendFixedList(ae.mp, ptr, otherTs, distinct); err != nil {
+		err := ae.state[x].mergeArgs(ae.mp, y, &next.state[otherX], otherY, &ae.aggInfo)
+		if err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func batchMergeVarLen[S any](ae *aggExec[S], next *aggExec[S], offset int, groups []uint64, distinct bool) error {
-	for i, group := range groups {
-		if group == GroupNotMatched {
-			continue
-		}
+func (ag *aggState) checkArgsSkl() {
+	if ag.argSkl == nil {
+		return
+	}
 
-		ptr := ae.GetPtrLen(group - 1)
-		otherPtr := next.GetPtrLen(uint64(offset + i))
-		if err := ptr.AppendBytesList(ae.mp, otherPtr, distinct); err != nil {
-			return err
+	it := ag.argSkl.NewIter(nil, nil)
+	xcnt := make([]uint32, ag.length)
+	for ok, k, _ := it.First(); ok; ok, k, _ = it.Next() {
+		y := binary.BigEndian.Uint16(k[:kAggArgPrefixSz])
+		if y >= uint16(len(xcnt)) {
+			panic(moerr.NewInternalErrorNoCtxf("invalid y: %d", y))
+		}
+		xcnt[y]++
+	}
+	it.Close()
+
+	for i, cnt := range xcnt {
+		if cnt != ag.argCnt[i] {
+			panic(moerr.NewInternalErrorNoCtxf("invalid count: %d for y: %d, expected: %d", cnt, i, ag.argCnt[i]))
 		}
 	}
-	return nil
+}
+
+func (ae *aggExec) checkArgsSkl() {
+	for _, state := range ae.state {
+		state.checkArgsSkl()
+	}
 }

@@ -371,6 +371,29 @@ func TestCDCCases(t *testing.T) {
 			mustExec(db, "drop cdc task "+cdcTaskTbl+" internal")
 			verifyTaskPresent(cdcTaskTbl, false)
 
+			// Wait for all remaining tasks to be visible before dropping
+			// This avoids flaky failures due to transaction snapshot visibility issues
+			expectedRemainingTasks := 7 // 8 created - 1 dropped (cdc_task_tbl)
+			waitForTaskCount := func(expectedCount int) {
+				deadline := time.Now().Add(5 * time.Second)
+				backoff := 50 * time.Millisecond
+				for {
+					cnt := rows("", "select * from mo_catalog.mo_cdc_task")
+					if cnt == expectedCount {
+						return
+					}
+					if time.Now().After(deadline) {
+						t.Logf("warning: expected %d tasks but found %d, proceeding anyway", expectedCount, cnt)
+						return
+					}
+					time.Sleep(backoff)
+					if backoff < 400*time.Millisecond {
+						backoff *= 2
+					}
+				}
+			}
+			waitForTaskCount(expectedRemainingTasks)
+
 			// Drop all and validate empty
 			mustExec(db, "drop cdc all internal")
 			require.Equal(t, rows("", "select * from mo_catalog.mo_cdc_task"), 0)

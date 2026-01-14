@@ -196,7 +196,6 @@ Charlie    3    3000.00
 Alice    3    1000.00
 drop table customer_orders;
 drop table if exists employee_sales;
-
 create table employee_sales (
 emp_id int,
 emp_name varchar(50),
@@ -204,14 +203,12 @@ department varchar(30),
 monthly_sales double,
 sale_month date
 );
-
 insert into employee_sales values
 (1, 'Alice', 'Sales', 10000, '2024-01-01'),
 (2, 'Bob', 'Sales', 15000, '2024-01-01'),
 (3, 'Charlie', 'Sales', 8000, '2024-01-01'),
 (4, 'David', 'Marketing', 12000, '2024-01-01'),
 (5, 'Eve', 'Marketing', 9000, '2024-01-01');
-
 /*+ {
 "rewrites": {
 "hint_test.dept_rankings": "SELECT emp_id, emp_name, department, monthly_sales, RANK() OVER (PARTITION BY department ORDER BY monthly_sales DESC) as dept_rank, SUM(monthly_sales) OVER (PARTITION BY department) as dept_total FROM employee_sales"
@@ -221,9 +218,8 @@ select emp_name, department, monthly_sales, dept_rank
 from dept_rankings
 where dept_rank <= 2
 order by department, dept_rank;
-
+emp_name    department    monthly_sales    dept_rank
 drop table employee_sales;
-
 drop table if exists sales;
 create table sales (
 sale_id int primary key,
@@ -358,8 +354,8 @@ select * from t1
 union all
 select * from t2;
 id    name    age    city
-1    Alice    25    Beijing
 2    Bob    30    Shanghai
+1    Alice    25    Beijing
 drop table if exists `user_data`;
 create table `user-data` (
 id int,
@@ -508,27 +504,22 @@ drop database if exists acc01_test;
 create database acc01_test;
 use acc01_test;
 drop table if exists large_table;
-
 create table large_table (
 id int,
 data varchar(100)
 );
-
 insert into large_table select result, 2 from generate_series(1, 1000000) g;
-
 /*+ {
 "rewrites": {
 "acc01_test.large_table": "SELECT * FROM large_table WHERE id < 1000"
 }
 } */
 select count(*) from large_table;
-
+count(*)
+999
 select count(*) from large_table where id < 1000;
-
-drop database acc01_test;
-
-set enable_remap_hint = 0;
-
+count(*)
+999
 set ft_relevancy_algorithm="TF-IDF";
 drop table if exists t_user;
 create table t_user (

@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	functionUtil "github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 )
 
 // FunctionParameterWrapper is generated from a vector.
@@ -64,24 +65,107 @@ func GenerateFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vect
 			sourceVector: v,
 		}
 	}
-	cols := MustFixedColWithTypeCheck[T](v)
+
+	// Special handling for type conversions to decimal128
+	var cols []T
+	var convertedType types.Type
+	var anyT T
+	switch (any)(anyT).(type) {
+	case types.Decimal128:
+		convertedType = types.T_decimal128.ToType()
+		convertedType.Width = 38
+		if t.Oid == types.T_decimal64 {
+			convertedType.Scale = t.Scale
+			d64Cols := MustFixedColWithTypeCheck[types.Decimal64](v)
+			// Optimize: for const vector, only convert one element
+			if v.IsConst() {
+				d128 := functionUtil.ConvertD64ToD128(d64Cols[0])
+				return &FunctionParameterScalar[T]{
+					typ:          convertedType,
+					sourceVector: v,
+					scalarValue:  any(d128).(T),
+				}
+			}
+			cols = make([]T, len(d64Cols))
+			for i, d64 := range d64Cols {
+				cols[i] = any(functionUtil.ConvertD64ToD128(d64)).(T)
+			}
+		} else if t.Oid == types.T_float64 {
+			convertedType.Scale = 16
+			f64Cols := MustFixedColWithTypeCheck[float64](v)
+			// Optimize: for const vector, only convert one element
+			if v.IsConst() {
+				d128, err := types.Decimal128FromFloat64(f64Cols[0], 38, 16)
+				if err != nil {
+					// Conversion failed, use zero value (similar to MySQL behavior for invalid conversions)
+					d128 = types.Decimal128{B0_63: 0, B64_127: 0}
+				}
+				return &FunctionParameterScalar[T]{
+					typ:          convertedType,
+					sourceVector: v,
+					scalarValue:  any(d128).(T),
+				}
+			}
+			cols = make([]T, len(f64Cols))
+			for i, f64 := range f64Cols {
+				d128, err := types.Decimal128FromFloat64(f64, 38, 16)
+				if err != nil {
+					// Conversion failed, use zero value
+					d128 = types.Decimal128{B0_63: 0, B64_127: 0}
+				}
+				cols[i] = any(d128).(T)
+			}
+		} else if t.Oid == types.T_float32 {
+			convertedType.Scale = 7
+			f32Cols := MustFixedColWithTypeCheck[float32](v)
+			// Optimize: for const vector, only convert one element
+			if v.IsConst() {
+				d128, err := types.Decimal128FromFloat64(float64(f32Cols[0]), 38, 7)
+				if err != nil {
+					// Conversion failed, use zero value
+					d128 = types.Decimal128{B0_63: 0, B64_127: 0}
+				}
+				return &FunctionParameterScalar[T]{
+					typ:          convertedType,
+					sourceVector: v,
+					scalarValue:  any(d128).(T),
+				}
+			}
+			cols = make([]T, len(f32Cols))
+			for i, f32 := range f32Cols {
+				d128, err := types.Decimal128FromFloat64(float64(f32), 38, 7)
+				if err != nil {
+					// Conversion failed, use zero value
+					d128 = types.Decimal128{B0_63: 0, B64_127: 0}
+				}
+				cols[i] = any(d128).(T)
+			}
+		} else {
+			convertedType = *t
+			cols = MustFixedColWithTypeCheck[T](v)
+		}
+	default:
+		convertedType = *t
+		cols = MustFixedColWithTypeCheck[T](v)
+	}
+
 	if v.IsConst() {
 		return &FunctionParameterScalar[T]{
-			typ:          *t,
+			typ:          convertedType,
 			sourceVector: v,
 			scalarValue:  cols[0],
 		}
 	}
 	if !v.nsp.IsEmpty() {
 		return &FunctionParameterNormal[T]{
-			typ:          *t,
+			typ:          convertedType,
 			sourceVector: v,
 			values:       cols,
 			nullMap:      v.GetNulls().GetBitmap(),
 		}
 	}
 	return &FunctionParameterWithoutNull[T]{
-		typ:          *t,
+		typ:          convertedType,
 		sourceVector: v,
 		values:       cols,
 	}
@@ -701,6 +785,8 @@ func NewFunctionResultWrapper(typ types.Type, mp *mpool.MPool) FunctionResultWra
 		return newResultFunc[float64](typ, mp)
 	case types.T_date:
 		return newResultFunc[types.Date](typ, mp)
+	case types.T_year:
+		return newResultFunc[types.MoYear](typ, mp)
 	case types.T_datetime:
 		return newResultFunc[types.Datetime](typ, mp)
 	case types.T_time:

@@ -1,59 +1,60 @@
 SELECT SINH(PI());
-sinh(pi())
-11.5487
+➤ SINH(PI())[8,54,0]  𝄀
+11.548739357257748
 SELECT ROUND(SINH(PI()));
-round(sinh(pi()))
+➤ ROUND(SINH(PI()))[8,54,0]  𝄀
 12.0
 SELECT SINH(PI());
-sinh(pi())
-11.5487
+➤ SINH(PI())[8,54,0]  𝄀
+11.548739357257748
 SELECT SINH(12);
-sinh(12)
-81377.3957
+➤ SINH(12)[8,54,0]  𝄀
+81377.39570642984
 SELECT SINH(PI());
-sinh(pi())
-11.5487
+➤ SINH(PI())[8,54,0]  𝄀
+11.548739357257748
 SELECT SINH(PI()+1);
-sinh(pi() + 1)
-31.4435
+➤ SINH(PI() + 1)[8,54,0]  𝄀
+31.44351338476914
 SELECT SINH(1);
-sinh(1)
-1.1752
+➤ SINH(1)[8,54,0]  𝄀
+1.1752011936438014
 SELECT SINH(1.0001);
-sinh(1.0001)
-1.1754
+➤ SINH(1.0001)[8,54,0]  𝄀
+1.1753555075835462
 SELECT SINH(0);
-sinh(0)
+➤ SINH(0)[8,54,0]  𝄀
 0.0
 SELECT SINH(2);
-sinh(2)
-3.6269
+➤ SINH(2)[8,54,0]  𝄀
+3.626860407847019
 SELECT SINH(-2);
-sinh(-2)
--3.6269
+➤ SINH(-2)[8,54,0]  𝄀
+-3.626860407847019
 SELECT SINH(13413);
 Data truncation: data out of range: data type float64, DOUBLE value is out of range in 'sinh(13413)'
 SELECT SINH(-3114);
 Data truncation: data out of range: data type float64, DOUBLE value is out of range in 'sinh(-3114)'
 SELECT SINH(1);
-sinh(1)
-1.1752
+➤ SINH(1)[8,54,0]  𝄀
+1.1752011936438014
 SELECT SINH(-1);
-sinh(-1)
--1.1752
+➤ SINH(-1)[8,54,0]  𝄀
+-1.1752011936438014
 SELECT SINH(0);
-sinh(0)
+➤ SINH(0)[8,54,0]  𝄀
 0.0
 SELECT SINH(0.001);
-sinh(0.001)
-0.001
+➤ SINH(0.001)[8,54,0]  𝄀
+0.001000000166666675
 SELECT SINH(-0.001);
-sinh(-0.001)
--0.001
+➤ SINH(-0.001)[8,54,0]  𝄀
+-0.001000000166666675
 SELECT SINH("ABC");
-strconv.ParseFloat: parsing "ABC": invalid syntax
+➤ SINH(ABC)[8,54,0]  𝄀
+0.0
 SELECT SINH(NULL);
-sinh(null)
+➤ SINH(null)[8,54,0]  𝄀
 null
 create table t1(a tinyint, b SMALLINT, c bigint, d INT, e BIGINT, f FLOAT, g DOUBLE, h decimal(38,19), i DATE, k datetime, l TIMESTAMP, m char(255), n varchar(255));
 insert into t1 values(1, 1, 2, 43, 5, 35.5, 31.133, 14.314, "2012-03-10", "2012-03-12 10:03:12", "2022-03-12 13:03:12", "ab23c", "d5cf");
@@ -71,40 +72,40 @@ insert into t1 select (SINH(0));
 insert into t1 select (acos(1));
 insert into t1 select (atan(1));
 select distinct a from t1;
-a
-1.1752012
-0.0
+➤ a[7,24,0]  𝄀
+1.1752012  𝄀
+0.0  𝄀
 0.7853982
 drop table t1;
 drop table if exists t1;
 create table t1(a INT,  b float);
 insert into t1 values(1, 0),(0, 1),(1,1),(0,0);
 select * from t1 where SINH(a)<>SINH(b);
-a	b
-1	0.0
-0	1.0
+➤ a[4,32,0]  ¦  b[7,24,0]  𝄀
+1  ¦  0.0  𝄀
+0  ¦  1.0
 drop table t1;
 create table t1(a INT,  b float);
 create table t2(a INT,  b float);
 insert into t1 values(1, 0),(0, 1),(1,1),(0,0);
 insert into t2 values(0, 1),(1, 0),(1,1),(0,0);
 SELECT t1.a, t2.a FROM t1 JOIN t2 ON (SINH(t1.a)=SINH(t2.b));
-a	a
-1	0
-1	1
-0	1
-0	0
-1	0
-1	1
-0	1
-0	0
+➤ a[4,32,0]  ¦  a[4,32,0]  𝄀
+1  ¦  0  𝄀
+1  ¦  1  𝄀
+0  ¦  1  𝄀
+0  ¦  0  𝄀
+1  ¦  0  𝄀
+1  ¦  1  𝄀
+0  ¦  1  𝄀
+0  ¦  0
 drop table t1;
 drop table t2;
 drop table if exists t1;
 create table t1(a INT,  b float);
 insert into t1 values(1, 0),(0, 1),(1,1),(0,0);
 SELECT a FROM t1 group by a having SINH(a)>0;
-a
+➤ a[4,32,0]  𝄀
 1
 drop table t1;
 SELECT SINH(0.745e5);
