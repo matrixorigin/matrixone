@@ -206,8 +206,9 @@ func filterNonAppendableObject(
 	return nil
 }
 
-// GetObjectFromUpstream gets object file from upstream using GETOBJECT SQL
-func GetObjectFromUpstream(
+// GetObjectFromUpstream is a variable that can be stubbed for testing
+// It gets object file from upstream using GETOBJECT SQL
+var GetObjectFromUpstream = func(
 	ctx context.Context,
 	upstreamExecutor SQLExecutor,
 	objectName string,
