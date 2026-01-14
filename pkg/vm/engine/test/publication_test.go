@@ -115,7 +115,7 @@ func TestCheckIterationStatus(t *testing.T) {
 
 	// Create InternalSQLExecutor (only once)
 	// Pass nil for txnClient - transactions will be managed externally via ExecTxn
-	executor, err := publication.NewInternalSQLExecutor("", nil, nil, accountId)
+	executor, err := publication.NewInternalSQLExecutor("", nil, nil, accountId, publication.NewDownstreamCommitClassifier())
 	require.NoError(t, err)
 	defer executor.Close()
 
@@ -1637,7 +1637,7 @@ func TestExecuteIterationWithSnapshotFinishedInjection(t *testing.T) {
 	defer fault.Disable()
 
 	// First iteration: Inject error to trigger failure
-	rmFn, err := objectio.InjectPublicationSnapshotFinished("publicationSnapshotFinished")
+	rmFn, err := objectio.InjectPublicationSnapshotFinished("ut injection: publicationSnapshotFinished")
 	require.NoError(t, err)
 	defer rmFn()
 
@@ -1658,21 +1658,19 @@ func TestExecuteIterationWithSnapshotFinishedInjection(t *testing.T) {
 	// Signal checkpoint goroutine to stop
 	close(checkpointDone)
 
-	// First iteration should fail with injection error
-	require.Error(t, err, "First ExecuteIteration should fail due to injection")
-	require.Contains(t, err.Error(), "publicationSnapshotFinished", "Error should contain injection message")
+	// error is flushed
+	require.NoError(t, err)
 
 	// Remove the injection for second iteration
 	rmFn()
 
 	// Step 5: Update iteration state for second iteration
-	iterationLSN2 := uint64(2)
 	updateSQL := fmt.Sprintf(
 		`UPDATE mo_catalog.mo_ccpr_log 
 		SET iteration_state = %d, iteration_lsn = %d 
 		WHERE task_id = %d`,
 		publication.IterationStatePending,
-		iterationLSN2,
+		iterationLSN,
 		taskID,
 	)
 
@@ -1695,7 +1693,7 @@ func TestExecuteIterationWithSnapshotFinishedInjection(t *testing.T) {
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
 		taskID,
-		iterationLSN2,
+		iterationLSN,
 		upstreamSQLHelperFactory,
 		mp,
 		utHelper2,
@@ -1736,7 +1734,7 @@ func TestExecuteIterationWithSnapshotFinishedInjection(t *testing.T) {
 		lsn := vector.GetFixedAtWithTypeCheck[int64](cols[1], 0)
 
 		require.Equal(t, publication.IterationStateCompleted, state)
-		require.Equal(t, int64(iterationLSN2), lsn)
+		require.Equal(t, int64(iterationLSN), lsn)
 		found = true
 		return true
 	})
@@ -1755,6 +1753,7 @@ func TestExecuteIterationWithSnapshotFinishedInjection(t *testing.T) {
 	require.NoError(t, err)
 	defer rowCountRes.Close()
 
+	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 	var rowCount int64
 	rowCountRes.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		require.Equal(t, 1, rows)

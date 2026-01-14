@@ -85,13 +85,9 @@ type IterationContextJSON struct {
 	SrcInfo          SrcInfo `json:"src_info"`
 
 	// Context information
-	PrevSnapshotName    string                     `json:"prev_snapshot_name"`
-	PrevSnapshotTS      int64                      `json:"prev_snapshot_ts"` // types.TS as int64
-	CurrentSnapshotName string                     `json:"current_snapshot_name"`
-	CurrentSnapshotTS   int64                      `json:"current_snapshot_ts"` // types.TS as int64
-	ActiveAObj          map[string]AObjMappingJSON `json:"active_aobj"`         // ActiveAObj as serializable map (key is ObjectId as string)
-	TableIDs            map[string]uint64          `json:"table_ids"`
-	IndexTableMappings  map[string]string          `json:"index_table_mappings"` // IndexTableMappings as serializable map (key is upstream_index_table_name, value is downstream_index_table_name)
+	ActiveAObj         map[string]AObjMappingJSON `json:"active_aobj"` // ActiveAObj as serializable map (key is ObjectId as string)
+	TableIDs           map[string]uint64          `json:"table_ids"`
+	IndexTableMappings map[string]string          `json:"index_table_mappings"` // IndexTableMappings as serializable map (key is upstream_index_table_name, value is downstream_index_table_name)
 }
 
 func (iterCtx *IterationContext) String() string {
@@ -138,7 +134,7 @@ func InitializeIterationContext(
 	// Create local executor first (without transaction) to query mo_ccpr_log
 	// mo_ccpr_log is a system table, so we must use system account
 	// Local executor doesn't need upstream SQL helper (no special SQL statements)
-	localExecutorInternal, err := NewInternalSQLExecutor(cnUUID, nil, nil, catalog.System_Account)
+	localExecutorInternal, err := NewInternalSQLExecutor(cnUUID, nil, nil, catalog.System_Account, NewDownstreamConnectionClassifier())
 	if err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "failed to create local executor: %v", err)
 	}
@@ -232,7 +228,7 @@ func InitializeIterationContext(
 		}
 
 		// Create upstream executor with account ID
-		upstreamExecutorInternal, err := NewInternalSQLExecutor(cnUUID, cnTxnClient, cnEngine, upstreamAccountID)
+		upstreamExecutorInternal, err := NewInternalSQLExecutor(cnUUID, cnTxnClient, cnEngine, upstreamAccountID, NewUpstreamConnectionClassifier())
 		if err != nil {
 			return nil, moerr.NewInternalErrorf(ctx, "failed to create upstream executor: %v", err)
 		}
@@ -269,6 +265,7 @@ func InitializeIterationContext(
 			-1, // retryTimes: -1 for infinite retry
 			0,  // retryDuration: 0 for no limit
 			connConfig.Timeout,
+			NewUpstreamConnectionClassifier(),
 		)
 		if err != nil {
 			return nil, moerr.NewInternalErrorf(ctx, "failed to create upstream executor: %v", err)
@@ -361,19 +358,6 @@ func InitializeIterationContext(
 			}
 		}
 
-		// Restore snapshot information if available
-		if ctxJSON.PrevSnapshotName != "" {
-			iterationCtx.PrevSnapshotName = ctxJSON.PrevSnapshotName
-		}
-		if ctxJSON.PrevSnapshotTS > 0 {
-			iterationCtx.PrevSnapshotTS = types.BuildTS(ctxJSON.PrevSnapshotTS, 0)
-		}
-		if ctxJSON.CurrentSnapshotName != "" {
-			iterationCtx.CurrentSnapshotName = ctxJSON.CurrentSnapshotName
-		}
-		if ctxJSON.CurrentSnapshotTS > 0 {
-			iterationCtx.CurrentSnapshotTS = types.BuildTS(ctxJSON.CurrentSnapshotTS, 0)
-		}
 	}
 
 	return iterationCtx, nil
@@ -453,16 +437,12 @@ func UpdateIterationState(
 
 		// Create a serializable context structure
 		ctxJSON := IterationContextJSON{
-			TaskID:              iterationCtx.TaskID,
-			SubscriptionName:    iterationCtx.SubscriptionName,
-			SrcInfo:             iterationCtx.SrcInfo,
-			PrevSnapshotName:    iterationCtx.PrevSnapshotName,
-			PrevSnapshotTS:      iterationCtx.PrevSnapshotTS.Physical(),
-			CurrentSnapshotName: iterationCtx.CurrentSnapshotName,
-			CurrentSnapshotTS:   iterationCtx.CurrentSnapshotTS.Physical(),
-			ActiveAObj:          activeAObjJSON,
-			TableIDs:            tableIDsJSON,
-			IndexTableMappings:  indexTableMappingsJSON,
+			TaskID:             iterationCtx.TaskID,
+			SubscriptionName:   iterationCtx.SubscriptionName,
+			SrcInfo:            iterationCtx.SrcInfo,
+			ActiveAObj:         activeAObjJSON,
+			TableIDs:           tableIDsJSON,
+			IndexTableMappings: indexTableMappingsJSON,
 		}
 
 		contextBytes, err := json.Marshal(ctxJSON)
@@ -638,21 +618,28 @@ func RequestUpstreamSnapshot(
 	} else {
 		result.Close()
 	}
-
-	// Before setting new current snapshot, save old current snapshot as prev snapshot
-	if iterationCtx.CurrentSnapshotName != "" {
-		iterationCtx.PrevSnapshotName = iterationCtx.CurrentSnapshotName
-		iterationCtx.PrevSnapshotTS = iterationCtx.CurrentSnapshotTS
-	}
-
 	// Store snapshot name in iteration context
 	iterationCtx.CurrentSnapshotName = snapshotName
-
-	// Query snapshot TS from mo_snapshots table
-	querySnapshotTsSQL := PublicationSQLBuilder.QuerySnapshotTsSQL(snapshotName)
-	tsResult, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, querySnapshotTsSQL)
+	iterationCtx.CurrentSnapshotTS, err = querySnapshotTS(ctx, iterationCtx.UpstreamExecutor, snapshotName)
 	if err != nil {
-		return moerr.NewInternalErrorf(ctx, "failed to query snapshot TS: %v", err)
+		return moerr.NewInternalErrorf(ctx, "failed to query current snapshot TS: %v", err)
+	}
+	if iterationCtx.IterationLSN > 1 {
+		prevSnapshotName := GenerateSnapshotName(iterationCtx.TaskID, iterationCtx.IterationLSN-1)
+		iterationCtx.PrevSnapshotName = prevSnapshotName
+		iterationCtx.PrevSnapshotTS, err = querySnapshotTS(ctx, iterationCtx.UpstreamExecutor, prevSnapshotName)
+		if err != nil {
+			return moerr.NewInternalErrorf(ctx, "failed to query previous snapshot TS: %v", err)
+		}
+	}
+	return nil
+}
+
+func querySnapshotTS(ctx context.Context, upstreamExecutor SQLExecutor, snapshotName string) (types.TS, error) {
+	querySnapshotTsSQL := PublicationSQLBuilder.QuerySnapshotTsSQL(snapshotName)
+	tsResult, err := upstreamExecutor.ExecSQL(ctx, querySnapshotTsSQL)
+	if err != nil {
+		return types.TS{}, moerr.NewInternalErrorf(ctx, "failed to query snapshot TS: %v", err)
 	}
 	defer tsResult.Close()
 
@@ -660,24 +647,24 @@ func RequestUpstreamSnapshot(
 	var tsValue sql.NullInt64
 	if !tsResult.Next() {
 		if err := tsResult.Err(); err != nil {
-			return moerr.NewInternalErrorf(ctx, "failed to read snapshot TS result: %v", err)
+			return types.TS{}, moerr.NewInternalErrorf(ctx, "failed to read snapshot TS result: %v", err)
 		}
-		return moerr.NewInternalErrorf(ctx, "no rows returned for snapshot %s", snapshotName)
+		return types.TS{}, moerr.NewInternalErrorf(ctx, "no rows returned for snapshot %s", snapshotName)
 	}
 
 	if err := tsResult.Scan(&tsValue); err != nil {
-		return moerr.NewInternalErrorf(ctx, "failed to scan snapshot TS result: %v", err)
+		return types.TS{}, moerr.NewInternalErrorf(ctx, "failed to scan snapshot TS result: %v", err)
 	}
 
 	if !tsValue.Valid {
-		return moerr.NewInternalErrorf(ctx, "snapshot TS is null for snapshot %s", snapshotName)
+		return types.TS{}, moerr.NewInternalErrorf(ctx, "snapshot TS is null for snapshot %s", snapshotName)
 	}
 
 	// Convert bigint TS to types.TS (logical time is set to 0)
 	snapshotTS := types.BuildTS(tsValue.Int64, 0)
-	iterationCtx.CurrentSnapshotTS = snapshotTS
 
-	return nil
+	return snapshotTS, nil
+
 }
 
 // WaitForSnapshotFlushed waits for the snapshot to be flushed with fixed interval
@@ -1305,10 +1292,14 @@ func ExecuteIteration(
 			} else {
 				err = moerr.NewInternalErrorf(ctx, "failed to close iteration context: %v", commitErr)
 			}
-			retryable := IsRetryableError(err)
-			errorMetadata := BuildErrorMetadata(iterationCtx.ErrorMetadata, err, retryable)
+			classifier := NewDownstreamCommitClassifier()
+			errorMetadata, retryable := BuildErrorMetadata(iterationCtx.ErrorMetadata, err, classifier)
+			finalState := IterationStateError
+			if retryable {
+				finalState = IterationStateCompleted
+			}
 			errorMsg := errorMetadata.Format()
-			if err = UpdateIterationState(ctx, iterationCtx.LocalExecutor, taskID, IterationStateError, iterationLSN, iterationCtx, errorMsg); err != nil {
+			if err = UpdateIterationState(ctx, iterationCtx.LocalExecutor, taskID, finalState, iterationLSN, iterationCtx, errorMsg); err != nil {
 				// Log error but don't override the original error
 				err = moerr.NewInternalErrorf(ctx, "failed to update iteration state: %v", err)
 				logutil.Error(
@@ -1328,16 +1319,18 @@ func ExecuteIteration(
 	// Update iteration state in defer to ensure it's always called
 	defer func() {
 		var errorMsg string
+		finalState := IterationStateCompleted
+		nextLSN := iterationLSN + 1
 		if err != nil {
-			errorMsg = err.Error()
+			classifier := NewDownstreamCommitClassifier()
+			errorMetadata, retryable := BuildErrorMetadata(iterationCtx.ErrorMetadata, err, classifier)
+			if !retryable {
+				finalState = IterationStateError
+			}
+			errorMsg = errorMetadata.Format()
+			nextLSN = iterationLSN
 		}
-		var finalState int8
-		if err == nil {
-			finalState = IterationStateCompleted
-		} else {
-			finalState = IterationStateError
-		}
-		if err = UpdateIterationState(ctx, iterationCtx.LocalExecutor, taskID, finalState, iterationLSN, iterationCtx, errorMsg); err != nil {
+		if err = UpdateIterationState(ctx, iterationCtx.LocalExecutor, taskID, finalState, nextLSN, iterationCtx, errorMsg); err != nil {
 			// Log error but don't override the original error
 			err = moerr.NewInternalErrorf(ctx, "failed to update iteration state: %v", err)
 		}
@@ -1350,7 +1343,7 @@ func ExecuteIteration(
 	}
 
 	// Injection point: on snapshot finished
-	if msg, injected := objectio.PublicationSnapshotFinishedInjected(); injected && msg == "publicationSnapshotFinished" {
+	if msg, injected := objectio.PublicationSnapshotFinishedInjected(); injected && msg == "ut injection: publicationSnapshotFinished" {
 		err = moerr.NewInternalErrorNoCtx(msg)
 		return
 	}

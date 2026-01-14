@@ -188,6 +188,7 @@ func NewUpstreamExecutor(
 	retryTimes int,
 	retryDuration time.Duration,
 	timeout string,
+	classifier ErrorClassifier,
 ) (*UpstreamExecutor, error) {
 	// Validate that user is not empty
 	if user == "" {
@@ -214,7 +215,7 @@ func NewUpstreamExecutor(
 		return nil, err
 	}
 
-	e.initRetryPolicy()
+	e.initRetryPolicy(classifier)
 
 	return e, nil
 }
@@ -683,12 +684,7 @@ func (e *UpstreamExecutor) execWithRetry(
 	return nil, err
 }
 
-func (e *UpstreamExecutor) initRetryPolicy() {
-	classifier := MultiClassifier{
-		DefaultClassifier{},
-		MySQLErrorClassifier{},
-	}
-
+func (e *UpstreamExecutor) initRetryPolicy(classifier ErrorClassifier) {
 	e.retryClassifier = classifier
 	e.retryPolicy = Policy{
 		MaxAttempts: e.calculateMaxAttempts(),

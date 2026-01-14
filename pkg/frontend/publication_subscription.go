@@ -2669,7 +2669,7 @@ func checkUpstreamPublicationCoverage(
 	}
 
 	// Create upstream executor to connect to upstream cluster
-	upstreamExecutor, err := publication.NewUpstreamExecutor(account, user, password, host, port, 3, 30*time.Second, "30s")
+	upstreamExecutor, err := publication.NewUpstreamExecutor(account, user, password, host, port, 3, 30*time.Second, "30s", publication.NewUpstreamConnectionClassifier())
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to connect to upstream cluster: %v", err)
 	}

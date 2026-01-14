@@ -172,6 +172,7 @@ func (w *worker) updateIterationStatePending(ctx context.Context, taskID uint64,
 		w.cnTxnClient,
 		w.cnEngine,
 		catalog.System_Account,
+		NewDownstreamCommitClassifier(),
 	)
 	if err != nil {
 		return err

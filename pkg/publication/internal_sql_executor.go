@@ -67,6 +67,7 @@ type InternalSQLExecutor struct {
 	upstreamSQLHelper UpstreamSQLHelper // Optional helper for special SQL statements
 	maxRetries        int               // Maximum number of retries for retryable errors
 	retryInterval     time.Duration     // Interval between retries
+	classifier        ErrorClassifier   // Error classifier for retry logic
 }
 
 // SetUpstreamSQLHelper sets the upstream SQL helper
@@ -89,12 +90,14 @@ func (e *InternalSQLExecutor) GetTxnClient() client.TxnClient {
 // txnClient is optional - if provided, StartTxn can create transactions
 // engine is required for registering transactions with the engine
 // accountID is the tenant account ID to use when executing SQL
+// classifier is the error classifier to use for retry logic
 // upstreamSQLHelper is optional - if provided, special SQL statements will be handled by it
 func NewInternalSQLExecutor(
 	cnUUID string,
 	txnClient client.TxnClient,
 	engine engine.Engine,
 	accountID uint32,
+	classifier ErrorClassifier,
 ) (*InternalSQLExecutor, error) {
 	v, ok := moruntime.ServiceRuntime(cnUUID).GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {
@@ -114,6 +117,7 @@ func NewInternalSQLExecutor(
 		accountID:     accountID,
 		maxRetries:    5,                     // Default max retries
 		retryInterval: 10 * time.Millisecond, // Default retry interval
+		classifier:    classifier,
 	}, nil
 }
 
@@ -267,11 +271,8 @@ func (e *InternalSQLExecutor) ExecSQLWithOptions(
 			return convertExecutorResult(execResult), nil
 		}
 
-		// Check if error is retryable using CommitErrorClassifier
-		// Note: RC mode check is done by checking error codes directly,
-		// as CommitErrorClassifier already handles ErrTxnNeedRetry errors
-		commitClassifier := CommitErrorClassifier{}
-		if !commitClassifier.IsRetryable(err) {
+		// Check if error is retryable using the provided classifier
+		if e.classifier == nil || !e.classifier.IsRetryable(err) {
 			// Not retryable, return error immediately
 			return nil, err
 		}
@@ -347,7 +348,6 @@ func (e *InternalSQLExecutor) SetRetryInterval(interval time.Duration) {
 	}
 	e.retryInterval = interval
 }
-
 
 // truncateSQL truncates SQL string for logging
 func truncateSQL(sql string) string {

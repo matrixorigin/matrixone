@@ -88,41 +88,75 @@ func Parse(errMsg string) *ErrorMetadata {
 	}
 }
 
+const (
+	// RetryThreshold is the maximum number of retries before stopping
+	RetryThreshold = 10
+)
+
 // BuildErrorMetadata builds new metadata based on old metadata and new error
-func BuildErrorMetadata(old *ErrorMetadata, err error, isRetryable bool) *ErrorMetadata {
+// It uses the classifier to determine if the error is retryable
+// Returns the error metadata and a boolean indicating if retry should continue
+// Retry will stop if retry count exceeds RetryThreshold
+func BuildErrorMetadata(old *ErrorMetadata, err error, classifier ErrorClassifier) (*ErrorMetadata, bool) {
 	now := time.Now()
 	message := err.Error()
 
+	// Determine if error is retryable using classifier
+	isRetryable := false
+	if classifier != nil {
+		isRetryable = classifier.IsRetryable(err)
+	}
+
 	// New error (no previous metadata)
 	if old == nil {
+		retryCount := 1
+		shouldRetry := isRetryable && retryCount <= RetryThreshold
 		return &ErrorMetadata{
-			IsRetryable: isRetryable,
-			RetryCount:  1,
+			IsRetryable: isRetryable && shouldRetry,
+			RetryCount:  retryCount,
 			FirstSeen:   now,
 			LastSeen:    now,
 			Message:     message,
-		}
+		}, shouldRetry
+	}
+
+	// Check if previous retry count exceeded threshold
+	// If so, reset count even if error type is the same
+	if old.RetryCount > RetryThreshold {
+		retryCount := 1
+		shouldRetry := isRetryable && retryCount <= RetryThreshold
+		return &ErrorMetadata{
+			IsRetryable: isRetryable && shouldRetry,
+			RetryCount:  retryCount,
+			FirstSeen:   now,
+			LastSeen:    now,
+			Message:     message,
+		}, shouldRetry
 	}
 
 	// Same error type, increment retry count
 	if old.IsRetryable == isRetryable {
+		retryCount := old.RetryCount + 1
+		shouldRetry := isRetryable && retryCount <= RetryThreshold
 		return &ErrorMetadata{
-			IsRetryable: isRetryable,
-			RetryCount:  old.RetryCount + 1,
+			IsRetryable: isRetryable && shouldRetry,
+			RetryCount:  retryCount,
 			FirstSeen:   old.FirstSeen, // Preserve first seen time
 			LastSeen:    now,           // Update last seen time
 			Message:     message,
-		}
+		}, shouldRetry
 	}
 
 	// Error type changed, reset count
+	retryCount := 1
+	shouldRetry := isRetryable && retryCount <= RetryThreshold
 	return &ErrorMetadata{
-		IsRetryable: isRetryable,
-		RetryCount:  1,
+		IsRetryable: isRetryable && shouldRetry,
+		RetryCount:  retryCount,
 		FirstSeen:   now,
 		LastSeen:    now,
 		Message:     message,
-	}
+	}, shouldRetry
 }
 
 // Format formats error metadata to string
@@ -144,39 +178,33 @@ func (m *ErrorMetadata) Format() string {
 	)
 }
 
-// CommitErrorClassifier recognises errors that are retryable during commit operations.
-// It checks for:
-//   - RC mode transaction retry errors (ErrTxnNeedRetry, ErrTxnNeedRetryWithDefChanged)
-//   - Network errors, timeouts, and temporary system unavailability
-type CommitErrorClassifier struct{}
+// DefaultClassifier recognises common transient network errors and connection issues.
+// It handles basic network retry scenarios like connection timeouts, EOF errors, etc.
+type DefaultClassifier struct{}
 
 // IsRetryable implements ErrorClassifier.
-func (CommitErrorClassifier) IsRetryable(err error) bool {
+func (DefaultClassifier) IsRetryable(err error) bool {
 	if err == nil {
 		return false
 	}
 
-	// Check for RC mode transaction retry errors
-	// These errors indicate that the transaction needs to be retried in RC mode
-	if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
-		moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
+	// Check for EOF errors
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 		return true
 	}
 
-	errMsg := err.Error()
-
-	// Check for unexpected EOF
-	if errors.Is(err, io.ErrUnexpectedEOF) {
+	// Check for context deadline exceeded
+	if errors.Is(err, context.DeadlineExceeded) {
 		return true
 	}
 
-	// Check for network timeout errors
-	if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-		return true
-	}
-
-	// Check for temporary network errors
-	if netErr, ok := err.(net.Error); ok {
+	// Check for network errors
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		if netErr.Timeout() {
+			return true
+		}
+		// Check for temporary network errors
 		type temporary interface {
 			Temporary() bool
 		}
@@ -185,8 +213,8 @@ func (CommitErrorClassifier) IsRetryable(err error) bool {
 		}
 	}
 
-	// Check error message for common retryable patterns
-	errMsgLower := strings.ToLower(errMsg)
+	// Check error message for common retryable network patterns
+	errMsg := strings.ToLower(err.Error())
 	retryablePatterns := []string{
 		"connection reset",
 		"connection timed out",
@@ -206,7 +234,7 @@ func (CommitErrorClassifier) IsRetryable(err error) bool {
 	}
 
 	for _, pattern := range retryablePatterns {
-		if strings.Contains(errMsgLower, pattern) {
+		if strings.Contains(errMsg, pattern) {
 			return true
 		}
 	}
@@ -214,12 +242,145 @@ func (CommitErrorClassifier) IsRetryable(err error) bool {
 	return false
 }
 
+// MySQLErrorClassifier recognises transient MySQL errors that are worth retrying.
+type MySQLErrorClassifier struct{}
+
+var mysqlRetryableErrorCodes = map[uint16]struct{}{
+	// Lock wait timeout exceeded; try restarting transaction
+	1205: {},
+	// Deadlock found when trying to get lock; try restarting transaction
+	1213: {},
+	// Server closed the connection
+	2006: {},
+	// Lost connection to MySQL server during query
+	2013: {},
+	// Can't connect to MySQL server on host (network issues)
+	2003: {},
+	// Not enough privilege or connection handshake issues that can be transient
+	1043: {},
+}
+
+// IsRetryable implements ErrorClassifier.
+func (MySQLErrorClassifier) IsRetryable(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	if errors.Is(err, driver.ErrBadConn) {
+		return true
+	}
+
+	var mysqlErr *gomysql.MySQLError
+	if errors.As(err, &mysqlErr) {
+		if _, ok := mysqlRetryableErrorCodes[mysqlErr.Number]; ok {
+			return true
+		}
+	}
+
+	return false
+}
+
+// CommitErrorClassifier recognises errors that are retryable during commit operations.
+// It checks for RC mode transaction retry errors (ErrTxnNeedRetry, ErrTxnNeedRetryWithDefChanged).
+type CommitErrorClassifier struct{}
+
+// IsRetryable implements ErrorClassifier.
+func (CommitErrorClassifier) IsRetryable(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	// Check for RC mode transaction retry errors
+	// These errors indicate that the transaction needs to be retried in RC mode
+	if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
+		moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
+		return true
+	}
+
+	return false
+}
+
+var utInjectionErrors = map[string]struct{}{
+	"ut injection: publicationSnapshotFinished": {},
+}
+
+// UTInjectionClassifier recognises UT injection errors that are retryable.
+type UTInjectionClassifier struct{}
+
+// IsRetryable implements ErrorClassifier.
+func (UTInjectionClassifier) IsRetryable(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	errMsg := strings.ToLower(err.Error())
+	for pattern := range utInjectionErrors {
+		patternLower := strings.ToLower(pattern)
+		if strings.Contains(errMsg, patternLower) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// DownstreamCommitClassifier is used when committing to downstream.
+// It combines default, mysql, commit, and ut injection classifiers.
+type DownstreamCommitClassifier struct {
+	MultiClassifier
+}
+
+// NewDownstreamCommitClassifier creates a new DownstreamCommitClassifier.
+func NewDownstreamCommitClassifier() *DownstreamCommitClassifier {
+	return &DownstreamCommitClassifier{
+		MultiClassifier: MultiClassifier{
+			DefaultClassifier{},
+			MySQLErrorClassifier{},
+			CommitErrorClassifier{},
+			UTInjectionClassifier{},
+		},
+	}
+}
+
+// UpstreamConnectionClassifier is used when connecting to upstream.
+// It combines default, mysql, and commit classifiers.
+type UpstreamConnectionClassifier struct {
+	MultiClassifier
+}
+
+// NewUpstreamConnectionClassifier creates a new UpstreamConnectionClassifier.
+func NewUpstreamConnectionClassifier() *UpstreamConnectionClassifier {
+	return &UpstreamConnectionClassifier{
+		MultiClassifier: MultiClassifier{
+			DefaultClassifier{},
+			MySQLErrorClassifier{},
+			CommitErrorClassifier{},
+		},
+	}
+}
+
+// DownstreamConnectionClassifier is used when connecting to downstream.
+// It combines default and mysql classifiers.
+type DownstreamConnectionClassifier struct {
+	MultiClassifier
+}
+
+// NewDownstreamConnectionClassifier creates a new DownstreamConnectionClassifier.
+func NewDownstreamConnectionClassifier() *DownstreamConnectionClassifier {
+	return &DownstreamConnectionClassifier{
+		MultiClassifier: MultiClassifier{
+			DefaultClassifier{},
+			MySQLErrorClassifier{},
+		},
+	}
+}
+
 // IsRetryableError determines if an error is retryable
 // Returns true if the error is a transient error that may succeed on retry,
 // such as network errors, timeouts, or temporary system unavailability
-// This function uses CommitErrorClassifier for consistency
+// This function uses DownstreamCommitClassifier for consistency
 func IsRetryableError(err error) bool {
-	classifier := CommitErrorClassifier{}
+	classifier := NewDownstreamCommitClassifier()
 	return classifier.IsRetryable(err)
 }
 
@@ -375,80 +536,6 @@ func (m MultiClassifier) IsRetryable(err error) bool {
 			return true
 		}
 	}
-	return false
-}
-
-// DefaultClassifier recognises common transient network errors.
-type DefaultClassifier struct{}
-
-// IsRetryable implements ErrorClassifier.
-func (DefaultClassifier) IsRetryable(err error) bool {
-	if err == nil {
-		return false
-	}
-
-	// Unwrap recursively.
-	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-		return true
-	}
-	if errors.Is(err, context.DeadlineExceeded) {
-		return true
-	}
-
-	var netErr net.Error
-	if errors.As(err, &netErr) {
-		if netErr.Timeout() {
-			return true
-		}
-		// Some drivers implement Temporary to signal transient failures; prefer Timeout up top.
-		type temporary interface {
-			Temporary() bool
-		}
-		if tmp, ok := netErr.(temporary); ok && tmp.Temporary() {
-			return true
-		}
-	}
-
-	// Use CommitErrorClassifier for additional checks
-	commitClassifier := CommitErrorClassifier{}
-	return commitClassifier.IsRetryable(err)
-}
-
-// MySQLErrorClassifier recognises transient MySQL errors that are worth retrying.
-type MySQLErrorClassifier struct{}
-
-var mysqlRetryableErrorCodes = map[uint16]struct{}{
-	// Lock wait timeout exceeded; try restarting transaction
-	1205: {},
-	// Deadlock found when trying to get lock; try restarting transaction
-	1213: {},
-	// Server closed the connection
-	2006: {},
-	// Lost connection to MySQL server during query
-	2013: {},
-	// Can't connect to MySQL server on host (network issues)
-	2003: {},
-	// Not enough privilege or connection handshake issues that can be transient
-	1043: {},
-}
-
-// IsRetryable implements ErrorClassifier.
-func (MySQLErrorClassifier) IsRetryable(err error) bool {
-	if err == nil {
-		return false
-	}
-
-	if errors.Is(err, driver.ErrBadConn) {
-		return true
-	}
-
-	var mysqlErr *gomysql.MySQLError
-	if errors.As(err, &mysqlErr) {
-		if _, ok := mysqlRetryableErrorCodes[mysqlErr.Number]; ok {
-			return true
-		}
-	}
-
 	return false
 }
 
