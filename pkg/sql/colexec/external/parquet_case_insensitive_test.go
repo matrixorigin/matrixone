@@ -210,7 +210,7 @@ func createParquetFileWithColumns(t *testing.T, colNames []string) *parquet.File
 	// Build row according to schema field order
 	row := make([]parquet.Value, len(schema.Fields()))
 	for i := range schema.Fields() {
-		row[i] = parquet.Int32Value(int32(i + 1)).Level(0, 0, i)
+		row[i] = parquet.Int32Value(int32(i+1)).Level(0, 0, i)
 	}
 
 	_, err := w.WriteRows([]parquet.Row{row})
@@ -238,7 +238,7 @@ func createAmbiguousParquetFile(t *testing.T) *parquet.File {
 	// Build row according to schema field order
 	row := make([]parquet.Value, len(schema.Fields()))
 	for i := range schema.Fields() {
-		row[i] = parquet.Int32Value(int32(i + 1)).Level(0, 0, i)
+		row[i] = parquet.Int32Value(int32(i+1)).Level(0, 0, i)
 	}
 
 	_, err := w.WriteRows([]parquet.Row{row})
