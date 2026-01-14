@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -35,7 +36,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/sort"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"go.uber.org/zap"
 )
@@ -49,7 +52,8 @@ func FilterObject(
 	ctx context.Context,
 	objectStatsBytes []byte,
 	snapshotTS types.TS,
-	iterationCtx *IterationContext,
+	aobjectMap map[objectio.ObjectId]AObjMapping,
+	upstreamExecutor SQLExecutor,
 	isTombstone bool,
 	localFS fileservice.FileService,
 	mp *mpool.MPool,
@@ -66,10 +70,10 @@ func FilterObject(
 	isAObj := stats.GetAppendable()
 	if isAObj {
 		// Handle appendable object
-		return filterAppendableObject(ctx, &stats, snapshotTS, iterationCtx, localFS, isTombstone, mp)
+		return filterAppendableObject(ctx, &stats, snapshotTS, aobjectMap, upstreamExecutor, localFS, isTombstone, mp)
 	} else {
 		// Handle non-appendable object - write directly to fileservice
-		return filterNonAppendableObject(ctx, &stats, iterationCtx, localFS)
+		return filterNonAppendableObject(ctx, &stats, upstreamExecutor, localFS)
 	}
 }
 
@@ -80,7 +84,8 @@ func filterAppendableObject(
 	ctx context.Context,
 	stats *objectio.ObjectStats,
 	snapshotTS types.TS,
-	iterationCtx *IterationContext,
+	aobjectMap map[objectio.ObjectId]AObjMapping,
+	upstreamExecutor SQLExecutor,
 	localFS fileservice.FileService,
 	isTombstone bool,
 	mp *mpool.MPool,
@@ -90,15 +95,12 @@ func filterAppendableObject(
 
 	// Record mapping in iteration context
 	// Map from upstream aobj UUID to both current and previous object stats
-	if iterationCtx.ActiveAObj == nil {
-		iterationCtx.ActiveAObj = make(map[objectio.ObjectId]AObjMapping)
-	}
 
 	// Get previous stats if exists, otherwise use zero value
-	mapping := iterationCtx.ActiveAObj[*upstreamAObjUUID]
+	mapping := aobjectMap[*upstreamAObjUUID]
 
 	// Get object file from upstream using GETOBJECT
-	objectContent, err := GetObjectFromUpstream(ctx, iterationCtx, stats.ObjectName().String())
+	objectContent, err := GetObjectFromUpstream(ctx, upstreamExecutor, stats.ObjectName().String())
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to get object from upstream: %v", err)
 	}
@@ -133,7 +135,7 @@ func filterAppendableObject(
 	// Update mapping
 	mapping.Previous = mapping.Current // Save previous stats
 	mapping.Current = objStats         // Set new current stats
-	iterationCtx.ActiveAObj[*upstreamAObjUUID] = mapping
+	aobjectMap[*upstreamAObjUUID] = mapping
 
 	return nil
 }
@@ -143,14 +145,14 @@ func filterAppendableObject(
 func filterNonAppendableObject(
 	ctx context.Context,
 	stats *objectio.ObjectStats,
-	iterationCtx *IterationContext,
+	upstreamExecutor SQLExecutor,
 	localFS fileservice.FileService,
 ) error {
 	// Get object name from stats
 	objectName := stats.ObjectName().String()
 
 	// Get object file from upstream
-	objectContent, err := GetObjectFromUpstream(ctx, iterationCtx, objectName)
+	objectContent, err := GetObjectFromUpstream(ctx, upstreamExecutor, objectName)
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to get object from upstream: %v", err)
 	}
@@ -207,10 +209,10 @@ func filterNonAppendableObject(
 // GetObjectFromUpstream gets object file from upstream using GETOBJECT SQL
 func GetObjectFromUpstream(
 	ctx context.Context,
-	iterationCtx *IterationContext,
+	upstreamExecutor SQLExecutor,
 	objectName string,
 ) ([]byte, error) {
-	if iterationCtx.UpstreamExecutor == nil {
+	if upstreamExecutor == nil {
 		return nil, moerr.NewInternalError(ctx, "upstream executor is nil")
 	}
 
@@ -218,7 +220,7 @@ func GetObjectFromUpstream(
 	// GETOBJECT returns: data, total_size, chunk_index, total_chunks, is_complete
 	// chunk 0 returns metadata with data = nil
 	getChunk0SQL := PublicationSQLBuilder.GetObjectSQL(objectName, 0)
-	result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, getChunk0SQL)
+	result, err := upstreamExecutor.ExecSQL(ctx, getChunk0SQL)
 	if err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "failed to execute GETOBJECT query for chunk 0: %v", err)
 	}
@@ -250,7 +252,7 @@ func GetObjectFromUpstream(
 
 	for i := int64(1); i <= totalChunks; i++ {
 		getChunkSQL := PublicationSQLBuilder.GetObjectSQL(objectName, i)
-		result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, getChunkSQL)
+		result, err := upstreamExecutor.ExecSQL(ctx, getChunkSQL)
 		if err != nil {
 			return nil, moerr.NewInternalErrorf(ctx, "failed to execute GETOBJECT query for chunk %d: %v", i, err)
 		}
@@ -681,14 +683,11 @@ func createObjectFromBatch(
 }
 
 // submitObjectsAsInsert submits objects as INSERT operation
-func submitObjectsAsInsert(ctx context.Context, iterationCtx *IterationContext, cnEngine engine.Engine, tombstoneInsertStats []*ObjectWithTableInfo, dataInsertStats []*ObjectWithTableInfo, mp *mpool.MPool) error {
+func submitObjectsAsInsert(ctx context.Context, taskID string, txn client.TxnOperator, cnEngine engine.Engine, tombstoneInsertStats []*ObjectWithTableInfo, dataInsertStats []*ObjectWithTableInfo, mp *mpool.MPool) error {
 	if len(tombstoneInsertStats) == 0 && len(dataInsertStats) == 0 {
 		return nil
 	}
 
-	if iterationCtx == nil {
-		return moerr.NewInternalError(ctx, "iteration context is nil")
-	}
 	if cnEngine == nil {
 		return moerr.NewInternalError(ctx, "engine is nil")
 	}
@@ -717,7 +716,7 @@ func submitObjectsAsInsert(ctx context.Context, iterationCtx *IterationContext, 
 		}
 
 		// Get database using transaction from iteration context
-		db, err := cnEngine.Database(ctx, key.dbName, iterationCtx.LocalTxn)
+		db, err := cnEngine.Database(ctx, key.dbName, txn)
 		if err != nil {
 			return moerr.NewInternalErrorf(ctx, "failed to get database %s: %v", key.dbName, err)
 		}
@@ -743,8 +742,7 @@ func submitObjectsAsInsert(ctx context.Context, iterationCtx *IterationContext, 
 		// Log tombstone insert objects
 		for _, stats := range tombstoneStats {
 			logutil.Info("ccpr-iteration submitting object",
-				zap.Uint64("task_id", iterationCtx.TaskID),
-				zap.Uint64("lsn", iterationCtx.IterationLSN),
+				zap.String("task_id", taskID),
 				zap.String("db_name", key.dbName),
 				zap.String("table_name", key.tableName),
 				zap.String("object_name", stats.ObjectName().String()),
@@ -788,7 +786,7 @@ func submitObjectsAsInsert(ctx context.Context, iterationCtx *IterationContext, 
 		}
 
 		// Get database using transaction from iteration context
-		db, err := cnEngine.Database(ctx, key.dbName, iterationCtx.LocalTxn)
+		db, err := cnEngine.Database(ctx, key.dbName, txn)
 		if err != nil {
 			return moerr.NewInternalErrorf(ctx, "failed to get database %s: %v", key.dbName, err)
 		}
@@ -814,8 +812,7 @@ func submitObjectsAsInsert(ctx context.Context, iterationCtx *IterationContext, 
 		// Log data insert objects
 		for _, stats := range dataStats {
 			logutil.Info("ccpr-iteration submitting object",
-				zap.Uint64("task_id", iterationCtx.TaskID),
-				zap.Uint64("lsn", iterationCtx.IterationLSN),
+				zap.String("task_id", taskID),
 				zap.String("db_name", key.dbName),
 				zap.String("table_name", key.tableName),
 				zap.String("object_name", stats.ObjectName().String()),
@@ -862,14 +859,18 @@ func submitObjectsAsInsert(ctx context.Context, iterationCtx *IterationContext, 
 
 // submitObjectsAsDelete submits objects as DELETE operation
 // It uses SoftDeleteObject to soft delete objects by setting their deleteat timestamp
-func submitObjectsAsDelete(ctx context.Context, iterationCtx *IterationContext, cnEngine engine.Engine, statsList []*ObjectWithTableInfo, mp *mpool.MPool) error {
+func submitObjectsAsDelete(
+	ctx context.Context,
+	taskID string,
+	txn client.TxnOperator,
+	cnEngine engine.Engine,
+	statsList []*ObjectWithTableInfo,
+	mp *mpool.MPool,
+) error {
 	if len(statsList) == 0 {
 		return nil
 	}
 
-	if iterationCtx == nil {
-		return moerr.NewInternalError(ctx, "iteration context is nil")
-	}
 	if cnEngine == nil {
 		return moerr.NewInternalError(ctx, "engine is nil")
 	}
@@ -893,7 +894,7 @@ func submitObjectsAsDelete(ctx context.Context, iterationCtx *IterationContext, 
 		}
 
 		// Get database using transaction from iteration context
-		db, err := cnEngine.Database(ctx, key.dbName, iterationCtx.LocalTxn)
+		db, err := cnEngine.Database(ctx, key.dbName, txn)
 		if err != nil {
 			return moerr.NewInternalErrorf(ctx, "failed to get database %s: %v", key.dbName, err)
 		}
@@ -936,8 +937,7 @@ func submitObjectsAsDelete(ctx context.Context, iterationCtx *IterationContext, 
 					objectType = "tombstone"
 				}
 				logutil.Info("ccpr-iteration submitting object",
-					zap.Uint64("task_id", iterationCtx.TaskID),
-					zap.Uint64("lsn", iterationCtx.IterationLSN),
+					zap.String("task_id", taskID),
 					zap.String("db_name", key.dbName),
 					zap.String("table_name", key.tableName),
 					zap.String("object_name", objName),
@@ -965,8 +965,7 @@ func submitObjectsAsDelete(ctx context.Context, iterationCtx *IterationContext, 
 				objectType = "tombstone"
 			}
 			logutil.Info("ccpr-iteration submitting object",
-				zap.Uint64("task_id", iterationCtx.TaskID),
-				zap.Uint64("lsn", iterationCtx.IterationLSN),
+				zap.String("task_id", taskID),
 				zap.String("db_name", key.dbName),
 				zap.String("table_name", key.tableName),
 				zap.String("object_name", objName),
@@ -1113,6 +1112,322 @@ func GetObjectListMap(ctx context.Context, iterationCtx *IterationContext, cnEng
 	return objectMap, nil
 }
 
-func ApplyObjects()(err error){
-	
+func ApplyObjects(
+	ctx context.Context,
+	tastID string,
+	accountID uint32,
+	indexTableMappings map[string]string,
+	aobjectMap map[objectio.ObjectId]AObjMapping,
+	objectMap map[objectio.ObjectId]*ObjectWithTableInfo,
+	upstreamExecutor SQLExecutor,
+	currentTS types.TS,
+	txn client.TxnOperator,
+	cnEngine engine.Engine,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (err error) {
+
+	var collectedTombstoneDeleteStats []*ObjectWithTableInfo
+	var collectedTombstoneInsertStats []*ObjectWithTableInfo
+	var collectedDataDeleteStats []*ObjectWithTableInfo
+	var collectedDataInsertStats []*ObjectWithTableInfo
+
+	// Extract objects from map to collected stats lists
+	// Apply index table name mapping before collecting
+	for _, info := range objectMap {
+		// Check if this is an index table and apply mapping
+		downstreamTableName := info.TableName
+		if indexTableMappings != nil {
+			if downstreamName, exists := indexTableMappings[info.TableName]; exists {
+				downstreamTableName = downstreamName
+				logutil.Info("ccpr-iteration mapping index table name",
+					zap.String("task_id", tastID),
+					zap.String("upstream_table_name", info.TableName),
+					zap.String("downstream_table_name", downstreamTableName),
+					zap.String("db_name", info.DBName),
+				)
+			}
+		}
+		// Update table name in info
+		info.TableName = downstreamTableName
+
+		statsBytes := info.Stats.Marshal()
+		delete := info.Delete
+		objID := info.Stats.ObjectName().ObjectId()
+		objName := info.Stats.ObjectName().String()
+
+		if info.Stats.GetAppendable() {
+			// Log before registering object operation for aobj
+			logutil.Info("ccpr-iteration registering object operation",
+				zap.String("task_id", tastID),
+				zap.String("db_name", info.DBName),
+				zap.String("table_name", info.TableName),
+				zap.String("object_name", objName),
+				zap.String("object_id", objID.ShortStringEx()),
+				zap.Bool("is_appendable", true),
+				zap.Bool("is_tombstone", info.IsTombstone),
+				zap.Bool("delete", delete),
+				zap.String("operation", "filter_aobj"),
+			)
+			if !info.Delete {
+				if err = FilterObject(ctx, statsBytes, currentTS, aobjectMap, upstreamExecutor, info.IsTombstone, fs, mp); err != nil {
+					err = moerr.NewInternalErrorf(ctx, "failed to filter object: %v", err)
+					return
+				}
+			}
+			continue
+		}
+
+		if info.Delete {
+			// Object to delete
+			if info.IsTombstone {
+				collectedTombstoneDeleteStats = append(collectedTombstoneDeleteStats, info)
+			} else {
+				collectedDataDeleteStats = append(collectedDataDeleteStats, info)
+			}
+		} else {
+			// Call FilterObject to handle the object (for both insert and delete)
+			// FilterObject will:
+			// - For aobj: get object from upstream, convert to batch, filter by snapshot TS, create new object
+			//   For delete: mark object for deletion in ActiveAObj
+			// - For nobj: get object from upstream and write directly to fileservice
+
+			// Log before registering object operation for nobj
+			objID := info.Stats.ObjectName().ObjectId()
+			objName := info.Stats.ObjectName().String()
+			logutil.Info("ccpr-iteration registering object operation",
+				zap.String("task_id", tastID),
+				zap.String("db_name", info.DBName),
+				zap.String("table_name", info.TableName),
+				zap.String("object_name", objName),
+				zap.String("object_id", objID.ShortStringEx()),
+				zap.Bool("is_appendable", false),
+				zap.Bool("is_tombstone", info.IsTombstone),
+				zap.Bool("delete", delete),
+				zap.String("operation", "filter_nobj"),
+			)
+			if err = FilterObject(ctx, statsBytes, currentTS, aobjectMap, upstreamExecutor, info.IsTombstone, fs, mp); err != nil {
+				err = moerr.NewInternalErrorf(ctx, "failed to filter object: %v", err)
+				return
+			}
+			// Object to insert
+			if info.IsTombstone {
+				collectedTombstoneInsertStats = append(collectedTombstoneInsertStats, info)
+			} else {
+				collectedDataInsertStats = append(collectedDataInsertStats, info)
+			}
+		}
+	}
+
+	// Process ActiveAObj and merge into collected stats
+	// All objects (aobj and nobj) will be submitted together after processing
+	if aobjectMap != nil {
+		// Log start of ActiveAObj processing
+		logutil.Info("ccpr-iteration processing ActiveAObj",
+			zap.String("task_id", tastID),
+			zap.Int("active_aobj_count", len(aobjectMap)),
+		)
+
+		var objectsToDelete []objectio.ObjectId // Track UUIDs to delete from map
+
+		for upstreamUUID, mapping := range aobjectMap {
+			upstreamInfo, ok := objectMap[upstreamUUID]
+			if !ok {
+				continue
+			}
+			isTombstone := upstreamInfo.IsTombstone
+			dbName := upstreamInfo.DBName
+			tableName := upstreamInfo.TableName
+
+			// Log registering object operation from ActiveAObj
+			logutil.Info("ccpr-iteration registering object operation from ActiveAObj",
+				zap.String("task_id", tastID),
+				zap.String("db_name", dbName),
+				zap.String("table_name", tableName),
+				zap.String("upstream_uuid", upstreamUUID.ShortStringEx()),
+				zap.Bool("is_tombstone", isTombstone),
+				zap.Bool("delete", upstreamInfo.Delete),
+				zap.Bool("has_current", !mapping.Current.IsZero()),
+				zap.Bool("has_previous", !mapping.Previous.IsZero()),
+			)
+
+			// Print upstream->current mapping when current exists and changed
+			if !mapping.Current.IsZero() {
+				// Check if current is different from previous (changed)
+				currentChanged := false
+				if mapping.Previous.IsZero() {
+					// New mapping (no previous)
+					currentChanged = true
+				} else {
+					// Check if current is different from previous by comparing object names
+					currentName := mapping.Current.ObjectName().String()
+					previousName := mapping.Previous.ObjectName().String()
+					if currentName != previousName {
+						currentChanged = true
+					}
+				}
+				if currentChanged {
+					logutil.Info("ccpr-iteration aobject mapping changed",
+						zap.String("task_id", tastID),
+						zap.String("db_name", dbName),
+						zap.String("table_name", tableName),
+						zap.String("upstream", upstreamUUID.ShortStringEx()),
+						zap.String("current", mapping.Current.ObjectName().String()),
+						zap.String("current_info", mapping.Current.String()),
+					)
+				}
+			}
+
+			// If delete is true, delete the object and remove from map
+			if upstreamInfo.Delete {
+				// Delete previous object if it exists (previous object was created in earlier iteration)
+				if !mapping.Current.IsZero() {
+					// Delete the previous object (assume data object, not tombstone)
+					// Use srcInfo for dbName and tableName since ActiveAObj doesn't have table info
+					if isTombstone {
+						collectedTombstoneDeleteStats = append(collectedTombstoneDeleteStats, &ObjectWithTableInfo{
+							Stats:       mapping.Current,
+							DBName:      dbName,
+							TableName:   tableName,
+							IsTombstone: isTombstone,
+							Delete:      true,
+						})
+
+					} else {
+						collectedDataDeleteStats = append(collectedDataDeleteStats, &ObjectWithTableInfo{
+							Stats:       mapping.Current,
+							DBName:      dbName,
+							TableName:   tableName,
+							IsTombstone: isTombstone,
+							Delete:      true,
+						})
+					}
+				}
+				// Mark for removal from map (no need to record in table)
+				objectsToDelete = append(objectsToDelete, upstreamUUID)
+				continue
+			}
+
+			// Check if current stats is valid (not zero value)
+			if !mapping.Current.IsZero() {
+				// New object to insert (not tombstone by default for ActiveAObj)
+				// Use srcInfo for dbName and tableName since ActiveAObj doesn't have table info
+				if isTombstone {
+					collectedTombstoneInsertStats = append(collectedTombstoneInsertStats, &ObjectWithTableInfo{
+						Stats:       mapping.Current,
+						DBName:      dbName,
+						TableName:   tableName,
+						IsTombstone: isTombstone,
+						Delete:      false,
+					})
+				} else {
+					collectedDataInsertStats = append(collectedDataInsertStats, &ObjectWithTableInfo{
+						Stats:       mapping.Current,
+						DBName:      dbName,
+						TableName:   tableName,
+						IsTombstone: isTombstone,
+						Delete:      false,
+					})
+				}
+			}
+
+			// Check if previous stats is valid (not zero value)
+			if !mapping.Previous.IsZero() {
+				// Previous object to delete (assume data object, not tombstone)
+				// Use srcInfo for dbName and tableName since ActiveAObj doesn't have table info
+				if isTombstone {
+					collectedTombstoneDeleteStats = append(collectedTombstoneDeleteStats, &ObjectWithTableInfo{
+						Stats:       mapping.Previous,
+						DBName:      dbName,
+						TableName:   tableName,
+						IsTombstone: isTombstone,
+						Delete:      true,
+					})
+				} else {
+					collectedDataDeleteStats = append(collectedDataDeleteStats, &ObjectWithTableInfo{
+						Stats:       mapping.Previous,
+						DBName:      dbName,
+						TableName:   tableName,
+						IsTombstone: isTombstone,
+						Delete:      true,
+					})
+				}
+			}
+		}
+
+		// Remove objects marked for deletion from map
+		for _, uuid := range objectsToDelete {
+			delete(aobjectMap, uuid)
+		}
+
+		// Log end of ActiveAObj processing
+		logutil.Info("ccpr-iteration finished processing ActiveAObj",
+			zap.String("task_id", tastID),
+			zap.Int("remaining_active_aobj_count", len(aobjectMap)),
+		)
+	}
+
+	// Submit all collected objects to TN in order: tombstone delete -> tombstone insert -> data delete -> data insert
+	// Use downstream account ID from iterationCtx.SrcInfo
+	// Set PkCheckByTN to SkipAllDedup to completely skip all deduplication checks in TN
+	downstreamCtx := context.WithValue(ctx, defines.TenantIDKey{}, accountID)
+	downstreamCtx = context.WithValue(downstreamCtx, defines.PkCheckByTN{}, int8(cmd_util.SkipAllDedup))
+
+	// Log summary before submitting objects
+	logutil.Info("ccpr-iteration preparing to submit objects",
+		zap.String("task_id", tastID),
+		zap.Int("tombstone_delete_count", len(collectedTombstoneDeleteStats)),
+		zap.Int("tombstone_insert_count", len(collectedTombstoneInsertStats)),
+		zap.Int("data_delete_count", len(collectedDataDeleteStats)),
+		zap.Int("data_insert_count", len(collectedDataInsertStats)),
+	)
+
+	// 1. Submit tombstone delete objects (soft delete)
+	if len(collectedTombstoneDeleteStats) > 0 {
+		logutil.Info("ccpr-iteration submitting tombstone delete objects",
+			zap.String("task_id", tastID),
+			zap.Int("count", len(collectedTombstoneDeleteStats)),
+		)
+		if err = submitObjectsAsDelete(downstreamCtx, tastID, txn, cnEngine, collectedTombstoneDeleteStats, mp); err != nil {
+			err = moerr.NewInternalErrorf(ctx, "failed to submit tombstone delete objects: %v", err)
+			return
+		}
+	}
+
+	// 2. Submit tombstone insert objects
+	if len(collectedTombstoneInsertStats) > 0 {
+		logutil.Info("ccpr-iteration submitting tombstone insert objects",
+			zap.String("task_id", tastID),
+			zap.Int("count", len(collectedTombstoneInsertStats)),
+		)
+		if err = submitObjectsAsInsert(downstreamCtx, tastID, txn, cnEngine, collectedTombstoneInsertStats, nil, mp); err != nil {
+			err = moerr.NewInternalErrorf(ctx, "failed to submit tombstone insert objects: %v", err)
+			return
+		}
+	}
+
+	// 3. Submit data delete objects (soft delete)
+	if len(collectedDataDeleteStats) > 0 {
+		logutil.Info("ccpr-iteration submitting data delete objects",
+			zap.String("task_id", tastID),
+			zap.Int("count", len(collectedDataDeleteStats)),
+		)
+		if err = submitObjectsAsDelete(downstreamCtx, tastID, txn, cnEngine, collectedDataDeleteStats, mp); err != nil {
+			err = moerr.NewInternalErrorf(ctx, "failed to submit data delete objects: %v", err)
+			return
+		}
+	}
+
+	// 4. Submit data insert objects
+	if len(collectedDataInsertStats) > 0 {
+		logutil.Info("ccpr-iteration submitting data insert objects",
+			zap.String("task_id", tastID),
+			zap.Int("count", len(collectedDataInsertStats)),
+		)
+		if err = submitObjectsAsInsert(downstreamCtx, tastID, txn, cnEngine, nil, collectedDataInsertStats, mp); err != nil {
+			err = moerr.NewInternalErrorf(ctx, "failed to submit data insert objects: %v", err)
+			return
+		}
+	}
+	return
 }
