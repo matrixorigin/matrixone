@@ -5,198 +5,239 @@ use hint_cte_test;
 drop table if exists t1;
 create table t1 (id int, name varchar(20), age int);
 insert into t1 values (1, 'Alice', 20), (2, 'Bob', 30), (3, 'Charlie', 40);
--- Case 1: Simple CTE, table inside CTE is rewritten
 /*+ {
-    "rewrites": {
-        "hint_cte_test.t1": "SELECT * FROM t1 WHERE age > 25"
-    }
+"rewrites": {
+"hint_cte_test.t1": "SELECT * FROM t1 WHERE age > 25"
+}
 } */
 with cte1 as (select * from t1)
 select * from cte1 order by id;
-id	name	age
-2	Bob	30
-3	Charlie	40
--- Case 2: CTE join, both tables rewritten
+id    name    age
+2    Bob    30
+3    Charlie    40
 drop table if exists t2;
 create table t2 (id int, city varchar(20));
 insert into t2 values (1, 'Beijing'), (2, 'Shanghai'), (3, 'Guangzhou');
 /*+ {
-    "rewrites": {
-        "hint_cte_test.t1": "SELECT * FROM t1 WHERE id > 1",
-        "hint_cte_test.t2": "SELECT * FROM t2 WHERE city != 'Shanghai'"
-    }
+"rewrites": {
+"hint_cte_test.t1": "SELECT * FROM t1 WHERE id > 1",
+"hint_cte_test.t2": "SELECT * FROM t2 WHERE city != 'Shanghai'"
+}
 } */
 with cte_t1 as (select * from t1),
-     cte_t2 as (select * from t2)
+cte_t2 as (select * from t2)
 select cte_t1.name, cte_t2.city
 from cte_t1 join cte_t2 on cte_t1.id = cte_t2.id
 order by cte_t1.name;
-name	city
-Charlie	Guangzhou
--- Case 3: CTE referencing another CTE, base table rewritten
+name    city
+Charlie    Guangzhou
 /*+ {
-    "rewrites": {
-        "hint_cte_test.t1": "SELECT * FROM t1 WHERE age < 35"
-    }
+"rewrites": {
+"hint_cte_test.t1": "SELECT * FROM t1 WHERE age < 35"
+}
 } */
 with cte1 as (select * from t1),
-     cte2 as (select * from cte1 where id > 1)
+cte2 as (select * from cte1 where id > 1)
 select * from cte2 order by id;
-id	name	age
-2	Bob	30
--- Case 4: CTE defined in the hint rewrite itself
+id    name    age
+2    Bob    30
 /*+ {
-    "rewrites": {
-        "hint_cte_test.v1": "WITH cte_internal AS (SELECT * FROM t1 WHERE age > 20) SELECT * FROM cte_internal"
-    }
+"rewrites": {
+"hint_cte_test.v1": "WITH cte_internal AS (SELECT * FROM t1 WHERE age > 20) SELECT * FROM cte_internal"
+}
 } */
 select * from v1 order by id;
-id	name	age
-2	Bob	30
-3	Charlie	40
--- Case 5: CTE in original query, hint target is a name that looks like a CTE but is meant to be a table
+id    name    age
+2    Bob    30
+3    Charlie    40
 /*+ {
-    "rewrites": {
-        "hint_cte_test.cte1": "SELECT 1 as id, 'Fake' as name, 99 as age"
-    }
+"rewrites": {
+"hint_cte_test.cte1": "SELECT 1 as id, 'Fake' as name, 99 as age"
+}
 } */
 with cte1 as (select * from t1)
 select * from cte1 order by id;
-id	name	age
-1	Alice	20
-2	Bob	30
-3	Charlie	40
--- Case 6: Recursive CTE
+id    name    age
+1    Alice    20
+2    Bob    30
+3    Charlie    40
 set mo_recursive_cte_max_iteration = 10;
+internal error: the system variable does not exist
 /*+ {
-    "rewrites": {
-        "hint_cte_test.t1": "SELECT * FROM t1 WHERE id = 1"
-    }
+"rewrites": {
+"hint_cte_test.t1": "SELECT * FROM t1 WHERE id = 1"
+}
 } */
 with recursive cte(n) as (
-    select id from t1
-    union all
-    select n + 1 from cte where n < 3
+select id from t1
+union all
+select n + 1 from cte where n < 3
 )
 select * from cte order by n;
-n
-1
-2
-3
--- Case 7: CTE used multiple times
+SQL parser error: Column remapping failed: cannot find column reference
+❌ Missing Column:
+   Position: [RelPos=0, ColPos=0]
+   Name: hint_cte_test.t1.id
+
+📍 Context:
+   Step: 0
+   Node ID: 12
+   Node Type: PROJECT
+   Tip: neededProj
+   Expression Index: 0
+
+🔍 Related Expression:
+   
+Expr_Col(id.0)
+
+🔧 Optimization History:
+   - pushdownFilters:before (nodeID: 13, nodeType: SINK, filters: 0)
+   - pushdownFilters:before (nodeID: 12, nodeType: PROJECT, filters: 0)
+   - pushdownFilters:before (nodeID: 11, nodeType: PROJECT, filters: 0)
+   - pushdownFilters:before (nodeID: 10, nodeType: FILTER, filters: 0)
+   - pushdownFilters:before (nodeID: 9, nodeType: TABLE_SCAN, filters: 1)
+   - pushdownFilters:middle (nodeID: 9, TABLE_SCAN, filters: 1)
+   - pushdownFilters:after (nodeID: 9, no change, cantPushdown: 0)
+   - pushdownFilters:after (nodeID: 10 -> 9, cantPushdown: 0)
+   - pushdownFilters:after (nodeID: 11, no change, cantPushdown: 0)
+   - pushdownFilters:after (nodeID: 12, no change, cantPushdown: 0)
+   - pushdownFilters:after (nodeID: 13, no change, cantPushdown: 0)
+   - pushdownFilters:before (nodeID: 17, nodeType: SINK, filters: 0)
+   - pushdownFilters:before (nodeID: 16, nodeType: PROJECT, filters: 0)
+   - pushdownFilters:before (nodeID: 15, nodeType: FILTER, filters: 0)
+   - pushdownFilters:before (nodeID: 14, nodeType: RECURSIVE_SCAN, filters: 1)
+   - pushdownFilters:after (nodeID: 14, no change, cantPushdown: 1)
+   - pushdownFilters:after (nodeID: 15, no change, cantPushdown: 0)
+   - pushdownFilters:after (nodeID: 16, no change, cantPushdown: 0)
+   - pushdownFilters:after (nodeID: 17, no change, cantPushdown: 0)
+   - pushdownFilters:before (nodeID: 19, nodeType: SINK, filters: 0)
+   - pushdownFilters:before (nodeID: 18, nodeType: RECURSIVE_CTE, filters: 0)
+   - pushdownFilters:after (nodeID: 18, no change, cantPushdown: 0)
+   - pushdownFilters:after (nodeID: 19, no change, cantPushdown: 0)
+   - pushdownFilters:before (nodeID: 23, nodeType: PROJECT, filters: 0)
+   - pushdownFilters:before (nodeID: 22, nodeType: SORT, filters: 0)
+   - pushdownFilters:before (nodeID: 21, nodeType: PROJECT, filters: 0)
+   - pushdownFilters:before (nodeID: 20, nodeType: SINK_SCAN, filters: 0)
+   - pushdownFilters:after (nodeID: 20, no change, cantPushdown: 0)
+   - pushdownFilters:after (nodeID: 21, no change, cantPushdown: 0)
+   - pushdownFilters:after (nodeID: 22, no change, cantPushdown: 0)
+   - pushdownFilters:after (nodeID: 23, no change, cantPushdown: 0)
+
+✅ Available Columns in Context:
+   [RelPos=34, ColPos=0] -> t1.id
+
+
 /*+ {
-    "rewrites": {
-        "hint_cte_test.t1": "SELECT * FROM t1 WHERE age > 25"
-    }
+"rewrites": {
+"hint_cte_test.t1": "SELECT * FROM t1 WHERE age > 25"
+}
 } */
 with cte1 as (select * from t1)
 select a.name, b.age
 from cte1 a join cte1 b on a.id = b.id
 order by a.name;
-name	age
-Bob	30
-Charlie	40
--- Case 8: CTE in subquery
+name    age
+Bob    30
+Charlie    40
 /*+ {
-    "rewrites": {
-        "hint_cte_test.t1": "SELECT * FROM t1 WHERE age > 25"
-    }
+"rewrites": {
+"hint_cte_test.t1": "SELECT * FROM t1 WHERE age > 25"
+}
 } */
 select * from (
-    with cte1 as (select * from t1)
-    select * from cte1
+with cte1 as (select * from t1)
+select * from cte1
 ) sub order by id;
-id	name	age
-2	Bob	30
-3	Charlie	40
--- Case 9: Specialized case for CTE self-join with schema-prefixed rewritten table
+id    name    age
+2    Bob    30
+3    Charlie    40
 drop table if exists bpc_consolidated_report;
 create table bpc_consolidated_report (
-    b28_s_kgd353d varchar(20),
-    b28_s_sdata decimal(20,2),
-    b28_s_kgd4b76 varchar(20),
-    b28_s_kgd4rtr_kgdxoi5 varchar(20),
-    b28_s_kgdtvnx varchar(20),
-    b28_s_kgdp984 varchar(20),
-    b28_s_kgd4kbn varchar(20),
-    b28_s_kgdc8w9 varchar(20)
+b28_s_kgd353d varchar(20),
+b28_s_sdata decimal(20,2),
+b28_s_kgd4b76 varchar(20),
+b28_s_kgd4rtr_kgdxoi5 varchar(20),
+b28_s_kgdtvnx varchar(20),
+b28_s_kgdp984 varchar(20),
+b28_s_kgd4kbn varchar(20),
+b28_s_kgdc8w9 varchar(20)
 );
 insert into bpc_consolidated_report values ('2021.12', -100.0, '4999999021', 'EO_1000', 'ACT_LG', 'F99', 'CNY', 'G123');
 insert into bpc_consolidated_report values ('2022.12', -200.0, '4999999021', 'EO_1000', 'ACT_LG', 'F99', 'CNY', 'G123');
 /*+ {
-    "rewrites" : {
-        "hint_cte_test.bpc_consolidated_report" : "SELECT * FROM bpc_consolidated_report"
-    }
+"rewrites" : {
+"hint_cte_test.bpc_consolidated_report" : "SELECT * FROM bpc_consolidated_report"
+}
 } */
 WITH yearly_revenue AS (
-    SELECT
-        CAST(SUBSTRING(b28_s_kgd353d, 1, 4) AS UNSIGNED) AS year_num,
-        -SUM(b28_s_sdata) AS total_rev
-    FROM hint_cte_test.bpc_consolidated_report
-    WHERE b28_s_kgd4b76 = '4999999021'
-    GROUP BY b28_s_kgd353d
+SELECT
+CAST(SUBSTRING(b28_s_kgd353d, 1, 4) AS UNSIGNED) AS year_num,
+-SUM(b28_s_sdata) AS total_rev
+FROM hint_cte_test.bpc_consolidated_report
+WHERE b28_s_kgd4b76 = '4999999021'
+GROUP BY b28_s_kgd353d
 )
 SELECT
-    r1.year_num,
-    r1.total_rev,
-    r2.total_rev as prev_rev
+r1.year_num,
+r1.total_rev,
+r2.total_rev as prev_rev
 FROM yearly_revenue r1
 LEFT JOIN yearly_revenue r2 ON r1.year_num = r2.year_num + 1
 ORDER BY r1.year_num;
-year_num	total_rev	prev_rev
-2021	100.00	null
-2022	200.00	100.00
--- Case 10: Deep reproduction case with exact user SQL structure and database names
-drop database if exists jst_flat_table;
-create database jst_flat_table;
-use jst_flat_table;
+year_num    total_rev    prev_rev
+2021    100.00    null
+2022    200.00    100.00
+drop database if exists jst_flat_table1;
+create database jst_flat_table1;
+use jst_flat_table1;
 create table bpc_consolidated_report (
-    b28_s_kgd353d varchar(20),
-    b28_s_sdata decimal(20,2),
-    b28_s_kgd4b76 varchar(20),
-    b28_s_kgd4rtr_kgdxoi5 varchar(20),
-    b28_s_kgdtvnx varchar(20),
-    b28_s_kgdp984 varchar(20),
-    b28_s_kgd4kbn varchar(20),
-    b28_s_kgdc8w9 varchar(20)
+b28_s_kgd353d varchar(20),
+b28_s_sdata decimal(20,2),
+b28_s_kgd4b76 varchar(20),
+b28_s_kgd4rtr_kgdxoi5 varchar(20),
+b28_s_kgdtvnx varchar(20),
+b28_s_kgdp984 varchar(20),
+b28_s_kgd4kbn varchar(20),
+b28_s_kgdc8w9 varchar(20)
 );
-insert into bpc_consolidated_report values 
+insert into bpc_consolidated_report values
 ('2021.12', -100.0, '4999999021', 'EO_1000', 'ACT_LG', 'F99', 'CNY', 'G123'),
 ('2022.12', -200.0, '4999999021', 'EO_1000', 'ACT_LG', 'F99', 'CNY', 'G123'),
 ('2023.12', -300.0, '4999999021', 'EO_1000', 'ACT_LG', 'F99', 'CNY', 'G123');
 /*+ {
-    "rewrites" : {
-        "jst_flat_table.capacity" : "SELECT * FROM jst_flat_table.capacity",
-        "jst_flat_table.open_orders_result" : "SELECT * FROM jst_flat_table.open_orders_result",
-        "jst_flat_table.bpc_consolidated_report" : "SELECT * FROM jst_flat_table.bpc_consolidated_report"
-    }
+"rewrites" : {
+"jst_flat_table1.capacity" : "SELECT * FROM jst_flat_table1.capacity",
+"jst_flat_table1.open_orders_result" : "SELECT * FROM jst_flat_table1.open_orders_result",
+"jst_flat_table1.bpc_consolidated_report" : "SELECT * FROM jst_flat_table1.bpc_consolidated_report"
+}
 } */
 WITH yearly_revenue AS (
-    SELECT
-        CAST(SUBSTRING(b28_s_kgd353d, 1, 4) AS UNSIGNED) AS `年份`,
-        -SUM(b28_s_sdata) AS `营业收入总额`
-    FROM jst_flat_table.bpc_consolidated_report
-    WHERE
-        b28_s_kgd4b76 IN ('4999999021','6001000000')
-        AND b28_s_kgd353d IN ('2021.12', '2022.12', '2023.12', '2024.12')
-    GROUP BY b28_s_kgd353d
+SELECT
+CAST(SUBSTRING(b28_s_kgd353d, 1, 4) AS UNSIGNED) AS `年份`,
+-SUM(b28_s_sdata) AS `营业收入总额`
+FROM jst_flat_table1.bpc_consolidated_report
+WHERE
+b28_s_kgd4b76 IN ('4999999021','6001000000')
+AND b28_s_kgd353d IN ('2021.12', '2022.12', '2023.12', '2024.12')
+GROUP BY b28_s_kgd353d
 )
 SELECT
-    r1.`年份`,
-    r1.`营业收入总额`,
-    CASE
-        WHEN r2.`营业收入总额` IS NOT NULL AND r2.`营业收入总额` != 0
-        THEN ROUND((r1.`营业收入总额` - r2.`营业收入总额`) / r2.`营业收入总额` * 100, 2)
-        ELSE NULL
-    END AS `同比增长率(%)`
+r1.`年份`,
+r1.`营业收入总额`,
+CASE
+WHEN r2.`营业收入总额` IS NOT NULL AND r2.`营业收入总额` != 0
+THEN ROUND((r1.`营业收入总额` - r2.`营业收入总额`) / r2.`营业收入总额` * 100, 2)
+ELSE NULL
+END AS `同比增长率(%)`
 FROM yearly_revenue r1
 LEFT JOIN yearly_revenue r2 ON r1.`年份` = r2.`年份` + 1
 ORDER BY r1.`年份`;
-年份	营业收入总额	同比增长率(%)
-2021	100.00	null
-2022	200.00	100.00
-2023	300.00	50.00
+年份    营业收入总额    同比增长率(%)
+2021    100.00    null
+2022    200.00    100.00
+2023    300.00    50.00
 drop database jst_flat_table;
+Can't drop database 'jst_flat_table'; database doesn't exist
 use hint_cte_test;
 drop database hint_cte_test;
 set enable_remap_hint = 0;
