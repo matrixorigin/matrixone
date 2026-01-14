@@ -281,9 +281,8 @@ func (bf *CBloomFilter) TestVector(v *vector.Vector, callBack func(bool, int)) {
 }
 
 // add all element in the vector.Vector to the bloom filter
-// call the callback function for all elements in the vector.Vector
 // use concurrent.ThreadPoolExecutor to process the vector.Vector
-func (bf *CBloomFilter) AddVector(v *vector.Vector, callBack func(bool, int)) {
+func (bf *CBloomFilter) AddVector(v *vector.Vector) {
 	if bf == nil || bf.ptr == nil {
 		return
 	}
@@ -313,9 +312,6 @@ func (bf *CBloomFilter) AddVector(v *vector.Vector, callBack func(bool, int)) {
 					idx := i * typeSize
 					buf = append(buf, fixedData[idx : idx+typeSize]...)
 					C.bloomfilter_add(bf.ptr, unsafe.Pointer(&buf[0]), C.size_t(len(buf)))
-					if callBack != nil {
-						callBack(false, i)
-					}
 				}
 			} else {
 				nulls := v.GetNulls()
@@ -329,9 +325,6 @@ func (bf *CBloomFilter) AddVector(v *vector.Vector, callBack func(bool, int)) {
 						buf = append(buf, fixedData[idx : idx+typeSize]...)
 					}
 					C.bloomfilter_add(bf.ptr, unsafe.Pointer(&buf[0]), C.size_t(len(buf)))
-					if callBack != nil {
-						callBack(false, i)
-					}
 				}
 			}
 		} else {
@@ -341,9 +334,6 @@ func (bf *CBloomFilter) AddVector(v *vector.Vector, callBack func(bool, int)) {
 					buf = append(buf, 0)
 					buf = append(buf, varlenData[i].GetByteSlice(area)...)
 					C.bloomfilter_add(bf.ptr, unsafe.Pointer(&buf[0]), C.size_t(len(buf)))
-					if callBack != nil {
-						callBack(false, i)
-					}
 				}
 			} else {
 				nulls := v.GetNulls()
@@ -356,9 +346,6 @@ func (bf *CBloomFilter) AddVector(v *vector.Vector, callBack func(bool, int)) {
 						buf = append(buf, varlenData[i].GetByteSlice(area)...)
 					}
 					C.bloomfilter_add(bf.ptr, unsafe.Pointer(&buf[0]), C.size_t(len(buf)))
-					if callBack != nil {
-						callBack(false, i)
-					}
 				}
 			}
 		}
