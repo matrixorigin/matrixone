@@ -75,6 +75,10 @@ func (bf *CBloomFilter) Marshal() ([]byte, error) {
 }
 
 func (bf *CBloomFilter) Unmarshal(data []byte) error {
+	if bf.ptr != nil {
+		return moerr.NewInternalErrorNoCtx("CBloomFilter:Unmarshal ptr is not nil")
+	}
+
 	if len(data) == 0 {
 		return nil
 	}
