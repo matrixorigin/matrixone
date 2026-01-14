@@ -987,8 +987,8 @@ func ExecuteIteration(
 			}
 		}
 	}()
-	// Step 0: 初始化阶段
-	// 0.1 检查iteration状态
+	// Step 0: Initialization phase
+	// 0.1 Check iteration status
 	if err = CheckIterationStatus(ctx, iterationCtx.LocalExecutor, taskID, cnUUID, iterationLSN); err != nil {
 		return
 	}
@@ -1013,7 +1013,7 @@ func ExecuteIteration(
 		}
 	}()
 
-	// 1.1 请求上游snapshot (includes 1.1.2 请求上游的snapshot ts)
+	// 1.1 Request upstream snapshot (includes 1.1.2 request upstream snapshot TS)
 	if err = RequestUpstreamSnapshot(ctx, iterationCtx); err != nil {
 		err = moerr.NewInternalErrorf(ctx, "failed to request upstream snapshot: %v", err)
 		return
@@ -1049,7 +1049,7 @@ func ExecuteIteration(
 		}
 	}
 
-	// 1.2 等待上游snapshot刷盘
+	// 1.2 Wait for upstream snapshot to be flushed
 	// Use provided interval, or default to 1 minute if not specified
 	flushInterval := snapshotFlushInterval
 	if flushInterval <= 0 {
@@ -1070,16 +1070,16 @@ func ExecuteIteration(
 		zap.Int64("prev_snapshot_ts", iterationCtx.PrevSnapshotTS.Physical()),
 	)
 
-	// TODO: 找到做snapshot的table，获取objectlist snapshot, 需要当前snapshot
+	// TODO: Find the table that created the snapshot, get objectlist snapshot, need current snapshot
 	if err = ProcessDDLChanges(ctx, cnEngine, iterationCtx); err != nil {
 		err = moerr.NewInternalErrorf(ctx, "failed to process DDL changes: %v", err)
 		return
 	}
-	// Step 2: 计算snapshot diff获取object list
+	// Step 2: Calculate snapshot diff to get object list
 
-	// Step 3: 获取object数据
-	// 遍历object list中的每个object，调用FilterObject接口处理
-	// 同时收集对象数据用于 Step 5 提交到 TN
+	// Step 3: Get object data
+	// Iterate through each object in the object list, call FilterObject interface to process
+	// Collect object data for Step 5 submission to TN
 	var collectedTombstoneDeleteStats []*ObjectWithTableInfo
 	var collectedTombstoneInsertStats []*ObjectWithTableInfo
 	var collectedDataDeleteStats []*ObjectWithTableInfo

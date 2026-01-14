@@ -1112,3 +1112,7 @@ func GetObjectListMap(ctx context.Context, iterationCtx *IterationContext, cnEng
 
 	return objectMap, nil
 }
+
+func ApplyObjects()(err error){
+	
+}

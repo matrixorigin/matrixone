@@ -480,7 +480,7 @@ type GetObject struct {
 	statementImpl
 
 	ObjectName Identifier // object name
-	ChunkIndex int64      // -1 表示只获取元数据，>=0 表示请求第几块
+	ChunkIndex int64      // -1 means only get metadata, >=0 means request which chunk
 }
 
 func (s *GetObject) TypeName() string {
