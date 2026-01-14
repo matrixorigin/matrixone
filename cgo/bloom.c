@@ -60,13 +60,11 @@ bloomfilter_t* bloomfilter_init(uint64_t nbits, uint32_t k) {
     
     memset(bf->bitmap, 0, nbytes);
     bloomfilter_setup(bf, nbits, k);
-    pthread_mutex_init(&bf->mutex, NULL);
     return bf;
 }
 
 void bloomfilter_free(bloomfilter_t *bf) {
     if (bf) {
-        pthread_mutex_destroy(&bf->mutex);
         free(bf);
     }
 }
@@ -86,13 +84,18 @@ void bloomfilter_add(const bloomfilter_t *bf, const void *key, size_t len) {
         pos[i] = bloom_calculate_pos(h, i, bf->nbits);
     }
 
-    pthread_mutex_lock((pthread_mutex_t*)&bf->mutex);
     for (int i = 0; i < bf->k; i++) {
         bitmap_set((uint64_t *) bf->bitmap, pos[i]);
     }
-    pthread_mutex_unlock((pthread_mutex_t*)&bf->mutex);
 
     if (pos != stack_pos) free(pos);
+}
+
+void bloomfilter_add_multi(const bloomfilter_t *bf, const void *key, size_t len, size_t elemsz, size_t nitem) {
+	char * k = (char *) key;
+	for (int i = 0, j = 0  ; i < nitem && j < len; i++, j += elemsz , k += elemsz) {
+		bloomfilter_add(bf, k, elemsz);
+	}
 }
 
 bool bloomfilter_test(const bloomfilter_t *bf, const void *key, size_t len) {
@@ -111,17 +114,24 @@ bool bloomfilter_test(const bloomfilter_t *bf, const void *key, size_t len) {
     }
 
     bool result = true;
-    pthread_mutex_lock((pthread_mutex_t*)&bf->mutex);
     for (int i = 0; i < bf->k; i++) {
         if (!bitmap_test((uint64_t*)bf->bitmap, pos[i])) {
             result = false;
             break;
         }
     }
-    pthread_mutex_unlock((pthread_mutex_t*)&bf->mutex);
 
     if (pos != stack_pos) free(pos);
     return result;
+}
+
+void bloomfilter_test_multi(const bloomfilter_t *bf, const void *key, size_t len, size_t elemsz, size_t nitem, void *result) {
+        char * k = (char *) key;
+	bool *br = (bool *) result;
+	
+        for (int i = 0, j = 0 ; i < nitem && j < len ; i++, j += elemsz, k += elemsz) {
+                br[i] = bloomfilter_test(bf, k, elemsz);
+        }
 }
 
 bool bloomfilter_test_and_add(const bloomfilter_t *bf, const void *key, size_t len) {
@@ -140,14 +150,12 @@ bool bloomfilter_test_and_add(const bloomfilter_t *bf, const void *key, size_t l
     }
 
     bool all_set = true;
-    pthread_mutex_lock((pthread_mutex_t*)&bf->mutex);
     for (int i = 0; i < bf->k; i++) {
         if (!bitmap_test((uint64_t*)bf->bitmap, pos[i])) {
             all_set = false;
             bitmap_set((uint64_t*)bf->bitmap, pos[i]);
         }
     }
-    pthread_mutex_unlock((pthread_mutex_t*)&bf->mutex);
 
     if (pos != stack_pos) free(pos);
     return all_set;
@@ -170,6 +178,5 @@ bloomfilter_t* bloomfilter_unmarshal(const uint8_t *buf, size_t len) {
     if (memcmp(bf->magic, BLOOM_MAGIC, 4) != 0) {
         return NULL;
     }
-    pthread_mutex_init(&bf->mutex, NULL);
     return bf;
 }

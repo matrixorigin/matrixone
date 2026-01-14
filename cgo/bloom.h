@@ -20,7 +20,6 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
-#include <pthread.h>
 
 #define BLOOM_MAGIC "XXBF"
 
@@ -37,14 +36,15 @@ typedef struct {
     uint32_t k;
     uint64_t nbits;
     uint64_t seeds[3];
-    pthread_mutex_t mutex;
     uint64_t bitmap[1];
 } bloomfilter_t;
 
 bloomfilter_t* bloomfilter_init(uint64_t nbits, uint32_t k);
 void bloomfilter_free(bloomfilter_t *bf);
 void bloomfilter_add(const bloomfilter_t *bf, const void *key, size_t len);
+void bloomfilter_add_multi(const bloomfilter_t *bf, const void *key, size_t len, size_t elemsz, size_t nitem);
 bool bloomfilter_test(const bloomfilter_t *bf, const void *key, size_t len);
+void bloomfilter_test_multi(const bloomfilter_t *bf, const void *key, size_t len, size_t elemsz, size_t nitem, void *result);
 bool bloomfilter_test_and_add(const bloomfilter_t *bf, const void *key, size_t len);
 uint8_t* bloomfilter_marshal(const bloomfilter_t *bf, size_t *len);
 bloomfilter_t* bloomfilter_unmarshal(const uint8_t *buf, size_t len);

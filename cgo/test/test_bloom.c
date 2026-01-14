@@ -84,6 +84,14 @@ int main() {
     }
     printf("test_and_add passed\n");
 
+    // Test add_multi
+    float ff[3];
+    ff[0] = 1; ff[1] = 3; ff[2] = 3;
+
+    bloomfilter_add_multi(bf2, (void *)ff, sizeof(float) * 3, sizeof(float), 3);
+    printf("add_multi passed\n");
+
+
     bloomfilter_free(bf2); // This will free(buf_copy)
     bloomfilter_free(bf);
     
