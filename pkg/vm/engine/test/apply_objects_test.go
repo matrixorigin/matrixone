@@ -249,11 +249,24 @@ func CollectAndExportObjects(
 	return nil
 }
 
-func TestCollectAndExportObjects(t *testing.T) {
+func PrepareDataAppend(
+	t *testing.T,
+	dir string,
+	collectFn func(
+		ctx context.Context,
+		fs fileservice.FileService,
+		dir string,
+		tableEntry *catalog.TableEntry,
+		dbname string,
+		tablename string,
+		fromts, tots types.TS,
+	) error,
+) {
 	ctx := context.Background()
 	tae := taetestutil.NewTestEngine(ctx, "test", t, nil)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(2, 1)
+	schema.Name = "testTable"
 	schema.Extra.BlockMaxRows = 50
 	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, 50)
@@ -269,8 +282,45 @@ func TestCollectAndExportObjects(t *testing.T) {
 	tblEntry := rel.GetMeta().(*catalog.TableEntry)
 	assert.NoError(t, txn.Commit(ctx))
 
-	err := CollectAndExportObjects(ctx, tae.Opts.Fs, "/tmp/test_apply_objects", tblEntry, dbname, tablename, fromts, tots)
+	err := collectFn(ctx, tae.Opts.Fs, dir, tblEntry, dbname, tablename, fromts, tots)
 	assert.NoError(t, err)
+}
+
+func DDLAppend(t *testing.T, disttaeEngine *testutil.TestDisttaeEngine) {
+	// Create database and table in disttaeEngine before ApplyObjects
+	// Use the same schema as the exported objects
+	destSchema := catalog.MockSchemaAll(2, 1)
+	destSchema.Name = "testTable"
+	destDBName := "db"
+	destTableName := destSchema.Name
+	destSchema.Extra.BlockMaxRows = 50
+
+	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, uint32(0))
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
+	// Create a new txn for creating database and table
+	createTxn, err := disttaeEngine.NewTxnOperator(ctxWithTimeout, disttaeEngine.Now())
+	require.NoError(t, err)
+
+	// Create database
+	err = disttaeEngine.Engine.Create(ctxWithTimeout, destDBName, createTxn)
+	require.NoError(t, err)
+
+	// Get database
+	destDB, err := disttaeEngine.Engine.Database(ctxWithTimeout, destDBName, createTxn)
+	require.NoError(t, err)
+
+	// Convert schema to table defs
+	defs, err := testutil.EngineTableDefBySchema(destSchema)
+	require.NoError(t, err)
+
+	// Create table
+	err = destDB.Create(ctxWithTimeout, destTableName, defs)
+	require.NoError(t, err)
+
+	// Commit the create txn
+	err = createTxn.Commit(ctxWithTimeout)
+	require.NoError(t, err)
 }
 
 // loadObjectMapFromDir loads objectmap from a directory
@@ -345,7 +395,45 @@ func loadObjectMapFromDir(ctx context.Context, dir string) (map[objectio.ObjectI
 	return objectMap, nil
 }
 
+type applyObjectCase struct {
+	ddlFn     func(t *testing.T, disttaeEngine *testutil.TestDisttaeEngine)
+	preDataFn func(
+		t *testing.T,
+		dir string,
+		collectFn func(
+			ctx context.Context,
+			fs fileservice.FileService,
+			dir string,
+			tableEntry *catalog.TableEntry,
+			dbname string,
+			tablename string,
+			fromts, tots types.TS,
+		) error,
+	)
+	checkFn func()
+}
+
+var applyObjectCases = []applyObjectCase{
+	{
+		ddlFn:     DDLAppend,
+		preDataFn: PrepareDataAppend,
+	},
+}
+
 func TestApplyObjects(t *testing.T) {
+	dir := "/tmp/test_apply_objects"
+	for _, testCase := range applyObjectCases {
+		testCase.preDataFn(t, dir, CollectAndExportObjects)
+		runApplyObjects(t, dir, testCase.ddlFn)
+
+	}
+}
+
+func runApplyObjects(
+	t *testing.T,
+	dir string,
+	ddlFn func(t *testing.T, disttaeEngine *testutil.TestDisttaeEngine),
+) {
 	pkgcatalog.SetupDefines("")
 
 	var (
@@ -366,29 +454,7 @@ func TestApplyObjects(t *testing.T) {
 		rpcAgent.Close()
 	}()
 
-	// First, create test data and export objects
-	tae := taetestutil.NewTestEngine(ctx, "test", t, nil)
-	defer tae.Close()
-	schema := catalog.MockSchemaAll(2, 1)
-	schema.Extra.BlockMaxRows = 50
-	tae.BindSchema(schema)
-	bat := catalog.MockBatch(schema, 50)
-	taetestutil.CreateRelationAndAppend(t, 0, tae.DB, "db", schema, bat, true)
-	tae.ForceCheckpoint()
-
-	// Export objects to directory
-	exportDir := "/tmp/test_apply_objects"
-	dbname := "db"
-	tablename := schema.Name
-	fromts := types.TS{}
-	tots := tae.TxnMgr.Now()
-	txn, rel := tae.GetRelation()
-	tblEntry := rel.GetMeta().(*catalog.TableEntry)
-	require.NoError(t, txn.Commit(ctx))
-
-	err := CollectAndExportObjects(ctx, tae.Opts.Fs, exportDir, tblEntry, dbname, tablename, fromts, tots)
-	require.NoError(t, err)
-
+	exportDir := dir
 	// Verify objectmap.json file exists and is readable
 	objectMapFile := filepath.Join(exportDir, "objectmap.json")
 	if _, err := os.Stat(objectMapFile); err != nil {
@@ -429,38 +495,7 @@ func TestApplyObjects(t *testing.T) {
 	)
 	defer stub.Reset()
 
-	// Create database and table in disttaeEngine before ApplyObjects
-	// Use the same schema as the exported objects
-	destDBName := dbname
-	destTableName := tablename
-	destSchema := catalog.MockSchemaAll(2, 1)
-	destSchema.Extra.BlockMaxRows = 50
-	destSchema.Name = destTableName
-
-	// Create a new txn for creating database and table
-	createTxn, err := disttaeEngine.NewTxnOperator(ctxWithTimeout, disttaeEngine.Now())
-	require.NoError(t, err)
-
-	// Create database
-	err = disttaeEngine.Engine.Create(ctxWithTimeout, destDBName, createTxn)
-	require.NoError(t, err)
-
-	// Get database
-	destDB, err := disttaeEngine.Engine.Database(ctxWithTimeout, destDBName, createTxn)
-	require.NoError(t, err)
-
-	// Convert schema to table defs
-	defs, err := testutil.EngineTableDefBySchema(destSchema)
-	require.NoError(t, err)
-
-	// Create table
-	err = destDB.Create(ctxWithTimeout, destTableName, defs)
-	require.NoError(t, err)
-
-	// Commit the create txn
-	err = createTxn.Commit(ctxWithTimeout)
-	require.NoError(t, err)
-
+	ddlFn(t, disttaeEngine)
 	// Create txn from disttaeEngine
 	cnTxn, err := disttaeEngine.NewTxnOperator(ctxWithTimeout, disttaeEngine.Now())
 	require.NoError(t, err)
