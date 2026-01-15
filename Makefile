@@ -195,7 +195,7 @@ GOEXPERIMENT_OPT :=
 ifeq ("$(UNAME_M)", "x86_64")
   ifeq ($(shell expr $(GO_MAJOR_VERSION) \>= 1), 1)
     ifeq ($(shell expr $(GO_MINOR_VERSION) \>= 26), 1)
-	GOEXPERIMENT_OPT=GOEXPERIMENT=simd
+	#GOEXPERIMENT_OPT=GOEXPERIMENT=simd
     endif
   endif
   ifneq ($(GOAMD64),)
