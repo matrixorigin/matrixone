@@ -3774,6 +3774,19 @@ func doDropStage(ctx context.Context, ses *Session, ds *tree.DropStage) (err err
 	return err
 }
 
+func doRemoveStageFiles(ctx context.Context, ses *Session, rs *tree.RemoveStageFiles) error {
+	if err := doCheckRole(ctx, ses); err != nil {
+		return err
+	}
+
+	if !strings.HasPrefix(rs.Path, stage.STAGE_PROTOCOL+"://") {
+		return moerr.NewBadConfig(ctx, "URL protocol only supports stage://")
+	}
+
+	_, err := stageutil.DeleteStageFiles(ctx, ses.proc, rs.Path, rs.IfExists)
+	return err
+}
+
 type dropAccount struct {
 	IfExists bool
 	Name     string
@@ -5956,7 +5969,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.SetConnectionID:
 		objType = objectTypeNone
 		kind = privilegeKindNone
-	case *tree.CreateStage, *tree.AlterStage, *tree.DropStage:
+	case *tree.CreateStage, *tree.AlterStage, *tree.DropStage, *tree.RemoveStageFiles:
 		objType = objectTypeNone
 		kind = privilegeKindNone
 	case *tree.BackupStart:
