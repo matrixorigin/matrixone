@@ -320,7 +320,6 @@ func genAutoIncrCol(bat *batch.Batch, proc *proc, preInsert *PreInsert) error {
 				logutil.Infof("auto-increment PK conflict check result: tableID=%d, col=%s, mayChanged=%v",
 					tableID, col, mayChanged)
 				if mayChanged {
-					logutil.Infof("auto-increment PK conflict detected, need retry: tableID=%d, col=%s", tableID, col)
 					return moerr.NewTxnNeedRetry(proc.Ctx)
 				}
 			} else {
