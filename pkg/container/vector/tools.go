@@ -206,9 +206,8 @@ func extend(v *Vector, rows int, m *mpool.MPool) error {
 		if err != nil {
 			return err
 		}
-		v.data = ndata
+		v.data = ndata[:cap(ndata)]
 	}
-	v.data = v.data[:tgtDataCap]
 	return nil
 }
 
