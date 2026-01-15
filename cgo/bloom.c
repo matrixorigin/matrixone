@@ -118,10 +118,6 @@ bool bloomfilter_test(const bloomfilter_t *bf, const void *key, size_t len) {
 
     uint64_t stack_pos[MAX_K_SEED];
     uint64_t *pos = stack_pos;
-    if (bf->k > MAX_K_SEED) {
-        pos = (uint64_t*)malloc(sizeof(uint64_t) * bf->k);
-        if (!pos) return false;
-    }
 
     for (int i = 0; i < bf->k; i++) {
         bloom_hash_t h = bloom_calculate_hash(key, len, bf->seeds[i]);
