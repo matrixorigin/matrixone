@@ -30,15 +30,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
+// CBloomFilter is a wrapper around the C implementation of a bloom filter.
 type CBloomFilter struct {
 	ptr *C.bloomfilter_t
 }
 
+// NewCBloomFilterWithProbaility creates a new CBloomFilter with optimal parameters
+// derived from the expected number of elements (rowcnt) and the desired false positive probability.
 func NewCBloomFilterWithProbaility(rowcnt int64, probability float64) *CBloomFilter {
 	nbit, k := computeMemAndHashCount(rowcnt, probability)
 	return NewCBloomFilter(uint64(nbit), uint32(k))
 }
 
+// NewCBloomFilter creates a new CBloomFilter with a specific number of bits (nbits)
+// and number of hash functions (k).
 func NewCBloomFilter(nbits uint64, k uint32) *CBloomFilter {
 	ptr := C.bloomfilter_init(C.uint64_t(nbits), C.uint32_t(k))
 	if ptr == nil {
@@ -47,6 +52,7 @@ func NewCBloomFilter(nbits uint64, k uint32) *CBloomFilter {
 	return &CBloomFilter{ptr: ptr}
 }
 
+// Free releases the C memory allocated for the bloom filter.
 func (bf *CBloomFilter) Free() {
 	if bf != nil && bf.ptr != nil {
 		C.bloomfilter_free(bf.ptr)
@@ -54,6 +60,7 @@ func (bf *CBloomFilter) Free() {
 	}
 }
 
+// Add inserts a byte slice into the bloom filter.
 func (bf *CBloomFilter) Add(data []byte) {
 	if bf == nil || bf.ptr == nil || len(data) == 0 {
 		return
@@ -62,6 +69,7 @@ func (bf *CBloomFilter) Add(data []byte) {
 	runtime.KeepAlive(data)
 }
 
+// Test checks if a byte slice is possibly in the bloom filter.
 func (bf *CBloomFilter) Test(data []byte) bool {
 	if bf == nil || bf.ptr == nil || len(data) == 0 {
 		return false
@@ -69,6 +77,7 @@ func (bf *CBloomFilter) Test(data []byte) bool {
 	return bool(C.bloomfilter_test(bf.ptr, unsafe.Pointer(&data[0]), C.size_t(len(data))))
 }
 
+// TestAndAdd checks if a byte slice is in the bloom filter and adds it if it's not.
 func (bf *CBloomFilter) TestAndAdd(data []byte) bool {
 	if bf == nil || bf.ptr == nil || len(data) == 0 {
 		return false
@@ -76,6 +85,7 @@ func (bf *CBloomFilter) TestAndAdd(data []byte) bool {
 	return bool(C.bloomfilter_test_and_add(bf.ptr, unsafe.Pointer(&data[0]), C.size_t(len(data))))
 }
 
+// Marshal serializes the bloom filter into a byte slice.
 func (bf *CBloomFilter) Marshal() ([]byte, error) {
 	if bf == nil || bf.ptr == nil {
 		return nil, nil
@@ -88,6 +98,7 @@ func (bf *CBloomFilter) Marshal() ([]byte, error) {
 	return C.GoBytes(unsafe.Pointer(dataPtr), C.int(clen)), nil
 }
 
+// Unmarshal reconstructs the bloom filter from a byte slice.
 func (bf *CBloomFilter) Unmarshal(data []byte) error {
 	if bf.ptr != nil {
 		return moerr.NewInternalErrorNoCtx("CBloomFilter:Unmarshal ptr is not nil")
@@ -111,8 +122,8 @@ func (bf *CBloomFilter) Unmarshal(data []byte) error {
 	return nil
 }
 
-// test and add all element in the vector.Vector to the bloom filter
-// call the callback function for all elements in the vector.Vector
+// TestAndAddVector tests and adds all elements in the vector to the bloom filter.
+// It invokes the callback function for all elements in the vector.
 func (bf *CBloomFilter) TestAndAddVector(v *vector.Vector, callBack func(bool, bool, int)) {
 	if bf == nil || bf.ptr == nil {
 		return
@@ -223,8 +234,8 @@ func (bf *CBloomFilter) TestAndAddVector(v *vector.Vector, callBack func(bool, b
 	runtime.KeepAlive(nullptr)
 }
 
-// test all element in the vector.Vector to the bloom filter
-// call the callback function for all elements in the vector.Vector
+// TestVector tests all elements in the vector against the bloom filter.
+// It invokes the callback function for all elements in the vector.
 func (bf *CBloomFilter) TestVector(v *vector.Vector, callBack func(bool, bool, int)) {
 	if bf == nil || bf.ptr == nil {
 		return
@@ -330,7 +341,7 @@ func (bf *CBloomFilter) TestVector(v *vector.Vector, callBack func(bool, bool, i
 	runtime.KeepAlive(nullptr)
 }
 
-// add all element in the vector.Vector to the bloom filter
+// AddVector adds all elements in the vector to the bloom filter.
 func (bf *CBloomFilter) AddVector(v *vector.Vector) {
 	if bf == nil || bf.ptr == nil {
 		return
