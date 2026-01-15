@@ -113,7 +113,7 @@ func (bf *CBloomFilter) Unmarshal(data []byte) error {
 
 // test and add all element in the vector.Vector to the bloom filter
 // call the callback function for all elements in the vector.Vector
-func (bf *CBloomFilter) TestAndAddVector(v *vector.Vector, callBack func(bool, int)) {
+func (bf *CBloomFilter) TestAndAddVector(v *vector.Vector, callBack func(bool, bool, int)) {
 	if bf == nil || bf.ptr == nil {
 		return
 	}
@@ -166,7 +166,7 @@ func (bf *CBloomFilter) TestAndAddVector(v *vector.Vector, callBack func(bool, i
 			runtime.KeepAlive(buf)
 			if callBack != nil {
 				for j := 0; j < nitem; j++ {
-					callBack(results[j] != 0, i+j)
+					callBack(results[j] != 0, nulls.Contains(uint64(i+j)), i+j)
 				}
 			}
 		}
@@ -214,7 +214,7 @@ func (bf *CBloomFilter) TestAndAddVector(v *vector.Vector, callBack func(bool, i
 			
 			if callBack != nil {
 				for j := 0; j < nitem; j++ {
-					callBack(results[j] != 0, i+j)
+					callBack(results[j] != 0, nulls.Contains(uint64(i+j)), i+j)
 				}
 			}
 		}
@@ -224,7 +224,7 @@ func (bf *CBloomFilter) TestAndAddVector(v *vector.Vector, callBack func(bool, i
 
 // test all element in the vector.Vector to the bloom filter
 // call the callback function for all elements in the vector.Vector
-func (bf *CBloomFilter) TestVector(v *vector.Vector, callBack func(bool, int)) {
+func (bf *CBloomFilter) TestVector(v *vector.Vector, callBack func(bool, bool, int)) {
 	if bf == nil || bf.ptr == nil {
 		return
 	}
@@ -278,7 +278,7 @@ func (bf *CBloomFilter) TestVector(v *vector.Vector, callBack func(bool, int)) {
 			runtime.KeepAlive(buf)
 			if callBack != nil {
 				for j := 0; j < nitem; j++ {
-					callBack(results[j] != 0, i+j)
+					callBack(results[j] != 0, nulls.Contains(uint64(i+j)), i+j)
 				}
 			}
 		}
@@ -320,7 +320,7 @@ func (bf *CBloomFilter) TestVector(v *vector.Vector, callBack func(bool, int)) {
 			
 			if callBack != nil {
 				for j := 0; j < nitem; j++ {
-					callBack(results[j] != 0, i+j)
+					callBack(results[j] != 0, nulls.Contains(uint64(i+j)), i+j)
 				}
 			}
 		}
