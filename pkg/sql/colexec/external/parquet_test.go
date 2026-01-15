@@ -17,6 +17,7 @@ package external
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"math/big"
 	"testing"
@@ -1065,19 +1066,102 @@ func Test_parquet_decimal256FromInt64(t *testing.T) {
 	require.Equal(t, uint64(^uint64(0)), d.B64_127)
 }
 
-func Test_pageIsNull_simplePaths(t *testing.T) {
+func Test_prepareNullCheck_simplePaths(t *testing.T) {
+	ctx := context.Background()
 	// Build a required int32 page (no nulls)
 	st := parquet.Int32Type
 	page := st.NewPage(0, 2, encoding.Int32Values([]int32{1, 2}))
 	mp := &columnMapper{srcNull: false, dstNull: true, maxDefinitionLevel: 0}
-	b, err := mp.pageIsNull(context.Background(), page, 0)
+	nc, err := prepareNullCheck(ctx, mp, page)
 	require.NoError(t, err)
-	require.False(t, b)
-	// when srcNull true but page has no nulls -> false
+	require.True(t, nc.noNulls)
+	require.False(t, nc.isNull(0))
+	require.False(t, nc.isNull(1))
+
+	// when srcNull true but page has no nulls -> noNulls should be true
 	mp = &columnMapper{srcNull: true, dstNull: true, maxDefinitionLevel: 0}
-	b, err = mp.pageIsNull(context.Background(), page, 0)
+	nc, err = prepareNullCheck(ctx, mp, page)
 	require.NoError(t, err)
-	require.False(t, b)
+	require.True(t, nc.noNulls)
+	require.False(t, nc.isNull(0))
+}
+
+func Test_validateStringDataCount(t *testing.T) {
+	ctx := context.Background()
+
+	// Test ByteArray validation - success case
+	{
+		var loader strLoader
+		loader.init(encoding.ByteArrayValues([]byte("abcdef"), []uint32{0, 3, 6}))
+		err := validateStringDataCount(ctx, &loader, 2)
+		require.NoError(t, err)
+	}
+
+	// Test ByteArray validation - mismatch
+	{
+		var loader strLoader
+		loader.init(encoding.ByteArrayValues([]byte("abcdef"), []uint32{0, 3, 6}))
+		err := validateStringDataCount(ctx, &loader, 3)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "expected 3 non-null values")
+	}
+
+	// Test FixedLenByteArray validation - success case
+	{
+		var loader strLoader
+		loader.init(encoding.FixedLenByteArrayValues([]byte("abcdef"), 3))
+		err := validateStringDataCount(ctx, &loader, 2)
+		require.NoError(t, err)
+	}
+
+	// Test FixedLenByteArray validation - mismatch
+	{
+		var loader strLoader
+		loader.init(encoding.FixedLenByteArrayValues([]byte("abcdef"), 3))
+		err := validateStringDataCount(ctx, &loader, 3)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "expected 3 non-null values")
+	}
+
+	// Test empty ByteArray
+	{
+		var loader strLoader
+		loader.init(encoding.ByteArrayValues(nil, nil))
+		err := validateStringDataCount(ctx, &loader, 0)
+		require.NoError(t, err)
+	}
+}
+
+func Test_validateDictionaryIndicesCount(t *testing.T) {
+	ctx := context.Background()
+
+	// Success case
+	indices := []int32{0, 1, 2}
+	err := validateDictionaryIndicesCount(ctx, indices, 3)
+	require.NoError(t, err)
+
+	// Mismatch case
+	err = validateDictionaryIndicesCount(ctx, indices, 5)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "expected 5 dictionary indices")
+}
+
+func Test_wrapParseError(t *testing.T) {
+	ctx := context.Background()
+
+	// nil error returns nil
+	require.Nil(t, wrapParseError(ctx, 0, nil))
+
+	// Plain error gets wrapped with row context
+	plainErr := errors.New("parse error")
+	wrapped := wrapParseError(ctx, 5, plainErr)
+	require.Error(t, wrapped)
+	require.Contains(t, wrapped.Error(), "row 5")
+
+	// moerr.Error is returned directly without extra wrapping
+	moErr := moerr.NewInternalError(ctx, "already a moerr")
+	result := wrapParseError(ctx, 10, moErr)
+	require.Equal(t, moErr, result)
 }
 
 func Test_fsReaderAt_ReadAt(t *testing.T) {
