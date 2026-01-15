@@ -209,9 +209,9 @@ func (bf *CBloomFilter) TestAndAddVector(v *vector.Vector, callBack func(bool, b
 					curNullLen = C.size_t(nulllen - offset)
 				}
 			}
-			
+
 			C.bloomfilter_test_and_add_varlena(bf.ptr, unsafe.Pointer(&buf[0]), C.size_t(len(buf)), C.size_t(nitem), curNullPtr, curNullLen, unsafe.Pointer(&results[0]))
-			
+
 			if callBack != nil {
 				for j := 0; j < nitem; j++ {
 					callBack(results[j] != 0, nulls.Contains(uint64(i+j)), i+j)
@@ -220,6 +220,7 @@ func (bf *CBloomFilter) TestAndAddVector(v *vector.Vector, callBack func(bool, b
 		}
 		runtime.KeepAlive(buf)
 	}
+	runtime.KeepAlive(nullptr)
 }
 
 // test all element in the vector.Vector to the bloom filter
@@ -317,7 +318,7 @@ func (bf *CBloomFilter) TestVector(v *vector.Vector, callBack func(bool, bool, i
 			}
 
 			C.bloomfilter_test_varlena(bf.ptr, unsafe.Pointer(&buf[0]), C.size_t(len(buf)), C.size_t(nitem), curNullPtr, curNullLen, unsafe.Pointer(&results[0]))
-			
+
 			if callBack != nil {
 				for j := 0; j < nitem; j++ {
 					callBack(results[j] != 0, nulls.Contains(uint64(i+j)), i+j)
@@ -326,6 +327,7 @@ func (bf *CBloomFilter) TestVector(v *vector.Vector, callBack func(bool, bool, i
 		}
 		runtime.KeepAlive(buf)
 	}
+	runtime.KeepAlive(nullptr)
 }
 
 // add all element in the vector.Vector to the bloom filter
@@ -417,4 +419,5 @@ func (bf *CBloomFilter) AddVector(v *vector.Vector) {
 		}
 		runtime.KeepAlive(buf)
 	}
+	runtime.KeepAlive(nullptr)
 }

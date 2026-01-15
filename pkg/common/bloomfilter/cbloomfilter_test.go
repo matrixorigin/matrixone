@@ -181,6 +181,50 @@ func BenchmarkCBloomFiltrerTestAndAddVector(b *testing.B) {
 	}
 }
 
+func BenchmarkCBloomFiltrerAddVarlenaVector(b *testing.B) {
+	mp := mpool.MustNewZero()
+	vecs := make([]*vector.Vector, cVecCount)
+	for i := 0; i < cVecCount; i++ {
+		vecs[i] = testutil.NewVector(cTestCount/cVecCount, types.New(types.T_varchar, 0, 0), mp, false, nil)
+	}
+	defer func() {
+		for i := range vecs {
+			vecs[i].Free(mp)
+		}
+	}()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		boom := NewCBloomFilterWithProbaility(cTestCount, cTestRate)
+		for j := 0; j < cVecCount; j++ {
+			boom.AddVector(vecs[j])
+		}
+		boom.Free()
+	}
+}
+
+func BenchmarkCBloomFiltrerTestAndAddVarlenaVector(b *testing.B) {
+	mp := mpool.MustNewZero()
+	vecs := make([]*vector.Vector, cVecCount)
+	for i := 0; i < cVecCount; i++ {
+		vecs[i] = testutil.NewVector(cTestCount/cVecCount, types.New(types.T_varchar, 0, 0), mp, false, nil)
+	}
+	defer func() {
+		for i := range vecs {
+			vecs[i].Free(mp)
+		}
+	}()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		boom := NewCBloomFilterWithProbaility(cTestCount, cTestRate)
+		for j := 0; j < cVecCount; j++ {
+			boom.TestAndAddVector(vecs[j], func(_ bool, _ bool, _ int) {})
+		}
+		boom.Free()
+	}
+}
+
 func TestCBloomFilter_MarshalUnmarshalWithVector(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vecs := make([]*vector.Vector, cVecCount)
