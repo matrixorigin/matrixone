@@ -2849,13 +2849,13 @@ func (builder *QueryBuilder) preprocessCte(stmt *tree.Select, ctx *BindContext) 
 }
 
 func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isRoot bool) (nodeID int32, err error) {
+	if stmt.RewriteOption != nil {
+		ctx.remapOption = stmt.RewriteOption
+	}
+
 	// preprocess CTEs
 	if err = builder.preprocessCte(stmt, ctx); err != nil {
 		return
-	}
-
-	if stmt.RewriteOption != nil {
-		ctx.remapOption = stmt.RewriteOption
 	}
 
 	var projectionBinder *ProjectionBinder

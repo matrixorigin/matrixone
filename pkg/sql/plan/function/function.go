@@ -91,6 +91,15 @@ func GetFunctionIsWinOrderFunByName(name string) bool {
 	return f.isWindowOrder()
 }
 
+func GetFunctionIsWinValueFunByName(name string) bool {
+	fid, exists := getFunctionIdByNameWithoutErr(name)
+	if !exists {
+		return false
+	}
+	f := allSupportedFunctions[fid]
+	return f.isWindowValue()
+}
+
 func GetFunctionIsWinOrderFunById(overloadID int64) bool {
 	fid, _ := DecodeOverloadID(overloadID)
 	return allSupportedFunctions[fid].isWindowOrder()
@@ -449,6 +458,10 @@ func (fn *FuncNew) isWindow() bool {
 
 func (fn *FuncNew) isWindowOrder() bool {
 	return fn.testFlag(plan.Function_WIN_ORDER)
+}
+
+func (fn *FuncNew) isWindowValue() bool {
+	return fn.testFlag(plan.Function_WIN_VALUE)
 }
 
 func (fn *FuncNew) testFlag(funcFlag plan.Function_FuncFlag) bool {
