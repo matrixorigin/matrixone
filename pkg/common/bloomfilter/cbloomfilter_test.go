@@ -298,3 +298,85 @@ func TestCBloomFilter_UnmarshalError(t *testing.T) {
 		_ = bf.Unmarshal([]byte{1, 2, 3})
 	})
 }
+
+func TestCBloomFilter_AddVectorWithNulls(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.New(types.T_int32, 0, 0))
+	defer vec.Free(mp)
+
+	count := 8192
+	for i := 0; i < count; i++ {
+		if i%2 != 0 {
+			err := vector.AppendFixed(vec, int32(0), true, mp)
+			require.NoError(t, err)
+		} else {
+			err := vector.AppendFixed(vec, int32(i), false, mp)
+			require.NoError(t, err)
+		}
+	}
+
+	bf := NewCBloomFilterWithProbaility(int64(count), 0.00001)
+	defer bf.Free()
+
+	bf.AddVector(vec)
+
+	callCount := 0
+	bf.TestVector(vec, func(exists bool, isNull bool, idx int) {
+		callCount++
+		if idx%2 != 0 {
+			require.True(t, isNull, "idx %d should be null", idx)
+			require.False(t, exists, "idx %d should not exist", idx)
+		} else {
+			require.False(t, isNull, "idx %d should not be null", idx)
+			require.True(t, exists, "idx %d should exist", idx)
+		}
+	})
+	require.Equal(t, count, callCount)
+}
+
+func TestCBloomFilter_TestAndAddVectorWithNulls(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.New(types.T_int32, 0, 0))
+	defer vec.Free(mp)
+
+	count := 8192
+	for i := 0; i < count; i++ {
+		if i%2 != 0 {
+			err := vector.AppendFixed(vec, int32(0), true, mp)
+			require.NoError(t, err)
+		} else {
+			err := vector.AppendFixed(vec, int32(i), false, mp)
+			require.NoError(t, err)
+		}
+	}
+
+	bf := NewCBloomFilterWithProbaility(int64(count), 0.00001)
+	defer bf.Free()
+
+	// First time: nulls should not exist. Non-nulls might exist due to collisions (false positives).
+	callCount1 := 0
+	bf.TestAndAddVector(vec, func(exists bool, isNull bool, idx int) {
+		callCount1++
+		if idx%2 != 0 {
+			require.True(t, isNull, "idx %d should be null", idx)
+			require.False(t, exists, "idx %d should not exist (null)", idx)
+		} else {
+			require.False(t, isNull, "idx %d should not be null", idx)
+		}
+	})
+	require.Equal(t, count, callCount1)
+
+	// Second time: even indices (non-null) should exist
+	callCount2 := 0
+	bf.TestAndAddVector(vec, func(exists bool, isNull bool, idx int) {
+		callCount2++
+		if idx%2 != 0 {
+			require.True(t, isNull, "idx %d should be null", idx)
+			require.False(t, exists, "idx %d (null) should still not exist", idx)
+		} else {
+			require.False(t, isNull, "idx %d should not be null", idx)
+			require.True(t, exists, "idx %d (non-null) should exist now", idx)
+		}
+	})
+	require.Equal(t, count, callCount2)
+}
