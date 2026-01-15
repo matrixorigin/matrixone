@@ -171,23 +171,50 @@ func (bf *CBloomFilter) TestAndAddVector(v *vector.Vector, callBack func(bool, i
 			}
 		}
 	} else {
-		buf := make([]byte, 0, 64)
+		// Estimated size: length * (avg_data_len + overhead)
+		// Overhead: size(4) + valid_flag(1)
+		buf := make([]byte, 0, length*20)
+		results := make([]uint8, chunkSize)
+
 		for i := 0; i < length; i += chunkSize {
 			end := i + chunkSize
 			if end > length {
 				end = length
 			}
+			nitem := end - i
+			buf = buf[:0]
+
 			for j := i; j < end; j++ {
-				buf = buf[:0]
 				if nulls.Contains(uint64(j)) {
-					buf = append(buf, 1)
+					// For nulls, we just need to advance the C pointer correctly.
+					// We write size=0.
+					// C code: uint32_t elemsz = *((uint32_t*)k); k += sizeof(uint32_t); ... k+= elemsz;
+					// So if elemsz=0, k moves 4 bytes.
+					buf = append(buf, 0, 0, 0, 0)
 				} else {
-					buf = append(buf, 0)
-					buf = append(buf, varlenData[j].GetByteSlice(area)...)
+					// Format: [size:4] [data...]
+					data := varlenData[j].GetByteSlice(area)
+					sz := uint32(len(data))
+					buf = append(buf, byte(sz), byte(sz>>8), byte(sz>>16), byte(sz>>24))
+					buf = append(buf, data...)
 				}
-				found := C.bloomfilter_test_and_add(bf.ptr, unsafe.Pointer(&buf[0]), C.size_t(len(buf)))
-				if callBack != nil {
-					callBack(bool(found), j)
+			}
+
+			var curNullPtr unsafe.Pointer
+			var curNullLen C.size_t
+			if nullptr != nil {
+				offset := (i / 64) * 8
+				if offset < nulllen {
+					curNullPtr = unsafe.Pointer(uintptr(unsafe.Pointer(nullptr)) + uintptr(offset))
+					curNullLen = C.size_t(nulllen - offset)
+				}
+			}
+			
+			C.bloomfilter_test_and_add_varlena(bf.ptr, unsafe.Pointer(&buf[0]), C.size_t(len(buf)), C.size_t(nitem), curNullPtr, curNullLen, unsafe.Pointer(&results[0]))
+			
+			if callBack != nil {
+				for j := 0; j < nitem; j++ {
+					callBack(results[j] != 0, i+j)
 				}
 			}
 		}
@@ -256,23 +283,44 @@ func (bf *CBloomFilter) TestVector(v *vector.Vector, callBack func(bool, int)) {
 			}
 		}
 	} else {
-		buf := make([]byte, 0, 64)
+		// Estimated size
+		buf := make([]byte, 0, length*20)
+		results := make([]uint8, chunkSize)
+
 		for i := 0; i < length; i += chunkSize {
 			end := i + chunkSize
 			if end > length {
 				end = length
 			}
+			nitem := end - i
+			buf = buf[:0]
+
 			for j := i; j < end; j++ {
-				buf = buf[:0]
 				if nulls.Contains(uint64(j)) {
-					buf = append(buf, 1)
+					buf = append(buf, 0, 0, 0, 0)
 				} else {
-					buf = append(buf, 0)
-					buf = append(buf, varlenData[j].GetByteSlice(area)...)
+					data := varlenData[j].GetByteSlice(area)
+					sz := uint32(len(data))
+					buf = append(buf, byte(sz), byte(sz>>8), byte(sz>>16), byte(sz>>24))
+					buf = append(buf, data...)
 				}
-				found := C.bloomfilter_test(bf.ptr, unsafe.Pointer(&buf[0]), C.size_t(len(buf)))
-				if callBack != nil {
-					callBack(bool(found), j)
+			}
+
+			var curNullPtr unsafe.Pointer
+			var curNullLen C.size_t
+			if nullptr != nil {
+				offset := (i / 64) * 8
+				if offset < nulllen {
+					curNullPtr = unsafe.Pointer(uintptr(unsafe.Pointer(nullptr)) + uintptr(offset))
+					curNullLen = C.size_t(nulllen - offset)
+				}
+			}
+
+			C.bloomfilter_test_varlena(bf.ptr, unsafe.Pointer(&buf[0]), C.size_t(len(buf)), C.size_t(nitem), curNullPtr, curNullLen, unsafe.Pointer(&results[0]))
+			
+			if callBack != nil {
+				for j := 0; j < nitem; j++ {
+					callBack(results[j] != 0, i+j)
 				}
 			}
 		}
@@ -334,23 +382,38 @@ func (bf *CBloomFilter) AddVector(v *vector.Vector) {
 			runtime.KeepAlive(buf)
 		}
 	} else {
-		buf := make([]byte, 0, 64)
+		buf := make([]byte, 0, length*20)
 		nulls := v.GetNulls()
 		for i := 0; i < length; i += chunkSize {
 			end := i + chunkSize
 			if end > length {
 				end = length
 			}
+			nitem := end - i
+			buf = buf[:0]
+
 			for j := i; j < end; j++ {
-				buf = buf[:0]
 				if nulls.Contains(uint64(j)) {
-					buf = append(buf, 1)
+					buf = append(buf, 0, 0, 0, 0)
 				} else {
-					buf = append(buf, 0)
-					buf = append(buf, varlenData[j].GetByteSlice(area)...)
+					data := varlenData[j].GetByteSlice(area)
+					sz := uint32(len(data))
+					buf = append(buf, byte(sz), byte(sz>>8), byte(sz>>16), byte(sz>>24))
+					buf = append(buf, data...)
 				}
-				C.bloomfilter_add(bf.ptr, unsafe.Pointer(&buf[0]), C.size_t(len(buf)))
 			}
+
+			var curNullPtr unsafe.Pointer
+			var curNullLen C.size_t
+			if nullptr != nil {
+				offset := (i / 64) * 8
+				if offset < nulllen {
+					curNullPtr = unsafe.Pointer(uintptr(unsafe.Pointer(nullptr)) + uintptr(offset))
+					curNullLen = C.size_t(nulllen - offset)
+				}
+			}
+
+			C.bloomfilter_add_varlena(bf.ptr, unsafe.Pointer(&buf[0]), C.size_t(len(buf)), C.size_t(nitem), curNullPtr, curNullLen)
 		}
 		runtime.KeepAlive(buf)
 	}

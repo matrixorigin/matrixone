@@ -94,9 +94,27 @@ void bloomfilter_add(const bloomfilter_t *bf, const void *key, size_t len) {
 void bloomfilter_add_multi(const bloomfilter_t *bf, const void *key, size_t len, size_t elemsz, size_t nitem, const void *nullmap, size_t nullmaplen) {
     char *k = (char *) key;
     for (int i = 0, j = 0; i < nitem && j < len; i++, j += elemsz, k += elemsz) {
-	if (nullmap && !bitmap_test((uint64_t *) nullmap, i)) {
+	if (!nullmap || !bitmap_test((uint64_t *) nullmap, i)) {
         	bloomfilter_add(bf, k, elemsz);
 	}
+    }
+}
+
+void bloomfilter_add_varlena(const bloomfilter_t *bf, const void *key, size_t len, size_t nitem, const void *nullmap, size_t nullmaplen) {
+    char *k = (char *) key;
+    char *start = k;
+
+    for (int i = 0; i < nitem; i++) {
+        if ((size_t)(k - start) + sizeof(uint32_t) > len) break;
+        uint32_t elemsz = *((uint32_t*)k);
+        k += sizeof(uint32_t);
+
+        if ((size_t)(k - start) + elemsz > len) break;
+
+        if (!nullmap || !bitmap_test((uint64_t *) nullmap, i)) {
+             bloomfilter_add(bf, k, elemsz);
+        }
+        k += elemsz;
     }
 }
 
@@ -141,6 +159,32 @@ void bloomfilter_test_multi(const bloomfilter_t *bf, const void *key, size_t len
     }
 }
 
+// key contain the lists of varlena items.
+// first 4 byte (uint32) contains the size of the content
+// and then follow with the content
+// format of the keys look likes [size0] [data with size0] [size1] [data with size1]...
+void bloomfilter_test_varlena(const bloomfilter_t *bf, const void *key, size_t len, size_t nitem, const void *nullmap, size_t nullmaplen, void *result) {
+    char *k = (char *) key;
+    char *start = k;
+    bool *br = (bool *) result;
+
+    for (int i = 0; i < nitem; i++) {
+        if ((size_t)(k - start) + sizeof(uint32_t) > len) break;
+	    uint32_t elemsz = *((uint32_t*)k);
+	    k += sizeof(uint32_t);
+        
+        if ((size_t)(k - start) + elemsz > len) break;
+
+            if (nullmap && bitmap_test((uint64_t*)nullmap, i)) {
+                    // null
+                    br[i] = false;
+            } else {
+                br[i] = bloomfilter_test(bf, k, elemsz);
+            }
+	    k += elemsz;
+    }
+}
+
 bool bloomfilter_test_and_add(const bloomfilter_t *bf, const void *key, size_t len) {
     if (bf->nbits == 0) return false;
 
@@ -178,6 +222,27 @@ void bloomfilter_test_and_add_multi(const bloomfilter_t *bf, const void *key, si
 	} else {
             br[i] = bloomfilter_test_and_add(bf, k, elemsz);
 	}
+    }
+}
+
+void bloomfilter_test_and_add_varlena(const bloomfilter_t *bf, const void *key, size_t len, size_t nitem,  const void *nullmap, size_t nullmaplen, void *result) {
+    char *k = (char *) key;
+    char *start = k;
+    bool *br = (bool *) result;
+    for (int i = 0; i < nitem; i++) {
+        if ((size_t)(k - start) + sizeof(uint32_t) > len) break;
+        uint32_t elemsz = *((uint32_t*)k);
+        k += sizeof(uint32_t);
+
+        if ((size_t)(k - start) + elemsz > len) break;
+
+        if (nullmap && bitmap_test((uint64_t*)nullmap, i)) {
+            // null
+            br[i] = false;
+        } else {
+            br[i] = bloomfilter_test_and_add(bf, k, elemsz);
+        }
+        k += elemsz;
     }
 }
 

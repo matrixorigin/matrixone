@@ -6,17 +6,15 @@
 #include "../bloom.h"
 #include "../bitmap.h"
 
-int main() {
-    srand(time(NULL));
+// Helper to check errors
+#define CHECK(cond, msg) if (!(cond)) { printf("Error: %s\n", msg); exit(1); }
+
+void test_basic_ops() {
+    printf("Testing basic operations...\n");
     uint64_t nbits = 1000;
     uint32_t k = 3;
-    
-    // Test the new Init which allocates everything in one go
     bloomfilter_t *bf = bloomfilter_init(nbits, k);
-    if (!bf) {
-        printf("Failed to allocate BloomFilter\n");
-        return 1;
-    }
+    CHECK(bf != NULL, "Failed to allocate BloomFilter");
 
     const char *key1 = "hello";
     const char *key2 = "world";
@@ -25,117 +23,174 @@ int main() {
     bloomfilter_add(bf, key1, strlen(key1));
     bloomfilter_add(bf, key2, strlen(key2));
 
-    if (!bloomfilter_test(bf, key1, strlen(key1))) {
-        printf("Error: key1 should be present\n");
-        return 1;
-    }
-    if (!bloomfilter_test(bf, key2, strlen(key2))) {
-        printf("Error: key2 should be present\n");
-        return 1;
-    }
+    CHECK(bloomfilter_test(bf, key1, strlen(key1)), "key1 should be present");
+    CHECK(bloomfilter_test(bf, key2, strlen(key2)), "key2 should be present");
     if (bloomfilter_test(bf, key3, strlen(key3))) {
         printf("Warning: key3 might be a false positive (or error)\n");
     } else {
         printf("key3 is correctly identified as not present\n");
     }
+    bloomfilter_free(bf);
+    printf("Basic operations passed\n");
+}
 
-    // Test Marshal/Unmarshal
+void test_marshal_unmarshal() {
+    printf("Testing marshal/unmarshal...\n");
+    uint64_t nbits = 1000;
+    uint32_t k = 3;
+    bloomfilter_t *bf = bloomfilter_init(nbits, k);
+    
+    bloomfilter_add(bf, "hello", 5);
+
     size_t buf_size = 0;
     uint8_t *data = bloomfilter_marshal(bf, &buf_size);
-    if (!data || buf_size != (sizeof(bloomfilter_t) + bitmap_nbyte(nbits))) {
-        printf("Failed to marshal BloomFilter\n");
-        return 1;
-    }
+    CHECK(data != NULL && buf_size == (sizeof(bloomfilter_t) + bitmap_nbyte(nbits)), "Marshal failed");
 
-    // Create a copy to simulate a real-world scenario (e.g. data from network/disk)
     uint8_t *buf_copy = (uint8_t *)malloc(buf_size);
     memcpy(buf_copy, data, buf_size);
 
     bloomfilter_t *bf2 = bloomfilter_unmarshal(buf_copy, buf_size);
-    if (!bf2) {
-        printf("Failed to unmarshal BloomFilter\n");
-        free(buf_copy);
-        return 1;
-    }
-
-    if (!bloomfilter_test(bf2, key1, strlen(key1))) {
-        printf("Error: key1 should be present in restored bitmap\n");
-        return 1;
-    }
-    if (bloomfilter_test(bf2, key3, strlen(key3))) {
-        printf("Warning: key3 might be a false positive in restored bitmap\n");
-    } else {
-        printf("key3 is correctly identified as not present in restored bitmap\n");
-    }
-
-    // Test test_and_add
-    const char *key4 = "new_key";
-    if (bloomfilter_test_and_add(bf2, key4, strlen(key4))) {
-        printf("Error: key4 should NOT be present initially\n");
-        return 1;
-    }
-    if (!bloomfilter_test(bf2, key4, strlen(key4))) {
-        printf("Error: key4 should BE present after test_and_add\n");
-        return 1;
-    }
-    if (!bloomfilter_test_and_add(bf2, key4, strlen(key4))) {
-        printf("Error: key4 should BE present when calling test_and_add again\n");
-        return 1;
-    }
-    printf("test_and_add passed\n");
-
-    // Test add_multi
-    uint64_t add_multi_nullmap = 0;
-    bitmap_set(&add_multi_nullmap, 2); // 2nd item is null
-
-    uint32_t add_multi[] = {100, 200, 300};
-    bloomfilter_add_multi(bf2, (void *)add_multi, sizeof(add_multi), sizeof(uint32_t), 3, &add_multi_nullmap, sizeof(add_multi_nullmap));
-    for (int i = 0; i < 3; i++) {
-        bool found = bloomfilter_test(bf2, &add_multi[i], sizeof(uint32_t));
-	if (bitmap_test(&add_multi_nullmap, i) && found) {
-              printf("Error: data_multi[%d] is null and should be absent after add_multi\n", i);
-              return 1;
-	}
-	if (!bitmap_test(&add_multi_nullmap, i) && !found) {
-              printf("Error: data_multi[%d] should be present after add_multi\n", i);
-              return 1;
-        }
-    }
-    printf("add_multi passed\n");
-
-    // Test test_multi
-    uint32_t test_multi_keys[] = {100, 400, 300}; // 100 and 300 added, 400 not
-    bool test_results[3];
-    bloomfilter_test_multi(bf2, (void *)test_multi_keys, sizeof(test_multi_keys), sizeof(uint32_t), 3, NULL, 0, test_results);
-    if (!test_results[0] || test_results[1] || !test_results[2]) {
-        printf("Error: test_multi results incorrect: %d %d %d\n", test_results[0], test_results[1], test_results[2]);
-        return 1;
-    }
-    printf("test_multi passed\n");
-
-    // Test test_and_add_multi
-    uint32_t taa_multi_keys[] = {500, 100, 600}; // 500, 600 new, 100 exists
-    bool taa_results[3];
-    bloomfilter_test_and_add_multi(bf2, (void *)taa_multi_keys, sizeof(taa_multi_keys), sizeof(uint32_t), 3, NULL, 0, taa_results);
+    CHECK(bf2 != NULL, "Unmarshal failed");
+    CHECK(bloomfilter_test(bf2, "hello", 5), "key should be present in restored BF");
     
-    // 500: was not there (false), 100: was there (true), 600: was not there (false)
-    if (taa_results[0] || !taa_results[1] || taa_results[2]) {
-        printf("Error: test_and_add_multi results incorrect: %d %d %d\n", taa_results[0], taa_results[1], taa_results[2]);
-        return 1;
-    }
-    
-    // Verify they are all there now
-    for (int i = 0; i < 3; i++) {
-        if (!bloomfilter_test(bf2, &taa_multi_keys[i], sizeof(uint32_t))) {
-            printf("Error: taa_multi_keys[%d] should be present after test_and_add_multi\n", i);
-            return 1;
-        }
-    }
-    printf("test_and_add_multi passed\n");
-
-    bloomfilter_free(bf2); // This will free(buf_copy)
+    bloomfilter_free(bf2); // This frees buf_copy
     bloomfilter_free(bf);
+    printf("Marshal/unmarshal passed\n");
+}
+
+void test_test_and_add() {
+    printf("Testing test_and_add...\n");
+    bloomfilter_t *bf = bloomfilter_init(1000, 3);
+    const char *key = "new_key";
     
-    printf("Bloom filter single-malloc test passed\n");
+    CHECK(!bloomfilter_test_and_add(bf, key, strlen(key)), "key should NOT be present initially");
+    CHECK(bloomfilter_test(bf, key, strlen(key)), "key should BE present after test_and_add");
+    CHECK(bloomfilter_test_and_add(bf, key, strlen(key)), "key should BE present on second call");
+    
+    bloomfilter_free(bf);
+    printf("test_and_add passed\n");
+}
+
+void test_add_multi() {
+    printf("Testing add_multi...\n");
+    bloomfilter_t *bf = bloomfilter_init(1000, 3);
+    
+    uint64_t nullmap = 0;
+    bitmap_set(&nullmap, 1); // 2nd item (index 1) is null
+
+    uint32_t keys[] = {100, 200, 300};
+    bloomfilter_add_multi(bf, (void *)keys, sizeof(keys), sizeof(uint32_t), 3, &nullmap, sizeof(nullmap));
+    
+    CHECK(bloomfilter_test(bf, &keys[0], sizeof(uint32_t)), "key 100 should be present");
+    CHECK(!bloomfilter_test(bf, &keys[1], sizeof(uint32_t)), "key 200 (null) should NOT be present");
+    CHECK(bloomfilter_test(bf, &keys[2], sizeof(uint32_t)), "key 300 should be present");
+
+    bloomfilter_free(bf);
+    printf("add_multi passed\n");
+}
+
+void test_test_multi() {
+    printf("Testing test_multi...\n");
+    bloomfilter_t *bf = bloomfilter_init(1000, 3);
+    uint32_t k1=100, k2=200;
+    bloomfilter_add(bf, &k1, 4);
+    bloomfilter_add(bf, &k2, 4);
+    
+    uint32_t keys[] = {100, 300, 200}; // 100(Y), 300(N), 200(Y)
+    bool results[3];
+    
+    bloomfilter_test_multi(bf, (void *)keys, sizeof(keys), sizeof(uint32_t), 3, NULL, 0, results);
+    
+    CHECK(results[0], "100 should be found");
+    CHECK(!results[1], "300 should not be found");
+    CHECK(results[2], "200 should be found");
+
+    bloomfilter_free(bf);
+    printf("test_multi passed\n");
+}
+
+void test_test_and_add_multi() {
+    printf("Testing test_and_add_multi...\n");
+    bloomfilter_t *bf = bloomfilter_init(1000, 3);
+    uint32_t k1=100;
+    bloomfilter_add(bf, &k1, 4);
+    
+    uint32_t keys[] = {500, 100, 600}; // 500(N->Y), 100(Y), 600(N->Y)
+    bool results[3];
+    
+    bloomfilter_test_and_add_multi(bf, (void *)keys, sizeof(keys), sizeof(uint32_t), 3, NULL, 0, results);
+    
+    CHECK(!results[0], "500 was not present");
+    CHECK(results[1], "100 was present");
+    CHECK(!results[2], "600 was not present");
+    
+    CHECK(bloomfilter_test(bf, &keys[0], 4), "500 should now be present");
+    CHECK(bloomfilter_test(bf, &keys[2], 4), "600 should now be present");
+
+    bloomfilter_free(bf);
+    printf("test_and_add_multi passed\n");
+}
+
+void test_varlena_ops() {
+    printf("Testing varlena operations...\n");
+    bloomfilter_t *bf = bloomfilter_init(1000, 3);
+    
+    // Construct buffer: [len:4][data][len:4][data][len:4][data]
+    // "one" (3), "two" (3), "three" (5)
+    size_t buf_size = sizeof(uint32_t)*3 + 3 + 3 + 5;
+    uint8_t *buf = (uint8_t*)malloc(buf_size);
+    uint8_t *ptr = buf;
+    
+    *(uint32_t*)ptr = 3; ptr += 4; memcpy(ptr, "one", 3); ptr += 3;
+    *(uint32_t*)ptr = 3; ptr += 4; memcpy(ptr, "two", 3); ptr += 3;
+    *(uint32_t*)ptr = 5; ptr += 4; memcpy(ptr, "three", 5); ptr += 5;
+
+    // Test add_varlena with nullmap
+    // Skip "two" (index 1)
+    uint64_t nullmap = 0;
+    bitmap_set(&nullmap, 1);
+    
+    bloomfilter_add_varlena(bf, buf, buf_size, 3, &nullmap, sizeof(nullmap));
+    
+    CHECK(bloomfilter_test(bf, "one", 3), "'one' should be present");
+    CHECK(!bloomfilter_test(bf, "two", 3), "'two' should NOT be present");
+    CHECK(bloomfilter_test(bf, "three", 5), "'three' should be present");
+    
+    // Test test_varlena
+    // Use same buffer
+    bool results[3];
+    bloomfilter_test_varlena(bf, buf, buf_size, 3, NULL, 0, results);
+    CHECK(results[0], "'one' found");
+    CHECK(!results[1], "'two' not found");
+    CHECK(results[2], "'three' found");
+
+    // Test test_and_add_varlena
+    // Reuse buffer, but this time add everything (no nullmap)
+    bool taa_results[3];
+    bloomfilter_test_and_add_varlena(bf, buf, buf_size, 3, NULL, 0, taa_results);
+    
+    CHECK(taa_results[0], "'one' already there");
+    CHECK(!taa_results[1], "'two' not there (was null)");
+    CHECK(taa_results[2], "'three' already there");
+    
+    CHECK(bloomfilter_test(bf, "two", 3), "'two' should now be present");
+
+    free(buf);
+    bloomfilter_free(bf);
+    printf("varlena operations passed\n");
+}
+
+int main() {
+    srand(time(NULL));
+    
+    test_basic_ops();
+    test_marshal_unmarshal();
+    test_test_and_add();
+    test_add_multi();
+    test_test_multi();
+    test_test_and_add_multi();
+    test_varlena_ops();
+
+    printf("All BloomFilter tests passed!\n");
     return 0;
 }

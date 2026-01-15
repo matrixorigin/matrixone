@@ -45,8 +45,11 @@ void bloomfilter_add(const bloomfilter_t *bf, const void *key, size_t len);
 void bloomfilter_add_multi(const bloomfilter_t *bf, const void *key, size_t len, size_t elemsz, size_t nitem, const void *nullmap, size_t nullmaplen);
 bool bloomfilter_test(const bloomfilter_t *bf, const void *key, size_t len);
 void bloomfilter_test_multi(const bloomfilter_t *bf, const void *key, size_t len, size_t elemsz, size_t nitem, const void *nullmap, size_t nullmaplen, void *result);
+void bloomfilter_test_varlena(const bloomfilter_t *bf, const void *key, size_t len, size_t nitem, const void *nullmap, size_t nullmaplen, void *result);
+void bloomfilter_add_varlena(const bloomfilter_t *bf, const void *key, size_t len, size_t nitem, const void *nullmap, size_t nullmaplen);
 bool bloomfilter_test_and_add(const bloomfilter_t *bf, const void *key, size_t len);
 void bloomfilter_test_and_add_multi(const bloomfilter_t *bf, const void *key, size_t len, size_t elemsz, size_t nitem, const void *nullmap, size_t nullmaplen,void *result);
+void bloomfilter_test_and_add_varlena(const bloomfilter_t *bf, const void *key, size_t len, size_t nitem, const void *nullmap, size_t nullmaplen,void *result);
 uint8_t* bloomfilter_marshal(const bloomfilter_t *bf, size_t *len);
 bloomfilter_t* bloomfilter_unmarshal(const uint8_t *buf, size_t len);
 
