@@ -31,6 +31,7 @@ extern "C"
 #include <libgen.h>
 
 // CUDA headers.
+#include <cuda_runtime_api.h>
 #include <cuda.h>
 #include <helper_cuda_drvapi.h>
 #include <helper_functions.h>
