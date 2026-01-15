@@ -71,26 +71,26 @@ void test_test_and_add() {
     printf("test_and_add passed\n");
 }
 
-void test_add_multi() {
-    printf("Testing add_multi...\n");
+void test_add_fixed() {
+    printf("Testing add_fixed...\n");
     bloomfilter_t *bf = bloomfilter_init(1000, 3);
     
     uint64_t nullmap = 0;
     bitmap_set(&nullmap, 1); // 2nd item (index 1) is null
 
     uint32_t keys[] = {100, 200, 300};
-    bloomfilter_add_multi(bf, (void *)keys, sizeof(keys), sizeof(uint32_t), 3, &nullmap, sizeof(nullmap));
+    bloomfilter_add_fixed(bf, (void *)keys, sizeof(keys), sizeof(uint32_t), 3, &nullmap, sizeof(nullmap));
     
     CHECK(bloomfilter_test(bf, &keys[0], sizeof(uint32_t)), "key 100 should be present");
     CHECK(!bloomfilter_test(bf, &keys[1], sizeof(uint32_t)), "key 200 (null) should NOT be present");
     CHECK(bloomfilter_test(bf, &keys[2], sizeof(uint32_t)), "key 300 should be present");
 
     bloomfilter_free(bf);
-    printf("add_multi passed\n");
+    printf("add_fixed passed\n");
 }
 
-void test_test_multi() {
-    printf("Testing test_multi...\n");
+void test_test_fixed() {
+    printf("Testing test_fixed...\n");
     bloomfilter_t *bf = bloomfilter_init(1000, 3);
     uint32_t k1=100, k2=200;
     bloomfilter_add(bf, &k1, 4);
@@ -99,18 +99,18 @@ void test_test_multi() {
     uint32_t keys[] = {100, 300, 200}; // 100(Y), 300(N), 200(Y)
     bool results[3];
     
-    bloomfilter_test_multi(bf, (void *)keys, sizeof(keys), sizeof(uint32_t), 3, NULL, 0, results);
+    bloomfilter_test_fixed(bf, (void *)keys, sizeof(keys), sizeof(uint32_t), 3, NULL, 0, results);
     
     CHECK(results[0], "100 should be found");
     CHECK(!results[1], "300 should not be found");
     CHECK(results[2], "200 should be found");
 
     bloomfilter_free(bf);
-    printf("test_multi passed\n");
+    printf("test_fixed passed\n");
 }
 
-void test_test_and_add_multi() {
-    printf("Testing test_and_add_multi...\n");
+void test_test_and_add_fixed() {
+    printf("Testing test_and_add_fixed...\n");
     bloomfilter_t *bf = bloomfilter_init(1000, 3);
     uint32_t k1=100;
     bloomfilter_add(bf, &k1, 4);
@@ -118,7 +118,7 @@ void test_test_and_add_multi() {
     uint32_t keys[] = {500, 100, 600}; // 500(N->Y), 100(Y), 600(N->Y)
     bool results[3];
     
-    bloomfilter_test_and_add_multi(bf, (void *)keys, sizeof(keys), sizeof(uint32_t), 3, NULL, 0, results);
+    bloomfilter_test_and_add_fixed(bf, (void *)keys, sizeof(keys), sizeof(uint32_t), 3, NULL, 0, results);
     
     CHECK(!results[0], "500 was not present");
     CHECK(results[1], "100 was present");
@@ -128,7 +128,7 @@ void test_test_and_add_multi() {
     CHECK(bloomfilter_test(bf, &keys[2], 4), "600 should now be present");
 
     bloomfilter_free(bf);
-    printf("test_and_add_multi passed\n");
+    printf("test_and_add_fixed passed\n");
 }
 
 void test_varlena_ops() {
@@ -186,9 +186,9 @@ int main() {
     test_basic_ops();
     test_marshal_unmarshal();
     test_test_and_add();
-    test_add_multi();
-    test_test_multi();
-    test_test_and_add_multi();
+    test_add_fixed();
+    test_test_fixed();
+    test_test_and_add_fixed();
     test_varlena_ops();
 
     printf("All BloomFilter tests passed!\n");

@@ -82,14 +82,11 @@ void bloomfilter_add(const bloomfilter_t *bf, const void *key, size_t len) {
     for (int i = 0; i < bf->k; i++) {
         bloom_hash_t h = bloom_calculate_hash(key, len, bf->seeds[i]);
         pos[i] = bloom_calculate_pos(h, i, bf->nbits);
-    }
-
-    for (int i = 0; i < bf->k; i++) {
         bitmap_set((uint64_t *) bf->bitmap, pos[i]);
     }
 }
 
-void bloomfilter_add_multi(const bloomfilter_t *bf, const void *key, size_t len, size_t elemsz, size_t nitem, const void *nullmap, size_t nullmaplen) {
+void bloomfilter_add_fixed(const bloomfilter_t *bf, const void *key, size_t len, size_t elemsz, size_t nitem, const void *nullmap, size_t nullmaplen) {
     char *k = (char *) key;
     for (int i = 0, j = 0; i < nitem && j < len; i++, j += elemsz, k += elemsz) {
 	if (!nullmap || !bitmap_test((uint64_t *) nullmap, i)) {
@@ -142,7 +139,7 @@ bool bloomfilter_test(const bloomfilter_t *bf, const void *key, size_t len) {
     return result;
 }
 
-void bloomfilter_test_multi(const bloomfilter_t *bf, const void *key, size_t len, size_t elemsz, size_t nitem, const void *nullmap, size_t nullmaplen, void *result) {
+void bloomfilter_test_fixed(const bloomfilter_t *bf, const void *key, size_t len, size_t elemsz, size_t nitem, const void *nullmap, size_t nullmaplen, void *result) {
     char *k = (char *) key;
     bool *br = (bool *) result;
 
@@ -204,7 +201,7 @@ bool bloomfilter_test_and_add(const bloomfilter_t *bf, const void *key, size_t l
     return all_set;
 }
 
-void bloomfilter_test_and_add_multi(const bloomfilter_t *bf, const void *key, size_t len, size_t elemsz, size_t nitem,  const void *nullmap, size_t nullmaplen, void *result) {
+void bloomfilter_test_and_add_fixed(const bloomfilter_t *bf, const void *key, size_t len, size_t elemsz, size_t nitem,  const void *nullmap, size_t nullmaplen, void *result) {
     char *k = (char *) key;
     bool *br = (bool *) result;
     for (int i = 0, j = 0; i < nitem && j < len; i++, j += elemsz, k += elemsz) {

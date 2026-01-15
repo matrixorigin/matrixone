@@ -162,7 +162,7 @@ func (bf *CBloomFilter) TestAndAddVector(v *vector.Vector, callBack func(bool, b
 					curNullLen = C.size_t(nulllen - offset)
 				}
 			}
-			C.bloomfilter_test_and_add_multi(bf.ptr, unsafe.Pointer(&buf[0]), C.size_t(len(buf)), C.size_t(typeSize), C.size_t(nitem), curNullPtr, curNullLen, unsafe.Pointer(&results[0]))
+			C.bloomfilter_test_and_add_fixed(bf.ptr, unsafe.Pointer(&buf[0]), C.size_t(len(buf)), C.size_t(typeSize), C.size_t(nitem), curNullPtr, curNullLen, unsafe.Pointer(&results[0]))
 			runtime.KeepAlive(buf)
 			if callBack != nil {
 				for j := 0; j < nitem; j++ {
@@ -275,7 +275,7 @@ func (bf *CBloomFilter) TestVector(v *vector.Vector, callBack func(bool, bool, i
 					curNullLen = C.size_t(nulllen - offset)
 				}
 			}
-			C.bloomfilter_test_multi(bf.ptr, unsafe.Pointer(&buf[0]), C.size_t(len(buf)), C.size_t(typeSize), C.size_t(nitem), curNullPtr, curNullLen, unsafe.Pointer(&results[0]))
+			C.bloomfilter_test_fixed(bf.ptr, unsafe.Pointer(&buf[0]), C.size_t(len(buf)), C.size_t(typeSize), C.size_t(nitem), curNullPtr, curNullLen, unsafe.Pointer(&results[0]))
 			runtime.KeepAlive(buf)
 			if callBack != nil {
 				for j := 0; j < nitem; j++ {
@@ -380,7 +380,7 @@ func (bf *CBloomFilter) AddVector(v *vector.Vector) {
 					curNullLen = C.size_t(nulllen - offset)
 				}
 			}
-			C.bloomfilter_add_multi(bf.ptr, unsafe.Pointer(&buf[0]), C.size_t(len(buf)), C.size_t(typeSize), C.size_t(nitem), curNullPtr, curNullLen)
+			C.bloomfilter_add_fixed(bf.ptr, unsafe.Pointer(&buf[0]), C.size_t(len(buf)), C.size_t(typeSize), C.size_t(nitem), curNullPtr, curNullLen)
 			runtime.KeepAlive(buf)
 		}
 	} else {
