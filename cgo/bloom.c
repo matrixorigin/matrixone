@@ -91,10 +91,12 @@ void bloomfilter_add(const bloomfilter_t *bf, const void *key, size_t len) {
     if (pos != stack_pos) free(pos);
 }
 
-void bloomfilter_add_multi(const bloomfilter_t *bf, const void *key, size_t len, size_t elemsz, size_t nitem) {
+void bloomfilter_add_multi(const bloomfilter_t *bf, const void *key, size_t len, size_t elemsz, size_t nitem, const void *nullmap, size_t nullmaplen) {
     char *k = (char *) key;
     for (int i = 0, j = 0; i < nitem && j < len; i++, j += elemsz, k += elemsz) {
-        bloomfilter_add(bf, k, elemsz);
+	if (nullmap && !bitmap_test((uint64_t *) nullmap, i)) {
+        	bloomfilter_add(bf, k, elemsz);
+	}
     }
 }
 
@@ -125,12 +127,17 @@ bool bloomfilter_test(const bloomfilter_t *bf, const void *key, size_t len) {
     return result;
 }
 
-void bloomfilter_test_multi(const bloomfilter_t *bf, const void *key, size_t len, size_t elemsz, size_t nitem, void *result) {
+void bloomfilter_test_multi(const bloomfilter_t *bf, const void *key, size_t len, size_t elemsz, size_t nitem, const void *nullmap, size_t nullmaplen, void *result) {
     char *k = (char *) key;
     bool *br = (bool *) result;
 
     for (int i = 0, j = 0; i < nitem && j < len; i++, j += elemsz, k += elemsz) {
-        br[i] = bloomfilter_test(bf, k, elemsz);
+	    if (nullmap && bitmap_test((uint64_t*)nullmap, i)) {
+		    // null
+		    br[i] = false;
+	    } else {
+        	br[i] = bloomfilter_test(bf, k, elemsz);
+	    }
     }
 }
 
@@ -161,11 +168,16 @@ bool bloomfilter_test_and_add(const bloomfilter_t *bf, const void *key, size_t l
     return all_set;
 }
 
-void bloomfilter_test_and_add_multi(const bloomfilter_t *bf, const void *key, size_t len, size_t elemsz, size_t nitem, void *result) {
+void bloomfilter_test_and_add_multi(const bloomfilter_t *bf, const void *key, size_t len, size_t elemsz, size_t nitem,  const void *nullmap, size_t nullmaplen, void *result) {
     char *k = (char *) key;
     bool *br = (bool *) result;
     for (int i = 0, j = 0; i < nitem && j < len; i++, j += elemsz, k += elemsz) {
-        br[i] = bloomfilter_test_and_add(bf, k, elemsz);
+        if (nullmap && bitmap_test((uint64_t*)nullmap, i)) {
+	    // null
+	    br[i] = false;
+	} else {
+            br[i] = bloomfilter_test_and_add(bf, k, elemsz);
+	}
     }
 }
 

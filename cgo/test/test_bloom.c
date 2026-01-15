@@ -85,12 +85,20 @@ int main() {
     printf("test_and_add passed\n");
 
     // Test add_multi
-    uint32_t data_multi[] = {100, 200, 300};
-    bloomfilter_add_multi(bf2, (void *)data_multi, sizeof(data_multi), sizeof(uint32_t), 3);
+    uint64_t add_multi_nullmap = 0;
+    bitmap_set(&add_multi_nullmap, 2); // 2nd item is null
+
+    uint32_t add_multi[] = {100, 200, 300};
+    bloomfilter_add_multi(bf2, (void *)add_multi, sizeof(add_multi), sizeof(uint32_t), 3, &add_multi_nullmap, sizeof(add_multi_nullmap));
     for (int i = 0; i < 3; i++) {
-        if (!bloomfilter_test(bf2, &data_multi[i], sizeof(uint32_t))) {
-            printf("Error: data_multi[%d] should be present after add_multi\n", i);
-            return 1;
+        bool found = bloomfilter_test(bf2, &add_multi[i], sizeof(uint32_t));
+	if (bitmap_test(&add_multi_nullmap, i) && found) {
+              printf("Error: data_multi[%d] is null and should be absent after add_multi\n", i);
+              return 1;
+	}
+	if (!bitmap_test(&add_multi_nullmap, i) && !found) {
+              printf("Error: data_multi[%d] should be present after add_multi\n", i);
+              return 1;
         }
     }
     printf("add_multi passed\n");
@@ -98,7 +106,7 @@ int main() {
     // Test test_multi
     uint32_t test_multi_keys[] = {100, 400, 300}; // 100 and 300 added, 400 not
     bool test_results[3];
-    bloomfilter_test_multi(bf2, (void *)test_multi_keys, sizeof(test_multi_keys), sizeof(uint32_t), 3, test_results);
+    bloomfilter_test_multi(bf2, (void *)test_multi_keys, sizeof(test_multi_keys), sizeof(uint32_t), 3, NULL, 0, test_results);
     if (!test_results[0] || test_results[1] || !test_results[2]) {
         printf("Error: test_multi results incorrect: %d %d %d\n", test_results[0], test_results[1], test_results[2]);
         return 1;
@@ -108,7 +116,7 @@ int main() {
     // Test test_and_add_multi
     uint32_t taa_multi_keys[] = {500, 100, 600}; // 500, 600 new, 100 exists
     bool taa_results[3];
-    bloomfilter_test_and_add_multi(bf2, (void *)taa_multi_keys, sizeof(taa_multi_keys), sizeof(uint32_t), 3, taa_results);
+    bloomfilter_test_and_add_multi(bf2, (void *)taa_multi_keys, sizeof(taa_multi_keys), sizeof(uint32_t), 3, NULL, 0, taa_results);
     
     // 500: was not there (false), 100: was there (true), 600: was not there (false)
     if (taa_results[0] || !taa_results[1] || taa_results[2]) {
