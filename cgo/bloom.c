@@ -26,6 +26,9 @@ typedef struct {
     uint64_t h2;
 } bloom_hash_t;
 
+/*
+ * Calculates a 128-bit hash (split into two 64-bit halves) for a given key and seed using XXH3.
+ */
 static inline bloom_hash_t bloom_calculate_hash(const void *key, size_t len, uint64_t seed) {
     bloom_hash_t h;
     XXH128_hash_t xh1 = XXH3_128bits_withSeed(key, len, seed);
@@ -35,10 +38,18 @@ static inline bloom_hash_t bloom_calculate_hash(const void *key, size_t len, uin
     return h;
 }
 
+/*
+ * Calculates the bit position in the bloom filter for a given hash and iteration index.
+ * Uses the double hashing technique: (h1 + i * h2) % nbits.
+ */
 static inline uint64_t bloom_calculate_pos(bloom_hash_t h, int i, uint64_t nbits) {
     return (h.h1 + (uint64_t)i * h.h2) % nbits;
 }
 
+/*
+ * Sets up the bloom filter structure with the given bit count and number of hash functions.
+ * Generates random seeds for the hash functions.
+ */
 static void bloomfilter_setup(bloomfilter_t *bf, uint64_t nbits, uint32_t k) {
     memcpy(bf->magic, BLOOM_MAGIC, 4);
     bf->nbits = nbits;
@@ -149,10 +160,12 @@ void bloomfilter_test_fixed(const bloomfilter_t *bf, const void *key, size_t len
     }
 }
 
-// key contain the lists of varlena items.
-// first 4 byte (uint32) contains the size of the content
-// and then follow with the content
-// format of the keys look likes [size0] [data with size0] [size1] [data with size1]...
+/*
+ * key contain the lists of varlena items.
+ * first 4 byte (uint32) contains the size of the content
+ * and then follow with the content
+ * format of the keys look likes [size0] [data with size0] [size1] [data with size1]...
+ */
 void bloomfilter_test_varlena(const bloomfilter_t *bf, const void *key, size_t len, size_t nitem, const void *nullmap, size_t nullmaplen, void *result) {
     char *k = (char *) key;
     char *start = k;
