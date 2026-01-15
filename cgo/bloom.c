@@ -21,24 +21,22 @@
 #define XXH_INLINE_ALL
 #include "xxhash.h"
 
-#define MAX_STACK_K 64
-
 typedef struct {
     uint64_t h1;
     uint64_t h2;
-    uint64_t h3;
 } bloom_hash_t;
 
 static inline bloom_hash_t bloom_calculate_hash(const void *key, size_t len, uint64_t seed) {
     bloom_hash_t h;
-    h.h1 = XXH3_64bits_withSeed(key, len, seed);
-    h.h2 = XXH3_64bits_withSeed(key, len, seed << 32);
-    h.h3 = XXH3_64bits_withSeed(key, len, seed >> 32);
+    XXH128_hash_t xh1 = XXH3_128bits_withSeed(key, len, seed);
+    XXH128_hash_t xh2 = XXH3_128bits_withSeed(key, len, seed << 32);
+    h.h1 = xh1.low64 ^ xh2.low64;
+    h.h2 = xh1.high64 ^ xh2.high64;
     return h;
 }
 
 static inline uint64_t bloom_calculate_pos(bloom_hash_t h, int i, uint64_t nbits) {
-    return (h.h1 + (uint64_t)i * h.h2 + (uint64_t)i * i * h.h3) % nbits;
+    return (h.h1 + (uint64_t)i * h.h2) % nbits;
 }
 
 static void bloomfilter_setup(bloomfilter_t *bf, uint64_t nbits, uint32_t k) {
@@ -55,6 +53,12 @@ static void bloomfilter_setup(bloomfilter_t *bf, uint64_t nbits, uint32_t k) {
 
 bloomfilter_t* bloomfilter_init(uint64_t nbits, uint32_t k) {
     uint64_t nbytes = bitmap_nbyte(nbits);
+
+    if (k > MAX_K_SEED) {
+	    // max number of seeds is 9
+	    return NULL;
+    }
+
     bloomfilter_t *bf = (bloomfilter_t *)malloc(sizeof(bloomfilter_t) + nbytes);
     if (!bf) return NULL;
 
@@ -72,12 +76,8 @@ void bloomfilter_free(bloomfilter_t *bf) {
 void bloomfilter_add(const bloomfilter_t *bf, const void *key, size_t len) {
     if (bf->nbits == 0) return;
 
-    uint64_t stack_pos[MAX_STACK_K];
+    uint64_t stack_pos[MAX_K_SEED];
     uint64_t *pos = stack_pos;
-    if (bf->k > MAX_STACK_K) {
-        pos = (uint64_t*)malloc(sizeof(uint64_t) * bf->k);
-        if (!pos) return;
-    }
 
     for (int i = 0; i < bf->k; i++) {
         bloom_hash_t h = bloom_calculate_hash(key, len, bf->seeds[i]);
@@ -87,8 +87,6 @@ void bloomfilter_add(const bloomfilter_t *bf, const void *key, size_t len) {
     for (int i = 0; i < bf->k; i++) {
         bitmap_set((uint64_t *) bf->bitmap, pos[i]);
     }
-
-    if (pos != stack_pos) free(pos);
 }
 
 void bloomfilter_add_multi(const bloomfilter_t *bf, const void *key, size_t len, size_t elemsz, size_t nitem, const void *nullmap, size_t nullmaplen) {
@@ -121,9 +119,9 @@ void bloomfilter_add_varlena(const bloomfilter_t *bf, const void *key, size_t le
 bool bloomfilter_test(const bloomfilter_t *bf, const void *key, size_t len) {
     if (bf->nbits == 0) return false;
 
-    uint64_t stack_pos[MAX_STACK_K];
+    uint64_t stack_pos[MAX_K_SEED];
     uint64_t *pos = stack_pos;
-    if (bf->k > MAX_STACK_K) {
+    if (bf->k > MAX_K_SEED) {
         pos = (uint64_t*)malloc(sizeof(uint64_t) * bf->k);
         if (!pos) return false;
     }
@@ -141,7 +139,6 @@ bool bloomfilter_test(const bloomfilter_t *bf, const void *key, size_t len) {
         }
     }
 
-    if (pos != stack_pos) free(pos);
     return result;
 }
 
@@ -188,12 +185,8 @@ void bloomfilter_test_varlena(const bloomfilter_t *bf, const void *key, size_t l
 bool bloomfilter_test_and_add(const bloomfilter_t *bf, const void *key, size_t len) {
     if (bf->nbits == 0) return false;
 
-    uint64_t stack_pos[MAX_STACK_K];
+    uint64_t stack_pos[MAX_K_SEED];
     uint64_t *pos = stack_pos;
-    if (bf->k > MAX_STACK_K) {
-        pos = (uint64_t*)malloc(sizeof(uint64_t) * bf->k);
-        if (!pos) return false;
-    }
 
     for (int i = 0; i < bf->k; i++) {
         bloom_hash_t h = bloom_calculate_hash(key, len, bf->seeds[i]);
@@ -208,7 +201,6 @@ bool bloomfilter_test_and_add(const bloomfilter_t *bf, const void *key, size_t l
         }
     }
 
-    if (pos != stack_pos) free(pos);
     return all_set;
 }
 
