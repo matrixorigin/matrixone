@@ -86,7 +86,7 @@ const (
 	PublicationObjectListSqlTemplate = `OBJECTLIST%s SNAPSHOT %s%s`
 
 	// Get object SQL template
-	PublicationGetObjectSqlTemplate = `GETOBJECT %s CHUNK %d`
+	PublicationGetObjectSqlTemplate = `GETOBJECT %s OFFSET %d`
 
 	// Get DDL SQL template
 	PublicationGetDdlSqlTemplate = `GETDDL%s`
@@ -597,7 +597,7 @@ func (b publicationSQLBuilder) ObjectListSQL(
 // ------------------------------------------------------------------------------------------------
 
 // GetObjectSQL creates SQL for get object statement
-// Example: GETOBJECT object_name CHUNK 0
+// Example: GETOBJECT object_name OFFSET 0
 func (b publicationSQLBuilder) GetObjectSQL(
 	objectName string,
 	chunkIndex int64,

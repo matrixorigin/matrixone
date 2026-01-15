@@ -217,13 +217,13 @@ var GetObjectFromUpstream = func(
 		return nil, moerr.NewInternalError(ctx, "upstream executor is nil")
 	}
 
-	// First, get chunk 0 to get metadata (total_chunks, total_size, etc.)
+	// First, get offset 0 to get metadata (total_chunks, total_size, etc.)
 	// GETOBJECT returns: data, total_size, chunk_index, total_chunks, is_complete
-	// chunk 0 returns metadata with data = nil
+	// offset 0 returns metadata with data = nil
 	getChunk0SQL := PublicationSQLBuilder.GetObjectSQL(objectName, 0)
 	result, err := upstreamExecutor.ExecSQL(ctx, getChunk0SQL)
 	if err != nil {
-		return nil, moerr.NewInternalErrorf(ctx, "failed to execute GETOBJECT query for chunk 0: %v", err)
+		return nil, moerr.NewInternalErrorf(ctx, "failed to execute GETOBJECT query for offset 0: %v", err)
 	}
 
 	var metadataData []byte
@@ -237,9 +237,9 @@ var GetObjectFromUpstream = func(
 		return nil, moerr.NewInternalErrorf(ctx, "no object content returned for %s", objectName)
 	}
 
-	if err := result.Scan(&metadataData, &totalSize, &chunkIndex, &totalChunks, &isComplete); err != nil {
+		if err := result.Scan(&metadataData, &totalSize, &chunkIndex, &totalChunks, &isComplete); err != nil {
 		result.Close()
-		return nil, moerr.NewInternalErrorf(ctx, "failed to scan chunk 0: %v", err)
+		return nil, moerr.NewInternalErrorf(ctx, "failed to scan offset 0: %v", err)
 	}
 	result.Close()
 
@@ -255,7 +255,7 @@ var GetObjectFromUpstream = func(
 		getChunkSQL := PublicationSQLBuilder.GetObjectSQL(objectName, i)
 		result, err := upstreamExecutor.ExecSQL(ctx, getChunkSQL)
 		if err != nil {
-			return nil, moerr.NewInternalErrorf(ctx, "failed to execute GETOBJECT query for chunk %d: %v", i, err)
+			return nil, moerr.NewInternalErrorf(ctx, "failed to execute GETOBJECT query for offset %d: %v", i, err)
 		}
 
 		if result.Next() {
@@ -266,7 +266,7 @@ var GetObjectFromUpstream = func(
 			var isCompleteChk bool
 			if err := result.Scan(&chunkData, &totalSizeChk, &chunkIndexChk, &totalChunksChk, &isCompleteChk); err != nil {
 				result.Close()
-				return nil, moerr.NewInternalErrorf(ctx, "failed to scan chunk %d: %v", i, err)
+				return nil, moerr.NewInternalErrorf(ctx, "failed to scan offset %d: %v", i, err)
 			}
 			// Store chunk at index i-1 since chunks are numbered 1 to totalChunks
 			allChunks[i-1] = chunkData

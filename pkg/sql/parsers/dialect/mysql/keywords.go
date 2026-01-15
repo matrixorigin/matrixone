@@ -682,6 +682,5 @@ func init() {
 		"objectlist":                 OBJECTLIST,
 		"getobject":                  GETOBJECT,
 		"getddl":                     GETDDL,
-		"chunk":                      CHUNK,
 	}
 }

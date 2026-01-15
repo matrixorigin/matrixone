@@ -356,7 +356,6 @@ const OUTPUT = 57679
 const OBJECTLIST = 57680
 const GETOBJECT = 57681
 const GETDDL = 57682
-const CHUNK = 57683
 const INCREMENT = 57684
 const CYCLE = 57685
 const MINVALUE = 57686
@@ -1055,7 +1054,6 @@ var yyToknames = [...]string{
 	"OBJECTLIST",
 	"GETOBJECT",
 	"GETDDL",
-	"CHUNK",
 	"INCREMENT",
 	"CYCLE",
 	"MINVALUE",
