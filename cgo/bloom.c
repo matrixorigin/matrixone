@@ -214,11 +214,11 @@ void bloomfilter_test_and_add_fixed(const bloomfilter_t *bf, const void *key, si
     bool *br = (bool *) result;
     for (int i = 0, j = 0; i < nitem && j < len; i++, j += elemsz, k += elemsz) {
         if (nullmap && bitmap_test((uint64_t*)nullmap, i)) {
-	    // null
-	    br[i] = false;
-	} else {
+            // null
+            br[i] = false;
+        } else {
             br[i] = bloomfilter_test_and_add(bf, k, elemsz);
-	}
+        }
     }
 }
 
