@@ -66,8 +66,7 @@ bloomfilter_t* bloomfilter_init(uint64_t nbits, uint32_t k) {
     uint64_t nbytes = bitmap_nbyte(nbits);
 
     if (k > MAX_K_SEED) {
-	    // max number of seeds is 9
-	    return NULL;
+        return NULL;
     }
 
     bloomfilter_t *bf = (bloomfilter_t *)malloc(sizeof(bloomfilter_t) + nbytes);
@@ -100,9 +99,9 @@ void bloomfilter_add(const bloomfilter_t *bf, const void *key, size_t len) {
 void bloomfilter_add_fixed(const bloomfilter_t *bf, const void *key, size_t len, size_t elemsz, size_t nitem, const void *nullmap, size_t nullmaplen) {
     char *k = (char *) key;
     for (int i = 0, j = 0; i < nitem && j < len; i++, j += elemsz, k += elemsz) {
-	if (!nullmap || !bitmap_test((uint64_t *) nullmap, i)) {
-        	bloomfilter_add(bf, k, elemsz);
-	}
+        if (!nullmap || !bitmap_test((uint64_t *) nullmap, i)) {
+            bloomfilter_add(bf, k, elemsz);
+        }
     }
 }
 
@@ -151,12 +150,12 @@ void bloomfilter_test_fixed(const bloomfilter_t *bf, const void *key, size_t len
     bool *br = (bool *) result;
 
     for (int i = 0, j = 0; i < nitem && j < len; i++, j += elemsz, k += elemsz) {
-	    if (nullmap && bitmap_test((uint64_t*)nullmap, i)) {
-		    // null
-		    br[i] = false;
-	    } else {
-        	br[i] = bloomfilter_test(bf, k, elemsz);
-	    }
+        if (nullmap && bitmap_test((uint64_t*)nullmap, i)) {
+            // null
+            br[i] = false;
+        } else {
+            br[i] = bloomfilter_test(bf, k, elemsz);
+        }
     }
 }
 
@@ -178,13 +177,13 @@ void bloomfilter_test_varlena(const bloomfilter_t *bf, const void *key, size_t l
         
         if ((size_t)(k - start) + elemsz > len) break;
 
-            if (nullmap && bitmap_test((uint64_t*)nullmap, i)) {
-                    // null
-                    br[i] = false;
-            } else {
-                br[i] = bloomfilter_test(bf, k, elemsz);
-            }
-	    k += elemsz;
+        if (nullmap && bitmap_test((uint64_t*)nullmap, i)) {
+            // null
+            br[i] = false;
+        } else {
+            br[i] = bloomfilter_test(bf, k, elemsz);
+        }
+        k += elemsz;
     }
 }
 
