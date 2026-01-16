@@ -8,7 +8,6 @@ package usearchex
 import "C"
 import (
 	"errors"
-	"fmt"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
@@ -51,9 +50,8 @@ func FilteredSearchUnsafeWithBloomFilter(
 	if errorMessage != nil {
 		return nil, nil, errors.New(C.GoString(errorMessage))
 	}
-	fmt.Println(resultCount)
-	fmt.Println(distances)
-	fmt.Println(keys)
 
-	return nil, nil, nil
+	keys = keys[:resultCount]
+	distances = distances[:resultCount]
+	return keys, distances, nil
 }
