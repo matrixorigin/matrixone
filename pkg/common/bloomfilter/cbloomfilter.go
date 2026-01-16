@@ -66,27 +66,27 @@ func (bf *CBloomFilter) Free() {
 
 // Add inserts a byte slice into the bloom filter.
 func (bf *CBloomFilter) Add(data []byte) {
-	if bf == nil || bf.ptr == nil || len(data) == 0 {
+	if bf == nil || bf.ptr == nil || data == nil {
 		return
 	}
-	C.bloomfilter_add(bf.ptr, unsafe.Pointer(&data[0]), C.size_t(len(data)))
+	C.bloomfilter_add(bf.ptr, unsafe.Pointer(unsafe.SliceData(data)), C.size_t(len(data)))
 	runtime.KeepAlive(data)
 }
 
 // Test checks if a byte slice is possibly in the bloom filter.
 func (bf *CBloomFilter) Test(data []byte) bool {
-	if bf == nil || bf.ptr == nil || len(data) == 0 {
+	if bf == nil || bf.ptr == nil || data == nil {
 		return false
 	}
-	return bool(C.bloomfilter_test(bf.ptr, unsafe.Pointer(&data[0]), C.size_t(len(data))))
+	return bool(C.bloomfilter_test(bf.ptr, unsafe.Pointer(unsafe.SliceData(data)), C.size_t(len(data))))
 }
 
 // TestAndAdd checks if a byte slice is in the bloom filter and adds it if it's not.
 func (bf *CBloomFilter) TestAndAdd(data []byte) bool {
-	if bf == nil || bf.ptr == nil || len(data) == 0 {
+	if bf == nil || bf.ptr == nil || data == nil {
 		return false
 	}
-	return bool(C.bloomfilter_test_and_add(bf.ptr, unsafe.Pointer(&data[0]), C.size_t(len(data))))
+	return bool(C.bloomfilter_test_and_add(bf.ptr, unsafe.Pointer(unsafe.SliceData(data)), C.size_t(len(data))))
 }
 
 // Marshal serializes the bloom filter into a byte slice.
