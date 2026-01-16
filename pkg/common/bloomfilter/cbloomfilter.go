@@ -109,7 +109,7 @@ func (bf *CBloomFilter) Unmarshal(data []byte) error {
 	}
 
 	if len(data) == 0 {
-		return nil
+		return moerr.NewInternalErrorNoCtx("Invalid bloomfilter data: empty slice")
 	}
 	// Allocate C memory and copy data to it, because bloomfilter_unmarshal
 	// just casts the pointer and we want a stable C allocation that we can free.
