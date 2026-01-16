@@ -3,7 +3,6 @@ package usearchex
 /*
 #include <stdlib.h>
 #include <string.h>
-#include "../../../cgo/bloom.h"
 #include "../../../cgo/usearchex.h"
 */
 import "C"
@@ -39,7 +38,8 @@ func FilteredSearchUnsafeWithBloomFilter(
 	keys = make([]usearch.Key, limit)
 	distances = make([]float32, limit)
 
-	resultCount := uint(C.usearchex_filtered_search_with_bloomfilter(unsafe.Pointer(index.GetHandle()),
+	resultCount := uint(C.usearchex_filtered_search_with_bloomfilter(
+		unsafe.Pointer(index.GetHandle()),
 		query,
 		C.uint32_t(index.GetConfig().Quantization.CValue()),
 		C.size_t(limit),
