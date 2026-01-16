@@ -52,6 +52,10 @@ func NewCBloomFilter(nbits uint64, k uint32) *CBloomFilter {
 	return &CBloomFilter{ptr: ptr}
 }
 
+func (bf *CBloomFilter) Ptr() *C.bloomfilter_t {
+	return bf.ptr
+}
+
 // Free releases the C memory allocated for the bloom filter.
 func (bf *CBloomFilter) Free() {
 	if bf != nil && bf.ptr != nil {
