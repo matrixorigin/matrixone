@@ -2,7 +2,6 @@ package usearchex
 
 import (
 	"encoding/binary"
-	"fmt"
 	"testing"
 	"unsafe"
 
@@ -86,6 +85,7 @@ func TestFilteredSearch(t *testing.T) {
 	keys, distances, err := FilteredSearchUnsafeWithBloomFilter(index, unsafe.Pointer(&vector[0]), limit, bf)
 	require.NoError(t, err)
 
-	fmt.Println(distances)
-	fmt.Println(keys)
+	require.Equal(t, len(keys), 1)
+	require.Equal(t, keys[0], foundkey)
+	require.Equal(t, distances[0], float32(0))
 }
