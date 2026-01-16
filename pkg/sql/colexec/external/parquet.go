@@ -107,6 +107,44 @@ func (h *ParquetHandler) openFile(param *ExternalParam) error {
 	return moerr.ConvertGoError(param.Ctx, err)
 }
 
+// findColumnIgnoreCase finds a column in the Parquet schema with case-insensitive matching.
+// It first tries exact match for performance, then falls back to case-insensitive match.
+// Returns error if multiple columns match case-insensitively (ambiguous), even if one is an exact match.
+func (h *ParquetHandler) findColumnIgnoreCase(ctx context.Context, name string) (*parquet.Column, error) {
+	root := h.file.Root()
+	nameLower := strings.ToLower(name)
+
+	// Single pass: find all columns that match case-insensitively
+	var exactMatch *parquet.Column
+	var caseInsensitiveMatches []*parquet.Column
+
+	for _, col := range root.Columns() {
+		if col.Name() == name {
+			exactMatch = col
+			caseInsensitiveMatches = append(caseInsensitiveMatches, col)
+		} else if strings.ToLower(col.Name()) == nameLower {
+			caseInsensitiveMatches = append(caseInsensitiveMatches, col)
+		}
+	}
+
+	// Check for ambiguity: multiple columns match case-insensitively
+	if len(caseInsensitiveMatches) > 1 {
+		return nil, moerr.NewInvalidInputf(ctx,
+			"ambiguous column name %s: multiple columns match case-insensitively (%s and %s)",
+			name, caseInsensitiveMatches[0].Name(), caseInsensitiveMatches[1].Name())
+	}
+
+	// Return exact match if found, otherwise the single case-insensitive match
+	if exactMatch != nil {
+		return exactMatch, nil
+	}
+	if len(caseInsensitiveMatches) == 1 {
+		return caseInsensitiveMatches[0], nil
+	}
+
+	return nil, nil
+}
+
 func (h *ParquetHandler) prepare(param *ExternalParam) error {
 	h.cols = make([]*parquet.Column, len(param.Attrs))
 	h.mappers = make([]*columnMapper, len(param.Attrs))
@@ -117,7 +155,11 @@ func (h *ParquetHandler) prepare(param *ExternalParam) error {
 			continue
 		}
 
-		col := h.file.Root().Column(attr.ColName)
+		// Use case-insensitive column lookup (fix for issue #15621)
+		col, err := h.findColumnIgnoreCase(param.Ctx, attr.ColName)
+		if err != nil {
+			return err
+		}
 		if col == nil {
 			return moerr.NewInvalidInputf(param.Ctx, "column %s not found", attr.ColName)
 		}
