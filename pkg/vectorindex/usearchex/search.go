@@ -39,8 +39,14 @@ func FilteredSearchUnsafeWithBloomFilter(
 	keys = make([]usearch.Key, limit)
 	distances = make([]float32, limit)
 
-	resultCount := uint(C.usearchex_filtered_search_with_bloomfilter(unsafe.Pointer(index.GetHandle()), query, C.uint32_t(index.GetConfig().Quantization.CValue()),
-		C.size_t(limit), (unsafe.Pointer)(bf.Ptr()), (*C.usearch_key_t)(&keys[0]), (*C.usearch_distance_t)(&distances[0]), (*C.usearch_error_t)(&errorMessage)))
+	resultCount := uint(C.usearchex_filtered_search_with_bloomfilter(unsafe.Pointer(index.GetHandle()),
+		query,
+		C.uint32_t(index.GetConfig().Quantization.CValue()),
+		C.size_t(limit),
+		(unsafe.Pointer)(bf.Ptr()),
+		(*C.usearch_key_t)(&keys[0]),
+		(*C.usearch_distance_t)(&distances[0]),
+		(*C.usearch_error_t)(&errorMessage)))
 
 	if errorMessage != nil {
 		return nil, nil, errors.New(C.GoString(errorMessage))
