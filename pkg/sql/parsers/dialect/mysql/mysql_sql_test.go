@@ -2608,6 +2608,10 @@ var (
 			output: "drop stage if not exists my_ext_stage1",
 		},
 		{
+			input:  "REMOVE FILES FROM STAGE IF EXISTS 'stage://mystage/data_*.csv'",
+			output: "remove files from stage if exists 'stage://mystage/data_*.csv'",
+		},
+		{
 			input:  "ALTER STAGE my_ext_stage SET URL='s3://loading/files/new/'",
 			output: "alter stage my_ext_stage set  url='s3://loading/files/new/'",
 		},

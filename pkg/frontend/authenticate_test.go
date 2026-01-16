@@ -18,6 +18,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net/url"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -46,6 +49,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -9099,6 +9103,44 @@ func TestDoCheckRole(t *testing.T) {
 	}
 	ses.SetTenantInfo(tenant)
 	err = doCheckRole(ctx, ses)
+	require.Error(t, err)
+}
+
+func TestDoRemoveStageFiles(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ctx := context.Background()
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	dir := t.TempDir()
+	stageURL := &url.URL{Scheme: stage.FILE_PROTOCOL, Path: dir}
+	ses.proc.GetStageCache().Set("mystage", stage.StageDef{Id: 1, Name: "mystage", Url: stageURL})
+
+	filePath := filepath.Join(dir, "a.txt")
+	require.NoError(t, os.WriteFile(filePath, []byte("a"), 0600))
+
+	rs := tree.NewRemoveStageFiles(false, "stage://mystage/a.txt")
+	err := doRemoveStageFiles(ctx, ses, rs)
+	require.NoError(t, err)
+	_, err = os.Stat(filePath)
+	require.True(t, os.IsNotExist(err))
+
+	rs = tree.NewRemoveStageFiles(false, "file:///tmp/a.txt")
+	err = doRemoveStageFiles(ctx, ses, rs)
+	require.Error(t, err)
+
+	tenant := &TenantInfo{
+		Tenant:        "default_1",
+		User:          "admin",
+		DefaultRole:   "role1",
+		TenantID:      3001,
+		UserID:        2,
+		DefaultRoleID: 10,
+	}
+	ses.SetTenantInfo(tenant)
+	rs = tree.NewRemoveStageFiles(false, "stage://mystage/a.txt")
+	err = doRemoveStageFiles(ctx, ses, rs)
 	require.Error(t, err)
 }
 
