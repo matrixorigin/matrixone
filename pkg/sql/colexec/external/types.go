@@ -248,6 +248,10 @@ type ParquetHandler struct {
 	batchCnt int64
 	cols     []*parquet.Column
 	mappers  []*columnMapper
+	// nested type support
+	hasNestedCols bool
+	nestedColIdxs []int
+	rowReader     *parquet.Reader
 }
 
 type columnMapper struct {

@@ -110,6 +110,8 @@ func (h *ParquetHandler) openFile(param *ExternalParam) error {
 func (h *ParquetHandler) prepare(param *ExternalParam) error {
 	h.cols = make([]*parquet.Column, len(param.Attrs))
 	h.mappers = make([]*columnMapper, len(param.Attrs))
+	h.nestedColIdxs = make([]int, 0)
+
 	for _, attr := range param.Attrs {
 		def := param.Cols[attr.ColIndex]
 		if def.Hidden {
@@ -123,7 +125,16 @@ func (h *ParquetHandler) prepare(param *ExternalParam) error {
 
 		var fn *columnMapper
 		if !col.Leaf() {
-			return moerr.NewNYI(param.Ctx, "parquet nested type")
+			// nested type: List/Struct/Map
+			targetType := types.T(def.Typ.Id)
+			if !isNestedTargetTypeSupported(targetType) {
+				return moerr.NewInvalidInputf(param.Ctx,
+					"parquet nested column %s must map to JSON or TEXT type, got %s",
+					attr.ColName, targetType.String())
+			}
+			h.hasNestedCols = true
+			h.nestedColIdxs = append(h.nestedColIdxs, int(attr.ColIndex))
+			fn = h.getNestedMapper(col, def.Typ)
 		} else {
 			fn = h.getMapper(col, def.Typ)
 		}
@@ -144,6 +155,11 @@ func (h *ParquetHandler) prepare(param *ExternalParam) error {
 		}
 		h.cols[attr.ColIndex] = col
 		h.mappers[attr.ColIndex] = fn
+	}
+
+	// init row reader if has nested columns
+	if h.hasNestedCols {
+		h.rowReader = parquet.NewReader(h.file)
 	}
 
 	return nil
@@ -1631,6 +1647,13 @@ func bigIntToTwosComplementBytes(ctx context.Context, bi *big.Int, size int) ([]
 }
 
 func (h *ParquetHandler) getData(bat *batch.Batch, param *ExternalParam, proc *process.Process) error {
+	if h.hasNestedCols {
+		return h.getDataByRow(bat, param, proc)
+	}
+	return h.getDataByPage(bat, param, proc)
+}
+
+func (h *ParquetHandler) getDataByPage(bat *batch.Batch, param *ExternalParam, proc *process.Process) error {
 	length := 0
 	finish := false
 	for colIdx, col := range h.cols {
