@@ -19,12 +19,15 @@ void test_basic_ops() {
     const char *key1 = "hello";
     const char *key2 = "world";
     const char *key3 = "matrixone";
+    const char *key4 = ""; // empty string
 
     bloomfilter_add(bf, key1, strlen(key1));
     bloomfilter_add(bf, key2, strlen(key2));
+    bloomfilter_add(bf, key4, strlen(key4));
 
     CHECK(bloomfilter_test(bf, key1, strlen(key1)), "key1 should be present");
     CHECK(bloomfilter_test(bf, key2, strlen(key2)), "key2 should be present");
+    CHECK(bloomfilter_test(bf, key4, strlen(key4)), "key4 should be present");
     if (bloomfilter_test(bf, key3, strlen(key3))) {
         printf("Warning: key3 might be a false positive (or error)\n");
     } else {
