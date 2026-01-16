@@ -12,7 +12,7 @@ static int filtered_search_cb(usearch_key_t key, void *data) {
 }
 
 size_t usearchex_filtered_search_with_bloomfilter(
-    void *index,
+    usearch_index_t index,
     void const* query_vector, uint32_t query_kind, size_t count,
     void *bf,
     usearch_key_t* keys, usearch_distance_t* distances, usearch_error_t* error) {
@@ -22,7 +22,7 @@ size_t usearchex_filtered_search_with_bloomfilter(
             (usearch_scalar_kind_t)query_kind, 
             count, 
             filtered_search_cb, 
-            (bloomfilter_t*)bf, 
+            bf, 
             keys, 
             distances, 
             error);

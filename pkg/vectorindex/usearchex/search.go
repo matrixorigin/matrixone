@@ -25,6 +25,12 @@ func FilteredSearchUnsafeWithBloomFilter(
 	if index.GetHandle() == nil {
 		panic("index is uninitialized")
 	}
+	handle := C.usearch_index_t(index.GetHandle())
+
+	var bfptr unsafe.Pointer
+	if bf != nil {
+		bfptr = unsafe.Pointer(bf.Ptr())
+	}
 
 	if query == nil {
 		return nil, nil, errors.New("query pointer cannot be nil")
@@ -38,11 +44,11 @@ func FilteredSearchUnsafeWithBloomFilter(
 	distances = make([]float32, limit)
 
 	resultCount := uint(C.usearchex_filtered_search_with_bloomfilter(
-		unsafe.Pointer(index.GetHandle()),
+		handle,
 		query,
 		C.uint32_t(index.GetConfig().Quantization.CValue()),
 		C.size_t(limit),
-		(unsafe.Pointer)(bf.Ptr()),
+		bfptr,
 		(*C.usearch_key_t)(&keys[0]),
 		(*C.usearch_distance_t)(&distances[0]),
 		(*C.usearch_error_t)(&errorMessage)))
