@@ -2454,6 +2454,80 @@ var supportedStringBuiltIns = []FuncNew{
 			},
 		},
 	},
+
+	// operator `in_range`
+	{
+		functionId: IN_RANGE,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) != 4 {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+
+			if inputs[3].Oid != types.T_uint8 {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+
+			has0, t01, t1 := fixedTypeCastRule1(inputs[0], inputs[1])
+			has1, t02, t2 := fixedTypeCastRule1(inputs[0], inputs[2])
+			if t01.Oid != t02.Oid {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+
+			if t01.Oid == types.T_decimal64 || t01.Oid == types.T_decimal128 || t01.Oid == types.T_decimal256 {
+				if t01.Scale != t1.Scale || t02.Scale != t2.Scale {
+					return newCheckResultWithFailure(failedFunctionParametersWrong)
+				}
+			}
+
+			if has0 || has1 {
+				if otherCompareOperatorSupports(t01, t1) && otherCompareOperatorSupports(t01, t2) {
+					return newCheckResultWithCast(0, []types.Type{t01, t1, t2})
+				}
+			} else {
+				if otherCompareOperatorSupports(t01, t1) && otherCompareOperatorSupports(t01, t2) {
+					return newCheckResultWithSuccess(0)
+				}
+			}
+
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return inRangeImpl
+				},
+			},
+		},
+	},
+
+	// function `prefix_in_range`
+	{
+		functionId: PREFIX_IN_RANGE,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedDirectlyTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar, types.T_uint8},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return PrefixInRange
+				},
+			},
+		},
+	},
+
 	// to_base64
 	{
 		functionId: TO_BASE64,
