@@ -77,6 +77,7 @@ func TestFilteredSearch(t *testing.T) {
 
 	bf := bloomfilter.NewCBloomFilterWithProbaility(int64(count), 0.001)
 	require.NotNil(t, bf)
+	defer bf.Free()
 
 	b := make([]byte, 8)
 	binary.LittleEndian.PutUint64(b, uint64(foundkey))
