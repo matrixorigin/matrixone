@@ -11,6 +11,7 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	usearch "github.com/unum-cloud/usearch/golang"
 )
 
@@ -33,7 +34,7 @@ func FilteredSearchUnsafeWithBloomFilter(
 	}
 
 	if query == nil {
-		return nil, nil, errors.New("query pointer cannot be nil")
+		return nil, nil, moerr.NewInternalErrorNoCtx("query pointer cannot be nil")
 	}
 
 	if limit == 0 {
