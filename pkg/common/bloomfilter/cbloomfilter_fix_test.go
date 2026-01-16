@@ -17,6 +17,9 @@ package bloomfilter
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
 )
 
@@ -48,4 +51,63 @@ func TestCBloomFilter_EmptySlice(t *testing.T) {
 	// 3. Verify nil slice behavior (should remain ignored/false)
 	bf2.Add(nilSlice)
 	require.False(t, bf2.Test(nilSlice), "Nil slice should not be found")
+}
+
+func TestCBloomFilter_VarlenaVectorWithEmptySlices(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.New(types.T_varchar, 0, 0))
+	defer vec.Free(mp)
+
+	// idx 0: "hello"
+	// idx 1: "" (empty, non-null)
+	// idx 2: "world"
+	// idx 3: null
+	err := vector.AppendBytes(vec, []byte("hello"), false, mp)
+	require.NoError(t, err)
+	err = vector.AppendBytes(vec, []byte(""), false, mp)
+	require.NoError(t, err)
+	err = vector.AppendBytes(vec, []byte("world"), false, mp)
+	require.NoError(t, err)
+	err = vector.AppendBytes(vec, nil, true, mp)
+	require.NoError(t, err)
+
+	bf := NewCBloomFilterWithProbaility(10, 0.00001)
+	defer bf.Free()
+
+	// 1. Test AddVector
+	bf.AddVector(vec)
+
+	// 2. Test TestVector
+	bf.TestVector(vec, func(exists bool, isNull bool, idx int) {
+		switch idx {
+		case 0, 1, 2:
+			require.False(t, isNull, "idx %d should not be null", idx)
+			require.True(t, exists, "idx %d should exist in bloom filter", idx)
+		case 3:
+			require.True(t, isNull, "idx %d should be null", idx)
+			require.False(t, exists, "idx %d (null) should not exist in bloom filter", idx)
+		}
+	})
+
+	// 3. Test TestAndAddVector with a new filter
+	bf2 := NewCBloomFilterWithProbaility(10, 0.00001)
+	defer bf2.Free()
+
+	// First pass: none should exist (except possibly due to collisions)
+	bf2.TestAndAddVector(vec, func(exists bool, isNull bool, idx int) {
+		if isNull {
+			require.False(t, exists, "idx %d (null) should not exist", idx)
+		} else {
+			// exists could be true due to collision, but unlikely with 0.00001 probability and 3 items
+		}
+	})
+
+	// Second pass: non-nulls should exist
+	bf2.TestAndAddVector(vec, func(exists bool, isNull bool, idx int) {
+		if isNull {
+			require.False(t, exists, "idx %d (null) should still not exist", idx)
+		} else {
+			require.True(t, exists, "idx %d (non-null) should exist now", idx)
+		}
+	})
 }
