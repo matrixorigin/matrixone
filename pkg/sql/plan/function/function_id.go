@@ -582,12 +582,12 @@ const (
 	// function `mo_feature_limit_upsert`
 	MO_FEATURE_LIMIT_UPSERT = 403
 
+	IN_RANGE        = 404
+	PREFIX_IN_RANGE = 405
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 404
-
-	IN_RANGE        = 405
-	PREFIX_IN_RANGE = 406
+	FUNCTION_END_NUMBER = 406
 )
 
 // functionIdRegister is what function we have registered already.
