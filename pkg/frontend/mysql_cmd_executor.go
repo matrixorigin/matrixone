@@ -1281,6 +1281,10 @@ func handleDropStage(ses FeSession, execCtx *ExecCtx, ds *tree.DropStage) error 
 	return doDropStage(execCtx.reqCtx, ses.(*Session), ds)
 }
 
+func handleRemoveStageFiles(ses FeSession, execCtx *ExecCtx, rs *tree.RemoveStageFiles) error {
+	return doRemoveStageFiles(execCtx.reqCtx, ses.(*Session), rs)
+}
+
 func handleCreateSnapshot(ses *Session, execCtx *ExecCtx, ct *tree.CreateSnapShot) error {
 	return doCreateSnapshot(execCtx.reqCtx, ses, ct)
 }
@@ -3617,6 +3621,8 @@ func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *
 		col.SetColumnType(defines.MYSQL_TYPE_TIME)
 	case types.T_timestamp:
 		col.SetColumnType(defines.MYSQL_TYPE_TIMESTAMP)
+	case types.T_year:
+		col.SetColumnType(defines.MYSQL_TYPE_YEAR)
 	case types.T_decimal64:
 		col.SetColumnType(defines.MYSQL_TYPE_DECIMAL)
 	case types.T_decimal128:

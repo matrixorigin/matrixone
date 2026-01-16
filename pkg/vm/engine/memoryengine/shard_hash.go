@@ -546,6 +546,21 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		return
 
+	case types.T_year:
+		if vec.IsConstNull() {
+			var zero types.MoYear
+			value = Nullable{
+				IsNull: true,
+				Value:  zero,
+			}
+			return
+		}
+		value = Nullable{
+			IsNull: vec.GetNulls().Contains(uint64(i)),
+			Value:  vector.MustFixedColNoTypeCheck[types.MoYear](vec)[i],
+		}
+		return
+
 	case types.T_decimal64:
 		if vec.IsConstNull() {
 			var zero types.Decimal64

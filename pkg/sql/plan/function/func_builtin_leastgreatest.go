@@ -393,6 +393,17 @@ func leastFn(parameters []*vector.Vector,
 				return v1 < v2
 			})
 
+	case types.T_year:
+		return leastGreatestFnFixed(
+			parameters,
+			result,
+			proc,
+			length,
+			selectList,
+			func(v1, v2 types.MoYear) bool {
+				return v1 < v2
+			})
+
 	case types.T_decimal64:
 		return leastGreatestFnFixed(
 			parameters,
@@ -661,6 +672,17 @@ func greatestFn(parameters []*vector.Vector,
 			length,
 			selectList,
 			func(v1, v2 types.Timestamp) bool {
+				return v1 > v2
+			})
+
+	case types.T_year:
+		return leastGreatestFnFixed(
+			parameters,
+			result,
+			proc,
+			length,
+			selectList,
+			func(v1, v2 types.MoYear) bool {
 				return v1 > v2
 			})
 

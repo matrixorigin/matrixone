@@ -166,6 +166,12 @@ func MergeAObj(
 				cols:        make([][]types.Enum, size),
 			}
 			merger = newAObjMerger(vpool, batches, sort.GenericLess[types.Enum], sortKeyPos, df, toLayout)
+		case types.T_year:
+			df := &fixedDataFetcher[types.MoYear]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[types.MoYear],
+				cols:        make([][]types.MoYear, size),
+			}
+			merger = newAObjMerger(vpool, batches, sort.GenericLess[types.MoYear], sortKeyPos, df, toLayout)
 		case types.T_decimal64:
 			df := &fixedDataFetcher[types.Decimal64]{
 				mustColFunc: vector.MustFixedColNoTypeCheck[types.Decimal64],

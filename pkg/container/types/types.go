@@ -66,6 +66,7 @@ const (
 	T_datetime  T = 52
 	T_timestamp T = 53
 	T_interval  T = 54
+	T_year      T = 55
 
 	// string family
 	T_char      T = 60
@@ -397,6 +398,7 @@ var Types = map[string]T{
 	"time":      T_time,
 	"timestamp": T_timestamp,
 	"interval":  T_interval,
+	"year":      T_year,
 
 	"char":    T_char,
 	"varchar": T_varchar,
@@ -527,7 +529,7 @@ func (t Type) IsNumeric() bool {
 
 func (t Type) IsTemporal() bool {
 	switch t.Oid {
-	case T_date, T_time, T_datetime, T_timestamp, T_interval:
+	case T_date, T_time, T_datetime, T_timestamp, T_interval, T_year:
 		return true
 	}
 	return false
@@ -603,6 +605,9 @@ func (t T) ToType() Type {
 		typ.Size = 4
 	case T_int64, T_datetime, T_time, T_timestamp:
 		typ.Size = 8
+	case T_year:
+		typ.Size = 2
+		typ.Width = 4
 	case T_uint8:
 		typ.Size = 1
 	case T_uint16:
@@ -738,6 +743,8 @@ func (t T) String() string {
 		return "BLOCKID"
 	case T_interval:
 		return "INTERVAL"
+	case T_year:
+		return "YEAR"
 	case T_array_float32:
 		return "VECF32"
 	case T_array_float64:
@@ -815,6 +822,8 @@ func (t T) OidString() string {
 		return "T_Blockid"
 	case T_interval:
 		return "T_interval"
+	case T_year:
+		return "T_year"
 	case T_enum:
 		return "T_enum"
 	case T_array_float32:
@@ -840,6 +849,8 @@ func (t T) TypeLen() int {
 		return 4
 	case T_int64, T_datetime, T_time, T_timestamp:
 		return 8
+	case T_year:
+		return 2
 	case T_uint8:
 		return 1
 	case T_uint16:
@@ -887,6 +898,8 @@ func (t T) FixedLength() int {
 		return 1
 	case T_int16, T_uint16:
 		return 2
+	case T_year:
+		return 2
 	case T_int32, T_uint32, T_date, T_float32:
 		return 4
 	case T_int64, T_uint64, T_datetime, T_time, T_float64, T_timestamp:
@@ -922,7 +935,7 @@ func (t T) IsOrdered() bool {
 	case T_int8, T_int16, T_int32, T_int64,
 		T_uint8, T_uint16, T_uint32, T_uint64,
 		T_float32, T_float64,
-		T_date, T_time, T_datetime, T_timestamp,
+		T_date, T_time, T_datetime, T_timestamp, T_year,
 		T_bit:
 		return true
 	default:
@@ -979,7 +992,7 @@ func (t T) IsMySQLString() bool {
 }
 
 func (t T) IsDateRelate() bool {
-	if t == T_date || t == T_datetime || t == T_timestamp || t == T_time {
+	if t == T_date || t == T_datetime || t == T_timestamp || t == T_time || t == T_year {
 		return true
 	}
 	return false

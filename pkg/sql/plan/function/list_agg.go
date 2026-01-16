@@ -570,19 +570,21 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, agg.BitmapConstructSupportedTypes)
+			return fixedUnaryAggTypeCheck(inputs, []types.T{types.T_uint64})
 		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
-				args:       agg.BitmapConstructSupportedTypes,
-				retType:    agg.BitmapConstructReturnType,
+				args:       []types.T{types.T_uint64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varbinary.ToType()
+				},
 
 				isAgg: true,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "bitmap_construct_agg",
-					aggRegister: agg.RegisterBitmapConstruct2,
+					aggRegister: agg.RegisterBitmapConstruct,
 				},
 			},
 		},
@@ -594,19 +596,21 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, agg.BitmapOrSupportedTypes)
+			return fixedUnaryAggTypeCheck(inputs, []types.T{types.T_varbinary})
 		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
-				args:       agg.BitmapOrSupportedTypes,
-				retType:    agg.BitmapOrReturnType,
+				args:       []types.T{types.T_varbinary},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varbinary.ToType()
+				},
 
 				isAgg: true,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "bitmap_or_agg",
-					aggRegister: agg.RegisterBitmapOr2,
+					aggRegister: agg.RegisterBitmapOr,
 				},
 			},
 		},
@@ -618,6 +622,7 @@ var SumSupportedTypes = []types.T{
 	types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 	types.T_float32, types.T_float64,
 	types.T_decimal64, types.T_decimal128,
+	types.T_bit, types.T_year,
 }
 
 var MinMaxSupportedTypes = []types.T{
@@ -625,7 +630,7 @@ var MinMaxSupportedTypes = []types.T{
 	types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 	types.T_float32, types.T_float64,
 	types.T_date, types.T_datetime,
-	types.T_timestamp, types.T_time,
+	types.T_timestamp, types.T_time, types.T_year,
 	types.T_decimal64, types.T_decimal128,
 	types.T_bool,
 	types.T_bit,
@@ -641,6 +646,7 @@ var AnyValueSupportedTypes = []types.T{
 	types.T_date, types.T_datetime,
 	types.T_timestamp, types.T_time,
 	types.T_decimal64, types.T_decimal128,
+	types.T_bit, types.T_year,
 	types.T_bool,
 	types.T_bit,
 	types.T_varchar, types.T_char, types.T_blob, types.T_text, types.T_datalink,

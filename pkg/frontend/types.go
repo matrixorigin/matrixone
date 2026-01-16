@@ -110,6 +110,7 @@ const (
 	FPCreateStage
 	FPDropStage
 	FPAlterStage
+	FPRemoveStageFiles
 	FPCreateAccount
 	FPDropAccount
 	FPAlterAccount

@@ -238,6 +238,14 @@ func DecodeEnum(v []byte) Enum {
 	return *(*Enum)(unsafe.Pointer(&v[0]))
 }
 
+func EncodeMoYear(v *MoYear) []byte {
+	return util.UnsafeToBytes(v)
+}
+
+func DecodeMoYear(v []byte) MoYear {
+	return *(*MoYear)(unsafe.Pointer(&v[0]))
+}
+
 func EncodeDecimal64(v *Decimal64) []byte {
 	return util.UnsafeToBytes(v)
 }
@@ -348,6 +356,8 @@ func DecodeValue(val []byte, t T) any {
 		return DecodeFixed[Datetime](val)
 	case T_timestamp:
 		return DecodeFixed[Timestamp](val)
+	case T_year:
+		return DecodeFixed[MoYear](val)
 	case T_decimal64:
 		return DecodeFixed[Decimal64](val)
 	case T_decimal128:
@@ -429,6 +439,8 @@ func CompareValue(left, right any) int {
 		return int(lVal - right.(Timestamp))
 	case Datetime:
 		return int(lVal - right.(Datetime))
+	case MoYear:
+		return int(lVal - right.(MoYear))
 	case Uuid:
 		return lVal.Compare(right.(Uuid))
 	case TS:
@@ -518,6 +530,8 @@ func EncodeValue(val any, t T) []byte {
 		return EncodeFixed(val.(Timestamp))
 	case T_datetime:
 		return EncodeFixed(val.(Datetime))
+	case T_year:
+		return EncodeFixed(val.(MoYear))
 	case T_uuid:
 		return EncodeFixed(val.(Uuid))
 	case T_TS:

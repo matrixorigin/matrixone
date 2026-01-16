@@ -1102,7 +1102,7 @@ func ExprIsZonemappable(ctx context.Context, expr *plan.Expr) bool {
 
 		if exprImpl.F.Func.ObjName == "cast" {
 			switch exprImpl.F.Args[0].Typ.Id {
-			case int32(types.T_date), int32(types.T_time), int32(types.T_datetime), int32(types.T_timestamp):
+			case int32(types.T_date), int32(types.T_time), int32(types.T_datetime), int32(types.T_timestamp), int32(types.T_year):
 				if exprImpl.F.Args[1].Typ.Id == int32(types.T_timestamp) {
 					//this cast is monotonic, can safely pushdown to block filters
 					return true
@@ -1861,7 +1861,7 @@ func InitS3Param(param *tree.ExternParam) error {
 			param.S3Param.ExternalId = param.Option[i+1]
 		case "format":
 			format := strings.ToLower(param.Option[i+1])
-			if format != tree.CSV && format != tree.JSONLINE {
+			if format != tree.CSV && format != tree.JSONLINE && format != tree.PARQUET {
 				return moerr.NewBadConfigf(param.Ctx, "the format '%s' is not supported", format)
 			}
 			param.Format = format
@@ -1949,7 +1949,7 @@ func InitStageS3Param(param *tree.ExternParam, s stage.StageDef) error {
 		switch strings.ToLower(param.Option[i]) {
 		case "format":
 			format := strings.ToLower(param.Option[i+1])
-			if format != tree.CSV && format != tree.JSONLINE {
+			if format != tree.CSV && format != tree.JSONLINE && format != tree.PARQUET {
 				return moerr.NewBadConfigf(param.Ctx, "the format '%s' is not supported", format)
 			}
 			param.Format = format
