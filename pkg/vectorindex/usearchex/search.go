@@ -7,7 +7,6 @@ package usearchex
 */
 import "C"
 import (
-	"errors"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
@@ -55,7 +54,7 @@ func FilteredSearchUnsafeWithBloomFilter(
 		(*C.usearch_error_t)(&errorMessage)))
 
 	if errorMessage != nil {
-		return nil, nil, errors.New(C.GoString(errorMessage))
+		return nil, nil, moerr.NewInternalErrorNoCtx(C.GoString(errorMessage))
 	}
 
 	keys = keys[:resultCount]
