@@ -250,7 +250,6 @@ type ParquetHandler struct {
 	mappers  []*columnMapper
 	// nested type support
 	hasNestedCols bool
-	nestedColIdxs []int
 	rowReader     *parquet.Reader
 }
 

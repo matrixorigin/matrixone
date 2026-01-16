@@ -110,7 +110,6 @@ func (h *ParquetHandler) openFile(param *ExternalParam) error {
 func (h *ParquetHandler) prepare(param *ExternalParam) error {
 	h.cols = make([]*parquet.Column, len(param.Attrs))
 	h.mappers = make([]*columnMapper, len(param.Attrs))
-	h.nestedColIdxs = make([]int, 0)
 
 	for _, attr := range param.Attrs {
 		def := param.Cols[attr.ColIndex]
@@ -133,7 +132,6 @@ func (h *ParquetHandler) prepare(param *ExternalParam) error {
 					attr.ColName, targetType.String())
 			}
 			h.hasNestedCols = true
-			h.nestedColIdxs = append(h.nestedColIdxs, int(attr.ColIndex))
 			fn = h.getNestedMapper(col, def.Typ)
 		} else {
 			fn = h.getMapper(col, def.Typ)
