@@ -570,19 +570,21 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, agg.BitmapConstructSupportedTypes)
+			return fixedUnaryAggTypeCheck(inputs, []types.T{types.T_uint64})
 		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
-				args:       agg.BitmapConstructSupportedTypes,
-				retType:    agg.BitmapConstructReturnType,
+				args:       []types.T{types.T_uint64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varbinary.ToType()
+				},
 
 				isAgg: true,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "bitmap_construct_agg",
-					aggRegister: agg.RegisterBitmapConstruct2,
+					aggRegister: agg.RegisterBitmapConstruct,
 				},
 			},
 		},
@@ -594,19 +596,21 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, agg.BitmapOrSupportedTypes)
+			return fixedUnaryAggTypeCheck(inputs, []types.T{types.T_varbinary})
 		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
-				args:       agg.BitmapOrSupportedTypes,
-				retType:    agg.BitmapOrReturnType,
+				args:       []types.T{types.T_varbinary},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varbinary.ToType()
+				},
 
 				isAgg: true,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "bitmap_or_agg",
-					aggRegister: agg.RegisterBitmapOr2,
+					aggRegister: agg.RegisterBitmapOr,
 				},
 			},
 		},

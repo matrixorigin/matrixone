@@ -62,7 +62,7 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 }
 
 func (bc *BindContext) rootTag() int32 {
-	if bc.bindingRecurCte() {
+	if bc.bindingRecurCte() && bc.sinkTag > 0 {
 		return bc.sinkTag
 	} else if bc.resultTag > 0 {
 		return bc.resultTag
