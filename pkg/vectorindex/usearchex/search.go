@@ -46,7 +46,7 @@ func FilteredSearchUnsafeWithBloomFilter(
 	resultCount := uint(C.usearchex_filtered_search_with_bloomfilter(
 		handle,
 		query,
-		C.uint32_t(index.GetConfig().Quantization.CValue()),
+		C.usearch_scalar_kind_t(index.GetConfig().Quantization.CValue()),
 		C.size_t(limit),
 		bfptr,
 		(*C.usearch_key_t)(&keys[0]),
