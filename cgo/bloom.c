@@ -26,6 +26,8 @@ typedef struct {
     uint64_t h2;
 } bloom_hash_t;
 
+#include "varlena.h"
+
 /*
  * Calculates a 128-bit hash (split into two 64-bit halves) for a given key and seed using XXH3.
  */
@@ -240,6 +242,50 @@ void bloomfilter_test_and_add_varlena(const bloomfilter_t *bf, const void *key, 
             br[i] = bloomfilter_test_and_add(bf, k, elemsz);
         }
         k += elemsz;
+    }
+}
+
+void bloomfilter_add_varlena_whole(const bloomfilter_t *bf, const void *keys, size_t nitem, const void *area, size_t area_len, const void *nullmap, size_t nullmaplen) {
+    const uint8_t *v = (const uint8_t *)keys;
+    for (int i = 0; i < nitem; i++) {
+        uint32_t len, next_offset;
+        const uint8_t *data = varlena_get_byte_slice(v, area, &len, &next_offset);
+        if (!nullmap || !bitmap_test((uint64_t *) nullmap, i)) {
+            bloomfilter_add(bf, data, len);
+        }
+        v += next_offset;
+    }
+}
+
+void bloomfilter_test_varlena_whole(const bloomfilter_t *bf, const void *keys, size_t nitem, const void *area, size_t area_len, const void *nullmap, size_t nullmaplen, void *result) {
+    const uint8_t *v = (const uint8_t *)keys;
+    bool *br = (bool *) result;
+
+    for (int i = 0; i < nitem; i++) {
+        uint32_t len, next_offset;
+        const uint8_t *data = varlena_get_byte_slice(v, area, &len, &next_offset);
+        if (nullmap && bitmap_test((uint64_t *) nullmap, i)) {
+            br[i] = false;
+        } else {
+            br[i] = bloomfilter_test(bf, data, len);
+        }
+		v += next_offset;
+    }
+}
+
+void bloomfilter_test_and_add_varlena_whole(const bloomfilter_t *bf, const void *keys, size_t nitem, const void *area, size_t area_len, const void *nullmap, size_t nullmaplen, void *result) {
+    const uint8_t *v = (const uint8_t *)keys;
+    bool *br = (bool *) result;
+
+    for (int i = 0; i < nitem; i++) {
+        uint32_t len, next_offset;
+        const uint8_t *data = varlena_get_byte_slice(v, area, &len, &next_offset);
+        if (nullmap && bitmap_test((uint64_t *) nullmap, i)) {
+            br[i] = false;
+        } else {
+            br[i] = bloomfilter_test_and_add(bf, data, len);
+        }
+        v += next_offset;
     }
 }
 
