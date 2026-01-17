@@ -22,14 +22,16 @@ void varlena_get_offset_len(const varlena_t v, uint32_t *offset, uint32_t *lengt
     *length = p[1];
 }
 
-const uint8_t* varlena_get_byte_slice(const varlena_t v, const uint8_t *area, uint32_t *len) {
+const uint8_t* varlena_get_byte_slice(const varlena_t v, const uint8_t *area, uint32_t *len, uint32_t *next_offset) {
     if (varlena_is_small(v)) {
         *len = (uint32_t) v[0];
+        *next_offset = *len+1;
         return v+1;
     } else {
         uint32_t offset, length;
         varlena_get_offset_len(v, &offset, &length);
         *len = length;
+        *next_offset = sizeof(uint32_t)*2;
         return area + offset;
     }
 }

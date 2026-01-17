@@ -17,7 +17,8 @@ void test_small_varlena() {
     assert(varlena_is_small((varlena_t)v));
     
     uint32_t len;
-    const uint8_t *slice = varlena_get_byte_slice((varlena_t)v, NULL, &len);
+    uint32_t offset;
+    const uint8_t *slice = varlena_get_byte_slice((varlena_t)v, NULL, &len, &offset);
     
     assert(len == test_len);
     assert(strncmp((char *)slice, test_str, len) == 0);
@@ -39,7 +40,6 @@ void test_big_varlena() {
     // and setting offset/length.
     // Note: The current varlena.h doesn't have a setter for big varlena,
     // so we manually craft it.
-    v[0] = VARLENA_INLINE_SIZE + 1; 
     uint32_t* p = (uint32_t*)v;
     p[0] = test_offset; 
     p[1] = test_len;
@@ -55,7 +55,7 @@ void test_big_varlena() {
     assert(length == test_len);
 
     uint32_t slice_len;
-    const uint8_t *slice = varlena_get_byte_slice((varlena_t)v, area, &slice_len);
+    const uint8_t *slice = varlena_get_byte_slice((varlena_t)v, area, &slice_len, &offset);
     
     assert(slice_len == test_len);
     assert(strncmp((char *)slice, test_str, slice_len) == 0);
