@@ -107,7 +107,7 @@ void bloomfilter_add_fixed(const bloomfilter_t *bf, const void *key, size_t len,
     }
 }
 
-void bloomfilter_add_varlena(const bloomfilter_t *bf, const void *key, size_t len, size_t nitem, const void *nullmap, size_t nullmaplen) {
+void bloomfilter_add_varlena_4b(const bloomfilter_t *bf, const void *key, size_t len, size_t nitem, const void *nullmap, size_t nullmaplen) {
     char *k = (char *) key;
     char *start = k;
 
@@ -167,7 +167,7 @@ void bloomfilter_test_fixed(const bloomfilter_t *bf, const void *key, size_t len
  * and then follow with the content
  * format of the keys look likes [size0] [data with size0] [size1] [data with size1]...
  */
-void bloomfilter_test_varlena(const bloomfilter_t *bf, const void *key, size_t len, size_t nitem, const void *nullmap, size_t nullmaplen, void *result) {
+void bloomfilter_test_varlena_4b(const bloomfilter_t *bf, const void *key, size_t len, size_t nitem, const void *nullmap, size_t nullmaplen, void *result) {
     char *k = (char *) key;
     char *start = k;
     bool *br = (bool *) result;
@@ -224,7 +224,7 @@ void bloomfilter_test_and_add_fixed(const bloomfilter_t *bf, const void *key, si
     }
 }
 
-void bloomfilter_test_and_add_varlena(const bloomfilter_t *bf, const void *key, size_t len, size_t nitem,  const void *nullmap, size_t nullmaplen, void *result) {
+void bloomfilter_test_and_add_varlena_4b(const bloomfilter_t *bf, const void *key, size_t len, size_t nitem,  const void *nullmap, size_t nullmaplen, void *result) {
     char *k = (char *) key;
     char *start = k;
     bool *br = (bool *) result;

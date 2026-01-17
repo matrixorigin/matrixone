@@ -84,13 +84,13 @@ void bloomfilter_test_fixed(const bloomfilter_t *bf, const void *key, size_t len
  * Tests multiple variable-length keys and stores boolean results in the result buffer.
  * Keys are expected to be prefixed with a 4-byte length.
  */
-void bloomfilter_test_varlena(const bloomfilter_t *bf, const void *key, size_t len, size_t nitem, const void *nullmap, size_t nullmaplen, void *result);
+void bloomfilter_test_varlena_4b(const bloomfilter_t *bf, const void *key, size_t len, size_t nitem, const void *nullmap, size_t nullmaplen, void *result);
 
 /*
  * Adds multiple variable-length keys to the bloom filter.
  * Keys are expected to be prefixed with a 4-byte length.
  */
-void bloomfilter_add_varlena(const bloomfilter_t *bf, const void *key, size_t len, size_t nitem, const void *nullmap, size_t nullmaplen);
+void bloomfilter_add_varlena_4b(const bloomfilter_t *bf, const void *key, size_t len, size_t nitem, const void *nullmap, size_t nullmaplen);
 
 /*
  * Tests if a key is in the bloom filter and then adds it.
@@ -106,7 +106,7 @@ void bloomfilter_test_and_add_fixed(const bloomfilter_t *bf, const void *key, si
 /*
  * Tests and adds multiple variable-length keys, storing results in the result buffer.
  */
-void bloomfilter_test_and_add_varlena(const bloomfilter_t *bf, const void *key, size_t len, size_t nitem, const void *nullmap, size_t nullmaplen,void *result);
+void bloomfilter_test_and_add_varlena_4b(const bloomfilter_t *bf, const void *key, size_t len, size_t nitem, const void *nullmap, size_t nullmaplen,void *result);
 
 /*
  * Returns a pointer to the raw bytes of the bloom filter for serialization.

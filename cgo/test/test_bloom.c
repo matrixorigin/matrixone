@@ -167,7 +167,7 @@ void test_varlena_ops() {
     uint64_t nullmap = 0;
     bitmap_set(&nullmap, 1);
     
-    bloomfilter_add_varlena(bf, buf, buf_size, 3, &nullmap, sizeof(nullmap));
+    bloomfilter_add_varlena_4b(bf, buf, buf_size, 3, &nullmap, sizeof(nullmap));
     
     CHECK(bloomfilter_test(bf, "one", 3), "'one' should be present");
     CHECK(!bloomfilter_test(bf, "two", 3), "'two' should NOT be present");
@@ -176,7 +176,7 @@ void test_varlena_ops() {
     // Test test_varlena
     // Use same buffer
     bool results[3];
-    bloomfilter_test_varlena(bf, buf, buf_size, 3, NULL, 0, results);
+    bloomfilter_test_varlena_4b(bf, buf, buf_size, 3, NULL, 0, results);
     CHECK(results[0], "'one' found");
     CHECK(!results[1], "'two' not found");
     CHECK(results[2], "'three' found");
@@ -184,7 +184,7 @@ void test_varlena_ops() {
     // Test test_and_add_varlena
     // Reuse buffer, but this time add everything (no nullmap)
     bool taa_results[3];
-    bloomfilter_test_and_add_varlena(bf, buf, buf_size, 3, NULL, 0, taa_results);
+    bloomfilter_test_and_add_varlena_4b(bf, buf, buf_size, 3, NULL, 0, taa_results);
     
     CHECK(taa_results[0], "'one' already there");
     CHECK(!taa_results[1], "'two' not there (was null)");
