@@ -171,43 +171,26 @@ func (bf *CBloomFilter) testAndAddFixedVector(v *vector.Vector, callBack func(bo
 	fixedData := v.GetData()
 	typeSize := v.GetType().TypeSize()
 	length := v.Length()
-	const chunkSize = 256
 	nulls := v.GetNulls()
 	nullbm := nulls.GetBitmap()
 
-	var nullptr *uint64
-	var nulllen int
+	var nullptr unsafe.Pointer
+	var nulllen C.size_t
 	if nullbm != nil {
-		nullptr = nullbm.Ptr()
-		nulllen = nullbm.Size()
+		nullptr = unsafe.Pointer(nullbm.Ptr())
+		nulllen = C.size_t(nullbm.Size())
 	}
 
-	results := make([]uint8, chunkSize)
-	for i := 0; i < length; i += chunkSize {
-		end := i + chunkSize
-		if end > length {
-			end = length
-		}
-		nitem := end - i
-		buf := fixedData[i*typeSize : end*typeSize : end*typeSize]
-		var curNullPtr unsafe.Pointer
-		var curNullLen C.size_t
-		if nullptr != nil {
-			offset := (i / 64) * 8
-			if offset < nulllen {
-				curNullPtr = unsafe.Pointer(uintptr(unsafe.Pointer(nullptr)) + uintptr(offset))
-				curNullLen = C.size_t(nulllen - offset)
-			}
-		}
-		C.bloomfilter_test_and_add_fixed(bf.ptr, unsafe.Pointer(&buf[0]), C.size_t(len(buf)), C.size_t(typeSize), C.size_t(nitem), curNullPtr, curNullLen, unsafe.Pointer(&results[0]))
-		runtime.KeepAlive(buf)
-		if callBack != nil {
-			for j := 0; j < nitem; j++ {
-				callBack(results[j] != 0, nulls.Contains(uint64(i+j)), i+j)
-			}
+	results := make([]uint8, length)
+	C.bloomfilter_test_and_add_fixed(bf.ptr, unsafe.Pointer(&fixedData[0]), C.size_t(len(fixedData)), C.size_t(typeSize), C.size_t(length), nullptr, nulllen, unsafe.Pointer(&results[0]))
+	runtime.KeepAlive(fixedData)
+	runtime.KeepAlive(nullptr)
+
+	if callBack != nil {
+		for j := 0; j < length; j++ {
+			callBack(results[j] != 0, nulls.Contains(uint64(j)), j)
 		}
 	}
-	runtime.KeepAlive(nullptr)
 }
 
 func (bf *CBloomFilter) testAndAddVarlenaVector(v *vector.Vector, callBack func(bool, bool, int)) {
@@ -244,44 +227,26 @@ func (bf *CBloomFilter) testFixedVector(v *vector.Vector, callBack func(bool, bo
 	fixedData := v.GetData()
 	typeSize := v.GetType().TypeSize()
 	length := v.Length()
-	const chunkSize = 256
 	nulls := v.GetNulls()
 	nullbm := nulls.GetBitmap()
 
-	var nullptr *uint64
-	var nulllen int
+	var nullptr unsafe.Pointer
+	var nulllen C.size_t
 	if nullbm != nil {
-		nullptr = nullbm.Ptr()
-		nulllen = nullbm.Size()
+		nullptr = unsafe.Pointer(nullbm.Ptr())
+		nulllen = C.size_t(nullbm.Size())
 	}
 
-	results := make([]uint8, chunkSize)
-	for i := 0; i < length; i += chunkSize {
-		end := i + chunkSize
-		if end > length {
-			end = length
-		}
-		nitem := end - i
-		buf := fixedData[i*typeSize : end*typeSize : end*typeSize]
-
-		var curNullPtr unsafe.Pointer
-		var curNullLen C.size_t
-		if nullptr != nil {
-			offset := (i / 64) * 8
-			if offset < nulllen {
-				curNullPtr = unsafe.Pointer(uintptr(unsafe.Pointer(nullptr)) + uintptr(offset))
-				curNullLen = C.size_t(nulllen - offset)
-			}
-		}
-		C.bloomfilter_test_fixed(bf.ptr, unsafe.Pointer(&buf[0]), C.size_t(len(buf)), C.size_t(typeSize), C.size_t(nitem), curNullPtr, curNullLen, unsafe.Pointer(&results[0]))
-		runtime.KeepAlive(buf)
-		if callBack != nil {
-			for j := 0; j < nitem; j++ {
-				callBack(results[j] != 0, nulls.Contains(uint64(i+j)), i+j)
-			}
-		}
-	}
+	results := make([]uint8, length)
+	C.bloomfilter_test_fixed(bf.ptr, unsafe.Pointer(&fixedData[0]), C.size_t(len(fixedData)), C.size_t(typeSize), C.size_t(length), nullptr, nulllen, unsafe.Pointer(&results[0]))
+	runtime.KeepAlive(fixedData)
 	runtime.KeepAlive(nullptr)
+
+	if callBack != nil {
+		for j := 0; j < length; j++ {
+			callBack(results[j] != 0, nulls.Contains(uint64(j)), j)
+		}
+	}
 }
 
 func (bf *CBloomFilter) testVarlenaVector(v *vector.Vector, callBack func(bool, bool, int)) {
@@ -319,40 +284,20 @@ func (bf *CBloomFilter) addFixedVector(v *vector.Vector) {
 	fixedData := v.GetData()
 	typeSize := v.GetType().TypeSize()
 	length := v.Length()
-	const chunkSize = 256
 	nulls := v.GetNulls()
 	nullbm := nulls.GetBitmap()
 
-	var nullptr *uint64
-	var nulllen int
+	var nullptr unsafe.Pointer
+	var nulllen C.size_t
 	if nullbm != nil {
-		nullptr = nullbm.Ptr()
-		nulllen = nullbm.Size()
+		nullptr = unsafe.Pointer(nullbm.Ptr())
+		nulllen = C.size_t(nullbm.Size())
 	}
 
-	for i := 0; i < length; i += chunkSize {
-		end := i + chunkSize
-		if end > length {
-			end = length
-		}
-		nitem := end - i
-		buf := fixedData[i*typeSize : end*typeSize : end*typeSize]
-
-		var curNullPtr unsafe.Pointer
-		var curNullLen C.size_t
-		if nullptr != nil {
-			offset := (i / 64) * 8
-			if offset < nulllen {
-				curNullPtr = unsafe.Pointer(uintptr(unsafe.Pointer(nullptr)) + uintptr(offset))
-				curNullLen = C.size_t(nulllen - offset)
-			}
-		}
-		C.bloomfilter_add_fixed(bf.ptr, unsafe.Pointer(&buf[0]), C.size_t(len(buf)), C.size_t(typeSize), C.size_t(nitem), curNullPtr, curNullLen)
-		runtime.KeepAlive(buf)
-	}
+	C.bloomfilter_add_fixed(bf.ptr, unsafe.Pointer(&fixedData[0]), C.size_t(len(fixedData)), C.size_t(typeSize), C.size_t(length), nullptr, nulllen)
+	runtime.KeepAlive(fixedData)
 	runtime.KeepAlive(nullptr)
 }
-
 func (bf *CBloomFilter) addVarlenaVector(v *vector.Vector) {
 	if v.Length() == 0 {
 		return
