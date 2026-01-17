@@ -228,7 +228,7 @@ func (bf *CBloomFilter) testAndAddVarlenaVector(v *vector.Vector, callBack func(
 	}
 
 	results := make([]uint8, length)
-	C.bloomfilter_test_and_add_varlena_whole(bf.ptr, unsafe.Pointer(&varlenData[0]), C.size_t(length), unsafe.Pointer(unsafe.SliceData(area)), C.size_t(len(area)), unsafe.Pointer(nullptr), C.size_t(nulllen), unsafe.Pointer(&results[0]))
+	C.bloomfilter_test_and_add_varlena(bf.ptr, unsafe.Pointer(&varlenData[0]), C.size_t(length), unsafe.Pointer(unsafe.SliceData(area)), C.size_t(len(area)), unsafe.Pointer(nullptr), C.size_t(nulllen), unsafe.Pointer(&results[0]))
 
 	if callBack != nil {
 		for j := 0; j < length; j++ {
@@ -302,7 +302,7 @@ func (bf *CBloomFilter) testVarlenaVector(v *vector.Vector, callBack func(bool, 
 	}
 
 	results := make([]uint8, length)
-	C.bloomfilter_test_varlena_whole(bf.ptr, unsafe.Pointer(&varlenData[0]), C.size_t(length), unsafe.Pointer(unsafe.SliceData(area)), C.size_t(len(area)), unsafe.Pointer(nullptr), C.size_t(nulllen), unsafe.Pointer(&results[0]))
+	C.bloomfilter_test_varlena(bf.ptr, unsafe.Pointer(&varlenData[0]), C.size_t(length), unsafe.Pointer(unsafe.SliceData(area)), C.size_t(len(area)), unsafe.Pointer(nullptr), C.size_t(nulllen), unsafe.Pointer(&results[0]))
 
 	if callBack != nil {
 		for j := 0; j < length; j++ {
@@ -369,7 +369,7 @@ func (bf *CBloomFilter) addVarlenaVector(v *vector.Vector) {
 		nulllen = nullbm.Size()
 	}
 
-	C.bloomfilter_add_varlena_whole(bf.ptr, unsafe.Pointer(&varlenData[0]), C.size_t(v.Length()), unsafe.Pointer(unsafe.SliceData(area)), C.size_t(len(area)), unsafe.Pointer(nullptr), C.size_t(nulllen))
+	C.bloomfilter_add_varlena(bf.ptr, unsafe.Pointer(&varlenData[0]), C.size_t(v.Length()), unsafe.Pointer(unsafe.SliceData(area)), C.size_t(len(area)), unsafe.Pointer(nullptr), C.size_t(nulllen))
 	runtime.KeepAlive(varlenData)
 	runtime.KeepAlive(area)
 	runtime.KeepAlive(nullptr)
