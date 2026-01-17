@@ -63,11 +63,7 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 		return err
 	}
 
-	if group.NeedEval {
-		group.ctr.setSpillMem(group.SpillMem, group.Aggs)
-	} else {
-		group.ctr.setSpillMem(group.SpillMem/8, group.Aggs)
-	}
+	group.ctr.setSpillMem(group.SpillMem, group.Aggs)
 	return nil
 }
 
