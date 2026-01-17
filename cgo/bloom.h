@@ -125,20 +125,20 @@ bloomfilter_t* bloomfilter_unmarshal(const uint8_t *buf, size_t len);
  * keys: pointer to the start of Varlena array.
  * area: pointer to the start of area buffer.
  */
-void bloomfilter_add_varlena_whole(const bloomfilter_t *bf, const void *keys, size_t nitem, const void *area, size_t area_len, const void *nullmap, size_t nullmaplen);
+void bloomfilter_add_varlena(const bloomfilter_t *bf, const void *keys, size_t nitem, const void *area, size_t area_len, const void *nullmap, size_t nullmaplen);
 
 /*
  * Tests multiple variable-length keys and stores boolean results in the result buffer.
  * keys: pointer to the start of Varlena array.
  * area: pointer to the start of area buffer.
  */
-void bloomfilter_test_varlena_whole(const bloomfilter_t *bf, const void *keys, size_t nitem, const void *area, size_t area_len, const void *nullmap, size_t nullmaplen, void *result);
+void bloomfilter_test_varlena(const bloomfilter_t *bf, const void *keys, size_t nitem, const void *area, size_t area_len, const void *nullmap, size_t nullmaplen, void *result);
 
 /*
  * Tests and adds multiple variable-length keys, storing results in the result buffer.
  * keys: pointer to the start of Varlena array.
  * area: pointer to the start of area buffer.
  */
-void bloomfilter_test_and_add_varlena_whole(const bloomfilter_t *bf, const void *keys, size_t nitem, const void *area, size_t area_len, const void *nullmap, size_t nullmaplen, void *result);
+void bloomfilter_test_and_add_varlena(const bloomfilter_t *bf, const void *keys, size_t nitem, const void *area, size_t area_len, const void *nullmap, size_t nullmaplen, void *result);
 
 #endif /* _BLOOM_H_ */

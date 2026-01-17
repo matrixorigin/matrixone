@@ -245,7 +245,7 @@ void bloomfilter_test_and_add_varlena_4b(const bloomfilter_t *bf, const void *ke
     }
 }
 
-void bloomfilter_add_varlena_whole(const bloomfilter_t *bf, const void *keys, size_t nitem, const void *area, size_t area_len, const void *nullmap, size_t nullmaplen) {
+void bloomfilter_add_varlena(const bloomfilter_t *bf, const void *keys, size_t nitem, const void *area, size_t area_len, const void *nullmap, size_t nullmaplen) {
     const uint8_t *v = (const uint8_t *)keys;
     for (int i = 0; i < nitem; i++) {
         uint32_t len, next_offset;
@@ -257,7 +257,7 @@ void bloomfilter_add_varlena_whole(const bloomfilter_t *bf, const void *keys, si
     }
 }
 
-void bloomfilter_test_varlena_whole(const bloomfilter_t *bf, const void *keys, size_t nitem, const void *area, size_t area_len, const void *nullmap, size_t nullmaplen, void *result) {
+void bloomfilter_test_varlena(const bloomfilter_t *bf, const void *keys, size_t nitem, const void *area, size_t area_len, const void *nullmap, size_t nullmaplen, void *result) {
     const uint8_t *v = (const uint8_t *)keys;
     bool *br = (bool *) result;
 
@@ -273,7 +273,7 @@ void bloomfilter_test_varlena_whole(const bloomfilter_t *bf, const void *keys, s
     }
 }
 
-void bloomfilter_test_and_add_varlena_whole(const bloomfilter_t *bf, const void *keys, size_t nitem, const void *area, size_t area_len, const void *nullmap, size_t nullmaplen, void *result) {
+void bloomfilter_test_and_add_varlena(const bloomfilter_t *bf, const void *keys, size_t nitem, const void *area, size_t area_len, const void *nullmap, size_t nullmaplen, void *result) {
     const uint8_t *v = (const uint8_t *)keys;
     bool *br = (bool *) result;
 
