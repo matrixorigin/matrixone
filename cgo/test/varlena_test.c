@@ -17,8 +17,7 @@ void test_small_varlena() {
     assert(varlena_is_small(v));
     
     uint32_t len;
-    uint32_t offset;
-    const uint8_t *slice = varlena_get_byte_slice(v, NULL, &len, &offset);
+    const uint8_t *slice = varlena_get_byte_slice(v, NULL, &len);
     
     assert(len == test_len);
     assert(strncmp((char *)slice, test_str, len) == 0);
@@ -45,14 +44,13 @@ void test_big_varlena() {
 
     assert(!varlena_is_small(v));
 
-    uint32_t offset, length, next_offset;
-    varlena_get_big_offset_len(v, &offset, &length, &next_offset);
+    uint32_t offset, length;
+    varlena_get_big_offset_len(v, &offset, &length);
     assert(offset == test_offset);
     assert(length == test_len);
-    assert(next_offset == VARLENA_SIZE);
 
     uint32_t slice_len;
-    const uint8_t *slice = varlena_get_byte_slice(v, area, &slice_len, &offset);
+    const uint8_t *slice = varlena_get_byte_slice(v, area, &slice_len);
     
     assert(slice_len == test_len);
     assert(strncmp((char *)slice, test_str, slice_len) == 0);
@@ -95,27 +93,24 @@ void test_multi_varlena_buffer() {
 
     // --- Traverse and check ---
     uint8_t *v = buffer;
-    uint32_t next_offset;
 
     // Check element 1
     uint32_t current_len1;
-    const uint8_t *current_data1 = varlena_get_byte_slice(v, area, &current_len1, &next_offset);
+    const uint8_t *current_data1 = varlena_get_byte_slice(v, area, &current_len1);
     assert(current_len1 == len1);
     assert(memcmp(current_data1, str1, len1) == 0);
-    assert(next_offset == VARLENA_SIZE);
-    v += next_offset;
+    v += VARLENA_SIZE;
 
     // Check element 2
     uint32_t current_len2;
-    const uint8_t *current_data2 = varlena_get_byte_slice(v, area, &current_len2, &next_offset);
+    const uint8_t *current_data2 = varlena_get_byte_slice(v, area, &current_len2);
     assert(current_len2 == len2);
     assert(memcmp(current_data2, str2, len2) == 0);
-    assert(next_offset == VARLENA_SIZE);
-    v += next_offset;
+    v += VARLENA_SIZE;
 
     // Check element 3
     uint32_t current_len3;
-    const uint8_t *current_data3 = varlena_get_byte_slice(v, area, &current_len3, &next_offset);
+    const uint8_t *current_data3 = varlena_get_byte_slice(v, area, &current_len3);
     assert(current_len3 == len3);
     assert(memcmp(current_data3, str3, len3) == 0);
     

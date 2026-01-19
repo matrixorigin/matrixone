@@ -246,47 +246,48 @@ void bloomfilter_test_and_add_varlena_4b(const bloomfilter_t *bf, const void *ke
     }
 }
 
-void bloomfilter_add_varlena(const bloomfilter_t *bf, const void *keys, size_t nitem, const void *area, size_t area_len, const void *nullmap, size_t nullmaplen) {
+void bloomfilter_add_varlena(const bloomfilter_t *bf, const void *keys, size_t len, size_t elemsz, size_t nitem, const void *area, size_t area_len, const void *nullmap, size_t nullmaplen) {
     const uint8_t *v = (const uint8_t *)keys;
-    for (int i = 0; i < nitem; i++) {
-        uint32_t len, next_offset;
-        const uint8_t *data = varlena_get_byte_slice(v, area, &len, &next_offset);
+
+    for (int i = 0, j = 0; i < nitem && j < len; i++, j += elemsz) {
+        uint32_t vlen;
+        const uint8_t *data = varlena_get_byte_slice(v, area, &vlen);
         if (!nullmap || !bitmap_test((uint64_t *) nullmap, i)) {
-            bloomfilter_add(bf, data, len);
+            bloomfilter_add(bf, data, vlen);
         }
-        v += next_offset;
+        v += elemsz;
     }
 }
 
-void bloomfilter_test_varlena(const bloomfilter_t *bf, const void *keys, size_t nitem, const void *area, size_t area_len, const void *nullmap, size_t nullmaplen, void *result) {
+void bloomfilter_test_varlena(const bloomfilter_t *bf, const void *keys, size_t len, size_t elemsz, size_t nitem, const void *area, size_t area_len, const void *nullmap, size_t nullmaplen, void *result) {
     const uint8_t *v = (const uint8_t *)keys;
     bool *br = (bool *) result;
 
-    for (int i = 0; i < nitem; i++) {
-        uint32_t len, next_offset;
-        const uint8_t *data = varlena_get_byte_slice(v, area, &len, &next_offset);
+    for (int i = 0, j = 0; i < nitem && j < len; i++, j += elemsz) {
+        uint32_t vlen;
+        const uint8_t *data = varlena_get_byte_slice(v, area, &vlen);
         if (nullmap && bitmap_test((uint64_t *) nullmap, i)) {
             br[i] = false;
         } else {
-            br[i] = bloomfilter_test(bf, data, len);
+            br[i] = bloomfilter_test(bf, data, vlen);
         }
-		v += next_offset;
+        v += elemsz;
     }
 }
 
-void bloomfilter_test_and_add_varlena(const bloomfilter_t *bf, const void *keys, size_t nitem, const void *area, size_t area_len, const void *nullmap, size_t nullmaplen, void *result) {
+void bloomfilter_test_and_add_varlena(const bloomfilter_t *bf, const void *keys, size_t len, size_t elemsz, size_t nitem, const void *area, size_t area_len, const void *nullmap, size_t nullmaplen, void *result) {
     const uint8_t *v = (const uint8_t *)keys;
     bool *br = (bool *) result;
 
-    for (int i = 0; i < nitem; i++) {
-        uint32_t len, next_offset;
-        const uint8_t *data = varlena_get_byte_slice(v, area, &len, &next_offset);
+    for (int i = 0, j = 0; i < nitem && j < len; i++, j += elemsz) {
+        uint32_t vlen;
+        const uint8_t *data = varlena_get_byte_slice(v, area, &vlen);
         if (nullmap && bitmap_test((uint64_t *) nullmap, i)) {
             br[i] = false;
         } else {
-            br[i] = bloomfilter_test_and_add(bf, data, len);
+            br[i] = bloomfilter_test_and_add(bf, data, vlen);
         }
-        v += next_offset;
+        v += elemsz;
     }
 }
 
