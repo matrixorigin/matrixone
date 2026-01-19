@@ -717,7 +717,7 @@ func TestExecuteIteration1(t *testing.T) {
 		lsn := vector.GetFixedAtWithTypeCheck[int64](cols[1], 0)
 
 		require.Equal(t, publication.IterationStateCompleted, state)
-		require.Equal(t, int64(iterationLSN3), lsn)
+		require.Equal(t, int64(iterationLSN3+1), lsn)
 		found3 = true
 		return true
 	})

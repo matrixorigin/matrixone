@@ -354,6 +354,23 @@ func (exec *PublicationTaskExecutor) run(ctx context.Context) {
 			}
 			// get candidate tasks and trigger if state is not completed
 			candidateTasks := exec.getCandidateTasks()
+			if len(candidateTasks) == 0 {
+				continue
+			}
+			// check lease before submitting tasks
+			ok, err := CheckLeaseWithRetry(exec.ctx, exec.cnUUID, exec.txnEngine, exec.cnTxnClient)
+			if err != nil {
+				logutil.Error(
+					"Publication-Task check lease failed",
+					zap.Error(err),
+				)
+				continue
+			}
+			if !ok {
+				logutil.Error("Publication-Task lease check failed, stopping executor")
+				go exec.Stop()
+				break
+			}
 			for _, task := range candidateTasks {
 				// Only trigger tasks that are not completed
 				err = exec.worker.Submit(task.taskID, task.lsn, task.state)

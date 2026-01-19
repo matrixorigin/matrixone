@@ -660,7 +660,7 @@ func CheckIterationStatus(
 	// Execute SQL query using system account context
 	// mo_ccpr_log is a system table, so we must use system account
 	systemCtx := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-	ctxWithTimeout,cancel := context.WithTimeout(systemCtx, time.Minute)
+	ctxWithTimeout, cancel := context.WithTimeout(systemCtx, time.Minute)
 	defer cancel()
 	result, err := executor.ExecSQL(ctxWithTimeout, nil, querySQL, false, false)
 	if err != nil {
