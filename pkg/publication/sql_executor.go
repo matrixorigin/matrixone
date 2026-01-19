@@ -158,8 +158,10 @@ type SQLExecutor interface {
 	Connect() error
 	StartTxn(ctx context.Context) error
 	EndTxn(ctx context.Context, commit bool) error
-	ExecSQL(ctx context.Context, query string) (*Result, error)
-	ExecSQLWithOptions(ctx context.Context, ar *ActiveRoutine, query string, needRetry bool) (*Result, error)
+	// ExecSQL executes a SQL statement with options
+	// useTxn: if true, execute within a transaction (must have active transaction for InternalSQLExecutor, not allowed for UpstreamExecutor)
+	// if false, execute as autocommit (will create and commit transaction automatically for InternalSQLExecutor)
+	ExecSQL(ctx context.Context, ar *ActiveRoutine, query string, useTxn bool, needRetry bool) (*Result, error)
 	HasActiveTx() bool
 }
 
@@ -294,7 +296,7 @@ func initAesKeyForPublication(ctx context.Context, executor SQLExecutor, cnUUID 
 	// Query the data key from mo_data_key table
 	querySQL := cdc.CDCSQLBuilder.GetDataKeySQL(uint64(catalog.System_Account), cdc.InitKeyId)
 	systemCtx := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-	result, err := executor.ExecSQL(systemCtx, querySQL)
+	result, err := executor.ExecSQL(systemCtx, nil, querySQL, false, false)
 	if err != nil {
 		return err
 	}
@@ -552,23 +554,20 @@ func (e *UpstreamExecutor) EndTxn(ctx context.Context, commit bool) error {
 	return err
 }
 
-// ExecSQL executes a SQL statement and returns the result (implements UpstreamExecutor interface)
-// If a transaction is active, executes within the transaction.
-// Otherwise, executes as a standalone statement.
-// By default, retry is enabled. Use ExecSQLWithOptions for more control.
-func (e *UpstreamExecutor) ExecSQL(ctx context.Context, query string) (*Result, error) {
-	return e.ExecSQLWithOptions(ctx, nil, query, true)
-}
-
-// ExecSQLWithOptions executes a SQL statement with additional options
-// If a transaction is active, executes within the transaction.
-// Otherwise, executes as a standalone statement.
-func (e *UpstreamExecutor) ExecSQLWithOptions(
+// ExecSQL executes a SQL statement with options
+// useTxn: must be false for UpstreamExecutor (transaction not supported, will error if true)
+// UpstreamExecutor always uses connection-level autocommit (no explicit transactions)
+func (e *UpstreamExecutor) ExecSQL(
 	ctx context.Context,
 	ar *ActiveRoutine,
 	query string,
+	useTxn bool,
 	needRetry bool,
 ) (*Result, error) {
+	// UpstreamExecutor does not support explicit transactions
+	if useTxn {
+		return nil, moerr.NewInternalError(ctx, "UpstreamExecutor does not support transactions. Use useTxn=false")
+	}
 	if err := e.ensureConnection(ctx); err != nil {
 		return nil, err
 	}
@@ -578,13 +577,10 @@ func (e *UpstreamExecutor) ExecSQLWithOptions(
 			return nil, err
 		}
 
+		// UpstreamExecutor always uses connection (autocommit), not transaction
 		var rows *sql.Rows
 		var err error
-		if e.tx != nil {
-			rows, err = e.tx.QueryContext(ctx, query)
-		} else {
-			rows, err = e.conn.QueryContext(ctx, query)
-		}
+		rows, err = e.conn.QueryContext(ctx, query)
 		if err != nil {
 			e.logFailedSQL(err, query)
 			return nil, err

@@ -237,7 +237,6 @@ func checkDBFlushTS(
 	engine *disttae.Engine,
 	record *snapshotRecord,
 ) (flushed bool, err error) {
-	defer logutil.Infof("lalala check db flush ts")
 	db, err := engine.Database(ctx, dbName, txn)
 	if err != nil {
 		return false, err

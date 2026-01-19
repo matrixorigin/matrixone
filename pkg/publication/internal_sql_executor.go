@@ -201,21 +201,23 @@ func (e *InternalSQLExecutor) EndTxn(ctx context.Context, commit bool) error {
 	return err
 }
 
-// ExecSQL executes a SQL statement and returns the result
-func (e *InternalSQLExecutor) ExecSQL(ctx context.Context, query string) (*Result, error) {
-	return e.ExecSQLWithOptions(ctx, nil, query, false)
-}
-
-// ExecSQLWithOptions executes a SQL statement with additional options
+// ExecSQL executes a SQL statement with options
+// useTxn: if true, execute within a transaction (requires active transaction, will error if txnOp is nil)
+// if false, execute as autocommit (will create and commit transaction automatically)
 // It supports automatic retry for RC mode transaction errors (txn need retry errors)
 // If session is set and the statement is CREATE/DROP SNAPSHOT, OBJECTLIST, or GET OBJECT,
 // it will be routed through frontend layer
-func (e *InternalSQLExecutor) ExecSQLWithOptions(
+func (e *InternalSQLExecutor) ExecSQL(
 	ctx context.Context,
 	ar *ActiveRoutine,
 	query string,
+	useTxn bool,
 	needRetry bool,
 ) (*Result, error) {
+	// If useTxn is true, check if transaction is available
+	if useTxn && e.txnOp == nil {
+		return nil, moerr.NewInternalError(ctx, "transaction required but no active transaction found. Call StartTxn() or SetTxn() first")
+	}
 	// Check for cancellation
 	if ar != nil {
 		select {
@@ -248,7 +250,8 @@ func (e *InternalSQLExecutor) ExecSQLWithOptions(
 	opts := executor.Options{}.
 		WithDisableIncrStatement()
 
-	if e.txnOp != nil {
+	// Only use transaction if useTxn is true and txnOp is available
+	if useTxn && e.txnOp != nil {
 		opts = opts.WithTxn(e.txnOp)
 	}
 

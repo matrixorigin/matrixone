@@ -143,7 +143,7 @@ func InitializeIterationContext(
 	// mo_ccpr_log is a system table, so we must use system account context
 	systemCtx := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	querySQL := PublicationSQLBuilder.QueryMoCcprLogFullSQL(taskID)
-	result, err := localExecutor.ExecSQL(systemCtx, querySQL)
+	result, err := localExecutor.ExecSQL(systemCtx, nil, querySQL, true, false)
 	if err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "failed to query mo_ccpr_log: %v", err)
 	}
@@ -395,6 +395,7 @@ func UpdateIterationState(
 	iterationLSN uint64,
 	iterationCtx *IterationContext,
 	errorMessage string,
+	useTxn bool,
 	subscriptionState int8,
 ) error {
 	if executor == nil {
@@ -472,7 +473,7 @@ func UpdateIterationState(
 	// Execute update SQL using system account context
 	// mo_ccpr_log is a system table, so we must use system account
 	systemCtx := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-	result, err := executor.ExecSQL(systemCtx, updateSQL)
+	result, err := executor.ExecSQL(systemCtx, nil, updateSQL, useTxn, false)
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to execute update SQL: %v", err)
 	}
@@ -490,6 +491,7 @@ func UpdateIterationStateNoSubscriptionState(
 	iterationState int8,
 	iterationLSN uint64,
 	iterationCtx *IterationContext,
+	useTxn bool,
 	errorMessage string,
 ) error {
 	if executor == nil {
@@ -565,7 +567,7 @@ func UpdateIterationStateNoSubscriptionState(
 	// Execute update SQL using system account context
 	// mo_ccpr_log is a system table, so we must use system account
 	systemCtx := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-	result, err := executor.ExecSQL(systemCtx, updateSQL)
+	result, err := executor.ExecSQL(systemCtx, nil, updateSQL, useTxn, false)
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to execute update SQL: %v", err)
 	}
@@ -589,7 +591,7 @@ func CheckStateBeforeUpdate(
 	// Execute SQL query using system account context
 	// mo_ccpr_log is a system table, so we must use system account
 	systemCtx := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-	result, err := executor.ExecSQL(systemCtx, querySQL)
+	result, err := executor.ExecSQL(systemCtx, nil, querySQL, false, false)
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to execute state check query: %v", err)
 	}
@@ -631,7 +633,8 @@ func CheckStateBeforeUpdate(
 
 // CheckIterationStatus checks the iteration status in mo_ccpr_log table
 // It verifies that cn_uuid, iteration_lsn match the expected values,
-// and that iteration_state is completed
+// and that iteration_state is pending
+// If all checks pass, it updates iteration_state to running using the existing executor
 func CheckIterationStatus(
 	ctx context.Context,
 	executor SQLExecutor,
@@ -645,14 +648,14 @@ func CheckIterationStatus(
 	// Execute SQL query using system account context
 	// mo_ccpr_log is a system table, so we must use system account
 	systemCtx := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-	result, err := executor.ExecSQL(systemCtx, querySQL)
+	result, err := executor.ExecSQL(systemCtx, nil, querySQL, false, false)
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to execute query: %v", err)
 	}
 	defer result.Close()
 
 	// Scan the result - expecting columns: cn_uuid, iteration_state, iteration_lsn
-	var cnUUID sql.NullString
+	var cnUUIDFromDB sql.NullString
 	var iterationState int8
 	var iterationLSN uint64
 
@@ -663,7 +666,7 @@ func CheckIterationStatus(
 		return moerr.NewInternalErrorf(ctx, "no rows returned for task_id %d", taskID)
 	}
 
-	if err := result.Scan(&cnUUID, &iterationState, &iterationLSN); err != nil {
+	if err := result.Scan(&cnUUIDFromDB, &iterationState, &iterationLSN); err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to scan query result: %v", err)
 	}
 
@@ -673,11 +676,11 @@ func CheckIterationStatus(
 	}
 
 	// Check if cn_uuid matches
-	if !cnUUID.Valid {
+	if !cnUUIDFromDB.Valid {
 		return moerr.NewInternalErrorf(ctx, "cn_uuid is null for task_id %d", taskID)
 	}
-	if cnUUID.String != expectedCNUUID {
-		return moerr.NewInternalErrorf(ctx, "cn_uuid mismatch: expected %s, got %s", expectedCNUUID, cnUUID.String)
+	if cnUUIDFromDB.String != expectedCNUUID {
+		return moerr.NewInternalErrorf(ctx, "cn_uuid mismatch: expected %s, got %s", expectedCNUUID, cnUUIDFromDB.String)
 	}
 
 	// Check if iteration_lsn matches
@@ -685,9 +688,22 @@ func CheckIterationStatus(
 		return moerr.NewInternalErrorf(ctx, "iteration_lsn mismatch: expected %d, got %d", expectedIterationLSN, iterationLSN)
 	}
 
-	// Check if iteration_state is completed
+	// Check if iteration_state is pending
 	if iterationState != IterationStatePending {
 		return moerr.NewInternalErrorf(ctx, "iteration_state is not pending: expected %d (pending), got %d", IterationStatePending, iterationState)
+	}
+
+	// All checks passed, update iteration_state to running using the existing executor
+	// Build update SQL to set iteration_state to running
+	updateSQL := PublicationSQLBuilder.UpdateMoCcprLogIterationStateOnlySQL(taskID, IterationStateRunning)
+
+	// Execute update SQL using system account context
+	updateResult, err := executor.ExecSQL(systemCtx, nil, updateSQL, false, false)
+	if err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to execute update SQL: %v", err)
+	}
+	if updateResult != nil {
+		updateResult.Close()
 	}
 
 	return nil
@@ -752,7 +768,7 @@ func RequestUpstreamSnapshot(
 	}
 
 	// Execute SQL through upstream executor (account ID is handled internally)
-	result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, createSnapshotSQL)
+	result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, nil, createSnapshotSQL, false, true)
 	if err != nil {
 		// Check if error is due to snapshot already existing
 		errMsg := err.Error()
@@ -791,7 +807,7 @@ func RequestUpstreamSnapshot(
 
 func querySnapshotTS(ctx context.Context, upstreamExecutor SQLExecutor, snapshotName string) (types.TS, error) {
 	querySnapshotTsSQL := PublicationSQLBuilder.QuerySnapshotTsSQL(snapshotName)
-	tsResult, err := upstreamExecutor.ExecSQL(ctx, querySnapshotTsSQL)
+	tsResult, err := upstreamExecutor.ExecSQL(ctx, nil, querySnapshotTsSQL, false, true)
 	if err != nil {
 		return types.TS{}, moerr.NewInternalErrorf(ctx, "failed to query snapshot TS: %v", err)
 	}
@@ -876,7 +892,7 @@ func WaitForSnapshotFlushed(
 		}
 
 		// Execute check snapshot flushed SQL
-		result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, checkSQL)
+		result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, nil, checkSQL, false, true)
 		if err != nil {
 			logutil.Warn("ccpr-iteration check snapshot flushed failed",
 				zap.String("snapshot_name", snapshotName),
@@ -951,7 +967,7 @@ func DropPreviousUpstreamSnapshot(
 	dropSnapshotSQL := PublicationSQLBuilder.DropSnapshotIfExistsSQL(iterationCtx.PrevSnapshotName)
 
 	// Execute SQL through upstream executor
-	result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, dropSnapshotSQL)
+	result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, nil, dropSnapshotSQL, false, true)
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to drop previous snapshot %s: %v", iterationCtx.PrevSnapshotName, err)
 	}
@@ -1017,7 +1033,7 @@ func GetObjectListFromSnapshotDiff(
 	)
 
 	// Execute SQL through upstream executor and return result directly
-	result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, objectListSQL)
+	result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, nil, objectListSQL, false, true)
 	if err != nil {
 		logutil.Error("ccpr-iteration failed to get object list",
 			zap.Uint64("task_id", iterationCtx.TaskID),
@@ -1136,7 +1152,7 @@ func ExecuteIteration(
 				subscriptionState = SubscriptionStateError
 			}
 			errorMsg := errorMetadata.Format()
-			if err = UpdateIterationState(ctx, iterationCtx.LocalExecutor, taskID, finalState, iterationLSN, iterationCtx, errorMsg, subscriptionState); err != nil {
+			if err = UpdateIterationState(ctx, iterationCtx.LocalExecutor, taskID, finalState, iterationLSN, iterationCtx, errorMsg, false, subscriptionState); err != nil {
 				// Log error but don't override the original error
 				err = moerr.NewInternalErrorf(ctx, "failed to update iteration state: %v", err)
 				logutil.Error(
@@ -1191,14 +1207,14 @@ func ExecuteIteration(
 			if !retryable {
 				// Non-retryable error: set state to error
 				finalState = IterationStateError
-				updateErr = UpdateIterationState(ctx, iterationCtx.LocalExecutor, taskID, finalState, nextLSN, iterationCtx, errorMsg, SubscriptionStateError)
+				updateErr = UpdateIterationState(ctx, iterationCtx.LocalExecutor, taskID, finalState, nextLSN, iterationCtx, errorMsg, true, SubscriptionStateError)
 			} else {
 				// Retryable error: don't change subscription state
-				updateErr = UpdateIterationStateNoSubscriptionState(ctx, iterationCtx.LocalExecutor, taskID, finalState, nextLSN, iterationCtx, errorMsg)
+				updateErr = UpdateIterationStateNoSubscriptionState(ctx, iterationCtx.LocalExecutor, taskID, finalState, nextLSN, iterationCtx, true, errorMsg)
 			}
 		} else {
 			// Success case: don't set subscription state
-			updateErr = UpdateIterationStateNoSubscriptionState(ctx, iterationCtx.LocalExecutor, taskID, finalState, nextLSN, iterationCtx, errorMsg)
+			updateErr = UpdateIterationStateNoSubscriptionState(ctx, iterationCtx.LocalExecutor, taskID, finalState, nextLSN, iterationCtx, true, errorMsg)
 		}
 
 		if updateErr != nil {
@@ -1224,7 +1240,7 @@ func ExecuteIteration(
 		if err != nil && iterationCtx.CurrentSnapshotName != "" {
 			// Drop the snapshot that was created if there's an error
 			dropSnapshotSQL := PublicationSQLBuilder.DropSnapshotIfExistsSQL(iterationCtx.CurrentSnapshotName)
-			if dropResult, dropErr := iterationCtx.UpstreamExecutor.ExecSQL(ctx, dropSnapshotSQL); dropErr != nil {
+			if dropResult, dropErr := iterationCtx.UpstreamExecutor.ExecSQL(ctx, nil, dropSnapshotSQL, false, true); dropErr != nil {
 				logutil.Warn("ccpr-iteration failed to drop snapshot on error",
 					zap.String("snapshot_name", iterationCtx.CurrentSnapshotName),
 					zap.Error(dropErr),

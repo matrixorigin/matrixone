@@ -221,7 +221,7 @@ var GetObjectFromUpstream = func(
 	// GETOBJECT returns: data, total_size, chunk_index, total_chunks, is_complete
 	// offset 0 returns metadata with data = nil
 	getChunk0SQL := PublicationSQLBuilder.GetObjectSQL(objectName, 0)
-	result, err := upstreamExecutor.ExecSQL(ctx, getChunk0SQL)
+	result, err := upstreamExecutor.ExecSQL(ctx, nil, getChunk0SQL, false, true)
 	if err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "failed to execute GETOBJECT query for offset 0: %v", err)
 	}
@@ -253,7 +253,7 @@ var GetObjectFromUpstream = func(
 
 	for i := int64(1); i <= totalChunks; i++ {
 		getChunkSQL := PublicationSQLBuilder.GetObjectSQL(objectName, i)
-		result, err := upstreamExecutor.ExecSQL(ctx, getChunkSQL)
+		result, err := upstreamExecutor.ExecSQL(ctx, nil, getChunkSQL, false, true)
 		if err != nil {
 			return nil, moerr.NewInternalErrorf(ctx, "failed to execute GETOBJECT query for offset %d: %v", i, err)
 		}

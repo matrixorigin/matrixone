@@ -95,7 +95,7 @@ func GetUpstreamDDLUsingGetDdl(
 	querySQL := PublicationSQLBuilder.GetDdlSQL(dbName, tableName, snapshotName)
 
 	// Execute GETDDL SQL
-	result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, querySQL)
+	result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, nil, querySQL, false, true)
 	if err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "failed to execute GETDDL: %v", err)
 	}
@@ -288,7 +288,7 @@ func ProcessDDLChanges(
 	// Step 4: Drop databases
 	for _, dbName := range dbToDrop {
 		dropDBSQL := fmt.Sprintf("DROP DATABASE IF EXISTS `%s`", escapeSQLIdentifierForDDL(dbName))
-		result, err := iterationCtx.LocalExecutor.ExecSQL(downstreamCtx, dropDBSQL)
+		result, err := iterationCtx.LocalExecutor.ExecSQL(downstreamCtx, nil, dropDBSQL, true, false)
 		if err != nil {
 			return moerr.NewInternalErrorf(ctx, "failed to drop database %s: %v", dbName, err)
 		}
@@ -528,7 +528,7 @@ func createTable(
 
 	// Create database if not exists
 	createDBSQL := fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s`", escapeSQLIdentifierForDDL(dbName))
-	result, err := executor.ExecSQL(ctx, createDBSQL)
+	result, err := executor.ExecSQL(ctx, nil, createDBSQL, true, false)
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to create database %s: %v", dbName, err)
 	}
@@ -541,7 +541,7 @@ func createTable(
 	// when processing the CREATE SQL from upstream
 	ctxWithTimeout, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	result, err = executor.ExecSQL(ctxWithTimeout, createSQL)
+	result, err = executor.ExecSQL(ctxWithTimeout, nil, createSQL, true, false)
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to create table %s.%s: %v", dbName, tableName, err)
 	}
@@ -587,7 +587,7 @@ func dropTable(
 	dropSQL := fmt.Sprintf("DROP TABLE IF EXISTS `%s`.`%s`",
 		escapeSQLIdentifierForDDL(dbName),
 		escapeSQLIdentifierForDDL(tableName))
-	result, err := executor.ExecSQL(ctx, dropSQL)
+	result, err := executor.ExecSQL(ctx, nil, dropSQL, true, false)
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to drop table %s.%s: %v", dbName, tableName, err)
 	}
@@ -767,7 +767,7 @@ func queryUpstreamIndexInfo(
 	querySQL := PublicationSQLBuilder.QueryMoIndexesSQL(0, tableID, "", "")
 
 	// Execute query
-	result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, querySQL)
+	result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, nil, querySQL, false, true)
 	if err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "failed to execute query upstream index info: %v", err)
 	}

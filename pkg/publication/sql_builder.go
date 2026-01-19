@@ -157,6 +157,11 @@ const (
 		`context = '%s', ` +
 		`error_message = '%s' ` +
 		`WHERE task_id = %d`
+
+	// Update mo_ccpr_log iteration_state only
+	PublicationUpdateMoCcprLogIterationStateOnlySqlTemplate = `UPDATE mo_catalog.mo_ccpr_log ` +
+		`SET iteration_state = %d ` +
+		`WHERE task_id = %d`
 )
 
 const (
@@ -180,6 +185,7 @@ const (
 	PublicationCheckSnapshotFlushedSqlTemplate_Idx
 	PublicationQueryMoCcprLogStateBeforeUpdateSqlTemplate_Idx
 	PublicationUpdateMoCcprLogNoStateSqlTemplate_Idx
+	PublicationUpdateMoCcprLogIterationStateOnlySqlTemplate_Idx
 
 	PublicationSqlTemplateCount
 )
@@ -316,6 +322,9 @@ var PublicationSQLTemplates = [PublicationSqlTemplateCount]struct {
 	},
 	PublicationUpdateMoCcprLogNoStateSqlTemplate_Idx: {
 		SQL: PublicationUpdateMoCcprLogNoStateSqlTemplate,
+	},
+	PublicationUpdateMoCcprLogIterationStateOnlySqlTemplate_Idx: {
+		SQL: PublicationUpdateMoCcprLogIterationStateOnlySqlTemplate,
 	},
 }
 
@@ -786,6 +795,19 @@ func (b publicationSQLBuilder) UpdateMoCcprLogNoStateSQL(
 		iterationLSN,
 		escapeSQLString(contextJSON),
 		escapeSQLString(errorMessage),
+		taskID,
+	)
+}
+
+// UpdateMoCcprLogIterationStateOnlySQL creates SQL for updating only iteration_state in mo_ccpr_log
+// Example: UPDATE mo_catalog.mo_ccpr_log SET iteration_state = 1 WHERE task_id = 1
+func (b publicationSQLBuilder) UpdateMoCcprLogIterationStateOnlySQL(
+	taskID uint64,
+	iterationState int8,
+) string {
+	return fmt.Sprintf(
+		PublicationSQLTemplates[PublicationUpdateMoCcprLogIterationStateOnlySqlTemplate_Idx].SQL,
+		iterationState,
 		taskID,
 	)
 }
