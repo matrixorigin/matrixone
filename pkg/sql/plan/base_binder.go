@@ -1324,7 +1324,6 @@ func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name s
 
 		arg3, err := ConstantFold(batch.EmptyForConstFoldBatch, fnArgs[3], proc, false, true)
 		if err != nil {
-			fmt.Println("IVFFlat 0")
 			return nil, err
 		}
 		fnArgs[3] = arg3
@@ -1841,10 +1840,6 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			}
 
 			return BindFuncExprImplByPlanExpr(ctx, "and", []*plan.Expr{leftFn, rightFn})
-		}
-
-		if name == "in_range" {
-			fmt.Println("IVFFlat 1")
 		}
 
 		return nil, err

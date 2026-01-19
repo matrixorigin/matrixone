@@ -10,237 +10,373 @@ in_range(b, a, c, 0)
 SELECT IN_RANGE(2, 2, '3', 0);
 in_range(2, 2, 3, 0)
 1
-DROP TABLE IF EXISTS in_range_test;
-CREATE TABLE in_range_test(
-int_test_max INT,
-int_test_min INT,
-str1 VARCHAR(20),
-str2 CHAR(20),
-float_32 FLOAT,
-float_64 DOUBLE
+SELECT IN_RANGE(TRUE, FALSE, TRUE, 0);
+in_range(true, false, true, 0)
+1
+SELECT IN_RANGE(FALSE, TRUE, FALSE, 1);
+in_range(false, true, false, 1)
+0
+SELECT IN_RANGE(TRUE, FALSE, TRUE, 1);
+in_range(true, false, true, 1)
+1
+SELECT IN_RANGE(TRUE, FALSE, TRUE, 2);
+in_range(true, false, true, 2)
+0
+SELECT IN_RANGE(TRUE, FALSE, TRUE, 3);
+in_range(true, false, true, 3)
+0
+SELECT IN_RANGE('2022-06-15', '2022-01-01', '2022-12-31', 0);
+in_range(2022-06-15, 2022-01-01, 2022-12-31, 0)
+1
+SELECT IN_RANGE('2021-12-31', '2022-01-01', '2022-12-31', 0);
+in_range(2021-12-31, 2022-01-01, 2022-12-31, 0)
+0
+SELECT IN_RANGE('2022-01-01', '2022-01-01', '2022-12-31', 1);
+in_range(2022-01-01, 2022-01-01, 2022-12-31, 1)
+0
+SELECT IN_RANGE('2022-12-31', '2022-01-01', '2022-12-31', 2);
+in_range(2022-12-31, 2022-01-01, 2022-12-31, 2)
+0
+SELECT IN_RANGE('2022-06-15', '2022-01-01', '2022-12-31', 3);
+in_range(2022-06-15, 2022-01-01, 2022-12-31, 3)
+1
+SELECT IN_RANGE('2022-06-15 12:00:00', '2022-01-01 00:00:00', '2022-12-31 23:59:59', 0);
+in_range(2022-06-15 12:00:00, 2022-01-01 00:00:00, 2022-12-31 23:59:59, 0)
+1
+SELECT IN_RANGE('2023-01-01 00:00:00', '2022-01-01 00:00:00', '2022-12-31 23:59:59', 0);
+in_range(2023-01-01 00:00:00, 2022-01-01 00:00:00, 2022-12-31 23:59:59, 0)
+0
+SELECT IN_RANGE('2022-01-01 00:00:00', '2022-01-01 00:00:00', '2022-12-31 23:59:59', 1);
+in_range(2022-01-01 00:00:00, 2022-01-01 00:00:00, 2022-12-31 23:59:59, 1)
+0
+SELECT IN_RANGE('2022-12-31 23:59:59', '2022-01-01 00:00:00', '2022-12-31 23:59:59', 2);
+in_range(2022-12-31 23:59:59, 2022-01-01 00:00:00, 2022-12-31 23:59:59, 2)
+0
+SELECT IN_RANGE('2022-06-15 12:00:00', '2022-01-01 00:00:00', '2022-12-31 23:59:59', 3);
+in_range(2022-06-15 12:00:00, 2022-01-01 00:00:00, 2022-12-31 23:59:59, 3)
+1
+SELECT IN_RANGE('12:00:00', '10:00:00', '14:00:00', 0);
+in_range(12:00:00, 10:00:00, 14:00:00, 0)
+1
+SELECT IN_RANGE('15:00:00', '10:00:00', '14:00:00', 0);
+in_range(15:00:00, 10:00:00, 14:00:00, 0)
+0
+SELECT IN_RANGE('10:00:00', '10:00:00', '14:00:00', 1);
+in_range(10:00:00, 10:00:00, 14:00:00, 1)
+0
+SELECT IN_RANGE('14:00:00', '10:00:00', '14:00:00', 2);
+in_range(14:00:00, 10:00:00, 14:00:00, 2)
+0
+SELECT IN_RANGE('12:00:00', '10:00:00', '14:00:00', 3);
+in_range(12:00:00, 10:00:00, 14:00:00, 3)
+1
+SELECT IN_RANGE(1.5, 1.0, 2.0, 0);
+in_range(1.5, 1.0, 2.0, 0)
+1
+SELECT IN_RANGE(2.5, 1.0, 2.0, 0);
+in_range(2.5, 1.0, 2.0, 0)
+0
+SELECT IN_RANGE(1.0, 1.0, 2.0, 1);
+in_range(1.0, 1.0, 2.0, 1)
+0
+SELECT IN_RANGE(2.0, 1.0, 2.0, 2);
+in_range(2.0, 1.0, 2.0, 2)
+0
+SELECT IN_RANGE(1.5, 1.0, 2.0, 3);
+in_range(1.5, 1.0, 2.0, 3)
+1
+SELECT IN_RANGE('hello', 'a', 'z', 0);
+in_range(hello, a, z, 0)
+1
+SELECT IN_RANGE('Hello', 'a', 'z', 0);
+in_range(Hello, a, z, 0)
+0
+SELECT IN_RANGE('a', 'a', 'z', 1);
+in_range(a, a, z, 1)
+0
+SELECT IN_RANGE('z', 'a', 'z', 2);
+in_range(z, a, z, 2)
+0
+SELECT IN_RANGE('m', 'a', 'z', 3);
+in_range(m, a, z, 3)
+1
+DROP TABLE IF EXISTS test_bool;
+CREATE TABLE test_bool(
+bool_primary BOOL PRIMARY KEY,
+bool_normal BOOL
 );
-INSERT INTO in_range_test() VALUES(2147483647, -2147483648, 'A', 'Z', 0.0000000000000000000000001, -1.1);
-INSERT INTO in_range_test() VALUES(2147483647, -2147483648, 'a', 'z', 0.002, 0.00003);
-INSERT INTO in_range_test(float_32, float_64) VALUES(2147483648, 16542147483647);
-SELECT float_32, float_64 FROM in_range_test WHERE IN_RANGE(float_64, -1.1, 0.00003, 0);
-float_32    float_64
-1.0E-25    -1.1
-0.002    3.0E-5
-SELECT float_32, float_64 FROM in_range_test WHERE IN_RANGE(-0.0, -1.1, 0.00003, 0);
-float_32    float_64
-1.0E-25    -1.1
-0.002    3.0E-5
-2.1474836E9    1.6542147483647E13
-SELECT * FROM in_range_test WHERE IN_RANGE(NULL, 'A', 'z', 1);
-int_test_max    int_test_min    str1    str2    float_32    float_64
-SELECT * FROM in_range_test WHERE IN_RANGE('#', 'A', 'z', 1);
-int_test_max    int_test_min    str1    str2    float_32    float_64
-SELECT * FROM in_range_test WHERE IN_RANGE(float_32, -2147483648, 2147483647, 1);
-int_test_max    int_test_min    str1    str2    float_32    float_64
-2147483647    -2147483648    A    Z    1.0E-25    -1.1
-2147483647    -2147483648    a    z    0.002    3.0E-5
-SELECT * FROM in_range_test WHERE IN_RANGE(float_64, -2147483648, 2147483647, 1);
-int_test_max    int_test_min    str1    str2    float_32    float_64
-2147483647    -2147483648    A    Z    1.0E-25    -1.1
-2147483647    -2147483648    a    z    0.002    3.0E-5
-SELECT * FROM in_range_test WHERE IN_RANGE(NULL, 'A', 'z', 2);
-int_test_max    int_test_min    str1    str2    float_32    float_64
-SELECT * FROM in_range_test WHERE IN_RANGE('#', 'A', 'z', 2);
-int_test_max    int_test_min    str1    str2    float_32    float_64
-SELECT * FROM in_range_test WHERE IN_RANGE(float_32, -2147483648, 2147483647, 2);
-int_test_max    int_test_min    str1    str2    float_32    float_64
-2147483647    -2147483648    A    Z    1.0E-25    -1.1
-2147483647    -2147483648    a    z    0.002    3.0E-5
-SELECT * FROM in_range_test WHERE IN_RANGE(float_64, -2147483648, 2147483647, 2);
-int_test_max    int_test_min    str1    str2    float_32    float_64
-2147483647    -2147483648    A    Z    1.0E-25    -1.1
-2147483647    -2147483648    a    z    0.002    3.0E-5
-SELECT * FROM in_range_test WHERE IN_RANGE(NULL, 'A', 'z', 3);
-int_test_max    int_test_min    str1    str2    float_32    float_64
-SELECT * FROM in_range_test WHERE IN_RANGE('#', 'A', 'z', 3);
-int_test_max    int_test_min    str1    str2    float_32    float_64
-SELECT * FROM in_range_test WHERE IN_RANGE(float_32, -2147483648, 2147483647, 3);
-int_test_max    int_test_min    str1    str2    float_32    float_64
-2147483647    -2147483648    A    Z    1.0E-25    -1.1
-2147483647    -2147483648    a    z    0.002    3.0E-5
-SELECT * FROM in_range_test WHERE IN_RANGE(float_64, -2147483648, 2147483647, 3);
-int_test_max    int_test_min    str1    str2    float_32    float_64
-2147483647    -2147483648    A    Z    1.0E-25    -1.1
-2147483647    -2147483648    a    z    0.002    3.0E-5
-DELETE FROM in_range_test;
-DROP TABLE IF EXISTS in_range_test;
-CREATE TABLE in_range_test(
-d1 DATE,
-d2 DATETIME,
-d3 TIMESTAMP
+INSERT INTO test_bool VALUES(TRUE, TRUE), (FALSE, FALSE);
+SELECT * FROM test_bool WHERE IN_RANGE(bool_primary, FALSE, TRUE, 0);
+bool_primary    bool_normal
+1    1
+0    0
+SELECT * FROM test_bool WHERE IN_RANGE(bool_primary, FALSE, TRUE, 1);
+bool_primary    bool_normal
+1    1
+SELECT * FROM test_bool WHERE IN_RANGE(bool_primary, FALSE, TRUE, 2);
+bool_primary    bool_normal
+0    0
+SELECT * FROM test_bool WHERE IN_RANGE(bool_primary, FALSE, TRUE, 3);
+bool_primary    bool_normal
+SELECT * FROM test_bool WHERE IN_RANGE(bool_normal, FALSE, TRUE, 0);
+bool_primary    bool_normal
+1    1
+0    0
+SELECT * FROM test_bool WHERE IN_RANGE(bool_normal, FALSE, TRUE, 1);
+bool_primary    bool_normal
+1    1
+SELECT * FROM test_bool WHERE IN_RANGE(bool_normal, FALSE, TRUE, 2);
+bool_primary    bool_normal
+0    0
+SELECT * FROM test_bool WHERE IN_RANGE(bool_normal, FALSE, TRUE, 3);
+bool_primary    bool_normal
+DROP TABLE IF EXISTS test_bool;
+DROP TABLE IF EXISTS test_int;
+CREATE TABLE test_int(
+int_primary INT PRIMARY KEY,
+int_normal INT
 );
-INSERT INTO in_range_test() VALUES('2022-06-06','2022-06-09 13:13:16', '2022-08-11 15:56:16');
-INSERT INTO in_range_test() VALUES('2022-06-30','2022-07-31 00:00:00', '2022-08-11 15:56:16');
-INSERT INTO in_range_test() VALUES('2021-06-30','2022-07-31 00:00:01', '2022-09-01 13:03:13.65456');
-SELECT * FROM in_range_test WHERE IN_RANGE(d1, '2022-06-01', '2022-06-30', 0);
-d1    d2    d3
-2022-06-06    2022-06-09 13:13:16    2022-08-11 15:56:16
-2022-06-30    2022-07-31 00:00:00    2022-08-11 15:56:16
-SELECT d2 FROM in_range_test WHERE IN_RANGE(d2, '2022-06-01', '2022-07-30 23:59:59', 0);
-d2
-2022-06-09 13:13:16
-SELECT * FROM in_range_test WHERE IN_RANGE(d1, '2022-06-01', '2022-06-15', 3);
-d1    d2    d3
-2022-06-06    2022-06-09 13:13:16    2022-08-11 15:56:16
-SELECT * FROM in_range_test WHERE IN_RANGE(d1, '2022-06-15', '2022-06-01', 3);
-d1    d2    d3
-SELECT d2 FROM in_range_test WHERE IN_RANGE(d2, '2022-06-09 00:13:16', '2022-06-9 14:00:00', 3);
-d2
-2022-06-09 13:13:16
-SELECT d2 FROM in_range_test WHERE IN_RANGE(d2, '2022-07-31', '2022-07-31', 0);
-d2
-2022-07-31 00:00:00
-SELECT d2 FROM in_range_test WHERE IN_RANGE(d2, '2022-07-31', '2022-07-31', 3);
-d2
-DELETE FROM in_range_test;
-DROP TABLE IF EXISTS in_range_test;
-CREATE TABLE t1(
-id INT,
-str VARCHAR(20)
+INSERT INTO test_int VALUES(5, 5), (15, 15);
+SELECT * FROM test_int WHERE IN_RANGE(int_primary, 1, 10, 0);
+int_primary    int_normal
+5    5
+SELECT * FROM test_int WHERE IN_RANGE(int_primary, 1, 10, 1);
+int_primary    int_normal
+5    5
+SELECT * FROM test_int WHERE IN_RANGE(int_primary, 1, 10, 2);
+int_primary    int_normal
+5    5
+SELECT * FROM test_int WHERE IN_RANGE(int_primary, 1, 10, 3);
+int_primary    int_normal
+5    5
+SELECT * FROM test_int WHERE IN_RANGE(int_normal, 1, 10, 0);
+int_primary    int_normal
+5    5
+SELECT * FROM test_int WHERE IN_RANGE(int_normal, 1, 10, 1);
+int_primary    int_normal
+5    5
+SELECT * FROM test_int WHERE IN_RANGE(int_normal, 1, 10, 2);
+int_primary    int_normal
+5    5
+SELECT * FROM test_int WHERE IN_RANGE(int_normal, 1, 10, 3);
+int_primary    int_normal
+5    5
+DROP TABLE IF EXISTS test_int;
+DROP TABLE IF EXISTS test_float;
+CREATE TABLE test_float(
+float_primary FLOAT PRIMARY KEY,
+float_normal FLOAT
 );
-CREATE TABLE t2(
-id INT,
-order_time DATE
+INSERT INTO test_float VALUES(1.5, 1.5), (2.5, 2.5);
+SELECT * FROM test_float WHERE IN_RANGE(float_primary, 1.0, 2.0, 0);
+float_primary    float_normal
+1.5    1.5
+SELECT * FROM test_float WHERE IN_RANGE(float_primary, 1.0, 2.0, 1);
+float_primary    float_normal
+1.5    1.5
+SELECT * FROM test_float WHERE IN_RANGE(float_primary, 1.0, 2.0, 2);
+float_primary    float_normal
+1.5    1.5
+SELECT * FROM test_float WHERE IN_RANGE(float_primary, 1.0, 2.0, 3);
+float_primary    float_normal
+1.5    1.5
+SELECT * FROM test_float WHERE IN_RANGE(float_normal, 1.0, 2.0, 0);
+float_primary    float_normal
+1.5    1.5
+SELECT * FROM test_float WHERE IN_RANGE(float_normal, 1.0, 2.0, 1);
+float_primary    float_normal
+1.5    1.5
+SELECT * FROM test_float WHERE IN_RANGE(float_normal, 1.0, 2.0, 2);
+float_primary    float_normal
+1.5    1.5
+SELECT * FROM test_float WHERE IN_RANGE(float_normal, 1.0, 2.0, 3);
+float_primary    float_normal
+1.5    1.5
+DROP TABLE IF EXISTS test_float;
+DROP TABLE IF EXISTS test_date;
+CREATE TABLE test_date(
+date_primary DATE PRIMARY KEY,
+date_normal DATE
 );
-INSERT INTO t1 VALUES(0, 'honda'), (-1, 'toyota'), (1, ' '), (-2, 'NULL');
-INSERT INTO t2 VALUES(0, '2022-09-21'), (-1, '2022-09-11'), (1, '2021-09-21'), (-2, '2021-09-11');
-INSERT INTO t1 VALUES(2, '#$%@RETE');
-SELECT * FROM t1 WHERE IN_RANGE(id, '0', '2', 0);
-id    str
-0    honda
-1     
-2    #$%@RETE
-SELECT id,str FROM t1 WHERE IN_RANGE(id, 0, 0, 0) AND IN_RANGE(str, 'A', 'Z', 0);
-id    str
-SELECT * FROM (SELECT * FROM t1 WHERE IN_RANGE(str, 'a', 'x', 0)) AS t WHERE IN_RANGE(id, 0, 1, 0);
-id    str
-0    honda
-SELECT * FROM (SELECT * FROM t1 WHERE IN_RANGE(str, '', 'z', 0)) AS t WHERE IN_RANGE(id, -1, 1, 0);
-id    str
-0    honda
--1    toyota
-1     
-SELECT t1.id, str, order_time
-FROM t1 INNER JOIN t2 ON t1.id = t2.id
-WHERE IN_RANGE(t1.id, -2, 2, 0) AND IN_RANGE(t2.order_time, '2022-09-11', '2022-09-21', 0);
-id    str    order_time
-0    honda    2022-09-21
--1    toyota    2022-09-11
-SELECT t1.id, str, order_time
-FROM t1 INNER JOIN t2 ON t1.id = t2.id
-WHERE IN_RANGE(YEAR(order_time), '2021', '2022', 0);
-id    str    order_time
-0    honda    2022-09-21
--1    toyota    2022-09-11
-1         2021-09-21
--2    NULL    2021-09-11
-DROP TABLE IF EXISTS t1;
-DROP TABLE IF EXISTS t2;
-CREATE TABLE t1(
-id VARCHAR(20),
-name VARCHAR(20)
+INSERT INTO test_date VALUES('2022-06-15', '2022-06-15'), ('2022-07-15', '2022-07-15');
+SELECT * FROM test_date WHERE IN_RANGE(date_primary, '2022-01-01', '2022-12-31', 0);
+date_primary    date_normal
+2022-06-15    2022-06-15
+2022-07-15    2022-07-15
+SELECT * FROM test_date WHERE IN_RANGE(date_primary, '2022-01-01', '2022-12-31', 1);
+date_primary    date_normal
+2022-06-15    2022-06-15
+2022-07-15    2022-07-15
+SELECT * FROM test_date WHERE IN_RANGE(date_primary, '2022-01-01', '2022-12-31', 2);
+date_primary    date_normal
+2022-06-15    2022-06-15
+2022-07-15    2022-07-15
+SELECT * FROM test_date WHERE IN_RANGE(date_primary, '2022-01-01', '2022-12-31', 3);
+date_primary    date_normal
+2022-06-15    2022-06-15
+2022-07-15    2022-07-15
+SELECT * FROM test_date WHERE IN_RANGE(date_normal, '2022-01-01', '2022-12-31', 0);
+date_primary    date_normal
+2022-06-15    2022-06-15
+2022-07-15    2022-07-15
+SELECT * FROM test_date WHERE IN_RANGE(date_normal, '2022-01-01', '2022-12-31', 1);
+date_primary    date_normal
+2022-06-15    2022-06-15
+2022-07-15    2022-07-15
+SELECT * FROM test_date WHERE IN_RANGE(date_normal, '2022-01-01', '2022-12-31', 2);
+date_primary    date_normal
+2022-06-15    2022-06-15
+2022-07-15    2022-07-15
+SELECT * FROM test_date WHERE IN_RANGE(date_normal, '2022-01-01', '2022-12-31', 3);
+date_primary    date_normal
+2022-06-15    2022-06-15
+2022-07-15    2022-07-15
+DROP TABLE IF EXISTS test_date;
+DROP TABLE IF EXISTS test_time;
+CREATE TABLE test_time(
+time_primary TIME PRIMARY KEY,
+time_normal TIME
 );
-CREATE TABLE t2(
-id VARCHAR(20),
-n1 INT,
-n2 FLOAT
+INSERT INTO test_time VALUES('12:00:00', '12:00:00'), ('13:00:00', '13:00:00');
+SELECT * FROM test_time WHERE IN_RANGE(time_primary, '10:00:00', '14:00:00', 0);
+time_primary    time_normal
+12:00:00    12:00:00
+13:00:00    13:00:00
+SELECT * FROM test_time WHERE IN_RANGE(time_primary, '10:00:00', '14:00:00', 1);
+time_primary    time_normal
+12:00:00    12:00:00
+13:00:00    13:00:00
+SELECT * FROM test_time WHERE IN_RANGE(time_primary, '10:00:00', '14:00:00', 2);
+time_primary    time_normal
+12:00:00    12:00:00
+13:00:00    13:00:00
+SELECT * FROM test_time WHERE IN_RANGE(time_primary, '10:00:00', '14:00:00', 3);
+time_primary    time_normal
+12:00:00    12:00:00
+13:00:00    13:00:00
+SELECT * FROM test_time WHERE IN_RANGE(time_normal, '10:00:00', '14:00:00', 0);
+time_primary    time_normal
+12:00:00    12:00:00
+13:00:00    13:00:00
+SELECT * FROM test_time WHERE IN_RANGE(time_normal, '10:00:00', '14:00:00', 1);
+time_primary    time_normal
+12:00:00    12:00:00
+13:00:00    13:00:00
+SELECT * FROM test_time WHERE IN_RANGE(time_normal, '10:00:00', '14:00:00', 2);
+time_primary    time_normal
+12:00:00    12:00:00
+13:00:00    13:00:00
+SELECT * FROM test_time WHERE IN_RANGE(time_normal, '10:00:00', '14:00:00', 3);
+time_primary    time_normal
+12:00:00    12:00:00
+13:00:00    13:00:00
+DROP TABLE IF EXISTS test_time;
+DROP TABLE IF EXISTS test_datetime;
+CREATE TABLE test_datetime(
+datetime_primary DATETIME PRIMARY KEY,
+datetime_normal DATETIME
 );
-INSERT INTO t1 VALUES('0001', 'Smi'), ('1111', 'Fri'), ('2222', '22TOM');
-INSERT INTO t2 VALUES('0001', 0001, 0.01), ('1111', 1111, -0.01), ('2222', 2222, NULL);
-SELECT * FROM t1 WHERE IN_RANGE(id, '0', '2', 0);
-id    name
-0001    Smi
-1111    Fri
-SELECT * FROM t1 WHERE IN_RANGE(name, '0', '2', 0);
-id    name
-SELECT * FROM t1 WHERE IN_RANGE(id, '0', '2', 3);
-id    name
-0001    Smi
-1111    Fri
-SELECT t1.id, name, n1, n2
-FROM t1 RIGHT JOIN t2 ON t1.id = t2.id
-WHERE IN_RANGE(t1.id, 'a', 'Z', 3) AND IN_RANGE(n2, -0.01, 0.01, 0);
-id    name    n1    n2
-SELECT t1.id, name, n1, n2
-FROM t1 INNER JOIN t2 ON t1.id = t2.id
-WHERE IN_RANGE(t1.id, '0', '1', 0) AND IN_RANGE(n1, 0, 1111, 0);
-id    name    n1    n2
-0001    Smi    1    0.01
-DROP TABLE IF EXISTS t1;
-DROP TABLE IF EXISTS t2;
-CREATE TABLE t1(
-str1 VARCHAR(50),
-b BOOL
+INSERT INTO test_datetime VALUES('2022-06-15 12:00:00', '2022-06-15 12:00:00'), ('2022-07-15 13:00:00', '2022-07-15 13:00:00');
+SELECT * FROM test_datetime WHERE IN_RANGE(datetime_primary, '2022-01-01 00:00:00', '2022-12-31 23:59:59', 0);
+datetime_primary    datetime_normal
+2022-06-15 12:00:00    2022-06-15 12:00:00
+2022-07-15 13:00:00    2022-07-15 13:00:00
+SELECT * FROM test_datetime WHERE IN_RANGE(datetime_primary, '2022-01-01 00:00:00', '2022-12-31 23:59:59', 1);
+datetime_primary    datetime_normal
+2022-06-15 12:00:00    2022-06-15 12:00:00
+2022-07-15 13:00:00    2022-07-15 13:00:00
+SELECT * FROM test_datetime WHERE IN_RANGE(datetime_primary, '2022-01-01 00:00:00', '2022-12-31 23:59:59', 2);
+datetime_primary    datetime_normal
+2022-06-15 12:00:00    2022-06-15 12:00:00
+2022-07-15 13:00:00    2022-07-15 13:00:00
+SELECT * FROM test_datetime WHERE IN_RANGE(datetime_primary, '2022-01-01 00:00:00', '2022-12-31 23:59:59', 3);
+datetime_primary    datetime_normal
+2022-06-15 12:00:00    2022-06-15 12:00:00
+2022-07-15 13:00:00    2022-07-15 13:00:00
+SELECT * FROM test_datetime WHERE IN_RANGE(datetime_normal, '2022-01-01 00:00:00', '2022-12-31 23:59:59', 0);
+datetime_primary    datetime_normal
+2022-06-15 12:00:00    2022-06-15 12:00:00
+2022-07-15 13:00:00    2022-07-15 13:00:00
+SELECT * FROM test_datetime WHERE IN_RANGE(datetime_normal, '2022-01-01 00:00:00', '2022-12-31 23:59:59', 1);
+datetime_primary    datetime_normal
+2022-06-15 12:00:00    2022-06-15 12:00:00
+2022-07-15 13:00:00    2022-07-15 13:00:00
+SELECT * FROM test_datetime WHERE IN_RANGE(datetime_normal, '2022-01-01 00:00:00', '2022-12-31 23:59:59', 2);
+datetime_primary    datetime_normal
+2022-06-15 12:00:00    2022-06-15 12:00:00
+2022-07-15 13:00:00    2022-07-15 13:00:00
+SELECT * FROM test_datetime WHERE IN_RANGE(datetime_normal, '2022-01-01 00:00:00', '2022-12-31 23:59:59', 3);
+datetime_primary    datetime_normal
+2022-06-15 12:00:00    2022-06-15 12:00:00
+2022-07-15 13:00:00    2022-07-15 13:00:00
+DROP TABLE IF EXISTS test_datetime;
+DROP TABLE IF EXISTS test_decimal;
+CREATE TABLE test_decimal(
+decimal_primary DECIMAL(10,2) PRIMARY KEY,
+decimal_normal DECIMAL(10,2)
 );
-INSERT INTO t1(str1) VALUES('This product is merged some high tech.');
-INSERT INTO t1(str1) VALUES('&^%$#@ has some error');
-INSERT INTO t1() VALUES('many years age, joe smith always', TRUE);
-INSERT INTO t1(b) VALUES(TRUE), (FALSE), (NULL);
-SELECT * FROM t1 WHERE IN_RANGE(SUBSTRING(str1,LENGTH(str1)), 'A', 'z', 0);
-str1    b
-&^%$#@ has some error    null
-many years age, joe smith always    1
-SELECT * FROM t1 WHERE IN_RANGE(SUBSTRING(str1,LENGTH(str1) - (LENGTH(str1)-1)), 'A', 'z', 0);
-str1    b
-This product is merged some high tech.    null
-many years age, joe smith always    1
-SELECT * FROM t1 WHERE IN_RANGE(SUBSTRING(str1,LENGTH(str1) - (LENGTH(str1)-1)), 'A', 'z', 3);
-str1    b
-This product is merged some high tech.    null
-many years age, joe smith always    1
-SELECT * FROM t1 WHERE IN_RANGE(str1, 'm', 'T', 3);
-str1    b
-SELECT * FROM t1 WHERE IN_RANGE(b, TRUE, FALSE, 0);
-str1    b
-SELECT * FROM t1 WHERE IN_RANGE(b, TRUE, FALSE, 3);
-str1    b
-SELECT * FROM t1 WHERE IN_RANGE(LENGTH(str1), 25, 50, 0);
-str1    b
-This product is merged some high tech.    null
-many years age, joe smith always    1
-SELECT * FROM t1 WHERE IN_RANGE(LENGTH(str1), 25, 50, 3);
-str1    b
-This product is merged some high tech.    null
-many years age, joe smith always    1
-DROP TABLE IF EXISTS t1;
-CREATE TABLE t1(
-d1 DATE,
-d2 DATETIME
+INSERT INTO test_decimal VALUES(10.50, 10.50), (20.50, 20.50);
+SELECT * FROM test_decimal WHERE IN_RANGE(decimal_primary, 0.0, 15.0, 0);
+decimal_primary    decimal_normal
+10.50    10.50
+SELECT * FROM test_decimal WHERE IN_RANGE(decimal_primary, 0.0, 15.0, 1);
+decimal_primary    decimal_normal
+10.50    10.50
+SELECT * FROM test_decimal WHERE IN_RANGE(decimal_primary, 0.0, 15.0, 2);
+decimal_primary    decimal_normal
+10.50    10.50
+SELECT * FROM test_decimal WHERE IN_RANGE(decimal_primary, 0.0, 15.0, 3);
+decimal_primary    decimal_normal
+10.50    10.50
+SELECT * FROM test_decimal WHERE IN_RANGE(decimal_normal, 0.0, 15.0, 0);
+decimal_primary    decimal_normal
+10.50    10.50
+SELECT * FROM test_decimal WHERE IN_RANGE(decimal_normal, 0.0, 15.0, 1);
+decimal_primary    decimal_normal
+10.50    10.50
+SELECT * FROM test_decimal WHERE IN_RANGE(decimal_normal, 0.0, 15.0, 2);
+decimal_primary    decimal_normal
+10.50    10.50
+SELECT * FROM test_decimal WHERE IN_RANGE(decimal_normal, 0.0, 15.0, 3);
+decimal_primary    decimal_normal
+10.50    10.50
+DROP TABLE IF EXISTS test_decimal;
+DROP TABLE IF EXISTS test_varchar;
+CREATE TABLE test_varchar(
+varchar_primary VARCHAR(50) PRIMARY KEY,
+varchar_normal VARCHAR(50)
 );
-INSERT INTO t1 VALUES('2022-09-11', '2029-12-16 01:21:34');
-INSERT INTO t1 VALUES('2021-11-11', '2028-11-06 00:21:34');
-INSERT INTO t1 VALUES('2222-12-11', '1999-05-16 21:21:34');
-SELECT * FROM t1 WHERE IN_RANGE(d1, '2022-01-01', '2022-12-31', 0);
-d1    d2
-2022-09-11    2029-12-16 01:21:34
-SELECT * FROM t1 WHERE IN_RANGE(d1, '2021-01-01', '2022-12-31', 0);
-d1    d2
-2022-09-11    2029-12-16 01:21:34
-2021-11-11    2028-11-06 00:21:34
-SELECT * FROM t1 WHERE IN_RANGE(d1, '2022-09-01', '2222-12-11', 0);
-d1    d2
-2022-09-11    2029-12-16 01:21:34
-2222-12-11    1999-05-16 21:21:34
-SELECT * FROM t1 WHERE IN_RANGE(d1, '2022-09-01', '2222-12-11', 3);
-d1    d2
-2022-09-11    2029-12-16 01:21:34
-SELECT * FROM t1 WHERE IN_RANGE(MONTH(d1) - 2, 9, 12, 0);
-d1    d2
-2021-11-11    2028-11-06 00:21:34
-2222-12-11    1999-05-16 21:21:34
-SELECT * FROM t1 WHERE IN_RANGE(YEAR(d2), 1999, 2020, 0);
-d1    d2
-2222-12-11    1999-05-16 21:21:34
-SELECT * FROM t1 WHERE IN_RANGE(YEAR(d2), 1999, 2020, 3);
-d1    d2
-SELECT * FROM t1 WHERE IN_RANGE(d2, '2028-11-06', '2029-12-16', 0);
-d1    d2
-2021-11-11    2028-11-06 00:21:34
-SELECT * FROM t1 WHERE IN_RANGE(d2, '2028-11-06', '2029-12-16', 3);
-d1    d2
-2021-11-11    2028-11-06 00:21:34
+INSERT INTO test_varchar VALUES('hello', 'hello'), ('world', 'world');
+SELECT * FROM test_varchar WHERE IN_RANGE(varchar_primary, 'a', 'z', 0);
+varchar_primary    varchar_normal
+hello    hello
+world    world
+SELECT * FROM test_varchar WHERE IN_RANGE(varchar_primary, 'a', 'z', 1);
+varchar_primary    varchar_normal
+hello    hello
+world    world
+SELECT * FROM test_varchar WHERE IN_RANGE(varchar_primary, 'a', 'z', 2);
+varchar_primary    varchar_normal
+hello    hello
+world    world
+SELECT * FROM test_varchar WHERE IN_RANGE(varchar_primary, 'a', 'z', 3);
+varchar_primary    varchar_normal
+hello    hello
+world    world
+SELECT * FROM test_varchar WHERE IN_RANGE(varchar_normal, 'a', 'z', 0);
+varchar_primary    varchar_normal
+hello    hello
+world    world
+SELECT * FROM test_varchar WHERE IN_RANGE(varchar_normal, 'a', 'z', 1);
+varchar_primary    varchar_normal
+hello    hello
+world    world
+SELECT * FROM test_varchar WHERE IN_RANGE(varchar_normal, 'a', 'z', 2);
+varchar_primary    varchar_normal
+hello    hello
+world    world
+SELECT * FROM test_varchar WHERE IN_RANGE(varchar_normal, 'a', 'z', 3);
+varchar_primary    varchar_normal
+hello    hello
+world    world
+DROP TABLE IF EXISTS test_varchar;
