@@ -15,6 +15,7 @@
 package external
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -215,7 +216,7 @@ func (h *ParquetHandler) processNestedValue(
 		return appendNull(vec, def, proc)
 	}
 
-	nested, err := reconstructNestedValue(col, colValues)
+	nested, err := reconstructNestedValue(proc.Ctx, col, colValues)
 	if err != nil {
 		return moerr.NewInternalErrorf(proc.Ctx,
 			"failed to reconstruct nested column %s: %v", col.Name(), err)
@@ -273,21 +274,21 @@ func isNestedColumnNull(values []parquet.Value, col *parquet.Column) bool {
 }
 
 // reconstructNestedValue reconstructs nested structure to Go type
-func reconstructNestedValue(col *parquet.Column, values []parquet.Value) (any, error) {
+func reconstructNestedValue(ctx context.Context, col *parquet.Column, values []parquet.Value) (any, error) {
 	logicalType := col.Type().LogicalType()
 	if logicalType != nil {
 		if logicalType.List != nil {
-			return reconstructList(col, values)
+			return reconstructList(ctx, col, values)
 		}
 		if logicalType.Map != nil {
-			return reconstructMap(col, values)
+			return reconstructMap(ctx, col, values)
 		}
 	}
-	return reconstructStruct(col, values)
+	return reconstructStruct(ctx, col, values)
 }
 
 // reconstructList reconstructs List type
-func reconstructList(col *parquet.Column, values []parquet.Value) ([]any, error) {
+func reconstructList(ctx context.Context, col *parquet.Column, values []parquet.Value) ([]any, error) {
 	result := make([]any, 0)
 	for _, v := range values {
 		if v.IsNull() {
@@ -300,7 +301,7 @@ func reconstructList(col *parquet.Column, values []parquet.Value) ([]any, error)
 }
 
 // reconstructMap reconstructs Map type
-func reconstructMap(col *parquet.Column, values []parquet.Value) (map[string]any, error) {
+func reconstructMap(ctx context.Context, col *parquet.Column, values []parquet.Value) (map[string]any, error) {
 	result := make(map[string]any)
 
 	keyColIdx := -1
@@ -332,7 +333,7 @@ func reconstructMap(col *parquet.Column, values []parquet.Value) (map[string]any
 	for i := 0; i < len(keys) && i < len(vals); i++ {
 		keyStr := stringifyMapKey(keys[i])
 		if _, exists := result[keyStr]; exists {
-			return nil, fmt.Errorf("duplicate map key: %s", keyStr)
+			return nil, moerr.NewInternalErrorf(ctx, "duplicate map key: %s", keyStr)
 		}
 		if vals[i].IsNull() {
 			result[keyStr] = nil
@@ -358,7 +359,7 @@ func stringifyMapKey(v parquet.Value) string {
 }
 
 // reconstructStruct reconstructs Struct type
-func reconstructStruct(col *parquet.Column, values []parquet.Value) (map[string]any, error) {
+func reconstructStruct(ctx context.Context, col *parquet.Column, values []parquet.Value) (map[string]any, error) {
 	result := make(map[string]any)
 	for _, child := range col.Columns() {
 		fieldName := child.Name()
@@ -375,7 +376,7 @@ func reconstructStruct(col *parquet.Column, values []parquet.Value) (map[string]
 			}
 		} else {
 			childValues := filterValuesByColumn(values, child)
-			childResult, err := reconstructNestedByType(child, childValues)
+			childResult, err := reconstructNestedByType(ctx, child, childValues)
 			if err != nil {
 				return nil, err
 			}
@@ -399,17 +400,17 @@ func filterValuesByColumn(values []parquet.Value, col *parquet.Column) []parquet
 }
 
 // reconstructNestedByType reconstructs nested structure by type
-func reconstructNestedByType(col *parquet.Column, values []parquet.Value) (any, error) {
+func reconstructNestedByType(ctx context.Context, col *parquet.Column, values []parquet.Value) (any, error) {
 	logicalType := col.Type().LogicalType()
 	if logicalType != nil {
 		if logicalType.List != nil {
-			return reconstructList(col, values)
+			return reconstructList(ctx, col, values)
 		}
 		if logicalType.Map != nil {
-			return reconstructMap(col, values)
+			return reconstructMap(ctx, col, values)
 		}
 	}
-	return reconstructStruct(col, values)
+	return reconstructStruct(ctx, col, values)
 }
 
 // parquetValueToGo converts parquet.Value to Go type
