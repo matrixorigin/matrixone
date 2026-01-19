@@ -210,17 +210,7 @@ func (ctr *container) free() {
 }
 
 func (ctr *container) reset() {
-	// reset the container state, do not reuse anything
-	ctr.state = vm.Build
-
-	ctr.inputDone = false
-	ctr.hr.Free0()
-
-	ctr.resetForSpill()
-	ctr.freeSpillBkts()
-
-	mpool.DeleteMPool(ctr.mp)
-	ctr.mp = mpool.MustNew("group_mpool")
+	ctr.free()
 }
 
 func (ctr *container) resetForSpill() {
