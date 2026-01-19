@@ -686,7 +686,7 @@ func processIndexTableMappings(
 	}
 
 	// Process indexes from table definition
-	if tableDef.Indexes != nil && len(tableDef.Indexes) > 0 {
+	if len(tableDef.Indexes) > 0 {
 		// Query upstream index information
 		upstreamIndexMap, err := queryUpstreamIndexInfo(ctx, iterationCtx, tableID)
 		if err != nil {

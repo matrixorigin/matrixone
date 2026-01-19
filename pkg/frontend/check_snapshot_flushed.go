@@ -93,7 +93,8 @@ func doCheckSnapshotFlushed(ctx context.Context, ses *Session, stmt *tree.CheckS
 	var de *disttae.Engine
 	var ok bool
 	if de, ok = eng.(*disttae.Engine); !ok {
-		if entireEngine, ok := eng.(*engine.EntireEngine); ok {
+		var entireEngine *engine.EntireEngine
+		if entireEngine, ok = eng.(*engine.EntireEngine); ok {
 			de, ok = entireEngine.Engine.(*disttae.Engine)
 		}
 		if !ok {

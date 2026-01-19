@@ -401,7 +401,7 @@ func (r *InternalResult) Next() bool {
 		return false
 	}
 
-	if r.executorResult.Batches == nil || len(r.executorResult.Batches) == 0 {
+	if len(r.executorResult.Batches) == 0 {
 		return false
 	}
 
@@ -428,7 +428,7 @@ func (r *InternalResult) Next() bool {
 
 // Scan scans the current row into the provided destinations
 func (r *InternalResult) Scan(dest ...interface{}) error {
-	if r.executorResult.Batches == nil || len(r.executorResult.Batches) == 0 {
+	if len(r.executorResult.Batches) == 0 {
 		return moerr.NewInternalErrorNoCtx("no batches available")
 	}
 

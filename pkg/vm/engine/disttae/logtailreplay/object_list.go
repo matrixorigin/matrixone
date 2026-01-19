@@ -65,13 +65,6 @@ var ObjectListTypes = []types.Type{
 	types.T_bool.ToType(),    // is_tombstone
 }
 
-type ObjectList struct {
-	stats       []objectio.ObjectStats
-	createAt    []types.TS
-	deleteAt    []types.TS
-	isTombstone []bool
-}
-
 // CreateObjectListBatch creates a new batch for object list with proper schema
 func CreateObjectListBatch() *batch.Batch {
 	return batch.NewWithSchema(false, ObjectListAttrs, ObjectListTypes)

@@ -237,7 +237,7 @@ var GetObjectFromUpstream = func(
 		return nil, moerr.NewInternalErrorf(ctx, "no object content returned for %s", objectName)
 	}
 
-		if err := result.Scan(&metadataData, &totalSize, &chunkIndex, &totalChunks, &isComplete); err != nil {
+	if err := result.Scan(&metadataData, &totalSize, &chunkIndex, &totalChunks, &isComplete); err != nil {
 		result.Close()
 		return nil, moerr.NewInternalErrorf(ctx, "failed to scan offset 0: %v", err)
 	}

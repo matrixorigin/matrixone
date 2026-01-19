@@ -19,8 +19,6 @@ import (
 	"fmt"
 	"io"
 
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -47,7 +45,8 @@ func ReadObjectFromEngine(ctx context.Context, eng engine.Engine, objectName str
 	var de *disttae.Engine
 	var ok bool
 	if de, ok = eng.(*disttae.Engine); !ok {
-		if entireEngine, ok := eng.(*engine.EntireEngine); ok {
+		var entireEngine *engine.EntireEngine
+		if entireEngine, ok = eng.(*engine.EntireEngine); ok {
 			de, ok = entireEngine.Engine.(*disttae.Engine)
 		}
 		if !ok {
@@ -149,7 +148,8 @@ func handleGetObject(
 	var de *disttae.Engine
 	var ok bool
 	if de, ok = eng.(*disttae.Engine); !ok {
-		if entireEngine, ok := eng.(*engine.EntireEngine); ok {
+		var entireEngine *engine.EntireEngine
+		if entireEngine, ok = eng.(*engine.EntireEngine); ok {
 			de, ok = entireEngine.Engine.(*disttae.Engine)
 		}
 		if !ok {
@@ -195,11 +195,6 @@ func handleGetObject(
 		data = nil
 		isComplete = false
 
-		// Print detailed chunk information if there are multiple chunks
-		if totalChunks > 1 {
-			chunkDetails := make([]zap.Field, 0, totalChunks+1)
-			chunkDetails = append(chunkDetails, zap.String("object", objectName))
-		}
 	} else {
 		// Data chunk request (chunkIndex >= 1)
 		// Calculate offset: chunk 1 starts at offset 0, chunk 2 at chunkSize, etc.

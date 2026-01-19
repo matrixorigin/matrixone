@@ -562,9 +562,7 @@ func (exec *PublicationTaskExecutor) replay(ctx context.Context) (err error) {
 			zap.Error(err),
 		)
 	}()
-	sql := fmt.Sprintf(
-		`SELECT task_id, iteration_state, iteration_lsn, state, drop_at FROM mo_catalog.mo_ccpr_log`,
-	)
+	sql := `SELECT task_id, iteration_state, iteration_lsn, state, drop_at FROM mo_catalog.mo_ccpr_log`
 	txn, err := getTxn(ctx, exec.txnEngine, exec.cnTxnClient, "publication replay")
 	if err != nil {
 		return

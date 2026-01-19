@@ -40,6 +40,7 @@ import (
 	testutil2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1968,12 +1969,10 @@ func TestExecuteIterationWithCommitFailedInjection(t *testing.T) {
 		utHelper,
 		100*time.Millisecond, // snapshotFlushInterval for test
 	)
+	assert.NoError(t, err)
 
 	// Signal checkpoint goroutine to stop
 	close(checkpointDone)
-
-	// ExecuteIteration may return error or complete (error is handled internally)
-	// The key is to check mo_ccpr_log table for error_message
 
 	// Step 5: Query mo_ccpr_log to check error_message using system account
 	querySQL := fmt.Sprintf(

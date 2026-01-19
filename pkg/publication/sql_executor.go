@@ -577,7 +577,11 @@ func (e *UpstreamExecutor) ExecSQLWithOptions(
 		} else {
 			rows, err = e.conn.QueryContext(ctx, query)
 		}
-
+		if err != nil {
+			e.logFailedSQL(err, query)
+			return nil, err
+		}
+		err = rows.Err()
 		if err != nil {
 			e.logFailedSQL(err, query)
 			return nil, err
