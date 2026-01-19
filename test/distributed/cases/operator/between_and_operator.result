@@ -329,12 +329,12 @@ CREATE TABLE bool_test(flag_primary BOOL PRIMARY KEY, flag_normal BOOL);
 INSERT INTO bool_test VALUES(TRUE, TRUE), (FALSE, FALSE);
 SELECT * FROM bool_test WHERE flag_primary BETWEEN FALSE AND TRUE;
 flag_primary    flag_normal
-true    true
-false    false
+1    1
+0    0
 SELECT * FROM bool_test WHERE flag_normal BETWEEN FALSE AND TRUE;
 flag_primary    flag_normal
-true    true
-false    false
+1    1
+0    0
 SELECT * FROM bool_test WHERE flag_primary NOT BETWEEN FALSE AND TRUE;
 flag_primary    flag_normal
 SELECT * FROM bool_test WHERE flag_normal NOT BETWEEN FALSE AND TRUE;
