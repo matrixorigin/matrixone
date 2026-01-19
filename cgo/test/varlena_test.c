@@ -38,21 +38,18 @@ void test_big_varlena() {
 
     // Simulate a big varlena by setting the first byte to a value > VARLENA_INLINE_SIZE
     // and setting offset/length.
-    // Note: The current varlena.h doesn't have a setter for big varlena,
-    // so we manually craft it.
-    uint32_t* p = (uint32_t*)v;
-    p[0] = test_offset; 
-    p[1] = test_len;
+    varlena_set_big_offset_len(v, test_offset, test_len);
 
     // Copy test string into the 'area'
     memcpy(area + test_offset, test_str, test_len);
 
     assert(!varlena_is_small(v));
 
-    uint32_t offset, length;
-    varlena_get_offset_len(v, &offset, &length);
+    uint32_t offset, length, next_offset;
+    varlena_get_big_offset_len(v, &offset, &length, &next_offset);
     assert(offset == test_offset);
     assert(length == test_len);
+    assert(next_offset == VARLENA_SIZE);
 
     uint32_t slice_len;
     const uint8_t *slice = varlena_get_byte_slice(v, area, &slice_len, &offset);
@@ -79,8 +76,7 @@ void test_multi_varlena_buffer() {
     uint8_t len1 = strlen(str1);
     ptr[0] = len1;
     memcpy(ptr + 1, str1, len1);
-    uint32_t size1 = len1 + 1;
-    ptr += size1;
+    ptr += VARLENA_SIZE;
 
     // Element 2: big
     const char *str2 = "this is a big string for testing";
@@ -88,11 +84,8 @@ void test_multi_varlena_buffer() {
     uint32_t offset2 = 40; // Use offset > 23 to make is_small() false
     memcpy(area + offset2, str2, len2);
     
-    uint32_t *p = (uint32_t*)ptr;
-    p[0] = offset2;
-    p[1] = len2;
-    uint32_t size2 = sizeof(uint32_t) * 2;
-    ptr += size2;
+    varlena_set_big_offset_len(ptr, offset2, len2);
+    ptr += VARLENA_SIZE;
 
     // Element 3: small
     const char *str3 = "small2";
@@ -109,7 +102,7 @@ void test_multi_varlena_buffer() {
     const uint8_t *current_data1 = varlena_get_byte_slice(v, area, &current_len1, &next_offset);
     assert(current_len1 == len1);
     assert(memcmp(current_data1, str1, len1) == 0);
-    assert(next_offset == size1);
+    assert(next_offset == VARLENA_SIZE);
     v += next_offset;
 
     // Check element 2
@@ -117,7 +110,7 @@ void test_multi_varlena_buffer() {
     const uint8_t *current_data2 = varlena_get_byte_slice(v, area, &current_len2, &next_offset);
     assert(current_len2 == len2);
     assert(memcmp(current_data2, str2, len2) == 0);
-    assert(next_offset == size2);
+    assert(next_offset == VARLENA_SIZE);
     v += next_offset;
 
     // Check element 3

@@ -62,7 +62,7 @@ func TestCBloomFilter_VarlenaVectorWithEmptySlices(t *testing.T) {
 	// idx 1: "" (empty, non-null)
 	// idx 2: "world"
 	// idx 3: null
-	err := vector.AppendBytes(vec, []byte("hello"), false, mp)
+	err := vector.AppendBytes(vec, []byte("hello world. this is a big area."), false, mp)
 	require.NoError(t, err)
 	err = vector.AppendBytes(vec, []byte(""), false, mp)
 	require.NoError(t, err)

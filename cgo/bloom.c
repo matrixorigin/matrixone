@@ -16,6 +16,7 @@
 
 #include "bloom.h"
 #include "bitmap.h"
+#include <stdio.h>
 #include <stdlib.h>
 
 #define XXH_INLINE_ALL
