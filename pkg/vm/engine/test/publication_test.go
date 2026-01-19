@@ -222,13 +222,14 @@ func TestCheckIterationStatus(t *testing.T) {
 					'test_table', 
 					'test_conn', 
 					'{}', 
-					0, 
+					%d, 
 					%d, 
 					%d, 
 					'%s'
 				)`,
 					tc.taskID,
 					catalog.System_Account,
+					publication.SubscriptionStateRunning,
 					tc.iterationState,
 					tc.iterationLSN,
 					tc.cnUUID,
@@ -392,7 +393,7 @@ func TestExecuteIteration1(t *testing.T) {
 			'%s', 
 			'%s', 
 			'{}', 
-			0, 
+			%d, 
 			%d, 
 			%d, 
 			'%s'
@@ -403,6 +404,7 @@ func TestExecuteIteration1(t *testing.T) {
 		srcDBName,
 		srcTableName,
 		fmt.Sprintf("%s:%d", publication.InternalSQLExecutorType, srcAccountID),
+		publication.SubscriptionStateRunning,
 		publication.IterationStatePending,
 		iterationLSN,
 		cnUUID,
@@ -588,7 +590,7 @@ func TestExecuteIteration1(t *testing.T) {
 		lsn := vector.GetFixedAtWithTypeCheck[int64](cols[1], 0)
 
 		require.Equal(t, publication.IterationStateCompleted, state)
-		require.Equal(t, int64(iterationLSN2), lsn)
+		require.Equal(t, int64(iterationLSN2+1), lsn)
 		found2 = true
 		return true
 	})
@@ -900,7 +902,7 @@ func TestExecuteIterationDatabaseLevel(t *testing.T) {
 			'', 
 			'%s', 
 			'{}', 
-			0, 
+			%d, 
 			%d, 
 			%d, 
 			'%s'
@@ -910,6 +912,7 @@ func TestExecuteIterationDatabaseLevel(t *testing.T) {
 		destAccountID,
 		srcDBName,
 		fmt.Sprintf("%s:%d", publication.InternalSQLExecutorType, srcAccountID),
+		publication.SubscriptionStateRunning,
 		publication.IterationStatePending,
 		iterationLSN,
 		cnUUID,
@@ -1203,7 +1206,7 @@ func TestExecuteIterationWithIndex(t *testing.T) {
 			'%s', 
 			'%s', 
 			'{}', 
-			0, 
+			%d, 
 			%d, 
 			%d, 
 			'%s'
@@ -1214,6 +1217,7 @@ func TestExecuteIterationWithIndex(t *testing.T) {
 		srcDBName,
 		srcTableName,
 		fmt.Sprintf("%s:%d", publication.InternalSQLExecutorType, srcAccountID),
+		publication.SubscriptionStateRunning,
 		publication.IterationStatePending,
 		iterationLSN,
 		cnUUID,
@@ -1600,7 +1604,7 @@ func TestExecuteIterationWithSnapshotFinishedInjection(t *testing.T) {
 			'%s', 
 			'%s', 
 			'{}', 
-			0, 
+			%d, 
 			%d, 
 			%d, 
 			'%s'
@@ -1611,6 +1615,7 @@ func TestExecuteIterationWithSnapshotFinishedInjection(t *testing.T) {
 		srcDBName,
 		srcTableName,
 		fmt.Sprintf("%s:%d", publication.InternalSQLExecutorType, srcAccountID),
+		publication.SubscriptionStateRunning,
 		publication.IterationStatePending,
 		iterationLSN,
 		cnUUID,
@@ -1904,7 +1909,7 @@ func TestExecuteIterationWithCommitFailedInjection(t *testing.T) {
 			'%s', 
 			'%s', 
 			'{}', 
-			0, 
+			%d, 
 			%d, 
 			%d, 
 			'%s'
@@ -1915,6 +1920,7 @@ func TestExecuteIterationWithCommitFailedInjection(t *testing.T) {
 		srcDBName,
 		srcTableName,
 		fmt.Sprintf("%s:%d", publication.InternalSQLExecutorType, srcAccountID),
+		publication.SubscriptionStateRunning,
 		publication.IterationStatePending,
 		iterationLSN,
 		cnUUID,
