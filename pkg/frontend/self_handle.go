@@ -231,6 +231,12 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		if err = handleAlterStage(ses, execCtx, st); err != nil {
 			return
 		}
+	case *tree.RemoveStageFiles:
+		ses.EnterFPrint(FPRemoveStageFiles)
+		defer ses.ExitFPrint(FPRemoveStageFiles)
+		if err = handleRemoveStageFiles(ses, execCtx, st); err != nil {
+			return
+		}
 	case *tree.CreateAccount:
 		ses.EnterFPrint(FPCreateAccount)
 		defer ses.ExitFPrint(FPCreateAccount)

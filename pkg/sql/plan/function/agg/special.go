@@ -91,3 +91,11 @@ func RegisterBitAnd(id int64) {
 func RegisterBitOr(id int64) {
 	aggexec.RegisterBitOrAgg(id)
 }
+
+func RegisterBitmapConstruct(id int64) {
+	aggexec.RegisterBitmapConstruct(id)
+}
+
+func RegisterBitmapOr(id int64) {
+	aggexec.RegisterBitmapOr(id)
+}

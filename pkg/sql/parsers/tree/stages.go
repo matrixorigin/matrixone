@@ -40,6 +40,12 @@ func init() {
 		reuse.DefaultOptions[AlterStage](), //.
 	) //WithEnableChecker()
 
+	reuse.CreatePool[RemoveStageFiles](
+		func() *RemoveStageFiles { return &RemoveStageFiles{} },
+		func(r *RemoveStageFiles) { r.reset() },
+		reuse.DefaultOptions[RemoveStageFiles](), //.
+	) //WithEnableChecker()
+
 }
 
 type CreateStage struct {
@@ -124,6 +130,40 @@ func NewDropStage(ifNotExists bool, name Identifier) *DropStage {
 	dropStage.Name = name
 	return dropStage
 }
+
+type RemoveStageFiles struct {
+	statementImpl
+	IfExists bool
+	Path     string
+}
+
+func NewRemoveStageFiles(ifExists bool, path string) *RemoveStageFiles {
+	removeStageFiles := reuse.Alloc[RemoveStageFiles](nil)
+	removeStageFiles.IfExists = ifExists
+	removeStageFiles.Path = path
+	return removeStageFiles
+}
+
+func (node *RemoveStageFiles) Format(ctx *FmtCtx) {
+	ctx.WriteString("remove files from stage ")
+	if node.IfExists {
+		ctx.WriteString("if exists ")
+	}
+	ctx.WriteString(fmt.Sprintf("'%s'", node.Path))
+}
+
+func (node *RemoveStageFiles) Free() {
+	reuse.Free[RemoveStageFiles](node, nil)
+}
+
+func (node *RemoveStageFiles) reset() {
+	*node = RemoveStageFiles{}
+}
+
+func (node *RemoveStageFiles) GetStatementType() string { return "Remove Stage Files" }
+func (node *RemoveStageFiles) GetQueryType() string     { return QueryTypeOth }
+
+func (node RemoveStageFiles) TypeName() string { return "tree.RemoveStageFiles" }
 
 type AlterStage struct {
 	statementImpl
