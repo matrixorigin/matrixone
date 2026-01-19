@@ -236,8 +236,6 @@ where dept_rank <= 2
 order by department, dept_rank;
 drop table employee_sales;
 
-
-
 -- subquery aggregation rewrite
 drop table if exists sales;
 create table sales (
