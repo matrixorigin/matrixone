@@ -253,44 +253,46 @@ func (node *persistedNode) CollectObjectTombstoneInRange(
 		if err != nil {
 			return err
 		}
-		defer func() {
-			for i := range vecs {
-				vecs[i].Close()
+		func() {
+			defer func() {
+				for i := range vecs {
+					vecs[i].Close()
+				}
+			}()
+			var commitTSs []types.TS
+			if !persistedByCN {
+				commitTSs = vector.MustFixedColWithTypeCheck[types.TS](vecs[2].GetDownstreamVector())
+				rowIDs := vector.MustFixedColWithTypeCheck[types.Rowid](vecs[0].GetDownstreamVector())
+				for i := 0; i < len(commitTSs); i++ {
+					commitTS := commitTSs[i]
+					if commitTS.GE(&start) && commitTS.LE(&end) &&
+						types.PrefixCompare(rowIDs[i][:], objID[:]) == 0 { // TODO
+						if *bat == nil {
+							pkIdx := readSchema.GetColIdx(objectio.TombstoneAttr_PK_Attr)
+							pkType := readSchema.ColDefs[pkIdx].GetType()
+							*bat = catalog.NewTombstoneBatchByPKType(pkType, mp)
+						}
+						(*bat).GetVectorByName(objectio.TombstoneAttr_Rowid_Attr).Append(rowIDs[i], false)
+						(*bat).GetVectorByName(objectio.TombstoneAttr_PK_Attr).Append(vecs[1].Get(i), false)
+						(*bat).GetVectorByName(objectio.TombstoneAttr_CommitTs_Attr).Append(commitTS, false)
+					}
+				}
+			} else {
+				rowIDs := vector.MustFixedColWithTypeCheck[types.Rowid](vecs[0].GetDownstreamVector())
+				for i := 0; i < len(rowIDs); i++ {
+					if types.PrefixCompare(rowIDs[i][:], objID[:]) == 0 { // TODO
+						if *bat == nil {
+							pkIdx := readSchema.GetColIdx(objectio.TombstoneAttr_PK_Attr)
+							pkType := readSchema.ColDefs[pkIdx].GetType()
+							*bat = catalog.NewTombstoneBatchByPKType(pkType, mp)
+						}
+						(*bat).GetVectorByName(objectio.TombstoneAttr_Rowid_Attr).Append(rowIDs[i], false)
+						(*bat).GetVectorByName(objectio.TombstoneAttr_PK_Attr).Append(vecs[1].Get(i), false)
+						(*bat).GetVectorByName(objectio.TombstoneAttr_CommitTs_Attr).Append(startTS, false)
+					}
+				}
 			}
 		}()
-		var commitTSs []types.TS
-		if !persistedByCN {
-			commitTSs = vector.MustFixedColWithTypeCheck[types.TS](vecs[2].GetDownstreamVector())
-			rowIDs := vector.MustFixedColWithTypeCheck[types.Rowid](vecs[0].GetDownstreamVector())
-			for i := 0; i < len(commitTSs); i++ {
-				commitTS := commitTSs[i]
-				if commitTS.GE(&start) && commitTS.LE(&end) &&
-					types.PrefixCompare(rowIDs[i][:], objID[:]) == 0 { // TODO
-					if *bat == nil {
-						pkIdx := readSchema.GetColIdx(objectio.TombstoneAttr_PK_Attr)
-						pkType := readSchema.ColDefs[pkIdx].GetType()
-						*bat = catalog.NewTombstoneBatchByPKType(pkType, mp)
-					}
-					(*bat).GetVectorByName(objectio.TombstoneAttr_Rowid_Attr).Append(rowIDs[i], false)
-					(*bat).GetVectorByName(objectio.TombstoneAttr_PK_Attr).Append(vecs[1].Get(i), false)
-					(*bat).GetVectorByName(objectio.TombstoneAttr_CommitTs_Attr).Append(commitTS, false)
-				}
-			}
-		} else {
-			rowIDs := vector.MustFixedColWithTypeCheck[types.Rowid](vecs[0].GetDownstreamVector())
-			for i := 0; i < len(rowIDs); i++ {
-				if types.PrefixCompare(rowIDs[i][:], objID[:]) == 0 { // TODO
-					if *bat == nil {
-						pkIdx := readSchema.GetColIdx(objectio.TombstoneAttr_PK_Attr)
-						pkType := readSchema.ColDefs[pkIdx].GetType()
-						*bat = catalog.NewTombstoneBatchByPKType(pkType, mp)
-					}
-					(*bat).GetVectorByName(objectio.TombstoneAttr_Rowid_Attr).Append(rowIDs[i], false)
-					(*bat).GetVectorByName(objectio.TombstoneAttr_PK_Attr).Append(vecs[1].Get(i), false)
-					(*bat).GetVectorByName(objectio.TombstoneAttr_CommitTs_Attr).Append(startTS, false)
-				}
-			}
-		}
 	}
 	return
 }
@@ -347,40 +349,45 @@ func (node *persistedNode) FillBlockTombstones(
 		if err != nil {
 			return err
 		}
-		defer func() {
-			for i := range vecs {
-				vecs[i].Close()
+		// Close vectors immediately after use to avoid memory accumulation in the loop
+		func() {
+			defer func() {
+				for i := range vecs {
+					vecs[i].Close()
+				}
+			}()
+			var commitTSs []types.TS
+			var commitTSVec containers.Vector
+
+			if node.object.meta.Load().IsAppendable() {
+				commitTSVec, err = node.object.LoadPersistedCommitTS(uint16(tombstoneBlkID))
+				if err != nil {
+					return
+				}
+				commitTSs = vector.MustFixedColWithTypeCheck[types.TS](commitTSVec.GetDownstreamVector())
+			}
+			if commitTSVec != nil {
+				defer commitTSVec.Close()
+			}
+			rowIDs := vector.MustFixedColWithTypeCheck[types.Rowid](vecs[0].GetDownstreamVector())
+			// TODO: biselect, check visibility
+			for i := 0; i < len(rowIDs); i++ {
+				if node.object.meta.Load().IsAppendable() {
+					if commitTSs[i].GT(&startTS) {
+						continue
+					}
+				}
+				rowID := rowIDs[i]
+				if types.PrefixCompare(rowID[:], blkID[:]) == 0 {
+					if *deletes == nil {
+						*deletes = &nulls.Nulls{}
+					}
+					offset := rowID.GetRowOffset()
+					(*deletes).Add(uint64(offset) + deleteStartOffset)
+				}
+
 			}
 		}()
-		var commitTSs []types.TS
-		var commitTSVec containers.Vector
-		if node.object.meta.Load().IsAppendable() {
-			commitTSVec, err = node.object.LoadPersistedCommitTS(uint16(tombstoneBlkID))
-			if err != nil {
-				return err
-			}
-			commitTSs = vector.MustFixedColWithTypeCheck[types.TS](commitTSVec.GetDownstreamVector())
-		}
-		if commitTSVec != nil {
-			defer commitTSVec.Close()
-		}
-		rowIDs := vector.MustFixedColWithTypeCheck[types.Rowid](vecs[0].GetDownstreamVector())
-		// TODO: biselect, check visibility
-		for i := 0; i < len(rowIDs); i++ {
-			if node.object.meta.Load().IsAppendable() {
-				if commitTSs[i].GT(&startTS) {
-					continue
-				}
-			}
-			rowID := rowIDs[i]
-			if types.PrefixCompare(rowID[:], blkID[:]) == 0 {
-				if *deletes == nil {
-					*deletes = &nulls.Nulls{}
-				}
-				offset := rowID.GetRowOffset()
-				(*deletes).Add(uint64(offset) + deleteStartOffset)
-			}
-		}
 	}
 	return nil
 }
