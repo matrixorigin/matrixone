@@ -948,7 +948,7 @@ func (txn *Transaction) WriteFileLocked(
 			oid := stats.ObjectName().ObjectId()
 			sid := oid.Segment()
 
-			colexec.RecordTxnUnCommitSegment(sid)
+			colexec.RecordTxnUnCommitSegment(txn.op.Txn().ID, tableId, sid)
 			txn.registerCNObjects(*oid, accountId, copied, databaseName, tableName)
 		}
 	}
@@ -1052,7 +1052,7 @@ func (txn *Transaction) deleteBatch(
 		mp[rowid] = 0
 		rowOffset := rowid.GetRowOffset()
 
-		if colexec.IsDeletionOnTxnUnCommitPersisted(nil, rowid.BorrowSegmentID()) {
+		if colexec.IsDeletionOnTxnUnCommitPersisted(nil, rowid.BorrowSegmentID(), tableId, txn.op.Txn().ID) {
 			txn.deletedBlocks.addDeletedBlocks(&blkid, []int64{int64(rowOffset)})
 			cnRowIdOffsets = append(cnRowIdOffsets, int64(i))
 			continue
@@ -1845,11 +1845,7 @@ func (txn *Transaction) delTransaction() {
 	txn.cn_flushed_s3_tombstone_object_stats_list = nil
 	txn.deletedBlocks = nil
 	txn.haveDDL.Store(false)
-	segmentnames := make([]objectio.Segmentid, 0, len(txn.cnObjsSummary)+1)
-	for blkId := range txn.cnObjsSummary {
-		segmentnames = append(segmentnames, *blkId.Segment())
-	}
-	colexec.Get().DeleteTxnSegmentIds(segmentnames)
+	colexec.Get().DeleteTxnSegmentIds(txn.op.Txn().ID)
 	txn.cnObjsSummary = nil
 	txn.hasS3Op.Store(false)
 	txn.removed = true
