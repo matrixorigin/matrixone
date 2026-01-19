@@ -187,7 +187,6 @@ mo_locks
 mo_variables
 mo_transactions
 mo_cache
-mo_ccpr_log
 mo_foreign_keys
 select user_name,authentication_string,owner from mo_user;
 user_name    authentication_string    owner

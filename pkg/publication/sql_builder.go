@@ -141,6 +141,22 @@ const (
 		`iteration_lsn = %d, ` +
 		`cn_uuid = '%s' ` +
 		`WHERE task_id = %d`
+
+	// Query mo_ccpr_log state before update SQL template
+	PublicationQueryMoCcprLogStateBeforeUpdateSqlTemplate = `SELECT ` +
+		`state, ` +
+		`iteration_state, ` +
+		`iteration_lsn ` +
+		`FROM mo_catalog.mo_ccpr_log ` +
+		`WHERE task_id = %d`
+
+	// Update mo_ccpr_log without state SQL template (for successful iterations)
+	PublicationUpdateMoCcprLogNoStateSqlTemplate = `UPDATE mo_catalog.mo_ccpr_log ` +
+		`SET iteration_state = %d, ` +
+		`iteration_lsn = %d, ` +
+		`context = '%s', ` +
+		`error_message = '%s' ` +
+		`WHERE task_id = %d`
 )
 
 const (
@@ -162,6 +178,8 @@ const (
 	PublicationUpdateMoCcprLogSqlTemplate_Idx
 	PublicationUpdateMoCcprLogStateSqlTemplate_Idx
 	PublicationCheckSnapshotFlushedSqlTemplate_Idx
+	PublicationQueryMoCcprLogStateBeforeUpdateSqlTemplate_Idx
+	PublicationUpdateMoCcprLogNoStateSqlTemplate_Idx
 
 	PublicationSqlTemplateCount
 )
@@ -287,6 +305,17 @@ var PublicationSQLTemplates = [PublicationSqlTemplateCount]struct {
 	},
 	PublicationCheckSnapshotFlushedSqlTemplate_Idx: {
 		SQL: PublicationCheckSnapshotFlushedSqlTemplate,
+	},
+	PublicationQueryMoCcprLogStateBeforeUpdateSqlTemplate_Idx: {
+		SQL: PublicationQueryMoCcprLogStateBeforeUpdateSqlTemplate,
+		OutputAttrs: []string{
+			"state",
+			"iteration_state",
+			"iteration_lsn",
+		},
+	},
+	PublicationUpdateMoCcprLogNoStateSqlTemplate_Idx: {
+		SQL: PublicationUpdateMoCcprLogNoStateSqlTemplate,
 	},
 }
 
@@ -728,6 +757,35 @@ func (b publicationSQLBuilder) UpdateMoCcprLogStateSQL(
 		iterationState,
 		iterationLSN,
 		escapeSQLString(cnUUID),
+		taskID,
+	)
+}
+
+// QueryMoCcprLogStateBeforeUpdateSQL creates SQL for querying state, iteration_state, iteration_lsn before update
+// Example: SELECT state, iteration_state, iteration_lsn FROM mo_catalog.mo_ccpr_log WHERE task_id = 1
+func (b publicationSQLBuilder) QueryMoCcprLogStateBeforeUpdateSQL(taskID uint64) string {
+	return fmt.Sprintf(
+		PublicationSQLTemplates[PublicationQueryMoCcprLogStateBeforeUpdateSqlTemplate_Idx].SQL,
+		taskID,
+	)
+}
+
+// UpdateMoCcprLogNoStateSQL creates SQL for updating mo_ccpr_log without state field
+// Used for successful iterations where we don't need to change the subscription state
+// Example: UPDATE mo_catalog.mo_ccpr_log SET iteration_state = 2, iteration_lsn = 1001, context = '...', error_message = ” WHERE task_id = 1
+func (b publicationSQLBuilder) UpdateMoCcprLogNoStateSQL(
+	taskID uint64,
+	iterationState int8,
+	iterationLSN uint64,
+	contextJSON string,
+	errorMessage string,
+) string {
+	return fmt.Sprintf(
+		PublicationSQLTemplates[PublicationUpdateMoCcprLogNoStateSqlTemplate_Idx].SQL,
+		iterationState,
+		iterationLSN,
+		escapeSQLString(contextJSON),
+		escapeSQLString(errorMessage),
 		taskID,
 	)
 }

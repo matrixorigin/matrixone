@@ -481,6 +481,154 @@ func UpdateIterationState(
 	return nil
 }
 
+// UpdateIterationStateNoSubscriptionState updates iteration state, iteration LSN, iteration context, and error message in mo_ccpr_log table
+// It does NOT update the subscription state field - used for successful iterations
+func UpdateIterationStateNoSubscriptionState(
+	ctx context.Context,
+	executor SQLExecutor,
+	taskID uint64,
+	iterationState int8,
+	iterationLSN uint64,
+	iterationCtx *IterationContext,
+	errorMessage string,
+) error {
+	if executor == nil {
+		return moerr.NewInternalError(ctx, "executor is nil")
+	}
+
+	// Serialize IterationContext to JSON
+	var contextJSON string
+	if iterationCtx != nil {
+		// Convert ActiveAObj to serializable format
+		activeAObjJSON := make(map[string]AObjMappingJSON)
+		if iterationCtx.ActiveAObj != nil {
+			for uuid, mapping := range iterationCtx.ActiveAObj {
+				mappingJSON := AObjMappingJSON{}
+				// Serialize Current ObjectStats to base64
+				if !mapping.Current.IsZero() {
+					currentBytes := mapping.Current.Marshal()
+					mappingJSON.Current = base64.StdEncoding.EncodeToString(currentBytes)
+				}
+				// Serialize Previous ObjectStats to base64
+				if !mapping.Previous.IsZero() {
+					previousBytes := mapping.Previous.Marshal()
+					mappingJSON.Previous = base64.StdEncoding.EncodeToString(previousBytes)
+				}
+				// Convert ObjectId to string for JSON serialization
+				activeAObjJSON[uuid.String()] = mappingJSON
+			}
+		}
+
+		// Convert TableIDs to string map for JSON serialization
+		tableIDsJSON := make(map[string]uint64)
+		for key, id := range iterationCtx.TableIDs {
+			keyStr := tableKeyToString(key)
+			tableIDsJSON[keyStr] = id
+		}
+
+		// Convert IndexTableMappings to string map for JSON serialization
+		indexTableMappingsJSON := make(map[string]string)
+		if iterationCtx.IndexTableMappings != nil {
+			for upstreamName, downstreamName := range iterationCtx.IndexTableMappings {
+				indexTableMappingsJSON[upstreamName] = downstreamName
+			}
+		}
+
+		// Create a serializable context structure
+		ctxJSON := IterationContextJSON{
+			TaskID:             iterationCtx.TaskID,
+			SubscriptionName:   iterationCtx.SubscriptionName,
+			SrcInfo:            iterationCtx.SrcInfo,
+			ActiveAObj:         activeAObjJSON,
+			TableIDs:           tableIDsJSON,
+			IndexTableMappings: indexTableMappingsJSON,
+		}
+
+		contextBytes, err := json.Marshal(ctxJSON)
+		if err != nil {
+			return moerr.NewInternalErrorf(ctx, "failed to marshal iteration context: %v", err)
+		}
+		contextJSON = string(contextBytes)
+	} else {
+		contextJSON = "null"
+	}
+
+	// Build update SQL without state field
+	updateSQL := PublicationSQLBuilder.UpdateMoCcprLogNoStateSQL(
+		taskID,
+		iterationState,
+		iterationLSN,
+		contextJSON,
+		errorMessage,
+	)
+
+	// Execute update SQL using system account context
+	// mo_ccpr_log is a system table, so we must use system account
+	systemCtx := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	result, err := executor.ExecSQL(systemCtx, updateSQL)
+	if err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to execute update SQL: %v", err)
+	}
+	defer result.Close()
+
+	return nil
+}
+
+// CheckStateBeforeUpdate checks the state, iteration_state, and iteration_lsn in mo_ccpr_log table before update
+// It verifies that state is running, iteration_state is running, and iteration_lsn matches the expected value
+// This check uses a separate executor (new transaction) to ensure isolation
+func CheckStateBeforeUpdate(
+	ctx context.Context,
+	executor SQLExecutor,
+	taskID uint64,
+	expectedIterationLSN uint64,
+) error {
+	// Build SQL query using sql_builder
+	querySQL := PublicationSQLBuilder.QueryMoCcprLogStateBeforeUpdateSQL(taskID)
+
+	// Execute SQL query using system account context
+	// mo_ccpr_log is a system table, so we must use system account
+	systemCtx := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	result, err := executor.ExecSQL(systemCtx, querySQL)
+	if err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to execute state check query: %v", err)
+	}
+	defer result.Close()
+
+	// Scan the result - expecting columns: state, iteration_state, iteration_lsn
+	var subscriptionState int8
+	var iterationState int8
+	var iterationLSN uint64
+
+	if !result.Next() {
+		if err := result.Err(); err != nil {
+			return moerr.NewInternalErrorf(ctx, "failed to read state check query result: %v", err)
+		}
+		return moerr.NewInternalErrorf(ctx, "no rows returned for task_id %d in state check", taskID)
+	}
+
+	if err := result.Scan(&subscriptionState, &iterationState, &iterationLSN); err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to scan state check query result: %v", err)
+	}
+
+	// Check if state is running
+	if subscriptionState != SubscriptionStateRunning {
+		return moerr.NewInternalErrorf(ctx, "subscription state is not running: expected %d (running), got %d", SubscriptionStateRunning, subscriptionState)
+	}
+
+	// Check if iteration_state is running
+	if iterationState != IterationStateRunning {
+		return moerr.NewInternalErrorf(ctx, "iteration_state is not running: expected %d (running), got %d", IterationStateRunning, iterationState)
+	}
+
+	// Check if iteration_lsn matches
+	if iterationLSN != expectedIterationLSN {
+		return moerr.NewInternalErrorf(ctx, "iteration_lsn mismatch: expected %d, got %d", expectedIterationLSN, iterationLSN)
+	}
+
+	return nil
+}
+
 // CheckIterationStatus checks the iteration status in mo_ccpr_log table
 // It verifies that cn_uuid, iteration_lsn match the expected values,
 // and that iteration_state is completed
@@ -1007,23 +1155,55 @@ func ExecuteIteration(
 
 	// Update iteration state in defer to ensure it's always called
 	defer func() {
+		// Create a new executor without transaction for checking state before update
+		checkExecutor, checkErr := NewInternalSQLExecutor(cnUUID, nil, nil, catalog.System_Account, NewDownstreamConnectionClassifier())
+		if checkErr != nil {
+			logutil.Error("ccpr-iteration failed to create check executor",
+				zap.Error(checkErr),
+				zap.Uint64("task_id", taskID),
+			)
+			err = moerr.NewInternalErrorf(ctx, "failed to create check executor: %v", checkErr)
+			return
+		}
+
+		// Check state before update: expecting state=running, iteration_state=running, iteration_lsn=iterationCtx.IterationLSN
+		if checkErr = CheckStateBeforeUpdate(ctx, checkExecutor, taskID, iterationCtx.IterationLSN); checkErr != nil {
+			logutil.Error("ccpr-iteration state check before update failed",
+				zap.Error(checkErr),
+				zap.Uint64("task_id", taskID),
+				zap.Uint64("iteration_lsn", iterationCtx.IterationLSN),
+			)
+			err = moerr.NewInternalErrorf(ctx, "state check before update failed: %v", checkErr)
+			return
+		}
+
 		var errorMsg string
 		finalState := IterationStateCompleted
-		subscriptionState := SubscriptionStateRunning
 		nextLSN := iterationLSN + 1
+		var updateErr error
+
 		if err != nil {
+			// Error case: check if retryable
 			classifier := NewDownstreamCommitClassifier()
 			errorMetadata, retryable := BuildErrorMetadata(iterationCtx.ErrorMetadata, err, classifier)
-			if !retryable {
-				finalState = IterationStateError
-				subscriptionState = SubscriptionStateError
-			}
 			errorMsg = errorMetadata.Format()
 			nextLSN = iterationLSN
+			if !retryable {
+				// Non-retryable error: set state to error
+				finalState = IterationStateError
+				updateErr = UpdateIterationState(ctx, iterationCtx.LocalExecutor, taskID, finalState, nextLSN, iterationCtx, errorMsg, SubscriptionStateError)
+			} else {
+				// Retryable error: don't change subscription state
+				updateErr = UpdateIterationStateNoSubscriptionState(ctx, iterationCtx.LocalExecutor, taskID, finalState, nextLSN, iterationCtx, errorMsg)
+			}
+		} else {
+			// Success case: don't set subscription state
+			updateErr = UpdateIterationStateNoSubscriptionState(ctx, iterationCtx.LocalExecutor, taskID, finalState, nextLSN, iterationCtx, errorMsg)
 		}
-		if err = UpdateIterationState(ctx, iterationCtx.LocalExecutor, taskID, finalState, nextLSN, iterationCtx, errorMsg, subscriptionState); err != nil {
+
+		if updateErr != nil {
 			// Log error but don't override the original error
-			err = moerr.NewInternalErrorf(ctx, "failed to update iteration state: %v", err)
+			err = moerr.NewInternalErrorf(ctx, "failed to update iteration state: %v", updateErr)
 		}
 	}()
 
