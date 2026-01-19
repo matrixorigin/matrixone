@@ -242,7 +242,9 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 			if needSpill {
 				// we need to spill the data to disk.
 				if group.NeedEval {
-					group.ctr.spillDataToDisk(proc, nil)
+					if err := group.ctr.spillDataToDisk(proc, nil); err != nil {
+						return vm.CancelResult, err
+					}
 					// continue the loop, to receive more data.
 				} else {
 					// break the loop, output the intermediate result.
