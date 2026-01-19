@@ -15,6 +15,7 @@
 package bloomfilter
 
 import (
+	"encoding/binary"
 	"fmt"
 	"testing"
 
@@ -333,6 +334,15 @@ func TestCBloomFilter_AddVectorWithNulls(t *testing.T) {
 		}
 	})
 	require.Equal(t, count, callCount)
+
+	b := make([]byte, 4)
+	for i := 0; i < count; i++ {
+		if i%2 != 0 {
+			continue
+		}
+		binary.LittleEndian.PutUint32(b, uint32(i))
+		require.True(t, bf.Test(b))
+	}
 }
 
 func TestCBloomFilter_TestAndAddVectorWithNulls(t *testing.T) {
