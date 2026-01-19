@@ -376,11 +376,23 @@ func (iterCtx *IterationContext) Close(commit bool) error {
 
 	var err error
 	if iterCtx.LocalExecutor != nil {
-		err = iterCtx.LocalExecutor.EndTxn(ctx, commit)
-		iterCtx.LocalExecutor.Close()
+		tmpErr := iterCtx.LocalExecutor.EndTxn(ctx, commit)
+		if tmpErr != nil {
+			logutil.Infof("ccpr-iteration local executor end txn error: %v", tmpErr)
+			err = tmpErr
+		}
+		tmpErr = iterCtx.LocalExecutor.Close()
+		if tmpErr != nil {
+			logutil.Infof("ccpr-iteration local executor close error: %v", tmpErr)
+			err = tmpErr
+		}
 	}
 	if iterCtx.UpstreamExecutor != nil {
-		err = iterCtx.UpstreamExecutor.Close()
+		tmpErr := iterCtx.UpstreamExecutor.Close()
+		if tmpErr != nil {
+			logutil.Infof("ccpr-iteration upstream executor close error: %v", tmpErr)
+			err = tmpErr
+		}
 	}
 	return err
 }
