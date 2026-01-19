@@ -5967,7 +5967,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.LockTableStmt, *tree.UnLockTableStmt:
 		objType = objectTypeNone
 		kind = privilegeKindNone
-	case *tree.CreatePublication, *tree.DropPublication, *tree.AlterPublication, *tree.DropCcprSubscription:
+	case *tree.CreatePublication, *tree.DropPublication, *tree.AlterPublication, *tree.DropCcprSubscription, *tree.PauseCcprSubscription, *tree.ResumeCcprSubscription:
 		typs = append(typs, PrivilegeTypeAccountAll)
 		objType = objectTypeDatabase
 		kind = privilegeKindNone
