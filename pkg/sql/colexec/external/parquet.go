@@ -65,7 +65,7 @@ func scanParquetFile(ctx context.Context, param *ExternalParam, proc *process.Pr
 	return param.parqh.getData(bat, param, proc)
 }
 
-var maxParquetBatchCnt int64 = 1000
+var maxParquetBatchCnt int64 = 100000
 
 func newParquetHandler(param *ExternalParam) (*ParquetHandler, error) {
 	h := ParquetHandler{
@@ -110,6 +110,7 @@ func (h *ParquetHandler) openFile(param *ExternalParam) error {
 func (h *ParquetHandler) prepare(param *ExternalParam) error {
 	h.cols = make([]*parquet.Column, len(param.Attrs))
 	h.mappers = make([]*columnMapper, len(param.Attrs))
+	h.pages = make([]parquet.Pages, len(param.Attrs))
 	for _, attr := range param.Attrs {
 		def := param.Cols[attr.ColIndex]
 		if def.Hidden {
@@ -144,6 +145,7 @@ func (h *ParquetHandler) prepare(param *ExternalParam) error {
 		}
 		h.cols[attr.ColIndex] = col
 		h.mappers[attr.ColIndex] = fn
+		h.pages[attr.ColIndex] = col.Pages()
 	}
 
 	return nil
@@ -1633,7 +1635,7 @@ func bigIntToTwosComplementBytes(ctx context.Context, bi *big.Int, size int) ([]
 func (h *ParquetHandler) getData(bat *batch.Batch, param *ExternalParam, proc *process.Process) error {
 	length := 0
 	finish := false
-	for colIdx, col := range h.cols {
+	for colIdx := range h.cols {
 		if param.Cols[colIdx].Hidden {
 			continue
 		}
@@ -1645,7 +1647,7 @@ func (h *ParquetHandler) getData(bat *batch.Batch, param *ExternalParam, proc *p
 
 		vec := bat.Vecs[colIdx]
 
-		pages := col.Pages()
+		pages := h.pages[colIdx]
 		n := h.batchCnt
 		o := h.offset
 	L:
@@ -1680,10 +1682,6 @@ func (h *ParquetHandler) getData(bat *batch.Batch, param *ExternalParam, proc *p
 				return err
 			}
 		}
-		err := pages.Close()
-		if err != nil {
-			return moerr.ConvertGoError(param.Ctx, err)
-		}
 		length = vec.Length()
 	}
 
@@ -1695,6 +1693,12 @@ func (h *ParquetHandler) getData(bat *batch.Batch, param *ExternalParam, proc *p
 	}
 
 	if finish {
+		// Close all page iterators when file processing is complete
+		for _, pages := range h.pages {
+			if pages != nil {
+				pages.Close()
+			}
+		}
 		param.parqh = nil
 		param.Fileparam.FileFin++
 		if param.Fileparam.FileFin >= param.Fileparam.FileCnt {

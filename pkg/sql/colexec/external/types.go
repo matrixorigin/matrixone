@@ -248,6 +248,7 @@ type ParquetHandler struct {
 	batchCnt int64
 	cols     []*parquet.Column
 	mappers  []*columnMapper
+	pages    []parquet.Pages // cached pages iterators for each column
 }
 
 type columnMapper struct {
