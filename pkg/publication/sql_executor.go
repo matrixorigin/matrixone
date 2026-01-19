@@ -39,11 +39,16 @@ import (
 // getParameterUnitWrapper is a wrapper function to get ParameterUnit from cnUUID
 // Similar to getGlobalPuWrapper in pkg/frontend/cdc_util.go
 // This can be set by the caller to provide a way to get ParameterUnit
-var getParameterUnitWrapper func(cnUUID string) *config.ParameterUnit
+var (
+	getParameterUnitWrapper   func(cnUUID string) *config.ParameterUnit
+	getParameterUnitWrapperMu sync.RWMutex
+)
 
 // SetGetParameterUnitWrapper sets the wrapper function to get ParameterUnit from cnUUID
 // This should be called during initialization to provide a way to get ParameterUnit
 func SetGetParameterUnitWrapper(fn func(cnUUID string) *config.ParameterUnit) {
+	getParameterUnitWrapperMu.Lock()
+	defer getParameterUnitWrapperMu.Unlock()
 	getParameterUnitWrapper = fn
 }
 
@@ -307,8 +312,11 @@ func initAesKeyForPublication(ctx context.Context, executor SQLExecutor, cnUUID 
 	// Get KeyEncryptionKey using getParameterUnitWrapper (similar to CDC)
 	// First try getParameterUnitWrapper if available
 	var pu *config.ParameterUnit
-	if getParameterUnitWrapper != nil {
-		pu = getParameterUnitWrapper(cnUUID)
+	getParameterUnitWrapperMu.RLock()
+	wrapper := getParameterUnitWrapper
+	getParameterUnitWrapperMu.RUnlock()
+	if wrapper != nil {
+		pu = wrapper(cnUUID)
 	}
 
 	// Fallback to context if wrapper is not available or returned nil
