@@ -58,7 +58,7 @@ func TestCBloomFilter_VarlenaVectorWithEmptySlices(t *testing.T) {
 	vec := vector.NewVec(types.New(types.T_varchar, 0, 0))
 	defer vec.Free(mp)
 
-	// idx 0: "hello"
+	// idx 0: "hello world. this is a big area."
 	// idx 1: "" (empty, non-null)
 	// idx 2: "world"
 	// idx 3: null
@@ -89,6 +89,10 @@ func TestCBloomFilter_VarlenaVectorWithEmptySlices(t *testing.T) {
 		}
 	})
 
+	require.True(t, bf.Test([]byte("hello world. this is a big area.")))
+	require.True(t, bf.Test([]byte("")))
+	require.True(t, bf.Test([]byte("world")))
+
 	// 3. Test TestAndAddVector with a new filter
 	bf2 := NewCBloomFilterWithProbaility(10, 0.00001)
 	defer bf2.Free()
@@ -110,4 +114,8 @@ func TestCBloomFilter_VarlenaVectorWithEmptySlices(t *testing.T) {
 			require.True(t, exists, "idx %d (non-null) should exist now", idx)
 		}
 	})
+
+	require.True(t, bf2.Test([]byte("hello world. this is a big area.")))
+	require.True(t, bf2.Test([]byte("")))
+	require.True(t, bf2.Test([]byte("world")))
 }
