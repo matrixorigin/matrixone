@@ -290,7 +290,9 @@ func (ctr *container) spillDataToDisk(proc *process.Process, parentBkt *spillBuc
 		nAggs := int32(len(ctr.aggList))
 		buf.Write(types.EncodeInt32(&nAggs))
 		for _, ag := range ctr.aggList {
-			ag.SaveIntermediateResult(cnt, flags, buf)
+			if err := ag.SaveIntermediateResult(cnt, flags, buf); err != nil {
+				return err
+			}
 		}
 
 		magic = 0xdeadbeef12345678
@@ -298,7 +300,10 @@ func (ctr *container) spillDataToDisk(proc *process.Process, parentBkt *spillBuc
 		buf.Write(types.EncodeUint64(&magic))
 
 		ctr.currentSpillBkt[i].cnt += cnt
-		ctr.currentSpillBkt[i].file.Write(buf.Bytes())
+		_, err := ctr.currentSpillBkt[i].file.Write(buf.Bytes())
+		if err != nil {
+			return err
+		}
 	}
 
 	// reset ctr for next spill
