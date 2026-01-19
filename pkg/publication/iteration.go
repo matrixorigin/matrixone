@@ -158,6 +158,7 @@ func InitializeIterationContext(
 	var upstreamConn sql.NullString
 	var contextJSON sql.NullString
 	var errorMessage sql.NullString
+	var subscriptionState int8
 
 	if !result.Next() {
 		if err := result.Err(); err != nil {
@@ -166,7 +167,7 @@ func InitializeIterationContext(
 		return nil, moerr.NewInternalErrorf(ctx, "no rows returned for task_id %d", taskID)
 	}
 
-	if err := result.Scan(&subscriptionName, &syncLevel, &accountID, &dbName, &tableName, &upstreamConn, &contextJSON, &errorMessage); err != nil {
+	if err := result.Scan(&subscriptionName, &syncLevel, &accountID, &dbName, &tableName, &upstreamConn, &contextJSON, &errorMessage, &subscriptionState); err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "failed to scan query result: %v", err)
 	}
 
@@ -284,6 +285,7 @@ func InitializeIterationContext(
 		LocalExecutor:      localExecutor,
 		UpstreamExecutor:   upstreamExecutor,
 		IterationLSN:       iterationLSN,
+		SubscriptionState:  subscriptionState,
 		ActiveAObj:         make(map[objectio.ObjectId]AObjMapping),
 		TableIDs:           make(map[TableKey]uint64),
 		IndexTableMappings: make(map[string]string),
@@ -367,6 +369,11 @@ func (iterCtx *IterationContext) Close(commit bool) error {
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, iterCtx.SrcInfo.AccountID)
 	ctx = context.WithValue(ctx, defines.PkCheckByTN{}, int8(cmd_util.SkipAllDedup))
 
+	// Check subscription state: if not running, rollback transaction
+	if iterCtx.SubscriptionState != SubscriptionStateRunning {
+		commit = false
+	}
+
 	var err error
 	if iterCtx.LocalExecutor != nil {
 		err = iterCtx.LocalExecutor.EndTxn(ctx, commit)
@@ -378,7 +385,7 @@ func (iterCtx *IterationContext) Close(commit bool) error {
 	return err
 }
 
-// UpdateIterationState updates iteration state, iteration LSN, iteration context, and error message in mo_ccpr_log table
+// UpdateIterationState updates iteration state, iteration LSN, iteration context, error message, and subscription state in mo_ccpr_log table
 // It serializes the relevant parts of IterationContext to JSON and updates the corresponding fields
 func UpdateIterationState(
 	ctx context.Context,
@@ -388,6 +395,7 @@ func UpdateIterationState(
 	iterationLSN uint64,
 	iterationCtx *IterationContext,
 	errorMessage string,
+	subscriptionState int8,
 ) error {
 	if executor == nil {
 		return moerr.NewInternalError(ctx, "executor is nil")
@@ -458,6 +466,7 @@ func UpdateIterationState(
 		iterationLSN,
 		contextJSON,
 		errorMessage,
+		subscriptionState,
 	)
 
 	// Execute update SQL using system account context
@@ -972,11 +981,14 @@ func ExecuteIteration(
 			classifier := NewDownstreamCommitClassifier()
 			errorMetadata, retryable := BuildErrorMetadata(iterationCtx.ErrorMetadata, err, classifier)
 			finalState := IterationStateError
+			subscriptionState := SubscriptionStateRunning
 			if retryable {
 				finalState = IterationStateCompleted
+			} else {
+				subscriptionState = SubscriptionStateError
 			}
 			errorMsg := errorMetadata.Format()
-			if err = UpdateIterationState(ctx, iterationCtx.LocalExecutor, taskID, finalState, iterationLSN, iterationCtx, errorMsg); err != nil {
+			if err = UpdateIterationState(ctx, iterationCtx.LocalExecutor, taskID, finalState, iterationLSN, iterationCtx, errorMsg, subscriptionState); err != nil {
 				// Log error but don't override the original error
 				err = moerr.NewInternalErrorf(ctx, "failed to update iteration state: %v", err)
 				logutil.Error(
@@ -997,17 +1009,19 @@ func ExecuteIteration(
 	defer func() {
 		var errorMsg string
 		finalState := IterationStateCompleted
+		subscriptionState := SubscriptionStateRunning
 		nextLSN := iterationLSN + 1
 		if err != nil {
 			classifier := NewDownstreamCommitClassifier()
 			errorMetadata, retryable := BuildErrorMetadata(iterationCtx.ErrorMetadata, err, classifier)
 			if !retryable {
 				finalState = IterationStateError
+				subscriptionState = SubscriptionStateError
 			}
 			errorMsg = errorMetadata.Format()
 			nextLSN = iterationLSN
 		}
-		if err = UpdateIterationState(ctx, iterationCtx.LocalExecutor, taskID, finalState, nextLSN, iterationCtx, errorMsg); err != nil {
+		if err = UpdateIterationState(ctx, iterationCtx.LocalExecutor, taskID, finalState, nextLSN, iterationCtx, errorMsg, subscriptionState); err != nil {
 			// Log error but don't override the original error
 			err = moerr.NewInternalErrorf(ctx, "failed to update iteration state: %v", err)
 		}

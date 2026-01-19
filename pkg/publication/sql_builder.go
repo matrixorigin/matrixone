@@ -103,7 +103,7 @@ const (
 		`FROM mo_catalog.mo_ccpr_log ` +
 		`WHERE task_id = %d`
 
-	// Query mo_ccpr_log full SQL template (includes subscription_name, sync_level, account_id, db_name, table_name, upstream_conn, context, error_message)
+	// Query mo_ccpr_log full SQL template (includes subscription_name, sync_level, account_id, db_name, table_name, upstream_conn, context, error_message, state)
 	PublicationQueryMoCcprLogFullSqlTemplate = `SELECT ` +
 		`subscription_name, ` +
 		`sync_level, ` +
@@ -112,7 +112,8 @@ const (
 		`table_name, ` +
 		`upstream_conn, ` +
 		`context, ` +
-		`error_message ` +
+		`error_message, ` +
+		`state ` +
 		`FROM mo_catalog.mo_ccpr_log ` +
 		`WHERE task_id = %d`
 
@@ -130,7 +131,8 @@ const (
 		`SET iteration_state = %d, ` +
 		`iteration_lsn = %d, ` +
 		`context = '%s', ` +
-		`error_message = '%s' ` +
+		`error_message = '%s', ` +
+		`state = %d ` +
 		`WHERE task_id = %d`
 
 	// Update mo_ccpr_log iteration_state (and lsn) only
@@ -692,14 +694,15 @@ func (b publicationSQLBuilder) CheckSnapshotFlushedSQL(
 }
 
 // UpdateMoCcprLogSQL creates SQL for updating mo_ccpr_log by task_id
-// Updates iteration_state, iteration_lsn, context, and error_message
-// Example: UPDATE mo_catalog.mo_ccpr_log SET iteration_state = 1, iteration_lsn = 1000, context = '{"key":"value"}', error_message = 'error msg' WHERE task_id = 1
+// Updates iteration_state, iteration_lsn, context, error_message, and state
+// Example: UPDATE mo_catalog.mo_ccpr_log SET iteration_state = 1, iteration_lsn = 1000, context = '{"key":"value"}', error_message = 'error msg', state = 0 WHERE task_id = 1
 func (b publicationSQLBuilder) UpdateMoCcprLogSQL(
 	taskID uint64,
 	iterationState int8,
 	iterationLSN uint64,
 	contextJSON string,
 	errorMessage string,
+	subscriptionState int8,
 ) string {
 	return fmt.Sprintf(
 		PublicationSQLTemplates[PublicationUpdateMoCcprLogSqlTemplate_Idx].SQL,
@@ -707,6 +710,7 @@ func (b publicationSQLBuilder) UpdateMoCcprLogSQL(
 		iterationLSN,
 		escapeSQLString(contextJSON),
 		escapeSQLString(errorMessage),
+		subscriptionState,
 		taskID,
 	)
 }

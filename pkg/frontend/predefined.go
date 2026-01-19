@@ -293,6 +293,7 @@ var (
 				table_name VARCHAR(5000),
 				upstream_conn VARCHAR(5000) NOT NULL,
 				sync_config JSON NOT NULL,
+				state TINYINT NOT NULL DEFAULT 0,
 				iteration_state TINYINT NOT NULL DEFAULT 0,
 				iteration_lsn BIGINT DEFAULT 0,
 				context JSON,

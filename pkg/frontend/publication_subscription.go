@@ -782,9 +782,9 @@ func doResumeCcprSubscription(ctx context.Context, ses *Session, rcs *tree.Resum
 		return moerr.NewInternalErrorf(ctx, "subscription '%s' does not exist", pubName)
 	}
 
-	// Update mo_ccpr_log: set iteration_state to complete (2), error_message to null
+	// Update mo_ccpr_log: set state to running (0)
 	updateSQL := fmt.Sprintf(
-		"UPDATE mo_catalog.mo_ccpr_log SET iteration_state = 2, error_message = NULL WHERE subscription_name = '%s' AND drop_at IS NULL",
+		"UPDATE mo_catalog.mo_ccpr_log SET state = 0 WHERE subscription_name = '%s' AND drop_at IS NULL",
 		escapedPubName,
 	)
 	if accountId != catalog.System_Account {
@@ -851,10 +851,9 @@ func doPauseCcprSubscription(ctx context.Context, ses *Session, pcs *tree.PauseC
 		return moerr.NewInternalErrorf(ctx, "subscription '%s' does not exist", pubName)
 	}
 
-	// Update mo_ccpr_log: set iteration_state to 5 (pause)
-	// Note: Using iteration_state = 5 to represent pause state
+	// Update mo_ccpr_log: set state to pause (2)
 	updateSQL := fmt.Sprintf(
-		"UPDATE mo_catalog.mo_ccpr_log SET iteration_state = 5 WHERE subscription_name = '%s' AND drop_at IS NULL",
+		"UPDATE mo_catalog.mo_ccpr_log SET state = 2 WHERE subscription_name = '%s' AND drop_at IS NULL",
 		escapedPubName,
 	)
 	if accountId != catalog.System_Account {
@@ -2873,6 +2872,8 @@ func doCreateSubscription(ctx context.Context, ses *Session, cs *tree.CreateSubs
 
 	// iteration_state: 2 = complete (based on design.md: 0='pending', 1='running', 2='complete', 3='error', 4='cancel')
 	iterationState := int8(2) // complete
+	// state: 0 = running (subscription state: 0=running, 1=error, 2=pause, 3=dropped)
+	subscriptionState := int8(0) // running
 
 	sql := fmt.Sprintf(
 		`INSERT INTO mo_catalog.mo_ccpr_log (
@@ -2883,6 +2884,7 @@ func doCreateSubscription(ctx context.Context, ses *Session, cs *tree.CreateSubs
 			table_name,
 			upstream_conn,
 			sync_config,
+			state,
 			iteration_state,
 			iteration_lsn
 		) VALUES (
@@ -2894,6 +2896,7 @@ func doCreateSubscription(ctx context.Context, ses *Session, cs *tree.CreateSubs
 			'%s',
 			'%s',
 			%d,
+			%d,
 			0
 		)`,
 		string(cs.PubName),
@@ -2903,6 +2906,7 @@ func doCreateSubscription(ctx context.Context, ses *Session, cs *tree.CreateSubs
 		tableName,
 		encryptedUri,
 		string(syncConfigJSON),
+		subscriptionState,
 		iterationState,
 	)
 

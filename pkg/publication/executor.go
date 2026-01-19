@@ -180,12 +180,12 @@ func NewPublicationTaskExecutor(
 }
 
 // TaskEntry represents a task entry in the executor
-// Only stores taskid, lsn, state, dropped
+// Only stores taskid, lsn, state, subscriptionState
 type TaskEntry struct {
-	taskID  uint64
-	lsn     uint64
-	state   int8 // iteration_state from mo_ccpr_log
-	dropped types.Timestamp
+	taskID            uint64
+	lsn               uint64
+	state             int8 // iteration_state from mo_ccpr_log
+	subscriptionState int8 // subscription state: 0=running, 1=error, 2=pause, 3=dropped
 }
 
 func taskEntryLess(a, b *TaskEntry) bool {
@@ -410,8 +410,8 @@ func (exec *PublicationTaskExecutor) getCandidateTasks() []*TaskEntry {
 	allTasks := exec.getAllTasks()
 	candidates := make([]*TaskEntry, 0)
 	for _, task := range allTasks {
-		// Only include tasks that are not dropped
-		if task.dropped == 0 && task.state == IterationStateCompleted {
+		// Only include tasks that subscription state is running and iteration state is completed
+		if task.subscriptionState == SubscriptionStateRunning && task.state == IterationStateCompleted {
 			candidates = append(candidates, task)
 		}
 	}
@@ -478,22 +478,23 @@ func (exec *PublicationTaskExecutor) applyCcprLogWithRel(ctx context.Context, re
 		}
 		// Parse mo_ccpr_log columns:
 		// task_id, subscription_name, sync_level, account_id, db_name, table_name,
-		// upstream_conn, sync_config, iteration_state, iteration_lsn, context,
+		// upstream_conn, sync_config, state, iteration_state, iteration_lsn, context,
 		// cn_uuid, error_message, created_at, drop_at
 		taskIDVector := insertData.Vecs[0]
 		taskIDs := vector.MustFixedColWithTypeCheck[uint32](taskIDVector)
-		iterationStateVector := insertData.Vecs[8]
+		subscriptionStateVector := insertData.Vecs[8]
+		subscriptionStates := vector.MustFixedColWithTypeCheck[int8](subscriptionStateVector)
+		iterationStateVector := insertData.Vecs[9]
 		states := vector.MustFixedColWithTypeCheck[int8](iterationStateVector)
-		iterationLSNVector := insertData.Vecs[9]
+		iterationLSNVector := insertData.Vecs[10]
 		lsns := vector.MustFixedColWithTypeCheck[int64](iterationLSNVector)
-		// drop_at is at index 14
-		dropAtVector := insertData.Vecs[14]
-		dropAts := vector.MustFixedColWithTypeCheck[types.Timestamp](dropAtVector)
+		// drop_at is at index 15
+		dropAtVector := insertData.Vecs[15]
 		// commit_ts is typically the last column (after all data columns)
-		// The number of columns in mo_ccpr_log is 15 (0-14), so commit_ts should be at index 15
+		// The number of columns in mo_ccpr_log is 16 (0-15), so commit_ts should be at index 16
 		var commitTSs []types.TS
-		if len(insertData.Vecs) > 15 {
-			commitTSVector := insertData.Vecs[15]
+		if len(insertData.Vecs) > 16 {
+			commitTSVector := insertData.Vecs[16]
 			commitTSs = vector.MustFixedColWithTypeCheck[types.TS](commitTSVector)
 		} else {
 			// If commit_ts is not available, use empty TS
@@ -531,16 +532,16 @@ func (exec *PublicationTaskExecutor) applyCcprLogWithRel(ctx context.Context, re
 			}
 		}
 		for _, task := range taskMap {
-			var dropped types.Timestamp
-			// Check if drop_at is set (indicating dropped)
+			subscriptionState := subscriptionStates[task.offset]
+			// Check if drop_at is set (indicating dropped), update subscriptionState
 			if !dropAtVector.IsNull(uint64(task.offset)) {
-				dropped = dropAts[task.offset]
+				subscriptionState = SubscriptionStateDropped
 			}
 			exec.addOrUpdateTask(
 				uint64(taskIDs[task.offset]),
 				uint64(lsns[task.offset]),
 				states[task.offset],
-				dropped,
+				subscriptionState,
 			)
 		}
 	}
@@ -562,7 +563,7 @@ func (exec *PublicationTaskExecutor) replay(ctx context.Context) (err error) {
 		)
 	}()
 	sql := fmt.Sprintf(
-		`SELECT task_id, iteration_state, iteration_lsn, drop_at FROM mo_catalog.mo_ccpr_log`,
+		`SELECT task_id, iteration_state, iteration_lsn, state, drop_at FROM mo_catalog.mo_ccpr_log`,
 	)
 	txn, err := getTxn(ctx, exec.txnEngine, exec.cnTxnClient, "publication replay")
 	if err != nil {
@@ -584,18 +585,20 @@ func (exec *PublicationTaskExecutor) replay(ctx context.Context) (err error) {
 		states := vector.MustFixedColWithTypeCheck[int8](iterationStateVector)
 		iterationLSNVector := cols[2]
 		lsns := vector.MustFixedColWithTypeCheck[int64](iterationLSNVector)
-		dropAtVector := cols[3]
-		dropAts := vector.MustFixedColWithTypeCheck[types.Timestamp](dropAtVector)
+		subscriptionStateVector := cols[3]
+		subscriptionStates := vector.MustFixedColWithTypeCheck[int8](subscriptionStateVector)
+		dropAtVector := cols[4]
 		for i := 0; i < rows; i++ {
-			var dropped types.Timestamp
+			subscriptionState := subscriptionStates[i]
+			// Check if drop_at is set (indicating dropped), update subscriptionState
 			if !dropAtVector.IsNull(uint64(i)) {
-				dropped = dropAts[i]
+				subscriptionState = SubscriptionStateDropped
 			}
 			err = exec.addOrUpdateTask(
 				uint64(taskIDs[i]),
 				uint64(lsns[i]),
 				states[i],
-				dropped,
+				subscriptionState,
 			)
 			if err != nil {
 				return false
@@ -611,25 +614,25 @@ func (exec *PublicationTaskExecutor) addOrUpdateTask(
 	taskID uint64,
 	lsn uint64,
 	state int8,
-	dropped types.Timestamp,
+	subscriptionState int8,
 ) error {
 	task, ok := exec.getTask(taskID)
 	if !ok {
 		logutil.Infof("Publication-Task add task %v", taskID)
 		task = &TaskEntry{
-			taskID:  taskID,
-			lsn:     lsn,
-			state:   state,
-			dropped: dropped,
+			taskID:            taskID,
+			lsn:               lsn,
+			state:             state,
+			subscriptionState: subscriptionState,
 		}
 		exec.setTask(task)
 		return nil
 	}
-	logutil.Infof("Publication-Task update task %v-%d-%d", taskID, lsn, state)
+	logutil.Infof("Publication-Task update task %v-%d-%d-%d", taskID, lsn, state, subscriptionState)
 	// Update existing task
 	task.lsn = lsn
 	task.state = state
-	task.dropped = dropped
+	task.subscriptionState = subscriptionState
 	exec.setTask(task)
 	return nil
 }
@@ -670,12 +673,9 @@ func (exec *PublicationTaskExecutor) GCInMemoryTask(threshold time.Duration) {
 	tasks := exec.getAllTasks()
 	tasksToDelete := make([]*TaskEntry, 0)
 	for _, task := range tasks {
-		if task.dropped != 0 {
-			// Check if dropped timestamp is older than threshold
-			droppedTime := time.Unix(int64(task.dropped), 0)
-			if time.Since(droppedTime) > threshold {
-				tasksToDelete = append(tasksToDelete, task)
-			}
+		// Delete tasks that are dropped (subscriptionState == SubscriptionStateDropped)
+		if task.subscriptionState == SubscriptionStateDropped {
+			tasksToDelete = append(tasksToDelete, task)
 		}
 	}
 	taskIDs := make([]uint64, 0, len(tasksToDelete))

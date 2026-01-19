@@ -34,6 +34,14 @@ const (
 	DDLOperationDrop   int8 = 3
 )
 
+// Subscription state types
+const (
+	SubscriptionStateRunning int8 = 0 // running
+	SubscriptionStateError   int8 = 1 // error
+	SubscriptionStatePause   int8 = 2 // pause
+	SubscriptionStateDropped int8 = 3 // dropped
+)
+
 // SrcInfo contains source information for subscription
 // It can be account/database/table level
 type SrcInfo struct {
@@ -76,7 +84,8 @@ type IterationContext struct {
 	LocalExecutor    SQLExecutor
 
 	// Execution state
-	IterationLSN uint64
+	IterationLSN      uint64
+	SubscriptionState int8 // subscription state: 0=running, 1=error, 2=pause, 3=dropped
 
 	// Context information
 	PrevSnapshotName    string

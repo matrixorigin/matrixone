@@ -208,6 +208,7 @@ func TestCheckIterationStatus(t *testing.T) {
 					table_name, 
 					upstream_conn, 
 					sync_config, 
+					state, 
 					iteration_state, 
 					iteration_lsn, 
 					cn_uuid
@@ -220,6 +221,7 @@ func TestCheckIterationStatus(t *testing.T) {
 					'test_table', 
 					'test_conn', 
 					'{}', 
+					0, 
 					%d, 
 					%d, 
 					'%s'
@@ -376,6 +378,7 @@ func TestExecuteIteration1(t *testing.T) {
 			table_name, 
 			upstream_conn, 
 			sync_config, 
+			state, 
 			iteration_state, 
 			iteration_lsn, 
 			cn_uuid
@@ -388,6 +391,7 @@ func TestExecuteIteration1(t *testing.T) {
 			'%s', 
 			'%s', 
 			'{}', 
+			0, 
 			%d, 
 			%d, 
 			'%s'
@@ -882,6 +886,7 @@ func TestExecuteIterationDatabaseLevel(t *testing.T) {
 			table_name, 
 			upstream_conn, 
 			sync_config, 
+			state, 
 			iteration_state, 
 			iteration_lsn, 
 			cn_uuid
@@ -894,6 +899,7 @@ func TestExecuteIterationDatabaseLevel(t *testing.T) {
 			'', 
 			'%s', 
 			'{}', 
+			0, 
 			%d, 
 			%d, 
 			'%s'
@@ -1183,6 +1189,7 @@ func TestExecuteIterationWithIndex(t *testing.T) {
 			table_name, 
 			upstream_conn, 
 			sync_config, 
+			state, 
 			iteration_state, 
 			iteration_lsn, 
 			cn_uuid
@@ -1195,6 +1202,7 @@ func TestExecuteIterationWithIndex(t *testing.T) {
 			'%s', 
 			'%s', 
 			'{}', 
+			0, 
 			%d, 
 			%d, 
 			'%s'
@@ -1578,6 +1586,7 @@ func TestExecuteIterationWithSnapshotFinishedInjection(t *testing.T) {
 			table_name, 
 			upstream_conn, 
 			sync_config, 
+			state, 
 			iteration_state, 
 			iteration_lsn, 
 			cn_uuid
@@ -1590,6 +1599,7 @@ func TestExecuteIterationWithSnapshotFinishedInjection(t *testing.T) {
 			'%s', 
 			'%s', 
 			'{}', 
+			0, 
 			%d, 
 			%d, 
 			'%s'
@@ -1880,6 +1890,7 @@ func TestExecuteIterationWithCommitFailedInjection(t *testing.T) {
 			table_name, 
 			upstream_conn, 
 			sync_config, 
+			state, 
 			iteration_state, 
 			iteration_lsn, 
 			cn_uuid
@@ -1892,6 +1903,7 @@ func TestExecuteIterationWithCommitFailedInjection(t *testing.T) {
 			'%s', 
 			'%s', 
 			'{}', 
+			0, 
 			%d, 
 			%d, 
 			'%s'
