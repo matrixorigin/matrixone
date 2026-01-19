@@ -291,6 +291,15 @@ func createPublication(ctx context.Context, bh BackgroundExec, cp *tree.CreatePu
 	// delete current tenant
 	delete(accIdInfoMap, int32(accountId))
 
+	// Check if trying to publish to self (before validating other accounts)
+	if !cp.AccountsSet.All {
+		for _, acc := range cp.AccountsSet.SetAccounts {
+			if string(acc) == accountName {
+				return moerr.NewInternalError(ctx, "can't publish to self")
+			}
+		}
+	}
+
 	var subAccounts map[int32]*pubsub.AccountInfo
 	if cp.AccountsSet.All {
 		if accountId != sysAccountID && !pubsub.CanPubToAll(accountName, getPu(bh.Service()).SV.PubAllAccounts) {
