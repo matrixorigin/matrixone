@@ -140,7 +140,7 @@ func TestCheckIterationStatus(t *testing.T) {
 			expectedCNUUID: "test-cn-uuid-123",
 			iterationLSN:   1000,
 			expectedLSN:    1000,
-			iterationState: publication.IterationStatePending,
+			iterationState: publication.IterationStateRunning,
 			shouldInsert:   true,
 			expectError:    false,
 		},
@@ -151,7 +151,7 @@ func TestCheckIterationStatus(t *testing.T) {
 			expectedCNUUID: "wrong-cn-uuid",
 			iterationLSN:   1000,
 			expectedLSN:    1000,
-			iterationState: publication.IterationStatePending,
+			iterationState: publication.IterationStateRunning,
 			shouldInsert:   true,
 			expectError:    true,
 			errorContains:  "cn_uuid mismatch",
@@ -163,7 +163,7 @@ func TestCheckIterationStatus(t *testing.T) {
 			expectedCNUUID: "test-cn-uuid-123",
 			iterationLSN:   1000,
 			expectedLSN:    2000,
-			iterationState: publication.IterationStatePending,
+			iterationState: publication.IterationStateRunning,
 			shouldInsert:   true,
 			expectError:    true,
 			errorContains:  "iteration_lsn mismatch",
@@ -405,7 +405,7 @@ func TestExecuteIteration1(t *testing.T) {
 		srcTableName,
 		fmt.Sprintf("%s:%d", publication.InternalSQLExecutorType, srcAccountID),
 		publication.SubscriptionStateRunning,
-		publication.IterationStatePending,
+		publication.IterationStateRunning,
 		iterationLSN,
 		cnUUID,
 	)
@@ -528,7 +528,7 @@ func TestExecuteIteration1(t *testing.T) {
 		`UPDATE mo_catalog.mo_ccpr_log 
 		SET iteration_state = %d, iteration_lsn = %d 
 		WHERE task_id = %d`,
-		publication.IterationStatePending,
+		publication.IterationStateRunning,
 		iterationLSN2,
 		taskID,
 	)
@@ -655,7 +655,7 @@ func TestExecuteIteration1(t *testing.T) {
 		`UPDATE mo_catalog.mo_ccpr_log 
 		SET iteration_state = %d, iteration_lsn = %d 
 		WHERE task_id = %d`,
-		publication.IterationStatePending,
+		publication.IterationStateRunning,
 		iterationLSN3,
 		taskID,
 	)
@@ -913,7 +913,7 @@ func TestExecuteIterationDatabaseLevel(t *testing.T) {
 		srcDBName,
 		fmt.Sprintf("%s:%d", publication.InternalSQLExecutorType, srcAccountID),
 		publication.SubscriptionStateRunning,
-		publication.IterationStatePending,
+		publication.IterationStateRunning,
 		iterationLSN,
 		cnUUID,
 	)
@@ -1218,7 +1218,7 @@ func TestExecuteIterationWithIndex(t *testing.T) {
 		srcTableName,
 		fmt.Sprintf("%s:%d", publication.InternalSQLExecutorType, srcAccountID),
 		publication.SubscriptionStateRunning,
-		publication.IterationStatePending,
+		publication.IterationStateRunning,
 		iterationLSN,
 		cnUUID,
 	)
@@ -1616,7 +1616,7 @@ func TestExecuteIterationWithSnapshotFinishedInjection(t *testing.T) {
 		srcTableName,
 		fmt.Sprintf("%s:%d", publication.InternalSQLExecutorType, srcAccountID),
 		publication.SubscriptionStateRunning,
-		publication.IterationStatePending,
+		publication.IterationStateRunning,
 		iterationLSN,
 		cnUUID,
 	)
@@ -1685,7 +1685,7 @@ func TestExecuteIterationWithSnapshotFinishedInjection(t *testing.T) {
 		`UPDATE mo_catalog.mo_ccpr_log 
 		SET iteration_state = %d, iteration_lsn = %d 
 		WHERE task_id = %d`,
-		publication.IterationStatePending,
+		publication.IterationStateRunning,
 		iterationLSN,
 		taskID,
 	)
@@ -1921,7 +1921,7 @@ func TestExecuteIterationWithCommitFailedInjection(t *testing.T) {
 		srcTableName,
 		fmt.Sprintf("%s:%d", publication.InternalSQLExecutorType, srcAccountID),
 		publication.SubscriptionStateRunning,
-		publication.IterationStatePending,
+		publication.IterationStateRunning,
 		iterationLSN,
 		cnUUID,
 	)

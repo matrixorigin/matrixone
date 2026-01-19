@@ -113,7 +113,7 @@ func (w *worker) onItem(taskCtx *TaskContext) {
 		w.ctx,
 		func() error {
 			// Ensure ccpr state is set to pending before executing iteration
-			if err := w.updateIterationStatePending(w.ctx, taskCtx.TaskID, taskCtx.LSN); err != nil {
+			if err := w.updateIterationStateRunning(w.ctx, taskCtx.TaskID, taskCtx.LSN); err != nil {
 				logutil.Error(
 					"Publication-Task update iteration state to pending failed",
 					zap.Uint64("taskID", taskCtx.TaskID),
@@ -166,7 +166,7 @@ func (w *worker) Stop() {
 	close(w.taskChan)
 }
 
-func (w *worker) updateIterationStatePending(ctx context.Context, taskID uint64, lsn uint64) error {
+func (w *worker) updateIterationStateRunning(ctx context.Context, taskID uint64, lsn uint64) error {
 	executor, err := NewInternalSQLExecutor(
 		w.cnUUID,
 		w.cnTxnClient,
@@ -180,7 +180,7 @@ func (w *worker) updateIterationStatePending(ctx context.Context, taskID uint64,
 
 	updateSQL := PublicationSQLBuilder.UpdateMoCcprLogStateSQL(
 		taskID,
-		IterationStatePending,
+		IterationStateRunning,
 		lsn,
 		w.cnUUID,
 	)

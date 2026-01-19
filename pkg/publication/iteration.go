@@ -701,21 +701,8 @@ func CheckIterationStatus(
 	}
 
 	// Check if iteration_state is pending
-	if iterationState != IterationStatePending {
-		return moerr.NewInternalErrorf(ctx, "iteration_state is not pending: expected %d (pending), got %d", IterationStatePending, iterationState)
-	}
-
-	// All checks passed, update iteration_state to running using the existing executor
-	// Build update SQL to set iteration_state to running
-	updateSQL := PublicationSQLBuilder.UpdateMoCcprLogIterationStateOnlySQL(taskID, IterationStateRunning)
-
-	// Execute update SQL using system account context
-	updateResult, err := executor.ExecSQL(systemCtx, nil, updateSQL, false, false)
-	if err != nil {
-		return moerr.NewInternalErrorf(ctx, "failed to execute update SQL: %v", err)
-	}
-	if updateResult != nil {
-		updateResult.Close()
+	if iterationState != IterationStateRunning {
+		return moerr.NewInternalErrorf(ctx, "iteration_state is not running: expected %d (running), got %d", IterationStateRunning, iterationState)
 	}
 
 	return nil
