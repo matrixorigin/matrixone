@@ -415,6 +415,13 @@ func TestCBloomFilter_AddVarlenaVectorWithNulls(t *testing.T) {
 		}
 	})
 	require.Equal(t, count, callCount)
+
+	for i := 0; i < count; i++ {
+		if i%2 != 0 {
+			continue
+		}
+		require.True(t, bf.Test([]byte(fmt.Sprintf("%d", i))))
+	}
 }
 
 func TestCBloomFilter_TestAndAddVarlenaVectorWithNulls(t *testing.T) {
