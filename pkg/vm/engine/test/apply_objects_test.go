@@ -410,7 +410,6 @@ type applyObjectCase struct {
 			fromts, tots types.TS,
 		) error,
 	)
-	checkFn func()
 }
 
 var applyObjectCases = []applyObjectCase{

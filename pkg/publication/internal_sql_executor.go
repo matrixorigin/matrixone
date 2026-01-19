@@ -684,7 +684,7 @@ func (r *InternalResult) Columns() ([]string, error) {
 		return r.columns, nil
 	}
 
-	if r.executorResult.Batches == nil || len(r.executorResult.Batches) == 0 {
+	if len(r.executorResult.Batches) == 0 {
 		return nil, moerr.NewInternalErrorNoCtx("no batches available")
 	}
 

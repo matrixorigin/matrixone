@@ -726,7 +726,8 @@ func (h *UpstreamSQLHelper) handleCheckSnapshotFlushedDirectly(
 	var de *disttae.Engine
 	var ok bool
 	if de, ok = h.engine.(*disttae.Engine); !ok {
-		if entireEngine, ok := h.engine.(*engine.EntireEngine); ok {
+		var entireEngine *engine.EntireEngine
+		if entireEngine, ok = h.engine.(*engine.EntireEngine); ok {
 			de, ok = entireEngine.Engine.(*disttae.Engine)
 		}
 		if !ok {
@@ -781,7 +782,8 @@ func (h *UpstreamSQLHelper) getFileserviceFromEngine() (fileservice.FileService,
 	var de *disttae.Engine
 	var ok bool
 	if de, ok = h.engine.(*disttae.Engine); !ok {
-		if entireEngine, ok := h.engine.(*engine.EntireEngine); ok {
+		var entireEngine *engine.EntireEngine
+		if entireEngine, ok = h.engine.(*engine.EntireEngine); ok {
 			de, ok = entireEngine.Engine.(*disttae.Engine)
 		}
 		if !ok {
