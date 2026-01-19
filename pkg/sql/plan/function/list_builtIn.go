@@ -17,13 +17,12 @@ package function
 import (
 	"fmt"
 
-	fj "github.com/matrixorigin/matrixone/pkg/sql/plan/function/fault"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
+	fj "github.com/matrixorigin/matrixone/pkg/sql/plan/function/fault"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -2476,14 +2475,14 @@ var supportedStringBuiltIns = []FuncNew{
 			}
 
 			if t01.Oid == types.T_decimal64 || t01.Oid == types.T_decimal128 || t01.Oid == types.T_decimal256 {
-				if t01.Scale != t1.Scale || t02.Scale != t2.Scale {
-					return newCheckResultWithFailure(failedFunctionParametersWrong)
-				}
+				t01.Scale = max(t01.Scale, t02.Scale)
+				t1.Scale = t01.Scale
+				t2.Scale = t01.Scale
 			}
 
 			if has0 || has1 {
 				if otherCompareOperatorSupports(t01, t1) && otherCompareOperatorSupports(t01, t2) {
-					return newCheckResultWithCast(0, []types.Type{t01, t1, t2})
+					return newCheckResultWithCast(0, []types.Type{t01, t1, t2, inputs[3]})
 				}
 			} else {
 				if otherCompareOperatorSupports(t01, t1) && otherCompareOperatorSupports(t01, t2) {

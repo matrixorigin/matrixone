@@ -489,16 +489,15 @@ func inRangeFixed[T constraints.Integer | constraints.Float](
 	} else if ivec.IsConst() {
 		val := icol[0]
 		var r bool
-		if flag&1 == 0 {
-			r = val >= lval
-		} else {
-			r = val > lval
-		}
-
-		if flag&2 == 0 {
-			r = r && val <= rval
-		} else {
-			r = r && val < rval
+		switch flag {
+		case 0:
+			r = val >= lval && val <= rval
+		case 1:
+			r = val > lval && val <= rval
+		case 2:
+			r = val >= lval && val < rval
+		case 3:
+			r = val > lval && val < rval
 		}
 
 		for i := range length {
@@ -513,34 +512,42 @@ func inRangeFixed[T constraints.Integer | constraints.Float](
 				rNulls.Add(uint64(i))
 			} else {
 				val := icol[i]
-
-				if flag&1 == 0 {
-					res[i] = val >= lval
-				} else {
-					res[i] = val > lval
-				}
-
-				if flag&2 == 0 {
-					res[i] = res[i] && val <= rval
-				} else {
-					res[i] = res[i] && val < rval
+				switch flag {
+				case 0:
+					res[i] = val >= lval && val <= rval
+				case 1:
+					res[i] = val > lval && val <= rval
+				case 2:
+					res[i] = val >= lval && val < rval
+				case 3:
+					res[i] = val > lval && val < rval
 				}
 			}
 		}
 	} else if ivec.GetSorted() {
-		lowerBound := sort.Search(len(icol), func(i int) bool {
-			if flag&1 == 0 {
+		var lowerBoundFunc func(i int) bool
+		if flag&1 == 0 {
+			lowerBoundFunc = func(i int) bool {
 				return icol[i] >= lval
 			}
-			return icol[i] > lval
-		})
+		} else {
+			lowerBoundFunc = func(i int) bool {
+				return icol[i] > lval
+			}
+		}
+		lowerBound := sort.Search(len(icol), lowerBoundFunc)
 
-		upperBound := sort.Search(len(icol), func(i int) bool {
-			if flag&2 == 0 {
+		var upperBoundFunc func(i int) bool
+		if flag&2 == 0 {
+			upperBoundFunc = func(i int) bool {
 				return icol[i] > rval
 			}
-			return icol[i] >= rval
-		})
+		} else {
+			upperBoundFunc = func(i int) bool {
+				return icol[i] >= rval
+			}
+		}
+		upperBound := sort.Search(len(icol), upperBoundFunc)
 
 		for i := range lowerBound {
 			res[i] = false
@@ -552,19 +559,26 @@ func inRangeFixed[T constraints.Integer | constraints.Float](
 			res[i] = false
 		}
 	} else {
-		for i := range length {
-			val := icol[i]
-
-			if flag&1 == 0 {
-				res[i] = val >= lval
-			} else {
-				res[i] = val > lval
+		switch flag {
+		case 0:
+			for i := range length {
+				val := icol[i]
+				res[i] = val >= lval && val <= rval
 			}
-
-			if flag&2 == 0 {
-				res[i] = res[i] && val <= rval
-			} else {
-				res[i] = res[i] && val < rval
+		case 1:
+			for i := range length {
+				val := icol[i]
+				res[i] = val > lval && val <= rval
+			}
+		case 2:
+			for i := range length {
+				val := icol[i]
+				res[i] = val >= lval && val < rval
+			}
+		case 3:
+			for i := range length {
+				val := icol[i]
+				res[i] = val > lval && val < rval
 			}
 		}
 	}
@@ -591,16 +605,15 @@ func inRangeFixedWithFunc[T types.FixedSizeTExceptStrType](
 	} else if ivec.IsConst() {
 		val := icol[0]
 		var r bool
-		if flag&1 == 0 {
-			r = compareFunc(val, lval) >= 0
-		} else {
-			r = compareFunc(val, lval) > 0
-		}
-
-		if flag&2 == 0 {
-			r = r && compareFunc(val, rval) <= 0
-		} else {
-			r = r && compareFunc(val, rval) < 0
+		switch flag {
+		case 0:
+			r = compareFunc(val, lval) >= 0 && compareFunc(val, rval) <= 0
+		case 1:
+			r = compareFunc(val, lval) > 0 && compareFunc(val, rval) <= 0
+		case 2:
+			r = compareFunc(val, lval) >= 0 && compareFunc(val, rval) < 0
+		case 3:
+			r = compareFunc(val, lval) > 0 && compareFunc(val, rval) < 0
 		}
 
 		for i := range length {
@@ -615,36 +628,42 @@ func inRangeFixedWithFunc[T types.FixedSizeTExceptStrType](
 				rNulls.Add(uint64(i))
 			} else {
 				val := icol[i]
-
-				if flag&1 == 0 {
-					res[i] = compareFunc(val, lval) >= 0
-				} else {
-					res[i] = compareFunc(val, lval) > 0
-				}
-
-				if flag&2 == 0 {
-					res[i] = res[i] && compareFunc(val, rval) <= 0
-				} else {
-					res[i] = res[i] && compareFunc(val, rval) < 0
+				switch flag {
+				case 0:
+					res[i] = compareFunc(val, lval) >= 0 && compareFunc(val, rval) <= 0
+				case 1:
+					res[i] = compareFunc(val, lval) > 0 && compareFunc(val, rval) <= 0
+				case 2:
+					res[i] = compareFunc(val, lval) >= 0 && compareFunc(val, rval) < 0
+				case 3:
+					res[i] = compareFunc(val, lval) > 0 && compareFunc(val, rval) < 0
 				}
 			}
 		}
 	} else if ivec.GetSorted() {
-		lowerBound := sort.Search(len(icol), func(i int) bool {
-			ret := compareFunc(icol[i], lval)
-			if flag&1 == 0 {
-				return ret >= 0
+		var lowerBoundFunc func(i int) bool
+		if flag&1 == 0 {
+			lowerBoundFunc = func(i int) bool {
+				return compareFunc(icol[i], lval) >= 0
 			}
-			return ret > 0
-		})
+		} else {
+			lowerBoundFunc = func(i int) bool {
+				return compareFunc(icol[i], lval) > 0
+			}
+		}
+		lowerBound := sort.Search(len(icol), lowerBoundFunc)
 
-		upperBound := sort.Search(len(icol), func(i int) bool {
-			ret := compareFunc(icol[i], rval)
-			if flag&2 == 0 {
-				return ret > 0
+		var upperBoundFunc func(i int) bool
+		if flag&2 == 0 {
+			upperBoundFunc = func(i int) bool {
+				return compareFunc(icol[i], rval) <= 0
 			}
-			return ret >= 0
-		})
+		} else {
+			upperBoundFunc = func(i int) bool {
+				return compareFunc(icol[i], rval) < 0
+			}
+		}
+		upperBound := sort.Search(len(icol), upperBoundFunc)
 
 		for i := range lowerBound {
 			res[i] = false
@@ -656,19 +675,26 @@ func inRangeFixedWithFunc[T types.FixedSizeTExceptStrType](
 			res[i] = false
 		}
 	} else {
-		for i := range length {
-			val := icol[i]
-
-			if flag&1 == 0 {
-				res[i] = compareFunc(val, lval) >= 0
-			} else {
-				res[i] = compareFunc(val, lval) > 0
+		switch flag {
+		case 0:
+			for i := range length {
+				val := icol[i]
+				res[i] = compareFunc(val, lval) >= 0 && compareFunc(val, rval) <= 0
 			}
-
-			if flag&2 == 0 {
-				res[i] = res[i] && compareFunc(val, rval) <= 0
-			} else {
-				res[i] = res[i] && compareFunc(val, rval) < 0
+		case 1:
+			for i := range length {
+				val := icol[i]
+				res[i] = compareFunc(val, lval) > 0 && compareFunc(val, rval) <= 0
+			}
+		case 2:
+			for i := range length {
+				val := icol[i]
+				res[i] = compareFunc(val, lval) >= 0 && compareFunc(val, rval) < 0
+			}
+		case 3:
+			for i := range length {
+				val := icol[i]
+				res[i] = compareFunc(val, lval) > 0 && compareFunc(val, rval) < 0
 			}
 		}
 	}
@@ -697,16 +723,15 @@ func inRangeBytesWithFunc(
 		} else {
 			val := icol[0].GetByteSlice(iarea)
 			var r bool
-			if flag&1 == 0 {
-				r = compareFunc(val, lval) >= 0
-			} else {
-				r = compareFunc(val, lval) > 0
-			}
-
-			if flag&2 == 0 {
-				r = r && compareFunc(val, rval) <= 0
-			} else {
-				r = r && compareFunc(val, rval) < 0
+			switch flag {
+			case 0:
+				r = compareFunc(val, lval) >= 0 && compareFunc(val, rval) <= 0
+			case 1:
+				r = compareFunc(val, lval) > 0 && compareFunc(val, rval) <= 0
+			case 2:
+				r = compareFunc(val, lval) >= 0 && compareFunc(val, rval) < 0
+			case 3:
+				r = compareFunc(val, lval) > 0 && compareFunc(val, rval) < 0
 			}
 
 			for i := range length {
@@ -722,36 +747,42 @@ func inRangeBytesWithFunc(
 				rNulls.Add(uint64(i))
 			} else {
 				val := icol[i].GetByteSlice(iarea)
-
-				if flag&1 == 0 {
-					res[i] = compareFunc(val, lval) >= 0
-				} else {
-					res[i] = compareFunc(val, lval) > 0
-				}
-
-				if flag&2 == 0 {
-					res[i] = res[i] && compareFunc(val, rval) <= 0
-				} else {
-					res[i] = res[i] && compareFunc(val, rval) < 0
+				switch flag {
+				case 0:
+					res[i] = compareFunc(val, lval) >= 0 && compareFunc(val, rval) <= 0
+				case 1:
+					res[i] = compareFunc(val, lval) > 0 && compareFunc(val, rval) <= 0
+				case 2:
+					res[i] = compareFunc(val, lval) >= 0 && compareFunc(val, rval) < 0
+				case 3:
+					res[i] = compareFunc(val, lval) > 0 && compareFunc(val, rval) < 0
 				}
 			}
 		}
 	} else if ivec.GetSorted() {
-		lowerBound := sort.Search(len(icol), func(i int) bool {
-			ret := compareFunc(icol[i].GetByteSlice(iarea), lval)
-			if flag&1 == 0 {
-				return ret >= 0
+		var lowerBoundFunc func(i int) bool
+		if flag&1 == 0 {
+			lowerBoundFunc = func(i int) bool {
+				return compareFunc(icol[i].GetByteSlice(iarea), lval) >= 0
 			}
-			return ret > 0
-		})
+		} else {
+			lowerBoundFunc = func(i int) bool {
+				return compareFunc(icol[i].GetByteSlice(iarea), lval) > 0
+			}
+		}
+		lowerBound := sort.Search(len(icol), lowerBoundFunc)
 
-		upperBound := sort.Search(len(icol), func(i int) bool {
-			ret := compareFunc(icol[i].GetByteSlice(iarea), rval)
-			if flag&2 == 0 {
-				return ret > 0
+		var upperBoundFunc func(i int) bool
+		if flag&2 == 0 {
+			upperBoundFunc = func(i int) bool {
+				return compareFunc(icol[i].GetByteSlice(iarea), rval) > 0
 			}
-			return ret >= 0
-		})
+		} else {
+			upperBoundFunc = func(i int) bool {
+				return compareFunc(icol[i].GetByteSlice(iarea), rval) >= 0
+			}
+		}
+		upperBound := sort.Search(len(icol), upperBoundFunc)
 
 		for i := range lowerBound {
 			res[i] = false
@@ -763,19 +794,26 @@ func inRangeBytesWithFunc(
 			res[i] = false
 		}
 	} else {
-		for i := range length {
-			val := icol[i].GetByteSlice(iarea)
-
-			if flag&1 == 0 {
-				res[i] = compareFunc(val, lval) >= 0
-			} else {
-				res[i] = compareFunc(val, lval) > 0
+		switch flag {
+		case 0:
+			for i := range length {
+				val := icol[i].GetByteSlice(iarea)
+				res[i] = compareFunc(val, lval) >= 0 && compareFunc(val, rval) <= 0
 			}
-
-			if flag&2 == 0 {
-				res[i] = res[i] && compareFunc(val, rval) <= 0
-			} else {
-				res[i] = res[i] && compareFunc(val, rval) < 0
+		case 1:
+			for i := range length {
+				val := icol[i].GetByteSlice(iarea)
+				res[i] = compareFunc(val, lval) > 0 && compareFunc(val, rval) <= 0
+			}
+		case 2:
+			for i := range length {
+				val := icol[i].GetByteSlice(iarea)
+				res[i] = compareFunc(val, lval) >= 0 && compareFunc(val, rval) < 0
+			}
+		case 3:
+			for i := range length {
+				val := icol[i].GetByteSlice(iarea)
+				res[i] = compareFunc(val, lval) > 0 && compareFunc(val, rval) < 0
 			}
 		}
 	}
