@@ -86,11 +86,6 @@ func GetUpstreamDDLUsingGetDdl(
 		return nil, moerr.NewInternalError(ctx, "current snapshot name is required for GETDDL")
 	}
 
-	// Initialize TableIDs map if nil
-	if iterationCtx.TableIDs == nil {
-		iterationCtx.TableIDs = make(map[TableKey]uint64)
-	}
-
 	// Build GETDDL SQL
 	querySQL := PublicationSQLBuilder.GetDdlSQL(dbName, tableName, snapshotName)
 
@@ -138,7 +133,6 @@ func GetUpstreamDDLUsingGetDdl(
 		if tableID.Valid {
 			ddlInfo.TableID = uint64(tableID.Int64)
 			// Record table ID in iteration context
-			iterationCtx.TableIDs[TableKey{DBName: dbNameStr, TableName: tableNameStr}] = ddlInfo.TableID
 		}
 
 		if tableSQL.Valid {
@@ -260,12 +254,12 @@ func ProcessDDLChanges(
 				}
 			case DDLOperationDrop:
 				// Execute DROP TABLE
-				if err := dropTable(downstreamCtx, iterationCtx.LocalExecutor, dbName, tableName, iterationCtx, ddlInfo.TableID); err != nil {
+				if err := dropTable(downstreamCtx, iterationCtx.LocalExecutor, dbName, tableName, iterationCtx, ddlInfo.TableID, cnEngine); err != nil {
 					return moerr.NewInternalErrorf(ctx, "failed to drop table %s.%s: %v", dbName, tableName, err)
 				}
 			case DDLOperationAlter:
 				// For alter, drop first then create
-				if err := dropTable(downstreamCtx, iterationCtx.LocalExecutor, dbName, tableName, iterationCtx, ddlInfo.TableID); err != nil {
+				if err := dropTable(downstreamCtx, iterationCtx.LocalExecutor, dbName, tableName, iterationCtx, ddlInfo.TableID, cnEngine); err != nil {
 					return moerr.NewInternalErrorf(ctx, "failed to drop table %s.%s for alter: %v", dbName, tableName, err)
 				}
 				if ddlInfo.TableCreateSQL != "" {
@@ -285,15 +279,25 @@ func ProcessDDLChanges(
 		}
 	}
 
-	// Step 4: Drop databases
+	// Step 4: Drop databases using CN engine API
 	for _, dbName := range dbToDrop {
-		dropDBSQL := fmt.Sprintf("DROP DATABASE IF EXISTS `%s`", escapeSQLIdentifierForDDL(dbName))
-		result, err := iterationCtx.LocalExecutor.ExecSQL(downstreamCtx, nil, dropDBSQL, true, false)
+		logutil.Info("ccpr-iteration dropping database",
+			zap.Uint64("task_id", iterationCtx.TaskID),
+			zap.Uint64("lsn", iterationCtx.IterationLSN),
+			zap.String("database", dbName),
+		)
+		err := cnEngine.Delete(downstreamCtx, dbName, iterationCtx.LocalTxn)
 		if err != nil {
+			// Check if error is due to database not existing (similar to IF EXISTS behavior)
+			if moerr.IsMoErrCode(err, moerr.ErrBadDB) || moerr.IsMoErrCode(err, moerr.ErrNoDB) {
+				logutil.Info("ccpr-iteration database does not exist, skipping",
+					zap.Uint64("task_id", iterationCtx.TaskID),
+					zap.Uint64("lsn", iterationCtx.IterationLSN),
+					zap.String("database", dbName),
+				)
+				continue
+			}
 			return moerr.NewInternalErrorf(ctx, "failed to drop database %s: %v", dbName, err)
-		}
-		if result != nil {
-			result.Close()
 		}
 	}
 
@@ -461,10 +465,14 @@ func findMissingTablesInDdlMap(
 			continue
 		}
 
-		// Get all table names in the database
-		tableNames, err := db.Relations(ctx)
-		if err != nil {
-			return nil, moerr.NewInternalErrorf(ctx, "failed to get table names from database %s: %v", dbName, err)
+		var tableNames []string
+		if iterationCtx.SrcInfo.SyncLevel == SyncLevelTable {
+			tableNames = []string{iterationCtx.SrcInfo.TableName}
+		} else {
+			tableNames, err = db.Relations(ctx)
+			if err != nil {
+				return nil, moerr.NewInternalErrorf(ctx, "failed to get table names from database %s: %v", dbName, err)
+			}
 		}
 
 		// Process each table
@@ -474,24 +482,12 @@ func findMissingTablesInDdlMap(
 				continue
 			}
 
-			// If SyncLevelTable, only process the specified table
-			if iterationCtx.SrcInfo.SyncLevel == SyncLevelTable {
-				if tableName != iterationCtx.SrcInfo.TableName {
-					continue
-				}
-			}
-
 			// Check if table exists in ddlMap
 			if tables, exists := ddlMap[dbName]; exists {
 				if _, existsInMap := tables[tableName]; existsInMap {
 					// Table exists in ddlMap, skip
 					continue
 				} else {
-					// Initialize inner map if needed
-					if ddlMap[dbName] == nil {
-						ddlMap[dbName] = make(map[string]*TableDDLInfo)
-					}
-
 					// Add table to ddlMap with drop operation
 					// for tables to drop, table id may be 0
 					ddlMap[dbName][tableName] = &TableDDLInfo{
@@ -500,6 +496,13 @@ func findMissingTablesInDdlMap(
 
 				}
 			} else {
+				ddlMap[dbName] = make(map[string]*TableDDLInfo)
+
+				// Add table to ddlMap with drop operation
+				// for tables to drop, table id may be 0
+				ddlMap[dbName][tableName] = &TableDDLInfo{
+					Operation: DDLOperationDrop,
+				}
 				dbToDrop = append(dbToDrop, dbName)
 			}
 
@@ -568,6 +571,7 @@ func dropTable(
 	tableName string,
 	iterationCtx *IterationContext,
 	tableID uint64,
+	cnEngine engine.Engine,
 ) error {
 	// Remove index table mappings before dropping the table
 	if iterationCtx != nil && iterationCtx.IndexTableMappings != nil && tableID > 0 {
@@ -584,16 +588,25 @@ func dropTable(
 		}
 	}
 
-	dropSQL := fmt.Sprintf("DROP TABLE IF EXISTS `%s`.`%s`",
-		escapeSQLIdentifierForDDL(dbName),
-		escapeSQLIdentifierForDDL(tableName))
-	result, err := executor.ExecSQL(ctx, nil, dropSQL, true, false)
+	if cnEngine == nil {
+		return moerr.NewInternalError(ctx, "engine is nil")
+	}
+	if iterationCtx == nil || iterationCtx.LocalTxn == nil {
+		return moerr.NewInternalError(ctx, "iteration context or transaction is nil")
+	}
+
+	// Get database using engine
+	db, err := cnEngine.Database(ctx, dbName, iterationCtx.LocalTxn)
+	if err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to get database %s: %v", dbName, err)
+	}
+
+	// Delete table using database API
+	err = db.Delete(ctx, tableName)
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to drop table %s.%s: %v", dbName, tableName, err)
 	}
-	if result != nil {
-		result.Close()
-	}
+
 	return nil
 }
 

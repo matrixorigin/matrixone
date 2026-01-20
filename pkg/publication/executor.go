@@ -560,8 +560,10 @@ func (exec *PublicationTaskExecutor) applyCcprLogWithRel(ctx context.Context, re
 				// Parse timestamp from vector - drop_at is TIMESTAMP type
 				ts := vector.GetFixedAtWithTypeCheck[types.Timestamp](dropAtVector, task.offset)
 				// Convert Timestamp to time.Time
-				// Timestamp is stored as microseconds since Unix epoch
-				t := time.UnixMicro(int64(ts)).UTC()
+				// Timestamp is stored as microseconds since year 1, not Unix epoch
+				// Use ToDatetime then ConvertToGoTime to properly convert
+				dt := ts.ToDatetime(time.UTC)
+				t := dt.ConvertToGoTime(time.UTC)
 				dropAt = &t
 			}
 			exec.addOrUpdateTask(
@@ -623,8 +625,10 @@ func (exec *PublicationTaskExecutor) replay(ctx context.Context) (err error) {
 				// Parse timestamp from vector - drop_at is TIMESTAMP type
 				ts := vector.GetFixedAtWithTypeCheck[types.Timestamp](dropAtVector, i)
 				// Convert Timestamp to time.Time
-				// Timestamp is stored as microseconds since Unix epoch
-				t := time.UnixMicro(int64(ts)).UTC()
+				// Timestamp is stored as microseconds since year 1, not Unix epoch
+				// Use ToDatetime then ConvertToGoTime to properly convert
+				dt := ts.ToDatetime(time.UTC)
+				t := dt.ConvertToGoTime(time.UTC)
 				dropAt = &t
 			}
 			err = exec.addOrUpdateTask(
@@ -791,8 +795,10 @@ func GC(
 				// Parse timestamp from vector - drop_at is TIMESTAMP type
 				ts := vector.GetFixedAtWithTypeCheck[types.Timestamp](dropAtVector, i)
 				// Convert Timestamp to time.Time
-				// Timestamp is stored as microseconds since Unix epoch
-				t := time.UnixMicro(int64(ts)).UTC()
+				// Timestamp is stored as microseconds since year 1, not Unix epoch
+				// Use ToDatetime then ConvertToGoTime to properly convert
+				dt := ts.ToDatetime(time.UTC)
+				t := dt.ConvertToGoTime(time.UTC)
 				dropAt = &t
 			}
 

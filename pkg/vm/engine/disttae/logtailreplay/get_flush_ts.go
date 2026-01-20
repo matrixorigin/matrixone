@@ -14,49 +14,20 @@
 
 package logtailreplay
 
-import "github.com/matrixorigin/matrixone/pkg/container/types"
+import (
+	"sort"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+)
 
 func (p *PartitionState) GetFlushTS() types.TS {
 	if p.rows.Len() == 0 {
 		return types.MaxTs()
 	}
 
-	dataObjectIter := p.dataObjectTSIndex.Iter()
-	defer dataObjectIter.Release()
-
-	var dataFlushTS types.TS
-	for dataObjectIter.Next() {
-		entry := dataObjectIter.Item()
-		if !entry.IsAppendable {
-			continue
-		}
-		if !entry.IsDelete {
-			continue
-		}
-		dataFlushTS = entry.Time
-		break
-	}
-
-	var tombstoneFlushTS types.TS
-
-	tombstoneObjectIter := p.tombstoneObjectDTSIndex.Iter()
-	defer tombstoneObjectIter.Release()
-	for tombstoneObjectIter.Next() {
-		entry := tombstoneObjectIter.Item()
-		if !entry.GetAppendable() {
-			continue
-		}
-		if entry.DeleteTime.IsEmpty() {
-			continue
-		}
-		tombstoneFlushTS = entry.DeleteTime
-		break
-	}
-
-	flushedTS := dataFlushTS
-	if tombstoneFlushTS.LT(&dataFlushTS) {
-		flushedTS = tombstoneFlushTS
-	}
-
-	return flushedTS
+	rows := p.rows.Items()
+	sort.Slice(rows, func(i, j int) bool {
+		return rows[i].Time.Compare(&rows[j].Time) < 0
+	})
+	return rows[0].Time.Prev()
 }
