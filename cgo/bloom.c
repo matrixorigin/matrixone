@@ -34,7 +34,6 @@ typedef struct {
         i64 = (uint64_t) (*(T*)V); \
         key = &i64; \
         len = sizeof(i64); \
-        break; \
     } while (0)
 
 /*
@@ -48,10 +47,13 @@ static inline bloom_hash_t bloom_calculate_hash(const void *key, size_t len, uin
     switch (len) {
         case 1: // int8
             TOV64(key, uint8_t);
+            break;
         case 2: // int16
             TOV64(key, uint16_t);
+            break;
         case 4: // int32
             TOV64(key, uint32_t);
+            break;
         default:
             break;
     }
