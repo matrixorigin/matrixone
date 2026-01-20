@@ -17,6 +17,7 @@ package publication
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -54,6 +55,7 @@ const (
 	DefaultRetryTimes       = 5
 	DefaultRetryInterval    = time.Second
 	DefaultRetryDuration    = time.Minute * 10
+	SnapshotThreshold       = time.Hour * 24 // 1 day
 )
 
 type PublicationExecutorOption struct {
@@ -704,22 +706,374 @@ func (exec *PublicationTaskExecutor) GCInMemoryTask(threshold time.Duration) {
 }
 
 func (exec *PublicationTaskExecutor) GC(cleanupThreshold time.Duration) (err error) {
-	txn, err := getTxn(exec.ctx, exec.txnEngine, exec.cnTxnClient, "publication gc")
-	if err != nil {
-		return err
-	}
-	ctx, cancel := context.WithTimeout(exec.ctx, time.Minute*5)
+	ctx := context.WithValue(exec.ctx, defines.TenantIDKey{}, catalog.System_Account)
+	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
 	defer cancel()
-	defer txn.Commit(ctx)
+
 	// GC tasks with drop_at set and older than threshold
 	gcTime := time.Now().Add(-cleanupThreshold)
-	// We'll just delete tasks from memory that have been dropped for a long time
-	// The actual GC of mo_ccpr_log records should be handled separately if needed
+	snapshotThresholdTime := time.Now().Add(-SnapshotThreshold)
+
 	logutil.Info(
 		"Publication-Task GC",
 		zap.Any("gcTime", gcTime),
+		zap.Any("snapshotThresholdTime", snapshotThresholdTime),
 	)
-	return err
+
+	// Read all mo_ccpr_log records
+	txn, err := getTxn(ctx, exec.txnEngine, exec.cnTxnClient, "publication gc read")
+	if err != nil {
+		logutil.Error("Publication-Task GC failed to create txn for reading", zap.Error(err))
+		return err
+	}
+	defer txn.Commit(ctx)
+
+	sql := `SELECT task_id, state, iteration_state, iteration_lsn, upstream_conn, drop_at FROM mo_catalog.mo_ccpr_log`
+	result, err := ExecWithResult(ctx, sql, exec.cnUUID, txn)
+	if err != nil {
+		logutil.Error("Publication-Task GC failed to query mo_ccpr_log", zap.Error(err))
+		return err
+	}
+	defer result.Close()
+
+	var records []ccprLogRecord
+	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		taskIDVector := cols[0]
+		taskIDs := vector.MustFixedColWithTypeCheck[uint32](taskIDVector)
+		stateVector := cols[1]
+		states := vector.MustFixedColWithTypeCheck[int8](stateVector)
+		iterationStateVector := cols[2]
+		iterationStates := vector.MustFixedColWithTypeCheck[int8](iterationStateVector)
+		iterationLSNVector := cols[3]
+		lsns := vector.MustFixedColWithTypeCheck[int64](iterationLSNVector)
+		upstreamConnVector := cols[4]
+		dropAtVector := cols[5]
+
+		for i := 0; i < rows; i++ {
+			var upstreamConn string
+			if !upstreamConnVector.IsNull(uint64(i)) {
+				upstreamConn = upstreamConnVector.GetStringAt(i)
+			}
+
+			var dropAt *time.Time
+			if !dropAtVector.IsNull(uint64(i)) {
+				// Parse timestamp from vector - drop_at is TIMESTAMP type
+				ts := vector.GetFixedAtWithTypeCheck[types.Timestamp](dropAtVector, i)
+				// Convert Timestamp to time.Time
+				// Timestamp is stored as microseconds since Unix epoch
+				t := time.UnixMicro(int64(ts)).UTC()
+				dropAt = &t
+			}
+
+			records = append(records, ccprLogRecord{
+				taskID:         uint64(taskIDs[i]),
+				state:          states[i],
+				iterationState: iterationStates[i],
+				iterationLSN:   uint64(lsns[i]),
+				upstreamConn:   upstreamConn,
+				dropAt:         dropAt,
+			})
+		}
+		return true
+	})
+
+	// Process each record
+	for _, record := range records {
+		exec.gcRecord(ctx, record, gcTime, snapshotThresholdTime)
+	}
+
+	return nil
+}
+
+type ccprLogRecord struct {
+	taskID         uint64
+	state          int8
+	iterationState int8
+	iterationLSN   uint64
+	upstreamConn   string
+	dropAt         *time.Time
+}
+
+func (exec *PublicationTaskExecutor) gcRecord(
+	ctx context.Context,
+	record ccprLogRecord,
+	gcTime time.Time,
+	snapshotThresholdTime time.Time,
+) {
+	// Create upstream executor for this record
+	upstreamExecutor, err := exec.createUpstreamExecutorForGC(ctx, record.upstreamConn)
+	if err != nil {
+		logutil.Error("Publication-Task GC failed to create upstream executor",
+			zap.Uint64("taskID", record.taskID),
+			zap.Error(err),
+		)
+		return
+	}
+	defer upstreamExecutor.Close()
+
+	// Query all snapshots for this task
+	snapshots, err := exec.queryTaskSnapshots(ctx, upstreamExecutor, record.taskID)
+	if err != nil {
+		logutil.Error("Publication-Task GC failed to query snapshots",
+			zap.Uint64("taskID", record.taskID),
+			zap.Error(err),
+		)
+		return
+	}
+
+	// Determine which snapshots to delete
+	snapshotsToDelete := exec.determineSnapshotsToDelete(
+		record,
+		snapshots,
+		gcTime,
+		snapshotThresholdTime,
+	)
+
+	// Delete snapshots (each in a separate transaction)
+	for _, snapshotName := range snapshotsToDelete {
+		exec.deleteSnapshotInSeparateTxn(ctx, upstreamExecutor, snapshotName, record.taskID)
+	}
+
+	// For dropped records, check if we should delete the record itself
+	if record.dropAt != nil && record.state == SubscriptionStateDropped {
+		// Check if all snapshots are deleted
+		remainingSnapshots, err := exec.queryTaskSnapshots(ctx, upstreamExecutor, record.taskID)
+		if err != nil {
+			logutil.Error("Publication-Task GC failed to query remaining snapshots",
+				zap.Uint64("taskID", record.taskID),
+				zap.Error(err),
+			)
+			return
+		}
+
+		if len(remainingSnapshots) == 0 && record.dropAt.Before(gcTime) {
+			exec.deleteCcprLogRecordInSeparateTxn(ctx, record.taskID)
+		}
+	}
+}
+
+func (exec *PublicationTaskExecutor) createUpstreamExecutorForGC(
+	ctx context.Context,
+	upstreamConn string,
+) (SQLExecutor, error) {
+	if upstreamConn == "" {
+		return nil, moerr.NewInternalError(ctx, "upstream_conn is empty")
+	}
+
+	// Check if it's internal_sql_executor
+	if strings.HasPrefix(upstreamConn, InternalSQLExecutorType) {
+		parts := strings.Split(upstreamConn, ":")
+		var upstreamAccountID uint32 = catalog.System_Account
+		if len(parts) == 2 {
+			var accountID uint32
+			_, err := fmt.Sscanf(parts[1], "%d", &accountID)
+			if err == nil {
+				upstreamAccountID = accountID
+			}
+		}
+
+		upstreamExecutor, err := NewInternalSQLExecutor(
+			exec.cnUUID,
+			exec.cnTxnClient,
+			exec.txnEngine,
+			upstreamAccountID,
+			NewUpstreamConnectionClassifier(),
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		// Set upstream SQL helper if factory is available
+		if exec.upstreamSQLHelperFactory != nil {
+			helper := exec.upstreamSQLHelperFactory(
+				nil,
+				exec.txnEngine,
+				upstreamAccountID,
+				upstreamExecutor.GetInternalExec(),
+				upstreamExecutor.GetTxnClient(),
+			)
+			upstreamExecutor.SetUpstreamSQLHelper(helper)
+		}
+
+		return upstreamExecutor, nil
+	}
+
+	// Parse external connection string
+	connConfig, err := ParseUpstreamConnWithDecrypt(ctx, upstreamConn, nil, exec.cnUUID)
+	if err != nil {
+		return nil, err
+	}
+
+	upstreamExecutor, err := NewUpstreamExecutor(
+		connConfig.Account,
+		connConfig.User,
+		connConfig.Password,
+		connConfig.Host,
+		connConfig.Port,
+		-1, // retryTimes: -1 for infinite retry
+		0,  // retryDuration: 0 for no limit
+		connConfig.Timeout,
+		NewUpstreamConnectionClassifier(),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return upstreamExecutor, nil
+}
+
+type snapshotInfo struct {
+	name string
+	lsn  uint64
+	ts   time.Time
+}
+
+func (exec *PublicationTaskExecutor) queryTaskSnapshots(
+	ctx context.Context,
+	upstreamExecutor SQLExecutor,
+	taskID uint64,
+) ([]snapshotInfo, error) {
+	// Query snapshots with pattern ccpr_<taskID>_*
+	snapshotPattern := fmt.Sprintf("ccpr_%d_%%", taskID)
+	sql := fmt.Sprintf(`SELECT sname, ts FROM mo_catalog.mo_snapshots WHERE sname LIKE '%s' ORDER BY sname`, snapshotPattern)
+
+	result, err := upstreamExecutor.ExecSQL(ctx, nil, sql, false, false)
+	if err != nil {
+		return nil, err
+	}
+	defer result.Close()
+
+	var snapshots []snapshotInfo
+	for result.Next() {
+		var snapshotName string
+		var tsValue int64
+		if err := result.Scan(&snapshotName, &tsValue); err != nil {
+			return nil, err
+		}
+
+		// Parse LSN from snapshot name: ccpr_<taskID>_<lsn>
+		var parsedTaskID, lsn uint64
+		_, err := fmt.Sscanf(snapshotName, "ccpr_%d_%d", &parsedTaskID, &lsn)
+		if err != nil {
+			logutil.Warn("Publication-Task GC failed to parse snapshot name",
+				zap.String("snapshotName", snapshotName),
+				zap.Error(err),
+			)
+			continue
+		}
+
+		// Convert ts (nanoseconds) to time.Time
+		ts := time.Unix(0, tsValue).UTC()
+		snapshots = append(snapshots, snapshotInfo{
+			name: snapshotName,
+			lsn:  lsn,
+			ts:   ts,
+		})
+	}
+
+	return snapshots, nil
+}
+
+func (exec *PublicationTaskExecutor) determineSnapshotsToDelete(
+	record ccprLogRecord,
+	snapshots []snapshotInfo,
+	gcTime time.Time,
+	snapshotThresholdTime time.Time,
+) []string {
+	var toDelete []string
+
+	if record.dropAt != nil && record.state == SubscriptionStateDropped {
+		// For dropped: delete all snapshots
+		for _, snap := range snapshots {
+			toDelete = append(toDelete, snap.name)
+		}
+		return toDelete
+	}
+
+	// For running, error, pause: delete snapshots with lsn < current_lsn - 1
+	currentLSN := record.iterationLSN
+	for _, snap := range snapshots {
+		if snap.lsn < currentLSN-1 {
+			toDelete = append(toDelete, snap.name)
+		}
+	}
+
+	// For error and pause: also delete snapshots older than snapshot_threshold
+	if record.state == SubscriptionStateError || record.state == SubscriptionStatePause {
+		for _, snap := range snapshots {
+			if snap.ts.Before(snapshotThresholdTime) {
+				// Check if not already in toDelete
+				alreadyInList := false
+				for _, name := range toDelete {
+					if name == snap.name {
+						alreadyInList = true
+						break
+					}
+				}
+				if !alreadyInList {
+					toDelete = append(toDelete, snap.name)
+				}
+			}
+		}
+	}
+
+	return toDelete
+}
+
+func (exec *PublicationTaskExecutor) deleteSnapshotInSeparateTxn(
+	ctx context.Context,
+	upstreamExecutor SQLExecutor,
+	snapshotName string,
+	taskID uint64,
+) {
+	// Each SQL operation in a separate transaction, no retry
+	// If error occurs, just log and continue
+	dropSQL := PublicationSQLBuilder.DropSnapshotIfExistsSQL(snapshotName)
+	result, err := upstreamExecutor.ExecSQL(ctx, nil, dropSQL, false, false)
+	if err != nil {
+		logutil.Error("Publication-Task GC failed to delete snapshot",
+			zap.Uint64("taskID", taskID),
+			zap.String("snapshotName", snapshotName),
+			zap.Error(err),
+		)
+		return
+	}
+	defer result.Close()
+	logutil.Info("Publication-Task GC deleted snapshot",
+		zap.Uint64("taskID", taskID),
+		zap.String("snapshotName", snapshotName),
+	)
+}
+
+func (exec *PublicationTaskExecutor) deleteCcprLogRecordInSeparateTxn(
+	ctx context.Context,
+	taskID uint64,
+) {
+	// Each SQL operation in a separate transaction, no retry
+	// If error occurs, just log and continue
+	txn, err := getTxn(ctx, exec.txnEngine, exec.cnTxnClient, "publication gc delete record")
+	if err != nil {
+		logutil.Error("Publication-Task GC failed to create txn for deleting record",
+			zap.Uint64("taskID", taskID),
+			zap.Error(err),
+		)
+		return
+	}
+	defer txn.Commit(ctx)
+
+	deleteSQL := fmt.Sprintf(`DELETE FROM mo_catalog.mo_ccpr_log WHERE task_id = %d`, taskID)
+	result, err := ExecWithResult(ctx, deleteSQL, exec.cnUUID, txn)
+	if err != nil {
+		logutil.Error("Publication-Task GC failed to delete mo_ccpr_log record",
+			zap.Uint64("taskID", taskID),
+			zap.Error(err),
+		)
+		return
+	}
+	defer result.Close()
+	logutil.Info("Publication-Task GC deleted mo_ccpr_log record",
+		zap.Uint64("taskID", taskID),
+	)
 }
 
 func retryPublication(
