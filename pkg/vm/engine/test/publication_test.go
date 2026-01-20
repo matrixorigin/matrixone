@@ -1675,7 +1675,7 @@ func TestExecuteIterationWithSnapshotFinishedInjection(t *testing.T) {
 	close(checkpointDone)
 
 	// error is flushed
-	require.NoError(t, err)
+	require.Error(t, err)
 
 	// Remove the injection for second iteration
 	rmFn()
