@@ -175,10 +175,10 @@ func TestCheckIterationStatus(t *testing.T) {
 			expectedCNUUID: "test-cn-uuid-123",
 			iterationLSN:   1000,
 			expectedLSN:    1000,
-			iterationState: publication.IterationStateRunning,
+			iterationState: publication.IterationStatePending,
 			shouldInsert:   true,
 			expectError:    true,
-			errorContains:  "iteration_state is not pending",
+			errorContains:  "iteration_state is not running",
 		},
 		{
 			name:           "NoRows",
