@@ -22,6 +22,12 @@ true not between false and true
 SELECT FALSE NOT BETWEEN TRUE AND FALSE;
 false not between true and false
 1
+SELECT NULL BETWEEN FALSE AND TRUE;
+null between false and true
+null
+SELECT NULL NOT BETWEEN FALSE AND TRUE;
+null not between false and true
+null
 DROP TABLE IF EXISTS between_and_test;
 CREATE TABLE between_and_test(
 int_test_max INT,
