@@ -390,6 +390,7 @@ type CtrState int
 const (
 	Build CtrState = iota
 	Eval
+	EvalReset
 	End
 )
 
