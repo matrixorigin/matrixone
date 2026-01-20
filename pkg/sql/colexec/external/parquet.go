@@ -90,10 +90,34 @@ func (h *ParquetHandler) openFile(param *ExternalParam) error {
 		if err != nil {
 			return err
 		}
-		r = &fsReaderAt{
-			fs:       fs,
-			readPath: readPath,
-			ctx:      param.Ctx,
+
+		// For S3 sources, pre-read the entire file into memory to avoid
+		// many small random HTTP requests which cause severe performance issues.
+		// Parquet reading involves many small random reads (metadata, page headers, etc.)
+		// which are fast on local disk but extremely slow over S3 due to HTTP RTT.
+		if param.Extern.ScanType == tree.S3 {
+			fileSize := param.FileSize[param.Fileparam.FileIndex-1]
+			data := make([]byte, fileSize)
+			vec := fileservice.IOVector{
+				FilePath: readPath,
+				Entries: []fileservice.IOEntry{
+					{
+						Offset: 0,
+						Size:   fileSize,
+						Data:   data,
+					},
+				},
+			}
+			if err := fs.Read(param.Ctx, &vec); err != nil {
+				return err
+			}
+			r = bytes.NewReader(data)
+		} else {
+			r = &fsReaderAt{
+				fs:       fs,
+				readPath: readPath,
+				ctx:      param.Ctx,
+			}
 		}
 	}
 	var err error
