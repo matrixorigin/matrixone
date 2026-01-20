@@ -1671,7 +1671,8 @@ func bigIntToTwosComplementBytes(ctx context.Context, bi *big.Int, size int) ([]
 func (h *ParquetHandler) getData(bat *batch.Batch, param *ExternalParam, proc *process.Process) error {
 	length := 0
 	finish := false
-	for colIdx := range h.cols {
+	for _, attr := range param.Attrs {
+		colIdx := attr.ColIndex
 		if param.Cols[colIdx].Hidden {
 			continue
 		}
@@ -1685,7 +1686,7 @@ func (h *ParquetHandler) getData(bat *batch.Batch, param *ExternalParam, proc *p
 
 		pages := h.pages[colIdx]
 		n := h.batchCnt
-		o := int64(0) // Don't use h.offset - the cached iterator already tracks position
+		o := h.offset
 	L:
 		for n > 0 {
 			page, err := pages.ReadPage()
