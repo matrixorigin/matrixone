@@ -29,7 +29,13 @@ typedef struct {
 
 #include "varlena.h"
 
-#define TOV64(v,T) ( (uint64_t) (*(T*)v))
+#define TOV64(V,T) \
+    do { \
+        i64 = (uint64_t) (*(T*)V); \
+        key = &i64; \
+        len = sizeof(i64); \
+        break; \
+    } while (0)
 
 /*
  * Calculates a 128-bit hash (split into two 64-bit halves) for a given key and seed using XXH3.
@@ -41,20 +47,11 @@ static inline bloom_hash_t bloom_calculate_hash(const void *key, size_t len, uin
     // force cast byte, int16, int32 into int64 so that same value share the same hash value
     switch (len) {
         case 1: // int8
-            i64 = TOV64(key, uint8_t);
-            key = &i64;
-            len = sizeof(i64);
-            break;
+            TOV64(key, uint8_t);
         case 2: // int16
-            i64 = TOV64(key, uint16_t);
-            key = &i64;
-            len = sizeof(i64);
-            break;
+            TOV64(key, uint16_t);
         case 4: // int32
-            i64 = TOV64(key, uint32_t);
-            key = &i64;
-            len = sizeof(i64);
-            break;
+            TOV64(key, uint32_t);
         default:
             break;
     }
