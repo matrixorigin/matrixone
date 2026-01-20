@@ -212,7 +212,7 @@ func (ctr *container) reset() {
 	ctr.freeSpillBkts()
 
 	mpool.DeleteMPool(ctr.mp)
-	ctr.mp = nil
+	ctr.mp = mpool.MustNew("group_mpool")
 }
 
 func (ctr *container) resetForSpill() {
