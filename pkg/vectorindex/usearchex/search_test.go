@@ -89,7 +89,7 @@ func TestFilteredSearch(t *testing.T) {
 	limit := uint(10)
 	count := int64(100)
 
-	bf := bloomfilter.NewCBloomFilterWithProbaility(int64(count), 0.001)
+	bf := bloomfilter.NewCBloomFilterWithProbability(int64(count), 0.001)
 	require.NotNil(t, bf)
 	defer bf.Free()
 
