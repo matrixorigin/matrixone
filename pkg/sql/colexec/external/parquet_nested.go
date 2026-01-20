@@ -275,6 +275,7 @@ func isNestedColumnNull(values []parquet.Value, col *parquet.Column) bool {
 
 // reconstructNestedValue reconstructs nested structure to Go type
 func reconstructNestedValue(ctx context.Context, col *parquet.Column, values []parquet.Value) (any, error) {
+	// Check LogicalType first
 	logicalType := col.Type().LogicalType()
 	if logicalType != nil {
 		if logicalType.List != nil {
@@ -284,12 +285,142 @@ func reconstructNestedValue(ctx context.Context, col *parquet.Column, values []p
 			return reconstructMap(ctx, col, values)
 		}
 	}
+
+	// Check for Parquet 3-level List pattern (without LogicalType annotation)
+	// Pattern: group (optional) -> repeated group "list" -> element
+	if isParquetListPattern(col) {
+		return reconstructListFromPattern(ctx, col, values)
+	}
+
+	// Check for Parquet Map pattern (without LogicalType annotation)
+	// Pattern: group (optional) -> repeated group "key_value" -> key, value
+	if isParquetMapPattern(col) {
+		return reconstructMapFromPattern(ctx, col, values)
+	}
+
 	return reconstructStruct(ctx, col, values)
 }
 
-// reconstructList reconstructs List type
+// isParquetListPattern checks if column matches Parquet 3-level List pattern
+// Pattern: group (optional) -> repeated group "list" -> element
+func isParquetListPattern(col *parquet.Column) bool {
+	if col.Leaf() {
+		return false
+	}
+	children := col.Columns()
+	if len(children) != 1 {
+		return false
+	}
+	listChild := children[0]
+	// Check if child is named "list" and is repeated
+	return listChild.Name() == "list" && listChild.Repeated()
+}
+
+// isParquetMapPattern checks if column matches Parquet Map pattern
+// Pattern: group (optional) -> repeated group "key_value" -> key, value
+func isParquetMapPattern(col *parquet.Column) bool {
+	if col.Leaf() {
+		return false
+	}
+	children := col.Columns()
+	if len(children) != 1 {
+		return false
+	}
+	kvChild := children[0]
+	// Check if child is named "key_value" and is repeated
+	return kvChild.Name() == "key_value" && kvChild.Repeated()
+}
+
+// reconstructListFromPattern reconstructs List from 3-level pattern
+func reconstructListFromPattern(ctx context.Context, col *parquet.Column, values []parquet.Value) ([]any, error) {
+	// Extract values from the "list.element" path
+	listChild := col.Columns()[0]
+	if len(listChild.Columns()) == 0 {
+		return nil, moerr.NewInternalErrorf(ctx, "list child has no element column")
+	}
+	elementCol := listChild.Columns()[0]
+
+	// Check if element is a leaf or nested structure
+	if elementCol.Leaf() {
+		// Simple case: list of primitive values
+		return reconstructList(ctx, listChild, values)
+	} else {
+		// Complex case: list of structs/maps/lists
+		return reconstructListOfNested(ctx, elementCol, values)
+	}
+}
+
+// reconstructMapFromPattern reconstructs Map from pattern
+func reconstructMapFromPattern(ctx context.Context, col *parquet.Column, values []parquet.Value) (map[string]any, error) {
+	// Extract values from the "key_value.key" and "key_value.value" paths
+	kvChild := col.Columns()[0]
+	return reconstructMap(ctx, kvChild, values)
+}
+
+// reconstructListOfNested reconstructs List of nested structures (Struct/Map/List)
+func reconstructListOfNested(ctx context.Context, elementCol *parquet.Column, values []parquet.Value) ([]any, error) {
+	result := make([]any, 0)
+	if len(values) == 0 {
+		return result, nil
+	}
+
+	leafCols := collectLeafColumns(elementCol)
+	if len(leafCols) == 0 {
+		return result, nil
+	}
+
+	expectedCols := make(map[int]bool)
+	for _, leaf := range leafCols {
+		expectedCols[leaf.Index()] = true
+	}
+
+	// Group values by column repetition - when we see a column again, new element starts
+	var groups [][]parquet.Value
+	var currentGroup []parquet.Value
+	seenCols := make(map[int]bool)
+
+	for _, v := range values {
+		colIdx := v.Column()
+		if !expectedCols[colIdx] {
+			continue
+		}
+		if seenCols[colIdx] {
+			if len(currentGroup) > 0 {
+				groups = append(groups, currentGroup)
+			}
+			currentGroup = []parquet.Value{}
+			seenCols = make(map[int]bool)
+		}
+		currentGroup = append(currentGroup, v)
+		seenCols[colIdx] = true
+	}
+	if len(currentGroup) > 0 {
+		groups = append(groups, currentGroup)
+	}
+
+	for _, group := range groups {
+		nested, err := reconstructNestedByType(ctx, elementCol, group)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, nested)
+	}
+
+	return result, nil
+}
+
+
 func reconstructList(ctx context.Context, col *parquet.Column, values []parquet.Value) ([]any, error) {
 	result := make([]any, 0)
+	// Empty list case: no values at all
+	if len(values) == 0 {
+		return result, nil
+	}
+	// Empty list case: single NULL value with low definition level
+	// This indicates an empty list, not a list with a NULL element
+	if len(values) == 1 && values[0].IsNull() && values[0].RepetitionLevel() == 0 {
+		return result, nil
+	}
 	for _, v := range values {
 		if v.IsNull() {
 			result = append(result, nil)
@@ -304,41 +435,104 @@ func reconstructList(ctx context.Context, col *parquet.Column, values []parquet.
 func reconstructMap(ctx context.Context, col *parquet.Column, values []parquet.Value) (map[string]any, error) {
 	result := make(map[string]any)
 
-	keyColIdx := -1
-	valColIdx := -1
+	// Find key and value columns
+	var keyCol, valueCol *parquet.Column
 	for _, child := range col.Columns() {
-		for _, leaf := range collectLeafColumns(child) {
-			path := leaf.Path()
-			if len(path) > 0 {
-				lastPart := path[len(path)-1]
-				if lastPart == "key" {
-					keyColIdx = leaf.Index()
-				} else if lastPart == "value" {
-					valColIdx = leaf.Index()
-				}
+		if child.Name() == "key" {
+			keyCol = child
+		} else if child.Name() == "value" {
+			valueCol = child
+		}
+	}
+
+	if keyCol == nil {
+		return result, nil
+	}
+
+	keyColIdx := keyCol.Index()
+
+	// Simple case: both key and value are leaf columns
+	if keyCol.Leaf() && (valueCol == nil || valueCol.Leaf()) {
+		valColIdx := -1
+		if valueCol != nil {
+			valColIdx = valueCol.Index()
+		}
+
+		var keys, vals []parquet.Value
+		for _, v := range values {
+			switch v.Column() {
+			case keyColIdx:
+				keys = append(keys, v)
+			case valColIdx:
+				vals = append(vals, v)
 			}
 		}
+
+		for i := 0; i < len(keys); i++ {
+			keyStr := stringifyMapKey(keys[i])
+			if _, exists := result[keyStr]; exists {
+				return nil, moerr.NewInternalErrorf(ctx, "duplicate map key: %s", keyStr)
+			}
+			if i < len(vals) {
+				if vals[i].IsNull() {
+					result[keyStr] = nil
+				} else {
+					result[keyStr] = parquetValueToGo(vals[i])
+				}
+			} else {
+				result[keyStr] = nil
+			}
+		}
+		return result, nil
 	}
 
-	var keys, vals []parquet.Value
-	for _, v := range values {
-		switch v.Column() {
-		case keyColIdx:
-			keys = append(keys, v)
-		case valColIdx:
-			vals = append(vals, v)
-		}
-	}
+	// Complex case: value is nested (List/Struct/Map)
+	if valueCol != nil && !valueCol.Leaf() {
+		valueStartIdx, valueEndIdx := getNestedColumnIndexRange(valueCol)
 
-	for i := 0; i < len(keys) && i < len(vals); i++ {
-		keyStr := stringifyMapKey(keys[i])
-		if _, exists := result[keyStr]; exists {
-			return nil, moerr.NewInternalErrorf(ctx, "duplicate map key: %s", keyStr)
+		// Collect all keys
+		var keys []parquet.Value
+		for _, v := range values {
+			if v.Column() == keyColIdx {
+				keys = append(keys, v)
+			}
 		}
-		if vals[i].IsNull() {
-			result[keyStr] = nil
-		} else {
-			result[keyStr] = parquetValueToGo(vals[i])
+
+		// Group values by RepetitionLevel
+		// Rep=0 or Rep=1 starts a new map entry, Rep>=2 continues current entry
+		valueGroups := make([][]parquet.Value, 0)
+		var currentGroup []parquet.Value
+
+		for _, v := range values {
+			colIdx := v.Column()
+			if colIdx >= valueStartIdx && colIdx < valueEndIdx {
+				rep := v.RepetitionLevel()
+				// Rep <= 1 means new map entry (0=new row, 1=new key_value)
+				if rep <= 1 && len(currentGroup) > 0 {
+					valueGroups = append(valueGroups, currentGroup)
+					currentGroup = nil
+				}
+				currentGroup = append(currentGroup, v)
+			}
+		}
+		if len(currentGroup) > 0 {
+			valueGroups = append(valueGroups, currentGroup)
+		}
+
+		for i, key := range keys {
+			keyStr := stringifyMapKey(key)
+			if _, exists := result[keyStr]; exists {
+				return nil, moerr.NewInternalErrorf(ctx, "duplicate map key: %s", keyStr)
+			}
+			if i >= len(valueGroups) || len(valueGroups[i]) == 0 {
+				result[keyStr] = nil
+			} else {
+				nested, err := reconstructNestedByType(ctx, valueCol, valueGroups[i])
+				if err != nil {
+					return nil, err
+				}
+				result[keyStr] = nested
+			}
 		}
 	}
 
@@ -410,6 +604,17 @@ func reconstructNestedByType(ctx context.Context, col *parquet.Column, values []
 			return reconstructMap(ctx, col, values)
 		}
 	}
+
+	// Check for Parquet 3-level List pattern (without LogicalType annotation)
+	if isParquetListPattern(col) {
+		return reconstructListFromPattern(ctx, col, values)
+	}
+
+	// Check for Parquet Map pattern (without LogicalType annotation)
+	if isParquetMapPattern(col) {
+		return reconstructMapFromPattern(ctx, col, values)
+	}
+
 	return reconstructStruct(ctx, col, values)
 }
 
