@@ -112,6 +112,58 @@ func BenchmarkBloomFiltrerAddVarlena(b *testing.B) {
 	}
 }
 
+func BenchmarkBloomFiltrerTestVector(b *testing.B) {
+	mp := mpool.MustNewZero()
+	vecs := make([]*vector.Vector, cVecCount)
+	for i := 0; i < cVecCount; i++ {
+		vecs[i] = testutil.NewVector(cTestCount/cVecCount, types.New(types.T_int64, 0, 0), mp, false, nil)
+	}
+	defer func() {
+		for i := range vecs {
+			vecs[i].Free(mp)
+		}
+	}()
+
+	var boom BloomFilter
+	boom = New(cTestCount, cTestRate)
+	for j := 0; j < cVecCount; j++ {
+		boom.Add(vecs[j])
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		for j := 0; j < cVecCount; j++ {
+			boom.Test(vecs[j], func(_ bool, _ int) {})
+		}
+	}
+}
+
+func BenchmarkBloomFiltrerTestVarienaVector(b *testing.B) {
+	mp := mpool.MustNewZero()
+	vecs := make([]*vector.Vector, cVecCount)
+	for i := 0; i < cVecCount; i++ {
+		vecs[i] = testutil.NewVector(cTestCount/cVecCount, types.New(types.T_varchar, 0, 0), mp, false, nil)
+	}
+	defer func() {
+		for i := range vecs {
+			vecs[i].Free(mp)
+		}
+	}()
+
+	var boom BloomFilter
+	boom = New(cTestCount, cTestRate)
+	for j := 0; j < cVecCount; j++ {
+		boom.Add(vecs[j])
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		for j := 0; j < cVecCount; j++ {
+			boom.Test(vecs[j], func(_ bool, _ int) {})
+		}
+	}
+}
+
 func BenchmarkBloomFiltrerTestAndAdd(b *testing.B) {
 	mp := mpool.MustNewZero()
 	vecs := make([]*vector.Vector, vecCount)
