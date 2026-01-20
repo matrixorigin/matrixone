@@ -1014,7 +1014,7 @@ int_data INT
 INSERT INTO test_large_int SELECT *, * FROM generate_series(1, 1000000) t;
 SELECT COUNT(*) FROM test_large_int WHERE IN_RANGE(int_col, 100000, 900000, 0);
 count(*)
-799999
+800001
 SELECT COUNT(*) FROM test_large_int WHERE IN_RANGE(int_col, 100000, 900000, 1);
 count(*)
 800000
@@ -1023,7 +1023,7 @@ count(*)
 800000
 SELECT COUNT(*) FROM test_large_int WHERE IN_RANGE(int_col, 100000, 900000, 3);
 count(*)
-800001
+799999
 DROP TABLE IF EXISTS test_large_int;
 DROP TABLE IF EXISTS test_large_float;
 CREATE TABLE test_large_float(
@@ -1033,7 +1033,7 @@ float_data FLOAT
 INSERT INTO test_large_float SELECT *, * FROM generate_series(1, 1000000) t;
 SELECT COUNT(*) FROM test_large_float WHERE IN_RANGE(float_col, 100000.0, 900000.0, 0);
 count(*)
-799999
+800001
 SELECT COUNT(*) FROM test_large_float WHERE IN_RANGE(float_col, 100000.0, 900000.0, 1);
 count(*)
 800000
@@ -1042,7 +1042,7 @@ count(*)
 800000
 SELECT COUNT(*) FROM test_large_float WHERE IN_RANGE(float_col, 100000.0, 900000.0, 3);
 count(*)
-800001
+799999
 DROP TABLE IF EXISTS test_large_float;
 DROP TABLE IF EXISTS test_large_decimal;
 CREATE TABLE test_large_decimal(
@@ -1052,7 +1052,7 @@ decimal_data DECIMAL(15,2)
 INSERT INTO test_large_decimal SELECT *, * FROM generate_series(1, 1000000) t;
 SELECT COUNT(*) FROM test_large_decimal WHERE IN_RANGE(decimal_col, 100000.00, 900000.00, 0);
 count(*)
-799999
+800001
 SELECT COUNT(*) FROM test_large_decimal WHERE IN_RANGE(decimal_col, 100000.00, 900000.00, 1);
 count(*)
 800000
@@ -1061,7 +1061,7 @@ count(*)
 800000
 SELECT COUNT(*) FROM test_large_decimal WHERE IN_RANGE(decimal_col, 100000.00, 900000.00, 3);
 count(*)
-800001
+799999
 DROP TABLE IF EXISTS test_large_decimal;
 DROP TABLE IF EXISTS test_large_varchar;
 CREATE TABLE test_large_varchar(
@@ -1071,14 +1071,14 @@ varchar_data VARCHAR(50)
 INSERT INTO test_large_varchar SELECT *, * FROM generate_series(1, 1000000) t;
 SELECT COUNT(*) FROM test_large_varchar WHERE IN_RANGE(varchar_col, '100000', '900000', 0);
 count(*)
-799999
+888890
 SELECT COUNT(*) FROM test_large_varchar WHERE IN_RANGE(varchar_col, '100000', '900000', 1);
 count(*)
-800000
+888889
 SELECT COUNT(*) FROM test_large_varchar WHERE IN_RANGE(varchar_col, '100000', '900000', 2);
 count(*)
-800000
+888889
 SELECT COUNT(*) FROM test_large_varchar WHERE IN_RANGE(varchar_col, '100000', '900000', 3);
 count(*)
-800001
+888888
 DROP TABLE IF EXISTS test_large_varchar;

@@ -656,11 +656,11 @@ func inRangeFixedWithFunc[T types.FixedSizeTExceptStrType](
 		var upperBoundFunc func(i int) bool
 		if flag&2 == 0 {
 			upperBoundFunc = func(i int) bool {
-				return compareFunc(icol[i], rval) <= 0
+				return compareFunc(icol[i], rval) > 0
 			}
 		} else {
 			upperBoundFunc = func(i int) bool {
-				return compareFunc(icol[i], rval) < 0
+				return compareFunc(icol[i], rval) >= 0
 			}
 		}
 		upperBound := sort.Search(len(icol), upperBoundFunc)
