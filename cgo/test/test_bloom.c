@@ -197,6 +197,35 @@ void test_varlena_ops() {
     printf("varlena operations passed\n");
 }
 
+void test_integer_compatibility() {
+    printf("Testing integer compatibility...\n");
+    bloomfilter_t *bf = bloomfilter_init(1000, 3);
+
+    int8_t v8 = 42;
+    int16_t v16 = 42;
+    int32_t v32 = 42;
+    int64_t v64 = 42;
+
+    bloomfilter_add(bf, &v8, sizeof(v8));
+    CHECK(bloomfilter_test(bf, &v8, sizeof(v8)), "int8 should be found");
+    CHECK(bloomfilter_test(bf, &v16, sizeof(v16)), "int16 should be found");
+    CHECK(bloomfilter_test(bf, &v32, sizeof(v32)), "int32 should be found");
+    CHECK(bloomfilter_test(bf, &v64, sizeof(v64)), "int64 should be found");
+
+    int64_t v64_2 = 123456789;
+    bloomfilter_add(bf, &v64_2, sizeof(v64_2));
+    CHECK(bloomfilter_test(bf, &v64_2, sizeof(v64_2)), "int64_2 should be found");
+
+    // Test with another value
+    int16_t v16_3 = 1000;
+    bloomfilter_add(bf, &v16_3, sizeof(v16_3));
+    int32_t v32_3 = 1000;
+    CHECK(bloomfilter_test(bf, &v32_3, sizeof(v32_3)), "int32_3 should be found if int16_3 was added");
+
+    bloomfilter_free(bf);
+    printf("Integer compatibility passed\n");
+}
+
 int main() {
     srand(time(NULL));
     
@@ -207,6 +236,7 @@ int main() {
     test_test_fixed();
     test_test_and_add_fixed();
     test_varlena_ops();
+    test_integer_compatibility();
 
     printf("All BloomFilter tests passed!\n");
     return 0;

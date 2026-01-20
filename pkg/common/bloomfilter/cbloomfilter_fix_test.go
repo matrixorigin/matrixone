@@ -119,3 +119,33 @@ func TestCBloomFilter_VarlenaVectorWithEmptySlices(t *testing.T) {
 	require.True(t, bf2.Test([]byte("")))
 	require.True(t, bf2.Test([]byte("world")))
 }
+
+func TestCBloomFilter_IntegerCompatibility(t *testing.T) {
+	bf := NewCBloomFilterWithProbability(100, 0.0001)
+	defer bf.Free()
+
+	// Test values
+	val := int64(42)
+	v8 := int8(val)
+	v16 := int16(val)
+	v32 := int32(val)
+	v64 := int64(val)
+
+	// Add as int8
+	bf.Add(types.EncodeFixed(v8))
+
+	// Should be found as any integer type
+	require.True(t, bf.Test(types.EncodeFixed(v8)), "Should find int8")
+	require.True(t, bf.Test(types.EncodeFixed(v16)), "Should find int16")
+	require.True(t, bf.Test(types.EncodeFixed(v32)), "Should find int32")
+	require.True(t, bf.Test(types.EncodeFixed(v64)), "Should find int64")
+
+	// Clear and try adding as int64
+	bf2 := NewCBloomFilterWithProbability(100, 0.0001)
+	defer bf2.Free()
+	bf2.Add(types.EncodeFixed(v64))
+	require.True(t, bf2.Test(types.EncodeFixed(v8)), "Should find int8 when added as int64")
+	require.True(t, bf2.Test(types.EncodeFixed(v16)), "Should find int16 when added as int64")
+	require.True(t, bf2.Test(types.EncodeFixed(v32)), "Should find int32 when added as int64")
+	require.True(t, bf2.Test(types.EncodeFixed(v64)), "Should find int64 when added as int64")
+}
