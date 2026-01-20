@@ -376,7 +376,7 @@ func reconstructListOfNested(ctx context.Context, elementCol *parquet.Column, va
 
 	// Group values by column repetition - when we see a column again, new element starts
 	var groups [][]parquet.Value
-	var currentGroup []parquet.Value
+	currentGroup := make([]parquet.Value, 0, len(leafCols))
 	seenCols := make(map[int]bool)
 
 	for _, v := range values {
@@ -388,7 +388,7 @@ func reconstructListOfNested(ctx context.Context, elementCol *parquet.Column, va
 			if len(currentGroup) > 0 {
 				groups = append(groups, currentGroup)
 			}
-			currentGroup = []parquet.Value{}
+			currentGroup = make([]parquet.Value, 0, len(leafCols))
 			seenCols = make(map[int]bool)
 		}
 		currentGroup = append(currentGroup, v)
@@ -408,7 +408,6 @@ func reconstructListOfNested(ctx context.Context, elementCol *parquet.Column, va
 
 	return result, nil
 }
-
 
 func reconstructList(ctx context.Context, col *parquet.Column, values []parquet.Value) ([]any, error) {
 	result := make([]any, 0)
@@ -489,6 +488,10 @@ func reconstructMap(ctx context.Context, col *parquet.Column, values []parquet.V
 	// Complex case: value is nested (List/Struct/Map)
 	if valueCol != nil && !valueCol.Leaf() {
 		valueStartIdx, valueEndIdx := getNestedColumnIndexRange(valueCol)
+		groupCap := valueEndIdx - valueStartIdx
+		if groupCap < 0 {
+			groupCap = 0
+		}
 
 		// Collect all keys
 		var keys []parquet.Value
@@ -501,7 +504,7 @@ func reconstructMap(ctx context.Context, col *parquet.Column, values []parquet.V
 		// Group values by RepetitionLevel
 		// Rep=0 or Rep=1 starts a new map entry, Rep>=2 continues current entry
 		valueGroups := make([][]parquet.Value, 0)
-		var currentGroup []parquet.Value
+		currentGroup := make([]parquet.Value, 0, groupCap)
 
 		for _, v := range values {
 			colIdx := v.Column()
@@ -510,7 +513,7 @@ func reconstructMap(ctx context.Context, col *parquet.Column, values []parquet.V
 				// Rep <= 1 means new map entry (0=new row, 1=new key_value)
 				if rep <= 1 && len(currentGroup) > 0 {
 					valueGroups = append(valueGroups, currentGroup)
-					currentGroup = nil
+					currentGroup = make([]parquet.Value, 0, groupCap)
 				}
 				currentGroup = append(currentGroup, v)
 			}
