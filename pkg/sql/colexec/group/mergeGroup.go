@@ -80,7 +80,9 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 			}
 
 			if needSpill {
-				mergeGroup.ctr.spillDataToDisk(proc, nil)
+				if err := mergeGroup.ctr.spillDataToDisk(proc, nil); err != nil {
+					return vm.CancelResult, err
+				}
 			}
 		}
 

@@ -3824,7 +3824,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("agg_spill_mem", 0, common.TiB, false),
-		Default:           int64(common.GiB),
+		Default:           int64(0),
 	},
 	"max_dop": {
 		Name:              "max_dop",
