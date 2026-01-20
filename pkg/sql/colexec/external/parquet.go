@@ -52,15 +52,9 @@ func scanParquetFile(ctx context.Context, param *ExternalParam, proc *process.Pr
 		}
 	}
 
-	o := param.parqh.offset
-	for _, g := range param.parqh.file.RowGroups() {
-		n := g.NumRows()
-		if o >= n {
-			o -= n
-			continue
-		}
-		param.parqh.batchCnt = min(n-o, maxParquetBatchCnt)
-	}
+	// With cached page iterators, we read up to maxParquetBatchCnt rows per call.
+	// The iterator automatically tracks position, so no need to calculate offset-based batchCnt.
+	param.parqh.batchCnt = maxParquetBatchCnt
 
 	return param.parqh.getData(bat, param, proc)
 }
@@ -146,9 +140,9 @@ func (h *ParquetHandler) findColumnIgnoreCase(ctx context.Context, name string) 
 }
 
 func (h *ParquetHandler) prepare(param *ExternalParam) error {
-	h.cols = make([]*parquet.Column, len(param.Attrs))
-	h.mappers = make([]*columnMapper, len(param.Attrs))
-	h.pages = make([]parquet.Pages, len(param.Attrs))
+	h.cols = make([]*parquet.Column, len(param.Cols))
+	h.mappers = make([]*columnMapper, len(param.Cols))
+	h.pages = make([]parquet.Pages, len(param.Cols))
 	for _, attr := range param.Attrs {
 		def := param.Cols[attr.ColIndex]
 		if def.Hidden {
@@ -1691,7 +1685,7 @@ func (h *ParquetHandler) getData(bat *batch.Batch, param *ExternalParam, proc *p
 
 		pages := h.pages[colIdx]
 		n := h.batchCnt
-		o := h.offset
+		o := int64(0) // Don't use h.offset - the cached iterator already tracks position
 	L:
 		for n > 0 {
 			page, err := pages.ReadPage()
