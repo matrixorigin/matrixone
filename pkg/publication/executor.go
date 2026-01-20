@@ -186,8 +186,9 @@ func NewPublicationTaskExecutor(
 type TaskEntry struct {
 	taskID            uint64
 	lsn               uint64
-	state             int8 // iteration_state from mo_ccpr_log
-	subscriptionState int8 // subscription state: 0=running, 1=error, 2=pause, 3=dropped
+	state             int8       // iteration_state from mo_ccpr_log
+	subscriptionState int8       // subscription state: 0=running, 1=error, 2=pause, 3=dropped
+	dropAt            *time.Time // drop timestamp from mo_ccpr_log
 }
 
 func taskEntryLess(a, b *TaskEntry) bool {
@@ -388,7 +389,7 @@ func (exec *PublicationTaskExecutor) run(ctx context.Context) {
 				}
 			}
 		case <-gcTrigger.C:
-			err := exec.GC(exec.option.GCTTL)
+			err := GC(exec.ctx, exec.txnEngine, exec.cnTxnClient, exec.cnUUID, exec.upstreamSQLHelperFactory, exec.option.GCTTL)
 			if err != nil {
 				logutil.Error(
 					"Publication-Task gc failed",
@@ -552,15 +553,23 @@ func (exec *PublicationTaskExecutor) applyCcprLogWithRel(ctx context.Context, re
 		}
 		for _, task := range taskMap {
 			subscriptionState := subscriptionStates[task.offset]
+			var dropAt *time.Time
 			// Check if drop_at is set (indicating dropped), update subscriptionState
 			if !dropAtVector.IsNull(uint64(task.offset)) {
 				subscriptionState = SubscriptionStateDropped
+				// Parse timestamp from vector - drop_at is TIMESTAMP type
+				ts := vector.GetFixedAtWithTypeCheck[types.Timestamp](dropAtVector, task.offset)
+				// Convert Timestamp to time.Time
+				// Timestamp is stored as microseconds since Unix epoch
+				t := time.UnixMicro(int64(ts)).UTC()
+				dropAt = &t
 			}
 			exec.addOrUpdateTask(
 				uint64(taskIDs[task.offset]),
 				uint64(lsns[task.offset]),
 				states[task.offset],
 				subscriptionState,
+				dropAt,
 			)
 		}
 	}
@@ -607,15 +616,23 @@ func (exec *PublicationTaskExecutor) replay(ctx context.Context) (err error) {
 		dropAtVector := cols[4]
 		for i := 0; i < rows; i++ {
 			subscriptionState := subscriptionStates[i]
+			var dropAt *time.Time
 			// Check if drop_at is set (indicating dropped), update subscriptionState
 			if !dropAtVector.IsNull(uint64(i)) {
 				subscriptionState = SubscriptionStateDropped
+				// Parse timestamp from vector - drop_at is TIMESTAMP type
+				ts := vector.GetFixedAtWithTypeCheck[types.Timestamp](dropAtVector, i)
+				// Convert Timestamp to time.Time
+				// Timestamp is stored as microseconds since Unix epoch
+				t := time.UnixMicro(int64(ts)).UTC()
+				dropAt = &t
 			}
 			err = exec.addOrUpdateTask(
 				uint64(taskIDs[i]),
 				uint64(lsns[i]),
 				states[i],
 				subscriptionState,
+				dropAt,
 			)
 			if err != nil {
 				return false
@@ -632,6 +649,7 @@ func (exec *PublicationTaskExecutor) addOrUpdateTask(
 	lsn uint64,
 	state int8,
 	subscriptionState int8,
+	dropAt *time.Time,
 ) error {
 	task, ok := exec.getTask(taskID)
 	if !ok {
@@ -641,6 +659,7 @@ func (exec *PublicationTaskExecutor) addOrUpdateTask(
 			lsn:               lsn,
 			state:             state,
 			subscriptionState: subscriptionState,
+			dropAt:            dropAt,
 		}
 		exec.setTask(task)
 		return nil
@@ -650,6 +669,7 @@ func (exec *PublicationTaskExecutor) addOrUpdateTask(
 	task.lsn = lsn
 	task.state = state
 	task.subscriptionState = subscriptionState
+	task.dropAt = dropAt
 	exec.setTask(task)
 	return nil
 }
@@ -689,10 +709,14 @@ func (exec *PublicationTaskExecutor) updateNonErrorTasksToComplete(ctx context.C
 func (exec *PublicationTaskExecutor) GCInMemoryTask(threshold time.Duration) {
 	tasks := exec.getAllTasks()
 	tasksToDelete := make([]*TaskEntry, 0)
+	now := time.Now()
+	gcTime := now.Add(-threshold)
 	for _, task := range tasks {
-		// Delete tasks that are dropped (subscriptionState == SubscriptionStateDropped)
-		if task.subscriptionState == SubscriptionStateDropped {
-			tasksToDelete = append(tasksToDelete, task)
+		// Delete tasks that are dropped and dropAt is older than threshold
+		if task.subscriptionState == SubscriptionStateDropped && task.dropAt != nil {
+			if task.dropAt.Before(gcTime) {
+				tasksToDelete = append(tasksToDelete, task)
+			}
 		}
 	}
 	taskIDs := make([]uint64, 0, len(tasksToDelete))
@@ -705,8 +729,15 @@ func (exec *PublicationTaskExecutor) GCInMemoryTask(threshold time.Duration) {
 	}
 }
 
-func (exec *PublicationTaskExecutor) GC(cleanupThreshold time.Duration) (err error) {
-	ctx := context.WithValue(exec.ctx, defines.TenantIDKey{}, catalog.System_Account)
+func GC(
+	ctx context.Context,
+	txnEngine engine.Engine,
+	cnTxnClient client.TxnClient,
+	cnUUID string,
+	upstreamSQLHelperFactory UpstreamSQLHelperFactory,
+	cleanupThreshold time.Duration,
+) (err error) {
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
 	defer cancel()
 
@@ -721,7 +752,7 @@ func (exec *PublicationTaskExecutor) GC(cleanupThreshold time.Duration) (err err
 	)
 
 	// Read all mo_ccpr_log records
-	txn, err := getTxn(ctx, exec.txnEngine, exec.cnTxnClient, "publication gc read")
+	txn, err := getTxn(ctx, txnEngine, cnTxnClient, "publication gc read")
 	if err != nil {
 		logutil.Error("Publication-Task GC failed to create txn for reading", zap.Error(err))
 		return err
@@ -729,7 +760,7 @@ func (exec *PublicationTaskExecutor) GC(cleanupThreshold time.Duration) (err err
 	defer txn.Commit(ctx)
 
 	sql := `SELECT task_id, state, iteration_state, iteration_lsn, upstream_conn, drop_at FROM mo_catalog.mo_ccpr_log`
-	result, err := ExecWithResult(ctx, sql, exec.cnUUID, txn)
+	result, err := ExecWithResult(ctx, sql, cnUUID, txn)
 	if err != nil {
 		logutil.Error("Publication-Task GC failed to query mo_ccpr_log", zap.Error(err))
 		return err
@@ -779,7 +810,7 @@ func (exec *PublicationTaskExecutor) GC(cleanupThreshold time.Duration) (err err
 
 	// Process each record
 	for _, record := range records {
-		exec.gcRecord(ctx, record, gcTime, snapshotThresholdTime)
+		gcRecord(ctx, txnEngine, cnTxnClient, cnUUID, upstreamSQLHelperFactory, record, gcTime, snapshotThresholdTime)
 	}
 
 	return nil
@@ -794,14 +825,18 @@ type ccprLogRecord struct {
 	dropAt         *time.Time
 }
 
-func (exec *PublicationTaskExecutor) gcRecord(
+func gcRecord(
 	ctx context.Context,
+	txnEngine engine.Engine,
+	cnTxnClient client.TxnClient,
+	cnUUID string,
+	upstreamSQLHelperFactory UpstreamSQLHelperFactory,
 	record ccprLogRecord,
 	gcTime time.Time,
 	snapshotThresholdTime time.Time,
 ) {
 	// Create upstream executor for this record
-	upstreamExecutor, err := exec.createUpstreamExecutorForGC(ctx, record.upstreamConn)
+	upstreamExecutor, err := createUpstreamExecutorForGC(ctx, cnUUID, cnTxnClient, txnEngine, upstreamSQLHelperFactory, record.upstreamConn)
 	if err != nil {
 		logutil.Error("Publication-Task GC failed to create upstream executor",
 			zap.Uint64("taskID", record.taskID),
@@ -812,7 +847,7 @@ func (exec *PublicationTaskExecutor) gcRecord(
 	defer upstreamExecutor.Close()
 
 	// Query all snapshots for this task
-	snapshots, err := exec.queryTaskSnapshots(ctx, upstreamExecutor, record.taskID)
+	snapshots, err := queryTaskSnapshots(ctx, upstreamExecutor, record.taskID)
 	if err != nil {
 		logutil.Error("Publication-Task GC failed to query snapshots",
 			zap.Uint64("taskID", record.taskID),
@@ -822,7 +857,7 @@ func (exec *PublicationTaskExecutor) gcRecord(
 	}
 
 	// Determine which snapshots to delete
-	snapshotsToDelete := exec.determineSnapshotsToDelete(
+	snapshotsToDelete := determineSnapshotsToDelete(
 		record,
 		snapshots,
 		gcTime,
@@ -831,13 +866,13 @@ func (exec *PublicationTaskExecutor) gcRecord(
 
 	// Delete snapshots (each in a separate transaction)
 	for _, snapshotName := range snapshotsToDelete {
-		exec.deleteSnapshotInSeparateTxn(ctx, upstreamExecutor, snapshotName, record.taskID)
+		deleteSnapshotInSeparateTxn(ctx, upstreamExecutor, snapshotName, record.taskID)
 	}
 
 	// For dropped records, check if we should delete the record itself
 	if record.dropAt != nil && record.state == SubscriptionStateDropped {
 		// Check if all snapshots are deleted
-		remainingSnapshots, err := exec.queryTaskSnapshots(ctx, upstreamExecutor, record.taskID)
+		remainingSnapshots, err := queryTaskSnapshots(ctx, upstreamExecutor, record.taskID)
 		if err != nil {
 			logutil.Error("Publication-Task GC failed to query remaining snapshots",
 				zap.Uint64("taskID", record.taskID),
@@ -847,13 +882,17 @@ func (exec *PublicationTaskExecutor) gcRecord(
 		}
 
 		if len(remainingSnapshots) == 0 && record.dropAt.Before(gcTime) {
-			exec.deleteCcprLogRecordInSeparateTxn(ctx, record.taskID)
+			deleteCcprLogRecordInSeparateTxn(ctx, txnEngine, cnTxnClient, cnUUID, record.taskID)
 		}
 	}
 }
 
-func (exec *PublicationTaskExecutor) createUpstreamExecutorForGC(
+func createUpstreamExecutorForGC(
 	ctx context.Context,
+	cnUUID string,
+	cnTxnClient client.TxnClient,
+	txnEngine engine.Engine,
+	upstreamSQLHelperFactory UpstreamSQLHelperFactory,
 	upstreamConn string,
 ) (SQLExecutor, error) {
 	if upstreamConn == "" {
@@ -873,9 +912,9 @@ func (exec *PublicationTaskExecutor) createUpstreamExecutorForGC(
 		}
 
 		upstreamExecutor, err := NewInternalSQLExecutor(
-			exec.cnUUID,
-			exec.cnTxnClient,
-			exec.txnEngine,
+			cnUUID,
+			cnTxnClient,
+			txnEngine,
 			upstreamAccountID,
 			NewUpstreamConnectionClassifier(),
 		)
@@ -884,10 +923,10 @@ func (exec *PublicationTaskExecutor) createUpstreamExecutorForGC(
 		}
 
 		// Set upstream SQL helper if factory is available
-		if exec.upstreamSQLHelperFactory != nil {
-			helper := exec.upstreamSQLHelperFactory(
+		if upstreamSQLHelperFactory != nil {
+			helper := upstreamSQLHelperFactory(
 				nil,
-				exec.txnEngine,
+				txnEngine,
 				upstreamAccountID,
 				upstreamExecutor.GetInternalExec(),
 				upstreamExecutor.GetTxnClient(),
@@ -899,7 +938,7 @@ func (exec *PublicationTaskExecutor) createUpstreamExecutorForGC(
 	}
 
 	// Parse external connection string
-	connConfig, err := ParseUpstreamConnWithDecrypt(ctx, upstreamConn, nil, exec.cnUUID)
+	connConfig, err := ParseUpstreamConnWithDecrypt(ctx, upstreamConn, nil, cnUUID)
 	if err != nil {
 		return nil, err
 	}
@@ -928,7 +967,7 @@ type snapshotInfo struct {
 	ts   time.Time
 }
 
-func (exec *PublicationTaskExecutor) queryTaskSnapshots(
+func queryTaskSnapshots(
 	ctx context.Context,
 	upstreamExecutor SQLExecutor,
 	taskID uint64,
@@ -974,7 +1013,7 @@ func (exec *PublicationTaskExecutor) queryTaskSnapshots(
 	return snapshots, nil
 }
 
-func (exec *PublicationTaskExecutor) determineSnapshotsToDelete(
+func determineSnapshotsToDelete(
 	record ccprLogRecord,
 	snapshots []snapshotInfo,
 	gcTime time.Time,
@@ -1020,7 +1059,7 @@ func (exec *PublicationTaskExecutor) determineSnapshotsToDelete(
 	return toDelete
 }
 
-func (exec *PublicationTaskExecutor) deleteSnapshotInSeparateTxn(
+func deleteSnapshotInSeparateTxn(
 	ctx context.Context,
 	upstreamExecutor SQLExecutor,
 	snapshotName string,
@@ -1045,13 +1084,16 @@ func (exec *PublicationTaskExecutor) deleteSnapshotInSeparateTxn(
 	)
 }
 
-func (exec *PublicationTaskExecutor) deleteCcprLogRecordInSeparateTxn(
+func deleteCcprLogRecordInSeparateTxn(
 	ctx context.Context,
+	txnEngine engine.Engine,
+	cnTxnClient client.TxnClient,
+	cnUUID string,
 	taskID uint64,
 ) {
 	// Each SQL operation in a separate transaction, no retry
 	// If error occurs, just log and continue
-	txn, err := getTxn(ctx, exec.txnEngine, exec.cnTxnClient, "publication gc delete record")
+	txn, err := getTxn(ctx, txnEngine, cnTxnClient, "publication gc delete record")
 	if err != nil {
 		logutil.Error("Publication-Task GC failed to create txn for deleting record",
 			zap.Uint64("taskID", taskID),
@@ -1062,7 +1104,7 @@ func (exec *PublicationTaskExecutor) deleteCcprLogRecordInSeparateTxn(
 	defer txn.Commit(ctx)
 
 	deleteSQL := fmt.Sprintf(`DELETE FROM mo_catalog.mo_ccpr_log WHERE task_id = %d`, taskID)
-	result, err := ExecWithResult(ctx, deleteSQL, exec.cnUUID, txn)
+	result, err := ExecWithResult(ctx, deleteSQL, cnUUID, txn)
 	if err != nil {
 		logutil.Error("Publication-Task GC failed to delete mo_ccpr_log record",
 			zap.Uint64("taskID", taskID),
