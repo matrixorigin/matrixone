@@ -167,6 +167,8 @@ func (h *ParquetHandler) prepare(param *ExternalParam) error {
 	h.cols = make([]*parquet.Column, len(param.Cols))
 	h.mappers = make([]*columnMapper, len(param.Cols))
 	h.pages = make([]parquet.Pages, len(param.Cols))
+	h.currentPage = make([]parquet.Page, len(param.Cols))
+	h.pageOffset = make([]int64, len(param.Cols))
 	for _, attr := range param.Attrs {
 		def := param.Cols[attr.ColIndex]
 		if def.Hidden {
@@ -1710,21 +1712,31 @@ func (h *ParquetHandler) getData(bat *batch.Batch, param *ExternalParam, proc *p
 
 		pages := h.pages[colIdx]
 		n := h.batchCnt
-		o := h.offset
+		pageOff := h.pageOffset[colIdx]
 	L:
 		for n > 0 {
-			page, err := pages.ReadPage()
-			switch {
-			case errors.Is(err, io.EOF):
-				finish = true
-				break L
-			case err != nil:
-				return moerr.ConvertGoError(param.Ctx, err)
+			// Use cached page if available, otherwise read next page
+			page := h.currentPage[colIdx]
+			if page == nil {
+				var err error
+				page, err = pages.ReadPage()
+				switch {
+				case errors.Is(err, io.EOF):
+					finish = true
+					break L
+				case err != nil:
+					return moerr.ConvertGoError(param.Ctx, err)
+				}
+				h.currentPage[colIdx] = page
+				pageOff = 0
 			}
 
 			nr := page.NumRows()
-			if nr < o {
-				o -= nr
+			if nr <= pageOff {
+				// Current page exhausted, clear cache and read next
+				h.currentPage[colIdx] = nil
+				h.pageOffset[colIdx] = 0
+				pageOff = 0
 				continue
 			}
 
@@ -1732,13 +1744,24 @@ func (h *ParquetHandler) getData(bat *batch.Batch, param *ExternalParam, proc *p
 				return moerr.NewNYI(param.Ctx, "page has repetition")
 			}
 
-			if o > 0 || o+n < nr {
-				page = page.Slice(o, min(n+o, nr))
-			}
-			o = 0
-			n -= page.NumRows()
+			// Calculate how many rows to read from this page
+			remaining := nr - pageOff
+			toRead := min(n, remaining)
 
-			err = h.mappers[colIdx].mapping(page, proc, vec)
+			slicedPage := page.Slice(pageOff, pageOff+toRead)
+			pageOff += toRead
+			n -= toRead
+
+			// Update page offset
+			h.pageOffset[colIdx] = pageOff
+
+			// If we've consumed the entire page, clear the cache
+			if pageOff >= nr {
+				h.currentPage[colIdx] = nil
+				h.pageOffset[colIdx] = 0
+			}
+
+			err := h.mappers[colIdx].mapping(slicedPage, proc, vec)
 			if err != nil {
 				return err
 			}
