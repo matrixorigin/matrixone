@@ -902,7 +902,7 @@ func createUpstreamExecutorForGC(
 	// Check if it's internal_sql_executor
 	if strings.HasPrefix(upstreamConn, InternalSQLExecutorType) {
 		parts := strings.Split(upstreamConn, ":")
-		var upstreamAccountID uint32 = catalog.System_Account
+		upstreamAccountID := catalog.System_Account
 		if len(parts) == 2 {
 			var accountID uint32
 			_, err := fmt.Sscanf(parts[1], "%d", &accountID)

@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -2016,4 +2017,332 @@ func TestExecuteIterationWithCommitFailedInjection(t *testing.T) {
 
 	err = txn.Commit(querySystemCtx)
 	require.NoError(t, err)
+}
+
+func TestCCPRGC(t *testing.T) {
+	catalog.SetupDefines("")
+
+	var (
+		accountID = catalog.System_Account
+		cnUUID    = ""
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountID)
+	ctxWithTimeout, cancelTimeout := context.WithTimeout(ctx, time.Minute*5)
+	defer cancelTimeout()
+
+	// Start cluster
+	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeHandler.Close(true)
+		rpcAgent.Close()
+	}()
+
+	// Register mock auto increment service
+	mockIncrService := NewMockAutoIncrementService(cnUUID)
+	incrservice.SetAutoIncrementServiceByID("", mockIncrService)
+	defer mockIncrService.Close()
+
+	// Create mo_indexes table
+	err := exec_sql(disttaeEngine, ctxWithTimeout, frontend.MoCatalogMoIndexesDDL)
+	require.NoError(t, err)
+
+	// Create mo_ccpr_log table using system account context
+	systemCtx := context.WithValue(ctxWithTimeout, defines.TenantIDKey{}, catalog.System_Account)
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprLogDDL)
+	require.NoError(t, err)
+
+	// Create mo_snapshots table
+	err = exec_sql(disttaeEngine, ctxWithTimeout, frontend.MoCatalogMoSnapshotsDDL)
+	require.NoError(t, err)
+
+	// Create upstream SQL helper factory
+	upstreamSQLHelperFactory := func(
+		txnOp client.TxnOperator,
+		engine engine.Engine,
+		accountID uint32,
+		exec executor.SQLExecutor,
+		txnClient client.TxnClient,
+	) publication.UpstreamSQLHelper {
+		return NewUpstreamSQLHelper(txnOp, engine, accountID, exec, txnClient)
+	}
+
+	// Define test cases
+	testCases := []struct {
+		name                       string
+		taskID                     uint64
+		iterationLSN               uint64
+		dropAtHoursAgo             float64 // Hours ago for drop_at (negative means future)
+		state                      int8    // subscription state
+		snapshotLSNs               []uint64
+		gcThresholdHours           float64
+		expectedSnapshotCountAfter int64
+		expectedRecordExists       bool // Whether mo_ccpr_log record should exist after GC
+	}{
+		{
+			name:                       "DroppedTaskOlderThanThreshold",
+			taskID:                     100,
+			iterationLSN:               10,
+			dropAtHoursAgo:             48, // 2 days ago
+			state:                      publication.SubscriptionStateDropped,
+			snapshotLSNs:               []uint64{5, 8, 9},
+			gcThresholdHours:           24,    // 1 day threshold
+			expectedSnapshotCountAfter: 0,     // All snapshots should be deleted
+			expectedRecordExists:       false, // Record should be deleted when all snapshots are cleaned
+		},
+		{
+			name:                       "DroppedTaskNewerThanThreshold",
+			taskID:                     101,
+			iterationLSN:               20,
+			dropAtHoursAgo:             12, // 12 hours ago
+			state:                      publication.SubscriptionStateDropped,
+			snapshotLSNs:               []uint64{15, 18},
+			gcThresholdHours:           24,   // 1 day threshold
+			expectedSnapshotCountAfter: 0,    // Snapshots should not be deleted
+			expectedRecordExists:       true, // Record should exist when drop_at is newer than threshold
+		},
+		{
+			name:                       "RunningTask",
+			taskID:                     102,
+			iterationLSN:               30,
+			dropAtHoursAgo:             -1, // No drop_at (future time means not dropped)
+			state:                      publication.SubscriptionStateRunning,
+			snapshotLSNs:               []uint64{25, 28},
+			gcThresholdHours:           24,
+			expectedSnapshotCountAfter: 0,    // Snapshots should not be deleted for running tasks
+			expectedRecordExists:       true, // Record should exist for running tasks
+		},
+	}
+
+	// Run test cases
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			subscriptionName := fmt.Sprintf("test_subscription_gc_%d", tc.taskID)
+
+			// Calculate drop_at timestamp
+			var dropAtStr string
+			if tc.dropAtHoursAgo >= 0 {
+				dropAtTime := time.Now().Add(-time.Duration(tc.dropAtHoursAgo) * time.Hour)
+				dropAtStr = dropAtTime.Format("2006-01-02 15:04:05")
+			} else {
+				// For non-dropped tasks, drop_at should be NULL
+				dropAtStr = "NULL"
+			}
+
+			// Insert test data into mo_ccpr_log
+			var insertCcprLogSQL string
+			if tc.dropAtHoursAgo >= 0 {
+				insertCcprLogSQL = fmt.Sprintf(
+					`INSERT INTO mo_catalog.mo_ccpr_log (
+						task_id, 
+						subscription_name, 
+						sync_level, 
+						account_id,
+						db_name, 
+						table_name, 
+						upstream_conn, 
+						sync_config, 
+						state, 
+						iteration_state, 
+						iteration_lsn, 
+						cn_uuid,
+						drop_at
+					) VALUES (
+						%d, 
+						'%s', 
+						'table', 
+						%d,
+						'test_db', 
+						'test_table', 
+						'%s:%d', 
+						'{}', 
+						%d, 
+						%d, 
+						%d, 
+						'%s',
+						'%s'
+					)`,
+					tc.taskID,
+					subscriptionName,
+					accountID,
+					publication.InternalSQLExecutorType,
+					accountID,
+					tc.state,
+					publication.IterationStateCompleted,
+					tc.iterationLSN,
+					cnUUID,
+					dropAtStr,
+				)
+			} else {
+				insertCcprLogSQL = fmt.Sprintf(
+					`INSERT INTO mo_catalog.mo_ccpr_log (
+						task_id, 
+						subscription_name, 
+						sync_level, 
+						account_id,
+						db_name, 
+						table_name, 
+						upstream_conn, 
+						sync_config, 
+						state, 
+						iteration_state, 
+						iteration_lsn, 
+						cn_uuid
+					) VALUES (
+						%d, 
+						'%s', 
+						'table', 
+						%d,
+						'test_db', 
+						'test_table', 
+						'%s:%d', 
+						'{}', 
+						%d, 
+						%d, 
+						%d, 
+						'%s'
+					)`,
+					tc.taskID,
+					subscriptionName,
+					accountID,
+					publication.InternalSQLExecutorType,
+					accountID,
+					tc.state,
+					publication.IterationStateCompleted,
+					tc.iterationLSN,
+					cnUUID,
+				)
+			}
+
+			err := exec_sql(disttaeEngine, systemCtx, insertCcprLogSQL)
+			require.NoError(t, err)
+
+			// Insert test snapshots into mo_snapshots
+			now := time.Now()
+			snapshotTS := now.UnixNano()
+			for _, lsn := range tc.snapshotLSNs {
+				snapshotName := fmt.Sprintf("ccpr_%d_%d", tc.taskID, lsn)
+				snapshotID, err := uuid.NewV7()
+				require.NoError(t, err)
+
+				insertSnapshotSQL := fmt.Sprintf(
+					`INSERT INTO mo_catalog.mo_snapshots(
+						snapshot_id,
+						sname,
+						ts,
+						level,
+						account_name,
+						database_name,
+						table_name,
+						obj_id
+					) VALUES ('%s', '%s', %d, '%s', '%s', '%s', '%s', %d)`,
+					snapshotID.String(),
+					snapshotName,
+					snapshotTS,
+					"table",
+					"",
+					"test_db",
+					"test_table",
+					0,
+				)
+
+				err = exec_sql(disttaeEngine, ctxWithTimeout, insertSnapshotSQL)
+				require.NoError(t, err)
+			}
+
+			// Verify snapshots exist before GC
+			v, ok := runtime.ServiceRuntime("").GetGlobalVariables(runtime.InternalSQLExecutor)
+			require.True(t, ok)
+			exec := v.(executor.SQLExecutor)
+
+			checkSnapshotSQL := fmt.Sprintf(
+				`SELECT COUNT(*) FROM mo_catalog.mo_snapshots WHERE sname LIKE 'ccpr_%d_%%'`,
+				tc.taskID,
+			)
+
+			txn, err := disttaeEngine.NewTxnOperator(ctxWithTimeout, disttaeEngine.Now())
+			require.NoError(t, err)
+
+			res, err := exec.Exec(ctxWithTimeout, checkSnapshotSQL, executor.Options{}.WithTxn(txn))
+			require.NoError(t, err)
+			defer res.Close()
+
+			var snapshotCountBefore int64
+			res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+				require.Equal(t, 1, rows)
+				snapshotCountBefore = vector.GetFixedAtWithTypeCheck[int64](cols[0], 0)
+				return true
+			})
+			require.Equal(t, int64(len(tc.snapshotLSNs)), snapshotCountBefore, "should have correct number of snapshots before GC")
+
+			err = txn.Commit(ctxWithTimeout)
+			require.NoError(t, err)
+
+			// Call GC
+			gcThreshold := time.Duration(tc.gcThresholdHours) * time.Hour
+			err = publication.GC(
+				ctxWithTimeout,
+				disttaeEngine.Engine,
+				disttaeEngine.GetTxnClient(),
+				cnUUID,
+				upstreamSQLHelperFactory,
+				gcThreshold,
+			)
+			require.NoError(t, err)
+
+			// Verify snapshots after GC
+			txn, err = disttaeEngine.NewTxnOperator(ctxWithTimeout, disttaeEngine.Now())
+			require.NoError(t, err)
+
+			res, err = exec.Exec(ctxWithTimeout, checkSnapshotSQL, executor.Options{}.WithTxn(txn))
+			require.NoError(t, err)
+			defer res.Close()
+
+			var snapshotCountAfter int64
+			res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+				require.Equal(t, 1, rows)
+				snapshotCountAfter = vector.GetFixedAtWithTypeCheck[int64](cols[0], 0)
+				return true
+			})
+			require.Equal(t, tc.expectedSnapshotCountAfter, snapshotCountAfter,
+				"snapshot count after GC should match expected value")
+
+			err = txn.Commit(ctxWithTimeout)
+			require.NoError(t, err)
+
+			// Verify mo_ccpr_log record exists or not after GC
+			checkRecordSQL := fmt.Sprintf(
+				`SELECT COUNT(*) FROM mo_catalog.mo_ccpr_log WHERE task_id = %d`,
+				tc.taskID,
+			)
+
+			txn, err = disttaeEngine.NewTxnOperator(ctxWithTimeout, disttaeEngine.Now())
+			require.NoError(t, err)
+
+			res, err = exec.Exec(ctxWithTimeout, checkRecordSQL, executor.Options{}.WithTxn(txn))
+			require.NoError(t, err)
+			defer res.Close()
+
+			var recordCount int64
+			res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+				require.Equal(t, 1, rows)
+				recordCount = vector.GetFixedAtWithTypeCheck[int64](cols[0], 0)
+				return true
+			})
+
+			if tc.expectedRecordExists {
+				require.Equal(t, int64(1), recordCount,
+					"mo_ccpr_log record should exist after GC")
+			} else {
+				require.Equal(t, int64(0), recordCount,
+					"mo_ccpr_log record should be deleted after GC")
+			}
+
+			err = txn.Commit(ctxWithTimeout)
+			require.NoError(t, err)
+		})
+	}
 }
