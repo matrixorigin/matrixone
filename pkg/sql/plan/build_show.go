@@ -966,7 +966,8 @@ func buildShowStages(stmt *tree.ShowStages, ctx CompilerContext) (*Plan, error) 
 
 func buildShowSnapShots(stmt *tree.ShowSnapShots, ctx CompilerContext) (*Plan, error) {
 	ddlType := plan.DataDefinition_SHOW_TARGET
-	sql := fmt.Sprintf("SELECT sname as `SNAPSHOT_NAME`, CAST_NANO_TO_TIMESTAMP(ts) as `TIMESTAMP`,  level as `SNAPSHOT_LEVEL`, account_name as `ACCOUNT_NAME`, database_name as `DATABASE_NAME`, table_name as `TABLE_NAME` FROM %s.mo_snapshots ORDER BY ts DESC", MO_CATALOG_DB_NAME)
+	// Filter out ccpr snapshots (snapshots with names starting with 'ccpr_')
+	sql := fmt.Sprintf("SELECT sname as `SNAPSHOT_NAME`, CAST_NANO_TO_TIMESTAMP(ts) as `TIMESTAMP`,  level as `SNAPSHOT_LEVEL`, account_name as `ACCOUNT_NAME`, database_name as `DATABASE_NAME`, table_name as `TABLE_NAME` FROM %s.mo_snapshots WHERE sname NOT LIKE 'ccpr_%%' ORDER BY ts DESC", MO_CATALOG_DB_NAME)
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
