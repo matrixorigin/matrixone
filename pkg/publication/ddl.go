@@ -150,6 +150,127 @@ func GetUpstreamDDLUsingGetDdl(
 	return ddlMap, nil
 }
 
+// getdroppeddatabase returns a list of databases that need to be dropped
+// It queries upstream databases using iterationCtx.UpstreamExecutor and compares with local databases
+// Logic:
+//   - If table level: returns empty list
+//   - If db level: checks if the database exists upstream, if not, returns the database name
+//   - If account level: queries all databases for the account upstream, compares with local databases,
+//     and returns databases that exist locally but not upstream
+func getdroppeddatabase(
+	ctx context.Context,
+	iterationCtx *IterationContext,
+	cnEngine engine.Engine,
+) ([]string, error) {
+	if iterationCtx == nil {
+		return nil, moerr.NewInternalError(ctx, "iteration context is nil")
+	}
+	if iterationCtx.UpstreamExecutor == nil {
+		return nil, moerr.NewInternalError(ctx, "upstream executor is nil")
+	}
+	if cnEngine == nil {
+		return nil, moerr.NewInternalError(ctx, "engine is nil")
+	}
+	if iterationCtx.LocalTxn == nil {
+		return nil, moerr.NewInternalError(ctx, "local transaction is nil")
+	}
+
+	var dbToDrop []string
+
+	// If table level, return empty list
+	if iterationCtx.SrcInfo.SyncLevel == SyncLevelTable {
+		return dbToDrop, nil
+	}
+
+	// Use downstream account ID from iterationCtx.SrcInfo
+	downstreamCtx := context.WithValue(ctx, defines.TenantIDKey{}, iterationCtx.SrcInfo.AccountID)
+
+	// If db level, check if the database exists upstream
+	if iterationCtx.SrcInfo.SyncLevel == SyncLevelDatabase {
+		if iterationCtx.SrcInfo.DBName == "" {
+			return nil, moerr.NewInternalError(ctx, "database name is empty for database level sync")
+		}
+
+		// Query upstream to check if database exists
+		querySQL := PublicationSQLBuilder.QueryMoDatabasesSQL(0, iterationCtx.SrcInfo.DBName)
+		result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, nil, querySQL, false, true)
+		if err != nil {
+			return nil, moerr.NewInternalErrorf(ctx, "failed to query upstream database: %v", err)
+		}
+		defer result.Close()
+
+		// Check if database exists upstream
+		exists := false
+		for result.Next() {
+			exists = true
+			break
+		}
+		if err := result.Err(); err != nil {
+			return nil, moerr.NewInternalErrorf(ctx, "error reading upstream database query results: %v", err)
+		}
+
+		// If database doesn't exist upstream, add it to drop list
+		if !exists {
+			// Also check if it exists locally before adding to drop list
+			_, err := cnEngine.Database(downstreamCtx, iterationCtx.SrcInfo.DBName, iterationCtx.LocalTxn)
+			if err == nil {
+				// Database exists locally but not upstream, add to drop list
+				dbToDrop = append(dbToDrop, iterationCtx.SrcInfo.DBName)
+			}
+		}
+
+		return dbToDrop, nil
+	}
+
+	// If account level, query all databases for the account upstream and compare with local databases
+	if iterationCtx.SrcInfo.SyncLevel == SyncLevelAccount {
+		// Query upstream databases for the account
+		querySQL := PublicationSQLBuilder.QueryMoDatabasesSQL(0, "")
+		result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, nil, querySQL, false, true)
+		if err != nil {
+			return nil, moerr.NewInternalErrorf(ctx, "failed to query upstream databases: %v", err)
+		}
+		defer result.Close()
+
+		// Collect upstream database names
+		upstreamDBs := make(map[string]bool)
+		for result.Next() {
+			var datID sql.NullInt64
+			var datName sql.NullString
+			var datCreateSQL sql.NullString
+			var accountID sql.NullInt64
+
+			if err := result.Scan(&datID, &datName, &datCreateSQL, &accountID); err != nil {
+				return nil, moerr.NewInternalErrorf(ctx, "failed to scan upstream database result: %v", err)
+			}
+
+			if datName.Valid {
+				upstreamDBs[datName.String] = true
+			}
+		}
+		if err := result.Err(); err != nil {
+			return nil, moerr.NewInternalErrorf(ctx, "error reading upstream database query results: %v", err)
+		}
+
+		// Get local databases
+		localDBs, err := cnEngine.Databases(downstreamCtx, iterationCtx.LocalTxn)
+		if err != nil {
+			return nil, moerr.NewInternalErrorf(ctx, "failed to get local databases: %v", err)
+		}
+
+		// Find databases that exist locally but not upstream
+		for _, localDB := range localDBs {
+			if !upstreamDBs[localDB] {
+				dbToDrop = append(dbToDrop, localDB)
+			}
+		}
+
+		return dbToDrop, nil
+	}
+
+	return nil, moerr.NewInternalErrorf(ctx, "unsupported sync level: %s", iterationCtx.SrcInfo.SyncLevel)
+}
+
 // ProcessDDLChanges processes DDL changes by:
 // 1. Getting upstream DDL map using GetUpstreamDDLUsingGetDdl
 // 2. Filling DDL operations using FillDDLOperation
@@ -182,7 +303,7 @@ func ProcessDDLChanges(
 	// Step 2: Fill DDL operations
 	// Use downstream account ID from iterationCtx.SrcInfo
 	downstreamCtx := context.WithValue(ctx, defines.TenantIDKey{}, iterationCtx.SrcInfo.AccountID)
-	dbToDrop, err := FillDDLOperation(
+	err = FillDDLOperation(
 		downstreamCtx,
 		cnEngine,
 		ddlMap,
@@ -279,7 +400,12 @@ func ProcessDDLChanges(
 		}
 	}
 
-	// Step 4: Drop databases using CN engine API
+	// Step 4: Get dropped databases and drop them using CN engine API
+	dbToDrop, err := getdroppeddatabase(ctx, iterationCtx, cnEngine)
+	if err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to get dropped databases: %v", err)
+	}
+
 	for _, dbName := range dbToDrop {
 		logutil.Info("ccpr-iteration dropping database",
 			zap.Uint64("task_id", iterationCtx.TaskID),
@@ -360,14 +486,13 @@ func FillDDLOperation(
 	tableIDs map[TableKey]uint64,
 	txn client.TxnOperator,
 	iterationCtx *IterationContext,
-) (dbToDrop []string, err error) {
+) (err error) {
 	if cnEngine == nil {
-		return nil, moerr.NewInternalError(ctx, "engine is nil")
+		return moerr.NewInternalError(ctx, "engine is nil")
 	}
 	if ddlMap == nil {
-		return nil, moerr.NewInternalError(ctx, "ddlMap is nil")
+		return moerr.NewInternalError(ctx, "ddlMap is nil")
 	}
-	dbToDrop = make([]string, 0)
 
 	// Process each database and table
 	for dbName, tables := range ddlMap {
@@ -391,7 +516,7 @@ func FillDDLOperation(
 			// Table exists, check table ID
 			expectedTableID, idExists := tableIDs[key]
 			if !idExists {
-				return nil, moerr.NewInternalErrorf(ctx, "table %s.%s id not exists", dbName, tableName)
+				return moerr.NewInternalErrorf(ctx, "table %s.%s id not exists", dbName, tableName)
 			}
 
 			// Check if table ID changed
@@ -403,7 +528,7 @@ func FillDDLOperation(
 				// Table ID matches, check if create SQL changed
 				currentCreateSQL, err := getCurrentTableCreateSQL(ctx, rel, dbName, tableName)
 				if err != nil {
-					return nil, moerr.NewInternalErrorf(ctx, "failed to get current table create SQL for %s.%s: %v", dbName, tableName, err)
+					return moerr.NewInternalErrorf(ctx, "failed to get current table create SQL for %s.%s: %v", dbName, tableName, err)
 				}
 				if currentCreateSQL != ddlInfo.TableCreateSQL {
 					// Create SQL changed, need to alter
@@ -416,14 +541,13 @@ func FillDDLOperation(
 	// Traverse local tables based on iterationCtx.SrcInfo
 	// Find tables that exist locally but not in ddlMap, and mark them as drop
 	if iterationCtx != nil {
-		dbToDropLocal, err := findMissingTablesInDdlMap(ctx, cnEngine, ddlMap, tableIDs, txn, iterationCtx)
+		err := findMissingTablesInDdlMap(ctx, cnEngine, ddlMap, tableIDs, txn, iterationCtx)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		dbToDrop = append(dbToDrop, dbToDropLocal...)
 	}
 
-	return dbToDrop, nil
+	return nil
 }
 
 // findMissingTablesInDdlMap traverses local tables based on SrcInfo and marks tables
@@ -435,7 +559,7 @@ func findMissingTablesInDdlMap(
 	tableIDs map[TableKey]uint64,
 	txn client.TxnOperator,
 	iterationCtx *IterationContext,
-) (dbToDrop []string, err error) {
+) (err error) {
 	var dbNames []string
 
 	// Determine which databases to traverse based on SrcInfo
@@ -445,16 +569,16 @@ func findMissingTablesInDdlMap(
 		var err error
 		dbNames, err = cnEngine.Databases(ctx, txn)
 		if err != nil {
-			return nil, moerr.NewInternalErrorf(ctx, "failed to get database names: %v", err)
+			return moerr.NewInternalErrorf(ctx, "failed to get database names: %v", err)
 		}
 	case SyncLevelDatabase, SyncLevelTable:
 		// Traverse only the specified database
 		if iterationCtx.SrcInfo.DBName == "" {
-			return nil, moerr.NewInternalError(ctx, "database name is empty")
+			return moerr.NewInternalError(ctx, "database name is empty")
 		}
 		dbNames = []string{iterationCtx.SrcInfo.DBName}
 	default:
-		return nil, moerr.NewInternalError(ctx, "invalid sync level")
+		return moerr.NewInternalError(ctx, "invalid sync level")
 	}
 
 	// Traverse each database
@@ -471,7 +595,7 @@ func findMissingTablesInDdlMap(
 		} else {
 			tableNames, err = db.Relations(ctx)
 			if err != nil {
-				return nil, moerr.NewInternalErrorf(ctx, "failed to get table names from database %s: %v", dbName, err)
+				return moerr.NewInternalErrorf(ctx, "failed to get table names from database %s: %v", dbName, err)
 			}
 		}
 
@@ -503,13 +627,12 @@ func findMissingTablesInDdlMap(
 				ddlMap[dbName][tableName] = &TableDDLInfo{
 					Operation: DDLOperationDrop,
 				}
-				dbToDrop = append(dbToDrop, dbName)
 			}
 
 		}
 	}
 
-	return dbToDrop, nil
+	return nil
 }
 
 // createTable creates a table using the provided CREATE TABLE SQL statement
