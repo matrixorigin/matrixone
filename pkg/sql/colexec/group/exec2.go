@@ -63,11 +63,7 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 		return err
 	}
 
-	if group.NeedEval {
-		group.ctr.setSpillMem(group.SpillMem, group.Aggs)
-	} else {
-		group.ctr.setSpillMem(group.SpillMem/8, group.Aggs)
-	}
+	group.ctr.setSpillMem(group.SpillMem, group.Aggs)
 	return nil
 }
 
@@ -246,7 +242,9 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 			if needSpill {
 				// we need to spill the data to disk.
 				if group.NeedEval {
-					group.ctr.spillDataToDisk(proc, nil)
+					if err := group.ctr.spillDataToDisk(proc, nil); err != nil {
+						return vm.CancelResult, err
+					}
 					// continue the loop, to receive more data.
 				} else {
 					// break the loop, output the intermediate result.
