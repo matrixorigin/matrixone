@@ -2081,8 +2081,9 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 		if capacity < 100 {
 			capacity = 100
 		}
-		bf := bloomfilter.New(capacity, 0.001) // Use lower false positive rate
-		bf.Add(vec)
+		bf := bloomfilter.NewCBloomFilterWithProbability(capacity, 0.001) // Use lower false positive rate
+		bf.AddVector(vec)
+		defer bf.Free()
 		vec.Free(mp)
 
 		return bf.Marshal()

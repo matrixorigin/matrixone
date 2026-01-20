@@ -200,8 +200,13 @@ func (ctr *container) handleRuntimeFilter(ap *HashBuild, proc *process.Process) 
 		// Reference fuzzyfilter experience, choose different false positive rates based on row count
 		probability := calculateBloomFilterProbability(rowCount)
 
-		bf := bloomfilter.New(int64(rowCount), probability)
-		bf.Add(keyVec)
+		bf := bloomfilter.NewCBloomFilterWithProbability(int64(rowCount), probability)
+		if bf == nil {
+			panic("failed to create CBloomFilter")
+		}
+
+		defer bf.Free()
+		bf.AddVector(keyVec)
 
 		data, err := bf.Marshal()
 		if err != nil {

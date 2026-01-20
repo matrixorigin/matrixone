@@ -138,7 +138,7 @@ func ConstructBlockPKFilter(
 	}
 
 	// Case with BloomFilter: wrap existing search func.
-	var bf bloomfilter.BloomFilter
+	bf := &bloomfilter.CBloomFilter{}
 	if err := bf.Unmarshal(bloomFilter); err != nil {
 		return objectio.BlockReadFilter{}, err
 	}
@@ -163,7 +163,7 @@ func ConstructBlockPKFilter(
 		if cap(sels) < rowCount {
 			sels = make([]int64, 0, rowCount)
 		}
-		bf.Test(lastColVec, func(exist bool, row int) {
+		bf.TestVector(lastColVec, func(exist bool, isnull bool, row int) {
 			if exist && row >= 0 && row < rowCount {
 				sels = append(sels, int64(row))
 			}
@@ -230,7 +230,7 @@ func ConstructBlockPKFilter(
 					rowSet[int(off)] = true
 				}
 			}
-			bf.Test(lastColVec, func(exist bool, row int) {
+			bf.TestVector(lastColVec, func(exist bool, isnull bool, row int) {
 				// Add strict boundary check to prevent index out of range
 				if exist && row >= 0 && row < rowCount && rowSet[row] {
 					exists[row] = true
@@ -254,7 +254,7 @@ func ConstructBlockPKFilter(
 	// Set cleanup function to release BloomFilter when filter is no longer needed
 	readFilter.Cleanup = func() {
 		// Release BloomFilter memory
-		bf.Clean()
+		bf.Free()
 		// Clear reusableExists map by reallocating for better memory efficiency
 		if reusableExists != nil {
 			reusableExists = nil
