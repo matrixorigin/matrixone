@@ -29,11 +29,38 @@ typedef struct {
 
 #include "varlena.h"
 
+#define R1(v) ((uint64_t) (*(uint8_t*)v))
+#define R2(v) ((uint64_t) (*(uint16_t*)v))
+#define R4(v) ((uint64_t) (*(uint32_t*)v))
+
 /*
  * Calculates a 128-bit hash (split into two 64-bit halves) for a given key and seed using XXH3.
  */
 static inline bloom_hash_t bloom_calculate_hash(const void *key, size_t len, uint64_t seed) {
     bloom_hash_t h;
+    uint64_t i64 = 0;
+
+    // force cast byte, int16, int32 into int64 so that same value share the same hash value
+    switch (len) {
+        case 1: // int8
+            i64 = R1(key);
+            key = &i64;
+            len = sizeof(i64);
+            break;
+        case 2: // int16
+            i64 = R2(key);
+            key = &i64;
+            len = sizeof(i64);
+            break;
+        case 4: // int32
+            i64 = R4(key);
+            key = &i64;
+            len = sizeof(i64);
+            break;
+        default:
+            break;
+    }
+
     XXH128_hash_t xh1 = XXH3_128bits_withSeed(key, len, seed);
     XXH128_hash_t xh2 = XXH3_128bits_withSeed(key, len, seed << 32);
     h.h1 = xh1.low64 ^ xh2.low64;
