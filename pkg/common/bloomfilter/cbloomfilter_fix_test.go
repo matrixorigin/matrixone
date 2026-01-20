@@ -25,7 +25,7 @@ import (
 
 func TestCBloomFilter_EmptySlice(t *testing.T) {
 	// Create a bloom filter
-	bf := NewCBloomFilterWithProbaility(100, 0.01)
+	bf := NewCBloomFilterWithProbability(100, 0.01)
 	defer bf.Free()
 
 	emptySlice := []byte{}
@@ -39,7 +39,7 @@ func TestCBloomFilter_EmptySlice(t *testing.T) {
 	require.True(t, exists, "Empty slice should be found after Add")
 
 	// 2. Test TestAndAdd
-	bf2 := NewCBloomFilterWithProbaility(100, 0.01)
+	bf2 := NewCBloomFilterWithProbability(100, 0.01)
 	defer bf2.Free()
 
 	present := bf2.TestAndAdd(emptySlice)
@@ -71,7 +71,7 @@ func TestCBloomFilter_VarlenaVectorWithEmptySlices(t *testing.T) {
 	err = vector.AppendBytes(vec, nil, true, mp)
 	require.NoError(t, err)
 
-	bf := NewCBloomFilterWithProbaility(10, 0.00001)
+	bf := NewCBloomFilterWithProbability(10, 0.00001)
 	defer bf.Free()
 
 	// 1. Test AddVector
@@ -94,7 +94,7 @@ func TestCBloomFilter_VarlenaVectorWithEmptySlices(t *testing.T) {
 	require.True(t, bf.Test([]byte("world")))
 
 	// 3. Test TestAndAddVector with a new filter
-	bf2 := NewCBloomFilterWithProbaility(10, 0.00001)
+	bf2 := NewCBloomFilterWithProbability(10, 0.00001)
 	defer bf2.Free()
 
 	// First pass: none should exist (except possibly due to collisions)

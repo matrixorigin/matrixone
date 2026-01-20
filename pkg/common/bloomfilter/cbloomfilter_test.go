@@ -79,7 +79,7 @@ func TestCBloomFilterWithVector(t *testing.T) {
 		vecs[i] = testutil.NewVector(cTestCount/cVecCount, types.New(types.T_int64, 0, 0), mp, false, nil)
 	}
 
-	boom := NewCBloomFilterWithProbaility(cTestCount, cTestRate)
+	boom := NewCBloomFilterWithProbability(cTestCount, cTestRate)
 	defer boom.Free()
 
 	for j := 0; j < cVecCount; j++ {
@@ -113,7 +113,7 @@ func TestCBloomFilter_Free(t *testing.T) {
 	vec := testutil.NewVector(int(cTestCount*1.2), types.New(types.T_int64, 0, 0), mp, false, nil)
 	defer vec.Free(mp)
 
-	boom := NewCBloomFilterWithProbaility(cTestCount, cTestRate)
+	boom := NewCBloomFilterWithProbability(cTestCount, cTestRate)
 	boom.TestAndAddVector(vec, func(_ bool, _ bool, _ int) {})
 
 	allAdd := true
@@ -129,7 +129,7 @@ func TestCBloomFilter_Free(t *testing.T) {
 	boom.TestAndAddVector(vec, nil)
 
 	// a new bloom filter
-	boom = NewCBloomFilterWithProbaility(cTestCount, cTestRate)
+	boom = NewCBloomFilterWithProbability(cTestCount, cTestRate)
 	defer boom.Free()
 
 	findOne := false
@@ -153,7 +153,7 @@ func BenchmarkCBloomFiltrerAddVector(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		boom := NewCBloomFilterWithProbaility(cTestCount, cTestRate)
+		boom := NewCBloomFilterWithProbability(cTestCount, cTestRate)
 		for j := 0; j < cVecCount; j++ {
 			boom.AddVector(vecs[j])
 		}
@@ -175,7 +175,7 @@ func BenchmarkCBloomFiltrerTestAndAddVector(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		boom := NewCBloomFilterWithProbaility(cTestCount, cTestRate)
+		boom := NewCBloomFilterWithProbability(cTestCount, cTestRate)
 		for j := 0; j < cVecCount; j++ {
 			boom.TestAndAddVector(vecs[j], func(_ bool, _ bool, _ int) {})
 		}
@@ -197,7 +197,7 @@ func BenchmarkCBloomFiltrerAddVarlenaVector(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		boom := NewCBloomFilterWithProbaility(cTestCount, cTestRate)
+		boom := NewCBloomFilterWithProbability(cTestCount, cTestRate)
 		for j := 0; j < cVecCount; j++ {
 			boom.AddVector(vecs[j])
 		}
@@ -219,7 +219,7 @@ func BenchmarkCBloomFiltrerTestAndAddVarlenaVector(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		boom := NewCBloomFilterWithProbaility(cTestCount, cTestRate)
+		boom := NewCBloomFilterWithProbability(cTestCount, cTestRate)
 		for j := 0; j < cVecCount; j++ {
 			boom.TestAndAddVector(vecs[j], func(_ bool, _ bool, _ int) {})
 		}
@@ -240,7 +240,7 @@ func TestCBloomFilter_MarshalUnmarshalWithVector(t *testing.T) {
 	}()
 
 	// Create and populate original filter
-	bf1 := NewCBloomFilterWithProbaility(cTestCount, cTestRate)
+	bf1 := NewCBloomFilterWithProbability(cTestCount, cTestRate)
 	defer bf1.Free()
 	for j := 0; j < cVecCount; j++ {
 		bf1.AddVector(vecs[j])
@@ -317,7 +317,7 @@ func TestCBloomFilter_AddVectorWithNulls(t *testing.T) {
 		}
 	}
 
-	bf := NewCBloomFilterWithProbaility(int64(count), 0.00001)
+	bf := NewCBloomFilterWithProbability(int64(count), 0.00001)
 	defer bf.Free()
 
 	bf.AddVector(vec)
@@ -361,7 +361,7 @@ func TestCBloomFilter_TestAndAddVectorWithNulls(t *testing.T) {
 		}
 	}
 
-	bf := NewCBloomFilterWithProbaility(int64(count), 0.00001)
+	bf := NewCBloomFilterWithProbability(int64(count), 0.00001)
 	defer bf.Free()
 
 	// First time: nulls should not exist. Non-nulls might exist due to collisions (false positives).
@@ -408,7 +408,7 @@ func TestCBloomFilter_AddVarlenaVectorWithNulls(t *testing.T) {
 		}
 	}
 
-	bf := NewCBloomFilterWithProbaility(int64(count), 0.00001)
+	bf := NewCBloomFilterWithProbability(int64(count), 0.00001)
 	defer bf.Free()
 
 	bf.AddVector(vec)
@@ -450,7 +450,7 @@ func TestCBloomFilter_TestAndAddVarlenaVectorWithNulls(t *testing.T) {
 		}
 	}
 
-	bf := NewCBloomFilterWithProbaility(int64(count), 0.00001)
+	bf := NewCBloomFilterWithProbability(int64(count), 0.00001)
 	defer bf.Free()
 
 	// First time: nulls should not exist. Non-nulls might exist due to collisions (false positives).

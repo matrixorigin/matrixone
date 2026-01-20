@@ -37,7 +37,7 @@ type CBloomFilter struct {
 
 // NewCBloomFilterWithProbaility creates a new CBloomFilter with optimal parameters
 // derived from the expected number of elements (rowcnt) and the desired false positive probability.
-func NewCBloomFilterWithProbaility(rowcnt int64, probability float64) *CBloomFilter {
+func NewCBloomFilterWithProbability(rowcnt int64, probability float64) *CBloomFilter {
 	nbit, k := computeMemAndHashCount(rowcnt, probability)
 	return NewCBloomFilter(uint64(nbit), uint32(k))
 }
