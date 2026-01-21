@@ -173,6 +173,12 @@ func (idx *IvfflatSearchIndex[T]) Search(
 	//os.Stderr.WriteString(sql)
 	//os.Stderr.WriteString("\n")
 
+	// get the bloomfilter after centroids calculated to give times to run both bloomfiler and find centroids in parallel.
+	_, err = sqlexec.WaitBloomFilter(sqlproc)
+	if err != nil {
+		return
+	}
+
 	res, err := runSql(sqlproc, sql)
 	if err != nil {
 		return
