@@ -243,14 +243,14 @@ func newReaderWithParam(param *ExternalParam) (*csvparser.CSVParser, error) {
 }
 
 type ParquetHandler struct {
-	file     *parquet.File
-	offset   int64
-	batchCnt int64
-	cols     []*parquet.Column
-	mappers  []*columnMapper
-	// nested type support
-	hasNestedCols bool
-	rowReader     *parquet.Reader
+	file        *parquet.File
+	offset      int64
+	batchCnt    int64
+	cols        []*parquet.Column
+	mappers     []*columnMapper
+	pages       []parquet.Pages // cached pages iterators for each column
+	currentPage []parquet.Page  // cached current page for each column
+	pageOffset  []int64         // current offset within each cached page
 }
 
 type columnMapper struct {

@@ -52,20 +52,14 @@ func scanParquetFile(ctx context.Context, param *ExternalParam, proc *process.Pr
 		}
 	}
 
-	o := param.parqh.offset
-	for _, g := range param.parqh.file.RowGroups() {
-		n := g.NumRows()
-		if o >= n {
-			o -= n
-			continue
-		}
-		param.parqh.batchCnt = min(n-o, maxParquetBatchCnt)
-	}
+	// With cached page iterators, we read up to maxParquetBatchCnt rows per call.
+	// The iterator automatically tracks position, so no need to calculate offset-based batchCnt.
+	param.parqh.batchCnt = maxParquetBatchCnt
 
 	return param.parqh.getData(bat, param, proc)
 }
 
-var maxParquetBatchCnt int64 = 1000
+var maxParquetBatchCnt int64 = 100000
 
 func newParquetHandler(param *ExternalParam) (*ParquetHandler, error) {
 	h := ParquetHandler{
@@ -96,10 +90,34 @@ func (h *ParquetHandler) openFile(param *ExternalParam) error {
 		if err != nil {
 			return err
 		}
-		r = &fsReaderAt{
-			fs:       fs,
-			readPath: readPath,
-			ctx:      param.Ctx,
+
+		// For S3 sources, pre-read the entire file into memory to avoid
+		// many small random HTTP requests which cause severe performance issues.
+		// Parquet reading involves many small random reads (metadata, page headers, etc.)
+		// which are fast on local disk but extremely slow over S3 due to HTTP RTT.
+		if param.Extern.ScanType == tree.S3 {
+			fileSize := param.FileSize[param.Fileparam.FileIndex-1]
+			data := make([]byte, fileSize)
+			vec := fileservice.IOVector{
+				FilePath: readPath,
+				Entries: []fileservice.IOEntry{
+					{
+						Offset: 0,
+						Size:   fileSize,
+						Data:   data,
+					},
+				},
+			}
+			if err := fs.Read(param.Ctx, &vec); err != nil {
+				return err
+			}
+			r = bytes.NewReader(data)
+		} else {
+			r = &fsReaderAt{
+				fs:       fs,
+				readPath: readPath,
+				ctx:      param.Ctx,
+			}
 		}
 	}
 	var err error
@@ -146,9 +164,11 @@ func (h *ParquetHandler) findColumnIgnoreCase(ctx context.Context, name string) 
 }
 
 func (h *ParquetHandler) prepare(param *ExternalParam) error {
-	h.cols = make([]*parquet.Column, len(param.Attrs))
-	h.mappers = make([]*columnMapper, len(param.Attrs))
-
+	h.cols = make([]*parquet.Column, len(param.Cols))
+	h.mappers = make([]*columnMapper, len(param.Cols))
+	h.pages = make([]parquet.Pages, len(param.Cols))
+	h.currentPage = make([]parquet.Page, len(param.Cols))
+	h.pageOffset = make([]int64, len(param.Cols))
 	for _, attr := range param.Attrs {
 		def := param.Cols[attr.ColIndex]
 		if def.Hidden {
@@ -195,6 +215,7 @@ func (h *ParquetHandler) prepare(param *ExternalParam) error {
 		}
 		h.cols[attr.ColIndex] = col
 		h.mappers[attr.ColIndex] = fn
+		h.pages[attr.ColIndex] = col.Pages()
 	}
 
 	// init row reader if has nested columns
@@ -1696,7 +1717,8 @@ func (h *ParquetHandler) getData(bat *batch.Batch, param *ExternalParam, proc *p
 func (h *ParquetHandler) getDataByPage(bat *batch.Batch, param *ExternalParam, proc *process.Process) error {
 	length := 0
 	finish := false
-	for colIdx, col := range h.cols {
+	for _, attr := range param.Attrs {
+		colIdx := attr.ColIndex
 		if param.Cols[colIdx].Hidden {
 			continue
 		}
@@ -1708,23 +1730,33 @@ func (h *ParquetHandler) getDataByPage(bat *batch.Batch, param *ExternalParam, p
 
 		vec := bat.Vecs[colIdx]
 
-		pages := col.Pages()
+		pages := h.pages[colIdx]
 		n := h.batchCnt
-		o := h.offset
+		pageOff := h.pageOffset[colIdx]
 	L:
 		for n > 0 {
-			page, err := pages.ReadPage()
-			switch {
-			case errors.Is(err, io.EOF):
-				finish = true
-				break L
-			case err != nil:
-				return moerr.ConvertGoError(param.Ctx, err)
+			// Use cached page if available, otherwise read next page
+			page := h.currentPage[colIdx]
+			if page == nil {
+				var err error
+				page, err = pages.ReadPage()
+				switch {
+				case errors.Is(err, io.EOF):
+					finish = true
+					break L
+				case err != nil:
+					return moerr.ConvertGoError(param.Ctx, err)
+				}
+				h.currentPage[colIdx] = page
+				pageOff = 0
 			}
 
 			nr := page.NumRows()
-			if nr < o {
-				o -= nr
+			if nr <= pageOff {
+				// Current page exhausted, clear cache and read next
+				h.currentPage[colIdx] = nil
+				h.pageOffset[colIdx] = 0
+				pageOff = 0
 				continue
 			}
 
@@ -1732,20 +1764,27 @@ func (h *ParquetHandler) getDataByPage(bat *batch.Batch, param *ExternalParam, p
 				return moerr.NewNYI(param.Ctx, "page has repetition")
 			}
 
-			if o > 0 || o+n < nr {
-				page = page.Slice(o, min(n+o, nr))
-			}
-			o = 0
-			n -= page.NumRows()
+			// Calculate how many rows to read from this page
+			remaining := nr - pageOff
+			toRead := min(n, remaining)
 
-			err = h.mappers[colIdx].mapping(page, proc, vec)
+			slicedPage := page.Slice(pageOff, pageOff+toRead)
+			pageOff += toRead
+			n -= toRead
+
+			// Update page offset
+			h.pageOffset[colIdx] = pageOff
+
+			// If we've consumed the entire page, clear the cache
+			if pageOff >= nr {
+				h.currentPage[colIdx] = nil
+				h.pageOffset[colIdx] = 0
+			}
+
+			err := h.mappers[colIdx].mapping(slicedPage, proc, vec)
 			if err != nil {
 				return err
 			}
-		}
-		err := pages.Close()
-		if err != nil {
-			return moerr.ConvertGoError(param.Ctx, err)
 		}
 		length = vec.Length()
 	}
@@ -1758,6 +1797,12 @@ func (h *ParquetHandler) getDataByPage(bat *batch.Batch, param *ExternalParam, p
 	}
 
 	if finish {
+		// Close all page iterators when file processing is complete
+		for _, pages := range h.pages {
+			if pages != nil {
+				pages.Close()
+			}
+		}
 		param.parqh = nil
 		param.Fileparam.FileFin++
 		if param.Fileparam.FileFin >= param.Fileparam.FileCnt {
