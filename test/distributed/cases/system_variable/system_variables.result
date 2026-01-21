@@ -6,6 +6,12 @@ set max_allowed_packet = default;
 set wait_timeout = default;
 set tx_isolation = default;
 set tx_isolation = default;
+show variables like 'server_id';
+Variable_name    Value
+server_id    0
+select @@server_id;
+@@server_id
+0
 show variables like 'auto%';
 Variable_name    Value
 auto_generate_certs    on
@@ -443,6 +449,9 @@ select @@sql_mode;
 @@sql_mode
 ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
 set @@sql_mode = default;
+select a from (select 1 as a) t having a = 1;
+a
+1
 set global long_query_time = 1.1;
 show global variables like 'long_query_time';
 Variable_name    Value
