@@ -521,25 +521,4 @@ select (col1,col2) != ('abcdef','{"ehyiuwqnve":"ashyiujewv"}') from row05;
 1
 1
 drop table row05;
-select (1,2) in ((1,2),(3,4));
-(1, 2) in ((1, 2), (3, 4))
-1
-select (1,2) in ((1,2));
-(1, 2) in ((1, 2))
-1
-select (1,2) not in ((1,2));
-(1, 2) not in ((1, 2))
-0
-drop table if exists row_in;
-create table row_in(a int, b int);
-insert into row_in values (1,2),(3,4);
-select (a,b) in ((1,2),(2,3)) from row_in order by a, b;
-(a, b) in ((1, 2), (2, 3))
-1
-0
-select * from row_in where (a,b) in ((1,2),(3,4)) order by a, b;
-a	b
-1	2
-3	4
-drop table row_in;
 drop database test;

@@ -11,8 +11,6 @@ set max_allowed_packet = default;
 set wait_timeout = default;
 set tx_isolation = default;
 set tx_isolation = default;
-show variables like 'server_id';
-select @@server_id;
 
 
 -- auto_increment_increment
@@ -188,8 +186,6 @@ select @@sql_mode;
 set @@sql_mode = "ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES";
 select @@sql_mode;
 set @@sql_mode = default;
--- having without group by should behave like where
-select a from (select 1 as a) t having a = 1;
 
 --double type
 set global long_query_time = 1.1;

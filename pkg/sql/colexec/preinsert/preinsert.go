@@ -17,13 +17,11 @@ package preinsert
 import (
 	"bytes"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -264,22 +262,6 @@ func genAutoIncrCol(bat *batch.Batch, proc *proc, preInsert *PreInsert) error {
 	eng := proc.Base.SessionInfo.StorageEngine
 	currentTxn := proc.Base.TxnOperator
 
-	// MySQL behavior: if NO_AUTO_VALUE_ON_ZERO is not set, inserting 0 into
-	// an AUTO_INCREMENT column should act like NULL and generate a new value.
-	if shouldTreatZeroAsAutoIncr(proc) {
-		for idx := range preInsert.Attrs {
-			if preInsert.TableDef.Cols[idx].Typ.AutoIncr {
-				vecIdx := int(preInsert.ColOffset) + idx
-				if vecIdx >= len(bat.Vecs) {
-					continue
-				}
-				if err := convertZeroToNull(bat.Vecs[vecIdx]); err != nil {
-					return err
-				}
-			}
-		}
-	}
-
 	needReCheck := checkIfNeedReGenAutoIncrCol(bat, preInsert)
 
 	// FIX: Capture lastAllocateAt BEFORE InsertValues to avoid false negative bug
@@ -342,61 +324,5 @@ func genAutoIncrCol(bat *batch.Batch, proc *proc, preInsert *PreInsert) error {
 	}
 
 	proc.SetLastInsertID(lastInsertValue)
-	return nil
-}
-
-func shouldTreatZeroAsAutoIncr(proc *proc) bool {
-	resolveVar := proc.GetResolveVariableFunc()
-	if resolveVar == nil {
-		return false
-	}
-	mode, err := resolveVar("sql_mode", true, false)
-	if err != nil {
-		return false
-	}
-	modeStr, ok := mode.(string)
-	if !ok {
-		return false
-	}
-	return !strings.Contains(modeStr, "NO_AUTO_VALUE_ON_ZERO")
-}
-
-func convertZeroToNull(vec *vector.Vector) error {
-	if vec == nil {
-		return nil
-	}
-	if vec.IsConst() {
-		return nil
-	}
-	nsp := vec.GetNulls()
-	switch vec.GetType().Oid {
-	case types.T_int8:
-		return convertZeroToNullFixed(vec, vector.MustFixedColWithTypeCheck[int8](vec), nsp)
-	case types.T_int16:
-		return convertZeroToNullFixed(vec, vector.MustFixedColWithTypeCheck[int16](vec), nsp)
-	case types.T_int32:
-		return convertZeroToNullFixed(vec, vector.MustFixedColWithTypeCheck[int32](vec), nsp)
-	case types.T_int64:
-		return convertZeroToNullFixed(vec, vector.MustFixedColWithTypeCheck[int64](vec), nsp)
-	case types.T_uint8:
-		return convertZeroToNullFixed(vec, vector.MustFixedColWithTypeCheck[uint8](vec), nsp)
-	case types.T_uint16:
-		return convertZeroToNullFixed(vec, vector.MustFixedColWithTypeCheck[uint16](vec), nsp)
-	case types.T_uint32:
-		return convertZeroToNullFixed(vec, vector.MustFixedColWithTypeCheck[uint32](vec), nsp)
-	case types.T_uint64:
-		return convertZeroToNullFixed(vec, vector.MustFixedColWithTypeCheck[uint64](vec), nsp)
-	default:
-		return nil
-	}
-}
-
-func convertZeroToNullFixed[T comparable](vec *vector.Vector, vals []T, nsp *nulls.Nulls) error {
-	var zero T
-	for i, v := range vals {
-		if v == zero && !nulls.Contains(nsp, uint64(i)) {
-			nulls.Add(nsp, uint64(i))
-		}
-	}
 	return nil
 }

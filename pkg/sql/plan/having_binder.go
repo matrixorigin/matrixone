@@ -95,9 +95,6 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 		}
 
 		return expr, nil
-	} else if len(b.ctx.groups) == 0 && len(b.ctx.aggregates) == 0 && len(b.ctx.times) == 0 {
-		// MySQL allows HAVING without GROUP BY/aggregates; treat it like WHERE.
-		return b.baseBindColRef(astExpr, depth, isRoot)
 	} else if b.builder.mysqlCompatible {
 		expr, err := b.baseBindColRef(astExpr, depth, isRoot)
 		if err != nil {

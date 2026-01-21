@@ -190,15 +190,4 @@ select (col1,col2) = ('abcdef','{"t1":"a"}') from row05;
 select (col1,col2) != ('abcdef','{"ehyiuwqnve":"ashyiujewv"}') from row05;
 drop table row05;
 
--- tuple in list
-select (1,2) in ((1,2),(3,4));
-select (1,2) in ((1,2));
-select (1,2) not in ((1,2));
-drop table if exists row_in;
-create table row_in(a int, b int);
-insert into row_in values (1,2),(3,4);
-select (a,b) in ((1,2),(2,3)) from row_in order by a, b;
-select * from row_in where (a,b) in ((1,2),(3,4)) order by a, b;
-drop table row_in;
-
 drop database test;

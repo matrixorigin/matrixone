@@ -453,7 +453,6 @@ func TestSingleTableSQLBuilder(t *testing.T) {
 		"SELECT N_REGIONKEY FROM NATION where N_REGIONKEY IN (1, 2)",  //test more expr
 		"SELECT N_REGIONKEY FROM NATION where N_REGIONKEY NOT IN (1)", //test more expr
 		"select N_REGIONKEY from nation group by N_REGIONKEY having abs(nation.N_REGIONKEY - 1) >10",
-		"select n_name from nation having n_regionkey > 0",
 
 		"SELECT -1",
 		"select date_add('1997-12-31 23:59:59',INTERVAL 100000 SECOND)",
@@ -509,7 +508,6 @@ func TestSingleTableSQLBuilder(t *testing.T) {
 		"SELECT N_NAME FROM NATION WHERE ffff(N_REGIONKEY) > 0",             //function name not exist
 		"SELECT NATION.N_NAME FROM NATION a",                                // mysql should error, but i don't think it is necesssary
 		"select n_nationkey, sum(n_nationkey) from nation",
-		"select n_name from nation group by n_name having n_regionkey > 0",
 		"SET @var = abs(a)", // can't use column
 		"SET @var = avg(2)", // can't use agg function
 
