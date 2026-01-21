@@ -1631,11 +1631,33 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		}
 
 		// When the leftside is also tuple.  e.g. where (a, b) in ((1, 2), (3, 4), ...)
-		if leftList, ok := args[0].Expr.(*plan.Expr_List); ok {
-			if rightList := args[1].GetList(); rightList != nil {
-				return handleTupleIn(ctx, name, leftList, rightList)
+		if args[0].Typ.Id == int32(types.T_tuple) {
+			leftList := args[0].GetList()
+			if leftList == nil {
+				return nil, moerr.NewInternalError(ctx, "The left side of IN must be a tuple list")
 			}
-			return nil, moerr.NewInternalError(ctx, "The right side of IN must be a list")
+
+			rightList := args[1].GetList()
+			if rightList == nil {
+				return nil, moerr.NewInternalError(ctx, "The right side of IN must be a list")
+			}
+
+			isTupleList := true
+			for _, rightVal := range rightList.List {
+				if rightVal.GetList() == nil || rightVal.Typ.Id != int32(types.T_tuple) {
+					isTupleList = false
+					break
+				}
+			}
+
+			if !isTupleList {
+				if args[1].Typ.Id != int32(types.T_tuple) {
+					return nil, moerr.NewInternalError(ctx, "IN list must contain tuples")
+				}
+				rightList = &plan.ExprList{List: []*plan.Expr{args[1]}}
+			}
+
+			return handleTupleIn(ctx, name, &plan.Expr_List{List: leftList}, rightList)
 		}
 
 		//if all the expr in the in list can safely cast to left type, we call it safe

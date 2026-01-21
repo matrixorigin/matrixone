@@ -1069,6 +1069,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableStringType("version_comment"),
 		Default:           "MatrixOne",
 	},
+	"server_id": {
+		Name:              "server_id",
+		Scope:             ScopeGlobal,
+		Dynamic:           false,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("server_id", 0, math.MaxInt64, false),
+		Default:           int64(0),
+	},
 	"tx_isolation": {
 		Name:              "tx_isolation",
 		Scope:             ScopeBoth,
