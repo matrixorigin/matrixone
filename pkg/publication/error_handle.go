@@ -302,7 +302,7 @@ func (CommitErrorClassifier) IsRetryable(err error) bool {
 
 var utInjectionErrors = map[string]struct{}{
 	"ut injection: publicationSnapshotFinished": {},
-	"ut injection: commit failed retryable": {},
+	"ut injection: commit failed retryable":     {},
 }
 
 // UTInjectionClassifier recognises UT injection errors that are retryable.

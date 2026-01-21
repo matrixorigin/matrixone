@@ -354,7 +354,6 @@ type InternalResult struct {
 	executorResult executor.Result
 	currentBatch   int
 	currentRow     int
-	columns        []string
 	err            error
 }
 
