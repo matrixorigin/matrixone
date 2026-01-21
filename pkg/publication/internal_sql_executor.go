@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -576,6 +577,18 @@ func extractVectorValue(vec *vector.Vector, idx uint64, dest interface{}) error 
 		val := vector.GetFixedAtWithTypeCheck[uint64](vec, int(idx))
 		if d, ok := dest.(*uint64); ok {
 			*d = val
+		} else if d, ok := dest.(*sql.NullInt64); ok {
+			// Support sql.NullInt64 for uint64 values (e.g., dat_id)
+			// Note: This may overflow if uint64 value exceeds int64 max, but it's acceptable for most use cases
+			// where database IDs and account IDs are typically within int64 range
+			if val <= uint64(math.MaxInt64) {
+				d.Int64 = int64(val)
+				d.Valid = true
+			} else {
+				// If value exceeds int64 max, we can't represent it in NullInt64
+				// This should be rare in practice for database/account IDs
+				return moerr.NewInternalErrorNoCtx(fmt.Sprintf("uint64 value %d exceeds int64 max, cannot convert to sql.NullInt64", val))
+			}
 		} else {
 			return moerr.NewInternalErrorNoCtx(fmt.Sprintf("destination type mismatch for uint64, type %T", dest))
 		}
