@@ -350,6 +350,9 @@ func ProcessDDLChanges(
 		)
 	}
 
+	// drop/create tables
+	// update index table mappings
+	// update table ids
 	for dbName, tables := range ddlMap {
 		for tableName, ddlInfo := range tables {
 			if ddlInfo.Operation == 0 {
@@ -360,18 +363,8 @@ func ProcessDDLChanges(
 			switch ddlInfo.Operation {
 			case DDLOperationCreate:
 				// Execute CREATE TABLE
-				if ddlInfo.TableCreateSQL != "" {
-					if err := createTable(downstreamCtx, iterationCtx.LocalExecutor, dbName, tableName, ddlInfo.TableCreateSQL, iterationCtx, cnEngine); err != nil {
-						return moerr.NewInternalErrorf(ctx, "failed to create table %s.%s: %v", dbName, tableName, err)
-					}
-					// Update TableIDs after successful table creation
-					if ddlInfo.TableID > 0 {
-						key := TableKey{DBName: dbName, TableName: tableName}
-						if iterationCtx.TableIDs == nil {
-							iterationCtx.TableIDs = make(map[TableKey]uint64)
-						}
-						iterationCtx.TableIDs[key] = ddlInfo.TableID
-					}
+				if err := createTable(downstreamCtx, iterationCtx.LocalExecutor, dbName, tableName, ddlInfo.TableCreateSQL, iterationCtx, ddlInfo, cnEngine); err != nil {
+					return moerr.NewInternalErrorf(ctx, "failed to create table %s.%s: %v", dbName, tableName, err)
 				}
 			case DDLOperationDrop:
 				// Execute DROP TABLE
@@ -383,18 +376,8 @@ func ProcessDDLChanges(
 				if err := dropTable(downstreamCtx, iterationCtx.LocalExecutor, dbName, tableName, iterationCtx, ddlInfo.TableID, cnEngine); err != nil {
 					return moerr.NewInternalErrorf(ctx, "failed to drop table %s.%s for alter: %v", dbName, tableName, err)
 				}
-				if ddlInfo.TableCreateSQL != "" {
-					if err := createTable(downstreamCtx, iterationCtx.LocalExecutor, dbName, tableName, ddlInfo.TableCreateSQL, iterationCtx, cnEngine); err != nil {
-						return moerr.NewInternalErrorf(ctx, "failed to create table %s.%s after alter: %v", dbName, tableName, err)
-					}
-					// Update TableIDs after successful table creation
-					if ddlInfo.TableID > 0 {
-						key := TableKey{DBName: dbName, TableName: tableName}
-						if iterationCtx.TableIDs == nil {
-							iterationCtx.TableIDs = make(map[TableKey]uint64)
-						}
-						iterationCtx.TableIDs[key] = ddlInfo.TableID
-					}
+				if err := createTable(downstreamCtx, iterationCtx.LocalExecutor, dbName, tableName, ddlInfo.TableCreateSQL, iterationCtx, ddlInfo, cnEngine); err != nil {
+					return moerr.NewInternalErrorf(ctx, "failed to create table %s.%s after alter: %v", dbName, tableName, err)
 				}
 			}
 		}
@@ -646,6 +629,7 @@ func createTable(
 	tableName string,
 	createSQL string,
 	iterationCtx *IterationContext,
+	ddlInfo *TableDDLInfo,
 	cnEngine engine.Engine,
 ) error {
 	if createSQL == "" {
@@ -676,11 +660,16 @@ func createTable(
 	}
 
 	// Process index table mappings after table creation
-	if iterationCtx != nil && cnEngine != nil {
-		if err := processIndexTableMappings(ctx, iterationCtx, cnEngine, dbName, tableName); err != nil {
-			return moerr.NewInternalErrorf(ctx, "failed to process index table mappings: %v", err)
-		}
+	if err := processIndexTableMappings(ctx, iterationCtx, cnEngine, dbName, tableName, ddlInfo.TableID); err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to process index table mappings: %v", err)
 	}
+
+	// Update TableIDs after successful table creation
+	key := TableKey{DBName: dbName, TableName: tableName}
+	if iterationCtx.TableIDs == nil {
+		iterationCtx.TableIDs = make(map[TableKey]uint64)
+	}
+	iterationCtx.TableIDs[key] = ddlInfo.TableID
 
 	return nil
 }
@@ -696,20 +685,6 @@ func dropTable(
 	tableID uint64,
 	cnEngine engine.Engine,
 ) error {
-	// Remove index table mappings before dropping the table
-	if iterationCtx != nil && iterationCtx.IndexTableMappings != nil && tableID > 0 {
-		if err := removeIndexTableMappings(ctx, iterationCtx, tableID, dbName, tableName); err != nil {
-			logutil.Warn("ccpr-iteration failed to remove index table mappings",
-				zap.Uint64("task_id", iterationCtx.TaskID),
-				zap.Uint64("lsn", iterationCtx.IterationLSN),
-				zap.String("db_name", dbName),
-				zap.String("table_name", tableName),
-				zap.Uint64("table_id", tableID),
-				zap.Error(err),
-			)
-			// Don't fail the table drop if index mapping removal fails
-		}
-	}
 
 	if cnEngine == nil {
 		return moerr.NewInternalError(ctx, "engine is nil")
@@ -722,6 +697,15 @@ func dropTable(
 	db, err := cnEngine.Database(ctx, dbName, iterationCtx.LocalTxn)
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to get database %s: %v", dbName, err)
+	}
+
+	rel, err := db.Relation(ctx, tableName, nil)
+	if err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to get relation %s.%s: %v", dbName, tableName, err)
+	}
+
+	if err := removeIndexTableMappings(ctx, iterationCtx, tableID, rel); err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to remove index table mappings: %v", err)
 	}
 
 	// Delete table using database API
@@ -739,41 +723,27 @@ func removeIndexTableMappings(
 	ctx context.Context,
 	iterationCtx *IterationContext,
 	tableID uint64,
-	dbName string,
-	tableName string,
+	rel engine.Relation,
 ) error {
-	if iterationCtx == nil || iterationCtx.UpstreamExecutor == nil {
-		return nil
+	def := rel.GetTableDef(ctx)
+	indexTableNames := make(map[string]struct{})
+	for _, index := range def.Indexes {
+		indexTableNames[index.IndexTableName] = struct{}{}
 	}
-
-	// Query upstream index information
-	upstreamIndexMap, err := queryUpstreamIndexInfo(ctx, iterationCtx, tableID)
-	if err != nil {
-		return moerr.NewInternalErrorf(ctx, "failed to query upstream index info: %v", err)
-	}
-
-	// Remove mappings for each upstream index table name
-	if upstreamIndexMap != nil && iterationCtx.IndexTableMappings != nil {
-		for _, upstreamIndexTableName := range upstreamIndexMap {
-			if upstreamIndexTableName != "" {
-				if downstreamName, exists := iterationCtx.IndexTableMappings[upstreamIndexTableName]; exists {
-					// Remove the mapping
-					delete(iterationCtx.IndexTableMappings, upstreamIndexTableName)
-					// Log the removal
-					logutil.Info("ccpr-iteration removed index table mapping",
-						zap.Uint64("task_id", iterationCtx.TaskID),
-						zap.Uint64("lsn", iterationCtx.IterationLSN),
-						zap.String("db_name", dbName),
-						zap.String("table_name", tableName),
-						zap.Uint64("table_id", tableID),
-						zap.String("upstream_index_table_name", upstreamIndexTableName),
-						zap.String("downstream_index_table_name", downstreamName),
-					)
-				}
-			}
+	for upstreamTableName, downstreamTableName := range iterationCtx.IndexTableMappings {
+		if _, exists := indexTableNames[upstreamTableName]; exists {
+			// Remove the mapping
+			delete(iterationCtx.IndexTableMappings, upstreamTableName)
+			// Log the removal
+			logutil.Info("ccpr-iteration removed index table mapping",
+				zap.Uint64("task_id", iterationCtx.TaskID),
+				zap.Uint64("lsn", iterationCtx.IterationLSN),
+				zap.Uint64("table_id", tableID),
+				zap.String("upstream_index_table_name", upstreamTableName),
+				zap.String("downstream_index_table_name", downstreamTableName),
+			)
 		}
 	}
-
 	return nil
 }
 
@@ -786,6 +756,7 @@ func processIndexTableMappings(
 	cnEngine engine.Engine,
 	dbName string,
 	tableName string,
+	upstreamTableID uint64,
 ) error {
 	if iterationCtx == nil || cnEngine == nil {
 		return nil
@@ -808,14 +779,6 @@ func processIndexTableMappings(
 		return moerr.NewInternalErrorf(ctx, "failed to get table definition for %s.%s", dbName, tableName)
 	}
 
-	// Get table ID from TableIDs map
-	tableKey := TableKey{DBName: dbName, TableName: tableName}
-	tableID, exists := iterationCtx.TableIDs[tableKey]
-	if !exists {
-		// Table ID not found, skip index processing
-		return nil
-	}
-
 	// Initialize IndexTableMappings if nil
 	if iterationCtx.IndexTableMappings == nil {
 		iterationCtx.IndexTableMappings = make(map[string]string)
@@ -824,7 +787,7 @@ func processIndexTableMappings(
 	// Process indexes from table definition
 	if len(tableDef.Indexes) > 0 {
 		// Query upstream index information
-		upstreamIndexMap, err := queryUpstreamIndexInfo(ctx, iterationCtx, tableID)
+		upstreamIndexMap, err := queryUpstreamIndexInfo(ctx, iterationCtx, upstreamTableID)
 		if err != nil {
 			return moerr.NewInternalErrorf(ctx, "failed to query upstream index info: %v", err)
 		}
