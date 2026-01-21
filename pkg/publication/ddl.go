@@ -150,45 +150,43 @@ func GetUpstreamDDLUsingGetDdl(
 	return ddlMap, nil
 }
 
-// getdroppeddatabase returns a list of databases that need to be dropped
+// getDatabaseDiff returns lists of databases that need to be created and dropped
 // It queries upstream databases using iterationCtx.UpstreamExecutor and compares with local databases
 // Logic:
-//   - If table level: returns empty list
-//   - If db level: checks if the database exists upstream, if not, returns the database name
+//   - If table level: returns empty lists
+//   - If db level: checks if the database exists upstream and locally, returns appropriate lists
 //   - If account level: queries all databases for the account upstream, compares with local databases,
-//     and returns databases that exist locally but not upstream
-func getdroppeddatabase(
+//     and returns databases that exist upstream but not locally (to create) and databases that exist locally but not upstream (to drop)
+func getDatabaseDiff(
 	ctx context.Context,
 	iterationCtx *IterationContext,
 	cnEngine engine.Engine,
-) ([]string, error) {
+) (dbToCreate []string, dbToDrop []string, err error) {
 	if iterationCtx == nil {
-		return nil, moerr.NewInternalError(ctx, "iteration context is nil")
+		return nil, nil, moerr.NewInternalError(ctx, "iteration context is nil")
 	}
 	if iterationCtx.UpstreamExecutor == nil {
-		return nil, moerr.NewInternalError(ctx, "upstream executor is nil")
+		return nil, nil, moerr.NewInternalError(ctx, "upstream executor is nil")
 	}
 	if cnEngine == nil {
-		return nil, moerr.NewInternalError(ctx, "engine is nil")
+		return nil, nil, moerr.NewInternalError(ctx, "engine is nil")
 	}
 	if iterationCtx.LocalTxn == nil {
-		return nil, moerr.NewInternalError(ctx, "local transaction is nil")
+		return nil, nil, moerr.NewInternalError(ctx, "local transaction is nil")
 	}
 
-	var dbToDrop []string
-
-	// If table level, return empty list
+	// If table level, return empty lists
 	if iterationCtx.SrcInfo.SyncLevel == SyncLevelTable {
-		return dbToDrop, nil
+		return dbToCreate, dbToDrop, nil
 	}
 
 	// Use downstream account ID from iterationCtx.SrcInfo
 	downstreamCtx := context.WithValue(ctx, defines.TenantIDKey{}, iterationCtx.SrcInfo.AccountID)
 
-	// If db level, check if the database exists upstream
+	// If db level, check if the database exists upstream and locally
 	if iterationCtx.SrcInfo.SyncLevel == SyncLevelDatabase {
 		if iterationCtx.SrcInfo.DBName == "" {
-			return nil, moerr.NewInternalError(ctx, "database name is empty for database level sync")
+			return nil, nil, moerr.NewInternalError(ctx, "database name is empty for database level sync")
 		}
 
 		// Query upstream to check if database exists
@@ -196,31 +194,34 @@ func getdroppeddatabase(
 		querySQL := PublicationSQLBuilder.QueryMoDatabasesSQL(0, iterationCtx.SrcInfo.DBName, snapshotName)
 		result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, nil, querySQL, false, true)
 		if err != nil {
-			return nil, moerr.NewInternalErrorf(ctx, "failed to query upstream database: %v", err)
+			return nil, nil, moerr.NewInternalErrorf(ctx, "failed to query upstream database: %v", err)
 		}
 		defer result.Close()
 
 		// Check if database exists upstream
-		exists := false
+		existsUpstream := false
 		for result.Next() {
-			exists = true
+			existsUpstream = true
 			break
 		}
 		if err := result.Err(); err != nil {
-			return nil, moerr.NewInternalErrorf(ctx, "error reading upstream database query results: %v", err)
+			return nil, nil, moerr.NewInternalErrorf(ctx, "error reading upstream database query results: %v", err)
 		}
 
-		// If database doesn't exist upstream, add it to drop list
-		if !exists {
-			// Also check if it exists locally before adding to drop list
-			_, err := cnEngine.Database(downstreamCtx, iterationCtx.SrcInfo.DBName, iterationCtx.LocalTxn)
-			if err == nil {
-				// Database exists locally but not upstream, add to drop list
-				dbToDrop = append(dbToDrop, iterationCtx.SrcInfo.DBName)
-			}
+		// Check if database exists locally
+		_, err = cnEngine.Database(downstreamCtx, iterationCtx.SrcInfo.DBName, iterationCtx.LocalTxn)
+		existsLocal := err == nil
+
+		// If database exists upstream but not locally, add to create list
+		if existsUpstream && !existsLocal {
+			dbToCreate = append(dbToCreate, iterationCtx.SrcInfo.DBName)
+		}
+		// If database exists locally but not upstream, add to drop list
+		if !existsUpstream && existsLocal {
+			dbToDrop = append(dbToDrop, iterationCtx.SrcInfo.DBName)
 		}
 
-		return dbToDrop, nil
+		return dbToCreate, dbToDrop, nil
 	}
 
 	// If account level, query all databases for the account upstream and compare with local databases
@@ -230,7 +231,7 @@ func getdroppeddatabase(
 		querySQL := PublicationSQLBuilder.QueryMoDatabasesSQL(0, "", snapshotName)
 		result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, nil, querySQL, false, true)
 		if err != nil {
-			return nil, moerr.NewInternalErrorf(ctx, "failed to query upstream databases: %v", err)
+			return nil, nil, moerr.NewInternalErrorf(ctx, "failed to query upstream databases: %v", err)
 		}
 		defer result.Close()
 
@@ -243,7 +244,7 @@ func getdroppeddatabase(
 			var accountID sql.NullInt64
 
 			if err := result.Scan(&datID, &datName, &datCreateSQL, &accountID); err != nil {
-				return nil, moerr.NewInternalErrorf(ctx, "failed to scan upstream database result: %v", err)
+				return nil, nil, moerr.NewInternalErrorf(ctx, "failed to scan upstream database result: %v", err)
 			}
 
 			if datName.Valid {
@@ -251,36 +252,51 @@ func getdroppeddatabase(
 			}
 		}
 		if err := result.Err(); err != nil {
-			return nil, moerr.NewInternalErrorf(ctx, "error reading upstream database query results: %v", err)
+			return nil, nil, moerr.NewInternalErrorf(ctx, "error reading upstream database query results: %v", err)
 		}
 
 		// Get local databases
 		localDBs, err := cnEngine.Databases(downstreamCtx, iterationCtx.LocalTxn)
 		if err != nil {
-			return nil, moerr.NewInternalErrorf(ctx, "failed to get local databases: %v", err)
+			return nil, nil, moerr.NewInternalErrorf(ctx, "failed to get local databases: %v", err)
 		}
 
-		// Find databases that exist locally but not upstream
+		// Create a map of local databases for efficient lookup
+		localDBsMap := make(map[string]bool)
+		for _, localDB := range localDBs {
+			localDBsMap[localDB] = true
+		}
+
+		// Find databases that exist upstream but not locally (to create)
+		for upstreamDB := range upstreamDBs {
+			if !localDBsMap[upstreamDB] {
+				dbToCreate = append(dbToCreate, upstreamDB)
+			}
+		}
+
+		// Find databases that exist locally but not upstream (to drop)
 		for _, localDB := range localDBs {
 			if !upstreamDBs[localDB] {
 				dbToDrop = append(dbToDrop, localDB)
 			}
 		}
 
-		return dbToDrop, nil
+		return dbToCreate, dbToDrop, nil
 	}
 
-	return nil, moerr.NewInternalErrorf(ctx, "unsupported sync level: %s", iterationCtx.SrcInfo.SyncLevel)
+	return nil, nil, moerr.NewInternalErrorf(ctx, "unsupported sync level: %s", iterationCtx.SrcInfo.SyncLevel)
 }
 
 // ProcessDDLChanges processes DDL changes by:
-// 1. Getting upstream DDL map using GetUpstreamDDLUsingGetDdl
-// 2. Filling DDL operations using FillDDLOperation
-// 3. Executing DDL operations for tables with non-empty operations:
+// 1. Getting database differences (databases to create and drop)
+// 2. Creating databases that exist upstream but not locally
+// 3. Getting upstream DDL map using GetUpstreamDDLUsingGetDdl
+// 4. Filling DDL operations using FillDDLOperation
+// 5. Executing DDL operations for tables with non-empty operations:
 //   - create/drop: execute directly
 //   - alter: drop first, then create
 //
-// 4. Dropping databases returned by FillDDLOperation
+// 6. Dropping databases that exist locally but not upstream
 func ProcessDDLChanges(
 	ctx context.Context,
 	cnEngine engine.Engine,
@@ -296,15 +312,47 @@ func ProcessDDLChanges(
 		return moerr.NewInternalError(ctx, "local transaction is nil")
 	}
 
-	// Step 1: Get upstream DDL map
+	// Use downstream account ID from iterationCtx.SrcInfo
+	downstreamCtx := context.WithValue(ctx, defines.TenantIDKey{}, iterationCtx.SrcInfo.AccountID)
+
+	// Step 1: Get database differences (databases to create and drop)
+	dbToCreate, dbToDrop, err := getDatabaseDiff(ctx, iterationCtx, cnEngine)
+	if err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to get database differences: %v", err)
+	}
+
+	// Step 2: Create databases that exist upstream but not locally
+	for _, dbName := range dbToCreate {
+		// Check if database already exists (for robustness in case of concurrent operations)
+		_, err := cnEngine.Database(downstreamCtx, dbName, iterationCtx.LocalTxn)
+		if err == nil {
+			// Database already exists, skip creation
+			logutil.Info("ccpr-iteration database already exists, skipping",
+				zap.Uint64("task_id", iterationCtx.TaskID),
+				zap.Uint64("lsn", iterationCtx.IterationLSN),
+				zap.String("database", dbName),
+			)
+			continue
+		}
+
+		logutil.Info("ccpr-iteration creating database",
+			zap.Uint64("task_id", iterationCtx.TaskID),
+			zap.Uint64("lsn", iterationCtx.IterationLSN),
+			zap.String("database", dbName),
+		)
+		err = cnEngine.Create(downstreamCtx, dbName, iterationCtx.LocalTxn)
+		if err != nil {
+			return moerr.NewInternalErrorf(ctx, "failed to create database %s: %v", dbName, err)
+		}
+	}
+
+	// Step 3: Get upstream DDL map
 	ddlMap, err := GetUpstreamDDLUsingGetDdl(ctx, iterationCtx)
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to get upstream DDL: %v", err)
 	}
 
-	// Step 2: Fill DDL operations
-	// Use downstream account ID from iterationCtx.SrcInfo
-	downstreamCtx := context.WithValue(ctx, defines.TenantIDKey{}, iterationCtx.SrcInfo.AccountID)
+	// Step 4: Fill DDL operations
 	err = FillDDLOperation(
 		downstreamCtx,
 		cnEngine,
@@ -317,7 +365,7 @@ func ProcessDDLChanges(
 		return moerr.NewInternalErrorf(ctx, "failed to fill DDL operations: %v", err)
 	}
 
-	// Step 3: Execute DDL operations for tables with non-empty operations
+	// Step 5: Execute DDL operations for tables with non-empty operations
 	// Use downstream account ID from iterationCtx.SrcInfo
 	// Log DDL operations to be executed
 	var ddlOperations []string
@@ -385,12 +433,7 @@ func ProcessDDLChanges(
 		}
 	}
 
-	// Step 4: Get dropped databases and drop them using CN engine API
-	dbToDrop, err := getdroppeddatabase(ctx, iterationCtx, cnEngine)
-	if err != nil {
-		return moerr.NewInternalErrorf(ctx, "failed to get dropped databases: %v", err)
-	}
-
+	// Step 6: Drop databases that exist locally but not upstream
 	for _, dbName := range dbToDrop {
 		logutil.Info("ccpr-iteration dropping database",
 			zap.Uint64("task_id", iterationCtx.TaskID),

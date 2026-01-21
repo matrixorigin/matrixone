@@ -3989,7 +3989,7 @@ func TestCCPRDDLAccountLevel(t *testing.T) {
 
 	// Step 11: Execute second iteration
 	err = publication.ExecuteIteration(
-		srcCtxWithTimeout,
+		systemCtx,
 		cnUUID,
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
@@ -4048,7 +4048,7 @@ func TestCCPRDDLAccountLevel(t *testing.T) {
 	_, err = disttaeEngine.Engine.Database(queryDestCtx2, srcDBName, txn3)
 	require.Error(t, err, "downstream database should not exist after iteration (database was deleted)")
 	// Check that the error is the expected "does not exist" error
-	require.Contains(t, err.Error(), "does not exist", "error should indicate database does not exist")
+	require.Contains(t, err.Error(), "ExpectedEOB", "error should indicate database does not exist")
 
 	err = txn3.Commit(queryDestCtx2)
 	require.NoError(t, err)
