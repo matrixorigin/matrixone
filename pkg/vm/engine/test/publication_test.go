@@ -3954,7 +3954,7 @@ func TestCCPRErrorHandling1(t *testing.T) {
 
 	// Fifth iteration should fail due to sql executor injection
 	require.Error(t, err, "Fifth ExecuteIteration should fail due to sql executor injection")
-    rmFn5()
+	rmFn5()
 }
 
 func TestCCPRDDLAccountLevel(t *testing.T) {
@@ -4278,6 +4278,352 @@ func TestCCPRDDLAccountLevel(t *testing.T) {
 
 	err = txn3.Commit(queryDestCtx2)
 	require.NoError(t, err)
+
+	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
+}
+
+func TestCCPRExecutorWithGC(t *testing.T) {
+	catalog.SetupDefines("")
+
+	var (
+		srcAccountID  = catalog.System_Account
+		destAccountID = uint32(2)
+		cnUUID        = ""
+	)
+
+	// Generate a UUID for cnUUID
+	testUUID, err := uuid.NewV7()
+	require.NoError(t, err)
+	cnUUID = testUUID.String()
+
+	// Setup source account context
+	srcCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	srcCtx = context.WithValue(srcCtx, defines.TenantIDKey{}, srcAccountID)
+	srcCtxWithTimeout, cancelSrc := context.WithTimeout(srcCtx, time.Minute*5)
+	defer cancelSrc()
+
+	// Setup destination account context
+	destCtx, cancelDest := context.WithCancel(context.Background())
+	defer cancelDest()
+	destCtx = context.WithValue(destCtx, defines.TenantIDKey{}, destAccountID)
+	destCtxWithTimeout, cancelDestTimeout := context.WithTimeout(destCtx, time.Minute*5)
+	defer cancelDestTimeout()
+
+	// Create engines with source account context
+	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(srcCtx, testutil.TestOptions{}, t)
+	defer func() {
+		disttaeEngine.Close(srcCtx)
+		taeHandler.Close(true)
+		rpcAgent.Close()
+	}()
+
+	// Register mock auto increment service
+	mockIncrService := NewMockAutoIncrementService(cnUUID)
+	incrservice.SetAutoIncrementServiceByID("", mockIncrService)
+	defer mockIncrService.Close()
+
+	// Get or create runtime for the new cnUUID
+	existingRuntime := runtime.ServiceRuntime("")
+	runtime.SetupServiceBasedRuntime(cnUUID, existingRuntime)
+
+	// Create mo_ccpr_log table using system account context
+	systemCtx := context.WithValue(srcCtxWithTimeout, defines.TenantIDKey{}, catalog.System_Account)
+
+	// Create mo_task database
+	createMoTaskDBSQL := fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s", catalog.MOTaskDB)
+	err = exec_sql(disttaeEngine, systemCtx, createMoTaskDBSQL)
+	require.NoError(t, err)
+
+	// Create mo_task.sys_daemon_task table
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoTaskSysDaemonTaskDDL)
+	require.NoError(t, err)
+
+	// Insert a record into mo_task.sys_daemon_task for lease check
+	insertDaemonTaskSQL := fmt.Sprintf(
+		`INSERT INTO mo_task.sys_daemon_task (
+			task_id,
+			task_metadata_id,
+			task_metadata_executor,
+			task_metadata_context,
+			task_metadata_option,
+			account_id,
+			account,
+			task_type,
+			task_runner,
+			task_status,
+			last_heartbeat,
+			create_at,
+			update_at
+		) VALUES (
+		    1,
+			'%s',
+			0,
+			NULL,
+			NULL,
+			%d,
+			'sys',
+			'Publication',
+			'%s',
+			0,
+			utc_timestamp(),
+			utc_timestamp(),
+			utc_timestamp()
+		)`,
+		cnUUID,
+		catalog.System_Account,
+		cnUUID,
+	)
+	err = exec_sql(disttaeEngine, systemCtx, insertDaemonTaskSQL)
+	require.NoError(t, err)
+
+	// Create mo_indexes table for source account
+	err = exec_sql(disttaeEngine, srcCtxWithTimeout, frontend.MoCatalogMoIndexesDDL)
+	require.NoError(t, err)
+
+	// Create mo_ccpr_log table using system account context
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprLogDDL)
+	require.NoError(t, err)
+
+	// Create mo_snapshots table for source account
+	moSnapshotsDDL := frontend.MoCatalogMoSnapshotsDDL
+	err = exec_sql(disttaeEngine, srcCtxWithTimeout, moSnapshotsDDL)
+	require.NoError(t, err)
+
+	// Create system tables for destination account
+	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoIndexesDDL)
+	require.NoError(t, err)
+
+	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoTablePartitionsDDL)
+	require.NoError(t, err)
+
+	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoAutoIncrTableDDL)
+	require.NoError(t, err)
+
+	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoForeignKeysDDL)
+	require.NoError(t, err)
+
+	err = exec_sql(disttaeEngine, destCtxWithTimeout, frontend.MoCatalogMoSnapshotsDDL)
+	require.NoError(t, err)
+
+	// Step 1: Create source database and table in source account
+	srcDBName := "src_db"
+	srcTableName := "src_table"
+	schema := catalog2.MockSchemaAll(4, 3)
+	schema.Name = srcTableName
+
+	// Create database and table in source account
+	txn, err := disttaeEngine.NewTxnOperator(srcCtxWithTimeout, disttaeEngine.Now())
+	require.NoError(t, err)
+
+	err = disttaeEngine.Engine.Create(srcCtxWithTimeout, srcDBName, txn)
+	require.NoError(t, err)
+
+	db, err := disttaeEngine.Engine.Database(srcCtxWithTimeout, srcDBName, txn)
+	require.NoError(t, err)
+
+	defs, err := testutil.EngineTableDefBySchema(schema)
+	require.NoError(t, err)
+
+	err = db.Create(srcCtxWithTimeout, srcTableName, defs)
+	require.NoError(t, err)
+
+	rel, err := db.Relation(srcCtxWithTimeout, srcTableName, nil)
+	require.NoError(t, err)
+
+	// Insert data into source table
+	bat := catalog2.MockBatch(schema, 10)
+	defer bat.Close()
+	err = rel.Write(srcCtxWithTimeout, containers.ToCNBatch(bat))
+	require.NoError(t, err)
+
+	err = txn.Commit(srcCtxWithTimeout)
+	require.NoError(t, err)
+
+	// Force checkpoint after inserting data
+	err = taeHandler.GetDB().ForceCheckpoint(srcCtxWithTimeout, types.TimestampToTS(disttaeEngine.Now()))
+	require.NoError(t, err)
+
+	// Step 2: Create upstream SQL helper factory
+	upstreamSQLHelperFactory := func(
+		txnOp client.TxnOperator,
+		engine engine.Engine,
+		accountID uint32,
+		exec executor.SQLExecutor,
+		txnClient client.TxnClient,
+	) publication.UpstreamSQLHelper {
+		return NewUpstreamSQLHelper(txnOp, engine, accountID, exec, txnClient)
+	}
+
+	// Create mpool for executor
+	mp, err := mpool.NewMPool("test_ccpr_executor_gc", 0, mpool.NoFixed)
+	require.NoError(t, err)
+
+	// Step 3: Create and start publication executor
+	executorCtx, executorCancel := context.WithCancel(context.Background())
+	defer executorCancel()
+
+	executorOption := &publication.PublicationExecutorOption{
+		GCInterval:       time.Hour * 24,
+		GCTTL:            time.Hour * 24,
+		SyncTaskInterval: 100 * time.Millisecond, // Short interval for testing
+	}
+
+	exec, err := publication.NewPublicationTaskExecutor(
+		executorCtx,
+		disttaeEngine.Engine,
+		disttaeEngine.GetTxnClient(),
+		cnUUID,
+		executorOption,
+		mp,
+		upstreamSQLHelperFactory,
+	)
+	require.NoError(t, err)
+
+	// Start the executor
+	err = exec.Start()
+	require.NoError(t, err)
+	defer exec.Stop()
+
+	// Step 4: Insert mo_ccpr_log record
+	taskID := uint64(1)
+	iterationLSN := uint64(1)
+	subscriptionName := "test_subscription_executor_gc"
+	insertSQL := fmt.Sprintf(
+		`INSERT INTO mo_catalog.mo_ccpr_log (
+			task_id, 
+			subscription_name, 
+			sync_level, 
+			account_id,
+			db_name, 
+			table_name, 
+			upstream_conn, 
+			sync_config, 
+			state, 
+			iteration_state, 
+			iteration_lsn, 
+			cn_uuid
+		) VALUES (
+			%d, 
+			'%s', 
+			'table', 
+			%d,
+			'%s', 
+			'%s', 
+			'%s', 
+			'{}', 
+			%d, 
+			%d, 
+			%d, 
+			'%s'
+		)`,
+		taskID,
+		subscriptionName,
+		destAccountID,
+		srcDBName,
+		srcTableName,
+		fmt.Sprintf("%s:%d", publication.InternalSQLExecutorType, srcAccountID),
+		publication.SubscriptionStateRunning,
+		publication.IterationStateCompleted,
+		iterationLSN,
+		cnUUID,
+	)
+
+	// Write mo_ccpr_log using system account context
+	err = exec_sql(disttaeEngine, systemCtx, insertSQL)
+	require.NoError(t, err)
+
+	// Step 5: Wait for executor to pick up and execute the task
+	// Poll mo_ccpr_log to check if iteration is completed
+	v, ok := runtime.ServiceRuntime("").GetGlobalVariables(runtime.InternalSQLExecutor)
+	require.True(t, ok)
+	sqlExec := v.(executor.SQLExecutor)
+
+	maxWaitTime := 30 * time.Second
+	checkInterval := 100 * time.Millisecond
+	startTime := time.Now()
+	var completed bool
+
+	for time.Since(startTime) < maxWaitTime {
+		querySQL := fmt.Sprintf(
+			`SELECT iteration_state, iteration_lsn FROM mo_catalog.mo_ccpr_log WHERE task_id = %d`,
+			taskID,
+		)
+
+		querySystemCtx := context.WithValue(destCtxWithTimeout, defines.TenantIDKey{}, catalog.System_Account)
+		txn, err := disttaeEngine.NewTxnOperator(querySystemCtx, disttaeEngine.Now())
+		require.NoError(t, err)
+
+		res, err := sqlExec.Exec(querySystemCtx, querySQL, executor.Options{}.WithTxn(txn))
+		require.NoError(t, err)
+
+		res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+			if rows > 0 {
+				state := vector.GetFixedAtWithTypeCheck[int8](cols[0], 0)
+				lsn := vector.GetFixedAtWithTypeCheck[int64](cols[1], 0)
+
+				if state == publication.IterationStateCompleted && lsn == int64(iterationLSN+1) {
+					completed = true
+				}
+			}
+			return true
+		})
+		res.Close()
+
+		err = txn.Commit(querySystemCtx)
+		require.NoError(t, err)
+
+		if completed {
+			break
+		}
+
+		time.Sleep(checkInterval)
+	}
+
+	require.True(t, completed, "iteration should complete within max wait time")
+
+	// Step 6: Update drop_at for the record
+	dropAtTime := time.Now().Add(-2 * time.Hour) // Set drop_at to 2 hours ago
+	dropAtStr := dropAtTime.Format("2006-01-02 15:04:05")
+	updateSQL := fmt.Sprintf(
+		`UPDATE mo_catalog.mo_ccpr_log 
+		SET drop_at = '%s'
+		WHERE task_id = %d`,
+		dropAtStr,
+		taskID,
+	)
+
+	err = exec_sql(disttaeEngine, systemCtx, updateSQL)
+	require.NoError(t, err)
+
+	// Step 7: Wait for executor to sync and update task entry in memory
+	// Poll executor's task entry to check if drop_at was updated
+	maxWaitTime2 := 10 * time.Second
+	checkInterval2 := 100 * time.Millisecond
+	startTime2 := time.Now()
+	var dropAtUpdatedInMemory bool
+
+	for time.Since(startTime2) < maxWaitTime2 {
+		taskEntry, ok := exec.GetTask(taskID)
+		if ok && taskEntry != nil && taskEntry.DropAt != nil {
+			// Verify drop_at is approximately 2 hours ago (allow some tolerance)
+			expectedTime := dropAtTime
+			actualTime := *taskEntry.DropAt
+			diff := actualTime.Sub(expectedTime)
+			if diff < time.Minute && diff > -time.Minute {
+				dropAtUpdatedInMemory = true
+				break
+			}
+		}
+		time.Sleep(checkInterval2)
+	}
+
+	require.True(t, dropAtUpdatedInMemory, "drop_at should be updated in executor's task entry")
+
+	// Step 8: Manually trigger GC
+	exec.GCInMemoryTask(0)
+	_, ok = exec.GetTask(taskID)
+	require.False(t, ok, "task should be deleted by GC")
 
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 }

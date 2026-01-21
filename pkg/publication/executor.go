@@ -206,15 +206,15 @@ func NewPublicationTaskExecutor(
 // TaskEntry represents a task entry in the executor
 // Only stores taskid, lsn, state, subscriptionState
 type TaskEntry struct {
-	taskID            uint64
-	lsn               uint64
-	state             int8       // iteration_state from mo_ccpr_log
-	subscriptionState int8       // subscription state: 0=running, 1=error, 2=pause, 3=dropped
-	dropAt            *time.Time // drop timestamp from mo_ccpr_log
+	TaskID            uint64
+	LSN               uint64
+	State             int8       // iteration_state from mo_ccpr_log
+	SubscriptionState int8       // subscription state: 0=running, 1=error, 2=pause, 3=dropped
+	DropAt            *time.Time // drop timestamp from mo_ccpr_log
 }
 
 func taskEntryLess(a, b *TaskEntry) bool {
-	return a.taskID < b.taskID
+	return a.TaskID < b.TaskID
 }
 
 // PublicationTaskExecutor manages publication tasks
@@ -396,13 +396,13 @@ func (exec *PublicationTaskExecutor) run(ctx context.Context) {
 			}
 			for _, task := range candidateTasks {
 				// Only trigger tasks that are not completed
-				err = exec.worker.Submit(task.taskID, task.lsn, task.state)
+				err = exec.worker.Submit(task.TaskID, task.LSN, task.State)
 				if err != nil {
 					logutil.Error(
 						"Publication-Task submit task failed",
-						zap.Uint64("taskID", task.taskID),
-						zap.Uint64("lsn", task.lsn),
-						zap.Int8("state", task.state),
+						zap.Uint64("taskID", task.TaskID),
+						zap.Uint64("lsn", task.LSN),
+						zap.Int8("state", task.State),
 						zap.Error(err),
 					)
 					continue
@@ -424,7 +424,21 @@ func (exec *PublicationTaskExecutor) run(ctx context.Context) {
 func (exec *PublicationTaskExecutor) getTask(taskID uint64) (*TaskEntry, bool) {
 	exec.taskMu.RLock()
 	defer exec.taskMu.RUnlock()
-	return exec.tasks.Get(&TaskEntry{taskID: taskID})
+	return exec.tasks.Get(&TaskEntry{TaskID: taskID})
+}
+
+// GetTask returns a copy of the task entry for the given taskID.
+// This is a public method for testing purposes.
+func (exec *PublicationTaskExecutor) GetTask(taskID uint64) (*TaskEntry, bool) {
+	exec.taskMu.RLock()
+	defer exec.taskMu.RUnlock()
+	task, ok := exec.tasks.Get(&TaskEntry{TaskID: taskID})
+	if !ok {
+		return nil, false
+	}
+	// Return a copy to avoid race conditions
+	taskCopy := *task
+	return &taskCopy, true
 }
 
 func (exec *PublicationTaskExecutor) setTask(task *TaskEntry) {
@@ -451,7 +465,7 @@ func (exec *PublicationTaskExecutor) getCandidateTasks() []*TaskEntry {
 	candidates := make([]*TaskEntry, 0)
 	for _, task := range allTasks {
 		// Only include tasks that subscription state is running and iteration state is completed
-		if task.subscriptionState == SubscriptionStateRunning && task.state == IterationStateCompleted {
+		if task.SubscriptionState == SubscriptionStateRunning && task.State == IterationStateCompleted {
 			candidates = append(candidates, task)
 		}
 	}
@@ -679,21 +693,21 @@ func (exec *PublicationTaskExecutor) addOrUpdateTask(
 	if !ok {
 		logutil.Infof("Publication-Task add task %v", taskID)
 		task = &TaskEntry{
-			taskID:            taskID,
-			lsn:               lsn,
-			state:             state,
-			subscriptionState: subscriptionState,
-			dropAt:            dropAt,
+			TaskID:            taskID,
+			LSN:               lsn,
+			State:             state,
+			SubscriptionState: subscriptionState,
+			DropAt:            dropAt,
 		}
 		exec.setTask(task)
 		return nil
 	}
 	logutil.Infof("Publication-Task update task %v-%d-%d-%d", taskID, lsn, state, subscriptionState)
 	// Update existing task
-	task.lsn = lsn
-	task.state = state
-	task.subscriptionState = subscriptionState
-	task.dropAt = dropAt
+	task.LSN = lsn
+	task.State = state
+	task.SubscriptionState = subscriptionState
+	task.DropAt = dropAt
 	exec.setTask(task)
 	return nil
 }
@@ -737,8 +751,8 @@ func (exec *PublicationTaskExecutor) GCInMemoryTask(threshold time.Duration) {
 	gcTime := now.Add(-threshold)
 	for _, task := range tasks {
 		// Delete tasks that are dropped and dropAt is older than threshold
-		if task.subscriptionState == SubscriptionStateDropped && task.dropAt != nil {
-			if task.dropAt.Before(gcTime) {
+		if task.SubscriptionState == SubscriptionStateDropped && task.DropAt != nil {
+			if task.DropAt.Before(gcTime) {
 				tasksToDelete = append(tasksToDelete, task)
 			}
 		}
@@ -746,7 +760,7 @@ func (exec *PublicationTaskExecutor) GCInMemoryTask(threshold time.Duration) {
 	taskIDs := make([]uint64, 0, len(tasksToDelete))
 	for _, task := range tasksToDelete {
 		exec.deleteTaskEntry(task)
-		taskIDs = append(taskIDs, task.taskID)
+		taskIDs = append(taskIDs, task.TaskID)
 	}
 	if len(taskIDs) > 0 {
 		logutil.Infof("Publication-Task delete tasks %v", taskIDs)

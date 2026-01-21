@@ -625,7 +625,9 @@ func CheckStateBeforeUpdate(
 	// Execute SQL query using system account context
 	// mo_ccpr_log is a system table, so we must use system account
 	systemCtx := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-	result, err := executor.ExecSQL(systemCtx, nil, querySQL, false, false)
+	ctxWithTimeout, cancel := context.WithTimeout(systemCtx, time.Minute)
+	defer cancel()
+	result, err := executor.ExecSQL(ctxWithTimeout, nil, querySQL, false, false)
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to execute state check query: %v", err)
 	}
@@ -790,8 +792,10 @@ func RequestUpstreamSnapshot(
 		return moerr.NewInternalErrorf(ctx, "unsupported sync_level: %s", iterationCtx.SrcInfo.SyncLevel)
 	}
 
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
 	// Execute SQL through upstream executor (account ID is handled internally)
-	result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, nil, createSnapshotSQL, false, true)
+	result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctxWithTimeout, nil, createSnapshotSQL, false, true)
 	if err != nil {
 		// Check if error is due to snapshot already existing
 		errMsg := err.Error()
@@ -830,7 +834,9 @@ func RequestUpstreamSnapshot(
 
 func querySnapshotTS(ctx context.Context, upstreamExecutor SQLExecutor, snapshotName string) (types.TS, error) {
 	querySnapshotTsSQL := PublicationSQLBuilder.QuerySnapshotTsSQL(snapshotName)
-	tsResult, err := upstreamExecutor.ExecSQL(ctx, nil, querySnapshotTsSQL, false, true)
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	tsResult, err := upstreamExecutor.ExecSQL(ctxWithTimeout, nil, querySnapshotTsSQL, false, true)
 	if err != nil {
 		return types.TS{}, moerr.NewInternalErrorf(ctx, "failed to query snapshot TS: %v", err)
 	}
