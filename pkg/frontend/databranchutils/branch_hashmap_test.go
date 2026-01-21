@@ -946,6 +946,165 @@ func TestBranchHashmapPopByEncodedKeyInMemory(t *testing.T) {
 	require.Empty(t, final[0].Rows)
 }
 
+func TestBranchHashmapGetByEncodedKey(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	keyVec := buildInt64Vector(t, mp, []int64{1, 1, 2})
+	valVec := buildStringVector(t, mp, []string{"one", "uno", "two"})
+	defer keyVec.Free(mp)
+	defer valVec.Free(mp)
+
+	bh, err := NewBranchHashmap()
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, bh.Close())
+	}()
+
+	require.NoError(t, bh.PutByVectors([]*vector.Vector{keyVec, valVec}, []int{0}))
+
+	encodedKeys := collectInt64EncodedKeys(t, bh)
+	encodedKey, ok := encodedKeys[1]
+	require.True(t, ok)
+
+	got, err := bh.GetByEncodedKey(encodedKey)
+	require.NoError(t, err)
+	require.True(t, got.Exists)
+	require.Len(t, got.Rows, 2)
+
+	values := make(map[string]struct{}, len(got.Rows))
+	for _, row := range got.Rows {
+		tuple, _, err := bh.DecodeRow(row)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), tuple[0])
+		valueBytes, ok := tuple[1].([]byte)
+		require.True(t, ok)
+		values[string(valueBytes)] = struct{}{}
+	}
+	require.Len(t, values, 2)
+	_, ok = values["one"]
+	require.True(t, ok)
+	_, ok = values["uno"]
+	require.True(t, ok)
+}
+
+func TestBranchHashmapPopByEncodedKeyValue(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	keyVec := buildInt64Vector(t, mp, []int64{1, 1, 1})
+	valVec := buildStringVector(t, mp, []string{"one", "uno", "eins"})
+	defer keyVec.Free(mp)
+	defer valVec.Free(mp)
+
+	bh, err := NewBranchHashmap()
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, bh.Close())
+	}()
+
+	require.NoError(t, bh.PutByVectors([]*vector.Vector{keyVec, valVec}, []int{0}))
+
+	var (
+		keyCopy      []byte
+		valueCopy    []byte
+		removedValue string
+	)
+	err = bh.ForEachShardParallel(func(cursor ShardCursor) error {
+		return cursor.ForEach(func(key []byte, rows [][]byte) error {
+			if len(rows) < 2 || len(keyCopy) > 0 {
+				return nil
+			}
+			keyCopy = append([]byte(nil), key...)
+			valueCopy = append([]byte(nil), rows[1]...)
+			tuple, _, err := bh.DecodeRow(valueCopy)
+			require.NoError(t, err)
+			valueBytes, ok := tuple[1].([]byte)
+			require.True(t, ok)
+			removedValue = string(valueBytes)
+			return nil
+		})
+	}, 1)
+	require.NoError(t, err)
+	require.NotEmpty(t, keyCopy)
+	require.NotEmpty(t, valueCopy)
+
+	removed, err := bh.PopByEncodedKeyValue(keyCopy, valueCopy, false)
+	require.NoError(t, err)
+	require.Equal(t, 1, removed)
+
+	probe := buildInt64Vector(t, mp, []int64{1})
+	defer probe.Free(mp)
+
+	results, err := bh.GetByVectors([]*vector.Vector{probe})
+	require.NoError(t, err)
+	require.True(t, results[0].Exists)
+	require.Len(t, results[0].Rows, 2)
+	for _, row := range results[0].Rows {
+		tuple, _, err := bh.DecodeRow(row)
+		require.NoError(t, err)
+		valueBytes, ok := tuple[1].([]byte)
+		require.True(t, ok)
+		require.NotEqual(t, removedValue, string(valueBytes))
+	}
+}
+
+func TestBranchHashmapPopByEncodedFullValueExact(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	keyVec := buildInt64Vector(t, mp, []int64{1, 1})
+	valVec := buildStringVector(t, mp, []string{"one", "uno"})
+	defer keyVec.Free(mp)
+	defer valVec.Free(mp)
+
+	bh, err := NewBranchHashmap()
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, bh.Close())
+	}()
+
+	require.NoError(t, bh.PutByVectors([]*vector.Vector{keyVec, valVec}, []int{0}))
+
+	var (
+		valueCopy    []byte
+		removedValue string
+	)
+	err = bh.ForEachShardParallel(func(cursor ShardCursor) error {
+		return cursor.ForEach(func(_ []byte, rows [][]byte) error {
+			if len(rows) == 0 || len(valueCopy) > 0 {
+				return nil
+			}
+			valueCopy = append([]byte(nil), rows[0]...)
+			tuple, _, err := bh.DecodeRow(valueCopy)
+			require.NoError(t, err)
+			valueBytes, ok := tuple[1].([]byte)
+			require.True(t, ok)
+			removedValue = string(valueBytes)
+			return nil
+		})
+	}, 1)
+	require.NoError(t, err)
+	require.NotEmpty(t, valueCopy)
+
+	removed, err := bh.PopByEncodedFullValueExact(valueCopy, false)
+	require.NoError(t, err)
+	require.Equal(t, 1, removed)
+
+	probe := buildInt64Vector(t, mp, []int64{1})
+	defer probe.Free(mp)
+
+	results, err := bh.GetByVectors([]*vector.Vector{probe})
+	require.NoError(t, err)
+	require.True(t, results[0].Exists)
+	require.Len(t, results[0].Rows, 1)
+	remaining, _, err := bh.DecodeRow(results[0].Rows[0])
+	require.NoError(t, err)
+	valueBytes, ok := remaining[1].([]byte)
+	require.True(t, ok)
+	require.NotEqual(t, removedValue, string(valueBytes))
+}
+
 func TestBranchHashmapPopByEncodedKeySpilled(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)

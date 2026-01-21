@@ -43,6 +43,10 @@ type BranchHashmap interface {
 	// GetResult per probed row, preserving the order of the original vectors. The
 	// returned rows reference the internal storage and must be treated as read-only.
 	GetByVectors(keyVecs []*vector.Vector) ([]GetResult, error)
+	// GetByEncodedKey retrieves rows using a pre-encoded key such as one obtained
+	// from ForEachShardParallel. Returned rows reference internal storage and must
+	// be treated as read-only.
+	GetByEncodedKey(encodedKey []byte) (GetResult, error)
 	// PopByVectors behaves like GetByVectors but removes matching rows from the
 	// hashmap. When removeAll is true, all rows associated with a key are removed.
 	// When removeAll is false, only a single row is removed. Returned rows are
@@ -51,10 +55,17 @@ type BranchHashmap interface {
 	// PopByEncodedKey removes rows using a pre-encoded key such as one obtained
 	// from ForEachShardParallel. It mirrors PopByVectors semantics.
 	PopByEncodedKey(encodedKey []byte, removeAll bool) (GetResult, error)
+	// PopByEncodedKeyValue removes rows matching both the encoded key and encoded
+	// value. When removeAll is true it removes all matching rows, otherwise it
+	// removes a single row. It returns the number of rows removed.
+	PopByEncodedKeyValue(encodedKey []byte, encodedValue []byte, removeAll bool) (int, error)
 	// PopByEncodedFullValue PopByEncodedFullValues removes rows by reconstructing the key from a full
 	// encoded row payload. The full row must match the value encoding used by
 	// PutByVectors. It mirrors PopByEncodedKey semantics.
 	PopByEncodedFullValue(encodedValue []byte, removeAll bool) (GetResult, error)
+	// PopByEncodedFullValueExact removes rows by matching the full encoded row
+	// payload, including the value bytes. It mirrors PopByEncodedKeyValue semantics.
+	PopByEncodedFullValueExact(encodedValue []byte, removeAll bool) (int, error)
 	// ForEachShardParallel provides exclusive access to each shard. The callback
 	// receives a cursor offering read-only iteration plus mutation helpers that
 	// avoid blocking other shards. parallelism <= 0 selects the default value:
@@ -89,6 +100,9 @@ type ShardCursor interface {
 	// PopByEncodedKey removes entries from the shard while the caller still owns
 	// the iteration lock, ensuring In-shard mutations stay non-blocking.
 	PopByEncodedKey(encodedKey []byte, removeAll bool) (GetResult, error)
+	// PopByEncodedKeyValue removes entries matching both key and value while the
+	// caller still owns the iteration lock.
+	PopByEncodedKeyValue(encodedKey []byte, encodedValue []byte, removeAll bool) (int, error)
 }
 
 // GetResult bundles the original rows associated with a probed key.
@@ -356,6 +370,36 @@ func (bh *branchHashmap) GetByVectors(keyVecs []*vector.Vector) ([]GetResult, er
 	return bh.lookupByVectors(keyVecs, nil)
 }
 
+func (bh *branchHashmap) GetByEncodedKey(encodedKey []byte) (GetResult, error) {
+	var result GetResult
+
+	bh.metaMu.RLock()
+	if bh.closed {
+		bh.metaMu.RUnlock()
+		return result, moerr.NewInternalErrorNoCtx("branchHashmap is closed")
+	}
+	if len(bh.keyTypes) == 0 {
+		bh.metaMu.RUnlock()
+		return result, nil
+	}
+	shardCount := bh.shardCount
+	bh.metaMu.RUnlock()
+
+	if shardCount == 0 {
+		return result, nil
+	}
+
+	hash := hashKey(encodedKey)
+	shard := bh.shards[int(hash%uint64(shardCount))]
+	rows, err := shard.getRows(hash, encodedKey)
+	if err != nil {
+		return result, err
+	}
+	result.Rows = rows
+	result.Exists = len(rows) > 0
+	return result, nil
+}
+
 func (bh *branchHashmap) PopByVectors(keyVecs []*vector.Vector, removeAll bool) ([]GetResult, error) {
 	return bh.lookupByVectors(keyVecs, &removeAll)
 }
@@ -459,6 +503,28 @@ func (bh *branchHashmap) PopByEncodedKey(encodedKey []byte, removeAll bool) (Get
 	return result, nil
 }
 
+func (bh *branchHashmap) PopByEncodedKeyValue(encodedKey []byte, encodedValue []byte, removeAll bool) (int, error) {
+	bh.metaMu.RLock()
+	if bh.closed {
+		bh.metaMu.RUnlock()
+		return 0, moerr.NewInternalErrorNoCtx("branchHashmap is closed")
+	}
+	if len(bh.keyTypes) == 0 {
+		bh.metaMu.RUnlock()
+		return 0, nil
+	}
+	shardCount := bh.shardCount
+	bh.metaMu.RUnlock()
+
+	if shardCount == 0 {
+		return 0, nil
+	}
+
+	hash := hashKey(encodedKey)
+	shard := bh.shards[int(hash%uint64(shardCount))]
+	return shard.popRowsByValue(hash, encodedKey, encodedValue, removeAll)
+}
+
 func (bh *branchHashmap) PopByEncodedFullValue(encodedValue []byte, removeAll bool) (GetResult, error) {
 	var result GetResult
 
@@ -504,6 +570,51 @@ func (bh *branchHashmap) PopByEncodedFullValue(encodedValue []byte, removeAll bo
 	}
 	encodedKey := packer.Bytes()
 	return bh.PopByEncodedKey(encodedKey, removeAll)
+}
+
+func (bh *branchHashmap) PopByEncodedFullValueExact(encodedValue []byte, removeAll bool) (int, error) {
+	if bh.ItemCount() == 0 {
+		return 0, nil
+	}
+
+	bh.metaMu.RLock()
+	if bh.closed {
+		bh.metaMu.RUnlock()
+		return 0, moerr.NewInternalErrorNoCtx("branchHashmap is closed")
+	}
+	valueTypes := cloneTypesFromSlice(bh.valueTypes)
+	keyTypes := cloneTypesFromSlice(bh.keyTypes)
+	keyCols := cloneInts(bh.keyCols)
+	bh.metaMu.RUnlock()
+
+	if len(valueTypes) == 0 || len(keyTypes) == 0 || len(keyCols) == 0 {
+		return 0, moerr.NewInvalidInputNoCtx("branchHashmap PopByEncodedFullValueExact requires initialized key and value types")
+	}
+	if len(keyCols) != len(keyTypes) {
+		return 0, moerr.NewInvalidInputNoCtx("branchHashmap key columns/types mismatch")
+	}
+
+	tuple, err := types.Unpack(encodedValue)
+	if err != nil {
+		return 0, err
+	}
+	if len(tuple) != len(valueTypes) {
+		return 0, moerr.NewInvalidInputNoCtxf("unexpected row width %d, want %d", len(tuple), len(valueTypes))
+	}
+
+	packer := bh.getPacker()
+	defer bh.putPacker(packer)
+
+	for i, colIdx := range keyCols {
+		if valueTypes[colIdx] != keyTypes[i] {
+			return 0, moerr.NewInvalidInputNoCtx("key column type mismatch")
+		}
+		if err := encodeDecodedValue(packer, valueTypes[colIdx], tuple[colIdx]); err != nil {
+			return 0, err
+		}
+	}
+	encodedKey := packer.Bytes()
+	return bh.PopByEncodedKeyValue(encodedKey, encodedValue, removeAll)
 }
 func (bh *branchHashmap) ForEachShardParallel(fn func(cursor ShardCursor) error, parallelism int) error {
 	if fn == nil {
@@ -772,6 +883,13 @@ func (sc *shardCursor) PopByEncodedKey(encodedKey []byte, removeAll bool) (GetRe
 	result.Exists = len(rows) > 0
 	return result, nil
 }
+
+func (sc *shardCursor) PopByEncodedKeyValue(encodedKey []byte, encodedValue []byte, removeAll bool) (int, error) {
+	if sc == nil || sc.shard == nil {
+		return 0, nil
+	}
+	return sc.shard.popRowsByValueDuringIteration(hashKey(encodedKey), encodedKey, encodedValue, removeAll)
+}
 func (bh *branchHashmap) DecodeRow(data []byte) (types.Tuple, []types.Type, error) {
 	t, err := types.Unpack(data)
 	//bh.metaMu.RLock()
@@ -875,13 +993,13 @@ func (hs *hashShard) insertEntryLocked(entry *hashEntry) {
 func (hs *hashShard) getRows(hash uint64, key []byte) ([][]byte, error) {
 	hs.lock()
 	defer hs.unlock()
-	rows := hs.collectFromMemory(hash, key, nil, nil, false)
+	rows := hs.collectFromMemory(hash, key, nil, nil, false, true)
 	if len(hs.spills) == 0 {
 		return rows, nil
 	}
 	var scratch []byte
 	for _, part := range hs.spills {
-		if err := part.collect(hash, key, &rows, &scratch, nil); err != nil {
+		if err := part.collect(hash, key, &rows, &scratch, nil, true); err != nil {
 			return nil, err
 		}
 	}
@@ -893,6 +1011,12 @@ func (hs *hashShard) popRows(hash uint64, key []byte, removeAll bool) ([][]byte,
 	return hs.popRowsUnsafe(hash, key, removeAll)
 }
 
+func (hs *hashShard) popRowsByValue(hash uint64, key []byte, value []byte, removeAll bool) (int, error) {
+	hs.lock()
+	defer hs.unlock()
+	return hs.popRowsByValueUnsafe(hash, key, value, removeAll)
+}
+
 func (hs *hashShard) popRowsDuringIteration(hash uint64, key []byte, removeAll bool) ([][]byte, error) {
 	if !hs.iterating {
 		return nil, moerr.NewInternalErrorNoCtx("shard iteration context required")
@@ -900,9 +1024,16 @@ func (hs *hashShard) popRowsDuringIteration(hash uint64, key []byte, removeAll b
 	return hs.popRowsUnsafe(hash, key, removeAll)
 }
 
+func (hs *hashShard) popRowsByValueDuringIteration(hash uint64, key []byte, value []byte, removeAll bool) (int, error) {
+	if !hs.iterating {
+		return 0, moerr.NewInternalErrorNoCtx("shard iteration context required")
+	}
+	return hs.popRowsByValueUnsafe(hash, key, value, removeAll)
+}
+
 func (hs *hashShard) popRowsUnsafe(hash uint64, key []byte, removeAll bool) ([][]byte, error) {
 	plan := newRemovalPlan(removeAll)
-	rows := hs.collectFromMemory(hash, key, nil, plan, true)
+	rows := hs.collectFromMemory(hash, key, nil, plan, true, true)
 	if len(hs.spills) == 0 {
 		if removed := len(rows); removed > 0 {
 			atomic.AddInt64(&hs.items, -int64(removed))
@@ -914,7 +1045,7 @@ func (hs *hashShard) popRowsUnsafe(hash uint64, key []byte, removeAll bool) ([][
 		if plan != nil && !plan.hasRemaining() {
 			break
 		}
-		if err := part.collect(hash, key, &rows, &scratch, plan); err != nil {
+		if err := part.collect(hash, key, &rows, &scratch, plan, true); err != nil {
 			return nil, err
 		}
 	}
@@ -923,7 +1054,41 @@ func (hs *hashShard) popRowsUnsafe(hash uint64, key []byte, removeAll bool) ([][
 	}
 	return rows, nil
 }
-func (hs *hashShard) collectFromMemory(hash uint64, key []byte, dst [][]byte, plan *removalPlan, copyValues bool) [][]byte {
+
+func (hs *hashShard) popRowsByValueUnsafe(hash uint64, key []byte, value []byte, removeAll bool) (int, error) {
+	matchValue := value
+	if removeAll && len(value) > 0 {
+		matchValue = make([]byte, len(value))
+		copy(matchValue, value)
+	}
+	plan := newValueRemovalPlan(removeAll, matchValue)
+	hs.collectFromMemory(hash, key, nil, plan, false, false)
+	if len(hs.spills) == 0 {
+		removed := plan.removed
+		if removed > 0 {
+			atomic.AddInt64(&hs.items, -int64(removed))
+		}
+		return removed, nil
+	}
+	var (
+		scratch []byte
+		unused  [][]byte
+	)
+	for _, part := range hs.spills {
+		if plan != nil && !plan.hasRemaining() {
+			break
+		}
+		if err := part.collect(hash, key, &unused, &scratch, plan, false); err != nil {
+			return 0, err
+		}
+	}
+	removed := plan.removed
+	if removed > 0 {
+		atomic.AddInt64(&hs.items, -int64(removed))
+	}
+	return removed, nil
+}
+func (hs *hashShard) collectFromMemory(hash uint64, key []byte, dst [][]byte, plan *removalPlan, copyValues bool, collectValues bool) [][]byte {
 	bucket, ok := hs.inMemory[hash]
 	if !ok {
 		return dst
@@ -936,16 +1101,18 @@ func (hs *hashShard) collectFromMemory(hash uint64, key []byte, dst [][]byte, pl
 				newEntries = append(newEntries, entry)
 				continue
 			}
-			if int(entry.keyLen) == matchLen && bytes.Equal(entry.keyBytes(), key) && plan.take() {
-				value := entry.valueBytes()
-				var payload []byte
-				if copyValues {
-					payload = make([]byte, len(value))
-					copy(payload, value)
-				} else {
-					payload = value
+			if int(entry.keyLen) == matchLen && bytes.Equal(entry.keyBytes(), key) && plan.matchesValue(entry.valueBytes()) && plan.take() {
+				if collectValues {
+					value := entry.valueBytes()
+					var payload []byte
+					if copyValues {
+						payload = make([]byte, len(value))
+						copy(payload, value)
+					} else {
+						payload = value
+					}
+					dst = append(dst, payload)
 				}
-				dst = append(dst, payload)
 				hs.memInUse -= uint64(len(entry.buf))
 				entry.release()
 			} else {
@@ -973,13 +1140,15 @@ func (hs *hashShard) collectFromMemory(hash uint64, key []byte, dst [][]byte, pl
 			continue
 		}
 		if bytes.Equal(entry.keyBytes(), key) {
-			value := entry.valueBytes()
-			if copyValues {
-				copied := make([]byte, len(value))
-				copy(copied, value)
-				dst = append(dst, copied)
-			} else {
-				dst = append(dst, value)
+			if collectValues {
+				value := entry.valueBytes()
+				if copyValues {
+					copied := make([]byte, len(value))
+					copy(copied, value)
+					dst = append(dst, copied)
+				} else {
+					dst = append(dst, value)
+				}
 			}
 		}
 	}
@@ -1615,7 +1784,7 @@ func (sp *spillPartition) append(entry *hashEntry) error {
 	return nil
 }
 
-func (sp *spillPartition) collect(hash uint64, key []byte, dst *[][]byte, scratch *[]byte, plan *removalPlan) error {
+func (sp *spillPartition) collect(hash uint64, key []byte, dst *[][]byte, scratch *[]byte, plan *removalPlan, collectValues bool) error {
 	pointers := sp.index[hash]
 	if len(pointers) == 0 {
 		return nil
@@ -1641,16 +1810,18 @@ func (sp *spillPartition) collect(hash uint64, key []byte, dst *[][]byte, scratc
 		matched := bytes.Equal(buf[:ptr.keyLen], key)
 		switch {
 		case plan == nil:
-			if matched {
+			if matched && collectValues {
 				payload := make([]byte, ptr.valueLen)
 				copy(payload, buf[ptr.keyLen:])
 				*dst = append(*dst, payload)
 			}
 			kept = append(kept, ptr)
-		case matched && plan.take():
-			payload := make([]byte, ptr.valueLen)
-			copy(payload, buf[ptr.keyLen:])
-			*dst = append(*dst, payload)
+		case matched && plan.matchesValue(buf[ptr.keyLen:ptr.keyLen+ptr.valueLen]) && plan.take():
+			if collectValues {
+				payload := make([]byte, ptr.valueLen)
+				copy(payload, buf[ptr.keyLen:])
+				*dst = append(*dst, payload)
+			}
 		default:
 			kept = append(kept, ptr)
 		}
@@ -1683,8 +1854,18 @@ func newRemovalPlan(removeAll bool) *removalPlan {
 	return &removalPlan{remaining: 1}
 }
 
+func newValueRemovalPlan(removeAll bool, value []byte) *removalPlan {
+	plan := newRemovalPlan(removeAll)
+	plan.matchValue = value
+	plan.matchValueSet = true
+	return plan
+}
+
 type removalPlan struct {
-	remaining int
+	remaining     int
+	removed       int
+	matchValue    []byte
+	matchValueSet bool
 }
 
 func (rp *removalPlan) take() bool {
@@ -1692,12 +1873,14 @@ func (rp *removalPlan) take() bool {
 		return false
 	}
 	if rp.remaining < 0 {
+		rp.removed++
 		return true
 	}
 	if rp.remaining == 0 {
 		return false
 	}
 	rp.remaining--
+	rp.removed++
 	return true
 }
 
@@ -1709,6 +1892,13 @@ func (rp *removalPlan) hasRemaining() bool {
 		return true
 	}
 	return rp.remaining > 0
+}
+
+func (rp *removalPlan) matchesValue(value []byte) bool {
+	if rp == nil || !rp.matchValueSet {
+		return true
+	}
+	return bytes.Equal(value, rp.matchValue)
 }
 
 type iterationGroup struct {

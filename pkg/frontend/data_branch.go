@@ -55,6 +55,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/panjf2000/ants/v2"
 )
 
@@ -845,7 +846,7 @@ func diffMergeAgency(
 	}
 
 	if dagInfo, err = decideLCABranchTSFromBranchDAG(
-		ctx, ses, bh, tblStuff.tarRel, tblStuff.baseRel,
+		ctx, ses, bh, tblStuff,
 	); err != nil {
 		return
 	}
@@ -3226,7 +3227,8 @@ func findDeleteAndUpdateBat(
 }
 
 func appendTupleToBat(ses *Session, bat *batch.Batch, tuple types.Tuple, tblStuff tableStuff) error {
-	for j, val := range tuple {
+	// exclude the commit ts column
+	for j, val := range tuple[:len(tuple)-1] {
 		vec := bat.Vecs[j]
 
 		if err := vector.AppendAny(
@@ -3957,9 +3959,13 @@ func buildHashmapForTable(
 			ll := bat.VectorCount()
 			var taskErr error
 			if isTombstone {
-				taskErr = tombstoneHashmap.PutByVectors(bat.Vecs[:ll-1], []int{0})
+				// keep the commit ts
+				taskErr = tombstoneHashmap.PutByVectors(bat.Vecs[:ll], []int{0})
+				fmt.Println("A", common.MoBatchToString(bat, bat.RowCount()))
 			} else {
-				taskErr = dataHashmap.PutByVectors(bat.Vecs[:ll-1], []int{tblStuff.def.pkColIdx})
+				// keep the commit ts
+				taskErr = dataHashmap.PutByVectors(bat.Vecs[:ll], []int{tblStuff.def.pkColIdx})
+				fmt.Println("B", common.MoBatchToString(bat, bat.RowCount()))
 			}
 
 			bat.Clean(mp)
@@ -4005,6 +4011,135 @@ func buildHashmapForTable(
 		err = atomicErr.Load().(error)
 	}
 
+	if err != nil {
+		return
+	}
+
+	if tblStuff.def.pkKind == fakeKind {
+		return
+	}
+
+	/*
+		case 1:
+			     insert    update    update     update
+				   pk1		 pk1       pk1        pk1   ....
+				|------|-------------------------------------|
+		               |           collect range             |
+			1.1. the last one is an update: only keep the last update op
+			1.2. the last one is a deletion: only keep the last deletion op
+
+		case 2:
+			           insert    update     update
+				   		 pk1       pk1        pk1   ....
+				|------|-------------------------------------|
+		               |           collect range             |
+		     2.1. the last one is an update: only keep the last update op
+		     2.2. the last one is a deletion: only keep the last deletion op
+
+		case 3:
+				 insert    delete    update     update
+		           pk1		 pk1       pk1        pk1   ....
+				|------|-------------------------------------|
+		               |           collect range             |
+				3.1. the last one is an update: only keep the last update op
+				3.2. the last one is a deletion: only keep the last deletion op
+	*/
+
+	if err = tombstoneHashmap.ForEachShardParallel(func(cursor databranchutils.ShardCursor) error {
+		var (
+			err2    error
+			err3    error
+			maxTs   types.TS
+			maxIdx  int
+			tuple   types.Tuple
+			dataRet databranchutils.GetResult
+		)
+		if err2 = cursor.ForEach(func(key []byte, rows [][]byte) error {
+			if len(rows) > 1 {
+				//tsMap := make(map[types.TS]struct{})
+				maxIdx = 0
+				maxTs = types.MinTs()
+				for i := 0; i < len(rows); i++ {
+					if tuple, _, err3 = tombstoneHashmap.DecodeRow(rows[i]); err3 != nil {
+						return err3
+					}
+					cur := types.TS(tuple[len(tuple)-1].([]uint8))
+					if cur.GT(&maxTs) {
+						maxTs = cur
+						maxIdx = i
+					}
+					//tsMap[cur] = struct{}{}
+				}
+				//delete(tsMap, maxTs)
+
+				for i := range rows {
+					if i != maxIdx {
+						if _, err3 = cursor.PopByEncodedKeyValue(
+							key, rows[i], false,
+						); err3 != nil {
+							return err3
+						}
+					}
+				}
+
+				if dataRet, err3 = dataHashmap.GetByEncodedKey(key); err3 != nil {
+					return err3
+				}
+
+				if dataRet.Exists {
+					for i := range dataRet.Rows {
+						if tuple, _, err3 = dataHashmap.DecodeRow(dataRet.Rows[i]); err3 != nil {
+							return err3
+						}
+						cur := types.TS(tuple[len(tuple)-1].([]uint8))
+						// cannot use tsMap to filter, why?
+						// cannot use cur != maxTS to filter, why?
+						if cur.LT(&maxTs) {
+							if _, err3 = dataHashmap.PopByEncodedKeyValue(
+								key, dataRet.Rows[i], false,
+							); err3 != nil {
+								return err3
+							}
+						}
+					}
+				}
+			}
+			return nil
+		}); err2 != nil {
+			return err2
+		}
+		return nil
+	}, -1); err != nil {
+		return nil, nil, err
+	}
+
+	//tombstoneHashmap.ForEachShardParallel(func(cursor databranchutils.ShardCursor) error {
+	//	cursor.ForEach(func(key []byte, rows [][]byte) error {
+	//		for i := range rows {
+	//			if tuple, _, err3 := tombstoneHashmap.DecodeRow(rows[i]); err3 != nil {
+	//				return err3
+	//			} else {
+	//				fmt.Println("tombstone", tuple[0].(int32))
+	//			}
+	//		}
+	//		return nil
+	//	})
+	//	return nil
+	//}, 1)
+	//
+	//dataHashmap.ForEachShardParallel(func(cursor databranchutils.ShardCursor) error {
+	//	cursor.ForEach(func(key []byte, rows [][]byte) error {
+	//		for i := range rows {
+	//			if tuple, _, err3 := dataHashmap.DecodeRow(rows[i]); err3 != nil {
+	//				return err3
+	//			} else {
+	//				fmt.Println("data", tuple[0].(int32), tuple[1].(int32))
+	//			}
+	//		}
+	//		return nil
+	//	})
+	//	return nil
+	//}, 1)
 	return
 }
 
@@ -4319,10 +4454,12 @@ func decideCollectRange(
 				tarCollectRange.rel = append(tarCollectRange.rel, lcaRel)
 				tarCollectRange.from = append(tarCollectRange.from, dagInfo.baseBranchTS.Next())
 				tarCollectRange.end = append(tarCollectRange.end, dagInfo.tarBranchTS)
+				dagInfo.tarBranchTS = dagInfo.baseBranchTS
 			} else {
 				baseCollectRange.rel = append(baseCollectRange.rel, lcaRel)
 				baseCollectRange.from = append(baseCollectRange.from, dagInfo.tarBranchTS.Next())
 				baseCollectRange.end = append(baseCollectRange.end, dagInfo.baseBranchTS)
+				dagInfo.baseBranchTS = dagInfo.tarBranchTS
 			}
 		}
 		return
@@ -4523,8 +4660,7 @@ func decideLCABranchTSFromBranchDAG(
 	ctx context.Context,
 	ses *Session,
 	bh BackgroundExec,
-	tarRel engine.Relation,
-	baseRel engine.Relation,
+	tblStuff tableStuff,
 ) (
 	branchInfo branchMetaInfo,
 	err error,
@@ -4569,14 +4705,14 @@ func decideLCABranchTSFromBranchDAG(
 	// if a table is cloned table, the commit ts of the cloned data
 	// should be the creation time of the table.
 	if lcaTableID, tarTS, baseTS, hasLca = dag.FindLCA(
-		tarRel.GetTableID(ctx), baseRel.GetTableID(ctx),
+		tblStuff.tarRel.GetTableID(ctx), tblStuff.baseRel.GetTableID(ctx),
 	); hasLca {
-		if lcaTableID == baseRel.GetTableID(ctx) {
+		if lcaTableID == tblStuff.baseRel.GetTableID(ctx) {
 			ts := timestamp.Timestamp{PhysicalTime: tarTS}
 			tarBranchTS = ts
 			baseBranchTS = ts
 			lcaType = lcaRight
-		} else if lcaTableID == tarRel.GetTableID(ctx) {
+		} else if lcaTableID == tblStuff.tarRel.GetTableID(ctx) {
 			ts := timestamp.Timestamp{PhysicalTime: baseTS}
 			tarBranchTS = ts
 			baseBranchTS = ts
@@ -4586,8 +4722,21 @@ func decideLCABranchTSFromBranchDAG(
 			tarBranchTS = timestamp.Timestamp{PhysicalTime: tarTS}
 			baseBranchTS = timestamp.Timestamp{PhysicalTime: baseTS}
 		}
-	} else {
-		lcaType = lcaEmpty
+	} else if tblStuff.tarRel.GetTableID(ctx) == tblStuff.baseRel.GetTableID(ctx) {
+		lcaTableID = tblStuff.tarRel.GetTableID(ctx)
+		if tblStuff.tarSnap == nil && tblStuff.baseSnap == nil {
+			lcaType = lcaRight
+		} else if tblStuff.tarSnap == nil {
+			// diff tar{now} against base{sp}
+			lcaType = lcaRight
+		} else if tblStuff.baseSnap == nil {
+			// diff tar{sp} against base{now}
+			lcaType = lcaLeft
+		} else if tblStuff.tarSnap.TS.LessEq(*tblStuff.baseSnap.TS) {
+			lcaType = lcaLeft
+		} else {
+			lcaType = lcaRight
+		}
 	}
 
 	return

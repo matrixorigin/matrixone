@@ -1,0 +1,55 @@
+
+drop database if exists test;
+create database test;
+use test;
+create table t1 (a int primary key, b int);
+insert into t1 values(1,1);
+insert into t1 values(2,2);
+create snapshot sp for table test t1;
+update t1 set b=2 where a = 1;
+select mo_ctl("dn", "flush", "test.t1");
+mo_ctl(dn, flush, test.t1)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+update t1 set b=3 where a = 1;
+select mo_ctl("dn", "flush", "test.t1");
+mo_ctl(dn, flush, test.t1)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+update t1 set b=4 where a = 1;
+data branch diff t1 against t1{snapshot="sp"};
+diff t1 against t1    flag    a    b
+t1    UPDATE    1    4
+select mo_ctl("dn", "flush", "test.t1");
+mo_ctl(dn, flush, test.t1)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+delete from t1 where a = 1;
+data branch diff t1 against t1{snapshot="sp"};
+diff t1 against t1    flag    a    b
+t1    DELETE    1    1
+drop snapshot sp;
+drop table t1;
+create table t1 (a int primary key, b int);
+create snapshot sp for table test t1;
+insert into t1 values(1,1);
+insert into t1 values(2,2);
+update t1 set b=2 where a = 1;
+select mo_ctl("dn", "flush", "test.t1");
+mo_ctl(dn, flush, test.t1)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+update t1 set b=3 where a = 1;
+select mo_ctl("dn", "flush", "test.t1");
+mo_ctl(dn, flush, test.t1)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+update t1 set b=4 where a = 1;
+data branch diff t1 against t1{snapshot="sp"};
+diff t1 against t1    flag    a    b
+t1    INSERT    1    4
+t1    INSERT    2    2
+select mo_ctl("dn", "flush", "test.t1");
+mo_ctl(dn, flush, test.t1)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+delete from t1 where a = 1;
+data branch diff t1 against t1{snapshot="sp"};
+diff t1 against t1    flag    a    b
+t1    INSERT    2    2
+drop snapshot sp;
+drop table t1;
