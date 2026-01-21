@@ -131,17 +131,6 @@ func (r *Result) Scan(dest ...interface{}) error {
 	return moerr.NewInternalErrorNoCtx("result is nil")
 }
 
-// Columns returns the column names
-func (r *Result) Columns() ([]string, error) {
-	if r.rows != nil {
-		return r.rows.Columns()
-	}
-	if r.internalResult != nil {
-		return r.internalResult.Columns()
-	}
-	return nil, moerr.NewInternalErrorNoCtx("result is nil")
-}
-
 // Err returns any error encountered during iteration
 func (r *Result) Err() error {
 	if r.rows != nil {
@@ -156,13 +145,11 @@ func (r *Result) Err() error {
 type SQLExecutor interface {
 	Close() error
 	Connect() error
-	StartTxn(ctx context.Context) error
 	EndTxn(ctx context.Context, commit bool) error
 	// ExecSQL executes a SQL statement with options
 	// useTxn: if true, execute within a transaction (must have active transaction for InternalSQLExecutor, not allowed for UpstreamExecutor)
 	// if false, execute as autocommit (will create and commit transaction automatically for InternalSQLExecutor)
 	ExecSQL(ctx context.Context, ar *ActiveRoutine, query string, useTxn bool, needRetry bool) (*Result, error)
-	HasActiveTx() bool
 }
 
 var _ SQLExecutor = (*UpstreamExecutor)(nil)
@@ -519,25 +506,6 @@ func tryConn(dsn string) (*sql.DB, error) {
 	return db, nil
 }
 
-// StartTxn starts a new transaction (implements UpstreamExecutor interface)
-func (e *UpstreamExecutor) StartTxn(ctx context.Context) error {
-	if e.tx != nil {
-		return moerr.NewInternalError(ctx, "transaction already active")
-	}
-
-	if err := e.ensureConnection(ctx); err != nil {
-		return err
-	}
-
-	tx, err := e.conn.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-
-	e.tx = tx
-	return nil
-}
-
 // EndTxn ends the current transaction (implements UpstreamExecutor interface)
 func (e *UpstreamExecutor) EndTxn(ctx context.Context, commit bool) error {
 	if e.tx == nil {
@@ -715,11 +683,6 @@ func (e *UpstreamExecutor) calculateMaxAttempts() int {
 		attempts = 1
 	}
 	return attempts
-}
-
-// HasActiveTx returns true if there's an active transaction
-func (e *UpstreamExecutor) HasActiveTx() bool {
-	return e.tx != nil
 }
 
 // Close closes the database connection and rolls back any active transaction

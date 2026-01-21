@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -71,7 +70,6 @@ type InternalSQLExecutor struct {
 }
 
 // SetUpstreamSQLHelper sets the upstream SQL helper
-// This allows setting the helper after the executor is created (e.g., after StartTxn)
 func (e *InternalSQLExecutor) SetUpstreamSQLHelper(helper UpstreamSQLHelper) {
 	e.upstreamSQLHelper = helper
 }
@@ -87,7 +85,7 @@ func (e *InternalSQLExecutor) GetTxnClient() client.TxnClient {
 }
 
 // NewInternalSQLExecutor creates a new InternalSQLExecutor
-// txnClient is optional - if provided, StartTxn can create transactions
+// txnClient is optional - if provided, transactions can be created via SetTxn
 // engine is required for registering transactions with the engine
 // accountID is the tenant account ID to use when executing SQL
 // classifier is the error classifier to use for retry logic
@@ -136,45 +134,6 @@ func (e *InternalSQLExecutor) Close() error {
 	return nil
 }
 
-// StartTxn starts a new transaction
-// For internal executor, if txnClient is provided, it creates a new transaction.
-// Otherwise, it returns an error indicating that transaction should be managed externally.
-func (e *InternalSQLExecutor) StartTxn(ctx context.Context) error {
-	if e.txnOp != nil {
-		return moerr.NewInternalError(ctx, "transaction already active")
-	}
-
-	if e.txnClient == nil {
-		return moerr.NewInternalError(ctx, "TxnClient not provided, cannot start transaction. Use NewInternalSQLExecutor with TxnClient parameter or manage transactions externally via ExecTxn")
-	}
-
-	// Create a new transaction using TxnClient
-	// Use empty timestamp to let TxnClient determine the appropriate timestamp
-	txnOp, err := e.txnClient.New(ctx, timestamp.Timestamp{})
-	if err != nil {
-		return err
-	}
-
-	// Register the transaction with the engine
-	if e.engine != nil {
-		err = e.engine.New(ctx, txnOp)
-		if err != nil {
-			return moerr.NewInternalErrorf(ctx, "failed to register transaction with engine: %v", err)
-		}
-	}
-
-	e.txnOp = txnOp
-
-	// Update helper's txnOp if helper is set and supports SetTxnOp
-	if e.upstreamSQLHelper != nil {
-		if helperWithTxnOp, ok := e.upstreamSQLHelper.(interface{ SetTxnOp(client.TxnOperator) }); ok {
-			helperWithTxnOp.SetTxnOp(txnOp)
-		}
-	}
-
-	return nil
-}
-
 // SetTxn sets an external transaction operator for the executor
 // This allows the executor to use a transaction created outside of it
 func (e *InternalSQLExecutor) SetTxn(txnOp client.TxnOperator) {
@@ -182,7 +141,7 @@ func (e *InternalSQLExecutor) SetTxn(txnOp client.TxnOperator) {
 }
 
 // EndTxn ends the current transaction
-// If a transaction was started via StartTxn, it commits or rolls back the transaction
+// It commits or rolls back the transaction set via SetTxn
 func (e *InternalSQLExecutor) EndTxn(ctx context.Context, commit bool) error {
 	if e.txnOp == nil {
 		return nil // Idempotent
@@ -216,7 +175,7 @@ func (e *InternalSQLExecutor) ExecSQL(
 ) (*Result, error) {
 	// If useTxn is true, check if transaction is available
 	if useTxn && e.txnOp == nil {
-		return nil, moerr.NewInternalError(ctx, "transaction required but no active transaction found. Call StartTxn() or SetTxn() first")
+		return nil, moerr.NewInternalError(ctx, "transaction required but no active transaction found. Call SetTxn() first")
 	}
 	// Check for cancellation
 	if ar != nil {
@@ -329,27 +288,6 @@ func (e *InternalSQLExecutor) ExecSQL(
 		zap.Error(lastErr),
 	)
 	return nil, lastErr
-}
-
-// HasActiveTx returns true if there's an active transaction
-func (e *InternalSQLExecutor) HasActiveTx() bool {
-	return e.txnOp != nil
-}
-
-// SetMaxRetries sets the maximum number of retries for retryable errors
-func (e *InternalSQLExecutor) SetMaxRetries(maxRetries int) {
-	if maxRetries < 0 {
-		maxRetries = 0
-	}
-	e.maxRetries = maxRetries
-}
-
-// SetRetryInterval sets the interval between retries
-func (e *InternalSQLExecutor) SetRetryInterval(interval time.Duration) {
-	if interval < 0 {
-		interval = 0
-	}
-	e.retryInterval = interval
 }
 
 // truncateSQL truncates SQL string for logging
@@ -679,33 +617,6 @@ func extractVectorValue(vec *vector.Vector, idx uint64, dest interface{}) error 
 	}
 
 	return nil
-}
-
-// Columns returns the column names
-func (r *InternalResult) Columns() ([]string, error) {
-	if r.columns != nil {
-		return r.columns, nil
-	}
-
-	if len(r.executorResult.Batches) == 0 {
-		return nil, moerr.NewInternalErrorNoCtx("no batches available")
-	}
-
-	batch := r.executorResult.Batches[0]
-	if batch == nil {
-		return nil, moerr.NewInternalErrorNoCtx("first batch is nil")
-	}
-
-	// Extract column names from batch
-	// Note: This is a simplified implementation
-	// In practice, column names might come from the logical plan
-	// For now, generate column names based on position
-	r.columns = make([]string, len(batch.Vecs))
-	for i := range batch.Vecs {
-		r.columns[i] = fmt.Sprintf("col_%d", i)
-	}
-
-	return r.columns, nil
 }
 
 // Err returns any error encountered during iteration
