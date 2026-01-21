@@ -215,6 +215,7 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 		for i := 0; i < rowCount; i += hashmap.UnitLimit {
 			n := min(rowCount-i, hashmap.UnitLimit)
 
+			mergeGroup.ctr.sanityCheck()
 			originGroupCount := mergeGroup.ctr.hr.Hash.GroupCount()
 			vals, _, err := mergeGroup.ctr.hr.Itr.Insert(i, n, bat.Vecs)
 			if err != nil {
@@ -241,6 +242,8 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 					return false, err
 				}
 			}
+
+			mergeGroup.ctr.sanityCheck()
 		}
 	}
 
