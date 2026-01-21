@@ -29,40 +29,38 @@ typedef struct {
 
 #include "varlena.h"
 
-#define TOV64(V,T) \
-    do { \
-        i64 = (uint64_t) (*(T*)V); \
-        key = &i64; \
-        len = sizeof(i64); \
-    } while (0)
+static inline bloom_hash_t bloom_calculate_hash64(uint64_t key, uint64_t seed) {
+    bloom_hash_t h;
+    XXH128_hash_t xh1 = XXH3_128bits_withSeed(&key, sizeof(uint64_t), seed);
+    h.h1 = xh1.low64;
+    h.h2 = xh1.high64;
+    return h;
+}
 
 /*
  * Calculates a 128-bit hash (split into two 64-bit halves) for a given key and seed using XXH3.
  */
 static inline bloom_hash_t bloom_calculate_hash(const void *key, size_t len, uint64_t seed) {
-    bloom_hash_t h;
-    uint64_t i64 = 0;
 
     // force cast byte, int16, int32 into int64 so that same value share the same hash value
     switch (len) {
         case 1: // int8
-            TOV64(key, uint8_t);
-            break;
+            return bloom_calculate_hash64((int64_t)(*(int8_t*)key), seed);
         case 2: // int16
-            TOV64(key, uint16_t);
-            break;
+            return bloom_calculate_hash64((int64_t)(*(int16_t*)key), seed);
         case 4: // int32
-            TOV64(key, uint32_t);
-            break;
+            return bloom_calculate_hash64((int64_t)(*(int32_t*)key), seed);
         default:
+            {
+                bloom_hash_t h;
+                XXH128_hash_t xh1 = XXH3_128bits_withSeed(key, len, seed);
+                h.h1 = xh1.low64;
+                h.h2 = xh1.high64;
+                return h;
+            }
             break;
     }
 
-    XXH128_hash_t xh1 = XXH3_128bits_withSeed(key, len, seed);
-    XXH128_hash_t xh2 = XXH3_128bits_withSeed(key, len, seed << 32);
-    h.h1 = xh1.low64 ^ xh2.low64;
-    h.h2 = xh1.high64 ^ xh2.high64;
-    return h;
 }
 
 /*
