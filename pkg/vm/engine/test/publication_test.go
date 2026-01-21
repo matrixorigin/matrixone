@@ -1201,10 +1201,10 @@ func TestExecuteIterationWithIndex(t *testing.T) {
 		) VALUES (
 			%d, 
 			'%s', 
-			'table', 
+			'database', 
 			%d,
 			'%s', 
-			'%s', 
+			'', 
 			'%s', 
 			'{}', 
 			%d, 
@@ -1216,7 +1216,6 @@ func TestExecuteIterationWithIndex(t *testing.T) {
 		subscriptionName,
 		destAccountID,
 		srcDBName,
-		srcTableName,
 		fmt.Sprintf("%s:%d", publication.InternalSQLExecutorType, srcAccountID),
 		publication.SubscriptionStateRunning,
 		publication.IterationStateRunning,
@@ -1367,6 +1366,123 @@ func TestExecuteIterationWithIndex(t *testing.T) {
 	require.Greater(t, indexCount, int64(0), "destination table should have at least one index entry")
 
 	err = txn3.Commit(queryIndexCtx)
+	require.NoError(t, err)
+
+	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
+
+	// Step 8: Delete the upstream table
+	txnDelete, err := disttaeEngine.NewTxnOperator(srcCtxWithTimeout, disttaeEngine.Now())
+	require.NoError(t, err)
+
+	db, err := disttaeEngine.Engine.Database(srcCtxWithTimeout, srcDBName, txnDelete)
+	require.NoError(t, err)
+
+	err = db.Delete(srcCtxWithTimeout, srcTableName)
+	require.NoError(t, err)
+
+	err = txnDelete.Commit(srcCtxWithTimeout)
+	require.NoError(t, err)
+
+	// Step 9: Update mo_ccpr_log for second iteration
+	iterationLSN2 := uint64(2)
+	updateSQL := fmt.Sprintf(
+		`UPDATE mo_catalog.mo_ccpr_log 
+		SET iteration_state = %d, iteration_lsn = %d 
+		WHERE task_id = %d`,
+		publication.IterationStateRunning,
+		iterationLSN2,
+		taskID,
+	)
+
+	// Update mo_ccpr_log using system account context
+	err = exec_sql(disttaeEngine, systemCtxWithTimeout, updateSQL)
+	require.NoError(t, err)
+
+	// Step 10: Create new checkpoint channel for second iteration
+	checkpointDone2 := make(chan struct{}, 1)
+	utHelper2 := &checkpointUTHelper{
+		taeHandler:    taeHandler,
+		disttaeEngine: disttaeEngine,
+		checkpointC:   checkpointDone2,
+	}
+
+	// Step 11: Execute second iteration (iteration2)
+	err = publication.ExecuteIteration(
+		systemCtxWithTimeout,
+		cnUUID,
+		disttaeEngine.Engine,
+		disttaeEngine.GetTxnClient(),
+		taskID,
+		iterationLSN2,
+		upstreamSQLHelperFactory,
+		mp,
+		utHelper2,
+		100*time.Millisecond, // snapshotFlushInterval for test
+	)
+
+	// Signal checkpoint goroutine to stop
+	close(checkpointDone2)
+
+	// Check errors
+	require.NoError(t, err, "Second ExecuteIteration should complete successfully")
+
+	// Step 12: Verify that the second iteration state was updated
+	querySQL2 := fmt.Sprintf(
+		`SELECT iteration_state, iteration_lsn FROM mo_catalog.mo_ccpr_log WHERE task_id = %d`,
+		taskID,
+	)
+
+	querySystemCtx2 := context.WithValue(destCtxWithTimeout, defines.TenantIDKey{}, catalog.System_Account)
+	txn4, err := disttaeEngine.NewTxnOperator(querySystemCtx2, disttaeEngine.Now())
+	require.NoError(t, err)
+
+	res2, err := exec.Exec(querySystemCtx2, querySQL2, executor.Options{}.WithTxn(txn4))
+	require.NoError(t, err)
+	defer res2.Close()
+
+	// Check that iteration_state is completed for second iteration
+	var found2 bool
+	res2.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		require.Equal(t, 1, rows)
+		require.Equal(t, 2, len(cols))
+
+		state := vector.GetFixedAtWithTypeCheck[int8](cols[0], 0)
+		lsn := vector.GetFixedAtWithTypeCheck[int64](cols[1], 0)
+
+		require.Equal(t, publication.IterationStateCompleted, state)
+		require.Equal(t, int64(iterationLSN2+1), lsn)
+		found2 = true
+		return true
+	})
+	require.True(t, found2, "should find the updated iteration record for second iteration")
+
+	err = txn4.Commit(querySystemCtx2)
+	require.NoError(t, err)
+
+	// Step 13: Check that downstream table does NOT exist after iteration2
+	checkTableExistsSQL := fmt.Sprintf(
+		`SELECT COUNT(*) FROM mo_catalog.mo_tables 
+		WHERE reldatabase = '%s' AND relname = '%s'`,
+		srcDBName, srcTableName,
+	)
+	queryDestCtx2 := context.WithValue(destCtxWithTimeout, defines.TenantIDKey{}, destAccountID)
+	txn5, err := disttaeEngine.NewTxnOperator(queryDestCtx2, disttaeEngine.Now())
+	require.NoError(t, err)
+
+	tableExistsRes, err := exec.Exec(queryDestCtx2, checkTableExistsSQL, executor.Options{}.WithTxn(txn5))
+	require.NoError(t, err)
+	defer tableExistsRes.Close()
+
+	var tableCount int64
+	tableExistsRes.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		if rows > 0 && len(cols) > 0 {
+			tableCount = vector.GetFixedAtWithTypeCheck[int64](cols[0], 0)
+		}
+		return true
+	})
+	require.Equal(t, int64(0), tableCount, "destination table should not exist after iteration2 (table was deleted)")
+
+	err = txn5.Commit(queryDestCtx2)
 	require.NoError(t, err)
 
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))

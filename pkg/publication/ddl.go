@@ -704,6 +704,15 @@ func dropTable(
 		return moerr.NewInternalErrorf(ctx, "failed to get relation %s.%s: %v", dbName, tableName, err)
 	}
 
+	def := rel.GetTableDef(ctx)
+
+	for _, index := range def.Indexes {
+		err = db.Delete(ctx, index.IndexTableName)
+		if err != nil {
+			return moerr.NewInternalErrorf(ctx, "failed to drop table %s.%s: %v", dbName, index.IndexTableName, err)
+		}
+	}
+
 	if err := removeIndexTableMappings(ctx, iterationCtx, tableID, rel); err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to remove index table mappings: %v", err)
 	}
@@ -714,6 +723,7 @@ func dropTable(
 		return moerr.NewInternalErrorf(ctx, "failed to drop table %s.%s: %v", dbName, tableName, err)
 	}
 
+	delete(iterationCtx.TableIDs, TableKey{DBName: dbName, TableName: tableName})
 	return nil
 }
 
