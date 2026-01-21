@@ -192,7 +192,8 @@ func getdroppeddatabase(
 		}
 
 		// Query upstream to check if database exists
-		querySQL := PublicationSQLBuilder.QueryMoDatabasesSQL(0, iterationCtx.SrcInfo.DBName)
+		snapshotName := iterationCtx.CurrentSnapshotName
+		querySQL := PublicationSQLBuilder.QueryMoDatabasesSQL(0, iterationCtx.SrcInfo.DBName, snapshotName)
 		result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, nil, querySQL, false, true)
 		if err != nil {
 			return nil, moerr.NewInternalErrorf(ctx, "failed to query upstream database: %v", err)
@@ -225,7 +226,8 @@ func getdroppeddatabase(
 	// If account level, query all databases for the account upstream and compare with local databases
 	if iterationCtx.SrcInfo.SyncLevel == SyncLevelAccount {
 		// Query upstream databases for the account
-		querySQL := PublicationSQLBuilder.QueryMoDatabasesSQL(0, "")
+		snapshotName := iterationCtx.CurrentSnapshotName
+		querySQL := PublicationSQLBuilder.QueryMoDatabasesSQL(0, "", snapshotName)
 		result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, nil, querySQL, false, true)
 		if err != nil {
 			return nil, moerr.NewInternalErrorf(ctx, "failed to query upstream databases: %v", err)

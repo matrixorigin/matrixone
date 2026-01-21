@@ -43,7 +43,7 @@ const (
 		`datname, ` +
 		`dat_createsql, ` +
 		`account_id ` +
-		`FROM mo_catalog.mo_database ` +
+		`FROM mo_catalog.mo_database%s ` +
 		`WHERE 1=1%s`
 
 	PublicationQueryMoColumnsSqlTemplate = `SELECT ` +
@@ -457,10 +457,11 @@ func (b publicationSQLBuilder) QueryMoTablesSQL(
 }
 
 // QueryMoDatabasesSQL creates SQL for querying mo_databases
-// Supports filtering by db_name
+// Supports filtering by db_name and snapshot
 func (b publicationSQLBuilder) QueryMoDatabasesSQL(
 	accountID uint32,
 	dbName string,
+	snapshotName string,
 ) string {
 	var conditions []string
 
@@ -473,8 +474,16 @@ func (b publicationSQLBuilder) QueryMoDatabasesSQL(
 	}
 
 	whereClause := strings.Join(conditions, "")
+
+	// Add snapshot clause if provided
+	var snapshotClause string
+	if snapshotName != "" {
+		snapshotClause = fmt.Sprintf("{SNAPSHOT = '%s'}", escapeSQLString(snapshotName))
+	}
+
 	return fmt.Sprintf(
 		PublicationSQLTemplates[PublicationQueryMoDatabasesSqlTemplate_Idx].SQL,
+		snapshotClause,
 		whereClause,
 	)
 }

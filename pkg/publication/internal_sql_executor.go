@@ -19,6 +19,7 @@ import (
 	"database/sql"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -195,6 +196,16 @@ func (e *InternalSQLExecutor) ExecSQL(
 		execCtx = context.WithValue(ctx, defines.TenantIDKey{}, e.accountID)
 	}
 
+	// Handle snapshot clause in query before processing
+	// Extract snapshot, update transaction, and remove snapshot clause from query
+	query, txnOp, hasSnapshot, err := e.handleSnapshotInQuery(execCtx, query)
+	if err != nil {
+		return nil, err
+	}
+	if hasSnapshot && useTxn {
+		return nil, moerr.NewInternalError(ctx, "snapshot clause is not supported in transaction")
+	}
+
 	// Check if upstreamSQLHelper can handle this SQL
 	if e.upstreamSQLHelper != nil {
 		handled, result, err := e.upstreamSQLHelper.HandleSpecialSQL(execCtx, query)
@@ -205,11 +216,14 @@ func (e *InternalSQLExecutor) ExecSQL(
 			return result, nil
 		}
 	}
-
 	// For other statements, use internal executor with retry logic
 	opts := executor.Options{}.
 		WithDisableIncrStatement()
 
+	if hasSnapshot {
+		opts = opts.WithTxn(txnOp)
+		defer txnOp.Commit(ctx)
+	}
 	// Only use transaction if useTxn is true and txnOp is available
 	if useTxn && e.txnOp != nil {
 		opts = opts.WithTxn(e.txnOp)
@@ -217,7 +231,6 @@ func (e *InternalSQLExecutor) ExecSQL(
 
 	// Retry loop for retryable errors
 	var execResult executor.Result
-	var err error
 	var lastErr error
 	retryCount := 0
 
@@ -635,6 +648,217 @@ func extractVectorValue(vec *vector.Vector, idx uint64, dest interface{}) error 
 // Err returns any error encountered during iteration
 func (r *InternalResult) Err() error {
 	return r.err
+}
+
+// handleSnapshotInQuery handles snapshot clause in SQL query
+// If the query contains {SNAPSHOT = 'snapshot_name'}, it extracts the snapshot name,
+// queries the snapshot timestamp, updates the transaction snapshot, and removes the snapshot clause from query
+// Returns the modified query (with snapshot clause removed), the transaction operator, whether snapshot was found, and error
+func (e *InternalSQLExecutor) handleSnapshotInQuery(ctx context.Context, query string) (string, client.TxnOperator, bool, error) {
+	// Check if query contains snapshot clause
+	snapshotName, found := extractSnapshotFromSQL(query)
+	if !found || snapshotName == "" {
+		return query, e.txnOp, false, nil // No snapshot clause, return original query and current txn
+	}
+
+	// Create a separate transaction for querying snapshot if no transaction exists
+	var txnOp client.TxnOperator
+	var createdTxn bool
+	if e.txnOp == nil {
+		// Need to create a new transaction
+		if e.engine == nil {
+			return "", nil, true, moerr.NewInternalError(ctx, "engine is required to create transaction for snapshot query")
+		}
+		if e.txnClient == nil {
+			return "", nil, true, moerr.NewInternalError(ctx, "txnClient is required to create transaction for snapshot query")
+		}
+
+		// Get latest logtail applied time as snapshot timestamp
+		snapshotTS := e.engine.LatestLogtailAppliedTime()
+
+		// Create new txn operator
+		var err error
+		txnOp, err = e.txnClient.New(ctx, snapshotTS)
+		if err != nil {
+			return "", nil, true, moerr.NewInternalErrorf(ctx, "failed to create transaction for snapshot query: %v", err)
+		}
+
+		// Initialize engine with the new txn
+		if err := e.engine.New(ctx, txnOp); err != nil {
+			txnOp.Rollback(ctx)
+			return "", nil, true, moerr.NewInternalErrorf(ctx, "failed to initialize engine with transaction: %v", err)
+		}
+
+		createdTxn = true
+	} else {
+		txnOp = e.txnOp
+	}
+
+	// Query snapshot timestamp using internal executor
+	querySnapshotTsSQL := fmt.Sprintf(`SELECT ts FROM mo_catalog.mo_snapshots WHERE sname = '%s' ORDER BY snapshot_id LIMIT 1`, escapeSQLStringForSnapshot(snapshotName))
+	opts := executor.Options{}.WithDisableIncrStatement().WithTxn(txnOp)
+	result, err := e.internalExec.Exec(ctx, querySnapshotTsSQL, opts)
+	if err != nil {
+		if createdTxn {
+			txnOp.Rollback(ctx)
+		}
+		return "", nil, true, moerr.NewInternalErrorf(ctx, "failed to query snapshot %s timestamp: %v", snapshotName, err)
+	}
+	defer result.Close()
+
+	var snapshotTS int64
+	var foundTS bool
+	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		if rows > 0 && len(cols) > 0 {
+			snapshotTS = vector.GetFixedAtWithTypeCheck[int64](cols[0], 0)
+			foundTS = true
+		}
+		return true
+	})
+
+	if !foundTS {
+		if createdTxn {
+			txnOp.Rollback(ctx)
+		}
+		return "", nil, true, moerr.NewInternalErrorf(ctx, "snapshot %s not found", snapshotName)
+	}
+
+	// Update transaction snapshot
+	ts := types.BuildTS(snapshotTS, 0)
+	err = txnOp.UpdateSnapshot(ctx, ts.ToTimestamp())
+	if err != nil {
+		if createdTxn {
+			txnOp.Rollback(ctx)
+		}
+		return "", nil, true, moerr.NewInternalErrorf(ctx, "failed to update transaction snapshot: %v", err)
+	}
+
+	logutil.Info("InternalSQLExecutor: updated transaction snapshot from query",
+		zap.String("snapshot_name", snapshotName),
+		zap.Int64("snapshot_ts", snapshotTS),
+		zap.Bool("created_new_txn", createdTxn),
+	)
+
+	// Remove snapshot clause from query
+	modifiedQuery := removeSnapshotFromSQL(query)
+	return modifiedQuery, txnOp, true, nil
+}
+
+// extractSnapshotFromSQL extracts snapshot name from SQL query
+// Looks for pattern: {SNAPSHOT = 'snapshot_name'} or {SNAPSHOT = "snapshot_name"}
+// Returns (snapshotName, found)
+func extractSnapshotFromSQL(query string) (string, bool) {
+	// Convert to uppercase for case-insensitive matching
+	upperQuery := strings.ToUpper(query)
+
+	// Look for {SNAPSHOT = pattern
+	startIdx := strings.Index(upperQuery, "{SNAPSHOT =")
+	if startIdx == -1 {
+		return "", false
+	}
+
+	// Find the opening brace (should be at startIdx)
+	braceStart := startIdx
+	if query[braceStart] != '{' {
+		// Try to find the actual brace
+		braceStart = strings.LastIndex(query[:startIdx+1], "{")
+		if braceStart == -1 {
+			return "", false
+		}
+	}
+
+	// Find the closing brace
+	braceEnd := strings.Index(query[braceStart:], "}")
+	if braceEnd == -1 {
+		return "", false
+	}
+
+	// Extract the snapshot clause
+	clause := query[braceStart : braceStart+braceEnd+1]
+
+	// Extract snapshot name
+	// Pattern: {SNAPSHOT = 'name'} or {SNAPSHOT = "name"}
+	equalIdx := strings.Index(clause, "=")
+	if equalIdx == -1 {
+		return "", false
+	}
+
+	// Get the value part after =
+	valuePart := strings.TrimSpace(clause[equalIdx+1:])
+	valuePart = strings.TrimSuffix(valuePart, "}")
+	valuePart = strings.TrimSpace(valuePart)
+
+	// Remove quotes (single or double)
+	if len(valuePart) >= 2 {
+		if (valuePart[0] == '\'' && valuePart[len(valuePart)-1] == '\'') ||
+			(valuePart[0] == '"' && valuePart[len(valuePart)-1] == '"') {
+			valuePart = valuePart[1 : len(valuePart)-1]
+		}
+	}
+
+	if valuePart == "" {
+		return "", false
+	}
+
+	return valuePart, true
+}
+
+// removeSnapshotFromSQL removes snapshot clause from SQL query
+// Removes pattern: {SNAPSHOT = 'snapshot_name'} or {SNAPSHOT = "snapshot_name"}
+func removeSnapshotFromSQL(query string) string {
+	// Convert to uppercase for case-insensitive matching
+	upperQuery := strings.ToUpper(query)
+
+	// Look for {SNAPSHOT = pattern
+	startIdx := strings.Index(upperQuery, "{SNAPSHOT =")
+	if startIdx == -1 {
+		return query // No snapshot clause found
+	}
+
+	// Find the opening brace
+	braceStart := startIdx
+	if query[braceStart] != '{' {
+		braceStart = strings.LastIndex(query[:startIdx+1], "{")
+		if braceStart == -1 {
+			return query
+		}
+	}
+
+	// Find the closing brace
+	braceEnd := strings.Index(query[braceStart:], "}")
+	if braceEnd == -1 {
+		return query // Malformed, return original
+	}
+
+	// Remove the snapshot clause
+	before := query[:braceStart]
+	after := query[braceStart+braceEnd+1:]
+
+	// Trim trailing spaces from before and leading spaces from after
+	beforeTrimmed := strings.TrimRight(before, " \t\n\r")
+	afterTrimmed := strings.TrimLeft(after, " \t\n\r")
+
+	// Check if we need to add a space between before and after
+	// If both before and after end/start with non-whitespace characters, add a space
+	if len(beforeTrimmed) > 0 && len(afterTrimmed) > 0 {
+		lastChar := beforeTrimmed[len(beforeTrimmed)-1]
+		firstChar := afterTrimmed[0]
+		// If both are non-whitespace characters, we need a space
+		if lastChar != ' ' && firstChar != ' ' {
+			return beforeTrimmed + " " + afterTrimmed
+		}
+	}
+
+	return beforeTrimmed + afterTrimmed
+}
+
+// escapeSQLStringForSnapshot escapes SQL string for use in snapshot name queries
+func escapeSQLStringForSnapshot(s string) string {
+	// Replace backslash first (before replacing quotes) to avoid double-escaping
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	// Replace single quotes with double single quotes (SQL standard escaping)
+	s = strings.ReplaceAll(s, "'", "''")
+	return s
 }
 
 // Ensure InternalSQLExecutor implements SQLExecutor interface
