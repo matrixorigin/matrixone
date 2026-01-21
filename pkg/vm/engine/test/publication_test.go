@@ -17,6 +17,7 @@ package test
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -3631,11 +3632,11 @@ func TestCCPRErrorHandling1(t *testing.T) {
 	require.NoError(t, err)
 
 	rmFn()
-	// Step 6: Update mo_ccpr_log for second iteration
+	// Step 6: Update mo_ccpr_log for second iteration (retryable error)
 	iterationLSN2 := uint64(1)
-	updateSQL := fmt.Sprintf(
+	updateSQL2 := fmt.Sprintf(
 		`UPDATE mo_catalog.mo_ccpr_log 
-		SET iteration_state = %d, iteration_lsn = %d
+		SET iteration_state = %d, iteration_lsn = %d, error_message = ''
 		WHERE task_id = %d`,
 		publication.IterationStateRunning,
 		iterationLSN2,
@@ -3643,11 +3644,14 @@ func TestCCPRErrorHandling1(t *testing.T) {
 	)
 
 	// Update mo_ccpr_log using system account context
-	err = exec_sql(disttaeEngine, systemCtx, updateSQL)
+	err = exec_sql(disttaeEngine, systemCtx, updateSQL2)
 	require.NoError(t, err)
 
-	// Step 6: Execute second ExecuteIteration with retryable error message
-	// It should succeed because the error is retryable
+	// Inject retryable error for second iteration
+	rmFn2, err := objectio.InjectPublicationSnapshotFinished("ut injection: commit failed retryable")
+	require.NoError(t, err)
+
+	// Execute second ExecuteIteration - should fail due to injection, but error is retryable
 	checkpointDone2 := make(chan struct{}, 1)
 	utHelper2 := &checkpointUTHelper{
 		taeHandler:    taeHandler,
@@ -3671,26 +3675,216 @@ func TestCCPRErrorHandling1(t *testing.T) {
 	// Signal checkpoint goroutine to stop
 	close(checkpointDone2)
 
-	// Check errors - should succeed because retryable error should be handled
-	require.NoError(t, err, "Second ExecuteIteration should complete successfully with retryable error")
+	// Second iteration should fail but error is retryable
+	require.NoError(t, err, "Second ExecuteIteration should fail due to injection")
 
-	// Step 7: Verify that the iteration state was updated
-	querySQL := fmt.Sprintf(
+	// Verify second iteration error message
+	querySQL2 := fmt.Sprintf(
+		`SELECT iteration_lsn, state, iteration_state, error_message 
+		FROM mo_catalog.mo_ccpr_log WHERE task_id = %d`,
+		taskID,
+	)
+
+	txn2, err := disttaeEngine.NewTxnOperator(querySystemCtx, disttaeEngine.Now())
+	require.NoError(t, err)
+
+	res2, err := exec.Exec(querySystemCtx, querySQL2, executor.Options{}.WithTxn(txn2))
+	require.NoError(t, err)
+	defer res2.Close()
+
+	var found2 bool
+	var iterationLSNFromDB2 uint64
+	var stateFromDB2 int8
+	var iterationStateFromDB2 int8
+	var errorMessageFromDB2 string
+	res2.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		require.Equal(t, 1, rows)
+		require.Equal(t, 4, len(cols))
+
+		iterationLSNFromDB2 = uint64(vector.GetFixedAtWithTypeCheck[int64](cols[0], 0))
+		stateFromDB2 = vector.GetFixedAtWithTypeCheck[int8](cols[1], 0)
+		iterationStateFromDB2 = vector.GetFixedAtWithTypeCheck[int8](cols[2], 0)
+		errorMessageFromDB2 = cols[3].GetStringAt(0)
+
+		found2 = true
+		return true
+	})
+	require.True(t, found2, "should find the iteration record after second iteration")
+
+	// Verify lsn should still be iterationLSN2 (no increment on retryable error)
+	require.Equal(t, iterationLSN2, iterationLSNFromDB2, "iteration_lsn should remain the same after retryable error")
+
+	// Verify state should still be running (retryable error doesn't change subscription state)
+	require.Equal(t, publication.SubscriptionStateRunning, stateFromDB2, "state should be running after retryable error")
+
+	// Verify iteration_state should be completed (retryable error sets state to completed)
+	require.Equal(t, publication.IterationStateCompleted, iterationStateFromDB2, "iteration_state should be completed after retryable error")
+
+	// Verify error_message should contain retryable error format
+	require.NotEmpty(t, errorMessageFromDB2, "error_message should not be empty after retryable error")
+	require.Contains(t, errorMessageFromDB2, "ut injection: commit failed retryable", "error_message should contain injection message")
+
+	err = txn2.Commit(querySystemCtx)
+	require.NoError(t, err)
+
+	rmFn2()
+	// Step 7: Update mo_ccpr_log for third iteration (non-retryable error)
+	iterationLSN3 := uint64(2)
+	updateSQL3 := fmt.Sprintf(
+		`UPDATE mo_catalog.mo_ccpr_log 
+		SET iteration_state = %d, iteration_lsn = %d, error_message = ''
+		WHERE task_id = %d`,
+		publication.IterationStateRunning,
+		iterationLSN3,
+		taskID,
+	)
+
+	// Update mo_ccpr_log using system account context
+	err = exec_sql(disttaeEngine, systemCtx, updateSQL3)
+	require.NoError(t, err)
+
+	// Inject non-retryable error for third iteration (message without "retryable" keyword)
+	rmFn3, err := objectio.InjectPublicationSnapshotFinished("ut injection: commit failed")
+	require.NoError(t, err)
+
+	// Execute third ExecuteIteration - should fail with non-retryable error
+	checkpointDone3 := make(chan struct{}, 1)
+	utHelper3 := &checkpointUTHelper{
+		taeHandler:    taeHandler,
+		disttaeEngine: disttaeEngine,
+		checkpointC:   checkpointDone3,
+	}
+
+	err = publication.ExecuteIteration(
+		srcCtxWithTimeout,
+		cnUUID,
+		disttaeEngine.Engine,
+		disttaeEngine.GetTxnClient(),
+		taskID,
+		iterationLSN3,
+		upstreamSQLHelperFactory,
+		mp,
+		utHelper3,
+		100*time.Millisecond, // snapshotFlushInterval for test
+	)
+
+	// Signal checkpoint goroutine to stop
+	close(checkpointDone3)
+
+	// Third iteration should fail with non-retryable error
+	require.NoError(t, err, "Third ExecuteIteration should fail due to injection")
+
+	// Verify third iteration error message and state
+	querySQL3 := fmt.Sprintf(
+		`SELECT iteration_lsn, state, iteration_state, error_message 
+		FROM mo_catalog.mo_ccpr_log WHERE task_id = %d`,
+		taskID,
+	)
+
+	txn3, err := disttaeEngine.NewTxnOperator(querySystemCtx, disttaeEngine.Now())
+	require.NoError(t, err)
+
+	res3, err := exec.Exec(querySystemCtx, querySQL3, executor.Options{}.WithTxn(txn3))
+	require.NoError(t, err)
+	defer res3.Close()
+
+	var found3 bool
+	var iterationLSNFromDB3 uint64
+	var stateFromDB3 int8
+	var iterationStateFromDB3 int8
+	var errorMessageFromDB3 string
+	res3.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		require.Equal(t, 1, rows)
+		require.Equal(t, 4, len(cols))
+
+		iterationLSNFromDB3 = uint64(vector.GetFixedAtWithTypeCheck[int64](cols[0], 0))
+		stateFromDB3 = vector.GetFixedAtWithTypeCheck[int8](cols[1], 0)
+		iterationStateFromDB3 = vector.GetFixedAtWithTypeCheck[int8](cols[2], 0)
+		errorMessageFromDB3 = cols[3].GetStringAt(0)
+
+		found3 = true
+		return true
+	})
+	require.True(t, found3, "should find the iteration record after third iteration")
+
+	// Verify lsn should still be iterationLSN3 (no increment on non-retryable error)
+	require.Equal(t, iterationLSN3, iterationLSNFromDB3, "iteration_lsn should remain the same after non-retryable error")
+
+	// Verify state should be error (non-retryable error changes subscription state to error)
+	require.Equal(t, publication.SubscriptionStateError, stateFromDB3, "state should be error after non-retryable error")
+
+	// Verify iteration_state should be error (non-retryable error sets state to error)
+	require.Equal(t, publication.IterationStateError, iterationStateFromDB3, "iteration_state should be error after non-retryable error")
+
+	// Verify error_message should contain non-retryable error format (starts with "N:")
+	require.NotEmpty(t, errorMessageFromDB3, "error_message should not be empty after non-retryable error")
+	require.Contains(t, errorMessageFromDB3, "ut injection: commit failed", "error_message should contain injection message")
+	require.True(t, strings.HasPrefix(errorMessageFromDB3, "N:"), "error_message should start with 'N:' for non-retryable error")
+
+	err = txn3.Commit(querySystemCtx)
+	require.NoError(t, err)
+
+	rmFn3()
+	// Step 8: Reset mo_ccpr_log table and manually write a retryable error, then execute normal iteration
+	// Reset the table
+	resetSQL := fmt.Sprintf(
+		`UPDATE mo_catalog.mo_ccpr_log 
+		SET state = %d, iteration_state = %d, iteration_lsn = %d, error_message = 'R:1:%d:%d:ut injection: commit failed retryable'
+		WHERE task_id = %d`,
+		publication.SubscriptionStateRunning,
+		publication.IterationStateRunning,
+		iterationLSN3,
+		time.Now().Unix(),
+		time.Now().Unix(),
+		taskID,
+	)
+
+	err = exec_sql(disttaeEngine, systemCtx, resetSQL)
+	require.NoError(t, err)
+
+	// Execute fourth ExecuteIteration - should succeed normally (no injection)
+	iterationLSN4 := iterationLSN3
+	checkpointDone4 := make(chan struct{}, 1)
+	utHelper4 := &checkpointUTHelper{
+		taeHandler:    taeHandler,
+		disttaeEngine: disttaeEngine,
+		checkpointC:   checkpointDone4,
+	}
+
+	err = publication.ExecuteIteration(
+		srcCtxWithTimeout,
+		cnUUID,
+		disttaeEngine.Engine,
+		disttaeEngine.GetTxnClient(),
+		taskID,
+		iterationLSN4,
+		upstreamSQLHelperFactory,
+		mp,
+		utHelper4,
+		100*time.Millisecond, // snapshotFlushInterval for test
+	)
+
+	// Signal checkpoint goroutine to stop
+	close(checkpointDone4)
+
+	// Fourth iteration should succeed
+	require.NoError(t, err, "Fourth ExecuteIteration should complete successfully")
+
+	// Verify fourth iteration state
+	querySQL4 := fmt.Sprintf(
 		`SELECT iteration_state, iteration_lsn FROM mo_catalog.mo_ccpr_log WHERE task_id = %d`,
 		taskID,
 	)
 
-	querySystemCtx2 := context.WithValue(destCtxWithTimeout, defines.TenantIDKey{}, catalog.System_Account)
-	txn2, err := disttaeEngine.NewTxnOperator(querySystemCtx2, disttaeEngine.Now())
+	txn4, err := disttaeEngine.NewTxnOperator(querySystemCtx, disttaeEngine.Now())
 	require.NoError(t, err)
 
-	res, err := exec.Exec(querySystemCtx2, querySQL, executor.Options{}.WithTxn(txn2))
+	res4, err := exec.Exec(querySystemCtx, querySQL4, executor.Options{}.WithTxn(txn4))
 	require.NoError(t, err)
-	defer res.Close()
+	defer res4.Close()
 
-	// Check that iteration_state is completed
-	var found bool
-	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+	var found4 bool
+	res4.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		require.Equal(t, 1, rows)
 		require.Equal(t, 2, len(cols))
 
@@ -3698,37 +3892,106 @@ func TestCCPRErrorHandling1(t *testing.T) {
 		lsn := vector.GetFixedAtWithTypeCheck[int64](cols[1], 0)
 
 		require.Equal(t, publication.IterationStateCompleted, state)
-		require.Equal(t, int64(iterationLSN2+1), lsn)
-		found = true
+		require.Equal(t, int64(iterationLSN4+1), lsn)
+		found4 = true
 		return true
 	})
-	require.True(t, found, "should find the updated iteration record")
+	require.True(t, found4, "should find the updated iteration record")
 
-	err = txn2.Commit(querySystemCtx2)
+	err = txn4.Commit(querySystemCtx)
 	require.NoError(t, err)
 
-	// Step 8: Check destination table row count
-	// The destination table should have 10 rows (same as source table)
-	checkRowCountSQL := fmt.Sprintf(`SELECT COUNT(*) FROM %s.%s`, srcDBName, srcTableName)
-	queryDestCtx := context.WithValue(destCtxWithTimeout, defines.TenantIDKey{}, destAccountID)
-	txn, err = disttaeEngine.NewTxnOperator(queryDestCtx, disttaeEngine.Now())
+	// Step 9: Inject error in sql executor for fifth iteration
+	iterationLSN5 := iterationLSN4 + 1
+	updateSQL5 := fmt.Sprintf(
+		`UPDATE mo_catalog.mo_ccpr_log 
+		SET iteration_state = %d, iteration_lsn = %d, error_message = ''
+		WHERE task_id = %d`,
+		publication.IterationStateRunning,
+		iterationLSN5,
+		taskID,
+	)
+
+	err = exec_sql(disttaeEngine, systemCtx, updateSQL5)
 	require.NoError(t, err)
 
-	rowCountRes, err := exec.Exec(queryDestCtx, checkRowCountSQL, executor.Options{}.WithTxn(txn))
+	// Inject error in sql executor
+	rmFn5, err := objectio.InjectCDCExecutor("ut injection: sql executor error")
 	require.NoError(t, err)
-	defer rowCountRes.Close()
 
-	var rowCount int64
-	rowCountRes.ReadRows(func(rows int, cols []*vector.Vector) bool {
+	// Execute fifth ExecuteIteration - should fail due to sql executor injection
+	checkpointDone5 := make(chan struct{}, 1)
+	utHelper5 := &checkpointUTHelper{
+		taeHandler:    taeHandler,
+		disttaeEngine: disttaeEngine,
+		checkpointC:   checkpointDone5,
+	}
+
+	err = publication.ExecuteIteration(
+		srcCtxWithTimeout,
+		cnUUID,
+		disttaeEngine.Engine,
+		disttaeEngine.GetTxnClient(),
+		taskID,
+		iterationLSN5,
+		upstreamSQLHelperFactory,
+		mp,
+		utHelper5,
+		100*time.Millisecond, // snapshotFlushInterval for test
+	)
+
+	// Signal checkpoint goroutine to stop
+	close(checkpointDone5)
+
+	// Fifth iteration should fail due to sql executor injection
+	require.NoError(t, err, "Fifth ExecuteIteration should fail due to sql executor injection")
+
+	// Verify fifth iteration error message
+	querySQL5 := fmt.Sprintf(
+		`SELECT iteration_lsn, state, iteration_state, error_message 
+		FROM mo_catalog.mo_ccpr_log WHERE task_id = %d`,
+		taskID,
+	)
+
+	txn5, err := disttaeEngine.NewTxnOperator(querySystemCtx, disttaeEngine.Now())
+	require.NoError(t, err)
+
+	res5, err := exec.Exec(querySystemCtx, querySQL5, executor.Options{}.WithTxn(txn5))
+	require.NoError(t, err)
+	defer res5.Close()
+
+	var found5 bool
+	var iterationLSNFromDB5 uint64
+	var stateFromDB5 int8
+	var iterationStateFromDB5 int8
+	var errorMessageFromDB5 string
+	res5.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		require.Equal(t, 1, rows)
-		require.Equal(t, 1, len(cols))
-		rowCount = vector.GetFixedAtWithTypeCheck[int64](cols[0], 0)
+		require.Equal(t, 4, len(cols))
+
+		iterationLSNFromDB5 = uint64(vector.GetFixedAtWithTypeCheck[int64](cols[0], 0))
+		stateFromDB5 = vector.GetFixedAtWithTypeCheck[int8](cols[1], 0)
+		iterationStateFromDB5 = vector.GetFixedAtWithTypeCheck[int8](cols[2], 0)
+		errorMessageFromDB5 = cols[3].GetStringAt(0)
+
+		found5 = true
 		return true
 	})
-	require.Equal(t, int64(10), rowCount, "destination table should have 10 rows after iteration")
+	require.True(t, found5, "should find the iteration record after fifth iteration")
 
-	err = txn.Commit(queryDestCtx)
+	// Verify error was recorded
+	require.NotEmpty(t, errorMessageFromDB5, "error_message should not be empty after sql executor injection")
+	require.Contains(t, errorMessageFromDB5, "ut injection: sql executor error", "error_message should contain injection message")
+
+	// Verify iteration state and LSN
+	require.Equal(t, iterationLSN5, iterationLSNFromDB5, "iteration_lsn should remain the same after sql executor injection")
+	require.Equal(t, publication.IterationStateCompleted, iterationStateFromDB5, "iteration_state should be completed after sql executor injection")
+	require.Equal(t, publication.SubscriptionStateRunning, stateFromDB5, "state should still be running after sql executor injection")
+
+	err = txn5.Commit(querySystemCtx)
 	require.NoError(t, err)
+
+	rmFn5()
 }
 
 func TestCCPRDDLAccountLevel(t *testing.T) {
