@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -54,6 +55,22 @@ type UpstreamSQLHelperFactory func(
 	txnClient client.TxnClient, // Optional: if nil, helper will try to get from engine
 ) UpstreamSQLHelper
 
+// SQLExecutorRetryOption configures retry behavior for SQL executor operations
+type SQLExecutorRetryOption struct {
+	MaxRetries    int             // Maximum number of retries for retryable errors
+	RetryInterval time.Duration   // Interval between retries
+	Classifier    ErrorClassifier // Error classifier for retry logic
+}
+
+// DefaultSQLExecutorRetryOption returns default retry options for SQL executor
+func DefaultSQLExecutorRetryOption() *SQLExecutorRetryOption {
+	return &SQLExecutorRetryOption{
+		MaxRetries:    10,          // Default max retries
+		RetryInterval: time.Second, // Default retry interval
+		Classifier:    nil,         // No default classifier
+	}
+}
+
 // InternalSQLExecutor implements SQLExecutor interface using MatrixOne's internal SQL executor
 // It supports retry for RC mode transaction errors (txn need retry errors)
 // If upstreamSQLHelper is provided, special statements (CREATE/DROP SNAPSHOT, OBJECTLIST, GET OBJECT)
@@ -64,11 +81,9 @@ type InternalSQLExecutor struct {
 	txnOp             client.TxnOperator
 	txnClient         client.TxnClient
 	engine            engine.Engine
-	accountID         uint32            // Account ID for tenant context
-	upstreamSQLHelper UpstreamSQLHelper // Optional helper for special SQL statements
-	maxRetries        int               // Maximum number of retries for retryable errors
-	retryInterval     time.Duration     // Interval between retries
-	classifier        ErrorClassifier   // Error classifier for retry logic
+	accountID         uint32                  // Account ID for tenant context
+	upstreamSQLHelper UpstreamSQLHelper       // Optional helper for special SQL statements
+	retryOpt          *SQLExecutorRetryOption // Retry configuration
 }
 
 // SetUpstreamSQLHelper sets the upstream SQL helper
@@ -90,14 +105,14 @@ func (e *InternalSQLExecutor) GetTxnClient() client.TxnClient {
 // txnClient is optional - if provided, transactions can be created via SetTxn
 // engine is required for registering transactions with the engine
 // accountID is the tenant account ID to use when executing SQL
-// classifier is the error classifier to use for retry logic
+// retryOpt is optional - if nil, default retry options will be used
 // upstreamSQLHelper is optional - if provided, special SQL statements will be handled by it
 func NewInternalSQLExecutor(
 	cnUUID string,
 	txnClient client.TxnClient,
 	engine engine.Engine,
 	accountID uint32,
-	classifier ErrorClassifier,
+	retryOpt *SQLExecutorRetryOption,
 ) (*InternalSQLExecutor, error) {
 	v, ok := moruntime.ServiceRuntime(cnUUID).GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {
@@ -109,15 +124,17 @@ func NewInternalSQLExecutor(
 		return nil, moerr.NewInternalErrorNoCtx("invalid internal SQL executor type")
 	}
 
+	if retryOpt == nil {
+		retryOpt = DefaultSQLExecutorRetryOption()
+	}
+
 	return &InternalSQLExecutor{
-		cnUUID:        cnUUID,
-		internalExec:  internalExec,
-		txnClient:     txnClient,
-		engine:        engine,
-		accountID:     accountID,
-		maxRetries:    5,                     // Default max retries
-		retryInterval: 10 * time.Millisecond, // Default retry interval
-		classifier:    classifier,
+		cnUUID:       cnUUID,
+		internalExec: internalExec,
+		txnClient:    txnClient,
+		engine:       engine,
+		accountID:    accountID,
+		retryOpt:     retryOpt,
 	}, nil
 }
 
@@ -229,79 +246,83 @@ func (e *InternalSQLExecutor) ExecSQL(
 		opts = opts.WithTxn(e.txnOp)
 	}
 
-	// Retry loop for retryable errors
+	// Use policy.Do for retry logic
 	var execResult executor.Result
 	var lastErr error
-	retryCount := 0
+	var attemptCount int
 
-	for retryCount <= e.maxRetries {
-		execResult, err = e.internalExec.Exec(execCtx, query, opts)
-		if err == nil {
-			// Success, return result
-			if retryCount > 0 {
-				logutil.Info("internal sql executor retry succeeded",
-					zap.String("query", truncateSQL(query)),
-					zap.Int("retryCount", retryCount),
-				)
+	// Create a custom backoff that handles defChanged special case
+	backoff := &defChangedBackoff{
+		baseInterval: e.retryOpt.RetryInterval,
+		getLastErr:   func() error { return lastErr },
+		getAttempt:   func() int { return attemptCount },
+	}
+
+	policy := Policy{
+		MaxAttempts: e.retryOpt.MaxRetries + 1, // +1 because first attempt is not a retry
+		Backoff:     backoff,
+		Classifier:  e.retryOpt.Classifier,
+	}
+
+	err = policy.Do(ctx, func() error {
+		attemptCount++
+
+		// Check for cancellation before each attempt
+		if ar != nil {
+			select {
+			case <-ar.Pause:
+				return moerr.NewInternalError(ctx, "task paused")
+			case <-ar.Cancel:
+				return moerr.NewInternalError(ctx, "task cancelled")
+			default:
 			}
-			return convertExecutorResult(execResult), nil
 		}
 
-		// Check if error is retryable using the provided classifier
-		if e.classifier == nil || !e.classifier.IsRetryable(err) {
-			// Not retryable, return error immediately
-			return nil, err
+		if msg, injected := objectio.PublicationSnapshotFinishedInjected(); injected && msg == "ut injection: sql fail" {
+			return moerr.NewInternalErrorNoCtx(msg)
+		}
+		execResult, err = e.internalExec.Exec(execCtx, query, opts)
+		if err == nil {
+			// Success
+			if attemptCount > 1 {
+				logutil.Info("internal sql executor retry succeeded",
+					zap.String("query", truncateSQL(query)),
+					zap.Int("retryCount", attemptCount-1),
+				)
+			}
+			return nil
 		}
 
 		lastErr = err
-		retryCount++
+		defChanged := moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)
 
 		// Log retry attempt
-		defChanged := moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)
 		logutil.Warn("internal sql executor retry attempt",
 			zap.String("query", truncateSQL(query)),
-			zap.Int("retryCount", retryCount),
-			zap.Int("maxRetries", e.maxRetries),
+			zap.Int("retryCount", attemptCount-1),
+			zap.Int("maxRetries", e.retryOpt.MaxRetries),
 			zap.Bool("defChanged", defChanged),
 			zap.Error(err),
 		)
 
-		// If defChanged, wait a bit longer for DDL to complete
-		if defChanged && retryCount == 1 {
-			// First retry after defChanged, wait a bit longer
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-time.After(e.retryInterval * 2):
-			}
-		} else {
-			// Regular retry interval
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-time.After(e.retryInterval):
-			}
-		}
+		return err
+	})
 
-		// Check for cancellation before retry
-		if ar != nil {
-			select {
-			case <-ar.Pause:
-				return nil, moerr.NewInternalError(ctx, "task paused")
-			case <-ar.Cancel:
-				return nil, moerr.NewInternalError(ctx, "task cancelled")
-			default:
-			}
-		}
+	if err == nil {
+		return convertExecutorResult(execResult), nil
 	}
 
-	// Max retries exceeded
-	logutil.Error("internal sql executor max retries exceeded",
-		zap.String("query", truncateSQL(query)),
-		zap.Int("retryCount", retryCount),
-		zap.Error(lastErr),
-	)
-	return nil, lastErr
+	// Max retries exceeded or non-retryable error
+	if lastErr != nil {
+		logutil.Error("internal sql executor max retries exceeded",
+			zap.String("query", truncateSQL(query)),
+			zap.Int("retryCount", attemptCount-1),
+			zap.Error(lastErr),
+		)
+		return nil, lastErr
+	}
+
+	return nil, err
 }
 
 // truncateSQL truncates SQL string for logging
@@ -863,3 +884,31 @@ func escapeSQLStringForSnapshot(s string) string {
 
 // Ensure InternalSQLExecutor implements SQLExecutor interface
 var _ SQLExecutor = (*InternalSQLExecutor)(nil)
+
+// defChangedBackoff is a custom backoff strategy that handles defChanged special case
+// It waits 2x the base interval on the first retry if the error is defChanged
+type defChangedBackoff struct {
+	baseInterval time.Duration
+	getLastErr   func() error
+	getAttempt   func() int
+}
+
+// Next implements BackoffStrategy
+func (b *defChangedBackoff) Next(attempt int) time.Duration {
+	if attempt < 1 {
+		attempt = 1
+	}
+
+	// Get the last error to check if it's defChanged
+	lastErr := b.getLastErr()
+	if lastErr != nil {
+		defChanged := moerr.IsMoErrCode(lastErr, moerr.ErrTxnNeedRetryWithDefChanged)
+		// First retry after defChanged, wait a bit longer
+		if defChanged && attempt == 1 {
+			return b.baseInterval * 2
+		}
+	}
+
+	// Regular retry interval
+	return b.baseInterval
+}

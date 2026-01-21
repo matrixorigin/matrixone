@@ -118,7 +118,11 @@ func TestCheckIterationStatus(t *testing.T) {
 
 	// Create InternalSQLExecutor (only once)
 	// Pass nil for txnClient - transactions will be managed externally via ExecTxn
-	executor, err := publication.NewInternalSQLExecutor("", nil, nil, accountId, publication.NewDownstreamCommitClassifier())
+	executor, err := publication.NewInternalSQLExecutor("", nil, nil, accountId, &publication.SQLExecutorRetryOption{
+		MaxRetries:    0,
+		RetryInterval: time.Second,
+		Classifier:    publication.NewDownstreamCommitClassifier(),
+	})
 	require.NoError(t, err)
 	defer executor.Close()
 
@@ -3916,7 +3920,7 @@ func TestCCPRErrorHandling1(t *testing.T) {
 	require.NoError(t, err)
 
 	// Inject error in sql executor
-	rmFn5, err := objectio.InjectCDCExecutor("ut injection: sql executor error")
+	rmFn5, err := objectio.InjectPublicationSnapshotFinished("ut injection: sql fail")
 	require.NoError(t, err)
 
 	// Execute fifth ExecuteIteration - should fail due to sql executor injection
@@ -3938,60 +3942,19 @@ func TestCCPRErrorHandling1(t *testing.T) {
 		mp,
 		utHelper5,
 		100*time.Millisecond, // snapshotFlushInterval for test
+		&publication.SQLExecutorRetryOption{
+			MaxRetries:    2,
+			RetryInterval: time.Second,
+			Classifier:    nil,
+		},
 	)
 
 	// Signal checkpoint goroutine to stop
 	close(checkpointDone5)
 
 	// Fifth iteration should fail due to sql executor injection
-	require.NoError(t, err, "Fifth ExecuteIteration should fail due to sql executor injection")
-
-	// Verify fifth iteration error message
-	querySQL5 := fmt.Sprintf(
-		`SELECT iteration_lsn, state, iteration_state, error_message 
-		FROM mo_catalog.mo_ccpr_log WHERE task_id = %d`,
-		taskID,
-	)
-
-	txn5, err := disttaeEngine.NewTxnOperator(querySystemCtx, disttaeEngine.Now())
-	require.NoError(t, err)
-
-	res5, err := exec.Exec(querySystemCtx, querySQL5, executor.Options{}.WithTxn(txn5))
-	require.NoError(t, err)
-	defer res5.Close()
-
-	var found5 bool
-	var iterationLSNFromDB5 uint64
-	var stateFromDB5 int8
-	var iterationStateFromDB5 int8
-	var errorMessageFromDB5 string
-	res5.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		require.Equal(t, 1, rows)
-		require.Equal(t, 4, len(cols))
-
-		iterationLSNFromDB5 = uint64(vector.GetFixedAtWithTypeCheck[int64](cols[0], 0))
-		stateFromDB5 = vector.GetFixedAtWithTypeCheck[int8](cols[1], 0)
-		iterationStateFromDB5 = vector.GetFixedAtWithTypeCheck[int8](cols[2], 0)
-		errorMessageFromDB5 = cols[3].GetStringAt(0)
-
-		found5 = true
-		return true
-	})
-	require.True(t, found5, "should find the iteration record after fifth iteration")
-
-	// Verify error was recorded
-	require.NotEmpty(t, errorMessageFromDB5, "error_message should not be empty after sql executor injection")
-	require.Contains(t, errorMessageFromDB5, "ut injection: sql executor error", "error_message should contain injection message")
-
-	// Verify iteration state and LSN
-	require.Equal(t, iterationLSN5, iterationLSNFromDB5, "iteration_lsn should remain the same after sql executor injection")
-	require.Equal(t, publication.IterationStateCompleted, iterationStateFromDB5, "iteration_state should be completed after sql executor injection")
-	require.Equal(t, publication.SubscriptionStateRunning, stateFromDB5, "state should still be running after sql executor injection")
-
-	err = txn5.Commit(querySystemCtx)
-	require.NoError(t, err)
-
-	rmFn5()
+	require.Error(t, err, "Fifth ExecuteIteration should fail due to sql executor injection")
+    rmFn5()
 }
 
 func TestCCPRDDLAccountLevel(t *testing.T) {

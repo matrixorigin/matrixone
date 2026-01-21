@@ -50,9 +50,7 @@ var CheckLeaseWithRetry = func(
 			ok, err = checkLease(ctx, cnUUID, txnEngine, cnTxnClient)
 			return err
 		},
-		DefaultRetryTimes,
-		DefaultRetryInterval,
-		DefaultRetryDuration,
+		DefaultExecutorRetryOption(),
 	)
 	return
 }

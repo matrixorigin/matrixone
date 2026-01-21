@@ -97,6 +97,7 @@ func (iterCtx *IterationContext) String() string {
 // and sets up the local executor to use that transaction.
 // iterationLSN is passed in as a parameter.
 // ActiveAObj and TableIDs are read from the context JSON field.
+// sqlExecutorRetryOpt: retry options for SQL executor operations (nil to use default)
 func InitializeIterationContext(
 	ctx context.Context,
 	cnUUID string,
@@ -105,6 +106,7 @@ func InitializeIterationContext(
 	taskID uint64,
 	iterationLSN uint64,
 	upstreamSQLHelperFactory UpstreamSQLHelperFactory,
+	sqlExecutorRetryOpt *SQLExecutorRetryOption,
 ) (*IterationContext, error) {
 	if cnTxnClient == nil {
 		return nil, moerr.NewInternalError(ctx, "txn client is nil")
@@ -131,7 +133,17 @@ func InitializeIterationContext(
 	// Create local executor first (without transaction) to query mo_ccpr_log
 	// mo_ccpr_log is a system table, so we must use system account
 	// Local executor doesn't need upstream SQL helper (no special SQL statements)
-	localExecutorInternal, err := NewInternalSQLExecutor(cnUUID, nil, nil, catalog.System_Account, NewDownstreamConnectionClassifier())
+	localRetryOpt := sqlExecutorRetryOpt
+	if localRetryOpt == nil {
+		localRetryOpt = DefaultSQLExecutorRetryOption()
+	}
+	// Override classifier for local executor
+	localRetryOpt = &SQLExecutorRetryOption{
+		MaxRetries:    localRetryOpt.MaxRetries,
+		RetryInterval: localRetryOpt.RetryInterval,
+	}
+	localRetryOpt.Classifier = NewDownstreamConnectionClassifier()
+	localExecutorInternal, err := NewInternalSQLExecutor(cnUUID, nil, nil, catalog.System_Account, localRetryOpt)
 	if err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "failed to create local executor: %v", err)
 	}
@@ -226,7 +238,17 @@ func InitializeIterationContext(
 		}
 
 		// Create upstream executor with account ID
-		upstreamExecutorInternal, err := NewInternalSQLExecutor(cnUUID, cnTxnClient, cnEngine, upstreamAccountID, NewUpstreamConnectionClassifier())
+		upstreamRetryOpt := sqlExecutorRetryOpt
+		if upstreamRetryOpt == nil {
+			upstreamRetryOpt = DefaultSQLExecutorRetryOption()
+		}
+		// Override classifier for upstream executor
+		upstreamRetryOpt = &SQLExecutorRetryOption{
+			MaxRetries:    upstreamRetryOpt.MaxRetries,
+			RetryInterval: upstreamRetryOpt.RetryInterval,
+		}
+		upstreamRetryOpt.Classifier = NewUpstreamConnectionClassifier()
+		upstreamExecutorInternal, err := NewInternalSQLExecutor(cnUUID, cnTxnClient, cnEngine, upstreamAccountID, upstreamRetryOpt)
 		if err != nil {
 			return nil, moerr.NewInternalErrorf(ctx, "failed to create upstream executor: %v", err)
 		}
@@ -1091,6 +1113,8 @@ func updateObjectStatsFlags(stats *objectio.ObjectStats, isTombstone bool, hasFa
 // ExecuteIteration executes a complete iteration according to the design document
 // It follows the sequence: initialization -> DDL -> snapshot diff -> object processing -> cleanup -> update system table
 // snapshotFlushInterval: interval between retries when waiting for snapshot to be flushed (default: 1min if 0)
+// executorRetryOpt: retry options for executor operations (nil to use default)
+// sqlExecutorRetryOpt: retry options for SQL executor operations (nil to use default)
 func ExecuteIteration(
 	ctx context.Context,
 	cnUUID string,
@@ -1102,8 +1126,13 @@ func ExecuteIteration(
 	mp *mpool.MPool,
 	utHelper UTHelper,
 	snapshotFlushInterval time.Duration,
+	sqlExecutorRetryOpts ...*SQLExecutorRetryOption,
 ) (err error) {
 	var iterationCtx *IterationContext
+	var sqlExecutorRetryOpt *SQLExecutorRetryOption
+	if len(sqlExecutorRetryOpts) > 0 {
+		sqlExecutorRetryOpt = sqlExecutorRetryOpts[0]
+	}
 
 	// Check if account ID exists in context and is not 0
 	if v := ctx.Value(defines.TenantIDKey{}); v != nil {
@@ -1112,7 +1141,7 @@ func ExecuteIteration(
 		}
 	}
 
-	iterationCtx, err = InitializeIterationContext(ctx, cnUUID, cnEngine, cnTxnClient, taskID, iterationLSN, upstreamSQLHelperFactory)
+	iterationCtx, err = InitializeIterationContext(ctx, cnUUID, cnEngine, cnTxnClient, taskID, iterationLSN, upstreamSQLHelperFactory, sqlExecutorRetryOpt)
 	if err != nil {
 		return
 	}
@@ -1188,7 +1217,17 @@ func ExecuteIteration(
 	// Update iteration state in defer to ensure it's always called
 	defer func() {
 		// Create a new executor without transaction for checking state before update
-		checkExecutor, checkErr := NewInternalSQLExecutor(cnUUID, nil, nil, catalog.System_Account, NewDownstreamConnectionClassifier())
+		checkRetryOpt := sqlExecutorRetryOpt
+		if checkRetryOpt == nil {
+			checkRetryOpt = DefaultSQLExecutorRetryOption()
+		}
+		// Override classifier for check executor
+		checkRetryOpt = &SQLExecutorRetryOption{
+			MaxRetries:    checkRetryOpt.MaxRetries,
+			RetryInterval: checkRetryOpt.RetryInterval,
+			Classifier:    NewDownstreamConnectionClassifier(),
+		}
+		checkExecutor, checkErr := NewInternalSQLExecutor(cnUUID, nil, nil, catalog.System_Account, checkRetryOpt)
 		if checkErr != nil {
 			logutil.Error("ccpr-iteration failed to create check executor",
 				zap.Error(checkErr),

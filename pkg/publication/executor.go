@@ -16,6 +16,7 @@ package publication
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -58,11 +59,28 @@ const (
 	SnapshotThreshold       = time.Hour * 24 // 1 day
 )
 
+// ExecutorRetryOption configures retry behavior for executor operations
+type ExecutorRetryOption struct {
+	RetryTimes    int           // Maximum number of retries (-1 for infinite)
+	RetryInterval time.Duration // Base interval between retries
+	RetryDuration time.Duration // Maximum total retry duration
+}
+
+// DefaultExecutorRetryOption returns default retry options for executor
+func DefaultExecutorRetryOption() *ExecutorRetryOption {
+	return &ExecutorRetryOption{
+		RetryTimes:    DefaultRetryTimes,
+		RetryInterval: DefaultRetryInterval,
+		RetryDuration: DefaultRetryDuration,
+	}
+}
+
 type PublicationExecutorOption struct {
-	GCInterval       time.Duration
-	GCTTL            time.Duration
-	SyncTaskInterval time.Duration
-	RetryTimes       int
+	GCInterval          time.Duration
+	GCTTL               time.Duration
+	SyncTaskInterval    time.Duration
+	RetryOption         *ExecutorRetryOption    // Retry configuration for executor operations
+	SQLExecutorRetryOpt *SQLExecutorRetryOption // Retry configuration for SQL executor operations
 }
 
 func PublicationTaskExecutorFactory(
@@ -134,8 +152,11 @@ func fillDefaultOption(option *PublicationExecutorOption) *PublicationExecutorOp
 	if option.SyncTaskInterval == 0 {
 		option.SyncTaskInterval = DefaultSyncTaskInterval
 	}
-	if option.RetryTimes == 0 {
-		option.RetryTimes = DefaultRetryTimes
+	if option.RetryOption == nil {
+		option.RetryOption = DefaultExecutorRetryOption()
+	}
+	if option.SQLExecutorRetryOpt == nil {
+		option.SQLExecutorRetryOpt = DefaultSQLExecutorRetryOption()
 	}
 	return option
 }
@@ -161,7 +182,8 @@ func NewPublicationTaskExecutor(
 			zap.Any("gcInterval", option.GCInterval),
 			zap.Any("gcttl", option.GCTTL),
 			zap.Any("syncTaskInterval", option.SyncTaskInterval),
-			zap.Any("retryTimes", option.RetryTimes),
+			zap.Any("retryOption", option.RetryOption),
+			zap.Any("sqlExecutorRetryOpt", option.SQLExecutorRetryOpt),
 			zap.Error(err),
 		)
 	}()
@@ -274,9 +296,7 @@ func (exec *PublicationTaskExecutor) initStateLocked() error {
 		func() error {
 			return exec.replay(exec.ctx)
 		},
-		exec.option.RetryTimes,
-		DefaultRetryInterval,
-		DefaultRetryDuration,
+		exec.option.RetryOption,
 	)
 	if err != nil {
 		return err
@@ -922,7 +942,11 @@ func createUpstreamExecutorForGC(
 			cnTxnClient,
 			txnEngine,
 			upstreamAccountID,
-			NewUpstreamConnectionClassifier(),
+			&SQLExecutorRetryOption{
+				MaxRetries:    DefaultSQLExecutorRetryOption().MaxRetries,
+				RetryInterval: DefaultSQLExecutorRetryOption().RetryInterval,
+				Classifier:    NewUpstreamConnectionClassifier(),
+			},
 		)
 		if err != nil {
 			return nil, err
@@ -1127,30 +1151,58 @@ func deleteCcprLogRecordInSeparateTxn(
 func retryPublication(
 	ctx context.Context,
 	fn func() error,
-	retryTimes int,
-	firstInterval time.Duration,
-	totalDuration time.Duration,
+	retryOpt *ExecutorRetryOption,
 ) (err error) {
-	interval := firstInterval
-	startTime := time.Now()
-	for i := 0; i < retryTimes; i++ {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-		if time.Since(startTime) > totalDuration {
-			break
-		}
-		err = fn()
-		if err == nil {
-			return
-		}
-		time.Sleep(interval)
-		interval *= 2
+	if retryOpt == nil {
+		retryOpt = DefaultExecutorRetryOption()
 	}
-	logutil.Errorf("Publication-Task retry failed, err: %v", err)
-	return
+
+	startTime := time.Now()
+	attempt := 0
+
+	// Create exponential backoff with base interval
+	backoff := ExponentialBackoff{
+		Base:   retryOpt.RetryInterval,
+		Factor: 2.0, // Double the interval each time
+	}
+
+	// Calculate max attempts (retryTimes + 1 for initial attempt)
+	maxAttempts := retryOpt.RetryTimes + 1
+	if retryOpt.RetryTimes < 0 {
+		// Infinite retry, use a large number
+		maxAttempts = 1000000
+	}
+
+	policy := Policy{
+		MaxAttempts: maxAttempts,
+		Backoff:     backoff,
+		// No classifier - retry all errors
+		Classifier: nil,
+	}
+
+	err = policy.Do(ctx, func() error {
+		attempt++
+
+		// Check total duration limit
+		if retryOpt.RetryDuration > 0 && attempt > 1 && time.Since(startTime) > retryOpt.RetryDuration {
+			return ErrNonRetryable
+		}
+
+		err = fn()
+		if err != nil {
+			logutil.Warn("Publication-Task retry attempt",
+				zap.Int("attempt", attempt),
+				zap.Int("maxAttempts", maxAttempts),
+				zap.Error(err),
+			)
+		}
+		return err
+	})
+
+	if err != nil && !errors.Is(err, ErrNonRetryable) {
+		logutil.Errorf("Publication-Task retry failed, err: %v", err)
+	}
+	return err
 }
 
 // Helper functions that need to be implemented or imported

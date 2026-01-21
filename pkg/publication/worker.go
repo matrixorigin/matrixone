@@ -109,6 +109,13 @@ func (w *worker) Submit(taskID uint64, lsn uint64, state int8) error {
 }
 
 func (w *worker) onItem(taskCtx *TaskContext) {
+	// Create retry option for executor operations
+	executorRetryOpt := &ExecutorRetryOption{
+		RetryTimes:    SubmitRetryTimes,
+		RetryInterval: DefaultRetryInterval,
+		RetryDuration: SubmitRetryDuration,
+	}
+
 	err := retryPublication(
 		w.ctx,
 		func() error {
@@ -134,6 +141,8 @@ func (w *worker) onItem(taskCtx *TaskContext) {
 				w.mp,
 				nil, // utHelper
 				0,   // snapshotFlushInterval (use default 1min)
+				nil, // executorRetryOpt (use default)
+				nil, // sqlExecutorRetryOpt (use default)
 			)
 			if err != nil {
 				logutil.Error(
@@ -145,9 +154,7 @@ func (w *worker) onItem(taskCtx *TaskContext) {
 			}
 			return err
 		},
-		SubmitRetryTimes,
-		DefaultRetryInterval,
-		SubmitRetryDuration,
+		executorRetryOpt,
 	)
 	if err != nil {
 		logutil.Error(
@@ -172,7 +179,11 @@ func (w *worker) updateIterationStateRunning(ctx context.Context, taskID uint64,
 		w.cnTxnClient,
 		w.cnEngine,
 		catalog.System_Account,
-		NewDownstreamCommitClassifier(),
+		&SQLExecutorRetryOption{
+			MaxRetries:    DefaultSQLExecutorRetryOption().MaxRetries,
+			RetryInterval: DefaultSQLExecutorRetryOption().RetryInterval,
+			Classifier:    NewDownstreamCommitClassifier(),
+		},
 	)
 	if err != nil {
 		return err
