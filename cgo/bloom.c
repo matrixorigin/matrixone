@@ -50,6 +50,8 @@ static inline bloom_hash_t bloom_calculate_hash(const void *key, size_t len, uin
             return bloom_calculate_hash64((int64_t)(*(int16_t*)key), seed);
         case 4: // int32
             return bloom_calculate_hash64((int64_t)(*(int32_t*)key), seed);
+        case 8: // int64 / uint64 / double
+            return bloom_calculate_hash64(*(uint64_t*)key, seed);
         default:
             {
                 bloom_hash_t h;
