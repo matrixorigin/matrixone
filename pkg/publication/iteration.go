@@ -1130,14 +1130,29 @@ func ExecuteIteration(
 
 	defer func() {
 		injectCommitFailed := false
+		var injectMessage string
 		if msg, injected := objectio.PublicationSnapshotFinishedInjected(); injected && msg == "ut injection: commit failed" {
 			injectCommitFailed = true
+			injectMessage = msg
 		}
-		commitErr := iterationCtx.Close(err == nil)
+		if msg, injected := objectio.PublicationSnapshotFinishedInjected(); injected && msg == "ut injection: commit failed retryable" {
+			injectCommitFailed = true
+			injectMessage = msg
+		}
+		var commitErr error
 		if injectCommitFailed {
-			commitErr = moerr.NewInternalErrorNoCtx("ut injection: commit failed")
+			iterationCtx.Close(false)
+		} else {
+			commitErr = iterationCtx.Close(err == nil)
+		}
+		if injectCommitFailed {
+			commitErr = moerr.NewInternalErrorNoCtx(injectMessage)
 		}
 		if commitErr != nil {
+			logutil.Error("ccpr-iteration commit error",
+				zap.Error(commitErr),
+				zap.String("task_id", iterationCtx.String()),
+			)
 			if err != nil {
 				err = moerr.NewInternalErrorf(ctx, "failed to close iteration context: %v; previous error: %v", commitErr, err)
 			} else {
