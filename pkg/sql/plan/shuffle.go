@@ -565,6 +565,7 @@ func determineShuffleForJoin(node *plan.Node, builder *QueryBuilder) {
 		if node.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Hash && node.Stats.HashmapStats.HashmapSize < threshHoldForHashShuffle {
 			node.Stats.HashmapStats.Shuffle = false
 		}
+
 		if node.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Range && node.Stats.HashmapStats.Ranges == nil && node.Stats.HashmapStats.ShuffleColMax-node.Stats.HashmapStats.ShuffleColMin < 100000 {
 			node.Stats.HashmapStats.Shuffle = false
 		}

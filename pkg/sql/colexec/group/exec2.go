@@ -63,11 +63,7 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 		return err
 	}
 
-	if group.NeedEval {
-		group.ctr.setSpillMem(group.SpillMem, group.Aggs)
-	} else {
-		group.ctr.setSpillMem(group.SpillMem/8, group.Aggs)
-	}
+	group.ctr.setSpillMem(group.SpillMem, group.Aggs)
 	return nil
 }
 
@@ -201,7 +197,12 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 	defer group.OpAnalyzer.Stop()
 
 	switch group.ctr.state {
-	case vm.Build:
+	case vm.Build, vm.EvalReset:
+		if group.ctr.state == vm.EvalReset {
+			group.ctr.resetForSpill()
+			group.ctr.state = vm.Build
+		}
+
 		// receive all data, loop till exhuasted.
 		for !group.ctr.inputDone {
 			var r vm.CallResult
@@ -246,10 +247,15 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 			if needSpill {
 				// we need to spill the data to disk.
 				if group.NeedEval {
-					group.ctr.spillDataToDisk(proc, nil)
+					if err := group.ctr.spillDataToDisk(proc, nil); err != nil {
+						return vm.CancelResult, err
+					}
 					// continue the loop, to receive more data.
 				} else {
 					// break the loop, output the intermediate result.
+					// set state to Eval, so that we can output ALL
+					// the intermediate result.
+					group.ctr.state = vm.Eval
 					break
 				}
 			}
@@ -451,7 +457,7 @@ func (group *Group) outputOneBatch(proc *process.Process) (vm.CallResult, error)
 				// switch back to build to receive more data.
 				// reset will set state to vm.Build, which will let us
 				// process more by Call child.
-				group.ctr.reset()
+				group.ctr.state = vm.EvalReset
 			}
 		}
 		return res, nil
@@ -471,9 +477,11 @@ func (group *Group) getNextIntermediateResult(proc *process.Process) (vm.CallRes
 
 	batch := group.ctr.groupByBatches[curr]
 
-	// XXX: serialize aggs to ExtraBuf1, only need to do this for the first
-	// batch.  This really should be set at plan time.
-	if curr == 0 {
+	// XXX: Bug #23561.
+	// Serialize agg expressions to ExtraBuf1, only need to ^H MUST
+	// do this for (the first^H) ALL batches.
+	// This really should be set at plan time.
+	if true || curr == 0 {
 		var buf1 bytes.Buffer
 		buf1.Write(types.EncodeInt32(&group.ctr.mtyp))
 		nAggs := int32(len(group.Aggs))

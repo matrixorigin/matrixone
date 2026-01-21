@@ -124,15 +124,25 @@ func (exec *sumAvgExec[T, A]) BatchFill(offset int, groups []uint64, vectors []*
 			continue
 		} else {
 			x, y := exec.getXY(grp - 1)
-			cnts := vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[0])
-			sums := vector.MustFixedColNoTypeCheck[T](exec.state[x].vecs[1])
+			sumVec := exec.state[x].vecs[0]
+			sums := vector.MustFixedColNoTypeCheck[T](sumVec)
 			val := vector.GetFixedAtNoTypeCheck[A](vectors[0], int(idx))
 			result := sums[y] + T(val)
 			if err := exec.ofCheck(sums[y], T(val), result); err != nil {
 				return err
 			}
-			sums[y] = result
-			cnts[y] += 1
+
+			if exec.isSum {
+				if sumVec.IsNull(uint64(y)) {
+					sumVec.UnsetNull(uint64(y))
+				}
+				sums[y] = result
+			} else {
+				sums[y] = result
+				cntVec := exec.state[x].vecs[1]
+				cnts := vector.MustFixedColNoTypeCheck[int64](cntVec)
+				cnts[y] += 1
+			}
 		}
 	}
 	return nil
@@ -155,16 +165,34 @@ func (exec *sumAvgExec[T, A]) BatchMerge(next AggFuncExec, offset int, groups []
 
 		x1, y1 := exec.getXY(grp - 1)
 		x2, y2 := other.getXY(uint64(offset + i))
-		cnts1 := vector.MustFixedColNoTypeCheck[int64](exec.state[x1].vecs[0])
-		cnts2 := vector.MustFixedColNoTypeCheck[int64](other.state[x2].vecs[0])
-		sums1 := vector.MustFixedColNoTypeCheck[T](exec.state[x1].vecs[1])
-		sums2 := vector.MustFixedColNoTypeCheck[T](other.state[x2].vecs[1])
-		result := sums1[y1] + sums2[y2]
-		if err := exec.ofCheck(sums1[y1], sums2[y2], result); err != nil {
-			return err
+		sumVec1 := exec.state[x1].vecs[0]
+		sumVec2 := other.state[x2].vecs[0]
+		sums1 := vector.MustFixedColNoTypeCheck[T](sumVec1)
+		sums2 := vector.MustFixedColNoTypeCheck[T](sumVec2)
+
+		if exec.isSum {
+			if sumVec2.IsNull(uint64(y2)) {
+				continue
+			} else if sumVec1.IsNull(uint64(y1)) {
+				sumVec1.UnsetNull(uint64(y1))
+				sums1[y1] = sums2[y2]
+			} else {
+				result := sums1[y1] + sums2[y2]
+				if err := exec.ofCheck(sums1[y1], sums2[y2], result); err != nil {
+					return err
+				}
+				sums1[y1] = result
+			}
+		} else {
+			cnts1 := vector.MustFixedColNoTypeCheck[int64](exec.state[x1].vecs[1])
+			cnts2 := vector.MustFixedColNoTypeCheck[int64](other.state[x2].vecs[1])
+			result := sums1[y1] + sums2[y2]
+			if err := exec.ofCheck(sums1[y1], sums2[y2], result); err != nil {
+				return err
+			}
+			sums1[y1] = result
+			cnts1[y1] += cnts2[y2]
 		}
-		sums1[y1] = result
-		cnts1[y1] += cnts2[y2]
 	}
 	return nil
 }
@@ -176,12 +204,12 @@ func (exec *sumAvgExec[T, A]) SetExtraInformation(partialResult any, _ int) erro
 func (exec *sumAvgExec[T, A]) Flush() ([]*vector.Vector, error) {
 	resultType := exec.aggInfo.retType
 	vecs := make([]*vector.Vector, len(exec.state))
-	for i := range vecs {
-		vecs[i] = vector.NewOffHeapVecWithType(resultType)
-		vecs[i].PreExtend(int(exec.state[i].length), exec.mp)
-	}
 
 	if exec.IsDistinct() {
+		for i := range vecs {
+			vecs[i] = vector.NewOffHeapVecWithType(resultType)
+			vecs[i].PreExtend(int(exec.state[i].length), exec.mp)
+		}
 		for i := range vecs {
 			for j := 0; j < int(exec.state[i].length); j++ {
 				if exec.state[i].argCnt[j] == 0 {
@@ -218,20 +246,40 @@ func (exec *sumAvgExec[T, A]) Flush() ([]*vector.Vector, error) {
 		}
 	} else {
 		for i := range vecs {
-			cnts := vector.MustFixedColNoTypeCheck[int64](exec.state[i].vecs[0])
-			sums := vector.MustFixedColNoTypeCheck[T](exec.state[i].vecs[1])
-			for j, cnt := range cnts {
-				if cnt == 0 {
-					vector.AppendNull(vecs[i], exec.mp)
-					continue
-				}
+			sumVec := exec.state[i].vecs[0]
+			sums := vector.MustFixedColNoTypeCheck[T](sumVec)
 
-				if exec.isSum {
-					vector.AppendFixed(vecs[i], sums[j], false, exec.mp)
-				} else {
-					vector.AppendFixed(vecs[i], float64(sums[j])/float64(cnt), false, exec.mp)
+			// transfer sumVec
+			vecs[i] = sumVec
+			exec.state[i].vecs[0] = nil
+
+			if !exec.isSum {
+				// hack: avgs will reuse sums slice, float64 and int64 are the same size.
+				avgs := util.UnsafeSliceCast[float64](sums)
+				cntVec := exec.state[i].vecs[1]
+				cnts := vector.MustFixedColNoTypeCheck[int64](cntVec)
+				for j, cnt := range cnts {
+					if cnt == 0 {
+						sumVec.SetNull(uint64(j))
+					} else {
+						avg := float64(sums[j]) / float64(cnt)
+						avgs[j] = avg
+					}
 				}
+				// free cntVec
+				cntVec.Free(exec.mp)
+				exec.state[i].vecs[1] = nil
 			}
+
+			// Fix result type.   note that for avg, the result type is
+			// float64, for any int/uint type, the sum type is int64/uint64.
+			// they are different types but SAME SIZE.   Let's just fix the
+			// result type and be happy.
+			*sumVec.GetType() = resultType
+
+			// done transfer,
+			exec.state[i].length = 0
+			exec.state[i].capacity = 0
 		}
 	}
 	return vecs, nil
@@ -266,8 +314,8 @@ func (exec *sumAvgDecExec[A]) BatchFill(offset int, groups []uint64, vectors []*
 			continue
 		} else {
 			x, y := exec.getXY(grp - 1)
-			cnts := vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[0])
-			sums := vector.MustFixedColNoTypeCheck[types.Decimal128](exec.state[x].vecs[1])
+			sumVec := exec.state[x].vecs[0]
+			sums := vector.MustFixedColNoTypeCheck[types.Decimal128](sumVec)
 			var val types.Decimal128
 			if exec.aggInfo.argTypes[0].Oid == types.T_decimal64 {
 				val64 := vector.GetFixedAtNoTypeCheck[types.Decimal64](vectors[0], int(idx))
@@ -276,10 +324,23 @@ func (exec *sumAvgDecExec[A]) BatchFill(offset int, groups []uint64, vectors []*
 				val = vector.GetFixedAtNoTypeCheck[types.Decimal128](vectors[0], int(idx))
 			}
 
-			if sums[y], err = sums[y].Add128(val); err != nil {
-				return err
+			if exec.isSum {
+				if sumVec.IsNull(uint64(y)) {
+					sumVec.UnsetNull(uint64(y))
+					sums[y] = val
+				} else {
+					if sums[y], err = sums[y].Add128(val); err != nil {
+						return err
+					}
+				}
+			} else {
+				if sums[y], err = sums[y].Add128(val); err != nil {
+					return err
+				}
+				cntVec := exec.state[x].vecs[1]
+				cnts := vector.MustFixedColNoTypeCheck[int64](cntVec)
+				cnts[y] += 1
 			}
-			cnts[y] += 1
 		}
 	}
 	return nil
@@ -303,14 +364,30 @@ func (exec *sumAvgDecExec[A]) BatchMerge(next AggFuncExec, offset int, groups []
 
 		x1, y1 := exec.getXY(grp - 1)
 		x2, y2 := other.getXY(uint64(offset + i))
-		cnts1 := vector.MustFixedColNoTypeCheck[int64](exec.state[x1].vecs[0])
-		cnts2 := vector.MustFixedColNoTypeCheck[int64](other.state[x2].vecs[0])
-		sums1 := vector.MustFixedColNoTypeCheck[types.Decimal128](exec.state[x1].vecs[1])
-		sums2 := vector.MustFixedColNoTypeCheck[types.Decimal128](other.state[x2].vecs[1])
-		if sums1[y1], err = sums1[y1].Add128(sums2[y2]); err != nil {
-			return err
+		sumVec1 := exec.state[x1].vecs[0]
+		sumVec2 := other.state[x2].vecs[0]
+		sums1 := vector.MustFixedColNoTypeCheck[types.Decimal128](sumVec1)
+		sums2 := vector.MustFixedColNoTypeCheck[types.Decimal128](sumVec2)
+
+		if exec.isSum {
+			if sumVec2.IsNull(uint64(y2)) {
+				continue
+			} else if sumVec1.IsNull(uint64(y1)) {
+				sumVec1.UnsetNull(uint64(y1))
+				sums1[y1] = sums2[y2]
+			} else {
+				if sums1[y1], err = sums1[y1].Add128(sums2[y2]); err != nil {
+					return err
+				}
+			}
+		} else {
+			if sums1[y1], err = sums1[y1].Add128(sums2[y2]); err != nil {
+				return err
+			}
+			cnts1 := vector.MustFixedColNoTypeCheck[int64](exec.state[x1].vecs[1])
+			cnts2 := vector.MustFixedColNoTypeCheck[int64](other.state[x2].vecs[1])
+			cnts1[y1] += cnts2[y2]
 		}
-		cnts1[y1] += cnts2[y2]
 	}
 	return nil
 }
@@ -330,12 +407,13 @@ func (exec *sumAvgDecExec[A]) Flush() ([]*vector.Vector, error) {
 	var err error
 	resultType := exec.aggInfo.retType
 	vecs := make([]*vector.Vector, len(exec.state))
-	for i := range vecs {
-		vecs[i] = vector.NewOffHeapVecWithType(resultType)
-		vecs[i].PreExtend(int(exec.state[i].length), exec.mp)
-	}
 
 	if exec.IsDistinct() {
+		for i := range vecs {
+			vecs[i] = vector.NewOffHeapVecWithType(resultType)
+			vecs[i].PreExtend(int(exec.state[i].length), exec.mp)
+		}
+
 		for i := range vecs {
 			for j := 0; j < int(exec.state[i].length); j++ {
 				if exec.state[i].argCnt[j] == 0 {
@@ -380,21 +458,32 @@ func (exec *sumAvgDecExec[A]) Flush() ([]*vector.Vector, error) {
 		}
 	} else {
 		for i := range vecs {
-			cnts := vector.MustFixedColNoTypeCheck[int64](exec.state[i].vecs[0])
-			sums := vector.MustFixedColNoTypeCheck[types.Decimal128](exec.state[i].vecs[1])
-			for j, cnt := range cnts {
-				if cnt == 0 {
-					vector.AppendNull(vecs[i], exec.mp)
-					continue
-				}
+			sumVec := exec.state[i].vecs[0]
+			sums := vector.MustFixedColNoTypeCheck[types.Decimal128](sumVec)
 
-				if exec.isSum {
-					vector.AppendFixed(vecs[i], sums[j], false, exec.mp)
-				} else {
-					avg := decAvg(sums[j], cnt, exec.aggInfo.argTypes[0].Scale, resultType.Scale)
-					vector.AppendFixed(vecs[i], avg, false, exec.mp)
+			if !exec.isSum {
+				cntVec := exec.state[i].vecs[1]
+				cnts := vector.MustFixedColNoTypeCheck[int64](cntVec)
+				for j, cnt := range cnts {
+					if cnt == 0 {
+						sumVec.SetNull(uint64(j))
+					} else {
+						avg := decAvg(sums[j], cnt, exec.aggInfo.argTypes[0].Scale, resultType.Scale)
+						vector.SetFixedAtNoTypeCheck(sumVec, j, avg)
+					}
 				}
+				cntVec.Free(exec.mp)
+				exec.state[i].vecs[1] = nil
 			}
+
+			// Fix resulit scale
+			sumVec.GetType().Scale = resultType.Scale
+
+			// transfer sumVec
+			vecs[i] = sumVec
+			exec.state[i].vecs[0] = nil
+			exec.state[i].length = 0
+			exec.state[i].capacity = 0
 		}
 	}
 	return vecs, nil
@@ -457,9 +546,14 @@ func newSumAvgExec[T float64 | int64 | uint64, A types.Ints | types.UInts | type
 		isDistinct: isDistinct,
 		argTypes:   []types.Type{param},
 		retType:    rt,
-		stateTypes: []types.Type{types.T_int64.ToType(), sumTyp},
-		emptyNull:  false,
+		emptyNull:  isSum,
 		saveArg:    isDistinct,
+	}
+
+	if isSum {
+		exec.aggInfo.stateTypes = []types.Type{sumTyp}
+	} else {
+		exec.aggInfo.stateTypes = []types.Type{sumTyp, types.T_int64.ToType()}
 	}
 	return &exec
 }
@@ -482,9 +576,15 @@ func newSumAvgDecExec[A types.Decimal64 | types.Decimal128](mp *mpool.MPool, isS
 		isDistinct: isDistinct,
 		argTypes:   []types.Type{param},
 		retType:    rt,
-		stateTypes: []types.Type{types.T_int64.ToType(), sumTyp},
-		emptyNull:  false,
+		emptyNull:  isSum,
 		saveArg:    isDistinct,
 	}
+
+	if isSum {
+		exec.aggInfo.stateTypes = []types.Type{sumTyp}
+	} else {
+		exec.aggInfo.stateTypes = []types.Type{sumTyp, types.T_int64.ToType()}
+	}
+
 	return &exec
 }

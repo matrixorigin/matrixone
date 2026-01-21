@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -126,8 +127,15 @@ func (ctr *container) setSpillMem(m int64, aggs []aggexec.AggFuncExecExpression)
 			return
 		}
 	}
+
 	if m == 0 {
-		ctr.spillMem = common.GiB
+		// 0 means auto config.   Here the formula is made up on the fly.
+		mem := int64(system.MemoryTotal()) / int64(system.GoMaxProcs()) / 8
+		// min 128MB
+		if mem < common.MiB*128 {
+			mem = common.MiB * 128
+		}
+		ctr.spillMem = mem
 	} else {
 		ctr.spillMem = m
 	}
@@ -202,17 +210,7 @@ func (ctr *container) free() {
 }
 
 func (ctr *container) reset() {
-	// reset the container state, do not reuse anything
-	ctr.state = vm.Build
-
-	ctr.inputDone = false
-	ctr.hr.Free0()
-
-	ctr.resetForSpill()
-	ctr.freeSpillBkts()
-
-	mpool.DeleteMPool(ctr.mp)
-	ctr.mp = mpool.MustNew("group_mpool")
+	ctr.free()
 }
 
 func (ctr *container) resetForSpill() {

@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
@@ -276,6 +277,7 @@ func (ctr *container) spillDataToDisk(proc *process.Process, parentBkt *spillBuc
 				}
 			}
 		}
+
 		// Oh, this API.
 		gbBatch.SetRowCount(int(cnt))
 		// write batch to buf
@@ -289,8 +291,11 @@ func (ctr *container) spillDataToDisk(proc *process.Process, parentBkt *spillBuc
 		// save aggs to buf
 		nAggs := int32(len(ctr.aggList))
 		buf.Write(types.EncodeInt32(&nAggs))
+
 		for _, ag := range ctr.aggList {
-			ag.SaveIntermediateResult(cnt, flags, buf)
+			if err := ag.SaveIntermediateResult(cnt, flags, buf); err != nil {
+				return err
+			}
 		}
 
 		magic = 0xdeadbeef12345678
@@ -298,7 +303,10 @@ func (ctr *container) spillDataToDisk(proc *process.Process, parentBkt *spillBuc
 		buf.Write(types.EncodeUint64(&magic))
 
 		ctr.currentSpillBkt[i].cnt += cnt
-		ctr.currentSpillBkt[i].file.Write(buf.Bytes())
+		_, err := ctr.currentSpillBkt[i].file.Write(buf.Bytes())
+		if err != nil {
+			return err
+		}
 	}
 
 	// reset ctr for next spill
@@ -599,4 +607,25 @@ func (ctr *container) makeAggList(aggExprs []aggexec.AggFuncExecExpression) ([]a
 		}
 	}
 	return aggList, nil
+}
+
+func (ctr *container) sanityCheck() {
+	if util.Debug {
+		originGroupCount := ctr.hr.Hash.GroupCount()
+		batchRowCount := 0
+		for _, batch := range ctr.groupByBatches {
+			batchRowCount += batch.RowCount()
+		}
+		if batchRowCount != int(originGroupCount) {
+			panic(moerr.NewInternalErrorNoCtx("group count mismatch"))
+		}
+
+		// this check only works for agg using aggState framework.
+		// disable for now.
+		// for aggIdx, ag := range ctr.aggList {
+		//	if ag.Size() != int64(batchRowCount) {
+		//		panic(moerr.NewInternalErrorNoCtxf("agg %d count mismatch", aggIdx))
+		//	}
+		//}
+	}
 }
