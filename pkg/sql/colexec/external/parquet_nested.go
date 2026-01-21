@@ -282,6 +282,13 @@ func reconstructNestedValue(ctx context.Context, col *parquet.Column, values []p
 			return reconstructList(ctx, col, values)
 		}
 		if logicalType.Map != nil {
+			// Map with LogicalType annotation has structure:
+			// metadata (Map) -> key_value (repeated) -> key, value
+			// We need to pass the key_value child to reconstructMap
+			children := col.Columns()
+			if len(children) == 1 {
+				return reconstructMap(ctx, children[0], values)
+			}
 			return reconstructMap(ctx, col, values)
 		}
 	}
