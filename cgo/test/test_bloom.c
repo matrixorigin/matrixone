@@ -223,6 +223,22 @@ void test_integer_compatibility() {
     CHECK(bloomfilter_test(bf, &v32_3, sizeof(v32_3)), "int32_3 should be found if int16_3 was added");
 
     bloomfilter_free(bf);
+
+    printf("Testing negative integer compatibility...\n");
+    bf = bloomfilter_init(1000, 3);
+
+    int8_t neg_v8 = -42;
+    int16_t neg_v16 = -42;
+    int32_t neg_v32 = -42;
+    int64_t neg_v64 = -42;
+
+    bloomfilter_add(bf, &neg_v8, sizeof(neg_v8));
+    CHECK(bloomfilter_test(bf, &neg_v8, sizeof(neg_v8)), "negative int8 should be found");
+    CHECK(bloomfilter_test(bf, &neg_v16, sizeof(neg_v16)), "negative int16 should be found");
+    CHECK(bloomfilter_test(bf, &neg_v32, sizeof(neg_v32)), "negative int32 should be found");
+    CHECK(bloomfilter_test(bf, &neg_v64, sizeof(neg_v64)), "negative int64 should be found");
+
+    bloomfilter_free(bf);
     printf("Integer compatibility passed\n");
 }
 
