@@ -140,6 +140,18 @@ func TestDataBranchDiffAsFile(t *testing.T) {
 			t.Log("large composite diff with multi column workload")
 			runLargeCompositeDiff(t, ctx, sqlDB)
 
+			t.Log("diff output splits updates into delete + insert (single pk)")
+			runUpdateSplitDiffAsFile(t, ctx, sqlDB)
+
+			t.Log("diff output splits updates into delete + insert (composite pk)")
+			runCompositeUpdateSplitDiffAsFile(t, ctx, sqlDB)
+
+			t.Log("diff output handles no-pk duplicates and null deletes")
+			runNoPKDuplicateDiffAsFile(t, ctx, sqlDB)
+
+			t.Log("diff output handles mixed types and string edge cases")
+			runComplexTypeDiffAsFile(t, ctx, sqlDB)
+
 			t.Log("sql diff handles rows containing NULL values")
 			runSQLDiffHandlesNulls(t, ctx, sqlDB)
 
@@ -200,7 +212,7 @@ func runSinglePKWithBase(t *testing.T, parentCtx context.Context, db *sql.DB) {
 
 	sqlContent := readSQLFile(t, diffPath)
 	lowerContent := strings.ToLower(sqlContent)
-	require.Contains(t, lowerContent, fmt.Sprintf("replace into %s.%s", strings.ToLower(dbName), base))
+	require.Contains(t, lowerContent, fmt.Sprintf("insert into %s.%s", strings.ToLower(dbName), base))
 
 	applyDiffStatements(t, ctx, db, sqlContent)
 	assertTablesEqual(t, ctx, db, dbName, branch, base)
@@ -240,7 +252,7 @@ func runMultiPKWithBase(t *testing.T, parentCtx context.Context, db *sql.DB) {
 
 	sqlContent := readSQLFile(t, diffPath)
 	lowerContent := strings.ToLower(sqlContent)
-	require.Contains(t, lowerContent, fmt.Sprintf("replace into %s.%s", strings.ToLower(dbName), base))
+	require.Contains(t, lowerContent, fmt.Sprintf("insert into %s.%s", strings.ToLower(dbName), base))
 	require.Contains(t, lowerContent, fmt.Sprintf("delete from %s.%s where (org_id,event_id)", strings.ToLower(dbName), base))
 
 	applyDiffStatements(t, ctx, db, sqlContent)
@@ -283,7 +295,7 @@ func runSinglePKNoBase(t *testing.T, parentCtx context.Context, db *sql.DB) {
 	}
 	require.ElementsMatch(t, expected, records)
 
-	applyCSVDiffRecords(t, ctx, db, dbName, base, records)
+	loadDiffCSVIntoTable(t, ctx, db, base, diffPath)
 	assertTablesEqual(t, ctx, db, dbName, target, base)
 }
 
@@ -323,7 +335,7 @@ func runMultiPKNoBase(t *testing.T, parentCtx context.Context, db *sql.DB) {
 	}
 	require.ElementsMatch(t, expected, records)
 
-	applyCSVDiffRecords(t, ctx, db, dbName, base, records)
+	loadDiffCSVIntoTable(t, ctx, db, base, diffPath)
 	assertTablesEqual(t, ctx, db, dbName, target, base)
 }
 
@@ -400,7 +412,7 @@ from generate_series(10001, 10800) as g`, branch)
 
 	sqlContent := readSQLFile(t, diffPath)
 	lowerContent := strings.ToLower(sqlContent)
-	require.Contains(t, lowerContent, fmt.Sprintf("replace into %s.%s", strings.ToLower(dbName), base))
+	require.Contains(t, lowerContent, fmt.Sprintf("insert into %s.%s", strings.ToLower(dbName), base))
 	require.Contains(t, lowerContent, fmt.Sprintf("delete from %s.%s", strings.ToLower(dbName), base))
 
 	applyDiffStatements(t, ctx, db, sqlContent)
@@ -753,10 +765,206 @@ func runDiffOutputToStage(t *testing.T, parentCtx context.Context, db *sql.DB) {
 	require.NotEmpty(t, payload, "stage diff payload is empty")
 
 	sqlContent := strings.ToLower(string(payload))
-	require.Contains(t, sqlContent, fmt.Sprintf("replace into %s.%s", strings.ToLower(dbName), base))
+	require.Contains(t, sqlContent, fmt.Sprintf("insert into %s.%s", strings.ToLower(dbName), base))
 	require.Contains(t, sqlContent, fmt.Sprintf("delete from %s.%s", strings.ToLower(dbName), base))
 
 	applyDiffStatements(t, ctx, db, string(payload))
+	assertTablesEqual(t, ctx, db, dbName, branch, base)
+}
+
+func runUpdateSplitDiffAsFile(t *testing.T, parentCtx context.Context, db *sql.DB) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(parentCtx, time.Second*90)
+	defer cancel()
+
+	dbName := testutils.GetDatabaseName(t)
+	base := "split_pk_base"
+	branch := "split_pk_branch"
+	diffDir := t.TempDir()
+	diffLiteral := strings.ReplaceAll(diffDir, "'", "''")
+
+	execSQLDB(t, ctx, db, fmt.Sprintf("create database `%s`", dbName))
+	defer func() {
+		execSQLDB(t, ctx, db, "use mo_catalog")
+		execSQLDB(t, ctx, db, fmt.Sprintf("drop database if exists `%s`", dbName))
+	}()
+	execSQLDB(t, ctx, db, fmt.Sprintf("use `%s`", dbName))
+
+	execSQLDB(t, ctx, db, fmt.Sprintf("create table `%s` (id int primary key, score int, note varchar(32))", base))
+	execSQLDB(t, ctx, db, fmt.Sprintf("insert into `%s` values (1, 10, 'seed'), (2, 20, 'seed'), (3, 30, 'seed')", base))
+
+	execSQLDB(t, ctx, db, fmt.Sprintf("data branch create table `%s` from `%s`", branch, base))
+	execSQLDB(t, ctx, db, fmt.Sprintf("update `%s` set score = score + 9, note = 'changed' where id in (1,3)", branch))
+
+	diffStmt := fmt.Sprintf("data branch diff %s against %s output file '%s'", branch, base, diffLiteral)
+	diffPath := execDiffAndFetchFile(t, ctx, db, diffStmt)
+	require.Equal(t, ".sql", filepath.Ext(diffPath))
+	require.True(t, strings.HasPrefix(diffPath, diffDir), "diff file %s not in dir %s", diffPath, diffDir)
+
+	sqlContent := readSQLFile(t, diffPath)
+	lowerContent := strings.ToLower(sqlContent)
+	require.Contains(t, lowerContent, fmt.Sprintf("insert into %s.%s", strings.ToLower(dbName), base))
+	require.Contains(t, lowerContent, fmt.Sprintf("delete from %s.%s where id in", strings.ToLower(dbName), base))
+	require.NotContains(t, lowerContent, "update ")
+
+	applyDiffStatements(t, ctx, db, sqlContent)
+	assertTablesEqual(t, ctx, db, dbName, branch, base)
+}
+
+func runCompositeUpdateSplitDiffAsFile(t *testing.T, parentCtx context.Context, db *sql.DB) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(parentCtx, time.Second*90)
+	defer cancel()
+
+	dbName := testutils.GetDatabaseName(t)
+	base := "split_comp_base"
+	branch := "split_comp_branch"
+	diffDir := t.TempDir()
+	diffLiteral := strings.ReplaceAll(diffDir, "'", "''")
+
+	execSQLDB(t, ctx, db, fmt.Sprintf("create database `%s`", dbName))
+	defer func() {
+		execSQLDB(t, ctx, db, "use mo_catalog")
+		execSQLDB(t, ctx, db, fmt.Sprintf("drop database if exists `%s`", dbName))
+	}()
+	execSQLDB(t, ctx, db, fmt.Sprintf("use `%s`", dbName))
+
+	execSQLDB(t, ctx, db, fmt.Sprintf("create table `%s` (org_id int, event_id int, qty int, note varchar(32), primary key (org_id, event_id))", base))
+	execSQLDB(t, ctx, db, fmt.Sprintf("insert into `%s` values (1, 1, 10, 'seed'), (1, 2, 20, 'seed'), (2, 1, 30, 'seed')", base))
+
+	execSQLDB(t, ctx, db, fmt.Sprintf("data branch create table `%s` from `%s`", branch, base))
+	execSQLDB(t, ctx, db, fmt.Sprintf("update `%s` set qty = qty + 5, note = 'shifted' where org_id = 1 and event_id = 2", branch))
+	execSQLDB(t, ctx, db, fmt.Sprintf("update `%s` set note = null where org_id = 2 and event_id = 1", branch))
+
+	diffStmt := fmt.Sprintf("data branch diff %s against %s output file '%s'", branch, base, diffLiteral)
+	diffPath := execDiffAndFetchFile(t, ctx, db, diffStmt)
+	require.Equal(t, ".sql", filepath.Ext(diffPath))
+	require.True(t, strings.HasPrefix(diffPath, diffDir), "diff file %s not in dir %s", diffPath, diffDir)
+
+	sqlContent := readSQLFile(t, diffPath)
+	lowerContent := strings.ToLower(sqlContent)
+	require.Contains(t, lowerContent, fmt.Sprintf("insert into %s.%s", strings.ToLower(dbName), base))
+	require.Contains(t, lowerContent, fmt.Sprintf("delete from %s.%s where (org_id,event_id) in", strings.ToLower(dbName), base))
+	require.Contains(t, lowerContent, "null")
+	require.NotContains(t, lowerContent, "update ")
+
+	applyDiffStatements(t, ctx, db, sqlContent)
+	assertTablesEqual(t, ctx, db, dbName, branch, base)
+}
+
+func runNoPKDuplicateDiffAsFile(t *testing.T, parentCtx context.Context, db *sql.DB) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(parentCtx, time.Second*120)
+	defer cancel()
+
+	dbName := testutils.GetDatabaseName(t)
+	base := "no_pk_base"
+	branch := "no_pk_branch"
+	diffDir := t.TempDir()
+	diffLiteral := strings.ReplaceAll(diffDir, "'", "''")
+
+	execSQLDB(t, ctx, db, fmt.Sprintf("create database `%s`", dbName))
+	defer func() {
+		execSQLDB(t, ctx, db, "use mo_catalog")
+		execSQLDB(t, ctx, db, fmt.Sprintf("drop database if exists `%s`", dbName))
+	}()
+	execSQLDB(t, ctx, db, fmt.Sprintf("use `%s`", dbName))
+
+	execSQLDB(t, ctx, db, fmt.Sprintf("create table `%s` (id int, grp int, note varchar(32))", base))
+	execSQLDB(t, ctx, db, fmt.Sprintf(`insert into %s values
+		(1, 10, 'dup'),
+		(1, 10, 'dup'),
+		(1, 10, 'dup'),
+		(1, 10, 'dup'),
+		(2, 20, null),
+		(3, 30, 'keep'),
+		(4, null, 'nil'),
+		(5, 50, 'change')`, base))
+
+	execSQLDB(t, ctx, db, fmt.Sprintf("data branch create table `%s` from `%s`", branch, base))
+	execSQLDB(t, ctx, db, fmt.Sprintf("delete from `%s` where id = 1 and grp = 10 and note = 'dup' limit 1", branch))
+	execSQLDB(t, ctx, db, fmt.Sprintf("delete from `%s` where id = 1 and grp = 10 and note = 'dup' limit 1", branch))
+	execSQLDB(t, ctx, db, fmt.Sprintf("delete from `%s` where id = 2 and grp = 20 and note is null", branch))
+	execSQLDB(t, ctx, db, fmt.Sprintf("update `%s` set grp = 41 where id = 4 and grp is null", branch))
+	execSQLDB(t, ctx, db, fmt.Sprintf("update `%s` set grp = 55, note = 'changed' where id = 5 and grp = 50 and note = 'change'", branch))
+	execSQLDB(t, ctx, db, fmt.Sprintf("insert into `%s` values (6, 60, 'added')", branch))
+
+	diffStmt := fmt.Sprintf("data branch diff %s against %s output file '%s'", branch, base, diffLiteral)
+	diffPath := execDiffAndFetchFile(t, ctx, db, diffStmt)
+	require.Equal(t, ".sql", filepath.Ext(diffPath))
+	require.True(t, strings.HasPrefix(diffPath, diffDir), "diff file %s not in dir %s", diffPath, diffDir)
+
+	sqlContent := readSQLFile(t, diffPath)
+	lowerContent := strings.ToLower(sqlContent)
+	require.Contains(t, lowerContent, fmt.Sprintf("insert into %s.%s", strings.ToLower(dbName), base))
+	require.Contains(t, lowerContent, fmt.Sprintf("delete from %s.%s", strings.ToLower(dbName), base))
+	require.Contains(t, lowerContent, "limit 1")
+	require.Contains(t, lowerContent, "is null")
+	require.NotContains(t, lowerContent, "update ")
+
+	applyDiffStatements(t, ctx, db, sqlContent)
+	assertTablesEqual(t, ctx, db, dbName, branch, base)
+}
+
+func runComplexTypeDiffAsFile(t *testing.T, parentCtx context.Context, db *sql.DB) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(parentCtx, time.Second*120)
+	defer cancel()
+
+	dbName := testutils.GetDatabaseName(t)
+	base := "complex_base"
+	branch := "complex_branch"
+	diffDir := t.TempDir()
+	diffLiteral := strings.ReplaceAll(diffDir, "'", "''")
+
+	execSQLDB(t, ctx, db, fmt.Sprintf("create database `%s`", dbName))
+	defer func() {
+		execSQLDB(t, ctx, db, "use mo_catalog")
+		execSQLDB(t, ctx, db, fmt.Sprintf("drop database if exists `%s`", dbName))
+	}()
+	execSQLDB(t, ctx, db, fmt.Sprintf("use `%s`", dbName))
+
+	execSQLDB(t, ctx, db, fmt.Sprintf(`
+create table %s (
+	id int primary key,
+	name varchar(32),
+	note text,
+	amount decimal(10,2),
+	created_at datetime,
+	active bool
+)`, base))
+
+	execSQLDB(t, ctx, db, fmt.Sprintf(`insert into %s values
+		(1, 'Alpha', 'Seed', 10.50, '2024-01-01 10:00:00', true),
+		(2, 'alpha', '', 0.00, null, false),
+		(3, 'MIX', 'case', 33.33, '2024-02-02 02:02:02', true),
+		(4, 'keep', 'NULLABLE', null, '2024-03-03 03:03:03', true)`, base))
+
+	execSQLDB(t, ctx, db, fmt.Sprintf("data branch create table `%s` from `%s`", branch, base))
+	execSQLDB(t, ctx, db, fmt.Sprintf("update `%s` set name = 'ALPHA', note = 'seed' where id = 1", branch))
+	execSQLDB(t, ctx, db, fmt.Sprintf("update `%s` set note = 'O\\'Reilly', created_at = '2024-01-02 00:00:00', active = true where id = 2", branch))
+	execSQLDB(t, ctx, db, fmt.Sprintf("update `%s` set note = '', amount = 40.00 where id = 3", branch))
+	execSQLDB(t, ctx, db, fmt.Sprintf("delete from `%s` where id = 4", branch))
+	execSQLDB(t, ctx, db, fmt.Sprintf("insert into `%s` values (5, 'path\\\\dir', null, 99.99, null, false)", branch))
+
+	diffStmt := fmt.Sprintf("data branch diff %s against %s output file '%s'", branch, base, diffLiteral)
+	diffPath := execDiffAndFetchFile(t, ctx, db, diffStmt)
+	require.Equal(t, ".sql", filepath.Ext(diffPath))
+	require.True(t, strings.HasPrefix(diffPath, diffDir), "diff file %s not in dir %s", diffPath, diffDir)
+
+	sqlContent := readSQLFile(t, diffPath)
+	lowerContent := strings.ToLower(sqlContent)
+	require.Contains(t, lowerContent, fmt.Sprintf("insert into %s.%s", strings.ToLower(dbName), base))
+	require.Contains(t, lowerContent, fmt.Sprintf("delete from %s.%s", strings.ToLower(dbName), base))
+	require.Contains(t, lowerContent, "null")
+	require.Contains(t, lowerContent, "''")
+	require.NotContains(t, lowerContent, "update ")
+
+	applyDiffStatements(t, ctx, db, sqlContent)
 	assertTablesEqual(t, ctx, db, dbName, branch, base)
 }
 
@@ -913,29 +1121,6 @@ func readDiffCSVFile(t *testing.T, path string) [][]string {
 	}
 	require.NotEmpty(t, records, "diff csv output is empty")
 	return records
-}
-
-func applyCSVDiffRecords(t *testing.T, ctx context.Context, db *sql.DB, schema, table string, records [][]string) {
-	t.Helper()
-
-	require.NotEmpty(t, records, "no csv records to apply")
-	valueClauses := make([]string, len(records))
-	for i, rec := range records {
-		values := make([]string, len(rec))
-		for j, field := range rec {
-			values[j] = csvFieldToSQLLiteral(field)
-		}
-		valueClauses[i] = fmt.Sprintf("(%s)", strings.Join(values, ","))
-	}
-	stmt := fmt.Sprintf("replace into %s.%s values %s", schema, table, strings.Join(valueClauses, ","))
-	execSQLDB(t, ctx, db, stmt)
-}
-
-func csvFieldToSQLLiteral(val string) string {
-	if val == `\N` {
-		return "NULL"
-	}
-	return fmt.Sprintf("'%s'", strings.ReplaceAll(val, "'", "''"))
 }
 
 func loadDiffCSVIntoTable(t *testing.T, ctx context.Context, db *sql.DB, table, csvPath string) {

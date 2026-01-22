@@ -55,7 +55,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/panjf2000/ants/v2"
 )
 
@@ -79,8 +78,8 @@ const (
 )
 
 const (
-	maxSqlBatchCnt  = objectio.BlockMaxRows * 10
-	maxSqlBatchSize = mpool.MB * 48
+	maxSqlBatchCnt  = objectio.BlockMaxRows
+	maxSqlBatchSize = mpool.MB * 32
 )
 
 func acquireBuffer(pool *sync.Pool) *bytes.Buffer {
@@ -355,7 +354,9 @@ func (retBatchPool *retBatchList) freeAllRetBatches(mp *mpool.MPool) {
 }
 
 type compositeOption struct {
-	conflictOpt *tree.ConflictOpt
+	conflictOpt  *tree.ConflictOpt
+	outputSQL    bool
+	expandUpdate bool
 }
 
 func runSql(
@@ -830,6 +831,8 @@ func diffMergeAgency(
 			copt.conflictOpt = &tree.ConflictOpt{
 				Opt: tree.CONFLICT_ACCEPT,
 			}
+			copt.outputSQL = true
+			copt.expandUpdate = true
 		}
 		if tblStuff, err = getTableStuff(
 			ctx, ses, bh, diffStmt.TargetTable, diffStmt.BaseTable,
@@ -838,6 +841,7 @@ func diffMergeAgency(
 		}
 	} else {
 		copt.conflictOpt = mergeStmt.ConflictOpt
+		copt.expandUpdate = true
 		if tblStuff, err = getTableStuff(
 			ctx, ses, bh, mergeStmt.SrcTable, mergeStmt.DstTable,
 		); err != nil {
@@ -963,7 +967,7 @@ func handleBranchMerge(
 	return diffMergeAgency(ses, execCtx, stmt)
 }
 
-func tryFlushDeletesOrReplace(
+func tryFlushDeletesOrInserts(
 	ctx context.Context,
 	ses *Session,
 	bh BackgroundExec,
@@ -971,16 +975,17 @@ func tryFlushDeletesOrReplace(
 	newKind string,
 	newValsLen int,
 	newRowCnt int,
+	deleteByFullRow bool,
 	deleteCnt *int,
 	deletesBuf *bytes.Buffer,
-	replaceCnt *int,
-	replaceBuf *bytes.Buffer,
+	insertCnt *int,
+	insertBuf *bytes.Buffer,
 	writeFile func([]byte) error,
 ) (err error) {
 
 	flushDeletes := func() error {
 		if err = flushSqlValues(
-			ctx, ses, bh, tblStuff, deletesBuf, true, writeFile,
+			ctx, ses, bh, tblStuff, deletesBuf, true, deleteByFullRow, writeFile,
 		); err != nil {
 			return err
 		}
@@ -990,16 +995,15 @@ func tryFlushDeletesOrReplace(
 		return nil
 	}
 
-	flushReplace := func() error {
-
+	flushInserts := func() error {
 		if err = flushSqlValues(
-			ctx, ses, bh, tblStuff, replaceBuf, false, writeFile,
+			ctx, ses, bh, tblStuff, insertBuf, false, false, writeFile,
 		); err != nil {
 			return err
 		}
 
-		*replaceCnt = 0
-		replaceBuf.Reset()
+		*insertCnt = 0
+		insertBuf.Reset()
 		return nil
 	}
 
@@ -1011,18 +1015,17 @@ func tryFlushDeletesOrReplace(
 				return flushDeletes()
 			}
 		} else {
-			if replaceBuf.Len()+newValsLen >= maxSqlBatchSize ||
-				*replaceCnt+newRowCnt >= maxSqlBatchCnt {
-				return flushReplace()
+			if insertBuf.Len()+newValsLen >= maxSqlBatchSize ||
+				*insertCnt+newRowCnt >= maxSqlBatchCnt {
+				if *deleteCnt > 0 {
+					if err = flushDeletes(); err != nil {
+						return err
+					}
+				}
+				return flushInserts()
 			}
 		}
 		return nil
-	}
-
-	if *replaceCnt > 0 {
-		if err = flushReplace(); err != nil {
-			return err
-		}
 	}
 
 	if *deleteCnt > 0 {
@@ -1031,19 +1034,26 @@ func tryFlushDeletesOrReplace(
 		}
 	}
 
+	if *insertCnt > 0 {
+		if err = flushInserts(); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
 type sqlValuesAppender struct {
-	ctx        context.Context
-	ses        *Session
-	bh         BackgroundExec
-	tblStuff   tableStuff
-	deleteCnt  *int
-	deleteBuf  *bytes.Buffer
-	replaceCnt *int
-	replaceBuf *bytes.Buffer
-	writeFile  func([]byte) error
+	ctx             context.Context
+	ses             *Session
+	bh              BackgroundExec
+	tblStuff        tableStuff
+	deleteByFullRow bool
+	deleteCnt       *int
+	deleteBuf       *bytes.Buffer
+	insertCnt       *int
+	insertBuf       *bytes.Buffer
+	writeFile       func([]byte) error
 }
 
 func (sva sqlValuesAppender) appendRow(kind string, rowValues []byte) error {
@@ -1055,9 +1065,22 @@ func (sva sqlValuesAppender) appendRow(kind string, rowValues []byte) error {
 	if kind == diffDelete {
 		targetBuf = sva.deleteBuf
 		rowCnt = sva.deleteCnt
+		if sva.deleteByFullRow {
+			newValsLen := len(rowValues)
+			if err := tryFlushDeletesOrInserts(
+				sva.ctx, sva.ses, sva.bh, sva.tblStuff, kind, newValsLen, 1, sva.deleteByFullRow,
+				sva.deleteCnt, sva.deleteBuf, sva.insertCnt, sva.insertBuf, sva.writeFile,
+			); err != nil {
+				return err
+			}
+
+			targetBuf.Write(rowValues)
+			*rowCnt++
+			return nil
+		}
 	} else {
-		targetBuf = sva.replaceBuf
-		rowCnt = sva.replaceCnt
+		targetBuf = sva.insertBuf
+		rowCnt = sva.insertCnt
 	}
 
 	newValsLen := len(rowValues)
@@ -1065,9 +1088,9 @@ func (sva sqlValuesAppender) appendRow(kind string, rowValues []byte) error {
 		newValsLen++
 	}
 
-	if err := tryFlushDeletesOrReplace(
-		sva.ctx, sva.ses, sva.bh, sva.tblStuff, kind, newValsLen, 1,
-		sva.deleteCnt, sva.deleteBuf, sva.replaceCnt, sva.replaceBuf, sva.writeFile,
+	if err := tryFlushDeletesOrInserts(
+		sva.ctx, sva.ses, sva.bh, sva.tblStuff, kind, newValsLen, 1, sva.deleteByFullRow,
+		sva.deleteCnt, sva.deleteBuf, sva.insertCnt, sva.insertBuf, sva.writeFile,
 	); err != nil {
 		return err
 	}
@@ -1081,13 +1104,13 @@ func (sva sqlValuesAppender) appendRow(kind string, rowValues []byte) error {
 }
 
 func (sva sqlValuesAppender) flushAll() error {
-	return tryFlushDeletesOrReplace(
+	return tryFlushDeletesOrInserts(
 		sva.ctx, sva.ses, sva.bh, sva.tblStuff, "",
-		0, 0, sva.deleteCnt, sva.deleteBuf, sva.replaceCnt, sva.replaceBuf, sva.writeFile,
+		0, 0, sva.deleteByFullRow, sva.deleteCnt, sva.deleteBuf, sva.insertCnt, sva.insertBuf, sva.writeFile,
 	)
 }
 
-func writeReplaceRowValues(
+func writeInsertRowValues(
 	ses *Session,
 	tblStuff tableStuff,
 	row []any,
@@ -1128,6 +1151,39 @@ func writeDeleteRowValues(
 		buf.WriteString(")")
 	}
 
+	return nil
+}
+
+func writeDeleteRowSQLFull(
+	ctx context.Context,
+	ses *Session,
+	tblStuff tableStuff,
+	row []any,
+	buf *bytes.Buffer,
+) error {
+	// Use NULL-aware equality and LIMIT 1 to preserve duplicate-row semantics.
+	buf.WriteString(fmt.Sprintf(
+		"delete from %s.%s where ",
+		tblStuff.baseRel.GetTableDef(ctx).DbName,
+		tblStuff.baseRel.GetTableDef(ctx).Name,
+	))
+	for i, idx := range tblStuff.def.visibleIdxes {
+		if i > 0 {
+			buf.WriteString(" and ")
+		}
+		colName := tblStuff.def.colNames[idx]
+		if row[idx] == nil {
+			buf.WriteString(colName)
+			buf.WriteString(" is null")
+		} else {
+			buf.WriteString(colName)
+			buf.WriteString(" = ")
+			if err := formatValIntoString(ses, row[idx], tblStuff.def.colTypes[idx], buf); err != nil {
+				return err
+			}
+		}
+	}
+	buf.WriteString(" limit 1;\n")
 	return nil
 }
 
@@ -1196,11 +1252,17 @@ func appendBatchRowsAsSQLValues(
 
 		tmpValsBuffer.Reset()
 		if wrapped.kind == diffDelete {
-			if err = writeDeleteRowValues(ses, tblStuff, row, tmpValsBuffer); err != nil {
-				return
+			if appender.deleteByFullRow {
+				if err = writeDeleteRowSQLFull(ctx, ses, tblStuff, row, tmpValsBuffer); err != nil {
+					return
+				}
+			} else {
+				if err = writeDeleteRowValues(ses, tblStuff, row, tmpValsBuffer); err != nil {
+					return
+				}
 			}
 		} else {
-			if err = writeReplaceRowValues(ses, tblStuff, row, tmpValsBuffer); err != nil {
+			if err = writeInsertRowValues(ses, tblStuff, row, tmpValsBuffer); err != nil {
 				return
 			}
 		}
@@ -1229,17 +1291,17 @@ func mergeDiffs(
 ) (err error) {
 
 	var (
-		replaceCnt int
-		deleteCnt  int
+		insertCnt int
+		deleteCnt int
 
-		replaceIntoVals = acquireBuffer(tblStuff.bufPool)
-		deleteFromVals  = acquireBuffer(tblStuff.bufPool)
-		firstErr        error
-		tmpValsBuffer   = acquireBuffer(tblStuff.bufPool)
+		insertIntoVals = acquireBuffer(tblStuff.bufPool)
+		deleteFromVals = acquireBuffer(tblStuff.bufPool)
+		firstErr       error
+		tmpValsBuffer  = acquireBuffer(tblStuff.bufPool)
 	)
 
 	defer func() {
-		releaseBuffer(tblStuff.bufPool, replaceIntoVals)
+		releaseBuffer(tblStuff.bufPool, insertIntoVals)
 		releaseBuffer(tblStuff.bufPool, deleteFromVals)
 		releaseBuffer(tblStuff.bufPool, tmpValsBuffer)
 	}()
@@ -1249,14 +1311,15 @@ func mergeDiffs(
 	}()
 
 	appender := sqlValuesAppender{
-		ctx:        ctx,
-		ses:        ses,
-		bh:         bh,
-		tblStuff:   tblStuff,
-		deleteCnt:  &deleteCnt,
-		deleteBuf:  deleteFromVals,
-		replaceCnt: &replaceCnt,
-		replaceBuf: replaceIntoVals,
+		ctx:             ctx,
+		ses:             ses,
+		bh:              bh,
+		tblStuff:        tblStuff,
+		deleteByFullRow: tblStuff.def.pkKind == fakeKind,
+		deleteCnt:       &deleteCnt,
+		deleteBuf:       deleteFromVals,
+		insertCnt:       &insertCnt,
+		insertBuf:       insertIntoVals,
 	}
 
 	// conflict option should be pushed down to the hash phase,
@@ -1403,12 +1466,12 @@ func satisfyDiffOutputOpt(
 
 	} else if len(stmt.OutputOpt.DirPath) != 0 {
 		var (
-			replaceCnt int
-			deleteCnt  int
+			insertCnt int
+			deleteCnt int
 
-			deleteFromValsBuffer  = acquireBuffer(tblStuff.bufPool)
-			replaceIntoValsBuffer = acquireBuffer(tblStuff.bufPool)
-			tmpValsBuffer         = acquireBuffer(tblStuff.bufPool)
+			deleteFromValsBuffer = acquireBuffer(tblStuff.bufPool)
+			insertIntoValsBuffer = acquireBuffer(tblStuff.bufPool)
+			tmpValsBuffer        = acquireBuffer(tblStuff.bufPool)
 
 			fileHint     string
 			fullFilePath string
@@ -1426,7 +1489,7 @@ func satisfyDiffOutputOpt(
 				release()
 			}
 			releaseBuffer(tblStuff.bufPool, deleteFromValsBuffer)
-			releaseBuffer(tblStuff.bufPool, replaceIntoValsBuffer)
+			releaseBuffer(tblStuff.bufPool, insertIntoValsBuffer)
 			releaseBuffer(tblStuff.bufPool, tmpValsBuffer)
 		}()
 
@@ -1437,15 +1500,16 @@ func satisfyDiffOutputOpt(
 		}
 
 		appender := sqlValuesAppender{
-			ctx:        ctx,
-			ses:        ses,
-			bh:         bh,
-			tblStuff:   tblStuff,
-			deleteCnt:  &deleteCnt,
-			deleteBuf:  deleteFromValsBuffer,
-			replaceCnt: &replaceCnt,
-			replaceBuf: replaceIntoValsBuffer,
-			writeFile:  writeFile,
+			ctx:             ctx,
+			ses:             ses,
+			bh:              bh,
+			tblStuff:        tblStuff,
+			deleteByFullRow: tblStuff.def.pkKind == fakeKind,
+			deleteCnt:       &deleteCnt,
+			deleteBuf:       deleteFromValsBuffer,
+			insertCnt:       &insertCnt,
+			insertBuf:       insertIntoValsBuffer,
+			writeFile:       writeFile,
 		}
 		if writeFile != nil {
 			// Make generated SQL runnable in one transaction.
@@ -1474,6 +1538,20 @@ func satisfyDiffOutputOpt(
 					cancel()
 					tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
 					continue
+				}
+			} else if wrapped.name == tblStuff.baseRel.GetTableName() {
+				if wrapped.kind == diffInsert {
+					wrapped.kind = diffDelete
+				}
+				if wrapped.kind == diffDelete {
+					if err = appendBatchRowsAsSQLValues(
+						ctx, ses, tblStuff, wrapped, tmpValsBuffer, appender,
+					); err != nil {
+						first = err
+						cancel()
+						tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+						continue
+					}
 				}
 			}
 
@@ -1708,7 +1786,7 @@ func prepareFSForDiffAsFile(
 	}
 
 	sqlRetHint = fmt.Sprintf(
-		"DELETE FROM %s.%s, REPLACE INTO %s.%s",
+		"DELETE FROM %s.%s, INSERT INTO %s.%s",
 		tblStuff.baseRel.GetTableDef(ctx).DbName, tblStuff.baseRel.GetTableName(),
 		tblStuff.baseRel.GetTableDef(ctx).DbName, tblStuff.baseRel.GetTableName(),
 	)
@@ -1893,15 +1971,41 @@ func flushSqlValues(
 	tblStuff tableStuff,
 	buf *bytes.Buffer,
 	isDeleteFrom bool,
+	deleteByFullRow bool,
 	writeFile func([]byte) error,
 ) (err error) {
+
+	if buf.Len() == 0 {
+		return nil
+	}
+
+	if isDeleteFrom && deleteByFullRow {
+		if writeFile != nil {
+			return writeFile(buf.Bytes())
+		}
+
+		statements := bytes.Split(buf.Bytes(), []byte(";\n"))
+		for _, stmt := range statements {
+			stmt = bytes.TrimSpace(stmt)
+			if len(stmt) == 0 {
+				continue
+			}
+			var ret executor.Result
+			ret, err = runSql(ctx, ses, bh, string(stmt)+";", nil, nil)
+			ret.Close()
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 
 	sqlBuffer := acquireBuffer(tblStuff.bufPool)
 	defer releaseBuffer(tblStuff.bufPool, sqlBuffer)
 
-	initReplaceIntoBuf := func() {
+	initInsertIntoBuf := func() {
 		sqlBuffer.WriteString(fmt.Sprintf(
-			"replace into %s.%s values ",
+			"insert into %s.%s values ",
 			tblStuff.baseRel.GetTableDef(ctx).DbName,
 			tblStuff.baseRel.GetTableDef(ctx).Name,
 		))
@@ -1934,7 +2038,7 @@ func flushSqlValues(
 		sqlBuffer.Write(buf.Bytes())
 		sqlBuffer.WriteString(")")
 	} else {
-		initReplaceIntoBuf()
+		initInsertIntoBuf()
 		sqlBuffer.Write(buf.Bytes())
 	}
 
@@ -2903,7 +3007,7 @@ func hashDiffIfHasLCA(
 
 			if err3 := findDeleteAndUpdateBat(
 				newCtx, ses, bh, tblStuff, name,
-				tmpCh, branchTS, hashmap1, hashmap2,
+				tmpCh, branchTS, copt.expandUpdate, hashmap1, hashmap2,
 			); err3 != nil {
 				atomicErr.Store(err3)
 			}
@@ -3093,18 +3197,20 @@ func compareRowInWrappedBatches(
 func findDeleteAndUpdateBat(
 	ctx context.Context, ses *Session, bh BackgroundExec,
 	tblStuff tableStuff, tblName string, tmpCh chan batchWithKind, branchTS types.TS,
+	expandUpdate bool,
 	dataHashmap, tombstoneHashmap databranchutils.BranchHashmap,
 ) (err error) {
 
 	if err = tombstoneHashmap.ForEachShardParallel(func(cursor databranchutils.ShardCursor) error {
 		var (
-			err2      error
-			tuple     types.Tuple
-			dBat      *batch.Batch
-			tBat1     = tblStuff.retPool.acquireRetBatch(tblStuff, true)
-			tBat2     *batch.Batch
-			updateBat *batch.Batch
-			checkRet  []databranchutils.GetResult
+			err2            error
+			tuple           types.Tuple
+			dBat            *batch.Batch
+			tBat1           = tblStuff.retPool.acquireRetBatch(tblStuff, true)
+			tBat2           *batch.Batch
+			updateBat       *batch.Batch
+			updateDeleteBat *batch.Batch
+			checkRet        []databranchutils.GetResult
 		)
 
 		send := func(bwk batchWithKind) error {
@@ -3177,9 +3283,18 @@ func findDeleteAndUpdateBat(
 					if updateBat == nil {
 						updateBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
 					}
+					if expandUpdate && updateDeleteBat == nil {
+						updateDeleteBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
+					}
 
 					if tuple, _, err2 = dataHashmap.DecodeRow(check.Rows[0]); err2 != nil {
 						return err2
+					}
+
+					if expandUpdate {
+						if err2 = updateDeleteBat.UnionOne(dBat, int64(i), ses.proc.Mp()); err2 != nil {
+							return err2
+						}
 					}
 
 					if err2 = appendTupleToBat(ses, updateBat, tuple, tblStuff); err2 != nil {
@@ -3199,12 +3314,32 @@ func findDeleteAndUpdateBat(
 
 			if updateBat != nil {
 				updateBat.SetRowCount(updateBat.Vecs[0].Length())
-				if err2 = send(batchWithKind{
-					name:  tblName,
-					batch: updateBat,
-					kind:  diffUpdate,
-				}); err2 != nil {
-					return err2
+				if expandUpdate {
+					if updateDeleteBat != nil {
+						updateDeleteBat.SetRowCount(updateDeleteBat.Vecs[0].Length())
+						if err2 = send(batchWithKind{
+							name:  tblName,
+							batch: updateDeleteBat,
+							kind:  diffDelete,
+						}); err2 != nil {
+							return err2
+						}
+					}
+					if err2 = send(batchWithKind{
+						name:  tblName,
+						batch: updateBat,
+						kind:  diffInsert,
+					}); err2 != nil {
+						return err2
+					}
+				} else {
+					if err2 = send(batchWithKind{
+						name:  tblName,
+						batch: updateBat,
+						kind:  diffUpdate,
+					}); err2 != nil {
+						return err2
+					}
 				}
 			}
 
@@ -3316,12 +3451,13 @@ func diffDataHelper(
 
 	if err = tarDataHashmap.ForEachShardParallel(func(cursor databranchutils.ShardCursor) error {
 		var (
-			err2      error
-			tarBat    *batch.Batch
-			baseBat   *batch.Batch
-			tarTuple  types.Tuple
-			baseTuple types.Tuple
-			checkRet  databranchutils.GetResult
+			err2          error
+			tarBat        *batch.Batch
+			baseBat       *batch.Batch
+			baseDeleteBat *batch.Batch
+			tarTuple      types.Tuple
+			baseTuple     types.Tuple
+			checkRet      databranchutils.GetResult
 		)
 
 		tarBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
@@ -3385,11 +3521,25 @@ func diffDataHelper(
 						}
 
 						if notSame {
-							// conflict happened
-							if err2 = checkConflictAndAppendToBat(
-								ses, copt, tblStuff, tarBat, baseBat, tarTuple, baseTuple,
-							); err2 != nil {
-								return err2
+							if copt.conflictOpt != nil &&
+								copt.conflictOpt.Opt == tree.CONFLICT_ACCEPT &&
+								copt.expandUpdate {
+								if baseDeleteBat == nil {
+									baseDeleteBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
+								}
+								if err2 = appendTupleToBat(ses, baseDeleteBat, baseTuple, tblStuff); err2 != nil {
+									return err2
+								}
+								if err2 = appendTupleToBat(ses, tarBat, tarTuple, tblStuff); err2 != nil {
+									return err2
+								}
+							} else {
+								// conflict happened
+								if err2 = checkConflictAndAppendToBat(
+									ses, copt, tblStuff, tarBat, baseBat, tarTuple, baseTuple,
+								); err2 != nil {
+									return err2
+								}
 							}
 						}
 					}
@@ -3404,6 +3554,18 @@ func diffDataHelper(
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
+		}
+
+		if baseDeleteBat != nil {
+			if stop, err3 := emitBatch(emit, batchWithKind{
+				batch: baseDeleteBat,
+				kind:  diffDelete,
+				name:  tblStuff.baseRel.GetTableName(),
+			}, false, tblStuff.retPool); err3 != nil {
+				return err3
+			} else if stop {
+				return nil
+			}
 		}
 
 		if stop, err3 := emitBatch(emit, batchWithKind{
@@ -3432,8 +3594,10 @@ func diffDataHelper(
 	}
 
 	if copt.conflictOpt != nil {
-		// merge doesnt need the base data
-		return nil
+		if !copt.outputSQL {
+			// merge doesnt need the base data
+			return nil
+		}
 	}
 
 	if err = baseDataHashmap.ForEachShardParallel(func(cursor databranchutils.ShardCursor) error {
@@ -3961,11 +4125,9 @@ func buildHashmapForTable(
 			if isTombstone {
 				// keep the commit ts
 				taskErr = tombstoneHashmap.PutByVectors(bat.Vecs[:ll], []int{0})
-				fmt.Println("A", common.MoBatchToString(bat, bat.RowCount()))
 			} else {
 				// keep the commit ts
 				taskErr = dataHashmap.PutByVectors(bat.Vecs[:ll], []int{tblStuff.def.pkColIdx})
-				fmt.Println("B", common.MoBatchToString(bat, bat.RowCount()))
 			}
 
 			bat.Clean(mp)
@@ -4113,33 +4275,6 @@ func buildHashmapForTable(
 		return nil, nil, err
 	}
 
-	//tombstoneHashmap.ForEachShardParallel(func(cursor databranchutils.ShardCursor) error {
-	//	cursor.ForEach(func(key []byte, rows [][]byte) error {
-	//		for i := range rows {
-	//			if tuple, _, err3 := tombstoneHashmap.DecodeRow(rows[i]); err3 != nil {
-	//				return err3
-	//			} else {
-	//				fmt.Println("tombstone", tuple[0].(int32))
-	//			}
-	//		}
-	//		return nil
-	//	})
-	//	return nil
-	//}, 1)
-	//
-	//dataHashmap.ForEachShardParallel(func(cursor databranchutils.ShardCursor) error {
-	//	cursor.ForEach(func(key []byte, rows [][]byte) error {
-	//		for i := range rows {
-	//			if tuple, _, err3 := dataHashmap.DecodeRow(rows[i]); err3 != nil {
-	//				return err3
-	//			} else {
-	//				fmt.Println("data", tuple[0].(int32), tuple[1].(int32))
-	//			}
-	//		}
-	//		return nil
-	//	})
-	//	return nil
-	//}, 1)
 	return
 }
 
