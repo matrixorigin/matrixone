@@ -11,6 +11,8 @@ set max_allowed_packet = default;
 set wait_timeout = default;
 set tx_isolation = default;
 set tx_isolation = default;
+show variables like 'server_id';
+select @@server_id;
 
 
 -- auto_increment_increment
