@@ -210,7 +210,7 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 	preInsert.ctr.buf.AddRowCount(bat.RowCount())
 
 	if preInsert.HasAutoCol {
-		if shouldTreatZeroAsAutoIncr(proc) {
+		if shouldConvertZeroToNull(preInsert, proc) {
 			convertZeroToNull(preInsert.ctr.buf, preInsert)
 		}
 		start := time.Now()
@@ -236,6 +236,13 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 }
 
 func shouldTreatZeroAsAutoIncr(proc *proc) bool {
+	if proc != nil {
+		if ses := proc.GetSession(); ses != nil {
+			if hasNoAutoValueOnZero, ok := ses.GetSqlModeNoAutoValueOnZero(); ok {
+				return !hasNoAutoValueOnZero
+			}
+		}
+	}
 	resolve := proc.GetResolveVariableFunc()
 	if resolve == nil {
 		// internal/background proc may not have sql_mode; keep explicit 0 behavior
@@ -250,6 +257,13 @@ func shouldTreatZeroAsAutoIncr(proc *proc) bool {
 		return false
 	}
 	return !strings.Contains(strings.ToUpper(mode), "NO_AUTO_VALUE_ON_ZERO")
+}
+
+func shouldConvertZeroToNull(preInsert *PreInsert, proc *proc) bool {
+	if preInsert.IsOldUpdate || preInsert.IsNewUpdate {
+		return false
+	}
+	return shouldTreatZeroAsAutoIncr(proc)
 }
 
 func convertZeroToNull(bat *batch.Batch, preInsert *PreInsert) {
