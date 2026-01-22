@@ -319,20 +319,17 @@ func concatDecimal128(v *vector.Vector, row int, src []byte) ([]byte, error) {
 }
 
 func concatTime[T fmt.Stringer](v *vector.Vector, row int, src []byte) ([]byte, error) {
-	value := vector.GetFixedAtNoTypeCheck[T](v, row)
-	return fmt.Appendf(src, "%v", value.String()), nil
+	val := vector.GetFixedAtNoTypeCheck[T](v, row)
+	return fmt.Appendf(src, "%v", val.String()), nil
 }
 
 func concatJson(v *vector.Vector, row int, src []byte) ([]byte, error) {
 	value := v.GetBytesAt(row)
-
 	if err := isValidGroupConcatUnit(value); err != nil {
 		return nil, err
 	}
 	// Decode the bytejson binary format and convert to JSON string
 	bj := types.DecodeJson(value)
-
 	jsonStr := bj.String()
-
 	return append(src, jsonStr...), nil
 }
