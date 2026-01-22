@@ -295,8 +295,8 @@ var oidToConcatFunc = map[types.T]func(*vector.Vector, int, []byte) ([]byte, err
 }
 
 func concatFixedTypeChecked[T types.FixedSizeTExceptStrType](v *vector.Vector, row int, src []byte) ([]byte, error) {
-	value := vector.GetFixedAtNoTypeCheck[T](v, row)
-	return fmt.Appendf(src, "%v", value), nil
+	val := vector.GetFixedAtNoTypeCheck[T](v, row)
+	return fmt.Appendf(src, "%v", val), nil
 }
 
 func concatVar(v *vector.Vector, row int, src []byte) ([]byte, error) {
@@ -319,8 +319,8 @@ func concatDecimal128(v *vector.Vector, row int, src []byte) ([]byte, error) {
 }
 
 func concatTime[T fmt.Stringer](v *vector.Vector, row int, src []byte) ([]byte, error) {
-	val := vector.GetFixedAtNoTypeCheck[T](v, row)
-	return fmt.Appendf(src, "%v", val.String()), nil
+	value := vector.GetFixedAtNoTypeCheck[T](v, row)
+	return fmt.Appendf(src, "%v", value.String()), nil
 }
 
 func concatJson(v *vector.Vector, row int, src []byte) ([]byte, error) {
