@@ -722,11 +722,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			if tsT == nil {
 				break
 			}
-			// isAdjustedToUTC indicates whether the timestamp is stored as UTC.
-			// If true, the value is already in UTC and can be used directly.
-			// If false, the value represents a "local time" without timezone info.
-			// For non-UTC timestamps, we need to adjust by subtracting the session timezone offset
-			// so that when MO displays the value (adding timezone offset), it shows the original value.
+			// isAdjustedToUTC: true=UTC (use directly), false=local time (subtract session timezone offset for correct MO display)
 			isAdjustedToUTC := tsT.IsAdjustedToUTC
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				data := page.Data()
