@@ -35,9 +35,19 @@ func PrefixEq(parameters []*vector.Vector, result vector.FunctionResultWrapper, 
 	res := vector.MustFixedColWithTypeCheck[bool](result.GetResultVector())
 
 	lcol, larea := vector.MustVarlenaRawData(lvec)
-	lvecHasNull := lvec.HasNull()
 
-	if lvec.GetSorted() && !lvecHasNull {
+	if lvec.HasNull() {
+		lNulls := lvec.GetNulls()
+		rNulls := result.GetResultVector().GetNulls()
+		for i := uint64(0); i < uint64(length); i++ {
+			if lNulls.Contains(i) {
+				res[i] = false
+				rNulls.Add(i)
+			} else {
+				res[i] = bytes.HasPrefix(lcol[i].GetByteSlice(larea), rval)
+			}
+		}
+	} else if lvec.GetSorted() {
 		lowerBound := sort.Search(len(lcol), func(i int) bool {
 			return bytes.Compare(rval, lcol[i].GetByteSlice(larea)) <= 0
 		})
@@ -47,7 +57,7 @@ func PrefixEq(parameters []*vector.Vector, result vector.FunctionResultWrapper, 
 			upperBound++
 		}
 
-		for i := 0; i < lowerBound; i++ {
+		for i := range lowerBound {
 			res[i] = false
 		}
 		for i := lowerBound; i < upperBound; i++ {
@@ -57,21 +67,8 @@ func PrefixEq(parameters []*vector.Vector, result vector.FunctionResultWrapper, 
 			res[i] = false
 		}
 	} else {
-		if lvecHasNull {
-			lNulls := lvec.GetNulls()
-			rNulls := result.GetResultVector().GetNulls()
-			for i := uint64(0); i < uint64(length); i++ {
-				if lNulls.Contains(i) {
-					res[i] = false
-					rNulls.Add(i)
-				} else {
-					res[i] = bytes.HasPrefix(lcol[i].GetByteSlice(larea), rval)
-				}
-			}
-		} else {
-			for i := 0; i < length; i++ {
-				res[i] = bytes.HasPrefix(lcol[i].GetByteSlice(larea), rval)
-			}
+		for i := range length {
+			res[i] = bytes.HasPrefix(lcol[i].GetByteSlice(larea), rval)
 		}
 	}
 
@@ -79,54 +76,11 @@ func PrefixEq(parameters []*vector.Vector, result vector.FunctionResultWrapper, 
 }
 
 func PrefixBetween(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	ivec := parameters[0]
-	lval := parameters[1].GetBytesAt(0)
-	rval := parameters[2].GetBytesAt(0)
-	res := vector.MustFixedColWithTypeCheck[bool](result.GetResultVector())
+	return opBetweenBytesWithFunc(parameters, result, proc, length, selectList, types.PrefixCompare)
+}
 
-	icol, iarea := vector.MustVarlenaRawData(ivec)
-	ivecHasNull := ivec.HasNull()
-
-	if ivec.GetSorted() && !ivecHasNull {
-		lowerBound := sort.Search(len(icol), func(i int) bool {
-			return types.PrefixCompare(icol[i].GetByteSlice(iarea), lval) >= 0
-		})
-
-		upperBound := sort.Search(len(icol), func(i int) bool {
-			return types.PrefixCompare(icol[i].GetByteSlice(iarea), rval) > 0
-		})
-
-		for i := 0; i < lowerBound; i++ {
-			res[i] = false
-		}
-		for i := lowerBound; i < upperBound; i++ {
-			res[i] = true
-		}
-		for i := upperBound; i < length; i++ {
-			res[i] = false
-		}
-	} else {
-		if ivecHasNull {
-			iNulls := ivec.GetNulls()
-			rNulls := result.GetResultVector().GetNulls()
-			for i := uint64(0); i < uint64(length); i++ {
-				if iNulls.Contains(i) {
-					res[i] = false
-					rNulls.Add(i)
-				} else {
-					val := icol[i].GetByteSlice(iarea)
-					res[i] = types.PrefixCompare(val, lval) >= 0 && types.PrefixCompare(val, rval) <= 0
-				}
-			}
-		} else {
-			for i := 0; i < length; i++ {
-				val := icol[i].GetByteSlice(iarea)
-				res[i] = types.PrefixCompare(val, lval) >= 0 && types.PrefixCompare(val, rval) <= 0
-			}
-		}
-	}
-
-	return nil
+func PrefixInRange(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return inRangeBytesWithFunc(parameters, result, proc, length, selectList, types.PrefixCompare)
 }
 
 type implPrefixIn struct {
@@ -191,7 +145,7 @@ func (op *implPrefixIn) doPrefixIn(parameters []*vector.Vector, result vector.Fu
 		rpos := 0
 		rlen := len(op.vals)
 
-		for i := 0; i < length; i++ {
+		for i := range length {
 			lval := lcol[i].GetByteSlice(larea)
 			for types.PrefixCompare(lval, rval) > 0 {
 				rpos++
@@ -225,7 +179,7 @@ func (op *implPrefixIn) doPrefixIn(parameters []*vector.Vector, result vector.Fu
 				}
 			}
 		} else {
-			for i := 0; i < length; i++ {
+			for i := range length {
 				lval := lcol[i].GetByteSlice(larea)
 				rpos, _ := sort.Find(len(op.vals), func(j int) int {
 					return types.PrefixCompare(lval, op.vals[j])
