@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/encoding"
+	"github.com/parquet-go/parquet-go/format"
 )
 
 func scanParquetFile(ctx context.Context, param *ExternalParam, proc *process.Process, bat *batch.Batch) error {
@@ -1011,8 +1012,9 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			return nil
 		}
 	case types.T_decimal64:
-		if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
-			// Support STRING to DECIMAL64 conversion
+		lt := st.LogicalType()
+		if (st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray) && !isDecimalLogicalType(lt) {
+			// STRING to DECIMAL64
 			precision := int32(dt.Width)
 			scale := int32(dt.Scale)
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
@@ -1028,6 +1030,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				)
 			}
 		} else {
+			// Binary DECIMAL
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				kind := st.Kind()
 				data := page.Data()
@@ -1051,8 +1054,9 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			}
 		}
 	case types.T_decimal128:
-		if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
-			// Support STRING to DECIMAL128 conversion
+		lt := st.LogicalType()
+		if (st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray) && !isDecimalLogicalType(lt) {
+			// STRING to DECIMAL128 conversion (no DECIMAL LogicalType means it's stored as string)
 			precision := int32(dt.Width)
 			scale := int32(dt.Scale)
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
@@ -1068,6 +1072,8 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				)
 			}
 		} else {
+			// Binary DECIMAL (INT32/INT64/FixedLenByteArray/ByteArray with DECIMAL LogicalType)
+			// PyArrow stores DECIMAL as FixedLenByteArray with DECIMAL LogicalType (big-endian two's complement)
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				kind := st.Kind()
 				data := page.Data()
@@ -1597,6 +1603,10 @@ func decodeDecimal256Values(ctx context.Context, kind parquet.Kind, data encodin
 	default:
 		return nil, moerr.NewInvalidInputf(ctx, "unsupported parquet physical type %s for decimal256", kind)
 	}
+}
+
+func isDecimalLogicalType(lt *format.LogicalType) bool {
+	return lt != nil && lt.Decimal != nil
 }
 
 func decimalBytesToDecimal64(ctx context.Context, b []byte) (types.Decimal64, error) {
