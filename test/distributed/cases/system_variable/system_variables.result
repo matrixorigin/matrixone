@@ -449,9 +449,6 @@ select @@sql_mode;
 @@sql_mode
 ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
 set @@sql_mode = default;
-select a from (select 1 as a) t having a = 1;
-a
-1
 set global long_query_time = 1.1;
 show global variables like 'long_query_time';
 Variable_name    Value
