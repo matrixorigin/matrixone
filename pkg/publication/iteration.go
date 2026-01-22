@@ -828,7 +828,7 @@ func RequestUpstreamSnapshot(
 		errMsg := err.Error()
 		if strings.Contains(errMsg, "already exists") && strings.Contains(errMsg, "snapshot") {
 			// Snapshot already exists, this is acceptable, continue execution
-			logutil.Info("ccpr-iteration snapshot already exists, continuing",
+			logutil.Info("ccpr-iteration-snapshot already exists, continuing",
 				zap.String("snapshot_name", snapshotName),
 				zap.Error(err),
 			)
@@ -958,7 +958,7 @@ func WaitForSnapshotFlushed(
 		defer cancel()
 		result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctxWithTimeout, nil, checkSQL, false, true)
 		if err != nil {
-			logutil.Warn("ccpr-iteration check snapshot flushed failed",
+			logutil.Warn("ccpr-iteration-wait-snapshot query failed",
 				zap.String("snapshot_name", snapshotName),
 				zap.Int("attempt", attempt),
 				zap.Error(err),
@@ -978,7 +978,7 @@ func WaitForSnapshotFlushed(
 			result.Close()
 
 			if found && flushed {
-				logutil.Info("ccpr-iteration snapshot flushed",
+				logutil.Info("ccpr-iteration-wait-snapshot success",
 					zap.String("snapshot_name", snapshotName),
 					zap.Int("attempt", attempt),
 					zap.Duration("elapsed", time.Since(startTime)),
@@ -989,12 +989,11 @@ func WaitForSnapshotFlushed(
 
 		// Log retry attempt
 		attempt++
-		logutil.Info("ccpr-iteration waiting for snapshot to be flushed",
+		logutil.Info("ccpr-iteration-wait-snapshot",
+			zap.String("task_id", iterationCtx.String()),
 			zap.String("snapshot_name", snapshotName),
 			zap.Int("attempt", attempt),
-			zap.Duration("next_interval", interval),
 			zap.Duration("elapsed", time.Since(startTime)),
-			zap.Duration("remaining", totalTimeout-time.Since(startTime)),
 		)
 
 		// Wait before next retry with fixed interval
@@ -1088,37 +1087,17 @@ func GetObjectListFromSnapshotDiff(
 		againstSnapshotName,
 	)
 
-	// Log before getting object list
-	logutil.Info("ccpr-iteration getting object list",
-		zap.Uint64("task_id", iterationCtx.TaskID),
-		zap.Uint64("lsn", iterationCtx.IterationLSN),
-		zap.String("db_name", dbName),
-		zap.String("table_name", tableName),
-		zap.String("current_snapshot", iterationCtx.CurrentSnapshotName),
-		zap.String("against_snapshot", againstSnapshotName),
-	)
-
 	// Execute SQL through upstream executor and return result directly
 	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
 	result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctxWithTimeout, nil, objectListSQL, false, true)
 	if err != nil {
-		logutil.Error("ccpr-iteration failed to get object list",
-			zap.Uint64("task_id", iterationCtx.TaskID),
-			zap.Uint64("lsn", iterationCtx.IterationLSN),
-			zap.String("db_name", dbName),
-			zap.String("table_name", tableName),
+		logutil.Error("ccpr-iteration error",
+			zap.String("task_id", iterationCtx.String()),
 			zap.Error(err),
 		)
 		return nil, moerr.NewInternalErrorf(ctx, "failed to execute object list query: %v", err)
 	}
-
-	logutil.Info("ccpr-iteration got object list result",
-		zap.Uint64("task_id", iterationCtx.TaskID),
-		zap.Uint64("lsn", iterationCtx.IterationLSN),
-		zap.String("db_name", dbName),
-		zap.String("table_name", tableName),
-	)
 
 	return result, nil
 }
@@ -1202,9 +1181,8 @@ func ExecuteIteration(
 	}
 
 	// Log iteration start with task id, lsn, and src info
-	logutil.Info("ccpr-iteration iteration start",
-		zap.Uint64("task_id", iterationCtx.TaskID),
-		zap.Uint64("lsn", iterationCtx.IterationLSN),
+	logutil.Info("ccpr-iteration start",
+		zap.String("task_id", iterationCtx.String()),
 		zap.String("src_info", fmt.Sprintf("sync_level=%s, account_id=%d, db_name=%s, table_name=%s",
 			iterationCtx.SrcInfo.SyncLevel,
 			iterationCtx.SrcInfo.AccountID,
@@ -1255,9 +1233,9 @@ func ExecuteIteration(
 			commitErr = moerr.NewInternalErrorNoCtx(injectMessage)
 		}
 		if commitErr != nil {
-			logutil.Error("ccpr-iteration commit error",
-				zap.Error(commitErr),
+			logutil.Error("ccpr-iteration error",
 				zap.String("task_id", iterationCtx.String()),
+				zap.Error(commitErr),
 			)
 			if err != nil {
 				err = moerr.NewInternalErrorf(ctx, "failed to close iteration context: %v; previous error: %v", commitErr, err)
@@ -1266,7 +1244,7 @@ func ExecuteIteration(
 			}
 		}
 		if err == nil {
-			logutil.Info("ccpr-iteration success",
+			logutil.Info("ccpr-iteration end",
 				zap.String("task_id", iterationCtx.String()),
 			)
 		}
@@ -1284,10 +1262,9 @@ func ExecuteIteration(
 			if err = UpdateIterationState(ctx, iterationCtx.LocalExecutor, taskID, finalState, iterationLSN, iterationCtx, errorMsg, false, subscriptionState); err != nil {
 				// Log error but don't override the original error
 				err = moerr.NewInternalErrorf(ctx, "failed to update iteration state: %v", err)
-				logutil.Error(
-					"ccpr-iteration failed to update iteration state",
+				logutil.Error("ccpr-iteration error",
+					zap.String("task_id", iterationCtx.String()),
 					zap.Error(err),
-					zap.String("task", iterationCtx.String()),
 				)
 			}
 		}
@@ -1309,9 +1286,9 @@ func ExecuteIteration(
 		}
 		checkExecutor, checkErr := NewInternalSQLExecutor(cnUUID, nil, nil, catalog.System_Account, checkRetryOpt, true)
 		if checkErr != nil {
-			logutil.Error("ccpr-iteration failed to create check executor",
+			logutil.Error("ccpr-iteration error",
+				zap.String("task_id", iterationCtx.String()),
 				zap.Error(checkErr),
-				zap.Uint64("task_id", taskID),
 			)
 			err = moerr.NewInternalErrorf(ctx, "failed to create check executor: %v", checkErr)
 			return
@@ -1319,10 +1296,9 @@ func ExecuteIteration(
 
 		// Check state before update: expecting state=running, iteration_state=running, iteration_lsn=iterationCtx.IterationLSN
 		if checkErr = CheckStateBeforeUpdate(ctx, checkExecutor, taskID, iterationCtx.IterationLSN); checkErr != nil {
-			logutil.Error("ccpr-iteration state check before update failed",
+			logutil.Error("ccpr-iteration error",
+				zap.String("task_id", iterationCtx.String()),
 				zap.Error(checkErr),
-				zap.Uint64("task_id", taskID),
-				zap.Uint64("iteration_lsn", iterationCtx.IterationLSN),
 			)
 			err = moerr.NewInternalErrorf(ctx, "state check before update failed: %v", checkErr)
 			// Task failure is usually caused by CN UUID or LSN validation errors.
@@ -1342,7 +1318,7 @@ func ExecuteIteration(
 				errorMetadata, retryable := BuildErrorMetadata(iterationCtx.ErrorMetadata, err, classifier)
 				errorMsg = errorMetadata.Format()
 				nextLSN = iterationLSN
-				logutil.Error("ccpr-iteration failed",
+				logutil.Error("ccpr-iteration error",
 					zap.String("task_id", iterationCtx.String()),
 					zap.Error(err),
 				)
@@ -1386,8 +1362,8 @@ func ExecuteIteration(
 			ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute)
 			defer cancel()
 			if dropResult, dropErr := iterationCtx.UpstreamExecutor.ExecSQL(ctxWithTimeout, nil, dropSnapshotSQL, false, true); dropErr != nil {
-				logutil.Warn("ccpr-iteration failed to drop snapshot on error",
-					zap.String("snapshot_name", iterationCtx.CurrentSnapshotName),
+				logutil.Error("ccpr-iteration error",
+					zap.String("task_id", iterationCtx.String()),
 					zap.Error(dropErr),
 				)
 			} else {
@@ -1416,9 +1392,8 @@ func ExecuteIteration(
 	}
 
 	// Log snapshot information
-	logutil.Info("ccpr-iteration snapshot info",
-		zap.Uint64("task_id", iterationCtx.TaskID),
-		zap.Uint64("lsn", iterationCtx.IterationLSN),
+	logutil.Info("ccpr-iteration-snapshot-info",
+		zap.String("task_id", iterationCtx.String()),
 		zap.String("current_snapshot_name", iterationCtx.CurrentSnapshotName),
 		zap.Int64("current_snapshot_ts", iterationCtx.CurrentSnapshotTS.Physical()),
 		zap.String("prev_snapshot_name", iterationCtx.PrevSnapshotName),
@@ -1459,11 +1434,6 @@ func ExecuteIteration(
 		err = moerr.NewInternalErrorf(ctx, "failed to apply object list: %v", err)
 		return
 	}
-	// Log completion of all object submissions
-	logutil.Info("ccpr-iteration finished submitting all objects",
-		zap.Uint64("task_id", iterationCtx.TaskID),
-		zap.Uint64("lsn", iterationCtx.IterationLSN),
-	)
 
 	return
 }

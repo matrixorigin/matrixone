@@ -327,6 +327,12 @@ func ProcessDDLChanges(
 		return moerr.NewInternalErrorf(ctx, "failed to get database differences: %v", err)
 	}
 
+	logutil.Info("ccpr-iteration ddl",
+		zap.String("task_id", iterationCtx.String()),
+		zap.String("operation", "create"),
+		zap.String("type", "database"),
+		zap.Any("database", dbToCreate),
+	)
 	// Step 2: Create databases that exist upstream but not locally
 	for _, dbName := range dbToCreate {
 		// Check if database already exists (for robustness in case of concurrent operations)
@@ -341,11 +347,6 @@ func ProcessDDLChanges(
 			continue
 		}
 
-		logutil.Info("ccpr-iteration creating database",
-			zap.Uint64("task_id", iterationCtx.TaskID),
-			zap.Uint64("lsn", iterationCtx.IterationLSN),
-			zap.String("database", dbName),
-		)
 		err = cnEngine.Create(downstreamCtx, dbName, iterationCtx.LocalTxn)
 		if err != nil {
 			return moerr.NewInternalErrorf(ctx, "failed to create database %s: %v", dbName, err)
@@ -439,13 +440,14 @@ func ProcessDDLChanges(
 		}
 	}
 
+	logutil.Info("ccpr-iteration ddl",
+		zap.String("task_id", iterationCtx.String()),
+		zap.String("operation", "drop"),
+		zap.String("type", "database"),
+		zap.Any("database", dbToDrop),
+	)
 	// Step 6: Drop databases that exist locally but not upstream
 	for _, dbName := range dbToDrop {
-		logutil.Info("ccpr-iteration dropping database",
-			zap.Uint64("task_id", iterationCtx.TaskID),
-			zap.Uint64("lsn", iterationCtx.IterationLSN),
-			zap.String("database", dbName),
-		)
 		err := cnEngine.Delete(downstreamCtx, dbName, iterationCtx.LocalTxn)
 		if err != nil {
 			// Check if error is due to database not existing (similar to IF EXISTS behavior)
@@ -793,18 +795,10 @@ func removeIndexTableMappings(
 	for _, index := range def.Indexes {
 		indexTableNames[index.IndexTableName] = struct{}{}
 	}
-	for upstreamTableName, downstreamTableName := range iterationCtx.IndexTableMappings {
+	for upstreamTableName := range iterationCtx.IndexTableMappings {
 		if _, exists := indexTableNames[upstreamTableName]; exists {
 			// Remove the mapping
 			delete(iterationCtx.IndexTableMappings, upstreamTableName)
-			// Log the removal
-			logutil.Info("ccpr-iteration removed index table mapping",
-				zap.Uint64("task_id", iterationCtx.TaskID),
-				zap.Uint64("lsn", iterationCtx.IterationLSN),
-				zap.Uint64("table_id", tableID),
-				zap.String("upstream_index_table_name", upstreamTableName),
-				zap.String("downstream_index_table_name", downstreamTableName),
-			)
 		}
 	}
 	return nil
@@ -896,7 +890,7 @@ func processIndexTableMappings(
 			iterationCtx.IndexTableMappings[upstreamIndexTableName] = downstreamIndexTableName
 
 			// Log index table mapping update
-			logutil.Info("ccpr-iteration updated index table mapping",
+			logutil.Info("ccpr-iteration-ddl updated index table mapping",
 				zap.Uint64("task_id", iterationCtx.TaskID),
 				zap.Uint64("lsn", iterationCtx.IterationLSN),
 				zap.String("db_name", dbName),
