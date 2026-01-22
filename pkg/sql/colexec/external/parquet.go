@@ -718,20 +718,41 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			}
 			// https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#timestamp
 			tsT := lt.Timestamp
-			if tsT == nil || !tsT.IsAdjustedToUTC {
+			if tsT == nil {
 				break
 			}
+			// isAdjustedToUTC indicates whether the timestamp is stored as UTC.
+			// If true, the value is already in UTC and can be used directly.
+			// If false, the value represents a "local time" without timezone info.
+			// For non-UTC timestamps, we need to adjust by subtracting the session timezone offset
+			// so that when MO displays the value (adding timezone offset), it shows the original value.
+			isAdjustedToUTC := tsT.IsAdjustedToUTC
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				data := page.Data()
 				dict := page.Dictionary()
+
+				// Get timezone offset for non-UTC timestamps
+				var tzOffsetMicros int64 = 0
+				if !isAdjustedToUTC {
+					loc := proc.Base.SessionInfo.TimeZone
+					if loc == nil {
+						loc = time.Local
+					}
+					// Get the timezone offset in seconds, then convert to microseconds
+					// We use current time to get the offset, which handles DST correctly for current data
+					_, offset := time.Now().In(loc).Zone()
+					tzOffsetMicros = int64(offset) * 1000000 // seconds to microseconds
+				}
+
 				switch {
 				case tsT.Unit.Nanos != nil:
+					tzOffsetNanos := tzOffsetMicros * 1000 // convert to nanoseconds
 					if dict != nil {
 						dictData := dict.Page().Data()
 						dictValues := dictData.Int64()
 						converted := make([]types.Timestamp, len(dictValues))
 						for i, v := range dictValues {
-							converted[i] = types.UnixNanoToTimestamp(v)
+							converted[i] = types.UnixNanoToTimestamp(v - tzOffsetNanos)
 						}
 						indexes := data.Int32()
 						return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Timestamp {
@@ -739,7 +760,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 						})
 					}
 					return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Timestamp {
-						return types.UnixNanoToTimestamp(v)
+						return types.UnixNanoToTimestamp(v - tzOffsetNanos)
 					})
 				case tsT.Unit.Micros != nil:
 					if dict != nil {
@@ -747,7 +768,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 						dictValues := dictData.Int64()
 						converted := make([]types.Timestamp, len(dictValues))
 						for i, v := range dictValues {
-							converted[i] = types.UnixMicroToTimestamp(v)
+							converted[i] = types.UnixMicroToTimestamp(v - tzOffsetMicros)
 						}
 						indexes := data.Int32()
 						return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Timestamp {
@@ -755,15 +776,16 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 						})
 					}
 					return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Timestamp {
-						return types.UnixMicroToTimestamp(v)
+						return types.UnixMicroToTimestamp(v - tzOffsetMicros)
 					})
 				case tsT.Unit.Millis != nil:
+					tzOffsetMillis := tzOffsetMicros / 1000 // convert to milliseconds
 					if dict != nil {
 						dictData := dict.Page().Data()
 						dictValues := dictData.Int64()
 						converted := make([]types.Timestamp, len(dictValues))
 						for i, v := range dictValues {
-							converted[i] = types.UnixMicroToTimestamp(v * 1000)
+							converted[i] = types.UnixMicroToTimestamp((v - tzOffsetMillis) * 1000)
 						}
 						indexes := data.Int32()
 						return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Timestamp {
@@ -771,7 +793,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 						})
 					}
 					return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Timestamp {
-						return types.UnixMicroToTimestamp(v * 1000)
+						return types.UnixMicroToTimestamp((v - tzOffsetMillis) * 1000)
 					})
 				default:
 					return moerr.NewInternalError(proc.Ctx, "unknown unit")
