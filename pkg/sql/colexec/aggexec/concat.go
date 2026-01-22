@@ -284,7 +284,7 @@ var oidToConcatFunc = map[types.T]func(*vector.Vector, int, []byte) ([]byte, err
 	types.T_datalink:      concatVar,
 	types.T_varbinary:     concatVar,
 	types.T_binary:        concatVar,
-	types.T_json:          concatVar,
+	types.T_json:          concatJson,
 	types.T_enum:          concatVar,
 	types.T_interval:      concatFixedTypeChecked[types.IntervalType],
 	types.T_TS:            concatFixedTypeChecked[types.TS],
@@ -321,4 +321,15 @@ func concatDecimal128(v *vector.Vector, row int, src []byte) ([]byte, error) {
 func concatTime[T fmt.Stringer](v *vector.Vector, row int, src []byte) ([]byte, error) {
 	value := vector.GetFixedAtNoTypeCheck[T](v, row)
 	return fmt.Appendf(src, "%v", value.String()), nil
+}
+
+func concatJson(v *vector.Vector, row int, src []byte) ([]byte, error) {
+	value := v.GetBytesAt(row)
+	if err := isValidGroupConcatUnit(value); err != nil {
+		return nil, err
+	}
+	// Decode the bytejson binary format and convert to JSON string
+	bj := types.DecodeJson(value)
+	jsonStr := bj.String()
+	return append(src, jsonStr...), nil
 }
