@@ -42,7 +42,6 @@ select * from t1 order by a;
 insert into t1 values ('-2000', 'yyy');
 insert into t1 values ('200', 'yyy');
 
--- echo error msg;
 insert into t1 values ('0', 'yyy');
 
 select * from t1;
@@ -166,7 +165,6 @@ select * from t4 order by a;
 insert into t4 values ('-2000', 'yyy');
 insert into t4 values ('200', 'yyy');
 
--- echo error msg;
 insert into t4 values ('0', 'yyy');
 
 select * from t4 order by a;
