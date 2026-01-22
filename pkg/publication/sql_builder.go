@@ -99,7 +99,8 @@ const (
 	PublicationQueryMoCcprLogSqlTemplate = `SELECT ` +
 		`cn_uuid, ` +
 		`iteration_state, ` +
-		`iteration_lsn ` +
+		`iteration_lsn, ` +
+		`state ` +
 		`FROM mo_catalog.mo_ccpr_log ` +
 		`WHERE task_id = %d`
 
@@ -289,6 +290,7 @@ var PublicationSQLTemplates = [PublicationSqlTemplateCount]struct {
 			"cn_uuid",
 			"iteration_state",
 			"iteration_lsn",
+			"state",
 		},
 	},
 	PublicationQueryMoCcprLogFullSqlTemplate_Idx: {
@@ -703,8 +705,8 @@ func (b publicationSQLBuilder) GetDdlSQL(
 // ------------------------------------------------------------------------------------------------
 
 // QueryMoCcprLogSQL creates SQL for querying mo_ccpr_log by task_id
-// Returns cn_uuid, iteration_state, iteration_lsn
-// Example: SELECT cn_uuid, iteration_state, iteration_lsn FROM mo_catalog.mo_ccpr_log WHERE task_id = 1
+// Returns cn_uuid, iteration_state, iteration_lsn, state
+// Example: SELECT cn_uuid, iteration_state, iteration_lsn, state FROM mo_catalog.mo_ccpr_log WHERE task_id = 1
 func (b publicationSQLBuilder) QueryMoCcprLogSQL(
 	taskID uint64,
 ) string {

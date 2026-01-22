@@ -56,6 +56,10 @@ const (
 type UTHelper interface {
 	// OnSnapshotCreated is called after a snapshot is created in the upstream
 	OnSnapshotCreated(ctx context.Context, snapshotName string, snapshotTS types.TS) error
+	// OnSQLExecFailed is called before each SQL execution attempt
+	// errorCount: current error count for this SQL query (resets to 0 for each new query)
+	// Returns: error to inject (nil means no error injection)
+	OnSQLExecFailed(ctx context.Context, query string, errorCount int) error
 }
 
 // ObjectWithTableInfo contains ObjectStats with its table and database information
@@ -98,6 +102,7 @@ func (iterCtx *IterationContext) String() string {
 // iterationLSN is passed in as a parameter.
 // ActiveAObj and TableIDs are read from the context JSON field.
 // sqlExecutorRetryOpt: retry options for SQL executor operations (nil to use default)
+// utHelper: optional unit test helper for injecting errors
 func InitializeIterationContext(
 	ctx context.Context,
 	cnUUID string,
@@ -107,17 +112,17 @@ func InitializeIterationContext(
 	iterationLSN uint64,
 	upstreamSQLHelperFactory UpstreamSQLHelperFactory,
 	sqlExecutorRetryOpt *SQLExecutorRetryOption,
+	utHelper UTHelper,
 ) (*IterationContext, error) {
 	if cnTxnClient == nil {
 		return nil, moerr.NewInternalError(ctx, "txn client is nil")
 	}
 
-	// Create local transaction
 	nowTs := cnEngine.LatestLogtailAppliedTime()
 	createByOpt := client.WithTxnCreateBy(
 		0,
 		"",
-		"publication iteration",
+		"publication iteration initialization",
 		0)
 	localTxn, err := cnTxnClient.New(ctx, nowTs, createByOpt)
 	if err != nil {
@@ -130,6 +135,11 @@ func InitializeIterationContext(
 		return nil, moerr.NewInternalErrorf(ctx, "failed to register transaction with engine: %v", err)
 	}
 
+	defer func() {
+		ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute)
+		defer cancel()
+		localTxn.Commit(ctxWithTimeout)
+	}()
 	// Create local executor first (without transaction) to query mo_ccpr_log
 	// mo_ccpr_log is a system table, so we must use system account
 	// Local executor doesn't need upstream SQL helper (no special SQL statements)
@@ -147,8 +157,11 @@ func InitializeIterationContext(
 	if err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "failed to create local executor: %v", err)
 	}
-	// Set the transaction in local executor
 	localExecutorInternal.SetTxn(localTxn)
+	// Set UTHelper if provided
+	if utHelper != nil {
+		localExecutorInternal.SetUTHelper(utHelper)
+	}
 	var localExecutor SQLExecutor = localExecutorInternal
 
 	// Query mo_ccpr_log table to get subscription_name, sync_level, db_name, table_name, upstream_conn, context
@@ -252,6 +265,10 @@ func InitializeIterationContext(
 		if err != nil {
 			return nil, moerr.NewInternalErrorf(ctx, "failed to create upstream executor: %v", err)
 		}
+		// Set UTHelper if provided
+		if utHelper != nil {
+			upstreamExecutorInternal.SetUTHelper(utHelper)
+		}
 		upstreamExecutor = upstreamExecutorInternal
 		// Create upstream SQL helper if factory is provided and upstream executor is InternalSQLExecutor
 		if upstreamSQLHelperFactory != nil {
@@ -306,7 +323,6 @@ func InitializeIterationContext(
 		TaskID:             taskID,
 		SubscriptionName:   subscriptionName.String,
 		SrcInfo:            srcInfo,
-		LocalTxn:           localTxn,
 		LocalExecutor:      localExecutor,
 		UpstreamExecutor:   upstreamExecutor,
 		IterationLSN:       iterationLSN,
@@ -697,10 +713,11 @@ func CheckIterationStatus(
 	}
 	defer result.Close()
 
-	// Scan the result - expecting columns: cn_uuid, iteration_state, iteration_lsn
+	// Scan the result - expecting columns: cn_uuid, iteration_state, iteration_lsn, state
 	var cnUUIDFromDB sql.NullString
 	var iterationState int8
 	var iterationLSN uint64
+	var subscriptionState int8
 
 	if !result.Next() {
 		if err := result.Err(); err != nil {
@@ -709,7 +726,7 @@ func CheckIterationStatus(
 		return moerr.NewInternalErrorf(ctx, "no rows returned for task_id %d", taskID)
 	}
 
-	if err := result.Scan(&cnUUIDFromDB, &iterationState, &iterationLSN); err != nil {
+	if err := result.Scan(&cnUUIDFromDB, &iterationState, &iterationLSN, &subscriptionState); err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to scan query result: %v", err)
 	}
 
@@ -734,6 +751,11 @@ func CheckIterationStatus(
 	// Check if iteration_state is pending
 	if iterationState != IterationStateRunning {
 		return moerr.NewInternalErrorf(ctx, "iteration_state is not running: expected %d (running), got %d", IterationStateRunning, iterationState)
+	}
+
+	// Check if state is running
+	if subscriptionState != SubscriptionStateRunning {
+		return moerr.NewInternalErrorf(ctx, "subscription state is not running: expected %d (running), got %d", SubscriptionStateRunning, subscriptionState)
 	}
 
 	return nil
@@ -1168,8 +1190,14 @@ func ExecuteIteration(
 		return moerr.NewInternalErrorf(ctx, "context deadline must be nil")
 	}
 
-	iterationCtx, err = InitializeIterationContext(ctx, cnUUID, cnEngine, cnTxnClient, taskID, iterationLSN, upstreamSQLHelperFactory, sqlExecutorRetryOpt)
+	iterationCtx, err = InitializeIterationContext(ctx, cnUUID, cnEngine, cnTxnClient, taskID, iterationLSN, upstreamSQLHelperFactory, sqlExecutorRetryOpt, utHelper)
 	if err != nil {
+		return
+	}
+	if err = CheckIterationStatus(ctx, iterationCtx.LocalExecutor, taskID, cnUUID, iterationLSN); err != nil {
+		ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute)
+		defer cancel()
+		iterationCtx.LocalTxn.Rollback(ctxWithTimeout)
 		return
 	}
 
@@ -1183,6 +1211,27 @@ func ExecuteIteration(
 			iterationCtx.SrcInfo.DBName,
 			iterationCtx.SrcInfo.TableName)),
 	)
+
+	// Create local transaction
+	nowTs := cnEngine.LatestLogtailAppliedTime()
+	createByOpt := client.WithTxnCreateBy(
+		0,
+		"",
+		"publication iteration",
+		0)
+	localTxn, err := cnTxnClient.New(ctx, nowTs, createByOpt)
+	if err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to create local transaction: %v", err)
+	}
+
+	// Register the transaction with the engine
+	err = cnEngine.New(ctx, localTxn)
+	if err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to register transaction with engine: %v", err)
+	}
+
+	iterationCtx.LocalTxn = localTxn
+	iterationCtx.LocalExecutor.(*InternalSQLExecutor).SetTxn(localTxn)
 
 	needFlushCCPRLog := true
 	defer func() {
@@ -1215,35 +1264,35 @@ func ExecuteIteration(
 			} else {
 				err = moerr.NewInternalErrorf(ctx, "failed to close iteration context: %v", commitErr)
 			}
-			if needFlushCCPRLog {
-				classifier := NewDownstreamCommitClassifier()
-				errorMetadata, retryable := BuildErrorMetadata(iterationCtx.ErrorMetadata, err, classifier)
-				finalState := IterationStateError
-				subscriptionState := SubscriptionStateRunning
-				if retryable {
-					finalState = IterationStateCompleted
-				} else {
-					subscriptionState = SubscriptionStateError
-				}
-				errorMsg := errorMetadata.Format()
-				if err = UpdateIterationState(ctx, iterationCtx.LocalExecutor, taskID, finalState, iterationLSN, iterationCtx, errorMsg, false, subscriptionState); err != nil {
-					// Log error but don't override the original error
-					err = moerr.NewInternalErrorf(ctx, "failed to update iteration state: %v", err)
-					logutil.Error(
-						"ccpr-iteration failed to update iteration state",
-						zap.Error(err),
-						zap.String("task", iterationCtx.String()),
-					)
-				}
+		}
+		if err == nil {
+			logutil.Info("ccpr-iteration success",
+				zap.String("task_id", iterationCtx.String()),
+			)
+		}
+		if err != nil && needFlushCCPRLog {
+			classifier := NewDownstreamCommitClassifier()
+			errorMetadata, retryable := BuildErrorMetadata(iterationCtx.ErrorMetadata, err, classifier)
+			finalState := IterationStateError
+			subscriptionState := SubscriptionStateRunning
+			if retryable {
+				finalState = IterationStateCompleted
+			} else {
+				subscriptionState = SubscriptionStateError
+			}
+			errorMsg := errorMetadata.Format()
+			if err = UpdateIterationState(ctx, iterationCtx.LocalExecutor, taskID, finalState, iterationLSN, iterationCtx, errorMsg, false, subscriptionState); err != nil {
+				// Log error but don't override the original error
+				err = moerr.NewInternalErrorf(ctx, "failed to update iteration state: %v", err)
+				logutil.Error(
+					"ccpr-iteration failed to update iteration state",
+					zap.Error(err),
+					zap.String("task", iterationCtx.String()),
+				)
 			}
 		}
 		err = nil
 	}()
-	// Step 0: Initialization phase
-	// 0.1 Check iteration status
-	if err = CheckIterationStatus(ctx, iterationCtx.LocalExecutor, taskID, cnUUID, iterationLSN); err != nil {
-		return
-	}
 
 	// Update iteration state in defer to ensure it's always called
 	defer func() {
@@ -1293,6 +1342,10 @@ func ExecuteIteration(
 				errorMetadata, retryable := BuildErrorMetadata(iterationCtx.ErrorMetadata, err, classifier)
 				errorMsg = errorMetadata.Format()
 				nextLSN = iterationLSN
+				logutil.Error("ccpr-iteration failed",
+					zap.String("task_id", iterationCtx.String()),
+					zap.Error(err),
+				)
 				if !retryable {
 					// Non-retryable error: set state to error
 					finalState = IterationStateError

@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -85,11 +84,18 @@ type InternalSQLExecutor struct {
 	useAccountID      bool                    // Whether to use account ID for tenant context
 	upstreamSQLHelper UpstreamSQLHelper       // Optional helper for special SQL statements
 	retryOpt          *SQLExecutorRetryOption // Retry configuration
+	utHelper          UTHelper                // Optional unit test helper
+	errorCount        int                     // Error counter for current SQL query
 }
 
 // SetUpstreamSQLHelper sets the upstream SQL helper
 func (e *InternalSQLExecutor) SetUpstreamSQLHelper(helper UpstreamSQLHelper) {
 	e.upstreamSQLHelper = helper
+}
+
+// SetUTHelper sets the unit test helper
+func (e *InternalSQLExecutor) SetUTHelper(helper UTHelper) {
+	e.utHelper = helper
 }
 
 // GetInternalExec returns the internal executor (for creating helper)
@@ -249,6 +255,9 @@ func (e *InternalSQLExecutor) ExecSQL(
 		opts = opts.WithTxn(e.txnOp)
 	}
 
+	// Reset error counter for new SQL query
+	e.errorCount = 0
+
 	// Use policy.Do for retry logic
 	var execResult executor.Result
 	var lastErr error
@@ -281,9 +290,17 @@ func (e *InternalSQLExecutor) ExecSQL(
 			}
 		}
 
-		if msg, injected := objectio.PublicationSnapshotFinishedInjected(); injected && msg == "ut injection: sql fail" {
-			return moerr.NewInternalErrorNoCtx(msg)
+		// Call UTHelper before executing SQL to check if we should inject error
+		var injectErr error
+		if e.utHelper != nil {
+			injectErr = e.utHelper.OnSQLExecFailed(ctx, query, e.errorCount)
 		}
+		if injectErr != nil {
+			// Inject the error and increment error count
+			e.errorCount++
+			return injectErr
+		}
+
 		execResult, err = e.internalExec.Exec(execCtx, query, opts)
 		if err == nil {
 			// Success
