@@ -325,11 +325,14 @@ func concatTime[T fmt.Stringer](v *vector.Vector, row int, src []byte) ([]byte, 
 
 func concatJson(v *vector.Vector, row int, src []byte) ([]byte, error) {
 	value := v.GetBytesAt(row)
+
 	if err := isValidGroupConcatUnit(value); err != nil {
 		return nil, err
 	}
 	// Decode the bytejson binary format and convert to JSON string
 	bj := types.DecodeJson(value)
+
 	jsonStr := bj.String()
+
 	return append(src, jsonStr...), nil
 }
