@@ -928,28 +928,65 @@ func gcRecord(
 	}
 }
 
-func createUpstreamExecutorForGC(
+// createUpstreamExecutor creates an upstream SQL executor from a connection string.
+// It supports both internal_sql_executor and external connection strings.
+// Optional parameters:
+//   - sqlExecutorRetryOpt: retry options for SQL executor (nil uses defaults)
+//   - utHelper: unit test helper (optional)
+//   - localExecutor: local executor for parsing connection string (optional)
+func createUpstreamExecutor(
 	ctx context.Context,
 	cnUUID string,
 	cnTxnClient client.TxnClient,
 	txnEngine engine.Engine,
 	upstreamSQLHelperFactory UpstreamSQLHelperFactory,
 	upstreamConn string,
-) (SQLExecutor, error) {
+	sqlExecutorRetryOpt *SQLExecutorRetryOption,
+	utHelper UTHelper,
+	localExecutor SQLExecutor,
+) (SQLExecutor, uint32, error) {
 	if upstreamConn == "" {
-		return nil, moerr.NewInternalError(ctx, "upstream_conn is empty")
+		return nil, 0, moerr.NewInternalError(ctx, "upstream_conn is empty")
 	}
 
 	// Check if it's internal_sql_executor
 	if strings.HasPrefix(upstreamConn, InternalSQLExecutorType) {
 		parts := strings.Split(upstreamConn, ":")
-		upstreamAccountID := catalog.System_Account
+		var upstreamAccountID uint32
+
 		if len(parts) == 2 {
+			// Parse account ID from upstream_conn
 			var accountID uint32
 			_, err := fmt.Sscanf(parts[1], "%d", &accountID)
-			if err == nil {
-				upstreamAccountID = accountID
+			if err != nil {
+				return nil, 0, moerr.NewInternalErrorf(ctx, "failed to parse account ID from upstream_conn %s: %v", upstreamConn, err)
 			}
+			upstreamAccountID = accountID
+		} else if len(parts) == 1 {
+			// No account ID specified, try to get from context as fallback
+			if v := ctx.Value(defines.TenantIDKey{}); v != nil {
+				if accountID, ok := v.(uint32); ok {
+					upstreamAccountID = accountID
+				} else {
+					upstreamAccountID = catalog.System_Account
+				}
+			} else {
+				upstreamAccountID = catalog.System_Account
+			}
+		} else {
+			return nil, 0, moerr.NewInternalErrorf(ctx, "invalid upstream_conn format: %s, expected internal_sql_executor or internal_sql_executor:<account_id>", upstreamConn)
+		}
+
+		// Use provided retry options or defaults
+		retryOpt := sqlExecutorRetryOpt
+		if retryOpt == nil {
+			retryOpt = DefaultSQLExecutorRetryOption()
+		}
+		// Override classifier for upstream executor
+		retryOpt = &SQLExecutorRetryOption{
+			MaxRetries:    retryOpt.MaxRetries,
+			RetryInterval: retryOpt.RetryInterval,
+			Classifier:    NewUpstreamConnectionClassifier(),
 		}
 
 		upstreamExecutor, err := NewInternalSQLExecutor(
@@ -957,36 +994,39 @@ func createUpstreamExecutorForGC(
 			cnTxnClient,
 			txnEngine,
 			upstreamAccountID,
-			&SQLExecutorRetryOption{
-				MaxRetries:    DefaultSQLExecutorRetryOption().MaxRetries,
-				RetryInterval: DefaultSQLExecutorRetryOption().RetryInterval,
-				Classifier:    NewUpstreamConnectionClassifier(),
-			},
+			retryOpt,
 			true,
 		)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
+		}
+
+		// Set UTHelper if provided
+		if utHelper != nil {
+			upstreamExecutor.SetUTHelper(utHelper)
 		}
 
 		// Set upstream SQL helper if factory is available
 		if upstreamSQLHelperFactory != nil {
+			// Create helper with nil txnOp - it will be updated when SetTxn is called
+			// Pass txnClient from InternalSQLExecutor so helper can create transactions when needed
 			helper := upstreamSQLHelperFactory(
-				nil,
+				nil, // txnOp will be set when SetTxn is called
 				txnEngine,
 				upstreamAccountID,
 				upstreamExecutor.GetInternalExec(),
-				upstreamExecutor.GetTxnClient(),
+				upstreamExecutor.GetTxnClient(), // Pass txnClient so helper can create txn if needed
 			)
 			upstreamExecutor.SetUpstreamSQLHelper(helper)
 		}
 
-		return upstreamExecutor, nil
+		return upstreamExecutor, upstreamAccountID, nil
 	}
 
 	// Parse external connection string
-	connConfig, err := ParseUpstreamConnWithDecrypt(ctx, upstreamConn, nil, cnUUID)
+	connConfig, err := ParseUpstreamConnWithDecrypt(ctx, upstreamConn, localExecutor, cnUUID)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	upstreamExecutor, err := NewUpstreamExecutor(
@@ -1001,10 +1041,24 @@ func createUpstreamExecutorForGC(
 		NewUpstreamConnectionClassifier(),
 	)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
-	return upstreamExecutor, nil
+	return upstreamExecutor, 0, nil
+}
+
+// createUpstreamExecutorForGC is a convenience wrapper for createUpstreamExecutor
+// that maintains backward compatibility for GC operations.
+func createUpstreamExecutorForGC(
+	ctx context.Context,
+	cnUUID string,
+	cnTxnClient client.TxnClient,
+	txnEngine engine.Engine,
+	upstreamSQLHelperFactory UpstreamSQLHelperFactory,
+	upstreamConn string,
+) (SQLExecutor, error) {
+	executor, _, err := createUpstreamExecutor(ctx, cnUUID, cnTxnClient, txnEngine, upstreamSQLHelperFactory, upstreamConn, nil, nil, nil)
+	return executor, err
 }
 
 type snapshotInfo struct {

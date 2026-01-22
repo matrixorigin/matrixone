@@ -221,93 +221,24 @@ func InitializeIterationContext(
 
 	// Create upstream executor from upstream_conn
 	var upstreamExecutor SQLExecutor
-	var upstreamAccountID uint32
 	if !upstreamConn.Valid || upstreamConn.String == "" {
 		return nil, moerr.NewInternalErrorf(ctx, "upstream_conn is null or empty for task_id %d", taskID)
 	}
 
-	// Parse upstream_conn to check if it's internal_sql_executor with account ID
-	// Format: internal_sql_executor or internal_sql_executor:<account_id>
-	if strings.HasPrefix(upstreamConn.String, InternalSQLExecutorType) {
-		// Check if account ID is specified after colon
-		parts := strings.Split(upstreamConn.String, ":")
-		if len(parts) == 2 {
-			// Parse account ID from upstream_conn
-			var accountID uint32
-			_, err := fmt.Sscanf(parts[1], "%d", &accountID)
-			if err != nil {
-				return nil, moerr.NewInternalErrorf(ctx, "failed to parse account ID from upstream_conn %s: %v", upstreamConn.String, err)
-			}
-			upstreamAccountID = accountID
-		} else if len(parts) == 1 {
-			// No account ID specified, use account ID from context as fallback
-			if v := ctx.Value(defines.TenantIDKey{}); v != nil {
-				if accountID, ok := v.(uint32); ok {
-					upstreamAccountID = accountID
-				}
-			}
-		} else {
-			return nil, moerr.NewInternalErrorf(ctx, "invalid upstream_conn format: %s, expected internal_sql_executor or internal_sql_executor:<account_id>", upstreamConn.String)
-		}
-
-		// Create upstream executor with account ID
-		upstreamRetryOpt := sqlExecutorRetryOpt
-		if upstreamRetryOpt == nil {
-			upstreamRetryOpt = DefaultSQLExecutorRetryOption()
-		}
-		// Override classifier for upstream executor
-		upstreamRetryOpt = &SQLExecutorRetryOption{
-			MaxRetries:    upstreamRetryOpt.MaxRetries,
-			RetryInterval: upstreamRetryOpt.RetryInterval,
-		}
-		upstreamRetryOpt.Classifier = NewUpstreamConnectionClassifier()
-		upstreamExecutorInternal, err := NewInternalSQLExecutor(cnUUID, cnTxnClient, cnEngine, upstreamAccountID, upstreamRetryOpt, true)
-		if err != nil {
-			return nil, moerr.NewInternalErrorf(ctx, "failed to create upstream executor: %v", err)
-		}
-		// Set UTHelper if provided
-		if utHelper != nil {
-			upstreamExecutorInternal.SetUTHelper(utHelper)
-		}
-		upstreamExecutor = upstreamExecutorInternal
-		// Create upstream SQL helper if factory is provided and upstream executor is InternalSQLExecutor
-		if upstreamSQLHelperFactory != nil {
-			if upstreamExecutorInternal, ok := upstreamExecutor.(*InternalSQLExecutor); ok {
-				// Create helper with nil txnOp - it will be updated when SetTxn is called
-				// Pass txnClient from InternalSQLExecutor so helper can create transactions when needed
-				helper := upstreamSQLHelperFactory(
-					nil, // txnOp will be set when SetTxn is called
-					cnEngine,
-					upstreamAccountID,
-					upstreamExecutorInternal.GetInternalExec(),
-					upstreamExecutorInternal.GetTxnClient(), // Pass txnClient so helper can create txn if needed
-				)
-				upstreamExecutorInternal.SetUpstreamSQLHelper(helper)
-			}
-		}
-		// Helper will be created after local transaction is created (helper needs txnOp)
-	} else {
-		// Parse upstream connection string with optional password decryption
-		// KeyEncryptionKey will be read using cnUUID (similar to CDC's getGlobalPuWrapper)
-		connConfig, err := ParseUpstreamConnWithDecrypt(ctx, upstreamConn.String, localExecutor, cnUUID)
-		if err != nil {
-			return nil, moerr.NewInternalErrorf(ctx, "failed to parse upstream connection string: %v", err)
-		}
-		upstreamExecutor, err = NewUpstreamExecutor(
-			connConfig.Account,
-			connConfig.User,
-			connConfig.Password,
-			connConfig.Host,
-			connConfig.Port,
-			-1, // retryTimes: -1 for infinite retry
-			0,  // retryDuration: 0 for no limit
-			connConfig.Timeout,
-			NewUpstreamConnectionClassifier(),
-		)
-		if err != nil {
-			return nil, moerr.NewInternalErrorf(ctx, "failed to create upstream executor: %v", err)
-		}
-
+	// Use unified createUpstreamExecutor function
+	upstreamExecutor, _, err = createUpstreamExecutor(
+		ctx,
+		cnUUID,
+		cnTxnClient,
+		cnEngine,
+		upstreamSQLHelperFactory,
+		upstreamConn.String,
+		sqlExecutorRetryOpt,
+		utHelper,
+		localExecutor,
+	)
+	if err != nil {
+		return nil, moerr.NewInternalErrorf(ctx, "failed to create upstream executor: %v", err)
 	}
 	// Parse error message if available
 	var errorMetadata *ErrorMetadata
@@ -1004,41 +935,6 @@ func WaitForSnapshotFlushed(
 			// Use fixed interval for all retries
 		}
 	}
-}
-
-// DropPreviousUpstreamSnapshot drops the previous snapshot from upstream cluster
-// It deletes the snapshot specified by PrevSnapshotName in IterationContext
-func DropPreviousUpstreamSnapshot(
-	ctx context.Context,
-	iterationCtx *IterationContext,
-) error {
-	if iterationCtx == nil {
-		return moerr.NewInternalError(ctx, "iteration context is nil")
-	}
-
-	if iterationCtx.UpstreamExecutor == nil {
-		return moerr.NewInternalError(ctx, "upstream executor is nil")
-	}
-
-	// Check if there's a previous snapshot to drop
-	if iterationCtx.PrevSnapshotName == "" {
-		// No previous snapshot to drop, silently return
-		return nil
-	}
-
-	// Build drop snapshot SQL using IF EXISTS to avoid errors if snapshot already deleted
-	dropSnapshotSQL := PublicationSQLBuilder.DropSnapshotIfExistsSQL(iterationCtx.PrevSnapshotName)
-
-	// Execute SQL through upstream executor
-	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute)
-	defer cancel()
-	result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctxWithTimeout, nil, dropSnapshotSQL, false, true)
-	if err != nil {
-		return moerr.NewInternalErrorf(ctx, "failed to drop previous snapshot %s: %v", iterationCtx.PrevSnapshotName, err)
-	}
-	defer result.Close()
-
-	return nil
 }
 
 // GetObjectListFromSnapshotDiff calculates snapshot diff and gets object list from upstream

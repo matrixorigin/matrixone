@@ -313,15 +313,11 @@ func (e *InternalSQLExecutor) ExecSQL(
 			return nil
 		}
 
-		lastErr = err
-		defChanged := moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)
-
 		// Log retry attempt
 		logutil.Warn("internal sql executor retry attempt",
 			zap.String("query", truncateSQL(query)),
 			zap.Int("retryCount", attemptCount-1),
 			zap.Int("maxRetries", e.retryOpt.MaxRetries),
-			zap.Bool("defChanged", defChanged),
 			zap.Error(err),
 		)
 
@@ -332,15 +328,11 @@ func (e *InternalSQLExecutor) ExecSQL(
 		return convertExecutorResult(execResult), nil
 	}
 
-	// Max retries exceeded or non-retryable error
-	if lastErr != nil {
-		logutil.Error("internal sql executor max retries exceeded",
-			zap.String("query", truncateSQL(query)),
-			zap.Int("retryCount", attemptCount-1),
-			zap.Error(lastErr),
-		)
-		return nil, lastErr
-	}
+	logutil.Error("internal sql executor max retries exceeded",
+		zap.String("query", truncateSQL(query)),
+		zap.Int("retryCount", attemptCount-1),
+		zap.Error(lastErr),
+	)
 
 	return nil, err
 }

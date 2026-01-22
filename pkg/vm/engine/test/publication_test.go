@@ -4194,13 +4194,12 @@ func TestCCPRExecutorWithGC(t *testing.T) {
 	var (
 		srcAccountID  = catalog.System_Account
 		destAccountID = uint32(2)
-		cnUUID        = ""
 	)
 
 	// Generate a UUID for cnUUID
 	testUUID, err := uuid.NewV7()
 	require.NoError(t, err)
-	cnUUID = testUUID.String()
+	cnUUID := testUUID.String()
 
 	// Setup source account context
 	srcCtx, cancel := context.WithCancel(context.Background())

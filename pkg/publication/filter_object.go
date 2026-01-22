@@ -1006,7 +1006,7 @@ func GetObjectListMap(ctx context.Context, iterationCtx *IterationContext, cnEng
 			delete := !deleteAt.IsEmpty()
 
 			// Check if this object already exists in map
-			if existing, exists := objectMap[objID]; exists {
+			if _, exists := objectMap[objID]; exists {
 				// If there are two records, one without delete and one with delete, use delete to override
 				if delete {
 					// New record is delete, override existing record
@@ -1014,18 +1014,6 @@ func GetObjectListMap(ctx context.Context, iterationCtx *IterationContext, cnEng
 						Stats:       stats,
 						IsTombstone: isTombstone,
 						Delete:      true,
-						DBName:      dbName,
-						TableName:   tableName,
-					}
-				} else if existing.Delete {
-					// Existing record is delete, keep delete (don't override)
-					// Keep existing record
-				} else {
-					// Both are non-delete, update with new record
-					objectMap[objID] = &ObjectWithTableInfo{
-						Stats:       stats,
-						IsTombstone: isTombstone,
-						Delete:      false,
 						DBName:      dbName,
 						TableName:   tableName,
 					}

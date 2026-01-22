@@ -327,7 +327,7 @@ func ProcessDDLChanges(
 		return moerr.NewInternalErrorf(ctx, "failed to get database differences: %v", err)
 	}
 
-	logutil.Info("ccpr-iteration ddl",
+	logutil.Info("ccpr-iteration DDL",
 		zap.String("task_id", iterationCtx.String()),
 		zap.String("operation", "create"),
 		zap.String("type", "database"),
@@ -440,7 +440,7 @@ func ProcessDDLChanges(
 		}
 	}
 
-	logutil.Info("ccpr-iteration ddl",
+	logutil.Info("ccpr-iteration DDL",
 		zap.String("task_id", iterationCtx.String()),
 		zap.String("operation", "drop"),
 		zap.String("type", "database"),
