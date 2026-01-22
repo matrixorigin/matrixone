@@ -1070,9 +1070,6 @@ func ExecuteIteration(
 		return
 	}
 	if err = CheckIterationStatus(ctx, iterationCtx.LocalExecutor, taskID, cnUUID, iterationLSN); err != nil {
-		ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute)
-		defer cancel()
-		iterationCtx.LocalTxn.Rollback(ctxWithTimeout)
 		return
 	}
 
