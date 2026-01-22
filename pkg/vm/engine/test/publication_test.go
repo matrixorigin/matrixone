@@ -122,7 +122,7 @@ func TestCheckIterationStatus(t *testing.T) {
 		MaxRetries:    0,
 		RetryInterval: time.Second,
 		Classifier:    publication.NewDownstreamCommitClassifier(),
-	})
+	}, false)
 	require.NoError(t, err)
 	defer executor.Close()
 
@@ -445,7 +445,7 @@ func TestExecuteIteration1(t *testing.T) {
 
 	// Execute ExecuteIteration with UTHelper
 	err = publication.ExecuteIteration(
-		srcCtxWithTimeout,
+		context.Background(),
 		cnUUID,
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
@@ -553,7 +553,7 @@ func TestExecuteIteration1(t *testing.T) {
 
 	// Execute second ExecuteIteration
 	err = publication.ExecuteIteration(
-		srcCtxWithTimeout,
+		context.Background(),
 		cnUUID,
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
@@ -680,7 +680,7 @@ func TestExecuteIteration1(t *testing.T) {
 
 	// Execute third ExecuteIteration
 	err = publication.ExecuteIteration(
-		srcCtxWithTimeout,
+		context.Background(),
 		cnUUID,
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
@@ -953,7 +953,7 @@ func TestExecuteIterationDatabaseLevel(t *testing.T) {
 
 	// Execute ExecuteIteration with UTHelper
 	err = publication.ExecuteIteration(
-		srcCtxWithTimeout,
+		context.Background(),
 		cnUUID,
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
@@ -1257,7 +1257,7 @@ func TestExecuteIterationWithIndex(t *testing.T) {
 
 	// Execute ExecuteIteration with UTHelper
 	err = publication.ExecuteIteration(
-		systemCtxWithTimeout,
+		context.Background(),
 		cnUUID,
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
@@ -1413,7 +1413,7 @@ func TestExecuteIterationWithIndex(t *testing.T) {
 
 	// Step 11: Execute second iteration (iteration2)
 	err = publication.ExecuteIteration(
-		systemCtxWithTimeout,
+		context.Background(),
 		cnUUID,
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
@@ -1787,7 +1787,7 @@ func TestExecuteIterationWithSnapshotFinishedInjection(t *testing.T) {
 
 	// Execute first ExecuteIteration - should fail due to injection
 	err = publication.ExecuteIteration(
-		srcCtxWithTimeout,
+		context.Background(),
 		cnUUID,
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
@@ -1832,7 +1832,7 @@ func TestExecuteIterationWithSnapshotFinishedInjection(t *testing.T) {
 
 	// Second iteration: No injection, should succeed
 	err = publication.ExecuteIteration(
-		srcCtxWithTimeout,
+		context.Background(),
 		cnUUID,
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
@@ -2092,7 +2092,7 @@ func TestExecuteIterationWithCommitFailedInjection(t *testing.T) {
 
 	// Execute ExecuteIteration - should fail due to commit injection
 	err = publication.ExecuteIteration(
-		srcCtxWithTimeout,
+		context.Background(),
 		cnUUID,
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
@@ -2759,7 +2759,7 @@ func TestCCPRCreateDelete(t *testing.T) {
 
 	// Step 5: Execute first iteration (iteration1)
 	err = publication.ExecuteIteration(
-		srcCtxWithTimeout,
+		context.Background(),
 		cnUUID,
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
@@ -2877,7 +2877,7 @@ func TestCCPRCreateDelete(t *testing.T) {
 
 	// Step 11: Execute second iteration (iteration2)
 	err = publication.ExecuteIteration(
-		srcCtxWithTimeout,
+		context.Background(),
 		cnUUID,
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
@@ -3133,7 +3133,7 @@ func TestCCPRAlterTable(t *testing.T) {
 
 	// Step 5: Execute first iteration (iteration1)
 	err = publication.ExecuteIteration(
-		srcCtxWithTimeout,
+		context.Background(),
 		cnUUID,
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
@@ -3278,7 +3278,7 @@ func TestCCPRAlterTable(t *testing.T) {
 
 	// Step 12: Execute second iteration (iteration2) - should recreate downstream table
 	err = publication.ExecuteIteration(
-		srcCtxWithTimeout,
+		context.Background(),
 		cnUUID,
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
@@ -3561,7 +3561,7 @@ func TestCCPRErrorHandling1(t *testing.T) {
 
 	// Execute first ExecuteIteration - should fail due to injection, but error is retryable
 	err = publication.ExecuteIteration(
-		srcCtxWithTimeout,
+		context.Background(),
 		cnUUID,
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
@@ -3664,7 +3664,7 @@ func TestCCPRErrorHandling1(t *testing.T) {
 	}
 
 	err = publication.ExecuteIteration(
-		srcCtxWithTimeout,
+		context.Background(),
 		cnUUID,
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
@@ -3760,7 +3760,7 @@ func TestCCPRErrorHandling1(t *testing.T) {
 	}
 
 	err = publication.ExecuteIteration(
-		srcCtxWithTimeout,
+		context.Background(),
 		cnUUID,
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
@@ -3856,7 +3856,7 @@ func TestCCPRErrorHandling1(t *testing.T) {
 	}
 
 	err = publication.ExecuteIteration(
-		srcCtxWithTimeout,
+		context.Background(),
 		cnUUID,
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
@@ -3932,7 +3932,7 @@ func TestCCPRErrorHandling1(t *testing.T) {
 	}
 
 	err = publication.ExecuteIteration(
-		srcCtxWithTimeout,
+		context.Background(),
 		cnUUID,
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
@@ -4113,7 +4113,7 @@ func TestCCPRDDLAccountLevel(t *testing.T) {
 
 	// Step 5: Execute first iteration
 	err = publication.ExecuteIteration(
-		systemCtx,
+		context.Background(),
 		cnUUID,
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
@@ -4215,7 +4215,7 @@ func TestCCPRDDLAccountLevel(t *testing.T) {
 
 	// Step 11: Execute second iteration
 	err = publication.ExecuteIteration(
-		systemCtx,
+		context.Background(),
 		cnUUID,
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
@@ -4383,6 +4383,9 @@ func TestCCPRExecutorWithGC(t *testing.T) {
 
 	// Create mo_ccpr_log table using system account context
 	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoCcprLogDDL)
+	require.NoError(t, err)
+	// Create mo_foreign_keys table using system account context
+	err = exec_sql(disttaeEngine, systemCtx, frontend.MoCatalogMoForeignKeysDDL)
 	require.NoError(t, err)
 
 	// Create mo_snapshots table for source account
@@ -4593,7 +4596,13 @@ func TestCCPRExecutorWithGC(t *testing.T) {
 		taskID,
 	)
 
-	err = exec_sql(disttaeEngine, systemCtx, updateSQL)
+	// w-w occurs
+	for i := 0; i < 10; i++ {
+		err = exec_sql(disttaeEngine, systemCtx, updateSQL)
+		if err == nil {
+			break
+		}
+	}
 	require.NoError(t, err)
 
 	// Step 7: Wait for executor to sync and update task entry in memory

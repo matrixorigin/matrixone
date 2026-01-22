@@ -82,6 +82,7 @@ type InternalSQLExecutor struct {
 	txnClient         client.TxnClient
 	engine            engine.Engine
 	accountID         uint32                  // Account ID for tenant context
+	useAccountID      bool                    // Whether to use account ID for tenant context
 	upstreamSQLHelper UpstreamSQLHelper       // Optional helper for special SQL statements
 	retryOpt          *SQLExecutorRetryOption // Retry configuration
 }
@@ -113,6 +114,7 @@ func NewInternalSQLExecutor(
 	engine engine.Engine,
 	accountID uint32,
 	retryOpt *SQLExecutorRetryOption,
+	useAccountID bool,
 ) (*InternalSQLExecutor, error) {
 	v, ok := moruntime.ServiceRuntime(cnUUID).GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {
@@ -135,6 +137,7 @@ func NewInternalSQLExecutor(
 		engine:       engine,
 		accountID:    accountID,
 		retryOpt:     retryOpt,
+		useAccountID: useAccountID,
 	}, nil
 }
 
@@ -209,7 +212,7 @@ func (e *InternalSQLExecutor) ExecSQL(
 
 	// Create context with account ID if specified
 	execCtx := ctx
-	if e.accountID > 0 {
+	if e.useAccountID {
 		execCtx = context.WithValue(ctx, defines.TenantIDKey{}, e.accountID)
 	}
 

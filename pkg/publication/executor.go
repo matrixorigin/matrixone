@@ -962,6 +962,7 @@ func createUpstreamExecutorForGC(
 				RetryInterval: DefaultSQLExecutorRetryOption().RetryInterval,
 				Classifier:    NewUpstreamConnectionClassifier(),
 			},
+			true,
 		)
 		if err != nil {
 			return nil, err

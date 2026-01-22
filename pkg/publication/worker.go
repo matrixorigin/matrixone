@@ -120,45 +120,41 @@ func (w *worker) onItem(taskCtx *TaskContext) {
 		w.ctx,
 		func() error {
 			// Ensure ccpr state is set to pending before executing iteration
-			if err := w.updateIterationStateRunning(w.ctx, taskCtx.TaskID, taskCtx.LSN); err != nil {
-				logutil.Error(
-					"Publication-Task update iteration state to pending failed",
-					zap.Uint64("taskID", taskCtx.TaskID),
-					zap.Uint64("lsn", taskCtx.LSN),
-					zap.Error(err),
-				)
+			if err := w.updateIterationState(w.ctx, taskCtx.TaskID, IterationStateRunning); err != nil {
 				return err
 			}
-
-			err := ExecuteIteration(
-				w.ctx,
-				w.cnUUID,
-				w.cnEngine,
-				w.cnTxnClient,
-				taskCtx.TaskID,
-				taskCtx.LSN,
-				w.upstreamSQLHelperFactory,
-				w.mp,
-				nil, // utHelper
-				0,   // snapshotFlushInterval (use default 1min)
-				nil, // executorRetryOpt (use default)
-				nil, // sqlExecutorRetryOpt (use default)
-			)
-			if err != nil {
-				logutil.Error(
-					"Publication-Task execute iteration failed",
-					zap.Uint64("taskID", taskCtx.TaskID),
-					zap.Uint64("lsn", taskCtx.LSN),
-					zap.Error(err),
-				)
-			}
-			return err
+			return nil
 		},
 		executorRetryOpt,
 	)
 	if err != nil {
 		logutil.Error(
-			"Publication-Task worker execute iteration failed",
+			"Publication-Task update iteration state to running failed",
+			zap.Uint64("taskID", taskCtx.TaskID),
+			zap.Uint64("lsn", taskCtx.LSN),
+			zap.Error(err),
+		)
+		return
+	}
+	err = ExecuteIteration(
+		w.ctx,
+		w.cnUUID,
+		w.cnEngine,
+		w.cnTxnClient,
+		taskCtx.TaskID,
+		taskCtx.LSN,
+		w.upstreamSQLHelperFactory,
+		w.mp,
+		nil, // utHelper
+		0,   // snapshotFlushInterval (use default 1min)
+		nil, // executorRetryOpt (use default)
+		nil, // sqlExecutorRetryOpt (use default)
+	)
+	// Task failure is usually caused by CN UUID or LSN validation errors.
+	// The state will be reset by another CN node.
+	if err != nil {
+		logutil.Error(
+			"Publication-Task execute iteration failed",
 			zap.Uint64("taskID", taskCtx.TaskID),
 			zap.Uint64("lsn", taskCtx.LSN),
 			zap.Error(err),
@@ -173,7 +169,7 @@ func (w *worker) Stop() {
 	close(w.taskChan)
 }
 
-func (w *worker) updateIterationStateRunning(ctx context.Context, taskID uint64, lsn uint64) error {
+func (w *worker) updateIterationState(ctx context.Context, taskID uint64, iterationState int8) error {
 	executor, err := NewInternalSQLExecutor(
 		w.cnUUID,
 		w.cnTxnClient,
@@ -184,15 +180,15 @@ func (w *worker) updateIterationStateRunning(ctx context.Context, taskID uint64,
 			RetryInterval: DefaultSQLExecutorRetryOption().RetryInterval,
 			Classifier:    NewDownstreamCommitClassifier(),
 		},
+		true,
 	)
 	if err != nil {
 		return err
 	}
 
-	updateSQL := PublicationSQLBuilder.UpdateMoCcprLogStateSQL(
+	updateSQL := PublicationSQLBuilder.UpdateMoCcprLogIterationStateAndCnUuidSQL(
 		taskID,
-		IterationStateRunning,
-		lsn,
+		iterationState,
 		w.cnUUID,
 	)
 

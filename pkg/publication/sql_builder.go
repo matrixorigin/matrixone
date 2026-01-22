@@ -162,6 +162,12 @@ const (
 	PublicationUpdateMoCcprLogIterationStateOnlySqlTemplate = `UPDATE mo_catalog.mo_ccpr_log ` +
 		`SET iteration_state = %d ` +
 		`WHERE task_id = %d`
+
+	// Update mo_ccpr_log iteration_state and cn_uuid (without lsn)
+	PublicationUpdateMoCcprLogIterationStateAndCnUuidSqlTemplate = `UPDATE mo_catalog.mo_ccpr_log ` +
+		`SET iteration_state = %d, ` +
+		`cn_uuid = '%s' ` +
+		`WHERE task_id = %d`
 )
 
 const (
@@ -186,6 +192,7 @@ const (
 	PublicationQueryMoCcprLogStateBeforeUpdateSqlTemplate_Idx
 	PublicationUpdateMoCcprLogNoStateSqlTemplate_Idx
 	PublicationUpdateMoCcprLogIterationStateOnlySqlTemplate_Idx
+	PublicationUpdateMoCcprLogIterationStateAndCnUuidSqlTemplate_Idx
 
 	PublicationSqlTemplateCount
 )
@@ -325,6 +332,9 @@ var PublicationSQLTemplates = [PublicationSqlTemplateCount]struct {
 	},
 	PublicationUpdateMoCcprLogIterationStateOnlySqlTemplate_Idx: {
 		SQL: PublicationUpdateMoCcprLogIterationStateOnlySqlTemplate,
+	},
+	PublicationUpdateMoCcprLogIterationStateAndCnUuidSqlTemplate_Idx: {
+		SQL: PublicationUpdateMoCcprLogIterationStateAndCnUuidSqlTemplate,
 	},
 }
 
@@ -817,6 +827,21 @@ func (b publicationSQLBuilder) UpdateMoCcprLogIterationStateOnlySQL(
 	return fmt.Sprintf(
 		PublicationSQLTemplates[PublicationUpdateMoCcprLogIterationStateOnlySqlTemplate_Idx].SQL,
 		iterationState,
+		taskID,
+	)
+}
+
+// UpdateMoCcprLogIterationStateAndCnUuidSQL creates SQL for updating iteration_state and cn_uuid in mo_ccpr_log (without lsn)
+// Example: UPDATE mo_catalog.mo_ccpr_log SET iteration_state = 1, cn_uuid = 'uuid' WHERE task_id = 1
+func (b publicationSQLBuilder) UpdateMoCcprLogIterationStateAndCnUuidSQL(
+	taskID uint64,
+	iterationState int8,
+	cnUUID string,
+) string {
+	return fmt.Sprintf(
+		PublicationSQLTemplates[PublicationUpdateMoCcprLogIterationStateAndCnUuidSqlTemplate_Idx].SQL,
+		iterationState,
+		escapeSQLString(cnUUID),
 		taskID,
 	)
 }

@@ -89,8 +89,10 @@ func GetUpstreamDDLUsingGetDdl(
 	// Build GETDDL SQL
 	querySQL := PublicationSQLBuilder.GetDdlSQL(dbName, tableName, snapshotName)
 
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
 	// Execute GETDDL SQL
-	result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, nil, querySQL, false, true)
+	result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctxWithTimeout, nil, querySQL, false, true)
 	if err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "failed to execute GETDDL: %v", err)
 	}
@@ -192,7 +194,9 @@ func getDatabaseDiff(
 		// Query upstream to check if database exists
 		snapshotName := iterationCtx.CurrentSnapshotName
 		querySQL := PublicationSQLBuilder.QueryMoDatabasesSQL(0, iterationCtx.SrcInfo.DBName, snapshotName)
-		result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, nil, querySQL, false, true)
+		ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute)
+		defer cancel()
+		result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctxWithTimeout, nil, querySQL, false, true)
 		if err != nil {
 			return nil, nil, moerr.NewInternalErrorf(ctx, "failed to query upstream database: %v", err)
 		}
@@ -229,7 +233,9 @@ func getDatabaseDiff(
 		// Query upstream databases for the account
 		snapshotName := iterationCtx.CurrentSnapshotName
 		querySQL := PublicationSQLBuilder.QueryMoDatabasesSQL(0, "", snapshotName)
-		result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, nil, querySQL, false, true)
+		ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute)
+		defer cancel()
+		result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctxWithTimeout, nil, querySQL, false, true)
 		if err != nil {
 			return nil, nil, moerr.NewInternalErrorf(ctx, "failed to query upstream databases: %v", err)
 		}
@@ -682,8 +688,10 @@ func createTable(
 	}
 
 	// Create database if not exists
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
 	createDBSQL := fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s`", escapeSQLIdentifierForDDL(dbName))
-	result, err := executor.ExecSQL(ctx, nil, createDBSQL, true, false)
+	result, err := executor.ExecSQL(ctxWithTimeout, nil, createDBSQL, true, false)
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to create database %s: %v", dbName, err)
 	}
@@ -694,9 +702,9 @@ func createTable(
 	// Create table
 	// Note: The "from_publication" property is already added in GetUpstreamDDLUsingGetDdl
 	// when processing the CREATE SQL from upstream
-	ctxWithTimeout, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	result, err = executor.ExecSQL(ctxWithTimeout, nil, createSQL, true, false)
+	ctxWithTimeout2, cancel2 := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel2()
+	result, err = executor.ExecSQL(ctxWithTimeout2, nil, createSQL, true, false)
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to create table %s.%s: %v", dbName, tableName, err)
 	}
@@ -921,7 +929,9 @@ func queryUpstreamIndexInfo(
 	querySQL := PublicationSQLBuilder.QueryMoIndexesSQL(0, tableID, "", "")
 
 	// Execute query
-	result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, nil, querySQL, false, true)
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctxWithTimeout, nil, querySQL, false, true)
 	if err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "failed to execute query upstream index info: %v", err)
 	}

@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"time"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -221,7 +222,9 @@ var GetObjectFromUpstream = func(
 	// GETOBJECT returns: data, total_size, chunk_index, total_chunks, is_complete
 	// offset 0 returns metadata with data = nil
 	getChunk0SQL := PublicationSQLBuilder.GetObjectSQL(objectName, 0)
-	result, err := upstreamExecutor.ExecSQL(ctx, nil, getChunk0SQL, false, true)
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	result, err := upstreamExecutor.ExecSQL(ctxWithTimeout, nil, getChunk0SQL, false, true)
 	if err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "failed to execute GETOBJECT query for offset 0: %v", err)
 	}
