@@ -93,7 +93,6 @@ a    b
 201    yyy
 202    yyy
 update t1 set a=0 where b='ccc';
-Duplicate entry '0' for key 'a'
 update t1 set a='200' where b='ccc';
 Duplicate entry '200' for key 'a'
 insert into t1(b) values ('xefrsdfgds');
@@ -103,7 +102,6 @@ a    b
 -1000    yyy
 1    bbb
 2    aaaa1111
-3    ccc
 4    bbb1111
 5    aaaa1111
 100    xxxx
@@ -113,7 +111,8 @@ a    b
 200    yyy
 201    yyy
 202    yyy
-203    xefrsdfgds
+203    ccc
+204    xefrsdfgds
 insert into t1 values (-9223372036854775808,'xefrsdfgds');
 insert into t1 values (-9223372036854775809,'xefrsdfgds');
 Data truncation: data out of range: data type int64, value '-9223372036854775809'
@@ -441,7 +440,7 @@ a    b    c    d    e
 100    400    7    7    7
 101    401    200    200    200
 102    402    200    400    600
-103    403    201    401    601
+103    403    202    402    602
 insert into t6 values ('a','a','a','a','a');
 invalid argument cast to int, bad value a
 select * from t6 order by a;
@@ -455,11 +454,11 @@ a    b    c    d    e
 100    400    7    7    7
 101    401    200    200    200
 102    402    200    400    600
-103    403    201    401    601
+103    403    202    402    602
 insert into t6 values ('-1',0,0,0,0);
 select * from t6 order by a;
 a    b    c    d    e
--1    404    202    402    602
+-1    404    203    403    603
 1    1    1    1    1
 2    2    2    2    2
 3    3    3    3    3
@@ -469,7 +468,7 @@ a    b    c    d    e
 100    400    7    7    7
 101    401    200    200    200
 102    402    200    400    600
-103    403    201    401    601
+103    403    202    402    602
 drop table t6;
 drop table if exists t8;
 create table t8(
