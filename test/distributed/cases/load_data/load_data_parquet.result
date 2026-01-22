@@ -4,65 +4,79 @@ use parq;
 create table t1(id bigint,name varchar);
 load data infile {'filepath'='$resources/load_data/simple.parq', 'format'='parquet'} into table t1;
 select * from t1;
-id    name
-1    user1
-2    user2
-7    user7
-8    user8
-10    user10
-12    user12
-15    user15
-16    user16
+➤ id[-5,64,0]  ¦  name[12,-1,0]  𝄀
+15  ¦  user15  𝄀
+16  ¦  user16  𝄀
+1  ¦  user1  𝄀
+2  ¦  user2  𝄀
+8  ¦  user8  𝄀
+10  ¦  user10  𝄀
+12  ¦  user12  𝄀
+7  ¦  user7
 create table t2(id bigint not null, name varchar not null, sex bool, f32 float(5,2));
 load data infile {'filepath'='$resources/load_data/simple2.parq', 'format'='parquet'} into table t2;
 select * from t2;
-id    name    sex    f32
-1    user1    0    1.0
-2    user2    0    null
-7    user7    0    7.0
-8    user8    1    null
-10    user10    0    10.0
-12    user12    0    null
-15    user15    0    null
-16    user16    1    null
+➤ id[-5,64,0]  ¦  name[12,-1,0]  ¦  sex[-7,1,0]  ¦  f32[7,5,2]  𝄀
+7  ¦  user7  ¦  0  ¦  7.0  𝄀
+1  ¦  user1  ¦  0  ¦  1.0  𝄀
+2  ¦  user2  ¦  0  ¦  null  𝄀
+8  ¦  user8  ¦  1  ¦  null  𝄀
+10  ¦  user10  ¦  0  ¦  10.0  𝄀
+15  ¦  user15  ¦  0  ¦  null  𝄀
+16  ¦  user16  ¦  1  ¦  null  𝄀
+12  ¦  user12  ¦  0  ¦  null
 create table t3(c varchar);
 load data infile {'filepath'='$resources/load_data/indexed_str.parq', 'format'='parquet'} into table t3;
 select * from t3;
-c
-null
-aa
-null
-bb
-aa
-789$&@789$&@789$&@789$&@789$&@789$&@789$&@789$&@789$&@789$&@
-789$&@789$&@789$&@789$&@789$&@789$&@789$&@789$&@789$&@789$&@
-aa
-bb
-xyzABCxyzABCxyzABCxyzABCxyzABCxyzABCxyzABCxyzABCxyzABCxyzABC
-null
-null
+➤ c[12,-1,0]  𝄀
+null  𝄀
+aa  𝄀
+null  𝄀
+bb  𝄀
+aa  𝄀
+789$&@789$&@789$&@789$&@789$&@789$&@789$&@789$&@789$&@789$&@  𝄀
+789$&@789$&@789$&@789$&@789$&@789$&@789$&@789$&@789$&@789$&@  𝄀
+aa  𝄀
+bb  𝄀
+xyzABCxyzABCxyzABCxyzABCxyzABCxyzABCxyzABCxyzABCxyzABCxyzABC  𝄀
+null  𝄀
+null  𝄀
 xyzABCxyzABCxyzABCxyzABCxyzABCxyzABCxyzABCxyzABCxyzABCxyzABC
 create table t4(id bigint not null, name varchar not null, sex bool, f32 float(5,2));
 create stage parqstage URL='file:///$resources/load_data/';
 load data infile {'filepath'='stage://parqstage/simple2.parq', 'format'='parquet'} into table t4;
 select * from t4;
-id    name    sex    f32
-1    user1    0    1.0
-2    user2    0    null
-7    user7    0    7.0
-8    user8    1    null
-10    user10    0    10.0
-12    user12    0    null
-15    user15    0    null
-16    user16    1    null
+➤ id[-5,64,0]  ¦  name[12,-1,0]  ¦  sex[-7,1,0]  ¦  f32[7,5,2]  𝄀
+8  ¦  user8  ¦  1  ¦  null  𝄀
+10  ¦  user10  ¦  0  ¦  10.0  𝄀
+7  ¦  user7  ¦  0  ¦  7.0  𝄀
+1  ¦  user1  ¦  0  ¦  1.0  𝄀
+2  ¦  user2  ¦  0  ¦  null  𝄀
+12  ¦  user12  ¦  0  ¦  null  𝄀
+15  ¦  user15  ¦  0  ¦  null  𝄀
+16  ¦  user16  ¦  1  ¦  null
 drop stage parqstage;
 create table t5(id bigint, name varchar, int8column tinyint, int16column smallint, binarycolumn binary, varbinarycolumn varbinary(32), blobcolumn blob);
 load data infile {'filepath'='$resources/load_data/int8_int16_binary_varbinary_blob.parq', 'format'='parquet'} into table t5;
 select * from t5;
-id    name    int8column    int16column    binarycolumn    varbinarycolumn    blobcolumn
-1    Alice    1    100    binary1    varbinary1    blob1
-2    Bob    2    200    binary2    varbinary2    blob2
-3    Charlie    3    300    binary3    varbinary3    blob3
-4    Diana    4    400    binary4    varbinary4    blob4
-5    Eve    5    500    binary5    varbinary5    blob5
+➤ id[-5,64,0]  ¦  name[12,-1,0]  ¦  int8column[-6,8,0]  ¦  int16column[5,16,0]  ¦  binarycolumn[12,3,0]  ¦  varbinarycolumn[12,96,0]  ¦  blobcolumn[12,0,0]  𝄀
+1  ¦  Alice  ¦  1  ¦  100  ¦  binary1  ¦  varbinary1  ¦  blob1  𝄀
+2  ¦  Bob  ¦  2  ¦  200  ¦  binary2  ¦  varbinary2  ¦  blob2  𝄀
+3  ¦  Charlie  ¦  3  ¦  300  ¦  binary3  ¦  varbinary3  ¦  blob3  𝄀
+4  ¦  Diana  ¦  4  ¦  400  ¦  binary4  ¦  varbinary4  ¦  blob4  𝄀
+5  ¦  Eve  ¦  5  ¦  500  ¦  binary5  ¦  varbinary5  ¦  blob5
+create table t6(id int, name varchar(100), scores text, address text, metadata text);
+load data infile {'filepath'='$resources/load_data/nested_types.parq', 'format'='parquet'} into table t6;
+select * from t6;
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  scores[12,0,0]  ¦  address[12,0,0]  ¦  metadata[12,0,0]  𝄀
+1  ¦  Alice  ¦  [85, 90, 78]  ¦  {"city": "Beijing", "zip": "100000"}  ¦  {"key1": "value1", "key2": "value2"}  𝄀
+2  ¦  Bob  ¦  [92, 88]  ¦  {"city": "Shanghai", "zip": "200000"}  ¦  {"a": "b"}  𝄀
+3  ¦  Charlie  ¦  [76, 85, 90, 95]  ¦  {"city": "Guangzhou", "zip": "510000"}  ¦  {"m": "n", "x": "y", "z": "w"}
+create table t7(id int, name varchar(100), scores json, address json, metadata json);
+load data infile {'filepath'='$resources/load_data/nested_types.parq', 'format'='parquet'} into table t7;
+select * from t7;
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  scores[-1,2147483647,0]  ¦  address[-1,2147483647,0]  ¦  metadata[-1,2147483647,0]  𝄀
+1  ¦  Alice  ¦  [85, 90, 78]  ¦  {"city": "Beijing", "zip": "100000"}  ¦  {"key1": "value1", "key2": "value2"}  𝄀
+2  ¦  Bob  ¦  [92, 88]  ¦  {"city": "Shanghai", "zip": "200000"}  ¦  {"a": "b"}  𝄀
+3  ¦  Charlie  ¦  [76, 85, 90, 95]  ¦  {"city": "Guangzhou", "zip": "510000"}  ¦  {"m": "n", "x": "y", "z": "w"}
 drop database parq;
