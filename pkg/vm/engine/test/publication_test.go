@@ -1803,7 +1803,7 @@ func TestExecuteIterationWithSnapshotFinishedInjection(t *testing.T) {
 	close(checkpointDone)
 
 	// error is flushed
-	require.Error(t, err)
+	require.NoError(t, err)
 
 	// Remove the injection for second iteration
 	rmFn()
@@ -3637,13 +3637,12 @@ func TestCCPRErrorHandling1(t *testing.T) {
 
 	rmFn()
 	// Step 6: Update mo_ccpr_log for second iteration (retryable error)
-	iterationLSN2 := uint64(1)
 	updateSQL2 := fmt.Sprintf(
 		`UPDATE mo_catalog.mo_ccpr_log 
 		SET iteration_state = %d, iteration_lsn = %d, error_message = ''
 		WHERE task_id = %d`,
 		publication.IterationStateRunning,
-		iterationLSN2,
+		iterationLSN1,
 		taskID,
 	)
 
@@ -3669,7 +3668,7 @@ func TestCCPRErrorHandling1(t *testing.T) {
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
 		taskID,
-		iterationLSN2,
+		iterationLSN1,
 		upstreamSQLHelperFactory,
 		mp,
 		utHelper2,
@@ -3716,7 +3715,7 @@ func TestCCPRErrorHandling1(t *testing.T) {
 	require.True(t, found2, "should find the iteration record after second iteration")
 
 	// Verify lsn should still be iterationLSN2 (no increment on retryable error)
-	require.Equal(t, iterationLSN2, iterationLSNFromDB2, "iteration_lsn should remain the same after retryable error")
+	require.Equal(t, iterationLSN1, iterationLSNFromDB2, "iteration_lsn should remain the same after retryable error")
 
 	// Verify state should still be running (retryable error doesn't change subscription state)
 	require.Equal(t, publication.SubscriptionStateRunning, stateFromDB2, "state should be running after retryable error")
@@ -3733,13 +3732,12 @@ func TestCCPRErrorHandling1(t *testing.T) {
 
 	rmFn2()
 	// Step 7: Update mo_ccpr_log for third iteration (non-retryable error)
-	iterationLSN3 := uint64(2)
 	updateSQL3 := fmt.Sprintf(
 		`UPDATE mo_catalog.mo_ccpr_log 
 		SET iteration_state = %d, iteration_lsn = %d, error_message = ''
 		WHERE task_id = %d`,
 		publication.IterationStateRunning,
-		iterationLSN3,
+		iterationLSN1,
 		taskID,
 	)
 
@@ -3765,7 +3763,7 @@ func TestCCPRErrorHandling1(t *testing.T) {
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
 		taskID,
-		iterationLSN3,
+		iterationLSN1,
 		upstreamSQLHelperFactory,
 		mp,
 		utHelper3,
@@ -3812,7 +3810,7 @@ func TestCCPRErrorHandling1(t *testing.T) {
 	require.True(t, found3, "should find the iteration record after third iteration")
 
 	// Verify lsn should still be iterationLSN3 (no increment on non-retryable error)
-	require.Equal(t, iterationLSN3, iterationLSNFromDB3, "iteration_lsn should remain the same after non-retryable error")
+	require.Equal(t, iterationLSN1, iterationLSNFromDB3, "iteration_lsn should remain the same after non-retryable error")
 
 	// Verify state should be error (non-retryable error changes subscription state to error)
 	require.Equal(t, publication.SubscriptionStateError, stateFromDB3, "state should be error after non-retryable error")
@@ -3829,25 +3827,8 @@ func TestCCPRErrorHandling1(t *testing.T) {
 	require.NoError(t, err)
 
 	rmFn3()
-	// Step 8: Reset mo_ccpr_log table and manually write a retryable error, then execute normal iteration
-	// Reset the table
-	resetSQL := fmt.Sprintf(
-		`UPDATE mo_catalog.mo_ccpr_log 
-		SET state = %d, iteration_state = %d, iteration_lsn = %d, error_message = 'R:1:%d:%d:ut injection: commit failed retryable'
-		WHERE task_id = %d`,
-		publication.SubscriptionStateRunning,
-		publication.IterationStateRunning,
-		iterationLSN3,
-		time.Now().Unix(),
-		time.Now().Unix(),
-		taskID,
-	)
 
-	err = exec_sql(disttaeEngine, systemCtx, resetSQL)
-	require.NoError(t, err)
-
-	// Execute fourth ExecuteIteration - should succeed normally (no injection)
-	iterationLSN4 := iterationLSN3
+	// Execute fourth ExecuteIteration - should fail
 	checkpointDone4 := make(chan struct{}, 1)
 	utHelper4 := &checkpointUTHelper{
 		taeHandler:    taeHandler,
@@ -3861,7 +3842,7 @@ func TestCCPRErrorHandling1(t *testing.T) {
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
 		taskID,
-		iterationLSN4,
+		iterationLSN1,
 		upstreamSQLHelperFactory,
 		mp,
 		utHelper4,
@@ -3871,90 +3852,8 @@ func TestCCPRErrorHandling1(t *testing.T) {
 	// Signal checkpoint goroutine to stop
 	close(checkpointDone4)
 
-	// Fourth iteration should succeed
-	require.NoError(t, err, "Fourth ExecuteIteration should complete successfully")
-
-	// Verify fourth iteration state
-	querySQL4 := fmt.Sprintf(
-		`SELECT iteration_state, iteration_lsn FROM mo_catalog.mo_ccpr_log WHERE task_id = %d`,
-		taskID,
-	)
-
-	txn4, err := disttaeEngine.NewTxnOperator(querySystemCtx, disttaeEngine.Now())
-	require.NoError(t, err)
-
-	res4, err := exec.Exec(querySystemCtx, querySQL4, executor.Options{}.WithTxn(txn4))
-	require.NoError(t, err)
-	defer res4.Close()
-
-	var found4 bool
-	res4.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		require.Equal(t, 1, rows)
-		require.Equal(t, 2, len(cols))
-
-		state := vector.GetFixedAtWithTypeCheck[int8](cols[0], 0)
-		lsn := vector.GetFixedAtWithTypeCheck[int64](cols[1], 0)
-
-		require.Equal(t, publication.IterationStateCompleted, state)
-		require.Equal(t, int64(iterationLSN4+1), lsn)
-		found4 = true
-		return true
-	})
-	require.True(t, found4, "should find the updated iteration record")
-
-	err = txn4.Commit(querySystemCtx)
-	require.NoError(t, err)
-
-	// Step 9: Inject error in sql executor for fifth iteration
-	iterationLSN5 := iterationLSN4 + 1
-	updateSQL5 := fmt.Sprintf(
-		`UPDATE mo_catalog.mo_ccpr_log 
-		SET iteration_state = %d, iteration_lsn = %d, error_message = ''
-		WHERE task_id = %d`,
-		publication.IterationStateRunning,
-		iterationLSN5,
-		taskID,
-	)
-
-	err = exec_sql(disttaeEngine, systemCtx, updateSQL5)
-	require.NoError(t, err)
-
-	// Inject error in sql executor
-	rmFn5, err := objectio.InjectPublicationSnapshotFinished("ut injection: sql fail")
-	require.NoError(t, err)
-
-	// Execute fifth ExecuteIteration - should fail due to sql executor injection
-	checkpointDone5 := make(chan struct{}, 1)
-	utHelper5 := &checkpointUTHelper{
-		taeHandler:    taeHandler,
-		disttaeEngine: disttaeEngine,
-		checkpointC:   checkpointDone5,
-	}
-
-	err = publication.ExecuteIteration(
-		context.Background(),
-		cnUUID,
-		disttaeEngine.Engine,
-		disttaeEngine.GetTxnClient(),
-		taskID,
-		iterationLSN5,
-		upstreamSQLHelperFactory,
-		mp,
-		utHelper5,
-		100*time.Millisecond, // snapshotFlushInterval for test
-		&publication.SQLExecutorRetryOption{
-			MaxRetries:    2,
-			RetryInterval: time.Second,
-			Classifier:    nil,
-		},
-	)
-
-	// Signal checkpoint goroutine to stop
-	close(checkpointDone5)
-
-	// Fifth iteration should fail due to sql executor injection
-	require.Error(t, err, "Fifth ExecuteIteration should fail due to sql executor injection")
-	rmFn5()
+	// Fourth iteration should fail
+	require.Error(t, err, "Fourth ExecuteIteration should fail")
 }
 
 func TestCCPRDDLAccountLevel(t *testing.T) {

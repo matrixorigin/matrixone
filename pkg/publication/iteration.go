@@ -297,6 +297,9 @@ func InitializeIterationContext(
 	if errorMessage.Valid && errorMessage.String != "" {
 		errorMetadata = Parse(errorMessage.String)
 	}
+	if errorMetadata != nil && !errorMetadata.IsRetryable {
+		return nil, moerr.NewInternalErrorf(ctx, "error metadata is not retryable: %v", errorMetadata.Message)
+	}
 
 	// Initialize IterationContext
 	iterationCtx := &IterationContext{
