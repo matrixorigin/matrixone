@@ -340,6 +340,10 @@ type Transaction struct {
 
 	// writes cache stores any writes done by txn
 	writes []Entry
+	// writesBlockIndex indexes INSERT entries by (tableId, blockId) for fast lookup in deleteTableWrites.
+	// Key: tableId<<32 | blockId.Sequence(), Value: indices into writes slice
+	// This optimization reduces deleteTableWrites from O(n) to O(1) lookup per block.
+	writesBlockIndex map[uint64]map[types.Blockid][]int
 	// txn workspace size, includes in memory entries and persisted entries.
 	workspaceSize uint64
 	// the approximation of total size for insert entries
@@ -487,14 +491,15 @@ func (b *deletedBlocks) iter(fn func(*types.Blockid, []int64) bool) {
 
 func NewTxnWorkSpace(eng *Engine, proc *process.Process) *Transaction {
 	txn := &Transaction{
-		proc:         proc,
-		engine:       eng,
-		idGen:        eng.idGen,
-		tnStores:     eng.GetTNServices(),
-		tableCache:   new(sync.Map),
-		databaseOps:  newDbOps(),
-		tableOps:     newTableOps(),
-		tablesInVain: make(map[uint64]int),
+		proc:             proc,
+		engine:           eng,
+		idGen:            eng.idGen,
+		tnStores:         eng.GetTNServices(),
+		tableCache:       new(sync.Map),
+		databaseOps:      newDbOps(),
+		tableOps:         newTableOps(),
+		tablesInVain:     make(map[uint64]int),
+		writesBlockIndex: make(map[uint64]map[types.Blockid][]int),
 		deletedBlocks: &deletedBlocks{
 			offsets: map[types.Blockid][]int64{},
 		},
@@ -926,6 +931,9 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 		txn.writes = txn.writes[:end]
 		txn.offsets = txn.offsets[:txn.statementID]
 
+		// Rebuild writesBlockIndex after truncating writes
+		txn.rebuildWritesBlockIndex()
+
 		// transfer stuff
 		if txn.op.Txn().IsRCIsolation() {
 			txn.transfer.timestamps = txn.transfer.timestamps[:txn.statementID]
@@ -955,6 +963,32 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 	// current statement has been rolled back, make can call IncrStatementID again.
 	txn.incrStatementCalled = false
 	return nil
+}
+
+// rebuildWritesBlockIndex rebuilds the writesBlockIndex from scratch based on current txn.writes.
+// This is called after truncating writes during rollback.
+func (txn *Transaction) rebuildWritesBlockIndex() {
+	// Clear existing index
+	txn.writesBlockIndex = make(map[uint64]map[types.Blockid][]int)
+
+	// Rebuild index from remaining writes
+	for idx, entry := range txn.writes {
+		if entry.typ != INSERT || entry.bat == nil || entry.bat.RowCount() == 0 {
+			continue
+		}
+		if entry.bat.Vecs[0].GetType().Oid != types.T_Rowid {
+			continue
+		}
+		rowids := vector.MustFixedColWithTypeCheck[types.Rowid](entry.bat.GetVector(0))
+		if len(rowids) == 0 {
+			continue
+		}
+		blockId := rowids[0].CloneBlockID()
+		if txn.writesBlockIndex[entry.tableId] == nil {
+			txn.writesBlockIndex[entry.tableId] = make(map[types.Blockid][]int)
+		}
+		txn.writesBlockIndex[entry.tableId][blockId] = append(txn.writesBlockIndex[entry.tableId][blockId], idx)
+	}
 }
 
 func (txn *Transaction) IncrSQLCount() {
