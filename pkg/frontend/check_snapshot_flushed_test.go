@@ -44,6 +44,44 @@ func Test_handleCheckSnapshotFlushed(t *testing.T) {
 		eng := mock_frontend.NewMockEngine(ctrl)
 		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
+		// Mock mo_catalog database (used by checkPublicationPermission)
+		mockMoCatalogDb := mock_frontend.NewMockDatabase(ctrl)
+		mockMoCatalogDb.EXPECT().IsSubscription(gomock.Any()).Return(false).AnyTimes()
+		eng.EXPECT().Database(gomock.Any(), catalog.MO_CATALOG, gomock.Any()).Return(mockMoCatalogDb, nil).AnyTimes()
+
+		// Mock mo_account relation (used by checkPublicationPermission)
+		mockMoAccountRel := mock_frontend.NewMockRelation(ctrl)
+		mockMoAccountRel.EXPECT().CopyTableDef(gomock.Any()).Return(&plan.TableDef{
+			Name:      "mo_account",
+			DbName:    catalog.MO_CATALOG,
+			TableType: catalog.SystemOrdinaryRel,
+			Defs:      []*plan.TableDefType{},
+		}).AnyTimes()
+		mockMoAccountRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(0)).AnyTimes()
+		mockMoCatalogDb.EXPECT().Relation(gomock.Any(), "mo_account", nil).Return(mockMoAccountRel, nil).AnyTimes()
+
+		// Mock mo_pubs relation (used by checkPublicationPermission)
+		mockMoPubsRel := mock_frontend.NewMockRelation(ctrl)
+		mockMoPubsRel.EXPECT().CopyTableDef(gomock.Any()).Return(&plan.TableDef{
+			Name:      "mo_pubs",
+			DbName:    catalog.MO_CATALOG,
+			TableType: catalog.SystemOrdinaryRel,
+			Defs:      []*plan.TableDefType{},
+		}).AnyTimes()
+		mockMoPubsRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(0)).AnyTimes()
+		mockMoCatalogDb.EXPECT().Relation(gomock.Any(), "mo_pubs", nil).Return(mockMoPubsRel, nil).AnyTimes()
+
+		// Mock mo_snapshots relation (used by getSnapshotByName)
+		mockMoSnapshotsRel := mock_frontend.NewMockRelation(ctrl)
+		mockMoSnapshotsRel.EXPECT().CopyTableDef(gomock.Any()).Return(&plan.TableDef{
+			Name:      "mo_snapshots",
+			DbName:    catalog.MO_CATALOG,
+			TableType: catalog.SystemOrdinaryRel,
+			Defs:      []*plan.TableDefType{},
+		}).AnyTimes()
+		mockMoSnapshotsRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(0)).AnyTimes()
+		mockMoCatalogDb.EXPECT().Relation(gomock.Any(), "mo_snapshots", nil).Return(mockMoSnapshotsRel, nil).AnyTimes()
+
 		// Mock txn operator
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
@@ -51,6 +89,9 @@ func Test_handleCheckSnapshotFlushed(t *testing.T) {
 		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 		txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
 		txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
+		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
+		txnOperator.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
+		txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
 		txnOperator.EXPECT().CloneSnapshotOp(gomock.Any()).Return(txnOperator).AnyTimes()
 
 		// Mock txn client
@@ -76,6 +117,7 @@ func Test_handleCheckSnapshotFlushed(t *testing.T) {
 		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
 		pu.SV.SkipCheckUser = true
 		setPu("", pu)
+		setSessionAlloc("", NewLeakCheckAllocator())
 		ioses, err := NewIOSession(&testConn{}, pu, "")
 		convey.So(err, convey.ShouldBeNil)
 		pu.StorageEngine = eng
@@ -179,7 +221,8 @@ func Test_checkTableFlushTS(t *testing.T) {
 			ts: 1000,
 		}
 
-		mockDb.EXPECT().Relation(ctx, "test_table", nil).Return(mockRel, nil)
+		// Relation is called twice: once for getting table def, once in the loop for GetFlushTS
+		mockDb.EXPECT().Relation(ctx, "test_table", nil).Return(mockRel, nil).Times(2)
 		tableDef := &plan.TableDef{
 			Indexes: []*plan.IndexDef{},
 		}
@@ -199,6 +242,8 @@ func Test_checkDBFlushTS(t *testing.T) {
 		defer ctrl.Finish()
 
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOperator.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
+		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 
 		record := &snapshotRecord{
 			ts: 1000,
