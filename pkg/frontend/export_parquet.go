@@ -25,6 +25,7 @@ import (
 	"github.com/apache/arrow/go/v18/arrow"
 	"github.com/apache/arrow/go/v18/arrow/array"
 	"github.com/apache/arrow/go/v18/arrow/memory"
+	"github.com/apache/arrow/go/v18/parquet"
 	"github.com/apache/arrow/go/v18/parquet/pqarrow"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -108,7 +109,12 @@ func NewParquetWriter(ctx context.Context, ses FeSession, mrs *MysqlResultSet) (
 	pool := memory.NewGoAllocator()
 	buf := &bytes.Buffer{}
 
-	pqWriter, err := pqarrow.NewFileWriter(schema, buf, nil, pqarrow.DefaultWriterProps())
+	// Use Required root repetition for compatibility with parquet-go reader.
+	// The default is Repeated, which causes "unexpected EOF" errors when reading.
+	writerProps := parquet.NewWriterProperties(
+		parquet.WithRootRepetition(parquet.Repetitions.Required),
+	)
+	pqWriter, err := pqarrow.NewFileWriter(schema, buf, writerProps, pqarrow.DefaultWriterProps())
 	if err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "failed to create parquet writer: %v", err)
 	}
