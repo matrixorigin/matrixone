@@ -868,6 +868,7 @@ func constructExternal(n *plan.Node, param *tree.ExternParam, ctx context.Contex
 				FileSize:        FileSize,
 				ClusterTable:    n.GetClusterTable(),
 				StrictSqlMode:   strictSqlMode,
+				TableDef:        n.TableDef,
 			},
 			ExParam: external.ExParam{
 				Fileparam: new(external.ExFileparam),

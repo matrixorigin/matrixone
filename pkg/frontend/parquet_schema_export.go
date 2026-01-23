@@ -57,9 +57,21 @@ func QueryParquetSchemas(ctx context.Context, ses FeSession, dbName, tableName s
 	mrs := erArray[0].(*MysqlResultSet)
 	for _, row := range mrs.Data {
 		if len(row) >= 2 {
-			colName, ok1 := row[0].(string)
-			schemaStr, ok2 := row[1].(string)
-			if ok1 && ok2 {
+			var colName, schemaStr string
+			// Handle both string and []uint8 types
+			switch v := row[0].(type) {
+			case string:
+				colName = v
+			case []uint8:
+				colName = string(v)
+			}
+			switch v := row[1].(type) {
+			case string:
+				schemaStr = v
+			case []uint8:
+				schemaStr = string(v)
+			}
+			if colName != "" && schemaStr != "" {
 				result[colName] = schemaStr
 			}
 		}

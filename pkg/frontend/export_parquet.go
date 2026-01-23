@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -286,14 +288,300 @@ func vectorValueToComplexType(vec *vector.Vector, i int, schemaStr string) (any,
 			"unsupported type for complex parquet export: %v", vec.GetType().Oid)
 	}
 
-	// Parse JSON to Go structure
-	var result any
-	if err := json.Unmarshal([]byte(jsonStr), &result); err != nil {
-		return nil, moerr.NewInternalErrorf(context.Background(),
-			"failed to parse JSON for complex type: %v", err)
+	// Parse JSON and convert to appropriate Go type based on schema
+	return convertJSONToParquetType(jsonStr, schemaStr)
+}
+
+// convertJSONToParquetType converts JSON string to Go type matching parquet schema
+func convertJSONToParquetType(jsonStr, schemaStr string) (any, error) {
+	schemaStr = strings.TrimSpace(schemaStr)
+
+	if strings.HasPrefix(schemaStr, "list<") {
+		return convertJSONToList(jsonStr, schemaStr)
+	}
+	if strings.HasPrefix(schemaStr, "map<") {
+		return convertJSONToMap(jsonStr, schemaStr)
+	}
+	if strings.HasPrefix(schemaStr, "struct<") {
+		return convertJSONToStruct(jsonStr, schemaStr)
 	}
 
+	// Basic type - just parse as-is
+	var result any
+	if err := json.Unmarshal([]byte(jsonStr), &result); err != nil {
+		return nil, err
+	}
 	return result, nil
+}
+
+// convertJSONToList converts JSON array to Go slice
+func convertJSONToList(jsonStr, schemaStr string) (any, error) {
+	var arr []any
+	if err := json.Unmarshal([]byte(jsonStr), &arr); err != nil {
+		return nil, err
+	}
+
+	// Extract element type
+	elementType := schemaStr[5 : len(schemaStr)-1] // remove "list<" and ">"
+
+	// Convert elements based on element type
+	switch strings.ToLower(strings.TrimSpace(elementType)) {
+	case "string":
+		result := make([]string, len(arr))
+		for i, v := range arr {
+			if v == nil {
+				result[i] = ""
+			} else if s, ok := v.(string); ok {
+				result[i] = s
+			} else {
+				result[i] = fmt.Sprintf("%v", v)
+			}
+		}
+		return result, nil
+	case "int32", "int":
+		result := make([]int32, len(arr))
+		for i, v := range arr {
+			if v == nil {
+				result[i] = 0
+			} else if f, ok := v.(float64); ok {
+				result[i] = int32(f)
+			}
+		}
+		return result, nil
+	case "int64":
+		result := make([]int64, len(arr))
+		for i, v := range arr {
+			if v == nil {
+				result[i] = 0
+			} else if f, ok := v.(float64); ok {
+				result[i] = int64(f)
+			}
+		}
+		return result, nil
+	case "float", "float32":
+		result := make([]float32, len(arr))
+		for i, v := range arr {
+			if v == nil {
+				result[i] = 0
+			} else if f, ok := v.(float64); ok {
+				result[i] = float32(f)
+			}
+		}
+		return result, nil
+	case "double", "float64":
+		result := make([]float64, len(arr))
+		for i, v := range arr {
+			if v == nil {
+				result[i] = 0
+			} else if f, ok := v.(float64); ok {
+				result[i] = f
+			}
+		}
+		return result, nil
+	default:
+		// For complex nested types, return as-is
+		return arr, nil
+	}
+}
+
+// convertJSONToMap converts JSON object to Go map
+func convertJSONToMap(jsonStr, schemaStr string) (any, error) {
+	var m map[string]any
+	if err := json.Unmarshal([]byte(jsonStr), &m); err != nil {
+		return nil, err
+	}
+
+	// Extract key and value types: map<keyType,valueType>
+	inner := schemaStr[4 : len(schemaStr)-1]
+	_, valueType := splitMapTypesForConvert(inner)
+
+	// Convert map values based on value type
+	switch strings.ToLower(strings.TrimSpace(valueType)) {
+	case "string":
+		result := make(map[string]string)
+		for k, v := range m {
+			if v == nil {
+				result[k] = ""
+			} else if s, ok := v.(string); ok {
+				result[k] = s
+			} else {
+				result[k] = fmt.Sprintf("%v", v)
+			}
+		}
+		return result, nil
+	case "int32", "int":
+		result := make(map[string]int32)
+		for k, v := range m {
+			if v == nil {
+				result[k] = 0
+			} else if f, ok := v.(float64); ok {
+				result[k] = int32(f)
+			}
+		}
+		return result, nil
+	case "int64":
+		result := make(map[string]int64)
+		for k, v := range m {
+			if v == nil {
+				result[k] = 0
+			} else if f, ok := v.(float64); ok {
+				result[k] = int64(f)
+			}
+		}
+		return result, nil
+	default:
+		// For complex nested types, return as-is
+		return m, nil
+	}
+}
+
+// convertJSONToStruct converts JSON object to Go map for struct
+func convertJSONToStruct(jsonStr, schemaStr string) (any, error) {
+	var m map[string]any
+	if err := json.Unmarshal([]byte(jsonStr), &m); err != nil {
+		return nil, err
+	}
+
+	// For struct, parquet-go expects map[string]any with correct value types
+	// Convert values to appropriate types based on field types
+	inner := schemaStr[7 : len(schemaStr)-1] // remove "struct<" and ">"
+	fields := splitStructFieldsForConvert(inner)
+
+	// Check if all fields are string type - if so, return map[string]string
+	allString := true
+	for _, field := range fields {
+		_, typeStr := splitFieldNameTypeForConvert(field)
+		if strings.ToLower(strings.TrimSpace(typeStr)) != "string" {
+			allString = false
+			break
+		}
+	}
+
+	if allString {
+		result := make(map[string]string)
+		for _, field := range fields {
+			name, _ := splitFieldNameTypeForConvert(field)
+			if name == "" {
+				continue
+			}
+			v, exists := m[name]
+			if !exists || v == nil {
+				result[name] = ""
+				continue
+			}
+			if s, ok := v.(string); ok {
+				result[name] = s
+			} else {
+				result[name] = fmt.Sprintf("%v", v)
+			}
+		}
+		return result, nil
+	}
+
+	// Mixed types - return map[string]any with converted values
+	result := make(map[string]any)
+	for _, field := range fields {
+		name, typeStr := splitFieldNameTypeForConvert(field)
+		if name == "" {
+			continue
+		}
+		v, exists := m[name]
+		if !exists {
+			continue
+		}
+		result[name] = convertValueToType(v, typeStr)
+	}
+	return result, nil
+}
+
+// Helper functions for type conversion
+func splitMapTypesForConvert(s string) (string, string) {
+	depth := 0
+	for i, c := range s {
+		switch c {
+		case '<':
+			depth++
+		case '>':
+			depth--
+		case ',':
+			if depth == 0 {
+				return strings.TrimSpace(s[:i]), strings.TrimSpace(s[i+1:])
+			}
+		}
+	}
+	return s, "string"
+}
+
+func splitStructFieldsForConvert(s string) []string {
+	var fields []string
+	depth := 0
+	start := 0
+	for i, c := range s {
+		switch c {
+		case '<':
+			depth++
+		case '>':
+			depth--
+		case ',':
+			if depth == 0 {
+				fields = append(fields, strings.TrimSpace(s[start:i]))
+				start = i + 1
+			}
+		}
+	}
+	if start < len(s) {
+		fields = append(fields, strings.TrimSpace(s[start:]))
+	}
+	return fields
+}
+
+func splitFieldNameTypeForConvert(field string) (string, string) {
+	idx := strings.Index(field, ":")
+	if idx < 0 {
+		return field, "string"
+	}
+	return strings.TrimSpace(field[:idx]), strings.TrimSpace(field[idx+1:])
+}
+
+func convertValueToType(v any, typeStr string) any {
+	if v == nil {
+		return nil
+	}
+	typeStr = strings.ToLower(strings.TrimSpace(typeStr))
+	switch typeStr {
+	case "string":
+		if s, ok := v.(string); ok {
+			return s
+		}
+		return fmt.Sprintf("%v", v)
+	case "int32", "int":
+		if f, ok := v.(float64); ok {
+			return int32(f)
+		}
+		return v
+	case "int64":
+		if f, ok := v.(float64); ok {
+			return int64(f)
+		}
+		return v
+	case "float", "float32":
+		if f, ok := v.(float64); ok {
+			return float32(f)
+		}
+		return v
+	case "double", "float64":
+		if f, ok := v.(float64); ok {
+			return f
+		}
+		return v
+	case "boolean", "bool":
+		if b, ok := v.(bool); ok {
+			return b
+		}
+		return v
+	default:
+		return v
+	}
 }
 
 // Close closes the parquet writer and returns the complete parquet data

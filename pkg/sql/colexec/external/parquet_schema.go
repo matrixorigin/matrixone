@@ -274,12 +274,12 @@ func SaveParquetSchema(
 
 // saveNestedSchemas saves schema for all nested columns
 func (h *ParquetHandler) saveNestedSchemas(param *ExternalParam, proc *process.Process) {
-	if param.tableDef == nil {
+	if param.TableDef == nil {
 		return
 	}
 
-	dbName := param.tableDef.DbName
-	tableName := param.tableDef.Name
+	dbName := param.TableDef.DbName
+	tableName := param.TableDef.Name
 	if dbName == "" || tableName == "" {
 		return
 	}
