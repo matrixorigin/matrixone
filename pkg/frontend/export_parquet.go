@@ -17,6 +17,7 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -30,22 +31,37 @@ import (
 
 // ParquetWriter handles writing data to Parquet format
 type ParquetWriter struct {
-	ctx         context.Context
-	buf         *bytes.Buffer
-	writer      *parquet.GenericWriter[any]
-	schema      *parquet.Schema
-	columnNames []string
-	columnTypes []defines.MysqlType
+	ctx           context.Context
+	buf           *bytes.Buffer
+	writer        *parquet.GenericWriter[any]
+	schema        *parquet.Schema
+	columnNames   []string
+	columnTypes   []defines.MysqlType
+	columnSchemas []string // parquet schema strings for complex types
 }
 
 // NewParquetWriter creates a new ParquetWriter
-func NewParquetWriter(ctx context.Context, mrs *MysqlResultSet) (*ParquetWriter, error) {
+func NewParquetWriter(ctx context.Context, ses FeSession, mrs *MysqlResultSet) (*ParquetWriter, error) {
 	if mrs == nil || len(mrs.Columns) == 0 {
 		return nil, moerr.NewInternalError(ctx, "no columns for parquet export")
 	}
 
+	// Collect tables and query schemas
+	schemaMap := make(map[string]map[string]string) // db.table -> columnName -> schema
+	if ses != nil {
+		tableColumns := collectTableColumns(mrs)
+		for key := range tableColumns {
+			dbName, tableName := splitDbTable(key)
+			schemas, err := QueryParquetSchemas(ctx, ses, dbName, tableName)
+			if err == nil && len(schemas) > 0 {
+				schemaMap[key] = schemas
+			}
+		}
+	}
+
 	columnNames := make([]string, len(mrs.Columns))
 	columnTypes := make([]defines.MysqlType, len(mrs.Columns))
+	columnSchemas := make([]string, len(mrs.Columns))
 
 	// Build parquet schema from column definitions using Group (map[string]Node)
 	group := make(parquet.Group)
@@ -57,7 +73,30 @@ func NewParquetWriter(ctx context.Context, mrs *MysqlResultSet) (*ParquetWriter,
 			return nil, moerr.NewInternalError(ctx, "invalid column type")
 		}
 		columnTypes[i] = mysqlCol.ColumnType()
-		group[columnNames[i]] = buildParquetNode(columnTypes[i], mysqlCol.Flag())
+
+		// Try to get parquet schema for this column
+		var node parquet.Node
+		dbName := mysqlCol.Schema()
+		tableName := mysqlCol.OrgTable()
+		columnName := mysqlCol.OrgName()
+
+		if dbName != "" && tableName != "" && columnName != "" {
+			key := dbName + "." + tableName
+			if tableSchemas, ok := schemaMap[key]; ok {
+				if schemaStr, ok := tableSchemas[columnName]; ok {
+					complexNode, err := BuildComplexParquetNode(schemaStr)
+					if err == nil {
+						node = complexNode
+						columnSchemas[i] = schemaStr // Store schema string
+					}
+				}
+			}
+		}
+
+		if node == nil {
+			node = buildParquetNode(columnTypes[i], mysqlCol.Flag())
+		}
+		group[columnNames[i]] = node
 	}
 
 	schema := parquet.NewSchema("export", group)
@@ -65,12 +104,13 @@ func NewParquetWriter(ctx context.Context, mrs *MysqlResultSet) (*ParquetWriter,
 	writer := parquet.NewGenericWriter[any](buf, schema)
 
 	return &ParquetWriter{
-		ctx:         ctx,
-		buf:         buf,
-		writer:      writer,
-		schema:      schema,
-		columnNames: columnNames,
-		columnTypes: columnTypes,
+		ctx:           ctx,
+		buf:           buf,
+		writer:        writer,
+		schema:        schema,
+		columnNames:   columnNames,
+		columnTypes:   columnTypes,
+		columnSchemas: columnSchemas,
 	}, nil
 }
 
@@ -129,17 +169,29 @@ func (pw *ParquetWriter) WriteBatch(bat *batch.Batch, mp *mpool.MPool, timeZone 
 	// Convert each column
 	for colIdx, vec := range bat.Vecs {
 		colName := pw.columnNames[colIdx]
+		schemaStr := pw.columnSchemas[colIdx]
+
 		for rowIdx := 0; rowIdx < bat.RowCount(); rowIdx++ {
 			row := rows[rowIdx].(map[string]any)
 			if vec.GetNulls().Contains(uint64(rowIdx)) {
 				row[colName] = nil
 				continue
 			}
-			val, err := vectorValueToParquet(vec, rowIdx, timeZone)
-			if err != nil {
-				return err
+
+			// If column has complex type schema, convert JSON to complex type
+			if schemaStr != "" {
+				val, err := vectorValueToComplexType(vec, rowIdx, schemaStr)
+				if err != nil {
+					return err
+				}
+				row[colName] = val
+			} else {
+				val, err := vectorValueToParquet(vec, rowIdx, timeZone)
+				if err != nil {
+					return err
+				}
+				row[colName] = val
 			}
-			row[colName] = val
 		}
 	}
 
@@ -217,6 +269,31 @@ func vectorValueToParquet(vec *vector.Vector, i int, timeZone *time.Location) (a
 	default:
 		return nil, moerr.NewInternalErrorf(context.Background(), "unsupported type for parquet export: %v", vec.GetType().Oid)
 	}
+}
+
+// vectorValueToComplexType converts a JSON vector value to complex type structure
+func vectorValueToComplexType(vec *vector.Vector, i int, schemaStr string) (any, error) {
+	// Get JSON string from vector
+	var jsonStr string
+	switch vec.GetType().Oid {
+	case types.T_json:
+		val := types.DecodeJson(vec.GetBytesAt(i))
+		jsonStr = val.String()
+	case types.T_char, types.T_varchar, types.T_text:
+		jsonStr = string(vec.GetBytesAt(i))
+	default:
+		return nil, moerr.NewInternalErrorf(context.Background(),
+			"unsupported type for complex parquet export: %v", vec.GetType().Oid)
+	}
+
+	// Parse JSON to Go structure
+	var result any
+	if err := json.Unmarshal([]byte(jsonStr), &result); err != nil {
+		return nil, moerr.NewInternalErrorf(context.Background(),
+			"failed to parse JSON for complex type: %v", err)
+	}
+
+	return result, nil
 }
 
 // Close closes the parquet writer and returns the complete parquet data
