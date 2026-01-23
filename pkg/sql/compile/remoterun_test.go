@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
@@ -70,7 +71,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -256,15 +257,15 @@ func Test_convertToVmInstruction(t *testing.T) {
 		{Op: int32(vm.Dispatch), Dispatch: &pipeline.Dispatch{}},
 		{Op: int32(vm.Group), Agg: &pipeline.Group{}},
 		{Op: int32(vm.HashJoin), HashJoin: &pipeline.HashJoin{}},
-		{Op: int32(vm.Limit), Limit: plan.MakePlan2Int64ConstExprWithType(1)},
+		{Op: int32(vm.Limit), Limit: planner.MakePlan2Int64ConstExprWithType(1)},
 		{Op: int32(vm.LoopJoin), LoopJoin: &pipeline.LoopJoin{}},
-		{Op: int32(vm.Offset), Offset: plan.MakePlan2Int64ConstExprWithType(0)},
+		{Op: int32(vm.Offset), Offset: planner.MakePlan2Int64ConstExprWithType(0)},
 		{Op: int32(vm.Order), OrderBy: []*plan.OrderBySpec{}},
 		{Op: int32(vm.Product), Product: &pipeline.Product{}},
 		{Op: int32(vm.ProductL2), ProductL2: &pipeline.ProductL2{}},
 		{Op: int32(vm.Projection), ProjectList: []*plan.Expr{}},
 		{Op: int32(vm.Filter), Filters: []*plan.Expr{}, RuntimeFilters: []*plan.Expr{}},
-		{Op: int32(vm.Top), Limit: plan.MakePlan2Int64ConstExprWithType(1)},
+		{Op: int32(vm.Top), Limit: planner.MakePlan2Int64ConstExprWithType(1)},
 		{Op: int32(vm.Intersect), SetOp: &pipeline.SetOp{}},
 		{Op: int32(vm.IntersectAll), SetOp: &pipeline.SetOp{}},
 		{Op: int32(vm.Minus), SetOp: &pipeline.SetOp{}},
@@ -272,7 +273,7 @@ func Test_convertToVmInstruction(t *testing.T) {
 		{Op: int32(vm.Merge), Merge: &pipeline.Merge{}},
 		{Op: int32(vm.MergeRecursive)},
 		{Op: int32(vm.MergeGroup), Agg: &pipeline.Group{}},
-		{Op: int32(vm.MergeTop), Limit: plan.MakePlan2Int64ConstExprWithType(1)},
+		{Op: int32(vm.MergeTop), Limit: planner.MakePlan2Int64ConstExprWithType(1)},
 		{Op: int32(vm.MergeOrder), OrderBy: []*plan.OrderBySpec{}},
 		{Op: int32(vm.TableFunction), TableFunction: &pipeline.TableFunction{}},
 		{Op: int32(vm.HashBuild), HashBuild: &pipeline.HashBuild{}},

@@ -24,17 +24,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -198,27 +197,27 @@ func Test_ConstructBasePKFilter(t *testing.T) {
 		// a=10
 		MakeFunctionExprForTest("=", []*plan.Expr{
 			MakeColExprForTest(0, types.T_int64),
-			plan2.MakePlan2Int64ConstExprWithType(10),
+			planner.MakePlan2Int64ConstExprWithType(10),
 		}),
 		// a=20 and a=10
 		MakeFunctionExprForTest("and", []*plan.Expr{
 			MakeFunctionExprForTest("=", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(20),
+				planner.MakePlan2Int64ConstExprWithType(20),
 			}),
 			MakeFunctionExprForTest("=", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(10),
+				planner.MakePlan2Int64ConstExprWithType(10),
 			}),
 		}),
 		// 30=a and 20=a
 		MakeFunctionExprForTest("and", []*plan.Expr{
 			MakeFunctionExprForTest("=", []*plan.Expr{
-				plan2.MakePlan2Int64ConstExprWithType(30),
+				planner.MakePlan2Int64ConstExprWithType(30),
 				MakeColExprForTest(0, types.T_int64),
 			}),
 			MakeFunctionExprForTest("=", []*plan.Expr{
-				plan2.MakePlan2Int64ConstExprWithType(20),
+				planner.MakePlan2Int64ConstExprWithType(20),
 				MakeColExprForTest(0, types.T_int64),
 			}),
 		}),
@@ -232,47 +231,47 @@ func Test_ConstructBasePKFilter(t *testing.T) {
 		MakeFunctionExprForTest("and", []*plan.Expr{
 			MakeFunctionExprForTest("=", []*plan.Expr{
 				MakeColExprForTest(1, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(40),
+				planner.MakePlan2Int64ConstExprWithType(40),
 			}),
 			MakeFunctionExprForTest("=", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(50),
+				planner.MakePlan2Int64ConstExprWithType(50),
 			}),
 		}),
 		MakeFunctionExprForTest("or", []*plan.Expr{
 			MakeFunctionExprForTest("=", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(60),
+				planner.MakePlan2Int64ConstExprWithType(60),
 			}),
 			MakeFunctionExprForTest("=", []*plan.Expr{
 				MakeColExprForTest(1, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(70),
+				planner.MakePlan2Int64ConstExprWithType(70),
 			}),
 		}),
 		MakeFunctionExprForTest("and", []*plan.Expr{
 			MakeFunctionExprForTest("=", []*plan.Expr{
 				MakeColExprForTest(1, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(80),
+				planner.MakePlan2Int64ConstExprWithType(80),
 			}),
 			MakeFunctionExprForTest("=", []*plan.Expr{
 				MakeColExprForTest(2, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(90),
+				planner.MakePlan2Int64ConstExprWithType(90),
 			}),
 		}),
 		MakeFunctionExprForTest("or", []*plan.Expr{
 			MakeFunctionExprForTest("=", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(60),
+				planner.MakePlan2Int64ConstExprWithType(60),
 			}),
 			MakeFunctionExprForTest("=", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(70),
+				planner.MakePlan2Int64ConstExprWithType(70),
 			}),
 		}),
 		MakeFunctionExprForTest("or", []*plan.Expr{
 			MakeFunctionExprForTest("=", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(60),
+				planner.MakePlan2Int64ConstExprWithType(60),
 			}),
 			MakeInExprForTest[int64](
 				MakeColExprForTest(0, types.T_int64),
@@ -285,48 +284,48 @@ func Test_ConstructBasePKFilter(t *testing.T) {
 			MakeFunctionExprForTest("or", []*plan.Expr{
 				MakeFunctionExprForTest("=", []*plan.Expr{
 					MakeColExprForTest(0, types.T_int64),
-					plan2.MakePlan2Int64ConstExprWithType(10),
+					planner.MakePlan2Int64ConstExprWithType(10),
 				}),
 				MakeFunctionExprForTest("=", []*plan.Expr{
 					MakeColExprForTest(1, types.T_int64),
-					plan2.MakePlan2Int64ConstExprWithType(20),
+					planner.MakePlan2Int64ConstExprWithType(20),
 				}),
 			}),
 			MakeFunctionExprForTest("=", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(30),
+				planner.MakePlan2Int64ConstExprWithType(30),
 			}),
 		}),
 		MakeFunctionExprForTest("and", []*plan.Expr{
 			MakeFunctionExprForTest("or", []*plan.Expr{
 				MakeFunctionExprForTest("=", []*plan.Expr{
 					MakeColExprForTest(0, types.T_int64),
-					plan2.MakePlan2Int64ConstExprWithType(10),
+					planner.MakePlan2Int64ConstExprWithType(10),
 				}),
 				MakeFunctionExprForTest("=", []*plan.Expr{
 					MakeColExprForTest(1, types.T_int64),
-					plan2.MakePlan2Int64ConstExprWithType(20),
+					planner.MakePlan2Int64ConstExprWithType(20),
 				}),
 			}),
 			MakeFunctionExprForTest("=", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(30),
+				planner.MakePlan2Int64ConstExprWithType(30),
 			}),
 		}),
 		MakeFunctionExprForTest("or", []*plan.Expr{
 			MakeFunctionExprForTest("and", []*plan.Expr{
 				MakeFunctionExprForTest("=", []*plan.Expr{
 					MakeColExprForTest(1, types.T_int64),
-					plan2.MakePlan2Int64ConstExprWithType(10),
+					planner.MakePlan2Int64ConstExprWithType(10),
 				}),
 				MakeFunctionExprForTest("=", []*plan.Expr{
 					MakeColExprForTest(0, types.T_int64),
-					plan2.MakePlan2Int64ConstExprWithType(20),
+					planner.MakePlan2Int64ConstExprWithType(20),
 				}),
 			}),
 			MakeFunctionExprForTest("=", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(30),
+				planner.MakePlan2Int64ConstExprWithType(30),
 			}),
 		}),
 
@@ -334,41 +333,41 @@ func Test_ConstructBasePKFilter(t *testing.T) {
 		MakeFunctionExprForTest("and", []*plan.Expr{
 			MakeFunctionExprForTest(">=", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(1),
+				planner.MakePlan2Int64ConstExprWithType(1),
 			}),
 			MakeFunctionExprForTest("<=", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(3),
+				planner.MakePlan2Int64ConstExprWithType(3),
 			}),
 		}),
 		MakeFunctionExprForTest("and", []*plan.Expr{
 			MakeFunctionExprForTest(">", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(1),
+				planner.MakePlan2Int64ConstExprWithType(1),
 			}),
 			MakeFunctionExprForTest("<=", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(3),
+				planner.MakePlan2Int64ConstExprWithType(3),
 			}),
 		}),
 		MakeFunctionExprForTest("and", []*plan.Expr{
 			MakeFunctionExprForTest(">=", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(1),
+				planner.MakePlan2Int64ConstExprWithType(1),
 			}),
 			MakeFunctionExprForTest("<", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(3),
+				planner.MakePlan2Int64ConstExprWithType(3),
 			}),
 		}),
 		MakeFunctionExprForTest("and", []*plan.Expr{
 			MakeFunctionExprForTest(">", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(1),
+				planner.MakePlan2Int64ConstExprWithType(1),
 			}),
 			MakeFunctionExprForTest("<", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(3),
+				planner.MakePlan2Int64ConstExprWithType(3),
 			}),
 		}),
 
@@ -376,41 +375,41 @@ func Test_ConstructBasePKFilter(t *testing.T) {
 		MakeFunctionExprForTest("or", []*plan.Expr{
 			MakeFunctionExprForTest(">=", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(1),
+				planner.MakePlan2Int64ConstExprWithType(1),
 			}),
 			MakeFunctionExprForTest("<=", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(3),
+				planner.MakePlan2Int64ConstExprWithType(3),
 			}),
 		}),
 		MakeFunctionExprForTest("or", []*plan.Expr{
 			MakeFunctionExprForTest(">", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(1),
+				planner.MakePlan2Int64ConstExprWithType(1),
 			}),
 			MakeFunctionExprForTest("<=", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(3),
+				planner.MakePlan2Int64ConstExprWithType(3),
 			}),
 		}),
 		MakeFunctionExprForTest("or", []*plan.Expr{
 			MakeFunctionExprForTest(">=", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(1),
+				planner.MakePlan2Int64ConstExprWithType(1),
 			}),
 			MakeFunctionExprForTest("<", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(3),
+				planner.MakePlan2Int64ConstExprWithType(3),
 			}),
 		}),
 		MakeFunctionExprForTest("or", []*plan.Expr{
 			MakeFunctionExprForTest(">", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(1),
+				planner.MakePlan2Int64ConstExprWithType(1),
 			}),
 			MakeFunctionExprForTest("<", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(3),
+				planner.MakePlan2Int64ConstExprWithType(3),
 			}),
 		}),
 
@@ -418,41 +417,41 @@ func Test_ConstructBasePKFilter(t *testing.T) {
 		MakeFunctionExprForTest("and", []*plan.Expr{
 			MakeFunctionExprForTest(">", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(1),
+				planner.MakePlan2Int64ConstExprWithType(1),
 			}),
 			MakeFunctionExprForTest(">", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(3),
+				planner.MakePlan2Int64ConstExprWithType(3),
 			}),
 		}),
 		MakeFunctionExprForTest("and", []*plan.Expr{
 			MakeFunctionExprForTest(">=", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(1),
+				planner.MakePlan2Int64ConstExprWithType(1),
 			}),
 			MakeFunctionExprForTest(">", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(3),
+				planner.MakePlan2Int64ConstExprWithType(3),
 			}),
 		}),
 		MakeFunctionExprForTest("and", []*plan.Expr{
 			MakeFunctionExprForTest(">=", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(1),
+				planner.MakePlan2Int64ConstExprWithType(1),
 			}),
 			MakeFunctionExprForTest(">=", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(3),
+				planner.MakePlan2Int64ConstExprWithType(3),
 			}),
 		}),
 		MakeFunctionExprForTest("and", []*plan.Expr{
 			MakeFunctionExprForTest(">", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(1),
+				planner.MakePlan2Int64ConstExprWithType(1),
 			}),
 			MakeFunctionExprForTest(">=", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(3),
+				planner.MakePlan2Int64ConstExprWithType(3),
 			}),
 		}),
 
@@ -460,41 +459,41 @@ func Test_ConstructBasePKFilter(t *testing.T) {
 		MakeFunctionExprForTest("or", []*plan.Expr{
 			MakeFunctionExprForTest(">", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(1),
+				planner.MakePlan2Int64ConstExprWithType(1),
 			}),
 			MakeFunctionExprForTest(">", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(3),
+				planner.MakePlan2Int64ConstExprWithType(3),
 			}),
 		}),
 		MakeFunctionExprForTest("or", []*plan.Expr{
 			MakeFunctionExprForTest(">=", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(1),
+				planner.MakePlan2Int64ConstExprWithType(1),
 			}),
 			MakeFunctionExprForTest(">", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(3),
+				planner.MakePlan2Int64ConstExprWithType(3),
 			}),
 		}),
 		MakeFunctionExprForTest("or", []*plan.Expr{
 			MakeFunctionExprForTest(">=", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(1),
+				planner.MakePlan2Int64ConstExprWithType(1),
 			}),
 			MakeFunctionExprForTest(">=", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(3),
+				planner.MakePlan2Int64ConstExprWithType(3),
 			}),
 		}),
 		MakeFunctionExprForTest("or", []*plan.Expr{
 			MakeFunctionExprForTest(">", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(1),
+				planner.MakePlan2Int64ConstExprWithType(1),
 			}),
 			MakeFunctionExprForTest(">=", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(3),
+				planner.MakePlan2Int64ConstExprWithType(3),
 			}),
 		}),
 
@@ -502,41 +501,41 @@ func Test_ConstructBasePKFilter(t *testing.T) {
 		MakeFunctionExprForTest("and", []*plan.Expr{
 			MakeFunctionExprForTest("<", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(1),
+				planner.MakePlan2Int64ConstExprWithType(1),
 			}),
 			MakeFunctionExprForTest("<", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(3),
+				planner.MakePlan2Int64ConstExprWithType(3),
 			}),
 		}),
 		MakeFunctionExprForTest("and", []*plan.Expr{
 			MakeFunctionExprForTest("<=", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(1),
+				planner.MakePlan2Int64ConstExprWithType(1),
 			}),
 			MakeFunctionExprForTest("<", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(3),
+				planner.MakePlan2Int64ConstExprWithType(3),
 			}),
 		}),
 		MakeFunctionExprForTest("and", []*plan.Expr{
 			MakeFunctionExprForTest("<=", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(1),
+				planner.MakePlan2Int64ConstExprWithType(1),
 			}),
 			MakeFunctionExprForTest("<=", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(3),
+				planner.MakePlan2Int64ConstExprWithType(3),
 			}),
 		}),
 		MakeFunctionExprForTest("and", []*plan.Expr{
 			MakeFunctionExprForTest("<", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(1),
+				planner.MakePlan2Int64ConstExprWithType(1),
 			}),
 			MakeFunctionExprForTest("<=", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(3),
+				planner.MakePlan2Int64ConstExprWithType(3),
 			}),
 		}),
 
@@ -544,41 +543,41 @@ func Test_ConstructBasePKFilter(t *testing.T) {
 		MakeFunctionExprForTest("or", []*plan.Expr{
 			MakeFunctionExprForTest("<", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(1),
+				planner.MakePlan2Int64ConstExprWithType(1),
 			}),
 			MakeFunctionExprForTest("<", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(3),
+				planner.MakePlan2Int64ConstExprWithType(3),
 			}),
 		}),
 		MakeFunctionExprForTest("or", []*plan.Expr{
 			MakeFunctionExprForTest("<=", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(1),
+				planner.MakePlan2Int64ConstExprWithType(1),
 			}),
 			MakeFunctionExprForTest("<", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(3),
+				planner.MakePlan2Int64ConstExprWithType(3),
 			}),
 		}),
 		MakeFunctionExprForTest("or", []*plan.Expr{
 			MakeFunctionExprForTest("<=", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(1),
+				planner.MakePlan2Int64ConstExprWithType(1),
 			}),
 			MakeFunctionExprForTest("<=", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(3),
+				planner.MakePlan2Int64ConstExprWithType(3),
 			}),
 		}),
 		MakeFunctionExprForTest("or", []*plan.Expr{
 			MakeFunctionExprForTest("<", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(1),
+				planner.MakePlan2Int64ConstExprWithType(1),
 			}),
 			MakeFunctionExprForTest("<=", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(3),
+				planner.MakePlan2Int64ConstExprWithType(3),
 			}),
 		}),
 
@@ -586,61 +585,61 @@ func Test_ConstructBasePKFilter(t *testing.T) {
 		MakeFunctionExprForTest("and", []*plan.Expr{
 			MakeFunctionExprForTest("<", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(10),
+				planner.MakePlan2Int64ConstExprWithType(10),
 			}),
 			MakeFunctionExprForTest("=", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(5),
+				planner.MakePlan2Int64ConstExprWithType(5),
 			}),
 		}),
 		MakeFunctionExprForTest("and", []*plan.Expr{
 			MakeFunctionExprForTest("<", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(10),
+				planner.MakePlan2Int64ConstExprWithType(10),
 			}),
 			MakeFunctionExprForTest("=", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(15),
+				planner.MakePlan2Int64ConstExprWithType(15),
 			}),
 		}),
 		MakeFunctionExprForTest("and", []*plan.Expr{
 			MakeFunctionExprForTest(">", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(10),
+				planner.MakePlan2Int64ConstExprWithType(10),
 			}),
 			MakeFunctionExprForTest("=", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(5),
+				planner.MakePlan2Int64ConstExprWithType(5),
 			}),
 		}),
 		MakeFunctionExprForTest("and", []*plan.Expr{
 			MakeFunctionExprForTest(">", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(10),
+				planner.MakePlan2Int64ConstExprWithType(10),
 			}),
 			MakeFunctionExprForTest("=", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(15),
+				planner.MakePlan2Int64ConstExprWithType(15),
 			}),
 		}),
 		MakeFunctionExprForTest("and", []*plan.Expr{
 			MakeFunctionExprForTest(">=", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(10),
+				planner.MakePlan2Int64ConstExprWithType(10),
 			}),
 			MakeFunctionExprForTest("=", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(10),
+				planner.MakePlan2Int64ConstExprWithType(10),
 			}),
 		}),
 		MakeFunctionExprForTest("and", []*plan.Expr{
 			MakeFunctionExprForTest("<=", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(10),
+				planner.MakePlan2Int64ConstExprWithType(10),
 			}),
 			MakeFunctionExprForTest("=", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(10),
+				planner.MakePlan2Int64ConstExprWithType(10),
 			}),
 		}),
 
@@ -648,61 +647,61 @@ func Test_ConstructBasePKFilter(t *testing.T) {
 		MakeFunctionExprForTest("or", []*plan.Expr{
 			MakeFunctionExprForTest("<", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(10),
+				planner.MakePlan2Int64ConstExprWithType(10),
 			}),
 			MakeFunctionExprForTest("=", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(5),
+				planner.MakePlan2Int64ConstExprWithType(5),
 			}),
 		}),
 		MakeFunctionExprForTest("or", []*plan.Expr{
 			MakeFunctionExprForTest("<", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(10),
+				planner.MakePlan2Int64ConstExprWithType(10),
 			}),
 			MakeFunctionExprForTest("=", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(15),
+				planner.MakePlan2Int64ConstExprWithType(15),
 			}),
 		}),
 		MakeFunctionExprForTest("or", []*plan.Expr{
 			MakeFunctionExprForTest(">", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(10),
+				planner.MakePlan2Int64ConstExprWithType(10),
 			}),
 			MakeFunctionExprForTest("=", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(5),
+				planner.MakePlan2Int64ConstExprWithType(5),
 			}),
 		}),
 		MakeFunctionExprForTest("or", []*plan.Expr{
 			MakeFunctionExprForTest(">", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(10),
+				planner.MakePlan2Int64ConstExprWithType(10),
 			}),
 			MakeFunctionExprForTest("=", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(15),
+				planner.MakePlan2Int64ConstExprWithType(15),
 			}),
 		}),
 		MakeFunctionExprForTest("or", []*plan.Expr{
 			MakeFunctionExprForTest(">=", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(10),
+				planner.MakePlan2Int64ConstExprWithType(10),
 			}),
 			MakeFunctionExprForTest("=", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(10),
+				planner.MakePlan2Int64ConstExprWithType(10),
 			}),
 		}),
 		MakeFunctionExprForTest("or", []*plan.Expr{
 			MakeFunctionExprForTest("<=", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(10),
+				planner.MakePlan2Int64ConstExprWithType(10),
 			}),
 			MakeFunctionExprForTest("=", []*plan.Expr{
 				MakeColExprForTest(0, types.T_int64),
-				plan2.MakePlan2Int64ConstExprWithType(10),
+				planner.MakePlan2Int64ConstExprWithType(10),
 			}),
 		}),
 	}
@@ -739,10 +738,10 @@ func Test_ConstructBasePKFilter(t *testing.T) {
 	var exes []colexec.ExpressionExecutor
 
 	for _, expr := range exprs {
-		plan2.ReplaceFoldExpr(proc, expr, &exes)
+		planner.ReplaceFoldExpr(proc, expr, &exes)
 	}
 	for i, expr := range exprs {
-		plan2.EvalFoldExpr(proc, expr, &exes)
+		planner.EvalFoldExpr(proc, expr, &exes)
 
 		BasePKFilter, err := ConstructBasePKFilter(expr, tableDef, proc.Mp())
 		require.NoError(t, err)
@@ -804,14 +803,14 @@ func TestConstructBasePKFilterWithOr(t *testing.T) {
 	makeEq := func(v int64) *plan.Expr {
 		return MakeFunctionExprForTest("=", []*plan.Expr{
 			MakeColExprForTest(0, types.T_int64),
-			plan2.MakePlan2Int64ConstExprWithType(v),
+			planner.MakePlan2Int64ConstExprWithType(v),
 		})
 	}
 
 	makeLessThan := func(v int64) *plan.Expr {
 		return MakeFunctionExprForTest("<", []*plan.Expr{
 			MakeColExprForTest(0, types.T_int64),
-			plan2.MakePlan2Int64ConstExprWithType(v),
+			planner.MakePlan2Int64ConstExprWithType(v),
 		})
 	}
 
@@ -878,7 +877,7 @@ func TestConstructBasePKFilterWithOr(t *testing.T) {
 			expr: MakeFunctionExprForTest("or", []*plan.Expr{
 				MakeFunctionExprForTest("=", []*plan.Expr{
 					MakeColExprForTest(1, types.T_int64),
-					plan2.MakePlan2Int64ConstExprWithType(2),
+					planner.MakePlan2Int64ConstExprWithType(2),
 				}),
 				makeEq(3),
 			}),
@@ -927,10 +926,10 @@ func TestConstructBasePKFilterWithOr(t *testing.T) {
 
 	var exes []colexec.ExpressionExecutor
 	for i := range testCases {
-		plan2.ReplaceFoldExpr(proc, testCases[i].expr, &exes)
+		planner.ReplaceFoldExpr(proc, testCases[i].expr, &exes)
 	}
 	for i := range testCases {
-		plan2.EvalFoldExpr(proc, testCases[i].expr, &exes)
+		planner.EvalFoldExpr(proc, testCases[i].expr, &exes)
 
 		basePKFilter, err := ConstructBasePKFilter(testCases[i].expr, tableDef, proc.Mp())
 		require.NoError(t, err, testCases[i].name)

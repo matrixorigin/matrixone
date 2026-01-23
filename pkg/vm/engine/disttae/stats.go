@@ -31,12 +31,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/gossip"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
@@ -146,7 +147,7 @@ type updateStatsRequest struct {
 	// The following fields are needed to update the stats.
 
 	// tableDef is the main table definition.
-	tableDef *plan2.TableDef
+	tableDef *plan.TableDef
 
 	partitionState  *logtailreplay.PartitionState
 	fs              fileservice.FileService
@@ -160,7 +161,7 @@ type updateStatsRequest struct {
 }
 
 func newUpdateStatsRequest(
-	tableDef *plan2.TableDef,
+	tableDef *plan.TableDef,
 	partitionState *logtailreplay.PartitionState,
 	fs fileservice.FileService,
 	ts types.TS,
@@ -656,7 +657,7 @@ func (gs *GlobalStats) PatchStats(key pb.StatsInfoKey, patch *PatchArgs) error {
 	stats := gs.mu.statsInfoMap[key]
 	if stats == nil {
 		// Create new stats if not exists
-		stats = plan2.NewStatsInfo()
+		stats = planner.NewStatsInfo()
 		gs.mu.statsInfoMap[key] = stats
 	}
 
@@ -810,7 +811,7 @@ func (gs *GlobalStats) coordinateStatsUpdate(wrapKey pb.StatsInfoKeyWithContext)
 		broadcastWithoutUpdate()
 		return
 	}
-	stats := plan2.NewStatsInfo()
+	stats := planner.NewStatsInfo()
 
 	newCtx := perfcounter.AttachS3RequestKey(wrapKey.Ctx, crs)
 	updated, samplingRatio = gs.executeStatsUpdate(newCtx, ps, wrapKey.Key, stats)
@@ -863,7 +864,7 @@ func (gs *GlobalStats) RefreshWithMode(ctx context.Context, key pb.StatsInfoKey,
 	}
 
 	// Create stats info
-	stats := plan2.NewStatsInfo()
+	stats := planner.NewStatsInfo()
 	approxObjectNum := int64(ps.ApproxDataObjectsNum())
 
 	lastActualObjectCnt := gs.GetBaseObjectCnt(key)
@@ -981,7 +982,7 @@ func getMinMaxValueByFloat64(typ types.Type, buf []byte) float64 {
 		dec := types.DecodeDecimal128(buf)
 		return types.Decimal128ToFloat64(dec, typ.Scale)
 	//case types.T_char, types.T_varchar, types.T_text:
-	//return float64(plan2.ByteSliceToUint64(buf)), true
+	//return float64(planner.ByteSliceToUint64(buf)), true
 	default:
 		panic("unsupported type")
 	}
@@ -1033,7 +1034,7 @@ func calcSamplingRatio(approxObjectNum int64) float64 {
 // get ndv, minval , maxval, datatype from zonemap. Retrieve all columns except for rowid, return accurate number of objects
 // Returns the actual sampling ratio (sampledObjects / totalObjects).
 func collectTableStats(
-	ctx context.Context, req *updateStatsRequest, info *plan2.TableStatsInfo, executor ConcurrentExecutor,
+	ctx context.Context, req *updateStatsRequest, info *planner.TableStatsInfo, executor ConcurrentExecutor,
 ) (float64, error) {
 	start := time.Now()
 	defer func() {
@@ -1113,7 +1114,7 @@ func collectTableStats(
 				columnMeta := meta.MustGetColumn(uint16(col.Seqnum))
 				info.NullCnts[idx] = int64(columnMeta.NullCnt())
 				info.ColumnZMs[idx] = columnMeta.ZoneMap().Clone()
-				info.DataTypes[idx] = plan2.ExprType2Type(&col.Typ)
+				info.DataTypes[idx] = planner.ExprType2Type(&col.Typ)
 				columnNDV := float64(columnMeta.Ndv())
 				info.ColumnNDVs[idx] = columnNDV
 				info.MaxNDVs[idx] = columnNDV
@@ -1125,14 +1126,14 @@ func collectTableStats(
 				if info.ColumnNDVs[idx] > 100 || info.ColumnNDVs[idx] > 0.1*float64(meta.BlockHeader().Rows()) {
 					switch info.DataTypes[idx].Oid {
 					case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_time, types.T_timestamp, types.T_date, types.T_datetime, types.T_year, types.T_decimal64, types.T_decimal128:
-						info.ShuffleRanges[idx] = plan2.NewShuffleRange(false)
+						info.ShuffleRanges[idx] = planner.NewShuffleRange(false)
 						if info.ColumnZMs[idx].IsInited() {
 							minValue := getMinMaxValueByFloat64(info.DataTypes[idx], info.ColumnZMs[idx].GetMinBuf())
 							maxValue := getMinMaxValueByFloat64(info.DataTypes[idx], info.ColumnZMs[idx].GetMaxBuf())
 							info.ShuffleRanges[idx].Update(minValue, maxValue, int64(meta.BlockHeader().Rows()), int64(columnMeta.NullCnt()))
 						}
 					case types.T_varchar, types.T_char, types.T_text:
-						info.ShuffleRanges[idx] = plan2.NewShuffleRange(true)
+						info.ShuffleRanges[idx] = planner.NewShuffleRange(true)
 						if info.ColumnZMs[idx].IsInited() {
 							info.ShuffleRanges[idx].UpdateString(info.ColumnZMs[idx].GetMinBuf(), info.ColumnZMs[idx].GetMaxBuf(), int64(meta.BlockHeader().Rows()), int64(columnMeta.NullCnt()))
 						}
@@ -1189,7 +1190,7 @@ func collectTableStats(
 					if info.ColumnNDVs[idx] > 100 || info.ColumnNDVs[idx] > 0.1*float64(info.TableRowCount) {
 						switch info.DataTypes[idx].Oid {
 						case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_time, types.T_timestamp, types.T_date, types.T_datetime, types.T_year, types.T_decimal64, types.T_decimal128:
-							info.ShuffleRanges[idx] = plan2.NewShuffleRange(false)
+							info.ShuffleRanges[idx] = planner.NewShuffleRange(false)
 							// Initialize with accumulated ZoneMap if available
 							if info.ColumnZMs[idx].IsInited() {
 								minValue := getMinMaxValueByFloat64(info.DataTypes[idx], info.ColumnZMs[idx].GetMinBuf())
@@ -1198,7 +1199,7 @@ func collectTableStats(
 								info.ShuffleRanges[idx].Update(minValue, maxValue, int64(info.TableRowCount), info.NullCnts[idx])
 							}
 						case types.T_varchar, types.T_char, types.T_text:
-							info.ShuffleRanges[idx] = plan2.NewShuffleRange(true)
+							info.ShuffleRanges[idx] = planner.NewShuffleRange(true)
 							if info.ColumnZMs[idx].IsInited() {
 								info.ShuffleRanges[idx].UpdateString(info.ColumnZMs[idx].GetMinBuf(), info.ColumnZMs[idx].GetMaxBuf(), int64(info.TableRowCount), info.NullCnts[idx])
 							}
@@ -1281,7 +1282,7 @@ func CollectAndCalculateStats(ctx context.Context, req *updateStatsRequest, exec
 		v2.TxnStatementUpdateStatsDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 	lenCols := len(req.tableDef.Cols) - 1 /* row-id */
-	info := plan2.NewTableStatsInfo(lenCols)
+	info := planner.NewTableStatsInfo(lenCols)
 	if req.approxObjectNum == 0 {
 		return 1.0, nil
 	}
@@ -1292,8 +1293,8 @@ func CollectAndCalculateStats(ctx context.Context, req *updateStatsRequest, exec
 	if err != nil {
 		return 0, err
 	}
-	plan2.UpdateStatsInfo(info, baseTableDef, req.statsInfo)
-	plan2.AdjustNDV(info, baseTableDef, req.statsInfo)
+	planner.UpdateStatsInfo(info, baseTableDef, req.statsInfo)
+	planner.AdjustNDV(info, baseTableDef, req.statsInfo)
 
 	for i, coldef := range baseTableDef.Cols[:len(baseTableDef.Cols)-1] {
 		colName := coldef.Name

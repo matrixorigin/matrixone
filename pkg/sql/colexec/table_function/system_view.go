@@ -34,7 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -87,11 +87,11 @@ func moLocksPrepare(proc *process.Process, tf *TableFunction) (tvfState, error) 
 		tf.ctr.retSchema = make([]types.Type, len(tf.Attrs))
 		for i, col := range tf.Attrs {
 			col = strings.ToLower(col)
-			idx, ok := plan2.MoLocksColName2Index[col]
+			idx, ok := planner.MoLocksColName2Index[col]
 			if !ok {
 				return nil, moerr.NewInternalErrorf(proc.Ctx, "invalid column name %s", col)
 			}
-			tf.ctr.retSchema[i] = plan2.MoLocksColTypes[idx]
+			tf.ctr.retSchema[i] = planner.MoLocksColTypes[idx]
 		}
 	}
 	if len(tf.ctr.retSchema) != len(tf.Attrs) {
@@ -152,17 +152,17 @@ func (s *moLocksState) start(tf *TableFunction, proc *process.Process, nthRow in
 			wList := lock.GetWaiters()
 			wLen := len(wList)
 
-			record := make([][]byte, len(plan2.MoLocksColNames))
-			record[plan2.MoLocksColTypeCnId] = []byte(cnId)
-			//record[plan2.MoLocksColTypeSessionId] = []byte(sessionId)
-			record[plan2.MoLocksColTypeTxnId] = []byte(txnId)
-			record[plan2.MoLocksColTypeTableId] = []byte(tableId)
-			//record[plan2.MoLocksColTypeTableName] = []byte(tableName)
-			record[plan2.MoLocksColTypeLockKey] = []byte(lockKey)
-			record[plan2.MoLocksColTypeLockContent] = []byte(lockContent)
-			record[plan2.MoLocksColTypeLockMode] = []byte(lockMode)
-			record[plan2.MoLocksColTypeLockStatus] = []byte(lockStatus)
-			record[plan2.MoLocksColTypeLockWait] = []byte(lockWait)
+			record := make([][]byte, len(planner.MoLocksColNames))
+			record[planner.MoLocksColTypeCnId] = []byte(cnId)
+			//record[planner.MoLocksColTypeSessionId] = []byte(sessionId)
+			record[planner.MoLocksColTypeTxnId] = []byte(txnId)
+			record[planner.MoLocksColTypeTableId] = []byte(tableId)
+			//record[planner.MoLocksColTypeTableName] = []byte(tableName)
+			record[planner.MoLocksColTypeLockKey] = []byte(lockKey)
+			record[planner.MoLocksColTypeLockContent] = []byte(lockContent)
+			record[planner.MoLocksColTypeLockMode] = []byte(lockMode)
+			record[planner.MoLocksColTypeLockStatus] = []byte(lockStatus)
+			record[planner.MoLocksColTypeLockWait] = []byte(lockWait)
 			if hLen == 0 && wLen == 0 {
 				//one record
 				if err := fillLockRecord(proc, tf.Attrs, bat, record); err != nil {
@@ -171,7 +171,7 @@ func (s *moLocksState) start(tf *TableFunction, proc *process.Process, nthRow in
 			} else if hLen == 0 && wLen != 0 {
 				//wLen records
 				for j := 0; j < wLen; j++ {
-					record[plan2.MoLocksColTypeLockWait] = []byte(hex.EncodeToString(wList[j].GetTxnID()))
+					record[planner.MoLocksColTypeLockWait] = []byte(hex.EncodeToString(wList[j].GetTxnID()))
 					if err := fillLockRecord(proc, tf.Attrs, bat, record); err != nil {
 						return err
 					}
@@ -179,7 +179,7 @@ func (s *moLocksState) start(tf *TableFunction, proc *process.Process, nthRow in
 			} else if hLen != 0 && wLen == 0 {
 				//hLen records
 				for j := 0; j < hLen; j++ {
-					record[plan2.MoLocksColTypeTxnId] = []byte(hex.EncodeToString(hList[j].GetTxnID()))
+					record[planner.MoLocksColTypeTxnId] = []byte(hex.EncodeToString(hList[j].GetTxnID()))
 					if err := fillLockRecord(proc, tf.Attrs, bat, record); err != nil {
 						return err
 					}
@@ -188,8 +188,8 @@ func (s *moLocksState) start(tf *TableFunction, proc *process.Process, nthRow in
 				//hLen * wLen records
 				for j := 0; j < hLen; j++ {
 					for k := 0; k < wLen; k++ {
-						record[plan2.MoLocksColTypeTxnId] = []byte(hex.EncodeToString(hList[j].GetTxnID()))
-						record[plan2.MoLocksColTypeLockWait] = []byte(hex.EncodeToString(wList[k].GetTxnID()))
+						record[planner.MoLocksColTypeTxnId] = []byte(hex.EncodeToString(hList[j].GetTxnID()))
+						record[planner.MoLocksColTypeLockWait] = []byte(hex.EncodeToString(wList[k].GetTxnID()))
 						if err := fillLockRecord(proc, tf.Attrs, bat, record); err != nil {
 							return err
 						}
@@ -205,7 +205,7 @@ func (s *moLocksState) start(tf *TableFunction, proc *process.Process, nthRow in
 
 func fillLockRecord(proc *process.Process, attrs []string, bat *batch.Batch, record [][]byte) error {
 	for colIdx, attr := range attrs {
-		realColIdx := plan2.MoLocksColName2Index[strings.ToLower(attr)]
+		realColIdx := planner.MoLocksColName2Index[strings.ToLower(attr)]
 		if err := vector.AppendBytes(bat.Vecs[colIdx], record[realColIdx], false, proc.GetMPool()); err != nil {
 			return err
 		}
@@ -255,11 +255,11 @@ func moConfigurationsPrepare(proc *process.Process, tf *TableFunction) (tvfState
 		tf.ctr.retSchema = make([]types.Type, len(tf.Attrs))
 		for i, col := range tf.Attrs {
 			col = strings.ToLower(col)
-			idx, ok := plan2.MoConfigColName2Index[col]
+			idx, ok := planner.MoConfigColName2Index[col]
 			if !ok {
 				return nil, moerr.NewInternalErrorf(proc.Ctx, "invalid column name %s", col)
 			}
-			tf.ctr.retSchema[i] = plan2.MoConfigColTypes[idx]
+			tf.ctr.retSchema[i] = planner.MoConfigColTypes[idx]
 		}
 	}
 	if len(tf.ctr.retSchema) != len(tf.Attrs) {
@@ -338,28 +338,28 @@ func fillMapToBatch(nodeType, nodeId string, attrs []string, kvs map[string]*log
 	for _, value := range kvs {
 		for i, col := range attrs {
 			col = strings.ToLower(col)
-			switch plan2.MoConfigColType(plan2.MoConfigColName2Index[col]) {
-			case plan2.MoConfigColTypeNodeType:
+			switch planner.MoConfigColType(planner.MoConfigColName2Index[col]) {
+			case planner.MoConfigColTypeNodeType:
 				if err = vector.AppendBytes(bat.Vecs[i], []byte(nodeType), false, mp); err != nil {
 					return err
 				}
-			case plan2.MoConfigColTypeNodeId:
+			case planner.MoConfigColTypeNodeId:
 				if err = vector.AppendBytes(bat.Vecs[i], []byte(nodeId), false, mp); err != nil {
 					return err
 				}
-			case plan2.MoConfigColTypeName:
+			case planner.MoConfigColTypeName:
 				if err = vector.AppendBytes(bat.Vecs[i], []byte(value.GetName()), false, mp); err != nil {
 					return err
 				}
-			case plan2.MoConfigColTypeCurrentValue:
+			case planner.MoConfigColTypeCurrentValue:
 				if err = vector.AppendBytes(bat.Vecs[i], []byte(value.GetCurrentValue()), false, mp); err != nil {
 					return err
 				}
-			case plan2.MoConfigColTypeDefaultValue:
+			case planner.MoConfigColTypeDefaultValue:
 				if err = vector.AppendBytes(bat.Vecs[i], []byte(value.GetDefaultValue()), false, mp); err != nil {
 					return err
 				}
-			case plan2.MoConfigColTypeInternal:
+			case planner.MoConfigColTypeInternal:
 				if err = vector.AppendBytes(bat.Vecs[i], []byte(value.GetInternal()), false, mp); err != nil {
 					return err
 				}
@@ -378,11 +378,11 @@ func moTransactionsPrepare(proc *process.Process, tf *TableFunction) (tvfState, 
 		tf.ctr.retSchema = make([]types.Type, len(tf.Attrs))
 		for i, col := range tf.Attrs {
 			col = strings.ToLower(col)
-			idx, ok := plan2.MoTransactionsColName2Index[col]
+			idx, ok := planner.MoTransactionsColName2Index[col]
 			if !ok {
 				return nil, moerr.NewInternalErrorf(proc.Ctx, "invalid column name %s", col)
 			}
-			tf.ctr.retSchema[i] = plan2.MoTransactionsColTypes[idx]
+			tf.ctr.retSchema[i] = planner.MoTransactionsColTypes[idx]
 		}
 	}
 	if len(tf.ctr.retSchema) != len(tf.Attrs) {
@@ -465,24 +465,24 @@ func (s *moTransactionsState) start(tf *TableFunction, proc *process.Process, nt
 			}
 
 			waitLocksCnt := len(txn.GetWaitLocks())
-			record := make([][]byte, len(plan2.MoTransactionsColNames))
-			record[plan2.MoTransactionsColTypeCnId] = []byte(cnId)
-			record[plan2.MoTransactionsColTypeTxnId] = []byte(txnId)
-			record[plan2.MoTransactionsColTypeCreateTs] = []byte(createTs)
-			record[plan2.MoTransactionsColTypeSnapshotTs] = []byte(snapshotTs)
-			record[plan2.MoTransactionsColTypePreparedTs] = []byte(preparedTs)
-			record[plan2.MoTransactionsColTypeCommitTs] = []byte(commitTs)
-			record[plan2.MoTransactionsColTypeTxnMode] = []byte(txnMode)
-			record[plan2.MoTransactionsColTypeIsolation] = []byte(isolation)
-			record[plan2.MoTransactionsColTypeUserTxn] = []byte(userTxn)
-			record[plan2.MoTransactionsColTypeTxnStatus] = []byte(txnStatus)
+			record := make([][]byte, len(planner.MoTransactionsColNames))
+			record[planner.MoTransactionsColTypeCnId] = []byte(cnId)
+			record[planner.MoTransactionsColTypeTxnId] = []byte(txnId)
+			record[planner.MoTransactionsColTypeCreateTs] = []byte(createTs)
+			record[planner.MoTransactionsColTypeSnapshotTs] = []byte(snapshotTs)
+			record[planner.MoTransactionsColTypePreparedTs] = []byte(preparedTs)
+			record[planner.MoTransactionsColTypeCommitTs] = []byte(commitTs)
+			record[planner.MoTransactionsColTypeTxnMode] = []byte(txnMode)
+			record[planner.MoTransactionsColTypeIsolation] = []byte(isolation)
+			record[planner.MoTransactionsColTypeUserTxn] = []byte(userTxn)
+			record[planner.MoTransactionsColTypeTxnStatus] = []byte(txnStatus)
 
 			if waitLocksCnt == 0 {
 				//one record
-				record[plan2.MoTransactionsColTypeTableId] = []byte{}
-				record[plan2.MoTransactionsColTypeLockKey] = []byte{}
-				record[plan2.MoTransactionsColTypeLockContent] = []byte{}
-				record[plan2.MoTransactionsColTypeLockMode] = []byte{}
+				record[planner.MoTransactionsColTypeTableId] = []byte{}
+				record[planner.MoTransactionsColTypeLockKey] = []byte{}
+				record[planner.MoTransactionsColTypeLockContent] = []byte{}
+				record[planner.MoTransactionsColTypeLockMode] = []byte{}
 
 				if err := fillTxnRecord(proc, tf.Attrs, bat, record); err != nil {
 					return err
@@ -497,14 +497,14 @@ func (s *moTransactionsState) start(tf *TableFunction, proc *process.Process, nt
 
 					//table id
 					tableId := fmt.Sprintf("%d", lock.GetTableId())
-					record[plan2.MoTransactionsColTypeTableId] = []byte(tableId)
+					record[planner.MoTransactionsColTypeTableId] = []byte(tableId)
 
 					//lock key
 					lockKey := "point"
 					if options.GetGranularity() == pblock.Granularity_Range {
 						lockKey = "range"
 					}
-					record[plan2.MoTransactionsColTypeLockKey] = []byte(lockKey)
+					record[planner.MoTransactionsColTypeLockKey] = []byte(lockKey)
 
 					//lock content
 					lockContent := ""
@@ -515,11 +515,11 @@ func (s *moTransactionsState) start(tf *TableFunction, proc *process.Process, nt
 					} else {
 						lockContent = hex.EncodeToString(getPointContent(lock))
 					}
-					record[plan2.MoTransactionsColTypeLockContent] = []byte(lockContent)
+					record[planner.MoTransactionsColTypeLockContent] = []byte(lockContent)
 
 					//lock mode
 					lockMode := options.GetMode().String()
-					record[plan2.MoTransactionsColTypeLockMode] = []byte(lockMode)
+					record[planner.MoTransactionsColTypeLockMode] = []byte(lockMode)
 
 					if err := fillTxnRecord(proc, tf.Attrs, bat, record); err != nil {
 						return err
@@ -535,7 +535,7 @@ func (s *moTransactionsState) start(tf *TableFunction, proc *process.Process, nt
 
 func fillTxnRecord(proc *process.Process, attrs []string, bat *batch.Batch, record [][]byte) error {
 	for colIdx, attr := range attrs {
-		realColIdx := plan2.MoTransactionsColName2Index[strings.ToLower(attr)]
+		realColIdx := planner.MoTransactionsColName2Index[strings.ToLower(attr)]
 		if err := vector.AppendBytes(bat.Vecs[colIdx], record[realColIdx], false, proc.GetMPool()); err != nil {
 			return err
 		}
@@ -584,11 +584,11 @@ func moCachePrepare(proc *process.Process, tf *TableFunction) (tvfState, error) 
 	tf.ctr.retSchema = make([]types.Type, len(tf.Attrs))
 	for i, col := range tf.Attrs {
 		col = strings.ToLower(col)
-		idx, ok := plan2.MoCacheColName2Index[col]
+		idx, ok := planner.MoCacheColName2Index[col]
 		if !ok {
 			return nil, moerr.NewInternalErrorf(proc.Ctx, "invalid column name %s", col)
 		}
-		tf.ctr.retSchema[i] = plan2.MoCacheColTypes[idx]
+		tf.ctr.retSchema[i] = planner.MoCacheColTypes[idx]
 	}
 	return &moCacheState{}, nil
 }
@@ -625,28 +625,28 @@ func (s *moCacheState) start(tf *TableFunction, proc *process.Process, nthRow in
 func fillCacheRecord(proc *process.Process, attrs []string, bat *batch.Batch, cache *query.CacheInfo) error {
 	var err error
 	for colIdx, attr := range attrs {
-		switch plan2.MoCacheColType(plan2.MoCacheColName2Index[strings.ToLower(attr)]) {
-		case plan2.MoCacheColTypeNodeType:
+		switch planner.MoCacheColType(planner.MoCacheColName2Index[strings.ToLower(attr)]) {
+		case planner.MoCacheColTypeNodeType:
 			if err = vector.AppendBytes(bat.Vecs[colIdx], []byte(cache.GetNodeType()), false, proc.GetMPool()); err != nil {
 				return err
 			}
-		case plan2.MoCacheColTypeNodeId:
+		case planner.MoCacheColTypeNodeId:
 			if err = vector.AppendBytes(bat.Vecs[colIdx], []byte(cache.GetNodeId()), false, proc.GetMPool()); err != nil {
 				return err
 			}
-		case plan2.MoCacheColTypeType:
+		case planner.MoCacheColTypeType:
 			if err = vector.AppendBytes(bat.Vecs[colIdx], []byte(cache.GetCacheType()), false, proc.GetMPool()); err != nil {
 				return err
 			}
-		case plan2.MoCacheColTypeUsed:
+		case planner.MoCacheColTypeUsed:
 			if err = vector.AppendFixed(bat.Vecs[colIdx], cache.GetUsed(), false, proc.GetMPool()); err != nil {
 				return err
 			}
-		case plan2.MoCacheColTypeFree:
+		case planner.MoCacheColTypeFree:
 			if err = vector.AppendFixed(bat.Vecs[colIdx], cache.GetFree(), false, proc.GetMPool()); err != nil {
 				return err
 			}
-		case plan2.MoCacheColTypeHitRatio:
+		case planner.MoCacheColTypeHitRatio:
 			if err = vector.AppendFixed(bat.Vecs[colIdx], cache.GetHitRatio(), false, proc.GetMPool()); err != nil {
 				return err
 			}

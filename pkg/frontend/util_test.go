@@ -26,12 +26,6 @@ import (
 	"time"
 
 	"github.com/golang/mock/gomock"
-	"github.com/prashantv/gostub"
-	"github.com/smartystreets/goconvey/convey"
-	cvey "github.com/smartystreets/goconvey/convey"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -41,19 +35,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
-	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/prashantv/gostub"
+	"github.com/smartystreets/goconvey/convey"
+	cvey "github.com/smartystreets/goconvey/convey"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func init() {
@@ -1487,7 +1485,7 @@ func Test_BuildTableDefFromMoColumns(t *testing.T) {
 		typBytes, err := typ.Marshal()
 		assert.Nil(t, err)
 
-		def := new(plan2.Default)
+		def := new(plan.Default)
 		defBytes, err := types.Encode(def)
 		assert.Nil(t, err)
 
@@ -1596,7 +1594,7 @@ func Test_extractTableDefColumns(t *testing.T) {
 			typ := new(types.Type)
 			typByte, _ := typ.Marshal()
 
-			def := new(plan2.Default)
+			def := new(plan.Default)
 
 			result := newMrsForPasswordOfUser([][]interface{}{{
 				def,
@@ -1622,7 +1620,7 @@ func Test_extractTableDefColumns(t *testing.T) {
 
 		var newTestExecResult = func() ExecResult {
 
-			def := new(plan2.Default)
+			def := new(plan.Default)
 
 			result := newMrsForPasswordOfUser([][]interface{}{{
 				"id",
@@ -1650,7 +1648,7 @@ func Test_extractTableDefColumns(t *testing.T) {
 			typ := new(types.Type)
 			typByte, _ := typ.Marshal()
 
-			def := new(plan2.Default)
+			def := new(plan.Default)
 
 			result := newMrsForPasswordOfUser([][]interface{}{{
 				"id",
@@ -1678,7 +1676,7 @@ func Test_extractTableDefColumns(t *testing.T) {
 			typ := new(types.Type)
 			typByte, _ := typ.Marshal()
 
-			def := new(plan2.Default)
+			def := new(plan.Default)
 
 			result := newMrsForPasswordOfUser([][]interface{}{{
 				"id",

@@ -22,7 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -180,25 +180,25 @@ func shuffleConstVectorByHash(ap *Shuffle, bat *batch.Batch) uint64 {
 	switch groupByVec.GetType().Oid {
 	case types.T_int64:
 		groupByCol := vector.MustFixedColNoTypeCheck[int64](groupByVec)
-		return plan2.SimpleInt64HashToRange(uint64(groupByCol[0]), lenRegs)
+		return planner.SimpleInt64HashToRange(uint64(groupByCol[0]), lenRegs)
 	case types.T_int32:
 		groupByCol := vector.MustFixedColNoTypeCheck[int32](groupByVec)
-		return plan2.SimpleInt64HashToRange(uint64(groupByCol[0]), lenRegs)
+		return planner.SimpleInt64HashToRange(uint64(groupByCol[0]), lenRegs)
 	case types.T_int16:
 		groupByCol := vector.MustFixedColNoTypeCheck[int16](groupByVec)
-		return plan2.SimpleInt64HashToRange(uint64(groupByCol[0]), lenRegs)
+		return planner.SimpleInt64HashToRange(uint64(groupByCol[0]), lenRegs)
 	case types.T_uint64:
 		groupByCol := vector.MustFixedColNoTypeCheck[uint64](groupByVec)
-		return plan2.SimpleInt64HashToRange(uint64(groupByCol[0]), lenRegs)
+		return planner.SimpleInt64HashToRange(uint64(groupByCol[0]), lenRegs)
 	case types.T_uint32:
 		groupByCol := vector.MustFixedColNoTypeCheck[uint32](groupByVec)
-		return plan2.SimpleInt64HashToRange(uint64(groupByCol[0]), lenRegs)
+		return planner.SimpleInt64HashToRange(uint64(groupByCol[0]), lenRegs)
 	case types.T_uint16:
 		groupByCol := vector.MustFixedColNoTypeCheck[uint16](groupByVec)
-		return plan2.SimpleInt64HashToRange(uint64(groupByCol[0]), lenRegs)
+		return planner.SimpleInt64HashToRange(uint64(groupByCol[0]), lenRegs)
 	case types.T_char, types.T_varchar, types.T_text:
 		groupByCol, area := vector.MustVarlenaRawData(groupByVec)
-		return plan2.SimpleCharHashToRange(groupByCol[0].GetByteSlice(area), lenRegs)
+		return planner.SimpleCharHashToRange(groupByCol[0].GetByteSlice(area), lenRegs)
 	default:
 		panic("unsupported shuffle type, wrong plan!") //something got wrong here!
 	}
@@ -214,7 +214,7 @@ func getShuffledSelsByHashWithNull(ap *Shuffle, bat *batch.Batch) [][]int32 {
 		for row, v := range groupByCol {
 			var regIndex uint64 = 0
 			if !groupByVec.IsNull(uint64(row)) {
-				regIndex = plan2.SimpleInt64HashToRange(uint64(v), lenRegs)
+				regIndex = planner.SimpleInt64HashToRange(uint64(v), lenRegs)
 			}
 			sels[regIndex] = append(sels[regIndex], int32(row))
 		}
@@ -223,7 +223,7 @@ func getShuffledSelsByHashWithNull(ap *Shuffle, bat *batch.Batch) [][]int32 {
 		for row, v := range groupByCol {
 			var regIndex uint64 = 0
 			if !groupByVec.IsNull(uint64(row)) {
-				regIndex = plan2.SimpleInt64HashToRange(uint64(v), lenRegs)
+				regIndex = planner.SimpleInt64HashToRange(uint64(v), lenRegs)
 			}
 			sels[regIndex] = append(sels[regIndex], int32(row))
 		}
@@ -232,7 +232,7 @@ func getShuffledSelsByHashWithNull(ap *Shuffle, bat *batch.Batch) [][]int32 {
 		for row, v := range groupByCol {
 			var regIndex uint64 = 0
 			if !groupByVec.IsNull(uint64(row)) {
-				regIndex = plan2.SimpleInt64HashToRange(uint64(v), lenRegs)
+				regIndex = planner.SimpleInt64HashToRange(uint64(v), lenRegs)
 			}
 			sels[regIndex] = append(sels[regIndex], int32(row))
 		}
@@ -241,7 +241,7 @@ func getShuffledSelsByHashWithNull(ap *Shuffle, bat *batch.Batch) [][]int32 {
 		for row, v := range groupByCol {
 			var regIndex uint64 = 0
 			if !groupByVec.IsNull(uint64(row)) {
-				regIndex = plan2.SimpleInt64HashToRange(v, lenRegs)
+				regIndex = planner.SimpleInt64HashToRange(v, lenRegs)
 			}
 			sels[regIndex] = append(sels[regIndex], int32(row))
 		}
@@ -250,7 +250,7 @@ func getShuffledSelsByHashWithNull(ap *Shuffle, bat *batch.Batch) [][]int32 {
 		for row, v := range groupByCol {
 			var regIndex uint64 = 0
 			if !groupByVec.IsNull(uint64(row)) {
-				regIndex = plan2.SimpleInt64HashToRange(uint64(v), lenRegs)
+				regIndex = planner.SimpleInt64HashToRange(uint64(v), lenRegs)
 			}
 			sels[regIndex] = append(sels[regIndex], int32(row))
 		}
@@ -259,7 +259,7 @@ func getShuffledSelsByHashWithNull(ap *Shuffle, bat *batch.Batch) [][]int32 {
 		for row, v := range groupByCol {
 			var regIndex uint64 = 0
 			if !groupByVec.IsNull(uint64(row)) {
-				regIndex = plan2.SimpleInt64HashToRange(uint64(v), lenRegs)
+				regIndex = planner.SimpleInt64HashToRange(uint64(v), lenRegs)
 			}
 			sels[regIndex] = append(sels[regIndex], int32(row))
 		}
@@ -268,7 +268,7 @@ func getShuffledSelsByHashWithNull(ap *Shuffle, bat *batch.Batch) [][]int32 {
 		for row := range groupByCol {
 			var regIndex uint64 = 0
 			if !groupByVec.IsNull(uint64(row)) {
-				regIndex = plan2.SimpleCharHashToRange(groupByCol[row].GetByteSlice(area), lenRegs)
+				regIndex = planner.SimpleCharHashToRange(groupByCol[row].GetByteSlice(area), lenRegs)
 			}
 			sels[regIndex] = append(sels[regIndex], int32(row))
 		}
@@ -286,55 +286,55 @@ func getShuffledSelsByHashWithoutNull(ap *Shuffle, bat *batch.Batch) [][]int32 {
 	case types.T_int64:
 		groupByCol := vector.MustFixedColNoTypeCheck[int64](groupByVec)
 		for row, v := range groupByCol {
-			regIndex := plan2.SimpleInt64HashToRange(uint64(v), bucketNum)
+			regIndex := planner.SimpleInt64HashToRange(uint64(v), bucketNum)
 			sels[regIndex] = append(sels[regIndex], int32(row))
 		}
 	case types.T_int32:
 		groupByCol := vector.MustFixedColNoTypeCheck[int32](groupByVec)
 		for row, v := range groupByCol {
-			regIndex := plan2.SimpleInt64HashToRange(uint64(v), bucketNum)
+			regIndex := planner.SimpleInt64HashToRange(uint64(v), bucketNum)
 			sels[regIndex] = append(sels[regIndex], int32(row))
 		}
 	case types.T_int16:
 		groupByCol := vector.MustFixedColNoTypeCheck[int16](groupByVec)
 		for row, v := range groupByCol {
-			regIndex := plan2.SimpleInt64HashToRange(uint64(v), bucketNum)
+			regIndex := planner.SimpleInt64HashToRange(uint64(v), bucketNum)
 			sels[regIndex] = append(sels[regIndex], int32(row))
 		}
 	case types.T_uint64:
 		groupByCol := vector.MustFixedColNoTypeCheck[uint64](groupByVec)
 		for row, v := range groupByCol {
-			regIndex := plan2.SimpleInt64HashToRange(v, bucketNum)
+			regIndex := planner.SimpleInt64HashToRange(v, bucketNum)
 			sels[regIndex] = append(sels[regIndex], int32(row))
 		}
 	case types.T_uint32:
 		groupByCol := vector.MustFixedColNoTypeCheck[uint32](groupByVec)
 		for row, v := range groupByCol {
-			regIndex := plan2.SimpleInt64HashToRange(uint64(v), bucketNum)
+			regIndex := planner.SimpleInt64HashToRange(uint64(v), bucketNum)
 			sels[regIndex] = append(sels[regIndex], int32(row))
 		}
 	case types.T_uint16:
 		groupByCol := vector.MustFixedColNoTypeCheck[uint16](groupByVec)
 		for row, v := range groupByCol {
-			regIndex := plan2.SimpleInt64HashToRange(uint64(v), bucketNum)
+			regIndex := planner.SimpleInt64HashToRange(uint64(v), bucketNum)
 			sels[regIndex] = append(sels[regIndex], int32(row))
 		}
 	case types.T_decimal64:
 		groupByCol := vector.MustFixedColNoTypeCheck[types.Decimal64](groupByVec)
 		for row, v := range groupByCol {
-			regIndex := plan2.SimpleInt64HashToRange(uint64(v), bucketNum)
+			regIndex := planner.SimpleInt64HashToRange(uint64(v), bucketNum)
 			sels[regIndex] = append(sels[regIndex], int32(row))
 		}
 	case types.T_decimal128:
 		groupByCol := vector.MustFixedColNoTypeCheck[types.Decimal128](groupByVec)
 		for row, v := range groupByCol {
-			regIndex := plan2.SimpleInt64HashToRange(uint64(v.B0_63^v.B64_127), bucketNum)
+			regIndex := planner.SimpleInt64HashToRange(uint64(v.B0_63^v.B64_127), bucketNum)
 			sels[regIndex] = append(sels[regIndex], int32(row))
 		}
 	case types.T_char, types.T_varchar, types.T_text:
 		groupByCol, area := vector.MustVarlenaRawData(groupByVec)
 		for row := range groupByCol {
-			regIndex := plan2.SimpleCharHashToRange(groupByCol[row].GetByteSlice(area), bucketNum)
+			regIndex := planner.SimpleCharHashToRange(groupByCol[row].GetByteSlice(area), bucketNum)
 			sels[regIndex] = append(sels[regIndex], int32(row))
 		}
 	default:
@@ -432,11 +432,11 @@ func allBatchInOneRange(ap *Shuffle, bat *batch.Batch) (bool, uint64) {
 		}
 	case types.T_char, types.T_varchar, types.T_text:
 		groupByCol, area := vector.MustVarlenaRawData(groupByVec)
-		firstValueUnsigned = plan2.VarlenaToUint64(&groupByCol[0], area)
+		firstValueUnsigned = planner.VarlenaToUint64(&groupByCol[0], area)
 		if groupByVec.IsConst() {
 			lastValueUnsigned = firstValueUnsigned
 		} else {
-			lastValueUnsigned = plan2.VarlenaToUint64(&groupByCol[groupByVec.Length()-1], area)
+			lastValueUnsigned = planner.VarlenaToUint64(&groupByCol[groupByVec.Length()-1], area)
 		}
 	default:
 		panic("unsupported shuffle type, wrong plan!") //something got wrong here!
@@ -444,17 +444,17 @@ func allBatchInOneRange(ap *Shuffle, bat *batch.Batch) (bool, uint64) {
 
 	var regIndexFirst, regIndexLast uint64
 	if ap.ShuffleRangeInt64 != nil {
-		regIndexFirst = plan2.GetRangeShuffleIndexSignedSlice(ap.ShuffleRangeInt64, firstValueSigned)
-		regIndexLast = plan2.GetRangeShuffleIndexSignedSlice(ap.ShuffleRangeInt64, lastValueSigned)
+		regIndexFirst = planner.GetRangeShuffleIndexSignedSlice(ap.ShuffleRangeInt64, firstValueSigned)
+		regIndexLast = planner.GetRangeShuffleIndexSignedSlice(ap.ShuffleRangeInt64, lastValueSigned)
 	} else if ap.ShuffleRangeUint64 != nil {
-		regIndexFirst = plan2.GetRangeShuffleIndexUnsignedSlice(ap.ShuffleRangeUint64, firstValueUnsigned)
-		regIndexLast = plan2.GetRangeShuffleIndexUnsignedSlice(ap.ShuffleRangeUint64, lastValueUnsigned)
+		regIndexFirst = planner.GetRangeShuffleIndexUnsignedSlice(ap.ShuffleRangeUint64, firstValueUnsigned)
+		regIndexLast = planner.GetRangeShuffleIndexUnsignedSlice(ap.ShuffleRangeUint64, lastValueUnsigned)
 	} else if signed {
-		regIndexFirst = plan2.GetRangeShuffleIndexSignedMinMax(ap.ShuffleColMin, ap.ShuffleColMax, firstValueSigned, bucketNum)
-		regIndexLast = plan2.GetRangeShuffleIndexSignedMinMax(ap.ShuffleColMin, ap.ShuffleColMax, lastValueSigned, bucketNum)
+		regIndexFirst = planner.GetRangeShuffleIndexSignedMinMax(ap.ShuffleColMin, ap.ShuffleColMax, firstValueSigned, bucketNum)
+		regIndexLast = planner.GetRangeShuffleIndexSignedMinMax(ap.ShuffleColMin, ap.ShuffleColMax, lastValueSigned, bucketNum)
 	} else {
-		regIndexFirst = plan2.GetRangeShuffleIndexUnsignedMinMax(uint64(ap.ShuffleColMin), uint64(ap.ShuffleColMax), firstValueUnsigned, bucketNum)
-		regIndexLast = plan2.GetRangeShuffleIndexUnsignedMinMax(uint64(ap.ShuffleColMin), uint64(ap.ShuffleColMax), lastValueUnsigned, bucketNum)
+		regIndexFirst = planner.GetRangeShuffleIndexUnsignedMinMax(uint64(ap.ShuffleColMin), uint64(ap.ShuffleColMax), firstValueUnsigned, bucketNum)
+		regIndexLast = planner.GetRangeShuffleIndexUnsignedMinMax(uint64(ap.ShuffleColMin), uint64(ap.ShuffleColMax), lastValueUnsigned, bucketNum)
 	}
 
 	if regIndexFirst == regIndexLast {
@@ -473,12 +473,12 @@ func getShuffledSelsByRangeWithoutNull(ap *Shuffle, bat *batch.Batch) [][]int32 
 		groupByCol := vector.MustFixedColNoTypeCheck[int64](groupByVec)
 		if ap.ShuffleRangeInt64 != nil {
 			for row, v := range groupByCol {
-				regIndex := plan2.GetRangeShuffleIndexSignedSlice(ap.ShuffleRangeInt64, v)
+				regIndex := planner.GetRangeShuffleIndexSignedSlice(ap.ShuffleRangeInt64, v)
 				sels[regIndex] = append(sels[regIndex], int32(row))
 			}
 		} else {
 			for row, v := range groupByCol {
-				regIndex := plan2.GetRangeShuffleIndexSignedMinMax(ap.ShuffleColMin, ap.ShuffleColMax, v, bucketNum)
+				regIndex := planner.GetRangeShuffleIndexSignedMinMax(ap.ShuffleColMin, ap.ShuffleColMax, v, bucketNum)
 				sels[regIndex] = append(sels[regIndex], int32(row))
 			}
 		}
@@ -486,12 +486,12 @@ func getShuffledSelsByRangeWithoutNull(ap *Shuffle, bat *batch.Batch) [][]int32 
 		groupByCol := vector.MustFixedColNoTypeCheck[int32](groupByVec)
 		if ap.ShuffleRangeInt64 != nil {
 			for row, v := range groupByCol {
-				regIndex := plan2.GetRangeShuffleIndexSignedSlice(ap.ShuffleRangeInt64, int64(v))
+				regIndex := planner.GetRangeShuffleIndexSignedSlice(ap.ShuffleRangeInt64, int64(v))
 				sels[regIndex] = append(sels[regIndex], int32(row))
 			}
 		} else {
 			for row, v := range groupByCol {
-				regIndex := plan2.GetRangeShuffleIndexSignedMinMax(ap.ShuffleColMin, ap.ShuffleColMax, int64(v), bucketNum)
+				regIndex := planner.GetRangeShuffleIndexSignedMinMax(ap.ShuffleColMin, ap.ShuffleColMax, int64(v), bucketNum)
 				sels[regIndex] = append(sels[regIndex], int32(row))
 			}
 		}
@@ -499,12 +499,12 @@ func getShuffledSelsByRangeWithoutNull(ap *Shuffle, bat *batch.Batch) [][]int32 
 		groupByCol := vector.MustFixedColNoTypeCheck[int16](groupByVec)
 		if ap.ShuffleRangeInt64 != nil {
 			for row, v := range groupByCol {
-				regIndex := plan2.GetRangeShuffleIndexSignedSlice(ap.ShuffleRangeInt64, int64(v))
+				regIndex := planner.GetRangeShuffleIndexSignedSlice(ap.ShuffleRangeInt64, int64(v))
 				sels[regIndex] = append(sels[regIndex], int32(row))
 			}
 		} else {
 			for row, v := range groupByCol {
-				regIndex := plan2.GetRangeShuffleIndexSignedMinMax(ap.ShuffleColMin, ap.ShuffleColMax, int64(v), bucketNum)
+				regIndex := planner.GetRangeShuffleIndexSignedMinMax(ap.ShuffleColMin, ap.ShuffleColMax, int64(v), bucketNum)
 				sels[regIndex] = append(sels[regIndex], int32(row))
 			}
 		}
@@ -512,12 +512,12 @@ func getShuffledSelsByRangeWithoutNull(ap *Shuffle, bat *batch.Batch) [][]int32 
 		groupByCol := vector.MustFixedColNoTypeCheck[uint64](groupByVec)
 		if ap.ShuffleRangeUint64 != nil {
 			for row, v := range groupByCol {
-				regIndex := plan2.GetRangeShuffleIndexUnsignedSlice(ap.ShuffleRangeUint64, v)
+				regIndex := planner.GetRangeShuffleIndexUnsignedSlice(ap.ShuffleRangeUint64, v)
 				sels[regIndex] = append(sels[regIndex], int32(row))
 			}
 		} else {
 			for row, v := range groupByCol {
-				regIndex := plan2.GetRangeShuffleIndexUnsignedMinMax(uint64(ap.ShuffleColMin), uint64(ap.ShuffleColMax), v, bucketNum)
+				regIndex := planner.GetRangeShuffleIndexUnsignedMinMax(uint64(ap.ShuffleColMin), uint64(ap.ShuffleColMax), v, bucketNum)
 				sels[regIndex] = append(sels[regIndex], int32(row))
 			}
 		}
@@ -525,12 +525,12 @@ func getShuffledSelsByRangeWithoutNull(ap *Shuffle, bat *batch.Batch) [][]int32 
 		groupByCol := vector.MustFixedColNoTypeCheck[uint32](groupByVec)
 		if ap.ShuffleRangeUint64 != nil {
 			for row, v := range groupByCol {
-				regIndex := plan2.GetRangeShuffleIndexUnsignedSlice(ap.ShuffleRangeUint64, uint64(v))
+				regIndex := planner.GetRangeShuffleIndexUnsignedSlice(ap.ShuffleRangeUint64, uint64(v))
 				sels[regIndex] = append(sels[regIndex], int32(row))
 			}
 		} else {
 			for row, v := range groupByCol {
-				regIndex := plan2.GetRangeShuffleIndexUnsignedMinMax(uint64(ap.ShuffleColMin), uint64(ap.ShuffleColMax), uint64(v), bucketNum)
+				regIndex := planner.GetRangeShuffleIndexUnsignedMinMax(uint64(ap.ShuffleColMin), uint64(ap.ShuffleColMax), uint64(v), bucketNum)
 				sels[regIndex] = append(sels[regIndex], int32(row))
 			}
 		}
@@ -538,12 +538,12 @@ func getShuffledSelsByRangeWithoutNull(ap *Shuffle, bat *batch.Batch) [][]int32 
 		groupByCol := vector.MustFixedColNoTypeCheck[uint16](groupByVec)
 		if ap.ShuffleRangeUint64 != nil {
 			for row, v := range groupByCol {
-				regIndex := plan2.GetRangeShuffleIndexUnsignedSlice(ap.ShuffleRangeUint64, uint64(v))
+				regIndex := planner.GetRangeShuffleIndexUnsignedSlice(ap.ShuffleRangeUint64, uint64(v))
 				sels[regIndex] = append(sels[regIndex], int32(row))
 			}
 		} else {
 			for row, v := range groupByCol {
-				regIndex := plan2.GetRangeShuffleIndexUnsignedMinMax(uint64(ap.ShuffleColMin), uint64(ap.ShuffleColMax), uint64(v), bucketNum)
+				regIndex := planner.GetRangeShuffleIndexUnsignedMinMax(uint64(ap.ShuffleColMin), uint64(ap.ShuffleColMax), uint64(v), bucketNum)
 				sels[regIndex] = append(sels[regIndex], int32(row))
 			}
 		}
@@ -552,28 +552,28 @@ func getShuffledSelsByRangeWithoutNull(ap *Shuffle, bat *batch.Batch) [][]int32 
 		if area == nil {
 			if ap.ShuffleRangeUint64 != nil {
 				for row := range groupByCol {
-					v := plan2.VarlenaToUint64Inline(&groupByCol[row])
-					regIndex := plan2.GetRangeShuffleIndexUnsignedSlice(ap.ShuffleRangeUint64, v)
+					v := planner.VarlenaToUint64Inline(&groupByCol[row])
+					regIndex := planner.GetRangeShuffleIndexUnsignedSlice(ap.ShuffleRangeUint64, v)
 					sels[regIndex] = append(sels[regIndex], int32(row))
 				}
 			} else {
 				for row := range groupByCol {
-					v := plan2.VarlenaToUint64Inline(&groupByCol[row])
-					regIndex := plan2.GetRangeShuffleIndexUnsignedMinMax(uint64(ap.ShuffleColMin), uint64(ap.ShuffleColMax), v, bucketNum)
+					v := planner.VarlenaToUint64Inline(&groupByCol[row])
+					regIndex := planner.GetRangeShuffleIndexUnsignedMinMax(uint64(ap.ShuffleColMin), uint64(ap.ShuffleColMax), v, bucketNum)
 					sels[regIndex] = append(sels[regIndex], int32(row))
 				}
 			}
 		} else {
 			if ap.ShuffleRangeUint64 != nil {
 				for row := range groupByCol {
-					v := plan2.VarlenaToUint64(&groupByCol[row], area)
-					regIndex := plan2.GetRangeShuffleIndexUnsignedSlice(ap.ShuffleRangeUint64, v)
+					v := planner.VarlenaToUint64(&groupByCol[row], area)
+					regIndex := planner.GetRangeShuffleIndexUnsignedSlice(ap.ShuffleRangeUint64, v)
 					sels[regIndex] = append(sels[regIndex], int32(row))
 				}
 			} else {
 				for row := range groupByCol {
-					v := plan2.VarlenaToUint64(&groupByCol[row], area)
-					regIndex := plan2.GetRangeShuffleIndexUnsignedMinMax(uint64(ap.ShuffleColMin), uint64(ap.ShuffleColMax), v, bucketNum)
+					v := planner.VarlenaToUint64(&groupByCol[row], area)
+					regIndex := planner.GetRangeShuffleIndexUnsignedMinMax(uint64(ap.ShuffleColMin), uint64(ap.ShuffleColMax), v, bucketNum)
 					sels[regIndex] = append(sels[regIndex], int32(row))
 				}
 			}
@@ -595,7 +595,7 @@ func getShuffledSelsByRangeWithNull(ap *Shuffle, bat *batch.Batch) [][]int32 {
 			for row, v := range groupByCol {
 				var regIndex uint64 = 0
 				if !groupByVec.IsNull(uint64(row)) {
-					regIndex = plan2.GetRangeShuffleIndexSignedSlice(ap.ShuffleRangeInt64, v)
+					regIndex = planner.GetRangeShuffleIndexSignedSlice(ap.ShuffleRangeInt64, v)
 				}
 				sels[regIndex] = append(sels[regIndex], int32(row))
 			}
@@ -603,7 +603,7 @@ func getShuffledSelsByRangeWithNull(ap *Shuffle, bat *batch.Batch) [][]int32 {
 			for row, v := range groupByCol {
 				var regIndex uint64 = 0
 				if !groupByVec.IsNull(uint64(row)) {
-					regIndex = plan2.GetRangeShuffleIndexSignedMinMax(ap.ShuffleColMin, ap.ShuffleColMax, v, bucketNum)
+					regIndex = planner.GetRangeShuffleIndexSignedMinMax(ap.ShuffleColMin, ap.ShuffleColMax, v, bucketNum)
 				}
 				sels[regIndex] = append(sels[regIndex], int32(row))
 			}
@@ -614,7 +614,7 @@ func getShuffledSelsByRangeWithNull(ap *Shuffle, bat *batch.Batch) [][]int32 {
 			for row, v := range groupByCol {
 				var regIndex uint64 = 0
 				if !groupByVec.IsNull(uint64(row)) {
-					regIndex = plan2.GetRangeShuffleIndexSignedSlice(ap.ShuffleRangeInt64, int64(v))
+					regIndex = planner.GetRangeShuffleIndexSignedSlice(ap.ShuffleRangeInt64, int64(v))
 				}
 				sels[regIndex] = append(sels[regIndex], int32(row))
 			}
@@ -622,7 +622,7 @@ func getShuffledSelsByRangeWithNull(ap *Shuffle, bat *batch.Batch) [][]int32 {
 			for row, v := range groupByCol {
 				var regIndex uint64 = 0
 				if !groupByVec.IsNull(uint64(row)) {
-					regIndex = plan2.GetRangeShuffleIndexSignedMinMax(ap.ShuffleColMin, ap.ShuffleColMax, int64(v), bucketNum)
+					regIndex = planner.GetRangeShuffleIndexSignedMinMax(ap.ShuffleColMin, ap.ShuffleColMax, int64(v), bucketNum)
 				}
 				sels[regIndex] = append(sels[regIndex], int32(row))
 			}
@@ -633,7 +633,7 @@ func getShuffledSelsByRangeWithNull(ap *Shuffle, bat *batch.Batch) [][]int32 {
 			for row, v := range groupByCol {
 				var regIndex uint64 = 0
 				if !groupByVec.IsNull(uint64(row)) {
-					regIndex = plan2.GetRangeShuffleIndexSignedSlice(ap.ShuffleRangeInt64, int64(v))
+					regIndex = planner.GetRangeShuffleIndexSignedSlice(ap.ShuffleRangeInt64, int64(v))
 				}
 				sels[regIndex] = append(sels[regIndex], int32(row))
 			}
@@ -641,7 +641,7 @@ func getShuffledSelsByRangeWithNull(ap *Shuffle, bat *batch.Batch) [][]int32 {
 			for row, v := range groupByCol {
 				var regIndex uint64 = 0
 				if !groupByVec.IsNull(uint64(row)) {
-					regIndex = plan2.GetRangeShuffleIndexSignedMinMax(ap.ShuffleColMin, ap.ShuffleColMax, int64(v), bucketNum)
+					regIndex = planner.GetRangeShuffleIndexSignedMinMax(ap.ShuffleColMin, ap.ShuffleColMax, int64(v), bucketNum)
 				}
 				sels[regIndex] = append(sels[regIndex], int32(row))
 			}
@@ -652,7 +652,7 @@ func getShuffledSelsByRangeWithNull(ap *Shuffle, bat *batch.Batch) [][]int32 {
 			for row, v := range groupByCol {
 				var regIndex uint64 = 0
 				if !groupByVec.IsNull(uint64(row)) {
-					regIndex = plan2.GetRangeShuffleIndexUnsignedSlice(ap.ShuffleRangeUint64, v)
+					regIndex = planner.GetRangeShuffleIndexUnsignedSlice(ap.ShuffleRangeUint64, v)
 				}
 				sels[regIndex] = append(sels[regIndex], int32(row))
 			}
@@ -660,7 +660,7 @@ func getShuffledSelsByRangeWithNull(ap *Shuffle, bat *batch.Batch) [][]int32 {
 			for row, v := range groupByCol {
 				var regIndex uint64 = 0
 				if !groupByVec.IsNull(uint64(row)) {
-					regIndex = plan2.GetRangeShuffleIndexSignedMinMax(ap.ShuffleColMin, ap.ShuffleColMax, int64(v), bucketNum)
+					regIndex = planner.GetRangeShuffleIndexSignedMinMax(ap.ShuffleColMin, ap.ShuffleColMax, int64(v), bucketNum)
 				}
 				sels[regIndex] = append(sels[regIndex], int32(row))
 			}
@@ -671,7 +671,7 @@ func getShuffledSelsByRangeWithNull(ap *Shuffle, bat *batch.Batch) [][]int32 {
 			for row, v := range groupByCol {
 				var regIndex uint64 = 0
 				if !groupByVec.IsNull(uint64(row)) {
-					regIndex = plan2.GetRangeShuffleIndexUnsignedSlice(ap.ShuffleRangeUint64, uint64(v))
+					regIndex = planner.GetRangeShuffleIndexUnsignedSlice(ap.ShuffleRangeUint64, uint64(v))
 				}
 				sels[regIndex] = append(sels[regIndex], int32(row))
 			}
@@ -679,7 +679,7 @@ func getShuffledSelsByRangeWithNull(ap *Shuffle, bat *batch.Batch) [][]int32 {
 			for row, v := range groupByCol {
 				var regIndex uint64 = 0
 				if !groupByVec.IsNull(uint64(row)) {
-					regIndex = plan2.GetRangeShuffleIndexSignedMinMax(ap.ShuffleColMin, ap.ShuffleColMax, int64(v), bucketNum)
+					regIndex = planner.GetRangeShuffleIndexSignedMinMax(ap.ShuffleColMin, ap.ShuffleColMax, int64(v), bucketNum)
 				}
 				sels[regIndex] = append(sels[regIndex], int32(row))
 			}
@@ -690,7 +690,7 @@ func getShuffledSelsByRangeWithNull(ap *Shuffle, bat *batch.Batch) [][]int32 {
 			for row, v := range groupByCol {
 				var regIndex uint64 = 0
 				if !groupByVec.IsNull(uint64(row)) {
-					regIndex = plan2.GetRangeShuffleIndexUnsignedSlice(ap.ShuffleRangeUint64, uint64(v))
+					regIndex = planner.GetRangeShuffleIndexUnsignedSlice(ap.ShuffleRangeUint64, uint64(v))
 				}
 				sels[regIndex] = append(sels[regIndex], int32(row))
 			}
@@ -698,7 +698,7 @@ func getShuffledSelsByRangeWithNull(ap *Shuffle, bat *batch.Batch) [][]int32 {
 			for row, v := range groupByCol {
 				var regIndex uint64 = 0
 				if !groupByVec.IsNull(uint64(row)) {
-					regIndex = plan2.GetRangeShuffleIndexSignedMinMax(ap.ShuffleColMin, ap.ShuffleColMax, int64(v), bucketNum)
+					regIndex = planner.GetRangeShuffleIndexSignedMinMax(ap.ShuffleColMin, ap.ShuffleColMax, int64(v), bucketNum)
 				}
 				sels[regIndex] = append(sels[regIndex], int32(row))
 			}
@@ -710,8 +710,8 @@ func getShuffledSelsByRangeWithNull(ap *Shuffle, bat *batch.Batch) [][]int32 {
 				for row := range groupByCol {
 					var regIndex uint64 = 0
 					if !groupByVec.IsNull(uint64(row)) {
-						v := plan2.VarlenaToUint64Inline(&groupByCol[row])
-						regIndex = plan2.GetRangeShuffleIndexUnsignedSlice(ap.ShuffleRangeUint64, v)
+						v := planner.VarlenaToUint64Inline(&groupByCol[row])
+						regIndex = planner.GetRangeShuffleIndexUnsignedSlice(ap.ShuffleRangeUint64, v)
 					}
 					sels[regIndex] = append(sels[regIndex], int32(row))
 				}
@@ -719,8 +719,8 @@ func getShuffledSelsByRangeWithNull(ap *Shuffle, bat *batch.Batch) [][]int32 {
 				for row := range groupByCol {
 					var regIndex uint64 = 0
 					if !groupByVec.IsNull(uint64(row)) {
-						v := plan2.VarlenaToUint64Inline(&groupByCol[row])
-						regIndex = plan2.GetRangeShuffleIndexUnsignedMinMax(uint64(ap.ShuffleColMin), uint64(ap.ShuffleColMax), v, bucketNum)
+						v := planner.VarlenaToUint64Inline(&groupByCol[row])
+						regIndex = planner.GetRangeShuffleIndexUnsignedMinMax(uint64(ap.ShuffleColMin), uint64(ap.ShuffleColMax), v, bucketNum)
 					}
 					sels[regIndex] = append(sels[regIndex], int32(row))
 				}
@@ -730,8 +730,8 @@ func getShuffledSelsByRangeWithNull(ap *Shuffle, bat *batch.Batch) [][]int32 {
 				for row := range groupByCol {
 					var regIndex uint64 = 0
 					if !groupByVec.IsNull(uint64(row)) {
-						v := plan2.VarlenaToUint64(&groupByCol[row], area)
-						regIndex = plan2.GetRangeShuffleIndexUnsignedSlice(ap.ShuffleRangeUint64, v)
+						v := planner.VarlenaToUint64(&groupByCol[row], area)
+						regIndex = planner.GetRangeShuffleIndexUnsignedSlice(ap.ShuffleRangeUint64, v)
 					}
 					sels[regIndex] = append(sels[regIndex], int32(row))
 				}
@@ -739,8 +739,8 @@ func getShuffledSelsByRangeWithNull(ap *Shuffle, bat *batch.Batch) [][]int32 {
 				for row := range groupByCol {
 					var regIndex uint64 = 0
 					if !groupByVec.IsNull(uint64(row)) {
-						v := plan2.VarlenaToUint64(&groupByCol[row], area)
-						regIndex = plan2.GetRangeShuffleIndexUnsignedMinMax(uint64(ap.ShuffleColMin), uint64(ap.ShuffleColMax), v, bucketNum)
+						v := planner.VarlenaToUint64(&groupByCol[row], area)
+						regIndex = planner.GetRangeShuffleIndexUnsignedMinMax(uint64(ap.ShuffleColMin), uint64(ap.ShuffleColMax), v, bucketNum)
 					}
 					sels[regIndex] = append(sels[regIndex], int32(row))
 				}

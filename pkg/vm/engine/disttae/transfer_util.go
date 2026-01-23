@@ -25,7 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -117,7 +117,7 @@ func ConstructCNTombstoneObjectsTransferFlow(
 		end.ToTimestamp(),
 		readutil.WithColumns(
 			[]uint16{0, 1},
-			[]types.Type{types.T_Rowid.ToType(), plan2.ExprType2Type(&pkCol.Typ)},
+			[]types.Type{types.T_Rowid.ToType(), planner.ExprType2Type(&pkCol.Typ)},
 		),
 	)
 
@@ -176,7 +176,7 @@ type TransferFlow struct {
 }
 
 func (flow *TransferFlow) fillDefaults() {
-	pkType := plan2.ExprType2Type(&flow.table.tableDef.Cols[flow.table.primaryIdx].Typ)
+	pkType := planner.ExprType2Type(&flow.table.tableDef.Cols[flow.table.primaryIdx].Typ)
 	if flow.buffer == nil {
 		attrs, attrTypes := objectio.GetTombstoneSchema(
 			pkType, flow.hiddenSelection,

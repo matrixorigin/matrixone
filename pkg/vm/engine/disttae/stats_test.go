@@ -25,9 +25,6 @@ import (
 	"time"
 
 	"github.com/lni/goutils/leaktest"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -36,9 +33,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func runTest(
@@ -129,7 +128,7 @@ func TestUpdateStats(t *testing.T) {
 				DatabaseID: 1000,
 				TableID:    1001,
 			}
-			stats := plan2.NewStatsInfo()
+			stats := planner.NewStatsInfo()
 			ps := logtailreplay.NewPartitionState("", true, 1001, false)
 			updated, _ := e.globalStats.executeStatsUpdate(ctx, ps, k, stats)
 			assert.False(t, updated)
@@ -149,7 +148,7 @@ func TestUpdateStats(t *testing.T) {
 				DatabaseID: did,
 				TableID:    tid,
 			}
-			stats := plan2.NewStatsInfo()
+			stats := planner.NewStatsInfo()
 			ps := logtailreplay.NewPartitionState("", true, tid, false)
 			updated, _ := e.globalStats.executeStatsUpdate(ctx, ps, k, stats)
 			assert.False(t, updated)
@@ -169,7 +168,7 @@ func TestUpdateStats(t *testing.T) {
 				DatabaseID: did,
 				TableID:    tid,
 			}
-			stats := plan2.NewStatsInfo()
+			stats := planner.NewStatsInfo()
 			ps := logtailreplay.NewPartitionState("", true, tid, false)
 			updated, _ := e.globalStats.executeStatsUpdate(ctx, ps, k, stats)
 			assert.True(t, updated)

@@ -161,7 +161,7 @@ var (
 	CauseGetProcByUuid            = NewInternalError(context.Background(), "GetProcByUuid")
 	CauseGenInsertMOIndexesSql    = NewInternalError(context.Background(), "genInsertMOIndexesSql")
 	CauseGenInsertMOIndexesSql2   = NewInternalError(context.Background(), "genInsertMOIndexesSql 2")
-	//pkg/sql/plan/function/ctl
+	//pkg/sql/function/ctl
 	CauseHandleCoreDump                 = NewInternalError(context.Background(), "handleCoreDump")
 	CauseHandleSyncCommit               = NewInternalError(context.Background(), "handleSyncCommit")
 	CauseHandleRemoveRemoteLockTable    = NewInternalError(context.Background(), "handleRemoveRemoteLockTable")

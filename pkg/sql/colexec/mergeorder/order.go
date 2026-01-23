@@ -21,9 +21,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -63,10 +62,10 @@ func (ctr *container) generateCompares(fs []*plan.OrderBySpec) {
 	var desc, nullsLast bool
 	ctr.compares = make([]compare.Compare, len(fs))
 	for i := range ctr.compares {
-		desc = fs[i].Flag&plan2.OrderBySpec_DESC != 0
-		if fs[i].Flag&plan2.OrderBySpec_NULLS_FIRST != 0 {
+		desc = fs[i].Flag&plan.OrderBySpec_DESC != 0
+		if fs[i].Flag&plan.OrderBySpec_NULLS_FIRST != 0 {
 			nullsLast = false
-		} else if fs[i].Flag&plan2.OrderBySpec_NULLS_LAST != 0 {
+		} else if fs[i].Flag&plan.OrderBySpec_NULLS_LAST != 0 {
 			nullsLast = true
 		} else {
 			nullsLast = desc

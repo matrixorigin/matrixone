@@ -21,8 +21,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	p "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -112,7 +112,7 @@ func PrunePartitionByExpr(
 	if partitionIndex != -1 {
 		// If partitionIndex is specified, create a deep copy of the expression
 		// and adjust column positions accordingly
-		expr = p.DeepCopyExpr(expr)
+		expr = plan.DeepCopyExpr(expr)
 		mustReplaceColPos(expr, partitionIndex)
 	}
 

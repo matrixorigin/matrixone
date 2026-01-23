@@ -39,7 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -841,9 +841,9 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 			return err
 		}
 
-		pkCol = plan2.PkColByTableDef(tbl.GetTableDef(txn.proc.Ctx))
+		pkCol = planner.PkColByTableDef(tbl.GetTableDef(txn.proc.Ctx))
 		s3Writer = colexec.NewCNS3TombstoneWriter(
-			txn.proc.GetMPool(), fs, plan2.ExprType2Type(&pkCol.Typ), -1,
+			txn.proc.GetMPool(), fs, planner.ExprType2Type(&pkCol.Typ), -1,
 		)
 
 		for i := 0; i < len(mp[tbKey]); i++ {

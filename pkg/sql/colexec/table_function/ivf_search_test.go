@@ -24,7 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
@@ -286,7 +286,7 @@ func makeConstInputExprsIvfSearch() []*plan.Expr {
 			},
 		},
 
-		plan2.MakePlan2Vecf32ConstExprWithType("[0,1,2]", 3),
+		planner.MakePlan2Vecf32ConstExprWithType("[0,1,2]", 3),
 	}
 
 	return ret
@@ -330,7 +330,7 @@ func makeBatchIvfSearchFail(proc *process.Process) []failBatch {
 				},
 			},
 
-			plan2.MakePlan2Vecf32ConstExprWithType("[0,1,2]", 3),
+			planner.MakePlan2Vecf32ConstExprWithType("[0,1,2]", 3),
 		}
 
 		bat := batch.NewWithSize(2)
@@ -365,7 +365,7 @@ func makeBatchIvfSearchFail(proc *process.Process) []failBatch {
 				},
 			},
 
-			plan2.MakePlan2Vecf32ConstExprWithType("[0,1,2]", 3),
+			planner.MakePlan2Vecf32ConstExprWithType("[0,1,2]", 3),
 		}
 
 		bat := batch.NewWithSize(2)

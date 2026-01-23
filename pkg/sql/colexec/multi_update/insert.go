@@ -23,7 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -45,7 +45,7 @@ func (update *MultiUpdate) insert_main_table(
 			if col.Name == catalog.Row_ID {
 				continue
 			}
-			bat.Vecs[len(attrs)] = vector.NewVec(plan.MakeTypeByPlan2Type(col.Typ))
+			bat.Vecs[len(attrs)] = vector.NewVec(planner.MakeTypeByPlan2Type(col.Typ))
 			attrs = append(attrs, col.GetOriginCaseName())
 		}
 		bat.SetAttributes(attrs)

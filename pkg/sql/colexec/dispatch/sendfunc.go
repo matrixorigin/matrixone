@@ -18,15 +18,13 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
-
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
 )
@@ -231,9 +229,9 @@ func shuffleToAllFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) (bo
 
 	ap.ctr.batchCnt[bat.ShuffleIDX]++
 	ap.ctr.rowCnt[bat.ShuffleIDX] += bat.RowCount()
-	if ap.ShuffleType == plan2.ShuffleToRegIndex {
+	if ap.ShuffleType == planner.ShuffleToRegIndex {
 		return false, sendBatToIndex(ap, proc, bat, uint32(bat.ShuffleIDX))
-	} else if ap.ShuffleType == plan2.ShuffleToLocalMatchedReg {
+	} else if ap.ShuffleType == planner.ShuffleToLocalMatchedReg {
 		return false, sendBatToLocalMatchedReg(ap, proc, bat, uint32(bat.ShuffleIDX))
 	} else {
 		return false, sendBatToMultiMatchedReg(ap, proc, bat, uint32(bat.ShuffleIDX))

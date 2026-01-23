@@ -19,7 +19,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
-	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
 func init() {
@@ -170,7 +170,7 @@ func DecideCloneStmtType(
 	dstDbName string,
 	toAccount uint32,
 	srcAccount uint32,
-	subMeta *plan2.SubscriptionMeta,
+	subMeta *plan.SubscriptionMeta,
 ) (cloneType CloneStmtType) {
 
 	if stmt.StmtType != NoClone {

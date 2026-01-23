@@ -85,10 +85,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
+	"github.com/matrixorigin/matrixone/pkg/sql/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner/rule"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -397,7 +397,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.BucketNum = sourceArg.BucketNum
 		op.ShuffleRangeInt64 = sourceArg.ShuffleRangeInt64
 		op.ShuffleRangeUint64 = sourceArg.ShuffleRangeUint64
-		op.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(sourceArg.RuntimeFilterSpec)
+		op.RuntimeFilterSpec = plan.DeepCopyRuntimeFilterSpec(sourceArg.RuntimeFilterSpec)
 		op.SetInfo(&info)
 		return op
 	case vm.Dispatch:
@@ -749,7 +749,7 @@ func constructLockOp(node *plan.Node, eng engine.Engine) (*lockop.LockOp, error)
 		if target.HasPartitionCol {
 			partitionColPos = target.PartitionColIdxInBat
 		}
-		typ := plan2.MakeTypeByPlan2Type(target.PrimaryColTyp)
+		typ := planner.MakeTypeByPlan2Type(target.PrimaryColTyp)
 		arg.AddLockTarget(target.GetTableId(), target.GetObjRef(), target.GetPrimaryColIdxInBat(), typ, partitionColPos, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd())
 	}
 	for _, target := range node.LockTargets {
@@ -1077,10 +1077,10 @@ func constructTimeWindow(_ context.Context, node *plan.Node, proc *process.Proce
 	i := 0
 	for _, expr := range node.AggList {
 		if e, ok := expr.Expr.(*plan.Expr_Col); ok {
-			if e.Col.Name == plan2.TimeWindowStart {
+			if e.Col.Name == planner.TimeWindowStart {
 				wStart = true
 			}
-			if e.Col.Name == plan2.TimeWindowEnd {
+			if e.Col.Name == planner.TimeWindowEnd {
 				wEnd = true
 			}
 			continue
@@ -1130,8 +1130,8 @@ func constructWindow(_ context.Context, node *plan.Node, proc *process.Process) 
 
 			//for group_concat, the last arg is separator string
 			//for cluster_centers, the last arg is kmeans_args string
-			if (f.F.Func.ObjName == plan2.NameGroupConcat ||
-				f.F.Func.ObjName == plan2.NameClusterCenters) && len(f.F.Args) > 1 {
+			if (f.F.Func.ObjName == planner.NameGroupConcat ||
+				f.F.Func.ObjName == planner.NameClusterCenters) && len(f.F.Args) > 1 {
 				argExpr := f.F.Args[len(f.F.Args)-1]
 				vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, argExpr)
 				if err != nil {
@@ -1170,10 +1170,10 @@ func constructLimit(node *plan.Node) *limit.Limit {
 }
 
 func constructSample(node *plan.Node, outputRowCount bool) *sample.Sample {
-	if node.SampleFunc.Rows != plan2.NotSampleByRows {
+	if node.SampleFunc.Rows != planner.NotSampleByRows {
 		return sample.NewSampleByRows(int(node.SampleFunc.Rows), node.AggList, node.GroupBy, node.SampleFunc.UsingRow, outputRowCount)
 	}
-	if node.SampleFunc.Percent != plan2.NotSampleByPercents {
+	if node.SampleFunc.Percent != planner.NotSampleByPercents {
 		return sample.NewSampleByPercent(node.SampleFunc.Percent, node.AggList, node.GroupBy)
 	}
 	panic("only support sample by rows / percent now.")
@@ -1191,8 +1191,8 @@ func constructGroup(_ context.Context, node, childNode *plan.Node, needEval bool
 			if len(f.F.Args) > 0 {
 				//for group_concat, the last arg is separator string
 				//for cluster_centers, the last arg is kmeans_args string
-				if (f.F.Func.ObjName == plan2.NameGroupConcat ||
-					f.F.Func.ObjName == plan2.NameClusterCenters) && len(f.F.Args) > 1 {
+				if (f.F.Func.ObjName == planner.NameGroupConcat ||
+					f.F.Func.ObjName == planner.NameClusterCenters) && len(f.F.Args) > 1 {
 					argExpr := f.F.Args[len(f.F.Args)-1]
 					vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, argExpr)
 					if err != nil {
@@ -1299,7 +1299,7 @@ func constructShuffleOperatorForJoinV2(bucketNum int32, node *plan.Node, left bo
 		}
 	}
 
-	hashCol, typ := plan2.GetHashColumn(expr)
+	hashCol, typ := planner.GetHashColumn(expr)
 	arg.ShuffleColIdx = hashCol.ColPos
 	arg.ShuffleType = int32(node.Stats.HashmapStats.ShuffleType)
 	arg.ShuffleColMin = node.Stats.HashmapStats.ShuffleColMin
@@ -1307,9 +1307,9 @@ func constructShuffleOperatorForJoinV2(bucketNum int32, node *plan.Node, left bo
 	arg.BucketNum = bucketNum
 	switch types.T(typ) {
 	case types.T_int64, types.T_int32, types.T_int16:
-		arg.ShuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
+		arg.ShuffleRangeInt64 = planner.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
 	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit, types.T_datalink:
-		arg.ShuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
+		arg.ShuffleRangeUint64 = planner.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
 	}
 	return arg
 }
@@ -1327,7 +1327,7 @@ func constructShuffleOperatorForJoin(bucketNum int32, node *plan.Node, left bool
 		}
 	}
 
-	hashCol, typ := plan2.GetHashColumn(expr)
+	hashCol, typ := planner.GetHashColumn(expr)
 	arg.ShuffleColIdx = hashCol.ColPos
 	arg.ShuffleType = int32(node.Stats.HashmapStats.ShuffleType)
 	arg.ShuffleColMin = node.Stats.HashmapStats.ShuffleColMin
@@ -1335,19 +1335,19 @@ func constructShuffleOperatorForJoin(bucketNum int32, node *plan.Node, left bool
 	arg.BucketNum = bucketNum
 	switch types.T(typ) {
 	case types.T_int64, types.T_int32, types.T_int16:
-		arg.ShuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
+		arg.ShuffleRangeInt64 = planner.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
 	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit, types.T_datalink:
-		arg.ShuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
+		arg.ShuffleRangeUint64 = planner.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
 	}
 	if left && len(node.RuntimeFilterProbeList) > 0 {
-		arg.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(node.RuntimeFilterProbeList[0])
+		arg.RuntimeFilterSpec = plan.DeepCopyRuntimeFilterSpec(node.RuntimeFilterProbeList[0])
 	}
 	return arg
 }
 
 func constructShuffleArgForGroupV2(node *plan.Node, dop int32) *shuffleV2.ShuffleV2 {
 	arg := shuffleV2.NewArgument()
-	hashCol, typ := plan2.GetHashColumn(node.GroupBy[node.Stats.HashmapStats.ShuffleColIdx])
+	hashCol, typ := planner.GetHashColumn(node.GroupBy[node.Stats.HashmapStats.ShuffleColIdx])
 	arg.ShuffleColIdx = hashCol.ColPos
 	arg.ShuffleType = int32(node.Stats.HashmapStats.ShuffleType)
 	arg.ShuffleColMin = node.Stats.HashmapStats.ShuffleColMin
@@ -1355,16 +1355,16 @@ func constructShuffleArgForGroupV2(node *plan.Node, dop int32) *shuffleV2.Shuffl
 	arg.BucketNum = dop
 	switch types.T(typ) {
 	case types.T_int64, types.T_int32, types.T_int16:
-		arg.ShuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
+		arg.ShuffleRangeInt64 = planner.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
 	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit, types.T_datalink:
-		arg.ShuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
+		arg.ShuffleRangeUint64 = planner.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
 	}
 	return arg
 }
 
 func constructShuffleArgForGroup(ss []*Scope, node *plan.Node) *shuffle.Shuffle {
 	arg := shuffle.NewArgument()
-	hashCol, typ := plan2.GetHashColumn(node.GroupBy[node.Stats.HashmapStats.ShuffleColIdx])
+	hashCol, typ := planner.GetHashColumn(node.GroupBy[node.Stats.HashmapStats.ShuffleColIdx])
 	arg.ShuffleColIdx = hashCol.ColPos
 	arg.ShuffleType = int32(node.Stats.HashmapStats.ShuffleType)
 	arg.ShuffleColMin = node.Stats.HashmapStats.ShuffleColMin
@@ -1372,9 +1372,9 @@ func constructShuffleArgForGroup(ss []*Scope, node *plan.Node) *shuffle.Shuffle 
 	arg.BucketNum = int32(len(ss))
 	switch types.T(typ) {
 	case types.T_int64, types.T_int32, types.T_int16:
-		arg.ShuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
+		arg.ShuffleRangeInt64 = planner.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
 	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit, types.T_datalink:
-		arg.ShuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
+		arg.ShuffleRangeUint64 = planner.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
 	}
 	return arg
 }
@@ -1386,12 +1386,12 @@ func constructDispatch(idx int, target []*Scope, source *Scope, node *plan.Node,
 		arg.FuncId = dispatch.ShuffleToAllFunc
 		if node.Stats.HashmapStats.ShuffleTypeForMultiCN == plan.ShuffleTypeForMultiCN_Hybrid {
 			if left {
-				arg.ShuffleType = plan2.ShuffleToLocalMatchedReg
+				arg.ShuffleType = planner.ShuffleToLocalMatchedReg
 			} else {
-				arg.ShuffleType = plan2.ShuffleToMultiMatchedReg
+				arg.ShuffleType = planner.ShuffleToMultiMatchedReg
 			}
 		} else {
-			arg.ShuffleType = plan2.ShuffleToRegIndex
+			arg.ShuffleType = planner.ShuffleToRegIndex
 		}
 		return arg
 	}
@@ -1529,7 +1529,7 @@ func rewriteJoinExprToHashBuildExpr(src []*plan.Expr) []*plan.Expr {
 
 	dst := make([]*plan.Expr, len(src))
 	for i := range src {
-		dst[i] = plan2.DeepCopyExpr(src[i])
+		dst[i] = plan.DeepCopyExpr(src[i])
 		doRelIndexRewrite(dst[i])
 	}
 	return dst
@@ -1653,7 +1653,7 @@ func constructShuffleHashBuild(op vm.Operator, proc *process.Process) *hashbuild
 		ret.HashOnPK = arg.HashOnPK
 		ret.NeedAllocateSels = !arg.HashOnPK
 		if len(arg.RuntimeFilterSpecs) > 0 {
-			ret.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(arg.RuntimeFilterSpecs[0])
+			ret.RuntimeFilterSpec = plan.DeepCopyRuntimeFilterSpec(arg.RuntimeFilterSpecs[0])
 		}
 		ret.JoinMapTag = arg.JoinMapTag
 		ret.ShuffleIdx = arg.ShuffleIdx
@@ -1669,7 +1669,7 @@ func constructShuffleHashBuild(op vm.Operator, proc *process.Process) *hashbuild
 		ret.DedupColTypes = arg.DedupColTypes
 		ret.DelColIdx = arg.DelColIdx
 		if len(arg.RuntimeFilterSpecs) > 0 {
-			ret.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(arg.RuntimeFilterSpecs[0])
+			ret.RuntimeFilterSpec = plan.DeepCopyRuntimeFilterSpec(arg.RuntimeFilterSpecs[0])
 		}
 		ret.JoinMapTag = arg.JoinMapTag
 		ret.ShuffleIdx = arg.ShuffleIdx
@@ -1685,7 +1685,7 @@ func constructShuffleHashBuild(op vm.Operator, proc *process.Process) *hashbuild
 		ret.DedupColTypes = arg.DedupColTypes
 		ret.DelColIdx = arg.DelColIdx
 		if len(arg.RuntimeFilterSpecs) > 0 {
-			ret.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(arg.RuntimeFilterSpecs[0])
+			ret.RuntimeFilterSpec = plan.DeepCopyRuntimeFilterSpec(arg.RuntimeFilterSpecs[0])
 		}
 		ret.JoinMapTag = arg.JoinMapTag
 		ret.ShuffleIdx = arg.ShuffleIdx
@@ -1734,7 +1734,7 @@ func constructJoinCondition(expr *plan.Expr, proc *process.Process) (*plan.Expr,
 		}
 	}
 	e, ok := expr.Expr.(*plan.Expr_F)
-	if !ok || !plan2.IsEqualFunc(e.F.Func.GetObj()) {
+	if !ok || !planner.IsEqualFunc(e.F.Func.GetObj()) {
 		panic(moerr.NewNYIf(proc.GetTopContext(), "join condition '%s'", expr))
 	}
 	if exprRelPos(e.F.Args[0]) == 1 {
@@ -1790,7 +1790,7 @@ func constructValueScan(proc *process.Process, node *plan.Node) (*value_scan.Val
 	}
 
 	for i, col := range node.RowsetData.Cols {
-		vec := vector.NewVec(plan2.MakeTypeByPlan2Type(node.TableDef.Cols[i].Typ))
+		vec := vector.NewVec(planner.MakeTypeByPlan2Type(node.TableDef.Cols[i].Typ))
 		op.Batchs[0].Vecs[i] = vec
 		for j, rowsetExpr := range col.Data {
 			get, err := rule.GetConstantValue2(proc, rowsetExpr.Expr, vec)
@@ -1815,11 +1815,11 @@ func extraJoinConditions(exprs []*plan.Expr) (*plan.Expr, []*plan.Expr) {
 	notEqConds := make([]*plan.Expr, 0, len(exprs))
 	for i, expr := range exprs {
 		if e, ok := expr.Expr.(*plan.Expr_F); ok {
-			if !plan2.IsEqualFunc(e.F.Func.GetObj()) {
+			if !planner.IsEqualFunc(e.F.Func.GetObj()) {
 				notEqConds = append(notEqConds, exprs[i])
 				continue
 			}
-			lpos, rpos := plan2.HasColExpr(e.F.Args[0], -1), plan2.HasColExpr(e.F.Args[1], -1)
+			lpos, rpos := planner.HasColExpr(e.F.Args[0], -1), planner.HasColExpr(e.F.Args[1], -1)
 			if lpos == -1 || rpos == -1 || (lpos == rpos) {
 				notEqConds = append(notEqConds, exprs[i])
 				continue

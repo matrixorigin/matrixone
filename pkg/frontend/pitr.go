@@ -22,19 +22,18 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
+	"go.uber.org/zap"
 )
 
 var (
@@ -1718,12 +1717,12 @@ func restoreViewsWithPitr(
 		err         error
 		stmts       []tree.Statement
 		sortedViews []string
-		snapshot    *pbplan.Snapshot
-		oldSnapshot *pbplan.Snapshot
+		snapshot    *plan.Snapshot
+		oldSnapshot *plan.Snapshot
 	)
-	snapshot = &pbplan.Snapshot{
+	snapshot = &plan.Snapshot{
 		TS: &timestamp.Timestamp{PhysicalTime: ts},
-		Tenant: &pbplan.SnapshotTenant{
+		Tenant: &plan.SnapshotTenant{
 			TenantName: accountName,
 			TenantID:   curAccount,
 		},
@@ -1746,10 +1745,10 @@ func restoreViewsWithPitr(
 
 		compCtx.SetDatabase(viewEntry.dbName)
 		// build create sql to find dependent views
-		_, err = plan.BuildPlan(compCtx, stmts[0], false)
+		_, err = planner.BuildPlan(compCtx, stmts[0], false)
 		if err != nil {
 			stmts, _ = parsers.Parse(ctx, dialect.MYSQL, viewEntry.createSql, 0)
-			_, err = plan.BuildPlan(compCtx, stmts[0], false)
+			_, err = planner.BuildPlan(compCtx, stmts[0], false)
 			if err != nil {
 				return err
 			}

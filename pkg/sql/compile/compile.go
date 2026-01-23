@@ -70,10 +70,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/crt"
+	"github.com/matrixorigin/matrixone/pkg/sql/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner/rule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -421,7 +421,7 @@ func (c *Compile) canRetry(err error) bool {
 }
 
 func (c *Compile) IsTpQuery() bool {
-	return c.execType == plan2.ExecTypeTP
+	return c.execType == planner.ExecTypeTP
 }
 
 func (c *Compile) IsSingleScope(ss []*Scope) bool {
@@ -729,7 +729,7 @@ func (c *Compile) appendMetaTables(objRes *plan.ObjectRef) {
 
 func (c *Compile) lockTable() error {
 	for _, tbl := range c.lockTables {
-		typ := plan2.MakeTypeByPlan2Type(tbl.PrimaryColTyp)
+		typ := planner.MakeTypeByPlan2Type(tbl.PrimaryColTyp)
 		return lockop.LockTable(
 			c.e,
 			c.proc,
@@ -821,10 +821,10 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 		v2.TxnStatementCompileQueryHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	c.execType = plan2.GetExecType(c.pn.GetQuery(), c.getHaveDDL(), c.isPrepare)
+	c.execType = planner.GetExecType(c.pn.GetQuery(), c.getHaveDDL(), c.isPrepare)
 
 	n := getEngineNode(c)
-	if c.execType == plan2.ExecTypeTP || c.execType == plan2.ExecTypeAP_ONECN {
+	if c.execType == planner.ExecTypeTP || c.execType == planner.ExecTypeAP_ONECN {
 		c.cnList = engine.Nodes{n}
 	} else {
 		c.cnList, err = c.getCNList()
@@ -845,7 +845,7 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 		ncpu = min(ncpu, int32(qry.MaxDop))
 	}
 
-	plan2.CalcQueryDOP(c.pn, ncpu, len(c.cnList), c.execType)
+	planner.CalcQueryDOP(c.pn, ncpu, len(c.cnList), c.execType)
 
 	c.initAnalyzeModule(qry)
 	// deal with sink scan first.
@@ -977,7 +977,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		if node.ObjRef != nil {
 			c.appendMetaTables(node.ObjRef)
 		}
-		nodeCopy := plan2.DeepCopyNode(node)
+		nodeCopy := plan.DeepCopyNode(node)
 
 		c.setAnalyzeCurrent(nil, int(curNodeIdx))
 		ss, err = c.compileExternScan(nodeCopy)
@@ -1471,11 +1471,11 @@ func (c *Compile) getExternParam(proc *process.Process, externScan *plan.ExternS
 	if externScan.Type == int32(plan.ExternType_EXTERNAL_TB) || externScan.Type == int32(plan.ExternType_RESULT_SCAN) {
 		switch param.ScanType {
 		case tree.INFILE:
-			if err := plan2.InitInfileOrStageParam(param, proc); err != nil {
+			if err := planner.InitInfileOrStageParam(param, proc); err != nil {
 				return nil, err
 			}
 		case tree.S3:
-			if err := plan2.InitS3Param(param); err != nil {
+			if err := planner.InitS3Param(param); err != nil {
 				return nil, err
 			}
 		}
@@ -1498,7 +1498,7 @@ func (c *Compile) getExternalFileListAndSize(node *plan.Node, param *tree.Extern
 	case int32(plan.ExternType_EXTERNAL_TB):
 		t := time.Now()
 		_, spanReadDir := trace.Start(c.proc.Ctx, "compileExternScan.ReadDir")
-		fileList, fileSize, err = plan2.ReadDir(param)
+		fileList, fileSize, err = planner.ReadDir(param)
 		if err != nil {
 			spanReadDir.End()
 			return nil, nil, err
@@ -2097,16 +2097,16 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	}
 
 	if len(node.FilterList) != len(s.DataSource.FilterList) {
-		s.DataSource.FilterList = plan2.DeepCopyExprList(node.FilterList)
+		s.DataSource.FilterList = plan.DeepCopyExprList(node.FilterList)
 		for _, e := range s.DataSource.FilterList {
-			_, err := plan2.ReplaceFoldExpr(c.proc, e, &c.filterExprExes)
+			_, err := planner.ReplaceFoldExpr(c.proc, e, &c.filterExprExes)
 			if err != nil {
 				return err
 			}
 		}
 	}
 	for _, e := range s.DataSource.FilterList {
-		err = plan2.EvalFoldExpr(c.proc, e, &c.filterExprExes)
+		err = planner.EvalFoldExpr(c.proc, e, &c.filterExprExes)
 		if err != nil {
 			return err
 		}
@@ -2114,9 +2114,9 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	s.DataSource.FilterExpr = colexec.RewriteFilterExprList(s.DataSource.FilterList)
 
 	if len(node.BlockFilterList) != len(s.DataSource.BlockFilterList) {
-		s.DataSource.BlockFilterList = plan2.DeepCopyExprList(node.BlockFilterList)
+		s.DataSource.BlockFilterList = plan.DeepCopyExprList(node.BlockFilterList)
 		for _, e := range s.DataSource.BlockFilterList {
-			_, err := plan2.ReplaceFoldExpr(c.proc, e, &c.filterExprExes)
+			_, err := planner.ReplaceFoldExpr(c.proc, e, &c.filterExprExes)
 			if err != nil {
 				return err
 			}
@@ -2144,7 +2144,7 @@ func (c *Compile) compileRestrict(node *plan.Node, ss []*Scope) []*Scope {
 	currentFirstFlag := c.anal.isFirst
 	var op *filter.Filter
 	for i := range ss {
-		op = constructRestrict(node, plan2.DeepCopyExprList(node.FilterList))
+		op = constructRestrict(node, plan.DeepCopyExprList(node.FilterList))
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[i].setRootOperator(op)
 	}
@@ -2230,7 +2230,7 @@ func (c *Compile) compileUnion(node *plan.Node, left []*Scope, right []*Scope) [
 	gn := new(plan.Node)
 	gn.GroupBy = make([]*plan.Expr, len(node.ProjectList))
 	for i := range gn.GroupBy {
-		gn.GroupBy[i] = plan2.DeepCopyExpr(node.ProjectList[i])
+		gn.GroupBy[i] = plan.DeepCopyExpr(node.ProjectList[i])
 		gn.GroupBy[i].Typ.NotNullable = false
 	}
 	currentFirstFlag := c.anal.isFirst
@@ -2475,7 +2475,7 @@ func (c *Compile) newProbeScopeListForBroadcastJoin(probeScopes []*Scope, forceO
 
 func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node, probeScopes []*Scope) []*Scope {
 	var rs []*Scope
-	isEq := plan2.IsEquiJoin2(node.OnList)
+	isEq := planner.IsEquiJoin2(node.OnList)
 
 	rightTypes := make([]types.Type, len(right.ProjectList))
 	for i, expr := range right.ProjectList {
@@ -2751,7 +2751,7 @@ func (c *Compile) compileSort(node *plan.Node, ss []*Scope) []*Scope {
 			}
 			if !overflow && topN <= 8192*2 {
 				// if n is small, convert `order by col limit m offset n` to `top m+n offset n`
-				return c.compileOffset(node, c.compileTop(node, plan2.MakePlan2Uint64ConstExprWithType(topN), ss))
+				return c.compileOffset(node, c.compileTop(node, planner.MakePlan2Uint64ConstExprWithType(topN), ss))
 			}
 		}
 		return c.compileLimit(node, c.compileOffset(node, c.compileOrder(node, ss)))
@@ -2994,7 +2994,7 @@ func (c *Compile) compileSample(node *plan.Node, ss []*Scope) []*Scope {
 
 	rs := c.newMergeScope(ss)
 	// should sample again if sample by rows.
-	if node.SampleFunc.Rows != plan2.NotSampleByRows {
+	if node.SampleFunc.Rows != planner.NotSampleByRows {
 		currentFirstFlag = c.anal.isFirst
 		op := sample.NewMergeSample(constructSample(node, true), false)
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
@@ -3254,7 +3254,7 @@ func (c *Compile) compileInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope
 		if c.anal.qry.LoadTag && node.Stats.HashmapStats != nil && node.Stats.HashmapStats.Shuffle && dataScope.NodeInfo.Mcpu == parallelSize && parallelSize > 1 {
 			_, arg := constructDispatchLocalAndRemote(0, scopes, dataScope)
 			arg.FuncId = dispatch.ShuffleToAllFunc
-			arg.ShuffleType = plan2.ShuffleToLocalMatchedReg
+			arg.ShuffleType = planner.ShuffleToLocalMatchedReg
 			arg.SetAnalyzeControl(c.anal.curNodeIdx, false)
 			dataScope.setRootOperator(arg)
 		} else {
@@ -4091,8 +4091,8 @@ func shouldScanOnCurrentCN(c *Compile, node *plan.Node, forceSingle bool) bool {
 		return true
 	}
 
-	if !plan2.GetForceScanOnMultiCN() &&
-		node.Stats.BlockNum <= int32(plan2.BlockThresholdForOneCN) {
+	if !planner.GetForceScanOnMultiCN() &&
+		node.Stats.BlockNum <= int32(planner.BlockThresholdForOneCN) {
 		return true
 	}
 
@@ -4680,7 +4680,7 @@ func (c *Compile) SetOriginSQL(sql string) {
 	c.originSQL = sql
 }
 
-func (c *Compile) SetBuildPlanFunc(buildPlanFunc func(ctx context.Context) (*plan2.Plan, error)) {
+func (c *Compile) SetBuildPlanFunc(buildPlanFunc func(ctx context.Context) (*plan.Plan, error)) {
 	c.buildPlanFunc = buildPlanFunc
 }
 

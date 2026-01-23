@@ -44,7 +44,7 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
@@ -918,7 +918,7 @@ func (tbl *txnTable) getObjList(ctx context.Context, rangesParam engine.RangesPa
 		tbl.db.op.SnapshotTS(),
 		func(obj objectio.ObjectEntry, isCommitted bool) (err2 error) {
 			//if need to shuffle objects
-			if plan2.ShouldSkipObjByShuffle(rangesParam.Rsp, &obj.ObjectStats) {
+			if planner.ShouldSkipObjByShuffle(rangesParam.Rsp, &obj.ObjectStats) {
 				return
 			}
 			objRelData.AppendObj(&obj.ObjectStats)
@@ -991,8 +991,8 @@ func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesPara
 			logutil.Info(
 				"txn.table.ranges.log",
 				zap.String("name", tbl.tableDef.Name),
-				zap.String("exprs", plan2.FormatExprs(
-					rangesParam.BlockFilters, plan2.FormatOption{
+				zap.String("exprs", planner.FormatExprs(
+					rangesParam.BlockFilters, planner.FormatOption{
 						ExpandVec: false,
 						MaxDepth:  5,
 					},
@@ -1120,9 +1120,9 @@ func (tbl *txnTable) rangesOnePart(
 		logutil.Info(
 			"SLOW-RANGES:",
 			zap.String("table", tbl.tableDef.Name),
-			zap.String("exprs", plan2.FormatExprs(
+			zap.String("exprs", planner.FormatExprs(
 				rangesParam.BlockFilters,
-				plan2.FormatOption{
+				planner.FormatOption{
 					ExpandVec:       true,
 					ExpandVecMaxLen: 2,
 					MaxDepth:        5,
@@ -1131,7 +1131,7 @@ func (tbl *txnTable) rangesOnePart(
 		)
 	}
 
-	hasFoldExpr := plan2.HasFoldExprForList(rangesParam.BlockFilters)
+	hasFoldExpr := planner.HasFoldExprForList(rangesParam.BlockFilters)
 	if hasFoldExpr {
 		rangesParam.BlockFilters = nil
 	}
@@ -1156,14 +1156,14 @@ func (tbl *txnTable) rangesOnePart(
 
 	// check if expr is monotonic, if not, we can skip evaluating expr for each block
 	for _, expr := range rangesParam.BlockFilters {
-		auxIdCnt += plan2.AssignAuxIdForExpr(expr, auxIdCnt)
+		auxIdCnt += planner.AssignAuxIdForExpr(expr, auxIdCnt)
 	}
 
 	columnMap := make(map[int]int)
 	if auxIdCnt > 0 {
 		zms = make([]objectio.ZoneMap, auxIdCnt)
 		vecs = make([]*vector.Vector, auxIdCnt)
-		plan2.GetColumnMapByExprs(rangesParam.BlockFilters, tableDef, columnMap)
+		planner.GetColumnMapByExprs(rangesParam.BlockFilters, tableDef, columnMap)
 	}
 
 	errCtx := errutil.ContextWithNoReport(ctx, true)
@@ -1172,7 +1172,7 @@ func (tbl *txnTable) rangesOnePart(
 		tbl.db.op.SnapshotTS(),
 		func(obj objectio.ObjectEntry, isCommitted bool) (err2 error) {
 			//if need to shuffle objects
-			if plan2.ShouldSkipObjByShuffle(rangesParam.Rsp, &obj.ObjectStats) {
+			if planner.ShouldSkipObjByShuffle(rangesParam.Rsp, &obj.ObjectStats) {
 				return
 			}
 			var meta objectio.ObjectDataMeta
@@ -1480,13 +1480,13 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 		}
 
 		if primarykey != nil && primarykey.PkeyColName == catalog.CPrimaryKeyColName {
-			primarykey.CompPkeyCol = plan2.GetColDefFromTable(cols, catalog.CPrimaryKeyColName)
+			primarykey.CompPkeyCol = planner.GetColDefFromTable(cols, catalog.CPrimaryKeyColName)
 		}
 		if clusterByDef != nil && util.JudgeIsCompositeClusterByColumn(clusterByDef.Name) {
-			clusterByDef.CompCbkeyCol = plan2.GetColDefFromTable(cols, clusterByDef.Name)
+			clusterByDef.CompCbkeyCol = planner.GetColDefFromTable(cols, clusterByDef.Name)
 		}
 		if !hasRowId {
-			rowIdCol := plan2.MakeRowIdColDef()
+			rowIdCol := planner.MakeRowIdColDef()
 			cols = append(cols, rowIdCol)
 		}
 
@@ -1519,7 +1519,7 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 
 func (tbl *txnTable) CopyTableDef(ctx context.Context) *plan.TableDef {
 	tbl.GetTableDef(ctx)
-	return plan2.DeepCopyTableDef(tbl.tableDef, true)
+	return plan.DeepCopyTableDef(tbl.tableDef, true)
 }
 
 func (tbl *txnTable) UpdateConstraint(ctx context.Context, c *engine.ConstraintDef) error {
@@ -2514,8 +2514,8 @@ func (tbl *txnTable) PKPersistedBetween(
 
 	keys.InplaceSort()
 	bytes, _ := keys.MarshalBinary()
-	colExpr := readutil.NewColumnExpr(0, plan2.MakePlan2Type(keys.GetType()), tbl.tableDef.Pkey.PkeyColName)
-	inExpr := plan2.MakeInExpr(
+	colExpr := readutil.NewColumnExpr(0, planner.MakePlan2Type(keys.GetType()), tbl.tableDef.Pkey.PkeyColName)
+	inExpr := planner.MakeInExpr(
 		tbl.proc.Load().Ctx,
 		colExpr,
 		int32(keys.Length()),
@@ -2550,7 +2550,7 @@ func (tbl *txnTable) PKPersistedBetween(
 	//read block ,check if keys exist in the block.
 	pkDef := tbl.tableDef.Cols[tbl.primaryIdx]
 	pkSeq := pkDef.Seqnum
-	pkType := plan2.ExprType2Type(&pkDef.Typ)
+	pkType := planner.ExprType2Type(&pkDef.Typ)
 	if len(candidateBlks) > 0 {
 		v2.TxnPKChangeCheckIOCounter.Inc()
 	}

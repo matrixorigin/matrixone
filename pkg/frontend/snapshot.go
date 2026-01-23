@@ -30,13 +30,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 )
 
@@ -1390,11 +1390,11 @@ func sortedViewInfos(
 
 		compCtx.SetDatabase(viewEntry.dbName)
 		// build create sql to find dependent views
-		_, err = plan.BuildPlan(compCtx, stmts[0], false)
+		_, err = planner.BuildPlan(compCtx, stmts[0], false)
 		if err != nil {
 			getLogger(ses.GetService()).Debug(fmt.Sprintf("try to build view %v failed, try to build it again", viewEntry.tblName))
 			stmts, _ = parsers.Parse(ctx, dialect.MYSQL, viewEntry.createSql, 0)
-			_, err = plan.BuildPlan(compCtx, stmts[0], false)
+			_, err = planner.BuildPlan(compCtx, stmts[0], false)
 			if err != nil {
 				return nil, err
 			}
@@ -1608,7 +1608,7 @@ func getSnapshotByName(ctx context.Context, bh BackgroundExec, snapshotName stri
 	}
 }
 
-func doResolveSnapshotWithSnapshotName(ctx context.Context, ses FeSession, snapshotName string) (snapshot *pbplan.Snapshot, err error) {
+func doResolveSnapshotWithSnapshotName(ctx context.Context, ses FeSession, snapshotName string) (snapshot *plan.Snapshot, err error) {
 	bh := ses.GetShareTxnBackgroundExec(ctx, false)
 	defer bh.Close()
 
@@ -1635,13 +1635,13 @@ func doResolveSnapshotWithSnapshotName(ctx context.Context, ses FeSession, snaps
 		}
 	}
 
-	return &pbplan.Snapshot{
+	return &plan.Snapshot{
 		TS: &timestamp.Timestamp{PhysicalTime: record.ts},
-		Tenant: &pbplan.SnapshotTenant{
+		Tenant: &plan.SnapshotTenant{
 			TenantName: record.accountName,
 			TenantID:   accountId,
 		},
-		ExtraInfo: &pbplan.SnapshotExtraInfo{
+		ExtraInfo: &plan.SnapshotExtraInfo{
 			Level: record.level,
 			ObjId: record.objId,
 			Name:  record.snapshotName,
@@ -2541,7 +2541,7 @@ func getPastExistsAccounts(
 	return
 }
 
-func getSnapshotPlanWithSharedBh(ctx context.Context, bh BackgroundExec, fromAccountId uint32, snapshotName string) (snapshot *pbplan.Snapshot, err error) {
+func getSnapshotPlanWithSharedBh(ctx context.Context, bh BackgroundExec, fromAccountId uint32, snapshotName string) (snapshot *plan.Snapshot, err error) {
 	var record *snapshotRecord
 	if record, err = getSnapshotByName(ctx, bh, snapshotName); err != nil {
 		return
@@ -2552,9 +2552,9 @@ func getSnapshotPlanWithSharedBh(ctx context.Context, bh BackgroundExec, fromAcc
 		return
 	}
 
-	return &pbplan.Snapshot{
+	return &plan.Snapshot{
 		TS: &timestamp.Timestamp{PhysicalTime: record.ts},
-		Tenant: &pbplan.SnapshotTenant{
+		Tenant: &plan.SnapshotTenant{
 			TenantName: record.accountName,
 			TenantID:   fromAccountId,
 		},

@@ -24,7 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -50,7 +50,7 @@ func makeTestCases(t *testing.T) []offsetTestCase {
 				types.T_int8.ToType(),
 			},
 			arg: &Offset{
-				OffsetExpr: plan2.MakePlan2Uint64ConstExprWithType(8),
+				OffsetExpr: planner.MakePlan2Uint64ConstExprWithType(8),
 				OperatorBase: vm.OperatorBase{
 					OperatorInfo: vm.OperatorInfo{
 						Idx:     1,
@@ -66,7 +66,7 @@ func makeTestCases(t *testing.T) []offsetTestCase {
 				types.T_int8.ToType(),
 			},
 			arg: &Offset{
-				OffsetExpr: plan2.MakePlan2Uint64ConstExprWithType(10),
+				OffsetExpr: planner.MakePlan2Uint64ConstExprWithType(10),
 				OperatorBase: vm.OperatorBase{
 					OperatorInfo: vm.OperatorInfo{
 						Idx:     1,
@@ -82,7 +82,7 @@ func makeTestCases(t *testing.T) []offsetTestCase {
 				types.T_int8.ToType(),
 			},
 			arg: &Offset{
-				OffsetExpr: plan2.MakePlan2Uint64ConstExprWithType(12),
+				OffsetExpr: planner.MakePlan2Uint64ConstExprWithType(12),
 				OperatorBase: vm.OperatorBase{
 					OperatorInfo: vm.OperatorInfo{
 						Idx:     1,
@@ -152,7 +152,7 @@ func BenchmarkOffset(b *testing.B) {
 					ctr: container{
 						seen: 0,
 					},
-					OffsetExpr: plan2.MakePlan2Uint64ConstExprWithType(8),
+					OffsetExpr: planner.MakePlan2Uint64ConstExprWithType(8),
 					OperatorBase: vm.OperatorBase{
 						OperatorInfo: vm.OperatorInfo{
 							Idx:     1,

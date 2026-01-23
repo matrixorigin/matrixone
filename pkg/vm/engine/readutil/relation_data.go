@@ -22,7 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -295,7 +295,7 @@ func (or *ObjListRelData) Split(cpunum int) []engine.RelData {
 		result[0].AppendBlockInfo(&objectio.EmptyBlockInfo)
 	}
 	for i := range or.Objlist {
-		shuffleIDX := int(plan2.CalcRangeShuffleIDXForObj(rsp, &or.Objlist[i], int(rsp.CNCNT)*cpunum)) % cpunum
+		shuffleIDX := int(planner.CalcRangeShuffleIDXForObj(rsp, &or.Objlist[i], int(rsp.CNCNT)*cpunum)) % cpunum
 		blks := objectio.ObjectStatsToBlockInfoSlice(&or.Objlist[i], false)
 		result[shuffleIDX].AppendBlockInfoSlice(blks)
 	}

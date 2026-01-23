@@ -24,26 +24,26 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/sql/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ plan.CompilerContext = new(compilerContext)
+var _ planner.CompilerContext = new(compilerContext)
 
 type compilerContext struct {
 	ctx        context.Context
 	defaultDB  string
 	engine     engine.Engine
 	proc       *process.Process
-	statsCache *plan.StatsCache
+	statsCache *planner.StatsCache
 
 	buildAlterView       bool
 	dbOfView, nameOfView string
@@ -70,7 +70,7 @@ func (c *compilerContext) GetSnapshot() *plan.Snapshot {
 func (c *compilerContext) SetSnapshot(snapshot *plan.Snapshot) {
 }
 
-func (c *compilerContext) InitExecuteStmtParam(execPlan *planpb.Execute) (*planpb.Plan, tree.Statement, error) {
+func (c *compilerContext) InitExecuteStmtParam(execPlan *plan.Execute) (*plan.Plan, tree.Statement, error) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -177,9 +177,9 @@ func (c *compilerContext) doStatsHeavyWork(obj *plan.ObjectRef, snapshot *plan.S
 	return nil, nil
 }
 
-func (c *compilerContext) GetStatsCache() *plan.StatsCache {
+func (c *compilerContext) GetStatsCache() *planner.StatsCache {
 	if c.statsCache == nil {
-		c.statsCache = plan.NewStatsCache()
+		c.statsCache = planner.NewStatsCache()
 	}
 	return c.statsCache
 }
@@ -200,7 +200,7 @@ func (c *compilerContext) DatabaseExists(name string, snapshot *plan.Snapshot) b
 	ctx := c.GetContext()
 	txnOpt := c.proc.GetTxnOperator()
 
-	if plan.IsSnapshotValid(snapshot) && snapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
+	if planner.IsSnapshotValid(snapshot) && snapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
 		txnOpt = c.proc.GetTxnOperator().CloneSnapshotOp(*snapshot.TS)
 
 		if snapshot.Tenant != nil {
@@ -220,7 +220,7 @@ func (c *compilerContext) GetDatabaseId(dbName string, snapshot *plan.Snapshot) 
 	ctx := c.GetContext()
 	txnOpt := c.proc.GetTxnOperator()
 
-	if plan.IsSnapshotValid(snapshot) && snapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
+	if planner.IsSnapshotValid(snapshot) && snapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
 		txnOpt = c.proc.GetTxnOperator().CloneSnapshotOp(*snapshot.TS)
 
 		if snapshot.Tenant != nil {
@@ -290,7 +290,7 @@ func (c *compilerContext) ResolveById(tableId uint64, snapshot *plan.Snapshot) (
 	ctx := c.GetContext()
 	txnOpt := c.proc.GetTxnOperator()
 
-	if plan.IsSnapshotValid(snapshot) && snapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
+	if planner.IsSnapshotValid(snapshot) && snapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
 		txnOpt = c.proc.GetTxnOperator().CloneSnapshotOp(*snapshot.TS)
 
 		if snapshot.Tenant != nil {
@@ -309,7 +309,7 @@ func (c *compilerContext) ResolveById(tableId uint64, snapshot *plan.Snapshot) (
 }
 
 func (c *compilerContext) ResolveIndexTableByRef(ref *plan.ObjectRef, tblName string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
-	return c.Resolve(plan.DbNameOfObjRef(ref), tblName, snapshot)
+	return c.Resolve(planner.DbNameOfObjRef(ref), tblName, snapshot)
 }
 
 func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
@@ -389,7 +389,7 @@ func (c *compilerContext) getRelation(
 	ctx := c.GetContext()
 	txnOpt := c.proc.GetTxnOperator()
 
-	if plan.IsSnapshotValid(snapshot) && snapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
+	if planner.IsSnapshotValid(snapshot) && snapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
 		txnOpt = c.proc.GetTxnOperator().CloneSnapshotOp(*snapshot.TS)
 
 		if snapshot.Tenant != nil {

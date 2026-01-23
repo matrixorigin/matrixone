@@ -20,19 +20,19 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
-	"github.com/stretchr/testify/require"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/stretchr/testify/require"
 )
 
 func TestString(t *testing.T) {
@@ -83,7 +83,7 @@ func TestCall(t *testing.T) {
 	arg := &TableScan{
 		Reader: reader,
 		Attrs:  []string{catalog.Row_ID, "int_col", "varchar_col"},
-		Types:  []plan.Type{plan.MakePlan2Type(&typ1), plan.MakePlan2Type(&typ2), plan.MakePlan2Type(&typ3)},
+		Types:  []plan.Type{planner.MakePlan2Type(&typ1), planner.MakePlan2Type(&typ2), planner.MakePlan2Type(&typ3)},
 	}
 	err := arg.Prepare(proc)
 	require.NoError(t, err)

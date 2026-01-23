@@ -31,7 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/pierrec/lz4/v4"
 )
@@ -66,7 +66,7 @@ func GetIOReadCloser(proc *process.Process, param *tree.ExternParam, data string
 		return io.NopCloser(proc.GetLoadLocalReader()), nil
 	}
 
-	fs, readPath, err := plan2.GetForETLWithType(param, data)
+	fs, readPath, err := planner.GetForETLWithType(param, data)
 	if err != nil {
 		return nil, err
 	}

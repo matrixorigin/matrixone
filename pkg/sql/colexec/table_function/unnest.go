@@ -26,7 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -127,11 +127,11 @@ func unnestPrepare(proc *process.Process, arg *TableFunction) (tvfState, error) 
 	if len(arg.Args) == 1 {
 		vType := types.T_varchar.ToType()
 		bType := types.T_bool.ToType()
-		arg.Args = append(arg.Args, &plan.Expr{Typ: plan2.MakePlan2Type(&vType), Expr: &plan.Expr_Lit{Lit: &plan2.Const{Value: &plan.Literal_Sval{Sval: "$"}}}})
-		arg.Args = append(arg.Args, &plan.Expr{Typ: plan2.MakePlan2Type(&bType), Expr: &plan.Expr_Lit{Lit: &plan2.Const{Value: &plan.Literal_Bval{Bval: false}}}})
+		arg.Args = append(arg.Args, &plan.Expr{Typ: planner.MakePlan2Type(&vType), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "$"}}}})
+		arg.Args = append(arg.Args, &plan.Expr{Typ: planner.MakePlan2Type(&bType), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Bval{Bval: false}}}})
 	} else if len(arg.Args) == 2 {
 		bType := types.T_bool.ToType()
-		arg.Args = append(arg.Args, &plan.Expr{Typ: plan2.MakePlan2Type(&bType), Expr: &plan.Expr_Lit{Lit: &plan2.Const{Value: &plan.Literal_Bval{Bval: false}}}})
+		arg.Args = append(arg.Args, &plan.Expr{Typ: planner.MakePlan2Type(&bType), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Bval{Bval: false}}}})
 	}
 	dt, err := json.Marshal(st.param)
 	if err != nil {

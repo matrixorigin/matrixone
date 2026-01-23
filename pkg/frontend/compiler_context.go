@@ -26,8 +26,6 @@ import (
 	"sync"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
@@ -37,26 +35,27 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/sql/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
-var _ plan2.CompilerContext = &TxnCompilerContext{}
+var _ planner.CompilerContext = &TxnCompilerContext{}
 
 type TxnCompilerContext struct {
 	dbName               string
 	buildAlterView       bool
 	dbOfView, nameOfView string
 	sub                  *plan.SubscriptionMeta
-	snapshot             *plan2.Snapshot
+	snapshot             *plan.Snapshot
 	views                []string
 	//for support explain analyze
 	tcw     ComputationWrapper
@@ -106,13 +105,13 @@ func (tcc *TxnCompilerContext) SetViews(views []string) {
 	tcc.views = views
 }
 
-func (tcc *TxnCompilerContext) GetSnapshot() *plan2.Snapshot {
+func (tcc *TxnCompilerContext) GetSnapshot() *plan.Snapshot {
 	tcc.mu.Lock()
 	defer tcc.mu.Unlock()
 	return tcc.snapshot
 }
 
-func (tcc *TxnCompilerContext) SetSnapshot(snapshot *plan2.Snapshot) {
+func (tcc *TxnCompilerContext) SetSnapshot(snapshot *plan.Snapshot) {
 	tcc.mu.Lock()
 	defer tcc.mu.Unlock()
 	tcc.snapshot = snapshot
@@ -123,7 +122,7 @@ func (tcc *TxnCompilerContext) InitExecuteStmtParam(execPlan *plan.Execute) (*pl
 	return p, st, err
 }
 
-func (tcc *TxnCompilerContext) GetStatsCache() *plan2.StatsCache {
+func (tcc *TxnCompilerContext) GetStatsCache() *planner.StatsCache {
 	tcc.mu.Lock()
 	defer tcc.mu.Unlock()
 	return tcc.execCtx.ses.GetStatsCache()
@@ -203,13 +202,13 @@ func (tcc *TxnCompilerContext) SetContext(ctx context.Context) {
 	tcc.execCtx.reqCtx = ctx
 }
 
-func (tcc *TxnCompilerContext) DatabaseExists(name string, snapshot *plan2.Snapshot) bool {
+func (tcc *TxnCompilerContext) DatabaseExists(name string, snapshot *plan.Snapshot) bool {
 	var err error
 	tempCtx := tcc.execCtx.reqCtx
 	txn := tcc.GetTxnHandler().GetTxn()
 
 	// change txn to snapshot txn
-	if plan2.IsSnapshotValid(snapshot) && snapshot.TS.Less(txn.Txn().SnapshotTS) {
+	if planner.IsSnapshotValid(snapshot) && snapshot.TS.Less(txn.Txn().SnapshotTS) {
 		txn = txn.CloneSnapshotOp(*snapshot.TS)
 
 		if snapshot.Tenant != nil {
@@ -231,7 +230,7 @@ func (tcc *TxnCompilerContext) DatabaseExists(name string, snapshot *plan2.Snaps
 	return true
 }
 
-func (tcc *TxnCompilerContext) GetDatabaseId(dbName string, snapshot *plan2.Snapshot) (uint64, error) {
+func (tcc *TxnCompilerContext) GetDatabaseId(dbName string, snapshot *plan.Snapshot) (uint64, error) {
 	dbName, _, err := tcc.ensureDatabaseIsNotEmpty(dbName, false, snapshot)
 	if err != nil {
 		return 0, err
@@ -240,7 +239,7 @@ func (tcc *TxnCompilerContext) GetDatabaseId(dbName string, snapshot *plan2.Snap
 	txn := tcc.GetTxnHandler().GetTxn()
 	// change txn to snapshot txn
 
-	if plan2.IsSnapshotValid(snapshot) && snapshot.TS.Less(txn.Txn().SnapshotTS) {
+	if planner.IsSnapshotValid(snapshot) && snapshot.TS.Less(txn.Txn().SnapshotTS) {
 		txn = txn.CloneSnapshotOp(*snapshot.TS)
 
 		if snapshot.Tenant != nil {
@@ -301,7 +300,7 @@ func (tcc *TxnCompilerContext) getRelation(
 	dbName string,
 	tableName string,
 	sub *plan.SubscriptionMeta,
-	snapshot *plan2.Snapshot,
+	snapshot *plan.Snapshot,
 ) (context.Context, engine.Relation, error) {
 	dbName, _, err := tcc.ensureDatabaseIsNotEmpty(dbName, false, snapshot)
 	if err != nil {
@@ -319,7 +318,7 @@ func (tcc *TxnCompilerContext) getRelation(
 		v2.GetRelationDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	if plan2.IsSnapshotValid(snapshot) && snapshot.TS.Less(txn.Txn().SnapshotTS) {
+	if planner.IsSnapshotValid(snapshot) && snapshot.TS.Less(txn.Txn().SnapshotTS) {
 		txn = txn.CloneSnapshotOp(*snapshot.TS)
 
 		if snapshot.Tenant != nil {
@@ -379,7 +378,7 @@ func (tcc *TxnCompilerContext) getRelation(
 	return tempCtx, table, nil
 }
 
-func (tcc *TxnCompilerContext) ensureDatabaseIsNotEmpty(dbName string, checkSub bool, snapshot *plan2.Snapshot) (string, *plan.SubscriptionMeta, error) {
+func (tcc *TxnCompilerContext) ensureDatabaseIsNotEmpty(dbName string, checkSub bool, snapshot *plan.Snapshot) (string, *plan.SubscriptionMeta, error) {
 	start := time.Now()
 	defer func() {
 		v2.EnsureDatabaseDurationHistogram.Observe(time.Since(start).Seconds())
@@ -401,11 +400,11 @@ func (tcc *TxnCompilerContext) ensureDatabaseIsNotEmpty(dbName string, checkSub 
 	return dbName, sub, nil
 }
 
-func (tcc *TxnCompilerContext) ResolveById(tableId uint64, snapshot *plan2.Snapshot) (*plan2.ObjectRef, *plan2.TableDef, error) {
+func (tcc *TxnCompilerContext) ResolveById(tableId uint64, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
 	tempCtx := tcc.execCtx.reqCtx
 	txn := tcc.GetTxnHandler().GetTxn()
 
-	if plan2.IsSnapshotValid(snapshot) && snapshot.TS.Less(txn.Txn().SnapshotTS) {
+	if planner.IsSnapshotValid(snapshot) && snapshot.TS.Less(txn.Txn().SnapshotTS) {
 		txn = txn.CloneSnapshotOp(*snapshot.TS)
 
 		if snapshot.Tenant != nil {
@@ -421,7 +420,7 @@ func (tcc *TxnCompilerContext) ResolveById(tableId uint64, snapshot *plan2.Snaps
 
 	// convert
 	returnTableID := int64(tableId)
-	obj := &plan2.ObjectRef{
+	obj := &plan.ObjectRef{
 		SchemaName: dbName,
 		ObjName:    tableName,
 		Obj:        returnTableID,
@@ -430,7 +429,7 @@ func (tcc *TxnCompilerContext) ResolveById(tableId uint64, snapshot *plan2.Snaps
 	return obj, tableDef, nil
 }
 
-func (tcc *TxnCompilerContext) ResolveSubscriptionTableById(tableId uint64, subMeta *plan.SubscriptionMeta) (*plan2.ObjectRef, *plan2.TableDef, error) {
+func (tcc *TxnCompilerContext) ResolveSubscriptionTableById(tableId uint64, subMeta *plan.SubscriptionMeta) (*plan.ObjectRef, *plan.TableDef, error) {
 	txn := tcc.GetTxnHandler().GetTxn()
 
 	pubContext := tcc.execCtx.reqCtx
@@ -446,7 +445,7 @@ func (tcc *TxnCompilerContext) ResolveSubscriptionTableById(tableId uint64, subM
 
 	// convert
 	returnTableID := int64(tableId)
-	obj := &plan2.ObjectRef{
+	obj := &plan.ObjectRef{
 		SchemaName: dbName,
 		ObjName:    tableName,
 		Obj:        returnTableID,
@@ -455,7 +454,7 @@ func (tcc *TxnCompilerContext) ResolveSubscriptionTableById(tableId uint64, subM
 	return obj, tableDef, nil
 }
 
-func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot *plan2.Snapshot) (*plan2.ObjectRef, *plan2.TableDef, error) {
+func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
 	start := time.Now()
 	defer func() {
 		end := time.Since(start).Seconds()
@@ -510,7 +509,7 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot
 	}
 
 	tableID := int64(table.GetTableID(ctx))
-	obj := &plan2.ObjectRef{
+	obj := &plan.ObjectRef{
 		SchemaName:       dbName,
 		ObjName:          tableName,
 		Obj:              tableID,
@@ -527,8 +526,8 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot
 func (tcc *TxnCompilerContext) ResolveIndexTableByRef(
 	ref *plan.ObjectRef,
 	tblName string,
-	snapshot *plan2.Snapshot,
-) (*plan2.ObjectRef, *plan2.TableDef, error) {
+	snapshot *plan.Snapshot,
+) (*plan.ObjectRef, *plan.TableDef, error) {
 	start := time.Now()
 	defer func() {
 		end := time.Since(start).Seconds()
@@ -560,7 +559,7 @@ func (tcc *TxnCompilerContext) ResolveIndexTableByRef(
 	}
 
 	tableID := int64(table.GetTableID(ctx))
-	obj := &plan2.ObjectRef{
+	obj := &plan.ObjectRef{
 		SchemaName:       ref.SchemaName,
 		ObjName:          tblName,
 		Obj:              tableID,
@@ -832,7 +831,7 @@ func (tcc *TxnCompilerContext) ResolveAccountIds(accountNames []string) (account
 	return accountIds, err
 }
 
-func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, snapshot *plan2.Snapshot) (*pb.StatsInfo, error) {
+func (tcc *TxnCompilerContext) Stats(obj *plan.ObjectRef, snapshot *plan.Snapshot) (*pb.StatsInfo, error) {
 	statser := statistic.StatsInfoFromContext(tcc.execCtx.reqCtx)
 	start := time.Now()
 	defer func() {
@@ -866,7 +865,7 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, snapshot *plan2.Snaps
 	return result, nil
 }
 
-func (tcc *TxnCompilerContext) doStatsHeavyWork(obj *plan2.ObjectRef, snapshot *plan2.Snapshot, tableID uint64) (*pb.StatsInfo, error) {
+func (tcc *TxnCompilerContext) doStatsHeavyWork(obj *plan.ObjectRef, snapshot *plan.Snapshot, tableID uint64) (*pb.StatsInfo, error) {
 	dbName := obj.GetSchemaName()
 	tableName := obj.GetObjName()
 
@@ -957,7 +956,7 @@ func (tcc *TxnCompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, 
 	return r.ResultCols, str, nil
 }
 
-func (tcc *TxnCompilerContext) GetSubscriptionMeta(dbName string, snapshot *plan2.Snapshot) (*plan.SubscriptionMeta, error) {
+func (tcc *TxnCompilerContext) GetSubscriptionMeta(dbName string, snapshot *plan.Snapshot) (*plan.SubscriptionMeta, error) {
 	start := time.Now()
 	defer func() {
 		v2.GetSubMetaDurationHistogram.Observe(time.Since(start).Seconds())
@@ -965,7 +964,7 @@ func (tcc *TxnCompilerContext) GetSubscriptionMeta(dbName string, snapshot *plan
 
 	tempCtx := tcc.execCtx.reqCtx
 	txn := tcc.GetTxnHandler().GetTxn()
-	if plan2.IsSnapshotValid(snapshot) && snapshot.TS.Less(txn.Txn().SnapshotTS) {
+	if planner.IsSnapshotValid(snapshot) && snapshot.TS.Less(txn.Txn().SnapshotTS) {
 		txn = txn.CloneSnapshotOp(*snapshot.TS)
 
 		if snapshot.Tenant != nil {
@@ -1033,7 +1032,7 @@ func makeResultMetaPath(accountName string, statementId string) string {
 	return fmt.Sprintf("query_result_meta/%s_%s.blk", accountName, statementId)
 }
 
-func (tcc *TxnCompilerContext) ResolveSnapshotWithSnapshotName(snapshotName string) (*plan2.Snapshot, error) {
+func (tcc *TxnCompilerContext) ResolveSnapshotWithSnapshotName(snapshotName string) (*plan.Snapshot, error) {
 	tenantCtx := tcc.GetContext()
 	if snapshot := tcc.GetSnapshot(); snapshot != nil && snapshot.GetTenant() != nil {
 		tenantCtx = defines.AttachAccount(tenantCtx, snapshot.Tenant.TenantID, GetAdminUserId(), GetAccountAdminRoleId())

@@ -20,8 +20,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/mohae/deepcopy"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -33,7 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	util2 "github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -41,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/mohae/deepcopy"
 )
 
 var (
@@ -49,7 +48,7 @@ var (
 
 type TxnComputationWrapper struct {
 	stmt      tree.Statement
-	plan      *plan2.Plan
+	plan      *plan.Plan
 	proc      *process.Process
 	ses       FeSession
 	compile   *compile.Compile
@@ -133,30 +132,30 @@ func (cwft *TxnComputationWrapper) GetProcess() *process.Process {
 
 func (cwft *TxnComputationWrapper) GetColumns(ctx context.Context) ([]interface{}, error) {
 	var err error
-	cols := plan2.GetResultColumnsFromPlan(cwft.plan)
+	cols := planner.GetResultColumnsFromPlan(cwft.plan)
 	switch cwft.GetAst().(type) {
 	case *tree.ShowColumns:
 		if len(cols) == 7 {
-			cols = []*plan2.ColDef{
-				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Field"},
-				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Type"},
-				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Null"},
-				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Key"},
-				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Default"},
-				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Extra"},
-				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Comment"},
+			cols = []*plan.ColDef{
+				{Typ: plan.Type{Id: int32(types.T_char)}, Name: "Field"},
+				{Typ: plan.Type{Id: int32(types.T_char)}, Name: "Type"},
+				{Typ: plan.Type{Id: int32(types.T_char)}, Name: "Null"},
+				{Typ: plan.Type{Id: int32(types.T_char)}, Name: "Key"},
+				{Typ: plan.Type{Id: int32(types.T_char)}, Name: "Default"},
+				{Typ: plan.Type{Id: int32(types.T_char)}, Name: "Extra"},
+				{Typ: plan.Type{Id: int32(types.T_char)}, Name: "Comment"},
 			}
 		} else {
-			cols = []*plan2.ColDef{
-				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Field"},
-				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Type"},
-				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Collation"},
-				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Null"},
-				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Key"},
-				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Default"},
-				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Extra"},
-				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Privileges"},
-				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Comment"},
+			cols = []*plan.ColDef{
+				{Typ: plan.Type{Id: int32(types.T_char)}, Name: "Field"},
+				{Typ: plan.Type{Id: int32(types.T_char)}, Name: "Type"},
+				{Typ: plan.Type{Id: int32(types.T_char)}, Name: "Collation"},
+				{Typ: plan.Type{Id: int32(types.T_char)}, Name: "Null"},
+				{Typ: plan.Type{Id: int32(types.T_char)}, Name: "Key"},
+				{Typ: plan.Type{Id: int32(types.T_char)}, Name: "Default"},
+				{Typ: plan.Type{Id: int32(types.T_char)}, Name: "Extra"},
+				{Typ: plan.Type{Id: int32(types.T_char)}, Name: "Privileges"},
+				{Typ: plan.Type{Id: int32(types.T_char)}, Name: "Comment"},
 			}
 		}
 	}
@@ -505,7 +504,7 @@ func createCompile(
 	proc *process.Process,
 	originSQL string,
 	stmt tree.Statement,
-	plan *plan2.Plan,
+	pl *plan.Plan,
 	fill func(*batch.Batch, *perfcounter.CounterSet) error,
 	isPrepare bool,
 ) (retCompile *compile.Compile, err error) {
@@ -561,14 +560,14 @@ func createCompile(
 		getStatementStartAt(execCtx.reqCtx),
 	)
 	retCompile.SetIsPrepare(isPrepare)
-	retCompile.SetBuildPlanFunc(func(ctx context.Context) (*plan2.Plan, error) {
+	retCompile.SetBuildPlanFunc(func(ctx context.Context) (*plan.Plan, error) {
 		// No permission verification is required when retry execute buildPlan
 		plan, err := buildPlan(ctx, ses, ses.GetTxnCompileCtx(), stmt)
 		if err != nil {
 			return nil, err
 		}
 		if plan.IsPrepare {
-			_, _, err = plan2.ResetPreparePlan(ses.GetTxnCompileCtx(), plan)
+			_, _, err = planner.ResetPreparePlan(ses.GetTxnCompileCtx(), plan)
 		}
 		return plan, err
 	})
@@ -581,7 +580,7 @@ func createCompile(
 		fill = func(bat *batch.Batch, crs *perfcounter.CounterSet) error { return nil }
 	}
 
-	err = retCompile.Compile(execCtx.reqCtx, plan, fill)
+	err = retCompile.Compile(execCtx.reqCtx, pl, fill)
 	if err != nil {
 		return
 	}
