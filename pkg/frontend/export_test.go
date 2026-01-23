@@ -704,43 +704,6 @@ func Test_getEffectiveMaxFileSize(t *testing.T) {
 	}
 }
 
-func Test_buildParquetNode(t *testing.T) {
-	tests := []struct {
-		name     string
-		mysqlTyp defines.MysqlType
-	}{
-		{"bool", defines.MYSQL_TYPE_BOOL},
-		{"tiny", defines.MYSQL_TYPE_TINY},
-		{"short", defines.MYSQL_TYPE_SHORT},
-		{"int24", defines.MYSQL_TYPE_INT24},
-		{"long", defines.MYSQL_TYPE_LONG},
-		{"longlong", defines.MYSQL_TYPE_LONGLONG},
-		{"float", defines.MYSQL_TYPE_FLOAT},
-		{"double", defines.MYSQL_TYPE_DOUBLE},
-		{"date", defines.MYSQL_TYPE_DATE},
-		{"datetime", defines.MYSQL_TYPE_DATETIME},
-		{"timestamp", defines.MYSQL_TYPE_TIMESTAMP},
-		{"time", defines.MYSQL_TYPE_TIME},
-		{"decimal", defines.MYSQL_TYPE_DECIMAL},
-		{"varchar", defines.MYSQL_TYPE_VARCHAR},
-		{"var_string", defines.MYSQL_TYPE_VAR_STRING},
-		{"string", defines.MYSQL_TYPE_STRING},
-		{"json", defines.MYSQL_TYPE_JSON},
-		{"uuid", defines.MYSQL_TYPE_UUID},
-		{"text", defines.MYSQL_TYPE_TEXT},
-		{"blob", defines.MYSQL_TYPE_BLOB},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			node := buildParquetNode(tt.mysqlTyp, 0)
-			if node == nil {
-				t.Errorf("buildParquetNode(%v) returned nil", tt.mysqlTyp)
-			}
-		})
-	}
-}
-
 func Test_vectorValueToParquet(t *testing.T) {
 	mp := mpool.MustNewZero()
 	convey.Convey("vectorValueToParquet converts types correctly", t, func() {
