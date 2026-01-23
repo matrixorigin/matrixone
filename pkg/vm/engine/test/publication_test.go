@@ -381,7 +381,7 @@ func TestExecuteIteration1(t *testing.T) {
 
 	// Step 2: Write mo_ccpr_log table in destination account context
 	taskID := uint64(1)
-	iterationLSN := uint64(1)
+	iterationLSN := uint64(0)
 	subscriptionName := "test_subscription"
 	insertSQL := fmt.Sprintf(
 		`INSERT INTO mo_catalog.mo_ccpr_log (
@@ -536,7 +536,7 @@ func TestExecuteIteration1(t *testing.T) {
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 
 	// Step 7: Execute second iteration without inserting new data
-	iterationLSN2 := uint64(2)
+	iterationLSN2 := uint64(1)
 	updateSQL := fmt.Sprintf(
 		`UPDATE mo_catalog.mo_ccpr_log 
 		SET iteration_state = %d, iteration_lsn = %d 
@@ -663,7 +663,7 @@ func TestExecuteIteration1(t *testing.T) {
 	require.NoError(t, err)
 
 	// Update mo_ccpr_log for third iteration
-	iterationLSN3 := uint64(3)
+	iterationLSN3 := uint64(2)
 	updateSQL3 := fmt.Sprintf(
 		`UPDATE mo_catalog.mo_ccpr_log 
 		SET iteration_state = %d, iteration_lsn = %d 
@@ -890,7 +890,7 @@ func TestExecuteIterationDatabaseLevel(t *testing.T) {
 
 	// Step 2: Write mo_ccpr_log table with database level sync
 	taskID := uint64(1)
-	iterationLSN := uint64(1)
+	iterationLSN := uint64(0)
 	subscriptionName := "test_subscription_db"
 	insertSQL := fmt.Sprintf(
 		`INSERT INTO mo_catalog.mo_ccpr_log (
@@ -1194,7 +1194,7 @@ func TestExecuteIterationWithIndex(t *testing.T) {
 
 	// Step 2: Write mo_ccpr_log table in destination account context
 	taskID := uint64(1)
-	iterationLSN := uint64(1)
+	iterationLSN := uint64(0)
 	subscriptionName := "test_subscription_with_index"
 	insertSQL := fmt.Sprintf(
 		`INSERT INTO mo_catalog.mo_ccpr_log (
@@ -1396,7 +1396,7 @@ func TestExecuteIterationWithIndex(t *testing.T) {
 	require.NoError(t, err)
 
 	// Step 9: Update mo_ccpr_log for second iteration
-	iterationLSN2 := uint64(2)
+	iterationLSN2 := uint64(1)
 	updateSQL := fmt.Sprintf(
 		`UPDATE mo_catalog.mo_ccpr_log 
 		SET iteration_state = %d, iteration_lsn = %d 
@@ -1714,7 +1714,7 @@ func TestExecuteIterationWithSnapshotFinishedInjection(t *testing.T) {
 
 	// Step 2: Write mo_ccpr_log table in destination account context
 	taskID := uint64(1)
-	iterationLSN := uint64(1)
+	iterationLSN := uint64(0)
 	subscriptionName := "test_subscription_injection"
 	insertSQL := fmt.Sprintf(
 		`INSERT INTO mo_catalog.mo_ccpr_log (
@@ -2019,7 +2019,7 @@ func TestExecuteIterationWithCommitFailedInjection(t *testing.T) {
 
 	// Step 2: Write mo_ccpr_log table in destination account context
 	taskID := uint64(1)
-	iterationLSN := uint64(1)
+	iterationLSN := uint64(0)
 	subscriptionName := "test_subscription_commit_failed"
 	insertSQL := fmt.Sprintf(
 		`INSERT INTO mo_catalog.mo_ccpr_log (
@@ -2696,7 +2696,7 @@ func TestCCPRCreateDelete(t *testing.T) {
 
 	// Step 2: Write mo_ccpr_log table with database level sync
 	taskID := uint64(1)
-	iterationLSN1 := uint64(1)
+	iterationLSN1 := uint64(0)
 	subscriptionName := "test_subscription_create_delete"
 	insertSQL := fmt.Sprintf(
 		`INSERT INTO mo_catalog.mo_ccpr_log (
@@ -2860,7 +2860,7 @@ func TestCCPRCreateDelete(t *testing.T) {
 	require.NoError(t, err)
 
 	// Step 9: Update mo_ccpr_log for second iteration
-	iterationLSN2 := uint64(2)
+	iterationLSN2 := uint64(1)
 	updateSQL := fmt.Sprintf(
 		`UPDATE mo_catalog.mo_ccpr_log 
 		SET iteration_state = %d, iteration_lsn = %d 
@@ -3069,7 +3069,7 @@ func TestCCPRAlterTable(t *testing.T) {
 
 	// Step 2: Write mo_ccpr_log table with database level sync
 	taskID := uint64(1)
-	iterationLSN1 := uint64(1)
+	iterationLSN1 := uint64(0)
 	subscriptionName := "test_subscription_alter_table"
 	insertSQL := fmt.Sprintf(
 		`INSERT INTO mo_catalog.mo_ccpr_log (
@@ -3261,7 +3261,7 @@ func TestCCPRAlterTable(t *testing.T) {
 	require.NoError(t, err)
 
 	// Step 10: Update mo_ccpr_log for second iteration
-	iterationLSN2 := uint64(2)
+	iterationLSN2 := uint64(1)
 	updateSQL2 := fmt.Sprintf(
 		`UPDATE mo_catalog.mo_ccpr_log 
 		SET iteration_state = %d, iteration_lsn = %d 
@@ -3950,7 +3950,7 @@ func TestCCPRDDLAccountLevel(t *testing.T) {
 
 	// Step 2: Write mo_ccpr_log table with account level sync
 	taskID := uint64(1)
-	iterationLSN1 := uint64(1)
+	iterationLSN1 := uint64(0)
 	subscriptionName := "test_subscription_account"
 	insertSQL := fmt.Sprintf(
 		`INSERT INTO mo_catalog.mo_ccpr_log (
@@ -4097,7 +4097,7 @@ func TestCCPRDDLAccountLevel(t *testing.T) {
 	require.NoError(t, err)
 
 	// Step 9: Update mo_ccpr_log for second iteration
-	iterationLSN2 := uint64(2)
+	iterationLSN2 := uint64(1)
 	updateSQL := fmt.Sprintf(
 		`UPDATE mo_catalog.mo_ccpr_log 
 		SET iteration_state = %d, iteration_lsn = %d 
@@ -4395,7 +4395,7 @@ func TestCCPRExecutorWithGC(t *testing.T) {
 
 	// Step 4: Insert mo_ccpr_log record
 	taskID := uint64(1)
-	iterationLSN := uint64(1)
+	iterationLSN := uint64(0)
 	subscriptionName := "test_subscription_executor_gc"
 	insertSQL := fmt.Sprintf(
 		`INSERT INTO mo_catalog.mo_ccpr_log (
@@ -4710,7 +4710,7 @@ func TestCCPRErrorHandling2(t *testing.T) {
 
 	// Step 2: Write mo_ccpr_log table
 	taskID := uint64(1)
-	iterationLSN1 := uint64(1)
+	iterationLSN1 := uint64(0)
 	subscriptionName := "test_subscription_sql_fail"
 	insertSQL := fmt.Sprintf(
 		`INSERT INTO mo_catalog.mo_ccpr_log (
