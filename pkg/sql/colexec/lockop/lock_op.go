@@ -33,10 +33,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
@@ -933,7 +934,7 @@ func (lockOp *LockOp) CopyToPipelineTarget() []*pipeline.LockTarget {
 		targets[i] = &pipeline.LockTarget{
 			TableId:            target.tableID,
 			PrimaryColIdxInBat: target.primaryColumnIndexInBatch,
-			PrimaryColTyp:      plan.MakePlan2Type(&target.primaryColumnType),
+			PrimaryColTyp:      planner.MakePlan2Type(&target.primaryColumnType),
 			RefreshTsIdxInBat:  target.refreshTimestampIndexInBatch,
 			FilterColIdxInBat:  target.filterColIndexInBatch,
 			LockTable:          target.lockTable,

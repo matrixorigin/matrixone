@@ -21,7 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
@@ -52,7 +52,7 @@ func TestBuildReadersBloomFilterFullCoverage(t *testing.T) {
 
 		c := NewMockCompile(t)
 		c.proc = proc
-		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
+		s.DataSource.FilterList = []*plan.Expr{planner.MakeFalseExpr()}
 		s.DataSource.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{}
 
 		readers, err := s.buildReaders(c)
@@ -86,7 +86,7 @@ func TestBuildReadersBloomFilterFullCoverage(t *testing.T) {
 
 		c := NewMockCompile(t)
 		c.proc = proc
-		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
+		s.DataSource.FilterList = []*plan.Expr{planner.MakeFalseExpr()}
 		s.DataSource.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{}
 
 		readers, err := s.buildReaders(c)
@@ -118,7 +118,7 @@ func TestBuildReadersBloomFilterFullCoverage(t *testing.T) {
 
 		c := NewMockCompile(t)
 		c.proc = proc
-		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
+		s.DataSource.FilterList = []*plan.Expr{planner.MakeFalseExpr()}
 		s.DataSource.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{}
 
 		defer func() {
@@ -154,7 +154,7 @@ func TestBuildReadersBloomFilterFullCoverage(t *testing.T) {
 
 		c := NewMockCompile(t)
 		c.proc = proc
-		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
+		s.DataSource.FilterList = []*plan.Expr{planner.MakeFalseExpr()}
 		s.DataSource.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{}
 
 		defer func() {

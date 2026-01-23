@@ -22,7 +22,7 @@ import (
 
 	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
+	"github.com/matrixorigin/matrixone/pkg/sql/function/ctl"
 	"github.com/matrixorigin/matrixone/pkg/util/json"
 	"github.com/stretchr/testify/require"
 )

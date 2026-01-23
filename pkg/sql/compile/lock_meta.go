@@ -29,8 +29,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -218,7 +218,7 @@ func (l *LockMeta) initLockExe(e engine.Engine, proc *process.Process) error {
 
 	accountTyp := types.T_uint32.ToType()
 	accountIdExpr := &plan.Expr{
-		Typ: plan2.MakePlan2Type(&accountTyp),
+		Typ: planner.MakePlan2Type(&accountTyp),
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				ColPos: 0,
@@ -228,7 +228,7 @@ func (l *LockMeta) initLockExe(e engine.Engine, proc *process.Process) error {
 
 	dbNameTyp := types.T_varchar.ToType()
 	dbNameExpr := &plan.Expr{
-		Typ: plan2.MakePlan2Type(&dbNameTyp),
+		Typ: planner.MakePlan2Type(&dbNameTyp),
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				ColPos: 1,
@@ -238,7 +238,7 @@ func (l *LockMeta) initLockExe(e engine.Engine, proc *process.Process) error {
 
 	tblNameTyp := types.T_varchar.ToType()
 	tblNameExpr := &plan.Expr{
-		Typ: plan2.MakePlan2Type(&tblNameTyp),
+		Typ: planner.MakePlan2Type(&tblNameTyp),
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				ColPos: 2,
@@ -246,7 +246,7 @@ func (l *LockMeta) initLockExe(e engine.Engine, proc *process.Process) error {
 		},
 	}
 
-	lockDbExpr, err := plan2.BindFuncExprImplByPlanExpr(proc.Ctx, function.SerialFunctionName, []*plan.Expr{accountIdExpr, dbNameExpr})
+	lockDbExpr, err := planner.BindFuncExprImplByPlanExpr(proc.Ctx, function.SerialFunctionName, []*plan.Expr{accountIdExpr, dbNameExpr})
 	if err != nil {
 		return err
 	}
@@ -256,7 +256,7 @@ func (l *LockMeta) initLockExe(e engine.Engine, proc *process.Process) error {
 	}
 	l.lockDbExe = exec
 
-	lockTblxpr, err := plan2.BindFuncExprImplByPlanExpr(proc.Ctx, function.SerialFunctionName, []*plan.Expr{accountIdExpr, dbNameExpr, tblNameExpr})
+	lockTblxpr, err := planner.BindFuncExprImplByPlanExpr(proc.Ctx, function.SerialFunctionName, []*plan.Expr{accountIdExpr, dbNameExpr, tblNameExpr})
 	if err != nil {
 		return err
 	}

@@ -39,7 +39,7 @@ import (
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/util/debug/goroutine"
@@ -404,7 +404,7 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	}
 
 	c := allocateNewCompile(proc)
-	c.execType = plan2.ExecTypeAP_MULTICN
+	c.execType = planner.ExecTypeAP_MULTICN
 	c.e = cnInfo.storeEngine
 	c.MessageBoard = c.MessageBoard.SetMultiCN(c.GetMessageCenter(), c.proc.GetStmtProfile().GetStmtId())
 	c.proc.SetMessageBoard(c.MessageBoard)
@@ -412,7 +412,7 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	c.addr = receiver.cnInformation.cnAddr
 
 	// a method to send back.
-	c.execType = plan2.ExecTypeAP_MULTICN
+	c.execType = planner.ExecTypeAP_MULTICN
 	c.fill = func(b *batch.Batch, counter *perfcounter.CounterSet) error {
 		return receiver.sendBatch(b)
 	}

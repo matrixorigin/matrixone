@@ -19,7 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 )
 
 // verifyAccountCanOperateClusterTable determines the account can operate
@@ -229,7 +229,7 @@ var privilegeCacheIsEnabled = func(ctx context.Context, ses *Session) (bool, err
 }
 
 // hasMoCtrl checks whether the plan has mo_ctrl
-func hasMoCtrl(p *plan2.Plan) bool {
+func hasMoCtrl(p *plan.Plan) bool {
 	if p != nil && p.GetQuery() != nil { //select,insert select, update, delete
 		q := p.GetQuery()
 		if q.StmtType == plan.Query_INSERT || q.StmtType == plan.Query_SELECT {
@@ -239,7 +239,7 @@ func hasMoCtrl(p *plan2.Plan) bool {
 					//	select mo_ctrl ...
 					//	insert into ... select mo_ctrl ...
 					for _, proj := range node.ProjectList {
-						if plan2.HasMoCtrl(proj) {
+						if planner.HasMoCtrl(proj) {
 							return true
 						}
 					}
@@ -253,7 +253,7 @@ func hasMoCtrl(p *plan2.Plan) bool {
 // isTargetSysWhiteList checks if ALL DML target tables are in the whitelist.
 // Returns true only when all target tables are in the whitelist.
 // Returns false if any target table is not in the whitelist, or if there are no DML target tables.
-func isTargetSysWhiteList(p *plan2.Plan) bool {
+func isTargetSysWhiteList(p *plan.Plan) bool {
 	if p == nil || p.GetQuery() == nil {
 		return false
 	}

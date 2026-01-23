@@ -152,12 +152,12 @@
 /pkg/sql @aunjgr
 /pkg/sql/colexec @ouyuanning @aunjgr
 /pkg/sql/compile @ouyuanning @aunjgr
+/pkg/sql/function @ouyuanning @aunjgr
 /pkg/sql/models @aptend
 /pkg/sql/parsers @iamlinjunhong
-/pkg/sql/plan @ouyuanning @aunjgr
-/pkg/sql/plan/function @ouyuanning @aunjgr
-/pkg/sql/plan/explain @ouyuanning @aunjgr
-/pkg/sql/plan/tools @gouhongshen
+/pkg/sql/planner @ouyuanning @aunjgr
+/pkg/sql/planner/explain @ouyuanning @aunjgr
+/pkg/sql/planner/tools @gouhongshen
 /pkg/sql/colexec/indexjoin @aunjgr
 /pkg/sql/colexec/indexbuild @aunjgr
 /pkg/sql/colexec/intersect @aunjgr

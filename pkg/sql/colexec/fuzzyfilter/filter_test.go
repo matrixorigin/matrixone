@@ -21,7 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -92,7 +92,7 @@ func makeTestCases(t *testing.T) []fuzzyTestCase {
 
 func newArgument(typ types.Type) *FuzzyFilter {
 	arg := new(FuzzyFilter)
-	arg.PkTyp = plan.MakePlan2Type(&typ)
+	arg.PkTyp = planner.MakePlan2Type(&typ)
 	arg.Callback = func(bat *batch.Batch) error {
 		if bat == nil || bat.IsEmpty() {
 			return nil

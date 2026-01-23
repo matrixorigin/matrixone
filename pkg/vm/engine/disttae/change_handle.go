@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -28,14 +29,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"go.uber.org/zap"
-	"sync"
 )
 
 const DefaultLoadParallism = 20
@@ -353,7 +353,7 @@ func (h *CheckpointChangesHandle) Next(
 		bat := batch.NewWithSize(len(tblDef.Cols))
 		for i, col := range tblDef.Cols {
 			bat.Attrs = append(bat.Attrs, col.Name)
-			typ := plan2.ExprType2Type(&col.Typ)
+			typ := planner.ExprType2Type(&col.Typ)
 			bat.Vecs[i] = vector.NewVec(typ)
 		}
 		return bat

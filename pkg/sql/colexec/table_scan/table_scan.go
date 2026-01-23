@@ -21,7 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -56,7 +56,7 @@ func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
 		tableScan.ctr.buf = batch.NewOffHeapWithSize(len(tableScan.Types))
 		tableScan.ctr.buf.Attrs = append(tableScan.ctr.buf.Attrs, tableScan.Attrs...)
 		for i := range tableScan.Types {
-			tableScan.ctr.buf.Vecs[i] = vector.NewOffHeapVecWithType(plan.MakeTypeByPlan2Type(tableScan.Types[i]))
+			tableScan.ctr.buf.Vecs[i] = vector.NewOffHeapVecWithType(planner.MakeTypeByPlan2Type(tableScan.Types[i]))
 		}
 	}
 	return

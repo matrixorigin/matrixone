@@ -276,7 +276,7 @@ type AccountIdResolver func(accountName string) (uint32, error)
 //   - If account_id is not found, keeps the original account = 'xxx' condition
 //
 // For non-system accounts:
-//   - No conversion is performed because account_id filter is already added in tablescan during plan building. QueryBuiler::buildTable pkg/sql/plan/query_builder.go:4889
+//   - No conversion is performed because account_id filter is already added in tablescan during plan building. QueryBuiler::buildTable pkg/sql/planner/query_builder.go:4889
 //
 // tableAliasMap is a map of table names/aliases that refer to statement_info or metric table. If nil, only checks for unqualified column names
 // or table name "statement_info"/"metric". This map is used to verify if table-qualified column names (e.g., s.account, m.account) refer to statement_info or metric.

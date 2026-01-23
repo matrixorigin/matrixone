@@ -32,8 +32,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/parquet-go/parquet-go"
@@ -87,7 +88,7 @@ func (h *ParquetHandler) openFile(param *ExternalParam) error {
 	case param.Extern.Local:
 		return moerr.NewNYI(param.Ctx, "load parquet local")
 	default:
-		fs, readPath, err := plan.GetForETLWithType(param.Extern, param.Fileparam.Filepath)
+		fs, readPath, err := planner.GetForETLWithType(param.Extern, param.Fileparam.Filepath)
 		if err != nil {
 			return err
 		}

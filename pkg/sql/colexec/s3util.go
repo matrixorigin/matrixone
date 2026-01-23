@@ -132,7 +132,7 @@ func GetSequmsAttrsSortKeyIdxFromTableDef(
 	// the condition of sortIdx == -1 may be unnecessary.
 	if sortKeyIdx == -1 && tableDef.ClusterBy != nil {
 		// the rowId column has been excluded from the TableDef of the target table for the insert statements(insert,load).
-		// link: pkg/sql/plan/build_constraint_util.go --> func setTableExprToDmlTableInfo,
+		// link: pkg/sql/planner/build_constraint_util.go --> func setTableExprToDmlTableInfo,
 		// and the sortKeyIdx position can be directly obtained by using a name that matches the sorting key.
 		for idx, colDef := range tableDef.Cols {
 			if colDef.Name == tableDef.ClusterBy.Name {

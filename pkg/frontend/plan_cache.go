@@ -17,8 +17,8 @@ package frontend
 import (
 	"container/list"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
 type cachedPlan struct {

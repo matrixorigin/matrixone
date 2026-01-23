@@ -43,7 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil/testengine"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -155,7 +155,7 @@ func generateScopeCases(t *testing.T, testCases []string) []*Scope {
 		proc.Base.TxnClient = txnCli
 		proc.Base.TxnOperator = txnOp
 		e, _, compilerCtx := testengine.New(defines.AttachAccountId(context.Background(), catalog.System_Account))
-		opt := plan2.NewBaseOptimizer(compilerCtx)
+		opt := planner.NewBaseOptimizer(compilerCtx)
 		ctx := compilerCtx.GetContext()
 		stmts, err := mysql.Parse(ctx, sql, 1)
 		require.NoError(t1, err)
@@ -304,7 +304,7 @@ func TestCompileExternValueScan(t *testing.T) {
 	testCompile := NewMockCompile(t)
 	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001"}, engine.Node{Addr: "cn2:6001"}}
 	testCompile.addr = "cn1:6001"
-	testCompile.execType = plan2.ExecTypeAP_MULTICN
+	testCompile.execType = planner.ExecTypeAP_MULTICN
 	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
 	param := &tree.ExternParam{
 		ExParamConst: tree.ExParamConst{
@@ -324,7 +324,7 @@ func TestCompileExternScanParallelWrite(t *testing.T) {
 	testCompile := NewMockCompile(t)
 	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001", Mcpu: 4}, engine.Node{Addr: "cn2:6001", Mcpu: 4}}
 	testCompile.addr = "cn1:6001"
-	testCompile.execType = plan2.ExecTypeAP_MULTICN
+	testCompile.execType = planner.ExecTypeAP_MULTICN
 	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
 	param := &tree.ExternParam{
 		ExParamConst: tree.ExParamConst{
@@ -345,7 +345,7 @@ func TestCompileExternScanParallelReadWrite(t *testing.T) {
 	testCompile := NewMockCompile(t)
 	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001", Mcpu: 4}, engine.Node{Addr: "cn2:6001", Mcpu: 4}}
 	testCompile.addr = "cn1:6001"
-	testCompile.execType = plan2.ExecTypeAP_MULTICN
+	testCompile.execType = planner.ExecTypeAP_MULTICN
 	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
 	ctx := context.TODO()
 	param := &tree.ExternParam{
@@ -624,7 +624,7 @@ func TestBuildReadersBloomFilterHint(t *testing.T) {
 		c := NewMockCompile(t)
 		c.proc = proc
 		// Use MakeFalseExpr to make emptyScan = true, skipping getRelData
-		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
+		s.DataSource.FilterList = []*plan.Expr{planner.MakeFalseExpr()}
 		s.DataSource.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{}
 
 		readers, err := s.buildReaders(c)
@@ -657,7 +657,7 @@ func TestBuildReadersBloomFilterHint(t *testing.T) {
 
 		c := NewMockCompile(t)
 		c.proc = proc
-		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
+		s.DataSource.FilterList = []*plan.Expr{planner.MakeFalseExpr()}
 
 		readers, err := s.buildReaders(c)
 		require.NoError(t, err)
@@ -691,7 +691,7 @@ func TestBuildReadersBloomFilterHint(t *testing.T) {
 
 		c := NewMockCompile(t)
 		c.proc = proc
-		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
+		s.DataSource.FilterList = []*plan.Expr{planner.MakeFalseExpr()}
 
 		readers, err := s.buildReaders(c)
 		require.NoError(t, err)
@@ -727,7 +727,7 @@ func TestBuildReadersBloomFilterHint(t *testing.T) {
 
 		c := NewMockCompile(t)
 		c.proc = proc
-		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
+		s.DataSource.FilterList = []*plan.Expr{planner.MakeFalseExpr()}
 
 		readers, err := s.buildReaders(c)
 		require.NoError(t, err)
@@ -761,7 +761,7 @@ func TestBuildReadersBloomFilterHint(t *testing.T) {
 
 		c := NewMockCompile(t)
 		c.proc = proc
-		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
+		s.DataSource.FilterList = []*plan.Expr{planner.MakeFalseExpr()}
 
 		readers, err := s.buildReaders(c)
 		require.NoError(t, err)
@@ -796,7 +796,7 @@ func TestBuildReadersBloomFilterHint(t *testing.T) {
 
 		c := NewMockCompile(t)
 		c.proc = proc
-		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
+		s.DataSource.FilterList = []*plan.Expr{planner.MakeFalseExpr()}
 
 		readers, err := s.buildReaders(c)
 		require.NoError(t, err)
@@ -831,7 +831,7 @@ func TestBuildReadersBloomFilterHint(t *testing.T) {
 
 		c := NewMockCompile(t)
 		c.proc = proc
-		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
+		s.DataSource.FilterList = []*plan.Expr{planner.MakeFalseExpr()}
 
 		readers, err := s.buildReaders(c)
 		require.NoError(t, err)

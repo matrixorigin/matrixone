@@ -20,20 +20,18 @@ import (
 	"time"
 
 	"github.com/golang/mock/gomock"
-	"github.com/prashantv/gostub"
-	"github.com/smartystreets/goconvey/convey"
-	"github.com/stretchr/testify/assert"
-
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
-	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/prashantv/gostub"
+	"github.com/smartystreets/goconvey/convey"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestScope_AlterTableInplace(t *testing.T) {
@@ -44,7 +42,7 @@ func TestScope_AlterTableInplace(t *testing.T) {
 			{
 				ColId: 0,
 				Name:  "deptno",
-				Alg:   plan2.CompressType_Lz4,
+				Alg:   plan.CompressType_Lz4,
 				Typ: plan.Type{
 					Id:          27,
 					NotNullable: false,
@@ -52,7 +50,7 @@ func TestScope_AlterTableInplace(t *testing.T) {
 					Width:       32,
 					Scale:       -1,
 				},
-				Default: &plan2.Default{},
+				Default: &plan.Default{},
 				NotNull: true,
 				Primary: true,
 				Pkidx:   0,
@@ -60,7 +58,7 @@ func TestScope_AlterTableInplace(t *testing.T) {
 			{
 				ColId: 1,
 				Name:  "dname",
-				Alg:   plan2.CompressType_Lz4,
+				Alg:   plan.CompressType_Lz4,
 				Typ: plan.Type{
 					Id:          61,
 					NotNullable: false,
@@ -68,7 +66,7 @@ func TestScope_AlterTableInplace(t *testing.T) {
 					Width:       15,
 					Scale:       0,
 				},
-				Default: &plan2.Default{},
+				Default: &plan.Default{},
 				NotNull: false,
 				Primary: false,
 				Pkidx:   0,
@@ -76,7 +74,7 @@ func TestScope_AlterTableInplace(t *testing.T) {
 			{
 				ColId: 2,
 				Name:  "loc",
-				Alg:   plan2.CompressType_Lz4,
+				Alg:   plan.CompressType_Lz4,
 				Typ: plan.Type{
 					Id:          61,
 					NotNullable: false,
@@ -84,7 +82,7 @@ func TestScope_AlterTableInplace(t *testing.T) {
 					Width:       50,
 					Scale:       0,
 				},
-				Default: &plan2.Default{},
+				Default: &plan.Default{},
 				NotNull: false,
 				Primary: false,
 				Pkidx:   0,
@@ -105,7 +103,7 @@ func TestScope_AlterTableInplace(t *testing.T) {
 				TableExist:     true,
 			},
 		},
-		Defs: []*plan2.TableDef_DefType{
+		Defs: []*plan.TableDef_DefType{
 			{
 				Def: &plan.TableDef_DefType_Properties{
 					Properties: &plan.PropertiesDef{
@@ -121,18 +119,18 @@ func TestScope_AlterTableInplace(t *testing.T) {
 		},
 	}
 
-	alterTable := &plan2.AlterTable{
+	alterTable := &plan.AlterTable{
 		Database: "test",
 		TableDef: tableDef,
-		Actions: []*plan2.AlterTable_Action{
+		Actions: []*plan.AlterTable_Action{
 			{
-				Action: &plan2.AlterTable_Action_AddIndex{
-					AddIndex: &plan2.AlterTableAddIndex{
+				Action: &plan.AlterTable_Action_AddIndex{
+					AddIndex: &plan.AlterTableAddIndex{
 						DbName:                "test",
 						TableName:             "dept",
 						OriginTablePrimaryKey: "deptno",
 						IndexTableExist:       true,
-						IndexInfo: &plan2.CreateTable{
+						IndexInfo: &plan.CreateTable{
 							TableDef: &plan.TableDef{
 								Indexes: []*plan.IndexDef{
 									{
@@ -150,7 +148,7 @@ func TestScope_AlterTableInplace(t *testing.T) {
 									Cols: []*plan.ColDef{
 										{
 											Name: "__mo_index_idx_col",
-											Alg:  plan2.CompressType_Lz4,
+											Alg:  plan.CompressType_Lz4,
 											Typ: plan.Type{
 												Id:          61,
 												NotNullable: false,
@@ -159,14 +157,14 @@ func TestScope_AlterTableInplace(t *testing.T) {
 												Scale:       0,
 											},
 											NotNull: false,
-											Default: &plan2.Default{
+											Default: &plan.Default{
 												NullAbility: false,
 											},
 											Pkidx: 0,
 										},
 										{
 											Name: "__mo_index_pri_col",
-											Alg:  plan2.CompressType_Lz4,
+											Alg:  plan.CompressType_Lz4,
 											Typ: plan.Type{
 												Id:          27,
 												NotNullable: false,
@@ -175,13 +173,13 @@ func TestScope_AlterTableInplace(t *testing.T) {
 												Scale:       -1,
 											},
 											NotNull: false,
-											Default: &plan2.Default{
+											Default: &plan.Default{
 												NullAbility: false,
 											},
 											Pkidx: 0,
 										},
 									},
-									Pkey: &plan2.PrimaryKeyDef{
+									Pkey: &plan.PrimaryKeyDef{
 										PkeyColName: "__mo_index_idx_col",
 										Names:       []string{"__mo_index_idx_col"},
 									},
@@ -195,10 +193,10 @@ func TestScope_AlterTableInplace(t *testing.T) {
 	}
 
 	cplan := &plan.Plan{
-		Plan: &plan2.Plan_Ddl{
-			Ddl: &plan2.DataDefinition{
-				DdlType: plan2.DataDefinition_ALTER_TABLE,
-				Definition: &plan2.DataDefinition_AlterTable{
+		Plan: &plan.Plan_Ddl{
+			Ddl: &plan.DataDefinition{
+				DdlType: plan.DataDefinition_ALTER_TABLE,
+				Definition: &plan.DataDefinition_AlterTable{
 					AlterTable: alterTable,
 				},
 			},
@@ -431,7 +429,7 @@ func TestScope_AlterTableCopy(t *testing.T) {
 			{
 				ColId: 0,
 				Name:  "deptno",
-				Alg:   plan2.CompressType_Lz4,
+				Alg:   plan.CompressType_Lz4,
 				Typ: plan.Type{
 					Id:          27,
 					NotNullable: false,
@@ -439,7 +437,7 @@ func TestScope_AlterTableCopy(t *testing.T) {
 					Width:       32,
 					Scale:       -1,
 				},
-				Default: &plan2.Default{},
+				Default: &plan.Default{},
 				NotNull: true,
 				Primary: true,
 				Pkidx:   0,
@@ -447,7 +445,7 @@ func TestScope_AlterTableCopy(t *testing.T) {
 			{
 				ColId: 1,
 				Name:  "dname",
-				Alg:   plan2.CompressType_Lz4,
+				Alg:   plan.CompressType_Lz4,
 				Typ: plan.Type{
 					Id:          61,
 					NotNullable: false,
@@ -455,7 +453,7 @@ func TestScope_AlterTableCopy(t *testing.T) {
 					Width:       15,
 					Scale:       0,
 				},
-				Default: &plan2.Default{},
+				Default: &plan.Default{},
 				NotNull: false,
 				Primary: false,
 				Pkidx:   0,
@@ -463,7 +461,7 @@ func TestScope_AlterTableCopy(t *testing.T) {
 			{
 				ColId: 2,
 				Name:  "loc",
-				Alg:   plan2.CompressType_Lz4,
+				Alg:   plan.CompressType_Lz4,
 				Typ: plan.Type{
 					Id:          61,
 					NotNullable: false,
@@ -471,7 +469,7 @@ func TestScope_AlterTableCopy(t *testing.T) {
 					Width:       50,
 					Scale:       0,
 				},
-				Default: &plan2.Default{},
+				Default: &plan.Default{},
 				NotNull: false,
 				Primary: false,
 				Pkidx:   0,
@@ -492,7 +490,7 @@ func TestScope_AlterTableCopy(t *testing.T) {
 				TableExist:     true,
 			},
 		},
-		Defs: []*plan2.TableDef_DefType{
+		Defs: []*plan.TableDef_DefType{
 			{
 				Def: &plan.TableDef_DefType_Properties{
 					Properties: &plan.PropertiesDef{
@@ -515,7 +513,7 @@ func TestScope_AlterTableCopy(t *testing.T) {
 			{
 				ColId: 1,
 				Name:  "deptno",
-				Alg:   plan2.CompressType_Lz4,
+				Alg:   plan.CompressType_Lz4,
 				Typ: plan.Type{
 					Id:          27,
 					NotNullable: false,
@@ -523,7 +521,7 @@ func TestScope_AlterTableCopy(t *testing.T) {
 					Width:       32,
 					Scale:       -1,
 				},
-				Default: &plan2.Default{},
+				Default: &plan.Default{},
 				NotNull: true,
 				Primary: true,
 				Pkidx:   0,
@@ -531,7 +529,7 @@ func TestScope_AlterTableCopy(t *testing.T) {
 			{
 				ColId: 2,
 				Name:  "dname",
-				Alg:   plan2.CompressType_Lz4,
+				Alg:   plan.CompressType_Lz4,
 				Typ: plan.Type{
 					Id:          61,
 					NotNullable: false,
@@ -539,7 +537,7 @@ func TestScope_AlterTableCopy(t *testing.T) {
 					Width:       20,
 					Scale:       0,
 				},
-				Default: &plan2.Default{},
+				Default: &plan.Default{},
 				NotNull: false,
 				Primary: false,
 				Pkidx:   0,
@@ -547,7 +545,7 @@ func TestScope_AlterTableCopy(t *testing.T) {
 			{
 				ColId: 3,
 				Name:  "loc",
-				Alg:   plan2.CompressType_Lz4,
+				Alg:   plan.CompressType_Lz4,
 				Typ: plan.Type{
 					Id:          61,
 					NotNullable: false,
@@ -555,7 +553,7 @@ func TestScope_AlterTableCopy(t *testing.T) {
 					Width:       50,
 					Scale:       0,
 				},
-				Default: &plan2.Default{},
+				Default: &plan.Default{},
 				NotNull: false,
 				Primary: false,
 				Pkidx:   0,
@@ -564,7 +562,7 @@ func TestScope_AlterTableCopy(t *testing.T) {
 				ColId:  4,
 				Name:   "__mo_rowid",
 				Hidden: true,
-				Alg:    plan2.CompressType_Lz4,
+				Alg:    plan.CompressType_Lz4,
 				Typ: plan.Type{
 					Id:          101,
 					NotNullable: true,
@@ -573,7 +571,7 @@ func TestScope_AlterTableCopy(t *testing.T) {
 					Scale:       0,
 					Table:       "dept",
 				},
-				Default: &plan2.Default{},
+				Default: &plan.Default{},
 				NotNull: false,
 				Primary: false,
 				Pkidx:   0,
@@ -596,7 +594,7 @@ func TestScope_AlterTableCopy(t *testing.T) {
 				TableExist:     true,
 			},
 		},
-		Defs: []*plan2.TableDef_DefType{
+		Defs: []*plan.TableDef_DefType{
 			{
 				Def: &plan.TableDef_DefType_Properties{
 					Properties: &plan.PropertiesDef{
@@ -612,17 +610,17 @@ func TestScope_AlterTableCopy(t *testing.T) {
 		},
 	}
 
-	alterTable := &plan2.AlterTable{
+	alterTable := &plan.AlterTable{
 		Database:     "test",
 		TableDef:     tableDef,
 		CopyTableDef: copyTableDef,
 	}
 
 	cplan := &plan.Plan{
-		Plan: &plan2.Plan_Ddl{
-			Ddl: &plan2.DataDefinition{
-				DdlType: plan2.DataDefinition_ALTER_TABLE,
-				Definition: &plan2.DataDefinition_AlterTable{
+		Plan: &plan.Plan_Ddl{
+			Ddl: &plan.DataDefinition{
+				DdlType: plan.DataDefinition_ALTER_TABLE,
+				Definition: &plan.DataDefinition_AlterTable{
 					AlterTable: alterTable,
 				},
 			},

@@ -40,7 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -668,7 +668,7 @@ func (s *Scope) waitForRuntimeFilters(c *Compile) ([]*plan.Expr, bool, error) {
 				case message.RuntimeFilter_DROP:
 					return nil, true, nil
 				case message.RuntimeFilter_IN:
-					inExpr := plan2.MakeInExpr(c.proc.Ctx, spec.Expr, msg.Card, msg.Data, spec.MatchPrefix)
+					inExpr := planner.MakeInExpr(c.proc.Ctx, spec.Expr, msg.Card, msg.Data, spec.MatchPrefix)
 					runtimeInExprList = append(runtimeInExprList, inExpr)
 
 					// TODO: implement BETWEEN expression
@@ -720,7 +720,7 @@ func (s *Scope) handleRuntimeFilters(c *Compile, runtimeInExprList []*plan.Expr)
 	}
 
 	for _, e := range s.DataSource.BlockFilterList {
-		err := plan2.EvalFoldExpr(s.Proc, e, &c.filterExprExes)
+		err := planner.EvalFoldExpr(s.Proc, e, &c.filterExprExes)
 		if err != nil {
 			return nil, err
 		}
@@ -1012,7 +1012,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		return
 	}
 	for i := range s.DataSource.FilterList {
-		if plan2.IsFalseExpr(s.DataSource.FilterList[i]) {
+		if planner.IsFalseExpr(s.DataSource.FilterList[i]) {
 			emptyScan = true
 			break
 		}

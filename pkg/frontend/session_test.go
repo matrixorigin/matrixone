@@ -36,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
@@ -363,12 +362,12 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		tcc.execCtx = &ExecCtx{reqCtx: ctx, ses: ses}
 		defDBName := tcc.DefaultDatabase()
 		convey.So(defDBName, convey.ShouldEqual, "")
-		convey.So(tcc.DatabaseExists("abc", &plan2.Snapshot{TS: ts}), convey.ShouldBeTrue)
+		convey.So(tcc.DatabaseExists("abc", &plan.Snapshot{TS: ts}), convey.ShouldBeTrue)
 
-		_, _, err := tcc.getRelation("abc", "t1", nil, &plan2.Snapshot{TS: ts})
+		_, _, err := tcc.getRelation("abc", "t1", nil, &plan.Snapshot{TS: ts})
 		convey.So(err, convey.ShouldBeNil)
 
-		object, tableRef, _ := tcc.Resolve("abc", "t1", &plan2.Snapshot{TS: ts})
+		object, tableRef, _ := tcc.Resolve("abc", "t1", &plan.Snapshot{TS: ts})
 		convey.So(object, convey.ShouldNotBeNil)
 		convey.So(tableRef, convey.ShouldNotBeNil)
 
@@ -378,11 +377,11 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 				TenantId: 0,
 			},
 		}
-		object, tableRef, _ = tcc.ResolveIndexTableByRef(ref, "indexTable", &plan2.Snapshot{TS: ts})
+		object, tableRef, _ = tcc.ResolveIndexTableByRef(ref, "indexTable", &plan.Snapshot{TS: ts})
 		convey.So(object, convey.ShouldNotBeNil)
 		convey.So(tableRef, convey.ShouldNotBeNil)
 
-		stats, err := tcc.Stats(&plan2.ObjectRef{SchemaName: "abc", ObjName: "t1"}, &plan2.Snapshot{TS: ts})
+		stats, err := tcc.Stats(&plan.ObjectRef{SchemaName: "abc", ObjName: "t1"}, &plan.Snapshot{TS: ts})
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(stats, convey.ShouldBeNil)
 	})
@@ -436,7 +435,7 @@ func TestSession_ResolveTempIndexTable(t *testing.T) {
 		// In the current bug state, the code in ResolveIndexTableByRef (after my previous fix) handles nil table but throws NoSuchTable.
 		// To reproduce the original panic (if we reverted) or the "no such table" error:
 
-		_, _, err := tcc.ResolveIndexTableByRef(ref, "index_table", &plan2.Snapshot{})
+		_, _, err := tcc.ResolveIndexTableByRef(ref, "index_table", &plan.Snapshot{})
 
 		// If the index was correctly registered, we would mock it:
 		// ses.AddTempTable("db1", "index_table", "mo_index_table_real")

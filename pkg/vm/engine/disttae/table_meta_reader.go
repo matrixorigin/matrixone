@@ -27,7 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
@@ -154,8 +154,8 @@ func (r *TableMetaReader) Read(
 	outBatch.CleanOnlyData()
 
 	if isTombstone {
-		pkCol := plan2.PkColByTableDef(r.table.tableDef)
-		pkType := plan2.ExprType2Type(&pkCol.Typ)
+		pkCol := planner.PkColByTableDef(r.table.tableDef)
+		pkType := planner.ExprType2Type(&pkCol.Typ)
 
 		seqnums = []uint16{0, 1}
 		colTypes = []types.Type{types.T_Rowid.ToType(), pkType}

@@ -24,7 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
-	splan "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -183,7 +183,7 @@ func (t *combinedTxnTable) Stats(
 		return nil, err
 	}
 
-	value := splan.NewStatsInfo()
+	value := planner.NewStatsInfo()
 	for _, rel := range tables {
 		v, err := rel.Stats(ctx, sync)
 		if err != nil {

@@ -22,18 +22,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/sql/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var _ plan.CompilerContext = &CompilerContext{}
+var _ planner.CompilerContext = &CompilerContext{}
 
 type CompilerContext struct {
 	ctx       context.Context
@@ -63,7 +63,7 @@ func (c *CompilerContext) SetSnapshot(snapshot *plan.Snapshot) {
 	panic("implement me")
 }
 
-func (c *CompilerContext) InitExecuteStmtParam(execPlan *planpb.Execute) (*planpb.Plan, tree.Statement, error) {
+func (c *CompilerContext) InitExecuteStmtParam(execPlan *plan.Execute) (*plan.Plan, tree.Statement, error) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -120,7 +120,7 @@ func (e *Engine) NewCompilerContext(
 	}
 }
 
-var _ plan.CompilerContext = new(CompilerContext)
+var _ planner.CompilerContext = new(CompilerContext)
 
 func (c *CompilerContext) ResolveUdf(name string, ast []*plan.Expr) (*function.Udf, error) {
 	return nil, nil
@@ -134,7 +134,7 @@ func (*CompilerContext) Stats(obj *plan.ObjectRef, snapshot *plan.Snapshot) (*pb
 	return nil, nil
 }
 
-func (*CompilerContext) GetStatsCache() *plan.StatsCache {
+func (*CompilerContext) GetStatsCache() *planner.StatsCache {
 	return nil
 }
 
@@ -155,7 +155,7 @@ func (c *CompilerContext) DatabaseExists(name string, snapshot *plan.Snapshot) b
 	ctx := c.GetContext()
 	txnOpt := c.txnOp
 
-	if plan.IsSnapshotValid(snapshot) && snapshot.TS.Less(c.txnOp.Txn().SnapshotTS) {
+	if planner.IsSnapshotValid(snapshot) && snapshot.TS.Less(c.txnOp.Txn().SnapshotTS) {
 		txnOpt = c.txnOp.CloneSnapshotOp(*snapshot.TS)
 
 		if snapshot.Tenant != nil {
@@ -175,7 +175,7 @@ func (c *CompilerContext) GetDatabaseId(dbName string, snapshot *plan.Snapshot) 
 	ctx := c.GetContext()
 	txnOpt := c.txnOp
 
-	if plan.IsSnapshotValid(snapshot) && snapshot.TS.Less(c.txnOp.Txn().SnapshotTS) {
+	if planner.IsSnapshotValid(snapshot) && snapshot.TS.Less(c.txnOp.Txn().SnapshotTS) {
 		txnOpt = c.txnOp.CloneSnapshotOp(*snapshot.TS)
 
 		if snapshot.Tenant != nil {
@@ -231,7 +231,7 @@ func (c *CompilerContext) ResolveById(tableId uint64, snapshot *plan.Snapshot) (
 }
 
 func (c *CompilerContext) ResolveIndexTableByRef(ref *plan.ObjectRef, tblName string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
-	return c.Resolve(plan.DbNameOfObjRef(ref), tblName, snapshot)
+	return c.Resolve(planner.DbNameOfObjRef(ref), tblName, snapshot)
 }
 
 func (c *CompilerContext) Resolve(schemaName string, tableName string, snapshot *plan.Snapshot) (objRef *plan.ObjectRef, tableDef *plan.TableDef, err error) {
@@ -288,7 +288,7 @@ func (c *CompilerContext) getTableAttrs(dbName string, tableName string, snapsho
 	ctx := c.GetContext()
 	txnOpt := c.txnOp
 
-	if plan.IsSnapshotValid(snapshot) && snapshot.TS.Less(c.txnOp.Txn().SnapshotTS) {
+	if planner.IsSnapshotValid(snapshot) && snapshot.TS.Less(c.txnOp.Txn().SnapshotTS) {
 		txnOpt = c.txnOp.CloneSnapshotOp(*snapshot.TS)
 
 		if snapshot.Tenant != nil {

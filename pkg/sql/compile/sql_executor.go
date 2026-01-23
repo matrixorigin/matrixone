@@ -31,12 +31,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
@@ -390,7 +391,7 @@ func (exec *txnExecutor) Exec(
 		*tree.ShowTableNumber, *tree.ShowCreateDatabase, *tree.ShowCreateTable, *tree.ShowIndex,
 		*tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
 
-		opt := plan.NewBaseOptimizer(compileContext)
+		opt := planner.NewBaseOptimizer(compileContext)
 		optimized, err := opt.Optimize(stmt, prepared)
 		if err == nil {
 			pn = &plan.Plan{
@@ -402,7 +403,7 @@ func (exec *txnExecutor) Exec(
 			return executor.Result{}, err
 		}
 	default:
-		pn, err = plan.BuildPlan(compileContext, stmt, prepared)
+		pn, err = planner.BuildPlan(compileContext, stmt, prepared)
 	}
 
 	if err != nil {
@@ -410,7 +411,7 @@ func (exec *txnExecutor) Exec(
 	}
 
 	if prepared {
-		_, _, err := plan.ResetPreparePlan(compileContext, pn)
+		_, _, err := planner.ResetPreparePlan(compileContext, pn)
 		if err != nil {
 			return executor.Result{}, err
 		}
@@ -442,14 +443,14 @@ func (exec *txnExecutor) Exec(
 
 	if prepared {
 		c.SetBuildPlanFunc(func(ctx context.Context) (*plan.Plan, error) {
-			pn, err := plan.BuildPlan(
+			pn, err := planner.BuildPlan(
 				exec.s.getCompileContext(ctx, proc, exec.getDatabase(), lower),
 				stmts[0], true,
 			)
 			if err != nil {
 				return pn, err
 			}
-			_, _, err = plan.ResetPreparePlan(compileContext, pn)
+			_, _, err = planner.ResetPreparePlan(compileContext, pn)
 			if err != nil {
 				return pn, err
 			}
@@ -457,7 +458,7 @@ func (exec *txnExecutor) Exec(
 		})
 	} else {
 		c.SetBuildPlanFunc(func(ctx context.Context) (*plan.Plan, error) {
-			return plan.BuildPlan(
+			return planner.BuildPlan(
 				exec.s.getCompileContext(ctx, proc, exec.getDatabase(), lower),
 				stmts[0], false)
 		})

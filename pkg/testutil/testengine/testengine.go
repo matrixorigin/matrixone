@@ -17,16 +17,15 @@ package testengine
 import (
 	"context"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/defines"
-
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -38,7 +37,7 @@ func New(
 ) (
 	eng engine.Engine,
 	client client.TxnClient,
-	compilerContext plan.CompilerContext,
+	compilerContext planner.CompilerContext,
 ) {
 	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	ck := runtime.ServiceRuntime("").Clock()

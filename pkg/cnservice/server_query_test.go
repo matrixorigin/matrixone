@@ -734,7 +734,7 @@ func Test_service_handleCtlReader(t *testing.T) {
 			fields: fields{},
 			args: args{
 				ctx: ctx,
-				// more details in pkg/sql/plan/function/ctl/reader.go::handleCtlReader
+				// more details in pkg/sql/function/ctl/reader.go::handleCtlReader
 				req: &query.Request{CtlReaderRequest: &query.CtlReaderRequest{
 					Cmd:   "enable",
 					Cfg:   "force_shuffle",
@@ -821,7 +821,7 @@ func Test_service_handleRunTask(t *testing.T) {
 			fields: fields{},
 			args: args{
 				ctx: ctx,
-				// more details in pkg/sql/plan/function/ctl/reader.go::handleCtlReader
+				// more details in pkg/sql/function/ctl/reader.go::handleCtlReader
 				req: &query.Request{RunTask: &query.RunTaskRequest{
 					TaskCode: -1,
 				}},
@@ -837,7 +837,7 @@ func Test_service_handleRunTask(t *testing.T) {
 			},
 			args: args{
 				ctx: ctx,
-				// more details in pkg/sql/plan/function/ctl/reader.go::handleCtlReader
+				// more details in pkg/sql/function/ctl/reader.go::handleCtlReader
 				req: &query.Request{RunTask: &query.RunTaskRequest{
 					TaskCode: 1,
 				}},

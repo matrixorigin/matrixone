@@ -21,7 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -360,8 +360,8 @@ func (fuzzyFilter *FuzzyFilter) appendCollisionKey(proc *process.Process, idx in
 func (fuzzyFilter *FuzzyFilter) generate() error {
 	ctr := &fuzzyFilter.ctr
 	rbat := batch.NewWithSize(1)
-	rbat.SetVector(0, vector.NewVec(plan.MakeTypeByPlan2Type(fuzzyFilter.PkTyp)))
-	ctr.pass2RuntimeFilter = vector.NewVec(plan.MakeTypeByPlan2Type(fuzzyFilter.PkTyp))
+	rbat.SetVector(0, vector.NewVec(planner.MakeTypeByPlan2Type(fuzzyFilter.PkTyp)))
+	ctr.pass2RuntimeFilter = vector.NewVec(planner.MakeTypeByPlan2Type(fuzzyFilter.PkTyp))
 	ctr.rbat = rbat
 	return nil
 }

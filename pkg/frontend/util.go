@@ -30,9 +30,6 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/google/uuid"
-	"github.com/petermattis/goid"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -52,8 +49,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/petermattis/goid"
+	"go.uber.org/zap"
 )
 
 type CloseFlag struct {
@@ -279,9 +278,9 @@ func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx) (interface{}, err
 	var planExpr *plan.Expr
 	oid := resultVec.GetType().Oid
 	if oid == types.T_decimal64 || oid == types.T_decimal128 {
-		builder := plan2.NewQueryBuilder(plan.Query_SELECT, ses.GetTxnCompileCtx(), false, false)
-		bindContext := plan2.NewBindContext(builder, nil)
-		binder := plan2.NewSetVarBinder(builder, bindContext)
+		builder := planner.NewQueryBuilder(plan.Query_SELECT, ses.GetTxnCompileCtx(), false, false)
+		bindContext := planner.NewBindContext(builder, nil)
+		binder := planner.NewSetVarBinder(builder, bindContext)
 		planExpr, err = binder.BindExpr(e, 0, false)
 		if err != nil {
 			return nil, err
@@ -298,9 +297,9 @@ func GetSimpleExprValue(ctx context.Context, e tree.Expr, feSes FeSession) (inte
 		// set @a = on, type of a is bool.
 		return v.ColName(), nil
 	default:
-		builder := plan2.NewQueryBuilder(plan.Query_SELECT, feSes.GetTxnCompileCtx(), false, false)
-		bindContext := plan2.NewBindContext(builder, nil)
-		binder := plan2.NewSetVarBinder(builder, bindContext)
+		builder := planner.NewQueryBuilder(plan.Query_SELECT, feSes.GetTxnCompileCtx(), false, false)
+		bindContext := planner.NewBindContext(builder, nil)
+		binder := planner.NewSetVarBinder(builder, bindContext)
 		planExpr, err := binder.BindExpr(e, 0, false)
 		if err != nil {
 			return nil, err
@@ -325,7 +324,7 @@ func GetSimpleExprValue(ctx context.Context, e tree.Expr, feSes FeSession) (inte
 	}
 }
 
-func getValueFromVector(ctx context.Context, vec *vector.Vector, feSes FeSession, expr *plan2.Expr) (interface{}, error) {
+func getValueFromVector(ctx context.Context, vec *vector.Vector, feSes FeSession, expr *plan.Expr) (interface{}, error) {
 	if vec.IsConstNull() || vec.GetNulls().Contains(0) {
 		return nil, nil
 	}

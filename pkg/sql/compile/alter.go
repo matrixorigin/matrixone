@@ -32,7 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/idxcron"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -623,7 +623,7 @@ func (s *Scope) doAlterTable(c *Compile) error {
 		return err
 	}
 
-	if !plan2.IsFkBannedDatabase(qry.Database) {
+	if !planner.IsFkBannedDatabase(qry.Database) {
 		//update the mo_foreign_keys
 		for _, sql := range qry.UpdateFkSqls {
 			err = c.runSql(sql)
@@ -748,7 +748,7 @@ func notifyParentTableFkTableIdChange(c *Compile, fkey *plan.ForeignKeyDef, oldT
 	}
 	for _, ct := range oldCt.Cts {
 		if def, ok1 := ct.(*engine.RefChildTableDef); ok1 {
-			def.Tables = plan2.RemoveIf(def.Tables, func(id uint64) bool {
+			def.Tables = planner.RemoveIf(def.Tables, func(id uint64) bool {
 				return id == oldTableId
 			})
 		}

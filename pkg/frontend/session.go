@@ -26,9 +26,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
-
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
@@ -43,13 +40,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 var (
@@ -192,7 +191,7 @@ type Session struct {
 
 	planCache *planCache
 
-	statsCache   *plan2.StatsCache
+	statsCache   *planner.StatsCache
 	seqCurValues map[uint64]string
 
 	/*
@@ -374,7 +373,7 @@ func (ses *Session) GetProc() *process.Process {
 	return ses.proc
 }
 
-func (ses *Session) GetStatsCache() *plan2.StatsCache {
+func (ses *Session) GetStatsCache() *planner.StatsCache {
 	return ses.statsCache
 }
 
@@ -659,7 +658,7 @@ func NewSession(
 		connType:  ConnTypeUnset,
 
 		timestampMap: map[TS]time.Time{},
-		statsCache:   plan2.NewStatsCache(),
+		statsCache:   planner.NewStatsCache(),
 	}
 	atomic.StoreInt32(&ses.sqlModeNoAutoValueOnZero, -1)
 

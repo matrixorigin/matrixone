@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -293,7 +292,7 @@ func updateOldBatch(evalBatch *batch.Batch, updateExpr map[string]*plan.Expr, pr
 		if i < columnCount {
 			// update insert cols
 			if expr, exists := updateExpr[attr]; exists {
-				runExpr := plan2.DeepCopyExpr(expr)
+				runExpr := plan.DeepCopyExpr(expr)
 				resetColPos(runExpr, columnCount)
 				newVec, err := colexec.GetWritableResultFromExpression(proc, runExpr, []*batch.Batch{evalBatch})
 				if err != nil {
