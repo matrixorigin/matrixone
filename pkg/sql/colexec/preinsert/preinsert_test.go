@@ -16,6 +16,7 @@ package preinsert
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -263,6 +264,33 @@ func TestConvertZeroToNullForAutoIncr(t *testing.T) {
 	require.True(t, nulls.Contains(nsp, 1))
 	require.True(t, nulls.Contains(nsp, 2))
 	require.False(t, nulls.Contains(nsp, 3))
+}
+
+func TestShouldTreatZeroAsAutoIncr(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+
+	require.False(t, shouldTreatZeroAsAutoIncr(proc), "nil resolver should not treat 0 as auto incr")
+
+	proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		return "STRICT_TRANS_TABLES", nil
+	})
+	require.True(t, shouldTreatZeroAsAutoIncr(proc), "sql_mode without NO_AUTO_VALUE_ON_ZERO should treat 0 as auto incr")
+
+	proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		return "STRICT_TRANS_TABLES,NO_AUTO_VALUE_ON_ZERO", nil
+	})
+	require.False(t, shouldTreatZeroAsAutoIncr(proc), "sql_mode with NO_AUTO_VALUE_ON_ZERO should keep 0")
+
+	proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		return nil, errors.New("boom")
+	})
+	require.False(t, shouldTreatZeroAsAutoIncr(proc), "resolve error should keep 0")
+
+	proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		return 123, nil
+	})
+	require.False(t, shouldTreatZeroAsAutoIncr(proc), "non-string sql_mode should keep 0")
 }
 
 func TestPreInsertIsUpdate(t *testing.T) {

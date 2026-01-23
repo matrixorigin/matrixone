@@ -238,15 +238,16 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 func shouldTreatZeroAsAutoIncr(proc *proc) bool {
 	resolve := proc.GetResolveVariableFunc()
 	if resolve == nil {
-		return true
+		// internal/background proc may not have sql_mode; keep explicit 0 behavior
+		return false
 	}
 	value, err := resolve("sql_mode", true, false)
 	if err != nil {
-		return true
+		return false
 	}
 	mode, ok := value.(string)
 	if !ok {
-		return true
+		return false
 	}
 	return !strings.Contains(strings.ToUpper(mode), "NO_AUTO_VALUE_ON_ZERO")
 }
