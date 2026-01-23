@@ -414,17 +414,6 @@ func (b publicationSQLBuilder) CreateSnapshotForTableSQL(
 	)
 }
 
-// DropSnapshotSQL creates SQL for dropping a snapshot
-// Example: DROP SNAPSHOT sp1
-func (b publicationSQLBuilder) DropSnapshotSQL(
-	snapshotName string,
-) string {
-	return fmt.Sprintf(
-		PublicationSQLTemplates[PublicationDropSnapshotSqlTemplate_Idx].SQL,
-		escapeSQLIdentifier(snapshotName),
-	)
-}
-
 // DropSnapshotIfExistsSQL creates SQL for dropping a snapshot if it exists
 // Example: DROP SNAPSHOT IF EXISTS sp1
 func (b publicationSQLBuilder) DropSnapshotIfExistsSQL(
@@ -439,34 +428,6 @@ func (b publicationSQLBuilder) DropSnapshotIfExistsSQL(
 // ------------------------------------------------------------------------------------------------
 // Query mo_catalog tables SQL
 // ------------------------------------------------------------------------------------------------
-
-// QueryMoTablesSQL creates SQL for querying mo_tables
-// Supports filtering by db_name or db_name+table_name
-func (b publicationSQLBuilder) QueryMoTablesSQL(
-	accountID uint32,
-	dbName string,
-	tableName string,
-) string {
-	var conditions []string
-
-	if accountID > 0 {
-		conditions = append(conditions, fmt.Sprintf(" AND account_id = %d", accountID))
-	}
-
-	if dbName != "" {
-		conditions = append(conditions, fmt.Sprintf(" AND reldatabase = '%s'", escapeSQLString(dbName)))
-	}
-
-	if tableName != "" {
-		conditions = append(conditions, fmt.Sprintf(" AND relname = '%s'", escapeSQLString(tableName)))
-	}
-
-	whereClause := strings.Join(conditions, "")
-	return fmt.Sprintf(
-		PublicationSQLTemplates[PublicationQueryMoTablesSqlTemplate_Idx].SQL,
-		whereClause,
-	)
-}
 
 // QueryMoDatabasesSQL creates SQL for querying mo_databases
 // Supports filtering by db_name and snapshot
@@ -496,34 +457,6 @@ func (b publicationSQLBuilder) QueryMoDatabasesSQL(
 	return fmt.Sprintf(
 		PublicationSQLTemplates[PublicationQueryMoDatabasesSqlTemplate_Idx].SQL,
 		snapshotClause,
-		whereClause,
-	)
-}
-
-// QueryMoColumnsSQL creates SQL for querying mo_columns
-// Supports filtering by account_id, db_name, and table_name
-func (b publicationSQLBuilder) QueryMoColumnsSQL(
-	accountID uint32,
-	dbName string,
-	tableName string,
-) string {
-	var conditions []string
-
-	if accountID > 0 {
-		conditions = append(conditions, fmt.Sprintf(" AND account_id = %d", accountID))
-	}
-
-	if dbName != "" {
-		conditions = append(conditions, fmt.Sprintf(" AND att_database = '%s'", escapeSQLString(dbName)))
-	}
-
-	if tableName != "" {
-		conditions = append(conditions, fmt.Sprintf(" AND att_relname = '%s'", escapeSQLString(tableName)))
-	}
-
-	whereClause := strings.Join(conditions, "")
-	return fmt.Sprintf(
-		PublicationSQLTemplates[PublicationQueryMoColumnsSqlTemplate_Idx].SQL,
 		whereClause,
 	)
 }
@@ -558,60 +491,6 @@ func (b publicationSQLBuilder) QueryMoIndexesSQL(
 		PublicationSQLTemplates[PublicationQueryMoIndexesSqlTemplate_Idx].SQL,
 		whereClause,
 	)
-}
-
-// QueryMoColumnsWithJoinSQL creates SQL for querying mo_columns with JOIN to mo_tables
-// This allows filtering by db_name and table_name directly using mo_tables fields
-// Useful when you need to ensure consistency between mo_columns and mo_tables
-func (b publicationSQLBuilder) QueryMoColumnsWithJoinSQL(
-	accountID uint32,
-	dbName string,
-	tableName string,
-) string {
-	var conditions []string
-
-	if accountID > 0 {
-		conditions = append(conditions, fmt.Sprintf(" AND c.account_id = %d", accountID))
-		conditions = append(conditions, fmt.Sprintf(" AND t.account_id = %d", accountID))
-	}
-
-	if dbName != "" {
-		conditions = append(conditions, fmt.Sprintf(" AND t.reldatabase = '%s'", escapeSQLString(dbName)))
-	}
-
-	if tableName != "" {
-		conditions = append(conditions, fmt.Sprintf(" AND t.relname = '%s'", escapeSQLString(tableName)))
-	}
-
-	whereClause := strings.Join(conditions, "")
-	return `SELECT ` +
-		`c.account_id, ` +
-		`c.att_database_id, ` +
-		`c.att_database, ` +
-		`c.att_relname_id, ` +
-		`c.att_relname, ` +
-		`c.attname, ` +
-		`c.atttyp, ` +
-		`c.attnum, ` +
-		`c.att_length, ` +
-		`c.attnotnull, ` +
-		`c.atthasdef, ` +
-		`c.att_default, ` +
-		`c.attisdropped, ` +
-		`c.att_constraint_type, ` +
-		`c.att_is_unsigned, ` +
-		`c.att_is_auto_increment, ` +
-		`c.att_comment, ` +
-		`c.att_is_hidden, ` +
-		`c.att_has_update, ` +
-		`c.att_update, ` +
-		`c.att_has_cluster_by, ` +
-		`c.att_cluster_by, ` +
-		`c.att_seqnum, ` +
-		`c.att_enum_values ` +
-		`FROM mo_catalog.mo_columns AS c ` +
-		`INNER JOIN mo_catalog.mo_tables AS t ON c.att_relname_id = t.rel_id ` +
-		`WHERE 1=1` + whereClause
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -774,23 +653,6 @@ func (b publicationSQLBuilder) UpdateMoCcprLogSQL(
 	)
 }
 
-// UpdateMoCcprLogStateSQL creates SQL for updating iteration_state, iteration_lsn and cn_uuid in mo_ccpr_log
-// Example: UPDATE mo_catalog.mo_ccpr_log SET iteration_state = 0, iteration_lsn = 1000, cn_uuid = 'uuid' WHERE task_id = 1
-func (b publicationSQLBuilder) UpdateMoCcprLogStateSQL(
-	taskID uint64,
-	iterationState int8,
-	iterationLSN uint64,
-	cnUUID string,
-) string {
-	return fmt.Sprintf(
-		PublicationSQLTemplates[PublicationUpdateMoCcprLogStateSqlTemplate_Idx].SQL,
-		iterationState,
-		iterationLSN,
-		escapeSQLString(cnUUID),
-		taskID,
-	)
-}
-
 // QueryMoCcprLogStateBeforeUpdateSQL creates SQL for querying state, iteration_state, iteration_lsn before update
 // Example: SELECT state, iteration_state, iteration_lsn FROM mo_catalog.mo_ccpr_log WHERE task_id = 1
 func (b publicationSQLBuilder) QueryMoCcprLogStateBeforeUpdateSQL(taskID uint64) string {
@@ -816,19 +678,6 @@ func (b publicationSQLBuilder) UpdateMoCcprLogNoStateSQL(
 		iterationLSN,
 		escapeSQLString(contextJSON),
 		escapeSQLString(errorMessage),
-		taskID,
-	)
-}
-
-// UpdateMoCcprLogIterationStateOnlySQL creates SQL for updating only iteration_state in mo_ccpr_log
-// Example: UPDATE mo_catalog.mo_ccpr_log SET iteration_state = 1 WHERE task_id = 1
-func (b publicationSQLBuilder) UpdateMoCcprLogIterationStateOnlySQL(
-	taskID uint64,
-	iterationState int8,
-) string {
-	return fmt.Sprintf(
-		PublicationSQLTemplates[PublicationUpdateMoCcprLogIterationStateOnlySqlTemplate_Idx].SQL,
-		iterationState,
 		taskID,
 	)
 }
