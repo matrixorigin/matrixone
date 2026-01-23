@@ -14,6 +14,13 @@ Insert into auto_increment01 values(1);
 Select * from auto_increment01;
 drop table auto_increment01;
 
+-- auto_increment insert 0 should allocate new id when NO_AUTO_VALUE_ON_ZERO is not set
+drop table if exists auto_increment_zero;
+create table auto_increment_zero(id int auto_increment primary key, val int);
+insert into auto_increment_zero values (0,1),(0,2);
+select * from auto_increment_zero order by id;
+drop table auto_increment_zero;
+
 
 -- auto_increment > 0
 Drop table if exists auto_increment02;

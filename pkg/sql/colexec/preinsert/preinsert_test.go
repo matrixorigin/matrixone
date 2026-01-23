@@ -22,6 +22,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -229,6 +230,39 @@ func TestPreInsertHasAutoCol(t *testing.T) {
 	argument1.Free(proc, false, nil)
 	proc.Free()
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
+}
+
+func TestConvertZeroToNullForAutoIncr(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+
+	vec := testutil.MakeInt64Vector([]int64{0, 1, 0, 2}, []uint64{1}, proc.Mp())
+	bat := batch.NewWithSize(1)
+	bat.SetVector(0, vec)
+	bat.SetRowCount(vec.Length())
+
+	pre := &PreInsert{
+		ColOffset: 0,
+		TableDef: &plan.TableDef{
+			Cols: []*plan.ColDef{
+				{
+					Name: "id",
+					Typ: plan.Type{
+						Id:       int32(types.T_int64),
+						AutoIncr: true,
+					},
+				},
+			},
+		},
+	}
+
+	convertZeroToNull(bat, pre)
+
+	nsp := vec.GetNulls()
+	require.True(t, nulls.Contains(nsp, 0))
+	require.True(t, nulls.Contains(nsp, 1))
+	require.True(t, nulls.Contains(nsp, 2))
+	require.False(t, nulls.Contains(nsp, 3))
 }
 
 func TestPreInsertIsUpdate(t *testing.T) {
