@@ -81,6 +81,8 @@ func (h *ParquetHandler) getDataByRow(bat *batch.Batch, param *ExternalParam, pr
 		param.Fileparam.FileFin++
 		if param.Fileparam.FileFin >= param.Fileparam.FileCnt {
 			param.Fileparam.End = true
+			// Save parquet schema for nested columns
+			h.saveNestedSchemas(param, proc)
 		}
 	}
 
