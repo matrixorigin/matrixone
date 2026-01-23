@@ -213,13 +213,13 @@ type TaskEntry struct {
 	DropAt            *time.Time // drop timestamp from mo_ccpr_log
 }
 
-func taskEntryLess(a, b *TaskEntry) bool {
+func taskEntryLess(a, b TaskEntry) bool {
 	return a.TaskID < b.TaskID
 }
 
 // PublicationTaskExecutor manages publication tasks
 type PublicationTaskExecutor struct {
-	tasks                    *btree.BTreeG[*TaskEntry]
+	tasks                    *btree.BTreeG[TaskEntry]
 	taskMu                   sync.RWMutex
 	mp                       *mpool.MPool
 	cnUUID                   string
@@ -422,48 +422,46 @@ func (exec *PublicationTaskExecutor) run(ctx context.Context) {
 	}
 }
 
-func (exec *PublicationTaskExecutor) getTask(taskID uint64) (*TaskEntry, bool) {
+func (exec *PublicationTaskExecutor) getTask(taskID uint64) (TaskEntry, bool) {
 	exec.taskMu.RLock()
 	defer exec.taskMu.RUnlock()
-	return exec.tasks.Get(&TaskEntry{TaskID: taskID})
+	return exec.tasks.Get(TaskEntry{TaskID: taskID})
 }
 
 // GetTask returns a copy of the task entry for the given taskID.
 // This is a public method for testing purposes.
-func (exec *PublicationTaskExecutor) GetTask(taskID uint64) (*TaskEntry, bool) {
+func (exec *PublicationTaskExecutor) GetTask(taskID uint64) (TaskEntry, bool) {
 	exec.taskMu.RLock()
 	defer exec.taskMu.RUnlock()
-	task, ok := exec.tasks.Get(&TaskEntry{TaskID: taskID})
+	task, ok := exec.tasks.Get(TaskEntry{TaskID: taskID})
 	if !ok {
-		return nil, false
+		return TaskEntry{}, false
 	}
-	// Return a copy to avoid race conditions
-	taskCopy := *task
-	return &taskCopy, true
+	return task, true
 }
 
-func (exec *PublicationTaskExecutor) setTask(task *TaskEntry) {
+func (exec *PublicationTaskExecutor) setTask(task TaskEntry) {
 	exec.taskMu.Lock()
 	defer exec.taskMu.Unlock()
 	exec.tasks.Set(task)
 }
 
-func (exec *PublicationTaskExecutor) deleteTaskEntry(task *TaskEntry) {
+func (exec *PublicationTaskExecutor) deleteTaskEntry(task TaskEntry) {
 	exec.taskMu.Lock()
 	defer exec.taskMu.Unlock()
 	exec.tasks.Delete(task)
 }
 
-func (exec *PublicationTaskExecutor) getAllTasks() []*TaskEntry {
+func (exec *PublicationTaskExecutor) getAllTasks() []TaskEntry {
 	exec.taskMu.RLock()
 	defer exec.taskMu.RUnlock()
 	items := exec.tasks.Items()
 	return items
 }
 
-func (exec *PublicationTaskExecutor) getCandidateTasks() []*TaskEntry {
+func (exec *PublicationTaskExecutor) getCandidateTasks() []TaskEntry {
 	allTasks := exec.getAllTasks()
-	candidates := make([]*TaskEntry, 0)
+	candidates := make([]TaskEntry, 0)
 	for _, task := range allTasks {
 		// Only include tasks that subscription state is running and iteration state is completed
 		if task.SubscriptionState == SubscriptionStateRunning && task.State == IterationStateCompleted {
@@ -693,7 +691,7 @@ func (exec *PublicationTaskExecutor) addOrUpdateTask(
 	task, ok := exec.getTask(taskID)
 	if !ok {
 		logutil.Infof("Publication-Task add task %v", taskID)
-		task = &TaskEntry{
+		task = TaskEntry{
 			TaskID:            taskID,
 			LSN:               lsn,
 			State:             state,
@@ -747,7 +745,7 @@ func (exec *PublicationTaskExecutor) updateNonErrorTasksToComplete(ctx context.C
 
 func (exec *PublicationTaskExecutor) GCInMemoryTask(threshold time.Duration) {
 	tasks := exec.getAllTasks()
-	tasksToDelete := make([]*TaskEntry, 0)
+	tasksToDelete := make([]TaskEntry, 0)
 	now := time.Now()
 	gcTime := now.Add(-threshold)
 	for _, task := range tasks {

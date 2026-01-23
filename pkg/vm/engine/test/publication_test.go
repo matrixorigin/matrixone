@@ -4519,7 +4519,7 @@ func TestCCPRExecutorWithGC(t *testing.T) {
 
 	for time.Since(startTime2) < maxWaitTime2 {
 		taskEntry, ok := exec.GetTask(taskID)
-		if ok && taskEntry != nil && taskEntry.DropAt != nil {
+		if ok && taskEntry.DropAt != nil {
 			// Verify drop_at is approximately 2 hours ago (allow some tolerance)
 			expectedTime := dropAtTime
 			actualTime := *taskEntry.DropAt
