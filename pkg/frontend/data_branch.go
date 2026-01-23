@@ -70,6 +70,8 @@ const (
 	diffUpdate = "UPDATE"
 )
 
+var diffTempTableSeq uint64
+
 const (
 	lcaEmpty = iota
 	lcaOther
@@ -78,7 +80,7 @@ const (
 )
 
 const (
-	maxSqlBatchCnt  = objectio.BlockMaxRows
+	maxSqlBatchCnt  = objectio.BlockMaxRows * 10
 	maxSqlBatchSize = mpool.MB * 32
 )
 
@@ -976,6 +978,7 @@ func tryFlushDeletesOrInserts(
 	newValsLen int,
 	newRowCnt int,
 	deleteByFullRow bool,
+	pkInfo *pkBatchInfo,
 	deleteCnt *int,
 	deletesBuf *bytes.Buffer,
 	insertCnt *int,
@@ -985,7 +988,7 @@ func tryFlushDeletesOrInserts(
 
 	flushDeletes := func() error {
 		if err = flushSqlValues(
-			ctx, ses, bh, tblStuff, deletesBuf, true, deleteByFullRow, writeFile,
+			ctx, ses, bh, tblStuff, deletesBuf, true, deleteByFullRow, pkInfo, writeFile,
 		); err != nil {
 			return err
 		}
@@ -997,7 +1000,7 @@ func tryFlushDeletesOrInserts(
 
 	flushInserts := func() error {
 		if err = flushSqlValues(
-			ctx, ses, bh, tblStuff, insertBuf, false, false, writeFile,
+			ctx, ses, bh, tblStuff, insertBuf, false, false, pkInfo, writeFile,
 		); err != nil {
 			return err
 		}
@@ -1043,12 +1046,130 @@ func tryFlushDeletesOrInserts(
 	return nil
 }
 
+type pkBatchInfo struct {
+	dbName       string
+	baseTable    string
+	deleteTable  string
+	insertTable  string
+	pkNames      []string
+	visibleNames []string
+}
+
+func newPKBatchInfo(ctx context.Context, ses *Session, tblStuff tableStuff) *pkBatchInfo {
+	if tblStuff.def.pkKind == fakeKind {
+		return nil
+	}
+
+	pkNames := make([]string, len(tblStuff.def.pkColIdxes))
+	for i, idx := range tblStuff.def.pkColIdxes {
+		pkNames[i] = tblStuff.def.colNames[idx]
+	}
+
+	visibleNames := make([]string, len(tblStuff.def.visibleIdxes))
+	for i, idx := range tblStuff.def.visibleIdxes {
+		visibleNames[i] = tblStuff.def.colNames[idx]
+	}
+
+	seq := atomic.AddUint64(&diffTempTableSeq, 1)
+	sessionTag := strings.ReplaceAll(ses.GetUUIDString(), "-", "")
+	return &pkBatchInfo{
+		dbName:       tblStuff.baseRel.GetTableDef(ctx).DbName,
+		baseTable:    tblStuff.baseRel.GetTableName(),
+		deleteTable:  fmt.Sprintf("__mo_diff_del_%s_%d", sessionTag, seq),
+		insertTable:  fmt.Sprintf("__mo_diff_ins_%s_%d", sessionTag, seq),
+		pkNames:      pkNames,
+		visibleNames: visibleNames,
+	}
+}
+
+func qualifiedTableName(dbName, tableName string) string {
+	return fmt.Sprintf("%s.%s", dbName, tableName)
+}
+
+func execSQLStatements(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	writeFile func([]byte) error,
+	stmts []string,
+) error {
+	for _, stmt := range stmts {
+		if stmt == "" {
+			continue
+		}
+		if writeFile != nil {
+			if err := writeFile([]byte(stmt + ";\n")); err != nil {
+				return err
+			}
+			continue
+		}
+		ret, err := runSql(ctx, ses, bh, stmt, nil, nil)
+		if len(ret.Batches) > 0 && ret.Mp != nil {
+			ret.Close()
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func initPKTables(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	pkInfo *pkBatchInfo,
+	writeFile func([]byte) error,
+) error {
+	if pkInfo == nil {
+		return nil
+	}
+
+	baseTable := qualifiedTableName(pkInfo.dbName, pkInfo.baseTable)
+	deleteTable := qualifiedTableName(pkInfo.dbName, pkInfo.deleteTable)
+	insertTable := qualifiedTableName(pkInfo.dbName, pkInfo.insertTable)
+
+	deleteCols := strings.Join(pkInfo.pkNames, ",")
+	insertCols := strings.Join(pkInfo.visibleNames, ",")
+
+	stmts := []string{
+		fmt.Sprintf("drop table if exists %s", deleteTable),
+		fmt.Sprintf("drop table if exists %s", insertTable),
+		fmt.Sprintf("create table %s as select %s from %s where 1=0", deleteTable, deleteCols, baseTable),
+		fmt.Sprintf("create table %s as select %s from %s where 1=0", insertTable, insertCols, baseTable),
+	}
+
+	return execSQLStatements(ctx, ses, bh, writeFile, stmts)
+}
+
+func dropPKTables(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	pkInfo *pkBatchInfo,
+	writeFile func([]byte) error,
+) error {
+	if pkInfo == nil {
+		return nil
+	}
+
+	deleteTable := qualifiedTableName(pkInfo.dbName, pkInfo.deleteTable)
+	insertTable := qualifiedTableName(pkInfo.dbName, pkInfo.insertTable)
+
+	stmts := []string{
+		fmt.Sprintf("drop table if exists %s", deleteTable),
+		fmt.Sprintf("drop table if exists %s", insertTable),
+	}
+	return execSQLStatements(ctx, ses, bh, writeFile, stmts)
+}
+
 type sqlValuesAppender struct {
 	ctx             context.Context
 	ses             *Session
 	bh              BackgroundExec
 	tblStuff        tableStuff
 	deleteByFullRow bool
+	pkInfo          *pkBatchInfo
 	deleteCnt       *int
 	deleteBuf       *bytes.Buffer
 	insertCnt       *int
@@ -1069,7 +1190,7 @@ func (sva sqlValuesAppender) appendRow(kind string, rowValues []byte) error {
 			newValsLen := len(rowValues)
 			if err := tryFlushDeletesOrInserts(
 				sva.ctx, sva.ses, sva.bh, sva.tblStuff, kind, newValsLen, 1, sva.deleteByFullRow,
-				sva.deleteCnt, sva.deleteBuf, sva.insertCnt, sva.insertBuf, sva.writeFile,
+				sva.pkInfo, sva.deleteCnt, sva.deleteBuf, sva.insertCnt, sva.insertBuf, sva.writeFile,
 			); err != nil {
 				return err
 			}
@@ -1090,7 +1211,7 @@ func (sva sqlValuesAppender) appendRow(kind string, rowValues []byte) error {
 
 	if err := tryFlushDeletesOrInserts(
 		sva.ctx, sva.ses, sva.bh, sva.tblStuff, kind, newValsLen, 1, sva.deleteByFullRow,
-		sva.deleteCnt, sva.deleteBuf, sva.insertCnt, sva.insertBuf, sva.writeFile,
+		sva.pkInfo, sva.deleteCnt, sva.deleteBuf, sva.insertCnt, sva.insertBuf, sva.writeFile,
 	); err != nil {
 		return err
 	}
@@ -1106,7 +1227,7 @@ func (sva sqlValuesAppender) appendRow(kind string, rowValues []byte) error {
 func (sva sqlValuesAppender) flushAll() error {
 	return tryFlushDeletesOrInserts(
 		sva.ctx, sva.ses, sva.bh, sva.tblStuff, "",
-		0, 0, sva.deleteByFullRow, sva.deleteCnt, sva.deleteBuf, sva.insertCnt, sva.insertBuf, sva.writeFile,
+		0, 0, sva.deleteByFullRow, sva.pkInfo, sva.deleteCnt, sva.deleteBuf, sva.insertCnt, sva.insertBuf, sva.writeFile,
 	)
 }
 
@@ -1151,6 +1272,25 @@ func writeDeleteRowValues(
 		buf.WriteString(")")
 	}
 
+	return nil
+}
+
+func writeDeleteRowValuesAsTuple(
+	ses *Session,
+	tblStuff tableStuff,
+	row []any,
+	buf *bytes.Buffer,
+) error {
+	buf.WriteString("(")
+	for i, colIdx := range tblStuff.def.pkColIdxes {
+		if err := formatValIntoString(ses, row[colIdx], tblStuff.def.colTypes[colIdx], buf); err != nil {
+			return err
+		}
+		if i != len(tblStuff.def.pkColIdxes)-1 {
+			buf.WriteString(",")
+		}
+	}
+	buf.WriteString(")")
 	return nil
 }
 
@@ -1256,6 +1396,10 @@ func appendBatchRowsAsSQLValues(
 				if err = writeDeleteRowSQLFull(ctx, ses, tblStuff, row, tmpValsBuffer); err != nil {
 					return
 				}
+			} else if appender.pkInfo != nil {
+				if err = writeDeleteRowValuesAsTuple(ses, tblStuff, row, tmpValsBuffer); err != nil {
+					return
+				}
 			} else {
 				if err = writeDeleteRowValues(ses, tblStuff, row, tmpValsBuffer); err != nil {
 					return
@@ -1316,11 +1460,20 @@ func mergeDiffs(
 		bh:              bh,
 		tblStuff:        tblStuff,
 		deleteByFullRow: tblStuff.def.pkKind == fakeKind,
+		pkInfo:          newPKBatchInfo(ctx, ses, tblStuff),
 		deleteCnt:       &deleteCnt,
 		deleteBuf:       deleteFromVals,
 		insertCnt:       &insertCnt,
 		insertBuf:       insertIntoVals,
 	}
+	if err = initPKTables(ctx, ses, bh, appender.pkInfo, appender.writeFile); err != nil {
+		return err
+	}
+	defer func() {
+		if err2 := dropPKTables(ctx, ses, bh, appender.pkInfo, appender.writeFile); err2 != nil && err == nil {
+			err = err2
+		}
+	}()
 
 	// conflict option should be pushed down to the hash phase,
 	// so the batch we received is conflict-free.
@@ -1505,6 +1658,7 @@ func satisfyDiffOutputOpt(
 			bh:              bh,
 			tblStuff:        tblStuff,
 			deleteByFullRow: tblStuff.def.pkKind == fakeKind,
+			pkInfo:          newPKBatchInfo(ctx, ses, tblStuff),
 			deleteCnt:       &deleteCnt,
 			deleteBuf:       deleteFromValsBuffer,
 			insertCnt:       &insertCnt,
@@ -1516,6 +1670,9 @@ func satisfyDiffOutputOpt(
 			if err = writeFile([]byte("BEGIN;\n")); err != nil {
 				return
 			}
+		}
+		if err = initPKTables(ctx, ses, bh, appender.pkInfo, appender.writeFile); err != nil {
+			return
 		}
 
 		for wrapped := range retCh {
@@ -1565,6 +1722,11 @@ func satisfyDiffOutputOpt(
 		if err = appender.flushAll(); err != nil {
 			first = err
 			cancel()
+		}
+		if first == nil {
+			if err = dropPKTables(ctx, ses, bh, appender.pkInfo, appender.writeFile); err != nil {
+				return err
+			}
 		}
 		if first == nil && writeFile != nil {
 			if err = writeFile([]byte("COMMIT;\n")); err != nil {
@@ -1972,6 +2134,7 @@ func flushSqlValues(
 	buf *bytes.Buffer,
 	isDeleteFrom bool,
 	deleteByFullRow bool,
+	pkInfo *pkBatchInfo,
 	writeFile func([]byte) error,
 ) (err error) {
 
@@ -1998,6 +2161,35 @@ func flushSqlValues(
 			}
 		}
 		return nil
+	}
+
+	if pkInfo != nil {
+		baseTable := qualifiedTableName(pkInfo.dbName, pkInfo.baseTable)
+		deleteTable := qualifiedTableName(pkInfo.dbName, pkInfo.deleteTable)
+		insertTable := qualifiedTableName(pkInfo.dbName, pkInfo.insertTable)
+
+		if isDeleteFrom {
+			insertStmt := fmt.Sprintf("insert into %s values %s", deleteTable, buf.String())
+			pkExpr := pkInfo.pkNames[0]
+			if len(pkInfo.pkNames) > 1 {
+				pkExpr = fmt.Sprintf("(%s)", strings.Join(pkInfo.pkNames, ","))
+			}
+			deleteStmt := fmt.Sprintf(
+				"delete from %s where %s in (select %s from %s)",
+				baseTable, pkExpr, strings.Join(pkInfo.pkNames, ","), deleteTable,
+			)
+			clearStmt := fmt.Sprintf("delete from %s", deleteTable)
+			return execSQLStatements(ctx, ses, bh, writeFile, []string{insertStmt, deleteStmt, clearStmt})
+		}
+
+		insertStmt := fmt.Sprintf("insert into %s values %s", insertTable, buf.String())
+		cols := strings.Join(pkInfo.visibleNames, ",")
+		applyStmt := fmt.Sprintf(
+			"insert into %s (%s) select %s from %s",
+			baseTable, cols, cols, insertTable,
+		)
+		clearStmt := fmt.Sprintf("delete from %s", insertTable)
+		return execSQLStatements(ctx, ses, bh, writeFile, []string{insertStmt, applyStmt, clearStmt})
 	}
 
 	sqlBuffer := acquireBuffer(tblStuff.bufPool)
@@ -2146,8 +2338,8 @@ func tryDiffAsCSV(
 		tblStuff.baseRel.GetTableDef(ctx).Name,
 	)
 
-	if tblStuff.baseSnap != nil {
-		sql += fmt.Sprintf("{snapshot='%s'}", tblStuff.baseSnap.ExtraInfo.Name)
+	if tblStuff.baseSnap != nil && tblStuff.baseSnap.TS != nil {
+		sql += fmt.Sprintf("{mo_ts=%d}", tblStuff.baseSnap.TS.PhysicalTime)
 	}
 
 	var (
@@ -4946,6 +5138,14 @@ func compareSingleValInVector(
 	}
 	if vec2.IsConst() {
 		rowIdx2 = 0
+	}
+
+	// Treat NULL as equal only when both sides are NULL.
+	if vec1.IsNull(uint64(rowIdx1)) || vec2.IsNull(uint64(rowIdx2)) {
+		if vec1.IsNull(uint64(rowIdx1)) && vec2.IsNull(uint64(rowIdx2)) {
+			return 0, nil
+		}
+		return 1, nil
 	}
 
 	// Use raw values to avoid format conversions in extractRowFromVector.

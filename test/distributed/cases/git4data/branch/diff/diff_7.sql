@@ -23,6 +23,7 @@ update t1 set b=4 where a = 1;
 data branch diff t1 against t1{snapshot="sp"};
 
 -- case 1.2
+-- @ignore:0
 select mo_ctl("dn", "flush", "test.t1");
 delete from t1 where a = 1;
 
@@ -50,6 +51,7 @@ update t1 set b=4 where a = 1;
 -- case 2.1
 data branch diff t1 against t1{snapshot="sp"};
 
+-- @ignore:0
 select mo_ctl("dn", "flush", "test.t1");
 delete from t1 where a = 1;
 
