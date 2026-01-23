@@ -33,6 +33,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 )
 
+// ObjectListPermissionChecker is the function to check publication permission for ObjectList
+// This is exported as a variable to allow stubbing in tests
+var ObjectListPermissionChecker = func(ctx context.Context, ses *Session, dbname, tablename string) error {
+	return checkPublicationPermission(ctx, ses, dbname, tablename)
+}
+
 // ProcessObjectList is the core function that processes OBJECTLIST statement
 // It returns a batch with "table name", "db name" columns plus object list columns
 // This function can be used by both handleObjectList and test utilities
@@ -112,7 +118,7 @@ func handleObjectList(
 	tablename := string(stmt.Table)
 
 	// Check publication permission
-	if err := checkPublicationPermission(ctx, ses, dbname, tablename); err != nil {
+	if err := ObjectListPermissionChecker(ctx, ses, dbname, tablename); err != nil {
 		return err
 	}
 

@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
+	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -316,5 +317,146 @@ func Test_ResolveSnapshotWithSnapshotNameWithoutSession(t *testing.T) {
 		_, err := ResolveSnapshotWithSnapshotNameWithoutSession(ctx, "test_snapshot", nil, txnOperator)
 		convey.So(err, convey.ShouldNotBeNil)
 		convey.So(moerr.IsMoErrCode(err, moerr.ErrInternal), convey.ShouldBeTrue)
+	})
+}
+
+// Test_handleObjectList_WithMockPermissionChecker tests handleObjectList with mock permission checker
+// This test covers the main code path (lines 120-193) in object_list.go
+func Test_handleObjectList_WithMockPermissionChecker(t *testing.T) {
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
+
+	convey.Convey("handleObjectList with mock permission checker - main path coverage", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		// Mock engine
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+		// Mock database
+		mockDb := mock_frontend.NewMockDatabase(ctrl)
+		mockDb.EXPECT().IsSubscription(gomock.Any()).Return(false).AnyTimes()
+		eng.EXPECT().Database(gomock.Any(), "test_db", gomock.Any()).Return(mockDb, nil).AnyTimes()
+
+		// Mock relation
+		mockRel := mock_frontend.NewMockRelation(ctrl)
+		mockRel.EXPECT().CollectObjectList(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		tableDef := &plan.TableDef{
+			Indexes: []*plan.IndexDef{},
+		}
+		mockRel.EXPECT().GetTableDef(gomock.Any()).Return(tableDef).AnyTimes()
+		mockRel.EXPECT().CopyTableDef(gomock.Any()).Return(&plan.TableDef{
+			Name:      "test_table",
+			DbName:    "test_db",
+			TableType: catalog.SystemOrdinaryRel,
+			Defs:      []*plan.TableDefType{},
+		}).AnyTimes()
+		mockRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(123)).AnyTimes()
+		mockDb.EXPECT().Relation(gomock.Any(), "test_table", nil).Return(mockRel, nil).AnyTimes()
+		mockDb.EXPECT().Relations(gomock.Any()).Return([]string{"test_table"}, nil).AnyTimes()
+
+		// Mock txn operator
+		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+		txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
+		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+		txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
+		txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
+		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
+		txnOperator.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
+		txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+		txnOperator.EXPECT().SnapshotTS().Return(timestamp.Timestamp{PhysicalTime: 1000}).AnyTimes()
+
+		// Mock txn client
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+		txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
+
+		// Setup system variables
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		convey.So(err, convey.ShouldBeNil)
+		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
+		pu.SV.SkipCheckUser = true
+		setPu("", pu)
+		setSessionAlloc("", NewLeakCheckAllocator())
+		ioses, err := NewIOSession(&testConn{}, pu, "")
+		convey.So(err, convey.ShouldBeNil)
+		pu.StorageEngine = eng
+		pu.TxnClient = txnClient
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, pu.SV)
+
+		ses := NewSession(ctx, "", proto, nil)
+		tenant := &TenantInfo{
+			Tenant:   "sys",
+			TenantID: catalog.System_Account,
+			User:     DefaultTenantMoAdmin,
+		}
+		ses.SetTenantInfo(tenant)
+		ses.mrs = &MysqlResultSet{}
+		ses.SetDatabaseName("test_db")
+
+		// Mock TxnHandler
+		txnHandler := InitTxnHandler("", eng, ctx, txnOperator)
+		ses.txnHandler = txnHandler
+
+		proto.SetSession(ses)
+
+		// Stub ObjectListPermissionChecker - permission passes
+		permStub := gostub.Stub(&ObjectListPermissionChecker, func(ctx context.Context, ses *Session, dbname, tablename string) error {
+			return nil
+		})
+		defer permStub.Reset()
+
+		// Test case 1: Basic success path with database and table specified
+		convey.Convey("basic success with db and table", func() {
+			stmt := &tree.ObjectList{
+				Database: tree.Identifier("test_db"),
+				Table:    tree.Identifier("test_table"),
+			}
+
+			ses.mrs = &MysqlResultSet{}
+			err = handleObjectList(ctx, ses, stmt)
+			convey.So(err, convey.ShouldBeNil)
+			// Result batch should have columns built
+			convey.So(ses.mrs.GetColumnCount(), convey.ShouldBeGreaterThan, 0)
+		})
+
+		// Test case 2: Permission check failed
+		convey.Convey("permission check failed", func() {
+			permStub.Reset()
+			permStub = gostub.Stub(&ObjectListPermissionChecker, func(ctx context.Context, ses *Session, dbname, tablename string) error {
+				return moerr.NewInternalError(ctx, "permission denied for test_db.test_table")
+			})
+			defer permStub.Reset()
+
+			stmt := &tree.ObjectList{
+				Database: tree.Identifier("test_db"),
+				Table:    tree.Identifier("test_table"),
+			}
+
+			ses.mrs = &MysqlResultSet{}
+			err = handleObjectList(ctx, ses, stmt)
+			convey.So(err, convey.ShouldNotBeNil)
+			convey.So(err.Error(), convey.ShouldContainSubstring, "permission denied")
+		})
+
+		// Test case 3: Use session database name when not specified
+		convey.Convey("use session database name", func() {
+			permStub.Reset()
+			permStub = gostub.Stub(&ObjectListPermissionChecker, func(ctx context.Context, ses *Session, dbname, tablename string) error {
+				// Verify that session database name is used
+				convey.So(dbname, convey.ShouldEqual, "test_db")
+				return nil
+			})
+			defer permStub.Reset()
+
+			stmt := &tree.ObjectList{
+				Database: tree.Identifier(""), // empty, should use session db
+				Table:    tree.Identifier("test_table"),
+			}
+
+			ses.mrs = &MysqlResultSet{}
+			err = handleObjectList(ctx, ses, stmt)
+			convey.So(err, convey.ShouldBeNil)
+		})
 	})
 }
