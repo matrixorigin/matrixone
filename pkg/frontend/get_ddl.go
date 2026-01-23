@@ -449,15 +449,24 @@ func checkPublicationPermission(
 	databaseName string,
 	tableName string,
 ) error {
+	bh := ses.GetShareTxnBackgroundExec(ctx, false)
+	defer bh.Close()
+	return checkPublicationPermissionWithBh(ctx, bh, databaseName, tableName)
+}
+
+// checkPublicationPermissionWithBh is the internal implementation that accepts a BackgroundExec
+// This is useful for testing
+func checkPublicationPermissionWithBh(
+	ctx context.Context,
+	bh BackgroundExec,
+	databaseName string,
+	tableName string,
+) error {
 	// Get current account ID and name
 	accountID, err := defines.GetAccountId(ctx)
 	if err != nil {
 		return err
 	}
-
-	// Get account name
-	bh := ses.GetShareTxnBackgroundExec(ctx, false)
-	defer bh.Close()
 
 	systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
 	getAccountNameSQL := fmt.Sprintf(`select account_name from mo_catalog.mo_account where account_id = %d;`, accountID)

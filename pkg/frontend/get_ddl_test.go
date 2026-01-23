@@ -414,3 +414,508 @@ func Test_GetDdlBatchWithoutSession(t *testing.T) {
 		bat2.Clean(mp)
 	})
 }
+
+// newMrsForAccountName creates a MysqlResultSet for account name query
+func newMrsForAccountName(accountName string) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+	col := &MysqlColumn{}
+	col.SetName("account_name")
+	col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	mrs.AddColumn(col)
+	if accountName != "" {
+		mrs.AddRow([]interface{}{accountName})
+	}
+	return mrs
+}
+
+// newMrsForMoPubs creates a MysqlResultSet for mo_pubs query
+// Columns: account_id, account_name, pub_name, database_name, database_id, table_list, account_list
+func newMrsForMoPubs(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("account_id")
+	col1.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+	mrs.AddColumn(col1)
+
+	col2 := &MysqlColumn{}
+	col2.SetName("account_name")
+	col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	mrs.AddColumn(col2)
+
+	col3 := &MysqlColumn{}
+	col3.SetName("pub_name")
+	col3.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	mrs.AddColumn(col3)
+
+	col4 := &MysqlColumn{}
+	col4.SetName("database_name")
+	col4.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	mrs.AddColumn(col4)
+
+	col5 := &MysqlColumn{}
+	col5.SetName("database_id")
+	col5.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+	mrs.AddColumn(col5)
+
+	col6 := &MysqlColumn{}
+	col6.SetName("table_list")
+	col6.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	mrs.AddColumn(col6)
+
+	col7 := &MysqlColumn{}
+	col7.SetName("account_list")
+	col7.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	mrs.AddColumn(col7)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+	return mrs
+}
+
+// Test_checkPublicationPermissionWithBh_GetAccountIdError tests error when GetAccountId fails
+func Test_checkPublicationPermissionWithBh_GetAccountIdError(t *testing.T) {
+	// Context without account ID will cause GetAccountId to fail
+	ctx := context.Background()
+
+	convey.Convey("checkPublicationPermissionWithBh GetAccountId error", t, func() {
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		err := checkPublicationPermissionWithBh(ctx, bh, "test_db", "test_table")
+		convey.So(err, convey.ShouldNotBeNil)
+	})
+}
+
+// Test_checkPublicationPermissionWithBh_ExecAccountNameError tests error when querying account name fails
+func Test_checkPublicationPermissionWithBh_ExecAccountNameError(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), uint32(100))
+
+	convey.Convey("checkPublicationPermissionWithBh Exec account name error", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(moerr.NewInternalErrorNoCtx("exec failed"))
+
+		err := checkPublicationPermissionWithBh(ctx, bh, "test_db", "test_table")
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "exec failed")
+	})
+}
+
+// Test_checkPublicationPermissionWithBh_AccountNameEmpty tests error when account name is empty
+func Test_checkPublicationPermissionWithBh_AccountNameEmpty(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), uint32(100))
+
+	convey.Convey("checkPublicationPermissionWithBh account name empty", t, func() {
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		// Return empty result for account name query
+		accountNameSQL := `select account_name from mo_catalog.mo_account where account_id = 100;`
+		bh.sql2result[accountNameSQL] = newMrsForAccountName("")
+
+		err := checkPublicationPermissionWithBh(ctx, bh, "test_db", "test_table")
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "failed to get account name")
+	})
+}
+
+// Test_checkPublicationPermissionWithBh_MoPubsExecError tests error when querying mo_pubs fails
+func Test_checkPublicationPermissionWithBh_MoPubsExecError(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), uint32(100))
+
+	convey.Convey("checkPublicationPermissionWithBh mo_pubs exec error", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		execCount := 0
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, sql string) error {
+			execCount++
+			if execCount == 1 {
+				// First call is for account name - succeed
+				return nil
+			}
+			// Second call is for mo_pubs - fail
+			return moerr.NewInternalErrorNoCtx("mo_pubs query failed")
+		}).Times(2)
+		bh.EXPECT().GetExecResultSet().Return([]interface{}{newMrsForAccountName("test_account")}).Times(1)
+
+		err := checkPublicationPermissionWithBh(ctx, bh, "test_db", "test_table")
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "mo_pubs query failed")
+	})
+}
+
+// Test_checkPublicationPermissionWithBh_NoPermission_EmptyPubs tests no permission when mo_pubs is empty
+func Test_checkPublicationPermissionWithBh_NoPermission_EmptyPubs(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), uint32(100))
+
+	convey.Convey("checkPublicationPermissionWithBh no permission - empty pubs", t, func() {
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		// Account name query result
+		accountNameSQL := `select account_name from mo_catalog.mo_account where account_id = 100;`
+		bh.sql2result[accountNameSQL] = newMrsForAccountName("test_account")
+
+		// Empty mo_pubs result - table level
+		moPubsSQL := `select account_id, account_name, pub_name, database_name, database_id, table_list, account_list 
+			from mo_catalog.mo_pubs 
+			where database_name = "test_db" 
+			order by account_id, pub_name;`
+		bh.sql2result[moPubsSQL] = newMrsForMoPubs([][]interface{}{})
+
+		err := checkPublicationPermissionWithBh(ctx, bh, "test_db", "test_table")
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "does not have permission to access table")
+	})
+}
+
+// Test_checkPublicationPermissionWithBh_NoPermission_AccountNotInList tests no permission when account is not in account_list
+func Test_checkPublicationPermissionWithBh_NoPermission_AccountNotInList(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), uint32(100))
+
+	convey.Convey("checkPublicationPermissionWithBh no permission - account not in list", t, func() {
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		// Account name query result
+		accountNameSQL := `select account_name from mo_catalog.mo_account where account_id = 100;`
+		bh.sql2result[accountNameSQL] = newMrsForAccountName("test_account")
+
+		// mo_pubs result with different account in list
+		moPubsSQL := `select account_id, account_name, pub_name, database_name, database_id, table_list, account_list 
+			from mo_catalog.mo_pubs 
+			where database_name = "test_db" 
+			order by account_id, pub_name;`
+		bh.sql2result[moPubsSQL] = newMrsForMoPubs([][]interface{}{
+			{int64(1), "pub_owner", "pub1", "test_db", int64(1), "test_table", "other_account"},
+		})
+
+		err := checkPublicationPermissionWithBh(ctx, bh, "test_db", "test_table")
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "does not have permission")
+	})
+}
+
+// Test_checkPublicationPermissionWithBh_NoPermission_TableNotInList tests no permission when table is not in table_list
+func Test_checkPublicationPermissionWithBh_NoPermission_TableNotInList(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), uint32(100))
+
+	convey.Convey("checkPublicationPermissionWithBh no permission - table not in list", t, func() {
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		// Account name query result
+		accountNameSQL := `select account_name from mo_catalog.mo_account where account_id = 100;`
+		bh.sql2result[accountNameSQL] = newMrsForAccountName("test_account")
+
+		// mo_pubs result with different table in list
+		moPubsSQL := `select account_id, account_name, pub_name, database_name, database_id, table_list, account_list 
+			from mo_catalog.mo_pubs 
+			where database_name = "test_db" 
+			order by account_id, pub_name;`
+		bh.sql2result[moPubsSQL] = newMrsForMoPubs([][]interface{}{
+			{int64(1), "pub_owner", "pub1", "test_db", int64(1), "other_table,another_table", "test_account"},
+		})
+
+		err := checkPublicationPermissionWithBh(ctx, bh, "test_db", "test_table")
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "does not have permission to access table")
+	})
+}
+
+// Test_checkPublicationPermissionWithBh_Permission_TableAll tests permission granted when table_list is "*"
+func Test_checkPublicationPermissionWithBh_Permission_TableAll(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), uint32(100))
+
+	convey.Convey("checkPublicationPermissionWithBh permission - table all (*)", t, func() {
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		// Account name query result
+		accountNameSQL := `select account_name from mo_catalog.mo_account where account_id = 100;`
+		bh.sql2result[accountNameSQL] = newMrsForAccountName("test_account")
+
+		// mo_pubs result with table_list = "*"
+		moPubsSQL := `select account_id, account_name, pub_name, database_name, database_id, table_list, account_list 
+			from mo_catalog.mo_pubs 
+			where database_name = "test_db" 
+			order by account_id, pub_name;`
+		bh.sql2result[moPubsSQL] = newMrsForMoPubs([][]interface{}{
+			{int64(1), "pub_owner", "pub1", "test_db", int64(1), "*", "test_account"},
+		})
+
+		err := checkPublicationPermissionWithBh(ctx, bh, "test_db", "test_table")
+		convey.So(err, convey.ShouldBeNil)
+	})
+}
+
+// Test_checkPublicationPermissionWithBh_Permission_TableInList tests permission granted when table is in table_list
+func Test_checkPublicationPermissionWithBh_Permission_TableInList(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), uint32(100))
+
+	convey.Convey("checkPublicationPermissionWithBh permission - table in list", t, func() {
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		// Account name query result
+		accountNameSQL := `select account_name from mo_catalog.mo_account where account_id = 100;`
+		bh.sql2result[accountNameSQL] = newMrsForAccountName("test_account")
+
+		// mo_pubs result with table in list
+		moPubsSQL := `select account_id, account_name, pub_name, database_name, database_id, table_list, account_list 
+			from mo_catalog.mo_pubs 
+			where database_name = "test_db" 
+			order by account_id, pub_name;`
+		bh.sql2result[moPubsSQL] = newMrsForMoPubs([][]interface{}{
+			{int64(1), "pub_owner", "pub1", "test_db", int64(1), "table1,test_table,table2", "test_account"},
+		})
+
+		err := checkPublicationPermissionWithBh(ctx, bh, "test_db", "test_table")
+		convey.So(err, convey.ShouldBeNil)
+	})
+}
+
+// Test_checkPublicationPermissionWithBh_Permission_AllAccounts tests permission granted when account_list is "*"
+func Test_checkPublicationPermissionWithBh_Permission_AllAccounts(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), uint32(100))
+
+	convey.Convey("checkPublicationPermissionWithBh permission - all accounts (*)", t, func() {
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		// Account name query result
+		accountNameSQL := `select account_name from mo_catalog.mo_account where account_id = 100;`
+		bh.sql2result[accountNameSQL] = newMrsForAccountName("any_account")
+
+		// mo_pubs result with account_list = "*" (all accounts)
+		moPubsSQL := `select account_id, account_name, pub_name, database_name, database_id, table_list, account_list 
+			from mo_catalog.mo_pubs 
+			where database_name = "test_db" 
+			order by account_id, pub_name;`
+		bh.sql2result[moPubsSQL] = newMrsForMoPubs([][]interface{}{
+			{int64(1), "pub_owner", "pub1", "test_db", int64(1), "test_table", "all"},
+		})
+
+		err := checkPublicationPermissionWithBh(ctx, bh, "test_db", "test_table")
+		convey.So(err, convey.ShouldBeNil)
+	})
+}
+
+// Test_checkPublicationPermissionWithBh_DatabaseLevel tests database level permission check
+func Test_checkPublicationPermissionWithBh_DatabaseLevel(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), uint32(100))
+
+	convey.Convey("checkPublicationPermissionWithBh database level permission", t, func() {
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		// Account name query result
+		accountNameSQL := `select account_name from mo_catalog.mo_account where account_id = 100;`
+		bh.sql2result[accountNameSQL] = newMrsForAccountName("test_account")
+
+		// mo_pubs result for database level (no table specified)
+		moPubsSQL := `select account_id, account_name, pub_name, database_name, database_id, table_list, account_list 
+			from mo_catalog.mo_pubs 
+			where database_name = "test_db" 
+			order by account_id, pub_name;`
+		bh.sql2result[moPubsSQL] = newMrsForMoPubs([][]interface{}{
+			{int64(1), "pub_owner", "pub1", "test_db", int64(1), "*", "test_account"},
+		})
+
+		// Database level - tableName is empty
+		err := checkPublicationPermissionWithBh(ctx, bh, "test_db", "")
+		convey.So(err, convey.ShouldBeNil)
+	})
+}
+
+// Test_checkPublicationPermissionWithBh_DatabaseLevel_NoPermission tests database level no permission
+func Test_checkPublicationPermissionWithBh_DatabaseLevel_NoPermission(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), uint32(100))
+
+	convey.Convey("checkPublicationPermissionWithBh database level no permission", t, func() {
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		// Account name query result
+		accountNameSQL := `select account_name from mo_catalog.mo_account where account_id = 100;`
+		bh.sql2result[accountNameSQL] = newMrsForAccountName("test_account")
+
+		// Empty mo_pubs result
+		moPubsSQL := `select account_id, account_name, pub_name, database_name, database_id, table_list, account_list 
+			from mo_catalog.mo_pubs 
+			where database_name = "test_db" 
+			order by account_id, pub_name;`
+		bh.sql2result[moPubsSQL] = newMrsForMoPubs([][]interface{}{})
+
+		// Database level - tableName is empty
+		err := checkPublicationPermissionWithBh(ctx, bh, "test_db", "")
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "does not have permission to access database")
+	})
+}
+
+// Test_checkPublicationPermissionWithBh_AccountLevel tests account level permission check
+func Test_checkPublicationPermissionWithBh_AccountLevel(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), uint32(100))
+
+	convey.Convey("checkPublicationPermissionWithBh account level permission", t, func() {
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		// Account name query result
+		accountNameSQL := `select account_name from mo_catalog.mo_account where account_id = 100;`
+		bh.sql2result[accountNameSQL] = newMrsForAccountName("test_account")
+
+		// mo_pubs result for account level (no database/table specified)
+		moPubsSQL := `select account_id, account_name, pub_name, database_name, database_id, table_list, account_list 
+			from mo_catalog.mo_pubs 
+			order by account_id, pub_name;`
+		bh.sql2result[moPubsSQL] = newMrsForMoPubs([][]interface{}{
+			{int64(1), "pub_owner", "pub1", "some_db", int64(1), "*", "test_account"},
+		})
+
+		// Account level - both databaseName and tableName are empty
+		err := checkPublicationPermissionWithBh(ctx, bh, "", "")
+		convey.So(err, convey.ShouldBeNil)
+	})
+}
+
+// Test_checkPublicationPermissionWithBh_AccountLevel_NoPermission tests account level no permission
+func Test_checkPublicationPermissionWithBh_AccountLevel_NoPermission(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), uint32(100))
+
+	convey.Convey("checkPublicationPermissionWithBh account level no permission", t, func() {
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		// Account name query result
+		accountNameSQL := `select account_name from mo_catalog.mo_account where account_id = 100;`
+		bh.sql2result[accountNameSQL] = newMrsForAccountName("test_account")
+
+		// Empty mo_pubs result
+		moPubsSQL := `select account_id, account_name, pub_name, database_name, database_id, table_list, account_list 
+			from mo_catalog.mo_pubs 
+			order by account_id, pub_name;`
+		bh.sql2result[moPubsSQL] = newMrsForMoPubs([][]interface{}{})
+
+		// Account level - both databaseName and tableName are empty
+		err := checkPublicationPermissionWithBh(ctx, bh, "", "")
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "does not have permission to access account level resources")
+	})
+}
+
+// Test_checkPublicationPermissionWithBh_MultiplePublications tests permission with multiple publications
+func Test_checkPublicationPermissionWithBh_MultiplePublications(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), uint32(100))
+
+	convey.Convey("checkPublicationPermissionWithBh multiple publications", t, func() {
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		// Account name query result
+		accountNameSQL := `select account_name from mo_catalog.mo_account where account_id = 100;`
+		bh.sql2result[accountNameSQL] = newMrsForAccountName("test_account")
+
+		// Multiple publications, only one grants permission
+		moPubsSQL := `select account_id, account_name, pub_name, database_name, database_id, table_list, account_list 
+			from mo_catalog.mo_pubs 
+			where database_name = "test_db" 
+			order by account_id, pub_name;`
+		bh.sql2result[moPubsSQL] = newMrsForMoPubs([][]interface{}{
+			{int64(1), "pub_owner1", "pub1", "test_db", int64(1), "other_table", "other_account"},
+			{int64(2), "pub_owner2", "pub2", "test_db", int64(1), "test_table", "different_account"},
+			{int64(3), "pub_owner3", "pub3", "test_db", int64(1), "test_table", "test_account"}, // This one grants permission
+		})
+
+		err := checkPublicationPermissionWithBh(ctx, bh, "test_db", "test_table")
+		convey.So(err, convey.ShouldBeNil)
+	})
+}
+
+// Test_checkPublicationPermissionWithBh_DatabaseMismatch tests when database in publication doesn't match
+func Test_checkPublicationPermissionWithBh_DatabaseMismatch(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), uint32(100))
+
+	convey.Convey("checkPublicationPermissionWithBh database mismatch", t, func() {
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		// Account name query result
+		accountNameSQL := `select account_name from mo_catalog.mo_account where account_id = 100;`
+		bh.sql2result[accountNameSQL] = newMrsForAccountName("test_account")
+
+		// mo_pubs result with different database
+		moPubsSQL := `select account_id, account_name, pub_name, database_name, database_id, table_list, account_list 
+			from mo_catalog.mo_pubs 
+			where database_name = "test_db" 
+			order by account_id, pub_name;`
+		bh.sql2result[moPubsSQL] = newMrsForMoPubs([][]interface{}{
+			{int64(1), "pub_owner", "pub1", "different_db", int64(1), "test_table", "test_account"},
+		})
+
+		err := checkPublicationPermissionWithBh(ctx, bh, "test_db", "test_table")
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "does not have permission")
+	})
+}
+
+// Test_checkPublicationPermissionWithBh_TableWithSpaces tests table name with spaces in list
+func Test_checkPublicationPermissionWithBh_TableWithSpaces(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), uint32(100))
+
+	convey.Convey("checkPublicationPermissionWithBh table with spaces in list", t, func() {
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		// Account name query result
+		accountNameSQL := `select account_name from mo_catalog.mo_account where account_id = 100;`
+		bh.sql2result[accountNameSQL] = newMrsForAccountName("test_account")
+
+		// mo_pubs result with spaces around table names
+		moPubsSQL := `select account_id, account_name, pub_name, database_name, database_id, table_list, account_list 
+			from mo_catalog.mo_pubs 
+			where database_name = "test_db" 
+			order by account_id, pub_name;`
+		bh.sql2result[moPubsSQL] = newMrsForMoPubs([][]interface{}{
+			{int64(1), "pub_owner", "pub1", "test_db", int64(1), "table1, test_table , table2", "test_account"},
+		})
+
+		err := checkPublicationPermissionWithBh(ctx, bh, "test_db", "test_table")
+		convey.So(err, convey.ShouldBeNil)
+	})
+}
+
+// Test_checkPublicationPermissionWithBh_MultipleAccountsInList tests multiple accounts in account_list
+func Test_checkPublicationPermissionWithBh_MultipleAccountsInList(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), uint32(100))
+
+	convey.Convey("checkPublicationPermissionWithBh multiple accounts in list", t, func() {
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		// Account name query result
+		accountNameSQL := `select account_name from mo_catalog.mo_account where account_id = 100;`
+		bh.sql2result[accountNameSQL] = newMrsForAccountName("test_account")
+
+		// mo_pubs result with multiple accounts in list
+		moPubsSQL := `select account_id, account_name, pub_name, database_name, database_id, table_list, account_list 
+			from mo_catalog.mo_pubs 
+			where database_name = "test_db" 
+			order by account_id, pub_name;`
+		bh.sql2result[moPubsSQL] = newMrsForMoPubs([][]interface{}{
+			{int64(1), "pub_owner", "pub1", "test_db", int64(1), "test_table", "acc1,test_account,acc2"},
+		})
+
+		err := checkPublicationPermissionWithBh(ctx, bh, "test_db", "test_table")
+		convey.So(err, convey.ShouldBeNil)
+	})
+}
