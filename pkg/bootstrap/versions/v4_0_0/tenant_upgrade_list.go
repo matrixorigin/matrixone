@@ -27,6 +27,7 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	enablePartitionMetadata,
 	enablePartitionTables,
 	upg_alter_mo_snapshots,
+	upg_mo_parquet_schema,
 }
 
 var enablePartitionMetadata = versions.UpgradeEntry{
@@ -68,5 +69,25 @@ var upg_alter_mo_snapshots = versions.UpgradeEntry{
 		}
 
 		return info.IsExits, nil
+	},
+}
+
+var upg_mo_parquet_schema = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MO_PARQUET_SCHEMA,
+	UpgType:   versions.CREATE_NEW_TABLE,
+	UpgSql: fmt.Sprintf(`create table %s.%s (
+		database_name   VARCHAR(256) NOT NULL,
+		table_name      VARCHAR(256) NOT NULL,
+		column_name     VARCHAR(256) NOT NULL,
+		parquet_schema  TEXT NOT NULL,
+		schema_version  TINYINT NOT NULL DEFAULT 1,
+		created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		updated_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+		PRIMARY KEY (database_name, table_name, column_name)
+	)`, catalog.MO_CATALOG, catalog.MO_PARQUET_SCHEMA),
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		exist, err := versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, catalog.MO_PARQUET_SCHEMA)
+		return exist, err
 	},
 }
