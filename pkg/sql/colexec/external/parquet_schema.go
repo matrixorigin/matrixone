@@ -161,13 +161,18 @@ func getBasicTypeString(col *parquet.Column) string {
 		return "unknown"
 	}
 
-	// Check logical type first
 	logicalType := pt.LogicalType()
-	if logicalType != nil {
-		if logicalType.String != nil {
-			return "string"
-		}
-		if logicalType.Integer != nil {
+
+	// Check physical type first, then refine with logical type.
+	// This prevents Arrow-created parquet files from being misidentified
+	// (e.g., Int32 with String logical type incorrectly becoming string).
+	switch pt.Kind() {
+	case parquet.Boolean:
+		return "boolean"
+
+	case parquet.Int32:
+		// Check logical type for more specific integer types
+		if logicalType != nil && logicalType.Integer != nil {
 			bitWidth := logicalType.Integer.BitWidth
 			isSigned := logicalType.Integer.IsSigned
 			if isSigned {
@@ -176,10 +181,6 @@ func getBasicTypeString(col *parquet.Column) string {
 					return "int8"
 				case 16:
 					return "int16"
-				case 32:
-					return "int32"
-				case 64:
-					return "int64"
 				}
 			} else {
 				switch bitWidth {
@@ -189,51 +190,83 @@ func getBasicTypeString(col *parquet.Column) string {
 					return "uint16"
 				case 32:
 					return "uint32"
-				case 64:
-					return "uint64"
 				}
 			}
 		}
-		if logicalType.Decimal != nil {
-			return fmt.Sprintf("decimal(%d,%d)",
-				logicalType.Decimal.Precision,
-				logicalType.Decimal.Scale)
+		if logicalType != nil {
+			if logicalType.Date != nil {
+				return "date"
+			}
+			if logicalType.Time != nil {
+				return "time"
+			}
+			if logicalType.Decimal != nil {
+				return fmt.Sprintf("decimal(%d,%d)",
+					logicalType.Decimal.Precision,
+					logicalType.Decimal.Scale)
+			}
 		}
-		if logicalType.Date != nil {
-			return "date"
-		}
-		if logicalType.Time != nil {
-			return "time"
-		}
-		if logicalType.Timestamp != nil {
-			return "timestamp"
-		}
-		if logicalType.UUID != nil {
-			return "uuid"
-		}
-		if logicalType.Json != nil {
-			return "json"
-		}
-	}
-
-	// Fall back to physical type
-	switch pt.Kind() {
-	case parquet.Boolean:
-		return "boolean"
-	case parquet.Int32:
 		return "int32"
+
 	case parquet.Int64:
+		// Check logical type for more specific types
+		if logicalType != nil && logicalType.Integer != nil {
+			if !logicalType.Integer.IsSigned && logicalType.Integer.BitWidth == 64 {
+				return "uint64"
+			}
+		}
+		if logicalType != nil {
+			if logicalType.Timestamp != nil {
+				return "timestamp"
+			}
+			if logicalType.Time != nil {
+				return "time"
+			}
+			if logicalType.Decimal != nil {
+				return fmt.Sprintf("decimal(%d,%d)",
+					logicalType.Decimal.Precision,
+					logicalType.Decimal.Scale)
+			}
+		}
 		return "int64"
+
 	case parquet.Int96:
 		return "int96"
+
 	case parquet.Float:
 		return "float"
+
 	case parquet.Double:
 		return "double"
+
 	case parquet.ByteArray:
+		// Only ByteArray should consider String logical type
+		if logicalType != nil {
+			if logicalType.String != nil {
+				return "string"
+			}
+			if logicalType.Json != nil {
+				return "json"
+			}
+			if logicalType.UUID != nil {
+				return "uuid"
+			}
+		}
 		return "binary"
+
 	case parquet.FixedLenByteArray:
+		if logicalType != nil {
+			if logicalType.UUID != nil {
+				return "uuid"
+			}
+			if logicalType.Decimal != nil {
+				return fmt.Sprintf("decimal(%d,%d)",
+					logicalType.Decimal.Precision,
+					logicalType.Decimal.Scale)
+			}
+		}
 		return fmt.Sprintf("fixed_len_byte_array(%d)", pt.Length())
+
 	default:
 		return "unknown"
 	}
