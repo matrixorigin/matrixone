@@ -300,12 +300,12 @@ func concatFixedTypeChecked[T types.FixedSizeTExceptStrType](v *vector.Vector, r
 }
 
 func concatVar(v *vector.Vector, row int, src []byte) ([]byte, error) {
-	value := v.GetBytesAt(row)
+	val := v.GetBytesAt(row)
 
-	if err := isValidGroupConcatUnit(value); err != nil {
+	if err := isValidGroupConcatUnit(val); err != nil {
 		return nil, err
 	}
-	return append(src, value...), nil
+	return append(src, val...), nil
 }
 
 func concatDecimal64(v *vector.Vector, row int, src []byte) ([]byte, error) {
