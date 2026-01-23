@@ -527,7 +527,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			NeedEval:     t.NeedEval,
 			SpillMem:     t.SpillMem,
 			GroupingFlag: t.GroupingFlag,
-			Exprs:        t.Exprs,
+			Exprs:        t.GroupBy,
 			Aggs:         convertToPipelineAggregates(t.Aggs),
 		}
 		in.ProjectList = t.ProjectList
@@ -613,6 +613,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	case *group.MergeGroup:
 		in.Agg = &pipeline.Group{
 			SpillMem: t.SpillMem,
+			Aggs:     convertToPipelineAggregates(t.Aggs),
 		}
 		in.ProjectList = t.ProjectList
 		EncodeMergeGroup(t, in.Agg)
@@ -967,7 +968,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.NeedEval = t.NeedEval
 		arg.SpillMem = t.SpillMem
 		arg.GroupingFlag = t.GroupingFlag
-		arg.Exprs = t.Exprs
+		arg.GroupBy = t.Exprs
 		arg.Aggs = convertToAggregates(t.Aggs)
 		arg.ProjectList = opr.ProjectList
 		op = arg
@@ -1068,6 +1069,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		// group node and then merge them
 		t := opr.GetAgg()
 		arg.SpillMem = t.SpillMem
+		arg.Aggs = convertToAggregates(t.Aggs)
 		arg.ProjectList = opr.ProjectList
 		op = arg
 		DecodeMergeGroup(op.(*group.MergeGroup), opr.Agg)
