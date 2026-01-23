@@ -817,14 +817,14 @@ func Test_NewParquetWriter(t *testing.T) {
 	convey.Convey("NewParquetWriter creates writer correctly", t, func() {
 		// Test with nil MysqlResultSet
 		convey.Convey("nil result set returns error", func() {
-			_, err := NewParquetWriter(context.Background(), nil)
+			_, err := NewParquetWriter(context.Background(), nil, nil)
 			convey.So(err, convey.ShouldNotBeNil)
 		})
 
 		// Test with empty columns
 		convey.Convey("empty columns returns error", func() {
 			mrs := &MysqlResultSet{}
-			_, err := NewParquetWriter(context.Background(), mrs)
+			_, err := NewParquetWriter(context.Background(), nil, mrs)
 			convey.So(err, convey.ShouldNotBeNil)
 		})
 
@@ -840,7 +840,7 @@ func Test_NewParquetWriter(t *testing.T) {
 			mrs.AddColumn(col1)
 			mrs.AddColumn(col2)
 
-			pw, err := NewParquetWriter(context.Background(), mrs)
+			pw, err := NewParquetWriter(context.Background(), nil, mrs)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(pw, convey.ShouldNotBeNil)
 			convey.So(len(pw.columnNames), convey.ShouldEqual, 2)
@@ -858,7 +858,7 @@ func Test_ParquetWriter_Close(t *testing.T) {
 		col1.SetColumnType(defines.MYSQL_TYPE_LONG)
 		mrs.AddColumn(col1)
 
-		pw, err := NewParquetWriter(context.Background(), mrs)
+		pw, err := NewParquetWriter(context.Background(), nil, mrs)
 		convey.So(err, convey.ShouldBeNil)
 
 		// Close without writing any data
@@ -1026,7 +1026,7 @@ func Test_ParquetWriter_Size(t *testing.T) {
 		mrs.AddColumn(col1)
 		mrs.AddColumn(col2)
 
-		pw, err := NewParquetWriter(ctx, mrs)
+		pw, err := NewParquetWriter(ctx, nil, mrs)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(pw, convey.ShouldNotBeNil)
 
