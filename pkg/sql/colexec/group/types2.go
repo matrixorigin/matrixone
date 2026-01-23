@@ -58,7 +58,7 @@ type Group struct {
 	SpillMem int64
 
 	// group-by column.
-	Exprs        []*plan.Expr
+	GroupBy      []*plan.Expr
 	GroupingFlag []bool
 
 	Aggs []aggexec.AggFuncExecExpression
@@ -315,7 +315,7 @@ func (group *Group) Release() {
 
 func (group *Group) String(buf *bytes.Buffer) {
 	buf.WriteString(thisOperatorName + ": group([")
-	for i, expr := range group.Exprs {
+	for i, expr := range group.GroupBy {
 		if i > 0 {
 			buf.WriteString(", ")
 		}
