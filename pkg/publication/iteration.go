@@ -781,7 +781,7 @@ func RequestUpstreamSnapshot(
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to query current snapshot TS: %v", err)
 	}
-	if iterationCtx.IterationLSN > 1 {
+	if iterationCtx.IterationLSN > 0 {
 		prevSnapshotName := GenerateSnapshotName(iterationCtx.TaskID, iterationCtx.IterationLSN-1)
 		iterationCtx.PrevSnapshotName = prevSnapshotName
 		ctxWithTimeout3, cancel3 := context.WithTimeout(ctx, time.Minute)
