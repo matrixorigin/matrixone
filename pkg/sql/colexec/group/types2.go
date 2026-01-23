@@ -58,7 +58,7 @@ type Group struct {
 	SpillMem int64
 
 	// group-by column.
-	Exprs        []*plan.Expr
+	GroupBy      []*plan.Expr
 	GroupingFlag []bool
 
 	Aggs []aggexec.AggFuncExecExpression
@@ -210,17 +210,7 @@ func (ctr *container) free() {
 }
 
 func (ctr *container) reset() {
-	// reset the container state, do not reuse anything
-	ctr.state = vm.Build
-
-	ctr.inputDone = false
-	ctr.hr.Free0()
-
-	ctr.resetForSpill()
-	ctr.freeSpillBkts()
-
-	mpool.DeleteMPool(ctr.mp)
-	ctr.mp = mpool.MustNew("group_mpool")
+	ctr.free()
 }
 
 func (ctr *container) resetForSpill() {
@@ -325,7 +315,7 @@ func (group *Group) Release() {
 
 func (group *Group) String(buf *bytes.Buffer) {
 	buf.WriteString(thisOperatorName + ": group([")
-	for i, expr := range group.Exprs {
+	for i, expr := range group.GroupBy {
 		if i > 0 {
 			buf.WriteString(", ")
 		}

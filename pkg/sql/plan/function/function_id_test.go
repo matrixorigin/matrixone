@@ -457,7 +457,9 @@ var predefinedFunids = map[int]int{
 	JSON_OBJECTAGG:             401,
 	MO_FEATURE_REGISTRY_UPSERT: 402,
 	MO_FEATURE_LIMIT_UPSERT:    403,
-	FUNCTION_END_NUMBER:        404,
+	IN_RANGE:                   404,
+	PREFIX_IN_RANGE:            405,
+	FUNCTION_END_NUMBER:        406,
 }
 
 func Test_funids(t *testing.T) {

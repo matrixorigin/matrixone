@@ -26,5 +26,16 @@ drop stage parqstage;
 create table t5(id bigint, name varchar, int8column tinyint, int16column smallint, binarycolumn binary, varbinarycolumn varbinary(32), blobcolumn blob);
 load data infile {'filepath'='$resources/load_data/int8_int16_binary_varbinary_blob.parq', 'format'='parquet'} into table t5;
 select * from t5;
+
+-- nested types (List/Struct/Map) to TEXT
+create table t6(id int, name varchar(100), scores text, address text, metadata text);
+load data infile {'filepath'='$resources/load_data/nested_types.parq', 'format'='parquet'} into table t6;
+select * from t6;
+
+-- nested types to JSON
+create table t7(id int, name varchar(100), scores json, address json, metadata json);
+load data infile {'filepath'='$resources/load_data/nested_types.parq', 'format'='parquet'} into table t7;
+select * from t7;
+
 -- post
 drop database parq;

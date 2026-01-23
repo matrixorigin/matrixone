@@ -16,6 +16,7 @@ package function
 
 import (
 	"bytes"
+	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -30,6 +31,7 @@ func betweenImpl(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	switch paramType.Oid {
 	case types.T_bool:
 		return opBetweenBool(parameters, rs, proc, length)
+
 	case types.T_bit:
 		return opBetweenFixed[uint64](parameters, rs, proc, length)
 	case types.T_int8:
@@ -62,24 +64,18 @@ func betweenImpl(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		return opBetweenFixed[types.Timestamp](parameters, rs, proc, length)
 
 	case types.T_uuid:
-		return opBetweenFixedWithFn(parameters, rs, proc, length, func(lhs, rhs types.Uuid) bool {
-			return types.CompareUuid(lhs, rhs) <= 0
-		})
+		return opBetweenFixedWithFn(parameters, rs, proc, length, types.CompareUuid)
 	case types.T_decimal64:
-		return opBetweenFixedWithFn(parameters, rs, proc, length, func(lhs, rhs types.Decimal64) bool {
-			return lhs.Compare(rhs) <= 0
-		})
+		return opBetweenFixedWithFn(parameters, rs, proc, length, types.CompareDecimal64)
 	case types.T_decimal128:
-		return opBetweenFixedWithFn(parameters, rs, proc, length, func(lhs, rhs types.Decimal128) bool {
-			return lhs.Compare(rhs) <= 0
-		})
+		return opBetweenFixedWithFn(parameters, rs, proc, length, types.CompareDecimal128)
 	case types.T_Rowid:
-		return opBetweenFixedWithFn(parameters, rs, proc, length, func(lhs, rhs types.Rowid) bool {
-			return lhs.LE(&rhs)
+		return opBetweenFixedWithFn(parameters, rs, proc, length, func(lhs, rhs types.Rowid) int {
+			return lhs.Compare(&rhs)
 		})
 
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
-		return opBetweenBytes(parameters, rs, proc, length)
+		return opBetweenBytesWithFunc(parameters, rs, proc, length, selectList, bytes.Compare)
 	}
 
 	panic("unreached code")
@@ -91,59 +87,49 @@ func opBetweenBool(
 	_ *process.Process,
 	length int,
 ) error {
-	p0 := vector.GenerateFunctionFixedTypeParameter[bool](parameters[0])
-	p1 := vector.GenerateFunctionFixedTypeParameter[bool](parameters[1])
-	p2 := vector.GenerateFunctionFixedTypeParameter[bool](parameters[2])
-	rs := vector.MustFunctionResult[bool](result)
-	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedColWithTypeCheck[bool](rsVec)
+	ivec := parameters[0]
+	icol := vector.MustFixedColWithTypeCheck[bool](ivec)
+	lval := vector.GetFixedAtWithTypeCheck[bool](parameters[1], 0)
+	rval := vector.GetFixedAtWithTypeCheck[bool](parameters[2], 0)
+	res := vector.MustFixedColWithTypeCheck[bool](result.GetResultVector())
 
-	// The lower and upper bound of BETWEEN must be non-null constants, or it should be collapsed to "a >= b and a <= c"
-	lb, _ := p1.GetValue(0)
-	ub, _ := p2.GetValue(0)
-	alwaysTrue := lb != ub
+	alwaysTrue := lval != rval
 
-	if parameters[0].IsConst() {
-		v0, null0 := p0.GetValue(0)
-		if null0 {
-			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
+	if ivec.IsConstNull() {
+		nulls.AddRange(result.GetResultVector().GetNulls(), 0, uint64(length))
+	} else if ivec.IsConst() {
+		if alwaysTrue {
+			for i := range length {
+				res[i] = true
+			}
 		} else {
-			if alwaysTrue {
-				for i := 0; i < length; i++ {
-					rss[i] = true
-				}
-			}
-			r := lb == v0
-			for i := 0; i < length; i++ {
-				rss[i] = r
+			r := icol[0] == lval
+
+			for i := range length {
+				res[i] = r
 			}
 		}
-		return nil
-	}
-
-	// basic case.
-	if p0.WithAnyNullValue() {
-		nulls.Set(rsVec.GetNulls(), parameters[0].GetNulls())
-		for i := 0; i < length; i++ {
-			v0, null0 := p0.GetValue(uint64(i))
-			if null0 {
-				continue
+	} else if ivec.HasNull() {
+		iNulls := ivec.GetNulls()
+		rNulls := result.GetResultVector().GetNulls()
+		for i := range length {
+			if iNulls.Contains(uint64(i)) {
+				res[i] = false
+				rNulls.Add(uint64(i))
+			} else {
+				res[i] = icol[i] == lval
 			}
-			rss[i] = alwaysTrue || lb == v0
 		}
-		return nil
-	}
-
-	if alwaysTrue {
-		for i := 0; i < length; i++ {
-			rss[i] = true
+	} else if alwaysTrue {
+		for i := range length {
+			res[i] = true
 		}
 	} else {
-		for i := 0; i < length; i++ {
-			v0, _ := p0.GetValue(uint64(i))
-			rss[i] = lb == v0
+		for i := range length {
+			res[i] = icol[i] == lval
 		}
 	}
+
 	return nil
 }
 
@@ -153,50 +139,60 @@ func opBetweenFixed[T constraints.Integer | constraints.Float](
 	_ *process.Process,
 	length int,
 ) error {
-	p0 := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
-	p1 := vector.GenerateFunctionFixedTypeParameter[T](parameters[1])
-	p2 := vector.GenerateFunctionFixedTypeParameter[T](parameters[2])
-	rs := vector.MustFunctionResult[bool](result)
-	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedColWithTypeCheck[bool](rsVec)
+	ivec := parameters[0]
+	icol := vector.MustFixedColWithTypeCheck[T](ivec)
+	lval := vector.GetFixedAtWithTypeCheck[T](parameters[1], 0)
+	rval := vector.GetFixedAtWithTypeCheck[T](parameters[2], 0)
+	res := vector.MustFixedColWithTypeCheck[bool](result.GetResultVector())
 
-	// The lower and upper bound of BETWEEN must be non-null constants, or it should be collapsed to "a >= b and a <= c"
-	lb, _ := p1.GetValue(0)
-	ub, _ := p2.GetValue(0)
-
-	if parameters[0].IsConst() {
-		v0, null0 := p0.GetValue(0)
-		if null0 {
-			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
+	if ivec.IsConst() {
+		if ivec.IsConstNull() {
+			nulls.AddRange(result.GetResultVector().GetNulls(), 0, uint64(length))
 		} else {
-			r := v0 >= lb && v0 <= ub
-			rowCount := uint64(length)
-			for i := uint64(0); i < rowCount; i++ {
-				rss[i] = r
+			val := icol[0]
+			r := val >= lval && val <= rval
+
+			for i := range length {
+				res[i] = r
 			}
 		}
-		return nil
-	}
-
-	// basic case.
-	if p0.WithAnyNullValue() {
-		nulls.Set(rsVec.GetNulls(), parameters[0].GetNulls())
-		rowCount := uint64(length)
-		for i := uint64(0); i < rowCount; i++ {
-			v0, null0 := p0.GetValue(i)
-			if null0 {
-				continue
+	} else if ivec.HasNull() {
+		iNulls := ivec.GetNulls()
+		rNulls := result.GetResultVector().GetNulls()
+		for i := range length {
+			if iNulls.Contains(uint64(i)) {
+				res[i] = false
+				rNulls.Add(uint64(i))
+			} else {
+				val := icol[i]
+				res[i] = val >= lval && val <= rval
 			}
-			rss[i] = v0 >= lb && v0 <= ub
 		}
-		return nil
+	} else if ivec.GetSorted() {
+		lowerBound := sort.Search(len(icol), func(i int) bool {
+			return icol[i] >= lval
+		})
+
+		upperBound := sort.Search(len(icol), func(i int) bool {
+			return icol[i] > rval
+		})
+
+		for i := range lowerBound {
+			res[i] = false
+		}
+		for i := lowerBound; i < upperBound; i++ {
+			res[i] = true
+		}
+		for i := upperBound; i < length; i++ {
+			res[i] = false
+		}
+	} else {
+		for i := range length {
+			val := icol[i]
+			res[i] = val >= lval && val <= rval
+		}
 	}
 
-	rowCount := uint64(length)
-	for i := uint64(0); i < rowCount; i++ {
-		v0, _ := p0.GetValue(i)
-		rss[i] = v0 >= lb && v0 <= ub
-	}
 	return nil
 }
 
@@ -205,104 +201,622 @@ func opBetweenFixedWithFn[T types.FixedSizeTExceptStrType](
 	result vector.FunctionResultWrapper,
 	_ *process.Process,
 	length int,
-	lessEqualFn func(v1, v2 T) bool,
+	compareFunc func(v1, v2 T) int,
 ) error {
-	p0 := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
-	p1 := vector.GenerateFunctionFixedTypeParameter[T](parameters[1])
-	p2 := vector.GenerateFunctionFixedTypeParameter[T](parameters[2])
-	rs := vector.MustFunctionResult[bool](result)
-	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedColWithTypeCheck[bool](rsVec)
+	ivec := parameters[0]
+	icol := vector.MustFixedColWithTypeCheck[T](ivec)
+	lval := vector.GetFixedAtWithTypeCheck[T](parameters[1], 0)
+	rval := vector.GetFixedAtWithTypeCheck[T](parameters[2], 0)
+	res := vector.MustFixedColWithTypeCheck[bool](result.GetResultVector())
 
-	// The lower and upper bound of BETWEEN must be non-null constants, or it should be collapsed to "a >= b and a <= c"
-	lb, _ := p1.GetValue(0)
-	ub, _ := p2.GetValue(0)
-
-	if parameters[0].IsConst() {
-		v0, null0 := p0.GetValue(0)
-		if null0 {
-			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
+	if ivec.IsConst() {
+		if ivec.IsConstNull() {
+			nulls.AddRange(result.GetResultVector().GetNulls(), 0, uint64(length))
 		} else {
-			r := lessEqualFn(lb, v0) && lessEqualFn(v0, ub)
-			rowCount := uint64(length)
-			for i := uint64(0); i < rowCount; i++ {
-				rss[i] = r
+			val := icol[0]
+			r := compareFunc(val, lval) >= 0 && compareFunc(val, rval) <= 0
+
+			for i := range length {
+				res[i] = r
 			}
 		}
-		return nil
-	}
-
-	// basic case.
-	if p0.WithAnyNullValue() {
-		nulls.Set(rsVec.GetNulls(), parameters[0].GetNulls())
-		rowCount := uint64(length)
-		for i := uint64(0); i < rowCount; i++ {
-			v0, null0 := p0.GetValue(i)
-			if null0 {
-				continue
+	} else if ivec.HasNull() {
+		iNulls := ivec.GetNulls()
+		rNulls := result.GetResultVector().GetNulls()
+		for i := range length {
+			if iNulls.Contains(uint64(i)) {
+				res[i] = false
+				rNulls.Add(uint64(i))
+			} else {
+				val := icol[i]
+				res[i] = compareFunc(val, lval) >= 0 && compareFunc(val, rval) <= 0
 			}
-			rss[i] = lessEqualFn(lb, v0) && lessEqualFn(v0, ub)
 		}
-		return nil
+	} else if ivec.GetSorted() {
+		lowerBound := sort.Search(len(icol), func(i int) bool {
+			return compareFunc(icol[i], lval) >= 0
+		})
+
+		upperBound := sort.Search(len(icol), func(i int) bool {
+			return compareFunc(icol[i], rval) > 0
+		})
+
+		for i := range lowerBound {
+			res[i] = false
+		}
+		for i := lowerBound; i < upperBound; i++ {
+			res[i] = true
+		}
+		for i := upperBound; i < length; i++ {
+			res[i] = false
+		}
+	} else {
+		for i := range length {
+			val := icol[i]
+			res[i] = compareFunc(val, lval) >= 0 && compareFunc(val, rval) <= 0
+		}
 	}
 
-	rowCount := uint64(length)
-	for i := uint64(0); i < rowCount; i++ {
-		v0, _ := p0.GetValue(i)
-		rss[i] = lessEqualFn(lb, v0) && lessEqualFn(v0, ub)
-	}
 	return nil
 }
 
-func opBetweenBytes(
+func opBetweenBytesWithFunc(
+	parameters []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	_ *process.Process,
+	length int,
+	_ *FunctionSelectList,
+	compareFunc func(v1, v2 []byte) int,
+) error {
+	ivec := parameters[0]
+	icol, iarea := vector.MustVarlenaRawData(ivec)
+	lval := parameters[1].GetBytesAt(0)
+	rval := parameters[2].GetBytesAt(0)
+	res := vector.MustFixedColWithTypeCheck[bool](result.GetResultVector())
+
+	if ivec.IsConst() {
+		if ivec.IsConstNull() {
+			nulls.AddRange(result.GetResultVector().GetNulls(), 0, uint64(length))
+		} else {
+			val := icol[0].GetByteSlice(iarea)
+			r := compareFunc(val, lval) >= 0 && compareFunc(val, rval) <= 0
+
+			for i := range length {
+				res[i] = r
+			}
+		}
+	} else if ivec.HasNull() {
+		iNulls := ivec.GetNulls()
+		rNulls := result.GetResultVector().GetNulls()
+		for i := range length {
+			if iNulls.Contains(uint64(i)) {
+				res[i] = false
+				rNulls.Add(uint64(i))
+			} else {
+				val := icol[i].GetByteSlice(iarea)
+				res[i] = compareFunc(val, lval) >= 0 && compareFunc(val, rval) <= 0
+			}
+		}
+	} else if ivec.GetSorted() {
+		lowerBound := sort.Search(len(icol), func(i int) bool {
+			return compareFunc(icol[i].GetByteSlice(iarea), lval) >= 0
+		})
+
+		upperBound := sort.Search(len(icol), func(i int) bool {
+			return compareFunc(icol[i].GetByteSlice(iarea), rval) > 0
+		})
+
+		for i := range lowerBound {
+			res[i] = false
+		}
+		for i := lowerBound; i < upperBound; i++ {
+			res[i] = true
+		}
+		for i := upperBound; i < length; i++ {
+			res[i] = false
+		}
+	} else {
+		for i := range length {
+			val := icol[i].GetByteSlice(iarea)
+			res[i] = compareFunc(val, lval) >= 0 && compareFunc(val, rval) <= 0
+		}
+	}
+
+	return nil
+}
+
+func inRangeImpl(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	paramType := parameters[0].GetType()
+	rs := vector.MustFunctionResult[bool](result)
+	switch paramType.Oid {
+	case types.T_bool:
+		return inRangeBool(parameters, rs, proc, length)
+
+	case types.T_bit:
+		return inRangeFixed[uint64](parameters, rs, proc, length)
+	case types.T_int8:
+		return inRangeFixed[int8](parameters, rs, proc, length)
+	case types.T_int16:
+		return inRangeFixed[int16](parameters, rs, proc, length)
+	case types.T_int32:
+		return inRangeFixed[int32](parameters, rs, proc, length)
+	case types.T_int64:
+		return inRangeFixed[int64](parameters, rs, proc, length)
+	case types.T_uint8:
+		return inRangeFixed[uint8](parameters, rs, proc, length)
+	case types.T_uint16:
+		return inRangeFixed[uint16](parameters, rs, proc, length)
+	case types.T_uint32:
+		return inRangeFixed[uint32](parameters, rs, proc, length)
+	case types.T_uint64:
+		return inRangeFixed[uint64](parameters, rs, proc, length)
+	case types.T_float32:
+		return inRangeFixed[float32](parameters, rs, proc, length)
+	case types.T_float64:
+		return inRangeFixed[float64](parameters, rs, proc, length)
+	case types.T_date:
+		return inRangeFixed[types.Date](parameters, rs, proc, length)
+	case types.T_datetime:
+		return inRangeFixed[types.Datetime](parameters, rs, proc, length)
+	case types.T_time:
+		return inRangeFixed[types.Time](parameters, rs, proc, length)
+	case types.T_timestamp:
+		return inRangeFixed[types.Timestamp](parameters, rs, proc, length)
+
+	case types.T_uuid:
+		return inRangeFixedWithFunc(parameters, rs, proc, length, types.CompareUuid)
+	case types.T_decimal64:
+		return inRangeFixedWithFunc(parameters, rs, proc, length, types.CompareDecimal64)
+	case types.T_decimal128:
+		return inRangeFixedWithFunc(parameters, rs, proc, length, types.CompareDecimal128)
+	case types.T_Rowid:
+		return inRangeFixedWithFunc(parameters, rs, proc, length, func(lhs, rhs types.Rowid) int {
+			return lhs.Compare(&rhs)
+		})
+
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
+		return inRangeBytesWithFunc(parameters, rs, proc, length, selectList, bytes.Compare)
+	}
+
+	panic("unreached code")
+}
+
+func inRangeBool(
 	parameters []*vector.Vector,
 	result vector.FunctionResultWrapper,
 	_ *process.Process,
 	length int,
 ) error {
-	p0 := vector.GenerateFunctionStrParameter(parameters[0])
-	p1 := vector.GenerateFunctionStrParameter(parameters[1])
-	p2 := vector.GenerateFunctionStrParameter(parameters[2])
-	rs := vector.MustFunctionResult[bool](result)
-	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedColWithTypeCheck[bool](rsVec)
+	ivec := parameters[0]
+	icol := vector.MustFixedColWithTypeCheck[bool](ivec)
+	lval := vector.GetFixedAtWithTypeCheck[bool](parameters[1], 0)
+	rval := vector.GetFixedAtWithTypeCheck[bool](parameters[2], 0)
+	flag := vector.MustFixedColWithTypeCheck[uint8](parameters[3])[0]
+	res := vector.MustFixedColWithTypeCheck[bool](result.GetResultVector())
 
-	// The lower and upper bound of BETWEEN must be non-null constants, or it should be collapsed to "a >= b and a <= c"
-	lb, _ := p1.GetStrValue(0)
-	ub, _ := p2.GetStrValue(0)
+	alwaysTrue := flag == 0 && lval != rval
+	alwaysFalse := flag == 3 || (flag != 0 && lval == rval)
 
-	if parameters[0].IsConst() {
-		v0, null0 := p0.GetStrValue(0)
-		if null0 {
-			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
+	if ivec.IsConstNull() {
+		nulls.AddRange(result.GetResultVector().GetNulls(), 0, uint64(length))
+	} else if ivec.IsConst() {
+		if alwaysTrue {
+			for i := range length {
+				res[i] = true
+			}
+		} else if alwaysFalse {
+			for i := range length {
+				res[i] = false
+			}
 		} else {
-			r := bytes.Compare(v0, lb) >= 0 && bytes.Compare(v0, ub) <= 0
-			rowCount := uint64(length)
-			for i := uint64(0); i < rowCount; i++ {
-				rss[i] = r
+			val := icol[0]
+			var r bool
+			switch flag {
+			case 0:
+				r = val == lval
+			case 1:
+				r = val
+			case 2:
+				r = !val
+			}
+
+			for i := range length {
+				res[i] = r
 			}
 		}
-		return nil
-	}
-
-	// basic case.
-	if p0.WithAnyNullValue() {
-		nulls.Set(rsVec.GetNulls(), parameters[0].GetNulls())
-		rowCount := uint64(length)
-		for i := uint64(0); i < rowCount; i++ {
-			v0, null0 := p0.GetStrValue(i)
-			if null0 {
-				continue
+	} else if ivec.HasNull() {
+		iNulls := ivec.GetNulls()
+		rNulls := result.GetResultVector().GetNulls()
+		for i := range length {
+			if iNulls.Contains(uint64(i)) {
+				res[i] = false
+				rNulls.Add(uint64(i))
+			} else {
+				val := icol[i]
+				switch flag {
+				case 0:
+					res[i] = val == lval
+				case 1:
+					res[i] = val
+				case 2:
+					res[i] = !val
+				}
 			}
-			rss[i] = bytes.Compare(v0, lb) >= 0 && bytes.Compare(v0, ub) <= 0
 		}
-		return nil
+	} else if alwaysTrue {
+		for i := range length {
+			res[i] = true
+		}
+	} else if alwaysFalse {
+		for i := range length {
+			res[i] = false
+		}
+	} else {
+		switch flag {
+		case 0:
+			for i := range length {
+				res[i] = icol[i] == lval
+			}
+		case 1:
+			for i := range length {
+				res[i] = icol[i]
+			}
+		case 2:
+			for i := range length {
+				res[i] = !icol[i]
+			}
+		}
 	}
 
-	rowCount := uint64(length)
-	for i := uint64(0); i < rowCount; i++ {
-		v0, _ := p0.GetStrValue(i)
-		rss[i] = bytes.Compare(v0, lb) >= 0 && bytes.Compare(v0, ub) <= 0
+	return nil
+}
+
+func inRangeFixed[T constraints.Integer | constraints.Float](
+	parameters []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	_ *process.Process,
+	length int,
+) error {
+	ivec := parameters[0]
+	icol := vector.MustFixedColWithTypeCheck[T](ivec)
+	lval := vector.GetFixedAtWithTypeCheck[T](parameters[1], 0)
+	rval := vector.GetFixedAtWithTypeCheck[T](parameters[2], 0)
+	flag := vector.MustFixedColWithTypeCheck[uint8](parameters[3])[0]
+	res := vector.MustFixedColWithTypeCheck[bool](result.GetResultVector())
+
+	if ivec.IsConstNull() {
+		nulls.AddRange(result.GetResultVector().GetNulls(), 0, uint64(length))
+	} else if ivec.IsConst() {
+		val := icol[0]
+		var r bool
+		switch flag {
+		case 0:
+			r = val >= lval && val <= rval
+		case 1:
+			r = val > lval && val <= rval
+		case 2:
+			r = val >= lval && val < rval
+		case 3:
+			r = val > lval && val < rval
+		}
+
+		for i := range length {
+			res[i] = r
+		}
+	} else if ivec.HasNull() {
+		iNulls := ivec.GetNulls()
+		rNulls := result.GetResultVector().GetNulls()
+		for i := range length {
+			if iNulls.Contains(uint64(i)) {
+				res[i] = false
+				rNulls.Add(uint64(i))
+			} else {
+				val := icol[i]
+				switch flag {
+				case 0:
+					res[i] = val >= lval && val <= rval
+				case 1:
+					res[i] = val > lval && val <= rval
+				case 2:
+					res[i] = val >= lval && val < rval
+				case 3:
+					res[i] = val > lval && val < rval
+				}
+			}
+		}
+	} else if ivec.GetSorted() {
+		var lowerBoundFunc func(i int) bool
+		if flag&1 == 0 {
+			lowerBoundFunc = func(i int) bool {
+				return icol[i] >= lval
+			}
+		} else {
+			lowerBoundFunc = func(i int) bool {
+				return icol[i] > lval
+			}
+		}
+		lowerBound := sort.Search(len(icol), lowerBoundFunc)
+
+		var upperBoundFunc func(i int) bool
+		if flag&2 == 0 {
+			upperBoundFunc = func(i int) bool {
+				return icol[i] > rval
+			}
+		} else {
+			upperBoundFunc = func(i int) bool {
+				return icol[i] >= rval
+			}
+		}
+		upperBound := sort.Search(len(icol), upperBoundFunc)
+
+		for i := range lowerBound {
+			res[i] = false
+		}
+		for i := lowerBound; i < upperBound; i++ {
+			res[i] = true
+		}
+		for i := upperBound; i < length; i++ {
+			res[i] = false
+		}
+	} else {
+		switch flag {
+		case 0:
+			for i := range length {
+				val := icol[i]
+				res[i] = val >= lval && val <= rval
+			}
+		case 1:
+			for i := range length {
+				val := icol[i]
+				res[i] = val > lval && val <= rval
+			}
+		case 2:
+			for i := range length {
+				val := icol[i]
+				res[i] = val >= lval && val < rval
+			}
+		case 3:
+			for i := range length {
+				val := icol[i]
+				res[i] = val > lval && val < rval
+			}
+		}
 	}
+
+	return nil
+}
+
+func inRangeFixedWithFunc[T types.FixedSizeTExceptStrType](
+	parameters []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	_ *process.Process,
+	length int,
+	compareFunc func(v1, v2 T) int,
+) error {
+	ivec := parameters[0]
+	icol := vector.MustFixedColWithTypeCheck[T](ivec)
+	lval := vector.GetFixedAtWithTypeCheck[T](parameters[1], 0)
+	rval := vector.GetFixedAtWithTypeCheck[T](parameters[2], 0)
+	flag := vector.MustFixedColWithTypeCheck[uint8](parameters[3])[0]
+	res := vector.MustFixedColWithTypeCheck[bool](result.GetResultVector())
+
+	if ivec.IsConstNull() {
+		nulls.AddRange(result.GetResultVector().GetNulls(), 0, uint64(length))
+	} else if ivec.IsConst() {
+		val := icol[0]
+		var r bool
+		switch flag {
+		case 0:
+			r = compareFunc(val, lval) >= 0 && compareFunc(val, rval) <= 0
+		case 1:
+			r = compareFunc(val, lval) > 0 && compareFunc(val, rval) <= 0
+		case 2:
+			r = compareFunc(val, lval) >= 0 && compareFunc(val, rval) < 0
+		case 3:
+			r = compareFunc(val, lval) > 0 && compareFunc(val, rval) < 0
+		}
+
+		for i := range length {
+			res[i] = r
+		}
+	} else if ivec.HasNull() {
+		iNulls := ivec.GetNulls()
+		rNulls := result.GetResultVector().GetNulls()
+		for i := range length {
+			if iNulls.Contains(uint64(i)) {
+				res[i] = false
+				rNulls.Add(uint64(i))
+			} else {
+				val := icol[i]
+				switch flag {
+				case 0:
+					res[i] = compareFunc(val, lval) >= 0 && compareFunc(val, rval) <= 0
+				case 1:
+					res[i] = compareFunc(val, lval) > 0 && compareFunc(val, rval) <= 0
+				case 2:
+					res[i] = compareFunc(val, lval) >= 0 && compareFunc(val, rval) < 0
+				case 3:
+					res[i] = compareFunc(val, lval) > 0 && compareFunc(val, rval) < 0
+				}
+			}
+		}
+	} else if ivec.GetSorted() {
+		var lowerBoundFunc func(i int) bool
+		if flag&1 == 0 {
+			lowerBoundFunc = func(i int) bool {
+				return compareFunc(icol[i], lval) >= 0
+			}
+		} else {
+			lowerBoundFunc = func(i int) bool {
+				return compareFunc(icol[i], lval) > 0
+			}
+		}
+		lowerBound := sort.Search(len(icol), lowerBoundFunc)
+
+		var upperBoundFunc func(i int) bool
+		if flag&2 == 0 {
+			upperBoundFunc = func(i int) bool {
+				return compareFunc(icol[i], rval) > 0
+			}
+		} else {
+			upperBoundFunc = func(i int) bool {
+				return compareFunc(icol[i], rval) >= 0
+			}
+		}
+		upperBound := sort.Search(len(icol), upperBoundFunc)
+
+		for i := range lowerBound {
+			res[i] = false
+		}
+		for i := lowerBound; i < upperBound; i++ {
+			res[i] = true
+		}
+		for i := upperBound; i < length; i++ {
+			res[i] = false
+		}
+	} else {
+		switch flag {
+		case 0:
+			for i := range length {
+				val := icol[i]
+				res[i] = compareFunc(val, lval) >= 0 && compareFunc(val, rval) <= 0
+			}
+		case 1:
+			for i := range length {
+				val := icol[i]
+				res[i] = compareFunc(val, lval) > 0 && compareFunc(val, rval) <= 0
+			}
+		case 2:
+			for i := range length {
+				val := icol[i]
+				res[i] = compareFunc(val, lval) >= 0 && compareFunc(val, rval) < 0
+			}
+		case 3:
+			for i := range length {
+				val := icol[i]
+				res[i] = compareFunc(val, lval) > 0 && compareFunc(val, rval) < 0
+			}
+		}
+	}
+
+	return nil
+}
+
+func inRangeBytesWithFunc(
+	parameters []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	_ *process.Process,
+	length int,
+	_ *FunctionSelectList,
+	compareFunc func(v1, v2 []byte) int,
+) error {
+	ivec := parameters[0]
+	icol, iarea := vector.MustVarlenaRawData(ivec)
+	lval := parameters[1].GetBytesAt(0)
+	rval := parameters[2].GetBytesAt(0)
+	flag := vector.MustFixedColWithTypeCheck[uint8](parameters[3])[0]
+	res := vector.MustFixedColWithTypeCheck[bool](result.GetResultVector())
+
+	if ivec.IsConst() {
+		if ivec.IsConstNull() {
+			nulls.AddRange(result.GetResultVector().GetNulls(), 0, uint64(length))
+		} else {
+			val := icol[0].GetByteSlice(iarea)
+			var r bool
+			switch flag {
+			case 0:
+				r = compareFunc(val, lval) >= 0 && compareFunc(val, rval) <= 0
+			case 1:
+				r = compareFunc(val, lval) > 0 && compareFunc(val, rval) <= 0
+			case 2:
+				r = compareFunc(val, lval) >= 0 && compareFunc(val, rval) < 0
+			case 3:
+				r = compareFunc(val, lval) > 0 && compareFunc(val, rval) < 0
+			}
+
+			for i := range length {
+				res[i] = r
+			}
+		}
+	} else if ivec.HasNull() {
+		iNulls := ivec.GetNulls()
+		rNulls := result.GetResultVector().GetNulls()
+		for i := range length {
+			if iNulls.Contains(uint64(i)) {
+				res[i] = false
+				rNulls.Add(uint64(i))
+			} else {
+				val := icol[i].GetByteSlice(iarea)
+				switch flag {
+				case 0:
+					res[i] = compareFunc(val, lval) >= 0 && compareFunc(val, rval) <= 0
+				case 1:
+					res[i] = compareFunc(val, lval) > 0 && compareFunc(val, rval) <= 0
+				case 2:
+					res[i] = compareFunc(val, lval) >= 0 && compareFunc(val, rval) < 0
+				case 3:
+					res[i] = compareFunc(val, lval) > 0 && compareFunc(val, rval) < 0
+				}
+			}
+		}
+	} else if ivec.GetSorted() {
+		var lowerBoundFunc func(i int) bool
+		if flag&1 == 0 {
+			lowerBoundFunc = func(i int) bool {
+				return compareFunc(icol[i].GetByteSlice(iarea), lval) >= 0
+			}
+		} else {
+			lowerBoundFunc = func(i int) bool {
+				return compareFunc(icol[i].GetByteSlice(iarea), lval) > 0
+			}
+		}
+		lowerBound := sort.Search(len(icol), lowerBoundFunc)
+
+		var upperBoundFunc func(i int) bool
+		if flag&2 == 0 {
+			upperBoundFunc = func(i int) bool {
+				return compareFunc(icol[i].GetByteSlice(iarea), rval) > 0
+			}
+		} else {
+			upperBoundFunc = func(i int) bool {
+				return compareFunc(icol[i].GetByteSlice(iarea), rval) >= 0
+			}
+		}
+		upperBound := sort.Search(len(icol), upperBoundFunc)
+
+		for i := range lowerBound {
+			res[i] = false
+		}
+		for i := lowerBound; i < upperBound; i++ {
+			res[i] = true
+		}
+		for i := upperBound; i < length; i++ {
+			res[i] = false
+		}
+	} else {
+		switch flag {
+		case 0:
+			for i := range length {
+				val := icol[i].GetByteSlice(iarea)
+				res[i] = compareFunc(val, lval) >= 0 && compareFunc(val, rval) <= 0
+			}
+		case 1:
+			for i := range length {
+				val := icol[i].GetByteSlice(iarea)
+				res[i] = compareFunc(val, lval) > 0 && compareFunc(val, rval) <= 0
+			}
+		case 2:
+			for i := range length {
+				val := icol[i].GetByteSlice(iarea)
+				res[i] = compareFunc(val, lval) >= 0 && compareFunc(val, rval) < 0
+			}
+		case 3:
+			for i := range length {
+				val := icol[i].GetByteSlice(iarea)
+				res[i] = compareFunc(val, lval) > 0 && compareFunc(val, rval) < 0
+			}
+		}
+	}
+
 	return nil
 }

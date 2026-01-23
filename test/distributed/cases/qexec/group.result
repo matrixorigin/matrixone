@@ -149,39 +149,19 @@ select sum(a), max(c), avg(d), avg(f) from (select a, c, avg(d) as d, avg(f) as 
 sum(a)    max(c)    avg(d)    avg(f)
 500000500000    foobar9zoo    500000.000000000000    500000.0
 select count(a), sum(d), sum(f) from (
+select count(*), a, sum(d) as d, sum(f) as f from t group by a
+) tmptt;
+count(a)    sum(d)    sum(f)
+1000000    900000000000.00    9.0E11
+select count(a), sum(d), sum(f) from (
 select count(*), a, sum(distinct d) d, sum(distinct f) f from t where a < 10000 group by a
 ) tmptt;
 count(a)    sum(d)    sum(f)
 9999    45000000.00    4.5E7
 explain analyze select a, b, c from t group by a, b, c;
-ap query plan on one cn(24 core)
-Project
-  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1000000 outputRows=1000000 (min=1000000, max=1000000) InputSize=27.66 MiB OutputSize=27.66 MiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=232.00 KiB (min=232.00 KiB, max=232.00 KiB)
-  ->  Aggregate
-        Analyze: timeConsumed=2058ms waitTime=0ms inputRows=0 outputRows=1000000 (min=1000000, max=1000000) InputSize=0 bytes OutputSize=27.66 MiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=78.73 MiB (min=78.73 MiB, max=78.73 MiB) SpillSize=236.18 MiB (min=236.18 MiB, max=236.18 MiB)
-        Group Key: t.a, t.b, t.c shuffle: range(t.a)
-        ->  Table Scan on qetest.t
-              Analyze: timeConsumed=13ms waitTime=0ms inputBlocks=261 inputRows=2000000 outputRows=2000000 (min=2000000, max=2000000) InputSize=55.31 MiB OutputSize=55.31 MiB ReadSize=16.53 MiB|0 bytes|0 bytes MemorySize=464.00 KiB (min=464.00 KiB, max=464.00 KiB)
+
 explain analyze select a, c, avg(d) d, avg(f) f from t group by a, c;
-ap query plan on one cn(24 core)
-Project
-  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1000000 outputRows=1000000 (min=1000000, max=1000000) InputSize=49.59 MiB OutputSize=49.59 MiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=416.00 KiB (min=416.00 KiB, max=416.00 KiB)
-  ->  Aggregate
-        Analyze: timeConsumed=4716ms waitTime=0ms inputRows=0 outputRows=1000000 (min=1000000, max=1000000) InputSize=0 bytes OutputSize=49.59 MiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=57.51 MiB (min=57.51 MiB, max=57.51 MiB) SpillSize=229.55 MiB (min=229.55 MiB, max=229.55 MiB)
-        Group Key: t.a, t.c shuffle: range(t.a)
-        Aggregate Functions: avg(t.d), avg(t.f)
-        ->  Table Scan on qetest.t
-              Analyze: timeConsumed=29ms waitTime=0ms inputBlocks=261 inputRows=2000000 outputRows=2000000 (min=2000000, max=2000000) InputSize=83.92 MiB OutputSize=83.92 MiB ReadSize=32.20 MiB|0 bytes|0 bytes MemorySize=704.00 KiB (min=704.00 KiB, max=704.00 KiB)
+
 explain analyze select count(*), a, sum(distinct d) d, sum(distinct f) f from t where a < 10000 group by a;
-tp query plan
-Project
-  Analyze: timeConsumed=0ms waitTime=0ms inputRows=9999 outputRows=9999 (min=9999, max=9999) InputSize=351.53 KiB OutputSize=351.53 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=288.00 KiB (min=288.00 KiB, max=288.00 KiB)
-  ->  Aggregate
-        Analyze: timeConsumed=780ms waitTime=0ms inputRows=19998 outputRows=9999 (min=9999, max=9999) InputSize=390.59 KiB OutputSize=351.53 KiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=1.28 GiB (min=1.28 GiB, max=1.28 GiB)
-        Group Key: t.a
-        Aggregate Functions: starcount(1), sum(t.d), sum(t.f)
-        ->  Table Scan on qetest.t
-              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=4 inputRows=32768 outputRows=19998 (min=19998, max=19998) InputSize=640.00 KiB OutputSize=390.59 KiB ReadSize=394.71 KiB|0 bytes|0 bytes MemorySize=352.00 KiB (min=160.00 KiB, max=160.00 KiB)
-              Filter Cond: (t.a < 10000)
-              Block Filter Cond: (t.a < 10000)
+
 drop database qetest;

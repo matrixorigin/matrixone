@@ -651,7 +651,7 @@ func calcSelectivityByMinMaxForDecimal(funcName string, min, max float64, expr *
 			ret = (val1 - min + 1) / (max - min)
 		}
 
-	case "between":
+	case "between", "in_range":
 		lit1 := fn.Args[1].GetLit()
 		lit2 := fn.Args[2].GetLit()
 		if lit1 == nil || lit2 == nil {
@@ -668,6 +668,7 @@ func calcSelectivityByMinMaxForDecimal(funcName string, min, max float64, expr *
 			return 0.1
 		}
 		ret = (val2 - val1 + 1) / (max - min)
+
 	default:
 		return 0.1
 	}
@@ -714,7 +715,7 @@ func calcSelectivityByMinMax(funcName string, min, max float64, typ types.T, val
 		if val1, ok = getFloat64Value(typ, vals[0]); ok {
 			ret = (val1 - min + 1) / (max - min)
 		}
-	case "between":
+	case "between", "in_range":
 		if val1, ok = getFloat64Value(typ, vals[0]); ok {
 			if val2, ok = getFloat64Value(typ, vals[1]); ok {
 				ret = (val2 - val1 + 1) / (max - min)
@@ -825,7 +826,7 @@ func estimateNonEqualitySelectivity(expr *plan.Expr, funcName string, builder *Q
 	colRef, litType, literals, colFnName, hasDynamicParam := extractColRefAndLiteralsInFilter(expr)
 	if hasDynamicParam {
 		// assume dynamic parameter always has low selectivity
-		if funcName == "between" {
+		if funcName == "between" || funcName == "in_range" {
 			return 0.0001
 		} else {
 			return 0.01
@@ -876,7 +877,7 @@ func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder, s *pb.Stats
 			ret = estimateEqualitySelectivity(expr, builder, s)
 		case "!=", "<>":
 			ret = 0.9
-		case ">", "<", ">=", "<=", "between":
+		case ">", "<", ">=", "<=", "between", "in_range":
 			ret = estimateNonEqualitySelectivity(expr, funcName, builder)
 		case "and":
 			ret = estimateExprSelectivity(exprImpl.F.Args[0], builder, s)
