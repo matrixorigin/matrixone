@@ -2724,8 +2724,18 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 			}
 		} else {
 			if flags == nil {
-				copy(v.data[v.length*tlen:(v.length+cnt)*tlen], w.data[(int(offset))*tlen:(int(offset)+cnt)*tlen])
-				v.length += cnt
+				if w.nsp.Any() {
+					for i := 0; i < cnt; i++ {
+						if w.nsp.Contains(uint64(offset) + uint64(i)) {
+							nulls.Add(&v.nsp, uint64(v.length))
+						}
+						copy(v.data[v.length*tlen:(v.length+1)*tlen], w.data[(int(offset)+i)*tlen:(int(offset)+i+1)*tlen])
+						v.length++
+					}
+				} else {
+					copy(v.data[v.length*tlen:(v.length+cnt)*tlen], w.data[(int(offset))*tlen:(int(offset)+cnt)*tlen])
+					v.length += cnt
+				}
 			} else {
 				for i := range flags {
 					if flags[i] == 0 {
