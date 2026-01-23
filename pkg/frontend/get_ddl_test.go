@@ -919,3 +919,935 @@ func Test_checkPublicationPermissionWithBh_MultipleAccountsInList(t *testing.T) 
 		convey.So(err, convey.ShouldBeNil)
 	})
 }
+
+// Test_handleGetDdlWithChecker_DatabaseError tests error when database access fails
+// Note: GetStorage() returns *engine.EntireEngine wrapper which is never nil,
+// so the eng == nil check in handleGetDdlWithChecker won't trigger directly.
+// This test verifies that database access errors are properly propagated.
+func Test_handleGetDdlWithChecker_DatabaseError(t *testing.T) {
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
+	convey.Convey("handleGetDdlWithChecker database error", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		// Mock engine that returns error on Database call
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Database(gomock.Any(), "test_db", gomock.Any()).Return(nil, moerr.NewInternalErrorNoCtx("database not found")).AnyTimes()
+
+		// Mock txn operator
+		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+		txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
+		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+		txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
+		txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
+		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
+		txnOperator.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
+		txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+		txnMeta := &txn.TxnMeta{
+			Mode: txn.TxnMode_Optimistic,
+		}
+		txnOperator.EXPECT().Txn().Return(*txnMeta).AnyTimes()
+		txnOperator.EXPECT().GetWaitActiveCost().Return(time.Duration(0)).AnyTimes()
+
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+		txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
+
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
+		pu.SV.SkipCheckUser = true
+		setPu("", pu)
+		setSessionAlloc("", NewLeakCheckAllocator())
+		ioses, err := NewIOSession(&testConn{}, pu, "")
+		convey.So(err, convey.ShouldBeNil)
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, pu.SV)
+
+		ses := NewSession(ctx, "", proto, nil)
+		ses.mrs = &MysqlResultSet{}
+
+		// TxnHandler with engine and valid txn
+		txnHandler := InitTxnHandler("", eng, ctx, txnOperator)
+		ses.txnHandler = txnHandler
+
+		mp := mpool.MustNewZero()
+		ses.SetMemPool(mp)
+
+		dbName := tree.Identifier("test_db")
+		stmt := &tree.GetDdl{
+			Database: &dbName,
+		}
+
+		// Use mock permission checker that always passes
+		mockPermChecker := func(ctx context.Context, ses *Session, dbName, tblName string) error {
+			return nil
+		}
+		mockSnapshotResolver := func(ses *Session, snapshotName string) (*plan2.Snapshot, error) {
+			return nil, nil
+		}
+
+		err = handleGetDdlWithChecker(ctx, ses, stmt, mockPermChecker, mockSnapshotResolver)
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "failed to get database")
+	})
+}
+
+// Test_handleGetDdlWithChecker_NilMpool tests error when mpool is nil
+func Test_handleGetDdlWithChecker_NilMpool(t *testing.T) {
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
+	convey.Convey("handleGetDdlWithChecker nil mpool error", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+		// Mock txn operator (needed to pass txn check)
+		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+		txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
+		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+		txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
+		txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
+		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
+		txnOperator.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
+		txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+		txnMeta := &txn.TxnMeta{
+			Mode: txn.TxnMode_Optimistic,
+		}
+		txnOperator.EXPECT().Txn().Return(*txnMeta).AnyTimes()
+		txnOperator.EXPECT().GetWaitActiveCost().Return(time.Duration(0)).AnyTimes()
+
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+		txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
+
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
+		pu.SV.SkipCheckUser = true
+		setPu("", pu)
+		setSessionAlloc("", NewLeakCheckAllocator())
+		ioses, err := NewIOSession(&testConn{}, pu, "")
+		convey.So(err, convey.ShouldBeNil)
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, pu.SV)
+
+		ses := NewSession(ctx, "", proto, nil)
+		ses.mrs = &MysqlResultSet{}
+
+		// TxnHandler with engine and valid txn
+		txnHandler := InitTxnHandler("", eng, ctx, txnOperator)
+		ses.txnHandler = txnHandler
+		// Explicitly set mempool to nil to test the nil mpool error path
+		// Note: NewSession creates a mpool if nil is passed, so we must set it to nil after creation
+		ses.SetMemPool(nil)
+
+		dbName := tree.Identifier("test_db")
+		stmt := &tree.GetDdl{
+			Database: &dbName,
+		}
+
+		// Use mock permission checker that always passes
+		mockPermChecker := func(ctx context.Context, ses *Session, dbName, tblName string) error {
+			return nil
+		}
+		mockSnapshotResolver := func(ses *Session, snapshotName string) (*plan2.Snapshot, error) {
+			return nil, nil
+		}
+
+		err = handleGetDdlWithChecker(ctx, ses, stmt, mockPermChecker, mockSnapshotResolver)
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(moerr.IsMoErrCode(err, moerr.ErrInternal), convey.ShouldBeTrue)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "mpool is nil")
+	})
+}
+
+// Test_handleGetDdlWithChecker_NoTxn tests error when no txn is available
+func Test_handleGetDdlWithChecker_NoTxn(t *testing.T) {
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
+	convey.Convey("handleGetDdlWithChecker no txn error", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
+		pu.SV.SkipCheckUser = true
+		setPu("", pu)
+		setSessionAlloc("", NewLeakCheckAllocator())
+		ioses, err := NewIOSession(&testConn{}, pu, "")
+		convey.So(err, convey.ShouldBeNil)
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, pu.SV)
+
+		ses := NewSession(ctx, "", proto, nil)
+		ses.mrs = &MysqlResultSet{}
+
+		// TxnHandler without txn
+		txnHandler := InitTxnHandler("", eng, ctx, nil)
+		ses.txnHandler = txnHandler
+
+		mp := mpool.MustNewZero()
+		ses.SetMemPool(mp)
+
+		dbName := tree.Identifier("test_db")
+		stmt := &tree.GetDdl{
+			Database: &dbName,
+		}
+
+		// Use mock permission checker that always passes
+		mockPermChecker := func(ctx context.Context, ses *Session, dbName, tblName string) error {
+			return nil
+		}
+		mockSnapshotResolver := func(ses *Session, snapshotName string) (*plan2.Snapshot, error) {
+			return nil, nil
+		}
+
+		// Without proc or txn, should return error
+		err = handleGetDdlWithChecker(ctx, ses, stmt, mockPermChecker, mockSnapshotResolver)
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(moerr.IsMoErrCode(err, moerr.ErrInternal), convey.ShouldBeTrue)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "transaction is required")
+	})
+}
+
+// Test_handleGetDdlWithChecker_WithSnapshot tests handling GetDdl with snapshot parameter
+func Test_handleGetDdlWithChecker_WithSnapshot(t *testing.T) {
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
+	convey.Convey("handleGetDdlWithChecker with snapshot", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		// Mock engine
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+		// Mock database
+		mockDb := mock_frontend.NewMockDatabase(ctrl)
+		mockDb.EXPECT().IsSubscription(gomock.Any()).Return(false).AnyTimes()
+		eng.EXPECT().Database(gomock.Any(), "test_db", gomock.Any()).Return(mockDb, nil).AnyTimes()
+
+		// Mock relation
+		mockRel := mock_frontend.NewMockRelation(ctrl)
+		mockRel.EXPECT().CopyTableDef(gomock.Any()).Return(&plan2.TableDef{
+			Name:      "test_table",
+			DbName:    "test_db",
+			TableType: catalog.SystemOrdinaryRel,
+			Defs:      []*plan2.TableDefType{},
+		}).AnyTimes()
+		mockRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(123)).AnyTimes()
+		mockDb.EXPECT().Relation(gomock.Any(), "test_table", nil).Return(mockRel, nil).AnyTimes()
+
+		// Mock txn operator
+		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+		txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
+		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+		txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
+		txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
+		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
+		txnOperator.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
+		txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+		txnOperator.EXPECT().CloneSnapshotOp(gomock.Any()).Return(txnOperator).AnyTimes()
+		txnMeta := &txn.TxnMeta{
+			Mode: txn.TxnMode_Optimistic,
+		}
+		txnOperator.EXPECT().Txn().Return(*txnMeta).AnyTimes()
+		txnOperator.EXPECT().GetWaitActiveCost().Return(time.Duration(0)).AnyTimes()
+
+		// Mock txn client
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+		txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
+
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
+		pu.SV.SkipCheckUser = true
+		setPu("", pu)
+		setSessionAlloc("", NewLeakCheckAllocator())
+		ioses, err := NewIOSession(&testConn{}, pu, "")
+		convey.So(err, convey.ShouldBeNil)
+		pu.StorageEngine = eng
+		pu.TxnClient = txnClient
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, pu.SV)
+
+		ses := NewSession(ctx, "", proto, nil)
+		tenant := &TenantInfo{
+			Tenant:   "sys",
+			TenantID: catalog.System_Account,
+			User:     DefaultTenantMoAdmin,
+		}
+		ses.SetTenantInfo(tenant)
+		ses.mrs = &MysqlResultSet{}
+		ses.SetDatabaseName("test_db")
+
+		// Mock TxnHandler
+		txnHandler := InitTxnHandler("", eng, ctx, txnOperator)
+		ses.txnHandler = txnHandler
+
+		// Mock GetMemPool
+		mp := mpool.MustNewZero()
+		ses.SetMemPool(mp)
+
+		proto.SetSession(ses)
+
+		// Test with snapshot
+		dbName := tree.Identifier("test_db")
+		tableName := tree.Identifier("test_table")
+		snapshotName := tree.Identifier("test_snapshot")
+		stmt := &tree.GetDdl{
+			Database: &dbName,
+			Table:    &tableName,
+			Snapshot: &snapshotName,
+		}
+
+		// Use mock permission checker that always passes
+		mockPermChecker := func(ctx context.Context, ses *Session, dbName, tblName string) error {
+			return nil
+		}
+		// Use mock snapshot resolver that returns a snapshot with timestamp
+		ts := types.BuildTS(1000, 0)
+		snapshotTS := ts.ToTimestamp()
+		mockSnapshotResolver := func(ses *Session, snapshotName string) (*plan2.Snapshot, error) {
+			return &plan2.Snapshot{
+				TS: &snapshotTS,
+			}, nil
+		}
+
+		err = handleGetDdlWithChecker(ctx, ses, stmt, mockPermChecker, mockSnapshotResolver)
+		convey.So(err, convey.ShouldBeNil)
+	})
+}
+
+// Test_handleGetDdlWithChecker_SnapshotResolveError tests snapshot resolution error
+func Test_handleGetDdlWithChecker_SnapshotResolveError(t *testing.T) {
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
+	convey.Convey("handleGetDdlWithChecker snapshot resolve error", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		// Mock engine
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+		// Mock txn operator
+		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+		txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
+		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+		txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
+		txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
+		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
+		txnOperator.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
+		txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+		txnMeta := &txn.TxnMeta{
+			Mode: txn.TxnMode_Optimistic,
+		}
+		txnOperator.EXPECT().Txn().Return(*txnMeta).AnyTimes()
+		txnOperator.EXPECT().GetWaitActiveCost().Return(time.Duration(0)).AnyTimes()
+
+		// Mock txn client
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+		txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
+
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
+		pu.SV.SkipCheckUser = true
+		setPu("", pu)
+		setSessionAlloc("", NewLeakCheckAllocator())
+		ioses, err := NewIOSession(&testConn{}, pu, "")
+		convey.So(err, convey.ShouldBeNil)
+		pu.StorageEngine = eng
+		pu.TxnClient = txnClient
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, pu.SV)
+
+		ses := NewSession(ctx, "", proto, nil)
+		ses.mrs = &MysqlResultSet{}
+
+		// Mock TxnHandler
+		txnHandler := InitTxnHandler("", eng, ctx, txnOperator)
+		ses.txnHandler = txnHandler
+
+		// Mock GetMemPool
+		mp := mpool.MustNewZero()
+		ses.SetMemPool(mp)
+
+		proto.SetSession(ses)
+
+		// Test with snapshot
+		dbName := tree.Identifier("test_db")
+		snapshotName := tree.Identifier("test_snapshot")
+		stmt := &tree.GetDdl{
+			Database: &dbName,
+			Snapshot: &snapshotName,
+		}
+
+		// Use mock permission checker that always passes
+		mockPermChecker := func(ctx context.Context, ses *Session, dbName, tblName string) error {
+			return nil
+		}
+		// Use mock snapshot resolver that returns an error
+		mockSnapshotResolver := func(ses *Session, snapshotName string) (*plan2.Snapshot, error) {
+			return nil, moerr.NewInternalErrorNoCtx("snapshot not found")
+		}
+
+		err = handleGetDdlWithChecker(ctx, ses, stmt, mockPermChecker, mockSnapshotResolver)
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "failed to resolve snapshot")
+	})
+}
+
+// Test_handleGetDdlWithChecker_PermissionError tests permission check error
+func Test_handleGetDdlWithChecker_PermissionError(t *testing.T) {
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
+	convey.Convey("handleGetDdlWithChecker permission error", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
+		pu.SV.SkipCheckUser = true
+		setPu("", pu)
+		setSessionAlloc("", NewLeakCheckAllocator())
+		ioses, err := NewIOSession(&testConn{}, pu, "")
+		convey.So(err, convey.ShouldBeNil)
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, pu.SV)
+
+		ses := NewSession(ctx, "", proto, nil)
+		ses.mrs = &MysqlResultSet{}
+
+		txnHandler := InitTxnHandler("", eng, ctx, nil)
+		ses.txnHandler = txnHandler
+
+		mp := mpool.MustNewZero()
+		ses.SetMemPool(mp)
+
+		dbName := tree.Identifier("test_db")
+		stmt := &tree.GetDdl{
+			Database: &dbName,
+		}
+
+		// Use mock permission checker that returns an error
+		mockPermChecker := func(ctx context.Context, ses *Session, dbName, tblName string) error {
+			return moerr.NewInternalErrorNoCtx("permission denied")
+		}
+		mockSnapshotResolver := func(ses *Session, snapshotName string) (*plan2.Snapshot, error) {
+			return nil, nil
+		}
+
+		err = handleGetDdlWithChecker(ctx, ses, stmt, mockPermChecker, mockSnapshotResolver)
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "permission denied")
+	})
+}
+
+// Test_visitDatabaseDdl tests visitDatabaseDdl function
+func Test_visitDatabaseDdl(t *testing.T) {
+	ctx := context.Background()
+	convey.Convey("visitDatabaseDdl succ - single table", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		mp := mpool.MustNewZero()
+
+		// Create batch
+		bat := batch.New([]string{"dbname", "tablename", "tableid", "tablesql"})
+		bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+		bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[3] = vector.NewVec(types.T_varchar.ToType())
+		defer bat.Clean(mp)
+
+		// Mock engine
+		eng := mock_frontend.NewMockEngine(ctrl)
+		mockDb := mock_frontend.NewMockDatabase(ctrl)
+		mockRel := mock_frontend.NewMockRelation(ctrl)
+		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+
+		// Database is called twice: once in visitDatabaseDdl and once in visitTableDdl
+		eng.EXPECT().Database(ctx, "test_db", txnOperator).Return(mockDb, nil).Times(2)
+		mockDb.EXPECT().Relation(ctx, "test_table", nil).Return(mockRel, nil)
+		mockRel.EXPECT().CopyTableDef(ctx).Return(&plan2.TableDef{
+			Name:      "test_table",
+			DbName:    "test_db",
+			TableType: catalog.SystemOrdinaryRel,
+			Defs:      []*plan2.TableDefType{},
+		})
+		mockRel.EXPECT().GetTableID(ctx).Return(uint64(123))
+
+		// Test with tableName provided (delegates to visitTableDdl)
+		err := visitDatabaseDdl(ctx, "test_db", "test_table", bat, txnOperator, eng, mp)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(bat.RowCount(), convey.ShouldEqual, 1)
+	})
+
+	convey.Convey("visitDatabaseDdl succ - all tables", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		mp := mpool.MustNewZero()
+
+		// Create batch
+		bat := batch.New([]string{"dbname", "tablename", "tableid", "tablesql"})
+		bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+		bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[3] = vector.NewVec(types.T_varchar.ToType())
+		defer bat.Clean(mp)
+
+		// Mock engine
+		eng := mock_frontend.NewMockEngine(ctrl)
+		mockDb := mock_frontend.NewMockDatabase(ctrl)
+		mockRel1 := mock_frontend.NewMockRelation(ctrl)
+		mockRel2 := mock_frontend.NewMockRelation(ctrl)
+		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+
+		eng.EXPECT().Database(ctx, "test_db", txnOperator).Return(mockDb, nil).Times(3) // Once for Relations, twice for each table
+		mockDb.EXPECT().Relations(ctx).Return([]string{"table1", "table2"}, nil)
+		mockDb.EXPECT().Relation(ctx, "table1", nil).Return(mockRel1, nil)
+		mockDb.EXPECT().Relation(ctx, "table2", nil).Return(mockRel2, nil)
+		mockRel1.EXPECT().CopyTableDef(ctx).Return(&plan2.TableDef{
+			Name:      "table1",
+			DbName:    "test_db",
+			TableType: catalog.SystemOrdinaryRel,
+			Defs:      []*plan2.TableDefType{},
+		})
+		mockRel1.EXPECT().GetTableID(ctx).Return(uint64(101))
+		mockRel2.EXPECT().CopyTableDef(ctx).Return(&plan2.TableDef{
+			Name:      "table2",
+			DbName:    "test_db",
+			TableType: catalog.SystemOrdinaryRel,
+			Defs:      []*plan2.TableDefType{},
+		})
+		mockRel2.EXPECT().GetTableID(ctx).Return(uint64(102))
+
+		// Test with empty tableName (iterate all tables)
+		err := visitDatabaseDdl(ctx, "test_db", "", bat, txnOperator, eng, mp)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(bat.RowCount(), convey.ShouldEqual, 2)
+	})
+}
+
+// Test_visitDatabaseDdl_InvalidInput tests visitDatabaseDdl with invalid inputs
+func Test_visitDatabaseDdl_InvalidInput(t *testing.T) {
+	ctx := context.Background()
+	convey.Convey("visitDatabaseDdl invalid input", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		mp := mpool.MustNewZero()
+		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+		eng := mock_frontend.NewMockEngine(ctrl)
+
+		// Test nil batch
+		err := visitDatabaseDdl(ctx, "test_db", "test_table", nil, txnOperator, eng, mp)
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "batch is nil")
+
+		// Test batch with insufficient columns
+		bat := batch.New([]string{"col1"})
+		bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+		err = visitDatabaseDdl(ctx, "test_db", "test_table", bat, txnOperator, eng, mp)
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "at least 4 columns")
+		bat.Clean(mp)
+
+		// Test nil mpool
+		bat2 := batch.New([]string{"dbname", "tablename", "tableid", "tablesql"})
+		bat2.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+		bat2.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+		bat2.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+		bat2.Vecs[3] = vector.NewVec(types.T_varchar.ToType())
+		err = visitDatabaseDdl(ctx, "test_db", "test_table", bat2, txnOperator, eng, nil)
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "mpool is nil")
+		bat2.Clean(mp)
+
+		// Test nil engine
+		bat3 := batch.New([]string{"dbname", "tablename", "tableid", "tablesql"})
+		bat3.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+		bat3.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+		bat3.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+		bat3.Vecs[3] = vector.NewVec(types.T_varchar.ToType())
+		err = visitDatabaseDdl(ctx, "test_db", "test_table", bat3, txnOperator, nil, mp)
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "engine is nil")
+		bat3.Clean(mp)
+
+		// Test nil txn
+		bat4 := batch.New([]string{"dbname", "tablename", "tableid", "tablesql"})
+		bat4.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+		bat4.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+		bat4.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+		bat4.Vecs[3] = vector.NewVec(types.T_varchar.ToType())
+		err = visitDatabaseDdl(ctx, "test_db", "test_table", bat4, nil, eng, mp)
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "txn is nil")
+		bat4.Clean(mp)
+	})
+}
+
+// Test_getddlbatch_AllDatabases tests getddlbatch when databaseName is empty (iterate all databases)
+func Test_getddlbatch_AllDatabases(t *testing.T) {
+	ctx := context.Background()
+	convey.Convey("getddlbatch all databases", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		mp := mpool.MustNewZero()
+
+		// Mock engine
+		eng := mock_frontend.NewMockEngine(ctrl)
+		mockDb1 := mock_frontend.NewMockDatabase(ctrl)
+		mockDb2 := mock_frontend.NewMockDatabase(ctrl)
+		mockRel1 := mock_frontend.NewMockRelation(ctrl)
+		mockRel2 := mock_frontend.NewMockRelation(ctrl)
+		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+
+		// Return two databases
+		eng.EXPECT().Databases(ctx, txnOperator).Return([]string{"db1", "db2"}, nil)
+
+		// First database
+		eng.EXPECT().Database(ctx, "db1", txnOperator).Return(mockDb1, nil).AnyTimes()
+		mockDb1.EXPECT().Relations(ctx).Return([]string{"table1"}, nil)
+		mockDb1.EXPECT().Relation(ctx, "table1", nil).Return(mockRel1, nil)
+		mockRel1.EXPECT().CopyTableDef(ctx).Return(&plan2.TableDef{
+			Name:      "table1",
+			DbName:    "db1",
+			TableType: catalog.SystemOrdinaryRel,
+			Defs:      []*plan2.TableDefType{},
+		})
+		mockRel1.EXPECT().GetTableID(ctx).Return(uint64(101))
+
+		// Second database
+		eng.EXPECT().Database(ctx, "db2", txnOperator).Return(mockDb2, nil).AnyTimes()
+		mockDb2.EXPECT().Relations(ctx).Return([]string{"table2"}, nil)
+		mockDb2.EXPECT().Relation(ctx, "table2", nil).Return(mockRel2, nil)
+		mockRel2.EXPECT().CopyTableDef(ctx).Return(&plan2.TableDef{
+			Name:      "table2",
+			DbName:    "db2",
+			TableType: catalog.SystemOrdinaryRel,
+			Defs:      []*plan2.TableDefType{},
+		})
+		mockRel2.EXPECT().GetTableID(ctx).Return(uint64(102))
+
+		// Test with empty databaseName (iterate all databases)
+		bat, err := getddlbatch(ctx, "", "", eng, mp, txnOperator)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(bat, convey.ShouldNotBeNil)
+		convey.So(bat.RowCount(), convey.ShouldEqual, 2)
+		bat.Clean(mp)
+	})
+}
+
+// Test_getddlbatch_NilTxn tests getddlbatch when txn is nil
+func Test_getddlbatch_NilTxn(t *testing.T) {
+	ctx := context.Background()
+	convey.Convey("getddlbatch nil txn", t, func() {
+		mp := mpool.MustNewZero()
+		eng := mock_frontend.NewMockEngine(nil)
+
+		_, err := getddlbatch(ctx, "test_db", "test_table", eng, mp, nil)
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "txn is nil")
+	})
+}
+
+// Test_GetDdlBatchWithoutSession_InvalidInputs tests GetDdlBatchWithoutSession with invalid inputs
+func Test_GetDdlBatchWithoutSession_InvalidInputs(t *testing.T) {
+	ctx := context.Background()
+	convey.Convey("GetDdlBatchWithoutSession invalid inputs", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		mp := mpool.MustNewZero()
+		eng := mock_frontend.NewMockEngine(ctrl)
+		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+
+		// Test nil engine
+		_, err := GetDdlBatchWithoutSession(ctx, "test_db", "test_table", nil, txnOperator, mp, nil)
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "engine is nil")
+
+		// Test nil txn
+		_, err = GetDdlBatchWithoutSession(ctx, "test_db", "test_table", eng, nil, mp, nil)
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "txn is nil")
+
+		// Test nil mpool
+		_, err = GetDdlBatchWithoutSession(ctx, "test_db", "test_table", eng, txnOperator, nil, nil)
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "mpool is nil")
+	})
+}
+
+// Test_visitTableDdl_NilEngine tests visitTableDdl when engine is nil
+func Test_visitTableDdl_NilEngine(t *testing.T) {
+	ctx := context.Background()
+	convey.Convey("visitTableDdl nil engine", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		mp := mpool.MustNewZero()
+		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+
+		bat := batch.New([]string{"dbname", "tablename", "tableid", "tablesql"})
+		bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+		bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[3] = vector.NewVec(types.T_varchar.ToType())
+		defer bat.Clean(mp)
+
+		err := visitTableDdl(ctx, "test_db", "test_table", bat, txnOperator, nil, mp)
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "engine is nil")
+	})
+}
+
+// Test_visitTableDdl_NilTxn tests visitTableDdl when txn is nil
+func Test_visitTableDdl_NilTxn(t *testing.T) {
+	ctx := context.Background()
+	convey.Convey("visitTableDdl nil txn", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		mp := mpool.MustNewZero()
+		eng := mock_frontend.NewMockEngine(ctrl)
+
+		bat := batch.New([]string{"dbname", "tablename", "tableid", "tablesql"})
+		bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+		bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[3] = vector.NewVec(types.T_varchar.ToType())
+		defer bat.Clean(mp)
+
+		err := visitTableDdl(ctx, "test_db", "test_table", bat, nil, eng, mp)
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "txn is nil")
+	})
+}
+
+// Test_visitTableDdl_DatabaseError tests visitTableDdl when database access fails
+func Test_visitTableDdl_DatabaseError(t *testing.T) {
+	ctx := context.Background()
+	convey.Convey("visitTableDdl database error", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		mp := mpool.MustNewZero()
+		eng := mock_frontend.NewMockEngine(ctrl)
+		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+
+		eng.EXPECT().Database(ctx, "test_db", txnOperator).Return(nil, moerr.NewInternalErrorNoCtx("database not found"))
+
+		bat := batch.New([]string{"dbname", "tablename", "tableid", "tablesql"})
+		bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+		bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[3] = vector.NewVec(types.T_varchar.ToType())
+		defer bat.Clean(mp)
+
+		err := visitTableDdl(ctx, "test_db", "test_table", bat, txnOperator, eng, mp)
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "failed to get database")
+	})
+}
+
+// Test_visitTableDdl_RelationError tests visitTableDdl when relation access fails
+func Test_visitTableDdl_RelationError(t *testing.T) {
+	ctx := context.Background()
+	convey.Convey("visitTableDdl relation error", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		mp := mpool.MustNewZero()
+		eng := mock_frontend.NewMockEngine(ctrl)
+		mockDb := mock_frontend.NewMockDatabase(ctrl)
+		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+
+		eng.EXPECT().Database(ctx, "test_db", txnOperator).Return(mockDb, nil)
+		mockDb.EXPECT().Relation(ctx, "test_table", nil).Return(nil, moerr.NewInternalErrorNoCtx("table not found"))
+
+		bat := batch.New([]string{"dbname", "tablename", "tableid", "tablesql"})
+		bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+		bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[3] = vector.NewVec(types.T_varchar.ToType())
+		defer bat.Clean(mp)
+
+		err := visitTableDdl(ctx, "test_db", "test_table", bat, txnOperator, eng, mp)
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "failed to get table")
+	})
+}
+
+// Test_visitTableDdl_NilTableDef tests visitTableDdl when table definition is nil
+func Test_visitTableDdl_NilTableDef(t *testing.T) {
+	ctx := context.Background()
+	convey.Convey("visitTableDdl nil table def", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		mp := mpool.MustNewZero()
+		eng := mock_frontend.NewMockEngine(ctrl)
+		mockDb := mock_frontend.NewMockDatabase(ctrl)
+		mockRel := mock_frontend.NewMockRelation(ctrl)
+		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+
+		eng.EXPECT().Database(ctx, "test_db", txnOperator).Return(mockDb, nil)
+		mockDb.EXPECT().Relation(ctx, "test_table", nil).Return(mockRel, nil)
+		mockRel.EXPECT().CopyTableDef(ctx).Return(nil)
+
+		bat := batch.New([]string{"dbname", "tablename", "tableid", "tablesql"})
+		bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+		bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[3] = vector.NewVec(types.T_varchar.ToType())
+		defer bat.Clean(mp)
+
+		err := visitTableDdl(ctx, "test_db", "test_table", bat, txnOperator, eng, mp)
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "failed to get table definition")
+	})
+}
+
+// Test_visitTableDdl_ClusterTable tests visitTableDdl with cluster table type
+func Test_visitTableDdl_ClusterTable(t *testing.T) {
+	ctx := context.Background()
+	convey.Convey("visitTableDdl cluster table", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		mp := mpool.MustNewZero()
+		eng := mock_frontend.NewMockEngine(ctrl)
+		mockDb := mock_frontend.NewMockDatabase(ctrl)
+		mockRel := mock_frontend.NewMockRelation(ctrl)
+		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+
+		eng.EXPECT().Database(ctx, "test_db", txnOperator).Return(mockDb, nil)
+		mockDb.EXPECT().Relation(ctx, "test_table", nil).Return(mockRel, nil)
+		mockRel.EXPECT().CopyTableDef(ctx).Return(&plan2.TableDef{
+			Name:      "test_table",
+			DbName:    "test_db",
+			TableType: catalog.SystemClusterRel,
+			Defs:      []*plan2.TableDefType{},
+		})
+		mockRel.EXPECT().GetTableID(ctx).Return(uint64(123))
+
+		bat := batch.New([]string{"dbname", "tablename", "tableid", "tablesql"})
+		bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+		bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[3] = vector.NewVec(types.T_varchar.ToType())
+		defer bat.Clean(mp)
+
+		err := visitTableDdl(ctx, "test_db", "test_table", bat, txnOperator, eng, mp)
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "cluster table is not supported")
+	})
+}
+
+// Test_visitTableDdl_ExternalTable tests visitTableDdl with external table type
+func Test_visitTableDdl_ExternalTable(t *testing.T) {
+	ctx := context.Background()
+	convey.Convey("visitTableDdl external table", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		mp := mpool.MustNewZero()
+		eng := mock_frontend.NewMockEngine(ctrl)
+		mockDb := mock_frontend.NewMockDatabase(ctrl)
+		mockRel := mock_frontend.NewMockRelation(ctrl)
+		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+
+		eng.EXPECT().Database(ctx, "test_db", txnOperator).Return(mockDb, nil)
+		mockDb.EXPECT().Relation(ctx, "test_table", nil).Return(mockRel, nil)
+		mockRel.EXPECT().CopyTableDef(ctx).Return(&plan2.TableDef{
+			Name:      "test_table",
+			DbName:    "test_db",
+			TableType: catalog.SystemExternalRel,
+			Defs:      []*plan2.TableDefType{},
+		})
+		mockRel.EXPECT().GetTableID(ctx).Return(uint64(123))
+
+		bat := batch.New([]string{"dbname", "tablename", "tableid", "tablesql"})
+		bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+		bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[3] = vector.NewVec(types.T_varchar.ToType())
+		defer bat.Clean(mp)
+
+		err := visitTableDdl(ctx, "test_db", "test_table", bat, txnOperator, eng, mp)
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "external table is not supported")
+	})
+}
+
+// Test_visitTableDdl_WithExistingProperty tests visitTableDdl when PropFromPublication already exists
+func Test_visitTableDdl_WithExistingProperty(t *testing.T) {
+	ctx := context.Background()
+	convey.Convey("visitTableDdl with existing PropFromPublication property", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		mp := mpool.MustNewZero()
+		eng := mock_frontend.NewMockEngine(ctrl)
+		mockDb := mock_frontend.NewMockDatabase(ctrl)
+		mockRel := mock_frontend.NewMockRelation(ctrl)
+		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+
+		eng.EXPECT().Database(ctx, "test_db", txnOperator).Return(mockDb, nil)
+		mockDb.EXPECT().Relation(ctx, "test_table", nil).Return(mockRel, nil)
+		mockRel.EXPECT().CopyTableDef(ctx).Return(&plan2.TableDef{
+			Name:      "test_table",
+			DbName:    "test_db",
+			TableType: catalog.SystemOrdinaryRel,
+			Defs: []*plan2.TableDefType{
+				{
+					Def: &plan2.TableDef_DefType_Properties{
+						Properties: &plan2.PropertiesDef{
+							Properties: []*plan2.Property{
+								{Key: catalog.PropFromPublication, Value: "true"},
+							},
+						},
+					},
+				},
+			},
+		})
+		mockRel.EXPECT().GetTableID(ctx).Return(uint64(123))
+
+		bat := batch.New([]string{"dbname", "tablename", "tableid", "tablesql"})
+		bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+		bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[3] = vector.NewVec(types.T_varchar.ToType())
+		defer bat.Clean(mp)
+
+		err := visitTableDdl(ctx, "test_db", "test_table", bat, txnOperator, eng, mp)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(bat.RowCount(), convey.ShouldEqual, 1)
+	})
+}

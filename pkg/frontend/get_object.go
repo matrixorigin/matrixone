@@ -27,6 +27,41 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 )
 
+// GetObjectPermissionChecker is the function to check publication permission for GetObject
+// This is exported as a variable to allow stubbing in tests
+var GetObjectPermissionChecker = func(ctx context.Context, ses *Session) error {
+	return checkPublicationPermissionForGetObject(ctx, ses)
+}
+
+// GetObjectFSProvider is the function to get fileservice for GetObject
+// This is exported as a variable to allow stubbing in tests
+var GetObjectFSProvider = func(ses *Session) (fileservice.FileService, error) {
+	eng := getPu(ses.GetService()).StorageEngine
+	var de *disttae.Engine
+	var ok bool
+	if de, ok = eng.(*disttae.Engine); !ok {
+		var entireEngine *engine.EntireEngine
+		if entireEngine, ok = eng.(*engine.EntireEngine); ok {
+			de, ok = entireEngine.Engine.(*disttae.Engine)
+		}
+		if !ok {
+			return nil, moerr.NewInternalErrorNoCtx("failed to get disttae engine")
+		}
+	}
+
+	fs := de.FS()
+	if fs == nil {
+		return nil, moerr.NewInternalErrorNoCtx("fileservice is not available")
+	}
+	return fs, nil
+}
+
+// GetObjectDataReader is the function to read object data from fileservice
+// This is exported as a variable to allow stubbing in tests
+var GetObjectDataReader = func(ctx context.Context, ses *Session, objectName string, offset int64, size int64) ([]byte, error) {
+	return readObjectFromFS(ctx, ses, objectName, offset, size)
+}
+
 // readObjectFromFS reads the object file from fileservice and returns its content as []byte
 func readObjectFromFS(ctx context.Context, ses *Session, objectName string, offset int64, size int64) ([]byte, error) {
 	eng := getPu(ses.GetService()).StorageEngine
@@ -139,27 +174,14 @@ func handleGetObject(
 	// Check publication permission
 	// For GET OBJECT, we check if the account has permission to access any publication
 	// since objectName doesn't contain database/table information
-	if err := checkPublicationPermissionForGetObject(ctx, ses); err != nil {
+	if err := GetObjectPermissionChecker(ctx, ses); err != nil {
 		return err
 	}
 
 	// Get fileservice
-	eng := getPu(ses.GetService()).StorageEngine
-	var de *disttae.Engine
-	var ok bool
-	if de, ok = eng.(*disttae.Engine); !ok {
-		var entireEngine *engine.EntireEngine
-		if entireEngine, ok = eng.(*engine.EntireEngine); ok {
-			de, ok = entireEngine.Engine.(*disttae.Engine)
-		}
-		if !ok {
-			return moerr.NewInternalError(ctx, "failed to get disttae engine")
-		}
-	}
-
-	fs := de.FS()
-	if fs == nil {
-		return moerr.NewInternalError(ctx, "fileservice is not available")
+	fs, err := GetObjectFSProvider(ses)
+	if err != nil {
+		return err
 	}
 
 	// Get file size
@@ -206,7 +228,7 @@ func handleGetObject(
 		}
 
 		// Read the chunk data
-		data, err = readObjectFromFS(ctx, ses, objectName, offset, size)
+		data, err = GetObjectDataReader(ctx, ses, objectName, offset, size)
 		if err != nil {
 			return err
 		}

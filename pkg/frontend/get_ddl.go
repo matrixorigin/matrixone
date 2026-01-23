@@ -34,10 +34,35 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
+// PublicationPermissionChecker is a function type for checking publication permission
+// This type allows dependency injection for testing
+type PublicationPermissionChecker func(ctx context.Context, ses *Session, databaseName, tableName string) error
+
+// SnapshotResolver is a function type for resolving snapshot by name
+// This type allows dependency injection for testing
+type SnapshotResolver func(ses *Session, snapshotName string) (*plan2.Snapshot, error)
+
+// defaultSnapshotResolver is the default implementation of SnapshotResolver
+func defaultSnapshotResolver(ses *Session, snapshotName string) (*plan2.Snapshot, error) {
+	return ses.GetTxnCompileCtx().ResolveSnapshotWithSnapshotName(snapshotName)
+}
+
 func handleGetDdl(
 	ctx context.Context,
 	ses *Session,
 	stmt *tree.GetDdl,
+) error {
+	return handleGetDdlWithChecker(ctx, ses, stmt, checkPublicationPermission, defaultSnapshotResolver)
+}
+
+// handleGetDdlWithChecker is the internal implementation that accepts a permission checker
+// This allows dependency injection for testing
+func handleGetDdlWithChecker(
+	ctx context.Context,
+	ses *Session,
+	stmt *tree.GetDdl,
+	permChecker PublicationPermissionChecker,
+	snapshotResolver SnapshotResolver,
 ) error {
 	var (
 		mrs      = ses.GetMysqlResultSet()
@@ -91,7 +116,7 @@ func handleGetDdl(
 	}
 
 	// Check publication permission
-	if err := checkPublicationPermission(ctx, ses, databaseName, tableName); err != nil {
+	if err := permChecker(ctx, ses, databaseName, tableName); err != nil {
 		return err
 	}
 
@@ -125,7 +150,7 @@ func handleGetDdl(
 	if stmt.Snapshot != nil {
 		snapshotName := string(*stmt.Snapshot)
 		var err error
-		snapshot, err = ses.GetTxnCompileCtx().ResolveSnapshotWithSnapshotName(snapshotName)
+		snapshot, err = snapshotResolver(ses, snapshotName)
 		if err != nil {
 			return moerr.NewInternalErrorf(ctx, "failed to resolve snapshot %s: %v", snapshotName, err)
 		}
