@@ -18,46 +18,47 @@ information_schema.REFERENTIAL_CONSTRAINTS.CONSTRAINT_SCHEMA in ('plat_content')
 order by information_schema.KEY_COLUMN_USAGE.CONSTRAINT_SCHEMA asc,
 information_schema.KEY_COLUMN_USAGE.CONSTRAINT_NAME asc,
 information_schema.KEY_COLUMN_USAGE.ORDINAL_POSITION asc;
-CONSTRAINT_SCHEMA    CONSTRAINT_NAME    TABLE_NAME    REFERENCED_TABLE_NAME    UNIQUE_CONSTRAINT_NAME    UNIQUE_CONSTRAINT_SCHEMA    COLUMN_NAME
+➤ CONSTRAINT_SCHEMA[12,-1,0]  ¦  CONSTRAINT_NAME[12,-1,0]  ¦  TABLE_NAME[12,-1,0]  ¦  REFERENCED_TABLE_NAME[12,-1,0]  ¦  UNIQUE_CONSTRAINT_NAME[12,-1,0]  ¦  UNIQUE_CONSTRAINT_SCHEMA[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]
 select table_catalog, table_schema, table_name, table_type, engine
 from information_schema.tables
 where table_schema = 'mo_catalog' and table_type = 'BASE TABLE'
 order by table_name;
-table_catalog    table_schema    table_name    table_type    engine
-def    mo_catalog    mo_account    BASE TABLE    Tae
-def    mo_catalog    mo_branch_metadata    BASE TABLE    Tae
-def    mo_catalog    mo_cdc_task    BASE TABLE    Tae
-def    mo_catalog    mo_cdc_watermark    BASE TABLE    Tae
-def    mo_catalog    mo_columns    BASE TABLE    Tae
-def    mo_catalog    mo_data_key    BASE TABLE    Tae
-def    mo_catalog    mo_database    BASE TABLE    Tae
-def    mo_catalog    mo_feature_limit    BASE TABLE    Tae
-def    mo_catalog    mo_feature_registry    BASE TABLE    Tae
-def    mo_catalog    mo_foreign_keys    BASE TABLE    Tae
-def    mo_catalog    mo_index_update    BASE TABLE    Tae
-def    mo_catalog    mo_indexes    BASE TABLE    Tae
-def    mo_catalog    mo_iscp_log    BASE TABLE    Tae
-def    mo_catalog    mo_merge_settings    BASE TABLE    Tae
-def    mo_catalog    mo_mysql_compatibility_mode    BASE TABLE    Tae
-def    mo_catalog    mo_partition_metadata    BASE TABLE    Tae
-def    mo_catalog    mo_partition_tables    BASE TABLE    Tae
-def    mo_catalog    mo_pitr    BASE TABLE    Tae
-def    mo_catalog    mo_pubs    BASE TABLE    Tae
-def    mo_catalog    mo_role    BASE TABLE    Tae
-def    mo_catalog    mo_role_grant    BASE TABLE    Tae
-def    mo_catalog    mo_role_privs    BASE TABLE    Tae
-def    mo_catalog    mo_shards    BASE TABLE    Tae
-def    mo_catalog    mo_shards_metadata    BASE TABLE    Tae
-def    mo_catalog    mo_snapshots    BASE TABLE    Tae
-def    mo_catalog    mo_stages    BASE TABLE    Tae
-def    mo_catalog    mo_stored_procedure    BASE TABLE    Tae
-def    mo_catalog    mo_subs    BASE TABLE    Tae
-def    mo_catalog    mo_table_partitions    BASE TABLE    Tae
-def    mo_catalog    mo_table_stats_alpha    BASE TABLE    Tae
-def    mo_catalog    mo_tables    BASE TABLE    Tae
-def    mo_catalog    mo_upgrade    BASE TABLE    Tae
-def    mo_catalog    mo_upgrade_tenant    BASE TABLE    Tae
-def    mo_catalog    mo_user    BASE TABLE    Tae
-def    mo_catalog    mo_user_defined_function    BASE TABLE    Tae
-def    mo_catalog    mo_user_grant    BASE TABLE    Tae
-def    mo_catalog    mo_version    BASE TABLE    Tae
+➤ table_catalog[12,-1,0]  ¦  table_schema[12,-1,0]  ¦  table_name[12,-1,0]  ¦  table_type[12,-1,0]  ¦  engine[12,-1,0]  𝄀
+def  ¦  mo_catalog  ¦  mo_account  ¦  BASE TABLE  ¦  Tae  𝄀
+def  ¦  mo_catalog  ¦  mo_branch_metadata  ¦  BASE TABLE  ¦  Tae  𝄀
+def  ¦  mo_catalog  ¦  mo_cdc_task  ¦  BASE TABLE  ¦  Tae  𝄀
+def  ¦  mo_catalog  ¦  mo_cdc_watermark  ¦  BASE TABLE  ¦  Tae  𝄀
+def  ¦  mo_catalog  ¦  mo_columns  ¦  BASE TABLE  ¦  Tae  𝄀
+def  ¦  mo_catalog  ¦  mo_data_key  ¦  BASE TABLE  ¦  Tae  𝄀
+def  ¦  mo_catalog  ¦  mo_database  ¦  BASE TABLE  ¦  Tae  𝄀
+def  ¦  mo_catalog  ¦  mo_feature_limit  ¦  BASE TABLE  ¦  Tae  𝄀
+def  ¦  mo_catalog  ¦  mo_feature_registry  ¦  BASE TABLE  ¦  Tae  𝄀
+def  ¦  mo_catalog  ¦  mo_foreign_keys  ¦  BASE TABLE  ¦  Tae  𝄀
+def  ¦  mo_catalog  ¦  mo_index_update  ¦  BASE TABLE  ¦  Tae  𝄀
+def  ¦  mo_catalog  ¦  mo_indexes  ¦  BASE TABLE  ¦  Tae  𝄀
+def  ¦  mo_catalog  ¦  mo_iscp_log  ¦  BASE TABLE  ¦  Tae  𝄀
+def  ¦  mo_catalog  ¦  mo_merge_settings  ¦  BASE TABLE  ¦  Tae  𝄀
+def  ¦  mo_catalog  ¦  mo_mysql_compatibility_mode  ¦  BASE TABLE  ¦  Tae  𝄀
+def  ¦  mo_catalog  ¦  mo_parquet_schema  ¦  BASE TABLE  ¦  Tae  𝄀
+def  ¦  mo_catalog  ¦  mo_partition_metadata  ¦  BASE TABLE  ¦  Tae  𝄀
+def  ¦  mo_catalog  ¦  mo_partition_tables  ¦  BASE TABLE  ¦  Tae  𝄀
+def  ¦  mo_catalog  ¦  mo_pitr  ¦  BASE TABLE  ¦  Tae  𝄀
+def  ¦  mo_catalog  ¦  mo_pubs  ¦  BASE TABLE  ¦  Tae  𝄀
+def  ¦  mo_catalog  ¦  mo_role  ¦  BASE TABLE  ¦  Tae  𝄀
+def  ¦  mo_catalog  ¦  mo_role_grant  ¦  BASE TABLE  ¦  Tae  𝄀
+def  ¦  mo_catalog  ¦  mo_role_privs  ¦  BASE TABLE  ¦  Tae  𝄀
+def  ¦  mo_catalog  ¦  mo_shards  ¦  BASE TABLE  ¦  Tae  𝄀
+def  ¦  mo_catalog  ¦  mo_shards_metadata  ¦  BASE TABLE  ¦  Tae  𝄀
+def  ¦  mo_catalog  ¦  mo_snapshots  ¦  BASE TABLE  ¦  Tae  𝄀
+def  ¦  mo_catalog  ¦  mo_stages  ¦  BASE TABLE  ¦  Tae  𝄀
+def  ¦  mo_catalog  ¦  mo_stored_procedure  ¦  BASE TABLE  ¦  Tae  𝄀
+def  ¦  mo_catalog  ¦  mo_subs  ¦  BASE TABLE  ¦  Tae  𝄀
+def  ¦  mo_catalog  ¦  mo_table_partitions  ¦  BASE TABLE  ¦  Tae  𝄀
+def  ¦  mo_catalog  ¦  mo_table_stats_alpha  ¦  BASE TABLE  ¦  Tae  𝄀
+def  ¦  mo_catalog  ¦  mo_tables  ¦  BASE TABLE  ¦  Tae  𝄀
+def  ¦  mo_catalog  ¦  mo_upgrade  ¦  BASE TABLE  ¦  Tae  𝄀
+def  ¦  mo_catalog  ¦  mo_upgrade_tenant  ¦  BASE TABLE  ¦  Tae  𝄀
+def  ¦  mo_catalog  ¦  mo_user  ¦  BASE TABLE  ¦  Tae  𝄀
+def  ¦  mo_catalog  ¦  mo_user_defined_function  ¦  BASE TABLE  ¦  Tae  𝄀
+def  ¦  mo_catalog  ¦  mo_user_grant  ¦  BASE TABLE  ¦  Tae  𝄀
+def  ¦  mo_catalog  ¦  mo_version  ¦  BASE TABLE  ¦  Tae

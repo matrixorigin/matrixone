@@ -7,54 +7,57 @@ create account if not exists tenant_test admin_name = 'root' identified by '111'
 create account tenant_test admin_name = 'root' open comment 'tenant_test';
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 51 near " open comment 'tenant_test';";
 show accounts;
-account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    snapshot_size    comments
-tenant_test    root    2025-11-24 14:03:04    open    null    5    66    0.0    0.0    tenant_test
-sys    root    2025-11-21 09:44:39    open    null    8    114    348.925694    0.0    system account
+-- @regex("tenant_test", true)
+➤ account_name[12,-1,0]  ¦  admin_name[12,-1,0]  ¦  created_time[93,64,0]  ¦  status[12,-1,0]  ¦  suspended_time[93,64,0]  ¦  db_count[-5,64,0]  ¦  tbl_count[-5,64,0]  ¦  size[8,54,0]  ¦  snapshot_size[8,54,0]  ¦  comments[12,-1,0]  𝄀
+tenant_test  ¦  root  ¦  2026-01-24 03:44:25  ¦  open  ¦  null  ¦  5  ¦  67  ¦  0.0  ¦  0.0  ¦  tenant_test  𝄀
+sys  ¦  root  ¦  2026-01-24 03:23:31  ¦  open  ¦  null  ¦  8  ¦  118  ¦  5.849834  ¦  0.0  ¦  system account  𝄀
+acc03  ¦  test_account  ¦  2026-01-24 03:32:42  ¦  open  ¦  null  ¦  5  ¦  67  ¦  0.028033  ¦  0.0  ¦  
 drop account if exists tenant_test;
 select account_id,relname,relkind from mo_catalog.mo_tables where account_id = 0 and reldatabase = 'mo_catalog' and relname not like '__mo_index%' and relname != '__mo_account_lock' order by relname;
-account_id    relname    relkind
-0    mo_account    r
-0    mo_branch_metadata    r
-0    mo_cache    v
-0    mo_cdc_task    r
-0    mo_cdc_watermark    r
-0    mo_columns    r
-0    mo_configurations    v
-0    mo_data_key    r
-0    mo_database    r
-0    mo_feature_limit    r
-0    mo_feature_registry    r
-0    mo_foreign_keys    r
-0    mo_increment_columns    
-0    mo_index_update    r
-0    mo_indexes    r
-0    mo_iscp_log    r
-0    mo_locks    v
-0    mo_merge_settings    r
-0    mo_mysql_compatibility_mode    r
-0    mo_partition_metadata    r
-0    mo_partition_tables    r
-0    mo_pitr    r
-0    mo_pubs    r
-0    mo_role    r
-0    mo_role_grant    r
-0    mo_role_privs    r
-0    mo_sessions    v
-0    mo_shards    r
-0    mo_shards_metadata    r
-0    mo_snapshots    r
-0    mo_stages    r
-0    mo_stored_procedure    r
-0    mo_subs    r
-0    mo_table_partitions    r
-0    mo_table_stats_alpha    r
-0    mo_tables    r
-0    mo_transactions    v
-0    mo_upgrade    r
-0    mo_upgrade_tenant    r
-0    mo_user    r
-0    mo_user_defined_function    r
-0    mo_user_grant    r
-0    mo_variables    v
-0    mo_version    r
+➤ account_id[4,32,0]  ¦  relname[12,-1,0]  ¦  relkind[12,-1,0]  𝄀
+0  ¦  mo_account  ¦  r  𝄀
+0  ¦  mo_branch_metadata  ¦  r  𝄀
+0  ¦  mo_cache  ¦  v  𝄀
+0  ¦  mo_cdc_task  ¦  r  𝄀
+0  ¦  mo_cdc_watermark  ¦  r  𝄀
+0  ¦  mo_columns  ¦  r  𝄀
+0  ¦  mo_configurations  ¦  v  𝄀
+0  ¦  mo_data_key  ¦  r  𝄀
+0  ¦  mo_database  ¦  r  𝄀
+0  ¦  mo_feature_limit  ¦  r  𝄀
+0  ¦  mo_feature_registry  ¦  r  𝄀
+0  ¦  mo_foreign_keys  ¦  r  𝄀
+0  ¦  mo_increment_columns  ¦    𝄀
+0  ¦  mo_index_update  ¦  r  𝄀
+0  ¦  mo_indexes  ¦  r  𝄀
+0  ¦  mo_iscp_log  ¦  r  𝄀
+0  ¦  mo_locks  ¦  v  𝄀
+0  ¦  mo_merge_settings  ¦  r  𝄀
+0  ¦  mo_mysql_compatibility_mode  ¦  r  𝄀
+0  ¦  mo_parquet_schema  ¦  r  𝄀
+0  ¦  mo_partition_metadata  ¦  r  𝄀
+0  ¦  mo_partition_tables  ¦  r  𝄀
+0  ¦  mo_pitr  ¦  r  𝄀
+0  ¦  mo_pubs  ¦  r  𝄀
+0  ¦  mo_role  ¦  r  𝄀
+0  ¦  mo_role_grant  ¦  r  𝄀
+0  ¦  mo_role_privs  ¦  r  𝄀
+0  ¦  mo_sessions  ¦  v  𝄀
+0  ¦  mo_shards  ¦  r  𝄀
+0  ¦  mo_shards_metadata  ¦  r  𝄀
+0  ¦  mo_snapshots  ¦  r  𝄀
+0  ¦  mo_stages  ¦  r  𝄀
+0  ¦  mo_stored_procedure  ¦  r  𝄀
+0  ¦  mo_subs  ¦  r  𝄀
+0  ¦  mo_table_partitions  ¦  r  𝄀
+0  ¦  mo_table_stats_alpha  ¦  r  𝄀
+0  ¦  mo_tables  ¦  r  𝄀
+0  ¦  mo_transactions  ¦  v  𝄀
+0  ¦  mo_upgrade  ¦  r  𝄀
+0  ¦  mo_upgrade_tenant  ¦  r  𝄀
+0  ¦  mo_user  ¦  r  𝄀
+0  ¦  mo_user_defined_function  ¦  r  𝄀
+0  ¦  mo_user_grant  ¦  r  𝄀
+0  ¦  mo_variables  ¦  v  𝄀
+0  ¦  mo_version  ¦  r
 set global enable_privilege_cache = on;

@@ -20,49 +20,50 @@ internal error: do not have privilege to execute the statement
 grant connect on account * to r1;
 use mo_catalog;
 show tables;
-Tables_in_mo_catalog
-mo_account
-mo_branch_metadata
-mo_cache
-mo_cdc_task
-mo_cdc_watermark
-mo_columns
-mo_configurations
-mo_data_key
-mo_database
-mo_feature_limit
-mo_feature_registry
-mo_foreign_keys
-mo_index_update
-mo_indexes
-mo_iscp_log
-mo_locks
-mo_merge_settings
-mo_mysql_compatibility_mode
-mo_partition_metadata
-mo_partition_tables
-mo_pitr
-mo_pubs
-mo_role
-mo_role_grant
-mo_role_privs
-mo_sessions
-mo_shards
-mo_shards_metadata
-mo_snapshots
-mo_stages
-mo_stored_procedure
-mo_subs
-mo_table_partitions
-mo_table_stats_alpha
-mo_tables
-mo_transactions
-mo_upgrade
-mo_upgrade_tenant
-mo_user
-mo_user_defined_function
-mo_user_grant
-mo_variables
+➤ Tables_in_mo_catalog[12,-1,0]  𝄀
+mo_account  𝄀
+mo_branch_metadata  𝄀
+mo_cache  𝄀
+mo_cdc_task  𝄀
+mo_cdc_watermark  𝄀
+mo_columns  𝄀
+mo_configurations  𝄀
+mo_data_key  𝄀
+mo_database  𝄀
+mo_feature_limit  𝄀
+mo_feature_registry  𝄀
+mo_foreign_keys  𝄀
+mo_index_update  𝄀
+mo_indexes  𝄀
+mo_iscp_log  𝄀
+mo_locks  𝄀
+mo_merge_settings  𝄀
+mo_mysql_compatibility_mode  𝄀
+mo_parquet_schema  𝄀
+mo_partition_metadata  𝄀
+mo_partition_tables  𝄀
+mo_pitr  𝄀
+mo_pubs  𝄀
+mo_role  𝄀
+mo_role_grant  𝄀
+mo_role_privs  𝄀
+mo_sessions  𝄀
+mo_shards  𝄀
+mo_shards_metadata  𝄀
+mo_snapshots  𝄀
+mo_stages  𝄀
+mo_stored_procedure  𝄀
+mo_subs  𝄀
+mo_table_partitions  𝄀
+mo_table_stats_alpha  𝄀
+mo_tables  𝄀
+mo_transactions  𝄀
+mo_upgrade  𝄀
+mo_upgrade_tenant  𝄀
+mo_user  𝄀
+mo_user_defined_function  𝄀
+mo_user_grant  𝄀
+mo_variables  𝄀
 mo_version
 create database t;
 internal error: do not have privilege to execute the statement
@@ -79,18 +80,18 @@ grant insert on table t.* to r1;
 use t;
 insert into A values (1),(1);
 select a from A;
-a
-1
-1
-1
+➤ a[4,32,0]  𝄀
+1  𝄀
+1  𝄀
+1  𝄀
 1
 grant select on table t.* to r1;
 use t;
 select a from A;
-a
-1
-1
-1
+➤ a[4,32,0]  𝄀
+1  𝄀
+1  𝄀
+1  𝄀
 1
 update A set a = 2 where a = 1;
 update A set a = 2;
@@ -105,7 +106,7 @@ use t;
 delete from A where a = 2;
 delete from A;
 select a from A;
-a
+➤ a[4,32,0]
 drop table A;
 grant drop table on database t to r1;
 use t;
@@ -119,10 +120,10 @@ grant select,insert,update,delete on table s.* to r1;
 use s;
 insert into B values (1),(1);
 select b from B;
-b
-1
-1
-1
+➤ b[4,32,0]  𝄀
+1  𝄀
+1  𝄀
+1  𝄀
 1
 update B set b = 2 where b=1;
 update B set b = 2;
@@ -150,15 +151,15 @@ create table H(h int);
 grant select on table v.A to r1;
 use v;
 select * from A,B;
-a    b
+➤ a[4,32,0]  ¦  b[4,32,0]
 select * from A,B where A.a = B.b;
-a    b
+➤ a[4,32,0]  ¦  b[4,32,0]
 grant select on table v.B to r1;
 use v;
 select * from A,B;
-a    b
+➤ a[4,32,0]  ¦  b[4,32,0]
 select * from A,B where A.a = B.b;
-a    b
+➤ a[4,32,0]  ¦  b[4,32,0]
 update C,D set c = d+1 where c = d;
 grant update on table v.C to r1;
 use v;

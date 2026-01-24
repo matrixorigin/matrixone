@@ -29,11 +29,11 @@ insert into index03 values (9001,'1980-12-17', 'SMITH', 'CLERK', 'F', '2008-12-1
 (9003,'1991-02-20', 'Bob', 'TEACHER', 'M', '2008-02-20'),
 (9004,'1999-02-20', 'MARY', 'PROGRAMMER', 'M', '2008-02-20');
 select * from index03;
-emp_no    birth_date    first_name    last_name    gender    hire_date
-9001    1980-12-17    SMITH    CLERK    F    2008-12-17
-9002    1981-02-20    ALLEN    SALESMAN    F    2008-02-20
-9003    1991-02-20    Bob    TEACHER    M    2008-02-20
-9004    1999-02-20    MARY    PROGRAMMER    M    2008-02-20
+➤ emp_no[4,32,0]  ¦  birth_date[91,64,0]  ¦  first_name[12,-1,0]  ¦  last_name[12,-1,0]  ¦  gender[12,-1,0]  ¦  hire_date[91,64,0]  𝄀
+9001  ¦  1980-12-17  ¦  SMITH  ¦  CLERK  ¦  F  ¦  2008-12-17  𝄀
+9002  ¦  1981-02-20  ¦  ALLEN  ¦  SALESMAN  ¦  F  ¦  2008-02-20  𝄀
+9003  ¦  1991-02-20  ¦  Bob  ¦  TEACHER  ¦  M  ¦  2008-02-20  𝄀
+9004  ¦  1999-02-20  ¦  MARY  ¦  PROGRAMMER  ¦  M  ¦  2008-02-20
 drop database if exists db02;
 create database db02;
 use db02;
@@ -43,8 +43,12 @@ department_id INT primary key auto_increment,
 department_name varchar(100)
 );
 show create table departments;
-Table    Create Table
-departments    CREATE TABLE `departments` (\n  `department_id` int NOT NULL AUTO_INCREMENT,\n  `department_name` varchar(100) DEFAULT NULL,\n  PRIMARY KEY (`department_id`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+departments  ¦  CREATE TABLE `departments` (
+  `department_id` int NOT NULL AUTO_INCREMENT,
+  `department_name` varchar(100) DEFAULT NULL,
+  PRIMARY KEY (`department_id`)
+)
 insert into departments (department_id, department_name)
 values (1, 'HR'),(2, 'Engineering');
 drop table if exists employees;
@@ -68,19 +72,19 @@ create view employee_with_department_view as
 select e.employee_id, e.first_name, e.last_name, d.department_name
 from employee_view e JOIN department_view d ON e.department_id = d.department_id;
 select * from employee_view;
-employee_id    first_name    last_name    department_id
-1    John    Doe    1
-2    Jane    Smith    2
-3    Bob    Johnson    1
+➤ employee_id[4,32,0]  ¦  first_name[12,-1,0]  ¦  last_name[12,-1,0]  ¦  department_id[4,32,0]  𝄀
+1  ¦  John  ¦  Doe  ¦  1  𝄀
+2  ¦  Jane  ¦  Smith  ¦  2  𝄀
+3  ¦  Bob  ¦  Johnson  ¦  1
 select * from department_view;
-department_id    department_name
-1    HR
-2    Engineering
+➤ department_id[4,32,0]  ¦  department_name[12,-1,0]  𝄀
+1  ¦  HR  𝄀
+2  ¦  Engineering
 select * from employee_with_department_view;
-employee_id    first_name    last_name    department_name
-1    John    Doe    HR
-2    Jane    Smith    Engineering
-3    Bob    Johnson    HR
+➤ employee_id[4,32,0]  ¦  first_name[12,-1,0]  ¦  last_name[12,-1,0]  ¦  department_name[12,-1,0]  𝄀
+1  ¦  John  ¦  Doe  ¦  HR  𝄀
+2  ¦  Jane  ¦  Smith  ¦  Engineering  𝄀
+3  ¦  Bob  ¦  Johnson  ¦  HR
 drop database if exists db03;
 create database db03;
 use db03;
@@ -123,17 +127,33 @@ insert into aff01 values (7900,'JAMES','CLERK',7698,'1981-12-03',950,NULL,30);
 insert into aff01 values (7902,'FORD','ANALYST',7566,'1981-12-03',3000,NULL,20);
 insert into aff01 values (7934,'MILLER','CLERK',7782,'1982-01-23',1300,NULL,10);
 select count(*) from pri01;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 4
 select count(*) from aff01;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 14
 show create table pri01;
-Table    Create Table
-pri01    CREATE TABLE `pri01` (\n  `deptno` int unsigned NOT NULL COMMENT '部门编号',\n  `dname` varchar(15) DEFAULT NULL COMMENT '部门名称',\n  `loc` varchar(50) DEFAULT NULL COMMENT '部门所在位置',\n  PRIMARY KEY (`deptno`)\n) COMMENT='部门表'
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+pri01  ¦  CREATE TABLE `pri01` (
+  `deptno` int unsigned NOT NULL COMMENT '部门编号',
+  `dname` varchar(15) DEFAULT NULL COMMENT '部门名称',
+  `loc` varchar(50) DEFAULT NULL COMMENT '部门所在位置',
+  PRIMARY KEY (`deptno`)
+) COMMENT='部门表'
 show create table aff01;
-Table    Create Table
-aff01    CREATE TABLE `aff01` (\n  `empno` int unsigned NOT NULL AUTO_INCREMENT COMMENT '雇员编号',\n  `ename` varchar(15) DEFAULT NULL COMMENT '雇员姓名',\n  `job` varchar(10) DEFAULT NULL COMMENT '雇员职位',\n  `mgr` int unsigned DEFAULT NULL COMMENT '雇员对应的领导的编号',\n  `hiredate` date DEFAULT NULL COMMENT '雇员的雇佣日期',\n  `sal` decimal(7,2) DEFAULT NULL COMMENT '雇员的基本工资',\n  `comm` decimal(7,2) DEFAULT NULL COMMENT '奖金',\n  `deptno` int unsigned DEFAULT NULL COMMENT '所在部门',\n  PRIMARY KEY (`empno`),\n  CONSTRAINT `c1` FOREIGN KEY (`deptno`) REFERENCES `pri01` (`deptno`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+aff01  ¦  CREATE TABLE `aff01` (
+  `empno` int unsigned NOT NULL AUTO_INCREMENT COMMENT '雇员编号',
+  `ename` varchar(15) DEFAULT NULL COMMENT '雇员姓名',
+  `job` varchar(10) DEFAULT NULL COMMENT '雇员职位',
+  `mgr` int unsigned DEFAULT NULL COMMENT '雇员对应的领导的编号',
+  `hiredate` date DEFAULT NULL COMMENT '雇员的雇佣日期',
+  `sal` decimal(7,2) DEFAULT NULL COMMENT '雇员的基本工资',
+  `comm` decimal(7,2) DEFAULT NULL COMMENT '奖金',
+  `deptno` int unsigned DEFAULT NULL COMMENT '所在部门',
+  PRIMARY KEY (`empno`),
+  CONSTRAINT `c1` FOREIGN KEY (`deptno`) REFERENCES `pri01` (`deptno`) ON DELETE RESTRICT ON UPDATE RESTRICT
+)
 use mo_catalog;
 drop table if exists t1;
 create cluster table t1(a int);
@@ -209,21 +229,21 @@ insert into tbh3(id, val) values(1,1.5),(2,2.5),(3,3.5);
 drop procedure if exists test_if_hit_elseif_first_elseif;
 create procedure test_if_hit_elseif_first_elseif() 'begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end';
 call test_if_hit_elseif_first_elseif();
-id    val
-1    a
-2    b
-3    c
+➤ id[4,32,0]  ¦  val[1,1,0]  𝄀
+1  ¦  a  𝄀
+2  ¦  b  𝄀
+3  ¦  c
 drop procedure if exists test_if_hit_if;
 create procedure test_if_hit_if() 'begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end';
 call test_if_hit_if();
-id    val
-1    a
-2    b
-3    c
+➤ id[4,32,0]  ¦  val[1,1,0]  𝄀
+1  ¦  a  𝄀
+2  ¦  b  𝄀
+3  ¦  c
 select * from mo_catalog.mo_stored_procedure;
-proc_id    name    creator    args    lang    body    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
-1    test_if_hit_elseif_first_elseif    null    []    sql    begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    procedure_test    test_account    2025-11-24 15:27:40    2025-11-24 15:27:40    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
-2    test_if_hit_if    null    []    sql    begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    procedure_test    test_account    2025-11-24 15:27:40    2025-11-24 15:27:40    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+➤ proc_id[4,32,0]  ¦  name[12,-1,0]  ¦  creator[4,32,0]  ¦  args[12,0,0]  ¦  lang[12,0,0]  ¦  body[12,0,0]  ¦  db[12,-1,0]  ¦  definer[12,-1,0]  ¦  modified_time[93,64,0]  ¦  created_time[93,64,0]  ¦  type[12,-1,0]  ¦  security_type[12,-1,0]  ¦  comment[12,-1,0]  ¦  character_set_client[12,-1,0]  ¦  collation_connection[12,-1,0]  ¦  database_collation[12,-1,0]  𝄀
+1  ¦  test_if_hit_elseif_first_elseif  ¦  null  ¦  []  ¦  sql  ¦  begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end  ¦  procedure_test  ¦  test_account  ¦  2026-01-24 03:46:58  ¦  2026-01-24 03:46:58  ¦  PROCEDURE  ¦  DEFINER  ¦    ¦  utf8mb4  ¦  utf8mb4_0900_ai_ci  ¦  utf8mb4_0900_ai_ci  𝄀
+2  ¦  test_if_hit_if  ¦  null  ¦  []  ¦  sql  ¦  begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end  ¦  procedure_test  ¦  test_account  ¦  2026-01-24 03:46:58  ¦  2026-01-24 03:46:58  ¦  PROCEDURE  ¦  DEFINER  ¦    ¦  utf8mb4  ¦  utf8mb4_0900_ai_ci  ¦  utf8mb4_0900_ai_ci
 drop database if exists udf_db2;
 create database udf_db2;
 use udf_db2;
@@ -231,16 +251,16 @@ create function `addAB`(x int, y int) returns int
 language sql as
 '$1 + $2';
 select * from mo_catalog.mo_user_defined_function;
-function_id    name    owner    args    rettype    body    language    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
-1    addab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 + $2    sql    udf_db2    test_account    2025-11-24 15:27:40    2025-11-24 15:27:40    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+➤ function_id[4,32,0]  ¦  name[12,-1,0]  ¦  owner[4,32,0]  ¦  args[-1,2147483647,0]  ¦  rettype[12,-1,0]  ¦  body[12,0,0]  ¦  language[12,-1,0]  ¦  db[12,-1,0]  ¦  definer[12,-1,0]  ¦  modified_time[93,64,0]  ¦  created_time[93,64,0]  ¦  type[12,-1,0]  ¦  security_type[12,-1,0]  ¦  comment[12,-1,0]  ¦  character_set_client[12,-1,0]  ¦  collation_connection[12,-1,0]  ¦  database_collation[12,-1,0]  𝄀
+1  ¦  addab  ¦  2  ¦  [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]  ¦  int  ¦  $1 + $2  ¦  sql  ¦  udf_db2  ¦  test_account  ¦  2026-01-24 03:46:59  ¦  2026-01-24 03:46:59  ¦  FUNCTION  ¦  DEFINER  ¦    ¦  utf8mb4  ¦  utf8mb4_0900_ai_ci  ¦  utf8mb4_0900_ai_ci
 drop stage if exists my_ext_stage;
 create stage my_ext_stage URL='s3://load/files/';
 drop stage if exists my_ext_stage1;
 create stage my_ext_stage1 URL='s3://load/files/' CREDENTIALS={'AWS_KEY_ID'='1a2b3c' ,'AWS_SECRET_KEY'='4x5y6z'};
 select * from mo_catalog.mo_stages;
-stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
-1    my_ext_stage    s3://load/files/        in_use    2025-11-24 15:27:40    
-2    my_ext_stage1    s3://load/files/    AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z    in_use    2025-11-24 15:27:40    
+➤ stage_id[4,32,0]  ¦  stage_name[12,-1,0]  ¦  url[12,0,0]  ¦  stage_credentials[12,0,0]  ¦  stage_status[12,-1,0]  ¦  created_time[93,64,0]  ¦  comment[12,0,0]  𝄀
+1  ¦  my_ext_stage  ¦  s3://load/files/  ¦    ¦  in_use  ¦  2026-01-24 03:46:59  ¦    𝄀
+2  ¦  my_ext_stage1  ¦  s3://load/files/  ¦  AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z  ¦  in_use  ¦  2026-01-24 03:46:59  ¦  
 drop database if exists test01;
 drop database if exists test02;
 drop database if exists test03;
@@ -268,39 +288,39 @@ INSERT INTO sales (id, sale_date, amount) values
 use test02;
 create view v01 as select * from test01.sales;
 show create view v01;
-View    Create View    character_set_client    collation_connection
-v01    create view v01 as select * from test01.sales;    utf8mb4    utf8mb4_general_ci
+➤ View[12,-1,0]  ¦  Create View[12,-1,0]  ¦  character_set_client[12,-1,0]  ¦  collation_connection[12,-1,0]  𝄀
+v01  ¦  create view v01 as select * from test01.sales;  ¦  utf8mb4  ¦  utf8mb4_general_ci
 select * from v01;
-id    sale_date    amount
-1    2018-12-25    100.00
-2    2019-05-15    200.00
-3    2020-07-22    150.00
-4    2021-08-01    300.00
+➤ id[4,32,0]  ¦  sale_date[91,64,0]  ¦  amount[3,10,2]  𝄀
+1  ¦  2018-12-25  ¦  100.00  𝄀
+2  ¦  2019-05-15  ¦  200.00  𝄀
+3  ¦  2020-07-22  ¦  150.00  𝄀
+4  ¦  2021-08-01  ¦  300.00
 use test03;
 create view v02 as select * from test02.v01;
 show create view v02;
-View    Create View    character_set_client    collation_connection
-v02    create view v02 as select * from test02.v01;    utf8mb4    utf8mb4_general_ci
+➤ View[12,-1,0]  ¦  Create View[12,-1,0]  ¦  character_set_client[12,-1,0]  ¦  collation_connection[12,-1,0]  𝄀
+v02  ¦  create view v02 as select * from test02.v01;  ¦  utf8mb4  ¦  utf8mb4_general_ci
 select * from v02;
-id    sale_date    amount
-1    2018-12-25    100.00
-2    2019-05-15    200.00
-3    2020-07-22    150.00
-4    2021-08-01    300.00
+➤ id[4,32,0]  ¦  sale_date[91,64,0]  ¦  amount[3,10,2]  𝄀
+1  ¦  2018-12-25  ¦  100.00  𝄀
+2  ¦  2019-05-15  ¦  200.00  𝄀
+3  ¦  2020-07-22  ¦  150.00  𝄀
+4  ¦  2021-08-01  ¦  300.00
 drop database if exists udf_db;
 create database udf_db;
 use udf_db;
 select name, db from mo_catalog.mo_user_defined_function;
-name    db
+➤ name[12,-1,0]  ¦  db[12,-1,0]
 create function `addab`(x int, y int) returns int
 language sql as
 '$1 + $2';
 select addab(10, 5);
-addab(10, 5)
+➤ addab(10, 5)[-5,64,0]  𝄀
 15
 select name, db from mo_catalog.mo_user_defined_function;
-name    db
-addab    udf_db
+➤ name[12,-1,0]  ¦  db[12,-1,0]  𝄀
+addab  ¦  udf_db
 drop database if exists udf_db2;
 create database udf_db2;
 use udf_db2;
@@ -308,31 +328,31 @@ create function `subab`(x int, y int) returns int
 language sql as
 '$1 - $2';
 select subab(10, 5);
-subab(10, 5)
+➤ subab(10, 5)[-5,64,0]  𝄀
 5
 select name, db from mo_catalog.mo_user_defined_function;
-name    db
-addab    udf_db
-subab    udf_db2
+➤ name[12,-1,0]  ¦  db[12,-1,0]  𝄀
+addab  ¦  udf_db  𝄀
+subab  ¦  udf_db2
 drop user if exists userx;
 create user userx identified by '111';
 drop user if exists usery;
 create user usery identified by '222';
 select user_name, authentication_string, status, login_type, creator, owner, default_role from mo_catalog.mo_user;
-user_name    authentication_string    status    login_type    creator    owner    default_role
-test_account    *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB    unlock    PASSWORD    2    2    2
-userx    *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB    unlock    PASSWORD    2    2    1
-usery    *899ECD04E40F745BD52A4C552BE4A818AC65FAF8    unlock    PASSWORD    2    2    1
+➤ user_name[12,-1,0]  ¦  authentication_string[12,-1,0]  ¦  status[12,-1,0]  ¦  login_type[12,-1,0]  ¦  creator[4,32,0]  ¦  owner[4,32,0]  ¦  default_role[4,32,0]  𝄀
+test_account  ¦  *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB  ¦  unlock  ¦  PASSWORD  ¦  2  ¦  2  ¦  2  𝄀
+userx  ¦  *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB  ¦  unlock  ¦  PASSWORD  ¦  2  ¦  2  ¦  1  𝄀
+usery  ¦  *899ECD04E40F745BD52A4C552BE4A818AC65FAF8  ¦  unlock  ¦  PASSWORD  ¦  2  ¦  2  ¦  1
 drop role if exists role1;
 drop role if exists role2;
 create role role1;
 create role role2;
 select role_name, creator, owner from mo_catalog.mo_role;
-role_name    creator    owner
-accountadmin    2    2
-public    2    2
-role1    2    2
-role2    2    2
+➤ role_name[12,-1,0]  ¦  creator[4,32,0]  ¦  owner[4,32,0]  𝄀
+accountadmin  ¦  2  ¦  2  𝄀
+public  ¦  2  ¦  2  𝄀
+role1  ¦  2  ¦  2  𝄀
+role2  ¦  2  ¦  2
 drop database if exists test;
 create database test;
 use test;
@@ -347,108 +367,114 @@ grant role_r1 to role_r2;
 grant role_r2 to role_r3;
 grant select,insert,update on table test.* to role_r1 with grant option;
 select user_name, authentication_string, status, login_type, creator, owner, default_role from mo_catalog.mo_user;
-user_name    authentication_string    status    login_type    creator    owner    default_role
-test_account    *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB    unlock    PASSWORD    2    2    2
-userx    *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB    unlock    PASSWORD    2    2    1
-usery    *899ECD04E40F745BD52A4C552BE4A818AC65FAF8    unlock    PASSWORD    2    2    1
-role_u1    *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB    unlock    PASSWORD    2    2    1
-role_u2    *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB    unlock    PASSWORD    2    2    1
-role_u3    *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB    unlock    PASSWORD    2    2    1
+➤ user_name[12,-1,0]  ¦  authentication_string[12,-1,0]  ¦  status[12,-1,0]  ¦  login_type[12,-1,0]  ¦  creator[4,32,0]  ¦  owner[4,32,0]  ¦  default_role[4,32,0]  𝄀
+test_account  ¦  *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB  ¦  unlock  ¦  PASSWORD  ¦  2  ¦  2  ¦  2  𝄀
+userx  ¦  *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB  ¦  unlock  ¦  PASSWORD  ¦  2  ¦  2  ¦  1  𝄀
+usery  ¦  *899ECD04E40F745BD52A4C552BE4A818AC65FAF8  ¦  unlock  ¦  PASSWORD  ¦  2  ¦  2  ¦  1  𝄀
+role_u1  ¦  *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB  ¦  unlock  ¦  PASSWORD  ¦  2  ¦  2  ¦  1  𝄀
+role_u2  ¦  *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB  ¦  unlock  ¦  PASSWORD  ¦  2  ¦  2  ¦  1  𝄀
+role_u3  ¦  *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB  ¦  unlock  ¦  PASSWORD  ¦  2  ¦  2  ¦  1
 select role_name, creator, owner from mo_catalog.mo_role;
-role_name    creator    owner
-accountadmin    2    2
-public    2    2
-role1    2    2
-role2    2    2
-role_r1    2    2
-role_r2    2    2
-role_r3    2    2
+➤ role_name[12,-1,0]  ¦  creator[4,32,0]  ¦  owner[4,32,0]  𝄀
+accountadmin  ¦  2  ¦  2  𝄀
+public  ¦  2  ¦  2  𝄀
+role1  ¦  2  ¦  2  𝄀
+role2  ¦  2  ¦  2  𝄀
+role_r1  ¦  2  ¦  2  𝄀
+role_r2  ¦  2  ¦  2  𝄀
+role_r3  ¦  2  ¦  2
 select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name in ('role_r1','role_r2');
-role_name    privilege_id    with_grant_option
-role_r1    30    1
-role_r1    31    1
-role_r1    32    1
+➤ role_name[12,-1,0]  ¦  privilege_id[4,32,0]  ¦  with_grant_option[-7,1,0]  𝄀
+role_r1  ¦  30  ¦  1  𝄀
+role_r1  ¦  31  ¦  1  𝄀
+role_r1  ¦  32  ¦  1
 select operation_role_id,operation_user_id from mo_catalog.mo_role_grant;
-operation_role_id    operation_user_id
-2    2
-2    2
+➤ operation_role_id[4,32,0]  ¦  operation_user_id[4,32,0]  𝄀
+2  ¦  2  𝄀
+2  ¦  2
 drop snapshot if exists cluster_level_snapshot;
 create snapshot cluster_level_snapshot for cluster;
 show snapshots;
-SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-cluster_level_snapshot    2025-11-24 15:27:40.568684999    cluster            
+➤ SNAPSHOT_NAME[12,-1,0]  ¦  TIMESTAMP[12,-1,0]  ¦  SNAPSHOT_LEVEL[12,-1,0]  ¦  ACCOUNT_NAME[12,-1,0]  ¦  DATABASE_NAME[12,-1,0]  ¦  TABLE_NAME[12,-1,0]  𝄀
+cluster_level_snapshot  ¦  2026-01-24 03:47:00.187100999  ¦  cluster  ¦    ¦    ¦  
 use db02;
 alter table departments add column newcolumn int after department_id;
 show create table departments;
-Table    Create Table
-departments    CREATE TABLE `departments` (\n  `department_id` int NOT NULL AUTO_INCREMENT,\n  `newcolumn` int DEFAULT NULL,\n  `department_name` varchar(100) DEFAULT NULL,\n  PRIMARY KEY (`department_id`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+departments  ¦  CREATE TABLE `departments` (
+  `department_id` int NOT NULL AUTO_INCREMENT,
+  `newcolumn` int DEFAULT NULL,
+  `department_name` varchar(100) DEFAULT NULL,
+  PRIMARY KEY (`department_id`)
+)
 drop table employees;
 select * from employee_view;
 SQL parser error: table "employees" does not exist
 select * from department_view;
-department_id    department_name
-1    HR
-2    Engineering
+➤ department_id[4,32,0]  ¦  department_name[12,-1,0]  𝄀
+1  ¦  HR  𝄀
+2  ¦  Engineering
 select * from employee_with_department_view;
 SQL parser error: table "employees" does not exist
 use db03;
 truncate db03.aff01;
 select count(*) from pri01;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 4
 select count(*) from aff01;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 0
 use mo_catalog;
 drop table if exists t3;
 create cluster table t3(a int);
 insert into t3 values (1,6),(2,6),(3,6);
 show tables;
-Tables_in_mo_catalog
-mo_account
-mo_branch_metadata
-mo_cache
-mo_cdc_task
-mo_cdc_watermark
-mo_columns
-mo_configurations
-mo_data_key
-mo_database
-mo_feature_limit
-mo_feature_registry
-mo_foreign_keys
-mo_index_update
-mo_indexes
-mo_iscp_log
-mo_locks
-mo_merge_settings
-mo_mysql_compatibility_mode
-mo_partition_metadata
-mo_partition_tables
-mo_pitr
-mo_pubs
-mo_role
-mo_role_grant
-mo_role_privs
-mo_sessions
-mo_shards
-mo_shards_metadata
-mo_snapshots
-mo_stages
-mo_stored_procedure
-mo_subs
-mo_table_partitions
-mo_table_stats_alpha
-mo_tables
-mo_transactions
-mo_upgrade
-mo_upgrade_tenant
-mo_user
-mo_user_defined_function
-mo_user_grant
-mo_variables
-mo_version
-t1
+➤ Tables_in_mo_catalog[12,-1,0]  𝄀
+mo_account  𝄀
+mo_branch_metadata  𝄀
+mo_cache  𝄀
+mo_cdc_task  𝄀
+mo_cdc_watermark  𝄀
+mo_columns  𝄀
+mo_configurations  𝄀
+mo_data_key  𝄀
+mo_database  𝄀
+mo_feature_limit  𝄀
+mo_feature_registry  𝄀
+mo_foreign_keys  𝄀
+mo_index_update  𝄀
+mo_indexes  𝄀
+mo_iscp_log  𝄀
+mo_locks  𝄀
+mo_merge_settings  𝄀
+mo_mysql_compatibility_mode  𝄀
+mo_parquet_schema  𝄀
+mo_partition_metadata  𝄀
+mo_partition_tables  𝄀
+mo_pitr  𝄀
+mo_pubs  𝄀
+mo_role  𝄀
+mo_role_grant  𝄀
+mo_role_privs  𝄀
+mo_sessions  𝄀
+mo_shards  𝄀
+mo_shards_metadata  𝄀
+mo_snapshots  𝄀
+mo_stages  𝄀
+mo_stored_procedure  𝄀
+mo_subs  𝄀
+mo_table_partitions  𝄀
+mo_table_stats_alpha  𝄀
+mo_tables  𝄀
+mo_transactions  𝄀
+mo_upgrade  𝄀
+mo_upgrade_tenant  𝄀
+mo_user  𝄀
+mo_user_defined_function  𝄀
+mo_user_grant  𝄀
+mo_variables  𝄀
+mo_version  𝄀
+t1  𝄀
 t3
 drop database t1;
 drop database repub02;
@@ -456,19 +482,19 @@ use procedure_test;
 drop procedure if exists test_if_hit_if;
 drop procedure if exists test_if_hit_elseif_first_elseif;
 select * from mo_catalog.mo_stored_procedure;
-proc_id    name    creator    args    lang    body    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
+➤ proc_id[4,32,0]  ¦  name[12,-1,0]  ¦  creator[4,32,0]  ¦  args[12,0,0]  ¦  lang[12,0,0]  ¦  body[12,0,0]  ¦  db[12,-1,0]  ¦  definer[12,-1,0]  ¦  modified_time[93,64,0]  ¦  created_time[93,64,0]  ¦  type[12,-1,0]  ¦  security_type[12,-1,0]  ¦  comment[12,-1,0]  ¦  character_set_client[12,-1,0]  ¦  collation_connection[12,-1,0]  ¦  database_collation[12,-1,0]
 drop function udf_db2.`addAB`(x int, y int);
 drop stage if exists my_ext_stage;
 select * from mo_catalog.mo_stages;
-stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
-2    my_ext_stage1    s3://load/files/    AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z    in_use    2025-11-24 15:27:40    
+➤ stage_id[4,32,0]  ¦  stage_name[12,-1,0]  ¦  url[12,0,0]  ¦  stage_credentials[12,0,0]  ¦  stage_status[12,-1,0]  ¦  created_time[93,64,0]  ¦  comment[12,0,0]  𝄀
+2  ¦  my_ext_stage1  ¦  s3://load/files/  ¦  AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z  ¦  in_use  ¦  2026-01-24 03:46:59  ¦  
 use udf_db2;
 create function `add`(x int, y int) returns int
 language sql as
 '$1 + $2';
 select * from mo_catalog.mo_user_defined_function;
-function_id    name    owner    args    rettype    body    language    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
-2    add    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 + $2    sql    udf_db2    test_account    2025-11-24 15:27:40    2025-11-24 15:27:40    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+➤ function_id[4,32,0]  ¦  name[12,-1,0]  ¦  owner[4,32,0]  ¦  args[-1,2147483647,0]  ¦  rettype[12,-1,0]  ¦  body[12,0,0]  ¦  language[12,-1,0]  ¦  db[12,-1,0]  ¦  definer[12,-1,0]  ¦  modified_time[93,64,0]  ¦  created_time[93,64,0]  ¦  type[12,-1,0]  ¦  security_type[12,-1,0]  ¦  comment[12,-1,0]  ¦  character_set_client[12,-1,0]  ¦  collation_connection[12,-1,0]  ¦  database_collation[12,-1,0]  𝄀
+2  ¦  add  ¦  2  ¦  [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]  ¦  int  ¦  $1 + $2  ¦  sql  ¦  udf_db2  ¦  test_account  ¦  2026-01-24 03:47:00  ¦  2026-01-24 03:47:00  ¦  FUNCTION  ¦  DEFINER  ¦    ¦  utf8mb4  ¦  utf8mb4_0900_ai_ci  ¦  utf8mb4_0900_ai_ci
 drop database test01;
 use test02;
 select * from v01;
@@ -481,87 +507,92 @@ function addab doesn't exist
 drop function `subab`(x int, y int);
 function subab doesn't exist
 select name, db from mo_catalog.mo_user_defined_function;
-name    db
-addab    udf_db
-subab    udf_db2
+➤ name[12,-1,0]  ¦  db[12,-1,0]  𝄀
+addab  ¦  udf_db  𝄀
+subab  ¦  udf_db2
 revoke role_r2 from role_r3;
 revoke role_r1 from role_r2;
 select operation_role_id,operation_user_id from mo_catalog.mo_role_grant;
-operation_role_id    operation_user_id
+➤ operation_role_id[4,32,0]  ¦  operation_user_id[4,32,0]
 restore cluster{snapshot="cluster_level_snapshot"};
 use db02;
 select * from department_id;
 SQL parser error: table "department_id" does not exist
 show create table departments;
-Table    Create Table
-departments    CREATE TABLE `departments` (\n  `department_id` int NOT NULL AUTO_INCREMENT,\n  `department_name` varchar(100) DEFAULT NULL,\n  PRIMARY KEY (`department_id`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+departments  ¦  CREATE TABLE `departments` (
+  `department_id` int NOT NULL AUTO_INCREMENT,
+  `department_name` varchar(100) DEFAULT NULL,
+  PRIMARY KEY (`department_id`)
+)
 drop table employees;
 select * from employee_view;
 SQL parser error: table "employees" does not exist
 select * from department_view;
-department_id    department_name
-1    HR
-2    Engineering
+➤ department_id[4,32,0]  ¦  department_name[12,-1,0]  𝄀
+1  ¦  HR  𝄀
+2  ¦  Engineering
 select * from employee_with_department_view;
 SQL parser error: table "employees" does not exist
 use db03;
 select count(*) from pri01;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 4
 select count(*) from aff01;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 14
 use mo_catalog;
 select * from t1;
-a    account_id
-1    6
-2    6
-3    6
+➤ a[4,32,0]  ¦  account_id[4,32,0]  𝄀
+1  ¦  6  𝄀
+2  ¦  6  𝄀
+3  ¦  6
 show tables;
-Tables_in_mo_catalog
-mo_account
-mo_branch_metadata
-mo_cache
-mo_cdc_task
-mo_cdc_watermark
-mo_columns
-mo_configurations
-mo_data_key
-mo_database
-mo_feature_limit
-mo_feature_registry
-mo_foreign_keys
-mo_index_update
-mo_indexes
-mo_iscp_log
-mo_locks
-mo_merge_settings
-mo_mysql_compatibility_mode
-mo_partition_metadata
-mo_partition_tables
-mo_pitr
-mo_pubs
-mo_role
-mo_role_grant
-mo_role_privs
-mo_sessions
-mo_shards
-mo_shards_metadata
-mo_snapshots
-mo_stages
-mo_stored_procedure
-mo_subs
-mo_table_partitions
-mo_table_stats_alpha
-mo_tables
-mo_transactions
-mo_upgrade
-mo_upgrade_tenant
-mo_user
-mo_user_defined_function
-mo_user_grant
-mo_variables
-mo_version
+➤ Tables_in_mo_catalog[12,-1,0]  𝄀
+mo_account  𝄀
+mo_branch_metadata  𝄀
+mo_cache  𝄀
+mo_cdc_task  𝄀
+mo_cdc_watermark  𝄀
+mo_columns  𝄀
+mo_configurations  𝄀
+mo_data_key  𝄀
+mo_database  𝄀
+mo_feature_limit  𝄀
+mo_feature_registry  𝄀
+mo_foreign_keys  𝄀
+mo_index_update  𝄀
+mo_indexes  𝄀
+mo_iscp_log  𝄀
+mo_locks  𝄀
+mo_merge_settings  𝄀
+mo_mysql_compatibility_mode  𝄀
+mo_parquet_schema  𝄀
+mo_partition_metadata  𝄀
+mo_partition_tables  𝄀
+mo_pitr  𝄀
+mo_pubs  𝄀
+mo_role  𝄀
+mo_role_grant  𝄀
+mo_role_privs  𝄀
+mo_sessions  𝄀
+mo_shards  𝄀
+mo_shards_metadata  𝄀
+mo_snapshots  𝄀
+mo_stages  𝄀
+mo_stored_procedure  𝄀
+mo_subs  𝄀
+mo_table_partitions  𝄀
+mo_table_stats_alpha  𝄀
+mo_tables  𝄀
+mo_transactions  𝄀
+mo_upgrade  𝄀
+mo_upgrade_tenant  𝄀
+mo_user  𝄀
+mo_user_defined_function  𝄀
+mo_user_grant  𝄀
+mo_variables  𝄀
+mo_version  𝄀
 t1
 drop table if exists t1;
 drop table if exists t3;
@@ -570,52 +601,52 @@ Unknown database repub01
 select * from repub01.pri01;
 Unknown database repub01
 select * from mo_catalog.mo_stored_procedure;
-proc_id    name    creator    args    lang    body    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
-1    test_if_hit_elseif_first_elseif    null    []    sql    begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    procedure_test    test_account    2025-11-24 15:27:40    2025-11-24 15:27:40    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
-2    test_if_hit_if    null    []    sql    begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    procedure_test    test_account    2025-11-24 15:27:40    2025-11-24 15:27:40    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+➤ proc_id[4,32,0]  ¦  name[12,-1,0]  ¦  creator[4,32,0]  ¦  args[12,0,0]  ¦  lang[12,0,0]  ¦  body[12,0,0]  ¦  db[12,-1,0]  ¦  definer[12,-1,0]  ¦  modified_time[93,64,0]  ¦  created_time[93,64,0]  ¦  type[12,-1,0]  ¦  security_type[12,-1,0]  ¦  comment[12,-1,0]  ¦  character_set_client[12,-1,0]  ¦  collation_connection[12,-1,0]  ¦  database_collation[12,-1,0]  𝄀
+1  ¦  test_if_hit_elseif_first_elseif  ¦  null  ¦  []  ¦  sql  ¦  begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end  ¦  procedure_test  ¦  test_account  ¦  2026-01-24 03:46:58  ¦  2026-01-24 03:46:58  ¦  PROCEDURE  ¦  DEFINER  ¦    ¦  utf8mb4  ¦  utf8mb4_0900_ai_ci  ¦  utf8mb4_0900_ai_ci  𝄀
+2  ¦  test_if_hit_if  ¦  null  ¦  []  ¦  sql  ¦  begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end  ¦  procedure_test  ¦  test_account  ¦  2026-01-24 03:46:58  ¦  2026-01-24 03:46:58  ¦  PROCEDURE  ¦  DEFINER  ¦    ¦  utf8mb4  ¦  utf8mb4_0900_ai_ci  ¦  utf8mb4_0900_ai_ci
 select * from mo_catalog.mo_stages;
-stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
-1    my_ext_stage    s3://load/files/        in_use    2025-11-24 15:27:40    
-2    my_ext_stage1    s3://load/files/    AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z    in_use    2025-11-24 15:27:40    
+➤ stage_id[4,32,0]  ¦  stage_name[12,-1,0]  ¦  url[12,0,0]  ¦  stage_credentials[12,0,0]  ¦  stage_status[12,-1,0]  ¦  created_time[93,64,0]  ¦  comment[12,0,0]  𝄀
+1  ¦  my_ext_stage  ¦  s3://load/files/  ¦    ¦  in_use  ¦  2026-01-24 03:46:59  ¦    𝄀
+2  ¦  my_ext_stage1  ¦  s3://load/files/  ¦  AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z  ¦  in_use  ¦  2026-01-24 03:46:59  ¦  
 select * from mo_catalog.mo_user_defined_function;
-function_id    name    owner    args    rettype    body    language    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
-1    addab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 + $2    sql    udf_db2    test_account    2025-11-24 15:27:40    2025-11-24 15:27:40    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+➤ function_id[4,32,0]  ¦  name[12,-1,0]  ¦  owner[4,32,0]  ¦  args[-1,2147483647,0]  ¦  rettype[12,-1,0]  ¦  body[12,0,0]  ¦  language[12,-1,0]  ¦  db[12,-1,0]  ¦  definer[12,-1,0]  ¦  modified_time[93,64,0]  ¦  created_time[93,64,0]  ¦  type[12,-1,0]  ¦  security_type[12,-1,0]  ¦  comment[12,-1,0]  ¦  character_set_client[12,-1,0]  ¦  collation_connection[12,-1,0]  ¦  database_collation[12,-1,0]  𝄀
+1  ¦  addab  ¦  2  ¦  [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]  ¦  int  ¦  $1 + $2  ¦  sql  ¦  udf_db2  ¦  test_account  ¦  2026-01-24 03:46:59  ¦  2026-01-24 03:46:59  ¦  FUNCTION  ¦  DEFINER  ¦    ¦  utf8mb4  ¦  utf8mb4_0900_ai_ci  ¦  utf8mb4_0900_ai_ci
 select * from test01.sales;
-id    sale_date    amount
-1    2018-12-25    100.00
-2    2019-05-15    200.00
-3    2020-07-22    150.00
-4    2021-08-01    300.00
+➤ id[4,32,0]  ¦  sale_date[91,64,0]  ¦  amount[3,10,2]  𝄀
+1  ¦  2018-12-25  ¦  100.00  𝄀
+2  ¦  2019-05-15  ¦  200.00  𝄀
+3  ¦  2020-07-22  ¦  150.00  𝄀
+4  ¦  2021-08-01  ¦  300.00
 use test02;
 select * from v01;
-id    sale_date    amount
-1    2018-12-25    100.00
-2    2019-05-15    200.00
-3    2020-07-22    150.00
-4    2021-08-01    300.00
+➤ id[4,32,0]  ¦  sale_date[91,64,0]  ¦  amount[3,10,2]  𝄀
+1  ¦  2018-12-25  ¦  100.00  𝄀
+2  ¦  2019-05-15  ¦  200.00  𝄀
+3  ¦  2020-07-22  ¦  150.00  𝄀
+4  ¦  2021-08-01  ¦  300.00
 use test03;
 select * from v02;
-id    sale_date    amount
-1    2018-12-25    100.00
-2    2019-05-15    200.00
-3    2020-07-22    150.00
-4    2021-08-01    300.00
+➤ id[4,32,0]  ¦  sale_date[91,64,0]  ¦  amount[3,10,2]  𝄀
+1  ¦  2018-12-25  ¦  100.00  𝄀
+2  ¦  2019-05-15  ¦  200.00  𝄀
+3  ¦  2020-07-22  ¦  150.00  𝄀
+4  ¦  2021-08-01  ¦  300.00
 select name, db from mo_catalog.mo_user_defined_function;
-name    db
-addab    udf_db
-subab    udf_db2
+➤ name[12,-1,0]  ¦  db[12,-1,0]  𝄀
+addab  ¦  udf_db  𝄀
+subab  ¦  udf_db2
 select operation_role_id,operation_user_id from mo_catalog.mo_role_grant;
-operation_role_id    operation_user_id
-2    2
-2    2
+➤ operation_role_id[4,32,0]  ¦  operation_user_id[4,32,0]  𝄀
+2  ¦  2  𝄀
+2  ¦  2
 drop role role_r1, role_r2, role_r3;
 drop user role_u1, role_u2, role_u3;
 drop database test;
 drop database repub02;
 select * from mo_catalog.mo_stored_procedure;
-proc_id    name    creator    args    lang    body    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
-1    test_if_hit_elseif_first_elseif    null    []    sql    begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    procedure_test    test_account    2025-11-24 15:27:40    2025-11-24 15:27:40    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
-2    test_if_hit_if    null    []    sql    begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    procedure_test    test_account    2025-11-24 15:27:40    2025-11-24 15:27:40    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+➤ proc_id[4,32,0]  ¦  name[12,-1,0]  ¦  creator[4,32,0]  ¦  args[12,0,0]  ¦  lang[12,0,0]  ¦  body[12,0,0]  ¦  db[12,-1,0]  ¦  definer[12,-1,0]  ¦  modified_time[93,64,0]  ¦  created_time[93,64,0]  ¦  type[12,-1,0]  ¦  security_type[12,-1,0]  ¦  comment[12,-1,0]  ¦  character_set_client[12,-1,0]  ¦  collation_connection[12,-1,0]  ¦  database_collation[12,-1,0]  𝄀
+1  ¦  test_if_hit_elseif_first_elseif  ¦  null  ¦  []  ¦  sql  ¦  begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end  ¦  procedure_test  ¦  test_account  ¦  2026-01-24 03:46:58  ¦  2026-01-24 03:46:58  ¦  PROCEDURE  ¦  DEFINER  ¦    ¦  utf8mb4  ¦  utf8mb4_0900_ai_ci  ¦  utf8mb4_0900_ai_ci  𝄀
+2  ¦  test_if_hit_if  ¦  null  ¦  []  ¦  sql  ¦  begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end  ¦  procedure_test  ¦  test_account  ¦  2026-01-24 03:46:58  ¦  2026-01-24 03:46:58  ¦  PROCEDURE  ¦  DEFINER  ¦    ¦  utf8mb4  ¦  utf8mb4_0900_ai_ci  ¦  utf8mb4_0900_ai_ci
 drop database if exists udf_db2;
 drop function `addab`(x int, y int);
 function addab doesn't exist
@@ -632,7 +663,7 @@ drop table if exists mo_catalog.t1;
 drop table if exists mo_catalog.t3;
 drop snapshot if exists cluster_level_snapshot;
 show snapshots;
-SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
+➤ SNAPSHOT_NAME[12,-1,0]  ¦  TIMESTAMP[12,-1,0]  ¦  SNAPSHOT_LEVEL[12,-1,0]  ¦  ACCOUNT_NAME[12,-1,0]  ¦  DATABASE_NAME[12,-1,0]  ¦  TABLE_NAME[12,-1,0]
 drop account acc01;
 drop account acc02;
 drop account acc03;
@@ -644,8 +675,8 @@ insert into t1 values (1,6),(2,6),(3,6);
 drop snapshot if exists cluster_level_snapshot;
 create snapshot cluster_level_snapshot for cluster;
 show snapshots;
-SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-cluster_level_snapshot    2025-11-24 15:27:42.746783999    cluster            
+➤ SNAPSHOT_NAME[12,-1,0]  ¦  TIMESTAMP[12,-1,0]  ¦  SNAPSHOT_LEVEL[12,-1,0]  ¦  ACCOUNT_NAME[12,-1,0]  ¦  DATABASE_NAME[12,-1,0]  ¦  TABLE_NAME[12,-1,0]  𝄀
+cluster_level_snapshot  ¦  2026-01-24 03:47:16.880876999  ¦  cluster  ¦    ¦    ¦  
 use mo_catalog;
 drop table if exists t2;
 create cluster table t2(a int);
@@ -653,15 +684,15 @@ insert into t2 values (1,6),(2,6),(3,6);
 restore account sys{snapshot="cluster_level_snapshot"};
 use mo_catalog;
 show tables like 't1';
-Tables_in_mo_catalog
+➤ Tables_in_mo_catalog[12,-1,0]  𝄀
 t1
 show tables like 't2';
-Tables_in_mo_catalog
+➤ Tables_in_mo_catalog[12,-1,0]
 drop table if exists t1;
 drop table if exists t2;
 drop snapshot if exists cluster_level_snapshot;
 show snapshots;
-SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
+➤ SNAPSHOT_NAME[12,-1,0]  ¦  TIMESTAMP[12,-1,0]  ¦  SNAPSHOT_LEVEL[12,-1,0]  ¦  ACCOUNT_NAME[12,-1,0]  ¦  DATABASE_NAME[12,-1,0]  ¦  TABLE_NAME[12,-1,0]
 use mo_catalog;
 drop table if exists t1;
 create cluster table t1(a int);
@@ -669,8 +700,8 @@ insert into t1 values (1,6),(2,6),(3,6);
 drop snapshot if exists cluster_level_snapshot;
 create snapshot cluster_level_snapshot for cluster;
 show snapshots;
-SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-cluster_level_snapshot    2025-11-24 15:27:42.914881999    cluster            
+➤ SNAPSHOT_NAME[12,-1,0]  ¦  TIMESTAMP[12,-1,0]  ¦  SNAPSHOT_LEVEL[12,-1,0]  ¦  ACCOUNT_NAME[12,-1,0]  ¦  DATABASE_NAME[12,-1,0]  ¦  TABLE_NAME[12,-1,0]  𝄀
+cluster_level_snapshot  ¦  2026-01-24 03:47:17.748922999  ¦  cluster  ¦    ¦    ¦  
 use mo_catalog;
 drop table if exists t2;
 create cluster table t2(a int);
@@ -678,15 +709,15 @@ insert into t2 values (1,6),(2,6),(3,6);
 restore cluster{snapshot="cluster_level_snapshot"};
 use mo_catalog;
 show tables like 't1';
-Tables_in_mo_catalog
+➤ Tables_in_mo_catalog[12,-1,0]  𝄀
 t1
 show tables like 't2';
-Tables_in_mo_catalog
+➤ Tables_in_mo_catalog[12,-1,0]
 drop table if exists t1;
 drop table if exists t2;
 drop snapshot if exists cluster_level_snapshot;
 show snapshots;
-SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
+➤ SNAPSHOT_NAME[12,-1,0]  ¦  TIMESTAMP[12,-1,0]  ¦  SNAPSHOT_LEVEL[12,-1,0]  ¦  ACCOUNT_NAME[12,-1,0]  ¦  DATABASE_NAME[12,-1,0]  ¦  TABLE_NAME[12,-1,0]
 use mo_catalog;
 drop table if exists t1;
 create cluster table t1(a int);
@@ -694,8 +725,8 @@ insert into t1 values (1,6),(2,6),(3,6);
 drop snapshot if exists account_level_snapshot;
 create snapshot account_level_snapshot for account;
 show snapshots;
-SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-account_level_snapshot    2025-11-24 15:27:43.112728999    account    sys        
+➤ SNAPSHOT_NAME[12,-1,0]  ¦  TIMESTAMP[12,-1,0]  ¦  SNAPSHOT_LEVEL[12,-1,0]  ¦  ACCOUNT_NAME[12,-1,0]  ¦  DATABASE_NAME[12,-1,0]  ¦  TABLE_NAME[12,-1,0]  𝄀
+account_level_snapshot  ¦  2026-01-24 03:47:18.540936999  ¦  account  ¦  sys  ¦    ¦  
 use mo_catalog;
 drop table if exists t2;
 create cluster table t2(a int);
@@ -703,12 +734,12 @@ insert into t2 values (1,6),(2,6),(3,6);
 restore account sys{snapshot="account_level_snapshot"};
 use mo_catalog;
 show tables like 't1';
-Tables_in_mo_catalog
+➤ Tables_in_mo_catalog[12,-1,0]  𝄀
 t1
 show tables like 't2';
-Tables_in_mo_catalog
+➤ Tables_in_mo_catalog[12,-1,0]
 drop table if exists t1;
 drop table if exists t2;
 drop snapshot if exists account_level_snapshot;
 show snapshots;
-SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
+➤ SNAPSHOT_NAME[12,-1,0]  ¦  TIMESTAMP[12,-1,0]  ¦  SNAPSHOT_LEVEL[12,-1,0]  ¦  ACCOUNT_NAME[12,-1,0]  ¦  DATABASE_NAME[12,-1,0]  ¦  TABLE_NAME[12,-1,0]

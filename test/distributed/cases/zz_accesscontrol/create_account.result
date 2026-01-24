@@ -1,9 +1,9 @@
 set global enable_privilege_cache = off;
 select enable_fault_injection();
-enable_fault_injection()
+➤ enable_fault_injection()[-7,1,0]  𝄀
 1
 select add_fault_point('fj/trace/partitionstate', ':::', 'echo', 20, 'mo_tables');
-add_fault_point(fj/trace/partitionstate, :::, echo, 20, mo_tables)
+➤ add_fault_point(fj/trace/partitionstate, :::, echo, 20, mo_tables)[-7,1,0]  𝄀
 1
 drop account if exists `test@123456`;
 drop account if exists testaccount;
@@ -33,66 +33,66 @@ drop account if exists ccc;
 create account `test@123456` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 internal error: the name "test@123456" is invalid
 select account_name from mo_catalog.mo_account where account_name='test@123456';
-account_name
+➤ account_name[12,-1,0]
 create account testaccount ADMIN_NAME 'admin@123' IDENTIFIED BY 'yyyy_1234@126.com';
 select account_name from mo_catalog.mo_account where account_name='testaccount';
-account_name
+➤ account_name[12,-1,0]  𝄀
 testaccount
 create account 123_acc ADMIN_NAME '8888' IDENTIFIED BY 'ffffff';
 select account_name from mo_catalog.mo_account where account_name='123_acc';
-account_name
+➤ account_name[12,-1,0]  𝄀
 123_acc
 create account _acc ADMIN_NAME 'AbcDef' IDENTIFIED BY 'NIU_2345';
 select account_name from mo_catalog.mo_account where account_name='_acc';
-account_name
+➤ account_name[12,-1,0]  𝄀
 _acc
 create account a12 ADMIN_NAME 'a12' IDENTIFIED BY 'aaaaa';
 select account_name from mo_catalog.mo_account where account_name='a12';
-account_name
+➤ account_name[12,-1,0]  𝄀
 a12
 create account _acc1 ADMIN_NAME '_AbcDef' IDENTIFIED BY '_2345';
 select account_name from mo_catalog.mo_account where account_name='_acc1';
-account_name
+➤ account_name[12,-1,0]  𝄀
 _acc1
 create account a123 ADMIN_NAME 'a12' IDENTIFIED BY 'aaaaa';
 select account_name from mo_catalog.mo_account where account_name='a12';
-account_name
+➤ account_name[12,-1,0]  𝄀
 a12
 create account FaSt ADMIN_NAME '账号' IDENTIFIED BY '账号密码';
 select account_name from mo_catalog.mo_account where account_name='fast';
-account_name
+➤ account_name[12,-1,0]  𝄀
 fast
 create account `ab.cd` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 internal error: the name "ab.cd" is invalid
 select account_name from mo_catalog.mo_account where account_name='ab.cd';
-account_name
+➤ account_name[12,-1,0]
 create account `test/123` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 internal error: the name "test/123" is invalid
 select account_name from mo_catalog.mo_account where account_name='test/123';
-account_name
+➤ account_name[12,-1,0]
 create account `test%` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 internal error: the name "test%" is invalid
 select account_name from mo_catalog.mo_account where account_name='test%';
-account_name
+➤ account_name[12,-1,0]
 create account `123` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 select account_name from mo_catalog.mo_account where account_name='123';
-account_name
+➤ account_name[12,-1,0]  𝄀
 123
 create account `非常` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 internal error: the name "非常" is invalid
 select account_name from mo_catalog.mo_account where account_name='非常';
-account_name
+➤ account_name[12,-1,0]
 create account `abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffff` admin_name `abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffffdddddd` IDENTIFIED BY '1111111111111111111111111111111111111111111111111111111';
 internal error: the name "abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffff" is invalid
 select account_name from mo_catalog.mo_account where account_name='abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffff';
-account_name
+➤ account_name[12,-1,0]
 create account ` user_strip_01 ` ADMIN_NAME " admin " IDENTIFIED BY " 123456 ";
 select account_name from mo_catalog.mo_account where account_name='user_strip_01';
-account_name
+➤ account_name[12,-1,0]  𝄀
 user_strip_01
 create account abc ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 select account_name from mo_catalog.mo_account where account_name='abc';
-account_name
+➤ account_name[12,-1,0]  𝄀
 abc
 create account ABC ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 internal error: the tenant abc exists
@@ -101,20 +101,20 @@ internal error: the tenant abc exists
 create account IF NOT EXISTS Abc ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 create account IF NOT EXISTS Abcd ADMIN_NAME 'admin' IDENTIFIED BY '123456' comment '这是comment备注/123456';
 select account_name,comments from mo_catalog.mo_account where account_name='abcd';
-account_name    comments
-abcd    这是comment备注/123456
+➤ account_name[12,-1,0]  ¦  comments[12,-1,0]  𝄀
+abcd  ¦  这是comment备注/123456
 create account IF NOT EXISTS cm1 ADMIN_NAME 'admin' IDENTIFIED BY '123456' comment 'this is test comment , please check';
 select account_name,comments from mo_catalog.mo_account where account_name='cm1';
-account_name    comments
-cm1    this is test comment , please check
+➤ account_name[12,-1,0]  ¦  comments[12,-1,0]  𝄀
+cm1  ¦  this is test comment , please check
 create account cm2 ADMIN_NAME 'admin' IDENTIFIED BY '123456' comment 'abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffff';
 select account_name,comments from mo_catalog.mo_account where account_name='cm2';
-account_name    comments
-cm2    abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffff
+➤ account_name[12,-1,0]  ¦  comments[12,-1,0]  𝄀
+cm2  ¦  abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffff
 create account cm3 ADMIN_NAME 'admin' IDENTIFIED BY '123456' comment '';
 select account_name,comments from mo_catalog.mo_account where account_name='cm3';
-account_name    comments
-cm3
+➤ account_name[12,-1,0]  ¦  comments[12,-1,0]  𝄀
+cm3  ¦  
 create accout a1 ADMIN_NAME ' admin' IDENTIFIED BY '123456';
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 13 near " accout a1 ADMIN_NAME ' admin' IDENTIFIED BY '123456';";
 create account a1;
@@ -151,79 +151,80 @@ create account default ADMIN_NAME 'root' IDENTIFIED BY '123456';
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 22 near " default ADMIN_NAME 'root' IDENTIFIED BY '123456';";
 create account account ADMIN_NAME 'root' IDENTIFIED BY '123456';
 select count(*) from mo_catalog.mo_account where account_name in ('test:account','default','account');
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 1
 create account account_1 admin_name='admin' identified by '123456';
 show databases;
-Database
-mo_catalog
-system
+➤ Database[12,-1,0]  𝄀
+information_schema  𝄀
+mo_catalog  𝄀
+mysql  𝄀
+system  𝄀
 system_metrics
-information_schema
-mysql
 use mo_catalog;
 show tables;
-Tables_in_mo_catalog
-mo_indexes
-mo_table_partitions
-mo_tables
-mo_user
-mo_role
-mo_user_grant
-mo_role_grant
-mo_role_privs
-mo_user_defined_function
-mo_mysql_compatibility_mode
-mo_partition_metadata
-mo_partition_tables
-mo_stored_procedure
-mo_stages
-mo_snapshots
-mo_database
-mo_columns
-mo_sessions
-mo_configurations
-mo_locks
+➤ Tables_in_mo_catalog[12,-1,0]  𝄀
+mo_cache  𝄀
+mo_columns  𝄀
+mo_configurations  𝄀
+mo_database  𝄀
+mo_foreign_keys  𝄀
+mo_indexes  𝄀
+mo_locks  𝄀
+mo_mysql_compatibility_mode  𝄀
+mo_parquet_schema  𝄀
+mo_partition_metadata  𝄀
+mo_partition_tables  𝄀
+mo_role  𝄀
+mo_role_grant  𝄀
+mo_role_privs  𝄀
+mo_sessions  𝄀
+mo_snapshots  𝄀
+mo_stages  𝄀
+mo_stored_procedure  𝄀
+mo_table_partitions  𝄀
+mo_tables  𝄀
+mo_transactions  𝄀
+mo_user  𝄀
+mo_user_defined_function  𝄀
+mo_user_grant  𝄀
 mo_variables
-mo_transactions
-mo_cache
-mo_foreign_keys
 select user_name,authentication_string,owner from mo_user;
-user_name    authentication_string    owner
-admin    *6BB4837EB74329105EE4568DDA7DC67ED2CA2AD9    2
+➤ user_name[12,-1,0]  ¦  authentication_string[12,-1,0]  ¦  owner[4,32,0]  𝄀
+admin  ¦  *6BB4837EB74329105EE4568DDA7DC67ED2CA2AD9  ¦  2
 select role_name,obj_type,privilege_name,privilege_level from mo_role_privs;
-role_name    obj_type    privilege_name    privilege_level
-accountadmin    account    create user    *
-accountadmin    account    drop user    *
-accountadmin    account    alter user    *
-accountadmin    account    create role    *
-accountadmin    account    drop role    *
-accountadmin    account    create database    *
-accountadmin    account    drop database    *
-accountadmin    account    show databases    *
-accountadmin    account    connect    *
-accountadmin    account    manage grants    *
-accountadmin    account    account all    *
-accountadmin    database    show tables    *
-accountadmin    database    create table    *
-accountadmin    database    drop table    *
-accountadmin    database    alter table    *
-accountadmin    database    create view    *
-accountadmin    database    drop view    *
-accountadmin    database    alter view    *
-accountadmin    database    database all    *
-accountadmin    database    database ownership    *
-accountadmin    table    select    *.*
-accountadmin    table    insert    *.*
-accountadmin    table    update    *.*
-accountadmin    table    truncate    *.*
-accountadmin    table    delete    *.*
-accountadmin    table    reference    *.*
-accountadmin    table    index    *.*
-accountadmin    table    table all    *.*
-accountadmin    table    table ownership    *.*
-accountadmin    table    values    *.*
-public    account    connect    *
+➤ role_name[12,-1,0]  ¦  obj_type[12,-1,0]  ¦  privilege_name[12,-1,0]  ¦  privilege_level[12,-1,0]  𝄀
+accountadmin  ¦  account  ¦  create user  ¦  *  𝄀
+accountadmin  ¦  account  ¦  drop user  ¦  *  𝄀
+accountadmin  ¦  account  ¦  alter user  ¦  *  𝄀
+accountadmin  ¦  account  ¦  create role  ¦  *  𝄀
+accountadmin  ¦  account  ¦  drop role  ¦  *  𝄀
+accountadmin  ¦  account  ¦  create database  ¦  *  𝄀
+accountadmin  ¦  account  ¦  drop database  ¦  *  𝄀
+accountadmin  ¦  account  ¦  show databases  ¦  *  𝄀
+accountadmin  ¦  account  ¦  connect  ¦  *  𝄀
+accountadmin  ¦  account  ¦  manage grants  ¦  *  𝄀
+accountadmin  ¦  account  ¦  account all  ¦  *  𝄀
+accountadmin  ¦  database  ¦  show tables  ¦  *  𝄀
+accountadmin  ¦  database  ¦  create table  ¦  *  𝄀
+accountadmin  ¦  database  ¦  drop table  ¦  *  𝄀
+accountadmin  ¦  database  ¦  alter table  ¦  *  𝄀
+accountadmin  ¦  database  ¦  create view  ¦  *  𝄀
+accountadmin  ¦  database  ¦  drop view  ¦  *  𝄀
+accountadmin  ¦  database  ¦  alter view  ¦  *  𝄀
+accountadmin  ¦  database  ¦  database all  ¦  *  𝄀
+accountadmin  ¦  database  ¦  database ownership  ¦  *  𝄀
+accountadmin  ¦  table  ¦  select  ¦  *.*  𝄀
+accountadmin  ¦  table  ¦  insert  ¦  *.*  𝄀
+accountadmin  ¦  table  ¦  update  ¦  *.*  𝄀
+accountadmin  ¦  table  ¦  truncate  ¦  *.*  𝄀
+accountadmin  ¦  table  ¦  delete  ¦  *.*  𝄀
+accountadmin  ¦  table  ¦  reference  ¦  *.*  𝄀
+accountadmin  ¦  table  ¦  index  ¦  *.*  𝄀
+accountadmin  ¦  table  ¦  table all  ¦  *.*  𝄀
+accountadmin  ¦  table  ¦  table ownership  ¦  *.*  𝄀
+accountadmin  ¦  table  ¦  values  ¦  *.*  𝄀
+public  ¦  account  ¦  connect  ¦  *
 create database account_1_db;
 CREATE USER account_1_user IDENTIFIED BY '123456';
 create table a(b int);
@@ -232,17 +233,17 @@ use account_1_db;
 create table a(b int);
 use mo_catalog;
 select user_name,authentication_string,owner from mo_user where user_name ='account_1_user';
-user_name    authentication_string    owner
+➤ user_name[12,-1,0]  ¦  authentication_string[12,-1,0]  ¦  owner[4,32,0]
 create account accout_Xingming_insert ADMIN_NAME 'root' IDENTIFIED BY '123456789';
 select account_name from mo_catalog.mo_account where account_name='accout_xingming_insert';
-account_name
+➤ account_name[12,-1,0]  𝄀
 accout_xingming_insert
 drop account accout_Xingming_insert;
 select account_name from mo_catalog.mo_account where account_name='accout_xingming_insert';
-account_name
+➤ account_name[12,-1,0]
 create account if not exists accout_Xingming_insert ADMIN_NAME 'root' IDENTIFIED BY '123456789';
 select account_name from mo_catalog.mo_account where account_name='accout_xingming_insert';
-account_name
+➤ account_name[12,-1,0]  𝄀
 accout_xingming_insert
 PREPARE s1 FROM "create account ? ADMIN_NAME ? IDENTIFIED BY ?";
 set @a_var = 'ccc';
@@ -251,7 +252,7 @@ set @c_var = '111';
 EXECUTE s1 USING @a_var, @b_var, @c_var;
 DEALLOCATE PREPARE s1;
 select account_name from mo_catalog.mo_account where account_name='ccc';
-account_name
+➤ account_name[12,-1,0]  𝄀
 ccc
 drop account ccc;
 PREPARE s1 FROM "create account ? ADMIN_NAME 'admin' IDENTIFIED BY ?";
@@ -260,7 +261,7 @@ set @c_var = '222';
 EXECUTE s1 USING @a_var, @c_var;
 DEALLOCATE PREPARE s1;
 select 1;
-1
+➤ 1[-5,64,0]  𝄀
 1
 drop account if exists `test@123456`;
 drop account if exists testaccount;
@@ -288,6 +289,6 @@ drop account if exists aaa;
 drop account if exists account;
 drop account if exists ccc;
 select disable_fault_injection();
-disable_fault_injection()
+➤ disable_fault_injection()[-7,1,0]  𝄀
 1
 set global enable_privilege_cache = on;

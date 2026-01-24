@@ -1030,8 +1030,8 @@ func Test_ParquetWriter_Size(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(pw, convey.ShouldNotBeNil)
 
-		// Initial size should be 0
-		convey.So(pw.Size(), convey.ShouldEqual, 0)
+		// Initial size should be 4 (parquet magic bytes "PAR1")
+		convey.So(pw.Size(), convey.ShouldEqual, 4)
 
 		// After close, the buffer should have data
 		data, err := pw.Close()
