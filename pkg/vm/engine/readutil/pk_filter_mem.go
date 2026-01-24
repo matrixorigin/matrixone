@@ -273,17 +273,6 @@ func (f *MemPKFilter) SetFullData(op int, isVec bool, val ...[]byte) {
 	f.op = op
 	f.isVec = isVec
 	f.isValid = true
-	f.buildInSet()
-}
-
-// buildInSet pre-builds a hashmap for IN filter to enable O(1) lookup
-func (f *MemPKFilter) buildInSet() {
-	if f.op == function.IN && len(f.packed) > 0 {
-		f.inSet = make(map[string]struct{}, len(f.packed))
-		for _, k := range f.packed {
-			f.inSet[string(k)] = struct{}{}
-		}
-	}
 }
 
 func (f *MemPKFilter) FilterVector(
