@@ -33,6 +33,7 @@ import (
 type MemPKFilter struct {
 	op      int
 	packed  [][]byte
+	inSet   map[string]struct{} // pre-built hashmap for IN filter
 	isVec   bool
 	isValid bool
 	TS      types.TS
@@ -272,6 +273,17 @@ func (f *MemPKFilter) SetFullData(op int, isVec bool, val ...[]byte) {
 	f.op = op
 	f.isVec = isVec
 	f.isValid = true
+	f.buildInSet()
+}
+
+// buildInSet pre-builds a hashmap for IN filter to enable O(1) lookup
+func (f *MemPKFilter) buildInSet() {
+	if f.op == function.IN && len(f.packed) > 0 {
+		f.inSet = make(map[string]struct{}, len(f.packed))
+		for _, k := range f.packed {
+			f.inSet[string(k)] = struct{}{}
+		}
+	}
 }
 
 func (f *MemPKFilter) FilterVector(
@@ -279,12 +291,29 @@ func (f *MemPKFilter) FilterVector(
 	packer *types.Packer,
 	skipMask *objectio.Bitmap,
 ) {
+	keys := EncodePrimaryKeyVector(vec, packer)
 
-	if (f.op == function.IN || f.op == function.PREFIX_IN) && len(f.packed) > 4 {
+	// For IN filter, use hashmap for O(1) lookup
+	if f.op == function.IN {
+		// Lazy build hashmap on first use
+		if f.inSet == nil && len(f.packed) > 0 {
+			f.inSet = make(map[string]struct{}, len(f.packed))
+			for _, k := range f.packed {
+				f.inSet[string(k)] = struct{}{}
+			}
+		}
+		for i := 0; i < len(keys); i++ {
+			if _, ok := f.inSet[string(keys[i])]; !ok {
+				skipMask.Add(uint64(i))
+			}
+		}
 		return
 	}
 
-	keys := EncodePrimaryKeyVector(vec, packer)
+	// For PREFIX_IN with small list, use linear search
+	if f.op == function.PREFIX_IN && len(f.packed) > 4 {
+		return
+	}
 
 	for i := 0; i < len(keys); i++ {
 		switch f.op {
@@ -298,17 +327,6 @@ func (f *MemPKFilter) FilterVector(
 				skipMask.Add(uint64(i))
 			}
 
-		case function.IN:
-			in := false
-			for _, k := range f.packed {
-				if bytes.Equal(keys[i], k) {
-					in = true
-					break
-				}
-			}
-			if !in {
-				skipMask.Add(uint64(i))
-			}
 		case function.PREFIX_IN:
 			in := false
 			for _, k := range f.packed {
