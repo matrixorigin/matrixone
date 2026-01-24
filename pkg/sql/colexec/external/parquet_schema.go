@@ -99,7 +99,7 @@ func generateMapSchema(col *parquet.Column) string {
 	kvChild := children[0]
 	kvChildren := kvChild.Columns()
 
-	var keyType, valueType string = "string", "unknown"
+	var keyType, valueType = "string", "unknown"
 
 	for _, child := range kvChildren {
 		if child.Name() == "key" {
@@ -128,7 +128,7 @@ func generateStructSchema(col *parquet.Column) string {
 		return "struct<>"
 	}
 
-	var fields []string
+	fields := make([]string, 0, len(children))
 	for _, child := range children {
 		fieldName := escapeFieldName(child.Name())
 		var fieldType string
@@ -242,7 +242,7 @@ func getBasicTypeString(col *parquet.Column) string {
 	case parquet.ByteArray:
 		// Only ByteArray should consider String logical type
 		if logicalType != nil {
-			if logicalType.String != nil {
+			if logicalType.UTF8 != nil {
 				return "string"
 			}
 			if logicalType.Json != nil {
