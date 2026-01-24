@@ -648,7 +648,7 @@ drop snapshot if exists sp06;
 create snapshot sp06 for account;
 select count(*) from mo_catalog.mo_tables{snapshot = sp06} where reldatabase = 'mo_catalog';
 ➤ count(*)[-5,64,0]  𝄀
-156
+157
 select * from mo_catalog.mo_database{snapshot = sp06} where datname = 'mo_catalog';
 ➤ dat_id[-5,64,0]  ¦  datname[12,-1,0]  ¦  dat_catalog_name[12,-1,0]  ¦  dat_createsql[12,-1,0]  ¦  owner[4,32,0]  ¦  creator[4,32,0]  ¦  created_time[93,64,0]  ¦  account_id[4,32,0]  ¦  dat_type[12,-1,0]  𝄀
 1  ¦  mo_catalog  ¦  mo_catalog  ¦    ¦  0  ¦  0  ¦  2026-01-24 11:23:30  ¦  0  ¦  
