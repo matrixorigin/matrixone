@@ -68,12 +68,12 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 }
 
 func (group *Group) prepareGroupAndAggArg(proc *process.Process) (err error) {
-	if len(group.ctr.groupByEvaluate.Executor) == len(group.Exprs) {
+	if len(group.ctr.groupByEvaluate.Executor) == len(group.GroupBy) {
 		group.ctr.groupByEvaluate.ResetForNextQuery()
 	} else {
 		// calculate the key width and key nullable, and hash table type.
 		group.ctr.keyWidth, group.ctr.keyNullable = 0, false
-		for _, expr := range group.Exprs {
+		for _, expr := range group.GroupBy {
 			group.ctr.keyNullable = group.ctr.keyNullable || (!expr.Typ.NotNullable)
 			if expr.Typ.Id == int32(types.T_tuple) {
 				return moerr.NewInternalErrorNoCtx("tuple is not supported as group by column")
@@ -99,7 +99,7 @@ func (group *Group) prepareGroupAndAggArg(proc *process.Process) (err error) {
 
 		// create group by evaluate
 		group.ctr.groupByEvaluate.Free()
-		group.ctr.groupByEvaluate, err = colexec.MakeEvalVector(proc, group.Exprs)
+		group.ctr.groupByEvaluate, err = colexec.MakeEvalVector(proc, group.GroupBy)
 		if err != nil {
 			return err
 		}
@@ -477,34 +477,18 @@ func (group *Group) getNextIntermediateResult(proc *process.Process) (vm.CallRes
 
 	batch := group.ctr.groupByBatches[curr]
 
-	// XXX: Bug #23561.
-	// Serialize agg expressions to ExtraBuf1, only need to ^H MUST
-	// do this for (the first^H) ALL batches.
-	// This really should be set at plan time.
-	if true || curr == 0 {
-		var buf1 bytes.Buffer
-		buf1.Write(types.EncodeInt32(&group.ctr.mtyp))
-		nAggs := int32(len(group.Aggs))
-		buf1.Write(types.EncodeInt32(&nAggs))
-		if nAggs > 0 {
-			for _, agExpr := range group.Aggs {
-				agExpr.MarshalToBuffer(&buf1)
-			}
-		}
-		batch.ExtraBuf1 = buf1.Bytes()
-	}
-
 	// XXX: Serialize chunk of aggList entries to batch.
 	// This is also a pretty bad design, we would really like to
 	// dump group state to a vector and put the vector into the batch.
 	// But well,
-	var buf2 bytes.Buffer
+	var buf bytes.Buffer
+	buf.Write(types.EncodeInt32(&group.ctr.mtyp))
 	nAggs := int32(len(group.ctr.aggList))
-	buf2.Write(types.EncodeInt32(&nAggs))
+	buf.Write(types.EncodeInt32(&nAggs))
 	for _, ag := range group.ctr.aggList {
-		ag.SaveIntermediateResultOfChunk(curr, &buf2)
+		ag.SaveIntermediateResultOfChunk(curr, &buf)
 	}
-	batch.ExtraBuf2 = buf2.Bytes()
+	batch.ExtraBuf = buf.Bytes()
 
 	res := vm.NewCallResult()
 	res.Batch = batch
