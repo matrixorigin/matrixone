@@ -1776,6 +1776,15 @@ func (ses *Session) SetSessionRoutineStatus(status string) error {
 	return err
 }
 
+func (ses *Session) getCleanupContext() context.Context {
+	if txnHandler := ses.GetTxnHandler(); txnHandler != nil {
+		if ctx := txnHandler.GetTxnCtx(); ctx != nil {
+			return ctx
+		}
+	}
+	return context.Background()
+}
+
 // reset resets the ses instance and copy some fields of prev, then
 // close the prev.
 func (ses *Session) reset(prev *Session) error {
@@ -1809,6 +1818,7 @@ func (ses *Session) reset(prev *Session) error {
 
 	// rollback the transactions in the old session.
 	tempExecCtx := ExecCtx{
+		reqCtx: prev.getCleanupContext(),
 		ses:    prev,
 		txnOpt: FeTxnOption{byRollback: true},
 	}
