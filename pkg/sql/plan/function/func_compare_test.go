@@ -16,6 +16,7 @@ package function
 
 import (
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -164,10 +165,6 @@ func TestNullSafeEqualFn(t *testing.T) {
 	require.True(t, s, info, tcInt64.info)
 
 	// Float64 Test
-	// 1.1 <=> 1.1 = true
-	// 1.1 <=> 0.0 = false
-	// 1.1 <=> null = false
-	// null <=> null = true
 	tcFloat := tcTemp{
 		info: "<=> float64 test",
 		inputs: []FunctionTestInput{
@@ -185,10 +182,6 @@ func TestNullSafeEqualFn(t *testing.T) {
 	require.True(t, s, info, tcFloat.info)
 
 	// Varchar Test
-	// "a" <=> "a" = true
-	// "a" <=> "b" = false
-	// "a" <=> null = false
-	// null <=> null = true
 	tcStr := tcTemp{
 		info: "<=> varchar test",
 		inputs: []FunctionTestInput{
@@ -206,10 +199,6 @@ func TestNullSafeEqualFn(t *testing.T) {
 	require.True(t, s, info, tcStr.info)
 
 	// Bool Test
-	// true <=> true = true
-	// true <=> false = false
-	// true <=> null = false
-	// null <=> null = true
 	tcBool := tcTemp{
 		info: "<=> bool test",
 		inputs: []FunctionTestInput{
@@ -225,4 +214,106 @@ func TestNullSafeEqualFn(t *testing.T) {
 		tcBool.inputs, tcBool.expect, nullSafeEqualFn)
 	s, info = fcTCBool.Run()
 	require.True(t, s, info, tcBool.info)
+
+	// Date Test
+	d1, _ := types.ParseDateCast("2022-01-01")
+	d2, _ := types.ParseDateCast("2022-01-02")
+	tcDate := tcTemp{
+		info: "<=> date test",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_date.ToType(), []types.Date{d1, d1, d1, d2}, []bool{false, false, false, true}),
+			NewFunctionTestInput(types.T_date.ToType(), []types.Date{d1, d2, d2, d2}, []bool{false, false, true, true}),
+		},
+		expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+			[]bool{true, false, false, true}, []bool{false, false, false, false}),
+	}
+	fcTCDate := NewFunctionTestCase(proc,
+		tcDate.inputs, tcDate.expect, nullSafeEqualFn)
+	s, info = fcTCDate.Run()
+	require.True(t, s, info, tcDate.info)
+
+	// Time Test
+	t1, _ := types.ParseTime("12:00:00", 0)
+	t2, _ := types.ParseTime("13:00:00", 0)
+	tcTime := tcTemp{
+		info: "<=> time test",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_time.ToType(), []types.Time{t1, t1, t1, t2}, []bool{false, false, false, true}),
+			NewFunctionTestInput(types.T_time.ToType(), []types.Time{t1, t2, t2, t2}, []bool{false, false, true, true}),
+		},
+		expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+			[]bool{true, false, false, true}, []bool{false, false, false, false}),
+	}
+	fcTCTime := NewFunctionTestCase(proc,
+		tcTime.inputs, tcTime.expect, nullSafeEqualFn)
+	s, info = fcTCTime.Run()
+	require.True(t, s, info, tcTime.info)
+
+	// Timestamp Test
+	ts1, _ := types.ParseTimestamp(time.UTC, "2022-01-01 12:00:00", 6)
+	ts2, _ := types.ParseTimestamp(time.UTC, "2022-01-01 13:00:00", 6)
+	tcTimestamp := tcTemp{
+		info: "<=> timestamp test",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_timestamp.ToType(), []types.Timestamp{ts1, ts1, ts1, ts2}, []bool{false, false, false, true}),
+			NewFunctionTestInput(types.T_timestamp.ToType(), []types.Timestamp{ts1, ts2, ts2, ts2}, []bool{false, false, true, true}),
+		},
+		expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+			[]bool{true, false, false, true}, []bool{false, false, false, false}),
+	}
+	fcTCTimestamp := NewFunctionTestCase(proc,
+		tcTimestamp.inputs, tcTimestamp.expect, nullSafeEqualFn)
+	s, info = fcTCTimestamp.Run()
+	require.True(t, s, info, tcTimestamp.info)
+
+	// Decimal64 Test
+	dec64_1, _ := types.ParseDecimal64("1.1", 10, 2)
+	dec64_2, _ := types.ParseDecimal64("2.2", 10, 2)
+	tcDecimal64 := tcTemp{
+		info: "<=> decimal64 test",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_decimal64.ToType(), []types.Decimal64{dec64_1, dec64_1, dec64_1, dec64_2}, []bool{false, false, false, true}),
+			NewFunctionTestInput(types.T_decimal64.ToType(), []types.Decimal64{dec64_1, dec64_2, dec64_2, dec64_2}, []bool{false, false, true, true}),
+		},
+		expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+			[]bool{true, false, false, true}, []bool{false, false, false, false}),
+	}
+	fcTCDecimal64 := NewFunctionTestCase(proc,
+		tcDecimal64.inputs, tcDecimal64.expect, nullSafeEqualFn)
+	s, info = fcTCDecimal64.Run()
+	require.True(t, s, info, tcDecimal64.info)
+
+	// Decimal128 Test
+	dec128_1, _ := types.ParseDecimal128("1.1", 30, 2)
+	dec128_2, _ := types.ParseDecimal128("2.2", 30, 2)
+	tcDecimal128 := tcTemp{
+		info: "<=> decimal128 test",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_decimal128.ToType(), []types.Decimal128{dec128_1, dec128_1, dec128_1, dec128_2}, []bool{false, false, false, true}),
+			NewFunctionTestInput(types.T_decimal128.ToType(), []types.Decimal128{dec128_1, dec128_2, dec128_2, dec128_2}, []bool{false, false, true, true}),
+		},
+		expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+			[]bool{true, false, false, true}, []bool{false, false, false, false}),
+	}
+	fcTCDecimal128 := NewFunctionTestCase(proc,
+		tcDecimal128.inputs, tcDecimal128.expect, nullSafeEqualFn)
+	s, info = fcTCDecimal128.Run()
+	require.True(t, s, info, tcDecimal128.info)
+
+	// UUID Test
+	uuid1, _ := types.ParseUuid("00000000-0000-0000-0000-000000000001")
+	uuid2, _ := types.ParseUuid("00000000-0000-0000-0000-000000000002")
+	tcUuid := tcTemp{
+		info: "<=> uuid test",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_uuid.ToType(), []types.Uuid{uuid1, uuid1, uuid1, uuid2}, []bool{false, false, false, true}),
+			NewFunctionTestInput(types.T_uuid.ToType(), []types.Uuid{uuid1, uuid2, uuid2, uuid2}, []bool{false, false, true, true}),
+		},
+		expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+			[]bool{true, false, false, true}, []bool{false, false, false, false}),
+	}
+	fcTCUuid := NewFunctionTestCase(proc,
+		tcUuid.inputs, tcUuid.expect, nullSafeEqualFn)
+	s, info = fcTCUuid.Run()
+	require.True(t, s, info, tcUuid.info)
 }
