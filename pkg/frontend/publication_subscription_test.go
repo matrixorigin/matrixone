@@ -1062,3 +1062,248 @@ func Test_doPauseCcprSubscription(t *testing.T) {
 		convey.So(err, convey.ShouldBeError)
 	})
 }
+
+func Test_maskPasswordInUri(t *testing.T) {
+	tests := []struct {
+		name     string
+		uri      string
+		expected string
+	}{
+		{
+			name:     "standard uri with password",
+			uri:      "mysql://user:password123@localhost:3306",
+			expected: "mysql://user:***@localhost:3306",
+		},
+		{
+			name:     "uri with account separator",
+			uri:      "mysql://account#user:password@host:3306",
+			expected: "mysql://account#user:***@host:3306",
+		},
+		{
+			name:     "non mysql uri",
+			uri:      "postgres://user:pass@host:5432",
+			expected: "postgres://user:pass@host:5432",
+		},
+		{
+			name:     "invalid uri format without @",
+			uri:      "mysql://userpassword",
+			expected: "mysql://userpassword",
+		},
+		{
+			name:     "uri without password",
+			uri:      "mysql://user@localhost:3306",
+			expected: "mysql://user@localhost:3306",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := maskPasswordInUri(tt.uri)
+			require.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func Test_extractWatermarkFromContext(t *testing.T) {
+	tests := []struct {
+		name        string
+		contextJSON string
+		expectNil   bool
+	}{
+		{
+			name:        "empty context",
+			contextJSON: "",
+			expectNil:   true,
+		},
+		{
+			name:        "invalid json",
+			contextJSON: "invalid json",
+			expectNil:   true,
+		},
+		{
+			name:        "context with float watermark",
+			contextJSON: `{"watermark": 1704067200000000000}`,
+			expectNil:   false,
+		},
+		{
+			name:        "context with current_snapshot_ts",
+			contextJSON: `{"current_snapshot_ts": 1704067200000000000}`,
+			expectNil:   false,
+		},
+		{
+			name:        "context without watermark",
+			contextJSON: `{"other_field": "value"}`,
+			expectNil:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := extractWatermarkFromContext(tt.contextJSON)
+			if tt.expectNil {
+				require.Nil(t, result)
+			} else {
+				require.NotNil(t, result)
+			}
+		})
+	}
+}
+
+func Test_doShowCcprSubscriptions(t *testing.T) {
+	convey.Convey("show ccpr subscriptions", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses := newSes(nil, ctrl)
+		ses.tenant = tenant
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		ctx = defines.AttachAccount(ctx, sysAccountID, rootID, moAdminRoleID)
+
+		// Mock accounts result
+		mockedAccountsResults := func(ctrl *gomock.Controller) []interface{} {
+			er := mock_frontend.NewMockExecResult(ctrl)
+			er.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
+			er.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(0)).Return(int64(0), nil).AnyTimes()
+			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(1)).Return("sys", nil).AnyTimes()
+			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(2)).Return("open", nil).AnyTimes()
+			er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(3)).Return(uint64(1), nil).AnyTimes()
+			er.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(4)).Return(true, nil).AnyTimes()
+			return []interface{}{er}
+		}
+
+		// Mock ccpr subscriptions result
+		mockedCcprSubResults := func(ctrl *gomock.Controller) []interface{} {
+			er := mock_frontend.NewMockExecResult(ctrl)
+			er.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
+			// subscription_name
+			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(0)).Return("test_sub", nil).AnyTimes()
+			// sync_level
+			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(1)).Return("database", nil).AnyTimes()
+			// account_id
+			er.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(2)).Return(int64(0), nil).AnyTimes()
+			// db_name (nullable)
+			er.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(3)).Return(false, nil).AnyTimes()
+			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(3)).Return("testdb", nil).AnyTimes()
+			// table_name (nullable)
+			er.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(4)).Return(true, nil).AnyTimes()
+			// upstream_conn
+			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(5)).Return("mysql://user:pass@host:3306", nil).AnyTimes()
+			// iteration_state
+			er.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(6)).Return(int64(1), nil).AnyTimes()
+			// iteration_lsn
+			er.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(7)).Return(int64(100), nil).AnyTimes()
+			// context (nullable)
+			er.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(8)).Return(true, nil).AnyTimes()
+			// error_message (nullable)
+			er.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(9)).Return(true, nil).AnyTimes()
+			// created_at
+			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(10)).Return("2024-01-01 00:00:00", nil).AnyTimes()
+			// drop_at (nullable)
+			er.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(11)).Return(true, nil).AnyTimes()
+			return []interface{}{er}
+		}
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		bh.EXPECT().Close().Return().AnyTimes()
+		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), "begin;").Return(nil).AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), "commit;").Return(nil).AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), "rollback;").Return(nil).AnyTimes()
+		// query ccpr subscriptions
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		bh.EXPECT().GetExecResultSet().Return(mockedCcprSubResults(ctrl))
+		// get accounts
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		bh.EXPECT().GetExecResultSet().Return(mockedAccountsResults(ctrl))
+
+		scs := &tree.ShowCcprSubscriptions{}
+		err := doShowCcprSubscriptions(ctx, ses, scs)
+		convey.So(err, convey.ShouldBeNil)
+	})
+}
+
+func Test_doShowPublicationCoverage(t *testing.T) {
+	convey.Convey("show publication coverage", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses := newSes(nil, ctrl)
+		ses.tenant = tenant
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		ctx = defines.AttachAccount(ctx, sysAccountID, rootID, moAdminRoleID)
+
+		mockedCheckColResults := func(ctrl *gomock.Controller) []interface{} {
+			er := mock_frontend.NewMockExecResult(ctrl)
+			er.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
+			return []interface{}{er}
+		}
+
+		// Mock pub info result with specific tables
+		mockedPubInfoResults := func(ctrl *gomock.Controller) []interface{} {
+			er := mock_frontend.NewMockExecResult(ctrl)
+			er.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
+			er.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(0)).Return(int64(0), nil).AnyTimes()
+			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(1)).Return("sys", nil).AnyTimes()
+			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(2)).Return("pub1", nil).AnyTimes()
+			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(3)).Return("db1", nil).AnyTimes()
+			er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(4)).Return(uint64(0), nil).AnyTimes()
+			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(5)).Return("t1,t2", nil).AnyTimes()
+			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(6)).Return("all", nil).AnyTimes()
+			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(7)).Return("", nil).AnyTimes()
+			er.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(8)).Return(true, nil).AnyTimes()
+			er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(9)).Return(uint64(0), nil).AnyTimes()
+			er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(10)).Return(uint64(0), nil).AnyTimes()
+			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(11)).Return("", nil).AnyTimes()
+			return []interface{}{er}
+		}
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		bh.EXPECT().Close().Return().AnyTimes()
+		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
+		// check col exists
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		bh.EXPECT().GetExecResultSet().Return(mockedCheckColResults(ctrl))
+		// get pub info
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		bh.EXPECT().GetExecResultSet().Return(mockedPubInfoResults(ctrl))
+
+		spc := &tree.ShowPublicationCoverage{Name: "pub1"}
+		err := doShowPublicationCoverage(ctx, ses, spc)
+		convey.So(err, convey.ShouldBeNil)
+
+		// Verify result set has data
+		convey.So(len(ses.mrs.Data), convey.ShouldBeGreaterThan, 0)
+	})
+}
