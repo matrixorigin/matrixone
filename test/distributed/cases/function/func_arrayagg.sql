@@ -68,7 +68,6 @@ SELECT JSON_ARRAY(
     (SELECT GROUP_CONCAT(DISTINCT department SEPARATOR '","') FROM employees)
 ) as departments;
 
---- @bvt:issue#23462
 SELECT CONCAT('[',
     GROUP_CONCAT(
         JSON_OBJECT('name', department, 'count', dept_count)
@@ -83,7 +82,6 @@ FROM (
     GROUP BY department
     ORDER BY department
 ) dept_summary;
---- @bvt:issue
 
 -- 部门员工的完整信息结构
 SELECT
@@ -234,7 +232,6 @@ GROUP BY product_id;
 
 
 -- 创建角色权限表
---- @bvt:issue#23462
 CREATE TABLE role_permissions (
     role_name VARCHAR(30),
     permission VARCHAR(50)
@@ -278,7 +275,6 @@ FROM (
     GROUP BY ur.user_id, ur.role_name
 ) role_permissions_grouped
 GROUP BY user_id;
---- @bvt:issue
 
 
 
