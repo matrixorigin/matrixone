@@ -8,10 +8,10 @@ set tx_isolation = default;
 set tx_isolation = default;
 show variables like 'server_id';
 Variable_name    Value
-server_id    0
+server_id    uuid
 select @@server_id;
 @@server_id
-0
+uuid
 show variables like 'auto%';
 Variable_name    Value
 auto_generate_certs    on

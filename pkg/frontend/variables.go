@@ -17,7 +17,6 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"hash/fnv"
 	"math"
 	bits2 "math/bits"
 	"strconv"
@@ -971,23 +970,16 @@ func useTomlConfigOverOtherConfigs(CNServiceConfig *config.FrontendParameters, s
 	sysVarsMp["version"] = verPrefix + verVal
 }
 
-func resolveServerID(ses *Session) int64 {
+func resolveServerID(ses *Session) string {
 	if ses == nil {
-		return 0
+		return ""
 	}
 	rm := ses.getRoutineManager()
 	if rm == nil || rm.baseService == nil {
-		return 0
+		return ""
 	}
 	serviceID := rm.baseService.ID()
-	if serviceID == "" {
-		return 0
-	}
-	h := fnv.New32()
-	if _, err := h.Write([]byte(serviceID)); err != nil {
-		return 0
-	}
-	return int64(h.Sum32())
+	return serviceID
 }
 
 // Get return sys vars of accountId
@@ -1095,8 +1087,8 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Scope:             ScopeGlobal,
 		Dynamic:           false,
 		SetVarHintApplies: false,
-		Type:              InitSystemVariableIntType("server_id", 0, math.MaxInt64, false),
-		Default:           int64(0),
+		Type:              InitSystemVariableStringType("server_id"),
+		Default:           "",
 	},
 	"tx_isolation": {
 		Name:              "tx_isolation",
