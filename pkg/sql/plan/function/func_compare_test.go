@@ -138,3 +138,28 @@ func TestOperatorOpBitLeftShiftInt64Fn(t *testing.T) {
 	s, info := fcTC.Run()
 	require.True(t, s, info, tc.info)
 }
+
+func TestNullSafeEqualFn(t *testing.T) {
+	// 1 <=> 1 = true
+	// 1 <=> 0 = false
+	// 1 <=> null = false
+	// null <=> 1 = false
+	// null <=> null = true
+	tc := tcTemp{
+		info: "<=> test",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_int64.ToType(),
+				[]int64{1, 1, 1, 0, 0}, []bool{false, false, false, true, true}),
+			NewFunctionTestInput(types.T_int64.ToType(),
+				[]int64{1, 0, 0, 1, 0}, []bool{false, false, true, false, true}),
+		},
+		expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+			[]bool{true, false, false, false, true}, []bool{false, false, false, false, false}),
+	}
+
+	proc := testutil.NewProcess(t)
+	fcTC := NewFunctionTestCase(proc,
+		tc.inputs, tc.expect, nullSafeEqualFn)
+	s, info := fcTC.Run()
+	require.True(t, s, info, tc.info)
+}
