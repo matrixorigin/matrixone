@@ -17,6 +17,7 @@ package tree
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/stretchr/testify/require"
 )
 
@@ -164,6 +165,126 @@ func TestDataBranchMergeLifecycle(t *testing.T) {
 	require.Panics(t, func() {
 		stmt.TypeName()
 	})
+
+	stmt.Free()
+}
+
+func TestObjectListLifecycle(t *testing.T) {
+	stmt := NewObjectList()
+	require.NotNil(t, stmt)
+
+	require.Equal(t, compositeResRowType, stmt.StmtKind())
+	require.Equal(t, "object list", stmt.GetStatementType())
+	require.Equal(t, "object list", stmt.String())
+	require.Equal(t, QueryTypeOth, stmt.GetQueryType())
+
+	// Test setting fields
+	stmt.Database = Identifier("testdb")
+	stmt.Table = Identifier("testtable")
+	stmt.Snapshot = Identifier("snap1")
+	againstSnap := Identifier("snap2")
+	stmt.AgainstSnapshot = &againstSnap
+
+	require.Equal(t, Identifier("testdb"), stmt.Database)
+	require.Equal(t, Identifier("testtable"), stmt.Table)
+	require.Equal(t, Identifier("snap1"), stmt.Snapshot)
+	require.NotNil(t, stmt.AgainstSnapshot)
+	require.Equal(t, Identifier("snap2"), *stmt.AgainstSnapshot)
+
+	// Test reset
+	stmt.reset()
+	require.Equal(t, Identifier(""), stmt.Database)
+	require.Equal(t, Identifier(""), stmt.Table)
+	require.Equal(t, Identifier(""), stmt.Snapshot)
+	require.Nil(t, stmt.AgainstSnapshot)
+
+	require.Panics(t, func() {
+		stmt.Format(nil)
+	})
+	require.Panics(t, func() {
+		stmt.TypeName()
+	})
+
+	stmt.Free()
+}
+
+func TestGetObjectLifecycle(t *testing.T) {
+	stmt := NewGetObject()
+	require.NotNil(t, stmt)
+
+	require.Equal(t, compositeResRowType, stmt.StmtKind())
+	require.Equal(t, "get object", stmt.GetStatementType())
+	require.Equal(t, "get object", stmt.String())
+	require.Equal(t, "get object", stmt.TypeName())
+	require.Equal(t, QueryTypeOth, stmt.GetQueryType())
+
+	// Test setting fields
+	stmt.ObjectName = Identifier("obj_001")
+	stmt.ChunkIndex = 5
+
+	require.Equal(t, Identifier("obj_001"), stmt.ObjectName)
+	require.Equal(t, int64(5), stmt.ChunkIndex)
+
+	// Test Format
+	ctx := NewFmtCtx(dialect.MYSQL, WithQuoteString(true))
+	stmt.Format(ctx)
+	require.Equal(t, "GET OBJECT obj_001 OFFSET 5", ctx.String())
+
+	// Test with ChunkIndex = -1 (metadata only)
+	stmt.ChunkIndex = -1
+	ctx2 := NewFmtCtx(dialect.MYSQL, WithQuoteString(true))
+	stmt.Format(ctx2)
+	require.Equal(t, "GET OBJECT obj_001 OFFSET -1", ctx2.String())
+
+	// Test reset
+	stmt.reset()
+	require.Equal(t, Identifier(""), stmt.ObjectName)
+	require.Equal(t, int64(0), stmt.ChunkIndex)
+
+	stmt.Free()
+}
+
+func TestGetDdlLifecycle(t *testing.T) {
+	stmt := NewGetDdl()
+	require.NotNil(t, stmt)
+
+	require.Equal(t, compositeResRowType, stmt.StmtKind())
+	require.Equal(t, "get ddl", stmt.GetStatementType())
+	require.Equal(t, "get ddl", stmt.String())
+	require.Equal(t, "get ddl", stmt.TypeName())
+	require.Equal(t, QueryTypeOth, stmt.GetQueryType())
+
+	// Test Format with no fields set
+	ctx := NewFmtCtx(dialect.MYSQL, WithQuoteString(true))
+	stmt.Format(ctx)
+	require.Equal(t, "GETDDL", ctx.String())
+
+	// Test Format with Database only
+	dbName := Identifier("testdb")
+	stmt.Database = &dbName
+	ctx2 := NewFmtCtx(dialect.MYSQL, WithQuoteString(true))
+	stmt.Format(ctx2)
+	require.Equal(t, "GETDDL DATABASE testdb", ctx2.String())
+
+	// Test Format with Database and Table
+	tableName := Identifier("testtable")
+	stmt.Table = &tableName
+	ctx3 := NewFmtCtx(dialect.MYSQL, WithQuoteString(true))
+	stmt.Format(ctx3)
+	require.Equal(t, "GETDDL DATABASE testdb TABLE testtable", ctx3.String())
+
+	// Test Format with all fields
+	snapName := Identifier("snap1")
+	stmt.Snapshot = &snapName
+	ctx4 := NewFmtCtx(dialect.MYSQL, WithQuoteString(true))
+	stmt.Format(ctx4)
+	require.Equal(t, "GETDDL DATABASE testdb TABLE testtable SNAPSHOT snap1", ctx4.String())
+
+	// Test reset
+	stmt.reset()
+	require.Nil(t, stmt.Database)
+	require.Nil(t, stmt.Table)
+	require.Nil(t, stmt.Snapshot)
 
 	stmt.Free()
 }
