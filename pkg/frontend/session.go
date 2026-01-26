@@ -572,11 +572,10 @@ func (ses *Session) GetSqlModeNoAutoValueOnZero() (bool, bool) {
 	if err != nil {
 		return false, false
 	}
-	mode, ok := val.(string)
+	has, ok := parseNoAutoValueOnZero(val)
 	if !ok {
 		return false, false
 	}
-	has := strings.Contains(strings.ToUpper(mode), "NO_AUTO_VALUE_ON_ZERO")
 	if has {
 		atomic.StoreInt32(&ses.sqlModeNoAutoValueOnZero, 1)
 	} else {
@@ -586,17 +585,24 @@ func (ses *Session) GetSqlModeNoAutoValueOnZero() (bool, bool) {
 }
 
 func (ses *Session) updateSqlModeNoAutoValueOnZero(val interface{}) {
-	mode, ok := val.(string)
+	has, ok := parseNoAutoValueOnZero(val)
 	if !ok {
 		atomic.StoreInt32(&ses.sqlModeNoAutoValueOnZero, -1)
 		return
 	}
-	has := strings.Contains(strings.ToUpper(mode), "NO_AUTO_VALUE_ON_ZERO")
 	if has {
 		atomic.StoreInt32(&ses.sqlModeNoAutoValueOnZero, 1)
 	} else {
 		atomic.StoreInt32(&ses.sqlModeNoAutoValueOnZero, 0)
 	}
+}
+
+func parseNoAutoValueOnZero(val interface{}) (bool, bool) {
+	mode, ok := val.(string)
+	if !ok {
+		return false, false
+	}
+	return strings.Contains(strings.ToUpper(mode), "NO_AUTO_VALUE_ON_ZERO"), true
 }
 
 type errInfo struct {
