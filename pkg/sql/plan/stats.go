@@ -316,6 +316,12 @@ func UpdateStatsInfo(info *TableStatsInfo, tableDef *plan.TableDef, s *pb.StatsI
 		case types.T_uint64:
 			s.MinValMap[colName] = float64(types.DecodeUint64(info.ColumnZMs[i].GetMinBuf()))
 			s.MaxValMap[colName] = float64(types.DecodeUint64(info.ColumnZMs[i].GetMaxBuf()))
+		case types.T_float32:
+			s.MinValMap[colName] = float64(types.DecodeFloat32(info.ColumnZMs[i].GetMinBuf()))
+			s.MaxValMap[colName] = float64(types.DecodeFloat32(info.ColumnZMs[i].GetMaxBuf()))
+		case types.T_float64:
+			s.MinValMap[colName] = float64(types.DecodeFloat64(info.ColumnZMs[i].GetMinBuf()))
+			s.MaxValMap[colName] = float64(types.DecodeFloat64(info.ColumnZMs[i].GetMaxBuf()))
 		case types.T_date:
 			s.MinValMap[colName] = float64(types.DecodeDate(info.ColumnZMs[i].GetMinBuf()))
 			s.MaxValMap[colName] = float64(types.DecodeDate(info.ColumnZMs[i].GetMaxBuf()))

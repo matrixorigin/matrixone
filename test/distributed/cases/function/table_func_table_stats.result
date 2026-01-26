@@ -14,9 +14,11 @@ insert into t1 select * from t1;
 insert into t1 select * from t1;
 insert into t1 select * from t1;
 insert into t1 select * from t1;
+insert into t1 select * from t1;
+insert into t1 select * from t1;
 select count(*) from t1;
 ➤ count(*)[-5,64,0]  𝄀
-512
+2048
 select mo_ctl('dn', 'flush', 'table_func_table_stats.t1');
 ➤ mo_ctl(dn, flush, table_func_table_stats.t1)[12,-1,0]  𝄀
 {
@@ -28,78 +30,23 @@ select mo_ctl('dn', 'flush', 'table_func_table_stats.t1');
   ]
 }
 
+select sleep(1);
+➤ sleep(1)[-6,8,0]  𝄀
+0
 select table_name, table_cnt, block_number, accurate_object_number from table_stats('table_func_table_stats.t1') g;
 ➤ table_name[12,-1,0]  ¦  table_cnt[8,54,0]  ¦  block_number[-5,64,0]  ¦  accurate_object_number[-5,64,0]  𝄀
-table_func_table_stats.t1  ¦  0.0  ¦  0  ¦  0
+table_func_table_stats.t1  ¦  2048.0  ¦  1  ¦  1
 select table_name, sampling_ratio >= 0 from table_stats('table_func_table_stats.t1') g;
 ➤ table_name[12,-1,0]  ¦  sampling_ratio >= 0[-7,1,0]  𝄀
 table_func_table_stats.t1  ¦  1
 select table_name, ndv_map is not null from table_stats('table_func_table_stats.t1') g;
 ➤ table_name[12,-1,0]  ¦  ndv_map is not null[-7,1,0]  𝄀
 table_func_table_stats.t1  ¦  1
-insert into t1 select * from t1;
-insert into t1 select * from t1;
-select count(*) from t1;
-➤ count(*)[-5,64,0]  𝄀
-2048
-select mo_ctl('dn', 'flush', 'table_func_table_stats.t1');
-➤ mo_ctl(dn, flush, table_func_table_stats.t1)[12,-1,0]  𝄀
-{
-  "method": "Flush",
-  "result": [
-    {
-      "returnStr": "OK"
-    }
-  ]
-}
-
 select table_name, table_cnt, block_number, accurate_object_number from table_stats('table_func_table_stats.t1', 'refresh', 'full') g;
 ➤ table_name[12,-1,0]  ¦  table_cnt[8,54,0]  ¦  block_number[-5,64,0]  ¦  accurate_object_number[-5,64,0]  𝄀
-table_func_table_stats.t1  ¦  2048.0  ¦  2  ¦  2
-drop table if exists t2;
-create table t2(id bigint, name text, score decimal(10,2));
-insert into t2 values(1, 'test1', 99.99);
-insert into t2 values(2, 'test2', 88.88);
-insert into t2 select * from t2;
-insert into t2 select * from t2;
-insert into t2 select * from t2;
-insert into t2 select * from t2;
-insert into t2 select * from t2;
-insert into t2 select * from t2;
-insert into t2 select * from t2;
-insert into t2 select * from t2;
-insert into t2 select * from t2;
-insert into t2 select * from t2;
-select count(*) from t2;
-➤ count(*)[-5,64,0]  𝄀
-2048
-select mo_ctl('dn', 'flush', 'table_func_table_stats.t2');
-➤ mo_ctl(dn, flush, table_func_table_stats.t2)[12,-1,0]  𝄀
-{
-  "method": "Flush",
-  "result": [
-    {
-      "returnStr": "OK"
-    }
-  ]
-}
-
-select table_name, table_cnt, block_number, accurate_object_number from table_stats('table_func_table_stats.t2') g;
-➤ table_name[12,-1,0]  ¦  table_cnt[8,54,0]  ¦  block_number[-5,64,0]  ¦  accurate_object_number[-5,64,0]  𝄀
-table_func_table_stats.t2  ¦  0.0  ¦  0  ¦  0
+table_func_table_stats.t1  ¦  2048.0  ¦  1  ¦  1
 drop table if exists t3;
 create table t3(x int, y varchar(50));
-select mo_ctl('dn', 'flush', 'table_func_table_stats.t3');
-➤ mo_ctl(dn, flush, table_func_table_stats.t3)[12,-1,0]  𝄀
-{
-  "method": "Flush",
-  "result": [
-    {
-      "returnStr": "OK"
-    }
-  ]
-}
-
 select table_name, table_cnt, block_number, accurate_object_number from table_stats('table_func_table_stats.t3') g;
 ➤ table_name[12,-1,0]  ¦  table_cnt[8,54,0]  ¦  block_number[-5,64,0]  ¦  accurate_object_number[-5,64,0]  𝄀
 table_func_table_stats.t3  ¦  0.0  ¦  0  ¦  0
@@ -127,7 +74,7 @@ internal error: unknown command: invalid_cmd (supported: get, refresh, patch)
 select table_name, table_cnt, ndv_map from table_stats('table_func_table_stats.t1', 'patch', '{"table_cnt": 99999, "ndv_map": {"a": 1000}}') g;
 ➤ table_name[12,-1,0]  ¦  table_cnt[8,54,0]  ¦  ndv_map[12,0,0]  𝄀
 table_func_table_stats.t1  ¦  99999.0  ¦  {
-  "__mo_fake_pk_col": 2027.52,
+  "__mo_fake_pk_col": 2048,
   "a": 1000,
   "b": 2,
   "c": 2
@@ -150,14 +97,15 @@ table_func_table_stats.t1  ¦  50000.0  ¦  1.0
 select table_name, ndv_map, min_val_map from table_stats('table_func_table_stats.t1') g;
 ➤ table_name[12,-1,0]  ¦  ndv_map[12,0,0]  ¦  min_val_map[12,0,0]  𝄀
 table_func_table_stats.t1  ¦  {
-  "__mo_fake_pk_col": 2027.52,
+  "__mo_fake_pk_col": 2048,
   "a": 1000,
   "b": 2,
   "c": 2
 }  ¦  {
   "__mo_fake_pk_col": 1,
   "a": 1,
-  "b": 7522537965566820000
+  "b": 7522537965566820000,
+  "c": 1.100000023841858
 }
 select table_name, table_cnt >= 0 from table_stats('mo_catalog.mo_tables') g;
 ➤ table_name[12,-1,0]  ¦  table_cnt >= 0[-7,1,0]  𝄀

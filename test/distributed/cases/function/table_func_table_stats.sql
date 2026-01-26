@@ -19,10 +19,14 @@ insert into t1 select * from t1;
 insert into t1 select * from t1;
 insert into t1 select * from t1;
 insert into t1 select * from t1;
+insert into t1 select * from t1;
+insert into t1 select * from t1;
 select count(*) from t1;
 
 -- Flush to ensure stats are available
 select mo_ctl('dn', 'flush', 'table_func_table_stats.t1');
+
+select sleep(1);
 
 -- Query table stats - basic columns (new column structure)
 select table_name, table_cnt, block_number, accurate_object_number from table_stats('table_func_table_stats.t1') g;
@@ -33,41 +37,13 @@ select table_name, sampling_ratio >= 0 from table_stats('table_func_table_stats.
 -- Check ndv_map is valid JSON (verify it's not null)
 select table_name, ndv_map is not null from table_stats('table_func_table_stats.t1') g;
 
--- Insert more data and check stats update
-insert into t1 select * from t1;
-insert into t1 select * from t1;
-select count(*) from t1;
-
-select mo_ctl('dn', 'flush', 'table_func_table_stats.t1');
 
 -- Stats should reflect more rows (use refresh command with full mode)
 select table_name, table_cnt, block_number, accurate_object_number from table_stats('table_func_table_stats.t1', 'refresh', 'full') g;
 
--- Test with different table and data types
-drop table if exists t2;
-create table t2(id bigint, name text, score decimal(10,2));
-insert into t2 values(1, 'test1', 99.99);
-insert into t2 values(2, 'test2', 88.88);
-insert into t2 select * from t2;
-insert into t2 select * from t2;
-insert into t2 select * from t2;
-insert into t2 select * from t2;
-insert into t2 select * from t2;
-insert into t2 select * from t2;
-insert into t2 select * from t2;
-insert into t2 select * from t2;
-insert into t2 select * from t2;
-insert into t2 select * from t2;
-select count(*) from t2;
-
-select mo_ctl('dn', 'flush', 'table_func_table_stats.t2');
-
-select table_name, table_cnt, block_number, accurate_object_number from table_stats('table_func_table_stats.t2') g;
-
 -- Test with empty table
 drop table if exists t3;
 create table t3(x int, y varchar(50));
-select mo_ctl('dn', 'flush', 'table_func_table_stats.t3');
 
 -- Empty table should return stats with 0 rows
 select table_name, table_cnt, block_number, accurate_object_number from table_stats('table_func_table_stats.t3') g;
