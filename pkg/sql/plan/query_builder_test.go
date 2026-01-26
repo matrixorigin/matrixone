@@ -1551,6 +1551,39 @@ func TestBaseBinder_bindComparisonExpr(t *testing.T) {
 				require.Equal(t, "not_in", funcExpr.F.Func.ObjName)
 			},
 		},
+		{
+			name:      "Tuple IN: (a, b) IN ((1, 2), (3, 4))",
+			sql:       "(a, b) IN ((1, 2), (3, 4))",
+			expectErr: false,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				funcExpr, ok := expr.Expr.(*plan.Expr_F)
+				require.True(t, ok)
+				require.Equal(t, "or", funcExpr.F.Func.ObjName)
+			},
+		},
+		{
+			name:      "Tuple NOT IN: (a, b) NOT IN ((1, 2), (3, 4))",
+			sql:       "(a, b) NOT IN ((1, 2), (3, 4))",
+			expectErr: false,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				funcExpr, ok := expr.Expr.(*plan.Expr_F)
+				require.True(t, ok)
+				require.Equal(t, "not", funcExpr.F.Func.ObjName)
+			},
+		},
+		{
+			name:      "Tuple IN length mismatch: (a, b) IN ((1, 2, 3))",
+			sql:       "(a, b) IN ((1, 2, 3))",
+			expectErr: true,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "tuple length mismatch")
+			},
+		},
 		// Tuple comparisons
 		{
 			name:      "Tuple EQUAL: (a, b) = (1, 2)",
