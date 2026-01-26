@@ -3992,6 +3992,66 @@ func TestTimeDiffString(t *testing.T) {
 	}
 }
 
+// TestTimeDiffStringMixedTypes tests MySQL-compatible behavior:
+// TIMEDIFF returns NULL when argument types don't match (one is TIME, other is DATETIME)
+func TestTimeDiffStringMixedTypes(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// Test case: TIME vs DATETIME should return NULL
+	inputs1 := []string{"15:30:45"}                  // TIME format
+	inputs2 := []string{"2000-01-01 15:30:45"}       // DATETIME format
+	nullFlags := []bool{false}
+	expectedNulls := []bool{true} // Should be NULL due to mixed types
+
+	tc := tcTemp{
+		info: "test timediff mixed types returns NULL (MySQL compatible)",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), inputs1, nullFlags),
+			NewFunctionTestInput(types.T_varchar.ToType(), inputs2, nullFlags),
+		},
+		expect: NewFunctionTestResult(types.T_time.ToType(), false, []types.Time{0}, expectedNulls),
+	}
+
+	fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, TimeDiffString)
+	s, info := fcTC.Run()
+	require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+}
+
+// SUBTIME
+
+// TestSubTimeWithDays tests SUBTIME with time expression containing days (e.g., '1 1:1:1.000002')
+func TestSubTimeWithDays(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// Test case: SUBTIME('2007-12-31 23:59:59.999999', '1 1:1:1.000002')
+	// Expected: 2007-12-30 22:58:58.999997
+	// Calculation: 2007-12-31 23:59:59.999999 - (1 day 1 hour 1 minute 1 second 2 microseconds)
+	//            = 2007-12-31 23:59:59.999999 - 25:01:01.000002
+	//            = 2007-12-30 22:58:58.999997
+	inputs1 := []string{"2007-12-31 23:59:59.999999"}
+	inputs2 := []string{"1 1:1:1.000002"}
+	nullFlags := []bool{false}
+
+	// Expected result: 2007-12-30 22:58:58.999997
+	// As Datetime: Year=2007, Month=12, Day=30, Hour=22, Min=58, Sec=58, Microsec=999997
+	expectedDt := types.DatetimeFromClock(2007, 12, 30, 22, 58, 58, 999997)
+	expected := []types.Datetime{expectedDt}
+	expectedNulls := []bool{false}
+
+	tc := tcTemp{
+		info: "test subtime with days format",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), inputs1, nullFlags),
+			NewFunctionTestInput(types.T_varchar.ToType(), inputs2, nullFlags),
+		},
+		expect: NewFunctionTestResult(types.New(types.T_datetime, 0, 6), false, expected, expectedNulls),
+	}
+
+	fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, SubTime)
+	s, info := fcTC.Run()
+	require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+}
+
 // TIMESTAMPDIFF
 
 func initTimestampDiffTestCase() []tcTemp {

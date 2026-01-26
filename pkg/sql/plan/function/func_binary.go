@@ -6015,6 +6015,8 @@ func timeDiff[T types.Time | types.Datetime](v1, v2 T) (types.Time, error) {
 }
 
 // TimeDiffString: TIMEDIFF with string inputs - parses strings as TIME or DATETIME and returns the difference as TIME
+// MySQL behavior: both arguments must be of the same type (both TIME or both DATETIME).
+// If one argument is TIME and the other is DATETIME, returns NULL.
 func TimeDiffString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	expr1Param := vector.GenerateFunctionStrParameter(ivecs[0])
 	expr2Param := vector.GenerateFunctionStrParameter(ivecs[1])
@@ -6041,56 +6043,136 @@ func TimeDiffString(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 			continue
 		}
 
-		// Parse expr1 - try datetime first, then time
-		var dt1 types.Datetime
-		var err1 error
 		expr1StrVal := functionUtil.QuickBytesToStr(expr1Str)
-		dt1, err1 = types.ParseDatetime(expr1StrVal, scale)
-		if err1 != nil {
-			// If parsing as datetime fails, try as time
-			time1, err2 := types.ParseTime(expr1StrVal, scale)
-			if err2 != nil {
-				if err := rs.Append(types.Time(0), true); err != nil {
-					return err
-				}
-				continue
-			}
-			// Convert time to datetime (using today's date)
-			dt1 = time1.ToDatetime(scale)
-		}
-
-		// Parse expr2 - try datetime first, then time
-		var dt2 types.Datetime
-		var err2 error
 		expr2StrVal := functionUtil.QuickBytesToStr(expr2Str)
-		dt2, err2 = types.ParseDatetime(expr2StrVal, scale)
-		if err2 != nil {
-			// If parsing as datetime fails, try as time
-			time2, err3 := types.ParseTime(expr2StrVal, scale)
-			if err3 != nil {
-				if err := rs.Append(types.Time(0), true); err != nil {
-					return err
-				}
-				continue
-			}
-			// Convert time to datetime (using today's date)
-			dt2 = time2.ToDatetime(scale)
-		}
 
-		// Calculate difference: expr1 - expr2
-		resultTime, err := timeDiff[types.Datetime](dt1, dt2)
-		if err != nil {
+		// Detect the type of each argument (TIME or DATETIME)
+		// isDatetimeFormat returns true if the string looks like a datetime (has date part)
+		expr1IsDatetime := isDatetimeFormat(expr1StrVal)
+		expr2IsDatetime := isDatetimeFormat(expr2StrVal)
+
+		// MySQL behavior: if argument types don't match (one is TIME, other is DATETIME), return NULL
+		if expr1IsDatetime != expr2IsDatetime {
 			if err := rs.Append(types.Time(0), true); err != nil {
 				return err
 			}
 			continue
 		}
 
-		if err := rs.Append(resultTime, false); err != nil {
-			return err
+		if expr1IsDatetime {
+			// Both are DATETIME format
+			dt1, err1 := types.ParseDatetime(expr1StrVal, scale)
+			if err1 != nil {
+				if err := rs.Append(types.Time(0), true); err != nil {
+					return err
+				}
+				continue
+			}
+
+			dt2, err2 := types.ParseDatetime(expr2StrVal, scale)
+			if err2 != nil {
+				if err := rs.Append(types.Time(0), true); err != nil {
+					return err
+				}
+				continue
+			}
+
+			// Calculate difference: expr1 - expr2
+			resultTime, err := timeDiff[types.Datetime](dt1, dt2)
+			if err != nil {
+				if err := rs.Append(types.Time(0), true); err != nil {
+					return err
+				}
+				continue
+			}
+
+			if err := rs.Append(resultTime, false); err != nil {
+				return err
+			}
+		} else {
+			// Both are TIME format
+			time1, err1 := types.ParseTime(expr1StrVal, scale)
+			if err1 != nil {
+				if err := rs.Append(types.Time(0), true); err != nil {
+					return err
+				}
+				continue
+			}
+
+			time2, err2 := types.ParseTime(expr2StrVal, scale)
+			if err2 != nil {
+				if err := rs.Append(types.Time(0), true); err != nil {
+					return err
+				}
+				continue
+			}
+
+			// Calculate difference: expr1 - expr2
+			resultTime, err := timeDiff[types.Time](time1, time2)
+			if err != nil {
+				if err := rs.Append(types.Time(0), true); err != nil {
+					return err
+				}
+				continue
+			}
+
+			if err := rs.Append(resultTime, false); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
+}
+
+// isDatetimeFormat checks if the string looks like a DATETIME format (has date part)
+// Returns true for formats like "2000-01-01 15:30:45" or "2000/01/01 15:30:45" or "2000:01:01 15:30:45"
+// Returns false for TIME formats like "15:30:45" or "1 15:30:45" (days + time)
+func isDatetimeFormat(s string) bool {
+	s = strings.TrimSpace(s)
+	if len(s) == 0 {
+		return false
+	}
+
+	// Check for negative sign (TIME can be negative, DATETIME cannot)
+	if s[0] == '-' {
+		return false
+	}
+
+	// If string contains a space, check if the first part is a date or a day number
+	if idx := strings.Index(s, " "); idx > 0 {
+		firstPart := s[:idx]
+		// If first part is purely numeric, it's a day number (TIME format like "1 15:30:45")
+		if _, err := strconv.ParseUint(firstPart, 10, 64); err == nil {
+			return false
+		}
+		// Otherwise it's likely a date (DATETIME format)
+		return true
+	}
+
+	// No space - check if it looks like a date-only format (yyyy-mm-dd, yyyy/mm/dd)
+	// or a long numeric format that could be a datetime (yyyymmddhhmmss)
+	if len(s) >= 8 {
+		// Check for date separators at position 4 (after year)
+		if len(s) >= 10 && (s[4] == '-' || s[4] == '/' || s[4] == ':') {
+			// Looks like yyyy-mm-dd or similar date format
+			return true
+		}
+		// Check for long numeric format (14+ digits = yyyymmddhhmmss)
+		if len(s) >= 14 {
+			allDigits := true
+			for j := 0; j < 14; j++ {
+				if s[j] < '0' || s[j] > '9' {
+					allDigits = false
+					break
+				}
+			}
+			if allDigits {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 // TimestampDiff: TIMESTAMPDIFF(unit, datetime1, datetime2) - Returns datetime2 - datetime1

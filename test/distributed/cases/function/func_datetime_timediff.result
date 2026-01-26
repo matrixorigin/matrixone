@@ -35,9 +35,11 @@ SELECT TIMEDIFF('2000-01-01 00:00:00', '2000-01-01 00:00:00') AS datetime_zero;
 datetime_zero
 00:00:00
 SELECT TIMEDIFF('2000-01-01 15:30:45', '15:30:45') AS mixed_format1;
-The result set is not correct because of unexpected reason,Message: Invalid length (20) for type TIME
+mixed_format1
+null
 SELECT TIMEDIFF('15:30:45', '2000-01-01 15:30:45') AS mixed_format2;
-The result set is not correct because of unexpected reason,Message: Invalid length (19) for type TIME
+mixed_format2
+null
 SELECT TIMEDIFF('2000-01-01 00:00:00.500000', '2000-01-01 00:00:00.200000') AS with_microseconds;
 with_microseconds
 00:00:00.300000000
