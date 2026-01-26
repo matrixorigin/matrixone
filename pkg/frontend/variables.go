@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
 	"math"
 	bits2 "math/bits"
 	"strconv"
@@ -970,6 +971,25 @@ func useTomlConfigOverOtherConfigs(CNServiceConfig *config.FrontendParameters, s
 	sysVarsMp["version"] = verPrefix + verVal
 }
 
+func resolveServerID(ses *Session) int64 {
+	if ses == nil {
+		return 0
+	}
+	rm := ses.getRoutineManager()
+	if rm == nil || rm.baseService == nil {
+		return 0
+	}
+	serviceID := rm.baseService.ID()
+	if serviceID == "" {
+		return 0
+	}
+	h := fnv.New32()
+	if _, err := h.Write([]byte(serviceID)); err != nil {
+		return 0
+	}
+	return int64(h.Sum32())
+}
+
 // Get return sys vars of accountId
 func (m *GlobalSysVarsMgr) Get(accountId uint32, ses *Session, ctx context.Context, bh BackgroundExec) (*SystemVariables, error) {
 	sysVarsMp, err := ses.getGlobalSysVars(ctx, bh)
@@ -979,6 +999,7 @@ func (m *GlobalSysVarsMgr) Get(accountId uint32, ses *Session, ctx context.Conte
 
 	CNServiceConfig := getPu(ses.service).SV
 	useTomlConfigOverOtherConfigs(CNServiceConfig, sysVarsMp)
+	sysVarsMp["server_id"] = resolveServerID(ses)
 
 	m.Lock()
 	defer m.Unlock()

@@ -11,7 +11,9 @@ set max_allowed_packet = default;
 set wait_timeout = default;
 set tx_isolation = default;
 set tx_isolation = default;
+-- @ignore:1
 show variables like 'server_id';
+-- @ignore:0
 select @@server_id;
 
 
