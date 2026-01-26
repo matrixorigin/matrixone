@@ -100,6 +100,7 @@ select * from t1 order by a;
 a    b
 -2000    yyy
 -1000    yyy
+0    ccc
 1    bbb
 2    aaaa1111
 4    bbb1111
@@ -111,8 +112,7 @@ a    b
 200    yyy
 201    yyy
 202    yyy
-203    ccc
-204    xefrsdfgds
+203    xefrsdfgds
 insert into t1 values (-9223372036854775808,'xefrsdfgds');
 insert into t1 values (-9223372036854775809,'xefrsdfgds');
 Data truncation: data out of range: data type int64, value '-9223372036854775809'
@@ -305,7 +305,7 @@ a    b
 200    ccc
 201    yyy
 202    yyy
-205    xefrsdfgds
+203    xefrsdfgds
 insert into t4 values (-9223372036854775808,'xefrsdfgds');
 insert into t4 values (-9223372036854775809,'xefrsdfgds');
 Data truncation: data out of range: data type int64, value '-9223372036854775809'
