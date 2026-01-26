@@ -16,8 +16,10 @@ package function
 
 var AndFunctionEncodedID = encodeOverloadID(AND, 0)
 var AndFunctionName = "and"
-var EqualFunctionName = "="
-var EqualFunctionEncodedID = encodeOverloadID(EQUAL, 0)
+var EqualFunctionName            = "="
+var EqualFunctionEncodedID       = encodeOverloadID(EQUAL, 0)
+var NullSafeEqualFunctionName    = "<=>"
+var NullSafeEqualFunctionEncodedID = encodeOverloadID(NULL_SAFE_EQUAL, 0)
 var SerialFunctionEncodeID = encodeOverloadID(SERIAL, 0)
 var SerialFullFunctionEncodeID = encodeOverloadID(SERIAL_FULL, 0)
 var CastFunctionEncodeID = encodeOverloadID(CAST, 0)

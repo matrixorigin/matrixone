@@ -459,7 +459,8 @@ var predefinedFunids = map[int]int{
 	MO_FEATURE_LIMIT_UPSERT:    403,
 	IN_RANGE:                   404,
 	PREFIX_IN_RANGE:            405,
-	FUNCTION_END_NUMBER:        406,
+	NULL_SAFE_EQUAL:            406,
+	FUNCTION_END_NUMBER:        407,
 }
 
 func Test_funids(t *testing.T) {
