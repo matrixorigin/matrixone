@@ -152,7 +152,109 @@ CREATE TABLE brotli_compression (
     status BOOL
 );
 load data infile {'filepath'='$resources/parquet/test_brotli.parquet', 'format'='parquet'} into table brotli_compression;
-SELECT 'NONE' as codec, COUNT(*), SUM(value) FROM brotli_compression;
+select 'NONE' as codec, count(*), sum(value) from brotli_compression;
+
+-- v1
+drop table if exists pq_version_compare;
+CREATE TABLE `pq_version_compare` (
+      `id` bigint DEFAULT NULL,
+      `user_name` varchar(50) DEFAULT NULL,
+      `login_time` timestamp NULL DEFAULT NULL
+);
+load data infile {'filepath'='$resources/parquet/test_v1_legacy.parquet', 'format'='parquet'} into table pq_version_compare;
+select * from pq_version_compare;
+truncate table pq_version_compare;
+
+-- v2
+load data infile {'filepath'='$resources/parquet/test_v2_modern.parquet', 'format'='parquet'} into table pq_version_compare;
+select * from pq_version_compare;
+
+
+-- Column statistics (write_statistics=True/False)
+drop table if exists pq_stats_check;
+CREATE TABLE pq_stats_check (
+    id BIGINT,
+    score DOUBLE
+);
+load data infile {'filepath'='$resources/parquet/no_stats.parquet', 'format'='parquet'} into table pq_stats_check;
+select * from pq_stats_check;
+select 'no_stats' as source, count(*), MIN(id), MAX(score) from pq_stats_check;
+truncate pq_stats_check;
+load data infile {'filepath'='$resources/parquet/with_stats.parquet', 'format'='parquet'} into table pq_stats_check;
+select * from pq_stats_check;
+select 'no_stats' as source, count(*), MIN(id), MAX(score) from pq_stats_check;
+
+-- empty file
+-- @bvt:issue#23601
+drop table if exists empty_table;
+create table empty_table(col1 int, col2 decimal);
+load data infile {'filepath'='$resources/parquet/empty_test.parquet', 'format'='parquet'} into table empty_table;
+select * from empty_table;
+-- @bvt:issue
+
+
+-- wide tables
+drop table if exists wide_100_columns;
+CREATE TABLE wide_100_columns (
+      col_0 BIGINT, col_1 DOUBLE, col_2 BIGINT, col_3 DOUBLE, col_4 BIGINT,
+      col_5 DOUBLE, col_6 BIGINT, col_7 DOUBLE, col_8 BIGINT, col_9 DOUBLE,
+      col_10 BIGINT, col_11 DOUBLE, col_12 BIGINT, col_13 DOUBLE, col_14 BIGINT,
+      col_15 DOUBLE, col_16 BIGINT, col_17 DOUBLE, col_18 BIGINT, col_19 DOUBLE,
+      col_20 BIGINT, col_21 DOUBLE, col_22 BIGINT, col_23 DOUBLE, col_24 BIGINT,
+      col_25 DOUBLE, col_26 BIGINT, col_27 DOUBLE, col_28 BIGINT, col_29 DOUBLE,
+      col_30 BIGINT, col_31 DOUBLE, col_32 BIGINT, col_33 DOUBLE, col_34 BIGINT,
+      col_35 DOUBLE, col_36 BIGINT, col_37 DOUBLE, col_38 BIGINT, col_39 DOUBLE,
+      col_40 BIGINT, col_41 DOUBLE, col_42 BIGINT, col_43 DOUBLE, col_44 BIGINT,
+      col_45 DOUBLE, col_46 BIGINT, col_47 DOUBLE, col_48 BIGINT, col_49 DOUBLE,
+      col_50 BIGINT, col_51 DOUBLE, col_52 BIGINT, col_53 DOUBLE, col_54 BIGINT,
+      col_55 DOUBLE, col_56 BIGINT, col_57 DOUBLE, col_58 BIGINT, col_59 DOUBLE,
+      col_60 BIGINT, col_61 DOUBLE, col_62 BIGINT, col_63 DOUBLE, col_64 BIGINT,
+      col_65 DOUBLE, col_66 BIGINT, col_67 DOUBLE, col_68 BIGINT, col_69 DOUBLE,
+      col_70 BIGINT, col_71 DOUBLE, col_72 BIGINT, col_73 DOUBLE, col_74 BIGINT,
+      col_75 DOUBLE, col_76 BIGINT, col_77 DOUBLE, col_78 BIGINT, col_79 DOUBLE,
+      col_80 BIGINT, col_81 DOUBLE, col_82 BIGINT, col_83 DOUBLE, col_84 BIGINT,
+      col_85 DOUBLE, col_86 BIGINT, col_87 DOUBLE, col_88 BIGINT, col_89 DOUBLE,
+      col_90 BIGINT, col_91 DOUBLE, col_92 BIGINT, col_93 DOUBLE, col_94 BIGINT,
+      col_95 DOUBLE, col_96 BIGINT, col_97 DOUBLE, col_98 BIGINT, col_99 DOUBLE
+);
+load data infile {'filepath'='$resources/parquet/wide_table_100.parquet', 'format'='parquet'} into table wide_100_columns;
+select count(*) from wide_100_columns;
+select max(col_99) from wide_100_columns;
+select col_0, col_50, col_99 from wide_100_columns LIMIT 5;
+
+
+drop table if exists pq_supported_types;
+CREATE TABLE pq_supported_types (
+    int32_col INT,
+    int64_col BIGINT,
+    uint32_col INT UNSIGNED,
+    float32_col FLOAT,
+    float64_col DOUBLE,
+    string_col VARCHAR(255),
+    bool_col BOOL,
+    date_col DATE,
+    time_col TIME,
+    ts_col TIMESTAMP
+);
+load data infile {'filepath'='$resources/parquet/supported_types.parquet', 'format'='parquet'} into table pq_supported_types;
+select * from pq_supported_types;
+select count(*) from pq_supported_types;
+
+-- new types
+drop table if exists pq_new_types;
+create table pq_new_types (
+  col_int8 TINYINT,
+  col_int16 SMALLINT,
+  col_large_string TEXT,
+  col_ts_no_tz DATETIME,
+  col_binary BLOB,
+  col_decimal DECIMAL(18, 3)
+);
+load data infile {'filepath'='$resources/parquet/new_supported_types.parquet', 'format'='parquet'} into table pq_new_types;
+select count(*) from pq_new_types;
+select * from pq_new_types;
+select length(col_binary) from pq_new_types;
+select col_ts_no_tz from pq_new_types;
 
 -- post
 drop database parq;
