@@ -123,7 +123,7 @@ func opBinaryBytesBytesToFixedNullSafe(
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionStrParameter(parameters[1])
 	rs := vector.MustFunctionResult[bool](result)
-	
+
 	// Result of <=> is never NULL
 
 	for i := uint64(0); i < uint64(length); i++ {
