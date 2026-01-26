@@ -19,7 +19,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/cdc"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -527,5 +530,316 @@ func TestOpenDbConn_Validation(t *testing.T) {
 		_, err := openDbConn("", "", "pass", "127.0.0.1", 6001, "10s")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "user cannot be empty")
+	})
+}
+
+// mockSQLExecutor is a mock implementation of SQLExecutor for testing
+type mockSQLExecutor struct {
+	execSQLFunc func(ctx context.Context, ar *ActiveRoutine, query string, useTxn bool, needRetry bool) (*Result, error)
+}
+
+func (m *mockSQLExecutor) Close() error {
+	return nil
+}
+
+func (m *mockSQLExecutor) Connect() error {
+	return nil
+}
+
+func (m *mockSQLExecutor) EndTxn(ctx context.Context, commit bool) error {
+	return nil
+}
+
+func (m *mockSQLExecutor) ExecSQL(ctx context.Context, ar *ActiveRoutine, query string, useTxn bool, needRetry bool) (*Result, error) {
+	if m.execSQLFunc != nil {
+		return m.execSQLFunc(ctx, ar, query, useTxn, needRetry)
+	}
+	return nil, nil
+}
+
+// testMockResult is a mock implementation for testing that simulates Result behavior
+type testMockResult struct {
+	data       [][]interface{}
+	currentRow int
+	closed     bool
+}
+
+func (r *testMockResult) Close() error {
+	r.closed = true
+	return nil
+}
+
+func (r *testMockResult) Next() bool {
+	r.currentRow++
+	return r.currentRow < len(r.data)
+}
+
+func (r *testMockResult) Scan(dest ...interface{}) error {
+	if r.currentRow < 0 || r.currentRow >= len(r.data) {
+		return moerr.NewInternalErrorNoCtx("no more rows")
+	}
+	row := r.data[r.currentRow]
+	if len(row) != len(dest) {
+		return moerr.NewInternalErrorNoCtx("column count mismatch")
+	}
+	for i, v := range row {
+		switch d := dest[i].(type) {
+		case *string:
+			if s, ok := v.(string); ok {
+				*d = s
+			} else {
+				return moerr.NewInternalErrorNoCtx("type mismatch: expected string")
+			}
+		case *int:
+			if n, ok := v.(int); ok {
+				*d = n
+			} else {
+				return moerr.NewInternalErrorNoCtx("type mismatch: expected int")
+			}
+		default:
+			return moerr.NewInternalErrorNoCtx("unsupported type")
+		}
+	}
+	return nil
+}
+
+func (r *testMockResult) Err() error {
+	return nil
+}
+
+// mockResultForTest creates a mock Result with given data for testing
+func mockResultForTest(data [][]interface{}) *Result {
+	mock := &testMockResult{
+		data:       data,
+		currentRow: -1,
+	}
+	return &Result{
+		mockResult: mock,
+	}
+}
+
+func TestInitAesKeyForPublication(t *testing.T) {
+	// Save original AesKey and restore after test
+	originalAesKey := cdc.AesKey
+	defer func() {
+		cdc.AesKey = originalAesKey
+	}()
+
+	// Save original wrapper and restore after test
+	defer func() {
+		SetGetParameterUnitWrapper(nil)
+	}()
+
+	t.Run("already initialized", func(t *testing.T) {
+		cdc.AesKey = "test-key-already-set-12345678901"
+
+		err := initAesKeyForPublication(context.Background(), nil, "test-cn-uuid")
+		assert.NoError(t, err)
+	})
+
+	t.Run("executor returns error", func(t *testing.T) {
+		cdc.AesKey = ""
+
+		mockExec := &mockSQLExecutor{
+			execSQLFunc: func(ctx context.Context, ar *ActiveRoutine, query string, useTxn bool, needRetry bool) (*Result, error) {
+				return nil, moerr.NewInternalErrorNoCtx("exec error")
+			},
+		}
+
+		err := initAesKeyForPublication(context.Background(), mockExec, "test-cn-uuid")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "exec error")
+	})
+
+	t.Run("no data key found", func(t *testing.T) {
+		cdc.AesKey = ""
+
+		mockExec := &mockSQLExecutor{
+			execSQLFunc: func(ctx context.Context, ar *ActiveRoutine, query string, useTxn bool, needRetry bool) (*Result, error) {
+				// Return empty result (no rows)
+				return mockResultForTest([][]interface{}{}), nil
+			},
+		}
+
+		err := initAesKeyForPublication(context.Background(), mockExec, "test-cn-uuid")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "no data key found")
+	})
+
+	t.Run("scan error", func(t *testing.T) {
+		cdc.AesKey = ""
+
+		mockExec := &mockSQLExecutor{
+			execSQLFunc: func(ctx context.Context, ar *ActiveRoutine, query string, useTxn bool, needRetry bool) (*Result, error) {
+				// Return result with wrong type that will cause scan error
+				return mockResultForTest([][]interface{}{
+					{123}, // int instead of string
+				}), nil
+			},
+		}
+
+		err := initAesKeyForPublication(context.Background(), mockExec, "test-cn-uuid")
+		assert.Error(t, err)
+	})
+
+	t.Run("parameter unit not available - no wrapper", func(t *testing.T) {
+		cdc.AesKey = ""
+		SetGetParameterUnitWrapper(nil)
+
+		mockExec := &mockSQLExecutor{
+			execSQLFunc: func(ctx context.Context, ar *ActiveRoutine, query string, useTxn bool, needRetry bool) (*Result, error) {
+				return mockResultForTest([][]interface{}{
+					{"encrypted-key-data"},
+				}), nil
+			},
+		}
+
+		err := initAesKeyForPublication(context.Background(), mockExec, "test-cn-uuid")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "ParameterUnit not available")
+	})
+
+	t.Run("parameter unit not available - wrapper returns nil", func(t *testing.T) {
+		cdc.AesKey = ""
+		SetGetParameterUnitWrapper(func(cnUUID string) *config.ParameterUnit {
+			return nil
+		})
+
+		mockExec := &mockSQLExecutor{
+			execSQLFunc: func(ctx context.Context, ar *ActiveRoutine, query string, useTxn bool, needRetry bool) (*Result, error) {
+				return mockResultForTest([][]interface{}{
+					{"encrypted-key-data"},
+				}), nil
+			},
+		}
+
+		err := initAesKeyForPublication(context.Background(), mockExec, "test-cn-uuid")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "ParameterUnit not available")
+	})
+
+	t.Run("parameter unit SV is nil", func(t *testing.T) {
+		cdc.AesKey = ""
+		SetGetParameterUnitWrapper(func(cnUUID string) *config.ParameterUnit {
+			return &config.ParameterUnit{
+				SV: nil,
+			}
+		})
+
+		mockExec := &mockSQLExecutor{
+			execSQLFunc: func(ctx context.Context, ar *ActiveRoutine, query string, useTxn bool, needRetry bool) (*Result, error) {
+				return mockResultForTest([][]interface{}{
+					{"encrypted-key-data"},
+				}), nil
+			},
+		}
+
+		err := initAesKeyForPublication(context.Background(), mockExec, "test-cn-uuid")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "ParameterUnit not available")
+	})
+
+	t.Run("fallback to context ParameterUnit", func(t *testing.T) {
+		cdc.AesKey = ""
+		SetGetParameterUnitWrapper(nil) // No wrapper
+
+		testKEK := "test-kek-key-32-bytes-long-1234"
+		testDataKey := "test-data-key-32-bytes-long-123"
+		fakeEncryptedKey := "0123456789abcdef0123456789abcdef0123456789abcdef" // fake encrypted data
+
+		// Mock AesCFBDecodeWithKey to return our test data key
+		stub := gostub.Stub(&cdc.AesCFBDecodeWithKey, func(ctx context.Context, data string, aesKey []byte) (string, error) {
+			return testDataKey, nil
+		})
+		defer stub.Reset()
+
+		mockExec := &mockSQLExecutor{
+			execSQLFunc: func(ctx context.Context, ar *ActiveRoutine, query string, useTxn bool, needRetry bool) (*Result, error) {
+				return mockResultForTest([][]interface{}{
+					{fakeEncryptedKey},
+				}), nil
+			},
+		}
+
+		// Create context with ParameterUnit
+		pu := &config.ParameterUnit{
+			SV: &config.FrontendParameters{
+				KeyEncryptionKey: testKEK,
+			},
+		}
+		ctx := context.WithValue(context.Background(), config.ParameterUnitKey, pu)
+
+		err := initAesKeyForPublication(ctx, mockExec, "test-cn-uuid")
+		assert.NoError(t, err)
+		assert.NotEmpty(t, cdc.AesKey)
+		assert.Equal(t, testDataKey, cdc.AesKey)
+	})
+
+	t.Run("success with wrapper", func(t *testing.T) {
+		cdc.AesKey = ""
+
+		testKEK := "test-kek-key-32-bytes-long-1234"
+		testDataKey := "test-data-key-32-bytes-long-456"
+		fakeEncryptedKey := "0123456789abcdef0123456789abcdef0123456789abcdef" // fake encrypted data
+
+		// Mock AesCFBDecodeWithKey to return our test data key
+		stub := gostub.Stub(&cdc.AesCFBDecodeWithKey, func(ctx context.Context, data string, aesKey []byte) (string, error) {
+			return testDataKey, nil
+		})
+		defer stub.Reset()
+
+		SetGetParameterUnitWrapper(func(cnUUID string) *config.ParameterUnit {
+			return &config.ParameterUnit{
+				SV: &config.FrontendParameters{
+					KeyEncryptionKey: testKEK,
+				},
+			}
+		})
+
+		mockExec := &mockSQLExecutor{
+			execSQLFunc: func(ctx context.Context, ar *ActiveRoutine, query string, useTxn bool, needRetry bool) (*Result, error) {
+				return mockResultForTest([][]interface{}{
+					{fakeEncryptedKey},
+				}), nil
+			},
+		}
+
+		err := initAesKeyForPublication(context.Background(), mockExec, "test-cn-uuid")
+		assert.NoError(t, err)
+		assert.NotEmpty(t, cdc.AesKey)
+		assert.Equal(t, testDataKey, cdc.AesKey)
+	})
+
+	t.Run("decrypt error - AesCFBDecodeWithKey returns error", func(t *testing.T) {
+		cdc.AesKey = ""
+
+		testKEK := "test-kek-key-32-bytes-long-1234"
+		fakeEncryptedKey := "0123456789abcdef0123456789abcdef0123456789abcdef"
+
+		// Mock AesCFBDecodeWithKey to return an error
+		stub := gostub.Stub(&cdc.AesCFBDecodeWithKey, func(ctx context.Context, data string, aesKey []byte) (string, error) {
+			return "", moerr.NewInternalError(ctx, "decryption failed")
+		})
+		defer stub.Reset()
+
+		SetGetParameterUnitWrapper(func(cnUUID string) *config.ParameterUnit {
+			return &config.ParameterUnit{
+				SV: &config.FrontendParameters{
+					KeyEncryptionKey: testKEK,
+				},
+			}
+		})
+
+		mockExec := &mockSQLExecutor{
+			execSQLFunc: func(ctx context.Context, ar *ActiveRoutine, query string, useTxn bool, needRetry bool) (*Result, error) {
+				return mockResultForTest([][]interface{}{
+					{fakeEncryptedKey},
+				}), nil
+			},
+		}
+
+		err := initAesKeyForPublication(context.Background(), mockExec, "test-cn-uuid")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "decryption failed")
 	})
 }

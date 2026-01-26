@@ -52,14 +52,26 @@ func SetGetParameterUnitWrapper(fn func(cnUUID string) *config.ParameterUnit) {
 	getParameterUnitWrapper = fn
 }
 
+// MockResultScanner is an interface for testing purposes
+type MockResultScanner interface {
+	Close() error
+	Next() bool
+	Scan(dest ...interface{}) error
+	Err() error
+}
+
 // Result wraps sql.Rows or InternalResult to provide query result access
 type Result struct {
 	rows           *sql.Rows
 	internalResult *InternalResult
+	mockResult     MockResultScanner // For testing only
 }
 
 // Close closes the result rows
 func (r *Result) Close() error {
+	if r.mockResult != nil {
+		return r.mockResult.Close()
+	}
 	if r.rows != nil {
 		return r.rows.Close()
 	}
@@ -71,6 +83,9 @@ func (r *Result) Close() error {
 
 // Next moves to the next row
 func (r *Result) Next() bool {
+	if r.mockResult != nil {
+		return r.mockResult.Next()
+	}
 	if r.rows != nil {
 		return r.rows.Next()
 	}
@@ -82,6 +97,9 @@ func (r *Result) Next() bool {
 
 // Scan scans the current row into the provided destinations
 func (r *Result) Scan(dest ...interface{}) error {
+	if r.mockResult != nil {
+		return r.mockResult.Scan(dest...)
+	}
 	if r.rows != nil {
 		// When using sql.Rows, we need to handle types.TS specially
 		// because the SQL driver doesn't know how to scan directly into types.TS
@@ -133,6 +151,9 @@ func (r *Result) Scan(dest ...interface{}) error {
 
 // Err returns any error encountered during iteration
 func (r *Result) Err() error {
+	if r.mockResult != nil {
+		return r.mockResult.Err()
+	}
 	if r.rows != nil {
 		return r.rows.Err()
 	}
