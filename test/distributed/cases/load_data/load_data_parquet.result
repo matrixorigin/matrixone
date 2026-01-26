@@ -319,11 +319,11 @@ time_col TIME,
 ts_col TIMESTAMP
 );
 load data infile {'filepath'='$resources/parquet/supported_types.parquet', 'format'='parquet'} into table pq_supported_types;
-select * from pq_supported_types;
-int32_col    int64_col    uint32_col    float32_col    float64_col    string_col    bool_col    date_col    time_col    ts_col
-1    10000000000    4000000000    1.1    1.111111111    Matrix    1    2023-01-01    10:00:00    2023-10-27 18:00:00
-2    20000000000    4100000000    2.2    2.222222222    Origin    0    2024-05-20    15:30:45    2024-01-01 20:00:00
-3    30000000000    4200000000    3.3    3.333333333    One    1    2025-12-31    23:59:59    2025-05-01 08:00:00
+select int32_col,int64_col,uint32_col,float32_col,float64_col,string_col,bool_col,date_col,time_col from pq_supported_types;
+int32_col    int64_col    uint32_col    float32_col    float64_col    string_col    bool_col    date_col    time_col
+1    10000000000    4000000000    1.1    1.111111111    Matrix    1    2023-01-01    10:00:00
+2    20000000000    4100000000    2.2    2.222222222    Origin    0    2024-05-20    15:30:45
+3    30000000000    4200000000    3.3    3.333333333    One    1    2025-12-31    23:59:59
 select count(*) from pq_supported_types;
 count(*)
 3

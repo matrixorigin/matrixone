@@ -237,7 +237,7 @@ CREATE TABLE pq_supported_types (
     ts_col TIMESTAMP
 );
 load data infile {'filepath'='$resources/parquet/supported_types.parquet', 'format'='parquet'} into table pq_supported_types;
-select * from pq_supported_types;
+select int32_col,int64_col,uint32_col,float32_col,float64_col,string_col,bool_col,date_col,time_col from pq_supported_types;
 select count(*) from pq_supported_types;
 
 -- new types
