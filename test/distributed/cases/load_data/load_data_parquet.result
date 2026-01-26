@@ -4,79 +4,214 @@ use parq;
 create table t1(id bigint,name varchar);
 load data infile {'filepath'='$resources/load_data/simple.parq', 'format'='parquet'} into table t1;
 select * from t1;
-➤ id[-5,64,0]  ¦  name[12,-1,0]  𝄀
-15  ¦  user15  𝄀
-16  ¦  user16  𝄀
-1  ¦  user1  𝄀
-2  ¦  user2  𝄀
-8  ¦  user8  𝄀
-10  ¦  user10  𝄀
-12  ¦  user12  𝄀
-7  ¦  user7
+id    name
+1    user1
+2    user2
+7    user7
+8    user8
+10    user10
+12    user12
+15    user15
+16    user16
 create table t2(id bigint not null, name varchar not null, sex bool, f32 float(5,2));
 load data infile {'filepath'='$resources/load_data/simple2.parq', 'format'='parquet'} into table t2;
 select * from t2;
-➤ id[-5,64,0]  ¦  name[12,-1,0]  ¦  sex[-7,1,0]  ¦  f32[7,5,2]  𝄀
-7  ¦  user7  ¦  0  ¦  7.0  𝄀
-1  ¦  user1  ¦  0  ¦  1.0  𝄀
-2  ¦  user2  ¦  0  ¦  null  𝄀
-8  ¦  user8  ¦  1  ¦  null  𝄀
-10  ¦  user10  ¦  0  ¦  10.0  𝄀
-15  ¦  user15  ¦  0  ¦  null  𝄀
-16  ¦  user16  ¦  1  ¦  null  𝄀
-12  ¦  user12  ¦  0  ¦  null
+id    name    sex    f32
+1    user1    0    1.0
+2    user2    0    null
+7    user7    0    7.0
+8    user8    1    null
+10    user10    0    10.0
+12    user12    0    null
+15    user15    0    null
+16    user16    1    null
 create table t3(c varchar);
 load data infile {'filepath'='$resources/load_data/indexed_str.parq', 'format'='parquet'} into table t3;
 select * from t3;
-➤ c[12,-1,0]  𝄀
-null  𝄀
-aa  𝄀
-null  𝄀
-bb  𝄀
-aa  𝄀
-789$&@789$&@789$&@789$&@789$&@789$&@789$&@789$&@789$&@789$&@  𝄀
-789$&@789$&@789$&@789$&@789$&@789$&@789$&@789$&@789$&@789$&@  𝄀
-aa  𝄀
-bb  𝄀
-xyzABCxyzABCxyzABCxyzABCxyzABCxyzABCxyzABCxyzABCxyzABCxyzABC  𝄀
-null  𝄀
-null  𝄀
+c
+null
+aa
+null
+bb
+aa
+789$&@789$&@789$&@789$&@789$&@789$&@789$&@789$&@789$&@789$&@
+789$&@789$&@789$&@789$&@789$&@789$&@789$&@789$&@789$&@789$&@
+aa
+bb
+xyzABCxyzABCxyzABCxyzABCxyzABCxyzABCxyzABCxyzABCxyzABCxyzABC
+null
+null
 xyzABCxyzABCxyzABCxyzABCxyzABCxyzABCxyzABCxyzABCxyzABCxyzABC
 create table t4(id bigint not null, name varchar not null, sex bool, f32 float(5,2));
 create stage parqstage URL='file:///$resources/load_data/';
 load data infile {'filepath'='stage://parqstage/simple2.parq', 'format'='parquet'} into table t4;
 select * from t4;
-➤ id[-5,64,0]  ¦  name[12,-1,0]  ¦  sex[-7,1,0]  ¦  f32[7,5,2]  𝄀
-8  ¦  user8  ¦  1  ¦  null  𝄀
-10  ¦  user10  ¦  0  ¦  10.0  𝄀
-7  ¦  user7  ¦  0  ¦  7.0  𝄀
-1  ¦  user1  ¦  0  ¦  1.0  𝄀
-2  ¦  user2  ¦  0  ¦  null  𝄀
-12  ¦  user12  ¦  0  ¦  null  𝄀
-15  ¦  user15  ¦  0  ¦  null  𝄀
-16  ¦  user16  ¦  1  ¦  null
+id    name    sex    f32
+1    user1    0    1.0
+2    user2    0    null
+7    user7    0    7.0
+8    user8    1    null
+10    user10    0    10.0
+12    user12    0    null
+15    user15    0    null
+16    user16    1    null
 drop stage parqstage;
 create table t5(id bigint, name varchar, int8column tinyint, int16column smallint, binarycolumn binary, varbinarycolumn varbinary(32), blobcolumn blob);
 load data infile {'filepath'='$resources/load_data/int8_int16_binary_varbinary_blob.parq', 'format'='parquet'} into table t5;
 select * from t5;
-➤ id[-5,64,0]  ¦  name[12,-1,0]  ¦  int8column[-6,8,0]  ¦  int16column[5,16,0]  ¦  binarycolumn[12,3,0]  ¦  varbinarycolumn[12,96,0]  ¦  blobcolumn[12,0,0]  𝄀
-1  ¦  Alice  ¦  1  ¦  100  ¦  binary1  ¦  varbinary1  ¦  blob1  𝄀
-2  ¦  Bob  ¦  2  ¦  200  ¦  binary2  ¦  varbinary2  ¦  blob2  𝄀
-3  ¦  Charlie  ¦  3  ¦  300  ¦  binary3  ¦  varbinary3  ¦  blob3  𝄀
-4  ¦  Diana  ¦  4  ¦  400  ¦  binary4  ¦  varbinary4  ¦  blob4  𝄀
-5  ¦  Eve  ¦  5  ¦  500  ¦  binary5  ¦  varbinary5  ¦  blob5
+id    name    int8column    int16column    binarycolumn    varbinarycolumn    blobcolumn
+1    Alice    1    100    binary1    varbinary1    blob1
+2    Bob    2    200    binary2    varbinary2    blob2
+3    Charlie    3    300    binary3    varbinary3    blob3
+4    Diana    4    400    binary4    varbinary4    blob4
+5    Eve    5    500    binary5    varbinary5    blob5
 create table t6(id int, name varchar(100), scores text, address text, metadata text);
 load data infile {'filepath'='$resources/load_data/nested_types.parq', 'format'='parquet'} into table t6;
 select * from t6;
-➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  scores[12,0,0]  ¦  address[12,0,0]  ¦  metadata[12,0,0]  𝄀
-1  ¦  Alice  ¦  [85, 90, 78]  ¦  {"city": "Beijing", "zip": "100000"}  ¦  {"key1": "value1", "key2": "value2"}  𝄀
-2  ¦  Bob  ¦  [92, 88]  ¦  {"city": "Shanghai", "zip": "200000"}  ¦  {"a": "b"}  𝄀
-3  ¦  Charlie  ¦  [76, 85, 90, 95]  ¦  {"city": "Guangzhou", "zip": "510000"}  ¦  {"m": "n", "x": "y", "z": "w"}
+id    name    scores    address    metadata
+1    Alice    [85, 90, 78]    {"city": "Beijing", "zip": "100000"}    {"key1": "value1", "key2": "value2"}
+2    Bob    [92, 88]    {"city": "Shanghai", "zip": "200000"}    {"a": "b"}
+3    Charlie    [76, 85, 90, 95]    {"city": "Guangzhou", "zip": "510000"}    {"m": "n", "x": "y", "z": "w"}
 create table t7(id int, name varchar(100), scores json, address json, metadata json);
 load data infile {'filepath'='$resources/load_data/nested_types.parq', 'format'='parquet'} into table t7;
 select * from t7;
-➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  scores[-1,2147483647,0]  ¦  address[-1,2147483647,0]  ¦  metadata[-1,2147483647,0]  𝄀
-1  ¦  Alice  ¦  [85, 90, 78]  ¦  {"city": "Beijing", "zip": "100000"}  ¦  {"key1": "value1", "key2": "value2"}  𝄀
-2  ¦  Bob  ¦  [92, 88]  ¦  {"city": "Shanghai", "zip": "200000"}  ¦  {"a": "b"}  𝄀
-3  ¦  Charlie  ¦  [76, 85, 90, 95]  ¦  {"city": "Guangzhou", "zip": "510000"}  ¦  {"m": "n", "x": "y", "z": "w"}
+id    name    scores    address    metadata
+1    Alice    [85, 90, 78]    {"city": "Beijing", "zip": "100000"}    {"key1": "value1", "key2": "value2"}
+2    Bob    [92, 88]    {"city": "Shanghai", "zip": "200000"}    {"a": "b"}
+3    Charlie    [76, 85, 90, 95]    {"city": "Guangzhou", "zip": "510000"}    {"m": "n", "x": "y", "z": "w"}
+drop table if exists pq_nullable_test;
+CREATE TABLE pq_nullable_test (
+id BIGINT NOT NULL,
+col_nullable_with_null DOUBLE,
+col_nullable_no_null VARCHAR(10),
+col_not_nullable BIGINT NOT NULL,
+col_all_null DOUBLE,
+PRIMARY KEY (id)
+);
+load data infile {'filepath'='$resources/parquet/nullable_test.parquet', 'format'='parquet'} into table pq_nullable_test;
+SELECT
+COUNT(*) as total_rows,
+SUM(CASE WHEN col_nullable_with_null IS NULL THEN 1 ELSE 0 END) as null_count_col1,
+SUM(CASE WHEN col_all_null IS NULL THEN 1 ELSE 0 END) as null_count_all_null
+FROM pq_nullable_test;
+total_rows    null_count_col1    null_count_all_null
+5    2    5
+SELECT COUNT(*) FROM pq_nullable_test WHERE col_not_nullable IS NULL;
+COUNT(*)
+0
+SELECT * FROM pq_nullable_test ORDER BY id;
+id    col_nullable_with_null    col_nullable_no_null    col_not_nullable    col_all_null
+1    10.5    A    100    null
+2    null    B    200    null
+3    30.2    C    300    null
+4    null    D    400    null
+5    50.1    E    500    null
+drop table pq_nullable_test;
+drop table if exists parquet_complex_types;
+
+CREATE TABLE `parquet_complex_types` (
+`test_id` bigint NOT NULL,
+`decimal_small` decimal(10,2) NOT NULL DEFAULT 0.0,
+`decimal_medium` decimal(18,4) NOT NULL DEFAULT 0.0,
+`decimal_large` decimal(38,6) NOT NULL DEFAULT 0.0,
+`timestamp_utc` timestamp NOT NULL DEFAULT '1970-01-01 00:00:00',
+`timestamp_micros` timestamp(6) NOT NULL DEFAULT '1970-01-01 00:00:00',
+`timestamp_millis` timestamp(3) NOT NULL DEFAULT '1970-01-01 00:00:00',
+`map_string_int` json DEFAULT NULL,
+`map_string_string` json DEFAULT NULL,
+`struct_simple` json DEFAULT NULL,
+`struct_nested` json DEFAULT NULL,
+`list_int` json DEFAULT NULL,
+`list_string` json DEFAULT NULL,
+`list_struct` json DEFAULT NULL
+);
+
+load data infile {'filepath'='$resources/parquet/complex.parquet', 'format'='parquet'} into table parquet_complex_types;
+load STRING(optional) to JSON NULL is not yet implemented
+select * from parquet_complex_types order by test_id limit 3;
+test_id    decimal_small    decimal_medium    decimal_large    timestamp_utc    timestamp_micros    timestamp_millis    map_string_int    map_string_string    struct_simple    struct_nested    list_int    list_string    list_struct
+SELECT COUNT(*) FROM parquet_complex_types;
+COUNT(*)
+0
+drop table parquet_complex_types;
+
+drop table if exists ts_test;
+CREATE TABLE ts_test (
+id BIGINT,
+ts_no_tz_micros DATETIME,
+ts_no_tz_millis DATETIME
+);
+load data infile {'filepath'='$resources/parquet/ts_no_tz_test.parquet', 'format'='parquet'} into table ts_test;
+select * from ts_test;
+id    ts_no_tz_micros    ts_no_tz_millis
+1    2023-10-27 10:00:00    2025-12-25 08:30:00
+2    1960-01-01 12:00:00    2000-01-01 00:00:00
+3    null    2023-12-31 23:59:59
+drop table ts_test;
+drop table if exists none_compression;
+CREATE TABLE none_compression (
+id BIGINT,
+name VARCHAR(100),
+value DOUBLE,
+status BOOL
+);
+load data infile {'filepath'='$resources/parquet/test_none.parquet', 'format'='parquet'} into table none_compression;
+SELECT 'NONE' as codec, COUNT(*), SUM(value) FROM none_compression;
+codec    COUNT(*)    SUM(value)
+NONE    9    55.35
+drop table if exists snappy_compression;
+CREATE TABLE snappy_compression (
+id BIGINT,
+name VARCHAR(100),
+value DOUBLE,
+status BOOL
+);
+load data infile {'filepath'='$resources/parquet/test_snappy.parquet', 'format'='parquet'} into table snappy_compression;
+SELECT 'NONE' as codec, COUNT(*), SUM(value) FROM snappy_compression;
+codec    COUNT(*)    SUM(value)
+NONE    9    55.35
+drop table if exists gzip_compression;
+CREATE TABLE gzip_compression (
+id BIGINT,
+name VARCHAR(100),
+value DOUBLE,
+status BOOL
+);
+load data infile {'filepath'='$resources/parquet/test_gzip.parquet', 'format'='parquet'} into table gzip_compression;
+SELECT 'NONE' as codec, COUNT(*), SUM(value) FROM gzip_compression;
+codec    COUNT(*)    SUM(value)
+NONE    9    55.35
+drop table if exists lz4_compression;
+CREATE TABLE lz4_compression (
+id BIGINT,
+name VARCHAR(100),
+value DOUBLE,
+status BOOL
+);
+load data infile {'filepath'='$resources/parquet/test_lz4.parquet', 'format'='parquet'} into table lz4_compression;
+SELECT 'NONE' as codec, COUNT(*), SUM(value) FROM lz4_compression;
+codec    COUNT(*)    SUM(value)
+NONE    9    55.35
+drop table if exists zstd_compression;
+CREATE TABLE zstd_compression (
+id BIGINT,
+name VARCHAR(100),
+value DOUBLE,
+status BOOL
+);
+load data infile {'filepath'='$resources/parquet/test_zstd.parquet', 'format'='parquet'} into table zstd_compression;
+SELECT 'NONE' as codec, COUNT(*), SUM(value) FROM zstd_compression;
+codec    COUNT(*)    SUM(value)
+NONE    9    55.35
+drop table if exists brotli_compression;
+CREATE TABLE brotli_compression (
+id BIGINT,
+name VARCHAR(100),
+value DOUBLE,
+status BOOL
+);
+load data infile {'filepath'='$resources/parquet/test_brotli.parquet', 'format'='parquet'} into table brotli_compression;
+SELECT 'NONE' as codec, COUNT(*), SUM(value) FROM brotli_compression;
+codec    COUNT(*)    SUM(value)
+NONE    9    55.35
 drop database parq;
