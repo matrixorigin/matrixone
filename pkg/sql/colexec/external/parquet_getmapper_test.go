@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/parquet-go/parquet-go"
+	"github.com/parquet-go/parquet-go/format"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1015,4 +1016,192 @@ func TestGetMapper_DictByteArray_MoreTypes(t *testing.T) {
 		require.NoError(t, mp.mapping(page, proc, vec))
 		require.Equal(t, 3, vec.Length())
 	})
+}
+
+// Test isDecimalLogicalType helper function
+func TestIsDecimalLogicalType(t *testing.T) {
+	tests := []struct {
+		name     string
+		lt       *format.LogicalType
+		expected bool
+	}{
+		{
+			name:     "nil_logical_type",
+			lt:       nil,
+			expected: false,
+		},
+		{
+			name:     "logical_type_with_nil_decimal",
+			lt:       &format.LogicalType{},
+			expected: false,
+		},
+		{
+			name:     "logical_type_with_decimal",
+			lt:       &format.LogicalType{Decimal: &format.DecimalType{Precision: 10, Scale: 2}},
+			expected: true,
+		},
+		{
+			name:     "logical_type_with_utf8",
+			lt:       &format.LogicalType{UTF8: &format.StringType{}},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := isDecimalLogicalType(tt.lt)
+			require.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// Test FixedLenByteArray with DECIMAL LogicalType (PyArrow scenario)
+func TestGetMapper_FixedLenByteArrayDecimal(t *testing.T) {
+	proc := testutil.NewProc(t)
+
+	// Test DECIMAL64 from FixedLenByteArray with DECIMAL LogicalType
+	t.Run("fixed_decimal_to_decimal64", func(t *testing.T) {
+		var buf bytes.Buffer
+		// Use parquet.Decimal to create proper DECIMAL type with FixedLenByteArray
+		schema := parquet.NewSchema("x", parquet.Group{
+			"c": parquet.Decimal(2, 10, parquet.FixedLenByteArrayType(5)),
+		})
+		w := parquet.NewWriter(&buf, schema)
+
+		// Write decimal values: 123.45, -678.90, 999.99
+		// These are stored as big-endian two's complement in FixedLenByteArray
+		rows := []parquet.Row{
+			{parquet.FixedLenByteArrayValue(encodeDecimalToBytes(12345, 5)).Level(0, 0, 0)},
+			{parquet.FixedLenByteArrayValue(encodeDecimalToBytes(67890, 5)).Level(0, 0, 0)},
+			{parquet.FixedLenByteArrayValue(encodeDecimalToBytes(99999, 5)).Level(0, 0, 0)},
+		}
+		_, err := w.WriteRows(rows)
+		require.NoError(t, err)
+		require.NoError(t, w.Close())
+
+		f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		require.NoError(t, err)
+
+		col := f.Root().Column("c")
+		// Verify LogicalType is DECIMAL
+		lt := col.Type().LogicalType()
+		require.NotNil(t, lt)
+		require.NotNil(t, lt.Decimal)
+
+		page, err := col.Pages().ReadPage()
+		require.NoError(t, err)
+
+		vec := vector.NewVec(types.New(types.T_decimal64, 10, 2))
+		var h ParquetHandler
+		mp := h.getMapper(col, plan.Type{Id: int32(types.T_decimal64), NotNullable: true, Width: 10, Scale: 2})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vec))
+		require.Equal(t, 3, vec.Length())
+
+		got := vector.MustFixedColWithTypeCheck[types.Decimal64](vec)
+		require.Equal(t, types.Decimal64(12345), got[0])
+		require.Equal(t, types.Decimal64(67890), got[1])
+		require.Equal(t, types.Decimal64(99999), got[2])
+	})
+
+	// Test DECIMAL128 from FixedLenByteArray with DECIMAL LogicalType
+	t.Run("fixed_decimal_to_decimal128", func(t *testing.T) {
+		var buf bytes.Buffer
+		schema := parquet.NewSchema("x", parquet.Group{
+			"c": parquet.Decimal(2, 20, parquet.FixedLenByteArrayType(9)),
+		})
+		w := parquet.NewWriter(&buf, schema)
+
+		rows := []parquet.Row{
+			{parquet.FixedLenByteArrayValue(encodeDecimalToBytes(1234567890123456, 9)).Level(0, 0, 0)},
+			{parquet.FixedLenByteArrayValue(encodeDecimalToBytes(-9876543210987654, 9)).Level(0, 0, 0)},
+		}
+		_, err := w.WriteRows(rows)
+		require.NoError(t, err)
+		require.NoError(t, w.Close())
+
+		f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		require.NoError(t, err)
+
+		col := f.Root().Column("c")
+		lt := col.Type().LogicalType()
+		require.NotNil(t, lt)
+		require.NotNil(t, lt.Decimal)
+
+		page, err := col.Pages().ReadPage()
+		require.NoError(t, err)
+
+		vec := vector.NewVec(types.New(types.T_decimal128, 20, 2))
+		var h ParquetHandler
+		mp := h.getMapper(col, plan.Type{Id: int32(types.T_decimal128), NotNullable: true, Width: 20, Scale: 2})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vec))
+		require.Equal(t, 2, vec.Length())
+	})
+}
+
+// Test FixedLenByteArray DECIMAL with dictionary encoding
+func TestGetMapper_FixedLenByteArrayDecimalWithDict(t *testing.T) {
+	proc := testutil.NewProc(t)
+
+	t.Run("dict_fixed_decimal_to_decimal64", func(t *testing.T) {
+		var buf bytes.Buffer
+		schema := parquet.NewSchema("x", parquet.Group{
+			"c": parquet.Encoded(
+				parquet.Decimal(2, 10, parquet.FixedLenByteArrayType(5)),
+				&parquet.RLEDictionary,
+			),
+		})
+		w := parquet.NewWriter(&buf, schema)
+
+		// Write with repeated values to trigger dictionary encoding
+		rows := []parquet.Row{
+			{parquet.FixedLenByteArrayValue(encodeDecimalToBytes(12345, 5)).Level(0, 0, 0)},
+			{parquet.FixedLenByteArrayValue(encodeDecimalToBytes(67890, 5)).Level(0, 0, 0)},
+			{parquet.FixedLenByteArrayValue(encodeDecimalToBytes(12345, 5)).Level(0, 0, 0)},
+		}
+		_, err := w.WriteRows(rows)
+		require.NoError(t, err)
+		require.NoError(t, w.Close())
+
+		f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		require.NoError(t, err)
+
+		col := f.Root().Column("c")
+		page, err := col.Pages().ReadPage()
+		require.NoError(t, err)
+
+		vec := vector.NewVec(types.New(types.T_decimal64, 10, 2))
+		var h ParquetHandler
+		mp := h.getMapper(col, plan.Type{Id: int32(types.T_decimal64), NotNullable: true, Width: 10, Scale: 2})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vec))
+		require.Equal(t, 3, vec.Length())
+
+		got := vector.MustFixedColWithTypeCheck[types.Decimal64](vec)
+		require.Equal(t, types.Decimal64(12345), got[0])
+		require.Equal(t, types.Decimal64(67890), got[1])
+		require.Equal(t, types.Decimal64(12345), got[2])
+	})
+}
+
+// encodeDecimalToBytes encodes an int64 value to big-endian two's complement bytes
+func encodeDecimalToBytes(val int64, length int) []byte {
+	result := make([]byte, length)
+	negative := val < 0
+
+	// Fill with sign extension
+	if negative {
+		for i := range result {
+			result[i] = 0xFF
+		}
+	}
+
+	// Write value in big-endian
+	for i := length - 1; i >= 0 && val != 0 && val != -1; i-- {
+		result[i] = byte(val & 0xFF)
+		val >>= 8
+	}
+
+	return result
 }

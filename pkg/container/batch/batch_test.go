@@ -57,8 +57,7 @@ func TestBatchMarshalAndUnmarshal(t *testing.T) {
 		err = rbat.UnmarshalBinary(data)
 		require.NoError(t, err)
 
-		require.Equal(t, tc.bat.ExtraBuf1, rbat.ExtraBuf1)
-		require.Equal(t, tc.bat.ExtraBuf2, rbat.ExtraBuf2)
+		require.Equal(t, tc.bat.ExtraBuf, rbat.ExtraBuf)
 
 		for i, vec := range rbat.Vecs {
 			require.Equal(t, vector.MustFixedColWithTypeCheck[int8](tc.bat.Vecs[i]), vector.MustFixedColWithTypeCheck[int8](vec))
@@ -155,9 +154,7 @@ func newBatch(ts []types.Type, rows int) *Batch {
 		}
 	}
 
-	bat.ExtraBuf1 = []byte("extra buf 1")
-	bat.ExtraBuf2 = []byte("extra buf 2")
-
+	bat.ExtraBuf = []byte("extra buf")
 	aggexec.RegisterGroupConcatAgg(0, ",")
 	bat.Attrs = []string{"1"}
 	return bat

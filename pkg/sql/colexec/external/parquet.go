@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/encoding"
+	"github.com/parquet-go/parquet-go/format"
 )
 
 func scanParquetFile(ctx context.Context, param *ExternalParam, proc *process.Process, bat *batch.Batch) error {
@@ -186,7 +187,15 @@ func (h *ParquetHandler) prepare(param *ExternalParam) error {
 
 		var fn *columnMapper
 		if !col.Leaf() {
-			return moerr.NewNYI(param.Ctx, "parquet nested type")
+			// nested type: List/Struct/Map
+			targetType := types.T(def.Typ.Id)
+			if !isNestedTargetTypeSupported(targetType) {
+				return moerr.NewInvalidInputf(param.Ctx,
+					"parquet nested column %s must map to JSON or TEXT type, got %s",
+					attr.ColName, targetType.String())
+			}
+			h.hasNestedCols = true
+			fn = h.getNestedMapper(col, def.Typ)
 		} else {
 			fn = h.getMapper(col, def.Typ)
 		}
@@ -208,6 +217,11 @@ func (h *ParquetHandler) prepare(param *ExternalParam) error {
 		h.cols[attr.ColIndex] = col
 		h.mappers[attr.ColIndex] = fn
 		h.pages[attr.ColIndex] = col.Pages()
+	}
+
+	// init row reader if has nested columns
+	if h.hasNestedCols {
+		h.rowReader = parquet.NewReader(h.file)
 	}
 
 	return nil
@@ -705,20 +719,37 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			}
 			// https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#timestamp
 			tsT := lt.Timestamp
-			if tsT == nil || !tsT.IsAdjustedToUTC {
+			if tsT == nil {
 				break
 			}
+			// isAdjustedToUTC: true=UTC (use directly), false=local time (subtract session timezone offset for correct MO display)
+			isAdjustedToUTC := tsT.IsAdjustedToUTC
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				data := page.Data()
 				dict := page.Dictionary()
+
+				// Get timezone offset for non-UTC timestamps
+				var tzOffsetMicros int64 = 0
+				if !isAdjustedToUTC {
+					loc := proc.Base.SessionInfo.TimeZone
+					if loc == nil {
+						loc = time.Local
+					}
+					// Get the timezone offset in seconds, then convert to microseconds
+					// We use current time to get the offset, which handles DST correctly for current data
+					_, offset := time.Now().In(loc).Zone()
+					tzOffsetMicros = int64(offset) * 1000000 // seconds to microseconds
+				}
+
 				switch {
 				case tsT.Unit.Nanos != nil:
+					tzOffsetNanos := tzOffsetMicros * 1000 // convert to nanoseconds
 					if dict != nil {
 						dictData := dict.Page().Data()
 						dictValues := dictData.Int64()
 						converted := make([]types.Timestamp, len(dictValues))
 						for i, v := range dictValues {
-							converted[i] = types.UnixNanoToTimestamp(v)
+							converted[i] = types.UnixNanoToTimestamp(v - tzOffsetNanos)
 						}
 						indexes := data.Int32()
 						return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Timestamp {
@@ -726,7 +757,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 						})
 					}
 					return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Timestamp {
-						return types.UnixNanoToTimestamp(v)
+						return types.UnixNanoToTimestamp(v - tzOffsetNanos)
 					})
 				case tsT.Unit.Micros != nil:
 					if dict != nil {
@@ -734,7 +765,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 						dictValues := dictData.Int64()
 						converted := make([]types.Timestamp, len(dictValues))
 						for i, v := range dictValues {
-							converted[i] = types.UnixMicroToTimestamp(v)
+							converted[i] = types.UnixMicroToTimestamp(v - tzOffsetMicros)
 						}
 						indexes := data.Int32()
 						return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Timestamp {
@@ -742,15 +773,16 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 						})
 					}
 					return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Timestamp {
-						return types.UnixMicroToTimestamp(v)
+						return types.UnixMicroToTimestamp(v - tzOffsetMicros)
 					})
 				case tsT.Unit.Millis != nil:
+					tzOffsetMillis := tzOffsetMicros / 1000 // convert to milliseconds
 					if dict != nil {
 						dictData := dict.Page().Data()
 						dictValues := dictData.Int64()
 						converted := make([]types.Timestamp, len(dictValues))
 						for i, v := range dictValues {
-							converted[i] = types.UnixMicroToTimestamp(v * 1000)
+							converted[i] = types.UnixMicroToTimestamp((v - tzOffsetMillis) * 1000)
 						}
 						indexes := data.Int32()
 						return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Timestamp {
@@ -758,7 +790,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 						})
 					}
 					return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Timestamp {
-						return types.UnixMicroToTimestamp(v * 1000)
+						return types.UnixMicroToTimestamp((v - tzOffsetMillis) * 1000)
 					})
 				default:
 					return moerr.NewInternalError(proc.Ctx, "unknown unit")
@@ -998,8 +1030,9 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			return nil
 		}
 	case types.T_decimal64:
-		if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
-			// Support STRING to DECIMAL64 conversion
+		lt := st.LogicalType()
+		if (st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray) && !isDecimalLogicalType(lt) {
+			// STRING to DECIMAL64
 			precision := int32(dt.Width)
 			scale := int32(dt.Scale)
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
@@ -1015,6 +1048,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				)
 			}
 		} else {
+			// Binary DECIMAL
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				kind := st.Kind()
 				data := page.Data()
@@ -1038,8 +1072,9 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			}
 		}
 	case types.T_decimal128:
-		if st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray {
-			// Support STRING to DECIMAL128 conversion
+		lt := st.LogicalType()
+		if (st.Kind() == parquet.ByteArray || st.Kind() == parquet.FixedLenByteArray) && !isDecimalLogicalType(lt) {
+			// STRING to DECIMAL128 conversion (no DECIMAL LogicalType means it's stored as string)
 			precision := int32(dt.Width)
 			scale := int32(dt.Scale)
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
@@ -1055,6 +1090,8 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				)
 			}
 		} else {
+			// Binary DECIMAL (INT32/INT64/FixedLenByteArray/ByteArray with DECIMAL LogicalType)
+			// PyArrow stores DECIMAL as FixedLenByteArray with DECIMAL LogicalType (big-endian two's complement)
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				kind := st.Kind()
 				data := page.Data()
@@ -1586,6 +1623,10 @@ func decodeDecimal256Values(ctx context.Context, kind parquet.Kind, data encodin
 	}
 }
 
+func isDecimalLogicalType(lt *format.LogicalType) bool {
+	return lt != nil && lt.Decimal != nil
+}
+
 func decimalBytesToDecimal64(ctx context.Context, b []byte) (types.Decimal64, error) {
 	if len(b) == 0 {
 		return 0, nil
@@ -1695,6 +1736,13 @@ func bigIntToTwosComplementBytes(ctx context.Context, bi *big.Int, size int) ([]
 }
 
 func (h *ParquetHandler) getData(bat *batch.Batch, param *ExternalParam, proc *process.Process) error {
+	if h.hasNestedCols {
+		return h.getDataByRow(bat, param, proc)
+	}
+	return h.getDataByPage(bat, param, proc)
+}
+
+func (h *ParquetHandler) getDataByPage(bat *batch.Batch, param *ExternalParam, proc *process.Process) error {
 	length := 0
 	finish := false
 	for _, attr := range param.Attrs {

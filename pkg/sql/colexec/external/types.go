@@ -251,6 +251,10 @@ type ParquetHandler struct {
 	pages       []parquet.Pages // cached pages iterators for each column
 	currentPage []parquet.Page  // cached current page for each column
 	pageOffset  []int64         // current offset within each cached page
+
+	// for nested types support
+	hasNestedCols bool
+	rowReader     *parquet.Reader
 }
 
 type columnMapper struct {
