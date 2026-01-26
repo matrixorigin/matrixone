@@ -714,3 +714,351 @@ func Test_extractSubInfosFromExecResultOld(t *testing.T) {
 	_, err = extractSubInfosFromExecResultOld(context.Background(), mockedSubInfoResults)
 	require.Error(t, err)
 }
+
+func Test_doDropCcprSubscription(t *testing.T) {
+	convey.Convey("drop ccpr subscription - subscription exists", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses := newSes(nil, ctrl)
+		ses.tenant = tenant
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		ctx = defines.AttachAccount(ctx, sysAccountID, rootID, moAdminRoleID)
+
+		// Mock count result (subscription exists)
+		mockedCountResult := func(ctrl *gomock.Controller) []interface{} {
+			er := mock_frontend.NewMockExecResult(ctrl)
+			er.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
+			er.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(0)).Return(int64(1), nil).AnyTimes()
+			return []interface{}{er}
+		}
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		bh.EXPECT().Close().Return().AnyTimes()
+		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), "begin;").Return(nil).AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), "commit;").Return(nil).AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), "rollback;").Return(nil).AnyTimes()
+		// check subscription exists
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		bh.EXPECT().GetExecResultSet().Return(mockedCountResult(ctrl))
+		// update drop_at
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+		dcs := tree.NewDropCcprSubscription(false, tree.Identifier("test_sub"))
+		err := doDropCcprSubscription(ctx, ses, dcs)
+		convey.So(err, convey.ShouldBeNil)
+	})
+
+	convey.Convey("drop ccpr subscription - subscription not exists without if exists", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses := newSes(nil, ctrl)
+		ses.tenant = tenant
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		ctx = defines.AttachAccount(ctx, sysAccountID, rootID, moAdminRoleID)
+
+		// Mock count result (subscription not exists)
+		mockedCountResult := func(ctrl *gomock.Controller) []interface{} {
+			er := mock_frontend.NewMockExecResult(ctrl)
+			er.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
+			er.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(0)).Return(int64(0), nil).AnyTimes()
+			return []interface{}{er}
+		}
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		bh.EXPECT().Close().Return().AnyTimes()
+		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), "begin;").Return(nil).AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), "commit;").Return(nil).AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), "rollback;").Return(nil).AnyTimes()
+		// check subscription exists
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		bh.EXPECT().GetExecResultSet().Return(mockedCountResult(ctrl))
+
+		dcs := tree.NewDropCcprSubscription(false, tree.Identifier("test_sub"))
+		err := doDropCcprSubscription(ctx, ses, dcs)
+		convey.So(err, convey.ShouldBeError)
+	})
+
+	convey.Convey("drop ccpr subscription - subscription not exists with if exists", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses := newSes(nil, ctrl)
+		ses.tenant = tenant
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		ctx = defines.AttachAccount(ctx, sysAccountID, rootID, moAdminRoleID)
+
+		// Mock count result (subscription not exists)
+		mockedCountResult := func(ctrl *gomock.Controller) []interface{} {
+			er := mock_frontend.NewMockExecResult(ctrl)
+			er.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
+			er.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(0)).Return(int64(0), nil).AnyTimes()
+			return []interface{}{er}
+		}
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		bh.EXPECT().Close().Return().AnyTimes()
+		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), "begin;").Return(nil).AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), "commit;").Return(nil).AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), "rollback;").Return(nil).AnyTimes()
+		// check subscription exists
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		bh.EXPECT().GetExecResultSet().Return(mockedCountResult(ctrl))
+
+		dcs := tree.NewDropCcprSubscription(true, tree.Identifier("test_sub"))
+		err := doDropCcprSubscription(ctx, ses, dcs)
+		convey.So(err, convey.ShouldBeNil)
+	})
+}
+
+func Test_doResumeCcprSubscription(t *testing.T) {
+	convey.Convey("resume ccpr subscription - subscription exists", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses := newSes(nil, ctrl)
+		ses.tenant = tenant
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		ctx = defines.AttachAccount(ctx, sysAccountID, rootID, moAdminRoleID)
+
+		// Mock count result (subscription exists)
+		mockedCountResult := func(ctrl *gomock.Controller) []interface{} {
+			er := mock_frontend.NewMockExecResult(ctrl)
+			er.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
+			er.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(0)).Return(int64(1), nil).AnyTimes()
+			return []interface{}{er}
+		}
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		bh.EXPECT().Close().Return().AnyTimes()
+		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), "begin;").Return(nil).AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), "commit;").Return(nil).AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), "rollback;").Return(nil).AnyTimes()
+		// check subscription exists
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		bh.EXPECT().GetExecResultSet().Return(mockedCountResult(ctrl))
+		// update state
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+		rcs := tree.NewResumeCcprSubscription(tree.Identifier("test_sub"))
+		err := doResumeCcprSubscription(ctx, ses, rcs)
+		convey.So(err, convey.ShouldBeNil)
+	})
+
+	convey.Convey("resume ccpr subscription - subscription not exists", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses := newSes(nil, ctrl)
+		ses.tenant = tenant
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		ctx = defines.AttachAccount(ctx, sysAccountID, rootID, moAdminRoleID)
+
+		// Mock count result (subscription not exists)
+		mockedCountResult := func(ctrl *gomock.Controller) []interface{} {
+			er := mock_frontend.NewMockExecResult(ctrl)
+			er.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
+			er.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(0)).Return(int64(0), nil).AnyTimes()
+			return []interface{}{er}
+		}
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		bh.EXPECT().Close().Return().AnyTimes()
+		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), "begin;").Return(nil).AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), "commit;").Return(nil).AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), "rollback;").Return(nil).AnyTimes()
+		// check subscription exists
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		bh.EXPECT().GetExecResultSet().Return(mockedCountResult(ctrl))
+
+		rcs := tree.NewResumeCcprSubscription(tree.Identifier("test_sub"))
+		err := doResumeCcprSubscription(ctx, ses, rcs)
+		convey.So(err, convey.ShouldBeError)
+	})
+}
+
+func Test_doPauseCcprSubscription(t *testing.T) {
+	convey.Convey("pause ccpr subscription - subscription exists", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses := newSes(nil, ctrl)
+		ses.tenant = tenant
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		ctx = defines.AttachAccount(ctx, sysAccountID, rootID, moAdminRoleID)
+
+		// Mock count result (subscription exists)
+		mockedCountResult := func(ctrl *gomock.Controller) []interface{} {
+			er := mock_frontend.NewMockExecResult(ctrl)
+			er.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
+			er.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(0)).Return(int64(1), nil).AnyTimes()
+			return []interface{}{er}
+		}
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		bh.EXPECT().Close().Return().AnyTimes()
+		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), "begin;").Return(nil).AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), "commit;").Return(nil).AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), "rollback;").Return(nil).AnyTimes()
+		// check subscription exists
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		bh.EXPECT().GetExecResultSet().Return(mockedCountResult(ctrl))
+		// update state
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+		pcs := tree.NewPauseCcprSubscription(tree.Identifier("test_sub"))
+		err := doPauseCcprSubscription(ctx, ses, pcs)
+		convey.So(err, convey.ShouldBeNil)
+	})
+
+	convey.Convey("pause ccpr subscription - subscription not exists", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses := newSes(nil, ctrl)
+		ses.tenant = tenant
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setPu("", pu)
+
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		ctx = defines.AttachAccount(ctx, sysAccountID, rootID, moAdminRoleID)
+
+		// Mock count result (subscription not exists)
+		mockedCountResult := func(ctrl *gomock.Controller) []interface{} {
+			er := mock_frontend.NewMockExecResult(ctrl)
+			er.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
+			er.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(0)).Return(int64(0), nil).AnyTimes()
+			return []interface{}{er}
+		}
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		bh.EXPECT().Close().Return().AnyTimes()
+		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), "begin;").Return(nil).AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), "commit;").Return(nil).AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), "rollback;").Return(nil).AnyTimes()
+		// check subscription exists
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		bh.EXPECT().GetExecResultSet().Return(mockedCountResult(ctrl))
+
+		pcs := tree.NewPauseCcprSubscription(tree.Identifier("test_sub"))
+		err := doPauseCcprSubscription(ctx, ses, pcs)
+		convey.So(err, convey.ShouldBeError)
+	})
+}
