@@ -23,7 +23,6 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -233,64 +232,49 @@ func TestPreInsertHasAutoCol(t *testing.T) {
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
 }
 
-func TestConvertZeroToNullForAutoIncr(t *testing.T) {
+func TestShouldConvertZeroToNullSkipOnUpdate(t *testing.T) {
 	proc := testutil.NewProc(t)
 	defer proc.Free()
 
-	vec := testutil.MakeInt64Vector([]int64{0, 1, 0, 2}, []uint64{1}, proc.Mp())
-	bat := batch.NewWithSize(1)
-	bat.SetVector(0, vec)
-	bat.SetRowCount(vec.Length())
+	pre := &PreInsert{HasAutoCol: true}
+	proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		return "STRICT_TRANS_TABLES", nil
+	})
+	require.True(t, shouldConvertZeroToNull(pre, proc))
 
-	pre := &PreInsert{
-		ColOffset: 0,
-		TableDef: &plan.TableDef{
-			Cols: []*plan.ColDef{
-				{
-					Name: "id",
-					Typ: plan.Type{
-						Id:       int32(types.T_int64),
-						AutoIncr: true,
-					},
-				},
-			},
-		},
-	}
+	pre.IsOldUpdate = true
+	require.False(t, shouldConvertZeroToNull(pre, proc))
 
-	convertZeroToNull(bat, pre)
-
-	nsp := vec.GetNulls()
-	require.True(t, nulls.Contains(nsp, 0))
-	require.True(t, nulls.Contains(nsp, 1))
-	require.True(t, nulls.Contains(nsp, 2))
-	require.False(t, nulls.Contains(nsp, 3))
+	pre.IsOldUpdate = false
+	pre.IsNewUpdate = true
+	require.False(t, shouldConvertZeroToNull(pre, proc))
 }
 
-func TestShouldTreatZeroAsAutoIncr(t *testing.T) {
+func TestShouldTreatZeroAsAutoIncrFallback(t *testing.T) {
 	proc := testutil.NewProc(t)
 	defer proc.Free()
 
 	require.False(t, shouldTreatZeroAsAutoIncr(proc), "nil resolver should not treat 0 as auto incr")
 
 	proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
-		return "STRICT_TRANS_TABLES", nil
-	})
-	require.True(t, shouldTreatZeroAsAutoIncr(proc), "sql_mode without NO_AUTO_VALUE_ON_ZERO should treat 0 as auto incr")
-
-	proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
-		return "STRICT_TRANS_TABLES,NO_AUTO_VALUE_ON_ZERO", nil
-	})
-	require.False(t, shouldTreatZeroAsAutoIncr(proc), "sql_mode with NO_AUTO_VALUE_ON_ZERO should keep 0")
-
-	proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
 		return nil, errors.New("boom")
 	})
-	require.False(t, shouldTreatZeroAsAutoIncr(proc), "resolve error should keep 0")
+	require.False(t, shouldTreatZeroAsAutoIncr(proc), "resolve error should not treat 0 as auto incr")
 
 	proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
 		return 123, nil
 	})
-	require.False(t, shouldTreatZeroAsAutoIncr(proc), "non-string sql_mode should keep 0")
+	require.False(t, shouldTreatZeroAsAutoIncr(proc), "non-string sql_mode should not treat 0 as auto incr")
+
+	proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		return "STRICT_TRANS_TABLES", nil
+	})
+	require.True(t, shouldTreatZeroAsAutoIncr(proc))
+
+	proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		return "STRICT_TRANS_TABLES,NO_AUTO_VALUE_ON_ZERO", nil
+	})
+	require.False(t, shouldTreatZeroAsAutoIncr(proc))
 }
 
 func TestPreInsertIsUpdate(t *testing.T) {

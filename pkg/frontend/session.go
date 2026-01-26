@@ -182,6 +182,10 @@ type Session struct {
 	// payloadCounter count the payload send by `load data LOCAL infile`
 	payloadCounter int64
 
+	// sqlModeNoAutoValueOnZero caches whether sql_mode contains NO_AUTO_VALUE_ON_ZERO
+	// -1: unknown, 0: false, 1: true
+	sqlModeNoAutoValueOnZero int32
+
 	createdTime time.Time
 
 	expiredTime time.Time
@@ -272,6 +276,7 @@ func (ses *Session) InitSystemVariables(ctx context.Context, bh BackgroundExec) 
 	defer ses.mu.Unlock()
 	ses.gSysVars = sv
 	ses.sesSysVars = ses.gSysVars.Clone()
+	atomic.StoreInt32(&ses.sqlModeNoAutoValueOnZero, -1)
 	return
 }
 
@@ -552,6 +557,48 @@ func (ses *Session) getQueryId(internalSql bool) []string {
 	return ses.queryId
 }
 
+func (ses *Session) GetSqlModeNoAutoValueOnZero() (bool, bool) {
+	v := atomic.LoadInt32(&ses.sqlModeNoAutoValueOnZero)
+	if v == 1 {
+		return true, true
+	}
+	if v == 0 {
+		return false, true
+	}
+	if ses.sesSysVars == nil {
+		return false, false
+	}
+	val, err := ses.GetSessionSysVar("sql_mode")
+	if err != nil {
+		return false, false
+	}
+	mode, ok := val.(string)
+	if !ok {
+		return false, false
+	}
+	has := strings.Contains(strings.ToUpper(mode), "NO_AUTO_VALUE_ON_ZERO")
+	if has {
+		atomic.StoreInt32(&ses.sqlModeNoAutoValueOnZero, 1)
+	} else {
+		atomic.StoreInt32(&ses.sqlModeNoAutoValueOnZero, 0)
+	}
+	return has, true
+}
+
+func (ses *Session) updateSqlModeNoAutoValueOnZero(val interface{}) {
+	mode, ok := val.(string)
+	if !ok {
+		atomic.StoreInt32(&ses.sqlModeNoAutoValueOnZero, -1)
+		return
+	}
+	has := strings.Contains(strings.ToUpper(mode), "NO_AUTO_VALUE_ON_ZERO")
+	if has {
+		atomic.StoreInt32(&ses.sqlModeNoAutoValueOnZero, 1)
+	} else {
+		atomic.StoreInt32(&ses.sqlModeNoAutoValueOnZero, 0)
+	}
+}
+
 type errInfo struct {
 	codes  []uint16
 	msgs   []string
@@ -608,6 +655,7 @@ func NewSession(
 		timestampMap: map[TS]time.Time{},
 		statsCache:   plan2.NewStatsCache(),
 	}
+	atomic.StoreInt32(&ses.sqlModeNoAutoValueOnZero, -1)
 
 	ses.userDefinedVars = make(map[string]*UserDefinedVar)
 	ses.tempTables = make(map[string]string)

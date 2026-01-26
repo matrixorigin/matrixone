@@ -245,7 +245,6 @@ func shouldTreatZeroAsAutoIncr(proc *proc) bool {
 	}
 	resolve := proc.GetResolveVariableFunc()
 	if resolve == nil {
-		// internal/background proc may not have sql_mode; keep explicit 0 behavior
 		return false
 	}
 	value, err := resolve("sql_mode", true, false)
