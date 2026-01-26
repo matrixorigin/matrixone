@@ -6178,15 +6178,15 @@ func isDatetimeFormat(s string) bool {
 // TimestampDiff: TIMESTAMPDIFF(unit, datetime1, datetime2) - Returns datetime2 - datetime1
 // Supports DATETIME, DATE, TIMESTAMP, and string inputs
 func TimestampDiff(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
-	p2 := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[1])
-	p3 := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[2])
+	i1 := vector.GenerateFunctionStrParameter(ivecs[0])
+	i2 := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[1])
+	i3 := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[2])
 	rs := vector.MustFunctionResult[int64](result)
 
 	for i := uint64(0); i < uint64(length); i++ {
-		v1, null1 := p1.GetStrValue(i)
-		v2, null2 := p2.GetValue(i)
-		v3, null3 := p3.GetValue(i)
+		v1, null1 := i1.GetStrValue(i)
+		v2, null2 := i2.GetValue(i)
+		v3, null3 := i3.GetValue(i)
 		if null1 || null2 || null3 {
 			if err = rs.Append(0, true); err != nil {
 				return err
@@ -6209,15 +6209,15 @@ func TimestampDiff(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 // When mixing DATE with string (containing time), the system should select TimestampDiffString
 // or convert DATE to DATETIME and use TimestampDiff.
 func TimestampDiffDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
-	p2 := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[1])
-	p3 := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[2])
+	i1 := vector.GenerateFunctionStrParameter(ivecs[0])
+	i2 := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[1])
+	i3 := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[2])
 	rs := vector.MustFunctionResult[int64](result)
 
 	for i := uint64(0); i < uint64(length); i++ {
-		v1, null1 := p1.GetStrValue(i)
-		v2, null2 := p2.GetValue(i)
-		v3, null3 := p3.GetValue(i)
+		v1, null1 := i1.GetStrValue(i)
+		v2, null2 := i2.GetValue(i)
+		v3, null3 := i3.GetValue(i)
 		if null1 || null2 || null3 {
 			if err = rs.Append(0, true); err != nil {
 				return err

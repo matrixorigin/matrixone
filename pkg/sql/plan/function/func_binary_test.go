@@ -3998,8 +3998,8 @@ func TestTimeDiffStringMixedTypes(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
 	// Test case: TIME vs DATETIME should return NULL
-	inputs1 := []string{"15:30:45"}                  // TIME format
-	inputs2 := []string{"2000-01-01 15:30:45"}       // DATETIME format
+	inputs1 := []string{"15:30:45"}            // TIME format
+	inputs2 := []string{"2000-01-01 15:30:45"} // DATETIME format
 	nullFlags := []bool{false}
 	expectedNulls := []bool{true} // Should be NULL due to mixed types
 
