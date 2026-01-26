@@ -1209,6 +1209,50 @@ func getPubInfo(ctx context.Context, bh BackgroundExec, pubName string) (pubInfo
 	return
 }
 
+// getPubInfoByName gets publication info by name only, without filtering by account_id.
+// This allows non-sys tenants to query publications created by any account (e.g., sys tenant).
+func getPubInfoByName(ctx context.Context, bh BackgroundExec, pubName string) (pubInfo *pubsub.PubInfo, err error) {
+	accountNameColExists, err := checkColExists(ctx, bh, "mo_catalog", "mo_pubs", "account_name")
+	if err != nil {
+		return
+	}
+
+	// Query by pub_name only, without account_id filter
+	var sql string
+	if accountNameColExists {
+		sql = getAllPubInfoSql + fmt.Sprintf(" where pub_name = '%s'", pubName)
+	} else {
+		// For old schema without account_name column
+		sql = "select account_id, pub_name, database_name, database_id, table_list, account_list, created_time, update_time, owner, creator, comment from mo_catalog.mo_pubs" +
+			fmt.Sprintf(" where pub_name = '%s'", pubName)
+	}
+
+	bh.ClearExecResultSet()
+	if err = bh.Exec(defines.AttachAccountId(ctx, catalog.System_Account), sql); err != nil {
+		return
+	}
+
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return
+	}
+
+	var pubInfos []*pubsub.PubInfo
+	if accountNameColExists {
+		if pubInfos, err = extractPubInfosFromExecResult(ctx, erArray); err != nil {
+			return
+		}
+	} else {
+		if pubInfos, err = extractPubInfosFromExecResultOld(ctx, erArray); err != nil {
+			return
+		}
+	}
+	if len(pubInfos) > 0 {
+		pubInfo = pubInfos[0]
+	}
+	return
+}
+
 func getPubInfos(ctx context.Context, bh BackgroundExec, like string) (pubInfos []*pubsub.PubInfo, err error) {
 	accountId, err := defines.GetAccountId(ctx)
 	if err != nil {
@@ -2016,8 +2060,9 @@ func doShowPublicationCoverage(ctx context.Context, ses *Session, spc *tree.Show
 	}
 	accountName := tenantInfo.GetTenant()
 
-	// Get publication info
-	pubInfo, err := getPubInfo(ctx, bh, spc.Name)
+	// Get publication info by name only (without filtering by current account_id)
+	// This allows non-sys tenants to query publications created by sys tenant
+	pubInfo, err := getPubInfoByName(ctx, bh, spc.Name)
 	if err != nil {
 		return err
 	}
@@ -2048,32 +2093,48 @@ func doShowPublicationCoverage(ctx context.Context, ses *Session, spc *tree.Show
 	// Get database name
 	dbName := pubInfo.DbName
 
+	// Check if this is account level (dbName == "*") or database level (dbName is specific but tables is "*")
+	isAccountLevel := dbName == pubsub.TableAll
+	isDatabaseLevel := dbName != pubsub.TableAll && pubInfo.TablesStr == pubsub.TableAll
+
+	// Add marker row for account level or database level
+	if isAccountLevel {
+		// Account level: add db * table *
+		rs.AddRow([]interface{}{pubsub.TableAll, pubsub.TableAll})
+	} else if isDatabaseLevel {
+		// Database level: add db dbname table *
+		rs.AddRow([]interface{}{dbName, pubsub.TableAll})
+	}
+
 	// Get table list
 	if pubInfo.TablesStr == pubsub.TableAll {
 		// If table_list is "*", query all tables from mo_tables
-		systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
-		querySQL := fmt.Sprintf(
-			`SELECT relname FROM mo_catalog.mo_tables WHERE reldatabase = '%s' AND account_id = %d AND relkind != '%s' ORDER BY relname`,
-			dbName, pubInfo.PubAccountId, catalog.SystemViewRel,
-		)
+		// For account level, we don't query tables since dbName is "*"
+		if !isAccountLevel {
+			systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
+			querySQL := fmt.Sprintf(
+				`SELECT relname FROM mo_catalog.mo_tables WHERE reldatabase = '%s' AND account_id = %d AND relkind != '%s' ORDER BY relname`,
+				dbName, pubInfo.PubAccountId, catalog.SystemViewRel,
+			)
 
-		bh.ClearExecResultSet()
-		if err = bh.Exec(systemCtx, querySQL); err != nil {
-			return err
-		}
+			bh.ClearExecResultSet()
+			if err = bh.Exec(systemCtx, querySQL); err != nil {
+				return err
+			}
 
-		erArray, err := getResultSet(systemCtx, bh)
-		if err != nil {
-			return err
-		}
+			erArray, err := getResultSet(systemCtx, bh)
+			if err != nil {
+				return err
+			}
 
-		for _, result := range erArray {
-			for i := uint64(0); i < result.GetRowCount(); i++ {
-				tableName, err := result.GetString(systemCtx, i, 0)
-				if err != nil {
-					return err
+			for _, result := range erArray {
+				for i := uint64(0); i < result.GetRowCount(); i++ {
+					tableName, err := result.GetString(systemCtx, i, 0)
+					if err != nil {
+						return err
+					}
+					rs.AddRow([]interface{}{dbName, tableName})
 				}
-				rs.AddRow([]interface{}{dbName, tableName})
 			}
 		}
 	} else {
@@ -2671,11 +2732,6 @@ func checkUpstreamPublicationCoverage(
 	dbName string,
 	tableName string,
 ) error {
-	// For account level, no need to check coverage
-	if syncLevel == "account" {
-		return nil
-	}
-
 	// Create upstream executor to connect to upstream cluster
 	upstreamExecutor, err := publication.NewUpstreamExecutor(account, user, password, host, port, 3, 30*time.Second, "30s", publication.NewUpstreamConnectionClassifier())
 	if err != nil {
@@ -2710,10 +2766,15 @@ func checkUpstreamPublicationCoverage(
 		return moerr.NewInternalErrorf(ctx, "error while reading coverage results: %v", err)
 	}
 
-	// Check if the requested database/table is covered
-	if syncLevel == "database" {
-		// Check if database is covered (any table in the database means database is covered)
-		if _, exists := coverageMap[dbName]; !exists {
+	// Check if the requested database/table is covered based on sync level
+	if syncLevel == "account" {
+		// For account level, must find db * table * marker row
+		if tables, exists := coverageMap[pubsub.TableAll]; !exists || !tables[pubsub.TableAll] {
+			return moerr.NewInternalErrorf(ctx, "publication '%s' is not account level in upstream cluster", pubName)
+		}
+	} else if syncLevel == "database" {
+		// For database level, must find db dbname table * marker row
+		if tables, exists := coverageMap[dbName]; !exists || !tables[pubsub.TableAll] {
 			return moerr.NewInternalErrorf(ctx, "database '%s' is not covered by publication '%s' in upstream cluster", dbName, pubName)
 		}
 	} else if syncLevel == "table" {
