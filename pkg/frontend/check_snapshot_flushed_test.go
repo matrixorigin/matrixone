@@ -614,7 +614,7 @@ func Test_doCheckSnapshotFlushed_DisttaeEngineConversionFailed(t *testing.T) {
 		entireEng := &engine.EntireEngine{
 			Engine: mockEng,
 		}
-		if de, ok = entireEng.Engine.(*disttae.Engine); !ok {
+		if _, ok = entireEng.Engine.(*disttae.Engine); !ok {
 			// This should fail as well
 			convey.So(ok, convey.ShouldBeFalse)
 		}

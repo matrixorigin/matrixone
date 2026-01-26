@@ -396,6 +396,7 @@ func (exec *PublicationTaskExecutor) run(ctx context.Context) {
 			}
 			for _, task := range candidateTasks {
 				task.State = IterationStatePending
+				exec.setTask(task)
 				// Only trigger tasks that are not completed
 				err = exec.worker.Submit(task.TaskID, task.LSN, task.State)
 				if err != nil {
