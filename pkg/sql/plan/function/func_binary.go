@@ -6240,9 +6240,9 @@ func TimestampDiffDate(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 
 // TimestampDiffTimestamp: TIMESTAMPDIFF(unit, timestamp1, timestamp2) - Supports TIMESTAMP inputs
 func TimestampDiffTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
-	p2 := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[1])
-	p3 := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[2])
+	i1 := vector.GenerateFunctionStrParameter(ivecs[0])
+	i2 := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[1])
+	i3 := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[2])
 	rs := vector.MustFunctionResult[int64](result)
 
 	loc := proc.GetSessionInfo().TimeZone
@@ -6251,9 +6251,9 @@ func TimestampDiffTimestamp(ivecs []*vector.Vector, result vector.FunctionResult
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
-		v1, null1 := p1.GetStrValue(i)
-		v2, null2 := p2.GetValue(i)
-		v3, null3 := p3.GetValue(i)
+		v1, null1 := i1.GetStrValue(i)
+		v2, null2 := i2.GetValue(i)
+		v3, null3 := i3.GetValue(i)
 		if null1 || null2 || null3 {
 			if err = rs.Append(0, true); err != nil {
 				return err
@@ -6276,17 +6276,17 @@ func TimestampDiffTimestamp(ivecs []*vector.Vector, result vector.FunctionResult
 
 // TimestampDiffString: TIMESTAMPDIFF(unit, datetime_string1, datetime_string2) - Supports string inputs
 func TimestampDiffString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
-	p2 := vector.GenerateFunctionStrParameter(ivecs[1])
-	p3 := vector.GenerateFunctionStrParameter(ivecs[2])
+	i1 := vector.GenerateFunctionStrParameter(ivecs[0])
+	i2 := vector.GenerateFunctionStrParameter(ivecs[1])
+	i3 := vector.GenerateFunctionStrParameter(ivecs[2])
 	rs := vector.MustFunctionResult[int64](result)
 
 	scale := int32(6) // Use max scale for string inputs
 
 	for i := uint64(0); i < uint64(length); i++ {
-		v1, null1 := p1.GetStrValue(i)
-		v2, null2 := p2.GetStrValue(i)
-		v3, null3 := p3.GetStrValue(i)
+		v1, null1 := i1.GetStrValue(i)
+		v2, null2 := i2.GetStrValue(i)
+		v3, null3 := i3.GetStrValue(i)
 		if null1 || null2 || null3 {
 			if err = rs.Append(0, true); err != nil {
 				return err
@@ -6340,17 +6340,17 @@ func TimestampDiffString(ivecs []*vector.Vector, result vector.FunctionResultWra
 // TimestampDiffDateString: TIMESTAMPDIFF(unit, date, datetime_string) - Handles DATE and string mix
 // When first argument is DATE and second is string, convert DATE to DATETIME (time 00:00:00)
 func TimestampDiffDateString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
-	p2 := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[1])
-	p3 := vector.GenerateFunctionStrParameter(ivecs[2])
+	i1 := vector.GenerateFunctionStrParameter(ivecs[0])
+	i2 := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[1])
+	i3 := vector.GenerateFunctionStrParameter(ivecs[2])
 	rs := vector.MustFunctionResult[int64](result)
 
 	scale := int32(6) // Use max scale for string inputs
 
 	for i := uint64(0); i < uint64(length); i++ {
-		v1, null1 := p1.GetStrValue(i)
-		v2, null2 := p2.GetValue(i)
-		v3, null3 := p3.GetStrValue(i)
+		v1, null1 := i1.GetStrValue(i)
+		v2, null2 := i2.GetValue(i)
+		v3, null3 := i3.GetStrValue(i)
 		if null1 || null2 || null3 {
 			if err = rs.Append(0, true); err != nil {
 				return err
@@ -6391,17 +6391,17 @@ func TimestampDiffDateString(ivecs []*vector.Vector, result vector.FunctionResul
 // TimestampDiffStringDate: TIMESTAMPDIFF(unit, datetime_string, date) - Handles string and DATE mix
 // When first argument is string and second is DATE, convert DATE to DATETIME (time 00:00:00)
 func TimestampDiffStringDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
-	p2 := vector.GenerateFunctionStrParameter(ivecs[1])
-	p3 := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[2])
+	i1 := vector.GenerateFunctionStrParameter(ivecs[0])
+	i2 := vector.GenerateFunctionStrParameter(ivecs[1])
+	i3 := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[2])
 	rs := vector.MustFunctionResult[int64](result)
 
 	scale := int32(6) // Use max scale for string inputs
 
 	for i := uint64(0); i < uint64(length); i++ {
-		v1, null1 := p1.GetStrValue(i)
-		v2, null2 := p2.GetStrValue(i)
-		v3, null3 := p3.GetValue(i)
+		v1, null1 := i1.GetStrValue(i)
+		v2, null2 := i2.GetStrValue(i)
+		v3, null3 := i3.GetValue(i)
 		if null1 || null2 || null3 {
 			if err = rs.Append(0, true); err != nil {
 				return err
@@ -6442,9 +6442,9 @@ func TimestampDiffStringDate(ivecs []*vector.Vector, result vector.FunctionResul
 // TimestampDiffTimestampDate: TIMESTAMPDIFF(unit, timestamp, date) - Handles TIMESTAMP and DATE mix
 // When first argument is TIMESTAMP and second is DATE, convert both to DATETIME and calculate
 func TimestampDiffTimestampDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
-	p2 := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[1])
-	p3 := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[2])
+	i1 := vector.GenerateFunctionStrParameter(ivecs[0])
+	i2 := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[1])
+	i3 := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[2])
 	rs := vector.MustFunctionResult[int64](result)
 
 	loc := proc.GetSessionInfo().TimeZone
@@ -6453,9 +6453,9 @@ func TimestampDiffTimestampDate(ivecs []*vector.Vector, result vector.FunctionRe
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
-		v1, null1 := p1.GetStrValue(i)
-		v2, null2 := p2.GetValue(i)
-		v3, null3 := p3.GetValue(i)
+		v1, null1 := i1.GetStrValue(i)
+		v2, null2 := i2.GetValue(i)
+		v3, null3 := i3.GetValue(i)
 		if null1 || null2 || null3 {
 			if err = rs.Append(0, true); err != nil {
 				return err
@@ -6483,9 +6483,9 @@ func TimestampDiffTimestampDate(ivecs []*vector.Vector, result vector.FunctionRe
 // TimestampDiffDateTimestamp: TIMESTAMPDIFF(unit, date, timestamp) - Handles DATE and TIMESTAMP mix
 // When first argument is DATE and second is TIMESTAMP, convert both to DATETIME and calculate
 func TimestampDiffDateTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
-	p2 := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[1])
-	p3 := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[2])
+	i1 := vector.GenerateFunctionStrParameter(ivecs[0])
+	i2 := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[1])
+	i3 := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[2])
 	rs := vector.MustFunctionResult[int64](result)
 
 	loc := proc.GetSessionInfo().TimeZone
@@ -6494,9 +6494,9 @@ func TimestampDiffDateTimestamp(ivecs []*vector.Vector, result vector.FunctionRe
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
-		v1, null1 := p1.GetStrValue(i)
-		v2, null2 := p2.GetValue(i)
-		v3, null3 := p3.GetValue(i)
+		v1, null1 := i1.GetStrValue(i)
+		v2, null2 := i2.GetValue(i)
+		v3, null3 := i3.GetValue(i)
 		if null1 || null2 || null3 {
 			if err = rs.Append(0, true); err != nil {
 				return err
