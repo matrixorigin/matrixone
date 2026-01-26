@@ -1426,6 +1426,18 @@ func TestBaseBinder_bindComparisonExpr(t *testing.T) {
 			},
 		},
 		{
+			name:      "NULL_SAFE_EQUAL: a <=> 1",
+			sql:       "a <=> 1",
+			expectErr: false,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				funcExpr, ok := expr.Expr.(*plan.Expr_F)
+				require.True(t, ok)
+				require.Equal(t, "<=>", funcExpr.F.Func.ObjName)
+			},
+		},
+		{
 			name:      "LIKE: a LIKE 'test%'",
 			sql:       "a LIKE 'test%'",
 			expectErr: false,
