@@ -223,3 +223,36 @@ info.NullCnts[i] *= rowScaleFactor
 | ColumnNDVs | 采样 | 由 AdjustNDV 综合调整 |
 
 **关键**：表级统计精确，列级统计采样推算，查询优化器主要依赖表级统计（行数）做决策。
+
+
+# table_stats 表函数
+
+表函数，用于获取/刷新/修改表统计信息，主要用于测试优化器。
+
+## 语法
+
+```sql
+SELECT ... FROM table_stats(table_path, command, args) g;
+```
+
+**参数：**
+- `table_path`: 表路径，格式为 `"db.table"` 或 `"table"`（使用当前数据库）
+- `command`: 操作命令
+  - `'get'`: 获取统计信息（默认）
+  - `'refresh'`: 强制刷新统计信息
+  - `'patch'`: 临时修改统计信息（用于测试）
+- `args`: JSON 参数（`patch` 命令必需），参数定义见 `pkg/vm/engine/disttae/stats.go` 中的 `PatchArgs` 结构
+
+## 示例
+
+详见 `test/distributed/cases/optimizer/associative.sql`
+
+```sql
+-- 设置小表触发优化器规则
+SELECT table_cnt FROM table_stats("db.t", 'patch', 
+  '{"table_cnt": 9, "accurate_object_number": 1}') g;
+
+-- 调整列 NDV 观察 Shuffle 决策
+SELECT table_cnt FROM table_stats("db.lineitem", 'patch',
+  '{"ndv_map": {"l_partkey": 1840290}}') g;
+```
