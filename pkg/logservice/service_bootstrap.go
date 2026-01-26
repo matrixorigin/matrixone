@@ -129,6 +129,18 @@ func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 		s.runtime.SubLogger(runtime.SystemInit).Info("initial cluster info set")
 		break
 	}
+
+	// Recover WAL data if configured
+	// This must be done after the cluster is initialized and Log shard is running
+	if cfg.BootstrapConfig.Restore.WALDataPath != "" {
+		s.runtime.SubLogger(runtime.SystemInit).Info("WAL recovery: starting WAL data recovery",
+			zap.String("wal_data_path", cfg.BootstrapConfig.Restore.WALDataPath))
+		if err := s.RecoverWALData(ctx, cfg); err != nil {
+			s.runtime.SubLogger(runtime.SystemInit).Error("WAL recovery: failed to recover WAL data", zap.Error(err))
+			return err
+		}
+	}
+
 	return nil
 }
 
