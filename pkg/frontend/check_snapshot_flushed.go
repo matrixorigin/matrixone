@@ -34,6 +34,20 @@ import (
 	"go.uber.org/zap"
 )
 
+// getSnapshotByNameFunc is a function variable for getSnapshotByName
+// This allows mocking in unit tests
+var getSnapshotByNameFunc = getSnapshotByName
+
+// checkSnapshotFlushedFunc is a function variable for CheckSnapshotFlushed
+// This allows mocking in unit tests
+var checkSnapshotFlushedFunc = CheckSnapshotFlushed
+
+// getFileServiceFunc is a function variable for getting fileservice from disttae.Engine
+// This allows mocking in unit tests
+var getFileServiceFunc = func(de *disttae.Engine) fileservice.FileService {
+	return de.FS()
+}
+
 func handleCheckSnapshotFlushed(ses *Session, execCtx *ExecCtx, stmt *tree.CheckSnapshotFlushed) error {
 	return doCheckSnapshotFlushed(execCtx.reqCtx, ses, stmt)
 }
@@ -53,7 +67,7 @@ func doCheckSnapshotFlushed(ctx context.Context, ses *Session, stmt *tree.CheckS
 	bh := ses.GetShareTxnBackgroundExec(ctx, false)
 	defer bh.Close()
 
-	record, err := getSnapshotByName(ctx, bh, snapshotName)
+	record, err := getSnapshotByNameFunc(ctx, bh, snapshotName)
 	if err != nil {
 		// If snapshot not found, return false
 		result := false
@@ -102,7 +116,7 @@ func doCheckSnapshotFlushed(ctx context.Context, ses *Session, stmt *tree.CheckS
 		}
 	}
 
-	fs := de.FS()
+	fs := getFileServiceFunc(de)
 	if fs == nil {
 		return moerr.NewInternalError(ctx, "fileservice is not available")
 	}
@@ -113,7 +127,7 @@ func doCheckSnapshotFlushed(ctx context.Context, ses *Session, stmt *tree.CheckS
 		LogicalTime:  0,
 	})
 	// Mock result: always return true for now
-	result, err := CheckSnapshotFlushed(ctx, txn, types.BuildTS(record.ts, 0), de, record, fs)
+	result, err := checkSnapshotFlushedFunc(ctx, txn, types.BuildTS(record.ts, 0), de, record, fs)
 	if err != nil {
 		return err
 	}

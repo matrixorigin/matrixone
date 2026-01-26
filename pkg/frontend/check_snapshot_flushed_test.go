@@ -16,9 +16,11 @@ package frontend
 
 import (
 	"context"
+	"iter"
 	"testing"
 
 	"github.com/golang/mock/gomock"
+	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -26,10 +28,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
@@ -194,6 +198,30 @@ func (e *errorStubExecutor) Exec(ctx context.Context, sql string, opts executor.
 func (e *errorStubExecutor) ExecTxn(ctx context.Context, execFunc func(txn executor.TxnExecutor) error, opts executor.Options) error {
 	return moerr.NewInternalError(ctx, "executor error")
 }
+
+// checkSnapshotStubFS implements fileservice.FileService for testing
+type checkSnapshotStubFS struct{ name string }
+
+func (s checkSnapshotStubFS) Delete(ctx context.Context, filePaths ...string) error { return nil }
+func (s checkSnapshotStubFS) Name() string                                          { return s.name }
+func (s checkSnapshotStubFS) Read(ctx context.Context, vector *fileservice.IOVector) error {
+	return nil
+}
+func (s checkSnapshotStubFS) ReadCache(ctx context.Context, vector *fileservice.IOVector) error {
+	return nil
+}
+func (s checkSnapshotStubFS) Write(ctx context.Context, vector fileservice.IOVector) error {
+	return nil
+}
+func (s checkSnapshotStubFS) List(ctx context.Context, dirPath string) iter.Seq2[*fileservice.DirEntry, error] {
+	return func(yield func(*fileservice.DirEntry, error) bool) {}
+}
+func (s checkSnapshotStubFS) StatFile(ctx context.Context, filePath string) (*fileservice.DirEntry, error) {
+	return &fileservice.DirEntry{Name: filePath}, nil
+}
+func (s checkSnapshotStubFS) PrefetchFile(ctx context.Context, filePath string) error { return nil }
+func (s checkSnapshotStubFS) Cost() *fileservice.CostAttr                             { return nil }
+func (s checkSnapshotStubFS) Close(ctx context.Context)                               {}
 
 func Test_GetSnapshotRecordByName(t *testing.T) {
 	convey.Convey("GetSnapshotRecordByName invalid executor", t, func() {
@@ -779,5 +807,123 @@ func Test_doCheckSnapshotFlushed_SnapshotNotFound(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 		// Result should be false (snapshot not found)
 		convey.So(ses.mrs.GetRowCount(), convey.ShouldEqual, 1)
+	})
+}
+
+// Test_doCheckSnapshotFlushed_GoodPath tests the good path of doCheckSnapshotFlushed (line 67-124)
+// This test mocks getSnapshotByNameFunc and checkSnapshotFlushedFunc to test the core logic
+func Test_doCheckSnapshotFlushed_GoodPath(t *testing.T) {
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
+	convey.Convey("doCheckSnapshotFlushed good path - cluster level snapshot", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		// Stub getSnapshotByNameFunc to return a cluster level snapshot record
+		// This bypasses permission check (line 74: if record.level != "cluster")
+		mockRecord := &snapshotRecord{
+			snapshotId:   "test-snapshot-id",
+			snapshotName: "test_snapshot",
+			ts:           1000,
+			level:        "cluster",
+			accountName:  "sys",
+			databaseName: "",
+			tableName:    "",
+			objId:        0,
+		}
+		snapshotStub := gostub.Stub(&getSnapshotByNameFunc, func(ctx context.Context, bh BackgroundExec, snapshotName string) (*snapshotRecord, error) {
+			return mockRecord, nil
+		})
+		defer snapshotStub.Reset()
+
+		// Stub checkSnapshotFlushedFunc to return true (good path)
+		checkStub := gostub.Stub(&checkSnapshotFlushedFunc, func(ctx context.Context, txn client.TxnOperator, snapshotTS types.TS, engine *disttae.Engine, record *snapshotRecord, fs fileservice.FileService) (bool, error) {
+			// Verify the record passed is correct
+			convey.So(record.snapshotName, convey.ShouldEqual, "test_snapshot")
+			convey.So(record.level, convey.ShouldEqual, "cluster")
+			convey.So(record.ts, convey.ShouldEqual, int64(1000))
+			return true, nil
+		})
+		defer checkStub.Reset()
+
+		// Stub getFileServiceFunc to return a stub fileservice (bypass nil check)
+		mockFS := checkSnapshotStubFS{name: "test_fs"}
+		fsStub := gostub.Stub(&getFileServiceFunc, func(de *disttae.Engine) fileservice.FileService {
+			return mockFS
+		})
+		defer fsStub.Reset()
+
+		// Mock engine with disttae.Engine wrapped in EntireEngine
+		mockDisttaeEng := &disttae.Engine{}
+		entireEngine := &engine.EntireEngine{
+			Engine: mockDisttaeEng,
+		}
+
+		// Mock txn operator
+		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+		txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
+		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+		txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
+		txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
+		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
+		txnOperator.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
+		txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+		txnOperator.EXPECT().CloneSnapshotOp(gomock.Any()).Return(txnOperator).AnyTimes()
+
+		// Mock txn client
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+		txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
+
+		// Mock background exec
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().Close().Return().AnyTimes()
+		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		bh.EXPECT().GetExecResultSet().Return([]interface{}{}).AnyTimes()
+
+		// Setup system variables
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+		pu := config.NewParameterUnit(sv, entireEngine, txnClient, nil)
+		pu.SV.SkipCheckUser = true
+		setPu("", pu)
+		setSessionAlloc("", NewLeakCheckAllocator())
+		ioses, err := NewIOSession(&testConn{}, pu, "")
+		convey.So(err, convey.ShouldBeNil)
+		pu.StorageEngine = entireEngine
+		pu.TxnClient = txnClient
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, pu.SV)
+
+		ses := NewSession(ctx, "", proto, nil)
+		tenant := &TenantInfo{
+			Tenant:   "sys",
+			TenantID: catalog.System_Account,
+			User:     DefaultTenantMoAdmin,
+		}
+		ses.SetTenantInfo(tenant)
+		ses.mrs = &MysqlResultSet{}
+		ses.SetDatabaseName("test_db")
+
+		// Mock TxnHandler
+		txnHandler := InitTxnHandler("", entireEngine, ctx, txnOperator)
+		ses.txnHandler = txnHandler
+
+		proto.SetSession(ses)
+
+		ec := newTestExecCtx(ctx, ctrl)
+		stmt := &tree.CheckSnapshotFlushed{
+			Name: tree.Identifier("test_snapshot"),
+		}
+
+		// Test good path: snapshot found, cluster level (no permission check), returns true
+		err = handleCheckSnapshotFlushed(ses, ec, stmt)
+		convey.So(err, convey.ShouldBeNil)
+		// Result should be true (snapshot flushed)
+		convey.So(ses.mrs.GetRowCount(), convey.ShouldEqual, 1)
+		// Verify the result is true
+		row := ses.mrs.Data[0]
+		convey.So(row[0], convey.ShouldEqual, true)
 	})
 }
