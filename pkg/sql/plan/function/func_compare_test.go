@@ -145,8 +145,8 @@ func TestNullSafeEqualFn(t *testing.T) {
 	// 1 <=> null = false
 	// null <=> 1 = false
 	// null <=> null = true
-	tc := tcTemp{
-		info: "<=> test",
+	tcInt64 := tcTemp{
+		info: "<=> int64 test",
 		inputs: []FunctionTestInput{
 			NewFunctionTestInput(types.T_int64.ToType(),
 				[]int64{1, 1, 1, 0, 0}, []bool{false, false, false, true, true}),
@@ -158,8 +158,71 @@ func TestNullSafeEqualFn(t *testing.T) {
 	}
 
 	proc := testutil.NewProcess(t)
-	fcTC := NewFunctionTestCase(proc,
-		tc.inputs, tc.expect, nullSafeEqualFn)
-	s, info := fcTC.Run()
-	require.True(t, s, info, tc.info)
+	fcTCInt64 := NewFunctionTestCase(proc,
+		tcInt64.inputs, tcInt64.expect, nullSafeEqualFn)
+	s, info := fcTCInt64.Run()
+	require.True(t, s, info, tcInt64.info)
+
+	// Float64 Test
+	// 1.1 <=> 1.1 = true
+	// 1.1 <=> 0.0 = false
+	// 1.1 <=> null = false
+	// null <=> null = true
+	tcFloat := tcTemp{
+		info: "<=> float64 test",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_float64.ToType(),
+				[]float64{1.1, 1.1, 1.1, 0.0}, []bool{false, false, false, true}),
+			NewFunctionTestInput(types.T_float64.ToType(),
+				[]float64{1.1, 0.0, 0.0, 0.0}, []bool{false, false, true, true}),
+		},
+		expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+			[]bool{true, false, false, true}, []bool{false, false, false, false}),
+	}
+	fcTCFloat := NewFunctionTestCase(proc,
+		tcFloat.inputs, tcFloat.expect, nullSafeEqualFn)
+	s, info = fcTCFloat.Run()
+	require.True(t, s, info, tcFloat.info)
+
+	// Varchar Test
+	// "a" <=> "a" = true
+	// "a" <=> "b" = false
+	// "a" <=> null = false
+	// null <=> null = true
+	tcStr := tcTemp{
+		info: "<=> varchar test",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{"a", "a", "a", ""}, []bool{false, false, false, true}),
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{"a", "b", "", ""}, []bool{false, false, true, true}),
+		},
+		expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+			[]bool{true, false, false, true}, []bool{false, false, false, false}),
+	}
+	fcTCStr := NewFunctionTestCase(proc,
+		tcStr.inputs, tcStr.expect, nullSafeEqualFn)
+	s, info = fcTCStr.Run()
+	require.True(t, s, info, tcStr.info)
+
+	// Bool Test
+	// true <=> true = true
+	// true <=> false = false
+	// true <=> null = false
+	// null <=> null = true
+	tcBool := tcTemp{
+		info: "<=> bool test",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_bool.ToType(),
+				[]bool{true, true, true, false}, []bool{false, false, false, true}),
+			NewFunctionTestInput(types.T_bool.ToType(),
+				[]bool{true, false, false, false}, []bool{false, false, true, true}),
+		},
+		expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+			[]bool{true, false, false, true}, []bool{false, false, false, false}),
+	}
+	fcTCBool := NewFunctionTestCase(proc,
+		tcBool.inputs, tcBool.expect, nullSafeEqualFn)
+	s, info = fcTCBool.Run()
+	require.True(t, s, info, tcBool.info)
 }
