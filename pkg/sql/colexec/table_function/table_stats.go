@@ -96,7 +96,7 @@ func (s *tableStatsState) start(tf *TableFunction, proc *process.Process, nthRow
 	// Get GlobalStats
 	gs := getGlobalStats(e)
 	if gs == nil {
-		return fillEmptyStats(s.batch, tf, dbname, tablename, proc)
+		return moerr.NewInvalidInputNoCtx("no valid engine")
 	}
 
 	// Execute command
@@ -458,48 +458,4 @@ func anyToJSON(v any) (string, error) {
 		return "", err
 	}
 	return string(jsonBytes), nil
-}
-
-// fillEmptyStats fills the result for non-disttae tables
-func fillEmptyStats(bat *batch.Batch, tf *TableFunction, dbname, tablename string, proc *process.Process) error {
-	mp := proc.Mp()
-	tableFullName := fmt.Sprintf("%s.%s", dbname, tablename)
-
-	// Iterate through projected columns
-	for i, colName := range tf.Attrs {
-		colNameUpper := strings.ToUpper(colName)
-
-		switch colNameUpper {
-		case "TABLE_NAME":
-			if err := vector.AppendBytes(bat.Vecs[i], []byte(tableFullName), false, mp); err != nil {
-				return err
-			}
-
-		case "TABLE_CNT":
-			if err := vector.AppendFixed(bat.Vecs[i], float64(0), false, mp); err != nil {
-				return err
-			}
-
-		case "SAMPLING_RATIO":
-			if err := vector.AppendFixed(bat.Vecs[i], float64(0), false, mp); err != nil {
-				return err
-			}
-
-		case "BLOCK_NUMBER", "APPROX_OBJECT_NUMBER", "ACCURATE_OBJECT_NUMBER":
-			if err := vector.AppendFixed(bat.Vecs[i], int64(0), false, mp); err != nil {
-				return err
-			}
-
-		case "NDV_MAP", "MIN_VAL_MAP", "MAX_VAL_MAP", "DATA_TYPE_MAP", "NULL_CNT_MAP", "SIZE_MAP", "SHUFFLE_RANGE_MAP":
-			if err := vector.AppendBytes(bat.Vecs[i], []byte("{}"), false, mp); err != nil {
-				return err
-			}
-
-		default:
-			return moerr.NewInternalError(proc.Ctx, fmt.Sprintf("unknown column name: %s", colName))
-		}
-	}
-
-	bat.SetRowCount(1)
-	return nil
 }

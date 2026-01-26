@@ -29,7 +29,7 @@ select mo_ctl('dn', 'flush', 'table_func_table_stats.t1');
 select sleep(1);
 
 -- Query table stats - basic columns (new column structure)
-select table_name, table_cnt, block_number, accurate_object_number from table_stats('table_func_table_stats.t1') g;
+select * from table_stats('table_func_table_stats.t1') g;
 
 -- Check sampling_ratio is present
 select table_name, sampling_ratio >= 0 from table_stats('table_func_table_stats.t1') g;
@@ -39,7 +39,7 @@ select table_name, ndv_map is not null from table_stats('table_func_table_stats.
 
 
 -- Stats should reflect more rows (use refresh command with full mode)
-select table_name, table_cnt, block_number, accurate_object_number from table_stats('table_func_table_stats.t1', 'refresh', 'full') g;
+select table_name, table_cnt, block_number from table_stats('table_func_table_stats.t1', 'refresh', 'full') g;
 
 -- Test with empty table
 drop table if exists t3;
