@@ -1100,10 +1100,6 @@ func NewConnectionReset(ctx context.Context) *Error {
 	return newError(ctx, ErrConnectionReset)
 }
 
-func NewAllCNServersBusy(ctx context.Context) *Error {
-	return newError(ctx, ErrAllCNServersBusy)
-}
-
 func NewAllCNServersBusyNoCtx() *Error {
 	return newError(Context(), ErrAllCNServersBusy)
 }
