@@ -220,8 +220,17 @@ func (s *Service) replayWALEntries(ctx context.Context, walData *WALRecoveryData
 				zap.Uint64("shard_id", shardID),
 				zap.Uint64("leader_id", info.LeaderID))
 			// Wait a bit more to ensure leader election is stable
-			time.Sleep(60 * time.Second)
-			break
+			time.Sleep(5 * time.Second)
+			// Verify again that leader is still there
+			info2, ok2 := s.getShardInfo(shardID)
+			if ok2 && info2.LeaderID != 0 {
+				logger.Info("WAL recovery: Log shard leader confirmed",
+					zap.Uint64("shard_id", shardID),
+					zap.Uint64("leader_id", info2.LeaderID))
+				break
+			}
+			logger.Warn("WAL recovery: Log shard leader lost after wait, retrying...")
+			continue
 		}
 
 		logger.Info("WAL recovery: Log shard not ready yet, waiting...",
