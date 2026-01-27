@@ -93,12 +93,6 @@ var emptyFileWithChecksumOSFile FileWithChecksum[*os.File]
 var _ FileLike = new(FileWithChecksum[*os.File])
 
 func (f *FileWithChecksum[T]) ReadAt(buf []byte, offset int64) (n int, err error) {
-	defer func() {
-		perfcounter.Update(f.ctx, func(c *perfcounter.CounterSet) {
-			c.FileService.FileWithChecksum.Read.Add(int64(n))
-		}, f.perfCounterSets...)
-	}()
-
 	for len(buf) > 0 {
 
 		blockOffset, offsetInBlock := f.contentOffsetToBlockOffset(offset)
@@ -138,12 +132,6 @@ func (f *FileWithChecksum[T]) Read(buf []byte) (n int, err error) {
 }
 
 func (f *FileWithChecksum[T]) WriteAt(buf []byte, offset int64) (n int, err error) {
-	defer func() {
-		perfcounter.Update(f.ctx, func(c *perfcounter.CounterSet) {
-			c.FileService.FileWithChecksum.Write.Add(int64(n))
-		}, f.perfCounterSets...)
-	}()
-
 	for len(buf) > 0 {
 
 		blockOffset, offsetInBlock := f.contentOffsetToBlockOffset(offset)
