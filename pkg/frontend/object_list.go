@@ -271,6 +271,10 @@ func collectObjectListForTable(
 		return moerr.NewInternalError(ctx, fmt.Sprintf("failed to get table: %v", err))
 	}
 
+	if strings.ToUpper(table.GetTableDef(ctx).TableType) == "V" {
+		return nil
+	}
+
 	// Call CollectObjectList on table
 	err = table.CollectObjectList(ctx, from, to, bat, mp)
 	if err != nil {

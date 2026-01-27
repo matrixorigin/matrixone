@@ -217,6 +217,10 @@ func visitTableDdl(
 		return moerr.NewInternalErrorf(ctx, "failed to get table: %v", err)
 	}
 
+	if strings.ToUpper(table.GetTableDef(ctx).TableType) == "V" {
+		return nil
+	}
+
 	// Get tableDef from relation
 	tableDef := table.CopyTableDef(ctx)
 	if tableDef == nil {
