@@ -25,7 +25,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const opName = "hash_build"
+const (
+	opName = "hash_build"
+	// exactPkFilterThreshold controls when we switch from BloomFilter to exact IN.
+	// This value is intentionally conservative and was chosen heuristically.
+	// Rationale:
+	// - For very small PK sets, BloomFilter can be counterproductive because
+	//   false positives interact poorly with centroid pruning in IVF pre mode.
+	// - Building and shipping an exact IN list keeps semantics correct when the
+	//   candidate set is tiny, and the SQL cost stays manageable.
+	// - The threshold should remain small to avoid overly large IN lists and to
+	//   preserve the existing BloomFilter performance path for larger sets.
+	// If future workloads show a better cutoff, adjust this number accordingly.
+	exactPkFilterThreshold = 100
+)
 
 func (hashBuild *HashBuild) String(buf *bytes.Buffer) {
 	buf.WriteString(opName)
@@ -219,6 +232,21 @@ func (ctr *container) handleRuntimeFilter(hashBuild *HashBuild, proc *process.Pr
 
 		keyVec := ctr.hashmapBuilder.UniqueJoinKeys[0]
 		rowCount := keyVec.Length()
+
+		if rowCount <= exactPkFilterThreshold {
+			keyVec.InplaceSort()
+			data, err := keyVec.MarshalBinary()
+			if err != nil {
+				return err
+			}
+
+			runtimeFilter.Typ = message.RuntimeFilter_IN
+			runtimeFilter.Card = int32(rowCount)
+			runtimeFilter.Data = data
+			message.SendRuntimeFilter(runtimeFilter, spec, proc.GetMessageBoard())
+			ctr.runtimeFilterIn = true
+			return nil
+		}
 
 		// Send UniqueJoinKeys instead of Bloomfilter
 		data, err := keyVec.MarshalBinary()

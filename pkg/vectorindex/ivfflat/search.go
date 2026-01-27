@@ -408,9 +408,15 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(
 		return
 	}
 
-	// get unique keys from hashbuild
+	// get unique keys from hashbuild (also handles RuntimeFilter_IN → ExactPkFilter)
 	vecbytes, err := sqlexec.WaitBloomFilter(sqlproc)
 	if err != nil {
+		return
+	}
+
+	// If WaitBloomFilter received a RuntimeFilter_IN message, it set ExactPkFilter.
+	// No bloom filter is needed in that case.
+	if sqlproc.ExactPkFilter != "" {
 		return
 	}
 
@@ -584,19 +590,38 @@ func (idx *IvfflatSearchIndex[T]) Search(
 		return
 	}
 
-	sql := fmt.Sprintf(
-		"SELECT `%s`, %s(`%s`, '%s') as vec_dist FROM `%s`.`%s` WHERE `%s` = %d AND `%s` IN (%s) ORDER BY vec_dist LIMIT %d",
-		catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
-		metric.MetricTypeToDistFuncName[metric.MetricType(idxcfg.Ivfflat.Metric)],
-		catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
-		types.ArrayToString(query),
-		tblcfg.DbName, tblcfg.EntriesTable,
-		catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
-		idx.Version,
-		catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
-		instr,
-		rt.Limit,
-	)
+	var sql string
+	if sqlproc != nil && sqlproc.ExactPkFilter != "" {
+		// Exact PK path: WaitBloomFilter received RuntimeFilter_IN and set ExactPkFilter.
+		// Query entries directly by pk list, skip centroid-based filtering.
+		sql = fmt.Sprintf(
+			"SELECT `%s`, %s(`%s`, '%s') as vec_dist FROM `%s`.`%s` WHERE `%s` = %d AND `%s` IN (%s)",
+			catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
+			metric.MetricTypeToDistFuncName[metric.MetricType(idxcfg.Ivfflat.Metric)],
+			catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
+			types.ArrayToString(query),
+			tblcfg.DbName, tblcfg.EntriesTable,
+			catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
+			idx.Version,
+			catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
+			sqlproc.ExactPkFilter,
+		)
+	} else {
+		// Standard centroid-based path with optional CBloomFilter pre-filtering.
+		sql = fmt.Sprintf(
+			"SELECT `%s`, %s(`%s`, '%s') as vec_dist FROM `%s`.`%s` WHERE `%s` = %d AND `%s` IN (%s) ORDER BY vec_dist LIMIT %d",
+			catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
+			metric.MetricTypeToDistFuncName[metric.MetricType(idxcfg.Ivfflat.Metric)],
+			catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
+			types.ArrayToString(query),
+			tblcfg.DbName, tblcfg.EntriesTable,
+			catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
+			idx.Version,
+			catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
+			instr,
+			rt.Limit,
+		)
+	}
 
 	//fmt.Println("IVFFlat SQL: ", sql)
 	//os.Stderr.WriteString(sql)

@@ -321,6 +321,9 @@ const (
 	// Group 14: TaskService
 	ErrExecutorRunning uint16 = 22201
 
+	// Group 15: Vector Search
+	ErrVectorNeedRetryWithPreMode uint16 = 22301
+
 	// ErrEnd, the max value of MOErrorCode
 	ErrEnd uint16 = 65535
 )
@@ -566,6 +569,9 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 
 	// Group 14: Task Service
 	ErrExecutorRunning: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "TaskService: executor %s is already running"},
+
+	// Group 15: Vector Search
+	ErrVectorNeedRetryWithPreMode: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "vector search need retry with pre mode"},
 
 	// Group End: max value of MOErrorCode
 	ErrEnd: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: end of errcode code"},
