@@ -21,6 +21,7 @@ import (
 	"io"
 	"os"
 	"sort"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -202,6 +203,32 @@ func (s *Service) replayWALEntries(ctx context.Context, walData *WALRecoveryData
 		zap.Uint64("shard_id", shardID),
 		zap.Int("entry_count", len(walData.Entries)))
 
+	// Wait for Log shard to be ready before replaying
+	// The Log shard is started by HAKeeper after bootstrap, so we need to wait
+	logger.Info("WAL recovery: waiting for Log shard to be ready",
+		zap.Uint64("shard_id", shardID))
+
+	maxWaitTime := 5 * time.Minute
+	waitStart := time.Now()
+	for {
+		if time.Since(waitStart) > maxWaitTime {
+			return fmt.Errorf("timeout waiting for Log shard %d to be ready", shardID)
+		}
+
+		info, ok := s.getShardInfo(shardID)
+		if ok && info.LeaderID != 0 {
+			logger.Info("WAL recovery: Log shard is ready",
+				zap.Uint64("shard_id", shardID),
+				zap.Uint64("leader_id", info.LeaderID))
+			break
+		}
+
+		logger.Info("WAL recovery: Log shard not ready yet, waiting...",
+			zap.Uint64("shard_id", shardID),
+			zap.Bool("found", ok))
+		time.Sleep(time.Second)
+	}
+
 	// Replay each entry
 	for i, entry := range walData.Entries {
 		// The RawData contains the original LogEntry that was stored in Raft
@@ -210,8 +237,14 @@ func (s *Service) replayWALEntries(ctx context.Context, walData *WALRecoveryData
 			Data: entry.RawData,
 		}
 
+		// Create a context with deadline for each append operation
+		// dragonboat requires context to have a deadline set
+		appendCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+
 		// Use the store's append method to write to the Log shard
-		lsn, err := s.store.append(ctx, shardID, rec.Data)
+		lsn, err := s.store.append(appendCtx, shardID, rec.Data)
+		cancel() // Release resources immediately after use
+
 		if err != nil {
 			logger.Error("WAL recovery: failed to append entry",
 				zap.Int("index", i),
