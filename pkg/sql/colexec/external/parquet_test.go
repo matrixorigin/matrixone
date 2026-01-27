@@ -1438,7 +1438,7 @@ func TestParquet_EmptyFile_ColumnCountMatch(t *testing.T) {
 				{ColName: "col2", ColIndex: 1}, // different name from "name"
 			},
 			Cols: []*plan.ColDef{
-				{Typ: plan.Type{Id: int32(types.T_int32)}}, // different type from int64
+				{Typ: plan.Type{Id: int32(types.T_int32)}},     // different type from int64
 				{Typ: plan.Type{Id: int32(types.T_decimal64)}}, // different type from string
 			},
 			Extern:   &tree.ExternParam{ExParamConst: tree.ExParamConst{ScanType: tree.INLINE}},
