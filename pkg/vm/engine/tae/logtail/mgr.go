@@ -258,6 +258,7 @@ func (mgr *Manager) GCByTS(ctx context.Context, ts types.TS) (updated bool) {
 
 func (mgr *Manager) TryCompactTable() {
 	mgr.nextCompactTS = mgr.table.TryCompact(mgr.nextCompactTS, mgr.rt)
+	logutil.Info("GC-Logtail-Table try compact table", zap.String("compactTS", mgr.nextCompactTS.String()))
 }
 
 func (mgr *Manager) GetTableOperator(

@@ -736,17 +736,20 @@ dev-setup-docker-mirror:
 .PHONY: dev-clean
 dev-clean:
 	@echo "WARNING: This will delete all data in mo-data/ and logs/!"
-	@read -p "Continue? [y/N] " -n 1 -r; \
-	echo; \
-	if [[ $$REPLY =~ ^[Yy]$$ ]]; then \
-		echo "Stopping services..."; \
-		cd $(DEV_DIR) && ./start.sh down; \
-		echo "Removing data..."; \
-		rm -rf mo-data logs; \
-		echo "Clean completed!"; \
-	else \
-		echo "Cancelled."; \
-	fi
+	@printf "Continue? [y/N] "; \
+	read REPLY; \
+	case "$$REPLY" in \
+		[Yy]*) \
+			echo "Stopping services..."; \
+			cd $(DEV_DIR) && ./start.sh down; \
+			echo "Removing data..."; \
+			rm -rf mo-data logs; \
+			echo "Clean completed!"; \
+			;; \
+		*) \
+			echo "Cancelled."; \
+			;; \
+	esac
 
 .PHONY: dev-cleanup
 dev-cleanup:
