@@ -191,6 +191,22 @@ func (s *Service) readWALDataFile(ctx context.Context, filePath string) (*WALRec
 	return &WALRecoveryData{Entries: entries}, nil
 }
 
+// buildUserEntryCmd builds a LogService command for UserEntryUpdate
+// LogService command format:
+// - UpdateType: 4 bytes (big-endian uint32) = 2 (UserEntryUpdate)
+// - LeaseHolderID: 8 bytes (big-endian uint64) = 0 (no lease holder during recovery)
+// - Payload: LogEntry data
+func buildUserEntryCmd(payload []byte) []byte {
+	cmd := make([]byte, headerSize+8+len(payload))
+	// UpdateType = UserEntryUpdate (2)
+	binaryEnc.PutUint32(cmd[0:4], uint32(pb.UserEntryUpdate))
+	// LeaseHolderID = 0 (no lease holder during recovery)
+	binaryEnc.PutUint64(cmd[4:12], 0)
+	// Payload
+	copy(cmd[12:], payload)
+	return cmd
+}
+
 // replayWALEntries replays WAL entries to the Log shard
 func (s *Service) replayWALEntries(ctx context.Context, walData *WALRecoveryData) error {
 	logger := s.runtime.SubLogger(runtime.SystemInit)
@@ -240,20 +256,41 @@ func (s *Service) replayWALEntries(ctx context.Context, walData *WALRecoveryData
 	}
 
 	// Replay each entry
+	logger.Info("WAL recovery: starting entry replay loop",
+		zap.Int("total_entries", len(walData.Entries)))
+
 	for i, entry := range walData.Entries {
-		// The RawData contains the original LogEntry that was stored in Raft
-		// We need to append it to the Log shard
-		rec := pb.LogRecord{
-			Data: entry.RawData,
+		// Log first entry for debugging
+		if i == 0 {
+			logger.Info("WAL recovery: processing first entry",
+				zap.Uint64("dsn", entry.DSN),
+				zap.Int("data_len", len(entry.RawData)))
 		}
+
+		// The RawData contains the LogEntry payload (TN WAL format)
+		// We need to wrap it in a LogService UserEntryUpdate command
+		cmd := buildUserEntryCmd(entry.RawData)
 
 		// Create a context with deadline for each append operation
 		// dragonboat requires context to have a deadline set
 		appendCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 
+		// Log before append for debugging
+		if i == 0 {
+			logger.Info("WAL recovery: calling append for first entry",
+				zap.Int("cmd_len", len(cmd)))
+		}
+
 		// Use the store's append method to write to the Log shard
-		lsn, err := s.store.append(appendCtx, shardID, rec.Data)
+		lsn, err := s.store.append(appendCtx, shardID, cmd)
 		cancel() // Release resources immediately after use
+
+		// Log after append for debugging
+		if i == 0 {
+			logger.Info("WAL recovery: first append completed",
+				zap.Uint64("lsn", lsn),
+				zap.Error(err))
+		}
 
 		if err != nil {
 			logger.Error("WAL recovery: failed to append entry",
