@@ -97,9 +97,11 @@ func (builder *QueryBuilder) buildFullTextIndexScan(tbl *tree.TableFunction, ctx
 		return 0, err
 	}
 
+	stats := DefaultMinimalStats()
+	stats.Sql = sql
 	node := &plan.Node{
 		NodeType: plan.Node_FUNCTION_SCAN,
-		Stats:    &plan.Stats{Sql: sql},
+		Stats:    stats,
 		TableDef: &plan.TableDef{
 			TableType: "func_table", //test if ok
 			//Name:               tbl.String(),
@@ -215,7 +217,7 @@ func (builder *QueryBuilder) buildFullTextIndexTokenize(tbl *tree.TableFunction,
 
 	node := &plan.Node{
 		NodeType: plan.Node_FUNCTION_SCAN,
-		Stats:    &plan.Stats{},
+		Stats:    DefaultMinimalStats(),
 		TableDef: &plan.TableDef{
 			TableType: "func_table", //test if ok
 			//Name:               tbl.String(),

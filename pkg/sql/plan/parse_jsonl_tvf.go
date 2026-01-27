@@ -187,7 +187,7 @@ func (builder *QueryBuilder) buildParseJsonl(tvfName string, tbl *tree.TableFunc
 
 	node := &plan.Node{
 		NodeType: plan.Node_FUNCTION_SCAN,
-		Stats:    &plan.Stats{},
+		Stats:    DefaultMinimalStats(),
 		TableDef: &plan.TableDef{
 			TableType: "func_table",
 			TblFunc: &plan.TableFunction{

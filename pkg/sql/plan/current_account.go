@@ -27,7 +27,7 @@ func (builder *QueryBuilder) buildCurrentAccount(tbl *tree.TableFunction, ctx *B
 	}
 	node := &plan.Node{
 		NodeType: plan.Node_FUNCTION_SCAN,
-		Stats:    &plan.Stats{},
+		Stats:    DefaultMinimalStats(),
 		TableDef: &plan.TableDef{
 			TableType: "func_table",
 			TblFunc: &plan.TableFunction{

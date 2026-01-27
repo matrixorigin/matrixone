@@ -89,7 +89,7 @@ func (builder *QueryBuilder) buildMoLocks(tbl *tree.TableFunction, ctx *BindCont
 
 	node := &plan.Node{
 		NodeType: plan.Node_FUNCTION_SCAN,
-		Stats:    &plan.Stats{},
+		Stats:    DefaultMinimalStats(),
 		TableDef: &plan.TableDef{
 			TableType: "func_table",
 			TblFunc: &plan.TableFunction{
@@ -159,7 +159,7 @@ func (builder *QueryBuilder) buildMoConfigurations(tbl *tree.TableFunction, ctx 
 
 	node := &plan.Node{
 		NodeType: plan.Node_FUNCTION_SCAN,
-		Stats:    &plan.Stats{},
+		Stats:    DefaultMinimalStats(),
 		TableDef: &plan.TableDef{
 			TableType: "func_table",
 			TblFunc: &plan.TableFunction{
@@ -261,7 +261,7 @@ func (builder *QueryBuilder) buildMoTransactions(tbl *tree.TableFunction, ctx *B
 
 	node := &plan.Node{
 		NodeType: plan.Node_FUNCTION_SCAN,
-		Stats:    &plan.Stats{},
+		Stats:    DefaultMinimalStats(),
 		TableDef: &plan.TableDef{
 			TableType: "func_table",
 			TblFunc: &plan.TableFunction{
@@ -331,7 +331,7 @@ func (builder *QueryBuilder) buildMoCache(tbl *tree.TableFunction, ctx *BindCont
 
 	node := &plan.Node{
 		NodeType: plan.Node_FUNCTION_SCAN,
-		Stats:    &plan.Stats{},
+		Stats:    DefaultMinimalStats(),
 		TableDef: &plan.TableDef{
 			TableType: "func_table",
 			TblFunc: &plan.TableFunction{

@@ -248,7 +248,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 	tableFuncTag := builder.genNewBindTag()
 	tableFuncNode := &plan.Node{
 		NodeType: plan.Node_FUNCTION_SCAN,
-		Stats:    &plan.Stats{},
+		Stats:    DefaultMinimalStats(),
 		TableDef: &plan.TableDef{
 			TableType: "func_table", //test if ok
 			//Name:               tbl.String(),
