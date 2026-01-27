@@ -961,7 +961,9 @@ func submitObjectsAsDelete(
 
 func GetObjectListMap(ctx context.Context, iterationCtx *IterationContext, cnEngine engine.Engine) (map[objectio.ObjectId]*ObjectWithTableInfo, error) {
 
-	objectListResult, err := GetObjectListFromSnapshotDiff(ctx, iterationCtx)
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	objectListResult, err := GetObjectListFromSnapshotDiff(ctxWithTimeout, iterationCtx)
 	if err != nil {
 		err = moerr.NewInternalErrorf(ctx, "failed to get object list from snapshot diff: %v", err)
 		return nil, err

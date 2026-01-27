@@ -984,9 +984,7 @@ func GetObjectListFromSnapshotDiff(
 	)
 
 	// Execute SQL through upstream executor and return result directly
-	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute)
-	defer cancel()
-	result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctxWithTimeout, nil, objectListSQL, false, true)
+	result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, nil, objectListSQL, false, true)
 	if err != nil {
 		logutil.Error("ccpr-iteration error",
 			zap.String("task_id", iterationCtx.String()),
