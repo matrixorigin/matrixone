@@ -278,6 +278,29 @@ create table pq_decimal_boundary (
 );
 load data infile {'filepath'='$resources/parquet/decimal_boundary_test.parquet', 'format'='parquet'} into table pq_decimal_boundary;
 select * from pq_decimal_boundary;
+select dec_p38_s0 from pq_decimal_boundary WHERE dec_p38_s0 > 0;
+select dec_p38_s38 from pq_decimal_boundary WHERE dec_p38_s38 > 0;
+select dec_p9_s2 * 1.1 from pq_decimal_boundary LIMIT 1;
+
+
+-- binary->binary/blob
+drop table if exists pq_binary_test;
+create table pq_binary_test (
+    bin_fixed BINARY(10),
+    bin_var VARBINARY(255),
+    bin_blob BLOB,
+    bin_empty VARBINARY(10)
+);
+load data infile {'filepath'='$resources/parquet/binary_mapping_test.parquet', 'format'='parquet'} into table pq_binary_test;
+select
+    hex(bin_fixed) as fixed_hex,
+    hex(bin_var) as var_hex,
+    hex(bin_blob) as blob_hex
+from pq_binary_test;
+select length(bin_fixed) from pq_binary_test;
+select count(*) from pq_binary_test where bin_blob is null;
+select length(bin_empty) from pq_binary_test limit 1;
+
 
 -- post
 drop database parq;
