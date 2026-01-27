@@ -800,13 +800,15 @@ func TestParquet_prepare_missingColumn(t *testing.T) {
 }
 
 func TestParquet_prepare_optionalToNotNull(t *testing.T) {
+	// Test that optional column can be prepared to map to NOT NULL column
+	// The NULL constraint violation will be checked at runtime when actual NULLs are encountered
 	var buf bytes.Buffer
 	schema := parquet.NewSchema("x", parquet.Group{
 		"c": parquet.Optional(parquet.Leaf(parquet.Int32Type)),
 	})
 	w := parquet.NewWriter(&buf, schema)
 	_, err := w.WriteRows([]parquet.Row{
-		{parquet.Int32Value(1).Level(0, 0, 0)},
+		{parquet.Int32Value(1).Level(0, 1, 0)},
 	})
 	require.NoError(t, err)
 	require.NoError(t, w.Close())
@@ -825,8 +827,9 @@ func TestParquet_prepare_optionalToNotNull(t *testing.T) {
 			},
 		},
 	}
+	// prepare should succeed - NULL constraint is checked at runtime, not prepare time
 	err = h.prepare(param)
-	require.Error(t, err)
+	require.NoError(t, err)
 }
 
 func TestParquet_ensureDictionaryIndexes_outOfRange(t *testing.T) {
