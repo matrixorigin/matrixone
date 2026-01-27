@@ -316,4 +316,192 @@ func TestNullSafeEqualFn(t *testing.T) {
 		tcUuid.inputs, tcUuid.expect, nullSafeEqualFn)
 	s, info = fcTCUuid.Run()
 	require.True(t, s, info, tcUuid.info)
+
+	// Int8 Test
+	tcInt8 := tcTemp{
+		info: "<=> int8 test",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_int8.ToType(), []int8{1, 1, 1, 0, 0}, []bool{false, false, false, true, true}),
+			NewFunctionTestInput(types.T_int8.ToType(), []int8{1, 0, 0, 1, 0}, []bool{false, false, true, false, true}),
+		},
+		expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+			[]bool{true, false, false, false, true}, []bool{false, false, false, false, false}),
+	}
+	fcTCInt8 := NewFunctionTestCase(proc, tcInt8.inputs, tcInt8.expect, nullSafeEqualFn)
+	s, info = fcTCInt8.Run()
+	require.True(t, s, info, tcInt8.info)
+
+	// Int16 Test
+	tcInt16 := tcTemp{
+		info: "<=> int16 test",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_int16.ToType(), []int16{1, 1, 1, 0, 0}, []bool{false, false, false, true, true}),
+			NewFunctionTestInput(types.T_int16.ToType(), []int16{1, 0, 0, 1, 0}, []bool{false, false, true, false, true}),
+		},
+		expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+			[]bool{true, false, false, false, true}, []bool{false, false, false, false, false}),
+	}
+	fcTCInt16 := NewFunctionTestCase(proc, tcInt16.inputs, tcInt16.expect, nullSafeEqualFn)
+	s, info = fcTCInt16.Run()
+	require.True(t, s, info, tcInt16.info)
+
+	// Int32 Test
+	tcInt32 := tcTemp{
+		info: "<=> int32 test",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_int32.ToType(), []int32{1, 1, 1, 0, 0}, []bool{false, false, false, true, true}),
+			NewFunctionTestInput(types.T_int32.ToType(), []int32{1, 0, 0, 1, 0}, []bool{false, false, true, false, true}),
+		},
+		expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+			[]bool{true, false, false, false, true}, []bool{false, false, false, false, false}),
+	}
+	fcTCInt32 := NewFunctionTestCase(proc, tcInt32.inputs, tcInt32.expect, nullSafeEqualFn)
+	s, info = fcTCInt32.Run()
+	require.True(t, s, info, tcInt32.info)
+
+	// Uint8 Test
+	tcUint8 := tcTemp{
+		info: "<=> uint8 test",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_uint8.ToType(), []uint8{1, 1, 1, 0, 0}, []bool{false, false, false, true, true}),
+			NewFunctionTestInput(types.T_uint8.ToType(), []uint8{1, 0, 0, 1, 0}, []bool{false, false, true, false, true}),
+		},
+		expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+			[]bool{true, false, false, false, true}, []bool{false, false, false, false, false}),
+	}
+	fcTCUint8 := NewFunctionTestCase(proc, tcUint8.inputs, tcUint8.expect, nullSafeEqualFn)
+	s, info = fcTCUint8.Run()
+	require.True(t, s, info, tcUint8.info)
+
+	// Uint16 Test
+	tcUint16 := tcTemp{
+		info: "<=> uint16 test",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_uint16.ToType(), []uint16{1, 1, 1, 0, 0}, []bool{false, false, false, true, true}),
+			NewFunctionTestInput(types.T_uint16.ToType(), []uint16{1, 0, 0, 1, 0}, []bool{false, false, true, false, true}),
+		},
+		expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+			[]bool{true, false, false, false, true}, []bool{false, false, false, false, false}),
+	}
+	fcTCUint16 := NewFunctionTestCase(proc, tcUint16.inputs, tcUint16.expect, nullSafeEqualFn)
+	s, info = fcTCUint16.Run()
+	require.True(t, s, info, tcUint16.info)
+
+	// Uint32 Test
+	tcUint32 := tcTemp{
+		info: "<=> uint32 test",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_uint32.ToType(), []uint32{1, 1, 1, 0, 0}, []bool{false, false, false, true, true}),
+			NewFunctionTestInput(types.T_uint32.ToType(), []uint32{1, 0, 0, 1, 0}, []bool{false, false, true, false, true}),
+		},
+		expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+			[]bool{true, false, false, false, true}, []bool{false, false, false, false, false}),
+	}
+	fcTCUint32 := NewFunctionTestCase(proc, tcUint32.inputs, tcUint32.expect, nullSafeEqualFn)
+	s, info = fcTCUint32.Run()
+	require.True(t, s, info, tcUint32.info)
+
+	// Uint64 Test
+	tcUint64 := tcTemp{
+		info: "<=> uint64 test",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_uint64.ToType(), []uint64{1, 1, 1, 0, 0}, []bool{false, false, false, true, true}),
+			NewFunctionTestInput(types.T_uint64.ToType(), []uint64{1, 0, 0, 1, 0}, []bool{false, false, true, false, true}),
+		},
+		expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+			[]bool{true, false, false, false, true}, []bool{false, false, false, false, false}),
+	}
+	fcTCUint64 := NewFunctionTestCase(proc, tcUint64.inputs, tcUint64.expect, nullSafeEqualFn)
+	s, info = fcTCUint64.Run()
+	require.True(t, s, info, tcUint64.info)
+
+	// Float32 Test
+	tcFloat32 := tcTemp{
+		info: "<=> float32 test",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_float32.ToType(), []float32{1.1, 1.1, 1.1, 0.0}, []bool{false, false, false, true}),
+			NewFunctionTestInput(types.T_float32.ToType(), []float32{1.1, 0.0, 0.0, 0.0}, []bool{false, false, true, true}),
+		},
+		expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+			[]bool{true, false, false, true}, []bool{false, false, false, false}),
+	}
+	fcTCFloat32 := NewFunctionTestCase(proc, tcFloat32.inputs, tcFloat32.expect, nullSafeEqualFn)
+	s, info = fcTCFloat32.Run()
+	require.True(t, s, info, tcFloat32.info)
+
+	// Enum Test
+	tcEnum := tcTemp{
+		info: "<=> enum test",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_enum.ToType(), []types.Enum{1, 1, 1, 0, 0}, []bool{false, false, false, true, true}),
+			NewFunctionTestInput(types.T_enum.ToType(), []types.Enum{1, 0, 0, 1, 0}, []bool{false, false, true, false, true}),
+		},
+		expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+			[]bool{true, false, false, false, true}, []bool{false, false, false, false, false}),
+	}
+	fcTCEnum := NewFunctionTestCase(proc, tcEnum.inputs, tcEnum.expect, nullSafeEqualFn)
+	s, info = fcTCEnum.Run()
+	require.True(t, s, info, tcEnum.info)
+
+	// Bit Test
+	tcBit := tcTemp{
+		info: "<=> bit test",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_bit.ToType(), []uint64{1, 1, 1, 0, 0}, []bool{false, false, false, true, true}),
+			NewFunctionTestInput(types.T_bit.ToType(), []uint64{1, 0, 0, 1, 0}, []bool{false, false, true, false, true}),
+		},
+		expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+			[]bool{true, false, false, false, true}, []bool{false, false, false, false, false}),
+	}
+	fcTCBit := NewFunctionTestCase(proc, tcBit.inputs, tcBit.expect, nullSafeEqualFn)
+	s, info = fcTCBit.Run()
+	require.True(t, s, info, tcBit.info)
+
+	// Rowid Test
+	rid1 := types.Rowid([24]byte{1})
+	rid2 := types.Rowid([24]byte{2})
+	tcRowid := tcTemp{
+		info: "<=> rowid test",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_Rowid.ToType(), []types.Rowid{rid1, rid1, rid1, rid2}, []bool{false, false, false, true}),
+			NewFunctionTestInput(types.T_Rowid.ToType(), []types.Rowid{rid1, rid2, rid2, rid2}, []bool{false, false, true, true}),
+		},
+		expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+			[]bool{true, false, false, true}, []bool{false, false, false, false}),
+	}
+	fcTCRowid := NewFunctionTestCase(proc, tcRowid.inputs, tcRowid.expect, nullSafeEqualFn)
+	s, info = fcTCRowid.Run()
+	require.True(t, s, info, tcRowid.info)
+
+	// Array Float32 Test
+	arr1 := []float32{1.0, 2.0}
+	arr2 := []float32{3.0, 4.0}
+	tcArrF32 := tcTemp{
+		info: "<=> array float32 test",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{arr1, arr1, arr1, arr2}, []bool{false, false, false, true}),
+			NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{arr1, arr2, arr2, arr2}, []bool{false, false, true, true}),
+		},
+		expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+			[]bool{true, false, false, true}, []bool{false, false, false, false}),
+	}
+	fcTCArrF32 := NewFunctionTestCase(proc, tcArrF32.inputs, tcArrF32.expect, nullSafeEqualFn)
+	s, info = fcTCArrF32.Run()
+	require.True(t, s, info, tcArrF32.info)
+
+	// Array Float64 Test
+	arrD1 := []float64{1.0, 2.0}
+	arrD2 := []float64{3.0, 4.0}
+	tcArrF64 := tcTemp{
+		info: "<=> array float64 test",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_array_float64.ToType(), [][]float64{arrD1, arrD1, arrD1, arrD2}, []bool{false, false, false, true}),
+			NewFunctionTestInput(types.T_array_float64.ToType(), [][]float64{arrD1, arrD2, arrD2, arrD2}, []bool{false, false, true, true}),
+		},
+		expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+			[]bool{true, false, false, true}, []bool{false, false, false, false}),
+	}
+	fcTCArrF64 := NewFunctionTestCase(proc, tcArrF64.inputs, tcArrF64.expect, nullSafeEqualFn)
+	s, info = fcTCArrF64.Run()
+	require.True(t, s, info, tcArrF64.info)
 }
