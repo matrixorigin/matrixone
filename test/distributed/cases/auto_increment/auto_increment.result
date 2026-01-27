@@ -15,6 +15,14 @@ Select * from auto_increment01;
 col1
 1
 drop table auto_increment01;
+drop table if exists auto_increment_zero;
+create table auto_increment_zero(id int auto_increment primary key, val int);
+insert into auto_increment_zero values (0,1),(0,2);
+select * from auto_increment_zero order by id;
+id    val
+1    1
+2    2
+drop table auto_increment_zero;
 Drop table if exists auto_increment02;
 Create table auto_increment02(col1 int auto_increment unique key)auto_increment = 10;
 Insert into auto_increment02 values();
