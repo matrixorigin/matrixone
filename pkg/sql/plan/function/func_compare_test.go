@@ -443,6 +443,68 @@ func TestNullSafeEqualFn(t *testing.T) {
 	s, info = fcTCEnum.Run()
 	require.True(t, s, info, tcEnum.info)
 
+	// Datetime Test
+	dt1, _ := types.ParseDatetime("2022-01-01 12:00:00", 6)
+	dt2, _ := types.ParseDatetime("2022-01-01 13:00:00", 6)
+	tcDatetime := tcTemp{
+		info: "<=> datetime test",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{dt1, dt1, dt1, dt2}, []bool{false, false, false, true}),
+			NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{dt1, dt2, dt2, dt2}, []bool{false, false, true, true}),
+		},
+		expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+			[]bool{true, false, false, true}, []bool{false, false, false, false}),
+	}
+	fcTCDatetime := NewFunctionTestCase(proc, tcDatetime.inputs, tcDatetime.expect, nullSafeEqualFn)
+	s, info = fcTCDatetime.Run()
+	require.True(t, s, info, tcDatetime.info)
+
+	// Year Test
+	y1 := types.MoYear(2022)
+	y2 := types.MoYear(2023)
+	tcYear := tcTemp{
+		info: "<=> year test",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_year.ToType(), []types.MoYear{y1, y1, y1, y2}, []bool{false, false, false, true}),
+			NewFunctionTestInput(types.T_year.ToType(), []types.MoYear{y1, y2, y2, y2}, []bool{false, false, true, true}),
+		},
+		expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+			[]bool{true, false, false, true}, []bool{false, false, false, false}),
+	}
+	fcTCYear := NewFunctionTestCase(proc, tcYear.inputs, tcYear.expect, nullSafeEqualFn)
+	s, info = fcTCYear.Run()
+	require.True(t, s, info, tcYear.info)
+
+	// Float32 with Scale Test
+	f32Type := types.T_float32.ToType()
+	f32Type.Scale = 2
+	tcFloat32Scale := tcTemp{
+		info: "<=> float32 scale test",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(f32Type, []float32{1.111, 1.114, 1.115}, []bool{false, false, false}),
+			NewFunctionTestInput(f32Type, []float32{1.11, 1.11, 1.12}, []bool{false, false, false}),
+		},
+		expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+			[]bool{true, true, true}, []bool{false, false, false}),
+	}
+	fcTCFloat32Scale := NewFunctionTestCase(proc, tcFloat32Scale.inputs, tcFloat32Scale.expect, nullSafeEqualFn)
+	s, info = fcTCFloat32Scale.Run()
+	require.True(t, s, info, tcFloat32Scale.info)
+
+	// JSON Test
+	tcJson := tcTemp{
+		info: "<=> json test",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_json.ToType(), []string{`{"a":1}`, `{"a":1}`}, []bool{false, true}),
+			NewFunctionTestInput(types.T_json.ToType(), []string{`{"a":1}`, `{"a":1}`}, []bool{false, true}),
+		},
+		expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+			[]bool{true, true}, []bool{false, false}),
+	}
+	fcTCJson := NewFunctionTestCase(proc, tcJson.inputs, tcJson.expect, nullSafeEqualFn)
+	s, info = fcTCJson.Run()
+	require.True(t, s, info, tcJson.info)
+
 	// Bit Test
 	tcBit := tcTemp{
 		info: "<=> bit test",

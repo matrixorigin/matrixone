@@ -858,6 +858,9 @@ func newVectorByType(mp *mpool.MPool, typ types.Type, val any, nsp *nulls.Nulls)
 	case types.T_enum:
 		values := val.([]types.Enum)
 		vector.AppendFixedList(vec, values, nil, mp)
+	case types.T_year:
+		values := val.([]types.MoYear)
+		vector.AppendFixedList(vec, values, nil, mp)
 	default:
 		panic(fmt.Sprintf("function test framework do not support typ %s", typ))
 	}
