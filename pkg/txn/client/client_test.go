@@ -368,6 +368,8 @@ func TestNewWithUpdateSnapshotTimeout(t *testing.T) {
 }
 
 func TestWaitAbortMarked(t *testing.T) {
+	var fp *FootPrints
+	assert.Equal(t, "", fp.String())
 	c := make(chan struct{})
 	tc := &txnClient{}
 	tc.mu.waitMarkAllActiveAbortedC = c
