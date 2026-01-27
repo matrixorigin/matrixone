@@ -130,11 +130,6 @@ func (e *connectErr) Error() string {
 	return e.cause.Error()
 }
 
-// isTimeout returns true if the error is caused by timeout.
-func (e *connectErr) isTimeout() bool {
-	return e.timeout
-}
-
 var _ error = (*connectErr)(nil)
 
 // isRetryableErr returns true if it is connectErr.
