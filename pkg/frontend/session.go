@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"net"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -306,7 +307,11 @@ func (ses *Session) getNextProcessId() string {
 		routineId + sqlCount
 	*/
 	routineId := ses.GetResponser().GetU32(CONNID)
-	return fmt.Sprintf("%d%d", routineId, ses.GetSqlCount())
+	// Optimize: use strconv instead of fmt.Sprintf
+	var buf [24]byte
+	b := strconv.AppendUint(buf[:0], uint64(routineId), 10)
+	b = strconv.AppendUint(b, ses.GetSqlCount(), 10)
+	return string(b)
 }
 
 // SetUserDefinedVar sets the user defined variable to the value in session

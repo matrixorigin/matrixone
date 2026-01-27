@@ -308,9 +308,7 @@ func (opAlyzr *operatorAnalyzer) AddDiskIO(counter *perfcounter.CounterSet) {
 	if opAlyzr.opStats == nil {
 		panic("operatorAnalyzer.AddDiskIO: operatorAnalyzer.opStats is nil")
 	}
-
-	opAlyzr.opStats.DiskIO += counter.FileService.FileWithChecksum.Read.Load()
-	opAlyzr.opStats.DiskIO += counter.FileService.FileWithChecksum.Write.Load()
+	// DiskIO counter removed - FileWithChecksum metrics deleted
 }
 
 func (opAlyzr *operatorAnalyzer) AddReadSizeInfo(counter *perfcounter.CounterSet) {
