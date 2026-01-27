@@ -1229,6 +1229,10 @@ func ExecuteIteration(
 			if updateErr != nil {
 				// Log error but don't override the original error
 				err = moerr.NewInternalErrorf(ctx, "failed to update iteration state: %v", updateErr)
+				logutil.Error("ccpr-iteration error",
+					zap.String("task_id", iterationCtx.String()),
+					zap.Error(err),
+				)
 			}
 		}
 	}()
