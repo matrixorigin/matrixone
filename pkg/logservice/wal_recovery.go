@@ -194,14 +194,14 @@ func (s *Service) readWALDataFile(ctx context.Context, filePath string) (*WALRec
 // buildUserEntryCmd builds a LogService command for UserEntryUpdate
 // LogService command format:
 // - UpdateType: 4 bytes (big-endian uint32) = 2 (UserEntryUpdate)
-// - LeaseHolderID: 8 bytes (big-endian uint64) = 0 (no lease holder during recovery)
+// - LeaseHolderID: 8 bytes (big-endian uint64)
 // - Payload: LogEntry data
-func buildUserEntryCmd(payload []byte) []byte {
+func buildUserEntryCmd(leaseHolderID uint64, payload []byte) []byte {
 	cmd := make([]byte, headerSize+8+len(payload))
 	// UpdateType = UserEntryUpdate (2)
 	binaryEnc.PutUint32(cmd[0:4], uint32(pb.UserEntryUpdate))
-	// LeaseHolderID = 0 (no lease holder during recovery)
-	binaryEnc.PutUint64(cmd[4:12], 0)
+	// LeaseHolderID
+	binaryEnc.PutUint64(cmd[4:12], leaseHolderID)
 	// Payload
 	copy(cmd[12:], payload)
 	return cmd
@@ -259,6 +259,24 @@ func (s *Service) replayWALEntries(ctx context.Context, walData *WALRecoveryData
 	logger.Info("WAL recovery: starting entry replay loop",
 		zap.Int("total_entries", len(walData.Entries)))
 
+	// First, get the current lease holder ID from the Log shard
+	// We need to use this ID when appending entries to pass the lease check
+	appendCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	v, err := s.store.read(appendCtx, shardID, leaseHolderIDQuery{})
+	cancel()
+	
+	var leaseHolderID uint64
+	if err != nil {
+		// If we can't get the lease holder ID, try with 0 (no lease holder)
+		logger.Warn("WAL recovery: failed to get lease holder ID, using 0",
+			zap.Error(err))
+		leaseHolderID = 0
+	} else {
+		leaseHolderID = v.(uint64)
+		logger.Info("WAL recovery: got current lease holder ID",
+			zap.Uint64("lease_holder_id", leaseHolderID))
+	}
+
 	for i, entry := range walData.Entries {
 		// Log first entry for debugging
 		if i == 0 {
@@ -269,7 +287,7 @@ func (s *Service) replayWALEntries(ctx context.Context, walData *WALRecoveryData
 
 		// The RawData contains the LogEntry payload (TN WAL format)
 		// We need to wrap it in a LogService UserEntryUpdate command
-		cmd := buildUserEntryCmd(entry.RawData)
+		cmd := buildUserEntryCmd(leaseHolderID, entry.RawData)
 
 		// Create a context with deadline for each append operation
 		// dragonboat requires context to have a deadline set
