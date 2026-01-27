@@ -20,6 +20,7 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 type ObjectLocation [LocationLen]byte
@@ -225,6 +226,14 @@ func MakeBlockInfoSlice(cnt int) BlockInfoSlice {
 }
 
 func PreAllocBlockInfoSlice(preAllocBlocks int) BlockInfoSlice {
+	if preAllocBlocks < 0 {
+		logutil.Errorf("Invalid PreAllocBlockInfoSlice: preAllocBlocks=%d", preAllocBlocks)
+		preAllocBlocks = 0
+	}
+	if preAllocBlocks > 2000000 {
+		logutil.Errorf("Huge PreAllocBlockInfoSlice: preAllocBlocks=%d", preAllocBlocks)
+		preAllocBlocks = 2000000
+	}
 	return make([]byte, 0, preAllocBlocks*BlockInfoSize)
 }
 
