@@ -1308,3 +1308,10 @@ func (backSes *backSession) RemoveTempTable(dbName, alias string) {
 	}
 	backSes.upstream.RemoveTempTable(dbName, alias)
 }
+
+func (backSes *backSession) GetSqlModeNoAutoValueOnZero() (bool, bool) {
+	if backSes == nil || backSes.upstream == nil {
+		return false, false
+	}
+	return backSes.upstream.GetSqlModeNoAutoValueOnZero()
+}
