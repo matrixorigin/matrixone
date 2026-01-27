@@ -27,10 +27,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Test getMapper returns nil when PhysicalType is nil
-func TestGetMapper_NilPhysicalType(t *testing.T) {
-	// Create a mock column with nil physical type (this is hard to do with real parquet,
-	// so we test the already covered optional->notNullable case)
+// Test getMapper returns a valid mapper for optional column to NotNullable type
+// (NULL constraint is checked at runtime, not at prepare time)
+func TestGetMapper_OptionalToNotNullable(t *testing.T) {
+	// Test that optional column can map to NotNullable type
+	// The NULL constraint violation will be checked at runtime when actual NULLs are encountered
 	var buf bytes.Buffer
 	schema := parquet.NewSchema("x", parquet.Group{
 		"c": parquet.Optional(parquet.Leaf(parquet.Int32Type)),
@@ -46,9 +47,10 @@ func TestGetMapper_NilPhysicalType(t *testing.T) {
 	require.NoError(t, err)
 
 	var h ParquetHandler
-	// Test: optional column mapped to NotNullable should return nil
+	// Test: optional column mapped to NotNullable should return a valid mapper
+	// (runtime check will fail if actual NULLs are encountered)
 	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_int32), NotNullable: true})
-	require.Nil(t, mp, "optional column should not map to notNullable type")
+	require.NotNil(t, mp, "optional column should map to notNullable type (runtime NULL check)")
 }
 
 // Test type mismatch cases that return nil mapper
