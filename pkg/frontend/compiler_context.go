@@ -61,12 +61,18 @@ type TxnCompilerContext struct {
 	//for support explain analyze
 	tcw     ComputationWrapper
 	execCtx *ExecCtx
-	mu      sync.Mutex
+	// cached backExec for subscription meta queries, reused within the same transaction
+	cachedBackExec BackgroundExec
+	mu             sync.Mutex
 }
 
 func (tcc *TxnCompilerContext) Close() {
 	tcc.mu.Lock()
 	defer tcc.mu.Unlock()
+	if tcc.cachedBackExec != nil {
+		tcc.cachedBackExec.Close()
+		tcc.cachedBackExec = nil
+	}
 	tcc.execCtx = nil
 	tcc.snapshot = nil
 	tcc.views = nil
@@ -834,12 +840,38 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, snapshot *plan2.Snaps
 		statser.AddBuildPlanStatsConsumption(time.Since(start))
 	}()
 
+	tableID := uint64(obj.Obj)
+
+	// Fast path: return cached result if visited within 3 seconds AND stats is valid
+	// Stats is valid if AccurateObjectNumber > 0 (meaning we have real data)
+	if w := tcc.GetStatsCache().Get(tableID); w.Exists() {
+		if time.Now().Unix()-w.GetLastVisit() < 3 {
+			s := w.GetStats()
+			if s != nil && s.AccurateObjectNumber > 0 {
+				return s, nil
+			}
+			// Stats is nil or empty, need to re-check
+		}
+	}
+
+	// Slow path: do heavy work
+	result, err := tcc.doStatsHeavyWork(obj, snapshot, tableID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Cache the result
+	tcc.GetStatsCache().Set(tableID, result)
+
+	return result, nil
+}
+
+func (tcc *TxnCompilerContext) doStatsHeavyWork(obj *plan2.ObjectRef, snapshot *plan2.Snapshot, tableID uint64) (*pb.StatsInfo, error) {
 	dbName := obj.GetSchemaName()
 	tableName := obj.GetObjName()
-	checkSub := true
-	if obj.PubInfo != nil {
-		checkSub = false
-	}
+
+	// 1. Check database and subscription
+	checkSub := obj.PubInfo == nil
 	dbName, sub, err := tcc.ensureDatabaseIsNotEmpty(dbName, checkSub, snapshot)
 	if err != nil {
 		return nil, err
@@ -853,6 +885,8 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, snapshot *plan2.Snaps
 			DbName:    dbName,
 		}
 	}
+
+	// 2. Get table relation
 	ctx, table, err := tcc.getRelation(dbName, tableName, sub, snapshot)
 	if err != nil {
 		return nil, err
@@ -860,59 +894,18 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, snapshot *plan2.Snaps
 	if table == nil {
 		return nil, moerr.NewNoSuchTable(ctx, dbName, tableName)
 	}
-	cached, needUpdate := tcc.statsInCache(ctx, dbName, table, snapshot)
-	if cached == nil {
-		return nil, nil
-	}
-	if !needUpdate {
-		return cached, nil
-	}
 
+	// 4. Call table.Stats() to get new data
 	newCtx := perfcounter.AttachCalcTableStatsKey(ctx)
-	statsInfo, err := table.Stats(newCtx, true)
+	stats, err := table.Stats(newCtx, true)
 	if err != nil {
-		return cached, err
+		return nil, err
 	}
-
-	if statsInfo != nil {
-		tcc.UpdateStatsInCache(table.GetTableID(ctx), statsInfo)
-		return statsInfo, nil
+	if stats != nil && stats.AccurateObjectNumber > 0 {
+		return stats, nil
 	}
-	return cached, nil
-}
-
-func (tcc *TxnCompilerContext) UpdateStatsInCache(tid uint64, s *pb.StatsInfo) {
-	tcc.GetStatsCache().SetStatsInfo(tid, s)
-}
-
-// statsInCache get the *pb.StatsInfo from session cache. If the info is nil, just return nil and false,
-// else, check if the info needs to be updated.
-func (tcc *TxnCompilerContext) statsInCache(ctx context.Context, dbName string, table engine.Relation, snapshot *plan2.Snapshot) (*pb.StatsInfo, bool) {
-	statser := statistic.StatsInfoFromContext(tcc.execCtx.reqCtx)
-	start := time.Now()
-	defer func() {
-		statser.AddStatsStatsInCacheDuration(time.Since(start))
-	}()
-
-	w := tcc.GetStatsCache().GetStatsInfo(table.GetTableID(ctx), true)
-	if w == nil {
-		return nil, false
-	}
-
-	var limit int64 = 3
-	if w.Stats.AccurateObjectNumber > 0 && w.IsRecentlyVisitIn(limit) {
-		// do not call ApproxObjectsNum within a short time limit
-		return w.Stats, true
-	}
-
-	approxNumObjects := table.ApproxObjectsNum(ctx)
-	if approxNumObjects == 0 {
-		return nil, false
-	}
-	if w.Stats.NeedUpdate(int64(approxNumObjects)) {
-		return w.Stats, true
-	}
-	return w.Stats, false
+	// Return nil for empty table, calcScanStats will use DefaultStats()
+	return nil, nil
 }
 
 func (tcc *TxnCompilerContext) GetProcess() *process.Process {
@@ -980,16 +973,39 @@ func (tcc *TxnCompilerContext) GetSubscriptionMeta(dbName string, snapshot *plan
 		}
 	}
 
-	bh := tcc.execCtx.ses.GetShareTxnBackgroundExec(tempCtx, false)
-	defer bh.Close()
+	bh := tcc.getOrCreateBackExec(tempCtx)
+	bh.ClearExecResultSet()
 	return getSubscriptionMeta(tempCtx, dbName, tcc.GetSession(), txn, bh)
 }
 
 func (tcc *TxnCompilerContext) CheckSubscriptionValid(subName, accName, pubName string) error {
-	bh := tcc.execCtx.ses.GetShareTxnBackgroundExec(tcc.GetContext(), false)
-	defer bh.Close()
+	bh := tcc.getOrCreateBackExec(tcc.GetContext())
+	bh.ClearExecResultSet()
 	_, err := checkSubscriptionValidCommon(tcc.GetContext(), tcc.GetSession(), subName, accName, pubName, bh)
 	return err
+}
+
+// getOrCreateBackExec returns a cached BackgroundExec or creates a new one.
+// The cached backExec shares the same txn with the session, so snapshot updates
+// (e.g., in pessimistic transactions after lock acquisition) are automatically visible.
+// If the session's txn has changed (e.g., after commit/rollback in autocommit mode),
+// the cached backExec's txn reference is updated instead of recreating the entire object.
+func (tcc *TxnCompilerContext) getOrCreateBackExec(ctx context.Context) BackgroundExec {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
+
+	currentTxn := tcc.execCtx.ses.GetTxnHandler().GetTxn()
+
+	if tcc.cachedBackExec != nil {
+		cachedTxn := tcc.cachedBackExec.(*backExec).backSes.GetTxnHandler().GetTxn()
+		// If txn changed (e.g., after commit/rollback), update the txn reference
+		if cachedTxn != currentTxn {
+			tcc.cachedBackExec.(*backExec).UpdateTxn(currentTxn)
+		}
+	} else {
+		tcc.cachedBackExec = tcc.execCtx.ses.GetShareTxnBackgroundExec(ctx, false)
+	}
+	return tcc.cachedBackExec
 }
 
 func (tcc *TxnCompilerContext) SetQueryingSubscription(meta *plan.SubscriptionMeta) {
