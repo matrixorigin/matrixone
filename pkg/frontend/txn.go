@@ -743,6 +743,15 @@ func (th *TxnHandler) IsShareTxn() bool {
 	return th.shareTxn
 }
 
+// SetShareTxn updates the shared transaction operator.
+// This is used to reuse a TxnHandler with a new transaction without recreating the entire object.
+func (th *TxnHandler) SetShareTxn(txnOp TxnOperator) {
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	th.txnOp = txnOp
+	th.shareTxn = txnOp != nil
+}
+
 func (th *TxnHandler) SetOptionBits(bits uint32) {
 	th.mu.Lock()
 	defer th.mu.Unlock()
