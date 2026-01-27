@@ -355,4 +355,31 @@ col_ts_no_tz
 2023-01-01 12:00:00
 2024-05-20 15:30:45
 2025-12-31 23:59:59
+drop table if exists subtask_test;
+create table subtask_test (
+c_int8 TINYINT,
+c_int16 SMALLINT,
+c_binary BLOB,
+c_decimal DECIMAL(12, 4),
+c_large_str TEXT
+);
+load data infile {'filepath'='$resources/parquet/subtask_22691_test.parquet', 'format'='parquet'} into table subtask_test;
+select * from subtask_test;
+c_int8    c_int16    c_binary    c_decimal    c_large_str
+1    1000     ÿ     123.4567    hello
+-128    -32768    matrixone    -1.0000    worldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworldworld
+127    32767    parquet    999999.9999    large_string_test
+drop table if exists pq_decimal_boundary;
+create table pq_decimal_boundary (
+dec_p9_s2 DECIMAL(9, 2),
+dec_p18_s9 DECIMAL(18, 9),
+dec_p38_s0 DECIMAL(38, 0),
+dec_p38_s38 DECIMAL(38, 38)
+);
+load data infile {'filepath'='$resources/parquet/decimal_boundary_test.parquet', 'format'='parquet'} into table pq_decimal_boundary;
+select * from pq_decimal_boundary;
+dec_p9_s2    dec_p18_s9    dec_p38_s0    dec_p38_s38
+9999999.99    999999999.999999999    99999999999999999999999999999999999999    1E-38
+-9999999.99    -999999999.999999999    -99999999999999999999999999999999999999    -1E-38
+0.00    1.234567890    0    null
 drop database parq;

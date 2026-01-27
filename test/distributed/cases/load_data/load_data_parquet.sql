@@ -256,5 +256,28 @@ select * from pq_new_types;
 select length(col_binary) from pq_new_types;
 select col_ts_no_tz from pq_new_types;
 
+-- int8->int8,int16->int16,binary,decimal->decimal
+drop table if exists subtask_test;
+create table subtask_test (
+      c_int8 TINYINT,
+      c_int16 SMALLINT,
+      c_binary BLOB,
+      c_decimal DECIMAL(12, 4),
+      c_large_str TEXT
+);
+load data infile {'filepath'='$resources/parquet/subtask_22691_test.parquet', 'format'='parquet'} into table subtask_test;
+select * from subtask_test;
+
+-- decimal
+drop table if exists pq_decimal_boundary;
+create table pq_decimal_boundary (
+     dec_p9_s2 DECIMAL(9, 2),
+     dec_p18_s9 DECIMAL(18, 9),
+     dec_p38_s0 DECIMAL(38, 0),
+     dec_p38_s38 DECIMAL(38, 38)
+);
+load data infile {'filepath'='$resources/parquet/decimal_boundary_test.parquet', 'format'='parquet'} into table pq_decimal_boundary;
+select * from pq_decimal_boundary;
+
 -- post
 drop database parq;
