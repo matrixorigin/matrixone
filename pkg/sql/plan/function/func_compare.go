@@ -123,25 +123,22 @@ func opBinaryBytesBytesToFixedNullSafe(
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionStrParameter(parameters[1])
 	rs := vector.MustFunctionResult[bool](result)
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedColNoTypeCheck[bool](rsVec)
 
 	// Result of <=> is never NULL
+	rsVec.GetNulls().Reset()
 
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := p1.GetStrValue(i)
 		v2, null2 := p2.GetStrValue(i)
 
 		if null1 && null2 {
-			if err := rs.Append(true, false); err != nil {
-				return err
-			}
+			rss[i] = true
 		} else if null1 || null2 {
-			if err := rs.Append(false, false); err != nil {
-				return err
-			}
+			rss[i] = false
 		} else {
-			if err := rs.Append(cmpFn(v1, v2), false); err != nil {
-				return err
-			}
+			rss[i] = cmpFn(v1, v2)
 		}
 	}
 	return nil
