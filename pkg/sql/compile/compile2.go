@@ -206,8 +206,8 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		stats.ExecutionStart()
 	}
 
-	crs := new(perfcounter.CounterSet)
-	execTopContext = perfcounter.AttachExecPipelineKey(execTopContext, crs)
+	c.counterSet.Reset()
+	execTopContext = perfcounter.AttachExecPipelineKey(execTopContext, c.counterSet)
 	c.proc.ReplaceTopCtx(execTopContext)
 	txnTrace.GetService(c.proc.GetService()).TxnStatementStart(txnOperator, executeSQL, sequence)
 	defer func() {
