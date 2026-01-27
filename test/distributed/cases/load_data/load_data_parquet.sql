@@ -317,5 +317,18 @@ select count(*) from pq_binary_test where bin_blob is null;
 select length(bin_empty) from pq_binary_test limit 1;
 
 
+-- string to int
+drop table if exists parquet_01;
+CREATE TABLE `parquet_01` (
+      `sepal.length` double DEFAULT NULL,
+      `sepal.width` double DEFAULT NULL,
+      `petal.length` double DEFAULT NULL,
+      `petal.width` double DEFAULT NULL,
+      `variety` varchar(20) DEFAULT NULL
+);
+load data infile {'filepath'='$resources/parquet/Iris.parquet', 'format'='parquet'} into table parquet_01;
+select count(*) from parquet_01;
+
+
 -- post
 drop database parq;
