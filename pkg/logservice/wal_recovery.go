@@ -128,7 +128,6 @@ func (s *Service) RecoverWALData(ctx context.Context, cfg Config) error {
 	return nil
 }
 
-
 // readWALDataFile reads WAL entries from the binary data file
 // File format:
 // [count:4][entry1_header:40][entry1_data]...[entryN_header:40][entryN_data]
@@ -220,6 +219,8 @@ func (s *Service) replayWALEntries(ctx context.Context, walData *WALRecoveryData
 			logger.Info("WAL recovery: Log shard is ready",
 				zap.Uint64("shard_id", shardID),
 				zap.Uint64("leader_id", info.LeaderID))
+			// Wait a bit more to ensure leader election is stable
+			time.Sleep(60 * time.Second)
 			break
 		}
 
@@ -253,7 +254,7 @@ func (s *Service) replayWALEntries(ctx context.Context, walData *WALRecoveryData
 			return fmt.Errorf("failed to append WAL entry %d (DSN=%d): %w", i, entry.DSN, err)
 		}
 
-		if i%100 == 0 || i == len(walData.Entries)-1 {
+		if i%1000 == 0 || i == len(walData.Entries)-1 {
 			logger.Info("WAL recovery: progress",
 				zap.Int("current", i+1),
 				zap.Int("total", len(walData.Entries)),
