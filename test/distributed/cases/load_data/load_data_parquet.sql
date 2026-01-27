@@ -186,10 +186,25 @@ select 'no_stats' as source, count(*), MIN(id), MAX(score) from pq_stats_check;
 
 -- empty file
 -- @bvt:issue#23601
+-- parquet file column number equal to table column number, and column name is not same
 drop table if exists empty_table;
-create table empty_table(col1 int, col2 decimal);
+create table empty_table(col1 bigint, col2 varchar);
 load data infile {'filepath'='$resources/parquet/empty_test.parquet', 'format'='parquet'} into table empty_table;
 select * from empty_table;
+
+-- parquet file column number equal to table column number, and column name is the same
+drop table if exists empty_table01;
+create table empty_table01(id bigint, name varchar);
+load data infile {'filepath'='$resources/parquet/empty_test.parquet', 'format'='parquet'} into table empty_table01;
+select * from empty_table;
+-- @bvt:issue
+
+-- @bvt:issue#23601
+-- parquet file's column number is not equal to table's column number
+drop table if exists empty_table02;
+create table empty_table02(col1 int);
+load data infile {'filepath'='$resources/parquet/empty_test.parquet', 'format'='parquet'} into table empty_table02;
+select * from empty_table02;
 -- @bvt:issue
 
 

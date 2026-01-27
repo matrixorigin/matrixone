@@ -262,11 +262,27 @@ source    count(*)    MIN(id)    MAX(score)
 no_stats    5    10    95.5
 drop table if exists empty_table;
 
-create table empty_table(col1 int, col2 decimal);
+create table empty_table(col1 bigint, col2 varchar);
 
 load data infile {'filepath'='$resources/parquet/empty_test.parquet', 'format'='parquet'} into table empty_table;
 
 select * from empty_table;
+
+drop table if exists empty_table01;
+
+create table empty_table01(id bigint, name varchar);
+
+load data infile {'filepath'='$resources/parquet/empty_test.parquet', 'format'='parquet'} into table empty_table01;
+
+select * from empty_table;
+
+drop table if exists empty_table02;
+
+create table empty_table02(col1 int);
+
+load data infile {'filepath'='$resources/parquet/empty_test.parquet', 'format'='parquet'} into table empty_table02;
+
+select * from empty_table02;
 
 drop table if exists wide_100_columns;
 CREATE TABLE wide_100_columns (
