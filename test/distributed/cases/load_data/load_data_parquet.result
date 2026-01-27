@@ -5,26 +5,26 @@ create table t1(id bigint,name varchar);
 load data infile {'filepath'='$resources/load_data/simple.parq', 'format'='parquet'} into table t1;
 select * from t1;
 ➤ id[-5,64,0]  ¦  name[12,-1,0]  𝄀
-15  ¦  user15  𝄀
-16  ¦  user16  𝄀
 1  ¦  user1  𝄀
 2  ¦  user2  𝄀
+7  ¦  user7  𝄀
 8  ¦  user8  𝄀
 10  ¦  user10  𝄀
 12  ¦  user12  𝄀
-7  ¦  user7
+15  ¦  user15  𝄀
+16  ¦  user16
 create table t2(id bigint not null, name varchar not null, sex bool, f32 float(5,2));
 load data infile {'filepath'='$resources/load_data/simple2.parq', 'format'='parquet'} into table t2;
 select * from t2;
 ➤ id[-5,64,0]  ¦  name[12,-1,0]  ¦  sex[-7,1,0]  ¦  f32[7,5,2]  𝄀
-7  ¦  user7  ¦  0  ¦  7.0  𝄀
 1  ¦  user1  ¦  0  ¦  1.0  𝄀
 2  ¦  user2  ¦  0  ¦  null  𝄀
+7  ¦  user7  ¦  0  ¦  7.0  𝄀
 8  ¦  user8  ¦  1  ¦  null  𝄀
 10  ¦  user10  ¦  0  ¦  10.0  𝄀
+12  ¦  user12  ¦  0  ¦  null  𝄀
 15  ¦  user15  ¦  0  ¦  null  𝄀
-16  ¦  user16  ¦  1  ¦  null  𝄀
-12  ¦  user12  ¦  0  ¦  null
+16  ¦  user16  ¦  1  ¦  null
 create table t3(c varchar);
 load data infile {'filepath'='$resources/load_data/indexed_str.parq', 'format'='parquet'} into table t3;
 select * from t3;
@@ -47,11 +47,11 @@ create stage parqstage URL='file:///$resources/load_data/';
 load data infile {'filepath'='stage://parqstage/simple2.parq', 'format'='parquet'} into table t4;
 select * from t4;
 ➤ id[-5,64,0]  ¦  name[12,-1,0]  ¦  sex[-7,1,0]  ¦  f32[7,5,2]  𝄀
-8  ¦  user8  ¦  1  ¦  null  𝄀
-10  ¦  user10  ¦  0  ¦  10.0  𝄀
-7  ¦  user7  ¦  0  ¦  7.0  𝄀
 1  ¦  user1  ¦  0  ¦  1.0  𝄀
 2  ¦  user2  ¦  0  ¦  null  𝄀
+7  ¦  user7  ¦  0  ¦  7.0  𝄀
+8  ¦  user8  ¦  1  ¦  null  𝄀
+10  ¦  user10  ¦  0  ¦  10.0  𝄀
 12  ¦  user12  ¦  0  ¦  null  𝄀
 15  ¦  user15  ¦  0  ¦  null  𝄀
 16  ¦  user16  ¦  1  ¦  null
@@ -79,4 +79,9 @@ select * from t7;
 1  ¦  Alice  ¦  [85, 90, 78]  ¦  {"city": "Beijing", "zip": "100000"}  ¦  {"key1": "value1", "key2": "value2"}  𝄀
 2  ¦  Bob  ¦  [92, 88]  ¦  {"city": "Shanghai", "zip": "200000"}  ¦  {"a": "b"}  𝄀
 3  ¦  Charlie  ¦  [76, 85, 90, 95]  ¦  {"city": "Guangzhou", "zip": "510000"}  ¦  {"m": "n", "x": "y", "z": "w"}
+create table t8(col1 int, col2 decimal);
+load data infile {'filepath'='$resources/load_data/empty_file.parq', 'format'='parquet'} into table t8;
+select count(*) from t8;
+➤ count(*)[-5,64,0]  𝄀
+0
 drop database parq;
