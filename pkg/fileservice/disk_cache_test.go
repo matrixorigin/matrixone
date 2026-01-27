@@ -193,8 +193,6 @@ func TestDiskCacheWriteAgain(t *testing.T) {
 		},
 	}, false)
 	assert.Nil(t, err)
-	assert.Equal(t, int64(1), counterSet.FileService.Cache.Disk.WriteFile.Load())
-	assert.Equal(t, int64(0), counterSet.FileService.Cache.Disk.Evict.Load())
 
 	// update another entry
 	err = cache.Update(ctx, &IOVector{
@@ -208,8 +206,6 @@ func TestDiskCacheWriteAgain(t *testing.T) {
 		},
 	}, false)
 	assert.Nil(t, err)
-	assert.Equal(t, int64(2), counterSet.FileService.Cache.Disk.WriteFile.Load())
-	assert.Equal(t, int64(1), counterSet.FileService.Cache.Disk.Evict.Load())
 
 	// update again, should write cache file again
 	err = cache.Update(ctx, &IOVector{
@@ -222,8 +218,6 @@ func TestDiskCacheWriteAgain(t *testing.T) {
 		},
 	}, false)
 	assert.Nil(t, err)
-	assert.Equal(t, int64(3), counterSet.FileService.Cache.Disk.WriteFile.Load())
-	assert.Equal(t, int64(2), counterSet.FileService.Cache.Disk.Evict.Load())
 
 	vec := &IOVector{
 		FilePath: "foo",
@@ -323,7 +317,7 @@ func TestDiskCacheDirSize(t *testing.T) {
 		size := dirSize(dir)
 		assert.LessOrEqual(t, size, capacity)
 	}
-	assert.True(t, counter.FileService.Cache.Disk.Evict.Load() > 0)
+	// Evict counter removed
 }
 
 func dirSize(path string) (ret int) {
@@ -565,10 +559,7 @@ func BenchmarkDiskCacheMultipleIOEntries(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
-		numOpen := counter.FileService.Cache.Disk.OpenFullFile.Load()
-		if numOpen != 1 {
-			b.Fatal()
-		}
+		// OpenFullFile counter removed
 		vec.Release()
 	}
 }
