@@ -195,7 +195,7 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(
 		rowCount += int64(bat.RowCount())
 	}
 
-	bf := bloomfilter.NewCBloomFilterWithProbability(rowCount, 0.001)
+	bf := bloomfilter.NewCBloomFilterWithProbability(rowCount, 0.0001)
 	if bf == nil {
 		panic("failed to create CBloomFilter")
 	}
@@ -219,25 +219,25 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(
 		}
 	}
 
-	if nexist > 0 {
-		bf2 := bloomfilter.NewCBloomFilterWithProbability(int64(nexist), 0.001)
-		if bf2 == nil {
-			panic("failed to create CBloomFilter")
-		}
-		defer bf2.Free()
+	bf2 := bloomfilter.NewCBloomFilterWithProbability(int64(nexist), 0.0001)
+	if bf2 == nil {
+		panic("failed to create CBloomFilter")
+	}
+	defer bf2.Free()
 
+	// Add filtered key to bloomfilter
+	if nexist > 0 {
 		for i, e := range exists {
 			if e != 0 {
 				bf2.Add(keyvec.GetRawBytesAt(i))
 			}
 		}
-
-		bfbytes, err := bf2.Marshal()
-		if err != nil {
-			return err
-		}
-		sqlproc.BloomFilter = bfbytes
 	}
+	bfbytes, err := bf2.Marshal()
+	if err != nil {
+		return err
+	}
+	sqlproc.BloomFilter = bfbytes
 
 	end2 := time.Now()
 	elapsed2 := end2.Sub(start)
