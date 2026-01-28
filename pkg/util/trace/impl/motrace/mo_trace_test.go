@@ -105,6 +105,14 @@ func TestMOTracer_Start(t *testing.T) {
 			wantKind:         trace.SpanKindInternal,
 		},
 		{
+			name:             "nilCtx",
+			fields:           fields{Enable: true},
+			args:             args{ctx: nil, name: "nilCtx", opts: []trace.SpanStartOption{}},
+			wantNewRoot:      true,
+			wantTraceId:      _1TraceID,
+			wantParentSpanId: _1SpanID,
+			wantKind:         trace.SpanKindInternal,
+		}, {
 			name:             "statement",
 			fields:           fields{Enable: true},
 			args:             args{ctx: stmCtx, name: "newStmt", opts: []trace.SpanStartOption{}},

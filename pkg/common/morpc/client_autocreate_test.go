@@ -133,17 +133,19 @@ func TestCreateQueueFullFallback(t *testing.T) {
 
 	// Verify at least one backend was created (either async or sync fallback)
 	c.mu.Lock()
-	totalBackends := len(c.mu.backends["addr1"]) + len(c.mu.backends["addr2"])
+	n1 := len(c.mu.backends["addr1"])
+	n2 := len(c.mu.backends["addr2"])
+	totalBackends := n1 + n2
 	ops1 := c.mu.ops["addr1"]
 	ops2 := c.mu.ops["addr2"]
 	c.mu.Unlock()
 
 	assert.Greater(t, totalBackends, 0, "At least one backend should be created")
 	// ops should be initialized for any created backend
-	if len(c.mu.backends["addr1"]) > 0 {
+	if n1 > 0 {
 		assert.NotNil(t, ops1, "ops should be initialized for addr1")
 	}
-	if len(c.mu.backends["addr2"]) > 0 {
+	if n2 > 0 {
 		assert.NotNil(t, ops2, "ops should be initialized for addr2")
 	}
 }

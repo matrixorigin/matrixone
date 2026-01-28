@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"math/big"
 	"testing"
+	"time"
 
 	"io"
 	"iter"
@@ -799,13 +800,15 @@ func TestParquet_prepare_missingColumn(t *testing.T) {
 }
 
 func TestParquet_prepare_optionalToNotNull(t *testing.T) {
+	// Test that optional column can be prepared to map to NOT NULL column
+	// The NULL constraint violation will be checked at runtime when actual NULLs are encountered
 	var buf bytes.Buffer
 	schema := parquet.NewSchema("x", parquet.Group{
 		"c": parquet.Optional(parquet.Leaf(parquet.Int32Type)),
 	})
 	w := parquet.NewWriter(&buf, schema)
 	_, err := w.WriteRows([]parquet.Row{
-		{parquet.Int32Value(1).Level(0, 0, 0)},
+		{parquet.Int32Value(1).Level(0, 1, 0)},
 	})
 	require.NoError(t, err)
 	require.NoError(t, w.Close())
@@ -824,8 +827,9 @@ func TestParquet_prepare_optionalToNotNull(t *testing.T) {
 			},
 		},
 	}
+	// prepare should succeed - NULL constraint is checked at runtime, not prepare time
 	err = h.prepare(param)
-	require.Error(t, err)
+	require.NoError(t, err)
 }
 
 func TestParquet_ensureDictionaryIndexes_outOfRange(t *testing.T) {
@@ -1233,4 +1237,178 @@ func Test_getData_FinishAndOffset(t *testing.T) {
 	require.NoError(t, h.getData(bat2, param, proc))
 	require.Equal(t, 1, bat2.RowCount())
 	require.Nil(t, param.parqh)
+}
+
+// TestParquet_Timestamp_NotAdjustedToUTC tests loading TIMESTAMP with IsAdjustedToUTC=false.
+// When IsAdjustedToUTC=false, the parquet value represents a "local time literal" without timezone info.
+// MO should store it such that displaying with session timezone shows the original literal value.
+func TestParquet_Timestamp_NotAdjustedToUTC(t *testing.T) {
+	// Create a process with a specific timezone (+8 hours)
+	proc := testutil.NewProc(t)
+	loc := time.FixedZone("UTC+8", 8*3600)
+	proc.Base.SessionInfo.TimeZone = loc
+
+	// Test value: 2024-01-15 10:30:00 as Unix microseconds (interpreted as UTC in parquet)
+	// 2024-01-15 10:30:00 UTC = 1705314600 seconds = 1705314600000000 microseconds
+	testMicros := int64(1705314600000000)
+
+	// Test with IsAdjustedToUTC=false (using TimestampAdjusted)
+	{
+		// Create parquet file with IsAdjustedToUTC=false
+		st := parquet.TimestampAdjusted(parquet.Microsecond, false).Type()
+		page := st.NewPage(0, 1, encoding.Int64Values([]int64{testMicros}))
+
+		var buf bytes.Buffer
+		schema := parquet.NewSchema("x", parquet.Group{
+			"c": parquet.TimestampAdjusted(parquet.Microsecond, false),
+		})
+		w := parquet.NewWriter(&buf, schema)
+		vals := make([]parquet.Value, page.NumRows())
+		_, _ = page.Values().ReadValues(vals)
+		_, err := w.WriteRows([]parquet.Row{parquet.MakeRow(vals)})
+		require.NoError(t, err)
+		require.NoError(t, w.Close())
+
+		f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		require.NoError(t, err)
+
+		vec := vector.NewVec(types.New(types.T_timestamp, 0, 0))
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_timestamp)})
+		require.NotNil(t, mp, "mapper should not be nil for IsAdjustedToUTC=false")
+
+		err = mp.mapping(page, proc, vec)
+		require.NoError(t, err)
+
+		got := vector.MustFixedColWithTypeCheck[types.Timestamp](vec)
+		require.Equal(t, 1, len(got))
+
+		// The displayed value should be "2024-01-15 10:30:00" regardless of timezone
+		// String2 uses the session timezone to display
+		displayed := got[0].String2(loc, 0)
+		require.Equal(t, "2024-01-15 10:30:00", displayed,
+			"IsAdjustedToUTC=false should preserve the literal time value")
+	}
+
+	// Compare with IsAdjustedToUTC=true (default behavior)
+	{
+		st := parquet.Timestamp(parquet.Microsecond).Type()
+		page := st.NewPage(0, 1, encoding.Int64Values([]int64{testMicros}))
+
+		var buf bytes.Buffer
+		schema := parquet.NewSchema("x", parquet.Group{
+			"c": parquet.Timestamp(parquet.Microsecond),
+		})
+		w := parquet.NewWriter(&buf, schema)
+		vals := make([]parquet.Value, page.NumRows())
+		_, _ = page.Values().ReadValues(vals)
+		_, err := w.WriteRows([]parquet.Row{parquet.MakeRow(vals)})
+		require.NoError(t, err)
+		require.NoError(t, w.Close())
+
+		f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		require.NoError(t, err)
+
+		vec := vector.NewVec(types.New(types.T_timestamp, 0, 0))
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_timestamp)})
+		require.NotNil(t, mp)
+
+		err = mp.mapping(page, proc, vec)
+		require.NoError(t, err)
+
+		got := vector.MustFixedColWithTypeCheck[types.Timestamp](vec)
+		displayed := got[0].String2(loc, 0)
+		// With IsAdjustedToUTC=true, the value is UTC, so +8 timezone shows +8 hours
+		require.Equal(t, "2024-01-15 18:30:00", displayed,
+			"IsAdjustedToUTC=true should add timezone offset when displaying")
+	}
+}
+
+// TestParquet_Timestamp_NotAdjustedToUTC_AllUnits tests all time units (nanos, micros, millis)
+func TestParquet_Timestamp_NotAdjustedToUTC_AllUnits(t *testing.T) {
+	proc := testutil.NewProc(t)
+	loc := time.FixedZone("UTC+8", 8*3600)
+	proc.Base.SessionInfo.TimeZone = loc
+
+	// 2024-01-15 10:30:00 UTC = 1705314600000000 microseconds
+	testMicros := int64(1705314600000000)
+	testMillis := testMicros / 1000
+	testNanos := testMicros * 1000
+
+	tests := []struct {
+		name  string
+		unit  parquet.TimeUnit
+		value int64
+	}{
+		{"micros", parquet.Microsecond, testMicros},
+		{"millis", parquet.Millisecond, testMillis},
+		{"nanos", parquet.Nanosecond, testNanos},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			st := parquet.TimestampAdjusted(tc.unit, false).Type()
+			page := st.NewPage(0, 1, encoding.Int64Values([]int64{tc.value}))
+
+			var buf bytes.Buffer
+			schema := parquet.NewSchema("x", parquet.Group{
+				"c": parquet.TimestampAdjusted(tc.unit, false),
+			})
+			w := parquet.NewWriter(&buf, schema)
+			vals := make([]parquet.Value, page.NumRows())
+			_, _ = page.Values().ReadValues(vals)
+			_, err := w.WriteRows([]parquet.Row{parquet.MakeRow(vals)})
+			require.NoError(t, err)
+			require.NoError(t, w.Close())
+
+			f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+			require.NoError(t, err)
+
+			vec := vector.NewVec(types.New(types.T_timestamp, 0, 0))
+			var h ParquetHandler
+			mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_timestamp)})
+			require.NotNil(t, mp, "mapper should not be nil for %s", tc.name)
+
+			err = mp.mapping(page, proc, vec)
+			require.NoError(t, err)
+
+			got := vector.MustFixedColWithTypeCheck[types.Timestamp](vec)
+			displayed := got[0].String2(loc, 0)
+			require.Equal(t, "2024-01-15 10:30:00", displayed,
+				"unit %s: should preserve literal time value", tc.name)
+		})
+	}
+}
+
+// TestParquet_Timestamp_NotAdjustedToUTC_Dictionary tests dictionary-encoded timestamps
+func TestParquet_Timestamp_NotAdjustedToUTC_Dictionary(t *testing.T) {
+	proc := testutil.NewProc(t)
+	loc := time.FixedZone("UTC+8", 8*3600)
+	proc.Base.SessionInfo.TimeZone = loc
+
+	// 2024-01-15 10:30:00 UTC = 1705314600000000 microseconds
+	testMicros := int64(1705314600000000)
+
+	node := parquet.Encoded(parquet.TimestampAdjusted(parquet.Microsecond, false), &parquet.RLEDictionary)
+	vals := []parquet.Value{
+		parquet.Int64Value(testMicros),
+		parquet.Int64Value(testMicros + 1000000), // +1 second
+		parquet.Int64Value(testMicros),
+	}
+	f, page := writeDictAndGetPage(t, node, vals)
+
+	vec := vector.NewVec(types.New(types.T_timestamp, 0, 0))
+	var h ParquetHandler
+	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_timestamp)})
+	require.NotNil(t, mp)
+
+	err := mp.mapping(page, proc, vec)
+	require.NoError(t, err)
+
+	got := vector.MustFixedColWithTypeCheck[types.Timestamp](vec)
+	require.Equal(t, 3, len(got))
+	require.Equal(t, "2024-01-15 10:30:00", got[0].String2(loc, 0))
+	require.Equal(t, "2024-01-15 10:30:01", got[1].String2(loc, 0))
+	require.Equal(t, "2024-01-15 10:30:00", got[2].String2(loc, 0))
 }

@@ -835,6 +835,11 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 		return b.bindFuncExprImplByAstExpr("not", []tree.Expr{newExpr}, depth)
 
 	case tree.IN:
+		if leftTuple, ok := astExpr.Left.(*tree.Tuple); ok {
+			if rightTuple, ok := astExpr.Right.(*tree.Tuple); ok {
+				return b.bindTupleInByAst(leftTuple, rightTuple, depth, false)
+			}
+		}
 		switch r := astExpr.Right.(type) {
 		case *tree.Tuple:
 			op = "in"
@@ -879,6 +884,11 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 		}
 
 	case tree.NOT_IN:
+		if leftTuple, ok := astExpr.Left.(*tree.Tuple); ok {
+			if rightTuple, ok := astExpr.Right.(*tree.Tuple); ok {
+				return b.bindTupleInByAst(leftTuple, rightTuple, depth, true)
+			}
+		}
 		switch astExpr.Right.(type) {
 		case *tree.Tuple:
 			op = "not_in"
@@ -975,6 +985,51 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 	}
 
 	return b.bindFuncExprImplByAstExpr(op, []tree.Expr{astExpr.Left, astExpr.Right}, depth)
+}
+
+func (b *baseBinder) bindTupleInByAst(leftTuple *tree.Tuple, rightTuple *tree.Tuple, depth int32, isNot bool) (*plan.Expr, error) {
+	var newExpr *plan.Expr
+
+	for _, rightVal := range rightTuple.Exprs {
+		rightTupleVal, ok := rightVal.(*tree.Tuple)
+		if !ok {
+			return nil, moerr.NewInternalError(b.GetContext(), "IN list must contain tuples")
+		}
+		if len(leftTuple.Exprs) != len(rightTupleVal.Exprs) {
+			return nil, moerr.NewInternalError(b.GetContext(), "tuple length mismatch")
+		}
+
+		var andExpr *plan.Expr
+		for i := 0; i < len(leftTuple.Exprs); i++ {
+			eqExpr, err := b.bindFuncExprImplByAstExpr("=", []tree.Expr{leftTuple.Exprs[i], rightTupleVal.Exprs[i]}, depth)
+			if err != nil {
+				return nil, err
+			}
+			if andExpr == nil {
+				andExpr = eqExpr
+			} else {
+				andExpr, err = BindFuncExprImplByPlanExpr(b.GetContext(), "and", []*plan.Expr{andExpr, eqExpr})
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+
+		if newExpr == nil {
+			newExpr = andExpr
+		} else {
+			var err error
+			newExpr, err = BindFuncExprImplByPlanExpr(b.GetContext(), "or", []*plan.Expr{newExpr, andExpr})
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	if isNot {
+		return BindFuncExprImplByPlanExpr(b.GetContext(), "not", []*plan.Expr{newExpr})
+	}
+	return newExpr, nil
 }
 
 func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bool) (*Expr, error) {
