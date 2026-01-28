@@ -16,7 +16,6 @@ package ivfflat
 
 import (
 	"fmt"
-	"os"
 	"strconv"
 	"time"
 
@@ -185,11 +184,6 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(
 		return
 	}
 
-	end := time.Now()
-	elapsed1 := end.Sub(start)
-
-	start = time.Now()
-
 	var rowCount int64
 	for _, bat := range res.Batches {
 		rowCount += int64(bat.RowCount())
@@ -239,9 +233,9 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(
 	}
 	sqlproc.BloomFilter = bfbytes
 
-	end2 := time.Now()
-	elapsed2 := end2.Sub(start)
-	os.Stderr.WriteString(fmt.Sprintf("ivf centroids chosen size %d. keysize %d . NEXIST %d. sql time %v build time %v\n", rowCount, keyvec.Length(), nexist, elapsed1, elapsed2))
+	end := time.Now()
+	elapsed := end.Sub(start)
+	//os.Stderr.WriteString(fmt.Sprintf("IVF BloomFilter Build: #Entries for selected centers =  %d, #UniqueKey = %d, #ExistAfterFilter = %d,  Built Time = %v\n", rowCount, keyvec.Length(), nexist, elapsed))
 
 	return
 }
