@@ -1075,7 +1075,7 @@ func queryTaskSnapshots(
 	snapshotPattern := fmt.Sprintf("ccpr_%d_%%", taskID)
 	sql := fmt.Sprintf(`SELECT sname, ts FROM mo_catalog.mo_snapshots WHERE sname LIKE '%s' ORDER BY sname`, snapshotPattern)
 
-	result, err := upstreamExecutor.ExecSQL(ctx, nil, sql, false, false)
+	result, err := upstreamExecutor.ExecSQL(ctx, nil, sql, false, false, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -1167,7 +1167,7 @@ func deleteSnapshotInSeparateTxn(
 	// Each SQL operation in a separate transaction, no retry
 	// If error occurs, just log and continue
 	dropSQL := PublicationSQLBuilder.DropSnapshotIfExistsSQL(snapshotName)
-	result, err := upstreamExecutor.ExecSQL(ctx, nil, dropSQL, false, false)
+	result, err := upstreamExecutor.ExecSQL(ctx, nil, dropSQL, false, false, 0)
 	if err != nil {
 		logutil.Error("Publication-Task GC failed to delete snapshot",
 			zap.Uint64("taskID", taskID),

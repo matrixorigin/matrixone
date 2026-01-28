@@ -320,9 +320,7 @@ func (w *worker) updateIterationState(ctx context.Context, taskID uint64, iterat
 	)
 
 	systemCtx := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-	systemCtx, cancel := context.WithTimeout(systemCtx, 10*time.Second)
-	defer cancel()
-	result, err := executor.ExecSQL(systemCtx, nil, updateSQL, false, false)
+	result, err := executor.ExecSQL(systemCtx, nil, updateSQL, false, false, 0)
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to update iteration state to pending: %v", err)
 	}

@@ -2741,7 +2741,7 @@ func checkUpstreamPublicationCoverage(
 
 	// Execute SHOW PUBLICATION COVERAGE on upstream
 	coverageSQL := fmt.Sprintf("SHOW PUBLICATION COVERAGE %s", pubName)
-	result, err := upstreamExecutor.ExecSQL(ctx, nil, coverageSQL, false, false)
+	result, err := upstreamExecutor.ExecSQL(ctx, nil, coverageSQL, false, false, 0)
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to check publication coverage on upstream: %v", err)
 	}

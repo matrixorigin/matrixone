@@ -170,7 +170,8 @@ type SQLExecutor interface {
 	// ExecSQL executes a SQL statement with options
 	// useTxn: if true, execute within a transaction (must have active transaction for InternalSQLExecutor, not allowed for UpstreamExecutor)
 	// if false, execute as autocommit (will create and commit transaction automatically for InternalSQLExecutor)
-	ExecSQL(ctx context.Context, ar *ActiveRoutine, query string, useTxn bool, needRetry bool) (*Result, error)
+	// timeout: if > 0, each retry attempt will use a new context with this timeout; if 0, use the provided ctx directly
+	ExecSQL(ctx context.Context, ar *ActiveRoutine, query string, useTxn bool, needRetry bool, timeout time.Duration) (*Result, error)
 }
 
 var _ SQLExecutor = (*UpstreamExecutor)(nil)
@@ -304,7 +305,7 @@ func initAesKeyForPublication(ctx context.Context, executor SQLExecutor, cnUUID 
 	// Query the data key from mo_data_key table
 	querySQL := cdc.CDCSQLBuilder.GetDataKeySQL(uint64(catalog.System_Account), cdc.InitKeyId)
 	systemCtx := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-	result, err := executor.ExecSQL(systemCtx, nil, querySQL, false, false)
+	result, err := executor.ExecSQL(systemCtx, nil, querySQL, false, false, 0)
 	if err != nil {
 		return err
 	}
@@ -552,6 +553,7 @@ func (e *UpstreamExecutor) ExecSQL(
 	query string,
 	useTxn bool,
 	needRetry bool,
+	timeout time.Duration,
 ) (*Result, error) {
 	// UpstreamExecutor does not support explicit transactions
 	if useTxn {
@@ -562,14 +564,22 @@ func (e *UpstreamExecutor) ExecSQL(
 	}
 
 	execFunc := func() (*Result, error) {
-		if err := e.ensureConnection(ctx); err != nil {
+		// Create a new timeout context for each retry attempt
+		execCtx := ctx
+		var cancel context.CancelFunc
+		if timeout > 0 {
+			execCtx, cancel = context.WithTimeout(ctx, timeout)
+			defer cancel()
+		}
+
+		if err := e.ensureConnection(execCtx); err != nil {
 			return nil, err
 		}
 
 		// UpstreamExecutor always uses connection (autocommit), not transaction
 		var rows *sql.Rows
 		var err error
-		rows, err = e.conn.QueryContext(ctx, query)
+		rows, err = e.conn.QueryContext(execCtx, query)
 		if err != nil {
 			e.logFailedSQL(err, query)
 			return nil, err

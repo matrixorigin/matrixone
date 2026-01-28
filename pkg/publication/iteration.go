@@ -169,7 +169,7 @@ func InitializeIterationContext(
 	// mo_ccpr_log is a system table, so we must use system account context
 	systemCtx := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	querySQL := PublicationSQLBuilder.QueryMoCcprLogFullSQL(taskID)
-	result, err := localExecutor.ExecSQL(systemCtx, nil, querySQL, true, false)
+	result, err := localExecutor.ExecSQL(systemCtx, nil, querySQL, true, false, 0)
 	if err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "failed to query mo_ccpr_log: %v", err)
 	}
@@ -458,9 +458,7 @@ func UpdateIterationState(
 	// Execute update SQL using system account context
 	// mo_ccpr_log is a system table, so we must use system account
 	systemCtx := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-	ctxWithTimeout, cancel := context.WithTimeout(systemCtx, time.Minute)
-	defer cancel()
-	result, err := executor.ExecSQL(ctxWithTimeout, nil, updateSQL, useTxn, false)
+	result, err := executor.ExecSQL(systemCtx, nil, updateSQL, useTxn, false, 0)
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to execute update SQL: %v", err)
 	}
@@ -554,7 +552,7 @@ func UpdateIterationStateNoSubscriptionState(
 	// Execute update SQL using system account context
 	// mo_ccpr_log is a system table, so we must use system account
 	systemCtx := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-	result, err := executor.ExecSQL(systemCtx, nil, updateSQL, useTxn, false)
+	result, err := executor.ExecSQL(systemCtx, nil, updateSQL, useTxn, false, 0)
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to execute update SQL: %v", err)
 	}
@@ -578,9 +576,7 @@ func CheckStateBeforeUpdate(
 	// Execute SQL query using system account context
 	// mo_ccpr_log is a system table, so we must use system account
 	systemCtx := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-	ctxWithTimeout, cancel := context.WithTimeout(systemCtx, time.Minute)
-	defer cancel()
-	result, err := executor.ExecSQL(ctxWithTimeout, nil, querySQL, false, false)
+	result, err := executor.ExecSQL(systemCtx, nil, querySQL, false, false, 0)
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to execute state check query: %v", err)
 	}
@@ -637,9 +633,7 @@ func CheckIterationStatus(
 	// Execute SQL query using system account context
 	// mo_ccpr_log is a system table, so we must use system account
 	systemCtx := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-	ctxWithTimeout, cancel := context.WithTimeout(systemCtx, time.Minute)
-	defer cancel()
-	result, err := executor.ExecSQL(ctxWithTimeout, nil, querySQL, false, false)
+	result, err := executor.ExecSQL(systemCtx, nil, querySQL, false, false, 0)
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to execute query: %v", err)
 	}
@@ -751,10 +745,8 @@ func RequestUpstreamSnapshot(
 		return moerr.NewInternalErrorf(ctx, "unsupported sync_level: %s", iterationCtx.SrcInfo.SyncLevel)
 	}
 
-	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute)
-	defer cancel()
 	// Execute SQL through upstream executor (account ID is handled internally)
-	result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctxWithTimeout, nil, createSnapshotSQL, false, true)
+	result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, nil, createSnapshotSQL, false, true, time.Minute)
 	if err != nil {
 		// Check if error is due to snapshot already existing
 		errMsg := err.Error()
@@ -797,9 +789,7 @@ func RequestUpstreamSnapshot(
 
 func querySnapshotTS(ctx context.Context, upstreamExecutor SQLExecutor, snapshotName string) (types.TS, error) {
 	querySnapshotTsSQL := PublicationSQLBuilder.QuerySnapshotTsSQL(snapshotName)
-	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute)
-	defer cancel()
-	tsResult, err := upstreamExecutor.ExecSQL(ctxWithTimeout, nil, querySnapshotTsSQL, false, true)
+	tsResult, err := upstreamExecutor.ExecSQL(ctx, nil, querySnapshotTsSQL, false, true, time.Minute)
 	if err != nil {
 		return types.TS{}, moerr.NewInternalErrorf(ctx, "failed to query snapshot TS: %v", err)
 	}
@@ -886,9 +876,7 @@ func WaitForSnapshotFlushed(
 		}
 
 		// Execute check snapshot flushed SQL
-		ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute)
-		defer cancel()
-		result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctxWithTimeout, nil, checkSQL, false, true)
+		result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, nil, checkSQL, false, true, time.Minute)
 		if err != nil {
 			logutil.Warn("ccpr-iteration-wait-snapshot query failed",
 				zap.String("snapshot_name", snapshotName),
@@ -985,7 +973,7 @@ func GetObjectListFromSnapshotDiff(
 	)
 
 	// Execute SQL through upstream executor and return result directly
-	result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, nil, objectListSQL, false, true)
+	result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, nil, objectListSQL, false, true, time.Minute)
 	if err != nil {
 		logutil.Error("ccpr-iteration error",
 			zap.String("task_id", iterationCtx.String()),
@@ -1257,9 +1245,7 @@ func ExecuteIteration(
 		if err != nil && iterationCtx.CurrentSnapshotName != "" {
 			// Drop the snapshot that was created if there's an error
 			dropSnapshotSQL := PublicationSQLBuilder.DropSnapshotIfExistsSQL(iterationCtx.CurrentSnapshotName)
-			ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute)
-			defer cancel()
-			if dropResult, dropErr := iterationCtx.UpstreamExecutor.ExecSQL(ctxWithTimeout, nil, dropSnapshotSQL, false, true); dropErr != nil {
+			if dropResult, dropErr := iterationCtx.UpstreamExecutor.ExecSQL(ctx, nil, dropSnapshotSQL, false, true, time.Minute); dropErr != nil {
 				logutil.Error("ccpr-iteration error",
 					zap.String("task_id", iterationCtx.String()),
 					zap.Error(dropErr),

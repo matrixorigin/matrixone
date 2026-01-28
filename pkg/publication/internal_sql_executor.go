@@ -194,13 +194,16 @@ func (e *InternalSQLExecutor) EndTxn(ctx context.Context, commit bool) error {
 // It supports automatic retry for RC mode transaction errors (txn need retry errors)
 // If session is set and the statement is CREATE/DROP SNAPSHOT, OBJECTLIST, or GET OBJECT,
 // it will be routed through frontend layer
+// timeout parameter is ignored for InternalSQLExecutor as it uses internal retry mechanism
 func (e *InternalSQLExecutor) ExecSQL(
 	ctx context.Context,
 	ar *ActiveRoutine,
 	query string,
 	useTxn bool,
 	needRetry bool,
+	timeout time.Duration,
 ) (*Result, error) {
+	_ = timeout // InternalSQLExecutor does not use timeout, kept for interface compatibility
 	// If useTxn is true, check if transaction is available
 	if useTxn && e.txnOp == nil {
 		return nil, moerr.NewInternalError(ctx, "transaction required but no active transaction found. Call SetTxn() first")

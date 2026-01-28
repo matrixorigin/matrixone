@@ -323,7 +323,7 @@ func TestUpstreamExecutor_EnsureConnection(t *testing.T) {
 func TestUpstreamExecutor_ExecSQL_UseTxn(t *testing.T) {
 	t.Run("useTxn not supported", func(t *testing.T) {
 		e := &UpstreamExecutor{}
-		_, err := e.ExecSQL(context.Background(), nil, "SELECT 1", true, false)
+		_, err := e.ExecSQL(context.Background(), nil, "SELECT 1", true, false, 0)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "does not support transactions")
 	})
@@ -535,7 +535,7 @@ func TestOpenDbConn_Validation(t *testing.T) {
 
 // mockSQLExecutor is a mock implementation of SQLExecutor for testing
 type mockSQLExecutor struct {
-	execSQLFunc func(ctx context.Context, ar *ActiveRoutine, query string, useTxn bool, needRetry bool) (*Result, error)
+	execSQLFunc func(ctx context.Context, ar *ActiveRoutine, query string, useTxn bool, needRetry bool, timeout time.Duration) (*Result, error)
 }
 
 func (m *mockSQLExecutor) Close() error {
@@ -550,9 +550,9 @@ func (m *mockSQLExecutor) EndTxn(ctx context.Context, commit bool) error {
 	return nil
 }
 
-func (m *mockSQLExecutor) ExecSQL(ctx context.Context, ar *ActiveRoutine, query string, useTxn bool, needRetry bool) (*Result, error) {
+func (m *mockSQLExecutor) ExecSQL(ctx context.Context, ar *ActiveRoutine, query string, useTxn bool, needRetry bool, timeout time.Duration) (*Result, error) {
 	if m.execSQLFunc != nil {
-		return m.execSQLFunc(ctx, ar, query, useTxn, needRetry)
+		return m.execSQLFunc(ctx, ar, query, useTxn, needRetry, timeout)
 	}
 	return nil, nil
 }
@@ -641,7 +641,7 @@ func TestInitAesKeyForPublication(t *testing.T) {
 		cdc.AesKey = ""
 
 		mockExec := &mockSQLExecutor{
-			execSQLFunc: func(ctx context.Context, ar *ActiveRoutine, query string, useTxn bool, needRetry bool) (*Result, error) {
+			execSQLFunc: func(ctx context.Context, ar *ActiveRoutine, query string, useTxn bool, needRetry bool, timeout time.Duration) (*Result, error) {
 				return nil, moerr.NewInternalErrorNoCtx("exec error")
 			},
 		}
@@ -655,7 +655,7 @@ func TestInitAesKeyForPublication(t *testing.T) {
 		cdc.AesKey = ""
 
 		mockExec := &mockSQLExecutor{
-			execSQLFunc: func(ctx context.Context, ar *ActiveRoutine, query string, useTxn bool, needRetry bool) (*Result, error) {
+			execSQLFunc: func(ctx context.Context, ar *ActiveRoutine, query string, useTxn bool, needRetry bool, timeout time.Duration) (*Result, error) {
 				// Return empty result (no rows)
 				return mockResultForTest([][]interface{}{}), nil
 			},
@@ -670,7 +670,7 @@ func TestInitAesKeyForPublication(t *testing.T) {
 		cdc.AesKey = ""
 
 		mockExec := &mockSQLExecutor{
-			execSQLFunc: func(ctx context.Context, ar *ActiveRoutine, query string, useTxn bool, needRetry bool) (*Result, error) {
+			execSQLFunc: func(ctx context.Context, ar *ActiveRoutine, query string, useTxn bool, needRetry bool, timeout time.Duration) (*Result, error) {
 				// Return result with wrong type that will cause scan error
 				return mockResultForTest([][]interface{}{
 					{123}, // int instead of string
@@ -687,7 +687,7 @@ func TestInitAesKeyForPublication(t *testing.T) {
 		SetGetParameterUnitWrapper(nil)
 
 		mockExec := &mockSQLExecutor{
-			execSQLFunc: func(ctx context.Context, ar *ActiveRoutine, query string, useTxn bool, needRetry bool) (*Result, error) {
+			execSQLFunc: func(ctx context.Context, ar *ActiveRoutine, query string, useTxn bool, needRetry bool, timeout time.Duration) (*Result, error) {
 				return mockResultForTest([][]interface{}{
 					{"encrypted-key-data"},
 				}), nil
@@ -706,7 +706,7 @@ func TestInitAesKeyForPublication(t *testing.T) {
 		})
 
 		mockExec := &mockSQLExecutor{
-			execSQLFunc: func(ctx context.Context, ar *ActiveRoutine, query string, useTxn bool, needRetry bool) (*Result, error) {
+			execSQLFunc: func(ctx context.Context, ar *ActiveRoutine, query string, useTxn bool, needRetry bool, timeout time.Duration) (*Result, error) {
 				return mockResultForTest([][]interface{}{
 					{"encrypted-key-data"},
 				}), nil
@@ -727,7 +727,7 @@ func TestInitAesKeyForPublication(t *testing.T) {
 		})
 
 		mockExec := &mockSQLExecutor{
-			execSQLFunc: func(ctx context.Context, ar *ActiveRoutine, query string, useTxn bool, needRetry bool) (*Result, error) {
+			execSQLFunc: func(ctx context.Context, ar *ActiveRoutine, query string, useTxn bool, needRetry bool, timeout time.Duration) (*Result, error) {
 				return mockResultForTest([][]interface{}{
 					{"encrypted-key-data"},
 				}), nil
@@ -754,7 +754,7 @@ func TestInitAesKeyForPublication(t *testing.T) {
 		defer stub.Reset()
 
 		mockExec := &mockSQLExecutor{
-			execSQLFunc: func(ctx context.Context, ar *ActiveRoutine, query string, useTxn bool, needRetry bool) (*Result, error) {
+			execSQLFunc: func(ctx context.Context, ar *ActiveRoutine, query string, useTxn bool, needRetry bool, timeout time.Duration) (*Result, error) {
 				return mockResultForTest([][]interface{}{
 					{fakeEncryptedKey},
 				}), nil
@@ -797,7 +797,7 @@ func TestInitAesKeyForPublication(t *testing.T) {
 		})
 
 		mockExec := &mockSQLExecutor{
-			execSQLFunc: func(ctx context.Context, ar *ActiveRoutine, query string, useTxn bool, needRetry bool) (*Result, error) {
+			execSQLFunc: func(ctx context.Context, ar *ActiveRoutine, query string, useTxn bool, needRetry bool, timeout time.Duration) (*Result, error) {
 				return mockResultForTest([][]interface{}{
 					{fakeEncryptedKey},
 				}), nil
@@ -831,7 +831,7 @@ func TestInitAesKeyForPublication(t *testing.T) {
 		})
 
 		mockExec := &mockSQLExecutor{
-			execSQLFunc: func(ctx context.Context, ar *ActiveRoutine, query string, useTxn bool, needRetry bool) (*Result, error) {
+			execSQLFunc: func(ctx context.Context, ar *ActiveRoutine, query string, useTxn bool, needRetry bool, timeout time.Duration) (*Result, error) {
 				return mockResultForTest([][]interface{}{
 					{fakeEncryptedKey},
 				}), nil
