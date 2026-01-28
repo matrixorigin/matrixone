@@ -194,7 +194,9 @@ func (e *InternalSQLExecutor) EndTxn(ctx context.Context, commit bool) error {
 // It supports automatic retry for RC mode transaction errors (txn need retry errors)
 // If session is set and the statement is CREATE/DROP SNAPSHOT, OBJECTLIST, or GET OBJECT,
 // it will be routed through frontend layer
-// timeout parameter is ignored for InternalSQLExecutor as it uses internal retry mechanism
+// timeout: if > 0, each retry attempt will use a new context with this timeout; if 0, use the provided ctx directly
+// Returns: result, cancel function (empty func if no timeout context was created), error
+// IMPORTANT: caller MUST call the cancel function after finishing with the result
 func (e *InternalSQLExecutor) ExecSQL(
 	ctx context.Context,
 	ar *ActiveRoutine,
@@ -202,47 +204,46 @@ func (e *InternalSQLExecutor) ExecSQL(
 	useTxn bool,
 	needRetry bool,
 	timeout time.Duration,
-) (*Result, error) {
-	_ = timeout // InternalSQLExecutor does not use timeout, kept for interface compatibility
+) (*Result, context.CancelFunc, error) {
 	// If useTxn is true, check if transaction is available
 	if useTxn && e.txnOp == nil {
-		return nil, moerr.NewInternalError(ctx, "transaction required but no active transaction found. Call SetTxn() first")
+		return nil, nil, moerr.NewInternalError(ctx, "transaction required but no active transaction found. Call SetTxn() first")
 	}
 	// Check for cancellation
 	if ar != nil {
 		select {
 		case <-ar.Pause:
-			return nil, moerr.NewInternalError(ctx, "task paused")
+			return nil, nil, moerr.NewInternalError(ctx, "task paused")
 		case <-ar.Cancel:
-			return nil, moerr.NewInternalError(ctx, "task cancelled")
+			return nil, nil, moerr.NewInternalError(ctx, "task cancelled")
 		default:
 		}
 	}
 
-	// Create context with account ID if specified
-	execCtx := ctx
+	// Create base context with account ID if specified
+	baseCtx := ctx
 	if e.useAccountID {
-		execCtx = context.WithValue(ctx, defines.TenantIDKey{}, e.accountID)
+		baseCtx = context.WithValue(ctx, defines.TenantIDKey{}, e.accountID)
 	}
 
 	// Handle snapshot clause in query before processing
 	// Extract snapshot, update transaction, and remove snapshot clause from query
-	query, txnOp, hasSnapshot, err := e.handleSnapshotInQuery(execCtx, query)
+	query, txnOp, hasSnapshot, err := e.handleSnapshotInQuery(baseCtx, query)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if hasSnapshot && useTxn {
-		return nil, moerr.NewInternalError(ctx, "snapshot clause is not supported in transaction")
+		return nil, nil, moerr.NewInternalError(ctx, "snapshot clause is not supported in transaction")
 	}
 
 	// Check if upstreamSQLHelper can handle this SQL
 	if e.upstreamSQLHelper != nil {
-		handled, result, err := e.upstreamSQLHelper.HandleSpecialSQL(execCtx, query)
+		handled, result, err := e.upstreamSQLHelper.HandleSpecialSQL(baseCtx, query)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if handled {
-			return result, nil
+			return result, func() {}, nil
 		}
 	}
 	// For other statements, use internal executor with retry logic
@@ -265,6 +266,7 @@ func (e *InternalSQLExecutor) ExecSQL(
 	var execResult executor.Result
 	var lastErr error
 	var attemptCount int
+	var lastCancel context.CancelFunc
 
 	// Create a custom backoff that handles defChanged special case
 	backoff := &defChangedBackoff{
@@ -281,6 +283,18 @@ func (e *InternalSQLExecutor) ExecSQL(
 
 	err = policy.Do(ctx, func() error {
 		attemptCount++
+
+		// Cancel previous attempt's context if exists
+		if lastCancel != nil {
+			lastCancel()
+			lastCancel = nil
+		}
+
+		// Create timeout context for this attempt if timeout > 0
+		execCtx := baseCtx
+		if timeout > 0 {
+			execCtx, lastCancel = context.WithTimeout(baseCtx, timeout)
+		}
 
 		// Check for cancellation before each attempt
 		if ar != nil {
@@ -328,7 +342,16 @@ func (e *InternalSQLExecutor) ExecSQL(
 	})
 
 	if err == nil {
-		return convertExecutorResult(execResult), nil
+		// Return empty cancel func if no timeout was used
+		if lastCancel == nil {
+			lastCancel = func() {}
+		}
+		return convertExecutorResult(execResult), lastCancel, nil
+	}
+
+	// On error, cancel the last context if exists
+	if lastCancel != nil {
+		lastCancel()
 	}
 
 	logutil.Error("internal sql executor max retries exceeded",
@@ -337,7 +360,7 @@ func (e *InternalSQLExecutor) ExecSQL(
 		zap.Error(lastErr),
 	)
 
-	return nil, err
+	return nil, nil, err
 }
 
 // truncateSQL truncates SQL string for logging

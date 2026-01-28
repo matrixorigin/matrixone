@@ -90,10 +90,11 @@ func GetUpstreamDDLUsingGetDdl(
 	querySQL := PublicationSQLBuilder.GetDdlSQL(dbName, tableName, snapshotName)
 
 	// Execute GETDDL SQL
-	result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, nil, querySQL, false, true, time.Minute)
+	result, cancel, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, nil, querySQL, false, true, time.Minute)
 	if err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "failed to execute GETDDL: %v", err)
 	}
+	defer cancel()
 	defer result.Close()
 
 	// Parse results into map: map[dbname][table name] *TableDDLInfo
@@ -192,10 +193,11 @@ func getDatabaseDiff(
 		// Query upstream to check if database exists
 		snapshotName := iterationCtx.CurrentSnapshotName
 		querySQL := PublicationSQLBuilder.QueryMoDatabasesSQL(0, iterationCtx.SrcInfo.DBName, snapshotName)
-		result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, nil, querySQL, false, true, time.Minute)
+		result, cancel, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, nil, querySQL, false, true, time.Minute)
 		if err != nil {
 			return nil, nil, moerr.NewInternalErrorf(ctx, "failed to query upstream database: %v", err)
 		}
+		defer cancel()
 		defer result.Close()
 
 		// Check if database exists upstream
@@ -229,10 +231,11 @@ func getDatabaseDiff(
 		// Query upstream databases for the account
 		snapshotName := iterationCtx.CurrentSnapshotName
 		querySQL := PublicationSQLBuilder.QueryMoDatabasesSQL(0, "", snapshotName)
-		result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, nil, querySQL, false, true, time.Minute)
+		result,cancel, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, nil, querySQL, false, true, time.Minute)
 		if err != nil {
 			return nil, nil, moerr.NewInternalErrorf(ctx, "failed to query upstream databases: %v", err)
 		}
+		defer cancel()
 		defer result.Close()
 
 		// Collect upstream database names
@@ -685,25 +688,26 @@ func createTable(
 
 	// Create database if not exists
 	createDBSQL := fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s`", escapeSQLIdentifierForDDL(dbName))
-	result, err := executor.ExecSQL(ctx, nil, createDBSQL, true, false, 0)
+	result,cancel, err := executor.ExecSQL(ctx, nil, createDBSQL, true, false, time.Minute)
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to create database %s: %v", dbName, err)
 	}
 	if result != nil {
 		result.Close()
 	}
+	cancel()
 
 	// Create table
 	// Note: The "from_publication" property is already added in GetUpstreamDDLUsingGetDdl
 	// when processing the CREATE SQL from upstream
-	result, err = executor.ExecSQL(ctx, nil, createSQL, true, false, 0)
+	result,cancel, err = executor.ExecSQL(ctx, nil, createSQL, true, false, time.Minute)
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to create table %s.%s: %v", dbName, tableName, err)
 	}
 	if result != nil {
 		result.Close()
 	}
-
+	cancel()
 	// Process index table mappings after table creation
 	if err := processIndexTableMappings(ctx, iterationCtx, cnEngine, dbName, tableName, ddlInfo.TableID); err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to process index table mappings: %v", err)
@@ -913,10 +917,11 @@ func queryUpstreamIndexInfo(
 	querySQL := PublicationSQLBuilder.QueryMoIndexesSQL(0, tableID, "", "")
 
 	// Execute query
-	result, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, nil, querySQL, false, true, time.Minute)
+	result,cancel, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, nil, querySQL, false, true, time.Minute)
 	if err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "failed to execute query upstream index info: %v", err)
 	}
+	defer cancel()
 	defer result.Close()
 
 	// Parse results

@@ -91,15 +91,15 @@ func (j *GetMetaJob) Execute() {
 	res := &GetMetaJobResult{}
 	getChunk0SQL := PublicationSQLBuilder.GetObjectSQL(j.objectName, 0)
 
-	result, err := j.upstreamExecutor.ExecSQL(j.ctx, nil, getChunk0SQL, false, true, time.Minute)
+	result,cancel, err := j.upstreamExecutor.ExecSQL(j.ctx, nil, getChunk0SQL, false, true, time.Minute)
 	if err != nil {
 		res.Err = moerr.NewInternalErrorf(j.ctx, "failed to execute GETOBJECT query for offset 0: %v", err)
 		j.result <- res
 		return
 	}
-
 	if !result.Next() {
 		result.Close()
+		cancel()
 		res.Err = moerr.NewInternalErrorf(j.ctx, "no object content returned for %s", j.objectName)
 		j.result <- res
 		return
@@ -107,11 +107,13 @@ func (j *GetMetaJob) Execute() {
 
 	if err := result.Scan(&res.MetadataData, &res.TotalSize, &res.ChunkIndex, &res.TotalChunks, &res.IsComplete); err != nil {
 		result.Close()
+		cancel()
 		res.Err = moerr.NewInternalErrorf(j.ctx, "failed to scan offset 0: %v", err)
 		j.result <- res
 		return
 	}
 	result.Close()
+	cancel()
 
 	if res.TotalChunks <= 0 {
 		res.Err = moerr.NewInternalErrorf(j.ctx, "invalid total_chunks: %d", res.TotalChunks)
@@ -163,13 +165,12 @@ func NewGetChunkJob(ctx context.Context, upstreamExecutor SQLExecutor, objectNam
 func (j *GetChunkJob) Execute() {
 	res := &GetChunkJobResult{ChunkIndex: j.chunkIndex}
 	getChunkSQL := PublicationSQLBuilder.GetObjectSQL(j.objectName, j.chunkIndex)
-	result, err := j.upstreamExecutor.ExecSQL(j.ctx, nil, getChunkSQL, false, true, time.Minute)
+	result,cancel, err := j.upstreamExecutor.ExecSQL(j.ctx, nil, getChunkSQL, false, true, time.Minute)
 	if err != nil {
 		res.Err = moerr.NewInternalErrorf(j.ctx, "failed to execute GETOBJECT query for offset %d: %v", j.chunkIndex, err)
 		j.result <- res
 		return
 	}
-
 	if result.Next() {
 		var chunkData []byte
 		var totalSizeChk int64
@@ -185,11 +186,13 @@ func (j *GetChunkJob) Execute() {
 		res.ChunkData = chunkData
 	} else {
 		result.Close()
+		cancel()
 		res.Err = moerr.NewInternalErrorf(j.ctx, "no chunk content returned for chunk %d of %s", j.chunkIndex, j.objectName)
 		j.result <- res
 		return
 	}
 	result.Close()
+	cancel()
 
 	j.result <- res
 }
@@ -1199,11 +1202,12 @@ func GetObjectListMap(ctx context.Context, iterationCtx *IterationContext, cnEng
 
 	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	objectListResult, err := GetObjectListFromSnapshotDiff(ctxWithTimeout, iterationCtx)
+	objectListResult,cancel, err := GetObjectListFromSnapshotDiff(ctxWithTimeout, iterationCtx)
 	if err != nil {
 		err = moerr.NewInternalErrorf(ctx, "failed to get object list from snapshot diff: %v", err)
 		return nil, err
 	}
+	defer cancel()
 	defer func() {
 		if objectListResult != nil {
 			objectListResult.Close()

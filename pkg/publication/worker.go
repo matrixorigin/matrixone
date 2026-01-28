@@ -32,7 +32,7 @@ import (
 
 const (
 	PublicationWorkerThread  = 10
-	FilterObjectWorkerThread = 100
+	FilterObjectWorkerThread = 1000
 	GetChunkWorkerThread     = 1000
 
 	SubmitRetryTimes    = 1000
@@ -320,13 +320,14 @@ func (w *worker) updateIterationState(ctx context.Context, taskID uint64, iterat
 	)
 
 	systemCtx := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-	result, err := executor.ExecSQL(systemCtx, nil, updateSQL, false, false, 0)
+	result, cancel, err := executor.ExecSQL(systemCtx, nil, updateSQL, false, false, time.Minute)
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to update iteration state to pending: %v", err)
 	}
 	if result != nil {
 		defer result.Close()
 	}
+	cancel()
 
 	return nil
 }

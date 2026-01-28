@@ -171,7 +171,9 @@ type SQLExecutor interface {
 	// useTxn: if true, execute within a transaction (must have active transaction for InternalSQLExecutor, not allowed for UpstreamExecutor)
 	// if false, execute as autocommit (will create and commit transaction automatically for InternalSQLExecutor)
 	// timeout: if > 0, each retry attempt will use a new context with this timeout; if 0, use the provided ctx directly
-	ExecSQL(ctx context.Context, ar *ActiveRoutine, query string, useTxn bool, needRetry bool, timeout time.Duration) (*Result, error)
+	// Returns: result, cancel function (may be nil if no timeout context was created), error
+	// IMPORTANT: caller MUST call the cancel function after finishing with the result (if cancel is not nil)
+	ExecSQL(ctx context.Context, ar *ActiveRoutine, query string, useTxn bool, needRetry bool, timeout time.Duration) (*Result, context.CancelFunc, error)
 }
 
 var _ SQLExecutor = (*UpstreamExecutor)(nil)
@@ -305,11 +307,16 @@ func initAesKeyForPublication(ctx context.Context, executor SQLExecutor, cnUUID 
 	// Query the data key from mo_data_key table
 	querySQL := cdc.CDCSQLBuilder.GetDataKeySQL(uint64(catalog.System_Account), cdc.InitKeyId)
 	systemCtx := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-	result, err := executor.ExecSQL(systemCtx, nil, querySQL, false, false, 0)
+	result, cancel, err := executor.ExecSQL(systemCtx, nil, querySQL, false, false, time.Minute)
 	if err != nil {
 		return err
 	}
-	defer result.Close()
+	defer func() {
+		result.Close()
+		if cancel != nil {
+			cancel()
+		}
+	}()
 
 	var encryptedKey string
 	if result.Next() {
@@ -547,6 +554,9 @@ func (e *UpstreamExecutor) EndTxn(ctx context.Context, commit bool) error {
 // ExecSQL executes a SQL statement with options
 // useTxn: must be false for UpstreamExecutor (transaction not supported, will error if true)
 // UpstreamExecutor always uses connection-level autocommit (no explicit transactions)
+// timeout: if > 0, each retry attempt will use a new context with this timeout; if 0, use the provided ctx directly
+// Returns: result, cancel function (empty func if no timeout context was created), error
+// IMPORTANT: caller MUST call the cancel function after finishing with the result
 func (e *UpstreamExecutor) ExecSQL(
 	ctx context.Context,
 	ar *ActiveRoutine,
@@ -554,24 +564,16 @@ func (e *UpstreamExecutor) ExecSQL(
 	useTxn bool,
 	needRetry bool,
 	timeout time.Duration,
-) (*Result, error) {
+) (*Result, context.CancelFunc, error) {
 	// UpstreamExecutor does not support explicit transactions
 	if useTxn {
-		return nil, moerr.NewInternalError(ctx, "UpstreamExecutor does not support transactions. Use useTxn=false")
+		return nil, nil, moerr.NewInternalError(ctx, "UpstreamExecutor does not support transactions. Use useTxn=false")
 	}
 	if err := e.ensureConnection(ctx); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	execFunc := func() (*Result, error) {
-		// Create a new timeout context for each retry attempt
-		execCtx := ctx
-		var cancel context.CancelFunc
-		if timeout > 0 {
-			execCtx, cancel = context.WithTimeout(ctx, timeout)
-			defer cancel()
-		}
-
+	execFunc := func(execCtx context.Context) (*Result, error) {
 		if err := e.ensureConnection(execCtx); err != nil {
 			return nil, err
 		}
@@ -593,19 +595,45 @@ func (e *UpstreamExecutor) ExecSQL(
 		return &Result{rows: rows}, nil
 	}
 
+	var result *Result
+	var err error
+	var lastCancel context.CancelFunc
 	if !needRetry {
-		return execFunc()
+		// Create timeout context for single attempt
+		execCtx := ctx
+		if timeout > 0 {
+			execCtx, lastCancel = context.WithTimeout(ctx, timeout)
+		}
+		result, err = execFunc(execCtx)
+	} else {
+		result, lastCancel, err = e.execWithRetry(ctx, ar, timeout, execFunc)
 	}
 
-	return e.execWithRetry(ctx, ar, execFunc)
+	// If error occurred, cancel the context immediately
+	if err != nil {
+		if lastCancel != nil {
+			lastCancel()
+		}
+		return nil, nil, err
+	}
+
+	// Return empty cancel func if no timeout was used
+	if lastCancel == nil {
+		lastCancel = func() {}
+	}
+
+	return result, lastCancel, nil
 }
 
 // execWithRetry executes a function with retry logic
+// timeout: if > 0, each retry attempt will use a new context with this timeout
+// Returns: result, cancel function (may be nil if no timeout), error
 func (e *UpstreamExecutor) execWithRetry(
 	ctx context.Context,
 	ar *ActiveRoutine,
-	fn func() (*Result, error),
-) (*Result, error) {
+	timeout time.Duration,
+	fn func(ctx context.Context) (*Result, error),
+) (*Result, context.CancelFunc, error) {
 
 	policy := e.retryPolicy
 	policy.MaxAttempts = e.calculateMaxAttempts()
@@ -618,9 +646,22 @@ func (e *UpstreamExecutor) execWithRetry(
 	attempt := 0
 	var lastErr error
 	var lastResult *Result
+	var lastCancel context.CancelFunc
 
 	err := policy.Do(ctx, func() error {
 		attempt++
+
+		// Cancel previous attempt's context if exists
+		if lastCancel != nil {
+			lastCancel()
+			lastCancel = nil
+		}
+
+		// Create timeout context for this attempt if timeout > 0
+		execCtx := ctx
+		if timeout > 0 {
+			execCtx, lastCancel = context.WithTimeout(ctx, timeout)
+		}
 
 		select {
 		case <-ctx.Done():
@@ -643,7 +684,7 @@ func (e *UpstreamExecutor) execWithRetry(
 		}
 
 		begin := time.Now()
-		result, err := fn()
+		result, err := fn(execCtx)
 		_ = begin // TODO: add metrics if needed
 		if err == nil {
 			lastErr = nil
@@ -671,7 +712,12 @@ func (e *UpstreamExecutor) execWithRetry(
 				zap.Error(lastErr),
 			)
 		}
-		return lastResult, nil
+		return lastResult, lastCancel, nil
+	}
+
+	// On error, cancel the last context if exists
+	if lastCancel != nil {
+		lastCancel()
 	}
 
 	if errors.Is(err, ErrNonRetryable) {
@@ -681,14 +727,14 @@ func (e *UpstreamExecutor) execWithRetry(
 			zap.Duration("total-duration", time.Since(start)),
 			zap.Error(lastErr),
 		)
-		return nil, moerr.NewInternalError(ctx, "retry limit exceeded")
+		return nil, nil, moerr.NewInternalError(ctx, "retry limit exceeded")
 	}
 
 	if lastErr != nil {
-		return nil, lastErr
+		return nil, nil, lastErr
 	}
 
-	return nil, err
+	return nil, nil, err
 }
 
 func (e *UpstreamExecutor) initRetryPolicy(classifier ErrorClassifier) {
