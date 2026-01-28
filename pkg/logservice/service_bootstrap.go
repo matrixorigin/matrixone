@@ -35,6 +35,13 @@ func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 	if !bootstrapping {
 		return nil
 	}
+
+	// Debug: Log the restore config to verify it's being read correctly
+	s.runtime.SubLogger(runtime.SystemInit).Info("BootstrapHAKeeper: restore config",
+		zap.String("file_path", cfg.BootstrapConfig.Restore.FilePath),
+		zap.String("wal_data_path", cfg.BootstrapConfig.Restore.WALDataPath),
+		zap.Bool("force", cfg.BootstrapConfig.Restore.Force))
+
 	members, err := cfg.GetInitHAKeeperMembers()
 	if err != nil {
 		return err

@@ -245,7 +245,9 @@ func waitHAKeeperReady(
 }
 
 func waitHAKeeperRunning(client logservice.CNHAKeeperClient) error {
-	ctx, cancel := context.WithTimeoutCause(context.TODO(), time.Minute*2, moerr.CauseWaitHAKeeperRunning)
+	// Use a longer timeout (30 minutes) to allow for WAL recovery during disaster recovery.
+	// WAL recovery can take a long time depending on the number of entries to replay.
+	ctx, cancel := context.WithTimeoutCause(context.TODO(), time.Minute*30, moerr.CauseWaitHAKeeperRunning)
 	defer cancel()
 
 	// wait HAKeeper running
