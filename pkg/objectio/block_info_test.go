@@ -304,3 +304,10 @@ func TestMarshalAndUnMarshal(t *testing.T) {
 
 	require.Equal(t, b, b2)
 }
+
+func TestPreAllocBlockInfoSlice(t *testing.T) {
+	b := PreAllocBlockInfoSlice(-1)
+	require.Equal(t, cap(b), 0)
+	b = PreAllocBlockInfoSlice(1000000000)
+	require.Equal(t, cap(b), 2000000*BlockInfoSize)
+}
