@@ -18,6 +18,7 @@
 #include "bitmap.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <math.h>
 
 #define XXH_INLINE_ALL
 #include "xxhash.h"
@@ -70,7 +71,7 @@ static inline bloom_hash_t bloom_calculate_hash(const void *key, size_t len, uin
  * Uses the double hashing technique: (h1 + i * h2) % nbits.
  */
 static inline uint64_t bloom_calculate_pos(bloom_hash_t h, int i, uint64_t nbits) {
-    return (h.h1 + (uint64_t)i * h.h2) % nbits;
+    return (h.h1 + (uint64_t)i * h.h2) & (nbits-1);
 }
 
 /*
@@ -81,26 +82,23 @@ static void bloomfilter_setup(bloomfilter_t *bf, uint64_t nbits, uint32_t k) {
     memcpy(bf->magic, BLOOM_MAGIC, 4);
     bf->nbits = nbits;
     bf->k = k;
-    for (int i = 0; i < k; i++) {
-        bf->seeds[i] = 0;
-        for (int j = 0; j < 4; j++) {
-            bf->seeds[i] = (bf->seeds[i] << 16) | (rand() & 0xFFFF);
-        }
+    bf->seed = 0;
+    for (int j = 0; j < 4; j++) {
+        bf->seed = (bf->seed << 16) | (rand() & 0xFFFF);
     }
 }
 
 bloomfilter_t* bloomfilter_init(uint64_t nbits, uint32_t k) {
-    uint64_t nbytes = bitmap_nbyte(nbits);
+    uint64_t new_nbits = pow(2, floor(log2(nbits) + 0.5));
+    uint64_t nbytes = bitmap_nbyte(new_nbits);
 
-    if (k > MAX_K_SEED) {
-        return NULL;
-    }
+    if (k > MAX_K_SEED) return NULL;
 
     bloomfilter_t *bf = (bloomfilter_t *)malloc(sizeof(bloomfilter_t) + nbytes);
     if (!bf) return NULL;
 
     memset(bf->bitmap, 0, nbytes);
-    bloomfilter_setup(bf, nbits, k);
+    bloomfilter_setup(bf, new_nbits, k);
     return bf;
 }
 
@@ -116,8 +114,8 @@ void bloomfilter_add(const bloomfilter_t *bf, const void *key, size_t len) {
     uint64_t stack_pos[MAX_K_SEED];
     uint64_t *pos = stack_pos;
 
+    bloom_hash_t h = bloom_calculate_hash(key, len, bf->seed);
     for (int i = 0; i < bf->k; i++) {
-        bloom_hash_t h = bloom_calculate_hash(key, len, bf->seeds[i]);
         pos[i] = bloom_calculate_pos(h, i, bf->nbits);
         bitmap_set((uint64_t *) bf->bitmap, pos[i]);
     }
@@ -156,8 +154,8 @@ bool bloomfilter_test(const bloomfilter_t *bf, const void *key, size_t len) {
     uint64_t stack_pos[MAX_K_SEED];
     uint64_t *pos = stack_pos;
 
+    bloom_hash_t h = bloom_calculate_hash(key, len, bf->seed);
     for (int i = 0; i < bf->k; i++) {
-        bloom_hash_t h = bloom_calculate_hash(key, len, bf->seeds[i]);
         pos[i] = bloom_calculate_pos(h, i, bf->nbits);
     }
 
@@ -220,8 +218,8 @@ bool bloomfilter_test_and_add(const bloomfilter_t *bf, const void *key, size_t l
     uint64_t stack_pos[MAX_K_SEED];
     uint64_t *pos = stack_pos;
 
+    bloom_hash_t h = bloom_calculate_hash(key, len, bf->seed);
     for (int i = 0; i < bf->k; i++) {
-        bloom_hash_t h = bloom_calculate_hash(key, len, bf->seeds[i]);
         pos[i] = bloom_calculate_pos(h, i, bf->nbits);
     }
 

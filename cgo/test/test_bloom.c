@@ -61,7 +61,7 @@ void test_marshal_unmarshal() {
 
     size_t buf_size = 0;
     uint8_t *data = bloomfilter_marshal(bf, &buf_size);
-    CHECK(data != NULL && buf_size == (sizeof(bloomfilter_t) + bitmap_nbyte(nbits)), "Marshal failed");
+    CHECK(data != NULL && buf_size == (sizeof(bloomfilter_t) + bitmap_nbyte(bf->nbits)), "Marshal failed");
 
     uint8_t *buf_copy = (uint8_t *)malloc(buf_size);
     memcpy(buf_copy, data, buf_size);
