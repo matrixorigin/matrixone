@@ -22,7 +22,7 @@
 #include <stdbool.h>
 
 #define BLOOM_MAGIC "XXBF"
-#define MAX_K_SEED 9
+#define MAX_K_SEED 64
 
 /*
  * Bloom filter structure.
@@ -36,7 +36,7 @@ typedef struct {
     uint8_t magic[4];
     uint32_t k;
     uint64_t nbits;
-    uint64_t seeds[MAX_K_SEED];
+    uint64_t seed;
     uint64_t bitmap[1];
 } bloomfilter_t;
 
