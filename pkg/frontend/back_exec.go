@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -949,7 +950,11 @@ func (backSes *backSession) getNextProcessId() string {
 		routineId + sqlCount
 	*/
 	routineId := backSes.respr.GetU32(CONNID)
-	return fmt.Sprintf("%d%d", routineId, backSes.GetSqlCount())
+	// Optimize: use strconv instead of fmt.Sprintf
+	var buf [24]byte
+	b := strconv.AppendUint(buf[:0], uint64(routineId), 10)
+	b = strconv.AppendUint(b, backSes.GetSqlCount(), 10)
+	return string(b)
 }
 
 func (backSes *backSession) cleanCache() {
