@@ -26,7 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/crt"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	json2 "github.com/segmentio/encoding/json"
@@ -38,7 +38,7 @@ type parseJsonlState struct {
 	scanner  *bufio.Scanner
 	batch    *batch.Batch
 	fromData bool
-	opts     plan.ParseJsonlOptions
+	opts     planner.ParseJsonlOptions
 	appender []func(proc *process.Process, vec *vector.Vector, v any) error
 }
 
@@ -61,19 +61,19 @@ func parseJsonlPrepare(fromData bool, proc *process.Process, tblArg *TableFuncti
 	st.appender = make([]func(proc *process.Process, vec *vector.Vector, v any) error, len(st.opts.Cols))
 	for i, col := range st.opts.Cols {
 		switch col.Type {
-		case plan.ParseJsonlTypeBool:
+		case planner.ParseJsonlTypeBool:
 			st.appender[i] = typedAppend_bool
-		case plan.ParseJsonlTypeInt32:
+		case planner.ParseJsonlTypeInt32:
 			st.appender[i] = typedAppend_int32
-		case plan.ParseJsonlTypeInt64:
+		case planner.ParseJsonlTypeInt64:
 			st.appender[i] = typedAppend_int64
-		case plan.ParseJsonlTypeFloat32:
+		case planner.ParseJsonlTypeFloat32:
 			st.appender[i] = typedAppend_float32
-		case plan.ParseJsonlTypeFloat64:
+		case planner.ParseJsonlTypeFloat64:
 			st.appender[i] = typedAppend_float64
-		case plan.ParseJsonlTypeString:
+		case planner.ParseJsonlTypeString:
 			st.appender[i] = typedAppend_string
-		case plan.ParseJsonlTypeTimestamp:
+		case planner.ParseJsonlTypeTimestamp:
 			st.appender[i] = typedAppend_timestamp
 		default:
 			// Should never reach here.
@@ -123,7 +123,7 @@ func (st *parseJsonlState) start(tf *TableFunction, proc *process.Process, nthRo
 		}
 	}
 
-	if st.opts.Format == plan.ParseJsonlFormatLine {
+	if st.opts.Format == planner.ParseJsonlFormatLine {
 		st.scanner = bufio.NewScanner(st.reader)
 	} else {
 		st.dec = json2.NewDecoder(st.reader)
@@ -172,7 +172,7 @@ func (st *parseJsonlState) call(tf *TableFunction, proc *process.Process) (vm.Ca
 	var cnt int
 
 	switch st.opts.Format {
-	case plan.ParseJsonlFormatLine:
+	case planner.ParseJsonlFormatLine:
 		for st.scanner.Scan() {
 			line := st.scanner.Text()
 			vector.AppendBytes(st.batch.Vecs[0], []byte(line), false, proc.Mp())
@@ -181,7 +181,7 @@ func (st *parseJsonlState) call(tf *TableFunction, proc *process.Process) (vm.Ca
 				break
 			}
 		}
-	case plan.ParseJsonlFormatArray:
+	case planner.ParseJsonlFormatArray:
 		var vv [][]any
 		for {
 			var v []any
@@ -225,7 +225,7 @@ func (st *parseJsonlState) call(tf *TableFunction, proc *process.Process) (vm.Ca
 			}
 		}
 
-	case plan.ParseJsonlFormatObject:
+	case planner.ParseJsonlFormatObject:
 		var objs []map[string]any
 		for {
 			var v map[string]any

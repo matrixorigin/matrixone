@@ -22,8 +22,8 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan3 "github.com/matrixorigin/matrixone/pkg/pb/plan"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
 func Test_verifyAccountCanOperateClusterTable(t *testing.T) {
@@ -199,12 +199,12 @@ func Test_hasMoCtrl(t *testing.T) {
 	ret = hasMoCtrl(nil)
 	assert.False(t, ret)
 
-	ret = hasMoCtrl(&plan2.Plan{})
+	ret = hasMoCtrl(&plan.Plan{})
 	assert.False(t, ret)
 
-	ret = hasMoCtrl(&plan2.Plan{
-		Plan: &plan2.Plan_Query{
-			Query: &plan2.Query{
+	ret = hasMoCtrl(&plan.Plan{
+		Plan: &plan.Plan_Query{
+			Query: &plan.Query{
 				StmtType: plan3.Query_SELECT,
 				Nodes: []*plan3.Node{
 					{

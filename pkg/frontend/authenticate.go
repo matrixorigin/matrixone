@@ -30,9 +30,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/tidwall/btree"
-	"golang.org/x/sync/errgroup"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -49,12 +46,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	"github.com/matrixorigin/matrixone/pkg/sql/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/stage/stageutil"
@@ -65,6 +62,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
+	"github.com/tidwall/btree"
+	"golang.org/x/sync/errgroup"
 )
 
 type TenantInfo struct {
@@ -4559,7 +4558,7 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction, rm
 	if execResultArrayHasData(erArray) {
 		receivedArgsType := make([]string, len(df.Args))
 		for i, arg := range df.Args {
-			typ, err := plan2.GetFunctionArgTypeStrFromAst(arg)
+			typ, err := planner.GetFunctionArgTypeStrFromAst(arg)
 			if err != nil {
 				return err
 			}
@@ -6043,7 +6042,7 @@ func (pota privilegeTipsArray) String() string {
 }
 
 // extractPrivilegeTipsFromPlan extracts the privilege tips from the plan
-func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
+func extractPrivilegeTipsFromPlan(p *plan.Plan) privilegeTipsArray {
 	//NOTE: the pts may be nil when the plan does operate any table.
 	var pts privilegeTipsArray
 	appendPt := func(pt privilegeTips) {
@@ -7167,7 +7166,7 @@ func checkRoleWhetherDatabaseOwner(ctx context.Context, ses *Session, dbName str
 func authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx context.Context,
 	ses *Session,
 	stmt tree.Statement,
-	p *plan2.Plan) (bool, statistic.StatsArray, error) {
+	p *plan.Plan) (bool, statistic.StatsArray, error) {
 	var stats statistic.StatsArray
 	stats.Reset()
 
@@ -8718,7 +8717,7 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 
 	// format return type
 	fmtctx = tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
-	retTypeStr, err = plan2.GetFunctionTypeStrFromAst(cf.ReturnType.Type)
+	retTypeStr, err = planner.GetFunctionTypeStrFromAst(cf.ReturnType.Type)
 	if err != nil {
 		return err
 	}
@@ -8730,7 +8729,7 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 		argList[i] = &function.Arg{}
 		argList[i].Name = cf.Args[i].GetName(fmtctx)
 		fmtctx.Reset()
-		typ, err := plan2.GetFunctionArgTypeStrFromAst(cf.Args[i])
+		typ, err := planner.GetFunctionArgTypeStrFromAst(cf.Args[i])
 		if err != nil {
 			return err
 		}
@@ -8924,14 +8923,14 @@ func InitProcedure(ctx context.Context, ses *Session, tenant *TenantInfo, cp *tr
 		}
 		initMoProcedure = fmt.Sprintf(updateMoStoredProcedureFormat,
 			string(argsJson),
-			cp.Lang, plan2.EscapeFormat(cp.Body), dbName,
+			cp.Lang, planner.EscapeFormat(cp.Body), dbName,
 			tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), "PROCEDURE", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci",
 			int32(id))
 	} else {
 		initMoProcedure = fmt.Sprintf(initMoStoredProcedureFormat,
 			string(cp.Name.Name.ObjectName),
 			string(argsJson),
-			cp.Lang, plan2.EscapeFormat(cp.Body), dbName,
+			cp.Lang, planner.EscapeFormat(cp.Body), dbName,
 			tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "PROCEDURE", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci")
 	}
 	err = bh.Exec(ctx, initMoProcedure)

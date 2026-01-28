@@ -17,8 +17,6 @@ package compile
 import (
 	"context"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -26,9 +24,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -90,13 +89,13 @@ func ApplyRuntimeFilters(
 	)
 
 	for _, expr := range exprs {
-		auxIdCnt = plan2.AssignAuxIdForExpr(expr, auxIdCnt)
+		auxIdCnt = planner.AssignAuxIdForExpr(expr, auxIdCnt)
 	}
 
 	columnMap := make(map[int]int)
 	zms := make([]objectio.ZoneMap, auxIdCnt)
 	vecs := make([]*vector.Vector, auxIdCnt)
-	plan2.GetColumnMapByExprs(exprs, tableDef, columnMap)
+	planner.GetColumnMapByExprs(exprs, tableDef, columnMap)
 
 	defer func() {
 		for i := range vecs {

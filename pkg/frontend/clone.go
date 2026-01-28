@@ -25,12 +25,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -112,7 +112,7 @@ func resolveSnapshot(
 	)
 
 	if atTsExpr != nil {
-		builder := plan.NewQueryBuilder(plan2.Query_INSERT, ses.txnCompileCtx, false, true)
+		builder := planner.NewQueryBuilder(plan.Query_INSERT, ses.txnCompileCtx, false, true)
 		if snapshot, err = builder.ResolveTsHint(atTsExpr); err != nil {
 			return nil, err
 		}
@@ -127,7 +127,7 @@ func getOpAndToAccountId(
 	bh BackgroundExec,
 	toAccountOpt *tree.ToAccountOpt,
 	atTsExpr *tree.AtTimeStamp,
-) (opAccountId, toAccountId uint32, snapshot *plan2.Snapshot, err error) {
+) (opAccountId, toAccountId uint32, snapshot *plan.Snapshot, err error) {
 
 	if snapshot, err = resolveSnapshot(ses, atTsExpr); err != nil {
 		return 0, 0, nil, err
@@ -164,7 +164,7 @@ func handleCloneTable(
 		deferred      func(error) error
 		faultInjected bool
 
-		snapshot   *plan2.Snapshot
+		snapshot   *plan.Snapshot
 		snapshotTS int64
 
 		toAccountId   uint32
@@ -316,7 +316,7 @@ func handleCloneDatabase(
 		ctx1 context.Context
 
 		srcTblInfos []*tableInfo
-		snapshot    *plan2.Snapshot
+		snapshot    *plan.Snapshot
 
 		viewMap = make(map[string]*tableInfo)
 
@@ -326,7 +326,7 @@ func handleCloneDatabase(
 		snapCondition string
 
 		snapshotTS int64
-		subMeta    *plan2.SubscriptionMeta
+		subMeta    *plan.SubscriptionMeta
 	)
 
 	oldDefault := ses.GetTxnCompileCtx().DefaultDatabase()

@@ -27,12 +27,11 @@ import (
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
-	"github.com/stretchr/testify/require"
-
 	"github.com/matrixorigin/matrixone/pkg/embed"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/stretchr/testify/require"
 )
 
 func TestDeleteAndSelect(t *testing.T) {
@@ -74,8 +73,8 @@ func TestDeleteAndSelect(t *testing.T) {
 			require.NoError(t, err)
 			res.Close()
 
-			plan.SetForceScanOnMultiCN(true)
-			defer plan.SetForceScanOnMultiCN(false)
+			planner.SetForceScanOnMultiCN(true)
+			defer planner.SetForceScanOnMultiCN(false)
 			//select * from t where a > 24500;
 			res, err = exec.Exec(
 				ctx,

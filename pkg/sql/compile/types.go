@@ -30,7 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -244,7 +244,7 @@ type Compile struct {
 
 	pn *plan.Plan
 
-	execType plan2.ExecType
+	execType planner.ExecType
 
 	// fill is a result writer runs a callback function.
 	// fill will be called when result data is ready.
@@ -289,7 +289,7 @@ type Compile struct {
 	// cnLabel is the CN labels which is received from proxy when build connection.
 	cnLabel map[string]string
 
-	buildPlanFunc func(ctx context.Context) (*plan2.Plan, error)
+	buildPlanFunc func(ctx context.Context) (*plan.Plan, error)
 	startAt       time.Time
 	// use for duplicate check
 	fuzzys []*fuzzyCheck

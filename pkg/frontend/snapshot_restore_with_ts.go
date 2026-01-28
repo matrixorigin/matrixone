@@ -21,12 +21,12 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 )
 
 func fkTablesTopoSortWithTS(ctx context.Context, bh BackgroundExec, dbName string, tblName string, ts int64, from, to uint32) (sortedTbls []string, err error) {
@@ -644,9 +644,9 @@ func restoreViewsFromTS(
 		sortedViews []string
 		oldSnapshot *plan.Snapshot
 	)
-	snapshot = &pbplan.Snapshot{
+	snapshot = &plan.Snapshot{
 		TS: &timestamp.Timestamp{PhysicalTime: snapshotTs},
-		Tenant: &pbplan.SnapshotTenant{
+		Tenant: &plan.SnapshotTenant{
 			TenantName: restoreAccountName,
 			TenantID:   restoreAccount,
 		},
@@ -669,11 +669,11 @@ func restoreViewsFromTS(
 
 		compCtx.SetDatabase(viewEntry.dbName)
 		// build create sql to find dependent views
-		_, err = plan.BuildPlan(compCtx, stmts[0], false)
+		_, err = planner.BuildPlan(compCtx, stmts[0], false)
 		if err != nil {
 			getLogger(ses.GetService()).Info(fmt.Sprintf("try to build view %v failed, try to build it again", viewEntry.tblName))
 			stmts, _ = parsers.Parse(ctx, dialect.MYSQL, viewEntry.createSql, 0)
-			_, err = plan.BuildPlan(compCtx, stmts[0], false)
+			_, err = planner.BuildPlan(compCtx, stmts[0], false)
 			if err != nil {
 				return err
 			}

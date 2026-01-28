@@ -22,7 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/monlp/llm"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	ujson "github.com/matrixorigin/matrixone/pkg/util/json"
 	"go.starlark.net/starlark"
 	"go.starlark.net/starlarkstruct"
@@ -294,7 +294,7 @@ func (si *starlarkInterpreter) moQuote(thread *starlark.Thread, b *starlark.Buil
 		return starlark.NewList(ret), nil
 	}
 
-	ret[0] = starlark.String(plan.EscapeFormat(s))
+	ret[0] = starlark.String(planner.EscapeFormat(s))
 	return starlark.NewList(ret), nil
 }
 

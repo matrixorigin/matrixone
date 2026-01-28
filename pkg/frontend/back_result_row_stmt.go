@@ -17,11 +17,10 @@ package frontend
 import (
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"go.uber.org/zap"
 )
 
 func executeResultRowStmtInBack(backSes *backSession,
@@ -43,7 +42,7 @@ func executeResultRowStmtInBack(backSes *backSession,
 		mrs.AddColumn(mysqlc)
 	}
 
-	backSes.rs = &plan.ResultColDef{ResultCols: plan2.GetResultColumnsFromPlan(execCtx.cw.Plan())}
+	backSes.rs = &plan.ResultColDef{ResultCols: planner.GetResultColumnsFromPlan(execCtx.cw.Plan())}
 
 	fPrintTxnOp := execCtx.ses.GetTxnHandler().GetTxn()
 

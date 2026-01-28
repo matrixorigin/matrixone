@@ -23,7 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -46,7 +46,7 @@ func makeTestCases(t *testing.T) []limitTestCase {
 		{
 			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			arg: &Limit{
-				LimitExpr: plan2.MakePlan2Uint64ConstExprWithType(0),
+				LimitExpr: planner.MakePlan2Uint64ConstExprWithType(0),
 				OperatorBase: vm.OperatorBase{
 					OperatorInfo: vm.OperatorInfo{
 						Idx:     0,
@@ -60,7 +60,7 @@ func makeTestCases(t *testing.T) []limitTestCase {
 		{
 			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			arg: &Limit{
-				LimitExpr: plan2.MakePlan2Uint64ConstExprWithType(1),
+				LimitExpr: planner.MakePlan2Uint64ConstExprWithType(1),
 				OperatorBase: vm.OperatorBase{
 					OperatorInfo: vm.OperatorInfo{
 						Idx:     0,
@@ -77,7 +77,7 @@ func makeTestCases(t *testing.T) []limitTestCase {
 				ctr: container{
 					seen: 0,
 				},
-				LimitExpr: plan2.MakePlan2Uint64ConstExprWithType(5),
+				LimitExpr: planner.MakePlan2Uint64ConstExprWithType(5),
 				OperatorBase: vm.OperatorBase{
 					OperatorInfo: vm.OperatorInfo{
 						Idx:     0,
@@ -141,7 +141,7 @@ func BenchmarkLimit(b *testing.B) {
 			{
 				proc: testutil.NewProcessWithMPool(b, "", mpool.MustNewZero()),
 				arg: &Limit{
-					LimitExpr: plan2.MakePlan2Uint64ConstExprWithType(8),
+					LimitExpr: planner.MakePlan2Uint64ConstExprWithType(8),
 				},
 			},
 		}

@@ -25,36 +25,34 @@ import (
 	"strings"
 	"time"
 
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/iscp"
-	"github.com/matrixorigin/matrixone/pkg/pb/task"
-
-	"github.com/matrixorigin/matrixone/pkg/cdc"
-	"github.com/matrixorigin/matrixone/pkg/taskservice"
-
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
+	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
+	"github.com/matrixorigin/matrixone/pkg/sql/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -404,7 +402,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 	tblId := rel.GetTableID(c.proc.Ctx)
 	extra := rel.GetExtraInfo()
 
-	oTableDef := plan2.DeepCopyTableDef(qry.TableDef, true)
+	oTableDef := plan.DeepCopyTableDef(qry.TableDef, true)
 
 	var oldCt *engine.ConstraintDef
 	newCt := &engine.ConstraintDef{
@@ -579,7 +577,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					return moerr.NewErrCantDropFieldOrKey(c.proc.Ctx, constraintName)
 				}
 				hasUpdateConstraints = true
-				oTableDef.Fkeys = plan2.RemoveIf(oTableDef.Fkeys, func(fk *plan.ForeignKeyDef) bool {
+				oTableDef.Fkeys = planner.RemoveIf(oTableDef.Fkeys, func(fk *plan.ForeignKeyDef) bool {
 					if fk.Name == constraintName {
 						removeRefChildTbls[constraintName] = fk.ForeignTbl
 						return true
@@ -941,7 +939,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			for _, fkey := range t.Fkeys {
 				//For compatibility, regenerate constraint name for the constraint with empty name.
 				if len(fkey.Name) == 0 {
-					fkey.Name = plan2.GenConstraintName()
+					fkey.Name = planner.GenConstraintName()
 					newFkeys = append(newFkeys, fkey)
 				} else if _, ok := removeRefChildTbls[fkey.Name]; !ok {
 					newFkeys = append(newFkeys, fkey)
@@ -1276,7 +1274,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		for _, col := range planCols {
 			colId2Name[col.ColId] = col.Name
 		}
-		dedupFkName := make(plan2.UnorderedSet[string])
+		dedupFkName := make(planner.UnorderedSet[string])
 		//1. update fk info in child table.
 		//column ids of column names in child table have changed after
 		//the table is created by engine.Database.Create.
@@ -1956,7 +1954,7 @@ func (s *Scope) doCreateIndex(
 	tableDef := r.GetTableDef(c.proc.Ctx)
 	extra := r.GetExtraInfo()
 
-	originalTableDef := plan2.DeepCopyTableDef(qry.TableDef, true)
+	originalTableDef := plan.DeepCopyTableDef(qry.TableDef, true)
 	indexInfo := qry.GetIndex() // IndexInfo is named same as planner's IndexInfo
 	indexTableDef := indexInfo.GetTableDef()
 
@@ -2296,7 +2294,7 @@ func makeNewDropConstraint(oldCt *engine.ConstraintDef, dropName string) (*engin
 			pred := func(fkDef *plan.ForeignKeyDef) bool {
 				return fkDef.Name == dropName
 			}
-			def.Fkeys = plan2.RemoveIf[*plan.ForeignKeyDef](def.Fkeys, pred)
+			def.Fkeys = planner.RemoveIf[*plan.ForeignKeyDef](def.Fkeys, pred)
 			oldCt.Cts[i] = def
 		case *engine.IndexDef:
 			pred := func(index *plan.IndexDef) bool {
@@ -2305,7 +2303,7 @@ func makeNewDropConstraint(oldCt *engine.ConstraintDef, dropName string) (*engin
 				}
 				return index.IndexName == dropName
 			}
-			def.Indexes = plan2.RemoveIf[*plan.IndexDef](def.Indexes, pred)
+			def.Indexes = planner.RemoveIf[*plan.IndexDef](def.Indexes, pred)
 			oldCt.Cts[i] = def
 		}
 	}
@@ -2327,14 +2325,14 @@ func MakeNewCreateConstraint(oldCt *engine.ConstraintDef, c engine.Constraint) (
 			_, ok = ct.(*engine.ForeignKeyDef)
 			return ok
 		}
-		oldCt.Cts = plan2.RemoveIf[engine.Constraint](oldCt.Cts, pred)
+		oldCt.Cts = planner.RemoveIf[engine.Constraint](oldCt.Cts, pred)
 		oldCt.Cts = append(oldCt.Cts, c)
 	case *engine.RefChildTableDef:
 		pred = func(ct engine.Constraint) bool {
 			_, ok = ct.(*engine.RefChildTableDef)
 			return ok
 		}
-		oldCt.Cts = plan2.RemoveIf[engine.Constraint](oldCt.Cts, pred)
+		oldCt.Cts = planner.RemoveIf[engine.Constraint](oldCt.Cts, pred)
 		oldCt.Cts = append(oldCt.Cts, c)
 	case *engine.IndexDef:
 		ok := false
@@ -2409,7 +2407,7 @@ func (s *Scope) removeChildTblIdFromParentTable(c *Compile, fkRelation engine.Re
 	}
 	for _, ct := range oldCt.Cts {
 		if def, ok := ct.(*engine.RefChildTableDef); ok {
-			def.Tables = plan2.RemoveIf[uint64](def.Tables, func(id uint64) bool {
+			def.Tables = planner.RemoveIf[uint64](def.Tables, func(id uint64) bool {
 				return id == tblId
 			})
 			break
@@ -3143,15 +3141,15 @@ last_seq_num | min_value| max_value| start_value| increment_value| cycle| is_cal
 func makeSequenceAlterBatch(ctx context.Context, stmt *tree.AlterSequence, tableDef *plan.TableDef, proc *process.Process, result []interface{}, curval string) (*batch.Batch, error) {
 	var bat batch.Batch
 	bat.SetRowCount(1)
-	attrs := make([]string, len(plan2.Sequence_cols_name))
+	attrs := make([]string, len(planner.Sequence_cols_name))
 	for i := range attrs {
-		attrs[i] = plan2.Sequence_cols_name[i]
+		attrs[i] = planner.Sequence_cols_name[i]
 	}
 	bat.Attrs = attrs
 
 	// typ is sequenece's type now
-	typ := plan2.MakeTypeByPlan2Type(tableDef.Cols[0].Typ)
-	vecs := make([]*vector.Vector, len(plan2.Sequence_cols_name))
+	typ := planner.MakeTypeByPlan2Type(tableDef.Cols[0].Typ)
+	vecs := make([]*vector.Vector, len(planner.Sequence_cols_name))
 
 	switch typ.Oid {
 	case types.T_int16:
@@ -3251,13 +3249,13 @@ func makeSequenceAlterBatch(ctx context.Context, stmt *tree.AlterSequence, table
 func makeSequenceInitBatch(ctx context.Context, stmt *tree.CreateSequence, tableDef *plan.TableDef, proc *process.Process) (*batch.Batch, error) {
 	var bat batch.Batch
 	bat.SetRowCount(1)
-	attrs := make([]string, len(plan2.Sequence_cols_name))
+	attrs := make([]string, len(planner.Sequence_cols_name))
 	for i := range attrs {
-		attrs[i] = plan2.Sequence_cols_name[i]
+		attrs[i] = planner.Sequence_cols_name[i]
 	}
 	bat.Attrs = attrs
 
-	typ := plan2.MakeTypeByPlan2Type(tableDef.Cols[0].Typ)
+	typ := planner.MakeTypeByPlan2Type(tableDef.Cols[0].Typ)
 	sequence_cols_num := 7
 	vecs := make([]*vector.Vector, sequence_cols_num)
 

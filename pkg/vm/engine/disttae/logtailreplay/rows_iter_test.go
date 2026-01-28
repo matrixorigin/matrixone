@@ -20,17 +20,15 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
-
-	"github.com/stretchr/testify/require"
-	"github.com/tidwall/btree"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/function"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
+	"github.com/stretchr/testify/require"
+	"github.com/tidwall/btree"
 )
 
 func TestPartitionStateRowsIter(t *testing.T) {

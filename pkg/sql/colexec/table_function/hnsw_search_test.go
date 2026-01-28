@@ -24,7 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
@@ -276,7 +276,7 @@ func makeConstInputExprsHnswSearch() []*plan.Expr {
 			},
 		},
 
-		plan2.MakePlan2Vecf32ConstExprWithType("[0,1,2]", 3),
+		planner.MakePlan2Vecf32ConstExprWithType("[0,1,2]", 3),
 	}
 
 	return ret
@@ -320,7 +320,7 @@ func makeBatchHnswSearchFail(proc *process.Process) []failBatch {
 				},
 			},
 
-			plan2.MakePlan2Vecf32ConstExprWithType("[0,1,2]", 3),
+			planner.MakePlan2Vecf32ConstExprWithType("[0,1,2]", 3),
 		}
 
 		bat := batch.NewWithSize(2)
@@ -355,7 +355,7 @@ func makeBatchHnswSearchFail(proc *process.Process) []failBatch {
 				},
 			},
 
-			plan2.MakePlan2Vecf32ConstExprWithType("[0,1,2]", 3),
+			planner.MakePlan2Vecf32ConstExprWithType("[0,1,2]", 3),
 		}
 
 		bat := batch.NewWithSize(2)
@@ -436,7 +436,7 @@ func makeBatchHnswSearchFail(proc *process.Process) []failBatch {
 				},
 			},
 
-			plan2.MakePlan2Vecf32ConstExprWithType("[0,1]", 3),
+			planner.MakePlan2Vecf32ConstExprWithType("[0,1]", 3),
 		}
 
 		bat := batch.NewWithSize(2)

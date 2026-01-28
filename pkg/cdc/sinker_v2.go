@@ -27,7 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/zap"
 )
@@ -190,7 +190,7 @@ var CreateMysqlSinker2 = func(
 			return nil, moerr.NewInternalErrorNoCtx("external table is not supported")
 		}
 
-		createSql, _, err = plan2.ConstructCreateTableSQL(nil, &newTableDef, nil, true, nil)
+		createSql, _, err = planner.ConstructCreateTableSQL(nil, &newTableDef, nil, true, nil)
 		if err != nil {
 			executor.Close()
 			return nil, err

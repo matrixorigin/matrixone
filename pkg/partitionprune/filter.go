@@ -18,15 +18,13 @@ import (
 	"context"
 	"sort"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	p "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -103,7 +101,7 @@ func hashFilterExpr(
 	for i, pt := range metadata.Partitions {
 		// Deep copy partition expressions to avoid modifying the original expressions
 		// when replacing column references with actual filter values
-		exprs[i] = p.DeepCopyExpr(pt.Expr)
+		exprs[i] = plan.DeepCopyExpr(pt.Expr)
 	}
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
@@ -221,7 +219,7 @@ func rangeFilterExpr(
 	for i, pt := range metadata.Partitions {
 		// Deep copy partition expressions to avoid modifying the original expressions
 		// when replacing column references with actual filter values
-		exprs[i] = p.DeepCopyExpr(pt.Expr)
+		exprs[i] = plan.DeepCopyExpr(pt.Expr)
 	}
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
@@ -542,7 +540,7 @@ func listFilterExpr(
 	metadata partition.PartitionMetadata,
 ) ([]int, bool, error) {
 	var err error
-	expr = p.DeepCopyExpr(expr)
+	expr = plan.DeepCopyExpr(expr)
 	expr, err = ConvertFoldExprToNormal(expr)
 	if err != nil {
 		return nil, false, err

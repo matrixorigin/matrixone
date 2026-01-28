@@ -32,10 +32,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
-	pbPlan "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -223,7 +222,7 @@ func getTestMainTable() (*plan.ObjectRef, *plan.TableDef) {
 		Name:   "t1",
 		Hidden: false,
 		Cols: []*plan.ColDef{
-			{ColId: 0, Name: "a", Typ: i64typ, NotNull: true, Primary: true, Default: &pbPlan.Default{
+			{ColId: 0, Name: "a", Typ: i64typ, NotNull: true, Primary: true, Default: &plan.Default{
 				NullAbility: false,
 			}},
 			{ColId: 1, Name: "b", Typ: varcharTyp, NotNull: true},
@@ -257,10 +256,10 @@ func getTestUniqueIndexTable(uniqueTblName string) (*plan.ObjectRef, *plan.Table
 		Name:   uniqueTblName,
 		Hidden: true,
 		Cols: []*plan.ColDef{
-			{ColId: 0, Name: catalog.IndexTableIndexColName, Typ: varcharTyp, NotNull: true, Primary: true, Default: &pbPlan.Default{
+			{ColId: 0, Name: catalog.IndexTableIndexColName, Typ: varcharTyp, NotNull: true, Primary: true, Default: &plan.Default{
 				NullAbility: false,
 			}},
-			{ColId: 1, Name: catalog.IndexTablePrimaryColName, Typ: i64typ, NotNull: true, Default: &pbPlan.Default{
+			{ColId: 1, Name: catalog.IndexTablePrimaryColName, Typ: i64typ, NotNull: true, Default: &plan.Default{
 				NullAbility: false,
 			}},
 			{ColId: 2, Name: catalog.Row_ID, Typ: rowIdTyp},
@@ -289,7 +288,7 @@ func getTestSecondaryIndexTable(secondaryIdxTblName string) (*plan.ObjectRef, *p
 		Name:   secondaryIdxTblName,
 		Hidden: true,
 		Cols: []*plan.ColDef{
-			{ColId: 0, Name: catalog.IndexTableIndexColName, Typ: varcharTyp, NotNull: true, Primary: true, Default: &pbPlan.Default{
+			{ColId: 0, Name: catalog.IndexTableIndexColName, Typ: varcharTyp, NotNull: true, Primary: true, Default: &plan.Default{
 				NullAbility: false,
 			}},
 			{ColId: 1, Name: catalog.IndexTablePrimaryColName, Typ: i64typ, NotNull: true},

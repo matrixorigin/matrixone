@@ -18,8 +18,6 @@ import (
 	"context"
 	"strings"
 
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -27,11 +25,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
+	"github.com/matrixorigin/matrixone/pkg/sql/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner/rule"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 func NewColumnExpr(pos int, typ plan.Type, name string) *plan.Expr {
@@ -52,8 +51,8 @@ func ConstructInExpr(
 	colVec *vector.Vector,
 ) *plan.Expr {
 	data, _ := colVec.MarshalBinary()
-	colExpr := NewColumnExpr(0, plan2.MakePlan2Type(colVec.GetType()), colName)
-	return plan2.MakeInExpr(
+	colExpr := NewColumnExpr(0, planner.MakePlan2Type(colVec.GetType()), colName)
+	return planner.MakeInExpr(
 		ctx,
 		colExpr,
 		int32(colVec.Length()),
@@ -78,7 +77,7 @@ func getColDefByName(expr *plan.Expr, name string, colPos int32, tableDef *plan.
 				zap.String("col-name", name),
 				zap.Int32("col-actual-pos", colPos),
 				zap.Int32("col-expected-pos", pos),
-				zap.String("col-expr", plan2.FormatExpr(expr, plan2.FormatOption{})),
+				zap.String("col-expr", planner.FormatExpr(expr, planner.FormatOption{})),
 			)
 		}
 	})
@@ -121,7 +120,7 @@ func evalValue(
 				"Bad-ColExpr",
 				zap.String("col-name", colName),
 				zap.String("pk-name", pkName),
-				zap.String("col-expr", plan2.FormatExpr(expr, plan2.FormatOption{})),
+				zap.String("col-expr", planner.FormatExpr(expr, planner.FormatOption{})),
 			)
 		}
 	})
@@ -146,7 +145,7 @@ func evalValue(
 				zap.String("col-name", colName),
 				zap.Int32("col-actual-pos", col.Col.ColPos),
 				zap.Int32("col-expected-pos", colPos),
-				zap.String("col-expr", plan2.FormatExpr(expr, plan2.FormatOption{})),
+				zap.String("col-expr", planner.FormatExpr(expr, planner.FormatOption{})),
 			)
 		}
 	})
@@ -222,7 +221,7 @@ func getConstBytesFromExpr(exprs []*plan.Expr) ([][]byte, bool) {
 			vals[idx] = nil
 			vals[idx] = append(vals[idx], fExpr.Fold.Data...)
 		} else {
-			logutil.Warnf("const folded val expr is not a fold expr: %s\n", plan2.FormatExpr(exprs[idx], plan2.FormatOption{}))
+			logutil.Warnf("const folded val expr is not a fold expr: %s\n", planner.FormatExpr(exprs[idx], planner.FormatOption{}))
 			return nil, false
 		}
 	}
@@ -271,7 +270,7 @@ func mustColVecValueFromBinaryFuncExpr(expr *plan.Expr_F) (*plan.Expr_Col, []byt
 			return colExpr, fExpr.Fold.Data, ok
 		}
 
-		logutil.Warnf("const folded val expr is not a vec expr: %s\n", plan2.FormatExpr(valExpr, plan2.FormatOption{}))
+		logutil.Warnf("const folded val expr is not a vec expr: %s\n", planner.FormatExpr(valExpr, planner.FormatOption{}))
 		return nil, nil, false
 	}
 
@@ -720,7 +719,7 @@ func MakeColExprForTest(idx int32, typ types.T, colName ...string) *plan.Expr {
 	}
 
 	containerType := typ.ToType()
-	exprType := plan2.MakePlan2Type(&containerType)
+	exprType := planner.MakePlan2Type(&containerType)
 
 	return &plan.Expr{
 		Typ: exprType,
@@ -737,7 +736,7 @@ func MakeColExprForTest(idx int32, typ types.T, colName ...string) *plan.Expr {
 func MakeFunctionExprForTest(name string, args []*plan.Expr) *plan.Expr {
 	argTypes := make([]types.Type, len(args))
 	for i, arg := range args {
-		argTypes[i] = plan2.MakeTypeByPlan2Expr(arg)
+		argTypes[i] = planner.MakeTypeByPlan2Expr(arg)
 	}
 
 	finfo, err := function.GetFunctionByName(context.TODO(), name, argTypes)
@@ -748,7 +747,7 @@ func MakeFunctionExprForTest(name string, args []*plan.Expr) *plan.Expr {
 	retTyp := finfo.GetReturnType()
 
 	return &plan.Expr{
-		Typ: plan2.MakePlan2Type(&retTyp),
+		Typ: planner.MakePlan2Type(&retTyp),
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
 				Func: &plan.ObjectRef{
@@ -784,7 +783,7 @@ func MakeInExprForTest[T any](
 				Args: []*plan.Expr{
 					arg0,
 					{
-						Typ: plan2.MakePlan2Type(vec.GetType()),
+						Typ: planner.MakePlan2Type(vec.GetType()),
 						Expr: &plan.Expr_Vec{
 							Vec: &plan.LiteralVec{
 								Len:  int32(len(vals)),

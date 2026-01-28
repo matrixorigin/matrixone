@@ -28,9 +28,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/planner"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -499,7 +499,7 @@ func TestReadDirSymlink(t *testing.T) {
 			t.Logf("WARNING: os.Stat failed for %s: %v", fooPathInB, statErr)
 		}
 
-		files, _, err = plan2.ReadDir(&tree.ExternParam{
+		files, _, err = planner.ReadDir(&tree.ExternParam{
 			ExParamConst: tree.ExParamConst{
 				Filepath: fooPathInB,
 			},
@@ -527,7 +527,7 @@ func TestReadDirSymlink(t *testing.T) {
 
 	path1 := filepath.Join(root, "a", "b", "..", "b", "c", "foo")
 	t.Logf("Testing ReadDir with path containing '..': %s", path1)
-	files1, _, err := plan2.ReadDir(&tree.ExternParam{
+	files1, _, err := planner.ReadDir(&tree.ExternParam{
 		ExParamConst: tree.ExParamConst{
 			Filepath: path1,
 		},
