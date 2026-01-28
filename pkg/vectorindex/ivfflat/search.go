@@ -174,11 +174,20 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(
 		centroids_ids,
 	)
 
+	//os.Stderr.WriteString(sql)
+	//os.Stderr.WriteString("\n")
+
 	res, err := runSql(sqlproc, sql)
 	if err != nil {
 		return
 	}
 	defer res.Close()
+
+	end1 := time.Now()
+	elapsed1 := end1.Sub(start)
+	_ = elapsed1
+	//os.Stderr.WriteString(fmt.Sprintf("IVF BloomFilter Build: Sql time = %v\n", elapsed1))
+	start = time.Now()
 
 	if len(res.Batches) == 0 {
 		return
@@ -235,6 +244,7 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(
 
 	end := time.Now()
 	elapsed := end.Sub(start)
+	_ = elapsed
 	//os.Stderr.WriteString(fmt.Sprintf("IVF BloomFilter Build: #Entries for selected centers =  %d, #UniqueKey = %d, #ExistAfterFilter = %d,  Built Time = %v\n", rowCount, keyvec.Length(), nexist, elapsed))
 
 	return
