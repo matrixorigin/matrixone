@@ -96,6 +96,14 @@ select count(a) from t1 where a = 1;
 select count(a) from t1 where a = 100;
 select count(a) from t1 where a >= 10;
 
+-- Verify COUNT optimization: should use starcount for COUNT(*) and COUNT(pk)
+-- @regex("(?s)Table Scan.*Aggregate Functions: starcount\\(\\*\\)",true)
+explain analyze select count(*) from t1;
+-- @regex("(?s)Table Scan.*Aggregate Functions: starcount\\(t1\\.a\\)",true)
+explain analyze select count(a) from t1;
+-- @regex("(?s)Table Scan.*Aggregate Functions: starcount\\(t1\\.a\\)",true)
+explain analyze select count(a) from t1 where a = 1;
+
 
 
 select count(b) from t1 where b >= 2;
@@ -125,6 +133,14 @@ insert into t1 values (2,1);
 select a,count(b), sum(b), avg(b), std(b), min(b), max(b), bit_and(b), bit_or(b) from t1 group by a;
 insert into t1 values (3,1);
 select a,count(b), sum(b), avg(b), std(b), min(b), max(b), bit_and(b), bit_or(b) from t1 group by a;
+
+-- Verify COUNT optimization: nullable column should NOT use starcount
+-- @regex("(?s)Table Scan.*Aggregate Functions: count\\(t1\\.b\\)",true)
+explain analyze select count(b) from t1;
+-- COUNT(*) should always use starcount
+-- @regex("(?s)Table Scan.*Aggregate Functions: starcount\\(\\*\\)",true)
+explain analyze select count(*) from t1;
+
 drop table t1;
 
 
@@ -239,6 +255,14 @@ DROP TABLE t1;
 CREATE TABLE t1 (a INT);
 INSERT INTO t1 SELECT result FROM generate_series(1,100000) g;
 SELECT COUNT(*) FROM t1;
+
+-- Verify COUNT optimization on large dataset
+-- @regex("(?s)Table Scan.*Aggregate Functions: starcount\\(\\*\\)",true)
+explain analyze SELECT COUNT(*) FROM t1;
+-- nullable column should NOT use starcount
+-- @regex("(?s)Table Scan.*Aggregate Functions: count\\(t1\\.a\\)",true)
+explain analyze SELECT COUNT(a) FROM t1;
+
 DELETE FROM t1 WHERE a>50000;
 SELECT COUNT(*) FROM t1;
 SELECT COUNT(a) FROM t1;
