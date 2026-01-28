@@ -530,3 +530,12 @@ func TestCBloomFilter_TestAndAddVarlenaVectorWithNulls(t *testing.T) {
 	})
 	require.Equal(t, count, callCount2)
 }
+
+func TestCBloomFilter_TestZeroRowCount(t *testing.T) {
+	bf := NewCBloomFilterWithProbability(0, 0.0001)
+	require.NotNil(t, bf)
+	defer bf.Free()
+	bf2 := NewCBloomFilterWithProbability(5000, 0.001)
+	require.NotNil(t, bf)
+	defer bf2.Free()
+}
