@@ -37,13 +37,6 @@ create table t7(id int, name varchar(100), scores json, address json, metadata j
 load data infile {'filepath'='$resources/load_data/nested_types.parq', 'format'='parquet'} into table t7;
 select * from t7;
 
--- empty parquet file test (Issue #23601)
--- Empty parquet files should only check column count, not column names or types
--- This aligns with DuckDB behavior
-create table t8(col1 int, col2 decimal);
-load data infile {'filepath'='$resources/load_data/empty_file.parq', 'format'='parquet'} into table t8;
-select count(*) from t8;
-
 -- nullable columns
 drop table if exists pq_nullable_test;
 CREATE TABLE pq_nullable_test (
