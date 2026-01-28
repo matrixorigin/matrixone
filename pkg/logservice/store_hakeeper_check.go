@@ -308,6 +308,12 @@ func (l *store) checkBootstrap(state *pb.CheckerState) {
 	if !l.bootstrapMgr.CheckBootstrap(state.LogState) {
 		l.bootstrapCheckCycles--
 	} else {
+		// If WAL recovery is in progress, don't set HAKeeperRunning yet.
+		// This ensures TN waits for WAL recovery to complete before starting.
+		if l.walRecoveryInProgress.Load() {
+			l.runtime.Logger().Info("bootstrap complete but WAL recovery in progress, waiting...")
+			return
+		}
 		if err := l.setBootstrapState(true); err != nil {
 			panic(err)
 		}
