@@ -212,14 +212,11 @@ insert into t1 values (1, 2, 3);
 select count(*) from t1;
 select count(*) from t1 where b=2;
 select count(*) from t1 where a=2;
-
--- Verify COUNT optimization: primary key and nullable columns
--- @regex("(?s)Table Scan.*Aggregate Functions: starcount\\(\\*\\)",true)
+-- @regex("(?s)Table Scan.*Aggregate Functions: starcount\(1\)",true)
 explain analyze select count(*) from t1;
--- @regex("(?s)Table Scan.*Aggregate Functions: starcount\\(t1\\.a\\)",true)
+-- @regex("(?s)Table Scan.*Aggregate Functions: starcount\(t1\.a\)",true)
 explain analyze select count(a) from t1;
--- nullable column should NOT use starcount
--- @regex("(?s)Table Scan.*Aggregate Functions: count\\(t1\\.b\\)",true)
+-- @regex("(?s)Table Scan.*Aggregate Functions: count\(t1\.b\)",true)
 explain analyze select count(b) from t1;
 
 drop table if exists t1;
@@ -241,13 +238,11 @@ create table t1 (a int,b int, primary key(a,b));
 insert into t1 values (1,1),(2,2),(3,3),(4,4),(5,5);
 select count(*) from t1 where a is null;
 select count(*) from t1 where a = null;
-
--- Verify COUNT optimization: composite primary key
--- @regex("(?s)Table Scan.*Aggregate Functions: starcount\\(\\*\\)",true)
+-- @regex("(?s)Table Scan.*Aggregate Functions: starcount\(1\)",true)
 explain analyze select count(*) from t1;
--- @regex("(?s)Table Scan.*Aggregate Functions: starcount\\(t1\\.a\\)",true)
+-- @regex("(?s)Table Scan.*Aggregate Functions: starcount\(t1\.a\)",true)
 explain analyze select count(a) from t1;
--- @regex("(?s)Table Scan.*Aggregate Functions: starcount\\(t1\\.b\\)",true)
+-- @regex("(?s)Table Scan.*Aggregate Functions: starcount\(t1\.b\)",true)
 explain analyze select count(b) from t1;
 
 -- @separator:table
@@ -261,14 +256,11 @@ create table t1 (a int,b int, primary key(a));
 insert into t1 values (1,1),(2,2),(3,3),(4,4),(5,5);
 select count(*) from t1 where a is null;
 select count(*) from t1 where a = null;
-
--- Verify COUNT optimization: single primary key with nullable column
--- @regex("(?s)Table Scan.*Aggregate Functions: starcount\\(\\*\\)",true)
+-- @regex("(?s)Table Scan.*Aggregate Functions: starcount\(1\)",true)
 explain analyze select count(*) from t1;
--- @regex("(?s)Table Scan.*Aggregate Functions: starcount\\(t1\\.a\\)",true)
+-- @regex("(?s)Table Scan.*Aggregate Functions: starcount\(t1\.a\)",true)
 explain analyze select count(a) from t1;
--- nullable column should NOT use starcount
--- @regex("(?s)Table Scan.*Aggregate Functions: count\\(t1\\.b\\)",true)
+-- @regex("(?s)Table Scan.*Aggregate Functions: count\(t1\.b\)",true)
 explain analyze select count(b) from t1;
 
 -- @separator:table
@@ -285,14 +277,11 @@ create table t11 (a int, b int, primary key (a));
 insert into t11 (select *,* from generate_series(1, 50000, 1)g);
 select count(*) from t11 where a=20000;
 select count(*) from t11 where a in (1,20000);
-
--- Verify COUNT optimization: large dataset with primary key
--- @regex("(?s)Table Scan.*Aggregate Functions: starcount\\(\\*\\)",true)
+-- @regex("(?s)Table Scan.*Aggregate Functions: starcount\(1\)",true)
 explain analyze select count(*) from t11;
--- @regex("(?s)Table Scan.*Aggregate Functions: starcount\\(t11\\.a\\)",true)
+-- @regex("(?s)Table Scan.*Aggregate Functions: starcount\(t11\.a\)",true)
 explain analyze select count(a) from t11;
--- nullable column should NOT use starcount
--- @regex("(?s)Table Scan.*Aggregate Functions: count\\(t11\\.b\\)",true)
+-- @regex("(?s)Table Scan.*Aggregate Functions: count\(t11\.b\)",true)
 explain analyze select count(b) from t11;
 
 drop table if exists t1;
