@@ -16,9 +16,12 @@ package ivfflat
 
 import (
 	"fmt"
+	"os"
 	"strconv"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -127,6 +130,122 @@ func (idx *IvfflatSearchIndex[T]) findCentroids(sqlproc *sqlexec.SqlProcess, que
 	return keys.([]int64), nil
 }
 
+func (idx *IvfflatSearchIndex[T]) getBloomFilter(
+	sqlproc *sqlexec.SqlProcess,
+	idxcfg vectorindex.IndexConfig,
+	tblcfg vectorindex.IndexTableConfig,
+	centroids_ids string) (err error) {
+
+	if sqlproc.Proc == nil {
+		return
+	}
+
+	if len(sqlproc.RuntimeFilterSpecs) == 0 {
+		return
+	}
+	spec := sqlproc.RuntimeFilterSpecs[0]
+	if !spec.UseBloomFilter {
+		return
+	}
+
+	// get unique keys from hashbuild
+	vecbytes, err := sqlexec.WaitBloomFilter(sqlproc)
+	if err != nil {
+		return
+	}
+
+	if len(vecbytes) == 0 {
+		return
+	}
+
+	keyvec := new(vector.Vector)
+	err = keyvec.UnmarshalBinary(vecbytes)
+	if err != nil {
+		return
+	}
+
+	start := time.Now()
+
+	sql := fmt.Sprintf("SELECT `%s` FROM `%s`.`%s` WHERE `%s` = %d AND `%s` IN (%s)",
+		catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
+		tblcfg.DbName, tblcfg.EntriesTable,
+		catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
+		idx.Version,
+		catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
+		centroids_ids,
+	)
+
+	res, err := runSql(sqlproc, sql)
+	if err != nil {
+		return
+	}
+	defer res.Close()
+
+	if len(res.Batches) == 0 {
+		return
+	}
+
+	end := time.Now()
+	elapsed1 := end.Sub(start)
+
+	start = time.Now()
+
+	var rowCount int64
+	for _, bat := range res.Batches {
+		rowCount += int64(bat.RowCount())
+	}
+
+	bf := bloomfilter.NewCBloomFilterWithProbability(rowCount, 0.001)
+	if bf == nil {
+		panic("failed to create CBloomFilter")
+	}
+
+	defer bf.Free()
+
+	for _, bat := range res.Batches {
+		bf.AddVector(bat.Vecs[0])
+	}
+
+	exists := bf.TestVector(keyvec, nil)
+
+	if len(exists) != keyvec.Length() {
+		return moerr.NewInternalError(sqlproc.GetContext(), "result from bloomfilter size not match with input key vector")
+	}
+
+	nexist := 0
+	for _, e := range exists {
+		if e != 0 {
+			nexist++
+		}
+	}
+
+	if nexist > 0 {
+		bf2 := bloomfilter.NewCBloomFilterWithProbability(int64(nexist), 0.001)
+		if bf2 == nil {
+			panic("failed to create CBloomFilter")
+		}
+		defer bf2.Free()
+
+		for i, e := range exists {
+			if e != 0 {
+				bf2.Add(keyvec.GetRawBytesAt(i))
+			}
+		}
+
+		bfbytes, err := bf2.Marshal()
+		if err != nil {
+			return err
+		}
+		sqlproc.BloomFilter = bfbytes
+	}
+
+	end2 := time.Now()
+	elapsed2 := end2.Sub(start)
+	os.Stderr.WriteString(fmt.Sprintf("ivf centroids chosen size %d. keysize %d . NEXIST %d. sql time %v build time %v\n", rowCount, keyvec.Length(), nexist, elapsed1, elapsed2))
+
+	return
+}
+
 // Call usearch.Search
 func (idx *IvfflatSearchIndex[T]) Search(
 	sqlproc *sqlexec.SqlProcess,
@@ -155,6 +274,11 @@ func (idx *IvfflatSearchIndex[T]) Search(
 		instr += strconv.FormatInt(c, 10)
 	}
 
+	err = idx.getBloomFilter(sqlproc, idxcfg, tblcfg, instr)
+	if err != nil {
+		return
+	}
+
 	sql := fmt.Sprintf(
 		"SELECT `%s`, %s(`%s`, '%s') as vec_dist FROM `%s`.`%s` WHERE `%s` = %d AND `%s` IN (%s) ORDER BY vec_dist LIMIT %d",
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
@@ -172,12 +296,6 @@ func (idx *IvfflatSearchIndex[T]) Search(
 	//fmt.Println("IVFFlat SQL: ", sql)
 	//os.Stderr.WriteString(sql)
 	//os.Stderr.WriteString("\n")
-
-	// get the bloomfilter after centroids calculated to give times to run both bloomfiler and find centroids in parallel.
-	_, err = sqlexec.WaitBloomFilter(sqlproc)
-	if err != nil {
-		return
-	}
 
 	res, err := runSql(sqlproc, sql)
 	if err != nil {

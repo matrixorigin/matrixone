@@ -23,7 +23,6 @@ import (
 // side in a join and build side produces a bloom runtime filter.
 // We don't deserialize BloomFilter here, only keep raw bytes, which can be passed to SQL executor / table scan later.
 func WaitBloomFilter(sqlproc *SqlProcess) ([]byte, error) {
-	sqlproc.BloomFilter = nil
 	if sqlproc.Proc == nil {
 		return nil, nil
 	}
@@ -56,7 +55,6 @@ func WaitBloomFilter(sqlproc *SqlProcess) ([]byte, error) {
 		}
 
 		// runtime bloomfilter uses common/bloomfilter encoding; pass through bytes directly here
-		sqlproc.BloomFilter = m.Data
 		return m.Data, nil
 	}
 
