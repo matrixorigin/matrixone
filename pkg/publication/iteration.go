@@ -69,6 +69,7 @@ type ObjectWithTableInfo struct {
 	TableName   string
 	IsTombstone bool
 	Delete      bool
+	FilterJob   *FilterObjectJob
 }
 
 // AObjMappingJSON represents the serializable part of AObjMapping
@@ -1044,6 +1045,8 @@ func ExecuteIteration(
 	mp *mpool.MPool,
 	utHelper UTHelper,
 	snapshotFlushInterval time.Duration,
+	filterObjectWorker FilterObjectWorker,
+	getChunkWorker GetChunkWorker,
 	sqlExecutorRetryOpts ...*SQLExecutorRetryOption,
 ) (err error) {
 	var iterationCtx *IterationContext
@@ -1324,6 +1327,8 @@ func ExecuteIteration(
 		cnEngine,
 		mp,
 		cnEngine.(*disttae.Engine).FS(),
+		filterObjectWorker,
+		getChunkWorker,
 	)
 	if err != nil {
 		err = moerr.NewInternalErrorf(ctx, "failed to apply object list: %v", err)

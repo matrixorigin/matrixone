@@ -44,6 +44,259 @@ import (
 	"go.uber.org/zap"
 )
 
+// Job types
+const (
+	JobTypeGetMeta      int8 = 1
+	JobTypeGetChunk     int8 = 2
+	JobTypeFilterObject int8 = 3
+)
+
+// Job is an interface for async jobs
+type Job interface {
+	Execute()
+	WaitDone() any
+	GetType() int8
+}
+
+// GetMetaJobResult holds the result of GetMetaJob
+type GetMetaJobResult struct {
+	MetadataData []byte
+	TotalSize    int64
+	ChunkIndex   int64
+	TotalChunks  int64
+	IsComplete   bool
+	Err          error
+}
+
+// GetMetaJob is a job for getting metadata (chunk 0)
+type GetMetaJob struct {
+	ctx              context.Context
+	upstreamExecutor SQLExecutor
+	objectName       string
+	result           chan *GetMetaJobResult
+}
+
+// NewGetMetaJob creates a new GetMetaJob
+func NewGetMetaJob(ctx context.Context, upstreamExecutor SQLExecutor, objectName string) *GetMetaJob {
+	return &GetMetaJob{
+		ctx:              ctx,
+		upstreamExecutor: upstreamExecutor,
+		objectName:       objectName,
+		result:           make(chan *GetMetaJobResult, 1),
+	}
+}
+
+// Execute runs the GetMetaJob
+func (j *GetMetaJob) Execute() {
+	res := &GetMetaJobResult{}
+	getChunk0SQL := PublicationSQLBuilder.GetObjectSQL(j.objectName, 0)
+	ctxWithTimeout, cancel := context.WithTimeout(j.ctx, time.Minute)
+	defer cancel()
+
+	result, err := j.upstreamExecutor.ExecSQL(ctxWithTimeout, nil, getChunk0SQL, false, true)
+	if err != nil {
+		res.Err = moerr.NewInternalErrorf(j.ctx, "failed to execute GETOBJECT query for offset 0: %v", err)
+		j.result <- res
+		return
+	}
+
+	if !result.Next() {
+		result.Close()
+		res.Err = moerr.NewInternalErrorf(j.ctx, "no object content returned for %s", j.objectName)
+		j.result <- res
+		return
+	}
+
+	if err := result.Scan(&res.MetadataData, &res.TotalSize, &res.ChunkIndex, &res.TotalChunks, &res.IsComplete); err != nil {
+		result.Close()
+		res.Err = moerr.NewInternalErrorf(j.ctx, "failed to scan offset 0: %v", err)
+		j.result <- res
+		return
+	}
+	result.Close()
+
+	if res.TotalChunks <= 0 {
+		res.Err = moerr.NewInternalErrorf(j.ctx, "invalid total_chunks: %d", res.TotalChunks)
+		j.result <- res
+		return
+	}
+
+	j.result <- res
+}
+
+// WaitDone waits for the job to complete and returns the result
+func (j *GetMetaJob) WaitDone() any {
+	return <-j.result
+}
+
+// GetType returns the job type
+func (j *GetMetaJob) GetType() int8 {
+	return JobTypeGetMeta
+}
+
+// GetChunkJobResult holds the result of GetChunkJob
+type GetChunkJobResult struct {
+	ChunkData  []byte
+	ChunkIndex int64
+	Err        error
+}
+
+// GetChunkJob is a job for getting a single chunk
+type GetChunkJob struct {
+	ctx              context.Context
+	upstreamExecutor SQLExecutor
+	objectName       string
+	chunkIndex       int64
+	result           chan *GetChunkJobResult
+}
+
+// NewGetChunkJob creates a new GetChunkJob
+func NewGetChunkJob(ctx context.Context, upstreamExecutor SQLExecutor, objectName string, chunkIndex int64) *GetChunkJob {
+	return &GetChunkJob{
+		ctx:              ctx,
+		upstreamExecutor: upstreamExecutor,
+		objectName:       objectName,
+		chunkIndex:       chunkIndex,
+		result:           make(chan *GetChunkJobResult, 1),
+	}
+}
+
+// Execute runs the GetChunkJob
+func (j *GetChunkJob) Execute() {
+	res := &GetChunkJobResult{ChunkIndex: j.chunkIndex}
+	getChunkSQL := PublicationSQLBuilder.GetObjectSQL(j.objectName, j.chunkIndex)
+	result, err := j.upstreamExecutor.ExecSQL(j.ctx, nil, getChunkSQL, false, true)
+	if err != nil {
+		res.Err = moerr.NewInternalErrorf(j.ctx, "failed to execute GETOBJECT query for offset %d: %v", j.chunkIndex, err)
+		j.result <- res
+		return
+	}
+
+	if result.Next() {
+		var chunkData []byte
+		var totalSizeChk int64
+		var chunkIndexChk int64
+		var totalChunksChk int64
+		var isCompleteChk bool
+		if err := result.Scan(&chunkData, &totalSizeChk, &chunkIndexChk, &totalChunksChk, &isCompleteChk); err != nil {
+			result.Close()
+			res.Err = moerr.NewInternalErrorf(j.ctx, "failed to scan offset %d: %v", j.chunkIndex, err)
+			j.result <- res
+			return
+		}
+		res.ChunkData = chunkData
+	} else {
+		result.Close()
+		res.Err = moerr.NewInternalErrorf(j.ctx, "no chunk content returned for chunk %d of %s", j.chunkIndex, j.objectName)
+		j.result <- res
+		return
+	}
+	result.Close()
+
+	j.result <- res
+}
+
+// WaitDone waits for the job to complete and returns the result
+func (j *GetChunkJob) WaitDone() any {
+	return <-j.result
+}
+
+// GetType returns the job type
+func (j *GetChunkJob) GetType() int8 {
+	return JobTypeGetChunk
+}
+
+// FilterObjectJobResult holds the result of FilterObjectJob
+type FilterObjectJobResult struct {
+	Err              error
+	HasMappingUpdate bool
+	UpstreamAObjUUID *objectio.ObjectId
+	PreviousStats    objectio.ObjectStats
+	CurrentStats     objectio.ObjectStats
+}
+
+// FilterObjectJob is a job for filtering an object
+type FilterObjectJob struct {
+	ctx              context.Context
+	objectStatsBytes []byte
+	snapshotTS       types.TS
+	aobjectMap       map[objectio.ObjectId]AObjMapping
+	upstreamExecutor SQLExecutor
+	isTombstone      bool
+	localFS          fileservice.FileService
+	mp               *mpool.MPool
+	getChunkWorker   GetChunkWorker
+	result           chan *FilterObjectJobResult
+}
+
+// NewFilterObjectJob creates a new FilterObjectJob
+func NewFilterObjectJob(
+	ctx context.Context,
+	objectStatsBytes []byte,
+	snapshotTS types.TS,
+	aobjectMap map[objectio.ObjectId]AObjMapping,
+	upstreamExecutor SQLExecutor,
+	isTombstone bool,
+	localFS fileservice.FileService,
+	mp *mpool.MPool,
+	getChunkWorker GetChunkWorker,
+) *FilterObjectJob {
+	return &FilterObjectJob{
+		ctx:              ctx,
+		objectStatsBytes: objectStatsBytes,
+		snapshotTS:       snapshotTS,
+		aobjectMap:       aobjectMap,
+		upstreamExecutor: upstreamExecutor,
+		isTombstone:      isTombstone,
+		localFS:          localFS,
+		mp:               mp,
+		getChunkWorker:   getChunkWorker,
+		result:           make(chan *FilterObjectJobResult, 1),
+	}
+}
+
+// Execute runs the FilterObjectJob
+func (j *FilterObjectJob) Execute() {
+	res := &FilterObjectJobResult{}
+	filterResult, err := FilterObject(
+		j.ctx,
+		j.objectStatsBytes,
+		j.snapshotTS,
+		j.aobjectMap,
+		j.upstreamExecutor,
+		j.isTombstone,
+		j.localFS,
+		j.mp,
+		j.getChunkWorker,
+	)
+	res.Err = err
+	if filterResult != nil {
+		res.HasMappingUpdate = filterResult.HasMappingUpdate
+		res.UpstreamAObjUUID = filterResult.UpstreamAObjUUID
+		res.PreviousStats = filterResult.PreviousStats
+		res.CurrentStats = filterResult.CurrentStats
+	}
+	j.result <- res
+}
+
+// WaitDone waits for the job to complete and returns the result
+func (j *FilterObjectJob) WaitDone() any {
+	return <-j.result
+}
+
+// GetType returns the job type
+func (j *FilterObjectJob) GetType() int8 {
+	return JobTypeFilterObject
+}
+
+// FilterObjectResult holds the result of FilterObject
+type FilterObjectResult struct {
+	HasMappingUpdate bool
+	UpstreamAObjUUID *objectio.ObjectId
+	PreviousStats    objectio.ObjectStats
+	CurrentStats     objectio.ObjectStats
+}
+
 // FilterObject filters an object based on snapshot TS
 // Input: object stats (as bytes), snapshot TS, and whether it's an aobj (checked from object stats)
 // For aobj: gets object file, converts to batch, filters by snapshot TS, creates new object
@@ -58,9 +311,10 @@ func FilterObject(
 	isTombstone bool,
 	localFS fileservice.FileService,
 	mp *mpool.MPool,
-) error {
+	getChunkWorker GetChunkWorker,
+) (*FilterObjectResult, error) {
 	if len(objectStatsBytes) != objectio.ObjectStatsLen {
-		return moerr.NewInternalErrorf(ctx, "invalid object stats length: expected %d, got %d", objectio.ObjectStatsLen, len(objectStatsBytes))
+		return nil, moerr.NewInternalErrorf(ctx, "invalid object stats length: expected %d, got %d", objectio.ObjectStatsLen, len(objectStatsBytes))
 	}
 
 	// Parse ObjectStats from bytes
@@ -71,16 +325,17 @@ func FilterObject(
 	isAObj := stats.GetAppendable()
 	if isAObj {
 		// Handle appendable object
-		return filterAppendableObject(ctx, &stats, snapshotTS, aobjectMap, upstreamExecutor, localFS, isTombstone, mp)
+		return filterAppendableObject(ctx, &stats, snapshotTS, aobjectMap, upstreamExecutor, localFS, isTombstone, mp, getChunkWorker)
 	} else {
 		// Handle non-appendable object - write directly to fileservice
-		return filterNonAppendableObject(ctx, &stats, upstreamExecutor, localFS)
+		err := filterNonAppendableObject(ctx, &stats, upstreamExecutor, localFS, getChunkWorker)
+		return nil, err
 	}
 }
 
 // filterAppendableObject handles appendable objects
 // Gets object file from upstream, converts to batch, filters by snapshot TS, creates new object
-// Records the mapping between new UUID and upstream aobj in iterationCtx.ActiveAObj
+// Returns the mapping update info instead of directly updating aobjectMap
 func filterAppendableObject(
 	ctx context.Context,
 	stats *objectio.ObjectStats,
@@ -90,7 +345,8 @@ func filterAppendableObject(
 	localFS fileservice.FileService,
 	isTombstone bool,
 	mp *mpool.MPool,
-) error {
+	getChunkWorker GetChunkWorker,
+) (*FilterObjectResult, error) {
 	// Get object name from stats (upstream aobj UUID)
 	upstreamAObjUUID := stats.ObjectName().ObjectId()
 
@@ -101,28 +357,28 @@ func filterAppendableObject(
 	mapping := aobjectMap[*upstreamAObjUUID]
 
 	// Get object file from upstream using GETOBJECT
-	objectContent, err := GetObjectFromUpstream(ctx, upstreamExecutor, stats.ObjectName().String())
+	objectContent, err := GetObjectFromUpstreamWithWorker(ctx, upstreamExecutor, stats.ObjectName().String(), getChunkWorker)
 	if err != nil {
-		return moerr.NewInternalErrorf(ctx, "failed to get object from upstream: %v", err)
+		return nil, moerr.NewInternalErrorf(ctx, "failed to get object from upstream: %v", err)
 	}
 
 	// Extract sortkey from original object metadata
 	sortKeySeqnum, err := extractSortKeyFromObject(ctx, objectContent, stats)
 	if err != nil {
-		return moerr.NewInternalErrorf(ctx, "failed to extract sortkey from object: %v", err)
+		return nil, moerr.NewInternalErrorf(ctx, "failed to extract sortkey from object: %v", err)
 	}
 
 	// Convert object file to batch
 	bat, err := convertObjectToBatch(ctx, objectContent, stats, snapshotTS, localFS, mp)
 	if err != nil {
-		return moerr.NewInternalErrorf(ctx, "failed to convert object to batch: %v", err)
+		return nil, moerr.NewInternalErrorf(ctx, "failed to convert object to batch: %v", err)
 	}
 	defer bat.Close()
 
 	// Filter batch by snapshot TS
 	filteredBat, err := filterBatchBySnapshotTS(ctx, bat, snapshotTS, mp)
 	if err != nil {
-		return moerr.NewInternalErrorf(ctx, "failed to filter batch by snapshot TS: %v", err)
+		return nil, moerr.NewInternalErrorf(ctx, "failed to filter batch by snapshot TS: %v", err)
 	}
 	defer filteredBat.Close()
 
@@ -130,15 +386,16 @@ func filterAppendableObject(
 	// This is data object (not tombstone), so use SchemaData
 	objStats, err := createObjectFromBatch(ctx, filteredBat, stats, snapshotTS, isTombstone, localFS, mp, sortKeySeqnum)
 	if err != nil {
-		return moerr.NewInternalErrorf(ctx, "failed to create object from batch: %v", err)
+		return nil, moerr.NewInternalErrorf(ctx, "failed to create object from batch: %v", err)
 	}
 
-	// Update mapping
-	mapping.Previous = mapping.Current // Save previous stats
-	mapping.Current = objStats         // Set new current stats
-	aobjectMap[*upstreamAObjUUID] = mapping
-
-	return nil
+	// Return mapping update info instead of directly updating aobjectMap
+	return &FilterObjectResult{
+		HasMappingUpdate: true,
+		UpstreamAObjUUID: upstreamAObjUUID,
+		PreviousStats:    mapping.Current, // Previous is the old current
+		CurrentStats:     objStats,        // New current stats
+	}, nil
 }
 
 // filterNonAppendableObject handles non-appendable objects
@@ -148,12 +405,13 @@ func filterNonAppendableObject(
 	stats *objectio.ObjectStats,
 	upstreamExecutor SQLExecutor,
 	localFS fileservice.FileService,
+	getChunkWorker GetChunkWorker,
 ) error {
 	// Get object name from stats
 	objectName := stats.ObjectName().String()
 
 	// Get object file from upstream
-	objectContent, err := GetObjectFromUpstream(ctx, upstreamExecutor, objectName)
+	objectContent, err := GetObjectFromUpstreamWithWorker(ctx, upstreamExecutor, objectName, getChunkWorker)
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to get object from upstream: %v", err)
 	}
@@ -214,6 +472,16 @@ var GetObjectFromUpstream = func(
 	upstreamExecutor SQLExecutor,
 	objectName string,
 ) ([]byte, error) {
+	return GetObjectFromUpstreamWithWorker(ctx, upstreamExecutor, objectName, nil)
+}
+
+// GetObjectFromUpstreamWithWorker gets object file from upstream using GETOBJECT SQL with worker pool
+func GetObjectFromUpstreamWithWorker(
+	ctx context.Context,
+	upstreamExecutor SQLExecutor,
+	objectName string,
+	getChunkWorker GetChunkWorker,
+) ([]byte, error) {
 	if upstreamExecutor == nil {
 		return nil, moerr.NewInternalError(ctx, "upstream executor is nil")
 	}
@@ -221,63 +489,43 @@ var GetObjectFromUpstream = func(
 	// First, get offset 0 to get metadata (total_chunks, total_size, etc.)
 	// GETOBJECT returns: data, total_size, chunk_index, total_chunks, is_complete
 	// offset 0 returns metadata with data = nil
-	getChunk0SQL := PublicationSQLBuilder.GetObjectSQL(objectName, 0)
-	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute)
-	defer cancel()
-	result, err := upstreamExecutor.ExecSQL(ctxWithTimeout, nil, getChunk0SQL, false, true)
-	if err != nil {
-		return nil, moerr.NewInternalErrorf(ctx, "failed to execute GETOBJECT query for offset 0: %v", err)
+	metaJob := NewGetMetaJob(ctx, upstreamExecutor, objectName)
+	if getChunkWorker != nil {
+		getChunkWorker.SubmitGetChunk(metaJob)
+	} else {
+		metaJob.Execute()
+	}
+	metaResult := metaJob.WaitDone().(*GetMetaJobResult)
+	if metaResult.Err != nil {
+		return nil, metaResult.Err
 	}
 
-	var metadataData []byte
-	var totalSize int64
-	var chunkIndex int64
-	var totalChunks int64
-	var isComplete bool
-
-	if !result.Next() {
-		result.Close()
-		return nil, moerr.NewInternalErrorf(ctx, "no object content returned for %s", objectName)
-	}
-
-	if err := result.Scan(&metadataData, &totalSize, &chunkIndex, &totalChunks, &isComplete); err != nil {
-		result.Close()
-		return nil, moerr.NewInternalErrorf(ctx, "failed to scan offset 0: %v", err)
-	}
-	result.Close()
-
-	if totalChunks <= 0 {
-		return nil, moerr.NewInternalErrorf(ctx, "invalid total_chunks: %d", totalChunks)
-	}
+	totalChunks := metaResult.TotalChunks
 
 	// Fetch data chunks starting from chunk 1
 	// chunk 0 is metadata, chunks 1 to totalChunks are data chunks
 	allChunks := make([][]byte, totalChunks)
 
+	// Submit all chunk jobs to worker pool
+	chunkJobs := make([]*GetChunkJob, totalChunks)
 	for i := int64(1); i <= totalChunks; i++ {
-		getChunkSQL := PublicationSQLBuilder.GetObjectSQL(objectName, i)
-		result, err := upstreamExecutor.ExecSQL(ctx, nil, getChunkSQL, false, true)
-		if err != nil {
-			return nil, moerr.NewInternalErrorf(ctx, "failed to execute GETOBJECT query for offset %d: %v", i, err)
-		}
-
-		if result.Next() {
-			var chunkData []byte
-			var totalSizeChk int64
-			var chunkIndexChk int64
-			var totalChunksChk int64
-			var isCompleteChk bool
-			if err := result.Scan(&chunkData, &totalSizeChk, &chunkIndexChk, &totalChunksChk, &isCompleteChk); err != nil {
-				result.Close()
-				return nil, moerr.NewInternalErrorf(ctx, "failed to scan offset %d: %v", i, err)
-			}
-			// Store chunk at index i-1 since chunks are numbered 1 to totalChunks
-			allChunks[i-1] = chunkData
+		chunkJob := NewGetChunkJob(ctx, upstreamExecutor, objectName, i)
+		chunkJobs[i-1] = chunkJob
+		if getChunkWorker != nil {
+			getChunkWorker.SubmitGetChunk(chunkJob)
 		} else {
-			result.Close()
-			return nil, moerr.NewInternalErrorf(ctx, "no chunk content returned for chunk %d of %s", i, objectName)
+			chunkJob.Execute()
 		}
-		result.Close()
+	}
+
+	// Wait for all chunk jobs to complete
+	for i := int64(0); i < totalChunks; i++ {
+		chunkResult := chunkJobs[i].WaitDone().(*GetChunkJobResult)
+		if chunkResult.Err != nil {
+			return nil, chunkResult.Err
+		}
+		// Store chunk at index i since chunkJobs is 0-indexed
+		allChunks[i] = chunkResult.ChunkData
 	}
 
 	// Combine all chunks
@@ -1051,12 +1299,28 @@ func ApplyObjects(
 	cnEngine engine.Engine,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
+	filterObjectWorker FilterObjectWorker,
+	getChunkWorker GetChunkWorker,
 ) (err error) {
 
 	var collectedTombstoneDeleteStats []*ObjectWithTableInfo
 	var collectedTombstoneInsertStats []*ObjectWithTableInfo
 	var collectedDataDeleteStats []*ObjectWithTableInfo
 	var collectedDataInsertStats []*ObjectWithTableInfo
+
+	// Pre-submit filter object jobs for all non-delete objects
+	for _, info := range objectMap {
+		if !info.Delete {
+			statsBytes := info.Stats.Marshal()
+			filterJob := NewFilterObjectJob(ctx, statsBytes, currentTS, aobjectMap, upstreamExecutor, info.IsTombstone, fs, mp, getChunkWorker)
+			if filterObjectWorker != nil {
+				filterObjectWorker.SubmitFilterObject(filterJob)
+			} else {
+				filterJob.Execute()
+			}
+			info.FilterJob = filterJob
+		}
+	}
 
 	// Extract objects from map to collected stats lists
 	// Apply index table name mapping before collecting
@@ -1071,13 +1335,19 @@ func ApplyObjects(
 		// Update table name in info
 		info.TableName = downstreamTableName
 
-		statsBytes := info.Stats.Marshal()
-
 		if info.Stats.GetAppendable() {
 			if !info.Delete {
-				if err = FilterObject(ctx, statsBytes, currentTS, aobjectMap, upstreamExecutor, info.IsTombstone, fs, mp); err != nil {
-					err = moerr.NewInternalErrorf(ctx, "failed to filter object: %v", err)
+				filterResult := info.FilterJob.WaitDone().(*FilterObjectJobResult)
+				if filterResult.Err != nil {
+					err = moerr.NewInternalErrorf(ctx, "failed to filter object: %v", filterResult.Err)
 					return
+				}
+				// Update aobjectMap with the result
+				if filterResult.HasMappingUpdate && filterResult.UpstreamAObjUUID != nil {
+					mapping := aobjectMap[*filterResult.UpstreamAObjUUID]
+					mapping.Previous = filterResult.PreviousStats
+					mapping.Current = filterResult.CurrentStats
+					aobjectMap[*filterResult.UpstreamAObjUUID] = mapping
 				}
 			}
 			continue
@@ -1091,14 +1361,22 @@ func ApplyObjects(
 				collectedDataDeleteStats = append(collectedDataDeleteStats, info)
 			}
 		} else {
-			// Call FilterObject to handle the object (for both insert and delete)
+			// Wait for pre-submitted FilterObject job to handle the object
 			// FilterObject will:
 			// - For aobj: get object from upstream, convert to batch, filter by snapshot TS, create new object
 			//   For delete: mark object for deletion in ActiveAObj
 			// - For nobj: get object from upstream and write directly to fileservice
-			if err = FilterObject(ctx, statsBytes, currentTS, aobjectMap, upstreamExecutor, info.IsTombstone, fs, mp); err != nil {
-				err = moerr.NewInternalErrorf(ctx, "failed to filter object: %v", err)
+			filterResult := info.FilterJob.WaitDone().(*FilterObjectJobResult)
+			if filterResult.Err != nil {
+				err = moerr.NewInternalErrorf(ctx, "failed to filter object: %v", filterResult.Err)
 				return
+			}
+			// Update aobjectMap with the result
+			if filterResult.HasMappingUpdate && filterResult.UpstreamAObjUUID != nil {
+				mapping := aobjectMap[*filterResult.UpstreamAObjUUID]
+				mapping.Previous = filterResult.PreviousStats
+				mapping.Current = filterResult.CurrentStats
+				aobjectMap[*filterResult.UpstreamAObjUUID] = mapping
 			}
 			// Object to insert
 			if info.IsTombstone {
