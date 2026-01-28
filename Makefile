@@ -948,17 +948,20 @@ dev-logs-minio-local:
 .PHONY: dev-clean-minio-local
 dev-clean-minio-local:
 	@echo "WARNING: This will delete all MinIO data!"
-	@read -p "Continue? [y/N] " -n 1 -r; \
-	echo; \
-	if [[ $$REPLY =~ ^[Yy]$$ ]]; then \
-		echo "Stopping MinIO..."; \
-		cd $(MINIO_DIR) && docker compose down; \
-		echo "Removing data..."; \
-		rm -rf $(MINIO_DATA_DIR); \
-		echo "✅ MinIO data cleaned!"; \
-	else \
-		echo "Cancelled."; \
-	fi
+	@printf "Continue? [y/N] "; \
+	read REPLY; \
+	case "$$REPLY" in \
+		[Yy]*) \
+			echo "Stopping MinIO..."; \
+			cd $(MINIO_DIR) && docker compose down; \
+			echo "Removing data..."; \
+			rm -rf $(MINIO_DATA_DIR); \
+			echo "✅ MinIO data cleaned!"; \
+			;; \
+		*) \
+			echo "Cancelled."; \
+			;; \
+	esac
 
 .PHONY: launch-minio
 launch-minio: build dev-up-minio-local
