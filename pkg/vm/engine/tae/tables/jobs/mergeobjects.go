@@ -32,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -496,9 +495,6 @@ func (task *mergeObjectsTask) Execute(ctx context.Context) (err error) {
 		v2.TaskDataMergeDurationHistogram.Observe(time.Since(begin).Seconds())
 	}
 
-	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.TAE.Object.MergeBlocks.Add(1)
-	})
 	return nil
 }
 

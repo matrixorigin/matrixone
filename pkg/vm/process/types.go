@@ -132,6 +132,9 @@ type Session interface {
 	AddTempTable(dbName, alias, realName string)
 	RemoveTempTable(dbName, alias string)
 	RemoveTempTableByRealName(realName string)
+	// GetSqlModeNoAutoValueOnZero reports whether sql_mode contains NO_AUTO_VALUE_ON_ZERO.
+	// ok=false means the session doesn't support the cache.
+	GetSqlModeNoAutoValueOnZero() (bool, bool)
 }
 
 type ExecStatus int

@@ -800,13 +800,15 @@ func TestParquet_prepare_missingColumn(t *testing.T) {
 }
 
 func TestParquet_prepare_optionalToNotNull(t *testing.T) {
+	// Test that optional column can be prepared to map to NOT NULL column
+	// The NULL constraint violation will be checked at runtime when actual NULLs are encountered
 	var buf bytes.Buffer
 	schema := parquet.NewSchema("x", parquet.Group{
 		"c": parquet.Optional(parquet.Leaf(parquet.Int32Type)),
 	})
 	w := parquet.NewWriter(&buf, schema)
 	_, err := w.WriteRows([]parquet.Row{
-		{parquet.Int32Value(1).Level(0, 0, 0)},
+		{parquet.Int32Value(1).Level(0, 1, 0)},
 	})
 	require.NoError(t, err)
 	require.NoError(t, w.Close())
@@ -825,8 +827,9 @@ func TestParquet_prepare_optionalToNotNull(t *testing.T) {
 			},
 		},
 	}
+	// prepare should succeed - NULL constraint is checked at runtime, not prepare time
 	err = h.prepare(param)
-	require.Error(t, err)
+	require.NoError(t, err)
 }
 
 func TestParquet_ensureDictionaryIndexes_outOfRange(t *testing.T) {
@@ -1408,4 +1411,187 @@ func TestParquet_Timestamp_NotAdjustedToUTC_Dictionary(t *testing.T) {
 	require.Equal(t, "2024-01-15 10:30:00", got[0].String2(loc, 0))
 	require.Equal(t, "2024-01-15 10:30:01", got[1].String2(loc, 0))
 	require.Equal(t, "2024-01-15 10:30:00", got[2].String2(loc, 0))
+}
+
+// TestParquet_EmptyFile_ColumnCountMatch tests that empty parquet files (0 rows)
+// only check column count, not column names or types. This aligns with DuckDB behavior.
+func TestParquet_EmptyFile_ColumnCountMatch(t *testing.T) {
+	// Create an empty parquet file with 2 columns (id: int64, name: string)
+	var buf bytes.Buffer
+	schema := parquet.NewSchema("x", parquet.Group{
+		"id":   parquet.Leaf(parquet.Int64Type),
+		"name": parquet.Leaf(parquet.ByteArrayType),
+	})
+	w := parquet.NewWriter(&buf, schema)
+	// Write no rows - just close to create empty file with schema
+	require.NoError(t, w.Close())
+
+	// Verify file has 0 rows
+	f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	require.NoError(t, err)
+	require.Equal(t, int64(0), f.NumRows())
+
+	// Create param with different column names but same count (2 columns)
+	// This should succeed for empty files (only check column count)
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			Ctx: context.Background(),
+			Attrs: []plan.ExternAttr{
+				{ColName: "col1", ColIndex: 0}, // different name from "id"
+				{ColName: "col2", ColIndex: 1}, // different name from "name"
+			},
+			Cols: []*plan.ColDef{
+				{Typ: plan.Type{Id: int32(types.T_int32)}},     // different type from int64
+				{Typ: plan.Type{Id: int32(types.T_decimal64)}}, // different type from string
+			},
+			Extern:   &tree.ExternParam{ExParamConst: tree.ExParamConst{ScanType: tree.INLINE}},
+			FileSize: []int64{int64(buf.Len())},
+		},
+		ExParam: ExParam{Fileparam: &ExFileparam{FileIndex: 1, FileCnt: 1}},
+	}
+	param.Extern.Data = string(buf.Bytes())
+
+	// newParquetHandler should return (nil, nil) for empty file with matching column count
+	h, err := newParquetHandler(param)
+	require.NoError(t, err)
+	require.Nil(t, h, "empty file should return nil handler")
+}
+
+// TestParquet_EmptyFile_ColumnCountMismatch tests that empty parquet files
+// still fail when column count doesn't match.
+func TestParquet_EmptyFile_ColumnCountMismatch(t *testing.T) {
+	// Create an empty parquet file with 2 columns
+	var buf bytes.Buffer
+	schema := parquet.NewSchema("x", parquet.Group{
+		"id":   parquet.Leaf(parquet.Int64Type),
+		"name": parquet.Leaf(parquet.ByteArrayType),
+	})
+	w := parquet.NewWriter(&buf, schema)
+	require.NoError(t, w.Close())
+
+	// Create param expecting 3 columns (more than parquet has)
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			Ctx: context.Background(),
+			Attrs: []plan.ExternAttr{
+				{ColName: "col1", ColIndex: 0},
+				{ColName: "col2", ColIndex: 1},
+				{ColName: "col3", ColIndex: 2}, // extra column
+			},
+			Cols: []*plan.ColDef{
+				{Typ: plan.Type{Id: int32(types.T_int32)}},
+				{Typ: plan.Type{Id: int32(types.T_varchar)}},
+				{Typ: plan.Type{Id: int32(types.T_float64)}},
+			},
+			Extern:   &tree.ExternParam{ExParamConst: tree.ExParamConst{ScanType: tree.INLINE}},
+			FileSize: []int64{int64(buf.Len())},
+		},
+		ExParam: ExParam{Fileparam: &ExFileparam{FileIndex: 1, FileCnt: 1}},
+	}
+	param.Extern.Data = string(buf.Bytes())
+
+	// Should fail with column count mismatch error
+	h, err := newParquetHandler(param)
+	require.Error(t, err)
+	require.Nil(t, h)
+	require.Contains(t, err.Error(), "column count mismatch")
+}
+
+// TestParquet_EmptyFile_ExtraParquetColumns tests that empty parquet files
+// with more columns than table expects should fail (align with DuckDB behavior).
+func TestParquet_EmptyFile_ExtraParquetColumns(t *testing.T) {
+	// Create an empty parquet file with 3 columns
+	var buf bytes.Buffer
+	schema := parquet.NewSchema("x", parquet.Group{
+		"id":    parquet.Leaf(parquet.Int64Type),
+		"name":  parquet.Leaf(parquet.ByteArrayType),
+		"extra": parquet.Leaf(parquet.Int32Type),
+	})
+	w := parquet.NewWriter(&buf, schema)
+	require.NoError(t, w.Close())
+
+	// Create param expecting only 2 columns (less than parquet has)
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			Ctx: context.Background(),
+			Attrs: []plan.ExternAttr{
+				{ColName: "col1", ColIndex: 0},
+				{ColName: "col2", ColIndex: 1},
+			},
+			Cols: []*plan.ColDef{
+				{Typ: plan.Type{Id: int32(types.T_int32)}},
+				{Typ: plan.Type{Id: int32(types.T_varchar)}},
+			},
+			Extern:   &tree.ExternParam{ExParamConst: tree.ExParamConst{ScanType: tree.INLINE}},
+			FileSize: []int64{int64(buf.Len())},
+		},
+		ExParam: ExParam{Fileparam: &ExFileparam{FileIndex: 1, FileCnt: 1}},
+	}
+	param.Extern.Data = string(buf.Bytes())
+
+	// Should fail - column count mismatch (parquet has 3, table expects 2)
+	h, err := newParquetHandler(param)
+	require.Error(t, err)
+	require.Nil(t, h)
+	require.Contains(t, err.Error(), "column count mismatch")
+}
+
+// TestParquet_ScanEmptyFile tests the full scanParquetFile flow with empty file.
+func TestParquet_ScanEmptyFile(t *testing.T) {
+	// Create an empty parquet file
+	var buf bytes.Buffer
+	schema := parquet.NewSchema("x", parquet.Group{
+		"c": parquet.Leaf(parquet.Int32Type),
+	})
+	w := parquet.NewWriter(&buf, schema)
+	require.NoError(t, w.Close())
+
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			Ctx:      context.Background(),
+			Attrs:    []plan.ExternAttr{{ColName: "different_name", ColIndex: 0}},
+			Cols:     []*plan.ColDef{{Typ: plan.Type{Id: int32(types.T_int64)}}}, // different type
+			Extern:   &tree.ExternParam{ExParamConst: tree.ExParamConst{ScanType: tree.INLINE}},
+			FileSize: []int64{int64(buf.Len())},
+		},
+		ExParam: ExParam{Fileparam: &ExFileparam{FileIndex: 1, FileCnt: 1}},
+	}
+	param.Extern.Data = string(buf.Bytes())
+
+	proc := testutil.NewProc(t)
+	bat := vectorBatch([]types.Type{types.New(types.T_int64, 0, 0)})
+
+	// scanParquetFile should succeed and mark file as finished
+	err := scanParquetFile(context.Background(), param, proc, bat)
+	require.NoError(t, err)
+	require.True(t, param.Fileparam.End, "empty file should mark End=true")
+	require.Equal(t, 1, param.Fileparam.FileFin, "FileFin should be incremented")
+	require.Equal(t, 0, bat.RowCount(), "batch should have 0 rows")
+}
+
+// TestParquet_getParquetExpectedColCnt tests the helper function.
+func TestParquet_getParquetExpectedColCnt(t *testing.T) {
+	// Normal columns
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			Attrs: []plan.ExternAttr{
+				{ColName: "col1"},
+				{ColName: "col2"},
+				{ColName: "col3"},
+			},
+		},
+	}
+	require.Equal(t, 3, getParquetExpectedColCnt(param))
+
+	// With hidden column __mo_filepath
+	param2 := &ExternalParam{
+		ExParamConst: ExParamConst{
+			Attrs: []plan.ExternAttr{
+				{ColName: "col1"},
+				{ColName: "__mo_filepath"}, // hidden column
+				{ColName: "col2"},
+			},
+		},
+	}
+	require.Equal(t, 2, getParquetExpectedColCnt(param2))
 }

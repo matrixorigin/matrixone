@@ -671,6 +671,19 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 			put.Put()
 		}
 
+		// apply bf filter on workspace entries
+		if ls.memPKFilter.HasBF && ls.memPKFilter.BFSeqNum != -1 {
+			if skipMask.IsEmpty() {
+				skipMask = objectio.GetReusableBitmap()
+			}
+			bfColVec := entry.bat.Vecs[ls.memPKFilter.BFSeqNum+1] // +1 for rowid
+			ls.memPKFilter.FilterHint.BF.TestVector(bfColVec, func(exist bool, isnull bool, row int) {
+				if !exist {
+					skipMask.Add(uint64(row))
+				}
+			})
+		}
+
 		offsets = readutil.RowIdsToOffset(retainedRowIds, skipMask)
 		skipMask.Release()
 
@@ -807,6 +820,17 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 
 			if len(sels) == 0 {
 				continue
+			}
+
+			// apply bf filter on committed entries
+			if ls.memPKFilter.HasBF && ls.memPKFilter.BFSeqNum != -1 {
+				bfColVec := entry.Batch.Vecs[2+ls.memPKFilter.BFSeqNum] // 2 for rowid and commits
+				if bfColVec.IsNull(uint64(entry.Offset)) {
+					continue
+				}
+				if !ls.memPKFilter.FilterHint.BF.Test(bfColVec.GetRawBytesAt(int(entry.Offset))) {
+					continue
+				}
 			}
 
 			if minTS.GT(&entry.Time) {

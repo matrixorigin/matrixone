@@ -2120,23 +2120,104 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 			Valid: false,
 		}
 
+		bf := &bloomfilter.CBloomFilter{}
+		if len(bfData) > 0 {
+			err = bf.Unmarshal(bfData)
+			require.NoError(t, err)
+			defer bf.Free()
+		}
+
 		readFilter, err := ConstructBlockPKFilter(
 			false,
 			basePKFilter,
-			bfData,
+			bf,
 		)
 		require.NoError(t, err)
 		require.True(t, readFilter.Valid)
 		require.NotNil(t, readFilter.UnSortedSearchFunc)
 
 		// Test the search function
-		// For non-composite PK, we still need len(cacheVectors) >= 2 to match the function signature
-		// Use the same vector for both positions (PK column)
+		// Use the same vector for both positions (PK column) to cover optimized path.
 		cacheVectors := containers.Vectors{*inputVec, *inputVec}
 		result := readFilter.UnSortedSearchFunc(cacheVectors)
 		// Should return indices of values that exist in BF: [10, 20, 30] -> indices [1, 3, 5] (allow false positives)
 		assertOffsetsInRange(t, result, inputVec.Length())
 		assertContainsAll(t, result, []int64{1, 3, 5})
+	})
+
+	t.Run("non-composite PK with BloomFilter only (single vector)", func(t *testing.T) {
+		bfData, err := createBloomFilter([]any{int64(10), int64(20), int64(30)}, mp)
+		require.NoError(t, err)
+
+		inputVec := vector.NewVec(types.T_int64.ToType())
+		for _, v := range []int64{5, 10, 15, 20, 25, 30, 35} {
+			vector.AppendFixed(inputVec, v, false, mp)
+		}
+		defer inputVec.Free(mp)
+
+		basePKFilter := BasePKFilter{
+			Valid: false,
+		}
+
+		bf := &bloomfilter.CBloomFilter{}
+		if len(bfData) > 0 {
+			err = bf.Unmarshal(bfData)
+			require.NoError(t, err)
+			defer bf.Free()
+		}
+
+		readFilter, err := ConstructBlockPKFilter(
+			false,
+			basePKFilter,
+			bf,
+		)
+		require.NoError(t, err)
+		require.True(t, readFilter.Valid)
+		require.NotNil(t, readFilter.UnSortedSearchFunc)
+
+		cacheVectors := containers.Vectors{*inputVec}
+		result := readFilter.UnSortedSearchFunc(cacheVectors)
+		assertOffsetsInRange(t, result, inputVec.Length())
+		assertContainsAll(t, result, []int64{1, 3, 5})
+	})
+
+	t.Run("non-composite PK with BloomFilter + base filter (single vector)", func(t *testing.T) {
+		bfData, err := createBloomFilter([]any{int64(10), int64(20), int64(30)}, mp)
+		require.NoError(t, err)
+
+		inputVec := vector.NewVec(types.T_int64.ToType())
+		for _, v := range []int64{5, 10, 15, 20, 25, 30, 35} {
+			vector.AppendFixed(inputVec, v, false, mp)
+		}
+		defer inputVec.Free(mp)
+
+		basePKFilter := BasePKFilter{
+			Valid: true,
+			Op:    function.EQUAL,
+			Oid:   types.T_int64,
+			LB:    types.EncodeFixed(int64(20)),
+		}
+
+		bf := &bloomfilter.CBloomFilter{}
+		if len(bfData) > 0 {
+			err = bf.Unmarshal(bfData)
+			require.NoError(t, err)
+			defer bf.Free()
+		}
+
+		readFilter, err := ConstructBlockPKFilter(
+			false,
+			basePKFilter,
+			bf,
+		)
+		require.NoError(t, err)
+		require.True(t, readFilter.Valid)
+		require.NotNil(t, readFilter.UnSortedSearchFunc)
+
+		cacheVectors := containers.Vectors{*inputVec}
+		result := readFilter.UnSortedSearchFunc(cacheVectors)
+		require.Len(t, result, 1)
+		require.Equal(t, int64(3), result[0])
 	})
 
 	t.Run("composite PK with BloomFilter only - int64 last column", func(t *testing.T) {
@@ -2160,10 +2241,17 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 			Valid: false,
 		}
 
+		bf := &bloomfilter.CBloomFilter{}
+		if len(bfData) > 0 {
+			err = bf.Unmarshal(bfData)
+			require.NoError(t, err)
+			defer bf.Free()
+		}
+
 		readFilter, err := ConstructBlockPKFilter(
 			false,
 			basePKFilter,
-			bfData,
+			bf,
 		)
 		require.NoError(t, err)
 		require.True(t, readFilter.Valid)
@@ -2204,10 +2292,17 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 			Valid: false,
 		}
 
+		bf := &bloomfilter.CBloomFilter{}
+		if len(bfData) > 0 {
+			err = bf.Unmarshal(bfData)
+			require.NoError(t, err)
+			defer bf.Free()
+		}
+
 		readFilter, err := ConstructBlockPKFilter(
 			false,
 			basePKFilter,
-			bfData,
+			bf,
 		)
 		require.NoError(t, err)
 
@@ -2244,10 +2339,17 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 			Valid: false,
 		}
 
+		bf := &bloomfilter.CBloomFilter{}
+		if len(bfData) > 0 {
+			err = bf.Unmarshal(bfData)
+			require.NoError(t, err)
+			defer bf.Free()
+		}
+
 		readFilter, err := ConstructBlockPKFilter(
 			false,
 			basePKFilter,
-			bfData,
+			bf,
 		)
 		require.NoError(t, err)
 
@@ -2293,10 +2395,17 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 			Valid: false,
 		}
 
+		bf := &bloomfilter.CBloomFilter{}
+		if len(bfData) > 0 {
+			err = bf.Unmarshal(bfData)
+			require.NoError(t, err)
+			defer bf.Free()
+		}
+
 		readFilter, err := ConstructBlockPKFilter(
 			false,
 			basePKFilter,
-			bfData,
+			bf,
 		)
 		require.NoError(t, err)
 		require.True(t, readFilter.Valid)
@@ -2335,10 +2444,17 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 			Valid: false,
 		}
 
+		bf := &bloomfilter.CBloomFilter{}
+		if len(bfData) > 0 {
+			err = bf.Unmarshal(bfData)
+			require.NoError(t, err)
+			defer bf.Free()
+		}
+
 		readFilter, err := ConstructBlockPKFilter(
 			false,
 			basePKFilter,
-			bfData,
+			bf,
 		)
 		require.NoError(t, err)
 
@@ -2366,10 +2482,17 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 			Valid: false,
 		}
 
+		bf := &bloomfilter.CBloomFilter{}
+		if len(bfData) > 0 {
+			err = bf.Unmarshal(bfData)
+			require.NoError(t, err)
+			defer bf.Free()
+		}
+
 		readFilter, err := ConstructBlockPKFilter(
 			false,
 			basePKFilter,
-			bfData,
+			bf,
 		)
 		require.NoError(t, err)
 
@@ -2395,10 +2518,17 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 			Valid: false,
 		}
 
+		bf := &bloomfilter.CBloomFilter{}
+		if len(bfData) > 0 {
+			err = bf.Unmarshal(bfData)
+			require.NoError(t, err)
+			defer bf.Free()
+		}
+
 		readFilter, err := ConstructBlockPKFilter(
 			false,
 			basePKFilter,
-			bfData,
+			bf,
 		)
 		require.NoError(t, err)
 
@@ -2409,6 +2539,6 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 		cacheVectors := containers.Vectors{*vec, *invalidLastColVec}
 		result := readFilter.UnSortedSearchFunc(cacheVectors)
 		// Should return nil or empty since extraction fails
-		require.Nil(t, result)
+		require.Empty(t, result)
 	})
 }

@@ -15,161 +15,69 @@
 package perfcounter
 
 import (
-	"fmt"
-	"reflect"
-
-	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
+	"sync/atomic"
 )
 
 type CounterSet struct {
 	FileService FileServiceCounterSet
-	DistTAE     DistTAECounterSet
-	TAE         TAECounterSet
 }
 
 type FileServiceCounterSet struct {
 	S3 struct {
-		List        stats.Counter // listObjects:List all Objects  [Put type request]
-		Head        stats.Counter // statObject:View all meta information contained in the object [Get type request]
-		Put         stats.Counter // putObject:Upload an Object   [Put type request]
-		Get         stats.Counter // getObject:Download an Object   [Get type request]
-		Delete      stats.Counter // deleteObject:Delete a single Object [Put type request]
-		DeleteMulti stats.Counter // deleteObjects:Delete multiple Objects [Put type request]
+		List        atomic.Int64 // listObjects:List all Objects  [Put type request]
+		Head        atomic.Int64 // statObject:View all meta information contained in the object [Get type request]
+		Put         atomic.Int64 // putObject:Upload an Object   [Put type request]
+		Get         atomic.Int64 // getObject:Download an Object   [Get type request]
+		Delete      atomic.Int64 // deleteObject:Delete a single Object [Put type request]
+		DeleteMulti atomic.Int64 // deleteObjects:Delete multiple Objects [Put type request]
 	}
 
 	Cache struct {
-		Read   stats.Counter // CacheRead
-		Hit    stats.Counter // CacheHit
+		Read   atomic.Int64 // CacheRead
+		Hit    atomic.Int64 // CacheHit
 		Memory struct {
-			Read stats.Counter // CacheMemoryRead
-			Hit  stats.Counter // CacheMemoryHit
+			Read atomic.Int64 // CacheMemoryRead
+			Hit  atomic.Int64 // CacheMemoryHit
 		}
 		Disk struct {
-			Read            stats.Counter // CacheDiskRead
-			Hit             stats.Counter // CacheDiskHit
-			OpenIOEntryFile stats.Counter
-			OpenFullFile    stats.Counter
-			CreateFile      stats.Counter
-			StatFile        stats.Counter
-			WriteFile       stats.Counter
-			Error           stats.Counter
-			Evict           stats.Counter
+			Read atomic.Int64 // CacheDiskRead
+			Hit  atomic.Int64 // CacheDiskHit
 		}
 		Remote struct {
-			Read stats.Counter // CacheRemoteRead
-			Hit  stats.Counter // CacheRemoteHit
+			Read atomic.Int64 // CacheRemoteRead
+			Hit  atomic.Int64 // CacheRemoteHit
 		}
-	}
-
-	FileWithChecksum struct {
-		Read  stats.Counter // logical read, unit：bytes
-		Write stats.Counter // logical write, unit：bytes
 	}
 
 	// ReadSize: actual bytes read from storage layer (excluding rowid tombstone)
-	ReadSize stats.Counter
+	ReadSize atomic.Int64
 	// S3ReadSize: actual bytes read from S3 (excluding rowid tombstone)
-	S3ReadSize stats.Counter
+	S3ReadSize atomic.Int64
 	// DiskReadSize: actual bytes read from disk cache (excluding rowid tombstone)
-	DiskReadSize stats.Counter
-}
-
-type DistTAECounterSet struct {
-	Logtail struct {
-		Entries               stats.Counter
-		InsertEntries         stats.Counter
-		MetadataInsertEntries stats.Counter
-		DeleteEntries         stats.Counter
-		MetadataDeleteEntries stats.Counter
-
-		InsertRows   stats.Counter
-		DeleteRows   stats.Counter
-		ActiveRows   stats.Counter
-		InsertBlocks stats.Counter
-	}
-}
-
-type TAECounterSet struct {
-	LogTail struct {
-		Entries       stats.Counter
-		InsertEntries stats.Counter
-		DeleteEntries stats.Counter
-	}
-
-	CheckPoint struct {
-		DoGlobalCheckPoint      stats.Counter
-		DoIncrementalCheckpoint stats.Counter
-		DeleteGlobalEntry       stats.Counter
-		DeleteIncrementalEntry  stats.Counter
-	}
-
-	Object struct {
-		Create              stats.Counter
-		CreateNonAppendable stats.Counter
-		SoftDelete          stats.Counter
-		MergeBlocks         stats.Counter
-		CompactBlock        stats.Counter
-	}
-
-	Block struct {
-		Create              stats.Counter
-		CreateNonAppendable stats.Counter
-		SoftDelete          stats.Counter
-		Flush               stats.Counter
-	}
-}
-
-var statsCounterType = reflect.TypeOf((*stats.Counter)(nil)).Elem()
-
-type IterFieldsFunc func(path []string, counter *stats.Counter) error
-
-func (c *CounterSet) IterFields(fn IterFieldsFunc) error {
-	return iterFields(
-		reflect.ValueOf(c),
-		[]string{},
-		fn,
-	)
+	DiskReadSize atomic.Int64
 }
 
 func (c *CounterSet) Reset() {
-	*c = CounterSet{}
-}
+	// FileService.S3
+	c.FileService.S3.List.Store(0)
+	c.FileService.S3.Head.Store(0)
+	c.FileService.S3.Put.Store(0)
+	c.FileService.S3.Get.Store(0)
+	c.FileService.S3.Delete.Store(0)
+	c.FileService.S3.DeleteMulti.Store(0)
 
-func iterFields(v reflect.Value, path []string, fn IterFieldsFunc) error {
+	// FileService.Cache
+	c.FileService.Cache.Read.Store(0)
+	c.FileService.Cache.Hit.Store(0)
+	c.FileService.Cache.Memory.Read.Store(0)
+	c.FileService.Cache.Memory.Hit.Store(0)
+	c.FileService.Cache.Disk.Read.Store(0)
+	c.FileService.Cache.Disk.Hit.Store(0)
+	c.FileService.Cache.Remote.Read.Store(0)
+	c.FileService.Cache.Remote.Hit.Store(0)
 
-	if v.Type() == statsCounterType {
-		return fn(path, v.Addr().Interface().(*stats.Counter))
-	}
-
-	t := v.Type()
-
-	switch t.Kind() {
-
-	case reflect.Pointer:
-		iterFields(v.Elem(), path, fn)
-
-	case reflect.Struct:
-		for i := 0; i < t.NumField(); i++ {
-			field := t.Field(i)
-			if err := iterFields(v.Field(i), append(path, field.Name), fn); err != nil {
-				return err
-			}
-		}
-
-	case reflect.Map:
-		if t.Key().Kind() != reflect.String {
-			panic(fmt.Sprintf("unknown type: %v", v.Type()))
-		}
-		iter := v.MapRange()
-		for iter.Next() {
-			if err := iterFields(iter.Value(), append(path, iter.Key().String()), fn); err != nil {
-				return err
-			}
-		}
-
-	default:
-		panic(fmt.Sprintf("unknown type: %v", v.Type()))
-	}
-
-	return nil
+	// FileService top-level
+	c.FileService.ReadSize.Store(0)
+	c.FileService.S3ReadSize.Store(0)
+	c.FileService.DiskReadSize.Store(0)
 }

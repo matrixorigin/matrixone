@@ -23,6 +23,7 @@ import "C"
 import (
 	"math"
 	"runtime"
+	"sync/atomic"
 	"unsafe"
 
 	_ "github.com/matrixorigin/matrixone/cgo"
@@ -33,7 +34,8 @@ import (
 
 // CBloomFilter is a wrapper around the C implementation of a bloom filter.
 type CBloomFilter struct {
-	ptr *C.bloomfilter_t
+	ptr    *C.bloomfilter_t
+	refcnt int32
 }
 
 func computeMemAndHashCountC(rowCount int64, probability float64) (int64, int) {
@@ -88,7 +90,7 @@ func NewCBloomFilter(nbits uint64, k uint32) *CBloomFilter {
 	if ptr == nil {
 		return nil
 	}
-	return &CBloomFilter{ptr: ptr}
+	return &CBloomFilter{ptr: ptr, refcnt: 1}
 }
 
 func (bf *CBloomFilter) Ptr() *C.bloomfilter_t {
@@ -98,9 +100,22 @@ func (bf *CBloomFilter) Ptr() *C.bloomfilter_t {
 // Free releases the C memory allocated for the bloom filter.
 func (bf *CBloomFilter) Free() {
 	if bf != nil && bf.ptr != nil {
-		C.bloomfilter_free(bf.ptr)
-		bf.ptr = nil
+		if atomic.AddInt32(&bf.refcnt, -1) == 0 {
+			C.bloomfilter_free(bf.ptr)
+			bf.ptr = nil
+		}
 	}
+}
+
+// Share the CBloomfilter and increment the reference counter
+func (bf *CBloomFilter) SharePointer() *CBloomFilter {
+	atomic.AddInt32(&bf.refcnt, 1)
+	return bf
+}
+
+// Check CBloomFilter is Valid
+func (bf *CBloomFilter) Valid() bool {
+	return (bf != nil && bf.ptr != nil)
 }
 
 // Add inserts a byte slice into the bloom filter.
@@ -162,6 +177,7 @@ func (bf *CBloomFilter) Unmarshal(data []byte) error {
 		panic("failed to alloc memory for CBloomFilter")
 	}
 	bf.ptr = ptr
+	atomic.StoreInt32(&bf.refcnt, 1)
 	return nil
 }
 

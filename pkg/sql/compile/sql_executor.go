@@ -197,10 +197,6 @@ func (s *sqlExecutor) getCompileContext(
 		proc:      proc,
 		lower:     lower,
 	}
-	// For testing: check if a stats cache is provided in context
-	if statsCache, ok := ctx.Value("test_stats_cache").(*plan.StatsCache); ok {
-		cc.statsCache = statsCache
-	}
 	return cc
 }
 

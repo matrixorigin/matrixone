@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -76,7 +75,7 @@ func TestCBloomFilterWithVector(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vecs := make([]*vector.Vector, cVecCount)
 	for i := 0; i < cVecCount; i++ {
-		vecs[i] = testutil.NewVector(cTestCount/cVecCount, types.New(types.T_int64, 0, 0), mp, false, nil)
+		vecs[i] = newVector(cTestCount/cVecCount, types.New(types.T_int64, 0, 0), mp)
 	}
 
 	boom := NewCBloomFilterWithProbability(cTestCount, cTestRate)
@@ -89,7 +88,7 @@ func TestCBloomFilterWithVector(t *testing.T) {
 		vecs[j].Free(mp)
 	}
 
-	testVec := testutil.NewVector(cTestCount/cVecCount, types.New(types.T_int64, 0, 0), mp, false, nil)
+	testVec := newVector(cTestCount/cVecCount, types.New(types.T_int64, 0, 0), mp)
 	defer testVec.Free(mp)
 
 	allAdd := true
@@ -98,7 +97,7 @@ func TestCBloomFilterWithVector(t *testing.T) {
 	})
 	require.Equal(t, allAdd, true)
 
-	testVec2 := testutil.NewVector(int(cTestCount*1.2), types.New(types.T_int64, 0, 0), mp, false, nil)
+	testVec2 := newVector(int(cTestCount*1.2), types.New(types.T_int64, 0, 0), mp)
 	defer testVec2.Free(mp)
 
 	allAdd = true
@@ -110,7 +109,7 @@ func TestCBloomFilterWithVector(t *testing.T) {
 
 func TestCBloomFilter_Free(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := testutil.NewVector(int(cTestCount*1.2), types.New(types.T_int64, 0, 0), mp, false, nil)
+	vec := newVector(int(cTestCount*1.2), types.New(types.T_int64, 0, 0), mp)
 	defer vec.Free(mp)
 
 	boom := NewCBloomFilterWithProbability(cTestCount, cTestRate)
@@ -143,7 +142,7 @@ func BenchmarkCBloomFiltrerAddVector(b *testing.B) {
 	mp := mpool.MustNewZero()
 	vecs := make([]*vector.Vector, cVecCount)
 	for i := 0; i < cVecCount; i++ {
-		vecs[i] = testutil.NewVector(cTestCount/cVecCount, types.New(types.T_int64, 0, 0), mp, false, nil)
+		vecs[i] = newVector(cTestCount/cVecCount, types.New(types.T_int64, 0, 0), mp)
 	}
 	defer func() {
 		for i := range vecs {
@@ -165,7 +164,7 @@ func BenchmarkCBloomFiltrerTestVector(b *testing.B) {
 	mp := mpool.MustNewZero()
 	vecs := make([]*vector.Vector, cVecCount)
 	for i := 0; i < cVecCount; i++ {
-		vecs[i] = testutil.NewVector(cTestCount/cVecCount, types.New(types.T_int64, 0, 0), mp, false, nil)
+		vecs[i] = newVector(cTestCount/cVecCount, types.New(types.T_int64, 0, 0), mp)
 	}
 	defer func() {
 		for i := range vecs {
@@ -190,7 +189,7 @@ func BenchmarkCBloomFiltrerTestAndAddVector(b *testing.B) {
 	mp := mpool.MustNewZero()
 	vecs := make([]*vector.Vector, cVecCount)
 	for i := 0; i < cVecCount; i++ {
-		vecs[i] = testutil.NewVector(cTestCount/cVecCount, types.New(types.T_int64, 0, 0), mp, false, nil)
+		vecs[i] = newVector(cTestCount/cVecCount, types.New(types.T_int64, 0, 0), mp)
 	}
 	defer func() {
 		for i := range vecs {
@@ -212,7 +211,7 @@ func BenchmarkCBloomFiltrerAddVarlenaVector(b *testing.B) {
 	mp := mpool.MustNewZero()
 	vecs := make([]*vector.Vector, cVecCount)
 	for i := 0; i < cVecCount; i++ {
-		vecs[i] = testutil.NewVector(cTestCount/cVecCount, types.New(types.T_varchar, 0, 0), mp, false, nil)
+		vecs[i] = newVector(cTestCount/cVecCount, types.New(types.T_varchar, 0, 0), mp)
 	}
 	defer func() {
 		for i := range vecs {
@@ -234,7 +233,7 @@ func BenchmarkCBloomFiltrerTestVarlenaVector(b *testing.B) {
 	mp := mpool.MustNewZero()
 	vecs := make([]*vector.Vector, cVecCount)
 	for i := 0; i < cVecCount; i++ {
-		vecs[i] = testutil.NewVector(cTestCount/cVecCount, types.New(types.T_varchar, 0, 0), mp, false, nil)
+		vecs[i] = newVector(cTestCount/cVecCount, types.New(types.T_varchar, 0, 0), mp)
 	}
 	defer func() {
 		for i := range vecs {
@@ -259,7 +258,7 @@ func BenchmarkCBloomFiltrerTestAndAddVarlenaVector(b *testing.B) {
 	mp := mpool.MustNewZero()
 	vecs := make([]*vector.Vector, cVecCount)
 	for i := 0; i < cVecCount; i++ {
-		vecs[i] = testutil.NewVector(cTestCount/cVecCount, types.New(types.T_varchar, 0, 0), mp, false, nil)
+		vecs[i] = newVector(cTestCount/cVecCount, types.New(types.T_varchar, 0, 0), mp)
 	}
 	defer func() {
 		for i := range vecs {
@@ -281,7 +280,7 @@ func TestCBloomFilter_MarshalUnmarshalWithVector(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vecs := make([]*vector.Vector, cVecCount)
 	for i := 0; i < cVecCount; i++ {
-		vecs[i] = testutil.NewVector(cTestCount/cVecCount, types.New(types.T_int64, 0, 0), mp, false, nil)
+		vecs[i] = newVector(cTestCount/cVecCount, types.New(types.T_int64, 0, 0), mp)
 	}
 	defer func() {
 		for i := 0; i < cVecCount; i++ {
@@ -308,7 +307,7 @@ func TestCBloomFilter_MarshalUnmarshalWithVector(t *testing.T) {
 	defer bf2.Free()
 
 	// Verify both filters behave the same
-	testVec := testutil.NewVector(cTestCount/cVecCount, types.New(types.T_int64, 0, 0), mp, false, nil)
+	testVec := newVector(cTestCount/cVecCount, types.New(types.T_int64, 0, 0), mp)
 	defer testVec.Free(mp)
 
 	// Test original filter
@@ -326,7 +325,7 @@ func TestCBloomFilter_MarshalUnmarshalWithVector(t *testing.T) {
 	require.Equal(t, allFound1, allFound2, "original and unmarshaled filters should behave the same")
 
 	// Test with new data that wasn't added
-	newVec := testutil.NewVector(cTestCount*2, types.New(types.T_int64, 0, 0), mp, false, nil)
+	newVec := newVector(cTestCount*2, types.New(types.T_int64, 0, 0), mp)
 	defer newVec.Free(mp)
 
 	allFoundNew1 := true
