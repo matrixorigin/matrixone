@@ -2067,7 +2067,6 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		determineHashOnPK(rootID, builder)
 		tagCnt := make(map[int32]int)
 		rootID = builder.removeEffectlessLeftJoins(rootID, tagCnt)
-		ReCalcNodeStats(rootID, builder, true, false, true)
 		builder.pushdownTopThroughLeftJoin(rootID)
 		ReCalcNodeStats(rootID, builder, true, false, true)
 
@@ -5326,6 +5325,8 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		nodeId, err = builder.buildParseJsonlData(tbl, ctx, exprs, children)
 	case "parse_jsonl_file":
 		nodeId, err = builder.buildParseJsonlFile(tbl, ctx, exprs, children)
+	case "table_stats":
+		nodeId = builder.buildTableStats(tbl, ctx, exprs, children)
 	default:
 		err = moerr.NewNotSupportedf(builder.GetContext(), "table function '%s' not supported", id)
 	}

@@ -107,8 +107,11 @@ create table table02 (col1 int unique key, col2 varchar(20));
 insert into table02 (col1, col2) values (133, 'database');
 create table table03(a INT primary key AUTO_INCREMENT, b INT, c INT);
 create table table04(a INT primary key AUTO_INCREMENT, b INT, c INT);
+set @old_sql_mode = @@sql_mode;
+set sql_mode = concat_ws(',', @@sql_mode, 'NO_AUTO_VALUE_ON_ZERO');
 insert into table03 values (1,1,1), (2,2,2);
 insert into table04 values (0,1,2), (2,3,4);
+set sql_mode = @old_sql_mode;
 select count(*) from table01;
 count(*)
 2
