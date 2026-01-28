@@ -21,6 +21,7 @@ package bloomfilter
 */
 import "C"
 import (
+	"math"
 	"runtime"
 	"unsafe"
 
@@ -35,10 +36,45 @@ type CBloomFilter struct {
 	ptr *C.bloomfilter_t
 }
 
+func computeMemAndHashCountC(rowCount int64, probability float64) (int64, int) {
+	k := 1
+	if rowCount < 10001 {
+		k = 1
+	} else if rowCount < 10_0001 {
+		k = 1
+	} else if rowCount < 100_0001 {
+		k = 1
+	} else if rowCount < 1000_0001 {
+		k = 2
+	} else if rowCount < 1_0000_0001 {
+		k = 3
+	} else if rowCount < 10_0000_0001 {
+		k = 3
+	} else if rowCount < 100_0000_0001 {
+		k = 3
+	} else {
+		panic("unsupport rowCount")
+	}
+	k *= 3
+	m_float := -float64(k) * float64(rowCount) / math.Log(1-math.Pow(probability, 1.0/float64(k)))
+	m := int64(m_float)
+
+	/*
+		m_float = -float64(rowCount) * math.Log(probability) / math.Pow(math.Log(2), 2)
+		m := uint64(math.Ceil(m_float))
+		k_float := (float64(m) / float64(rowCount)) * math.Log2(2)
+		k = int(math.Ceil(k_float))
+	*/
+
+	//fmt.Printf("m %d k %d\n", m, k)
+	return m, k
+}
+
 // NewCBloomFilterWithProbaility creates a new CBloomFilter with optimal parameters
 // derived from the expected number of elements (rowcnt) and the desired false positive probability.
 func NewCBloomFilterWithProbability(rowcnt int64, probability float64) *CBloomFilter {
-	nbit, k := computeMemAndHashCount(rowcnt, probability)
+	nbit, k := computeMemAndHashCountC(rowcnt, probability)
+	//os.Stderr.WriteString(fmt.Sprintf("bloom k %d m %d\n", k, nbit))
 	return NewCBloomFilter(uint64(nbit), uint32(k))
 }
 
@@ -142,15 +178,15 @@ func (bf *CBloomFilter) TestAndAddVector(v *vector.Vector, callBack func(bool, b
 
 // TestVector tests all elements in the vector against the bloom filter.
 // It invokes the callback function for all elements in the vector.
-func (bf *CBloomFilter) TestVector(v *vector.Vector, callBack func(bool, bool, int)) {
+func (bf *CBloomFilter) TestVector(v *vector.Vector, callBack func(bool, bool, int)) []uint8 {
 	if bf == nil || bf.ptr == nil {
-		return
+		return nil
 	}
 
 	if v.GetType().IsFixedLen() {
-		bf.testFixedVector(v, callBack)
+		return bf.testFixedVector(v, callBack)
 	} else {
-		bf.testVarlenaVector(v, callBack)
+		return bf.testVarlenaVector(v, callBack)
 	}
 }
 
@@ -224,7 +260,7 @@ func (bf *CBloomFilter) testAndAddVarlenaVector(v *vector.Vector, callBack func(
 	runtime.KeepAlive(nullptr)
 }
 
-func (bf *CBloomFilter) testFixedVector(v *vector.Vector, callBack func(bool, bool, int)) {
+func (bf *CBloomFilter) testFixedVector(v *vector.Vector, callBack func(bool, bool, int)) []uint8 {
 	fixedData := v.GetData()
 	typeSize := v.GetType().TypeSize()
 	length := v.Length()
@@ -248,11 +284,13 @@ func (bf *CBloomFilter) testFixedVector(v *vector.Vector, callBack func(bool, bo
 			callBack(results[j] != 0, nulls.Contains(uint64(j)), j)
 		}
 	}
+
+	return results
 }
 
-func (bf *CBloomFilter) testVarlenaVector(v *vector.Vector, callBack func(bool, bool, int)) {
+func (bf *CBloomFilter) testVarlenaVector(v *vector.Vector, callBack func(bool, bool, int)) []uint8 {
 	if v.Length() == 0 {
-		return
+		return []uint8{}
 	}
 	varlenData := vector.MustFixedColWithTypeCheck[types.Varlena](v)
 	typeSize := v.GetType().TypeSize()
@@ -280,6 +318,8 @@ func (bf *CBloomFilter) testVarlenaVector(v *vector.Vector, callBack func(bool, 
 	runtime.KeepAlive(varlenData)
 	runtime.KeepAlive(area)
 	runtime.KeepAlive(nullptr)
+
+	return results
 }
 
 func (bf *CBloomFilter) addFixedVector(v *vector.Vector) {
