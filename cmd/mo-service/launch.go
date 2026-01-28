@@ -244,11 +244,13 @@ func waitHAKeeperReady(
 	}
 }
 
-func waitHAKeeperRunning(client logservice.CNHAKeeperClient) error {
-	// Use a longer timeout (30 minutes) to allow for WAL recovery during disaster recovery.
-	// WAL recovery can take a long time depending on the number of entries to replay.
-	ctx, cancel := context.WithTimeoutCause(context.TODO(), time.Minute*30, moerr.CauseWaitHAKeeperRunning)
+func waitHAKeeperRunning(client logservice.CNHAKeeperClient, timeout time.Duration) error {
+	// Use the configured timeout for waiting HAKeeper to be running.
+	// This is useful during disaster recovery when WAL recovery may take a long time.
+	ctx, cancel := context.WithTimeoutCause(context.TODO(), timeout, moerr.CauseWaitHAKeeperRunning)
 	defer cancel()
+
+	logutil.Info("wait.hakeeper.running", zap.Duration("timeout", timeout))
 
 	// wait HAKeeper running
 	for {
@@ -267,7 +269,7 @@ func waitHAKeeperRunning(client logservice.CNHAKeeperClient) error {
 	}
 }
 
-func waitAnyShardReady(client logservice.CNHAKeeperClient) error {
+func waitAnyShardReady(client logservice.CNHAKeeperClient, _ time.Duration) error {
 	ctx, cancel := context.WithTimeoutCause(context.TODO(), time.Second*30, moerr.CauseWaitAnyShardReady)
 	defer cancel()
 
@@ -304,13 +306,14 @@ func waitAnyShardReady(client logservice.CNHAKeeperClient) error {
 func waitClusterCondition(
 	service string,
 	cfg logservice.HAKeeperClientConfig,
-	waitFunc func(logservice.CNHAKeeperClient) error,
+	waitFunc func(logservice.CNHAKeeperClient, time.Duration) error,
 ) error {
 	client, err := waitHAKeeperReady(service, cfg)
 	if err != nil {
 		return err
 	}
-	if err := waitFunc(client); err != nil {
+	timeout := cfg.GetHAKeeperRunningTimeout()
+	if err := waitFunc(client, timeout); err != nil {
 		return err
 	}
 	if err := client.Close(); err != nil {

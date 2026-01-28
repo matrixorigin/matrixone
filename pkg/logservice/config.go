@@ -574,6 +574,10 @@ type HAKeeperClientConfig struct {
 	AllocateIDBatch uint64 `toml:"allocate-id-batch"`
 	// EnableCompress enable compress
 	EnableCompress bool `toml:"enable-compress"`
+	// HAKeeperRunningTimeout is the timeout for waiting HAKeeper to be running.
+	// This is useful during disaster recovery when WAL recovery may take a long time.
+	// Default is 5 minutes. Set to a larger value (e.g., 30m) for disaster recovery.
+	HAKeeperRunningTimeout toml.Duration `toml:"hakeeper-running-timeout"`
 }
 
 // Validate validates the HAKeeperClientConfig.
@@ -584,7 +588,19 @@ func (c *HAKeeperClientConfig) Validate() error {
 	if c.AllocateIDBatch == 0 {
 		c.AllocateIDBatch = 100
 	}
+	if c.HAKeeperRunningTimeout.Duration == 0 {
+		c.HAKeeperRunningTimeout.Duration = time.Minute * 5
+	}
 	return nil
+}
+
+// GetHAKeeperRunningTimeout returns the timeout for waiting HAKeeper to be running.
+// Returns the configured value or default 5 minutes.
+func (c *HAKeeperClientConfig) GetHAKeeperRunningTimeout() time.Duration {
+	if c.HAKeeperRunningTimeout.Duration == 0 {
+		return time.Minute * 5
+	}
+	return c.HAKeeperRunningTimeout.Duration
 }
 
 // ClientConfig is the configuration for log service clients.

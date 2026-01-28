@@ -393,8 +393,13 @@ func (op *operator) waitClusterConditionLocked(
 func (op *operator) waitHAKeeperRunningLocked(
 	client logservice.CNHAKeeperClient,
 ) error {
-	ctx, cancel := context.WithTimeoutCause(context.TODO(), time.Minute*2, moerr.CauseWaitHAKeeperRunningLocked)
+	// Use the configured timeout for waiting HAKeeper to be running.
+	// This is useful during disaster recovery when WAL recovery may take a long time.
+	timeout := op.cfg.HAKeeperClient.GetHAKeeperRunningTimeout()
+	ctx, cancel := context.WithTimeoutCause(context.TODO(), timeout, moerr.CauseWaitHAKeeperRunningLocked)
 	defer cancel()
+
+	op.reset.logger.Info("waiting for hakeeper to be running", zap.Duration("timeout", timeout))
 
 	// wait HAKeeper running
 	for {
