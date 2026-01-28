@@ -149,9 +149,8 @@ func (bat *Batch) MarshalBinaryWithBuffer(w *bytes.Buffer, reset bool) ([]byte, 
 		}
 	}
 
-	// ExtraBuf1 and ExtraBuf2
-	types.WriteSizeBytes(bat.ExtraBuf1, w)
-	types.WriteSizeBytes(bat.ExtraBuf2, w)
+	// ExtraBuf
+	types.WriteSizeBytes(bat.ExtraBuf, w)
 
 	w.Write(types.EncodeInt32(&bat.Recursive))
 	w.Write(types.EncodeInt32(&bat.ShuffleIDX))
@@ -260,18 +259,11 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 		data = data[size:]
 	}
 
-	// ExtraBuf1
+	// ExtraBuf
 	l = types.DecodeInt32(data[:4])
 	data = data[4:]
-	bat.ExtraBuf1 = nil
-	bat.ExtraBuf1 = append(bat.ExtraBuf1, data[:l]...)
-	data = data[l:]
-
-	// ExtraBuf2
-	l = types.DecodeInt32(data[:4])
-	data = data[4:]
-	bat.ExtraBuf2 = nil
-	bat.ExtraBuf2 = append(bat.ExtraBuf2, data[:l]...)
+	bat.ExtraBuf = nil
+	bat.ExtraBuf = append(bat.ExtraBuf, data[:l]...)
 	data = data[l:]
 
 	bat.Recursive = types.DecodeInt32(data[:4])
@@ -332,11 +324,8 @@ func (bat *Batch) UnmarshalFromReader(r io.Reader, mp *mpool.MPool) (err error) 
 		bat.Attrs[i] = string(bs)
 	}
 
-	// ExtraBuf1
-	if _, bat.ExtraBuf1, err = types.ReadSizeBytes(r); err != nil {
-		return err
-	}
-	if _, bat.ExtraBuf2, err = types.ReadSizeBytes(r); err != nil {
+	// ExtraBuf
+	if _, bat.ExtraBuf, err = types.ReadSizeBytes(r); err != nil {
 		return err
 	}
 
@@ -518,8 +507,7 @@ func (bat *Batch) Clean(m *mpool.MPool) {
 
 	bat.Vecs = nil
 	bat.Attrs = nil
-	bat.ExtraBuf1 = nil
-	bat.ExtraBuf2 = nil
+	bat.ExtraBuf = nil
 	bat.SetRowCount(0)
 }
 

@@ -232,10 +232,6 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 	if st.PhysicalType() == nil {
 		return nil
 	}
-	if sc.Optional() && dt.NotNullable {
-		return nil
-	}
-
 	mp := &columnMapper{
 		srcNull:            sc.Optional(),
 		dstNull:            !dt.NotNullable,
@@ -250,6 +246,13 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			if page.Dictionary() != nil {
 				return moerr.NewNYIf(proc.Ctx, "indexed %s page", st)
 			}
+
+			// Fail early: if page has NULLs and destination doesn't allow them
+			if mp.srcNull && page.NumNulls() > 0 && !mp.dstNull {
+				return moerr.NewConstraintViolationf(proc.Ctx,
+					"cannot load NULL value into NOT NULL column")
+			}
+
 			p := make([]parquet.Value, page.NumValues())
 			n, err := page.Values().ReadValues(p)
 			if err != nil && !errors.Is(err, io.EOF) {
@@ -719,20 +722,37 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			}
 			// https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#timestamp
 			tsT := lt.Timestamp
-			if tsT == nil || !tsT.IsAdjustedToUTC {
+			if tsT == nil {
 				break
 			}
+			// isAdjustedToUTC: true=UTC (use directly), false=local time (subtract session timezone offset for correct MO display)
+			isAdjustedToUTC := tsT.IsAdjustedToUTC
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				data := page.Data()
 				dict := page.Dictionary()
+
+				// Get timezone offset for non-UTC timestamps
+				var tzOffsetMicros int64 = 0
+				if !isAdjustedToUTC {
+					loc := proc.Base.SessionInfo.TimeZone
+					if loc == nil {
+						loc = time.Local
+					}
+					// Get the timezone offset in seconds, then convert to microseconds
+					// We use current time to get the offset, which handles DST correctly for current data
+					_, offset := time.Now().In(loc).Zone()
+					tzOffsetMicros = int64(offset) * 1000000 // seconds to microseconds
+				}
+
 				switch {
 				case tsT.Unit.Nanos != nil:
+					tzOffsetNanos := tzOffsetMicros * 1000 // convert to nanoseconds
 					if dict != nil {
 						dictData := dict.Page().Data()
 						dictValues := dictData.Int64()
 						converted := make([]types.Timestamp, len(dictValues))
 						for i, v := range dictValues {
-							converted[i] = types.UnixNanoToTimestamp(v)
+							converted[i] = types.UnixNanoToTimestamp(v - tzOffsetNanos)
 						}
 						indexes := data.Int32()
 						return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Timestamp {
@@ -740,7 +760,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 						})
 					}
 					return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Timestamp {
-						return types.UnixNanoToTimestamp(v)
+						return types.UnixNanoToTimestamp(v - tzOffsetNanos)
 					})
 				case tsT.Unit.Micros != nil:
 					if dict != nil {
@@ -748,7 +768,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 						dictValues := dictData.Int64()
 						converted := make([]types.Timestamp, len(dictValues))
 						for i, v := range dictValues {
-							converted[i] = types.UnixMicroToTimestamp(v)
+							converted[i] = types.UnixMicroToTimestamp(v - tzOffsetMicros)
 						}
 						indexes := data.Int32()
 						return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Timestamp {
@@ -756,15 +776,16 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 						})
 					}
 					return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Timestamp {
-						return types.UnixMicroToTimestamp(v)
+						return types.UnixMicroToTimestamp(v - tzOffsetMicros)
 					})
 				case tsT.Unit.Millis != nil:
+					tzOffsetMillis := tzOffsetMicros / 1000 // convert to milliseconds
 					if dict != nil {
 						dictData := dict.Page().Data()
 						dictValues := dictData.Int64()
 						converted := make([]types.Timestamp, len(dictValues))
 						for i, v := range dictValues {
-							converted[i] = types.UnixMicroToTimestamp(v * 1000)
+							converted[i] = types.UnixMicroToTimestamp((v - tzOffsetMillis) * 1000)
 						}
 						indexes := data.Int32()
 						return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Timestamp {
@@ -772,7 +793,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 						})
 					}
 					return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Timestamp {
-						return types.UnixMicroToTimestamp(v * 1000)
+						return types.UnixMicroToTimestamp((v - tzOffsetMillis) * 1000)
 					})
 				default:
 					return moerr.NewInternalError(proc.Ctx, "unknown unit")
@@ -923,7 +944,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				}
 			}
 		}
-	case types.T_char, types.T_varchar, types.T_text, types.T_binary, types.T_varbinary, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_text, types.T_binary, types.T_varbinary, types.T_blob, types.T_json:
 		if st.Kind() != parquet.ByteArray && st.Kind() != parquet.FixedLenByteArray {
 			break
 		}
@@ -1148,8 +1169,8 @@ func (nc *nullCheckInfo) isNull(index int) bool {
 func prepareNullCheck(ctx context.Context, mp *columnMapper, page parquet.Page) (nullCheckInfo, error) {
 	numRows := int(page.NumRows())
 
-	// Fast path: source or destination doesn't allow null
-	if !mp.srcNull || !mp.dstNull {
+	// Fast path: source doesn't allow null
+	if !mp.srcNull {
 		return nullCheckInfo{
 			noNulls:        true,
 			actualNonNulls: int64(numRows),
@@ -1162,6 +1183,12 @@ func prepareNullCheck(ctx context.Context, mp *columnMapper, page parquet.Page) 
 			noNulls:        true,
 			actualNonNulls: int64(numRows),
 		}, nil
+	}
+
+	// Page has NULLs - check if destination allows them
+	if !mp.dstNull {
+		return nullCheckInfo{}, moerr.NewConstraintViolationf(ctx,
+			"cannot load NULL value into NOT NULL column")
 	}
 
 	levels := page.DefinitionLevels()
@@ -1398,8 +1425,16 @@ func copyPageToVec[T any](mp *columnMapper, page parquet.Page, proc *process.Pro
 }
 
 func copyPageToVecMap[T, U any](mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector, data []T, itee func(t T) U) error {
-	noNulls := !mp.srcNull || !mp.dstNull || page.NumNulls() == 0
 	n := int(page.NumRows())
+
+	// Only skip NULL check if source doesn't allow null OR page has no nulls
+	noNulls := !mp.srcNull || page.NumNulls() == 0
+
+	// Fail early: if page has NULLs and destination doesn't allow them
+	if !noNulls && !mp.dstNull {
+		return moerr.NewConstraintViolationf(proc.Ctx,
+			"cannot load NULL value into NOT NULL column")
+	}
 
 	length := vec.Length()
 	err := vec.PreExtend(n+length, proc.Mp())

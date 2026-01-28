@@ -869,3 +869,43 @@ func TestSessionTempTableMap(t *testing.T) {
 	_, ok = ses.GetTempTable("db1", "alias")
 	assert.False(t, ok)
 }
+
+func TestSession_Cleanup(t *testing.T) {
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	tz := time.Local
+	ses := &Session{}
+	ses.timeZone = tz
+	ses.txnHandler = &TxnHandler{}
+
+	// 1. Test getCleanupContext with nil txnCtx
+	ctx := ses.getCleanupContext()
+	assert.NotNil(t, ctx)
+	assert.Equal(t, context.Background(), ctx)
+
+	// 2. Test getCleanupContext with valid txnCtx
+	ses.txnHandler.txnCtx = context.WithValue(context.Background(), "test", "value")
+	ctx2 := ses.getCleanupContext()
+	assert.Equal(t, ses.txnHandler.txnCtx, ctx2)
+
+	// 3. Test the code path in reset (manual execution to ensure coverage)
+	prev := &Session{}
+	prev.txnHandler = &TxnHandler{}
+	tempExecCtx := ExecCtx{
+		reqCtx: prev.getCleanupContext(),
+		ses:    prev,
+		txnOpt: FeTxnOption{byRollback: true},
+	}
+	assert.NotNil(t, tempExecCtx.reqCtx)
+
+	// 4. Test backSession getCleanupContext
+	bses := &backSession{}
+	bses.txnHandler = &TxnHandler{}
+	ctx3 := bses.getCleanupContext()
+	assert.NotNil(t, ctx3)
+
+	// 5. Test Routine getCleanupContext
+	rt := &Routine{}
+	rt.ses = ses
+	ctx4 := rt.getCleanupContext()
+	assert.Equal(t, ses.txnHandler.txnCtx, ctx4)
+}
