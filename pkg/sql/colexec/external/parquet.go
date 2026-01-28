@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -32,8 +33,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/parquet-go/parquet-go"
@@ -50,6 +52,15 @@ func scanParquetFile(ctx context.Context, param *ExternalParam, proc *process.Pr
 		param.parqh, err = newParquetHandler(param)
 		if err != nil {
 			return err
+		}
+		// Empty file handling: newParquetHandler returns (nil, nil) for empty files.
+		// Mark file as finished to allow multi-file loading to proceed correctly.
+		if param.parqh == nil {
+			param.Fileparam.FileFin++
+			if param.Fileparam.FileFin >= param.Fileparam.FileCnt {
+				param.Fileparam.End = true
+			}
+			return nil
 		}
 	}
 
@@ -71,6 +82,30 @@ func newParquetHandler(param *ExternalParam) (*ParquetHandler, error) {
 		return nil, err
 	}
 
+	// Empty file handling (0 rows): only check column count, skip column name and type checks.
+	// This aligns with DuckDB behavior for empty parquet files.
+	if h.file.NumRows() == 0 {
+		// Check if @vars are used in column list (LOAD DATA ... (col1, @v, col2))
+		// Parquet doesn't support @vars, report explicit error
+		if param.Extern.ExternType == int32(plan.ExternType_LOAD) &&
+			param.ColumnListLen > int32(len(param.Attrs)) {
+			return nil, moerr.NewNYI(param.Ctx, "parquet load with @variables in column list")
+		}
+
+		// Only check column count, not column names or types
+		// Column count must match exactly (align with DuckDB behavior)
+		parquetColCnt := len(h.file.Root().Columns())
+		tableColCnt := getParquetExpectedColCnt(param)
+		if parquetColCnt != tableColCnt {
+			return nil, moerr.NewInvalidInputf(param.Ctx,
+				"column count mismatch: parquet file has %d columns, but table has %d columns",
+				parquetColCnt, tableColCnt)
+		}
+		// Return nil to indicate empty file, no data to load
+		return nil, nil
+	}
+
+	// Non-empty file: use original logic (check column names and types)
 	err = h.prepare(param)
 	if err != nil {
 		return nil, err
@@ -87,7 +122,7 @@ func (h *ParquetHandler) openFile(param *ExternalParam) error {
 	case param.Extern.Local:
 		return moerr.NewNYI(param.Ctx, "load parquet local")
 	default:
-		fs, readPath, err := plan.GetForETLWithType(param.Extern, param.Fileparam.Filepath)
+		fs, readPath, err := plan2.GetForETLWithType(param.Extern, param.Fileparam.Filepath)
 		if err != nil {
 			return err
 		}
@@ -232,10 +267,6 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 	if st.PhysicalType() == nil {
 		return nil
 	}
-	if sc.Optional() && dt.NotNullable {
-		return nil
-	}
-
 	mp := &columnMapper{
 		srcNull:            sc.Optional(),
 		dstNull:            !dt.NotNullable,
@@ -250,6 +281,13 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			if page.Dictionary() != nil {
 				return moerr.NewNYIf(proc.Ctx, "indexed %s page", st)
 			}
+
+			// Fail early: if page has NULLs and destination doesn't allow them
+			if mp.srcNull && page.NumNulls() > 0 && !mp.dstNull {
+				return moerr.NewConstraintViolationf(proc.Ctx,
+					"cannot load NULL value into NOT NULL column")
+			}
+
 			p := make([]parquet.Value, page.NumValues())
 			n, err := page.Values().ReadValues(p)
 			if err != nil && !errors.Is(err, io.EOF) {
@@ -941,7 +979,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				}
 			}
 		}
-	case types.T_char, types.T_varchar, types.T_text, types.T_binary, types.T_varbinary, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_text, types.T_binary, types.T_varbinary, types.T_blob, types.T_json:
 		if st.Kind() != parquet.ByteArray && st.Kind() != parquet.FixedLenByteArray {
 			break
 		}
@@ -1166,8 +1204,8 @@ func (nc *nullCheckInfo) isNull(index int) bool {
 func prepareNullCheck(ctx context.Context, mp *columnMapper, page parquet.Page) (nullCheckInfo, error) {
 	numRows := int(page.NumRows())
 
-	// Fast path: source or destination doesn't allow null
-	if !mp.srcNull || !mp.dstNull {
+	// Fast path: source doesn't allow null
+	if !mp.srcNull {
 		return nullCheckInfo{
 			noNulls:        true,
 			actualNonNulls: int64(numRows),
@@ -1180,6 +1218,12 @@ func prepareNullCheck(ctx context.Context, mp *columnMapper, page parquet.Page) 
 			noNulls:        true,
 			actualNonNulls: int64(numRows),
 		}, nil
+	}
+
+	// Page has NULLs - check if destination allows them
+	if !mp.dstNull {
+		return nullCheckInfo{}, moerr.NewConstraintViolationf(ctx,
+			"cannot load NULL value into NOT NULL column")
 	}
 
 	levels := page.DefinitionLevels()
@@ -1416,8 +1460,16 @@ func copyPageToVec[T any](mp *columnMapper, page parquet.Page, proc *process.Pro
 }
 
 func copyPageToVecMap[T, U any](mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector, data []T, itee func(t T) U) error {
-	noNulls := !mp.srcNull || !mp.dstNull || page.NumNulls() == 0
 	n := int(page.NumRows())
+
+	// Only skip NULL check if source doesn't allow null OR page has no nulls
+	noNulls := !mp.srcNull || page.NumNulls() == 0
+
+	// Fail early: if page has NULLs and destination doesn't allow them
+	if !noNulls && !mp.dstNull {
+		return moerr.NewConstraintViolationf(proc.Ctx,
+			"cannot load NULL value into NOT NULL column")
+	}
 
 	length := vec.Length()
 	err := vec.PreExtend(n+length, proc.Mp())
@@ -1934,4 +1986,16 @@ func parseStringToDecimal128(s string, precision, scale int32) (types.Decimal128
 	}
 
 	return result, nil
+}
+
+// getParquetExpectedColCnt calculates the expected column count for parquet loading.
+// It excludes external hidden columns like __mo_filepath.
+func getParquetExpectedColCnt(param *ExternalParam) int {
+	cnt := 0
+	for _, attr := range param.Attrs {
+		if !catalog.ContainExternalHidenCol(attr.ColName) {
+			cnt++
+		}
+	}
+	return cnt
 }

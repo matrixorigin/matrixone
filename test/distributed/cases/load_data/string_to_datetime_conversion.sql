@@ -86,10 +86,8 @@ create table test_datetime_invalid(
     date_val date
 );
 
--- @bvt:issue#15626
 load data infile {'filepath'='$resources/load_data/string_to_datetime_invalid.parq', 'format'='parquet'} 
 into table test_datetime_invalid;
--- @bvt:issue
 
 -- Cleanup
 drop database test_string_to_datetime;

@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
@@ -186,9 +185,6 @@ func (job *checkpointJob) doGlobalCheckpoint(
 	if err != nil {
 		return
 	}
-	perfcounter.Update(job.executor.ctx, func(counter *perfcounter.CounterSet) {
-		counter.TAE.CheckPoint.DoGlobalCheckPoint.Add(1)
-	})
 	return
 }
 

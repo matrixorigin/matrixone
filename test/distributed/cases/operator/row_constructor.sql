@@ -25,6 +25,16 @@ select (1,null) < (2,null);
 select (2,3) >= (1,3);
 select (-2,1,3) >= (-1,2,3);
 select (-387293.324321,32190391.34134,000) <= (-387293.324321, -123, -1);
+select (1,2) in ((1,2),(3,4));
+select (1,2) in ((1,3),(3,4));
+select (1,2) in ((1,2));
+select (1,2) not in ((1,2));
+select (1,2) not in ((1,3),(3,4));
+select (1,2) in ((1,null));
+select (1,2) in ((1,null),(1,2));
+select (1,2) not in ((1,null));
+select (1,null) in ((1,null));
+select (1,2) not in ((1,null),(2,2));
 
 -- + - * / % mod
 select (1,2,3) > (-1,-3+2,2*3);
