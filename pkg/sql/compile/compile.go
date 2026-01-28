@@ -4197,7 +4197,14 @@ func checkAggOptimize(node *plan.Node) ([]any, []types.T, map[int]int) {
 				}
 				return nil, nil, nil
 			} else {
-				columnMap[int(col.Col.ColPos)] = int(node.TableDef.Cols[int(col.Col.ColPos)].Seqnum)
+				// Check if column is NOT NULL
+				colPos := int(col.Col.ColPos)
+				if node.TableDef.Cols[colPos].Typ.NotNullable {
+					// Rewrite COUNT(not_null_col) to STARCOUNT
+					agg.F.Func.ObjName = "starcount"
+				} else {
+					columnMap[colPos] = int(node.TableDef.Cols[colPos].Seqnum)
+				}
 			}
 		case "min", "max":
 			partialResults[i] = nil
