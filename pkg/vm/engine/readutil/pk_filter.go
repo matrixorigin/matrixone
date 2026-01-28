@@ -54,9 +54,12 @@ func DirectConstructBlockPKFilter(
 func ConstructBlockPKFilter(
 	isFakePK bool,
 	basePKFilter BasePKFilter,
-	bloomFilter []byte,
+	bf *bloomfilter.BloomFilter,
 ) (f objectio.BlockReadFilter, err error) {
-	if !basePKFilter.Valid && len(bloomFilter) == 0 {
+	if bf != nil && !bf.Valid() {
+		bf = nil
+	}
+	if !basePKFilter.Valid && bf == nil {
 		return objectio.BlockReadFilter{}, nil
 	}
 
@@ -126,7 +129,7 @@ func ConstructBlockPKFilter(
 		}
 	}
 
-	if len(bloomFilter) == 0 {
+	if bf == nil {
 		if sortedSearchFunc != nil {
 			readFilter.SortedSearchFunc = wrapInner(sortedSearchFunc)
 			readFilter.UnSortedSearchFunc = wrapInner(unSortedSearchFunc)
@@ -138,10 +141,6 @@ func ConstructBlockPKFilter(
 	}
 
 	// Case with BloomFilter: wrap existing search func.
-	var bf bloomfilter.BloomFilter
-	if err := bf.Unmarshal(bloomFilter); err != nil {
-		return objectio.BlockReadFilter{}, err
-	}
 
 	// Reusable temporary variables (defined outside closure to avoid allocation on each call)
 	var (
@@ -149,21 +148,31 @@ func ConstructBlockPKFilter(
 		reusableExists map[int]bool
 	)
 
+	bfVec := func(cacheVectors containers.Vectors) *vector.Vector {
+		if len(cacheVectors) == 0 || cacheVectors[0].Length() == 0 {
+			return nil
+		}
+		// Prefer optimized BF column when provided.
+		if len(cacheVectors) >= 2 && cacheVectors[1].Length() > 0 {
+			return &cacheVectors[1]
+		}
+		// Fallback to primary key column.
+		return &cacheVectors[0]
+	}
+
 	// Pure BloomFilter searchFunc: directly filter entire column with BloomFilter.
-	// This function only works when optimization is enabled (len(cacheVectors) >= 2).
-	// When optimization is enabled, cacheVectors[1] contains __mo_index_pri_col which is used for BF filtering.
-	// If len(cacheVectors) < 2, skip BF filtering and return nil.
+	// Uses cacheVectors[1] when available (optimization), otherwise falls back to cacheVectors[0].
 	bfOnlySearch := func(cacheVectors containers.Vectors) []int64 {
-		if len(cacheVectors) < 2 || cacheVectors[0].Length() == 0 || cacheVectors[1].Length() == 0 {
+		vec := bfVec(cacheVectors)
+		if vec == nil {
 			return nil
 		}
 		rowCount := cacheVectors[0].Length()
-		lastColVec := &cacheVectors[1]
 		sels := reusableSels[:0]
 		if cap(sels) < rowCount {
 			sels = make([]int64, 0, rowCount)
 		}
-		bf.Test(lastColVec, func(exist bool, row int) {
+		bf.Test(vec, func(exist bool, row int) {
 			if exist && row >= 0 && row < rowCount {
 				sels = append(sels, int64(row))
 			}
@@ -174,8 +183,7 @@ func ConstructBlockPKFilter(
 
 	// Wrap: if inner is nil, degenerate to pure BF; otherwise run inner first, then intersect with BF results.
 	// The inner function receives *vector.Vector (PK column) for PK filtering.
-	// cacheVectors[0] is used for PK filtering, cacheVectors[1] (if exists) is used for BF filtering.
-	// When optimization is enabled (len(cacheVectors) >= 2), cacheVectors[1] contains __mo_index_pri_col.
+	// BF filtering uses cacheVectors[1] when available (optimization), otherwise cacheVectors[0].
 	wrap := func(inner func(*vector.Vector) []int64) func(containers.Vectors) []int64 {
 		if inner == nil {
 			return bfOnlySearch
@@ -195,14 +203,12 @@ func ConstructBlockPKFilter(
 			}
 
 			// Test BloomFilter on rows filtered by inner function.
-			// Only works when optimization is enabled (len(cacheVectors) >= 2).
-			if len(cacheVectors) < 2 || cacheVectors[1].Length() == 0 {
+			vec := bfVec(cacheVectors)
+			if vec == nil {
 				// No optimization: skip BF filtering, return all offsets that passed inner filter.
 				return offsets
 			}
 
-			// Optimization enabled: use cacheVectors[1] (__mo_index_pri_col) for BF filtering.
-			lastColVec := &cacheVectors[1]
 			var exists map[int]bool
 			var bfHits int
 
@@ -223,14 +229,14 @@ func ConstructBlockPKFilter(
 			}
 			exists = reusableExists
 
-			// Test BloomFilter on lastColVec, but only for rows that passed inner filter.
+			// Test BloomFilter on vec, but only for rows that passed inner filter.
 			rowSet := make(map[int]bool, len(offsets))
 			for _, off := range offsets {
 				if int(off) >= 0 && int(off) < rowCount {
 					rowSet[int(off)] = true
 				}
 			}
-			bf.Test(lastColVec, func(exist bool, row int) {
+			bf.Test(vec, func(exist bool, row int) {
 				// Add strict boundary check to prevent index out of range
 				if exist && row >= 0 && row < rowCount && rowSet[row] {
 					exists[row] = true
@@ -251,10 +257,8 @@ func ConstructBlockPKFilter(
 	readFilter.SortedSearchFunc = wrap(sortedSearchFunc)
 	readFilter.UnSortedSearchFunc = wrap(unSortedSearchFunc)
 	readFilter.Valid = true
-	// Set cleanup function to release BloomFilter when filter is no longer needed
+	// Set cleanup function
 	readFilter.Cleanup = func() {
-		// Release BloomFilter memory
-		bf.Clean()
 		// Clear reusableExists map by reallocating for better memory efficiency
 		if reusableExists != nil {
 			reusableExists = nil

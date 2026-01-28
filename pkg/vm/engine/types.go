@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compress"
@@ -1317,4 +1318,5 @@ func GetPrefetchOnSubscribed() (bool, []*regexp.Regexp) {
 type FilterHint struct {
 	Must        bool
 	BloomFilter []byte
+	BF          *bloomfilter.BloomFilter
 }
