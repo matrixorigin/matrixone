@@ -88,8 +88,19 @@ static void bloomfilter_setup(bloomfilter_t *bf, uint64_t nbits, uint32_t k) {
     }
 }
 
+static uint64_t next_pow2_64(uint64_t v) {
+    v--;
+    v |= v >> 1;
+    v |= v >> 2;
+    v |= v >> 4;
+    v |= v >> 8;
+    v |= v >> 16;
+    v |= v >> 32;
+    return v + 1;
+}
+
 bloomfilter_t* bloomfilter_init(uint64_t nbits, uint32_t k) {
-    uint64_t new_nbits = pow(2, floor(log2(nbits) + 0.5));
+    uint64_t new_nbits = next_pow2_64(nbits);
     uint64_t nbytes = bitmap_nbyte(new_nbits);
 
     if (k > MAX_K_SEED) return NULL;

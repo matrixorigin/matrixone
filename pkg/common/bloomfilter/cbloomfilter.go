@@ -73,6 +73,9 @@ func computeMemAndHashCountC(rowCount int64, probability float64) (int64, int) {
 // NewCBloomFilterWithProbaility creates a new CBloomFilter with optimal parameters
 // derived from the expected number of elements (rowcnt) and the desired false positive probability.
 func NewCBloomFilterWithProbability(rowcnt int64, probability float64) *CBloomFilter {
+	if rowcnt <= 0 {
+		rowcnt = 2
+	}
 	nbit, k := computeMemAndHashCountC(rowcnt, probability)
 	//os.Stderr.WriteString(fmt.Sprintf("bloom k %d m %d\n", k, nbit))
 	return NewCBloomFilter(uint64(nbit), uint32(k))
