@@ -166,14 +166,14 @@ func TestBloomFilter_LargeVector(t *testing.T) {
 		vector.AppendFixed(vec, int64(i), false, mp)
 	}
 	defer vec.Free(mp)
-	
+
 	bf.Add(vec)
 
 	allPass := true
 	bf.Test(vec, func(exist bool, _ int) {
-if !exist {
-allPass = false
-}
-})
+		if !exist {
+			allPass = false
+		}
+	})
 	require.True(t, allPass)
 }

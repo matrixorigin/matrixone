@@ -2538,6 +2538,6 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 		cacheVectors := containers.Vectors{*vec, *invalidLastColVec}
 		result := readFilter.UnSortedSearchFunc(cacheVectors)
 		// Should return nil or empty since extraction fails
-		require.Nil(t, result)
+		require.Empty(t, result)
 	})
 }
