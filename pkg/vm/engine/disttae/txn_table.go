@@ -641,6 +641,23 @@ func (tbl *txnTable) Ranges(ctx context.Context, rangesParam engine.RangesParam)
 	return tbl.doRanges(ctx, rangesParam)
 }
 
+func (tbl *txnTable) StarCount(ctx context.Context) (uint64, error) {
+	part, err := tbl.getPartitionState(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	snapshot := tbl.db.op.SnapshotTS()
+	fs, err := fileservice.Get[fileservice.FileService](
+		tbl.getTxn().proc.Base.FileService,
+		defines.SharedFileServiceName)
+	if err != nil {
+		return 0, err
+	}
+
+	return part.CountRows(ctx, types.TimestampToTS(snapshot), fs)
+}
+
 func (tbl *txnTable) getObjList(ctx context.Context, rangesParam engine.RangesParam) (data engine.RelData, err error) {
 	needUncommited := rangesParam.Policy&engine.Policy_CollectUncommittedData != 0
 

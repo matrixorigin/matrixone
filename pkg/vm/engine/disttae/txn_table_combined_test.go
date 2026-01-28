@@ -1192,6 +1192,10 @@ func (m *mockRelation) CollectTombstones(ctx context.Context, txnOffset int, pol
 	return nil, nil
 }
 
+func (m *mockRelation) StarCount(ctx context.Context) (uint64, error) {
+	return 0, nil
+}
+
 func (m *mockRelation) CollectChanges(ctx context.Context, from, to types.TS, _ bool, mp *mpool.MPool) (engine.ChangesHandle, error) {
 	return nil, nil
 }

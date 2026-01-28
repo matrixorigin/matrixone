@@ -243,6 +243,23 @@ func (t *combinedTxnTable) CollectTombstones(
 	return tombstone, nil
 }
 
+func (t *combinedTxnTable) StarCount(ctx context.Context) (uint64, error) {
+	tables, err := t.tablesFunc()
+	if err != nil {
+		return 0, err
+	}
+
+	var total uint64
+	for _, rel := range tables {
+		count, err := rel.StarCount(ctx)
+		if err != nil {
+			return 0, err
+		}
+		total += count
+	}
+	return total, nil
+}
+
 func (t *combinedTxnTable) CollectChanges(
 	ctx context.Context,
 	from, to types.TS,

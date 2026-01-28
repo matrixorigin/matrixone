@@ -273,6 +273,10 @@ func (t *Table) CollectTombstones(
 	panic("implement me")
 }
 
+func (t *Table) StarCount(ctx context.Context) (uint64, error) {
+	return t.Rows(ctx)
+}
+
 // for memory engine.
 type MemRelationData struct {
 	Shards ShardIdSlice

@@ -335,6 +335,22 @@ func (tbl *txnTableDelegate) Ranges(ctx context.Context, rangesParam engine.Rang
 	return ret, nil
 }
 
+func (tbl *txnTableDelegate) StarCount(ctx context.Context) (uint64, error) {
+	if tbl.combined.is {
+		return tbl.combined.tbl.StarCount(ctx)
+	}
+
+	is, err := tbl.isLocal()
+	if err != nil {
+		return 0, err
+	}
+	if is {
+		return tbl.origin.StarCount(ctx)
+	}
+
+	return tbl.parent.StarCount(ctx)
+}
+
 func (tbl *txnTableDelegate) CollectTombstones(
 	ctx context.Context,
 	txnOffset int,

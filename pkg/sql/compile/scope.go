@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	pbpipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -931,6 +932,35 @@ func removeStringBetween(s, start, end string) string {
 func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context) error {
 	node := s.DataSource.node
 	if node != nil && len(node.AggList) > 0 {
+		// Fast path: single starcount without filter/groupby
+		if len(node.AggList) == 1 && len(node.FilterList) == 0 && len(node.GroupBy) == 0 {
+			agg := node.AggList[0].Expr.(*plan.Expr_F)
+			if agg.F.Func.ObjName == "starcount" {
+				totalRows, err := rel.StarCount(ctx)
+				if err != nil {
+					return err
+				}
+
+				// Create empty reldata with first empty block
+				newRelData := s.NodeInfo.Data.BuildEmptyRelData(1)
+				newRelData.AppendBlockInfo(&objectio.EmptyBlockInfo)
+				s.NodeInfo.Data = newRelData
+
+				// Set partial result
+				partialResults := []any{int64(totalRows)}
+				partialResultTypes := []types.T{types.T_int64}
+
+				mergeGroup := findMergeGroup(s.RootOp)
+				if mergeGroup != nil {
+					mergeGroup.PartialResults = partialResults
+					mergeGroup.PartialResultTypes = partialResultTypes
+				} else {
+					panic("can't find merge group operator for agg optimize!")
+				}
+				return nil
+			}
+		}
+
 		partialResults, partialResultTypes, columnMap := checkAggOptimize(node)
 		if partialResults != nil && s.NodeInfo.Data.DataCnt() > 1 {
 			//append first empty block
