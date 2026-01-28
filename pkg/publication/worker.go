@@ -16,6 +16,7 @@ package publication
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -33,13 +34,20 @@ import (
 const (
 	PublicationWorkerThread  = 10
 	FilterObjectWorkerThread = 1000
-	GetChunkWorkerThread     = 1000
+	GetChunkWorkerThread     = 10000
 
 	SubmitRetryTimes    = 1000
 	SubmitRetryDuration = time.Hour
 
 	StatsPrintInterval = 10 * time.Second
 )
+
+// GetChunkJobDuration holds duration info for a GetChunk job
+type GetChunkJobDuration struct {
+	ObjectName string
+	ChunkIndex int64
+	Duration   time.Duration
+}
 
 // JobStats holds statistics for job tracking using atomic counters for thread safety
 type JobStats struct {
@@ -54,6 +62,10 @@ type JobStats struct {
 	GetMetaPending   atomic.Int64
 	GetMetaRunning   atomic.Int64
 	GetMetaCompleted atomic.Int64
+
+	// Top 3 longest GetChunk jobs
+	getChunkDurationMu   sync.Mutex
+	getChunkTopDurations []*GetChunkJobDuration
 }
 
 // Global job stats instance
@@ -115,6 +127,52 @@ func (s *JobStats) DecrementGetMetaRunning() {
 	s.GetMetaCompleted.Add(1)
 }
 
+// RecordGetChunkDuration records a GetChunk job duration and keeps top 3 longest
+func (s *JobStats) RecordGetChunkDuration(objectName string, chunkIndex int64, duration time.Duration) {
+	s.getChunkDurationMu.Lock()
+	defer s.getChunkDurationMu.Unlock()
+
+	newEntry := &GetChunkJobDuration{
+		ObjectName: objectName,
+		ChunkIndex: chunkIndex,
+		Duration:   duration,
+	}
+
+	// Add new entry
+	s.getChunkTopDurations = append(s.getChunkTopDurations, newEntry)
+
+	// Sort by duration descending
+	for i := len(s.getChunkTopDurations) - 1; i > 0; i-- {
+		if s.getChunkTopDurations[i].Duration > s.getChunkTopDurations[i-1].Duration {
+			s.getChunkTopDurations[i], s.getChunkTopDurations[i-1] = s.getChunkTopDurations[i-1], s.getChunkTopDurations[i]
+		} else {
+			break
+		}
+	}
+
+	// Keep only top 3
+	if len(s.getChunkTopDurations) > 3 {
+		s.getChunkTopDurations = s.getChunkTopDurations[:3]
+	}
+}
+
+// GetTopGetChunkDurations returns a copy of top 3 longest GetChunk job durations
+func (s *JobStats) GetTopGetChunkDurations() []*GetChunkJobDuration {
+	s.getChunkDurationMu.Lock()
+	defer s.getChunkDurationMu.Unlock()
+
+	result := make([]*GetChunkJobDuration, len(s.getChunkTopDurations))
+	copy(result, s.getChunkTopDurations)
+	return result
+}
+
+// ResetTopGetChunkDurations resets the top durations (called after printing)
+func (s *JobStats) ResetTopGetChunkDurations() {
+	s.getChunkDurationMu.Lock()
+	defer s.getChunkDurationMu.Unlock()
+	s.getChunkTopDurations = nil
+}
+
 type Worker interface {
 	Submit(taskID uint64, lsn uint64, state int8) error
 	Stop()
@@ -130,6 +188,12 @@ type FilterObjectWorker interface {
 type GetChunkWorker interface {
 	SubmitGetChunk(job Job) error
 	Stop()
+}
+
+// GetChunkJobInfo is the interface for jobs that have object name and chunk index
+type GetChunkJobInfo interface {
+	GetObjectName() string
+	GetChunkIndex() int64
 }
 
 type worker struct {
@@ -196,6 +260,24 @@ func (w *worker) RunStatsPrinter() {
 				zap.Int64("get_meta_running", stats.GetMetaRunning.Load()),
 				zap.Int64("get_meta_completed", stats.GetMetaCompleted.Load()),
 			)
+
+			// Print top 3 longest GetChunk jobs
+			topDurations := stats.GetTopGetChunkDurations()
+			if len(topDurations) > 0 {
+				fields := make([]zap.Field, 0, len(topDurations)*3)
+				for i, d := range topDurations {
+					idx := i + 1
+					fields = append(fields,
+						zap.String(fmt.Sprintf("object_name_%d", idx), d.ObjectName),
+						zap.Int64(fmt.Sprintf("chunk_index_%d", idx), d.ChunkIndex),
+						zap.Duration(fmt.Sprintf("duration_%d", idx), d.Duration),
+					)
+				}
+				logutil.Info("ccpr-worker-stats-top3-get-chunk-duration", fields...)
+			}
+
+			// Reset top durations for next interval
+			stats.ResetTopGetChunkDurations()
 		}
 	}
 }
@@ -428,8 +510,19 @@ func (w *getChunkWorker) Run() {
 						globalJobStats.DecrementGetMetaRunning()
 					} else {
 						globalJobStats.IncrementGetChunkRunning()
+						startTime := time.Now()
 						job.Execute()
+						duration := time.Since(startTime)
 						globalJobStats.DecrementGetChunkRunning()
+
+						// Record duration for GetChunk jobs
+						if chunkJobInfo, ok := job.(GetChunkJobInfo); ok {
+							globalJobStats.RecordGetChunkDuration(
+								chunkJobInfo.GetObjectName(),
+								chunkJobInfo.GetChunkIndex(),
+								duration,
+							)
+						}
 					}
 				}
 			}

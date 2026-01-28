@@ -91,7 +91,7 @@ func (j *GetMetaJob) Execute() {
 	res := &GetMetaJobResult{}
 	getChunk0SQL := PublicationSQLBuilder.GetObjectSQL(j.objectName, 0)
 
-	result,cancel, err := j.upstreamExecutor.ExecSQL(j.ctx, nil, getChunk0SQL, false, true, time.Minute)
+	result, cancel, err := j.upstreamExecutor.ExecSQL(j.ctx, nil, getChunk0SQL, false, true, time.Minute)
 	if err != nil {
 		res.Err = moerr.NewInternalErrorf(j.ctx, "failed to execute GETOBJECT query for offset 0: %v", err)
 		j.result <- res
@@ -165,7 +165,7 @@ func NewGetChunkJob(ctx context.Context, upstreamExecutor SQLExecutor, objectNam
 func (j *GetChunkJob) Execute() {
 	res := &GetChunkJobResult{ChunkIndex: j.chunkIndex}
 	getChunkSQL := PublicationSQLBuilder.GetObjectSQL(j.objectName, j.chunkIndex)
-	result,cancel, err := j.upstreamExecutor.ExecSQL(j.ctx, nil, getChunkSQL, false, true, time.Minute)
+	result, cancel, err := j.upstreamExecutor.ExecSQL(j.ctx, nil, getChunkSQL, false, true, time.Minute)
 	if err != nil {
 		res.Err = moerr.NewInternalErrorf(j.ctx, "failed to execute GETOBJECT query for offset %d: %v", j.chunkIndex, err)
 		j.result <- res
@@ -205,6 +205,16 @@ func (j *GetChunkJob) WaitDone() any {
 // GetType returns the job type
 func (j *GetChunkJob) GetType() int8 {
 	return JobTypeGetChunk
+}
+
+// GetObjectName returns the object name
+func (j *GetChunkJob) GetObjectName() string {
+	return j.objectName
+}
+
+// GetChunkIndex returns the chunk index
+func (j *GetChunkJob) GetChunkIndex() int64 {
+	return j.chunkIndex
 }
 
 // FilterObjectJobResult holds the result of FilterObjectJob
@@ -1202,7 +1212,7 @@ func GetObjectListMap(ctx context.Context, iterationCtx *IterationContext, cnEng
 
 	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	objectListResult,cancel, err := GetObjectListFromSnapshotDiff(ctxWithTimeout, iterationCtx)
+	objectListResult, cancel, err := GetObjectListFromSnapshotDiff(ctxWithTimeout, iterationCtx)
 	if err != nil {
 		err = moerr.NewInternalErrorf(ctx, "failed to get object list from snapshot diff: %v", err)
 		return nil, err
