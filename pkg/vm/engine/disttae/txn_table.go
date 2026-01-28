@@ -28,6 +28,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	commonUtil "github.com/matrixorigin/matrixone/pkg/common/util"
@@ -1976,9 +1977,25 @@ func (tbl *txnTable) BuildReaders(
 
 	def := tbl.GetTableDef(ctx)
 	shards := relData.Split(newNum)
+
+	var mainBF *bloomfilter.BloomFilter
+	if len(filterHint.BloomFilter) > 0 {
+		mainBF = &bloomfilter.BloomFilter{}
+		if err := mainBF.Unmarshal(filterHint.BloomFilter); err != nil {
+			mainBF = nil
+		}
+	}
+
 	for i := 0; i < newNum; i++ {
+		hint := filterHint
+		if mainBF != nil {
+			hint.BF = mainBF.NewHandle()
+		}
 		ds, err := tbl.buildLocalDataSource(ctx, txnOffset, shards[i], tombstonePolicy, engine.GeneralLocalDataSource)
 		if err != nil {
+			if mainBF != nil {
+				mainBF.Free()
+			}
 			return nil, err
 		}
 		rd, err := readutil.NewReader(
@@ -1991,13 +2008,20 @@ func (tbl *txnTable) BuildReaders(
 			expr,
 			ds,
 			readutil.GetThresholdForReader(newNum),
-			filterHint,
+			hint,
 		)
 		if err != nil {
+			if mainBF != nil {
+				mainBF.Free()
+			}
 			return nil, err
 		}
 
 		rds = append(rds, rd)
+	}
+
+	if mainBF != nil {
+		mainBF.Free()
 	}
 	return rds, nil
 }
