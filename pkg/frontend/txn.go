@@ -187,6 +187,9 @@ type TxnHandler struct {
 
 	//the option bits
 	optionBits uint32
+
+	// footPrints for debugging, shared across all transactions in this session
+	footPrints txnclient.FootPrints
 }
 
 func InitTxnHandler(service string, storage engine.Engine, connCtx context.Context, txnOp TxnOperator) *TxnHandler {
@@ -396,7 +399,8 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 			execCtx.ses.GetUUIDString(),
 			connectionID),
 		txnclient.WithSessionInfo(sessionInfo),
-		txnclient.WithBeginAutoCommit(execCtx.txnOpt.byBegin, execCtx.txnOpt.autoCommit))
+		txnclient.WithBeginAutoCommit(execCtx.txnOpt.byBegin, execCtx.txnOpt.autoCommit),
+		txnclient.WithFootPrints(&th.footPrints))
 
 	if execCtx.ses.GetFromRealUser() {
 		opts = append(opts,
@@ -741,6 +745,15 @@ func (th *TxnHandler) IsShareTxn() bool {
 	th.mu.Lock()
 	defer th.mu.Unlock()
 	return th.shareTxn
+}
+
+// SetShareTxn updates the shared transaction operator.
+// This is used to reuse a TxnHandler with a new transaction without recreating the entire object.
+func (th *TxnHandler) SetShareTxn(txnOp TxnOperator) {
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	th.txnOp = txnOp
+	th.shareTxn = txnOp != nil
 }
 
 func (th *TxnHandler) SetOptionBits(bits uint32) {

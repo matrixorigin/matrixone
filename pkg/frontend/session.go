@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"net"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -182,6 +183,10 @@ type Session struct {
 	// payloadCounter count the payload send by `load data LOCAL infile`
 	payloadCounter int64
 
+	// sqlModeNoAutoValueOnZero caches whether sql_mode contains NO_AUTO_VALUE_ON_ZERO
+	// -1: unknown, 0: false, 1: true
+	sqlModeNoAutoValueOnZero int32
+
 	createdTime time.Time
 
 	expiredTime time.Time
@@ -272,6 +277,7 @@ func (ses *Session) InitSystemVariables(ctx context.Context, bh BackgroundExec) 
 	defer ses.mu.Unlock()
 	ses.gSysVars = sv
 	ses.sesSysVars = ses.gSysVars.Clone()
+	atomic.StoreInt32(&ses.sqlModeNoAutoValueOnZero, -1)
 	return
 }
 
@@ -301,7 +307,11 @@ func (ses *Session) getNextProcessId() string {
 		routineId + sqlCount
 	*/
 	routineId := ses.GetResponser().GetU32(CONNID)
-	return fmt.Sprintf("%d%d", routineId, ses.GetSqlCount())
+	// Optimize: use strconv instead of fmt.Sprintf
+	var buf [24]byte
+	b := strconv.AppendUint(buf[:0], uint64(routineId), 10)
+	b = strconv.AppendUint(b, ses.GetSqlCount(), 10)
+	return string(b)
 }
 
 // SetUserDefinedVar sets the user defined variable to the value in session
@@ -552,6 +562,54 @@ func (ses *Session) getQueryId(internalSql bool) []string {
 	return ses.queryId
 }
 
+func (ses *Session) GetSqlModeNoAutoValueOnZero() (bool, bool) {
+	v := atomic.LoadInt32(&ses.sqlModeNoAutoValueOnZero)
+	if v == 1 {
+		return true, true
+	}
+	if v == 0 {
+		return false, true
+	}
+	if ses.sesSysVars == nil {
+		return false, false
+	}
+	val, err := ses.GetSessionSysVar("sql_mode")
+	if err != nil {
+		return false, false
+	}
+	has, ok := parseNoAutoValueOnZero(val)
+	if !ok {
+		return false, false
+	}
+	if has {
+		atomic.StoreInt32(&ses.sqlModeNoAutoValueOnZero, 1)
+	} else {
+		atomic.StoreInt32(&ses.sqlModeNoAutoValueOnZero, 0)
+	}
+	return has, true
+}
+
+func (ses *Session) updateSqlModeNoAutoValueOnZero(val interface{}) {
+	has, ok := parseNoAutoValueOnZero(val)
+	if !ok {
+		atomic.StoreInt32(&ses.sqlModeNoAutoValueOnZero, -1)
+		return
+	}
+	if has {
+		atomic.StoreInt32(&ses.sqlModeNoAutoValueOnZero, 1)
+	} else {
+		atomic.StoreInt32(&ses.sqlModeNoAutoValueOnZero, 0)
+	}
+}
+
+func parseNoAutoValueOnZero(val interface{}) (bool, bool) {
+	mode, ok := val.(string)
+	if !ok {
+		return false, false
+	}
+	return strings.Contains(strings.ToUpper(mode), "NO_AUTO_VALUE_ON_ZERO"), true
+}
+
 type errInfo struct {
 	codes  []uint16
 	msgs   []string
@@ -608,6 +666,7 @@ func NewSession(
 		timestampMap: map[TS]time.Time{},
 		statsCache:   plan2.NewStatsCache(),
 	}
+	atomic.StoreInt32(&ses.sqlModeNoAutoValueOnZero, -1)
 
 	ses.userDefinedVars = make(map[string]*UserDefinedVar)
 	ses.tempTables = make(map[string]string)

@@ -232,10 +232,6 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 	if st.PhysicalType() == nil {
 		return nil
 	}
-	if sc.Optional() && dt.NotNullable {
-		return nil
-	}
-
 	mp := &columnMapper{
 		srcNull:            sc.Optional(),
 		dstNull:            !dt.NotNullable,
@@ -250,6 +246,13 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			if page.Dictionary() != nil {
 				return moerr.NewNYIf(proc.Ctx, "indexed %s page", st)
 			}
+
+			// Fail early: if page has NULLs and destination doesn't allow them
+			if mp.srcNull && page.NumNulls() > 0 && !mp.dstNull {
+				return moerr.NewConstraintViolationf(proc.Ctx,
+					"cannot load NULL value into NOT NULL column")
+			}
+
 			p := make([]parquet.Value, page.NumValues())
 			n, err := page.Values().ReadValues(p)
 			if err != nil && !errors.Is(err, io.EOF) {
@@ -941,7 +944,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				}
 			}
 		}
-	case types.T_char, types.T_varchar, types.T_text, types.T_binary, types.T_varbinary, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_text, types.T_binary, types.T_varbinary, types.T_blob, types.T_json:
 		if st.Kind() != parquet.ByteArray && st.Kind() != parquet.FixedLenByteArray {
 			break
 		}
@@ -1166,8 +1169,8 @@ func (nc *nullCheckInfo) isNull(index int) bool {
 func prepareNullCheck(ctx context.Context, mp *columnMapper, page parquet.Page) (nullCheckInfo, error) {
 	numRows := int(page.NumRows())
 
-	// Fast path: source or destination doesn't allow null
-	if !mp.srcNull || !mp.dstNull {
+	// Fast path: source doesn't allow null
+	if !mp.srcNull {
 		return nullCheckInfo{
 			noNulls:        true,
 			actualNonNulls: int64(numRows),
@@ -1180,6 +1183,12 @@ func prepareNullCheck(ctx context.Context, mp *columnMapper, page parquet.Page) 
 			noNulls:        true,
 			actualNonNulls: int64(numRows),
 		}, nil
+	}
+
+	// Page has NULLs - check if destination allows them
+	if !mp.dstNull {
+		return nullCheckInfo{}, moerr.NewConstraintViolationf(ctx,
+			"cannot load NULL value into NOT NULL column")
 	}
 
 	levels := page.DefinitionLevels()
@@ -1416,8 +1425,16 @@ func copyPageToVec[T any](mp *columnMapper, page parquet.Page, proc *process.Pro
 }
 
 func copyPageToVecMap[T, U any](mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector, data []T, itee func(t T) U) error {
-	noNulls := !mp.srcNull || !mp.dstNull || page.NumNulls() == 0
 	n := int(page.NumRows())
+
+	// Only skip NULL check if source doesn't allow null OR page has no nulls
+	noNulls := !mp.srcNull || page.NumNulls() == 0
+
+	// Fail early: if page has NULLs and destination doesn't allow them
+	if !noNulls && !mp.dstNull {
+		return moerr.NewConstraintViolationf(proc.Ctx,
+			"cannot load NULL value into NOT NULL column")
+	}
 
 	length := vec.Length()
 	err := vec.PreExtend(n+length, proc.Mp())

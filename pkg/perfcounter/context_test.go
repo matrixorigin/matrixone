@@ -27,9 +27,9 @@ func TestWithCounterSetFrom(t *testing.T) {
 	ctx := WithCounterSet(context.Background(), &c1, &c2)
 	ctx2 := WithCounterSetFrom(context.Background(), ctx)
 	Update(ctx2, func(set *CounterSet) {
-		set.DistTAE.Logtail.Entries.Add(1)
+		set.FileService.S3.List.Add(1)
 	})
-	assert.Equal(t, int64(1), c1.DistTAE.Logtail.Entries.Load())
+	assert.Equal(t, int64(1), c1.FileService.S3.List.Load())
 }
 
 func makeCounterSetArray(cnt int) []*CounterSet {
