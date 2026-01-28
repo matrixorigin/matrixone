@@ -483,8 +483,8 @@ func runApplyObjects(
 
 	// Stub GetObjectFromUpstream to read from directory
 	stub := gostub.Stub(
-		&publication.GetObjectFromUpstream,
-		func(ctx context.Context, executor publication.SQLExecutor, objectName string) ([]byte, error) {
+		&publication.GetObjectFromUpstreamWithWorker,
+		func(ctx context.Context, executor publication.SQLExecutor, objectName string, getChunkWorker publication.GetChunkWorker) ([]byte, error) {
 			// Read object file from directory
 			objectPath := filepath.Join(exportDir, objectName)
 			data, err := os.ReadFile(objectPath)
@@ -515,6 +515,8 @@ func runApplyObjects(
 		disttaeEngine.Engine,
 		mp,
 		fs,
+		nil,                  // FilterObjectWorker
+		nil,                  // GetChunkWorker
 	)
 	require.NoError(t, err)
 

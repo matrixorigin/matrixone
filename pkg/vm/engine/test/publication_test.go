@@ -462,6 +462,8 @@ func TestExecuteIteration1(t *testing.T) {
 		mp,
 		utHelper,
 		100*time.Millisecond, // snapshotFlushInterval for test
+		nil,                  // FilterObjectWorker
+		nil,                  // GetChunkWorker
 	)
 
 	// Signal checkpoint goroutine to stop
@@ -570,6 +572,8 @@ func TestExecuteIteration1(t *testing.T) {
 		mp,
 		utHelper2,
 		100*time.Millisecond, // snapshotFlushInterval for test
+		nil,                  // FilterObjectWorker
+		nil,                  // GetChunkWorker
 	)
 
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
@@ -697,6 +701,8 @@ func TestExecuteIteration1(t *testing.T) {
 		mp,
 		utHelper3,
 		100*time.Millisecond, // snapshotFlushInterval for test
+		nil,                  // FilterObjectWorker
+		nil,                  // GetChunkWorker
 	)
 
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
@@ -970,6 +976,8 @@ func TestExecuteIterationDatabaseLevel(t *testing.T) {
 		mp,
 		utHelper,
 		100*time.Millisecond, // snapshotFlushInterval for test
+		nil,                  // FilterObjectWorker
+		nil,                  // GetChunkWorker
 	)
 
 	// Signal checkpoint goroutine to stop
@@ -1274,6 +1282,8 @@ func TestExecuteIterationWithIndex(t *testing.T) {
 		mp,
 		utHelper,
 		100*time.Millisecond, // snapshotFlushInterval for test
+		nil,                  // FilterObjectWorker
+		nil,                  // GetChunkWorker
 	)
 
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
@@ -1430,6 +1440,8 @@ func TestExecuteIterationWithIndex(t *testing.T) {
 		mp,
 		utHelper2,
 		100*time.Millisecond, // snapshotFlushInterval for test
+		nil,                  // FilterObjectWorker
+		nil,                  // GetChunkWorker
 	)
 
 	// Signal checkpoint goroutine to stop
@@ -1804,6 +1816,8 @@ func TestExecuteIterationWithSnapshotFinishedInjection(t *testing.T) {
 		mp,
 		utHelper,
 		100*time.Millisecond, // snapshotFlushInterval for test
+		nil,                  // FilterObjectWorker
+		nil,                  // GetChunkWorker
 	)
 
 	// Signal checkpoint goroutine to stop
@@ -1849,6 +1863,8 @@ func TestExecuteIterationWithSnapshotFinishedInjection(t *testing.T) {
 		mp,
 		utHelper2,
 		100*time.Millisecond, // snapshotFlushInterval for test
+		nil,                  // FilterObjectWorker
+		nil,                  // GetChunkWorker
 	)
 
 	// Signal checkpoint goroutine to stop
@@ -2109,6 +2125,8 @@ func TestExecuteIterationWithCommitFailedInjection(t *testing.T) {
 		mp,
 		utHelper,
 		100*time.Millisecond, // snapshotFlushInterval for test
+		nil,                  // FilterObjectWorker
+		nil,                  // GetChunkWorker
 	)
 	assert.NoError(t, err)
 
@@ -2776,6 +2794,8 @@ func TestCCPRCreateDelete(t *testing.T) {
 		mp,
 		utHelper1,
 		100*time.Millisecond, // snapshotFlushInterval for test
+		nil,                  // FilterObjectWorker
+		nil,                  // GetChunkWorker
 	)
 
 	// Signal checkpoint goroutine to stop
@@ -2894,6 +2914,8 @@ func TestCCPRCreateDelete(t *testing.T) {
 		mp,
 		utHelper2,
 		100*time.Millisecond, // snapshotFlushInterval for test
+		nil,                  // FilterObjectWorker
+		nil,                  // GetChunkWorker
 	)
 
 	// Signal checkpoint goroutine to stop
@@ -3150,6 +3172,8 @@ func TestCCPRAlterTable(t *testing.T) {
 		mp,
 		utHelper1,
 		100*time.Millisecond, // snapshotFlushInterval for test
+		nil,                  // FilterObjectWorker
+		nil,                  // GetChunkWorker
 	)
 
 	// Signal checkpoint goroutine to stop
@@ -3295,6 +3319,8 @@ func TestCCPRAlterTable(t *testing.T) {
 		mp,
 		utHelper2,
 		100*time.Millisecond, // snapshotFlushInterval for test
+		nil,                  // FilterObjectWorker
+		nil,                  // GetChunkWorker
 	)
 
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
@@ -3578,6 +3604,8 @@ func TestCCPRErrorHandling1(t *testing.T) {
 		mp,
 		utHelper1,
 		100*time.Millisecond, // snapshotFlushInterval for test
+		nil,                  // FilterObjectWorker
+		nil,                  // GetChunkWorker
 	)
 
 	// Signal checkpoint goroutine to stop
@@ -3680,6 +3708,8 @@ func TestCCPRErrorHandling1(t *testing.T) {
 		mp,
 		utHelper2,
 		100*time.Millisecond, // snapshotFlushInterval for test
+		nil,                  // FilterObjectWorker
+		nil,                  // GetChunkWorker
 	)
 
 	// Signal checkpoint goroutine to stop
@@ -3775,6 +3805,8 @@ func TestCCPRErrorHandling1(t *testing.T) {
 		mp,
 		utHelper3,
 		100*time.Millisecond, // snapshotFlushInterval for test
+		nil,                  // FilterObjectWorker
+		nil,                  // GetChunkWorker
 	)
 
 	// Signal checkpoint goroutine to stop
@@ -3854,6 +3886,8 @@ func TestCCPRErrorHandling1(t *testing.T) {
 		mp,
 		utHelper4,
 		100*time.Millisecond, // snapshotFlushInterval for test
+		nil,                  // FilterObjectWorker
+		nil,                  // GetChunkWorker
 	)
 
 	// Signal checkpoint goroutine to stop
@@ -4029,6 +4063,8 @@ func TestCCPRDDLAccountLevel(t *testing.T) {
 		mp,
 		utHelper1,
 		100*time.Millisecond, // snapshotFlushInterval for test
+		nil,                  // FilterObjectWorker
+		nil,                  // GetChunkWorker
 	)
 
 	// Signal checkpoint goroutine to stop
@@ -4131,6 +4167,8 @@ func TestCCPRDDLAccountLevel(t *testing.T) {
 		mp,
 		utHelper2,
 		100*time.Millisecond, // snapshotFlushInterval for test
+		nil,                  // FilterObjectWorker
+		nil,                  // GetChunkWorker
 	)
 
 	// Signal checkpoint goroutine to stop
@@ -4796,6 +4834,8 @@ func TestCCPRErrorHandling2(t *testing.T) {
 		mp,
 		utHelper1,
 		100*time.Millisecond, // snapshotFlushInterval for test
+		nil,                  // FilterObjectWorker
+		nil,                  // GetChunkWorker
 		&publication.SQLExecutorRetryOption{
 			MaxRetries:    2,
 			RetryInterval: 100 * time.Millisecond,
@@ -4886,6 +4926,8 @@ func TestCCPRErrorHandling2(t *testing.T) {
 		mp,
 		utHelper2,
 		100*time.Millisecond, // snapshotFlushInterval for test
+		nil,                  // FilterObjectWorker
+		nil,                  // GetChunkWorker
 	)
 
 	// Signal checkpoint goroutine to stop
