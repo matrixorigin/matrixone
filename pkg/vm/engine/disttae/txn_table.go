@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"runtime/debug"
 	"slices"
 	"strings"
 	"sync"
@@ -1859,8 +1858,9 @@ func extractPStateFromRelData(
 			zap.String("table", tbl.tableName),
 			zap.String("sql", commonUtil.Abbreviate(sql, 500)),
 			zap.String("relDataType", fmt.Sprintf("%T", relData)),
-			zap.String("relDataContent", relData.String()),
-			zap.String("stack", string(debug.Stack())))
+			zap.Int("relDataLen", relData.DataCnt()),
+			zap.String("txn", tbl.db.op.Txn().DebugString()),
+		)
 
 		pState, err := tbl.getPartitionState(ctx)
 		if err != nil {
