@@ -21,9 +21,11 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/stretchr/testify/require"
 )
 
@@ -550,16 +552,7 @@ func TestStarCountMixedInMemoryAndPersisted(t *testing.T) {
 	defer cancel()
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 
-	// Small threshold to trigger persist
-	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(
-		ctx,
-		testutil.TestOptions{
-			DisttaeOptions: []testutil.TestDisttaeEngineOptions{
-				testutil.WithDisttaeEngineWriteWorkspaceThreshold(2048), // 2KB
-			},
-		},
-		t,
-	)
+	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
 	defer func() {
 		disttaeEngine.Close(ctx)
 		taeHandler.Close(true)
@@ -597,8 +590,13 @@ func TestStarCountMixedInMemoryAndPersisted(t *testing.T) {
 	err = txn.Commit(ctx)
 	require.NoError(t, err)
 
-	// Add mixed inserts: some in-memory, some persisted
+	// Start new transaction with fault injection enabled
 	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Now())
+	require.NoError(t, err)
+
+	// Enable fault injection to force workspace flush
+	fault.Enable()
+	err = fault.AddFaultPoint(ctx, objectio.FJ_CNWorkspaceForceFlush, ":::", "return", 0, "", false)
 	require.NoError(t, err)
 
 	db, err = disttaeEngine.Engine.Database(ctx, "testdb", txn)
@@ -607,27 +605,28 @@ func TestStarCountMixedInMemoryAndPersisted(t *testing.T) {
 	rel, err = db.Relation(ctx, "test_table", nil)
 	require.NoError(t, err)
 
-	// First batch: in-memory (small)
-	bat = catalog2.MockBatch(schema, 10)
-	err = rel.Write(ctx, containers.ToCNBatch(bat))
-	require.NoError(t, err)
-
-	// Second batch: trigger persist (large enough to exceed 2KB)
+	// Write batches with fault injection enabled - these will be persisted
 	for i := 0; i < 3; i++ {
 		bat = catalog2.MockBatch(schema, 20)
 		err = rel.Write(ctx, containers.ToCNBatch(bat))
 		require.NoError(t, err)
 	}
 
-	// Third batch: in-memory again (small)
-	bat = catalog2.MockBatch(schema, 10)
-	err = rel.Write(ctx, containers.ToCNBatch(bat))
-	require.NoError(t, err)
+	// Disable fault injection
+	fault.RemoveFaultPoint(ctx, objectio.FJ_CNWorkspaceForceFlush)
+	fault.Disable()
 
-	// Total: 100 committed + 10 + 60 + 10 = 180
+	// Write more batches without fault injection - these will stay in-memory
+	for i := 0; i < 2; i++ {
+		bat = catalog2.MockBatch(schema, 25)
+		err = rel.Write(ctx, containers.ToCNBatch(bat))
+		require.NoError(t, err)
+	}
+
+	// Total: 100 committed + 60 persisted + 50 in-memory = 210
 	count, err := rel.StarCount(ctx)
 	require.NoError(t, err)
-	require.Equal(t, uint64(180), count, "100 committed + 80 mixed uncommitted = 180")
+	require.Equal(t, uint64(210), count, "Should count all rows including mixed in-memory and persisted")
 
 	err = txn.Commit(ctx)
 	require.NoError(t, err)
