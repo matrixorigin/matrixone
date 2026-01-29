@@ -522,8 +522,8 @@ func tryConn(dsn string) (*sql.DB, error) {
 		return nil, err
 	}
 	db.SetConnMaxLifetime(time.Minute * 3)
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
+	db.SetMaxOpenConns(100)
+	db.SetMaxIdleConns(100)
 	time.Sleep(time.Millisecond * 100)
 
 	// ping opens the connection

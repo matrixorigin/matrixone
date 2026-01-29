@@ -91,7 +91,7 @@ func (j *GetMetaJob) Execute() {
 	res := &GetMetaJobResult{}
 	getChunk0SQL := PublicationSQLBuilder.GetObjectSQL(j.objectName, 0)
 
-	result, cancel, err := j.upstreamExecutor.ExecSQL(j.ctx, nil, getChunk0SQL, false, true, time.Minute)
+	result, cancel, err := j.upstreamExecutor.ExecSQL(j.ctx, nil, getChunk0SQL, false, true, time.Second*10)
 	if err != nil {
 		res.Err = moerr.NewInternalErrorf(j.ctx, "failed to execute GETOBJECT query for offset 0: %v", err)
 		j.result <- res

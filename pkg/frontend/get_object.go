@@ -192,7 +192,7 @@ func handleGetObject(
 	fileSize := dirEntry.Size
 
 	// Calculate total data chunks (chunk 0 is metadata, chunks 1+ are data)
-	const chunkSize = 100 * 1024 * 1024 // 1MB
+	const chunkSize = 100 * 1024 * 1024 // 100MB
 	var totalChunks int64
 	if fileSize <= chunkSize {
 		totalChunks = 1
