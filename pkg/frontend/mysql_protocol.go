@@ -2986,6 +2986,15 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow2(mrs *MysqlResultSet, colS
 				if err != nil {
 					return err
 				}
+			case types.T_uuid:
+				value, err := GetUUID(colSlices, rowIdx, i)
+				if err != nil {
+					return err
+				}
+				err = AppendStringLenEnc(mp, value)
+				if err != nil {
+					return err
+				}
 			default:
 				value, err := GetBytesBased(colSlices, rowIdx, i)
 				if err != nil {
@@ -3288,6 +3297,15 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 			switch typ.Oid {
 			case types.T_datetime:
 				value, err := GetDatetime(colSlices, r, i)
+				if err != nil {
+					return err
+				}
+				err = AppendStringLenEnc(mp, value)
+				if err != nil {
+					return err
+				}
+			case types.T_uuid:
+				value, err := GetUUID(colSlices, r, i)
 				if err != nil {
 					return err
 				}
