@@ -76,16 +76,12 @@ static inline uint64_t bloom_calculate_pos(bloom_hash_t h, int i, uint64_t nbits
 
 /*
  * Sets up the bloom filter structure with the given bit count and number of hash functions.
- * Generates random seeds for the hash functions.
  */
-static void bloomfilter_setup(bloomfilter_t *bf, uint64_t nbits, uint32_t k) {
+static void bloomfilter_setup(bloomfilter_t *bf, uint64_t nbits, uint32_t k, uint64_t seed) {
     memcpy(bf->magic, BLOOM_MAGIC, 4);
     bf->nbits = nbits;
     bf->k = k;
-    bf->seed = 0;
-    for (int j = 0; j < 4; j++) {
-        bf->seed = (bf->seed << 16) | (rand() & 0xFFFF);
-    }
+    bf->seed = seed;
 }
 
 static uint64_t next_pow2_64(uint64_t v) {
@@ -109,7 +105,25 @@ bloomfilter_t* bloomfilter_init(uint64_t nbits, uint32_t k) {
     if (!bf) return NULL;
 
     memset(bf->bitmap, 0, nbytes);
-    bloomfilter_setup(bf, new_nbits, k);
+    uint64_t seed = 0;
+    for (int j = 0; j < 4; j++) {
+        seed = (seed << 16) | (rand() & 0xFFFF);
+    }
+    bloomfilter_setup(bf, new_nbits, k, seed);
+    return bf;
+}
+
+bloomfilter_t* bloomfilter_init_with_seed(uint64_t nbits, uint32_t k, uint64_t seed) {
+    uint64_t new_nbits = next_pow2_64(nbits);
+    uint64_t nbytes = bitmap_nbyte(new_nbits);
+
+    if (k > MAX_K_SEED) return NULL;
+
+    bloomfilter_t *bf = (bloomfilter_t *)malloc(sizeof(bloomfilter_t) + nbytes);
+    if (!bf) return NULL;
+
+    memset(bf->bitmap, 0, nbytes);
+    bloomfilter_setup(bf, new_nbits, k, seed);
     return bf;
 }
 
@@ -343,3 +357,22 @@ bloomfilter_t* bloomfilter_unmarshal(const uint8_t *buf, size_t len) {
     }
     return bf;
 }
+
+int bloomfilter_or(bloomfilter_t *dst, const bloomfilter_t *a, const bloomfilter_t *b) {
+
+    if (!(a->nbits == b->nbits && a->nbits == dst->nbits)) {
+        return 1;
+    }
+
+    if (!(a->seed == b->seed && a->seed == dst->seed)) {
+        return 2;
+    }
+
+    if (!(a->k == b->k && a->k == dst->k)) {
+        return 3;
+    }
+
+    bitmap_or((uint64_t*)dst->bitmap, (uint64_t*)a->bitmap, (uint64_t*)b->bitmap, dst->nbits);
+    return 0;
+}
+

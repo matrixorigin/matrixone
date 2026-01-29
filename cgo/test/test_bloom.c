@@ -242,6 +242,105 @@ void test_integer_compatibility() {
     printf("Integer compatibility passed\n");
 }
 
+
+void test_bloomfilter_or() {
+    printf("Testing bloomfilter_or...\n");
+    uint64_t nbits = 1000;
+    uint32_t k = 3;
+
+    // Test case 1: Successful OR operation
+    bloomfilter_t *bf_a = bloomfilter_init(nbits, k);
+    bloomfilter_t *bf_b = bloomfilter_init(nbits, k);
+    // For OR operation to work, seeds must be the same.
+    // In bloomfilter_init, seed is randomized. So we need to copy seed from a to b.
+    bf_b->seed = bf_a->seed;
+    bloomfilter_t *bf_dst = bloomfilter_init(nbits, k);
+    bf_dst->seed = bf_a->seed;
+
+
+    const char *key_a1 = "apple";
+    const char *key_a2 = "banana";
+    const char *key_b1 = "orange";
+    const char *key_b2 = "grape";
+    const char *key_common = "mango";
+
+    bloomfilter_add(bf_a, key_a1, strlen(key_a1));
+    bloomfilter_add(bf_a, key_a2, strlen(key_a2));
+    bloomfilter_add(bf_a, key_common, strlen(key_common));
+
+    bloomfilter_add(bf_b, key_b1, strlen(key_b1));
+    bloomfilter_add(bf_b, key_b2, strlen(key_b2));
+    bloomfilter_add(bf_b, key_common, strlen(key_common));
+
+    int result = bloomfilter_or(bf_dst, bf_a, bf_b);
+    CHECK(result == 0, "bloomfilter_or should return 0 for success");
+
+    CHECK(bloomfilter_test(bf_dst, key_a1, strlen(key_a1)), "bf_dst should contain key_a1");
+    CHECK(bloomfilter_test(bf_dst, key_a2, strlen(key_a2)), "bf_dst should contain key_a2");
+    CHECK(bloomfilter_test(bf_dst, key_b1, strlen(key_b1)), "bf_dst should contain key_b1");
+    CHECK(bloomfilter_test(bf_dst, key_b2, strlen(key_b2)), "bf_dst should contain key_b2");
+    CHECK(bloomfilter_test(bf_dst, key_common, strlen(key_common)), "bf_dst should contain key_common");
+
+    bloomfilter_free(bf_a);
+    bloomfilter_free(bf_b);
+    bloomfilter_free(bf_dst);
+
+    // Test case 2: Mismatched nbits
+    bf_a = bloomfilter_init(nbits, k);
+    bf_b = bloomfilter_init(nbits / 2, k); // Different nbits
+    bf_dst = bloomfilter_init(nbits, k);
+    bf_b->seed = bf_a->seed;
+    bf_dst->seed = bf_a->seed;
+    result = bloomfilter_or(bf_dst, bf_a, bf_b);
+    CHECK(result == 1, "bloomfilter_or should return 1 for mismatched nbits");
+    bloomfilter_free(bf_a);
+    bloomfilter_free(bf_b);
+    bloomfilter_free(bf_dst);
+
+    // Test case 3: Mismatched seed
+    bf_a = bloomfilter_init(nbits, k);
+    bf_b = bloomfilter_init(nbits, k);
+    bf_dst = bloomfilter_init(nbits, k);
+    // bf_b and bf_dst will have different seeds than bf_a by default
+    result = bloomfilter_or(bf_dst, bf_a, bf_b);
+    CHECK(result == 2, "bloomfilter_or should return 2 for mismatched seed");
+    bloomfilter_free(bf_a);
+    bloomfilter_free(bf_b);
+    bloomfilter_free(bf_dst);
+
+    // Test case 4: Mismatched k
+    bf_a = bloomfilter_init(nbits, k);
+    bf_b = bloomfilter_init(nbits, k + 1); // Different k
+    bf_dst = bloomfilter_init(nbits, k);
+    bf_b->seed = bf_a->seed;
+    bf_dst->seed = bf_a->seed;
+    result = bloomfilter_or(bf_dst, bf_a, bf_b);
+    CHECK(result == 3, "bloomfilter_or should return 3 for mismatched k");
+    bloomfilter_free(bf_a);
+    bloomfilter_free(bf_b);
+    bloomfilter_free(bf_dst);
+
+    // Test case 5: In-place OR operation (dst = a)
+    bf_a = bloomfilter_init(nbits, k);
+    bf_b = bloomfilter_init(nbits, k);
+    bf_b->seed = bf_a->seed; // Seeds must match
+
+    const char *key_a_inplace = "inplace_a";
+    const char *key_b_inplace = "inplace_b";
+    bloomfilter_add(bf_a, key_a_inplace, strlen(key_a_inplace));
+    bloomfilter_add(bf_b, key_b_inplace, strlen(key_b_inplace));
+
+    result = bloomfilter_or(bf_a, bf_a, bf_b);
+    CHECK(result == 0, "In-place bloomfilter_or should return 0");
+    CHECK(bloomfilter_test(bf_a, key_a_inplace, strlen(key_a_inplace)), "In-place dst should still contain its original keys");
+    CHECK(bloomfilter_test(bf_a, key_b_inplace, strlen(key_b_inplace)), "In-place dst should contain keys from the other filter");
+
+    bloomfilter_free(bf_a);
+    bloomfilter_free(bf_b);
+
+    printf("bloomfilter_or tests passed\n");
+}
+
 int main() {
     srand(time(NULL));
     
@@ -253,6 +352,7 @@ int main() {
     test_test_and_add_fixed();
     test_varlena_ops();
     test_integer_compatibility();
+    test_bloomfilter_or();
 
     printf("All BloomFilter tests passed!\n");
     return 0;

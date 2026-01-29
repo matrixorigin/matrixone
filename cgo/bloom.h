@@ -49,6 +49,15 @@ typedef struct {
 bloomfilter_t* bloomfilter_init(uint64_t nbits, uint32_t k);
 
 /*
+ * Initializes a new bloom filter with a given seed.
+ * nbits: the number of bits in the bloom filter bitmap.
+ * k: the number of hash functions to use.
+ * seed: the seed for hash functions.
+ * Returns a pointer to the newly allocated bloomfilter_t, or NULL if it fails.
+ */
+bloomfilter_t* bloomfilter_init_with_seed(uint64_t nbits, uint32_t k, uint64_t seed);
+
+/*
  * Frees the memory allocated for the bloom filter.
  */
 void bloomfilter_free(bloomfilter_t *bf);
@@ -140,5 +149,31 @@ void bloomfilter_test_varlena(const bloomfilter_t *bf, const void *keys, size_t 
  * area: pointer to the start of area buffer.
  */
 void bloomfilter_test_and_add_varlena(const bloomfilter_t *bf, const void *keys, size_t len, size_t elemsz, size_t nitem, const void *area, size_t area_len, const void *nullmap, size_t nullmaplen, void *result);
+
+/*
+ * Merge two bloomfilter into dst. nbits, seed and k MUST be same
+ */
+int bloomfilter_or(bloomfilter_t *dst, const bloomfilter_t *a, const bloomfilter_t *b);
+
+/*
+ * Returns the number of bits in the bloom filter.
+ */
+static inline uint64_t bloomfilter_get_nbits(const bloomfilter_t *bf) {
+    return bf->nbits;
+}
+
+/*
+ * Returns the seed of the bloom filter.
+ */
+static inline uint64_t bloomfilter_get_seed(const bloomfilter_t *bf) {
+    return bf->seed;
+}
+
+/*
+ * Returns the number of hash functions used by the bloom filter.
+ */
+static inline uint32_t bloomfilter_get_k(const bloomfilter_t *bf) {
+    return bf->k;
+}
 
 #endif /* _BLOOM_H_ */
