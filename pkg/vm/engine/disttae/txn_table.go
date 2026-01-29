@@ -662,7 +662,7 @@ func (tbl *txnTable) StarCount(ctx context.Context) (uint64, error) {
 
 	// Check if there are uncommitted tombstones
 	hasUncommittedTombstones := false
-	txnOffset := 0
+	txnOffset := len(tbl.getTxn().writes)
 	if tbl.db.op.IsSnapOp() {
 		txnOffset = tbl.getTxn().GetSnapshotWriteOffset()
 	}
