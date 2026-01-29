@@ -23,12 +23,42 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/assert"
 )
+
+func TestNewMemPKFilter_WithBF(t *testing.T) {
+	tableDef := &plan.TableDef{
+		Name: "test",
+		Pkey: &plan.PrimaryKeyDef{
+			Names: []string{"pk"},
+		},
+		Cols: []*plan.ColDef{
+			{Name: "a", Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: catalog.IndexTablePrimaryColName, Seqnum: 1, Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "b", Seqnum: 2, Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+
+	ts := types.MaxTs().ToTimestamp()
+	packerPool := fileservice.NewPool(8, func() *types.Packer { return types.NewPacker() }, func(p *types.Packer) { p.Reset() }, func(p *types.Packer) { p.Close() })
+
+	bf := bloomfilter.New(100, 0.01)
+	defer bf.Free()
+
+	hint := engine.FilterHint{BF: &bf}
+	base := BasePKFilter{Op: function.EQUAL, Valid: true, Oid: types.T_int64, LB: types.EncodeFixed(int64(1))}
+
+	filter, err := NewMemPKFilter(tableDef, ts, packerPool, base, hint)
+	require.NoError(t, err)
+	require.True(t, filter.HasBF)
+	require.Equal(t, int16(1), filter.BFSeqNum)
+}
 
 func TestNewMemPKFilter(t *testing.T) {
 

@@ -33,30 +33,16 @@ type RowT = *txnRow
 type BlockT = *txnBlock
 
 type smallTxn struct {
-	memo      *txnif.TxnMemo
-	startTS   types.TS
 	prepareTS types.TS
 	state     txnif.TxnState
 	lsn       uint64
-}
-
-func (txn *smallTxn) GetMemo() *txnif.TxnMemo {
-	return txn.memo
 }
 
 func (txn *smallTxn) GetTxnState(_ bool) txnif.TxnState {
 	return txn.state
 }
 
-func (txn *smallTxn) GetStartTS() types.TS {
-	return txn.startTS
-}
-
 func (txn *smallTxn) GetPrepareTS() types.TS {
-	return txn.prepareTS
-}
-
-func (txn *smallTxn) GetCommitTS() types.TS {
 	return txn.prepareTS
 }
 
@@ -66,9 +52,7 @@ func (txn *smallTxn) GetLSN() uint64 {
 
 type summary struct {
 	hasCatalogChanges bool
-	tids              map[uint64]struct{}
-	// TODO
-	// maxLsn
+	tids              map[model.TableRecord]struct{}
 }
 
 type txnRow struct {
@@ -88,8 +72,7 @@ func (row *txnRow) GetMemo() *txnif.TxnMemo {
 	if txn := row.source.Load(); txn != nil {
 		return txn.GetMemo()
 	}
-	txn := row.packed.Load()
-	return txn.GetMemo()
+	return nil
 }
 
 func (row *txnRow) GetTxnState(waitIfcommitting bool) txnif.TxnState {
@@ -100,14 +83,6 @@ func (row *txnRow) GetTxnState(waitIfcommitting bool) txnif.TxnState {
 	return txn.GetTxnState(waitIfcommitting)
 }
 
-func (row *txnRow) GetStartTS() types.TS {
-	if txn := row.source.Load(); txn != nil {
-		return txn.GetStartTS()
-	}
-	txn := row.packed.Load()
-	return txn.GetStartTS()
-}
-
 func (row *txnRow) GetPrepareTS() types.TS {
 	if txn := row.source.Load(); txn != nil {
 		return txn.GetPrepareTS()
@@ -116,40 +91,10 @@ func (row *txnRow) GetPrepareTS() types.TS {
 	return txn.GetPrepareTS()
 }
 
-func (row *txnRow) GetCommitTS() types.TS {
-	if txn := row.source.Load(); txn != nil {
-		return txn.GetCommitTS()
-	}
-	txn := row.packed.Load()
-	return txn.GetCommitTS()
-}
-
 func (row *txnRow) Length() int             { return 1 }
 func (row *txnRow) Window(_, _ int) *txnRow { return nil }
-
 func (row *txnRow) IsCompacted() bool {
 	return row.packed.Load() != nil
-}
-
-func (row *txnRow) TryCompact() (compacted, changed bool) {
-	if txn := row.source.Load(); txn == nil {
-		return true, false
-	} else {
-		state := txn.GetTxnState(false)
-		if state == txnif.TxnStateCommitted || state == txnif.TxnStateRollbacked {
-			packed := &smallTxn{
-				memo:      txn.GetMemo(),
-				startTS:   txn.GetStartTS(),
-				prepareTS: txn.GetPrepareTS(),
-				state:     state,
-				lsn:       txn.GetLSN(),
-			}
-			row.packed.Store(packed)
-			row.source.Store(nil)
-			return true, true
-		}
-	}
-	return false, false
 }
 
 type txnBlock struct {
@@ -174,17 +119,41 @@ func (blk *txnBlock) TryCompact() (all bool, changed bool) {
 	if blk.rows[len(blk.rows)-1].IsCompacted() {
 		return true, false
 	}
-	all = true
+
 	for _, row := range blk.rows {
-		if compacted, _ := row.TryCompact(); !compacted {
-			all = false
-			break
+		txn := row.source.Load()
+		state := txn.GetTxnState(false)
+		if state != txnif.TxnStateCommitted && state != txnif.TxnStateRollbacked {
+			// not ready to compact
+			return false, false
 		}
 	}
-	if all {
-		changed = true
+
+	// compact the blk and make a summary for dirty tables
+	sum := &summary{
+		tids: make(map[model.TableRecord]struct{}),
 	}
-	return
+	for _, row := range blk.rows {
+		txn := row.source.Load()
+		memo := txn.GetMemo()
+		if !sum.hasCatalogChanges && memo.HasCatalogChanges() {
+			sum.hasCatalogChanges = true
+		}
+		for _, record := range memo.Tables {
+			sum.tids[*record] = struct{}{}
+		}
+		packed := &smallTxn{
+			prepareTS: txn.GetPrepareTS(),
+			state:     txn.GetTxnState(false),
+			lsn:       txn.GetLSN(),
+		}
+		row.packed.Store(packed)
+		row.source.Store(nil)
+	}
+
+	blk.summary.CompareAndSwap(nil, sum)
+
+	return true, true
 }
 
 func (blk *txnBlock) IsAppendable() bool {
@@ -205,21 +174,6 @@ func (blk *txnBlock) Close() {
 	blk.rows = make([]*txnRow, 0)
 }
 
-func (blk *txnBlock) trySumary() {
-	summary := new(summary)
-	summary.tids = make(map[uint64]struct{}, 8)
-	for _, row := range blk.rows {
-		memo := row.GetMemo()
-		if !summary.hasCatalogChanges && memo.HasCatalogChanges() {
-			summary.hasCatalogChanges = true
-		}
-		for k := range memo.Tree.Tables {
-			summary.tids[k] = struct{}{}
-		}
-	}
-	blk.summary.CompareAndSwap(nil, summary)
-}
-
 func (blk *txnBlock) ForeachRowInBetween(
 	from, to types.TS,
 	rowOp func(row RowT) (goNext bool),
@@ -228,11 +182,7 @@ func (blk *txnBlock) ForeachRowInBetween(
 	if blk.summary.Load() == nil {
 		blk.RLock()
 		rows = blk.rows[:len(blk.rows)]
-		capacity := cap(blk.rows)
 		blk.RUnlock()
-		if capacity == len(rows) && blk.summary.Load() == nil {
-			blk.trySumary()
-		}
 	} else {
 		rows = blk.rows
 	}
