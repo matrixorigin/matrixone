@@ -1423,3 +1423,178 @@ func TestStarCountEmptyTableWithTombstones(t *testing.T) {
 
 	require.NoError(t, txnop.Commit(p.Ctx))
 }
+
+// TestStarCountMultipleDeletes tests StarCount with multiple DELETE operations in the same transaction.
+//
+// Scenario:
+// 1. Insert 100 rows via TAE (committed)
+// 2. Start CN transaction
+// 3. Delete 20 rows (first DELETE)
+// 4. Delete another 15 rows (second DELETE)
+// 5. Delete another 10 rows (third DELETE)
+// 6. Verify StarCount = 100 - 20 - 15 - 10 = 55
+//
+// This tests that tombstones accumulate correctly across multiple DELETE operations.
+func TestStarCountMultipleDeletes(t *testing.T) {
+	p := testutil.InitEnginePack(testutil.TestOptions{}, t)
+	defer p.Close()
+
+	tae := p.T.GetDB()
+
+	schema := catalog2.MockSchemaAll(3, 0)
+	schema.Name = "test_table"
+
+	// Step 1: Create table and insert 100 rows
+	txnop := p.StartCNTxn()
+	_, rel := p.CreateDBAndTable(txnop, "db", schema)
+	dbID := rel.GetDBID(p.Ctx)
+	tableID := rel.GetTableID(p.Ctx)
+	require.NoError(t, txnop.Commit(p.Ctx))
+
+	require.NoError(t, p.D.SubscribeTable(p.Ctx, dbID, tableID, "db", schema.Name, false))
+
+	{
+		txn, _ := tae.StartTxn(nil)
+		db, _ := txn.GetDatabase("db")
+		rel, _ := db.GetRelationByName(schema.Name)
+		bat := catalog2.MockBatch(schema, 100)
+		require.NoError(t, rel.Append(p.Ctx, bat))
+		require.NoError(t, txn.Commit(p.Ctx))
+	}
+
+	_, err := p.D.GetPartitionStateStats(p.Ctx, dbID, tableID)
+	require.NoError(t, err)
+
+	// Step 2: Collect rowids for three batches of deletes
+	var batch1RowIDs, batch2RowIDs, batch3RowIDs []types.Rowid
+	{
+		txn, _ := tae.StartTxn(nil)
+		db, _ := txn.GetDatabase("db")
+		taeRel, _ := db.GetRelationByName(schema.Name)
+
+		it := taeRel.MakeObjectIt(false)
+		for it.Next() {
+			obj := it.GetObject()
+			objID := obj.GetMeta().(*catalog2.ObjectEntry).ID()
+
+			for blkIdx := 0; blkIdx < obj.BlkCnt(); blkIdx++ {
+				blkID := objectio.NewBlockidWithObjectID(objID, uint16(blkIdx))
+
+				// Collect rowids for batch 1 (rows 0-19)
+				for rowIdx := uint32(0); rowIdx < 20 && len(batch1RowIDs) < 20; rowIdx++ {
+					rowid := objectio.NewRowid(&blkID, rowIdx)
+					batch1RowIDs = append(batch1RowIDs, rowid)
+				}
+
+				// Collect rowids for batch 2 (rows 20-34)
+				for rowIdx := uint32(20); rowIdx < 35 && len(batch2RowIDs) < 15; rowIdx++ {
+					rowid := objectio.NewRowid(&blkID, rowIdx)
+					batch2RowIDs = append(batch2RowIDs, rowid)
+				}
+
+				// Collect rowids for batch 3 (rows 35-44)
+				for rowIdx := uint32(35); rowIdx < 45 && len(batch3RowIDs) < 10; rowIdx++ {
+					rowid := objectio.NewRowid(&blkID, rowIdx)
+					batch3RowIDs = append(batch3RowIDs, rowid)
+				}
+
+				if len(batch1RowIDs) >= 20 && len(batch2RowIDs) >= 15 && len(batch3RowIDs) >= 10 {
+					break
+				}
+			}
+			if len(batch1RowIDs) >= 20 && len(batch2RowIDs) >= 15 && len(batch3RowIDs) >= 10 {
+				break
+			}
+		}
+		it.Close()
+		require.NoError(t, txn.Commit(p.Ctx))
+	}
+	require.Equal(t, 20, len(batch1RowIDs))
+	require.Equal(t, 15, len(batch2RowIDs))
+	require.Equal(t, 10, len(batch3RowIDs))
+
+	// Step 3: Start CN transaction and perform three DELETE operations
+	txnop = p.StartCNTxn()
+	db, err := p.D.Engine.Database(p.Ctx, "db", txnop)
+	require.NoError(t, err)
+	rel, err = db.Relation(p.Ctx, schema.Name, nil)
+	require.NoError(t, err)
+
+	// First DELETE: 20 rows
+	{
+		vec1 := vector.NewVec(types.T_Rowid.ToType())
+		vec2 := vector.NewVec(types.T_int64.ToType())
+		for _, rowID := range batch1RowIDs {
+			vector.AppendFixed(vec1, rowID, false, p.Mp)
+			vector.AppendFixed(vec2, int64(0), false, p.Mp)
+		}
+
+		delBatch := batch.NewWithSize(2)
+		delBatch.SetRowCount(len(batch1RowIDs))
+		delBatch.Attrs = []string{catalog.Row_ID, catalog.TableTailAttrPKVal}
+		delBatch.Vecs[0] = vec1
+		delBatch.Vecs[1] = vec2
+
+		require.NoError(t, rel.Delete(p.Ctx, delBatch, catalog.Row_ID))
+		vec1.Free(p.Mp)
+		vec2.Free(p.Mp)
+	}
+
+	// Verify count after first delete
+	count, err := rel.StarCount(p.Ctx)
+	require.NoError(t, err)
+	require.Equal(t, uint64(80), count, "Count should be 80 after first delete")
+
+	// Second DELETE: 15 rows
+	{
+		vec1 := vector.NewVec(types.T_Rowid.ToType())
+		vec2 := vector.NewVec(types.T_int64.ToType())
+		for _, rowID := range batch2RowIDs {
+			vector.AppendFixed(vec1, rowID, false, p.Mp)
+			vector.AppendFixed(vec2, int64(0), false, p.Mp)
+		}
+
+		delBatch := batch.NewWithSize(2)
+		delBatch.SetRowCount(len(batch2RowIDs))
+		delBatch.Attrs = []string{catalog.Row_ID, catalog.TableTailAttrPKVal}
+		delBatch.Vecs[0] = vec1
+		delBatch.Vecs[1] = vec2
+
+		require.NoError(t, rel.Delete(p.Ctx, delBatch, catalog.Row_ID))
+		vec1.Free(p.Mp)
+		vec2.Free(p.Mp)
+	}
+
+	// Verify count after second delete
+	count, err = rel.StarCount(p.Ctx)
+	require.NoError(t, err)
+	require.Equal(t, uint64(65), count, "Count should be 65 after second delete")
+
+	// Third DELETE: 10 rows
+	{
+		vec1 := vector.NewVec(types.T_Rowid.ToType())
+		vec2 := vector.NewVec(types.T_int64.ToType())
+		for _, rowID := range batch3RowIDs {
+			vector.AppendFixed(vec1, rowID, false, p.Mp)
+			vector.AppendFixed(vec2, int64(0), false, p.Mp)
+		}
+
+		delBatch := batch.NewWithSize(2)
+		delBatch.SetRowCount(len(batch3RowIDs))
+		delBatch.Attrs = []string{catalog.Row_ID, catalog.TableTailAttrPKVal}
+		delBatch.Vecs[0] = vec1
+		delBatch.Vecs[1] = vec2
+
+		require.NoError(t, rel.Delete(p.Ctx, delBatch, catalog.Row_ID))
+		vec1.Free(p.Mp)
+		vec2.Free(p.Mp)
+	}
+
+	// Step 4: Verify final StarCount
+	count, err = rel.StarCount(p.Ctx)
+	require.NoError(t, err)
+	t.Logf("StarCount: %d, expected: 55 (100 - 20 - 15 - 10)", count)
+	require.Equal(t, uint64(55), count, "StarCount should be 100 - 20 - 15 - 10 = 55")
+
+	require.NoError(t, txnop.Commit(p.Ctx))
+}
