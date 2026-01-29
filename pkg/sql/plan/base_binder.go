@@ -324,6 +324,39 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 			} else {
 				return nil, moerr.NewInvalidInputf(b.GetContext(), "ambiguous column reference '%v'", name)
 			}
+		} else if selectItem, ok := b.ctx.aliasMap[col]; ok {
+			// Handle UNION aliases: aliasMap entry exists but column is not in bindingByCol
+			// This happens when ORDER BY references a UNION result column inside a function
+			if int(selectItem.idx) < len(b.ctx.projects) {
+				// Get the tag from the existing project expression
+				// In UNION context, ctx.projects[i] references the UNION node's output (lastTag)
+				// We need to use the same tag, not ctx.projectTag
+				projExpr := b.ctx.projects[selectItem.idx]
+				if colExpr, ok := projExpr.Expr.(*plan.Expr_Col); ok {
+					return &plan.Expr{
+						Typ: projExpr.Typ,
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{
+								RelPos: colExpr.Col.RelPos,
+								ColPos: colExpr.Col.ColPos,
+								Name:   col,
+							},
+						},
+					}, nil
+				}
+				// Fallback to projectTag if the project expression is not a column reference
+				return &plan.Expr{
+					Typ: projExpr.Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: b.ctx.projectTag,
+							ColPos: selectItem.idx,
+							Name:   col,
+						},
+					},
+				}, nil
+			}
+			err = moerr.NewInvalidInputf(localErrCtx, "column %s does not exist", name)
 		} else {
 			err = moerr.NewInvalidInputf(localErrCtx, "column %s does not exist", name)
 		}
