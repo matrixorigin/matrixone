@@ -136,7 +136,7 @@ func TestCheckIterationStatus(t *testing.T) {
 	// Define test cases
 	testCases := []struct {
 		name           string
-		taskID         uint64
+		taskID         string
 		cnUUID         string
 		expectedCNUUID string
 		iterationLSN   uint64
@@ -148,7 +148,7 @@ func TestCheckIterationStatus(t *testing.T) {
 	}{
 		{
 			name:           "Success",
-			taskID:         1,
+			taskID:         "00000000-0000-0000-0000-000000000001",
 			cnUUID:         "test-cn-uuid-123",
 			expectedCNUUID: "test-cn-uuid-123",
 			iterationLSN:   1000,
@@ -159,7 +159,7 @@ func TestCheckIterationStatus(t *testing.T) {
 		},
 		{
 			name:           "WrongCNUUID",
-			taskID:         2,
+			taskID:         "00000000-0000-0000-0000-000000000002",
 			cnUUID:         "test-cn-uuid-123",
 			expectedCNUUID: "wrong-cn-uuid",
 			iterationLSN:   1000,
@@ -171,7 +171,7 @@ func TestCheckIterationStatus(t *testing.T) {
 		},
 		{
 			name:           "WrongIterationLSN",
-			taskID:         3,
+			taskID:         "00000000-0000-0000-0000-000000000003",
 			cnUUID:         "test-cn-uuid-123",
 			expectedCNUUID: "test-cn-uuid-123",
 			iterationLSN:   1000,
@@ -183,7 +183,7 @@ func TestCheckIterationStatus(t *testing.T) {
 		},
 		{
 			name:           "NotCompleted",
-			taskID:         4,
+			taskID:         "00000000-0000-0000-0000-000000000004",
 			cnUUID:         "test-cn-uuid-123",
 			expectedCNUUID: "test-cn-uuid-123",
 			iterationLSN:   1000,
@@ -195,7 +195,7 @@ func TestCheckIterationStatus(t *testing.T) {
 		},
 		{
 			name:           "NoRows",
-			taskID:         999,
+			taskID:         "00000000-0000-0000-0000-000000000999",
 			cnUUID:         "",
 			expectedCNUUID: "test-cn-uuid-123",
 			iterationLSN:   0,
@@ -227,7 +227,7 @@ func TestCheckIterationStatus(t *testing.T) {
 					iteration_lsn, 
 					cn_uuid
 				) VALUES (
-					%d, 
+					'%s', 
 					'test_subscription', 
 					'full', 
 					%d,
@@ -380,7 +380,7 @@ func TestExecuteIteration1(t *testing.T) {
 	// Note: We do NOT force checkpoint here - that will be done in parallel
 
 	// Step 2: Write mo_ccpr_log table in destination account context
-	taskID := uint64(1)
+	taskID := uuid.New().String()
 	iterationLSN := uint64(0)
 	subscriptionName := "test_subscription"
 	insertSQL := fmt.Sprintf(
@@ -398,7 +398,7 @@ func TestExecuteIteration1(t *testing.T) {
 			iteration_lsn, 
 			cn_uuid
 		) VALUES (
-			%d, 
+			'%s', 
 			'%s', 
 			'table', 
 			%d,
@@ -895,7 +895,7 @@ func TestExecuteIterationDatabaseLevel(t *testing.T) {
 	// Note: We do NOT force checkpoint here - that will be done in parallel
 
 	// Step 2: Write mo_ccpr_log table with database level sync
-	taskID := uint64(1)
+	taskID := uuid.New().String()
 	iterationLSN := uint64(0)
 	subscriptionName := "test_subscription_db"
 	insertSQL := fmt.Sprintf(
@@ -913,7 +913,7 @@ func TestExecuteIterationDatabaseLevel(t *testing.T) {
 			iteration_lsn, 
 			cn_uuid
 		) VALUES (
-			%d, 
+			'%s', 
 			'%s', 
 			'database', 
 			%d,
@@ -1201,7 +1201,7 @@ func TestExecuteIterationWithIndex(t *testing.T) {
 	}
 
 	// Step 2: Write mo_ccpr_log table in destination account context
-	taskID := uint64(1)
+	taskID := uuid.New().String()
 	iterationLSN := uint64(0)
 	subscriptionName := "test_subscription_with_index"
 	insertSQL := fmt.Sprintf(
@@ -1219,7 +1219,7 @@ func TestExecuteIterationWithIndex(t *testing.T) {
 			iteration_lsn, 
 			cn_uuid
 		) VALUES (
-			%d, 
+			'%s', 
 			'%s', 
 			'database', 
 			%d,
@@ -1725,7 +1725,7 @@ func TestExecuteIterationWithSnapshotFinishedInjection(t *testing.T) {
 	require.NoError(t, err)
 
 	// Step 2: Write mo_ccpr_log table in destination account context
-	taskID := uint64(1)
+	taskID := uuid.New().String()
 	iterationLSN := uint64(0)
 	subscriptionName := "test_subscription_injection"
 	insertSQL := fmt.Sprintf(
@@ -1743,7 +1743,7 @@ func TestExecuteIterationWithSnapshotFinishedInjection(t *testing.T) {
 			iteration_lsn, 
 			cn_uuid
 		) VALUES (
-			%d, 
+			'%s', 
 			'%s', 
 			'table', 
 			%d,
@@ -2034,7 +2034,7 @@ func TestExecuteIterationWithCommitFailedInjection(t *testing.T) {
 	require.NoError(t, err)
 
 	// Step 2: Write mo_ccpr_log table in destination account context
-	taskID := uint64(1)
+	taskID := uuid.New().String()
 	iterationLSN := uint64(0)
 	subscriptionName := "test_subscription_commit_failed"
 	insertSQL := fmt.Sprintf(
@@ -2052,7 +2052,7 @@ func TestExecuteIterationWithCommitFailedInjection(t *testing.T) {
 			iteration_lsn, 
 			cn_uuid
 		) VALUES (
-			%d, 
+			'%s', 
 			'%s', 
 			'table', 
 			%d,
@@ -2377,6 +2377,7 @@ func TestCCPRGC(t *testing.T) {
 			}
 
 			// Insert test data into mo_ccpr_log
+			taskID := uuid.New().String()
 			var insertCcprLogSQL string
 			if tc.dropAtHoursAgo >= 0 {
 				insertCcprLogSQL = fmt.Sprintf(
@@ -2395,7 +2396,7 @@ func TestCCPRGC(t *testing.T) {
 						cn_uuid,
 						drop_at
 					) VALUES (
-						0, 
+						'%s', 
 						'%s', 
 						'table', 
 						%d,
@@ -2409,6 +2410,7 @@ func TestCCPRGC(t *testing.T) {
 						'%s',
 						'%s'
 					)`,
+					taskID,
 					subscriptionName,
 					accountID,
 					publication.InternalSQLExecutorType,
@@ -2435,7 +2437,7 @@ func TestCCPRGC(t *testing.T) {
 						iteration_lsn, 
 						cn_uuid
 					) VALUES (
-						0, 
+						'%s', 
 						'%s', 
 						'table', 
 						%d,
@@ -2448,6 +2450,7 @@ func TestCCPRGC(t *testing.T) {
 						%d, 
 						'%s'
 					)`,
+					taskID,
 					subscriptionName,
 					accountID,
 					publication.InternalSQLExecutorType,
@@ -2462,36 +2465,17 @@ func TestCCPRGC(t *testing.T) {
 			err = exec_sql(disttaeEngine, systemCtx, insertCcprLogSQL)
 			require.NoError(t, err)
 
-			// Read task_id from mo_ccpr_log after insertion
-			// Since we just inserted one record, query it to get the task_id
+			// Get exec for later use
 			v, ok := runtime.ServiceRuntime("").GetGlobalVariables(runtime.InternalSQLExecutor)
 			require.True(t, ok)
 			exec := v.(executor.SQLExecutor)
-
-			queryTaskIDSQL := `SELECT task_id FROM mo_catalog.mo_ccpr_log WHERE subscription_name = 'test_subscription_gc'`
-			txn, err := disttaeEngine.NewTxnOperator(ctxWithTimeout, disttaeEngine.Now())
-			require.NoError(t, err)
-
-			res, err := exec.Exec(ctxWithTimeout, queryTaskIDSQL, executor.Options{}.WithTxn(txn))
-			require.NoError(t, err)
-
-			var taskID uint64
-			res.ReadRows(func(rows int, cols []*vector.Vector) bool {
-				require.Equal(t, 1, rows, "should have exactly one record after insertion")
-				taskID = uint64(vector.GetFixedAtWithTypeCheck[uint32](cols[0], 0))
-				return true
-			})
-			res.Close()
-
-			err = txn.Commit(ctxWithTimeout)
-			require.NoError(t, err)
 
 			// Insert test snapshots into mo_snapshots
 			// Calculate snapshot timestamp based on snapshotHoursAgo
 			snapshotTime := time.Now().Add(-time.Duration(tc.snapshotHoursAgo) * time.Hour)
 			snapshotTS := snapshotTime.UnixNano()
 			for _, lsn := range tc.snapshotLSNs {
-				snapshotName := fmt.Sprintf("ccpr_%d_%d", taskID, lsn)
+				snapshotName := fmt.Sprintf("ccpr_%s_%d", taskID, lsn)
 				snapshotID, err := uuid.NewV7()
 				require.NoError(t, err)
 
@@ -2522,14 +2506,14 @@ func TestCCPRGC(t *testing.T) {
 
 			// Verify snapshots exist before GC
 			checkSnapshotSQL := fmt.Sprintf(
-				`SELECT COUNT(*) FROM mo_catalog.mo_snapshots WHERE sname LIKE 'ccpr_%d_%%'`,
+				`SELECT COUNT(*) FROM mo_catalog.mo_snapshots WHERE sname LIKE 'ccpr_%s_%%'`,
 				taskID,
 			)
 
-			txn, err = disttaeEngine.NewTxnOperator(ctxWithTimeout, disttaeEngine.Now())
+			txn, err := disttaeEngine.NewTxnOperator(ctxWithTimeout, disttaeEngine.Now())
 			require.NoError(t, err)
 
-			res, err = exec.Exec(ctxWithTimeout, checkSnapshotSQL, executor.Options{}.WithTxn(txn))
+			res, err := exec.Exec(ctxWithTimeout, checkSnapshotSQL, executor.Options{}.WithTxn(txn))
 			require.NoError(t, err)
 			defer res.Close()
 
@@ -2578,7 +2562,7 @@ func TestCCPRGC(t *testing.T) {
 
 			// Verify mo_ccpr_log record exists or not after GC
 			checkRecordSQL := fmt.Sprintf(
-				`SELECT COUNT(*) FROM mo_catalog.mo_ccpr_log WHERE task_id = %d`,
+				`SELECT COUNT(*) FROM mo_catalog.mo_ccpr_log WHERE task_id = '%s'`,
 				taskID,
 			)
 
@@ -2713,7 +2697,7 @@ func TestCCPRCreateDelete(t *testing.T) {
 	require.NoError(t, err)
 
 	// Step 2: Write mo_ccpr_log table with database level sync
-	taskID := uint64(1)
+	taskID := uuid.New().String()
 	iterationLSN1 := uint64(0)
 	subscriptionName := "test_subscription_create_delete"
 	insertSQL := fmt.Sprintf(
@@ -2731,7 +2715,7 @@ func TestCCPRCreateDelete(t *testing.T) {
 			iteration_lsn, 
 			cn_uuid
 		) VALUES (
-			%d, 
+			'%s', 
 			'%s', 
 			'database', 
 			%d,
@@ -3090,7 +3074,7 @@ func TestCCPRAlterTable(t *testing.T) {
 	require.NoError(t, err)
 
 	// Step 2: Write mo_ccpr_log table with database level sync
-	taskID := uint64(1)
+	taskID := uuid.New().String()
 	iterationLSN1 := uint64(0)
 	subscriptionName := "test_subscription_alter_table"
 	insertSQL := fmt.Sprintf(
@@ -3108,7 +3092,7 @@ func TestCCPRAlterTable(t *testing.T) {
 			iteration_lsn, 
 			cn_uuid
 		) VALUES (
-			%d, 
+			'%s', 
 			'%s', 
 			'table', 
 			%d,
@@ -3513,7 +3497,7 @@ func TestCCPRErrorHandling1(t *testing.T) {
 	require.NoError(t, err)
 
 	// Step 2: Write mo_ccpr_log table
-	taskID := uint64(1)
+	taskID := uuid.New().String()
 	iterationLSN1 := uint64(0)
 	subscriptionName := "test_subscription_retryable_error"
 
@@ -3532,7 +3516,7 @@ func TestCCPRErrorHandling1(t *testing.T) {
 			iteration_lsn, 
 			cn_uuid
 		) VALUES (
-			%d, 
+			'%s', 
 			'%s', 
 			'table', 
 			%d,
@@ -3983,7 +3967,7 @@ func TestCCPRDDLAccountLevel(t *testing.T) {
 	require.NoError(t, err)
 
 	// Step 2: Write mo_ccpr_log table with account level sync
-	taskID := uint64(1)
+	taskID := uuid.New().String()
 	iterationLSN1 := uint64(0)
 	subscriptionName := "test_subscription_account"
 	insertSQL := fmt.Sprintf(
@@ -4001,7 +3985,7 @@ func TestCCPRDDLAccountLevel(t *testing.T) {
 			iteration_lsn, 
 			cn_uuid
 		) VALUES (
-			%d, 
+			'%s', 
 			'%s', 
 			'account', 
 			%d,
@@ -4432,7 +4416,7 @@ func TestCCPRExecutorWithGC(t *testing.T) {
 	defer exec.Stop()
 
 	// Step 4: Insert mo_ccpr_log record
-	taskID := uint64(1)
+	taskID := uuid.New().String()
 	iterationLSN := uint64(0)
 	subscriptionName := "test_subscription_executor_gc"
 	insertSQL := fmt.Sprintf(
@@ -4450,7 +4434,7 @@ func TestCCPRExecutorWithGC(t *testing.T) {
 			iteration_lsn,
 			cn_uuid
 		) VALUES (
-			%d,
+			'%s',
 			'%s',
 			'table',
 			%d,
@@ -4747,7 +4731,7 @@ func TestCCPRErrorHandling2(t *testing.T) {
 	require.NoError(t, err)
 
 	// Step 2: Write mo_ccpr_log table
-	taskID := uint64(1)
+	taskID := uuid.New().String()
 	iterationLSN1 := uint64(0)
 	subscriptionName := "test_subscription_sql_fail"
 	insertSQL := fmt.Sprintf(
@@ -4765,7 +4749,7 @@ func TestCCPRErrorHandling2(t *testing.T) {
 			iteration_lsn, 
 			cn_uuid
 		) VALUES (
-			%d, 
+			'%s', 
 			'%s', 
 			'table', 
 			%d,

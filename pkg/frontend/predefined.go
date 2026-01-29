@@ -285,7 +285,7 @@ var (
 			)`
 
 	MoCatalogMoCcprLogDDL = `CREATE TABLE mo_catalog.mo_ccpr_log (
-				task_id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+				task_id UUID PRIMARY KEY,
 				subscription_name VARCHAR(5000) NOT NULL,
 				sync_level VARCHAR(16) NOT NULL,
 				account_id INT UNSIGNED NOT NULL,

@@ -174,7 +174,7 @@ func (s *JobStats) ResetTopGetChunkDurations() {
 }
 
 type Worker interface {
-	Submit(taskID uint64, lsn uint64, state int8) error
+	Submit(taskID string, lsn uint64, state int8) error
 	Stop()
 }
 
@@ -212,7 +212,7 @@ type worker struct {
 }
 
 type TaskContext struct {
-	TaskID uint64
+	TaskID string
 	LSN    uint64
 }
 
@@ -299,7 +299,7 @@ func (w *worker) Run() {
 	}
 }
 
-func (w *worker) Submit(taskID uint64, lsn uint64, state int8) error {
+func (w *worker) Submit(taskID string, lsn uint64, state int8) error {
 	if w.closed.Load() {
 		return moerr.NewInternalError(context.Background(), "Publication-Worker is closed")
 	}
@@ -332,7 +332,7 @@ func (w *worker) onItem(taskCtx *TaskContext) {
 	if err != nil {
 		logutil.Error(
 			"Publication-Task update iteration state to running failed",
-			zap.Uint64("taskID", taskCtx.TaskID),
+			zap.String("taskID", taskCtx.TaskID),
 			zap.Uint64("lsn", taskCtx.LSN),
 			zap.Error(err),
 		)
@@ -358,7 +358,7 @@ func (w *worker) onItem(taskCtx *TaskContext) {
 	if err != nil {
 		logutil.Error(
 			"Publication-Task execute iteration failed",
-			zap.Uint64("taskID", taskCtx.TaskID),
+			zap.String("taskID", taskCtx.TaskID),
 			zap.Uint64("lsn", taskCtx.LSN),
 			zap.Error(err),
 		)
@@ -378,7 +378,7 @@ func (w *worker) Stop() {
 	}
 }
 
-func (w *worker) updateIterationState(ctx context.Context, taskID uint64, iterationState int8) error {
+func (w *worker) updateIterationState(ctx context.Context, taskID string, iterationState int8) error {
 	executor, err := NewInternalSQLExecutor(
 		w.cnUUID,
 		w.cnTxnClient,

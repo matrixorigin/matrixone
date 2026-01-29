@@ -2947,6 +2947,7 @@ func doCreateSubscription(ctx context.Context, ses *Session, cs *tree.CreateSubs
 
 	sql := fmt.Sprintf(
 		`INSERT INTO mo_catalog.mo_ccpr_log (
+			task_id,
 			subscription_name,
 			sync_level,
 			account_id,
@@ -2958,6 +2959,7 @@ func doCreateSubscription(ctx context.Context, ses *Session, cs *tree.CreateSubs
 			iteration_state,
 			iteration_lsn
 		) VALUES (
+			uuid(),
 			'%s',
 			'%s',
 			%d,

@@ -206,7 +206,7 @@ func NewPublicationTaskExecutor(
 // TaskEntry represents a task entry in the executor
 // Only stores taskid, lsn, state, subscriptionState
 type TaskEntry struct {
-	TaskID            uint64
+	TaskID            string
 	LSN               uint64
 	State             int8       // iteration_state from mo_ccpr_log
 	SubscriptionState int8       // subscription state: 0=running, 1=error, 2=pause, 3=dropped
@@ -402,7 +402,7 @@ func (exec *PublicationTaskExecutor) run(ctx context.Context) {
 				if err != nil {
 					logutil.Error(
 						"Publication-Task submit task failed",
-						zap.Uint64("taskID", task.TaskID),
+						zap.String("taskID", task.TaskID),
 						zap.Uint64("lsn", task.LSN),
 						zap.Int8("state", task.State),
 						zap.Error(err),
@@ -423,7 +423,7 @@ func (exec *PublicationTaskExecutor) run(ctx context.Context) {
 	}
 }
 
-func (exec *PublicationTaskExecutor) getTask(taskID uint64) (TaskEntry, bool) {
+func (exec *PublicationTaskExecutor) getTask(taskID string) (TaskEntry, bool) {
 	exec.taskMu.RLock()
 	defer exec.taskMu.RUnlock()
 	return exec.tasks.Get(TaskEntry{TaskID: taskID})
@@ -431,7 +431,7 @@ func (exec *PublicationTaskExecutor) getTask(taskID uint64) (TaskEntry, bool) {
 
 // GetTask returns a copy of the task entry for the given taskID.
 // This is a public method for testing purposes.
-func (exec *PublicationTaskExecutor) GetTask(taskID uint64) (TaskEntry, bool) {
+func (exec *PublicationTaskExecutor) GetTask(taskID string) (TaskEntry, bool) {
 	exec.taskMu.RLock()
 	defer exec.taskMu.RUnlock()
 	task, ok := exec.tasks.Get(TaskEntry{TaskID: taskID})
@@ -531,11 +531,11 @@ func (exec *PublicationTaskExecutor) applyCcprLogWithRel(ctx context.Context, re
 			continue
 		}
 		// Parse mo_ccpr_log columns:
-		// task_id, subscription_name, sync_level, account_id, db_name, table_name,
+		// task_id (UUID), subscription_name, sync_level, account_id, db_name, table_name,
 		// upstream_conn, sync_config, state, iteration_state, iteration_lsn, context,
 		// cn_uuid, error_message, created_at, drop_at
 		taskIDVector := insertData.Vecs[0]
-		taskIDs := vector.MustFixedColWithTypeCheck[uint32](taskIDVector)
+		taskIDs := vector.MustFixedColWithTypeCheck[types.Uuid](taskIDVector)
 		subscriptionStateVector := insertData.Vecs[8]
 		subscriptionStates := vector.MustFixedColWithTypeCheck[int8](subscriptionStateVector)
 		iterationStateVector := insertData.Vecs[9]
@@ -560,7 +560,7 @@ func (exec *PublicationTaskExecutor) applyCcprLogWithRel(ctx context.Context, re
 			offset int
 		}
 		type taskKey struct {
-			taskID uint64
+			taskID string
 		}
 		taskMap := make(map[taskKey]taskInfo)
 		for i := 0; i < insertData.RowCount(); i++ {
@@ -573,7 +573,7 @@ func (exec *PublicationTaskExecutor) applyCcprLogWithRel(ctx context.Context, re
 				}
 			}
 			key := taskKey{
-				taskID: uint64(taskIDs[i]),
+				taskID: taskIDs[i].String(),
 			}
 			if task, ok := taskMap[key]; ok {
 				if task.ts.GT(&commitTS) {
@@ -601,7 +601,7 @@ func (exec *PublicationTaskExecutor) applyCcprLogWithRel(ctx context.Context, re
 				dropAt = &t
 			}
 			exec.addOrUpdateTask(
-				uint64(taskIDs[task.offset]),
+				taskIDs[task.offset].String(),
 				uint64(lsns[task.offset]),
 				states[task.offset],
 				subscriptionState,
@@ -642,7 +642,7 @@ func (exec *PublicationTaskExecutor) replay(ctx context.Context) (err error) {
 	defer result.Close()
 	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		taskIDVector := cols[0]
-		taskIDs := vector.MustFixedColWithTypeCheck[uint32](taskIDVector)
+		taskIDs := vector.MustFixedColWithTypeCheck[types.Uuid](taskIDVector)
 		iterationStateVector := cols[1]
 		states := vector.MustFixedColWithTypeCheck[int8](iterationStateVector)
 		iterationLSNVector := cols[2]
@@ -666,7 +666,7 @@ func (exec *PublicationTaskExecutor) replay(ctx context.Context) (err error) {
 				dropAt = &t
 			}
 			err = exec.addOrUpdateTask(
-				uint64(taskIDs[i]),
+				taskIDs[i].String(),
 				uint64(lsns[i]),
 				states[i],
 				subscriptionState,
@@ -683,7 +683,7 @@ func (exec *PublicationTaskExecutor) replay(ctx context.Context) (err error) {
 }
 
 func (exec *PublicationTaskExecutor) addOrUpdateTask(
-	taskID uint64,
+	taskID string,
 	lsn uint64,
 	state int8,
 	subscriptionState int8,
@@ -757,7 +757,7 @@ func (exec *PublicationTaskExecutor) GCInMemoryTask(threshold time.Duration) {
 			}
 		}
 	}
-	taskIDs := make([]uint64, 0, len(tasksToDelete))
+	taskIDs := make([]string, 0, len(tasksToDelete))
 	for _, task := range tasksToDelete {
 		exec.deleteTaskEntry(task)
 		taskIDs = append(taskIDs, task.TaskID)
@@ -808,7 +808,7 @@ func GC(
 	var records []ccprLogRecord
 	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		taskIDVector := cols[0]
-		taskIDs := vector.MustFixedColWithTypeCheck[uint32](taskIDVector)
+		taskIDs := vector.MustFixedColWithTypeCheck[types.Uuid](taskIDVector)
 		stateVector := cols[1]
 		states := vector.MustFixedColWithTypeCheck[int8](stateVector)
 		iterationStateVector := cols[2]
@@ -837,7 +837,7 @@ func GC(
 			}
 
 			records = append(records, ccprLogRecord{
-				taskID:         uint64(taskIDs[i]),
+				taskID:         taskIDs[i].String(),
 				state:          states[i],
 				iterationState: iterationStates[i],
 				iterationLSN:   uint64(lsns[i]),
@@ -857,7 +857,7 @@ func GC(
 }
 
 type ccprLogRecord struct {
-	taskID         uint64
+	taskID         string
 	state          int8
 	iterationState int8
 	iterationLSN   uint64
@@ -879,7 +879,7 @@ func gcRecord(
 	upstreamExecutor, err := createUpstreamExecutorForGC(ctx, cnUUID, cnTxnClient, txnEngine, upstreamSQLHelperFactory, record.upstreamConn)
 	if err != nil {
 		logutil.Error("Publication-Task GC failed to create upstream executor",
-			zap.Uint64("taskID", record.taskID),
+			zap.String("taskID", record.taskID),
 			zap.Error(err),
 		)
 		return
@@ -890,7 +890,7 @@ func gcRecord(
 	snapshots, err := queryTaskSnapshots(ctx, upstreamExecutor, record.taskID)
 	if err != nil {
 		logutil.Error("Publication-Task GC failed to query snapshots",
-			zap.Uint64("taskID", record.taskID),
+			zap.String("taskID", record.taskID),
 			zap.Error(err),
 		)
 		return
@@ -915,7 +915,7 @@ func gcRecord(
 		remainingSnapshots, err := queryTaskSnapshots(ctx, upstreamExecutor, record.taskID)
 		if err != nil {
 			logutil.Error("Publication-Task GC failed to query remaining snapshots",
-				zap.Uint64("taskID", record.taskID),
+				zap.String("taskID", record.taskID),
 				zap.Error(err),
 			)
 			return
@@ -1069,13 +1069,13 @@ type snapshotInfo struct {
 func queryTaskSnapshots(
 	ctx context.Context,
 	upstreamExecutor SQLExecutor,
-	taskID uint64,
+	taskID string,
 ) ([]snapshotInfo, error) {
 	// Query snapshots with pattern ccpr_<taskID>_*
-	snapshotPattern := fmt.Sprintf("ccpr_%d_%%", taskID)
+	snapshotPattern := fmt.Sprintf("ccpr_%s_%%", taskID)
 	sql := fmt.Sprintf(`SELECT sname, ts FROM mo_catalog.mo_snapshots WHERE sname LIKE '%s' ORDER BY sname`, snapshotPattern)
 
-	result,cancel, err := upstreamExecutor.ExecSQL(ctx, nil, sql, false, false, time.Minute)
+	result, cancel, err := upstreamExecutor.ExecSQL(ctx, nil, sql, false, false, time.Minute)
 	if err != nil {
 		return nil, err
 	}
@@ -1091,8 +1091,27 @@ func queryTaskSnapshots(
 		}
 
 		// Parse LSN from snapshot name: ccpr_<taskID>_<lsn>
-		var parsedTaskID, lsn uint64
-		_, err := fmt.Sscanf(snapshotName, "ccpr_%d_%d", &parsedTaskID, &lsn)
+		var parsedTaskID string
+		var lsn uint64
+		// Use strings.Cut to parse the snapshot name format: ccpr_<uuid>_<lsn>
+		prefix := "ccpr_"
+		if !strings.HasPrefix(snapshotName, prefix) {
+			logutil.Warn("Publication-Task GC failed to parse snapshot name: invalid prefix",
+				zap.String("snapshotName", snapshotName),
+			)
+			continue
+		}
+		rest := snapshotName[len(prefix):]
+		// Find the last underscore to separate uuid from lsn
+		lastUnderscore := strings.LastIndex(rest, "_")
+		if lastUnderscore == -1 {
+			logutil.Warn("Publication-Task GC failed to parse snapshot name: no underscore found",
+				zap.String("snapshotName", snapshotName),
+			)
+			continue
+		}
+		parsedTaskID = rest[:lastUnderscore]
+		_, err := fmt.Sscanf(rest[lastUnderscore+1:], "%d", &lsn)
 		if err != nil {
 			logutil.Warn("Publication-Task GC failed to parse snapshot name",
 				zap.String("snapshotName", snapshotName),
@@ -1100,6 +1119,7 @@ func queryTaskSnapshots(
 			)
 			continue
 		}
+		_ = parsedTaskID // unused but kept for clarity
 
 		// Convert ts (nanoseconds) to time.Time
 		ts := time.Unix(0, tsValue).UTC()
@@ -1163,15 +1183,15 @@ func deleteSnapshotInSeparateTxn(
 	ctx context.Context,
 	upstreamExecutor SQLExecutor,
 	snapshotName string,
-	taskID uint64,
+	taskID string,
 ) {
 	// Each SQL operation in a separate transaction, no retry
 	// If error occurs, just log and continue
 	dropSQL := PublicationSQLBuilder.DropSnapshotIfExistsSQL(snapshotName)
-	result,cancel, err := upstreamExecutor.ExecSQL(ctx, nil, dropSQL, false, false, time.Minute)
+	result, cancel, err := upstreamExecutor.ExecSQL(ctx, nil, dropSQL, false, false, time.Minute)
 	if err != nil {
 		logutil.Error("Publication-Task GC failed to delete snapshot",
-			zap.Uint64("taskID", taskID),
+			zap.String("taskID", taskID),
 			zap.String("snapshotName", snapshotName),
 			zap.Error(err),
 		)
@@ -1180,7 +1200,7 @@ func deleteSnapshotInSeparateTxn(
 	defer cancel()
 	defer result.Close()
 	logutil.Info("Publication-Task GC deleted snapshot",
-		zap.Uint64("taskID", taskID),
+		zap.String("taskID", taskID),
 		zap.String("snapshotName", snapshotName),
 	)
 }
@@ -1190,32 +1210,32 @@ func deleteCcprLogRecordInSeparateTxn(
 	txnEngine engine.Engine,
 	cnTxnClient client.TxnClient,
 	cnUUID string,
-	taskID uint64,
+	taskID string,
 ) {
 	// Each SQL operation in a separate transaction, no retry
 	// If error occurs, just log and continue
 	txn, err := getTxn(ctx, txnEngine, cnTxnClient, "publication gc delete record")
 	if err != nil {
 		logutil.Error("Publication-Task GC failed to create txn for deleting record",
-			zap.Uint64("taskID", taskID),
+			zap.String("taskID", taskID),
 			zap.Error(err),
 		)
 		return
 	}
 	defer txn.Commit(ctx)
 
-	deleteSQL := fmt.Sprintf(`DELETE FROM mo_catalog.mo_ccpr_log WHERE task_id = %d`, taskID)
+	deleteSQL := fmt.Sprintf(`DELETE FROM mo_catalog.mo_ccpr_log WHERE task_id = '%s'`, taskID)
 	result, err := ExecWithResult(ctx, deleteSQL, cnUUID, txn)
 	if err != nil {
 		logutil.Error("Publication-Task GC failed to delete mo_ccpr_log record",
-			zap.Uint64("taskID", taskID),
+			zap.String("taskID", taskID),
 			zap.Error(err),
 		)
 		return
 	}
 	defer result.Close()
 	logutil.Info("Publication-Task GC deleted mo_ccpr_log record",
-		zap.Uint64("taskID", taskID),
+		zap.String("taskID", taskID),
 	)
 }
 

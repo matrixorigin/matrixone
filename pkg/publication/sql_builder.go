@@ -102,7 +102,7 @@ const (
 		`iteration_lsn, ` +
 		`state ` +
 		`FROM mo_catalog.mo_ccpr_log ` +
-		`WHERE task_id = %d`
+		`WHERE task_id = '%s'`
 
 	// Query mo_ccpr_log full SQL template (includes subscription_name, sync_level, account_id, db_name, table_name, upstream_conn, context, error_message, state)
 	PublicationQueryMoCcprLogFullSqlTemplate = `SELECT ` +
@@ -116,7 +116,7 @@ const (
 		`error_message, ` +
 		`state ` +
 		`FROM mo_catalog.mo_ccpr_log ` +
-		`WHERE task_id = %d`
+		`WHERE task_id = '%s'`
 
 	// Query snapshot TS SQL template
 	PublicationQuerySnapshotTsSqlTemplate = `SELECT ` +
@@ -134,14 +134,14 @@ const (
 		`context = '%s', ` +
 		`error_message = '%s', ` +
 		`state = %d ` +
-		`WHERE task_id = %d`
+		`WHERE task_id = '%s'`
 
 	// Update mo_ccpr_log iteration_state (and lsn) only
 	PublicationUpdateMoCcprLogStateSqlTemplate = `UPDATE mo_catalog.mo_ccpr_log ` +
 		`SET iteration_state = %d, ` +
 		`iteration_lsn = %d, ` +
 		`cn_uuid = '%s' ` +
-		`WHERE task_id = %d`
+		`WHERE task_id = '%s'`
 
 	// Query mo_ccpr_log state before update SQL template
 	PublicationQueryMoCcprLogStateBeforeUpdateSqlTemplate = `SELECT ` +
@@ -149,7 +149,7 @@ const (
 		`iteration_state, ` +
 		`iteration_lsn ` +
 		`FROM mo_catalog.mo_ccpr_log ` +
-		`WHERE task_id = %d`
+		`WHERE task_id = '%s'`
 
 	// Update mo_ccpr_log without state SQL template (for successful iterations)
 	PublicationUpdateMoCcprLogNoStateSqlTemplate = `UPDATE mo_catalog.mo_ccpr_log ` +
@@ -157,18 +157,18 @@ const (
 		`iteration_lsn = %d, ` +
 		`context = '%s', ` +
 		`error_message = '%s' ` +
-		`WHERE task_id = %d`
+		`WHERE task_id = '%s'`
 
 	// Update mo_ccpr_log iteration_state only
 	PublicationUpdateMoCcprLogIterationStateOnlySqlTemplate = `UPDATE mo_catalog.mo_ccpr_log ` +
 		`SET iteration_state = %d ` +
-		`WHERE task_id = %d`
+		`WHERE task_id = '%s'`
 
 	// Update mo_ccpr_log iteration_state and cn_uuid (without lsn)
 	PublicationUpdateMoCcprLogIterationStateAndCnUuidSqlTemplate = `UPDATE mo_catalog.mo_ccpr_log ` +
 		`SET iteration_state = %d, ` +
 		`cn_uuid = '%s' ` +
-		`WHERE task_id = %d`
+		`WHERE task_id = '%s'`
 )
 
 const (
@@ -585,9 +585,9 @@ func (b publicationSQLBuilder) GetDdlSQL(
 
 // QueryMoCcprLogSQL creates SQL for querying mo_ccpr_log by task_id
 // Returns cn_uuid, iteration_state, iteration_lsn, state
-// Example: SELECT cn_uuid, iteration_state, iteration_lsn, state FROM mo_catalog.mo_ccpr_log WHERE task_id = 1
+// Example: SELECT cn_uuid, iteration_state, iteration_lsn, state FROM mo_catalog.mo_ccpr_log WHERE task_id = 'uuid'
 func (b publicationSQLBuilder) QueryMoCcprLogSQL(
-	taskID uint64,
+	taskID string,
 ) string {
 	return fmt.Sprintf(
 		PublicationSQLTemplates[PublicationQueryMoCcprLogSqlTemplate_Idx].SQL,
@@ -597,9 +597,9 @@ func (b publicationSQLBuilder) QueryMoCcprLogSQL(
 
 // QueryMoCcprLogFullSQL creates SQL for querying full mo_ccpr_log record by task_id
 // Returns subscription_name, sync_level, db_name, table_name, upstream_conn, context
-// Example: SELECT subscription_name, sync_level, db_name, table_name, upstream_conn, context FROM mo_catalog.mo_ccpr_log WHERE task_id = 1
+// Example: SELECT subscription_name, sync_level, db_name, table_name, upstream_conn, context FROM mo_catalog.mo_ccpr_log WHERE task_id = 'uuid'
 func (b publicationSQLBuilder) QueryMoCcprLogFullSQL(
-	taskID uint64,
+	taskID string,
 ) string {
 	return fmt.Sprintf(
 		PublicationSQLTemplates[PublicationQueryMoCcprLogFullSqlTemplate_Idx].SQL,
@@ -633,9 +633,9 @@ func (b publicationSQLBuilder) CheckSnapshotFlushedSQL(
 
 // UpdateMoCcprLogSQL creates SQL for updating mo_ccpr_log by task_id
 // Updates iteration_state, iteration_lsn, context, error_message, and state
-// Example: UPDATE mo_catalog.mo_ccpr_log SET iteration_state = 1, iteration_lsn = 1000, context = '{"key":"value"}', error_message = 'error msg', state = 0 WHERE task_id = 1
+// Example: UPDATE mo_catalog.mo_ccpr_log SET iteration_state = 1, iteration_lsn = 1000, context = '{"key":"value"}', error_message = 'error msg', state = 0 WHERE task_id = 'uuid'
 func (b publicationSQLBuilder) UpdateMoCcprLogSQL(
-	taskID uint64,
+	taskID string,
 	iterationState int8,
 	iterationLSN uint64,
 	contextJSON string,
@@ -654,8 +654,8 @@ func (b publicationSQLBuilder) UpdateMoCcprLogSQL(
 }
 
 // QueryMoCcprLogStateBeforeUpdateSQL creates SQL for querying state, iteration_state, iteration_lsn before update
-// Example: SELECT state, iteration_state, iteration_lsn FROM mo_catalog.mo_ccpr_log WHERE task_id = 1
-func (b publicationSQLBuilder) QueryMoCcprLogStateBeforeUpdateSQL(taskID uint64) string {
+// Example: SELECT state, iteration_state, iteration_lsn FROM mo_catalog.mo_ccpr_log WHERE task_id = 'uuid'
+func (b publicationSQLBuilder) QueryMoCcprLogStateBeforeUpdateSQL(taskID string) string {
 	return fmt.Sprintf(
 		PublicationSQLTemplates[PublicationQueryMoCcprLogStateBeforeUpdateSqlTemplate_Idx].SQL,
 		taskID,
@@ -664,9 +664,9 @@ func (b publicationSQLBuilder) QueryMoCcprLogStateBeforeUpdateSQL(taskID uint64)
 
 // UpdateMoCcprLogNoStateSQL creates SQL for updating mo_ccpr_log without state field
 // Used for successful iterations where we don't need to change the subscription state
-// Example: UPDATE mo_catalog.mo_ccpr_log SET iteration_state = 2, iteration_lsn = 1001, context = '...', error_message = ” WHERE task_id = 1
+// Example: UPDATE mo_catalog.mo_ccpr_log SET iteration_state = 2, iteration_lsn = 1001, context = '...', error_message = " WHERE task_id = 'uuid'
 func (b publicationSQLBuilder) UpdateMoCcprLogNoStateSQL(
-	taskID uint64,
+	taskID string,
 	iterationState int8,
 	iterationLSN uint64,
 	contextJSON string,
@@ -683,9 +683,9 @@ func (b publicationSQLBuilder) UpdateMoCcprLogNoStateSQL(
 }
 
 // UpdateMoCcprLogIterationStateAndCnUuidSQL creates SQL for updating iteration_state and cn_uuid in mo_ccpr_log (without lsn)
-// Example: UPDATE mo_catalog.mo_ccpr_log SET iteration_state = 1, cn_uuid = 'uuid' WHERE task_id = 1
+// Example: UPDATE mo_catalog.mo_ccpr_log SET iteration_state = 1, cn_uuid = 'uuid' WHERE task_id = 'uuid'
 func (b publicationSQLBuilder) UpdateMoCcprLogIterationStateAndCnUuidSQL(
-	taskID uint64,
+	taskID string,
 	iterationState int8,
 	cnUUID string,
 ) string {

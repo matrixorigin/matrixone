@@ -231,7 +231,7 @@ func getDatabaseDiff(
 		// Query upstream databases for the account
 		snapshotName := iterationCtx.CurrentSnapshotName
 		querySQL := PublicationSQLBuilder.QueryMoDatabasesSQL(0, "", snapshotName)
-		result,cancel, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, nil, querySQL, false, true, time.Minute)
+		result, cancel, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, nil, querySQL, false, true, time.Minute)
 		if err != nil {
 			return nil, nil, moerr.NewInternalErrorf(ctx, "failed to query upstream databases: %v", err)
 		}
@@ -337,7 +337,7 @@ func ProcessDDLChanges(
 		if err == nil {
 			// Database already exists, skip creation
 			logutil.Info("ccpr-iteration database already exists, skipping",
-				zap.Uint64("task_id", iterationCtx.TaskID),
+				zap.String("task_id", iterationCtx.TaskID),
 				zap.Uint64("lsn", iterationCtx.IterationLSN),
 				zap.String("database", dbName),
 			)
@@ -398,7 +398,7 @@ func ProcessDDLChanges(
 	// Log DDL operations with task id and lsn
 	if len(ddlOperations) > 0 {
 		logutil.Info("ccpr-iteration DDL operations to execute",
-			zap.Uint64("task_id", iterationCtx.TaskID),
+			zap.String("task_id", iterationCtx.TaskID),
 			zap.Uint64("lsn", iterationCtx.IterationLSN),
 			zap.Strings("ddl_operations", ddlOperations),
 		)
@@ -450,7 +450,7 @@ func ProcessDDLChanges(
 			// Check if error is due to database not existing (similar to IF EXISTS behavior)
 			if moerr.IsMoErrCode(err, moerr.ErrBadDB) || moerr.IsMoErrCode(err, moerr.ErrNoDB) {
 				logutil.Info("ccpr-iteration database does not exist, skipping",
-					zap.Uint64("task_id", iterationCtx.TaskID),
+					zap.String("task_id", iterationCtx.TaskID),
 					zap.Uint64("lsn", iterationCtx.IterationLSN),
 					zap.String("database", dbName),
 				)
@@ -688,7 +688,7 @@ func createTable(
 
 	// Create database if not exists
 	createDBSQL := fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s`", escapeSQLIdentifierForDDL(dbName))
-	result,cancel, err := executor.ExecSQL(ctx, nil, createDBSQL, true, false, time.Minute)
+	result, cancel, err := executor.ExecSQL(ctx, nil, createDBSQL, true, false, time.Minute)
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to create database %s: %v", dbName, err)
 	}
@@ -700,7 +700,7 @@ func createTable(
 	// Create table
 	// Note: The "from_publication" property is already added in GetUpstreamDDLUsingGetDdl
 	// when processing the CREATE SQL from upstream
-	result,cancel, err = executor.ExecSQL(ctx, nil, createSQL, true, false, time.Minute)
+	result, cancel, err = executor.ExecSQL(ctx, nil, createSQL, true, false, time.Minute)
 	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "failed to create table %s.%s: %v", dbName, tableName, err)
 	}
@@ -868,7 +868,7 @@ func processIndexTableMappings(
 			// Skip if no upstream index table name found
 			if upstreamIndexTableName == "" {
 				logutil.Warn("ccpr-iteration upstream index table name not found",
-					zap.Uint64("task_id", iterationCtx.TaskID),
+					zap.String("task_id", iterationCtx.TaskID),
 					zap.Uint64("lsn", iterationCtx.IterationLSN),
 					zap.String("db_name", dbName),
 					zap.String("table_name", tableName),
@@ -885,7 +885,7 @@ func processIndexTableMappings(
 
 			// Log index table mapping update
 			logutil.Info("ccpr-iteration-ddl updated index table mapping",
-				zap.Uint64("task_id", iterationCtx.TaskID),
+				zap.String("task_id", iterationCtx.TaskID),
 				zap.Uint64("lsn", iterationCtx.IterationLSN),
 				zap.String("db_name", dbName),
 				zap.String("table_name", tableName),
@@ -917,7 +917,7 @@ func queryUpstreamIndexInfo(
 	querySQL := PublicationSQLBuilder.QueryMoIndexesSQL(0, tableID, "", "")
 
 	// Execute query
-	result,cancel, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, nil, querySQL, false, true, time.Minute)
+	result, cancel, err := iterationCtx.UpstreamExecutor.ExecSQL(ctx, nil, querySQL, false, true, time.Minute)
 	if err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "failed to execute query upstream index info: %v", err)
 	}

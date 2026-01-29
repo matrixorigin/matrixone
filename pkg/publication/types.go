@@ -74,7 +74,7 @@ type TableKey struct {
 // IterationContext contains context information for an iteration
 type IterationContext struct {
 	// Task identification
-	TaskID           uint64
+	TaskID           string
 	SubscriptionName string
 	SrcInfo          SrcInfo
 

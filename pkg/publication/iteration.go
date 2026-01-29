@@ -82,7 +82,7 @@ type AObjMappingJSON struct {
 // This structure is used to store iteration context in mo_ccpr_log.context field
 type IterationContextJSON struct {
 	// Task identification
-	TaskID           uint64  `json:"task_id"`
+	TaskID           string  `json:"task_id"`
 	SubscriptionName string  `json:"subscription_name"`
 	SrcInfo          SrcInfo `json:"src_info"`
 
@@ -93,7 +93,7 @@ type IterationContextJSON struct {
 }
 
 func (iterCtx *IterationContext) String() string {
-	return fmt.Sprintf("%d-%d", iterCtx.TaskID, iterCtx.IterationLSN)
+	return fmt.Sprintf("%s-%d", iterCtx.TaskID, iterCtx.IterationLSN)
 }
 
 // InitializeIterationContext initializes IterationContext from mo_ccpr_log table
@@ -109,7 +109,7 @@ func InitializeIterationContext(
 	cnUUID string,
 	cnEngine engine.Engine,
 	cnTxnClient client.TxnClient,
-	taskID uint64,
+	taskID string,
 	iterationLSN uint64,
 	upstreamSQLHelperFactory UpstreamSQLHelperFactory,
 	sqlExecutorRetryOpt *SQLExecutorRetryOption,
@@ -195,7 +195,7 @@ func InitializeIterationContext(
 		if err := result.Err(); err != nil {
 			return nil, moerr.NewInternalErrorf(ctx, "failed to read query result: %v", err)
 		}
-		return nil, moerr.NewInternalErrorf(ctx, "no rows returned for task_id %d", taskID)
+		return nil, moerr.NewInternalErrorf(ctx, "no rows returned for task_id %s", taskID)
 	}
 
 	if err := result.Scan(&subscriptionName, &syncLevel, &accountID, &dbName, &tableName, &upstreamConn, &contextJSON, &errorMessage, &subscriptionState); err != nil {
@@ -204,13 +204,13 @@ func InitializeIterationContext(
 
 	// Validate required fields
 	if !subscriptionName.Valid {
-		return nil, moerr.NewInternalErrorf(ctx, "subscription_name is null for task_id %d", taskID)
+		return nil, moerr.NewInternalErrorf(ctx, "subscription_name is null for task_id %s", taskID)
 	}
 	if !syncLevel.Valid {
-		return nil, moerr.NewInternalErrorf(ctx, "sync_level is null for task_id %d", taskID)
+		return nil, moerr.NewInternalErrorf(ctx, "sync_level is null for task_id %s", taskID)
 	}
 	if !accountID.Valid {
-		return nil, moerr.NewInternalErrorf(ctx, "account_id is null for task_id %d", taskID)
+		return nil, moerr.NewInternalErrorf(ctx, "account_id is null for task_id %s", taskID)
 	}
 
 	// Build SrcInfo from sync_level, account_id, db_name, table_name
@@ -228,7 +228,7 @@ func InitializeIterationContext(
 	// Create upstream executor from upstream_conn
 	var upstreamExecutor SQLExecutor
 	if !upstreamConn.Valid || upstreamConn.String == "" {
-		return nil, moerr.NewInternalErrorf(ctx, "upstream_conn is null or empty for task_id %d", taskID)
+		return nil, moerr.NewInternalErrorf(ctx, "upstream_conn is null or empty for task_id %s", taskID)
 	}
 
 	// Use unified createUpstreamExecutor function
@@ -380,7 +380,7 @@ func (iterCtx *IterationContext) Close(commit bool) error {
 func UpdateIterationState(
 	ctx context.Context,
 	executor SQLExecutor,
-	taskID uint64,
+	taskID string,
 	iterationState int8,
 	iterationLSN uint64,
 	iterationCtx *IterationContext,
@@ -482,7 +482,7 @@ func UpdateIterationState(
 func UpdateIterationStateNoSubscriptionState(
 	ctx context.Context,
 	executor SQLExecutor,
-	taskID uint64,
+	taskID string,
 	iterationState int8,
 	iterationLSN uint64,
 	iterationCtx *IterationContext,
@@ -582,7 +582,7 @@ func UpdateIterationStateNoSubscriptionState(
 func CheckStateBeforeUpdate(
 	ctx context.Context,
 	executor SQLExecutor,
-	taskID uint64,
+	taskID string,
 	expectedIterationLSN uint64,
 ) error {
 	// Build SQL query using sql_builder
@@ -611,7 +611,7 @@ func CheckStateBeforeUpdate(
 		if err := result.Err(); err != nil {
 			return moerr.NewInternalErrorf(ctx, "failed to read state check query result: %v", err)
 		}
-		return moerr.NewInternalErrorf(ctx, "no rows returned for task_id %d in state check", taskID)
+		return moerr.NewInternalErrorf(ctx, "no rows returned for task_id %s in state check", taskID)
 	}
 
 	if err := result.Scan(&subscriptionState, &iterationState, &iterationLSN); err != nil {
@@ -643,7 +643,7 @@ func CheckStateBeforeUpdate(
 func CheckIterationStatus(
 	ctx context.Context,
 	executor SQLExecutor,
-	taskID uint64,
+	taskID string,
 	expectedCNUUID string,
 	expectedIterationLSN uint64,
 ) error {
@@ -674,7 +674,7 @@ func CheckIterationStatus(
 		if err := result.Err(); err != nil {
 			return moerr.NewInternalErrorf(ctx, "failed to read query result: %v", err)
 		}
-		return moerr.NewInternalErrorf(ctx, "no rows returned for task_id %d", taskID)
+		return moerr.NewInternalErrorf(ctx, "no rows returned for task_id %s", taskID)
 	}
 
 	if err := result.Scan(&cnUUIDFromDB, &iterationState, &iterationLSN, &subscriptionState); err != nil {
@@ -683,12 +683,12 @@ func CheckIterationStatus(
 
 	// Check if there are more rows (should not happen for a single task_id)
 	if result.Next() {
-		return moerr.NewInternalErrorf(ctx, "multiple rows returned for task_id %d", taskID)
+		return moerr.NewInternalErrorf(ctx, "multiple rows returned for task_id %s", taskID)
 	}
 
 	// Check if cn_uuid matches
 	if !cnUUIDFromDB.Valid {
-		return moerr.NewInternalErrorf(ctx, "cn_uuid is null for task_id %d", taskID)
+		return moerr.NewInternalErrorf(ctx, "cn_uuid is null for task_id %s", taskID)
 	}
 	if cnUUIDFromDB.String != expectedCNUUID {
 		return moerr.NewInternalErrorf(ctx, "cn_uuid mismatch: expected %s, got %s", expectedCNUUID, cnUUIDFromDB.String)
@@ -714,8 +714,8 @@ func CheckIterationStatus(
 
 // GenerateSnapshotName generates a snapshot name using a rule-based encoding
 // Format: ccpr_<taskID>_<iterationLSN>
-func GenerateSnapshotName(taskID uint64, iterationLSN uint64) string {
-	return fmt.Sprintf("ccpr_%d_%d", taskID, iterationLSN)
+func GenerateSnapshotName(taskID string, iterationLSN uint64) string {
+	return fmt.Sprintf("ccpr_%s_%d", taskID, iterationLSN)
 }
 
 // RequestUpstreamSnapshot requests a snapshot from upstream cluster
@@ -1066,7 +1066,7 @@ func ExecuteIteration(
 	cnUUID string,
 	cnEngine engine.Engine,
 	cnTxnClient client.TxnClient,
-	taskID uint64,
+	taskID string,
 	iterationLSN uint64,
 	upstreamSQLHelperFactory UpstreamSQLHelperFactory,
 	mp *mpool.MPool,
