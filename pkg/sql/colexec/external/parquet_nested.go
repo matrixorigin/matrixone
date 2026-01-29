@@ -564,25 +564,6 @@ func reconstructListOfStructs(ctx context.Context, elementCol *parquet.Column, l
 	return result, nil
 }
 
-func hasValues(m map[int][]parquet.Value) bool {
-	for _, v := range m {
-		if len(v) > 0 {
-			return true
-		}
-	}
-	return false
-}
-
-func flattenValuesByCol(valuesByCol map[int][]parquet.Value, leafCols []*parquet.Column) []parquet.Value {
-	result := make([]parquet.Value, 0)
-	for _, leaf := range leafCols {
-		if vals, ok := valuesByCol[leaf.Index()]; ok {
-			result = append(result, vals...)
-		}
-	}
-	return result
-}
-
 func reconstructList(ctx context.Context, col *parquet.Column, values []parquet.Value) ([]any, error) {
 	result := make([]any, 0)
 	// Empty list case: no values at all
