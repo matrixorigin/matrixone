@@ -575,13 +575,11 @@ func reconstructMap(ctx context.Context, col *parquet.Column, values []parquet.V
 	if valueCol != nil && !valueCol.Leaf() {
 		valueLeafCols := collectLeafColumns(valueCol)
 
-		// Collect all keys with their positions
+		// Collect all keys
 		var keys []parquet.Value
-		var keyPositions []int // position in the values slice
-		for i, v := range values {
+		for _, v := range values {
 			if v.Column() == keyColIdx {
 				keys = append(keys, v)
-				keyPositions = append(keyPositions, i)
 			}
 		}
 
