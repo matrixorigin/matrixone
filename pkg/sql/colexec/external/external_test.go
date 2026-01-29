@@ -16,6 +16,7 @@ package external
 
 import (
 	"bytes"
+	"compress/zlib"
 	"context"
 	"encoding/json"
 	"io"
@@ -26,6 +27,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -172,6 +174,45 @@ func Test_Prepare(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestReadFileOffsetCompressedUnsafe(t *testing.T) {
+	fs := testutil.NewFS(t)
+	content := []byte("0,0,1,2,0,0,3,4,0,0,abc,2024-01-01,2024-01-01 00:00:01,2024-01-01 00:00:01,1,1.23,txt,aaa,bbb,ccc\n")
+	var buf bytes.Buffer
+	zw := zlib.NewWriter(&buf)
+	_, err := zw.Write(content)
+	require.NoError(t, err)
+	require.NoError(t, zw.Close())
+
+	filePath := "etl:/test.csv.lz"
+	data := buf.Bytes()
+	vec := fileservice.IOVector{
+		FilePath: filePath,
+		Entries: []fileservice.IOEntry{
+			{
+				Offset:         0,
+				Size:           int64(len(data)),
+				ReaderForWrite: bytes.NewReader(data),
+			},
+		},
+	}
+	require.NoError(t, fs.Write(context.Background(), vec))
+
+	param := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			Filepath:     filePath,
+			CompressType: tree.ZLIB,
+			ScanType:     tree.INFILE,
+		},
+		ExParam: tree.ExParam{
+			FileService: fs,
+			Ctx:         context.Background(),
+		},
+	}
+
+	_, err = ReadFileOffset(param, 2, int64(len(data)), nil)
+	require.Error(t, err)
 }
 
 func Test_Call(t *testing.T) {
