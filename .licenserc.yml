@@ -34,3 +34,5 @@ dependency:
   licenses:
     - name: github.com/mattn/go-localereader
       license: MIT
+    - name: github.com/JohnCGriffin/overflow
+      license: MIT

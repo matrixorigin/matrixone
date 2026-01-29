@@ -71,6 +71,9 @@ const (
 	MOShardsMetadata = "mo_shards_metadata"
 	// MOShards shards detail.
 	MOShards = "mo_shards"
+
+	// MO_PARQUET_SCHEMA stores parquet complex type schema for import/export
+	MO_PARQUET_SCHEMA = "mo_parquet_schema"
 )
 
 var InternalColumns = map[string]int8{

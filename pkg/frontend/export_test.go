@@ -704,43 +704,6 @@ func Test_getEffectiveMaxFileSize(t *testing.T) {
 	}
 }
 
-func Test_buildParquetNode(t *testing.T) {
-	tests := []struct {
-		name     string
-		mysqlTyp defines.MysqlType
-	}{
-		{"bool", defines.MYSQL_TYPE_BOOL},
-		{"tiny", defines.MYSQL_TYPE_TINY},
-		{"short", defines.MYSQL_TYPE_SHORT},
-		{"int24", defines.MYSQL_TYPE_INT24},
-		{"long", defines.MYSQL_TYPE_LONG},
-		{"longlong", defines.MYSQL_TYPE_LONGLONG},
-		{"float", defines.MYSQL_TYPE_FLOAT},
-		{"double", defines.MYSQL_TYPE_DOUBLE},
-		{"date", defines.MYSQL_TYPE_DATE},
-		{"datetime", defines.MYSQL_TYPE_DATETIME},
-		{"timestamp", defines.MYSQL_TYPE_TIMESTAMP},
-		{"time", defines.MYSQL_TYPE_TIME},
-		{"decimal", defines.MYSQL_TYPE_DECIMAL},
-		{"varchar", defines.MYSQL_TYPE_VARCHAR},
-		{"var_string", defines.MYSQL_TYPE_VAR_STRING},
-		{"string", defines.MYSQL_TYPE_STRING},
-		{"json", defines.MYSQL_TYPE_JSON},
-		{"uuid", defines.MYSQL_TYPE_UUID},
-		{"text", defines.MYSQL_TYPE_TEXT},
-		{"blob", defines.MYSQL_TYPE_BLOB},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			node := buildParquetNode(tt.mysqlTyp, 0)
-			if node == nil {
-				t.Errorf("buildParquetNode(%v) returned nil", tt.mysqlTyp)
-			}
-		})
-	}
-}
-
 func Test_vectorValueToParquet(t *testing.T) {
 	mp := mpool.MustNewZero()
 	convey.Convey("vectorValueToParquet converts types correctly", t, func() {
@@ -854,14 +817,14 @@ func Test_NewParquetWriter(t *testing.T) {
 	convey.Convey("NewParquetWriter creates writer correctly", t, func() {
 		// Test with nil MysqlResultSet
 		convey.Convey("nil result set returns error", func() {
-			_, err := NewParquetWriter(context.Background(), nil)
+			_, err := NewParquetWriter(context.Background(), nil, nil)
 			convey.So(err, convey.ShouldNotBeNil)
 		})
 
 		// Test with empty columns
 		convey.Convey("empty columns returns error", func() {
 			mrs := &MysqlResultSet{}
-			_, err := NewParquetWriter(context.Background(), mrs)
+			_, err := NewParquetWriter(context.Background(), nil, mrs)
 			convey.So(err, convey.ShouldNotBeNil)
 		})
 
@@ -877,7 +840,7 @@ func Test_NewParquetWriter(t *testing.T) {
 			mrs.AddColumn(col1)
 			mrs.AddColumn(col2)
 
-			pw, err := NewParquetWriter(context.Background(), mrs)
+			pw, err := NewParquetWriter(context.Background(), nil, mrs)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(pw, convey.ShouldNotBeNil)
 			convey.So(len(pw.columnNames), convey.ShouldEqual, 2)
@@ -895,7 +858,7 @@ func Test_ParquetWriter_Close(t *testing.T) {
 		col1.SetColumnType(defines.MYSQL_TYPE_LONG)
 		mrs.AddColumn(col1)
 
-		pw, err := NewParquetWriter(context.Background(), mrs)
+		pw, err := NewParquetWriter(context.Background(), nil, mrs)
 		convey.So(err, convey.ShouldBeNil)
 
 		// Close without writing any data
@@ -1063,12 +1026,12 @@ func Test_ParquetWriter_Size(t *testing.T) {
 		mrs.AddColumn(col1)
 		mrs.AddColumn(col2)
 
-		pw, err := NewParquetWriter(ctx, mrs)
+		pw, err := NewParquetWriter(ctx, nil, mrs)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(pw, convey.ShouldNotBeNil)
 
-		// Initial size should be 0
-		convey.So(pw.Size(), convey.ShouldEqual, 0)
+		// Initial size should be 4 (parquet magic bytes "PAR1")
+		convey.So(pw.Size(), convey.ShouldEqual, 4)
 
 		// After close, the buffer should have data
 		data, err := pw.Close()

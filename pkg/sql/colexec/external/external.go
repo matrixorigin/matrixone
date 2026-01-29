@@ -130,10 +130,12 @@ func (external *External) Prepare(proc *process.Process) error {
 	for i, col := range param.Cols {
 		name2ColIndex[col.Name] = int32(i)
 	}
-	param.tableDef = &plan.TableDef{
-		Name2ColIndex: name2ColIndex,
+	// Preserve existing TableDef (with DbName, Name) if set, otherwise create new one
+	if param.TableDef == nil {
+		param.TableDef = &plan.TableDef{}
 	}
-	param.Filter.columnMap, _, _, _ = plan2.GetColumnsByExpr(param.Filter.FilterExpr, param.tableDef)
+	param.TableDef.Name2ColIndex = name2ColIndex
+	param.Filter.columnMap, _, _, _ = plan2.GetColumnsByExpr(param.Filter.FilterExpr, param.TableDef)
 	param.Filter.zonemappable = plan2.ExprIsZonemappable(proc.Ctx, param.Filter.FilterExpr)
 	if external.ProjectList != nil {
 		err := external.PrepareProjection(proc)

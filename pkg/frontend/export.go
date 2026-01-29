@@ -941,7 +941,7 @@ func (ec *ExportConfig) writeParquet(execCtx *ExecCtx, bat *batch.Batch) error {
 		if ec.mrs == nil {
 			return moerr.NewInternalError(execCtx.reqCtx, "mrs is nil for parquet export")
 		}
-		ec.parquetWriter, err = NewParquetWriter(execCtx.reqCtx, ec.mrs)
+		ec.parquetWriter, err = NewParquetWriter(execCtx.reqCtx, execCtx.ses, ec.mrs)
 		if err != nil {
 			return err
 		}
@@ -971,7 +971,7 @@ func (ec *ExportConfig) writeParquet(execCtx *ExecCtx, bat *batch.Batch) error {
 		ec.FileCnt++
 		// Create new parquet writer for next file
 		var err error
-		ec.parquetWriter, err = NewParquetWriter(execCtx.reqCtx, ec.mrs)
+		ec.parquetWriter, err = NewParquetWriter(execCtx.reqCtx, execCtx.ses, ec.mrs)
 		if err != nil {
 			return err
 		}

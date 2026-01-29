@@ -69,7 +69,7 @@ type ExParamConst struct {
 	FileOffsetTotal []*pipeline.FileOffset
 	Ctx             context.Context
 	Extern          *tree.ExternParam
-	tableDef        *plan.TableDef
+	TableDef        *plan.TableDef
 	ClusterTable    *plan.ClusterTable
 }
 

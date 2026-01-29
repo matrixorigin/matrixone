@@ -377,10 +377,21 @@ var (
     	primary key(feature_code)
 	)`, catalog.MO_FEATURE_REGISTRY)
 
-	MoCatalogFeatureRegistryInitData = fmt.Sprintf(`insert into mo_catalog.%s(feature_code, scope_spec) values 
+	MoCatalogFeatureRegistryInitData = fmt.Sprintf(`insert into mo_catalog.%s(feature_code, scope_spec) values
 		('SNAPSHOT', '{"allowed_scope":["account","database","table"]}'),
 		('BRANCH', '{"allowed_scope":[]}')
 		on duplicate key update scope_spec = values(scope_spec);`, catalog.MO_FEATURE_REGISTRY)
+
+	MoCatalogMoParquetSchemaDDL = fmt.Sprintf(`create table %s.%s (
+		database_name   VARCHAR(256) NOT NULL,
+		table_name      VARCHAR(256) NOT NULL,
+		column_name     VARCHAR(256) NOT NULL,
+		parquet_schema  TEXT NOT NULL,
+		schema_version  TINYINT NOT NULL DEFAULT 1,
+		created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		updated_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+		PRIMARY KEY (database_name, table_name, column_name)
+	)`, catalog.MO_CATALOG, catalog.MO_PARQUET_SCHEMA)
 )
 
 // `mo_catalog` database system tables

@@ -78,13 +78,13 @@ create database cluster_new;
 create table cluster_new.t1 clone mo_catalog.t1 {snapshot = sp04};
 use cluster_new;
 show tables;
-Tables_in_cluster_new
+➤ Tables_in_cluster_new[12,-1,0]  𝄀
 t1
 select * from t1;
-a    account_id
-1    6
-2    6
-3    6
+➤ a[4,32,0]  ¦  account_id[4,32,0]  𝄀
+1  ¦  6  𝄀
+2  ¦  6  𝄀
+3  ¦  6
 drop table mo_catalog.t1;
 drop database cluster_new;
 drop snapshot sp04;
@@ -119,7 +119,7 @@ drop snapshot if exists sp01;
 internal error: do not have privilege to execute the statement
 drop account acc04;
 select count(*) from mo_catalog.mo_database;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 12
 drop snapshot if exists sp06;
 create snapshot sp06 for account;
@@ -127,102 +127,104 @@ drop database if exists mo_catalog_new;
 create database mo_catalog_new clone mo_catalog {snapshot = 'sp06'};
 use mo_catalog_new;
 show tables;
-Tables_in_mo_catalog_new
-mo_account
-mo_branch_metadata
-mo_cache
-mo_cdc_task
-mo_cdc_watermark
-mo_columns
-mo_configurations
-mo_data_key
-mo_database
-mo_feature_limit
-mo_feature_registry
-mo_foreign_keys
-mo_index_update
-mo_indexes
-mo_iscp_log
-mo_locks
-mo_merge_settings
-mo_mysql_compatibility_mode
-mo_partition_metadata
-mo_partition_tables
-mo_pitr
-mo_pubs
-mo_role
-mo_role_grant
-mo_role_privs
-mo_sessions
-mo_shards
-mo_shards_metadata
-mo_snapshots
-mo_stages
-mo_stored_procedure
-mo_subs
-mo_table_partitions
-mo_table_stats_alpha
-mo_tables
-mo_transactions
-mo_upgrade
-mo_upgrade_tenant
-mo_user
-mo_user_defined_function
-mo_user_grant
-mo_variables
+➤ Tables_in_mo_catalog_new[12,-1,0]  𝄀
+mo_account  𝄀
+mo_branch_metadata  𝄀
+mo_cache  𝄀
+mo_cdc_task  𝄀
+mo_cdc_watermark  𝄀
+mo_columns  𝄀
+mo_configurations  𝄀
+mo_data_key  𝄀
+mo_database  𝄀
+mo_feature_limit  𝄀
+mo_feature_registry  𝄀
+mo_foreign_keys  𝄀
+mo_index_update  𝄀
+mo_indexes  𝄀
+mo_iscp_log  𝄀
+mo_locks  𝄀
+mo_merge_settings  𝄀
+mo_mysql_compatibility_mode  𝄀
+mo_parquet_schema  𝄀
+mo_partition_metadata  𝄀
+mo_partition_tables  𝄀
+mo_pitr  𝄀
+mo_pubs  𝄀
+mo_role  𝄀
+mo_role_grant  𝄀
+mo_role_privs  𝄀
+mo_sessions  𝄀
+mo_shards  𝄀
+mo_shards_metadata  𝄀
+mo_snapshots  𝄀
+mo_stages  𝄀
+mo_stored_procedure  𝄀
+mo_subs  𝄀
+mo_table_partitions  𝄀
+mo_table_stats_alpha  𝄀
+mo_tables  𝄀
+mo_transactions  𝄀
+mo_upgrade  𝄀
+mo_upgrade_tenant  𝄀
+mo_user  𝄀
+mo_user_defined_function  𝄀
+mo_user_grant  𝄀
+mo_variables  𝄀
 mo_version
 select count(*) from mo_catalog.mo_database;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 13
 select count(*) from mo_catalog_new.mo_database;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 12
 create database mo_catalog_new_new clone mo_catalog {snapshot = 'sp06'};
 use mo_catalog_new_new;
 show tables;
-Tables_in_mo_catalog_new_new
-mo_account
-mo_branch_metadata
-mo_cache
-mo_cdc_task
-mo_cdc_watermark
-mo_columns
-mo_configurations
-mo_data_key
-mo_database
-mo_feature_limit
-mo_feature_registry
-mo_foreign_keys
-mo_index_update
-mo_indexes
-mo_iscp_log
-mo_locks
-mo_merge_settings
-mo_mysql_compatibility_mode
-mo_partition_metadata
-mo_partition_tables
-mo_pitr
-mo_pubs
-mo_role
-mo_role_grant
-mo_role_privs
-mo_sessions
-mo_shards
-mo_shards_metadata
-mo_snapshots
-mo_stages
-mo_stored_procedure
-mo_subs
-mo_table_partitions
-mo_table_stats_alpha
-mo_tables
-mo_transactions
-mo_upgrade
-mo_upgrade_tenant
-mo_user
-mo_user_defined_function
-mo_user_grant
-mo_variables
+➤ Tables_in_mo_catalog_new_new[12,-1,0]  𝄀
+mo_account  𝄀
+mo_branch_metadata  𝄀
+mo_cache  𝄀
+mo_cdc_task  𝄀
+mo_cdc_watermark  𝄀
+mo_columns  𝄀
+mo_configurations  𝄀
+mo_data_key  𝄀
+mo_database  𝄀
+mo_feature_limit  𝄀
+mo_feature_registry  𝄀
+mo_foreign_keys  𝄀
+mo_index_update  𝄀
+mo_indexes  𝄀
+mo_iscp_log  𝄀
+mo_locks  𝄀
+mo_merge_settings  𝄀
+mo_mysql_compatibility_mode  𝄀
+mo_parquet_schema  𝄀
+mo_partition_metadata  𝄀
+mo_partition_tables  𝄀
+mo_pitr  𝄀
+mo_pubs  𝄀
+mo_role  𝄀
+mo_role_grant  𝄀
+mo_role_privs  𝄀
+mo_sessions  𝄀
+mo_shards  𝄀
+mo_shards_metadata  𝄀
+mo_snapshots  𝄀
+mo_stages  𝄀
+mo_stored_procedure  𝄀
+mo_subs  𝄀
+mo_table_partitions  𝄀
+mo_table_stats_alpha  𝄀
+mo_tables  𝄀
+mo_transactions  𝄀
+mo_upgrade  𝄀
+mo_upgrade_tenant  𝄀
+mo_user  𝄀
+mo_user_defined_function  𝄀
+mo_user_grant  𝄀
+mo_variables  𝄀
 mo_version
 drop database mo_catalog_new_new;
 drop database mo_catalog_new;
@@ -342,11 +344,27 @@ create snapshot sp10 for account;
 create database test11 clone test10 {snapshot = 'sp10'} to account acc06;
 use test11;
 show create table aff01;
-Table    Create Table
-aff01    CREATE TABLE `aff01` (\n  `empno` int unsigned NOT NULL AUTO_INCREMENT COMMENT '雇员编号',\n  `ename` varchar(15) DEFAULT NULL COMMENT '雇员姓名',\n  `job` varchar(10) DEFAULT NULL COMMENT '雇员职位',\n  `mgr` int unsigned DEFAULT NULL COMMENT '雇员对应的领导的编号',\n  `hiredate` date DEFAULT NULL COMMENT '雇员的雇佣日期',\n  `sal` decimal(7,2) DEFAULT NULL COMMENT '雇员的基本工资',\n  `comm` decimal(7,2) DEFAULT NULL COMMENT '奖金',\n  `deptno` int unsigned DEFAULT NULL COMMENT '所在部门',\n  PRIMARY KEY (`empno`),\n  CONSTRAINT `c1` FOREIGN KEY (`deptno`) REFERENCES `pri01` (`deptno`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+aff01  ¦  CREATE TABLE `aff01` (
+  `empno` int unsigned NOT NULL AUTO_INCREMENT COMMENT '雇员编号',
+  `ename` varchar(15) DEFAULT NULL COMMENT '雇员姓名',
+  `job` varchar(10) DEFAULT NULL COMMENT '雇员职位',
+  `mgr` int unsigned DEFAULT NULL COMMENT '雇员对应的领导的编号',
+  `hiredate` date DEFAULT NULL COMMENT '雇员的雇佣日期',
+  `sal` decimal(7,2) DEFAULT NULL COMMENT '雇员的基本工资',
+  `comm` decimal(7,2) DEFAULT NULL COMMENT '奖金',
+  `deptno` int unsigned DEFAULT NULL COMMENT '所在部门',
+  PRIMARY KEY (`empno`),
+  CONSTRAINT `c1` FOREIGN KEY (`deptno`) REFERENCES `pri01` (`deptno`) ON DELETE RESTRICT ON UPDATE RESTRICT
+)
 show create table pri01;
-Table    Create Table
-pri01    CREATE TABLE `pri01` (\n  `deptno` int unsigned NOT NULL COMMENT '部门编号',\n  `dname` varchar(15) DEFAULT NULL COMMENT '部门名称',\n  `loc` varchar(50) DEFAULT NULL COMMENT '部门所在位置',\n  PRIMARY KEY (`deptno`)\n) COMMENT='部门表'
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+pri01  ¦  CREATE TABLE `pri01` (
+  `deptno` int unsigned NOT NULL COMMENT '部门编号',
+  `dname` varchar(15) DEFAULT NULL COMMENT '部门名称',
+  `loc` varchar(50) DEFAULT NULL COMMENT '部门所在位置',
+  PRIMARY KEY (`deptno`)
+) COMMENT='部门表'
 drop table aff01;
 truncate pri01;
 drop database test11;

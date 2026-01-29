@@ -1046,6 +1046,24 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 		}
 	}
 
+	// Update parquet schema for rename operations
+	if dbName != catalog.MO_CATALOG {
+		for _, req := range reqs {
+			switch req.Kind {
+			case api.AlterKind_RenameTable:
+				if op, ok := req.Operation.(*api.AlterTableReq_RenameTable); ok {
+					_ = updateParquetSchemaTableName(c, dbName,
+						op.RenameTable.OldName, op.RenameTable.NewName)
+				}
+			case api.AlterKind_RenameColumn:
+				if op, ok := req.Operation.(*api.AlterTableReq_RenameCol); ok {
+					_ = updateParquetSchemaColumnName(c, dbName, tblName,
+						op.RenameCol.OldName, op.RenameCol.NewName)
+				}
+			}
+		}
+	}
+
 	// remove refChildTbls for drop foreign key clause
 	//remove the child table id -- tblId from the parent table -- fkTblId
 	for _, fkTblId := range removeRefChildTbls {
@@ -2835,6 +2853,12 @@ func (s *Scope) DropTable(c *Compile) error {
 	if err := dbSource.Delete(c.proc.Ctx, tblName); err != nil {
 		return err
 	}
+
+	// Clean up parquet schema entries for the dropped table
+	if dbName != catalog.MO_CATALOG {
+		_ = deleteParquetSchemaForTable(c, dbName, tblName)
+	}
+
 	// Try to remove temp table alias from session if it exists.
 	// tblName is the real name here (because Binder resolved it using the temp name from session if it was an alias).
 	// If tblName is not a temp table (e.g. regular table), this call will just do nothing (scan map and find no match).
