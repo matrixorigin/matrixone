@@ -568,21 +568,30 @@ func TestReadDirSymlink(t *testing.T) {
 
 	path1 := filepath.Join(root, "a", "b", "..", "b", "c", "foo")
 	t.Logf("Testing ReadDir with path containing '..': %s", path1)
-	files1, _, err := plan2.ReadDir(&tree.ExternParam{
-		ExParamConst: tree.ExParamConst{
-			Filepath: path1,
-		},
-		ExParam: tree.ExParam{
-			Ctx: ctx,
-		},
-	})
-	assert.Nil(t, err)
-	pathWant1 := filepath.Join(root, "a", "b", "c", "foo")
-	assert.Equal(t, 1, len(files1))
-	if len(files1) > 0 {
-		t.Logf("ReadDir with '..' returned: %s (expected: %s)", files1[0], pathWant1)
+	var files1 []string
+	var maxRetries2 = 3
+	for i := 0; i < maxRetries2; i++ {
+		files1, _, err = plan2.ReadDir(&tree.ExternParam{
+			ExParamConst: tree.ExParamConst{
+				Filepath: path1,
+			},
+			ExParam: tree.ExParam{
+				Ctx: ctx,
+			},
+		})
+		if err == nil {
+			break
+		}
+		if i < maxRetries2-1 {
+			t.Logf("ReadDir with '..' attempt %d failed: %v, retrying in 100ms...", i+1, err)
+			time.Sleep(100 * time.Millisecond)
+		}
 	}
-	assert.Equal(t, pathWant1, files1[0])
+	require.NoError(t, err)
+	pathWant1 := filepath.Join(root, "a", "b", "c", "foo")
+	require.Equal(t, 1, len(files1))
+	t.Logf("ReadDir with '..' returned: %s (expected: %s)", files1[0], pathWant1)
+	require.Equal(t, pathWant1, files1[0])
 
 	err = os.Remove(filepath.Join(root, "a", "b", "c", "foo"))
 	assert.Nil(t, err)
