@@ -655,6 +655,62 @@ func (tbl *txnTable) StarCount(ctx context.Context) (uint64, error) {
 		return 0, err
 	}
 
+	// Fast path: readonly transaction
+	if tbl.getTxn().ReadOnly() {
+		return part.CountRows(ctx, types.TimestampToTS(snapshot), fs)
+	}
+
+	// Check if there are uncommitted tombstones
+	hasUncommittedTombstones := false
+	txnOffset := 0
+	if tbl.db.op.IsSnapOp() {
+		txnOffset = tbl.getTxn().GetSnapshotWriteOffset()
+	}
+
+	tbl.getTxn().ForEachTableWrites(
+		tbl.db.databaseId,
+		tbl.tableId,
+		txnOffset,
+		func(entry Entry) {
+			if entry.typ == DELETE && entry.bat != nil && !entry.bat.IsEmpty() {
+				hasUncommittedTombstones = true
+			}
+		})
+
+	// Fast path: only uncommitted inserts, no tombstones
+	if !hasUncommittedTombstones {
+		committedRows, err := part.CountRows(ctx, types.TimestampToTS(snapshot), fs)
+		if err != nil {
+			return 0, err
+		}
+
+		// Count uncommitted inserts (both in-memory and persisted)
+		uncommittedInserts := uint64(0)
+		tbl.getTxn().ForEachTableWrites(
+			tbl.db.databaseId,
+			tbl.tableId,
+			txnOffset,
+			func(entry Entry) {
+				if entry.typ != INSERT || entry.bat == nil || entry.bat.IsEmpty() {
+					return
+				}
+
+				// Check if this is a persisted insert (has ObjectStats)
+				if len(entry.bat.Attrs) >= 2 && entry.bat.Attrs[1] == catalog.ObjectMeta_ObjectStats {
+					// Persisted insert: read row count from ObjectStats
+					var stats objectio.ObjectStats
+					stats.UnMarshal(entry.bat.Vecs[1].GetBytesAt(0))
+					uncommittedInserts += uint64(stats.Rows())
+				} else {
+					// In-memory insert: use batch row count
+					uncommittedInserts += uint64(entry.bat.RowCount())
+				}
+			})
+
+		return committedRows + uncommittedInserts, nil
+	}
+
+	// TODO: Handle uncommitted tombstones
 	return part.CountRows(ctx, types.TimestampToTS(snapshot), fs)
 }
 
